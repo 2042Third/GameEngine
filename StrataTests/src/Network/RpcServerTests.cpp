@@ -758,16 +758,67 @@ TEST_SUITE("Network.RpcServer")
 		for (Tests::RawRpcConnection& hoarder : hoarders)
 			REQUIRE(hoarder.Connect(server.GetPort()));
 
+		// Each connection beyond the two pending slots turns one connection away with ServerBusy: an older one
+		// once it had a chance to send, else (within one burst) the new one itself. Two hoarders remain.
+		std::vector<bool> turnedAway(hoarders.size(), false);
+		auto countTurnedAway = [&]()
+		{
+			for (size_t index = 0; index < hoarders.size(); index++)
+			{
+				if (turnedAway[index])
+					continue;
+				std::optional<nlohmann::json> message = hoarders[index].ReadMessage(std::chrono::milliseconds(1));
+				if (message && (*message)["error"]["code"] == JsonRpc::ErrorCode::ServerBusy)
+					turnedAway[index] = true;
+			}
+			return static_cast<size_t>(std::count(turnedAway.begin(), turnedAway.end(), true));
+		};
+		REQUIRE(Tests::WaitUntil([&]() { return countTurnedAway() == hoarders.size() - 2; }));
+
 		// A legitimate client still gets in: its connection evicts the oldest hoarder, and it authenticates at once.
 		RpcClient client;
 		ConnectClient(client, server.GetPort());
 		CHECK(client.Call("rpc.ping", nlohmann::json::object(), c_CallTimeout).IsSuccess());
 		CHECK(server.GetServer().GetClientCount() == 1);
+		CHECK(Tests::WaitUntil([&]() { return countTurnedAway() == hoarders.size() - 1; }));
 
-		// Every hoarder but the newest one was evicted with an error and an orderly close.
-		CheckRejectedAndClosed(hoarders.front(), JsonRpc::ErrorCode::ServerBusy);
-		CHECK_FALSE(hoarders.back().ReadMessage(std::chrono::milliseconds(100)).has_value());
-		CHECK_FALSE(hoarders.back().WasClosedByPeer());
+		// The newest remaining hoarder keeps its slot.
+		const size_t survivor = static_cast<size_t>(std::find(turnedAway.begin(), turnedAway.end(), false) - turnedAway.begin());
+		REQUIRE(survivor < hoarders.size());
+		CHECK_FALSE(hoarders[survivor].ReadMessage(std::chrono::milliseconds(100)).has_value());
+		CHECK_FALSE(hoarders[survivor].WasClosedByPeer());
+	}
+
+	TEST_CASE("A connection is not evicted before it had a chance to send")
+	{
+		Tests::PumpedRpcServer server;
+		RpcServerSpecification specification = Tests::MakeTestServerSpecification();
+		specification.MaxPendingConnections = 1;
+		REQUIRE(server.Start(specification));
+
+		// The server accepts every waiting connection in one go. A connection that sent its first request before
+		// the next one arrived is always answered, even when both are accepted together and only one may wait.
+		for (int round = 0; round < 100; round++)
+		{
+			CAPTURE(round);
+			Tests::RawRpcConnection first;
+			REQUIRE(first.Connect(server.GetPort()));
+			REQUIRE(first.SendLine(MakeRequestLine(1, "rpc.handshake", nlohmann::json { { "clientNonce", RpcAuthentication::GenerateNonce() } })));
+			Tests::RawRpcConnection second;
+			REQUIRE(second.Connect(server.GetPort()));
+			REQUIRE(second.SendLine(MakeRequestLine(1, "rpc.handshake", nlohmann::json { { "clientNonce", RpcAuthentication::GenerateNonce() } })));
+
+			std::optional<nlohmann::json> firstAnswer = first.ReadMessage();
+			REQUIRE(firstAnswer.has_value());
+			CHECK(firstAnswer->contains("result"));
+
+			// The second one is either answered too (the first was evicted afterwards) or turned away itself.
+			std::optional<nlohmann::json> secondAnswer = second.ReadMessage();
+			REQUIRE(secondAnswer.has_value());
+			const bool answered = secondAnswer->contains("result");
+			const bool turnedAway = secondAnswer->contains("error") && (*secondAnswer)["error"]["code"] == JsonRpc::ErrorCode::ServerBusy;
+			CHECK((answered || turnedAway));
+		}
 	}
 
 	TEST_CASE("Deferred responders can answer from another thread")

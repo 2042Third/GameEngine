@@ -144,12 +144,13 @@ namespace Strata
 	// A new connection must complete the handshake (see RpcAuthentication) with its first two requests, within
 	// AuthenticationTimeout; any other request, a wrong proof, or malformed input closes the connection.
 	// Until then it is limited to tiny messages and output, and only MaxPendingConnections such connections are
-	// kept (a new one evicts the oldest). Authenticated connections count toward MaxClients (rejected with
-	// ServerBusy beyond it). A client's requests are only read while it has few enough in flight and little
-	// output waiting; its answered responses wait in its connection until the socket takes them, and a client
-	// that stops accepting output for StalledClientTimeout is dropped. Replies larger than MaxMessageSize are
-	// replaced by an error, request ids longer than 256 characters are refused rather than echoed, and method
-	// names quoted in error messages are shortened.
+	// kept: a new one evicts the oldest that has had a chance to send (preferring ones that have not started the
+	// handshake), or is itself turned away when all of them arrived in the same burst. Authenticated connections
+	// count toward MaxClients (rejected with ServerBusy beyond it). A client's requests are only read while it has
+	// few enough in flight and little output waiting; its answered responses wait in its connection until the
+	// socket takes them, and a client that stops accepting output for StalledClientTimeout is dropped. Replies
+	// larger than MaxMessageSize are replaced by an error, request ids longer than 256 characters are refused
+	// rather than echoed, and method names quoted in error messages are shortened.
 	//
 	// Built-in methods (answered without waiting for ProcessRequests):
 	//   rpc.handshake {"clientNonce"}   -> {"serverNonce", "serverProof"} (see RpcAuthentication)

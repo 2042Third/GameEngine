@@ -357,6 +357,9 @@ namespace Strata
 			// Set by the first handshake step; the second step must prove the token against both.
 			std::string ClientNonce;
 			std::string ServerNonce;
+			// Whether the connection has been through a poll since it was accepted, i.e. had a chance to send. Until
+			// then it is never evicted to make room for newer connections.
+			bool Polled = false;
 
 			// Requests and notifications admitted for this client that are queued, being handled, or answered but
 			// not yet moved into SendBuffer (backpressure counts all of them).
@@ -603,6 +606,7 @@ namespace Strata
 		{
 			Connection& connection = *Connections[index];
 			const SocketPollEntry& entry = pollEntries[index + 2];
+			connection.Polled = true;
 			Guard(connection, [&]()
 			{
 				if (entry.Readable && !connection.PeerFinished && !connection.Closed)
@@ -632,15 +636,29 @@ namespace Strata
 
 			// Connections that have not authenticated never lock out new ones: the oldest of them makes room. A
 			// legitimate client authenticates within milliseconds, so it is the hoarded slots that get recycled.
+			// Connections that have not started the handshake go first, and connections accepted since the last poll
+			// (this loop drains the whole backlog at once) are never evicted before they had a chance to send.
+			bool refuse = false;
 			if (CountConnections(false) >= Specification.MaxPendingConnections)
 			{
-				Connection* oldest = FindOldestConnection([](const Connection& candidate) { return !candidate.Authenticated && !candidate.Closing; });
+				Connection* oldest = FindOldestConnection([](const Connection& candidate)
+				{
+					return !candidate.Authenticated && !candidate.Closing && candidate.Polled && candidate.ServerNonce.empty();
+				});
+				if (!oldest)
+					oldest = FindOldestConnection([](const Connection& candidate) { return !candidate.Authenticated && !candidate.Closing && candidate.Polled; });
+
 				if (oldest)
 				{
 					if (RejectionWarnings.Allow(suppressed))
 						ST_CORE_WARN("RpcServer: closing client {}, which has not authenticated, to make room for a new connection{}", oldest->Id, DescribeSuppressed(suppressed));
 					Send(*oldest, JsonRpc::MakeError(nullptr, JsonRpc::ErrorCode::ServerBusy, "Too many connections are waiting to authenticate; this one was the oldest"));
 					BeginClose(*oldest, c_ErrorCloseLinger);
+				}
+				else
+				{
+					// Every waiting connection arrived in this same burst: the newest one is turned away instead.
+					refuse = true;
 				}
 			}
 
@@ -669,7 +687,17 @@ namespace Strata
 				Shared->OpenConnections.insert(connection->Id);
 			}
 
-			ST_CORE_TRACE("RpcServer: client {} connected", connection->Id);
+			if (refuse)
+			{
+				if (RejectionWarnings.Allow(suppressed))
+					ST_CORE_WARN("RpcServer: rejecting client {}, {} connections that just arrived are waiting to authenticate{}", connection->Id, Specification.MaxPendingConnections, DescribeSuppressed(suppressed));
+				Send(*connection, JsonRpc::MakeError(nullptr, JsonRpc::ErrorCode::ServerBusy, "Too many connections are waiting to authenticate"));
+				BeginClose(*connection, c_ErrorCloseLinger);
+			}
+			else
+			{
+				ST_CORE_TRACE("RpcServer: client {} connected", connection->Id);
+			}
 			Connections.push_back(std::move(connection));
 		}
 
