@@ -91,13 +91,19 @@ namespace Strata::Tests
 		}
 
 		// Sends rpc.authenticate as the first message; returns whether the server accepted it.
+		// Sends rpc.authenticate as the first message; returns whether the server accepted it and proved that it
+		// knows the token.
 		bool Authenticate(const std::string& token = c_TestServerToken)
 		{
-			const nlohmann::json request = JsonRpc::MakeRequest("authenticate", "rpc.authenticate", nlohmann::json { { "token", token } });
+			const std::string nonce = RpcAuthentication::GenerateNonce();
+			const nlohmann::json request = JsonRpc::MakeRequest("authenticate", "rpc.authenticate", nlohmann::json { { "token", token }, { "nonce", nonce } });
 			if (!SendLine(JsonRpc::Serialize(request)))
 				return false;
-			const std::optional<nlohmann::json> response = ReadMessage();
-			return response && response->is_object() && response->contains("result");
+			std::optional<nlohmann::json> response = ReadMessage();
+			if (!response || !response->is_object() || !response->contains("result"))
+				return false;
+			const nlohmann::json& proof = (*response)["result"]["proof"];
+			return proof.is_string() && proof.get<std::string>() == RpcAuthentication::ComputeServerProof(token, nonce);
 		}
 
 		bool SendLine(std::string_view text)
@@ -194,12 +200,14 @@ namespace Strata::Tests
 		LiveProcess& operator=(const LiveProcess&) = delete;
 
 		uint32_t GetProcessId() const { return m_Process.GetProcessID(); }
+		uint64_t GetStartTime() const { return Platform::GetProcessStartTime(m_Process.GetProcessID()).value_or(0); }
 	private:
 		Process m_Process;
 	};
 
-	// A helper process that has already exited. The object keeps (and on POSIX has reaped) the process, so its id
-	// cannot be reused by another process while the test runs.
+	// A helper process that has already exited, with the start time it had while it existed. On Windows the
+	// Process object's handle keeps its id from being reused; on POSIX waiting reaped it and freed the id, which a
+	// new process may take. Sessions are matched on id and start time, so either way they read as stale.
 	class ExitedProcess
 	{
 	public:
@@ -209,16 +217,22 @@ namespace Strata::Tests
 			specification.Executable = GetTestExecutablePath();
 			specification.Arguments = { "--strata-test-helper=exit-code", "0" };
 			specification.Output = ProcessOutputMode::Discard;
-			if (m_Process.Start(specification))
-				m_Process.Wait(std::chrono::milliseconds(10000));
+			if (!m_Process.Start(specification))
+				return;
+			// Until it is waited for, an exited child (or, on Windows, a process with an open handle) still reports
+			// its start time.
+			m_StartTime = Platform::GetProcessStartTime(m_Process.GetProcessID()).value_or(0);
+			m_Process.Wait(std::chrono::milliseconds(10000));
 		}
 
 		ExitedProcess(const ExitedProcess&) = delete;
 		ExitedProcess& operator=(const ExitedProcess&) = delete;
 
 		uint32_t GetProcessId() const { return m_Process.GetProcessID(); }
+		uint64_t GetStartTime() const { return m_StartTime; }
 	private:
 		Process m_Process;
+		uint64_t m_StartTime = 0;
 	};
 
 	// Sets an environment variable for the lifetime of the object. An empty value counts as unset for every

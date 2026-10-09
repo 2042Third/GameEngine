@@ -85,6 +85,7 @@ namespace Strata::Tests
 	{
 		EditorSessionInfo session;
 		session.ProcessId = processId;
+		session.ProcessStartTime = Platform::GetProcessStartTime(processId).value_or(0);
 		session.Port = port;
 		session.Token = c_FakeEditorToken;
 		session.ProjectPath = std::move(projectPath);

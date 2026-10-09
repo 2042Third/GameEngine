@@ -106,6 +106,59 @@ TEST_SUITE("CLI.Discovery")
 		}
 	}
 
+	TEST_CASE("Sessions are reached at the loopback address they record")
+	{
+		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("DiscoveryAddresses");
+		Tests::LiveProcess ipv6Owner;
+		Tests::LiveProcess remoteOwner;
+		EditorSessionInfo ipv6 = Tests::MakeFakeSession(ipv6Owner.GetProcessId(), 40301, "2026-02-01T00:00:00Z");
+		ipv6.Address = "::1";
+		EditorSessionInfo remote = Tests::MakeFakeSession(remoteOwner.GetProcessId(), 40302, "2026-03-01T00:00:00Z");
+		remote.Address = "192.168.1.5";
+		REQUIRE(Tests::WriteFakeSessionFile(sessionDirectory, ipv6));
+		REQUIRE(Tests::WriteFakeSessionFile(sessionDirectory, remote));
+
+		// A session naming anything but a loopback address is never followed.
+		const std::vector<EditorEndpoint> endpoints = DiscoverEditorEndpoints(MakeOptions(sessionDirectory));
+		REQUIRE(endpoints.size() == 1);
+		CHECK(endpoints[0].Host == "::1");
+		CHECK(endpoints[0].Port == 40301);
+
+		EditorConnection connection(MakeOptions(sessionDirectory));
+		CHECK_FALSE(connection.ConnectToSession(remote));
+		CHECK(connection.GetLastError().find("loopback") != std::string::npos);
+
+		// Sessions written without an address are on IPv4 loopback.
+		nlohmann::json legacy = ipv6.ToJson();
+		legacy.erase("Address");
+		CHECK(EditorSessionInfo::FromJson(legacy)->Address == "127.0.0.1");
+	}
+
+	TEST_CASE("An editor listening on IPv6 loopback is found through its session")
+	{
+		Tests::PumpedRpcServer editor;
+		Tests::RegisterFakeEditorMethods(editor.GetServer());
+		RpcServerSpecification specification;
+		specification.AuthToken = Tests::c_FakeEditorToken;
+		specification.BindAddress = "::1";
+		if (!editor.Start(specification))
+		{
+			MESSAGE("IPv6 loopback is not available on this machine; the address handling is covered by the test above");
+			return;
+		}
+
+		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("DiscoveryIPv6");
+		Tests::LiveProcess owner;
+		EditorSessionInfo session = Tests::MakeFakeSession(owner.GetProcessId(), editor.GetPort(), "2026-01-01T00:00:00Z");
+		session.Address = "::1";
+		REQUIRE(Tests::WriteFakeSessionFile(sessionDirectory, session));
+
+		EditorConnection connection(MakeOptions(sessionDirectory));
+		const RpcResult result = connection.Call("rpc.ping", nlohmann::json::object(), std::chrono::milliseconds(5000));
+		REQUIRE_MESSAGE(result.IsSuccess(), result.GetError().Message);
+		CHECK(connection.GetEndpoint()->Host == "::1");
+	}
+
 	TEST_CASE("Project paths are compared by location")
 	{
 		const std::filesystem::path project = Tests::CreateTemporaryDirectory("SameProject");

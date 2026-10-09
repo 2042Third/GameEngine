@@ -169,13 +169,16 @@ JSON-RPC 2.0, one compact JSON message per line, over TCP on loopback. `StrataCL
 - **Security model:** any local process, and any web page in a local browser, can reach the port; only
   holders of the session token are trusted. The server binds loopback addresses only and refuses to start
   without a token (`EditorSession::GenerateSessionToken`, from the OS secure random generator). A
-  connection's first message must be `rpc.authenticate`; anything else closes it. Unauthenticated
-  connections get tiny limits and a deadline; authenticated ones get size limits and backpressure. Never
-  log or print tokens.
-- **Session files:** `<user data>/Strata/Sessions/<pid>.json` holds the full session (port and token). It is
-  written owner-only (`Platform::WritePrivateFile`) into a private directory, and files of exited editors
-  are pruned. `<project>/.strata/EditorSession.json` only names the editor's process; it is untrusted (the
-  project may be shared) and never contains the port or token.
+  connection's first message must be `rpc.authenticate` (token plus a random nonce); anything else closes
+  it. The server answers with an HMAC proof that it knows the token, which `RpcClient` verifies before
+  sending anything else, so clients never talk to a process that took over a dead editor's port.
+  Unauthenticated connections get tiny limits and a deadline; authenticated ones get size limits and
+  backpressure. Never log or print tokens.
+- **Session files:** `<user data>/Strata/Sessions/<pid>.json` holds the full session (address, port, token,
+  process start time). It is written owner-only (`Platform::WritePrivateFile`) into a private directory. A
+  session counts only while its process id is alive with the recorded start time (a reused id does not
+  match); other files are pruned. `<project>/.strata/EditorSession.json` only names the editor's process; it
+  is untrusted (the project may be shared) and never contains the port or token.
 - **Environment:** `STRATA_SESSION_DIR` overrides the session directory (tests use it to stay isolated from
   real editors). `STRATA_EDITOR_PORT`/`STRATA_EDITOR_TOKEN` select an explicit endpoint, and
   `STRATA_EDITOR_PATH` the editor executable for `launch`/`strata_launch_editor`.

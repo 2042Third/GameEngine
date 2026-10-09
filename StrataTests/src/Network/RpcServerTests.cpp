@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Network/NetworkTestHelpers.h"
+#include "Strata/Core/Crypto.h"
 #include "Strata/Network/RpcClient.h"
 #include "Strata/Network/RpcServer.h"
 #include "TestHelpers.h"
@@ -54,6 +55,11 @@ namespace
 		CHECK_FALSE(connection.ReadMessage().has_value());
 		CHECK(connection.WasClosedByPeer());
 		CHECK_FALSE(connection.WasResetByPeer());
+	}
+
+	nlohmann::json AuthenticationParams(const std::string& token)
+	{
+		return nlohmann::json { { "token", token }, { "nonce", RpcAuthentication::GenerateNonce() } };
 	}
 
 	std::string Nest(size_t depth)
@@ -383,13 +389,25 @@ TEST_SUITE("Network.RpcServer")
 
 		SUBCASE("A wrong token closes the connection")
 		{
-			REQUIRE(connection.SendLine(MakeRequestLine(1, "rpc.authenticate", nlohmann::json { { "token", "wrong" } })));
+			REQUIRE(connection.SendLine(MakeRequestLine(1, "rpc.authenticate", AuthenticationParams("wrong"))));
 			CheckRejectedAndClosed(connection, JsonRpc::ErrorCode::Unauthorized);
 		}
 
 		SUBCASE("A missing token closes the connection")
 		{
 			REQUIRE(connection.SendLine(MakeRequestLine(1, "rpc.authenticate")));
+			CheckRejectedAndClosed(connection, JsonRpc::ErrorCode::InvalidParams);
+		}
+
+		SUBCASE("A missing nonce closes the connection")
+		{
+			REQUIRE(connection.SendLine(MakeRequestLine(1, "rpc.authenticate", nlohmann::json { { "token", Tests::c_TestServerToken } })));
+			CheckRejectedAndClosed(connection, JsonRpc::ErrorCode::InvalidParams);
+		}
+
+		SUBCASE("A malformed nonce closes the connection")
+		{
+			REQUIRE(connection.SendLine(MakeRequestLine(1, "rpc.authenticate", nlohmann::json { { "token", Tests::c_TestServerToken }, { "nonce", "not-hex-and-too-short" } })));
 			CheckRejectedAndClosed(connection, JsonRpc::ErrorCode::InvalidParams);
 		}
 
@@ -427,7 +445,7 @@ TEST_SUITE("Network.RpcServer")
 			CHECK((*echo)["result"]["value"].get_ref<const std::string&>().size() == 256 * 1024);
 
 			// Authenticating again with a wrong token is answered but does not end an authenticated connection.
-			REQUIRE(connection.SendLine(MakeRequestLine(3, "rpc.authenticate", nlohmann::json { { "token", "wrong" } })));
+			REQUIRE(connection.SendLine(MakeRequestLine(3, "rpc.authenticate", AuthenticationParams("wrong"))));
 			std::optional<nlohmann::json> again = connection.ReadMessage();
 			REQUIRE(again.has_value());
 			CHECK((*again)["error"]["code"] == JsonRpc::ErrorCode::Unauthorized);
@@ -435,6 +453,92 @@ TEST_SUITE("Network.RpcServer")
 			std::optional<nlohmann::json> pong = connection.ReadMessage();
 			REQUIRE(pong.has_value());
 			CHECK((*pong)["result"]["pong"] == true);
+		}
+	}
+
+	TEST_CASE("The server proves that it knows the token")
+	{
+		Tests::PumpedRpcServer server;
+		REQUIRE(server.Start());
+
+		const std::string nonce = "00112233445566778899aabbccddeeff";
+		Tests::RawRpcConnection connection;
+		REQUIRE(connection.Connect(server.GetPort()));
+		REQUIRE(connection.SendLine(MakeRequestLine(1, "rpc.authenticate", nlohmann::json { { "token", Tests::c_TestServerToken }, { "nonce", nonce } })));
+		std::optional<nlohmann::json> response = connection.ReadMessage();
+		REQUIRE(response.has_value());
+		CHECK((*response)["result"]["authenticated"] == true);
+
+		// HMAC-SHA256(token, nonce + "strata-server"), computed independently of RpcAuthentication.
+		const std::string expected = Crypto::ToHex(Crypto::HmacSha256(std::string_view(Tests::c_TestServerToken), nonce + "strata-server"));
+		CHECK((*response)["result"]["proof"] == expected);
+		CHECK(RpcAuthentication::ComputeServerProof(Tests::c_TestServerToken, nonce) == expected);
+
+		CHECK(RpcAuthentication::IsValidNonce(RpcAuthentication::GenerateNonce()));
+		CHECK(RpcAuthentication::GenerateNonce() != RpcAuthentication::GenerateNonce());
+		CHECK_FALSE(RpcAuthentication::IsValidNonce("0123"));
+		CHECK_FALSE(RpcAuthentication::IsValidNonce(std::string(32, 'g')));
+		CHECK_FALSE(RpcAuthentication::IsValidNonce(std::string(129, 'a')));
+	}
+
+	TEST_CASE("The client refuses a server that cannot prove it knows the token")
+	{
+		// A process that took over the port of an editor that exited: it accepts any token but cannot compute the
+		// proof. The client must give up before sending anything beyond the authentication request.
+		auto runImpostor = [](const nlohmann::json& result)
+		{
+			TcpListener listener;
+			REQUIRE(listener.Listen());
+			std::atomic<size_t> linesReceived = 0;
+			std::atomic<bool> closedByClient = false;
+			std::thread impostor([&]()
+			{
+				std::optional<TcpSocket> socket = listener.Accept(std::chrono::milliseconds(5000));
+				if (!socket)
+					return;
+				JsonLineReader reader;
+				std::vector<uint8_t> buffer;
+				const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(5000);
+				while (std::chrono::steady_clock::now() < deadline)
+				{
+					buffer.clear();
+					const SocketReceiveStatus status = socket->Receive(buffer, std::chrono::milliseconds(100));
+					if (status == SocketReceiveStatus::Closed || status == SocketReceiveStatus::Error)
+					{
+						closedByClient = true;
+						return;
+					}
+					reader.Append(buffer);
+					while (std::optional<std::string> line = reader.NextLine())
+					{
+						if (linesReceived++ > 0)
+							continue;
+						const std::optional<nlohmann::json> request = JsonRpc::Parse(*line);
+						if (request && request->contains("id"))
+							socket->SendAll(JsonRpc::Serialize(JsonRpc::MakeResult((*request)["id"], result)) + "\n");
+					}
+				}
+			});
+
+			RpcClient client;
+			const bool connected = client.Connect("127.0.0.1", listener.GetPort(), Tests::c_TestServerToken, std::chrono::milliseconds(3000));
+			const std::string error = client.GetLastError();
+			impostor.join();
+			CHECK_FALSE(connected);
+			CHECK_FALSE(client.IsConnected());
+			CHECK(error.find("could not prove") != std::string::npos);
+			CHECK(linesReceived.load() == 1);
+			CHECK(closedByClient.load());
+		};
+
+		SUBCASE("No proof")
+		{
+			runImpostor(nlohmann::json { { "authenticated", true } });
+		}
+
+		SUBCASE("A wrong proof")
+		{
+			runImpostor(nlohmann::json { { "authenticated", true }, { "proof", std::string(64, '0') } });
 		}
 	}
 
@@ -501,7 +605,7 @@ TEST_SUITE("Network.RpcServer")
 		// close guarantees the reply arrives before the connection ends.
 		RpcClient second;
 		REQUIRE(second.Connect("127.0.0.1", server.GetPort(), {}, std::chrono::milliseconds(2000)));
-		const RpcResult rejected = second.Call("rpc.authenticate", nlohmann::json { { "token", Tests::c_TestServerToken } }, c_CallTimeout);
+		const RpcResult rejected = second.Call("rpc.authenticate", AuthenticationParams(Tests::c_TestServerToken), c_CallTimeout);
 		REQUIRE(rejected.IsError());
 		CHECK(rejected.GetError().Code == JsonRpc::ErrorCode::ServerBusy);
 		CHECK(rejected.GetError().Message.find("at most 1 client") != std::string::npos);

@@ -18,14 +18,17 @@ namespace Strata
 	struct EditorSessionInfo
 	{
 		uint32_t ProcessId = 0;
+		uint64_t ProcessStartTime = 0;  // Platform::GetProcessStartTime of ProcessId, to detect a reused process id
+		std::string Address = "127.0.0.1"; // The loopback address the editor listens on
 		uint16_t Port = 0;
-		std::string Token;         // Secret required by rpc.authenticate
-		std::string ProjectPath;   // UTF-8; empty when no project is open
+		std::string Token;              // Secret required by rpc.authenticate
+		std::string ProjectPath;        // UTF-8; empty when no project is open
 		std::string EditorVersion;
 		bool Headless = false;
-		std::string StartedAt;     // ISO-8601 UTC, e.g. "2026-01-31T12:00:00Z"
+		std::string StartedAt;          // ISO-8601 UTC, e.g. "2026-01-31T12:00:00Z"
 
-		// Keys: "ProcessId", "Port", "Token", "ProjectPath", "EditorVersion", "Headless", "StartedAt".
+		// Keys: "ProcessId", "ProcessStartTime", "Address", "Port", "Token", "ProjectPath", "EditorVersion",
+		// "Headless", "StartedAt".
 		nlohmann::json ToJson() const;
 		// Returns nullopt unless json is an object with a valid ProcessId and Port (other keys are optional).
 		static std::optional<EditorSessionInfo> FromJson(const nlohmann::json& json);
@@ -45,10 +48,17 @@ namespace Strata
 	//                                          names a process whose per-user session file must exist, be trusted,
 	//                                          belong to a running process and name the same project.
 	//
-	// Session files of processes that are no longer running are deleted by FindSessions.
+	// A session belongs to a running editor only while its process id is alive with the recorded start time (a
+	// process that later reuses the id has another start time); FindSessions deletes the files of the others.
+	// Clients connect to the recorded loopback address and still verify the editor through the authentication
+	// handshake (see RpcAuthentication).
 	class EditorSession
 	{
 	public:
+		// A session describing this process (id, start time, version, start timestamp, loopback address); the
+		// caller fills in the port, token, project and Headless.
+		static EditorSessionInfo DescribeCurrentProcess();
+
 		// The private session directory (created if missing), or nullopt with the reason in error.
 		static std::optional<std::filesystem::path> GetSessionDirectory(std::string* error = nullptr);
 		static std::filesystem::path GetSessionFilePath(const std::filesystem::path& sessionDirectory, uint32_t processId);
@@ -72,6 +82,8 @@ namespace Strata
 		static std::optional<EditorSessionInfo> ReadProjectSession(const std::filesystem::path& projectDirectory);
 		static std::optional<EditorSessionInfo> ReadProjectSession(const std::filesystem::path& projectDirectory, const std::filesystem::path& sessionDirectory);
 
+		// Whether the process that wrote the session is still running (same id and start time).
+		static bool IsSessionProcessRunning(const EditorSessionInfo& session);
 		// Whether a session's ProjectPath (UTF-8) refers to projectDirectory.
 		static bool IsSameProject(const std::string& sessionProjectPath, const std::filesystem::path& projectDirectory);
 

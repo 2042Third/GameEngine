@@ -11,6 +11,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Strata
@@ -84,6 +85,20 @@ namespace Strata
 	// Handler of a synchronous method: the returned result is the response.
 	using RpcSyncHandler = std::function<RpcResult(const nlohmann::json& params)>;
 
+	// The rpc.authenticate handshake authenticates both sides. The client sends the session token together with a
+	// fresh random nonce; the server checks the token and answers with a proof that it knows the token as well,
+	// HMAC-SHA256(token, nonce + "strata-server") in lower-case hexadecimal. The client verifies the proof before it
+	// sends anything else, so it never talks to a process that merely took over a dead editor's port.
+	class RpcAuthentication
+	{
+	public:
+		// 32 lower-case hexadecimal characters from the system's secure random generator (empty if it fails).
+		static std::string GenerateNonce();
+		// 32 to 128 hexadecimal characters.
+		static bool IsValidNonce(std::string_view nonce);
+		static std::string ComputeServerProof(std::string_view token, std::string_view nonce);
+	};
+
 	struct RpcServerSpecification
 	{
 		std::string BindAddress = "127.0.0.1"; // Must be a numeric loopback address (127.0.0.0/8 or ::1)
@@ -116,9 +131,9 @@ namespace Strata
 	// exceeds MaxMessageSize plus a small margin; responses larger than MaxMessageSize are replaced by an error.
 	//
 	// Built-in methods (answered without waiting for ProcessRequests):
-	//   rpc.authenticate {"token": "..."} -> {"authenticated": true}
-	//   rpc.ping                          -> {"pong": true}
-	//   rpc.listMethods                   -> {"methods": [{"name", "description", "paramsSchema"}, ...]}
+	//   rpc.authenticate {"token", "nonce"} -> {"authenticated": true, "proof"} (see RpcAuthentication)
+	//   rpc.ping                            -> {"pong": true}
+	//   rpc.listMethods                     -> {"methods": [{"name", "description", "paramsSchema"}, ...]}
 	class RpcServer
 	{
 	public:

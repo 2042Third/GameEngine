@@ -16,12 +16,12 @@
 namespace Strata::CLI
 {
 
-	// Editors publish their automation endpoint on loopback only, so discovered sessions are always reached here.
+	// Default host of an explicit endpoint. Discovered sessions are reached at the loopback address they record.
 	constexpr const char* c_EditorSessionHost = "127.0.0.1";
 
 	struct EditorConnectionOptions
 	{
-		std::string Host = c_EditorSessionHost; // Host of the explicit endpoint (Port); discovery always uses loopback
+		std::string Host = c_EditorSessionHost; // Host of the explicit endpoint (Port); discovery uses each session's address
 		// Explicit endpoint (--port/--token, or STRATA_EDITOR_PORT/STRATA_EDITOR_TOKEN). Disables session discovery.
 		std::optional<uint16_t> Port;
 		std::string Token;

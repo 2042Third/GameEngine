@@ -4,6 +4,7 @@
 #include "Strata/Core/Log.h"
 #include "Strata/Core/Platform.h"
 #include "Strata/Network/RpcClient.h"
+#include "Strata/Network/Socket.h"
 
 #include <thread>
 
@@ -117,7 +118,13 @@ namespace Strata::CLI
 			if (std::optional<EditorSessionInfo> session = EditorSession::ReadSessionFile(sessionFile))
 			{
 				RpcClient client;
-				if (client.Connect("127.0.0.1", session->Port, session->Token, c_SessionConnectTimeout))
+				if (!IsLoopbackAddress(session->Address))
+				{
+					if (error)
+						*error = fmt::format("The editor's session names '{}', which is not a loopback address", session->Address);
+					return std::nullopt;
+				}
+				if (client.Connect(session->Address, session->Port, session->Token, c_SessionConnectTimeout))
 					return session;
 				lastProblem = fmt::format("the session on port {} does not accept connections: {}", session->Port, client.GetLastError());
 			}

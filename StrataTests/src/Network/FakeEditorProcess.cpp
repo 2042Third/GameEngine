@@ -2,7 +2,6 @@
 
 #include "Strata/Core/Log.h"
 #include "Strata/Core/Platform.h"
-#include "Strata/Core/Version.h"
 #include "Strata/Network/EditorSession.h"
 #include "Strata/Network/RpcServer.h"
 
@@ -70,14 +69,12 @@ namespace Strata::Tests
 		if (!server.Start(specification))
 			return 2;
 
-		EditorSessionInfo session;
-		session.ProcessId = Platform::GetProcessID();
+		EditorSessionInfo session = EditorSession::DescribeCurrentProcess();
+		session.Address = specification.BindAddress;
 		session.Port = server.GetPort();
 		session.Token = specification.AuthToken;
 		session.ProjectPath = project;
-		session.EditorVersion = c_EngineVersion;
 		session.Headless = headless;
-		session.StartedAt = EditorSession::GetCurrentTimestamp();
 		if (!EditorSession::WriteSessionFiles(session))
 			return 3;
 

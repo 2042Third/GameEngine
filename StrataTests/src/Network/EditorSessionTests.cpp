@@ -19,6 +19,7 @@ namespace
 	{
 		EditorSessionInfo info;
 		info.ProcessId = processId;
+		info.ProcessStartTime = Platform::GetProcessStartTime(processId).value_or(0);
 		info.Port = port;
 		info.Token = EditorSession::GenerateSessionToken();
 		info.ProjectPath = std::move(projectPath);
@@ -59,14 +60,17 @@ TEST_SUITE("Network.EditorSession")
 		std::set<std::string> keys;
 		for (const auto& [key, value] : json.items())
 			keys.insert(key);
-		CHECK(keys == std::set<std::string> { "ProcessId", "Port", "Token", "ProjectPath", "EditorVersion", "Headless", "StartedAt" });
+		CHECK(keys == std::set<std::string> { "ProcessId", "ProcessStartTime", "Address", "Port", "Token", "ProjectPath", "EditorVersion", "Headless", "StartedAt" });
 		CHECK(json["ProcessId"] == 4242);
 		CHECK(json["Port"] == 50123);
 		CHECK(json["Headless"] == true);
+		CHECK(json["Address"] == "127.0.0.1");
 
 		const std::optional<EditorSessionInfo> parsed = EditorSessionInfo::FromJson(json);
 		REQUIRE(parsed.has_value());
 		CHECK(parsed->ProcessId == info.ProcessId);
+		CHECK(parsed->ProcessStartTime == info.ProcessStartTime);
+		CHECK(parsed->Address == info.Address);
 		CHECK(parsed->Port == info.Port);
 		CHECK(parsed->Token == info.Token);
 		CHECK(parsed->ProjectPath == info.ProjectPath);
@@ -89,6 +93,56 @@ TEST_SUITE("Network.EditorSession")
 		REQUIRE(minimal.has_value());
 		CHECK(minimal->Token.empty());
 		CHECK_FALSE(minimal->Headless);
+		CHECK(minimal->ProcessStartTime == 0);
+		CHECK(minimal->Address == "127.0.0.1");
+	}
+
+	TEST_CASE("The current process is described for its session")
+	{
+		const EditorSessionInfo info = EditorSession::DescribeCurrentProcess();
+		CHECK(info.ProcessId == Platform::GetProcessID());
+		CHECK(info.ProcessStartTime == Platform::GetProcessStartTime(Platform::GetProcessID()));
+		CHECK(info.ProcessStartTime != 0);
+		CHECK(info.Address == "127.0.0.1");
+		CHECK_FALSE(info.EditorVersion.empty());
+		CHECK(info.StartedAt.size() == 20);
+		CHECK(EditorSession::IsSessionProcessRunning(info));
+	}
+
+	TEST_CASE("A session whose process id now belongs to another process is stale")
+	{
+		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("EditorSessionsReused");
+		const std::filesystem::path project = Tests::CreateTemporaryDirectory("EditorSessionsReusedProject");
+		Tests::LiveProcess running;
+
+		// The same id with another start time is what a reused id looks like.
+		EditorSessionInfo reused = MakeSession(running.GetProcessId(), 46001, "2026-01-01T00:00:00Z", FileSystem::ToUTF8(project));
+		reused.ProcessStartTime += 1;
+		CHECK_FALSE(EditorSession::IsSessionProcessRunning(reused));
+		REQUIRE(WriteSession(sessionDirectory, reused));
+		REQUIRE(FileSystem::WriteText(EditorSession::GetProjectSessionFilePath(project), nlohmann::json { { "ProcessId", running.GetProcessId() } }.dump()));
+		CHECK_FALSE(EditorSession::ReadProjectSession(project, sessionDirectory).has_value());
+		CHECK(EditorSession::FindSessions(sessionDirectory).empty());
+		CHECK_FALSE(FileSystem::Exists(EditorSession::GetSessionFilePath(sessionDirectory, running.GetProcessId())));
+
+		// A session without a start time cannot be verified either.
+		EditorSessionInfo unverifiable = MakeSession(running.GetProcessId(), 46002, "2026-01-01T00:00:00Z");
+		unverifiable.ProcessStartTime = 0;
+		CHECK_FALSE(EditorSession::IsSessionProcessRunning(unverifiable));
+		REQUIRE(WriteSession(sessionDirectory, unverifiable));
+		CHECK(EditorSession::FindSessions(sessionDirectory).empty());
+
+		// With the right start time it is the running process's session.
+		const EditorSessionInfo current = MakeSession(running.GetProcessId(), 46003, "2026-01-01T00:00:00Z", FileSystem::ToUTF8(project));
+		CHECK(EditorSession::IsSessionProcessRunning(current));
+		REQUIRE(WriteSession(sessionDirectory, current));
+		REQUIRE(EditorSession::FindSessions(sessionDirectory).size() == 1);
+		CHECK(EditorSession::ReadProjectSession(project, sessionDirectory).has_value());
+
+		Tests::ExitedProcess exited;
+		EditorSessionInfo gone = MakeSession(exited.GetProcessId(), 46004, "2026-01-01T00:00:00Z");
+		gone.ProcessStartTime = exited.GetStartTime();
+		CHECK_FALSE(EditorSession::IsSessionProcessRunning(gone));
 	}
 
 	TEST_CASE("Session files are written owner-only, found and removed")
@@ -161,7 +215,9 @@ TEST_SUITE("Network.EditorSession")
 		Tests::ExitedProcess exited;
 		REQUIRE(exited.GetProcessId() != 0);
 		REQUIRE(WriteSession(sessionDirectory, MakeSession(running.GetProcessId(), 41001, "2026-01-01T00:00:00Z")));
-		REQUIRE(WriteSession(sessionDirectory, MakeSession(exited.GetProcessId(), 41002, "2026-02-01T00:00:00Z")));
+		EditorSessionInfo exitedSession = MakeSession(exited.GetProcessId(), 41002, "2026-02-01T00:00:00Z");
+		exitedSession.ProcessStartTime = exited.GetStartTime();
+		REQUIRE(WriteSession(sessionDirectory, exitedSession));
 
 		const std::vector<EditorSessionInfo> sessions = EditorSession::FindSessions(sessionDirectory);
 		REQUIRE(sessions.size() == 1);
@@ -232,7 +288,9 @@ TEST_SUITE("Network.EditorSession")
 		SUBCASE("The referenced process must be running")
 		{
 			Tests::ExitedProcess exited;
-			REQUIRE(WriteSession(sessionDirectory, MakeSession(exited.GetProcessId(), 43003, "2026-01-01T00:00:00Z", FileSystem::ToUTF8(project))));
+			EditorSessionInfo session = MakeSession(exited.GetProcessId(), 43003, "2026-01-01T00:00:00Z", FileSystem::ToUTF8(project));
+			session.ProcessStartTime = exited.GetStartTime();
+			REQUIRE(WriteSession(sessionDirectory, session));
 			writePointer(nlohmann::json { { "ProcessId", exited.GetProcessId() } });
 			CHECK_FALSE(EditorSession::ReadProjectSession(project, sessionDirectory).has_value());
 		}

@@ -2,6 +2,7 @@
 
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Log.h"
+#include "Strata/Network/Socket.h"
 
 #include <algorithm>
 
@@ -22,12 +23,23 @@ namespace Strata::CLI
 		EditorEndpoint MakeSessionEndpoint(const EditorSessionInfo& session, const char* source)
 		{
 			EditorEndpoint endpoint;
-			endpoint.Host = c_EditorSessionHost;
+			endpoint.Host = session.Address;
 			endpoint.Port = session.Port;
 			endpoint.Token = session.Token;
 			endpoint.Session = session;
 			endpoint.Source = source;
 			return endpoint;
+		}
+
+		// Editors only listen on loopback; a session naming any other address is not followed.
+		void AddSessionEndpoint(std::vector<EditorEndpoint>& endpoints, const EditorSessionInfo& session, const char* source)
+		{
+			if (!IsLoopbackAddress(session.Address))
+			{
+				ST_WARN("Ignoring the session of process {}: '{}' is not a loopback address", session.ProcessId, session.Address);
+				return;
+			}
+			endpoints.push_back(MakeSessionEndpoint(session, source));
 		}
 
 	}
@@ -58,18 +70,18 @@ namespace Strata::CLI
 		if (!options.ProjectDirectory.empty())
 		{
 			if (std::optional<EditorSessionInfo> projectSession = EditorSession::ReadProjectSession(options.ProjectDirectory, sessionDirectory))
-				endpoints.push_back(MakeSessionEndpoint(*projectSession, "project"));
+				AddSessionEndpoint(endpoints, *projectSession, "project");
 
 			for (const EditorSessionInfo& session : sessions)
 			{
 				if (EditorSession::IsSameProject(session.ProjectPath, options.ProjectDirectory) && !IsDuplicate(endpoints, session))
-					endpoints.push_back(MakeSessionEndpoint(session, "session"));
+					AddSessionEndpoint(endpoints, session, "session");
 			}
 			return endpoints;
 		}
 
 		for (const EditorSessionInfo& session : sessions)
-			endpoints.push_back(MakeSessionEndpoint(session, "session"));
+			AddSessionEndpoint(endpoints, session, "session");
 		return endpoints;
 	}
 
@@ -144,6 +156,11 @@ namespace Strata::CLI
 		if (!session.ProjectPath.empty())
 			m_Options.ProjectDirectory = FileSystem::FromUTF8(session.ProjectPath);
 
+		if (!IsLoopbackAddress(session.Address))
+		{
+			m_LastError = fmt::format("The session's address '{}' is not a loopback address", session.Address);
+			return false;
+		}
 		if (TryEndpoint(MakeSessionEndpoint(session, "session")))
 			return true;
 		m_LastError = m_Client.GetLastError();

@@ -4,6 +4,7 @@
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Core/Platform.h"
+#include "Strata/Core/Version.h"
 #include "Strata/Network/JsonRpc.h"
 
 namespace Strata
@@ -16,7 +17,7 @@ namespace Strata
 		constexpr const char* c_ProjectDataDirectory = ".strata";
 		constexpr const char* c_ProjectSessionFileName = "EditorSession.json";
 		// Session files are tiny; anything larger is not one, and is not read into memory.
-		constexpr uint64_t c_MaxSessionFileSize = 64 * 1024;
+		constexpr size_t c_MaxSessionFileSize = 64 * 1024;
 
 		std::optional<uint64_t> GetUnsigned(const nlohmann::json& object, const char* key)
 		{
@@ -40,13 +41,9 @@ namespace Strata
 
 		std::optional<nlohmann::json> ReadJsonFile(const std::filesystem::path& path)
 		{
-			// Only regular files: opening a FIFO or device planted in a shared project could block or never end.
-			if (!FileSystem::IsRegularFile(path))
-				return std::nullopt;
-			const std::optional<uint64_t> size = FileSystem::GetFileSize(path);
-			if (!size || *size > c_MaxSessionFileSize)
-				return std::nullopt;
-			const std::optional<std::string> text = FileSystem::ReadText(path);
+			// Checked and read through one handle: a file planted in a shared project cannot be swapped for a FIFO,
+			// a device or a link between the checks and the read.
+			const std::optional<std::string> text = Platform::ReadRegularFile(path, c_MaxSessionFileSize);
 			if (!text)
 				return std::nullopt;
 			return JsonRpc::Parse(*text);
@@ -91,6 +88,8 @@ namespace Strata
 	{
 		nlohmann::json json = nlohmann::json::object();
 		json["ProcessId"] = ProcessId;
+		json["ProcessStartTime"] = ProcessStartTime;
+		json["Address"] = Address;
 		json["Port"] = Port;
 		json["Token"] = Token;
 		json["ProjectPath"] = ProjectPath;
@@ -112,6 +111,8 @@ namespace Strata
 
 		EditorSessionInfo info;
 		info.ProcessId = *processId;
+		info.ProcessStartTime = GetUnsigned(json, "ProcessStartTime").value_or(0);
+		info.Address = JsonUtils::GetString(json, "Address", info.Address);
 		info.Port = static_cast<uint16_t>(*port);
 		info.Token = JsonUtils::GetString(json, "Token");
 		info.ProjectPath = JsonUtils::GetString(json, "ProjectPath");
@@ -124,6 +125,16 @@ namespace Strata
 	////////////////////////////////////////////////////////////////////////////////
 	// EditorSession
 	////////////////////////////////////////////////////////////////////////////////
+
+	EditorSessionInfo EditorSession::DescribeCurrentProcess()
+	{
+		EditorSessionInfo info;
+		info.ProcessId = Platform::GetProcessID();
+		info.ProcessStartTime = Platform::GetProcessStartTime(info.ProcessId).value_or(0);
+		info.EditorVersion = c_EngineVersion;
+		info.StartedAt = GetCurrentTimestamp();
+		return info;
+	}
 
 	std::optional<std::filesystem::path> EditorSession::GetSessionDirectory(std::string* error)
 	{
@@ -262,7 +273,7 @@ namespace Strata
 			if (!session || FileSystem::ToUTF8(it->path().stem()) != std::to_string(session->ProcessId))
 				continue;
 
-			if (!Platform::IsProcessAlive(session->ProcessId))
+			if (!IsSessionProcessRunning(*session))
 			{
 				// The editor exited without cleaning up (e.g. it crashed).
 				std::error_code removeError;
@@ -325,9 +336,19 @@ namespace Strata
 		std::optional<EditorSessionInfo> session = ReadSessionFile(GetSessionFilePath(sessionDirectory, *processId));
 		if (!session || session->ProcessId != *processId || !IsSameProject(session->ProjectPath, projectDirectory))
 			return std::nullopt;
-		if (!Platform::IsProcessAlive(*processId))
+		if (!IsSessionProcessRunning(*session))
 			return std::nullopt;
 		return session;
+	}
+
+	bool EditorSession::IsSessionProcessRunning(const EditorSessionInfo& session)
+	{
+		// The start time tells the process that wrote the session apart from a later one that reuses its id. A
+		// process that cannot be inspected is not one of this user's editors.
+		if (session.ProcessStartTime == 0)
+			return false;
+		const std::optional<uint64_t> startTime = Platform::GetProcessStartTime(session.ProcessId);
+		return startTime && *startTime == session.ProcessStartTime && Platform::IsProcessAlive(session.ProcessId);
 	}
 
 	bool EditorSession::IsSameProject(const std::string& sessionProjectPath, const std::filesystem::path& projectDirectory)

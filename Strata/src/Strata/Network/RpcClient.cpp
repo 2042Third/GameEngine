@@ -1,6 +1,8 @@
 #include "stpch.h"
 #include "Strata/Network/RpcClient.h"
 
+#include "Strata/Core/Crypto.h"
+
 namespace Strata
 {
 
@@ -54,12 +56,29 @@ namespace Strata
 
 		if (!token.empty())
 		{
-			const RpcResult result = CallLocked("rpc.authenticate", nlohmann::json { { "token", std::string(token) } }, timeout);
+			const std::string nonce = RpcAuthentication::GenerateNonce();
+			if (nonce.empty())
+			{
+				FailLocked(JsonRpc::ErrorCode::InternalError, "Authentication failed: the system random number generator failed", true);
+				return false;
+			}
+
+			const RpcResult result = CallLocked("rpc.authenticate", nlohmann::json { { "token", std::string(token) }, { "nonce", nonce } }, timeout);
 			if (result.IsError())
 			{
-				m_LastError = fmt::format("Authentication failed: {}", result.GetError().Message);
-				m_Socket.Close();
-				m_Reader.Reset();
+				FailLocked(result.GetError().Code, fmt::format("Authentication failed: {}", result.GetError().Message), true);
+				return false;
+			}
+
+			// The server must prove that it knows the token before anything else is sent to it: a process that took
+			// over the port of an editor that exited cannot.
+			const nlohmann::json& value = result.GetValue();
+			const auto proof = value.is_object() ? value.find("proof") : value.end();
+			const bool proven = proof != value.end() && proof->is_string()
+				&& Crypto::ConstantTimeEquals(proof->get_ref<const std::string&>(), RpcAuthentication::ComputeServerProof(token, nonce));
+			if (!proven)
+			{
+				FailLocked(JsonRpc::ErrorCode::Unauthorized, "Authentication failed: the server could not prove that it knows the session token, so it may not be the editor", true);
 				return false;
 			}
 		}

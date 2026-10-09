@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Network/RpcServer.h"
 
+#include "Strata/Core/Crypto.h"
 #include "Strata/Core/Platform.h"
 #include "Strata/Network/Socket.h"
 
@@ -64,11 +65,14 @@ namespace Strata
 
 			RpcMethodInfo& authenticate = methods.emplace_back();
 			authenticate.Name = c_AuthenticateMethod;
-			authenticate.Description = "Authenticates this connection with the session token. Must be the first request of every connection.";
+			authenticate.Description = "Authenticates this connection with the session token and returns proof that the server knows it too "
+				"(HMAC-SHA256 of the nonce followed by \"strata-server\"). Must be the first request of every connection.";
 			authenticate.ParamsSchema = nlohmann::json {
 				{ "type", "object" },
-				{ "properties", { { "token", { { "type", "string" }, { "description", "Session token from the editor session file" } } } } },
-				{ "required", nlohmann::json::array({ "token" }) }
+				{ "properties", {
+					{ "token", { { "type", "string" }, { "description", "Session token from the editor session file" } } },
+					{ "nonce", { { "type", "string" }, { "description", "Fresh random value, 32 to 128 hexadecimal characters" } } } } },
+				{ "required", nlohmann::json::array({ "token", "nonce" }) }
 			};
 
 			RpcMethodInfo& ping = methods.emplace_back();
@@ -81,17 +85,9 @@ namespace Strata
 			return methods;
 		}
 
-		// Compares secrets without an early exit, so response timing does not reveal how much of a guess matched.
-		bool ConstantTimeEquals(std::string_view left, std::string_view right)
-		{
-			if (left.size() != right.size())
-				return false;
-
-			uint8_t difference = 0;
-			for (size_t index = 0; index < left.size(); index++)
-				difference = static_cast<uint8_t>(difference | static_cast<uint8_t>(left[index] ^ right[index]));
-			return difference == 0;
-		}
+		constexpr std::string_view c_ServerProofLabel = "strata-server";
+		constexpr size_t c_MinNonceLength = 32;
+		constexpr size_t c_MaxNonceLength = 128;
 
 		nlohmann::json MakeResponse(const nlohmann::json& id, const RpcResult& result)
 		{
@@ -221,6 +217,35 @@ namespace Strata
 	{
 		if (!TryRespond(std::move(result)))
 			ST_CORE_WARN("RpcResponder: '{}' already responded; ignoring the second response", m_Method);
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
+	// RpcAuthentication
+	////////////////////////////////////////////////////////////////////////////////
+
+	std::string RpcAuthentication::GenerateNonce()
+	{
+		std::array<uint8_t, 16> bytes = {};
+		if (!Platform::GenerateSecureRandom(bytes))
+			return {};
+		return Crypto::ToHex(bytes);
+	}
+
+	bool RpcAuthentication::IsValidNonce(std::string_view nonce)
+	{
+		if (nonce.size() < c_MinNonceLength || nonce.size() > c_MaxNonceLength)
+			return false;
+		return std::all_of(nonce.begin(), nonce.end(), [](char character)
+		{
+			return (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') || (character >= 'A' && character <= 'F');
+		});
+	}
+
+	std::string RpcAuthentication::ComputeServerProof(std::string_view token, std::string_view nonce)
+	{
+		std::string message(nonce);
+		message += c_ServerProofLabel;
+		return Crypto::ToHex(Crypto::HmacSha256(token, message));
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -730,11 +755,17 @@ namespace Strata
 	RpcResult RpcServer::Impl::CheckToken(const nlohmann::json& params) const
 	{
 		const auto token = params.is_object() ? params.find("token") : params.end();
-		if (token == params.end() || !token->is_string())
-			return RpcResult::Failure(JsonRpc::ErrorCode::InvalidParams, "Expected params {\"token\": string}");
-		if (!ConstantTimeEquals(token->get_ref<const std::string&>(), Specification.AuthToken))
+		const auto nonce = params.is_object() ? params.find("nonce") : params.end();
+		if (token == params.end() || !token->is_string() || nonce == params.end() || !nonce->is_string())
+			return RpcResult::Failure(JsonRpc::ErrorCode::InvalidParams, "Expected params {\"token\": string, \"nonce\": string}");
+		const std::string& nonceText = nonce->get_ref<const std::string&>();
+		if (!RpcAuthentication::IsValidNonce(nonceText))
+			return RpcResult::Failure(JsonRpc::ErrorCode::InvalidParams, "The nonce must be 32 to 128 hexadecimal characters");
+		if (!Crypto::ConstantTimeEquals(token->get_ref<const std::string&>(), Specification.AuthToken))
 			return RpcResult::Failure(JsonRpc::ErrorCode::Unauthorized, "Invalid authentication token");
-		return RpcResult::Success(nlohmann::json { { "authenticated", true } });
+
+		// Prove knowledge of the token in return, bound to the client's nonce so the proof cannot be replayed.
+		return RpcResult::Success(nlohmann::json { { "authenticated", true }, { "proof", RpcAuthentication::ComputeServerProof(Specification.AuthToken, nonceText) } });
 	}
 
 	void RpcServer::Impl::DeliverResponse(Connection& connection, const OutgoingResponse& response)
