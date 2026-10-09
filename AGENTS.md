@@ -6,7 +6,9 @@ uses GLFW for windowing, glm for math, EnTT for the entity-component system, Jol
 miniaudio for audio. Game logic is written in C++ script modules that are isolated from the engine
 behind a C ABI (crash containment + hot reload).
 
-This file is the source of truth for how to work on Strata. Read it fully before changing code.
+This file is the source of truth for how to work on Strata. Read it fully before changing code. How the parts fit
+together (targets, modules, frame loop, threading, asset pipeline, scripting, editor, export) is described in
+[Docs/Architecture.md](Docs/Architecture.md).
 
 ## Golden rules
 
@@ -35,7 +37,7 @@ This file is the source of truth for how to work on Strata. Read it fully before
 | `StrataTests/` | doctest unit tests, test helpers, and the feature test project. |
 | `Samples/` | Games made through the editor by an AI agent, as projects (`.stproj`, `Assets/` with `.meta` files, `Scripts/`): `Tetris` (played and exported by the CTest `StrataEditor.Tetris`). Open one with `StrataEditor --project Samples/<Game>`. |
 | `CMake/` | CMake modules (configurations, compiler options, shader compilation, manifest). |
-| `Docs/` | Architecture and API documentation. |
+| `Docs/` | Documentation of how the engine works, linked to the code: `README.md` (index), `Architecture.md` (targets and dependencies, modules, frame loop, threading, asset pipeline, scripting, editor, export and runtime). |
 | `.claude/skills/` | Task-specific skills for agents (build/test, adding components, script API, editor automation, making a game end to end: `strata-make-a-game`). |
 
 Engine modules (`Strata/src/Strata/`): `Core` (application, logging, jobs, platform services),
@@ -217,6 +219,9 @@ Conventions:
 - Profile hot paths with `ST_PROFILE_FUNCTION()` / `ST_PROFILE_SCOPE("Name")`.
 
 ## Architecture rules
+
+The threading model, frame loop and pipelines these rules protect are described in
+[Docs/Architecture.md](Docs/Architecture.md).
 
 - **Threading:** the main thread owns the scene, input, scripts and rendering submission. Background
   work goes through `JobSystem` (`Submit` for CPU work, `SubmitIO` for blocking I/O). Results return to
