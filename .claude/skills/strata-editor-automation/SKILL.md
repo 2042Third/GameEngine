@@ -11,22 +11,26 @@ all of them over a local, token-authenticated JSON-RPC connection (`EditorAutoma
 - **StrataCLI** (`build/<preset>/bin/<Config>/StrataCLI[.exe]`): one command per call, JSON result on stdout.
 - **MCP** (`StrataCLI mcp`): every command becomes a tool, `.` replaced by `_` (`entity.create` -> `entity_create`).
 
-Both find the editor through its **session file** (`<user data>/Strata/Sessions/<pid>.json`, written by the
-editor, holding the port and the secret token). You never handle ports or tokens yourself.
+Both find the editor through its **session file** (`<user data>/Sessions/<pid>.json`, written by the editor,
+holding the port and the secret token; `<user data>` is `%LOCALAPPDATA%\Strata` on Windows,
+`~/.local/share/Strata` on Linux and `~/Library/Application Support/Strata` on macOS). You never handle ports or
+tokens yourself.
 
 ## 1. Get an editor
 
 ```sh
 StrataCLI status                      # is one running? lists known editor sessions (never the token)
 StrataCLI launch --no-gpu             # start one without window and GPU, no project; waits until it answers
-StrataCLI launch --headless --project <dir>   # existing project; offscreen rendering (viewport captures work)
+StrataCLI launch --headless --project <dir>   # existing project; no window, but rendering works (captures)
 ```
 
 - `--no-gpu`: no graphics device at all (any machine, CI). `--headless`: no window but rendering works.
   Without either, the editor opens its window (a human can watch).
 - Started by hand: `StrataEditor --no-gpu [--project <dir>]` (keep it running in the background). It serves
   automation by default; `--automation-port <n>` fixes the port (default: a free one), `--no-automation`
-  turns it off. A headless editor runs until `editor.quit` (or a signal); it paces itself at 60 frames/s.
+  turns it off. A headless editor runs until `editor.quit` (or a signal), or with `--idle-timeout <seconds>` until
+  no client has been connected for that long; it paces itself at 60 frames/s. `launch` passes
+  `--idle-timeout <s>` when given; editors started through MCP close after 10 minutes without a client.
 - Several editors: pick one with `--project <dir>` on every call; otherwise the newest is used.
 - `STRATA_SESSION_DIR` moves the session directory; editor and clients must agree on it (tests use it).
 
@@ -39,12 +43,14 @@ StrataCLI call editor.status                # start here: project, scene, play s
 StrataCLI call entity.create '{"name": "Player"}'
 StrataCLI call entity.create @params.json   # params from a file (no shell quoting problems)
 echo '{"frames": 60}' | StrataCLI call editor.wait -     # params from stdin
-StrataCLI call viewport.capture --save-image shot.png    # image results are written to a file
+StrataCLI call viewport.capture --save-image shot.png    # image results are written to a file (needs rendering)
 ```
 
 - On Windows, quoting JSON on the command line is fragile (PowerShell strips inner quotes): prefer `@file` or `-`.
-- Exit codes: `0` success (result on stdout), `1` the editor answered with an error (JSON on stderr), `2` no
-  editor reachable / connection lost, `3` invalid command line.
+- Exit codes: `0` success (result on stdout); `1` the editor answered with an error (`{"code", "message",
+  "data"}` on stderr); `2` no editor reachable or the connection was lost; `3` invalid command line; `4` no
+  answer within `--timeout` (the editor is still there and the command may still finish: wait or call
+  `editor.status`, do not start another editor); `5` `--save-image` could not write the image.
 - `--timeout <ms>` (default 30000) bounds the wait for one call. Commands that take frames (`editor.wait`,
   captures, builds) answer only when they finish.
 
@@ -54,7 +60,8 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 `claude mcp add strata -- <bin>/StrataCLI mcp`). Tools:
 
 - `strata_status`, `strata_launch_editor` (`project`, `headless`, `noGpu`; without `project` it starts an empty
-  editor), `strata_list_methods`, `strata_call` (`method`, `params`) are always there.
+  editor, or reconnects to the empty one it started before), `strata_list_methods`, `strata_call` (`method`,
+  `params`) are always there.
 - While an editor is connected, each command is a tool with the command's schema as `inputSchema`. The tool list
   changes (`notifications/tools/list_changed`) when an editor connects or goes away.
 - Results come as text plus `structuredContent`; `{"Image": {"MimeType", "Data"}}` results come as image content.
@@ -73,7 +80,13 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | What happened (errors, script output)? | `log.read` (`after` = the previous `latest` to page; `minLevel`) |
 
 Commands added at run time (for example `script.*`, `viewport.*`, `camera.*` when those features are present)
-appear in `editor.commands` and as tools automatically.
+appear in `editor.commands` and as tools automatically. The viewport commands need rendering: they fail in an
+editor started with `--no-gpu` (use `--headless`):
+
+- `viewport.capture {width?, height?, camera?: "editor" | "scene", overlays?, path?}` returns
+  `{"Image": {"MimeType": "image/png", "Data"}, width, height, camera, overlays, pendingAssets, notice?, path?}`.
+- `camera.get`; `camera.set {position?, target?, yaw?, pitch?, distance?, fov?, near?, far?, flySpeed?}`;
+  `camera.focus {entities?}` frames the given (or selected) entities.
 
 ## 4. Conventions
 
@@ -124,8 +137,10 @@ with `prefab.instantiate`.
 `component.get` / `log.read` -> `play.stop`. `play.pause {"paused": true}` and `play.step {"frames": n}` advance
 a paused scene by fixed steps. `play.simulate` runs physics only.
 
-**Look at it** (needs rendering, not `--no-gpu`): `StrataCLI call viewport.capture --save-image shot.png`, then
-open `shot.png`; with MCP the capture arrives as an image.
+**Look at it** (needs rendering, not `--no-gpu`): `camera.focus` or `camera.set`, then
+`StrataCLI call viewport.capture '{"camera": "scene"}' --save-image shot.png` and open `shot.png`; with MCP the
+capture arrives as an image. `pendingAssets` above zero means assets were still loading: wait a few frames and
+capture again.
 
 **Export**: `project.export {"directory": "<absolute dir outside the project>"}` writes `<Game>.stpak`,
 `<Game>.stgame` and the runtime renamed `<Game>[.exe]` (`"includeRuntime": false` skips it). Check the result
@@ -141,13 +156,13 @@ headless: `<dir>/<Game> --headless --frames 120` (exit code 0).
 | `No running Strata editor was found` (exit 2) | Start one (`StrataCLI launch --no-gpu`). The editor and the client must use the same `STRATA_SESSION_DIR` (and user). |
 | Several editors, the wrong one answers | Pass `--project <dir>` to every call (MCP: `strata_launch_editor` with `project`). |
 | `-32602 Unknown parameter 'x'` | Misspelled or unsupported parameter; read `data.parameters` or `editor.commands`. |
-| A call times out | The command takes many frames (or the editor is busy): raise `--timeout`. The command still finishes in the editor. |
+| A call times out (exit 4) | The command takes many frames (or the editor is busy): raise `--timeout`. The command still finishes in the editor; do not launch another one. |
 | Changes vanished after `play.stop` | They were made while playing; make them in edit mode. |
 | `editor.quit` fails with unsaved changes | `scene.save` / `scene.saveAs` first, or `{"force": true}`. |
-| Headless editor exits at once with code 1 | Its automation could not start (session directory not private, port in use); read its output or `<user data>/Strata/Logs/StrataEditor.log`. |
-| Rendering / capture commands fail | The editor runs with `--no-gpu`; restart it with `--headless`. |
+| Headless editor exits at once with code 1 | Its automation could not start (session directory not private, port in use); read its output or `<user data>/Logs/StrataEditor.log`. |
+| The editor went away on its own | It was started with `--idle-timeout` (MCP: 10 minutes) and no client stayed connected; start it again. |
+| `viewport.*` / `camera.*` fail or are missing | The editor runs with `--no-gpu` (restart it with `--headless`), or this build has no viewport commands (check `editor.commands`). |
 | Script or import errors | `log.read {"minLevel": "Warn"}`, `asset.info`. |
 
-`<user data>` is `%LOCALAPPDATA%\Strata` on Windows, `~/.local/share/Strata` on Linux and
-`~/Library/Application Support/Strata` on macOS. Session files of editors that exited are removed by the clients
-automatically; never edit or copy them (they hold the token).
+Session files of editors that exited are removed by the clients automatically; never edit or copy them (they
+hold the token).

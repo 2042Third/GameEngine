@@ -401,7 +401,8 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
   that took over a dead editor's port); `rpc.authenticate` then sends the client's HMAC proof. Anything else
   closes the connection. Clients refuse to connect without a token. Unauthenticated connections get tiny
   limits and a deadline; authenticated ones get size limits and backpressure. Never log or print tokens.
-- **Session files:** `<user data>/Strata/Sessions/<pid>.json` holds the full session (address, port, token,
+- **Session files:** `<per-user data>/Strata/Sessions/<pid>.json` (`Platform::FindUserDataDirectory`, e.g.
+  `%LOCALAPPDATA%\Strata\Sessions`) holds the full session (address, port, token,
   process start time). It is written owner-only (`Platform::WritePrivateFile`) into a private directory. A
   session counts only while its process id is alive with the recorded start time (a reused id does not
   match). Files of exited editors are pruned; a live process whose start time cannot be verified is skipped,
@@ -416,6 +417,8 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
   starts get `--idle-timeout 600` (`StrataCLI mcp --idle-timeout <s>`, 0: never) so they do not outlive the agent
   session, and a request for another editor without a project reuses the one it started. `launch` passes
   `--idle-timeout` only when given. `call` reads params as JSON text, from stdin (`-`) or a file (`@path`).
+  Exit codes: 0 success, 1 the editor answered with an error, 2 no editor reachable or connection lost, 3 usage,
+  4 no answer within `--timeout` (the command may still finish), 5 `--save-image` failed.
 - **Environment:** `STRATA_SESSION_DIR` overrides the session directory for editors and clients alike (tests
   use it to stay isolated from real editors). `STRATA_EDITOR_PORT`/`STRATA_EDITOR_TOKEN` select an explicit
   endpoint, and `STRATA_EDITOR_PATH` the editor executable for `launch`/`strata_launch_editor`.

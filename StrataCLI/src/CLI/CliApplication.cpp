@@ -94,8 +94,10 @@ namespace Strata::CLI
 				description["data"] = error.Data;
 			errorOutput << PrettyPrint(description) << "\n";
 
-			const bool transportFailure = error.Code == JsonRpc::ErrorCode::ConnectionClosed || error.Code == JsonRpc::ErrorCode::Timeout;
-			return transportFailure ? ExitCode::ConnectionFailure : ExitCode::RpcError;
+			// A timeout is not a lost editor: the command may still be running, and starting another editor would be wrong.
+			if (error.Code == JsonRpc::ErrorCode::Timeout)
+				return ExitCode::Timeout;
+			return error.Code == JsonRpc::ErrorCode::ConnectionClosed ? ExitCode::ConnectionFailure : ExitCode::RpcError;
 		}
 
 		int ReportUsageError(const std::string& message, std::ostream& errorOutput)
@@ -197,7 +199,7 @@ namespace Strata::CLI
 				if (!SaveResultImage(value, ToAbsolutePath(*arguments.SaveImage), error))
 				{
 					errorOutput << "error: " << error << "\n";
-					return ExitCode::RpcError;
+					return ExitCode::OutputError;
 				}
 			}
 			output << PrettyPrint(value) << "\n";
@@ -552,10 +554,14 @@ namespace Strata::CLI
 			"Environment:\n"
 			"  STRATA_EDITOR_PORT, STRATA_EDITOR_TOKEN  Explicit editor endpoint\n"
 			"  STRATA_EDITOR_PATH  Editor executable for launch/mcp (default: StrataEditor next to StrataCLI)\n"
-			"  STRATA_SESSION_DIR  Private directory of editor session files (default: <user data>/Strata/Sessions)\n"
+			"  STRATA_SESSION_DIR  Private directory of editor session files (default: %LOCALAPPDATA%\\Strata\\Sessions,\n"
+			"                      ~/.local/share/Strata/Sessions or ~/Library/Application Support/Strata/Sessions)\n"
 			"\n"
-			"Exit codes: 0 success, 1 the editor returned an error, 2 no editor reachable or connection lost,\n"
-			"            3 invalid command line\n",
+			"Exit codes: 0 success; 1 the editor answered with an error; 2 no editor reachable or the connection\n"
+			"            was lost; 3 invalid command line; 4 no answer within --timeout (the command may still be\n"
+			"            running in the editor: do not start another one); 5 --save-image could not save the image.\n"
+			"Errors of a call (1, and 2 or 4 once the call was sent) are printed to stderr as JSON\n"
+			"{{\"code\", \"message\", \"data\"}}; other problems as \"error: <message>\".\n",
 			c_EngineVersion);
 	}
 

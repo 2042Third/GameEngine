@@ -18,9 +18,11 @@ namespace Strata::CLI
 		enum : int
 		{
 			Success = 0,
-			RpcError = 1,          // The editor answered with an error
+			RpcError = 1,          // The editor answered with an error (JSON error object on stderr)
 			ConnectionFailure = 2, // No editor reachable, connection lost, or the editor failed to launch
-			UsageError = 3         // Invalid command line
+			UsageError = 3,        // Invalid command line
+			Timeout = 4,           // No answer within --timeout; the command may still be running in the editor
+			OutputError = 5        // The answer arrived but could not be saved (--save-image)
 		};
 	};
 

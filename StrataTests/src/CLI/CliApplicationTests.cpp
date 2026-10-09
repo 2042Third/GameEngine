@@ -10,6 +10,7 @@
 #include "Strata/Network/Socket.h"
 #include "TestHelpers.h"
 
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -258,6 +259,29 @@ TEST_SUITE("CLI.Commands")
 		CHECK(noSession.ErrorOutput.find("No running Strata editor") != std::string::npos);
 	}
 
+	TEST_CASE("A call without an answer in time has its own exit code")
+	{
+		IsolatedEnvironment environment("CliTimeout");
+		Tests::PumpedRpcServer editor;
+		std::mutex responderMutex;
+		Ref<RpcResponder> heldResponder;
+		RpcMethodInfo hold;
+		hold.Name = "test.hold";
+		REQUIRE(editor.GetServer().RegisterMethod(hold, [&](const nlohmann::json&, const Ref<RpcResponder>& responder)
+		{
+			std::scoped_lock<std::mutex> lock(responderMutex);
+			heldResponder = responder; // Never answered while the call waits, like a command that takes long
+		}));
+		REQUIRE(Tests::StartFakeEditor(editor));
+
+		// Not a lost editor (exit code 2): the command may still be running.
+		const CliRun timedOut = Run(Concat({ "call", "test.hold", "--timeout", "300" }, ExplicitEndpoint(editor)));
+		CHECK(timedOut.ExitCode == ExitCode::Timeout);
+		CHECK(timedOut.Output.empty());
+		CHECK(JsonRpc::Parse(timedOut.ErrorOutput).value()["code"] == JsonRpc::ErrorCode::Timeout);
+		editor.Stop();
+	}
+
 	TEST_CASE("call reads its params from standard input or a file")
 	{
 		IsolatedEnvironment environment("CliParams");
@@ -313,7 +337,7 @@ TEST_SUITE("CLI.Commands")
 
 		// A result without an image is reported instead of silently printed.
 		const CliRun noImage = Run(Concat({ "call", "math.add", "{\"a\":1,\"b\":2}", "--save-image", FileSystem::ToUTF8(image) }, ExplicitEndpoint(editor)));
-		CHECK(noImage.ExitCode == ExitCode::RpcError);
+		CHECK(noImage.ExitCode == ExitCode::OutputError);
 		CHECK(noImage.ErrorOutput.find("no image") != std::string::npos);
 	}
 
