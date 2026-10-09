@@ -306,6 +306,10 @@ namespace Strata
 
 		if (keepWorldTransform)
 			SetWorldTransform(child, worldTransform);
+
+		// Systems that build state from the hierarchy (physics merges descendants' colliders into a body) learn about the
+		// move through the child's on_update signal, emitted once the hierarchy and transform are final.
+		m_Registry.patch<RelationshipComponent>(child.GetHandle());
 		return true;
 	}
 
@@ -435,7 +439,7 @@ namespace Strata
 		{
 			// A parent with zero scale has no inverse; the child's local transform cannot express the request.
 			const glm::mat4 parentWorld = GetWorldTransform(parent);
-			if (!(glm::abs(glm::determinant(parentWorld)) > 1e-12f))
+			if (!(glm::abs(glm::determinant(parentWorld)) > c_MinInvertibleDeterminant))
 			{
 				ST_CORE_WARN("Cannot set the world transform of '{}': its parent's transform is singular", entity.GetName());
 				return false;

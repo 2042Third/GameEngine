@@ -91,6 +91,10 @@ namespace Strata
 
 		void SetUploadBudget(uint64_t bytesPerFrame) { m_UploadBudget.store(bytesPerFrame); }
 		AssetManagerStats GetStats() const;
+		// Changes whenever an asset object is published, replaced or dropped (a load or reload finished, a memory asset was
+		// added, an asset was unloaded or unregistered), so that caches of data derived from loaded assets can check
+		// cheaply whether to revalidate.
+		uint64_t GetContentVersion() const { return m_ContentVersion.load(std::memory_order_acquire); }
 	protected:
 		// Reads the stored bytes of an asset. Called on I/O threads; must be thread-safe.
 		virtual bool ReadAssetData(const AssetMetadata& metadata, std::vector<uint8_t>& outData, std::string* outError) = 0;
@@ -139,6 +143,7 @@ namespace Strata
 
 		nvrhi::CommandListHandle m_UploadCommandList;
 		std::atomic<uint64_t> m_UploadBudget = 256ull * 1024 * 1024;
+		std::atomic<uint64_t> m_ContentVersion = 0; // See GetContentVersion; changed with m_Mutex held
 		bool m_ProcessingCompletions = false; // Main thread only
 	};
 

@@ -53,6 +53,8 @@ namespace Strata
 		// destruction is deferred to the end of the frame, so handles stay valid for the rest of the frame.
 		void DestroyEntity(Entity entity);
 		bool IsPendingDestroy(Entity entity) const;
+		// Entities whose destruction was deferred to the end of the current update (each with its descendants).
+		const std::vector<UUID>& GetPendingDestroys() const { return m_PendingDestroy; }
 
 		// Deep copy of an entity and its descendants with fresh UUIDs, inserted after the original.
 		// References between entities inside the copied hierarchy are remapped to the copies.
@@ -73,9 +75,11 @@ namespace Strata
 		//////////////////////////////////////////////////////////////////////////
 
 		// Re-parents child under parent (an invalid parent makes it a root). Returns false if this would create a
-		// cycle. With keepWorldTransform the child's world transform is preserved.
+		// cycle. With keepWorldTransform the child's world transform is preserved. A change of parent emits the child's
+		// RelationshipComponent on_update signal (the old and new parents' Children lists change silently).
 		bool SetParent(Entity child, Entity parent, bool keepWorldTransform = true);
-		// Moves an entity to position `index` among its siblings (or among the roots).
+		// Moves an entity to position `index` among its siblings (or among the roots). Only the order changes, so no
+		// signal is emitted.
 		bool SetSiblingIndex(Entity entity, size_t index);
 		bool IsDescendantOf(Entity entity, Entity ancestor) const;
 
@@ -86,6 +90,9 @@ namespace Strata
 		// Returns false (leaving the entity unchanged) if the transform cannot be represented, e.g. under a parent
 		// with zero scale.
 		bool SetWorldTransform(Entity entity, const glm::mat4& worldTransform);
+		// A parent whose world transform's determinant is not above this (in magnitude) cannot be inverted, so the world
+		// transforms of its children cannot be set.
+		static constexpr float c_MinInvertibleDeterminant = 1.0e-12f;
 		bool IsActiveInHierarchy(Entity entity) const;
 
 		//////////////////////////////////////////////////////////////////////////

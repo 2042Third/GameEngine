@@ -166,6 +166,50 @@ TEST_SUITE("Scene")
 		CHECK(order == std::vector<Entity> { a, c, b });
 	}
 
+	TEST_CASE("Reparenting notifies the moved entity's relationship listeners")
+	{
+		struct Observer
+		{
+			std::vector<entt::entity> Updated;
+			std::vector<UUID> SeenParents;
+			glm::vec3 SeenTranslation = glm::vec3(0.0f);
+
+			void OnUpdate(entt::registry& registry, entt::entity entity)
+			{
+				Updated.push_back(entity);
+				SeenParents.push_back(registry.get<RelationshipComponent>(entity).Parent);
+				SeenTranslation = registry.get<TransformComponent>(entity).Translation;
+			}
+		};
+
+		Scene scene;
+		Entity parent = scene.CreateEntity("Parent");
+		parent.GetTransform().Translation = glm::vec3(5.0f, 0.0f, 0.0f);
+		Entity child = scene.CreateEntity("Child");
+		Entity other = scene.CreateEntity("Other");
+		Observer observer;
+		scene.GetRegistry().on_update<RelationshipComponent>().connect<&Observer::OnUpdate>(observer);
+
+		// Listeners see the final hierarchy and the transform that keeps the world pose.
+		CHECK(scene.SetParent(child, parent));
+		REQUIRE(observer.Updated.size() == 1);
+		CHECK(observer.Updated[0] == child.GetHandle());
+		CHECK(observer.SeenParents[0] == parent.GetUUID());
+		CHECK(observer.SeenTranslation == glm::vec3(-5.0f, 0.0f, 0.0f));
+
+		// No change, rejected requests and sibling reordering emit nothing.
+		CHECK(scene.SetParent(child, parent));
+		CHECK_FALSE(scene.SetParent(parent, child));
+		CHECK(scene.SetParent(other, parent));
+		CHECK(scene.SetSiblingIndex(other, 0));
+		CHECK(observer.Updated.size() == 2);
+
+		CHECK(scene.SetParent(child, Entity()));
+		REQUIRE(observer.Updated.size() == 3);
+		CHECK(observer.Updated[2] == child.GetHandle());
+		CHECK_FALSE(observer.SeenParents[2].IsValid());
+	}
+
 	TEST_CASE("World transforms follow the hierarchy")
 	{
 		Scene scene;

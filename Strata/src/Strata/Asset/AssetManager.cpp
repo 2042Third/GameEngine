@@ -345,6 +345,8 @@ namespace Strata
 		if (it == m_Entries.end() || it->second.IsMemoryAsset)
 			return;
 
+		if (it->second.Loaded)
+			m_ContentVersion.fetch_add(1, std::memory_order_release);
 		it->second.Loaded = nullptr;
 		it->second.State = AssetState::Unloaded;
 		it->second.Error.clear();
@@ -401,6 +403,7 @@ namespace Strata
 		entry.Generation = m_NextGeneration++;
 		if (!metadata.Path.empty() && !metadata.IsSubAsset())
 			m_PathIndex[metadata.Path] = metadata.Handle;
+		m_ContentVersion.fetch_add(1, std::memory_order_release);
 		return metadata.Handle;
 	}
 
@@ -428,6 +431,8 @@ namespace Strata
 		auto pathIt = m_PathIndex.find(it->second.Metadata.Path);
 		if (pathIt != m_PathIndex.end() && pathIt->second == handle)
 			m_PathIndex.erase(pathIt);
+		if (it->second.Loaded)
+			m_ContentVersion.fetch_add(1, std::memory_order_release);
 		m_Entries.erase(it);
 	}
 
@@ -519,6 +524,7 @@ namespace Strata
 				entry.Loaded = completion.LoadedAsset;
 				entry.State = AssetState::Ready;
 				entry.Error.clear();
+				m_ContentVersion.fetch_add(1, std::memory_order_release);
 			}
 			else
 			{
