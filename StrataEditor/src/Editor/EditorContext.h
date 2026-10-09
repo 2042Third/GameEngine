@@ -5,6 +5,7 @@
 #include "Editor/UndoStack.h"
 
 #include <Strata/Asset/EditorAssetManager.h>
+#include <Strata/Core/Crypto.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Project/Project.h>
 #include <Strata/Scene/Scene.h>
@@ -43,6 +44,13 @@ namespace Strata
 		bool Loaded = false; // The built module is the loaded one (loaded, reloaded, or already loaded and unchanged)
 		bool Reloaded = false; // It replaced a loaded module (running scenes went through a hot reload)
 		std::string Error;   // Why it could not be loaded
+	};
+
+	// The file of the script module the editor runs, as read back for shipping it (EditorContext::ReadRunningScriptModule).
+	struct ScriptModuleFile
+	{
+		std::filesystem::path Path; // Empty when no module is loaded
+		std::vector<uint8_t> Bytes;
 	};
 
 	// The editor's state independent of any UI: the open project and its assets, the edited scene, play mode, the
@@ -149,6 +157,11 @@ namespace Strata
 		const ScriptBuildLoad& GetLastScriptBuildLoad() const { return m_LastScriptBuildLoad; }
 		// The script crash that stopped play mode last; cleared when a module loads.
 		const std::optional<ScriptFault>& GetLastScriptFault() const { return m_LastScriptFault; }
+		// Reads the loaded module's file and checks that it is still the file that was loaded, so that exports ship the
+		// scripts the editor runs. Fails while a script build runs (it may be writing the file) and when the file changed
+		// since it was loaded (e.g. a build whose module could not be loaded). Without a loaded module it succeeds with an
+		// empty path.
+		bool ReadRunningScriptModule(ScriptModuleFile& outFile, std::string* outError = nullptr) const;
 
 		// Once per frame: script hot reload and builds, asset hot reload and loading, then the scene update (simulation
 		// while playing). A script crash while playing stops play mode.
@@ -159,6 +172,9 @@ namespace Strata
 		void ResetScene(Ref<Scene> scene, AssetHandle handle);
 		void OpenScriptEngine(bool created);
 		void CloseScriptEngine();
+		// Fingerprints the loaded module's file after a load. `expected` is its digest from before the load (if known):
+		// a file that changed while it was being loaded leaves the running version unknown.
+		void RecordScriptModuleFile(const std::optional<Sha256Digest>& expected);
 		void OnScriptBuildFinished();
 		// Stops play mode (and reports the fault) when the script module crashed. Returns true if it did.
 		bool StopOnScriptFault();
@@ -179,6 +195,9 @@ namespace Strata
 		ScriptBuilder m_ScriptBuilder;
 		ScriptBuildLoad m_LastScriptBuildLoad;
 		std::optional<ScriptFault> m_LastScriptFault;
+		// The loaded module's file as it was loaded (see ReadRunningScriptModule), and the load it belongs to.
+		std::optional<Sha256Digest> m_ScriptModuleDigest;
+		uint64_t m_ScriptModuleLoadCount = 0;
 	};
 
 }

@@ -357,6 +357,47 @@ TEST_SUITE("Editor.Scripts")
 		CHECK(game->GetScene()->IsRunning());
 	}
 
+	TEST_CASE("Exports ship the module file the editor loaded, not a newer one")
+	{
+		// A module the editor loaded from a file that later changes (as a build whose module fails to load leaves it).
+		ScriptHarness harness;
+		const std::filesystem::path modules = harness.Directory.parent_path() / "Modules";
+		const std::filesystem::path module = modules / GetTestScriptModule(STRATA_TEST_SCRIPTS_FAULTS).filename();
+		REQUIRE(FileSystem::CreateDirectories(modules));
+		REQUIRE(FileSystem::Copy(GetTestScriptModule(STRATA_TEST_SCRIPTS_FAULTS), module));
+		const std::optional<std::vector<uint8_t>> loadedBytes = FileSystem::ReadBytes(module);
+		REQUIRE(loadedBytes);
+		// As in the editor, hot reload is on: the module runs from a private copy, so its file can change. The test never
+		// updates the context, so the watcher does not reload it.
+		harness.Context.GetScriptEngine()->SetHotReloadEnabled(true);
+		harness.Run("script.load", { { "path", FileSystem::ToUTF8(module) } });
+		harness.Run("script.add", { { "entity", harness.CreateEntity("Healthy Host") }, { "class", "Healthy" } });
+		harness.Run("scene.saveAs", { { "path", "Scenes/Main.stscene" } });
+		harness.Run("project.setStartScene", { { "scene", "Scenes/Main.stscene" } });
+		const std::filesystem::path build = harness.Directory.parent_path() / "Build";
+		const nlohmann::json parameters = { { "directory", FileSystem::ToUTF8(build) }, { "includeRuntime", false } };
+
+		// Another file in its place: refused, nothing is written.
+		const std::optional<std::vector<uint8_t>> otherBytes = FileSystem::ReadBytes(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
+		REQUIRE(otherBytes);
+		REQUIRE(FileSystem::WriteBytes(module, *otherBytes));
+		const std::string error = harness.Error("project.export", parameters);
+		CHECK(error.find("changed since the editor loaded it") != std::string::npos);
+		CHECK(error.find("script.reload") != std::string::npos);
+		CHECK_FALSE(FileSystem::Exists(build));
+
+		// The same bytes as loaded again: exported as they are.
+		REQUIRE(FileSystem::WriteBytes(module, *loadedBytes));
+		const nlohmann::json exported = harness.Run("project.export", parameters);
+		CHECK(FileSystem::ReadBytes(FileSystem::FromUTF8(exported["scriptModule"].get<std::string>())) == loadedBytes);
+
+		// Reloading makes the new file the module the editor runs, and the one the game ships.
+		REQUIRE(FileSystem::WriteBytes(module, *otherBytes));
+		harness.Run("script.reload");
+		const nlohmann::json reexported = harness.Run("project.export", parameters);
+		CHECK(FileSystem::ReadBytes(FileSystem::FromUTF8(reexported["scriptModule"].get<std::string>())) == otherBytes);
+	}
+
 	TEST_CASE("Games whose scenes use scripts are not exported without a script module")
 	{
 		ScriptHarness harness;

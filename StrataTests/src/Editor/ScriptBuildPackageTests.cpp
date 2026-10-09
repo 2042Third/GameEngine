@@ -102,6 +102,18 @@ namespace
 			return result.Value;
 		}
 
+		// Runs frames until the running script build finished.
+		void WaitForBuild()
+		{
+			const auto deadline = std::chrono::steady_clock::now() + c_BuildTimeout;
+			while (Context.GetScriptBuilder().IsRunning() && std::chrono::steady_clock::now() < deadline)
+			{
+				Frame();
+				std::this_thread::sleep_for(std::chrono::milliseconds(5));
+			}
+			REQUIRE_FALSE(Context.GetScriptBuilder().IsRunning());
+		}
+
 		void WriteScript(const std::string& source)
 		{
 			REQUIRE(FileSystem::WriteText(Context.GetProject()->GetScriptSourceDirectory() / "Counter.cpp", source));
@@ -219,13 +231,7 @@ TEST_SUITE("Package.ScriptBuild")
 		CHECK_FALSE(second.Success);
 		CHECK(second.Error.find("still running") != std::string::npos);
 		CHECK_FALSE(engine->IsHotReloadEnabled());
-		const auto deadline = std::chrono::steady_clock::now() + c_BuildTimeout;
-		while (harness.Context.GetScriptBuilder().IsRunning() && std::chrono::steady_clock::now() < deadline)
-		{
-			harness.Frame();
-			std::this_thread::sleep_for(std::chrono::milliseconds(5));
-		}
-		REQUIRE_FALSE(harness.Context.GetScriptBuilder().IsRunning());
+		harness.WaitForBuild();
 		CHECK(harness.Context.GetScriptBuilder().GetLastResult().Success);
 		CHECK(harness.Context.GetScriptBuilder().GetLastResult().ModuleChanged);
 		CHECK_FALSE(harness.Context.GetScriptBuilder().GetLastResult().Configured);
@@ -288,12 +294,19 @@ TEST_SUITE("Package.ScriptBuild")
 		harness.Frames(1);
 		CHECK(GetField<int32_t>(*system, host, "Counter", "Count") == countBefore + 200); // The previous module still runs
 
-		// Fixed again, stopped, exported: the game runs the scripts in the game runtime.
-		harness.WriteScript(MakeCounterScript(2));
-		harness.Run("script.build");
+		// Fixed again and stopped. Nothing is exported while the build runs (it may be writing the module); afterwards the
+		// game ships the new module and runs it in the game runtime.
 		harness.Run("play.stop");
+		harness.WriteScript(MakeCounterScript(2));
+		harness.Run("script.build", { { "wait", false } });
 		const std::filesystem::path build = harness.Directory.parent_path() / "Build";
-		const nlohmann::json exported = harness.Run("project.export", { { "directory", FileSystem::ToUTF8(build) }, { "includeRuntime", false } });
+		const nlohmann::json exportParameters = { { "directory", FileSystem::ToUTF8(build) }, { "includeRuntime", false } };
+		const EditorCommandResult early = harness.Commands.Execute(harness.Context, "project.export", exportParameters);
+		CHECK_FALSE(early.Success);
+		CHECK(early.Error.find("is running") != std::string::npos);
+		harness.WaitForBuild();
+		REQUIRE(harness.Context.GetScriptBuilder().GetLastResult().Success);
+		const nlohmann::json exported = harness.Run("project.export", exportParameters);
 		REQUIRE(exported["scriptModule"].is_string());
 		std::string gameError;
 		Scope<GameRuntime> game = GameRuntime::Create(FileSystem::FromUTF8(exported["manifest"].get<std::string>()), &gameError);

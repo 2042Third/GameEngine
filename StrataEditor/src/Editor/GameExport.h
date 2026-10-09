@@ -35,10 +35,10 @@ namespace Strata
 	};
 
 	// Exports the open project as a playable game: an asset pack with every project asset, the script module the editor
-	// runs (the loaded one, or else the project's built one), a game manifest pointing at the project's start scene (or
-	// the open scene when none is set) and the module, and the runtime executable with the third-party notices found next
-	// to it. The scene must be saved and not running. A project whose scenes or prefabs use scripts cannot be exported
-	// without a script module.
+	// runs (the loaded module, exactly as it was loaded: see EditorContext::ReadRunningScriptModule), a game manifest
+	// pointing at the project's start scene (or the open scene when none is set) and the module, and the runtime
+	// executable with the third-party notices found next to it. The scene must be saved and not running, and no script
+	// build may run. A project whose scenes or prefabs use scripts cannot be exported without a loaded script module.
 	bool ExportGame(EditorContext& context, const GameExportOptions& options, GameExportResult& outResult, std::string* outError = nullptr);
 
 	// Platform file name of an executable ("Name.exe" on Windows, "Name" elsewhere).

@@ -293,8 +293,9 @@ Building and loading scripts:
   find_package(StrataScriptCore CONFIG REQUIRED PATHS "<engine>/StrataScriptCore/CMake" NO_DEFAULT_PATH)
   strata_add_script_module(MyGameScripts SOURCE_DIR Scripts)
   ```
-  Use the engine's compiler and configuration (the package defines Dist with the Release flags, like the engine; multi-config
-  generators get it added to `CMAKE_CONFIGURATION_TYPES`). The module is `<Name>.dll`/`.so`/`.dylib` (`ScriptEngine::GetModuleFileName`).
+  Use the engine's compiler and configuration (the package defines Dist with the Release flags, like the engine;
+  multi-config generators get it added to `CMAKE_CONFIGURATION_TYPES`). The module is `<Name>.dll`/`.so`/`.dylib`
+  (`ScriptEngine::GetModuleFileName`).
 - **Project scripts.** A project's scripts live in its script directory (`ProjectScriptSettings::SourceDirectory`,
   "Scripts"), whose `CMakeLists.txt` builds every `.cpp`/`.h` below it into the module `ModuleName` (stored in the
   `.stproj`, version 2: `"Scripts": {"SourceDirectory", "ModuleName"}`; version 1 files derive the name from the project
@@ -313,13 +314,16 @@ Building and loading scripts:
   once per frame before the scene. A successful `script.build` loads the module, or reloads it when it changed (hot
   reload while playing; the file watcher is paused during editor builds so the module reloads once). A crash while
   playing stops play mode and logs the class, callback and entity; `play.start` then fails until the module is rebuilt
-  (a successful build loads a crashed module again even when it did not change) or reloaded. `script.load {path}` runs another module file (tests use in-tree modules this way).
-- **Exported games:** `project.export` copies the module the editor runs (the loaded one, else the project's built
-  one; plus its PDB except in Dist builds or with `includeScriptSymbols: false`) next to the game and names it in the
-  `.stgame` manifest (version 2, `"ScriptModule"`; version 1 manifests load without scripts). It refuses projects whose
-  scenes or prefabs attach scripts when there is no module. `GameRuntime` loads the module (no hot reload) and makes
-  its engine active before the start scene plays. A script crash disables the scripts for the session
-  (`GameRuntime::GetScriptFault`): a headless `StrataRuntime` exits with code 2, a windowed one keeps running and logs it.
+  (a successful build loads a crashed module again even when it did not change) or reloaded. `script.load {path}` runs
+  another module file (tests use in-tree modules this way).
+- **Exported games:** `project.export` writes the module the editor runs next to the game (the loaded module's file,
+  verified against the digest taken when it was loaded, `EditorContext::ReadRunningScriptModule`; plus its PDB except
+  in Dist builds or with `includeScriptSymbols: false`) and names it in the `.stgame` manifest (version 2,
+  `"ScriptModule"`; version 1 manifests load without scripts). It refuses while a script build runs, when the module
+  file changed since it was loaded (`script.reload` or `script.build` first), and when scenes or prefabs attach scripts
+  but no module is loaded. `GameRuntime` loads the module (no hot reload) and makes its engine active before the start
+  scene plays. A script crash disables the scripts for the session (`GameRuntime::GetScriptFault`): a headless
+  `StrataRuntime` exits with code 2, a windowed one keeps running and logs it.
 - The host: `ScriptEngine::LoadModule(path)`, `ScriptEngine::SetActive(engine)` before scenes start playing,
   `SetHotReloadEnabled(true)` and `Update()` once per frame (outside scene updates) for hot reload. The module is loaded
   from a private temporary copy, so the build can overwrite the original at any time; a failed (re)load keeps the

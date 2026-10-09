@@ -3,6 +3,7 @@
 #include "Editor/ScriptProject.h"
 
 #include <Strata/Asset/AssetManager.h>
+#include <Strata/Core/Crypto.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
@@ -23,6 +24,17 @@ namespace Strata
 			case SceneState::Simulate: return "Simulate";
 		}
 		return "Unknown";
+	}
+
+	namespace
+	{
+
+		std::optional<Sha256Digest> HashFile(const std::filesystem::path& path)
+		{
+			const std::optional<std::vector<uint8_t>> bytes = FileSystem::ReadBytes(path);
+			return bytes ? std::optional<Sha256Digest>(Sha256::Hash(*bytes)) : std::nullopt;
+		}
+
 	}
 
 	EditorContext::EditorContext(const EditorContextSpecification& specification)
@@ -387,6 +399,7 @@ namespace Strata
 			ScriptEngine::SetActive(nullptr);
 		m_ScriptEngine.reset();
 		m_LastScriptFault.reset();
+		RecordScriptModuleFile(std::nullopt);
 	}
 
 	bool EditorContext::LoadScriptModule(const std::filesystem::path& path, std::string* outError)
@@ -397,8 +410,10 @@ namespace Strata
 				*outError = "No project is open";
 			return false;
 		}
+		const std::optional<Sha256Digest> digest = HashFile(path);
 		if (!m_ScriptEngine->LoadModule(path, outError))
 			return false;
+		RecordScriptModuleFile(digest);
 		m_LastScriptFault.reset();
 		return true;
 	}
@@ -413,8 +428,10 @@ namespace Strata
 		}
 		if (m_ScriptEngine->IsModuleLoaded())
 		{
+			const std::optional<Sha256Digest> digest = HashFile(m_ScriptEngine->GetModulePath());
 			if (!m_ScriptEngine->Reload(outError))
 				return false;
+			RecordScriptModuleFile(digest);
 			m_LastScriptFault.reset();
 			return true;
 		}
@@ -429,6 +446,50 @@ namespace Strata
 			return false;
 		}
 		return LoadScriptModule(module, outError);
+	}
+
+	void EditorContext::RecordScriptModuleFile(const std::optional<Sha256Digest>& expected)
+	{
+		m_ScriptModuleDigest.reset();
+		m_ScriptModuleLoadCount = m_ScriptEngine ? m_ScriptEngine->GetLoadCount() : 0;
+		if (!m_ScriptEngine || !m_ScriptEngine->IsModuleLoaded())
+			return;
+		const std::optional<Sha256Digest> digest = HashFile(m_ScriptEngine->GetModulePath());
+		if (digest && (!expected || *expected == *digest))
+			m_ScriptModuleDigest = digest;
+	}
+
+	bool EditorContext::ReadRunningScriptModule(ScriptModuleFile& outFile, std::string* outError) const
+	{
+		auto fail = [outError](std::string message)
+		{
+			if (outError)
+				*outError = std::move(message);
+			return false;
+		};
+
+		outFile = {};
+		if (m_ScriptBuilder.IsRunning())
+		{
+			return fail(fmt::format("Script build {} is running and may be writing the script module; wait for it to finish (script.status) and try again",
+				m_ScriptBuilder.GetCurrentID()));
+		}
+		if (!m_ScriptEngine || !m_ScriptEngine->IsModuleLoaded())
+			return true;
+
+		const std::filesystem::path& path = m_ScriptEngine->GetModulePath();
+		std::optional<std::vector<uint8_t>> bytes = FileSystem::ReadBytes(path);
+		if (!bytes)
+			return fail(fmt::format("Cannot read the script module '{}'", FileSystem::ToUTF8(path)));
+		if (!m_ScriptModuleDigest || Sha256::Hash(*bytes) != *m_ScriptModuleDigest)
+		{
+			return fail(fmt::format("The script module '{}' changed since the editor loaded it (e.g. a build whose module could not be loaded, or a "
+				"build outside the editor): load it (script.reload) or build the scripts (script.build), so that the game ships the scripts the "
+				"editor runs", FileSystem::ToUTF8(path)));
+		}
+		outFile.Path = path;
+		outFile.Bytes = std::move(*bytes);
+		return true;
 	}
 
 	bool EditorContext::BuildScripts(std::string* outError)
@@ -496,7 +557,12 @@ namespace Strata
 	{
 		// Script modules are only replaced here, outside scene updates.
 		if (m_ScriptEngine)
+		{
 			m_ScriptEngine->Update();
+			// A hot reload by the file watcher: the file is complete (the engine waits for that) and was just loaded.
+			if (m_ScriptEngine->GetLoadCount() != m_ScriptModuleLoadCount)
+				RecordScriptModuleFile(std::nullopt);
+		}
 		if (m_ScriptBuilder.Update())
 			OnScriptBuildFinished();
 

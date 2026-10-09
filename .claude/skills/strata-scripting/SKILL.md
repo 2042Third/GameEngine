@@ -164,8 +164,9 @@ every step below is a command, and source files are written with your own file t
 9. **Ship.** `project.setStartScene`, then `project.export {"directory": "<absolute, outside the project>"}` writes the
    game: the runtime executable, the asset pack, the script module (the one the editor runs) and the `.stgame`
    manifest naming it. The exported game loads the module before its start scene; run it headless with
-   `<Game> --headless --frames 600` to check it (exit code 2 means the scripts crashed). Export refuses scenes that use
-   scripts while no module is built.
+   `<Game> --headless --frames 600` to check it (exit code 2 means the scripts crashed). Export refuses while a build
+   runs, when the module file changed since the editor loaded it (e.g. a build whose module did not load: fix it, or
+   `script.reload`), and when scenes use scripts but no module is loaded.
 
 The UI does the same with Scripts > Build Scripts (Ctrl+B), the toolbar's Build Scripts button and the inspector's
 Script section (add a class from the module, edit fields with their default shown and a reset button).

@@ -8,7 +8,6 @@
 #include <Strata/Core/Log.h>
 #include <Strata/Core/Platform.h>
 #include <Strata/Project/GameManifest.h>
-#include <Strata/Scripting/ScriptEngine.h>
 
 #include <cctype>
 
@@ -119,25 +118,23 @@ namespace Strata
 				return fail(fmt::format("'{}' is missing next to the runtime; games must ship the third-party notices", c_NoticesFile));
 		}
 
-		if (!FileSystem::CreateDirectories(options.Directory))
-			return fail(fmt::format("Could not create '{}'", FileSystem::ToUTF8(options.Directory)));
-
-		// The game runs the scripts the editor runs: the loaded module, or else the project's built one.
-		std::filesystem::path scriptModule;
-		if (const Ref<ScriptEngine>& engine = context.GetScriptEngine(); engine && engine->IsModuleLoaded())
-			scriptModule = engine->GetModulePath();
-		else if (FileSystem::IsRegularFile(project.GetScriptModulePath()))
-			scriptModule = project.GetScriptModulePath();
-		if (scriptModule.empty())
+		// The game runs the scripts the editor runs: the loaded module, exactly as it was loaded.
+		ScriptModuleFile scriptModule;
+		std::string scriptError;
+		if (!context.ReadRunningScriptModule(scriptModule, &scriptError))
+			return fail(scriptError);
+		if (scriptModule.Path.empty())
 		{
 			const std::string user = FindAssetUsingScripts(*assets);
 			if (!user.empty())
-				return fail(fmt::format("'{}' uses scripts, but the project has no script module: build the scripts first (script.build)", user));
+			{
+				return fail(fmt::format("'{}' uses scripts, but no script module is loaded: build the scripts (script.build) or load the built module "
+					"(script.reload)", user));
+			}
 		}
-		else if (!FileSystem::IsRegularFile(scriptModule))
-		{
-			return fail(fmt::format("The script module '{}' is missing; build the scripts again (script.build)", FileSystem::ToUTF8(scriptModule)));
-		}
+
+		if (!FileSystem::CreateDirectories(options.Directory))
+			return fail(fmt::format("Could not create '{}'", FileSystem::ToUTF8(options.Directory)));
 
 		const std::string name = ToFileName(project.GetConfig().Name);
 		GameExportResult result;
@@ -151,12 +148,12 @@ namespace Strata
 		manifest.Name = project.GetConfig().Name;
 		manifest.AssetPack = FileSystem::ToUTF8(result.AssetPack.filename());
 		manifest.StartScene = startScene;
-		if (!scriptModule.empty())
+		if (!scriptModule.Path.empty())
 		{
-			result.ScriptModule = options.Directory / scriptModule.filename();
-			if (!FileSystem::Copy(scriptModule, result.ScriptModule, true))
-				return fail(fmt::format("Could not copy the script module to '{}'", FileSystem::ToUTF8(result.ScriptModule)));
-			std::filesystem::path symbols = scriptModule;
+			result.ScriptModule = options.Directory / scriptModule.Path.filename();
+			if (!FileSystem::WriteBytes(result.ScriptModule, scriptModule.Bytes))
+				return fail(fmt::format("Could not write the script module to '{}'", FileSystem::ToUTF8(result.ScriptModule)));
+			std::filesystem::path symbols = scriptModule.Path;
 			symbols.replace_extension(".pdb");
 			if (options.IncludeScriptSymbols && FileSystem::IsRegularFile(symbols)
 				&& !FileSystem::Copy(symbols, options.Directory / symbols.filename(), true))
