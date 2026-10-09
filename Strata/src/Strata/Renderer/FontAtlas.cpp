@@ -40,10 +40,9 @@ namespace Strata
 		if (!font || font->GetData().empty())
 			return fail("No font data");
 
+		// Font::Create validated everything stb_truetype reads below (see ValidateTrueTypeFont).
 		const std::vector<uint8_t>& data = font->GetData();
-		const int offset = stbtt_GetFontOffsetForIndex(data.data(), 0);
-		if (offset < 0)
-			return fail("The font file holds no font");
+		const int offset = static_cast<int>(font->GetFontOffset());
 
 		Scope<FontAtlas> atlas(new FontAtlas());
 		atlas->m_Info = std::make_unique<FontInfo>();
@@ -83,8 +82,12 @@ namespace Strata
 		else
 		{
 			// Glyph 0 is the font's missing-glyph shape.
+			// Character maps may name glyphs the font does not have: those use the missing glyph too.
 			if (codepoint <= c_MaxCodepoint)
-				glyphIndex = static_cast<uint32_t>(std::max(stbtt_FindGlyphIndex(&m_Info->Info, static_cast<int>(codepoint)), 0));
+			{
+				const int found = stbtt_FindGlyphIndex(&m_Info->Info, static_cast<int>(codepoint));
+				glyphIndex = found > 0 && static_cast<uint32_t>(found) < m_Font->GetGlyphCount() ? static_cast<uint32_t>(found) : 0u;
+			}
 			m_CodepointGlyphs.emplace(codepoint, glyphIndex);
 		}
 
@@ -103,6 +106,24 @@ namespace Strata
 		int leftSideBearing = 0;
 		stbtt_GetGlyphHMetrics(info, static_cast<int>(glyphIndex), &advance, &leftSideBearing);
 		glyph.Advance = static_cast<float>(advance) * m_EmScale;
+
+		// The rasterizer allocates and visits every texel of the glyph's box (from the glyph's header, which a malformed font
+		// can make huge) once per outline vertex: check both before rasterizing.
+		const uint32_t points = m_Font->GetGlyphPointCount(glyphIndex);
+		int boxX0 = 0;
+		int boxY0 = 0;
+		int boxX1 = 0;
+		int boxY1 = 0;
+		stbtt_GetGlyphBitmapBox(info, static_cast<int>(glyphIndex), m_Scale, m_Scale, &boxX0, &boxY0, &boxX1, &boxY1);
+		if (points == 0 || boxX1 <= boxX0 || boxY1 <= boxY0)
+			return m_Glyphs.emplace(glyphIndex, glyph).first->second; // Nothing to draw (whitespace)
+		const uint64_t boxWidth = static_cast<uint64_t>(static_cast<int64_t>(boxX1) - boxX0) + 2 * c_DistancePadding;
+		const uint64_t boxHeight = static_cast<uint64_t>(static_cast<int64_t>(boxY1) - boxY0) + 2 * c_DistancePadding;
+		if (boxWidth > c_MaxGlyphTexels || boxHeight > c_MaxGlyphTexels || boxWidth * boxHeight * points > c_MaxGlyphRasterCost)
+		{
+			ST_CORE_WARN("Font: glyph {} is too large or complex to draw ({}x{} texels, {} points)", glyphIndex, boxWidth, boxHeight, points);
+			return m_Glyphs.emplace(glyphIndex, glyph).first->second;
+		}
 
 		// The distance rises by c_OnEdgeValue / c_DistancePadding per texel toward the inside: 0 at the padding's edge.
 		int width = 0;
@@ -141,6 +162,8 @@ namespace Strata
 
 	float FontAtlas::GetKerning(const GlyphInfo& left, const GlyphInfo& right) const
 	{
+		if (!m_Font->HasUsableKerning())
+			return 0.0f;
 		return static_cast<float>(stbtt_GetGlyphKernAdvance(&m_Info->Info, static_cast<int>(left.GlyphIndex), static_cast<int>(right.GlyphIndex))) * m_EmScale;
 	}
 

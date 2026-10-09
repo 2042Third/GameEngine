@@ -45,6 +45,11 @@ namespace Strata
 		static constexpr int c_DistancePadding = 6;   // Texels of distance field around each glyph shape
 		static constexpr uint32_t c_AtlasWidth = 1024;
 		static constexpr uint32_t c_MaxAtlasHeight = 4096;
+		// Glyphs larger than this (texels, padding included) or costlier to rasterize than c_MaxGlyphRasterCost (texels
+		// times outline points; real glyphs stay far below, a Latin letter costs about 100 thousand) are not drawn: a
+		// malformed font cannot make the rasterizer allocate or compute without bound.
+		static constexpr uint64_t c_MaxGlyphTexels = 256;
+		static constexpr uint64_t c_MaxGlyphRasterCost = 8ull * 1024 * 1024;
 
 		// Null (with an error) when the font data cannot be read.
 		static Scope<FontAtlas> Create(const Ref<Font>& font, std::string* outError = nullptr);

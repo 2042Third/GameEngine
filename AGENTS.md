@@ -231,6 +231,10 @@ Conventions:
   alignment). World-space text is depth-tested, screen-space text goes over everything. Text without a
   font, or whose font is loading, uses `Font::GetDefault()` (Roboto, embedded with
   `strata_embed_file` from `CMake/StrataEmbeddedFiles.cmake`).
+- Font files are untrusted input and stb_truetype does no bounds checking: `Font::Create` validates
+  everything stb_truetype can read (`Renderer/FontValidation.h`), rejects malformed fonts and fonts with
+  CFF outlines (OTTO), and disables kerning that is not fully bounded. Before calling another
+  stb_truetype function, extend the validator to cover what it reads, with crafted-font tests.
 - GPU tests of the scene renderer share `StrataTests/src/Renderer/SceneRendererTestUtils.h`. Verify that a
   new regression test fails without its fix before relying on it.
 
