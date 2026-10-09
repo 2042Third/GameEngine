@@ -6,6 +6,8 @@
 namespace Strata
 {
 
+	constexpr uint32_t c_HeadlessFrameRate = 60;
+
 	class EditorApplication : public Application
 	{
 	public:
@@ -42,6 +44,10 @@ namespace Strata
 		specification.EnableRenderer = !commandLine.HasFlag("--no-gpu");
 		specification.Headless = commandLine.HasFlag("--headless") || !specification.EnableRenderer;
 		specification.EnableImGui = !specification.Headless;
+		// Without a window there is no vsync: a headless editor waiting for automation would otherwise spin a CPU core,
+		// and playing scenes advance about as they would in a 60 Hz game.
+		if (specification.Headless)
+			specification.MaxFrameRate = c_HeadlessFrameRate;
 		// Scripted runs (a fixed number of frames) never overwrite the user's saved panel layout.
 		if (!commandLine.GetIntOption("--frames"))
 			specification.ImGuiLayoutFile = userData / "EditorLayout.ini";
