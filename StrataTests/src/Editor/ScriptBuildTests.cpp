@@ -402,6 +402,22 @@ TEST_SUITE("Editor.ScriptBuild")
 		REQUIRE(created.size() == 1);
 		CHECK(created[0] == project->GetScriptSourceDirectory() / "Spinner.cpp");
 		CHECK(FileSystem::ReadText(project->GetScriptSourceDirectory() / "CMakeLists.txt") == "# Edited by hand\n");
+
+		// Text from the project only goes into comments, never with a line break that would end one.
+		project->GetConfig().Name = "Evil\nmessage(FATAL_ERROR injected)\r\x7f";
+		project->GetConfig().Scripts.SourceDirectory = "Scripts\n)";
+		const std::string sanitized = MakeScriptCMakeLists(*project);
+		CHECK(sanitized.find("\nmessage(") == std::string::npos);
+		CHECK(sanitized.find("\n)") == std::string::npos);
+		CHECK(sanitized.find('\r') == std::string::npos);
+		CHECK(sanitized.find('\x7f') == std::string::npos);
+		CHECK(sanitized.find("project(DungeonCrawlerScripts CXX)") != std::string::npos);
+		// The module name is code: an invalid one (changed in memory, not saved) is replaced by the derived name.
+		project->GetConfig().Name = "Dungeon";
+		project->GetConfig().Scripts.ModuleName = "X)\nmessage(FATAL_ERROR injected";
+		const std::string derived = MakeScriptCMakeLists(*project);
+		CHECK(derived.find("injected") == std::string::npos);
+		CHECK(derived.find("project(DungeonScripts CXX)") != std::string::npos);
 	}
 
 	TEST_CASE("A script build needs the project's CMakeLists.txt")

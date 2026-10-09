@@ -22,11 +22,23 @@ namespace Strata
 			return s_Active;
 		}
 
+		// Names and paths of a project end up in generated files (the scripts' CMakeLists.txt) and logs, where control
+		// characters (a newline above all) could inject content: they never contain any.
+		bool HasControlCharacters(std::string_view text)
+		{
+			return std::any_of(text.begin(), text.end(), [](char character)
+			{
+				const auto value = static_cast<unsigned char>(character);
+				return value < 0x20 || value == 0x7F;
+			});
+		}
+
 		// Asset and script directories are plain relative subdirectories of the project: not the project directory itself,
-		// no absolute paths, no "..", nothing inside the intermediate directory, no hidden directories.
+		// no absolute paths, no "..", nothing inside the intermediate directory, no hidden directories, no control
+		// characters.
 		bool IsValidProjectSubdirectory(std::string_view directory)
 		{
-			if (directory.empty())
+			if (directory.empty() || HasControlCharacters(directory))
 				return false;
 			const std::filesystem::path path = FileSystem::FromUTF8(directory);
 			if (path.is_absolute() || path.has_root_name() || path.has_root_directory())
@@ -77,8 +89,11 @@ namespace Strata
 
 		bool IsValidProjectName(std::string_view name)
 		{
-			if (name.empty() || name.size() > 128 || name.front() == ' ' || name.back() == ' ' || name.back() == '.' || IsReservedFileName(name))
+			if (name.empty() || name.size() > 128 || name.front() == ' ' || name.back() == ' ' || name.back() == '.' || IsReservedFileName(name)
+				|| HasControlCharacters(name))
+			{
 				return false;
+			}
 			for (char character : name)
 			{
 				const auto value = static_cast<unsigned char>(character);
@@ -166,6 +181,8 @@ namespace Strata
 
 		ProjectConfig& projectConfig = project->m_Config;
 		projectConfig.Name = JsonUtils::GetString(*config, "Name", FileSystem::ToUTF8(projectFile.stem()));
+		if (HasControlCharacters(projectConfig.Name))
+			return fail("the project name contains control characters");
 		projectConfig.AssetDirectory = JsonUtils::GetString(*config, "AssetDirectory", projectConfig.AssetDirectory);
 		if (!IsValidProjectSubdirectory(projectConfig.AssetDirectory))
 			return fail(fmt::format("asset directory '{}' must be a relative path inside the project", projectConfig.AssetDirectory));
@@ -218,6 +235,12 @@ namespace Strata
 
 	bool Project::Save(std::string* outError) const
 	{
+		if (HasControlCharacters(m_Config.Name))
+		{
+			if (outError)
+				*outError = "The project name contains control characters";
+			return false;
+		}
 		if (!IsValidProjectSubdirectory(m_Config.AssetDirectory))
 		{
 			if (outError)

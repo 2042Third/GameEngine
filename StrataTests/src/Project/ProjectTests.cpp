@@ -147,6 +147,34 @@ TEST_SUITE("Project")
 		CHECK(custom->GetScriptSourceDirectory() == (directory / "Gameplay").lexically_normal());
 	}
 
+	TEST_CASE("Project names and directories never contain control characters")
+	{
+		// They end up in generated files (the scripts' CMakeLists.txt), where a newline would inject code.
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("ProjectControlCharacters");
+		const std::filesystem::path file = directory / "Game.stproj";
+		std::string error;
+		auto load = [&](const std::string& project)
+		{
+			REQUIRE(FileSystem::WriteText(file, "{ \"Strata\": { \"Format\": \"Project\", \"Version\": 2 }, \"Project\": " + project + " }"));
+			error.clear();
+			return Project::Load(file, &error);
+		};
+		CHECK_FALSE(load("{ \"Name\": \"Game\\nmessage(FATAL_ERROR injected)\" }"));
+		CHECK(error.find("control characters") != std::string::npos);
+		CHECK_FALSE(load("{ \"Name\": \"Tab\\tName\" }"));
+		CHECK_FALSE(load("{ \"Name\": \"Delete\\u007f\" }"));
+		CHECK_FALSE(load("{ \"AssetDirectory\": \"Assets\\r\" }"));
+		CHECK_FALSE(load("{ \"Scripts\": { \"SourceDirectory\": \"Scripts\\n)\" } }"));
+		REQUIRE(load("{ \"Name\": \"Caf\\u00e9 \\\"Game\\\"\" }"));
+
+		CHECK_FALSE(Project::Create(directory / "New", "Delete\x7f", &error));
+		Ref<Project> project = Project::Create(directory / "New", "New Game", &error);
+		REQUIRE_MESSAGE(project, error);
+		project->GetConfig().Name = "Line\nBreak";
+		CHECK_FALSE(project->Save(&error));
+		CHECK(error.find("control characters") != std::string::npos);
+	}
+
 	TEST_CASE("Version 1 projects load with the default script settings")
 	{
 		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("ProjectVersion1");

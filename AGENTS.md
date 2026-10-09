@@ -300,7 +300,8 @@ Building and loading scripts:
   "Scripts"), whose `CMakeLists.txt` builds every `.cpp`/`.h` below it into the module `ModuleName` (stored in the
   `.stproj`, version 2: `"Scripts": {"SourceDirectory", "ModuleName"}`; version 1 files derive the name from the project
   name, `Project::MakeScriptModuleName`). `project.create` writes that `CMakeLists.txt` and an example script
-  (`Editor/ScriptProject.cpp`; `script.init` adds them to older projects). The editor builds the scripts with
+  (`Editor/ScriptProject.cpp`; `script.init` adds them to older projects); project text only goes into its comments,
+  and projects reject names and directories with control characters on load and save. The editor builds the scripts with
   `script.build` (`ScriptBuilder`, `Editor/ScriptBuild.cpp`): CMake configures `<project>/.strata/Scripts/Build` with the
   toolchain the engine was configured with (generator, platform, toolset, compiler, configuration and this checkout as
   `STRATA_ENGINE_DIR`, baked into `Editor/ScriptBuildConfig.h` at configure time; CMake is the engine's, else `cmake` on

@@ -4,15 +4,39 @@
 #include <Strata/Core/Log.h>
 #include <Strata/Project/Project.h>
 
+#include <string_view>
 #include <utility>
 #include <vector>
 
 namespace Strata
 {
 
+	namespace
+	{
+
+		// Project names and paths only go into comments of the generated CMake code: without line breaks (or other
+		// control characters), which would end the comment. Projects reject them on load and save; this also covers
+		// settings changed in memory.
+		std::string ToCMakeComment(std::string_view text)
+		{
+			std::string comment(text);
+			for (char& character : comment)
+			{
+				const auto value = static_cast<unsigned char>(character);
+				if (value < 0x20 || value == 0x7F)
+					character = ' ';
+			}
+			return comment;
+		}
+
+	}
+
 	std::string MakeScriptCMakeLists(const Project& project)
 	{
-		const std::string module = project.GetScriptModuleName();
+		// Code must only ever see a C identifier: settings changed in memory are not validated until the project is saved.
+		std::string module = project.GetScriptModuleName();
+		if (!Project::IsValidScriptModuleName(module))
+			module = Project::MakeScriptModuleName(project.GetConfig().Name);
 		return fmt::format(R"CMAKE(# Game scripts of "{0}": every .cpp and .h file in this directory (and below) belongs to the script module {1}.
 # The editor builds it (script.build) with the engine's compiler and configuration and loads it from .strata/Scripts/Bin.
 # Keep the module's name and output directory; to build by hand:
@@ -23,7 +47,7 @@ project({1} CXX)
 set(STRATA_ENGINE_DIR "" CACHE PATH "The Strata engine checkout (the editor sets it)")
 find_package(StrataScriptCore CONFIG REQUIRED PATHS "${{STRATA_ENGINE_DIR}}/StrataScriptCore/CMake" NO_DEFAULT_PATH)
 strata_add_script_module({1} SOURCE_DIR "${{CMAKE_CURRENT_SOURCE_DIR}}")
-)CMAKE", project.GetConfig().Name, module, project.GetConfig().Scripts.SourceDirectory);
+)CMAKE", ToCMakeComment(project.GetConfig().Name), module, ToCMakeComment(project.GetConfig().Scripts.SourceDirectory));
 	}
 
 	std::string MakeExampleScript()
