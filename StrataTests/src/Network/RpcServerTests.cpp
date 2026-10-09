@@ -1187,7 +1187,11 @@ TEST_SUITE("Network.RpcServer")
 		std::string requests;
 		for (int id = 1; id <= c_RequestCount; id++)
 			requests += MakeRequestLine(id, "test.echo", nlohmann::json { { "value", std::string(16000, 'q') } }) + "\n";
-		REQUIRE(connection.GetSocket().SendAll(requests, std::chrono::milliseconds(5000)));
+
+		// Sent from another thread while this one plays the main loop: the server stops reading once the queue is
+		// full, so with small socket buffers the requests only go through as ProcessRequests drains the queue.
+		std::atomic<bool> sent = false;
+		std::thread sender([&]() { sent = connection.GetSocket().SendAll(requests, std::chrono::milliseconds(15000)); });
 
 		uint32_t processed = 0;
 		uint32_t largestBatch = 0;
@@ -1201,6 +1205,8 @@ TEST_SUITE("Network.RpcServer")
 				answered.push_back((*response)["id"].get<int>());
 			return answered.size() == c_RequestCount;
 		}, std::chrono::milliseconds(15000)));
+		sender.join();
+		CHECK(sent.load());
 		CHECK(processed == c_RequestCount);
 		CHECK(largestBatch >= 1);
 		CHECK(largestBatch <= 5);
