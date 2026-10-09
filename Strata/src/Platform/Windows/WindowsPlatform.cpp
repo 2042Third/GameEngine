@@ -65,44 +65,6 @@ namespace Strata
 			HANDLE m_Handle;
 		};
 
-		// Security attributes whose DACL grants access to the current user only, protected from inheriting the
-		// parent directory's entries.
-		class OwnerOnlySecurity
-		{
-		public:
-			bool Initialize(std::string& error)
-			{
-				m_User = WindowsFileSecurity::GetCurrentUserSid(error);
-				if (m_User.empty())
-					return false;
-
-				PSID user = m_User.data();
-				const DWORD aclSize = static_cast<DWORD>(sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE) + GetLengthSid(user));
-				m_Acl.resize(aclSize);
-				PACL acl = reinterpret_cast<PACL>(m_Acl.data());
-				if (!InitializeAcl(acl, aclSize, ACL_REVISION) || !AddAccessAllowedAce(acl, ACL_REVISION, FILE_ALL_ACCESS, user)
-					|| !InitializeSecurityDescriptor(&m_Descriptor, SECURITY_DESCRIPTOR_REVISION)
-					|| !SetSecurityDescriptorDacl(&m_Descriptor, TRUE, acl, FALSE)
-					|| !SetSecurityDescriptorControl(&m_Descriptor, SE_DACL_PROTECTED, SE_DACL_PROTECTED))
-				{
-					error = "Failed to build an owner-only security descriptor: " + GetLastErrorMessage();
-					return false;
-				}
-
-				m_Attributes.nLength = sizeof(m_Attributes);
-				m_Attributes.lpSecurityDescriptor = &m_Descriptor;
-				m_Attributes.bInheritHandle = FALSE;
-				return true;
-			}
-
-			SECURITY_ATTRIBUTES* GetAttributes() { return &m_Attributes; }
-		private:
-			std::vector<uint8_t> m_User;
-			std::vector<uint8_t> m_Acl;
-			SECURITY_DESCRIPTOR m_Descriptor = {};
-			SECURITY_ATTRIBUTES m_Attributes = {};
-		};
-
 		// Opens a file or directory itself (never the target of a link) just to inspect it.
 		HANDLE OpenForInspection(const std::filesystem::path& path, bool directory)
 		{
@@ -250,50 +212,6 @@ namespace Strata
 	namespace
 	{
 
-		// Security attributes for a directory only the current user can access: a protected DACL (nothing is inherited
-		// from the parent directory) with a single entry that grants the user full access and is inherited by everything
-		// created inside. Not copyable: the attributes point into the object.
-		class OwnerOnlyDirectorySecurity
-		{
-		public:
-			OwnerOnlyDirectorySecurity() = default;
-			OwnerOnlyDirectorySecurity(const OwnerOnlyDirectorySecurity&) = delete;
-			OwnerOnlyDirectorySecurity& operator=(const OwnerOnlyDirectorySecurity&) = delete;
-
-			bool Initialize()
-			{
-				std::string error;
-				m_User = WindowsFileSecurity::GetCurrentUserSid(error);
-				if (m_User.empty())
-					return false;
-
-				PSID user = m_User.data();
-				const DWORD aclSize = static_cast<DWORD>(sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE) + GetLengthSid(user));
-				m_Acl.resize(aclSize);
-				PACL acl = reinterpret_cast<PACL>(m_Acl.data());
-				if (!InitializeAcl(acl, aclSize, ACL_REVISION)
-					|| !AddAccessAllowedAceEx(acl, ACL_REVISION, CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE, FILE_ALL_ACCESS, user)
-					|| !InitializeSecurityDescriptor(&m_Descriptor, SECURITY_DESCRIPTOR_REVISION)
-					|| !SetSecurityDescriptorDacl(&m_Descriptor, TRUE, acl, FALSE)
-					|| !SetSecurityDescriptorControl(&m_Descriptor, SE_DACL_PROTECTED, SE_DACL_PROTECTED))
-				{
-					return false;
-				}
-
-				m_Attributes.nLength = sizeof(m_Attributes);
-				m_Attributes.lpSecurityDescriptor = &m_Descriptor;
-				m_Attributes.bInheritHandle = FALSE;
-				return true;
-			}
-
-			SECURITY_ATTRIBUTES* GetAttributes() { return &m_Attributes; }
-		private:
-			std::vector<uint8_t> m_User;
-			std::vector<uint8_t> m_Acl;
-			SECURITY_DESCRIPTOR m_Descriptor = {};
-			SECURITY_ATTRIBUTES m_Attributes = {};
-		};
-
 		// Whether `directory` is a directory that only the current user can modify (besides SYSTEM and the
 		// Administrators, who can take over anything anyway; see WindowsFileSecurity::CheckOwnerAndAccess). With
 		// `followLink` a link or junction is followed and its target checked; otherwise links are refused.
@@ -322,8 +240,9 @@ namespace Strata
 			if (!base.is_absolute() || !FileSystem::CreateDirectories(base) || !IsPrivateDirectory(base, true))
 				return {};
 
-			OwnerOnlyDirectorySecurity security;
-			if (!security.Initialize())
+			WindowsFileSecurity::OwnerOnlySecurity security;
+			std::string securityError;
+			if (!security.Initialize(WindowsFileSecurity::OwnerOnlyObject::Directory, securityError))
 				return {};
 			if (!CreateDirectoryW(directory.c_str(), security.GetAttributes()) && ::GetLastError() != ERROR_ALREADY_EXISTS)
 				return {};
@@ -359,8 +278,9 @@ namespace Strata
 	std::filesystem::path Platform::CreatePrivateDirectory(const std::filesystem::path& parent, std::string_view prefix)
 	{
 		// A name collision (practically impossible) picks another name; an existing directory is never reused.
-		OwnerOnlyDirectorySecurity security;
-		if (!security.Initialize())
+		WindowsFileSecurity::OwnerOnlySecurity security;
+		std::string securityError;
+		if (!security.Initialize(WindowsFileSecurity::OwnerOnlyObject::Directory, securityError))
 			return {};
 		constexpr int c_MaxAttempts = 16;
 		for (int attempt = 0; attempt < c_MaxAttempts; attempt++)
@@ -478,9 +398,9 @@ namespace Strata
 		if (path.has_parent_path())
 			std::filesystem::create_directories(path.parent_path(), directoryError);
 
-		OwnerOnlySecurity security;
+		WindowsFileSecurity::OwnerOnlySecurity security;
 		std::string securityError;
-		if (!security.Initialize(securityError))
+		if (!security.Initialize(WindowsFileSecurity::OwnerOnlyObject::File, securityError))
 			return SetError(error, securityError);
 
 		// CREATE_NEW never opens an existing file or link, so the data only ever lands in a file created here. The

@@ -149,4 +149,32 @@ namespace Strata::WindowsFileSecurity
 		return IsNameSurrogate(information.FileAttributes, information.ReparseTag);
 	}
 
+	bool OwnerOnlySecurity::Initialize(OwnerOnlyObject object, std::string& error)
+	{
+		m_User = GetCurrentUserSid(error);
+		if (m_User.empty())
+			return false;
+
+		// A directory's entry is inherited by the files and directories created inside it, so they are owner-only too.
+		const DWORD inheritance = object == OwnerOnlyObject::Directory ? (CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE) : 0;
+		PSID user = m_User.data();
+		const DWORD aclSize = static_cast<DWORD>(sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE) + GetLengthSid(user));
+		m_Acl.assign(aclSize, 0);
+		PACL acl = reinterpret_cast<PACL>(m_Acl.data());
+		if (!InitializeAcl(acl, aclSize, ACL_REVISION)
+			|| !AddAccessAllowedAceEx(acl, ACL_REVISION, inheritance, FILE_ALL_ACCESS, user)
+			|| !InitializeSecurityDescriptor(&m_Descriptor, SECURITY_DESCRIPTOR_REVISION)
+			|| !SetSecurityDescriptorDacl(&m_Descriptor, TRUE, acl, FALSE)
+			|| !SetSecurityDescriptorControl(&m_Descriptor, SE_DACL_PROTECTED, SE_DACL_PROTECTED))
+		{
+			error = "Failed to build an owner-only security descriptor: " + WindowsUtils::GetErrorMessage(::GetLastError());
+			return false;
+		}
+
+		m_Attributes.nLength = sizeof(m_Attributes);
+		m_Attributes.lpSecurityDescriptor = &m_Descriptor;
+		m_Attributes.bInheritHandle = FALSE;
+		return true;
+	}
+
 }
