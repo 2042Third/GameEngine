@@ -27,10 +27,11 @@ namespace Strata
 		RpcClient(const RpcClient&) = delete;
 		RpcClient& operator=(const RpcClient&) = delete;
 
-		// Connects (closing any previous connection) and, when token is non-empty, runs the rpc.authenticate
-		// handshake: the connection fails unless the server also proves it knows the token (see
-		// RpcAuthentication). timeout bounds the connection and the authentication separately.
-		bool Connect(std::string_view host, uint16_t port, std::string_view token = {}, std::chrono::milliseconds timeout = std::chrono::milliseconds(5000));
+		// Connects (closing any previous connection) and runs the authentication handshake with the session token
+		// (see RpcAuthentication): the connection fails unless the server proves that it knows the token, before
+		// the client proves it in return. The token itself is never sent, and an empty token fails at once.
+		// timeout bounds the connection and the whole handshake separately.
+		bool Connect(std::string_view host, uint16_t port, std::string_view token, std::chrono::milliseconds timeout = std::chrono::milliseconds(5000));
 
 		// Sends a request and waits for its response. Notifications and responses to other (e.g. timed out)
 		// requests are skipped. Transport failures are reported as ConnectionClosed (the connection is closed)
@@ -47,6 +48,7 @@ namespace Strata
 
 		std::string GetLastError() const;
 	private:
+		bool AuthenticateLocked(std::string_view token, std::chrono::milliseconds timeout);
 		RpcResult CallLocked(const std::string& method, const nlohmann::json& params, std::chrono::milliseconds timeout);
 		RpcResult FailLocked(int code, std::string message, bool closeConnection);
 	private:

@@ -148,9 +148,27 @@ TEST_SUITE("CLI.Commands")
 		CHECK(error.find("--host requires --port") != std::string::npos);
 		CliArguments hostAndPort = hostOnly;
 		hostAndPort.Port = 4300;
+		hostAndPort.Token = "remote";
 		std::optional<EditorConnectionOptions> remote = BuildConnectionOptions(hostAndPort, error);
 		REQUIRE(remote.has_value());
 		CHECK(remote->Host == "192.168.1.10");
+
+		// An explicit port takes its token from --token or the environment, and is refused without one.
+		CliArguments portOnly;
+		portOnly.Port = 4400;
+		CHECK_FALSE(BuildConnectionOptions(portOnly, error).has_value());
+		CHECK(error.find("session token") != std::string::npos);
+		{
+			Tests::ScopedEnvironmentVariable token("STRATA_EDITOR_TOKEN", "from-environment");
+			std::optional<EditorConnectionOptions> withEnvironmentToken = BuildConnectionOptions(portOnly, error);
+			REQUIRE_MESSAGE(withEnvironmentToken.has_value(), error);
+			CHECK(withEnvironmentToken->Token == "from-environment");
+		}
+		{
+			Tests::ScopedEnvironmentVariable port("STRATA_EDITOR_PORT", "4200");
+			CHECK_FALSE(BuildConnectionOptions(CliArguments(), error).has_value());
+			CHECK(error.find("session token") != std::string::npos);
+		}
 
 		std::optional<EditorConnectionOptions> discovery = BuildConnectionOptions(CliArguments(), error);
 		REQUIRE(discovery.has_value());
@@ -210,9 +228,14 @@ TEST_SUITE("CLI.Commands")
 		CHECK(unauthorized.ExitCode == ExitCode::ConnectionFailure);
 
 		Tests::RefusingPort refusingPort;
-		const CliRun unreachable = Run({ "call", "rpc.ping", "--port", std::to_string(refusingPort.GetPort()) });
+		const CliRun unreachable = Run({ "call", "rpc.ping", "--port", std::to_string(refusingPort.GetPort()), "--token", "x" });
 		CHECK(unreachable.ExitCode == ExitCode::ConnectionFailure);
 		CHECK(unreachable.ErrorOutput.find("error:") != std::string::npos);
+
+		// An explicit endpoint without a token could never authenticate.
+		const CliRun withoutToken = Run({ "call", "rpc.ping", "--port", std::to_string(editor.GetPort()) });
+		CHECK(withoutToken.ExitCode == ExitCode::UsageError);
+		CHECK(withoutToken.ErrorOutput.find("STRATA_EDITOR_TOKEN") != std::string::npos);
 
 		const CliRun noSession = Run({ "call", "rpc.ping" });
 		CHECK(noSession.ExitCode == ExitCode::ConnectionFailure);
@@ -251,7 +274,7 @@ TEST_SUITE("CLI.Commands")
 
 		const CliRun listJson = Run(Concat({ "list", "--json" }, ExplicitEndpoint(editor)));
 		CHECK(listJson.ExitCode == ExitCode::Success);
-		CHECK(JsonRpc::Parse(listJson.Output).value()["methods"].size() == 8);
+		CHECK(JsonRpc::Parse(listJson.Output).value()["methods"].size() == 9); // 4 built-ins + 5 editor methods
 
 		const CliRun status = Run(Concat({ "status" }, ExplicitEndpoint(editor)));
 		CHECK(status.ExitCode == ExitCode::Success);

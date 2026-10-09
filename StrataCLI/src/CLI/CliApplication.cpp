@@ -394,7 +394,7 @@ namespace Strata::CLI
 		if (arguments.Port)
 		{
 			options.Port = arguments.Port;
-			options.Token = arguments.Token.value_or(std::string());
+			options.Token = arguments.Token ? *arguments.Token : Platform::GetEnvVar(c_EditorTokenVariable).value_or(std::string());
 		}
 		else if (const std::optional<std::string> environmentPort = Platform::GetEnvVar(c_EditorPortVariable); environmentPort && !environmentPort->empty())
 		{
@@ -413,7 +413,15 @@ namespace Strata::CLI
 		}
 		else if (arguments.Host)
 		{
-			error = "--host requires --port (discovered editor sessions are always reached on 127.0.0.1)";
+			error = "--host requires --port (discovered editor sessions are reached at the loopback address they record)";
+			return std::nullopt;
+		}
+
+		// An explicit endpoint has no session file to take the token from, and the editor accepts no connection
+		// without one.
+		if (options.Port && options.Token.empty())
+		{
+			error = fmt::format("An explicit editor endpoint needs its session token: set {} (or pass --token)", c_EditorTokenVariable);
 			return std::nullopt;
 		}
 

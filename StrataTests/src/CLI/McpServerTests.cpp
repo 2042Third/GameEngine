@@ -325,7 +325,7 @@ TEST_SUITE("CLI.Mcp")
 
 			nlohmann::json methods = client.CallTool("strata_list_methods");
 			CHECK(methods["isError"] == false);
-			CHECK(methods["structuredContent"]["methods"].size() == 8); // 3 built-ins + 5 editor methods
+			CHECK(methods["structuredContent"]["methods"].size() == 9); // 4 built-ins + 5 editor methods
 
 			nlohmann::json status = client.CallTool("strata_status");
 			CHECK(status["structuredContent"]["connected"] == true);

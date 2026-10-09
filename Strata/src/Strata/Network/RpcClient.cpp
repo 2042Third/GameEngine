@@ -44,6 +44,13 @@ namespace Strata
 		m_Reader.Reset();
 		m_LastError.clear();
 
+		// The server accepts nothing but the handshake from an unauthenticated connection.
+		if (token.empty())
+		{
+			m_LastError = "A session token is required to connect to the editor";
+			return false;
+		}
+
 		std::string error;
 		std::optional<TcpSocket> socket = TcpSocket::Connect(host, port, timeout, &error);
 		if (!socket)
@@ -53,34 +60,52 @@ namespace Strata
 		}
 		socket->SetNoDelay(true);
 		m_Socket = std::move(*socket);
+		return AuthenticateLocked(token, timeout);
+	}
 
-		if (!token.empty())
+	bool RpcClient::AuthenticateLocked(std::string_view token, std::chrono::milliseconds timeout)
+	{
+		const auto deadline = std::chrono::steady_clock::now() + ClampSocketTimeout(timeout);
+		auto remaining = [deadline]()
 		{
-			const std::string nonce = RpcAuthentication::GenerateNonce();
-			if (nonce.empty())
-			{
-				FailLocked(JsonRpc::ErrorCode::InternalError, "Authentication failed: the system random number generator failed", true);
-				return false;
-			}
+			return std::max(std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()), std::chrono::milliseconds(0));
+		};
 
-			const RpcResult result = CallLocked("rpc.authenticate", nlohmann::json { { "token", std::string(token) }, { "nonce", nonce } }, timeout);
-			if (result.IsError())
-			{
-				FailLocked(result.GetError().Code, fmt::format("Authentication failed: {}", result.GetError().Message), true);
-				return false;
-			}
+		const std::string clientNonce = RpcAuthentication::GenerateNonce();
+		if (clientNonce.empty())
+		{
+			FailLocked(JsonRpc::ErrorCode::InternalError, "Authentication failed: the system random number generator failed", true);
+			return false;
+		}
 
-			// The server must prove that it knows the token before anything else is sent to it: a process that took
-			// over the port of an editor that exited cannot.
-			const nlohmann::json& value = result.GetValue();
-			const auto proof = value.is_object() ? value.find("proof") : value.end();
-			const bool proven = proof != value.end() && proof->is_string()
-				&& Crypto::ConstantTimeEquals(proof->get_ref<const std::string&>(), RpcAuthentication::ComputeServerProof(token, nonce));
-			if (!proven)
-			{
-				FailLocked(JsonRpc::ErrorCode::Unauthorized, "Authentication failed: the server could not prove that it knows the session token, so it may not be the editor", true);
-				return false;
-			}
+		const RpcResult handshake = CallLocked(c_RpcHandshakeMethod, nlohmann::json { { "clientNonce", clientNonce } }, remaining());
+		if (handshake.IsError())
+		{
+			FailLocked(handshake.GetError().Code, fmt::format("Authentication failed: {}", handshake.GetError().Message), true);
+			return false;
+		}
+
+		// The server proves that it knows the token before the client proves anything in return: a process that
+		// took over the port of an editor that exited cannot, and gets nothing it could use. A server nonce equal to
+		// the client's would let a reflected proof pass, so it is refused as well.
+		const nlohmann::json& value = handshake.GetValue();
+		const auto serverNonce = value.is_object() ? value.find("serverNonce") : value.end();
+		const auto serverProof = value.is_object() ? value.find("serverProof") : value.end();
+		const bool proven = serverNonce != value.end() && serverNonce->is_string() && serverProof != value.end() && serverProof->is_string()
+			&& RpcAuthentication::IsValidNonce(serverNonce->get_ref<const std::string&>()) && serverNonce->get_ref<const std::string&>() != clientNonce
+			&& Crypto::ConstantTimeEquals(serverProof->get_ref<const std::string&>(), RpcAuthentication::ComputeServerProof(token, clientNonce, serverNonce->get_ref<const std::string&>()));
+		if (!proven)
+		{
+			FailLocked(JsonRpc::ErrorCode::Unauthorized, "Authentication failed: the server could not prove that it knows the session token, so it may not be the editor", true);
+			return false;
+		}
+
+		const std::string clientProof = RpcAuthentication::ComputeClientProof(token, serverNonce->get_ref<const std::string&>(), clientNonce);
+		const RpcResult authenticated = CallLocked(c_RpcAuthenticateMethod, nlohmann::json { { "clientProof", clientProof } }, remaining());
+		if (authenticated.IsError())
+		{
+			FailLocked(authenticated.GetError().Code, fmt::format("Authentication failed: {}", authenticated.GetError().Message), true);
+			return false;
 		}
 		return true;
 	}

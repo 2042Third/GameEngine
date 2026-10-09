@@ -85,18 +85,31 @@ namespace Strata
 	// Handler of a synchronous method: the returned result is the response.
 	using RpcSyncHandler = std::function<RpcResult(const nlohmann::json& params)>;
 
-	// The rpc.authenticate handshake authenticates both sides. The client sends the session token together with a
-	// fresh random nonce; the server checks the token and answers with a proof that it knows the token as well,
-	// HMAC-SHA256(token, nonce + "strata-server") in lower-case hexadecimal. The client verifies the proof before it
-	// sends anything else, so it never talks to a process that merely took over a dead editor's port.
+	// The two requests of the authentication handshake (see RpcAuthentication).
+	constexpr const char* c_RpcHandshakeMethod = "rpc.handshake";
+	constexpr const char* c_RpcAuthenticateMethod = "rpc.authenticate";
+
+	// Every connection starts with a challenge-response handshake in which both sides prove that they know the
+	// session token, and the token itself never crosses the wire:
+	//   1. rpc.handshake {"clientNonce"} -> {"serverNonce", "serverProof"}
+	//      serverProof = HMAC-SHA256(token, "strata-server" + clientNonce + serverNonce). The client verifies it
+	//      before it sends anything else, so it never talks to (or proves anything to) a process that merely took
+	//      over a dead editor's port.
+	//   2. rpc.authenticate {"clientProof"} -> {"authenticated": true}
+	//      clientProof = HMAC-SHA256(token, "strata-client" + serverNonce + clientNonce). The server verifies it
+	//      before it accepts any other request.
+	// Nonces are 128-bit values from the system's secure random generator, fresh for every connection and written
+	// as 32 lower-case hexadecimal characters; proofs are lower-case hexadecimal. Both sides compare proofs in
+	// constant time, and a connection performs the handshake only once.
 	class RpcAuthentication
 	{
 	public:
-		// 32 lower-case hexadecimal characters from the system's secure random generator (empty if it fails).
+		// A fresh nonce (empty if the system's secure random generator fails).
 		static std::string GenerateNonce();
-		// 32 to 128 hexadecimal characters.
+		// Exactly 32 lower-case hexadecimal characters.
 		static bool IsValidNonce(std::string_view nonce);
-		static std::string ComputeServerProof(std::string_view token, std::string_view nonce);
+		static std::string ComputeServerProof(std::string_view token, std::string_view clientNonce, std::string_view serverNonce);
+		static std::string ComputeClientProof(std::string_view token, std::string_view serverNonce, std::string_view clientNonce);
 	};
 
 	struct RpcServerSpecification
@@ -106,7 +119,7 @@ namespace Strata
 		std::string AuthToken;                 // Required; see EditorSession::GenerateSessionToken
 		uint32_t MaxClients = 8;               // Authenticated connections
 		uint32_t MaxPendingConnections = 8;    // Connections that have not authenticated yet
-		std::chrono::milliseconds AuthenticationTimeout = std::chrono::milliseconds(5000); // From accept to rpc.authenticate
+		std::chrono::milliseconds AuthenticationTimeout = std::chrono::milliseconds(5000); // From accept to the end of the handshake
 		size_t MaxMessageSize = c_DefaultMaxRpcMessageSize;  // Per message, in both directions
 		uint32_t MaxQueuedRequests = 1024;                   // Waiting for ProcessRequests, across all clients
 		size_t MaxQueuedBytes = 256ull * 1024 * 1024;        // Their total size; beyond it, no further requests are read
@@ -128,8 +141,8 @@ namespace Strata
 	//
 	// Security model: every local process (and any web page in a local browser) may reach the port, so only
 	// holders of the session token are trusted. The server binds loopback addresses only and requires a token.
-	// A new connection must send rpc.authenticate with the token as its first message, within
-	// AuthenticationTimeout; any other first message, a wrong token, or malformed input closes the connection.
+	// A new connection must complete the handshake (see RpcAuthentication) with its first two requests, within
+	// AuthenticationTimeout; any other request, a wrong proof, or malformed input closes the connection.
 	// Until then it is limited to tiny messages and output, and only MaxPendingConnections such connections are
 	// kept (a new one evicts the oldest). Authenticated connections count toward MaxClients (rejected with
 	// ServerBusy beyond it). A client's requests are only read while it has few enough in flight and little
@@ -139,9 +152,10 @@ namespace Strata
 	// names quoted in error messages are shortened.
 	//
 	// Built-in methods (answered without waiting for ProcessRequests):
-	//   rpc.authenticate {"token", "nonce"} -> {"authenticated": true, "proof"} (see RpcAuthentication)
-	//   rpc.ping                            -> {"pong": true}
-	//   rpc.listMethods                     -> {"methods": [{"name", "description", "paramsSchema"}, ...]}
+	//   rpc.handshake {"clientNonce"}   -> {"serverNonce", "serverProof"} (see RpcAuthentication)
+	//   rpc.authenticate {"clientProof"} -> {"authenticated": true}
+	//   rpc.ping                         -> {"pong": true}
+	//   rpc.listMethods                  -> {"methods": [{"name", "description", "paramsSchema"}, ...]}
 	class RpcServer
 	{
 	public:

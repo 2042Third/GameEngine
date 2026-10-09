@@ -90,19 +90,38 @@ namespace Strata::Tests
 			return true;
 		}
 
-		// Sends rpc.authenticate as the first message; returns whether the server accepted it and proved that it
-		// knows the token.
+		// Sends the first handshake request (rpc.handshake) and returns the server's response.
+		std::optional<nlohmann::json> Handshake(const std::string& clientNonce)
+		{
+			if (!SendLine(JsonRpc::Serialize(JsonRpc::MakeRequest("handshake", c_RpcHandshakeMethod, nlohmann::json { { "clientNonce", clientNonce } }))))
+				return std::nullopt;
+			return ReadMessage();
+		}
+
+		// Sends the second handshake request (rpc.authenticate) and returns the server's response.
+		std::optional<nlohmann::json> SendClientProof(const std::string& clientProof)
+		{
+			if (!SendLine(JsonRpc::Serialize(JsonRpc::MakeRequest("authenticate", c_RpcAuthenticateMethod, nlohmann::json { { "clientProof", clientProof } }))))
+				return std::nullopt;
+			return ReadMessage();
+		}
+
+		// Runs the whole handshake as the first two requests; returns whether the server proved that it knows the
+		// token and accepted this side's proof.
 		bool Authenticate(const std::string& token = c_TestServerToken)
 		{
-			const std::string nonce = RpcAuthentication::GenerateNonce();
-			const nlohmann::json request = JsonRpc::MakeRequest("authenticate", "rpc.authenticate", nlohmann::json { { "token", token }, { "nonce", nonce } });
-			if (!SendLine(JsonRpc::Serialize(request)))
+			const std::string clientNonce = RpcAuthentication::GenerateNonce();
+			std::optional<nlohmann::json> handshake = Handshake(clientNonce);
+			if (!handshake || !handshake->is_object() || !handshake->contains("result"))
 				return false;
-			std::optional<nlohmann::json> response = ReadMessage();
-			if (!response || !response->is_object() || !response->contains("result"))
+			const nlohmann::json& serverNonce = (*handshake)["result"]["serverNonce"];
+			const nlohmann::json& serverProof = (*handshake)["result"]["serverProof"];
+			if (!serverNonce.is_string() || !serverProof.is_string()
+				|| serverProof.get<std::string>() != RpcAuthentication::ComputeServerProof(token, clientNonce, serverNonce.get<std::string>()))
 				return false;
-			const nlohmann::json& proof = (*response)["result"]["proof"];
-			return proof.is_string() && proof.get<std::string>() == RpcAuthentication::ComputeServerProof(token, nonce);
+
+			std::optional<nlohmann::json> authenticated = SendClientProof(RpcAuthentication::ComputeClientProof(token, serverNonce.get<std::string>(), clientNonce));
+			return authenticated && authenticated->is_object() && authenticated->contains("result") && (*authenticated)["result"]["authenticated"] == true;
 		}
 
 		bool SendLine(std::string_view text)

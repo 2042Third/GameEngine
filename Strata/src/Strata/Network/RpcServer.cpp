@@ -15,7 +15,6 @@ namespace Strata
 	namespace
 	{
 
-		constexpr const char* c_AuthenticateMethod = "rpc.authenticate";
 		constexpr const char* c_PingMethod = "rpc.ping";
 		constexpr const char* c_ListMethodsMethod = "rpc.listMethods";
 		constexpr std::string_view c_ReservedMethodPrefix = "rpc.";
@@ -32,16 +31,16 @@ namespace Strata
 		// end of stream before closing anyway.
 		constexpr std::chrono::milliseconds c_DrainTimeout = std::chrono::milliseconds(2000);
 
-		// Limits before authentication: the only useful message is a small rpc.authenticate request, and the only
-		// output an error or two.
+		// Limits before authentication: the only useful messages are the two small handshake requests, and the only
+		// output their answers or an error.
 		constexpr size_t c_PreAuthMaxMessageSize = 4 * 1024;
 		constexpr size_t c_PreAuthMaxPendingOutput = 16 * 1024;
 		// While a client has this much output waiting, no further requests of it are read (backpressure).
 		constexpr size_t c_OutputBackpressureThreshold = 1024 * 1024;
 		// Consumed output is discarded once it exceeds this size and half of the send buffer.
 		constexpr size_t c_SendBufferCompactThreshold = 1024 * 1024;
-		// Connections tracked beyond MaxClients + MaxPendingConnections (those being closed). Further connections
-		// are dropped immediately, so a connection flood cannot exhaust file descriptors or memory.
+		// Connections tracked beyond MaxClients + MaxPendingConnections (those being closed). Beyond it the oldest
+		// closing connection is dropped, so a connection flood cannot exhaust file descriptors or memory.
 		constexpr size_t c_MaxClosingConnections = 16;
 		// Repeated warnings (e.g. from a port scanner or a hostile process) are logged at most this often.
 		constexpr std::chrono::seconds c_WarningInterval = std::chrono::seconds(5);
@@ -84,16 +83,26 @@ namespace Strata
 		{
 			std::vector<RpcMethodInfo> methods;
 
+			RpcMethodInfo& handshake = methods.emplace_back();
+			handshake.Name = c_RpcHandshakeMethod;
+			handshake.Description = "First step of the authentication handshake, and the first request of every connection: sends a "
+				"fresh client nonce and returns a server nonce with proof that the server knows the session token (see RpcAuthentication).";
+			handshake.ParamsSchema = nlohmann::json {
+				{ "type", "object" },
+				{ "properties", {
+					{ "clientNonce", { { "type", "string" }, { "description", "Fresh random value: 32 lower-case hexadecimal characters" } } } } },
+				{ "required", nlohmann::json::array({ "clientNonce" }) }
+			};
+
 			RpcMethodInfo& authenticate = methods.emplace_back();
-			authenticate.Name = c_AuthenticateMethod;
-			authenticate.Description = "Authenticates this connection with the session token and returns proof that the server knows it too "
-				"(HMAC-SHA256 of the nonce followed by \"strata-server\"). Must be the first request of every connection.";
+			authenticate.Name = c_RpcAuthenticateMethod;
+			authenticate.Description = "Second step of the authentication handshake: proves that the client knows the session token, "
+				"without sending it. Returns {\"authenticated\": true}.";
 			authenticate.ParamsSchema = nlohmann::json {
 				{ "type", "object" },
 				{ "properties", {
-					{ "token", { { "type", "string" }, { "description", "Session token from the editor session file" } } },
-					{ "nonce", { { "type", "string" }, { "description", "Fresh random value, 32 to 128 hexadecimal characters" } } } } },
-				{ "required", nlohmann::json::array({ "token", "nonce" }) }
+					{ "clientProof", { { "type", "string" }, { "description", "HMAC-SHA256 of the nonces with the session token, in hexadecimal" } } } } },
+				{ "required", nlohmann::json::array({ "clientProof" }) }
 			};
 
 			RpcMethodInfo& ping = methods.emplace_back();
@@ -106,9 +115,19 @@ namespace Strata
 			return methods;
 		}
 
+		// The labels keep a proof of one side from ever being valid for the other.
 		constexpr std::string_view c_ServerProofLabel = "strata-server";
-		constexpr size_t c_MinNonceLength = 32;
-		constexpr size_t c_MaxNonceLength = 128;
+		constexpr std::string_view c_ClientProofLabel = "strata-client";
+		constexpr size_t c_NonceBytes = 16;
+
+		// The string value of params[key], or nullptr if params is not an object or the value is not a string.
+		const std::string* FindString(const nlohmann::json& params, const char* key)
+		{
+			if (!params.is_object())
+				return nullptr;
+			const auto it = params.find(key);
+			return it != params.end() && it->is_string() ? &it->get_ref<const std::string&>() : nullptr;
+		}
 
 		nlohmann::json MakeResponse(const nlohmann::json& id, const RpcResult& result)
 		{
@@ -248,7 +267,7 @@ namespace Strata
 
 	std::string RpcAuthentication::GenerateNonce()
 	{
-		std::array<uint8_t, 16> bytes = {};
+		std::array<uint8_t, c_NonceBytes> bytes = {};
 		if (!Platform::GenerateSecureRandom(bytes))
 			return {};
 		return Crypto::ToHex(bytes);
@@ -256,18 +275,28 @@ namespace Strata
 
 	bool RpcAuthentication::IsValidNonce(std::string_view nonce)
 	{
-		if (nonce.size() < c_MinNonceLength || nonce.size() > c_MaxNonceLength)
+		// One canonical spelling: with fixed-length nonces, the concatenations in the proofs are unambiguous.
+		if (nonce.size() != c_NonceBytes * 2)
 			return false;
 		return std::all_of(nonce.begin(), nonce.end(), [](char character)
 		{
-			return (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') || (character >= 'A' && character <= 'F');
+			return (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f');
 		});
 	}
 
-	std::string RpcAuthentication::ComputeServerProof(std::string_view token, std::string_view nonce)
+	std::string RpcAuthentication::ComputeServerProof(std::string_view token, std::string_view clientNonce, std::string_view serverNonce)
 	{
-		std::string message(nonce);
-		message += c_ServerProofLabel;
+		std::string message(c_ServerProofLabel);
+		message += clientNonce;
+		message += serverNonce;
+		return Crypto::ToHex(Crypto::HmacSha256(token, message));
+	}
+
+	std::string RpcAuthentication::ComputeClientProof(std::string_view token, std::string_view serverNonce, std::string_view clientNonce)
+	{
+		std::string message(c_ClientProofLabel);
+		message += serverNonce;
+		message += clientNonce;
 		return Crypto::ToHex(Crypto::HmacSha256(token, message));
 	}
 
@@ -325,6 +354,9 @@ namespace Strata
 			size_t SendOffset = 0;
 			bool Authenticated = false;
 			std::chrono::steady_clock::time_point AuthenticationDeadline;
+			// Set by the first handshake step; the second step must prove the token against both.
+			std::string ClientNonce;
+			std::string ServerNonce;
 
 			// Requests and notifications admitted for this client that are queued, being handled, or answered but
 			// not yet moved into SendBuffer (backpressure counts all of them).
@@ -389,8 +421,7 @@ namespace Strata
 		void ReadFrom(Connection& connection);
 		void ProcessBufferedLines(Connection& connection);
 		void HandleMessage(Connection& connection, const std::string& line);
-		void HandleFirstMessage(Connection& connection, const std::optional<nlohmann::json>& message);
-		RpcResult CheckToken(const nlohmann::json& params) const;
+		void HandleHandshakeMessage(Connection& connection, const std::optional<nlohmann::json>& message);
 		void TransferResponses(Connection& connection);
 		std::string SerializeBounded(const nlohmann::json& message);
 		void Send(Connection& connection, const nlohmann::json& message);
@@ -698,7 +729,7 @@ namespace Strata
 		std::optional<nlohmann::json> message = JsonRpc::Parse(line);
 		if (!connection.Authenticated)
 		{
-			HandleFirstMessage(connection, message);
+			HandleHandshakeMessage(connection, message);
 			return;
 		}
 
@@ -738,9 +769,9 @@ namespace Strata
 				Send(connection, MakeResponse(validation.Id, result));
 		};
 
-		if (method == c_AuthenticateMethod)
+		if (method == c_RpcHandshakeMethod || method == c_RpcAuthenticateMethod)
 		{
-			reply(CheckToken(params));
+			reply(RpcResult::Failure(JsonRpc::ErrorCode::InvalidRequest, "This connection is already authenticated"));
 			return;
 		}
 		if (method == c_PingMethod)
@@ -783,10 +814,11 @@ namespace Strata
 		connection.RequestsInFlight++;
 	}
 
-	void RpcServer::Impl::HandleFirstMessage(Connection& connection, const std::optional<nlohmann::json>& message)
+	void RpcServer::Impl::HandleHandshakeMessage(Connection& connection, const std::optional<nlohmann::json>& message)
 	{
-		// The first message must authenticate. Anything else ends the connection: the peer is either a confused
-		// client or a hostile local process probing the port (e.g. a web page sending HTTP), and gets nothing more.
+		// Until the handshake completes, only its two requests are accepted, in order. Anything else ends the
+		// connection: the peer is either a confused client or a hostile local process probing the port (e.g. a web
+		// page sending HTTP), and gets nothing more.
 		auto reject = [&](const nlohmann::json& id, int code, std::string_view reason, bool reply)
 		{
 			uint64_t suppressed = 0;
@@ -820,18 +852,65 @@ namespace Strata
 			return;
 		}
 
-		const nlohmann::json& method = (*message)["method"];
-		if (method != c_AuthenticateMethod)
+		const std::string& method = (*message)["method"].get_ref<const std::string&>();
+		const auto paramsIt = message->find("params");
+		const nlohmann::json params = paramsIt != message->end() ? *paramsIt : nlohmann::json::object();
+
+		if (connection.ServerNonce.empty())
 		{
-			reject(validation.Id, JsonRpc::ErrorCode::Unauthorized, "Authentication required: the first request must be rpc.authenticate with the session token", true);
+			// Step 1: the client's nonce in, the server's nonce and its proof of the token out.
+			if (method != c_RpcHandshakeMethod)
+			{
+				reject(validation.Id, JsonRpc::ErrorCode::Unauthorized, "Authentication required: the first request must be rpc.handshake", true);
+				return;
+			}
+			const std::string* clientNonce = FindString(params, "clientNonce");
+			if (!clientNonce || !RpcAuthentication::IsValidNonce(*clientNonce))
+			{
+				reject(validation.Id, JsonRpc::ErrorCode::InvalidParams, "Expected params {\"clientNonce\": 32 lower-case hexadecimal characters}", true);
+				return;
+			}
+			std::string serverNonce = RpcAuthentication::GenerateNonce();
+			if (serverNonce.empty())
+			{
+				reject(validation.Id, JsonRpc::ErrorCode::InternalError, "The server's random number generator failed", true);
+				return;
+			}
+			// Each nonce is used once per connection; a client echoing the server's nonce back (or one that
+			// happens to match) could make one side's proof stand in for a fresh one.
+			if (serverNonce == *clientNonce)
+			{
+				reject(validation.Id, JsonRpc::ErrorCode::InvalidParams, "The nonces of a handshake must differ", true);
+				return;
+			}
+
+			connection.ClientNonce = *clientNonce;
+			connection.ServerNonce = std::move(serverNonce);
+			const std::string serverProof = RpcAuthentication::ComputeServerProof(Specification.AuthToken, connection.ClientNonce, connection.ServerNonce);
+			Send(connection, JsonRpc::MakeResult(validation.Id, nlohmann::json { { "serverNonce", connection.ServerNonce }, { "serverProof", serverProof } }));
 			return;
 		}
 
-		const auto paramsIt = message->find("params");
-		const RpcResult result = CheckToken(paramsIt != message->end() ? *paramsIt : nlohmann::json::object());
-		if (result.IsError())
+		// Step 2: the client's proof, bound to both nonces, so neither a recorded proof nor a proof from another
+		// connection is accepted.
+		if (method != c_RpcAuthenticateMethod)
 		{
-			reject(validation.Id, result.GetError().Code, result.GetError().Message, true);
+			const std::string_view reason = method == c_RpcHandshakeMethod
+				? "The handshake was already started on this connection"
+				: "Authentication required: the second request must be rpc.authenticate";
+			reject(validation.Id, JsonRpc::ErrorCode::Unauthorized, reason, true);
+			return;
+		}
+		const std::string* clientProof = FindString(params, "clientProof");
+		if (!clientProof)
+		{
+			reject(validation.Id, JsonRpc::ErrorCode::InvalidParams, "Expected params {\"clientProof\": string}", true);
+			return;
+		}
+		const std::string expectedProof = RpcAuthentication::ComputeClientProof(Specification.AuthToken, connection.ServerNonce, connection.ClientNonce);
+		if (!Crypto::ConstantTimeEquals(*clientProof, expectedProof))
+		{
+			reject(validation.Id, JsonRpc::ErrorCode::Unauthorized, "Authentication failed: the proof does not match the session token", true);
 			return;
 		}
 
@@ -846,26 +925,12 @@ namespace Strata
 		}
 
 		connection.Authenticated = true;
+		connection.ClientNonce.clear();
+		connection.ServerNonce.clear();
 		connection.Reader.SetMaxMessageSize(Specification.MaxMessageSize);
 		UpdateClientCount();
 		ST_CORE_TRACE("RpcServer: client {} authenticated", connection.Id);
-		Send(connection, MakeResponse(validation.Id, result));
-	}
-
-	RpcResult RpcServer::Impl::CheckToken(const nlohmann::json& params) const
-	{
-		const auto token = params.is_object() ? params.find("token") : params.end();
-		const auto nonce = params.is_object() ? params.find("nonce") : params.end();
-		if (token == params.end() || !token->is_string() || nonce == params.end() || !nonce->is_string())
-			return RpcResult::Failure(JsonRpc::ErrorCode::InvalidParams, "Expected params {\"token\": string, \"nonce\": string}");
-		const std::string& nonceText = nonce->get_ref<const std::string&>();
-		if (!RpcAuthentication::IsValidNonce(nonceText))
-			return RpcResult::Failure(JsonRpc::ErrorCode::InvalidParams, "The nonce must be 32 to 128 hexadecimal characters");
-		if (!Crypto::ConstantTimeEquals(token->get_ref<const std::string&>(), Specification.AuthToken))
-			return RpcResult::Failure(JsonRpc::ErrorCode::Unauthorized, "Invalid authentication token");
-
-		// Prove knowledge of the token in return, bound to the client's nonce so the proof cannot be replayed.
-		return RpcResult::Success(nlohmann::json { { "authenticated", true }, { "proof", RpcAuthentication::ComputeServerProof(Specification.AuthToken, nonceText) } });
+		Send(connection, JsonRpc::MakeResult(validation.Id, nlohmann::json { { "authenticated", true } }));
 	}
 
 	void RpcServer::Impl::TransferResponses(Connection& connection)

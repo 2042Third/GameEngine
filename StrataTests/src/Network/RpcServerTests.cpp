@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -55,11 +56,6 @@ namespace
 		CHECK_FALSE(connection.ReadMessage().has_value());
 		CHECK(connection.WasClosedByPeer());
 		CHECK_FALSE(connection.WasResetByPeer());
-	}
-
-	nlohmann::json AuthenticationParams(const std::string& token)
-	{
-		return nlohmann::json { { "token", token }, { "nonce", RpcAuthentication::GenerateNonce() } };
 	}
 
 	std::string Nest(size_t depth)
@@ -166,12 +162,12 @@ TEST_SUITE("Network.RpcServer")
 				CHECK(method["paramsSchema"]["properties"]["value"]["type"] == "string");
 			}
 		}
-		CHECK(names == std::vector<std::string> { "rpc.authenticate", "rpc.ping", "rpc.listMethods", "scene.save", "test.echo" });
+		CHECK(names == std::vector<std::string> { "rpc.handshake", "rpc.authenticate", "rpc.ping", "rpc.listMethods", "scene.save", "test.echo" });
 
 		const std::vector<RpcMethodInfo> methods = server.GetServer().GetMethods();
-		REQUIRE(methods.size() == 5);
-		CHECK(methods[3].Name == "scene.save");
-		CHECK(methods[3].ParamsSchema["type"] == "object"); // A null schema is normalized
+		REQUIRE(methods.size() == 6);
+		CHECK(methods[4].Name == "scene.save");
+		CHECK(methods[4].ParamsSchema["type"] == "object"); // A null schema is normalized
 	}
 
 	TEST_CASE("Method registration rules")
@@ -183,9 +179,9 @@ TEST_SUITE("Network.RpcServer")
 		CHECK_FALSE(server.RegisterMethod(MakeMethod(""), handler));
 		CHECK_FALSE(server.RegisterMethod(MakeMethod("rpc.custom"), handler));
 		CHECK_FALSE(server.RegisterMethod(MakeMethod("no.handler"), RpcHandler()));
-		CHECK(server.GetMethods().size() == 4);
+		CHECK(server.GetMethods().size() == 5); // 4 built-ins + a.b
 		server.UnregisterMethod("a.b");
-		CHECK(server.GetMethods().size() == 3);
+		CHECK(server.GetMethods().size() == 4);
 		CHECK(server.RegisterMethod(MakeMethod("a.b"), handler));
 	}
 
@@ -372,7 +368,7 @@ TEST_SUITE("Network.RpcServer")
 		CHECK_FALSE(connection.WasResetByPeer());
 	}
 
-	TEST_CASE("The first message must authenticate")
+	TEST_CASE("The connection must complete the handshake first")
 	{
 		Tests::PumpedRpcServer server;
 		RegisterEcho(server.GetServer());
@@ -380,6 +376,7 @@ TEST_SUITE("Network.RpcServer")
 
 		Tests::RawRpcConnection connection;
 		REQUIRE(connection.Connect(server.GetPort()));
+		const std::string clientNonce = RpcAuthentication::GenerateNonce();
 
 		SUBCASE("Any other request is rejected and the connection closed")
 		{
@@ -387,28 +384,52 @@ TEST_SUITE("Network.RpcServer")
 			CheckRejectedAndClosed(connection, JsonRpc::ErrorCode::Unauthorized);
 		}
 
-		SUBCASE("A wrong token closes the connection")
+		SUBCASE("A proof before the handshake is rejected")
 		{
-			REQUIRE(connection.SendLine(MakeRequestLine(1, "rpc.authenticate", AuthenticationParams("wrong"))));
+			REQUIRE(connection.SendLine(MakeRequestLine(1, "rpc.authenticate", nlohmann::json { { "clientProof", std::string(64, '0') } })));
 			CheckRejectedAndClosed(connection, JsonRpc::ErrorCode::Unauthorized);
 		}
 
-		SUBCASE("A missing token closes the connection")
+		SUBCASE("A missing client nonce closes the connection")
 		{
-			REQUIRE(connection.SendLine(MakeRequestLine(1, "rpc.authenticate")));
+			REQUIRE(connection.SendLine(MakeRequestLine(1, "rpc.handshake")));
 			CheckRejectedAndClosed(connection, JsonRpc::ErrorCode::InvalidParams);
 		}
 
-		SUBCASE("A missing nonce closes the connection")
+		SUBCASE("A malformed client nonce closes the connection")
 		{
-			REQUIRE(connection.SendLine(MakeRequestLine(1, "rpc.authenticate", nlohmann::json { { "token", Tests::c_TestServerToken } })));
+			REQUIRE(connection.SendLine(MakeRequestLine(1, "rpc.handshake", nlohmann::json { { "clientNonce", "not-hex-and-too-short" } })));
 			CheckRejectedAndClosed(connection, JsonRpc::ErrorCode::InvalidParams);
 		}
 
-		SUBCASE("A malformed nonce closes the connection")
+		SUBCASE("A nonce in another spelling closes the connection")
 		{
-			REQUIRE(connection.SendLine(MakeRequestLine(1, "rpc.authenticate", nlohmann::json { { "token", Tests::c_TestServerToken }, { "nonce", "not-hex-and-too-short" } })));
+			REQUIRE(connection.SendLine(MakeRequestLine(1, "rpc.handshake", nlohmann::json { { "clientNonce", std::string(32, 'A') } })));
 			CheckRejectedAndClosed(connection, JsonRpc::ErrorCode::InvalidParams);
+		}
+
+		SUBCASE("A proof made with the wrong token closes the connection")
+		{
+			std::optional<nlohmann::json> handshake = connection.Handshake(clientNonce);
+			REQUIRE(handshake.has_value());
+			const std::string serverNonce = (*handshake)["result"]["serverNonce"].get<std::string>();
+			REQUIRE(connection.SendLine(MakeRequestLine(2, "rpc.authenticate", nlohmann::json { { "clientProof", RpcAuthentication::ComputeClientProof("wrong", serverNonce, clientNonce) } })));
+			CheckRejectedAndClosed(connection, JsonRpc::ErrorCode::Unauthorized);
+			CHECK(server.GetServer().GetClientCount() == 0);
+		}
+
+		SUBCASE("A second handshake on the same connection closes it")
+		{
+			REQUIRE(connection.Handshake(clientNonce).has_value());
+			REQUIRE(connection.SendLine(MakeRequestLine(2, "rpc.handshake", nlohmann::json { { "clientNonce", RpcAuthentication::GenerateNonce() } })));
+			CheckRejectedAndClosed(connection, JsonRpc::ErrorCode::Unauthorized);
+		}
+
+		SUBCASE("Any other request between the two steps closes the connection")
+		{
+			REQUIRE(connection.Handshake(clientNonce).has_value());
+			REQUIRE(connection.SendLine(MakeRequestLine(2, "rpc.ping")));
+			CheckRejectedAndClosed(connection, JsonRpc::ErrorCode::Unauthorized);
 		}
 
 		SUBCASE("Non-JSON-RPC input, such as an HTTP request from a web page, closes the connection")
@@ -419,13 +440,13 @@ TEST_SUITE("Network.RpcServer")
 
 		SUBCASE("An invalid request closes the connection")
 		{
-			REQUIRE(connection.SendLine(R"({"jsonrpc":"1.0","id":1,"method":"rpc.authenticate"})"));
+			REQUIRE(connection.SendLine(R"({"jsonrpc":"1.0","id":1,"method":"rpc.handshake"})"));
 			CheckRejectedAndClosed(connection, JsonRpc::ErrorCode::InvalidRequest);
 		}
 
 		SUBCASE("A notification closes the connection without a reply")
 		{
-			REQUIRE(connection.SendLine(R"({"jsonrpc":"2.0","method":"rpc.authenticate","params":{"token":"x"}})"));
+			REQUIRE(connection.SendLine(R"({"jsonrpc":"2.0","method":"rpc.handshake","params":{"clientNonce":"x"}})"));
 			CHECK_FALSE(connection.ReadMessage().has_value());
 			CHECK(connection.WasClosedByPeer());
 		}
@@ -436,61 +457,110 @@ TEST_SUITE("Network.RpcServer")
 			CheckRejectedAndClosed(connection, JsonRpc::ErrorCode::InvalidRequest);
 		}
 
-		SUBCASE("The right token unlocks the connection and the full message size")
+		SUBCASE("The handshake unlocks the connection and the full message size")
 		{
 			REQUIRE(connection.Authenticate());
+			CHECK(Tests::WaitUntil([&]() { return server.GetServer().GetClientCount() == 1; }));
 			REQUIRE(connection.SendLine(MakeRequestLine(2, "test.echo", nlohmann::json { { "value", std::string(256 * 1024, 'v') } })));
 			std::optional<nlohmann::json> echo = connection.ReadMessage();
 			REQUIRE(echo.has_value());
 			CHECK((*echo)["result"]["value"].get_ref<const std::string&>().size() == 256 * 1024);
 
-			// Authenticating again with a wrong token is answered but does not end an authenticated connection.
-			REQUIRE(connection.SendLine(MakeRequestLine(3, "rpc.authenticate", AuthenticationParams("wrong"))));
+			// Handshake requests on an authenticated connection are answered with an error but do not end it.
+			REQUIRE(connection.SendLine(MakeRequestLine(3, "rpc.handshake", nlohmann::json { { "clientNonce", RpcAuthentication::GenerateNonce() } })));
 			std::optional<nlohmann::json> again = connection.ReadMessage();
 			REQUIRE(again.has_value());
-			CHECK((*again)["error"]["code"] == JsonRpc::ErrorCode::Unauthorized);
-			REQUIRE(connection.SendLine(MakeRequestLine(4, "rpc.ping")));
+			CHECK((*again)["error"]["code"] == JsonRpc::ErrorCode::InvalidRequest);
+			REQUIRE(connection.SendLine(MakeRequestLine(4, "rpc.authenticate", nlohmann::json { { "clientProof", std::string(64, '0') } })));
+			again = connection.ReadMessage();
+			REQUIRE(again.has_value());
+			CHECK((*again)["error"]["code"] == JsonRpc::ErrorCode::InvalidRequest);
+			REQUIRE(connection.SendLine(MakeRequestLine(5, "rpc.ping")));
 			std::optional<nlohmann::json> pong = connection.ReadMessage();
 			REQUIRE(pong.has_value());
 			CHECK((*pong)["result"]["pong"] == true);
 		}
 	}
 
-	TEST_CASE("The server proves that it knows the token")
+	TEST_CASE("The handshake proves the token both ways without sending it")
 	{
 		Tests::PumpedRpcServer server;
 		REQUIRE(server.Start());
 
-		const std::string nonce = "00112233445566778899aabbccddeeff";
+		const std::string token = Tests::c_TestServerToken;
+		const std::string clientNonce = "00112233445566778899aabbccddeeff";
 		Tests::RawRpcConnection connection;
 		REQUIRE(connection.Connect(server.GetPort()));
-		REQUIRE(connection.SendLine(MakeRequestLine(1, "rpc.authenticate", nlohmann::json { { "token", Tests::c_TestServerToken }, { "nonce", nonce } })));
-		std::optional<nlohmann::json> response = connection.ReadMessage();
-		REQUIRE(response.has_value());
-		CHECK((*response)["result"]["authenticated"] == true);
+		std::optional<nlohmann::json> handshake = connection.Handshake(clientNonce);
+		REQUIRE(handshake.has_value());
+		REQUIRE(handshake->contains("result"));
+		const std::string serverNonce = (*handshake)["result"]["serverNonce"].get<std::string>();
+		CHECK(RpcAuthentication::IsValidNonce(serverNonce));
+		CHECK(serverNonce != clientNonce);
 
-		// HMAC-SHA256(token, nonce + "strata-server"), computed independently of RpcAuthentication.
-		const std::string expected = Crypto::ToHex(Crypto::HmacSha256(std::string_view(Tests::c_TestServerToken), nonce + "strata-server"));
-		CHECK((*response)["result"]["proof"] == expected);
-		CHECK(RpcAuthentication::ComputeServerProof(Tests::c_TestServerToken, nonce) == expected);
+		// HMAC-SHA256 over the label and both nonces, computed independently of RpcAuthentication.
+		const std::string expectedServerProof = Crypto::ToHex(Crypto::HmacSha256(token, "strata-server" + clientNonce + serverNonce));
+		CHECK((*handshake)["result"]["serverProof"] == expectedServerProof);
+		CHECK(RpcAuthentication::ComputeServerProof(token, clientNonce, serverNonce) == expectedServerProof);
+
+		const std::string clientProof = Crypto::ToHex(Crypto::HmacSha256(token, "strata-client" + serverNonce + clientNonce));
+		CHECK(RpcAuthentication::ComputeClientProof(token, serverNonce, clientNonce) == clientProof);
+		CHECK(clientProof != expectedServerProof);
+		std::optional<nlohmann::json> authenticated = connection.SendClientProof(clientProof);
+		REQUIRE(authenticated.has_value());
+		CHECK((*authenticated)["result"]["authenticated"] == true);
+
+		// Every connection gets a fresh server nonce, even for the same client nonce.
+		Tests::RawRpcConnection other;
+		REQUIRE(other.Connect(server.GetPort()));
+		std::optional<nlohmann::json> otherHandshake = other.Handshake(clientNonce);
+		REQUIRE(otherHandshake.has_value());
+		CHECK((*otherHandshake)["result"]["serverNonce"] != serverNonce);
 
 		CHECK(RpcAuthentication::IsValidNonce(RpcAuthentication::GenerateNonce()));
 		CHECK(RpcAuthentication::GenerateNonce() != RpcAuthentication::GenerateNonce());
 		CHECK_FALSE(RpcAuthentication::IsValidNonce("0123"));
 		CHECK_FALSE(RpcAuthentication::IsValidNonce(std::string(32, 'g')));
-		CHECK_FALSE(RpcAuthentication::IsValidNonce(std::string(129, 'a')));
+		CHECK_FALSE(RpcAuthentication::IsValidNonce(std::string(32, 'A')));
+		CHECK_FALSE(RpcAuthentication::IsValidNonce(std::string(31, 'a')));
+		CHECK_FALSE(RpcAuthentication::IsValidNonce(std::string(33, 'a')));
+	}
+
+	TEST_CASE("A recorded client proof is refused on another connection")
+	{
+		Tests::PumpedRpcServer server;
+		REQUIRE(server.Start());
+
+		// An eavesdropper records a complete handshake...
+		const std::string clientNonce = RpcAuthentication::GenerateNonce();
+		Tests::RawRpcConnection recorded;
+		REQUIRE(recorded.Connect(server.GetPort()));
+		std::optional<nlohmann::json> handshake = recorded.Handshake(clientNonce);
+		REQUIRE(handshake.has_value());
+		const std::string clientProof = RpcAuthentication::ComputeClientProof(Tests::c_TestServerToken, (*handshake)["result"]["serverNonce"].get<std::string>(), clientNonce);
+		std::optional<nlohmann::json> accepted = recorded.SendClientProof(clientProof);
+		REQUIRE(accepted.has_value());
+		CHECK((*accepted)["result"]["authenticated"] == true);
+
+		// ...and replays it with the same client nonce: the server's fresh nonce makes the old proof worthless.
+		Tests::RawRpcConnection replay;
+		REQUIRE(replay.Connect(server.GetPort()));
+		REQUIRE(replay.Handshake(clientNonce).has_value());
+		REQUIRE(replay.SendLine(MakeRequestLine(2, "rpc.authenticate", nlohmann::json { { "clientProof", clientProof } })));
+		CheckRejectedAndClosed(replay, JsonRpc::ErrorCode::Unauthorized);
 	}
 
 	TEST_CASE("The client refuses a server that cannot prove it knows the token")
 	{
-		// A process that took over the port of an editor that exited: it accepts any token but cannot compute the
-		// proof. The client must give up before sending anything beyond the authentication request.
-		auto runImpostor = [](const nlohmann::json& result)
+		// A process that took over the port of an editor that exited answers the handshake, but cannot compute the
+		// proof. The client must give up before sending anything beyond its nonce, and never sends the token.
+		auto runImpostor = [](const std::function<nlohmann::json(const std::string& clientNonce)>& makeResult)
 		{
 			TcpListener listener;
 			REQUIRE(listener.Listen());
 			std::atomic<size_t> linesReceived = 0;
 			std::atomic<bool> closedByClient = false;
+			std::string received;
 			std::thread impostor([&]()
 			{
 				std::optional<TcpSocket> socket = listener.Accept(std::chrono::milliseconds(5000));
@@ -508,14 +578,18 @@ TEST_SUITE("Network.RpcServer")
 						closedByClient = true;
 						return;
 					}
+					received.append(buffer.begin(), buffer.end());
 					reader.Append(buffer);
 					while (std::optional<std::string> line = reader.NextLine())
 					{
 						if (linesReceived++ > 0)
 							continue;
 						const std::optional<nlohmann::json> request = JsonRpc::Parse(*line);
-						if (request && request->contains("id"))
-							socket->SendAll(JsonRpc::Serialize(JsonRpc::MakeResult((*request)["id"], result)) + "\n");
+						if (!request || !request->contains("id"))
+							continue;
+						const auto params = request->find("params");
+						const std::string clientNonce = params != request->end() && params->is_object() ? params->value("clientNonce", std::string()) : std::string();
+						socket->SendAll(JsonRpc::Serialize(JsonRpc::MakeResult((*request)["id"], makeResult(clientNonce))) + "\n");
 					}
 				}
 			});
@@ -529,16 +603,39 @@ TEST_SUITE("Network.RpcServer")
 			CHECK(error.find("could not prove") != std::string::npos);
 			CHECK(linesReceived.load() == 1);
 			CHECK(closedByClient.load());
+			CHECK(received.find("rpc.handshake") != std::string::npos);
+			CHECK(received.find(Tests::c_TestServerToken) == std::string::npos);
 		};
 
 		SUBCASE("No proof")
 		{
-			runImpostor(nlohmann::json { { "authenticated", true } });
+			runImpostor([](const std::string&) { return nlohmann::json { { "serverNonce", RpcAuthentication::GenerateNonce() } }; });
 		}
 
 		SUBCASE("A wrong proof")
 		{
-			runImpostor(nlohmann::json { { "authenticated", true }, { "proof", std::string(64, '0') } });
+			runImpostor([](const std::string&) { return nlohmann::json { { "serverNonce", RpcAuthentication::GenerateNonce() }, { "serverProof", std::string(64, '0') } }; });
+		}
+
+		SUBCASE("A proof recorded from the real editor for another client nonce")
+		{
+			Tests::PumpedRpcServer editor;
+			REQUIRE(editor.Start());
+			Tests::RawRpcConnection recorder;
+			REQUIRE(recorder.Connect(editor.GetPort()));
+			std::optional<nlohmann::json> recorded = recorder.Handshake(RpcAuthentication::GenerateNonce());
+			REQUIRE(recorded.has_value());
+			const nlohmann::json replayed = (*recorded)["result"];
+			runImpostor([&replayed](const std::string&) { return replayed; });
+		}
+
+		SUBCASE("The client's own nonce reflected as the server nonce")
+		{
+			// Even with a correct proof for that pair, equal nonces are refused.
+			runImpostor([](const std::string& clientNonce)
+			{
+				return nlohmann::json { { "serverNonce", clientNonce }, { "serverProof", RpcAuthentication::ComputeServerProof(Tests::c_TestServerToken, clientNonce, clientNonce) } };
+			});
 		}
 	}
 
@@ -551,6 +648,12 @@ TEST_SUITE("Network.RpcServer")
 		CHECK_FALSE(client.Connect("127.0.0.1", server.GetPort(), "wrong-token", std::chrono::milliseconds(2000)));
 		CHECK_FALSE(client.IsConnected());
 		CHECK(client.GetLastError().find("Authentication failed") != std::string::npos);
+		CHECK(server.GetServer().GetClientCount() == 0);
+
+		// Without a token there is nothing to authenticate with, so no connection is even attempted.
+		CHECK_FALSE(client.Connect("127.0.0.1", server.GetPort(), "", std::chrono::milliseconds(2000)));
+		CHECK_FALSE(client.IsConnected());
+		CHECK(client.GetLastError().find("token is required") != std::string::npos);
 
 		ConnectClient(client, server.GetPort());
 		CHECK(client.Call("rpc.ping", nlohmann::json::object(), c_CallTimeout).IsSuccess());
@@ -565,6 +668,18 @@ TEST_SUITE("Network.RpcServer")
 
 		Tests::RawRpcConnection connection;
 		REQUIRE(connection.Connect(server.GetPort()));
+
+		SUBCASE("A connection that sends nothing")
+		{
+		}
+
+		SUBCASE("A connection that stops after the first step")
+		{
+			std::optional<nlohmann::json> handshake = connection.Handshake(RpcAuthentication::GenerateNonce());
+			REQUIRE(handshake.has_value());
+			CHECK(handshake->contains("result"));
+		}
+
 		const auto start = std::chrono::steady_clock::now();
 		CheckRejectedAndClosed(connection, JsonRpc::ErrorCode::Unauthorized);
 		CHECK(std::chrono::steady_clock::now() - start < std::chrono::milliseconds(3000));
@@ -603,12 +718,24 @@ TEST_SUITE("Network.RpcServer")
 
 		// A second client authenticates correctly but exceeds MaxClients: it gets exactly ServerBusy, and the clean
 		// close guarantees the reply arrives before the connection ends.
-		RpcClient second;
-		REQUIRE(second.Connect("127.0.0.1", server.GetPort(), {}, std::chrono::milliseconds(2000)));
-		const RpcResult rejected = second.Call("rpc.authenticate", AuthenticationParams(Tests::c_TestServerToken), c_CallTimeout);
-		REQUIRE(rejected.IsError());
-		CHECK(rejected.GetError().Code == JsonRpc::ErrorCode::ServerBusy);
-		CHECK(rejected.GetError().Message.find("at most 1 client") != std::string::npos);
+		Tests::RawRpcConnection second;
+		REQUIRE(second.Connect(server.GetPort()));
+		const std::string clientNonce = RpcAuthentication::GenerateNonce();
+		std::optional<nlohmann::json> handshake = second.Handshake(clientNonce);
+		REQUIRE(handshake.has_value());
+		const std::string serverNonce = (*handshake)["result"]["serverNonce"].get<std::string>();
+		REQUIRE(second.SendLine(MakeRequestLine(2, "rpc.authenticate", nlohmann::json { { "clientProof", RpcAuthentication::ComputeClientProof(Tests::c_TestServerToken, serverNonce, clientNonce) } })));
+		std::optional<nlohmann::json> rejected = second.ReadMessage();
+		REQUIRE(rejected.has_value());
+		CHECK((*rejected)["error"]["code"] == JsonRpc::ErrorCode::ServerBusy);
+		CHECK((*rejected)["error"]["message"].get<std::string>().find("at most 1 client") != std::string::npos);
+		CHECK_FALSE(second.ReadMessage().has_value());
+		CHECK(second.WasClosedByPeer());
+
+		// RpcClient reports the same.
+		RpcClient refused;
+		CHECK_FALSE(refused.Connect("127.0.0.1", server.GetPort(), Tests::c_TestServerToken, std::chrono::milliseconds(2000)));
+		CHECK(refused.GetLastError().find("at most 1 client") != std::string::npos);
 
 		// Once the first client leaves, a new one is accepted.
 		first.Close();

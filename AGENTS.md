@@ -168,12 +168,13 @@ JSON-RPC 2.0, one compact JSON message per line, over TCP on loopback. `StrataCL
 
 - **Security model:** any local process, and any web page in a local browser, can reach the port; only
   holders of the session token are trusted. The server binds loopback addresses only and refuses to start
-  without a token (`EditorSession::GenerateSessionToken`, from the OS secure random generator). A
-  connection's first message must be `rpc.authenticate` (token plus a random nonce); anything else closes
-  it. The server answers with an HMAC proof that it knows the token, which `RpcClient` verifies before
-  sending anything else, so clients never talk to a process that took over a dead editor's port.
-  Unauthenticated connections get tiny limits and a deadline; authenticated ones get size limits and
-  backpressure. Never log or print tokens.
+  without a token (`EditorSession::GenerateSessionToken`, from the OS secure random generator). Every
+  connection starts with a challenge-response handshake (`RpcAuthentication`) in which the token never
+  crosses the wire: `rpc.handshake` sends a client nonce and returns a server nonce with the server's HMAC
+  proof, which `RpcClient` verifies before it proves anything in return (so clients never talk to a process
+  that took over a dead editor's port); `rpc.authenticate` then sends the client's HMAC proof. Anything else
+  closes the connection. Clients refuse to connect without a token. Unauthenticated connections get tiny
+  limits and a deadline; authenticated ones get size limits and backpressure. Never log or print tokens.
 - **Session files:** `<user data>/Strata/Sessions/<pid>.json` holds the full session (address, port, token,
   process start time). It is written owner-only (`Platform::WritePrivateFile`) into a private directory. A
   session counts only while its process id is alive with the recorded start time (a reused id does not
