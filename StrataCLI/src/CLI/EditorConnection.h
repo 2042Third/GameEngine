@@ -54,16 +54,18 @@ namespace Strata::CLI
 	// The editor a connection stays with once it has connected.
 	struct PinnedEditor
 	{
-		std::string ProjectPath; // Any running editor with this project is accepted (e.g. after an editor restart)
-		uint32_t ProcessId = 0;  // The process last connected to; without a project, the only one accepted
+		std::string ProjectPath;       // Any running editor with this project is accepted (e.g. after an editor restart)
+		uint32_t ProcessId = 0;        // The process last connected to, which is always accepted (whatever project it has
+		uint64_t ProcessStartTime = 0; // open now); its start time tells it apart from a process that reuses its id
 	};
 
 	// Client for a running editor that connects lazily and reconnects when the connection drops.
 	//
 	// After the first successful connection through a session, the connection is pinned to that editor: later
-	// reconnects only accept the same project (any process, so an editor restart is followed) or, for an editor
-	// without a project, the same process. A different editor never silently takes its place (its tools and
-	// state would differ); calls fail with a "disconnected" error instead until ConnectToSession picks an editor.
+	// reconnects accept the same process (even after it opened another project, which the pin then follows) or
+	// another process with the same project (so an editor restart is followed). A different editor never silently takes
+	// its place (its tools and state would differ); calls fail with a "disconnected" error instead until
+	// ConnectToSession picks an editor.
 	class EditorConnection
 	{
 	public:
@@ -90,6 +92,7 @@ namespace Strata::CLI
 		nlohmann::json DescribeStatus() const;
 	private:
 		bool TryEndpoint(const EditorEndpoint& endpoint);
+		void AddPinnedProcessEndpoint(std::vector<EditorEndpoint>& endpoints) const;
 		bool IsPinnedEditor(const EditorEndpoint& endpoint) const;
 		std::string DescribePinnedEditorMissing() const;
 	private:

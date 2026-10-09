@@ -386,12 +386,20 @@ TEST_SUITE("CLI.Mcp")
 		McpTestClient client(specification);
 		client.Initialize();
 
-		nlohmann::json missingProject = client.CallTool("strata_launch_editor");
-		CHECK(missingProject["isError"] == true);
-		CHECK(GetText(missingProject).find("project") != std::string::npos);
+		nlohmann::json badProject = client.CallTool("strata_launch_editor", nlohmann::json { { "project", 42 } });
+		CHECK(badProject["isError"] == true);
+		CHECK(GetText(badProject).find("project") != std::string::npos);
 
 		nlohmann::json badHeadless = client.CallTool("strata_launch_editor", nlohmann::json { { "project", FileSystem::ToUTF8(directory) }, { "headless", "yes" } });
 		CHECK(badHeadless["isError"] == true);
+		nlohmann::json badNoGpu = client.CallTool("strata_launch_editor", nlohmann::json { { "noGpu", 1 } });
+		CHECK(badNoGpu["isError"] == true);
+		CHECK(GetText(badNoGpu).find("noGpu") != std::string::npos);
+
+		// Without a project, an editor is started without one (here the editor executable is missing).
+		nlohmann::json withoutProject = client.CallTool("strata_launch_editor");
+		CHECK(withoutProject["isError"] == true);
+		CHECK(GetText(withoutProject).find("not found") != std::string::npos);
 
 		nlohmann::json missingEditor = client.CallTool("strata_launch_editor", nlohmann::json { { "project", FileSystem::ToUTF8(directory) }, { "headless", true } });
 		CHECK(missingEditor["isError"] == true);
@@ -458,6 +466,29 @@ TEST_SUITE("CLI.Mcp")
 			return client.CountNotifications("notifications/tools/list_changed") == 2;
 		}, std::chrono::milliseconds(10000)));
 		CHECK(client.ListToolNames() == c_GenericTools);
+	}
+
+	TEST_CASE("Launching without a project starts an editor without one")
+	{
+		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("McpLaunchEmpty") / "Sessions";
+		Tests::ScopedEnvironmentVariable fakeEditor("STRATA_TEST_FAKE_EDITOR", "1");
+		Tests::ScopedEnvironmentVariable sessionOverride("STRATA_SESSION_DIR", FileSystem::ToUTF8(sessionDirectory));
+
+		McpServerSpecification specification = MakeSpecification(sessionDirectory);
+		specification.EditorPath = FileSystem::ToUTF8(Tests::GetTestExecutablePath());
+		specification.LaunchTimeout = std::chrono::milliseconds(20000);
+		McpTestClient client(specification);
+		client.Initialize();
+
+		nlohmann::json launched = client.CallTool("strata_launch_editor", nlohmann::json { { "noGpu", true } });
+		REQUIRE_MESSAGE(launched["isError"] == false, GetText(launched));
+		CHECK(launched["structuredContent"]["launched"] == true);
+		CHECK(launched["structuredContent"]["session"]["ProjectPath"] == "");
+		nlohmann::json info = client.CallTool("editor_info");
+		REQUIRE(info["isError"] == false);
+		CHECK(info["structuredContent"]["NoGpu"] == true);
+		CHECK(info["structuredContent"]["Project"] == "");
+		CHECK(client.CallTool("editor_quit")["isError"] == false);
 	}
 
 	TEST_CASE("Another project's editor does not replace a disconnected one")

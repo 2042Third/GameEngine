@@ -30,9 +30,13 @@ namespace Strata::CLI
 
 		constexpr const char* c_Instructions =
 			"Controls the Strata game engine editor. Call strata_status to check whether an editor is connected; "
-			"if none is, call strata_launch_editor with a project directory. While an editor is connected, each of "
-			"its automation methods is available as a tool (method name with '.' replaced by '_', e.g. entity_create), "
-			"and strata_call invokes any method by name.";
+			"if none is, call strata_launch_editor (with a project directory to open one, or without to create one with "
+			"project_create). While an editor is connected, each of its commands is available as a tool (command name with "
+			"'.' replaced by '_', e.g. entity_create), and strata_call invokes any method by name. editor_status gives an "
+			"overview of the editor, editor_commands lists every command with its parameters, and component_list the "
+			"component types. Entities and assets are referenced by 16-digit hexadecimal IDs (assets also by path). "
+			"Commands that take frames (editor_wait, captures) answer when they finish. Changes made while playing are "
+			"discarded by play_stop. Save with scene_save or scene_saveAs before editor_quit.";
 
 		std::string PrettyPrint(const nlohmann::json& value)
 		{
@@ -62,11 +66,14 @@ namespace Strata::CLI
 				MakeEmptyObjectSchema()));
 
 			nlohmann::json launchSchema = MakeEmptyObjectSchema();
-			launchSchema["properties"]["project"] = nlohmann::json { { "type", "string" }, { "description", "Directory of the project to open" } };
+			launchSchema["properties"]["project"] = nlohmann::json { { "type", "string" },
+				{ "description", "Directory of an existing project to open; omit it to start without a project (then create one with project_create)" } };
 			launchSchema["properties"]["headless"] = nlohmann::json { { "type", "boolean" }, { "description", "Run without a window (rendering stays available offscreen)" } };
-			launchSchema["required"] = nlohmann::json::array({ "project" });
+			launchSchema["properties"]["noGpu"] = nlohmann::json { { "type", "boolean" },
+				{ "description", "Run without a window and without a graphics device (no rendering or viewport capture), e.g. on machines without a GPU" } };
 			tools.push_back(MakeTool(c_LaunchEditorTool,
-				"Starts the Strata editor for a project (or reuses one that already has it open) and connects to it. The editor's methods then become available as tools.",
+				"Starts the Strata editor (for a project, reusing an editor that already has it open) and connects to it. The editor's methods then become "
+				"available as tools. The editor keeps running until editor_quit.",
 				std::move(launchSchema)));
 
 			tools.push_back(MakeTool(c_ListMethodsTool,
@@ -123,6 +130,22 @@ namespace Strata::CLI
 				return false;
 			}
 			value = it->get<std::string>();
+			return true;
+		}
+
+		// Reads an optional boolean argument (value keeps its default when absent). Returns false (with error set) if it
+		// is present with another type.
+		bool GetBoolArgument(const nlohmann::json& arguments, const char* name, bool& value, std::string& error)
+		{
+			const auto it = arguments.find(name);
+			if (it == arguments.end() || it->is_null())
+				return true;
+			if (!it->is_boolean())
+			{
+				error = fmt::format("Argument '{}' must be a boolean", name);
+				return false;
+			}
+			value = it->get<bool>();
 			return true;
 		}
 
@@ -413,22 +436,21 @@ namespace Strata::CLI
 		std::optional<std::string> project;
 		if (!GetStringArgument(arguments, "project", project, error))
 			return MakeToolError(error);
-		if (!project || project->empty())
-			return MakeToolError("Missing required argument 'project' (the project directory)");
 
 		bool headless = false;
-		if (const auto headlessIt = arguments.find("headless"); headlessIt != arguments.end() && !headlessIt->is_null())
-		{
-			if (!headlessIt->is_boolean())
-				return MakeToolError("Argument 'headless' must be a boolean");
-			headless = headlessIt->get<bool>();
-		}
+		bool noGpu = false;
+		if (!GetBoolArgument(arguments, "headless", headless, error) || !GetBoolArgument(arguments, "noGpu", noGpu, error))
+			return MakeToolError(error);
 
-		std::error_code pathError;
-		std::filesystem::path projectDirectory = std::filesystem::absolute(FileSystem::FromUTF8(*project), pathError);
-		if (pathError)
-			projectDirectory = FileSystem::FromUTF8(*project);
-		projectDirectory = projectDirectory.lexically_normal();
+		std::filesystem::path projectDirectory;
+		if (project && !project->empty())
+		{
+			std::error_code pathError;
+			projectDirectory = std::filesystem::absolute(FileSystem::FromUTF8(*project), pathError);
+			if (pathError)
+				projectDirectory = FileSystem::FromUTF8(*project);
+			projectDirectory = projectDirectory.lexically_normal();
+		}
 
 		// Reuse an editor that already has the project open instead of starting a second one.
 		EditorConnectionOptions probeOptions = m_Specification.Connection;
@@ -437,7 +459,7 @@ namespace Strata::CLI
 		probeOptions.ProjectDirectory = projectDirectory;
 		probeOptions.SessionDirectory = m_Connection.GetOptions().SessionDirectory;
 		EditorConnection probe(probeOptions);
-		if (probe.EnsureConnected() && probe.GetEndpoint() && probe.GetEndpoint()->Session)
+		if (!projectDirectory.empty() && probe.EnsureConnected() && probe.GetEndpoint() && probe.GetEndpoint()->Session)
 		{
 			const EditorSessionInfo session = *probe.GetEndpoint()->Session;
 			probe.Disconnect();
@@ -456,6 +478,7 @@ namespace Strata::CLI
 		launch.EditorPath = ResolveEditorPath(m_Specification.EditorPath);
 		launch.ProjectDirectory = projectDirectory;
 		launch.Headless = headless;
+		launch.NoGpu = noGpu;
 		launch.WaitTimeout = m_Specification.LaunchTimeout;
 		launch.SessionDirectory = m_Connection.GetOptions().SessionDirectory;
 

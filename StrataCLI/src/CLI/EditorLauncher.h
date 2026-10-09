@@ -20,8 +20,9 @@ namespace Strata::CLI
 	struct EditorLaunchSpecification
 	{
 		std::filesystem::path EditorPath;
-		std::filesystem::path ProjectDirectory;
-		bool Headless = false;
+		std::filesystem::path ProjectDirectory; // Empty starts the editor without a project (e.g. to create one)
+		bool Headless = false;                  // No window ("--headless")
+		bool NoGpu = false;                     // No graphics device either ("--no-gpu", implies headless)
 		std::chrono::milliseconds WaitTimeout = std::chrono::milliseconds(60000);
 		// Where the editor publishes its session file; empty uses EditorSession::GetSessionDirectory(). The
 		// editor inherits this process's environment, so STRATA_SESSION_DIR applies to both.
@@ -38,8 +39,8 @@ namespace Strata::CLI
 		Scope<Process> EditorProcess;
 	};
 
-	// Starts the editor detached ("--project <dir>" [+ "--headless"], output discarded) and waits until its
-	// session accepts an authenticated connection.
+	// Starts the editor detached ("--project <dir>" when a project is given, "--headless", "--no-gpu"; output discarded)
+	// and waits until its session accepts an authenticated connection.
 	EditorLaunchResult LaunchEditor(const EditorLaunchSpecification& specification);
 
 	// Waits until the session file of processId exists in sessionDirectory and its endpoint accepts an

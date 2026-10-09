@@ -1,6 +1,7 @@
 #include "CLI/CliApplication.h"
 
 #include "CLI/EditorLauncher.h"
+#include "CLI/ImageOutput.h"
 #include "CLI/McpServer.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Log.h"
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <charconv>
 #include <istream>
+#include <iterator>
 #include <mutex>
 #include <ostream>
 #include <string_view>
@@ -42,7 +44,9 @@ namespace Strata::CLI
 			{ "--token", true },
 			{ "--timeout", true },
 			{ "--wait-timeout", true },
+			{ "--save-image", true },
 			{ "--headless", false },
+			{ "--no-gpu", false },
 			{ "--json", false },
 			{ "--verbose", false },
 			{ "--help", false },
@@ -112,21 +116,58 @@ namespace Strata::CLI
 			return false;
 		}
 
-		int RunCallCommand(const CliArguments& arguments, std::ostream& output, std::ostream& errorOutput)
+		// The params argument of 'call': JSON text, "-" for JSON read from the input stream, or "@<file>" for a JSON file
+		// (quoting JSON on a command line is error-prone, especially on Windows).
+		std::optional<nlohmann::json> ReadParams(const std::string& argument, std::istream& input, std::string& error)
+		{
+			std::string text;
+			std::string source = "params";
+			if (argument == "-")
+			{
+				text.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+				source = "the params read from standard input";
+			}
+			else if (argument.starts_with('@'))
+			{
+				const std::filesystem::path file = ToAbsolutePath(argument.substr(1));
+				std::optional<std::string> contents = FileSystem::ReadText(file);
+				if (!contents)
+				{
+					error = fmt::format("cannot read the params file '{}'", FileSystem::ToUTF8(file));
+					return std::nullopt;
+				}
+				text = std::move(*contents);
+				source = fmt::format("the params file '{}'", FileSystem::ToUTF8(file));
+			}
+			else
+			{
+				text = argument;
+			}
+
+			std::optional<nlohmann::json> parsed = JsonRpc::Parse(text);
+			if (!parsed || (!parsed->is_object() && !parsed->is_array()))
+			{
+				error = fmt::format("{} must be a JSON object or array", source);
+				return std::nullopt;
+			}
+			return parsed;
+		}
+
+		int RunCallCommand(const CliArguments& arguments, std::istream& input, std::ostream& output, std::ostream& errorOutput)
 		{
 			if (arguments.Positionals.empty() || arguments.Positionals.size() > 2)
-				return ReportUsageError("'call' expects <method> [params-json]", errorOutput);
+				return ReportUsageError("'call' expects <method> [params-json | - | @file]", errorOutput);
 
+			std::string error;
 			nlohmann::json params = nlohmann::json::object();
 			if (arguments.Positionals.size() == 2)
 			{
-				std::optional<nlohmann::json> parsed = JsonRpc::Parse(arguments.Positionals[1]);
-				if (!parsed || (!parsed->is_object() && !parsed->is_array()))
-					return ReportUsageError("params must be a JSON object or array", errorOutput);
+				std::optional<nlohmann::json> parsed = ReadParams(arguments.Positionals[1], input, error);
+				if (!parsed)
+					return ReportUsageError(error, errorOutput);
 				params = std::move(*parsed);
 			}
 
-			std::string error;
 			std::optional<EditorConnectionOptions> options = BuildConnectionOptions(arguments, error);
 			if (!options)
 				return ReportUsageError(error, errorOutput);
@@ -139,7 +180,16 @@ namespace Strata::CLI
 			if (result.IsError())
 				return ReportCallFailure(result, errorOutput);
 
-			output << PrettyPrint(result.GetValue()) << "\n";
+			nlohmann::json value = result.GetValue();
+			if (arguments.SaveImage)
+			{
+				if (!SaveResultImage(value, ToAbsolutePath(*arguments.SaveImage), error))
+				{
+					errorOutput << "error: " << error << "\n";
+					return ExitCode::RpcError;
+				}
+			}
+			output << PrettyPrint(value) << "\n";
 			return ExitCode::Success;
 		}
 
@@ -222,13 +272,13 @@ namespace Strata::CLI
 		{
 			if (!arguments.Positionals.empty())
 				return ReportUsageError("'launch' takes no positional arguments", errorOutput);
-			if (!arguments.Project)
-				return ReportUsageError("'launch' requires --project <dir>", errorOutput);
 
 			EditorLaunchSpecification specification;
 			specification.EditorPath = ResolveEditorPath(arguments.Editor);
-			specification.ProjectDirectory = ToAbsolutePath(*arguments.Project);
+			if (arguments.Project)
+				specification.ProjectDirectory = ToAbsolutePath(*arguments.Project);
 			specification.Headless = arguments.Headless;
+			specification.NoGpu = arguments.NoGpu;
 			if (arguments.WaitTimeoutMilliseconds)
 				specification.WaitTimeout = std::chrono::milliseconds(*arguments.WaitTimeoutMilliseconds);
 
@@ -371,8 +421,12 @@ namespace Strata::CLI
 				else
 					result.WaitTimeoutMilliseconds = milliseconds;
 			}
+			else if (name == "--save-image")
+				result.SaveImage = value;
 			else if (name == "--headless")
 				result.Headless = true;
+			else if (name == "--no-gpu")
+				result.NoGpu = true;
 			else if (name == "--json")
 				result.Json = true;
 			else if (name == "--verbose")
@@ -436,18 +490,23 @@ namespace Strata::CLI
 			"StrataCLI {} - command-line client for the Strata editor automation API\n"
 			"\n"
 			"Usage:\n"
-			"  StrataCLI call <method> [params-json] [connection options] [--timeout <ms>]\n"
+			"  StrataCLI call <method> [params] [connection options] [--timeout <ms>] [--save-image <file>]\n"
 			"  StrataCLI list [connection options] [--json]\n"
 			"  StrataCLI status [connection options]\n"
-			"  StrataCLI launch --project <dir> [--headless] [--editor <path>] [--wait-timeout <ms>]\n"
+			"  StrataCLI launch [--project <dir>] [--headless | --no-gpu] [--editor <path>] [--wait-timeout <ms>]\n"
 			"  StrataCLI mcp [connection options] [--editor <path>] [--timeout <ms>]\n"
 			"  StrataCLI --help | --version\n"
 			"\n"
 			"Commands:\n"
-			"  call     Call an editor method and print its JSON result\n"
-			"  list     List the editor's methods and their descriptions\n"
+			"  call     Call an editor method and print its JSON result. params is a JSON object, '-' to read it\n"
+			"           from standard input, or @<file> to read it from a file. Commands that take frames answer\n"
+			"           when they finish; --timeout (default 30000 ms) bounds the wait. --save-image writes an image\n"
+			"           result ({{\"Image\": {{\"MimeType\", \"Data\"}}}}) to a file and prints its path instead of the data\n"
+			"  list     List the editor's methods and their descriptions (--json: with parameter schemas)\n"
 			"  status   Show whether an editor is reachable, and the known editor sessions\n"
-			"  launch   Start the editor for a project and wait until it accepts connections\n"
+			"  launch   Start an editor (for a project, if given) and wait until it accepts connections. It keeps\n"
+			"           running until 'call editor.quit'. --headless runs without a window, --no-gpu also without\n"
+			"           a graphics device (no rendering)\n"
 			"  mcp      Serve the Model Context Protocol on stdin/stdout (for AI agents)\n"
 			"\n"
 			"Connection options, in discovery order:\n"
@@ -456,7 +515,8 @@ namespace Strata::CLI
 			"  --project <dir>           The editor that has this project open (<dir>/.strata/EditorSession.json)\n"
 			"  (none)                    The newest running editor session that accepts a connection\n"
 			"  --host <address>          Host of the explicit endpoint (default 127.0.0.1; requires --port)\n"
-			"Once connected, reconnects only reach the same project's editor (e.g. after it restarts).\n"
+			"Once connected (mcp), reconnects only reach the same editor (also after it opened another project)\n"
+			"or, after it restarts, an editor with the same project.\n"
 			"Avoid --token where possible: command lines are visible to other processes.\n"
 			"\n"
 			"Other options:\n"
@@ -511,7 +571,7 @@ namespace Strata::CLI
 		}
 
 		if (cliArguments.Command == "call")
-			return RunCallCommand(cliArguments, output, errorOutput);
+			return RunCallCommand(cliArguments, input, output, errorOutput);
 		if (cliArguments.Command == "list")
 			return RunListCommand(cliArguments, output, errorOutput);
 		if (cliArguments.Command == "status")

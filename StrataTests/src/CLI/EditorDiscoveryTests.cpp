@@ -270,6 +270,33 @@ TEST_SUITE("CLI.Discovery")
 		CHECK(EditorSession::IsSameProject(connection.GetPinnedEditor()->ProjectPath, otherProject));
 	}
 
+	TEST_CASE("A pinned editor that opens another project is still followed")
+	{
+		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("DiscoveryMoved");
+		const std::filesystem::path firstProject = Tests::CreateTemporaryDirectory("DiscoveryMovedFirst");
+		const std::filesystem::path secondProject = Tests::CreateTemporaryDirectory("DiscoveryMovedSecond");
+		FakeEditorInstance editor;
+		REQUIRE(editor.Start(sessionDirectory, "2026-02-01T00:00:00Z", FileSystem::ToUTF8(firstProject)));
+
+		// Found by its first project.
+		EditorConnectionOptions options = MakeOptions(sessionDirectory);
+		options.ProjectDirectory = firstProject;
+		EditorConnection connection(options);
+		REQUIRE(connection.EnsureConnected());
+		CHECK(connection.GetEndpoint()->Port == editor.Server.GetPort());
+
+		// The editor opens the second project (its session moves along) and the connection drops: discovery by the first
+		// project no longer finds it, but it is still the pinned process.
+		editor.Session.ProjectPath = FileSystem::ToUTF8(secondProject);
+		REQUIRE(Tests::WriteFakeSessionFile(sessionDirectory, editor.Session));
+		connection.Disconnect();
+		REQUIRE(connection.Call("rpc.ping", nlohmann::json::object(), std::chrono::milliseconds(5000)).IsSuccess());
+		CHECK(connection.GetEndpoint()->Port == editor.Server.GetPort());
+		REQUIRE(connection.GetPinnedEditor().has_value());
+		CHECK(connection.GetPinnedEditor()->ProcessId == editor.Session.ProcessId);
+		CHECK(EditorSession::IsSameProject(connection.GetPinnedEditor()->ProjectPath, secondProject));
+	}
+
 	TEST_CASE("The editor executable is resolved from the option, the environment or the default location")
 	{
 		Tests::ScopedEnvironmentVariable editorPath("STRATA_EDITOR_PATH", "");
@@ -345,6 +372,32 @@ TEST_SUITE("CLI.Discovery")
 		CHECK(*exitCode == 0);
 		CHECK(EditorSession::FindSessions().empty());
 		CHECK_FALSE(FileSystem::Exists(EditorSession::GetProjectSessionFilePath(project)));
+	}
+
+	TEST_CASE("Launching without a project starts an editor without one")
+	{
+		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("LaunchEmptySessions") / "Sessions";
+		Tests::ScopedEnvironmentVariable fakeEditor("STRATA_TEST_FAKE_EDITOR", "1");
+		Tests::ScopedEnvironmentVariable sessionOverride("STRATA_SESSION_DIR", FileSystem::ToUTF8(sessionDirectory));
+
+		EditorLaunchSpecification specification;
+		specification.EditorPath = Tests::GetTestExecutablePath();
+		specification.NoGpu = true;
+		specification.WaitTimeout = std::chrono::milliseconds(20000);
+		EditorLaunchResult result = LaunchEditor(specification);
+		REQUIRE_MESSAGE(result.Success, result.Error);
+		CHECK(result.Session.ProjectPath.empty());
+		CHECK(result.Session.Headless);
+
+		RpcClient client;
+		REQUIRE_MESSAGE(client.Connect("127.0.0.1", result.Session.Port, result.Session.Token, std::chrono::milliseconds(3000)), client.GetLastError());
+		const RpcResult info = client.Call("editor.info", nlohmann::json::object(), std::chrono::milliseconds(5000));
+		REQUIRE(info.IsSuccess());
+		CHECK(info.GetValue()["NoGpu"] == true);
+		CHECK(info.GetValue()["Project"] == "");
+		CHECK(client.Call("editor.quit", nlohmann::json::object(), std::chrono::milliseconds(5000)).IsSuccess());
+		client.Close();
+		REQUIRE(result.EditorProcess->Wait(std::chrono::milliseconds(10000)).has_value());
 	}
 
 	TEST_CASE("Waiting for a launched editor's session")

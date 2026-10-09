@@ -35,7 +35,9 @@ namespace Strata::CLI
 		std::optional<std::string> Token;
 		std::optional<int64_t> TimeoutMilliseconds;
 		std::optional<int64_t> WaitTimeoutMilliseconds;
+		std::optional<std::string> SaveImage; // call: where to write an image result
 		bool Headless = false;
+		bool NoGpu = false;
 		bool Json = false;
 		bool Verbose = false;
 		bool Help = false;
@@ -56,7 +58,7 @@ namespace Strata::CLI
 	void InitializeCliLogging(bool verbose);
 
 	// Runs StrataCLI with arguments (without the program name) and returns the process exit code. Results go to
-	// output, diagnostics to errorOutput; input feeds the MCP server.
+	// output, diagnostics to errorOutput; input feeds the MCP server and the params of `call -`.
 	int RunCli(const std::vector<std::string>& arguments, std::istream& input, std::ostream& output, std::ostream& errorOutput);
 
 }

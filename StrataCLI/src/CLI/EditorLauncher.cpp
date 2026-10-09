@@ -54,7 +54,7 @@ namespace Strata::CLI
 			result.Error = fmt::format("Editor executable not found at '{}' (use --editor or set {})", FileSystem::ToUTF8(specification.EditorPath), c_EditorPathVariable);
 			return result;
 		}
-		if (!FileSystem::IsDirectory(specification.ProjectDirectory))
+		if (!specification.ProjectDirectory.empty() && !FileSystem::IsDirectory(specification.ProjectDirectory))
 		{
 			result.Error = fmt::format("Project directory '{}' does not exist", FileSystem::ToUTF8(specification.ProjectDirectory));
 			return result;
@@ -71,17 +71,20 @@ namespace Strata::CLI
 			sessionDirectory = std::move(*defaultDirectory);
 		}
 
-		std::error_code error;
-		std::filesystem::path projectDirectory = std::filesystem::absolute(specification.ProjectDirectory, error);
-		if (error)
-			projectDirectory = specification.ProjectDirectory;
-		projectDirectory = projectDirectory.lexically_normal();
-
 		ProcessSpecification processSpecification;
 		processSpecification.Executable = specification.EditorPath;
-		processSpecification.Arguments = { "--project", FileSystem::ToUTF8(projectDirectory) };
+		if (!specification.ProjectDirectory.empty())
+		{
+			std::error_code error;
+			std::filesystem::path projectDirectory = std::filesystem::absolute(specification.ProjectDirectory, error);
+			if (error)
+				projectDirectory = specification.ProjectDirectory;
+			processSpecification.Arguments = { "--project", FileSystem::ToUTF8(projectDirectory.lexically_normal()) };
+		}
 		if (specification.Headless)
 			processSpecification.Arguments.push_back("--headless");
+		if (specification.NoGpu)
+			processSpecification.Arguments.push_back("--no-gpu");
 		processSpecification.Output = ProcessOutputMode::Discard;
 		processSpecification.Detached = true;
 
