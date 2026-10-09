@@ -346,7 +346,7 @@ namespace Strata
 			return;
 
 		if (it->second.Loaded)
-			m_ContentVersion.fetch_add(1, std::memory_order_release);
+			PublishContentChange(handle);
 		it->second.Loaded = nullptr;
 		it->second.State = AssetState::Unloaded;
 		it->second.Error.clear();
@@ -403,7 +403,7 @@ namespace Strata
 		entry.Generation = m_NextGeneration++;
 		if (!metadata.Path.empty() && !metadata.IsSubAsset())
 			m_PathIndex[metadata.Path] = metadata.Handle;
-		m_ContentVersion.fetch_add(1, std::memory_order_release);
+		PublishContentChange(metadata.Handle);
 		return metadata.Handle;
 	}
 
@@ -432,7 +432,7 @@ namespace Strata
 		if (pathIt != m_PathIndex.end() && pathIt->second == handle)
 			m_PathIndex.erase(pathIt);
 		if (it->second.Loaded)
-			m_ContentVersion.fetch_add(1, std::memory_order_release);
+			PublishContentChange(handle);
 		m_Entries.erase(it);
 	}
 
@@ -524,7 +524,7 @@ namespace Strata
 				entry.Loaded = completion.LoadedAsset;
 				entry.State = AssetState::Ready;
 				entry.Error.clear();
-				m_ContentVersion.fetch_add(1, std::memory_order_release);
+				PublishContentChange(completion.Handle);
 			}
 			else
 			{
@@ -574,6 +574,27 @@ namespace Strata
 				m_LoadState->Condition.wait_for(lock, std::chrono::milliseconds(1));
 			}
 		}
+		return true;
+	}
+
+	void AssetManagerBase::PublishContentChange(AssetHandle handle)
+	{
+		const uint64_t version = m_ContentVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
+		m_ContentChanges.push_back(ContentChange { version, handle });
+		if (m_ContentChanges.size() > c_MaxContentChanges)
+			m_ContentChanges.pop_front();
+	}
+
+	bool AssetManagerBase::GetContentChanges(uint64_t sinceVersion, std::vector<AssetHandle>& outHandles) const
+	{
+		std::scoped_lock<std::mutex> lock(m_Mutex);
+		if (sinceVersion >= m_ContentVersion.load(std::memory_order_acquire))
+			return true;
+		// The changes after sinceVersion start with version sinceVersion + 1, which must still be remembered.
+		if (m_ContentChanges.empty() || m_ContentChanges.front().Version > sinceVersion + 1)
+			return false;
+		for (auto it = m_ContentChanges.rbegin(); it != m_ContentChanges.rend() && it->Version > sinceVersion; ++it)
+			outHandles.push_back(it->Handle);
 		return true;
 	}
 
