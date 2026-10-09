@@ -46,6 +46,10 @@ namespace Strata
 		static std::filesystem::path FromUTF8(std::string_view utf8);
 		static std::string ToUTF8(const std::filesystem::path& path); // Generic form with '/' separators
 
+		// `path` without trailing directory separators ("a/b/" -> "a/b"), which name the same directory but make some
+		// system calls follow a final symbolic link. A root ("/", "C:/") stays as it is.
+		static std::filesystem::path RemoveTrailingSeparators(std::filesystem::path path);
+
 		// Lexically normalized path relative to base, or empty if path is not inside base.
 		static std::filesystem::path GetRelativePath(const std::filesystem::path& path, const std::filesystem::path& base);
 		static bool IsInside(const std::filesystem::path& path, const std::filesystem::path& base);

@@ -588,6 +588,92 @@ TEST_SUITE("Core.Platform")
 #endif
 	}
 
+	TEST_CASE("Private directories are owner-only from the start, also when named with a trailing separator")
+	{
+		const std::filesystem::path root = Tests::CreateTemporaryDirectory("PrivateDirectoryCreation");
+		const std::filesystem::path created = root / "Created";
+		const std::filesystem::path trailing = root / "Trailing";
+		std::string error;
+		REQUIRE_MESSAGE(Platform::EnsurePrivateDirectory(created, &error), error);
+		REQUIRE_MESSAGE(Platform::EnsurePrivateDirectory(trailing / "", &error), error);
+		CHECK(FileSystem::IsDirectory(trailing));
+
+#if defined(ST_PLATFORM_POSIX)
+		for (const std::filesystem::path& directory : { created, trailing })
+		{
+			std::error_code statusError;
+			CHECK((std::filesystem::status(directory, statusError).permissions() & std::filesystem::perms::all) == std::filesystem::perms::owner_all);
+		}
+#elif defined(ST_PLATFORM_WINDOWS)
+		// Not the entries inherited from the parent: the session files' directory is owner-only like the runtime one.
+		CheckOwnerOnlyDacl(created, c_InheritedByContents);
+		CheckOwnerOnlyDacl(trailing, c_InheritedByContents);
+		REQUIRE(FileSystem::WriteText(created / "Session.json", "{}"));
+		CheckInheritedOwnerOnlyDacl(created / "Session.json");
+#endif
+	}
+
+	TEST_CASE("Existing private directories are tightened (POSIX) or left as they are (Windows)")
+	{
+		const std::filesystem::path root = Tests::CreateTemporaryDirectory("PrivateDirectoryExisting");
+		std::string error;
+
+#if defined(ST_PLATFORM_POSIX)
+		using std::filesystem::perms;
+		// Readable by others but not writable: tightened too, since others could read what it holds.
+		const std::filesystem::path readable = root / "Readable";
+		REQUIRE(FileSystem::CreateDirectories(readable));
+		std::error_code permissionsError;
+		std::filesystem::permissions(readable, perms::owner_all | perms::group_read | perms::group_exec | perms::others_read | perms::others_exec,
+			std::filesystem::perm_options::replace, permissionsError);
+		REQUIRE_FALSE(permissionsError);
+		REQUIRE_MESSAGE(Platform::EnsurePrivateDirectory(readable, &error), error);
+		CHECK((std::filesystem::status(readable, permissionsError).permissions() & perms::all) == perms::owner_all);
+
+		// A trailing separator does not make a symbolic link acceptable.
+		const std::filesystem::path link = root / "Link";
+		std::error_code linkError;
+		std::filesystem::create_directory_symlink(readable, link, linkError);
+		REQUIRE_FALSE(linkError);
+		CHECK_FALSE(Platform::EnsurePrivateDirectory(link / "", &error));
+
+		// The runtime directory follows the same rules.
+		const std::filesystem::path location = root / "Location";
+		REQUIRE(FileSystem::CreateDirectories(location / "StrataTightened"));
+		std::filesystem::permissions(location, perms::owner_all, std::filesystem::perm_options::replace, permissionsError);
+		std::filesystem::permissions(location / "StrataTightened", perms::owner_all | perms::group_all, std::filesystem::perm_options::replace, permissionsError);
+		REQUIRE_FALSE(permissionsError);
+		{
+			const Tests::ScopedEnvironmentVariable scopedRuntime("STRATA_RUNTIME_DIR", FileSystem::ToUTF8(location));
+			CHECK(Platform::GetUserRuntimeDirectory("StrataTightened") == location / "StrataTightened");
+		}
+		CHECK((std::filesystem::status(location / "StrataTightened", permissionsError).permissions() & perms::all) == perms::owner_all);
+#elif defined(ST_PLATFORM_WINDOWS)
+		// One that inherits the (private) entries of its parent is accepted, and its permissions stay untouched.
+		const std::filesystem::path inherited = root / "Inherited";
+		REQUIRE(FileSystem::CreateDirectories(inherited));
+		const ObjectDacl before = ReadDacl(inherited);
+		REQUIRE(before.Read);
+		CHECK_FALSE(before.Protected);
+		REQUIRE_MESSAGE(Platform::EnsurePrivateDirectory(inherited, &error), error);
+		const ObjectDacl after = ReadDacl(inherited);
+		REQUIRE(after.Read);
+		CHECK_FALSE(after.Protected);
+		CHECK(after.Entries.size() == before.Entries.size());
+
+		// A trailing separator does not make a junction acceptable.
+		const std::filesystem::path junction = root / "Junction";
+		REQUIRE(Tests::CreateJunction(junction, inherited));
+		CHECK_FALSE(Platform::EnsurePrivateDirectory(junction / "", &error));
+		CHECK(error.find("link or junction") != std::string::npos);
+		CHECK(RemoveDirectoryW(junction.c_str()));
+#endif
+
+		// A relative location never qualifies for the runtime directory.
+		const Tests::ScopedEnvironmentVariable relative("STRATA_RUNTIME_DIR", "relative/location");
+		CHECK(Platform::GetUserRuntimeDirectory("StrataRelative").empty());
+	}
+
 	TEST_CASE("Renaming without replacing")
 	{
 		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("RenameNoReplace");

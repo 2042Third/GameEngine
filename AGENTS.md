@@ -193,6 +193,10 @@ Conventions:
   `CreateWindow`, `LoadImage`, `OPAQUE`, `TRANSPARENT`, `interface`, `small`). Never include X11
   headers in engine code: X11 defines `None` as a macro, and Strata uses `None` in scoped enums (Hazel
   style). Unscoped enums must not use `None` at all.
+- Files and directories only the current user may change (tokens, code the engine loads) go through
+  `Platform::EnsurePrivateDirectory`, `CreatePrivateDirectory`, `GetUserRuntimeDirectory`, `WritePrivateFile` and
+  `ReadTrustedFile`, which follow one contract (`Strata/Core/Platform.h`); never create them with default permissions.
+  Windows security descriptors and their checks live in `Platform/Windows/WindowsFileSecurity`.
 - Headers must be self-contained (compile without the precompiled header): include what you use,
   e.g. `Strata/Core/Assert.h` for `ST_CORE_ASSERT`.
 - Tag components (empty structs) carry no data: use `HasComponent`/`AddComponent`, never `GetComponent`.

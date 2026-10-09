@@ -4,7 +4,6 @@
 #include "Strata/Core/BoundedRead.h"
 #include "Strata/Core/Crypto.h"
 #include "Strata/Core/FileSystem.h"
-#include "Strata/Core/UUID.h"
 
 #include "Platform/Windows/WindowsFileSecurity.h"
 #include "Platform/Windows/WindowsUtils.h"
@@ -65,10 +64,17 @@ namespace Strata
 			HANDLE m_Handle;
 		};
 
-		// Opens a file or directory itself (never the target of a link) just to inspect it.
-		HANDLE OpenForInspection(const std::filesystem::path& path, bool directory)
+		enum class ObjectKind
 		{
-			const DWORD flags = FILE_FLAG_OPEN_REPARSE_POINT | (directory ? FILE_FLAG_BACKUP_SEMANTICS : 0);
+			File,
+			Directory
+		};
+
+		// Opens a file or directory just to inspect it: the object itself, or with `followLink` the object a link or
+		// junction leads to.
+		HANDLE OpenForInspection(const std::filesystem::path& path, ObjectKind kind, bool followLink)
+		{
+			const DWORD flags = (followLink ? 0 : FILE_FLAG_OPEN_REPARSE_POINT) | (kind == ObjectKind::Directory ? FILE_FLAG_BACKUP_SEMANTICS : 0);
 			return CreateFileW(path.c_str(), READ_CONTROL | FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, flags, nullptr);
 		}
 
@@ -82,6 +88,30 @@ namespace Strata
 			if (*isLink)
 				return SetError(error, fmt::format("'{}' is a link or junction, which is not trusted", name));
 			return true;
+		}
+
+		// Whether an existing file or directory only the current user can modify: of the expected kind, not a link or
+		// junction (with `followLink`, the object it leads to is checked instead), owned and protected as
+		// WindowsFileSecurity::CheckOwnerAndAccess requires.
+		bool CheckPrivateObject(const std::filesystem::path& path, ObjectKind kind, bool followLink, std::string* error)
+		{
+			const std::string name = FileSystem::ToUTF8(path);
+			HANDLE handle = OpenForInspection(path, kind, followLink);
+			if (handle == INVALID_HANDLE_VALUE)
+				return SetError(error, fmt::format("Cannot open '{}': {}", name, GetLastErrorMessage()));
+			HandleGuard handleGuard(handle);
+
+			BY_HANDLE_FILE_INFORMATION information = {};
+			if (!GetFileInformationByHandle(handle, &information))
+				return SetError(error, fmt::format("Cannot inspect '{}': {}", name, GetLastErrorMessage()));
+			const bool isDirectory = (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+			if (kind == ObjectKind::Directory && !isDirectory)
+				return SetError(error, fmt::format("'{}' is not a directory", name));
+			if (kind == ObjectKind::File && isDirectory)
+				return SetError(error, fmt::format("'{}' is not a regular file", name));
+			if (!CheckNotLink(handle, name, error))
+				return false;
+			return WindowsFileSecurity::CheckHandleOwnerAndAccess(handle, name, error);
 		}
 
 		// Opens path once and does every check and the read through that handle, so the file cannot be swapped in
@@ -152,6 +182,18 @@ namespace Strata
 			return Crypto::ToHex(bytes);
 		}
 
+		// `directory` inside `base` for GetUserRuntimeDirectory: a private directory (Platform::EnsurePrivateDirectory) in
+		// a base that only the current user can modify. The base may be a link or junction (say to a relocated folder);
+		// a missing one is created, an existing one is only checked. Empty if the location does not qualify.
+		std::filesystem::path PrepareRuntimeDirectory(const std::filesystem::path& base, const std::filesystem::path& directory)
+		{
+			if (!base.is_absolute() || !FileSystem::CreateDirectories(base) || !CheckPrivateObject(base, ObjectKind::Directory, true, nullptr))
+				return {};
+			if (!Platform::EnsurePrivateDirectory(directory))
+				return {};
+			return directory;
+		}
+
 	}
 
 	std::string_view Platform::GetName()
@@ -209,57 +251,13 @@ namespace Strata
 		return directory;
 	}
 
-	namespace
-	{
-
-		// Whether `directory` is a directory that only the current user can modify (besides SYSTEM and the
-		// Administrators, who can take over anything anyway; see WindowsFileSecurity::CheckOwnerAndAccess). With
-		// `followLink` a link or junction is followed and its target checked; otherwise links are refused.
-		bool IsPrivateDirectory(const std::filesystem::path& directory, bool followLink)
-		{
-			const DWORD flags = FILE_FLAG_BACKUP_SEMANTICS | (followLink ? 0 : FILE_FLAG_OPEN_REPARSE_POINT);
-			HANDLE handle = CreateFileW(directory.c_str(), READ_CONTROL | FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-				nullptr, OPEN_EXISTING, flags, nullptr);
-			if (handle == INVALID_HANDLE_VALUE)
-				return false;
-
-			BY_HANDLE_FILE_INFORMATION information = {};
-			const bool isDirectory = GetFileInformationByHandle(handle, &information) && (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-			const std::optional<bool> isLink = WindowsFileSecurity::IsNameSurrogate(handle);
-			const bool isPrivate = isDirectory && isLink.has_value() && !*isLink
-				&& WindowsFileSecurity::CheckHandleOwnerAndAccess(handle, FileSystem::ToUTF8(directory), nullptr);
-			CloseHandle(handle);
-			return isPrivate;
-		}
-
-		// `directory` inside `base` (created if missing) for files that only the current user may modify. A new
-		// `directory` gets an owner-only DACL; an existing one is used as it is. Both must pass IsPrivateDirectory (`base`
-		// may be a link, say to a relocated folder); empty otherwise.
-		std::filesystem::path PreparePrivateDirectory(const std::filesystem::path& base, const std::filesystem::path& directory)
-		{
-			if (!base.is_absolute() || !FileSystem::CreateDirectories(base) || !IsPrivateDirectory(base, true))
-				return {};
-
-			WindowsFileSecurity::OwnerOnlySecurity security;
-			std::string securityError;
-			if (!security.Initialize(WindowsFileSecurity::OwnerOnlyObject::Directory, securityError))
-				return {};
-			if (!CreateDirectoryW(directory.c_str(), security.GetAttributes()) && ::GetLastError() != ERROR_ALREADY_EXISTS)
-				return {};
-			if (!IsPrivateDirectory(directory, false))
-				return {};
-			return directory;
-		}
-
-	}
-
 	std::filesystem::path Platform::GetUserRuntimeDirectory(std::string_view applicationName)
 	{
 		// An explicit location (tests, sandboxes) replaces the default; it must pass the same checks.
 		if (const std::optional<std::string> configured = GetEnvVar("STRATA_RUNTIME_DIR"); configured && !configured->empty())
 		{
 			const std::filesystem::path base = FileSystem::FromUTF8(*configured);
-			return PreparePrivateDirectory(base, base / FileSystem::FromUTF8(applicationName));
+			return PrepareRuntimeDirectory(base, base / FileSystem::FromUTF8(applicationName));
 		}
 
 		// Local application data, which only the user (and administrators) can access. The path must be freed even when
@@ -272,20 +270,23 @@ namespace Strata
 			return {};
 
 		const std::filesystem::path base = localAppData / FileSystem::FromUTF8(applicationName);
-		return PreparePrivateDirectory(base, base / "Runtime");
+		return PrepareRuntimeDirectory(base, base / "Runtime");
 	}
 
 	std::filesystem::path Platform::CreatePrivateDirectory(const std::filesystem::path& parent, std::string_view prefix)
 	{
-		// A name collision (practically impossible) picks another name; an existing directory is never reused.
 		WindowsFileSecurity::OwnerOnlySecurity security;
 		std::string securityError;
 		if (!security.Initialize(WindowsFileSecurity::OwnerOnlyObject::Directory, securityError))
 			return {};
-		constexpr int c_MaxAttempts = 16;
-		for (int attempt = 0; attempt < c_MaxAttempts; attempt++)
+
+		// Names are random; one that already exists (planted by someone else) is skipped, never reused.
+		for (int attempt = 0; attempt < c_TemporaryNameAttempts; attempt++)
 		{
-			const std::filesystem::path path = parent / FileSystem::FromUTF8(fmt::format("{}{}", prefix, UUID().ToString()));
+			const std::string suffix = MakeRandomSuffix();
+			if (suffix.empty())
+				return {};
+			const std::filesystem::path path = parent / FileSystem::FromUTF8(fmt::format("{}{}", prefix, suffix));
 			if (CreateDirectoryW(path.c_str(), security.GetAttributes()))
 				return path;
 			if (::GetLastError() != ERROR_ALREADY_EXISTS)
@@ -458,43 +459,27 @@ namespace Strata
 		return SetError(error, fmt::format("Failed to replace '{}': {}", FileSystem::ToUTF8(path), WindowsUtils::GetErrorMessage(moveError)));
 	}
 
-	bool Platform::EnsurePrivateDirectory(const std::filesystem::path& directory, std::string* error)
+	bool Platform::EnsurePrivateDirectory(const std::filesystem::path& path, std::string* error)
 	{
+		// "a/b/" names the same directory as "a/b", which must be created here (not as one of the parents).
+		const std::filesystem::path directory = FileSystem::RemoveTrailingSeparators(path);
 		const std::string name = FileSystem::ToUTF8(directory);
-		if (!FileSystem::CreateDirectories(directory))
-			return SetError(error, fmt::format("Failed to create the directory '{}'", name));
+		// Missing parents get the access rules they inherit; the directory itself is owner-only from the start.
+		if (directory.has_parent_path() && !FileSystem::CreateDirectories(directory.parent_path()))
+			return SetError(error, fmt::format("Failed to create the directory '{}'", FileSystem::ToUTF8(directory.parent_path())));
 
-		HANDLE handle = OpenForInspection(directory, true);
-		if (handle == INVALID_HANDLE_VALUE)
-			return SetError(error, fmt::format("Cannot open '{}': {}", name, GetLastErrorMessage()));
-		HandleGuard handleGuard(handle);
-
-		BY_HANDLE_FILE_INFORMATION information = {};
-		if (!GetFileInformationByHandle(handle, &information))
-			return SetError(error, fmt::format("Cannot inspect '{}': {}", name, GetLastErrorMessage()));
-		if ((information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0)
-			return SetError(error, fmt::format("'{}' is not a directory", name));
-		if (!CheckNotLink(handle, name, error))
-			return false;
-		return WindowsFileSecurity::CheckHandleOwnerAndAccess(handle, name, error);
+		WindowsFileSecurity::OwnerOnlySecurity security;
+		std::string securityError;
+		if (!security.Initialize(WindowsFileSecurity::OwnerOnlyObject::Directory, securityError))
+			return SetError(error, securityError);
+		if (!CreateDirectoryW(directory.c_str(), security.GetAttributes()) && ::GetLastError() != ERROR_ALREADY_EXISTS)
+			return SetError(error, fmt::format("Failed to create the directory '{}': {}", name, GetLastErrorMessage()));
+		return CheckPrivateObject(directory, ObjectKind::Directory, false, error);
 	}
 
 	bool Platform::IsTrustedFile(const std::filesystem::path& path, std::string* error)
 	{
-		const std::string name = FileSystem::ToUTF8(path);
-		HANDLE handle = OpenForInspection(path, false);
-		if (handle == INVALID_HANDLE_VALUE)
-			return SetError(error, fmt::format("Cannot open '{}': {}", name, GetLastErrorMessage()));
-		HandleGuard handleGuard(handle);
-
-		BY_HANDLE_FILE_INFORMATION information = {};
-		if (!GetFileInformationByHandle(handle, &information))
-			return SetError(error, fmt::format("Cannot inspect '{}': {}", name, GetLastErrorMessage()));
-		if (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-			return SetError(error, fmt::format("'{}' is not a regular file", name));
-		if (!CheckNotLink(handle, name, error))
-			return false;
-		return WindowsFileSecurity::CheckHandleOwnerAndAccess(handle, name, error);
+		return CheckPrivateObject(path, ObjectKind::File, false, error);
 	}
 
 	std::optional<std::string> Platform::ReadRegularFile(const std::filesystem::path& path, size_t maxSize, std::string* error)
