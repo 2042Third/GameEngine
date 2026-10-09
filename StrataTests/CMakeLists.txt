@@ -13,6 +13,7 @@ set_target_properties(StrataTestLibrary PROPERTIES CXX_VISIBILITY_PRESET hidden 
 #   ReloadV1/V2 two versions of one module for the hot reload tests
 #   Faults      scripts that crash on purpose; LoadFault crashes while loading
 #   ABIMismatch and Malformed are written against the C ABI directly and are refused by the engine
+#   NewerSDK    describes itself with a larger StrataScriptModuleAPI, as a module of a newer SDK would
 #   Dependent   links StrataTestScriptDependency, a library built into a directory of its own
 set(STRATA_TEST_SCRIPTS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Scripts")
 add_library(StrataTestScriptDependency SHARED "${STRATA_TEST_SCRIPTS_DIR}/Dependency/ScriptDependency.cpp")
@@ -34,6 +35,7 @@ strata_add_script_module(StrataTestScriptsFaults SOURCE_DIR "${STRATA_TEST_SCRIP
 strata_add_script_module(StrataTestScriptsLoadFault SOURCE_DIR "${STRATA_TEST_SCRIPTS_DIR}/LoadFault")
 strata_add_script_module(StrataTestScriptsABIMismatch NO_SDK_ENTRY SOURCES "${STRATA_TEST_SCRIPTS_DIR}/Invalid/ABIMismatch.cpp")
 strata_add_script_module(StrataTestScriptsMalformed NO_SDK_ENTRY SOURCES "${STRATA_TEST_SCRIPTS_DIR}/Invalid/Malformed.cpp")
+strata_add_script_module(StrataTestScriptsNewerSDK NO_SDK_ENTRY SOURCES "${STRATA_TEST_SCRIPTS_DIR}/NewerSDK/NewerSDKModule.cpp")
 set(STRATA_TEST_SCRIPT_MODULES
 	StrataTestScriptsAPI
 	StrataTestScriptsReloadV1
@@ -42,6 +44,7 @@ set(STRATA_TEST_SCRIPT_MODULES
 	StrataTestScriptsLoadFault
 	StrataTestScriptsABIMismatch
 	StrataTestScriptsMalformed
+	StrataTestScriptsNewerSDK
 	StrataTestScriptsDependent)
 foreach(module IN LISTS STRATA_TEST_SCRIPT_MODULES)
 	strata_configure_target(${module})

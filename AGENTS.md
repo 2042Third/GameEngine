@@ -209,6 +209,9 @@ ABI rules:
 - Only plain C data crosses the boundary: strings as (pointer, size) UTF-8, entities and assets as 64-bit UUIDs, math
   as float arrays (quaternions x, y, z, w), booleans as `bool`. No STL types, no engine types, no exceptions: the SDK
   catches every exception in the module and reports it through `ReportException` (the instance is disabled).
+- The module description (`StrataScriptModuleAPI`) is the only extensible struct a module writes into engine memory:
+  the engine announces its size in `StructSize`, the module writes at most that much and reports its own size
+  (`Detail::WriteModuleAPI`), so modules of a newer SDK with appended members load into older engines safely.
 - Every call into module code goes through `ScriptModule` (`CrashGuard`), including loading and unloading the library.
   Module memory (descriptors, strings) is read only inside guarded calls; copy it into locals of the guarded lambda,
   then move the complete result out, so a fault can never leave engine objects half-written.

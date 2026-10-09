@@ -6,12 +6,17 @@
 #include "Strata/Core/Platform.h"
 #include "Strata/Core/Process.h"
 #include "Strata/Core/StringUtils.h"
+#include "Strata/Scripting/ScriptHostAPI.h"
 #include "Strata/Scripting/ScriptModule.h"
 #include "TestHelpers.h"
 
 #include "StrataScript/ScriptABI.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cstddef>
+#include <cstring>
+#include <iterator>
 #include <set>
 #include <string>
 #include <vector>
@@ -151,6 +156,63 @@ TEST_SUITE("Scripting.Module")
 		CHECK(Contains(error, fmt::format("uses version {}", ST_SCRIPT_ABI_VERSION)));
 		CHECK_FALSE(engine.IsModuleLoaded());
 		CHECK_FALSE(engine.IsFaulted());
+	}
+
+	TEST_CASE("Modules of a newer SDK with a larger module description load")
+	{
+		ScriptEngine engine;
+		std::string error;
+		REQUIRE_MESSAGE(engine.LoadModule(GetTestScriptModule(STRATA_TEST_SCRIPTS_NEWERSDK), &error), error);
+		CHECK(engine.GetModuleName() == "NewerSDK");
+		const ScriptClassInfo* probe = engine.FindClass("Probe");
+		REQUIRE(probe);
+		REQUIRE(probe->Fields.size() == 1);
+		CHECK(probe->Fields[0].DefaultValue == PropertyValue(int32_t(7)));
+	}
+
+	TEST_CASE("Modules write no more of their description than the engine's struct holds")
+	{
+		// The engine's struct followed by memory the module must not touch.
+		struct GuardedModuleAPI
+		{
+			StrataScriptModuleAPI API;
+			uint8_t Guard[64];
+		};
+		auto guardIntact = [](const GuardedModuleAPI& guarded)
+		{
+			return std::all_of(std::begin(guarded.Guard), std::end(guarded.Guard), [](uint8_t byte) { return byte == 0xA5; });
+		};
+
+		for (const char* moduleFile : { STRATA_TEST_SCRIPTS_API, STRATA_TEST_SCRIPTS_NEWERSDK })
+		{
+			INFO("Module ", moduleFile);
+			DynamicLibrary library;
+			REQUIRE_MESSAGE(library.Load(GetTestScriptModule(moduleFile)), library.GetLastError());
+			const auto load = library.GetFunction<StrataScriptLoadFunction>(ST_SCRIPT_LOAD_SYMBOL);
+			REQUIRE(load);
+
+			GuardedModuleAPI guarded;
+			std::memset(&guarded, 0xA5, sizeof(guarded));
+			guarded.API.StructSize = sizeof(StrataScriptModuleAPI);
+			REQUIRE(load(&GetScriptHostAPI(), ST_SCRIPT_ABI_VERSION, &guarded.API) == StrataScriptResult_Ok);
+			CHECK(guardIntact(guarded));
+			// StructSize reports the members the module knows: a newer SDK knows more than this engine.
+			if (std::string(moduleFile) == STRATA_TEST_SCRIPTS_NEWERSDK)
+				CHECK(guarded.API.StructSize > sizeof(StrataScriptModuleAPI));
+			else
+				CHECK(guarded.API.StructSize == sizeof(StrataScriptModuleAPI));
+			CHECK(guarded.API.ABIVersion == ST_SCRIPT_ABI_VERSION);
+			CHECK(guarded.API.ClassCount > 0);
+			REQUIRE(guarded.API.Unload);
+			CHECK(guarded.API.Unload() == StrataScriptResult_Ok);
+
+			// A struct without room for the members of this ABI version is refused, and nothing is written.
+			std::memset(&guarded, 0xA5, sizeof(guarded));
+			guarded.API.StructSize = static_cast<uint32_t>(offsetof(StrataScriptModuleAPI, Unload));
+			CHECK(load(&GetScriptHostAPI(), ST_SCRIPT_ABI_VERSION, &guarded.API) == StrataScriptResult_ABIMismatch);
+			CHECK(guarded.API.StructSize == offsetof(StrataScriptModuleAPI, Unload));
+			CHECK(guardIntact(guarded));
+		}
 	}
 
 	TEST_CASE("Missing files, garbage and foreign libraries are refused")

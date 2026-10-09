@@ -7,7 +7,9 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <memory>
 #include <string>
@@ -475,14 +477,35 @@ namespace Strata
 			return record;
 		}
 
+		// Whether the engine's StrataScriptModuleAPI (its size is in StructSize) holds every member of this ABI version.
+		inline bool CanReceiveModuleAPI(const StrataScriptModuleAPI* outModule)
+		{
+			return outModule->StructSize >= offsetof(StrataScriptModuleAPI, Unload) + sizeof(outModule->Unload);
+		}
+
+		// Hands a module description (a StrataScriptModuleAPI, possibly with members of a newer SDK appended) to the engine.
+		// The engine's struct may be smaller (an engine built against an older SDK of the same ABI version): at most its
+		// size (StructSize on entry) is written, and StructSize then holds `descriptionSize`, the members the module knows.
+		// Writes nothing and returns false when the engine's struct cannot hold the members of this ABI version.
+		inline bool WriteModuleAPI(StrataScriptModuleAPI* outModule, const void* description, uint32_t descriptionSize)
+		{
+			if (!CanReceiveModuleAPI(outModule) || descriptionSize < sizeof(StrataScriptModuleAPI))
+				return false;
+			const uint32_t capacity = outModule->StructSize;
+			std::memcpy(outModule, description, capacity < descriptionSize ? capacity : descriptionSize);
+			outModule->StructSize = descriptionSize;
+			return true;
+		}
+
 		// Implementation of StrataScript_Load (see ScriptModuleEntry.cpp).
 		inline uint32_t LoadModule(const StrataScriptHostAPI* host, uint32_t hostABIVersion, StrataScriptModuleAPI* outModule, const char* moduleName)
 		{
 			if (!host || !outModule)
 				return StrataScriptResult_InvalidArgument;
-			// Every function of this ABI version must be present; later additions are checked where they are used.
+			// Every function of this ABI version must be present (later additions are checked where they are used), and the
+			// engine's module description must have room for every member of this ABI version.
 			if (hostABIVersion != ST_SCRIPT_ABI_VERSION || host->ABIVersion != ST_SCRIPT_ABI_VERSION
-				|| !ST_SCRIPT_HAS_MEMBER(StrataScriptHostAPI, host, GetScrollDelta))
+				|| !ST_SCRIPT_HAS_MEMBER(StrataScriptHostAPI, host, GetScrollDelta) || !CanReceiveModuleAPI(outModule))
 				return StrataScriptResult_ABIMismatch;
 
 			if (s_Module)
@@ -501,14 +524,15 @@ namespace Strata
 					state->Classes.push_back(std::move(record));
 				}
 
-				*outModule = StrataScriptModuleAPI {};
-				outModule->StructSize = sizeof(StrataScriptModuleAPI);
-				outModule->ABIVersion = ST_SCRIPT_ABI_VERSION;
-				outModule->Name = ToABIString(state->Name);
-				outModule->ClassCount = static_cast<uint32_t>(state->ClassDescs.size());
-				outModule->Classes = state->ClassDescs.data();
-				outModule->Unload = &UnloadModule;
+				StrataScriptModuleAPI description = {};
+				description.StructSize = sizeof(StrataScriptModuleAPI);
+				description.ABIVersion = ST_SCRIPT_ABI_VERSION;
+				description.Name = ToABIString(state->Name);
+				description.ClassCount = static_cast<uint32_t>(state->ClassDescs.size());
+				description.Classes = state->ClassDescs.data();
+				description.Unload = &UnloadModule;
 				s_Module = state.release();
+				WriteModuleAPI(outModule, &description, sizeof(description)); // The capacity was checked above
 				return StrataScriptResult_Ok;
 			}
 			catch (const std::exception& exception)

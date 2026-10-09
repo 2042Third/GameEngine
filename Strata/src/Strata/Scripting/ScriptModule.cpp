@@ -305,7 +305,9 @@ namespace Strata
 				"against this engine's StrataScriptCore", displayPath, moduleVersion, ST_SCRIPT_ABI_VERSION));
 		}
 
+		// StructSize tells the module how much it may write (a module of a newer SDK knows more members).
 		StrataScriptModuleAPI api = {};
+		api.StructSize = sizeof(StrataScriptModuleAPI);
 		const ScriptCallResult loadResult = module->Call({ nullptr, ST_SCRIPT_LOAD_SYMBOL }, [&]()
 		{
 			return load(&GetScriptHostAPI(), ST_SCRIPT_ABI_VERSION, &api);

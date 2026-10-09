@@ -9,7 +9,8 @@
  *   uint32_t StrataScript_GetABIVersion(void);
  *   uint32_t StrataScript_Load(const StrataScriptHostAPI* host, uint32_t hostABIVersion, StrataScriptModuleAPI* outModule);
  *
- * The host API table gives scripts access to the engine; the module API describes the script classes. Everything
+ * The host API table gives scripts access to the engine; the module API describes the script classes (outModule->StructSize
+ * tells the module how large the host's struct is, see StrataScriptModuleAPI). Everything
  * crossing this boundary is plain data: no C++ types, no exceptions, strings as (pointer, size) in UTF-8, entities and
  * assets as 64-bit ids, math as float arrays (quaternions are x, y, z, w).
  *
@@ -273,7 +274,14 @@ extern "C"
 		/* New callbacks are appended here. */
 	} StrataScriptClassDesc;
 
-	/* Filled by StrataScript_Load. The pointed-to data stays valid until Unload is called. */
+	/*
+	 * Filled by StrataScript_Load. The host sets StructSize to the size of its StrataScriptModuleAPI (the capacity of the
+	 * struct it passes) and zeroes the rest. The module writes at most that many bytes and sets StructSize to the size of
+	 * the struct it was built with, so a module built against a newer SDK (same ABI version, members appended) never
+	 * writes past the host's struct; either side reads a member only if both sizes cover it. A module refuses a capacity
+	 * that cannot hold the members of its ABI version (StrataScriptResult_ABIMismatch). The pointed-to data stays valid
+	 * until Unload is called.
+	 */
 	typedef struct StrataScriptModuleAPI
 	{
 		uint32_t StructSize;

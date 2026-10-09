@@ -60,6 +60,10 @@ ST_SCRIPT_EXTERN_C ST_SCRIPT_EXPORT uint32_t StrataScript_GetABIVersion(void)
 
 ST_SCRIPT_EXTERN_C ST_SCRIPT_EXPORT uint32_t StrataScript_Load(const StrataScriptHostAPI* host, uint32_t, StrataScriptModuleAPI* outModule)
 {
+	// The engine's struct has room for this module's description (StructSize is its size; see StrataScriptModuleAPI).
+	if (outModule->StructSize < sizeof(StrataScriptModuleAPI))
+		return StrataScriptResult_ABIMismatch;
+
 	const char* testCase = std::getenv("STRATA_TEST_MALFORMED_CASE");
 	if (Is(testCase, "Exception"))
 	{
