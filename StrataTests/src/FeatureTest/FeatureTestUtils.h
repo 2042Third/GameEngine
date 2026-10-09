@@ -22,8 +22,9 @@
 
 // The feature test: the project in StrataTests/FeatureTest (a scene with every component, assets of every type and a
 // script module exercising the whole script API) and the helpers its runners share. The headless runner
-// (FeatureTests.cpp), the GPU runner (GPUFeatureTests.cpp) and the editor runner (Editor/EditorFeatureTests.cpp) play the
-// same scenario. See AGENTS.md, "Testing".
+// (FeatureTests.cpp) and the editor runner (Editor/EditorFeatureTests.cpp, which also plays the exported game) play the
+// scripted scenario of PlayFeatureScene; the GPU runner (GPUFeatureTests.cpp) only renders the scene, without scripts.
+// See AGENTS.md, "Testing".
 namespace Strata::Tests
 {
 

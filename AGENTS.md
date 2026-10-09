@@ -102,12 +102,15 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   its script module `Scripts/` (target `StrataTestScriptsFeatureTest`) exercises the whole script SDK. Feature scripts
   derive from `FeatureTest::FeatureScript`: `Expect(condition, "description")` counts checks and keeps the first
   failure, `Completed` marks the end of a scenario, and `Journal()` records events in the scene's "Journal" entity.
-  Every runner plays the same scenario (200 frames, simulated input, a hot reload of the module halfway):
-  - `StrataTests.FeatureTest` (label `feature`, no GPU): suite `FeatureTest` (`src/FeatureTest/`, headless) and
-    `Editor.FeatureTest` (editor commands in-process, then the exported game in `GameRuntime`);
-  - `GPU.FeatureTest` (in `StrataTests.GPU`): renders the scene, checks entities in the ID buffer, text and stats;
-  - `StrataEditor.FeatureTest` and `StrataRuntime.FeatureTest` (label `feature`): the real executables open, step,
-    export and run a copy of the project (they do not load script modules yet).
+  The runners:
+  - `StrataTests.FeatureTest` (label `feature`, no GPU) plays the scripted scenario (`PlayFeatureScene`: 200 frames,
+    simulated input, a hot reload of the module halfway) three times: headless (suite `FeatureTest`,
+    `src/FeatureTest/`), through editor commands in-process, and in the exported game in `GameRuntime` (suite
+    `Editor.FeatureTest`);
+  - `GPU.FeatureTest` (in `StrataTests.GPU`) renders the scene for 4 frames without playing it (no scripts) and checks
+    entities in the ID buffer, text and stats;
+  - `StrataEditor.FeatureTest` and `StrataRuntime.FeatureTest` (label `feature`): the real executables open, step the
+    physics of, export and run a copy of the project; they do not load script modules yet, so no scripts run there.
 - **The feature test enforces coverage.** It fails when:
   - a registered component is missing from the feature scene, or a property has its default value on every entity
     with the component (new properties need a non-default value there, which also proves that they serialize);

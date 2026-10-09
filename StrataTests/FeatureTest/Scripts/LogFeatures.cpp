@@ -8,7 +8,8 @@
 using namespace Strata;
 using namespace FeatureTest;
 
-// The runner expects exactly these messages (FeatureTests.cpp, c_ExpectedLogMessages); keep both in sync.
+// The runner expects exactly these messages (c_ExpectedLogMessages in StrataTests/src/FeatureTest/FeatureTestUtils.cpp);
+// keep both in sync.
 class LogFeatures : public FeatureScript
 {
 public:
