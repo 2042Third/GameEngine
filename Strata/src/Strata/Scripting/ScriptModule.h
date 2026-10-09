@@ -19,7 +19,15 @@ namespace Strata
 {
 
 	class Scene;
+	class ScriptModuleCopyDirectory;
 	class ScriptWatchdog;
+
+	// How ScriptModule::Load loads the module's library.
+	enum class ScriptModuleLoadMode : uint8_t
+	{
+		InPlace, // From the file itself (shipped games). A file that is already loaded is loaded from a copy instead.
+		Copy     // From a private copy, so the build can replace the file while the module runs (hot reload)
+	};
 
 	enum class ScriptCallResult : uint8_t
 	{
@@ -45,8 +53,9 @@ namespace Strata
 		bool Retryable = false; // The file was missing or busy (e.g. still being written); trying again later may work
 	};
 
-	// One loaded copy of a script module (engine-internal; see ScriptEngine). The module file is copied to a unique
-	// temporary path before loading, so the build can overwrite the original while this copy is in use.
+	// One loaded script module (engine-internal; see ScriptEngine). It runs from its file, or from a private copy of it
+	// (ScriptModuleLoadMode) so the build can overwrite the original while the copy is in use. Copies live in a directory
+	// only the user can modify (Platform::GetUserRuntimeDirectory), one per process, and are removed on unload.
 	//
 	// Every call into module code - including loading and unloading the library - runs under CrashGuard. A crash marks
 	// the module faulted: it is never called again, its instances are abandoned (their memory is leaked) and only the
@@ -54,14 +63,17 @@ namespace Strata
 	class ScriptModule
 	{
 	public:
-		static Scope<ScriptModule> Load(const std::filesystem::path& path, ScriptWatchdog* watchdog, ScriptModuleLoadError* outError = nullptr);
+		static Scope<ScriptModule> Load(const std::filesystem::path& path, ScriptModuleLoadMode mode, ScriptWatchdog* watchdog,
+			ScriptModuleLoadError* outError = nullptr);
 		~ScriptModule();
 
 		ScriptModule(const ScriptModule&) = delete;
 		ScriptModule& operator=(const ScriptModule&) = delete;
 
 		const std::filesystem::path& GetSourcePath() const { return m_SourcePath; }
+		// The file the library was loaded from: the source file, or the private copy.
 		const std::filesystem::path& GetLoadedPath() const { return m_LoadedPath; }
+		bool IsLoadedFromCopy() const { return m_CopyDirectory != nullptr; }
 		const std::string& GetName() const { return m_Name; }
 
 		const std::vector<ScriptClassInfo>& GetClasses() const { return m_Classes; }
@@ -89,23 +101,44 @@ namespace Strata
 	private:
 		ScriptModule() = default;
 
+		// Loads the library under the crash guard (loading runs the module's static initializers); see DynamicLibrary::Load
+		// for `dependencyDirectory`. On failure `outError` is the complete message.
+		bool LoadLibraryGuarded(const std::filesystem::path& path, const std::filesystem::path& dependencyDirectory, const std::string& displayPath,
+			std::string& outError);
+		// The functions of a script class, copied out of the module's descriptor while the description is read (guarded):
+		// calls never read module memory outside the guard.
+		struct ClassFunctions
+		{
+			decltype(StrataScriptClassDesc::Create) Create = nullptr;
+			decltype(StrataScriptClassDesc::Destroy) Destroy = nullptr;
+			decltype(StrataScriptClassDesc::GetField) GetField = nullptr;
+			decltype(StrataScriptClassDesc::SetField) SetField = nullptr;
+			decltype(StrataScriptClassDesc::OnCreate) OnCreate = nullptr;
+			decltype(StrataScriptClassDesc::OnUpdate) OnUpdate = nullptr;
+			decltype(StrataScriptClassDesc::OnFixedUpdate) OnFixedUpdate = nullptr;
+			decltype(StrataScriptClassDesc::OnLateUpdate) OnLateUpdate = nullptr;
+			decltype(StrataScriptClassDesc::OnDestroy) OnDestroy = nullptr;
+			decltype(StrataScriptClassDesc::OnReload) OnReload = nullptr;
+		};
+
 		template<typename Function>
 		ScriptCallResult Call(const ScriptCallSite& site, Function&& function);
 		void RecordFault(const ScriptCallSite& site, const CrashInfo& crash);
-		const StrataScriptClassDesc* GetDescriptor(const ScriptCallSite& site) const;
+		const ClassFunctions* GetFunctions(const ScriptCallSite& site) const;
 		// Validates the module description and builds the class metadata. Reads module memory: call guarded.
-		bool ReadModuleDescription(std::string& outName, std::vector<ScriptClassInfo>& outClasses, std::vector<const StrataScriptClassDesc*>& outDescriptors,
+		bool ReadModuleDescription(std::string& outName, std::vector<ScriptClassInfo>& outClasses, std::vector<ClassFunctions>& outFunctions,
 			std::string& outError) const;
 	private:
 		std::filesystem::path m_SourcePath;
 		std::filesystem::path m_LoadedPath;
+		Ref<ScriptModuleCopyDirectory> m_CopyDirectory; // Holds the copy the module runs from (null when it runs in place)
 		std::string m_Name;
 		DynamicLibrary m_Library;
 		StrataScriptModuleAPI m_API = {};
 		bool m_Initialized = false; // StrataScript_Load succeeded; Unload is due
 		bool m_Ready = false;       // Validated and in use (crashes before that are reported as load failures)
 		std::vector<ScriptClassInfo> m_Classes;
-		std::vector<const StrataScriptClassDesc*> m_Descriptors; // Per class index
+		std::vector<ClassFunctions> m_Functions; // Per class index
 		std::optional<ScriptFault> m_Fault;
 		std::string m_LastException;
 		ScriptWatchdog* m_Watchdog = nullptr;

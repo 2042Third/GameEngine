@@ -1,7 +1,9 @@
 #include "stpch.h"
 #include "Strata/Scripting/ScriptModule.h"
 
+#include "Strata/Core/FileLock.h"
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Core/Platform.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scripting/ScriptHostAPI.h"
@@ -13,6 +15,33 @@
 
 namespace Strata
 {
+
+	static_assert(ST_SCRIPT_ABORT_EXCEPTION_CODE == c_CrashGuardAbortExceptionCode, "Modules report abort() with the code the crash guard contains");
+
+	// The private directory module copies are loaded from (in Platform::GetUserRuntimeDirectory): one per process,
+	// created on first use and removed with the last copy. Several processes of the user (editors, tests, games) have
+	// their directories side by side; each holds a lock file in its own for as long as it runs, so directories left
+	// behind by processes that ended without unloading (crashes, debugger stops) can be told apart and are removed by
+	// later sessions - never a directory whose owner still runs.
+	class ScriptModuleCopyDirectory
+	{
+	public:
+		static Ref<ScriptModuleCopyDirectory> Acquire(std::string& outError);
+		~ScriptModuleCopyDirectory();
+
+		ScriptModuleCopyDirectory(const ScriptModuleCopyDirectory&) = delete;
+		ScriptModuleCopyDirectory& operator=(const ScriptModuleCopyDirectory&) = delete;
+
+		const std::filesystem::path& GetPath() const { return m_Path; }
+	private:
+		ScriptModuleCopyDirectory(std::filesystem::path path, Scope<FileLock> ownerLock)
+			: m_Path(std::move(path)), m_OwnerLock(std::move(ownerLock))
+		{
+		}
+	private:
+		std::filesystem::path m_Path;
+		Scope<FileLock> m_OwnerLock;
+	};
 
 	namespace
 	{
@@ -30,26 +59,44 @@ namespace Strata
 		constexpr size_t c_RequiredClassDescSize = offsetof(StrataScriptClassDesc, OnReload) + sizeof(StrataScriptClassDesc::OnReload);
 		constexpr size_t c_RequiredFieldDescSize = offsetof(StrataScriptFieldDesc, DefaultValue) + sizeof(StrataScriptFieldDesc::DefaultValue);
 
-		std::filesystem::path GetModuleCopyDirectory()
+		constexpr std::string_view c_CopyDirectoryPrefix = "ScriptModules-";
+		// In every copy directory, locked by the owning process while it runs.
+		constexpr std::string_view c_OwnerLockName = "Owner.lock";
+
+		// Libraries script modules run from (native handles). Loading a file that is already loaded yields the same
+		// library, whose module state belongs to the module that loaded it first. Libraries abandoned after their unload
+		// code crashed stay registered: they remain loaded until the process ends.
+		std::mutex s_LibrariesMutex;
+		std::unordered_set<void*> s_Libraries;
+
+		bool RegisterLibrary(void* handle)
 		{
-			std::error_code error;
-			const std::filesystem::path temporary = std::filesystem::temp_directory_path(error);
-			if (error)
-				return {};
-			return temporary / "StrataScriptModules";
+			std::scoped_lock<std::mutex> lock(s_LibrariesMutex);
+			return s_Libraries.insert(handle).second;
 		}
 
-		// Copies left behind by processes that ended without unloading (crashes, debugger stops). Copies still loaded
-		// by a running process cannot be deleted on Windows; on POSIX deleting them is harmless (the mapping stays).
-		void RemoveStaleModuleCopies(const std::filesystem::path& directory)
+		void UnregisterLibrary(void* handle)
 		{
+			std::scoped_lock<std::mutex> lock(s_LibrariesMutex);
+			s_Libraries.erase(handle);
+		}
+
+		// Copy directories of processes that are gone: anyone can take their owner lock. A directory without a lock file
+		// is left alone (its owner may be creating it right now). Removal is best effort: another process may be removing
+		// the same directory, and whatever remains is tried again by later sessions.
+		void RemoveStaleCopyDirectories(const std::filesystem::path& parent)
+		{
+			std::vector<std::filesystem::path> stale;
 			std::error_code error;
-			for (std::filesystem::directory_iterator it(directory, error), end; !error && it != end; it.increment(error))
+			for (std::filesystem::directory_iterator it(parent, error), end; !error && it != end; it.increment(error))
 			{
-				std::error_code removeError;
-				if (it->is_regular_file(removeError))
-					std::filesystem::remove(it->path(), removeError);
+				if (!FileSystem::ToUTF8(it->path().filename()).starts_with(c_CopyDirectoryPrefix))
+					continue;
+				if (FileLock::TryAcquire(it->path() / FileSystem::FromUTF8(c_OwnerLockName)))
+					stale.push_back(it->path()); // The lock is released again right away (the temporary is destroyed)
 			}
+			for (const std::filesystem::path& directory : stale)
+				FileSystem::Remove(directory);
 		}
 
 		bool ReadName(const StrataScriptString& text, std::string& out)
@@ -57,6 +104,81 @@ namespace Strata
 			return ReadScriptString(text, out) && !out.empty() && out.size() <= c_MaxScriptNameSize;
 		}
 
+		// Marks a call into script code for the host API (GetCurrentCall) and the watchdog, and undoes both however the
+		// call ends.
+		class ScriptCallScope
+		{
+		public:
+			ScriptCallScope(const ScriptCallSite& site, ScriptWatchdog* watchdog, const char* className)
+				: m_Previous(t_CurrentCall)
+			{
+				if (watchdog)
+				{
+					watchdog->BeginCall(className, site.Method, site.Entity);
+					m_Watchdog = watchdog; // Ends only a call that began
+				}
+				t_CurrentCall = &site;
+				t_PendingException.clear();
+			}
+
+			~ScriptCallScope()
+			{
+				t_CurrentCall = m_Previous;
+				if (m_Watchdog)
+					m_Watchdog->EndCall();
+			}
+
+			ScriptCallScope(const ScriptCallScope&) = delete;
+			ScriptCallScope& operator=(const ScriptCallScope&) = delete;
+		private:
+			const ScriptCallSite* m_Previous;
+			ScriptWatchdog* m_Watchdog = nullptr;
+		};
+
+	}
+
+	Ref<ScriptModuleCopyDirectory> ScriptModuleCopyDirectory::Acquire(std::string& outError)
+	{
+		static std::mutex s_Mutex;
+		static std::weak_ptr<ScriptModuleCopyDirectory> s_Current;
+
+		std::scoped_lock<std::mutex> lock(s_Mutex);
+		if (Ref<ScriptModuleCopyDirectory> current = s_Current.lock())
+			return current;
+
+		const std::filesystem::path parent = Platform::GetUserRuntimeDirectory("Strata");
+		if (parent.empty())
+		{
+			outError = "there is no per-user runtime directory that only this user can modify";
+			return nullptr;
+		}
+		RemoveStaleCopyDirectories(parent);
+
+		std::filesystem::path path = Platform::CreatePrivateDirectory(parent, c_CopyDirectoryPrefix);
+		if (path.empty())
+		{
+			outError = fmt::format("cannot create a private directory in '{}'", FileSystem::ToUTF8(parent));
+			return nullptr;
+		}
+		Scope<FileLock> ownerLock = FileLock::Create(path / FileSystem::FromUTF8(c_OwnerLockName));
+		if (!ownerLock)
+		{
+			FileSystem::Remove(path);
+			outError = fmt::format("cannot create the owner lock of '{}'", FileSystem::ToUTF8(path));
+			return nullptr;
+		}
+		Ref<ScriptModuleCopyDirectory> directory(new ScriptModuleCopyDirectory(std::move(path), std::move(ownerLock)));
+		s_Current = directory;
+		return directory;
+	}
+
+	ScriptModuleCopyDirectory::~ScriptModuleCopyDirectory()
+	{
+		// The lock file can only be deleted once it is released. Removal fails only while a copy is still in use (a library
+		// abandoned after a crash) - or when a scanning session removes the released directory at the same time.
+		m_OwnerLock.reset();
+		if (!FileSystem::Remove(m_Path) && FileSystem::Exists(m_Path))
+			ST_CORE_WARN("Cannot remove the script module directory '{}'; it is removed by a later session", FileSystem::ToUTF8(m_Path));
 	}
 
 	template<typename Function>
@@ -72,22 +194,16 @@ namespace Strata
 		};
 		Invocation invocation { &function, StrataScriptResult_Ok };
 
-		const ScriptCallSite* previousCall = t_CurrentCall;
-		t_CurrentCall = &site;
-		t_PendingException.clear();
-		if (m_Watchdog)
-			m_Watchdog->BeginCall(site.Class ? site.Class->Name.c_str() : m_Name.c_str(), site.Method, site.Entity);
-
 		CrashInfo crash;
-		const bool completed = CrashGuard::Invoke([](void* data)
+		bool completed = false;
 		{
-			Invocation* call = static_cast<Invocation*>(data);
-			call->Result = (*call->Body)();
-		}, &invocation, &crash);
-
-		if (m_Watchdog)
-			m_Watchdog->EndCall();
-		t_CurrentCall = previousCall;
+			const ScriptCallScope scope(site, m_Watchdog, site.Class ? site.Class->Name.c_str() : m_Name.c_str());
+			completed = CrashGuard::Invoke([](void* data)
+			{
+				Invocation* call = static_cast<Invocation*>(data);
+				call->Result = (*call->Body)();
+			}, &invocation, &crash);
+		}
 
 		if (!completed)
 		{
@@ -111,7 +227,37 @@ namespace Strata
 		}
 	}
 
-	Scope<ScriptModule> ScriptModule::Load(const std::filesystem::path& path, ScriptWatchdog* watchdog, ScriptModuleLoadError* outError)
+	bool ScriptModule::LoadLibraryGuarded(const std::filesystem::path& path, const std::filesystem::path& dependencyDirectory, const std::string& displayPath,
+		std::string& outError)
+	{
+		struct LibraryLoad
+		{
+			DynamicLibrary* Library;
+			const std::filesystem::path* Path;
+			const std::filesystem::path* DependencyDirectory;
+			bool Loaded;
+		};
+		LibraryLoad libraryLoad { &m_Library, &path, &dependencyDirectory, false };
+		CrashInfo crash;
+		if (!CrashGuard::Invoke([](void* data)
+		{
+			LibraryLoad* load = static_cast<LibraryLoad*>(data);
+			load->Loaded = load->Library->Load(*load->Path, *load->DependencyDirectory);
+		}, &libraryLoad, &crash))
+		{
+			RecordFault(ScriptCallSite { nullptr, "static initialization" }, crash);
+			outError = fmt::format("Script module '{}' crashed while loading: {}", displayPath, crash.Description);
+			return false;
+		}
+		if (!libraryLoad.Loaded)
+		{
+			outError = fmt::format("Cannot load script module '{}': {}", displayPath, m_Library.GetLastError());
+			return false;
+		}
+		return true;
+	}
+
+	Scope<ScriptModule> ScriptModule::Load(const std::filesystem::path& path, ScriptModuleLoadMode mode, ScriptWatchdog* watchdog, ScriptModuleLoadError* outError)
 	{
 		ST_PROFILE_FUNCTION();
 
@@ -129,44 +275,52 @@ namespace Strata
 		if (!FileSystem::IsRegularFile(path))
 			return fail(fmt::format("Script module '{}' does not exist", displayPath), true);
 
-		// Load a private copy so the build can replace the original file while the module is in use.
-		const std::filesystem::path copyDirectory = GetModuleCopyDirectory();
-		if (copyDirectory.empty() || !FileSystem::CreateDirectories(copyDirectory))
-			return fail("Cannot create the temporary directory for script modules");
-		static std::once_flag s_StaleCopiesRemoved;
-		std::call_once(s_StaleCopiesRemoved, [&]() { RemoveStaleModuleCopies(copyDirectory); });
-
-		const std::filesystem::path copyPath = copyDirectory / FileSystem::FromUTF8(fmt::format("{}-{}{}", FileSystem::ToUTF8(path.stem()), UUID().ToString(), FileSystem::ToUTF8(path.extension())));
-		if (!FileSystem::Copy(path, copyPath, false))
-			return fail(fmt::format("Cannot copy script module '{}' (it may still be being written)", displayPath), true);
-
 		Scope<ScriptModule> module(new ScriptModule());
 		module->m_SourcePath = path;
-		module->m_LoadedPath = copyPath;
 		module->m_Name = FileSystem::ToUTF8(path.stem());
 		module->m_Watchdog = watchdog;
 
-		// Loading runs the module's static initializers.
-		struct LibraryLoad
+		std::string error;
+		bool loaded = false;
+		if (mode == ScriptModuleLoadMode::InPlace)
 		{
-			DynamicLibrary* Library;
-			const std::filesystem::path* Path;
-			bool Loaded;
-		};
-		LibraryLoad libraryLoad { &module->m_Library, &copyPath, false };
-		CrashInfo crash;
-		const ScriptCallSite loadSite { nullptr, "static initialization" };
-		if (!CrashGuard::Invoke([](void* data)
-		{
-			LibraryLoad* load = static_cast<LibraryLoad*>(data);
-			load->Loaded = load->Library->Load(*load->Path);
-		}, &libraryLoad, &crash))
-		{
-			module->RecordFault(loadSite, crash);
-			return fail(fmt::format("Script module '{}' crashed while loading: {}", displayPath, crash.Description));
+			if (!module->LoadLibraryGuarded(path, {}, displayPath, error))
+				return fail(std::move(error));
+			if (RegisterLibrary(module->m_Library.GetNativeHandle()))
+			{
+				module->m_LoadedPath = path;
+				loaded = true;
+			}
+			else
+			{
+				// The file is loaded already (a reload, another engine): this load only added a reference to that library,
+				// whose module state is in use. Dropping the reference runs no module code; the module loads from a copy.
+				module->m_Library.Unload();
+			}
 		}
-		if (!libraryLoad.Loaded)
-			return fail(fmt::format("Cannot load script module '{}': {}", displayPath, module->m_Library.GetLastError()));
+
+		if (!loaded)
+		{
+			// A private copy, so the build can replace the original file while the module is in use.
+			module->m_CopyDirectory = ScriptModuleCopyDirectory::Acquire(error);
+			if (!module->m_CopyDirectory)
+				return fail(fmt::format("Cannot load script module '{}' from a private copy: {}", displayPath, error));
+
+			const std::filesystem::path copyPath = module->m_CopyDirectory->GetPath()
+				/ FileSystem::FromUTF8(fmt::format("{}-{}{}", FileSystem::ToUTF8(path.stem()), UUID().ToString(), FileSystem::ToUTF8(path.extension())));
+			if (!FileSystem::Copy(path, copyPath, false))
+				return fail(fmt::format("Cannot copy script module '{}' (it may still be being written)", displayPath), true);
+			module->m_LoadedPath = copyPath; // From now on the destructor removes the copy
+
+			// The libraries the module depends on stay next to the original.
+			if (!module->LoadLibraryGuarded(copyPath, path.parent_path(), displayPath, error))
+				return fail(std::move(error));
+			if (!RegisterLibrary(module->m_Library.GetNativeHandle()))
+			{
+				module->m_Library.Unload();
+				return fail(fmt::format("Cannot load script module '{}': its private copy resolved to a library that is already loaded", displayPath));
+			}
+		}
 
 		const auto getVersion = module->m_Library.GetFunction<StrataScriptGetABIVersionFunction>(ST_SCRIPT_GET_ABI_VERSION_SYMBOL);
 		const auto load = module->m_Library.GetFunction<StrataScriptLoadFunction>(ST_SCRIPT_LOAD_SYMBOL);
@@ -187,7 +341,9 @@ namespace Strata
 				"against this engine's StrataScriptCore", displayPath, moduleVersion, ST_SCRIPT_ABI_VERSION));
 		}
 
+		// StructSize tells the module how much it may write (a module of a newer SDK knows more members).
 		StrataScriptModuleAPI api = {};
+		api.StructSize = sizeof(StrataScriptModuleAPI);
 		const ScriptCallResult loadResult = module->Call({ nullptr, ST_SCRIPT_LOAD_SYMBOL }, [&]()
 		{
 			return load(&GetScriptHostAPI(), ST_SCRIPT_ABI_VERSION, &api);
@@ -210,20 +366,20 @@ namespace Strata
 		// The description lives in module memory; reading it is guarded like any other module access.
 		std::string name;
 		std::vector<ScriptClassInfo> classes;
-		std::vector<const StrataScriptClassDesc*> descriptors;
+		std::vector<ClassFunctions> functions;
 		std::string descriptionError;
 		bool descriptionValid = false;
 		const ScriptCallResult descriptionResult = module->Call({ nullptr, "module description" }, [&]()
 		{
 			std::string readName;
 			std::vector<ScriptClassInfo> readClasses;
-			std::vector<const StrataScriptClassDesc*> readDescriptors;
+			std::vector<ClassFunctions> readFunctions;
 			std::string readError;
-			const bool valid = module->ReadModuleDescription(readName, readClasses, readDescriptors, readError);
+			const bool valid = module->ReadModuleDescription(readName, readClasses, readFunctions, readError);
 			// Moving engine objects cannot fault, so the outputs are either untouched or complete.
 			name = std::move(readName);
 			classes = std::move(readClasses);
-			descriptors = std::move(readDescriptors);
+			functions = std::move(readFunctions);
 			descriptionError = std::move(readError);
 			descriptionValid = valid;
 			return static_cast<uint32_t>(StrataScriptResult_Ok);
@@ -236,7 +392,7 @@ namespace Strata
 		if (!name.empty())
 			module->m_Name = std::move(name);
 		module->m_Classes = std::move(classes);
-		module->m_Descriptors = std::move(descriptors);
+		module->m_Functions = std::move(functions);
 		module->m_Ready = true;
 		return module;
 	}
@@ -252,16 +408,23 @@ namespace Strata
 		if (m_Library.IsLoaded())
 		{
 			// Unloading runs the module's static destructors.
+			void* library = m_Library.GetNativeHandle();
 			CrashInfo crash;
-			if (!CrashGuard::Invoke([](void* data) { static_cast<DynamicLibrary*>(data)->Unload(); }, &m_Library, &crash))
+			if (CrashGuard::Invoke([](void* data) { static_cast<DynamicLibrary*>(data)->Unload(); }, &m_Library, &crash))
 			{
+				UnregisterLibrary(library);
+			}
+			else
+			{
+				// The library stays registered: it remains loaded, so loading its file again would return it.
 				ST_CORE_ERROR("Script module '{}' crashed while unloading ({}); it stays loaded", m_Name, crash.Description);
 				m_Library.Release();
 			}
 		}
 
-		if (!m_LoadedPath.empty() && FileSystem::Exists(m_LoadedPath) && !FileSystem::Remove(m_LoadedPath))
-			ST_CORE_WARN("Cannot remove the temporary script module copy '{}'; it is removed by a later session", FileSystem::ToUTF8(m_LoadedPath));
+		// The copy goes with the module (its directory with the last copy).
+		if (m_CopyDirectory && !m_LoadedPath.empty() && FileSystem::Exists(m_LoadedPath) && !FileSystem::Remove(m_LoadedPath))
+			ST_CORE_WARN("Cannot remove the script module copy '{}'; it is removed by a later session", FileSystem::ToUTF8(m_LoadedPath));
 	}
 
 	const ScriptClassInfo* ScriptModule::FindClass(std::string_view name) const
@@ -301,25 +464,25 @@ namespace Strata
 			m_Fault = std::move(fault);
 	}
 
-	const StrataScriptClassDesc* ScriptModule::GetDescriptor(const ScriptCallSite& site) const
+	const ScriptModule::ClassFunctions* ScriptModule::GetFunctions(const ScriptCallSite& site) const
 	{
-		if (!site.Class || site.Class->Index >= m_Descriptors.size() || &m_Classes[site.Class->Index] != site.Class)
+		if (!site.Class || site.Class->Index >= m_Functions.size() || &m_Classes[site.Class->Index] != site.Class)
 		{
 			ST_CORE_ASSERT(false, "Script call site refers to a class of another module");
 			return nullptr;
 		}
-		return m_Descriptors[site.Class->Index];
+		return &m_Functions[site.Class->Index];
 	}
 
 	ScriptCallResult ScriptModule::CreateInstance(const ScriptCallSite& site, StrataScriptContext* context, StrataScriptInstance* outInstance)
 	{
 		*outInstance = nullptr;
-		const StrataScriptClassDesc* descriptor = GetDescriptor(site);
-		if (!descriptor)
+		const ClassFunctions* functions = GetFunctions(site);
+		if (!functions)
 			return ScriptCallResult::Rejected;
 
 		StrataScriptInstance instance = nullptr;
-		const auto create = descriptor->Create;
+		const auto create = functions->Create;
 		const uint64_t entity = static_cast<uint64_t>(site.Entity);
 		const ScriptCallResult result = Call(site, [&]() { return create(context, entity, &instance); });
 		if (result == ScriptCallResult::Ok && !instance)
@@ -331,20 +494,20 @@ namespace Strata
 
 	ScriptCallResult ScriptModule::DestroyInstance(const ScriptCallSite& site, StrataScriptInstance instance)
 	{
-		const StrataScriptClassDesc* descriptor = GetDescriptor(site);
-		if (!descriptor || !instance)
+		const ClassFunctions* functions = GetFunctions(site);
+		if (!functions || !instance)
 			return ScriptCallResult::Rejected;
-		const auto destroy = descriptor->Destroy;
+		const auto destroy = functions->Destroy;
 		return Call(site, [&]() { return destroy(instance); });
 	}
 
 	ScriptCallResult ScriptModule::GetField(const ScriptCallSite& site, StrataScriptInstance instance, uint32_t fieldIndex, PropertyValue& outValue)
 	{
-		const StrataScriptClassDesc* descriptor = GetDescriptor(site);
-		if (!descriptor || !instance || fieldIndex >= site.Class->Fields.size())
+		const ClassFunctions* functions = GetFunctions(site);
+		if (!functions || !instance || fieldIndex >= site.Class->Fields.size())
 			return ScriptCallResult::Rejected;
 
-		const auto getField = descriptor->GetField;
+		const auto getField = functions->GetField;
 		const PropertyType type = site.Class->Fields[fieldIndex].Type;
 		std::optional<PropertyValue> result;
 		const ScriptCallResult callResult = Call(site, [&]()
@@ -368,8 +531,8 @@ namespace Strata
 
 	ScriptCallResult ScriptModule::SetField(const ScriptCallSite& site, StrataScriptInstance instance, uint32_t fieldIndex, const PropertyValue& value)
 	{
-		const StrataScriptClassDesc* descriptor = GetDescriptor(site);
-		if (!descriptor || !instance || fieldIndex >= site.Class->Fields.size())
+		const ClassFunctions* functions = GetFunctions(site);
+		if (!functions || !instance || fieldIndex >= site.Class->Fields.size())
 			return ScriptCallResult::Rejected;
 
 		const PropertyType type = site.Class->Fields[fieldIndex].Type;
@@ -377,53 +540,53 @@ namespace Strata
 			return ScriptCallResult::Rejected;
 
 		const StrataScriptValue scriptValue = FieldValueToScriptValue(value, type);
-		const auto setField = descriptor->SetField;
+		const auto setField = functions->SetField;
 		return Call(site, [&]() { return setField(instance, fieldIndex, &scriptValue); });
 	}
 
 	ScriptCallResult ScriptModule::InvokeCallback(const ScriptCallSite& site, StrataScriptInstance instance, ScriptCallback callback, float argument)
 	{
-		const StrataScriptClassDesc* descriptor = GetDescriptor(site);
-		if (!descriptor || !instance)
+		const ClassFunctions* functions = GetFunctions(site);
+		if (!functions || !instance)
 			return ScriptCallResult::Rejected;
 
 		switch (callback)
 		{
 			case ScriptCallback::OnCreate:
 			{
-				const auto function = descriptor->OnCreate;
+				const auto function = functions->OnCreate;
 				return function ? Call(site, [&]() { return function(instance); }) : ScriptCallResult::Unavailable;
 			}
 			case ScriptCallback::OnUpdate:
 			{
-				const auto function = descriptor->OnUpdate;
+				const auto function = functions->OnUpdate;
 				return function ? Call(site, [&]() { return function(instance, argument); }) : ScriptCallResult::Unavailable;
 			}
 			case ScriptCallback::OnFixedUpdate:
 			{
-				const auto function = descriptor->OnFixedUpdate;
+				const auto function = functions->OnFixedUpdate;
 				return function ? Call(site, [&]() { return function(instance, argument); }) : ScriptCallResult::Unavailable;
 			}
 			case ScriptCallback::OnLateUpdate:
 			{
-				const auto function = descriptor->OnLateUpdate;
+				const auto function = functions->OnLateUpdate;
 				return function ? Call(site, [&]() { return function(instance, argument); }) : ScriptCallResult::Unavailable;
 			}
 			case ScriptCallback::OnDestroy:
 			{
-				const auto function = descriptor->OnDestroy;
+				const auto function = functions->OnDestroy;
 				return function ? Call(site, [&]() { return function(instance); }) : ScriptCallResult::Unavailable;
 			}
 			case ScriptCallback::OnReload:
 			{
-				const auto function = descriptor->OnReload;
+				const auto function = functions->OnReload;
 				return function ? Call(site, [&]() { return function(instance); }) : ScriptCallResult::Unavailable;
 			}
 		}
 		return ScriptCallResult::Rejected;
 	}
 
-	bool ScriptModule::ReadModuleDescription(std::string& outName, std::vector<ScriptClassInfo>& outClasses, std::vector<const StrataScriptClassDesc*>& outDescriptors,
+	bool ScriptModule::ReadModuleDescription(std::string& outName, std::vector<ScriptClassInfo>& outClasses, std::vector<ClassFunctions>& outFunctions,
 		std::string& outError) const
 	{
 		const StrataScriptModuleAPI& api = m_API;
@@ -466,19 +629,32 @@ namespace Strata
 				outError = fmt::format("class '{}' is registered twice", info.Name);
 				return false;
 			}
-			if (!descriptor->Create || !descriptor->Destroy || !descriptor->GetField || !descriptor->SetField)
+			// The functions are copied now: the descriptor is never read again, so later calls cannot be redirected by (or
+			// fault on) module memory read outside the guard.
+			ClassFunctions functions;
+			functions.Create = descriptor->Create;
+			functions.Destroy = descriptor->Destroy;
+			functions.GetField = descriptor->GetField;
+			functions.SetField = descriptor->SetField;
+			functions.OnCreate = descriptor->OnCreate;
+			functions.OnUpdate = descriptor->OnUpdate;
+			functions.OnFixedUpdate = descriptor->OnFixedUpdate;
+			functions.OnLateUpdate = descriptor->OnLateUpdate;
+			functions.OnDestroy = descriptor->OnDestroy;
+			functions.OnReload = descriptor->OnReload;
+			if (!functions.Create || !functions.Destroy || !functions.GetField || !functions.SetField)
 			{
 				outError = fmt::format("class '{}' lacks its lifetime or field functions", info.Name);
 				return false;
 			}
 
 			const std::pair<ScriptCallback, bool> callbacks[] = {
-				{ ScriptCallback::OnCreate, descriptor->OnCreate != nullptr },
-				{ ScriptCallback::OnUpdate, descriptor->OnUpdate != nullptr },
-				{ ScriptCallback::OnFixedUpdate, descriptor->OnFixedUpdate != nullptr },
-				{ ScriptCallback::OnLateUpdate, descriptor->OnLateUpdate != nullptr },
-				{ ScriptCallback::OnDestroy, descriptor->OnDestroy != nullptr },
-				{ ScriptCallback::OnReload, descriptor->OnReload != nullptr }
+				{ ScriptCallback::OnCreate, functions.OnCreate != nullptr },
+				{ ScriptCallback::OnUpdate, functions.OnUpdate != nullptr },
+				{ ScriptCallback::OnFixedUpdate, functions.OnFixedUpdate != nullptr },
+				{ ScriptCallback::OnLateUpdate, functions.OnLateUpdate != nullptr },
+				{ ScriptCallback::OnDestroy, functions.OnDestroy != nullptr },
+				{ ScriptCallback::OnReload, functions.OnReload != nullptr }
 			};
 			for (const auto& [callback, implemented] : callbacks)
 			{
@@ -531,7 +707,7 @@ namespace Strata
 				field.DefaultValue = std::move(*defaultValue);
 			}
 
-			outDescriptors.push_back(descriptor);
+			outFunctions.push_back(functions);
 		}
 		return true;
 	}

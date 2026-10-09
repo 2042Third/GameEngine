@@ -4,6 +4,7 @@
 #include "Strata/Core/BoundedRead.h"
 #include "Strata/Core/Crypto.h"
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Core/UUID.h"
 
 #include "Platform/Windows/WindowsFileSecurity.h"
 #include "Platform/Windows/WindowsUtils.h"
@@ -244,6 +245,37 @@ namespace Strata
 		if (!FileSystem::CreateDirectories(directory))
 			return std::nullopt;
 		return directory;
+	}
+
+	std::filesystem::path Platform::GetUserRuntimeDirectory(std::string_view applicationName)
+	{
+		// Local application data is only accessible to the user (and administrators); its subdirectories inherit that.
+		PWSTR knownFolder = nullptr;
+		if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_CREATE, nullptr, &knownFolder)))
+			return {};
+		const std::filesystem::path base(knownFolder);
+		CoTaskMemFree(knownFolder);
+
+		std::filesystem::path directory = base / FileSystem::FromUTF8(applicationName) / "Runtime";
+		if (!FileSystem::CreateDirectories(directory))
+			return {};
+		return directory;
+	}
+
+	std::filesystem::path Platform::CreatePrivateDirectory(const std::filesystem::path& parent, std::string_view prefix)
+	{
+		// The directory inherits the parent's access rules. A name collision (practically impossible) picks another name;
+		// an existing directory is never reused.
+		constexpr int c_MaxAttempts = 16;
+		for (int attempt = 0; attempt < c_MaxAttempts; attempt++)
+		{
+			const std::filesystem::path path = parent / FileSystem::FromUTF8(fmt::format("{}{}", prefix, UUID().ToString()));
+			if (CreateDirectoryW(path.c_str(), nullptr))
+				return path;
+			if (::GetLastError() != ERROR_ALREADY_EXISTS)
+				return {};
+		}
+		return {};
 	}
 
 	bool Platform::IsDebuggerAttached()

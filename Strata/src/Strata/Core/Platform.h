@@ -30,6 +30,20 @@ namespace Strata
 		// location exists (or it cannot be created). Use it for anything secret.
 		static std::optional<std::filesystem::path> FindUserDataDirectory(std::string_view applicationName);
 
+		// Per-user directory for files that only matter while the application runs, such as private copies of libraries
+		// it loads. Nobody but the current user can add, replace or rename files in it. Created if missing; empty if no
+		// such location exists.
+		//   Windows: %LOCALAPPDATA%/<applicationName>/Runtime
+		//   Linux:   $XDG_RUNTIME_DIR/<applicationName> (default $XDG_CACHE_HOME/<applicationName> or ~/.cache/<applicationName>)
+		//   macOS:   <per-user temporary directory>/<applicationName> (default ~/Library/Caches/<applicationName>)
+		// POSIX: the directory and the one containing it must be owned by the user and writable by nobody else; a location
+		// that fails the check is skipped.
+		static std::filesystem::path GetUserRuntimeDirectory(std::string_view applicationName);
+		// Creates a new directory "<prefix><random characters>" in `parent` that only the current user can access (POSIX:
+		// mode 0700; Windows: it inherits the access rules of a per-user parent such as GetUserRuntimeDirectory). Never
+		// reuses an existing directory. Returns an empty path on failure.
+		static std::filesystem::path CreatePrivateDirectory(const std::filesystem::path& parent, std::string_view prefix);
+
 		static bool IsDebuggerAttached();
 		static void SetCurrentThreadName(std::string_view name);
 		static uint32_t GetProcessID();

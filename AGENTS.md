@@ -100,7 +100,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   run headless by CTest. Extend it whenever you add a component or script API.
 - Script modules the tests load are CMake targets in `StrataTests/CMakeLists.txt` (sources in `StrataTests/Scripts/`),
   built with the tests. The CTest `StrataScriptCore.Package` (label `package`) builds `StrataTests/PackageProject` through
-  the StrataScriptCore package the way a game project does; it needs CMake and the compiler at test time.
+  the StrataScriptCore package the way a game project does (and checks that the package's glm definitions match the
+  engine's glm target); it needs CMake and the compiler at test time.
 
 ## Code style (Hazel conventions)
 
@@ -222,6 +223,9 @@ ABI rules:
 - Only plain C data crosses the boundary: strings as (pointer, size) UTF-8, entities and assets as 64-bit UUIDs, math
   as float arrays (quaternions x, y, z, w), booleans as `bool`. No STL types, no engine types, no exceptions: the SDK
   catches every exception in the module and reports it through `ReportException` (the instance is disabled).
+- The module description (`StrataScriptModuleAPI`) is the only extensible struct a module writes into engine memory:
+  the engine announces its size in `StructSize`, the module writes at most that much and reports its own size
+  (`Detail::WriteModuleAPI`), so modules of a newer SDK with appended members load into older engines safely.
 - Every call into module code goes through `ScriptModule` (`CrashGuard`), including loading and unloading the library.
   Module memory (descriptors, strings) is read only inside guarded calls; copy it into locals of the guarded lambda,
   then move the complete result out, so a fault can never leave engine objects half-written.
@@ -259,16 +263,34 @@ Building and loading scripts:
   ```
   Use the engine's compiler and configuration. The module is `<Name>.dll`/`.so`/`.dylib` (`ScriptEngine::GetModuleFileName`).
 - The host: `ScriptEngine::LoadModule(path)`, `ScriptEngine::SetActive(engine)` before scenes start playing,
-  `SetHotReloadEnabled(true)` and `Update()` once per frame (outside scene updates) for hot reload. The module is loaded
-  from a private temporary copy, so the build can overwrite the original at any time; a failed (re)load keeps the
-  running module. Poll `IsFaulted()`/`GetFault()` to stop play mode after a crash; reloading clears the fault.
+  `SetHotReloadEnabled(true)` (before loading) and `Update()` once per frame (outside scene updates) for hot reload. With
+  hot reload the module runs from a private copy in a directory only the user can modify
+  (`Platform::GetUserRuntimeDirectory`; one directory per process, removed with its last copy; the process holds a
+  `FileLock` in it while it runs, so other sessions remove only directories whose owner is gone), so the build can
+  overwrite the original at any time; without it (shipped games) the module loads in place. A file that is already
+  loaded (a reload, another engine) is always loaded from a copy, because loading it again would share the running
+  module's state. A failed (re)load keeps the running module. Poll `IsFaulted()`/`GetFault()` to stop play mode after a
+  crash; reloading clears the fault.
+- Shared libraries a module links against: on Windows they are found next to the module file, also when it runs from a
+  copy (the original's directory is searched, never the current directory or PATH). On Linux and macOS the loader
+  resolves them through the module's RUNPATH: CMake's default (absolute) build RPATH works, but `$ORIGIN` /
+  `@loader_path` name the directory of the file actually loaded, which is the private copy's directory under hot reload.
 - Hot reload during play snapshots every instance's fields, deletes the instances (no `OnDestroy`), loads the new
   module, recreates the instances, restores fields that still exist with the same name and type and calls `OnReload`
   (not `OnCreate`). Classes that disappeared lose their instances; new classes start normally.
+- Contained: access violations, division by zero, stack overflow, `abort()` (also from a failed `assert()` and from
+  `std::terminate`; POSIX catches SIGABRT, Windows modules turn it into `ST_SCRIPT_ABORT_EXCEPTION_CODE` through a
+  SIGABRT handler `ScriptModuleEntry.cpp` installs in their static C runtime) and C++ exceptions escaping module code.
 - Limitations: native code cannot be preempted (an infinite loop blocks the main thread; `SetWatchdogTimeout` reports
-  long calls); a crash inside a module's static initializers or destructors is reported, but may leave the platform
-  loader in an undefined state; `std::terminate` (an exception leaving a `noexcept` function or a destructor) ends the
-  process; memory of instances abandoned after a crash is leaked.
+  long calls); a crash inside a module's static initializers or destructors fails the load or abandons the library (the
+  Windows loader contains it itself; elsewhere it is reported), but may make the process crash when it exits, and outside
+  Windows may leave the platform loader in an undefined state;
+  after `std::terminate` the C++ runtime keeps the abandoned exception; stray writes into
+  engine memory are not detected; memory of instances abandoned after a crash is leaked. Not contained (the process
+  ends): Windows fail-fast terminations (`__fastfail`: `/GS` buffer overrun checks, C runtime invalid-parameter
+  failures, heap corruption the system detects), `abort()` in Windows modules with a dynamically linked C runtime
+  (`/MD`) or without the SDK's entry points (`NO_SDK_ENTRY`), and calls that end the process (`exit`,
+  `TerminateProcess`).
 
 ## Editor
 

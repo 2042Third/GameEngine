@@ -789,17 +789,21 @@ namespace Strata
 				if (transform && !ReadTransform(*system, *transform, StrataScriptTransformPart_All, translation, rotation, scale, "Instantiate"))
 					return 0;
 
-				// Prefab documents are small; loading one on demand costs a short stall (its meshes and textures still stream).
-				Ref<Asset> loaded = manager->GetAsset(handle, AssetPriority::High);
+				// Never waits for loading (script code runs on the main thread): an asset that is not loaded yet is requested and
+				// the call fails, so scripts request assets early and instantiate them once they are loaded.
+				const Ref<Asset> loaded = manager->GetAsset(handle, AssetPriority::High);
 				if (!loaded)
 				{
-					system->ReportProblem("Instantiate", fmt::format("asset {} was not loaded yet and was loaded synchronously; request it earlier "
-						"(Assets::RequestLoad) to avoid the stall", handle.ToString()));
-					loaded = manager->LoadAssetSync(handle);
+					if (manager->GetAssetState(handle) == AssetState::Failed)
+						system->ReportProblem("Instantiate", fmt::format("asset {} failed to load: {}", handle.ToString(), manager->GetAssetError(handle)));
+					else
+						system->ReportProblem("Instantiate", fmt::format("asset {} is not loaded yet (its load was started); request assets early "
+							"(Assets::RequestLoad) and instantiate them once Assets::IsLoaded is true", handle.ToString()));
+					return 0;
 				}
-				if (!loaded || (loaded->GetType() != AssetType::Prefab && loaded->GetType() != AssetType::Model))
+				if (loaded->GetType() != AssetType::Prefab && loaded->GetType() != AssetType::Model)
 				{
-					system->ReportProblem("Instantiate", fmt::format("asset {} failed to load: {}", handle.ToString(), manager->GetAssetError(handle)));
+					system->ReportProblem("Instantiate", fmt::format("asset {} is not a prefab or model", handle.ToString()));
 					return 0;
 				}
 

@@ -45,6 +45,7 @@ namespace Strata
 				case EXCEPTION_STACK_OVERFLOW:
 				case EXCEPTION_BREAKPOINT:
 				case c_CppExceptionCode:
+				case c_CrashGuardAbortExceptionCode:
 					break;
 				default:
 					return EXCEPTION_CONTINUE_SEARCH;
@@ -105,6 +106,7 @@ namespace Strata
 				case EXCEPTION_STACK_OVERFLOW:         return "Stack overflow";
 				case EXCEPTION_BREAKPOINT:             return "Breakpoint hit without a debugger attached";
 				case c_CppExceptionCode:               return "Unhandled C++ exception";
+				case c_CrashGuardAbortExceptionCode:   return "abort() called (for example by a failed assertion)";
 			}
 			return fmt::format("Structured exception 0x{:08X}", record.Code);
 		}

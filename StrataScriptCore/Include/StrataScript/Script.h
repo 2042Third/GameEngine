@@ -7,7 +7,9 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <memory>
 #include <string>
@@ -33,7 +35,7 @@ namespace Strata
 	//   OnDestroy       when the entity is destroyed, the script is removed or the scene stops playing
 	//   OnReload        after a hot reload, instead of OnCreate (see below)
 	// Instances update in entity hierarchy order (parents first), then in the order of the scripts on the entity.
-	// Inactive entities receive no updates.
+	// Inactive entities receive no updates. Overrides may be public, protected or private.
 	//
 	// Hot reload: when the module is rebuilt while the game runs, each instance is deleted (its destructor runs, but
 	// not OnDestroy) and a new instance of the new code is constructed. Field values (see ST_SCRIPT_FIELD) carry over
@@ -259,22 +261,78 @@ namespace Strata
 			CallbackFlag_OnReload = 1u << 5
 		};
 
-		// `&T::OnUpdate` has type `void (Script::*)(float)` unless T (or a base between T and Script) declares it.
+		// Whether T overrides a callback. `&T::OnUpdate` names Script::OnUpdate (type `void (Script::*)(float)`) unless T,
+		// or a base between T and Script, declares OnUpdate. When that declaration is not accessible here (a private or
+		// protected override), the expression is invalid: the class then declares the callback itself.
+		template<typename T>
+		constexpr bool OverridesOnCreate()
+		{
+			if constexpr (requires { &T::OnCreate; })
+				return !std::is_same_v<decltype(&T::OnCreate), void (Script::*)()>;
+			else
+				return true;
+		}
+
+		template<typename T>
+		constexpr bool OverridesOnUpdate()
+		{
+			if constexpr (requires { &T::OnUpdate; })
+				return !std::is_same_v<decltype(&T::OnUpdate), void (Script::*)(float)>;
+			else
+				return true;
+		}
+
+		template<typename T>
+		constexpr bool OverridesOnFixedUpdate()
+		{
+			if constexpr (requires { &T::OnFixedUpdate; })
+				return !std::is_same_v<decltype(&T::OnFixedUpdate), void (Script::*)(float)>;
+			else
+				return true;
+		}
+
+		template<typename T>
+		constexpr bool OverridesOnLateUpdate()
+		{
+			if constexpr (requires { &T::OnLateUpdate; })
+				return !std::is_same_v<decltype(&T::OnLateUpdate), void (Script::*)(float)>;
+			else
+				return true;
+		}
+
+		template<typename T>
+		constexpr bool OverridesOnDestroy()
+		{
+			if constexpr (requires { &T::OnDestroy; })
+				return !std::is_same_v<decltype(&T::OnDestroy), void (Script::*)()>;
+			else
+				return true;
+		}
+
+		template<typename T>
+		constexpr bool OverridesOnReload()
+		{
+			if constexpr (requires { &T::OnReload; })
+				return !std::is_same_v<decltype(&T::OnReload), void (Script::*)()>;
+			else
+				return true;
+		}
+
 		template<typename T>
 		constexpr uint32_t GetCallbackFlags()
 		{
 			uint32_t flags = 0;
-			if constexpr (!std::is_same_v<decltype(&T::OnCreate), void (Script::*)()>)
+			if constexpr (OverridesOnCreate<T>())
 				flags |= CallbackFlag_OnCreate;
-			if constexpr (!std::is_same_v<decltype(&T::OnUpdate), void (Script::*)(float)>)
+			if constexpr (OverridesOnUpdate<T>())
 				flags |= CallbackFlag_OnUpdate;
-			if constexpr (!std::is_same_v<decltype(&T::OnFixedUpdate), void (Script::*)(float)>)
+			if constexpr (OverridesOnFixedUpdate<T>())
 				flags |= CallbackFlag_OnFixedUpdate;
-			if constexpr (!std::is_same_v<decltype(&T::OnLateUpdate), void (Script::*)(float)>)
+			if constexpr (OverridesOnLateUpdate<T>())
 				flags |= CallbackFlag_OnLateUpdate;
-			if constexpr (!std::is_same_v<decltype(&T::OnDestroy), void (Script::*)()>)
+			if constexpr (OverridesOnDestroy<T>())
 				flags |= CallbackFlag_OnDestroy;
-			if constexpr (!std::is_same_v<decltype(&T::OnReload), void (Script::*)()>)
+			if constexpr (OverridesOnReload<T>())
 				flags |= CallbackFlag_OnReload;
 			return flags;
 		}
@@ -419,14 +477,35 @@ namespace Strata
 			return record;
 		}
 
+		// Whether the engine's StrataScriptModuleAPI (its size is in StructSize) holds every member of this ABI version.
+		inline bool CanReceiveModuleAPI(const StrataScriptModuleAPI* outModule)
+		{
+			return outModule->StructSize >= offsetof(StrataScriptModuleAPI, Unload) + sizeof(outModule->Unload);
+		}
+
+		// Hands a module description (a StrataScriptModuleAPI, possibly with members of a newer SDK appended) to the engine.
+		// The engine's struct may be smaller (an engine built against an older SDK of the same ABI version): at most its
+		// size (StructSize on entry) is written, and StructSize then holds `descriptionSize`, the members the module knows.
+		// Writes nothing and returns false when the engine's struct cannot hold the members of this ABI version.
+		inline bool WriteModuleAPI(StrataScriptModuleAPI* outModule, const void* description, uint32_t descriptionSize)
+		{
+			if (!CanReceiveModuleAPI(outModule) || descriptionSize < sizeof(StrataScriptModuleAPI))
+				return false;
+			const uint32_t capacity = outModule->StructSize;
+			std::memcpy(outModule, description, capacity < descriptionSize ? capacity : descriptionSize);
+			outModule->StructSize = descriptionSize;
+			return true;
+		}
+
 		// Implementation of StrataScript_Load (see ScriptModuleEntry.cpp).
 		inline uint32_t LoadModule(const StrataScriptHostAPI* host, uint32_t hostABIVersion, StrataScriptModuleAPI* outModule, const char* moduleName)
 		{
 			if (!host || !outModule)
 				return StrataScriptResult_InvalidArgument;
-			// Every function of this ABI version must be present; later additions are checked where they are used.
+			// Every function of this ABI version must be present (later additions are checked where they are used), and the
+			// engine's module description must have room for every member of this ABI version.
 			if (hostABIVersion != ST_SCRIPT_ABI_VERSION || host->ABIVersion != ST_SCRIPT_ABI_VERSION
-				|| !ST_SCRIPT_HAS_MEMBER(StrataScriptHostAPI, host, GetScrollDelta))
+				|| !ST_SCRIPT_HAS_MEMBER(StrataScriptHostAPI, host, GetScrollDelta) || !CanReceiveModuleAPI(outModule))
 				return StrataScriptResult_ABIMismatch;
 
 			if (s_Module)
@@ -445,14 +524,15 @@ namespace Strata
 					state->Classes.push_back(std::move(record));
 				}
 
-				*outModule = StrataScriptModuleAPI {};
-				outModule->StructSize = sizeof(StrataScriptModuleAPI);
-				outModule->ABIVersion = ST_SCRIPT_ABI_VERSION;
-				outModule->Name = ToABIString(state->Name);
-				outModule->ClassCount = static_cast<uint32_t>(state->ClassDescs.size());
-				outModule->Classes = state->ClassDescs.data();
-				outModule->Unload = &UnloadModule;
+				StrataScriptModuleAPI description = {};
+				description.StructSize = sizeof(StrataScriptModuleAPI);
+				description.ABIVersion = ST_SCRIPT_ABI_VERSION;
+				description.Name = ToABIString(state->Name);
+				description.ClassCount = static_cast<uint32_t>(state->ClassDescs.size());
+				description.Classes = state->ClassDescs.data();
+				description.Unload = &UnloadModule;
 				s_Module = state.release();
+				WriteModuleAPI(outModule, &description, sizeof(description)); // The capacity was checked above
 				return StrataScriptResult_Ok;
 			}
 			catch (const std::exception& exception)
@@ -565,8 +645,9 @@ namespace Strata
 #define ST_SCRIPT_FIELD(Member) \
 	stScriptBuilder.template Field<&std::remove_reference_t<decltype(stScriptBuilder)>::ClassType::Member>(#Member)
 
+// The registrar is not const: registering the next class links it into this one (ClassRegistration::Next).
 #define ST_SCRIPT_DETAIL_CLASS(Type, Counter) ST_SCRIPT_DETAIL_CLASS_IMPL(Type, Counter)
 #define ST_SCRIPT_DETAIL_CLASS_IMPL(Type, Counter) \
 	static void StrataScriptDescribe##Counter(::Strata::ScriptClassBuilder<Type>& stScriptBuilder); \
-	static const ::Strata::Detail::ClassRegistrar<Type> s_StrataScriptRegistrar##Counter(#Type, &StrataScriptDescribe##Counter); \
+	static ::Strata::Detail::ClassRegistrar<Type> s_StrataScriptRegistrar##Counter(#Type, &StrataScriptDescribe##Counter); \
 	static void StrataScriptDescribe##Counter([[maybe_unused]] ::Strata::ScriptClassBuilder<Type>& stScriptBuilder)

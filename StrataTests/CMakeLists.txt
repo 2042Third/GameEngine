@@ -13,7 +13,19 @@ set_target_properties(StrataTestLibrary PROPERTIES CXX_VISIBILITY_PRESET hidden 
 #   ReloadV1/V2 two versions of one module for the hot reload tests
 #   Faults      scripts that crash on purpose; LoadFault crashes while loading
 #   ABIMismatch and Malformed are written against the C ABI directly and are refused by the engine
+#   NewerSDK    describes itself with a larger StrataScriptModuleAPI, as a module of a newer SDK would
+#   Dependent   links StrataTestScriptDependency, a library built into a directory of its own
 set(STRATA_TEST_SCRIPTS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Scripts")
+add_library(StrataTestScriptDependency SHARED "${STRATA_TEST_SCRIPTS_DIR}/Dependency/ScriptDependency.cpp")
+strata_configure_target(StrataTestScriptDependency)
+set_target_properties(StrataTestScriptDependency PROPERTIES
+	CXX_VISIBILITY_PRESET hidden
+	VISIBILITY_INLINES_HIDDEN ON
+	RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>/ScriptDependency"
+	LIBRARY_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/$<CONFIG>/ScriptDependency"
+	FOLDER "Strata/TestScripts")
+strata_add_script_module(StrataTestScriptsDependent SOURCES "${STRATA_TEST_SCRIPTS_DIR}/Dependent/DependentScripts.cpp")
+target_link_libraries(StrataTestScriptsDependent PRIVATE StrataTestScriptDependency)
 strata_add_script_module(StrataTestScriptsAPI SOURCE_DIR "${STRATA_TEST_SCRIPTS_DIR}/API")
 strata_add_script_module(StrataTestScriptsReloadV1 SOURCES "${STRATA_TEST_SCRIPTS_DIR}/Reload/ReloadScripts.cpp")
 target_compile_definitions(StrataTestScriptsReloadV1 PRIVATE ST_TEST_RELOAD_VERSION=1)
@@ -23,6 +35,7 @@ strata_add_script_module(StrataTestScriptsFaults SOURCE_DIR "${STRATA_TEST_SCRIP
 strata_add_script_module(StrataTestScriptsLoadFault SOURCE_DIR "${STRATA_TEST_SCRIPTS_DIR}/LoadFault")
 strata_add_script_module(StrataTestScriptsABIMismatch NO_SDK_ENTRY SOURCES "${STRATA_TEST_SCRIPTS_DIR}/Invalid/ABIMismatch.cpp")
 strata_add_script_module(StrataTestScriptsMalformed NO_SDK_ENTRY SOURCES "${STRATA_TEST_SCRIPTS_DIR}/Invalid/Malformed.cpp")
+strata_add_script_module(StrataTestScriptsNewerSDK NO_SDK_ENTRY SOURCES "${STRATA_TEST_SCRIPTS_DIR}/NewerSDK/NewerSDKModule.cpp")
 set(STRATA_TEST_SCRIPT_MODULES
 	StrataTestScriptsAPI
 	StrataTestScriptsReloadV1
@@ -30,7 +43,9 @@ set(STRATA_TEST_SCRIPT_MODULES
 	StrataTestScriptsFaults
 	StrataTestScriptsLoadFault
 	StrataTestScriptsABIMismatch
-	StrataTestScriptsMalformed)
+	StrataTestScriptsMalformed
+	StrataTestScriptsNewerSDK
+	StrataTestScriptsDependent)
 foreach(module IN LISTS STRATA_TEST_SCRIPT_MODULES)
 	strata_configure_target(${module})
 	set_target_properties(${module} PROPERTIES FOLDER "Strata/TestScripts")
@@ -56,8 +71,13 @@ if(TARGET StrataEditorCore)
 	target_link_libraries(StrataTests PRIVATE StrataEditorCore)
 endif()
 target_include_directories(StrataTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+# DOCTEST_CONFIG_NO_POSIX_SIGNALS: CrashGuard owns the fault signals (and the alternate signal stack) of the process.
+# doctest would install its own handlers around every test case and then restore the ones from before, removing the
+# guard's handlers and leaving crashes in scripts uncontained (or reported as test failures).
 target_compile_definitions(StrataTests PRIVATE
+	DOCTEST_CONFIG_NO_POSIX_SIGNALS
 	"STRATA_TEST_LIBRARY_NAME=\"$<TARGET_FILE_NAME:StrataTestLibrary>\""
+	"STRATA_TEST_SCRIPT_DEPENDENCY=\"$<TARGET_FILE:StrataTestScriptDependency>\""
 	"STRATA_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
 foreach(module IN LISTS STRATA_TEST_SCRIPT_MODULES)
 	string(REPLACE "StrataTestScripts" "" moduleKind "${module}")
@@ -86,12 +106,14 @@ add_test(NAME StrataTests.GPU
 set_tests_properties(StrataTests.GPU PROPERTIES LABELS "gpu")
 
 # Builds a game project's scripts through the StrataScriptCore package (outside this build, as game projects do) and
-# checks that the engine loads the result.
+# checks that the engine loads the result. The package must give scripts the same glm definitions as the engine's glm
+# target ('|'-separated, checked by the package project).
 add_test(NAME StrataScriptCore.Package
 	COMMAND "${CMAKE_COMMAND}"
 		"-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/PackageProject"
 		"-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/PackageProject/$<CONFIG>"
 		"-DENGINE_DIR=${PROJECT_SOURCE_DIR}"
+		"-DEXPECTED_GLM_DEFINITIONS=$<JOIN:$<TARGET_PROPERTY:glm,INTERFACE_COMPILE_DEFINITIONS>,|>"
 		"-DGENERATOR=${CMAKE_GENERATOR}"
 		"-DPLATFORM=${CMAKE_GENERATOR_PLATFORM}"
 		"-DTOOLSET=${CMAKE_GENERATOR_TOOLSET}"

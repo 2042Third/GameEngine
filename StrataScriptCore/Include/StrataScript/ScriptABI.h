@@ -9,7 +9,8 @@
  *   uint32_t StrataScript_GetABIVersion(void);
  *   uint32_t StrataScript_Load(const StrataScriptHostAPI* host, uint32_t hostABIVersion, StrataScriptModuleAPI* outModule);
  *
- * The host API table gives scripts access to the engine; the module API describes the script classes. Everything
+ * The host API table gives scripts access to the engine; the module API describes the script classes (outModule->StructSize
+ * tells the module how large the host's struct is, see StrataScriptModuleAPI). Everything
  * crossing this boundary is plain data: no C++ types, no exceptions, strings as (pointer, size) in UTF-8, entities and
  * assets as 64-bit ids, math as float arrays (quaternions are x, y, z, w).
  *
@@ -46,6 +47,13 @@
 /* Names of the functions every script module exports. */
 #define ST_SCRIPT_GET_ABI_VERSION_SYMBOL "StrataScript_GetABIVersion"
 #define ST_SCRIPT_LOAD_SYMBOL "StrataScript_Load"
+
+/*
+ * Windows: the structured exception a module raises when its code calls abort() (a failed assert(), std::abort()). The
+ * engine reports it as a crash of the current call instead of the C runtime ending the process. Modules built with the
+ * SDK raise it from a SIGABRT handler installed in their own, statically linked C runtime (ScriptModuleEntry.cpp).
+ */
+#define ST_SCRIPT_ABORT_EXCEPTION_CODE 0xE0535441u
 
 /* True when the struct behind `pointer` (which starts with a StructSize member) is large enough to contain `member`. */
 #define ST_SCRIPT_HAS_MEMBER(type, pointer, member) \
@@ -204,7 +212,8 @@ extern "C"
 		bool (*SetWorldTransform)(StrataScriptContext* context, StrataScriptEntityID entity, const StrataScriptTransform* transform, uint32_t parts);
 
 		/* Scene queries and prefab/model instantiation. Instantiate returns the root entity of the created hierarchy;
-		 * transform (optional) becomes the root's local transform. */
+		 * transform (optional) becomes the root's local transform. It never waits for loading: for an asset that is not
+		 * loaded yet it starts the load and returns 0 (IsAssetLoaded tells when to try again). */
 		StrataScriptEntityID (*GetPrimaryCamera)(StrataScriptContext* context);
 		uint32_t (*GetRootEntities)(StrataScriptContext* context, StrataScriptEntityID* outEntities, uint32_t capacity);
 		StrataScriptEntityID (*Instantiate)(StrataScriptContext* context, StrataScriptAssetHandle asset, StrataScriptEntityID parent,
@@ -273,7 +282,14 @@ extern "C"
 		/* New callbacks are appended here. */
 	} StrataScriptClassDesc;
 
-	/* Filled by StrataScript_Load. The pointed-to data stays valid until Unload is called. */
+	/*
+	 * Filled by StrataScript_Load. The host sets StructSize to the size of its StrataScriptModuleAPI (the capacity of the
+	 * struct it passes) and zeroes the rest. The module writes at most that many bytes and sets StructSize to the size of
+	 * the struct it was built with, so a module built against a newer SDK (same ABI version, members appended) never
+	 * writes past the host's struct; either side reads a member only if both sizes cover it. A module refuses a capacity
+	 * that cannot hold the members of its ABI version (StrataScriptResult_ABIMismatch). The pointed-to data stays valid
+	 * until Unload is called.
+	 */
 	typedef struct StrataScriptModuleAPI
 	{
 		uint32_t StructSize;

@@ -2,6 +2,7 @@
 
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Platform.h"
+#include "Strata/Scripting/ScriptModule.h"
 
 namespace Strata::Tests
 {
@@ -17,9 +18,10 @@ namespace Strata::Tests
 		ScriptEngine::SetActive(m_Engine);
 	}
 
-	ScopedScriptEngine::ScopedScriptEngine(const std::filesystem::path& module)
+	ScopedScriptEngine::ScopedScriptEngine(const std::filesystem::path& module, bool enableHotReload)
 		: ScopedScriptEngine()
 	{
+		m_Engine->SetHotReloadEnabled(enableHotReload);
 		std::string error;
 		REQUIRE_MESSAGE(m_Engine->LoadModule(module, &error), error);
 	}
@@ -27,6 +29,20 @@ namespace Strata::Tests
 	ScopedScriptEngine::~ScopedScriptEngine()
 	{
 		ScriptEngine::SetActive(m_Previous);
+	}
+
+	LiveInstanceCounter::LiveInstanceCounter(const ScriptEngine& engine)
+	{
+		REQUIRE(engine.GetModule());
+		// Loading the file the module runs from returns the engine's library itself (with another reference).
+		REQUIRE_MESSAGE(m_Library.Load(engine.GetModule()->GetLoadedPath()), m_Library.GetLastError());
+		m_GetCount = m_Library.GetFunction<int64_t (*)()>("StrataTestScripts_GetLiveInstanceCount");
+		REQUIRE(m_GetCount);
+	}
+
+	int64_t LiveInstanceCounter::Get() const
+	{
+		return m_GetCount();
 	}
 
 	ScriptSystem& GetScriptSystem(Scene& scene)
