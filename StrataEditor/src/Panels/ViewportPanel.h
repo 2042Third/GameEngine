@@ -24,6 +24,7 @@ namespace Strata
 	public:
 		void OnImGuiRender(EditorContext& context, const EditorCommandRegistry& commands);
 		// Ends interactions that hold state (camera drags, gizmo drags, a locked cursor); call when the editor detaches.
+		// Uses no ImGui functions, so it also works after the ImGui context is gone.
 		void Reset(EditorContext& context);
 	private:
 		enum class CameraDrag : uint8_t

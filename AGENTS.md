@@ -320,7 +320,9 @@ Building and loading scripts:
   (`Editor/TransformEdit.h`): selected entities without a selected ancestor follow the primary one, local transforms
   are recomputed under their parent (`TransformEdit::WorldToLocal`), writes emit the transform's update signal so
   physics follows, and a drag is one undo step (while playing: the running scene, no undo). Playing through the scene's
-  camera makes the panel the game view: editor tools are off and `Input` is enabled only while it is focused.
+  camera makes the panel the game view: editor tools are off and `Input` is enabled only while it is focused (Shift+F1
+  leaves it and frees a cursor the game locked). ImGuizmo only starts a drag while no ImGui item is hovered, so the
+  image is a plain `Dummy` while the mouse is over the gizmo.
 - **View commands** change no scene data and record no undo: `camera.get`, `camera.set {position, target, yaw, pitch,
   distance, fov, near, far, flySpeed}` (position + target looks from one at the other) and `camera.focus {entities?}`
   (frames them, or the whole scene). `viewport.capture {width?, height?, camera?: "editor" | "scene", overlays?, path?}`

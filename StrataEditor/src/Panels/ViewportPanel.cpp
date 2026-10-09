@@ -18,6 +18,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -84,8 +86,14 @@ namespace Strata
 		ImGuizmo::BeginFrame();
 		EditorViewport& viewport = context.GetViewport();
 
+		// ImGuizmo starts a drag only while no ImGui item is hovered or active, so over the gizmo (as of the last frame)
+		// the image is not an item; the window then must not move with the mouse either (when it floats).
+		const bool overGizmo = ImGuizmo::IsOver();
+		ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+		if (overGizmo)
+			windowFlags |= ImGuiWindowFlags_NoMove;
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-		const bool visible = ImGui::Begin("Viewport", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+		const bool visible = ImGui::Begin("Viewport", nullptr, windowFlags);
 		ImGui::PopStyleVar();
 		if (!visible)
 		{
@@ -113,8 +121,11 @@ namespace Strata
 		m_ImageMin = glm::vec2(imageMin.x, imageMin.y);
 		m_ImageSize = glm::vec2(available.x, available.y);
 
-		// An item covering the image: it takes the clicks, so dragging in the viewport never moves a floating window.
-		ImGui::InvisibleButton("SceneImage", available, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
+		// Elsewhere an item covering the image takes the clicks, so dragging in the viewport never moves a floating window.
+		if (overGizmo)
+			ImGui::Dummy(available);
+		else
+			ImGui::InvisibleButton("SceneImage", available, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
 		m_Hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
 		AcceptAssetDrops(context, commands);
 
@@ -292,9 +303,13 @@ namespace Strata
 	void ViewportPanel::HandleShortcuts(EditorContext& context)
 	{
 		// Only while the viewport is the target of the keyboard, never while typing or flying (WASD/QE move the camera).
+		// Nor during a gizmo drag, whose operation must not change under it.
 		const ImGuiIO& io = ImGui::GetIO();
-		if (!(m_Hovered || m_Focused) || io.WantTextInput || m_CameraDrag == CameraDrag::Fly || io.KeyCtrl || io.KeyAlt || io.KeySuper)
+		if (!(m_Hovered || m_Focused) || io.WantTextInput || m_CameraDrag == CameraDrag::Fly || m_GizmoDrag || ImGuizmo::IsUsing() || io.KeyCtrl || io.KeyAlt
+			|| io.KeySuper)
+		{
 			return;
+		}
 
 		ViewportSettings& settings = context.GetViewport().GetSettings();
 		if (ImGui::IsKeyPressed(ImGuiKey_Q, false))
@@ -387,6 +402,14 @@ namespace Strata
 
 	void ViewportPanel::UpdateGameInput(EditorContext& context, bool gameView)
 	{
+		// Shift+F1 leaves the game view (and frees a cursor the game locked or hid) without stopping the game. Only asked
+		// while the game view is shown: Reset runs this without an ImGui frame (when the editor detaches).
+		if (gameView && m_Focused && ImGui::GetIO().KeyShift && ImGui::IsKeyPressed(ImGuiKey_F1, false))
+		{
+			ImGui::SetWindowFocus(nullptr);
+			m_Focused = false;
+		}
+
 		// Scripts read Input: only the focused game view feeds it, with coordinates relative to the image.
 		const bool enabled = gameView && m_Focused && context.GetSceneState() == SceneState::Play;
 		// A game that hid or locked the cursor gives it back when it loses the input.
@@ -430,23 +453,27 @@ namespace Strata
 		const bool changed = ImGuizmo::Manipulate(&view.Camera.View[0][0], &view.Camera.Projection[0][0], ToImGuizmo(settings.Gizmo), mode, &world[0][0], nullptr,
 			snapping ? snap : nullptr);
 
-		if (!ImGuizmo::IsUsing())
-		{
-			EndGizmoDrag(context);
-			return;
-		}
-		if (!m_GizmoDrag)
+		// The frame the mouse is released still carries the last movement (and snap step): apply it, then end the drag.
+		const bool dragging = ImGuizmo::IsUsing();
+		if ((dragging || changed) && !m_GizmoDrag)
 			m_GizmoDrag = TransformDrag::Begin(context, settings.Gizmo);
 		std::string error;
 		if (changed && m_GizmoDrag && !m_GizmoDrag->Update(context, world, &error))
 		{
 			ST_WARN("Transform gizmo: {}", error);
 			EndGizmoDrag(context);
+			return;
 		}
+		if (!dragging)
+			EndGizmoDrag(context);
 	}
 
 	void ViewportPanel::EndGizmoDrag(EditorContext& context)
 	{
+		// Also cancels ImGuizmo's own drag, which would otherwise stay active while no Manipulate call sees the mouse
+		// released (the entity was deleted or the gizmo hidden); the gizmo is enabled again before its next Manipulate.
+		if (ImGuizmo::IsUsing())
+			ImGuizmo::Enable(false);
 		if (!m_GizmoDrag)
 			return;
 		m_GizmoDrag->End(context);
@@ -502,18 +529,24 @@ namespace Strata
 	{
 		if (!ImGui::BeginDragDropTarget())
 			return;
-		if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(DragDrop::c_Asset))
+		const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(DragDrop::c_Asset);
+		if (payload && payload->DataSize == static_cast<int>(sizeof(AssetHandle)))
 		{
 			// Prefabs and models are placed at the camera's target, the point the view centers on.
-			const AssetHandle asset = *static_cast<const AssetHandle*>(payload->Data);
+			AssetHandle asset = UUID::Null();
+			std::memcpy(&asset, payload->Data, sizeof(AssetHandle));
 			const AssetType type = AssetManager::GetAssetType(asset);
 			if (type == AssetType::Prefab || type == AssetType::Model)
 			{
 				const glm::vec3 target = context.GetViewport().GetCamera().GetTarget();
 				const nlohmann::json created = RunEditorCommand(context, commands, "prefab.instantiate", { { "prefab", UUIDToJson(asset) },
 					{ "components", { { "Transform", { { "Translation", { target.x, target.y, target.z } } } } } } });
-				if (created.is_object() && !created["entities"].empty())
-					context.Select(*UUIDFromJson(created["entities"][0]));
+				const auto entities = created.is_object() ? created.find("entities") : created.end();
+				if (entities != created.end() && entities->is_array() && !entities->empty())
+				{
+					if (const std::optional<UUID> root = UUIDFromJson(entities->front()))
+						context.Select(*root);
+				}
 			}
 			else
 			{
