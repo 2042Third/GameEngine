@@ -5,12 +5,15 @@
 #include "Strata/Core/Layer.h"
 #include "Strata/Core/LayerStack.h"
 #include "Strata/Core/Log.h"
+#include "Strata/Core/Timer.h"
 #include "Strata/Core/UUID.h"
 #include "Strata/Events/ApplicationEvent.h"
 #include "Strata/Events/KeyEvent.h"
 #include "Strata/Events/MouseEvent.h"
 
+#include <chrono>
 #include <set>
+#include <thread>
 #include <vector>
 
 using namespace Strata;
@@ -82,6 +85,35 @@ TEST_SUITE("Core")
 		CHECK(entries.back().Message == "buffer-test 42");
 		CHECK(entries.back().Level == LogLevel::Error);
 		CHECK(entries.back().Logger == "Strata");
+	}
+
+	TEST_CASE("FramePacer keeps a loop at or below its frame rate")
+	{
+		// 100 frames per second: 20 frames take at least 19 periods after the first one.
+		FramePacer pacer(100);
+		CHECK(pacer.GetMaxFrameRate() == 100);
+		const auto start = std::chrono::steady_clock::now();
+		for (int frame = 0; frame < 20; frame++)
+			pacer.WaitForNextFrame();
+		const auto paced = std::chrono::steady_clock::now() - start;
+		CHECK(paced >= std::chrono::milliseconds(190));
+		CHECK(paced < std::chrono::milliseconds(5000));
+
+		// A frame that runs late lets the next one start at once, without a burst of make-up frames afterwards (which
+		// would return at once until the schedule caught up with the ten missed slots).
+		std::this_thread::sleep_for(std::chrono::milliseconds(100));
+		pacer.WaitForNextFrame();
+		const auto afterLate = std::chrono::steady_clock::now();
+		for (int frame = 0; frame < 5; frame++)
+			pacer.WaitForNextFrame();
+		CHECK(std::chrono::steady_clock::now() - afterLate >= std::chrono::milliseconds(45));
+
+		// Unlimited: never waits.
+		pacer.SetMaxFrameRate(0);
+		const auto unlimitedStart = std::chrono::steady_clock::now();
+		for (int frame = 0; frame < 1000; frame++)
+			pacer.WaitForNextFrame();
+		CHECK(std::chrono::steady_clock::now() - unlimitedStart < std::chrono::milliseconds(100));
 	}
 
 	TEST_CASE("CommandLine parses flags and options")

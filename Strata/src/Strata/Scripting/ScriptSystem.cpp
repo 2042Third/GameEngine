@@ -100,6 +100,9 @@ namespace Strata
 		m_PendingReloads.clear();
 		m_DirtyEntities.clear();
 		m_DirtySet.clear();
+		m_CreationQueue.clear();
+		m_CreationQueued.clear();
+		m_CreationCursor = 0;
 		m_DeferredDestroys.clear();
 		m_ReconcileAll = false;
 		m_Running = false;
@@ -218,6 +221,8 @@ namespace Strata
 	{
 		if (m_DirtySet.insert(entity).second)
 			m_DirtyEntities.push_back(entity);
+		if (m_CreationQueued.insert(entity).second)
+			m_CreationQueue.push_back(entity);
 	}
 
 	bool ScriptSystem::HasPendingWork() const
@@ -233,6 +238,8 @@ namespace Strata
 			{
 				ReportProblem("Scripting", fmt::format("scripts keep creating scripted entities while starting; the rest is created at the next update "
 					"(after {} rounds)", c_MaxSyncRounds));
+				// Removals still complete now (each instance is destroyed once, so this ends); creation waits.
+				DestroyRemovedInstances(m_UpdateOrder);
 				return;
 			}
 
@@ -281,19 +288,32 @@ namespace Strata
 			const std::vector<UUID> dirty = std::move(m_DirtyEntities);
 			m_DirtyEntities.clear();
 			m_DirtySet.clear();
+			// The entities queued for creation are all among them (MarkDirty queues both).
+			m_CreationQueue.clear();
+			m_CreationQueued.clear();
+			m_CreationCursor = 0;
 			for (UUID entityID : dirty)
 				ReconcileEntity(entityID, true);
 			return;
 		}
 
-		// Creation only (script code may be on the stack): the entries stay queued for the next full pass. Script code run
-		// by the creations may queue more, hence the index loop.
-		for (size_t index = 0; index < m_DirtyEntities.size(); index++)
-			ReconcileEntity(m_DirtyEntities[index], false);
+		// Creation only (script code may be on the stack): the entities stay queued for the next full pass. Each entity
+		// changed since the previous creation pass is reconciled once, so spawning many scripted entities in one update
+		// stays linear. Script code run by the creations may queue more entities; this loop takes them too, and so does a
+		// creation pass nested in that code (both advance the same cursor).
+		while (m_CreationCursor < m_CreationQueue.size())
+		{
+			const UUID entityID = m_CreationQueue[m_CreationCursor++];
+			m_CreationQueued.erase(entityID);
+			ReconcileEntity(entityID, false);
+		}
+		m_CreationQueue.clear();
+		m_CreationCursor = 0;
 	}
 
 	void ScriptSystem::ReconcileEntity(UUID entityID, bool allowRemovals)
 	{
+		m_ReconcileCount++;
 		const Entity entity = m_Scene.GetEntityByUUID(entityID);
 
 		if (allowRemovals)
@@ -319,30 +339,37 @@ namespace Strata
 		if (!component || component->Scripts.empty() || m_CreationBlocked || !module)
 			return;
 
-		// A copy: constructors run script code, which may change the component.
-		const std::vector<ScriptEntry> entries = component->Scripts;
-		std::unordered_set<std::string> seen;
-		for (const ScriptEntry& entry : entries)
+		// Usually every entry has its instance already (the entity changed in some other way): then there is nothing to
+		// create, and no reason to copy the entries.
+		const bool complete = std::all_of(component->Scripts.begin(), component->Scripts.end(),
+			[&](const ScriptEntry& entry) { return FindInstance(entityID, entry.ClassName) != nullptr; });
+		if (!complete)
 		{
-			if (!seen.insert(entry.ClassName).second)
+			// A copy: constructors run script code, which may change the component.
+			const std::vector<ScriptEntry> entries = component->Scripts;
+			std::unordered_set<std::string> seen;
+			for (const ScriptEntry& entry : entries)
 			{
-				ReportProblem("Script component", fmt::format("entity {} lists script '{}' more than once; the duplicate is ignored", DescribeEntity(m_Scene, entityID), entry.ClassName));
-				continue;
-			}
-			if (FindInstance(entityID, entry.ClassName))
-				continue;
+				if (!seen.insert(entry.ClassName).second)
+				{
+					ReportProblem("Script component", fmt::format("entity {} lists script '{}' more than once; the duplicate is ignored", DescribeEntity(m_Scene, entityID), entry.ClassName));
+					continue;
+				}
+				if (FindInstance(entityID, entry.ClassName))
+					continue;
 
-			const ScriptClassInfo* info = module->FindClass(entry.ClassName);
-			if (!info)
-			{
-				ReportProblem("Script component", fmt::format("entity {} uses script '{}', which the module '{}' does not contain", DescribeEntity(m_Scene, entityID),
-					entry.ClassName, module->GetName()));
-				continue;
-			}
+				const ScriptClassInfo* info = module->FindClass(entry.ClassName);
+				if (!info)
+				{
+					ReportProblem("Script component", fmt::format("entity {} uses script '{}', which the module '{}' does not contain", DescribeEntity(m_Scene, entityID),
+						entry.ClassName, module->GetName()));
+					continue;
+				}
 
-			CreateInstance(entity, entry, *info);
-			if (!GetUsableModule() || !entity.IsValid())
-				return;
+				CreateInstance(entity, entry, *info);
+				if (!GetUsableModule() || !entity.IsValid())
+					return;
+			}
 		}
 
 		// Keep the instances in entry order (the update order on this entity).
@@ -557,13 +584,37 @@ namespace Strata
 		return instances;
 	}
 
+	void ScriptSystem::DestroyRemovedInstances(std::vector<Ref<Instance>> order)
+	{
+		// OnDestroy may remove further scripts, also of instances this pass already went by: repeat until a pass finds
+		// none. Every instance is destroyed at most once, so this ends.
+		bool destroyedAny = true;
+		while (destroyedAny)
+		{
+			destroyedAny = false;
+			for (auto it = order.rbegin(); it != order.rend(); ++it)
+			{
+				Instance& instance = **it;
+				if (!instance.Removed || !instance.Handle)
+					continue;
+				DestroyInstance(instance, m_Scene.GetEntityByUUID(instance.Entity).IsValid());
+				destroyedAny = true;
+			}
+		}
+		for (const Ref<Instance>& instance : order)
+		{
+			if (instance->Removed)
+				RemoveDestroyedInstances(instance->Entity);
+		}
+	}
+
 	void ScriptSystem::RemoveDestroyedInstances(UUID entity)
 	{
 		auto it = m_Instances.find(entity);
 		if (it == m_Instances.end())
 			return;
 		std::vector<Ref<Instance>>& instances = it->second;
-		instances.erase(std::remove_if(instances.begin(), instances.end(), [](const Ref<Instance>& instance) { return instance->Removed; }), instances.end());
+		instances.erase(std::remove_if(instances.begin(), instances.end(), &IsDestroyed), instances.end());
 		if (instances.empty())
 			m_Instances.erase(it);
 	}
@@ -574,7 +625,7 @@ namespace Strata
 		for (auto it = m_Instances.begin(); it != m_Instances.end();)
 		{
 			std::vector<Ref<Instance>>& instances = it->second;
-			instances.erase(std::remove_if(instances.begin(), instances.end(), [](const Ref<Instance>& instance) { return instance->Removed; }), instances.end());
+			instances.erase(std::remove_if(instances.begin(), instances.end(), &IsDestroyed), instances.end());
 			it = instances.empty() ? m_Instances.erase(it) : std::next(it);
 		}
 		if (m_Instances.empty())
@@ -599,6 +650,8 @@ namespace Strata
 
 		// Script code run by the destructors must not create instances in the module that is going away.
 		m_CreationBlocked = true;
+		// Scripts that were removed but not destroyed yet end in the old module (with OnDestroy); they are not carried over.
+		DestroyRemovedInstances(CollectInstances());
 		m_ReloadOrder = CollectInstances();
 		m_UpdateOrder.clear();
 		m_PendingStart.clear();
@@ -607,6 +660,14 @@ namespace Strata
 		{
 			instance->ReloadFields.clear();
 			instance->Restore = false;
+
+			// Removed by script code that ran during this loop (a destructor): it ends here as well.
+			if (instance->Removed)
+			{
+				DestroyInstance(*instance, m_Scene.GetEntityByUUID(instance->Entity).IsValid());
+				instance->Class = nullptr;
+				continue;
+			}
 
 			// Without a usable module (it crashed) instances cannot be saved: they are abandoned and start over.
 			ScriptModule* module = GetUsableModule();

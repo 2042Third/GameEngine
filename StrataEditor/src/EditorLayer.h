@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Editor/EditorAutomation.h"
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
@@ -7,9 +8,11 @@
 #include "Panels/ContentBrowserPanel.h"
 #include "Panels/InspectorPanel.h"
 #include "Panels/SceneHierarchyPanel.h"
+#include "Panels/ViewportPanel.h"
 
 #include <Strata.h>
 
+#include <chrono>
 #include <filesystem>
 #include <functional>
 #include <optional>
@@ -29,6 +32,12 @@ namespace Strata
 		bool QuitAfterCommands = false; // Close the editor once the command script finished (e.g. after a script build)
 		bool ShowImGuiDemo = false;
 		bool Headless = false; // No UI: the editor runs for automation only
+		// Serve the commands to tools and AI agents (EditorAutomation) on loopback, published through a session file.
+		bool EnableAutomation = true;
+		uint16_t AutomationPort = 0; // 0 picks a free port
+		// Close the editor after this long without a connected automation client (0: never), e.g. a headless editor
+		// started for an MCP server that went away.
+		std::chrono::seconds IdleTimeout = std::chrono::seconds(0);
 	};
 
 	// The editor application layer: owns the editor state (EditorContext), the command registry shared with automation,
@@ -49,13 +58,13 @@ namespace Strata
 		const EditorCommandRegistry& GetCommands() const { return m_Commands; }
 		EditorCommandRunner& GetCommandRunner() { return m_CommandRunner; }
 	private:
+		void StartAutomation();
 		void DrawDockspace();
 		// Docks the panels into the default arrangement (first run, or Window > Reset Layout).
 		void BuildDefaultLayout(unsigned int dockspaceId);
 		void DrawMenuBar();
 		void DrawToolbar();
 		void DrawStatusBar();
-		void DrawViewport();
 		void DrawUnsavedChangesModal();
 		void HandleShortcuts();
 		void UpdateWindowTitle();
@@ -80,11 +89,14 @@ namespace Strata
 		// completions, so the script must outlive it.
 		Scope<EditorCommandScript> m_CommandScript;
 		EditorCommandRunner m_CommandRunner;
+		// Declared after what it serves, so it stops before they go away.
+		EditorAutomation m_Automation;
 
 		SceneHierarchyPanel m_Hierarchy;
 		InspectorPanel m_Inspector;
 		ContentBrowserPanel m_ContentBrowser;
 		ConsolePanel m_Console;
+		ViewportPanel m_Viewport;
 
 		std::function<void()> m_PendingDiscardAction;
 		bool m_OpenUnsavedChangesModal = false;

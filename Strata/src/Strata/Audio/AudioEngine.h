@@ -4,6 +4,8 @@
 
 #include <glm/glm.hpp>
 
+#include <optional>
+
 namespace Strata
 {
 
@@ -15,13 +17,22 @@ namespace Strata
 	struct AudioEngineSpecification
 	{
 		// Mix without an output device. Nothing is played; the mix only advances when it is pulled with
-		// AudioEngine::ReadFrames. For tests, dedicated servers and headless runs.
+		// AudioEngine::ReadFrames or AdvanceNullDevice. For tests, dedicated servers and headless runs.
 		bool NullDevice = false;
 		uint32_t SampleRate = 48000; // Mixing rate in Hz; clips at other rates are resampled per voice
 		uint32_t Channels = 2;       // Output channels (2 = stereo)
 		// Fire-and-forget voices are reclaimed once they finish; beyond this many (at least 1), the oldest one is cut
 		// off so new one-shots always play and a flood of them cannot exhaust memory.
 		uint32_t MaxOneShots = 128;
+	};
+
+	// The listener as placed with AudioEngine::SetListener.
+	struct AudioListenerState
+	{
+		glm::vec3 Position = glm::vec3(0.0f);
+		glm::vec3 Forward = glm::vec3(0.0f, 0.0f, -1.0f);
+		glm::vec3 Up = glm::vec3(0.0f, 1.0f, 0.0f);
+		glm::vec3 Velocity = glm::vec3(0.0f);
 	};
 
 	struct AudioStats
@@ -63,8 +74,13 @@ namespace Strata
 
 		// Places the listener, typically from the active camera every frame. forward and up need not be normalized
 		// or exactly perpendicular, but must not be zero; up only matters for rolling around forward, so listeners
-		// that do not roll can pass +Y. velocity (world units per second) drives the Doppler effect.
+		// that do not roll can pass +Y. velocity (world units per second) drives the Doppler effect. A new up vector
+		// reaches the mix after the current mixing period (the mixing thread applies it, see AudioEngine.cpp).
 		static void SetListener(const glm::vec3& position, const glm::vec3& forward, const glm::vec3& up, const glm::vec3& velocity = glm::vec3(0.0f));
+		static AudioListenerState GetListener();
+		// The up vector the mixer currently uses, for diagnostics and tests. Null device only (nullopt otherwise): with an
+		// output device the audio thread owns it.
+		static std::optional<glm::vec3> GetMixedListenerUp();
 
 		// Fire-and-forget voices owned by the engine. PlayOneShot plays the clip without spatialization (UI, music
 		// stingers); PlayOneShotAt plays it at a world position. Return false if the engine is not initialized or the
@@ -79,6 +95,11 @@ namespace Strata
 		// GetChannelCount() floats. Null device only: with a real device the device pulls the mix itself, and this
 		// returns 0 and logs an error. Returns the number of frames written. While paused, writes silence.
 		static uint64_t ReadFrames(float* interleavedOutput, uint64_t frameCount);
+		// Null device only: mixes and discards the next `seconds` of audio, so that playback advances in real time when nothing
+		// else pulls the mix (the Application calls it every frame while mixing without a device: headless runs and machines
+		// without audio output). Fractions of a frame carry over to the next call; at most one second is mixed per call. Does
+		// nothing with an output device, while paused or while not initialized.
+		static void AdvanceNullDevice(float seconds);
 
 		static AudioStats GetStats();
 	private:

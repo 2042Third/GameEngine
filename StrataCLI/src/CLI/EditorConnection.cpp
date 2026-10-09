@@ -112,6 +112,7 @@ namespace Strata::CLI
 
 		std::string discoveryError;
 		std::vector<EditorEndpoint> endpoints = DiscoverEditorEndpoints(m_Options, &discoveryError);
+		AddPinnedProcessEndpoint(endpoints);
 		std::erase_if(endpoints, [this](const EditorEndpoint& endpoint) { return !IsPinnedEditor(endpoint); });
 		if (endpoints.empty())
 		{
@@ -231,15 +232,27 @@ namespace Strata::CLI
 
 		m_Endpoint = endpoint;
 		m_LastError.clear();
+		// Follows a restart of the same project, or the same editor's switch to another project.
 		if (endpoint.Session)
-		{
-			if (!m_Pinned)
-				m_Pinned = PinnedEditor { endpoint.Session->ProjectPath, endpoint.Session->ProcessId };
-			else
-				m_Pinned->ProcessId = endpoint.Session->ProcessId; // Followed a restart of the same project
-		}
+			m_Pinned = PinnedEditor { endpoint.Session->ProjectPath, endpoint.Session->ProcessId, endpoint.Session->ProcessStartTime };
 		ST_INFO("Connected to the editor on {}:{} ({})", endpoint.Host, endpoint.Port, endpoint.Source);
 		return true;
+	}
+
+	void EditorConnection::AddPinnedProcessEndpoint(std::vector<EditorEndpoint>& endpoints) const
+	{
+		// Discovery by project misses the pinned editor once it has opened another project; its own session file is a
+		// candidate whatever project it names. Explicit endpoints are not discovered at all.
+		if (!m_Pinned || m_Options.Port)
+			return;
+		const std::optional<std::filesystem::path> sessionDirectory = GetSessionDirectory();
+		if (!sessionDirectory)
+			return;
+		std::optional<EditorSessionInfo> session = EditorSession::ReadSessionFile(EditorSession::GetSessionFilePath(*sessionDirectory, m_Pinned->ProcessId));
+		if (!session || session->ProcessId != m_Pinned->ProcessId || !EditorSession::IsSessionProcessRunning(*session) || IsDuplicate(endpoints, *session)
+			|| !IsLoopbackAddress(session->Address))
+			return;
+		endpoints.insert(endpoints.begin(), MakeSessionEndpoint(*session, "session"));
 	}
 
 	bool EditorConnection::IsPinnedEditor(const EditorEndpoint& endpoint) const
@@ -247,9 +260,13 @@ namespace Strata::CLI
 		// Explicit endpoints are fixed by configuration and need no pinning.
 		if (!m_Pinned || !endpoint.Session)
 			return true;
+		// The same editor process, whatever project it has open now. Discovery only returns sessions whose process runs
+		// with the recorded start time, so a matching start time rules out a process that reused the id.
+		if (endpoint.Session->ProcessId == m_Pinned->ProcessId && endpoint.Session->ProcessStartTime == m_Pinned->ProcessStartTime)
+			return true;
 		if (!m_Pinned->ProjectPath.empty())
 			return EditorSession::IsSameProject(endpoint.Session->ProjectPath, FileSystem::FromUTF8(m_Pinned->ProjectPath));
-		return endpoint.Session->ProcessId == m_Pinned->ProcessId;
+		return false;
 	}
 
 	std::string EditorConnection::DescribePinnedEditorMissing() const

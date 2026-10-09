@@ -69,6 +69,7 @@ namespace Strata
 
 		m_EntityMap.emplace(uuid, entity.GetHandle());
 		m_RootEntities.push_back(uuid);
+		m_HierarchyVersion++;
 		return entity;
 	}
 
@@ -203,6 +204,7 @@ namespace Strata
 		{
 			m_RootEntities.erase(std::remove(m_RootEntities.begin(), m_RootEntities.end(), uuid), m_RootEntities.end());
 		}
+		m_HierarchyVersion++;
 	}
 
 	Entity Scene::DuplicateEntity(Entity entity)
@@ -303,6 +305,7 @@ namespace Strata
 		{
 			m_RootEntities.push_back(child.GetUUID());
 		}
+		m_HierarchyVersion++;
 
 		if (keepWorldTransform)
 			SetWorldTransform(child, worldTransform);
@@ -328,6 +331,7 @@ namespace Strata
 		siblings.erase(it);
 		index = std::min(index, siblings.size());
 		siblings.insert(siblings.begin() + static_cast<ptrdiff_t>(index), uuid);
+		m_HierarchyVersion++;
 		return true;
 	}
 
@@ -452,6 +456,10 @@ namespace Strata
 			ST_CORE_WARN("Cannot set the world transform of '{}': the transform is degenerate", entity.GetName());
 			return false;
 		}
+
+		// Systems that mirror transforms (e.g. physics bodies, which only follow signaled edits while they sleep) learn about
+		// the change like about any other component edit.
+		m_Registry.patch<TransformComponent>(entity.GetHandle());
 		return true;
 	}
 
@@ -572,6 +580,18 @@ namespace Strata
 
 		FlushPendingDestroys();
 		UpdateWorldTransforms();
+	}
+
+	void Scene::SetPaused(bool paused)
+	{
+		if (paused == m_IsPaused)
+			return;
+
+		m_IsPaused = paused;
+		if (!m_IsRunning)
+			return;
+		for (const Scope<SceneSystem>& system : m_Systems)
+			system->OnPausedChanged(paused);
 	}
 
 	void Scene::OnUpdateEditor(Timestep)

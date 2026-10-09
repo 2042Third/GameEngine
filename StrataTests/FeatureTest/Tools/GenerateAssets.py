@@ -5,7 +5,13 @@ The outputs are committed (CI never runs this script); run it again only to chan
 
     python StrataTests/FeatureTest/Tools/GenerateAssets.py
 
-Every asset is tiny and deterministic (the same bytes on every run):
+Every asset is tiny and computed without randomness, so a given Python installation writes the same bytes on every
+run. Other installations may differ in two places: the PNG's pixel data is compressed by the zlib Python links
+(another zlib version or implementation, such as zlib-ng, may produce other compressed bytes for the same pixels), and
+the WAV samples come from the platform's math.sin (rounded to 16 bits, so a difference is unlikely but possible). The
+other files use integer and string operations and float arithmetic that IEEE 754 makes exact or correctly rounded
+everywhere (+, -, *, /, sqrt, frexp, log2 of powers of two, shortest float repr in JSON). After regenerating, commit
+only files whose content changed on purpose; the .meta files keep the handles either way. The assets:
     Assets/Textures/Checker.png    8x8 RGBA checkerboard (sRGB color texture)
     Assets/Textures/Sky.hdr        16x8 Radiance HDR sky gradient (equirectangular environment map)
     Assets/Audio/Blip.wav          0.1 s mono 16-bit PCM tone

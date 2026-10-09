@@ -2,8 +2,10 @@
 
 #include "Strata/Asset/AssetTypes.h"
 #include "Strata/Core/Base.h"
+#include "Strata/Core/ErrorThrottle.h"
 #include "Strata/Renderer/DebugDraw.h"
 #include "Strata/Renderer/SceneRenderData.h"
+#include "Strata/Renderer/TextureReadback.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 
@@ -116,6 +118,8 @@ namespace Strata
 		uint32_t OutlinedEntities = 0;    // Selected entities of the rendered scene
 		uint32_t Texts = 0;               // Text components drawn
 		uint32_t TextGlyphs = 0;
+		uint32_t PendingTextGlyphs = 0;   // Glyphs waiting for rasterization (budgeted per frame), drawn on a later frame
+		uint32_t RasterizedTextGlyphs = 0; // Glyphs added to font atlases this frame (see TextRenderer::c_FrameRasterBudget)
 	};
 
 	// Renders a scene: depth/normal/entity-id prepass, ground-truth ambient occlusion, forward physically based
@@ -141,7 +145,7 @@ namespace Strata
 		glm::uvec2 GetViewportSize() const { return m_ViewportSize; }
 
 		// Renders the scene into the output texture, or into `target` when given. A target must have the viewport size
-		// (the renderer never rescales) and a single-sampled, non-sRGB UNORM color attachment 0, e.g. the swapchain:
+		// (the renderer never rescales) and exactly one color attachment, single-sampled non-sRGB UNORM, e.g. the swapchain:
 		// values are written sRGB-encoded. Returns false, with GetStats().Rendered false, when nothing was rendered: an
 		// empty viewport, or an invalid target or render targets (both logged). Updates the scene's cached world
 		// transforms. With overlays and a target, the image is composed in the output texture and then copied.
@@ -163,8 +167,15 @@ namespace Strata
 		nvrhi::ITexture* GetBloomTexture() const { return m_BloomTexture; } // Level 0 of the bloom chain (half resolution)
 
 		// Entity visible at a pixel of the last rendered frame (invalid when none, or when no frame was rendered since
-		// the last resize). Blocks until the GPU is idle; meant for editor clicks and tests.
+		// the last resize). Blocks until the GPU is done; meant for tests and tools (editors use ReadEntityIDAsync).
 		Entity GetEntityAt(Scene& scene, uint32_t x, uint32_t y);
+		// Starts reading the entity ID at a pixel of the last rendered frame without waiting for the GPU. Null when no
+		// frame was rendered since the last resize, the pixel is outside the viewport or the copy cannot be made. Once
+		// the readback is ready, its single R32_UINT pixel resolves with GetEntityFromID (against the scene that was
+		// rendered: entities destroyed meanwhile resolve to an invalid entity).
+		Scope<TextureReadback> ReadEntityIDAsync(uint32_t x, uint32_t y);
+		// The entity an entity-ID buffer value refers to; invalid for 0 (nothing drawn) or entities that no longer exist.
+		static Entity GetEntityFromID(Scene& scene, uint32_t id);
 
 		// Automatic exposure adapts gradually; this makes the next frame jump to the scene's brightness (camera cuts,
 		// scene loads).
@@ -253,8 +264,6 @@ namespace Strata
 		// Recreates the viewport-sized targets; false (targets released, error logged) when they cannot be created.
 		bool CreateRenderTargets();
 		void ReleaseRenderTargets();
-		// Logs a rendering failure, once until a frame renders successfully again (avoids a message every frame).
-		void ReportError(const std::string& message);
 		bool ValidateTarget(nvrhi::IFramebuffer* target);
 		// Finds the scene's sky light; (re)computes the environment maps when its environment texture changed.
 		void UpdateEnvironment(Scene& scene, RenderData::FrameConstants& frame, nvrhi::ICommandList* commandList);
@@ -305,7 +314,7 @@ namespace Strata
 		glm::uvec2 m_ViewportSize = { 0, 0 };
 		bool m_TargetsValid = false;
 		bool m_HasRenderedFrame = false; // Since the render targets were (re)created
-		std::string m_LastError;
+		ErrorThrottle m_Errors; // Rendering failures, logged once until a frame renders successfully again
 		bool m_WarnedLightOverflow = false;
 		SceneRendererStats m_Stats;
 

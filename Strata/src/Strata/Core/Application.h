@@ -31,13 +31,18 @@ namespace Strata
 		bool Headless = false;     // No window or swapchain; offscreen rendering remains available
 		bool EnableRenderer = true;
 		bool EnableImGui = false;
-		bool EnableAudio = true; // Headless applications mix without an output device
+		// Initializes the AudioEngine. Headless applications (and machines without an output device) mix without a device,
+		// advanced by the frame time so that playback still progresses.
+		bool EnableAudio = true;
 		std::filesystem::path ImGuiLayoutFile; // Where ImGui persists its layout (empty: not persisted)
 		std::optional<bool> GraphicsValidation; // Defaults to enabled in Debug builds
 
 		JobSystemSpecification Jobs;
 		std::optional<uint64_t> MaxFrames; // Close automatically after this many frames (automation, tests)
 		float MaxTimestep = 0.25f;         // Clamp for long frames (breakpoints, loading hitches)
+		// Frames per second the main loop does not exceed (0: unlimited). Headless applications have no vsync to pace
+		// them and would otherwise keep a CPU core busy.
+		uint32_t MaxFrameRate = 0;
 	};
 
 	class Application

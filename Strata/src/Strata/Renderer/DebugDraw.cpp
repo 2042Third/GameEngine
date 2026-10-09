@@ -39,7 +39,14 @@ namespace Strata
 
 	uint32_t DebugDraw::PackColor(const glm::vec4& color)
 	{
-		const glm::vec4 clamped = glm::clamp(color, glm::vec4(0.0f), glm::vec4(1.0f)) * 255.0f + 0.5f;
+		// Non-finite components become 0 first: clamp keeps NaN, and converting NaN to an integer is undefined.
+		glm::vec4 finite = color;
+		for (int component = 0; component < 4; component++)
+		{
+			if (!std::isfinite(finite[component]))
+				finite[component] = 0.0f;
+		}
+		const glm::vec4 clamped = glm::clamp(finite, glm::vec4(0.0f), glm::vec4(1.0f)) * 255.0f + 0.5f;
 		return static_cast<uint32_t>(clamped.r) | (static_cast<uint32_t>(clamped.g) << 8) | (static_cast<uint32_t>(clamped.b) << 16)
 			| (static_cast<uint32_t>(clamped.a) << 24);
 	}

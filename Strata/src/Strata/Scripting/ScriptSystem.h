@@ -71,6 +71,9 @@ namespace Strata
 		std::optional<PropertyValue> GetFieldValue(Entity entity, std::string_view className, std::string_view fieldName) const;
 		// Assigns a field of a live instance (the value must have the field's type).
 		bool SetFieldValue(Entity entity, std::string_view className, std::string_view fieldName, const PropertyValue& value);
+		// How often an entity's instances were matched against its Script component since the system was created
+		// (diagnostics: the work grows with the number of changed entities, not with their square).
+		uint64_t GetReconcileCount() const { return m_ReconcileCount; }
 
 		//////////////////////////////////////////////////////////////////////////
 		// Script host API support
@@ -135,7 +138,13 @@ namespace Strata
 		void ApplyFieldOverrides(Instance& instance, const std::vector<ScriptFieldValue>& fields, bool reportProblems);
 		void DestroyInstance(Instance& instance, bool callOnDestroy);
 		void DestroyAllInstances(bool callOnDestroy);
+		// Destroys the instances RemoveScript flagged (OnDestroy, then deletion) in reverse `order` without creating any:
+		// where the sync point that would destroy them does not come in time.
+		void DestroyRemovedInstances(std::vector<Ref<Instance>> order);
+		// Drops the entity's instances that are removed and deleted. Flagged instances whose script object still exists
+		// stay until they are destroyed: dropping them would leak them without OnDestroy.
 		void RemoveDestroyedInstances(UUID entity);
+		static bool IsDestroyed(const Ref<Instance>& instance) { return instance->Removed && !instance->Handle; }
 		void RebuildUpdateOrder();
 		// Every instance in update order, followed by those of entities that left the scene without notice.
 		std::vector<Ref<Instance>> CollectInstances();
@@ -155,6 +164,11 @@ namespace Strata
 
 		std::vector<UUID> m_DirtyEntities; // Script components changed since the last sync point (in change order)
 		std::unordered_set<UUID> m_DirtySet;
+		// Changed entities the next creation-only pass (CreatePendingInstances) takes; the cursor is shared by nested passes.
+		std::vector<UUID> m_CreationQueue;
+		std::unordered_set<UUID> m_CreationQueued;
+		size_t m_CreationCursor = 0;
+		uint64_t m_ReconcileCount = 0;
 		bool m_ReconcileAll = false;
 		std::vector<UUID> m_DeferredDestroys;
 

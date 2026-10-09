@@ -75,11 +75,16 @@ namespace Strata
 		static std::filesystem::path GetSessionFilePath(const std::filesystem::path& sessionDirectory, uint32_t processId);
 		static std::filesystem::path GetProjectSessionFilePath(const std::filesystem::path& projectDirectory);
 
-		// Writes the per-process file and, when ProjectPath is set, the project pointer.
+		// Writes the per-process file and, when ProjectPath is set, the project pointer. Writing again replaces the
+		// per-process file atomically, e.g. after the editor opened another project (remove the old project's pointer
+		// with RemoveProjectPointer). Returns false only when the per-process file cannot be written: the pointer is
+		// best-effort (a warning), since clients also find sessions by the ProjectPath they record.
 		static bool WriteSessionFiles(const EditorSessionInfo& info, std::string* error = nullptr);
-		// Removes the per-process file, and the project pointer if it still refers to info's process (another
-		// editor may have opened the project since; its pointer is left alone).
+		// Removes the per-process file and the project pointer (see RemoveProjectPointer).
 		static void RemoveSessionFiles(const EditorSessionInfo& info);
+		// Removes the pointer in info's project if it still refers to info's session (another editor may have opened
+		// the project since; its pointer is left alone). Nothing happens without a ProjectPath.
+		static void RemoveProjectPointer(const EditorSessionInfo& info);
 
 		// Sessions of running editors in the directory, newest (StartedAt) first. Files of editors that have exited
 		// are deleted; sessions that cannot be verified and untrusted files are skipped. Callers still verify

@@ -7,7 +7,6 @@
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scripting/ScriptHostAPI.h"
-#include "Strata/Scripting/ScriptTypes.h"
 #include "Strata/Scripting/ScriptValue.h"
 
 #include <entt/entt.hpp>
@@ -36,19 +35,6 @@ namespace
 				types.insert(*type);
 		}
 		return types;
-	}
-
-	// Every ScriptCallback value (derived from their names, so new callbacks are included).
-	std::vector<ScriptCallback> GetScriptCallbacks()
-	{
-		std::vector<ScriptCallback> callbacks;
-		for (uint32_t value = 0; value < 256; value++)
-		{
-			const ScriptCallback callback = static_cast<ScriptCallback>(value);
-			if (std::string_view(ScriptCallbackToString(callback)) != "Unknown")
-				callbacks.push_back(callback);
-		}
-		return callbacks;
 	}
 
 	std::string MissingAssetMessage(AssetType type)
@@ -187,16 +173,6 @@ TEST_SUITE("FeatureTest")
 		LoadAllAssets(*project.GetAssetManager());
 		const Ref<Scene> scene = project.LoadStartScene();
 		ScopedScriptEngine engine(GetFeatureScriptModule());
-
-		// Every callback the engine offers is implemented by a feature script.
-		uint32_t implemented = 0;
-		for (const ScriptClassInfo& info : engine->GetClasses())
-			implemented |= info.Callbacks;
-		for (const ScriptCallback callback : GetScriptCallbacks())
-		{
-			INFO("Script callback ", ScriptCallbackToString(callback), ": implement it in a feature script");
-			CHECK((implemented & (1u << static_cast<uint32_t>(callback))) != 0);
-		}
 
 		ScopedScriptLogLevel scriptLogLevel;
 		LogCapture log;

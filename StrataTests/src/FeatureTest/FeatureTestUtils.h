@@ -22,8 +22,9 @@
 
 // The feature test: the project in StrataTests/FeatureTest (a scene with every component, assets of every type and a
 // script module exercising the whole script API) and the helpers its runners share. The headless runner
-// (FeatureTests.cpp), the GPU runner (GPUFeatureTests.cpp) and the editor runner (Editor/EditorFeatureTests.cpp) play the
-// same scenario. See AGENTS.md, "Testing".
+// (FeatureTests.cpp) and the editor runner (Editor/EditorFeatureTests.cpp, which also plays the exported game) play the
+// scripted scenario of PlayFeatureScene; the GPU runner (GPUFeatureTests.cpp) only renders the scene, without scripts.
+// See AGENTS.md, "Testing".
 namespace Strata::Tests
 {
 
@@ -101,7 +102,7 @@ namespace Strata::Tests
 	void CheckFeatureResults(Scene& scene, const ScriptEngine& engine);
 
 	// After stopping: the scene's journal ("<Class>.<Event>@<Entity>" entries the scripts record) shows that every class
-	// of the module ran, and the destruction and reload events.
+	// of the module ran, that every script callback the engine offers was called, and the destruction and reload events.
 	void CheckFeatureJournal(Scene& scene, const ScriptEngine& engine);
 
 	// The log of `runs` feature runs: every message the feature scripts log on purpose once per run, and no other warning

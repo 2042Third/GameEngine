@@ -27,7 +27,8 @@ namespace Strata
 
 	// Diagnostics: every function of the host API table in declaration order, with the number of calls made through the
 	// table (by any module, scene or thread; calls that were rejected count too) since the process started or the last
-	// reset. The feature test uses it to prove that every host function is exercised. Thread-safe.
+	// reset. The feature test uses it to prove that every host function is exercised. Thread-safe. Dist builds do not
+	// count (host calls go straight to the implementation): there the list is empty and resetting does nothing.
 	std::vector<ScriptHostFunctionCalls> GetScriptHostCallCounts();
 	void ResetScriptHostCallCounts();
 

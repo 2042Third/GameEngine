@@ -242,11 +242,12 @@ namespace Strata
 	{
 		ma_sound& sound = m_Data->Sound;
 
-		// A voice that reached the end stays in the started state until the audio thread processes it once more, and
-		// ma_sound_start ignores voices that still report playing. Stopping first guarantees that ma_sound_start
-		// sees a stopped, finished voice, which it rewinds and restarts.
+		// A voice that played to its end stays started until the audio thread processes it once more, and that pass stops
+		// it. A restart from here (ma_sound_start rewinds it and marks it started) can be undone by that deferred stop, and
+		// would be lost silently, so finished voices are replaced instead (see AudioSource::Play). The audio thread may
+		// mark the voice finished at any moment, including right after a caller checked HasEnded: then this returns false.
 		if (ma_sound_at_end(&sound))
-			Stop();
+			return false;
 
 		const ma_result result = ma_sound_start(&sound);
 		if (result != MA_SUCCESS)
@@ -269,6 +270,11 @@ namespace Strata
 	{
 		const ma_sound& sound = m_Data->Sound;
 		return ma_sound_is_playing(&sound) && !ma_sound_at_end(&sound);
+	}
+
+	bool AudioVoice::HasEnded() const
+	{
+		return ma_sound_at_end(&m_Data->Sound);
 	}
 
 	bool AudioVoice::HasStarted() const
@@ -297,7 +303,11 @@ namespace Strata
 
 	void AudioVoice::SetVolume(float volume)
 	{
-		ma_sound_set_volume(&m_Data->Sound, volume);
+		// The volume of the voice's output bus, applied by the node graph, is atomic; ma_sound_set_volume writes a plain
+		// float the audio thread reads while mixing.
+		const ma_result result = ma_node_set_output_bus_volume(&m_Data->Sound, 0, volume);
+		if (result != MA_SUCCESS)
+			ST_CORE_ERROR("AudioVoice: failed to set the volume of '{}' ({})", m_Data->Clip->GetDebugName(), ma_result_description(result));
 	}
 
 	void AudioVoice::SetPitch(float pitch)

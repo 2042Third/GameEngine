@@ -1,10 +1,17 @@
 // Scripts that crash on purpose, for the crash containment tests.
 
+// assert() stays active in every configuration: the "Assert" fault needs it.
+#undef NDEBUG
+#include <cassert>
+
 #include "StrataScript/StrataScript.h"
 
 #include <chrono>
 #include <climits>
 #include <cstdint>
+#include <cstdlib>
+#include <exception>
+#include <stdexcept>
 #include <string>
 
 using namespace Strata;
@@ -22,6 +29,17 @@ namespace
 		if (currentDepth == INT_MAX)
 			return 0;
 		return Recurse(currentDepth + 1) + padding[0];
+	}
+
+	void Throw()
+	{
+		throw std::runtime_error("This exception leaves a noexcept function on purpose");
+	}
+
+	// An exception leaving a noexcept function calls std::terminate.
+	void ThrowThroughNoexcept() noexcept
+	{
+		Throw();
 	}
 
 	void Crash(const std::string& kind)
@@ -42,11 +60,29 @@ namespace
 			volatile int result = Recurse(0);
 			(void)result;
 		}
+		else if (kind == "Abort")
+		{
+			std::abort();
+		}
+		else if (kind == "Assert")
+		{
+			volatile bool holds = false;
+			assert(holds && "This assertion fails on purpose");
+		}
+		else if (kind == "Terminate")
+		{
+			std::terminate();
+		}
+		else if (kind == "TerminateFromNoexcept")
+		{
+			ThrowThroughNoexcept();
+		}
 	}
 
 }
 
-// Crashes with Fault ("NullDereference", "DivideByZero" or "StackOverflow") in the callback named by FaultIn.
+// Crashes with Fault ("NullDereference", "DivideByZero", "StackOverflow", "Abort", "Assert", "Terminate" or
+// "TerminateFromNoexcept") in the callback named by FaultIn.
 class Faulty : public Script
 {
 public:

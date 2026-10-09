@@ -95,6 +95,12 @@ namespace Strata
 		// added, an asset was unloaded or unregistered), so that caches of data derived from loaded assets can check
 		// cheaply whether to revalidate.
 		uint64_t GetContentVersion() const { return m_ContentVersion.load(std::memory_order_acquire); }
+		// Appends the handles of the assets whose objects changed after content version `sinceVersion` (a handle may appear
+		// more than once), so that such caches revalidate only what changed. Returns false, appending nothing, if the
+		// manager no longer remembers that far back (it keeps the latest c_MaxContentChanges changes): then any asset may
+		// have changed.
+		bool GetContentChanges(uint64_t sinceVersion, std::vector<AssetHandle>& outHandles) const;
+		static constexpr size_t c_MaxContentChanges = 4096;
 	protected:
 		// Reads the stored bytes of an asset. Called on I/O threads; must be thread-safe.
 		virtual bool ReadAssetData(const AssetMetadata& metadata, std::vector<uint8_t>& outData, std::string* outError) = 0;
@@ -130,7 +136,15 @@ namespace Strata
 
 		struct LoadState;
 
+		struct ContentChange
+		{
+			uint64_t Version = 0; // Content version the change produced
+			AssetHandle Handle = UUID::Null();
+		};
+
 		static void PushCompletion(const Ref<LoadState>& loadState, Completion completion) noexcept;
+		// Advances the content version for a changed asset object and remembers the change. Requires m_Mutex.
+		void PublishContentChange(AssetHandle handle);
 		// Finalizes queued completions; returns the number processed. With a budget, stops once it is exceeded.
 		size_t ProcessCompletions(bool applyBudget);
 	private:
@@ -144,6 +158,7 @@ namespace Strata
 		nvrhi::CommandListHandle m_UploadCommandList;
 		std::atomic<uint64_t> m_UploadBudget = 256ull * 1024 * 1024;
 		std::atomic<uint64_t> m_ContentVersion = 0; // See GetContentVersion; changed with m_Mutex held
+		std::deque<ContentChange> m_ContentChanges; // The latest changes, oldest first (guarded by m_Mutex)
 		bool m_ProcessingCompletions = false; // Main thread only
 	};
 

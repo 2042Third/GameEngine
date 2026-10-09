@@ -69,23 +69,23 @@ TEST_SUITE("Renderer.Text")
 		CHECK(&atlas->GetGlyph(0x7FFFFFFF) == &missing);
 
 		// The texels inside a glyph are above the on-edge value, the border of its rectangle far below.
-		const std::vector<uint8_t>& pixels = atlas->GetPixels();
-		const glm::uvec2 size = atlas->GetSize();
+		const std::vector<uint8_t>& pixels = atlas->GetPagePixels(letter.Page);
+		auto texel = [&](uint32_t x, uint32_t y) { return pixels[static_cast<size_t>(y) * FontAtlas::c_PageSize + x]; };
 		uint8_t brightest = 0;
 		for (uint32_t y = letter.AtlasPosition.y; y < letter.AtlasPosition.y + letter.AtlasSize.y; y++)
 		{
 			for (uint32_t x = letter.AtlasPosition.x; x < letter.AtlasPosition.x + letter.AtlasSize.x; x++)
-				brightest = std::max(brightest, pixels[static_cast<size_t>(y) * size.x + x]);
+				brightest = std::max(brightest, texel(x, y));
 		}
 		CHECK(brightest > 160);
-		CHECK(pixels[static_cast<size_t>(letter.AtlasPosition.y) * size.x + letter.AtlasPosition.x] < 40);
+		CHECK(texel(letter.AtlasPosition.x, letter.AtlasPosition.y) < 40);
 	}
 
-	TEST_CASE("The atlas grows to hold many glyphs without overlapping them")
+	TEST_CASE("The atlas adds pages to hold many glyphs without overlapping them")
 	{
 		Scope<FontAtlas> atlas = FontAtlas::Create(Font::GetDefault());
 		REQUIRE(atlas);
-		const uint32_t initialHeight = atlas->GetSize().y;
+		CHECK(atlas->GetPageCount() == 0);
 		std::vector<const GlyphInfo*> glyphs;
 		for (uint32_t codepoint = 0x21; codepoint < 0x500; codepoint++) // Latin, Greek and Cyrillic
 		{
@@ -94,17 +94,19 @@ TEST_SUITE("Renderer.Text")
 				glyphs.push_back(&glyph);
 		}
 		CHECK(glyphs.size() > 500);
-		CHECK(atlas->GetSize().y > initialHeight);
-		const glm::uvec2 size = atlas->GetSize();
+		CHECK(atlas->GetPageCount() > 1);
+		CHECK(atlas->GetPageCount() <= FontAtlasSpecification().MaxPages);
+		CHECK(atlas->GetStats().EvictedGlyphs == 0);
 		for (size_t first = 0; first < glyphs.size(); first++)
 		{
 			const GlyphInfo& a = *glyphs[first];
-			REQUIRE(a.AtlasPosition.x + a.AtlasSize.x <= size.x);
-			REQUIRE(a.AtlasPosition.y + a.AtlasSize.y <= size.y);
+			REQUIRE(a.Page < atlas->GetPageCount());
+			REQUIRE(a.AtlasPosition.x + a.AtlasSize.x <= FontAtlas::c_PageSize);
+			REQUIRE(a.AtlasPosition.y + a.AtlasSize.y <= FontAtlas::c_PageSize);
 			for (size_t second = first + 1; second < glyphs.size(); second++)
 			{
 				const GlyphInfo& b = *glyphs[second];
-				const bool separate = a.AtlasPosition.x + a.AtlasSize.x <= b.AtlasPosition.x || b.AtlasPosition.x + b.AtlasSize.x <= a.AtlasPosition.x
+				const bool separate = a.Page != b.Page || a.AtlasPosition.x + a.AtlasSize.x <= b.AtlasPosition.x || b.AtlasPosition.x + b.AtlasSize.x <= a.AtlasPosition.x
 					|| a.AtlasPosition.y + a.AtlasSize.y <= b.AtlasPosition.y || b.AtlasPosition.y + b.AtlasSize.y <= a.AtlasPosition.y;
 				REQUIRE(separate);
 			}

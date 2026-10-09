@@ -44,7 +44,7 @@ namespace Strata
 		// Once per frame: polls the pending commands in the order they were issued. Commands issued by completions are
 		// polled from the next frame on.
 		void Update(EditorContext& context);
-		// Completes every pending command with the error `reason` (e.g. the editor is closing).
+		// Completes every pending command with a Cancelled error carrying `reason` (e.g. the editor is closing).
 		void CancelAll(const std::string& reason);
 
 		size_t GetPendingCount() const;
@@ -65,15 +65,28 @@ namespace Strata
 	};
 
 	// A list of commands run one after another, e.g. `StrataEditor --commands script.json`: a JSON array of
-	// {"command": name, "parameters": {...}} ("parameters" is optional). A pending command holds the script until it
-	// completes. A failed command is logged and marks the script as failed; the following commands still run.
+	// {"command": name, "parameters": {...}, "expect": {...}} ("parameters" and "expect" are optional). A pending command
+	// holds the script until it completes. A failed command is logged and marks the script as failed; the following
+	// commands still run. "expect" checks the result of a successful command: it maps JSON pointers into the result
+	// ("" is the whole result, "/values/Translation/1" an element) to conditions {"equals": value, "min": number,
+	// "max": number} (any of them); a result that does not meet them fails the step like a failed command.
 	class EditorCommandScript
 	{
 	public:
+		struct Expectation
+		{
+			std::string Pointer;           // As written in the script, for messages
+			std::vector<std::string> Path; // The pointer's reference tokens
+			std::optional<nlohmann::json> Equals;
+			std::optional<double> Min;
+			std::optional<double> Max;
+		};
+
 		struct Step
 		{
 			std::string Command;
 			nlohmann::json Parameters;
+			std::vector<Expectation> Expectations;
 		};
 
 		static Scope<EditorCommandScript> FromJson(const nlohmann::json& json, std::string* outError = nullptr);

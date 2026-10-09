@@ -29,13 +29,13 @@ This file is the source of truth for how to work on Strata. Read it fully before
 | --- | --- |
 | `Strata/` | Engine static library. `src/Strata/<Module>/` holds the engine modules, `src/Platform/<OS or backend>/` the platform implementations, `shaders/` the GLSL sources, `vendor/` the pinned third-party submodules. |
 | `StrataEditor/` | Editor executable (ImGui docking UI, gizmos, undo/redo, automation server). |
-| `StrataRuntime/` | Runtime executable that plays exported games (`GameRuntime`): it runs the `.stgame` manifest next to it, or `--game <file>`; `--headless` runs without window and GPU (servers, CI). |
+| `StrataRuntime/` | Runtime executable that plays exported games (`GameRuntime`, drawn by `GameRenderer`): it runs the `.stgame` manifest next to it, or `--game <file>`; `--headless` runs without window and GPU (servers, CI); `--screenshot out.png` with `--frames N` saves the last frame (and fails the run when it shows the missing-camera message). |
 | `StrataScriptCore/` | Script ABI (C header) and the header-only C++ SDK game scripts are written against. Script modules never link the engine. |
 | `StrataCLI/` | Command-line client for the editor automation API; also an MCP server (`StrataCLI mcp`). |
 | `StrataTests/` | doctest unit tests, test helpers, and the feature test project. |
 | `CMake/` | CMake modules (configurations, compiler options, shader compilation, manifest). |
 | `Docs/` | Architecture and API documentation. |
-| `.claude/skills/` | Task-specific skills for agents (build/test, adding components, script API, game creation). |
+| `.claude/skills/` | Task-specific skills for agents (build/test, adding components, script API, editor automation, game creation). |
 
 Engine modules (`Strata/src/Strata/`): `Core` (application, logging, jobs, platform services),
 `Events`, `Input`, `Math`, `Reflection`, `Scene` (ECS, components, serialization, prefabs),
@@ -93,7 +93,13 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   devices in tests) and end with `CHECK(gpu.GetNewErrorCount() == 0)`, so validation errors fail the
   test. Run them under the Khronos validation layer locally by pointing `VK_ADD_LAYER_PATH` at its
   build. Rendering features are tested on pixels read back with `Renderer::ReadTexture`.
-- Use `Strata::Tests::CreateTemporaryDirectory()` for files; never write into the source tree.
+- Suites whose names start with `EndToEnd` start the built `StrataEditor` and `StrataCLI` (paths in
+  `STRATA_TEST_EDITOR_PATH`/`STRATA_TEST_CLI_PATH`, else next to the test executable) and run as the CTest
+  `StrataEditor.Automation`, not in `StrataTests.Core`. They need no GPU (`--no-gpu`), use private session
+  directories, free ports and timeouts, and terminate the processes they started when they fail.
+- Use `Strata::Tests::CreateTemporaryDirectory()` for files; never write into the source tree. The test process sets
+  `STRATA_RUNTIME_DIR` to a private temporary directory (`TestMain.cpp`), so runtime files such as script module copies
+  never go to the user's runtime directory; helper processes inherit it.
 - `StrataTests.exe --strata-test-helper=<mode>` turns the test binary into a child process for
   process tests (see `TestMain.cpp`), so tests never depend on external programs. With `STRATA_TEST_FAKE_CMAKE=succeed`
   it also stands in for CMake in script builds (`ScriptBuildSettings::CMake`), building nothing.
@@ -103,22 +109,35 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   its script module `Scripts/` (target `StrataTestScriptsFeatureTest`) exercises the whole script SDK. Feature scripts
   derive from `FeatureTest::FeatureScript`: `Expect(condition, "description")` counts checks and keeps the first
   failure, `Completed` marks the end of a scenario, and `Journal()` records events in the scene's "Journal" entity.
-  Every runner plays the same scenario (200 frames, simulated input, a hot reload of the module halfway):
-  - `StrataTests.FeatureTest` (label `feature`, no GPU): suite `FeatureTest` (`src/FeatureTest/`, headless) and
-    `Editor.FeatureTest` (editor commands in-process, then the exported game in `GameRuntime`);
-  - `GPU.FeatureTest` (in `StrataTests.GPU`): renders the scene, checks entities in the ID buffer, text and stats;
+  The runners:
+  - `StrataTests.FeatureTest` (label `feature`, no GPU) plays the scripted scenario (`PlayFeatureScene`: 200 frames,
+    simulated input, a hot reload of the module halfway) three times: headless (suite `FeatureTest`,
+    `src/FeatureTest/`), through editor commands in-process, and in the exported game in `GameRuntime` (suite
+    `Editor.FeatureTest`);
+  - `GPU.FeatureTest` (in `StrataTests.GPU`) renders the scene for 4 frames without playing it (no scripts) and checks
+    entities in the ID buffer, text and stats;
   - `StrataEditor.FeatureTest` and `StrataRuntime.FeatureTest` (label `feature`): the real executables open a copy of
-    the project, load the feature scripts (`script.load`), step, export it with the module and run it headless; they
-    must exit cleanly and print what the scripts log (`StrataTests/Editor/RunAndExpect.cmake`).
+    the project, load the feature scripts (`script.load`), step the physics (`expect` conditions on the ball and on
+    `script.status`), export it with the module and run it headless; they must exit cleanly and print what the
+    scripts log (`StrataTests/Editor/RunAndExpect.cmake`).
 - **The feature test enforces coverage.** It fails when:
   - a registered component is missing from the feature scene, or a property has its default value on every entity
     with the component (new properties need a non-default value there, which also proves that they serialize);
-  - a script field type is not overridden in the scene, or a `ScriptCallback` is implemented by no feature script;
+  - a script field type is not overridden in the scene: every C++ type the SDK accepts for fields
+    (`Detail::c_IsFieldType` in `StrataScript/Script.h`) needs a feature script field of that type, registered with
+    `ST_SCRIPT_FIELD` and overridden in `Feature.stscene` (and every engine property type fields map to is overridden);
+  - a `ScriptCallback` was never called during the run (feature scripts journal their callbacks, `LifecycleFeatures`
+    the first call of each, and the runners look for an entry of every callback in the journal);
   - a host function of `StrataScriptHostAPI` was never called during the run. `GetScriptHostCallCounts()`
-    (`Scripting/ScriptHostAPI.h`) counts calls per table entry; the table is built from `ST_SCRIPT_HOST_FUNCTIONS` in
-    `ScriptHostAPI.cpp`, and a `static_assert` fails the build when that list and the struct disagree;
-  - a public SDK class, member function or macro (`StrataScript/*.h` outside `Detail`) is not used by the feature
-    scripts (`SDKCoverageTests.cpp` reads the headers; the check is by name, so overloads count together);
+    (`Scripting/ScriptHostAPI.h`) counts calls per table entry (Dist builds do not count); the table is built from
+    `ST_SCRIPT_HOST_FUNCTIONS` in `ScriptHostAPI.cpp`, and a `static_assert` fails the build when that list and the
+    struct disagree;
+  - a public SDK class, function or macro (`StrataScript/*.h` outside `Detail`) is not used by the feature scripts.
+    `SDKCoverageTests.cpp` reads the headers and the scripts with `src/FeatureTest/SDKReader.h`: a function counts only
+    when a script calls it on its class — static functions as `Class::Name`, member functions on a receiver whose type
+    the reader knows (a variable, field or parameter declared with the type, `auto` from such an expression, a call
+    returning it, `this`), inherited ones unqualified inside a script class, virtual ones by an `override`. Overloads
+    count together; calls on receivers of unknown type do not count, and the failure lists them;
   - a feature script fails a check or does not complete, a script class never runs, or the run logs a warning or error
     other than the messages the scripts log on purpose (`c_ExpectedLogMessages` in `FeatureTestUtils.cpp`);
   - an asset type has no asset in the project, an asset imports with warnings, or importing rewrites a `.meta` file.
@@ -130,12 +149,14 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   scripts log on purpose go into `c_ExpectedLogMessages`.
 - Script modules the tests load are CMake targets in `StrataTests/CMakeLists.txt` (sources in `StrataTests/Scripts/`),
   built with the tests. The CTest `StrataScriptCore.Package` (label `package`) builds `StrataTests/PackageProject` through
-  the StrataScriptCore package the way a game project does; it needs CMake and the compiler at test time, like the other
-  `package` tests: `StrataTests.Package` (doctest suites named `Package*`, e.g. `Package.ScriptBuild`: script.build,
-  hot reload while playing, compiler diagnostics, export) and `StrataEditor.Scripts` (`Editor/ScriptsEndToEnd.cmake`:
-  the real editor creates a project, builds and attaches a script, plays and exports, and the game runs headless).
-  The `Package*` suites build in the system temp directory, where MSBuild does not track files (MSB8029) and may relink
-  unchanged modules: do not rely on a build leaving the module unchanged there (use the fake CMake instead).
+  the StrataScriptCore package the way a game project does (and checks that the package's glm definitions match the
+  engine's glm target), `StrataScriptCore.PackageDist` the same in the Dist configuration; they need CMake and the
+  compiler at test time, like the other `package` tests: `StrataTests.Package` (doctest suites named `Package*`, e.g.
+  `Package.ScriptBuild`: script.build, hot reload while playing, compiler diagnostics, export) and
+  `StrataEditor.Scripts` (`Editor/ScriptsEndToEnd.cmake`: the real editor creates a project, builds and attaches a
+  script, plays and exports, and the game runs headless). The `Package*` suites build in the system temp directory,
+  where MSBuild does not track files (MSB8029) and may relink unchanged modules: do not rely on a build leaving the
+  module unchanged there (use the fake CMake instead).
 
 ## Code style (Hazel conventions)
 
@@ -258,6 +279,9 @@ ABI rules:
 - Only plain C data crosses the boundary: strings as (pointer, size) UTF-8, entities and assets as 64-bit UUIDs, math
   as float arrays (quaternions x, y, z, w), booleans as `bool`. No STL types, no engine types, no exceptions: the SDK
   catches every exception in the module and reports it through `ReportException` (the instance is disabled).
+- The module description (`StrataScriptModuleAPI`) is the only extensible struct a module writes into engine memory:
+  the engine announces its size in `StructSize`, the module writes at most that much and reports its own size
+  (`Detail::WriteModuleAPI`), so modules of a newer SDK with appended members load into older engines safely.
 - Every call into module code goes through `ScriptModule` (`CrashGuard`), including loading and unloading the library.
   Module memory (descriptors, strings) is read only inside guarded calls; copy it into locals of the guarded lambda,
   then move the complete result out, so a fault can never leave engine objects half-written.
@@ -331,16 +355,61 @@ Building and loading scripts:
   scene plays. A script crash disables the scripts for the session (`GameRuntime::GetScriptFault`): a headless
   `StrataRuntime` exits with code 2, a windowed one keeps running and logs it.
 - The host: `ScriptEngine::LoadModule(path)`, `ScriptEngine::SetActive(engine)` before scenes start playing,
-  `SetHotReloadEnabled(true)` and `Update()` once per frame (outside scene updates) for hot reload. The module is loaded
-  from a private temporary copy, so the build can overwrite the original at any time; a failed (re)load keeps the
-  running module. Poll `IsFaulted()`/`GetFault()` to stop play mode after a crash; reloading clears the fault.
+  `SetHotReloadEnabled(true)` (before loading) and `Update()` once per frame (outside scene updates) for hot reload. With
+  hot reload the module runs from a private copy in a directory only the user can modify
+  (`Platform::GetUserRuntimeDirectory`; one directory per process, removed with its last copy; the process holds a
+  `FileLock` in it while it runs, so other sessions remove only directories whose owner is gone), so the build can
+  overwrite the original at any time; without it (shipped games) the module loads in place. A file that is already
+  loaded (a reload, another engine) is always loaded from a copy, because loading it again would share the running
+  module's state. A failed (re)load keeps the running module. Poll `IsFaulted()`/`GetFault()` to stop play mode after a
+  crash; reloading clears the fault.
+- Shared libraries a module links against: on Windows they are found next to the module file, also when it runs from a
+  copy (the original's directory is searched, never the current directory or PATH). On Linux and macOS the loader
+  resolves them through the module's RUNPATH: CMake's default (absolute) build RPATH works, but `$ORIGIN` /
+  `@loader_path` name the directory of the file actually loaded, which is the private copy's directory under hot reload.
 - Hot reload during play snapshots every instance's fields, deletes the instances (no `OnDestroy`), loads the new
   module, recreates the instances, restores fields that still exist with the same name and type and calls `OnReload`
   (not `OnCreate`). Classes that disappeared lose their instances; new classes start normally.
+- Contained: access violations, division by zero, stack overflow, C++ exceptions escaping module code and, on Windows,
+  `abort()` (also from a failed `assert()` and from `std::terminate`: modules turn it into
+  `ST_SCRIPT_ABORT_EXCEPTION_CODE` through a SIGABRT handler `ScriptModuleEntry.cpp` installs in their static C
+  runtime before the module's own static initializers run; an abort in one of those fails the load). On Linux and
+  macOS `abort()` is reported on stderr and ends the process: the C library also aborts on heap corruption while it
+  holds allocator locks, and jumping out would leave them locked (the next allocation would hang).
 - Limitations: native code cannot be preempted (an infinite loop blocks the main thread; `SetWatchdogTimeout` reports
-  long calls); a crash inside a module's static initializers or destructors is reported, but may leave the platform
-  loader in an undefined state; `std::terminate` (an exception leaving a `noexcept` function or a destructor) ends the
-  process; memory of instances abandoned after a crash is leaked.
+  long calls); a crash inside a module's static initializers or destructors fails the load or abandons the library (the
+  Windows loader contains it itself; elsewhere it is reported), but may make the process crash when it exits, and
+  outside Windows may leave the platform loader in an undefined state (the engine logs that a restart is recommended
+  and loads that file only from copies until then, so the loader never hands out the broken library again); after
+  `std::terminate` the C++ runtime keeps the abandoned exception; stray writes into engine memory are not detected;
+  memory of instances abandoned after a crash is leaked. Not contained (the process
+  ends): Windows fail-fast terminations (`__fastfail`: `/GS` buffer overrun checks, C runtime invalid-parameter
+  failures, heap corruption the system detects), `abort()` in Windows modules with a dynamically linked C runtime
+  (`/MD`) or without the SDK's entry points (`NO_SDK_ENTRY`), and calls that end the process (`exit`,
+  `TerminateProcess`).
+
+## Audio
+
+`Strata/src/Strata/Audio/` holds `AudioEngine` (the miniaudio mixer, output device and listener), `AudioClip` (sound data,
+decoded or streamed; `AudioClipAsset` is its asset), `AudioSource` (a voice with volume, pitch, looping and 3D settings)
+and `AudioSystem`, the built-in "Audio" scene system.
+
+- **Initialization:** `Application` initializes the `AudioEngine` (`ApplicationSpecification::EnableAudio`, on by default)
+  and shuts it down after the layers, so editor play mode and exported games produce sound without further setup.
+  Headless runs (`--headless`, the editor's `--no-gpu`) and machines without an output device mix without a device (the
+  null device); the application advances it by the frame time (`AudioEngine::AdvanceNullDevice`), so sounds still
+  progress and end. Tests initialize the null device themselves and pull the mix with `AudioEngine::ReadFrames` to
+  measure levels (`StrataTests/src/Audio/AudioTestUtils.h`).
+- **Scenes:** `AudioSystem` runs in Play mode only (not in Simulate mode) and updates in `OnLateUpdate`, after scripts and
+  physics. Every active entity with an `AudioSourceComponent` owns an `AudioSource`, released when the component, the
+  entity or its activity goes away. Clips load asynchronously and start once ready (`PlayOnStart` or `Play`). Component
+  values are compared with the applied ones every frame, so plain field writes apply without a signal. Spatial sources
+  follow their world transform; their velocity (Doppler) is their rigid body's, or else derived from their moves. The
+  listener is the first active `AudioListenerComponent` in hierarchy order, else the primary camera. Pausing the scene
+  (`Scene::SetPaused`, which calls `SceneSystem::OnPausedChanged`) pauses its sound; stopping it releases every voice.
+- **Gameplay API:** `AudioSystem::Play`, `Pause`, `Stop`, `IsPlaying`, `Seek` and `GetPlaybackPosition` per entity,
+  `PlayOneShot`/`PlayOneShotAt` by clip handle and the engine-wide master volume. Game code goes through the system rather
+  than `AudioEngine` directly, so that its sounds pause and stop with the scene.
 
 ## Editor
 
@@ -355,9 +424,14 @@ Building and loading scripts:
   automation exposes them as tools, so descriptions must tell an agent what the command does. Use
   `CommandArguments` to read parameters (no exceptions), reject invalid input without side effects
   (roll back the transaction) and record exactly one undo step per successful mutating command.
+  Failures carry an `EditorCommandError` kind: a request the command cannot accept (unknown, missing or
+  mistyped parameter, a reference to nothing) is `InvalidParameters` (`CommandArguments::Fail`,
+  `EditorCommandResult::InvalidParameters`); a valid request that cannot be carried out in the current
+  state is `Failed` (`EditorCommandResult::Fail`). Automation reports them with different error codes.
 - Undo works on entity snapshots: a `SceneEditTransaction` captures the entities an edit touches
   (`Track`, `TrackSubtree` before changing or deleting them, `TrackCreated` after creating them) and
-  `EditorContext::CommitEdit` records the difference. Edits while playing are not recorded.
+  `EditorContext::CommitEdit` records the difference. Edits while playing are not recorded. Continuous edits merge
+  into one step (`EditorAction::MergeWith`); a merged step that ends where it started (`IsNoOp`) is dropped.
 - `project.export` writes a playable game outside the project: the asset pack (`<Game>.stpak`), the script module, the
   manifest (`<Game>.stgame`, start scene, script module and window settings) and the runtime executable renamed after
   the game. CTest exports a small game (`StrataEditor --no-gpu`) and runs it headless.
@@ -374,17 +448,57 @@ Building and loading scripts:
   run commands through the runner (UI helpers that expect an immediate result reject pending ones).
   Poll functions own their data (copy parameters, never capture them by reference). `editor.wait
   {frames}` returns after that many frames, e.g. to let a playing scene run.
-- `StrataEditor --commands script.json` runs a JSON array of `{"command", "parameters"}` at startup
-  (`EditorCommandScript`); a pending command holds the script until it completes. If a command fails,
-  or the script has not finished by the last of `--frames N` frames, the process exit code becomes 1.
+- `StrataEditor --commands script.json` runs a JSON array of `{"command", "parameters", "expect"}` at startup
+  (`EditorCommandScript`); a pending command holds the script until it completes. `expect` (optional) maps JSON
+  pointers into the command's result to conditions, e.g. `{"/values/Translation/1": {"min": 1.6, "max": 1.7}}` or
+  `{"/state": {"equals": "Play"}}`; a result that does not meet them fails the step. If a command or an expectation
+  fails, or the script has not finished by the last of `--frames N` frames or by `editor.quit`, the process exit code
+  becomes 1.
   `--frames N` stops after N frames (without saving the panel layout), `--screenshot out.png` captures
-  the last frame, `--no-gpu` runs headless without a graphics device (export, asset processing), and
-  `--quit-after-commands` closes the editor once the command script finished (for scripts of unknown length, e.g.
+  the last frame (viewport included), `--no-gpu` runs headless without a graphics device (export, asset processing),
+  and `--quit-after-commands` closes the editor once the command script finished (for scripts of unknown length, e.g.
   with `script.build`, whose duration no frame budget can bound).
-  CTest runs `StrataTests/Editor/SmokeCommands.json` and checks that failing and unfinished scripts
-  fail the process.
+  Without `--frames`, a headless editor runs until `editor.quit` (which refuses to discard unsaved
+  scene changes unless `force` is true) or a signal; headless editors run at most 60 frames per second.
+  The editor serves automation by default (`EditorAutomation`, see [Automation](#automation-editor-rpc--mcp));
+  `--no-automation` turns it off and `--automation-port <port>` picks the port (default 0: a free one).
+  A headless editor without `--frames` whose automation cannot start exits with code 1. CTest runs of
+  command scripts pass `--no-automation`.
+  CTest runs `StrataTests/Editor/SmokeCommands.json.in` (configured into the build tree; it builds a scene and captures
+  the viewport into `build/<preset>/StrataTests/SmokeCaptures/`) and checks that failing and unfinished scripts fail the
+  process.
+- `editor.status` summarizes the editor (project, scene, play state, selection, undo history); other
+  parts of the editor add sections to it through `EditorContext::SetStatusProvider`.
 - Mutating commands report a `warning` in their result while the scene is playing: such changes apply
   to the running copy and are discarded by `play.stop`. Unknown or missing parameters are errors.
+- **Viewport state** lives in the core: `EditorContext::GetViewport()` (`EditorViewport`) holds the editor camera
+  (`EditorCamera`: a target that is also the orbit pivot, distance, yaw/pitch in degrees, FOV, clip planes, fly speed),
+  the `ViewportSettings` (grid, selection outline, light/camera/collider shapes, stats, gizmo mode and space, snap
+  steps) and two `ViewportRenderer`s (the panel's and the captures'), created on first use and only with a GPU. Camera
+  and settings are saved per project in `<project>/.strata/EditorViewport.json` when it closes and restored when it
+  opens. `ResolveViewportView` picks the camera: the scene's primary camera while playing (the editor camera with a
+  notice when there is none), the editor camera when editing or simulating. Without a project the context keeps an
+  asset manager with only the built-in assets active, so built-in meshes render.
+- **Viewport panel** (`Panels/ViewportPanel`): renders into a texture of the panel's pixel size and takes input only
+  while hovered or focused: Alt + left drag orbits, middle drag pans, the wheel dollies, right drag flies (WASD, Q/E
+  down/up, Shift faster, wheel = speed), F frames the selection, Home everything, W/E/R/Q pick the gizmo, Ctrl snaps.
+  Clicks pick without blocking (`EditorViewport::RequestPick` reads one pixel of the entity-ID buffer; Ctrl toggles,
+  Shift adds, empty space clears) and never when they hit the gizmo. Gizmo drags go through `TransformDrag`
+  (`Editor/TransformEdit.h`): selected entities without a selected ancestor follow the primary one, local transforms
+  are recomputed under their parent (`TransformEdit::WorldToLocal`), writes emit the transform's update signal so
+  physics follows, and a drag is one undo step (while playing: the running scene, no undo). Playing through the scene's
+  camera makes the panel the game view: editor tools are off and `Input` is enabled only while it is focused (Shift+F1
+  leaves it and frees a cursor the game locked). ImGuizmo only starts a drag while no ImGui item is hovered, so the
+  image is a plain `Dummy` while the mouse is over the gizmo.
+- **View commands** change no scene data and record no undo: `camera.get`, `camera.set {position, target, yaw, pitch,
+  distance, fov, near, far, flySpeed}` (position + target looks from one at the other) and `camera.focus {entities?}`
+  (frames them, or the whole scene). `viewport.capture {width?, height?, camera?: "editor" | "scene", overlays?, path?,
+  overwrite?}` renders on the next frame, reads the image back without stalling, encodes it on a job thread and returns
+  `{"Image": {"MimeType": "image/png", "Data": <base64>}, "width", "height", "camera", "overlays", "pendingAssets",
+  "notice"?, "path"?}`; it defaults to the viewport's size, camera and overlays and fails without a GPU.
+- Files commands write for clients go through `CommandUtils::ResolveOutputPath`: relative paths are relative to the
+  project directory (an error without a project), network/device paths and reserved device names are refused, and an
+  existing file is replaced only with `overwrite: true`.
 
 ## Rendering
 
@@ -420,6 +534,28 @@ Building and loading scripts:
   alignment). World-space text is depth-tested, screen-space text goes over everything. Text without a
   font, or whose font is loading, uses `Font::GetDefault()` (Roboto, embedded with
   `strata_embed_file` from `CMake/StrataEmbeddedFiles.cmake`).
+- Glyph atlases stay bounded: glyphs live in cells of up to `FontAtlasSpecification::MaxPages` texture
+  array pages, the least recently used ones (never those of the current frame) are evicted, and only
+  changed rows are uploaded. New glyphs are rasterized within `TextRenderer::c_FrameRasterBudget` per
+  frame; the rest are drawn on later frames (`SceneRendererStats::PendingTextGlyphs`), so GPU tests of
+  text with many distinct glyphs render until no glyphs are pending. A glyph whose rasterization would
+  cost more than `FontAtlas::c_MaxGlyphRasterCost` (four frame budgets; `FontAtlas::GetRasterCost`
+  counts texels times vertices, curves and composite assembly) is rasterized at half or a quarter of
+  the resolution, and not drawn beyond that.
+- Font files are untrusted input and stb_truetype does no bounds checking: `Font::Create` validates
+  everything stb_truetype can read (`Renderer/FontValidation.h`), rejects malformed fonts and fonts with
+  CFF outlines (OTTO), and disables kerning that is not fully bounded (in what stb_truetype reads,
+  in the GPOS lookups it searches per glyph pair, and in the work to validate it). Inconsistent
+  format 4 character map search parameters, which stb_truetype trusts, are corrected in the font's
+  copy (`Font::GetData`) rather than rejected. Bound time as
+  well as reads: offsets in font tables may share targets, so count work with repeats. Before
+  calling another stb_truetype function, extend the validator to cover what it reads, with
+  crafted-font tests.
+- Reading GPU data back: `TextureReadback` copies a texture region and reports when the GPU is done (poll `IsReady`
+  once per frame, never wait in a frame); `Renderer::ReadTexture` is the blocking form for tests and tools. Picking
+  uses `SceneRenderer::ReadEntityIDAsync` and `GetEntityFromID`.
+- `GameRenderer` (`Runtime/`) draws a running game into the window's back buffer from the scene's primary camera, or a
+  message frame naming the problem when the scene has none.
 - GPU tests of the scene renderer share `StrataTests/src/Renderer/SceneRendererTestUtils.h`. Verify that a
   new regression test fails without its fix before relying on it.
 
@@ -427,8 +563,35 @@ Building and loading scripts:
 
 The editor exposes its features to tools and AI agents through `RpcServer` (`Strata/src/Strata/Network/`):
 JSON-RPC 2.0, one compact JSON message per line, over TCP on loopback. `StrataCLI` is the client (`call`,
-`list`, `status`, `launch`) and an MCP server on stdio (`StrataCLI mcp`).
+`list`, `status`, `launch`) and an MCP server on stdio (`StrataCLI mcp`). How an agent drives the editor is
+described in `.claude/skills/strata-editor-automation/SKILL.md`.
 
+- **Commands are the API:** `EditorAutomation` (`StrataEditor/src/Editor/`) owns the editor's server and offers
+  every command of the `EditorCommandRegistry` as a method with the command's name, description and parameter
+  schema; commands registered later (or again, with another description or schema) are picked up on the next
+  frame. `rpc.listMethods` lists them, and `StrataCLI mcp` turns each into a tool (`entity.create` ->
+  `entity_create`, `inputSchema` = the parameter schema). So a new feature reaches agents by registering a
+  command; no RPC code is needed. Write commands for agents: a description that says what the command does
+  and returns, a complete schema (property descriptions, `required`), IDs as 16-digit hex strings, assets by
+  handle or path, results as JSON objects with camelCase keys, and images as
+  `{"Image": {"MimeType": ..., "Data": <base64>}}` (MCP clients receive image content; `StrataCLI call
+  --save-image` writes the file).
+- **Requests** run on the main thread from `EditorAutomation::Update` (once per frame, after the runner's
+  update) through the `EditorCommandRunner`: deferred commands answer when they complete; a client that
+  disconnects meanwhile only loses the answer. Requests are logged at trace level (`Automation: #<n> <method>
+  <params> -> <outcome> (<time>)`).
+- **Errors** map from `EditorCommandError`: unknown command -32601 (`MethodNotFound`), `InvalidParameters`
+  -32602 (`data`: `{"command", "parameters": <schema>}`), `Failed` -32005 (`OperationFailed`), `Cancelled`
+  -32006, `Internal` -32603. Transport errors are -32001 to -32004 (`JsonRpc::ErrorCode`).
+- **Lifecycle:** the editor starts automation after opening its project, on 127.0.0.1 with a fresh token and a
+  free port (`--automation-port <port>` picks one, `--no-automation` turns it off), and publishes its session.
+  The session moves along when the editor opens or creates another project. On exit the editor cancels pending
+  commands (their clients get `Cancelled`), removes the session files and stops the server with a grace period
+  (`RpcServer::Stop(gracePeriod)`) so the last answers, such as `editor.quit`'s, still arrive. A headless editor
+  without `--frames` runs until `editor.quit` or a signal (a killed editor leaves a stale session file, which
+  clients prune), or, with `--idle-timeout <seconds>`, until no client has been connected and no request
+  pending for that long (unsaved changes are then discarded, with a warning). The status bar shows the port
+  and the connected clients; `editor.status` has an `automation` section.
 - **Security model:** any local process, and any web page in a local browser, can reach the port; only
   holders of the session token are trusted. The server binds loopback addresses only and refuses to start
   without a token (`EditorSession::GenerateSessionToken`, from the OS secure random generator). Every
@@ -438,22 +601,34 @@ JSON-RPC 2.0, one compact JSON message per line, over TCP on loopback. `StrataCL
   that took over a dead editor's port); `rpc.authenticate` then sends the client's HMAC proof. Anything else
   closes the connection. Clients refuse to connect without a token. Unauthenticated connections get tiny
   limits and a deadline; authenticated ones get size limits and backpressure. Never log or print tokens.
-- **Session files:** `<user data>/Strata/Sessions/<pid>.json` holds the full session (address, port, token,
+- **Session files:** `<per-user data>/Strata/Sessions/<pid>.json` (`Platform::FindUserDataDirectory`, e.g.
+  `%LOCALAPPDATA%\Strata\Sessions`) holds the full session (address, port, token,
   process start time). It is written owner-only (`Platform::WritePrivateFile`) into a private directory. A
   session counts only while its process id is alive with the recorded start time (a reused id does not
   match). Files of exited editors are pruned; a live process whose start time cannot be verified is skipped,
   never deleted. `<project>/.strata/EditorSession.json` only names the editor's process; it
-  is untrusted (the project may be shared) and never contains the port or token.
-- **Environment:** `STRATA_SESSION_DIR` overrides the session directory (tests use it to stay isolated from
-  real editors). `STRATA_EDITOR_PORT`/`STRATA_EDITOR_TOKEN` select an explicit endpoint, and
-  `STRATA_EDITOR_PATH` the editor executable for `launch`/`strata_launch_editor`.
-- **Adding editor methods:** `RpcServer::RegisterMethod` with a description and a JSON Schema for the params.
-  Handlers run on the main thread from `ProcessRequests()`; keep the `Ref<RpcResponder>` to answer later
-  (e.g. after advancing frames). Methods become MCP tools automatically (`entity.create` -> `entity_create`).
-  Return images as `{"Image": {"MimeType": ..., "Data": <base64>}}` to have MCP clients receive image content.
-- **Tests** never need a real editor: `Tests::PumpedRpcServer` plays the editor, `Tests::LiveProcess` gives
-  fake sessions a running process id, and `STRATA_TEST_FAKE_EDITOR=1` makes the test executable act as a
-  launched editor (see `StrataTests/src/Network/FakeEditorProcess.h`).
+  is untrusted (the project may be shared) and never contains the port or token. An editor that cannot publish
+  its session does not serve automation (nothing could find it).
+- **Clients:** discovery prefers `--port` (+ `STRATA_EDITOR_TOKEN`), then `--project <dir>`, then the newest
+  session. A connection that has connected stays with that editor process (also after it opens another
+  project) or, after a restart, an editor with the same project; it never switches to another editor silently.
+  `launch`/`strata_launch_editor` start an editor (optionally for a project; `--headless`, `--no-gpu`) that runs
+  until `editor.quit`; an editor that does not become reachable in time is stopped. Editors the MCP server
+  starts get `--idle-timeout 600` (`StrataCLI mcp --idle-timeout <s>`, 0: never) so they do not outlive the agent
+  session, and a request for another editor without a project reuses the one it started. `launch` passes
+  `--idle-timeout` only when given. `call` reads params as JSON text, from stdin (`-`) or a file (`@path`).
+  Exit codes: 0 success, 1 the editor answered with an error, 2 no editor reachable or connection lost, 3 usage,
+  4 no answer within `--timeout` (the command may still finish), 5 `--save-image` failed.
+- **Environment:** `STRATA_SESSION_DIR` overrides the session directory for editors and clients alike (tests
+  use it to stay isolated from real editors). `STRATA_EDITOR_PORT`/`STRATA_EDITOR_TOKEN` select an explicit
+  endpoint, and `STRATA_EDITOR_PATH` the editor executable for `launch`/`strata_launch_editor`.
+- **Other methods:** endpoints that are not editor commands use `RpcServer::RegisterMethod` with a description
+  and a JSON Schema (`ReplaceMethod` swaps one in a single step). Handlers run on the main thread from
+  `ProcessRequests()`; keep the `Ref<RpcResponder>` to answer later. Names starting with `rpc.` are reserved.
+- **Tests:** `Editor.Automation` drives `EditorAutomation` in-process with `RpcClient`; the CLI and MCP suites
+  never need a real editor (`Tests::PumpedRpcServer` plays the editor, `Tests::LiveProcess` gives fake sessions
+  a running process id, and `STRATA_TEST_FAKE_EDITOR=1` makes the test executable act as a launched editor, see
+  `StrataTests/src/Network/FakeEditorProcess.h`); the `EndToEnd` suites run the real editor and StrataCLI.
 
 ## Pre-commit review checklist
 

@@ -71,6 +71,21 @@ namespace Strata
 			return nlohmann::json { { "type", "object" }, { "properties", nlohmann::json::object() } };
 		}
 
+		bool IsValidMethod(const RpcMethodInfo& info, const RpcHandler& handler)
+		{
+			if (info.Name.empty() || info.Name.starts_with(c_ReservedMethodPrefix))
+			{
+				ST_CORE_ERROR("RpcServer: invalid method name '{}' (names must be non-empty and not start with 'rpc.')", info.Name);
+				return false;
+			}
+			if (!handler)
+			{
+				ST_CORE_ERROR("RpcServer: method '{}' has no handler", info.Name);
+				return false;
+			}
+			return true;
+		}
+
 		nlohmann::json NormalizeParamsSchema(nlohmann::json schema)
 		{
 			if (!schema.is_object())
@@ -314,6 +329,9 @@ namespace Strata
 		{
 			std::mutex Mutex;
 			bool Running = false;
+			// Set by a graceful Stop: the network thread delivers what is owed, then ends by itself (see Stop).
+			bool Draining = false;
+			std::chrono::steady_clock::time_point DrainDeadline;
 			std::unordered_set<uint64_t> OpenConnections;
 			std::vector<OutgoingResponse> Outgoing;
 			// Wakes the network thread. Notify() is only called under Mutex while Running, so Stop() can close
@@ -395,6 +413,7 @@ namespace Strata
 
 		std::atomic<bool> Running = false;
 		std::atomic<uint16_t> Port = 0;
+		std::string LastError; // Why Start failed (owning thread)
 		std::atomic<uint32_t> ClientCount = 0;
 
 		mutable std::mutex MethodsMutex;
@@ -412,6 +431,8 @@ namespace Strata
 		// Network thread state
 		std::vector<Scope<Connection>> Connections;
 		uint64_t NextConnectionId = 1;
+		bool DrainStarted = false; // A graceful Stop is delivering the last answers (see BeginDrain)
+		std::chrono::steady_clock::time_point DrainDeadline;
 		WarningLimiter AuthenticationWarnings;
 		WarningLimiter RejectionWarnings;
 		WarningLimiter ProtocolWarnings;
@@ -421,6 +442,8 @@ namespace Strata
 
 		void RunNetworkThread();
 		bool RunIteration(std::vector<OutgoingResponse>& outgoing, std::vector<SocketPollEntry>& pollEntries);
+		void BeginDrain(std::chrono::steady_clock::time_point deadline);
+		void CancelQueuedRequests(std::vector<OutgoingResponse>& outgoing);
 		uint32_t AcceptConnections();
 		void ReadFrom(Connection& connection);
 		void ProcessBufferedLines(Connection& connection);
@@ -506,10 +529,13 @@ namespace Strata
 		bool failureReported = false;
 		while (true)
 		{
+			std::optional<std::chrono::steady_clock::time_point> startDrain;
 			{
 				std::scoped_lock<std::mutex> lock(Shared->Mutex);
 				if (!Shared->Running)
 					break;
+				if (Shared->Draining && !DrainStarted)
+					startDrain = Shared->DrainDeadline;
 				outgoing.swap(Shared->Outgoing);
 			}
 
@@ -518,6 +544,12 @@ namespace Strata
 			bool succeeded = false;
 			try
 			{
+				// Once the connections are closing, no further requests are read, so the queue cannot grow again.
+				if (startDrain)
+				{
+					BeginDrain(*startDrain);
+					CancelQueuedRequests(outgoing);
+				}
 				succeeded = RunIteration(outgoing, pollEntries);
 				if (!succeeded && !failureReported)
 					ST_CORE_ERROR("RpcServer: waiting for socket events failed; retrying");
@@ -528,6 +560,11 @@ namespace Strata
 					ST_CORE_ERROR("RpcServer: network thread error: {}; retrying", exception.what());
 			}
 			outgoing.clear();
+
+			// A draining server ends once every client has its answers and has closed (connections that finish
+			// closing are removed by RunIteration), or when the grace period is over.
+			if (DrainStarted && (Connections.empty() || std::chrono::steady_clock::now() >= DrainDeadline))
+				break;
 
 			if (!succeeded)
 			{
@@ -540,6 +577,7 @@ namespace Strata
 
 		// Shutting down: drop every connection without waiting for pending output.
 		Connections.clear();
+		DrainStarted = false;
 		{
 			std::scoped_lock<std::mutex> lock(Shared->Mutex);
 			Shared->OpenConnections.clear();
@@ -583,10 +621,18 @@ namespace Strata
 			});
 		}
 		RemoveClosedConnections();
+		// A draining server is done once its last connection is gone; waiting for socket events would only delay Stop.
+		if (DrainStarted && Connections.empty())
+			return true;
 
 		// Poll set: [0] notifier, [1] listener, [2...] connections in order.
 		const bool hasNotifier = Shared->Notifier.IsValid();
 		std::chrono::milliseconds timeout = hasNotifier ? c_IdlePollInterval : c_FallbackPollInterval;
+		if (DrainStarted)
+		{
+			const auto untilDrainDeadline = std::chrono::duration_cast<std::chrono::milliseconds>(DrainDeadline - now);
+			timeout = std::clamp(untilDrainDeadline + std::chrono::milliseconds(1), std::chrono::milliseconds(0), timeout);
+		}
 		pollEntries.clear();
 		pollEntries.push_back(SocketPollEntry { hasNotifier ? Shared->Notifier.GetHandle() : c_InvalidSocketHandle, true, false });
 		pollEntries.push_back(SocketPollEntry { Listener.GetHandle(), true, false });
@@ -641,6 +687,49 @@ namespace Strata
 		if (pollEntries[1].Readable && AcceptConnections() == 0)
 			std::this_thread::sleep_for(c_FallbackPollInterval);
 		return true;
+	}
+
+	void RpcServer::Impl::BeginDrain(std::chrono::steady_clock::time_point deadline)
+	{
+		DrainStarted = true;
+		DrainDeadline = deadline;
+		// New clients are refused at once instead of waiting in the backlog of a server that is going away.
+		Listener.Close();
+
+		const auto now = std::chrono::steady_clock::now();
+		const auto linger = std::max(std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now), std::chrono::milliseconds(0));
+		for (const Scope<Connection>& connection : Connections)
+		{
+			if (connection->Closed)
+				continue;
+			// Nothing is owed to a connection that has not authenticated.
+			if (!connection->Authenticated)
+			{
+				connection->Closed = true;
+				continue;
+			}
+			// A closing connection stops reading requests and closes once its answers are sent (see CheckDeadlines).
+			BeginClose(*connection, linger);
+			connection->CloseDeadline = std::min(connection->CloseDeadline, deadline);
+		}
+		UpdateClientCount();
+	}
+
+	void RpcServer::Impl::CancelQueuedRequests(std::vector<OutgoingResponse>& outgoing)
+	{
+		// Queued requests wait for a ProcessRequests call that will not come any more; their clients get an answer.
+		std::vector<QueuedRequest> abandoned;
+		{
+			std::scoped_lock<std::mutex> lock(QueueMutex);
+			abandoned.swap(Queue);
+			QueuedBytes = 0;
+		}
+		for (QueuedRequest& request : abandoned)
+		{
+			RpcResult result = request.IsNotification ? RpcResult::Success(nullptr)
+				: RpcResult::Failure(JsonRpc::ErrorCode::Cancelled, fmt::format("The server is shutting down; {} was not handled", QuoteMethod(request.Method)));
+			outgoing.push_back(OutgoingResponse { request.ConnectionId, std::move(request.Id), std::move(result), request.IsNotification });
+		}
 	}
 
 	uint32_t RpcServer::Impl::AcceptConnections()
@@ -1134,7 +1223,10 @@ namespace Strata
 			connection.SentShutdown = true;
 			connection.CloseDeadline = std::min(connection.CloseDeadline, now + c_DrainTimeout);
 		}
-		if (connection.PeerFinished)
+		// A stopping server does not wait for that: an idle client (e.g. an MCP server between tool calls) may only
+		// notice the end of the stream when it next uses the connection. Its answers are sent, and a client that waits
+		// for each answer before sending more has read them; anything it sends later finds the connection closed.
+		if (connection.PeerFinished || DrainStarted)
 			connection.Closed = true;
 	}
 
@@ -1239,24 +1331,21 @@ namespace Strata
 	bool RpcServer::Start(const RpcServerSpecification& specification)
 	{
 		Stop();
+		m_Impl->LastError.clear();
+		auto fail = [this](std::string error)
+		{
+			ST_CORE_ERROR("RpcServer: {}", error);
+			m_Impl->LastError = std::move(error);
+			return false;
+		};
 
 		// Automation grants full control over the editor, so it is never exposed beyond this machine.
 		if (!IsLoopbackAddress(specification.BindAddress))
-		{
-			ST_CORE_ERROR("RpcServer: refusing to listen on '{}': only loopback addresses (127.0.0.0/8 or ::1) are allowed", specification.BindAddress);
-			return false;
-		}
+			return fail(fmt::format("refusing to listen on '{}': only loopback addresses (127.0.0.0/8 or ::1) are allowed", specification.BindAddress));
 		if (specification.AuthToken.empty())
-		{
-			ST_CORE_ERROR("RpcServer: refusing to start without an authentication token");
-			return false;
-		}
-
+			return fail("refusing to start without an authentication token");
 		if (!m_Impl->Listener.Listen(specification.BindAddress, specification.Port))
-		{
-			ST_CORE_ERROR("RpcServer: {}", m_Impl->Listener.GetLastError());
-			return false;
-		}
+			return fail(m_Impl->Listener.GetLastError());
 
 		RpcServerSpecification& active = m_Impl->Specification;
 		active = specification;
@@ -1282,17 +1371,31 @@ namespace Strata
 		return true;
 	}
 
-	void RpcServer::Stop()
+	void RpcServer::Stop(std::chrono::milliseconds gracePeriod)
 	{
 		if (!m_Impl->NetworkThread.joinable())
 			return;
 
+		if (gracePeriod.count() > 0)
+		{
+			{
+				std::scoped_lock<std::mutex> lock(m_Impl->Shared->Mutex);
+				m_Impl->Shared->Draining = true;
+				m_Impl->Shared->DrainDeadline = std::chrono::steady_clock::now() + ClampSocketTimeout(gracePeriod);
+				m_Impl->Shared->Notifier.Notify();
+			}
+			// The network thread ends by itself once the clients have their answers or the grace period is over.
+			m_Impl->NetworkThread.join();
+		}
+
 		{
 			std::scoped_lock<std::mutex> lock(m_Impl->Shared->Mutex);
 			m_Impl->Shared->Running = false;
+			m_Impl->Shared->Draining = false;
 			m_Impl->Shared->Notifier.Notify();
 		}
-		m_Impl->NetworkThread.join();
+		if (m_Impl->NetworkThread.joinable())
+			m_Impl->NetworkThread.join();
 
 		m_Impl->Shared->Notifier.Close();
 		m_Impl->Listener.Close();
@@ -1314,6 +1417,11 @@ namespace Strata
 		return m_Impl->Running.load();
 	}
 
+	const std::string& RpcServer::GetLastError() const
+	{
+		return m_Impl->LastError;
+	}
+
 	uint16_t RpcServer::GetPort() const
 	{
 		return m_Impl->Port.load();
@@ -1326,17 +1434,8 @@ namespace Strata
 
 	bool RpcServer::RegisterMethod(RpcMethodInfo info, RpcHandler handler)
 	{
-		if (info.Name.empty() || info.Name.starts_with(c_ReservedMethodPrefix))
-		{
-			ST_CORE_ERROR("RpcServer: invalid method name '{}' (names must be non-empty and not start with 'rpc.')", info.Name);
+		if (!IsValidMethod(info, handler))
 			return false;
-		}
-		if (!handler)
-		{
-			ST_CORE_ERROR("RpcServer: method '{}' has no handler", info.Name);
-			return false;
-		}
-
 		info.ParamsSchema = NormalizeParamsSchema(std::move(info.ParamsSchema));
 
 		std::scoped_lock<std::mutex> lock(m_Impl->MethodsMutex);
@@ -1363,6 +1462,23 @@ namespace Strata
 		{
 			responder->Respond(handler(params));
 		}));
+	}
+
+	bool RpcServer::ReplaceMethod(RpcMethodInfo info, RpcHandler handler)
+	{
+		if (!IsValidMethod(info, handler))
+			return false;
+		info.ParamsSchema = NormalizeParamsSchema(std::move(info.ParamsSchema));
+
+		const std::string name = info.Name;
+		std::unique_lock<std::mutex> lock(m_Impl->MethodsMutex);
+		const bool replaced = m_Impl->Methods.contains(name);
+		m_Impl->Methods.insert_or_assign(name, RegisteredMethod { std::move(info), std::move(handler) });
+
+		// As in UnregisterMethod: the caller may destroy what the previous handler captured once this returns.
+		if (replaced && m_Impl->ProcessingThread != std::this_thread::get_id())
+			m_Impl->MethodsCondition.wait(lock, [&]() { return m_Impl->RunningMethod != name; });
+		return true;
 	}
 
 	void RpcServer::UnregisterMethod(const std::string& name)

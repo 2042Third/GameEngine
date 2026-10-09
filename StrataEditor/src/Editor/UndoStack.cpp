@@ -40,7 +40,17 @@ namespace Strata
 		}
 
 		if (!m_MergeBroken && m_Position > 0 && m_SavedPosition != m_Position && m_Actions.back()->MergeWith(*action))
-			return; // Absorbed into the latest step (never across the save point, so saving ends a drag's step)
+		{
+			// Absorbed into the latest step (never across the save point, so saving ends a drag's step). A step that now
+			// changes nothing is dropped, and the next edit starts a step of its own.
+			if (m_Actions.back()->IsNoOp())
+			{
+				m_Actions.pop_back();
+				m_Position--;
+				m_MergeBroken = true;
+			}
+			return;
+		}
 
 		m_Actions.push_back(std::move(action));
 		m_Position = m_Actions.size();

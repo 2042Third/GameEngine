@@ -26,20 +26,48 @@ namespace Strata::Tests
 
 	bool IsFakeEditorLaunch(int argc, char** argv)
 	{
-		return argc > 2 && std::string_view(argv[1]) == "--project" && Platform::GetEnvVar(c_FakeEditorVariable).value_or(std::string()) == "1";
+		const std::string mode = Platform::GetEnvVar(c_FakeEditorVariable).value_or(std::string());
+		if (mode != "1" && mode != "silent")
+			return false;
+		// At least one argument, and only the ones an editor launch passes, so the test run itself is never mistaken for
+		// a launch.
+		if (argc < 2)
+			return false;
+		for (int index = 1; index < argc; index++)
+		{
+			const std::string_view argument = argv[index];
+			if ((argument == "--project" || argument == "--idle-timeout") && index + 1 < argc)
+				index++;
+			else if (argument != "--headless" && argument != "--no-gpu")
+				return false;
+		}
+		return true;
 	}
 
 	int RunFakeEditor(int argc, char** argv)
 	{
 		std::string project;
 		bool headless = false;
+		bool noGpu = false;
+		std::string idleTimeout;
 		for (int index = 1; index < argc; index++)
 		{
 			const std::string_view argument = argv[index];
 			if (argument == "--project" && index + 1 < argc)
 				project = argv[++index];
+			else if (argument == "--idle-timeout" && index + 1 < argc)
+				idleTimeout = argv[++index];
 			else if (argument == "--headless")
 				headless = true;
+			else if (argument == "--no-gpu")
+				noGpu = true;
+		}
+
+		// "silent": an editor that never becomes reachable (it publishes no session), for the launch timeout tests.
+		if (Platform::GetEnvVar(c_FakeEditorVariable).value_or(std::string()) == "silent")
+		{
+			std::this_thread::sleep_for(c_FakeEditorLifetime);
+			return 0;
 		}
 
 		LogSpecification logSpecification;
@@ -53,7 +81,8 @@ namespace Strata::Tests
 		info.Description = "Describes the fake editor";
 		server.RegisterMethod(info, [&](const nlohmann::json&)
 		{
-			return RpcResult::Success(nlohmann::json { { "Project", project }, { "Headless", headless }, { "ProcessId", Platform::GetProcessID() } });
+			return RpcResult::Success(nlohmann::json { { "Project", project }, { "Headless", headless }, { "NoGpu", noGpu }, { "IdleTimeout", idleTimeout },
+				{ "ProcessId", Platform::GetProcessID() } });
 		});
 		RpcMethodInfo quit;
 		quit.Name = "editor.quit";
@@ -74,7 +103,7 @@ namespace Strata::Tests
 		session.Port = server.GetPort();
 		session.Token = specification.AuthToken;
 		session.ProjectPath = project;
-		session.Headless = headless;
+		session.Headless = headless || noGpu;
 		if (!EditorSession::WriteSessionFiles(session))
 			return 3;
 

@@ -103,10 +103,12 @@ ST_SCRIPT_CLASS(Turret)
   world `Get/SetWorldPosition`, `Get/SetWorldRotation`, `GetWorldScale`, `GetForward/Right/Up` (-Z is forward).
 - `Scene`: `CreateEntity(name, parent)`, `GetEntity(id)`, `FindEntityByName`, `FindEntitiesByTag`, `GetRootEntities`,
   `GetPrimaryCamera`, `Instantiate(prefabOrModel [, translation, rotation, scale] [, parent])` by handle or asset path.
-- `Assets`: `Find(path)`, `IsLoaded`, `RequestLoad`. Instantiating an asset that is not loaded yet stalls once (loaded
-  synchronously, with a warning) - request it early.
+- `Assets`: `Find(path)`, `IsLoaded`, `RequestLoad`. `Instantiate` never waits: for an asset that is not loaded yet it
+  starts the load and returns a null entity - request assets early (in `OnCreate`) and spawn once `IsLoaded`.
 - `Input`: `IsKeyDown/Pressed/Released(Key::W)`, `IsMouseButtonDown/Pressed/Released(Mouse::ButtonLeft)`,
-  `GetMousePosition` (viewport pixels), `GetMouseDelta`, `GetScrollDelta`.
+  `GetMousePosition` (viewport pixels), `GetMouseDelta`, `GetScrollDelta`. In the editor, scripts receive input only
+  while the viewport is the focused game view (playing through the scene's primary camera); positions are relative to
+  the image.
 - `Time`: `GetDeltaTime`, `GetFixedDeltaTime`, `GetElapsedTime`, `GetFrameIndex`, `Get/SetTimeScale`.
 - `Log::Info/Warn/Error/Trace(args...)` - arguments are concatenated (`Log::Info("Health ", health)`).
 
@@ -119,7 +121,8 @@ null entity) and the engine logs a warning naming the calling script.
 - Do not keep `T*` from `GetScript<T>()` across frames - fetch it when needed (the target may be destroyed or reloaded).
   Store `Entity` values instead; check `IsValid()`.
 - Exceptions thrown by a script disable that instance (logged with the message); other scripts keep running.
-- A crash (null pointer, division by zero, stack overflow) disables the whole module (`ScriptEngine::IsFaulted`; hosts
+- A crash (null pointer, division by zero, stack overflow; on Windows also `abort()` or a failed `assert()`, which end
+  the process on Linux and macOS) disables the whole module (`ScriptEngine::IsFaulted`; hosts
   such as the editor stop play mode) and the log names the class, callback and entity. Fix it and rebuild; reloading the
   module clears the fault.
 - Never block: no sleeps, no busy loops, no synchronous file or network I/O. An infinite loop freezes the editor.
@@ -187,9 +190,16 @@ strata_add_script_module(MyGameScripts SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 ```
 
 Build it with the engine's compiler and configuration. The editor watches the module it runs and reloads it when the
-file changes (an IDE build works too); the engine runs a private copy, so rebuilding while the game runs is safe.
-Inside this repository, test modules use `strata_add_script_module(<Target> SOURCE_DIR <dir>)` directly and load with
-`script.load {"path": "<module file>"}`.
+file changes (an IDE build works too). Rebuilding while the game runs is safe with hot reload enabled
+(`ScriptEngine::SetHotReloadEnabled`, on in the editor): the engine then runs a private copy of the module and reloads
+the new build once the file is completely written. A build that fails to load (or crashes while loading) leaves the
+running version in place. Field values survive the reload when the field keeps its name and type. Without hot reload
+(shipped games) the module runs from its file. Inside this repository, test modules use
+`strata_add_script_module(<Target> SOURCE_DIR <dir>)` directly and load with `script.load {"path": "<module file>"}`.
+
+Prefer static libraries for third-party code in scripts. Shared libraries the module links against must sit next to the
+module file (Windows) or be reachable through its RUNPATH (Linux, macOS; `$ORIGIN` does not work under hot reload,
+because the module then runs from a private copy - see AGENTS.md).
 
 ## Testing scripts
 
@@ -212,10 +222,14 @@ When you add or change script API:
    `PhysicsFeatures`, `LogFeatures`), or add a class deriving from `FeatureTest::FeatureScript` on a new entity of the
    scene. Verify the effect with `Expect(condition, "what is checked")` and set `Completed = true` when the scenario
    ended; journal `OnCreate` with `Journal(*this, "<Class>", "OnCreate")`. Keep state that spans frames in fields: the
-   runner hot reloads the module after frame 100.
+   runner hot reloads the module after frame 100. The coverage check counts a call only on the class it belongs to:
+   call static functions as `Class::Name(...)` and member functions on a receiver of declared type (`Entity target =
+   ...; target.Name(...)`), see `StrataTests/src/FeatureTest/SDKReader.h`.
 2. A new host function is also appended to `ST_SCRIPT_HOST_FUNCTIONS` in `ScriptHostAPI.cpp` (the build fails until
-   it is). A new field type, callback or asset type is picked up automatically by the coverage checks: override such a
-   field in the scene, implement the callback, add such an asset.
+   it is). A new field type, callback or asset type is picked up automatically by the coverage checks: declare a field
+   of the new type in a feature script, register it with `ST_SCRIPT_FIELD` and override it in the scene; implement the
+   callback in a feature script that runs and journal its first call (`Journal(*this, "<Class>", "<Callback>")`, as
+   `LifecycleFeatures` does); add such an asset.
 3. Input the scripts need is simulated by `PlayFeatureScene` (`StrataTests/src/FeatureTest/FeatureTestUtils.cpp`);
    messages logged on purpose belong in `c_ExpectedLogMessages` there (any other warning or error fails the run).
 4. Run `StrataTests.exe --test-suite=FeatureTest,Editor.FeatureTest` (or `ctest -L feature`). A failure names the

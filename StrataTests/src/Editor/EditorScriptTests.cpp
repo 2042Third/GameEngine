@@ -12,6 +12,7 @@
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Runtime/GameRuntime.h>
 #include <Strata/Scene/Components.h>
+#include <Strata/Scripting/ScriptModule.h>
 #include <Strata/Scripting/ScriptSystem.h>
 
 #include <chrono>
@@ -333,6 +334,47 @@ TEST_SUITE("Editor.Scripts")
 		harness.Run("play.start");
 		harness.Frames(2);
 		CHECK(harness.Context.IsPlaying());
+	}
+
+	TEST_CASE("Modules the editor loads run from a private copy, so builds can replace them")
+	{
+		// With hot reload (the editor's default) modules must not run from their file, or script.build could not replace
+		// it (Windows locks loaded modules) and moving them to a copy later would reload them a second time.
+		ScopedEnvironmentVariable fakeCMake("STRATA_TEST_FAKE_CMAKE", "succeed");
+		EditorContextSpecification specification { false, true };
+		specification.ScriptBuild.CMake = GetTestExecutablePath();
+		ScriptHarness harness(specification);
+		const Ref<Project> project = harness.Context.GetProject();
+		const std::filesystem::path module = project->GetScriptModulePath();
+		REQUIRE(FileSystem::CreateDirectories(module.parent_path()));
+		REQUIRE(FileSystem::Copy(GetTestScriptModule(STRATA_TEST_SCRIPTS_FAULTS), module));
+
+		auto checkRunsFromCopy = [&]()
+		{
+			const Ref<ScriptEngine>& engine = harness.Context.GetScriptEngine();
+			REQUIRE(engine->GetModule());
+			CHECK(engine->GetModule()->IsLoadedFromCopy());
+			const uint64_t loads = engine->GetLoadCount();
+			harness.Frames(3);
+			CHECK(engine->GetLoadCount() == loads);
+		};
+
+		// Loaded by a build (the fake CMake leaves the file the test put there).
+		std::string error;
+		REQUIRE_MESSAGE(harness.Context.BuildScripts(&error), error);
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+		while (harness.Context.GetScriptBuilder().IsRunning() && std::chrono::steady_clock::now() < deadline)
+		{
+			harness.Frames(1);
+			std::this_thread::sleep_for(std::chrono::milliseconds(5));
+		}
+		REQUIRE(harness.Context.GetLastScriptBuildLoad().Loaded);
+		checkRunsFromCopy();
+
+		// Loaded when the project opens.
+		REQUIRE_MESSAGE(harness.Context.OpenProject(project->GetProjectFile(), &error), error);
+		REQUIRE(harness.Context.GetScriptEngine()->IsModuleLoaded());
+		checkRunsFromCopy();
 	}
 
 	TEST_CASE("Exported games carry the script module and run it in the game runtime")

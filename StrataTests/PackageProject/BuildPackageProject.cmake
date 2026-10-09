@@ -1,16 +1,17 @@
 # Configures and builds the package project with the engine's generator and configuration, then lets the test
 # executable load the module it produced.
 #
-# cmake -DSOURCE_DIR=... -DBINARY_DIR=... -DENGINE_DIR=... -DGENERATOR=... [-DPLATFORM=...] [-DTOOLSET=...]
-#       [-DCXX_COMPILER=...] -DCONFIG=... -DTEST_EXECUTABLE=... -P BuildPackageProject.cmake
+# cmake -DSOURCE_DIR=... -DBINARY_DIR=... -DENGINE_DIR=... -DEXPECTED_GLM_DEFINITIONS=<a|b|...> -DGENERATOR=...
+#       [-DPLATFORM=...] [-DTOOLSET=...] [-DCXX_COMPILER=...] -DCONFIG=... -DTEST_EXECUTABLE=... -P BuildPackageProject.cmake
 
-foreach(variable SOURCE_DIR BINARY_DIR ENGINE_DIR GENERATOR CONFIG TEST_EXECUTABLE)
+foreach(variable SOURCE_DIR BINARY_DIR ENGINE_DIR EXPECTED_GLM_DEFINITIONS GENERATOR CONFIG TEST_EXECUTABLE)
 	if(NOT DEFINED ${variable} OR "${${variable}}" STREQUAL "")
 		message(FATAL_ERROR "BuildPackageProject: ${variable} is required")
 	endif()
 endforeach()
 
-set(configureArguments -S "${SOURCE_DIR}" -B "${BINARY_DIR}" -G "${GENERATOR}" "-DSTRATA_ENGINE_DIR=${ENGINE_DIR}")
+set(configureArguments -S "${SOURCE_DIR}" -B "${BINARY_DIR}" -G "${GENERATOR}" "-DSTRATA_ENGINE_DIR=${ENGINE_DIR}"
+	"-DSTRATA_EXPECTED_GLM_DEFINITIONS=${EXPECTED_GLM_DEFINITIONS}")
 if(PLATFORM)
 	list(APPEND configureArguments -A "${PLATFORM}")
 endif()

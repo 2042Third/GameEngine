@@ -1,19 +1,36 @@
 // A hand-written script module (no SDK) that describes two classes through the C ABI directly. The environment
-// variable STRATA_TEST_MALFORMED_CASE, read when the module loads, selects a defect for the validation tests; without it
-// the module is valid.
+// variable STRATA_TEST_MALFORMED_CASE, read when the module loads, selects a defect (or a crash) for the validation and
+// crash containment tests; without it the module is valid.
 
 #include "StrataScript/ScriptABI.h"
 
 #include <cstdlib>
 #include <cstring>
+#include <stdexcept>
 
 namespace
 {
 
 	int s_InstanceStorage = 0;
+	// "ChangesDescriptors": the first Create clears the functions of every class descriptor, as if the module had
+	// overwritten its memory. The engine must keep calling the functions it read while loading.
+	bool s_ChangeDescriptorsInCreate = false;
+	// "ThrowsInCreate": Create lets a C++ exception escape (there is no SDK to catch it).
+	bool s_ThrowInCreate = false;
+
+	void ClearDescriptorFunctions();
+
+	[[noreturn]] void ThrowOnPurpose(const char* message)
+	{
+		throw std::runtime_error(message);
+	}
 
 	uint32_t Create(StrataScriptContext*, StrataScriptEntityID, StrataScriptInstance* outInstance)
 	{
+		if (s_ThrowInCreate)
+			ThrowOnPurpose("Create threw on purpose");
+		if (s_ChangeDescriptorsInCreate)
+			ClearDescriptorFunctions();
 		*outInstance = &s_InstanceStorage;
 		return StrataScriptResult_Ok;
 	}
@@ -51,6 +68,47 @@ namespace
 	StrataScriptClassDesc s_Classes[2];
 	const StrataScriptClassDesc* s_ClassPointers[2];
 
+	void ClearDescriptorFunctions()
+	{
+		for (StrataScriptClassDesc& descriptor : s_Classes)
+		{
+			descriptor.Create = nullptr;
+			descriptor.Destroy = nullptr;
+			descriptor.GetField = nullptr;
+			descriptor.SetField = nullptr;
+		}
+	}
+
+	void CrashNow()
+	{
+		volatile int* pointer = nullptr;
+		*pointer = 42;
+	}
+
+	// "CrashInStaticInitialization" / "CrashInStaticDestruction": a static object crashes while the library loads
+	// (before the engine calls any entry point) or while it unloads.
+	class StaticCrasher
+	{
+	public:
+		StaticCrasher()
+		{
+			const char* testCase = std::getenv("STRATA_TEST_MALFORMED_CASE");
+			if (Is(testCase, "CrashInStaticInitialization"))
+				CrashNow();
+			m_CrashWhenDestroyed = Is(testCase, "CrashInStaticDestruction");
+		}
+
+		~StaticCrasher()
+		{
+			if (m_CrashWhenDestroyed)
+				CrashNow();
+		}
+	private:
+		bool m_CrashWhenDestroyed = false;
+	};
+
+	StaticCrasher s_StaticCrasher;
+
 }
 
 ST_SCRIPT_EXTERN_C ST_SCRIPT_EXPORT uint32_t StrataScript_GetABIVersion(void)
@@ -60,7 +118,13 @@ ST_SCRIPT_EXTERN_C ST_SCRIPT_EXPORT uint32_t StrataScript_GetABIVersion(void)
 
 ST_SCRIPT_EXTERN_C ST_SCRIPT_EXPORT uint32_t StrataScript_Load(const StrataScriptHostAPI* host, uint32_t, StrataScriptModuleAPI* outModule)
 {
+	// The engine's struct has room for this module's description (StructSize is its size; see StrataScriptModuleAPI).
+	if (outModule->StructSize < sizeof(StrataScriptModuleAPI))
+		return StrataScriptResult_ABIMismatch;
+
 	const char* testCase = std::getenv("STRATA_TEST_MALFORMED_CASE");
+	if (Is(testCase, "Throws"))
+		ThrowOnPurpose("StrataScript_Load threw on purpose");
 	if (Is(testCase, "Exception"))
 	{
 		host->ReportException(Text("Broken on purpose"));
@@ -128,5 +192,7 @@ ST_SCRIPT_EXTERN_C ST_SCRIPT_EXPORT uint32_t StrataScript_Load(const StrataScrip
 		outModule->ClassCount = 1u << 20;
 	else if (Is(testCase, "NullClassList"))
 		outModule->Classes = nullptr;
+	s_ChangeDescriptorsInCreate = Is(testCase, "ChangesDescriptors");
+	s_ThrowInCreate = Is(testCase, "ThrowsInCreate");
 	return StrataScriptResult_Ok;
 }

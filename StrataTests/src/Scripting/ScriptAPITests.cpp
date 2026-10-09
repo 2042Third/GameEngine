@@ -234,7 +234,9 @@ TEST_SUITE("Scripting.API")
 		prefabMetadata.Type = AssetType::Prefab;
 		prefabMetadata.Path = "Prefabs/Bullet.stprefab";
 		prefabMetadata.Name = "Bullet";
-		manager->Add(prefabMetadata, ToBytes(prefab->Serialize())); // Not loaded until a script needs it
+		manager->Add(prefabMetadata, ToBytes(prefab->Serialize()));
+		// Loaded before play: Instantiate never waits for loading.
+		REQUIRE(manager->LoadAssetSync(prefabMetadata.Handle));
 
 		AssetMetadata modelMetadata;
 		modelMetadata.Handle = UUID(0x6000);
@@ -283,6 +285,62 @@ TEST_SUITE("Scripting.API")
 		const Entity last = scene.GetEntityByUUID(GetField<UUID>(system, spawner, "Spawner", "LastSpawned"));
 		REQUIRE(last.IsValid());
 		CHECK(GetField<int32_t>(system, last, "Spawned", "ValueSeenInCreate") == 102);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Instantiating an asset that is not loaded yet starts its load and returns no entity")
+	{
+		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
+
+		Scene authoring;
+		Entity bullet = authoring.CreateEntity("Bullet");
+		AddScriptEntry(bullet, "Spawned");
+		const Ref<Prefab> prefab = Prefab::CreateFromEntities(authoring, { bullet });
+
+		Ref<TestAssetManager> manager = CreateRef<TestAssetManager>();
+		AssetMetadata prefabMetadata;
+		prefabMetadata.Handle = UUID(0x5000);
+		prefabMetadata.Type = AssetType::Prefab;
+		prefabMetadata.Path = "Prefabs/Bullet.stprefab";
+		prefabMetadata.Name = "Bullet";
+		manager->Add(prefabMetadata, ToBytes(prefab->Serialize()));
+		AssetMetadata brokenMetadata;
+		brokenMetadata.Handle = UUID(0x5001);
+		brokenMetadata.Type = AssetType::Prefab;
+		brokenMetadata.Path = "Prefabs/Broken.stprefab";
+		brokenMetadata.Name = "Broken";
+		manager->Add(brokenMetadata, { 'n', 'o', 't', ' ', 'j', 's', 'o', 'n' });
+		ScopedAssetManager scopedManager(manager);
+
+		Scene scene;
+		Entity spawner = scene.CreateEntity("Spawner");
+		AddFieldOverride(AddScriptEntry(spawner, "PendingSpawner"), "Prefab", PropertyType::Asset, prefabMetadata.Handle);
+		Entity brokenSpawner = scene.CreateEntity("BrokenSpawner");
+		AddFieldOverride(AddScriptEntry(brokenSpawner, "PendingSpawner"), "Prefab", PropertyType::Asset, brokenMetadata.Handle);
+		scene.OnRuntimeStart();
+		ScriptSystem& system = GetScriptSystem(scene);
+
+		// The first attempt starts the load and fails right away.
+		scene.OnUpdateRuntime(0.0f);
+		CHECK(GetField<int32_t>(system, spawner, "PendingSpawner", "Attempts") == 1);
+		CHECK_FALSE(scene.GetEntityByUUID(GetField<UUID>(system, spawner, "PendingSpawner", "Spawned")).IsValid());
+		CHECK(manager->GetAssetState(prefabMetadata.Handle) == AssetState::Loading);
+
+		// Loads finish in the background and are published by the manager's update (here: all at once).
+		REQUIRE(manager->WaitForPendingLoads());
+		CHECK(manager->GetAssetState(prefabMetadata.Handle) == AssetState::Ready);
+		CHECK(manager->GetAssetState(brokenMetadata.Handle) == AssetState::Failed);
+
+		scene.OnUpdateRuntime(0.0f);
+		CHECK(GetField<int32_t>(system, spawner, "PendingSpawner", "Attempts") == 2);
+		const Entity spawned = scene.GetEntityByUUID(GetField<UUID>(system, spawner, "PendingSpawner", "Spawned"));
+		REQUIRE(spawned.IsValid());
+		CHECK(spawned.GetName() == "Bullet");
+		CHECK(system.HasInstance(spawned, "Spawned"));
+
+		// An asset that failed to load keeps failing, without waiting either.
+		CHECK(GetField<int32_t>(system, brokenSpawner, "PendingSpawner", "Attempts") == 2);
+		CHECK_FALSE(scene.GetEntityByUUID(GetField<UUID>(system, brokenSpawner, "PendingSpawner", "Spawned")).IsValid());
 		scene.OnRuntimeStop();
 	}
 
@@ -410,6 +468,19 @@ TEST_SUITE("Scripting.API")
 		scene.OnRuntimeStop();
 	}
 
+	TEST_CASE("Host functions refuse invalid buffers, pointers and strings harmlessly")
+	{
+		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
+		Scene scene;
+		Entity tester = scene.CreateEntity("Tester");
+		AddScriptEntry(tester, "InvalidArguments");
+		scene.OnRuntimeStart();
+		CheckScriptChecks(GetScriptSystem(scene), tester, "InvalidArguments", 34);
+		CHECK_FALSE(engine->IsFaulted());
+		CHECK(tester.GetComponent<TextComponent>().Text == "Hello");
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("The host API rejects calls from outside script callbacks")
 	{
 		const StrataScriptHostAPI& host = GetScriptHostAPI();
@@ -459,6 +530,13 @@ TEST_SUITE("Scripting.API")
 	TEST_CASE("Every host function has a call counter")
 	{
 		const StrataScriptHostAPI& host = GetScriptHostAPI();
+#if defined(ST_DIST)
+		// Dist builds do not count calls.
+		CHECK_FALSE(host.IsEntityValid(nullptr, 1));
+		CHECK(GetScriptHostCallCounts().empty());
+		ResetScriptHostCallCounts();
+		CHECK(GetScriptHostCallCounts().empty());
+#else
 		const std::vector<ScriptHostFunctionCalls> before = GetScriptHostCallCounts();
 
 		// One counter per function of the table, in declaration order.
@@ -493,5 +571,6 @@ TEST_SUITE("Scripting.API")
 		ResetScriptHostCallCounts();
 		for (const ScriptHostFunctionCalls& entry : GetScriptHostCallCounts())
 			CHECK(entry.Calls == 0);
+#endif
 	}
 }

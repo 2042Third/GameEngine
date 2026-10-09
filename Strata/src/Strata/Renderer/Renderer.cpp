@@ -1,6 +1,8 @@
 #include "stpch.h"
 #include "Strata/Renderer/Renderer.h"
 
+#include "Strata/Renderer/TextureReadback.h"
+
 namespace Strata
 {
 
@@ -46,12 +48,6 @@ namespace Strata
 			for (uint32_t slice = 0; slice < desc.arraySize; slice++)
 				commandList->writeTexture(texture, slice, 0, &rgba, sizeof(rgba));
 			return texture;
-		}
-
-		uint32_t GetBytesPerPixel(nvrhi::Format format)
-		{
-			const nvrhi::FormatInfo& info = nvrhi::getFormatInfo(format);
-			return info.blockSize == 1 ? info.bytesPerBlock : 0; // Block-compressed formats are not readable
 		}
 
 	}
@@ -168,56 +164,18 @@ namespace Strata
 		if (!s_Data || !texture)
 			return false;
 
-		const nvrhi::TextureDesc& sourceDesc = texture->getDesc();
-		const uint32_t bytesPerPixel = GetBytesPerPixel(sourceDesc.format);
-		if (bytesPerPixel == 0)
+		TextureReadbackRegion region;
+		region.MipLevel = mipLevel;
+		region.ArraySlice = arraySlice;
+		std::string error;
+		Scope<TextureReadback> readback = TextureReadback::Create(texture, region, &error);
+		if (!readback)
 		{
-			ST_CORE_ERROR("Renderer::ReadTexture: format of '{}' cannot be read back", sourceDesc.debugName);
+			ST_CORE_ERROR("Renderer::ReadTexture: {}", error);
 			return false;
 		}
-		if (mipLevel >= sourceDesc.mipLevels || arraySlice >= sourceDesc.arraySize || sourceDesc.dimension == nvrhi::TextureDimension::Texture3D)
-		{
-			ST_CORE_ERROR("Renderer::ReadTexture: '{}' has no 2D subresource at mip {}, slice {}", sourceDesc.debugName, mipLevel, arraySlice);
-			return false;
-		}
-
-		const uint32_t width = std::max(sourceDesc.width >> mipLevel, 1u);
-		const uint32_t height = std::max(sourceDesc.height >> mipLevel, 1u);
-		nvrhi::IDevice* device = GetDevice();
-		nvrhi::TextureDesc stagingDesc;
-		stagingDesc.width = width;
-		stagingDesc.height = height;
-		stagingDesc.format = sourceDesc.format;
-		stagingDesc.debugName = "ReadbackStaging";
-		stagingDesc.initialState = nvrhi::ResourceStates::CopyDest;
-		stagingDesc.keepInitialState = true;
-		nvrhi::StagingTextureHandle staging = device->createStagingTexture(stagingDesc, nvrhi::CpuAccessMode::Read);
-		if (!staging)
-			return false;
-
-		nvrhi::CommandListHandle commandList = device->createCommandList();
-		commandList->open();
-		commandList->copyTexture(staging, nvrhi::TextureSlice(), texture, nvrhi::TextureSlice().setMipLevel(mipLevel).setArraySlice(arraySlice));
-		commandList->close();
-		device->executeCommandList(commandList);
-		device->waitForIdle();
-
-		size_t rowPitch = 0;
-		const auto* mapped = static_cast<const uint8_t*>(device->mapStagingTexture(staging, nvrhi::TextureSlice(), nvrhi::CpuAccessMode::Read, &rowPitch));
-		if (!mapped)
-			return false;
-
-		outImage.Width = width;
-		outImage.Height = height;
-		outImage.Format = sourceDesc.format;
-		outImage.BytesPerPixel = bytesPerPixel;
-		const size_t packedRow = static_cast<size_t>(width) * bytesPerPixel;
-		outImage.Pixels.resize(packedRow * height);
-		for (uint32_t row = 0; row < height; row++)
-			std::memcpy(outImage.Pixels.data() + row * packedRow, mapped + row * rowPitch, packedRow);
-
-		device->unmapStagingTexture(staging);
-		return true;
+		readback->Wait();
+		return readback->GetResult(outImage);
 	}
 
 }

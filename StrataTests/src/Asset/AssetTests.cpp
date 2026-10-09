@@ -13,6 +13,7 @@
 #include "Strata/Renderer/MeshFactory.h"
 #include "TestHelpers.h"
 
+#include <algorithm>
 #include <fstream>
 #include <map>
 #include <set>
@@ -434,6 +435,41 @@ TEST_SUITE("Asset")
 		metadata.Name = "Runtime";
 		manager->AddMemoryAsset(Material::Create(), metadata);
 		CHECK(changed());
+	}
+
+	TEST_CASE("Content changes name the changed assets until they are forgotten")
+	{
+		const std::filesystem::path path = WritePack("ContentChanges", {
+			{ MakeMetadata(0x6200, AssetType::Material, "A.stmat"), CreateMaterialBytes(0.25f) },
+			{ MakeMetadata(0x6201, AssetType::Material, "B.stmat"), CreateMaterialBytes(0.5f) } });
+		Ref<RuntimeAssetManager> manager = RuntimeAssetManager::Create(path);
+		REQUIRE(manager);
+		const uint64_t start = manager->GetContentVersion();
+		std::vector<AssetHandle> changes;
+		CHECK(manager->GetContentChanges(start, changes));
+		CHECK(changes.empty());
+
+		REQUIRE(manager->LoadAssetSync(UUID(0x6200)));
+		const uint64_t loaded = manager->GetContentVersion();
+		CHECK(manager->GetContentChanges(start, changes));
+		CHECK(changes == std::vector<AssetHandle> { UUID(0x6200) });
+
+		manager->UnloadAsset(UUID(0x6200));
+		REQUIRE(manager->LoadAssetSync(UUID(0x6201)));
+		changes.clear();
+		CHECK(manager->GetContentChanges(loaded, changes));
+		std::sort(changes.begin(), changes.end());
+		CHECK(changes == std::vector<AssetHandle> { UUID(0x6200), UUID(0x6201) });
+
+		// Only the latest changes are remembered.
+		const uint64_t before = manager->GetContentVersion();
+		for (size_t index = 0; index <= AssetManagerBase::c_MaxContentChanges; index++)
+			manager->AddMemoryAsset(Material::Create(), AssetMetadata());
+		changes.clear();
+		CHECK_FALSE(manager->GetContentChanges(before, changes));
+		CHECK(changes.empty());
+		CHECK(manager->GetContentChanges(manager->GetContentVersion() - 1, changes));
+		CHECK(changes.size() == 1);
 	}
 
 	TEST_CASE("The active asset manager serves typed requests")

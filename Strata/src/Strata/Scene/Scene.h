@@ -67,6 +67,9 @@ namespace Strata
 
 		// Root entities in hierarchy order.
 		const std::vector<UUID>& GetRootEntities() const { return m_RootEntities; }
+		// Changes whenever the hierarchy order may have changed (entities created or destroyed, reparented or reordered among
+		// their siblings), so that results depending on it can be cached.
+		uint64_t GetHierarchyVersion() const { return m_HierarchyVersion; }
 		// Every entity in depth-first hierarchy order (parents before children).
 		std::vector<Entity> GetEntitiesInHierarchyOrder() const;
 
@@ -75,8 +78,9 @@ namespace Strata
 		//////////////////////////////////////////////////////////////////////////
 
 		// Re-parents child under parent (an invalid parent makes it a root). Returns false if this would create a
-		// cycle. With keepWorldTransform the child's world transform is preserved. A change of parent emits the child's
-		// RelationshipComponent on_update signal (the old and new parents' Children lists change silently).
+		// cycle. With keepWorldTransform the child's world transform is preserved (through SetWorldTransform, which signals
+		// the new local transform). A change of parent emits the child's RelationshipComponent on_update signal (the old and
+		// new parents' Children lists change silently).
 		bool SetParent(Entity child, Entity parent, bool keepWorldTransform = true);
 		// Moves an entity to position `index` among its siblings (or among the roots). Only the order changes, so no
 		// signal is emitted.
@@ -87,8 +91,9 @@ namespace Strata
 		void UpdateWorldTransforms();
 		// World transform computed from the hierarchy right now (always current, independent of the cache).
 		glm::mat4 GetWorldTransform(Entity entity) const;
-		// Returns false (leaving the entity unchanged) if the transform cannot be represented, e.g. under a parent
-		// with zero scale.
+		// Sets the entity's local transform so that its world transform becomes `worldTransform`, and emits the
+		// TransformComponent on_update signal like Entity::MarkModified. Returns false (leaving the entity unchanged, without
+		// a signal) if the transform cannot be represented, e.g. under a parent with zero scale.
 		bool SetWorldTransform(Entity entity, const glm::mat4& worldTransform);
 		// A parent whose world transform's determinant is not above this (in magnitude) cannot be inverted, so the world
 		// transforms of its children cannot be set.
@@ -107,7 +112,9 @@ namespace Strata
 		bool IsRunning() const { return m_IsRunning; }
 		SceneRuntimeMode GetRuntimeMode() const { return m_RuntimeMode; }
 		bool IsUpdating() const { return m_IsUpdating; }
-		void SetPaused(bool paused) { m_IsPaused = paused; }
+		// Pausing stops the updates of the running systems and tells them (SceneSystem::OnPausedChanged). Starting the scene
+		// resets it to unpaused.
+		void SetPaused(bool paused);
 		bool IsPaused() const { return m_IsPaused; }
 		// While paused, lets the next `frames` updates each advance the simulation by exactly one fixed step.
 		void Step(uint32_t frames = 1) { m_StepFrames += frames; }
@@ -163,6 +170,7 @@ namespace Strata
 		entt::registry m_Registry;
 		std::unordered_map<UUID, entt::entity> m_EntityMap;
 		std::vector<UUID> m_RootEntities;
+		uint64_t m_HierarchyVersion = 0;
 		SceneSettings m_Settings;
 
 		std::vector<Scope<SceneSystem>> m_Systems;

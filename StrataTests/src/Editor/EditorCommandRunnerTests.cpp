@@ -7,7 +7,9 @@
 #include "TestHelpers.h"
 
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/Log.h>
 
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -116,6 +118,7 @@ TEST_SUITE("Editor.CommandRunner")
 		CHECK_FALSE(harness.Run("test.defer", { { "polls", 0 } }));
 		REQUIRE(harness.Results.size() == 1);
 		CHECK_FALSE(harness.Results[0].Success);
+		CHECK(harness.Results[0].ErrorKind == EditorCommandError::InvalidParameters);
 		CHECK(harness.Runner.GetPendingCount() == 0);
 	}
 
@@ -128,8 +131,10 @@ TEST_SUITE("Editor.CommandRunner")
 		harness.Runner.Update(harness.Context);
 		REQUIRE(harness.Results.size() == 2);
 		CHECK(harness.Results[0].Error == "Failed on purpose");
+		CHECK(harness.Results[0].ErrorKind == EditorCommandError::Failed);
 		CHECK_FALSE(harness.Results[1].Success);
 		CHECK(harness.Results[1].Error.find("broken poll") != std::string::npos);
+		CHECK(harness.Results[1].ErrorKind == EditorCommandError::Internal);
 		CHECK(harness.Runner.GetPendingCount() == 1); // The chain moved to its second stage
 
 		harness.Runner.Update(harness.Context);
@@ -165,6 +170,7 @@ TEST_SUITE("Editor.CommandRunner")
 		{
 			CHECK_FALSE(result.Success);
 			CHECK(result.Error == "Closing");
+			CHECK(result.ErrorKind == EditorCommandError::Cancelled);
 		}
 		CHECK(harness.Runner.GetPendingCount() == 0);
 		harness.Runner.Update(harness.Context);
@@ -241,6 +247,86 @@ TEST_SUITE("Editor.CommandScript")
 		Scope<EditorCommandScript> empty = EditorCommandScript::FromJson(nlohmann::json::array(), &error);
 		REQUIRE(empty);
 		CHECK(empty->IsFinished());
+	}
+
+	TEST_CASE("Malformed expectations are rejected before anything runs")
+	{
+		struct Case
+		{
+			const char* Expect;
+			const char* Error;
+		};
+		const Case cases[] = {
+			{ R"([])", "\"expect\" must be an object" },
+			{ R"({ "values": { "equals": 1 } })", "'values' in \"expect\" is not a JSON pointer" },
+			{ R"({ "/a~2": { "equals": 1 } })", "'/a~2' in \"expect\" is not a JSON pointer" },
+			{ R"({ "/a": 1 })", "the condition of '/a' must be an object" },
+			{ R"({ "/a": {} })", "the condition of '/a' must be an object" },
+			{ R"({ "/a": { "min": "1" } })", "invalid condition 'min' for '/a'" },
+			{ R"({ "/a": { "near": 1 } })", "invalid condition 'near' for '/a'" },
+			{ R"({ "/a": { "min": 2, "max": 1 } })", "minimum above its maximum" },
+		};
+		for (const Case& testCase : cases)
+		{
+			INFO("expect: ", testCase.Expect);
+			const nlohmann::json script = nlohmann::json::array({ { { "command", "scene.new" }, { "expect", nlohmann::json::parse(testCase.Expect) } } });
+			std::string error;
+			CHECK_FALSE(EditorCommandScript::FromJson(script, &error));
+			CHECK(error.find("Step 1 (scene.new)") != std::string::npos);
+			CHECK(error.find(testCase.Error) != std::string::npos);
+		}
+
+		// Escapes of JSON pointers ("~0" is '~', "~1" is '/') and the whole result ("").
+		std::string error;
+		CHECK(EditorCommandScript::FromJson(nlohmann::json::parse(R"([ { "command": "scene.new", "expect": { "/a~0b/c~1d/0": { "equals": 1 }, "": { "equals": null } } } ])"), &error));
+	}
+
+	TEST_CASE("Expectations check the results of successful steps")
+	{
+		auto run = [](const char* json)
+		{
+			RunnerHarness harness;
+			std::string error;
+			Scope<EditorCommandScript> script = EditorCommandScript::FromJson(nlohmann::json::parse(json), &error);
+			REQUIRE_MESSAGE(script, error);
+			for (int32_t frame = 0; frame < 10 && !script->Update(harness.Runner, harness.Context, harness.Commands); frame++)
+				harness.Runner.Update(harness.Context);
+			REQUIRE(script->IsFinished());
+			return !script->HasFailed();
+		};
+
+		CHECK(run(R"([
+			{ "command": "test.defer", "parameters": { "polls": 2 }, "expect": { "/polls": { "equals": 2, "min": 1.5, "max": 2.5 }, "": { "equals": { "polls": 2 } } } },
+			{ "command": "editor.wait", "parameters": { "frames": 1 }, "expect": { "/frames": { "min": 1, "max": 1 } } },
+			{ "command": "selection.get", "expect": { "/entities": { "equals": [] } } }
+		])"));
+
+		const uint64_t logStart = Log::GetBuffer().GetLatestSequence();
+		CHECK_FALSE(run(R"([ { "command": "test.defer", "parameters": { "polls": 2 }, "expect": { "/polls": { "equals": 3 } } } ])"));
+		CHECK_FALSE(run(R"([ { "command": "test.defer", "parameters": { "polls": 2 }, "expect": { "/polls": { "max": 1.5 } } } ])"));
+		CHECK_FALSE(run(R"([ { "command": "test.defer", "parameters": { "polls": 2 }, "expect": { "/polls": { "min": 2.5 } } } ])"));
+		CHECK_FALSE(run(R"([ { "command": "test.defer", "parameters": { "polls": 2 }, "expect": { "/missing": { "equals": 1 } } } ])"));
+		CHECK_FALSE(run(R"([ { "command": "test.defer", "parameters": { "polls": 2 }, "expect": { "": { "min": 0 } } } ])"));
+		CHECK_FALSE(run(R"([ { "command": "selection.get", "expect": { "/entities/0": { "equals": "0000000000000001" } } } ])"));
+		CHECK_FALSE(run(R"([ { "command": "selection.get", "expect": { "/entities/x": { "equals": 1 } } } ])"));
+
+		// Each failure says what was expected and what the result has.
+		std::vector<std::string> errors;
+		for (const LogEntry& entry : Log::GetBuffer().GetEntries(logStart))
+		{
+			if (entry.Level == LogLevel::Error && entry.Message.find(": expected ") != std::string::npos)
+				errors.push_back(entry.Message);
+		}
+		const std::vector<std::string> expected = {
+			"test.defer: expected '/polls' to be 3, but it is 2",
+			"test.defer: expected '/polls' to be a number in [-inf, 1.5], but it is 2",
+			"test.defer: expected '/polls' to be a number in [2.5, inf], but it is 2",
+			"test.defer: expected a value at '/missing', but the result has none",
+			"test.defer: expected '' to be a number in [0, inf], but it is {\"polls\":2}",
+			"selection.get: expected a value at '/entities/0', but the result has none",
+			"selection.get: expected a value at '/entities/x', but the result has none",
+		};
+		CHECK(errors == expected);
 	}
 
 	TEST_CASE("Scripts load from files")

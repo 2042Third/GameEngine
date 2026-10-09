@@ -2,8 +2,16 @@
 	{ "command": "project.create", "parameters": { "directory": "@STRATA_EXPORT_TEST_DIR@/Project", "name": "SmokeGame" } },
 	{ "command": "material.create", "parameters": { "path": "Materials/Blue.stmat", "properties": { "BaseColor": [0.1, 0.2, 1, 1] } } },
 	{ "command": "entity.create", "parameters": { "name": "Box", "components": { "MeshRenderer": { "Mesh": "0000000000000001", "Material": "Materials/Blue.stmat" } } } },
-	{ "command": "entity.create", "parameters": { "name": "Sun", "components": { "DirectionalLight": { "Intensity": 3 } } } },
+	{ "command": "entity.create", "parameters": { "name": "Floor", "components": { "MeshRenderer": { "Mesh": "0000000000000003" }, "Transform": { "Translation": [0, -0.5, 0], "Scale": [8, 1, 8] } } } },
+	{ "command": "entity.create", "parameters": { "name": "Sun", "components": { "DirectionalLight": { "Intensity": 3 }, "Transform": { "Rotation": [-50, 30, 0] } } } },
+	{ "command": "entity.create", "parameters": { "name": "Camera", "components": { "Camera": {}, "Transform": { "Translation": [0, 1.5, 4], "Rotation": [-15, 0, 0] } } } },
+	{ "command": "entity.create", "parameters": { "name": "Title", "components": { "Text": { "Text": "Smoke Game", "FontSize": 28, "ScreenAnchor": [0.5, 0.08] } } } },
 	{ "command": "scene.saveAs", "parameters": { "path": "Scenes/Main.stscene" } },
 	{ "command": "project.setStartScene", "parameters": { "scene": "Scenes/Main.stscene" } },
-	{ "command": "project.export", "parameters": { "directory": "@STRATA_EXPORT_TEST_DIR@/Build" } }
+	{ "command": "project.export", "parameters": { "directory": "@STRATA_EXPORT_TEST_DIR@/Build" } },
+	{ "command": "scene.new", "parameters": { "name": "NoCamera" } },
+	{ "command": "entity.create", "parameters": { "name": "Box", "components": { "MeshRenderer": { "Mesh": "0000000000000001", "Material": "Materials/Blue.stmat" } } } },
+	{ "command": "scene.saveAs", "parameters": { "path": "Scenes/NoCamera.stscene" } },
+	{ "command": "project.setStartScene", "parameters": { "scene": "Scenes/NoCamera.stscene" } },
+	{ "command": "project.export", "parameters": { "directory": "@STRATA_EXPORT_TEST_DIR@/BuildNoCamera" } }
 ]

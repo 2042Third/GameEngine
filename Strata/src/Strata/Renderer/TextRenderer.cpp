@@ -16,8 +16,11 @@
 namespace Strata
 {
 
+	// A glyph may overdraw the frame budget by its own cost: keep that within a few budgets.
+	static_assert(FontAtlas::c_MaxGlyphRasterCost <= 4 * TextRenderer::c_FrameRasterBudget.Cost);
+
 	TextRenderer::TextRenderer(const std::string& debugName, nvrhi::IBuffer* frameConstants)
-		: m_DebugName(debugName), m_FrameConstants(frameConstants)
+		: m_DebugName(debugName), m_Errors("TextRenderer '" + debugName + "'"), m_FrameConstants(frameConstants)
 	{
 		ST_CORE_VERIFY(Renderer::IsInitialized() && frameConstants, "TextRenderer requires an initialized renderer and frame constants");
 		m_Device = Renderer::GetDevice();
@@ -29,7 +32,7 @@ namespace Strata
 		const nvrhi::VertexAttributeDesc attributes[] = {
 			nvrhi::VertexAttributeDesc().setName("POSITION").setFormat(nvrhi::Format::RGB32_FLOAT).setBufferIndex(0)
 				.setOffset(offsetof(TextVertex, Position)).setElementStride(sizeof(TextVertex)),
-			nvrhi::VertexAttributeDesc().setName("TEXCOORD").setFormat(nvrhi::Format::RG32_FLOAT).setBufferIndex(0)
+			nvrhi::VertexAttributeDesc().setName("TEXCOORD").setFormat(nvrhi::Format::RGB32_FLOAT).setBufferIndex(0)
 				.setOffset(offsetof(TextVertex, TexCoord)).setElementStride(sizeof(TextVertex)),
 			nvrhi::VertexAttributeDesc().setName("COLOR").setFormat(nvrhi::Format::RGBA8_UNORM).setBufferIndex(0)
 				.setOffset(offsetof(TextVertex, Color)).setElementStride(sizeof(TextVertex))
@@ -63,7 +66,7 @@ namespace Strata
 			CachedAtlas cached;
 			cached.Atlas = FontAtlas::Create(font, &error);
 			if (!cached.Atlas)
-				ST_CORE_ERROR("TextRenderer '{}': cannot use a font: {}", m_DebugName, error); // Cached as unusable: reported once
+				m_Errors.Report(fmt::format("cannot use a font: {}", error)); // Cached as unusable, so not retried every frame
 			it = m_Atlases.emplace(font.get(), std::move(cached)).first;
 		}
 		it->second.Used = true;
@@ -77,12 +80,13 @@ namespace Strata
 		const uint32_t packedColor = DebugDraw::PackColor(color);
 		for (const TextGlyphQuad& quad : m_Layout.Quads)
 		{
-			// Texture coordinates stay in texels: the atlas may still grow this frame.
+			// Texture coordinates stay in texels of the glyph's page (the layer of the atlas texture array).
 			const glm::vec2 texelMin(quad.AtlasPosition);
 			const glm::vec2 texelMax = texelMin + glm::vec2(quad.AtlasSize);
+			const float page = static_cast<float>(quad.Page);
 			auto vertex = [&](float x, float y, float u, float v)
 			{
-				m_Vertices.push_back(TextVertex { glm::vec3(transform * glm::vec4(x, y, 0.0f, 1.0f)), glm::vec2(u, v), packedColor });
+				m_Vertices.push_back(TextVertex { glm::vec3(transform * glm::vec4(x, y, 0.0f, 1.0f)), glm::vec3(u, v, page), packedColor });
 			};
 			// Em space is +Y up; atlas rows go down.
 			vertex(quad.Min.x, quad.Min.y, texelMin.x, texelMax.y);
@@ -107,7 +111,13 @@ namespace Strata
 		m_ScreenRanges.clear();
 		m_ViewportSize = glm::max(glm::vec2(viewportSize), glm::vec2(1.0f));
 		for (auto& [font, cached] : m_Atlases)
+		{
 			cached.Used = false;
+			if (cached.Atlas)
+				cached.Atlas->BeginFrame();
+		}
+		// One budget for every font: each atlas receives what the previous ones left.
+		GlyphRasterBudget budget = c_FrameRasterBudget;
 
 		for (auto [entity, text, world] : scene.GetRegistry().view<TextComponent, WorldTransformComponent>().each())
 		{
@@ -126,7 +136,10 @@ namespace Strata
 			CachedAtlas* atlas = GetAtlas(font ? font : Font::GetDefault());
 			if (!atlas)
 				continue;
+			atlas->Atlas->SetRasterBudget(budget);
 			LayoutText(*atlas->Atlas, text.Text, text.Alignment, m_Layout);
+			budget = atlas->Atlas->GetRasterBudget();
+			outStats.PendingGlyphs += m_Layout.PendingGlyphs;
 			if (m_Layout.Quads.empty())
 				continue;
 
@@ -150,6 +163,7 @@ namespace Strata
 			outStats.Texts++;
 			outStats.Glyphs += static_cast<uint32_t>(m_Layout.Quads.size());
 		}
+		outStats.RasterizedGlyphs += c_FrameRasterBudget.Glyphs - budget.Glyphs;
 
 		// Atlases live as long as their font asset: once only the cache still holds a font, it is gone from the scene's
 		// asset manager (unloaded or replaced by a reload) and its atlas is dropped.
@@ -168,7 +182,7 @@ namespace Strata
 				CachedAtlas& cached = *range.Atlas;
 				if (!cached.Atlas->Upload(m_Device, commandList))
 				{
-					ST_CORE_ERROR("TextRenderer '{}': failed to create a glyph atlas texture", m_DebugName);
+					m_Errors.Report("failed to create a glyph atlas texture");
 					return false;
 				}
 				if (cached.BoundTexture != cached.Atlas->GetTexture())
@@ -183,7 +197,7 @@ namespace Strata
 					cached.BindingSet = m_Device->createBindingSet(desc, m_BindingLayout);
 					if (!cached.BindingSet)
 					{
-						ST_CORE_ERROR("TextRenderer '{}': failed to create a glyph atlas binding set", m_DebugName);
+						m_Errors.Report("failed to create a glyph atlas binding set");
 						return false;
 					}
 					cached.BoundTexture = cached.Atlas->GetTexture();
@@ -206,12 +220,13 @@ namespace Strata
 			nvrhi::BufferHandle buffer = m_Device->createBuffer(desc);
 			if (!buffer)
 			{
-				ST_CORE_ERROR("TextRenderer '{}': failed to allocate {} bytes of text vertices", m_DebugName, capacity);
+				m_Errors.Report(fmt::format("failed to allocate {} bytes of text vertices", capacity));
 				return false;
 			}
 			m_VertexBuffer = buffer;
 		}
 		commandList->writeBuffer(m_VertexBuffer, m_Vertices.data(), requiredBytes);
+		m_Errors.Clear();
 		return true;
 	}
 

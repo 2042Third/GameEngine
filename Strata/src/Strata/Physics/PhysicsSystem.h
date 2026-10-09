@@ -23,7 +23,8 @@ namespace Strata
 	//
 	// The simulation (a PhysicsWorld, see there for how components map to bodies) is created when the scene starts running
 	// with physics components, or as soon as the first one is added, so scenes without physics cost nothing. The scene's
-	// gravity and fixed timestep drive it: each fixed update steps the world once. Component edits (EnTT
+	// gravity and fixed timestep drive it: each fixed update steps the world once (the first steps are held while mesh
+	// colliders wait for their meshes, see PhysicsWorld). Component edits (EnTT
 	// on_construct/on_update/on_destroy; property edits must emit on_update, e.g. through Entity::MarkModified or
 	// ComponentAccess), entity destruction and (de)activation are applied before the next update, body API call or query.
 	// Transforms changed outside physics are applied to the bodies at the next fixed step, so queries made in between see the

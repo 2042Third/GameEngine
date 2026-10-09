@@ -24,7 +24,7 @@ function(run_editor name commands)
 	cmake_parse_arguments(PARSE_ARGV 2 ARG "" "" "ARGUMENTS;EXPECT")
 	set(script "${WORK_DIR}/${name}.json")
 	file(WRITE "${script}" "${commands}")
-	execute_process(COMMAND "${EDITOR}" --no-gpu --quit-after-commands ${ARG_ARGUMENTS} --commands "${script}"
+	execute_process(COMMAND "${EDITOR}" --no-gpu --no-automation --quit-after-commands ${ARG_ARGUMENTS} --commands "${script}"
 		WORKING_DIRECTORY "${WORK_DIR}" OUTPUT_VARIABLE output ERROR_VARIABLE output RESULT_VARIABLE result)
 	message("${output}")
 	if(NOT result EQUAL 0)

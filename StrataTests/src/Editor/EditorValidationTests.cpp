@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Editor/CommandUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/PropertyEdit.h"
@@ -13,6 +14,9 @@
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/SceneSerializer.h>
+
+#include <stdexcept>
+#include <string>
 
 using namespace Strata;
 
@@ -82,8 +86,9 @@ TEST_SUITE("Editor.Validation")
 		{
 			CAPTURE(command->Name);
 			// A misspelled parameter: always rejected, whatever else is given.
-			const std::string unknown = harness.Error(command->Name, { { "definitelyNotAParameter", 1 } });
-			CHECK(unknown.find("Unknown parameter 'definitelyNotAParameter'") != std::string::npos);
+			const EditorCommandResult unknown = harness.Commands.Execute(harness.Context, command->Name, { { "definitelyNotAParameter", 1 } });
+			CHECK(unknown.Error.find("Unknown parameter 'definitelyNotAParameter'") != std::string::npos);
+			CHECK(unknown.ErrorKind == EditorCommandError::InvalidParameters);
 
 			// Each required parameter, left out while the others are present.
 			const nlohmann::json& schema = command->Parameters;
@@ -97,10 +102,56 @@ TEST_SUITE("Editor.Validation")
 					if (required != missing)
 						parameters[required.get<std::string>()] = ExampleValue(schema["properties"][required.get<std::string>()]);
 				}
-				CHECK(harness.Error(command->Name, parameters).find("Missing parameter '" + missing.get<std::string>() + "'") != std::string::npos);
+				const EditorCommandResult result = harness.Commands.Execute(harness.Context, command->Name, parameters);
+				CHECK(result.Error.find("Missing parameter '" + missing.get<std::string>() + "'") != std::string::npos);
+				CHECK(result.ErrorKind == EditorCommandError::InvalidParameters);
 			}
 		}
 		CHECK(harness.Snapshot() == before);
+	}
+
+	TEST_CASE("Failures say whether the request or the command was at fault")
+	{
+		Harness harness;
+		harness.Commands.Register({ "test.throw", "Test command that throws, as third-party code may.", CommandUtils::ObjectSchema({}),
+			[](EditorContext&, const nlohmann::json&) -> EditorCommandResult
+			{
+				throw std::runtime_error("broken handler");
+			} });
+		auto kind = [&harness](std::string_view name, const nlohmann::json& parameters = nlohmann::json::object())
+		{
+			return harness.Commands.Execute(harness.Context, name, parameters).ErrorKind;
+		};
+
+		const std::string entity = harness.Create("Player");
+		CHECK(kind("entity.get", { { "entity", entity } }) == EditorCommandError::None);
+		CHECK(kind("does.not.exist") == EditorCommandError::UnknownCommand);
+		CHECK(kind("scene.info", nlohmann::json::array()) == EditorCommandError::InvalidParameters);
+
+		// Requests the command cannot accept: mistyped values, references to nothing, invalid component values.
+		CHECK(kind("entity.get", { { "entity", "not an id" } }) == EditorCommandError::InvalidParameters);
+		CHECK(kind("entity.get", { { "entity", "00000000DEADBEEF" } }) == EditorCommandError::InvalidParameters);
+		CHECK(kind("entity.create", { { "components", { { "NoSuchComponent", nlohmann::json::object() } } } }) == EditorCommandError::InvalidParameters);
+		CHECK(kind("component.set", { { "entity", entity }, { "component", "Transform" }, { "values", { { "Translation", "up" } } } })
+			== EditorCommandError::InvalidParameters);
+		CHECK(kind("entity.setParent", { { "entity", entity }, { "parent", entity } }) == EditorCommandError::InvalidParameters);
+		CHECK(kind("scene.setSettings", { { "gravity", { 0, -9.81 } } }) == EditorCommandError::InvalidParameters);
+		CHECK(kind("scene.setSettings", { { "fixedTimestep", 5 } }) == EditorCommandError::InvalidParameters);
+		CHECK(kind("selection.set", { { "entities", { "00000000000000AB" } } }) == EditorCommandError::InvalidParameters);
+		CHECK(kind("log.read", { { "minLevel", "Loud" } }) == EditorCommandError::InvalidParameters);
+
+		// Valid requests that cannot be carried out in the current state.
+		CHECK(kind("play.pause", { { "paused", true } }) == EditorCommandError::Failed);
+		CHECK(kind("component.get", { { "entity", entity }, { "component", "PointLight" } }) == EditorCommandError::Failed);
+		CHECK(kind("edit.redo") == EditorCommandError::Failed);
+		CHECK(kind("scene.save") == EditorCommandError::Failed);
+
+		const EditorCommandResult broken = harness.Commands.Execute(harness.Context, "test.throw");
+		CHECK(broken.ErrorKind == EditorCommandError::Internal);
+		CHECK(broken.Error.find("broken handler") != std::string::npos);
+
+		CHECK(std::string(EditorCommandErrorToString(EditorCommandError::InvalidParameters)) == "InvalidParameters");
+		CHECK(std::string(EditorCommandErrorToString(EditorCommandError::Cancelled)) == "Cancelled");
 	}
 
 	TEST_CASE("Component values are validated like in the inspector")

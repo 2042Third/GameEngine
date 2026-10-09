@@ -18,9 +18,11 @@ namespace Strata::CLI
 		enum : int
 		{
 			Success = 0,
-			RpcError = 1,          // The editor answered with an error
+			RpcError = 1,          // The editor answered with an error (JSON error object on stderr)
 			ConnectionFailure = 2, // No editor reachable, connection lost, or the editor failed to launch
-			UsageError = 3         // Invalid command line
+			UsageError = 3,        // Invalid command line
+			Timeout = 4,           // No answer within --timeout; the command may still be running in the editor
+			OutputError = 5        // The answer arrived but could not be saved (--save-image)
 		};
 	};
 
@@ -35,7 +37,11 @@ namespace Strata::CLI
 		std::optional<std::string> Token;
 		std::optional<int64_t> TimeoutMilliseconds;
 		std::optional<int64_t> WaitTimeoutMilliseconds;
+		std::optional<std::string> SaveImage; // call: where to write an image result
+		// launch/mcp: launched editors close themselves after this many seconds without a client (0: never)
+		std::optional<int64_t> IdleTimeoutSeconds;
 		bool Headless = false;
+		bool NoGpu = false;
 		bool Json = false;
 		bool Verbose = false;
 		bool Help = false;
@@ -56,7 +62,7 @@ namespace Strata::CLI
 	void InitializeCliLogging(bool verbose);
 
 	// Runs StrataCLI with arguments (without the program name) and returns the process exit code. Results go to
-	// output, diagnostics to errorOutput; input feeds the MCP server.
+	// output, diagnostics to errorOutput; input feeds the MCP server and the params of `call -`.
 	int RunCli(const std::vector<std::string>& arguments, std::istream& input, std::ostream& output, std::ostream& errorOutput);
 
 }

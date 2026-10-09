@@ -535,6 +535,22 @@ TEST_SUITE("GPU.SceneRenderer")
 			else
 				CHECK(GetPixelRGBA8(image, size / 2, size / 2) == glm::u8vec4(0, 0, 255, 255));
 		}
+
+		// A second color attachment would be left undefined: such framebuffers are rejected too.
+		{
+			auto [first, firstFramebuffer] = createTarget(32, nvrhi::Format::RGBA8_UNORM);
+			auto [second, secondFramebuffer] = createTarget(32, nvrhi::Format::RGBA8_UNORM);
+			nvrhi::FramebufferHandle both = gpu.GetNvrhiDevice()->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(first).addColorAttachment(second));
+			REQUIRE(both);
+			CHECK_FALSE(renderer.Render(scene, camera, both));
+			CHECK_FALSE(renderer.GetStats().Rendered);
+			for (nvrhi::ITexture* texture : { first.Get(), second.Get() })
+			{
+				ReadbackImage image;
+				REQUIRE(Renderer::ReadTexture(texture, image));
+				CHECK(GetPixelRGBA8(image, 16, 16) == glm::u8vec4(0, 0, 255, 255));
+			}
+		}
 		CHECK(renderer.Render(scene, camera)); // Recovers without a target
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

@@ -158,7 +158,7 @@ namespace Strata
 	}
 
 	SceneRenderer::SceneRenderer(const SceneRendererSpecification& specification)
-		: m_Specification(specification)
+		: m_Specification(specification), m_Errors("SceneRenderer '" + specification.DebugName + "'")
 	{
 		ST_CORE_VERIFY(Renderer::IsInitialized(), "SceneRenderer requires an initialized renderer");
 		m_Device = Renderer::GetDevice();
@@ -1079,20 +1079,12 @@ namespace Strata
 		nvrhi::BufferHandle created = m_Device->createBuffer(desc);
 		if (!created)
 		{
-			ReportError(fmt::format("failed to allocate the {} buffer ({} bytes)", name, capacity));
+			m_Errors.Report(fmt::format("failed to allocate the {} buffer ({} bytes)", name, capacity));
 			return false;
 		}
 		buffer = created;
 		outRecreated = true;
 		return true;
-	}
-
-	void SceneRenderer::ReportError(const std::string& message)
-	{
-		if (message == m_LastError)
-			return;
-		m_LastError = message;
-		ST_CORE_ERROR("SceneRenderer '{}': {}", m_Specification.DebugName, message);
 	}
 
 	void SceneRenderer::SetViewportSize(uint32_t width, uint32_t height)
@@ -1112,7 +1104,7 @@ namespace Strata
 		if (width > limit || height > limit)
 		{
 			ReleaseRenderTargets();
-			ReportError(fmt::format("viewport size {}x{} exceeds the device's texture size limit ({})", width, height, limit));
+			m_Errors.Report(fmt::format("viewport size {}x{} exceeds the device's texture size limit ({})", width, height, limit));
 			return;
 		}
 		m_TargetsValid = CreateRenderTargets();
@@ -1158,7 +1150,7 @@ namespace Strata
 		auto fail = [&](const char* what)
 		{
 			ReleaseRenderTargets();
-			ReportError(fmt::format("failed to create the {} for a {}x{} viewport", what, width, height));
+			m_Errors.Report(fmt::format("failed to create the {} for a {}x{} viewport", what, width, height));
 			return false;
 		};
 
@@ -1710,20 +1702,21 @@ namespace Strata
 	{
 		const nvrhi::FramebufferDesc& desc = target->getDesc();
 		const nvrhi::FramebufferInfoEx& info = target->getFramebufferInfo();
-		if (desc.colorAttachments.empty() || !desc.colorAttachments[0].texture)
+		// The final passes write one color output: further attachments would be left undefined.
+		if (desc.colorAttachments.size() != 1 || !desc.colorAttachments[0].texture)
 		{
-			ReportError("the target framebuffer has no color attachment");
+			m_Errors.Report(fmt::format("the target framebuffer has {} color attachments; exactly one is required", desc.colorAttachments.size()));
 			return false;
 		}
 		const nvrhi::FormatInfo& format = nvrhi::getFormatInfo(info.colorFormats[0]);
 		if (format.kind != nvrhi::FormatKind::Normalized || format.isSigned || format.isSRGB || info.sampleCount != 1)
 		{
-			ReportError(fmt::format("the target's color format {} is not supported (single-sampled, non-sRGB UNORM required)", format.name));
+			m_Errors.Report(fmt::format("the target's color format {} is not supported (single-sampled, non-sRGB UNORM required)", format.name));
 			return false;
 		}
 		if (info.width != m_ViewportSize.x || info.height != m_ViewportSize.y)
 		{
-			ReportError(fmt::format("the target is {}x{} but the viewport is {}x{}; the renderer does not rescale", info.width, info.height, m_ViewportSize.x,
+			m_Errors.Report(fmt::format("the target is {}x{} but the viewport is {}x{}; the renderer does not rescale", info.width, info.height, m_ViewportSize.x,
 				m_ViewportSize.y));
 			return false;
 		}
@@ -1738,7 +1731,7 @@ namespace Strata
 			return false; // Nothing to show (e.g. a minimized window); not an error
 		if (!m_TargetsValid)
 		{
-			ReportError("the render targets are unavailable (see the previous error)");
+			m_Errors.Report("the render targets are unavailable (see the previous error)");
 			return false;
 		}
 		if (target && !ValidateTarget(target))
@@ -1769,7 +1762,7 @@ namespace Strata
 		bool degraded = false; // Rendered with a reported limitation: keep the error so it is not logged every frame
 		if (frame.ShadowParams.w > 0.0f && !EnsureShadowMap())
 		{
-			ReportError("failed to create the shadow map; rendering without shadows");
+			m_Errors.Report("failed to create the shadow map; rendering without shadows");
 			frame.ShadowParams.w = 0.0f;
 			degraded = true;
 		}
@@ -1801,7 +1794,7 @@ namespace Strata
 			commandList->endMarker();
 			commandList->close();
 			m_Device->executeCommandList(commandList); // Keeps the environment processing that was recorded
-			ReportError("failed to create the scene binding sets");
+			m_Errors.Report("failed to create the scene binding sets");
 			m_Stats = {};
 			return false;
 		}
@@ -1907,6 +1900,8 @@ namespace Strata
 		const bool text = m_TextRenderer->Prepare(scene, m_ViewportSize, commandList, textStats);
 		m_Stats.Texts = textStats.Texts;
 		m_Stats.TextGlyphs = textStats.Glyphs;
+		m_Stats.PendingTextGlyphs = textStats.PendingGlyphs;
+		m_Stats.RasterizedTextGlyphs = textStats.RasterizedGlyphs;
 		m_Stats.PendingAssets += textStats.PendingFonts;
 
 		// Overlays (and text) are composed in the output texture, which is then copied into the target.
@@ -1960,7 +1955,7 @@ namespace Strata
 		m_Stats.Rendered = true;
 		m_HasRenderedFrame = true;
 		if (!degraded)
-			m_LastError.clear();
+			m_Errors.Clear();
 		return true;
 	}
 
@@ -2139,7 +2134,7 @@ namespace Strata
 				m_OutlineBindingSet = m_Device->createBindingSet(desc, m_OutlineBindingLayout);
 				if (!m_OutlineBindingSet)
 				{
-					ReportError("failed to create the selection outline bindings");
+					m_Errors.Report("failed to create the selection outline bindings");
 					return false;
 				}
 			}
@@ -2169,18 +2164,41 @@ namespace Strata
 
 	Entity SceneRenderer::GetEntityAt(Scene& scene, uint32_t x, uint32_t y)
 	{
-		if (!m_HasRenderedFrame || !m_EntityIDTexture || x >= m_ViewportSize.x || y >= m_ViewportSize.y)
+		Scope<TextureReadback> readback = ReadEntityIDAsync(x, y);
+		if (!readback)
 			return {};
-
+		readback->Wait();
 		ReadbackImage image;
-		if (!Renderer::ReadTexture(m_EntityIDTexture, image) || image.BytesPerPixel != sizeof(uint32_t))
+		if (!readback->GetResult(image) || image.BytesPerPixel != sizeof(uint32_t) || image.Pixels.size() < sizeof(uint32_t))
 			return {};
 
 		uint32_t id = 0;
-		std::memcpy(&id, image.Pixels.data() + (static_cast<size_t>(y) * image.Width + x) * sizeof(uint32_t), sizeof(uint32_t));
+		std::memcpy(&id, image.Pixels.data(), sizeof(uint32_t));
+		return GetEntityFromID(scene, id);
+	}
+
+	Scope<TextureReadback> SceneRenderer::ReadEntityIDAsync(uint32_t x, uint32_t y)
+	{
+		if (!m_HasRenderedFrame || !m_EntityIDTexture || x >= m_ViewportSize.x || y >= m_ViewportSize.y)
+			return nullptr;
+
+		TextureReadbackRegion region;
+		region.X = x;
+		region.Y = y;
+		region.Width = 1;
+		region.Height = 1;
+		std::string error;
+		Scope<TextureReadback> readback = TextureReadback::Create(m_EntityIDTexture, region, &error);
+		if (!readback)
+			m_Errors.Report(fmt::format("reading the entity ID at ({}, {}) failed: {}", x, y, error));
+		return readback;
+	}
+
+	Entity SceneRenderer::GetEntityFromID(Scene& scene, uint32_t id)
+	{
+		// The prepass writes the entity handle + 1, so 0 means that nothing was drawn.
 		if (id == 0)
 			return {};
-
 		const entt::entity handle = static_cast<entt::entity>(id - 1);
 		if (!scene.GetRegistry().valid(handle))
 			return {};

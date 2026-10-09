@@ -46,12 +46,15 @@ namespace Strata
 
 		const Ref<AudioClip>& GetClip() const;
 
-		// Starts or resumes playback; rewinds first if the clip has already played to its end.
+		// Starts or resumes playback. Returns false for a voice that played to its end (HasEnded), which is replaced instead:
+		// the audio thread stops a finished voice on its next pass, and that stop could undo a restart.
 		bool Start();
 		// Halts playback, keeping the position.
 		void Stop();
 		// Started and not yet at the end of the clip.
 		bool IsPlaying() const;
+		// Played to the end of a non-looping clip.
+		bool HasEnded() const;
 		// Whether Start() ever succeeded, i.e. whether the mixer may have read audio from the voice.
 		bool HasStarted() const;
 

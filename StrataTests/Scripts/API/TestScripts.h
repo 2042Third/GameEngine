@@ -70,10 +70,28 @@ namespace ScriptTests
 		}
 	};
 
+	// Counts its live instances (all classes derived from it), so the engine-side tests can check that every instance
+	// the engine created was also deleted (StrataTestScripts_GetLiveInstanceCount, exported by the module).
+	class CountedScript : public Strata::Script
+	{
+	public:
+		CountedScript()
+		{
+			s_LiveInstances++;
+		}
+
+		~CountedScript() override
+		{
+			s_LiveInstances--;
+		}
+
+		static inline int64_t s_LiveInstances = 0;
+	};
+
 }
 
 // Records every callback in the scene's "Log" entity and counts them in fields.
-class Lifecycle : public Strata::Script
+class Lifecycle : public ScriptTests::CountedScript
 {
 public:
 	int32_t Creates = 0;

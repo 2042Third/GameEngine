@@ -7,6 +7,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <filesystem>
 #include <initializer_list>
 #include <optional>
 #include <string>
@@ -53,10 +54,20 @@ namespace Strata
 		// {"id", "name", "parent", "children": [...], "components": {...}}
 		nlohmann::json DescribeEntity(Entity entity);
 
+		// {"open": false} without a project, else {"open": true, "name", "directory", "assetDirectory", "startScene"}.
+		nlohmann::json DescribeProject(const EditorContext& context);
+
 		// Applies component values (as in scene files) to the entity, adding missing components. Validated like the
 		// inspector: unknown components or properties, read-only properties, invalid values and references to missing
 		// assets or entities fail (values before the failure may have been applied: roll back).
 		bool ApplyComponents(Entity entity, const nlohmann::json& components, std::string* outError);
+
+		// A file a command writes for its client (e.g. a capture). Relative paths resolve against the project directory
+		// and fail without a project (the editor's working directory means nothing to a client); absolute paths stay.
+		// Network (UNC) and device paths, drive-relative paths and reserved device names are refused, the extension must
+		// match (".png"), and an existing file is replaced only with `overwrite`; anything but a regular file never is.
+		std::optional<std::filesystem::path> ResolveOutputPath(const EditorContext& context, std::string_view path, std::string_view extension, bool overwrite,
+			std::string* outError);
 
 	}
 

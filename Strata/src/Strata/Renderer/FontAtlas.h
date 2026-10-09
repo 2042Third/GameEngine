@@ -1,11 +1,13 @@
 #pragma once
 
 #include "Strata/Core/Base.h"
+#include "Strata/Renderer/FontValidation.h"
 
 #include <glm/glm.hpp>
 #include <nvrhi/nvrhi.h>
 
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -28,26 +30,75 @@ namespace Strata
 	{
 		uint32_t GlyphIndex = 0;
 		float Advance = 0.0f;    // Pen advance in em units
-		bool Visible = false;    // False for whitespace and glyphs that did not fit into the atlas
+		bool Visible = false;    // In the atlas, ready to draw
+		// Has a shape but is not in the atlas yet: it waits for the rasterization budget of a later frame, or for atlas
+		// space. Glyphs that are neither visible nor pending have nothing to draw (whitespace, or too large to draw).
+		bool Pending = false;
 		glm::vec2 PlaneMin = glm::vec2(0.0f); // Quad corners relative to the pen on the baseline, em units, +Y up
 		glm::vec2 PlaneMax = glm::vec2(0.0f);
-		glm::uvec2 AtlasPosition = glm::uvec2(0); // Top-left texel of the glyph's rectangle in the atlas
+		uint32_t Page = 0;                        // Atlas page (texture array layer) of a visible glyph
+		glm::uvec2 AtlasPosition = glm::uvec2(0); // Top-left texel of the glyph's rectangle in its page
 		glm::uvec2 AtlasSize = glm::uvec2(0);
 	};
 
-	// Signed distance field glyph atlas of one font, filled on demand. Each glyph is rasterized once at a fixed size as
-	// a distance field (crisp when scaled up or down) into a single-channel texture that grows as glyphs are added.
-	// Characters the font lacks use its missing-glyph shape. Main thread only.
+	// Glyph rasterization a frame may still do (see FontAtlas::SetRasterBudget). A glyph is rasterized while both counts
+	// are above zero; its cost may overdraw the remaining cost.
+	struct GlyphRasterBudget
+	{
+		uint32_t Glyphs = std::numeric_limits<uint32_t>::max();
+		uint64_t Cost = std::numeric_limits<uint64_t>::max(); // See FontAtlas::GetRasterCost
+	};
+
+	struct FontAtlasSpecification
+	{
+		uint32_t MaxPages = 8; // Of FontAtlas::c_PageSize squared texels (256 KB each, on the CPU and the GPU)
+	};
+
+	struct FontAtlasStats
+	{
+		uint64_t RasterizedGlyphs = 0; // Totals since the atlas was created
+		uint64_t EvictedGlyphs = 0;
+		uint64_t UploadedBytes = 0;
+	};
+
+	// Signed distance field glyph atlas of one font, filled on demand. Each glyph is rasterized once at a fixed size as a
+	// distance field (crisp when scaled up or down) into a page of a single-channel texture array. Characters the font
+	// lacks use its missing-glyph shape. Main thread only.
+	//
+	// Pages are grids of square cells; a glyph takes one cell, or a block of cells when it is larger. Memory stays bounded:
+	// when no cells are free and no page can be added, the least recently used glyphs that were not used in the current
+	// frame (see BeginFrame) are evicted and rasterized again when next needed. Rasterization can be limited per frame
+	// (SetRasterBudget); glyphs over the budget stay pending and are drawn on a later frame. Only the rows of a page that
+	// changed are uploaded to the GPU.
 	class FontAtlas
 	{
 	public:
-		static constexpr float c_GlyphEmSize = 48.0f; // Atlas texels per em
-		static constexpr int c_DistancePadding = 6;   // Texels of distance field around each glyph shape
-		static constexpr uint32_t c_AtlasWidth = 1024;
-		static constexpr uint32_t c_MaxAtlasHeight = 4096;
+		static constexpr float c_GlyphEmSize = 32.0f; // Atlas texels per em
+		static constexpr int c_DistancePadding = 4;   // Texels of distance field around each glyph shape
+		static constexpr uint32_t c_PageSize = 512;
+		// Cells hold glyphs up to one texel smaller (the empty gutter keeps filtering from bleeding between glyphs): shapes
+		// of about one em, such as Latin letters and CJK ideographs, take one cell.
+		static constexpr uint32_t c_CellSize = 42;
+		static constexpr uint32_t c_CellsPerRow = c_PageSize / c_CellSize;
+		static constexpr uint32_t c_UploadBandRows = 64; // Changed rows are uploaded in bands of this height
+		// Rasterization cost (GetRasterCost) is about proportional to time: about 4 ns per unit in an optimized build on a
+		// desktop CPU, up to twice that for curve-heavy outlines such as emoji. Glyphs larger than c_MaxGlyphTexels (padding
+		// included) or costlier than c_MaxGlyphRasterCost (four times TextRenderer's frame budget) are rasterized at half
+		// or a quarter of the resolution, and beyond that not drawn: a malformed font cannot make the rasterizer allocate
+		// or compute without bound. Among the vendored fonts only a few dozen emoji are drawn at reduced resolution.
+		static constexpr uint64_t c_MaxGlyphTexels = 192;
+		static constexpr uint64_t c_MaxGlyphRasterCost = 2 * 1024 * 1024;
+		static constexpr uint32_t c_MaxResolutionReduction = 4;
+		static constexpr uint64_t c_CurveCostWeight = 2; // Extra cost of a curve vertex over a line vertex
+		// BeginFrame drops cached glyphs that are not in the atlas, and the code point cache, beyond this many entries; the
+		// kerning cache is cleared when it reaches it.
+		static constexpr size_t c_GlyphCacheLimit = 4096;
+
+		// The cost of rasterizing a glyph of `shape` into a distance field of `size` texels (see GlyphRasterBudget::Cost).
+		static uint64_t GetRasterCost(const glm::uvec2& size, const GlyphShapeCost& shape);
 
 		// Null (with an error) when the font data cannot be read.
-		static Scope<FontAtlas> Create(const Ref<Font>& font, std::string* outError = nullptr);
+		static Scope<FontAtlas> Create(const Ref<Font>& font, std::string* outError = nullptr, const FontAtlasSpecification& specification = {});
 		~FontAtlas();
 
 		FontAtlas(const FontAtlas&) = delete;
@@ -56,42 +107,89 @@ namespace Strata
 		const Ref<Font>& GetFont() const { return m_Font; }
 		const FontMetrics& GetMetrics() const { return m_Metrics; }
 
-		// The glyph of a Unicode code point, rasterized on first use.
-		const GlyphInfo& GetGlyph(uint32_t codepoint);
-		// Extra advance between two glyphs (kerning), in em units.
-		float GetKerning(const GlyphInfo& left, const GlyphInfo& right) const;
+		// Starts a frame: glyphs returned from now on are not evicted until the next BeginFrame, and the references to them
+		// stay valid until then.
+		void BeginFrame();
+		// The rasterization this frame may still do; GetRasterBudget returns what is left. Unlimited by default.
+		void SetRasterBudget(const GlyphRasterBudget& budget) { m_Budget = budget; }
+		const GlyphRasterBudget& GetRasterBudget() const { return m_Budget; }
 
-		// Creates or updates the GPU texture with the glyphs added since the last upload. False when the texture
-		// cannot be created (the atlas then stays dirty).
+		// The glyph of a Unicode code point, rasterized on first use (budget and atlas space permitting).
+		const GlyphInfo& GetGlyph(uint32_t codepoint);
+		// A glyph by its index in the font (out of range: the missing glyph).
+		const GlyphInfo& GetGlyphByIndex(uint32_t glyphIndex);
+		// Extra advance between two glyphs (kerning), in em units. Cached per glyph pair: stb_truetype searches the font's
+		// kerning tables on every call.
+		float GetKerning(const GlyphInfo& left, const GlyphInfo& right);
+
+		// Creates the GPU texture array or uploads what changed since the last upload. False when a texture cannot be
+		// created (the changes then stay pending).
 		bool Upload(nvrhi::IDevice* device, nvrhi::ICommandList* commandList);
 		nvrhi::ITexture* GetTexture() const { return m_Texture; }
-		glm::uvec2 GetSize() const { return { c_AtlasWidth, m_Height }; }
-		uint32_t GetGlyphCount() const { return static_cast<uint32_t>(m_Glyphs.size()); }
-		const std::vector<uint8_t>& GetPixels() const { return m_Pixels; }
+
+		uint32_t GetPageCount() const { return static_cast<uint32_t>(m_Pages.size()); }
+		const std::vector<uint8_t>& GetPagePixels(uint32_t page) const; // c_PageSize squared texels, rows top to bottom
+		size_t GetCachedGlyphCount() const { return m_Glyphs.size(); }
+		size_t GetCachedKerningCount() const { return m_Kerning.size(); }
+		const FontAtlasStats& GetStats() const { return m_Stats; }
 	private:
+		static constexpr uint32_t c_FreeCell = std::numeric_limits<uint32_t>::max();
+
+		struct GlyphEntry
+		{
+			GlyphInfo Info;
+			glm::uvec2 Size = glm::uvec2(0); // Distance field texels of a glyph with a shape
+			float Scale = 0.0f;              // Font units to texels: the atlas's, or reduced for costly glyphs
+			uint64_t Cost = 0;
+			uint64_t LastUsed = 0;           // Frame
+		};
+
+		struct Page
+		{
+			std::vector<uint8_t> Pixels;
+			std::vector<uint32_t> Cells; // Glyph index per cell, row by row (c_FreeCell when free)
+			uint32_t FreeCells = 0;
+			uint32_t DirtyBegin = 0;     // Rows changed since the last upload
+			uint32_t DirtyEnd = 0;
+			bool FullyDirty = true;      // The whole page needs uploading
+		};
+
+		// A block of cells: the top-left cell and the size in cells.
+		struct CellBlock
+		{
+			uint32_t Page = 0;
+			glm::uvec2 Cell = glm::uvec2(0);
+			glm::uvec2 Cells = glm::uvec2(1);
+		};
+
 		FontAtlas() = default;
-		GlyphInfo& AddGlyph(uint32_t glyphIndex);
-		// Finds space for a rectangle (shelf packing), growing the atlas when needed. False when it is full.
-		bool Allocate(uint32_t width, uint32_t height, glm::uvec2& outPosition);
+		GlyphEntry DescribeGlyph(uint32_t glyphIndex) const;
+		void Rasterize(GlyphEntry& entry);
+		// Finds cells for a glyph: free ones, a new page, or the least recently used glyphs not used in this frame.
+		bool Allocate(const glm::uvec2& cells, CellBlock& outBlock);
+		void Evict(uint32_t glyphIndex);
+		void MarkDirty(Page& page, uint32_t firstRow, uint32_t rowCount);
 	private:
 		struct FontInfo;
 
 		Ref<Font> m_Font;
+		FontAtlasSpecification m_Specification;
 		std::unique_ptr<FontInfo> m_Info; // stb_truetype state (kept out of the header)
 		float m_Scale = 1.0f;             // Font units to atlas texels
 		float m_EmScale = 1.0f;           // Font units to em
 		FontMetrics m_Metrics;
 
 		std::unordered_map<uint32_t, uint32_t> m_CodepointGlyphs; // Code point -> glyph index
-		std::unordered_map<uint32_t, GlyphInfo> m_Glyphs;         // Glyph index -> glyph
+		std::unordered_map<uint32_t, float> m_Kerning;            // Glyph pair (left << 16 | right) -> kerning
+		std::unordered_map<uint32_t, GlyphEntry> m_Glyphs;        // Glyph index -> glyph
+		std::vector<Page> m_Pages;
+		uint64_t m_Frame = 0;
+		GlyphRasterBudget m_Budget;
+		bool m_ReportedFull = false;
+		FontAtlasStats m_Stats;
 
-		std::vector<uint8_t> m_Pixels; // c_AtlasWidth x m_Height, one byte per texel
-		uint32_t m_Height = 0;
-		uint32_t m_ShelfX = 0;
-		uint32_t m_ShelfY = 0;
-		uint32_t m_ShelfHeight = 0;
-		bool m_Dirty = false;
-		nvrhi::TextureHandle m_Texture;
+		nvrhi::TextureHandle m_Texture;    // Texture2DArray, one layer per page (capacity grows in powers of two)
+		nvrhi::TextureHandle m_UploadBand; // c_PageSize x c_UploadBandRows staging for partial page uploads
 	};
 
 }

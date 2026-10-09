@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Strata/Core/Base.h"
+#include "Strata/Core/ErrorThrottle.h"
 #include "Strata/Renderer/FontAtlas.h"
 #include "Strata/Renderer/TextLayout.h"
 
@@ -19,9 +20,11 @@ namespace Strata
 
 	struct TextRenderStats
 	{
-		uint32_t Texts = 0;        // Text components drawn
-		uint32_t Glyphs = 0;       // Glyph quads drawn
-		uint32_t PendingFonts = 0; // Text drawn with the default font while its own font loads
+		uint32_t Texts = 0;            // Text components drawn
+		uint32_t Glyphs = 0;           // Glyph quads drawn
+		uint32_t PendingFonts = 0;     // Text drawn with the default font while its own font loads
+		uint32_t PendingGlyphs = 0;    // Glyphs left out while they wait for rasterization (drawn on a later frame)
+		uint32_t RasterizedGlyphs = 0; // Glyphs added to atlases this frame
 	};
 
 	// Draws the TextComponents of a scene with signed distance field glyph atlases (one per font, see FontAtlas):
@@ -31,6 +34,11 @@ namespace Strata
 	class TextRenderer
 	{
 	public:
+		// Glyph rasterization per frame, shared by all fonts, so new text never stalls a frame for long (the cost allows
+		// about 2 ms of rasterization in an optimized build on a desktop CPU: about ten Latin letters or one emoji).
+		// Glyphs over it are drawn on the following frames (see TextRenderStats::PendingGlyphs).
+		static constexpr GlyphRasterBudget c_FrameRasterBudget = { 32, 512 * 1024 };
+
 		// frameConstants: the frame constant buffer of the owning SceneRenderer (view-projection of world-space text).
 		TextRenderer(const std::string& debugName, nvrhi::IBuffer* frameConstants);
 		~TextRenderer();
@@ -48,7 +56,7 @@ namespace Strata
 		struct TextVertex
 		{
 			glm::vec3 Position; // World space, or pixels (screen space)
-			glm::vec2 TexCoord;
+			glm::vec3 TexCoord; // Atlas texels and page
 			uint32_t Color;     // RGBA8, display colors
 		};
 
@@ -73,6 +81,7 @@ namespace Strata
 		nvrhi::IGraphicsPipeline* GetPipeline(const nvrhi::FramebufferInfo& framebufferInfo, bool screenSpace);
 	private:
 		std::string m_DebugName;
+		ErrorThrottle m_Errors; // Failures repeat every frame: logged once until text renders again
 		nvrhi::IDevice* m_Device = nullptr;
 		nvrhi::ShaderHandle m_VertexShader;
 		nvrhi::ShaderHandle m_PixelShader;

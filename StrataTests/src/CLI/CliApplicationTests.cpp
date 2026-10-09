@@ -4,11 +4,13 @@
 
 #include "CLI/CliApplication.h"
 #include "CLI/FakeEditor.h"
+#include "CLI/ImageOutput.h"
 #include "Strata/Core/Version.h"
 #include "Strata/Network/JsonRpc.h"
 #include "Strata/Network/Socket.h"
 #include "TestHelpers.h"
 
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -85,6 +87,21 @@ TEST_SUITE("CLI.Commands")
 		REQUIRE_MESSAGE(unbounded.has_value(), error);
 		CHECK(unbounded->WaitTimeoutMilliseconds.value() == c_MaxSocketTimeout.count());
 		CHECK(unbounded->TimeoutMilliseconds.value() == c_MaxSocketTimeout.count());
+
+		// "-" (params from standard input) is a positional, not an option.
+		std::optional<CliArguments> fromInput = ParseCliArguments({ "call", "viewport.capture", "-", "--save-image", "shot.png", "--no-gpu" }, error);
+		REQUIRE_MESSAGE(fromInput.has_value(), error);
+		CHECK(fromInput->Positionals == std::vector<std::string> { "viewport.capture", "-" });
+		CHECK(fromInput->SaveImage.value() == "shot.png");
+		CHECK(fromInput->NoGpu);
+
+		std::optional<CliArguments> idle = ParseCliArguments({ "launch", "--idle-timeout", "300" }, error);
+		REQUIRE_MESSAGE(idle.has_value(), error);
+		CHECK(idle->IdleTimeoutSeconds.value() == 300);
+		CHECK(ParseCliArguments({ "mcp", "--idle-timeout", "0" }, error)->IdleTimeoutSeconds.value() == 0);
+		CHECK_FALSE(ParseCliArguments({ "launch", "--idle-timeout", "-1" }, error).has_value());
+		CHECK(error.find("--idle-timeout") != std::string::npos);
+		CHECK_FALSE(ParseCliArguments({ "launch", "--idle-timeout", "soon" }, error).has_value());
 
 		std::optional<CliArguments> separated = ParseCliArguments({ "call", "--", "--weird-method" }, error);
 		REQUIRE(separated.has_value());
@@ -195,7 +212,7 @@ TEST_SUITE("CLI.Commands")
 		CHECK(Run({ "call", "a.b", "{not json" }).ExitCode == ExitCode::UsageError);
 		CHECK(Run({ "call", "a.b", "42" }).ExitCode == ExitCode::UsageError);
 		CHECK(Run({ "list", "extra" }).ExitCode == ExitCode::UsageError);
-		CHECK(Run({ "launch" }).ExitCode == ExitCode::UsageError);
+		CHECK(Run({ "launch", "extra" }).ExitCode == ExitCode::UsageError);
 
 		const CliRun badOption = Run({ "status", "--nope" });
 		CHECK(badOption.ExitCode == ExitCode::UsageError);
@@ -240,6 +257,125 @@ TEST_SUITE("CLI.Commands")
 		const CliRun noSession = Run({ "call", "rpc.ping" });
 		CHECK(noSession.ExitCode == ExitCode::ConnectionFailure);
 		CHECK(noSession.ErrorOutput.find("No running Strata editor") != std::string::npos);
+	}
+
+	TEST_CASE("A call without an answer in time has its own exit code")
+	{
+		IsolatedEnvironment environment("CliTimeout");
+		Tests::PumpedRpcServer editor;
+		std::mutex responderMutex;
+		Ref<RpcResponder> heldResponder;
+		RpcMethodInfo hold;
+		hold.Name = "test.hold";
+		REQUIRE(editor.GetServer().RegisterMethod(hold, [&](const nlohmann::json&, const Ref<RpcResponder>& responder)
+		{
+			std::scoped_lock<std::mutex> lock(responderMutex);
+			heldResponder = responder; // Never answered while the call waits, like a command that takes long
+		}));
+		REQUIRE(Tests::StartFakeEditor(editor));
+
+		// Not a lost editor (exit code 2): the command may still be running.
+		const CliRun timedOut = Run(Concat({ "call", "test.hold", "--timeout", "300" }, ExplicitEndpoint(editor)));
+		CHECK(timedOut.ExitCode == ExitCode::Timeout);
+		CHECK(timedOut.Output.empty());
+		CHECK(JsonRpc::Parse(timedOut.ErrorOutput).value()["code"] == JsonRpc::ErrorCode::Timeout);
+		editor.Stop();
+	}
+
+	TEST_CASE("call reads its params from standard input or a file")
+	{
+		IsolatedEnvironment environment("CliParams");
+		Tests::PumpedRpcServer editor;
+		REQUIRE(Tests::StartFakeEditor(editor));
+
+		const CliRun fromInput = Run(Concat({ "call", "math.add", "-" }, ExplicitEndpoint(editor)), "{\"a\": 2,\n \"b\": 3}\n");
+		CHECK(fromInput.ExitCode == ExitCode::Success);
+		CHECK(JsonRpc::Parse(fromInput.Output).value() == 5.0);
+
+		const std::filesystem::path file = Tests::CreateTemporaryDirectory("CliParamsFile") / "params \xC3\xA9.json";
+		REQUIRE(FileSystem::WriteText(file, "{\"a\": 1, \"b\": 1}"));
+		const CliRun fromFile = Run(Concat({ "call", "math.add", "@" + FileSystem::ToUTF8(file) }, ExplicitEndpoint(editor)));
+		CHECK(fromFile.ExitCode == ExitCode::Success);
+		CHECK(JsonRpc::Parse(fromFile.Output).value() == 2.0);
+
+		const CliRun missingFile = Run(Concat({ "call", "math.add", "@" + FileSystem::ToUTF8(file.parent_path() / "missing.json") }, ExplicitEndpoint(editor)));
+		CHECK(missingFile.ExitCode == ExitCode::UsageError);
+		CHECK(missingFile.ErrorOutput.find("cannot read the params file") != std::string::npos);
+
+		const CliRun invalidInput = Run(Concat({ "call", "math.add", "-" }, ExplicitEndpoint(editor)), "not json");
+		CHECK(invalidInput.ExitCode == ExitCode::UsageError);
+		CHECK(invalidInput.ErrorOutput.find("standard input") != std::string::npos);
+
+		// A UTF-8 byte order mark (as Windows tools write) is skipped; UTF-16 is refused with a hint.
+		const std::filesystem::path withBom = file.parent_path() / "bom.json";
+		REQUIRE(FileSystem::WriteText(withBom, "\xEF\xBB\xBF{\"a\": 4, \"b\": 4}"));
+		const CliRun fromBomFile = Run(Concat({ "call", "math.add", "@" + FileSystem::ToUTF8(withBom) }, ExplicitEndpoint(editor)));
+		CHECK(fromBomFile.ExitCode == ExitCode::Success);
+		CHECK(JsonRpc::Parse(fromBomFile.Output).value() == 8.0);
+		const CliRun utf16 = Run(Concat({ "call", "math.add", "-" }, ExplicitEndpoint(editor)), std::string("\xFF\xFE{\0}\0", 6));
+		CHECK(utf16.ExitCode == ExitCode::UsageError);
+		CHECK(utf16.ErrorOutput.find("UTF-16") != std::string::npos);
+	}
+
+	TEST_CASE("call saves image results to a file")
+	{
+		IsolatedEnvironment environment("CliImage");
+		Tests::PumpedRpcServer editor;
+		REQUIRE(Tests::StartFakeEditor(editor));
+		const std::filesystem::path image = Tests::CreateTemporaryDirectory("CliImageOutput") / "Shots" / "capture.png";
+
+		const CliRun saved = Run(Concat({ "call", "viewport.capture", "--save-image", FileSystem::ToUTF8(image) }, ExplicitEndpoint(editor)));
+		REQUIRE_MESSAGE(saved.ExitCode == ExitCode::Success, saved.ErrorOutput);
+		const nlohmann::json printed = JsonRpc::Parse(saved.Output).value();
+		CHECK(printed["Width"] == 2);
+		CHECK(printed["Image"]["MimeType"] == "image/png");
+		CHECK(printed["Image"]["Size"] == 8);
+		CHECK_FALSE(printed["Image"].contains("Data"));
+		CHECK(std::filesystem::equivalent(FileSystem::FromUTF8(printed["Image"]["File"].get<std::string>()), image));
+		const std::vector<uint8_t> expected = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n' };
+		CHECK(FileSystem::ReadBytes(image).value_or(std::vector<uint8_t>()) == expected);
+
+		// A result without an image is reported instead of silently printed.
+		const CliRun noImage = Run(Concat({ "call", "math.add", "{\"a\":1,\"b\":2}", "--save-image", FileSystem::ToUTF8(image) }, ExplicitEndpoint(editor)));
+		CHECK(noImage.ExitCode == ExitCode::OutputError);
+		CHECK(noImage.ErrorOutput.find("no image") != std::string::npos);
+	}
+
+	TEST_CASE("Base64 is decoded strictly")
+	{
+		auto decode = [](std::string_view text) -> std::optional<std::string>
+		{
+			const std::optional<std::vector<uint8_t>> bytes = DecodeBase64(text);
+			if (!bytes)
+				return std::nullopt;
+			return std::string(bytes->begin(), bytes->end());
+		};
+		// RFC 4648 test vectors, with and without padding.
+		CHECK(decode("") == std::string());
+		CHECK(decode("Zg==") == "f");
+		CHECK(decode("Zm8=") == "fo");
+		CHECK(decode("Zm9v") == "foo");
+		CHECK(decode("Zm9vYg==") == "foob");
+		CHECK(decode("Zm9vYmE=") == "fooba");
+		CHECK(decode("Zm9vYmFy") == "foobar");
+		CHECK(decode("Zm9vYg") == "foob");
+		CHECK(decode("Zm9v\r\nYmFy") == "foobar");
+		CHECK(decode("+/+/") == std::string("\xFB\xFF\xBF", 3));
+
+		CHECK_FALSE(decode("Z").has_value());
+		CHECK_FALSE(decode("Zg=").has_value());
+		CHECK_FALSE(decode("Zg===").has_value());
+		CHECK_FALSE(decode("Zg==Zg==").has_value());
+		CHECK_FALSE(decode("Zm9v!").has_value());
+		CHECK_FALSE(decode("Zm9v-_").has_value()); // The URL-safe alphabet is not accepted
+
+		nlohmann::json noImage = { { "Width", 1 } };
+		std::string error;
+		CHECK_FALSE(SaveResultImage(noImage, Tests::CreateTemporaryDirectory("CliNoImage") / "x.png", error));
+		CHECK(noImage == nlohmann::json { { "Width", 1 } });
+		nlohmann::json badData = { { "Image", { { "MimeType", "image/png" }, { "Data", "***" } } } };
+		CHECK_FALSE(SaveResultImage(badData, Tests::CreateTemporaryDirectory("CliBadImage") / "x.png", error));
+		CHECK(error.find("base64") != std::string::npos);
 	}
 
 	TEST_CASE("call discovers the editor through session files")
@@ -323,6 +459,27 @@ TEST_SUITE("CLI.Commands")
 		const CliRun quit = Run({ "call", "editor.quit", "--project", FileSystem::ToUTF8(project) });
 		CHECK(quit.ExitCode == ExitCode::Success);
 		const std::filesystem::path sessionFile = EditorSession::GetSessionFilePath(environment.SessionDirectory, sessions[0].ProcessId);
+		CHECK(Tests::WaitUntil([&]() { return !FileSystem::Exists(sessionFile); }, std::chrono::milliseconds(10000)));
+	}
+
+	TEST_CASE("launch starts an editor without a project and without a GPU")
+	{
+		IsolatedEnvironment environment("CliLaunchEmpty");
+		Tests::ScopedEnvironmentVariable fakeEditor("STRATA_TEST_FAKE_EDITOR", "1");
+
+		const CliRun run = Run({ "launch", "--no-gpu", "--editor", FileSystem::ToUTF8(Tests::GetTestExecutablePath()), "--wait-timeout", "20000" });
+		REQUIRE_MESSAGE(run.ExitCode == ExitCode::Success, run.ErrorOutput);
+		const nlohmann::json printed = JsonRpc::Parse(run.Output).value();
+		CHECK(printed["ProjectPath"] == "");
+		CHECK(printed["Headless"] == true);
+
+		const CliRun info = Run({ "call", "editor.info" });
+		REQUIRE_MESSAGE(info.ExitCode == ExitCode::Success, info.ErrorOutput);
+		CHECK(JsonRpc::Parse(info.Output).value()["NoGpu"] == true);
+
+		const CliRun quit = Run({ "call", "editor.quit" });
+		CHECK(quit.ExitCode == ExitCode::Success);
+		const std::filesystem::path sessionFile = EditorSession::GetSessionFilePath(environment.SessionDirectory, printed["ProcessId"].get<uint32_t>());
 		CHECK(Tests::WaitUntil([&]() { return !FileSystem::Exists(sessionFile); }, std::chrono::milliseconds(10000)));
 	}
 

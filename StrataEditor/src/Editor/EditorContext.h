@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Editor/EditorViewport.h"
 #include "Editor/SceneEdit.h"
 #include "Editor/ScriptBuild.h"
 #include "Editor/UndoStack.h"
@@ -12,7 +13,11 @@
 #include <Strata/Scripting/ScriptEngine.h>
 #include <Strata/Scripting/ScriptTypes.h>
 
+#include <nlohmann/json.hpp>
+
 #include <filesystem>
+#include <functional>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -32,7 +37,9 @@ namespace Strata
 	struct EditorContextSpecification
 	{
 		bool WatchAssetFiles = true;  // Hot reload of files changed outside the editor
-		bool HotReloadScripts = true; // Reload the script module when its file changes (e.g. rebuilt from an IDE)
+		// Reload the script module when its file changes (e.g. rebuilt from an IDE). With it, modules run from a private copy;
+		// without it they load in place, which on Windows keeps script.build from replacing a loaded module.
+		bool HotReloadScripts = true;
 		// The toolchain script.build uses (the engine's own by default).
 		ScriptBuildSettings ScriptBuild = ScriptBuildSettings::GetEngineDefaults();
 	};
@@ -54,7 +61,9 @@ namespace Strata
 	};
 
 	// The editor's state independent of any UI: the open project and its assets, the edited scene, play mode, the
-	// selection and the undo history. Every editor operation (UI, automation, tests) goes through it. Main thread only.
+	// selection, the undo history and the viewport (editor camera, overlays, rendering). Every editor operation (UI,
+	// automation, tests) goes through it. Without a project, an asset manager with only the built-in assets is active, so
+	// built-in meshes and materials render. Main thread only.
 	class EditorContext
 	{
 	public:
@@ -72,6 +81,7 @@ namespace Strata
 		bool CreateProject(const std::filesystem::path& directory, const std::string& name, std::string* outError = nullptr);
 		// Opens a project file, or the project in a directory. Closes the current project first.
 		bool OpenProject(const std::filesystem::path& path, std::string* outError = nullptr);
+		// Saves the project's viewport state (editor camera and settings) to its intermediate directory, then closes it.
 		void CloseProject();
 		bool HasProject() const { return m_Project != nullptr; }
 		const Ref<Project>& GetProject() const { return m_Project; }
@@ -101,7 +111,8 @@ namespace Strata
 		// Play mode
 		//////////////////////////////////////////////////////////////////////////
 
-		// Runs a copy of the edited scene. Changes made while playing are discarded by Stop.
+		// Runs a copy of the edited scene, with scripts, physics and audio. Changes made while playing are discarded by Stop,
+		// which also restores the engine-wide master volume a game may have changed (AudioSystem::SetMasterVolume).
 		bool Play(std::string* outError = nullptr);
 		// Like Play, but only physics runs (no scripts or audio).
 		bool Simulate(std::string* outError = nullptr);
@@ -112,6 +123,13 @@ namespace Strata
 		bool IsPaused() const;
 		// While paused, advances the simulation by `frames` fixed steps over the next updates.
 		void Step(uint32_t frames = 1);
+		// Whether the viewport's game view feeds keyboard and mouse input to the running game (play mode through the
+		// scene's camera with the viewport focused). Editor shortcuts that edit the scene stay off meanwhile, so keys meant
+		// for the game never change it. Only play mode can have game input; stopping ends it.
+		void SetGameInputActive(bool active);
+		bool IsGameInputActive() const { return m_GameInputActive; }
+		// Whether keyboard shortcuts that edit the scene or the project (undo, delete, duplicate, save) may act now.
+		bool AcceptsEditShortcuts() const { return !m_GameInputActive; }
 
 		//////////////////////////////////////////////////////////////////////////
 		// Selection (entities of the active scene)
@@ -163,9 +181,33 @@ namespace Strata
 		// empty path.
 		bool ReadRunningScriptModule(ScriptModuleFile& outFile, std::string* outError = nullptr) const;
 
+		//////////////////////////////////////////////////////////////////////////
+		// Viewport
+		//////////////////////////////////////////////////////////////////////////
+
+		// The editor camera, viewport settings and viewport rendering. Its state is saved per project in
+		// "<project>/.strata/EditorViewport.json" when the project closes and restored when it opens.
+		EditorViewport& GetViewport() { return m_Viewport; }
+		const EditorViewport& GetViewport() const { return m_Viewport; }
+
 		// Once per frame: script hot reload and builds, asset hot reload and loading, then the scene update (simulation
-		// while playing). A script crash while playing stops play mode.
+		// while playing), then finished viewport picks. A script crash while playing stops play mode.
 		void Update(Timestep timestep);
+
+		//////////////////////////////////////////////////////////////////////////
+		// Editor services
+		//////////////////////////////////////////////////////////////////////////
+
+		// Asks the editor to close after the current frame (editor.quit); the application layer polls the request.
+		void RequestQuit() { m_QuitRequested = true; }
+		bool IsQuitRequested() const { return m_QuitRequested; }
+
+		// Extra sections of editor.status, reported by the parts of the editor that own the information (e.g.
+		// "automation" by EditorAutomation). Providers run on the main thread whenever editor.status runs. A null provider
+		// removes the section; a section named like one of the built-in ones is not reported.
+		using StatusProvider = std::function<nlohmann::json()>;
+		void SetStatusProvider(const std::string& section, StatusProvider provider);
+		const std::map<std::string, StatusProvider>& GetStatusProviders() const { return m_StatusProviders; }
 	private:
 		bool OpenProjectInternal(const std::filesystem::path& path, bool created, std::string* outError);
 		bool StartRuntime(SceneRuntimeMode mode, std::string* outError);
@@ -178,6 +220,10 @@ namespace Strata
 		void OnScriptBuildFinished();
 		// Stops play mode (and reports the fault) when the script module crashed. Returns true if it did.
 		bool StopOnScriptFault();
+		// Saves the viewport state and closes the project; with activateBuiltinAssets the built-in asset manager becomes active.
+		void ReleaseProject(bool activateBuiltinAssets);
+		void ActivateBuiltinAssets();
+		std::filesystem::path GetViewportStateFile() const;
 	private:
 		EditorContextSpecification m_Specification;
 		Ref<Project> m_Project;
@@ -187,6 +233,8 @@ namespace Strata
 		Ref<Scene> m_RuntimeScene;
 		AssetHandle m_SceneHandle = UUID::Null();
 		SceneState m_SceneState = SceneState::Edit;
+		float m_MasterVolumeBeforePlay = 1.0f;
+		bool m_GameInputActive = false;
 
 		std::vector<UUID> m_Selection;
 		UndoStack m_UndoStack;
@@ -198,6 +246,11 @@ namespace Strata
 		// The loaded module's file as it was loaded (see ReadRunningScriptModule), and the load it belongs to.
 		std::optional<Sha256Digest> m_ScriptModuleDigest;
 		uint64_t m_ScriptModuleLoadCount = 0;
+		Ref<AssetManagerBase> m_BuiltinAssets; // Active while no project is open
+		EditorViewport m_Viewport;
+
+		bool m_QuitRequested = false;
+		std::map<std::string, StatusProvider> m_StatusProviders;
 	};
 
 }

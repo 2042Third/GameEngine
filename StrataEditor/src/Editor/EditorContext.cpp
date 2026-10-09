@@ -3,6 +3,7 @@
 #include "Editor/ScriptProject.h"
 
 #include <Strata/Asset/AssetManager.h>
+#include <Strata/Audio/AudioEngine.h>
 #include <Strata/Core/Crypto.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
@@ -29,6 +30,26 @@ namespace Strata
 	namespace
 	{
 
+		constexpr const char* c_ViewportStateFile = "EditorViewport.json";
+
+		// The asset manager of an editor without a project: only the built-in assets (primitive meshes, default material),
+		// which are memory assets, so nothing is ever read from storage.
+		class BuiltinAssetManager final : public AssetManagerBase
+		{
+		public:
+			~BuiltinAssetManager() override
+			{
+				WaitForInFlightLoads();
+			}
+		protected:
+			bool ReadAssetData(const AssetMetadata& metadata, std::vector<uint8_t>&, std::string* outError) override
+			{
+				if (outError)
+					*outError = fmt::format("'{}' is not available without a project", metadata.Name);
+				return false;
+			}
+		};
+
 		std::optional<Sha256Digest> HashFile(const std::filesystem::path& path)
 		{
 			const std::optional<std::vector<uint8_t>> bytes = FileSystem::ReadBytes(path);
@@ -40,11 +61,26 @@ namespace Strata
 	EditorContext::EditorContext(const EditorContextSpecification& specification)
 		: m_Specification(specification), m_EditScene(CreateRef<Scene>())
 	{
+		ActivateBuiltinAssets();
 	}
 
 	EditorContext::~EditorContext()
 	{
-		CloseProject();
+		ReleaseProject(false);
+		if (m_BuiltinAssets && AssetManager::GetActive() == m_BuiltinAssets)
+			AssetManager::SetActive(nullptr);
+	}
+
+	void EditorContext::ActivateBuiltinAssets()
+	{
+		if (!m_BuiltinAssets)
+			m_BuiltinAssets = CreateRef<BuiltinAssetManager>();
+		AssetManager::SetActive(m_BuiltinAssets);
+	}
+
+	std::filesystem::path EditorContext::GetViewportStateFile() const
+	{
+		return m_Project ? m_Project->GetIntermediateDirectory() / c_ViewportStateFile : std::filesystem::path();
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -84,6 +120,12 @@ namespace Strata
 		m_Project = project;
 		Project::SetActive(m_Project);
 
+		// The editor camera and viewport settings continue where they were when the project was last closed.
+		const std::filesystem::path viewportState = GetViewportStateFile();
+		std::string viewportError;
+		if (FileSystem::Exists(viewportState) && !m_Viewport.Load(viewportState, &viewportError))
+			ST_WARN("The saved viewport state is ignored: {}", viewportError);
+
 		EditorAssetManagerSpecification specification;
 		specification.AssetDirectory = m_Project->GetAssetDirectory();
 		specification.CacheDirectory = m_Project->GetCacheDirectory();
@@ -104,7 +146,19 @@ namespace Strata
 
 	void EditorContext::CloseProject()
 	{
+		ReleaseProject(true);
+	}
+
+	void EditorContext::ReleaseProject(bool activateBuiltinAssets)
+	{
 		Stop();
+		if (m_Project)
+		{
+			std::string error;
+			if (!m_Viewport.Save(GetViewportStateFile(), &error))
+				ST_WARN("The viewport state was not saved: {}", error);
+			m_Viewport.ResetState();
+		}
 		ResetScene(CreateRef<Scene>(), UUID::Null());
 		CloseScriptEngine();
 		if (m_AssetManager)
@@ -119,6 +173,8 @@ namespace Strata
 				Project::SetActive(nullptr);
 			m_Project.reset();
 		}
+		if (activateBuiltinAssets)
+			ActivateBuiltinAssets();
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -252,6 +308,7 @@ namespace Strata
 			return false;
 		}
 		m_UndoStack.BreakMerge();
+		m_MasterVolumeBeforePlay = AudioEngine::GetMasterVolume();
 		m_RuntimeScene = Scene::Copy(m_EditScene);
 		m_RuntimeScene->OnRuntimeStart(mode);
 		m_SceneState = mode == SceneRuntimeMode::Play ? SceneState::Play : SceneState::Simulate;
@@ -265,7 +322,15 @@ namespace Strata
 		m_RuntimeScene->OnRuntimeStop();
 		m_RuntimeScene.reset();
 		m_SceneState = SceneState::Edit;
+		// A game's volume setting belongs to the game session, not to the editor.
+		AudioEngine::SetMasterVolume(m_MasterVolumeBeforePlay);
+		m_GameInputActive = false;
 		PruneSelection(); // Entities created during play are gone
+	}
+
+	void EditorContext::SetGameInputActive(bool active)
+	{
+		m_GameInputActive = active && m_SceneState == SceneState::Play;
 	}
 
 	void EditorContext::SetPaused(bool paused)
@@ -374,6 +439,9 @@ namespace Strata
 		ScriptEngine::SetActive(m_ScriptEngine);
 		m_LastScriptBuildLoad = {};
 		m_LastScriptFault.reset();
+		// Before the module loads: with hot reload it runs from a private copy, so script.build can replace its file (a
+		// module loaded in place locks it on Windows).
+		m_ScriptEngine->SetHotReloadEnabled(m_Specification.HotReloadScripts);
 
 		const std::filesystem::path module = m_Project->GetScriptModulePath();
 		std::string error;
@@ -386,7 +454,6 @@ namespace Strata
 		{
 			ST_WARN("The scripts of '{}' are not built yet; build them with script.build (Scripts > Build Scripts)", m_Project->GetConfig().Name);
 		}
-		m_ScriptEngine->SetHotReloadEnabled(m_Specification.HotReloadScripts);
 	}
 
 	void EditorContext::CloseScriptEngine()
@@ -514,6 +581,10 @@ namespace Strata
 		const ScriptBuildResult& result = m_ScriptBuilder.GetLastResult();
 		m_LastScriptBuildLoad = {};
 		m_LastScriptBuildLoad.BuildID = result.ID;
+		// The watcher comes back before the built module loads: with hot reload the module loads from a private copy, so
+		// the next build can replace the file. It only reports changes from now on, so it does not reload this build again.
+		if (m_ScriptEngine)
+			m_ScriptEngine->SetHotReloadEnabled(m_Specification.HotReloadScripts);
 		if (result.Success && m_ScriptEngine)
 		{
 			std::error_code error;
@@ -532,8 +603,6 @@ namespace Strata
 				m_LastScriptBuildLoad.Reloaded = replacing && m_LastScriptBuildLoad.Loaded;
 			}
 		}
-		if (m_ScriptEngine)
-			m_ScriptEngine->SetHotReloadEnabled(m_Specification.HotReloadScripts);
 	}
 
 	bool EditorContext::StopOnScriptFault()
@@ -574,6 +643,19 @@ namespace Strata
 			m_EditScene->OnUpdateEditor(timestep);
 		StopOnScriptFault();
 		PruneSelection();
+		m_Viewport.UpdatePicking(*this);
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
+	// Editor services
+	////////////////////////////////////////////////////////////////////////////////
+
+	void EditorContext::SetStatusProvider(const std::string& section, StatusProvider provider)
+	{
+		if (provider)
+			m_StatusProviders.insert_or_assign(section, std::move(provider));
+		else
+			m_StatusProviders.erase(section);
 	}
 
 }
