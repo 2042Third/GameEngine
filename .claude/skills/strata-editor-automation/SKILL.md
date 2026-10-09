@@ -117,7 +117,7 @@ editor started with `--no-gpu` (use `--headless`):
 ```text
 project.create      {"directory": "<absolute dir>", "name": "Tetris"}
 material.create     {"path": "Materials/Red.stmat", "properties": {"BaseColor": [1, 0, 0, 1]}}
-entity.create       {"name": "Camera", "components": {"Camera": {}, "Transform": {"Translation": [0, 5, -10]}}}
+entity.create       {"name": "Camera", "components": {"Camera": {}, "Transform": {"Translation": [0, 5, 10], "Rotation": [-26, 0, 0]}}}
 entity.create       {"name": "Sun", "components": {"DirectionalLight": {"Intensity": 3}}}
 entity.create       {"name": "Block", "components": {"MeshRenderer": {"Mesh": "Builtin/Cube", "Material": "Materials/Red.stmat"}}}
 scene.saveAs        {"path": "Scenes/Main.stscene"}

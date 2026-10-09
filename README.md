@@ -69,7 +69,14 @@ Binaries land in `build/<preset>/bin/<Config>/`:
    **Scripts > Build Scripts** (Ctrl+B), attach them in the inspector, and try the scene with **Play**. Rebuilding
    while the game plays hot reloads the scripts.
 3. Choose the start scene (**File > Set as Start Scene**) and export with the `project.export` command.
-   The output folder contains everything the game needs.
+   The output folder contains everything the game needs. Run it with `<Game> --headless --frames 600` to check that it
+   plays without errors, or with `--windowed --frames 120 --screenshot shot.png` to see it.
+
+Games can be play-tested without a person: while a game runs in the editor, the `input.key`, `input.mouseButton`,
+`input.mouseMove` and `input.scroll` commands press keys and buttons the way a player would, and `viewport.capture`
+returns the frame as a PNG. [`Samples/Tetris`](Samples/Tetris) is a complete game an AI agent made this way, entirely
+through editor commands: open it with `StrataEditor --project Samples/Tetris`, build its scripts (Ctrl+B) and press Play
+(arrow keys, Space, Z, P, R).
 
 Every step is also available as an editor command. For example, this command script creates a lit cube
 and saves the scene:
@@ -82,9 +89,10 @@ and saves the scene:
 ]
 ```
 
-Run `editor.commands` (or `StrataCLI list`) for the full list of commands and their parameters, and see
-`.claude/skills/strata-editor-automation/SKILL.md` and `.claude/skills/strata-scripting/SKILL.md` for the
-workflow an AI agent follows.
+Run `editor.commands` (or `StrataCLI list`) for the full list of commands and their parameters.
+`.claude/skills/strata-make-a-game/SKILL.md` is the end-to-end playbook an AI agent follows to make a game (project,
+assets, scripts, scene, play-testing, export); `.claude/skills/strata-editor-automation/SKILL.md` and
+`.claude/skills/strata-scripting/SKILL.md` cover the commands and the script SDK in depth.
 
 ## Repository layout
 
@@ -96,6 +104,7 @@ workflow an AI agent follows.
 | `StrataCLI/` | The automation client and MCP server. |
 | `StrataScriptCore/` | The script SDK and ABI that game code is written against. |
 | `StrataTests/` | Tests, test script modules, and the feature test project, which uses every component and the whole script API. |
+| `Samples/` | Example games, made through the editor by an AI agent (`Tetris`). |
 | `.claude/skills/` | Task guides for AI agents working on the engine or making games with it. |
 
 ## Contributing
