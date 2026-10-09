@@ -162,8 +162,9 @@ When you add or change script API:
    call static functions as `Class::Name(...)` and member functions on a receiver of declared type (`Entity target =
    ...; target.Name(...)`), see `StrataTests/src/FeatureTest/SDKReader.h`.
 2. A new host function is also appended to `ST_SCRIPT_HOST_FUNCTIONS` in `ScriptHostAPI.cpp` (the build fails until
-   it is). A new field type, callback or asset type is picked up automatically by the coverage checks: override such a
-   field in the scene, implement the callback, add such an asset.
+   it is). A new field type, callback or asset type is picked up automatically by the coverage checks: declare a field
+   of the new type in a feature script, register it with `ST_SCRIPT_FIELD` and override it in the scene; implement the
+   callback; add such an asset.
 3. Input the scripts need is simulated by `PlayFeatureScene` (`StrataTests/src/FeatureTest/FeatureTestUtils.cpp`);
    messages logged on purpose belong in `c_ExpectedLogMessages` there (any other warning or error fails the run).
 4. Run `StrataTests.exe --test-suite=FeatureTest,Editor.FeatureTest` (or `ctest -L feature`). A failure names the

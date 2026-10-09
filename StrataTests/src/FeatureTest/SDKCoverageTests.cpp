@@ -3,6 +3,8 @@
 #include "FeatureTest/FeatureTestUtils.h"
 #include "FeatureTest/SDKReader.h"
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Scene/Components.h"
+#include "Strata/Scene/Entity.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -397,6 +399,48 @@ TEST_SUITE("FeatureTest")
 		{
 			INFO("SDK macro ", macro, " is not used by the feature scripts (StrataTests/FeatureTest/Scripts)");
 			CHECK(usage.Identifiers.contains(macro));
+		}
+	}
+
+	TEST_CASE("The feature scene overrides a script field of every SDK field type")
+	{
+		const SDKSurface surface = ReadSDKSurface();
+		REQUIRE_FALSE(surface.FieldTypes.empty());
+		const ScriptUsage usage = AnalyzeScripts(surface, ReadFeatureScripts());
+		FeatureProject project;
+		const Ref<Scene> scene = project.LoadStartScene();
+
+		// The C++ types (as the scripts declare them) of the registered fields the scene overrides.
+		std::set<std::string> overridden;
+		for (const Entity entity : scene->GetEntitiesInHierarchyOrder())
+		{
+			const ScriptComponent* scripts = entity.TryGetComponent<ScriptComponent>();
+			if (!scripts)
+				continue;
+			for (const ScriptEntry& entry : scripts->Scripts)
+			{
+				const auto registration = std::find_if(usage.Registrations.begin(), usage.Registrations.end(),
+					[&](const ScriptRegistration& candidate) { return candidate.ClassName == entry.ClassName; });
+				if (registration == usage.Registrations.end())
+					continue;
+				// "Game::Player" is declared as class Player.
+				const size_t separator = entry.ClassName.rfind("::");
+				const std::string className = separator == std::string::npos ? entry.ClassName : entry.ClassName.substr(separator + 2);
+				for (const ScriptFieldValue& field : entry.Fields)
+				{
+					if (std::find(registration->Fields.begin(), registration->Fields.end(), field.Name) == registration->Fields.end())
+						continue;
+					if (const ScriptField* declared = usage.FindField(className, field.Name))
+						overridden.insert(declared->TypeSpelling);
+				}
+			}
+		}
+
+		for (const std::string& type : surface.FieldTypes)
+		{
+			INFO("Script field type ", type, ": declare a field of this type in a feature script (StrataTests/FeatureTest/Scripts), register it with "
+				"ST_SCRIPT_FIELD and override it in StrataTests/FeatureTest/Assets/Scenes/Feature.stscene");
+			CHECK(overridden.contains(type));
 		}
 	}
 }
