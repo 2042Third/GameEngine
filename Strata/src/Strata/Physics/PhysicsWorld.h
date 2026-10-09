@@ -31,9 +31,9 @@ namespace Strata
 	//  - Lock rotation flags refer to world axes. Collision events and query hits report the entity that owns the body.
 	//
 	// An entity whose body cannot be built yet keeps a pending record and is retried once that can succeed: a degenerate
-	// (e.g. zero scale) world transform when it becomes valid, a mesh collider when its mesh data is available and its shape
-	// cooked (see SetMeshProvider), a full world when bodies are freed. A body whose world transform becomes degenerate
-	// leaves the simulation until it is valid again.
+	// (e.g. zero scale) world transform when a transform change is signaled (see below), a mesh collider when its mesh data
+	// is available and its shape cooked (see SetMeshProvider), a full world when bodies are freed. A body whose world
+	// transform becomes degenerate leaves the simulation until a signaled change (or reactivation) makes it valid again.
 	// Dynamic bodies write their pose back relative to their parent, so for them a parent scaled to (nearly) zero, which
 	// cannot be inverted, counts as a degenerate transform too.
 	//

@@ -93,7 +93,7 @@ namespace Strata
 			None = 0,
 			NoCollider,          // A rigid body without colliders; waits for a component change
 			InvalidColliders,    // Every collider has invalid data; waits for a component change
-			DegenerateTransform, // Retried when the world transform changes
+			DegenerateTransform, // Retried when a transform change is signaled (on the entity or an ancestor)
 			MissingMesh,         // Retried when the mesh provider reports new data or a shape finished cooking
 			BodyLimit            // Retried every step while the world is full
 		};
@@ -876,13 +876,13 @@ namespace Strata
 		}
 
 		// Whether a record needs attention at the next step although its body may be asleep or out of the simulation (awake
-		// bodies are synchronized anyway): a build to retry, a suspended body to bring back, a signaled transform change.
-		// (Mesh data is checked when the mesh provider reports changes, see RefreshMeshBodies.)
+		// bodies are synchronized anyway): a signaled transform change, which also retries a build that failed on a
+		// degenerate transform and brings back a body suspended for one, or a build waiting for a free body slot. Nothing
+		// else is polled: activity changes bring bodies back through their signals, and mesh data is checked when the mesh
+		// provider reports changes (see RefreshMeshBodies).
 		bool NeedsPolling(const BodyRecord& record)
 		{
-			if (!record.HasBody())
-				return record.Failure == BuildFailure::DegenerateTransform || record.Failure == BuildFailure::BodyLimit;
-			return record.Suspended || record.TransformDirty;
+			return record.TransformDirty || (!record.HasBody() && record.Failure == BuildFailure::BodyLimit);
 		}
 
 		const ShapeMember* FindShapeMember(const BodyRecord& record, entt::entity handle)
@@ -2426,19 +2426,22 @@ namespace Strata
 					return true;
 
 				BodyRecord* record = FindRecord(data, entity.GetHandle());
-				if (!record || !record->HasBody())
+				if (!record)
 					return true;
 				if (simulatedMove && record->WriteBackPass == data.WriteBackPass)
 					return false; // Written itself, after this one (deeper entities are written later)
 
-				if (simulatedMove && record->Type == RigidBodyType::Dynamic && record->InSimulation)
+				if (simulatedMove && record->HasBody() && record->Type == RigidBodyType::Dynamic && record->InSimulation)
 				{
-					// Its world pose, and with it the poses of its own descendants, stays where its body is. (If the entity
-					// cannot take the pose, it moved with its parent; the next step notices and suspends the body.)
+					// Its world pose, and with it the poses of its own descendants, stays where its body is. If the entity
+					// cannot take the pose, it moved with its parent; the next step notices and suspends the body.
 					if (WriteWorldTransform(scene, entity, record->LastWorldTransform))
+					{
 						record->LastWorldTransform = scene.GetWorldTransform(entity);
-					return false;
+						return false;
+					}
 				}
+				// Also a record waiting for a valid transform: its transform changed.
 				record->TransformDirty = true;
 				UpdatePolling(data, entity.GetHandle(), *record);
 				return true;
