@@ -55,6 +55,7 @@ namespace Strata
 		{
 			m_Renderer->ResetExposureAdaptation();
 			m_LastScene = scene;
+			m_ShowingMessage = false; // A new scene without a camera is reported again
 		}
 
 		const float aspectRatio = static_cast<float>(size.x) / static_cast<float>(size.y);

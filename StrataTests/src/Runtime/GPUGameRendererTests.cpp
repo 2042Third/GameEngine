@@ -2,6 +2,8 @@
 
 #include "Strata/Runtime/GameRenderer.h"
 
+#include <functional>
+
 using namespace Strata;
 using namespace Strata::Tests;
 
