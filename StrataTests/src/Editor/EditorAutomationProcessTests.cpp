@@ -325,6 +325,10 @@ TEST_SUITE("EndToEnd.EditorAutomation")
 
 		// Build a scene.
 		Call("project.create", { { "directory", FileSystem::ToUTF8(projectDirectory) }, { "name", "Tetris" } });
+		// The session follows the project before the answer arrives: the very next call finds the editor by it.
+		const CliResult byNewProject = RunCli({ "call", "editor.status", "--project", FileSystem::ToUTF8(projectDirectory) });
+		REQUIRE_MESSAGE(byNewProject.ExitCode == 0, byNewProject.ErrorOutput);
+		CHECK(byNewProject.Json["project"]["name"] == "Tetris");
 		const nlohmann::json board = Call("entity.create", { { "name", "Board" }, { "components", { { "Transform", { { "Translation", { 0, 1, 0 } } } } } } });
 		const std::string boardId = board["id"].get<std::string>();
 		Call("component.add", { { "entity", boardId }, { "component", "MeshRenderer" }, { "values", { { "Mesh", "Builtin/Cube" } } } });

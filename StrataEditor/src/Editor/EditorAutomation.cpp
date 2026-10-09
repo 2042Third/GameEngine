@@ -115,6 +115,7 @@ namespace Strata
 		}
 
 		m_Context.SetStatusProvider(c_StatusSection, [this]() { return DescribeStatus(); });
+		m_State->RefreshSession = [this]() { UpdateSession(); };
 		ST_INFO("Automation: listening on {}:{}{}", specification.BindAddress, m_Server.GetPort(),
 			m_Session ? " (StrataCLI and its MCP server find this editor through its session file)" : "");
 		return true;
@@ -125,6 +126,7 @@ namespace Strata
 		if (!m_Server.IsRunning())
 			return;
 
+		m_State->RefreshSession = nullptr;
 		m_Context.SetStatusProvider(c_StatusSection, nullptr);
 		// No new client should find an editor that is going away.
 		if (m_Session)
@@ -287,6 +289,9 @@ namespace Strata
 			if (trace->Pending)
 				state->PendingRequests--;
 			state->CompletedRequests++;
+			// The command may have opened or created a project: publish it before the client hears of it.
+			if (state->RefreshSession)
+				state->RefreshSession();
 			RpcResult rpcResult = ToRpcResult(result, method->Name, method->Parameters);
 			LogCompletion(*trace, method->Name, rpcResult, state->Frame);
 			responder->Respond(std::move(rpcResult));

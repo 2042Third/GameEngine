@@ -10,6 +10,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
@@ -65,7 +66,8 @@ namespace Strata
 		bool IsRunning() const;
 
 		// Once per frame: offers commands registered since the last frame, keeps the session in step with the open project
-		// and runs the requests that arrived.
+		// (also before answering each request, so a project a command opened is published by the time its client hears of
+		// it) and runs the requests that arrived.
 		void Update();
 
 		uint16_t GetPort() const;
@@ -98,6 +100,10 @@ namespace Strata
 			uint64_t NextRequestId = 1;
 			uint64_t CompletedRequests = 0;
 			size_t PendingRequests = 0;
+			// Brings the published session up to date before an answer goes out, so a client that is told a project was
+			// opened finds the editor by that project at once. Set while serving (Stop clears it), so completions that
+			// run after the automation is gone do not call into it.
+			std::function<void()> RefreshSession;
 		};
 
 		void SyncMethods();

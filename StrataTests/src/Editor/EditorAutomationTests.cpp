@@ -369,11 +369,18 @@ TEST_SUITE("Editor.Automation")
 		CHECK(sessions[0].Token == Tests::c_TestServerToken);
 		CHECK(harness.Automation.DescribeStatus()["sessionPublished"] == true);
 
-		// A client finds the editor through the session file alone.
-		RpcClient client;
-		REQUIRE(client.Connect(sessions[0].Address, sessions[0].Port, sessions[0].Token, std::chrono::milliseconds(5000)));
-		REQUIRE(harness.Call(client, "project.create", { { "directory", FileSystem::ToUTF8(projectDirectory) }, { "name", "Game" } }).IsSuccess());
-		harness.Frame();
+		// A client finds the editor through the session file alone. A project that a command creates is published before
+		// the answer goes out: no frame runs between the command and the checks below, so a client that calls again
+		// with --project right after the answer finds the editor.
+		Tests::RawRpcConnection connection;
+		REQUIRE(connection.Connect(sessions[0].Port));
+		REQUIRE(connection.Authenticate(sessions[0].Token));
+		REQUIRE(connection.SendLine(JsonRpc::Serialize(JsonRpc::MakeRequest(1, "project.create",
+			{ { "directory", FileSystem::ToUTF8(projectDirectory) }, { "name", "Game" } }))));
+		REQUIRE(harness.RunFramesUntil([&]() { return harness.Automation.GetCompletedRequestCount() == 1; }));
+		const std::optional<nlohmann::json> created = connection.ReadMessage();
+		REQUIRE(created.has_value());
+		CHECK(created->contains("result"));
 		const std::optional<EditorSessionInfo> projectSession = EditorSession::ReadProjectSession(projectDirectory, sessionDirectory);
 		REQUIRE(projectSession.has_value());
 		CHECK(projectSession->Port == harness.Automation.GetPort());
@@ -381,7 +388,7 @@ TEST_SUITE("Editor.Automation")
 		REQUIRE(sessions.size() == 1);
 		CHECK(EditorSession::IsSameProject(sessions[0].ProjectPath, projectDirectory));
 
-		client.Close();
+		connection.GetSocket().Close();
 		harness.Automation.Stop();
 		CHECK(EditorSession::FindSessions(sessionDirectory).empty());
 		CHECK_FALSE(FileSystem::Exists(EditorSession::GetProjectSessionFilePath(projectDirectory)));
