@@ -20,7 +20,7 @@ namespace
 	struct NamedMesh
 	{
 		std::string Name;
-		Ref<Mesh> Mesh;
+		Ref<Mesh> Asset;
 		bool Convex = true;
 	};
 
@@ -81,8 +81,8 @@ TEST_SUITE("Renderer.Mesh")
 		for (const NamedMesh& named : CreateFactoryMeshes())
 		{
 			CAPTURE(named.Name);
-			REQUIRE(named.Mesh);
-			const Mesh& mesh = *named.Mesh;
+			REQUIRE(named.Asset);
+			const Mesh& mesh = *named.Asset;
 			CHECK(mesh.GetTriangleCount() > 0);
 
 			const std::vector<glm::vec3>& positions = mesh.GetPositions();
