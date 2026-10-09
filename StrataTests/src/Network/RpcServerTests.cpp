@@ -1534,6 +1534,39 @@ TEST_SUITE("Network.RpcServer")
 		CHECK(server.GetPort() == 0);
 	}
 
+	TEST_CASE("A graceful stop does not wait for idle clients to close their side")
+	{
+		RpcServer server;
+		Ref<RpcResponder> heldResponder;
+		REQUIRE(server.RegisterMethod(MakeMethod("test.hold"), [&](const nlohmann::json&, const Ref<RpcResponder>& responder) { heldResponder = responder; }));
+		REQUIRE(server.Start(Tests::MakeTestServerSpecification()));
+
+		// One client never calls anything; another waits for an answer and keeps its connection open afterwards, like an
+		// MCP server that asked the editor to quit.
+		RpcClient idle;
+		ConnectClient(idle, server.GetPort());
+		RpcClient asking;
+		ConnectClient(asking, server.GetPort());
+		RpcResult result = RpcResult::Failure(0, "not called");
+		std::thread caller([&]() { result = asking.Call("test.hold", nlohmann::json::object(), c_CallTimeout); });
+		REQUIRE(Tests::WaitUntil([&]()
+		{
+			server.ProcessRequests();
+			return heldResponder != nullptr;
+		}));
+		heldResponder->Respond(RpcResult::Success("bye"));
+
+		const auto start = std::chrono::steady_clock::now();
+		server.Stop(std::chrono::milliseconds(10000));
+		const auto elapsed = std::chrono::steady_clock::now() - start;
+		caller.join();
+		REQUIRE(result.IsSuccess());
+		CHECK(result.GetValue() == "bye");
+		// Without waiting for either client's end of stream (which takes a while to come, or never comes).
+		CHECK(elapsed < std::chrono::milliseconds(1000));
+		CHECK(idle.Call("rpc.ping", nlohmann::json::object(), c_CallTimeout).GetError().Code == JsonRpc::ErrorCode::ConnectionClosed);
+	}
+
 	TEST_CASE("A graceful stop ends with its grace period")
 	{
 		RpcServer server;

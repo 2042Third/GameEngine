@@ -1208,7 +1208,10 @@ namespace Strata
 			connection.SentShutdown = true;
 			connection.CloseDeadline = std::min(connection.CloseDeadline, now + c_DrainTimeout);
 		}
-		if (connection.PeerFinished)
+		// A stopping server does not wait for that: an idle client (e.g. an MCP server between tool calls) may only
+		// notice the end of the stream when it next uses the connection. Its answers are sent, and a client that waits
+		// for each answer before sending more has read them; anything it sends later finds the connection closed.
+		if (connection.PeerFinished || DrainStarted)
 			connection.Closed = true;
 	}
 
