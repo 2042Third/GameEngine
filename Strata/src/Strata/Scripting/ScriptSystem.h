@@ -63,6 +63,8 @@ namespace Strata
 		ScriptSystem& operator=(const ScriptSystem&) = delete;
 
 		void OnRuntimeStart() override;
+		// The scripts start here (instances, then OnCreate), once every system of the scene runs: OnCreate can use physics.
+		void OnRuntimeStarted() override;
 		void OnRuntimeStop() override;
 		void OnUpdate(Timestep timestep) override;
 		void OnFixedUpdate(float fixedTimestep) override;

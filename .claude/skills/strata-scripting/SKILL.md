@@ -78,7 +78,7 @@ ST_SCRIPT_CLASS(Turret)
 | Callback | When |
 | --- | --- |
 | constructor | Instance created; then the entity's stored field values are applied. |
-| `OnCreate()` | Once, before the first update, after every script that exists at that moment was constructed. |
+| `OnCreate()` | Once, before the first update, after every script that exists at that moment was constructed. Physics and audio already run. |
 | `OnUpdate(dt)` | Every frame. Order: entity hierarchy (parents first), then the order of scripts on the entity. |
 | `OnFixedUpdate(dt)` | Zero or more times per frame at the fixed timestep (gameplay physics). |
 | `OnLateUpdate(dt)` | Every frame after the fixed updates. |

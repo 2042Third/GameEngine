@@ -113,18 +113,42 @@ TEST_SUITE("Scripting.Physics")
 		scene.OnRuntimeStop();
 	}
 
-	TEST_CASE("Physics functions find nothing and change nothing in scenes without physics")
+	TEST_CASE("Scripts use physics from OnCreate, also on bodies they spawn while the scene starts")
+	{
+		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
+		Scene scene;
+		const Entity tester = CreatePhysicsScene(scene, "PhysicsAtStart");
+		scene.OnRuntimeStart();
+
+		const ScriptSystem& system = GetScriptSystem(scene);
+		CheckScriptChecks(system, tester, "PhysicsAtStart", 5);
+		const Entity spawned = scene.FindEntityByName("Spawned");
+		REQUIRE(spawned.IsValid());
+		CHECK(GetField<UUID>(system, tester, "PhysicsAtStart", "Spawned") == spawned.GetUUID());
+		CheckScriptChecks(system, spawned, "SpawnedBody", 1);
+		PhysicsSystem* physics = scene.GetSystem<PhysicsSystem>();
+		REQUIRE(physics != nullptr);
+		CHECK(Near(physics->GetLinearVelocity(scene.FindEntityByName("Crate")), glm::vec3(1.0f, 0.0f, 0.0f)));
+		CHECK(Near(physics->GetLinearVelocity(spawned), glm::vec3(0.0f, 0.0f, 2.0f)));
+		CHECK_FALSE(engine->IsFaulted());
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Physics functions find nothing in scenes without physics, until a physics component appears")
 	{
 		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
 		Scene scene;
 		Entity tester = scene.CreateEntity("Tester");
 		AddScriptEntry(tester, "PhysicsWithoutWorld");
 		scene.OnRuntimeStart();
-		RunFrames(scene, 1);
-
-		CheckScriptChecks(GetScriptSystem(scene), tester, "PhysicsWithoutWorld", 5);
 		REQUIRE(scene.GetSystem<PhysicsSystem>() != nullptr);
 		CHECK(scene.GetSystem<PhysicsSystem>()->GetWorld() == nullptr);
+		RunFrames(scene, 1);
+
+		const ScriptSystem& system = GetScriptSystem(scene);
+		CHECK(GetField<bool>(system, tester, "PhysicsWithoutWorld", "Done"));
+		CheckScriptChecks(system, tester, "PhysicsWithoutWorld", 13);
+		CHECK(scene.GetSystem<PhysicsSystem>()->GetWorld() != nullptr);
 		CHECK(Near(glm::vec3(scene.GetWorldTransform(tester)[3]), glm::vec3(0.0f)));
 		scene.OnRuntimeStop();
 	}

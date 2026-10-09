@@ -85,6 +85,11 @@ namespace Strata
 
 		if (!m_DirtyEntities.empty() && !(m_Engine && m_Engine->IsModuleLoaded()))
 			ST_CORE_WARN("Scene '{}' has Script components but no script module is loaded; its scripts do not run", m_Scene.GetName());
+	}
+
+	void ScriptSystem::OnRuntimeStarted()
+	{
+		ST_PROFILE_FUNCTION();
 
 		SyncPoint();
 	}

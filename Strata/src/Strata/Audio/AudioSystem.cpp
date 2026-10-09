@@ -129,9 +129,15 @@ namespace Strata
 	{
 		ST_PROFILE_FUNCTION();
 
-		// Scripts may have used the API in their OnCreate already (systems start in registration order).
+		// Before any game code runs: the scripts' OnCreate (in ScriptSystem::OnRuntimeStarted) may use the gameplay API.
 		m_Paused = m_Scene.IsPaused();
 		m_Physics = m_Scene.GetSystem<PhysicsSystem>();
+	}
+
+	void AudioSystem::OnRuntimeStarted()
+	{
+		ST_PROFILE_FUNCTION();
+
 		UpdateSources(0.0f);
 		UpdateListener(0.0f);
 	}

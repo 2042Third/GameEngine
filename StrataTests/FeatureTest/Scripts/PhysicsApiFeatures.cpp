@@ -28,6 +28,9 @@ public:
 		Journal(*this, "PhysicsApiFeatures", "OnCreate");
 		Home = GetTransform().GetWorldPosition();
 		Expect(GetEntity().GetProperty<float>("RigidBody", "GravityScale") == 0.0f, "the probe is weightless");
+		// Every system of the scene runs before the scripts start: physics works in OnCreate already.
+		Expect(Physics::Raycast(Home + glm::vec3(0.0f, 3.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f)).value_or(RaycastHit()).HitEntity == GetEntity(),
+			"physics queries work in OnCreate");
 	}
 
 	void OnFixedUpdate(float fixedDeltaTime) override

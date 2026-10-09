@@ -343,11 +343,80 @@ ST_SCRIPT_CLASS(OlderEnginePhysics)
 	ST_SCRIPT_FIELD(Done);
 }
 
-// In a scene without physics components: there is no simulation, so queries find nothing and body functions fail.
-class PhysicsWithoutWorld : public CheckingScript
+// Uses physics from OnCreate (the scene starts every system before the scripts): the scene's bodies, a body the script
+// creates, and a script on that new entity, whose own OnCreate pushes its body.
+class PhysicsAtStart : public CheckingScript
+{
+public:
+	Entity Spawned;
+
+	void OnCreate() override
+	{
+		const PhysicsScene scene;
+		RigidBody crate = scene.Crate.GetRigidBody();
+		Expect(crate.SetLinearVelocity({ 1.0f, 0.0f, 0.0f }) && Near(crate.GetLinearVelocity(), glm::vec3(1.0f, 0.0f, 0.0f)), "body calls work in OnCreate");
+		Expect(Physics::Raycast({ 0.0f, 10.0f, 0.0f }, { 0.0f, -1.0f, 0.0f }).value_or(RaycastHit()).HitEntity == scene.Crate, "queries work in OnCreate");
+
+		Spawned = Scene::CreateEntity("Spawned");
+		Spawned.GetTransform().SetTranslation({ 10.0f, 5.0f, 0.0f });
+		Expect(Spawned.AddComponent("RigidBody") && Spawned.SetProperty("RigidBody", "GravityScale", 0.0f) && Spawned.AddComponent("BoxCollider"),
+			"spawn a body");
+		Expect(Physics::OverlapSphere({ 10.0f, 5.0f, 0.0f }, 0.25f) == std::vector<Entity> { Spawned }, "a body created in OnCreate is simulated at once");
+		Expect(Spawned.AddScript("SpawnedBody"), "attach a script to the new body");
+	}
+};
+
+ST_SCRIPT_CLASS(PhysicsAtStart)
+{
+	ST_SCRIPT_FIELD(Checks);
+	ST_SCRIPT_FIELD(Failure);
+	ST_SCRIPT_FIELD(Spawned);
+}
+
+// On an entity spawned with a body while the scene starts (by PhysicsAtStart): pushes its own body in OnCreate.
+class SpawnedBody : public CheckingScript
 {
 public:
 	void OnCreate() override
+	{
+		RigidBody body = GetEntity().GetRigidBody();
+		Expect(body.AddImpulse({ 0.0f, 0.0f, 2.0f }) && Near(body.GetLinearVelocity(), glm::vec3(0.0f, 0.0f, 2.0f)), "a spawned script pushes its body in OnCreate");
+	}
+};
+
+ST_SCRIPT_CLASS(SpawnedBody)
+{
+	ST_SCRIPT_FIELD(Checks);
+	ST_SCRIPT_FIELD(Failure);
+}
+
+// In a scene without physics components there is no simulation, in OnCreate as in updates: queries find nothing and body
+// functions fail. The first physics component added while the scene plays creates it, and the same calls work.
+class PhysicsWithoutWorld : public CheckingScript
+{
+public:
+	bool Done = false;
+
+	void OnCreate() override
+	{
+		CheckWithoutWorld();
+	}
+
+	void OnUpdate(float) override
+	{
+		if (Done)
+			return;
+		Done = true;
+		CheckWithoutWorld();
+
+		Entity crate = Scene::CreateEntity("Late Crate");
+		crate.GetTransform().SetTranslation({ 0.0f, 5.0f, 0.0f });
+		Expect(crate.AddComponent("RigidBody") && crate.SetProperty("RigidBody", "GravityScale", 0.0f) && crate.AddComponent("BoxCollider"), "add physics components");
+		Expect(crate.GetRigidBody().SetLinearVelocity({ 1.0f, 0.0f, 0.0f }), "body functions work once the simulation exists");
+		Expect(Physics::Raycast({ 0.0f, 10.0f, 0.0f }, { 0.0f, -1.0f, 0.0f }).value_or(RaycastHit()).HitEntity == crate, "queries work once the simulation exists");
+	}
+private:
+	void CheckWithoutWorld()
 	{
 		const glm::vec3 origin(0.0f, 10.0f, 0.0f);
 		const glm::vec3 down(0.0f, -1.0f, 0.0f);
@@ -364,4 +433,5 @@ ST_SCRIPT_CLASS(PhysicsWithoutWorld)
 {
 	ST_SCRIPT_FIELD(Checks);
 	ST_SCRIPT_FIELD(Failure);
+	ST_SCRIPT_FIELD(Done);
 }

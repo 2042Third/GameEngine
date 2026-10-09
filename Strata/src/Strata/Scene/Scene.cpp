@@ -501,6 +501,8 @@ namespace Strata
 		m_IsUpdating = true;
 		for (const Scope<SceneSystem>& system : m_Systems)
 			system->OnRuntimeStart();
+		for (const Scope<SceneSystem>& system : m_Systems)
+			system->OnRuntimeStarted();
 		m_IsUpdating = false;
 		FlushPendingDestroys();
 		UpdateWorldTransforms();
