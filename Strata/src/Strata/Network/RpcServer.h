@@ -169,9 +169,14 @@ namespace Strata
 		// Starts listening (stopping a previous session first). Returns false for a non-loopback bind address, an
 		// empty token, or an unavailable address/port.
 		bool Start(const RpcServerSpecification& specification);
-		// Closes every connection and joins the network thread. Queued requests are discarded; pending responders
-		// become inert.
-		void Stop();
+		// Closes every connection and joins the network thread; pending responders become inert. Without a grace
+		// period, queued requests are discarded and unsent responses are lost. With one, the server first stops
+		// accepting connections and reading requests, answers the queued requests (which no ProcessRequests call will
+		// handle any more) with Cancelled errors, and keeps delivering responses, including ones responders produce
+		// meanwhile on other threads, until every client has received its answers and closed, or the grace period ends.
+		// Use it to make sure a final answer (e.g. to a quit request) reaches its client. Blocks for at most the grace
+		// period plus the time a forced stop takes.
+		void Stop(std::chrono::milliseconds gracePeriod = std::chrono::milliseconds(0));
 		bool IsRunning() const;
 		uint16_t GetPort() const;
 		uint32_t GetClientCount() const;

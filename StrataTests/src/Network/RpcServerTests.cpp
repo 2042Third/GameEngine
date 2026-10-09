@@ -1447,6 +1447,123 @@ TEST_SUITE("Network.RpcServer")
 		CHECK(again.Call("rpc.ping", nlohmann::json::object(), c_CallTimeout).IsSuccess());
 	}
 
+	TEST_CASE("A graceful stop delivers the answers that are owed before closing")
+	{
+		RpcServer server;
+		std::mutex responderMutex;
+		Ref<RpcResponder> heldResponder;
+		REQUIRE(server.RegisterMethod(MakeMethod("test.hold"), [&](const nlohmann::json&, const Ref<RpcResponder>& responder)
+		{
+			std::scoped_lock<std::mutex> lock(responderMutex);
+			heldResponder = responder;
+		}));
+		RegisterEcho(server);
+		REQUIRE(server.Start(Tests::MakeTestServerSpecification()));
+
+		// One client waits for a held responder, which answers from another thread while the server stops.
+		RpcClient waiting;
+		ConnectClient(waiting, server.GetPort());
+		RpcResult waitingResult = RpcResult::Failure(0, "not called");
+		std::thread caller([&]()
+		{
+			waitingResult = waiting.Call("test.hold", nlohmann::json::object(), c_CallTimeout);
+			waiting.Close();
+		});
+		REQUIRE(Tests::WaitUntil([&]()
+		{
+			server.ProcessRequests();
+			std::scoped_lock<std::mutex> lock(responderMutex);
+			return heldResponder != nullptr;
+		}));
+
+		// Another client's request is queued, but nothing will process it any more.
+		Tests::RawRpcConnection queued;
+		REQUIRE(queued.Connect(server.GetPort()));
+		REQUIRE(queued.Authenticate());
+		REQUIRE(queued.SendLine(MakeRequestLine(7, "test.echo")));
+		// Lines are handled in order and the network thread answers rpc.ping itself: once the pong arrives, the echo
+		// request is queued.
+		REQUIRE(queued.SendLine(MakeRequestLine(8, "rpc.ping")));
+		const std::optional<nlohmann::json> pong = queued.ReadMessage();
+		REQUIRE(pong.has_value());
+		REQUIRE((*pong)["id"] == 8);
+		std::optional<nlohmann::json> queuedResponse;
+		bool queuedClosedByPeer = false;
+		std::thread queuedReader([&]()
+		{
+			queuedResponse = queued.ReadMessage();
+			queuedClosedByPeer = !queued.ReadMessage().has_value() && queued.WasClosedByPeer() && !queued.WasResetByPeer();
+			queued.GetSocket().Close();
+		});
+
+		std::thread lateResponder([&]()
+		{
+			std::this_thread::sleep_for(std::chrono::milliseconds(200));
+			std::scoped_lock<std::mutex> lock(responderMutex);
+			heldResponder->Respond(RpcResult::Success("late answer"));
+			heldResponder.reset();
+		});
+
+		const auto start = std::chrono::steady_clock::now();
+		server.Stop(std::chrono::milliseconds(10000));
+		const auto elapsed = std::chrono::steady_clock::now() - start;
+		lateResponder.join();
+		caller.join();
+		queuedReader.join();
+
+		REQUIRE(waitingResult.IsSuccess());
+		CHECK(waitingResult.GetValue() == "late answer");
+		REQUIRE(queuedResponse.has_value());
+		CHECK((*queuedResponse)["id"] == 7);
+		CHECK((*queuedResponse)["error"]["code"] == JsonRpc::ErrorCode::Cancelled);
+		CHECK(queuedClosedByPeer);
+		// It waited for the late answer, but not for the whole grace period: both clients closed after their answers.
+		CHECK(elapsed >= std::chrono::milliseconds(150));
+		CHECK(elapsed < std::chrono::milliseconds(5000));
+		CHECK_FALSE(server.IsRunning());
+		CHECK(server.GetPort() == 0);
+	}
+
+	TEST_CASE("A graceful stop ends with its grace period")
+	{
+		RpcServer server;
+		Ref<RpcResponder> heldResponder;
+		REQUIRE(server.RegisterMethod(MakeMethod("test.hold"), [&](const nlohmann::json&, const Ref<RpcResponder>& responder) { heldResponder = responder; }));
+		REQUIRE(server.Start(Tests::MakeTestServerSpecification()));
+
+		RpcClient client;
+		ConnectClient(client, server.GetPort());
+		RpcResult result = RpcResult::Failure(0, "not called");
+		std::thread caller([&]() { result = client.Call("test.hold", nlohmann::json::object(), c_CallTimeout); });
+		REQUIRE(Tests::WaitUntil([&]()
+		{
+			server.ProcessRequests();
+			return heldResponder != nullptr;
+		}));
+
+		// The held request is never answered: the server gives up when the grace period is over.
+		const auto start = std::chrono::steady_clock::now();
+		server.Stop(std::chrono::milliseconds(300));
+		const auto elapsed = std::chrono::steady_clock::now() - start;
+		caller.join();
+		CHECK(elapsed >= std::chrono::milliseconds(250));
+		CHECK(elapsed < std::chrono::milliseconds(3000));
+		REQUIRE(result.IsError());
+		CHECK(result.GetError().Code == JsonRpc::ErrorCode::ConnectionClosed);
+
+		// A responder that answers afterwards is inert. The server serves again after a restart, and without clients a
+		// graceful stop returns at once.
+		heldResponder->Respond(RpcResult::Success(true));
+		REQUIRE(server.Start(Tests::MakeTestServerSpecification()));
+		RpcClient again;
+		ConnectClient(again, server.GetPort());
+		CHECK(again.Call("rpc.ping", nlohmann::json::object(), c_CallTimeout).IsSuccess());
+		again.Close();
+		const auto idleStart = std::chrono::steady_clock::now();
+		server.Stop(std::chrono::milliseconds(10000));
+		CHECK(std::chrono::steady_clock::now() - idleStart < std::chrono::milliseconds(2000));
+	}
+
 	TEST_CASE("Destroying the server while another thread holds a responder is safe")
 	{
 		auto server = CreateScope<RpcServer>();

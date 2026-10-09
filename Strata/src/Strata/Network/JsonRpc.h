@@ -69,7 +69,9 @@ namespace Strata
 				Unauthorized = -32001,     // The connection has not authenticated (or used a wrong token)
 				ConnectionClosed = -32002, // Client side: not connected, or the connection was lost mid-call
 				Timeout = -32003,          // Client side: no response arrived in time
-				ServerBusy = -32004        // The server rejected the request or connection due to load limits
+				ServerBusy = -32004,       // The server rejected the request or connection due to load limits
+				OperationFailed = -32005,  // The request was valid, but the method could not carry it out (the message says why)
+				Cancelled = -32006         // The request was abandoned before it completed (e.g. the server is shutting down)
 			};
 		};
 
