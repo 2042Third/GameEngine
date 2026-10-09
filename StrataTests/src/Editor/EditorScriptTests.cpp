@@ -246,8 +246,24 @@ TEST_SUITE("Editor.Scripts")
 		const std::string id = harness.CreateEntity("Holder");
 		harness.Run("script.add", { { "entity", id }, { "class", "FieldTypes" }, { "fields", { { "IntField", 9 } } } });
 
+		// script.get in edit mode: the stored override, the class defaults for the rest.
+		nlohmann::json stored = harness.Run("script.get", { { "entity", id } });
+		REQUIRE(stored["scripts"].size() == 1);
+		CHECK(stored["scripts"][0]["class"] == "FieldTypes");
+		CHECK(stored["scripts"][0]["live"] == false);
+		CHECK(stored["scripts"][0]["known"] == true);
+		CHECK(stored["scripts"][0]["fields"]["IntField"] == 9);
+		CHECK(stored["scripts"][0]["fields"]["StringField"] == "Hello");
+		CHECK(stored["scripts"][0]["fields"]["IntSeenInCreate"] == 0);
+		CHECK(harness.ErrorKind("script.get", { { "entity", id }, { "class", "Idle" } }) == EditorCommandError::InvalidParameters);
+
 		harness.Run("play.start");
 		harness.Frames(2);
+		// While playing: the live instance's values, including what the script itself changed.
+		const nlohmann::json liveFields = harness.Run("script.get", { { "entity", id }, { "class", "FieldTypes" } });
+		REQUIRE(liveFields["scripts"].size() == 1);
+		CHECK(liveFields["scripts"][0]["live"] == true);
+		CHECK(liveFields["scripts"][0]["fields"]["IntSeenInCreate"] == 9);
 		Ref<Scene> running = harness.Context.GetActiveScene();
 		REQUIRE(running != harness.Context.GetEditScene());
 		ScriptSystem& system = GetScriptSystem(*running);
@@ -272,6 +288,18 @@ TEST_SUITE("Editor.Scripts")
 		REQUIRE(entry->FindField("IntField"));
 		CHECK(std::get<int32_t>(entry->FindField("IntField")->Value) == 9); // Edits while playing were discarded
 		CHECK(entry->FindField("StringField") == nullptr);
+		stored = harness.Run("script.get", { { "entity", id } });
+		CHECK(stored["scripts"][0]["live"] == false);
+		CHECK(stored["scripts"][0]["fields"]["IntSeenInCreate"] == 0);
+
+		// A class the module does not have: only the stored overrides are known.
+		const std::string orphan = harness.Run("entity.create", { { "name", "Orphan" }, { "components", { { "Script", { { "Scripts", { {
+			{ "Class", "Missing" }, { "Fields", { { "Speed", { { "Type", "Float" }, { "Value", 2.5 } } } } } } } } } } } } })["id"].get<std::string>();
+		const nlohmann::json unknown = harness.Run("script.get", { { "entity", orphan } });
+		REQUIRE(unknown["scripts"].size() == 1);
+		CHECK(unknown["scripts"][0]["known"] == false);
+		CHECK(unknown["scripts"][0]["fields"] == nlohmann::json { { "Speed", 2.5 } });
+		CHECK(harness.Run("script.get", { { "entity", harness.CreateEntity("Plain") } })["scripts"].empty());
 	}
 
 	TEST_CASE("A script crash stops play mode and keeps the module disabled until it is reloaded")

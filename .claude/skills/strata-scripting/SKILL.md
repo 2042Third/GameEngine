@@ -334,7 +334,8 @@ every step below is a command, and source files are written with your own file t
    one runs; `script.build {"wait": false}` returns at once and `script.status` -> `build.running` tells when it is
    done). The build output also streams into the editor log (`log.read`).
 4. **Inspect.** `script.status` -> `classes` lists every class with its fields (`name`, `type`, `default`) and
-   implemented callbacks.
+   implemented callbacks. `script.get {"entity": "<id>"}` shows the field values of an entity's scripts: what the scene
+   stores, or while playing what the live instances hold now.
 5. **Attach.** `script.add {"entity": "<id>", "class": "Player", "fields": {"Speed": 4.5, "Target": "<entity id>",
    "Bullet": "Prefabs/Bullet.stprefab"}}`; change one field with `script.setField {"entity", "class", "field", "value"}`
    (value `null` resets to the class default); detach with `script.remove {"entity", "class"}`. These are undoable,

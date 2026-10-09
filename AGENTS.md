@@ -468,8 +468,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
 - **Scripts through commands** (see Scripting, "Project scripts"): `script.status` (loaded module, classes with fields
   and callbacks, faults, the running and last build with diagnostics), `script.build {wait}` (deferred; fails with the
   first compiler errors), `script.reload`, `script.load {path}`, `script.init {example}`, `script.add {entity, class,
-  fields}`, `script.remove {entity, class}` and `script.setField {entity, class, field, value}` (null resets to the
-  default). Adding scripts and setting fields need a loaded module, which validates class and field names and types;
+  fields}`, `script.remove {entity, class}`, `script.setField {entity, class, field, value}` (null resets to the
+  default) and `script.get {entity, class?}` (the field values: the live instances' while playing, which is how tools read
+  game state kept in fields; the stored overrides over the class defaults otherwise). Adding scripts and setting fields need a loaded module, which validates class and field names and types;
   removing works without one. Script edits are undoable (`ScriptEdit`, shared with the inspector's Script drawer) and
   reach the live instances while playing. The UI builds with Scripts > Build Scripts (Ctrl+B) or the toolbar.
 - Commands never block a frame. One that has to wait (frames, a build, a GPU readback) returns

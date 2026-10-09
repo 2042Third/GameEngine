@@ -41,8 +41,8 @@ Design the code for verification before writing it:
   be planned and tests can expect exact outcomes. Each restart can use the next seed.
 - Tuning as fields (`StartInterval`, `LinesPerLevel`, `RepeatDelay`...): tests and you can change them with
   `script.setField`, even while playing.
-- `Log::Info` one line per meaningful event ("cleared 1 line; score 209"), and show state in `Text` entities: those are
-  what you can observe from outside (`log.read`, `component.get`). Live script fields are not readable by commands.
+- `Log::Info` one line per meaningful event ("cleared 1 line; score 209"), and show state in `Text` entities or keep it in
+  fields: that is what you can observe from outside (`log.read`, `component.get`, `script.get` for live field values).
 
 ## 3. Assets
 

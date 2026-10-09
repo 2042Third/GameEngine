@@ -77,6 +77,7 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | Which components and properties (types, ranges, enum values)? | `component.list` |
 | Which assets exist? | `asset.list` (`type`, `path` filters), `asset.info` |
 | What does a material hold, which properties exist? | `material.get` (values, and each property's type, range, options) |
+| What state do the scripts hold (a score, a timer)? | `script.get` (live field values while playing) |
 | What is in the scene? | `scene.hierarchy`, `entity.find` (`name`, `tag`, `component`), `entity.get` |
 | What happened (errors, script output)? | `log.read` (`after` = the previous `latest` to page; `minLevel`) |
 

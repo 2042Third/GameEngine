@@ -8,6 +8,7 @@
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Scene.h>
+#include <Strata/Scripting/ScriptSystem.h>
 
 namespace Strata
 {
@@ -128,6 +129,35 @@ namespace Strata
 			return nullptr;
 		}
 
+		// The fields of one attached script: the live instance's values while it runs, else the stored overrides over the class
+		// defaults. Without a loaded module the class is unknown, so only the stored overrides can be reported.
+		nlohmann::json DescribeScriptEntry(const EditorContext& context, Entity entity, const ScriptEntry& entry, const ScriptSystem* system)
+		{
+			const Ref<ScriptEngine>& engine = context.GetScriptEngine();
+			const ScriptClassInfo* info = engine && engine->IsModuleLoaded() ? engine->FindClass(entry.ClassName) : nullptr;
+			const bool live = system && system->HasInstance(entity, entry.ClassName);
+			nlohmann::json fields = nlohmann::json::object();
+			if (info)
+			{
+				for (const ScriptFieldInfo& field : info->Fields)
+				{
+					std::optional<PropertyValue> value = live ? system->GetFieldValue(entity, entry.ClassName, field.Name) : std::nullopt;
+					if (!value)
+					{
+						const ScriptFieldValue* stored = entry.FindField(field.Name);
+						value = stored && stored->Type == field.Type ? stored->Value : field.DefaultValue;
+					}
+					fields[field.Name] = ScriptEdit::FieldValueToJson(*value, field.Type);
+				}
+			}
+			else
+			{
+				for (const ScriptFieldValue& stored : entry.Fields)
+					fields[stored.Name] = ScriptEdit::FieldValueToJson(stored.Value, stored.Type);
+			}
+			return { { "class", entry.ClassName }, { "live", live }, { "known", info != nullptr }, { "fields", std::move(fields) } };
+		}
+
 		// Ends a script edit: while playing the change applied to the running copy, which play.stop discards.
 		EditorCommandResult FinishScriptEdit(EditorContext& context, nlohmann::json value)
 		{
@@ -159,6 +189,37 @@ namespace Strata
 			[](EditorContext& context, const nlohmann::json&)
 			{
 				return EditorCommandResult::Ok(DescribeScripts(context));
+			} });
+
+		registry.Register({ "script.get",
+			"The field values of the scripts attached to an entity. While the game plays they are the live instances' values (game state kept "
+			"in fields, e.g. a score, as it is now; live: true); otherwise the values the scene stores (overrides, else the class defaults). "
+			"known: false means the loaded module has no such class, so only stored overrides are listed. Optionally one class.",
+			ObjectSchema({ { "entity", EntitySchema("Entity") }, { "class", StringSchema("Only this script class (default: every script of the entity)") } },
+				{ "entity" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				Scene& scene = *context.GetActiveScene();
+				CommandArguments arguments(parameters);
+				Entity entity = arguments.GetEntity(scene, "entity");
+				const std::string className = arguments.GetString("class", "");
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				const ScriptComponent* component = entity.TryGetComponent<ScriptComponent>();
+				if (!className.empty() && (!component || !component->FindScript(className)))
+					return EditorCommandResult::InvalidParameters(fmt::format("'{}' has no script {}", entity.GetName(), className));
+
+				const ScriptSystem* system = scene.IsRunning() ? scene.GetSystem<ScriptSystem>() : nullptr;
+				nlohmann::json scripts = nlohmann::json::array();
+				if (component)
+				{
+					for (const ScriptEntry& entry : component->Scripts)
+					{
+						if (className.empty() || entry.ClassName == className)
+							scripts.push_back(DescribeScriptEntry(context, entity, entry, system));
+					}
+				}
+				return EditorCommandResult::Ok({ { "entity", UUIDToJson(entity.GetUUID()) }, { "scripts", std::move(scripts) } });
 			} });
 
 		registry.Register({ "script.build",
