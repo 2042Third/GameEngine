@@ -258,6 +258,75 @@ TEST_SUITE("Physics.Hierarchy")
 		CHECK(recorder.Count(CollisionEventType::Begin) == recorder.Count(CollisionEventType::End));
 	}
 
+	TEST_CASE("Bodies below a body moved without a signal follow it in the same step")
+	{
+		Scene scene;
+		CreateGround(scene);
+		// A kinematic platform carrying a static railing and a kinematic door, bodies of their own.
+		Entity platform = CreateDynamicBox(scene, "Platform", glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(2.0f, 0.25f, 2.0f));
+		platform.GetComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
+		Entity railing = CreateStaticBox(scene, "Railing", glm::vec3(1.5f, 1.0f, 0.0f), glm::vec3(0.1f, 0.5f, 2.0f));
+		railing.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Static;
+		REQUIRE(scene.SetParent(railing, platform, false)); // World (1.5, 2, 0)
+		Entity door = CreateStaticBox(scene, "Door", glm::vec3(-1.5f, 1.0f, 0.0f), glm::vec3(0.1f, 0.5f, 1.0f));
+		door.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
+		REQUIRE(scene.SetParent(door, platform, false)); // World (-1.5, 2, 0)
+
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		StepScene(scene, 90);
+		REQUIRE(physics.IsSleeping(platform));
+		REQUIRE(physics.IsSleeping(door));
+
+		// Driven by direct writes every frame, which the awake platform notices without a signal.
+		CHECK(physics.WakeUp(platform));
+		for (int frame = 0; frame < 30; frame++)
+		{
+			platform.GetTransform().Translation.y += 0.1f;
+			StepScene(scene, 1);
+		}
+		REQUIRE(GetWorldPosition(scene, platform).y == doctest::Approx(4.0f));
+		for (Entity rider : { railing, door })
+		{
+			const glm::vec3 position = GetWorldPosition(scene, rider);
+			std::optional<RaycastHit> hit = CastDown(physics, position);
+			REQUIRE(hit);
+			CHECK(hit->HitEntity == rider);
+			CHECK(hit->Point.y == doctest::Approx(position.y + 0.5f).epsilon(1.0e-3));
+		}
+		// Nothing is left behind where the riders started.
+		std::optional<RaycastHit> below = physics.Raycast(glm::vec3(1.5f, 3.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), 10.0f);
+		REQUIRE(below);
+		CHECK(below->HitEntity != railing);
+	}
+
+	TEST_CASE("Sleeping dynamic children move along with a parent moved without a signal")
+	{
+		Scene scene;
+		CreateGround(scene);
+		Entity parent = CreateDynamicBox(scene, "Parent", glm::vec3(0.0f, 5.0f, 0.0f));
+		parent.GetComponent<RigidBodyComponent>().GravityScale = 0.0f;
+		Entity child = CreateDynamicBox(scene, "Child", glm::vec3(10.0f, 0.5f, 0.0f));
+		REQUIRE(scene.SetParent(child, parent));
+
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		StepScene(scene, 90);
+		REQUIRE(physics.IsSleeping(child));
+
+		// The awake parent is moved by a direct write: the child moves along, as after a signaled edit.
+		CHECK(physics.WakeUp(parent));
+		parent.GetTransform().Translation.x += 3.0f;
+		StepScene(scene, 1);
+		CHECK(GetWorldPosition(scene, parent).x == doctest::Approx(3.0f).epsilon(1.0e-3));
+		CHECK(GetWorldPosition(scene, child).x == doctest::Approx(13.0f).epsilon(1.0e-3));
+		std::optional<RaycastHit> hit = CastDown(physics, glm::vec3(13.0f, 0.0f, 0.0f));
+		REQUIRE(hit);
+		CHECK(hit->HitEntity == child);
+		StepScene(scene, 30);
+		CHECK(GetWorldPosition(scene, child).x == doctest::Approx(13.0f).epsilon(1.0e-3));
+	}
+
 	TEST_CASE("Bodies rebuilt while inactive keep their merged colliders")
 	{
 		Scene scene;

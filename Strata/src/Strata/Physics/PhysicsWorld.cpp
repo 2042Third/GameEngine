@@ -602,6 +602,7 @@ namespace Strata
 			bool TransformDirty = false;                    // A signaled transform change to apply at the next step
 			bool Polled = false;                            // Listed in PhysicsWorldData::PolledBodies
 			uint64_t WriteBackPass = 0;                     // Last write-back pass that wrote this body
+			uint64_t SyncPass = 0;                          // Last step whose synchronization handled this record
 			glm::vec3 ShapeScale = glm::vec3(1.0f);         // World scale baked into the shape
 			glm::mat4 LastWorldTransform = glm::mat4(1.0f); // Entity world transform the body was last synchronized with
 			glm::vec3 KinematicTargetPosition = glm::vec3(0.0f);
@@ -744,6 +745,7 @@ namespace Strata
 		JPH::EPhysicsUpdateError ReportedErrors = JPH::EPhysicsUpdateError::None;
 		uint64_t StepCount = 0;
 		uint64_t WriteBackPass = 0;
+		uint64_t SyncPass = 0;
 		float LastStepTime = 0.0f;
 		uint32_t LastSyncedBodies = 0;
 		uint32_t LastCheckedPairs = 0;
@@ -751,6 +753,7 @@ namespace Strata
 
 		// Scratch buffers reused by every step, so that steps allocate nothing once they have grown.
 		std::vector<entt::entity> SyncCandidates;
+		std::vector<entt::entity> SyncFollowers;                      // See MarkMovedDescendants
 		std::vector<PairKey> CheckedPairs;
 		std::vector<ContactReport> Reports;
 		std::vector<TouchingPair> EndedPairs;
@@ -1955,16 +1958,158 @@ namespace Strata
 			}
 		}
 
-		// Brings the bodies in line with their entities before a step: kinematic targets, teleports, degenerate transforms,
-		// scale changes and retries of bodies that could not be built. Only awake bodies (whose entities may have been moved
-		// without a signal) and the records that need attention (see NeedsPolling) are visited, so sleeping and static
-		// bodies cost nothing.
+		// Marks the records below an entity that moved without a signal: their entities moved too, but their bodies may sleep
+		// (or be static), so nothing else would notice. They are synchronized in the same step (see SyncEntitiesToBodies).
+		void MarkMovedDescendants(PhysicsWorldData& data, Entity moved)
+		{
+			VisitSubtree(*data.OwnerScene, moved, data.VisitStack, [&](Entity entity)
+			{
+				if (entity == moved)
+					return true;
+				BodyRecord* record = FindRecord(data, entity.GetHandle());
+				if (record && record->SyncPass != data.SyncPass)
+				{
+					record->TransformDirty = true;
+					data.SyncFollowers.push_back(entity.GetHandle());
+				}
+				return true;
+			});
+		}
+
+		// Brings one body in line with its entity before a step: kinematic target, teleport, degenerate transform, scale
+		// change, or a retry of a body that could not be built. Each record is synchronized at most once per step.
+		void SyncBody(PhysicsWorldData& data, entt::entity handle, float timestep)
+		{
+			Scene& scene = *data.OwnerScene;
+			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
+			BodyRecord* record = FindRecord(data, handle);
+			if (!record || record->SyncPass == data.SyncPass)
+				return;
+			record->SyncPass = data.SyncPass;
+			data.LastSyncedBodies++;
+
+			const Entity entity(handle, &scene);
+			if (!entity.IsValid())
+			{
+				data.StructureChanges.Add(handle);
+				return;
+			}
+
+			if (!record->HasBody())
+			{
+				// A build whose cause of failure may have gone away is retried.
+				bool retry = false;
+				if (IsSimulated(scene, entity))
+				{
+					switch (record->Failure)
+					{
+						case BuildFailure::DegenerateTransform:
+							retry = scene.GetWorldTransform(entity) != record->LastWorldTransform || (record->WaitsForParent && HasInvertibleParent(scene, entity));
+							break;
+						case BuildFailure::BodyLimit: retry = data.JoltSystem->GetNumBodies() < data.Settings.MaxBodies; break;
+						default: break;
+					}
+				}
+				if (retry)
+					data.OwnerRefreshes.Add(handle);
+				record->TransformDirty = false;
+				return;
+			}
+
+			if (!record->InSimulation)
+			{
+				// A suspended body comes back once its transform is valid. Bodies of inactive entities or entities about to
+				// be destroyed wait: activity changes bring them back, and their pose is taken from the entity then.
+				if (record->Suspended && IsSimulated(scene, entity))
+				{
+					const PlacementResult result = AddToSimulation(data, *record, entity);
+					record->Suspended = result == PlacementResult::DegenerateTransform;
+					if (result == PlacementResult::ScaleChanged)
+						data.OwnerRefreshes.Add(handle);
+				}
+				record->TransformDirty = false;
+				UpdatePolling(data, handle, *record);
+				return;
+			}
+
+			const glm::mat4 worldTransform = scene.GetWorldTransform(entity);
+			if (worldTransform == record->LastWorldTransform)
+			{
+				// A kinematic body keeps the velocity of its last move; stop it at its target.
+				if (record->KinematicMoving)
+				{
+					bodies.MoveKinematic(record->BodyID, ToJoltPosition(record->KinematicTargetPosition), ToJolt(record->KinematicTargetRotation), timestep);
+					record->KinematicMoving = false;
+				}
+				record->TransformDirty = false;
+				return;
+			}
+
+			// Moved without a signal (the entity or an ancestor of this awake body was edited directly): the bodies below it
+			// moved as well. (A signaled change marked them already.)
+			if (!record->TransformDirty)
+				MarkMovedDescendants(data, entity);
+			record->TransformDirty = false;
+
+			glm::vec3 position;
+			glm::quat rotation;
+			glm::vec3 scale;
+			const bool decomposed = Math::DecomposeTransform(worldTransform, position, rotation, scale);
+			if (!decomposed || (record->Type == RigidBodyType::Dynamic && !HasInvertibleParent(scene, entity)))
+			{
+				// Out of the simulation (like an inactive entity) until the transform is valid again; the transform is
+				// left as it is.
+				if (ShouldWarn(data, record->EntityID, PhysicsWarning::DegenerateTransform))
+				{
+					if (!decomposed)
+						ST_CORE_WARN("Physics: '{}' has a degenerate world transform; its body leaves the simulation until the transform is valid", entity.GetName());
+					else
+						ST_CORE_WARN("Physics: the parent of '{}' is scaled to (nearly) zero, so its simulated pose cannot be written back; its body leaves the simulation until the parent's transform is valid", entity.GetName());
+				}
+				RemoveFromSimulation(data, *record);
+				record->Suspended = true;
+				UpdatePolling(data, handle, *record);
+				return;
+			}
+			if (HasScaleChanged(scale, record->ShapeScale))
+			{
+				data.OwnerRefreshes.Add(handle);
+				return;
+			}
+
+			switch (record->Type)
+			{
+				case RigidBodyType::Static:
+					// Jolt only activates a body that is moved itself, so bodies resting on it at the old and the new place
+					// are woken up explicitly.
+					WakeBodiesAround(data, record->BodyID);
+					bodies.SetPositionAndRotation(record->BodyID, ToJoltPosition(position), ToJolt(rotation), JPH::EActivation::DontActivate);
+					WakeBodiesAround(data, record->BodyID);
+					break;
+				case RigidBodyType::Kinematic:
+					// Moved with a velocity: the bodies it touches, also those resting on it, wake up through their contacts.
+					bodies.MoveKinematic(record->BodyID, ToJoltPosition(position), ToJolt(rotation), timestep);
+					record->KinematicMoving = true;
+					record->KinematicTargetPosition = position;
+					record->KinematicTargetRotation = rotation;
+					break;
+				case RigidBodyType::Dynamic:
+					// Moved from outside physics (gameplay code, editor gizmo, a moving parent): teleport, keeping velocity,
+					// and wake the bodies that rested on it.
+					WakeBodiesAround(data, record->BodyID);
+					bodies.SetPositionAndRotation(record->BodyID, ToJoltPosition(position), ToJolt(rotation), JPH::EActivation::Activate);
+					break;
+			}
+			record->LastWorldTransform = worldTransform;
+		}
+
+		// Brings the bodies in line with their entities before a step. Only awake bodies (whose entities may have been moved
+		// without a signal), the records that need attention (see NeedsPolling) and the bodies below entities that moved
+		// without a signal are visited, so sleeping and static bodies cost nothing otherwise.
 		void SyncEntitiesToBodies(PhysicsWorldData& data, float timestep)
 		{
 			ST_PROFILE_FUNCTION();
 
-			Scene& scene = *data.OwnerScene;
-			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
 			RemovePendingDestroys(data);
 			RefreshMeshBodies(data);
 
@@ -1995,126 +2140,17 @@ namespace Strata
 			for (entt::entity handle : data.PolledBodies)
 				FindRecord(data, handle)->Polled = true;
 
-			// Processed in a fixed order, whatever the order of Jolt's active list.
+			// Processed in a fixed order, whatever the order of Jolt's active list; then the bodies below entities that moved
+			// without a signal, in the order they were found.
 			std::sort(candidates.begin(), candidates.end());
 			candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
-			data.LastSyncedBodies = static_cast<uint32_t>(candidates.size());
-
+			data.SyncPass++;
+			data.LastSyncedBodies = 0;
+			data.SyncFollowers.clear();
 			for (entt::entity handle : candidates)
-			{
-				BodyRecord* record = FindRecord(data, handle);
-				if (!record)
-					continue;
-
-				const Entity entity(handle, &scene);
-				if (!entity.IsValid())
-				{
-					data.StructureChanges.Add(handle);
-					continue;
-				}
-
-				if (!record->HasBody())
-				{
-					// A build whose cause of failure may have gone away is retried.
-					bool retry = false;
-					if (IsSimulated(scene, entity))
-					{
-						switch (record->Failure)
-						{
-							case BuildFailure::DegenerateTransform:
-								retry = scene.GetWorldTransform(entity) != record->LastWorldTransform || (record->WaitsForParent && HasInvertibleParent(scene, entity));
-								break;
-							case BuildFailure::BodyLimit: retry = data.JoltSystem->GetNumBodies() < data.Settings.MaxBodies; break;
-							default: break;
-						}
-					}
-					if (retry)
-						data.OwnerRefreshes.Add(handle);
-					continue;
-				}
-
-				if (!record->InSimulation)
-				{
-					// A suspended body comes back once its transform is valid. Bodies of inactive entities or entities about to
-					// be destroyed wait: activity changes bring them back, and their pose is taken from the entity then.
-					if (record->Suspended && IsSimulated(scene, entity))
-					{
-						const PlacementResult result = AddToSimulation(data, *record, entity);
-						record->Suspended = result == PlacementResult::DegenerateTransform;
-						if (result == PlacementResult::ScaleChanged)
-							data.OwnerRefreshes.Add(handle);
-					}
-					record->TransformDirty = false;
-					UpdatePolling(data, handle, *record);
-					continue;
-				}
-
-				const glm::mat4 worldTransform = scene.GetWorldTransform(entity);
-				if (worldTransform == record->LastWorldTransform)
-				{
-					// A kinematic body keeps the velocity of its last move; stop it at its target.
-					if (record->KinematicMoving)
-					{
-						bodies.MoveKinematic(record->BodyID, ToJoltPosition(record->KinematicTargetPosition), ToJolt(record->KinematicTargetRotation), timestep);
-						record->KinematicMoving = false;
-					}
-					record->TransformDirty = false;
-					continue;
-				}
-
-				glm::vec3 position;
-				glm::quat rotation;
-				glm::vec3 scale;
-				const bool decomposed = Math::DecomposeTransform(worldTransform, position, rotation, scale);
-				if (!decomposed || (record->Type == RigidBodyType::Dynamic && !HasInvertibleParent(scene, entity)))
-				{
-					// Out of the simulation (like an inactive entity) until the transform is valid again; the transform is
-					// left as it is.
-					if (ShouldWarn(data, record->EntityID, PhysicsWarning::DegenerateTransform))
-					{
-						if (!decomposed)
-							ST_CORE_WARN("Physics: '{}' has a degenerate world transform; its body leaves the simulation until the transform is valid", entity.GetName());
-						else
-							ST_CORE_WARN("Physics: the parent of '{}' is scaled to (nearly) zero, so its simulated pose cannot be written back; its body leaves the simulation until the parent's transform is valid", entity.GetName());
-					}
-					RemoveFromSimulation(data, *record);
-					record->Suspended = true;
-					record->TransformDirty = false;
-					UpdatePolling(data, handle, *record);
-					continue;
-				}
-				if (HasScaleChanged(scale, record->ShapeScale))
-				{
-					data.OwnerRefreshes.Add(handle);
-					continue;
-				}
-
-				switch (record->Type)
-				{
-					case RigidBodyType::Static:
-						// Jolt only activates a body that is moved itself, so bodies resting on it at the old and the new place
-						// are woken up explicitly.
-						WakeBodiesAround(data, record->BodyID);
-						bodies.SetPositionAndRotation(record->BodyID, ToJoltPosition(position), ToJolt(rotation), JPH::EActivation::DontActivate);
-						WakeBodiesAround(data, record->BodyID);
-						break;
-					case RigidBodyType::Kinematic:
-						// Moved with a velocity: the bodies it touches, also those resting on it, wake up through their contacts.
-						bodies.MoveKinematic(record->BodyID, ToJoltPosition(position), ToJolt(rotation), timestep);
-						record->KinematicMoving = true;
-						record->KinematicTargetPosition = position;
-						record->KinematicTargetRotation = rotation;
-						break;
-					case RigidBodyType::Dynamic:
-						// Moved from outside physics (gameplay code, editor gizmo, a moving parent): teleport, keeping velocity,
-						// and wake the bodies that rested on it.
-						WakeBodiesAround(data, record->BodyID);
-						bodies.SetPositionAndRotation(record->BodyID, ToJoltPosition(position), ToJolt(rotation), JPH::EActivation::Activate);
-						break;
-				}
-				record->LastWorldTransform = worldTransform;
-				record->TransformDirty = false;
-			}
+				SyncBody(data, handle, timestep);
+			for (size_t index = 0; index < data.SyncFollowers.size(); index++)
+				SyncBody(data, data.SyncFollowers[index], timestep);
 
 			ApplyChanges(data);
 		}
