@@ -35,24 +35,32 @@ namespace Strata
 		static uint32_t GetProcessID();
 		// Whether a process with this id is running (false once it has exited, even while a handle keeps its id).
 		static bool IsProcessAlive(uint32_t processId);
+		// An opaque value identifying one run of a process: the same for the same process, different for a later
+		// process that reuses the id. nullopt if no such process exists or it cannot be inspected.
+		static std::optional<uint64_t> GetProcessStartTime(uint32_t processId);
 
 		// Fills buffer from the operating system's cryptographically secure random number generator.
 		static bool GenerateSecureRandom(std::span<uint8_t> buffer);
 
 		// Atomically replaces path with contents, readable and writable only by the current user (POSIX mode 0600,
-		// a protected owner-only DACL on Windows). The data is written to a freshly created temporary file (exclusive
-		// create, never following an existing file or link) that is then renamed over path; the rename is retried
-		// briefly while readers hold the destination open (Windows). Parent directories are created.
+		// a protected owner-only DACL on Windows). The data is written to a freshly created temporary file with a
+		// random name (exclusive create, never following an existing file or link) that is then renamed over path;
+		// the rename is retried briefly while readers hold the destination open (Windows). Parent directories are
+		// created.
 		static bool WritePrivateFile(const std::filesystem::path& path, std::string_view contents, std::string* error = nullptr);
-		// Creates directory (and its parents) if missing and verifies it may hold secrets. POSIX: the directory must
-		// be a real directory (not a symbolic link) owned by the current user; a newly created leaf gets mode 0700,
-		// and group/other write permission on an owned directory is removed. Windows: it must not be a reparse
-		// point (per-user profile ACLs protect the default locations).
+		// Creates directory (and its parents) if missing and verifies it may hold secrets: a real directory (not a
+		// symbolic link, junction or other reparse point) that only the current user can modify. POSIX: owned by
+		// the current user; a newly created leaf gets mode 0700, and group/other write permission on an owned
+		// directory is removed. Windows: owned by the current user (or by Administrators when elevated), with no
+		// access control entry granting modify rights to accounts other than the user, SYSTEM and Administrators.
 		static bool EnsurePrivateDirectory(const std::filesystem::path& directory, std::string* error = nullptr);
-		// Whether a file can be trusted as written by the current user. POSIX: a regular file (not a symbolic link)
-		// owned by the current user and not writable by group or others. Windows: a regular file that is not a
-		// reparse point.
+		// Whether a file can be trusted as written by the current user: a regular file (not a link) that only the
+		// current user can modify, by the same rules as EnsurePrivateDirectory.
 		static bool IsTrustedFile(const std::filesystem::path& path, std::string* error = nullptr);
+		// Reads a regular file of at most maxSize bytes through a single open handle, so it cannot be swapped
+		// between the checks and the read. Links (final component), directories, FIFOs and devices are rejected
+		// without blocking. nullopt (with the reason in error) otherwise.
+		static std::optional<std::string> ReadRegularFile(const std::filesystem::path& path, size_t maxSize, std::string* error = nullptr);
 		// Renames from to to, failing (without touching either file) if to already exists.
 		static bool RenameNoReplace(const std::filesystem::path& from, const std::filesystem::path& to);
 

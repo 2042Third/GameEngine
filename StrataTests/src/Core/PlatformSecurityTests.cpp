@@ -10,10 +10,37 @@
 #include <string>
 #include <vector>
 
+#if defined(ST_PLATFORM_POSIX)
+	#include <sys/stat.h>
+#elif defined(ST_PLATFORM_WINDOWS)
+	#include <Windows.h>
+	#include <aclapi.h>
+	#include <sddl.h>
+#endif
+
 using namespace Strata;
 
 namespace
 {
+#if defined(ST_PLATFORM_WINDOWS)
+	// Replaces the DACL of path with one that lets Everyone modify it (the owner and SYSTEM keep full access, so the
+	// test can still clean up).
+	bool GrantEveryoneModify(const std::filesystem::path& path)
+	{
+		PSECURITY_DESCRIPTOR descriptor = nullptr;
+		if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;FA;;;OW)(A;;FA;;;SY)(A;;0x1301bf;;;WD)", SDDL_REVISION_1, &descriptor, nullptr))
+			return false;
+
+		BOOL present = FALSE;
+		BOOL defaulted = FALSE;
+		PACL dacl = nullptr;
+		const BOOL found = GetSecurityDescriptorDacl(descriptor, &present, &dacl, &defaulted);
+		const DWORD result = found && present ? SetNamedSecurityInfoW(const_cast<wchar_t*>(path.c_str()), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, dacl, nullptr) : ERROR_INVALID_DATA;
+		LocalFree(descriptor);
+		return result == ERROR_SUCCESS;
+	}
+#endif
+
 	ProcessSpecification HelperProcess(std::vector<std::string> arguments)
 	{
 		ProcessSpecification specification;
@@ -46,22 +73,76 @@ TEST_SUITE("Core.Platform")
 		CHECK(Platform::GenerateSecureRandom(std::span<uint8_t>()));
 	}
 
-	TEST_CASE("Process liveness follows the process lifetime")
+	TEST_CASE("Process liveness and start time follow the process lifetime")
 	{
 		CHECK(Platform::IsProcessAlive(Platform::GetProcessID()));
 		CHECK_FALSE(Platform::IsProcessAlive(0));
+		CHECK_FALSE(Platform::GetProcessStartTime(0).has_value());
+
+		const std::optional<uint64_t> ownStart = Platform::GetProcessStartTime(Platform::GetProcessID());
+		REQUIRE(ownStart.has_value());
+		CHECK(Platform::GetProcessStartTime(Platform::GetProcessID()) == ownStart);
 
 		Process sleeper;
 		REQUIRE(sleeper.Start(HelperProcess({ "--strata-test-helper=sleep", "10000" })));
-		CHECK(Platform::IsProcessAlive(sleeper.GetProcessID()));
+		const uint32_t sleeperId = sleeper.GetProcessID();
+		CHECK(Platform::IsProcessAlive(sleeperId));
+		const std::optional<uint64_t> sleeperStart = Platform::GetProcessStartTime(sleeperId);
+		REQUIRE(sleeperStart.has_value());
+		CHECK(sleeperStart != ownStart);
+		CHECK(Platform::GetProcessStartTime(sleeperId) == sleeperStart);
 		REQUIRE(sleeper.Terminate());
-		CHECK_FALSE(Platform::IsProcessAlive(sleeper.GetProcessID()));
 
-		// The Process object still holds the exited process (its id cannot be reused yet), which must not count.
+		// Once a process has exited, its instance is gone. On Windows the Process object's handle keeps the id from
+		// being reused; on POSIX waiting for the process reaped it and freed the id, which a new process may take, so
+		// the start time is what identifies the instance that exited.
+		auto instanceGone = [](uint32_t processId, std::optional<uint64_t> startTime)
+		{
+			return !Platform::IsProcessAlive(processId) || Platform::GetProcessStartTime(processId) != startTime;
+		};
+		CHECK(instanceGone(sleeperId, sleeperStart));
+
 		Process exited;
 		REQUIRE(exited.Start(HelperProcess({ "--strata-test-helper=exit-code", "0" })));
+		// Queried before waiting: until it is waited for, an exited child (or a Windows process with an open handle)
+		// still has its start time.
+		const std::optional<uint64_t> exitedStart = Platform::GetProcessStartTime(exited.GetProcessID());
 		REQUIRE(exited.Wait(std::chrono::milliseconds(10000)).has_value());
-		CHECK_FALSE(Platform::IsProcessAlive(exited.GetProcessID()));
+		CHECK(exitedStart.has_value());
+		CHECK(instanceGone(exited.GetProcessID(), exitedStart));
+	}
+
+	TEST_CASE("Small files are read through a single handle")
+	{
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("ReadRegularFile");
+		REQUIRE(FileSystem::WriteText(directory / "small.json", "{\"a\":1}"));
+
+		std::string error;
+		const std::optional<std::string> contents = Platform::ReadRegularFile(directory / "small.json", 64, &error);
+		REQUIRE_MESSAGE(contents.has_value(), error);
+		CHECK(*contents == "{\"a\":1}");
+		CHECK(Platform::ReadRegularFile(directory / "small.json", 7).value() == "{\"a\":1}");
+
+		CHECK_FALSE(Platform::ReadRegularFile(directory / "small.json", 6, &error).has_value());
+		CHECK(error.find("larger") != std::string::npos);
+		CHECK_FALSE(Platform::ReadRegularFile(directory / "missing.json", 64).has_value());
+		CHECK_FALSE(Platform::ReadRegularFile(directory, 64).has_value());
+
+		REQUIRE(FileSystem::WriteText(directory / "empty.json", ""));
+		CHECK(Platform::ReadRegularFile(directory / "empty.json", 64).value().empty());
+
+#if defined(ST_PLATFORM_POSIX)
+		// A link to a regular file and a FIFO are both refused, the FIFO without blocking.
+		std::error_code linkError;
+		std::filesystem::create_symlink(directory / "small.json", directory / "link.json", linkError);
+		REQUIRE_FALSE(linkError);
+		CHECK_FALSE(Platform::ReadRegularFile(directory / "link.json", 64).has_value());
+
+		const std::filesystem::path fifo = directory / "fifo.json";
+		REQUIRE(mkfifo(fifo.c_str(), 0600) == 0);
+		CHECK_FALSE(Platform::ReadRegularFile(fifo, 64, &error).has_value());
+		CHECK(error.find("not a regular file") != std::string::npos);
+#endif
 	}
 
 	TEST_CASE("Private files are replaced atomically and trusted")
@@ -111,6 +192,15 @@ TEST_SUITE("Core.Platform")
 		REQUIRE_FALSE(linkError);
 		CHECK_FALSE(Platform::IsTrustedFile(link, &error));
 #endif
+
+#if defined(ST_PLATFORM_WINDOWS)
+		const std::filesystem::path shared = directory / "shared.json";
+		REQUIRE(Platform::WritePrivateFile(shared, "{}"));
+		REQUIRE_MESSAGE(Platform::IsTrustedFile(shared, &error), error);
+		REQUIRE(GrantEveryoneModify(shared));
+		CHECK_FALSE(Platform::IsTrustedFile(shared, &error));
+		CHECK(error.find("another account") != std::string::npos);
+#endif
 	}
 
 	TEST_CASE("Private directories are created owner-only and verified")
@@ -144,6 +234,15 @@ TEST_SUITE("Core.Platform")
 		std::filesystem::create_directory_symlink(directory, link, linkError);
 		REQUIRE_FALSE(linkError);
 		CHECK_FALSE(Platform::EnsurePrivateDirectory(link, &error));
+#endif
+
+#if defined(ST_PLATFORM_WINDOWS)
+		// A directory other accounts may modify is refused.
+		const std::filesystem::path shared = root / "Shared";
+		REQUIRE(Platform::EnsurePrivateDirectory(shared, &error));
+		REQUIRE(GrantEveryoneModify(shared));
+		CHECK_FALSE(Platform::EnsurePrivateDirectory(shared, &error));
+		CHECK(error.find("another account") != std::string::npos);
 #endif
 	}
 

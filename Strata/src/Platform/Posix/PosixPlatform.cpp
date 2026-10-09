@@ -1,10 +1,12 @@
 #include "stpch.h"
 #include "Strata/Core/Platform.h"
 
+#include "Strata/Core/Crypto.h"
 #include "Strata/Core/FileSystem.h"
 
-#include <atomic>
+#include <array>
 #include <cerrno>
+#include <charconv>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -12,14 +14,17 @@
 #include <fstream>
 #include <limits>
 #include <pthread.h>
+#include <sstream>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <system_error>
 #include <unistd.h>
 
 #if defined(ST_PLATFORM_MACOS)
+	#include <libproc.h>
 	#include <mach-o/dyld.h>
 	#include <mach/mach.h>
+	#include <sys/proc_info.h>
 	#include <sys/sysctl.h>
 #else
 	#include <sys/random.h>
@@ -30,6 +35,9 @@ namespace Strata
 
 	namespace
 	{
+
+		// Temporary names are random; a name that already exists (planted by someone else) is skipped.
+		constexpr int c_TemporaryNameAttempts = 8;
 
 		// Thread-safe, unlike std::strerror.
 		std::string GetErrorMessage(int errorCode)
@@ -215,6 +223,44 @@ namespace Strata
 		return errno == EPERM;
 	}
 
+	std::optional<uint64_t> Platform::GetProcessStartTime(uint32_t processId)
+	{
+		if (processId == 0 || processId > static_cast<uint32_t>(std::numeric_limits<pid_t>::max()))
+			return std::nullopt;
+
+#if defined(ST_PLATFORM_MACOS)
+		proc_bsdinfo information = {};
+		const int size = proc_pidinfo(static_cast<int>(processId), PROC_PIDTBSDINFO, 0, &information, sizeof(information));
+		if (size != static_cast<int>(sizeof(information)))
+			return std::nullopt;
+		return static_cast<uint64_t>(information.pbi_start_tvsec) * 1000000 + static_cast<uint64_t>(information.pbi_start_tvusec);
+#else
+		// Field 22 of /proc/<pid>/stat is the start time in clock ticks since boot. Field 2 (the command name, in
+		// parentheses) may contain spaces and parentheses itself, so fields are counted after its last ')'.
+		std::ifstream statFile("/proc/" + std::to_string(processId) + "/stat");
+		std::string content;
+		if (!statFile || !std::getline(statFile, content))
+			return std::nullopt;
+		const size_t commandEnd = content.rfind(')');
+		if (commandEnd == std::string::npos)
+			return std::nullopt;
+
+		std::istringstream fields(content.substr(commandEnd + 1));
+		std::string field;
+		for (int index = 3; index <= 22; index++)
+		{
+			if (!(fields >> field))
+				return std::nullopt;
+		}
+
+		uint64_t startTime = 0;
+		const auto [end, parseError] = std::from_chars(field.data(), field.data() + field.size(), startTime);
+		if (parseError != std::errc() || end != field.data() + field.size())
+			return std::nullopt;
+		return startTime;
+#endif
+	}
+
 	bool Platform::GenerateSecureRandom(std::span<uint8_t> buffer)
 	{
 #if defined(ST_PLATFORM_MACOS)
@@ -243,15 +289,26 @@ namespace Strata
 		if (path.has_parent_path())
 			std::filesystem::create_directories(path.parent_path(), directoryError);
 
-		static std::atomic<uint32_t> s_TemporaryCounter = 0;
-		std::filesystem::path temporaryPath = path;
-		temporaryPath += FileSystem::FromUTF8(fmt::format(".tmp-{}-{}", getpid(), s_TemporaryCounter.fetch_add(1)));
-
 		// O_EXCL never opens an existing file or symbolic link, so the data only ever lands in a file created here,
-		// and it is created owner-only rather than restricted after the fact.
-		const int descriptor = open(temporaryPath.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, S_IRUSR | S_IWUSR);
+		// and it is created owner-only rather than restricted after the fact. The random name keeps other users
+		// from blocking the write by creating the file first.
+		std::filesystem::path temporaryPath;
+		int descriptor = -1;
+		int createError = 0;
+		for (int attempt = 0; attempt < c_TemporaryNameAttempts && descriptor < 0; attempt++)
+		{
+			std::array<uint8_t, 8> suffix = {};
+			if (!GenerateSecureRandom(suffix))
+				return SetError(error, "The system random number generator failed");
+			temporaryPath = path;
+			temporaryPath += FileSystem::FromUTF8(".tmp-" + Crypto::ToHex(suffix));
+			descriptor = open(temporaryPath.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, S_IRUSR | S_IWUSR);
+			createError = descriptor < 0 ? errno : 0;
+			if (descriptor < 0 && createError != EEXIST)
+				break;
+		}
 		if (descriptor < 0)
-			return SetError(error, fmt::format("Failed to create '{}': {}", FileSystem::ToUTF8(temporaryPath), GetErrorMessage(errno)));
+			return SetError(error, fmt::format("Failed to create '{}': {}", FileSystem::ToUTF8(temporaryPath), GetErrorMessage(createError)));
 
 		bool written = true;
 		int writeError = 0;
@@ -326,6 +383,62 @@ namespace Strata
 		if ((information.st_mode & (S_IWGRP | S_IWOTH)) != 0)
 			return SetError(error, fmt::format("'{}' is writable by other users", name));
 		return true;
+	}
+
+	std::optional<std::string> Platform::ReadRegularFile(const std::filesystem::path& path, size_t maxSize, std::string* error)
+	{
+		const std::string name = FileSystem::ToUTF8(path);
+		// One descriptor for every check and the read, so the file cannot be swapped in between. O_NOFOLLOW rejects
+		// a final symbolic link, and O_NONBLOCK keeps opening a FIFO from blocking until it is identified below.
+		const int descriptor = open(path.c_str(), O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC);
+		if (descriptor < 0)
+		{
+			SetError(error, fmt::format("Cannot open '{}': {}", name, GetErrorMessage(errno)));
+			return std::nullopt;
+		}
+
+		struct DescriptorGuard
+		{
+			int Descriptor;
+			~DescriptorGuard() { close(Descriptor); }
+		} descriptorGuard { descriptor };
+
+		struct stat information = {};
+		if (fstat(descriptor, &information) != 0 || !S_ISREG(information.st_mode))
+		{
+			SetError(error, fmt::format("'{}' is not a regular file", name));
+			return std::nullopt;
+		}
+		if (information.st_size < 0 || static_cast<uint64_t>(information.st_size) > maxSize)
+		{
+			SetError(error, fmt::format("'{}' is larger than {} bytes", name, maxSize));
+			return std::nullopt;
+		}
+
+		// Read one byte more than allowed, to notice a file that grew since it was inspected.
+		std::string contents(static_cast<size_t>(information.st_size) + 1, '\0');
+		size_t total = 0;
+		while (total < contents.size())
+		{
+			const ssize_t result = read(descriptor, contents.data() + total, contents.size() - total);
+			if (result < 0 && errno == EINTR)
+				continue;
+			if (result < 0)
+			{
+				SetError(error, fmt::format("Failed to read '{}': {}", name, GetErrorMessage(errno)));
+				return std::nullopt;
+			}
+			if (result == 0)
+				break;
+			total += static_cast<size_t>(result);
+		}
+		if (total > maxSize)
+		{
+			SetError(error, fmt::format("'{}' is larger than {} bytes", name, maxSize));
+			return std::nullopt;
+		}
+		contents.resize(total);
+		return contents;
 	}
 
 	bool Platform::RenameNoReplace(const std::filesystem::path& from, const std::filesystem::path& to)
