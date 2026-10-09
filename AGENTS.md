@@ -93,6 +93,10 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   devices in tests) and end with `CHECK(gpu.GetNewErrorCount() == 0)`, so validation errors fail the
   test. Run them under the Khronos validation layer locally by pointing `VK_ADD_LAYER_PATH` at its
   build. Rendering features are tested on pixels read back with `Renderer::ReadTexture`.
+- Suites whose names start with `EndToEnd` start the built `StrataEditor` and `StrataCLI` (paths in
+  `STRATA_TEST_EDITOR_PATH`/`STRATA_TEST_CLI_PATH`, else next to the test executable) and run as the CTest
+  `StrataEditor.Automation`, not in `StrataTests.Core`. They need no GPU (`--no-gpu`), use private session
+  directories, free ports and timeouts, and terminate the processes they started when they fail.
 - Use `Strata::Tests::CreateTemporaryDirectory()` for files; never write into the source tree.
 - `StrataTests.exe --strata-test-helper=<mode>` turns the test binary into a child process for
   process tests (see `TestMain.cpp`), so tests never depend on external programs.

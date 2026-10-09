@@ -77,7 +77,7 @@ if(WIN32)
 endif()
 
 add_test(NAME StrataTests.Core
-	COMMAND StrataTests --test-suite-exclude=GPU* --no-intro=true
+	COMMAND StrataTests --test-suite-exclude=GPU*,EndToEnd* --no-intro=true
 	WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
 
 add_test(NAME StrataTests.GPU
@@ -130,6 +130,17 @@ if(TARGET StrataEditor)
 		COMMAND StrataEditor --no-gpu --no-automation --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/QuitCommands.json"
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
 	set_tests_properties(StrataEditor.QuitScript PROPERTIES TIMEOUT 60)
+endif()
+
+# Editor automation end to end (no GPU): the "EndToEnd" suites start the real editor headless and drive it with StrataCLI
+# and its MCP server, the way an AI agent does.
+if(TARGET StrataEditor AND TARGET StrataCLI)
+	add_test(NAME StrataEditor.Automation
+		COMMAND StrataTests --test-suite=EndToEnd* --no-intro=true
+		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
+	set_tests_properties(StrataEditor.Automation PROPERTIES
+		ENVIRONMENT "STRATA_TEST_EDITOR_PATH=$<TARGET_FILE:StrataEditor>;STRATA_TEST_CLI_PATH=$<TARGET_FILE:StrataCLI>"
+		TIMEOUT 600)
 endif()
 
 # Editor export to a playable game, then the exported runtime: neither needs a GPU (--no-gpu, headless runtime).
