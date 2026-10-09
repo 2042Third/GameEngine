@@ -2,6 +2,7 @@
 
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Network/NetworkTestHelpers.h"
 #include "Scripting/ScriptTestUtils.h"
 #include "TestHelpers.h"
 
@@ -13,10 +14,12 @@
 #include <Strata/Scene/Components.h>
 #include <Strata/Scripting/ScriptSystem.h>
 
+#include <chrono>
 #include <filesystem>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 
 using namespace Strata;
 using namespace Strata::Tests;
@@ -27,12 +30,12 @@ namespace
 	// An editor with a new project, driven by commands.
 	struct ScriptHarness
 	{
-		EditorContext Context { EditorContextSpecification { false, false } };
+		EditorContext Context;
 		EditorCommandRegistry Commands;
 		std::filesystem::path Directory;
 
-		ScriptHarness()
-			: Directory(CreateTemporaryDirectory("EditorScripts") / "Script Game")
+		explicit ScriptHarness(const EditorContextSpecification& specification = EditorContextSpecification { false, false })
+			: Context(specification), Directory(CreateTemporaryDirectory("EditorScripts") / "Script Game")
 		{
 			Run("project.create", { { "directory", FileSystem::ToUTF8(Directory) }, { "name", "Script Game" } });
 		}
@@ -290,6 +293,46 @@ TEST_SUITE("Editor.Scripts")
 		CHECK(harness.Error("play.start").find("crashed") != std::string::npos);
 		CHECK_FALSE(harness.Context.IsPlaying());
 		CHECK(harness.Run("script.status")["lastFault"]["method"] == "OnCreate");
+	}
+
+	TEST_CASE("A build that leaves a crashed module unchanged loads it again")
+	{
+		// The test executable stands in for CMake and builds nothing (see TestMain.cpp), so the module file stays the same:
+		// the build succeeds without changing the module, as when only data caused the crash.
+		ScopedEnvironmentVariable fakeCMake("STRATA_TEST_FAKE_CMAKE", "succeed");
+		EditorContextSpecification specification { false, false };
+		specification.ScriptBuild.CMake = GetTestExecutablePath();
+		ScriptHarness harness(specification);
+		const std::filesystem::path module = harness.Context.GetProject()->GetScriptModulePath();
+		REQUIRE(FileSystem::CreateDirectories(module.parent_path()));
+		REQUIRE(FileSystem::Copy(GetTestScriptModule(STRATA_TEST_SCRIPTS_FAULTS), module));
+		harness.Run("script.reload"); // Loads the project's built module
+		const std::string id = harness.CreateEntity("Crasher");
+		harness.Run("script.add", { { "entity", id }, { "class", "Faulty" }, { "fields", { { "Fault", "NullDereference" }, { "FaultIn", "OnUpdate" } } } });
+		harness.Run("play.start");
+		harness.Frames(2);
+		REQUIRE_FALSE(harness.Context.IsPlaying());
+		REQUIRE(harness.Context.GetScriptEngine()->IsFaulted());
+
+		// The data is fixed and the scripts are built: the module did not change, yet it runs again.
+		harness.Run("script.setField", { { "entity", id }, { "class", "Faulty" }, { "field", "Fault" }, { "value", "" } });
+		std::string error;
+		REQUIRE_MESSAGE(harness.Context.BuildScripts(&error), error);
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+		while (harness.Context.GetScriptBuilder().IsRunning() && std::chrono::steady_clock::now() < deadline)
+		{
+			harness.Frames(1);
+			std::this_thread::sleep_for(std::chrono::milliseconds(5));
+		}
+		REQUIRE_FALSE(harness.Context.GetScriptBuilder().IsRunning());
+		const ScriptBuildResult& result = harness.Context.GetScriptBuilder().GetLastResult();
+		REQUIRE_MESSAGE(result.Success, result.Error);
+		CHECK_FALSE(result.ModuleChanged);
+		CHECK(harness.Context.GetLastScriptBuildLoad().Loaded);
+		CHECK_FALSE(harness.Context.GetScriptEngine()->IsFaulted());
+		harness.Run("play.start");
+		harness.Frames(2);
+		CHECK(harness.Context.IsPlaying());
 	}
 
 	TEST_CASE("Exported games carry the script module and run it in the game runtime")

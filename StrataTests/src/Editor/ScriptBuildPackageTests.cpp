@@ -165,35 +165,6 @@ ST_SCRIPT_CLASS(Counter)
 )";
 	}
 
-	// Crashes in OnUpdate while Crash is set: a crash caused by data, which a field edit fixes without new code.
-	constexpr const char* c_CrashingScript = R"(#include "StrataScript/StrataScript.h"
-
-using namespace Strata;
-
-class Crasher : public Script
-{
-public:
-	bool Crash = true;
-	int32_t Updates = 0;
-
-	void OnUpdate(float) override
-	{
-		if (Crash)
-		{
-			volatile int32_t* pointer = nullptr;
-			*pointer = 1;
-		}
-		Updates++;
-	}
-};
-
-ST_SCRIPT_CLASS(Crasher)
-{
-	ST_SCRIPT_FIELD(Crash);
-	ST_SCRIPT_FIELD(Updates);
-}
-)";
-
 	// A compile error on line 4.
 	constexpr const char* c_BrokenScript = "#include \"StrataScript/StrataScript.h\"\n\nusing namespace Strata;\nint Broken() { return undeclaredValue; }\n";
 
@@ -317,33 +288,6 @@ TEST_SUITE("Package.ScriptBuild")
 			game->Update(Timestep(1.0f / 60.0f));
 		const Entity gameHost = game->GetScene()->FindEntityByName("Counter Host");
 		CHECK(GetField<int32_t>(GetScriptSystem(*game->GetScene()), gameHost, "Counter", "Count") == 2 * 200);
-	}
-
-	TEST_CASE("A successful build ends a crash even when the module did not change")
-	{
-		BuildHarness harness;
-		REQUIRE(FileSystem::WriteText(harness.Context.GetProject()->GetScriptSourceDirectory() / "Crasher.cpp", c_CrashingScript));
-		harness.Run("script.build");
-		const std::string id = harness.Run("entity.create", { { "name", "Crasher" } })["id"].get<std::string>();
-		harness.Run("script.add", { { "entity", id }, { "class", "Crasher" } });
-
-		harness.Run("play.start");
-		harness.Frames(2);
-		REQUIRE_FALSE(harness.Context.IsPlaying());
-		CHECK(harness.Context.GetScriptEngine()->IsFaulted());
-		CHECK_FALSE(harness.RunToCompletion("play.start").Success);
-
-		// The data was the problem: fixing the field and building again (nothing to compile) makes the scripts run.
-		harness.Run("script.setField", { { "entity", id }, { "class", "Crasher" }, { "field", "Crash" }, { "value", false } });
-		const nlohmann::json rebuilt = harness.Run("script.build");
-		CHECK(rebuilt["moduleChanged"] == false);
-		CHECK(rebuilt["loaded"] == true);
-		CHECK_FALSE(harness.Context.GetScriptEngine()->IsFaulted());
-		harness.Run("play.start");
-		harness.Frames(3);
-		CHECK(harness.Context.IsPlaying());
-		const Ref<Scene> running = harness.Context.GetActiveScene();
-		CHECK(GetField<int32_t>(GetScriptSystem(*running), running->GetEntityByUUID(*UUIDFromJson(id)), "Crasher", "Updates") == 3);
 	}
 
 	TEST_CASE("Scripts build in the Dist configuration")

@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -139,11 +140,28 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 	return 99;
 }
 
+// With STRATA_TEST_FAKE_CMAKE=succeed, the test executable run with CMake's arguments ("-S ..." to configure,
+// "--build ..." to build) stands in for CMake in script builds (ScriptBuildSettings::CMake): it succeeds without building
+// anything, so the module file stays as the test left it.
+static std::optional<int> RunAsFakeCMake(int argc, char** argv)
+{
+	const std::optional<std::string> mode = Strata::Platform::GetEnvVar("STRATA_TEST_FAKE_CMAKE");
+	if (!mode || argc < 2 || (std::string_view(argv[1]) != "-S" && std::string_view(argv[1]) != "--build"))
+		return std::nullopt;
+	if (*mode != "succeed")
+		return std::nullopt;
+	std::printf("-- Fake CMake: %s\n", argv[1]);
+	std::fflush(stdout);
+	return 0;
+}
+
 int main(int argc, char** argv)
 {
 	constexpr std::string_view helperPrefix = "--strata-test-helper=";
 	if (argc > 1 && std::string_view(argv[1]).substr(0, helperPrefix.size()) == helperPrefix)
 		return RunHelperMode(std::string_view(argv[1]).substr(helperPrefix.size()), argc, argv);
+	if (const std::optional<int> fakeCMake = RunAsFakeCMake(argc, argv))
+		return *fakeCMake;
 
 	// Launched as an editor by the CLI launch tests (see Network/FakeEditorProcess.h).
 	if (Strata::Tests::IsFakeEditorLaunch(argc, argv))
