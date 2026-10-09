@@ -209,8 +209,13 @@ namespace Strata
 		const float position = std::clamp(seconds, 0.0f, m_Clip->GetLength());
 		if (m_Voice && m_Voice->IsPlaying())
 		{
-			m_Voice->SeekToFrame(SecondsToFrames(position));
-			return;
+			// The audio thread takes the seek before its next read, unless the voice finishes first: then the seek still
+			// applies where the voice that replaces it starts (see ReplaceFinishedVoice).
+			const uint64_t frame = SecondsToFrames(position);
+			m_Voice->SeekToFrame(frame);
+			m_PlayingSeekFrame = frame;
+			if (!m_Voice->HasEnded())
+				return;
 		}
 
 		m_StartPosition = position;
@@ -245,13 +250,18 @@ namespace Strata
 
 	bool AudioSource::ReplaceFinishedVoice()
 	{
+		// A seek made while the voice played, which the audio thread had not taken when the voice finished, still applies:
+		// such a voice reports the seek target as its position.
+		if (m_PlayingSeekFrame && m_Voice->GetCursorInFrames() == *m_PlayingSeekFrame)
+			m_StartPosition = static_cast<float>(static_cast<double>(*m_PlayingSeekFrame) / static_cast<double>(m_Clip->GetSampleRate()));
+		m_PlayingSeekFrame.reset();
 		m_Voice.reset();
 		return EnsureVoice();
 	}
-
 	void AudioSource::ReleaseVoice()
 	{
 		m_Voice.reset();
+		m_PlayingSeekFrame.reset();
 		m_Paused = false;
 		m_StartPosition = 0.0f;
 	}
@@ -259,6 +269,7 @@ namespace Strata
 	void AudioSource::ResetVoice()
 	{
 		// Without a voice, m_StartPosition applies when one is created.
+		m_PlayingSeekFrame.reset();
 		if (!m_Voice)
 			return;
 
