@@ -77,7 +77,8 @@ namespace Strata
 		// Play mode
 		//////////////////////////////////////////////////////////////////////////
 
-		// Runs a copy of the edited scene. Changes made while playing are discarded by Stop.
+		// Runs a copy of the edited scene, with scripts, physics and audio. Changes made while playing are discarded by Stop,
+		// which also restores the engine-wide master volume a game may have changed (AudioSystem::SetMasterVolume).
 		bool Play(std::string* outError = nullptr);
 		// Like Play, but only physics runs (no scripts or audio).
 		bool Simulate(std::string* outError = nullptr);
@@ -129,6 +130,7 @@ namespace Strata
 		Ref<Scene> m_RuntimeScene;
 		AssetHandle m_SceneHandle = UUID::Null();
 		SceneState m_SceneState = SceneState::Edit;
+		float m_MasterVolumeBeforePlay = 1.0f;
 
 		std::vector<UUID> m_Selection;
 		UndoStack m_UndoStack;
