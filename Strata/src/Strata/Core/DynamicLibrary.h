@@ -23,6 +23,9 @@ namespace Strata
 
 		bool Load(const std::filesystem::path& path);
 		void Unload();
+		// Forgets the library without unloading it (it stays loaded until the process exits). For libraries that must
+		// not be touched again, e.g. after their unload code crashed.
+		void Release();
 
 		bool IsLoaded() const { return m_Handle != nullptr; }
 		const std::filesystem::path& GetPath() const { return m_Path; }

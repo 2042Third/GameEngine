@@ -77,6 +77,12 @@ namespace Strata
 		m_Path.clear();
 	}
 
+	void DynamicLibrary::Release()
+	{
+		m_Handle = nullptr;
+		m_Path.clear();
+	}
+
 	void* DynamicLibrary::GetSymbol(const char* name) const
 	{
 		if (!m_Handle)

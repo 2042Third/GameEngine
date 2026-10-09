@@ -45,6 +45,7 @@ target_link_libraries(Strata
 		imgui
 		ImGuizmo
 	PRIVATE
+		StrataScriptCore # Only the C ABI header (StrataScript/ScriptABI.h); the engine never includes the script SDK
 		nvrhi_vk
 		Vulkan::Headers
 		glfw

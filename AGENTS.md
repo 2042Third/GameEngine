@@ -94,6 +94,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   process tests (see `TestMain.cpp`), so tests never depend on external programs.
 - The feature test project exercises every component and the entire scripting API in a real scene,
   run headless by CTest. Extend it whenever you add a component or script API.
+- Script modules the tests load are CMake targets in `StrataTests/CMakeLists.txt` (sources in `StrataTests/Scripts/`),
+  built with the tests. The CTest `StrataScriptCore.Package` (label `package`) builds `StrataTests/PackageProject` through
+  the StrataScriptCore package the way a game project does; it needs CMake and the compiler at test time.
 
 ## Code style (Hazel conventions)
 
@@ -183,6 +186,75 @@ Conventions:
 - Adding an asset type: an `Asset` subclass with a cooked/serialized form, a loader in
   `Asset/AssetRegistration.cpp`, an importer if it comes from external files, and tests for round trips
   and corrupt data (every loader must reject truncated or garbage bytes without crashing).
+
+## Scripting
+
+Game logic is C++ script classes compiled into a **script module**: a shared library built against
+`StrataScriptCore` only (it never links the engine). The engine loads it through `ScriptEngine`; playing scenes run
+their Script components through the built-in "Scripting" scene system (`ScriptSystem`, not created in simulate mode).
+Writing scripts is described in `.claude/skills/strata-scripting/SKILL.md`.
+
+| Where | What |
+| --- | --- |
+| `StrataScriptCore/Include/StrataScript/ScriptABI.h` | The versioned C ABI: host API table, module/class/field descriptors, values. |
+| `StrataScriptCore/Include/StrataScript/*.h` | Header-only C++ SDK (`StrataScript.h` includes all): `Script`, `Entity`, `Scene`, `Assets`, `Input`, `Time`, `Log`, `ST_SCRIPT_CLASS`/`ST_SCRIPT_FIELD`. |
+| `StrataScriptCore/Source/ScriptModuleEntry.cpp` | The module entry points, compiled into every module by `strata_add_script_module()`. |
+| `StrataScriptCore/CMake/` | `strata_add_script_module()` and the package game projects use (`StrataScriptCoreConfig.cmake`). |
+| `Strata/src/Strata/Scripting/` | `ScriptEngine` (module, hot reload, faults, watchdog), `ScriptModule` (loading, validation, guarded calls), `ScriptSystem` (instances and lifecycle), `ScriptHostAPI` (the host table), `ScriptValue` (value conversion). |
+| `StrataTests/Scripts/`, `StrataTests/src/Scripting/` | Test modules (API, reload V1/V2, faults, invalid modules) and the `Scripting.*` suites. |
+
+ABI rules:
+
+- Only plain C data crosses the boundary: strings as (pointer, size) UTF-8, entities and assets as 64-bit UUIDs, math
+  as float arrays (quaternions x, y, z, w), booleans as `bool`. No STL types, no engine types, no exceptions: the SDK
+  catches every exception in the module and reports it through `ReportException` (the instance is disabled).
+- Every call into module code goes through `ScriptModule` (`CrashGuard`), including loading and unloading the library.
+  Module memory (descriptors, strings) is read only inside guarded calls; copy it into locals of the guarded lambda,
+  then move the complete result out, so a fault can never leave engine objects half-written.
+- Host functions (`ScriptHostAPI.cpp`) wrap their body in `HostCall` (no exception may unwind into the module), start
+  with `ResolveContext` (rejects null/stale contexts, other threads, calls outside script callbacks and calls from a
+  crashed module), report misuse with `ScriptSystem::ReportProblem` and return a failure value instead of asserting.
+- Script code must never run while engine state it could invalidate is in use: entity destruction requested by scripts
+  goes through `ScriptSystem::DestroyEntity`, removed instances are flagged and destroyed at the next sync point, and
+  `Scene` defers destruction while systems run (`SceneSystem::OnEntityDestroying` lets systems react first).
+
+Adding a host function (or a module callback):
+
+1. Append it at the **end** of `StrataScriptHostAPI` (callbacks: `StrataScriptClassDesc`) with a comment. Never insert,
+   reorder or remove members; that is an incompatible change.
+2. Implement it in `ScriptHostAPI.cpp` and assign it in `CreateHostAPI()` (callbacks: `ScriptModule` reads them only
+   when the descriptor's `StructSize` covers them, see `ST_SCRIPT_HAS_MEMBER`).
+3. Wrap it in the SDK. Functions appended after an ABI version's initial set are optional for modules: check
+   `ST_SCRIPT_HAS_MEMBER(StrataScriptHostAPI, host, Name) && host->Name` and degrade gracefully.
+4. Exercise it in the API test module (`StrataTests/Scripts/API`) and test it in `StrataTests/src/Scripting/` (and the
+   feature test project).
+5. Appending keeps `ST_SCRIPT_ABI_VERSION`. Any incompatible change (signature, meaning, struct layout of
+   `StrataScriptValue`/`StrataScriptTransform`/`StrataScriptString`, removals) bumps it; the engine then refuses older
+   modules with a clear error. On a bump, move the SDK's baseline check in `Detail::LoadModule` to the new version's
+   last host function.
+
+Building and loading scripts:
+
+- Inside this repository: `strata_add_script_module(<Target> SOURCE_DIR <dir>)` (or `SOURCES`). Game projects build
+  their `Scripts/` folder through the package:
+  ```cmake
+  cmake_minimum_required(VERSION 3.25)
+  project(MyGameScripts CXX)
+  find_package(StrataScriptCore CONFIG REQUIRED PATHS "<engine>/StrataScriptCore/CMake" NO_DEFAULT_PATH)
+  strata_add_script_module(MyGameScripts SOURCE_DIR Scripts)
+  ```
+  Use the engine's compiler and configuration. The module is `<Name>.dll`/`.so`/`.dylib` (`ScriptEngine::GetModuleFileName`).
+- The host: `ScriptEngine::LoadModule(path)`, `ScriptEngine::SetActive(engine)` before scenes start playing,
+  `SetHotReloadEnabled(true)` and `Update()` once per frame (outside scene updates) for hot reload. The module is loaded
+  from a private temporary copy, so the build can overwrite the original at any time; a failed (re)load keeps the
+  running module. Poll `IsFaulted()`/`GetFault()` to stop play mode after a crash; reloading clears the fault.
+- Hot reload during play snapshots every instance's fields, deletes the instances (no `OnDestroy`), loads the new
+  module, recreates the instances, restores fields that still exist with the same name and type and calls `OnReload`
+  (not `OnCreate`). Classes that disappeared lose their instances; new classes start normally.
+- Limitations: native code cannot be preempted (an infinite loop blocks the main thread; `SetWatchdogTimeout` reports
+  long calls); a crash inside a module's static initializers or destructors is reported, but may leave the platform
+  loader in an undefined state; `std::terminate` (an exception leaving a `noexcept` function or a destructor) ends the
+  process; memory of instances abandoned after a crash is leaked.
 
 ## Pre-commit review checklist
 

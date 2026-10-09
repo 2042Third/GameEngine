@@ -45,3 +45,7 @@
 #include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneSerializer.h"
+
+#include "Strata/Scripting/ScriptEngine.h"
+#include "Strata/Scripting/ScriptSystem.h"
+#include "Strata/Scripting/ScriptTypes.h"

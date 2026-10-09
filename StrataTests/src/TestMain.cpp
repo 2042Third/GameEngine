@@ -2,18 +2,22 @@
 #include <doctest/doctest.h>
 
 #include "Renderer/GPUTestUtils.h"
+#include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Log.h"
+#include "Strata/Scripting/ScriptEngine.h"
 #include "TestHelpers.h"
 
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <string>
 #include <string_view>
 #include <thread>
 
 // When launched with --strata-test-helper=<mode>, the test executable acts as a child process for the
-// Process tests instead of running the test suites. This keeps those tests free of external programs.
+// Process tests (and checks build products for CTest scripts) instead of running the test suites. This keeps
+// those tests free of external programs.
 static int RunHelperMode(std::string_view mode, int argc, char** argv)
 {
 	if (mode == "echo")
@@ -42,6 +46,28 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		const std::u8string currentDirectory = std::filesystem::current_path().generic_u8string();
 		std::printf("%s\n", reinterpret_cast<const char*>(currentDirectory.c_str()));
 		std::fflush(stdout);
+		return 0;
+	}
+	if (mode == "load-script-module")
+	{
+		// <module path> <class name>...: succeeds if the module loads and contains every class.
+		if (argc < 3)
+			return 2;
+		Strata::ScriptEngine engine;
+		std::string error;
+		if (!engine.LoadModule(Strata::FileSystem::FromUTF8(argv[2]), &error))
+		{
+			std::fprintf(stderr, "%s\n", error.c_str());
+			return 1;
+		}
+		for (int index = 3; index < argc; index++)
+		{
+			if (!engine.FindClass(argv[index]))
+			{
+				std::fprintf(stderr, "The module has no script class '%s'\n", argv[index]);
+				return 1;
+			}
+		}
 		return 0;
 	}
 	return 99;

@@ -108,6 +108,25 @@ TEST_SUITE("Core.Platform")
 		CHECK(moved.GetSymbol("StrataTestLibrary_Add") == nullptr);
 	}
 
+	TEST_CASE("DynamicLibrary can forget a library without unloading it")
+	{
+		const std::filesystem::path libraryPath = Platform::GetExecutableDirectory() / STRATA_TEST_LIBRARY_NAME;
+		DynamicLibrary library;
+		REQUIRE_MESSAGE(library.Load(libraryPath), library.GetLastError());
+		library.Release();
+		CHECK_FALSE(library.IsLoaded());
+		CHECK(library.GetPath().empty());
+		CHECK(library.GetSymbol("StrataTestLibrary_Add") == nullptr);
+
+		// The released library is still loaded in the process; loading it again works.
+		DynamicLibrary again;
+		REQUIRE_MESSAGE(again.Load(libraryPath), again.GetLastError());
+		using AddFunction = int (*)(int, int);
+		AddFunction add = again.GetFunction<AddFunction>("StrataTestLibrary_Add");
+		REQUIRE(add != nullptr);
+		CHECK(add(20, 22) == 42);
+	}
+
 	TEST_CASE("DynamicLibrary reports errors for missing files")
 	{
 		DynamicLibrary library;
