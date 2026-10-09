@@ -188,7 +188,9 @@ second to load is dropped. Clip, volume, pitch, looping and spatial settings are
 `Game::Quit(exitCode)` ends the game (an exported game exits with the code, the editor stops play mode).
 `Game::LoadScene(handleOrPath)` replaces the running scene; `Game::ReloadScene()` restarts it (e.g. after a game over).
 Both happen after the current frame; every entity of the old scene goes away (scripts get `OnDestroy`), so pass state to
-the next scene through fields set in that scene, or rebuild it there.
+the next scene through fields set in that scene, or rebuild it there. The switch loads the scene synchronously: request the
+next level early (`Assets::RequestLoad(Assets::Find("Levels/Two.stscene"))` while the current one runs) to avoid a hitch.
+In the editor `ReloadScene` restarts what play mode runs, including unsaved edits.
 
 ### Text, spawning and other building blocks
 

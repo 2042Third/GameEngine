@@ -55,6 +55,15 @@
  */
 #define ST_SCRIPT_ABORT_EXCEPTION_CODE 0xE0535441u
 
+/* Layout checks of the ABI's structs, on every compiler that builds the engine or a module. */
+#if defined(__cplusplus)
+	#define ST_SCRIPT_DETAIL_STATIC_ASSERT(condition, message) static_assert(condition, message)
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+	#define ST_SCRIPT_DETAIL_STATIC_ASSERT(condition, message) _Static_assert(condition, message)
+#else
+	#define ST_SCRIPT_DETAIL_STATIC_ASSERT(condition, message)
+#endif
+
 /* True when the struct behind `pointer` (which starts with a StructSize member) is large enough to contain `member`. */
 #define ST_SCRIPT_HAS_MEMBER(type, pointer, member) \
 	((pointer)->StructSize >= offsetof(type, member) + sizeof(((type*)0)->member))
@@ -148,7 +157,9 @@ extern "C"
 	} StrataScriptTransformPart;
 
 	/* A hit of a physics ray: the entity owning the body, the world space point and surface normal, and the distance from
-	 * the ray's origin. */
+	 * the ray's origin. Its layout is frozen for the ABI version: modules pass arrays of it (RaycastAll) that the engine
+	 * fills, and they carry no size, so a member appended later would overrun the buffers of older modules. More data
+	 * needs a new struct and function. */
 	typedef struct StrataScriptRaycastHit
 	{
 		StrataScriptEntityID Entity;
@@ -157,6 +168,11 @@ extern "C"
 		float Distance;
 		uint32_t Padding;
 	} StrataScriptRaycastHit;
+
+	ST_SCRIPT_DETAIL_STATIC_ASSERT(sizeof(StrataScriptRaycastHit) == 40 && offsetof(StrataScriptRaycastHit, Entity) == 0
+		&& offsetof(StrataScriptRaycastHit, Point) == 8 && offsetof(StrataScriptRaycastHit, Normal) == 20
+		&& offsetof(StrataScriptRaycastHit, Distance) == 32 && offsetof(StrataScriptRaycastHit, Padding) == 36,
+		"StrataScriptRaycastHit's layout is part of the ABI");
 
 	/* A contact passed to the contact callbacks of StrataScriptClassDesc. Engine memory, valid during the call; read members
 	 * appended later only when StructSize covers them. Other is the entity on the other side (it may be destroyed already
@@ -170,6 +186,10 @@ extern "C"
 		float Point[3];
 		float Normal[3];
 	} StrataScriptCollision;
+
+	ST_SCRIPT_DETAIL_STATIC_ASSERT(sizeof(StrataScriptCollision) == 40 && offsetof(StrataScriptCollision, StructSize) == 0
+		&& offsetof(StrataScriptCollision, Other) == 8 && offsetof(StrataScriptCollision, Point) == 16
+		&& offsetof(StrataScriptCollision, Normal) == 28, "StrataScriptCollision's layout is part of the ABI");
 
 	/*
 	 * Engine services for scripts. Unless noted otherwise, functions taking a context only work while the engine is
@@ -334,7 +354,8 @@ extern "C"
 		 * honored once the current frame's update is done (scripts keep running until then); quitting wins over loading and
 		 * later requests replace earlier ones. QuitGame ends the game with an exit code: an exported game exits with it, the
 		 * editor stops play mode. LoadScene replaces the running scene with a scene asset (every entity of the current scene
-		 * goes away), or restarts the running scene for the null handle; it fails for assets that are not scenes.
+		 * goes away), or restarts the running scene for the null handle; it fails for assets that are not scenes. The switch
+		 * loads the scene asset synchronously (the frame waits for it unless it was loaded before, see RequestAssetLoad).
 		 */
 		void (*QuitGame)(StrataScriptContext* context, int32_t exitCode);
 		bool (*LoadScene)(StrataScriptContext* context, StrataScriptAssetHandle scene);

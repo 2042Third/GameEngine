@@ -23,7 +23,9 @@ namespace Strata
 		}
 
 		// Replaces the running scene with a scene asset of the project: every entity of the current scene goes away (its
-		// scripts receive OnDestroy) and the new scene starts. Returns false for assets that are not scenes.
+		// scripts receive OnDestroy) and the new scene starts. Returns false for assets that are not scenes. The switch loads
+		// the scene synchronously, so the frame waits for a scene that is not loaded yet: request it early
+		// (Assets::RequestLoad, e.g. while the level runs) to switch without a hitch.
 		static bool LoadScene(AssetHandle scene)
 		{
 			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(LoadScene);
@@ -32,7 +34,8 @@ namespace Strata
 
 		static bool LoadScene(std::string_view path) { return LoadScene(Assets::Find(path)); }
 
-		// Starts the running scene over (e.g. after the player lost): it is loaded again as it was saved.
+		// Starts the running scene over (e.g. after the player lost): an exported game loads it again from its asset; the
+		// editor restarts what play mode runs (the edited scene with its unsaved changes, or the scene asset switched to last).
 		static bool ReloadScene()
 		{
 			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(LoadScene);
