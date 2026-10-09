@@ -307,7 +307,9 @@ Building and loading scripts:
   PATH) and builds the module into `<project>/.strata/Scripts/Bin`, in child processes polled once per frame (never
   blocking). The configure step only runs when the build tree is new or the toolchain changed. Output is streamed to
   the log; errors are parsed into file/line/message diagnostics (MSVC, GCC, Clang, linker, CMake). One build runs at a
-  time: a second request fails until the running one finished.
+  time: a second request fails until the running one finished. Cancelling a build (also by closing the project or the
+  editor) ends every process it started (`ProcessSpecification::TerminateTree`: a job object on Windows, a process
+  group on POSIX).
 - **The editor's script engine:** `EditorContext` owns a `ScriptEngine` per open project (active while it is open and
   set active again when play starts), loads the project's built module when the project opens (warning when the
   scripts exist but are not built), keeps hot reload on for modules rebuilt outside the editor, and calls `Update()`

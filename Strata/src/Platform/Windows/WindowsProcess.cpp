@@ -51,6 +51,27 @@ namespace Strata
 			return CreateFileW(L"NUL", access, FILE_SHARE_READ | FILE_SHARE_WRITE, security, OPEN_EXISTING, 0, nullptr);
 		}
 
+		// A job that ends its processes when its last handle closes. Processes that explicitly ask to break away may: shared
+		// servers (e.g. the compiler's PDB server, used by other builds as well) must outlive the build that started them.
+		HANDLE CreateProcessTreeJob(std::string& outError)
+		{
+			HANDLE job = CreateJobObjectW(nullptr, nullptr);
+			if (!job)
+			{
+				outError = "CreateJobObject failed: " + WindowsUtils::GetErrorMessage(::GetLastError());
+				return nullptr;
+			}
+			JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {};
+			limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK;
+			if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits)))
+			{
+				outError = "SetInformationJobObject failed: " + WindowsUtils::GetErrorMessage(::GetLastError());
+				CloseHandle(job);
+				return nullptr;
+			}
+			return job;
+		}
+
 	}
 
 	Process::~Process()
@@ -147,6 +168,23 @@ namespace Strata
 			creationFlags |= EXTENDED_STARTUPINFO_PRESENT;
 		}
 
+		// A process tree starts suspended, so that it is in its job before it can start processes of its own.
+		HANDLE job = nullptr;
+		if (specification.TerminateTree)
+		{
+			job = CreateProcessTreeJob(m_LastError);
+			if (!job)
+			{
+				if (startupInfo.lpAttributeList)
+					DeleteProcThreadAttributeList(startupInfo.lpAttributeList);
+				closeHandles();
+				if (outputRead)
+					CloseHandle(outputRead);
+				return false;
+			}
+			creationFlags |= CREATE_SUSPENDED;
+		}
+
 		const std::wstring workingDirectory = specification.WorkingDirectory.wstring();
 		PROCESS_INFORMATION processInfo = {};
 		const BOOL created = CreateProcessW(nullptr, commandLine.data(), nullptr, nullptr, redirectHandles ? TRUE : FALSE,
@@ -161,11 +199,29 @@ namespace Strata
 		{
 			if (outputRead)
 				CloseHandle(outputRead);
+			if (job)
+				CloseHandle(job);
 			m_LastError = fmt::format("Failed to start '{}': {}", WindowsUtils::WideToUtf8(specification.Executable.wstring()), WindowsUtils::GetErrorMessage(createError));
 			return false;
 		}
 
+		if (job)
+		{
+			if (!AssignProcessToJobObject(job, processInfo.hProcess) || ResumeThread(processInfo.hThread) == static_cast<DWORD>(-1))
+			{
+				m_LastError = "Could not start the process in its job: " + WindowsUtils::GetErrorMessage(::GetLastError());
+				TerminateProcess(processInfo.hProcess, 1);
+				CloseHandle(processInfo.hThread);
+				CloseHandle(processInfo.hProcess);
+				CloseHandle(job);
+				if (outputRead)
+					CloseHandle(outputRead);
+				return false;
+			}
+		}
+
 		CloseHandle(processInfo.hThread);
+		m_JobHandle = job;
 		m_ProcessHandle = processInfo.hProcess;
 		m_ProcessID = processInfo.dwProcessId;
 		m_OutputRead = outputRead;
@@ -240,7 +296,8 @@ namespace Strata
 		if (!m_ProcessHandle || m_ExitCode)
 			return false;
 
-		if (!TerminateProcess(static_cast<HANDLE>(m_ProcessHandle), 1))
+		// A process tree ends as a whole: its job holds the child and every process the child started.
+		if (m_JobHandle ? !TerminateJobObject(static_cast<HANDLE>(m_JobHandle), 1) : !TerminateProcess(static_cast<HANDLE>(m_ProcessHandle), 1))
 			return false;
 
 		Wait(std::chrono::milliseconds(5000));
@@ -265,6 +322,12 @@ namespace Strata
 		{
 			CloseHandle(static_cast<HANDLE>(m_ProcessHandle));
 			m_ProcessHandle = nullptr;
+		}
+		// Closing the job's last handle ends the processes still in it (JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE).
+		if (m_JobHandle)
+		{
+			CloseHandle(static_cast<HANDLE>(m_JobHandle));
+			m_JobHandle = nullptr;
 		}
 		m_ProcessID = 0;
 	}

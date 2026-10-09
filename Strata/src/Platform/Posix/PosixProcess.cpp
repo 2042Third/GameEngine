@@ -71,7 +71,8 @@ namespace Strata
 
 		posix_spawnattr_t attributes;
 		posix_spawnattr_init(&attributes);
-		if (specification.Detached)
+		// A process tree is the child's own process group, which the child joins before it runs (no race with its children).
+		if (specification.Detached || specification.TerminateTree)
 		{
 			posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETPGROUP);
 			posix_spawnattr_setpgroup(&attributes, 0);
@@ -107,6 +108,7 @@ namespace Strata
 
 		m_ProcessPid = pid;
 		m_ProcessID = static_cast<uint32_t>(pid);
+		m_TerminateTree = specification.TerminateTree;
 		m_OutputRead = pipeFds[0];
 		if (m_OutputRead >= 0)
 			StartOutputReader();
@@ -206,7 +208,8 @@ namespace Strata
 		if (m_ProcessPid <= 0 || m_ExitCode)
 			return false;
 
-		if (kill(m_ProcessPid, SIGKILL) != 0)
+		// The group's id is the child's pid, which cannot be reused while the child is not reaped (m_ExitCode is unset).
+		if (kill(m_TerminateTree ? -m_ProcessPid : m_ProcessPid, SIGKILL) != 0)
 			return false;
 
 		Wait(std::chrono::milliseconds(5000));
@@ -221,6 +224,10 @@ namespace Strata
 
 	void Process::Close()
 	{
+		// A process tree that still runs ends with its Process object.
+		if (m_TerminateTree && m_ProcessPid > 0 && !m_ExitCode)
+			Terminate();
+		m_TerminateTree = false;
 		StopOutputReader(std::chrono::milliseconds(0));
 		if (m_OutputRead >= 0)
 		{

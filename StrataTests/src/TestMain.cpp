@@ -5,6 +5,8 @@
 #include "Renderer/GPUTestUtils.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Log.h"
+#include "Strata/Core/Platform.h"
+#include "Strata/Core/Process.h"
 #include "Strata/Scripting/ScriptEngine.h"
 #include "TestHelpers.h"
 
@@ -13,6 +15,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -21,6 +24,13 @@
 #if defined(ST_PLATFORM_LINUX)
 	#include <sys/prctl.h>
 #endif
+
+// Helper processes that could outlive their test stop when it says so: once the stop file exists or its directory is gone
+// (temporary directories are removed when the tests end), and after a minute at the latest.
+static bool KeepHelperRunning(const std::filesystem::path& stop, std::chrono::steady_clock::time_point deadline)
+{
+	return !Strata::FileSystem::Exists(stop) && Strata::FileSystem::IsDirectory(stop.parent_path()) && std::chrono::steady_clock::now() < deadline;
+}
 
 // When launched with --strata-test-helper=<mode>, the test executable acts as a child process for the
 // Process tests (and checks build products for CTest scripts) instead of running the test suites. This keeps
@@ -46,6 +56,38 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 	if (mode == "sleep")
 	{
 		std::this_thread::sleep_for(std::chrono::milliseconds(argc > 2 ? std::atoi(argv[2]) : 10000));
+		return 0;
+	}
+	if (mode == "heartbeat" && argc > 3)
+	{
+		// <file> <stop file>: appends a byte to the file every 10 ms (see KeepHelperRunning).
+		const std::filesystem::path beats = Strata::FileSystem::FromUTF8(argv[2]);
+		const std::filesystem::path stop = Strata::FileSystem::FromUTF8(argv[3]);
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(1);
+		while (KeepHelperRunning(stop, deadline))
+		{
+			{
+				std::ofstream file(beats, std::ios::binary | std::ios::app);
+				file.put('.');
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		}
+		return 0;
+	}
+	if (mode == "spawn-heartbeat" && argc > 3)
+	{
+		// <file> <stop file>: starts a "heartbeat" child (a grandchild of the test) and waits (see KeepHelperRunning).
+		Strata::ProcessSpecification specification;
+		specification.Executable = Strata::Platform::GetExecutablePath();
+		specification.Arguments = { "--strata-test-helper=heartbeat", argv[2], argv[3] };
+		specification.Output = Strata::ProcessOutputMode::Discard;
+		Strata::Process heartbeat;
+		if (!heartbeat.Start(specification))
+			return 1;
+		const std::filesystem::path stop = Strata::FileSystem::FromUTF8(argv[3]);
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(1);
+		while (KeepHelperRunning(stop, deadline))
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
 		return 0;
 	}
 	if (mode == "cwd")

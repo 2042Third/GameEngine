@@ -495,6 +495,9 @@ namespace Strata
 		specification.Arguments = arguments;
 		specification.Output = ProcessOutputMode::Capture;
 		specification.HideWindow = true;
+		// Cancelling (also by closing the project or the editor) must stop MSBuild, ninja, the compilers and the linker too,
+		// or they keep writing the build and binary directories.
+		specification.TerminateTree = true;
 
 		const std::string commandLine = fmt::format("> {} {}", FileSystem::ToUTF8(specification.Executable), JoinArguments(arguments));
 		m_Log += commandLine + "\n";
