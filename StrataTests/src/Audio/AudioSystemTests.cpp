@@ -559,6 +559,19 @@ TEST_SUITE("Audio.System")
 		StepScene(scene, 1);
 		CHECK(glm::length(AudioEngine::GetListener().Up - glm::vec3(-1.0f, 0.0f, 0.0f)) < 1e-5f);
 		CHECK(MeasureRms(1) > MeasureRms(0) * 1.5f);
+
+		// Upside down, the right axis is level too, but forward x +Y would point to the left: rolled half a turn, and
+		// pitched past vertical (on its back, looking up and behind). A source on the camera's right stays on the right.
+		const auto checkRightSide = [&](const glm::quat& rotation)
+		{
+			camera.GetTransform().Rotation = rotation;
+			source.GetTransform().Translation = rotation * glm::vec3(5.0f, 0.0f, 0.0f);
+			StepScene(scene, 1);
+			CHECK(glm::length(AudioEngine::GetListener().Up - rotation * yAxis) < 1e-5f);
+			CHECK(MeasureRms(1) > MeasureRms(0) * 1.5f);
+		};
+		checkRightSide(rotate(std::numbers::pi_v<float>, zAxis));
+		checkRightSide(rotate(2.0f, xAxis));
 	}
 
 	TEST_CASE("Spatial sources follow entities moved by physics")

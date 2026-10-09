@@ -65,13 +65,17 @@ namespace Strata
 		}
 
 		// The up vector to give the AudioEngine for a listener. miniaudio derives the right axis from forward x up, so +Y gives
-		// exactly the same orientation for a listener that does not roll, whatever its pitch and yaw; the up vector then
-		// never changes, so it does not need to travel to the mixing thread every frame (see AudioEngine::SetListener).
-		// Rolled listeners, and those looking (nearly) straight up or down, where forward x +Y degenerates, pass their own.
+		// exactly the same orientation for an upright listener that does not roll, whatever its pitch and yaw; the up vector
+		// then never changes, so it does not need to travel to the mixing thread every frame (see AudioEngine::SetListener).
+		// Listeners that roll pass their own up vector, and so do those looking (nearly) straight up or down, where
+		// forward x +Y degenerates, and those upside down (rolled half a turn, or pitched past vertical): their right axis is
+		// level too, but forward x +Y points to their left.
 		glm::vec3 GetListenerUp(const glm::vec3& forward, const glm::vec3& up, const glm::vec3& right)
 		{
 			const bool level = std::abs(right.y) <= c_MaxLevelRoll * glm::length(right) && std::abs(forward.y) <= c_MaxLevelPitch * glm::length(forward);
-			return level ? glm::vec3(0.0f, 1.0f, 0.0f) : up;
+			// Level and not looking straight up or down, an upright listener's up vector rises clearly (y >= 0.14 |up|).
+			const bool upright = up.y > 0.0f;
+			return level && upright ? glm::vec3(0.0f, 1.0f, 0.0f) : up;
 		}
 
 		// The position of an entity in depth-first hierarchy order, as its sibling indices from its root down to it:
