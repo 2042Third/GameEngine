@@ -5,7 +5,10 @@
 #include <Strata/Core/Log.h>
 
 #include <algorithm>
+#include <cmath>
 #include <exception>
+#include <optional>
+#include <string_view>
 #include <utility>
 
 namespace Strata
@@ -25,6 +28,124 @@ namespace Strata
 			if (text.size() > c_MaxLoggedResultSize)
 				text = fmt::format("{}... ({} bytes)", text.substr(0, c_MaxLoggedResultSize), text.size());
 			return text;
+		}
+
+		// The reference tokens of a JSON pointer (RFC 6901: "" or "/token/token", with "~0" for '~' and "~1" for '/'),
+		// or nullopt when it is malformed.
+		std::optional<std::vector<std::string>> ParseJsonPointer(std::string_view pointer)
+		{
+			std::vector<std::string> path;
+			if (pointer.empty())
+				return path;
+			if (pointer.front() != '/')
+				return std::nullopt;
+			size_t start = 1;
+			while (true)
+			{
+				const size_t end = pointer.find('/', start);
+				const std::string_view raw = pointer.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start);
+				std::string token;
+				for (size_t index = 0; index < raw.size(); index++)
+				{
+					if (raw[index] != '~')
+					{
+						token += raw[index];
+						continue;
+					}
+					if (index + 1 >= raw.size() || (raw[index + 1] != '0' && raw[index + 1] != '1'))
+						return std::nullopt;
+					token += raw[index + 1] == '0' ? '~' : '/';
+					index++;
+				}
+				path.push_back(std::move(token));
+				if (end == std::string_view::npos)
+					return path;
+				start = end + 1;
+			}
+		}
+
+		// The value at path inside value, or null when there is none.
+		const nlohmann::json* ResolveJsonPath(const nlohmann::json& value, const std::vector<std::string>& path)
+		{
+			const nlohmann::json* current = &value;
+			for (const std::string& token : path)
+			{
+				if (current->is_object())
+				{
+					current = JsonUtils::Find(*current, token);
+					if (!current)
+						return nullptr;
+					continue;
+				}
+				// Array indices are decimal numbers without leading zeros.
+				if (!current->is_array() || token.empty() || token.size() > 9 || (token.size() > 1 && token[0] == '0')
+					|| !std::all_of(token.begin(), token.end(), [](char character) { return character >= '0' && character <= '9'; }))
+					return nullptr;
+				size_t index = 0;
+				for (const char digit : token)
+					index = index * 10 + static_cast<size_t>(digit - '0');
+				if (index >= current->size())
+					return nullptr;
+				current = &(*current)[index];
+			}
+			return current;
+		}
+
+		// Why `result` does not meet the expectations, or an empty string when it does.
+		std::string CheckExpectations(const nlohmann::json& result, const std::vector<EditorCommandScript::Expectation>& expectations)
+		{
+			for (const EditorCommandScript::Expectation& expectation : expectations)
+			{
+				const nlohmann::json* value = ResolveJsonPath(result, expectation.Path);
+				if (!value)
+					return fmt::format("expected a value at '{}', but the result has none", expectation.Pointer);
+				if (expectation.Equals && *value != *expectation.Equals)
+					return fmt::format("expected '{}' to be {}, but it is {}", expectation.Pointer, JsonUtils::Dump(*expectation.Equals), JsonUtils::Dump(*value));
+				if (!expectation.Min && !expectation.Max)
+					continue;
+				const double number = value->is_number() ? value->get<double>() : 0.0;
+				if (!value->is_number() || std::isnan(number) || (expectation.Min && number < *expectation.Min) || (expectation.Max && number > *expectation.Max))
+				{
+					return fmt::format("expected '{}' to be a number in [{}, {}], but it is {}", expectation.Pointer,
+						expectation.Min ? fmt::format("{}", *expectation.Min) : std::string("-inf"), expectation.Max ? fmt::format("{}", *expectation.Max) : std::string("inf"),
+						JsonUtils::Dump(*value));
+				}
+			}
+			return {};
+		}
+
+		// The "expect" object of a script step; an error message when it is malformed.
+		std::optional<std::string> ParseExpectations(const nlohmann::json& expect, std::vector<EditorCommandScript::Expectation>& out)
+		{
+			constexpr std::string_view c_Format = "{\"<JSON pointer>\": {\"equals\": value, \"min\": number, \"max\": number}}";
+			if (!expect.is_object())
+				return fmt::format("\"expect\" must be an object {}", c_Format);
+			for (const auto& [pointer, condition] : expect.items())
+			{
+				EditorCommandScript::Expectation expectation;
+				expectation.Pointer = pointer;
+				std::optional<std::vector<std::string>> path = ParseJsonPointer(pointer);
+				if (!path)
+					return fmt::format("'{}' in \"expect\" is not a JSON pointer (\"\" for the whole result, or \"/key/0\")", pointer);
+				expectation.Path = std::move(*path);
+				if (!condition.is_object() || condition.empty())
+					return fmt::format("the condition of '{}' must be an object with \"equals\", \"min\" or \"max\"", pointer);
+				for (const auto& [key, value] : condition.items())
+				{
+					if (key == "equals")
+						expectation.Equals = value;
+					else if (key == "min" && value.is_number())
+						expectation.Min = value.get<double>();
+					else if (key == "max" && value.is_number())
+						expectation.Max = value.get<double>();
+					else
+						return fmt::format("invalid condition '{}' for '{}' (\"equals\": value, \"min\" and \"max\": numbers)", key, pointer);
+				}
+				if (expectation.Min && expectation.Max && *expectation.Min > *expectation.Max)
+					return fmt::format("the condition of '{}' has a minimum above its maximum", pointer);
+				out.push_back(std::move(expectation));
+			}
+			return std::nullopt;
 		}
 
 	}
@@ -152,8 +273,8 @@ namespace Strata
 				return fail(fmt::format("Step {} must be an object {{\"command\": name, \"parameters\": {{...}}}}", index + 1));
 			for (const auto& [key, value] : step.items())
 			{
-				if (key != "command" && key != "parameters")
-					return fail(fmt::format("Step {}: unknown key '{}' (expected \"command\" and \"parameters\")", index + 1, key));
+				if (key != "command" && key != "parameters" && key != "expect")
+					return fail(fmt::format("Step {}: unknown key '{}' (expected \"command\", \"parameters\" and \"expect\")", index + 1, key));
 			}
 			const nlohmann::json* command = JsonUtils::Find(step, "command");
 			if (!command || !command->is_string() || command->get<std::string>().empty())
@@ -161,7 +282,13 @@ namespace Strata
 			const nlohmann::json* parameters = JsonUtils::Find(step, "parameters");
 			if (parameters && !parameters->is_object())
 				return fail(fmt::format("Step {} ({}): \"parameters\" must be an object", index + 1, command->get<std::string>()));
-			steps.push_back({ command->get<std::string>(), parameters ? *parameters : nlohmann::json::object() });
+			std::vector<Expectation> expectations;
+			if (const nlohmann::json* expect = JsonUtils::Find(step, "expect"))
+			{
+				if (const std::optional<std::string> error = ParseExpectations(*expect, expectations))
+					return fail(fmt::format("Step {} ({}): {}", index + 1, command->get<std::string>(), *error));
+			}
+			steps.push_back({ command->get<std::string>(), parameters ? *parameters : nlohmann::json::object(), std::move(expectations) });
 		}
 		return CreateScope<EditorCommandScript>(std::move(steps));
 	}
@@ -206,6 +333,12 @@ namespace Strata
 				if (result.Success)
 				{
 					ST_INFO("{} -> {}", name, DescribeResultValue(result.Value));
+					const std::string unmet = CheckExpectations(result.Value, m_Steps[index].Expectations);
+					if (!unmet.empty())
+					{
+						ST_ERROR("{}: {}", name, unmet);
+						m_Failed = true;
+					}
 				}
 				else
 				{

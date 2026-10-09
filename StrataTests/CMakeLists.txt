@@ -156,9 +156,10 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	set_tests_properties(StrataRuntime.Smoke PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
 endif()
 
-# The real executables with the feature test project: the editor opens a copy of it, plays the feature scene (physics) and
-# exports it; the exported game then runs headless. The editor executable does not load script modules yet, so the
-# feature scripts run in StrataTests.FeatureTest (which also drives the editor and the exported game in-process).
+# The real executables with the feature test project: the editor opens a copy of it, steps the feature scene's physics
+# (the command script's "expect" conditions require the ball to come to rest on the platform, and play.stop to restore
+# it) and exports it; the exported game then runs headless. The editor executable does not load script modules yet, so
+# the feature scripts run in StrataTests.FeatureTest (which also drives the editor and the exported game in-process).
 if(TARGET StrataEditor AND TARGET StrataRuntime)
 	set(STRATA_FEATURE_RUN_DIR "${CMAKE_CURRENT_BINARY_DIR}/FeatureTestRun")
 	configure_file("${CMAKE_CURRENT_SOURCE_DIR}/Editor/FeatureCommands.json.in" "${CMAKE_CURRENT_BINARY_DIR}/FeatureCommands.json" @ONLY)

@@ -336,9 +336,11 @@ Building and loading scripts:
   run commands through the runner (UI helpers that expect an immediate result reject pending ones).
   Poll functions own their data (copy parameters, never capture them by reference). `editor.wait
   {frames}` returns after that many frames, e.g. to let a playing scene run.
-- `StrataEditor --commands script.json` runs a JSON array of `{"command", "parameters"}` at startup
-  (`EditorCommandScript`); a pending command holds the script until it completes. If a command fails,
-  or the script has not finished by the last of `--frames N` frames, the process exit code becomes 1.
+- `StrataEditor --commands script.json` runs a JSON array of `{"command", "parameters", "expect"}` at startup
+  (`EditorCommandScript`); a pending command holds the script until it completes. `expect` (optional) maps JSON
+  pointers into the command's result to conditions, e.g. `{"/values/Translation/1": {"min": 1.6, "max": 1.7}}` or
+  `{"/state": {"equals": "Play"}}`; a result that does not meet them fails the step. If a command or an expectation
+  fails, or the script has not finished by the last of `--frames N` frames, the process exit code becomes 1.
   `--frames N` stops after N frames (without saving the panel layout), `--screenshot out.png` captures
   the last frame, `--no-gpu` runs headless without a graphics device (export, asset processing).
   CTest runs `StrataTests/Editor/SmokeCommands.json` and checks that failing and unfinished scripts
