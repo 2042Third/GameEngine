@@ -36,7 +36,7 @@ can drive in the same way, plus a runtime that plays exported games.
   `StrataCLI` drives it from the command line and is also an MCP server, so AI agents can build a game
   from scratch without anyone touching the editor.
 - **Runtime:** plays exported games (`<Game>` executable, `.stgame` manifest, `.stpak` asset pack and the
-  game's script module). With `--headless` it runs the simulation without a window or GPU.
+  game's script module). With `--headless` it runs the simulation without a window or GPU, at 60 frames per second.
 
 ## Building
 

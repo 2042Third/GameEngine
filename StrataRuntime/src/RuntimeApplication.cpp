@@ -10,6 +10,9 @@ namespace Strata
 
 	// Exit codes: 1 when the game cannot start, 2 when its scripts crashed in a headless run.
 	constexpr int c_ScriptCrashExitCode = 2;
+	// Frames per second of a headless run (no vsync paces it): game time passes as in a window, and a dedicated server
+	// does not keep a CPU core busy.
+	constexpr uint32_t c_HeadlessFrameRate = 60;
 
 	struct RuntimeOptions
 	{
@@ -154,6 +157,8 @@ namespace Strata
 		// Headless runs the simulation only, like a dedicated server: no window and no GPU.
 		specification.Headless = commandLine.HasFlag("--headless");
 		specification.EnableRenderer = !specification.Headless;
+		if (specification.Headless)
+			specification.MaxFrameRate = c_HeadlessFrameRate;
 		specification.EnableImGui = false;
 		specification.Window.Title = name;
 		specification.Window.Width = manifest->WindowWidth;

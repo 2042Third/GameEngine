@@ -236,6 +236,11 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 
 	add_test(NAME StrataRuntime.Smoke COMMAND "${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}" --headless --frames 30)
 	set_tests_properties(StrataRuntime.Smoke PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
+	# Headless games run at 60 frames per second, so 180 frames are three seconds of game time (and of the clock), not a burst.
+	add_test(NAME StrataRuntime.HeadlessPacing
+		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}" "-DARGUMENTS=--headless|--frames|180"
+			-DMIN_SECONDS=2 -P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
+	set_tests_properties(StrataRuntime.HeadlessPacing PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
 
 	# The exported game in a window renders a few frames from its camera and saves the last one, which must show the scene:
 	# not black, not one color, and the blue box covering at least 1% of it.
