@@ -16,6 +16,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 using namespace Strata;
@@ -166,6 +167,7 @@ TEST_SUITE("Scripting.API")
 		ScriptSystem& system = GetScriptSystem(scene);
 
 		int32_t probes = 0;
+		std::unordered_set<std::string> probedComponents;
 		for (const ComponentInfo* info : ComponentRegistry::GetAll())
 		{
 			// Scripts cannot add components only the engine adds (the probe's AddComponent fails), but their properties
@@ -180,12 +182,20 @@ TEST_SUITE("Scripting.API")
 				REQUIRE(system.SetFieldValue(probe, "PropertyProbe", "Property", property.Name));
 				scene.OnUpdateRuntime(0.0f);
 				probes++;
+				probedComponents.insert(info->Name);
 				CHECK(GetField<int32_t>(system, probe, "PropertyProbe", "Probes") == probes);
 				CHECK(GetField<std::string>(system, probe, "PropertyProbe", "ReadType") == GetScriptReadType(property.Type));
 				CHECK(GetField<bool>(system, probe, "PropertyProbe", "WroteBack") == !property.IsReadOnly());
 			}
 		}
-		CHECK(probes > 100);
+		// The loop proves nothing over a (nearly) empty registry: every built-in component with data must have been probed.
+		for (const char* name : { "Transform", "Camera", "MeshRenderer", "DirectionalLight", "PointLight", "SpotLight", "SkyLight",
+				 "PostProcess", "Text", "RigidBody", "BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "AudioSource",
+				 "AudioListener", "PrefabInstance" })
+		{
+			INFO("Component ", name);
+			CHECK(probedComponents.contains(name));
+		}
 		scene.OnRuntimeStop();
 	}
 
