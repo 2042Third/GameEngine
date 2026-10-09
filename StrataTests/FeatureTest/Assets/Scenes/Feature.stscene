@@ -915,6 +915,67 @@
 			},
 			{
 				"Components": {
+					"BoxCollider": {
+						"HalfExtents": [
+							0.5,
+							0.5,
+							0.5
+						],
+						"Offset": [
+							0,
+							0,
+							0
+						]
+					},
+					"Name": {
+						"Name": "Physics Probe"
+					},
+					"RigidBody": {
+						"AngularDamping": 0,
+						"ContinuousCollision": false,
+						"Friction": 0.5,
+						"GravityScale": 0,
+						"IsTrigger": false,
+						"Layer": 0,
+						"LinearDamping": 0,
+						"LockRotationX": false,
+						"LockRotationY": false,
+						"LockRotationZ": false,
+						"Mass": 1,
+						"Restitution": 0,
+						"Type": "Dynamic"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "PhysicsApiFeatures",
+								"Fields": {}
+							}
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							-8,
+							6,
+							8
+						]
+					}
+				},
+				"ID": "F7E000000000001E"
+			},
+			{
+				"Components": {
 					"AudioSource": {
 						"Clip": "F7A0000000000007",
 						"Loop": true,

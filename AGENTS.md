@@ -256,7 +256,7 @@ Writing scripts is described in `.claude/skills/strata-scripting/SKILL.md`.
 | Where | What |
 | --- | --- |
 | `StrataScriptCore/Include/StrataScript/ScriptABI.h` | The versioned C ABI: host API table, module/class/field descriptors, values. |
-| `StrataScriptCore/Include/StrataScript/*.h` | Header-only C++ SDK (`StrataScript.h` includes all): `Script`, `Entity`, `Scene`, `Assets`, `Input`, `Time`, `Log`, `ST_SCRIPT_CLASS`/`ST_SCRIPT_FIELD`. |
+| `StrataScriptCore/Include/StrataScript/*.h` | Header-only C++ SDK (`StrataScript.h` includes all): `Script`, `Entity`, `Scene`, `Assets`, `Input`, `Time`, `Log`, `RigidBody` and `Physics` (bodies and queries), `ST_SCRIPT_CLASS`/`ST_SCRIPT_FIELD`. |
 | `StrataScriptCore/Source/ScriptModuleEntry.cpp` | The module entry points, compiled into every module by `strata_add_script_module()`. |
 | `StrataScriptCore/CMake/` | `strata_add_script_module()` and the package game projects use (`StrataScriptCoreConfig.cmake`). |
 | `Strata/src/Strata/Scripting/` | `ScriptEngine` (module, hot reload, faults, watchdog), `ScriptModule` (loading, validation, guarded calls), `ScriptSystem` (instances and lifecycle), `ScriptHostAPI` (the host table), `ScriptValue` (value conversion). |
@@ -290,7 +290,8 @@ Adding a host function (or a module callback):
    the struct). Callbacks: `ScriptModule` reads them only when the descriptor's `StructSize` covers them, see
    `ST_SCRIPT_HAS_MEMBER`.
 3. Wrap it in the SDK. Functions appended after an ABI version's initial set are optional for modules: check
-   `ST_SCRIPT_HAS_MEMBER(StrataScriptHostAPI, host, Name) && host->Name` and degrade gracefully.
+   `ST_SCRIPT_HAS_MEMBER(StrataScriptHostAPI, host, Name) && host->Name` and degrade gracefully (the SDK's
+   `ST_SCRIPT_DETAIL_HOST_WITH(Name)`, in `StrataScript/Host.h`, returns the table only then).
 4. Exercise it in the API test module (`StrataTests/Scripts/API`), test it in `StrataTests/src/Scripting/`, and call it
    from the feature scripts (`StrataTests/FeatureTest/Scripts`): the feature test fails while a host function or a
    public SDK function is never used there.

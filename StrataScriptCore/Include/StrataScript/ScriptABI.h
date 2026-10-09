@@ -147,6 +147,16 @@ extern "C"
 		StrataScriptTransformPart_All = 7
 	} StrataScriptTransformPart;
 
+	/* A hit of a physics ray: the entity owning the body, the world space point and surface normal, and the distance from
+	 * the ray's origin. */
+	typedef struct StrataScriptRaycastHit
+	{
+		StrataScriptEntityID Entity;
+		float Point[3];
+		float Normal[3];
+		float Distance;
+		uint32_t Padding;
+	} StrataScriptRaycastHit;
 	/*
 	 * Engine services for scripts. Unless noted otherwise, functions taking a context only work while the engine is
 	 * calling into the module for that context, on the engine's main thread; otherwise they fail (returning false, 0
@@ -241,6 +251,46 @@ extern "C"
 		void (*GetMousePosition)(StrataScriptContext* context, float outPosition[2]);
 		void (*GetMouseDelta)(StrataScriptContext* context, float outDelta[2]);
 		void (*GetScrollDelta)(StrataScriptContext* context, float outDelta[2]);
+
+		/*
+		 * Physics bodies (added after the initial set of ABI version 1: check ST_SCRIPT_HAS_MEMBER before use). A body is an
+		 * active entity with a RigidBody component and colliders; the functions fail for other entities. Vectors are in
+		 * world space, angular values in radians. Velocities can be read from any body, but only dynamic bodies accept
+		 * velocities, forces and impulses. Forces and torques act during the next fixed step, impulses change the velocity
+		 * at once. A transform written through SetTransform/SetWorldTransform moves the body at the next fixed step;
+		 * Teleport moves it (and its entity) at once, keeping its velocities, so queries see it there right away.
+		 */
+		bool (*GetLinearVelocity)(StrataScriptContext* context, StrataScriptEntityID entity, float outVelocity[3]);
+		bool (*SetLinearVelocity)(StrataScriptContext* context, StrataScriptEntityID entity, const float velocity[3]);
+		bool (*GetAngularVelocity)(StrataScriptContext* context, StrataScriptEntityID entity, float outVelocity[3]);
+		bool (*SetAngularVelocity)(StrataScriptContext* context, StrataScriptEntityID entity, const float velocity[3]);
+		bool (*AddForce)(StrataScriptContext* context, StrataScriptEntityID entity, const float force[3]);
+		bool (*AddForceAtPosition)(StrataScriptContext* context, StrataScriptEntityID entity, const float force[3], const float worldPosition[3]);
+		bool (*AddImpulse)(StrataScriptContext* context, StrataScriptEntityID entity, const float impulse[3]);
+		bool (*AddImpulseAtPosition)(StrataScriptContext* context, StrataScriptEntityID entity, const float impulse[3], const float worldPosition[3]);
+		bool (*AddTorque)(StrataScriptContext* context, StrataScriptEntityID entity, const float torque[3]);
+		bool (*AddAngularImpulse)(StrataScriptContext* context, StrataScriptEntityID entity, const float impulse[3]);
+		/* rotation: x, y, z, w (normalized by the engine). */
+		bool (*Teleport)(StrataScriptContext* context, StrataScriptEntityID entity, const float position[3], const float rotation[4]);
+
+		/*
+		 * Physics queries, against the bodies as of the last fixed step (or Teleport). layerMask selects RigidBody layers
+		 * (bit n: layer n; 0xFFFFFFFF: every layer). Triggers are skipped unless includeTriggers is set. Rays: the direction
+		 * need not be normalized, maxDistance must be positive (infinity is clamped to 1e5), ignoreEntity is skipped (0 or
+		 * an entity that does not exist: none), and a ray starting inside a convex collider does not hit it. Results name
+		 * the entity owning the body (a RigidBody entity, also for colliders on its descendants).
+		 */
+		/* The closest hit; false if nothing is hit. outHit may be null. */
+		bool (*Raycast)(StrataScriptContext* context, const float origin[3], const float direction[3], float maxDistance, uint32_t layerMask,
+			StrataScriptEntityID ignoreEntity, bool includeTriggers, StrataScriptRaycastHit* outHit);
+		/* The closest hit on every body along the ray, sorted by distance. */
+		uint32_t (*RaycastAll)(StrataScriptContext* context, const float origin[3], const float direction[3], float maxDistance, uint32_t layerMask,
+			StrataScriptEntityID ignoreEntity, bool includeTriggers, StrataScriptRaycastHit* outHits, uint32_t capacity);
+		/* The entities whose bodies overlap a sphere or an oriented box (rotation x, y, z, w), in a deterministic order. */
+		uint32_t (*OverlapSphere)(StrataScriptContext* context, const float center[3], float radius, uint32_t layerMask, bool includeTriggers,
+			StrataScriptEntityID* outEntities, uint32_t capacity);
+		uint32_t (*OverlapBox)(StrataScriptContext* context, const float center[3], const float halfExtents[3], const float rotation[4], uint32_t layerMask,
+			bool includeTriggers, StrataScriptEntityID* outEntities, uint32_t capacity);
 
 		/* New functions are appended here (see the compatibility rules above). */
 	} StrataScriptHostAPI;

@@ -9,6 +9,7 @@
 #include "StrataScript/Host.h"
 #include "StrataScript/Input.h"
 #include "StrataScript/Log.h"
+#include "StrataScript/Physics.h"
 #include "StrataScript/Scene.h"
 #include "StrataScript/Script.h"
 #include "StrataScript/Time.h"

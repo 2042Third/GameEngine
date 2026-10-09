@@ -16,6 +16,7 @@ namespace Strata
 {
 
 	class Component;
+	class RigidBody;
 	class TransformComponent;
 
 	// Reference to an entity of the scene the script runs in, by UUID. A plain value: copy it freely and store it in
@@ -67,6 +68,8 @@ namespace Strata
 		bool SetProperty(std::string_view component, std::string_view property, const T& value);
 
 		TransformComponent GetTransform() const;
+		// The entity's physics body (see Physics.h).
+		RigidBody GetRigidBody() const;
 
 		// Script instances on this entity, by class (must be registered with ST_SCRIPT_CLASS) or by class name.
 		template<typename T>

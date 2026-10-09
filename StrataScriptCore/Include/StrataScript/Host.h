@@ -102,3 +102,10 @@ namespace Strata
 	}
 
 }
+
+// The host API table if the engine provides the host function `Function`, else null. Functions appended to the table after
+// the initial set of its ABI version are missing from older engines (see ScriptABI.h), so the SDK checks them before every
+// use and degrades gracefully without them.
+#define ST_SCRIPT_DETAIL_HOST_WITH(Function) \
+	(::Strata::Detail::s_Host && ST_SCRIPT_HAS_MEMBER(StrataScriptHostAPI, ::Strata::Detail::s_Host, Function) && ::Strata::Detail::s_Host->Function \
+		? ::Strata::Detail::s_Host : nullptr)
