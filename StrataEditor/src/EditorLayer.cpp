@@ -80,6 +80,12 @@ namespace Strata
 		UpdateWindowTitle();
 
 		Application& application = Application::Get();
+		// editor.quit answered already (it checked for unsaved changes); this frame is the last one.
+		if (m_Context.IsQuitRequested() && application.IsRunning())
+		{
+			ST_INFO("Closing the editor (editor.quit)");
+			application.Close();
+		}
 		const bool lastFrame = m_Options.MaxFrames && application.GetFrameCount() + 1 == *m_Options.MaxFrames;
 		if (lastFrame && m_CommandScript)
 		{

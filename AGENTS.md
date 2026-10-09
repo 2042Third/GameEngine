@@ -304,8 +304,12 @@ Building and loading scripts:
   or the script has not finished by the last of `--frames N` frames, the process exit code becomes 1.
   `--frames N` stops after N frames (without saving the panel layout), `--screenshot out.png` captures
   the last frame, `--no-gpu` runs headless without a graphics device (export, asset processing).
+  Without `--frames`, a headless editor runs until `editor.quit` (which refuses to discard unsaved
+  scene changes unless `force` is true) or a signal; headless editors run at most 60 frames per second.
   CTest runs `StrataTests/Editor/SmokeCommands.json` and checks that failing and unfinished scripts
   fail the process.
+- `editor.status` summarizes the editor (project, scene, play state, selection, undo history); other
+  parts of the editor add sections to it through `EditorContext::SetStatusProvider`.
 - Mutating commands report a `warning` in their result while the scene is playing: such changes apply
   to the running copy and are discarded by `play.stop`. Unknown or missing parameters are errors.
 

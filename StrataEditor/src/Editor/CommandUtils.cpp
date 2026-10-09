@@ -4,6 +4,8 @@
 
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/BuiltinAssets.h>
+#include <Strata/Core/FileSystem.h>
+#include <Strata/Project/Project.h>
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/ComponentAccess.h>
@@ -138,6 +140,20 @@ namespace Strata
 				{ "children", std::move(children) },
 				{ "components", ComponentAccess::SerializeEntityComponents(entity) }
 			};
+		}
+
+		nlohmann::json DescribeProject(const EditorContext& context)
+		{
+			const Ref<Project>& project = context.GetProject();
+			if (!project)
+				return { { "open", false } };
+			const ProjectConfig& config = project->GetConfig();
+			return {
+				{ "open", true },
+				{ "name", config.Name },
+				{ "directory", FileSystem::ToUTF8(project->GetProjectDirectory()) },
+				{ "assetDirectory", FileSystem::ToUTF8(project->GetAssetDirectory()) },
+				{ "startScene", config.StartScene.IsValid() ? UUIDToJson(config.StartScene) : nlohmann::json(nullptr) } };
 		}
 
 		bool ApplyComponents(Entity entity, const nlohmann::json& components, std::string* outError)

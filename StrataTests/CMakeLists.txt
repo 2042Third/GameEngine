@@ -123,6 +123,13 @@ if(TARGET StrataEditor)
 		COMMAND StrataEditor --no-gpu --frames 5 --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/UnfinishedCommands.json"
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
 	set_tests_properties(StrataEditor.UnfinishedScript PROPERTIES WILL_FAIL TRUE)
+
+	# Without --frames a headless editor runs until editor.quit (here at the end of its script); a quit that does not
+	# close it runs into the timeout.
+	add_test(NAME StrataEditor.QuitScript
+		COMMAND StrataEditor --no-gpu --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/QuitCommands.json"
+		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
+	set_tests_properties(StrataEditor.QuitScript PROPERTIES TIMEOUT 60)
 endif()
 
 # Editor export to a playable game, then the exported runtime: neither needs a GPU (--no-gpu, headless runtime).

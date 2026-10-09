@@ -86,16 +86,7 @@ namespace Strata
 		registry.Register({ "project.info", "The open project: name, directories and start scene (null fields without a project).", ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
-				const Ref<Project>& project = context.GetProject();
-				if (!project)
-					return EditorCommandResult::Ok({ { "open", false } });
-				const ProjectConfig& config = project->GetConfig();
-				return EditorCommandResult::Ok({
-					{ "open", true },
-					{ "name", config.Name },
-					{ "directory", FileSystem::ToUTF8(project->GetProjectDirectory()) },
-					{ "assetDirectory", FileSystem::ToUTF8(project->GetAssetDirectory()) },
-					{ "startScene", config.StartScene.IsValid() ? UUIDToJson(config.StartScene) : nlohmann::json(nullptr) } });
+				return EditorCommandResult::Ok(DescribeProject(context));
 			} });
 
 		registry.Register({ "project.create", "Creates a project in a directory and opens it.",
