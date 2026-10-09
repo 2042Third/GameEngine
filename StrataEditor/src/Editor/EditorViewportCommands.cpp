@@ -12,6 +12,7 @@
 #include <Strata/Scene/Scene.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <memory>
@@ -27,8 +28,8 @@ namespace Strata
 
 		constexpr int64_t c_MinCaptureSize = 16;
 		constexpr int64_t c_MaxCaptureSize = 4096;
-		// A capture whose GPU readback has not finished after this many frames fails (a lost or hung device).
-		constexpr uint32_t c_MaxCaptureReadbackFrames = 600;
+		// A capture whose GPU readback has not finished after this long fails (a lost or hung device).
+		constexpr std::chrono::seconds c_CaptureReadbackTimeout { 30 };
 
 		nlohmann::json ToJson(const glm::vec3& value)
 		{
@@ -101,7 +102,7 @@ namespace Strata
 			ViewportView View;
 			bool Overlays = false;
 			uint32_t PendingAssets = 0;
-			uint32_t Frames = 0;
+			std::chrono::steady_clock::time_point Submitted;
 		};
 
 		// First poll (the frame after the command): renders the image and starts reading it back.
@@ -130,6 +131,7 @@ namespace Strata
 			if (!progress.Readback)
 				return EditorCommandResult::Fail(fmt::format("Reading the capture back failed: {}", error));
 			progress.View = std::move(*view);
+			progress.Submitted = std::chrono::steady_clock::now();
 			return std::nullopt;
 		}
 
@@ -138,8 +140,8 @@ namespace Strata
 		{
 			if (!progress.Readback->IsReady())
 			{
-				if (++progress.Frames > c_MaxCaptureReadbackFrames)
-					return EditorCommandResult::Fail(fmt::format("The GPU did not finish the capture within {} frames", c_MaxCaptureReadbackFrames));
+				if (std::chrono::steady_clock::now() - progress.Submitted > c_CaptureReadbackTimeout)
+					return EditorCommandResult::Fail(fmt::format("The GPU did not finish the capture within {} seconds", c_CaptureReadbackTimeout.count()));
 				return std::nullopt;
 			}
 
@@ -231,7 +233,10 @@ namespace Strata
 				if (position && target)
 				{
 					if (!camera.LookAt(*position, *target))
-						return EditorCommandResult::Fail(fmt::format("position and target must be at least {} apart", EditorCamera::c_MinDistance));
+					{
+						return EditorCommandResult::Fail(fmt::format("position and target must be between {} and {} apart", EditorCamera::c_MinDistance,
+							EditorCamera::c_MaxDistance));
+					}
 				}
 				else
 				{
@@ -332,6 +337,14 @@ namespace Strata
 				}
 				const int64_t deviceLimit = static_cast<int64_t>(Renderer::GetGraphicsDevice().GetInfo().MaxTextureDimension2D);
 				const int64_t limit = std::min(c_MaxCaptureSize, deviceLimit);
+				// Larger images (a viewport on a very large display) shrink to the limit, keeping their shape.
+				const int64_t largest = std::max(captureWidth, captureHeight);
+				if (largest > limit)
+				{
+					const double scale = static_cast<double>(limit) / static_cast<double>(largest);
+					captureWidth = static_cast<int64_t>(std::lround(static_cast<double>(captureWidth) * scale));
+					captureHeight = static_cast<int64_t>(std::lround(static_cast<double>(captureHeight) * scale));
+				}
 				request.Size = glm::uvec2(static_cast<uint32_t>(std::clamp<int64_t>(captureWidth, 1, limit)), static_cast<uint32_t>(std::clamp<int64_t>(captureHeight, 1, limit)));
 
 				// Polled from the next frame on: the first poll renders, the later ones wait for the GPU readback.

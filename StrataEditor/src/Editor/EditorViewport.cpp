@@ -85,10 +85,11 @@ namespace Strata
 		{
 			if (const auto it = json.find(key); it != json.end())
 			{
-				const float number = it->is_number() ? it->get<float>() : -1.0f;
-				if (!std::isfinite(number) || !(number > 0.0f) || number > maximum)
+				// Read as double: converting a number beyond the float range to float is undefined.
+				const double number = it->is_number() ? it->get<double>() : -1.0;
+				if (!std::isfinite(number) || !(number > 0.0) || number > maximum)
 					return fail(fmt::format("'{}' must be a number above 0 and at most {}", key, maximum));
-				*value = number;
+				*value = static_cast<float>(number);
 			}
 		}
 		*this = result;
@@ -144,6 +145,7 @@ namespace Strata
 		m_Pick->Readback = std::move(readback);
 		m_Pick->PickedScene = m_Renderer->GetRenderedScene();
 		m_Pick->Mode = mode;
+		m_Pick->Requested = std::chrono::steady_clock::now();
 		return true;
 	}
 
@@ -153,7 +155,7 @@ namespace Strata
 			return;
 		if (!m_Pick->Readback->IsReady())
 		{
-			if (++m_Pick->Frames > c_MaxPickFrames)
+			if (std::chrono::steady_clock::now() - m_Pick->Requested > c_PickTimeout)
 			{
 				ST_WARN("Picking in the viewport timed out: the GPU did not finish the readback");
 				m_Pick.reset();

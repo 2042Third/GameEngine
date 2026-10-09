@@ -12,6 +12,7 @@
 #include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
 
+#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -63,8 +64,8 @@ namespace Strata
 	public:
 		static constexpr uint32_t c_DefaultWidth = 1280;
 		static constexpr uint32_t c_DefaultHeight = 720;
-		// A pick whose GPU readback has not finished after this many frames is dropped.
-		static constexpr uint32_t c_MaxPickFrames = 120;
+		// A pick whose GPU readback has not finished after this long is dropped (a lost or hung device).
+		static constexpr std::chrono::seconds c_PickTimeout { 5 };
 
 		EditorViewport() = default;
 		~EditorViewport();
@@ -115,7 +116,7 @@ namespace Strata
 			Scope<TextureReadback> Readback;
 			std::weak_ptr<Scene> PickedScene;
 			ViewportPickMode Mode = ViewportPickMode::Replace;
-			uint32_t Frames = 0;
+			std::chrono::steady_clock::time_point Requested;
 		};
 	private:
 		EditorCamera m_Camera;

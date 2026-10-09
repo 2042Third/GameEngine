@@ -126,6 +126,10 @@ namespace Strata
 		const float halfAngle = std::min(halfVertical, halfHorizontal);
 		SetTarget(bounds.GetCenter());
 		SetDistance(radius * c_FocusMargin / std::sin(halfAngle));
+		// Large bounds would end beyond the far plane: it moves out so everything framed stays visible.
+		const float farthest = m_Distance + radius;
+		if (farthest > m_Far)
+			m_Far = std::min(farthest * c_FocusMargin, c_MaxFar);
 		return true;
 	}
 
@@ -133,7 +137,7 @@ namespace Strata
 	{
 		const glm::vec3 direction = target - position;
 		const float distance = glm::length(direction);
-		if (!IsFinite(position) || !IsFinite(target) || !std::isfinite(distance) || distance < c_MinDistance)
+		if (!IsFinite(position) || !IsFinite(target) || !std::isfinite(distance) || distance < c_MinDistance || distance > c_MaxDistance)
 			return false;
 		m_Yaw = WrapDegrees(glm::degrees(std::atan2(-direction.x, -direction.z)));
 		m_Pitch = std::clamp(glm::degrees(std::asin(std::clamp(direction.y / distance, -1.0f, 1.0f))), -c_MaxPitch, c_MaxPitch);
@@ -279,13 +283,14 @@ namespace Strata
 			const auto it = json.find(key);
 			if (it == json.end())
 				return true;
-			const float value = it->is_number() ? it->get<float>() : std::numeric_limits<float>::quiet_NaN();
+			// Read as double: converting a number beyond the float range to float is undefined.
+			const double value = it->is_number() ? it->get<double>() : std::numeric_limits<double>::quiet_NaN();
 			if (!std::isfinite(value) || value < minimum || value > maximum)
 			{
 				outProblem = fmt::format("'{}' must be a number between {} and {}", key, minimum, maximum);
 				return false;
 			}
-			outValue = value;
+			outValue = static_cast<float>(value);
 			return true;
 		};
 
@@ -294,10 +299,13 @@ namespace Strata
 		{
 			if (!target->is_array() || target->size() != 3 || !(*target)[0].is_number() || !(*target)[1].is_number() || !(*target)[2].is_number())
 				return fail("'Target' must be an array of three numbers");
-			const glm::vec3 value((*target)[0].get<float>(), (*target)[1].get<float>(), (*target)[2].get<float>());
-			if (!IsFinite(value) || glm::any(glm::greaterThan(glm::abs(value), glm::vec3(c_MaxCoordinate))))
+			const glm::dvec3 value((*target)[0].get<double>(), (*target)[1].get<double>(), (*target)[2].get<double>());
+			if (!std::isfinite(value.x) || !std::isfinite(value.y) || !std::isfinite(value.z)
+				|| glm::any(glm::greaterThan(glm::abs(value), glm::dvec3(c_MaxCoordinate))))
+			{
 				return fail(fmt::format("'Target' must be finite and within +-{}", c_MaxCoordinate));
-			result.m_Target = value;
+			}
+			result.m_Target = glm::vec3(value);
 		}
 		float nearClip = result.m_Near;
 		float farClip = result.m_Far;

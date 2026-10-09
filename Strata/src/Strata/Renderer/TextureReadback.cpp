@@ -20,8 +20,12 @@ namespace Strata
 
 		const nvrhi::TextureDesc& desc = texture->getDesc();
 		const nvrhi::FormatInfo& formatInfo = nvrhi::getFormatInfo(desc.format);
-		if (formatInfo.blockSize != 1 || formatInfo.bytesPerBlock == 0)
+		// Compressed blocks, combined depth-stencil formats (two aspects) and multisampled images cannot be copied to rows of
+		// pixels.
+		if (formatInfo.blockSize != 1 || formatInfo.bytesPerBlock == 0 || formatInfo.hasStencil)
 			return fail(fmt::format("the format of '{}' cannot be read back", desc.debugName));
+		if (desc.sampleCount > 1)
+			return fail(fmt::format("'{}' is multisampled and cannot be read back", desc.debugName));
 		if (desc.dimension == nvrhi::TextureDimension::Texture3D || region.MipLevel >= desc.mipLevels || region.ArraySlice >= desc.arraySize)
 			return fail(fmt::format("'{}' has no 2D subresource at mip {}, slice {}", desc.debugName, region.MipLevel, region.ArraySlice));
 

@@ -29,8 +29,8 @@ namespace Strata
 	class TextureReadback
 	{
 	public:
-		// Null (with an error) without a renderer, for missing textures, block-compressed or 3D textures, and regions
-		// outside the subresource.
+		// Null (with an error) without a renderer, for missing textures, block-compressed, depth-stencil, multisampled or 3D
+		// textures, and regions outside the subresource.
 		static Scope<TextureReadback> Create(nvrhi::ITexture* texture, const TextureReadbackRegion& region = {}, std::string* outError = nullptr);
 
 		TextureReadback(const TextureReadback&) = delete;

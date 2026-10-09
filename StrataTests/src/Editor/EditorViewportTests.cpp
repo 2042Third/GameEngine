@@ -139,6 +139,7 @@ TEST_SUITE("Editor.Viewport")
 
 		// Invalid requests change nothing.
 		CHECK(harness.Error("camera.set", { { "position", { 1, 1, 1 } }, { "target", { 1, 1, 1 } } }).find("apart") != std::string::npos);
+		CHECK(harness.Error("camera.set", { { "position", { 0, 0, 0 } }, { "target", { 3e6, 0, 0 } } }).find("apart") != std::string::npos);
 		CHECK(harness.Error("camera.set", { { "position", { 1, 1, 1 } }, { "target", { 0, 0, 0 } }, { "yaw", 3 } }).find("either") != std::string::npos);
 		CHECK(harness.Error("camera.set", { { "near", 200 } }).find("below far") != std::string::npos);
 		CHECK(harness.Error("camera.set", { { "fov", 0 } }).find("'fov'") != std::string::npos);
@@ -292,7 +293,7 @@ TEST_SUITE("Editor.Viewport")
 		const nlohmann::json before = restored.ToJson();
 		for (const nlohmann::json& invalid : { nlohmann::json("x"), nlohmann::json { { "ShowGrid", 1 } }, nlohmann::json { { "Gizmo", "Move" } },
 			nlohmann::json { { "Space", "Global" } }, nlohmann::json { { "RotateSnap", 0 } }, nlohmann::json { { "TranslateSnap", 1e9 } },
-			nlohmann::json { { "ScaleSnap", -1 } }, nlohmann::json { { "ShowStats", false }, { "ScaleSnap", "big" } } })
+			nlohmann::json { { "ScaleSnap", -1 } }, nlohmann::json { { "ScaleSnap", 1e300 } }, nlohmann::json { { "ShowStats", false }, { "ScaleSnap", "big" } } })
 		{
 			CAPTURE(invalid.dump());
 			CHECK_FALSE(restored.FromJson(invalid, &error));

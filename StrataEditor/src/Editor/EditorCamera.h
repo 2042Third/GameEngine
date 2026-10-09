@@ -77,9 +77,11 @@ namespace Strata
 		void AdjustFlySpeed(float steps);
 
 		// Keeps the orientation and frames the bounds: the target moves to their center and the distance makes their
-		// bounding sphere fit the view. Returns false (changing nothing) for invalid bounds.
+		// bounding sphere fit the view; the far plane moves out if the bounds would reach past it. Returns false
+		// (changing nothing) for invalid bounds.
 		bool Focus(const AABB& bounds, float aspectRatio);
-		// Looks from `position` at `target`. Returns false (changing nothing) when they coincide or are not finite.
+		// Looks from `position` at `target`. Returns false (changing nothing) unless they are finite and between
+		// c_MinDistance and c_MaxDistance apart.
 		bool LookAt(const glm::vec3& position, const glm::vec3& target);
 		// Moves the camera so it looks at `target`, keeping orientation and distance.
 		void SetTarget(const glm::vec3& target);

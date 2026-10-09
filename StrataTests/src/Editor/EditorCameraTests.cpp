@@ -249,6 +249,13 @@ TEST_SUITE("Editor.Camera")
 		const glm::vec3 target = camera.GetTarget();
 		CHECK_FALSE(camera.Focus(AABB(), 1.0f));
 		CHECK(Near(camera.GetTarget(), target));
+
+		// Bounds reaching past the far plane move it out, so the framed content stays visible.
+		const float farClip = camera.GetFar();
+		REQUIRE(camera.Focus(AABB(glm::vec3(-5000.0f), glm::vec3(5000.0f)), 1.0f));
+		CHECK(camera.GetFar() > camera.GetDistance() + glm::length(glm::vec3(5000.0f)));
+		CHECK(camera.GetFar() > farClip);
+		CHECK(camera.GetNear() < camera.GetFar());
 	}
 
 	TEST_CASE("LookAt, positions and settings")
@@ -260,6 +267,7 @@ TEST_SUITE("Editor.Camera")
 		CHECK(Near(camera.GetForward(), glm::normalize(glm::vec3(-4.0f, -4.0f, -3.0f))));
 		CHECK_FALSE(camera.LookAt(glm::vec3(1.0f), glm::vec3(1.0f)));
 		CHECK_FALSE(camera.LookAt(glm::vec3(std::nanf("")), glm::vec3(1.0f)));
+		CHECK_FALSE(camera.LookAt(glm::vec3(0.0f), glm::vec3(2.0f * EditorCamera::c_MaxDistance, 0.0f, 0.0f))); // Too far to represent
 		CHECK(Near(camera.GetTarget(), glm::vec3(-1.0f, 0.0f, 2.0f)));
 
 		// Straight down is limited to the maximum pitch.
@@ -317,6 +325,8 @@ TEST_SUITE("Editor.Camera")
 			{ { "Near", 10.0 }, { "Far", 5.0 } },
 			{ { "Far", 1e12 } },
 			{ { "FlySpeed", -1.0 } },
+			{ { "FOV", 1e300 } },          // Beyond the float range
+			{ { "Target", { 1e300, 0, 0 } } },
 			{ { "FOV", 70.0 }, { "Yaw", true } } // A valid value next to an invalid one changes nothing either
 		};
 		for (const nlohmann::json& document : invalid)

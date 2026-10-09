@@ -3,6 +3,7 @@
 #include "Strata/Renderer/TextureReadback.h"
 
 #include <chrono>
+#include <cstring>
 #include <thread>
 
 using namespace Strata;
@@ -153,6 +154,36 @@ TEST_SUITE("GPU.TextureReadback")
 			REQUIRE(compressed);
 			CHECK_FALSE(TextureReadback::Create(compressed, {}, &error));
 		}
+
+		// Multisampled images and combined depth-stencil formats have no plain rows of pixels to copy.
+		nvrhi::TextureDesc multisampledDesc;
+		multisampledDesc.width = 8;
+		multisampledDesc.height = 8;
+		multisampledDesc.format = nvrhi::Format::RGBA8_UNORM;
+		multisampledDesc.sampleCount = 4;
+		multisampledDesc.dimension = nvrhi::TextureDimension::Texture2DMS;
+		multisampledDesc.isRenderTarget = true;
+		multisampledDesc.debugName = "Multisampled";
+		multisampledDesc.initialState = nvrhi::ResourceStates::RenderTarget;
+		multisampledDesc.keepInitialState = true;
+		nvrhi::TextureHandle multisampled = gpu.GetNvrhiDevice()->createTexture(multisampledDesc);
+		REQUIRE(multisampled);
+		error.clear();
+		CHECK_FALSE(TextureReadback::Create(multisampled, {}, &error));
+		CHECK(error.find("multisampled") != std::string::npos);
+		nvrhi::TextureDesc depthStencilDesc;
+		depthStencilDesc.width = 8;
+		depthStencilDesc.height = 8;
+		depthStencilDesc.format = nvrhi::Format::D32S8;
+		depthStencilDesc.isRenderTarget = true;
+		depthStencilDesc.debugName = "DepthStencil";
+		depthStencilDesc.initialState = nvrhi::ResourceStates::DepthWrite;
+		depthStencilDesc.keepInitialState = true;
+		nvrhi::TextureHandle depthStencil = gpu.GetNvrhiDevice()->createTexture(depthStencilDesc);
+		REQUIRE(depthStencil);
+		error.clear();
+		CHECK_FALSE(TextureReadback::Create(depthStencil, {}, &error));
+		CHECK(error.find("cannot be read back") != std::string::npos);
 
 		// Dropped before the GPU finished: the copy still completes safely.
 		for (int index = 0; index < 8; index++)

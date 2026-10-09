@@ -9,6 +9,7 @@
 #include <nlohmann/json.hpp>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 

@@ -15,6 +15,8 @@
 #include <stb_image.h>
 
 #include <chrono>
+#include <memory>
+#include <optional>
 #include <thread>
 
 using namespace Strata;
@@ -64,18 +66,19 @@ namespace
 		// Runs a command through the runner, one update per frame, until it completes.
 		EditorCommandResult RunFrames(std::string_view name, const nlohmann::json& parameters, int* outFrames = nullptr)
 		{
-			std::optional<EditorCommandResult> completed;
-			const bool pending = Runner.Run(Context, Commands, name, parameters, [&completed](const EditorCommandResult& result) { completed = result; });
+			// Shared with the completion, which may outlive this call if the command never finishes.
+			auto completed = std::make_shared<std::optional<EditorCommandResult>>();
+			const bool pending = Runner.Run(Context, Commands, name, parameters, [completed](const EditorCommandResult& result) { *completed = result; });
 			int frames = 0;
-			for (; !completed && frames < 5000; frames++)
+			for (; !*completed && frames < 20000; frames++)
 			{
 				Runner.Update(Context);
 				std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			}
-			REQUIRE(completed);
+			REQUIRE(*completed);
 			if (outFrames)
 				*outFrames = pending ? frames : 0;
-			return *completed;
+			return **completed;
 		}
 
 		DecodedImage Capture(const nlohmann::json& parameters, nlohmann::json* outResult = nullptr)
@@ -177,6 +180,12 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(image.Height == 40);
 		image = harness.Capture({ { "width", 60 } });
 		CHECK(image.Height == 30);
+		// A viewport larger than the capture limit shrinks to it, keeping its shape.
+		harness.Context.GetViewport().SetSize(glm::uvec2(8000, 2000));
+		image = harness.Capture(nlohmann::json::object());
+		CHECK(image.Width == 4096);
+		CHECK(image.Height == 1024);
+		harness.Context.GetViewport().SetSize(glm::uvec2(80, 40));
 
 		// The grid and the light's shape are overlays.
 		harness.Run("camera.set", { { "position", { 0, 3, 6 } }, { "target", { 0, 0, 0 } } });
