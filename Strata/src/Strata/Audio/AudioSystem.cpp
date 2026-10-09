@@ -408,6 +408,9 @@ namespace Strata
 		ApplyComponent(it->second, *component);
 		if (it->second.Applied.Clip != component->Clip)
 			ResolveClip(it->second, entity, *component);
+		// Where the entity is now (e.g. just made spatial, or a pooled emitter just moved), so that a sound started now begins
+		// there. The velocity still comes from the next update, measured from the last one.
+		PlaceSource(it->second, entity);
 		return &it->second;
 	}
 
@@ -568,6 +571,15 @@ namespace Strata
 			return;
 		record.PlayRequested = false;
 		record.Source->Play();
+	}
+
+	void AudioSystem::PlaceSource(SourceRecord& record, Entity entity)
+	{
+		if (!record.Applied.Spatial)
+			return;
+		const glm::vec3 position = glm::vec3(m_Scene.GetWorldTransform(entity)[3]);
+		if (IsFinite(position))
+			record.Source->SetPosition(position);
 	}
 
 	void AudioSystem::UpdateSourcePosition(SourceRecord& record, Entity entity, float timestep)

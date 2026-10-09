@@ -878,6 +878,39 @@ TEST_SUITE("Audio.System")
 		CHECK(AudioSystem::GetMasterVolume() == 0.5f);
 	}
 
+	TEST_CASE("Gameplay calls start sources where their entity is now")
+	{
+		ScopedAudioEngine engine;
+		REQUIRE(engine.Initialized);
+		AudioProject project;
+
+		Scene scene;
+		Entity entity = CreateSource(scene, "Source", project.AddClip(1.0f));
+		AudioSourceComponent& component = entity.GetComponent<AudioSourceComponent>();
+		component.PlayOnStart = false;
+		scene.OnRuntimeStart();
+		AudioSystem& audio = GetAudio(scene);
+		const AudioSource* source = audio.GetAudioSource(entity);
+		REQUIRE(source);
+
+		// Made spatial and moved in the frame it is played.
+		component.Spatial = true;
+		entity.GetTransform().Translation = glm::vec3(0.0f, 0.0f, -20.0f);
+		REQUIRE(audio.Play(entity));
+		CHECK(source->IsSpatial());
+		CHECK(source->GetPosition() == glm::vec3(0.0f, 0.0f, -20.0f));
+
+		// A pooled emitter moved to a new place and played again.
+		StepScene(scene, 1);
+		REQUIRE(audio.Stop(entity));
+		entity.GetTransform().Translation = glm::vec3(5.0f, 0.0f, 0.0f);
+		REQUIRE(audio.Play(entity));
+		CHECK(source->GetPosition() == glm::vec3(5.0f, 0.0f, 0.0f));
+		// The jump is a teleport, not a velocity.
+		StepScene(scene, 1);
+		CHECK(source->GetVelocity() == glm::vec3(0.0f));
+	}
+
 	TEST_CASE("One-shots belong to the scene")
 	{
 		ScopedAudioEngine engine;

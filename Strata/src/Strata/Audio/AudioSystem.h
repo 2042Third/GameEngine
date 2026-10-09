@@ -179,6 +179,8 @@ namespace Strata
 		void ResolveClip(SourceRecord& record, Entity entity, const AudioSourceComponent& component);
 		void RefreshClip(SourceRecord& record, Entity entity, const AudioSourceComponent& component);
 		void StartIfRequested(SourceRecord& record);
+		// Moves a spatial source to its entity's position without touching its velocity.
+		void PlaceSource(SourceRecord& record, Entity entity);
 		void UpdateSourcePosition(SourceRecord& record, Entity entity, float timestep);
 		// The velocity of an entity at `position`: its rigid body's, or derived from its moves (see the class comment).
 		glm::vec3 UpdateMotion(MotionTracker& motion, Entity entity, const glm::vec3& position, float timestep);
