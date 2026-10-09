@@ -555,13 +555,15 @@ namespace Strata
 	////////////////////////////////////////////////////////////////////////////////
 
 	// Defined in SceneSystemRegistration.cpp.
-	void RegisterBuiltinSceneSystems();
+	void CreateBuiltinSceneSystems(std::vector<SceneSystemDescriptor>& descriptors);
 
+	// The built-in systems are added directly to the storage (never through Register, which would re-enter the
+	// call_once), before any other registration.
 	static std::vector<SceneSystemDescriptor>& GetSceneSystemDescriptors()
 	{
 		static std::vector<SceneSystemDescriptor> s_Descriptors;
 		static std::once_flag s_BuiltinsRegistered;
-		std::call_once(s_BuiltinsRegistered, []() { RegisterBuiltinSceneSystems(); });
+		std::call_once(s_BuiltinsRegistered, []() { CreateBuiltinSceneSystems(s_Descriptors); });
 		return s_Descriptors;
 	}
 
