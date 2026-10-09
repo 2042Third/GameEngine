@@ -128,6 +128,13 @@ namespace
 			return m_Output;
 		}
 
+		// Whether the editor printed text. The output readers may still be appending the last lines after the process
+		// has exited, so this waits a little for them.
+		bool OutputContains(const std::string& text)
+		{
+			return Tests::WaitUntil([&]() { return TakeOutput().find(text) != std::string::npos; }, std::chrono::milliseconds(5000));
+		}
+
 		uint32_t GetProcessId() const { return m_Process.GetProcessID(); }
 	private:
 		Process m_Process;
@@ -383,7 +390,7 @@ TEST_SUITE("EndToEnd.EditorAutomation")
 		CHECK_MESSAGE(*exitCode == 0, editor.TakeOutput());
 		CHECK(EditorSession::FindSessions(environment.SessionDirectory).empty());
 		CHECK_FALSE(FileSystem::Exists(EditorSession::GetProjectSessionFilePath(projectDirectory)));
-		CHECK(editor.TakeOutput().find("Automation: #") != std::string::npos); // Requests are logged
+		CHECK(editor.OutputContains("Automation: #")); // Requests are logged
 	}
 
 	TEST_CASE("The MCP server exposes the editor's commands as tools")
@@ -460,7 +467,7 @@ TEST_SUITE("EndToEnd.EditorAutomation")
 			const std::optional<int> exitCode = editor.Wait();
 			REQUIRE(exitCode.has_value());
 			CHECK(*exitCode != 0);
-			CHECK(editor.TakeOutput().find("--automation-port") != std::string::npos);
+			CHECK(editor.OutputContains("--automation-port"));
 		}
 
 		// With an idle timeout, an editor nobody connects to closes itself, cleanly.
@@ -470,7 +477,7 @@ TEST_SUITE("EndToEnd.EditorAutomation")
 			const std::optional<int> exitCode = editor.Wait();
 			REQUIRE(exitCode.has_value());
 			CHECK_MESSAGE(*exitCode == 0, editor.TakeOutput());
-			CHECK(editor.TakeOutput().find("--idle-timeout") != std::string::npos);
+			CHECK(editor.OutputContains("--idle-timeout"));
 			CHECK(EditorSession::FindSessions(environment.SessionDirectory).empty());
 
 			EditorProcess invalid;
@@ -501,7 +508,7 @@ TEST_SUITE("EndToEnd.EditorAutomation")
 			const std::optional<int> exitCode = editor.Wait();
 			REQUIRE(exitCode.has_value());
 			CHECK(*exitCode == 1);
-			CHECK(editor.TakeOutput().find("needs automation") != std::string::npos);
+			CHECK(editor.OutputContains("needs automation"));
 		}
 	}
 }
