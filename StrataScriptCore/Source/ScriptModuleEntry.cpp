@@ -9,7 +9,8 @@
 
 // Windows modules with their own (static) C runtime turn abort() into a crash the engine contains. With a shared C
 // runtime (/MD) its abort handling belongs to every user of that runtime, so it is left alone (abort() then ends the
-// process). POSIX engines catch SIGABRT themselves.
+// process). On POSIX the engine reports SIGABRT and the process ends: there the C library also aborts on heap corruption
+// while holding allocator locks, so an abort cannot be contained safely.
 #if defined(_WIN32) && defined(_MSC_VER) && !defined(_DLL)
 	#define ST_SCRIPT_CONTAIN_ABORT 1
 #else

@@ -264,9 +264,11 @@ Building and loading scripts:
 - Hot reload during play snapshots every instance's fields, deletes the instances (no `OnDestroy`), loads the new
   module, recreates the instances, restores fields that still exist with the same name and type and calls `OnReload`
   (not `OnCreate`). Classes that disappeared lose their instances; new classes start normally.
-- Contained: access violations, division by zero, stack overflow, `abort()` (also from a failed `assert()` and from
-  `std::terminate`; POSIX catches SIGABRT, Windows modules turn it into `ST_SCRIPT_ABORT_EXCEPTION_CODE` through a
-  SIGABRT handler `ScriptModuleEntry.cpp` installs in their static C runtime) and C++ exceptions escaping module code.
+- Contained: access violations, division by zero, stack overflow, C++ exceptions escaping module code and, on Windows,
+  `abort()` (also from a failed `assert()` and from `std::terminate`: modules turn it into
+  `ST_SCRIPT_ABORT_EXCEPTION_CODE` through a SIGABRT handler `ScriptModuleEntry.cpp` installs in their static C
+  runtime). On Linux and macOS `abort()` is reported on stderr and ends the process: the C library also aborts on heap
+  corruption while it holds allocator locks, and jumping out would leave them locked (the next allocation would hang).
 - Limitations: native code cannot be preempted (an infinite loop blocks the main thread; `SetWatchdogTimeout` reports
   long calls); a crash inside a module's static initializers or destructors fails the load or abandons the library (the
   Windows loader contains it itself; elsewhere it is reported), but may make the process crash when it exits, and outside

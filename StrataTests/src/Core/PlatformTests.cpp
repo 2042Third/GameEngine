@@ -85,14 +85,6 @@ namespace
 		throw std::runtime_error("Thrown on purpose");
 	}
 
-#if defined(ST_PLATFORM_POSIX)
-	// Windows guards contain abort() only where the aborting code's C runtime reports it (see the script SDK).
-	void CallAbort(void*)
-	{
-		std::abort();
-	}
-#endif
-
 	void NestedThrow(void* userData)
 	{
 		CrashInfo innerInfo;
@@ -371,9 +363,6 @@ TEST_SUITE("Core.Platform")
 		{
 			CrashInfo info;
 			CHECK_FALSE(CrashGuard::Invoke(WriteToNull, nullptr, &info));
-			// abort() may change the mask itself before it raises SIGABRT (macOS blocks every other signal).
-			CHECK_FALSE(CrashGuard::Invoke(CallAbort, nullptr, &info));
-			CHECK(info.Description.find("abort()") != std::string::npos);
 #if !defined(__aarch64__) && !defined(_M_ARM64)
 			int divisor = 0;
 			CHECK_FALSE(CrashGuard::Invoke(DivideByZero, &divisor, &info));
@@ -386,6 +375,18 @@ TEST_SUITE("Core.Platform")
 				CHECK(sigismember(&after, signal) == sigismember(&before, signal));
 			}
 		}
+	}
+
+	TEST_CASE("abort() in guarded code is reported and ends the process")
+	{
+		// It cannot be contained safely (the C library may hold allocator locks), so it must neither be swallowed nor hang.
+		const Process::RunResult result = Process::Run(HelperProcess({ "--strata-test-helper=guarded-abort" }), std::chrono::milliseconds(60000));
+		INFO("Output: ", result.Output);
+		REQUIRE(result.Started);
+		CHECK_FALSE(result.TimedOut);
+		CHECK(result.ExitCode == 128 + SIGABRT);
+		CHECK(result.Output.find("called abort()") != std::string::npos);
+		CHECK(result.Output.find("contained") == std::string::npos);
 	}
 #endif
 

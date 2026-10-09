@@ -2,9 +2,11 @@
 
 #include "Scripting/ScriptTestUtils.h"
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Core/Process.h"
 #include "TestHelpers.h"
 
 #include <chrono>
+#include <csignal>
 #include <string>
 #include <vector>
 
@@ -16,8 +18,12 @@ namespace
 
 	std::vector<const char*> GetFaultKinds()
 	{
-		// abort(): directly, from a failed assert() (active in every configuration) and from std::terminate.
-		std::vector<const char*> faults = { "NullDereference", "StackOverflow", "Abort", "Assert", "Terminate", "TerminateFromNoexcept" };
+		std::vector<const char*> faults = { "NullDereference", "StackOverflow" };
+#if defined(ST_PLATFORM_WINDOWS)
+		// abort(): directly, from a failed assert() (active in every configuration) and from std::terminate. Only Windows
+		// contains it; elsewhere it ends the process (see "abort() in a script ...").
+		faults.insert(faults.end(), { "Abort", "Assert", "Terminate", "TerminateFromNoexcept" });
+#endif
 #if !defined(__aarch64__) && !defined(_M_ARM64)
 		// Integer division by zero does not trap on ARM64 (it returns 0).
 		faults.push_back("DivideByZero");
@@ -89,6 +95,29 @@ TEST_SUITE("Scripting.Faults")
 				CHECK_FALSE(engine->IsModuleLoaded());
 				CHECK(engine->GetFaultCount() == 1);
 			}
+		}
+	}
+
+	TEST_CASE("abort() in a script is contained on Windows and ends the process with a report elsewhere")
+	{
+		// In a child process, since it may end. POSIX cannot contain abort() safely: the C library also aborts this way
+		// on heap corruption, holding allocator locks that would never be released.
+		for (const char* fault : { "Abort", "Assert", "Terminate" })
+		{
+			ProcessSpecification specification;
+			specification.Executable = GetTestExecutablePath();
+			specification.Arguments = { "--strata-test-helper=play-faulty-script", FileSystem::ToUTF8(GetTestScriptModule(STRATA_TEST_SCRIPTS_FAULTS)), fault };
+			const Process::RunResult result = Process::Run(specification, std::chrono::milliseconds(60000));
+			INFO("Fault ", fault, ", output: ", result.Output);
+			REQUIRE(result.Started);
+			CHECK_FALSE(result.TimedOut);
+#if defined(ST_PLATFORM_WINDOWS)
+			CHECK(result.ExitCode == 0);
+			CHECK(result.Output.find("contained") != std::string::npos);
+#else
+			CHECK(result.ExitCode == 128 + SIGABRT);
+			CHECK(result.Output.find("called abort()") != std::string::npos);
+#endif
 		}
 	}
 

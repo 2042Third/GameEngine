@@ -16,16 +16,20 @@ namespace Strata
 
 	// Windows: the structured exception code with which guarded code reports that it called abort() (a failed assert(),
 	// std::abort()). A C runtime would end the process instead; script modules built with the SDK install a SIGABRT
-	// handler in their own runtime that raises this code (ST_SCRIPT_ABORT_EXCEPTION_CODE). POSIX guards catch SIGABRT.
+	// handler in their own runtime that raises this code (ST_SCRIPT_ABORT_EXCEPTION_CODE).
 	constexpr uint32_t c_CrashGuardAbortExceptionCode = 0xE0535441u;
 
 	// Contains hardware faults raised by untrusted native code (game scripts) so they cannot take down the
 	// host process. Invoke() runs a function; if it raises an access violation, illegal instruction,
-	// integer division by zero or stack overflow, calls abort() (see c_CrashGuardAbortExceptionCode for Windows), or
-	// a C++ exception escapes it, execution resumes at the Invoke() call, which returns false and describes the fault.
+	// integer division by zero or stack overflow, or a C++ exception escapes it, execution resumes at the
+	// Invoke() call, which returns false and describes the fault. On Windows that includes abort() reported through
+	// c_CrashGuardAbortExceptionCode (the C runtime detects heap corruption by failing fast, never through abort()).
 	// Uncontainable: fail-fast terminations (Windows __fastfail: /GS buffer overrun checks, invalid-parameter
-	// failures of the C runtime, heap corruption the system detects) and anything that ends the process directly
-	// (exit, _exit, TerminateProcess, SIGKILL).
+	// failures of the C runtime, heap corruption the system detects); on POSIX abort() (SIGABRT), which the C library
+	// also calls on heap corruption while it holds allocator locks - it is reported on stderr and the process ends the
+	// way abort() ends it; and anything that ends the process directly (exit, _exit, TerminateProcess, SIGKILL).
+	// A crash inside the C library's allocator (a corrupted heap) can leave the allocator locked: the guarded thread
+	// then blocks at its next allocation.
 	//
 	// Destructors of objects in the faulting call frames do not run, so the guarded code may leak.
 	// Callers must treat the guarded module as unusable after a fault (e.g. stop play mode and unload it).

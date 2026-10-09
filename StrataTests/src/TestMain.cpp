@@ -2,9 +2,13 @@
 #include <doctest/doctest.h>
 
 #include "Renderer/GPUTestUtils.h"
+#include "Strata/Core/CrashGuard.h"
 #include "Strata/Core/FileLock.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Log.h"
+#include "Strata/Scene/Components.h"
+#include "Strata/Scene/Entity.h"
+#include "Strata/Scene/Scene.h"
 #include "Strata/Scripting/ScriptEngine.h"
 #include "TestHelpers.h"
 
@@ -48,6 +52,50 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		std::printf("%s\n", reinterpret_cast<const char*>(currentDirectory.c_str()));
 		std::fflush(stdout);
 		return 0;
+	}
+	if (mode == "guarded-abort")
+	{
+		// Calls abort() inside a crash guard. Printing "contained" means the guard swallowed it.
+		Strata::CrashGuard::Invoke([](void*) { std::abort(); }, nullptr);
+		std::printf("contained\n");
+		std::fflush(stdout);
+		return 0;
+	}
+	if (mode == "play-faulty-script")
+	{
+		// <faults module> <fault>: plays a scene whose Faulty script crashes with <fault> in OnUpdate. Prints "contained"
+		// (and returns 0) if the engine faulted the module and kept running.
+		if (argc < 4)
+			return 2;
+		Strata::LogSpecification logSpecification;
+		logSpecification.Level = Strata::LogLevel::Warn;
+		Strata::Log::Init(logSpecification);
+		const Strata::Ref<Strata::ScriptEngine> engine = Strata::CreateRef<Strata::ScriptEngine>();
+		std::string error;
+		if (!engine->LoadModule(Strata::FileSystem::FromUTF8(argv[2]), &error))
+		{
+			std::printf("%s\n", error.c_str());
+			return 1;
+		}
+		Strata::ScriptEngine::SetActive(engine);
+		bool contained = false;
+		{
+			Strata::Scene scene;
+			Strata::Entity entity = scene.CreateEntity("Faulty");
+			Strata::ScriptEntry& entry = entity.AddComponent<Strata::ScriptComponent>().Scripts.emplace_back();
+			entry.ClassName = "Faulty";
+			entry.Fields.push_back(Strata::ScriptFieldValue { "Fault", Strata::PropertyType::String, std::string(argv[3]) });
+			entry.Fields.push_back(Strata::ScriptFieldValue { "FaultIn", Strata::PropertyType::String, std::string("OnUpdate") });
+			scene.OnRuntimeStart();
+			scene.OnUpdateRuntime(0.0f);
+			contained = engine->IsFaulted();
+			scene.OnRuntimeStop();
+		}
+		Strata::ScriptEngine::SetActive(nullptr);
+		std::printf("%s\n", contained ? "contained" : "not faulted");
+		std::fflush(stdout);
+		Strata::Log::Shutdown();
+		return contained ? 0 : 1;
 	}
 	if (mode == "hold-file-lock")
 	{
