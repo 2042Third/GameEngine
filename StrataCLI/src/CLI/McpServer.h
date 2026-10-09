@@ -42,7 +42,9 @@ namespace Strata::CLI
 	// available. While an editor is connected, each editor RPC method is also exposed as its own tool, named
 	// after the method with characters outside [A-Za-z0-9_-] replaced by '_' (entity.create -> entity_create),
 	// using the method's description and params schema. rpc.* built-ins are not exposed. When that set
-	// changes (an editor connected or disconnected), notifications/tools/list_changed is sent.
+	// changes (an editor connected or disconnected), notifications/tools/list_changed is sent. Once connected,
+	// the server stays with that editor (see EditorConnection): if it goes away, the server reports itself
+	// disconnected instead of switching to another project's editor, until strata_launch_editor picks one.
 	class McpServer
 	{
 	public:

@@ -134,6 +134,17 @@ TEST_SUITE("CLI.Commands")
 		tokenOnly.Token = "x";
 		CHECK_FALSE(BuildConnectionOptions(tokenOnly, error).has_value());
 
+		// Discovered editors are always on loopback, so a host only makes sense for an explicit endpoint.
+		CliArguments hostOnly;
+		hostOnly.Host = "192.168.1.10";
+		CHECK_FALSE(BuildConnectionOptions(hostOnly, error).has_value());
+		CHECK(error.find("--host requires --port") != std::string::npos);
+		CliArguments hostAndPort = hostOnly;
+		hostAndPort.Port = 4300;
+		std::optional<EditorConnectionOptions> remote = BuildConnectionOptions(hostAndPort, error);
+		REQUIRE(remote.has_value());
+		CHECK(remote->Host == "192.168.1.10");
+
 		std::optional<EditorConnectionOptions> discovery = BuildConnectionOptions(CliArguments(), error);
 		REQUIRE(discovery.has_value());
 		CHECK_FALSE(discovery->Port.has_value());
@@ -198,15 +209,16 @@ TEST_SUITE("CLI.Commands")
 
 		const CliRun noSession = Run({ "call", "rpc.ping" });
 		CHECK(noSession.ExitCode == ExitCode::ConnectionFailure);
-		CHECK(noSession.ErrorOutput.find("No Strata editor session") != std::string::npos);
+		CHECK(noSession.ErrorOutput.find("No running Strata editor") != std::string::npos);
 	}
 
 	TEST_CASE("call discovers the editor through session files")
 	{
 		IsolatedEnvironment environment("CliDiscovery");
+		Tests::LiveProcess owner;
 		Tests::PumpedRpcServer editor;
 		REQUIRE(Tests::StartFakeEditor(editor));
-		REQUIRE(Tests::WriteFakeSessionFile(environment.SessionDirectory, Tests::MakeFakeSession(5001, editor.GetPort(), "2026-01-01T00:00:00Z")));
+		REQUIRE(Tests::WriteFakeSessionFile(environment.SessionDirectory, Tests::MakeFakeSession(owner.GetProcessId(), editor.GetPort(), "2026-01-01T00:00:00Z")));
 
 		const CliRun run = Run({ "call", "math.add", "{\"a\":1,\"b\":2}" });
 		CHECK(run.ExitCode == ExitCode::Success);
@@ -254,6 +266,34 @@ TEST_SUITE("CLI.Commands")
 		CHECK(run.ExitCode == ExitCode::ConnectionFailure);
 		CHECK(run.ErrorOutput.find("not found") != std::string::npos);
 		CHECK(run.Output.empty());
+	}
+
+	TEST_CASE("launch starts the editor and prints its session without the token")
+	{
+		IsolatedEnvironment environment("CliLaunchEditor");
+		const std::filesystem::path project = Tests::CreateTemporaryDirectory("CliLaunchEditorProject");
+		Tests::ScopedEnvironmentVariable fakeEditor("STRATA_TEST_FAKE_EDITOR", "1");
+
+		const CliRun run = Run({ "launch", "--project", FileSystem::ToUTF8(project), "--editor", FileSystem::ToUTF8(Tests::GetTestExecutablePath()), "--headless", "--wait-timeout", "20000" });
+		REQUIRE_MESSAGE(run.ExitCode == ExitCode::Success, run.ErrorOutput);
+		nlohmann::json printed = JsonRpc::Parse(run.Output).value();
+		CHECK_FALSE(printed.contains("Token"));
+		CHECK(printed["Headless"] == true);
+		REQUIRE(printed["Port"].is_number_unsigned());
+		REQUIRE(printed["ProcessId"].is_number_unsigned());
+
+		// The token is only in the private session file.
+		const std::vector<EditorSessionInfo> sessions = EditorSession::FindSessions(environment.SessionDirectory);
+		REQUIRE(sessions.size() == 1);
+		CHECK(sessions[0].ProcessId == printed["ProcessId"].get<uint32_t>());
+		CHECK(run.Output.find(sessions[0].Token) == std::string::npos);
+
+		// The editor removes its session files when it exits. (Its process is not waited for here: the launch command
+		// leaves it running detached, and on POSIX an exited child of this test process stays a zombie.)
+		const CliRun quit = Run({ "call", "editor.quit", "--project", FileSystem::ToUTF8(project) });
+		CHECK(quit.ExitCode == ExitCode::Success);
+		const std::filesystem::path sessionFile = EditorSession::GetSessionFilePath(environment.SessionDirectory, sessions[0].ProcessId);
+		CHECK(Tests::WaitUntil([&]() { return !FileSystem::Exists(sessionFile); }, std::chrono::milliseconds(10000)));
 	}
 
 	TEST_CASE("mcp serves the protocol on the given streams")

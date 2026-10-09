@@ -6,6 +6,7 @@
 #include "CLI/EditorLauncher.h"
 #include "CLI/FakeEditor.h"
 #include "Strata/Core/Platform.h"
+#include "Strata/Network/RpcClient.h"
 #include "TestHelpers.h"
 
 #include <atomic>
@@ -24,6 +25,22 @@ namespace
 		options.ConnectTimeout = std::chrono::milliseconds(3000);
 		return options;
 	}
+
+	// A fake editor: an automation server in this process, published under a live helper process's id.
+	struct FakeEditorInstance
+	{
+		Tests::LiveProcess Owner;
+		Tests::PumpedRpcServer Server;
+		EditorSessionInfo Session;
+
+		bool Start(const std::filesystem::path& sessionDirectory, std::string startedAt, std::string projectPath = {})
+		{
+			if (!Tests::StartFakeEditor(Server))
+				return false;
+			Session = Tests::MakeFakeSession(Owner.GetProcessId(), Server.GetPort(), std::move(startedAt), std::move(projectPath));
+			return Tests::WriteFakeSessionFile(sessionDirectory, Session);
+		}
+	};
 }
 
 TEST_SUITE("CLI.Discovery")
@@ -34,27 +51,36 @@ TEST_SUITE("CLI.Discovery")
 		const std::filesystem::path project = Tests::CreateTemporaryDirectory("DiscoveryProject");
 		const std::filesystem::path otherProject = Tests::CreateTemporaryDirectory("DiscoveryOtherProject");
 
-		REQUIRE(Tests::WriteFakeSessionFile(sessionDirectory, Tests::MakeFakeSession(101, 40101, "2026-01-01T00:00:00Z", FileSystem::ToUTF8(project))));
-		REQUIRE(Tests::WriteFakeSessionFile(sessionDirectory, Tests::MakeFakeSession(102, 40102, "2026-02-01T00:00:00Z", FileSystem::ToUTF8(otherProject))));
-		REQUIRE(Tests::WriteFakeSessionFile(sessionDirectory, Tests::MakeFakeSession(103, 40103, "2026-03-01T00:00:00Z")));
-		const EditorSessionInfo projectFileSession = Tests::MakeFakeSession(104, 40104, "2026-04-01T00:00:00Z", FileSystem::ToUTF8(project));
-		REQUIRE(FileSystem::WriteText(EditorSession::GetProjectSessionFilePath(project), projectFileSession.ToJson().dump()));
+		Tests::LiveProcess first;
+		Tests::LiveProcess second;
+		Tests::LiveProcess third;
+		Tests::LiveProcess pointed;
+		REQUIRE(Tests::WriteFakeSessionFile(sessionDirectory, Tests::MakeFakeSession(first.GetProcessId(), 40101, "2026-01-01T00:00:00Z", FileSystem::ToUTF8(project))));
+		REQUIRE(Tests::WriteFakeSessionFile(sessionDirectory, Tests::MakeFakeSession(second.GetProcessId(), 40102, "2026-02-01T00:00:00Z", FileSystem::ToUTF8(otherProject))));
+		REQUIRE(Tests::WriteFakeSessionFile(sessionDirectory, Tests::MakeFakeSession(third.GetProcessId(), 40103, "2026-03-01T00:00:00Z")));
+		REQUIRE(Tests::WriteFakeSessionFile(sessionDirectory, Tests::MakeFakeSession(pointed.GetProcessId(), 40104, "2025-12-01T00:00:00Z", FileSystem::ToUTF8(project))));
+		REQUIRE(FileSystem::WriteText(EditorSession::GetProjectSessionFilePath(project), nlohmann::json { { "ProcessId", pointed.GetProcessId() } }.dump()));
 
 		EditorConnectionOptions options = MakeOptions(sessionDirectory);
+		options.Host = "10.1.2.3"; // Only used for explicit endpoints
 
-		SUBCASE("Without a project, every session newest first")
+		SUBCASE("Without a project, every running editor's session newest first, always on loopback")
 		{
 			const std::vector<EditorEndpoint> endpoints = DiscoverEditorEndpoints(options);
-			REQUIRE(endpoints.size() == 3);
+			REQUIRE(endpoints.size() == 4);
 			CHECK(endpoints[0].Port == 40103);
 			CHECK(endpoints[1].Port == 40102);
 			CHECK(endpoints[2].Port == 40101);
-			CHECK(endpoints[0].Source == "session");
-			CHECK(endpoints[0].Token == Tests::c_FakeEditorToken);
-			CHECK(endpoints[0].Host == "127.0.0.1");
+			CHECK(endpoints[3].Port == 40104);
+			for (const EditorEndpoint& endpoint : endpoints)
+			{
+				CHECK(endpoint.Source == "session");
+				CHECK(endpoint.Host == "127.0.0.1");
+				CHECK(endpoint.Token == Tests::c_FakeEditorToken);
+			}
 		}
 
-		SUBCASE("With a project, its session file first, then its sessions only")
+		SUBCASE("With a project, its pointed-to session first, then its other sessions only")
 		{
 			options.ProjectDirectory = project;
 			const std::vector<EditorEndpoint> endpoints = DiscoverEditorEndpoints(options);
@@ -62,6 +88,7 @@ TEST_SUITE("CLI.Discovery")
 			CHECK(endpoints[0].Port == 40104);
 			CHECK(endpoints[0].Source == "project");
 			CHECK(endpoints[1].Port == 40101);
+			CHECK(endpoints[1].Source == "session");
 		}
 
 		SUBCASE("An explicit endpoint disables discovery")
@@ -72,6 +99,7 @@ TEST_SUITE("CLI.Discovery")
 			const std::vector<EditorEndpoint> endpoints = DiscoverEditorEndpoints(options);
 			REQUIRE(endpoints.size() == 1);
 			CHECK(endpoints[0].Port == 45000);
+			CHECK(endpoints[0].Host == "10.1.2.3");
 			CHECK(endpoints[0].Token == "explicit");
 			CHECK(endpoints[0].Source == "explicit");
 			CHECK_FALSE(endpoints[0].Session.has_value());
@@ -81,56 +109,60 @@ TEST_SUITE("CLI.Discovery")
 	TEST_CASE("Project paths are compared by location")
 	{
 		const std::filesystem::path project = Tests::CreateTemporaryDirectory("SameProject");
-		CHECK(IsSameProject(FileSystem::ToUTF8(project), project));
-		CHECK(IsSameProject(FileSystem::ToUTF8(project) + "/", project));
-		CHECK(IsSameProject(FileSystem::ToUTF8(project / "sub" / ".."), project));
-		CHECK_FALSE(IsSameProject(FileSystem::ToUTF8(project / "other"), project));
-		CHECK_FALSE(IsSameProject("", project));
+		CHECK(EditorSession::IsSameProject(FileSystem::ToUTF8(project), project));
+		CHECK(EditorSession::IsSameProject(FileSystem::ToUTF8(project) + "/", project));
+		CHECK(EditorSession::IsSameProject(FileSystem::ToUTF8(project / "sub" / ".."), project));
+		CHECK_FALSE(EditorSession::IsSameProject(FileSystem::ToUTF8(project / "other"), project));
+		CHECK_FALSE(EditorSession::IsSameProject("", project));
 	}
 
 	TEST_CASE("The newest reachable session is used and stale sessions are skipped")
 	{
 		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("DiscoveryStale");
-		Tests::PumpedRpcServer editor;
-		REQUIRE(Tests::StartFakeEditor(editor));
+		FakeEditorInstance editor;
+		REQUIRE(editor.Start(sessionDirectory, "2026-01-01T00:00:00Z"));
 
-		// A newer session left behind by an editor that is gone, and an older one that is alive.
-		Tests::RefusingPort deadEditorPort;
-		REQUIRE(Tests::WriteFakeSessionFile(sessionDirectory, Tests::MakeFakeSession(201, deadEditorPort.GetPort(), "2026-05-01T00:00:00Z")));
-		REQUIRE(Tests::WriteFakeSessionFile(sessionDirectory, Tests::MakeFakeSession(202, editor.GetPort(), "2026-01-01T00:00:00Z")));
+		// Newer sessions of an editor whose process is gone, and of a live process that no longer serves its port.
+		Tests::ExitedProcess exited;
+		REQUIRE(Tests::WriteFakeSessionFile(sessionDirectory, Tests::MakeFakeSession(exited.GetProcessId(), 40200, "2026-06-01T00:00:00Z")));
+		Tests::LiveProcess hung;
+		Tests::RefusingPort deadPort;
+		REQUIRE(Tests::WriteFakeSessionFile(sessionDirectory, Tests::MakeFakeSession(hung.GetProcessId(), deadPort.GetPort(), "2026-05-01T00:00:00Z")));
 
 		EditorConnection connection(MakeOptions(sessionDirectory));
 		CHECK_FALSE(connection.IsConnected());
 		REQUIRE_MESSAGE(connection.EnsureConnected(), connection.GetLastError());
 		REQUIRE(connection.GetEndpoint().has_value());
-		CHECK(connection.GetEndpoint()->Port == editor.GetPort());
-		CHECK(connection.GetEndpoint()->Session->ProcessId == 202);
+		CHECK(connection.GetEndpoint()->Port == editor.Server.GetPort());
+		CHECK(connection.GetEndpoint()->Session->ProcessId == editor.Session.ProcessId);
 
 		const RpcResult result = connection.Call("entity.create", nlohmann::json { { "Name", "Found" } }, std::chrono::milliseconds(5000));
 		REQUIRE(result.IsSuccess());
 
 		nlohmann::json status = connection.DescribeStatus();
 		CHECK(status["connected"] == true);
-		CHECK(status["session"]["ProcessId"] == 202);
+		CHECK(status["session"]["ProcessId"] == editor.Session.ProcessId);
 		CHECK_FALSE(status["session"].contains("Token"));
+		CHECK(status["pinnedEditor"]["ProcessId"] == editor.Session.ProcessId);
 	}
 
-	TEST_CASE("A dropped connection is re-established through discovery")
+	TEST_CASE("A restarted editor is found again")
 	{
 		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("DiscoveryReconnect");
+		Tests::LiveProcess owner;
 		auto first = CreateScope<Tests::PumpedRpcServer>();
 		REQUIRE(Tests::StartFakeEditor(*first));
-		REQUIRE(Tests::WriteFakeSessionFile(sessionDirectory, Tests::MakeFakeSession(301, first->GetPort(), "2026-01-01T00:00:00Z")));
+		REQUIRE(Tests::WriteFakeSessionFile(sessionDirectory, Tests::MakeFakeSession(owner.GetProcessId(), first->GetPort(), "2026-01-01T00:00:00Z")));
 
 		EditorConnection connection(MakeOptions(sessionDirectory));
 		REQUIRE(connection.Call("rpc.ping", nlohmann::json::object(), std::chrono::milliseconds(5000)).IsSuccess());
 
-		// The editor restarts on another port and rewrites its session file.
+		// The same editor process restarts its server on another port and rewrites its session file.
 		first->Stop();
 		first.reset();
 		Tests::PumpedRpcServer second;
 		REQUIRE(Tests::StartFakeEditor(second));
-		REQUIRE(Tests::WriteFakeSessionFile(sessionDirectory, Tests::MakeFakeSession(301, second.GetPort(), "2026-01-01T00:00:01Z")));
+		REQUIRE(Tests::WriteFakeSessionFile(sessionDirectory, Tests::MakeFakeSession(owner.GetProcessId(), second.GetPort(), "2026-01-01T00:00:01Z")));
 
 		const RpcResult result = connection.Call("rpc.ping", nlohmann::json::object(), std::chrono::milliseconds(5000));
 		REQUIRE_MESSAGE(result.IsSuccess(), result.GetError().Message);
@@ -143,6 +175,48 @@ TEST_SUITE("CLI.Discovery")
 		CHECK_FALSE(connection.GetLastError().empty());
 	}
 
+	TEST_CASE("Reconnects stay with the pinned editor")
+	{
+		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("DiscoveryPinned");
+		const std::filesystem::path pinnedProject = Tests::CreateTemporaryDirectory("DiscoveryPinnedProject");
+		const std::filesystem::path otherProject = Tests::CreateTemporaryDirectory("DiscoveryPinnedOther");
+
+		auto original = CreateScope<FakeEditorInstance>();
+		REQUIRE(original->Start(sessionDirectory, "2026-02-01T00:00:00Z", FileSystem::ToUTF8(pinnedProject)));
+		FakeEditorInstance other;
+		REQUIRE(other.Start(sessionDirectory, "2026-01-01T00:00:00Z", FileSystem::ToUTF8(otherProject)));
+
+		EditorConnection connection(MakeOptions(sessionDirectory));
+		REQUIRE(connection.EnsureConnected());
+		CHECK(connection.GetEndpoint()->Port == original->Server.GetPort()); // The newest session
+		REQUIRE(connection.GetPinnedEditor().has_value());
+		CHECK(EditorSession::IsSameProject(connection.GetPinnedEditor()->ProjectPath, pinnedProject));
+
+		// The pinned editor goes away; the other project's editor is still running but must not take its place.
+		const uint32_t originalProcess = original->Session.ProcessId;
+		original.reset();
+		const RpcResult disconnected = connection.Call("rpc.ping", nlohmann::json::object(), std::chrono::milliseconds(5000));
+		REQUIRE(disconnected.IsError());
+		CHECK(disconnected.GetError().Code == JsonRpc::ErrorCode::ConnectionClosed);
+		CHECK(disconnected.GetError().Message.find("Disconnected") != std::string::npos);
+		nlohmann::json status = connection.DescribeStatus();
+		CHECK(status["connected"] == false);
+		CHECK(status["pinnedEditor"]["ProcessId"] == originalProcess);
+		CHECK(status["error"].get<std::string>().find(FileSystem::ToUTF8(pinnedProject)) != std::string::npos);
+
+		// The same project's editor starting again (as a new process) is followed.
+		FakeEditorInstance restarted;
+		REQUIRE(restarted.Start(sessionDirectory, "2026-03-01T00:00:00Z", FileSystem::ToUTF8(pinnedProject)));
+		REQUIRE(connection.Call("rpc.ping", nlohmann::json::object(), std::chrono::milliseconds(5000)).IsSuccess());
+		CHECK(connection.GetEndpoint()->Port == restarted.Server.GetPort());
+		CHECK(connection.GetPinnedEditor()->ProcessId == restarted.Session.ProcessId);
+
+		// Switching editors takes an explicit choice.
+		REQUIRE(connection.ConnectToSession(other.Session));
+		CHECK(connection.GetEndpoint()->Port == other.Server.GetPort());
+		CHECK(EditorSession::IsSameProject(connection.GetPinnedEditor()->ProjectPath, otherProject));
+	}
+
 	TEST_CASE("The editor executable is resolved from the option, the environment or the default location")
 	{
 		Tests::ScopedEnvironmentVariable editorPath("STRATA_EDITOR_PATH", "");
@@ -152,9 +226,16 @@ TEST_SUITE("CLI.Discovery")
 
 		{
 			Tests::ScopedEnvironmentVariable fromEnvironment("STRATA_EDITOR_PATH", "C:/Tools/Editor \xC3\xA9.exe");
-			CHECK(ResolveEditorPath(std::nullopt) == FileSystem::FromUTF8("C:/Tools/Editor \xC3\xA9.exe"));
-			CHECK(ResolveEditorPath(std::string("D:/Explicit.exe")) == FileSystem::FromUTF8("D:/Explicit.exe"));
+			const std::filesystem::path environmentPath = ResolveEditorPath(std::nullopt);
+			CHECK(environmentPath.is_absolute());
+			CHECK(environmentPath.filename() == FileSystem::FromUTF8("Editor \xC3\xA9.exe"));
+			CHECK(ResolveEditorPath(std::string("D:/Explicit.exe")).filename() == "Explicit.exe");
 		}
+
+		// A relative path is made absolute, so the file that is checked is the one that is started.
+		const std::filesystem::path relative = ResolveEditorPath(std::string("tools/StrataEditor.exe"));
+		CHECK(relative.is_absolute());
+		CHECK(relative == (std::filesystem::current_path() / "tools" / "StrataEditor.exe").lexically_normal());
 		CHECK(ResolveEditorPath(std::string()) == defaultPath);
 	}
 
@@ -165,6 +246,7 @@ TEST_SUITE("CLI.Discovery")
 		EditorLaunchSpecification specification;
 		specification.EditorPath = directory / "Missing.exe";
 		specification.ProjectDirectory = directory;
+		specification.SessionDirectory = directory / "Sessions";
 		EditorLaunchResult result = LaunchEditor(specification);
 		CHECK_FALSE(result.Success);
 		CHECK(result.Error.find("not found") != std::string::npos);
@@ -175,6 +257,41 @@ TEST_SUITE("CLI.Discovery")
 		result = LaunchEditor(specification);
 		CHECK_FALSE(result.Success);
 		CHECK(result.Error.find("does not exist") != std::string::npos);
+	}
+
+	TEST_CASE("Launching starts the editor and waits until its session accepts connections")
+	{
+		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("LaunchSessions") / "Sessions";
+		const std::filesystem::path project = Tests::CreateTemporaryDirectory("LaunchProject");
+		Tests::ScopedEnvironmentVariable fakeEditor("STRATA_TEST_FAKE_EDITOR", "1");
+		Tests::ScopedEnvironmentVariable sessionOverride("STRATA_SESSION_DIR", FileSystem::ToUTF8(sessionDirectory));
+
+		EditorLaunchSpecification specification;
+		specification.EditorPath = Tests::GetTestExecutablePath();
+		specification.ProjectDirectory = project;
+		specification.Headless = true;
+		specification.WaitTimeout = std::chrono::milliseconds(20000);
+		EditorLaunchResult result = LaunchEditor(specification);
+		REQUIRE_MESSAGE(result.Success, result.Error);
+		REQUIRE(result.EditorProcess != nullptr);
+		CHECK(result.Session.ProcessId == result.EditorProcess->GetProcessID());
+		CHECK(result.Session.Headless);
+		CHECK(EditorSession::IsSameProject(result.Session.ProjectPath, project));
+		CHECK(EditorSession::ReadProjectSession(project).has_value());
+
+		RpcClient client;
+		REQUIRE_MESSAGE(client.Connect("127.0.0.1", result.Session.Port, result.Session.Token, std::chrono::milliseconds(3000)), client.GetLastError());
+		const RpcResult info = client.Call("editor.info", nlohmann::json::object(), std::chrono::milliseconds(5000));
+		REQUIRE(info.IsSuccess());
+		CHECK(info.GetValue()["Headless"] == true);
+		CHECK(client.Call("editor.quit", nlohmann::json::object(), std::chrono::milliseconds(5000)).IsSuccess());
+		client.Close();
+
+		const std::optional<int> exitCode = result.EditorProcess->Wait(std::chrono::milliseconds(10000));
+		REQUIRE(exitCode.has_value());
+		CHECK(*exitCode == 0);
+		CHECK(EditorSession::FindSessions().empty());
+		CHECK_FALSE(FileSystem::Exists(EditorSession::GetProjectSessionFilePath(project)));
 	}
 
 	TEST_CASE("Waiting for a launched editor's session")

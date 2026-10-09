@@ -398,8 +398,11 @@ namespace Strata::CLI
 		nlohmann::json status = m_Connection.DescribeStatus();
 		status["editorTools"] = m_ToolToMethod.size();
 		nlohmann::json sessions = nlohmann::json::array();
-		for (const EditorSessionInfo& session : EditorSession::FindSessions(m_Connection.GetSessionDirectory()))
-			sessions.push_back(DescribeSession(session));
+		if (const std::optional<std::filesystem::path> sessionDirectory = m_Connection.GetSessionDirectory())
+		{
+			for (const EditorSessionInfo& session : EditorSession::FindSessions(*sessionDirectory))
+				sessions.push_back(DescribeSession(session));
+		}
 		status["knownSessions"] = std::move(sessions);
 		return MakeToolResult(RpcResult::Success(std::move(status)));
 	}
@@ -432,7 +435,7 @@ namespace Strata::CLI
 		probeOptions.Port.reset();
 		probeOptions.Token.clear();
 		probeOptions.ProjectDirectory = projectDirectory;
-		probeOptions.SessionDirectory = m_Connection.GetSessionDirectory();
+		probeOptions.SessionDirectory = m_Connection.GetOptions().SessionDirectory;
 		EditorConnection probe(probeOptions);
 		if (probe.EnsureConnected() && probe.GetEndpoint() && probe.GetEndpoint()->Session)
 		{
@@ -454,7 +457,7 @@ namespace Strata::CLI
 		launch.ProjectDirectory = projectDirectory;
 		launch.Headless = headless;
 		launch.WaitTimeout = m_Specification.LaunchTimeout;
-		launch.SessionDirectory = m_Connection.GetSessionDirectory();
+		launch.SessionDirectory = m_Connection.GetOptions().SessionDirectory;
 
 		EditorLaunchResult launched = LaunchEditor(launch);
 		if (launched.EditorProcess)

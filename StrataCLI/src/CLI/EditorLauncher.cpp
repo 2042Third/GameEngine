@@ -30,11 +30,19 @@ namespace Strata::CLI
 
 	std::filesystem::path ResolveEditorPath(const std::optional<std::string>& explicitPath)
 	{
+		std::filesystem::path path;
 		if (explicitPath && !explicitPath->empty())
-			return FileSystem::FromUTF8(*explicitPath);
-		if (const std::optional<std::string> environmentPath = Platform::GetEnvVar(c_EditorPathVariable); environmentPath && !environmentPath->empty())
-			return FileSystem::FromUTF8(*environmentPath);
-		return Platform::GetExecutableDirectory() / GetDefaultEditorFileName();
+			path = FileSystem::FromUTF8(*explicitPath);
+		else if (const std::optional<std::string> environmentPath = Platform::GetEnvVar(c_EditorPathVariable); environmentPath && !environmentPath->empty())
+			path = FileSystem::FromUTF8(*environmentPath);
+		else
+			return Platform::GetExecutableDirectory() / GetDefaultEditorFileName();
+
+		// The path that is validated must be the one that is started: a relative path would otherwise be checked
+		// against the current directory, but a bare name is searched on PATH when launching.
+		std::error_code error;
+		std::filesystem::path absolute = std::filesystem::absolute(path, error);
+		return (error ? path : absolute).lexically_normal();
 	}
 
 	EditorLaunchResult LaunchEditor(const EditorLaunchSpecification& specification)
@@ -49,6 +57,17 @@ namespace Strata::CLI
 		{
 			result.Error = fmt::format("Project directory '{}' does not exist", FileSystem::ToUTF8(specification.ProjectDirectory));
 			return result;
+		}
+
+		// The editor publishes its session in the same directory (it inherits STRATA_SESSION_DIR); without a usable
+		// one the editor could not be found, so nothing is started.
+		std::filesystem::path sessionDirectory = specification.SessionDirectory;
+		if (sessionDirectory.empty())
+		{
+			std::optional<std::filesystem::path> defaultDirectory = EditorSession::GetSessionDirectory(&result.Error);
+			if (!defaultDirectory)
+				return result;
+			sessionDirectory = std::move(*defaultDirectory);
 		}
 
 		std::error_code error;
@@ -76,7 +95,6 @@ namespace Strata::CLI
 		const uint32_t processId = result.EditorProcess->GetProcessID();
 		ST_INFO("Started the editor (process {}), waiting for its session", processId);
 
-		const std::filesystem::path sessionDirectory = specification.SessionDirectory.empty() ? EditorSession::GetSessionDirectory() : specification.SessionDirectory;
 		Process& process = *result.EditorProcess;
 		std::optional<EditorSessionInfo> session = WaitForEditorSession(processId, sessionDirectory, specification.WaitTimeout,
 			[&process]() { return process.IsRunning(); }, &result.Error);

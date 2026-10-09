@@ -360,9 +360,10 @@ TEST_SUITE("CLI.Mcp")
 		client.GetServer().Tick();
 		CHECK(client.CountNotifications("notifications/tools/list_changed") == 0);
 
+		Tests::LiveProcess owner;
 		Tests::PumpedRpcServer editor;
 		REQUIRE(Tests::StartFakeEditor(editor));
-		REQUIRE(Tests::WriteFakeSessionFile(sessionDirectory, Tests::MakeFakeSession(31337, editor.GetPort(), EditorSession::GetCurrentTimestamp())));
+		REQUIRE(Tests::WriteFakeSessionFile(sessionDirectory, Tests::MakeFakeSession(owner.GetProcessId(), editor.GetPort(), EditorSession::GetCurrentTimestamp())));
 
 		client.GetServer().Tick();
 		CHECK(client.CountNotifications("notifications/tools/list_changed") == 1);
@@ -399,11 +400,14 @@ TEST_SUITE("CLI.Mcp")
 
 	TEST_CASE("Launching reuses an editor that already has the project open")
 	{
-		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("McpLaunchReuse");
+		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("McpLaunchReuse") / "Sessions";
 		const std::filesystem::path projectDirectory = Tests::CreateTemporaryDirectory("McpLaunchReuseProject");
+		Tests::ScopedEnvironmentVariable sessionOverride("STRATA_SESSION_DIR", FileSystem::ToUTF8(sessionDirectory));
+		Tests::LiveProcess owner;
 		Tests::PumpedRpcServer editor;
 		REQUIRE(Tests::StartFakeEditor(editor));
-		REQUIRE(Tests::WriteFakeSessionFile(sessionDirectory, Tests::MakeFakeSession(4321, editor.GetPort(), EditorSession::GetCurrentTimestamp(), FileSystem::ToUTF8(projectDirectory))));
+		// Published like the real editor: the per-user session and the project pointer.
+		REQUIRE(EditorSession::WriteSessionFiles(Tests::MakeFakeSession(owner.GetProcessId(), editor.GetPort(), EditorSession::GetCurrentTimestamp(), FileSystem::ToUTF8(projectDirectory))));
 
 		McpServerSpecification specification = MakeSpecification(sessionDirectory);
 		specification.EditorPath = FileSystem::ToUTF8(sessionDirectory / "NoSuchEditor.exe");
@@ -413,9 +417,83 @@ TEST_SUITE("CLI.Mcp")
 		nlohmann::json result = client.CallTool("strata_launch_editor", nlohmann::json { { "project", FileSystem::ToUTF8(projectDirectory) } });
 		CHECK(result["isError"] == false);
 		CHECK(result["structuredContent"]["launched"] == false);
-		CHECK(result["structuredContent"]["session"]["ProcessId"] == 4321);
+		CHECK(result["structuredContent"]["session"]["ProcessId"] == owner.GetProcessId());
 		CHECK_FALSE(result["structuredContent"]["session"].contains("Token"));
 		CHECK(client.CallTool("entity_create", nlohmann::json { { "Name", "Reused" } })["isError"] == false);
+	}
+
+	TEST_CASE("Launching starts an editor and exposes its methods as tools")
+	{
+		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("McpLaunch") / "Sessions";
+		const std::filesystem::path projectDirectory = Tests::CreateTemporaryDirectory("McpLaunchProject");
+		Tests::ScopedEnvironmentVariable fakeEditor("STRATA_TEST_FAKE_EDITOR", "1");
+		Tests::ScopedEnvironmentVariable sessionOverride("STRATA_SESSION_DIR", FileSystem::ToUTF8(sessionDirectory));
+
+		McpServerSpecification specification = MakeSpecification(sessionDirectory);
+		specification.EditorPath = FileSystem::ToUTF8(Tests::GetTestExecutablePath());
+		specification.LaunchTimeout = std::chrono::milliseconds(20000);
+		McpTestClient client(specification);
+		client.Initialize();
+		CHECK(client.ListToolNames() == c_GenericTools);
+
+		nlohmann::json launched = client.CallTool("strata_launch_editor", nlohmann::json { { "project", FileSystem::ToUTF8(projectDirectory) }, { "headless", true } });
+		REQUIRE_MESSAGE(launched["isError"] == false, GetText(launched));
+		CHECK(launched["structuredContent"]["launched"] == true);
+		CHECK(launched["structuredContent"]["session"]["Headless"] == true);
+		CHECK_FALSE(launched["structuredContent"]["session"].contains("Token"));
+		CHECK(launched["structuredContent"]["editorTools"] == 2);
+		CHECK(client.CountNotifications("notifications/tools/list_changed") == 1);
+
+		const std::vector<std::string> tools = client.ListToolNames();
+		CHECK(std::find(tools.begin(), tools.end(), "editor_info") != tools.end());
+		nlohmann::json info = client.CallTool("editor_info");
+		CHECK(info["isError"] == false);
+		CHECK(EditorSession::IsSameProject(info["structuredContent"]["Project"].get<std::string>(), projectDirectory));
+
+		CHECK(client.CallTool("editor_quit")["isError"] == false);
+		// The editor exits and removes its session; the server notices on its next tick and drops the tools.
+		CHECK(Tests::WaitUntil([&]()
+		{
+			client.GetServer().Tick();
+			return client.CountNotifications("notifications/tools/list_changed") == 2;
+		}, std::chrono::milliseconds(10000)));
+		CHECK(client.ListToolNames() == c_GenericTools);
+	}
+
+	TEST_CASE("Another project's editor does not replace a disconnected one")
+	{
+		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("McpPinned");
+		const std::filesystem::path firstProject = Tests::CreateTemporaryDirectory("McpPinnedFirst");
+		const std::filesystem::path secondProject = Tests::CreateTemporaryDirectory("McpPinnedSecond");
+		McpTestClient client(MakeSpecification(sessionDirectory));
+		client.Initialize();
+
+		auto firstOwner = CreateScope<Tests::LiveProcess>();
+		auto firstEditor = CreateScope<Tests::PumpedRpcServer>();
+		REQUIRE(Tests::StartFakeEditor(*firstEditor));
+		REQUIRE(Tests::WriteFakeSessionFile(sessionDirectory, Tests::MakeFakeSession(firstOwner->GetProcessId(), firstEditor->GetPort(), "2026-01-01T00:00:00Z", FileSystem::ToUTF8(firstProject))));
+		CHECK(client.ListToolNames().size() == c_GenericTools.size() + 5);
+
+		// The first editor exits; an editor for another project is running.
+		firstEditor.reset();
+		firstOwner.reset();
+		Tests::LiveProcess secondOwner;
+		Tests::PumpedRpcServer secondEditor;
+		REQUIRE(Tests::StartFakeEditor(secondEditor));
+		REQUIRE(Tests::WriteFakeSessionFile(sessionDirectory, Tests::MakeFakeSession(secondOwner.GetProcessId(), secondEditor.GetPort(), "2026-02-01T00:00:00Z", FileSystem::ToUTF8(secondProject))));
+
+		client.GetServer().Tick();
+		CHECK(client.CountNotifications("notifications/tools/list_changed") == 1);
+		CHECK(client.ListToolNames() == c_GenericTools);
+
+		nlohmann::json status = client.CallTool("strata_status");
+		CHECK(status["structuredContent"]["connected"] == false);
+		CHECK(status["structuredContent"]["error"].get<std::string>().find("Disconnected") != std::string::npos);
+		CHECK(status["structuredContent"].contains("pinnedEditor"));
+
+		nlohmann::json call = client.CallTool("strata_call", nlohmann::json { { "method", "rpc.ping" } });
+		CHECK(call["isError"] == true);
+		CHECK(GetText(call).find("Disconnected") != std::string::npos);
 	}
 
 	TEST_CASE("The stream runner serves until the input ends")

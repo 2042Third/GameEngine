@@ -1,26 +1,18 @@
 #include "CLI/CliApplication.h"
 
 #include "Strata/Core/Log.h"
-#include "Strata/Core/PlatformDetection.h"
+#include "Strata/Core/Platform.h"
 
 #include <algorithm>
 #include <iostream>
 #include <string>
 #include <vector>
 
-#if defined(ST_PLATFORM_WINDOWS)
-	#include <fcntl.h>
-	#include <io.h>
-#endif
-
 int main(int argc, char** argv)
 {
-#if defined(ST_PLATFORM_WINDOWS)
-	// stdout/stdin carry machine-readable output and the MCP protocol: no "\r\n" translation (the CRT's text
-	// mode). Input lines may then end in "\r", which the MCP server tolerates.
-	_setmode(_fileno(stdout), _O_BINARY);
-	_setmode(_fileno(stdin), _O_BINARY);
-#endif
+	// stdout/stdin carry machine-readable output and the MCP protocol: no newline translation. Input lines may then
+	// end in "\r", which the MCP server tolerates.
+	Strata::Platform::SetBinaryStandardStreams();
 
 	std::vector<std::string> arguments;
 	for (int index = 1; index < argc; index++)

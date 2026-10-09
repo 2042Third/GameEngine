@@ -206,8 +206,11 @@ namespace Strata::CLI
 
 			nlohmann::json status = connection.DescribeStatus();
 			nlohmann::json sessions = nlohmann::json::array();
-			for (const EditorSessionInfo& session : EditorSession::FindSessions(connection.GetSessionDirectory()))
-				sessions.push_back(DescribeSession(session));
+			if (const std::optional<std::filesystem::path> sessionDirectory = connection.GetSessionDirectory())
+			{
+				for (const EditorSessionInfo& session : EditorSession::FindSessions(*sessionDirectory))
+					sessions.push_back(DescribeSession(session));
+			}
 			status["knownSessions"] = std::move(sessions);
 
 			output << PrettyPrint(status) << "\n";
@@ -235,7 +238,8 @@ namespace Strata::CLI
 				return ExitCode::ConnectionFailure;
 			}
 
-			output << PrettyPrint(result.Session.ToJson()) << "\n";
+			// The token stays in the private session file; printing it would expose it in logs and terminals.
+			output << PrettyPrint(DescribeSession(result.Session)) << "\n";
 			return ExitCode::Success;
 		}
 
@@ -404,6 +408,11 @@ namespace Strata::CLI
 			error = "--token requires --port (discovered editor sessions provide their own token)";
 			return std::nullopt;
 		}
+		else if (arguments.Host)
+		{
+			error = "--host requires --port (discovered editor sessions are always reached on 127.0.0.1)";
+			return std::nullopt;
+		}
 
 		if (arguments.Project)
 			options.ProjectDirectory = ToAbsolutePath(*arguments.Project);
@@ -431,10 +440,13 @@ namespace Strata::CLI
 			"  mcp      Serve the Model Context Protocol on stdin/stdout (for AI agents)\n"
 			"\n"
 			"Connection options, in discovery order:\n"
-			"  --port <n> [--token <t>]  Explicit endpoint (else STRATA_EDITOR_PORT / STRATA_EDITOR_TOKEN)\n"
+			"  --port <n>                Explicit endpoint (else STRATA_EDITOR_PORT), authenticated with the\n"
+			"                            STRATA_EDITOR_TOKEN environment variable (preferred) or --token <t>\n"
 			"  --project <dir>           The editor that has this project open (<dir>/.strata/EditorSession.json)\n"
 			"  (none)                    The newest running editor session that accepts a connection\n"
-			"  --host <address>          Editor host (default 127.0.0.1)\n"
+			"  --host <address>          Host of the explicit endpoint (default 127.0.0.1; requires --port)\n"
+			"Once connected, reconnects only reach the same project's editor (e.g. after it restarts).\n"
+			"Avoid --token where possible: command lines are visible to other processes.\n"
 			"\n"
 			"Other options:\n"
 			"  --verbose                 Log diagnostics to stderr\n"
@@ -442,7 +454,7 @@ namespace Strata::CLI
 			"Environment:\n"
 			"  STRATA_EDITOR_PORT, STRATA_EDITOR_TOKEN  Explicit editor endpoint\n"
 			"  STRATA_EDITOR_PATH  Editor executable for launch/mcp (default: StrataEditor next to StrataCLI)\n"
-			"  STRATA_SESSION_DIR  Directory of editor session files (default: <user data>/Strata/Sessions)\n"
+			"  STRATA_SESSION_DIR  Private directory of editor session files (default: <user data>/Strata/Sessions)\n"
 			"\n"
 			"Exit codes: 0 success, 1 the editor returned an error, 2 no editor reachable or connection lost,\n"
 			"            3 invalid command line\n",

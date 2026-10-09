@@ -11,15 +11,6 @@ namespace Strata::CLI
 	namespace
 	{
 
-		std::filesystem::path NormalizePath(const std::filesystem::path& path)
-		{
-			std::error_code error;
-			std::filesystem::path absolute = std::filesystem::absolute(path, error);
-			if (error)
-				absolute = path;
-			return absolute.lexically_normal();
-		}
-
 		bool IsDuplicate(const std::vector<EditorEndpoint>& endpoints, const EditorSessionInfo& session)
 		{
 			return std::any_of(endpoints.begin(), endpoints.end(), [&](const EditorEndpoint& endpoint)
@@ -28,10 +19,10 @@ namespace Strata::CLI
 			});
 		}
 
-		EditorEndpoint MakeSessionEndpoint(const EditorConnectionOptions& options, const EditorSessionInfo& session, const char* source)
+		EditorEndpoint MakeSessionEndpoint(const EditorSessionInfo& session, const char* source)
 		{
 			EditorEndpoint endpoint;
-			endpoint.Host = options.Host;
+			endpoint.Host = c_EditorSessionHost;
 			endpoint.Port = session.Port;
 			endpoint.Token = session.Token;
 			endpoint.Session = session;
@@ -41,7 +32,7 @@ namespace Strata::CLI
 
 	}
 
-	std::vector<EditorEndpoint> DiscoverEditorEndpoints(const EditorConnectionOptions& options)
+	std::vector<EditorEndpoint> DiscoverEditorEndpoints(const EditorConnectionOptions& options, std::string* error)
 	{
 		std::vector<EditorEndpoint> endpoints;
 		if (options.Port)
@@ -54,44 +45,32 @@ namespace Strata::CLI
 			return endpoints;
 		}
 
-		const std::filesystem::path sessionDirectory = options.SessionDirectory.empty() ? EditorSession::GetSessionDirectory() : options.SessionDirectory;
+		std::filesystem::path sessionDirectory = options.SessionDirectory;
+		if (sessionDirectory.empty())
+		{
+			std::optional<std::filesystem::path> defaultDirectory = EditorSession::GetSessionDirectory(error);
+			if (!defaultDirectory)
+				return endpoints;
+			sessionDirectory = std::move(*defaultDirectory);
+		}
+
 		const std::vector<EditorSessionInfo> sessions = EditorSession::FindSessions(sessionDirectory);
 		if (!options.ProjectDirectory.empty())
 		{
-			if (std::optional<EditorSessionInfo> projectSession = EditorSession::ReadProjectSession(options.ProjectDirectory))
-				endpoints.push_back(MakeSessionEndpoint(options, *projectSession, "project"));
+			if (std::optional<EditorSessionInfo> projectSession = EditorSession::ReadProjectSession(options.ProjectDirectory, sessionDirectory))
+				endpoints.push_back(MakeSessionEndpoint(*projectSession, "project"));
 
 			for (const EditorSessionInfo& session : sessions)
 			{
-				if (IsSameProject(session.ProjectPath, options.ProjectDirectory) && !IsDuplicate(endpoints, session))
-					endpoints.push_back(MakeSessionEndpoint(options, session, "session"));
+				if (EditorSession::IsSameProject(session.ProjectPath, options.ProjectDirectory) && !IsDuplicate(endpoints, session))
+					endpoints.push_back(MakeSessionEndpoint(session, "session"));
 			}
 			return endpoints;
 		}
 
 		for (const EditorSessionInfo& session : sessions)
-			endpoints.push_back(MakeSessionEndpoint(options, session, "session"));
+			endpoints.push_back(MakeSessionEndpoint(session, "session"));
 		return endpoints;
-	}
-
-	bool IsSameProject(const std::string& sessionProjectPath, const std::filesystem::path& projectDirectory)
-	{
-		if (sessionProjectPath.empty() || projectDirectory.empty())
-			return false;
-
-		const std::filesystem::path sessionPath = FileSystem::FromUTF8(sessionProjectPath);
-		std::error_code error;
-		if (std::filesystem::equivalent(sessionPath, projectDirectory, error) && !error)
-			return true;
-
-		// Fall back to a lexical comparison (e.g. a directory that no longer exists), ignoring a trailing separator.
-		std::filesystem::path left = NormalizePath(sessionPath);
-		std::filesystem::path right = NormalizePath(projectDirectory);
-		if (!left.has_filename())
-			left = left.parent_path();
-		if (!right.has_filename())
-			right = right.parent_path();
-		return left == right;
 	}
 
 	nlohmann::json DescribeSession(const EditorSessionInfo& session)
@@ -119,13 +98,19 @@ namespace Strata::CLI
 			ST_INFO("Lost the connection to the editor on port {}", m_Endpoint->Port);
 		m_Endpoint.reset();
 
-		const std::vector<EditorEndpoint> endpoints = DiscoverEditorEndpoints(m_Options);
+		std::string discoveryError;
+		std::vector<EditorEndpoint> endpoints = DiscoverEditorEndpoints(m_Options, &discoveryError);
+		std::erase_if(endpoints, [this](const EditorEndpoint& endpoint) { return !IsPinnedEditor(endpoint); });
 		if (endpoints.empty())
 		{
-			if (!m_Options.ProjectDirectory.empty())
-				m_LastError = fmt::format("No Strata editor session found for project '{}'", FileSystem::ToUTF8(m_Options.ProjectDirectory));
+			if (m_Pinned)
+				m_LastError = DescribePinnedEditorMissing();
+			else if (!discoveryError.empty())
+				m_LastError = discoveryError;
+			else if (!m_Options.ProjectDirectory.empty())
+				m_LastError = fmt::format("No running Strata editor has the project '{}' open", FileSystem::ToUTF8(m_Options.ProjectDirectory));
 			else
-				m_LastError = fmt::format("No Strata editor session found in '{}'", FileSystem::ToUTF8(GetSessionDirectory()));
+				m_LastError = "No running Strata editor was found";
 			return false;
 		}
 
@@ -137,7 +122,7 @@ namespace Strata::CLI
 			failures.push_back(fmt::format("port {} ({}): {}", endpoint.Port, endpoint.Source, m_Client.GetLastError()));
 		}
 
-		m_LastError = "No Strata editor is reachable";
+		m_LastError = m_Pinned ? DescribePinnedEditorMissing() : "No Strata editor is reachable";
 		for (const std::string& failure : failures)
 			m_LastError += "\n  " + failure;
 		return false;
@@ -152,13 +137,14 @@ namespace Strata::CLI
 	{
 		Disconnect();
 
-		// Prefer this editor when reconnecting later; an explicit endpoint would otherwise take precedence.
+		// An explicit choice: forget the previous editor, and prefer this one when reconnecting later.
+		m_Pinned.reset();
 		m_Options.Port.reset();
 		m_Options.Token.clear();
 		if (!session.ProjectPath.empty())
 			m_Options.ProjectDirectory = FileSystem::FromUTF8(session.ProjectPath);
 
-		if (TryEndpoint(MakeSessionEndpoint(m_Options, session, "session")))
+		if (TryEndpoint(MakeSessionEndpoint(session, "session")))
 			return true;
 		m_LastError = m_Client.GetLastError();
 		return false;
@@ -184,16 +170,19 @@ namespace Strata::CLI
 		return result;
 	}
 
-	std::filesystem::path EditorConnection::GetSessionDirectory() const
+	std::optional<std::filesystem::path> EditorConnection::GetSessionDirectory(std::string* error) const
 	{
-		return m_Options.SessionDirectory.empty() ? EditorSession::GetSessionDirectory() : m_Options.SessionDirectory;
+		if (!m_Options.SessionDirectory.empty())
+			return m_Options.SessionDirectory;
+		return EditorSession::GetSessionDirectory(error);
 	}
 
 	nlohmann::json EditorConnection::DescribeStatus() const
 	{
 		nlohmann::json status = nlohmann::json::object();
-		status["connected"] = IsConnected() && m_Endpoint.has_value();
-		if (m_Endpoint && IsConnected())
+		const bool connected = IsConnected() && m_Endpoint.has_value();
+		status["connected"] = connected;
+		if (connected)
 		{
 			status["endpoint"] = nlohmann::json { { "host", m_Endpoint->Host }, { "port", m_Endpoint->Port }, { "source", m_Endpoint->Source } };
 			status["session"] = m_Endpoint->Session ? DescribeSession(*m_Endpoint->Session) : nlohmann::json();
@@ -202,7 +191,14 @@ namespace Strata::CLI
 		{
 			status["error"] = m_LastError;
 		}
-		status["sessionDirectory"] = FileSystem::ToUTF8(GetSessionDirectory());
+		if (m_Pinned)
+			status["pinnedEditor"] = nlohmann::json { { "ProjectPath", m_Pinned->ProjectPath }, { "ProcessId", m_Pinned->ProcessId } };
+
+		std::string directoryError;
+		if (const std::optional<std::filesystem::path> sessionDirectory = GetSessionDirectory(&directoryError))
+			status["sessionDirectory"] = FileSystem::ToUTF8(*sessionDirectory);
+		else
+			status["sessionDirectoryError"] = directoryError;
 		if (!m_Options.ProjectDirectory.empty())
 			status["project"] = FileSystem::ToUTF8(m_Options.ProjectDirectory);
 		return status;
@@ -218,8 +214,36 @@ namespace Strata::CLI
 
 		m_Endpoint = endpoint;
 		m_LastError.clear();
+		if (endpoint.Session)
+		{
+			if (!m_Pinned)
+				m_Pinned = PinnedEditor { endpoint.Session->ProjectPath, endpoint.Session->ProcessId };
+			else
+				m_Pinned->ProcessId = endpoint.Session->ProcessId; // Followed a restart of the same project
+		}
 		ST_INFO("Connected to the editor on {}:{} ({})", endpoint.Host, endpoint.Port, endpoint.Source);
 		return true;
+	}
+
+	bool EditorConnection::IsPinnedEditor(const EditorEndpoint& endpoint) const
+	{
+		// Explicit endpoints are fixed by configuration and need no pinning.
+		if (!m_Pinned || !endpoint.Session)
+			return true;
+		if (!m_Pinned->ProjectPath.empty())
+			return EditorSession::IsSameProject(endpoint.Session->ProjectPath, FileSystem::FromUTF8(m_Pinned->ProjectPath));
+		return endpoint.Session->ProcessId == m_Pinned->ProcessId;
+	}
+
+	std::string EditorConnection::DescribePinnedEditorMissing() const
+	{
+		if (!m_Pinned->ProjectPath.empty())
+		{
+			return fmt::format("Disconnected: the editor for project '{}' (last seen as process {}) is not running. Other editors are not "
+				"used automatically; start that project's editor again (e.g. strata_launch_editor).", m_Pinned->ProjectPath, m_Pinned->ProcessId);
+		}
+		return fmt::format("Disconnected: the editor process {} (no project) is not running. Other editors are not used "
+			"automatically; launch or choose an editor explicitly (e.g. strata_launch_editor).", m_Pinned->ProcessId);
 	}
 
 }

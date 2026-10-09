@@ -2,6 +2,7 @@
 
 #include "Network/NetworkTestHelpers.h"
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Core/Platform.h"
 #include "Strata/Network/EditorSession.h"
 #include "Strata/Network/RpcServer.h"
 #include "Strata/Network/Socket.h"
@@ -92,12 +93,11 @@ namespace Strata::Tests
 		return session;
 	}
 
+	// Writes a per-user session file the way the editor does (owner-only). Discovery only accepts it while
+	// session.ProcessId is a running process (see LiveProcess).
 	inline bool WriteFakeSessionFile(const std::filesystem::path& sessionDirectory, const EditorSessionInfo& session)
 	{
-		// A concurrent reader can make the atomic replace fail transiently on Windows; keep trying briefly.
-		const std::filesystem::path path = EditorSession::GetSessionFilePath(sessionDirectory, session.ProcessId);
-		const std::string text = session.ToJson().dump();
-		return WaitUntil([&]() { return FileSystem::WriteText(path, text); }, std::chrono::milliseconds(2000));
+		return Platform::WritePrivateFile(EditorSession::GetSessionFilePath(sessionDirectory, session.ProcessId), session.ToJson().dump());
 	}
 
 }

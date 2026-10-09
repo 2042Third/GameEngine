@@ -13,8 +13,8 @@
 namespace Strata::CLI
 {
 
-	// The editor executable: explicitPath (--editor), else the STRATA_EDITOR_PATH environment variable, else
-	// StrataEditor[.exe] next to the running executable.
+	// The editor executable as an absolute path: explicitPath (--editor), else the STRATA_EDITOR_PATH environment
+	// variable, else StrataEditor[.exe] next to the running executable.
 	std::filesystem::path ResolveEditorPath(const std::optional<std::string>& explicitPath);
 
 	struct EditorLaunchSpecification

@@ -2,10 +2,9 @@
 #include "Strata/Network/EditorSession.h"
 
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Core/JsonUtils.h"
 #include "Strata/Core/Platform.h"
 #include "Strata/Network/JsonRpc.h"
-
-#include <random>
 
 namespace Strata
 {
@@ -16,55 +15,70 @@ namespace Strata
 		constexpr const char* c_SessionDirectoryVariable = "STRATA_SESSION_DIR";
 		constexpr const char* c_ProjectDataDirectory = ".strata";
 		constexpr const char* c_ProjectSessionFileName = "EditorSession.json";
-		constexpr int c_WriteAttempts = 10;
-		constexpr std::chrono::milliseconds c_WriteRetryDelay = std::chrono::milliseconds(20);
+		// Session files are tiny; anything larger is not one, and is not read into memory.
+		constexpr uint64_t c_MaxSessionFileSize = 64 * 1024;
 
 		std::optional<uint64_t> GetUnsigned(const nlohmann::json& object, const char* key)
 		{
-			const auto it = object.find(key);
-			if (it == object.end())
+			const nlohmann::json* value = JsonUtils::Find(object, key);
+			if (!value)
 				return std::nullopt;
-			if (it->is_number_unsigned())
-				return it->get<uint64_t>();
-			if (it->is_number_integer() && it->get<int64_t>() >= 0)
-				return static_cast<uint64_t>(it->get<int64_t>());
+			if (value->is_number_unsigned())
+				return value->get<uint64_t>();
+			if (value->is_number_integer() && value->get<int64_t>() >= 0)
+				return static_cast<uint64_t>(value->get<int64_t>());
 			return std::nullopt;
 		}
 
-		std::string GetString(const nlohmann::json& object, const char* key)
+		std::optional<uint32_t> GetProcessId(const nlohmann::json& object)
 		{
-			const auto it = object.find(key);
-			return it != object.end() && it->is_string() ? it->get<std::string>() : std::string();
+			const std::optional<uint64_t> processId = GetUnsigned(object, "ProcessId");
+			if (!processId || *processId == 0 || *processId > UINT32_MAX)
+				return std::nullopt;
+			return static_cast<uint32_t>(*processId);
 		}
 
-		std::string SerializeSession(const EditorSessionInfo& info)
+		std::optional<nlohmann::json> ReadJsonFile(const std::filesystem::path& path)
 		{
-			return info.ToJson().dump(1, '\t', false, nlohmann::json::error_handler_t::replace) + "\n";
+			// Only regular files: opening a FIFO or device planted in a shared project could block or never end.
+			if (!FileSystem::IsRegularFile(path))
+				return std::nullopt;
+			const std::optional<uint64_t> size = FileSystem::GetFileSize(path);
+			if (!size || *size > c_MaxSessionFileSize)
+				return std::nullopt;
+			const std::optional<std::string> text = FileSystem::ReadText(path);
+			if (!text)
+				return std::nullopt;
+			return JsonRpc::Parse(*text);
 		}
 
-		// Tools polling for sessions briefly hold session files open, and Windows refuses to replace a file that is
-		// open without delete sharing. Such failures are transient, so the atomic write is retried for a moment.
-		bool WriteSessionFile(const std::filesystem::path& path, const std::string& text)
+		// The project pointer: identifies the editor's process, but holds no secret.
+		nlohmann::json MakeProjectPointer(const EditorSessionInfo& info)
 		{
-			for (int attempt = 0; attempt < c_WriteAttempts; attempt++)
-			{
-				if (attempt > 0)
-					std::this_thread::sleep_for(c_WriteRetryDelay);
-				if (FileSystem::WriteText(path, text))
-					return true;
-			}
-			return false;
+			nlohmann::json pointer = nlohmann::json::object();
+			pointer["ProcessId"] = info.ProcessId;
+			pointer["ProjectPath"] = info.ProjectPath;
+			pointer["EditorVersion"] = info.EditorVersion;
+			pointer["Headless"] = info.Headless;
+			pointer["StartedAt"] = info.StartedAt;
+			return pointer;
 		}
 
-		// Restricts a path to its owner (POSIX permission bits; on Windows this only keeps it writable, and
-		// per-user profile ACLs already protect it). Best effort: failures leave the default permissions.
-		void RestrictToOwner(const std::filesystem::path& path, bool isDirectory)
+		bool IsPointerTo(const nlohmann::json& pointer, const EditorSessionInfo& info)
 		{
-			const std::filesystem::perms permissions = isDirectory
-				? std::filesystem::perms::owner_all
-				: std::filesystem::perms::owner_read | std::filesystem::perms::owner_write;
+			return GetProcessId(pointer) == info.ProcessId && JsonUtils::GetString(pointer, "StartedAt") == info.StartedAt;
+		}
+
+		std::filesystem::path NormalizePath(const std::filesystem::path& path)
+		{
 			std::error_code error;
-			std::filesystem::permissions(path, permissions, std::filesystem::perm_options::replace, error);
+			std::filesystem::path absolute = std::filesystem::absolute(path, error);
+			if (error)
+				absolute = path;
+			absolute = absolute.lexically_normal();
+			if (!absolute.has_filename() && absolute.has_parent_path())
+				absolute = absolute.parent_path(); // Ignore a trailing separator
+			return absolute;
 		}
 
 	}
@@ -91,22 +105,19 @@ namespace Strata
 		if (!json.is_object())
 			return std::nullopt;
 
-		const std::optional<uint64_t> processId = GetUnsigned(json, "ProcessId");
+		const std::optional<uint32_t> processId = GetProcessId(json);
 		const std::optional<uint64_t> port = GetUnsigned(json, "Port");
-		if (!processId || *processId == 0 || *processId > UINT32_MAX)
-			return std::nullopt;
-		if (!port || *port == 0 || *port > UINT16_MAX)
+		if (!processId || !port || *port == 0 || *port > UINT16_MAX)
 			return std::nullopt;
 
 		EditorSessionInfo info;
-		info.ProcessId = static_cast<uint32_t>(*processId);
+		info.ProcessId = *processId;
 		info.Port = static_cast<uint16_t>(*port);
-		info.Token = GetString(json, "Token");
-		info.ProjectPath = GetString(json, "ProjectPath");
-		info.EditorVersion = GetString(json, "EditorVersion");
-		info.StartedAt = GetString(json, "StartedAt");
-		const auto headless = json.find("Headless");
-		info.Headless = headless != json.end() && headless->is_boolean() && headless->get<bool>();
+		info.Token = JsonUtils::GetString(json, "Token");
+		info.ProjectPath = JsonUtils::GetString(json, "ProjectPath");
+		info.EditorVersion = JsonUtils::GetString(json, "EditorVersion");
+		info.StartedAt = JsonUtils::GetString(json, "StartedAt");
+		info.Headless = JsonUtils::GetBool(json, "Headless", false);
 		return info;
 	}
 
@@ -114,16 +125,33 @@ namespace Strata
 	// EditorSession
 	////////////////////////////////////////////////////////////////////////////////
 
-	std::filesystem::path EditorSession::GetSessionDirectory()
+	std::optional<std::filesystem::path> EditorSession::GetSessionDirectory(std::string* error)
 	{
+		std::filesystem::path directory;
 		if (const std::optional<std::string> overridden = Platform::GetEnvVar(c_SessionDirectoryVariable); overridden && !overridden->empty())
-			return FileSystem::FromUTF8(*overridden);
-		return Platform::GetUserDataDirectory("Strata") / "Sessions";
-	}
+		{
+			directory = FileSystem::FromUTF8(*overridden);
+		}
+		else if (const std::optional<std::filesystem::path> userData = Platform::FindUserDataDirectory("Strata"))
+		{
+			directory = *userData / "Sessions";
+		}
+		else
+		{
+			// Session files hold authentication tokens, so a shared location such as the temp directory is never used.
+			if (error)
+				*error = fmt::format("No per-user data directory is available for editor sessions (set {} to a private directory)", c_SessionDirectoryVariable);
+			return std::nullopt;
+		}
 
-	std::filesystem::path EditorSession::GetSessionFilePath(uint32_t processId)
-	{
-		return GetSessionFilePath(GetSessionDirectory(), processId);
+		std::string problem;
+		if (!Platform::EnsurePrivateDirectory(directory, &problem))
+		{
+			if (error)
+				*error = fmt::format("The editor session directory cannot be used: {}", problem);
+			return std::nullopt;
+		}
+		return directory;
 	}
 
 	std::filesystem::path EditorSession::GetSessionFilePath(const std::filesystem::path& sessionDirectory, uint32_t processId)
@@ -136,115 +164,141 @@ namespace Strata
 		return projectDirectory / c_ProjectDataDirectory / c_ProjectSessionFileName;
 	}
 
-	bool EditorSession::WriteSessionFiles(const EditorSessionInfo& info)
+	bool EditorSession::WriteSessionFiles(const EditorSessionInfo& info, std::string* error)
 	{
-		const std::string text = SerializeSession(info);
-		bool success = true;
-
-		const std::filesystem::path sessionDirectory = GetSessionDirectory();
-		if (!FileSystem::CreateDirectories(sessionDirectory))
+		std::string problem;
+		const std::optional<std::filesystem::path> sessionDirectory = GetSessionDirectory(&problem);
+		if (!sessionDirectory)
 		{
-			ST_CORE_ERROR("EditorSession: failed to create '{}'", FileSystem::ToUTF8(sessionDirectory));
+			ST_CORE_ERROR("EditorSession: {}", problem);
+			if (error)
+				*error = problem;
 			return false;
 		}
-		RestrictToOwner(sessionDirectory, true);
 
-		const std::filesystem::path sessionFile = GetSessionFilePath(sessionDirectory, info.ProcessId);
-		if (WriteSessionFile(sessionFile, text))
+		const std::filesystem::path sessionFile = GetSessionFilePath(*sessionDirectory, info.ProcessId);
+		const std::string session = info.ToJson().dump(1, '\t', false, nlohmann::json::error_handler_t::replace) + "\n";
+		if (!Platform::WritePrivateFile(sessionFile, session, &problem))
 		{
-			RestrictToOwner(sessionFile, false);
-		}
-		else
-		{
-			ST_CORE_ERROR("EditorSession: failed to write '{}'", FileSystem::ToUTF8(sessionFile));
-			success = false;
+			ST_CORE_ERROR("EditorSession: {}", problem);
+			if (error)
+				*error = problem;
+			return false;
 		}
 
 		if (!info.ProjectPath.empty())
 		{
-			const std::filesystem::path projectFile = GetProjectSessionFilePath(FileSystem::FromUTF8(info.ProjectPath));
-			if (WriteSessionFile(projectFile, text))
+			const std::filesystem::path pointerFile = GetProjectSessionFilePath(FileSystem::FromUTF8(info.ProjectPath));
+			const std::string pointer = MakeProjectPointer(info).dump(1, '\t', false, nlohmann::json::error_handler_t::replace) + "\n";
+			if (!Platform::WritePrivateFile(pointerFile, pointer, &problem))
 			{
-				RestrictToOwner(projectFile, false);
-			}
-			else
-			{
-				ST_CORE_ERROR("EditorSession: failed to write '{}'", FileSystem::ToUTF8(projectFile));
-				success = false;
+				ST_CORE_ERROR("EditorSession: {}", problem);
+				if (error)
+					*error = problem;
+				return false;
 			}
 		}
-		return success;
+		return true;
 	}
 
 	void EditorSession::RemoveSessionFiles(const EditorSessionInfo& info)
 	{
 		std::error_code error;
-		std::filesystem::remove(GetSessionFilePath(info.ProcessId), error);
+		if (const std::optional<std::filesystem::path> sessionDirectory = GetSessionDirectory())
+			std::filesystem::remove(GetSessionFilePath(*sessionDirectory, info.ProcessId), error);
 
 		if (info.ProjectPath.empty())
 			return;
 
-		// Another editor may have opened the project since; only remove the file if it is still ours.
-		const std::filesystem::path projectFile = GetProjectSessionFilePath(FileSystem::FromUTF8(info.ProjectPath));
-		const std::optional<EditorSessionInfo> current = ReadSessionFile(projectFile);
-		if (current && current->ProcessId == info.ProcessId && current->Token == info.Token)
-			std::filesystem::remove(projectFile, error);
+		// Another editor may write its own pointer at any moment, so checking and then deleting would race.
+		// Instead, take the pointer out of place atomically, inspect it, and put it back unless it is ours; if a
+		// newer pointer appeared in the meantime, the taken (older) one is dropped.
+		const std::filesystem::path pointerFile = GetProjectSessionFilePath(FileSystem::FromUTF8(info.ProjectPath));
+		std::filesystem::path takenFile = pointerFile;
+		takenFile += FileSystem::FromUTF8(fmt::format(".removing-{}", info.ProcessId));
+		std::filesystem::rename(pointerFile, takenFile, error);
+		if (error)
+			return;
+
+		const std::optional<nlohmann::json> pointer = ReadJsonFile(takenFile);
+		if (pointer && IsPointerTo(*pointer, info))
+		{
+			std::filesystem::remove(takenFile, error);
+			return;
+		}
+		if (!Platform::RenameNoReplace(takenFile, pointerFile))
+			std::filesystem::remove(takenFile, error);
 	}
 
 	std::vector<EditorSessionInfo> EditorSession::FindSessions()
 	{
-		return FindSessions(GetSessionDirectory());
+		std::string error;
+		const std::optional<std::filesystem::path> sessionDirectory = GetSessionDirectory(&error);
+		if (!sessionDirectory)
+		{
+			ST_CORE_WARN("EditorSession: {}", error);
+			return {};
+		}
+		return FindSessions(*sessionDirectory);
 	}
 
 	std::vector<EditorSessionInfo> EditorSession::FindSessions(const std::filesystem::path& sessionDirectory)
 	{
-		struct FoundSession
+		std::string problem;
+		if (!Platform::EnsurePrivateDirectory(sessionDirectory, &problem))
 		{
-			EditorSessionInfo Info;
-			int64_t WriteTime = 0;
-		};
+			ST_CORE_WARN("EditorSession: ignoring the session directory: {}", problem);
+			return {};
+		}
 
-		std::vector<FoundSession> found;
+		std::vector<EditorSessionInfo> sessions;
 		std::error_code error;
 		for (std::filesystem::directory_iterator it(sessionDirectory, error); !error && it != std::filesystem::directory_iterator(); it.increment(error))
 		{
-			std::error_code entryError;
-			if (!it->is_regular_file(entryError) || it->path().extension() != ".json")
+			if (it->path().extension() != ".json")
 				continue;
 
 			std::optional<EditorSessionInfo> session = ReadSessionFile(it->path());
-			if (!session)
+			if (!session || FileSystem::ToUTF8(it->path().stem()) != std::to_string(session->ProcessId))
 				continue;
-			found.push_back(FoundSession { std::move(*session), FileSystem::GetLastWriteTime(it->path()).value_or(0) });
+
+			if (!Platform::IsProcessAlive(session->ProcessId))
+			{
+				// The editor exited without cleaning up (e.g. it crashed).
+				std::error_code removeError;
+				std::filesystem::remove(it->path(), removeError);
+				ST_CORE_INFO("EditorSession: removed the stale session of process {}", session->ProcessId);
+				continue;
+			}
+			sessions.push_back(std::move(*session));
 		}
 
-		// ISO-8601 UTC timestamps of a fixed format order lexicographically; the write time breaks ties.
-		std::sort(found.begin(), found.end(), [](const FoundSession& left, const FoundSession& right)
+		// ISO-8601 UTC timestamps of a fixed format order lexicographically; the process id breaks ties.
+		std::sort(sessions.begin(), sessions.end(), [](const EditorSessionInfo& left, const EditorSessionInfo& right)
 		{
-			if (left.Info.StartedAt != right.Info.StartedAt)
-				return left.Info.StartedAt > right.Info.StartedAt;
-			if (left.WriteTime != right.WriteTime)
-				return left.WriteTime > right.WriteTime;
-			return left.Info.ProcessId > right.Info.ProcessId;
+			if (left.StartedAt != right.StartedAt)
+				return left.StartedAt > right.StartedAt;
+			return left.ProcessId > right.ProcessId;
 		});
-
-		std::vector<EditorSessionInfo> sessions;
-		sessions.reserve(found.size());
-		for (FoundSession& session : found)
-			sessions.push_back(std::move(session.Info));
 		return sessions;
 	}
 
 	std::optional<EditorSessionInfo> EditorSession::ReadSessionFile(const std::filesystem::path& path)
 	{
-		const std::optional<std::string> text = FileSystem::ReadText(path);
-		if (!text)
+		if (!FileSystem::Exists(path))
 			return std::nullopt;
 
-		const std::optional<nlohmann::json> json = JsonRpc::Parse(*text);
+		std::string problem;
+		if (!Platform::IsTrustedFile(path, &problem))
+		{
+			ST_CORE_WARN("EditorSession: ignoring an untrusted session file: {}", problem);
+			return std::nullopt;
+		}
+
+		const std::optional<nlohmann::json> json = ReadJsonFile(path);
 		if (!json)
 		{
-			ST_CORE_WARN("EditorSession: '{}' is not valid JSON", FileSystem::ToUTF8(path));
+			ST_CORE_TRACE("EditorSession: '{}' is not a valid session file", FileSystem::ToUTF8(path));
 			return std::nullopt;
 		}
 		return EditorSessionInfo::FromJson(*json);
@@ -252,16 +306,57 @@ namespace Strata
 
 	std::optional<EditorSessionInfo> EditorSession::ReadProjectSession(const std::filesystem::path& projectDirectory)
 	{
-		return ReadSessionFile(GetProjectSessionFilePath(projectDirectory));
+		const std::optional<std::filesystem::path> sessionDirectory = GetSessionDirectory();
+		if (!sessionDirectory)
+			return std::nullopt;
+		return ReadProjectSession(projectDirectory, *sessionDirectory);
+	}
+
+	std::optional<EditorSessionInfo> EditorSession::ReadProjectSession(const std::filesystem::path& projectDirectory, const std::filesystem::path& sessionDirectory)
+	{
+		const std::optional<nlohmann::json> pointer = ReadJsonFile(GetProjectSessionFilePath(projectDirectory));
+		if (!pointer)
+			return std::nullopt;
+		const std::optional<uint32_t> processId = GetProcessId(*pointer);
+		if (!processId)
+			return std::nullopt;
+
+		// Everything the connection needs comes from the per-user file; the pointer only chose which one.
+		std::optional<EditorSessionInfo> session = ReadSessionFile(GetSessionFilePath(sessionDirectory, *processId));
+		if (!session || session->ProcessId != *processId || !IsSameProject(session->ProjectPath, projectDirectory))
+			return std::nullopt;
+		if (!Platform::IsProcessAlive(*processId))
+			return std::nullopt;
+		return session;
+	}
+
+	bool EditorSession::IsSameProject(const std::string& sessionProjectPath, const std::filesystem::path& projectDirectory)
+	{
+		if (sessionProjectPath.empty() || projectDirectory.empty())
+			return false;
+
+		const std::filesystem::path sessionPath = FileSystem::FromUTF8(sessionProjectPath);
+		std::error_code error;
+		if (std::filesystem::equivalent(sessionPath, projectDirectory, error) && !error)
+			return true;
+
+		// Fall back to a lexical comparison (e.g. a directory that no longer exists).
+		return NormalizePath(sessionPath) == NormalizePath(projectDirectory);
 	}
 
 	std::string EditorSession::GenerateSessionToken()
 	{
-		std::random_device device;
+		std::array<uint8_t, 16> bytes = {};
+		if (!Platform::GenerateSecureRandom(bytes))
+		{
+			ST_CORE_ERROR("EditorSession: the system random number generator failed");
+			return {};
+		}
+
 		std::string token;
-		token.reserve(32);
-		for (int index = 0; index < 4; index++)
-			token += fmt::format("{:08x}", static_cast<uint32_t>(device()));
+		token.reserve(bytes.size() * 2);
+		for (const uint8_t byte : bytes)
+			token += fmt::format("{:02x}", byte);
 		return token;
 	}
 

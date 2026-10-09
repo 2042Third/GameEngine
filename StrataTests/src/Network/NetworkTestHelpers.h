@@ -1,9 +1,11 @@
 #pragma once
 
 #include "Strata/Core/Platform.h"
+#include "Strata/Core/Process.h"
 #include "Strata/Network/JsonRpc.h"
 #include "Strata/Network/RpcServer.h"
 #include "Strata/Network/Socket.h"
+#include "TestHelpers.h"
 
 #include <nlohmann/json.hpp>
 
@@ -167,6 +169,56 @@ namespace Strata::Tests
 	private:
 		TcpSocket m_Client;
 		TcpSocket m_Server;
+	};
+
+	// A running helper process (the test executable sleeping). Session discovery only accepts sessions of running
+	// processes, so fake sessions served by this test process are attributed to one of these.
+	class LiveProcess
+	{
+	public:
+		LiveProcess()
+		{
+			ProcessSpecification specification;
+			specification.Executable = GetTestExecutablePath();
+			specification.Arguments = { "--strata-test-helper=sleep", "60000" };
+			specification.Output = ProcessOutputMode::Discard;
+			m_Process.Start(specification);
+		}
+
+		~LiveProcess()
+		{
+			m_Process.Terminate();
+		}
+
+		LiveProcess(const LiveProcess&) = delete;
+		LiveProcess& operator=(const LiveProcess&) = delete;
+
+		uint32_t GetProcessId() const { return m_Process.GetProcessID(); }
+	private:
+		Process m_Process;
+	};
+
+	// A helper process that has already exited. The object keeps (and on POSIX has reaped) the process, so its id
+	// cannot be reused by another process while the test runs.
+	class ExitedProcess
+	{
+	public:
+		ExitedProcess()
+		{
+			ProcessSpecification specification;
+			specification.Executable = GetTestExecutablePath();
+			specification.Arguments = { "--strata-test-helper=exit-code", "0" };
+			specification.Output = ProcessOutputMode::Discard;
+			if (m_Process.Start(specification))
+				m_Process.Wait(std::chrono::milliseconds(10000));
+		}
+
+		ExitedProcess(const ExitedProcess&) = delete;
+		ExitedProcess& operator=(const ExitedProcess&) = delete;
+
+		uint32_t GetProcessId() const { return m_Process.GetProcessID(); }
+	private:
+		Process m_Process;
 	};
 
 	// Sets an environment variable for the lifetime of the object. An empty value counts as unset for every

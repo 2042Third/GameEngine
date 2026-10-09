@@ -31,34 +31,52 @@ namespace Strata
 		static std::optional<EditorSessionInfo> FromJson(const nlohmann::json& json);
 	};
 
-	// Session files:
-	//   <session directory>/<process id>.json   one per running editor
-	//   <project>/.strata/EditorSession.json    when the editor has a project open
-	// The session directory is <user data directory>/Strata/Sessions (see Platform::GetUserDataDirectory),
-	// unless the STRATA_SESSION_DIR environment variable names another directory (used by tests to isolate
-	// themselves from real editor sessions). Files are written atomically and readable only by tools that can
-	// read the user's files, which is what protects the token.
+	// Session files.
+	//
+	//   <session directory>/<process id>.json  The full session, including the token. Written owner-only (POSIX mode
+	//                                          0600, owner-only DACL on Windows) into a private directory: per-user
+	//                                          data/Strata/Sessions (see Platform::FindUserDataDirectory), or the
+	//                                          STRATA_SESSION_DIR environment variable (used by tests to isolate
+	//                                          themselves). There is no fallback to a shared location; on POSIX the
+	//                                          directory must be owned by the current user and not writable by others.
+	//   <project>/.strata/EditorSession.json   A pointer for tools started in a project: ProcessId, ProjectPath,
+	//                                          EditorVersion, Headless and StartedAt only, never the port or token.
+	//                                          Project directories may be shared, so the pointer is untrusted: it only
+	//                                          names a process whose per-user session file must exist, be trusted,
+	//                                          belong to a running process and name the same project.
+	//
+	// Session files of processes that are no longer running are deleted by FindSessions.
 	class EditorSession
 	{
 	public:
-		static std::filesystem::path GetSessionDirectory();
-		static std::filesystem::path GetSessionFilePath(uint32_t processId);
+		// The private session directory (created if missing), or nullopt with the reason in error.
+		static std::optional<std::filesystem::path> GetSessionDirectory(std::string* error = nullptr);
 		static std::filesystem::path GetSessionFilePath(const std::filesystem::path& sessionDirectory, uint32_t processId);
 		static std::filesystem::path GetProjectSessionFilePath(const std::filesystem::path& projectDirectory);
 
-		// Writes the per-process file and, when ProjectPath is set, the project file.
-		static bool WriteSessionFiles(const EditorSessionInfo& info);
-		// Removes the per-process file, and the project file if it still belongs to info's process.
+		// Writes the per-process file and, when ProjectPath is set, the project pointer.
+		static bool WriteSessionFiles(const EditorSessionInfo& info, std::string* error = nullptr);
+		// Removes the per-process file, and the project pointer if it still refers to info's process (another
+		// editor may have opened the project since; its pointer is left alone).
 		static void RemoveSessionFiles(const EditorSessionInfo& info);
 
-		// Every readable session in the directory, newest (StartedAt) first. Stale files of editors that exited
-		// without cleaning up are included; callers verify sessions by connecting.
+		// Sessions of running editors in the directory, newest (StartedAt) first. Files of processes that have
+		// exited are deleted; untrusted files are ignored. Callers still verify sessions by connecting.
 		static std::vector<EditorSessionInfo> FindSessions();
 		static std::vector<EditorSessionInfo> FindSessions(const std::filesystem::path& sessionDirectory);
+		// Reads a per-user session file (nullopt if it is missing, untrusted or invalid).
 		static std::optional<EditorSessionInfo> ReadSessionFile(const std::filesystem::path& path);
-		static std::optional<EditorSessionInfo> ReadProjectSession(const std::filesystem::path& projectDirectory);
 
-		// 32 random lower-case hexadecimal characters (128 bits from std::random_device).
+		// The session of the running editor that has projectDirectory open, located through the project pointer
+		// and validated as described above.
+		static std::optional<EditorSessionInfo> ReadProjectSession(const std::filesystem::path& projectDirectory);
+		static std::optional<EditorSessionInfo> ReadProjectSession(const std::filesystem::path& projectDirectory, const std::filesystem::path& sessionDirectory);
+
+		// Whether a session's ProjectPath (UTF-8) refers to projectDirectory.
+		static bool IsSameProject(const std::string& sessionProjectPath, const std::filesystem::path& projectDirectory);
+
+		// 32 lower-case hexadecimal characters (128 bits from the system's secure random generator), or an empty
+		// string if the generator fails (which RpcServer::Start then refuses).
 		static std::string GenerateSessionToken();
 		// The current UTC time in ISO-8601 form ("YYYY-MM-DDTHH:MM:SSZ").
 		static std::string GetCurrentTimestamp();
