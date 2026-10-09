@@ -10,10 +10,12 @@
 #include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/Core/Base64.h>
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/JobSystem.h>
 #include <Strata/Reflection/PropertyJson.h>
 
 #include <stb_image.h>
 
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <optional>
@@ -209,6 +211,66 @@ TEST_SUITE("GPU.Editor.Viewport")
 		harness.Capture({ { "width", 64 }, { "height", 64 } }, &result);
 		CHECK(result["camera"] == "scene");
 		harness.Context.Stop();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Captures are encoded and saved on job threads, not in the frame")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		REQUIRE_FALSE(JobSystem::IsInitialized());
+
+		// One worker, kept busy until the test releases it: the capture can only finish once the worker is free.
+		std::atomic<bool> release = false;
+		struct JobSystemScope
+		{
+			std::atomic<bool>& Release;
+			explicit JobSystemScope(std::atomic<bool>& release)
+				: Release(release)
+			{
+				JobSystemSpecification specification;
+				specification.WorkerThreadCount = 1;
+				specification.IOThreadCount = 1;
+				JobSystem::Init(specification);
+			}
+			~JobSystemScope()
+			{
+				Release = true;
+				JobSystem::Shutdown();
+			}
+		} jobSystem(release);
+		JobSystem::Submit([&release]()
+		{
+			while (!release)
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		});
+
+		ViewportGPUHarness harness;
+		harness.AddScene();
+		const std::filesystem::path path = Tests::CreateTemporaryDirectory("ViewportCaptureJobs") / "Capture.png";
+		auto completed = std::make_shared<std::optional<EditorCommandResult>>();
+		REQUIRE(harness.Runner.Run(harness.Context, harness.Commands, "viewport.capture", { { "width", 32 }, { "height", 32 }, { "path", FileSystem::ToUTF8(path) } },
+			[completed](const EditorCommandResult& result) { *completed = result; }));
+		for (int frame = 0; frame < 300; frame++)
+		{
+			harness.Runner.Update(harness.Context);
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		CHECK_FALSE(*completed); // Long after the GPU finished, the encoding still waits for the worker
+		CHECK_FALSE(FileSystem::Exists(path));
+
+		release = true;
+		for (int frame = 0; frame < 20000 && !*completed; frame++)
+		{
+			harness.Runner.Update(harness.Context);
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		REQUIRE(*completed);
+		INFO((*completed)->Error);
+		CHECK((*completed)->Success);
+		const std::optional<std::vector<uint8_t>> saved = FileSystem::ReadBytes(path);
+		REQUIRE(saved);
+		CHECK(*Base64::Decode((*completed)->Value["Image"]["Data"].get<std::string>()) == *saved);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

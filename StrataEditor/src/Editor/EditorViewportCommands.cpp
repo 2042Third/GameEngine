@@ -4,6 +4,7 @@
 
 #include <Strata/Core/Base64.h>
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/JobSystem.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Core/StringUtils.h>
 #include <Strata/Renderer/ImageWriter.h>
@@ -96,6 +97,16 @@ namespace Strata
 			std::filesystem::path Path; // Empty: the image is only returned
 		};
 
+		// The image and what the jobs make of it. Jobs write it; the main thread reads it once a job has completed.
+		struct EncodedCapture
+		{
+			ReadbackImage Image;
+			std::vector<uint8_t> Png;
+			std::string Base64;
+			std::string Error;     // Encoding failed when set
+			std::string SaveError; // Saving failed when set
+		};
+
 		struct CaptureProgress
 		{
 			Scope<TextureReadback> Readback;
@@ -103,6 +114,10 @@ namespace Strata
 			bool Overlays = false;
 			uint32_t PendingAssets = 0;
 			std::chrono::steady_clock::time_point Submitted;
+			Ref<EncodedCapture> Encoded; // Set once the pixels are on the CPU
+			JobHandle EncodeJob;
+			JobHandle SaveJob;
+			bool SaveStarted = false;
 		};
 
 		// First poll (the frame after the command): renders the image and starts reading it back.
@@ -135,28 +150,62 @@ namespace Strata
 			return std::nullopt;
 		}
 
-		// Later polls: once the GPU finished the copy, encodes the image and saves it when asked to.
-		std::optional<EditorCommandResult> FinishCapture(const CaptureRequest& request, CaptureProgress& progress)
+		// Later polls: wait for the GPU copy, encode the image on a worker thread (PNG compression and Base64 of a large
+		// image take long enough to hitch the editor), save it on an I/O thread when asked to, then report.
+		std::optional<EditorCommandResult> ContinueCapture(const CaptureRequest& request, CaptureProgress& progress)
 		{
-			if (!progress.Readback->IsReady())
+			if (!progress.Encoded)
 			{
-				if (std::chrono::steady_clock::now() - progress.Submitted > c_CaptureReadbackTimeout)
-					return EditorCommandResult::Fail(fmt::format("The GPU did not finish the capture within {} seconds", c_CaptureReadbackTimeout.count()));
+				if (!progress.Readback->IsReady())
+				{
+					if (std::chrono::steady_clock::now() - progress.Submitted > c_CaptureReadbackTimeout)
+						return EditorCommandResult::Fail(fmt::format("The GPU did not finish the capture within {} seconds", c_CaptureReadbackTimeout.count()));
+					return std::nullopt;
+				}
+				Ref<EncodedCapture> encoded = CreateRef<EncodedCapture>();
+				if (!progress.Readback->GetResult(encoded->Image))
+					return EditorCommandResult::Fail("Mapping the captured image failed");
+				progress.Readback.reset();
+				progress.Encoded = encoded;
+				progress.EncodeJob = JobSystem::Submit([encoded]()
+				{
+					std::string error;
+					std::optional<std::vector<uint8_t>> png = ImageWriter::EncodePNG(encoded->Image, true, &error);
+					if (!png)
+					{
+						encoded->Error = fmt::format("Encoding the capture as PNG failed: {}", error);
+						return;
+					}
+					encoded->Base64 = Base64::Encode(*png);
+					encoded->Png = std::move(*png);
+				});
 				return std::nullopt;
 			}
 
-			ReadbackImage image;
-			if (!progress.Readback->GetResult(image))
-				return EditorCommandResult::Fail("Mapping the captured image failed");
-			std::string error;
-			const std::optional<std::vector<uint8_t>> png = ImageWriter::EncodePNG(image, true, &error);
-			if (!png)
-				return EditorCommandResult::Fail(fmt::format("Encoding the capture as PNG failed: {}", error));
+			if (!progress.EncodeJob.IsComplete())
+				return std::nullopt;
+			EncodedCapture& encoded = *progress.Encoded;
+			if (!encoded.Error.empty())
+				return EditorCommandResult::Fail(encoded.Error);
+			if (!request.Path.empty() && !progress.SaveStarted)
+			{
+				progress.SaveStarted = true;
+				progress.SaveJob = JobSystem::SubmitIO([encodedRef = progress.Encoded, path = request.Path]()
+				{
+					if (!FileSystem::CreateDirectories(path.parent_path()) || !FileSystem::WriteBytes(path, encodedRef->Png))
+						encodedRef->SaveError = fmt::format("Cannot write the capture to '{}'", FileSystem::ToUTF8(path));
+				});
+				return std::nullopt;
+			}
+			if (!progress.SaveJob.IsComplete())
+				return std::nullopt;
+			if (!encoded.SaveError.empty())
+				return EditorCommandResult::Fail(encoded.SaveError);
 
 			nlohmann::json result = {
-				{ "Image", { { "MimeType", "image/png" }, { "Data", Base64::Encode(*png) } } },
-				{ "width", image.Width },
-				{ "height", image.Height },
+				{ "Image", { { "MimeType", "image/png" }, { "Data", std::move(encoded.Base64) } } },
+				{ "width", encoded.Image.Width },
+				{ "height", encoded.Image.Height },
 				{ "camera", progress.View.FromScene ? "scene" : "editor" },
 				{ "overlays", progress.Overlays },
 				{ "pendingAssets", progress.PendingAssets }
@@ -164,11 +213,7 @@ namespace Strata
 			if (!progress.View.Notice.empty())
 				result["notice"] = progress.View.Notice;
 			if (!request.Path.empty())
-			{
-				if (!FileSystem::CreateDirectories(request.Path.parent_path()) || !FileSystem::WriteBytes(request.Path, *png))
-					return EditorCommandResult::Fail(fmt::format("Cannot write the capture to '{}'", FileSystem::ToUTF8(request.Path)));
 				result["path"] = FileSystem::ToUTF8(request.Path);
-			}
 			return EditorCommandResult::Ok(std::move(result));
 		}
 
@@ -347,13 +392,13 @@ namespace Strata
 				}
 				request.Size = glm::uvec2(static_cast<uint32_t>(std::clamp<int64_t>(captureWidth, 1, limit)), static_cast<uint32_t>(std::clamp<int64_t>(captureHeight, 1, limit)));
 
-				// Polled from the next frame on: the first poll renders, the later ones wait for the GPU readback.
+				// Polled from the next frame on: the first poll renders, the later ones wait for the readback and the jobs.
 				auto progress = std::make_shared<CaptureProgress>();
 				return EditorCommandResult::Defer([request, progress](EditorContext& context) -> std::optional<EditorCommandResult>
 				{
-					if (!progress->Readback)
+					if (!progress->Readback && !progress->Encoded)
 						return StartCapture(context, request, *progress);
-					return FinishCapture(request, *progress);
+					return ContinueCapture(request, *progress);
 				});
 			} });
 	}
