@@ -49,18 +49,24 @@ namespace Strata
 		// created.
 		static bool WritePrivateFile(const std::filesystem::path& path, std::string_view contents, std::string* error = nullptr);
 		// Creates directory (and its parents) if missing and verifies it may hold secrets: a real directory (not a
-		// symbolic link, junction or other reparse point) that only the current user can modify. POSIX: owned by
-		// the current user; a newly created leaf gets mode 0700, and group/other write permission on an owned
-		// directory is removed. Windows: owned by the current user (or by Administrators when elevated), with no
-		// access control entry granting modify rights to accounts other than the user, SYSTEM and Administrators.
+		// symbolic link or junction) that only the current user can modify. POSIX: owned by the current user; a
+		// newly created leaf gets mode 0700, and group/other write permission on an owned directory is removed.
+		// Windows: owned by the current user, Administrators or SYSTEM (an elevated run creates objects owned by
+		// Administrators), with no access control entry granting modify rights to anyone else. Reparse points that
+		// hold an object's own data (e.g. cloud placeholders) are accepted; links and junctions are not.
 		static bool EnsurePrivateDirectory(const std::filesystem::path& directory, std::string* error = nullptr);
 		// Whether a file can be trusted as written by the current user: a regular file (not a link) that only the
-		// current user can modify, by the same rules as EnsurePrivateDirectory.
+		// current user can modify, by the same rules as EnsurePrivateDirectory. To read such a file, use
+		// ReadTrustedFile, which checks and reads through one handle.
 		static bool IsTrustedFile(const std::filesystem::path& path, std::string* error = nullptr);
-		// Reads a regular file of at most maxSize bytes through a single open handle, so it cannot be swapped
-		// between the checks and the read. Links (final component), directories, FIFOs and devices are rejected
-		// without blocking. nullopt (with the reason in error) otherwise.
+		// Reads a regular file to its end through a single open handle, so it cannot be swapped between the checks
+		// and the read; a file larger than maxSize bytes (also one that grows while it is read) is refused. Links
+		// (final component), directories, FIFOs and devices are rejected without blocking. nullopt (with the reason
+		// in error) otherwise.
 		static std::optional<std::string> ReadRegularFile(const std::filesystem::path& path, size_t maxSize, std::string* error = nullptr);
+		// ReadRegularFile that also requires the file to be trusted (see IsTrustedFile), checked on the same handle
+		// the file is read through.
+		static std::optional<std::string> ReadTrustedFile(const std::filesystem::path& path, size_t maxSize, std::string* error = nullptr);
 		// Renames from to to, failing (without touching either file) if to already exists.
 		static bool RenameNoReplace(const std::filesystem::path& from, const std::filesystem::path& to);
 

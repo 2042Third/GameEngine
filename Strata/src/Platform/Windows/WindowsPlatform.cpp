@@ -1,12 +1,13 @@
 #include "stpch.h"
 #include "Strata/Core/Platform.h"
 
+#include "Strata/Core/BoundedRead.h"
 #include "Strata/Core/Crypto.h"
 #include "Strata/Core/FileSystem.h"
 
+#include "Platform/Windows/WindowsFileSecurity.h"
 #include "Platform/Windows/WindowsUtils.h"
 
-#include <aclapi.h>
 #include <bcrypt.h>
 #include <fcntl.h>
 #include <io.h>
@@ -29,11 +30,6 @@ namespace Strata
 		constexpr DWORD c_ReplaceRetryDelayMilliseconds = 20;
 		// Temporary names are random; a name that already exists (planted by someone else) is skipped.
 		constexpr int c_TemporaryNameAttempts = 8;
-
-		// Rights that let a principal change a file or directory: its data or entries, its attributes, its name,
-		// or its security.
-		constexpr ACCESS_MASK c_ModifyRights = FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES
-			| FILE_DELETE_CHILD | DELETE | WRITE_DAC | WRITE_OWNER | GENERIC_WRITE | GENERIC_ALL;
 
 		std::string GetLastErrorMessage()
 		{
@@ -68,57 +64,6 @@ namespace Strata
 			HANDLE m_Handle;
 		};
 
-		std::vector<uint8_t> MakeWellKnownSid(WELL_KNOWN_SID_TYPE type)
-		{
-			DWORD size = SECURITY_MAX_SID_SIZE;
-			std::vector<uint8_t> sid(size);
-			if (!CreateWellKnownSid(type, nullptr, sid.data(), &size))
-				return {};
-			sid.resize(size);
-			return sid;
-		}
-
-		bool IsSid(PSID sid, const std::vector<uint8_t>& wellKnownSid)
-		{
-			return !wellKnownSid.empty() && EqualSid(sid, const_cast<uint8_t*>(wellKnownSid.data())) != FALSE;
-		}
-
-		// The account this process runs as, and whether its token is elevated.
-		class CurrentUser
-		{
-		public:
-			bool Query(std::string& error)
-			{
-				HANDLE token = nullptr;
-				if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
-				{
-					error = "OpenProcessToken failed: " + GetLastErrorMessage();
-					return false;
-				}
-				HandleGuard tokenGuard(token);
-
-				DWORD size = 0;
-				GetTokenInformation(token, TokenUser, nullptr, 0, &size);
-				m_TokenUser.resize(size);
-				if (size == 0 || !GetTokenInformation(token, TokenUser, m_TokenUser.data(), size, &size))
-				{
-					error = "GetTokenInformation failed: " + GetLastErrorMessage();
-					return false;
-				}
-
-				TOKEN_ELEVATION elevation = {};
-				DWORD elevationSize = 0;
-				m_Elevated = GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &elevationSize) && elevation.TokenIsElevated != 0;
-				return true;
-			}
-
-			PSID GetSid() const { return reinterpret_cast<const TOKEN_USER*>(m_TokenUser.data())->User.Sid; }
-			bool IsElevated() const { return m_Elevated; }
-		private:
-			std::vector<uint8_t> m_TokenUser;
-			bool m_Elevated = false;
-		};
-
 		// Security attributes whose DACL grants access to the current user only, protected from inheriting the
 		// parent directory's entries.
 		class OwnerOnlySecurity
@@ -126,10 +71,11 @@ namespace Strata
 		public:
 			bool Initialize(std::string& error)
 			{
-				if (!m_User.Query(error))
+				m_User = WindowsFileSecurity::GetCurrentUserSid(error);
+				if (m_User.empty())
 					return false;
 
-				PSID user = m_User.GetSid();
+				PSID user = m_User.data();
 				const DWORD aclSize = static_cast<DWORD>(sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE) + GetLengthSid(user));
 				m_Acl.resize(aclSize);
 				PACL acl = reinterpret_cast<PACL>(m_Acl.data());
@@ -150,80 +96,89 @@ namespace Strata
 
 			SECURITY_ATTRIBUTES* GetAttributes() { return &m_Attributes; }
 		private:
-			CurrentUser m_User;
+			std::vector<uint8_t> m_User;
 			std::vector<uint8_t> m_Acl;
 			SECURITY_DESCRIPTOR m_Descriptor = {};
 			SECURITY_ATTRIBUTES m_Attributes = {};
 		};
-
-		// Verifies, on an open handle, that only the current user (plus the system and administrators, who can take
-		// any file anyway) can modify the object: it must be owned by the current user (or by the Administrators
-		// group, which owns what an elevated administrator creates), and no access control entry may grant modify
-		// rights to anyone else.
-		bool CheckOwnerAndAccess(HANDLE handle, const std::string& name, std::string* error)
-		{
-			PSID owner = nullptr;
-			PACL dacl = nullptr;
-			PSECURITY_DESCRIPTOR descriptor = nullptr;
-			const DWORD result = GetSecurityInfo(handle, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, &owner, nullptr, &dacl, nullptr, &descriptor);
-			if (result != ERROR_SUCCESS)
-				return SetError(error, fmt::format("Cannot read the permissions of '{}': {}", name, WindowsUtils::GetErrorMessage(result)));
-
-			// owner and dacl point into the descriptor.
-			struct DescriptorGuard
-			{
-				PSECURITY_DESCRIPTOR Descriptor;
-				~DescriptorGuard() { LocalFree(Descriptor); }
-			} descriptorGuard { descriptor };
-
-			CurrentUser user;
-			std::string userError;
-			if (!user.Query(userError))
-				return SetError(error, userError);
-
-			const std::vector<uint8_t> administrators = MakeWellKnownSid(WinBuiltinAdministratorsSid);
-			const std::vector<uint8_t> system = MakeWellKnownSid(WinLocalSystemSid);
-			const std::vector<uint8_t> ownerRights = MakeWellKnownSid(WinCreatorOwnerRightsSid);
-
-			if (!owner)
-				return SetError(error, fmt::format("'{}' has no owner (its file system does not support permissions)", name));
-			const bool trustedOwner = EqualSid(owner, user.GetSid()) || (user.IsElevated() && IsSid(owner, administrators));
-			if (!trustedOwner)
-				return SetError(error, fmt::format("'{}' is owned by another account", name));
-			if (!dacl)
-				return SetError(error, fmt::format("'{}' has no access control list, so any account may modify it", name));
-
-			for (DWORD index = 0; index < dacl->AceCount; index++)
-			{
-				void* entry = nullptr;
-				if (!GetAce(dacl, index, &entry))
-					return SetError(error, fmt::format("Cannot read the permissions of '{}': {}", name, GetLastErrorMessage()));
-
-				const ACE_HEADER* header = static_cast<const ACE_HEADER*>(entry);
-				if ((header->AceFlags & INHERIT_ONLY_ACE) != 0)
-					continue; // Applies only to objects created inside it later
-				if (header->AceType == ACCESS_DENIED_ACE_TYPE)
-					continue; // Deny entries only take rights away
-				if (header->AceType != ACCESS_ALLOWED_ACE_TYPE)
-					return SetError(error, fmt::format("'{}' has an access control entry of an unexpected kind", name));
-
-				const ACCESS_ALLOWED_ACE* allowed = static_cast<const ACCESS_ALLOWED_ACE*>(entry);
-				if ((allowed->Mask & c_ModifyRights) == 0)
-					continue;
-
-				PSID sid = reinterpret_cast<PSID>(const_cast<DWORD*>(&allowed->SidStart));
-				const bool trusted = EqualSid(sid, user.GetSid()) || EqualSid(sid, owner) || IsSid(sid, system) || IsSid(sid, administrators) || IsSid(sid, ownerRights);
-				if (!trusted)
-					return SetError(error, fmt::format("'{}' can be modified by another account", name));
-			}
-			return true;
-		}
 
 		// Opens a file or directory itself (never the target of a link) just to inspect it.
 		HANDLE OpenForInspection(const std::filesystem::path& path, bool directory)
 		{
 			const DWORD flags = FILE_FLAG_OPEN_REPARSE_POINT | (directory ? FILE_FLAG_BACKUP_SEMANTICS : 0);
 			return CreateFileW(path.c_str(), READ_CONTROL | FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, flags, nullptr);
+		}
+
+		// Rejects symbolic links, junctions and other reparse points that redirect to another object. Reparse
+		// points that hold the file's own data (e.g. OneDrive placeholders) are fine.
+		bool CheckNotLink(HANDLE handle, const std::string& name, std::string* error)
+		{
+			const std::optional<bool> isLink = WindowsFileSecurity::IsNameSurrogate(handle);
+			if (!isLink)
+				return SetError(error, fmt::format("Cannot inspect '{}': {}", name, GetLastErrorMessage()));
+			if (*isLink)
+				return SetError(error, fmt::format("'{}' is a link or junction, which is not trusted", name));
+			return true;
+		}
+
+		// Opens path once and does every check and the read through that handle, so the file cannot be swapped in
+		// between. Delete sharing lets writers replace the file atomically while it is being read.
+		std::optional<std::string> ReadThroughOneHandle(const std::filesystem::path& path, size_t maxSize, bool requireTrusted, std::string* error)
+		{
+			const std::string name = FileSystem::ToUTF8(path);
+			const DWORD access = GENERIC_READ | (requireTrusted ? READ_CONTROL : 0);
+			HANDLE file = CreateFileW(path.c_str(), access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+			if (file == INVALID_HANDLE_VALUE)
+			{
+				SetError(error, fmt::format("Cannot open '{}': {}", name, GetLastErrorMessage()));
+				return std::nullopt;
+			}
+			HandleGuard fileGuard(file);
+
+			BY_HANDLE_FILE_INFORMATION information = {};
+			if (GetFileType(file) != FILE_TYPE_DISK || !GetFileInformationByHandle(file, &information) || (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
+			{
+				SetError(error, fmt::format("'{}' is not a regular file", name));
+				return std::nullopt;
+			}
+			if (!CheckNotLink(file, name, error))
+				return std::nullopt;
+			if (requireTrusted && !WindowsFileSecurity::CheckHandleOwnerAndAccess(file, name, error))
+				return std::nullopt;
+
+			const uint64_t size = (static_cast<uint64_t>(information.nFileSizeHigh) << 32) | information.nFileSizeLow;
+			if (size > maxSize)
+			{
+				SetError(error, fmt::format("'{}' is larger than {} bytes", name, maxSize));
+				return std::nullopt;
+			}
+
+			DWORD readError = ERROR_SUCCESS;
+			auto readChunk = [file, &readError](std::span<char> buffer) -> std::optional<size_t>
+			{
+				const DWORD chunk = static_cast<DWORD>(std::min<size_t>(buffer.size(), 1u << 30));
+				DWORD bytesRead = 0;
+				if (!ReadFile(file, buffer.data(), chunk, &bytesRead, nullptr))
+				{
+					readError = ::GetLastError();
+					return std::nullopt;
+				}
+				return static_cast<size_t>(bytesRead);
+			};
+
+			std::string contents;
+			const BoundedReadStatus status = BoundedRead::ReadAll(readChunk, static_cast<size_t>(size), maxSize, contents);
+			if (status == BoundedReadStatus::Failed)
+			{
+				SetError(error, fmt::format("Failed to read '{}': {}", name, WindowsUtils::GetErrorMessage(readError)));
+				return std::nullopt;
+			}
+			if (status == BoundedReadStatus::TooLarge)
+			{
+				SetError(error, fmt::format("'{}' is larger than {} bytes", name, maxSize));
+				return std::nullopt;
+			}
+			return contents;
 		}
 
 		std::string MakeRandomSuffix()
@@ -471,9 +426,9 @@ namespace Strata
 			return SetError(error, fmt::format("Cannot inspect '{}': {}", name, GetLastErrorMessage()));
 		if ((information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0)
 			return SetError(error, fmt::format("'{}' is not a directory", name));
-		if (information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
-			return SetError(error, fmt::format("'{}' is a link or junction, which is not trusted", name));
-		return CheckOwnerAndAccess(handle, name, error);
+		if (!CheckNotLink(handle, name, error))
+			return false;
+		return WindowsFileSecurity::CheckHandleOwnerAndAccess(handle, name, error);
 	}
 
 	bool Platform::IsTrustedFile(const std::filesystem::path& path, std::string* error)
@@ -487,62 +442,21 @@ namespace Strata
 		BY_HANDLE_FILE_INFORMATION information = {};
 		if (!GetFileInformationByHandle(handle, &information))
 			return SetError(error, fmt::format("Cannot inspect '{}': {}", name, GetLastErrorMessage()));
-		if (information.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))
-			return SetError(error, fmt::format("'{}' is not a regular file (links are not trusted)", name));
-		return CheckOwnerAndAccess(handle, name, error);
+		if (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+			return SetError(error, fmt::format("'{}' is not a regular file", name));
+		if (!CheckNotLink(handle, name, error))
+			return false;
+		return WindowsFileSecurity::CheckHandleOwnerAndAccess(handle, name, error);
 	}
 
 	std::optional<std::string> Platform::ReadRegularFile(const std::filesystem::path& path, size_t maxSize, std::string* error)
 	{
-		const std::string name = FileSystem::ToUTF8(path);
-		// One handle for every check and the read, so the file cannot be swapped in between. Delete sharing lets
-		// writers replace the file atomically while it is being read.
-		HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-		if (file == INVALID_HANDLE_VALUE)
-		{
-			SetError(error, fmt::format("Cannot open '{}': {}", name, GetLastErrorMessage()));
-			return std::nullopt;
-		}
-		HandleGuard fileGuard(file);
+		return ReadThroughOneHandle(path, maxSize, false, error);
+	}
 
-		BY_HANDLE_FILE_INFORMATION information = {};
-		if (GetFileType(file) != FILE_TYPE_DISK || !GetFileInformationByHandle(file, &information)
-			|| (information.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0)
-		{
-			SetError(error, fmt::format("'{}' is not a regular file", name));
-			return std::nullopt;
-		}
-
-		const uint64_t size = (static_cast<uint64_t>(information.nFileSizeHigh) << 32) | information.nFileSizeLow;
-		if (size > maxSize)
-		{
-			SetError(error, fmt::format("'{}' is larger than {} bytes", name, maxSize));
-			return std::nullopt;
-		}
-
-		// Read one byte more than allowed, to notice a file that grew since it was inspected.
-		std::string contents(static_cast<size_t>(size) + 1, '\0');
-		size_t total = 0;
-		while (total < contents.size())
-		{
-			const DWORD chunk = static_cast<DWORD>(std::min<size_t>(contents.size() - total, 1u << 30));
-			DWORD bytesRead = 0;
-			if (!ReadFile(file, contents.data() + total, chunk, &bytesRead, nullptr))
-			{
-				SetError(error, fmt::format("Failed to read '{}': {}", name, GetLastErrorMessage()));
-				return std::nullopt;
-			}
-			if (bytesRead == 0)
-				break;
-			total += bytesRead;
-		}
-		if (total > maxSize)
-		{
-			SetError(error, fmt::format("'{}' is larger than {} bytes", name, maxSize));
-			return std::nullopt;
-		}
-		contents.resize(total);
-		return contents;
+	std::optional<std::string> Platform::ReadTrustedFile(const std::filesystem::path& path, size_t maxSize, std::string* error)
+	{
+		return ReadThroughOneHandle(path, maxSize, true, error);
 	}
 
 	bool Platform::RenameNoReplace(const std::filesystem::path& from, const std::filesystem::path& to)

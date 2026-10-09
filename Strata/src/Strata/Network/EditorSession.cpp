@@ -299,14 +299,16 @@ namespace Strata
 		if (!FileSystem::Exists(path))
 			return std::nullopt;
 
+		// The trust checks and the read use one handle, so the file cannot be swapped in between.
 		std::string problem;
-		if (!Platform::IsTrustedFile(path, &problem))
+		const std::optional<std::string> text = Platform::ReadTrustedFile(path, c_MaxSessionFileSize, &problem);
+		if (!text)
 		{
-			ST_CORE_WARN("EditorSession: ignoring an untrusted session file: {}", problem);
+			ST_CORE_WARN("EditorSession: ignoring an untrusted or unreadable session file: {}", problem);
 			return std::nullopt;
 		}
 
-		const std::optional<nlohmann::json> json = ReadJsonFile(path);
+		const std::optional<nlohmann::json> json = JsonRpc::Parse(*text);
 		if (!json)
 		{
 			ST_CORE_TRACE("EditorSession: '{}' is not a valid session file", FileSystem::ToUTF8(path));

@@ -13,9 +13,14 @@
 #if defined(ST_PLATFORM_POSIX)
 	#include <sys/stat.h>
 #elif defined(ST_PLATFORM_WINDOWS)
+	#include "Platform/Windows/WindowsFileSecurity.h"
+
 	#include <Windows.h>
 	#include <aclapi.h>
 	#include <sddl.h>
+	#include <winioctl.h>
+
+	#include <cstring>
 #endif
 
 using namespace Strata;
@@ -38,6 +43,81 @@ namespace
 		const DWORD result = found && present ? SetNamedSecurityInfoW(const_cast<wchar_t*>(path.c_str()), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, dacl, nullptr) : ERROR_INVALID_DATA;
 		LocalFree(descriptor);
 		return result == ERROR_SUCCESS;
+	}
+
+	std::vector<uint8_t> ParseSid(const wchar_t* text)
+	{
+		PSID sid = nullptr;
+		if (!ConvertStringSidToSidW(text, &sid))
+			return {};
+		const uint8_t* bytes = static_cast<const uint8_t*>(sid);
+		std::vector<uint8_t> result(bytes, bytes + GetLengthSid(sid));
+		LocalFree(sid);
+		return result;
+	}
+
+	struct AllowedEntry
+	{
+		std::vector<uint8_t>* Sid;
+		DWORD Mask;
+	};
+
+	// An ACL with one access-allowed entry per element.
+	std::vector<uint8_t> MakeAcl(const std::vector<AllowedEntry>& entries)
+	{
+		DWORD size = sizeof(ACL);
+		for (const AllowedEntry& entry : entries)
+			size += static_cast<DWORD>(sizeof(ACCESS_ALLOWED_ACE) + GetLengthSid(entry.Sid->data()));
+
+		std::vector<uint8_t> acl(size);
+		PACL pointer = reinterpret_cast<PACL>(acl.data());
+		if (!InitializeAcl(pointer, size, ACL_REVISION))
+			return {};
+		for (const AllowedEntry& entry : entries)
+		{
+			if (!AddAccessAllowedAce(pointer, ACL_REVISION, entry.Mask, entry.Sid->data()))
+				return {};
+		}
+		return acl;
+	}
+
+	// Creates a junction (a mount-point reparse point, which needs no special privilege) at link that redirects to
+	// target.
+	bool CreateJunction(const std::filesystem::path& link, const std::filesystem::path& target)
+	{
+		if (!CreateDirectoryW(link.c_str(), nullptr))
+			return false;
+		HANDLE handle = CreateFileW(link.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+		if (handle == INVALID_HANDLE_VALUE)
+			return false;
+
+		// The mount point layout of REPARSE_DATA_BUFFER (declared in the driver kit, not the user-mode headers):
+		// tag, data length, reserved, then the substitute and print names' offsets and lengths, then both names.
+		const std::wstring printName = std::filesystem::absolute(target).wstring();
+		const std::wstring substituteName = L"\\??\\" + printName;
+		const size_t substituteBytes = (substituteName.size() + 1) * sizeof(wchar_t);
+		const size_t printBytes = (printName.size() + 1) * sizeof(wchar_t);
+		const size_t dataSize = 4 * sizeof(USHORT) + substituteBytes + printBytes;
+		std::vector<uint8_t> buffer(8 + dataSize);
+		auto write16 = [&buffer](size_t offset, size_t value)
+		{
+			const USHORT narrowed = static_cast<USHORT>(value);
+			std::memcpy(buffer.data() + offset, &narrowed, sizeof(narrowed));
+		};
+		const DWORD tag = IO_REPARSE_TAG_MOUNT_POINT;
+		std::memcpy(buffer.data(), &tag, sizeof(tag));
+		write16(4, dataSize);
+		write16(8, 0);
+		write16(10, substituteBytes - sizeof(wchar_t));
+		write16(12, substituteBytes);
+		write16(14, printBytes - sizeof(wchar_t));
+		std::memcpy(buffer.data() + 16, substituteName.c_str(), substituteBytes);
+		std::memcpy(buffer.data() + 16 + substituteBytes, printName.c_str(), printBytes);
+
+		DWORD returned = 0;
+		const BOOL created = DeviceIoControl(handle, FSCTL_SET_REPARSE_POINT, buffer.data(), static_cast<DWORD>(buffer.size()), nullptr, 0, &returned, nullptr);
+		CloseHandle(handle);
+		return created != FALSE;
 	}
 #endif
 
@@ -144,6 +224,115 @@ TEST_SUITE("Core.Platform")
 		CHECK(error.find("not a regular file") != std::string::npos);
 #endif
 	}
+
+	TEST_CASE("Trusted files are checked and read through one handle")
+	{
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("ReadTrustedFile");
+		const std::filesystem::path path = directory / "session.json";
+		REQUIRE(Platform::WritePrivateFile(path, "{\"b\":2}"));
+
+		std::string error;
+		const std::optional<std::string> contents = Platform::ReadTrustedFile(path, 64, &error);
+		REQUIRE_MESSAGE(contents.has_value(), error);
+		CHECK(*contents == "{\"b\":2}");
+		CHECK_FALSE(Platform::ReadTrustedFile(path, 3, &error).has_value());
+		CHECK(error.find("larger") != std::string::npos);
+		CHECK_FALSE(Platform::ReadTrustedFile(directory / "missing.json", 64).has_value());
+		CHECK_FALSE(Platform::ReadTrustedFile(directory, 64).has_value());
+
+		// A file others may modify can still be read as plain data, but it is not trusted.
+#if defined(ST_PLATFORM_POSIX)
+		std::filesystem::permissions(path, std::filesystem::perms::others_write, std::filesystem::perm_options::add);
+		CHECK_FALSE(Platform::ReadTrustedFile(path, 64, &error).has_value());
+		CHECK(error.find("writable by other users") != std::string::npos);
+#elif defined(ST_PLATFORM_WINDOWS)
+		REQUIRE(GrantEveryoneModify(path));
+		CHECK_FALSE(Platform::ReadTrustedFile(path, 64, &error).has_value());
+		CHECK(error.find("another account") != std::string::npos);
+#endif
+		CHECK(Platform::ReadRegularFile(path, 64).value() == "{\"b\":2}");
+	}
+
+#if defined(ST_PLATFORM_LINUX)
+	TEST_CASE("Files that report no size are read to their end")
+	{
+		// /proc files report a size of 0 but have contents.
+		std::string error;
+		const std::optional<std::string> stat = Platform::ReadRegularFile("/proc/self/stat", 64 * 1024, &error);
+		REQUIRE_MESSAGE(stat.has_value(), error);
+		CHECK(stat->find(')') != std::string::npos);
+		CHECK(stat->size() > 50);
+	}
+#endif
+
+#if defined(ST_PLATFORM_WINDOWS)
+	TEST_CASE("Objects owned by the user, Administrators or SYSTEM are trusted whatever the elevation")
+	{
+		std::string error;
+		std::vector<uint8_t> user = WindowsFileSecurity::GetCurrentUserSid(error);
+		REQUIRE_MESSAGE(!user.empty(), error);
+		std::vector<uint8_t> administrators = WindowsFileSecurity::MakeWellKnownSid(WinBuiltinAdministratorsSid);
+		std::vector<uint8_t> system = WindowsFileSecurity::MakeWellKnownSid(WinLocalSystemSid);
+		std::vector<uint8_t> everyone = WindowsFileSecurity::MakeWellKnownSid(WinWorldSid);
+		std::vector<uint8_t> otherUser = ParseSid(L"S-1-5-21-1111111111-2222222222-3333333333-1001");
+		REQUIRE_FALSE(administrators.empty());
+		REQUIRE_FALSE(system.empty());
+		REQUIRE_FALSE(everyone.empty());
+		REQUIRE_FALSE(otherUser.empty());
+
+		std::vector<uint8_t> privateAcl = MakeAcl({ { &user, FILE_ALL_ACCESS }, { &system, FILE_ALL_ACCESS }, { &administrators, FILE_ALL_ACCESS } });
+		REQUIRE_FALSE(privateAcl.empty());
+		PACL acl = reinterpret_cast<PACL>(privateAcl.data());
+
+		// What an elevated editor or CLI creates is owned by Administrators; a later run without elevation (this
+		// test usually runs without it) must still accept it. SYSTEM can take any file anyway.
+		for (std::vector<uint8_t>* owner : { &user, &administrators, &system })
+			CHECK_MESSAGE(WindowsFileSecurity::CheckOwnerAndAccess(owner->data(), acl, user.data(), "object", &error), error);
+		CHECK_FALSE(WindowsFileSecurity::CheckOwnerAndAccess(otherUser.data(), acl, user.data(), "object", &error));
+		CHECK(error.find("owned by another account") != std::string::npos);
+		CHECK_FALSE(WindowsFileSecurity::CheckOwnerAndAccess(nullptr, acl, user.data(), "object", &error));
+
+		// Others may read, but not modify.
+		std::vector<uint8_t> readable = MakeAcl({ { &user, FILE_ALL_ACCESS }, { &everyone, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE } });
+		REQUIRE_FALSE(readable.empty());
+		CHECK(WindowsFileSecurity::CheckOwnerAndAccess(administrators.data(), reinterpret_cast<PACL>(readable.data()), user.data(), "object", &error));
+		for (const DWORD mask : { DWORD(FILE_WRITE_DATA), DWORD(FILE_APPEND_DATA), DWORD(DELETE), DWORD(WRITE_DAC), DWORD(WRITE_OWNER), DWORD(GENERIC_WRITE), DWORD(GENERIC_ALL) })
+		{
+			CAPTURE(mask);
+			std::vector<uint8_t> writable = MakeAcl({ { &user, FILE_ALL_ACCESS }, { &otherUser, mask } });
+			REQUIRE_FALSE(writable.empty());
+			CHECK_FALSE(WindowsFileSecurity::CheckOwnerAndAccess(user.data(), reinterpret_cast<PACL>(writable.data()), user.data(), "object", &error));
+			CHECK(error.find("modified by another account") != std::string::npos);
+		}
+		CHECK_FALSE(WindowsFileSecurity::CheckOwnerAndAccess(user.data(), nullptr, user.data(), "object", &error));
+	}
+
+	TEST_CASE("Only reparse points that redirect elsewhere count as links")
+	{
+		CHECK(WindowsFileSecurity::IsNameSurrogate(DWORD(FILE_ATTRIBUTE_REPARSE_POINT), DWORD(IO_REPARSE_TAG_SYMLINK)));
+		CHECK(WindowsFileSecurity::IsNameSurrogate(DWORD(FILE_ATTRIBUTE_REPARSE_POINT), DWORD(IO_REPARSE_TAG_MOUNT_POINT)));
+		// Cloud placeholders (OneDrive) and deduplicated files hold the file's own data.
+		CHECK_FALSE(WindowsFileSecurity::IsNameSurrogate(DWORD(FILE_ATTRIBUTE_REPARSE_POINT), DWORD(IO_REPARSE_TAG_CLOUD_6)));
+		CHECK_FALSE(WindowsFileSecurity::IsNameSurrogate(DWORD(FILE_ATTRIBUTE_REPARSE_POINT), DWORD(IO_REPARSE_TAG_DEDUP)));
+		CHECK_FALSE(WindowsFileSecurity::IsNameSurrogate(DWORD(FILE_ATTRIBUTE_NORMAL), DWORD(IO_REPARSE_TAG_SYMLINK)));
+
+		// Junctions are still refused.
+		const std::filesystem::path root = Tests::CreateTemporaryDirectory("Junctions");
+		const std::filesystem::path target = root / "Target";
+		std::string error;
+		REQUIRE_MESSAGE(Platform::EnsurePrivateDirectory(target, &error), error);
+		const std::filesystem::path junction = root / "Junction";
+		if (!CreateJunction(junction, target))
+		{
+			MESSAGE("Skipping the junction checks: this file system cannot create junctions");
+			return;
+		}
+		CHECK_FALSE(Platform::EnsurePrivateDirectory(junction, &error));
+		CHECK(error.find("link or junction") != std::string::npos);
+		std::error_code removeError;
+		std::filesystem::remove(junction, removeError);
+	}
+#endif
 
 	TEST_CASE("Private files are replaced atomically and trusted")
 	{

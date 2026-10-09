@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Core/Platform.h"
 
+#include "Strata/Core/BoundedRead.h"
 #include "Strata/Core/Crypto.h"
 #include "Strata/Core/FileSystem.h"
 
@@ -38,6 +39,10 @@ namespace Strata
 
 		// Temporary names are random; a name that already exists (planted by someone else) is skipped.
 		constexpr int c_TemporaryNameAttempts = 8;
+#if !defined(ST_PLATFORM_MACOS)
+		// /proc/<pid>/stat is a few hundred bytes; the limit only guards against something unexpected.
+		constexpr size_t c_MaxProcStatSize = 64 * 1024;
+#endif
 
 		// Thread-safe, unlike std::strerror.
 		std::string GetErrorMessage(int errorCode)
@@ -50,6 +55,82 @@ namespace Strata
 			if (error)
 				*error = std::move(message);
 			return false;
+		}
+
+		// A file or directory that only the current user can modify: owned by it, and not writable by its group or
+		// by others.
+		bool CheckOwnedAndPrivate(const struct stat& information, const std::string& name, std::string* error)
+		{
+			if (information.st_uid != geteuid())
+				return SetError(error, fmt::format("'{}' is owned by another user", name));
+			if ((information.st_mode & (S_IWGRP | S_IWOTH)) != 0)
+				return SetError(error, fmt::format("'{}' is writable by other users", name));
+			return true;
+		}
+
+		// Opens path once and does every check and the read through that descriptor, so the file cannot be swapped
+		// in between. O_NOFOLLOW rejects a final symbolic link, and O_NONBLOCK keeps opening a FIFO from blocking
+		// until it is identified below.
+		std::optional<std::string> ReadThroughOneDescriptor(const std::filesystem::path& path, size_t maxSize, bool requireTrusted, std::string* error)
+		{
+			const std::string name = FileSystem::ToUTF8(path);
+			const int descriptor = open(path.c_str(), O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC);
+			if (descriptor < 0)
+			{
+				SetError(error, fmt::format("Cannot open '{}': {}", name, GetErrorMessage(errno)));
+				return std::nullopt;
+			}
+
+			struct DescriptorGuard
+			{
+				int Descriptor;
+				~DescriptorGuard() { close(Descriptor); }
+			} descriptorGuard { descriptor };
+
+			struct stat information = {};
+			if (fstat(descriptor, &information) != 0 || !S_ISREG(information.st_mode))
+			{
+				SetError(error, fmt::format("'{}' is not a regular file", name));
+				return std::nullopt;
+			}
+			if (requireTrusted && !CheckOwnedAndPrivate(information, name, error))
+				return std::nullopt;
+			if (information.st_size < 0 || static_cast<uint64_t>(information.st_size) > maxSize)
+			{
+				SetError(error, fmt::format("'{}' is larger than {} bytes", name, maxSize));
+				return std::nullopt;
+			}
+
+			int readError = 0;
+			auto readChunk = [descriptor, &readError](std::span<char> buffer) -> std::optional<size_t>
+			{
+				while (true)
+				{
+					const ssize_t result = read(descriptor, buffer.data(), buffer.size());
+					if (result >= 0)
+						return static_cast<size_t>(result);
+					if (errno != EINTR)
+					{
+						readError = errno;
+						return std::nullopt;
+					}
+				}
+			};
+
+			// The size only sizes the first buffer: files such as /proc/<pid>/stat report 0 but have contents.
+			std::string contents;
+			const BoundedReadStatus status = BoundedRead::ReadAll(readChunk, static_cast<size_t>(information.st_size), maxSize, contents);
+			if (status == BoundedReadStatus::Failed)
+			{
+				SetError(error, fmt::format("Failed to read '{}': {}", name, GetErrorMessage(readError)));
+				return std::nullopt;
+			}
+			if (status == BoundedReadStatus::TooLarge)
+			{
+				SetError(error, fmt::format("'{}' is larger than {} bytes", name, maxSize));
+				return std::nullopt;
+			}
+			return contents;
 		}
 
 	}
@@ -236,16 +317,16 @@ namespace Strata
 		return static_cast<uint64_t>(information.pbi_start_tvsec) * 1000000 + static_cast<uint64_t>(information.pbi_start_tvusec);
 #else
 		// Field 22 of /proc/<pid>/stat is the start time in clock ticks since boot. Field 2 (the command name, in
-		// parentheses) may contain spaces and parentheses itself, so fields are counted after its last ')'.
-		std::ifstream statFile("/proc/" + std::to_string(processId) + "/stat");
-		std::string content;
-		if (!statFile || !std::getline(statFile, content))
+		// parentheses) may contain spaces, parentheses and even newlines, so the whole file is read and fields are
+		// counted after its last ')'.
+		const std::optional<std::string> content = ReadRegularFile("/proc/" + std::to_string(processId) + "/stat", c_MaxProcStatSize);
+		if (!content)
 			return std::nullopt;
-		const size_t commandEnd = content.rfind(')');
+		const size_t commandEnd = content->rfind(')');
 		if (commandEnd == std::string::npos)
 			return std::nullopt;
 
-		std::istringstream fields(content.substr(commandEnd + 1));
+		std::istringstream fields(content->substr(commandEnd + 1));
 		std::string field;
 		for (int index = 3; index <= 22; index++)
 		{
@@ -364,7 +445,7 @@ namespace Strata
 			return SetError(error, fmt::format("'{}' is owned by another user", name));
 
 		// Other users could plant or replace files in a group- or world-writable directory. Since the directory is
-		// ours, tighten it instead of failing; files planted earlier are still rejected by IsTrustedFile.
+		// ours, tighten it instead of failing; files planted earlier are still rejected by ReadTrustedFile.
 		if ((information.st_mode & (S_IWGRP | S_IWOTH)) != 0 && chmod(directory.c_str(), S_IRWXU) != 0)
 			return SetError(error, fmt::format("'{}' is writable by other users and its permissions cannot be fixed: {}", name, GetErrorMessage(errno)));
 		return true;
@@ -378,67 +459,17 @@ namespace Strata
 			return SetError(error, fmt::format("Cannot inspect '{}': {}", name, GetErrorMessage(errno)));
 		if (!S_ISREG(information.st_mode))
 			return SetError(error, fmt::format("'{}' is not a regular file (symbolic links are not trusted)", name));
-		if (information.st_uid != geteuid())
-			return SetError(error, fmt::format("'{}' is owned by another user", name));
-		if ((information.st_mode & (S_IWGRP | S_IWOTH)) != 0)
-			return SetError(error, fmt::format("'{}' is writable by other users", name));
-		return true;
+		return CheckOwnedAndPrivate(information, name, error);
 	}
 
 	std::optional<std::string> Platform::ReadRegularFile(const std::filesystem::path& path, size_t maxSize, std::string* error)
 	{
-		const std::string name = FileSystem::ToUTF8(path);
-		// One descriptor for every check and the read, so the file cannot be swapped in between. O_NOFOLLOW rejects
-		// a final symbolic link, and O_NONBLOCK keeps opening a FIFO from blocking until it is identified below.
-		const int descriptor = open(path.c_str(), O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC);
-		if (descriptor < 0)
-		{
-			SetError(error, fmt::format("Cannot open '{}': {}", name, GetErrorMessage(errno)));
-			return std::nullopt;
-		}
+		return ReadThroughOneDescriptor(path, maxSize, false, error);
+	}
 
-		struct DescriptorGuard
-		{
-			int Descriptor;
-			~DescriptorGuard() { close(Descriptor); }
-		} descriptorGuard { descriptor };
-
-		struct stat information = {};
-		if (fstat(descriptor, &information) != 0 || !S_ISREG(information.st_mode))
-		{
-			SetError(error, fmt::format("'{}' is not a regular file", name));
-			return std::nullopt;
-		}
-		if (information.st_size < 0 || static_cast<uint64_t>(information.st_size) > maxSize)
-		{
-			SetError(error, fmt::format("'{}' is larger than {} bytes", name, maxSize));
-			return std::nullopt;
-		}
-
-		// Read one byte more than allowed, to notice a file that grew since it was inspected.
-		std::string contents(static_cast<size_t>(information.st_size) + 1, '\0');
-		size_t total = 0;
-		while (total < contents.size())
-		{
-			const ssize_t result = read(descriptor, contents.data() + total, contents.size() - total);
-			if (result < 0 && errno == EINTR)
-				continue;
-			if (result < 0)
-			{
-				SetError(error, fmt::format("Failed to read '{}': {}", name, GetErrorMessage(errno)));
-				return std::nullopt;
-			}
-			if (result == 0)
-				break;
-			total += static_cast<size_t>(result);
-		}
-		if (total > maxSize)
-		{
-			SetError(error, fmt::format("'{}' is larger than {} bytes", name, maxSize));
-			return std::nullopt;
-		}
-		contents.resize(total);
-		return contents;
+	std::optional<std::string> Platform::ReadTrustedFile(const std::filesystem::path& path, size_t maxSize, std::string* error)
+	{
+		return ReadThroughOneDescriptor(path, maxSize, true, error);
 	}
 
 	bool Platform::RenameNoReplace(const std::filesystem::path& from, const std::filesystem::path& to)
