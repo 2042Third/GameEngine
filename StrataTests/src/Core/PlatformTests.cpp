@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -50,6 +51,27 @@ namespace
 		volatile int divisor = *static_cast<int*>(userData);
 		volatile int result = 100 / divisor;
 		(void)result;
+	}
+#endif
+
+#if defined(ST_PLATFORM_POSIX)
+	// Whether a helper process printed this exact line (its own result, as opposed to words in other messages).
+	bool HasOutputLine(const std::string& output, std::string_view line)
+	{
+		size_t start = 0;
+		while (start <= output.size())
+		{
+			size_t end = output.find('\n', start);
+			if (end == std::string::npos)
+				end = output.size();
+			std::string_view current(output.data() + start, end - start);
+			if (!current.empty() && current.back() == '\r')
+				current.remove_suffix(1);
+			if (current == line)
+				return true;
+			start = end + 1;
+		}
+		return false;
 	}
 #endif
 
@@ -671,7 +693,7 @@ TEST_SUITE("Core.Platform")
 		REQUIRE(result.Started);
 		CHECK_FALSE(result.TimedOut);
 		CHECK(result.ExitCode == 128 + SIGFPE);
-		CHECK(result.Output.find("contained") == std::string::npos);
+		CHECK_FALSE(HasOutputLine(result.Output, "contained"));
 	}
 
 	TEST_CASE("abort() in guarded code is reported and ends the process")
@@ -683,7 +705,7 @@ TEST_SUITE("Core.Platform")
 		CHECK_FALSE(result.TimedOut);
 		CHECK(result.ExitCode == 128 + SIGABRT);
 		CHECK(result.Output.find("called abort()") != std::string::npos);
-		CHECK(result.Output.find("contained") == std::string::npos);
+		CHECK_FALSE(HasOutputLine(result.Output, "contained"));
 	}
 #endif
 
