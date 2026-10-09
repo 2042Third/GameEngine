@@ -68,7 +68,8 @@ What may depend on what:
   CLI tests compile only when those targets exist (`StrataTests/CMakeLists.txt`).
 - Platform code is in `Strata/src/Platform/` (`Windows`, `Posix`, `GLFW`, `Vulkan`), filtered per OS by
   `Strata/CMakeLists.txt`; engine modules reach it through interfaces such as `Core/Platform.h`, `Core/Window.h`,
-  `Core/CrashGuard.h`, `Core/Process.h` and `Renderer/GraphicsDevice.h`.
+  `Core/CrashGuard.h`, `Core/Process.h`, `Core/DynamicLibrary.h`, `Core/FileChangeNotifier.h` and
+  `Renderer/GraphicsDevice.h`. Engine code outside `src/Platform/` includes no OS headers.
 
 Applications built on `Application` (editor, runtime) get `main` from `Core/EntryPoint.h`, which calls the client's
 `CreateApplication`, runs it and returns its exit code. `StrataCLI` has its own `main` and no `Application`.
