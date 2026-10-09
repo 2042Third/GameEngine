@@ -10,6 +10,7 @@
 namespace Strata
 {
 
+	class Entity;
 	class Scene;
 
 	enum class SceneRuntimeMode : uint8_t
@@ -32,6 +33,11 @@ namespace Strata
 		virtual void OnUpdate(Timestep) {}
 		virtual void OnFixedUpdate(float) {}
 		virtual void OnLateUpdate(Timestep) {}
+
+		// Called while the scene is running, right before an entity is destroyed (descendants before their ancestors).
+		// The entity is still complete and valid. Destruction requested from here is deferred; entities attached to
+		// the dying hierarchy from here are announced (and destroyed) as well.
+		virtual void OnEntityDestroying(const Entity&) {}
 	};
 
 	struct SceneSystemDescriptor

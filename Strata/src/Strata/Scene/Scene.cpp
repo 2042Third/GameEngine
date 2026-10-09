@@ -94,6 +94,8 @@ namespace Strata
 		}
 
 		DestroyEntityImmediate(entity.GetHandle());
+		// Systems reacting to the destruction may have requested more.
+		FlushPendingDestroys();
 	}
 
 	bool Scene::IsPendingDestroy(Entity entity) const
@@ -103,12 +105,11 @@ namespace Strata
 		return m_PendingDestroySet.find(entity.GetUUID()) != m_PendingDestroySet.end();
 	}
 
-	void Scene::DestroyEntityImmediate(entt::entity handle)
+	std::vector<entt::entity> Scene::CollectSubtree(entt::entity root) const
 	{
-		// The subtree in hierarchy order (iteratively: hierarchies can be arbitrarily deep). Only the subtree root
-		// leaves its parent; the links inside the subtree disappear with the entities.
+		// Iteratively: hierarchies can be arbitrarily deep.
 		std::vector<entt::entity> subtree;
-		std::vector<entt::entity> stack = { handle };
+		std::vector<entt::entity> stack = { root };
 		while (!stack.empty())
 		{
 			const entt::entity current = stack.back();
@@ -122,7 +123,41 @@ namespace Strata
 					stack.push_back(child->second);
 			}
 		}
+		return subtree;
+	}
 
+	void Scene::NotifyEntitiesDestroying(entt::entity root)
+	{
+		// Systems run arbitrary code here (scripts' OnDestroy), so destruction they request is deferred, and the subtree
+		// is collected again afterwards: entities attached to it in the meantime are announced too.
+		const bool wasUpdating = m_IsUpdating;
+		m_IsUpdating = true;
+		std::unordered_set<entt::entity> notified;
+		bool notifiedAny = true;
+		while (notifiedAny)
+		{
+			notifiedAny = false;
+			const std::vector<entt::entity> subtree = CollectSubtree(root);
+			for (auto it = subtree.rbegin(); it != subtree.rend(); ++it)
+			{
+				if (!notified.insert(*it).second)
+					continue;
+				notifiedAny = true;
+				const Entity entity(*it, this);
+				for (const Scope<SceneSystem>& system : m_Systems)
+					system->OnEntityDestroying(entity);
+			}
+		}
+		m_IsUpdating = wasUpdating;
+	}
+
+	void Scene::DestroyEntityImmediate(entt::entity handle)
+	{
+		if (m_IsRunning && !m_Systems.empty())
+			NotifyEntitiesDestroying(handle);
+
+		// Only the subtree root leaves its parent; the links inside the subtree disappear with the entities.
+		const std::vector<entt::entity> subtree = CollectSubtree(handle);
 		RemoveFromParent(handle);
 		// Children before their parents.
 		for (auto it = subtree.rbegin(); it != subtree.rend(); ++it)
@@ -134,15 +169,19 @@ namespace Strata
 
 	void Scene::FlushPendingDestroys()
 	{
-		// Iterate over a moved-out copy: destroying entities must not observe a list being modified.
-		std::vector<UUID> pending = std::move(m_PendingDestroy);
-		m_PendingDestroy.clear();
-		m_PendingDestroySet.clear();
-		for (UUID uuid : pending)
+		// Destroying entities can request more destruction (systems reacting to it), so repeat until nothing is left.
+		// Each round iterates over a moved-out copy: destroying entities must not observe a list being modified.
+		while (!m_PendingDestroy.empty())
 		{
-			auto it = m_EntityMap.find(uuid);
-			if (it != m_EntityMap.end())
-				DestroyEntityImmediate(it->second);
+			std::vector<UUID> pending = std::move(m_PendingDestroy);
+			m_PendingDestroy.clear();
+			m_PendingDestroySet.clear();
+			for (UUID uuid : pending)
+			{
+				auto it = m_EntityMap.find(uuid);
+				if (it != m_EntityMap.end())
+					DestroyEntityImmediate(it->second);
+			}
 		}
 	}
 

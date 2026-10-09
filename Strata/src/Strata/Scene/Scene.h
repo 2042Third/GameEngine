@@ -139,6 +139,10 @@ namespace Strata
 		}
 	private:
 		void DestroyEntityImmediate(entt::entity handle);
+		// Lets running systems react to the subtree's destruction (SceneSystem::OnEntityDestroying).
+		void NotifyEntitiesDestroying(entt::entity root);
+		// The entity and its descendants in depth-first hierarchy order (parents before children).
+		std::vector<entt::entity> CollectSubtree(entt::entity root) const;
 		void FlushPendingDestroys();
 		void RemoveFromParent(entt::entity handle);
 		struct HierarchyStackEntry

@@ -5,6 +5,9 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <string>
+#include <vector>
+
 using namespace Strata;
 
 namespace
@@ -52,6 +55,31 @@ namespace
 
 		Scene& TargetScene;
 		static inline bool StillValidDuringFrame = false;
+	};
+
+	// Records the entities announced by OnEntityDestroying and reacts to the destruction of "Root" by destroying "Other"
+	// and attaching a new child to the dying root.
+	struct DestroyWatcherSystem : public SceneSystem
+	{
+		explicit DestroyWatcherSystem(Scene& scene)
+			: TargetScene(scene)
+		{
+		}
+
+		void OnEntityDestroying(const Entity& entity) override
+		{
+			Announced.push_back(entity.GetName());
+			AllValid = AllValid && entity.IsValid() && entity.HasComponent<TransformComponent>() && !TargetScene.IsPendingDestroy(entity);
+			if (entity.GetName() == "Root")
+			{
+				TargetScene.DestroyEntity(TargetScene.FindEntityByName("Other"));
+				TargetScene.CreateChildEntity(entity, "LateChild");
+			}
+		}
+
+		Scene& TargetScene;
+		static inline std::vector<std::string> Announced;
+		static inline bool AllValid = true;
 	};
 
 	struct ScopedCountingSystem
@@ -321,6 +349,52 @@ TEST_SUITE("Scene")
 			scene.OnRuntimeStop();
 		}
 		SceneSystemRegistry::Unregister("TestDestroying");
+	}
+
+	TEST_CASE("Systems see entities before they are destroyed")
+	{
+		DestroyWatcherSystem::Announced.clear();
+		DestroyWatcherSystem::AllValid = true;
+		SceneSystemRegistry::Register({ "TestDestroyWatcher", false, [](Scene& scene) { return CreateScope<DestroyWatcherSystem>(scene); } });
+		{
+			Scene scene;
+			Entity root = scene.CreateEntity("Root");
+			Entity child = scene.CreateChildEntity(root, "Child");
+			scene.CreateChildEntity(child, "Grandchild");
+			scene.CreateEntity("Other");
+			Entity survivor = scene.CreateEntity("Survivor");
+
+			// Scenes that are not running have no systems to notify.
+			scene.DestroyEntity(scene.CreateEntity("Temporary"));
+			CHECK(DestroyWatcherSystem::Announced.empty());
+
+			// Descendants first; destruction requested by the system is deferred until this destruction is done, and the
+			// child attached to the dying root is announced and destroyed as well.
+			scene.OnRuntimeStart();
+			scene.DestroyEntity(root);
+			CHECK(DestroyWatcherSystem::Announced == std::vector<std::string> { "Grandchild", "Child", "Root", "LateChild", "Other" });
+			CHECK(DestroyWatcherSystem::AllValid);
+			CHECK(scene.GetEntityCount() == 1);
+			CHECK(survivor.IsValid());
+
+			scene.OnRuntimeStop();
+		}
+
+		// Destruction requested during an update (by DestroyingSystem) is announced at the end of the frame.
+		DestroyWatcherSystem::Announced.clear();
+		SceneSystemRegistry::Register({ "TestDestroying", false, [](Scene& scene) { return CreateScope<DestroyingSystem>(scene); } });
+		{
+			Scene scene;
+			Entity doomed = scene.CreateEntity("Doomed");
+			scene.OnRuntimeStart();
+			scene.OnUpdateRuntime(0.0f);
+			CHECK(DestroyingSystem::StillValidDuringFrame);
+			CHECK_FALSE(doomed.IsValid());
+			CHECK(DestroyWatcherSystem::Announced == std::vector<std::string> { "Doomed" });
+			scene.OnRuntimeStop();
+		}
+		SceneSystemRegistry::Unregister("TestDestroying");
+		SceneSystemRegistry::Unregister("TestDestroyWatcher");
 	}
 
 	TEST_CASE("Primary camera lookup")
