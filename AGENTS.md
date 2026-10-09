@@ -113,8 +113,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
     with the component (new properties need a non-default value there, which also proves that they serialize);
   - a script field type is not overridden in the scene, or a `ScriptCallback` is implemented by no feature script;
   - a host function of `StrataScriptHostAPI` was never called during the run. `GetScriptHostCallCounts()`
-    (`Scripting/ScriptHostAPI.h`) counts calls per table entry; the table is built from `ST_SCRIPT_HOST_FUNCTIONS` in
-    `ScriptHostAPI.cpp`, and a `static_assert` fails the build when that list and the struct disagree;
+    (`Scripting/ScriptHostAPI.h`) counts calls per table entry (Dist builds do not count); the table is built from
+    `ST_SCRIPT_HOST_FUNCTIONS` in `ScriptHostAPI.cpp`, and a `static_assert` fails the build when that list and the
+    struct disagree;
   - a public SDK class, member function or macro (`StrataScript/*.h` outside `Detail`) is not used by the feature
     scripts (`SDKCoverageTests.cpp` reads the headers; the check is by name, so overloads count together);
   - a feature script fails a check or does not complete, a script class never runs, or the run logs a warning or error

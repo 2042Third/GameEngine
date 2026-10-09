@@ -459,6 +459,13 @@ TEST_SUITE("Scripting.API")
 	TEST_CASE("Every host function has a call counter")
 	{
 		const StrataScriptHostAPI& host = GetScriptHostAPI();
+#if defined(ST_DIST)
+		// Dist builds do not count calls.
+		CHECK_FALSE(host.IsEntityValid(nullptr, 1));
+		CHECK(GetScriptHostCallCounts().empty());
+		ResetScriptHostCallCounts();
+		CHECK(GetScriptHostCallCounts().empty());
+#else
 		const std::vector<ScriptHostFunctionCalls> before = GetScriptHostCallCounts();
 
 		// One counter per function of the table, in declaration order.
@@ -493,5 +500,6 @@ TEST_SUITE("Scripting.API")
 		ResetScriptHostCallCounts();
 		for (const ScriptHostFunctionCalls& entry : GetScriptHostCallCounts())
 			CHECK(entry.Calls == 0);
+#endif
 	}
 }

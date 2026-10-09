@@ -1020,9 +1020,9 @@ namespace Strata
 		////////////////////////////////////////////////////////////////////////////////
 
 		// Every function of StrataScriptHostAPI in declaration order, each implemented by Host<Name> above. CreateHostAPI
-		// builds the table from this list, giving every function a call counter, and the static_assert below fails the
-		// build when the list and the struct disagree: a function appended to the ABI has to be listed here, and the
-		// feature test (StrataTests/FeatureTest) then requires its scripts to call it.
+		// builds the table from this list, giving every function a call counter (except in Dist builds), and the
+		// static_assert below fails the build when the list and the struct disagree: a function appended to the ABI has
+		// to be listed here, and the feature test (StrataTests/FeatureTest) then requires its scripts to call it.
 #define ST_SCRIPT_HOST_FUNCTIONS(X) \
 	X(Log) \
 	X(ReportException) \
@@ -1087,8 +1087,6 @@ namespace Strata
 		constexpr HostFunctionEntry c_HostFunctions[] = { ST_SCRIPT_HOST_FUNCTIONS(ST_SCRIPT_HOST_FUNCTION_ENTRY) };
 #undef ST_SCRIPT_HOST_FUNCTION_ENTRY
 
-		constexpr size_t c_HostFunctionCount = std::size(c_HostFunctions);
-
 		// True when c_HostFunctions covers the struct after its header exactly: every member, in order, without gaps.
 		constexpr bool ListsEveryHostFunction()
 		{
@@ -1103,6 +1101,11 @@ namespace Strata
 		}
 
 		static_assert(ListsEveryHostFunction(), "ST_SCRIPT_HOST_FUNCTIONS must list every member of StrataScriptHostAPI after ABIVersion, in declaration order");
+
+		// Call counting is a development diagnostic. Dist builds (shipped games) put the implementations into the table
+		// directly: no host call pays for an atomic increment there, nor for threads (e.g. logging) contending on counters.
+#if !defined(ST_DIST)
+		constexpr size_t c_HostFunctionCount = std::size(c_HostFunctions);
 
 		constexpr size_t GetHostFunctionIndex(size_t offset)
 		{
@@ -1132,13 +1135,18 @@ namespace Strata
 				return Function(arguments...);
 			}
 		};
+#endif
 
 		StrataScriptHostAPI CreateHostAPI()
 		{
 			StrataScriptHostAPI api = {};
 			api.StructSize = sizeof(StrataScriptHostAPI);
 			api.ABIVersion = ST_SCRIPT_ABI_VERSION;
-#define ST_SCRIPT_ASSIGN_HOST_FUNCTION(Name) api.Name = &CountedHostFunction<GetHostFunctionIndex(offsetof(StrataScriptHostAPI, Name)), &Host##Name>::Call;
+#if defined(ST_DIST)
+	#define ST_SCRIPT_ASSIGN_HOST_FUNCTION(Name) api.Name = &Host##Name;
+#else
+	#define ST_SCRIPT_ASSIGN_HOST_FUNCTION(Name) api.Name = &CountedHostFunction<GetHostFunctionIndex(offsetof(StrataScriptHostAPI, Name)), &Host##Name>::Call;
+#endif
 			ST_SCRIPT_HOST_FUNCTIONS(ST_SCRIPT_ASSIGN_HOST_FUNCTION)
 #undef ST_SCRIPT_ASSIGN_HOST_FUNCTION
 			return api;
@@ -1156,17 +1164,23 @@ namespace Strata
 
 	std::vector<ScriptHostFunctionCalls> GetScriptHostCallCounts()
 	{
+#if defined(ST_DIST)
+		return {};
+#else
 		std::vector<ScriptHostFunctionCalls> calls;
 		calls.reserve(c_HostFunctionCount);
 		for (size_t index = 0; index < c_HostFunctionCount; index++)
 			calls.push_back({ c_HostFunctions[index].Name, s_HostCallCounts[index].load(std::memory_order_relaxed) });
 		return calls;
+#endif
 	}
 
 	void ResetScriptHostCallCounts()
 	{
+#if !defined(ST_DIST)
 		for (std::atomic<uint64_t>& count : s_HostCallCounts)
 			count.store(0, std::memory_order_relaxed);
+#endif
 	}
 
 	StrataScriptContext* RegisterScriptContext(ScriptSystem& system)
