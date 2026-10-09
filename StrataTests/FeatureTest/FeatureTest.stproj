@@ -1,0 +1,11 @@
+{
+	"Project": {
+		"AssetDirectory": "Assets",
+		"Name": "FeatureTest",
+		"StartScene": "F7A0000000000001"
+	},
+	"Strata": {
+		"Format": "Project",
+		"Version": 1
+	}
+}

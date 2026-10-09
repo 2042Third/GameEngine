@@ -1,0 +1,11 @@
+{
+	"Handle": "F7A0000000000007",
+	"ImportSettings": {
+		"LoadMode": "Decompressed"
+	},
+	"Strata": {
+		"Format": "AssetMeta",
+		"Version": 1
+	},
+	"Type": "AudioClip"
+}

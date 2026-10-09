@@ -1,0 +1,116 @@
+{
+	"Prefab": {
+		"Entities": [
+			{
+				"Components": {
+					"BoxCollider": {
+						"HalfExtents": [
+							0.5,
+							0.5,
+							0.5
+						],
+						"Offset": [
+							0.0,
+							0.0,
+							0.0
+						]
+					},
+					"MeshRenderer": {
+						"CastShadows": true,
+						"Material": "F7A0000000000003",
+						"Mesh": "0000000000000001"
+					},
+					"Name": {
+						"Name": "Crate"
+					},
+					"RigidBody": {
+						"AngularDamping": 0.05,
+						"ContinuousCollision": false,
+						"Friction": 0.5,
+						"GravityScale": 1.0,
+						"IsTrigger": false,
+						"Layer": 0,
+						"LinearDamping": 0.05,
+						"LockRotationX": false,
+						"LockRotationY": false,
+						"LockRotationZ": false,
+						"Mass": 0.5,
+						"Restitution": 0.0,
+						"Type": "Dynamic"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "CrateScript",
+								"Fields": {
+									"Value": {
+										"Type": "Int",
+										"Value": 1
+									}
+								}
+							}
+						]
+					},
+					"Tag": {
+						"Tag": "Crate"
+					},
+					"Transform": {
+						"Rotation": [
+							0.0,
+							0.0,
+							0.0,
+							1.0
+						],
+						"Scale": [
+							0.6,
+							0.6,
+							0.6
+						],
+						"Translation": [
+							0.0,
+							0.0,
+							0.0
+						]
+					}
+				},
+				"ID": "F7C0000000000001"
+			},
+			{
+				"Components": {
+					"MeshRenderer": {
+						"CastShadows": true,
+						"Material": "0000000000000000",
+						"Mesh": "0000000000000001"
+					},
+					"Name": {
+						"Name": "Crate Lid"
+					},
+					"Transform": {
+						"Rotation": [
+							0.0,
+							0.0,
+							0.0,
+							1.0
+						],
+						"Scale": [
+							1.1,
+							0.1,
+							1.1
+						],
+						"Translation": [
+							0.0,
+							0.55,
+							0.0
+						]
+					}
+				},
+				"ID": "F7C0000000000002",
+				"Parent": "F7C0000000000001"
+			}
+		]
+	},
+	"Strata": {
+		"Format": "Prefab",
+		"Version": 1
+	}
+}
