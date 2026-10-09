@@ -73,9 +73,11 @@ namespace Strata
 		//////////////////////////////////////////////////////////////////////////
 
 		// Re-parents child under parent (an invalid parent makes it a root). Returns false if this would create a
-		// cycle. With keepWorldTransform the child's world transform is preserved.
+		// cycle. With keepWorldTransform the child's world transform is preserved. A change of parent emits the child's
+		// RelationshipComponent on_update signal (the old and new parents' Children lists change silently).
 		bool SetParent(Entity child, Entity parent, bool keepWorldTransform = true);
-		// Moves an entity to position `index` among its siblings (or among the roots).
+		// Moves an entity to position `index` among its siblings (or among the roots). Only the order changes, so no
+		// signal is emitted.
 		bool SetSiblingIndex(Entity entity, size_t index);
 		bool IsDescendantOf(Entity entity, Entity ancestor) const;
 

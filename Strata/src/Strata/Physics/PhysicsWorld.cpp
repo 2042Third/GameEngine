@@ -276,16 +276,19 @@ namespace Strata
 			return scene.IsActiveInHierarchy(entity) && !IsPendingDestroyInHierarchy(scene, entity);
 		}
 
-		// Whether a merged collider entity contributes to its owner's shape: neither it nor an entity between it and the
-		// owner is inactive or pending destruction. (The owner's own state decides whether the whole body is simulated.)
+		// Whether a merged collider entity contributes to its owner's shape: the owner is an ancestor, and neither the entity
+		// nor an entity between it and the owner is inactive or pending destruction. (The owner's own state decides whether
+		// the whole body is simulated.)
 		bool IsPartOfOwnerShape(const Scene& scene, Entity entity, Entity owner)
 		{
-			for (Entity current = entity; current.IsValid() && current != owner; current = current.GetParent())
+			for (Entity current = entity; current.IsValid(); current = current.GetParent())
 			{
+				if (current == owner)
+					return true;
 				if (current.HasComponent<InactiveComponent>() || scene.IsPendingDestroy(current))
 					return false;
 			}
-			return true;
+			return false; // Moved out from under the owner
 		}
 
 		// Visits root and its descendants depth first, parents before children. The visitor returns whether to descend into
@@ -1643,7 +1646,8 @@ namespace Strata
 			ConnectChangeSignals<CapsuleColliderComponent, &OnStructureChanged>(data, registry);
 			ConnectChangeSignals<MeshColliderComponent, &OnStructureChanged>(data, registry);
 			ConnectChangeSignals<MeshRendererComponent, &OnMeshRendererChanged>(data, registry);
-			// Entity creation and destruction are reported by the other signals; this covers hierarchy edits that patch it.
+			// Reparenting (Scene::SetParent) patches the moved entity's relationship; entity creation and destruction are
+			// reported by the other signals.
 			data.Connections.emplace_back(registry.on_update<RelationshipComponent>().connect<&OnHierarchyChanged>(data));
 			data.Connections.emplace_back(registry.on_update<TransformComponent>().connect<&OnTransformChanged>(data));
 			data.Connections.emplace_back(registry.on_construct<InactiveComponent>().connect<&OnActivityChanged>(data));

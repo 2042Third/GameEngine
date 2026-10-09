@@ -172,6 +172,92 @@ TEST_SUITE("Physics.Hierarchy")
 		CHECK(CastDown(physics, cabinTop)->Point.y == doctest::Approx(7.25f).epsilon(1.0e-3));
 	}
 
+	TEST_CASE("Reparenting colliders at runtime moves them between bodies")
+	{
+		Scene scene;
+		scene.GetSettings().Gravity = glm::vec3(0.0f);
+		Entity player = CreateDynamicBox(scene, "Player", glm::vec3(0.0f, 5.0f, 0.0f));
+		Entity enemy = CreateDynamicBox(scene, "Enemy", glm::vec3(10.0f, 5.0f, 0.0f));
+		for (Entity body : { player, enemy })
+			body.GetComponent<RigidBodyComponent>().LinearDamping = 0.0f;
+		// A collider-only item lying against the player's +X face: a static body of its own.
+		Entity sword = CreateStaticBox(scene, "Sword", glm::vec3(1.0f, 5.0f, 0.0f), glm::vec3(0.5f, 0.1f, 0.1f));
+
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		CollisionRecorder recorder(physics);
+		StepScene(scene, 1);
+		REQUIRE(physics.GetBodyEntity(sword) == sword);
+		REQUIRE(recorder.Count(CollisionEventType::Begin, player.GetUUID(), sword.GetUUID()) == 1);
+
+		// Picked up: the sword becomes part of the player's shape and stops touching it.
+		CHECK(scene.SetParent(sword, player));
+		CHECK(physics.GetBodyEntity(sword) == player);
+		CHECK_FALSE(physics.HasBody(sword));
+		CHECK(physics.GetStats().StaticBodyCount == 0);
+		std::optional<RaycastHit> hit = CastDown(physics, glm::vec3(1.3f, 0.0f, 0.0f));
+		REQUIRE(hit);
+		CHECK(hit->HitEntity == player);
+		CHECK(hit->Point.y == doctest::Approx(5.1f).epsilon(1.0e-3));
+		StepScene(scene, 1);
+		CHECK(recorder.Count(CollisionEventType::End, player.GetUUID(), sword.GetUUID()) == 1);
+		CHECK(physics.GetStats().ContactPairCount == 0);
+
+		// The player carries it along instead of running into it.
+		CHECK(physics.SetLinearVelocity(player, glm::vec3(2.0f, 0.0f, 0.0f)));
+		StepScene(scene, 30);
+		const float playerX = GetWorldPosition(scene, player).x;
+		CHECK(playerX == doctest::Approx(1.0f).epsilon(0.01));
+		CHECK(GetWorldPosition(scene, sword).x == doctest::Approx(playerX + 1.0f).epsilon(0.01));
+		hit = CastDown(physics, glm::vec3(playerX + 1.3f, 0.0f, 0.0f));
+		REQUIRE(hit);
+		CHECK(hit->HitEntity == player);
+		CHECK(physics.GetStats().ContactPairCount == 0);
+
+		// Dropped: a static body of its own again where it was let go, no longer part of the player's shape.
+		CHECK(physics.SetLinearVelocity(player, glm::vec3(0.0f, 0.0f, -2.0f)));
+		CHECK(scene.SetParent(sword, Entity()));
+		CHECK(physics.GetBodyEntity(sword) == sword);
+		CHECK(physics.HasBody(sword));
+		CHECK(physics.GetStats().StaticBodyCount == 1);
+		StepScene(scene, 30);
+		const glm::vec3 droppedAt = GetWorldPosition(scene, sword);
+		CHECK(droppedAt.x == doctest::Approx(playerX + 1.0f).epsilon(0.01));
+		CHECK(std::abs(droppedAt.z) < 1.0e-4f);
+		const glm::vec3 playerPosition = GetWorldPosition(scene, player);
+		CHECK(playerPosition.z == doctest::Approx(-1.0f).epsilon(0.02));
+		hit = CastDown(physics, droppedAt);
+		REQUIRE(hit);
+		CHECK(hit->HitEntity == sword);
+		CHECK_FALSE(CastDown(physics, playerPosition + glm::vec3(1.3f, 0.0f, 0.0f)));
+		// It touched the player when dropped, and stopped touching when the player walked away.
+		CHECK(recorder.Count(CollisionEventType::Begin, player.GetUUID(), sword.GetUUID()) == 2);
+		CHECK(recorder.Count(CollisionEventType::End, player.GetUUID(), sword.GetUUID()) == 2);
+
+		// Handed from one body to another.
+		sword.GetTransform().Translation = glm::vec3(1.0f, 0.0f, 0.0f);
+		CHECK(scene.SetParent(sword, enemy, false));
+		CHECK(physics.GetBodyEntity(sword) == enemy);
+		CHECK(physics.GetStats().StaticBodyCount == 0);
+		hit = CastDown(physics, glm::vec3(11.3f, 0.0f, 0.0f));
+		REQUIRE(hit);
+		CHECK(hit->HitEntity == enemy);
+		CHECK(scene.SetParent(sword, player, false));
+		CHECK(physics.GetBodyEntity(sword) == player);
+		CHECK_FALSE(CastDown(physics, glm::vec3(11.3f, 0.0f, 0.0f)));
+		hit = CastDown(physics, playerPosition + glm::vec3(1.3f, 0.0f, 0.0f));
+		REQUIRE(hit);
+		CHECK(hit->HitEntity == player);
+
+		// A rigid body moved under another one stays a body of its own.
+		CHECK(scene.SetParent(enemy, player));
+		CHECK(physics.GetBodyEntity(enemy) == enemy);
+		CHECK(physics.HasBody(enemy));
+		CHECK(physics.GetStats().DynamicBodyCount == 2);
+		StepScene(scene, 1);
+		CHECK(recorder.Count(CollisionEventType::Begin) == recorder.Count(CollisionEventType::End));
+	}
+
 	TEST_CASE("Bodies rebuilt while inactive keep their merged colliders")
 	{
 		Scene scene;

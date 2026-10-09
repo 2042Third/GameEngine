@@ -267,6 +267,10 @@ namespace Strata
 
 		if (keepWorldTransform)
 			SetWorldTransform(child, worldTransform);
+
+		// Systems that build state from the hierarchy (physics merges descendants' colliders into a body) learn about the
+		// move through the child's on_update signal, emitted once the hierarchy and transform are final.
+		m_Registry.patch<RelationshipComponent>(child.GetHandle());
 		return true;
 	}
 

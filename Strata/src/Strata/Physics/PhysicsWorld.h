@@ -34,8 +34,9 @@ namespace Strata
 	// scale) world transform until it becomes valid, a mesh collider until the mesh provider returns its data, a full world
 	// until bodies are freed. A body whose world transform becomes degenerate leaves the simulation until it is valid again.
 	//
-	// The world listens to the scene registry: component, hierarchy-activity and entity-destruction changes are applied by
-	// ApplyPendingChanges (called by Simulate and by PhysicsSystem before queries). Each step:
+	// The world listens to the scene registry: component, reparenting (Scene::SetParent), activity and entity-destruction
+	// changes are applied by ApplyPendingChanges (called by Simulate and by PhysicsSystem before queries); reparenting
+	// moves colliders between bodies. Each step:
 	//  - kinematic bodies are moved towards their entity's transform; dynamic bodies whose transform was changed from
 	//    outside physics are teleported (waking bodies resting on them); both are checked every step;
 	//  - static bodies follow their entity's transform when a change is signaled (TransformComponent on_update, e.g.
