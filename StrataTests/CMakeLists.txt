@@ -82,9 +82,17 @@ if(WIN32)
 	target_sources(StrataTests PRIVATE "${PROJECT_SOURCE_DIR}/CMake/Strata.manifest")
 endif()
 
+# The feature test (FeatureTest/, see AGENTS.md "Testing") runs as its own test; its GPU suite runs with the GPU tests.
+set(STRATA_FEATURE_TEST_SUITES "FeatureTest,Editor.FeatureTest")
+
 add_test(NAME StrataTests.Core
-	COMMAND StrataTests --test-suite-exclude=GPU* --no-intro=true
+	COMMAND StrataTests "--test-suite-exclude=GPU*,${STRATA_FEATURE_TEST_SUITES}" --no-intro=true
 	WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
+
+add_test(NAME StrataTests.FeatureTest
+	COMMAND StrataTests "--test-suite=${STRATA_FEATURE_TEST_SUITES}" --no-intro=true
+	WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
+set_tests_properties(StrataTests.FeatureTest PROPERTIES LABELS "feature")
 
 add_test(NAME StrataTests.GPU
 	COMMAND StrataTests --test-suite=GPU* --no-intro=true
@@ -146,4 +154,27 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 
 	add_test(NAME StrataRuntime.Smoke COMMAND "${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}" --headless --frames 30)
 	set_tests_properties(StrataRuntime.Smoke PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
+endif()
+
+# The real executables with the feature test project: the editor opens a copy of it, plays the feature scene (physics) and
+# exports it; the exported game then runs headless. The editor executable does not load script modules yet, so the
+# feature scripts run in StrataTests.FeatureTest (which also drives the editor and the exported game in-process).
+if(TARGET StrataEditor AND TARGET StrataRuntime)
+	set(STRATA_FEATURE_RUN_DIR "${CMAKE_CURRENT_BINARY_DIR}/FeatureTestRun")
+	configure_file("${CMAKE_CURRENT_SOURCE_DIR}/Editor/FeatureCommands.json.in" "${CMAKE_CURRENT_BINARY_DIR}/FeatureCommands.json" @ONLY)
+
+	add_test(NAME StrataFeatureTest.Clean COMMAND "${CMAKE_COMMAND}" -E rm -rf "${STRATA_FEATURE_RUN_DIR}")
+	set_tests_properties(StrataFeatureTest.Clean PROPERTIES FIXTURES_SETUP StrataFeatureTestClean LABELS "feature")
+
+	add_test(NAME StrataFeatureTest.Copy COMMAND "${CMAKE_COMMAND}" -E copy_directory "${STRATA_FEATURE_TEST_DIR}" "${STRATA_FEATURE_RUN_DIR}/Project")
+	set_tests_properties(StrataFeatureTest.Copy PROPERTIES FIXTURES_REQUIRED StrataFeatureTestClean FIXTURES_SETUP StrataFeatureTestProject LABELS "feature")
+
+	add_test(NAME StrataEditor.FeatureTest
+		COMMAND StrataEditor --no-gpu --frames 300 --project "${STRATA_FEATURE_RUN_DIR}/Project/FeatureTest.stproj"
+			--commands "${CMAKE_CURRENT_BINARY_DIR}/FeatureCommands.json"
+		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
+	set_tests_properties(StrataEditor.FeatureTest PROPERTIES FIXTURES_REQUIRED StrataFeatureTestProject FIXTURES_SETUP StrataFeatureTestGame LABELS "feature")
+
+	add_test(NAME StrataRuntime.FeatureTest COMMAND "${STRATA_FEATURE_RUN_DIR}/Build/FeatureTest${CMAKE_EXECUTABLE_SUFFIX}" --headless --frames 120)
+	set_tests_properties(StrataRuntime.FeatureTest PROPERTIES FIXTURES_REQUIRED StrataFeatureTestGame LABELS "feature")
 endif()
