@@ -84,9 +84,22 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 	}
 	if (mode == "check-image")
 	{
-		// <png>: succeeds if the image decodes and shows something: it is neither (nearly) black nor a single color.
-		if (argc < 3)
+		// <png> [--dominant red|green|blue <percent>]: succeeds if the image decodes and shows something: it is neither
+		// (nearly) black nor a single color, and with --dominant at least <percent> of its pixels are clearly of that color
+		// (the channel exceeds both others by more than 40), e.g. a known object of the scene.
+		if (argc != 3 && argc != 6)
 			return 2;
+		int dominantChannel = -1;
+		double dominantPercent = 0.0;
+		if (argc == 6)
+		{
+			const std::string_view option(argv[3]);
+			const std::string_view color(argv[4]);
+			dominantChannel = color == "red" ? 0 : (color == "green" ? 1 : (color == "blue" ? 2 : -1));
+			dominantPercent = std::atof(argv[5]);
+			if (option != "--dominant" || dominantChannel < 0 || !(dominantPercent > 0.0 && dominantPercent <= 100.0))
+				return 2;
+		}
 		const std::optional<std::vector<uint8_t>> data = Strata::FileSystem::ReadBytes(Strata::FileSystem::FromUTF8(argv[2]));
 		if (!data || data->empty())
 		{
@@ -105,11 +118,19 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		}
 		int brightest = 0;
 		int64_t differing = 0; // Pixels that differ from the top-left one
+		int64_t dominant = 0;  // Pixels clearly of the --dominant color
 		const int64_t count = static_cast<int64_t>(width) * height;
 		for (int64_t index = 0; index < count; index++)
 		{
 			const stbi_uc* pixel = pixels + index * 4;
 			brightest = std::max({ brightest, static_cast<int>(pixel[0]), static_cast<int>(pixel[1]), static_cast<int>(pixel[2]) });
+			if (dominantChannel >= 0)
+			{
+				const int value = pixel[dominantChannel];
+				const int other1 = pixel[(dominantChannel + 1) % 3];
+				const int other2 = pixel[(dominantChannel + 2) % 3];
+				dominant += value > other1 + 40 && value > other2 + 40 ? 1 : 0;
+			}
 			for (int channel = 0; channel < 3; channel++)
 			{
 				if (std::abs(static_cast<int>(pixel[channel]) - static_cast<int>(pixels[channel])) > 24)
@@ -130,6 +151,16 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		{
 			std::fprintf(stderr, "The image is (nearly) a single color\n");
 			return 1;
+		}
+		if (dominantChannel >= 0)
+		{
+			const double percent = 100.0 * static_cast<double>(dominant) / static_cast<double>(count);
+			std::printf("%.2f%% of the pixels are %s\n", percent, argv[4]);
+			if (percent < dominantPercent)
+			{
+				std::fprintf(stderr, "Fewer than %.2f%% of the pixels are %s\n", dominantPercent, argv[4]);
+				return 1;
+			}
 		}
 		return 0;
 	}

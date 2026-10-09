@@ -109,7 +109,10 @@ if(TARGET StrataEditor)
 	add_test(NAME StrataEditor.Smoke
 		COMMAND StrataEditor --frames 120 --windowed --commands "${CMAKE_CURRENT_BINARY_DIR}/SmokeCommands.json"
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
-	set_tests_properties(StrataEditor.Smoke PROPERTIES LABELS "gpu")
+	set_tests_properties(StrataEditor.Smoke PROPERTIES LABELS "gpu" FIXTURES_SETUP StrataEditorSmokeCaptures)
+	# The smoke script's capture shows the scene (grid, floor, crate), not a black or empty image.
+	add_test(NAME StrataEditor.SmokeCaptureCheck COMMAND StrataTests --strata-test-helper=check-image "${STRATA_SMOKE_CAPTURE_DIR}/SmokeViewport.png")
+	set_tests_properties(StrataEditor.SmokeCaptureCheck PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataEditorSmokeCaptures)
 
 	# A failing command must fail the process, so scripted runs notice.
 	add_test(NAME StrataEditor.FailingScript
@@ -130,10 +133,9 @@ if(TARGET StrataEditor)
 	# Viewport captures need a GPU: without one the command fails with a clear error and the run with exit code 1.
 	add_test(NAME StrataEditor.CaptureWithoutGPU
 		COMMAND "${CMAKE_COMMAND}"
-			"-DEDITOR=$<TARGET_FILE:StrataEditor>"
-			"-DCOMMANDS=${CMAKE_CURRENT_SOURCE_DIR}/Editor/NoGpuCaptureCommands.json"
+			"-DCOMMAND=$<TARGET_FILE:StrataEditor>;--no-gpu;--frames;2;--commands;${CMAKE_CURRENT_SOURCE_DIR}/Editor/NoGpuCaptureCommands.json"
 			"-DEXPECTED_OUTPUT=viewport[.]capture failed: viewport[.]capture needs a GPU"
-			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/ExpectCommandFailure.cmake"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake"
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
 endif()
 
@@ -154,11 +156,20 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	add_test(NAME StrataRuntime.Smoke COMMAND "${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}" --headless --frames 30)
 	set_tests_properties(StrataRuntime.Smoke PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
 
-	# The exported game in a window renders a few frames from its camera and saves the last one, which must show the scene.
+	# The exported game in a window renders a few frames from its camera and saves the last one, which must show the scene:
+	# not black, not one color, and the blue box covering at least 1% of it.
 	set(STRATA_RUNTIME_SCREENSHOT "${STRATA_EXPORT_TEST_DIR}/RuntimeScreenshot.png")
 	add_test(NAME StrataRuntime.Render
 		COMMAND "${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}" --windowed --frames 10 --screenshot "${STRATA_RUNTIME_SCREENSHOT}")
 	set_tests_properties(StrataRuntime.Render PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataExportedGame FIXTURES_SETUP StrataRuntimeScreenshot)
-	add_test(NAME StrataRuntime.RenderCheck COMMAND StrataTests --strata-test-helper=check-image "${STRATA_RUNTIME_SCREENSHOT}")
+	add_test(NAME StrataRuntime.RenderCheck COMMAND StrataTests --strata-test-helper=check-image "${STRATA_RUNTIME_SCREENSHOT}" --dominant blue 1)
 	set_tests_properties(StrataRuntime.RenderCheck PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataRuntimeScreenshot)
+
+	# A game whose start scene has no camera shows a message frame: a screenshot of it fails the run.
+	add_test(NAME StrataRuntime.NoCameraScreenshot
+		COMMAND "${CMAKE_COMMAND}"
+			"-DCOMMAND=${STRATA_EXPORT_TEST_DIR}/BuildNoCamera/SmokeGame${CMAKE_EXECUTABLE_SUFFIX};--windowed;--frames;5;--screenshot;${STRATA_EXPORT_TEST_DIR}/NoCameraScreenshot.png"
+			"-DEXPECTED_OUTPUT=The screenshot shows the missing-camera message"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
+	set_tests_properties(StrataRuntime.NoCameraScreenshot PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataExportedGame)
 endif()

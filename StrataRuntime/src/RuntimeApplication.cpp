@@ -68,17 +68,24 @@ namespace Strata
 			const bool lastFrame = m_Options.MaxFrames && application.GetFrameCount() + 1 == *m_Options.MaxFrames;
 			if (!lastFrame || m_Options.ScreenshotPath.empty())
 				return;
-			application.RequestBackBufferCapture([path = m_Options.ScreenshotPath](const ReadbackImage& image)
+			// This frame is already rendered: a game that shows the missing-camera message cannot be what a screenshot is for.
+			const bool showingMessage = m_Renderer && m_Renderer->IsShowingMessage();
+			application.RequestBackBufferCapture([path = m_Options.ScreenshotPath, showingMessage](const ReadbackImage& image)
 			{
-				// A requested screenshot that cannot be made fails the run, so scripted runs (CI) notice.
+				// A requested screenshot that cannot be made, or shows no game, fails the run, so scripted runs (CI) notice.
 				std::string error;
-				if (ImageWriter::SavePNG(image, path, true, &error))
+				if (!ImageWriter::SavePNG(image, path, true, &error))
 				{
-					ST_INFO("Saved screenshot to {}", FileSystem::ToUTF8(path));
+					ST_ERROR("Screenshot failed: {}", error);
+					Application::Get().SetExitCode(1);
 					return;
 				}
-				ST_ERROR("Screenshot failed: {}", error);
-				Application::Get().SetExitCode(1);
+				ST_INFO("Saved screenshot to {}", FileSystem::ToUTF8(path));
+				if (showingMessage)
+				{
+					ST_ERROR("The screenshot shows the missing-camera message instead of the game");
+					Application::Get().SetExitCode(1);
+				}
 			});
 		}
 	private:

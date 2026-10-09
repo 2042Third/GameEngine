@@ -38,11 +38,15 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
 - CTest runs: `StrataTests.Core` (everything but GPU suites), `StrataTests.GPU` (label `gpu`),
   `StrataEditor.Smoke` (the real editor with `StrataTests/Editor/SmokeCommands.json.in`, configured into the build tree,
   label `gpu`; it captures the viewport to `SmokeViewport.png`/`SmokeSceneCamera.png` in
-  `build/<preset>/StrataTests/SmokeCaptures/`), the editor script checks
+  `build/<preset>/StrataTests/SmokeCaptures/`, checked by `StrataEditor.SmokeCaptureCheck`), the editor script checks
   (`StrataEditor.FailingScript`, `WaitingScript`, `UnfinishedScript`, `CaptureWithoutGPU`), and the export chain
-  `StrataExport.Clean` → `StrataEditor.Export` (`--no-gpu`) → `StrataRuntime.Smoke` (the exported game, headless) →
-  `StrataRuntime.Render` (windowed, saves `build/<preset>/StrataTests/ExportSmoke/RuntimeScreenshot.png`, label `gpu`)
-  → `StrataRuntime.RenderCheck` (`StrataTests --strata-test-helper=check-image`: not black, not a single color).
+  `StrataExport.Clean` → `StrataEditor.Export` (`--no-gpu`; it exports the smoke game twice, the second time starting
+  in a scene without a camera) → `StrataRuntime.Smoke` (the exported game, headless) → `StrataRuntime.Render` (windowed,
+  saves `build/<preset>/StrataTests/ExportSmoke/RuntimeScreenshot.png`, label `gpu`) → `StrataRuntime.RenderCheck`
+  (`StrataTests --strata-test-helper=check-image <png> [--dominant red|green|blue <percent>]`: not black, not a single
+  color, and here at least 1% of the blue box), plus `StrataRuntime.NoCameraScreenshot` (a screenshot of the
+  missing-camera message fails the run).
+- Tests that expect a process to fail with exit code 1 and a message use `StrataTests/ExpectFailure.cmake`.
 - To look at rendering changes, read those PNGs, or run `StrataEditor --windowed --frames N --commands <script>
   --screenshot out.png` with a script that builds a scene and uses `camera.set`/`camera.focus`.
 - GPU tests must end with `CHECK(gpu.GetNewErrorCount() == 0)` so validation errors fail them.

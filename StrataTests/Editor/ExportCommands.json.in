@@ -8,5 +8,10 @@
 	{ "command": "entity.create", "parameters": { "name": "Title", "components": { "Text": { "Text": "Smoke Game", "FontSize": 28, "ScreenAnchor": [0.5, 0.08] } } } },
 	{ "command": "scene.saveAs", "parameters": { "path": "Scenes/Main.stscene" } },
 	{ "command": "project.setStartScene", "parameters": { "scene": "Scenes/Main.stscene" } },
-	{ "command": "project.export", "parameters": { "directory": "@STRATA_EXPORT_TEST_DIR@/Build" } }
+	{ "command": "project.export", "parameters": { "directory": "@STRATA_EXPORT_TEST_DIR@/Build" } },
+	{ "command": "scene.new", "parameters": { "name": "NoCamera" } },
+	{ "command": "entity.create", "parameters": { "name": "Box", "components": { "MeshRenderer": { "Mesh": "0000000000000001", "Material": "Materials/Blue.stmat" } } } },
+	{ "command": "scene.saveAs", "parameters": { "path": "Scenes/NoCamera.stscene" } },
+	{ "command": "project.setStartScene", "parameters": { "scene": "Scenes/NoCamera.stscene" } },
+	{ "command": "project.export", "parameters": { "directory": "@STRATA_EXPORT_TEST_DIR@/BuildNoCamera" } }
 ]
