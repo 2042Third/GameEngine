@@ -40,12 +40,15 @@ namespace
 		*pointer = 42;
 	}
 
+#if !defined(__aarch64__) && !defined(_M_ARM64)
+	// Integer division by zero does not trap on ARM64 (it returns 0), so the tests that use this only exist elsewhere.
 	void DivideByZero(void* userData)
 	{
 		volatile int divisor = *static_cast<int*>(userData);
 		volatile int result = 100 / divisor;
 		(void)result;
 	}
+#endif
 
 	int Recurse(int depth)
 	{
@@ -357,8 +360,7 @@ TEST_SUITE("Core.Platform")
 			// abort() may change the mask itself before it raises SIGABRT (macOS blocks every other signal).
 			CHECK_FALSE(CrashGuard::Invoke(CallAbort, nullptr, &info));
 			CHECK(info.Description.find("abort()") != std::string::npos);
-#if !defined(__aarch64__)
-			// Integer division by zero does not trap on ARM64.
+#if !defined(__aarch64__) && !defined(_M_ARM64)
 			int divisor = 0;
 			CHECK_FALSE(CrashGuard::Invoke(DivideByZero, &divisor, &info));
 #endif
