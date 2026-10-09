@@ -35,10 +35,13 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
 
 - doctest filters split on commas. A test name containing a comma must be matched with `?`/`*`, e.g.
   `--test-case="Hierarchy?*"`.
-- CTest runs: `StrataTests.Core` (everything but GPU suites), `StrataTests.GPU` (label `gpu`),
-  `StrataEditor.Smoke` (the real editor with `StrataTests/Editor/SmokeCommands.json`, label `gpu`), and
-  the export chain `StrataExport.Clean` → `StrataEditor.Export` (`--no-gpu`) → `StrataRuntime.Smoke`
-  (the exported game, headless).
+- CTest runs: `StrataTests.Core` (everything but the GPU and EndToEnd suites), `StrataTests.GPU` (label `gpu`),
+  `StrataEditor.Smoke` (the real editor with `StrataTests/Editor/SmokeCommands.json`, label `gpu`), the
+  command script checks (`FailingScript`, `WaitingScript`, `UnfinishedScript`, `QuitScript`), the export
+  chain `StrataExport.Clean` → `StrataEditor.Export` (`--no-gpu`) → `StrataRuntime.Smoke` (the exported
+  game, headless), and `StrataEditor.Automation` (the `EndToEnd*` suites: the real editor, headless without a
+  GPU, driven by StrataCLI and its MCP server).
+- Scripted editor runs in CTest pass `--no-automation`, so they never publish sessions for real clients.
 - GPU tests must end with `CHECK(gpu.GetNewErrorCount() == 0)` so validation errors fail them.
 - Run both Debug and Release before committing: some bugs (uninitialized memory, timing) only show in one.
 
