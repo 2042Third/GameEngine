@@ -34,6 +34,8 @@ namespace Strata
 			options.ScreenshotPath = FileSystem::FromUTF8(*screenshot);
 		if (std::optional<std::string> commands = commandLine.GetOption("--commands"))
 			options.CommandScript = FileSystem::FromUTF8(*commands);
+		// Scripted runs whose length is unknown (script builds) end when their command script has finished.
+		options.QuitAfterCommands = commandLine.HasFlag("--quit-after-commands");
 
 		ApplicationSpecification specification;
 		specification.Name = "Strata Editor";

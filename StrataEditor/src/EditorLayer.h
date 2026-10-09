@@ -26,6 +26,7 @@ namespace Strata
 		// EditorCommandScript. With MaxFrames, a script that has not finished by the last frame fails the run.
 		std::filesystem::path CommandScript;
 		std::optional<uint64_t> MaxFrames;
+		bool QuitAfterCommands = false; // Close the editor once the command script finished (e.g. after a script build)
 		bool ShowImGuiDemo = false;
 		bool Headless = false; // No UI: the editor runs for automation only
 	};

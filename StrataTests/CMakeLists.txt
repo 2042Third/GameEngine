@@ -189,3 +189,25 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DEXPECT=${STRATA_FEATURE_SCRIPTS_RAN}" -P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
 	set_tests_properties(StrataRuntime.FeatureTest PROPERTIES FIXTURES_REQUIRED StrataFeatureTestGame LABELS "feature")
 endif()
+
+# A game's script workflow through the real editor and runtime, as an agent drives it (see Editor/ScriptsEndToEnd.cmake):
+# create a project, write a script, script.build, script.add, play, export, run the game headless. Like
+# StrataScriptCore.Package it needs CMake and the compiler at test time.
+if(TARGET StrataEditor AND TARGET StrataRuntime)
+	if(WIN32)
+		set(STRATA_SCRIPT_MODULE_SUFFIX ".dll")
+	elseif(APPLE)
+		set(STRATA_SCRIPT_MODULE_SUFFIX ".dylib")
+	else()
+		set(STRATA_SCRIPT_MODULE_SUFFIX ".so")
+	endif()
+	add_test(NAME StrataEditor.Scripts
+		COMMAND "${CMAKE_COMMAND}"
+			"-DEDITOR=$<TARGET_FILE:StrataEditor>"
+			"-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/ScriptsEndToEnd/$<CONFIG>"
+			"-DSCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/Editor/ScriptProject/Greeter.cpp"
+			"-DEXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
+			"-DMODULE_SUFFIX=${STRATA_SCRIPT_MODULE_SUFFIX}"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/ScriptsEndToEnd.cmake")
+	set_tests_properties(StrataEditor.Scripts PROPERTIES LABELS "package" TIMEOUT 1800)
+endif()

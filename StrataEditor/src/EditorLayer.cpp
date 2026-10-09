@@ -43,6 +43,8 @@ namespace Strata
 			{
 				ST_ERROR("Command script: {}", error);
 				Application::Get().SetExitCode(1);
+				if (m_Options.QuitAfterCommands)
+					Application::Get().Close();
 			}
 		}
 	}
@@ -62,6 +64,8 @@ namespace Strata
 			ST_INFO("Command script finished ({} commands)", m_CommandScript->GetStepCount());
 		}
 		m_CommandScript.reset();
+		if (m_Options.QuitAfterCommands)
+			Application::Get().Close();
 	}
 
 	void EditorLayer::OnDetach()
