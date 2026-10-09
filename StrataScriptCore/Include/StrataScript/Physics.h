@@ -24,6 +24,16 @@ namespace Strata
 		float Distance = 0.0f;              // From the ray's origin along its direction
 	};
 
+	// A contact passed to the collision and trigger callbacks of Script.
+	struct Collision
+	{
+		// The entity on the other side. Entities destroyed during the frame stay valid until it ends; a contact that ended
+		// because the other entity was destroyed names an entity that no longer exists.
+		Entity Other;
+		glm::vec3 Point = glm::vec3(0.0f);  // World space (the last known one when the contact ends)
+		glm::vec3 Normal = glm::vec3(0.0f); // From this script's entity towards the other
+	};
+
 	// The physics body of an entity while the scene plays: an active entity with a RigidBody component and colliders.
 	// Vectors are in world space, angular values in radians. Velocities can be read from every body, but only dynamic
 	// bodies accept velocities, forces and impulses; calls on other bodies or on entities without a body fail (the engine

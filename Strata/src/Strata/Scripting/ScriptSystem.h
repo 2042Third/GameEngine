@@ -3,12 +3,14 @@
 #include "Strata/Core/Base.h"
 #include "Strata/Core/Timestep.h"
 #include "Strata/Core/UUID.h"
+#include "Strata/Physics/PhysicsTypes.h"
 #include "Strata/Reflection/Property.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/SceneSystem.h"
 #include "Strata/Scripting/ScriptTypes.h"
 
 #include <entt/entt.hpp>
+#include <glm/glm.hpp>
 
 #include <optional>
 #include <string>
@@ -27,6 +29,7 @@ namespace Strata
 	class ScriptEngine;
 	class ScriptModule;
 	struct ScriptCallSite;
+	enum class ScriptCallResult : uint8_t;
 
 	// Runs the Script components of a playing scene through the active ScriptEngine. It is the built-in "Scripting" scene
 	// system (created on Scene::OnRuntimeStart in play mode, not in simulate mode). Main thread only.
@@ -43,6 +46,12 @@ namespace Strata
 	// Inactive entities receive no update callbacks (OnCreate and OnDestroy run regardless); entities destroyed during a
 	// frame keep updating until it ends. An instance whose callback throws is disabled; a crash faults the whole module
 	// (see ScriptEngine).
+	//
+	// Contacts: the scene's PhysicsSystem reports contact changes after each step; the scripts on both entities (those owning
+	// the bodies) receive OnCollisionEnter/Exit, or OnTriggerEnter/Exit when either body is a trigger, with the other entity
+	// and the contact normal pointing towards it. Scripts on inactive entities receive none. The callbacks run while the scene
+	// updates, so the entities they destroy stay valid until the frame ends; the other side of an Exit caused by destruction
+	// may already be gone.
 	class ScriptSystem final : public SceneSystem
 	{
 	public:
@@ -151,6 +160,12 @@ namespace Strata
 
 		void RunCallbacks(ScriptCallback callback, float argument);
 		void Invoke(Instance& instance, ScriptCallback callback, float argument);
+		// Disables an instance whose callback threw.
+		void HandleCallResult(Instance& instance, ScriptCallback callback, ScriptCallResult result);
+
+		void OnCollision(const CollisionEvent& event);
+		// Calls a contact callback on the scripts of an entity, for its contact with "other" (the normal points towards it).
+		void DeliverContact(UUID entityID, UUID otherID, ScriptCallback callback, const glm::vec3& point, const glm::vec3& normal);
 	private:
 		Scene& m_Scene;
 		Ref<ScriptEngine> m_Engine;
@@ -173,6 +188,7 @@ namespace Strata
 		std::vector<UUID> m_DeferredDestroys;
 
 		std::unordered_set<std::string> m_ReportedProblems;
+		CollisionListenerID m_CollisionListener = c_InvalidCollisionListener; // Registered with the scene's PhysicsSystem while running
 		std::vector<entt::scoped_connection> m_Connections;
 		float m_DeltaTime = 0.0f;
 		bool m_Running = false;

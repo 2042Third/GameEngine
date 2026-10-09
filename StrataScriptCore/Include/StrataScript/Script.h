@@ -2,6 +2,7 @@
 
 #include "StrataScript/Entity.h"
 #include "StrataScript/Host.h"
+#include "StrataScript/Physics.h"
 #include "StrataScript/Value.h"
 
 #include <glm/glm.hpp>
@@ -34,6 +35,8 @@ namespace Strata
 	//   OnLateUpdate    every frame, after the fixed updates
 	//   OnDestroy       when the entity is destroyed, the script is removed or the scene stops playing
 	//   OnReload        after a hot reload, instead of OnCreate (see below)
+	//   OnCollisionEnter / OnCollisionExit, OnTriggerEnter / OnTriggerExit
+	//                   when the entity's physics body starts or stops touching another body (see below)
 	// Instances update in entity hierarchy order (parents first), then in the order of the scripts on the entity.
 	// Inactive entities receive no updates. Overrides may be public, protected or private.
 	//
@@ -41,6 +44,12 @@ namespace Strata
 	// not OnDestroy) and a new instance of the new code is constructed. Field values (see ST_SCRIPT_FIELD) carry over
 	// when the new class still has a field with the same name and type; other state starts over. OnReload then runs
 	// instead of OnCreate, so re-acquire anything that is not a field (cached entities, script pointers) there.
+	//
+	// Contacts: scripts on an entity that owns a physics body (its RigidBody entity; colliders on descendants belong to it)
+	// learn when the body starts touching another body and when they part (or one leaves the simulation), after the fixed
+	// step that found it. The trigger callbacks report contacts where either body is a trigger (no collision response), the
+	// collision callbacks all others. Both entities' scripts are called. Destroying entities in these callbacks is safe:
+	// destruction happens at the end of the frame.
 	//
 	// Script classes must be default constructible; the module constructs one instance when it loads to read the field
 	// defaults. Do gameplay initialization in OnCreate, not in the constructor.
@@ -63,6 +72,10 @@ namespace Strata
 		virtual void OnLateUpdate([[maybe_unused]] float deltaTime) {}
 		virtual void OnDestroy() {}
 		virtual void OnReload() {}
+		virtual void OnCollisionEnter([[maybe_unused]] const Collision& collision) {}
+		virtual void OnCollisionExit([[maybe_unused]] const Collision& collision) {}
+		virtual void OnTriggerEnter([[maybe_unused]] const Collision& collision) {}
+		virtual void OnTriggerExit([[maybe_unused]] const Collision& collision) {}
 
 		// The entity this script is attached to.
 		Entity GetEntity() const { return m_Entity; }
@@ -241,6 +254,28 @@ namespace Strata
 			return InvokeScript(ScriptAccess::GetInstanceContext(*script), [&]() { script->OnReload(); });
 		}
 
+		// The engine's contact, if it is complete (it is engine memory: members appended later are read only when its
+		// StructSize covers them).
+		inline bool ReadCollision(const StrataScriptCollision* collision, Collision& out)
+		{
+			if (!collision || collision->StructSize < offsetof(StrataScriptCollision, Normal) + sizeof(collision->Normal))
+				return false;
+			out.Other = Entity(collision->Other);
+			out.Point = FromABIVector3(collision->Point);
+			out.Normal = FromABIVector3(collision->Normal);
+			return true;
+		}
+
+		template<void (Script::*Callback)(const Collision&)>
+		uint32_t ContactThunk(StrataScriptInstance instance, const StrataScriptCollision* collision)
+		{
+			Script* script = ToScript(instance);
+			Collision contact;
+			if (!script || !ReadCollision(collision, contact))
+				return StrataScriptResult_InvalidArgument;
+			return InvokeScript(ScriptAccess::GetInstanceContext(*script), [&]() { (script->*Callback)(contact); });
+		}
+
 		// Per script class: its registered name and, while the module is loaded, its record.
 		template<typename T>
 		struct ClassSlot
@@ -258,7 +293,11 @@ namespace Strata
 			CallbackFlag_OnFixedUpdate = 1u << 2,
 			CallbackFlag_OnLateUpdate = 1u << 3,
 			CallbackFlag_OnDestroy = 1u << 4,
-			CallbackFlag_OnReload = 1u << 5
+			CallbackFlag_OnReload = 1u << 5,
+			CallbackFlag_OnCollisionEnter = 1u << 6,
+			CallbackFlag_OnCollisionExit = 1u << 7,
+			CallbackFlag_OnTriggerEnter = 1u << 8,
+			CallbackFlag_OnTriggerExit = 1u << 9
 		};
 
 		// Whether T overrides a callback. `&T::OnUpdate` names Script::OnUpdate (type `void (Script::*)(float)`) unless T,
@@ -319,6 +358,42 @@ namespace Strata
 		}
 
 		template<typename T>
+		constexpr bool OverridesOnCollisionEnter()
+		{
+			if constexpr (requires { &T::OnCollisionEnter; })
+				return !std::is_same_v<decltype(&T::OnCollisionEnter), void (Script::*)(const Collision&)>;
+			else
+				return true;
+		}
+
+		template<typename T>
+		constexpr bool OverridesOnCollisionExit()
+		{
+			if constexpr (requires { &T::OnCollisionExit; })
+				return !std::is_same_v<decltype(&T::OnCollisionExit), void (Script::*)(const Collision&)>;
+			else
+				return true;
+		}
+
+		template<typename T>
+		constexpr bool OverridesOnTriggerEnter()
+		{
+			if constexpr (requires { &T::OnTriggerEnter; })
+				return !std::is_same_v<decltype(&T::OnTriggerEnter), void (Script::*)(const Collision&)>;
+			else
+				return true;
+		}
+
+		template<typename T>
+		constexpr bool OverridesOnTriggerExit()
+		{
+			if constexpr (requires { &T::OnTriggerExit; })
+				return !std::is_same_v<decltype(&T::OnTriggerExit), void (Script::*)(const Collision&)>;
+			else
+				return true;
+		}
+
+		template<typename T>
 		constexpr uint32_t GetCallbackFlags()
 		{
 			uint32_t flags = 0;
@@ -334,6 +409,14 @@ namespace Strata
 				flags |= CallbackFlag_OnDestroy;
 			if constexpr (OverridesOnReload<T>())
 				flags |= CallbackFlag_OnReload;
+			if constexpr (OverridesOnCollisionEnter<T>())
+				flags |= CallbackFlag_OnCollisionEnter;
+			if constexpr (OverridesOnCollisionExit<T>())
+				flags |= CallbackFlag_OnCollisionExit;
+			if constexpr (OverridesOnTriggerEnter<T>())
+				flags |= CallbackFlag_OnTriggerEnter;
+			if constexpr (OverridesOnTriggerExit<T>())
+				flags |= CallbackFlag_OnTriggerExit;
 			return flags;
 		}
 
@@ -474,6 +557,10 @@ namespace Strata
 			desc.OnLateUpdate = (flags & CallbackFlag_OnLateUpdate) ? &OnLateUpdateThunk : nullptr;
 			desc.OnDestroy = (flags & CallbackFlag_OnDestroy) ? &OnDestroyThunk : nullptr;
 			desc.OnReload = (flags & CallbackFlag_OnReload) ? &OnReloadThunk : nullptr;
+			desc.OnCollisionEnter = (flags & CallbackFlag_OnCollisionEnter) ? &ContactThunk<&Script::OnCollisionEnter> : nullptr;
+			desc.OnCollisionExit = (flags & CallbackFlag_OnCollisionExit) ? &ContactThunk<&Script::OnCollisionExit> : nullptr;
+			desc.OnTriggerEnter = (flags & CallbackFlag_OnTriggerEnter) ? &ContactThunk<&Script::OnTriggerEnter> : nullptr;
+			desc.OnTriggerExit = (flags & CallbackFlag_OnTriggerExit) ? &ContactThunk<&Script::OnTriggerExit> : nullptr;
 			return record;
 		}
 

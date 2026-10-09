@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Scripting/ScriptSystem.h"
 
+#include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scripting/ScriptEngine.h"
 #include "Strata/Scripting/ScriptHostAPI.h"
@@ -71,6 +72,9 @@ namespace Strata
 		m_Running = true;
 		m_CreationBlocked = false;
 		ConnectSignals();
+		// The physics system is created with this one (systems start after all of them exist) and stops before it.
+		if (PhysicsSystem* physics = m_Scene.GetSystem<PhysicsSystem>())
+			m_CollisionListener = physics->AddCollisionListener([this](const CollisionEvent& event) { OnCollision(event); });
 
 		const std::vector<Entity> entities = m_Scene.GetEntitiesInHierarchyOrder();
 		for (const Entity entity : entities)
@@ -92,6 +96,12 @@ namespace Strata
 		if (!m_Running)
 			return;
 
+		if (m_CollisionListener != c_InvalidCollisionListener)
+		{
+			if (PhysicsSystem* physics = m_Scene.GetSystem<PhysicsSystem>())
+				physics->RemoveCollisionListener(m_CollisionListener);
+			m_CollisionListener = c_InvalidCollisionListener;
+		}
 		m_CreationBlocked = true;
 		DestroyAllInstances(true);
 		m_Connections.clear();
@@ -187,11 +197,67 @@ namespace Strata
 			return;
 
 		const ScriptCallSite site = MakeCallSite(instance, ScriptCallbackToString(callback));
-		if (module->InvokeCallback(site, instance.Handle, callback, argument) == ScriptCallResult::Exception)
+		HandleCallResult(instance, callback, module->InvokeCallback(site, instance.Handle, callback, argument));
+	}
+
+	void ScriptSystem::HandleCallResult(Instance& instance, ScriptCallback callback, ScriptCallResult result)
+	{
+		if (result != ScriptCallResult::Exception)
+			return;
+
+		instance.Disabled = true;
+		const ScriptModule* module = m_Engine ? m_Engine->GetModule() : nullptr;
+		Log::GetScriptLogger()->error("Script '{}' on entity {} threw an exception in {}: {}. The script is disabled.", instance.ClassName,
+			DescribeEntity(m_Scene, instance.Entity), ScriptCallbackToString(callback), module ? module->GetLastExceptionMessage() : std::string());
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
+	// Contacts
+	////////////////////////////////////////////////////////////////////////////////
+
+	void ScriptSystem::OnCollision(const CollisionEvent& event)
+	{
+		const bool begin = event.Type == CollisionEventType::Begin;
+		ScriptCallback callback = begin ? ScriptCallback::OnCollisionEnter : ScriptCallback::OnCollisionExit;
+		if (event.IsTrigger)
+			callback = begin ? ScriptCallback::OnTriggerEnter : ScriptCallback::OnTriggerExit;
+		DeliverContact(event.AID, event.BID, callback, event.Point, event.Normal);
+		DeliverContact(event.BID, event.AID, callback, event.Point, -event.Normal);
+	}
+
+	void ScriptSystem::DeliverContact(UUID entityID, UUID otherID, ScriptCallback callback, const glm::vec3& point, const glm::vec3& normal)
+	{
+		if (!m_Running || !GetUsableModule())
+			return;
+		auto it = m_Instances.find(entityID);
+		if (it == m_Instances.end())
+			return;
+		// Like the update callbacks: entities destroyed during this frame still receive them, inactive ones do not.
+		const Entity entity = m_Scene.GetEntityByUUID(entityID);
+		if (!entity || !m_Scene.IsActiveInHierarchy(entity))
+			return;
+
+		StrataScriptCollision contact = {};
+		contact.StructSize = sizeof(StrataScriptCollision);
+		contact.Other = static_cast<uint64_t>(otherID);
+		for (int axis = 0; axis < 3; axis++)
 		{
-			instance.Disabled = true;
-			Log::GetScriptLogger()->error("Script '{}' on entity {} threw an exception in {}: {}. The script is disabled.", instance.ClassName,
-				DescribeEntity(m_Scene, instance.Entity), ScriptCallbackToString(callback), module->GetLastExceptionMessage());
+			contact.Point[axis] = point[axis];
+			contact.Normal[axis] = normal[axis];
+		}
+
+		// A copy: the callbacks may add or remove scripts (removed instances are flagged and skipped).
+		const std::vector<Ref<Instance>> instances = it->second;
+		for (const Ref<Instance>& instance : instances)
+		{
+			if (instance->Removed || instance->Disabled || !instance->Created || !instance->Handle || !instance->Class->Implements(callback))
+				continue;
+
+			ScriptModule* module = GetUsableModule();
+			if (!module)
+				return;
+			const ScriptCallSite site = MakeCallSite(*instance, ScriptCallbackToString(callback));
+			HandleCallResult(*instance, callback, module->InvokeContactCallback(site, instance->Handle, callback, contact));
 		}
 	}
 

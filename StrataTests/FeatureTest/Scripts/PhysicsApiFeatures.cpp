@@ -102,16 +102,16 @@ private:
 		const std::vector<RaycastHit> hits = Physics::RaycastAll(above, down);
 		Expect(hits.size() == 2 && hits[0].HitEntity == self && hits[1].HitEntity == ground, "Physics::RaycastAll, sorted by distance");
 
-		// The trigger zone's box spans y = 0 to 2 around (8, 6).
-		const glm::vec3 aboveZone(8.0f, 5.0f, 6.0f);
+		// The trigger zone's box spans x = 7 to 9, y = 0 to 2 and z = 5 to 7 (the collision probe falls into its x+ z- quarter).
+		const glm::vec3 aboveZone(7.5f, 5.0f, 6.5f);
 		Expect(Physics::Raycast(aboveZone, down).value_or(RaycastHit()).HitEntity == ground, "rays pass through triggers");
 		const std::optional<RaycastHit> zoneHit = Physics::Raycast(aboveZone, down, 10.0f, Physics::c_AllLayers, Entity(), true);
 		Expect(zoneHit.has_value() && zoneHit->HitEntity == zone && Near(zoneHit->Distance, 3.0f, 1e-3f), "rays can hit triggers");
 		Expect(Physics::Raycast(aboveZone, down, 10.0f, ~(1u << 3), Entity(), true).value_or(RaycastHit()).HitEntity == ground, "rays filter layers");
 
-		const glm::vec3 zoneCenter(8.0f, 1.0f, 6.0f);
-		Expect(Physics::OverlapSphere(zoneCenter, 0.5f).empty(), "Physics::OverlapSphere skips triggers");
-		Expect(Physics::OverlapSphere(zoneCenter, 0.5f, Physics::c_AllLayers, true) == std::vector<Entity> { zone }, "Physics::OverlapSphere can include triggers");
+		const glm::vec3 inZone(7.5f, 1.0f, 6.5f);
+		Expect(Physics::OverlapSphere(inZone, 0.4f).empty(), "Physics::OverlapSphere skips triggers");
+		Expect(Physics::OverlapSphere(inZone, 0.4f, Physics::c_AllLayers, true) == std::vector<Entity> { zone }, "Physics::OverlapSphere can include triggers");
 		const glm::quat turned = glm::angleAxis(glm::radians(45.0f), glm::vec3(0.0f, 1.0f, 0.0f));
 		Expect(Physics::OverlapBox(Home, glm::vec3(0.25f), turned) == std::vector<Entity> { self }, "Physics::OverlapBox");
 	}

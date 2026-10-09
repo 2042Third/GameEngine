@@ -315,6 +315,9 @@ namespace Strata::Tests
 			bodies++;
 		}
 		CHECK(bodies == 3);
+
+		// The fragile probe destroyed itself when it landed (inside its OnCollisionEnter).
+		CHECK_FALSE(scene.FindEntityByName("Fragile Probe").IsValid());
 	}
 
 	void CheckFeatureJournal(Scene& scene, const ScriptEngine& engine)
@@ -342,7 +345,8 @@ namespace Strata::Tests
 		}
 
 		for (const char* expected : { "DoomedProbe.OnDestroy@Doomed", "Helper.OnDestroy@Script Features", "LifecycleFeatures.OnReload@Lifecycle Features",
-				 "ExceptionProbe.OnReload@Exception Probe", "LifecycleFeatures.OnDestroy@Lifecycle Features" })
+				 "ExceptionProbe.OnReload@Exception Probe", "LifecycleFeatures.OnDestroy@Lifecycle Features", "FragileProbe.OnCollisionEnter@Fragile Probe",
+				 "FragileProbe.OnDestroy@Fragile Probe" })
 		{
 			INFO("Journal entry ", expected);
 			CHECK(std::find(journal.begin(), journal.end(), expected) != journal.end());

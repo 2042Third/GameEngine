@@ -157,6 +157,20 @@ extern "C"
 		float Distance;
 		uint32_t Padding;
 	} StrataScriptRaycastHit;
+
+	/* A contact passed to the contact callbacks of StrataScriptClassDesc. Engine memory, valid during the call; read members
+	 * appended later only when StructSize covers them. Other is the entity on the other side (it may be destroyed already
+	 * when the contact ended because of that); Point is in world space (the last known one when a contact ends) and Normal
+	 * points from the script's entity towards the other. */
+	typedef struct StrataScriptCollision
+	{
+		uint32_t StructSize; /* sizeof(StrataScriptCollision) as built into the engine */
+		uint32_t Padding;
+		StrataScriptEntityID Other;
+		float Point[3];
+		float Normal[3];
+	} StrataScriptCollision;
+
 	/*
 	 * Engine services for scripts. Unless noted otherwise, functions taking a context only work while the engine is
 	 * calling into the module for that context, on the engine's main thread; otherwise they fail (returning false, 0
@@ -328,6 +342,18 @@ extern "C"
 		uint32_t (*OnLateUpdate)(StrataScriptInstance instance, float deltaTime);
 		uint32_t (*OnDestroy)(StrataScriptInstance instance);
 		uint32_t (*OnReload)(StrataScriptInstance instance);
+
+		/*
+		 * Contacts of the entity's physics body (added after the initial set of ABI version 1: the engine reads them only when
+		 * StructSize covers them). They reach the scripts on the entities owning the two bodies (RigidBody entities, or
+		 * colliders without one), after the fixed step that found the change: Enter when the bodies start touching, Exit when
+		 * they part or one of them leaves the simulation. The trigger callbacks report contacts where either body is a
+		 * trigger, the collision callbacks the others. Scripts on inactive entities receive none.
+		 */
+		uint32_t (*OnCollisionEnter)(StrataScriptInstance instance, const StrataScriptCollision* collision);
+		uint32_t (*OnCollisionExit)(StrataScriptInstance instance, const StrataScriptCollision* collision);
+		uint32_t (*OnTriggerEnter)(StrataScriptInstance instance, const StrataScriptCollision* collision);
+		uint32_t (*OnTriggerExit)(StrataScriptInstance instance, const StrataScriptCollision* collision);
 
 		/* New callbacks are appended here. */
 	} StrataScriptClassDesc;

@@ -8,12 +8,16 @@ namespace Strata
 	{
 		switch (callback)
 		{
-			case ScriptCallback::OnCreate:      return "OnCreate";
-			case ScriptCallback::OnUpdate:      return "OnUpdate";
-			case ScriptCallback::OnFixedUpdate: return "OnFixedUpdate";
-			case ScriptCallback::OnLateUpdate:  return "OnLateUpdate";
-			case ScriptCallback::OnDestroy:     return "OnDestroy";
-			case ScriptCallback::OnReload:      return "OnReload";
+			case ScriptCallback::OnCreate:         return "OnCreate";
+			case ScriptCallback::OnUpdate:         return "OnUpdate";
+			case ScriptCallback::OnFixedUpdate:    return "OnFixedUpdate";
+			case ScriptCallback::OnLateUpdate:     return "OnLateUpdate";
+			case ScriptCallback::OnDestroy:        return "OnDestroy";
+			case ScriptCallback::OnReload:         return "OnReload";
+			case ScriptCallback::OnCollisionEnter: return "OnCollisionEnter";
+			case ScriptCallback::OnCollisionExit:  return "OnCollisionExit";
+			case ScriptCallback::OnTriggerEnter:   return "OnTriggerEnter";
+			case ScriptCallback::OnTriggerExit:    return "OnTriggerExit";
 		}
 		return "Unknown";
 	}
