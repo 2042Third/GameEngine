@@ -703,7 +703,7 @@ TEST_SUITE("Audio.System")
 		REQUIRE(engine.Initialized);
 		AudioProject project;
 		const AssetHandle clip = project.AddClip(1.0f);
-		SceneSystemRegistry::Register({ "TestDooming", false, [](Scene& scene) { return CreateScope<DoomingSystem>(scene); } });
+		ScopedSceneSystemRegistration dooming({ "TestDooming", false, [](Scene& scene) { return CreateScope<DoomingSystem>(scene); } });
 
 		Scene scene;
 		Entity parent = scene.CreateEntity("Parent");
@@ -776,7 +776,6 @@ TEST_SUITE("Audio.System")
 		CHECK(audio.IsPlaying(survivor));
 
 		scene.OnRuntimeStop();
-		SceneSystemRegistry::Unregister("TestDooming");
 		CHECK(AudioEngine::GetStats().SourceCount == 0);
 	}
 

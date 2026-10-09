@@ -249,6 +249,14 @@ TEST_SUITE("Audio.Engine")
 		CHECK(source.GetPlaybackPosition() == position);
 		AudioEngine::SetPaused(false);
 
+		// A long hitch advances at most one second, like an output device that underruns.
+		AudioSource longSource;
+		REQUIRE(longSource.SetClip(CreateSineClip(3.0f)));
+		longSource.Play();
+		AudioEngine::AdvanceNullDevice(5.0f);
+		CHECK(std::abs(longSource.GetPlaybackPosition() - 1.0f) < c_PositionTolerance);
+		CHECK(longSource.IsPlaying());
+
 		// Sounds end, so finished one-shots are reclaimed.
 		REQUIRE(AudioEngine::PlayOneShot(CreateSineClip(0.1f)));
 		AudioEngine::AdvanceNullDevice(0.25f);
