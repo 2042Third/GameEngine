@@ -43,6 +43,9 @@ strata_vendor_option(NVRHI_BUILD_TESTS OFF)
 strata_vendor_option(NVRHI_INSTALL OFF)
 strata_vendor_option(NVRHI_FETCH_VULKAN_HEADERS OFF)
 add_subdirectory(NVRHI SYSTEM)
+# The Vulkan backend uses the common library (validation, state tracking), which NVRHI does not declare. Linkers that
+# resolve static libraries in command-line order (GNU ld) need nvrhi after nvrhi_vk.
+target_link_libraries(nvrhi_vk PUBLIC nvrhi)
 
 # --- GLFW (glfw) ----------------------------------------------------------------------------------
 strata_vendor_option(GLFW_BUILD_DOCS OFF)
