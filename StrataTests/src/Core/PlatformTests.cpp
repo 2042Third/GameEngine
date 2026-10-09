@@ -172,6 +172,20 @@ TEST_SUITE("Core.Platform")
 		const Scope<FileLock> again = FileLock::TryAcquire(path);
 		CHECK(again);
 		CHECK_FALSE(FileLock::TryAcquire(directory / "Missing.lock"));
+
+		// Create never replaces an existing file, locked or not.
+		const std::filesystem::path existing = directory / "Existing.lock";
+		REQUIRE(FileSystem::WriteText(existing, "Kept"));
+		CHECK_FALSE(FileLock::Create(existing));
+		CHECK(FileSystem::ReadText(existing) == std::optional<std::string>("Kept"));
+		CHECK(FileLock::TryAcquire(existing));
+		// No temporary files are left behind.
+		size_t entries = 0;
+		std::error_code error;
+		for (std::filesystem::directory_iterator it(directory, error), end; !error && it != end; it.increment(error))
+			entries++;
+		CHECK_FALSE(error);
+		CHECK(entries == 2);
 	}
 
 	TEST_CASE("File locks are released when their process ends")
