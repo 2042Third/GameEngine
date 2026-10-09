@@ -44,6 +44,9 @@ namespace Strata
 		// Lexically normalized path relative to base, or empty if path is not inside base.
 		static std::filesystem::path GetRelativePath(const std::filesystem::path& path, const std::filesystem::path& base);
 		static bool IsInside(const std::filesystem::path& path, const std::filesystem::path& base);
+		// Like IsInside, but resolves symbolic links and relative components against the file system first, so a link
+		// inside base pointing elsewhere is outside. False when either path cannot be resolved.
+		static bool IsInsideResolved(const std::filesystem::path& path, const std::filesystem::path& base);
 
 		// Returns a path that does not exist yet by appending " (n)" before the extension if needed.
 		static std::filesystem::path GetUniquePath(const std::filesystem::path& desiredPath);

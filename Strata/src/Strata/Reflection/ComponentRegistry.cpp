@@ -1,7 +1,8 @@
 #include "stpch.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 
-#include <cctype>
+#include "Strata/Core/StringUtils.h"
+
 #include <mutex>
 
 namespace Strata
@@ -27,28 +28,11 @@ namespace Strata
 			return s_Data;
 		}
 
-		bool EqualsIgnoreCase(std::string_view a, std::string_view b)
-		{
-			if (a.size() != b.size())
-				return false;
-			for (size_t index = 0; index < a.size(); index++)
-			{
-				if (std::tolower(static_cast<unsigned char>(a[index])) != std::tolower(static_cast<unsigned char>(b[index])))
-					return false;
-			}
-			return true;
-		}
-
 	}
 
 	const PropertyInfo* ComponentInfo::FindProperty(std::string_view name) const
 	{
-		for (const PropertyInfo& property : Properties)
-		{
-			if (EqualsIgnoreCase(property.Name, name))
-				return &property;
-		}
-		return nullptr;
+		return Strata::FindProperty(Properties, name);
 	}
 
 	void ComponentRegistry::EnsureInitialized()
@@ -88,7 +72,7 @@ namespace Strata
 	{
 		for (const ComponentInfo* info : GetAll())
 		{
-			if (EqualsIgnoreCase(info->Name, name))
+			if (StringUtils::EqualsIgnoreCase(info->Name, name))
 				return info;
 		}
 		return nullptr;
@@ -100,23 +84,6 @@ namespace Strata
 		const RegistryData& data = GetData();
 		auto it = data.ByTypeId.find(typeId);
 		return it != data.ByTypeId.end() ? it->second : nullptr;
-	}
-
-	namespace Detail
-	{
-
-		void ApplyPropertyOptions(PropertyInfo& property, const std::string& name, PropertyType type, const PropertyOptions& options)
-		{
-			property.Name = name;
-			property.DisplayName = options.DisplayName.empty() ? Utils::PascalCaseToDisplayName(name) : options.DisplayName;
-			property.Tooltip = options.Tooltip;
-			property.Type = type;
-			property.Flags = options.Flags;
-			property.Min = options.Min;
-			property.Max = options.Max;
-			property.Speed = options.Speed;
-		}
-
 	}
 
 }

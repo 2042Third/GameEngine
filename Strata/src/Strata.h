@@ -20,10 +20,28 @@
 #include "Strata/Events/KeyEvent.h"
 #include "Strata/Events/MouseEvent.h"
 
+#include "Strata/Asset/AssetManager.h"
+#include "Strata/Asset/BuiltinAssets.h"
+
 #include "Strata/Audio/AudioClip.h"
+#include "Strata/Audio/AudioClipAsset.h"
 #include "Strata/Audio/AudioEngine.h"
 #include "Strata/Audio/AudioSource.h"
 
 #include "Strata/Input/Input.h"
 #include "Strata/Input/KeyCodes.h"
 #include "Strata/Input/MouseCodes.h"
+
+#include "Strata/Project/Project.h"
+
+#include "Strata/Renderer/Material.h"
+#include "Strata/Renderer/Mesh.h"
+#include "Strata/Renderer/MeshFactory.h"
+#include "Strata/Renderer/Renderer.h"
+#include "Strata/Renderer/Texture.h"
+
+#include "Strata/Scene/Components.h"
+#include "Strata/Scene/Entity.h"
+#include "Strata/Scene/Prefab.h"
+#include "Strata/Scene/Scene.h"
+#include "Strata/Scene/SceneSerializer.h"

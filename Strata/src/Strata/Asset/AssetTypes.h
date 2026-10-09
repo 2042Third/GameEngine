@@ -27,4 +27,8 @@ namespace Strata
 	const char* AssetTypeToString(AssetType type);
 	std::optional<AssetType> AssetTypeFromString(std::string_view text);
 
+	// File extension of the asset types the engine writes itself (".stscene", ".stprefab", ".stmat"); empty for types
+	// that are always imported from other formats.
+	std::string_view GetNativeAssetExtension(AssetType type);
+
 }

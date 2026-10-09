@@ -1,11 +1,13 @@
 #include "stpch.h"
 #include "Strata/Core/Application.h"
 
+#include "Strata/Asset/AssetManager.h"
 #include "Strata/Audio/AudioEngine.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Timer.h"
 #include "Strata/ImGui/ImGuiLayer.h"
 #include "Strata/Input/Input.h"
+#include "Strata/Project/Project.h"
 #include "Strata/Renderer/GraphicsDevice.h"
 #include "Strata/Renderer/Renderer.h"
 
@@ -68,6 +70,11 @@ namespace Strata
 		// Layers may reference engine systems, so they go first.
 		m_LayerStack.Clear();
 		m_ImGuiLayer = nullptr;
+
+		// Assets own GPU resources and their manager waits for load jobs: release them while the job system and the
+		// renderer still exist.
+		AssetManager::SetActive(nullptr);
+		Project::SetActive(nullptr);
 
 		ExecuteMainThreadQueue();
 		JobSystem::Shutdown();
