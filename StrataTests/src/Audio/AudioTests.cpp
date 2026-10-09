@@ -626,8 +626,9 @@ TEST_SUITE("Audio.Source")
 	{
 		ScopedAudioEngine engine;
 		REQUIRE(engine.Initialized);
+		Ref<AudioClip> clip = CreateSineClip(0.01f);
 		AudioSource source;
-		REQUIRE(source.SetClip(CreateSineClip(0.01f)));
+		REQUIRE(source.SetClip(clip));
 
 		// A thread mixing like an output device finishes the voice at any moment, while this thread keeps calling Play,
 		// like a script playing a short sound every frame.
@@ -640,15 +641,21 @@ TEST_SUITE("Audio.Source")
 		});
 		const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
 		uint32_t plays = 0;
+		uint32_t stalled = 0;
 		while (std::chrono::steady_clock::now() < deadline)
 		{
 			source.Play();
 			plays++;
+			// Started, or already finished again: never stopped short. (Restarting a finished voice instead of replacing it
+			// could leave it stopped at its beginning, though only in a window too narrow to hit reliably here.)
+			if (!source.IsPlaying() && source.GetPlaybackPosition() < clip->GetLength() - 1e-6f)
+				stalled++;
 		}
 		mixing = false;
 		mixer.join();
 
 		CHECK(plays > 0);
+		CHECK(stalled == 0);
 		source.Play();
 		CHECK(source.IsPlaying());
 	}
@@ -1146,11 +1153,12 @@ TEST_SUITE("Audio.Spatial")
 		CHECK(AudioEngine::GetMixedListenerUp() == glm::vec3(0.0f, -1.0f, 0.0f));
 		CHECK(MeasureRms(0) > MeasureRms(1) * 1.5f);
 
-		// Changed many times between periods, the latest vector wins.
-		for (int index = 0; index < 100; index++)
+		// Changed many times between periods, the latest vector wins (upright again: a handoff that dropped updates would
+		// leave the mixer upside down).
+		for (int index = 0; index <= 100; index++)
 			AudioEngine::SetListener(position, glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, index % 2 == 0 ? 1.0f : -1.0f, 0.0f));
-		CHECK(MeasureRms(0) > MeasureRms(1) * 1.5f);
-		CHECK(AudioEngine::GetMixedListenerUp() == glm::vec3(0.0f, -1.0f, 0.0f));
+		CHECK(MeasureRms(1) > MeasureRms(0) * 1.5f);
+		CHECK(AudioEngine::GetMixedListenerUp() == glm::vec3(0.0f, 1.0f, 0.0f));
 	}
 
 	TEST_CASE("Non-spatial sources ignore their position")
