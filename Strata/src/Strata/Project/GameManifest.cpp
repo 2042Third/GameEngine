@@ -13,6 +13,13 @@ namespace Strata
 
 		constexpr uint32_t c_MaxWindowSize = 16384;
 
+		// Files a manifest names must lie next to it: a manifest cannot point the runtime elsewhere.
+		bool IsPlainFileName(const std::string& name)
+		{
+			const std::filesystem::path path = FileSystem::FromUTF8(name);
+			return !name.empty() && !path.has_parent_path() && !path.is_absolute() && path.filename() == path;
+		}
+
 	}
 
 	nlohmann::json GameManifest::ToJson() const
@@ -23,6 +30,7 @@ namespace Strata
 				{ "Name", Name },
 				{ "AssetPack", AssetPack },
 				{ "StartScene", UUIDToJson(StartScene) },
+				{ "ScriptModule", ScriptModule },
 				{ "Window", { { "Width", WindowWidth }, { "Height", WindowHeight }, { "Fullscreen", Fullscreen }, { "VSync", VSync } } } } } };
 	}
 
@@ -38,8 +46,9 @@ namespace Strata
 		const nlohmann::json* header = JsonUtils::Find(json, "Strata");
 		if (!header || JsonUtils::GetString(*header, "Format") != "Game")
 			return fail("Not a Strata game manifest");
-		if (JsonUtils::GetUInt(*header, "Version", 0) != c_FormatVersion)
-			return fail(fmt::format("Unsupported game manifest version (expected {})", c_FormatVersion));
+		const uint64_t version = JsonUtils::GetUInt(*header, "Version", 0);
+		if (version == 0 || version > c_FormatVersion)
+			return fail(fmt::format("Unsupported game manifest version {} (this runtime reads 1-{})", version, c_FormatVersion));
 		const nlohmann::json* game = JsonUtils::Find(json, "Game");
 		if (!game || !game->is_object())
 			return fail("The manifest has no \"Game\" object");
@@ -47,10 +56,11 @@ namespace Strata
 		GameManifest manifest;
 		manifest.Name = JsonUtils::GetString(*game, "Name", manifest.Name);
 		manifest.AssetPack = JsonUtils::GetString(*game, "AssetPack");
-		// The pack must be a plain file name next to the manifest: a manifest cannot point the runtime elsewhere.
-		const std::filesystem::path pack = FileSystem::FromUTF8(manifest.AssetPack);
-		if (manifest.AssetPack.empty() || pack.has_parent_path() || pack.is_absolute() || pack.filename() != pack)
+		if (!IsPlainFileName(manifest.AssetPack))
 			return fail("\"AssetPack\" must be the file name of the asset pack next to the manifest");
+		manifest.ScriptModule = JsonUtils::GetString(*game, "ScriptModule");
+		if (!manifest.ScriptModule.empty() && !IsPlainFileName(manifest.ScriptModule))
+			return fail("\"ScriptModule\" must be the file name of the script module next to the manifest");
 		const nlohmann::json* startScene = JsonUtils::Find(*game, "StartScene");
 		std::optional<UUID> scene = startScene ? UUIDFromJson(*startScene) : std::nullopt;
 		if (!scene || !scene->IsValid())

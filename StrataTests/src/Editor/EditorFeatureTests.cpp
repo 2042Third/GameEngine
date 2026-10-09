@@ -59,14 +59,16 @@ TEST_SUITE("Editor.FeatureTest")
 	{
 		const std::filesystem::path directory = CreateTemporaryDirectory("EditorFeatureTest");
 		const std::filesystem::path projectFile = CopyFeatureProject(directory / "Project");
-		// Scenes played while it is active (by the editor and by the exported game) run the feature scripts.
-		ScopedScriptEngine engine(GetFeatureScriptModule());
 		ScopedScriptLogLevel scriptLogLevel;
 		LogCapture log;
 
+		// The editor runs the feature scripts, built in-tree, as the project's script module.
 		FeatureEditor editor;
 		editor.Run("project.open", { { "path", FileSystem::ToUTF8(projectFile) } });
 		CHECK(editor.Run("project.info")["startScene"] == "F7A0000000000001");
+		editor.Run("script.load", { { "path", FileSystem::ToUTF8(GetFeatureScriptModule()) } });
+		const Ref<ScriptEngine> engine = editor.Context.GetScriptEngine();
+		REQUIRE(engine);
 		editor.Run("scene.open", { { "scene", "Scenes/Feature.stscene" } });
 		const std::string ball = editor.FindEntity("Ball");
 		CHECK(editor.GetHeight(ball) == doctest::Approx(4.0f));
@@ -92,17 +94,25 @@ TEST_SUITE("Editor.FeatureTest")
 		CHECK(editor.Run("component.get", { { "entity", sign }, { "component", "Text" } })["values"]["Text"] == "Hello, Strata");
 		CHECK_FALSE(editor.Context.IsSceneModified());
 
-		// The exported game (asset pack and manifest) plays the same scenario in the game runtime.
+		// The exported game (asset pack, script module and manifest) plays the same scenario in the game runtime, with its own
+		// copy of the module.
 		const nlohmann::json exported = editor.Run("project.export", { { "directory", FileSystem::ToUTF8(directory / "Build") }, { "includeRuntime", false } });
+		REQUIRE(exported["scriptModule"].is_string());
+		CHECK(FileSystem::FromUTF8(exported["scriptModule"].get<std::string>()).filename() == GetFeatureScriptModule().filename());
 		const std::filesystem::path manifest = FileSystem::FromUTF8(exported["manifest"].get<std::string>());
 		std::string error;
 		Scope<GameRuntime> game = GameRuntime::Create(manifest, &error);
 		REQUIRE_MESSAGE(game, error);
+		const Ref<ScriptEngine> gameEngine = game->GetScriptEngine();
+		REQUIRE(gameEngine);
+		CHECK(gameEngine != engine);
+		CHECK(ScriptEngine::GetActive() == gameEngine);
 		const Ref<Scene> gameScene = game->GetScene();
-		PlayFeatureScene(*gameScene, *engine, [&]() { game->Update(Timestep(c_FeatureFrameTime)); });
-		CheckFeatureResults(*gameScene, *engine);
+		PlayFeatureScene(*gameScene, *gameEngine, [&]() { game->Update(Timestep(c_FeatureFrameTime)); });
+		CheckFeatureResults(*gameScene, *gameEngine);
+		CHECK_FALSE(game->GetScriptFault());
 		game.reset(); // Stops the scene
-		CheckFeatureJournal(*gameScene, *engine);
+		CheckFeatureJournal(*gameScene, *gameEngine);
 
 		// The game runtime starts its scene right away and streams assets in (it has no loading screen yet), so the
 		// platform's mesh collider waits for its mesh at first.

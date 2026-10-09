@@ -1,12 +1,14 @@
 [
 	{ "command": "project.info" },
 	{ "command": "scene.open", "parameters": { "scene": "Scenes/Feature.stscene" } },
+	{ "command": "script.load", "parameters": { "path": "$<TARGET_FILE:StrataTestScriptsFeatureTest>" } },
 	{ "command": "component.get", "parameters": { "entity": "F7E0000000000012", "component": "RigidBody" } },
 	{ "command": "play.start" },
 	{ "command": "play.pause", "parameters": { "paused": true } },
 	{ "command": "play.step", "parameters": { "frames": 150 } },
 	{ "command": "editor.wait", "parameters": { "frames": 160 } },
 	{ "command": "component.get", "parameters": { "entity": "F7E0000000000012", "component": "Transform" } },
+	{ "command": "script.status" },
 	{ "command": "play.stop" },
 	{ "command": "project.export", "parameters": { "directory": "@STRATA_FEATURE_RUN_DIR@/Build" } }
 ]

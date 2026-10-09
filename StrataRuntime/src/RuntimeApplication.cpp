@@ -6,6 +6,9 @@
 namespace Strata
 {
 
+	// Exit codes: 1 when the game cannot start, 2 when its scripts crashed in a headless run.
+	constexpr int c_ScriptCrashExitCode = 2;
+
 	// Runs the game of a manifest. Startup failures end the process with exit code 1.
 	class RuntimeLayer : public Layer
 	{
@@ -34,8 +37,18 @@ namespace Strata
 
 		void OnUpdate(Timestep timestep) override
 		{
-			if (m_Runtime)
-				m_Runtime->Update(timestep);
+			if (!m_Runtime)
+				return;
+			m_Runtime->Update(timestep);
+			// A headless run (a server, CI) has nobody to show a broken game to: a script crash ends it with exit code 2. A
+			// windowed game keeps running without its scripts; the crash is in the log.
+			if (m_Runtime->GetScriptFault() && Application::Get().GetSpecification().Headless)
+			{
+				ST_CRITICAL("Stopping the headless game after a script crash");
+				Application::Get().SetExitCode(c_ScriptCrashExitCode);
+				Application::Get().Close();
+				m_Runtime.reset();
+			}
 		}
 	private:
 		std::filesystem::path m_ManifestPath;

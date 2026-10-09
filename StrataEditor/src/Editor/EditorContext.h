@@ -1,14 +1,18 @@
 #pragma once
 
 #include "Editor/SceneEdit.h"
+#include "Editor/ScriptBuild.h"
 #include "Editor/UndoStack.h"
 
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Project/Project.h>
 #include <Strata/Scene/Scene.h>
+#include <Strata/Scripting/ScriptEngine.h>
+#include <Strata/Scripting/ScriptTypes.h>
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -26,7 +30,19 @@ namespace Strata
 
 	struct EditorContextSpecification
 	{
-		bool WatchAssetFiles = true; // Hot reload of files changed outside the editor
+		bool WatchAssetFiles = true;  // Hot reload of files changed outside the editor
+		bool HotReloadScripts = true; // Reload the script module when its file changes (e.g. rebuilt from an IDE)
+		// The toolchain script.build uses (the engine's own by default).
+		ScriptBuildSettings ScriptBuild = ScriptBuildSettings::GetEngineDefaults();
+	};
+
+	// What became of the module of the last finished script build.
+	struct ScriptBuildLoad
+	{
+		uint64_t BuildID = 0;
+		bool Loaded = false; // The built module is the loaded one (loaded, reloaded, or already loaded and unchanged)
+		bool Reloaded = false; // It replaced a loaded module (running scenes went through a hot reload)
+		std::string Error;   // Why it could not be loaded
 	};
 
 	// The editor's state independent of any UI: the open project and its assets, the edited scene, play mode, the
@@ -115,11 +131,37 @@ namespace Strata
 		bool Undo();
 		bool Redo();
 
-		// Once per frame: asset hot reload and loading, then the scene update (simulation while playing).
+		//////////////////////////////////////////////////////////////////////////
+		// Scripts
+		//////////////////////////////////////////////////////////////////////////
+
+		// The project's script engine (null without a project). Scenes the editor plays run their scripts through it. When
+		// a project opens, its built module (Project::GetScriptModulePath) is loaded if it exists.
+		const Ref<ScriptEngine>& GetScriptEngine() const { return m_ScriptEngine; }
+		// Loads a script module file instead of the loaded one; running scenes keep their script state (hot reload).
+		bool LoadScriptModule(const std::filesystem::path& path, std::string* outError = nullptr);
+		// Loads the loaded module's file again, or the project's built module when none is loaded.
+		bool ReloadScripts(std::string* outError = nullptr);
+		// Starts building the project's scripts in the background (one build at a time). When the build succeeds, its
+		// module is loaded, or reloaded if it changed; the outcome is GetLastScriptBuildLoad.
+		bool BuildScripts(std::string* outError = nullptr);
+		const ScriptBuilder& GetScriptBuilder() const { return m_ScriptBuilder; }
+		const ScriptBuildLoad& GetLastScriptBuildLoad() const { return m_LastScriptBuildLoad; }
+		// The script crash that stopped play mode last; cleared when a module loads.
+		const std::optional<ScriptFault>& GetLastScriptFault() const { return m_LastScriptFault; }
+
+		// Once per frame: script hot reload and builds, asset hot reload and loading, then the scene update (simulation
+		// while playing). A script crash while playing stops play mode.
 		void Update(Timestep timestep);
 	private:
+		bool OpenProjectInternal(const std::filesystem::path& path, bool created, std::string* outError);
 		bool StartRuntime(SceneRuntimeMode mode, std::string* outError);
 		void ResetScene(Ref<Scene> scene, AssetHandle handle);
+		void OpenScriptEngine(bool created);
+		void CloseScriptEngine();
+		void OnScriptBuildFinished();
+		// Stops play mode (and reports the fault) when the script module crashed. Returns true if it did.
+		bool StopOnScriptFault();
 	private:
 		EditorContextSpecification m_Specification;
 		Ref<Project> m_Project;
@@ -132,6 +174,11 @@ namespace Strata
 
 		std::vector<UUID> m_Selection;
 		UndoStack m_UndoStack;
+
+		Ref<ScriptEngine> m_ScriptEngine;
+		ScriptBuilder m_ScriptBuilder;
+		ScriptBuildLoad m_LastScriptBuildLoad;
+		std::optional<ScriptFault> m_LastScriptFault;
 	};
 
 }

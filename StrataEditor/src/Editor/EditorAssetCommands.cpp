@@ -149,10 +149,11 @@ namespace Strata
 				return EditorCommandResult::Ok();
 			} });
 
-		registry.Register({ "project.export", "Exports the project as a playable game (runtime executable, asset pack, manifest) into a directory outside the project.",
+		registry.Register({ "project.export", "Exports the project as a playable game (runtime executable, asset pack, script module, manifest) into a directory outside the project. The game runs the script module the editor has loaded (build it first with script.build).",
 			ObjectSchema({
 				{ "directory", StringSchema("Absolute output directory") },
 				{ "includeRuntime", BoolSchema("Copy the runtime executable (default true)") },
+				{ "includeScriptSymbols", BoolSchema("Copy the script module's debug symbols (PDB) too (default: true, false in Dist builds)") },
 				{ "runtime", StringSchema("Runtime executable to copy (default: StrataRuntime next to the editor)") },
 				{ "width", IntegerSchema("Window width (default 1280)", 1, 16384) },
 				{ "height", IntegerSchema("Window height (default 720)", 1, 16384) },
@@ -163,6 +164,7 @@ namespace Strata
 				GameExportOptions options;
 				options.Directory = FileSystem::FromUTF8(arguments.GetString("directory"));
 				options.IncludeRuntime = arguments.GetBool("includeRuntime", true);
+				options.IncludeScriptSymbols = arguments.GetBool("includeScriptSymbols", options.IncludeScriptSymbols);
 				options.RuntimeExecutable = FileSystem::FromUTF8(arguments.GetString("runtime", ""));
 				options.WindowWidth = static_cast<uint32_t>(arguments.GetInt("width", options.WindowWidth, 1, 16384));
 				options.WindowHeight = static_cast<uint32_t>(arguments.GetInt("height", options.WindowHeight, 1, 16384));
@@ -177,6 +179,7 @@ namespace Strata
 					{ "executable", result.Executable.empty() ? nlohmann::json(nullptr) : nlohmann::json(FileSystem::ToUTF8(result.Executable)) },
 					{ "manifest", FileSystem::ToUTF8(result.Manifest) },
 					{ "assetPack", FileSystem::ToUTF8(result.AssetPack) },
+					{ "scriptModule", result.ScriptModule.empty() ? nlohmann::json(nullptr) : nlohmann::json(FileSystem::ToUTF8(result.ScriptModule)) },
 					{ "assetCount", result.AssetCount } });
 			} });
 
