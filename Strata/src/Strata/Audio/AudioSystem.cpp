@@ -19,6 +19,10 @@ namespace Strata
 	{
 
 		constexpr float c_MinDirectionLengthSquared = 1e-12f;
+		// A listener whose right axis rises or falls less than this (the sine of its roll) counts as level.
+		constexpr float c_MaxLevelRoll = 1e-3f;
+		// Looking up or down more steeply than this (the sine of the pitch), forward x +Y no longer gives a usable right axis.
+		constexpr float c_MaxLevelPitch = 0.99f;
 
 		// Bitwise comparison, so that a value the source rejects (NaN) is applied, and reported, once instead of every frame.
 		bool IsSameFloat(float a, float b)
@@ -47,6 +51,16 @@ namespace Strata
 			if (!IsFinite(velocity) || glm::dot(velocity, velocity) > AudioSystem::c_MaxDopplerSpeed * AudioSystem::c_MaxDopplerSpeed)
 				return glm::vec3(0.0f);
 			return velocity;
+		}
+
+		// The up vector to give the AudioEngine for a listener. miniaudio derives the right axis from forward x up, so +Y gives
+		// exactly the same orientation for a listener that does not roll, whatever its pitch and yaw; the up vector then
+		// never changes, so it does not need to travel to the mixing thread every frame (see AudioEngine::SetListener).
+		// Rolled listeners, and those looking (nearly) straight up or down, where forward x +Y degenerates, pass their own.
+		glm::vec3 GetListenerUp(const glm::vec3& forward, const glm::vec3& up, const glm::vec3& right)
+		{
+			const bool level = std::abs(right.y) <= c_MaxLevelRoll * glm::length(right) && std::abs(forward.y) <= c_MaxLevelPitch * glm::length(forward);
+			return level ? glm::vec3(0.0f, 1.0f, 0.0f) : up;
 		}
 
 		// The position of an entity in depth-first hierarchy order, as its sibling indices from its root down to it:
@@ -639,12 +653,13 @@ namespace Strata
 		const glm::vec3 position = glm::vec3(transform[3]);
 		const glm::vec3 forward = -glm::vec3(transform[2]);
 		const glm::vec3 up = glm::vec3(transform[1]);
+		const glm::vec3 right = glm::vec3(transform[0]);
 		// A degenerate transform (zero scale) has no orientation: the listener stays where it was.
 		if (!IsFinite(position) || !IsFinite(forward) || !IsFinite(up) || glm::dot(forward, forward) < c_MinDirectionLengthSquared || glm::dot(up, up) < c_MinDirectionLengthSquared)
 			return;
 
 		const glm::vec3 velocity = listener == m_ListenerEntity ? ComputeVelocity(m_ListenerPosition, position, timestep) : glm::vec3(0.0f);
-		AudioEngine::SetListener(position, forward, up, velocity);
+		AudioEngine::SetListener(position, forward, GetListenerUp(forward, up, right), velocity);
 		m_ListenerEntity = listener;
 		m_ListenerPosition = position;
 	}

@@ -384,6 +384,48 @@ TEST_SUITE("Audio.System")
 		CHECK(source->GetPosition() == glm::vec3(1010.0f, 0.0f, 0.0f));
 	}
 
+	TEST_CASE("Level listeners keep +Y as their up vector; rolled and vertical ones pass their own")
+	{
+		ScopedAudioEngine engine;
+		REQUIRE(engine.Initialized);
+		AudioProject project;
+
+		Scene scene;
+		Entity camera = scene.CreateEntity("Camera");
+		camera.AddComponent<CameraComponent>();
+		Entity source = CreateSource(scene, "Source", project.AddClip(1.0f));
+		source.GetComponent<AudioSourceComponent>().Spatial = true;
+		scene.OnRuntimeStart();
+		const auto rotate = [](float angle, const glm::vec3& axis) { return glm::angleAxis(angle, axis); };
+		const glm::vec3 xAxis(1.0f, 0.0f, 0.0f);
+		const glm::vec3 yAxis(0.0f, 1.0f, 0.0f);
+		const glm::vec3 zAxis(0.0f, 0.0f, 1.0f);
+
+		// Turning and pitching without rolling: the up vector stays +Y, so it never has to reach the mixing thread anew.
+		for (int frame = 0; frame < 10; frame++)
+		{
+			camera.GetTransform().Rotation = rotate(0.3f * static_cast<float>(frame), yAxis) * rotate(-0.6f, xAxis);
+			StepScene(scene, 1);
+			const glm::vec3 forward = camera.GetTransform().Rotation * glm::vec3(0.0f, 0.0f, -1.0f);
+			const AudioListenerState listener = AudioEngine::GetListener();
+			CHECK(listener.Up == yAxis);
+			CHECK(glm::length(listener.Forward - forward) < 1e-5f);
+		}
+
+		// Rolled: its own up vector.
+		camera.GetTransform().Rotation = rotate(0.5f, zAxis);
+		StepScene(scene, 1);
+		CHECK(glm::length(AudioEngine::GetListener().Up - camera.GetTransform().Rotation * yAxis) < 1e-5f);
+
+		// Looking straight down and turned by 90 degrees, the camera's right is -Z: forward x +Y would give no right axis, so
+		// its own up vector is used, and a source on its right is louder on the right.
+		camera.GetTransform().Rotation = rotate(std::numbers::pi_v<float> * 0.5f, yAxis) * rotate(-std::numbers::pi_v<float> * 0.5f, xAxis);
+		source.GetTransform().Translation = glm::vec3(0.0f, 0.0f, -5.0f);
+		StepScene(scene, 1);
+		CHECK(glm::length(AudioEngine::GetListener().Up - glm::vec3(-1.0f, 0.0f, 0.0f)) < 1e-5f);
+		CHECK(MeasureRms(1) > MeasureRms(0) * 1.5f);
+	}
+
 	TEST_CASE("Spatial sources follow entities moved by physics")
 	{
 		ScopedAudioEngine engine;
