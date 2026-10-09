@@ -16,8 +16,11 @@ namespace Strata
 		// Files a manifest names must lie next to it: a manifest cannot point the runtime elsewhere.
 		bool IsPlainFileName(const std::string& name)
 		{
+			// "." and ".." are file names to std::filesystem, but name the directory or its parent.
+			if (name.empty() || name == "." || name == "..")
+				return false;
 			const std::filesystem::path path = FileSystem::FromUTF8(name);
-			return !name.empty() && !path.has_parent_path() && !path.is_absolute() && path.filename() == path;
+			return !path.has_parent_path() && !path.is_absolute() && path.filename() == path;
 		}
 
 	}

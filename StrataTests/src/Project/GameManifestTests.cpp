@@ -31,10 +31,11 @@ TEST_SUITE("Project.GameManifest")
 		CHECK_FALSE(loaded->VSync);
 
 		// The pack must be a file next to the manifest; a scene handle is required.
-		for (const char* pack : { "../Other.stpak", "/abs/Game.stpak", "Sub/Game.stpak", "" })
+		for (const char* pack : { "../Other.stpak", "/abs/Game.stpak", "Sub/Game.stpak", "", ".", ".." })
 		{
 			nlohmann::json json = manifest.ToJson();
 			json["Game"]["AssetPack"] = pack;
+			INFO("pack: ", pack);
 			CHECK_FALSE(GameManifest::FromJson(json).has_value());
 		}
 		nlohmann::json noScene = manifest.ToJson();
@@ -67,9 +68,9 @@ TEST_SUITE("Project.GameManifest")
 		REQUIRE_MESSAGE(loaded, error);
 		CHECK(loaded->ScriptModule.empty());
 
-		for (const char* module : { "../GameScripts.dll", "/abs/GameScripts.so", "Scripts/GameScripts.dll" })
+		for (const char* module : { "../GameScripts.dll", "/abs/GameScripts.so", "Scripts/GameScripts.dll", ".", ".." })
 		{
-			CAPTURE(module);
+			INFO("module: ", module);
 			nlohmann::json json = manifest.ToJson();
 			json["Game"]["ScriptModule"] = module;
 			CHECK_FALSE(GameManifest::FromJson(json, &error).has_value());
