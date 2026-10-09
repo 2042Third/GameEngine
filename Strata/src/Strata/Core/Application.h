@@ -52,6 +52,9 @@ namespace Strata
 		void Run();
 		void Close();
 		bool IsRunning() const { return m_Running; }
+		// Process exit code returned from main (0 unless set; 1 when startup failed).
+		void SetExitCode(int exitCode) { m_ExitCode = exitCode; }
+		int GetExitCode() const { return m_ExitCode; }
 
 		void OnEvent(Event& event);
 
@@ -87,7 +90,6 @@ namespace Strata
 		bool RunFrame(Timestep timestep);
 		void ProcessBackBufferCaptures(bool frameRendered);
 		void RenderImGui();
-		bool OnWindowClose(WindowCloseEvent& event);
 		bool OnWindowResize(WindowResizeEvent& event);
 		void ExecuteMainThreadQueue();
 	private:
@@ -98,6 +100,7 @@ namespace Strata
 		LayerStack m_LayerStack;
 
 		bool m_Running = true;
+		int m_ExitCode = 0;
 		bool m_Minimized = false;
 		double m_LastFrameTime = 0.0;
 		Timestep m_LastTimestep;

@@ -1,0 +1,4 @@
+[
+	{ "command": "entity.create", "parameters": { "name": "Fine" } },
+	{ "command": "entity.get", "parameters": { "entity": "0000000000000123" } }
+]

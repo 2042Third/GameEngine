@@ -167,6 +167,7 @@ namespace Strata
 		ComponentRegistry::Register<PrefabInstanceComponent>("PrefabInstance")
 			.DisplayName("Prefab Instance")
 			.Category("Core")
+			.Flags(ComponentFlags::EngineAdded)
 			.Description("Links this entity to the prefab it was created from")
 			.AssetProperty("Prefab", &PrefabInstanceComponent::Prefab, AssetType::Prefab, { .Flags = PropertyFlags::ReadOnly })
 			// The prefab-internal entity id is not a scene entity reference, so it is exposed as text and is never remapped.

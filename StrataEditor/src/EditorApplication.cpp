@@ -32,13 +32,19 @@ namespace Strata
 			options.ProjectPath = FileSystem::FromUTF8(*project);
 		if (std::optional<std::string> screenshot = commandLine.GetOption("--screenshot"))
 			options.ScreenshotPath = FileSystem::FromUTF8(*screenshot);
+		if (std::optional<std::string> commands = commandLine.GetOption("--commands"))
+			options.CommandScript = FileSystem::FromUTF8(*commands);
 
 		ApplicationSpecification specification;
 		specification.Name = "Strata Editor";
 		specification.CommandLineArgs = commandLine;
-		specification.Headless = commandLine.HasFlag("--headless");
+		// --no-gpu: automation that needs no rendering (export, asset processing) on machines without a GPU.
+		specification.EnableRenderer = !commandLine.HasFlag("--no-gpu");
+		specification.Headless = commandLine.HasFlag("--headless") || !specification.EnableRenderer;
 		specification.EnableImGui = !specification.Headless;
-		specification.ImGuiLayoutFile = userData / "EditorLayout.ini";
+		// Scripted runs (a fixed number of frames) never overwrite the user's saved panel layout.
+		if (!commandLine.GetIntOption("--frames"))
+			specification.ImGuiLayoutFile = userData / "EditorLayout.ini";
 		specification.Window.Title = "Strata Editor";
 		specification.Window.Width = 1600;
 		specification.Window.Height = 900;
@@ -46,6 +52,7 @@ namespace Strata
 		if (std::optional<int64_t> frames = commandLine.GetIntOption("--frames"); frames && *frames > 0)
 			specification.MaxFrames = static_cast<uint64_t>(*frames);
 		options.MaxFrames = specification.MaxFrames;
+		options.Headless = specification.Headless;
 
 		return new EditorApplication(specification, options);
 	}

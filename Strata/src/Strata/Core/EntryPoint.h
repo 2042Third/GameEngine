@@ -14,8 +14,9 @@ int main(int argc, char** argv)
 		return 1;
 
 	application->Run();
+	const int exitCode = application->GetExitCode();
 	delete application;
 
 	Strata::Log::Shutdown();
-	return 0;
+	return exitCode;
 }

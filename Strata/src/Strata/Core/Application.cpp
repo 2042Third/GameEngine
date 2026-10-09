@@ -47,6 +47,7 @@ namespace Strata
 		{
 			ST_CORE_CRITICAL("No usable graphics device; the application cannot run");
 			m_Running = false;
+			m_ExitCode = 1;
 			return;
 		}
 
@@ -144,7 +145,6 @@ namespace Strata
 	void Application::OnEvent(Event& event)
 	{
 		EventDispatcher dispatcher(event);
-		dispatcher.Dispatch<WindowCloseEvent>(ST_BIND_EVENT_FN(OnWindowClose));
 		dispatcher.Dispatch<WindowResizeEvent>(ST_BIND_EVENT_FN(OnWindowResize));
 
 		for (auto it = m_LayerStack.rbegin(); it != m_LayerStack.rend(); ++it)
@@ -153,6 +153,11 @@ namespace Strata
 				break;
 			(*it)->OnEvent(event);
 		}
+
+		// A close request goes through the layers first: one that handles it (to ask about unsaved changes, for
+		// example) keeps the application running.
+		if (event.GetEventType() == EventType::WindowClose && !event.Handled)
+			m_Running = false;
 	}
 
 	void Application::Run()
@@ -285,12 +290,6 @@ namespace Strata
 			layer->OnImGuiRender();
 
 		m_ImGuiLayer->End(m_GraphicsDevice->GetBackBufferFramebuffer());
-	}
-
-	bool Application::OnWindowClose(WindowCloseEvent&)
-	{
-		m_Running = false;
-		return false;
 	}
 
 	bool Application::OnWindowResize(WindowResizeEvent& event)

@@ -29,7 +29,7 @@ This file is the source of truth for how to work on Strata. Read it fully before
 | --- | --- |
 | `Strata/` | Engine static library. `src/Strata/<Module>/` holds the engine modules, `src/Platform/<OS or backend>/` the platform implementations, `shaders/` the GLSL sources, `vendor/` the pinned third-party submodules. |
 | `StrataEditor/` | Editor executable (ImGui docking UI, gizmos, undo/redo, automation server). |
-| `StrataRuntime/` | Runtime executable used to play and ship games (no editing). |
+| `StrataRuntime/` | Runtime executable that plays exported games (`GameRuntime`): it runs the `.stgame` manifest next to it, or `--game <file>`; `--headless` runs without window and GPU (servers, CI). |
 | `StrataScriptCore/` | Script ABI (C header) and the header-only C++ SDK game scripts are written against. Script modules never link the engine. |
 | `StrataCLI/` | Command-line client for the editor automation API; also an MCP server (`StrataCLI mcp`). |
 | `StrataTests/` | doctest unit tests, test helpers, and the feature test project. |
@@ -40,7 +40,7 @@ This file is the source of truth for how to work on Strata. Read it fully before
 Engine modules (`Strata/src/Strata/`): `Core` (application, logging, jobs, platform services),
 `Events`, `Input`, `Math`, `Reflection`, `Scene` (ECS, components, serialization, prefabs),
 `Asset` (asset database, importers, cooking, streaming, packs), `Renderer`, `Physics`, `Audio`,
-`Scripting`, `Project`, `ImGui`.
+`Scripting`, `Project` (projects, game manifests), `Runtime` (running exported games), `ImGui`.
 
 ## Building
 
@@ -183,6 +183,33 @@ Conventions:
 - Adding an asset type: an `Asset` subclass with a cooked/serialized form, a loader in
   `Asset/AssetRegistration.cpp`, an importer if it comes from external files, and tests for round trips
   and corrupt data (every loader must reject truncated or garbage bytes without crashing).
+
+## Editor
+
+- `StrataEditorCore` (`StrataEditor/src/Editor/`) is the editor without UI: `EditorContext` (project, asset
+  manager, edited scene, play mode, selection, undo history) and `EditorCommandRegistry`. The ImGui
+  panels (`StrataEditor/src/Panels/`, `UI/`) only draw state and call commands; the tests link the core.
+- **Every change to the scene or project goes through a command** (`EditorCommandRegistry::Execute`) or,
+  for continuous UI edits, through `SceneEditTransaction` / `SetPropertyWithUndo`. That keeps the UI,
+  automation (AI agents) and tests identical, and makes every edit undoable.
+- Commands are named `<group>.<action>`, take a JSON object and return a JSON value or an error. Each
+  has a one-line description and a JSON Schema of its parameters (`CommandUtils::ObjectSchema` etc.);
+  automation exposes them as tools, so descriptions must tell an agent what the command does. Use
+  `CommandArguments` to read parameters (no exceptions), reject invalid input without side effects
+  (roll back the transaction) and record exactly one undo step per successful mutating command.
+- Undo works on entity snapshots: a `SceneEditTransaction` captures the entities an edit touches
+  (`Track`, `TrackSubtree` before changing or deleting them, `TrackCreated` after creating them) and
+  `EditorContext::CommitEdit` records the difference. Edits while playing are not recorded.
+- `project.export` writes a playable game outside the project: the asset pack (`<Game>.stpak`), the
+  manifest (`<Game>.stgame`, start scene and window settings) and the runtime executable renamed after
+  the game. CTest exports a small game (`StrataEditor --no-gpu`) and runs it headless.
+- `StrataEditor --commands script.json` runs a JSON array of `{"command", "parameters"}` at startup; if
+  one fails, the process exit code becomes 1. `--frames N` stops after N frames (without saving the
+  panel layout), `--screenshot out.png` captures the last frame, `--no-gpu` runs headless without a
+  graphics device (export, asset processing). CTest runs `StrataTests/Editor/SmokeCommands.json` and
+  checks that a failing script fails the process.
+- Mutating commands report a `warning` in their result while the scene is playing: such changes apply
+  to the running copy and are discarded by `play.stop`. Unknown or missing parameters are errors.
 
 ## Pre-commit review checklist
 
