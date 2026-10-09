@@ -662,28 +662,41 @@ TEST_SUITE("Network.RpcServer")
 
 	TEST_CASE("Connections that do not authenticate in time are closed")
 	{
-		Tests::PumpedRpcServer server;
-		RpcServerSpecification specification = Tests::MakeTestServerSpecification();
-		specification.AuthenticationTimeout = std::chrono::milliseconds(100);
-		REQUIRE(server.Start(specification));
+		// The deadline counts from the accept and covers the whole handshake. Its default is 5 s, so a close well
+		// before that shows the configured timeout is what closed the connection.
+		auto checkClosedAtDeadline = [](std::chrono::milliseconds timeout, bool completeFirstStep)
+		{
+			Tests::PumpedRpcServer server;
+			RpcServerSpecification specification = Tests::MakeTestServerSpecification();
+			specification.AuthenticationTimeout = timeout;
+			REQUIRE(server.Start(specification));
 
-		Tests::RawRpcConnection connection;
-		REQUIRE(connection.Connect(server.GetPort()));
+			const auto start = std::chrono::steady_clock::now();
+			Tests::RawRpcConnection connection;
+			REQUIRE(connection.Connect(server.GetPort()));
+			if (completeFirstStep)
+			{
+				std::optional<nlohmann::json> handshake = connection.Handshake(RpcAuthentication::GenerateNonce());
+				REQUIRE(handshake.has_value());
+				CHECK(handshake->contains("result"));
+			}
+
+			CheckRejectedAndClosed(connection, JsonRpc::ErrorCode::Unauthorized);
+			const auto elapsed = std::chrono::steady_clock::now() - start;
+			CHECK(elapsed >= timeout);
+			CHECK(elapsed < timeout + std::chrono::milliseconds(2500));
+		};
 
 		SUBCASE("A connection that sends nothing")
 		{
+			checkClosedAtDeadline(std::chrono::milliseconds(100), false);
 		}
 
 		SUBCASE("A connection that stops after the first step")
 		{
-			std::optional<nlohmann::json> handshake = connection.Handshake(RpcAuthentication::GenerateNonce());
-			REQUIRE(handshake.has_value());
-			CHECK(handshake->contains("result"));
+			// Long enough for the handshake round trip even on a loaded machine.
+			checkClosedAtDeadline(std::chrono::milliseconds(1000), true);
 		}
-
-		const auto start = std::chrono::steady_clock::now();
-		CheckRejectedAndClosed(connection, JsonRpc::ErrorCode::Unauthorized);
-		CHECK(std::chrono::steady_clock::now() - start < std::chrono::milliseconds(3000));
 	}
 
 	TEST_CASE("Only authenticated connections hold client slots")
