@@ -29,6 +29,9 @@ namespace Strata
 		constexpr int64_t c_MaxCaptureSize = 4096;
 		// A capture whose GPU readback has not finished after this long fails (a lost or hung device).
 		constexpr std::chrono::seconds c_CaptureReadbackTimeout { 30 };
+		// Frames a capture may render again while glyphs of its text are still being rasterized (a budget per render, see
+		// TextRenderer::c_FrameRasterBudget); enough for thousands of distinct glyphs.
+		constexpr uint32_t c_MaxCaptureTextFrames = 120;
 
 		nlohmann::json ToJson(const glm::vec3& value)
 		{
@@ -112,6 +115,8 @@ namespace Strata
 			ViewportView View;
 			bool Overlays = false;
 			uint32_t PendingAssets = 0;
+			uint32_t PendingTextGlyphs = 0;
+			uint32_t TextFrames = 0; // Renders repeated so far to complete the text
 			std::chrono::steady_clock::time_point Submitted;
 			Ref<EncodedCapture> Encoded; // Set once the pixels are on the CPU
 			JobHandle EncodeJob;
@@ -119,7 +124,9 @@ namespace Strata
 			bool SaveStarted = false;
 		};
 
-		// First poll (the frame after the command): renders the image and starts reading it back.
+		// First poll (the frame after the command): renders the image and starts reading it back. While glyphs of the
+		// scene's text are still being rasterized, the image would lack them: the next polls render again until the text is
+		// complete (or c_MaxCaptureTextFrames ran out).
 		std::optional<EditorCommandResult> StartCapture(EditorContext& context, const CaptureRequest& request, CaptureProgress& progress)
 		{
 			EditorViewport& viewport = context.GetViewport();
@@ -131,15 +138,27 @@ namespace Strata
 			const float aspectRatio = static_cast<float>(request.Size.x) / static_cast<float>(request.Size.y);
 			std::optional<ViewportView> view = ResolveViewportView(context, request.Camera, aspectRatio, &error);
 			if (!view)
+			{
+				renderer->ReleaseTargets(); // An earlier render of this capture may have created them
 				return EditorCommandResult::Fail(error);
+			}
 			progress.Overlays = request.Overlays.value_or(view->EditorOverlays);
 
 			// A capture is a single frame: its exposure is metered from this frame alone, not adapted from an earlier one.
 			renderer->GetSceneRenderer().ResetExposureAdaptation();
 			if (!renderer->Render(context, request.Size, *view, viewport.GetSettings(), progress.Overlays))
+			{
+				renderer->ReleaseTargets();
 				return EditorCommandResult::Fail("Rendering the capture failed (see the log)");
-			progress.Readback = TextureReadback::Create(renderer->GetOutputTexture(), {}, &error);
+			}
 			progress.PendingAssets = renderer->GetStats().PendingAssets;
+			progress.PendingTextGlyphs = renderer->GetStats().PendingTextGlyphs;
+			if (progress.PendingTextGlyphs > 0 && progress.TextFrames < c_MaxCaptureTextFrames)
+			{
+				progress.TextFrames++;
+				return std::nullopt;
+			}
+			progress.Readback = TextureReadback::Create(renderer->GetOutputTexture(), {}, &error);
 			// Captures are occasional and may be large: their render targets are not kept between them.
 			renderer->ReleaseTargets();
 			if (!progress.Readback)
@@ -210,7 +229,8 @@ namespace Strata
 				{ "height", encoded.Image.Height },
 				{ "camera", progress.View.FromScene ? "scene" : "editor" },
 				{ "overlays", progress.Overlays },
-				{ "pendingAssets", progress.PendingAssets }
+				{ "pendingAssets", progress.PendingAssets },
+				{ "pendingTextGlyphs", progress.PendingTextGlyphs }
 			};
 			if (!progress.View.Notice.empty())
 				result["notice"] = progress.View.Notice;
@@ -323,8 +343,9 @@ namespace Strata
 		registry.Register({ "viewport.capture",
 			"Renders the scene on the next frame and returns the picture as a PNG image, with its width and height. By default it looks like the viewport: "
 			"its size (1280x720 while the viewport is hidden), the scene's primary camera while playing (the editor camera otherwise) and the editor overlays "
-			"(grid, selection outline, light/camera/collider shapes) for the editor camera. Also reports how many assets were still loading (call editor.wait "
-			"and capture again to see them). Needs a GPU (fails in editors started with --no-gpu).",
+			"(grid, selection outline, light/camera/collider shapes) for the editor camera. Text whose glyphs are still being prepared delays the picture by a "
+			"few frames, so it is complete. Also reports how many assets were still loading (pendingAssets: call editor.wait and capture again to see "
+			"them) and glyphs that could not be prepared in time (pendingTextGlyphs). Needs a GPU (fails in editors started with --no-gpu).",
 			ObjectSchema({
 				{ "width", IntegerSchema("Image width in pixels; without height the viewport's aspect ratio is kept", c_MinCaptureSize, c_MaxCaptureSize) },
 				{ "height", IntegerSchema("Image height in pixels; without width the viewport's aspect ratio is kept", c_MinCaptureSize, c_MaxCaptureSize) },

@@ -145,6 +145,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(result["camera"] == "editor");
 		CHECK(result["overlays"] == true);
 		CHECK(result["pendingAssets"] == 0);
+		CHECK(result["pendingTextGlyphs"] == 0);
 		CHECK_FALSE(result.contains("notice"));
 		CHECK(FileSystem::FromUTF8(result["path"].get<std::string>()) == path);
 
@@ -165,6 +166,30 @@ TEST_SUITE("GPU.Editor.Viewport")
 		REQUIRE(captureRenderer);
 		CHECK(captureRenderer->GetSize() == glm::uvec2(0, 0));
 		CHECK(captureRenderer->GetOutputTexture() == nullptr);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A capture waits until its text is complete")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.AddScene();
+		// More distinct glyphs than a render may rasterize (TextRenderer::c_FrameRasterBudget), new to the capture renderer.
+		harness.Run("entity.create", { { "name", "HUD" }, { "components", { { "Text", { { "Text", "ABCDEFGHIJKLMNOPQRSTUVWXYZ\nabcdefghijklmnopqrstuvwxyz\n0123456789" },
+			{ "ScreenSpace", true }, { "ScreenAnchor", { 0.0, 0.0 } }, { "FontSize", 20.0 }, { "Alignment", "Left" } } } } } });
+
+		nlohmann::json result;
+		int frames = 0;
+		const EditorCommandResult first = harness.RunFrames("viewport.capture", { { "width", 320 }, { "height", 96 } }, &frames);
+		REQUIRE(first.Success);
+		CHECK(first.Value.value("pendingTextGlyphs", -1) == 0);
+		CHECK(frames > 2); // It rendered again while glyphs were missing
+		const DecodedImage complete = harness.Capture({ { "width", 320 }, { "height", 96 } }, &result);
+		CHECK(result["pendingTextGlyphs"] == 0);
+		const std::optional<std::vector<uint8_t>> png = Base64::Decode(first.Value["Image"]["Data"].get<std::string>());
+		REQUIRE(png);
+		CHECK(harness.CountDifferences(DecodePNG(*png), complete) == 0);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

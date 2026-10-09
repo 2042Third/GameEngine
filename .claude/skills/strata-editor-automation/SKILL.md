@@ -84,7 +84,8 @@ appear in `editor.commands` and as tools automatically. The viewport commands ne
 editor started with `--no-gpu` (use `--headless`):
 
 - `viewport.capture {width?, height?, camera?: "editor" | "scene", overlays?, path?}` returns
-  `{"Image": {"MimeType": "image/png", "Data"}, width, height, camera, overlays, pendingAssets, notice?, path?}`.
+  `{"Image": {"MimeType": "image/png", "Data"}, width, height, camera, overlays, pendingAssets, pendingTextGlyphs, notice?,
+  path?}`. Text is complete in the picture (the capture waits a few frames for new glyphs).
 - `camera.get`; `camera.set {position?, target?, yaw?, pitch?, distance?, fov?, near?, far?, flySpeed?}`;
   `camera.focus {entities?}` frames the given (or selected) entities.
 - Game logic: write C++ scripts into the project's `Scripts/` folder and use `script.build`, `script.status`,

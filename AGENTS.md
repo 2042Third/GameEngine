@@ -519,9 +519,11 @@ and `AudioSystem`, the built-in "Audio" scene system.
 - **View commands** change no scene data and record no undo: `camera.get`, `camera.set {position, target, yaw, pitch,
   distance, fov, near, far, flySpeed}` (position + target looks from one at the other) and `camera.focus {entities?}`
   (frames them, or the whole scene). `viewport.capture {width?, height?, camera?: "editor" | "scene", overlays?, path?,
-  overwrite?}` renders on the next frame, reads the image back without stalling, encodes it on a job thread and returns
-  `{"Image": {"MimeType": "image/png", "Data": <base64>}, "width", "height", "camera", "overlays", "pendingAssets",
-  "notice"?, "path"?}`; it defaults to the viewport's size, camera and overlays and fails without a GPU.
+  overwrite?}` renders on the next frame (again on the following frames, up to `c_MaxCaptureTextFrames`, while glyphs of
+  the scene's text are still being rasterized, so text is never half drawn), reads the image back without stalling,
+  encodes it on a job thread and returns `{"Image": {"MimeType": "image/png", "Data": <base64>}, "width", "height",
+  "camera", "overlays", "pendingAssets", "pendingTextGlyphs", "notice"?, "path"?}`; it defaults to the viewport's size,
+  camera and overlays and fails without a GPU.
 - **Simulated input** (`Editor/EditorInputCommands.cpp`) lets tools play a running game (play mode only) as a person would:
   `input.key {key, action: tap|press|release, frames}`, `input.mouseButton {button, action, frames}`, `input.mouseMove
   {position}` (pixels from the game view's top-left corner), `input.scroll {delta}`, `input.releaseAll` and `input.state`. Keys
