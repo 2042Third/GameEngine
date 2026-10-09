@@ -400,6 +400,7 @@ namespace Strata
 				scene.m_RootEntities.push_back(uuid);
 			}
 		}
+		scene.m_HierarchyVersion++;
 
 		// Pass 4: entity references between the created entities point at the new UUIDs.
 		std::unordered_map<UUID, UUID> remapping;

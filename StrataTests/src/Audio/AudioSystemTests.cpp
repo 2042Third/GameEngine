@@ -651,6 +651,52 @@ TEST_SUITE("Audio.System")
 		CHECK(audio.GetListenerEntity() == second);
 	}
 
+	TEST_CASE("The listener is chosen by hierarchy order only when the candidates or the hierarchy change")
+	{
+		// Two primary cameras and no listener: common, since cameras are primary by default.
+		Scene scene;
+		Entity first = scene.CreateEntity("First");
+		first.AddComponent<CameraComponent>();
+		Entity second = scene.CreateEntity("Second");
+		second.AddComponent<CameraComponent>();
+		scene.OnRuntimeStart();
+		AudioSystem& audio = GetAudio(scene);
+		CHECK(audio.GetListenerEntity() == first);
+		CHECK(audio.GetStats().ListenerSearchCount == 1);
+
+		// Frames, moves and component edits keep the choice.
+		for (int frame = 0; frame < 10; frame++)
+		{
+			first.GetTransform().Translation.x += 1.0f;
+			StepScene(scene, 1);
+		}
+		CHECK(audio.GetListenerEntity() == first);
+		CHECK(audio.GetStats().ListenerSearchCount == 1);
+
+		// A new order chooses again.
+		REQUIRE(scene.SetSiblingIndex(second, 0));
+		StepScene(scene, 2);
+		CHECK(audio.GetListenerEntity() == second);
+		CHECK(audio.GetStats().ListenerSearchCount == 2);
+
+		// A single candidate needs no order; the same candidates in the same hierarchy keep the earlier choice.
+		second.SetActive(false);
+		StepScene(scene, 2);
+		CHECK(audio.GetListenerEntity() == first);
+		CHECK(audio.GetStats().ListenerSearchCount == 2);
+		second.SetActive(true);
+		StepScene(scene, 2);
+		CHECK(audio.GetListenerEntity() == second);
+		CHECK(audio.GetStats().ListenerSearchCount == 2);
+
+		// Other candidates choose again.
+		Entity third = scene.CreateEntity("Third");
+		third.AddComponent<CameraComponent>();
+		StepScene(scene, 2);
+		CHECK(audio.GetListenerEntity() == second);
+		CHECK(audio.GetStats().ListenerSearchCount == 3);
+	}
+
 	TEST_CASE("Sources come and go with their components and entities during play")
 	{
 		ScopedAudioEngine engine;

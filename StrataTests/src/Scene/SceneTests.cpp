@@ -213,6 +213,46 @@ TEST_SUITE("Scene")
 		CHECK_FALSE(observer.SeenParents[2].IsValid());
 	}
 
+	TEST_CASE("The hierarchy version changes with the hierarchy order")
+	{
+		Scene scene;
+		uint64_t version = scene.GetHierarchyVersion();
+		const auto changed = [&]()
+		{
+			const uint64_t current = scene.GetHierarchyVersion();
+			const bool result = current != version;
+			version = current;
+			return result;
+		};
+
+		Entity a = scene.CreateEntity("A");
+		CHECK(changed());
+		Entity b = scene.CreateEntity("B");
+		CHECK(changed());
+		Entity child = scene.CreateChildEntity(a, "Child");
+		CHECK(changed());
+
+		// Neither transforms, activity nor components change the order.
+		a.GetTransform().Translation.x = 1.0f;
+		a.SetActive(false);
+		a.SetActive(true);
+		b.AddComponent<CameraComponent>();
+		CHECK_FALSE(changed());
+
+		CHECK(scene.SetParent(b, a));
+		CHECK(changed());
+		CHECK(scene.SetParent(b, a)); // Already its parent
+		CHECK_FALSE(changed());
+		CHECK(scene.SetSiblingIndex(b, 0));
+		CHECK(changed());
+		CHECK(scene.DuplicateEntity(child));
+		CHECK(changed());
+		scene.DestroyEntity(child);
+		CHECK(changed());
+		CHECK(scene.SetParent(b, Entity()));
+		CHECK(changed());
+	}
+
 	TEST_CASE("World transforms follow the hierarchy")
 	{
 		Scene scene;

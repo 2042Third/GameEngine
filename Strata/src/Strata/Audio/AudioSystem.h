@@ -30,6 +30,9 @@ namespace Strata
 		uint32_t PlayingSourceCount = 0; // Sources playing, or about to (clip still loading, or the scene paused)
 		uint32_t WaitingSourceCount = 0; // Sources whose clip is still loading
 		uint32_t OneShotCount = 0;       // One-shots playing or waiting for their clip
+		// Times the listener was chosen among several candidates by hierarchy order (the choice is kept while the candidates
+		// and the hierarchy stay the same).
+		uint64_t ListenerSearchCount = 0;
 	};
 
 	// Plays a running scene's audio: the built-in "Audio" scene system. It runs in Play mode only (like scripts, it is
@@ -189,6 +192,8 @@ namespace Strata
 		void UpdateSources(float timestep);
 		void ProcessAssetChanges();
 		void UpdateListener(float timestep);
+		// The first of m_ListenerCandidates in hierarchy order (invalid if there are none).
+		Entity SelectListener();
 		void UpdateOneShots(float timestep);
 		bool StartOneShot(AssetHandle clip, bool spatial, const glm::vec3& position, float volume, float pitch);
 		// Starts a waiting one-shot whose clip is ready; returns false if it should be dropped.
@@ -210,6 +215,13 @@ namespace Strata
 		Entity m_ListenerEntity;
 		MotionTracker m_ListenerMotion;
 		std::vector<Entity> m_ListenerCandidates; // Scratch
+		std::vector<entt::entity> m_CandidateHandles; // Scratch
+		std::vector<entt::entity> m_SelectedAmong;    // The candidates m_SelectedListener was chosen among (sorted)
+		uint64_t m_SelectedAtVersion = 0;             // The scene's hierarchy version then
+		Entity m_SelectedListener;
+		uint64_t m_ListenerSearchCount = 0;
+		std::vector<size_t> m_FirstPath;              // Scratch
+		std::vector<size_t> m_CandidatePath;          // Scratch
 	};
 
 }

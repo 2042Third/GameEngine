@@ -81,9 +81,9 @@ namespace Strata
 		// The position of an entity in depth-first hierarchy order, as its sibling indices from its root down to it:
 		// comparing two paths lexicographically orders entities like Scene::GetEntitiesInHierarchyOrder, without visiting
 		// the whole scene.
-		std::vector<size_t> GetHierarchyPath(const Scene& scene, Entity entity)
+		void GetHierarchyPath(const Scene& scene, Entity entity, std::vector<size_t>& path)
 		{
-			std::vector<size_t> path;
+			path.clear();
 			for (Entity current = entity; current.IsValid();)
 			{
 				const UUID id = current.GetUUID();
@@ -93,27 +93,6 @@ namespace Strata
 				current = parent;
 			}
 			std::reverse(path.begin(), path.end());
-			return path;
-		}
-
-		// The first of the candidates in hierarchy order (invalid if there are none).
-		Entity FindFirstInHierarchyOrder(const Scene& scene, const std::vector<Entity>& candidates)
-		{
-			if (candidates.size() <= 1)
-				return candidates.empty() ? Entity() : candidates.front();
-
-			Entity first = candidates.front();
-			std::vector<size_t> firstPath = GetHierarchyPath(scene, first);
-			for (size_t index = 1; index < candidates.size(); index++)
-			{
-				std::vector<size_t> path = GetHierarchyPath(scene, candidates[index]);
-				if (path < firstPath)
-				{
-					first = candidates[index];
-					firstPath = std::move(path);
-				}
-			}
-			return first;
 		}
 
 		// The clip of a loaded asset, or nullptr (with the reason) if the asset cannot be played.
@@ -375,6 +354,7 @@ namespace Strata
 				stats.WaitingSourceCount++;
 		}
 		stats.OneShotCount = static_cast<uint32_t>(m_OneShots.size());
+		stats.ListenerSearchCount = m_ListenerSearchCount;
 		return stats;
 	}
 
@@ -743,7 +723,7 @@ namespace Strata
 					m_ListenerCandidates.push_back(entity);
 			}
 		}
-		const Entity listener = FindFirstInHierarchyOrder(m_Scene, m_ListenerCandidates);
+		const Entity listener = SelectListener();
 
 		if (!listener)
 		{
@@ -768,9 +748,40 @@ namespace Strata
 		m_ListenerEntity = listener;
 	}
 
+	Entity AudioSystem::SelectListener()
+	{
+		if (m_ListenerCandidates.size() <= 1)
+			return m_ListenerCandidates.empty() ? Entity() : m_ListenerCandidates.front();
+
+		// Ordering by hierarchy looks up every candidate's place among its siblings (all root entities for roots), so it is
+		// redone only when the candidates or the hierarchy change.
+		m_CandidateHandles.clear();
+		for (const Entity candidate : m_ListenerCandidates)
+			m_CandidateHandles.push_back(candidate.GetHandle());
+		std::sort(m_CandidateHandles.begin(), m_CandidateHandles.end());
+		if (m_CandidateHandles == m_SelectedAmong && m_Scene.GetHierarchyVersion() == m_SelectedAtVersion)
+			return m_SelectedListener;
+
+		m_ListenerSearchCount++;
+		Entity first = m_ListenerCandidates.front();
+		GetHierarchyPath(m_Scene, first, m_FirstPath);
+		for (size_t index = 1; index < m_ListenerCandidates.size(); index++)
+		{
+			GetHierarchyPath(m_Scene, m_ListenerCandidates[index], m_CandidatePath);
+			if (m_CandidatePath < m_FirstPath)
+			{
+				first = m_ListenerCandidates[index];
+				std::swap(m_FirstPath, m_CandidatePath);
+			}
+		}
+		m_SelectedAmong = m_CandidateHandles;
+		m_SelectedAtVersion = m_Scene.GetHierarchyVersion();
+		m_SelectedListener = first;
+		return first;
+	}
+
 	////////////////////////////////////////////////////////////////////////////////
-	// One-shots
-	////////////////////////////////////////////////////////////////////////////////
+	// One-shots	////////////////////////////////////////////////////////////////////////////////
 
 	bool AudioSystem::StartOneShot(AssetHandle clip, bool spatial, const glm::vec3& position, float volume, float pitch)
 	{

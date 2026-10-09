@@ -67,6 +67,9 @@ namespace Strata
 
 		// Root entities in hierarchy order.
 		const std::vector<UUID>& GetRootEntities() const { return m_RootEntities; }
+		// Changes whenever the hierarchy order may have changed (entities created or destroyed, reparented or reordered among
+		// their siblings), so that results depending on it can be cached.
+		uint64_t GetHierarchyVersion() const { return m_HierarchyVersion; }
 		// Every entity in depth-first hierarchy order (parents before children).
 		std::vector<Entity> GetEntitiesInHierarchyOrder() const;
 
@@ -167,6 +170,7 @@ namespace Strata
 		entt::registry m_Registry;
 		std::unordered_map<UUID, entt::entity> m_EntityMap;
 		std::vector<UUID> m_RootEntities;
+		uint64_t m_HierarchyVersion = 0;
 		SceneSettings m_Settings;
 
 		std::vector<Scope<SceneSystem>> m_Systems;
