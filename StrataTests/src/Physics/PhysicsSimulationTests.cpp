@@ -334,6 +334,53 @@ TEST_SUITE("Physics.Simulation")
 		CHECK(Math::IsNearlyEqual(childTransform.Rotation, glm::quat(1.0f, 0.0f, 0.0f, 0.0f), 1.0e-4f));
 	}
 
+	TEST_CASE("Mirrored dynamic bodies keep their authored scale")
+	{
+		Scene scene;
+		CreateGround(scene);
+		// Mirrored on Y and spinning about Y.
+		Entity mirrored = CreateDynamicBox(scene, "Mirrored", glm::vec3(0.0f, 2.0f, 0.0f), glm::vec3(1.0f, 0.5f, 0.5f));
+		mirrored.GetTransform().Scale = glm::vec3(1.0f, -1.0f, 1.0f);
+		// Mirrored by its parent instead, with a scale of its own.
+		Entity parent = scene.CreateEntity("MirroringParent");
+		parent.GetTransform().Translation = glm::vec3(10.0f, 0.0f, 0.0f);
+		parent.GetTransform().Scale = glm::vec3(-1.0f, 1.0f, 1.0f);
+		Entity child = CreateDynamicBox(scene, "Child", glm::vec3(0.0f, 2.0f, 0.0f));
+		child.GetTransform().Scale = glm::vec3(2.0f, 1.0f, 1.0f);
+		REQUIRE(scene.SetParent(child, parent, false));
+
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		CHECK(physics.SetAngularVelocity(mirrored, glm::vec3(0.0f, 1.0f, 0.0f)));
+		StepScene(scene, 1);
+
+		// Only the translation and rotation of the components change, as if the entity had been moved by hand.
+		const TransformComponent& transform = mirrored.GetComponent<TransformComponent>();
+		CHECK(Math::IsNearlyEqual(transform.Scale, glm::vec3(1.0f, -1.0f, 1.0f), 1.0e-5f));
+		CHECK(Math::IsNearlyEqual(transform.Rotation, glm::angleAxis(1.0f / 60.0f, glm::vec3(0.0f, 1.0f, 0.0f)), 1.0e-4f));
+		CHECK(glm::determinant(glm::mat3(scene.GetWorldTransform(mirrored))) < 0.0f);
+
+		StepScene(scene, 150);
+		CHECK(Math::IsNearlyEqual(transform.Scale, glm::vec3(1.0f, -1.0f, 1.0f), 1.0e-5f));
+		CHECK(std::abs(transform.Translation.y - 0.5f) < 0.03f);
+		CHECK(std::abs(transform.Rotation.x) < 1.0e-3f); // Still a rotation about Y only
+		CHECK(std::abs(transform.Rotation.z) < 1.0e-3f);
+		std::optional<RaycastHit> top = physics.Raycast(glm::vec3(transform.Translation.x, 5.0f, transform.Translation.z), glm::vec3(0.0f, -1.0f, 0.0f), 10.0f);
+		REQUIRE(top);
+		CHECK(top->HitEntity == mirrored);
+		CHECK(top->Point.y == doctest::Approx(1.0f).epsilon(0.03));
+
+		const TransformComponent& childTransform = child.GetComponent<TransformComponent>();
+		CHECK(Math::IsNearlyEqual(childTransform.Scale, glm::vec3(2.0f, 1.0f, 1.0f), 1.0e-5f));
+		CHECK(Math::IsNearlyEqual(childTransform.Rotation, glm::quat(1.0f, 0.0f, 0.0f, 0.0f), 1.0e-4f));
+		CHECK(std::abs(GetWorldPosition(scene, child).y - 0.5f) < 0.03f);
+
+		// Teleporting keeps the authored scale as well.
+		CHECK(physics.Teleport(mirrored, glm::vec3(5.0f, 3.0f, 0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f)));
+		CHECK(Math::IsNearlyEqual(transform.Scale, glm::vec3(1.0f, -1.0f, 1.0f), 1.0e-5f));
+		CHECK(Math::IsNearlyEqual(GetWorldPosition(scene, mirrored), glm::vec3(5.0f, 3.0f, 0.0f), 1.0e-4f));
+	}
+
 	TEST_CASE("Several colliders on one entity form a compound shape")
 	{
 		Scene scene;

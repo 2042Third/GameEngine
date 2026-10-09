@@ -33,6 +33,8 @@ namespace Strata
 	// An entity whose body cannot be built yet keeps a pending record and is retried every step: a degenerate (e.g. zero
 	// scale) world transform until it becomes valid, a mesh collider until the mesh provider returns its data, a full world
 	// until bodies are freed. A body whose world transform becomes degenerate leaves the simulation until it is valid again.
+	// Dynamic bodies write their pose back relative to their parent, so for them a parent scaled to (nearly) zero, which
+	// cannot be inverted, counts as a degenerate transform too.
 	//
 	// The world listens to the scene registry: component, reparenting (Scene::SetParent), activity and entity-destruction
 	// changes are applied by ApplyPendingChanges (called by Simulate and by PhysicsSystem before queries); reparenting
@@ -44,8 +46,10 @@ namespace Strata
 	//    without a signal are not noticed (move colliders that change every frame with a kinematic rigid body);
 	//  - entities that are inactive in the hierarchy or pending destruction (or under such an ancestor) leave the
 	//    simulation; static bodies pending destruction stay until they are destroyed, but queries skip them;
-	//  - dynamic bodies write their simulated pose back to their entity, parents before children. Dynamic descendants of
-	//    a moving dynamic body keep their own world pose; kinematic and static descendants follow it.
+	//  - dynamic bodies write their simulated pose back to their entity, parents before children, changing only its
+	//    translation and rotation (the authored scale stays, mirrored axes included, unless a sheared parent makes that
+	//    impossible). Dynamic descendants of a moving dynamic body keep their own world pose; kinematic and static
+	//    descendants follow it.
 	//
 	// Main thread only. Jolt runs the step on Strata's JobSystem workers when it is initialized.
 	class PhysicsWorld

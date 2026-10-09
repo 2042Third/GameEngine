@@ -88,6 +88,9 @@ namespace Strata
 		// Returns false (leaving the entity unchanged) if the transform cannot be represented, e.g. under a parent
 		// with zero scale.
 		bool SetWorldTransform(Entity entity, const glm::mat4& worldTransform);
+		// A parent whose world transform's determinant is not above this (in magnitude) cannot be inverted, so the world
+		// transforms of its children cannot be set.
+		static constexpr float c_MinInvertibleDeterminant = 1.0e-12f;
 		bool IsActiveInHierarchy(Entity entity) const;
 
 		//////////////////////////////////////////////////////////////////////////

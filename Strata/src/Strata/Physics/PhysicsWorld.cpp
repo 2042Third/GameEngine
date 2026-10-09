@@ -333,6 +333,76 @@ namespace Strata
 		}
 
 		//////////////////////////////////////////////////////////////////////////
+		// Transforms
+		//////////////////////////////////////////////////////////////////////////
+
+		bool IsInvertible(const glm::mat4& transform)
+		{
+			return glm::abs(glm::determinant(transform)) > Scene::c_MinInvertibleDeterminant;
+		}
+
+		// World poses are written to entities relative to their parent, which must be invertible (not scaled to nearly zero),
+		// so dynamic bodies, which write their pose back, cannot be simulated below a parent that is not.
+		bool HasInvertibleParent(const Scene& scene, Entity entity)
+		{
+			const Entity parent = entity.GetParent();
+			return !parent || IsInvertible(scene.GetWorldTransform(parent));
+		}
+
+		// The rotation that, with the given scale, makes up the basis of a transform; fails if the basis divided by the scale
+		// is not a rotation (the transform has another scale, a reflection the scale does not express, or shear).
+		bool SolveRotationForScale(const glm::mat4& transform, const glm::vec3& scale, glm::quat& outRotation)
+		{
+			constexpr float tolerance = 1.0e-4f;
+			if (!IsFinite(scale) || glm::any(glm::lessThan(glm::abs(scale), glm::vec3(1.0e-6f))))
+				return false;
+
+			const glm::mat3 basis(glm::vec3(transform[0]) / scale.x, glm::vec3(transform[1]) / scale.y, glm::vec3(transform[2]) / scale.z);
+			for (int column = 0; column < 3; column++)
+			{
+				if (!(glm::abs(glm::length(basis[column]) - 1.0f) <= tolerance))
+					return false;
+			}
+			const bool orthogonal = glm::abs(glm::dot(basis[0], basis[1])) <= tolerance && glm::abs(glm::dot(basis[0], basis[2])) <= tolerance
+				&& glm::abs(glm::dot(basis[1], basis[2])) <= tolerance;
+			if (!orthogonal || !(glm::determinant(basis) > 0.0f))
+				return false;
+
+			const glm::quat rotation = glm::normalize(glm::quat_cast(basis));
+			if (!IsFinite(rotation))
+				return false;
+			outRotation = rotation;
+			return true;
+		}
+
+		// Sets an entity's world transform to a simulated pose. The entity keeps its authored scale (including mirrored axes)
+		// whenever the new local transform can be expressed with it, so that only its translation and rotation change;
+		// otherwise (e.g. below a sheared parent) the local transform is decomposed, which folds mirroring into X. Returns
+		// false, leaving the entity unchanged, if its parent cannot be inverted or the transform is degenerate.
+		bool WriteWorldTransform(Scene& scene, Entity entity, const glm::mat4& worldTransform)
+		{
+			glm::mat4 localTransform = worldTransform;
+			if (const Entity parent = entity.GetParent())
+			{
+				const glm::mat4 parentWorld = scene.GetWorldTransform(parent);
+				if (!IsInvertible(parentWorld))
+					return false;
+				localTransform = glm::inverse(parentWorld) * worldTransform;
+			}
+
+			TransformComponent& transform = entity.GetComponent<TransformComponent>();
+			const glm::vec3 translation(localTransform[3]);
+			glm::quat rotation;
+			if (IsFinite(translation) && SolveRotationForScale(localTransform, transform.Scale, rotation))
+			{
+				transform.Translation = translation;
+				transform.Rotation = rotation;
+				return true;
+			}
+			return transform.SetTransform(localTransform);
+		}
+
+		//////////////////////////////////////////////////////////////////////////
 		// Listeners (called from Jolt's worker threads during a step)
 		//////////////////////////////////////////////////////////////////////////
 
@@ -449,6 +519,7 @@ namespace Strata
 			BuildFailure Failure = BuildFailure::None;
 			bool InSimulation = false;
 			bool Suspended = false;                         // Out of the simulation because the world transform is degenerate
+			bool WaitsForParent = false;                    // Not built because the parent cannot be inverted (dynamic bodies)
 			bool KinematicMoving = false;                   // MoveKinematic gave the body a velocity during the last step
 			bool TransformDirty = false;                    // Re-synchronize with the entity at the next step (static bodies)
 			glm::vec3 ShapeScale = glm::vec3(1.0f);         // World scale baked into the shape
@@ -584,6 +655,7 @@ namespace Strata
 		std::unordered_map<PairKey, TouchingPair, PairKeyHash> TouchingPairs;
 		std::unordered_map<UUID, std::vector<PairKey>> EntityPairs;   // Touching pairs of each entity
 		std::vector<CollisionEvent> PendingEvents;
+		std::vector<UUID> LeftAfterStep;                              // Bodies removed between the step and contact processing
 		std::unordered_set<uint64_t> IssuedWarnings;                  // Hash of (entity, PhysicsWarning)
 		JPH::EPhysicsUpdateError ReportedErrors = JPH::EPhysicsUpdateError::None;
 		uint64_t StepCount = 0;
@@ -811,7 +883,7 @@ namespace Strata
 		enum class PlacementResult : uint8_t
 		{
 			Added,
-			DegenerateTransform, // The body stays out of the simulation until the transform is valid
+			DegenerateTransform, // The body stays out of the simulation until the transform (or the parent's) is valid
 			ScaleChanged         // The shape must be rebuilt
 		};
 
@@ -820,6 +892,8 @@ namespace Strata
 		{
 			if (record.InSimulation)
 				return PlacementResult::Added;
+			if (record.Type == RigidBodyType::Dynamic && !HasInvertibleParent(*data.OwnerScene, entity))
+				return PlacementResult::DegenerateTransform;
 
 			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
 			const glm::mat4 worldTransform = data.OwnerScene->GetWorldTransform(entity);
@@ -846,6 +920,12 @@ namespace Strata
 				bodies.SetLinearAndAngularVelocity(record.BodyID, ToJolt(record.SavedLinearVelocity), ToJolt(record.SavedAngularVelocity));
 				record.SavedLinearVelocity = glm::vec3(0.0f);
 				record.SavedAngularVelocity = glm::vec3(0.0f);
+			}
+			if (record.Suspended)
+			{
+				// The transform problem that suspended the body is solved; it is reported again if it recurs.
+				constexpr PhysicsWarning resolved[] = { PhysicsWarning::DegenerateTransform };
+				ClearWarnings(data, record.EntityID, resolved);
 			}
 			record.InSimulation = true;
 			record.Suspended = false;
@@ -1337,14 +1417,22 @@ namespace Strata
 			glm::vec3 position;
 			glm::quat rotation;
 			glm::vec3 scale;
-			if (!Math::DecomposeTransform(worldTransform, position, rotation, scale))
+			const bool decomposed = Math::DecomposeTransform(worldTransform, position, rotation, scale);
+			if (!decomposed || (type == RigidBodyType::Dynamic && !HasInvertibleParent(scene, entity)))
 			{
 				if (ShouldWarn(data, record.EntityID, PhysicsWarning::DegenerateTransform))
-					ST_CORE_WARN("Physics: '{}' has a degenerate world transform (zero scale or non-finite values); it gets its body once the transform is valid", entity.GetName());
+				{
+					if (!decomposed)
+						ST_CORE_WARN("Physics: '{}' has a degenerate world transform (zero scale or non-finite values); it gets its body once the transform is valid", entity.GetName());
+					else
+						ST_CORE_WARN("Physics: the parent of '{}' is scaled to (nearly) zero, so its simulated pose cannot be written back; it gets its body once the parent's transform is valid", entity.GetName());
+				}
 				record.Type = type;
 				SetBuildFailure(data, handle, record, BuildFailure::DegenerateTransform, worldTransform);
+				record.WaitsForParent = decomposed; // The world transform may stay the same when the parent is fixed
 				return;
 			}
+			record.WaitsForParent = false;
 
 			ShapeBuild build;
 			AddColliderParts(data, entity, glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), scale, type, build);
@@ -1713,7 +1801,9 @@ namespace Strata
 					{
 						switch (record->Failure)
 						{
-							case BuildFailure::DegenerateTransform: retry = scene.GetWorldTransform(entity) != record->LastWorldTransform; break;
+							case BuildFailure::DegenerateTransform:
+								retry = scene.GetWorldTransform(entity) != record->LastWorldTransform || (record->WaitsForParent && HasInvertibleParent(scene, entity));
+								break;
 							case BuildFailure::MissingMesh: retry = IsAnyMeshAvailable(record->MissingMeshes); break;
 							case BuildFailure::BodyLimit: retry = data.JoltSystem->GetNumBodies() < data.Settings.MaxBodies; break;
 							default: break;
@@ -1771,12 +1861,18 @@ namespace Strata
 				glm::vec3 position;
 				glm::quat rotation;
 				glm::vec3 scale;
-				if (!Math::DecomposeTransform(worldTransform, position, rotation, scale))
+				const bool decomposed = Math::DecomposeTransform(worldTransform, position, rotation, scale);
+				if (!decomposed || (record->Type == RigidBodyType::Dynamic && !HasInvertibleParent(scene, entity)))
 				{
 					// Out of the simulation (like an inactive entity) until the transform is valid again; the transform is
 					// left as it is.
 					if (ShouldWarn(data, record->EntityID, PhysicsWarning::DegenerateTransform))
-						ST_CORE_WARN("Physics: '{}' has a degenerate world transform; its body leaves the simulation until the transform is valid", entity.GetName());
+					{
+						if (!decomposed)
+							ST_CORE_WARN("Physics: '{}' has a degenerate world transform; its body leaves the simulation until the transform is valid", entity.GetName());
+						else
+							ST_CORE_WARN("Physics: the parent of '{}' is scaled to (nearly) zero, so its simulated pose cannot be written back; its body leaves the simulation until the parent's transform is valid", entity.GetName());
+					}
 					RemoveFromSimulation(data, *record);
 					record->Suspended = true;
 					UpdatePolling(data, handle, *record);
@@ -1860,8 +1956,12 @@ namespace Strata
 			// Several sub shape pairs of the same entity pair may touch; keep the lowest sub shape key so that the reported
 			// point does not depend on the order in which worker threads reported them.
 			std::unordered_map<PairKey, ContactReport, PairKeyHash> current;
+			const auto leftAfterStep = [&](UUID entityID) { return std::find(data.LeftAfterStep.begin(), data.LeftAfterStep.end(), entityID) != data.LeftAfterStep.end(); };
 			for (const ContactReport& report : data.Contacts.TakeReports())
 			{
+				// The contacts of a body that left the simulation after the step ended already.
+				if (!data.LeftAfterStep.empty() && (leftAfterStep(report.EntityA) || leftAfterStep(report.EntityB)))
+					continue;
 				auto [it, inserted] = current.try_emplace(MakePairKey(report.EntityA, report.EntityB), report);
 				if (!inserted && report.SubShapeKey < it->second.SubShapeKey)
 					it->second = report;
@@ -1941,9 +2041,10 @@ namespace Strata
 
 				if (keepDynamicPoses && record->Type == RigidBodyType::Dynamic && record->InSimulation)
 				{
-					// Its world pose, and with it the poses of its own descendants, stays where its body is.
-					scene.SetWorldTransform(entity, record->LastWorldTransform);
-					record->LastWorldTransform = scene.GetWorldTransform(entity);
+					// Its world pose, and with it the poses of its own descendants, stays where its body is. (If the entity
+					// cannot take the pose, it moved with its parent; the next step notices and suspends the body.)
+					if (WriteWorldTransform(scene, entity, record->LastWorldTransform))
+						record->LastWorldTransform = scene.GetWorldTransform(entity);
 					return false;
 				}
 				if (record->Type == RigidBodyType::Static)
@@ -2012,7 +2113,23 @@ namespace Strata
 					continue;
 				}
 
-				scene.SetWorldTransform(entity, Math::ComposeTransform(position, glm::normalize(rotation), record.ShapeScale));
+				if (!WriteWorldTransform(scene, entity, Math::ComposeTransform(position, glm::normalize(rotation), record.ShapeScale)))
+				{
+					// The parent cannot be inverted (the sync before the step notices this only when the transform changed):
+					// the body goes back to its entity's pose and leaves the simulation until the parent is valid again.
+					if (ShouldWarn(data, record.EntityID, PhysicsWarning::DegenerateTransform))
+						ST_CORE_WARN("Physics: the parent of '{}' is scaled to (nearly) zero, so its simulated pose cannot be written back; its body leaves the simulation until the parent's transform is valid", entity.GetName());
+					glm::vec3 entityPosition;
+					glm::quat entityRotation;
+					glm::vec3 entityScale;
+					if (Math::DecomposeTransform(record.LastWorldTransform, entityPosition, entityRotation, entityScale))
+						data.JoltSystem->GetBodyInterface().SetPositionAndRotation(record.BodyID, ToJoltPosition(entityPosition), ToJolt(entityRotation), JPH::EActivation::DontActivate);
+					RemoveFromSimulation(data, record);
+					record.Suspended = true;
+					UpdatePolling(data, writeBack.Handle, record);
+					data.LeftAfterStep.push_back(record.EntityID);
+					continue;
+				}
 				record.LastWorldTransform = scene.GetWorldTransform(entity);
 				UpdateDescendantsOfMovedBody(data, entity, written, true);
 			}
@@ -2249,6 +2366,7 @@ namespace Strata
 				ReportUpdateErrors(data, errors);
 		}
 
+		data.LeftAfterStep.clear();
 		WriteBackDynamicBodies(data);
 		ProcessContacts(data);
 
@@ -2440,8 +2558,11 @@ namespace Strata
 		const glm::quat normalizedRotation = rotation / rotationLength;
 
 		Scene& scene = *data.OwnerScene;
-		if (!scene.SetWorldTransform(entity, Math::ComposeTransform(position, normalizedRotation, record->ShapeScale)))
+		if (!WriteWorldTransform(scene, entity, Math::ComposeTransform(position, normalizedRotation, record->ShapeScale)))
+		{
+			ST_CORE_WARN("Physics: cannot teleport '{}': its parent is scaled to (nearly) zero", entity.GetName());
 			return false;
+		}
 		record->LastWorldTransform = scene.GetWorldTransform(entity);
 		record->KinematicTargetPosition = position;
 		record->KinematicTargetRotation = normalizedRotation;

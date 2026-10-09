@@ -400,7 +400,7 @@ namespace Strata
 		{
 			// A parent with zero scale has no inverse; the child's local transform cannot express the request.
 			const glm::mat4 parentWorld = GetWorldTransform(parent);
-			if (!(glm::abs(glm::determinant(parentWorld)) > 1e-12f))
+			if (!(glm::abs(glm::determinant(parentWorld)) > c_MinInvertibleDeterminant))
 			{
 				ST_CORE_WARN("Cannot set the world transform of '{}': its parent's transform is singular", entity.GetName());
 				return false;

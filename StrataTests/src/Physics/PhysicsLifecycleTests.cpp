@@ -629,6 +629,94 @@ TEST_SUITE("Physics.Lifecycle")
 		CHECK(std::abs(GetWorldPosition(scene, box).y - 0.5f) < 0.03f);
 	}
 
+	TEST_CASE("Dynamic bodies below a parent scaled to nearly zero wait until it is restored")
+	{
+		// Powers of two keep the arithmetic exact: compensating children keep bit-identical world transforms.
+		const float tiny = std::ldexp(1.0f, -20);
+		const float huge = std::ldexp(1.0f, 20);
+
+		Scene scene;
+		CreateGround(scene);
+		Entity parent = scene.CreateEntity("Shrunk");
+		parent.GetTransform().Scale = glm::vec3(tiny);
+		// The children compensate: their world transforms are ordinary, but the parent cannot be inverted.
+		Entity box = scene.CreateChildEntity(parent, "Box");
+		box.GetTransform().Translation = glm::vec3(0.0f, 3.0f * huge, 0.0f);
+		box.GetTransform().Scale = glm::vec3(huge);
+		box.AddComponent<RigidBodyComponent>().LinearDamping = 0.0f;
+		box.AddComponent<BoxColliderComponent>();
+		// Static bodies never write their pose back, so the parent does not matter to them.
+		Entity shelf = scene.CreateChildEntity(parent, "Shelf");
+		shelf.GetTransform().Translation = glm::vec3(5.0f * huge, huge, 0.0f);
+		shelf.GetTransform().Scale = glm::vec3(huge);
+		shelf.AddComponent<BoxColliderComponent>();
+		REQUIRE(GetWorldPosition(scene, box) == glm::vec3(0.0f, 3.0f, 0.0f));
+
+		const uint64_t logStart = Log::GetBuffer().GetLatestSequence();
+		const auto warnings = [&]() { return CountLogMessages(logStart, "the parent of 'Box' is scaled to (nearly) zero"); };
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		CHECK_FALSE(physics.HasBody(box));
+		CHECK(physics.HasBody(shelf));
+		CHECK(physics.GetStats().PendingBodyCount == 1);
+		StepScene(scene, 10);
+		CHECK_FALSE(physics.HasBody(box));
+		CHECK(box.GetComponent<TransformComponent>().Translation == glm::vec3(0.0f, 3.0f * huge, 0.0f));
+		CHECK(warnings() == 1);
+
+		// Rescales the parent keeping the box's world pose (exactly).
+		const auto setParentScale = [&](float scale)
+		{
+			const glm::vec3 boxWorld = GetWorldPosition(scene, box);
+			parent.GetTransform().Scale = glm::vec3(scale);
+			box.GetTransform().Translation = boxWorld / scale;
+			box.GetTransform().Scale = glm::vec3(1.0f / scale);
+		};
+
+		// Restored (the box's world transform does not change): the body is built and falls.
+		setParentScale(1.0f);
+		StepScene(scene, 1);
+		REQUIRE(physics.HasBody(box));
+		StepScene(scene, 30);
+		const float speed = physics.GetLinearVelocity(box).y;
+		CHECK(speed < -4.0f);
+
+		// Shrunk while falling and moved: the body leaves the simulation before the step (warned once more, since the
+		// problem was solved in between) and comes back with its motion when the parent is restored.
+		setParentScale(tiny);
+		box.GetTransform().Translation.x += huge;
+		StepScene(scene, 1);
+		CHECK_FALSE(physics.HasBody(box));
+		glm::vec3 frozen = box.GetComponent<TransformComponent>().Translation;
+		StepScene(scene, 10);
+		CHECK(box.GetComponent<TransformComponent>().Translation == frozen);
+		CHECK(warnings() == 2);
+
+		setParentScale(1.0f);
+		StepScene(scene, 1);
+		REQUIRE(physics.HasBody(box));
+		CHECK(physics.GetLinearVelocity(box).y < speed);
+		CHECK(GetWorldPosition(scene, box).x == doctest::Approx(1.0f));
+
+		// Shrunk without moving: only writing the pose back fails. The body returns to its entity's pose and leaves the
+		// simulation until the parent is restored.
+		setParentScale(tiny);
+		frozen = box.GetComponent<TransformComponent>().Translation;
+		StepScene(scene, 1);
+		CHECK_FALSE(physics.HasBody(box));
+		StepScene(scene, 10);
+		CHECK(box.GetComponent<TransformComponent>().Translation == frozen);
+		CHECK(warnings() == 3);
+		CHECK(CountLogMessages(logStart, "Cannot set the world transform") == 0);
+
+		setParentScale(1.0f);
+		StepScene(scene, 1);
+		REQUIRE(physics.HasBody(box));
+		StepScene(scene, 120);
+		CHECK(std::abs(GetWorldPosition(scene, box).y - 0.5f) < 0.03f);
+		CHECK(GetWorldPosition(scene, box).x == doctest::Approx(1.0f).epsilon(1.0e-3));
+	}
+
 	TEST_CASE("Entities pending destruction leave the simulation and queries right away")
 	{
 		DeferredDestroySystem::Reset();
