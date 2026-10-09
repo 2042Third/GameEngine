@@ -220,7 +220,15 @@ namespace Strata
 					if (!turned)
 						return fail(fmt::format("'{}' cannot rotate: its transform cannot be represented", entity.GetName()));
 					local.Translation = turned->Translation;
-					local.Rotation = turned->Rotation;
+					// The decomposition puts any reflection on X and makes the other scale axes positive. With the start
+					// scale's signs kept, the rotation absorbs the difference: the axes whose signs differ (none or two, as
+					// the reflection is the same) turn by 180 degrees, a diagonal matrix of the sign products.
+					const glm::vec3 flip = glm::sign(turned->Scale) * glm::sign(dragged.StartLocal.Scale);
+					glm::mat3 flipMatrix(1.0f);
+					flipMatrix[0][0] = flip.x;
+					flipMatrix[1][1] = flip.y;
+					flipMatrix[2][2] = flip.z;
+					local.Rotation = glm::normalize(turned->Rotation * glm::quat_cast(flipMatrix));
 					break;
 				}
 				case GizmoOperation::Scale:

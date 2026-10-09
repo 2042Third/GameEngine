@@ -241,6 +241,60 @@ TEST_SUITE("Editor.TransformEdit")
 		}
 	}
 
+	TEST_CASE("Rotating and scaling keep mirrored entities mirrored the same way")
+	{
+		// Every sign pattern of the scale, under parents that are plain, rotated and scaled, or mirrored themselves.
+		const glm::vec3 signs[] = {
+			{ 1.0f, 1.0f, -1.0f }, { -1.0f, -1.0f, 1.0f }, { -1.0f, -1.0f, -1.0f }, { -1.0f, 1.0f, 1.0f }, { 1.0f, -1.0f, 1.0f }, { 1.0f, 1.0f, 1.0f }
+		};
+		const glm::mat4 parents[] = {
+			glm::mat4(1.0f),
+			Compose(glm::vec3(1.0f, -2.0f, 0.5f), glm::vec3(0.0f, 30.0f, 10.0f), glm::vec3(2.0f)),
+			Compose(glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(20.0f, 0.0f, 0.0f), glm::vec3(-1.5f, 1.5f, 1.5f))
+		};
+		const glm::quat turn = glm::angleAxis(glm::radians(25.0f), glm::normalize(glm::vec3(0.3f, 1.0f, 0.2f)));
+		for (size_t parentIndex = 0; parentIndex < std::size(parents); parentIndex++)
+		{
+			for (size_t signIndex = 0; signIndex < std::size(signs); signIndex++)
+			{
+				CAPTURE(parentIndex);
+				CAPTURE(signIndex);
+				const glm::vec3& sign = signs[signIndex];
+				EditorContext context(EditorContextSpecification { false });
+				Scene& scene = *context.GetEditScene();
+				glm::vec3 parentTranslation;
+				glm::quat parentRotation;
+				glm::vec3 parentScale;
+				REQUIRE(Math::DecomposeTransform(parents[parentIndex], parentTranslation, parentRotation, parentScale));
+				Entity parent = CreateEntity(scene, "Parent", parentTranslation, Math::QuatToEulerDegrees(parentRotation), parentScale);
+				Entity entity = CreateEntity(scene, "Mirrored", glm::vec3(0.5f, 1.0f, -1.0f), glm::vec3(10.0f, 20.0f, 30.0f), glm::vec3(1.5f, 0.5f, 2.0f) * sign, parent);
+				const TransformComponent startLocal = entity.GetComponent<TransformComponent>();
+				const glm::mat4 start = scene.GetWorldTransform(entity);
+				context.Select(entity.GetUUID());
+
+				// Rotation turns the entity around its origin; nothing else may change, in particular no axis may flip.
+				std::optional<TransformDrag> drag = TransformDrag::Begin(context, GizmoOperation::Rotate);
+				REQUIRE(drag);
+				const glm::vec3 origin(start[3]);
+				const glm::mat4 rotated = glm::translate(glm::mat4(1.0f), origin) * glm::mat4_cast(turn) * glm::translate(glm::mat4(1.0f), -origin) * start;
+				REQUIRE(drag->Update(context, rotated));
+				drag->End(context);
+				CHECK(Near(scene.GetWorldTransform(entity), rotated, 1e-4f));
+				CHECK(entity.GetComponent<TransformComponent>().Scale == startLocal.Scale);
+				REQUIRE(context.Undo());
+
+				// Scaling multiplies the scale along the entity's own axes, whatever their signs.
+				drag = TransformDrag::Begin(context, GizmoOperation::Scale);
+				REQUIRE(drag);
+				const glm::mat4 scaled = start * glm::scale(glm::mat4(1.0f), glm::vec3(2.0f, 0.5f, 1.5f));
+				REQUIRE(drag->Update(context, scaled));
+				drag->End(context);
+				CHECK(Near(scene.GetWorldTransform(entity), scaled, 1e-4f));
+				CHECK(Math::IsNearlyEqual(entity.GetComponent<TransformComponent>().Rotation, startLocal.Rotation));
+			}
+		}
+	}
+
 	TEST_CASE("Drag edits notify systems, skip deleted entities and stop when the scene changes")
 	{
 		EditorContext context(EditorContextSpecification { false });
