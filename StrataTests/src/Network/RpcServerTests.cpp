@@ -662,28 +662,41 @@ TEST_SUITE("Network.RpcServer")
 
 	TEST_CASE("Connections that do not authenticate in time are closed")
 	{
-		Tests::PumpedRpcServer server;
-		RpcServerSpecification specification = Tests::MakeTestServerSpecification();
-		specification.AuthenticationTimeout = std::chrono::milliseconds(100);
-		REQUIRE(server.Start(specification));
+		// The deadline counts from the accept and covers the whole handshake. Its default is 5 s, so a close well
+		// before that shows the configured timeout is what closed the connection.
+		auto checkClosedAtDeadline = [](std::chrono::milliseconds timeout, bool completeFirstStep)
+		{
+			Tests::PumpedRpcServer server;
+			RpcServerSpecification specification = Tests::MakeTestServerSpecification();
+			specification.AuthenticationTimeout = timeout;
+			REQUIRE(server.Start(specification));
 
-		Tests::RawRpcConnection connection;
-		REQUIRE(connection.Connect(server.GetPort()));
+			const auto start = std::chrono::steady_clock::now();
+			Tests::RawRpcConnection connection;
+			REQUIRE(connection.Connect(server.GetPort()));
+			if (completeFirstStep)
+			{
+				std::optional<nlohmann::json> handshake = connection.Handshake(RpcAuthentication::GenerateNonce());
+				REQUIRE(handshake.has_value());
+				CHECK(handshake->contains("result"));
+			}
+
+			CheckRejectedAndClosed(connection, JsonRpc::ErrorCode::Unauthorized);
+			const auto elapsed = std::chrono::steady_clock::now() - start;
+			CHECK(elapsed >= timeout);
+			CHECK(elapsed < timeout + std::chrono::milliseconds(2500));
+		};
 
 		SUBCASE("A connection that sends nothing")
 		{
+			checkClosedAtDeadline(std::chrono::milliseconds(100), false);
 		}
 
 		SUBCASE("A connection that stops after the first step")
 		{
-			std::optional<nlohmann::json> handshake = connection.Handshake(RpcAuthentication::GenerateNonce());
-			REQUIRE(handshake.has_value());
-			CHECK(handshake->contains("result"));
+			// Long enough for the handshake round trip even on a loaded machine.
+			checkClosedAtDeadline(std::chrono::milliseconds(1000), true);
 		}
-
-		const auto start = std::chrono::steady_clock::now();
-		CheckRejectedAndClosed(connection, JsonRpc::ErrorCode::Unauthorized);
-		CHECK(std::chrono::steady_clock::now() - start < std::chrono::milliseconds(3000));
 	}
 
 	TEST_CASE("Only authenticated connections hold client slots")
@@ -762,6 +775,7 @@ TEST_SUITE("Network.RpcServer")
 		// Each connection beyond the two pending slots turns one connection away with ServerBusy: an older one
 		// once it had a chance to send, else (within one burst) the new one itself. Two hoarders remain.
 		std::vector<bool> turnedAway(hoarders.size(), false);
+		std::vector<std::string> reasons(hoarders.size());
 		auto countTurnedAway = [&]()
 		{
 			for (size_t index = 0; index < hoarders.size(); index++)
@@ -770,11 +784,15 @@ TEST_SUITE("Network.RpcServer")
 					continue;
 				std::optional<nlohmann::json> message = hoarders[index].ReadMessage(std::chrono::milliseconds(1));
 				if (message && (*message)["error"]["code"] == JsonRpc::ErrorCode::ServerBusy)
+				{
 					turnedAway[index] = true;
+					reasons[index] = (*message)["error"]["message"].get<std::string>();
+				}
 			}
 			return static_cast<size_t>(std::count(turnedAway.begin(), turnedAway.end(), true));
 		};
 		REQUIRE(Tests::WaitUntil([&]() { return countTurnedAway() == hoarders.size() - 2; }));
+		const std::vector<bool> turnedAwayBefore = turnedAway;
 
 		// A legitimate client still gets in: its connection evicts the oldest hoarder, and it authenticates at once.
 		RpcClient client;
@@ -782,6 +800,16 @@ TEST_SUITE("Network.RpcServer")
 		CHECK(client.Call("rpc.ping", nlohmann::json::object(), c_CallTimeout).IsSuccess());
 		CHECK(server.GetServer().GetClientCount() == 1);
 		CHECK(Tests::WaitUntil([&]() { return countTurnedAway() == hoarders.size() - 1; }));
+
+		// The evicted hoarder is told why; it was not necessarily the oldest connection, only the one chosen.
+		for (size_t index = 0; index < hoarders.size(); index++)
+		{
+			if (turnedAway[index] && !turnedAwayBefore[index])
+			{
+				CHECK(reasons[index].find("chosen to make room") != std::string::npos);
+				CHECK(reasons[index].find("oldest") == std::string::npos);
+			}
+		}
 
 		// The newest remaining hoarder keeps its slot.
 		const size_t survivor = static_cast<size_t>(std::find(turnedAway.begin(), turnedAway.end(), false) - turnedAway.begin());
@@ -1217,25 +1245,39 @@ TEST_SUITE("Network.RpcServer")
 		for (int id = 1; id <= c_RequestCount; id++)
 			requests += MakeRequestLine(id, "test.echo", nlohmann::json { { "value", std::string(16000, 'q') } }) + "\n";
 
-		// Sent from another thread while this one plays the main loop: the server stops reading once the queue is
-		// full, so with small socket buffers the requests only go through as ProcessRequests drains the queue.
+		// The server stops reading once the queue is full, so with small socket buffers the requests only go through
+		// as ProcessRequests drains the queue: a helper thread sends them while this thread plays the main loop. A
+		// socket is used by one thread at a time, so the responses are read only once the sender has finished.
+		// They fit in the server's output allowance meanwhile, so it keeps reading.
 		std::atomic<bool> sent = false;
-		std::thread sender([&]() { sent = connection.GetSocket().SendAll(requests, std::chrono::milliseconds(15000)); });
+		std::atomic<bool> sending = true;
+		std::thread sender([&]()
+		{
+			sent = connection.GetSocket().SendAll(requests, std::chrono::milliseconds(15000));
+			sending = false;
+		});
 
 		uint32_t processed = 0;
 		uint32_t largestBatch = 0;
-		std::vector<int> answered;
 		CHECK(Tests::WaitUntil([&]()
 		{
 			const uint32_t batch = server.ProcessRequests();
 			processed += batch;
 			largestBatch = std::max(largestBatch, batch);
-			while (std::optional<nlohmann::json> response = connection.ReadMessage(std::chrono::milliseconds(1)))
-				answered.push_back((*response)["id"].get<int>());
-			return answered.size() == c_RequestCount;
+			return !sending.load() && processed == c_RequestCount;
 		}, std::chrono::milliseconds(15000)));
 		sender.join();
 		CHECK(sent.load());
+
+		std::vector<int> answered;
+		while (answered.size() < c_RequestCount)
+		{
+			std::optional<nlohmann::json> response = connection.ReadMessage();
+			if (!response)
+				break;
+			answered.push_back((*response)["id"].get<int>());
+		}
+		REQUIRE(answered.size() == c_RequestCount);
 		CHECK(processed == c_RequestCount);
 		CHECK(largestBatch >= 1);
 		CHECK(largestBatch <= 5);

@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Network/EditorSession.h"
 
+#include "Strata/Core/Crypto.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Core/Platform.h"
@@ -283,9 +284,8 @@ namespace Strata
 			if (state == SessionProcessState::Exited)
 			{
 				// The editor exited without cleaning up (e.g. it crashed).
-				std::error_code removeError;
-				std::filesystem::remove(it->path(), removeError);
-				ST_CORE_INFO("EditorSession: removed the stale session of process {}", session->ProcessId);
+				if (RemoveStaleSessionFile(it->path()))
+					ST_CORE_INFO("EditorSession: removed the stale session of process {}", session->ProcessId);
 				continue;
 			}
 			if (state == SessionProcessState::Unverifiable)
@@ -305,6 +305,35 @@ namespace Strata
 			return left.ProcessId > right.ProcessId;
 		});
 		return sessions;
+	}
+
+	bool EditorSession::RemoveStaleSessionFile(const std::filesystem::path& path)
+	{
+		// The file was judged stale from contents read earlier, and a new editor that reuses the process id may have
+		// written its own session at the same path since. So the file is taken out of place atomically and judged
+		// again: only a file that is still stale is deleted; anything else goes back (unless an even newer session
+		// has taken the path in the meantime, which then wins). The taken name does not end in ".json", so even if
+		// this process dies in between, no client ever reads it as a session.
+		std::array<uint8_t, 8> suffix = {};
+		if (!Platform::GenerateSecureRandom(suffix))
+			return false;
+		std::filesystem::path takenFile = path;
+		takenFile += FileSystem::FromUTF8(".stale-" + Crypto::ToHex(suffix));
+
+		std::error_code error;
+		std::filesystem::rename(path, takenFile, error);
+		if (error)
+			return false; // Already removed (e.g. by another client), or held open by a reader
+
+		const std::optional<EditorSessionInfo> session = ReadSessionFile(takenFile);
+		if (!session || GetSessionProcessState(*session) != SessionProcessState::Exited)
+		{
+			if (!Platform::RenameNoReplace(takenFile, path))
+				std::filesystem::remove(takenFile, error);
+			return false;
+		}
+		std::filesystem::remove(takenFile, error);
+		return !error;
 	}
 
 	std::optional<EditorSessionInfo> EditorSession::ReadSessionFile(const std::filesystem::path& path)

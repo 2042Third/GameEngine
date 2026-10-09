@@ -263,6 +263,31 @@ TEST_SUITE("Core.Platform")
 		CHECK(stat->find(')') != std::string::npos);
 		CHECK(stat->size() > 50);
 	}
+
+	TEST_CASE("The start time is read whatever the process is called")
+	{
+		// /proc/<pid>/stat shows the process name in parentheses, unescaped, so the name may add a ')' or even a
+		// newline to the line. The helper takes such a name only when told to, so its start time is first read
+		// while the name is still plain.
+		const std::filesystem::path trigger = Tests::CreateTemporaryDirectory("ProcessName") / "rename";
+		Process child;
+		REQUIRE(child.Start(HelperProcess({ "--strata-test-helper=rename-when-file-exists", FileSystem::ToUTF8(trigger) })));
+		struct TerminateOnExit
+		{
+			Process& Child;
+			~TerminateOnExit() { Child.Terminate(); }
+		} terminateOnExit { child };
+
+		const uint32_t childId = child.GetProcessID();
+		const std::optional<uint64_t> plainNameStart = Platform::GetProcessStartTime(childId);
+		REQUIRE(plainNameStart.has_value());
+
+		REQUIRE(FileSystem::WriteText(trigger, "rename"));
+		const std::filesystem::path nameFile = "/proc/" + std::to_string(childId) + "/comm";
+		REQUIRE(Tests::WaitUntil([&]() { return Platform::ReadRegularFile(nameFile, 4096).value_or(std::string()) == "a)\nb\n"; }));
+
+		CHECK(Platform::GetProcessStartTime(childId) == plainNameStart);
+	}
 #endif
 
 #if defined(ST_PLATFORM_WINDOWS)

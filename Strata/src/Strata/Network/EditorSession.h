@@ -88,6 +88,10 @@ namespace Strata
 		static std::vector<EditorSessionInfo> FindSessions(const std::filesystem::path& sessionDirectory);
 		// Reads a per-user session file (nullopt if it is missing, untrusted or invalid).
 		static std::optional<EditorSessionInfo> ReadSessionFile(const std::filesystem::path& path);
+		// Deletes the session file at path if its editor has exited, judging the file again after taking it out of
+		// place, so a session that a new process with the same id wrote there in the meantime survives. Returns
+		// whether the file was deleted. Used by FindSessions.
+		static bool RemoveStaleSessionFile(const std::filesystem::path& path);
 
 		// The session of the running editor that has projectDirectory open, located through the project pointer
 		// and validated as described above.
