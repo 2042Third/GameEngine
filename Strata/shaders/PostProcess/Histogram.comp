@@ -1,0 +1,34 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_samplerless_texture_functions : require
+
+#include "Include/Common.glsl"
+#include "Include/Exposure.glsl"
+
+// Luminance histogram of the HDR scene color (input of Exposure.comp). Each workgroup counts its 16x16 pixels in
+// shared memory and adds them to the global histogram, which is cleared before the pass.
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in; // One thread per bin
+
+layout(set = 0, binding = ST_SRV(0)) uniform texture2D u_SceneColor;
+layout(set = 0, binding = ST_UAV(0), std430) buffer HistogramBuffer
+{
+	uint u_Histogram[];
+};
+
+shared uint s_Bins[ST_HISTOGRAM_BINS];
+
+void main()
+{
+	s_Bins[gl_LocalInvocationIndex] = 0u;
+	barrier();
+
+	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+	if (all(lessThan(pixel, textureSize(u_SceneColor, 0))))
+		atomicAdd(s_Bins[LuminanceToHistogramBin(Luminance(texelFetch(u_SceneColor, pixel, 0).rgb))], 1u);
+	barrier();
+
+	uint count = s_Bins[gl_LocalInvocationIndex];
+	if (count > 0u)
+		atomicAdd(u_Histogram[gl_LocalInvocationIndex], count);
+}

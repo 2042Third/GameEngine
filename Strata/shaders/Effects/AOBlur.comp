@@ -1,0 +1,54 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_samplerless_texture_functions : require
+
+#include "Include/Scene.glsl"
+
+// Depth-aware 5x5 blur of the ambient occlusion: removes the per-pixel slice noise without bleeding across edges.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = ST_SRV(8)) uniform texture2D u_Depth;
+layout(set = 0, binding = ST_SRV(10)) uniform texture2D u_Input;
+layout(set = 0, binding = ST_UAV(0), r32f) uniform writeonly image2D o_Output;
+
+float LinearDepth(float depth)
+{
+	// Distance along the view axis; with reversed-Z, depth falls toward 0 with distance.
+	vec4 view = u_Frame.InverseProjection * vec4(0.0, 0.0, depth, 1.0);
+	return -view.z / view.w;
+}
+
+void main()
+{
+	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 size = ivec2(u_Frame.ViewportSize.xy);
+	if (pixel.x >= size.x || pixel.y >= size.y)
+		return;
+
+	float centerDepth = texelFetch(u_Depth, pixel, 0).r;
+	if (centerDepth <= 0.0)
+	{
+		imageStore(o_Output, pixel, vec4(1.0));
+		return;
+	}
+	float center = LinearDepth(centerDepth);
+
+	float sum = 0.0;
+	float weightSum = 0.0;
+	for (int y = -2; y <= 2; y++)
+	{
+		for (int x = -2; x <= 2; x++)
+		{
+			ivec2 samplePixel = clamp(pixel + ivec2(x, y), ivec2(0), size - 1);
+			float sampleDepth = texelFetch(u_Depth, samplePixel, 0).r;
+			if (sampleDepth <= 0.0)
+				continue;
+			float difference = abs(LinearDepth(sampleDepth) - center) / max(center, 1e-4);
+			float weight = exp(-difference * 50.0);
+			sum += texelFetch(u_Input, samplePixel, 0).r * weight;
+			weightSum += weight;
+		}
+	}
+	imageStore(o_Output, pixel, vec4(weightSum > 0.0 ? sum / weightSum : 1.0));
+}

@@ -104,7 +104,8 @@ namespace Strata
 		float OrthographicNear = 0.1f;
 		float OrthographicFar = 1000.0f;
 		bool Primary = true;
-		glm::vec4 ClearColor = { 0.05f, 0.05f, 0.07f, 1.0f }; // Background when no sky is rendered
+		// Background when no sky is rendered (sRGB-encoded; exposed and tone mapped with the scene, see SceneCamera)
+		glm::vec4 ClearColor = { 0.05f, 0.05f, 0.07f, 1.0f };
 
 		// View-to-clip transform for the given aspect ratio, in Strata's reversed-Z convention.
 		glm::mat4 GetProjection(float aspectRatio) const;
@@ -125,29 +126,27 @@ namespace Strata
 		float Intensity = 3.0f;
 		bool CastShadows = true;
 		float ShadowDistance = 80.0f;   // Shadows are rendered up to this distance from the camera
-		float ShadowSoftness = 1.0f;    // Apparent light size; larger values give softer penumbrae
-		float ShadowBias = 0.002f;
-		float ShadowNormalBias = 0.02f;
+		float ShadowSoftness = 1.0f;    // Angular diameter of the light in degrees (the sun is about 0.5): penumbra size
+		float ShadowBias = 1.0f;        // Depth offset toward the light, in shadow map texels
+		float ShadowNormalBias = 1.5f;  // Offset along the surface normal, in shadow map texels
 	};
 
+	// Point and spot lights cast no shadows (only the directional light does).
 	struct PointLightComponent
 	{
 		glm::vec3 Color = { 1.0f, 1.0f, 1.0f };
 		float Intensity = 10.0f;
-		float Range = 10.0f;
-		bool CastShadows = false;
-		float SourceRadius = 0.05f; // Light size for soft shadows
+		float Range = 10.0f; // Light fades to zero at this distance
 	};
 
+	// Shines along the entity's forward (-Z) direction.
 	struct SpotLightComponent
 	{
 		glm::vec3 Color = { 1.0f, 1.0f, 1.0f };
 		float Intensity = 20.0f;
 		float Range = 15.0f;
-		float InnerConeAngle = 20.0f; // Degrees, half angle
-		float OuterConeAngle = 30.0f; // Degrees, half angle
-		bool CastShadows = true;
-		float SourceRadius = 0.05f;
+		float InnerConeAngle = 20.0f; // Degrees, half angle: full intensity inside
+		float OuterConeAngle = 30.0f; // Degrees, half angle: no light outside
 	};
 
 	// Image-based lighting and sky background from an HDR environment map (equirectangular texture).
@@ -170,25 +169,28 @@ namespace Strata
 		KhronosNeutral
 	};
 
-	// Scene-wide post-processing and screen-space effect settings (the first enabled instance is used).
+	// Post-processing of the camera image. The first active entity with this component in a scene applies; scenes
+	// without one use the defaults.
 	struct PostProcessComponent
 	{
 		TonemapOperator Tonemapper = TonemapOperator::ACES;
-		float Exposure = 0.0f; // Exposure compensation in EV
+		float Exposure = 0.0f; // Exposure compensation in EV (stops); the only exposure without AutoExposure
+		// Automatic exposure maps the average luminance of the image's non-black pixels to middle gray. The average is
+		// clamped to [2^MinEV, 2^MaxEV] and approached at AutoExposureSpeed per second (0 = instantly).
 		bool AutoExposure = true;
 		float AutoExposureMinEV = -4.0f;
 		float AutoExposureMaxEV = 12.0f;
 		float AutoExposureSpeed = 1.5f;
 		bool Bloom = true;
-		float BloomIntensity = 0.04f;
-		float BloomThreshold = 1.0f;
+		float BloomIntensity = 0.04f; // Fraction of the light scattered into the glow
+		float BloomThreshold = 0.0f;  // Only light brighter than this (after exposure) blooms; 0 = all light
 		bool AmbientOcclusion = true;
-		float AmbientOcclusionRadius = 0.6f;
+		float AmbientOcclusionRadius = 0.6f; // World units
 		float AmbientOcclusionIntensity = 1.0f;
-		bool AntiAliasing = true;
+		bool AntiAliasing = true; // FXAA
 		float Vignette = 0.2f;
 		float Saturation = 1.0f;
-		float Contrast = 1.0f;
+		float Contrast = 1.0f; // Around middle gray; 1 = unchanged
 	};
 
 	enum class TextAlignment : uint8_t

@@ -88,7 +88,10 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
 - Unit tests live in `StrataTests/src/<Module>/*Tests.cpp` and use [doctest](https://github.com/doctest/doctest).
   Name suites after the module (`TEST_SUITE("Scene.Serialization")`).
 - Suites whose names start with `GPU` need a Vulkan device and are registered separately under the
-  CTest label `gpu`.
+  CTest label `gpu`. They share one device per process through `Tests::GPUContext` (never create
+  devices in tests) and end with `CHECK(gpu.GetNewErrorCount() == 0)`, so validation errors fail the
+  test. Run them under the Khronos validation layer locally by pointing `VK_ADD_LAYER_PATH` at its
+  build. Rendering features are tested on pixels read back with `Renderer::ReadTexture`.
 - Use `Strata::Tests::CreateTemporaryDirectory()` for files; never write into the source tree.
 - `StrataTests.exe --strata-test-helper=<mode>` turns the test binary into a child process for
   process tests (see `TestMain.cpp`), so tests never depend on external programs.
@@ -155,6 +158,16 @@ Conventions:
   top-left, NDC +Y is up, depth range is [0, 1] and the engine uses reversed-Z (near = 1, far = 0).
   Fullscreen-pass UVs are `uv = (ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5)`. Front faces are
   counter-clockwise (glTF convention).
+- **Shaders:** GLSL in `Strata/shaders`, compiled to SPIR-V at build time and embedded; every shader
+  must be listed in `strata_add_shaders` in `Strata/CMakeLists.txt` (re-run configure after adding one).
+  Bindings use the `ST_SRV/ST_SAMPLER/ST_CBV/ST_UAV(slot)` macros of `Include/Common.glsl`, matching
+  NVRHI's register mapping. Push constants share the `b` registers with constant buffers: give them a
+  slot no constant buffer of the pipeline's other layouts uses.
+- **NVRHI pitfalls:** never take the address of a handle (`&m_Pipeline`): `RefCountPtr::operator&`
+  releases the reference and returns the raw pointer's address, so assigning through it leaves a
+  dangling object. NVRHI places automatic barriers only when the binding sets change; consecutive
+  dispatches through the *same* binding set that read each other's UAV writes need an explicit
+  `setBufferState`/`setTextureState(..., UnorderedAccess)` plus `commitBarriers()`.
 - **Scripting isolation:** game scripts only see `StrataScriptCore`. Every call into script code goes
   through `CrashGuard`; anything crossing the ABI is plain data (no STL types, no exceptions).
 - **Assets:** referenced by `AssetHandle` (UUID), never by path at runtime. Loading is asynchronous;
@@ -183,6 +196,33 @@ Conventions:
 - Adding an asset type: an `Asset` subclass with a cooked/serialized form, a loader in
   `Asset/AssetRegistration.cpp`, an importer if it comes from external files, and tests for round trips
   and corrupt data (every loader must reject truncated or garbage bytes without crashing).
+
+## Rendering
+
+- `SceneRenderer` draws a `Scene` from a `SceneCamera` into its output texture or a given framebuffer:
+  light clustering, directional shadow cascades, depth/normal/entity-ID prepass, ground-truth ambient
+  occlusion, forward PBR (opaque surfaces with an EQUAL depth test and forced early depth testing), sky,
+  transparent surfaces (back to front), then post-processing from the scene's `PostProcessComponent`
+  (exposure, bloom, tone mapping and grading, FXAA). A target framebuffer must match the viewport size
+  and have a non-sRGB UNORM color format; `Render` returns false (and logs once) instead of rescaling.
+- Light units are relative but physically consistent: directional intensity acts like illuminance,
+  point and spot intensity like luminous intensity with inverse-square falloff (cut off at `Range`).
+  Automatic exposure maps the average luminance of the non-black pixels to middle gray; tests that
+  compare exact colors disable it (see `AddNeutralPostProcess` in `SceneRendererTestUtils.h`).
+- Point and spot lights are frustum culled on the CPU, ranked by relevance (projected size of their
+  range) and capped at `MaxLights`; `Scene/LightClusters.comp` then lists the lights reaching each
+  cluster of a 16x9x24 froxel grid (exponential depth slices) and `Forward.frag` loops only over its
+  pixel's cluster. Only the directional light casts shadows.
+- Shadows: cascade depth ranges are fitted to the casters toward the light (casters beyond
+  `c_MaxShadowCasterDistance` are pancaked onto the near plane); acne is handled by the rasterizer
+  depth bias, the light's depth and normal offsets and a receiver plane depth bias in the PCSS filter.
+- HDR targets are RGBA16F: shaders writing them clamp with `SanitizeHDR` (Inf and NaN would turn
+  black after tone mapping). Instances with a mirroring transform (negative determinant) use
+  pipelines with clockwise front faces and flip their tangent handedness (`c_InstanceMirrored`).
+- Everything streams: meshes, materials and textures that are still loading are skipped or drawn with
+  fallbacks and counted in `SceneRendererStats::PendingAssets`; never block a frame on an asset.
+- GPU tests of the scene renderer share `StrataTests/src/Renderer/SceneRendererTestUtils.h`. Verify that a
+  new regression test fails without its fix before relying on it.
 
 ## Pre-commit review checklist
 

@@ -33,7 +33,29 @@ strata_add_shaders(Strata
 		ImGui.vert
 		ImGui.frag
 		Debug/ColorTriangle.vert
-		Debug/ColorTriangle.frag)
+		Debug/ColorTriangle.frag
+		Scene/Mesh.vert
+		Scene/DepthPrepass.frag
+		Scene/Forward.frag
+		Scene/Skybox.frag
+		Scene/ShadowMesh.vert
+		Scene/ShadowMask.frag
+		Scene/LightClusters.comp
+		IBL/EquirectToCube.comp
+		IBL/CubeDownsample.comp
+		IBL/Irradiance.comp
+		IBL/Prefilter.comp
+		IBL/BRDFLut.comp
+		Effects/GTAO.comp
+		Effects/AOBlur.comp
+		PostProcess/Fullscreen.vert
+		PostProcess/Tonemap.frag
+		PostProcess/Histogram.comp
+		PostProcess/Exposure.comp
+		PostProcess/Bloom.comp
+		PostProcess/FXAA.frag
+	VARIANTS
+		"Scene/Forward.frag|Scene/ForwardTransparent.frag|ST_FORWARD_TRANSPARENT")
 
 target_link_libraries(Strata
 	PUBLIC

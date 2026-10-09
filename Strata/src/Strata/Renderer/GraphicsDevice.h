@@ -35,6 +35,7 @@ namespace Strata
 		bool SupportsBCCompression = false;
 		bool SupportsWireframe = false;
 		bool ValidationEnabled = false;
+		uint32_t MaxTextureDimension2D = 4096; // Largest width or height of a 2D texture or render target
 	};
 
 	struct GraphicsMemoryBudget
