@@ -1,0 +1,61 @@
+# Strata engine core (static library).
+
+file(GLOB_RECURSE STRATA_SOURCES CONFIGURE_DEPENDS
+	"${CMAKE_CURRENT_SOURCE_DIR}/src/*.h"
+	"${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
+
+# Platform backends live in src/Platform/<Platform>/ and are filtered per target OS.
+if(WIN32)
+	list(FILTER STRATA_SOURCES EXCLUDE REGEX "/src/Platform/(Posix|Linux|MacOS)/")
+elseif(APPLE)
+	list(FILTER STRATA_SOURCES EXCLUDE REGEX "/src/Platform/(Windows|Linux)/")
+	file(GLOB_RECURSE STRATA_MACOS_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/Platform/MacOS/*.mm")
+	list(APPEND STRATA_SOURCES ${STRATA_MACOS_SOURCES})
+else()
+	list(FILTER STRATA_SOURCES EXCLUDE REGEX "/src/Platform/(Windows|MacOS)/")
+endif()
+
+add_library(Strata STATIC ${STRATA_SOURCES})
+strata_configure_target(Strata)
+source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${STRATA_SOURCES})
+
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/src/Strata/Core/Version.h.in" "${CMAKE_CURRENT_BINARY_DIR}/Generated/Strata/Core/Version.h" @ONLY)
+
+target_include_directories(Strata PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+	"${CMAKE_CURRENT_BINARY_DIR}/Generated")
+target_precompile_headers(Strata PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/stpch.h")
+
+target_link_libraries(Strata
+	PUBLIC
+		glm
+		EnTT
+		spdlog::spdlog
+		nlohmann_json::nlohmann_json
+		nvrhi
+		imgui
+		ImGuizmo
+	PRIVATE
+		nvrhi_vk
+		Vulkan::Headers
+		glfw
+		stb
+		cgltf
+		MikkTSpace
+		meshoptimizer
+		miniaudio
+		Jolt)
+
+if(WIN32)
+	target_link_libraries(Strata PRIVATE shell32 ole32)
+elseif(APPLE)
+	target_link_libraries(Strata PRIVATE "-framework CoreFoundation")
+else()
+	find_package(Threads REQUIRED)
+	target_link_libraries(Strata PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+endif()
+
+if(STRATA_ENABLE_TRACY)
+	target_compile_definitions(Strata PUBLIC ST_ENABLE_TRACY)
+	target_link_libraries(Strata PUBLIC Tracy::TracyClient)
+endif()

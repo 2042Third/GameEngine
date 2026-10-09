@@ -1,0 +1,64 @@
+{
+	"version": 6,
+	"cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+	"configurePresets": [
+		{
+			"name": "base",
+			"hidden": true,
+			"binaryDir": "${sourceDir}/build/${presetName}"
+		},
+		{
+			"name": "windows",
+			"displayName": "Windows (Visual Studio 2026)",
+			"inherits": "base",
+			"generator": "Visual Studio 18 2026",
+			"architecture": { "value": "x64", "strategy": "set" },
+			"condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+		},
+		{
+			"name": "windows-vs2022",
+			"displayName": "Windows (Visual Studio 2022)",
+			"inherits": "windows",
+			"generator": "Visual Studio 17 2022"
+		},
+		{
+			"name": "linux",
+			"displayName": "Linux (Ninja Multi-Config)",
+			"inherits": "base",
+			"generator": "Ninja Multi-Config",
+			"condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" }
+		},
+		{
+			"name": "macos",
+			"displayName": "macOS (Ninja Multi-Config)",
+			"inherits": "base",
+			"generator": "Ninja Multi-Config",
+			"condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" }
+		}
+	],
+	"buildPresets": [
+		{ "name": "windows-debug", "configurePreset": "windows", "configuration": "Debug" },
+		{ "name": "windows-release", "configurePreset": "windows", "configuration": "Release" },
+		{ "name": "windows-dist", "configurePreset": "windows", "configuration": "Dist" },
+		{ "name": "linux-debug", "configurePreset": "linux", "configuration": "Debug" },
+		{ "name": "linux-release", "configurePreset": "linux", "configuration": "Release" },
+		{ "name": "linux-dist", "configurePreset": "linux", "configuration": "Dist" },
+		{ "name": "macos-debug", "configurePreset": "macos", "configuration": "Debug" },
+		{ "name": "macos-release", "configurePreset": "macos", "configuration": "Release" },
+		{ "name": "macos-dist", "configurePreset": "macos", "configuration": "Dist" }
+	],
+	"testPresets": [
+		{
+			"name": "test-base",
+			"hidden": true,
+			"output": { "outputOnFailure": true },
+			"execution": { "noTestsAction": "error", "stopOnFailure": false }
+		},
+		{ "name": "windows-debug", "inherits": "test-base", "configurePreset": "windows", "configuration": "Debug" },
+		{ "name": "windows-release", "inherits": "test-base", "configurePreset": "windows", "configuration": "Release" },
+		{ "name": "linux-debug", "inherits": "test-base", "configurePreset": "linux", "configuration": "Debug" },
+		{ "name": "linux-release", "inherits": "test-base", "configurePreset": "linux", "configuration": "Release" },
+		{ "name": "macos-debug", "inherits": "test-base", "configurePreset": "macos", "configuration": "Debug" },
+		{ "name": "macos-release", "inherits": "test-base", "configurePreset": "macos", "configuration": "Release" }
+	]
+}

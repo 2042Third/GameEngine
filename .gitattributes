@@ -1,0 +1,30 @@
+# Normalize text files to LF in the repository
+* text=auto eol=lf
+
+# Windows scripts need CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary assets
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.tga binary
+*.bmp binary
+*.hdr binary
+*.exr binary
+*.ktx2 binary
+*.glb binary
+*.bin binary
+*.ttf binary
+*.otf binary
+*.wav binary
+*.mp3 binary
+*.ogg binary
+*.flac binary
+*.ico binary
+*.icns binary
+*.stpak binary
+*.stmesh binary
+*.sttex binary

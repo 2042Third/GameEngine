@@ -1,0 +1,44 @@
+# Strata code formatting. Mirrors the Hazel engine style:
+# tabs for indentation, Allman braces, namespace contents indented, left-aligned pointers.
+---
+Language: Cpp
+Standard: c++20
+UseTab: ForIndentation
+TabWidth: 4
+IndentWidth: 4
+ContinuationIndentWidth: 4
+ColumnLimit: 0
+BreakBeforeBraces: Allman
+NamespaceIndentation: All
+AccessModifierOffset: -4
+IndentCaseLabels: true
+IndentPPDirectives: None
+PointerAlignment: Left
+ReferenceAlignment: Left
+Cpp11BracedListStyle: false
+BreakConstructorInitializers: BeforeColon
+ConstructorInitializerIndentWidth: 4
+PackConstructorInitializers: Never
+AllowShortFunctionsOnASingleLine: InlineOnly
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortEnumsOnASingleLine: false
+AllowShortLambdasOnASingleLine: Inline
+AlwaysBreakTemplateDeclarations: Yes
+AlignAfterOpenBracket: DontAlign
+AlignOperands: DontAlign
+AlignTrailingComments: false
+AlignEscapedNewlines: DontAlign
+AlignConsecutiveAssignments: None
+AlignConsecutiveDeclarations: None
+SpaceBeforeParens: ControlStatements
+SpaceAfterCStyleCast: false
+SpaceAfterTemplateKeyword: true
+SpacesInAngles: Never
+SpaceInEmptyBlock: false
+SortIncludes: Never
+FixNamespaceComments: false
+MaxEmptyLinesToKeep: 1
+KeepEmptyLinesAtTheStartOfBlocks: false

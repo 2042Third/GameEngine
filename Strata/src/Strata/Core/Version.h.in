@@ -1,0 +1,16 @@
+#pragma once
+
+// Generated from Strata/src/Strata/Core/Version.h.in by CMake - edit the template, not the output.
+
+#define ST_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
+#define ST_VERSION_MINOR @PROJECT_VERSION_MINOR@
+#define ST_VERSION_PATCH @PROJECT_VERSION_PATCH@
+#define ST_VERSION_STRING "@PROJECT_VERSION@"
+
+namespace Strata
+{
+
+	constexpr const char* c_EngineName = "Strata";
+	constexpr const char* c_EngineVersion = ST_VERSION_STRING;
+
+}

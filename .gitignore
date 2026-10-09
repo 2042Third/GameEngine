@@ -1,0 +1,30 @@
+# Build output
+/build/
+/out/
+CMakeUserPresets.json
+compile_commands.json
+
+# IDE / editor state
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+imgui.ini
+
+# Strata per-project local data (cooked cache, script builds, editor session state)
+.strata/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs, crash dumps, test artifacts
+*.log
+*.dmp
+/TestResults/
+
+# Python
+__pycache__/
+*.pyc
