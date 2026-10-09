@@ -87,6 +87,9 @@ editor started with `--no-gpu` (use `--headless`):
   `{"Image": {"MimeType": "image/png", "Data"}, width, height, camera, overlays, pendingAssets, notice?, path?}`.
 - `camera.get`; `camera.set {position?, target?, yaw?, pitch?, distance?, fov?, near?, far?, flySpeed?}`;
   `camera.focus {entities?}` frames the given (or selected) entities.
+- Game logic: write C++ scripts into the project's `Scripts/` folder and use `script.build`, `script.status`,
+  `script.add`, `script.setField`, `script.reload` (see `.claude/skills/strata-scripting/SKILL.md`, "The workflow in a
+  game project"). Builds need CMake and the engine's compiler on the machine; they work with `--no-gpu`.
 
 ## 4. Conventions
 

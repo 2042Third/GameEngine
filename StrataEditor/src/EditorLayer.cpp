@@ -47,7 +47,7 @@ namespace Strata
 		});
 		if (m_Options.EnableAutomation)
 			StartAutomation();
-		else if (m_Options.Headless && !m_Options.MaxFrames)
+		else if (m_Options.Headless && !m_Options.MaxFrames && !m_Options.QuitAfterCommands)
 			ST_WARN("Running headless without automation or --frames: the editor runs until it is stopped with a signal (Ctrl+C)");
 
 		if (!m_Options.CommandScript.empty())
@@ -63,6 +63,8 @@ namespace Strata
 			{
 				ST_ERROR("Command script: {}", error);
 				Application::Get().SetExitCode(1);
+				if (m_Options.QuitAfterCommands)
+					Application::Get().Close();
 			}
 		}
 	}
@@ -102,6 +104,8 @@ namespace Strata
 			ST_INFO("Command script finished ({} commands)", m_CommandScript->GetStepCount());
 		}
 		m_CommandScript.reset();
+		if (m_Options.QuitAfterCommands)
+			Application::Get().Close();
 	}
 
 	void EditorLayer::OnDetach()
@@ -255,6 +259,9 @@ namespace Strata
 			SaveSceneAs();
 		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_D, global))
 			DuplicateSelection();
+		// Like the menu item and the toolbar button, the shortcut does nothing while a build runs.
+		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_B, global) && !m_Context.GetScriptBuilder().IsRunning())
+			BuildScripts();
 		if (ImGui::Shortcut(ImGuiKey_Delete, global))
 			DeleteSelection();
 	}
@@ -333,6 +340,18 @@ namespace Strata
 		for (UUID id : m_Context.GetSelection())
 			ids.push_back(UUIDToJson(id));
 		RunEditorCommand(m_Context, m_Commands, "entity.delete", { { "entities", ids } });
+	}
+
+	void EditorLayer::BuildScripts()
+	{
+		// The builder logs the outcome of builds that ran; requests refused at once (no project, a build already running)
+		// are only reported here.
+		const uint64_t previousBuild = m_Context.GetScriptBuilder().GetLastResult().ID;
+		m_CommandRunner.Run(m_Context, m_Commands, "script.build", { { "wait", true } }, [this, previousBuild](const EditorCommandResult& result)
+		{
+			if (!result.Success && m_Context.GetScriptBuilder().GetLastResult().ID == previousBuild)
+				ST_ERROR("Build Scripts: {}", result.Error);
+		});
 	}
 
 	void EditorLayer::DuplicateSelection()
@@ -469,6 +488,25 @@ namespace Strata
 			ImGui::EndMenu();
 		}
 
+		if (ImGui::BeginMenu("Scripts"))
+		{
+			const bool building = m_Context.GetScriptBuilder().IsRunning();
+			if (ImGui::MenuItem("Build Scripts", "Ctrl+B", false, m_Context.HasProject() && !building))
+				BuildScripts();
+			const Ref<ScriptEngine>& engine = m_Context.GetScriptEngine();
+			if (ImGui::MenuItem("Reload Scripts", nullptr, false, m_Context.HasProject() && !building))
+				RunEditorCommand(m_Context, m_Commands, "script.reload");
+			if (ImGui::MenuItem("Create Script Build", nullptr, false, m_Context.HasProject()))
+				RunEditorCommand(m_Context, m_Commands, "script.init", { { "example", true } });
+			ImGui::Separator();
+			if (engine && engine->IsModuleLoaded())
+				ImGui::TextDisabled("%s: %zu classes, loaded %llu times", engine->GetModuleName().c_str(), engine->GetClasses().size(),
+					static_cast<unsigned long long>(engine->GetLoadCount()));
+			else
+				ImGui::TextDisabled("No script module loaded");
+			ImGui::EndMenu();
+		}
+
 		if (ImGui::BeginMenu("Window"))
 		{
 			if (ImGui::MenuItem("Reset Layout"))
@@ -490,7 +528,19 @@ namespace Strata
 		ImGui::Begin("Toolbar", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 		const SceneState state = m_Context.GetSceneState();
 		const float width = ImGui::GetFrameHeight() * 4.0f;
-		ImGui::SetCursorPosX(std::max((ImGui::GetContentRegionAvail().x - width * 4.0f) * 0.5f, 0.0f));
+		const float lineStart = ImGui::GetCursorPosX();
+		const float lineWidth = ImGui::GetContentRegionAvail().x;
+
+		// Scripts build at the left; play controls in the center.
+		const bool building = m_Context.GetScriptBuilder().IsRunning();
+		ImGui::BeginDisabled(!m_Context.HasProject() || building);
+		if (ImGui::Button(building ? "Building..." : "Build Scripts", ImVec2(width * 1.5f, 0.0f)))
+			BuildScripts();
+		ImGui::EndDisabled();
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+			ImGui::SetTooltip("Build the project's scripts and hot-reload them (Ctrl+B)");
+		ImGui::SameLine();
+		ImGui::SetCursorPosX(std::max(lineStart + (lineWidth - width * 4.0f) * 0.5f, ImGui::GetCursorPosX()));
 
 		if (state == SceneState::Edit)
 		{
@@ -544,6 +594,22 @@ namespace Strata
 			const AssetManagerStats stats = assets->GetStats();
 			ImGui::SameLine();
 			ImGui::TextDisabled("|  %u assets loaded, %u loading", stats.LoadedAssets, stats.LoadingAssets);
+		}
+		const ScriptBuilder& builder = m_Context.GetScriptBuilder();
+		if (builder.IsRunning())
+		{
+			ImGui::SameLine();
+			ImGui::TextDisabled("|  Building scripts (%.0f s)", builder.GetElapsedSeconds());
+		}
+		else if (const Ref<ScriptEngine>& engine = m_Context.GetScriptEngine(); engine && engine->IsFaulted())
+		{
+			ImGui::SameLine();
+			ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.35f, 1.0f), "|  Scripts crashed (rebuild or reload them)");
+		}
+		else if (builder.GetLastResult().ID != 0 && !builder.GetLastResult().Success)
+		{
+			ImGui::SameLine();
+			ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.35f, 1.0f), "|  Script build failed (see Console)");
 		}
 		if (const uint32_t errors = m_Console.GetUnreadErrors(); errors > 0)
 		{

@@ -106,8 +106,14 @@ endif()
 set(STRATA_FEATURE_TEST_SUITES "FeatureTest,Editor.FeatureTest")
 
 add_test(NAME StrataTests.Core
-	COMMAND StrataTests "--test-suite-exclude=GPU*,EndToEnd*,${STRATA_FEATURE_TEST_SUITES}" --no-intro=true
+	COMMAND StrataTests "--test-suite-exclude=GPU*,EndToEnd*,Package*,${STRATA_FEATURE_TEST_SUITES}" --no-intro=true
 	WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
+
+# Suites whose names start with "Package" build script modules with the real toolchain (CMake and the compiler).
+add_test(NAME StrataTests.Package
+	COMMAND StrataTests "--test-suite=Package*" --no-intro=true
+	WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
+set_tests_properties(StrataTests.Package PROPERTIES LABELS "package" TIMEOUT 1800)
 
 add_test(NAME StrataTests.FeatureTest
 	COMMAND StrataTests "--test-suite=${STRATA_FEATURE_TEST_SUITES}" --no-intro=true
@@ -136,6 +142,23 @@ add_test(NAME StrataScriptCore.Package
 		"-DTEST_EXECUTABLE=$<TARGET_FILE:StrataTests>"
 		-P "${CMAKE_CURRENT_SOURCE_DIR}/PackageProject/BuildPackageProject.cmake")
 set_tests_properties(StrataScriptCore.Package PROPERTIES LABELS "package")
+
+# The same in the Dist configuration, whatever this build's configuration: CMake does not define Dist, so the package
+# must for the scripts of a Dist engine to build.
+add_test(NAME StrataScriptCore.PackageDist
+	COMMAND "${CMAKE_COMMAND}"
+		"-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/PackageProject"
+		"-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/PackageProject/DistCheck-$<CONFIG>"
+		"-DENGINE_DIR=${PROJECT_SOURCE_DIR}"
+		"-DEXPECTED_GLM_DEFINITIONS=$<JOIN:$<TARGET_PROPERTY:glm,INTERFACE_COMPILE_DEFINITIONS>,|>"
+		"-DGENERATOR=${CMAKE_GENERATOR}"
+		"-DPLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+		"-DTOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+		"-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
+		"-DCONFIG=Dist"
+		"-DTEST_EXECUTABLE=$<TARGET_FILE:StrataTests>"
+		-P "${CMAKE_CURRENT_SOURCE_DIR}/PackageProject/BuildPackageProject.cmake")
+set_tests_properties(StrataScriptCore.PackageDist PROPERTIES LABELS "package")
 
 # The real editor, driven by a command script for a few frames: catches startup, UI and shutdown failures.
 if(TARGET StrataEditor)
@@ -232,13 +255,17 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	set_tests_properties(StrataRuntime.NoCameraScreenshot PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataExportedGame)
 endif()
 
-# The real executables with the feature test project: the editor opens a copy of it, steps the feature scene's physics
-# (the command script's "expect" conditions require the ball to come to rest on the platform, and play.stop to restore
-# it) and exports it; the exported game then runs headless. The editor executable does not load script modules yet, so
-# the feature scripts run in StrataTests.FeatureTest (which also drives the editor and the exported game in-process).
+# The real executables with the feature test project: the editor opens a copy of it, loads the feature scripts
+# (script.load), steps the feature scene (the command script's "expect" conditions require the ball to come to rest on
+# the platform, the scripts to run without a crash, and play.stop to restore the scene) and exports it with the module;
+# the exported game then runs headless with the scripts. Both must exit cleanly and show that the scripts ran
+# (Editor/RunAndExpect.cmake).
 if(TARGET StrataEditor AND TARGET StrataRuntime)
 	set(STRATA_FEATURE_RUN_DIR "${CMAKE_CURRENT_BINARY_DIR}/FeatureTestRun")
-	configure_file("${CMAKE_CURRENT_SOURCE_DIR}/Editor/FeatureCommands.json.in" "${CMAKE_CURRENT_BINARY_DIR}/FeatureCommands.json" @ONLY)
+	# @VARIABLES@ first, then the generator expressions (the module's path) per configuration.
+	configure_file("${CMAKE_CURRENT_SOURCE_DIR}/Editor/FeatureCommands.json.in" "${CMAKE_CURRENT_BINARY_DIR}/FeatureCommands.json.configured" @ONLY)
+	file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/FeatureCommands-$<CONFIG>.json" INPUT "${CMAKE_CURRENT_BINARY_DIR}/FeatureCommands.json.configured")
+	set(STRATA_FEATURE_SCRIPTS_RAN "FeatureTest expected warning: true|Loaded script module 'StrataTestScriptsFeatureTest'")
 
 	add_test(NAME StrataFeatureTest.Clean COMMAND "${CMAKE_COMMAND}" -E rm -rf "${STRATA_FEATURE_RUN_DIR}")
 	set_tests_properties(StrataFeatureTest.Clean PROPERTIES FIXTURES_SETUP StrataFeatureTestClean LABELS "feature")
@@ -247,11 +274,35 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	set_tests_properties(StrataFeatureTest.Copy PROPERTIES FIXTURES_REQUIRED StrataFeatureTestClean FIXTURES_SETUP StrataFeatureTestProject LABELS "feature")
 
 	add_test(NAME StrataEditor.FeatureTest
-		COMMAND StrataEditor --no-gpu --no-automation --frames 300 --project "${STRATA_FEATURE_RUN_DIR}/Project/FeatureTest.stproj"
-			--commands "${CMAKE_CURRENT_BINARY_DIR}/FeatureCommands.json"
-		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
+		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:StrataEditor>"
+			"-DARGUMENTS=--no-gpu|--no-automation|--frames|300|--project|${STRATA_FEATURE_RUN_DIR}/Project/FeatureTest.stproj|--commands|${CMAKE_CURRENT_BINARY_DIR}/FeatureCommands-$<CONFIG>.json"
+			"-DEXPECT=${STRATA_FEATURE_SCRIPTS_RAN}" -P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
 	set_tests_properties(StrataEditor.FeatureTest PROPERTIES FIXTURES_REQUIRED StrataFeatureTestProject FIXTURES_SETUP StrataFeatureTestGame LABELS "feature")
 
-	add_test(NAME StrataRuntime.FeatureTest COMMAND "${STRATA_FEATURE_RUN_DIR}/Build/FeatureTest${CMAKE_EXECUTABLE_SUFFIX}" --headless --frames 120)
+	add_test(NAME StrataRuntime.FeatureTest
+		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=${STRATA_FEATURE_RUN_DIR}/Build/FeatureTest${CMAKE_EXECUTABLE_SUFFIX}" "-DARGUMENTS=--headless|--frames|120"
+			"-DEXPECT=${STRATA_FEATURE_SCRIPTS_RAN}" -P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
 	set_tests_properties(StrataRuntime.FeatureTest PROPERTIES FIXTURES_REQUIRED StrataFeatureTestGame LABELS "feature")
+endif()
+
+# A game's script workflow through the real editor and runtime, as an agent drives it (see Editor/ScriptsEndToEnd.cmake):
+# create a project, write a script, script.build, script.add, play, export, run the game headless. Like
+# StrataScriptCore.Package it needs CMake and the compiler at test time.
+if(TARGET StrataEditor AND TARGET StrataRuntime)
+	if(WIN32)
+		set(STRATA_SCRIPT_MODULE_SUFFIX ".dll")
+	elseif(APPLE)
+		set(STRATA_SCRIPT_MODULE_SUFFIX ".dylib")
+	else()
+		set(STRATA_SCRIPT_MODULE_SUFFIX ".so")
+	endif()
+	add_test(NAME StrataEditor.Scripts
+		COMMAND "${CMAKE_COMMAND}"
+			"-DEDITOR=$<TARGET_FILE:StrataEditor>"
+			"-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/ScriptsEndToEnd/$<CONFIG>"
+			"-DSCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/Editor/ScriptProject/Greeter.cpp"
+			"-DEXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
+			"-DMODULE_SUFFIX=${STRATA_SCRIPT_MODULE_SUFFIX}"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/ScriptsEndToEnd.cmake")
+	set_tests_properties(StrataEditor.Scripts PROPERTIES LABELS "package" TIMEOUT 1800)
 endif()

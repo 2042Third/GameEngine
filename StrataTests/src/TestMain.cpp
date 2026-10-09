@@ -8,6 +8,7 @@
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Log.h"
 #include "Strata/Core/Platform.h"
+#include "Strata/Core/Process.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
@@ -23,6 +24,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -69,6 +71,12 @@ namespace
 
 }
 #endif
+// Helper processes that could outlive their test stop when it says so: once the stop file exists or its directory is gone
+// (temporary directories are removed when the tests end), and after a minute at the latest.
+static bool KeepHelperRunning(const std::filesystem::path& stop, std::chrono::steady_clock::time_point deadline)
+{
+	return !Strata::FileSystem::Exists(stop) && Strata::FileSystem::IsDirectory(stop.parent_path()) && std::chrono::steady_clock::now() < deadline;
+}
 
 // When launched with --strata-test-helper=<mode>, the test executable acts as a child process for the
 // Process tests (and checks build products for CTest scripts) instead of running the test suites. This keeps
@@ -134,6 +142,38 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 	if (mode == "sleep")
 	{
 		std::this_thread::sleep_for(std::chrono::milliseconds(argc > 2 ? std::atoi(argv[2]) : 10000));
+		return 0;
+	}
+	if (mode == "heartbeat" && argc > 3)
+	{
+		// <file> <stop file>: appends a byte to the file every 10 ms (see KeepHelperRunning).
+		const std::filesystem::path beats = Strata::FileSystem::FromUTF8(argv[2]);
+		const std::filesystem::path stop = Strata::FileSystem::FromUTF8(argv[3]);
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(1);
+		while (KeepHelperRunning(stop, deadline))
+		{
+			{
+				std::ofstream file(beats, std::ios::binary | std::ios::app);
+				file.put('.');
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		}
+		return 0;
+	}
+	if (mode == "spawn-heartbeat" && argc > 3)
+	{
+		// <file> <stop file>: starts a "heartbeat" child (a grandchild of the test) and waits (see KeepHelperRunning).
+		Strata::ProcessSpecification specification;
+		specification.Executable = Strata::Platform::GetExecutablePath();
+		specification.Arguments = { "--strata-test-helper=heartbeat", argv[2], argv[3] };
+		specification.Output = Strata::ProcessOutputMode::Discard;
+		Strata::Process heartbeat;
+		if (!heartbeat.Start(specification))
+			return 1;
+		const std::filesystem::path stop = Strata::FileSystem::FromUTF8(argv[3]);
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(1);
+		while (KeepHelperRunning(stop, deadline))
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
 		return 0;
 	}
 	if (mode == "cwd")
@@ -496,11 +536,28 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 	return 99;
 }
 
+// With STRATA_TEST_FAKE_CMAKE=succeed, the test executable run with CMake's arguments ("-S ..." to configure,
+// "--build ..." to build) stands in for CMake in script builds (ScriptBuildSettings::CMake): it succeeds without building
+// anything, so the module file stays as the test left it.
+static std::optional<int> RunAsFakeCMake(int argc, char** argv)
+{
+	const std::optional<std::string> mode = Strata::Platform::GetEnvVar("STRATA_TEST_FAKE_CMAKE");
+	if (!mode || argc < 2 || (std::string_view(argv[1]) != "-S" && std::string_view(argv[1]) != "--build"))
+		return std::nullopt;
+	if (*mode != "succeed")
+		return std::nullopt;
+	std::printf("-- Fake CMake: %s\n", argv[1]);
+	std::fflush(stdout);
+	return 0;
+}
+
 int main(int argc, char** argv)
 {
 	constexpr std::string_view helperPrefix = "--strata-test-helper=";
 	if (argc > 1 && std::string_view(argv[1]).substr(0, helperPrefix.size()) == helperPrefix)
 		return RunHelperMode(std::string_view(argv[1]).substr(helperPrefix.size()), argc, argv);
+	if (const std::optional<int> fakeCMake = RunAsFakeCMake(argc, argv))
+		return *fakeCMake;
 
 	// Launched as an editor by the CLI launch tests (see Network/FakeEditorProcess.h).
 	if (Strata::Tests::IsFakeEditorLaunch(argc, argv))

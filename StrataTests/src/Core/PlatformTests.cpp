@@ -12,8 +12,10 @@
 #include <chrono>
 #include <climits>
 #include <cstdlib>
+#include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #if defined(ST_PLATFORM_POSIX)
@@ -439,6 +441,69 @@ TEST_SUITE("Core.Platform")
 		CHECK(process.Terminate());
 		CHECK_FALSE(process.IsRunning());
 		CHECK(process.GetExitCode().has_value());
+	}
+
+	TEST_CASE("Captured output reports when it ended")
+	{
+		Process idle;
+		CHECK(idle.IsOutputFinished()); // Nothing captured
+
+		Process process;
+		REQUIRE(process.Start(HelperProcess({ "--strata-test-helper=echo", "last words" })));
+		REQUIRE(process.Wait(std::chrono::seconds(30)));
+		// The output can end after the exit; then everything is there.
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+		while (!process.IsOutputFinished() && std::chrono::steady_clock::now() < deadline)
+			std::this_thread::sleep_for(std::chrono::milliseconds(5));
+		REQUIRE(process.IsOutputFinished());
+		CHECK(process.TakeOutput().find("last words") != std::string::npos);
+	}
+
+	TEST_CASE("Terminating a process tree ends the processes the child started")
+	{
+		// The child starts a grandchild that appends to a file every 10 ms; both stop once the stop file exists, which the
+		// test writes when it ends (also when it fails), so nothing outlives it.
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("ProcessTree");
+		const std::filesystem::path stop = directory / "Stop";
+		struct StopHelpers
+		{
+			std::filesystem::path File;
+			~StopHelpers() { FileSystem::WriteText(File, "stop"); }
+		} stopHelpers { stop };
+
+		auto startTree = [&](Process& process, const std::filesystem::path& beats)
+		{
+			ProcessSpecification specification = HelperProcess({ "--strata-test-helper=spawn-heartbeat", FileSystem::ToUTF8(beats), FileSystem::ToUTF8(stop) });
+			specification.TerminateTree = true;
+			REQUIRE(process.Start(specification));
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+			while (FileSystem::GetFileSize(beats).value_or(0) == 0 && std::chrono::steady_clock::now() < deadline)
+				std::this_thread::sleep_for(std::chrono::milliseconds(10));
+			REQUIRE(FileSystem::GetFileSize(beats).value_or(0) > 0);
+		};
+		// After a grace period for a beat in flight, a dead grandchild writes nothing more (a live one writes ~50 times).
+		auto beatsStopped = [](const std::filesystem::path& beats)
+		{
+			std::this_thread::sleep_for(std::chrono::milliseconds(200));
+			const uint64_t size = FileSystem::GetFileSize(beats).value_or(0);
+			std::this_thread::sleep_for(std::chrono::milliseconds(500));
+			return FileSystem::GetFileSize(beats).value_or(0) == size;
+		};
+
+		const std::filesystem::path terminated = directory / "Terminated.txt";
+		Process process;
+		startTree(process, terminated);
+		CHECK(process.Terminate());
+		CHECK_FALSE(process.IsRunning());
+		CHECK(beatsStopped(terminated));
+
+		// Destroying the Process object while the child runs ends the tree as well.
+		const std::filesystem::path destroyed = directory / "Destroyed.txt";
+		{
+			Process scoped;
+			startTree(scoped, destroyed);
+		}
+		CHECK(beatsStopped(destroyed));
 	}
 
 	TEST_CASE("Starting a missing executable fails cleanly")

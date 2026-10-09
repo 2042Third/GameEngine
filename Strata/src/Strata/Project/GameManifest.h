@@ -13,19 +13,22 @@ namespace Strata
 {
 
 	// Describes an exported game: what the runtime loads and how it presents it. Written by the editor's export next
-	// to the asset pack and the runtime executable ("<Name>.stgame").
+	// to the asset pack, the script module and the runtime executable ("<Name>.stgame").
 	//
-	// { "Strata": { "Format": "Game", "Version": 1 },
+	// { "Strata": { "Format": "Game", "Version": 2 },
 	//   "Game": { "Name": ..., "AssetPack": "<file next to the manifest>", "StartScene": "<handle>",
+	//             "ScriptModule": "<file next to the manifest, or empty>",
 	//             "Window": { "Width": 1280, "Height": 720, "Fullscreen": false, "VSync": true } } }
+	// Version 1 manifests (games without scripts) still load.
 	struct GameManifest
 	{
 		static constexpr std::string_view c_FileExtension = ".stgame";
-		static constexpr uint32_t c_FormatVersion = 1;
+		static constexpr uint32_t c_FormatVersion = 2;
 
 		std::string Name = "Game";
 		std::string AssetPack;                   // File name relative to the manifest's directory
 		AssetHandle StartScene = UUID::Null();
+		std::string ScriptModule;                // File name relative to the manifest's directory; empty without scripts
 		uint32_t WindowWidth = 1280;
 		uint32_t WindowHeight = 720;
 		bool Fullscreen = false;

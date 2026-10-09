@@ -31,10 +31,11 @@ TEST_SUITE("Project.GameManifest")
 		CHECK_FALSE(loaded->VSync);
 
 		// The pack must be a file next to the manifest; a scene handle is required.
-		for (const char* pack : { "../Other.stpak", "/abs/Game.stpak", "Sub/Game.stpak", "" })
+		for (const char* pack : { "../Other.stpak", "/abs/Game.stpak", "Sub/Game.stpak", "", ".", ".." })
 		{
 			nlohmann::json json = manifest.ToJson();
 			json["Game"]["AssetPack"] = pack;
+			INFO("pack: ", pack);
 			CHECK_FALSE(GameManifest::FromJson(json).has_value());
 		}
 		nlohmann::json noScene = manifest.ToJson();
@@ -46,6 +47,46 @@ TEST_SUITE("Project.GameManifest")
 		nlohmann::json hugeWindow = manifest.ToJson();
 		hugeWindow["Game"]["Window"]["Width"] = 1000000;
 		CHECK(GameManifest::FromJson(hugeWindow)->WindowWidth == 16384);
+	}
+
+	TEST_CASE("Game manifests name the script module next to them")
+	{
+		GameManifest manifest;
+		manifest.AssetPack = "Game.stpak";
+		manifest.StartScene = UUID(0x42);
+		manifest.ScriptModule = "GameScripts.dll";
+
+		std::string error;
+		std::optional<GameManifest> loaded = GameManifest::FromJson(manifest.ToJson(), &error);
+		REQUIRE_MESSAGE(loaded, error);
+		CHECK(loaded->ScriptModule == "GameScripts.dll");
+		CHECK(manifest.ToJson()["Strata"]["Version"] == GameManifest::c_FormatVersion);
+
+		// No module: a game without scripts.
+		manifest.ScriptModule.clear();
+		loaded = GameManifest::FromJson(manifest.ToJson(), &error);
+		REQUIRE_MESSAGE(loaded, error);
+		CHECK(loaded->ScriptModule.empty());
+
+		for (const char* module : { "../GameScripts.dll", "/abs/GameScripts.so", "Scripts/GameScripts.dll", ".", ".." })
+		{
+			INFO("module: ", module);
+			nlohmann::json json = manifest.ToJson();
+			json["Game"]["ScriptModule"] = module;
+			CHECK_FALSE(GameManifest::FromJson(json, &error).has_value());
+			CHECK(error.find("ScriptModule") != std::string::npos);
+		}
+
+		// Version 1 manifests (written before games had scripts) still load; newer versions are refused.
+		nlohmann::json version1 = manifest.ToJson();
+		version1["Strata"]["Version"] = 1;
+		version1["Game"].erase("ScriptModule");
+		loaded = GameManifest::FromJson(version1, &error);
+		REQUIRE_MESSAGE(loaded, error);
+		CHECK(loaded->ScriptModule.empty());
+		nlohmann::json future = manifest.ToJson();
+		future["Strata"]["Version"] = GameManifest::c_FormatVersion + 1;
+		CHECK_FALSE(GameManifest::FromJson(future).has_value());
 	}
 
 	TEST_CASE("The runtime finds the manifest next to its executable")

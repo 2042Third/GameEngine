@@ -1,6 +1,8 @@
 [
 	{ "command": "project.info" },
 	{ "command": "scene.open", "parameters": { "scene": "Scenes/Feature.stscene" } },
+	{ "command": "script.load", "parameters": { "path": "$<TARGET_FILE:StrataTestScriptsFeatureTest>" },
+		"expect": { "/classes": { "min": 1 } } },
 	{ "command": "component.get", "parameters": { "entity": "F7E0000000000012", "component": "RigidBody" },
 		"expect": { "/values/Type": { "equals": "Dynamic" } } },
 	{ "command": "component.get", "parameters": { "entity": "F7E0000000000012", "component": "Transform" },
@@ -14,6 +16,12 @@
 			"/values/Translation/0": { "min": -4.05, "max": -3.95 },
 			"/values/Translation/1": { "min": 1.6, "max": 1.7 },
 			"/values/Translation/2": { "min": -0.05, "max": 0.05 } } },
+	{ "command": "script.status",
+		"expect": {
+			"/loaded": { "equals": true },
+			"/moduleName": { "equals": "StrataTestScriptsFeatureTest" },
+			"/fault": { "equals": null },
+			"/lastFault": { "equals": null } } },
 	{ "command": "play.stop" },
 	{ "command": "component.get", "parameters": { "entity": "F7E0000000000012", "component": "Transform" },
 		"expect": { "/values/Translation": { "equals": [ -4, 4, 0 ] } } },

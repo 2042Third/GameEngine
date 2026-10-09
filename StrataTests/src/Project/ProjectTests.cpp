@@ -101,6 +101,114 @@ TEST_SUITE("Project")
 		CHECK(error.find("2") != std::string::npos);
 	}
 
+	TEST_CASE("Projects store their script settings")
+	{
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("ProjectScripts") / "Space Game";
+		std::string error;
+		Ref<Project> project = Project::Create(directory, "Space Game!", &error);
+		REQUIRE_MESSAGE(project, error);
+		CHECK(project->GetConfig().Scripts.SourceDirectory == "Scripts");
+		CHECK(project->GetConfig().Scripts.ModuleName == "SpaceGameScripts");
+		CHECK(project->GetScriptModuleName() == "SpaceGameScripts");
+		CHECK(project->GetScriptSourceDirectory() == (directory / "Scripts").lexically_normal());
+		CHECK(project->GetScriptBuildDirectory() == project->GetIntermediateDirectory() / "Scripts" / "Build");
+		CHECK(project->GetScriptModulePath().parent_path() == project->GetScriptBinaryDirectory());
+		CHECK(FileSystem::ToUTF8(project->GetScriptModulePath().filename()).rfind("SpaceGameScripts.", 0) == 0);
+
+		// Renaming the project keeps the stored module name.
+		project->GetConfig().Name = "Renamed";
+		project->GetConfig().Scripts.SourceDirectory = "Code/Scripts";
+		REQUIRE_MESSAGE(project->Save(&error), error);
+		Ref<Project> loaded = Project::Load(project->GetProjectFile(), &error);
+		REQUIRE_MESSAGE(loaded, error);
+		CHECK(loaded->GetConfig().Scripts.SourceDirectory == "Code/Scripts");
+		CHECK(loaded->GetScriptModuleName() == "SpaceGameScripts");
+
+		// Invalid settings are refused when saving and loading.
+		project->GetConfig().Scripts.ModuleName = "Not an identifier";
+		CHECK_FALSE(project->Save(&error));
+		project->GetConfig().Scripts.ModuleName.clear();
+		project->GetConfig().Scripts.SourceDirectory = "../Outside";
+		CHECK_FALSE(project->Save(&error));
+
+		const std::filesystem::path file = directory / "Other.stproj";
+		auto load = [&](const std::string& scripts)
+		{
+			REQUIRE(FileSystem::WriteText(file, "{ \"Strata\": { \"Format\": \"Project\", \"Version\": 2 }, \"Project\": { \"Scripts\": " + scripts + " } }"));
+			return Project::Load(file, &error);
+		};
+		CHECK_FALSE(load("[]"));
+		CHECK_FALSE(load("{ \"SourceDirectory\": \".strata/Scripts\" }"));
+		CHECK_FALSE(load("{ \"ModuleName\": \"1Bad\" }"));
+		CHECK_FALSE(load("{ \"ModuleName\": \"" + std::string(Project::c_MaxScriptModuleNameSize + 1, 'A') + "\" }"));
+		Ref<Project> custom = load("{ \"SourceDirectory\": \"Gameplay\", \"ModuleName\": \"Game_Logic\" }");
+		REQUIRE_MESSAGE(custom, error);
+		CHECK(custom->GetScriptModuleName() == "Game_Logic");
+		CHECK(custom->GetScriptSourceDirectory() == (directory / "Gameplay").lexically_normal());
+	}
+
+	TEST_CASE("Project names and directories never contain control characters")
+	{
+		// They end up in generated files (the scripts' CMakeLists.txt), where a newline would inject code.
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("ProjectControlCharacters");
+		const std::filesystem::path file = directory / "Game.stproj";
+		std::string error;
+		auto load = [&](const std::string& project)
+		{
+			REQUIRE(FileSystem::WriteText(file, "{ \"Strata\": { \"Format\": \"Project\", \"Version\": 2 }, \"Project\": " + project + " }"));
+			error.clear();
+			return Project::Load(file, &error);
+		};
+		CHECK_FALSE(load("{ \"Name\": \"Game\\nmessage(FATAL_ERROR injected)\" }"));
+		CHECK(error.find("control characters") != std::string::npos);
+		CHECK_FALSE(load("{ \"Name\": \"Tab\\tName\" }"));
+		CHECK_FALSE(load("{ \"Name\": \"Delete\\u007f\" }"));
+		CHECK_FALSE(load("{ \"AssetDirectory\": \"Assets\\r\" }"));
+		CHECK_FALSE(load("{ \"Scripts\": { \"SourceDirectory\": \"Scripts\\n)\" } }"));
+		REQUIRE(load("{ \"Name\": \"Caf\\u00e9 \\\"Game\\\"\" }"));
+
+		CHECK_FALSE(Project::Create(directory / "New", "Delete\x7f", &error));
+		Ref<Project> project = Project::Create(directory / "New", "New Game", &error);
+		REQUIRE_MESSAGE(project, error);
+		project->GetConfig().Name = "Line\nBreak";
+		CHECK_FALSE(project->Save(&error));
+		CHECK(error.find("control characters") != std::string::npos);
+	}
+
+	TEST_CASE("Version 1 projects load with the default script settings")
+	{
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("ProjectVersion1");
+		const std::filesystem::path file = directory / "Old Game.stproj";
+		REQUIRE(FileSystem::WriteText(file, "{ \"Strata\": { \"Format\": \"Project\", \"Version\": 1 }, \"Project\": { \"Name\": \"Old Game\" } }"));
+		std::string error;
+		Ref<Project> project = Project::Load(file, &error);
+		REQUIRE_MESSAGE(project, error);
+		CHECK(project->GetConfig().Scripts.SourceDirectory == "Scripts");
+		CHECK(project->GetConfig().Scripts.ModuleName.empty());
+		CHECK(project->GetScriptModuleName() == "OldGameScripts");
+
+		// Saving upgrades the file to the current version with the derived module name.
+		REQUIRE_MESSAGE(project->Save(&error), error);
+		const std::optional<std::string> saved = FileSystem::ReadText(file);
+		REQUIRE(saved);
+		CHECK(saved->find("\"Version\": 2") != std::string::npos);
+		CHECK(saved->find("\"ModuleName\": \"OldGameScripts\"") != std::string::npos);
+	}
+
+	TEST_CASE("Script module names are derived from project names")
+	{
+		CHECK(Project::MakeScriptModuleName("MyGame") == "MyGameScripts");
+		CHECK(Project::MakeScriptModuleName("my game!") == "MyGameScripts");
+		CHECK(Project::MakeScriptModuleName("2D Shooter") == "Game2DShooterScripts");
+		CHECK(Project::MakeScriptModuleName("") == "GameScripts");
+		CHECK(Project::MakeScriptModuleName("\xC3\xA9t\xC3\xA9") == "TScripts"); // Non-ASCII letters separate words
+		CHECK(Project::MakeScriptModuleName(std::string(200, 'x')).size() == Project::c_MaxScriptModuleNameSize);
+		for (const char* name : { "MyGameScripts", "_Private", "Game2D" })
+			CHECK(Project::IsValidScriptModuleName(name));
+		for (const char* name : { "", "2D", "My Game", "Bad-Name", "\xC3\xA9" })
+			CHECK_FALSE(Project::IsValidScriptModuleName(name));
+	}
+
 	TEST_CASE("The active project can be set and cleared")
 	{
 		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("ProjectActive");

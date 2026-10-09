@@ -35,9 +35,9 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
 
 - doctest filters split on commas. A test name containing a comma must be matched with `?`/`*`, e.g.
   `--test-case="Hierarchy?*"`.
-- CTest runs: `StrataTests.Core` (everything but the GPU, EndToEnd and feature test suites), `StrataTests.GPU` (label
-  `gpu`), `StrataEditor.Smoke` (the real editor with `StrataTests/Editor/SmokeCommands.json.in`, configured into the
-  build tree, label `gpu`; it captures the viewport to `SmokeViewport.png`/`SmokeSceneCamera.png` in
+- CTest runs: `StrataTests.Core` (everything but the GPU, EndToEnd, `Package*` and feature test suites), `StrataTests.GPU`
+  (label `gpu`), `StrataEditor.Smoke` (the real editor with `StrataTests/Editor/SmokeCommands.json.in`, configured into
+  the build tree, label `gpu`; it captures the viewport to `SmokeViewport.png`/`SmokeSceneCamera.png` in
   `build/<preset>/StrataTests/SmokeCaptures/`, checked by `StrataEditor.SmokeCaptureCheck`), the editor script checks
   (`StrataEditor.FailingScript`, `WaitingScript`, `UnfinishedScript`, `QuitScript`, `QuitBeforeScriptEnds`,
   `CaptureWithoutGPU`), the export chain `StrataExport.Clean` → `StrataEditor.Export` (`--no-gpu`; it exports the smoke
@@ -50,7 +50,11 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
   MCP server), and the feature test (label `feature`): `StrataTests.FeatureTest` (suites `FeatureTest` and
   `Editor.FeatureTest`) plus `StrataFeatureTest.Clean` → `.Copy` → `StrataEditor.FeatureTest` →
   `StrataRuntime.FeatureTest` (the real executables with a copy of `StrataTests/FeatureTest`). See AGENTS.md
-  ("Testing") for what the feature test enforces when you add components or script API.
+  ("Testing") for what the feature test enforces when you add components or script API. Label `package` marks the
+  tests that build script modules with CMake and the compiler at test time: `StrataScriptCore.Package` and
+  `.PackageDist`, `StrataTests.Package` (suites `Package*`) and `StrataEditor.Scripts` (the real editor builds, plays
+  and exports a scripted game, `StrataTests/Editor/ScriptsEndToEnd.cmake`); `-LE package` skips them on machines
+  without a toolchain.
 - Scripted editor runs in CTest pass `--no-automation`, so they never publish sessions for real clients.
 - Tests that expect a process to fail with exit code 1 and a message use `StrataTests/ExpectFailure.cmake`.
 - To look at rendering changes, read those PNGs, or run `StrataEditor --windowed --frames N --commands <script>
