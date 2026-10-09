@@ -1,10 +1,14 @@
 #include <doctest/doctest.h>
 
+#include "Strata/Core/FileChangeNotifier.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/FileWatcher.h"
+#include "Strata/Core/PlatformDetection.h"
 #include "TestHelpers.h"
 
+#include <chrono>
 #include <map>
+#include <thread>
 
 using namespace Strata;
 
@@ -107,5 +111,59 @@ TEST_SUITE("Core.FileWatcher")
 		FileWatcher watcher;
 		CHECK_FALSE(watcher.Start(Tests::CreateTemporaryDirectory("FileWatcherMissing") / "missing"));
 		CHECK_FALSE(watcher.IsRunning());
+	}
+
+	TEST_CASE("Stopping does not wait for the poll interval, and a stopped watcher starts again")
+	{
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("FileWatcherStop");
+		FileWatcherSettings settings;
+		settings.PollInterval = std::chrono::hours(1);
+		FileWatcher watcher;
+		REQUIRE(watcher.Start(directory, settings));
+		// Long enough for the thread to scan and settle into its wait.
+		std::this_thread::sleep_for(std::chrono::milliseconds(100));
+		const auto stopStart = std::chrono::steady_clock::now();
+		watcher.Stop();
+		CHECK(std::chrono::steady_clock::now() - stopStart < std::chrono::seconds(10));
+		CHECK_FALSE(watcher.IsRunning());
+
+		REQUIRE(watcher.Start(directory, FastSettings()));
+		REQUIRE(FileSystem::WriteText(directory / "after-restart.txt", "x"));
+		std::map<std::string, FileChangeType> changes = CollectChanges(watcher, 1);
+		CHECK(changes.count("after-restart.txt") == 1);
+	}
+
+	TEST_CASE("Change notifications end waits early where the platform reports changes")
+	{
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("FileChangeNotifier");
+		const Scope<FileChangeNotifier> notifier = FileChangeNotifier::Create(directory, true);
+#if defined(ST_PLATFORM_WINDOWS)
+		REQUIRE(notifier);
+		// A change in a subdirectory ends the wait (one made after the notifier started is not lost).
+		REQUIRE(FileSystem::WriteText(directory / "sub" / "file.txt", "x"));
+		auto waitStart = std::chrono::steady_clock::now();
+		notifier->Wait(std::chrono::minutes(2));
+		CHECK(std::chrono::steady_clock::now() - waitStart < std::chrono::seconds(30));
+
+		// Waking ends this and every later wait.
+		notifier->Wake();
+		waitStart = std::chrono::steady_clock::now();
+		notifier->Wait(std::chrono::minutes(2));
+		notifier->Wait(std::chrono::minutes(2));
+		CHECK(std::chrono::steady_clock::now() - waitStart < std::chrono::seconds(30));
+
+		// So a watcher reports changes long before its poll interval.
+		FileWatcherSettings settings;
+		settings.PollInterval = std::chrono::hours(1);
+		settings.Debounce = std::chrono::milliseconds(50);
+		FileWatcher watcher;
+		REQUIRE(watcher.Start(directory, settings));
+		REQUIRE(FileSystem::WriteText(directory / "notified.txt", "x"));
+		std::map<std::string, FileChangeType> changes = CollectChanges(watcher, 1);
+		CHECK(changes.count("notified.txt") == 1);
+#else
+		// Linux and macOS: no notifications, the watcher polls.
+		CHECK_FALSE(notifier);
+#endif
 	}
 }

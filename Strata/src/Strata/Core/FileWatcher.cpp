@@ -1,13 +1,12 @@
 #include "stpch.h"
 #include "Strata/Core/FileWatcher.h"
 
+#include "Strata/Core/FileChangeNotifier.h"
+#include "Strata/Core/FileSystem.h"
+
 #include <condition_variable>
 #include <map>
 #include <thread>
-
-#if defined(ST_PLATFORM_WINDOWS)
-	#include <Windows.h>
-#endif
 
 namespace Strata
 {
@@ -141,15 +140,14 @@ namespace Strata
 		// Shared with PollChanges (guarded by Mutex)
 		std::vector<FileChange> ReadyChanges;
 
+		// Ends waits early when the platform reports changes; null where it does not (the thread then polls). Created
+		// before the thread starts and destroyed after it ended.
+		Scope<FileChangeNotifier> Notifier;
+
 		void Run();
 		void Rescan();
 		void PromoteStableChanges();
 		void WaitForWork(std::chrono::milliseconds timeout);
-
-#if defined(ST_PLATFORM_WINDOWS)
-		HANDLE ChangeNotification = INVALID_HANDLE_VALUE;
-		HANDLE StopEvent = nullptr;
-#endif
 	};
 
 	void FileWatcher::Impl::Rescan()
@@ -237,16 +235,11 @@ namespace Strata
 
 	void FileWatcher::Impl::WaitForWork(std::chrono::milliseconds timeout)
 	{
-#if defined(ST_PLATFORM_WINDOWS)
-		if (ChangeNotification != INVALID_HANDLE_VALUE)
+		if (Notifier)
 		{
-			HANDLE handles[2] = { StopEvent, ChangeNotification };
-			const DWORD result = WaitForMultipleObjects(2, handles, FALSE, static_cast<DWORD>(timeout.count()));
-			if (result == WAIT_OBJECT_0 + 1)
-				FindNextChangeNotification(ChangeNotification);
+			Notifier->Wait(timeout);
 			return;
 		}
-#endif
 		std::unique_lock<std::mutex> lock(Mutex);
 		Condition.wait_for(lock, timeout, [this]() { return StopRequested; });
 	}
@@ -288,7 +281,7 @@ namespace Strata
 		std::error_code error;
 		if (!std::filesystem::is_directory(directory, error))
 		{
-			ST_CORE_ERROR("FileWatcher: '{}' is not a directory", directory.string());
+			ST_CORE_ERROR("FileWatcher: '{}' is not a directory", FileSystem::ToUTF8(directory));
 			return false;
 		}
 
@@ -298,14 +291,7 @@ namespace Strata
 		m_Impl->Pending.clear();
 		m_Impl->ReadyChanges.clear();
 		m_Impl->CurrentSnapshot = ScanDirectory(m_Impl->Directory, settings);
-
-#if defined(ST_PLATFORM_WINDOWS)
-		m_Impl->StopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-		m_Impl->ChangeNotification = FindFirstChangeNotificationW(m_Impl->Directory.c_str(), settings.Recursive ? TRUE : FALSE,
-			FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME | FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_LAST_WRITE);
-		if (m_Impl->ChangeNotification == INVALID_HANDLE_VALUE)
-			ST_CORE_WARN("FileWatcher: change notifications unavailable for '{}', falling back to polling", m_Impl->Directory.string());
-#endif
+		m_Impl->Notifier = FileChangeNotifier::Create(m_Impl->Directory, settings.Recursive);
 
 		m_Impl->Running = true;
 		m_Impl->Thread = std::thread([impl = m_Impl.get()]() { impl->Run(); });
@@ -322,20 +308,11 @@ namespace Strata
 			m_Impl->StopRequested = true;
 		}
 		m_Impl->Condition.notify_all();
-#if defined(ST_PLATFORM_WINDOWS)
-		if (m_Impl->StopEvent)
-			SetEvent(m_Impl->StopEvent);
-#endif
+		if (m_Impl->Notifier)
+			m_Impl->Notifier->Wake();
 		m_Impl->Thread.join();
 
-#if defined(ST_PLATFORM_WINDOWS)
-		if (m_Impl->ChangeNotification != INVALID_HANDLE_VALUE)
-			FindCloseChangeNotification(m_Impl->ChangeNotification);
-		m_Impl->ChangeNotification = INVALID_HANDLE_VALUE;
-		if (m_Impl->StopEvent)
-			CloseHandle(m_Impl->StopEvent);
-		m_Impl->StopEvent = nullptr;
-#endif
+		m_Impl->Notifier.reset();
 		m_Impl->Running = false;
 	}
 
