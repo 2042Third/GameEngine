@@ -269,6 +269,75 @@ TEST_SUITE("Editor.ScriptBuild")
 		CHECK(diagnostics[4].Code == "C4100");
 	}
 
+	TEST_CASE("Linker and CMake errors without an error marker or line are parsed")
+	{
+		// GNU ld (modules link with --no-undefined) reports undefined references without "error:".
+		const std::string gnu =
+			"/usr/bin/ld: CMakeFiles/GameScripts.dir/Player.cpp.o: in function `Player::OnUpdate(float)':\n"
+			"Player.cpp:(.text+0x15): undefined reference to `Missing()'\n"
+			"/usr/bin/ld: /home/me/Game/Scripts/Enemy.cpp:12: undefined reference to `Other()'\n"
+			"collect2: error: ld returned 1 exit status\n";
+		std::vector<ScriptDiagnostic> diagnostics = ParseScriptBuildDiagnostics(gnu);
+		REQUIRE(diagnostics.size() == 3);
+		CHECK(diagnostics[0].File == "Player.cpp");
+		CHECK(diagnostics[0].Line == 0);
+		CHECK(diagnostics[0].Severity == "error");
+		CHECK(diagnostics[0].Message == "undefined reference to `Missing()'");
+		CHECK_FALSE(IsScriptBuildSummary(diagnostics[0]));
+		CHECK(diagnostics[1].File == "/home/me/Game/Scripts/Enemy.cpp");
+		CHECK(diagnostics[1].Line == 12);
+		CHECK(diagnostics[1].Message == "undefined reference to `Other()'");
+		CHECK(IsScriptBuildSummary(diagnostics[2]));
+
+		// Apple's linker lists undefined symbols in a block.
+		const std::string apple =
+			"Undefined symbols for architecture arm64:\n"
+			"  \"Missing()\", referenced from:\n"
+			"      Player::OnUpdate(float) in Player.cpp.o\n"
+			"  \"_Other\", referenced from:\n"
+			"      Enemy::OnCreate() in Enemy.cpp.o\n"
+			"ld: symbol(s) not found for architecture arm64\n"
+			"clang++: error: linker command failed with exit code 1 (use -v to see invocation)\n";
+		diagnostics = ParseScriptBuildDiagnostics(apple);
+		REQUIRE(diagnostics.size() == 4);
+		CHECK(diagnostics[0].File == "Player.cpp.o");
+		CHECK(diagnostics[0].Severity == "error");
+		CHECK(diagnostics[0].Message == "undefined symbol Missing() (referenced from Player::OnUpdate(float))");
+		CHECK(diagnostics[1].File == "Enemy.cpp.o");
+		CHECK(diagnostics[1].Message == "undefined symbol _Other (referenced from Enemy::OnCreate())");
+		CHECK(IsScriptBuildSummary(diagnostics[2]));
+		CHECK(IsScriptBuildSummary(diagnostics[3]));
+
+		// CMake errors of the generate step name a file but no line; warnings may carry a qualifier.
+		diagnostics = ParseScriptBuildDiagnostics(
+			"CMake Error in CMakeLists.txt:\n  Target \"GameScripts\" links to a missing target.\n\n"
+			"CMake Warning (dev) at C:/Game/Scripts/CMakeLists.txt:3 (project):\n  Policy CMP0000 is not set.\n"
+			"CMake Error: Could not create the build directory\n");
+		REQUIRE(diagnostics.size() == 3);
+		CHECK(diagnostics[0].File == "CMakeLists.txt");
+		CHECK(diagnostics[0].Line == 0);
+		CHECK(diagnostics[0].Message == "Target \"GameScripts\" links to a missing target.");
+		CHECK(diagnostics[1].File == "C:/Game/Scripts/CMakeLists.txt");
+		CHECK(diagnostics[1].Line == 3);
+		CHECK(diagnostics[1].Severity == "warning");
+		CHECK(diagnostics[2].File.empty());
+		CHECK(diagnostics[2].Message == "Could not create the build directory");
+	}
+
+	TEST_CASE("A failed build always names its cause")
+	{
+		const std::string log = "Building...\n/usr/bin/ld: cannot find -lmissing\ncollect2: error: ld returned 1 exit status\n";
+		// Only a summary was parsed: the end of the log follows it.
+		std::string description = DescribeScriptBuildFailure("Building the scripts failed (exit code 1)", ParseScriptBuildDiagnostics(log), log);
+		CHECK(description.find("collect2: error: ld returned 1 exit status") != std::string::npos);
+		CHECK(description.find("cannot find -lmissing") != std::string::npos);
+
+		// Real errors are enough.
+		const std::string compile = "Player.cpp:4:23: error: use of undeclared identifier 'speed'\n";
+		description = DescribeScriptBuildFailure("Building the scripts failed (exit code 1)", ParseScriptBuildDiagnostics(compile), compile);
+		CHECK(description == "Building the scripts failed (exit code 1)\nPlayer.cpp(4,23): error: use of undeclared identifier 'speed'");
+	}
+
 	TEST_CASE("Streamed build output is split into bounded lines")
 	{
 		OutputLineSplitter splitter(8);

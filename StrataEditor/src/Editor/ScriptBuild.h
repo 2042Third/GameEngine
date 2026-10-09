@@ -55,11 +55,17 @@ namespace Strata
 		bool operator==(const ScriptDiagnostic& other) const = default;
 	};
 
-	// Errors and warnings of MSVC, GCC, Clang, MSBuild/linker and CMake in a build log, in order, without duplicates
-	// (MSBuild repeats every error in its summary). At most `maxDiagnostics` are returned.
+	// Errors and warnings of MSVC, GCC, Clang, MSBuild, the GNU, LLVM, Apple and Microsoft linkers and CMake in a build
+	// log, in order, without duplicates (MSBuild repeats every error in its summary). At most `maxDiagnostics` are returned.
 	std::vector<ScriptDiagnostic> ParseScriptBuildDiagnostics(std::string_view log, size_t maxDiagnostics = 100);
 	// "File(Line,Column): error C2065: message" style text of one diagnostic.
 	std::string FormatScriptDiagnostic(const ScriptDiagnostic& diagnostic);
+	// True for messages that only say that a step failed ("ld returned 1 exit status", "linker command failed",
+	// LNK1120, "cl.exe exited with code 2"): the cause is elsewhere in the log.
+	bool IsScriptBuildSummary(const ScriptDiagnostic& diagnostic);
+	// The error of a failed build: the reason, then its first errors. When there are none, or only summaries, the end of
+	// the build log follows, so the cause is never missing.
+	std::string DescribeScriptBuildFailure(const std::string& reason, const std::vector<ScriptDiagnostic>& diagnostics, std::string_view log);
 	// The last `lineCount` lines of a log.
 	std::string GetLogTail(std::string_view log, size_t lineCount);
 

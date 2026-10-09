@@ -28,6 +28,7 @@ namespace Strata
 		constexpr size_t c_MaxDiagnosticMessageSize = 4096;
 		constexpr size_t c_ErrorsInSummary = 5;
 		constexpr size_t c_LogTailLines = 40;
+		constexpr size_t c_FailureLogTailLines = 15;
 		// After a process exited, its output is collected until it ends, but no longer than this: a process it started may
 		// keep the output open (it is ended with the process tree).
 		constexpr std::chrono::seconds c_OutputDrainLimit(5);
@@ -182,6 +183,78 @@ namespace Strata
 			diagnostic.Column = numberCount == 2 ? numbers[0] : 0;
 		}
 
+		bool StartsWithBlank(std::string_view line)
+		{
+			return !line.empty() && IsBlank(line.front());
+		}
+
+		// GNU ld reports undefined references without an "error:" marker (modules link with --no-undefined):
+		// "Player.cpp:(.text+0x15): undefined reference to `Missing()'", with debug information "Player.cpp:12: ...", and
+		// newer versions prefix the line with the linker ("/usr/bin/ld: Player.cpp:(.text+0x15): ...").
+		std::optional<ScriptDiagnostic> ParseUndefinedReference(std::string_view line)
+		{
+			constexpr std::string_view c_Marker = ": undefined reference to ";
+			const size_t marker = line.find(c_Marker);
+			if (marker == std::string_view::npos)
+				return std::nullopt;
+
+			std::string_view location = line.substr(0, marker);
+			if (const size_t prefix = location.rfind(": "); prefix != std::string_view::npos)
+				location = location.substr(prefix + 2);
+			if (const size_t section = location.find(":("); section != std::string_view::npos)
+				location = location.substr(0, section);
+
+			ScriptDiagnostic diagnostic;
+			diagnostic.Severity = "error";
+			diagnostic.Message = CutMessage(Trim(line.substr(marker + 2)));
+			ParseLocation(Trim(location), diagnostic);
+			if (diagnostic.File.empty())
+				diagnostic.File = "ld";
+			return diagnostic;
+		}
+
+		// Apple's linker lists undefined symbols in a block, without file or line:
+		//   Undefined symbols for architecture arm64:      (ld-prime: "ld: Undefined symbols:")
+		//     "Missing()", referenced from:
+		//         Player::OnUpdate(float) in Player.cpp.o
+		bool IsUndefinedSymbolsBlock(std::string_view line)
+		{
+			return line.rfind("Undefined symbols for architecture ", 0) == 0 || line.rfind("ld: Undefined symbols:", 0) == 0;
+		}
+
+		// One diagnostic per symbol of the block starting at lines[start]; returns the index of the block's last line.
+		size_t ParseUndefinedSymbolsBlock(const std::vector<std::string_view>& lines, size_t start, std::vector<ScriptDiagnostic>& outDiagnostics)
+		{
+			constexpr std::string_view c_ReferencedFrom = ", referenced from:";
+			size_t next = start + 1;
+			while (next < lines.size() && StartsWithBlank(lines[next]))
+			{
+				const std::string symbolLine = Trim(lines[next++]);
+				if (symbolLine.size() <= c_ReferencedFrom.size() || !symbolLine.ends_with(c_ReferencedFrom))
+					continue;
+				std::string symbol = symbolLine.substr(0, symbolLine.size() - c_ReferencedFrom.size());
+				if (symbol.size() >= 2 && symbol.front() == '"' && symbol.back() == '"')
+					symbol = symbol.substr(1, symbol.size() - 2);
+
+				ScriptDiagnostic diagnostic;
+				diagnostic.Severity = "error";
+				diagnostic.File = "ld";
+				diagnostic.Message = "undefined symbol " + symbol;
+				if (next < lines.size() && StartsWithBlank(lines[next]) && !Trim(lines[next]).ends_with(c_ReferencedFrom))
+				{
+					// "<function> in <object file>"
+					const std::string reference = Trim(lines[next]);
+					const size_t in = reference.rfind(" in ");
+					if (in != std::string::npos)
+						diagnostic.File = reference.substr(in + 4);
+					diagnostic.Message += " (referenced from " + (in != std::string::npos ? reference.substr(0, in) : reference) + ")";
+				}
+				diagnostic.Message = CutMessage(std::move(diagnostic.Message));
+				outDiagnostics.push_back(std::move(diagnostic));
+			}
+			return next - 1;
+		}
+
 		// One diagnostic from a single line, or nothing. A diagnostic is "<location>: <severity>: <message>" (GCC, Clang)
 		// or "<location>: <severity> <code>: <message> [<project>]" (MSVC, MSBuild, the linker), where the severity is
 		// "error", "fatal error" or "warning" and the location the part before the first such marker. Linear in the
@@ -328,49 +401,80 @@ namespace Strata
 	std::vector<ScriptDiagnostic> ParseScriptBuildDiagnostics(std::string_view log, size_t maxDiagnostics)
 	{
 		std::vector<ScriptDiagnostic> diagnostics;
+		auto add = [&](ScriptDiagnostic diagnostic)
+		{
+			if (diagnostics.size() < maxDiagnostics && std::find(diagnostics.begin(), diagnostics.end(), diagnostic) == diagnostics.end())
+				diagnostics.push_back(std::move(diagnostic));
+		};
+
 		const std::vector<std::string_view> lines = SplitLines(log);
 		for (size_t index = 0; index < lines.size() && diagnostics.size() < maxDiagnostics; index++)
 		{
 			const std::string_view line = lines[index];
-			std::optional<ScriptDiagnostic> diagnostic;
-			// CMake: "CMake Error at CMakeLists.txt:5 (find_package):" with the message on the following indented lines.
+			// CMake: "CMake Error at CMakeLists.txt:5 (find_package):" or "CMake Error in CMakeLists.txt:" (generation, no
+			// line) with the message on the following indented lines; or "CMake Error: <message>".
 			const bool cmakeError = line.rfind(c_CMakeError, 0) == 0;
 			if (cmakeError || line.rfind(c_CMakeWarning, 0) == 0)
 			{
 				ScriptDiagnostic cmake;
 				cmake.Severity = cmakeError ? "error" : "warning";
-				const size_t at = line.find(" at ");
-				const size_t colon = line.rfind(':');
-				if (at != std::string_view::npos && colon != std::string_view::npos && colon > at)
+				std::string_view rest = line.substr(cmakeError ? c_CMakeError.size() : c_CMakeWarning.size());
+				// "CMake Warning (dev) at ...".
+				if (rest.rfind(" (", 0) == 0)
 				{
-					// "<file>:<line> (<command>):"
-					std::string location(line.substr(at + 4, colon - at - 4));
+					const size_t close = rest.find(')');
+					rest = close == std::string_view::npos ? std::string_view() : rest.substr(close + 1);
+				}
+				if ((rest.rfind(" at ", 0) == 0 || rest.rfind(" in ", 0) == 0) && rest.size() > 5 && rest.back() == ':')
+				{
+					// "<file>[:<line>] [(<command>)]"
+					std::string location = Trim(rest.substr(4, rest.size() - 5));
 					if (const size_t command = location.rfind(" ("); command != std::string::npos)
 						location.resize(command);
-					if (const size_t lineSeparator = location.rfind(':'); lineSeparator != std::string::npos)
+					const size_t lineSeparator = location.rfind(':');
+					if (lineSeparator != std::string::npos && IsDigits(std::string_view(location).substr(lineSeparator + 1)))
 					{
-						cmake.File = location.substr(0, lineSeparator);
 						cmake.Line = ToNumber(location.substr(lineSeparator + 1));
+						location.resize(lineSeparator);
 					}
+					cmake.File = std::move(location);
 					std::string message;
-					for (size_t next = index + 1; next < lines.size() && !lines[next].empty() && (lines[next][0] == ' ' || lines[next][0] == '\t'); next++)
+					for (size_t next = index + 1; next < lines.size() && StartsWithBlank(lines[next]); next++)
 						message += (message.empty() ? "" : " ") + Trim(lines[next]);
 					cmake.Message = CutMessage(std::move(message));
 				}
-				else if (const size_t separator = line.find(": "); separator != std::string_view::npos)
+				else if (rest.rfind(": ", 0) == 0)
 				{
-					cmake.Message = Trim(line.substr(separator + 2));
+					cmake.Message = CutMessage(Trim(rest.substr(2)));
 				}
 				if (!cmake.Message.empty())
-					diagnostic = std::move(cmake);
-			}
-			else
-			{
-				diagnostic = ParseDiagnosticLine(line);
+					add(std::move(cmake));
+				continue;
 			}
 
-			if (diagnostic && std::find(diagnostics.begin(), diagnostics.end(), *diagnostic) == diagnostics.end())
-				diagnostics.push_back(std::move(*diagnostic));
+			if (IsUndefinedSymbolsBlock(line))
+			{
+				std::vector<ScriptDiagnostic> symbols;
+				index = ParseUndefinedSymbolsBlock(lines, index, symbols);
+				for (ScriptDiagnostic& symbol : symbols)
+					add(std::move(symbol));
+				continue;
+			}
+			// Apple's linker ends a failed link with this summary, without a severity.
+			if (line.rfind("ld: symbol(s) not found", 0) == 0)
+			{
+				ScriptDiagnostic summary;
+				summary.File = "ld";
+				summary.Severity = "error";
+				summary.Message = Trim(line.substr(4));
+				add(std::move(summary));
+				continue;
+			}
+
+			if (std::optional<ScriptDiagnostic> diagnostic = ParseDiagnosticLine(line))
+				add(std::move(*diagnostic));
+			else if (std::optional<ScriptDiagnostic> reference = ParseUndefinedReference(line))
+				add(std::move(*reference));
 		}
 		return diagnostics;
 	}
@@ -385,6 +489,38 @@ namespace Strata
 		if (!diagnostic.Code.empty())
 			text += " " + diagnostic.Code;
 		return text + ": " + diagnostic.Message;
+	}
+
+	bool IsScriptBuildSummary(const ScriptDiagnostic& diagnostic)
+	{
+		const std::string_view message = diagnostic.Message;
+		if (message.find("ld returned") != std::string_view::npos && message.find("exit status") != std::string_view::npos)
+			return true;
+		if (message.rfind("linker command failed", 0) == 0 || message.rfind("symbol(s) not found", 0) == 0)
+			return true;
+		// LNK1120: "<n> unresolved externals" after the LNK2019/LNK2001 errors naming them.
+		if (diagnostic.Code == "LNK1120")
+			return true;
+		// MSBuild: "The command ... exited with code 1", "\"CL.exe\" exited with code 2".
+		return diagnostic.Code.rfind("MSB", 0) == 0 && message.find("exited with code") != std::string_view::npos;
+	}
+
+	std::string DescribeScriptBuildFailure(const std::string& reason, const std::vector<ScriptDiagnostic>& diagnostics, std::string_view log)
+	{
+		std::string description = reason;
+		size_t errors = 0;
+		bool onlySummaries = true;
+		for (const ScriptDiagnostic& diagnostic : diagnostics)
+		{
+			if (diagnostic.Severity != "error")
+				continue;
+			onlySummaries = onlySummaries && IsScriptBuildSummary(diagnostic);
+			if (errors++ < c_ErrorsInSummary)
+				description += "\n" + FormatScriptDiagnostic(diagnostic);
+		}
+		if (onlySummaries)
+			description += "\nLast lines of the build log:\n" + GetLogTail(log, c_FailureLogTailLines);
+		return description;
 	}
 
 	std::string GetLogTail(std::string_view log, size_t lineCount)
@@ -697,22 +833,7 @@ namespace Strata
 		if (!success)
 		{
 			// The first errors make the message actionable on its own; the full list is in Diagnostics.
-			std::vector<std::string> errors;
-			for (const ScriptDiagnostic& diagnostic : result.Diagnostics)
-			{
-				if (diagnostic.Severity == "error" && errors.size() < c_ErrorsInSummary)
-					errors.push_back(FormatScriptDiagnostic(diagnostic));
-			}
-			result.Error = std::move(error);
-			if (!errors.empty())
-			{
-				for (const std::string& line : errors)
-					result.Error += "\n" + line;
-			}
-			else
-			{
-				result.Error += "\nLast lines of the build log:\n" + GetLogTail(m_Log, 15);
-			}
+			result.Error = DescribeScriptBuildFailure(error, result.Diagnostics, m_Log);
 			ST_ERROR("Script build {} failed: {}", result.ID, result.Error);
 		}
 		else

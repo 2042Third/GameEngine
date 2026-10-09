@@ -137,9 +137,10 @@ every step below is a command, and source files are written with your own file t
    files are picked up by the next build.
 3. **Build.** `script.build` (waits by default) configures CMake on the first run (a few seconds) and builds with the
    engine's compiler and configuration into `.strata/Scripts/Bin`, then loads the module. On failure the command fails
-   with the first compiler errors (`File(Line,Column): error C2065: ...`); `script.status` -> `build.last` lists every
-   diagnostic (`file`, `line`, `column`, `severity`, `code`, `message`) and the end of the build log (`log`). Fix and
-   build again. One build runs at a time (a second request fails while one runs; `script.build {"wait": false}` returns
+   with the first errors (`File(Line,Column): error C2065: ...`, undefined references or symbols of the linker, CMake
+   errors), followed by the end of the build log when only summaries such as `ld returned 1 exit status` were found;
+   `script.status` -> `build.last` lists every diagnostic (`file`, `line`, `column`, `severity`, `code`, `message`)
+   and the end of the build log (`log`). Fix and build again. One build runs at a time (a second request fails while one runs; `script.build {"wait": false}` returns
    at once and `script.status` -> `build.running` tells when it is done). The build output also streams into the
    editor log (`log.read`).
 4. **Inspect.** `script.status` -> `classes` lists every class with its fields (`name`, `type`, `default`) and
