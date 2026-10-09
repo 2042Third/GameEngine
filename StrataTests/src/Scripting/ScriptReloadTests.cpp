@@ -4,8 +4,11 @@
 #include "Strata/Core/FileSystem.h"
 #include "TestHelpers.h"
 
+#include <algorithm>
 #include <chrono>
+#include <filesystem>
 #include <string>
+#include <system_error>
 #include <vector>
 
 using namespace Strata;
@@ -24,12 +27,25 @@ namespace
 			Path = CreateTemporaryDirectory(name) / FileSystem::FromUTF8(ScriptEngine::GetModuleFileName("Game"));
 		}
 
-		// Writes the built test module (written fresh, so the file's timestamp changes like after a real build).
+		// Writes the built test module like a rebuild does. File watchers compare sizes and write times: the two test
+		// modules can have the same size (module files are padded to an alignment) and two writes in quick succession can
+		// share a write time (file times advance in clock ticks of several milliseconds), so the write time is moved past
+		// the previous one, as a real build seconds later would.
 		void Install(const char* moduleFileName) const
 		{
 			const std::optional<std::vector<uint8_t>> bytes = FileSystem::ReadBytes(GetTestScriptModule(moduleFileName));
 			REQUIRE(bytes.has_value());
+			std::error_code error;
+			const std::filesystem::file_time_type previous = std::filesystem::last_write_time(Path, error);
+			const bool existed = !error;
 			REQUIRE(FileSystem::WriteBytes(Path, *bytes));
+			if (existed)
+			{
+				const std::filesystem::file_time_type written = std::filesystem::last_write_time(Path, error);
+				REQUIRE_FALSE(error);
+				std::filesystem::last_write_time(Path, std::max(written, previous + std::chrono::seconds(2)), error);
+				REQUIRE_FALSE(error);
+			}
 		}
 
 		void InstallGarbage() const
