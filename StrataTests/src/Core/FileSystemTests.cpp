@@ -55,6 +55,14 @@ TEST_SUITE("Core.FileSystem")
 		CHECK_FALSE(FileSystem::GetLastWriteTime(directory / "missing.bin").has_value());
 	}
 
+	TEST_CASE("Reading a directory as a file fails gracefully")
+	{
+		// On Linux a stream opens a directory, and seeking to its end can report an enormous size.
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("FileSystemDirectory");
+		CHECK_FALSE(FileSystem::ReadText(directory).has_value());
+		CHECK_FALSE(FileSystem::ReadBytes(directory).has_value());
+	}
+
 	TEST_CASE("UTF-8 byte order mark is stripped")
 	{
 		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("FileSystemBom");
