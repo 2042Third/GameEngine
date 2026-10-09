@@ -103,8 +103,8 @@ ST_SCRIPT_CLASS(Turret)
   world `Get/SetWorldPosition`, `Get/SetWorldRotation`, `GetWorldScale`, `GetForward/Right/Up` (-Z is forward).
 - `Scene`: `CreateEntity(name, parent)`, `GetEntity(id)`, `FindEntityByName`, `FindEntitiesByTag`, `GetRootEntities`,
   `GetPrimaryCamera`, `Instantiate(prefabOrModel [, translation, rotation, scale] [, parent])` by handle or asset path.
-- `Assets`: `Find(path)`, `IsLoaded`, `RequestLoad`. Instantiating an asset that is not loaded yet stalls once (loaded
-  synchronously, with a warning) - request it early.
+- `Assets`: `Find(path)`, `IsLoaded`, `RequestLoad`. `Instantiate` never waits: for an asset that is not loaded yet it
+  starts the load and returns a null entity - request assets early (in `OnCreate`) and spawn once `IsLoaded`.
 - `Input`: `IsKeyDown/Pressed/Released(Key::W)`, `IsMouseButtonDown/Pressed/Released(Mouse::ButtonLeft)`,
   `GetMousePosition` (viewport pixels), `GetMouseDelta`, `GetScrollDelta`.
 - `Time`: `GetDeltaTime`, `GetFixedDeltaTime`, `GetElapsedTime`, `GetFrameIndex`, `Get/SetTimeScale`.

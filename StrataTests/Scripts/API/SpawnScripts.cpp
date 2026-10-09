@@ -88,6 +88,30 @@ public:
 	}
 };
 
+// Tries to instantiate Prefab in every update until it succeeds, without requesting it first.
+class PendingSpawner : public Script
+{
+public:
+	AssetHandle Prefab;
+	int32_t Attempts = 0;
+	Entity Spawned;
+
+	void OnUpdate(float) override
+	{
+		if (Spawned.IsValid())
+			return;
+		Attempts++;
+		Spawned = Scene::Instantiate(Prefab);
+	}
+};
+
+ST_SCRIPT_CLASS(PendingSpawner)
+{
+	ST_SCRIPT_FIELD(Prefab);
+	ST_SCRIPT_FIELD(Attempts);
+	ST_SCRIPT_FIELD(Spawned);
+}
+
 // Creates Count entities with a script each in its first update.
 class MassSpawner : public Script
 {

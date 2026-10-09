@@ -97,6 +97,8 @@ namespace Strata
 
 		// Instantiates a prefab or model under `parent` (or as a root) and returns its root entity. Scripts on the new
 		// entities exist right away (GetScript works); their OnCreate runs before their first update.
+		// Never waits for loading: if the asset is not loaded yet, this starts loading it and returns a null entity. Request
+		// assets early (Assets::RequestLoad, e.g. in OnCreate) and instantiate once Assets::IsLoaded(asset) is true.
 		static Entity Instantiate(AssetHandle asset, Entity parent = Entity())
 		{
 			const StrataScriptHostAPI* host = Detail::GetHost();

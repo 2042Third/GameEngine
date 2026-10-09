@@ -212,7 +212,8 @@ extern "C"
 		bool (*SetWorldTransform)(StrataScriptContext* context, StrataScriptEntityID entity, const StrataScriptTransform* transform, uint32_t parts);
 
 		/* Scene queries and prefab/model instantiation. Instantiate returns the root entity of the created hierarchy;
-		 * transform (optional) becomes the root's local transform. */
+		 * transform (optional) becomes the root's local transform. It never waits for loading: for an asset that is not
+		 * loaded yet it starts the load and returns 0 (IsAssetLoaded tells when to try again). */
 		StrataScriptEntityID (*GetPrimaryCamera)(StrataScriptContext* context);
 		uint32_t (*GetRootEntities)(StrataScriptContext* context, StrataScriptEntityID* outEntities, uint32_t capacity);
 		StrataScriptEntityID (*Instantiate)(StrataScriptContext* context, StrataScriptAssetHandle asset, StrataScriptEntityID parent,
