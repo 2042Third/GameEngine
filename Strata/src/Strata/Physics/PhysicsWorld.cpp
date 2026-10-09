@@ -92,7 +92,7 @@ namespace Strata
 			NoCollider,          // A rigid body without colliders; waits for a component change
 			InvalidColliders,    // Every collider has invalid data; waits for a component change
 			DegenerateTransform, // Retried when the world transform changes
-			MissingMesh,         // Retried every step: mesh data may still be loading
+			MissingMesh,         // Retried when the mesh provider reports new data or a shape finished cooking
 			BodyLimit            // Retried every step while the world is full
 		};
 
@@ -281,19 +281,18 @@ namespace Strata
 			return scene.IsActiveInHierarchy(entity) && !IsPendingDestroyInHierarchy(scene, entity);
 		}
 
-		// Whether a merged collider entity contributes to its owner's shape: the owner is an ancestor, and neither the entity
-		// nor an entity between it and the owner is inactive or pending destruction. (The owner's own state decides whether
-		// the whole body is simulated.)
+		// Whether a merged collider entity, a descendant of the owner (as collected by CollectMergedEntities), contributes to
+		// its owner's shape: neither it nor an entity between it and the owner is inactive or pending destruction. (The
+		// owner's own state decides whether the whole body is simulated.)
 		bool IsPartOfOwnerShape(const Scene& scene, Entity entity, Entity owner)
 		{
-			for (Entity current = entity; current.IsValid(); current = current.GetParent())
+			ST_CORE_ASSERT(scene.IsDescendantOf(entity, owner), "IsPartOfOwnerShape: '{}' is not below its body's entity", entity.GetName());
+			for (Entity current = entity; current.IsValid() && current != owner; current = current.GetParent())
 			{
-				if (current == owner)
-					return true;
 				if (current.HasComponent<InactiveComponent>() || scene.IsPendingDestroy(current))
 					return false;
 			}
-			return false; // Moved out from under the owner
+			return true;
 		}
 
 		// Visits root and its descendants depth first, parents before children. The visitor returns whether to descend into
