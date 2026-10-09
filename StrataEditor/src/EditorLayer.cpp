@@ -68,6 +68,8 @@ namespace Strata
 	{
 		// Before the project closes: completions may still look at the editor state.
 		m_CommandRunner.CancelAll("The editor is closing");
+		if (!m_Options.Headless)
+			m_Viewport.Reset(m_Context);
 		m_Context.CloseProject();
 		FileDialogs::Shutdown();
 	}
@@ -125,7 +127,7 @@ namespace Strata
 		HandleShortcuts();
 		DrawDockspace();
 		DrawToolbar();
-		DrawViewport();
+		m_Viewport.OnImGuiRender(m_Context, m_Commands);
 		m_Hierarchy.OnImGuiRender(m_Context, m_Commands);
 		m_Inspector.OnImGuiRender(m_Context, m_Commands);
 		m_ContentBrowser.OnImGuiRender(m_Context, m_Commands);
@@ -444,13 +446,6 @@ namespace Strata
 				m_Context.Step();
 			ImGui::EndDisabled();
 		}
-		ImGui::End();
-	}
-
-	void EditorLayer::DrawViewport()
-	{
-		ImGui::Begin("Viewport");
-		ImGui::TextDisabled("Scene: %s (%zu entities)", m_Context.GetActiveScene()->GetName().c_str(), m_Context.GetActiveScene()->GetEntityCount());
 		ImGui::End();
 	}
 
