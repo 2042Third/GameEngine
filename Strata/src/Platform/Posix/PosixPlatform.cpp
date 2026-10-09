@@ -15,8 +15,12 @@
 #if defined(ST_PLATFORM_MACOS)
 	#include <mach-o/dyld.h>
 	#include <mach/mach.h>
+	#include <sys/mount.h>
+	#include <sys/param.h>
 	#include <sys/sysctl.h>
 	#include <sys/types.h>
+#else
+	#include <sys/statvfs.h>
 #endif
 
 namespace Strata
@@ -34,6 +38,32 @@ namespace Strata
 			return result == 0 && S_ISDIR(info.st_mode) && info.st_uid == geteuid() && (info.st_mode & (S_IWGRP | S_IWOTH)) == 0;
 		}
 
+		// Script modules are loaded from copies in the runtime directory: a file system mounted noexec cannot hold it.
+		bool AllowsExecution(const std::filesystem::path& path)
+		{
+#if defined(ST_PLATFORM_MACOS)
+			struct statfs info = {};
+			return statfs(path.c_str(), &info) != 0 || (info.f_flags & MNT_NOEXEC) == 0;
+#else
+			struct statvfs info = {};
+			return statvfs(path.c_str(), &info) != 0 || (info.f_flag & ST_NOEXEC) == 0;
+#endif
+		}
+
+		// Creates `directory` with mode 0700 if missing. An existing real directory of this user loses group and other
+		// write permission (left by a permissive umask); anything else is refused by the caller's checks.
+		bool CreateOwnDirectory(const std::filesystem::path& directory)
+		{
+			if (mkdir(directory.c_str(), 0700) == 0)
+				return true;
+			if (errno != EEXIST)
+				return false;
+			struct stat info = {};
+			if (lstat(directory.c_str(), &info) == 0 && S_ISDIR(info.st_mode) && info.st_uid == geteuid() && (info.st_mode & (S_IWGRP | S_IWOTH)) != 0)
+				chmod(directory.c_str(), info.st_mode & 0777 & ~static_cast<mode_t>(S_IWGRP | S_IWOTH));
+			return true;
+		}
+
 		// <base>/<applicationName>, created with mode 0700 where missing, or empty unless both pass IsPrivateDirectory.
 		// The base may be a link (a relocated cache directory, say); the application's directory must be a real one.
 		std::filesystem::path PreparePrivateSubdirectory(const std::filesystem::path& base, std::string_view applicationName)
@@ -43,13 +73,37 @@ namespace Strata
 			// A missing base is created (e.g. ~/.cache of a new account); an existing one is only checked.
 			if (mkdir(base.c_str(), 0700) != 0 && errno != EEXIST)
 				return {};
-			if (!IsPrivateDirectory(base, true))
+			if (!IsPrivateDirectory(base, true) || !AllowsExecution(base))
 				return {};
 
 			std::filesystem::path directory = base / FileSystem::FromUTF8(applicationName);
+			if (!CreateOwnDirectory(directory) || !IsPrivateDirectory(directory, false))
+				return {};
+			return directory;
+		}
+
+		// <temp>/<applicationName>-<user id>, for when the user has no private location (containers running as a user
+		// whose home belongs to someone else, HOME=/, a group-writable cache directory). The shared temporary directory
+		// must keep users from renaming each other's entries (sticky bit) unless only this user can write to it, and the
+		// directory must be a real directory of this user that nobody else can access. If another user created it first,
+		// this location is unusable - never insecure.
+		std::filesystem::path PrepareTemporaryDirectory(std::string_view applicationName)
+		{
+			std::error_code error;
+			const std::filesystem::path base = std::filesystem::temp_directory_path(error);
+			if (error || !base.is_absolute())
+				return {};
+			struct stat baseInfo = {};
+			if (stat(base.c_str(), &baseInfo) != 0 || !S_ISDIR(baseInfo.st_mode) || !AllowsExecution(base))
+				return {};
+			if ((baseInfo.st_mode & (S_IWGRP | S_IWOTH)) != 0 && (baseInfo.st_mode & S_ISVTX) == 0)
+				return {};
+
+			const std::filesystem::path directory = base / FileSystem::FromUTF8(fmt::format("{}-{}", applicationName, static_cast<uint64_t>(geteuid())));
 			if (mkdir(directory.c_str(), 0700) != 0 && errno != EEXIST)
 				return {};
-			if (!IsPrivateDirectory(directory, false))
+			struct stat info = {};
+			if (lstat(directory.c_str(), &info) != 0 || !S_ISDIR(info.st_mode) || info.st_uid != geteuid() || (info.st_mode & 077) != 0)
 				return {};
 			return directory;
 		}
@@ -112,6 +166,10 @@ namespace Strata
 
 	std::filesystem::path Platform::GetUserRuntimeDirectory(std::string_view applicationName)
 	{
+		// An explicit location (tests, sandboxes) replaces the search; it must pass the same checks.
+		if (const std::optional<std::string> configured = GetEnvVar("STRATA_RUNTIME_DIR"); configured && !configured->empty())
+			return PreparePrivateSubdirectory(FileSystem::FromUTF8(*configured), applicationName);
+
 		std::vector<std::filesystem::path> candidates;
 		const std::optional<std::string> home = GetEnvVar("HOME");
 #if defined(ST_PLATFORM_MACOS)
@@ -140,7 +198,7 @@ namespace Strata
 			if (!directory.empty())
 				return directory;
 		}
-		return {};
+		return PrepareTemporaryDirectory(applicationName);
 	}
 
 	std::filesystem::path Platform::CreatePrivateDirectory(const std::filesystem::path& parent, std::string_view prefix)

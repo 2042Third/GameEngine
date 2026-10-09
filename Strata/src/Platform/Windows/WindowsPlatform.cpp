@@ -61,6 +61,13 @@ namespace Strata
 
 	std::filesystem::path Platform::GetUserRuntimeDirectory(std::string_view applicationName)
 	{
+		// An explicit location (tests, sandboxes) replaces the default.
+		if (const std::optional<std::string> configured = GetEnvVar("STRATA_RUNTIME_DIR"); configured && !configured->empty())
+		{
+			std::filesystem::path directory = FileSystem::FromUTF8(*configured) / FileSystem::FromUTF8(applicationName);
+			return FileSystem::CreateDirectories(directory) ? directory : std::filesystem::path();
+		}
+
 		// Local application data is only accessible to the user (and administrators); its subdirectories inherit that.
 		PWSTR knownFolder = nullptr;
 		if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_CREATE, nullptr, &knownFolder)))

@@ -115,12 +115,32 @@ TEST_SUITE("Core.Platform")
 		CHECK(FileSystem::IsDirectory(directory));
 	}
 
+	TEST_CASE("The runtime directory is the user's, or the one STRATA_RUNTIME_DIR names")
+	{
+		// The tests run with STRATA_RUNTIME_DIR set to a private temporary directory (TestMain.cpp).
+		const std::optional<std::string> configured = Platform::GetEnvVar("STRATA_RUNTIME_DIR");
+		REQUIRE(configured.has_value());
+		const std::filesystem::path runtime = Platform::GetUserRuntimeDirectory("StrataTests");
+		CHECK(runtime == FileSystem::FromUTF8(*configured) / "StrataTests");
+		CHECK(FileSystem::IsDirectory(runtime));
+		CHECK(Platform::GetUserRuntimeDirectory("StrataTests") == runtime);
+
+		// Without it, every user has a location (with a temporary-directory fallback on POSIX). Removed again afterwards.
+		REQUIRE(Platform::SetEnvVar("STRATA_RUNTIME_DIR", ""));
+		const std::filesystem::path user = Platform::GetUserRuntimeDirectory("StrataTestsUser");
+		REQUIRE(Platform::SetEnvVar("STRATA_RUNTIME_DIR", *configured));
+		REQUIRE_FALSE(user.empty());
+		CHECK(FileSystem::IsDirectory(user));
+		CHECK(user != runtime);
+		// Windows: <local application data>/StrataTestsUser/Runtime.
+		CHECK(FileSystem::Remove(user.filename() == "Runtime" ? user.parent_path() : user));
+	}
+
 	TEST_CASE("Private directories are unique and only the user can modify them")
 	{
 		const std::filesystem::path runtime = Platform::GetUserRuntimeDirectory("StrataTests");
 		REQUIRE_FALSE(runtime.empty());
 		CHECK(FileSystem::IsDirectory(runtime));
-		CHECK(Platform::GetUserRuntimeDirectory("StrataTests") == runtime);
 
 		const std::filesystem::path first = Platform::CreatePrivateDirectory(runtime, "Private-");
 		const std::filesystem::path second = Platform::CreatePrivateDirectory(runtime, "Private-");
@@ -149,6 +169,47 @@ TEST_SUITE("Core.Platform")
 		CHECK(FileSystem::Remove(first));
 		CHECK(FileSystem::Remove(second));
 	}
+
+#if defined(ST_PLATFORM_LINUX)
+	TEST_CASE("Without a private per-user location the runtime directory falls back to the temporary directory")
+	{
+		const std::filesystem::path root = Tests::CreateTemporaryDirectory("RuntimeFallback");
+		const std::filesystem::path runtime = root / "Runtime";
+		const std::filesystem::path cache = root / "Cache";
+		const std::filesystem::path temporary = root / "Temp";
+		const std::filesystem::path shared = root / "Shared";
+		using std::filesystem::perms;
+		std::error_code error;
+		for (const std::filesystem::path& directory : { runtime, cache, temporary, shared })
+			REQUIRE(FileSystem::CreateDirectories(directory));
+		// Group-writable runtime and cache directories do not qualify (others could replace what is in them).
+		std::filesystem::permissions(runtime, perms::owner_all | perms::group_all, std::filesystem::perm_options::replace, error);
+		std::filesystem::permissions(cache, perms::owner_all | perms::group_all, std::filesystem::perm_options::replace, error);
+		std::filesystem::permissions(temporary, perms::owner_all, std::filesystem::perm_options::replace, error);
+		// A shared temporary directory without the sticky bit lets others rename entries: refused too.
+		std::filesystem::permissions(shared, perms::all, std::filesystem::perm_options::replace, error);
+		REQUIRE_FALSE(error);
+
+		auto find = [&](const std::filesystem::path& temporaryDirectory)
+		{
+			const Process::RunResult result = Process::Run(HelperProcess({ "--strata-test-helper=runtime-directory", "StrataFallback", FileSystem::ToUTF8(runtime),
+				FileSystem::ToUTF8(cache), FileSystem::ToUTF8(temporaryDirectory) }), std::chrono::milliseconds(30000));
+			REQUIRE(result.ExitCode == 0);
+			const size_t begin = result.Output.find('[');
+			const size_t end = result.Output.rfind(']');
+			REQUIRE((begin != std::string::npos && end != std::string::npos && end > begin));
+			return result.Output.substr(begin + 1, end - begin - 1);
+		};
+
+		const std::filesystem::path expected = temporary / ("StrataFallback-" + std::to_string(geteuid()));
+		CHECK(find(temporary) == FileSystem::ToUTF8(expected));
+		struct stat info = {};
+		REQUIRE(lstat(expected.c_str(), &info) == 0);
+		CHECK(S_ISDIR(info.st_mode));
+		CHECK((info.st_mode & 0777) == 0700);
+		CHECK(find(shared).empty());
+	}
+#endif
 
 	TEST_CASE("File locks are exclusive")
 	{

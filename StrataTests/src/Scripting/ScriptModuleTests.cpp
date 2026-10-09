@@ -544,14 +544,13 @@ TEST_SUITE("Scripting.Module")
 		REQUIRE(FileSystem::WriteBytes(stale / "Game-Leftover.dll", CreateGarbage(16)));
 		REQUIRE(FileLock::Create(stale / "Owner.lock") != nullptr);
 
-		// Owned by a running process: a child holds its owner lock.
+		// Owned by a running process: a child creates and holds its owner lock (so it is never seen unlocked).
 		const std::filesystem::path owned = runtime / FileSystem::FromUTF8("ScriptModules-Owned" + suffix);
 		REQUIRE(FileSystem::WriteBytes(owned / "Game-InUse.dll", CreateGarbage(16)));
-		REQUIRE(FileLock::Create(owned / "Owner.lock") != nullptr);
 		Process owner;
 		ProcessSpecification specification;
 		specification.Executable = GetTestExecutablePath();
-		specification.Arguments = { "--strata-test-helper=hold-file-lock", FileSystem::ToUTF8(owned / "Owner.lock") };
+		specification.Arguments = { "--strata-test-helper=hold-file-lock", FileSystem::ToUTF8(owned / "Owner.lock"), "create" };
 		REQUIRE(owner.Start(specification));
 		std::string output;
 		REQUIRE(WaitUntil([&]()

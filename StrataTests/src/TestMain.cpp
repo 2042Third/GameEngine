@@ -6,6 +6,7 @@
 #include "Strata/Core/FileLock.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Log.h"
+#include "Strata/Core/Platform.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
@@ -99,11 +100,13 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 	}
 	if (mode == "hold-file-lock")
 	{
-		// <path>: locks the existing file, reports "locked" and holds the lock until the process is ended (at most a
-		// minute).
+		// <path> [create]: locks the existing file (or creates it locked), reports "locked" and holds the lock until the
+		// process is ended (at most a minute).
 		if (argc < 3)
 			return 2;
-		const Strata::Scope<Strata::FileLock> lock = Strata::FileLock::TryAcquire(Strata::FileSystem::FromUTF8(argv[2]));
+		const std::filesystem::path path = Strata::FileSystem::FromUTF8(argv[2]);
+		const bool create = argc > 3 && std::string_view(argv[3]) == "create";
+		const Strata::Scope<Strata::FileLock> lock = create ? Strata::FileLock::Create(path) : Strata::FileLock::TryAcquire(path);
 		if (!lock)
 			return 1;
 		std::printf("locked\n");
@@ -170,6 +173,20 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		std::fflush(stderr);
 		std::_Exit(result);
 	}
+	if (mode == "runtime-directory")
+	{
+		// <application> <XDG_RUNTIME_DIR> <XDG_CACHE_HOME> <TMPDIR>: prints the runtime directory found with that
+		// environment (and no STRATA_RUNTIME_DIR).
+		if (argc < 6)
+			return 2;
+		Strata::Platform::SetEnvVar("STRATA_RUNTIME_DIR", "");
+		Strata::Platform::SetEnvVar("XDG_RUNTIME_DIR", argv[3]);
+		Strata::Platform::SetEnvVar("XDG_CACHE_HOME", argv[4]);
+		Strata::Platform::SetEnvVar("TMPDIR", argv[5]);
+		std::printf("[%s]\n", Strata::FileSystem::ToUTF8(Strata::Platform::GetUserRuntimeDirectory(argv[2])).c_str());
+		std::fflush(stdout);
+		return 0;
+	}
 	if (mode == "load-script-module")
 	{
 		// <module path> <class name>...: succeeds if the module loads and contains every class.
@@ -204,6 +221,13 @@ int main(int argc, char** argv)
 	Strata::LogSpecification logSpecification;
 	logSpecification.Level = Strata::LogLevel::Warn;
 	Strata::Log::Init(logSpecification);
+
+	// The tests (and the helper processes they start, which inherit the environment) keep their runtime files - script
+	// module copies, private directories - in a private directory of their own, never in the user's.
+	const std::filesystem::path runtimeDirectory = Strata::Tests::CreateTemporaryDirectory("Runtime");
+	std::error_code permissionError;
+	std::filesystem::permissions(runtimeDirectory, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace, permissionError);
+	Strata::Platform::SetEnvVar("STRATA_RUNTIME_DIR", Strata::FileSystem::ToUTF8(runtimeDirectory));
 
 	doctest::Context context(argc, argv);
 	const int result = context.run();

@@ -29,10 +29,15 @@ namespace Strata
 		// it loads. Nobody but the current user can add, replace or rename files in it. Created if missing; empty if no
 		// such location exists.
 		//   Windows: %LOCALAPPDATA%/<applicationName>/Runtime
-		//   Linux:   $XDG_RUNTIME_DIR/<applicationName> (default $XDG_CACHE_HOME/<applicationName> or ~/.cache/<applicationName>)
-		//   macOS:   <per-user temporary directory>/<applicationName> (default ~/Library/Caches/<applicationName>)
-		// POSIX: the directory and the one containing it must be owned by the user and writable by nobody else; a location
-		// that fails the check is skipped.
+		//   Linux:   $XDG_RUNTIME_DIR/<applicationName>, else $XDG_CACHE_HOME/<applicationName> or ~/.cache/<applicationName>
+		//   macOS:   <per-user temporary directory>/<applicationName>, else ~/Library/Caches/<applicationName>
+		//   POSIX, when none of those qualifies: <temporary directory>/<applicationName>-<user id>
+		// The environment variable STRATA_RUNTIME_DIR replaces the search with <STRATA_RUNTIME_DIR>/<applicationName>
+		// (tests use it to stay out of the user's real directory).
+		// POSIX: the directory and the one containing it must be owned by the user and writable by nobody else (in the
+		// temporary directory: accessible by nobody else, inside a sticky or private temporary directory), and on a file
+		// system that allows executing files; a location that fails the checks is skipped. Group and other write
+		// permission on an existing directory of the user is removed.
 		static std::filesystem::path GetUserRuntimeDirectory(std::string_view applicationName);
 		// Creates a new directory "<prefix><random characters>" in `parent` that only the current user can access (POSIX:
 		// mode 0700; Windows: it inherits the access rules of a per-user parent such as GetUserRuntimeDirectory). Never

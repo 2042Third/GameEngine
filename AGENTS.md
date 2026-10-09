@@ -89,7 +89,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   Name suites after the module (`TEST_SUITE("Scene.Serialization")`).
 - Suites whose names start with `GPU` need a Vulkan device and are registered separately under the
   CTest label `gpu`.
-- Use `Strata::Tests::CreateTemporaryDirectory()` for files; never write into the source tree.
+- Use `Strata::Tests::CreateTemporaryDirectory()` for files; never write into the source tree. The test process sets
+  `STRATA_RUNTIME_DIR` to a private temporary directory (`TestMain.cpp`), so runtime files such as script module copies
+  never go to the user's runtime directory; helper processes inherit it.
 - `StrataTests.exe --strata-test-helper=<mode>` turns the test binary into a child process for
   process tests (see `TestMain.cpp`), so tests never depend on external programs.
 - The feature test project exercises every component and the entire scripting API in a real scene,
