@@ -329,6 +329,33 @@ TEST_SUITE("Scene")
 		CHECK(child.GetComponent<WorldTransformComponent>().ActiveInHierarchy);
 	}
 
+	TEST_CASE("Quit and scene load requests wait for the owner and clear when the scene starts")
+	{
+		Scene scene;
+		CHECK_FALSE(scene.GetQuitRequest().has_value());
+		CHECK_FALSE(scene.TakeSceneLoadRequest().has_value());
+
+		scene.RequestQuit(3);
+		scene.RequestQuit(-2); // Later requests replace earlier ones
+		CHECK(scene.GetQuitRequest() == -2);
+		CHECK(scene.GetQuitRequest() == -2); // Reading does not clear it
+
+		const UUID level(0x1234);
+		scene.RequestSceneLoad(level);
+		CHECK(scene.GetSceneLoadRequest() == level);
+		CHECK(scene.TakeSceneLoadRequest() == level);
+		CHECK_FALSE(scene.TakeSceneLoadRequest().has_value()); // Taking clears it
+		scene.RequestSceneLoad(UUID::Null());
+		CHECK(scene.GetSceneLoadRequest() == UUID::Null());
+
+		// A start is a fresh beginning.
+		scene.OnRuntimeStart();
+		CHECK_FALSE(scene.GetQuitRequest().has_value());
+		CHECK_FALSE(scene.GetSceneLoadRequest().has_value());
+		scene.RequestQuit(1);
+		scene.OnRuntimeStop();
+		CHECK(scene.GetQuitRequest() == 1);
+	}
 	TEST_CASE("Find by name and tag")
 	{
 		Scene scene;

@@ -269,6 +269,7 @@ namespace Strata
 		m_UndoStack.BreakMerge();
 		m_MasterVolumeBeforePlay = AudioEngine::GetMasterVolume();
 		m_RuntimeScene = Scene::Copy(m_EditScene);
+		m_RuntimeSceneAsset = UUID::Null();
 		m_RuntimeScene->OnRuntimeStart(mode);
 		m_SceneState = mode == SceneRuntimeMode::Play ? SceneState::Play : SceneState::Simulate;
 		return true;
@@ -280,6 +281,7 @@ namespace Strata
 			return;
 		m_RuntimeScene->OnRuntimeStop();
 		m_RuntimeScene.reset();
+		m_RuntimeSceneAsset = UUID::Null();
 		m_SceneState = SceneState::Edit;
 		// A game's volume setting belongs to the game session, not to the editor.
 		AudioEngine::SetMasterVolume(m_MasterVolumeBeforePlay);
@@ -287,6 +289,59 @@ namespace Strata
 		PruneSelection(); // Entities created during play are gone
 	}
 
+	void EditorContext::HandleRuntimeRequests()
+	{
+		if (const std::optional<int32_t> exitCode = m_RuntimeScene->GetQuitRequest())
+		{
+			ST_INFO("The game quit with exit code {}; play mode stopped", *exitCode);
+			Stop();
+			return;
+		}
+
+		const std::optional<UUID> request = m_RuntimeScene->TakeSceneLoadRequest();
+		std::string error;
+		if (request && !SwitchRuntimeScene(*request, &error))
+			ST_ERROR("The game cannot switch scenes: {}", error);
+	}
+
+	bool EditorContext::SwitchRuntimeScene(AssetHandle scene, std::string* outError)
+	{
+		auto fail = [outError](std::string message)
+		{
+			if (outError)
+				*outError = std::move(message);
+			return false;
+		};
+
+		// The null handle restarts what runs: the scene asset switched to last, or else the edited scene (unsaved changes
+		// included, as play mode started with them).
+		const AssetHandle target = scene.IsValid() ? scene : m_RuntimeSceneAsset;
+		Ref<Scene> next;
+		if (!target.IsValid())
+		{
+			next = Scene::Copy(m_EditScene);
+		}
+		else
+		{
+			if (!m_AssetManager || m_AssetManager->GetAssetType(target) != AssetType::Scene)
+				return fail(fmt::format("{} is not a scene asset of the project", target.ToString()));
+			Ref<SceneAsset> asset = AssetManager::LoadAssetSync<SceneAsset>(target);
+			if (!asset)
+				return fail(fmt::format("loading scene {} failed: {}", target.ToString(), m_AssetManager->GetAssetError(target)));
+			std::string error;
+			next = asset->CreateScene(&error);
+			if (!next)
+				return fail(fmt::format("scene {} is invalid: {}", target.ToString(), error));
+		}
+
+		const SceneRuntimeMode mode = m_RuntimeScene->GetRuntimeMode();
+		m_RuntimeScene->OnRuntimeStop();
+		m_RuntimeScene = std::move(next);
+		m_RuntimeSceneAsset = target;
+		m_RuntimeScene->OnRuntimeStart(mode);
+		PruneSelection(); // The selection named entities of the previous scene
+		return true;
+	}
 	void EditorContext::SetGameInputActive(bool active)
 	{
 		m_GameInputActive = active && m_SceneState == SceneState::Play;
@@ -393,9 +448,14 @@ namespace Strata
 		if (m_AssetManager)
 			m_AssetManager->Update();
 		if (m_RuntimeScene)
+		{
 			m_RuntimeScene->OnUpdateRuntime(timestep);
+			HandleRuntimeRequests();
+		}
 		else
+		{
 			m_EditScene->OnUpdateEditor(timestep);
+		}
 		PruneSelection();
 		m_Viewport.UpdatePicking(*this);
 	}

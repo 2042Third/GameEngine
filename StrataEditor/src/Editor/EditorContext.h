@@ -87,6 +87,10 @@ namespace Strata
 
 		// Runs a copy of the edited scene, with scripts, physics and audio. Changes made while playing are discarded by Stop,
 		// which also restores the engine-wide master volume a game may have changed (AudioSystem::SetMasterVolume).
+		// The running game's requests are honored after each update (Update): a quit (Scene::RequestQuit) stops play mode and
+		// logs the exit code; a scene load (Scene::RequestSceneLoad) replaces the running scene with that scene asset, or restarts
+		// the running one for the null handle (a fresh copy of the edited scene when that is what runs). Stop returns to the edited
+		// scene either way.
 		bool Play(std::string* outError = nullptr);
 		// Like Play, but only physics runs (no scripts or audio).
 		bool Simulate(std::string* outError = nullptr);
@@ -140,8 +144,8 @@ namespace Strata
 		EditorViewport& GetViewport() { return m_Viewport; }
 		const EditorViewport& GetViewport() const { return m_Viewport; }
 
-		// Once per frame: asset hot reload and loading, then the scene update (simulation while playing), then finished
-		// viewport picks.
+		// Once per frame: asset hot reload and loading, then the scene update (simulation while playing) and the running game's
+		// requests, then finished viewport picks.
 		void Update(Timestep timestep);
 
 		//////////////////////////////////////////////////////////////////////////
@@ -160,6 +164,9 @@ namespace Strata
 		const std::map<std::string, StatusProvider>& GetStatusProviders() const { return m_StatusProviders; }
 	private:
 		bool StartRuntime(SceneRuntimeMode mode, std::string* outError);
+		void HandleRuntimeRequests();
+		// Replaces the running scene with a scene asset, or with a restart of the running scene for the null handle.
+		bool SwitchRuntimeScene(AssetHandle scene, std::string* outError);
 		void ResetScene(Ref<Scene> scene, AssetHandle handle);
 		// Saves the viewport state and closes the project; with activateBuiltinAssets the built-in asset manager becomes active.
 		void ReleaseProject(bool activateBuiltinAssets);
@@ -172,6 +179,7 @@ namespace Strata
 
 		Ref<Scene> m_EditScene;
 		Ref<Scene> m_RuntimeScene;
+		AssetHandle m_RuntimeSceneAsset = UUID::Null(); // The scene asset playing after a switch; null while a copy of the edited scene runs
 		AssetHandle m_SceneHandle = UUID::Null();
 		SceneState m_SceneState = SceneState::Edit;
 		float m_MasterVolumeBeforePlay = 1.0f;

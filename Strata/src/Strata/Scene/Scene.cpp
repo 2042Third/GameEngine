@@ -487,6 +487,8 @@ namespace Strata
 		m_FixedTimeAccumulator = 0.0f;
 		m_Time = 0.0;
 		m_FrameIndex = 0;
+		m_QuitRequest.reset();
+		m_SceneLoadRequest.reset();
 		UpdateWorldTransforms();
 
 		for (const SceneSystemDescriptor& descriptor : SceneSystemRegistry::GetAll())
@@ -598,6 +600,13 @@ namespace Strata
 	{
 		ST_PROFILE_FUNCTION();
 		UpdateWorldTransforms();
+	}
+
+	std::optional<UUID> Scene::TakeSceneLoadRequest()
+	{
+		std::optional<UUID> request = m_SceneLoadRequest;
+		m_SceneLoadRequest.reset();
+		return request;
 	}
 
 	Entity Scene::GetPrimaryCameraEntity()

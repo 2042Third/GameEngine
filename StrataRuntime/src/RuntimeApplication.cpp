@@ -16,7 +16,7 @@ namespace Strata
 	};
 
 	// Runs the game of a manifest and, with a window, renders it every frame. Startup failures end the process with exit
-	// code 1.
+	// code 1; a game that quits ends it with the exit code it chose.
 	class RuntimeLayer : public Layer
 	{
 	public:
@@ -52,6 +52,13 @@ namespace Strata
 			if (!m_Runtime)
 				return;
 			m_Runtime->Update(timestep);
+			// The game asked to end (Scene::RequestQuit): the process exits with its code.
+			if (const std::optional<int32_t> exitCode = m_Runtime->GetQuitRequest())
+			{
+				Application::Get().SetExitCode(*exitCode);
+				Application::Get().Close();
+				return;
+			}
 			if (m_Renderer)
 			{
 				// Frames of minimized windows are skipped by the application; this frame has a back buffer.

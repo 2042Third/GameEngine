@@ -9,6 +9,8 @@
 #include <glm/glm.hpp>
 
 #include <algorithm>
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -136,6 +138,21 @@ namespace Strata
 			return nullptr;
 		}
 
+		//////////////////////////////////////////////////////////////////////////
+		// Requests to the scene's owner
+		//////////////////////////////////////////////////////////////////////////
+
+		// Gameplay code (scripts) asks whoever runs the scene to end the game or to switch scenes; the owner (GameRuntime,
+		// the editor's play mode) honors the requests after the update in which they were made. Quitting wins over a scene
+		// load. Later requests replace earlier ones; starting the scene clears both.
+		void RequestQuit(int32_t exitCode) { m_QuitRequest = exitCode; }
+		std::optional<int32_t> GetQuitRequest() const { return m_QuitRequest; }
+		// `sceneAsset` is the handle of a scene asset; the null handle asks to restart the running scene.
+		void RequestSceneLoad(UUID sceneAsset) { m_SceneLoadRequest = sceneAsset; }
+		std::optional<UUID> GetSceneLoadRequest() const { return m_SceneLoadRequest; }
+		// The pending scene load, which the call clears (so that an owner that cannot honor it does not retry every frame).
+		std::optional<UUID> TakeSceneLoadRequest();
+
 		Entity GetPrimaryCameraEntity();
 
 		const std::string& GetName() const { return m_Name; }
@@ -185,6 +202,8 @@ namespace Strata
 		float m_TimeScale = 1.0f;
 		double m_Time = 0.0;
 		uint64_t m_FrameIndex = 0;
+		std::optional<int32_t> m_QuitRequest;
+		std::optional<UUID> m_SceneLoadRequest;
 
 		friend class Entity;
 		friend class SceneSerializer;

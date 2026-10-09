@@ -389,6 +389,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
 - `project.export` writes a playable game outside the project: the asset pack (`<Game>.stpak`), the
   manifest (`<Game>.stgame`, start scene and window settings) and the runtime executable renamed after
   the game. CTest exports a small game (`StrataEditor --no-gpu`) and runs it headless.
+- A running game asks its owner to quit or to switch scenes through `Scene::RequestQuit`/`RequestSceneLoad`, honored
+  after each update: the editor stops play mode, or replaces the running scene (`play.stop` still
+  returns to the edited scene); `GameRuntime` ends the game (`GetQuitRequest`; StrataRuntime exits with the code) or loads
+  the scene from the pack. A null handle restarts the running scene.
 - Commands never block a frame. One that has to wait (frames, a build, a GPU readback) returns
   `EditorCommandResult::Defer(poll)`; `EditorCommandRunner` polls it once per frame, starting with the
   next frame, and reports through a completion callback. The UI, command scripts and automation all

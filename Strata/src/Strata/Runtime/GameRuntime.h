@@ -6,7 +6,9 @@
 #include "Strata/Project/GameManifest.h"
 #include "Strata/Scene/Scene.h"
 
+#include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 
 namespace Strata
@@ -34,15 +36,23 @@ namespace Strata
 		// Stops the current scene and starts another scene of the pack. The current scene keeps running on failure.
 		bool LoadScene(AssetHandle scene, std::string* outError = nullptr);
 
-		// Once per frame: finishes asset loads, then advances the scene.
+		// Once per frame: finishes asset loads, advances the scene, then honors its requests (Scene::RequestQuit,
+		// RequestSceneLoad): a quit ends the game (GetQuitRequest; further updates do nothing), a scene load switches to that
+		// scene of the pack, or restarts the current one for the null handle (synchronously; a failure is logged and the
+		// scene keeps running).
 		void Update(Timestep timestep);
+		// The exit code the game ended with, once its scene asked to quit.
+		std::optional<int32_t> GetQuitRequest() const { return m_QuitRequest; }
 	private:
 		GameRuntime() = default;
+
+		void HandleSceneRequests();
 	private:
 		GameManifest m_Manifest;
 		Ref<RuntimeAssetManager> m_AssetManager;
 		Ref<Scene> m_Scene;
 		AssetHandle m_SceneHandle = UUID::Null();
+		std::optional<int32_t> m_QuitRequest;
 	};
 
 }
