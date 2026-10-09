@@ -5,6 +5,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <optional>
@@ -24,11 +25,26 @@ namespace Strata
 	// has finished (which may itself be pending again), nullopt while it is still running.
 	using EditorCommandPoll = std::function<std::optional<EditorCommandResult>(EditorContext& context)>;
 
+	// Why a command failed. Callers that report failures to tools (automation) map these to error codes, so a client can
+	// tell a mistake in its request from a command that could not be carried out.
+	enum class EditorCommandError : uint8_t
+	{
+		None = 0,
+		UnknownCommand,    // No command has this name
+		InvalidParameters, // A parameter is unknown, missing, mistyped, out of range or refers to nothing that exists
+		Failed,            // The request was valid, but the command could not be carried out (e.g. nothing to undo)
+		Cancelled,         // A pending command was abandoned before it finished (e.g. the editor is closing)
+		Internal           // An unexpected failure inside the command (e.g. an exception from third-party code)
+	};
+
+	const char* EditorCommandErrorToString(EditorCommandError error);
+
 	struct EditorCommandResult
 	{
 		bool Success = true;
 		nlohmann::json Value; // Result data (null when the command returns nothing)
 		std::string Error;
+		EditorCommandError ErrorKind = EditorCommandError::None; // Set for failures
 		// Set for commands that finish over the next frames (waiting for frames, a build or a GPU readback) instead of
 		// blocking the frame. Success, Value and Error are meaningless while it is set. Run commands that may defer through
 		// EditorCommandRunner, which polls them.
@@ -36,10 +52,12 @@ namespace Strata
 
 		bool IsPending() const { return static_cast<bool>(Pending); }
 
-		static EditorCommandResult Ok(nlohmann::json value = nullptr) { return { true, std::move(value), {}, {} }; }
-		static EditorCommandResult Fail(std::string error) { return { false, nullptr, std::move(error), {} }; }
+		static EditorCommandResult Ok(nlohmann::json value = nullptr) { return { true, std::move(value), {}, EditorCommandError::None, {} }; }
+		static EditorCommandResult Fail(std::string error, EditorCommandError kind = EditorCommandError::Failed) { return { false, nullptr, std::move(error), kind, {} }; }
+		// A request the command cannot accept: report the parameter and what is wrong with it.
+		static EditorCommandResult InvalidParameters(std::string error) { return Fail(std::move(error), EditorCommandError::InvalidParameters); }
 		// The poll function must own everything it uses: copy the parameters, never capture them by reference.
-		static EditorCommandResult Defer(EditorCommandPoll poll) { return { true, nullptr, {}, std::move(poll) }; }
+		static EditorCommandResult Defer(EditorCommandPoll poll) { return { true, nullptr, {}, EditorCommandError::None, std::move(poll) }; }
 	};
 
 	using EditorCommandHandler = std::function<EditorCommandResult(EditorContext& context, const nlohmann::json& parameters)>;
@@ -69,6 +87,8 @@ namespace Strata
 		void Register(EditorCommand command);
 		const EditorCommand* Find(std::string_view name) const;
 		std::vector<const EditorCommand*> GetAll() const; // Sorted by name
+		// Changes whenever a command is registered, so users that mirror the commands (automation) notice additions.
+		uint64_t GetRevision() const { return m_Revision; }
 
 		// Runs a command. Unknown commands, parameters that are not an object and failures inside the handler
 		// (including exceptions from third-party code) become error results. The result may be pending (see
@@ -76,10 +96,11 @@ namespace Strata
 		EditorCommandResult Execute(EditorContext& context, std::string_view name, const nlohmann::json& parameters = nlohmann::json::object()) const;
 	private:
 		std::map<std::string, EditorCommand, std::less<>> m_Commands;
+		uint64_t m_Revision = 0;
 	};
 
 	// Reads command parameters. Getters record the first problem (missing or mistyped parameter) and return a
-	// fallback; check IsValid after reading all of them and return Fail() if not.
+	// fallback; check IsValid after reading all of them and return Fail() (an InvalidParameters error) if not.
 	class CommandArguments
 	{
 	public:
@@ -87,7 +108,7 @@ namespace Strata
 
 		bool Has(std::string_view name) const;
 		bool IsValid() const { return m_Error.empty(); }
-		EditorCommandResult Fail() const { return EditorCommandResult::Fail(m_Error); }
+		EditorCommandResult Fail() const { return EditorCommandResult::InvalidParameters(m_Error); }
 		void SetError(std::string error);
 
 		std::string GetString(std::string_view name);

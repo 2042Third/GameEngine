@@ -35,7 +35,7 @@ This file is the source of truth for how to work on Strata. Read it fully before
 | `StrataTests/` | doctest unit tests, test helpers, and the feature test project. |
 | `CMake/` | CMake modules (configurations, compiler options, shader compilation, manifest). |
 | `Docs/` | Architecture and API documentation. |
-| `.claude/skills/` | Task-specific skills for agents (build/test, adding components, script API, game creation). |
+| `.claude/skills/` | Task-specific skills for agents (build/test, adding components, script API, editor automation, game creation). |
 
 Engine modules (`Strata/src/Strata/`): `Core` (application, logging, jobs, platform services),
 `Events`, `Input`, `Math`, `Reflection`, `Scene` (ECS, components, serialization, prefabs),
@@ -93,6 +93,10 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   devices in tests) and end with `CHECK(gpu.GetNewErrorCount() == 0)`, so validation errors fail the
   test. Run them under the Khronos validation layer locally by pointing `VK_ADD_LAYER_PATH` at its
   build. Rendering features are tested on pixels read back with `Renderer::ReadTexture`.
+- Suites whose names start with `EndToEnd` start the built `StrataEditor` and `StrataCLI` (paths in
+  `STRATA_TEST_EDITOR_PATH`/`STRATA_TEST_CLI_PATH`, else next to the test executable) and run as the CTest
+  `StrataEditor.Automation`, not in `StrataTests.Core`. They need no GPU (`--no-gpu`), use private session
+  directories, free ports and timeouts, and terminate the processes they started when they fail.
 - Use `Strata::Tests::CreateTemporaryDirectory()` for files; never write into the source tree.
 - `StrataTests.exe --strata-test-helper=<mode>` turns the test binary into a child process for
   process tests (see `TestMain.cpp`), so tests never depend on external programs.
@@ -328,6 +332,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   automation exposes them as tools, so descriptions must tell an agent what the command does. Use
   `CommandArguments` to read parameters (no exceptions), reject invalid input without side effects
   (roll back the transaction) and record exactly one undo step per successful mutating command.
+  Failures carry an `EditorCommandError` kind: a request the command cannot accept (unknown, missing or
+  mistyped parameter, a reference to nothing) is `InvalidParameters` (`CommandArguments::Fail`,
+  `EditorCommandResult::InvalidParameters`); a valid request that cannot be carried out in the current
+  state is `Failed` (`EditorCommandResult::Fail`). Automation reports them with different error codes.
 - Undo works on entity snapshots: a `SceneEditTransaction` captures the entities an edit touches
   (`Track`, `TrackSubtree` before changing or deleting them, `TrackCreated` after creating them) and
   `EditorContext::CommitEdit` records the difference. Edits while playing are not recorded. Continuous edits merge
@@ -343,12 +351,21 @@ and `AudioSystem`, the built-in "Audio" scene system.
   {frames}` returns after that many frames, e.g. to let a playing scene run.
 - `StrataEditor --commands script.json` runs a JSON array of `{"command", "parameters"}` at startup
   (`EditorCommandScript`); a pending command holds the script until it completes. If a command fails,
-  or the script has not finished by the last of `--frames N` frames, the process exit code becomes 1.
+  or the script has not finished by the last of `--frames N` frames or by `editor.quit`, the process exit
+  code becomes 1.
   `--frames N` stops after N frames (without saving the panel layout), `--screenshot out.png` captures
   the last frame (viewport included), `--no-gpu` runs headless without a graphics device (export, asset processing).
+  Without `--frames`, a headless editor runs until `editor.quit` (which refuses to discard unsaved
+  scene changes unless `force` is true) or a signal; headless editors run at most 60 frames per second.
+  The editor serves automation by default (`EditorAutomation`, see [Automation](#automation-editor-rpc--mcp));
+  `--no-automation` turns it off and `--automation-port <port>` picks the port (default 0: a free one).
+  A headless editor without `--frames` whose automation cannot start exits with code 1. CTest runs of
+  command scripts pass `--no-automation`.
   CTest runs `StrataTests/Editor/SmokeCommands.json.in` (configured into the build tree; it builds a scene and captures
   the viewport into `build/<preset>/StrataTests/SmokeCaptures/`) and checks that failing and unfinished scripts fail the
   process.
+- `editor.status` summarizes the editor (project, scene, play state, selection, undo history); other
+  parts of the editor add sections to it through `EditorContext::SetStatusProvider`.
 - Mutating commands report a `warning` in their result while the scene is playing: such changes apply
   to the running copy and are discarded by `play.stop`. Unknown or missing parameters are errors.
 - **Viewport state** lives in the core: `EditorContext::GetViewport()` (`EditorViewport`) holds the editor camera
@@ -443,8 +460,35 @@ and `AudioSystem`, the built-in "Audio" scene system.
 
 The editor exposes its features to tools and AI agents through `RpcServer` (`Strata/src/Strata/Network/`):
 JSON-RPC 2.0, one compact JSON message per line, over TCP on loopback. `StrataCLI` is the client (`call`,
-`list`, `status`, `launch`) and an MCP server on stdio (`StrataCLI mcp`).
+`list`, `status`, `launch`) and an MCP server on stdio (`StrataCLI mcp`). How an agent drives the editor is
+described in `.claude/skills/strata-editor-automation/SKILL.md`.
 
+- **Commands are the API:** `EditorAutomation` (`StrataEditor/src/Editor/`) owns the editor's server and offers
+  every command of the `EditorCommandRegistry` as a method with the command's name, description and parameter
+  schema; commands registered later (or again, with another description or schema) are picked up on the next
+  frame. `rpc.listMethods` lists them, and `StrataCLI mcp` turns each into a tool (`entity.create` ->
+  `entity_create`, `inputSchema` = the parameter schema). So a new feature reaches agents by registering a
+  command; no RPC code is needed. Write commands for agents: a description that says what the command does
+  and returns, a complete schema (property descriptions, `required`), IDs as 16-digit hex strings, assets by
+  handle or path, results as JSON objects with camelCase keys, and images as
+  `{"Image": {"MimeType": ..., "Data": <base64>}}` (MCP clients receive image content; `StrataCLI call
+  --save-image` writes the file).
+- **Requests** run on the main thread from `EditorAutomation::Update` (once per frame, after the runner's
+  update) through the `EditorCommandRunner`: deferred commands answer when they complete; a client that
+  disconnects meanwhile only loses the answer. Requests are logged at trace level (`Automation: #<n> <method>
+  <params> -> <outcome> (<time>)`).
+- **Errors** map from `EditorCommandError`: unknown command -32601 (`MethodNotFound`), `InvalidParameters`
+  -32602 (`data`: `{"command", "parameters": <schema>}`), `Failed` -32005 (`OperationFailed`), `Cancelled`
+  -32006, `Internal` -32603. Transport errors are -32001 to -32004 (`JsonRpc::ErrorCode`).
+- **Lifecycle:** the editor starts automation after opening its project, on 127.0.0.1 with a fresh token and a
+  free port (`--automation-port <port>` picks one, `--no-automation` turns it off), and publishes its session.
+  The session moves along when the editor opens or creates another project. On exit the editor cancels pending
+  commands (their clients get `Cancelled`), removes the session files and stops the server with a grace period
+  (`RpcServer::Stop(gracePeriod)`) so the last answers, such as `editor.quit`'s, still arrive. A headless editor
+  without `--frames` runs until `editor.quit` or a signal (a killed editor leaves a stale session file, which
+  clients prune), or, with `--idle-timeout <seconds>`, until no client has been connected and no request
+  pending for that long (unsaved changes are then discarded, with a warning). The status bar shows the port
+  and the connected clients; `editor.status` has an `automation` section.
 - **Security model:** any local process, and any web page in a local browser, can reach the port; only
   holders of the session token are trusted. The server binds loopback addresses only and refuses to start
   without a token (`EditorSession::GenerateSessionToken`, from the OS secure random generator). Every
@@ -454,22 +498,34 @@ JSON-RPC 2.0, one compact JSON message per line, over TCP on loopback. `StrataCL
   that took over a dead editor's port); `rpc.authenticate` then sends the client's HMAC proof. Anything else
   closes the connection. Clients refuse to connect without a token. Unauthenticated connections get tiny
   limits and a deadline; authenticated ones get size limits and backpressure. Never log or print tokens.
-- **Session files:** `<user data>/Strata/Sessions/<pid>.json` holds the full session (address, port, token,
+- **Session files:** `<per-user data>/Strata/Sessions/<pid>.json` (`Platform::FindUserDataDirectory`, e.g.
+  `%LOCALAPPDATA%\Strata\Sessions`) holds the full session (address, port, token,
   process start time). It is written owner-only (`Platform::WritePrivateFile`) into a private directory. A
   session counts only while its process id is alive with the recorded start time (a reused id does not
   match). Files of exited editors are pruned; a live process whose start time cannot be verified is skipped,
   never deleted. `<project>/.strata/EditorSession.json` only names the editor's process; it
-  is untrusted (the project may be shared) and never contains the port or token.
-- **Environment:** `STRATA_SESSION_DIR` overrides the session directory (tests use it to stay isolated from
-  real editors). `STRATA_EDITOR_PORT`/`STRATA_EDITOR_TOKEN` select an explicit endpoint, and
-  `STRATA_EDITOR_PATH` the editor executable for `launch`/`strata_launch_editor`.
-- **Adding editor methods:** `RpcServer::RegisterMethod` with a description and a JSON Schema for the params.
-  Handlers run on the main thread from `ProcessRequests()`; keep the `Ref<RpcResponder>` to answer later
-  (e.g. after advancing frames). Methods become MCP tools automatically (`entity.create` -> `entity_create`).
-  Return images as `{"Image": {"MimeType": ..., "Data": <base64>}}` to have MCP clients receive image content.
-- **Tests** never need a real editor: `Tests::PumpedRpcServer` plays the editor, `Tests::LiveProcess` gives
-  fake sessions a running process id, and `STRATA_TEST_FAKE_EDITOR=1` makes the test executable act as a
-  launched editor (see `StrataTests/src/Network/FakeEditorProcess.h`).
+  is untrusted (the project may be shared) and never contains the port or token. An editor that cannot publish
+  its session does not serve automation (nothing could find it).
+- **Clients:** discovery prefers `--port` (+ `STRATA_EDITOR_TOKEN`), then `--project <dir>`, then the newest
+  session. A connection that has connected stays with that editor process (also after it opens another
+  project) or, after a restart, an editor with the same project; it never switches to another editor silently.
+  `launch`/`strata_launch_editor` start an editor (optionally for a project; `--headless`, `--no-gpu`) that runs
+  until `editor.quit`; an editor that does not become reachable in time is stopped. Editors the MCP server
+  starts get `--idle-timeout 600` (`StrataCLI mcp --idle-timeout <s>`, 0: never) so they do not outlive the agent
+  session, and a request for another editor without a project reuses the one it started. `launch` passes
+  `--idle-timeout` only when given. `call` reads params as JSON text, from stdin (`-`) or a file (`@path`).
+  Exit codes: 0 success, 1 the editor answered with an error, 2 no editor reachable or connection lost, 3 usage,
+  4 no answer within `--timeout` (the command may still finish), 5 `--save-image` failed.
+- **Environment:** `STRATA_SESSION_DIR` overrides the session directory for editors and clients alike (tests
+  use it to stay isolated from real editors). `STRATA_EDITOR_PORT`/`STRATA_EDITOR_TOKEN` select an explicit
+  endpoint, and `STRATA_EDITOR_PATH` the editor executable for `launch`/`strata_launch_editor`.
+- **Other methods:** endpoints that are not editor commands use `RpcServer::RegisterMethod` with a description
+  and a JSON Schema (`ReplaceMethod` swaps one in a single step). Handlers run on the main thread from
+  `ProcessRequests()`; keep the `Ref<RpcResponder>` to answer later. Names starting with `rpc.` are reserved.
+- **Tests:** `Editor.Automation` drives `EditorAutomation` in-process with `RpcClient`; the CLI and MCP suites
+  never need a real editor (`Tests::PumpedRpcServer` plays the editor, `Tests::LiveProcess` gives fake sessions
+  a running process id, and `STRATA_TEST_FAKE_EDITOR=1` makes the test executable act as a launched editor, see
+  `StrataTests/src/Network/FakeEditorProcess.h`); the `EndToEnd` suites run the real editor and StrataCLI.
 
 ## Pre-commit review checklist
 

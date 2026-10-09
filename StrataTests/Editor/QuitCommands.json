@@ -1,0 +1,5 @@
+[
+	{ "command": "entity.create", "parameters": { "name": "Unsaved" } },
+	{ "command": "editor.wait", "parameters": { "frames": 3 } },
+	{ "command": "editor.quit", "parameters": { "force": true } }
+]

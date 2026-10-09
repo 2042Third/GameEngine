@@ -90,10 +90,10 @@ namespace Strata
 			return EditorCommandResult::Ok(std::move(value));
 		}
 
-		EditorCommandResult RollBack(SceneEditTransaction& transaction, std::string error)
+		EditorCommandResult RollBack(SceneEditTransaction& transaction, std::string error, EditorCommandError kind)
 		{
 			transaction.Rollback();
-			return EditorCommandResult::Fail(std::move(error));
+			return EditorCommandResult::Fail(std::move(error), kind);
 		}
 
 	}
@@ -218,15 +218,15 @@ namespace Strata
 				if (auto gravity = parameters.find("gravity"); gravity != parameters.end())
 				{
 					if (!gravity->is_array() || gravity->size() != 3 || !(*gravity)[0].is_number() || !(*gravity)[1].is_number() || !(*gravity)[2].is_number())
-						return EditorCommandResult::Fail("Parameter 'gravity' must be an array of three numbers");
+						return EditorCommandResult::InvalidParameters("Parameter 'gravity' must be an array of three numbers");
 					after.Gravity = { (*gravity)[0].get<float>(), (*gravity)[1].get<float>(), (*gravity)[2].get<float>() };
 					if (!std::isfinite(after.Gravity.x) || !std::isfinite(after.Gravity.y) || !std::isfinite(after.Gravity.z))
-						return EditorCommandResult::Fail("Parameter 'gravity' must be finite");
+						return EditorCommandResult::InvalidParameters("Parameter 'gravity' must be finite");
 				}
 				if (auto step = parameters.find("fixedTimestep"); step != parameters.end())
 				{
 					if (!step->is_number() || !(step->get<float>() >= 0.001f && step->get<float>() <= 0.1f))
-						return EditorCommandResult::Fail("Parameter 'fixedTimestep' must be between 0.001 and 0.1");
+						return EditorCommandResult::InvalidParameters("Parameter 'fixedTimestep' must be between 0.001 and 0.1");
 					after.FixedTimestep = step->get<float>();
 				}
 				CommandArguments arguments(parameters);
@@ -266,7 +266,7 @@ namespace Strata
 				transaction.TrackCreated(entity.GetUUID());
 				std::string error;
 				if (components && !ApplyComponents(entity, *components, &error))
-					return RollBack(transaction, error);
+					return RollBack(transaction, error, EditorCommandError::InvalidParameters);
 				return Finish(context, transaction, { { "id", UUIDToJson(entity.GetUUID()) } });
 			} });
 
@@ -312,7 +312,7 @@ namespace Strata
 				SceneEditTransaction transaction(scene, "Duplicate Entity", {});
 				Entity copy = scene.DuplicateEntity(entity);
 				if (!copy)
-					return RollBack(transaction, "Duplicating failed");
+					return RollBack(transaction, "Duplicating failed", EditorCommandError::Failed);
 				transaction.TrackCreated(copy.GetUUID());
 				return Finish(context, transaction, { { "id", UUIDToJson(copy.GetUUID()) } });
 			} });
@@ -373,7 +373,7 @@ namespace Strata
 
 				SceneEditTransaction transaction(scene, "Reparent Entity", { entity.GetUUID() });
 				if (!scene.SetParent(entity, parent, keepWorld))
-					return RollBack(transaction, "The new parent is the entity itself or one of its descendants");
+					return RollBack(transaction, "The new parent is the entity itself or one of its descendants", EditorCommandError::InvalidParameters);
 				if (index >= 0)
 					scene.SetSiblingIndex(entity, static_cast<size_t>(index));
 				return Finish(context, transaction);
@@ -457,7 +457,7 @@ namespace Strata
 				SceneEditTransaction transaction(scene, fmt::format("Add {}", info->DisplayName), { entity.GetUUID() });
 				std::string error;
 				if (!ApplyComponents(entity, { { info->Name, values ? *values : nlohmann::json::object() } }, &error))
-					return RollBack(transaction, error);
+					return RollBack(transaction, error, EditorCommandError::InvalidParameters);
 				return Finish(context, transaction);
 			} });
 
@@ -477,7 +477,7 @@ namespace Strata
 				SceneEditTransaction transaction(scene, fmt::format("Remove {}", info->DisplayName), { entity.GetUUID() });
 				std::string error;
 				if (!ComponentAccess::RemoveComponent(entity, *info, &error))
-					return RollBack(transaction, error);
+					return RollBack(transaction, error, EditorCommandError::Failed);
 				return Finish(context, transaction);
 			} });
 
@@ -515,7 +515,7 @@ namespace Strata
 				SceneEditTransaction transaction(scene, fmt::format("Edit {}", info->DisplayName), { entity.GetUUID() });
 				std::string error;
 				if (!ApplyComponents(entity, { { info->Name, values } }, &error))
-					return RollBack(transaction, error);
+					return RollBack(transaction, error, EditorCommandError::InvalidParameters);
 				return Finish(context, transaction, { { "values", ComponentAccess::Serialize(*info, info->Get(scene.GetRegistry(), entity.GetHandle())) } });
 			} });
 
@@ -539,7 +539,7 @@ namespace Strata
 					return arguments.Fail();
 				const AssetType type = AssetManager::GetAssetType(handle);
 				if (type != AssetType::Prefab && type != AssetType::Model)
-					return EditorCommandResult::Fail(fmt::format("'{}' is a {}, not a prefab or model", parameters["prefab"].get<std::string>(), AssetTypeToString(type)));
+					return EditorCommandResult::InvalidParameters(fmt::format("'{}' is a {}, not a prefab or model", parameters["prefab"].get<std::string>(), AssetTypeToString(type)));
 
 				Ref<EntityTemplate> asset = std::static_pointer_cast<EntityTemplate>(AssetManager::GetActive()->LoadAssetSync(handle));
 				if (!asset)
@@ -555,7 +555,7 @@ namespace Strata
 				}
 				std::string error;
 				if (components && !roots.empty() && !ApplyComponents(roots.front(), *components, &error))
-					return RollBack(transaction, error);
+					return RollBack(transaction, error, EditorCommandError::InvalidParameters);
 				return Finish(context, transaction, { { "entities", std::move(ids) } });
 			} });
 	}

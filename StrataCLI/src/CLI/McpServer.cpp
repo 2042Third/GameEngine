@@ -30,9 +30,13 @@ namespace Strata::CLI
 
 		constexpr const char* c_Instructions =
 			"Controls the Strata game engine editor. Call strata_status to check whether an editor is connected; "
-			"if none is, call strata_launch_editor with a project directory. While an editor is connected, each of "
-			"its automation methods is available as a tool (method name with '.' replaced by '_', e.g. entity_create), "
-			"and strata_call invokes any method by name.";
+			"if none is, call strata_launch_editor (with a project directory to open one, or without to create one with "
+			"project_create). While an editor is connected, each of its commands is available as a tool (command name with "
+			"'.' replaced by '_', e.g. entity_create), and strata_call invokes any method by name. editor_status gives an "
+			"overview of the editor, editor_commands lists every command with its parameters, and component_list the "
+			"component types. Entities and assets are referenced by 16-digit hexadecimal IDs (assets also by path). "
+			"Commands that take frames (editor_wait, captures) answer when they finish. Changes made while playing are "
+			"discarded by play_stop. Save with scene_save or scene_saveAs before editor_quit.";
 
 		std::string PrettyPrint(const nlohmann::json& value)
 		{
@@ -62,11 +66,14 @@ namespace Strata::CLI
 				MakeEmptyObjectSchema()));
 
 			nlohmann::json launchSchema = MakeEmptyObjectSchema();
-			launchSchema["properties"]["project"] = nlohmann::json { { "type", "string" }, { "description", "Directory of the project to open" } };
+			launchSchema["properties"]["project"] = nlohmann::json { { "type", "string" },
+				{ "description", "Directory of an existing project to open; omit it to start without a project (then create one with project_create)" } };
 			launchSchema["properties"]["headless"] = nlohmann::json { { "type", "boolean" }, { "description", "Run without a window (rendering stays available offscreen)" } };
-			launchSchema["required"] = nlohmann::json::array({ "project" });
+			launchSchema["properties"]["noGpu"] = nlohmann::json { { "type", "boolean" },
+				{ "description", "Run without a window and without a graphics device (no rendering or viewport capture), e.g. on machines without a GPU" } };
 			tools.push_back(MakeTool(c_LaunchEditorTool,
-				"Starts the Strata editor for a project (or reuses one that already has it open) and connects to it. The editor's methods then become available as tools.",
+				"Starts the Strata editor (for a project, reusing an editor that already has it open) and connects to it. The editor's methods then become "
+				"available as tools. The editor keeps running until editor_quit.",
 				std::move(launchSchema)));
 
 			tools.push_back(MakeTool(c_ListMethodsTool,
@@ -123,6 +130,22 @@ namespace Strata::CLI
 				return false;
 			}
 			value = it->get<std::string>();
+			return true;
+		}
+
+		// Reads an optional boolean argument (value keeps its default when absent). Returns false (with error set) if it
+		// is present with another type.
+		bool GetBoolArgument(const nlohmann::json& arguments, const char* name, bool& value, std::string& error)
+		{
+			const auto it = arguments.find(name);
+			if (it == arguments.end() || it->is_null())
+				return true;
+			if (!it->is_boolean())
+			{
+				error = fmt::format("Argument '{}' must be a boolean", name);
+				return false;
+			}
+			value = it->get<bool>();
 			return true;
 		}
 
@@ -413,60 +436,78 @@ namespace Strata::CLI
 		std::optional<std::string> project;
 		if (!GetStringArgument(arguments, "project", project, error))
 			return MakeToolError(error);
-		if (!project || project->empty())
-			return MakeToolError("Missing required argument 'project' (the project directory)");
 
 		bool headless = false;
-		if (const auto headlessIt = arguments.find("headless"); headlessIt != arguments.end() && !headlessIt->is_null())
+		bool noGpu = false;
+		if (!GetBoolArgument(arguments, "headless", headless, error) || !GetBoolArgument(arguments, "noGpu", noGpu, error))
+			return MakeToolError(error);
+
+		std::filesystem::path projectDirectory;
+		if (project && !project->empty())
 		{
-			if (!headlessIt->is_boolean())
-				return MakeToolError("Argument 'headless' must be a boolean");
-			headless = headlessIt->get<bool>();
+			std::error_code pathError;
+			projectDirectory = std::filesystem::absolute(FileSystem::FromUTF8(*project), pathError);
+			if (pathError)
+				projectDirectory = FileSystem::FromUTF8(*project);
+			projectDirectory = projectDirectory.lexically_normal();
 		}
 
-		std::error_code pathError;
-		std::filesystem::path projectDirectory = std::filesystem::absolute(FileSystem::FromUTF8(*project), pathError);
-		if (pathError)
-			projectDirectory = FileSystem::FromUTF8(*project);
-		projectDirectory = projectDirectory.lexically_normal();
-
-		// Reuse an editor that already has the project open instead of starting a second one.
-		EditorConnectionOptions probeOptions = m_Specification.Connection;
-		probeOptions.Port.reset();
-		probeOptions.Token.clear();
-		probeOptions.ProjectDirectory = projectDirectory;
-		probeOptions.SessionDirectory = m_Connection.GetOptions().SessionDirectory;
-		EditorConnection probe(probeOptions);
-		if (probe.EnsureConnected() && probe.GetEndpoint() && probe.GetEndpoint()->Session)
+		auto reuse = [this](const EditorSessionInfo& session, const char* message) -> std::optional<nlohmann::json>
 		{
-			const EditorSessionInfo session = *probe.GetEndpoint()->Session;
-			probe.Disconnect();
-			if (m_Connection.ConnectToSession(session))
+			if (!m_Connection.ConnectToSession(session))
+				return std::nullopt;
+			RefreshEditorState();
+			return MakeToolResult(RpcResult::Success(nlohmann::json {
+				{ "launched", false },
+				{ "message", message },
+				{ "session", DescribeSession(session) },
+				{ "editorTools", m_ToolToMethod.size() } }));
+		};
+
+		if (!projectDirectory.empty())
+		{
+			// Reuse an editor that already has the project open instead of starting a second one.
+			EditorConnectionOptions probeOptions = m_Specification.Connection;
+			probeOptions.Port.reset();
+			probeOptions.Token.clear();
+			probeOptions.ProjectDirectory = projectDirectory;
+			probeOptions.SessionDirectory = m_Connection.GetOptions().SessionDirectory;
+			EditorConnection probe(probeOptions);
+			if (probe.EnsureConnected() && probe.GetEndpoint() && probe.GetEndpoint()->Session)
 			{
-				RefreshEditorState();
-				return MakeToolResult(RpcResult::Success(nlohmann::json {
-					{ "launched", false },
-					{ "message", "An editor already has this project open; connected to it" },
-					{ "session", DescribeSession(session) },
-					{ "editorTools", m_ToolToMethod.size() } }));
+				const EditorSessionInfo session = *probe.GetEndpoint()->Session;
+				probe.Disconnect();
+				if (std::optional<nlohmann::json> reused = reuse(session, "An editor already has this project open; connected to it"))
+					return *reused;
 			}
+		}
+		else if (std::optional<EditorSessionInfo> session = FindReusableEditor(headless, noGpu))
+		{
+			// Without a project, a further editor would only leave the previous one running unused.
+			if (std::optional<nlohmann::json> reused = reuse(*session, "An editor without a project that this server started is still running; connected to it"))
+				return *reused;
 		}
 
 		EditorLaunchSpecification launch;
 		launch.EditorPath = ResolveEditorPath(m_Specification.EditorPath);
 		launch.ProjectDirectory = projectDirectory;
 		launch.Headless = headless;
+		launch.NoGpu = noGpu;
 		launch.WaitTimeout = m_Specification.LaunchTimeout;
 		launch.SessionDirectory = m_Connection.GetOptions().SessionDirectory;
+		if (m_Specification.LaunchIdleTimeout.count() > 0)
+			launch.IdleTimeout = m_Specification.LaunchIdleTimeout;
 
 		EditorLaunchResult launched = LaunchEditor(launch);
-		if (launched.EditorProcess)
-			m_LaunchedEditors.push_back(std::move(launched.EditorProcess));
 		if (!launched.Success)
 			return MakeToolError(launched.Error);
-
 		if (!m_Connection.ConnectToSession(launched.Session))
-			return MakeToolError(fmt::format("The editor started but connecting to it failed: {}", m_Connection.GetLastError()));
+		{
+			const std::string connectError = m_Connection.GetLastError();
+			launched.EditorProcess->Terminate();
+			return MakeToolError(fmt::format("The editor started, but connecting to it failed (it was stopped): {}", connectError));
+		}
+		m_LaunchedEditors.push_back(LaunchedEditor { std::move(launched.EditorProcess), headless, noGpu });
 
 		RefreshEditorState();
 		return MakeToolResult(RpcResult::Success(nlohmann::json {
@@ -557,9 +598,28 @@ namespace Strata::CLI
 		Send(JsonRpc::MakeNotification("notifications/tools/list_changed", nullptr));
 	}
 
+	std::optional<EditorSessionInfo> McpServer::FindReusableEditor(bool headless, bool noGpu)
+	{
+		ReapLaunchedEditors();
+		const std::optional<std::filesystem::path> sessionDirectory = m_Connection.GetSessionDirectory();
+		if (!sessionDirectory)
+			return std::nullopt;
+
+		// Newest first. The session is read again: the editor may have opened a project since it was started.
+		for (auto it = m_LaunchedEditors.rbegin(); it != m_LaunchedEditors.rend(); ++it)
+		{
+			if (it->Headless != headless || it->NoGpu != noGpu)
+				continue;
+			std::optional<EditorSessionInfo> session = EditorSession::ReadSessionFile(EditorSession::GetSessionFilePath(*sessionDirectory, it->EditorProcess->GetProcessID()));
+			if (session && session->ProjectPath.empty() && EditorSession::IsSessionProcessRunning(*session))
+				return session;
+		}
+		return std::nullopt;
+	}
+
 	void McpServer::ReapLaunchedEditors()
 	{
-		std::erase_if(m_LaunchedEditors, [](const Scope<Process>& process) { return !process->IsRunning(); });
+		std::erase_if(m_LaunchedEditors, [](const LaunchedEditor& editor) { return !editor.EditorProcess->IsRunning(); });
 	}
 
 	void McpServer::Send(const nlohmann::json& message)

@@ -97,7 +97,7 @@ if(WIN32)
 endif()
 
 add_test(NAME StrataTests.Core
-	COMMAND StrataTests --test-suite-exclude=GPU* --no-intro=true
+	COMMAND StrataTests --test-suite-exclude=GPU*,EndToEnd* --no-intro=true
 	WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
 
 add_test(NAME StrataTests.GPU
@@ -129,7 +129,7 @@ if(TARGET StrataEditor)
 	set(STRATA_SMOKE_CAPTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/SmokeCaptures")
 	configure_file("${CMAKE_CURRENT_SOURCE_DIR}/Editor/SmokeCommands.json.in" "${CMAKE_CURRENT_BINARY_DIR}/SmokeCommands.json" @ONLY)
 	add_test(NAME StrataEditor.Smoke
-		COMMAND StrataEditor --frames 120 --windowed --commands "${CMAKE_CURRENT_BINARY_DIR}/SmokeCommands.json"
+		COMMAND StrataEditor --no-automation --frames 120 --windowed --commands "${CMAKE_CURRENT_BINARY_DIR}/SmokeCommands.json"
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
 	set_tests_properties(StrataEditor.Smoke PROPERTIES LABELS "gpu" FIXTURES_SETUP StrataEditorSmokeCaptures)
 	# The smoke script's capture shows the scene (grid, floor, crate), not a black or empty image.
@@ -138,27 +138,49 @@ if(TARGET StrataEditor)
 
 	# A failing command must fail the process, so scripted runs notice.
 	add_test(NAME StrataEditor.FailingScript
-		COMMAND StrataEditor --no-gpu --frames 2 --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/FailingCommands.json"
+		COMMAND StrataEditor --no-gpu --no-automation --frames 2 --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/FailingCommands.json"
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
 	set_tests_properties(StrataEditor.FailingScript PROPERTIES WILL_FAIL TRUE)
 
 	# Commands that take frames (editor.wait) hold the script; the script must finish within the --frames budget...
 	add_test(NAME StrataEditor.WaitingScript
-		COMMAND StrataEditor --no-gpu --frames 10 --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/WaitCommands.json"
+		COMMAND StrataEditor --no-gpu --no-automation --frames 10 --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/WaitCommands.json"
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
 	# ...or the run fails.
 	add_test(NAME StrataEditor.UnfinishedScript
-		COMMAND StrataEditor --no-gpu --frames 5 --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/UnfinishedCommands.json"
+		COMMAND StrataEditor --no-gpu --no-automation --frames 5 --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/UnfinishedCommands.json"
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
 	set_tests_properties(StrataEditor.UnfinishedScript PROPERTIES WILL_FAIL TRUE)
 
 	# Viewport captures need a GPU: without one the command fails with a clear error and the run with exit code 1.
 	add_test(NAME StrataEditor.CaptureWithoutGPU
 		COMMAND "${CMAKE_COMMAND}"
-			"-DCOMMAND=$<TARGET_FILE:StrataEditor>;--no-gpu;--frames;2;--commands;${CMAKE_CURRENT_SOURCE_DIR}/Editor/NoGpuCaptureCommands.json"
+			"-DCOMMAND=$<TARGET_FILE:StrataEditor>;--no-gpu;--no-automation;--frames;2;--commands;${CMAKE_CURRENT_SOURCE_DIR}/Editor/NoGpuCaptureCommands.json"
 			"-DEXPECTED_OUTPUT=viewport[.]capture failed: viewport[.]capture needs a GPU"
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake"
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
+	# Without --frames a headless editor runs until editor.quit (here at the end of its script); a quit that does not
+	# close it runs into the timeout.
+	add_test(NAME StrataEditor.QuitScript
+		COMMAND StrataEditor --no-gpu --no-automation --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/QuitCommands.json"
+		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
+	set_tests_properties(StrataEditor.QuitScript PROPERTIES TIMEOUT 60)
+	# A quit before the script's last command fails the run: the rest of the script never ran.
+	add_test(NAME StrataEditor.QuitBeforeScriptEnds
+		COMMAND StrataEditor --no-gpu --no-automation --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/QuitEarlyCommands.json"
+		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
+	set_tests_properties(StrataEditor.QuitBeforeScriptEnds PROPERTIES WILL_FAIL TRUE TIMEOUT 60)
+endif()
+
+# Editor automation end to end (no GPU): the "EndToEnd" suites start the real editor headless and drive it with StrataCLI
+# and its MCP server, the way an AI agent does.
+if(TARGET StrataEditor AND TARGET StrataCLI)
+	add_test(NAME StrataEditor.Automation
+		COMMAND StrataTests --test-suite=EndToEnd* --no-intro=true
+		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
+	set_tests_properties(StrataEditor.Automation PROPERTIES
+		ENVIRONMENT "STRATA_TEST_EDITOR_PATH=$<TARGET_FILE:StrataEditor>;STRATA_TEST_CLI_PATH=$<TARGET_FILE:StrataCLI>"
+		TIMEOUT 600)
 endif()
 
 # Editor export to a playable game, then the exported runtime: headless without a GPU (--no-gpu, --headless), then in a
@@ -171,7 +193,7 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	set_tests_properties(StrataExport.Clean PROPERTIES FIXTURES_SETUP StrataExportClean)
 
 	add_test(NAME StrataEditor.Export
-		COMMAND StrataEditor --no-gpu --frames 2 --commands "${CMAKE_CURRENT_BINARY_DIR}/ExportCommands.json"
+		COMMAND StrataEditor --no-gpu --no-automation --frames 2 --commands "${CMAKE_CURRENT_BINARY_DIR}/ExportCommands.json"
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
 	set_tests_properties(StrataEditor.Export PROPERTIES FIXTURES_REQUIRED StrataExportClean FIXTURES_SETUP StrataExportedGame)
 

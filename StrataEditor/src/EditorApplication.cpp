@@ -6,6 +6,9 @@
 namespace Strata
 {
 
+	constexpr uint32_t c_HeadlessFrameRate = 60;
+	constexpr int64_t c_MaxIdleTimeoutSeconds = 7 * 24 * 60 * 60; // A week
+
 	class EditorApplication : public Application
 	{
 	public:
@@ -35,6 +38,30 @@ namespace Strata
 		if (std::optional<std::string> commands = commandLine.GetOption("--commands"))
 			options.CommandScript = FileSystem::FromUTF8(*commands);
 
+		// Automation (StrataCLI, MCP): on by default, on a free loopback port unless --automation-port picks one.
+		options.EnableAutomation = !commandLine.HasFlag("--no-automation");
+		if (commandLine.HasFlag("--automation-port"))
+		{
+			const std::optional<int64_t> port = commandLine.GetIntOption("--automation-port");
+			if (!port || *port < 0 || *port > UINT16_MAX)
+			{
+				ST_ERROR("--automation-port expects a port number from 0 to 65535 (0 picks a free port)");
+				return nullptr;
+			}
+			options.AutomationPort = static_cast<uint16_t>(*port);
+		}
+		// Editors started by tools close themselves once no client has been connected for this long.
+		if (commandLine.HasFlag("--idle-timeout"))
+		{
+			const std::optional<int64_t> seconds = commandLine.GetIntOption("--idle-timeout");
+			if (!seconds || *seconds < 0 || *seconds > c_MaxIdleTimeoutSeconds)
+			{
+				ST_ERROR("--idle-timeout expects a number of seconds from 0 to {} (0: never)", c_MaxIdleTimeoutSeconds);
+				return nullptr;
+			}
+			options.IdleTimeout = std::chrono::seconds(*seconds);
+		}
+
 		ApplicationSpecification specification;
 		specification.Name = "Strata Editor";
 		specification.CommandLineArgs = commandLine;
@@ -42,6 +69,10 @@ namespace Strata
 		specification.EnableRenderer = !commandLine.HasFlag("--no-gpu");
 		specification.Headless = commandLine.HasFlag("--headless") || !specification.EnableRenderer;
 		specification.EnableImGui = !specification.Headless;
+		// Without a window there is no vsync: a headless editor waiting for automation would otherwise spin a CPU core,
+		// and playing scenes advance about as they would in a 60 Hz game.
+		if (specification.Headless)
+			specification.MaxFrameRate = c_HeadlessFrameRate;
 		// Scripted runs (a fixed number of frames) never overwrite the user's saved panel layout.
 		if (!commandLine.GetIntOption("--frames"))
 			specification.ImGuiLayoutFile = userData / "EditorLayout.ini";

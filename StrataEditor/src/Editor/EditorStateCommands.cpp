@@ -3,6 +3,8 @@
 #include "Editor/EditorContext.h"
 
 #include <Strata/Core/Log.h>
+#include <Strata/Core/Platform.h>
+#include <Strata/Core/Version.h>
 #include <Strata/Reflection/PropertyJson.h>
 
 #include <limits>
@@ -56,13 +58,13 @@ namespace Strata
 			{
 				auto entities = parameters.find("entities");
 				if (entities == parameters.end() || !entities->is_array())
-					return EditorCommandResult::Fail("Parameter 'entities' must be an array of entity IDs");
+					return EditorCommandResult::InvalidParameters("Parameter 'entities' must be an array of entity IDs");
 				std::vector<UUID> selection;
 				for (const nlohmann::json& element : *entities)
 				{
 					std::optional<UUID> id = UUIDFromJson(element);
 					if (!id || !context.GetActiveScene()->GetEntityByUUID(*id))
-						return EditorCommandResult::Fail(fmt::format("No entity {} in the scene", element.dump()));
+						return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'entities': no entity {} in the scene", element.dump()));
 					selection.push_back(*id);
 				}
 				context.SetSelection(std::move(selection));
@@ -97,6 +99,63 @@ namespace Strata
 			[](EditorContext& context, const nlohmann::json&)
 			{
 				return EditorCommandResult::Ok(DescribeHistory(context));
+			} });
+
+		////////////////////////////////////////////////////////////////////////////////
+		// Editor
+		////////////////////////////////////////////////////////////////////////////////
+
+		registry.Register({ "editor.status",
+			"Overview of the editor: engine version, open project, scene (name, asset, unsaved changes, entity count), play state, selection, "
+			"undo history, and sections such as automation (port, clients, pending requests and commands). Start here to orient yourself.",
+			ObjectSchema({}),
+			[](EditorContext& context, const nlohmann::json&)
+			{
+				Entity primary = context.GetPrimarySelection();
+				const UndoStack& undo = context.GetUndoStack();
+				nlohmann::json status = {
+					{ "engineVersion", c_EngineVersion },
+					{ "platform", std::string(Platform::GetName()) },
+					{ "project", DescribeProject(context) },
+					{ "scene", {
+						{ "name", context.GetEditScene()->GetName() },
+						{ "scene", context.GetSceneHandle().IsValid() ? UUIDToJson(context.GetSceneHandle()) : nlohmann::json(nullptr) },
+						{ "modified", context.IsSceneModified() },
+						{ "entityCount", context.GetActiveScene()->GetEntityCount() } } },
+					{ "play", DescribePlayState(context) },
+					{ "selection", {
+						{ "count", context.GetSelection().size() },
+						{ "primary", primary ? UUIDToJson(primary.GetUUID()) : nlohmann::json(nullptr) } } },
+					{ "undo", {
+						{ "position", undo.GetPosition() },
+						{ "count", undo.GetHistory().size() },
+						{ "undo", undo.GetUndoName() },
+						{ "redo", undo.GetRedoName() } } } };
+				// Sections of other editor parts; they never replace the built-in ones.
+				for (const auto& [section, provider] : context.GetStatusProviders())
+					status.emplace(section, provider());
+				return EditorCommandResult::Ok(std::move(status));
+			} });
+
+		registry.Register({ "editor.quit",
+			"Closes the editor after answering (pending commands are cancelled). Fails while the scene has unsaved changes unless force is "
+			"true; save first with scene.save or scene.saveAs.",
+			ObjectSchema({ { "force", BoolSchema("Quit even if the scene has unsaved changes, discarding them (default false)") } }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				CommandArguments arguments(parameters);
+				const bool force = arguments.GetBool("force", false);
+				if (!arguments.IsValid())
+					return arguments.Fail();
+
+				const bool modified = context.IsSceneModified();
+				if (modified && !force)
+				{
+					return EditorCommandResult::Fail(fmt::format("The scene '{}' has unsaved changes: save them (scene.save, or scene.saveAs for a new "
+						"scene) or quit with force: true to discard them", context.GetEditScene()->GetName()));
+				}
+				context.RequestQuit();
+				return EditorCommandResult::Ok({ { "quitting", true }, { "discardedChanges", modified } });
 			} });
 
 		////////////////////////////////////////////////////////////////////////////////

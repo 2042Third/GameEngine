@@ -40,6 +40,9 @@ namespace Strata
 		JobSystemSpecification Jobs;
 		std::optional<uint64_t> MaxFrames; // Close automatically after this many frames (automation, tests)
 		float MaxTimestep = 0.25f;         // Clamp for long frames (breakpoints, loading hitches)
+		// Frames per second the main loop does not exceed (0: unlimited). Headless applications have no vsync to pace
+		// them and would otherwise keep a CPU core busy.
+		uint32_t MaxFrameRate = 0;
 	};
 
 	class Application

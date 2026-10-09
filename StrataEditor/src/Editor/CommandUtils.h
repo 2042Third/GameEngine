@@ -54,6 +54,9 @@ namespace Strata
 		// {"id", "name", "parent", "children": [...], "components": {...}}
 		nlohmann::json DescribeEntity(Entity entity);
 
+		// {"open": false} without a project, else {"open": true, "name", "directory", "assetDirectory", "startScene"}.
+		nlohmann::json DescribeProject(const EditorContext& context);
+
 		// Applies component values (as in scene files) to the entity, adding missing components. Validated like the
 		// inspector: unknown components or properties, read-only properties, invalid values and references to missing
 		// assets or entities fail (values before the failure may have been applied: roll back).

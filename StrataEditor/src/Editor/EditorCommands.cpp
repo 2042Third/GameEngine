@@ -11,6 +11,20 @@
 namespace Strata
 {
 
+	const char* EditorCommandErrorToString(EditorCommandError error)
+	{
+		switch (error)
+		{
+			case EditorCommandError::None:              return "None";
+			case EditorCommandError::UnknownCommand:    return "UnknownCommand";
+			case EditorCommandError::InvalidParameters: return "InvalidParameters";
+			case EditorCommandError::Failed:            return "Failed";
+			case EditorCommandError::Cancelled:         return "Cancelled";
+			case EditorCommandError::Internal:          return "Internal";
+		}
+		return "Unknown";
+	}
+
 	EditorCommandRegistry::EditorCommandRegistry()
 	{
 		RegisterSceneCommands(*this);
@@ -33,6 +47,7 @@ namespace Strata
 		ST_ASSERT(!command.Name.empty() && command.Handler, "Editor commands need a name and a handler");
 		std::string name = command.Name;
 		m_Commands.insert_or_assign(std::move(name), std::move(command));
+		m_Revision++;
 	}
 
 	const EditorCommand* EditorCommandRegistry::Find(std::string_view name) const
@@ -54,9 +69,9 @@ namespace Strata
 	{
 		const EditorCommand* command = Find(name);
 		if (!command)
-			return EditorCommandResult::Fail(fmt::format("Unknown command '{}'", name));
+			return EditorCommandResult::Fail(fmt::format("Unknown command '{}' (editor.commands lists them)", name), EditorCommandError::UnknownCommand);
 		if (!parameters.is_object() && !parameters.is_null())
-			return EditorCommandResult::Fail("Command parameters must be a JSON object");
+			return EditorCommandResult::InvalidParameters("Command parameters must be a JSON object");
 
 		const nlohmann::json& arguments = parameters.is_null() ? nlohmann::json::object() : parameters;
 		try
@@ -71,7 +86,7 @@ namespace Strata
 					std::string expected;
 					for (const auto& [parameter, schema] : declared->items())
 						expected += (expected.empty() ? "" : ", ") + parameter;
-					return EditorCommandResult::Fail(fmt::format("Unknown parameter '{}' for {} (parameters: {})", key, command->Name, expected.empty() ? "none" : expected));
+					return EditorCommandResult::InvalidParameters(fmt::format("Unknown parameter '{}' for {} (parameters: {})", key, command->Name, expected.empty() ? "none" : expected));
 				}
 			}
 			if (const auto required = command->Parameters.find("required"); required != command->Parameters.end() && required->is_array())
@@ -79,7 +94,7 @@ namespace Strata
 				for (const nlohmann::json& parameter : *required)
 				{
 					if (parameter.is_string() && !arguments.contains(parameter.get<std::string>()))
-						return EditorCommandResult::Fail(fmt::format("Missing parameter '{}' for {}", parameter.get<std::string>(), command->Name));
+						return EditorCommandResult::InvalidParameters(fmt::format("Missing parameter '{}' for {}", parameter.get<std::string>(), command->Name));
 				}
 			}
 			return command->Handler(context, arguments);
@@ -87,7 +102,7 @@ namespace Strata
 		catch (const std::exception& exception)
 		{
 			// Engine code does not throw; this guards third-party code (JSON access) used by handlers.
-			return EditorCommandResult::Fail(fmt::format("Command '{}' failed: {}", name, exception.what()));
+			return EditorCommandResult::Fail(fmt::format("Command '{}' failed: {}", name, exception.what()), EditorCommandError::Internal);
 		}
 	}
 

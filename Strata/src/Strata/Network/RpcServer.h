@@ -169,10 +169,17 @@ namespace Strata
 		// Starts listening (stopping a previous session first). Returns false for a non-loopback bind address, an
 		// empty token, or an unavailable address/port.
 		bool Start(const RpcServerSpecification& specification);
-		// Closes every connection and joins the network thread. Queued requests are discarded; pending responders
-		// become inert.
-		void Stop();
+		// Closes every connection and joins the network thread; pending responders become inert. Without a grace
+		// period, queued requests are discarded and unsent responses are lost. With one, the server first stops
+		// accepting connections and reading requests, answers the queued requests (which no ProcessRequests call will
+		// handle any more) with Cancelled errors, and keeps delivering responses, including ones responders produce
+		// meanwhile on other threads, until every client has received its answers and closed, or the grace period ends.
+		// Use it to make sure a final answer (e.g. to a quit request) reaches its client. Blocks for at most the grace
+		// period plus the time a forced stop takes.
+		void Stop(std::chrono::milliseconds gracePeriod = std::chrono::milliseconds(0));
 		bool IsRunning() const;
+		// Why the last Start failed (empty after a successful one). Owning thread only.
+		const std::string& GetLastError() const;
 		uint16_t GetPort() const;
 		uint32_t GetClientCount() const;
 
@@ -180,6 +187,10 @@ namespace Strata
 		// duplicate name. A missing or non-object ParamsSchema is replaced by an empty object schema.
 		bool RegisterMethod(RpcMethodInfo info, RpcHandler handler);
 		bool RegisterMethod(RpcMethodInfo info, RpcSyncHandler handler);
+		// Registers a method, or replaces the description, schema and handler of one with the same name in a single step,
+		// so a request arriving meanwhile never finds the method missing. Waits for a running handler of the replaced
+		// method like UnregisterMethod. Returns false for an invalid name or a missing handler.
+		bool ReplaceMethod(RpcMethodInfo info, RpcHandler handler);
 		// Removes a method. If its handler is running on the owning thread, waits for it to return, so the caller
 		// may destroy whatever the handler captured afterwards (calling it from inside a handler does not wait).
 		void UnregisterMethod(const std::string& name);

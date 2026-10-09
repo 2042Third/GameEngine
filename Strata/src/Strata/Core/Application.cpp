@@ -167,6 +167,7 @@ namespace Strata
 
 		OnInit();
 
+		FramePacer pacer(m_Specification.MaxFrameRate);
 		m_LastFrameTime = Time::GetTime();
 		while (m_Running)
 		{
@@ -195,6 +196,8 @@ namespace Strata
 				if (m_Specification.MaxFrames && m_FrameCount >= *m_Specification.MaxFrames)
 					m_Running = false;
 			}
+			if (m_Running)
+				pacer.WaitForNextFrame();
 		}
 		ProcessBackBufferCaptures(false);
 

@@ -254,6 +254,88 @@ TEST_SUITE("Core.Platform")
 		CHECK(exitCode.ExitCode == 7);
 	}
 
+	TEST_CASE("Process captures stdout and stderr separately on request")
+	{
+		ProcessSpecification specification = HelperProcess({ "--strata-test-helper=split-output" });
+		specification.Output = ProcessOutputMode::CaptureSeparate;
+		Process::RunResult separate = Process::Run(specification);
+		REQUIRE_MESSAGE(separate.Started, separate.Error);
+		CHECK(separate.ExitCode == 0);
+		CHECK(separate.Output.find("to-stdout") != std::string::npos);
+		CHECK(separate.Output.find("to-stderr") == std::string::npos);
+		CHECK(separate.ErrorOutput.find("to-stderr") != std::string::npos);
+		CHECK(separate.ErrorOutput.find("to-stdout") == std::string::npos);
+
+		// Merged by default.
+		Process::RunResult merged = Process::Run(HelperProcess({ "--strata-test-helper=split-output" }));
+		CHECK(merged.Output.find("to-stdout") != std::string::npos);
+		CHECK(merged.Output.find("to-stderr") != std::string::npos);
+		CHECK(merged.ErrorOutput.empty());
+	}
+
+	TEST_CASE("Process pipes input to the child")
+	{
+		ProcessSpecification specification = HelperProcess({ "--strata-test-helper=cat" });
+		specification.PipeInput = true;
+		specification.Output = ProcessOutputMode::CaptureSeparate;
+		Process process;
+		REQUIRE_MESSAGE(process.Start(specification), process.GetLastError());
+
+		// A conversation: the child answers each line while its input stays open.
+		std::string output;
+		auto waitForOutput = [&](size_t size)
+		{
+			return Tests::WaitUntil([&]()
+			{
+				output += process.TakeOutput();
+				return output.size() >= size;
+			}, std::chrono::milliseconds(10000));
+		};
+		REQUIRE(process.WriteInput("first line\n"));
+		REQUIRE(waitForOutput(11));
+		CHECK(output == "first line\n");
+
+		// More than a pipe buffer holds: writing blocks until the child has read enough.
+		const std::string large = std::string(1024 * 1024, 'x') + "\n";
+		REQUIRE(process.WriteInput(large));
+		process.CloseInput();
+		CHECK(process.Wait(std::chrono::milliseconds(10000)) == 0);
+		REQUIRE(waitForOutput(11 + large.size()));
+		CHECK(output.size() == 11 + large.size());
+		CHECK(output.substr(11) == large);
+		CHECK_FALSE(process.WriteInput("after the input was closed\n"));
+	}
+
+	TEST_CASE("Writing to a child that has exited fails without ending this process")
+	{
+		ProcessSpecification specification = HelperProcess({ "--strata-test-helper=exit-code", "0" });
+		specification.PipeInput = true;
+		specification.Output = ProcessOutputMode::Discard;
+		Process process;
+		REQUIRE_MESSAGE(process.Start(specification), process.GetLastError());
+		REQUIRE(process.Wait(std::chrono::milliseconds(10000)) == 0);
+		// The child never read its input; with its end closed, the write fails (on POSIX without a fatal SIGPIPE).
+		CHECK_FALSE(process.WriteInput(std::string(256 * 1024, 'x')));
+		CHECK_FALSE(process.WriteInput("again"));
+	}
+
+	TEST_CASE("Piped input needs captured or discarded output")
+	{
+		ProcessSpecification specification = HelperProcess({ "--strata-test-helper=exit-code", "0" });
+		specification.PipeInput = true;
+		specification.Output = ProcessOutputMode::Inherit;
+		Process process;
+		CHECK_FALSE(process.Start(specification));
+		CHECK(process.GetLastError().find("Piped input") != std::string::npos);
+
+		// Without piped input, there is nothing to write to.
+		Process plain;
+		REQUIRE(plain.Start(HelperProcess({ "--strata-test-helper=exit-code", "0" })));
+		CHECK_FALSE(plain.WriteInput("x"));
+		plain.CloseInput();
+		CHECK(plain.Wait(std::chrono::milliseconds(10000)) == 0);
+	}
+
 	TEST_CASE("Process honors the working directory")
 	{
 		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("ProcessCwd");

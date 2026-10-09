@@ -9,7 +9,11 @@
 #include <Strata/Project/Project.h>
 #include <Strata/Scene/Scene.h>
 
+#include <nlohmann/json.hpp>
+
 #include <filesystem>
+#include <functional>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -139,6 +143,21 @@ namespace Strata
 		// Once per frame: asset hot reload and loading, then the scene update (simulation while playing), then finished
 		// viewport picks.
 		void Update(Timestep timestep);
+
+		//////////////////////////////////////////////////////////////////////////
+		// Editor services
+		//////////////////////////////////////////////////////////////////////////
+
+		// Asks the editor to close after the current frame (editor.quit); the application layer polls the request.
+		void RequestQuit() { m_QuitRequested = true; }
+		bool IsQuitRequested() const { return m_QuitRequested; }
+
+		// Extra sections of editor.status, reported by the parts of the editor that own the information (e.g.
+		// "automation" by EditorAutomation). Providers run on the main thread whenever editor.status runs. A null provider
+		// removes the section; a section named like one of the built-in ones is not reported.
+		using StatusProvider = std::function<nlohmann::json()>;
+		void SetStatusProvider(const std::string& section, StatusProvider provider);
+		const std::map<std::string, StatusProvider>& GetStatusProviders() const { return m_StatusProviders; }
 	private:
 		bool StartRuntime(SceneRuntimeMode mode, std::string* outError);
 		void ResetScene(Ref<Scene> scene, AssetHandle handle);
@@ -162,6 +181,9 @@ namespace Strata
 		UndoStack m_UndoStack;
 		Ref<AssetManagerBase> m_BuiltinAssets; // Active while no project is open
 		EditorViewport m_Viewport;
+
+		bool m_QuitRequested = false;
+		std::map<std::string, StatusProvider> m_StatusProviders;
 	};
 
 }

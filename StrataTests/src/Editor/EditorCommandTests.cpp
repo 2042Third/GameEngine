@@ -73,6 +73,74 @@ TEST_SUITE("Editor.Commands")
 		CHECK_FALSE(harness.Commands.Execute(harness.Context, "scene.info", nlohmann::json::array()).Success);
 	}
 
+	TEST_CASE("editor.status gives an overview with the sections other editor parts provide")
+	{
+		CommandHarness harness;
+		nlohmann::json status = harness.Run("editor.status");
+		CHECK_FALSE(status["engineVersion"].get<std::string>().empty());
+		CHECK_FALSE(status["platform"].get<std::string>().empty());
+		CHECK(status["project"]["open"] == false);
+		CHECK(status["scene"]["modified"] == false);
+		CHECK(status["scene"]["scene"].is_null());
+		CHECK(status["scene"]["entityCount"] == 0);
+		CHECK(status["play"]["state"] == "Edit");
+		CHECK(status["selection"]["count"] == 0);
+		CHECK(status["selection"]["primary"].is_null());
+		CHECK(status["undo"]["position"] == 0);
+
+		const std::string entity = harness.Run("entity.create", { { "name", "Player" } })["id"].get<std::string>();
+		harness.Run("selection.set", { { "entities", { entity } } });
+		harness.Context.SetStatusProvider("automation", []() { return nlohmann::json { { "port", 1234 } }; });
+		// A provider cannot replace a built-in section.
+		harness.Context.SetStatusProvider("scene", []() { return nlohmann::json("replaced"); });
+		status = harness.Run("editor.status");
+		CHECK(status["scene"]["modified"] == true);
+		CHECK(status["scene"]["entityCount"] == 1);
+		CHECK(status["selection"]["count"] == 1);
+		CHECK(status["selection"]["primary"] == entity);
+		CHECK(status["undo"]["position"] == 1);
+		CHECK(status["undo"]["count"] == 1);
+		CHECK(status["undo"]["undo"] == "Create Entity");
+		CHECK(status["automation"]["port"] == 1234);
+
+		harness.Run("play.start");
+		CHECK(harness.Run("editor.status")["play"]["state"] == "Play");
+		harness.Run("play.stop");
+
+		harness.Context.SetStatusProvider("automation", nullptr);
+		harness.Context.SetStatusProvider("scene", nullptr);
+		CHECK_FALSE(harness.Run("editor.status").contains("automation"));
+
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("EditorStatusProject");
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "StatusGame" } });
+		const nlohmann::json project = harness.Run("editor.status")["project"];
+		CHECK(project == harness.Run("project.info"));
+		CHECK(project["name"] == "StatusGame");
+	}
+
+	TEST_CASE("editor.quit keeps unsaved changes unless forced")
+	{
+		CommandHarness unchanged;
+		const nlohmann::json quit = unchanged.Run("editor.quit");
+		CHECK(quit["quitting"] == true);
+		CHECK(quit["discardedChanges"] == false);
+		CHECK(unchanged.Context.IsQuitRequested());
+
+		CommandHarness modified;
+		modified.Run("entity.create", { { "name", "Unsaved" } });
+		const EditorCommandResult refused = modified.Commands.Execute(modified.Context, "editor.quit");
+		CHECK_FALSE(refused.Success);
+		CHECK(refused.ErrorKind == EditorCommandError::Failed);
+		CHECK(refused.Error.find("unsaved changes") != std::string::npos);
+		CHECK(refused.Error.find("force") != std::string::npos);
+		CHECK_FALSE(modified.Context.IsQuitRequested());
+		CHECK(modified.Commands.Execute(modified.Context, "editor.quit", { { "force", "yes" } }).ErrorKind == EditorCommandError::InvalidParameters);
+
+		const nlohmann::json forced = modified.Run("editor.quit", { { "force", true } });
+		CHECK(forced["discardedChanges"] == true);
+		CHECK(modified.Context.IsQuitRequested());
+	}
+
 	TEST_CASE("Entities are created, edited and deleted with undo")
 	{
 		CommandHarness harness;

@@ -11,8 +11,13 @@
 namespace Strata
 {
 
+	namespace
+	{
+		constexpr const char* c_EditorStatusSection = "editor";
+	}
+
 	EditorLayer::EditorLayer(const EditorOptions& options)
-		: Layer("EditorLayer"), m_Options(options), m_ShowImGuiDemo(options.ShowImGuiDemo)
+		: Layer("EditorLayer"), m_Options(options), m_Automation(m_Context, m_Commands, m_CommandRunner), m_ShowImGuiDemo(options.ShowImGuiDemo)
 	{
 	}
 
@@ -30,6 +35,21 @@ namespace Strata
 			if (!m_Context.OpenProject(m_Options.ProjectPath, &error))
 				ST_ERROR("Could not open the project '{}': {}", FileSystem::ToUTF8(m_Options.ProjectPath), error);
 		}
+
+		m_Context.SetStatusProvider(c_EditorStatusSection, [this]()
+		{
+			const Application& application = Application::Get();
+			return nlohmann::json {
+				{ "headless", m_Options.Headless },
+				{ "graphicsDevice", application.GetGraphicsDevice() != nullptr },
+				{ "frame", application.GetFrameCount() },
+				{ "maxFrames", m_Options.MaxFrames ? nlohmann::json(*m_Options.MaxFrames) : nlohmann::json(nullptr) } };
+		});
+		if (m_Options.EnableAutomation)
+			StartAutomation();
+		else if (m_Options.Headless && !m_Options.MaxFrames)
+			ST_WARN("Running headless without automation or --frames: the editor runs until it is stopped with a signal (Ctrl+C)");
+
 		if (!m_Options.CommandScript.empty())
 		{
 			std::string error;
@@ -44,6 +64,26 @@ namespace Strata
 				ST_ERROR("Command script: {}", error);
 				Application::Get().SetExitCode(1);
 			}
+		}
+	}
+
+	void EditorLayer::StartAutomation()
+	{
+		EditorAutomationSpecification specification;
+		specification.Port = m_Options.AutomationPort;
+		specification.Headless = m_Options.Headless;
+		specification.IdleTimeout = m_Options.IdleTimeout;
+		std::string error;
+		if (m_Automation.Start(specification, &error))
+			return;
+
+		ST_ERROR("Automation is unavailable: {}", error);
+		// Nothing could reach a headless editor that runs until it is told to quit.
+		if (m_Options.Headless && !m_Options.MaxFrames)
+		{
+			ST_ERROR("A headless editor without --frames needs automation; exiting");
+			Application::Get().SetExitCode(1);
+			Application::Get().Close();
 		}
 	}
 
@@ -66,10 +106,13 @@ namespace Strata
 
 	void EditorLayer::OnDetach()
 	{
-		// Before the project closes: completions may still look at the editor state.
+		// Before the project closes: completions may still look at the editor state. Automation stops afterwards, so the
+		// clients of cancelled commands still get their answers.
 		m_CommandRunner.CancelAll("The editor is closing");
 		if (!m_Options.Headless)
 			m_Viewport.Reset(m_Context);
+		m_Automation.Stop();
+		m_Context.SetStatusProvider(c_EditorStatusSection, nullptr);
 		m_Context.CloseProject();
 		FileDialogs::Shutdown();
 	}
@@ -78,10 +121,31 @@ namespace Strata
 	{
 		m_Context.Update(timestep);
 		m_CommandRunner.Update(m_Context);
+		m_Automation.Update();
 		UpdateCommandScript();
 		UpdateWindowTitle();
 
 		Application& application = Application::Get();
+		// editor.quit answered already (it checked for unsaved changes); this frame is the last one.
+		if (m_Context.IsQuitRequested() && application.IsRunning())
+		{
+			ST_INFO("Closing the editor (editor.quit)");
+			// The rest of the command script will not run: a scripted run (CI, automation) must not look successful.
+			if (m_CommandScript)
+			{
+				ST_ERROR("The command script did not finish before editor.quit ({} of {} commands done)", m_CommandScript->GetCompletedCount(),
+					m_CommandScript->GetStepCount());
+				application.SetExitCode(1);
+			}
+			application.Close();
+		}
+		// Started for a tool that has gone away (--idle-timeout): nobody is left to quit it.
+		if (m_Automation.HasIdledOut() && application.IsRunning())
+		{
+			ST_WARN("No automation client for {} s (--idle-timeout): closing the editor{}", m_Options.IdleTimeout.count(),
+				m_Context.IsSceneModified() ? " and discarding unsaved scene changes" : "");
+			application.Close();
+		}
 		const bool lastFrame = m_Options.MaxFrames && application.GetFrameCount() + 1 == *m_Options.MaxFrames;
 		if (lastFrame && m_CommandScript)
 		{
@@ -459,6 +523,22 @@ namespace Strata
 		ImGui::TextDisabled("%s", SceneStateToString(m_Context.GetSceneState()));
 		ImGui::SameLine();
 		ImGui::TextDisabled("|  %.1f FPS", ImGui::GetIO().Framerate);
+		ImGui::SameLine();
+		if (m_Automation.IsRunning())
+		{
+			const uint32_t clients = m_Automation.GetClientCount();
+			ImGui::TextDisabled("|  Automation: port %u, %u %s", static_cast<unsigned>(m_Automation.GetPort()), clients, clients == 1 ? "client" : "clients");
+			if (ImGui::IsItemHovered())
+			{
+				ImGui::SetTooltip("Tools and AI agents control this editor through StrataCLI (or its MCP server, StrataCLI mcp),\n"
+					"which finds it through its session file.\n%zu pending requests, %llu answered",
+					m_Automation.GetPendingRequestCount(), static_cast<unsigned long long>(m_Automation.GetCompletedRequestCount()));
+			}
+		}
+		else
+		{
+			ImGui::TextDisabled("|  Automation off");
+		}
 		if (EditorAssetManager* assets = m_Context.GetAssetManager())
 		{
 			const AssetManagerStats stats = assets->GetStats();

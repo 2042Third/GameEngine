@@ -400,4 +400,16 @@ namespace Strata
 		m_Viewport.UpdatePicking(*this);
 	}
 
+	////////////////////////////////////////////////////////////////////////////////
+	// Editor services
+	////////////////////////////////////////////////////////////////////////////////
+
+	void EditorContext::SetStatusProvider(const std::string& section, StatusProvider provider)
+	{
+		if (provider)
+			m_StatusProviders.insert_or_assign(section, std::move(provider));
+		else
+			m_StatusProviders.erase(section);
+	}
+
 }
