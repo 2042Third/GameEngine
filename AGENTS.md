@@ -60,6 +60,10 @@ git submodule update --init --recursive --depth 1
 Configurations: `Debug`, `Release` (optimized, asserts on), `Dist` (shipping; asserts compiled out).
 Binaries land in `build/<preset>/bin/<Config>/`.
 
+Sources are collected with `file(GLOB_RECURSE ... CONFIGURE_DEPENDS)`. **After adding or removing source
+files, re-run the configure step** (`cmake --preset <preset>`): the Visual Studio generator re-globs during
+the build but compiles that build with the stale project, so new files would only appear in the next build.
+
 Requirements: CMake 3.25+, a C++20 compiler (MSVC 19.40+, GCC 13+, Clang 17+/Apple Clang 15+),
 a Vulkan 1.2+ driver. The Vulkan SDK is **not** required to build (headers and the shader compiler
 are vendored), but installing it enables the Khronos validation layers used by Debug builds.
@@ -131,8 +135,13 @@ Conventions:
   `FileSystem::FromUTF8` / `FileSystem::ToUTF8`. Never construct a `path` from a narrow string on
   Windows without these helpers.
 - Never include `<Windows.h>` in headers. Platform code lives in `src/Platform/`. Avoid identifiers
-  that collide with Windows/X11 macros (`near`, `far`, `None`, `CopyFile`, `DeleteFile`,
-  `GetObject`, `CreateWindow`, `LoadImage`, `OPAQUE`, `TRANSPARENT`, `interface`, `small`).
+  that collide with Windows macros (`near`, `far`, `CopyFile`, `DeleteFile`, `GetObject`,
+  `CreateWindow`, `LoadImage`, `OPAQUE`, `TRANSPARENT`, `interface`, `small`). Never include X11
+  headers in engine code: X11 defines `None` as a macro, and Strata uses `None` in scoped enums (Hazel
+  style). Unscoped enums must not use `None` at all.
+- Headers must be self-contained (compile without the precompiled header): include what you use,
+  e.g. `Strata/Core/Assert.h` for `ST_CORE_ASSERT`.
+- Tag components (empty structs) carry no data: use `HasComponent`/`AddComponent`, never `GetComponent`.
 - Prefer clear, verbose code over clever abstractions; comment *why*, not *what*.
 - Profile hot paths with `ST_PROFILE_FUNCTION()` / `ST_PROFILE_SCOPE("Name")`.
 

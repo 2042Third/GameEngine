@@ -17,7 +17,8 @@ endif()
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/CMake")
 
 option(STRATA_BUILD_EDITOR "Build the Strata editor" ON)
-option(STRATA_BUILD_RUNTIME "Build the Strata runtime (game player used for exported games)" ON)
+# Defaults to OFF until the runtime executable lands (StrataRuntime/).
+option(STRATA_BUILD_RUNTIME "Build the Strata runtime (game player used for exported games)" OFF)
 option(STRATA_BUILD_CLI "Build StrataCLI (editor automation client and MCP server)" ON)
 option(STRATA_BUILD_TESTS "Build the Strata test suites" ON)
 option(STRATA_ENABLE_TRACY "Instrument the engine for the Tracy profiler" OFF)

@@ -20,6 +20,10 @@
 #include "Strata/Events/KeyEvent.h"
 #include "Strata/Events/MouseEvent.h"
 
+#include "Strata/Audio/AudioClip.h"
+#include "Strata/Audio/AudioEngine.h"
+#include "Strata/Audio/AudioSource.h"
+
 #include "Strata/Input/Input.h"
 #include "Strata/Input/KeyCodes.h"
 #include "Strata/Input/MouseCodes.h"
