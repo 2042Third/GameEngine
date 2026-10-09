@@ -17,6 +17,10 @@ namespace Strata
 		constexpr uint32_t c_MaxSampleRate = 384000;
 		constexpr ma_uint32 c_ListenerIndex = 0;
 		constexpr float c_MinDirectionLengthSquared = 1e-12f;
+		// AdvanceNullDevice mixes in chunks of this many frames, and at most this much time per call (a longer hitch drops the
+		// backlog, like an output device that underruns).
+		constexpr uint64_t c_NullDeviceChunkFrames = 1024;
+		constexpr double c_MaxNullDeviceAdvance = 1.0;
 
 		// Engine-wide settings, kept while the engine is not initialized so the next Init can apply them.
 		struct AudioEngineSettings
@@ -38,6 +42,8 @@ namespace Strata
 			bool NullDevice = false;
 			uint32_t MaxOneShots = 0;
 			std::vector<Scope<AudioVoice>> OneShots; // Oldest first
+			double PendingNullDeviceFrames = 0.0;    // Fraction of a frame AdvanceNullDevice has not mixed yet
+			std::vector<float> DiscardedFrames;      // Scratch output of AdvanceNullDevice
 		};
 
 		AudioEngineData* s_Data = nullptr;
@@ -388,6 +394,27 @@ namespace Strata
 			return 0;
 		}
 		return frameCount;
+	}
+
+	void AudioEngine::AdvanceNullDevice(float seconds)
+	{
+		ST_PROFILE_FUNCTION();
+
+		if (!s_Data || !s_Data->NullDevice || s_Settings.Paused || !std::isfinite(seconds) || seconds <= 0.0f)
+			return;
+
+		s_Data->PendingNullDeviceFrames += std::min(static_cast<double>(seconds), c_MaxNullDeviceAdvance) * static_cast<double>(GetSampleRate());
+		uint64_t frames = static_cast<uint64_t>(s_Data->PendingNullDeviceFrames);
+		s_Data->PendingNullDeviceFrames -= static_cast<double>(frames);
+
+		s_Data->DiscardedFrames.resize(static_cast<size_t>(c_NullDeviceChunkFrames * GetChannelCount()));
+		while (frames > 0)
+		{
+			const uint64_t chunk = std::min(frames, c_NullDeviceChunkFrames);
+			if (ReadFrames(s_Data->DiscardedFrames.data(), chunk) != chunk)
+				return; // Mixing failed (logged)
+			frames -= chunk;
+		}
 	}
 
 	AudioStats AudioEngine::GetStats()

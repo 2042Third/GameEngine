@@ -242,6 +242,9 @@ namespace Strata
 		for (Layer* layer : m_LayerStack)
 			layer->OnUpdate(timestep);
 
+		// Without an output device nothing pulls the mix: advance it by the frame time, so that sounds still progress and end.
+		if (AudioEngine::IsNullDevice())
+			AudioEngine::AdvanceNullDevice(timestep);
 		AudioEngine::Update();
 		RenderImGui();
 

@@ -15,7 +15,7 @@ namespace Strata
 	struct AudioEngineSpecification
 	{
 		// Mix without an output device. Nothing is played; the mix only advances when it is pulled with
-		// AudioEngine::ReadFrames. For tests, dedicated servers and headless runs.
+		// AudioEngine::ReadFrames or AdvanceNullDevice. For tests, dedicated servers and headless runs.
 		bool NullDevice = false;
 		uint32_t SampleRate = 48000; // Mixing rate in Hz; clips at other rates are resampled per voice
 		uint32_t Channels = 2;       // Output channels (2 = stereo)
@@ -79,6 +79,11 @@ namespace Strata
 		// GetChannelCount() floats. Null device only: with a real device the device pulls the mix itself, and this
 		// returns 0 and logs an error. Returns the number of frames written. While paused, writes silence.
 		static uint64_t ReadFrames(float* interleavedOutput, uint64_t frameCount);
+		// Null device only: mixes and discards the next `seconds` of audio, so that playback advances in real time when nothing
+		// else pulls the mix (the Application calls it every frame while mixing without a device: headless runs and machines
+		// without audio output). Fractions of a frame carry over to the next call; at most one second is mixed per call. Does
+		// nothing with an output device, while paused or while not initialized.
+		static void AdvanceNullDevice(float seconds);
 
 		static AudioStats GetStats();
 	private:

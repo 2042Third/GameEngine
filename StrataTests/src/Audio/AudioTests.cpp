@@ -283,6 +283,43 @@ TEST_SUITE("Audio.Engine")
 		CHECK(source.GetPlaybackPosition() == doctest::Approx(pausedPosition + 0.1f).epsilon(0.1));
 	}
 
+	TEST_CASE("The null device advances playback by the time it is given")
+	{
+		// Without the engine, or with nothing to advance, nothing happens.
+		AudioEngine::AdvanceNullDevice(1.0f);
+
+		ScopedAudioEngine engine;
+		REQUIRE(engine.Initialized);
+		AudioSource source;
+		REQUIRE(source.SetClip(CreateSineClip(0.5f)));
+		source.Play();
+
+		AudioEngine::AdvanceNullDevice(0.2f);
+		CHECK(std::abs(source.GetPlaybackPosition() - 0.2f) < c_PositionTolerance);
+
+		// Fractions of a frame add up over many short frames.
+		for (int frame = 0; frame < 5000; frame++)
+			AudioEngine::AdvanceNullDevice(0.00002f); // 0.96 frames at 48 kHz
+		CHECK(std::abs(source.GetPlaybackPosition() - 0.3f) < c_PositionTolerance);
+
+		// Invalid times and a paused engine leave playback where it is.
+		const float position = source.GetPlaybackPosition();
+		AudioEngine::AdvanceNullDevice(-1.0f);
+		AudioEngine::AdvanceNullDevice(std::numeric_limits<float>::quiet_NaN());
+		AudioEngine::AdvanceNullDevice(std::numeric_limits<float>::infinity());
+		AudioEngine::SetPaused(true);
+		AudioEngine::AdvanceNullDevice(0.1f);
+		CHECK(source.GetPlaybackPosition() == position);
+		AudioEngine::SetPaused(false);
+
+		// Sounds end, so finished one-shots are reclaimed.
+		REQUIRE(AudioEngine::PlayOneShot(CreateSineClip(0.1f)));
+		AudioEngine::AdvanceNullDevice(0.25f);
+		CHECK_FALSE(source.IsPlaying());
+		AudioEngine::Update();
+		CHECK(AudioEngine::GetStats().ActiveOneShots == 0);
+	}
+
 	TEST_CASE("Settings made before Init are applied and Shutdown resets them")
 	{
 		REQUIRE_FALSE(AudioEngine::IsInitialized());
