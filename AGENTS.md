@@ -313,7 +313,7 @@ Building and loading scripts:
   once per frame before the scene. A successful `script.build` loads the module, or reloads it when it changed (hot
   reload while playing; the file watcher is paused during editor builds so the module reloads once). A crash while
   playing stops play mode and logs the class, callback and entity; `play.start` then fails until the module is rebuilt
-  or reloaded. `script.load {path}` runs another module file (tests use in-tree modules this way).
+  (a successful build loads a crashed module again even when it did not change) or reloaded. `script.load {path}` runs another module file (tests use in-tree modules this way).
 - **Exported games:** `project.export` copies the module the editor runs (the loaded one, else the project's built
   one; plus its PDB except in Dist builds or with `includeScriptSymbols: false`) next to the game and names it in the
   `.stgame` manifest (version 2, `"ScriptModule"`; version 1 manifests load without scripts). It refuses projects whose

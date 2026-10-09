@@ -458,7 +458,9 @@ namespace Strata
 			std::error_code error;
 			const std::filesystem::path built = std::filesystem::absolute(result.Module, error).lexically_normal();
 			const bool loaded = m_ScriptEngine->IsModuleLoaded() && m_ScriptEngine->GetModulePath() == built;
-			if (loaded && !result.ModuleChanged)
+			// An unchanged module is loaded again when it crashed: a successful build is the documented way back to a
+			// working module, also when the crash came from data (fields) rather than code.
+			if (loaded && !result.ModuleChanged && !m_ScriptEngine->IsFaulted())
 			{
 				m_LastScriptBuildLoad.Loaded = true;
 			}
