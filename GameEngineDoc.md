@@ -1,24 +1,25 @@
 # AI Game Engine
 
-We're building a production-grade, simple and straight-forward 3D Game Engine for Windows, macOS and Linux (Ubuntu 24+). This is professional-grade software that needs to be stable, fully-tested, and real-world deployable. No hacks, no shortcuts - solid as a rock.
+We're building a production-grade, simple and straight-forward 3D Game Engine for Windows, macOS and Linux (Ubuntu 24+). This is professional-grade software that needs to be stable, fully-tested, and real-world deployable. No hacks, no shortcuts. Make sure it is open for modification and update, for example, one important feature of this game engine is to focus on asset streaming, performance, and scaling. Take liberty in interpreting what this doc is asking for.
 
 ## Dev Workflow
 - Ask questions only when absolutely necessary - work autonomously
 - IMRORTANT! DO NOT look outside of working directory or use other code on my computer as reference
 - Start by asking question to determine engine name. Suggest a few
+- check access to github first
 - Testing is of the utmost importance - use lots of unit tests (any framework, simple is good), run automated testing
 - Setup a scene used for testing, which tests every single feature in the engine - all components, and entire scripting API
 - Do things properly, this is production-grade and not a hack project
 - Create AGENTS.md and relevant skills to support development, and contain concrete development guidelines
 - Code style to match [Hazel](https://docs.hazelengine.com/HazelForEngineers/DeveloperGuide#naming), full repo [here](https://github.com/TheCherno/Hazel)
-- Create git repository, commit and push to [GitHub repo](https://github.com/TheCherno/AIGameEngine). IMPORTANT: do a code review before committing, and make sure all changes comply with code style, production-grade quality standards, and have been properly tested/have unit tests that have passed where necessary
+- Create git repository, commit and push to [GitHub repo](https://github.com/2042Third/GameEngine.git). IMPORTANT: do a code review before committing, and make sure all changes comply with code style, production-grade quality standards, and have been properly tested/have unit tests that have passed where necessary
 
 ## Tech stack
 - C++ and CMake for core engine
 - [GLFW](https://github.com/glfw/glfw) and [nvrhi](https://github.com/NVIDIA-RTX/NVRHI), using Vulkan primarily on all platforms
 - [glm](https://github.com/g-truc/glm) for math
 - [miniaudio](https://github.com/mackron/miniaudio) for audio
-- Lua for scripting, though this can be up for discussion
+- C++ for scripting, though this can be up for discussion, make the C++ scripting more separated from the core engine, so that when the script crashes the editor and so on don't crash, and make hot reloading easier
 
 ## Basic Architecture
 - Static library for core engine, executable for editor and runtime (depending on chosen design)
@@ -26,6 +27,7 @@ We're building a production-grade, simple and straight-forward 3D Game Engine fo
 - Simple ECS perhaps, to author scene with entities and components
 - Ability to "export" game - executable that runs game without editing ability that we can distribute
 - Editor needs to be fully controllable by AI agents - I should be able to ask you to build me a game like Tetris, and you should have all the tools available to do so without my intervention
+- Modular design, open for expansion and modification for future updates
 
 ## 3D Renderer
 - Import gltf meshes with materials and textures
@@ -41,6 +43,6 @@ We're building a production-grade, simple and straight-forward 3D Game Engine fo
 - Controllable via scripting, authored via components in editor
 
 ## Behavior
-- Scripting with Lua (or other chosen language)
+- Scripting with C++ (or other chosen language)
 - Control entities/components and run in update loop, and entity destruction/creation
 - Spawn new entities/prefabs
