@@ -11,7 +11,8 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <cmath>
-#include <unordered_set>
+#include <utility>
+#include <vector>
 
 namespace Strata
 {

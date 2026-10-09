@@ -17,9 +17,9 @@
 #include <ImGuizmo.h>
 
 #include <algorithm>
-#include <cfloat>
 #include <cmath>
 #include <string>
+#include <vector>
 
 namespace Strata
 {

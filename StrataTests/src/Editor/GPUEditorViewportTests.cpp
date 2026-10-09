@@ -154,6 +154,12 @@ TEST_SUITE("GPU.Editor.Viewport")
 		const std::optional<std::vector<uint8_t>> saved = FileSystem::ReadBytes(path);
 		REQUIRE(saved);
 		CHECK(*Base64::Decode(result["Image"]["Data"].get<std::string>()) == *saved);
+
+		// Captures do not keep their render targets.
+		ViewportRenderer* captureRenderer = harness.Context.GetViewport().GetCaptureRenderer();
+		REQUIRE(captureRenderer);
+		CHECK(captureRenderer->GetSize() == glm::uvec2(0, 0));
+		CHECK(captureRenderer->GetOutputTexture() == nullptr);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

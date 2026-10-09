@@ -11,6 +11,7 @@
 #include <Strata/Renderer/TextureReadback.h>
 #include <Strata/Scene/Scene.h>
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <memory>
@@ -123,10 +124,12 @@ namespace Strata
 			if (!renderer->Render(context, request.Size, *view, viewport.GetSettings(), progress.Overlays))
 				return EditorCommandResult::Fail("Rendering the capture failed (see the log)");
 			progress.Readback = TextureReadback::Create(renderer->GetOutputTexture(), {}, &error);
+			progress.PendingAssets = renderer->GetStats().PendingAssets;
+			// Captures are occasional and may be large: their render targets are not kept between them.
+			renderer->ReleaseTargets();
 			if (!progress.Readback)
 				return EditorCommandResult::Fail(fmt::format("Reading the capture back failed: {}", error));
 			progress.View = std::move(*view);
-			progress.PendingAssets = renderer->GetStats().PendingAssets;
 			return std::nullopt;
 		}
 
