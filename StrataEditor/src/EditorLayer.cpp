@@ -47,7 +47,7 @@ namespace Strata
 		});
 		if (m_Options.EnableAutomation)
 			StartAutomation();
-		else if (m_Options.Headless && !m_Options.MaxFrames)
+		else if (m_Options.Headless && !m_Options.MaxFrames && !m_Options.QuitAfterCommands)
 			ST_WARN("Running headless without automation or --frames: the editor runs until it is stopped with a signal (Ctrl+C)");
 
 		if (!m_Options.CommandScript.empty())
