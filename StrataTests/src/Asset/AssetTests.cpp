@@ -393,6 +393,49 @@ TEST_SUITE("Asset")
 		CHECK(other->GetAssetState(UUID(0x6001)) == AssetState::Unloaded);
 	}
 
+	TEST_CASE("The content version changes whenever loaded objects change")
+	{
+		const std::filesystem::path path = WritePack("ContentVersion", {
+			{ MakeMetadata(0x6100, AssetType::Material, "M.stmat"), CreateMaterialBytes(0.25f) },
+			{ MakeMetadata(0x6101, AssetType::Mesh, "Broken.mesh"), { 1, 2, 3 } } });
+		Ref<RuntimeAssetManager> manager = RuntimeAssetManager::Create(path);
+		REQUIRE(manager);
+		uint64_t version = manager->GetContentVersion();
+		const auto changed = [&]()
+		{
+			const uint64_t current = manager->GetContentVersion();
+			const bool result = current != version;
+			version = current;
+			return result;
+		};
+
+		// Failed loads and requests publish nothing.
+		CHECK_FALSE(manager->LoadAssetSync(UUID(0x6101)));
+		CHECK_FALSE(changed());
+		CHECK(manager->GetAsset(UUID(0x6100)) == nullptr);
+		CHECK_FALSE(changed());
+
+		REQUIRE(manager->WaitForPendingLoads());
+		CHECK(changed());
+		CHECK(manager->GetAsset(UUID(0x6100)) != nullptr);
+		CHECK_FALSE(changed());
+
+		manager->ReloadAsset(UUID(0x6100));
+		CHECK_FALSE(changed()); // The previous object is served until the new one is ready
+		REQUIRE(manager->WaitForPendingLoads());
+		CHECK(changed());
+
+		manager->UnloadAsset(UUID(0x6100));
+		CHECK(changed());
+		manager->UnloadAsset(UUID(0x6100));
+		CHECK_FALSE(changed());
+
+		AssetMetadata metadata;
+		metadata.Name = "Runtime";
+		manager->AddMemoryAsset(Material::Create(), metadata);
+		CHECK(changed());
+	}
+
 	TEST_CASE("The active asset manager serves typed requests")
 	{
 		const std::filesystem::path path = WritePack("ActiveManager", { { MakeMetadata(0x7000, AssetType::Material, "M.stmat"), CreateMaterialBytes(0.75f) } });
