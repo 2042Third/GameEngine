@@ -57,7 +57,10 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          cmake --build --preset ${{ matrix.preset }}-release --parallel 2>&1 | tee build.log
+          # Ninja (Linux, macOS) keeps building after a failure, so one run reports every compile error.
+          keepGoing=()
+          if [ "$RUNNER_OS" != "Windows" ]; then keepGoing=(-- -k 0); fi
+          cmake --build --preset ${{ matrix.preset }}-release --parallel "${keepGoing[@]}" 2>&1 | tee build.log
 
       # Hosted runners have no GPU: suites that need one carry the "gpu" label.
       - name: Test (Release)

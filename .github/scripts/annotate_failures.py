@@ -21,7 +21,8 @@ PATTERNS = [
 ]
 UNLOCATED = re.compile(
     r"(undefined reference|Undefined symbols|ld: |error LNK|collect2|CMake Error|\*\*\*Failed|\*\*\*Exception|"
-    r"Subprocess aborted|Timeout|SegFault|FATAL ERROR|terminate called|Assertion|Sanitizer|The following tests FAILED)")
+    r"Subprocess aborted|Timeout|SegFault|FATAL ERROR|Fatal signal|terminate called|Assertion|Sanitizer|"
+    r"The following tests FAILED)")
 
 
 def escape_data(text):
