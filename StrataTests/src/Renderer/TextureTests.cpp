@@ -33,9 +33,9 @@ namespace
 	{
 		std::vector<uint8_t> pixels;
 		for (int index = 0; index < 4; index++)
-			pixels.insert(pixels.end(), { 255, 0, 0, 255 });
+			Tests::AppendPixel(pixels, 255, 0, 0, 255);
 		for (int index = 0; index < 4; index++)
-			pixels.insert(pixels.end(), { 0, 0, 255, 255 });
+			Tests::AppendPixel(pixels, 0, 0, 255, 255);
 		return pixels;
 	}
 

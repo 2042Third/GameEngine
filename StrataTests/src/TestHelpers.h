@@ -20,6 +20,16 @@ namespace Strata::Tests
 	std::filesystem::path CreateTemporaryDirectory(const std::string& name);
 	void CleanupTemporaryDirectories();
 
+	// Appends one RGBA texel to a pixel buffer. Tests use it instead of insert(end(), { r, g, b, a }), for which GCC 14 at
+	// -O3 reports a false -Wstringop-overflow on byte vectors.
+	inline void AppendPixel(std::vector<uint8_t>& pixels, uint8_t red, uint8_t green, uint8_t blue, uint8_t alpha)
+	{
+		pixels.push_back(red);
+		pixels.push_back(green);
+		pixels.push_back(blue);
+		pixels.push_back(alpha);
+	}
+
 	// Polls condition until it returns true or the timeout elapses; returns the final condition value.
 	inline bool WaitUntil(const std::function<bool()>& condition, std::chrono::milliseconds timeout = std::chrono::milliseconds(5000))
 	{

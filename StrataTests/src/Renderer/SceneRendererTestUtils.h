@@ -87,7 +87,7 @@ namespace Strata::Tests
 		{
 			std::vector<uint8_t> pixels;
 			for (int texel = 0; texel < 4; texel++)
-				pixels.insert(pixels.end(), { color.r, color.g, color.b, color.a });
+				AppendPixel(pixels, color.r, color.g, color.b, color.a);
 			return AddTexture(2, 2, pixels, format);
 		}
 	};

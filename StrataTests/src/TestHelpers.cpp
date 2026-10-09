@@ -100,7 +100,7 @@ namespace Strata::Tests
 		std::vector<uint8_t> pixels;
 		pixels.reserve(static_cast<size_t>(width) * height * 4);
 		for (uint32_t index = 0; index < width * height; index++)
-			pixels.insert(pixels.end(), { red, green, blue, alpha });
+			AppendPixel(pixels, red, green, blue, alpha);
 		return EncodePNG(width, height, pixels);
 	}
 

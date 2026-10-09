@@ -348,7 +348,7 @@ TEST_SUITE("GPU.SceneRenderer")
 		level0.Width = 2;
 		level0.Height = 2;
 		for (int texel = 0; texel < 4; texel++)
-			level0.Data.insert(level0.Data.end(), { 0, 255, 0, 255 });
+			AppendPixel(level0.Data, 0, 255, 0, 255);
 		TextureSpecification textureSpecification;
 		textureSpecification.Format = TextureFormat::RGBA8SRGB;
 		Ref<Texture> texture = Texture::Create(textureSpecification, { level0 });

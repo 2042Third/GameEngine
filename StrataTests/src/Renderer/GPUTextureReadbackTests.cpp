@@ -40,7 +40,7 @@ namespace
 				for (uint32_t y = 0; y < mipHeight; y++)
 				{
 					for (uint32_t x = 0; x < mipWidth; x++)
-						pixels.insert(pixels.end(), { static_cast<uint8_t>(x), static_cast<uint8_t>(y), static_cast<uint8_t>(mip), static_cast<uint8_t>(slice) });
+						AppendPixel(pixels, static_cast<uint8_t>(x), static_cast<uint8_t>(y), static_cast<uint8_t>(mip), static_cast<uint8_t>(slice));
 				}
 				commandList->writeTexture(texture, slice, mip, pixels.data(), static_cast<size_t>(mipWidth) * 4);
 			}
