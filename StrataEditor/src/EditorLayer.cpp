@@ -127,6 +127,13 @@ namespace Strata
 		if (m_Context.IsQuitRequested() && application.IsRunning())
 		{
 			ST_INFO("Closing the editor (editor.quit)");
+			// The rest of the command script will not run: a scripted run (CI, automation) must not look successful.
+			if (m_CommandScript)
+			{
+				ST_ERROR("The command script did not finish before editor.quit ({} of {} commands done)", m_CommandScript->GetCompletedCount(),
+					m_CommandScript->GetStepCount());
+				application.SetExitCode(1);
+			}
 			application.Close();
 		}
 		const bool lastFrame = m_Options.MaxFrames && application.GetFrameCount() + 1 == *m_Options.MaxFrames;

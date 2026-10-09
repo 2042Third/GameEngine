@@ -305,7 +305,8 @@ Building and loading scripts:
   {frames}` returns after that many frames, e.g. to let a playing scene run.
 - `StrataEditor --commands script.json` runs a JSON array of `{"command", "parameters"}` at startup
   (`EditorCommandScript`); a pending command holds the script until it completes. If a command fails,
-  or the script has not finished by the last of `--frames N` frames, the process exit code becomes 1.
+  or the script has not finished by the last of `--frames N` frames or by `editor.quit`, the process exit
+  code becomes 1.
   `--frames N` stops after N frames (without saving the panel layout), `--screenshot out.png` captures
   the last frame, `--no-gpu` runs headless without a graphics device (export, asset processing).
   Without `--frames`, a headless editor runs until `editor.quit` (which refuses to discard unsaved

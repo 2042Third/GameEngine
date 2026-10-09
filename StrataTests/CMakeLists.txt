@@ -130,6 +130,11 @@ if(TARGET StrataEditor)
 		COMMAND StrataEditor --no-gpu --no-automation --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/QuitCommands.json"
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
 	set_tests_properties(StrataEditor.QuitScript PROPERTIES TIMEOUT 60)
+	# A quit before the script's last command fails the run: the rest of the script never ran.
+	add_test(NAME StrataEditor.QuitBeforeScriptEnds
+		COMMAND StrataEditor --no-gpu --no-automation --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/QuitEarlyCommands.json"
+		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
+	set_tests_properties(StrataEditor.QuitBeforeScriptEnds PROPERTIES WILL_FAIL TRUE TIMEOUT 60)
 endif()
 
 # Editor automation end to end (no GPU): the "EndToEnd" suites start the real editor headless and drive it with StrataCLI
