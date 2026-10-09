@@ -131,7 +131,8 @@ if(TARGET StrataEditor)
 	set_tests_properties(StrataEditor.CaptureWithoutGPU PROPERTIES PASS_REGULAR_EXPRESSION "viewport[.]capture failed: viewport[.]capture needs a GPU")
 endif()
 
-# Editor export to a playable game, then the exported runtime: neither needs a GPU (--no-gpu, headless runtime).
+# Editor export to a playable game, then the exported runtime: headless without a GPU (--no-gpu, --headless), then in a
+# window with rendering (label gpu).
 if(TARGET StrataEditor AND TARGET StrataRuntime)
 	set(STRATA_EXPORT_TEST_DIR "${CMAKE_CURRENT_BINARY_DIR}/ExportSmoke")
 	configure_file("${CMAKE_CURRENT_SOURCE_DIR}/Editor/ExportCommands.json.in" "${CMAKE_CURRENT_BINARY_DIR}/ExportCommands.json" @ONLY)
@@ -146,4 +147,12 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 
 	add_test(NAME StrataRuntime.Smoke COMMAND "${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}" --headless --frames 30)
 	set_tests_properties(StrataRuntime.Smoke PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
+
+	# The exported game in a window renders a few frames from its camera and saves the last one, which must show the scene.
+	set(STRATA_RUNTIME_SCREENSHOT "${STRATA_EXPORT_TEST_DIR}/RuntimeScreenshot.png")
+	add_test(NAME StrataRuntime.Render
+		COMMAND "${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}" --windowed --frames 10 --screenshot "${STRATA_RUNTIME_SCREENSHOT}")
+	set_tests_properties(StrataRuntime.Render PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataExportedGame FIXTURES_SETUP StrataRuntimeScreenshot)
+	add_test(NAME StrataRuntime.RenderCheck COMMAND StrataTests --strata-test-helper=check-image "${STRATA_RUNTIME_SCREENSHOT}")
+	set_tests_properties(StrataRuntime.RenderCheck PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataRuntimeScreenshot)
 endif()
