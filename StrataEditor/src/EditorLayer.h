@@ -69,6 +69,8 @@ namespace Strata
 		void OpenProject();
 		void DeleteSelection();
 		void DuplicateSelection();
+		// Builds the project's scripts through the command runner (script.build); the build reports to the log.
+		void BuildScripts();
 	private:
 		EditorOptions m_Options;
 		EditorContext m_Context;
