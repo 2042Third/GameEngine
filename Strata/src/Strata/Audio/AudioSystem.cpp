@@ -195,6 +195,15 @@ namespace Strata
 	{
 		if (m_Stopped || paused == m_Paused)
 			return;
+
+		if (!paused)
+		{
+			// Edits made while paused (sources removed, deactivated, muted or given another clip, a moved listener) apply before
+			// anything resumes; still paused, nothing starts meanwhile. No time passed, so moves made meanwhile are teleports.
+			UpdateSources(0.0f);
+			ProcessAssetChanges();
+			UpdateListener(0.0f);
+		}
 		m_Paused = paused;
 
 		for (auto& [handle, record] : m_Sources)

@@ -778,6 +778,42 @@ TEST_SUITE("Audio.System")
 		CHECK(audio.IsPlaying(idle));
 	}
 
+	TEST_CASE("Changes made while the scene is paused apply before it resumes")
+	{
+		ScopedAudioEngine engine;
+		REQUIRE(engine.Initialized);
+		AudioProject project;
+		const AssetHandle clip = project.AddClip(2.0f);
+		const AssetHandle otherClip = project.AddClip(1.0f);
+
+		Scene scene;
+		Entity removed = CreateSource(scene, "Removed", clip);
+		Entity muted = CreateSource(scene, "Muted", clip);
+		Entity deactivated = CreateSource(scene, "Deactivated", clip);
+		Entity reclipped = CreateSource(scene, "Reclipped", clip);
+		scene.OnRuntimeStart();
+		AudioSystem& audio = GetAudio(scene);
+		Render(4800);
+		REQUIRE(AudioEngine::GetStats().ActiveVoices == 4);
+
+		// Edited while paused, e.g. in the editor.
+		scene.SetPaused(true);
+		removed.RemoveComponent<AudioSourceComponent>();
+		muted.GetComponent<AudioSourceComponent>().Volume = 0.0f;
+		deactivated.SetActive(false);
+		reclipped.GetComponent<AudioSourceComponent>().Clip = otherClip;
+
+		// Resuming does not play any of them in their old state, not even for one mixing period.
+		scene.SetPaused(false);
+		CHECK(audio.GetStats().SourceCount == 2);
+		CHECK(AudioEngine::GetStats().ActiveVoices == 1); // The muted source
+		CHECK(ComputeRms(Render(480)) == 0.0f);
+		CHECK(audio.IsPlaying(muted));
+		CHECK_FALSE(audio.IsPlaying(reclipped));
+		REQUIRE(audio.GetAudioSource(reclipped)->GetClip());
+		CHECK(audio.GetAudioSource(reclipped)->GetClip()->GetLength() == doctest::Approx(1.0f));
+	}
+
 	TEST_CASE("Gameplay calls control the sources of entities")
 	{
 		ScopedAudioEngine engine;
