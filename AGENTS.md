@@ -256,7 +256,7 @@ Writing scripts is described in `.claude/skills/strata-scripting/SKILL.md`.
 | Where | What |
 | --- | --- |
 | `StrataScriptCore/Include/StrataScript/ScriptABI.h` | The versioned C ABI: host API table, module/class/field descriptors, values. |
-| `StrataScriptCore/Include/StrataScript/*.h` | Header-only C++ SDK (`StrataScript.h` includes all): `Script`, `Entity`, `Scene`, `Assets`, `Input`, `Time`, `Log`, `RigidBody` and `Physics` (bodies and queries; `Collision` for the contact callbacks of `Script`), `AudioSource` and `Audio`, `ST_SCRIPT_CLASS`/`ST_SCRIPT_FIELD`. |
+| `StrataScriptCore/Include/StrataScript/*.h` | Header-only C++ SDK (`StrataScript.h` includes all): `Script`, `Entity`, `Scene`, `Assets`, `Input`, `Time`, `Log`, `RigidBody` and `Physics` (bodies and queries; `Collision` for the contact callbacks of `Script`), `AudioSource` and `Audio`, `Game` (quit, scene loads), `ST_SCRIPT_CLASS`/`ST_SCRIPT_FIELD`. |
 | `StrataScriptCore/Source/ScriptModuleEntry.cpp` | The module entry points, compiled into every module by `strata_add_script_module()`. |
 | `StrataScriptCore/CMake/` | `strata_add_script_module()` and the package game projects use (`StrataScriptCoreConfig.cmake`). |
 | `Strata/src/Strata/Scripting/` | `ScriptEngine` (module, hot reload, faults, watchdog), `ScriptModule` (loading, validation, guarded calls), `ScriptSystem` (instances and lifecycle), `ScriptHostAPI` (the host table), `ScriptValue` (value conversion). |
@@ -389,8 +389,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
 - `project.export` writes a playable game outside the project: the asset pack (`<Game>.stpak`), the
   manifest (`<Game>.stgame`, start scene and window settings) and the runtime executable renamed after
   the game. CTest exports a small game (`StrataEditor --no-gpu`) and runs it headless.
-- A running game asks its owner to quit or to switch scenes through `Scene::RequestQuit`/`RequestSceneLoad`, honored
-  after each update: the editor stops play mode, or replaces the running scene (`play.stop` still
+- A running game asks its owner to quit or to switch scenes through `Scene::RequestQuit`/`RequestSceneLoad` (scripts: the
+  SDK's `Game`), honored after each update: the editor stops play mode, or replaces the running scene (`play.stop` still
   returns to the edited scene); `GameRuntime` ends the game (`GetQuitRequest`; StrataRuntime exits with the code) or loads
   the scene from the pack. A null handle restarts the running scene.
 - Commands never block a frame. One that has to wait (frames, a build, a GPU readback) returns

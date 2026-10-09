@@ -183,13 +183,21 @@ TEST_SUITE("FeatureTest")
 		ResetScriptHostCallCounts();
 
 		scene->OnRuntimeStart();
-		PlayFeatureScene(*scene, *engine, [&]()
+		const auto advanceFrame = [&]()
 		{
 			project.GetAssetManager()->Update();
 			scene->OnUpdateRuntime(c_FeatureFrameTime);
-		});
+		};
+		PlayFeatureScene(*scene, *engine, advanceFrame);
 		CHECK(engine->GetLoadCount() == 2);
 		CheckFeatureResults(*scene, *engine);
+
+		// The game asks to quit after the scenario; headless, nobody acts on it, so the scene keeps the requests (the quit,
+		// and the restart that replaced the earlier loads).
+		const int32_t exitCode = PlayFeatureQuitFrame(*scene, *engine, advanceFrame);
+		CHECK(scene->GetQuitRequest() == exitCode);
+		CHECK(scene->GetSceneLoadRequest() == UUID::Null());
+		CHECK(GetField<std::string>(GetScriptSystem(*scene), scene->FindEntityByName("Game Features"), "GameFeatures", "Failure").empty());
 
 		// Every host function of the script API was called.
 		for (const ScriptHostFunctionCalls& function : GetScriptHostCallCounts())

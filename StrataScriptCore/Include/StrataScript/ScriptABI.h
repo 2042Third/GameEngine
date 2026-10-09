@@ -329,6 +329,16 @@ extern "C"
 		void (*AudioSetMasterVolume)(StrataScriptContext* context, float volume);
 		float (*AudioGetMasterVolume)(StrataScriptContext* context);
 
+		/*
+		 * Game flow (added after the initial set of ABI version 1: check ST_SCRIPT_HAS_MEMBER before use). Both are requests
+		 * honored once the current frame's update is done (scripts keep running until then); quitting wins over loading and
+		 * later requests replace earlier ones. QuitGame ends the game with an exit code: an exported game exits with it, the
+		 * editor stops play mode. LoadScene replaces the running scene with a scene asset (every entity of the current scene
+		 * goes away), or restarts the running scene for the null handle; it fails for assets that are not scenes.
+		 */
+		void (*QuitGame)(StrataScriptContext* context, int32_t exitCode);
+		bool (*LoadScene)(StrataScriptContext* context, StrataScriptAssetHandle scene);
+
 		/* New functions are appended here (see the compatibility rules above). */
 	} StrataScriptHostAPI;
 

@@ -90,7 +90,10 @@ TEST_SUITE("Editor.FeatureTest")
 		const nlohmann::json edit = editor.Run("component.set", { { "entity", sign }, { "component", "Text" }, { "values", { { "Text", "Edited while playing" } } } });
 		CHECK(edit.contains("warning"));
 
-		editor.Run("play.stop");
+		// The game quits after the scenario: play mode stops.
+		PlayFeatureQuitFrame(*played, *engine, [&]() { editor.Context.Update(Timestep(c_FeatureFrameTime)); });
+		CHECK_FALSE(editor.Context.IsPlaying());
+		CHECK_FALSE(played->IsRunning());
 		CheckFeatureJournal(*played, *engine);
 		// The edited scene is untouched by play mode.
 		CHECK(editor.GetHeight(ball) == doctest::Approx(4.0f));
@@ -104,8 +107,12 @@ TEST_SUITE("Editor.FeatureTest")
 		Scope<GameRuntime> game = GameRuntime::Create(manifest, &error);
 		REQUIRE_MESSAGE(game, error);
 		const Ref<Scene> gameScene = game->GetScene();
-		PlayFeatureScene(*gameScene, *engine, [&]() { game->Update(Timestep(c_FeatureFrameTime)); });
+		const auto advanceGame = [&]() { game->Update(Timestep(c_FeatureFrameTime)); };
+		PlayFeatureScene(*gameScene, *engine, advanceGame);
 		CheckFeatureResults(*gameScene, *engine);
+		// The game quits after the scenario: the runtime reports the exit code (StrataRuntime would exit with it).
+		const int32_t exitCode = PlayFeatureQuitFrame(*gameScene, *engine, advanceGame);
+		CHECK(game->GetQuitRequest() == exitCode);
 		game.reset(); // Stops the scene
 		CheckFeatureJournal(*gameScene, *engine);
 

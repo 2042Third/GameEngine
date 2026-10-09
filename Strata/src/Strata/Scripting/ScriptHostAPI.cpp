@@ -1522,6 +1522,43 @@ namespace Strata
 			});
 		}
 		////////////////////////////////////////////////////////////////////////////////
+		// Game flow
+		////////////////////////////////////////////////////////////////////////////////
+
+		void HostQuitGame(StrataScriptContext* context, int32_t exitCode)
+		{
+			HostCallVoid("QuitGame", [&]()
+			{
+				if (ScriptSystem* system = ResolveContext(context, "QuitGame"))
+					system->GetScene().RequestQuit(exitCode);
+			});
+		}
+
+		bool HostLoadScene(StrataScriptContext* context, StrataScriptAssetHandle scene)
+		{
+			return HostCall("LoadScene", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "LoadScene");
+				if (!system)
+					return false;
+				// The null handle restarts the running scene, whatever it was loaded from.
+				if (scene != 0)
+				{
+					AssetManagerBase* manager = RequireAssetManager(*system, "LoadScene");
+					if (!manager)
+						return false;
+					if (manager->GetAssetType(AssetHandle(scene)) != AssetType::Scene)
+					{
+						system->ReportProblem("LoadScene", fmt::format("asset {} is not a scene", AssetHandle(scene).ToString()));
+						return false;
+					}
+				}
+				system->GetScene().RequestSceneLoad(UUID(scene));
+				return true;
+			});
+		}
+
+		////////////////////////////////////////////////////////////////////////////////
 		// The table
 		////////////////////////////////////////////////////////////////////////////////
 
@@ -1605,7 +1642,9 @@ namespace Strata
 	X(AudioPlayOneShot) \
 	X(AudioPlayOneShotAt) \
 	X(AudioSetMasterVolume) \
-	X(AudioGetMasterVolume)
+	X(AudioGetMasterVolume) \
+	X(QuitGame) \
+	X(LoadScene)
 
 		struct HostFunctionEntry
 		{

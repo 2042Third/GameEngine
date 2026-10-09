@@ -2135,6 +2135,49 @@
 			},
 			{
 				"Components": {
+					"Name": {
+						"Name": "Game Features"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "GameFeatures",
+								"Fields": {
+									"QuitCode": {
+										"Type": "Int",
+										"Value": 3
+									},
+									"QuitFrame": {
+										"Type": "Int",
+										"Value": 200
+									}
+								}
+							}
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E000000000004C"
+			},
+			{
+				"Components": {
 					"Inactive": {},
 					"Name": {
 						"Name": "Journal"

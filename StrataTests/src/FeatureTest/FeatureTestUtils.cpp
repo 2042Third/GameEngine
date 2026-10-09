@@ -320,6 +320,21 @@ namespace Strata::Tests
 		CHECK_FALSE(scene.FindEntityByName("Fragile Probe").IsValid());
 	}
 
+	int32_t PlayFeatureQuitFrame(Scene& scene, ScriptEngine& engine, const std::function<void()>& advanceFrame)
+	{
+		const ScriptSystem& system = GetScriptSystem(scene);
+		const Entity gameFeatures = RequireEntity(scene, "Game Features");
+		const int32_t quitFrame = GetField<int32_t>(system, gameFeatures, "GameFeatures", "QuitFrame");
+		const int32_t quitCode = GetField<int32_t>(system, gameFeatures, "GameFeatures", "QuitCode");
+		REQUIRE(quitFrame == c_FeatureFrames);
+		REQUIRE(scene.GetFrameIndex() == static_cast<uint64_t>(quitFrame));
+		REQUIRE_FALSE(scene.GetQuitRequest().has_value());
+
+		ScopedInput input;
+		advanceFrame();
+		REQUIRE_FALSE(engine.IsFaulted());
+		return quitCode;
+	}
 	void CheckFeatureJournal(Scene& scene, const ScriptEngine& engine)
 	{
 		const std::vector<std::string> journal = GetJournal(scene);
@@ -346,7 +361,7 @@ namespace Strata::Tests
 
 		for (const char* expected : { "DoomedProbe.OnDestroy@Doomed", "Helper.OnDestroy@Script Features", "LifecycleFeatures.OnReload@Lifecycle Features",
 				 "ExceptionProbe.OnReload@Exception Probe", "LifecycleFeatures.OnDestroy@Lifecycle Features", "FragileProbe.OnCollisionEnter@Fragile Probe",
-				 "FragileProbe.OnDestroy@Fragile Probe" })
+				 "FragileProbe.OnDestroy@Fragile Probe", "GameFeatures.Quit@Game Features" })
 		{
 			INFO("Journal entry ", expected);
 			CHECK(std::find(journal.begin(), journal.end(), expected) != journal.end());

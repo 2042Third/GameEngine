@@ -86,7 +86,8 @@ TEST_SUITE("Scripting.Module")
 			"ComponentAPI", "PropertyProbe", "TransformAPI", "Spawned", "Spawner", "Listener", "Talker", "InputProbe", "TimeProbe", "SceneProbe",
 			"RemoveOnDestroy", "Fragile", "Readder", "Replicator", "MassSpawner", "PendingSpawner", "InvalidArguments", "PhysicsAPI", "PhysicsMisuse",
 			"OlderEnginePhysics", "PhysicsWithoutWorld", "ContactRecorder", "DestroySelfOnContact", "DestroyOtherOnContact", "RemoveSelfOnContact",
-			"ContactThrower", "ContactCounter", "AudioAPI", "AudioMisuse", "AudioUnavailable"
+			"ContactThrower", "ContactCounter", "AudioAPI", "AudioMisuse", "AudioUnavailable", "GameFlow",
+			"GameFlowMisuse"
 		};
 		std::set<std::string> classes;
 		for (const ScriptClassInfo& info : engine.GetClasses())

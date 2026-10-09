@@ -7,6 +7,7 @@
 
 #include "StrataScript/Audio.h"
 #include "StrataScript/Entity.h"
+#include "StrataScript/Game.h"
 #include "StrataScript/Host.h"
 #include "StrataScript/Input.h"
 #include "StrataScript/Log.h"
