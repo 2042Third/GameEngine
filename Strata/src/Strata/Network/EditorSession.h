@@ -30,8 +30,17 @@ namespace Strata
 		// Keys: "ProcessId", "ProcessStartTime", "Address", "Port", "Token", "ProjectPath", "EditorVersion",
 		// "Headless", "StartedAt".
 		nlohmann::json ToJson() const;
-		// Returns nullopt unless json is an object with a valid ProcessId and Port (other keys are optional).
+		// Returns nullopt unless json is an object with a valid ProcessId and Port and a non-empty Token (other keys
+		// are optional): a session without a token could not be authenticated.
 		static std::optional<EditorSessionInfo> FromJson(const nlohmann::json& json);
+	};
+
+	// Whether the process that wrote a session still runs, as far as can be verified.
+	enum class SessionProcessState : uint8_t
+	{
+		Running,     // Its process id is alive with the recorded start time
+		Exited,      // The process is gone, or its id now belongs to another process (another start time)
+		Unverifiable // The id is alive, but the start time is unknown (not recorded, or the process cannot be inspected)
 	};
 
 	// Session files.
@@ -49,14 +58,16 @@ namespace Strata
 	//                                          belong to a running process and name the same project.
 	//
 	// A session belongs to a running editor only while its process id is alive with the recorded start time (a
-	// process that later reuses the id has another start time); FindSessions deletes the files of the others.
+	// process that later reuses the id has another start time). FindSessions deletes the files of exited editors
+	// and skips, but keeps, sessions it cannot verify.
 	// Clients connect to the recorded loopback address and still verify the editor through the authentication
 	// handshake (see RpcAuthentication).
 	class EditorSession
 	{
 	public:
-		// A session describing this process (id, start time, version, start timestamp, loopback address); the
-		// caller fills in the port, token, project and Headless.
+		// A session describing this process (id, start time, version and start timestamp); the caller fills in the
+		// address, port, token, project and Headless. Warns when the start time is unavailable: clients cannot
+		// verify such a session and skip it.
 		static EditorSessionInfo DescribeCurrentProcess();
 
 		// The private session directory (created if missing), or nullopt with the reason in error.
@@ -70,8 +81,9 @@ namespace Strata
 		// editor may have opened the project since; its pointer is left alone).
 		static void RemoveSessionFiles(const EditorSessionInfo& info);
 
-		// Sessions of running editors in the directory, newest (StartedAt) first. Files of processes that have
-		// exited are deleted; untrusted files are ignored. Callers still verify sessions by connecting.
+		// Sessions of running editors in the directory, newest (StartedAt) first. Files of editors that have exited
+		// are deleted; sessions that cannot be verified and untrusted files are skipped. Callers still verify
+		// sessions by connecting.
 		static std::vector<EditorSessionInfo> FindSessions();
 		static std::vector<EditorSessionInfo> FindSessions(const std::filesystem::path& sessionDirectory);
 		// Reads a per-user session file (nullopt if it is missing, untrusted or invalid).
@@ -82,7 +94,8 @@ namespace Strata
 		static std::optional<EditorSessionInfo> ReadProjectSession(const std::filesystem::path& projectDirectory);
 		static std::optional<EditorSessionInfo> ReadProjectSession(const std::filesystem::path& projectDirectory, const std::filesystem::path& sessionDirectory);
 
-		// Whether the process that wrote the session is still running (same id and start time).
+		static SessionProcessState GetSessionProcessState(const EditorSessionInfo& session);
+		// GetSessionProcessState(session) == SessionProcessState::Running.
 		static bool IsSessionProcessRunning(const EditorSessionInfo& session);
 		// Whether a session's ProjectPath (UTF-8) refers to projectDirectory.
 		static bool IsSameProject(const std::string& sessionProjectPath, const std::filesystem::path& projectDirectory);

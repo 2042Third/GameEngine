@@ -108,13 +108,16 @@ namespace Strata
 		const std::optional<uint64_t> port = GetUnsigned(json, "Port");
 		if (!processId || !port || *port == 0 || *port > UINT16_MAX)
 			return std::nullopt;
+		std::string token = JsonUtils::GetString(json, "Token");
+		if (token.empty())
+			return std::nullopt;
 
 		EditorSessionInfo info;
 		info.ProcessId = *processId;
 		info.ProcessStartTime = GetUnsigned(json, "ProcessStartTime").value_or(0);
 		info.Address = JsonUtils::GetString(json, "Address", info.Address);
 		info.Port = static_cast<uint16_t>(*port);
-		info.Token = JsonUtils::GetString(json, "Token");
+		info.Token = std::move(token);
 		info.ProjectPath = JsonUtils::GetString(json, "ProjectPath");
 		info.EditorVersion = JsonUtils::GetString(json, "EditorVersion");
 		info.StartedAt = JsonUtils::GetString(json, "StartedAt");
@@ -130,7 +133,10 @@ namespace Strata
 	{
 		EditorSessionInfo info;
 		info.ProcessId = Platform::GetProcessID();
-		info.ProcessStartTime = Platform::GetProcessStartTime(info.ProcessId).value_or(0);
+		if (const std::optional<uint64_t> startTime = Platform::GetProcessStartTime(info.ProcessId))
+			info.ProcessStartTime = *startTime;
+		else
+			ST_CORE_WARN("EditorSession: the start time of this process (id {}) is unavailable; clients cannot verify its session and will ignore it", info.ProcessId);
 		info.EditorVersion = c_EngineVersion;
 		info.StartedAt = GetCurrentTimestamp();
 		return info;
@@ -273,12 +279,19 @@ namespace Strata
 			if (!session || FileSystem::ToUTF8(it->path().stem()) != std::to_string(session->ProcessId))
 				continue;
 
-			if (!IsSessionProcessRunning(*session))
+			const SessionProcessState state = GetSessionProcessState(*session);
+			if (state == SessionProcessState::Exited)
 			{
 				// The editor exited without cleaning up (e.g. it crashed).
 				std::error_code removeError;
 				std::filesystem::remove(it->path(), removeError);
 				ST_CORE_INFO("EditorSession: removed the stale session of process {}", session->ProcessId);
+				continue;
+			}
+			if (state == SessionProcessState::Unverifiable)
+			{
+				// Possibly a live editor (e.g. one whose start time could not be read): never deleted, never used.
+				ST_CORE_INFO("EditorSession: skipping the session of process {}: its process cannot be verified", session->ProcessId);
 				continue;
 			}
 			sessions.push_back(std::move(*session));
@@ -343,14 +356,22 @@ namespace Strata
 		return session;
 	}
 
+	SessionProcessState EditorSession::GetSessionProcessState(const EditorSessionInfo& session)
+	{
+		if (!Platform::IsProcessAlive(session.ProcessId))
+			return SessionProcessState::Exited;
+
+		// The start time tells the process that wrote the session apart from a later one that reuses its id. Only a
+		// known start time that differs proves the id was reused; an unknown one proves nothing either way.
+		const std::optional<uint64_t> startTime = Platform::GetProcessStartTime(session.ProcessId);
+		if (!startTime || session.ProcessStartTime == 0)
+			return SessionProcessState::Unverifiable;
+		return *startTime == session.ProcessStartTime ? SessionProcessState::Running : SessionProcessState::Exited;
+	}
+
 	bool EditorSession::IsSessionProcessRunning(const EditorSessionInfo& session)
 	{
-		// The start time tells the process that wrote the session apart from a later one that reuses its id. A
-		// process that cannot be inspected is not one of this user's editors.
-		if (session.ProcessStartTime == 0)
-			return false;
-		const std::optional<uint64_t> startTime = Platform::GetProcessStartTime(session.ProcessId);
-		return startTime && *startTime == session.ProcessStartTime && Platform::IsProcessAlive(session.ProcessId);
+		return GetSessionProcessState(session) == SessionProcessState::Running;
 	}
 
 	bool EditorSession::IsSameProject(const std::string& sessionProjectPath, const std::filesystem::path& projectDirectory)

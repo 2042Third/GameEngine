@@ -177,7 +177,8 @@ JSON-RPC 2.0, one compact JSON message per line, over TCP on loopback. `StrataCL
 - **Session files:** `<user data>/Strata/Sessions/<pid>.json` holds the full session (address, port, token,
   process start time). It is written owner-only (`Platform::WritePrivateFile`) into a private directory. A
   session counts only while its process id is alive with the recorded start time (a reused id does not
-  match); other files are pruned. `<project>/.strata/EditorSession.json` only names the editor's process; it
+  match). Files of exited editors are pruned; a live process whose start time cannot be verified is skipped,
+  never deleted. `<project>/.strata/EditorSession.json` only names the editor's process; it
   is untrusted (the project may be shared) and never contains the port or token.
 - **Environment:** `STRATA_SESSION_DIR` overrides the session directory (tests use it to stay isolated from
   real editors). `STRATA_EDITOR_PORT`/`STRATA_EDITOR_TOKEN` select an explicit endpoint, and

@@ -88,10 +88,15 @@ TEST_SUITE("Network.EditorSession")
 		CHECK_FALSE(EditorSessionInfo::FromJson(nlohmann::json { { "ProcessId", -5 }, { "Port", 80 } }).has_value());
 		CHECK_FALSE(EditorSessionInfo::FromJson(nlohmann::json { { "ProcessId", "12" }, { "Port", 80 } }).has_value());
 
-		// Only ProcessId and Port are required; mistyped optional fields fall back to defaults.
-		const std::optional<EditorSessionInfo> minimal = EditorSessionInfo::FromJson(nlohmann::json { { "ProcessId", 7 }, { "Port", 80 }, { "Headless", "yes" } });
+		// A session without a token could not be authenticated to.
+		CHECK_FALSE(EditorSessionInfo::FromJson(nlohmann::json { { "ProcessId", 7 }, { "Port", 80 } }).has_value());
+		CHECK_FALSE(EditorSessionInfo::FromJson(nlohmann::json { { "ProcessId", 7 }, { "Port", 80 }, { "Token", "" } }).has_value());
+		CHECK_FALSE(EditorSessionInfo::FromJson(nlohmann::json { { "ProcessId", 7 }, { "Port", 80 }, { "Token", 1234 } }).has_value());
+
+		// Only ProcessId, Port and Token are required; mistyped optional fields fall back to defaults.
+		const std::optional<EditorSessionInfo> minimal = EditorSessionInfo::FromJson(nlohmann::json { { "ProcessId", 7 }, { "Port", 80 }, { "Token", "t" }, { "Headless", "yes" } });
 		REQUIRE(minimal.has_value());
-		CHECK(minimal->Token.empty());
+		CHECK(minimal->Token == "t");
 		CHECK_FALSE(minimal->Headless);
 		CHECK(minimal->ProcessStartTime == 0);
 		CHECK(minimal->Address == "127.0.0.1");
@@ -118,6 +123,7 @@ TEST_SUITE("Network.EditorSession")
 		// The same id with another start time is what a reused id looks like.
 		EditorSessionInfo reused = MakeSession(running.GetProcessId(), 46001, "2026-01-01T00:00:00Z", FileSystem::ToUTF8(project));
 		reused.ProcessStartTime += 1;
+		CHECK(EditorSession::GetSessionProcessState(reused) == SessionProcessState::Exited);
 		CHECK_FALSE(EditorSession::IsSessionProcessRunning(reused));
 		REQUIRE(WriteSession(sessionDirectory, reused));
 		REQUIRE(FileSystem::WriteText(EditorSession::GetProjectSessionFilePath(project), nlohmann::json { { "ProcessId", running.GetProcessId() } }.dump()));
@@ -125,15 +131,19 @@ TEST_SUITE("Network.EditorSession")
 		CHECK(EditorSession::FindSessions(sessionDirectory).empty());
 		CHECK_FALSE(FileSystem::Exists(EditorSession::GetSessionFilePath(sessionDirectory, running.GetProcessId())));
 
-		// A session without a start time cannot be verified either.
+		// A live process whose session has no start time (e.g. the editor could not read its own) cannot be verified:
+		// it is neither used nor deleted, since it may well be a running editor.
 		EditorSessionInfo unverifiable = MakeSession(running.GetProcessId(), 46002, "2026-01-01T00:00:00Z");
 		unverifiable.ProcessStartTime = 0;
+		CHECK(EditorSession::GetSessionProcessState(unverifiable) == SessionProcessState::Unverifiable);
 		CHECK_FALSE(EditorSession::IsSessionProcessRunning(unverifiable));
 		REQUIRE(WriteSession(sessionDirectory, unverifiable));
 		CHECK(EditorSession::FindSessions(sessionDirectory).empty());
+		CHECK(FileSystem::Exists(EditorSession::GetSessionFilePath(sessionDirectory, running.GetProcessId())));
 
 		// With the right start time it is the running process's session.
 		const EditorSessionInfo current = MakeSession(running.GetProcessId(), 46003, "2026-01-01T00:00:00Z", FileSystem::ToUTF8(project));
+		CHECK(EditorSession::GetSessionProcessState(current) == SessionProcessState::Running);
 		CHECK(EditorSession::IsSessionProcessRunning(current));
 		REQUIRE(WriteSession(sessionDirectory, current));
 		REQUIRE(EditorSession::FindSessions(sessionDirectory).size() == 1);
@@ -142,6 +152,9 @@ TEST_SUITE("Network.EditorSession")
 		Tests::ExitedProcess exited;
 		EditorSessionInfo gone = MakeSession(exited.GetProcessId(), 46004, "2026-01-01T00:00:00Z");
 		gone.ProcessStartTime = exited.GetStartTime();
+		CHECK_FALSE(EditorSession::IsSessionProcessRunning(gone));
+		// Even without a start time, a session whose process is gone is stale.
+		gone.ProcessStartTime = 0;
 		CHECK_FALSE(EditorSession::IsSessionProcessRunning(gone));
 	}
 
