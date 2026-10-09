@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <type_traits>
 #include <utility>
 
 #if !defined(ST_DIST)
@@ -25,6 +26,15 @@
 #define ST_BIT(x) (1u << (x))
 
 #define ST_BIND_EVENT_FN(fn) [this](auto&&... args) -> decltype(auto) { return this->fn(std::forward<decltype(args)>(args)...); }
+
+// Bitwise operators for an `enum class` used as a set of flags.
+#define ST_DEFINE_ENUM_FLAG_OPERATORS(EnumType) \
+	constexpr EnumType operator|(EnumType a, EnumType b) { return static_cast<EnumType>(static_cast<std::underlying_type_t<EnumType>>(a) | static_cast<std::underlying_type_t<EnumType>>(b)); } \
+	constexpr EnumType operator&(EnumType a, EnumType b) { return static_cast<EnumType>(static_cast<std::underlying_type_t<EnumType>>(a) & static_cast<std::underlying_type_t<EnumType>>(b)); } \
+	constexpr EnumType operator~(EnumType a) { return static_cast<EnumType>(~static_cast<std::underlying_type_t<EnumType>>(a)); } \
+	constexpr EnumType& operator|=(EnumType& a, EnumType b) { return a = a | b; } \
+	constexpr EnumType& operator&=(EnumType& a, EnumType b) { return a = a & b; } \
+	constexpr bool HasFlag(EnumType value, EnumType flag) { return (value & flag) == flag; }
 
 namespace Strata
 {

@@ -28,3 +28,6 @@ desktop.ini
 # Python
 __pycache__/
 *.pyc
+
+# Agent worktrees (parallel development checkouts)
+/.worktrees/

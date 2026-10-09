@@ -2,6 +2,8 @@
 
 #include "Strata/Core/Base.h"
 
+#include <spdlog/fmt/fmt.h>
+
 #include <string>
 
 namespace Strata
