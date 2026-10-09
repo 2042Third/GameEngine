@@ -224,7 +224,11 @@ namespace Strata
 		std::error_code error;
 		if (const std::optional<std::filesystem::path> sessionDirectory = GetSessionDirectory())
 			std::filesystem::remove(GetSessionFilePath(*sessionDirectory, info.ProcessId), error);
+		RemoveProjectPointer(info);
+	}
 
+	void EditorSession::RemoveProjectPointer(const EditorSessionInfo& info)
+	{
 		if (info.ProjectPath.empty())
 			return;
 
@@ -234,6 +238,7 @@ namespace Strata
 		const std::filesystem::path pointerFile = GetProjectSessionFilePath(FileSystem::FromUTF8(info.ProjectPath));
 		std::filesystem::path takenFile = pointerFile;
 		takenFile += FileSystem::FromUTF8(fmt::format(".removing-{}", info.ProcessId));
+		std::error_code error;
 		std::filesystem::rename(pointerFile, takenFile, error);
 		if (error)
 			return;

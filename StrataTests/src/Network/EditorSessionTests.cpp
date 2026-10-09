@@ -363,6 +363,44 @@ TEST_SUITE("Network.EditorSession")
 		}
 	}
 
+	TEST_CASE("A session follows the editor to another project")
+	{
+		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("EditorSessionsMove") / "Sessions";
+		const std::filesystem::path firstProject = Tests::CreateTemporaryDirectory("EditorSessionFirstProject");
+		const std::filesystem::path secondProject = Tests::CreateTemporaryDirectory("EditorSessionSecondProject");
+		Tests::ScopedEnvironmentVariable sessionOverride("STRATA_SESSION_DIR", FileSystem::ToUTF8(sessionDirectory));
+		Tests::LiveProcess editorProcess;
+
+		const EditorSessionInfo first = MakeSession(editorProcess.GetProcessId(), 46001, "2026-01-01T10:00:00Z", FileSystem::ToUTF8(firstProject));
+		REQUIRE(EditorSession::WriteSessionFiles(first));
+		REQUIRE(EditorSession::ReadProjectSession(firstProject).has_value());
+
+		// The editor opens another project: the session is rewritten in place and the old pointer goes away.
+		EditorSessionInfo second = first;
+		second.ProjectPath = FileSystem::ToUTF8(secondProject);
+		REQUIRE(EditorSession::WriteSessionFiles(second));
+		EditorSession::RemoveProjectPointer(first);
+
+		CHECK_FALSE(FileSystem::Exists(EditorSession::GetProjectSessionFilePath(firstProject)));
+		CHECK(CountEntries(firstProject / ".strata") == 0);
+		const std::optional<EditorSessionInfo> moved = EditorSession::ReadProjectSession(secondProject);
+		REQUIRE(moved.has_value());
+		CHECK(moved->Port == first.Port);
+		const std::vector<EditorSessionInfo> sessions = EditorSession::FindSessions();
+		REQUIRE(sessions.size() == 1);
+		CHECK(sessions[0].ProjectPath == second.ProjectPath);
+
+		// Without a project there is no pointer to remove.
+		EditorSessionInfo withoutProject = second;
+		withoutProject.ProjectPath.clear();
+		EditorSession::RemoveProjectPointer(withoutProject);
+		CHECK(EditorSession::ReadProjectSession(secondProject).has_value());
+
+		EditorSession::RemoveSessionFiles(second);
+		CHECK(EditorSession::FindSessions().empty());
+		CHECK_FALSE(FileSystem::Exists(EditorSession::GetProjectSessionFilePath(secondProject)));
+	}
+
 	TEST_CASE("Removing a session keeps a project pointer that another editor took over")
 	{
 		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("EditorSessionsTakeover") / "Sessions";
