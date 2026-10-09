@@ -387,4 +387,30 @@ TEST_SUITE("Editor.Input")
 		CHECK_FALSE(harness.ProbeField("WPressed"));
 		CHECK(harness.Run("input.state")["keys"].empty());
 	}
+
+	TEST_CASE("Key and button names match ignoring case, and the schemas allow that")
+	{
+		InputHarness harness;
+		// An enum in the schema would make clients that validate requests refuse "left", which the commands accept.
+		const EditorCommand* key = harness.Commands.Find("input.key");
+		const EditorCommand* button = harness.Commands.Find("input.mouseButton");
+		REQUIRE(key);
+		REQUIRE(button);
+		const nlohmann::json& keySchema = key->Parameters["properties"]["key"];
+		const nlohmann::json& buttonSchema = button->Parameters["properties"]["button"];
+		CHECK_FALSE(keySchema.contains("enum"));
+		CHECK_FALSE(buttonSchema.contains("enum"));
+		CHECK(keySchema["description"].get<std::string>().find("KPEnter") != std::string::npos);
+		CHECK(buttonSchema["description"].get<std::string>().find("Button0") != std::string::npos);
+
+		harness.Run("play.start");
+		harness.Run("input.mouseButton", { { "button", "left" }, { "action", "press" }, { "wait", false } });
+		harness.Run("input.key", { { "key", "w" }, { "action", "press" }, { "wait", false } });
+		harness.Frame();
+		CHECK(harness.ProbeField("LeftPressed"));
+		CHECK(harness.ProbeField("WPressed"));
+		harness.Run("input.mouseButton", { { "button", "BUTTON0" }, { "action", "release" }, { "wait", false } });
+		harness.Frame();
+		CHECK(harness.ProbeField("LeftReleased"));
+	}
 }

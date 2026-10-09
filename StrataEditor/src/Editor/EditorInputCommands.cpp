@@ -33,12 +33,14 @@ namespace Strata
 			Release
 		};
 
-		nlohmann::json NamesSchema(std::span<const char* const> names, std::string description)
+		// Names match ignoring case, and mouse buttons have numbered aliases: the schemas list the names in their description, as an
+		// enum would make clients that validate against the schema refuse spellings the command accepts.
+		std::string JoinNames(std::span<const char* const> names)
 		{
-			nlohmann::json values = nlohmann::json::array();
+			std::string joined;
 			for (const char* name : names)
-				values.push_back(name);
-			return { { "type", "string" }, { "enum", std::move(values) }, { "description", std::move(description) } };
+				joined += (joined.empty() ? "" : ", ") + std::string(name);
+			return joined;
 		}
 
 		nlohmann::json ActionSchema(const char* what)
@@ -220,8 +222,8 @@ namespace Strata
 			"reaches it in the next frame play.step runs or after play.pause false. Answers once the game has seen the input (a tap: its "
 			"release), or at once with wait false (the default while paused). Returns the key, seen, and the keys and buttons still held.",
 			ObjectSchema({
-				{ "key", NamesSchema(InputNames::GetKeyNames(), "The key, named like the SDK's Key:: constants (Left, Space, A, D1, F5, Enter, "
-					"LeftShift; case does not matter)") },
+				{ "key", StringSchema(fmt::format("The key, named like the SDK's Key:: constants (case does not matter): {}",
+					JoinNames(InputNames::GetKeyNames()))) },
 				{ "action", ActionSchema("key") },
 				{ "frames", IntegerSchema("Game frames a tap holds the key (default 1)", 1, c_MaxHoldFrames) },
 				{ "wait", WaitSchema() } }, { "key" }),
@@ -251,7 +253,8 @@ namespace Strata
 			"Released. tap (default) holds it for 'frames' game frames, press until a release; answers once the game has seen it, or at once "
 			"with wait false (the default while paused). Move the pointer first with input.mouseMove if the game reads where the click is.",
 			ObjectSchema({
-				{ "button", NamesSchema(InputNames::GetMouseButtonNames(), "The button: Left, Right, Middle, Button3 to Button7") },
+				{ "button", StringSchema(fmt::format("The button (case does not matter): {}; Button0, Button1 and Button2 name Left, Right and "
+					"Middle too", JoinNames(InputNames::GetMouseButtonNames()))) },
 				{ "action", ActionSchema("button") },
 				{ "frames", IntegerSchema("Game frames a tap holds the button (default 1)", 1, c_MaxHoldFrames) },
 				{ "wait", WaitSchema() } }, { "button" }),
