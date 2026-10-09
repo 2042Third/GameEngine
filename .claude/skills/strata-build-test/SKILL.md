@@ -36,9 +36,14 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
 - doctest filters split on commas. A test name containing a comma must be matched with `?`/`*`, e.g.
   `--test-case="Hierarchy?*"`.
 - CTest runs: `StrataTests.Core` (everything but GPU suites), `StrataTests.GPU` (label `gpu`),
-  `StrataEditor.Smoke` (the real editor with `StrataTests/Editor/SmokeCommands.json`, label `gpu`), and
-  the export chain `StrataExport.Clean` → `StrataEditor.Export` (`--no-gpu`) → `StrataRuntime.Smoke`
-  (the exported game, headless).
+  `StrataEditor.Smoke` (the real editor with `StrataTests/Editor/SmokeCommands.json`, label `gpu`; it captures the
+  viewport to `SmokeViewport.png`/`SmokeSceneCamera.png` in `build/<preset>/bin/<Config>/`), the editor script checks
+  (`StrataEditor.FailingScript`, `WaitingScript`, `UnfinishedScript`, `CaptureWithoutGPU`), and the export chain
+  `StrataExport.Clean` → `StrataEditor.Export` (`--no-gpu`) → `StrataRuntime.Smoke` (the exported game, headless) →
+  `StrataRuntime.Render` (windowed, saves `build/<preset>/StrataTests/ExportSmoke/RuntimeScreenshot.png`, label `gpu`)
+  → `StrataRuntime.RenderCheck` (`StrataTests --strata-test-helper=check-image`: not black, not a single color).
+- To look at rendering changes, read those PNGs, or run `StrataEditor --windowed --frames N --commands <script>
+  --screenshot out.png` with a script that builds a scene and uses `camera.set`/`camera.focus`.
 - GPU tests must end with `CHECK(gpu.GetNewErrorCount() == 0)` so validation errors fail them.
 - Run both Debug and Release before committing: some bugs (uninitialized memory, timing) only show in one.
 

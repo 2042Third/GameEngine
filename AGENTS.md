@@ -29,7 +29,7 @@ This file is the source of truth for how to work on Strata. Read it fully before
 | --- | --- |
 | `Strata/` | Engine static library. `src/Strata/<Module>/` holds the engine modules, `src/Platform/<OS or backend>/` the platform implementations, `shaders/` the GLSL sources, `vendor/` the pinned third-party submodules. |
 | `StrataEditor/` | Editor executable (ImGui docking UI, gizmos, undo/redo, automation server). |
-| `StrataRuntime/` | Runtime executable that plays exported games (`GameRuntime`): it runs the `.stgame` manifest next to it, or `--game <file>`; `--headless` runs without window and GPU (servers, CI). |
+| `StrataRuntime/` | Runtime executable that plays exported games (`GameRuntime`, drawn by `GameRenderer`): it runs the `.stgame` manifest next to it, or `--game <file>`; `--headless` runs without window and GPU (servers, CI); `--screenshot out.png` with `--frames N` saves the last frame. |
 | `StrataScriptCore/` | Script ABI (C header) and the header-only C++ SDK game scripts are written against. Script modules never link the engine. |
 | `StrataCLI/` | Command-line client for the editor automation API; also an MCP server (`StrataCLI mcp`). |
 | `StrataTests/` | doctest unit tests, test helpers, and the feature test project. |
@@ -299,11 +299,34 @@ Building and loading scripts:
   (`EditorCommandScript`); a pending command holds the script until it completes. If a command fails,
   or the script has not finished by the last of `--frames N` frames, the process exit code becomes 1.
   `--frames N` stops after N frames (without saving the panel layout), `--screenshot out.png` captures
-  the last frame, `--no-gpu` runs headless without a graphics device (export, asset processing).
-  CTest runs `StrataTests/Editor/SmokeCommands.json` and checks that failing and unfinished scripts
-  fail the process.
+  the last frame (viewport included), `--no-gpu` runs headless without a graphics device (export, asset processing).
+  CTest runs `StrataTests/Editor/SmokeCommands.json` (it builds a scene and captures the viewport) and checks that
+  failing and unfinished scripts fail the process.
 - Mutating commands report a `warning` in their result while the scene is playing: such changes apply
   to the running copy and are discarded by `play.stop`. Unknown or missing parameters are errors.
+- **Viewport state** lives in the core: `EditorContext::GetViewport()` (`EditorViewport`) holds the editor camera
+  (`EditorCamera`: a target that is also the orbit pivot, distance, yaw/pitch in degrees, FOV, clip planes, fly speed),
+  the `ViewportSettings` (grid, selection outline, light/camera/collider shapes, stats, gizmo mode and space, snap
+  steps) and two `ViewportRenderer`s (the panel's and the captures'), created on first use and only with a GPU. Camera
+  and settings are saved per project in `<project>/.strata/EditorViewport.json` when it closes and restored when it
+  opens. `ResolveViewportView` picks the camera: the scene's primary camera while playing (the editor camera with a
+  notice when there is none), the editor camera when editing or simulating. Without a project the context keeps an
+  asset manager with only the built-in assets active, so built-in meshes render.
+- **Viewport panel** (`Panels/ViewportPanel`): renders into a texture of the panel's pixel size and takes input only
+  while hovered or focused: Alt + left drag orbits, middle drag pans, the wheel dollies, right drag flies (WASD, Q/E
+  down/up, Shift faster, wheel = speed), F frames the selection, Home everything, W/E/R/Q pick the gizmo, Ctrl snaps.
+  Clicks pick without blocking (`EditorViewport::RequestPick` reads one pixel of the entity-ID buffer; Ctrl toggles,
+  Shift adds, empty space clears) and never when they hit the gizmo. Gizmo drags go through `TransformDrag`
+  (`Editor/TransformEdit.h`): selected entities without a selected ancestor follow the primary one, local transforms
+  are recomputed under their parent (`TransformEdit::WorldToLocal`), writes emit the transform's update signal so
+  physics follows, and a drag is one undo step (while playing: the running scene, no undo). Playing through the scene's
+  camera makes the panel the game view: editor tools are off and `Input` is enabled only while it is focused.
+- **View commands** change no scene data and record no undo: `camera.get`, `camera.set {position, target, yaw, pitch,
+  distance, fov, near, far, flySpeed}` (position + target looks from one at the other) and `camera.focus {entities?}`
+  (frames them, or the whole scene). `viewport.capture {width?, height?, camera?: "editor" | "scene", overlays?, path?}`
+  renders on the next frame, reads the image back without stalling and returns `{"Image": {"MimeType": "image/png",
+  "Data": <base64>}, "width", "height", "camera", "overlays", "pendingAssets", "notice"?, "path"?}`; it defaults to
+  the viewport's size, camera and overlays and fails without a GPU.
 
 ## Rendering
 
@@ -339,6 +362,11 @@ Building and loading scripts:
   alignment). World-space text is depth-tested, screen-space text goes over everything. Text without a
   font, or whose font is loading, uses `Font::GetDefault()` (Roboto, embedded with
   `strata_embed_file` from `CMake/StrataEmbeddedFiles.cmake`).
+- Reading GPU data back: `TextureReadback` copies a texture region and reports when the GPU is done (poll `IsReady`
+  once per frame, never wait in a frame); `Renderer::ReadTexture` is the blocking form for tests and tools. Picking
+  uses `SceneRenderer::ReadEntityIDAsync` and `GetEntityFromID`.
+- `GameRenderer` (`Runtime/`) draws a running game into the window's back buffer from the scene's primary camera, or a
+  message frame naming the problem when the scene has none.
 - GPU tests of the scene renderer share `StrataTests/src/Renderer/SceneRendererTestUtils.h`. Verify that a
   new regression test fails without its fix before relying on it.
 
