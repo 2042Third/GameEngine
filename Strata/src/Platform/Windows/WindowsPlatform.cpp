@@ -4,6 +4,7 @@
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/UUID.h"
 
+#include "Platform/Windows/WindowsFileSecurity.h"
 #include "Platform/Windows/WindowsUtils.h"
 
 #include <psapi.h>
@@ -59,37 +60,126 @@ namespace Strata
 		return directory;
 	}
 
-	std::filesystem::path Platform::GetUserRuntimeDirectory(std::string_view applicationName)
+	namespace
 	{
-		// An explicit location (tests, sandboxes) replaces the default.
-		if (const std::optional<std::string> configured = GetEnvVar("STRATA_RUNTIME_DIR"); configured && !configured->empty())
+
+		// Security attributes for a directory only the current user can access: a protected DACL (nothing is inherited
+		// from the parent directory) with a single entry that grants the user full access and is inherited by everything
+		// created inside. Not copyable: the attributes point into the object.
+		class OwnerOnlyDirectorySecurity
 		{
-			std::filesystem::path directory = FileSystem::FromUTF8(*configured) / FileSystem::FromUTF8(applicationName);
-			return FileSystem::CreateDirectories(directory) ? directory : std::filesystem::path();
+		public:
+			OwnerOnlyDirectorySecurity() = default;
+			OwnerOnlyDirectorySecurity(const OwnerOnlyDirectorySecurity&) = delete;
+			OwnerOnlyDirectorySecurity& operator=(const OwnerOnlyDirectorySecurity&) = delete;
+
+			bool Initialize()
+			{
+				std::string error;
+				m_User = WindowsFileSecurity::GetCurrentUserSid(error);
+				if (m_User.empty())
+					return false;
+
+				PSID user = m_User.data();
+				const DWORD aclSize = static_cast<DWORD>(sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE) + GetLengthSid(user));
+				m_Acl.resize(aclSize);
+				PACL acl = reinterpret_cast<PACL>(m_Acl.data());
+				if (!InitializeAcl(acl, aclSize, ACL_REVISION)
+					|| !AddAccessAllowedAceEx(acl, ACL_REVISION, CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE, FILE_ALL_ACCESS, user)
+					|| !InitializeSecurityDescriptor(&m_Descriptor, SECURITY_DESCRIPTOR_REVISION)
+					|| !SetSecurityDescriptorDacl(&m_Descriptor, TRUE, acl, FALSE)
+					|| !SetSecurityDescriptorControl(&m_Descriptor, SE_DACL_PROTECTED, SE_DACL_PROTECTED))
+				{
+					return false;
+				}
+
+				m_Attributes.nLength = sizeof(m_Attributes);
+				m_Attributes.lpSecurityDescriptor = &m_Descriptor;
+				m_Attributes.bInheritHandle = FALSE;
+				return true;
+			}
+
+			SECURITY_ATTRIBUTES* GetAttributes() { return &m_Attributes; }
+		private:
+			std::vector<uint8_t> m_User;
+			std::vector<uint8_t> m_Acl;
+			SECURITY_DESCRIPTOR m_Descriptor = {};
+			SECURITY_ATTRIBUTES m_Attributes = {};
+		};
+
+		// Whether `directory` is a directory that only the current user can modify (besides SYSTEM and the
+		// Administrators, who can take over anything anyway; see WindowsFileSecurity::CheckOwnerAndAccess). With
+		// `followLink` a link or junction is followed and its target checked; otherwise links are refused.
+		bool IsPrivateDirectory(const std::filesystem::path& directory, bool followLink)
+		{
+			const DWORD flags = FILE_FLAG_BACKUP_SEMANTICS | (followLink ? 0 : FILE_FLAG_OPEN_REPARSE_POINT);
+			HANDLE handle = CreateFileW(directory.c_str(), READ_CONTROL | FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+				nullptr, OPEN_EXISTING, flags, nullptr);
+			if (handle == INVALID_HANDLE_VALUE)
+				return false;
+
+			BY_HANDLE_FILE_INFORMATION information = {};
+			const bool isDirectory = GetFileInformationByHandle(handle, &information) && (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+			const std::optional<bool> isLink = WindowsFileSecurity::IsNameSurrogate(handle);
+			const bool isPrivate = isDirectory && isLink.has_value() && !*isLink
+				&& WindowsFileSecurity::CheckHandleOwnerAndAccess(handle, FileSystem::ToUTF8(directory), nullptr);
+			CloseHandle(handle);
+			return isPrivate;
 		}
 
-		// Local application data is only accessible to the user (and administrators); its subdirectories inherit that.
-		PWSTR knownFolder = nullptr;
-		if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_CREATE, nullptr, &knownFolder)))
-			return {};
-		const std::filesystem::path base(knownFolder);
-		CoTaskMemFree(knownFolder);
+		// `directory` inside `base` (created if missing) for files that only the current user may modify. A new
+		// `directory` gets an owner-only DACL; an existing one is used as it is. Both must pass IsPrivateDirectory (`base`
+		// may be a link, say to a relocated folder); empty otherwise.
+		std::filesystem::path PreparePrivateDirectory(const std::filesystem::path& base, const std::filesystem::path& directory)
+		{
+			if (!base.is_absolute() || !FileSystem::CreateDirectories(base) || !IsPrivateDirectory(base, true))
+				return {};
 
-		std::filesystem::path directory = base / FileSystem::FromUTF8(applicationName) / "Runtime";
-		if (!FileSystem::CreateDirectories(directory))
+			OwnerOnlyDirectorySecurity security;
+			if (!security.Initialize())
+				return {};
+			if (!CreateDirectoryW(directory.c_str(), security.GetAttributes()) && ::GetLastError() != ERROR_ALREADY_EXISTS)
+				return {};
+			if (!IsPrivateDirectory(directory, false))
+				return {};
+			return directory;
+		}
+
+	}
+
+	std::filesystem::path Platform::GetUserRuntimeDirectory(std::string_view applicationName)
+	{
+		// An explicit location (tests, sandboxes) replaces the default; it must pass the same checks.
+		if (const std::optional<std::string> configured = GetEnvVar("STRATA_RUNTIME_DIR"); configured && !configured->empty())
+		{
+			const std::filesystem::path base = FileSystem::FromUTF8(*configured);
+			return PreparePrivateDirectory(base, base / FileSystem::FromUTF8(applicationName));
+		}
+
+		// Local application data, which only the user (and administrators) can access. The path must be freed even when
+		// the call fails.
+		PWSTR knownFolder = nullptr;
+		const HRESULT result = SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_CREATE, nullptr, &knownFolder);
+		const std::filesystem::path localAppData = SUCCEEDED(result) ? std::filesystem::path(knownFolder) : std::filesystem::path();
+		CoTaskMemFree(knownFolder);
+		if (localAppData.empty())
 			return {};
-		return directory;
+
+		const std::filesystem::path base = localAppData / FileSystem::FromUTF8(applicationName);
+		return PreparePrivateDirectory(base, base / "Runtime");
 	}
 
 	std::filesystem::path Platform::CreatePrivateDirectory(const std::filesystem::path& parent, std::string_view prefix)
 	{
-		// The directory inherits the parent's access rules. A name collision (practically impossible) picks another name;
-		// an existing directory is never reused.
+		// A name collision (practically impossible) picks another name; an existing directory is never reused.
+		OwnerOnlyDirectorySecurity security;
+		if (!security.Initialize())
+			return {};
 		constexpr int c_MaxAttempts = 16;
 		for (int attempt = 0; attempt < c_MaxAttempts; attempt++)
 		{
 			const std::filesystem::path path = parent / FileSystem::FromUTF8(fmt::format("{}{}", prefix, UUID().ToString()));
-			if (CreateDirectoryW(path.c_str(), nullptr))
+			if (CreateDirectoryW(path.c_str(), security.GetAttributes()))
 				return path;
 			if (::GetLastError() != ERROR_ALREADY_EXISTS)
 				return {};

@@ -20,6 +20,14 @@
 	#include <pthread.h>
 	#include <sys/stat.h>
 	#include <unistd.h>
+#elif defined(ST_PLATFORM_WINDOWS)
+	#include <Windows.h>
+	#include <aclapi.h>
+	#include <sddl.h>
+	#include <winioctl.h>
+
+	#include <cstring>
+	#include <vector>
 #endif
 
 using namespace Strata;
@@ -91,6 +99,173 @@ namespace
 		const bool innerSucceeded = CrashGuard::Invoke(ThrowException, nullptr, &innerInfo);
 		*static_cast<bool*>(userData) = !innerSucceeded;
 	}
+
+#if defined(ST_PLATFORM_WINDOWS)
+	// Points STRATA_RUNTIME_DIR somewhere else for the scope.
+	class ScopedRuntimeDirectory
+	{
+	public:
+		explicit ScopedRuntimeDirectory(const std::filesystem::path& directory)
+			: m_Previous(Platform::GetEnvVar("STRATA_RUNTIME_DIR").value_or(""))
+		{
+			Platform::SetEnvVar("STRATA_RUNTIME_DIR", FileSystem::ToUTF8(directory));
+		}
+
+		~ScopedRuntimeDirectory()
+		{
+			Platform::SetEnvVar("STRATA_RUNTIME_DIR", m_Previous);
+		}
+
+		ScopedRuntimeDirectory(const ScopedRuntimeDirectory&) = delete;
+		ScopedRuntimeDirectory& operator=(const ScopedRuntimeDirectory&) = delete;
+	private:
+		std::string m_Previous;
+	};
+
+	std::vector<uint8_t> SidBytes(PSID sid)
+	{
+		const uint8_t* bytes = static_cast<const uint8_t*>(sid);
+		return std::vector<uint8_t>(bytes, bytes + GetLengthSid(sid));
+	}
+
+	std::vector<uint8_t> GetCurrentUserSid()
+	{
+		HANDLE token = nullptr;
+		if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+			return {};
+		DWORD size = 0;
+		GetTokenInformation(token, TokenUser, nullptr, 0, &size);
+		std::vector<uint8_t> tokenUser(size);
+		const bool queried = size > 0 && GetTokenInformation(token, TokenUser, tokenUser.data(), size, &size);
+		CloseHandle(token);
+		if (!queried)
+			return {};
+		return SidBytes(reinterpret_cast<const TOKEN_USER*>(tokenUser.data())->User.Sid);
+	}
+
+	struct AccessEntry
+	{
+		BYTE Type = 0;
+		BYTE Flags = 0;
+		ACCESS_MASK Mask = 0;
+		std::vector<uint8_t> Sid; // Of allow and deny entries
+	};
+
+	struct FileSecurity
+	{
+		bool Read = false;
+		bool Protected = false;
+		std::vector<AccessEntry> Entries;
+	};
+
+	FileSecurity ReadFileSecurity(const std::filesystem::path& path)
+	{
+		FileSecurity security;
+		PACL dacl = nullptr;
+		PSECURITY_DESCRIPTOR descriptor = nullptr;
+		if (GetNamedSecurityInfoW(path.c_str(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, &dacl, nullptr, &descriptor) != ERROR_SUCCESS)
+			return security;
+
+		SECURITY_DESCRIPTOR_CONTROL control = 0;
+		DWORD revision = 0;
+		security.Read = dacl && GetSecurityDescriptorControl(descriptor, &control, &revision);
+		security.Protected = (control & SE_DACL_PROTECTED) != 0;
+		for (DWORD index = 0; security.Read && index < dacl->AceCount; index++)
+		{
+			void* ace = nullptr;
+			if (!GetAce(dacl, index, &ace))
+			{
+				security.Read = false;
+				break;
+			}
+			const ACE_HEADER* header = static_cast<const ACE_HEADER*>(ace);
+			AccessEntry entry;
+			entry.Type = header->AceType;
+			entry.Flags = header->AceFlags;
+			if (header->AceType == ACCESS_ALLOWED_ACE_TYPE || header->AceType == ACCESS_DENIED_ACE_TYPE)
+			{
+				// Both kinds have this layout.
+				const ACCESS_ALLOWED_ACE* allowed = static_cast<const ACCESS_ALLOWED_ACE*>(ace);
+				entry.Mask = allowed->Mask;
+				entry.Sid = SidBytes(const_cast<DWORD*>(&allowed->SidStart));
+			}
+			security.Entries.push_back(std::move(entry));
+		}
+		LocalFree(descriptor);
+		return security;
+	}
+
+	// Only the current user has access: a protected DACL whose one entry grants the user full access and is inherited
+	// by everything created inside.
+	void CheckOwnerOnlyDirectory(const std::filesystem::path& directory)
+	{
+		INFO("Directory: ", FileSystem::ToUTF8(directory));
+		const FileSecurity security = ReadFileSecurity(directory);
+		REQUIRE(security.Read);
+		CHECK(security.Protected);
+		REQUIRE(security.Entries.size() == 1);
+		const AccessEntry& entry = security.Entries[0];
+		CHECK(entry.Type == ACCESS_ALLOWED_ACE_TYPE);
+		CHECK(entry.Flags == (CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE));
+		CHECK(entry.Mask == FILE_ALL_ACCESS);
+		CHECK(entry.Sid == GetCurrentUserSid());
+	}
+
+	// A directory everyone may modify.
+	bool CreateSharedDirectory(const std::filesystem::path& path)
+	{
+		PSECURITY_DESCRIPTOR descriptor = nullptr;
+		if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;OICI;FA;;;WD)", SDDL_REVISION_1, &descriptor, nullptr))
+			return false;
+		SECURITY_ATTRIBUTES attributes = { sizeof(SECURITY_ATTRIBUTES), descriptor, FALSE };
+		const bool created = CreateDirectoryW(path.c_str(), &attributes) != FALSE;
+		LocalFree(descriptor);
+		return created;
+	}
+
+	// Creates `link` as a junction to the directory `target` (unlike symbolic links, junctions need no privilege).
+	bool CreateJunction(const std::filesystem::path& link, const std::filesystem::path& target)
+	{
+		if (!CreateDirectoryW(link.c_str(), nullptr))
+			return false;
+		HANDLE handle = CreateFileW(link.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+		if (handle == INVALID_HANDLE_VALUE)
+			return false;
+
+		// The mount point form of REPARSE_DATA_BUFFER (declared in the driver kit only), followed by both names.
+		struct MountPointHeader
+		{
+			DWORD ReparseTag;
+			WORD ReparseDataLength;
+			WORD Reserved;
+			WORD SubstituteNameOffset;
+			WORD SubstituteNameLength;
+			WORD PrintNameOffset;
+			WORD PrintNameLength;
+		};
+		const std::wstring printName = std::filesystem::path(target).make_preferred().wstring();
+		const std::wstring substituteName = L"\\??\\" + printName;
+		const size_t substituteSize = (substituteName.size() + 1) * sizeof(wchar_t);
+		const size_t printSize = (printName.size() + 1) * sizeof(wchar_t);
+
+		MountPointHeader header = {};
+		header.ReparseTag = IO_REPARSE_TAG_MOUNT_POINT;
+		header.ReparseDataLength = static_cast<WORD>(4 * sizeof(WORD) + substituteSize + printSize);
+		header.SubstituteNameOffset = 0;
+		header.SubstituteNameLength = static_cast<WORD>(substituteName.size() * sizeof(wchar_t));
+		header.PrintNameOffset = static_cast<WORD>(substituteSize);
+		header.PrintNameLength = static_cast<WORD>(printName.size() * sizeof(wchar_t));
+		std::vector<uint8_t> buffer(sizeof(header) + substituteSize + printSize);
+		std::memcpy(buffer.data(), &header, sizeof(header));
+		std::memcpy(buffer.data() + sizeof(header), substituteName.c_str(), substituteSize);
+		std::memcpy(buffer.data() + sizeof(header) + substituteSize, printName.c_str(), printSize);
+
+		DWORD returned = 0;
+		const bool set = DeviceIoControl(handle, FSCTL_SET_REPARSE_POINT, buffer.data(), static_cast<DWORD>(buffer.size()), nullptr, 0, &returned, nullptr) != FALSE;
+		CloseHandle(handle);
+		return set;
+	}
+#endif
 }
 
 TEST_SUITE("Core.Platform")
@@ -169,6 +344,59 @@ TEST_SUITE("Core.Platform")
 		CHECK(FileSystem::Remove(first));
 		CHECK(FileSystem::Remove(second));
 	}
+
+#if defined(ST_PLATFORM_WINDOWS)
+	TEST_CASE("Runtime and private directories grant only the current user access")
+	{
+		const std::filesystem::path root = Tests::CreateTemporaryDirectory("RuntimeSecurity");
+		const ScopedRuntimeDirectory scopedRuntime(root);
+
+		// New directories get an owner-only DACL instead of inheriting the parent's entries.
+		const std::filesystem::path runtime = Platform::GetUserRuntimeDirectory("StrataSecurity");
+		REQUIRE(runtime == root / "StrataSecurity");
+		CheckOwnerOnlyDirectory(runtime);
+		const std::filesystem::path directory = Platform::CreatePrivateDirectory(runtime, "Private-");
+		REQUIRE_FALSE(directory.empty());
+		CheckOwnerOnlyDirectory(directory);
+
+		// What is created inside inherits it.
+		const std::filesystem::path file = directory / "File.txt";
+		REQUIRE(FileSystem::WriteText(file, "Private"));
+		const FileSecurity fileSecurity = ReadFileSecurity(file);
+		REQUIRE(fileSecurity.Read);
+		REQUIRE(fileSecurity.Entries.size() == 1);
+		CHECK(fileSecurity.Entries[0].Sid == GetCurrentUserSid());
+		CHECK((fileSecurity.Entries[0].Flags & INHERITED_ACE) != 0);
+
+		// An existing private directory is used as it is.
+		CHECK(Platform::GetUserRuntimeDirectory("StrataSecurity") == runtime);
+	}
+
+	TEST_CASE("Runtime directories that others can modify, and links, are not used")
+	{
+		const std::filesystem::path root = Tests::CreateTemporaryDirectory("RuntimeRefused");
+		{
+			// The directory containing it.
+			const std::filesystem::path shared = root / "Shared";
+			REQUIRE(CreateSharedDirectory(shared));
+			const ScopedRuntimeDirectory scopedRuntime(shared);
+			CHECK(Platform::GetUserRuntimeDirectory("StrataRefused").empty());
+		}
+
+		const ScopedRuntimeDirectory scopedRuntime(root);
+		REQUIRE(CreateSharedDirectory(root / "StrataShared"));
+		CHECK(Platform::GetUserRuntimeDirectory("StrataShared").empty());
+
+		// A junction to a private directory: the directory itself must be the user's.
+		const std::filesystem::path target = Platform::GetUserRuntimeDirectory("StrataTarget");
+		REQUIRE_FALSE(target.empty());
+		const std::filesystem::path junction = root / "StrataJunction";
+		REQUIRE(CreateJunction(junction, target));
+		CHECK(Platform::GetUserRuntimeDirectory("StrataJunction").empty());
+		CHECK(RemoveDirectoryW(junction.c_str()));
+		CHECK(FileSystem::IsDirectory(target));
+	}
+#endif
 
 #if defined(ST_PLATFORM_LINUX)
 	TEST_CASE("Without a private per-user location the runtime directory falls back to the temporary directory")

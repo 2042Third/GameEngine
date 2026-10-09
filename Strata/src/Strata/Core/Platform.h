@@ -38,10 +38,14 @@ namespace Strata
 		// temporary directory: accessible by nobody else, inside a sticky or private temporary directory), and on a file
 		// system that allows executing files; a location that fails the checks is skipped. Group and other write
 		// permission on an existing directory of the user is removed.
+		// Windows: a new directory gets a protected DACL that grants only the current user access (inherited by what is
+		// created inside). The directory - not a link or junction - and the one containing it must be owned by the user,
+		// SYSTEM or the Administrators, with no access control entry that lets anyone else modify them; otherwise the
+		// location is not used.
 		static std::filesystem::path GetUserRuntimeDirectory(std::string_view applicationName);
 		// Creates a new directory "<prefix><random characters>" in `parent` that only the current user can access (POSIX:
-		// mode 0700; Windows: it inherits the access rules of a per-user parent such as GetUserRuntimeDirectory). Never
-		// reuses an existing directory. Returns an empty path on failure.
+		// mode 0700; Windows: a protected DACL that grants only the current user access, inherited by what is created
+		// inside). Never reuses an existing directory. Returns an empty path on failure.
 		static std::filesystem::path CreatePrivateDirectory(const std::filesystem::path& parent, std::string_view prefix);
 
 		static bool IsDebuggerAttached();
