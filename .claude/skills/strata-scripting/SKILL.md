@@ -1,6 +1,6 @@
 ---
 name: strata-scripting
-description: How to write, build and debug Strata game scripts (C++ script classes in a script module built against the StrataScriptCore SDK). Use when creating gameplay logic, adding script classes or fields, spawning prefabs from scripts, or diagnosing script crashes and hot reload.
+description: How to write, build, attach, debug and ship Strata game scripts (C++ script classes in a game project's script module, built against the StrataScriptCore SDK) through the editor's script.* commands. Use when creating gameplay logic for a project, adding script classes or fields, spawning prefabs from scripts, iterating with hot reload, diagnosing script build errors or crashes, or exporting a scripted game.
 ---
 
 # Writing Strata game scripts
@@ -124,27 +124,77 @@ null entity) and the engine logs a warning naming the calling script.
   module clears the fault.
 - Never block: no sleeps, no busy loops, no synchronous file or network I/O. An infinite loop freezes the editor.
 
-## Building
+## The workflow in a game project (through editor commands)
 
-Inside this repository (tests): `strata_add_script_module(<Target> SOURCE_DIR <dir>)` in CMake.
+An agent drives the editor through its commands (`StrataCLI` / MCP tools, or `StrataEditor --commands script.json`);
+every step below is a command, and source files are written with your own file tools.
 
-A game project builds its `Scripts/` folder with this `CMakeLists.txt` (same compiler and configuration as the engine):
+1. **Project.** `project.create {"directory": "<absolute>", "name": "Tetris"}` creates `Tetris.stproj`, `Assets/` and
+   `Scripts/` with a `CMakeLists.txt` (do not change the module's name or output directory) and an example script
+   `Scripts/Spinner.cpp`. Older projects get the same with `script.init {"example": true}`. `script.status` shows the
+   script directory (`sourceDirectory`) and the module name.
+2. **Write scripts.** Put `.cpp`/`.h` files anywhere under `Scripts/` (one `ST_SCRIPT_CLASS` per class, see above). New
+   files are picked up by the next build.
+3. **Build.** `script.build` (waits by default) configures CMake on the first run (a few seconds) and builds with the
+   engine's compiler and configuration into `.strata/Scripts/Bin`, then loads the module. On failure the command fails
+   with the first compiler errors (`File(Line,Column): error C2065: ...`); `script.status` -> `build.last` lists every
+   diagnostic (`file`, `line`, `column`, `severity`, `code`, `message`) and the end of the build log (`log`). Fix and
+   build again. One build runs at a time (a second request fails while one runs; `script.build {"wait": false}` returns
+   at once and `script.status` -> `build.running` tells when it is done). The build output also streams into the
+   editor log (`log.read`).
+4. **Inspect.** `script.status` -> `classes` lists every class with its fields (`name`, `type`, `default`) and
+   implemented callbacks.
+5. **Attach.** `script.add {"entity": "<id>", "class": "Player", "fields": {"Speed": 4.5, "Target": "<entity id>",
+   "Bullet": "Prefabs/Bullet.stprefab"}}`; change one field with `script.setField {"entity", "class", "field", "value"}`
+   (value `null` resets to the class default); detach with `script.remove {"entity", "class"}`. These are undoable,
+   validated against the loaded module (class names, field names and types), and need a built module. Field values:
+   bool, integer, number, arrays for vec2/3/4, `[x, y, z, w]` or Euler degrees `[pitch, yaw, roll]` for quaternions,
+   text, an entity ID, an asset handle or path. Save the scene (`scene.save`) to keep them.
+6. **Play and observe.** `play.start`, `editor.wait {"frames": 60}`, then read state with `component.get`,
+   `entity.find`, `scene.hierarchy`; script `Log::Info(...)` output is in `log.read`. While playing, `script.setField`
+   changes the live instance too (and the running copy only: `play.stop` discards it).
+7. **Iterate with hot reload.** Edit the sources and `script.build` again while the scene plays: the module is reloaded
+   in place, every instance keeps its field values (same name and type) and gets `OnReload` instead of `OnCreate`.
+   A build that fails keeps the running module. `script.reload` reloads the module file without building.
+8. **Crashes.** A crash (null pointer, division by zero, stack overflow) stops play mode; the log and `script.status` ->
+   `fault`/`lastFault` name the module, class, callback, entity and the crash. `play.start` fails until the module is
+   rebuilt (`script.build`) or reloaded (`script.reload`). An exception thrown by a script only disables that instance
+   (the message is logged).
+9. **Ship.** `project.setStartScene`, then `project.export {"directory": "<absolute, outside the project>"}` writes the
+   game: the runtime executable, the asset pack, the script module (the one the editor runs) and the `.stgame`
+   manifest naming it. The exported game loads the module before its start scene; run it headless with
+   `<Game> --headless --frames 600` to check it (exit code 2 means the scripts crashed). Export refuses scenes that use
+   scripts while no module is built.
+
+The UI does the same with Scripts > Build Scripts (Ctrl+B), the toolbar's Build Scripts button and the inspector's
+Script section (add a class from the module, edit fields with their default shown and a reset button).
+
+## Building outside the editor
+
+A game's `Scripts/CMakeLists.txt` uses the StrataScriptCore package (`STRATA_ENGINE_DIR` names the engine checkout;
+`script.build` sets it):
 
 ```cmake
 cmake_minimum_required(VERSION 3.25)
 project(MyGameScripts CXX)
-find_package(StrataScriptCore CONFIG REQUIRED PATHS "<engine>/StrataScriptCore/CMake" NO_DEFAULT_PATH)
-strata_add_script_module(MyGameScripts SOURCE_DIR Scripts)
+set(STRATA_ENGINE_DIR "" CACHE PATH "The Strata engine checkout")
+find_package(StrataScriptCore CONFIG REQUIRED PATHS "${STRATA_ENGINE_DIR}/StrataScriptCore/CMake" NO_DEFAULT_PATH)
+strata_add_script_module(MyGameScripts SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 ```
 
-Rebuilding while the game runs is safe: the engine runs a private copy of the module and, with hot reload enabled
-(`ScriptEngine::SetHotReloadEnabled`), reloads the new build once the file is completely written. A build that fails to load (or crashes while loading) leaves the running version in
-place. Field values survive the reload when the field keeps its name and type.
+Build it with the engine's compiler and configuration. The editor watches the module it runs and reloads it when the
+file changes (an IDE build works too); the engine runs a private copy, so rebuilding while the game runs is safe.
+Inside this repository, test modules use `strata_add_script_module(<Target> SOURCE_DIR <dir>)` directly and load with
+`script.load {"path": "<module file>"}`.
 
 ## Testing scripts
 
 Engine-side tests load a module, play a scene and inspect fields: see `StrataTests/src/Scripting/` (helpers in
 `ScriptTestUtils.h`: `ScopedScriptEngine`, `AddScriptEntry`, `AddFieldOverride`, `GetField<T>`, `RunFrames`).
+Editor-side tests drive the script commands on a new project with in-tree modules (`script.load`):
+`StrataTests/src/Editor/EditorScriptTests.cpp` (`ScriptHarness`). Tests that compile a project's scripts for real
+(`script.build`, hot reload, diagnostics) are `package` tests: doctest suites named `Package*`
+(`ScriptBuildPackageTests.cpp`) and `StrataTests/Editor/ScriptsEndToEnd.cmake` (the real editor and exported game).
 
 ## Extending the script API: the feature test
 

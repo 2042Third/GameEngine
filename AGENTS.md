@@ -106,8 +106,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   - `StrataTests.FeatureTest` (label `feature`, no GPU): suite `FeatureTest` (`src/FeatureTest/`, headless) and
     `Editor.FeatureTest` (editor commands in-process, then the exported game in `GameRuntime`);
   - `GPU.FeatureTest` (in `StrataTests.GPU`): renders the scene, checks entities in the ID buffer, text and stats;
-  - `StrataEditor.FeatureTest` and `StrataRuntime.FeatureTest` (label `feature`): the real executables open, step,
-    export and run a copy of the project (they do not load script modules yet).
+  - `StrataEditor.FeatureTest` and `StrataRuntime.FeatureTest` (label `feature`): the real executables open a copy of
+    the project, load the feature scripts (`script.load`), step, export it with the module and run it headless; they
+    must exit cleanly and print what the scripts log (`StrataTests/Editor/RunAndExpect.cmake`).
 - **The feature test enforces coverage.** It fails when:
   - a registered component is missing from the feature scene, or a property has its default value on every entity
     with the component (new properties need a non-default value there, which also proves that they serialize);
@@ -128,7 +129,10 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   scripts log on purpose go into `c_ExpectedLogMessages`.
 - Script modules the tests load are CMake targets in `StrataTests/CMakeLists.txt` (sources in `StrataTests/Scripts/`),
   built with the tests. The CTest `StrataScriptCore.Package` (label `package`) builds `StrataTests/PackageProject` through
-  the StrataScriptCore package the way a game project does; it needs CMake and the compiler at test time.
+  the StrataScriptCore package the way a game project does; it needs CMake and the compiler at test time, like the other
+  `package` tests: `StrataTests.Package` (doctest suites named `Package*`, e.g. `Package.ScriptBuild`: script.build,
+  hot reload while playing, compiler diagnostics, export) and `StrataEditor.Scripts` (`Editor/ScriptsEndToEnd.cmake`:
+  the real editor creates a project, builds and attaches a script, plays and exports, and the game runs headless).
 
 ## Code style (Hazel conventions)
 
@@ -290,6 +294,31 @@ Building and loading scripts:
   strata_add_script_module(MyGameScripts SOURCE_DIR Scripts)
   ```
   Use the engine's compiler and configuration. The module is `<Name>.dll`/`.so`/`.dylib` (`ScriptEngine::GetModuleFileName`).
+- **Project scripts.** A project's scripts live in its script directory (`ProjectScriptSettings::SourceDirectory`,
+  "Scripts"), whose `CMakeLists.txt` builds every `.cpp`/`.h` below it into the module `ModuleName` (stored in the
+  `.stproj`, version 2: `"Scripts": {"SourceDirectory", "ModuleName"}`; version 1 files derive the name from the project
+  name, `Project::MakeScriptModuleName`). `project.create` writes that `CMakeLists.txt` and an example script
+  (`Editor/ScriptProject.cpp`; `script.init` adds them to older projects). The editor builds the scripts with
+  `script.build` (`ScriptBuilder`, `Editor/ScriptBuild.cpp`): CMake configures `<project>/.strata/Scripts/Build` with the
+  toolchain the engine was configured with (generator, platform, toolset, compiler, configuration and this checkout as
+  `STRATA_ENGINE_DIR`, baked into `Editor/ScriptBuildConfig.h` at configure time; CMake is the engine's, else `cmake` on
+  PATH) and builds the module into `<project>/.strata/Scripts/Bin`, in child processes polled once per frame (never
+  blocking). The configure step only runs when the build tree is new or the toolchain changed. Output is streamed to
+  the log; errors are parsed into file/line/message diagnostics (MSVC, GCC, Clang, linker, CMake). One build runs at a
+  time: a second request fails until the running one finished.
+- **The editor's script engine:** `EditorContext` owns a `ScriptEngine` per open project (active while it is open and
+  set active again when play starts), loads the project's built module when the project opens (warning when the
+  scripts exist but are not built), keeps hot reload on for modules rebuilt outside the editor, and calls `Update()`
+  once per frame before the scene. A successful `script.build` loads the module, or reloads it when it changed (hot
+  reload while playing; the file watcher is paused during editor builds so the module reloads once). A crash while
+  playing stops play mode and logs the class, callback and entity; `play.start` then fails until the module is rebuilt
+  or reloaded. `script.load {path}` runs another module file (tests use in-tree modules this way).
+- **Exported games:** `project.export` copies the module the editor runs (the loaded one, else the project's built
+  one; plus its PDB except in Dist builds or with `includeScriptSymbols: false`) next to the game and names it in the
+  `.stgame` manifest (version 2, `"ScriptModule"`; version 1 manifests load without scripts). It refuses projects whose
+  scenes or prefabs attach scripts when there is no module. `GameRuntime` loads the module (no hot reload) and makes
+  its engine active before the start scene plays. A script crash disables the scripts for the session
+  (`GameRuntime::GetScriptFault`): a headless `StrataRuntime` exits with code 2, a windowed one keeps running and logs it.
 - The host: `ScriptEngine::LoadModule(path)`, `ScriptEngine::SetActive(engine)` before scenes start playing,
   `SetHotReloadEnabled(true)` and `Update()` once per frame (outside scene updates) for hot reload. The module is loaded
   from a private temporary copy, so the build can overwrite the original at any time; a failed (re)load keeps the
@@ -318,9 +347,16 @@ Building and loading scripts:
 - Undo works on entity snapshots: a `SceneEditTransaction` captures the entities an edit touches
   (`Track`, `TrackSubtree` before changing or deleting them, `TrackCreated` after creating them) and
   `EditorContext::CommitEdit` records the difference. Edits while playing are not recorded.
-- `project.export` writes a playable game outside the project: the asset pack (`<Game>.stpak`), the
-  manifest (`<Game>.stgame`, start scene and window settings) and the runtime executable renamed after
+- `project.export` writes a playable game outside the project: the asset pack (`<Game>.stpak`), the script module, the
+  manifest (`<Game>.stgame`, start scene, script module and window settings) and the runtime executable renamed after
   the game. CTest exports a small game (`StrataEditor --no-gpu`) and runs it headless.
+- **Scripts through commands** (see Scripting, "Project scripts"): `script.status` (loaded module, classes with fields
+  and callbacks, faults, the running and last build with diagnostics), `script.build {wait}` (deferred; fails with the
+  first compiler errors), `script.reload`, `script.load {path}`, `script.init {example}`, `script.add {entity, class,
+  fields}`, `script.remove {entity, class}` and `script.setField {entity, class, field, value}` (null resets to the
+  default). Adding scripts and setting fields need a loaded module, which validates class and field names and types;
+  removing works without one. Script edits are undoable (`ScriptEdit`, shared with the inspector's Script drawer) and
+  reach the live instances while playing. The UI builds with Scripts > Build Scripts (Ctrl+B) or the toolbar.
 - Commands never block a frame. One that has to wait (frames, a build, a GPU readback) returns
   `EditorCommandResult::Defer(poll)`; `EditorCommandRunner` polls it once per frame, starting with the
   next frame, and reports through a completion callback. The UI, command scripts and automation all
@@ -331,7 +367,9 @@ Building and loading scripts:
   (`EditorCommandScript`); a pending command holds the script until it completes. If a command fails,
   or the script has not finished by the last of `--frames N` frames, the process exit code becomes 1.
   `--frames N` stops after N frames (without saving the panel layout), `--screenshot out.png` captures
-  the last frame, `--no-gpu` runs headless without a graphics device (export, asset processing).
+  the last frame, `--no-gpu` runs headless without a graphics device (export, asset processing), and
+  `--quit-after-commands` closes the editor once the command script finished (for scripts of unknown length, e.g.
+  with `script.build`, whose duration no frame budget can bound).
   CTest runs `StrataTests/Editor/SmokeCommands.json` and checks that failing and unfinished scripts
   fail the process.
 - Mutating commands report a `warning` in their result while the scene is playing: such changes apply
