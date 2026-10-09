@@ -271,6 +271,19 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		std::fflush(stderr);
 		std::_Exit(result);
 	}
+	if (mode == "active-engine-at-exit")
+	{
+		// <module path>: leaves an engine with a loaded module active, so it is destroyed - unloading the module - while
+		// the program's static objects are destroyed. Exit code 0 if that goes well.
+		if (argc < 3)
+			return 2;
+		const Strata::Ref<Strata::ScriptEngine> engine = Strata::CreateRef<Strata::ScriptEngine>();
+		engine->SetHotReloadEnabled(true); // From a copy, which is removed on unload as well
+		if (!engine->LoadModule(Strata::FileSystem::FromUTF8(argv[2])))
+			return 1;
+		Strata::ScriptEngine::SetActive(engine);
+		return 0;
+	}
 	if (mode == "runtime-directory")
 	{
 		// <application> <XDG_RUNTIME_DIR> <XDG_CACHE_HOME> <TMPDIR>: prints the runtime directory found with that

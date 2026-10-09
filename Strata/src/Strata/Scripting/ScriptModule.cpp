@@ -66,19 +66,32 @@ namespace Strata
 		// Libraries script modules run from (native handles). Loading a file that is already loaded yields the same
 		// library, whose module state belongs to the module that loaded it first. Libraries abandoned after their unload
 		// code crashed stay registered: they remain loaded until the process ends.
-		std::mutex s_LibrariesMutex;
-		std::unordered_set<void*> s_Libraries;
+		struct LoadedLibraries
+		{
+			std::mutex Mutex;
+			std::unordered_set<void*> Handles;
+		};
+
+		// Intentionally never destroyed: an engine that is still active when the program ends (ScriptEngine::SetActive)
+		// unloads its module from a static destructor, which may run after this object would have been destroyed.
+		LoadedLibraries& GetLoadedLibraries()
+		{
+			static LoadedLibraries* s_Libraries = new LoadedLibraries();
+			return *s_Libraries;
+		}
 
 		bool RegisterLibrary(void* handle)
 		{
-			std::scoped_lock<std::mutex> lock(s_LibrariesMutex);
-			return s_Libraries.insert(handle).second;
+			LoadedLibraries& libraries = GetLoadedLibraries();
+			std::scoped_lock<std::mutex> lock(libraries.Mutex);
+			return libraries.Handles.insert(handle).second;
 		}
 
 		void UnregisterLibrary(void* handle)
 		{
-			std::scoped_lock<std::mutex> lock(s_LibrariesMutex);
-			s_Libraries.erase(handle);
+			LoadedLibraries& libraries = GetLoadedLibraries();
+			std::scoped_lock<std::mutex> lock(libraries.Mutex);
+			libraries.Handles.erase(handle);
 		}
 
 		// Copy directories of processes that are gone: anyone can take their owner lock. A directory without a lock file

@@ -405,6 +405,18 @@ TEST_SUITE("Scripting.Module")
 #endif
 	}
 
+	TEST_CASE("An engine still active when the program ends unloads its module cleanly")
+	{
+		ProcessSpecification specification;
+		specification.Executable = GetTestExecutablePath();
+		specification.Arguments = { "--strata-test-helper=active-engine-at-exit", FileSystem::ToUTF8(GetTestScriptModule(STRATA_TEST_SCRIPTS_API)) };
+		const Process::RunResult result = Process::Run(specification, std::chrono::milliseconds(60000));
+		INFO("Output: ", result.Output);
+		REQUIRE(result.Started);
+		CHECK_FALSE(result.TimedOut);
+		CHECK(result.ExitCode == 0);
+	}
+
 	TEST_CASE("Class functions are read once, while the module loads")
 	{
 		// The module clears the functions in its class descriptors when the first instance is created; the engine keeps
