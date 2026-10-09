@@ -71,6 +71,9 @@ namespace Strata
 		std::optional<PropertyValue> GetFieldValue(Entity entity, std::string_view className, std::string_view fieldName) const;
 		// Assigns a field of a live instance (the value must have the field's type).
 		bool SetFieldValue(Entity entity, std::string_view className, std::string_view fieldName, const PropertyValue& value);
+		// How often an entity's instances were matched against its Script component since the system was created
+		// (diagnostics: the work grows with the number of changed entities, not with their square).
+		uint64_t GetReconcileCount() const { return m_ReconcileCount; }
 
 		//////////////////////////////////////////////////////////////////////////
 		// Script host API support
@@ -161,6 +164,11 @@ namespace Strata
 
 		std::vector<UUID> m_DirtyEntities; // Script components changed since the last sync point (in change order)
 		std::unordered_set<UUID> m_DirtySet;
+		// Changed entities the next creation-only pass (CreatePendingInstances) takes; the cursor is shared by nested passes.
+		std::vector<UUID> m_CreationQueue;
+		std::unordered_set<UUID> m_CreationQueued;
+		size_t m_CreationCursor = 0;
+		uint64_t m_ReconcileCount = 0;
 		bool m_ReconcileAll = false;
 		std::vector<UUID> m_DeferredDestroys;
 

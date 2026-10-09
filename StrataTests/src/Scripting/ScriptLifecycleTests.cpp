@@ -322,6 +322,28 @@ TEST_SUITE("Scripting.Lifecycle")
 		CHECK(liveInstances.Get() == baseline);
 	}
 
+	TEST_CASE("Spawning many scripted entities in one update takes work linear in their number")
+	{
+		constexpr int32_t c_Count = 2000;
+		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
+		Scene scene;
+		Entity spawner = scene.CreateEntity("Spawner");
+		AddFieldOverride(AddScriptEntry(spawner, "MassSpawner"), "Count", PropertyType::Int, c_Count);
+		scene.OnRuntimeStart();
+		ScriptSystem& system = GetScriptSystem(scene);
+		const uint64_t reconcilesBefore = system.GetReconcileCount();
+
+		// Every AddScript creates its instance right away; each spawned entity must be looked at a bounded number of times
+		// (once when its script is added, once at the next sync point), not once per entity spawned after it.
+		scene.OnUpdateRuntime(0.0f);
+		CHECK(GetField<int32_t>(system, spawner, "MassSpawner", "Spawned") == c_Count);
+		CHECK(system.GetInstanceCount() == static_cast<size_t>(c_Count) + 1);
+		const uint64_t reconciles = system.GetReconcileCount() - reconcilesBefore;
+		INFO("Entities reconciled: ", reconciles);
+		CHECK(reconciles <= 3 * static_cast<uint64_t>(c_Count));
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("Restarting creates fresh instances; play copies leave the edited scene alone")
 	{
 		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
