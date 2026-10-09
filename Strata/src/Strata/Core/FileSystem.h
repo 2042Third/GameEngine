@@ -32,6 +32,7 @@ namespace Strata
 		static bool Remove(const std::filesystem::path& path); // Files, or directories recursively
 		static bool Rename(const std::filesystem::path& from, const std::filesystem::path& to);
 		static bool Copy(const std::filesystem::path& from, const std::filesystem::path& to, bool overwrite = true);
+		// Copies the directories and regular files below `from` into `to` (created if needed), overwriting files.
 		static bool CopyDirectory(const std::filesystem::path& from, const std::filesystem::path& to);
 
 		static std::optional<uint64_t> GetFileSize(const std::filesystem::path& path);

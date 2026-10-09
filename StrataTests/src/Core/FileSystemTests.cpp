@@ -122,4 +122,33 @@ TEST_SUITE("Core.FileSystem")
 		CHECK(FileSystem::IsDirectory(directory / "d"));
 		CHECK(FileSystem::IsRegularFile(directory / "d" / "one.txt"));
 	}
+
+	TEST_CASE("CopyDirectory copies nested directories into existing ones")
+	{
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("FileSystemCopyDirectory");
+		REQUIRE(FileSystem::WriteText(directory / "Source" / "Top.txt", "top"));
+		REQUIRE(FileSystem::WriteText(directory / "Source" / "Nested" / "Deeper" / "Leaf.txt", "leaf"));
+		REQUIRE(FileSystem::CreateDirectories(directory / "Source" / "Empty"));
+		REQUIRE(FileSystem::WriteText(directory / "Target" / "Top.txt", "old"));
+		REQUIRE(FileSystem::WriteText(directory / "Target" / "Kept.txt", "kept"));
+
+		REQUIRE(FileSystem::CopyDirectory(directory / "Source", directory / "Target"));
+		CHECK(FileSystem::ReadText(directory / "Target" / "Top.txt") == "top"); // Overwritten
+		CHECK(FileSystem::ReadText(directory / "Target" / "Nested" / "Deeper" / "Leaf.txt") == "leaf");
+		CHECK(FileSystem::IsDirectory(directory / "Target" / "Empty"));
+		CHECK(FileSystem::ReadText(directory / "Target" / "Kept.txt") == "kept");
+
+		CHECK_FALSE(FileSystem::CopyDirectory(directory / "Missing", directory / "Other"));
+		CHECK_FALSE(FileSystem::CopyDirectory(directory / "Source" / "Top.txt", directory / "Other"));
+	}
+
+	TEST_CASE("CopyDirectory copies from the source tree's file system")
+	{
+		// The checkout may live on another volume and file system than the temporary directory (on Windows the
+		// standard library's directory copy failed for exFAT sources).
+		const std::filesystem::path source = FileSystem::FromUTF8(STRATA_SOURCE_DIR) / "StrataScriptCore" / "Include";
+		const std::filesystem::path target = Tests::CreateTemporaryDirectory("FileSystemCopySourceTree") / "Include";
+		REQUIRE(FileSystem::CopyDirectory(source, target));
+		CHECK(FileSystem::ReadBytes(target / "StrataScript" / "ScriptABI.h") == FileSystem::ReadBytes(source / "StrataScript" / "ScriptABI.h"));
+	}
 }

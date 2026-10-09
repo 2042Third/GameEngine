@@ -147,9 +147,23 @@ namespace Strata
 
 	bool FileSystem::CopyDirectory(const std::filesystem::path& from, const std::filesystem::path& to)
 	{
+		// Entry by entry rather than with std::filesystem::copy: MSVC's implementation compares file identities first,
+		// which fails (ERROR_INVALID_PARAMETER) on file systems without 128-bit file ids, such as exFAT.
 		std::error_code error;
+		if (!std::filesystem::is_directory(from, error))
+			return false;
 		std::filesystem::create_directories(to, error);
-		std::filesystem::copy(from, to, std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, error);
+		if (error)
+			return false;
+
+		for (std::filesystem::recursive_directory_iterator it(from, error), end; !error && it != end; it.increment(error))
+		{
+			const std::filesystem::path target = to / it->path().lexically_relative(from);
+			if (it->is_directory(error))
+				std::filesystem::create_directories(target, error);
+			else if (!error && it->is_regular_file(error))
+				std::filesystem::copy_file(it->path(), target, std::filesystem::copy_options::overwrite_existing, error);
+		}
 		return !error;
 	}
 
