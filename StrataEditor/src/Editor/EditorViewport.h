@@ -112,8 +112,10 @@ namespace Strata
 		bool Focus(EditorContext& context, std::span<const Entity> entities);
 
 		// Starts picking the entity at a pixel of the viewport renderer's last frame (a GPU readback, finished by
-		// UpdatePicking over the next frames). Replaces a pending pick. False when the viewport has not rendered yet.
-		bool RequestPick(const glm::uvec2& pixel, ViewportPickMode mode);
+		// UpdatePicking over the next frames). imageSize is the pixel size of the image the click was on: when the
+		// renderer's last frame has another size (the panel is being resized), the pixel would point elsewhere and the
+		// click is not picked. Replaces a pending pick. False when no pick was started.
+		bool RequestPick(const glm::uvec2& pixel, const glm::uvec2& imageSize, ViewportPickMode mode);
 		bool IsPickPending() const { return m_Pick != nullptr; }
 		// Once per frame: applies a finished pick to the selection. Picks of a scene that is no longer active (play mode
 		// started or stopped meanwhile) are dropped.

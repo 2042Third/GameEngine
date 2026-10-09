@@ -166,9 +166,9 @@ namespace Strata
 	// Picking
 	////////////////////////////////////////////////////////////////////////////////
 
-	bool EditorViewport::RequestPick(const glm::uvec2& pixel, ViewportPickMode mode)
+	bool EditorViewport::RequestPick(const glm::uvec2& pixel, const glm::uvec2& imageSize, ViewportPickMode mode)
 	{
-		if (!m_Renderer)
+		if (!m_Renderer || m_Renderer->GetSize() != imageSize)
 			return false;
 		Scope<TextureReadback> readback = m_Renderer->GetSceneRenderer().ReadEntityIDAsync(pixel.x, pixel.y);
 		if (!readback)

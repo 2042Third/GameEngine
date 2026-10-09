@@ -382,7 +382,7 @@ TEST_SUITE("Editor.Viewport")
 		CHECK(context.GetSelection().empty());
 
 		// Without a renderer nothing can be picked.
-		CHECK_FALSE(context.GetViewport().RequestPick(glm::uvec2(1, 1), ViewportPickMode::Replace));
+		CHECK_FALSE(context.GetViewport().RequestPick(glm::uvec2(1, 1), glm::uvec2(64, 64), ViewportPickMode::Replace));
 		CHECK_FALSE(context.GetViewport().IsPickPending());
 	}
 

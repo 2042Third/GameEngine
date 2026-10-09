@@ -327,9 +327,9 @@ TEST_SUITE("GPU.Editor.Viewport")
 		EditorViewport& viewport = context.GetViewport();
 		ViewportRenderer* renderer = viewport.GetRenderer();
 		REQUIRE(renderer);
-		CHECK_FALSE(viewport.RequestPick(glm::uvec2(32, 32), ViewportPickMode::Replace)); // Nothing rendered yet
-
 		const glm::uvec2 size(64, 64);
+		CHECK_FALSE(viewport.RequestPick(glm::uvec2(32, 32), size, ViewportPickMode::Replace)); // Nothing rendered yet
+
 		auto render = [&]()
 		{
 			const std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Automatic, 1.0f);
@@ -351,7 +351,11 @@ TEST_SUITE("GPU.Editor.Viewport")
 		Entity cube = context.GetActiveScene()->FindEntityByName("Cube");
 		REQUIRE(cube);
 
-		REQUIRE(viewport.RequestPick(glm::uvec2(32, 32), ViewportPickMode::Replace));
+		// While the panel is resized, the last frame has another size than the image clicked on: no pick.
+		CHECK_FALSE(viewport.RequestPick(glm::uvec2(32, 32), glm::uvec2(65, 64), ViewportPickMode::Replace));
+		CHECK_FALSE(viewport.IsPickPending());
+
+		REQUIRE(viewport.RequestPick(glm::uvec2(32, 32), size, ViewportPickMode::Replace));
 		CHECK(viewport.IsPickPending());
 		finishPick();
 		CHECK(context.GetSelection() == std::vector<UUID> { cube.GetUUID() });
@@ -359,13 +363,13 @@ TEST_SUITE("GPU.Editor.Viewport")
 		// The selection outline is drawn from now on; empty space clears the selection.
 		render();
 		CHECK(renderer->GetStats().OutlinedEntities == 1);
-		CHECK_FALSE(viewport.RequestPick(size, ViewportPickMode::Replace)); // Outside the image
-		REQUIRE(viewport.RequestPick(glm::uvec2(1, 1), ViewportPickMode::Replace));
+		CHECK_FALSE(viewport.RequestPick(size, size, ViewportPickMode::Replace)); // Outside the image
+		REQUIRE(viewport.RequestPick(glm::uvec2(1, 1), size, ViewportPickMode::Replace));
 		finishPick();
 		CHECK(context.GetSelection().empty());
 
 		// A pick that finishes after play mode started belongs to the edited scene's image: it is dropped.
-		REQUIRE(viewport.RequestPick(glm::uvec2(32, 32), ViewportPickMode::Replace));
+		REQUIRE(viewport.RequestPick(glm::uvec2(32, 32), size, ViewportPickMode::Replace));
 		REQUIRE(context.Play());
 		finishPick();
 		CHECK(context.GetSelection().empty());

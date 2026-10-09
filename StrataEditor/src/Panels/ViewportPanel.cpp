@@ -150,7 +150,7 @@ namespace Strata
 			{
 				const ViewportPickMode mode = io.KeyCtrl ? ViewportPickMode::Toggle : (io.KeyShift ? ViewportPickMode::Add : ViewportPickMode::Replace);
 				if (const std::optional<glm::uvec2> pixel = m_Image.ToPixel(glm::vec2(io.MousePos.x, io.MousePos.y)))
-					viewport.RequestPick(*pixel, mode);
+					viewport.RequestPick(*pixel, size, mode);
 			}
 			// The camera may have moved this frame.
 			view = ResolveViewportView(context, ViewportCameraSource::Automatic, aspectRatio);
