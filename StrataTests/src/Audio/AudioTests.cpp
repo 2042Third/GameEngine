@@ -589,8 +589,12 @@ TEST_SUITE("Audio.Source")
 	{
 		ScopedAudioEngine engine;
 		REQUIRE(engine.Initialized);
+		// Streamed clips decode on the audio thread: their finished voices must be replaced, never rewound from here.
+		AudioClipLoadMode mode = AudioClipLoadMode::Decompressed;
+		SUBCASE("Decompressed") {}
+		SUBCASE("Streamed") { mode = AudioClipLoadMode::Streamed; }
 		AudioSource source;
-		REQUIRE(source.SetClip(CreateSineClip(0.1f)));
+		REQUIRE(source.SetClip(CreateSineClip(0.1f, mode)));
 		source.Play();
 
 		// Play again the moment the source reports that it finished, before the mixer has processed its end.
@@ -605,6 +609,7 @@ TEST_SUITE("Audio.Source")
 		CHECK(source.IsPlaying());
 		CHECK(ComputeRms(Render(2400)) == doctest::Approx(c_SineRms).epsilon(0.05));
 		CHECK(std::abs(source.GetPlaybackPosition() - 0.05f) < c_PositionTolerance);
+		CHECK(AudioEngine::GetStats().AllocatedVoices == 1); // The finished voice was released
 	}
 
 	TEST_CASE("Seek moves the playback position")
@@ -1021,6 +1026,38 @@ TEST_SUITE("Audio.Spatial")
 		left = MeasureRms(0);
 		right = MeasureRms(1);
 		CHECK(left == doctest::Approx(right).epsilon(0.01));
+	}
+
+	TEST_CASE("The listener's up vector reaches the mix through the mixing thread")
+	{
+		ScopedAudioEngine engine;
+		REQUIRE(engine.Initialized);
+		AudioSource source;
+		REQUIRE(source.SetClip(CreateSineClip(1.0f)));
+		source.SetLooping(true);
+		source.SetSpatial(true);
+		source.SetPosition(glm::vec3(5.0f, 0.0f, 0.0f));
+		source.Play();
+		CHECK(MeasureRms(1) > MeasureRms(0) * 1.5f);
+
+		// Rolled upside down, +X is on the left. The vector is applied after a mixing period, so the next ones use it.
+		const glm::vec3 position(0.0f, 0.0f, 1.0f);
+		AudioEngine::SetListener(position, glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+		const AudioListenerState listener = AudioEngine::GetListener();
+		CHECK(listener.Position == position);
+		CHECK(listener.Forward == glm::vec3(0.0f, 0.0f, -1.0f));
+		CHECK(listener.Up == glm::vec3(0.0f, -1.0f, 0.0f));
+		CHECK(listener.Velocity == glm::vec3(1.0f, 0.0f, 0.0f));
+		CHECK(AudioEngine::GetMixedListenerUp() == glm::vec3(0.0f, 1.0f, 0.0f)); // Not written from this call
+		Render(64);
+		CHECK(AudioEngine::GetMixedListenerUp() == glm::vec3(0.0f, -1.0f, 0.0f));
+		CHECK(MeasureRms(0) > MeasureRms(1) * 1.5f);
+
+		// Changed many times between periods, the latest vector wins.
+		for (int index = 0; index < 100; index++)
+			AudioEngine::SetListener(position, glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, index % 2 == 0 ? 1.0f : -1.0f, 0.0f));
+		CHECK(MeasureRms(0) > MeasureRms(1) * 1.5f);
+		CHECK(AudioEngine::GetMixedListenerUp() == glm::vec3(0.0f, -1.0f, 0.0f));
 	}
 
 	TEST_CASE("Non-spatial sources ignore their position")

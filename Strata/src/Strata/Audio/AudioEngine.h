@@ -4,6 +4,8 @@
 
 #include <glm/glm.hpp>
 
+#include <optional>
+
 namespace Strata
 {
 
@@ -22,6 +24,15 @@ namespace Strata
 		// Fire-and-forget voices are reclaimed once they finish; beyond this many (at least 1), the oldest one is cut
 		// off so new one-shots always play and a flood of them cannot exhaust memory.
 		uint32_t MaxOneShots = 128;
+	};
+
+	// The listener as placed with AudioEngine::SetListener.
+	struct AudioListenerState
+	{
+		glm::vec3 Position = glm::vec3(0.0f);
+		glm::vec3 Forward = glm::vec3(0.0f, 0.0f, -1.0f);
+		glm::vec3 Up = glm::vec3(0.0f, 1.0f, 0.0f);
+		glm::vec3 Velocity = glm::vec3(0.0f);
 	};
 
 	struct AudioStats
@@ -63,8 +74,13 @@ namespace Strata
 
 		// Places the listener, typically from the active camera every frame. forward and up need not be normalized
 		// or exactly perpendicular, but must not be zero; up only matters for rolling around forward, so listeners
-		// that do not roll can pass +Y. velocity (world units per second) drives the Doppler effect.
+		// that do not roll can pass +Y. velocity (world units per second) drives the Doppler effect. A new up vector
+		// reaches the mix after the current mixing period (the mixing thread applies it, see AudioEngine.cpp).
 		static void SetListener(const glm::vec3& position, const glm::vec3& forward, const glm::vec3& up, const glm::vec3& velocity = glm::vec3(0.0f));
+		static AudioListenerState GetListener();
+		// The up vector the mixer currently uses, for diagnostics and tests. Null device only (nullopt otherwise): with an
+		// output device the audio thread owns it.
+		static std::optional<glm::vec3> GetMixedListenerUp();
 
 		// Fire-and-forget voices owned by the engine. PlayOneShot plays the clip without spatialization (UI, music
 		// stingers); PlayOneShotAt plays it at a world position. Return false if the engine is not initialized or the
