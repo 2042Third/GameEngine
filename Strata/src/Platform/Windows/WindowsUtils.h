@@ -4,9 +4,45 @@
 
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace Strata::WindowsUtils
 {
+
+	// Owns a kernel handle and closes it when it goes out of scope, so every early return closes what was opened. Null
+	// and INVALID_HANDLE_VALUE both mean "no handle".
+	class ScopedHandle
+	{
+	public:
+		ScopedHandle() = default;
+		explicit ScopedHandle(HANDLE handle)
+			: m_Handle(handle)
+		{
+		}
+
+		~ScopedHandle() { Reset(); }
+
+		ScopedHandle(const ScopedHandle&) = delete;
+		ScopedHandle& operator=(const ScopedHandle&) = delete;
+
+		HANDLE Get() const { return m_Handle; }
+		// For functions that return a handle through a pointer; closes the current handle first.
+		HANDLE* Receive()
+		{
+			Reset();
+			return &m_Handle;
+		}
+		HANDLE Release() { return std::exchange(m_Handle, nullptr); }
+		void Reset(HANDLE handle = nullptr)
+		{
+			if (IsValid())
+				CloseHandle(m_Handle);
+			m_Handle = handle;
+		}
+		bool IsValid() const { return m_Handle && m_Handle != INVALID_HANDLE_VALUE; }
+	private:
+		HANDLE m_Handle = nullptr;
+	};
 
 	inline std::wstring Utf8ToWide(std::string_view text)
 	{

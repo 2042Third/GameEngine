@@ -25,8 +25,11 @@ namespace Strata
 	// How ScriptModule::Load loads the module's library.
 	enum class ScriptModuleLoadMode : uint8_t
 	{
-		InPlace, // From the file itself (shipped games). A file that is already loaded is loaded from a copy instead.
-		Copy     // From a private copy, so the build can replace the file while the module runs (hot reload)
+		// From the file itself (shipped games). A file that is already loaded, or whose library crashed while it loaded or
+		// unloaded earlier in this process (see ScriptModule), is loaded from a copy instead.
+		InPlace,
+		// From a private copy, so the build can replace the file while the module runs (hot reload).
+		Copy
 	};
 
 	enum class ScriptCallResult : uint8_t
@@ -59,7 +62,10 @@ namespace Strata
 	//
 	// Every call into module code - including loading and unloading the library - runs under CrashGuard. A crash marks
 	// the module faulted: it is never called again, its instances are abandoned (their memory is leaked) and only the
-	// library itself is unloaded, also guarded. Main thread only.
+	// library itself is unloaded, also guarded. A crash the guard catches in the library's static initializers or
+	// destructors (the Windows loader contains those itself) happened inside the platform's loader, which may keep the
+	// half-initialized or half-destroyed library: the file is then only loaded from copies for the rest of the process,
+	// and an error recommends a restart. Main thread only.
 	class ScriptModule
 	{
 	public:

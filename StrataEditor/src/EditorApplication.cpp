@@ -37,6 +37,8 @@ namespace Strata
 			options.ScreenshotPath = FileSystem::FromUTF8(*screenshot);
 		if (std::optional<std::string> commands = commandLine.GetOption("--commands"))
 			options.CommandScript = FileSystem::FromUTF8(*commands);
+		// Scripted runs whose length is unknown (script builds) end when their command script has finished.
+		options.QuitAfterCommands = commandLine.HasFlag("--quit-after-commands");
 
 		// Automation (StrataCLI, MCP): on by default, on a free loopback port unless --automation-port picks one.
 		options.EnableAutomation = !commandLine.HasFlag("--no-automation");

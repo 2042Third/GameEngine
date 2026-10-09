@@ -440,7 +440,7 @@ namespace Strata
 					// stb_truetype transforms the component's vertices, then copies the vertices gathered so far and the
 					// component's into a new array.
 					shape.CompositeCopies = SaturatingAdd(shape.CompositeCopies, SaturatingAdd(child.Shape.CompositeCopies,
-						2ull * child.Shape.Vertices + shape.Vertices));
+						static_cast<uint64_t>(child.Shape.Vertices) * 2 + shape.Vertices));
 					shape.Vertices = SaturatingAdd(shape.Vertices, child.Shape.Vertices);
 					shape.Curves = SaturatingAdd(shape.Curves, child.Shape.Curves);
 					more = (flags & c_MoreComponents) != 0;

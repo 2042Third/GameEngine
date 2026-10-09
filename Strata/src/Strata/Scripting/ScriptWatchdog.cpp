@@ -41,6 +41,12 @@ namespace Strata
 			m_Calls.pop_back();
 	}
 
+	size_t ScriptWatchdog::GetActiveCallCount() const
+	{
+		std::scoped_lock<std::mutex> lock(m_Mutex);
+		return m_Calls.size();
+	}
+
 	void ScriptWatchdog::Run()
 	{
 		Platform::SetCurrentThreadName("Script Watchdog");

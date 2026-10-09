@@ -798,15 +798,18 @@ TEST_SUITE("Asset.Gltf")
 		Entity root;
 		Ref<Scene> scene = InstantiateModel(output, root);
 
-		const CameraComponent& perspective = FindChild(root, "Cam").GetComponent<CameraComponent>();
+		const Entity perspectiveCamera = FindChild(root, "Cam");
+		const CameraComponent& perspective = perspectiveCamera.GetComponent<CameraComponent>();
 		CHECK(perspective.PerspectiveNear == doctest::Approx(0.1f));
 		CHECK(perspective.PerspectiveFar == doctest::Approx(1000.0f));
-		const CameraComponent& orthographic = FindChild(root, "Ortho").GetComponent<CameraComponent>();
+		const Entity orthographicCamera = FindChild(root, "Ortho");
+		const CameraComponent& orthographic = orthographicCamera.GetComponent<CameraComponent>();
 		CHECK(orthographic.Projection == ProjectionType::Orthographic);
 		CHECK(orthographic.OrthographicSize == doctest::Approx(12.0f));
 		CHECK(orthographic.OrthographicNear == doctest::Approx(1.0f));
 		CHECK(orthographic.OrthographicFar == doctest::Approx(100.0f));
-		const CameraComponent& infinite = FindChild(root, "Infinite").GetComponent<CameraComponent>();
+		const Entity infiniteCamera = FindChild(root, "Infinite");
+		const CameraComponent& infinite = infiniteCamera.GetComponent<CameraComponent>();
 		CHECK(infinite.PerspectiveNear == doctest::Approx(0.5f));
 		CHECK(infinite.PerspectiveFar >= 500.0f);
 		CHECK(std::isfinite(infinite.PerspectiveFar));
@@ -822,7 +825,8 @@ TEST_SUITE("Asset.Gltf")
 		const ImportOutput tinyOutput = RunImport(assets, "Tiny.gltf", ToBytes(tiny), { { "Scale", 0.01 } });
 		REQUIRE_MESSAGE(tinyOutput.Success, tinyOutput.Error);
 		Ref<Scene> tinyScene = InstantiateModel(tinyOutput, root);
-		const CameraComponent& tinyCamera = FindChild(root, "Cam").GetComponent<CameraComponent>();
+		const Entity tinyCameraEntity = FindChild(root, "Cam");
+		const CameraComponent& tinyCamera = tinyCameraEntity.GetComponent<CameraComponent>();
 		CHECK(tinyCamera.PerspectiveFar > tinyCamera.PerspectiveNear);
 	}
 

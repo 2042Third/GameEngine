@@ -12,8 +12,11 @@
 #include <chrono>
 #include <climits>
 #include <cstdlib>
+#include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <thread>
+#include <vector>
 
 #if defined(ST_PLATFORM_POSIX)
 	#include <csignal>
@@ -40,12 +43,15 @@ namespace
 		*pointer = 42;
 	}
 
+#if !defined(__aarch64__) && !defined(_M_ARM64)
+	// Integer division by zero does not trap on ARM64 (it returns 0), so the tests that use this only exist elsewhere.
 	void DivideByZero(void* userData)
 	{
 		volatile int divisor = *static_cast<int*>(userData);
 		volatile int result = 100 / divisor;
 		(void)result;
 	}
+#endif
 
 	int Recurse(int depth)
 	{
@@ -82,20 +88,13 @@ namespace
 		throw std::runtime_error("Thrown on purpose");
 	}
 
-#if defined(ST_PLATFORM_POSIX)
-	// Windows guards contain abort() only where the aborting code's C runtime reports it (see the script SDK).
-	void CallAbort(void*)
-	{
-		std::abort();
-	}
-#endif
-
 	void NestedThrow(void* userData)
 	{
 		CrashInfo innerInfo;
 		const bool innerSucceeded = CrashGuard::Invoke(ThrowException, nullptr, &innerInfo);
 		*static_cast<bool*>(userData) = !innerSucceeded;
 	}
+
 }
 
 TEST_SUITE("Core.Platform")
@@ -120,12 +119,34 @@ TEST_SUITE("Core.Platform")
 		CHECK(FileSystem::IsDirectory(directory));
 	}
 
+	TEST_CASE("The runtime directory is the user's, or the one STRATA_RUNTIME_DIR names")
+	{
+		// The tests run with STRATA_RUNTIME_DIR set to a private temporary directory (TestMain.cpp).
+		const std::optional<std::string> configured = Platform::GetEnvVar("STRATA_RUNTIME_DIR");
+		REQUIRE(configured.has_value());
+		const std::filesystem::path runtime = Platform::GetUserRuntimeDirectory("StrataTests");
+		CHECK(runtime == FileSystem::FromUTF8(*configured) / "StrataTests");
+		CHECK(FileSystem::IsDirectory(runtime));
+		CHECK(Platform::GetUserRuntimeDirectory("StrataTests") == runtime);
+
+		// Without it, every user has a location (with a temporary-directory fallback on POSIX). Removed again afterwards.
+		std::filesystem::path user;
+		{
+			const Tests::ScopedEnvironmentVariable noOverride("STRATA_RUNTIME_DIR", "");
+			user = Platform::GetUserRuntimeDirectory("StrataTestsUser");
+		}
+		REQUIRE_FALSE(user.empty());
+		CHECK(FileSystem::IsDirectory(user));
+		CHECK(user != runtime);
+		// Windows: <local application data>/StrataTestsUser/Runtime.
+		CHECK(FileSystem::Remove(user.filename() == "Runtime" ? user.parent_path() : user));
+	}
+
 	TEST_CASE("Private directories are unique and only the user can modify them")
 	{
 		const std::filesystem::path runtime = Platform::GetUserRuntimeDirectory("StrataTests");
 		REQUIRE_FALSE(runtime.empty());
 		CHECK(FileSystem::IsDirectory(runtime));
-		CHECK(Platform::GetUserRuntimeDirectory("StrataTests") == runtime);
 
 		const std::filesystem::path first = Platform::CreatePrivateDirectory(runtime, "Private-");
 		const std::filesystem::path second = Platform::CreatePrivateDirectory(runtime, "Private-");
@@ -155,6 +176,47 @@ TEST_SUITE("Core.Platform")
 		CHECK(FileSystem::Remove(second));
 	}
 
+#if defined(ST_PLATFORM_LINUX)
+	TEST_CASE("Without a private per-user location the runtime directory falls back to the temporary directory")
+	{
+		const std::filesystem::path root = Tests::CreateTemporaryDirectory("RuntimeFallback");
+		const std::filesystem::path runtime = root / "Runtime";
+		const std::filesystem::path cache = root / "Cache";
+		const std::filesystem::path temporary = root / "Temp";
+		const std::filesystem::path shared = root / "Shared";
+		using std::filesystem::perms;
+		std::error_code error;
+		for (const std::filesystem::path& directory : { runtime, cache, temporary, shared })
+			REQUIRE(FileSystem::CreateDirectories(directory));
+		// Group-writable runtime and cache directories do not qualify (others could replace what is in them).
+		std::filesystem::permissions(runtime, perms::owner_all | perms::group_all, std::filesystem::perm_options::replace, error);
+		std::filesystem::permissions(cache, perms::owner_all | perms::group_all, std::filesystem::perm_options::replace, error);
+		std::filesystem::permissions(temporary, perms::owner_all, std::filesystem::perm_options::replace, error);
+		// A shared temporary directory without the sticky bit lets others rename entries: refused too.
+		std::filesystem::permissions(shared, perms::all, std::filesystem::perm_options::replace, error);
+		REQUIRE_FALSE(error);
+
+		auto find = [&](const std::filesystem::path& temporaryDirectory)
+		{
+			const Process::RunResult result = Process::Run(HelperProcess({ "--strata-test-helper=runtime-directory", "StrataFallback", FileSystem::ToUTF8(runtime),
+				FileSystem::ToUTF8(cache), FileSystem::ToUTF8(temporaryDirectory) }), std::chrono::milliseconds(30000));
+			REQUIRE(result.ExitCode == 0);
+			const size_t begin = result.Output.find('[');
+			const size_t end = result.Output.rfind(']');
+			REQUIRE((begin != std::string::npos && end != std::string::npos && end > begin));
+			return result.Output.substr(begin + 1, end - begin - 1);
+		};
+
+		const std::filesystem::path expected = temporary / ("StrataFallback-" + std::to_string(geteuid()));
+		CHECK(find(temporary) == FileSystem::ToUTF8(expected));
+		struct stat info = {};
+		REQUIRE(lstat(expected.c_str(), &info) == 0);
+		CHECK(S_ISDIR(info.st_mode));
+		CHECK((info.st_mode & 0777) == 0700);
+		CHECK(find(shared).empty());
+	}
+#endif
+
 	TEST_CASE("File locks are exclusive")
 	{
 		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("FileLock");
@@ -169,6 +231,20 @@ TEST_SUITE("Core.Platform")
 		const Scope<FileLock> again = FileLock::TryAcquire(path);
 		CHECK(again);
 		CHECK_FALSE(FileLock::TryAcquire(directory / "Missing.lock"));
+
+		// Create never replaces an existing file, locked or not.
+		const std::filesystem::path existing = directory / "Existing.lock";
+		REQUIRE(FileSystem::WriteText(existing, "Kept"));
+		CHECK_FALSE(FileLock::Create(existing));
+		CHECK(FileSystem::ReadText(existing) == std::optional<std::string>("Kept"));
+		CHECK(FileLock::TryAcquire(existing));
+		// No temporary files are left behind.
+		size_t entries = 0;
+		std::error_code error;
+		for (std::filesystem::directory_iterator it(directory, error), end; !error && it != end; it.increment(error))
+			entries++;
+		CHECK_FALSE(error);
+		CHECK(entries == 2);
 	}
 
 	TEST_CASE("File locks are released when their process ends")
@@ -367,6 +443,69 @@ TEST_SUITE("Core.Platform")
 		CHECK(process.GetExitCode().has_value());
 	}
 
+	TEST_CASE("Captured output reports when it ended")
+	{
+		Process idle;
+		CHECK(idle.IsOutputFinished()); // Nothing captured
+
+		Process process;
+		REQUIRE(process.Start(HelperProcess({ "--strata-test-helper=echo", "last words" })));
+		REQUIRE(process.Wait(std::chrono::seconds(30)));
+		// The output can end after the exit; then everything is there.
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+		while (!process.IsOutputFinished() && std::chrono::steady_clock::now() < deadline)
+			std::this_thread::sleep_for(std::chrono::milliseconds(5));
+		REQUIRE(process.IsOutputFinished());
+		CHECK(process.TakeOutput().find("last words") != std::string::npos);
+	}
+
+	TEST_CASE("Terminating a process tree ends the processes the child started")
+	{
+		// The child starts a grandchild that appends to a file every 10 ms; both stop once the stop file exists, which the
+		// test writes when it ends (also when it fails), so nothing outlives it.
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("ProcessTree");
+		const std::filesystem::path stop = directory / "Stop";
+		struct StopHelpers
+		{
+			std::filesystem::path File;
+			~StopHelpers() { FileSystem::WriteText(File, "stop"); }
+		} stopHelpers { stop };
+
+		auto startTree = [&](Process& process, const std::filesystem::path& beats)
+		{
+			ProcessSpecification specification = HelperProcess({ "--strata-test-helper=spawn-heartbeat", FileSystem::ToUTF8(beats), FileSystem::ToUTF8(stop) });
+			specification.TerminateTree = true;
+			REQUIRE(process.Start(specification));
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+			while (FileSystem::GetFileSize(beats).value_or(0) == 0 && std::chrono::steady_clock::now() < deadline)
+				std::this_thread::sleep_for(std::chrono::milliseconds(10));
+			REQUIRE(FileSystem::GetFileSize(beats).value_or(0) > 0);
+		};
+		// After a grace period for a beat in flight, a dead grandchild writes nothing more (a live one writes ~50 times).
+		auto beatsStopped = [](const std::filesystem::path& beats)
+		{
+			std::this_thread::sleep_for(std::chrono::milliseconds(200));
+			const uint64_t size = FileSystem::GetFileSize(beats).value_or(0);
+			std::this_thread::sleep_for(std::chrono::milliseconds(500));
+			return FileSystem::GetFileSize(beats).value_or(0) == size;
+		};
+
+		const std::filesystem::path terminated = directory / "Terminated.txt";
+		Process process;
+		startTree(process, terminated);
+		CHECK(process.Terminate());
+		CHECK_FALSE(process.IsRunning());
+		CHECK(beatsStopped(terminated));
+
+		// Destroying the Process object while the child runs ends the tree as well.
+		const std::filesystem::path destroyed = directory / "Destroyed.txt";
+		{
+			Process scoped;
+			startTree(scoped, destroyed);
+		}
+		CHECK(beatsStopped(destroyed));
+	}
+
 	TEST_CASE("Starting a missing executable fails cleanly")
 	{
 		ProcessSpecification specification;
@@ -436,11 +575,7 @@ TEST_SUITE("Core.Platform")
 		{
 			CrashInfo info;
 			CHECK_FALSE(CrashGuard::Invoke(WriteToNull, nullptr, &info));
-			// abort() may change the mask itself before it raises SIGABRT (macOS blocks every other signal).
-			CHECK_FALSE(CrashGuard::Invoke(CallAbort, nullptr, &info));
-			CHECK(info.Description.find("abort()") != std::string::npos);
-#if !defined(__aarch64__)
-			// Integer division by zero does not trap on ARM64.
+#if !defined(__aarch64__) && !defined(_M_ARM64)
 			int divisor = 0;
 			CHECK_FALSE(CrashGuard::Invoke(DivideByZero, &divisor, &info));
 #endif
@@ -452,6 +587,49 @@ TEST_SUITE("Core.Platform")
 				CHECK(sigismember(&after, signal) == sigismember(&before, signal));
 			}
 		}
+	}
+
+	TEST_CASE("Faults outside guarded calls go to the handler installed before the guard, every time")
+	{
+		const Process::RunResult result = Process::Run(HelperProcess({ "--strata-test-helper=signal-chaining" }), std::chrono::milliseconds(60000));
+		INFO("Output: ", result.Output);
+		REQUIRE(result.Started);
+		CHECK_FALSE(result.TimedOut);
+		CHECK(result.ExitCode == 0);
+	}
+
+	TEST_CASE("Signals another process sends during a guarded call are not contained")
+	{
+		const Process::RunResult result = Process::Run(HelperProcess({ "--strata-test-helper=external-signal" }), std::chrono::milliseconds(60000));
+		INFO("Output: ", result.Output);
+		REQUIRE(result.Started);
+		CHECK_FALSE(result.TimedOut);
+		CHECK(result.ExitCode == 128 + SIGFPE);
+		CHECK(result.Output.find("contained") == std::string::npos);
+	}
+
+	TEST_CASE("abort() in guarded code is reported and ends the process")
+	{
+		// It cannot be contained safely (the C library may hold allocator locks), so it must neither be swallowed nor hang.
+		const Process::RunResult result = Process::Run(HelperProcess({ "--strata-test-helper=guarded-abort" }), std::chrono::milliseconds(60000));
+		INFO("Output: ", result.Output);
+		REQUIRE(result.Started);
+		CHECK_FALSE(result.TimedOut);
+		CHECK(result.ExitCode == 128 + SIGABRT);
+		CHECK(result.Output.find("called abort()") != std::string::npos);
+		CHECK(result.Output.find("contained") == std::string::npos);
+	}
+#endif
+
+#if defined(ST_PLATFORM_LINUX)
+	TEST_CASE("Thread cancellation passes through guarded calls")
+	{
+		// glibc ends a thread (pthread_exit, pthread_cancel) by unwinding it with an exception that must not be swallowed.
+		const Process::RunResult result = Process::Run(HelperProcess({ "--strata-test-helper=guarded-thread-exit" }), std::chrono::milliseconds(60000));
+		INFO("Output: ", result.Output);
+		REQUIRE(result.Started);
+		CHECK(result.ExitCode == 0);
+		CHECK(result.Output.find("exited") != std::string::npos);
 	}
 #endif
 

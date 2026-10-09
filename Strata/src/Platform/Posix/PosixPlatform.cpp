@@ -26,10 +26,14 @@
 	#include <libproc.h>
 	#include <mach-o/dyld.h>
 	#include <mach/mach.h>
+	#include <sys/mount.h>
+	#include <sys/param.h>
 	#include <sys/proc_info.h>
 	#include <sys/sysctl.h>
+	#include <sys/types.h>
 #else
 	#include <sys/random.h>
+	#include <sys/statvfs.h>
 #endif
 
 namespace Strata
@@ -132,32 +136,72 @@ namespace Strata
 				return std::nullopt;
 			}
 			return contents;
-
-		// The directory exists (as a directory; a symbolic link only if `followLinks`), belongs to this user and is
-		// writable by nobody else, so other users cannot add, replace or rename entries in it.
-		bool IsPrivateDirectory(const std::filesystem::path& path, bool followLinks)
-		{
-			struct stat info = {};
-			const int result = followLinks ? stat(path.c_str(), &info) : lstat(path.c_str(), &info);
-			return result == 0 && S_ISDIR(info.st_mode) && info.st_uid == geteuid() && (info.st_mode & (S_IWGRP | S_IWOTH)) == 0;
 		}
 
-		// <base>/<applicationName>, created with mode 0700 where missing, or empty unless both pass IsPrivateDirectory.
-		// The base may be a link (a relocated cache directory, say); the application's directory must be a real one.
-		std::filesystem::path PreparePrivateSubdirectory(const std::filesystem::path& base, std::string_view applicationName)
+		// An existing directory that only the current user can modify (CheckOwnedAndPrivate), so other users cannot add,
+		// replace or rename entries in it. With `followLinks` a symbolic link to such a directory counts as well.
+		bool CheckPrivateDirectory(const std::filesystem::path& directory, bool followLinks, std::string* error)
+		{
+			const std::string name = FileSystem::ToUTF8(directory);
+			struct stat information = {};
+			const int result = followLinks ? stat(directory.c_str(), &information) : lstat(directory.c_str(), &information);
+			if (result != 0)
+				return SetError(error, fmt::format("Cannot inspect '{}': {}", name, GetErrorMessage(errno)));
+			if (!S_ISDIR(information.st_mode))
+				return SetError(error, fmt::format("'{}' is not a directory", name));
+			return CheckOwnedAndPrivate(information, name, error);
+		}
+
+		// Script modules are loaded from copies in the runtime directory: a file system mounted noexec cannot hold it.
+		bool AllowsExecution(const std::filesystem::path& path)
+		{
+#if defined(ST_PLATFORM_MACOS)
+			struct statfs info = {};
+			return statfs(path.c_str(), &info) != 0 || (info.f_flags & MNT_NOEXEC) == 0;
+#else
+			struct statvfs info = {};
+			return statvfs(path.c_str(), &info) != 0 || (info.f_flag & ST_NOEXEC) == 0;
+#endif
+		}
+
+		// <base>/<applicationName> for GetUserRuntimeDirectory: a private directory (Platform::EnsurePrivateDirectory) in a
+		// base that only the current user can modify, on a file system that allows executing files. The base may be a
+		// link (a relocated cache directory, say); a missing one is created, an existing one is only checked. Empty if
+		// the location does not qualify.
+		std::filesystem::path PrepareRuntimeDirectory(const std::filesystem::path& base, std::string_view applicationName)
 		{
 			if (base.empty() || !base.is_absolute())
 				return {};
-			// A missing base is created (e.g. ~/.cache of a new account); an existing one is only checked.
-			if (mkdir(base.c_str(), 0700) != 0 && errno != EEXIST)
+			if (mkdir(base.c_str(), S_IRWXU) != 0 && errno != EEXIST)
 				return {};
-			if (!IsPrivateDirectory(base, true))
+			if (!CheckPrivateDirectory(base, true, nullptr) || !AllowsExecution(base))
 				return {};
 
 			std::filesystem::path directory = base / FileSystem::FromUTF8(applicationName);
-			if (mkdir(directory.c_str(), 0700) != 0 && errno != EEXIST)
+			if (!Platform::EnsurePrivateDirectory(directory))
 				return {};
-			if (!IsPrivateDirectory(directory, false))
+			return directory;
+		}
+
+		// <temp>/<applicationName>-<user id>, for when the user has no private location (containers running as a user
+		// whose home belongs to someone else, HOME=/, a group-writable cache directory). The shared temporary directory
+		// must keep users from renaming each other's entries (sticky bit) unless only this user can write to it; the
+		// directory itself is private (Platform::EnsurePrivateDirectory). If another user created it first, this location
+		// is unusable - never insecure.
+		std::filesystem::path PrepareTemporaryRuntimeDirectory(std::string_view applicationName)
+		{
+			std::error_code error;
+			const std::filesystem::path base = std::filesystem::temp_directory_path(error);
+			if (error || !base.is_absolute())
+				return {};
+			struct stat baseInfo = {};
+			if (stat(base.c_str(), &baseInfo) != 0 || !S_ISDIR(baseInfo.st_mode) || !AllowsExecution(base))
+				return {};
+			if ((baseInfo.st_mode & (S_IWGRP | S_IWOTH)) != 0 && (baseInfo.st_mode & S_ISVTX) == 0)
+				return {};
+
+			std::filesystem::path directory = base / FileSystem::FromUTF8(fmt::format("{}-{}", applicationName, static_cast<uint64_t>(geteuid())));
+			if (!Platform::EnsurePrivateDirectory(directory))
 				return {};
 			return directory;
 		}
@@ -233,6 +277,10 @@ namespace Strata
 
 	std::filesystem::path Platform::GetUserRuntimeDirectory(std::string_view applicationName)
 	{
+		// An explicit location (tests, sandboxes) replaces the search; it must pass the same checks.
+		if (const std::optional<std::string> configured = GetEnvVar("STRATA_RUNTIME_DIR"); configured && !configured->empty())
+			return PrepareRuntimeDirectory(FileSystem::FromUTF8(*configured), applicationName);
+
 		std::vector<std::filesystem::path> candidates;
 		const std::optional<std::string> home = GetEnvVar("HOME");
 #if defined(ST_PLATFORM_MACOS)
@@ -257,11 +305,11 @@ namespace Strata
 
 		for (const std::filesystem::path& candidate : candidates)
 		{
-			std::filesystem::path directory = PreparePrivateSubdirectory(candidate, applicationName);
+			std::filesystem::path directory = PrepareRuntimeDirectory(candidate, applicationName);
 			if (!directory.empty())
 				return directory;
 		}
-		return {};
+		return PrepareTemporaryRuntimeDirectory(applicationName);
 	}
 
 	std::filesystem::path Platform::CreatePrivateDirectory(const std::filesystem::path& parent, std::string_view prefix)
@@ -498,8 +546,10 @@ namespace Strata
 		return true;
 	}
 
-	bool Platform::EnsurePrivateDirectory(const std::filesystem::path& directory, std::string* error)
+	bool Platform::EnsurePrivateDirectory(const std::filesystem::path& path, std::string* error)
 	{
+		// With a trailing separator lstat would follow a final symbolic link.
+		const std::filesystem::path directory = FileSystem::RemoveTrailingSeparators(path);
 		const std::string name = FileSystem::ToUTF8(directory);
 		std::error_code parentError;
 		if (directory.has_parent_path())
@@ -515,10 +565,10 @@ namespace Strata
 		if (information.st_uid != geteuid())
 			return SetError(error, fmt::format("'{}' is owned by another user", name));
 
-		// Other users could plant or replace files in a group- or world-writable directory. Since the directory is
-		// ours, tighten it instead of failing; files planted earlier are still rejected by ReadTrustedFile.
-		if ((information.st_mode & (S_IWGRP | S_IWOTH)) != 0 && chmod(directory.c_str(), S_IRWXU) != 0)
-			return SetError(error, fmt::format("'{}' is writable by other users and its permissions cannot be fixed: {}", name, GetErrorMessage(errno)));
+		// Other users could plant or replace files in a directory they can write to, or read what it holds. Since the
+		// directory is ours, tighten it instead of failing; files planted earlier are still rejected by ReadTrustedFile.
+		if ((information.st_mode & (S_IRWXG | S_IRWXO)) != 0 && chmod(directory.c_str(), S_IRWXU) != 0)
+			return SetError(error, fmt::format("'{}' is accessible to other users and its permissions cannot be fixed: {}", name, GetErrorMessage(errno)));
 		return true;
 	}
 

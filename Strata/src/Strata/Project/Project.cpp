@@ -1,10 +1,14 @@
 #include "stpch.h"
 #include "Strata/Project/Project.h"
 
+#include "Strata/Core/DynamicLibrary.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Core/StringUtils.h"
 #include "Strata/Reflection/PropertyJson.h"
+
+#include <algorithm>
+#include <cctype>
 
 namespace Strata
 {
@@ -18,11 +22,23 @@ namespace Strata
 			return s_Active;
 		}
 
-		// Asset directories are plain relative subdirectories of the project: not the project directory itself, no
-		// absolute paths, no "..", nothing inside the intermediate directory, no hidden directories.
-		bool IsValidAssetDirectory(std::string_view directory)
+		// Names and paths of a project end up in generated files (the scripts' CMakeLists.txt) and logs, where control
+		// characters (a newline above all) could inject content: they never contain any.
+		bool HasControlCharacters(std::string_view text)
 		{
-			if (directory.empty())
+			return std::any_of(text.begin(), text.end(), [](char character)
+			{
+				const auto value = static_cast<unsigned char>(character);
+				return value < 0x20 || value == 0x7F;
+			});
+		}
+
+		// Asset and script directories are plain relative subdirectories of the project: not the project directory itself,
+		// no absolute paths, no "..", nothing inside the intermediate directory, no hidden directories, no control
+		// characters.
+		bool IsValidProjectSubdirectory(std::string_view directory)
+		{
+			if (directory.empty() || HasControlCharacters(directory))
 				return false;
 			const std::filesystem::path path = FileSystem::FromUTF8(directory);
 			if (path.is_absolute() || path.has_root_name() || path.has_root_directory())
@@ -52,10 +68,32 @@ namespace Strata
 			return false;
 		}
 
+		// Script settings must name a valid source directory and module (an empty module name is derived later).
+		bool ValidateScriptSettings(const ProjectScriptSettings& settings, std::string* outError)
+		{
+			if (!IsValidProjectSubdirectory(settings.SourceDirectory))
+			{
+				if (outError)
+					*outError = fmt::format("script source directory '{}' must be a relative path inside the project", settings.SourceDirectory);
+				return false;
+			}
+			if (!settings.ModuleName.empty() && !Project::IsValidScriptModuleName(settings.ModuleName))
+			{
+				if (outError)
+					*outError = fmt::format("script module name '{}' must be a C identifier of at most {} characters", settings.ModuleName,
+						Project::c_MaxScriptModuleNameSize);
+				return false;
+			}
+			return true;
+		}
+
 		bool IsValidProjectName(std::string_view name)
 		{
-			if (name.empty() || name.size() > 128 || name.front() == ' ' || name.back() == ' ' || name.back() == '.' || IsReservedFileName(name))
+			if (name.empty() || name.size() > 128 || name.front() == ' ' || name.back() == ' ' || name.back() == '.' || IsReservedFileName(name)
+				|| HasControlCharacters(name))
+			{
 				return false;
+			}
 			for (char character : name)
 			{
 				const auto value = static_cast<unsigned char>(character);
@@ -91,6 +129,7 @@ namespace Strata
 		Ref<Project> project(new Project());
 		project->m_ProjectFile = projectDirectory / FileSystem::FromUTF8(name + std::string(c_FileExtension));
 		project->m_Config.Name = name;
+		project->m_Config.Scripts.ModuleName = MakeScriptModuleName(name);
 
 		if (!FileSystem::CreateDirectories(project->GetAssetDirectory()) || !FileSystem::CreateDirectories(project->GetCacheDirectory()))
 			return fail(fmt::format("Could not create the project directories in '{}'", FileSystem::ToUTF8(projectDirectory)));
@@ -142,8 +181,10 @@ namespace Strata
 
 		ProjectConfig& projectConfig = project->m_Config;
 		projectConfig.Name = JsonUtils::GetString(*config, "Name", FileSystem::ToUTF8(projectFile.stem()));
+		if (HasControlCharacters(projectConfig.Name))
+			return fail("the project name contains control characters");
 		projectConfig.AssetDirectory = JsonUtils::GetString(*config, "AssetDirectory", projectConfig.AssetDirectory);
-		if (!IsValidAssetDirectory(projectConfig.AssetDirectory))
+		if (!IsValidProjectSubdirectory(projectConfig.AssetDirectory))
 			return fail(fmt::format("asset directory '{}' must be a relative path inside the project", projectConfig.AssetDirectory));
 		if (const nlohmann::json* startScene = JsonUtils::Find(*config, "StartScene"))
 		{
@@ -152,6 +193,19 @@ namespace Strata
 				return fail("\"StartScene\" is not an asset handle");
 			projectConfig.StartScene = *handle;
 		}
+
+		// Version 1 projects have no "Scripts" object: they keep the defaults.
+		if (const nlohmann::json* scripts = JsonUtils::Find(*config, "Scripts"))
+		{
+			if (!scripts->is_object())
+				return fail("\"Scripts\" must be an object");
+			ProjectScriptSettings& settings = projectConfig.Scripts;
+			settings.SourceDirectory = JsonUtils::GetString(*scripts, "SourceDirectory", settings.SourceDirectory);
+			settings.ModuleName = JsonUtils::GetString(*scripts, "ModuleName", settings.ModuleName);
+		}
+		std::string scriptError;
+		if (!ValidateScriptSettings(projectConfig.Scripts, &scriptError))
+			return fail(scriptError);
 		return project;
 	}
 
@@ -181,12 +235,21 @@ namespace Strata
 
 	bool Project::Save(std::string* outError) const
 	{
-		if (!IsValidAssetDirectory(m_Config.AssetDirectory))
+		if (HasControlCharacters(m_Config.Name))
+		{
+			if (outError)
+				*outError = "The project name contains control characters";
+			return false;
+		}
+		if (!IsValidProjectSubdirectory(m_Config.AssetDirectory))
 		{
 			if (outError)
 				*outError = fmt::format("Asset directory '{}' must be a relative path inside the project", m_Config.AssetDirectory);
 			return false;
 		}
+
+		if (!ValidateScriptSettings(m_Config.Scripts, outError))
+			return false;
 
 		nlohmann::json document = nlohmann::json::object();
 		document["Strata"] = { { "Format", "Project" }, { "Version", c_FormatVersion } };
@@ -194,6 +257,8 @@ namespace Strata
 		config["Name"] = m_Config.Name;
 		config["AssetDirectory"] = m_Config.AssetDirectory;
 		config["StartScene"] = UUIDToJson(m_Config.StartScene);
+		// The module name is stored even when derived, so that renaming the project keeps the module's name.
+		config["Scripts"] = { { "SourceDirectory", m_Config.Scripts.SourceDirectory }, { "ModuleName", GetScriptModuleName() } };
 		document["Project"] = std::move(config);
 
 		if (!FileSystem::WriteText(m_ProjectFile, JsonUtils::Dump(document, 1, '\t') + "\n"))
@@ -208,6 +273,56 @@ namespace Strata
 	std::filesystem::path Project::GetAssetDirectory() const
 	{
 		return (GetProjectDirectory() / FileSystem::FromUTF8(m_Config.AssetDirectory)).lexically_normal();
+	}
+
+	std::filesystem::path Project::GetScriptSourceDirectory() const
+	{
+		return (GetProjectDirectory() / FileSystem::FromUTF8(m_Config.Scripts.SourceDirectory)).lexically_normal();
+	}
+
+	std::string Project::GetScriptModuleName() const
+	{
+		return m_Config.Scripts.ModuleName.empty() ? MakeScriptModuleName(m_Config.Name) : m_Config.Scripts.ModuleName;
+	}
+
+	std::filesystem::path Project::GetScriptModulePath() const
+	{
+		return GetScriptBinaryDirectory() / FileSystem::FromUTF8(GetScriptModuleName() + std::string(DynamicLibrary::GetFileExtension()));
+	}
+
+	std::string Project::MakeScriptModuleName(std::string_view projectName)
+	{
+		// PascalCase from the ASCII letters and digits; every other character separates words.
+		std::string name;
+		bool wordStart = true;
+		for (char character : projectName)
+		{
+			const auto value = static_cast<unsigned char>(character);
+			if (value >= 0x80 || !std::isalnum(value))
+			{
+				wordStart = true;
+				continue;
+			}
+			name += wordStart ? static_cast<char>(std::toupper(value)) : character;
+			wordStart = false;
+		}
+		if (name.empty() || !std::isalpha(static_cast<unsigned char>(name.front())))
+			name.insert(0, "Game");
+		// Keep room for the suffix within the identifier limit.
+		if (name.size() > c_MaxScriptModuleNameSize - 7)
+			name.resize(c_MaxScriptModuleNameSize - 7);
+		return name + "Scripts";
+	}
+
+	bool Project::IsValidScriptModuleName(std::string_view name)
+	{
+		if (name.empty() || name.size() > c_MaxScriptModuleNameSize || !(std::isalpha(static_cast<unsigned char>(name.front())) || name.front() == '_'))
+			return false;
+		return std::all_of(name.begin(), name.end(), [](char character)
+		{
+			const auto value = static_cast<unsigned char>(character);
+			return value < 0x80 && (std::isalnum(value) || character == '_');
+		});
 	}
 
 	void Project::SetActive(const Ref<Project>& project)

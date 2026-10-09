@@ -36,9 +36,16 @@ namespace Strata
 		bool PipeInput = false;
 		bool HideWindow = true; // Windows: no console window for console programs (when output is not inherited)
 		bool Detached = false;  // Own process group; unaffected by console signals sent to this process
+		// The child and every process it starts form one unit (for build tools, whose compilers and linkers must not
+		// outlive a cancelled build): Terminate() ends all of them, and so does destroying the Process object (or starting
+		// it again) while the child runs. On Windows the unit is a job object, which also ends processes that outlive the
+		// child when the Process object is destroyed or this process exits; processes that explicitly break away from it
+		// (shared servers) may. On POSIX it is the child's own process group; processes that leave it are not ended.
+		bool TerminateTree = false;
 	};
 
-	// A child process. Destroying a Process object does not terminate the child; call Terminate() for that.
+	// A child process. Destroying a Process object does not terminate the child (unless it was started with TerminateTree);
+	// call Terminate() for that.
 	class Process
 	{
 	public:
@@ -66,6 +73,10 @@ namespace Strata
 		std::string TakeOutput();
 		// Returns captured stderr produced since the previous call (CaptureSeparate; thread-safe).
 		std::string TakeErrorOutput();
+		// True once the captured output has ended (both streams with CaptureSeparate): every process holding it (the
+		// child, and descendants that inherited it) closed it, and everything was read (TakeOutput and TakeErrorOutput
+		// return the rest). Output can still arrive after the child exited. Always true when output is not captured.
+		bool IsOutputFinished() const { return m_ReaderFinished.load() && m_ErrorReaderFinished.load(); }
 		std::optional<int> GetExitCode() const { return m_ExitCode; }
 		uint32_t GetProcessID() const { return m_ProcessID; }
 		const std::string& GetLastError() const { return m_LastError; }
@@ -93,11 +104,13 @@ namespace Strata
 		void* m_OutputRead = nullptr;
 		void* m_ErrorRead = nullptr;
 		void* m_InputWrite = nullptr;
+		void* m_JobHandle = nullptr; // TerminateTree: the job holding the child and its descendants
 #else
 		int m_ProcessPid = -1;
 		int m_OutputRead = -1;
 		int m_ErrorRead = -1;
 		int m_InputWrite = -1;
+		bool m_TerminateTree = false; // The child leads its own process group, which Terminate() ends
 #endif
 		uint32_t m_ProcessID = 0;
 		std::optional<int> m_ExitCode;

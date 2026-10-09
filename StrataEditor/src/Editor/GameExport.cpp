@@ -4,6 +4,7 @@
 
 #include <Strata/Asset/AssetPack.h>
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Core/Platform.h>
 #include <Strata/Project/GameManifest.h>
@@ -30,6 +31,41 @@ namespace Strata
 			while (!result.empty() && (result.back() == ' ' || result.back() == '.'))
 				result.pop_back();
 			return result.empty() ? std::string("Game") : result;
+		}
+
+		// True if an entity snapshot ({"Entities": [...]}) attaches at least one script.
+		bool UsesScripts(const nlohmann::json& snapshot)
+		{
+			const nlohmann::json* entities = JsonUtils::Find(snapshot, "Entities");
+			if (!entities || !entities->is_array())
+				return false;
+			for (const nlohmann::json& entity : *entities)
+			{
+				const nlohmann::json* components = JsonUtils::Find(entity, "Components");
+				const nlohmann::json* script = components ? JsonUtils::Find(*components, "Script") : nullptr;
+				const nlohmann::json* scripts = script ? JsonUtils::Find(*script, "Scripts") : nullptr;
+				if (scripts && scripts->is_array() && !scripts->empty())
+					return true;
+			}
+			return false;
+		}
+
+		// The first scene or prefab of the project that attaches scripts (empty when none does). The saved files are read,
+		// as the export packs them; loaded copies may be older.
+		std::string FindAssetUsingScripts(EditorAssetManager& assets)
+		{
+			for (const AssetMetadata& metadata : assets.GetAllMetadata())
+			{
+				const char* documentKey = metadata.Type == AssetType::Scene ? "Scene" : metadata.Type == AssetType::Prefab ? "Prefab" : nullptr;
+				if (!documentKey || metadata.IsSubAsset())
+					continue;
+				const std::optional<std::string> text = FileSystem::ReadText(assets.GetAbsolutePath(metadata.Handle));
+				const std::optional<nlohmann::json> document = text ? JsonUtils::Parse(*text) : std::nullopt;
+				const nlohmann::json* content = document ? JsonUtils::Find(*document, documentKey) : nullptr;
+				if (content && UsesScripts(*content))
+					return metadata.Path;
+			}
+			return {};
 		}
 
 	}
@@ -82,6 +118,21 @@ namespace Strata
 				return fail(fmt::format("'{}' is missing next to the runtime; games must ship the third-party notices", c_NoticesFile));
 		}
 
+		// The game runs the scripts the editor runs: the loaded module, exactly as it was loaded.
+		ScriptModuleFile scriptModule;
+		std::string scriptError;
+		if (!context.ReadRunningScriptModule(scriptModule, &scriptError))
+			return fail(scriptError);
+		if (scriptModule.Path.empty())
+		{
+			const std::string user = FindAssetUsingScripts(*assets);
+			if (!user.empty())
+			{
+				return fail(fmt::format("'{}' uses scripts, but no script module is loaded: build the scripts (script.build) or load the built module "
+					"(script.reload)", user));
+			}
+		}
+
 		if (!FileSystem::CreateDirectories(options.Directory))
 			return fail(fmt::format("Could not create '{}'", FileSystem::ToUTF8(options.Directory)));
 
@@ -97,6 +148,20 @@ namespace Strata
 		manifest.Name = project.GetConfig().Name;
 		manifest.AssetPack = FileSystem::ToUTF8(result.AssetPack.filename());
 		manifest.StartScene = startScene;
+		if (!scriptModule.Path.empty())
+		{
+			result.ScriptModule = options.Directory / scriptModule.Path.filename();
+			if (!FileSystem::WriteBytes(result.ScriptModule, scriptModule.Bytes))
+				return fail(fmt::format("Could not write the script module to '{}'", FileSystem::ToUTF8(result.ScriptModule)));
+			std::filesystem::path symbols = scriptModule.Path;
+			symbols.replace_extension(".pdb");
+			if (options.IncludeScriptSymbols && FileSystem::IsRegularFile(symbols)
+				&& !FileSystem::Copy(symbols, options.Directory / symbols.filename(), true))
+			{
+				return fail(fmt::format("Could not copy the script module's symbols '{}'", FileSystem::ToUTF8(symbols)));
+			}
+			manifest.ScriptModule = FileSystem::ToUTF8(result.ScriptModule.filename());
+		}
 		manifest.WindowWidth = options.WindowWidth;
 		manifest.WindowHeight = options.WindowHeight;
 		manifest.Fullscreen = options.Fullscreen;

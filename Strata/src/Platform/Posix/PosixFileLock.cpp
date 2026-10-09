@@ -1,8 +1,9 @@
 #include "stpch.h"
 #include "Strata/Core/FileLock.h"
 
-#include <cstdio>
+#include <cstdlib>
 #include <fcntl.h>
+#include <string>
 #include <sys/file.h>
 #include <unistd.h>
 
@@ -15,17 +16,19 @@ namespace Strata
 
 	Scope<FileLock> FileLock::Create(const std::filesystem::path& path)
 	{
-		// The file is created and locked under a temporary name, then renamed into place, so whoever opens `path` finds
-		// it locked already.
-		std::filesystem::path temporary = path;
-		temporary += ".creating";
-		const int descriptor = open(temporary.c_str(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+		// The file is created and locked under a unique temporary name next to `path`, then given the name `path` with
+		// link(), which fails if `path` exists: whoever opens `path` finds it locked already, and an existing file is
+		// never replaced. The temporary name is removed either way.
+		std::string temporary = path.string() + ".XXXXXX";
+		const int descriptor = mkstemp(temporary.data());
 		if (descriptor < 0)
 			return nullptr;
-		if (flock(descriptor, LOCK_EX | LOCK_NB) != 0 || std::rename(temporary.c_str(), path.c_str()) != 0)
+		const bool created = fcntl(descriptor, F_SETFD, FD_CLOEXEC) == 0 && flock(descriptor, LOCK_EX | LOCK_NB) == 0
+			&& link(temporary.c_str(), path.c_str()) == 0;
+		unlink(temporary.c_str());
+		if (!created)
 		{
 			close(descriptor);
-			unlink(temporary.c_str());
 			return nullptr;
 		}
 

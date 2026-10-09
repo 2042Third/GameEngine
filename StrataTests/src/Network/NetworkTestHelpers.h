@@ -253,27 +253,4 @@ namespace Strata::Tests
 		uint64_t m_StartTime = 0;
 	};
 
-	// Sets an environment variable for the lifetime of the object. An empty value counts as unset for every
-	// variable Strata reads, so restoring an absent variable sets it to empty.
-	class ScopedEnvironmentVariable
-	{
-	public:
-		ScopedEnvironmentVariable(std::string name, const std::string& value)
-			: m_Name(std::move(name)), m_Previous(Platform::GetEnvVar(m_Name))
-		{
-			Platform::SetEnvVar(m_Name, value);
-		}
-
-		~ScopedEnvironmentVariable()
-		{
-			Platform::SetEnvVar(m_Name, m_Previous.value_or(std::string()));
-		}
-
-		ScopedEnvironmentVariable(const ScopedEnvironmentVariable&) = delete;
-		ScopedEnvironmentVariable& operator=(const ScopedEnvironmentVariable&) = delete;
-	private:
-		std::string m_Name;
-		std::optional<std::string> m_Previous;
-	};
-
 }

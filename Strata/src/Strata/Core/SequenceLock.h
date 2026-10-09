@@ -51,7 +51,9 @@ namespace Strata
 			if (m_Sequence.load(std::memory_order_relaxed) != sequence)
 				return false; // Rewritten meanwhile
 
-			std::memcpy(&outValue, words.data(), sizeof(T));
+			// T is trivially copyable (asserted above), so copying its bytes is valid even when it has default member
+			// initializers; the void* tells GCC so (-Wclass-memaccess).
+			std::memcpy(static_cast<void*>(&outValue), words.data(), sizeof(T));
 			m_TakenSequence = sequence;
 			return true;
 		}

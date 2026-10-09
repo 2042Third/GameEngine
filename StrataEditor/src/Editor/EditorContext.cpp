@@ -1,7 +1,10 @@
 #include "Editor/EditorContext.h"
 
+#include "Editor/ScriptProject.h"
+
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Audio/AudioEngine.h>
+#include <Strata/Core/Crypto.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
@@ -47,6 +50,12 @@ namespace Strata
 			}
 		};
 
+		std::optional<Sha256Digest> HashFile(const std::filesystem::path& path)
+		{
+			const std::optional<std::vector<uint8_t>> bytes = FileSystem::ReadBytes(path);
+			return bytes ? std::optional<Sha256Digest>(Sha256::Hash(*bytes)) : std::nullopt;
+		}
+
 	}
 
 	EditorContext::EditorContext(const EditorContextSpecification& specification)
@@ -83,10 +92,18 @@ namespace Strata
 		Ref<Project> project = Project::Create(directory, name, outError);
 		if (!project)
 			return false;
-		return OpenProject(project->GetProjectFile(), outError);
+		// New projects come with their script build and an example script.
+		if (!CreateScriptProjectFiles(*project, true, nullptr, outError))
+			return false;
+		return OpenProjectInternal(project->GetProjectFile(), true, outError);
 	}
 
 	bool EditorContext::OpenProject(const std::filesystem::path& path, std::string* outError)
+	{
+		return OpenProjectInternal(path, false, outError);
+	}
+
+	bool EditorContext::OpenProjectInternal(const std::filesystem::path& path, bool created, std::string* outError)
 	{
 		std::filesystem::path projectFile = path;
 		if (FileSystem::IsDirectory(path))
@@ -117,6 +134,7 @@ namespace Strata
 		AssetManager::SetActive(m_AssetManager);
 		m_AssetManager->Scan();
 		ST_INFO("Opened project '{}' ({})", m_Project->GetConfig().Name, FileSystem::ToUTF8(m_Project->GetProjectDirectory()));
+		OpenScriptEngine(created);
 
 		// Continue with the start scene when the project has one.
 		const AssetHandle startScene = m_Project->GetConfig().StartScene;
@@ -142,6 +160,7 @@ namespace Strata
 			m_Viewport.ResetState();
 		}
 		ResetScene(CreateRef<Scene>(), UUID::Null());
+		CloseScriptEngine();
 		if (m_AssetManager)
 		{
 			if (AssetManager::GetActive() == m_AssetManager)
@@ -250,7 +269,29 @@ namespace Strata
 
 	bool EditorContext::Play(std::string* outError)
 	{
-		return StartRuntime(SceneRuntimeMode::Play, outError);
+		auto fail = [outError](std::string message)
+		{
+			if (outError)
+				*outError = std::move(message);
+			return false;
+		};
+
+		if (m_ScriptEngine)
+		{
+			if (std::optional<ScriptFault> fault = m_ScriptEngine->GetFault())
+			{
+				return fail(fmt::format("The script module crashed earlier ({}: {}); it stays disabled until it is rebuilt (script.build) or reloaded "
+					"(script.reload)", fault->ClassName.empty() ? fault->ModuleName : fault->ClassName + "::" + fault->Method, fault->Description));
+			}
+			// Scenes use the engine that is active when they start.
+			ScriptEngine::SetActive(m_ScriptEngine);
+		}
+		if (!StartRuntime(SceneRuntimeMode::Play, outError))
+			return false;
+		// A crash while the scripts start (constructors, OnCreate) ends play mode right away.
+		if (StopOnScriptFault())
+			return fail("A script crashed while the scene started; play mode was stopped (see the log or script.status)");
+		return true;
 	}
 
 	bool EditorContext::Simulate(std::string* outError)
@@ -443,14 +484,220 @@ namespace Strata
 		return redone;
 	}
 
+	////////////////////////////////////////////////////////////////////////////////
+	// Scripts
+	////////////////////////////////////////////////////////////////////////////////
+
+	void EditorContext::OpenScriptEngine(bool created)
+	{
+		m_ScriptEngine = CreateRef<ScriptEngine>();
+		ScriptEngine::SetActive(m_ScriptEngine);
+		m_LastScriptBuildLoad = {};
+		m_LastScriptFault.reset();
+		// Before the module loads: with hot reload it runs from a private copy, so script.build can replace its file (a
+		// module loaded in place locks it on Windows).
+		m_ScriptEngine->SetHotReloadEnabled(m_Specification.HotReloadScripts);
+
+		const std::filesystem::path module = m_Project->GetScriptModulePath();
+		std::string error;
+		if (FileSystem::IsRegularFile(module))
+		{
+			if (!LoadScriptModule(module, &error))
+				ST_WARN("The project's script module '{}' could not be loaded: {}", FileSystem::ToUTF8(module), error);
+		}
+		else if (!created && FileSystem::IsRegularFile(m_Project->GetScriptSourceDirectory() / "CMakeLists.txt"))
+		{
+			ST_WARN("The scripts of '{}' are not built yet; build them with script.build (Scripts > Build Scripts)", m_Project->GetConfig().Name);
+		}
+	}
+
+	void EditorContext::CloseScriptEngine()
+	{
+		m_ScriptBuilder.Cancel();
+		if (!m_ScriptEngine)
+			return;
+		m_ScriptEngine->UnloadModule();
+		if (ScriptEngine::GetActive() == m_ScriptEngine)
+			ScriptEngine::SetActive(nullptr);
+		m_ScriptEngine.reset();
+		m_LastScriptFault.reset();
+		RecordScriptModuleFile(std::nullopt);
+	}
+
+	bool EditorContext::LoadScriptModule(const std::filesystem::path& path, std::string* outError)
+	{
+		if (!m_ScriptEngine)
+		{
+			if (outError)
+				*outError = "No project is open";
+			return false;
+		}
+		const std::optional<Sha256Digest> digest = HashFile(path);
+		if (!m_ScriptEngine->LoadModule(path, outError))
+			return false;
+		RecordScriptModuleFile(digest);
+		m_LastScriptFault.reset();
+		return true;
+	}
+
+	bool EditorContext::ReloadScripts(std::string* outError)
+	{
+		if (!m_ScriptEngine)
+		{
+			if (outError)
+				*outError = "No project is open";
+			return false;
+		}
+		if (m_ScriptEngine->IsModuleLoaded())
+		{
+			const std::optional<Sha256Digest> digest = HashFile(m_ScriptEngine->GetModulePath());
+			if (!m_ScriptEngine->Reload(outError))
+				return false;
+			RecordScriptModuleFile(digest);
+			m_LastScriptFault.reset();
+			return true;
+		}
+		const std::filesystem::path module = m_Project->GetScriptModulePath();
+		if (!FileSystem::IsRegularFile(module))
+		{
+			if (outError)
+			{
+				*outError = fmt::format("No script module is loaded and the project's scripts are not built ('{}' is missing); run script.build",
+					FileSystem::ToUTF8(module));
+			}
+			return false;
+		}
+		return LoadScriptModule(module, outError);
+	}
+
+	void EditorContext::RecordScriptModuleFile(const std::optional<Sha256Digest>& expected)
+	{
+		m_ScriptModuleDigest.reset();
+		m_ScriptModuleLoadCount = m_ScriptEngine ? m_ScriptEngine->GetLoadCount() : 0;
+		if (!m_ScriptEngine || !m_ScriptEngine->IsModuleLoaded())
+			return;
+		const std::optional<Sha256Digest> digest = HashFile(m_ScriptEngine->GetModulePath());
+		if (digest && (!expected || *expected == *digest))
+			m_ScriptModuleDigest = digest;
+	}
+
+	bool EditorContext::ReadRunningScriptModule(ScriptModuleFile& outFile, std::string* outError) const
+	{
+		auto fail = [outError](std::string message)
+		{
+			if (outError)
+				*outError = std::move(message);
+			return false;
+		};
+
+		outFile = {};
+		if (m_ScriptBuilder.IsRunning())
+		{
+			return fail(fmt::format("Script build {} is running and may be writing the script module; wait for it to finish (script.status) and try again",
+				m_ScriptBuilder.GetCurrentID()));
+		}
+		if (!m_ScriptEngine || !m_ScriptEngine->IsModuleLoaded())
+			return true;
+
+		const std::filesystem::path& path = m_ScriptEngine->GetModulePath();
+		std::optional<std::vector<uint8_t>> bytes = FileSystem::ReadBytes(path);
+		if (!bytes)
+			return fail(fmt::format("Cannot read the script module '{}'", FileSystem::ToUTF8(path)));
+		if (!m_ScriptModuleDigest || Sha256::Hash(*bytes) != *m_ScriptModuleDigest)
+		{
+			return fail(fmt::format("The script module '{}' changed since the editor loaded it (e.g. a build whose module could not be loaded, or a "
+				"build outside the editor): load it (script.reload) or build the scripts (script.build), so that the game ships the scripts the "
+				"editor runs", FileSystem::ToUTF8(path)));
+		}
+		outFile.Path = path;
+		outFile.Bytes = std::move(*bytes);
+		return true;
+	}
+
+	bool EditorContext::BuildScripts(std::string* outError)
+	{
+		if (!m_Project || !m_ScriptEngine)
+		{
+			if (outError)
+				*outError = "No project is open (project.open or project.create)";
+			return false;
+		}
+		// A refused request (e.g. while a build runs) leaves the file watcher alone: a running build has paused it.
+		if (!m_ScriptBuilder.Start(*m_Project, m_Specification.ScriptBuild, outError))
+			return false;
+		// The build reloads the module itself once it finished; the file watcher would reload it a second time when the
+		// linker writes it.
+		m_ScriptEngine->SetHotReloadEnabled(false);
+		return true;
+	}
+
+	void EditorContext::OnScriptBuildFinished()
+	{
+		const ScriptBuildResult& result = m_ScriptBuilder.GetLastResult();
+		m_LastScriptBuildLoad = {};
+		m_LastScriptBuildLoad.BuildID = result.ID;
+		// The watcher comes back before the built module loads: with hot reload the module loads from a private copy, so
+		// the next build can replace the file. It only reports changes from now on, so it does not reload this build again.
+		if (m_ScriptEngine)
+			m_ScriptEngine->SetHotReloadEnabled(m_Specification.HotReloadScripts);
+		if (result.Success && m_ScriptEngine)
+		{
+			std::error_code error;
+			const std::filesystem::path built = std::filesystem::absolute(result.Module, error).lexically_normal();
+			const bool loaded = m_ScriptEngine->IsModuleLoaded() && m_ScriptEngine->GetModulePath() == built;
+			// An unchanged module is loaded again when it crashed: a successful build is the documented way back to a
+			// working module, also when the crash came from data (fields) rather than code.
+			if (loaded && !result.ModuleChanged && !m_ScriptEngine->IsFaulted())
+			{
+				m_LastScriptBuildLoad.Loaded = true;
+			}
+			else
+			{
+				const bool replacing = m_ScriptEngine->IsModuleLoaded();
+				m_LastScriptBuildLoad.Loaded = LoadScriptModule(result.Module, &m_LastScriptBuildLoad.Error);
+				m_LastScriptBuildLoad.Reloaded = replacing && m_LastScriptBuildLoad.Loaded;
+			}
+		}
+	}
+
+	bool EditorContext::StopOnScriptFault()
+	{
+		if (m_SceneState != SceneState::Play || !m_ScriptEngine)
+			return false;
+		std::optional<ScriptFault> fault = m_ScriptEngine->GetFault();
+		if (!fault)
+			return false;
+
+		const std::string where = fault->ClassName.empty() ? fmt::format("module '{}' ({})", fault->ModuleName, fault->Method)
+			: fmt::format("{}::{} on entity '{}' ({})", fault->ClassName, fault->Method, fault->EntityName, fault->Entity.ToString());
+		ST_ERROR("Script crash in {}: {}. Play mode stopped; fix the script and rebuild (script.build) or reload it (script.reload)", where,
+			fault->Description);
+		m_LastScriptFault = std::move(fault);
+		Stop();
+		return true;
+	}
+
 	void EditorContext::Update(Timestep timestep)
 	{
+		// Script modules are only replaced here, outside scene updates.
+		if (m_ScriptEngine)
+		{
+			m_ScriptEngine->Update();
+			// A hot reload by the file watcher: the file is complete (the engine waits for that) and was just loaded.
+			if (m_ScriptEngine->GetLoadCount() != m_ScriptModuleLoadCount)
+				RecordScriptModuleFile(std::nullopt);
+		}
+		if (m_ScriptBuilder.Update())
+			OnScriptBuildFinished();
+
 		if (m_AssetManager)
 			m_AssetManager->Update();
 		if (m_RuntimeScene)
 		{
 			m_RuntimeScene->OnUpdateRuntime(timestep);
-			HandleRuntimeRequests();
+			// A crashed game stops; one that still runs gets what it asked for.
+			if (!StopOnScriptFault())
+				HandleRuntimeRequests();
 		}
 		else
 		{

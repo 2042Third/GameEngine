@@ -277,6 +277,14 @@ namespace Strata
 		return std::string(reinterpret_cast<const char*>(text.data()), text.size());
 	}
 
+	std::filesystem::path FileSystem::RemoveTrailingSeparators(std::filesystem::path path)
+	{
+		// The last element of "a/b/" is an empty file name; its parent is "a/b". A root has no relative part to remove.
+		while (!path.has_filename() && path.has_relative_path())
+			path = path.parent_path();
+		return path;
+	}
+
 	std::filesystem::path FileSystem::GetRelativePath(const std::filesystem::path& path, const std::filesystem::path& base)
 	{
 		const std::filesystem::path relative = path.lexically_normal().lexically_relative(base.lexically_normal());
