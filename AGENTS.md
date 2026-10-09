@@ -116,8 +116,12 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
     (`Scripting/ScriptHostAPI.h`) counts calls per table entry (Dist builds do not count); the table is built from
     `ST_SCRIPT_HOST_FUNCTIONS` in `ScriptHostAPI.cpp`, and a `static_assert` fails the build when that list and the
     struct disagree;
-  - a public SDK class, member function or macro (`StrataScript/*.h` outside `Detail`) is not used by the feature
-    scripts (`SDKCoverageTests.cpp` reads the headers; the check is by name, so overloads count together);
+  - a public SDK class, function or macro (`StrataScript/*.h` outside `Detail`) is not used by the feature scripts.
+    `SDKCoverageTests.cpp` reads the headers and the scripts with `src/FeatureTest/SDKReader.h`: a function counts only
+    when a script calls it on its class — static functions as `Class::Name`, member functions on a receiver whose type
+    the reader knows (a variable, field or parameter declared with the type, `auto` from such an expression, a call
+    returning it, `this`), inherited ones unqualified inside a script class, virtual ones by an `override`. Overloads
+    count together; calls on receivers of unknown type do not count, and the failure lists them;
   - a feature script fails a check or does not complete, a script class never runs, or the run logs a warning or error
     other than the messages the scripts log on purpose (`c_ExpectedLogMessages` in `FeatureTestUtils.cpp`);
   - an asset type has no asset in the project, an asset imports with warnings, or importing rewrites a `.meta` file.

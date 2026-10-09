@@ -158,7 +158,9 @@ When you add or change script API:
    `PhysicsFeatures`, `LogFeatures`), or add a class deriving from `FeatureTest::FeatureScript` on a new entity of the
    scene. Verify the effect with `Expect(condition, "what is checked")` and set `Completed = true` when the scenario
    ended; journal `OnCreate` with `Journal(*this, "<Class>", "OnCreate")`. Keep state that spans frames in fields: the
-   runner hot reloads the module after frame 100.
+   runner hot reloads the module after frame 100. The coverage check counts a call only on the class it belongs to:
+   call static functions as `Class::Name(...)` and member functions on a receiver of declared type (`Entity target =
+   ...; target.Name(...)`), see `StrataTests/src/FeatureTest/SDKReader.h`.
 2. A new host function is also appended to `ST_SCRIPT_HOST_FUNCTIONS` in `ScriptHostAPI.cpp` (the build fails until
    it is). A new field type, callback or asset type is picked up automatically by the coverage checks: override such a
    field in the scene, implement the callback, add such an asset.
