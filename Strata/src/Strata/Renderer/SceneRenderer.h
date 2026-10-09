@@ -24,6 +24,7 @@ namespace Strata
 	class Material;
 	class Mesh;
 	class Scene;
+	class TextRenderer;
 	class Texture;
 	struct Submesh;
 
@@ -113,6 +114,8 @@ namespace Strata
 		uint32_t ShadowCasters = 0;       // Instances drawn into shadow cascades (summed over cascades)
 		uint32_t DebugLines = 0;          // Lines drawn from SceneRenderOptions::DebugShapes
 		uint32_t OutlinedEntities = 0;    // Selected entities of the rendered scene
+		uint32_t Texts = 0;               // Text components drawn
+		uint32_t TextGlyphs = 0;
 	};
 
 	// Renders a scene: depth/normal/entity-id prepass, ground-truth ambient occlusion, forward physically based
@@ -293,7 +296,7 @@ namespace Strata
 		void CreateOverlayResources();
 		static bool HasOverlays(const SceneRenderOptions& options);
 		// Draws the overlays into the output texture (which must hold the finished image); false when GPU resources failed.
-		bool RenderOverlays(nvrhi::ICommandList* commandList, Scene& scene, const SceneRenderOptions& options);
+		bool RenderOverlays(nvrhi::ICommandList* commandList, Scene& scene, const SceneRenderOptions& options, bool drawText);
 		void DrawDebugLines(nvrhi::ICommandList* commandList, DebugDrawDepth depth, uint32_t firstVertex, uint32_t vertexCount);
 	private:
 		SceneRendererSpecification m_Specification;
@@ -433,6 +436,7 @@ namespace Strata
 		nvrhi::FramebufferHandle m_OverlayFramebuffer; // Output texture with the scene depth (read-only)
 		nvrhi::BindingSetHandle m_CopyBindingSet;      // Output texture, copied into external targets
 		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_CopyPipelines;
+		Scope<TextRenderer> m_TextRenderer; // TextComponents, drawn with the overlays
 
 		// Per-frame gathered data (kept between frames to reuse the allocations)
 		std::vector<RenderData::InstanceData> m_Instances;

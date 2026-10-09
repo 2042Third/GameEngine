@@ -8,6 +8,7 @@
 #include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/Renderer.h"
+#include "Strata/Renderer/TextRenderer.h"
 #include "Strata/Renderer/Texture.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
@@ -400,6 +401,7 @@ namespace Strata
 			"SceneRenderer: failed to create GPU resources");
 		CreateIBLResources();
 		CreateOverlayResources();
+		m_TextRenderer = CreateScope<TextRenderer>(m_Specification.DebugName, m_FrameConstantBuffer);
 	}
 
 	void SceneRenderer::CreateIBLResources()
@@ -1901,8 +1903,14 @@ namespace Strata
 		tonemap.Operator = static_cast<int32_t>(postProcess.Tonemapper);
 		tonemap.BloomAdditive = postProcess.BloomThreshold > 0.0f ? 1u : 0u;
 
-		// Overlays are composed in the output texture, which is then copied into the target.
-		const bool overlays = HasOverlays(options);
+		TextRenderStats textStats;
+		const bool text = m_TextRenderer->Prepare(scene, m_ViewportSize, commandList, textStats);
+		m_Stats.Texts = textStats.Texts;
+		m_Stats.TextGlyphs = textStats.Glyphs;
+		m_Stats.PendingAssets += textStats.PendingFonts;
+
+		// Overlays (and text) are composed in the output texture, which is then copied into the target.
+		const bool overlays = HasOverlays(options) || text;
 		nvrhi::IFramebuffer* output = target && !overlays ? target : m_OutputFramebuffer.Get();
 		auto drawFullscreen = [&](nvrhi::IGraphicsPipeline* pipeline, nvrhi::IFramebuffer* framebuffer, nvrhi::IBindingSet* bindingSet, const void* pushConstants,
 			size_t pushConstantSize)
@@ -1933,7 +1941,7 @@ namespace Strata
 		if (overlays)
 		{
 			commandList->beginMarker("Overlays");
-			const bool overlaysDrawn = RenderOverlays(commandList, scene, options);
+			const bool overlaysDrawn = RenderOverlays(commandList, scene, options, text);
 			commandList->endMarker();
 			if (!overlaysDrawn)
 				degraded = true; // The image is complete without them; RenderOverlays reported why
@@ -2024,7 +2032,7 @@ namespace Strata
 		commandList->draw(nvrhi::DrawArguments().setVertexCount(vertexCount).setStartVertexLocation(firstVertex));
 	}
 
-	bool SceneRenderer::RenderOverlays(nvrhi::ICommandList* commandList, Scene& scene, const SceneRenderOptions& options)
+	bool SceneRenderer::RenderOverlays(nvrhi::ICommandList* commandList, Scene& scene, const SceneRenderOptions& options, bool drawText)
 	{
 		if (!m_GridPipeline)
 		{
@@ -2103,6 +2111,8 @@ namespace Strata
 		}
 		if (testedVertices > 0)
 			DrawDebugLines(commandList, DebugDrawDepth::Tested, 0, testedVertices);
+		if (drawText)
+			m_TextRenderer->Draw(commandList, m_OverlayFramebuffer, false);
 
 		// Selection outline from the entity-ID buffer (ids + 1, sorted for the shader's binary search).
 		m_SelectionIDs.clear();
@@ -2152,6 +2162,8 @@ namespace Strata
 
 		if (onTopVertices > 0)
 			DrawDebugLines(commandList, DebugDrawDepth::OnTop, testedVertices, onTopVertices);
+		if (drawText)
+			m_TextRenderer->Draw(commandList, m_OverlayFramebuffer, true); // The HUD goes over everything
 		return true;
 	}
 

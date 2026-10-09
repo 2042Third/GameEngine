@@ -26,5 +26,10 @@ alongside the executable.
 | [doctest](https://github.com/doctest/doctest) | 2.5.3 | MIT | No (tests) | Unit testing |
 | [Tracy](https://github.com/wolfpld/tracy) | 0.14.1 | BSD-3-Clause | Optional | Profiler instrumentation |
 
+The engine embeds the font [Roboto Medium](https://fonts.google.com/specimen/Roboto) by Christian Robertson
+(Apache License 2.0, https://www.apache.org/licenses/LICENSE-2.0) as the default font of text rendering. It is
+compiled in from the copy that Dear ImGui distributes (`Strata/vendor/imgui/misc/fonts/Roboto-Medium.ttf`) and ships in
+every game.
+
 HDR environment maps in sample projects come from [Poly Haven](https://polyhaven.com/hdris) and are
 licensed CC0.

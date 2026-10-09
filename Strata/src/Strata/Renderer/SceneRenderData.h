@@ -178,6 +178,15 @@ namespace Strata
 		};
 		static_assert(sizeof(OutlineParameters) == 32);
 
+		// Overlay/Text.vert
+		struct TextParameters
+		{
+			glm::vec2 ViewportSize;
+			uint32_t ScreenSpace; // 1: positions are pixels (+Y down), 0: world space
+			uint32_t Padding;
+		};
+		static_assert(sizeof(TextParameters) == 16);
+
 		constexpr uint32_t c_BloomPrefilter = 0;
 		constexpr uint32_t c_BloomDownsample = 1;
 		constexpr uint32_t c_BloomUpsample = 2;

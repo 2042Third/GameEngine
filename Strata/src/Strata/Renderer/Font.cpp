@@ -1,6 +1,9 @@
 #include "stpch.h"
 #include "Strata/Renderer/Font.h"
 
+#include "Strata/Core/Assert.h"
+#include "Strata/Core/EmbeddedFiles.h"
+
 namespace Strata
 {
 
@@ -109,6 +112,19 @@ namespace Strata
 		Ref<Font> font(new Font());
 		font->m_Data = std::move(fontData);
 		return font;
+	}
+
+	const Ref<Font>& Font::GetDefault()
+	{
+		static const Ref<Font> s_Default = []()
+		{
+			const std::span<const uint8_t> data = EmbeddedFiles::GetDefaultFont();
+			std::string error;
+			Ref<Font> font = Create(std::vector<uint8_t>(data.begin(), data.end()), &error);
+			ST_CORE_VERIFY(font, "The embedded default font is invalid: {}", error);
+			return font;
+		}();
+		return s_Default;
 	}
 
 }

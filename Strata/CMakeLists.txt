@@ -59,8 +59,13 @@ strata_add_shaders(Strata
 		Overlay/Outline.frag
 		Overlay/DebugLine.vert
 		Overlay/DebugLine.frag
+		Overlay/Text.vert
+		Overlay/Text.frag
 	VARIANTS
 		"Scene/Forward.frag|Scene/ForwardTransparent.frag|ST_FORWARD_TRANSPARENT")
+
+# The default font of text rendering (Roboto Medium, Apache License 2.0; see ThirdPartyNotices.md).
+strata_embed_file(Strata "${CMAKE_CURRENT_SOURCE_DIR}/vendor/imgui/misc/fonts/Roboto-Medium.ttf" GetDefaultFont)
 
 target_link_libraries(Strata
 	PUBLIC

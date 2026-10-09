@@ -226,6 +226,11 @@ Conventions:
   selection outline (from the entity-ID buffer, so alpha-blended surfaces get none) and `DebugDraw` line
   lists, depth-tested against the scene or always on top. Fill a `DebugDraw` each frame (gameplay
   debugging, or `DrawSceneGizmos` for light, camera and collider shapes) and pass it to `Render`.
+- `TextComponent`s are drawn with the overlays by `TextRenderer`: signed distance field glyphs from a
+  per-font `FontAtlas` (stb_truetype, filled on demand), laid out by `LayoutText` (UTF-8, lines,
+  alignment). World-space text is depth-tested, screen-space text goes over everything. Text without a
+  font, or whose font is loading, uses `Font::GetDefault()` (Roboto, embedded with
+  `strata_embed_file` from `CMake/StrataEmbeddedFiles.cmake`).
 - GPU tests of the scene renderer share `StrataTests/src/Renderer/SceneRendererTestUtils.h`. Verify that a
   new regression test fails without its fix before relying on it.
 

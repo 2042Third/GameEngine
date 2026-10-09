@@ -16,6 +16,8 @@ namespace Strata
 		AssetType GetType() const override { return GetStaticType(); }
 
 		static Ref<Font> Create(std::vector<uint8_t> fontData, std::string* outError = nullptr);
+		// The engine's built-in font (Roboto Medium), used by text without a font of its own. Created on first use.
+		static const Ref<Font>& GetDefault();
 
 		uint64_t GetMemoryUsage() const override { return m_Data.size(); }
 		const std::vector<uint8_t>& GetData() const { return m_Data; }

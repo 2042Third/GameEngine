@@ -200,12 +200,16 @@ namespace Strata
 		Right
 	};
 
+	// UTF-8 text, '\n' starts a new line. Screen-space text is a HUD drawn over everything: the anchor point is also the
+	// text block's vertical pivot (anchor y 0 hangs the block below the point, 1 stands it above it, 0.5 centers it) and
+	// Alignment places each line horizontally (Left starts at the point, Right ends at it). World-space text lies in the
+	// entity's XY plane facing +Z, vertically centered on its origin and aligned the same way, hidden behind geometry.
 	struct TextComponent
 	{
 		std::string Text = "Text";
-		AssetHandle Font = UUID::Null(); // Default engine font when unset
-		glm::vec4 Color = { 1.0f, 1.0f, 1.0f, 1.0f };
-		float FontSize = 32.0f; // Pixels in screen space, world units in world space
+		AssetHandle Font = UUID::Null(); // Default engine font when unset (or while the font loads)
+		glm::vec4 Color = { 1.0f, 1.0f, 1.0f, 1.0f }; // Display (sRGB) color; alpha blends
+		float FontSize = 32.0f; // Pixels per em in screen space, world units per em in world space
 		bool ScreenSpace = true;
 		glm::vec2 ScreenAnchor = { 0.5f, 0.5f }; // Normalized viewport position (0,0 = top-left)
 		glm::vec2 ScreenOffset = { 0.0f, 0.0f }; // Pixels added to the anchor (+Y down)
