@@ -20,8 +20,9 @@ TEST_SUITE("Editor.Audio")
 	{
 		ScopedAudioEngine engine;
 		REQUIRE(engine.Initialized);
-		AudioProject project;
+		// An editor without a project makes its built-in assets active, so the clip project is activated after it.
 		EditorContext context(EditorContextSpecification { false });
+		AudioProject project;
 		EditorCommandRegistry commands;
 		const auto run = [&](std::string_view name, const nlohmann::json& parameters = nlohmann::json::object())
 		{

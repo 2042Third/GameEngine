@@ -2190,7 +2190,7 @@ namespace Strata
 		std::string error;
 		Scope<TextureReadback> readback = TextureReadback::Create(m_EntityIDTexture, region, &error);
 		if (!readback)
-			ReportError(fmt::format("reading the entity ID at ({}, {}) failed: {}", x, y, error));
+			m_Errors.Report(fmt::format("reading the entity ID at ({}, {}) failed: {}", x, y, error));
 		return readback;
 	}
 
