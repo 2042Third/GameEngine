@@ -263,7 +263,9 @@ rules"). Other threads:
 - **I/O threads** (`JobSystem::Init`; 2 by default): `JobSystem::SubmitIO` work such as asset reads, background
   re-imports and saving captures.
 - **File watchers** (`FileWatcher::Start`): one thread per watcher, for the project's asset directory
-  (`EditorAssetManager`) and for the script module's directory (`ScriptEngine`, hot reload).
+  (`EditorAssetManager`) and for the script module's directory (`ScriptEngine`, hot reload). Each rescans its tree when
+  the platform reports a change (`FileChangeNotifier`: change notifications on Windows,
+  `Platform/Windows/WindowsFileChangeNotifier.cpp`) or its poll interval has passed (Linux and macOS only poll).
 - **Audio** (miniaudio): mixes for the output device. The `AudioEngine` API stays on the main thread; the listener's up
   vector reaches the mixer through a `SequenceLock` (`Audio/AudioEngine.cpp`).
 - **RPC network** (`RpcServer::Start`): all socket I/O of editor automation and the built-in `rpc.*` methods.
