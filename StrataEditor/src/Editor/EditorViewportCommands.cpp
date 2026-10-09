@@ -6,7 +6,6 @@
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JobSystem.h>
 #include <Strata/Core/Log.h>
-#include <Strata/Core/StringUtils.h>
 #include <Strata/Renderer/ImageWriter.h>
 #include <Strata/Renderer/Renderer.h>
 #include <Strata/Renderer/TextureReadback.h>
@@ -17,7 +16,6 @@
 #include <cmath>
 #include <filesystem>
 #include <memory>
-#include <system_error>
 
 namespace Strata
 {
@@ -95,6 +93,7 @@ namespace Strata
 			ViewportCameraSource Camera = ViewportCameraSource::Automatic;
 			std::optional<bool> Overlays;
 			std::filesystem::path Path; // Empty: the image is only returned
+			bool Overwrite = false;
 		};
 
 		// The image and what the jobs make of it. Jobs write it; the main thread reads it once a job has completed.
@@ -190,9 +189,12 @@ namespace Strata
 			if (!request.Path.empty() && !progress.SaveStarted)
 			{
 				progress.SaveStarted = true;
-				progress.SaveJob = JobSystem::SubmitIO([encodedRef = progress.Encoded, path = request.Path]()
+				progress.SaveJob = JobSystem::SubmitIO([encodedRef = progress.Encoded, path = request.Path, overwrite = request.Overwrite]()
 				{
-					if (!FileSystem::CreateDirectories(path.parent_path()) || !FileSystem::WriteBytes(path, encodedRef->Png))
+					// Checked again: the file may have appeared since the command was given.
+					if (!overwrite && FileSystem::Exists(path))
+						encodedRef->SaveError = fmt::format("'{}' already exists (pass overwrite: true to replace it)", FileSystem::ToUTF8(path));
+					else if (!FileSystem::CreateDirectories(path.parent_path()) || !FileSystem::WriteBytes(path, encodedRef->Png))
 						encodedRef->SaveError = fmt::format("Cannot write the capture to '{}'", FileSystem::ToUTF8(path));
 				});
 				return std::nullopt;
@@ -329,7 +331,9 @@ namespace Strata
 				{ "camera", { { "type", "string" }, { "enum", { "editor", "scene" } },
 					{ "description", "\"editor\": the editor camera; \"scene\": the scene's primary camera (fails without one)" } } },
 				{ "overlays", BoolSchema("Draw the editor overlays enabled in the viewport (default: on for the editor camera, off for the scene camera)") },
-				{ "path", StringSchema("Also save the PNG to this .png file (relative to the editor's working directory; folders are created)") } }),
+				{ "path", StringSchema("Also save the PNG to this .png file: relative to the project directory (needs an open project) or absolute; folders are "
+					"created, network and device paths are refused") },
+				{ "overwrite", BoolSchema("Replace an existing file at path (default false: an existing file is an error)") } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
@@ -345,17 +349,18 @@ namespace Strata
 					arguments.SetError("Parameter 'camera' must be \"editor\" or \"scene\"");
 				if (arguments.Has("overlays"))
 					request.Overlays = arguments.GetBool("overlays", true);
+				request.Overwrite = arguments.GetBool("overwrite", false);
 				if (arguments.Has("path"))
 				{
 					const std::string path = arguments.GetString("path");
-					const std::filesystem::path file = FileSystem::FromUTF8(path);
-					std::error_code error;
-					if (arguments.IsValid() && (path.empty() || !StringUtils::EqualsIgnoreCase(FileSystem::ToUTF8(file.extension()), ".png")))
-						arguments.SetError("Parameter 'path' must name a .png file");
-					else if (arguments.IsValid())
-						request.Path = std::filesystem::absolute(file, error);
-					if (error)
-						arguments.SetError(fmt::format("Parameter 'path': {}", error.message()));
+					std::string error;
+					if (arguments.IsValid())
+					{
+						if (std::optional<std::filesystem::path> resolved = ResolveOutputPath(context, path, ".png", request.Overwrite, &error))
+							request.Path = std::move(*resolved);
+						else
+							arguments.SetError(fmt::format("Parameter 'path': {}", error));
+					}
 				}
 				if (!arguments.IsValid())
 					return arguments.Fail();

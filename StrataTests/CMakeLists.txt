@@ -103,8 +103,11 @@ set_tests_properties(StrataScriptCore.Package PROPERTIES LABELS "package")
 
 # The real editor, driven by a command script for a few frames: catches startup, UI and shutdown failures.
 if(TARGET StrataEditor)
+	# The script saves viewport captures into the build tree (absolute paths: it runs without a project).
+	set(STRATA_SMOKE_CAPTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/SmokeCaptures")
+	configure_file("${CMAKE_CURRENT_SOURCE_DIR}/Editor/SmokeCommands.json.in" "${CMAKE_CURRENT_BINARY_DIR}/SmokeCommands.json" @ONLY)
 	add_test(NAME StrataEditor.Smoke
-		COMMAND StrataEditor --frames 30 --windowed --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/SmokeCommands.json"
+		COMMAND StrataEditor --frames 120 --windowed --commands "${CMAKE_CURRENT_BINARY_DIR}/SmokeCommands.json"
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
 	set_tests_properties(StrataEditor.Smoke PROPERTIES LABELS "gpu")
 

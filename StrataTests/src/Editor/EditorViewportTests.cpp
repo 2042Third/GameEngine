@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Editor/CommandUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/EditorViewport.h"
@@ -192,8 +193,57 @@ TEST_SUITE("Editor.Viewport")
 		CHECK(harness.Error("viewport.capture", { { "width", 8 } }).find("'width'") != std::string::npos);
 		CHECK(harness.Error("viewport.capture", { { "height", 100000 } }).find("'height'") != std::string::npos);
 		CHECK(harness.Error("viewport.capture", { { "path", "Capture.jpg" } }).find(".png") != std::string::npos);
-		CHECK(harness.Error("viewport.capture", { { "path", "" } }).find(".png") != std::string::npos);
+		CHECK(harness.Error("viewport.capture", { { "path", "" } }).find("empty") != std::string::npos);
+		CHECK(harness.Error("viewport.capture", { { "path", "Capture.png" } }).find("no project is open") != std::string::npos);
+		CHECK(harness.Error("viewport.capture", { { "overwrite", 1 } }).find("'overwrite'") != std::string::npos);
 		CHECK(harness.Error("viewport.capture", { { "overlays", "yes" } }).find("'overlays'") != std::string::npos);
+	}
+
+	TEST_CASE("Output paths resolve against the project and never replace files by accident")
+	{
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("OutputPaths");
+		ViewportHarness harness;
+		std::string error;
+		auto resolve = [&](std::string_view path, bool overwrite = false)
+		{
+			error.clear();
+			return CommandUtils::ResolveOutputPath(harness.Context, path, ".png", overwrite, &error);
+		};
+
+		// Without a project only absolute paths work: the editor's working directory means nothing to a client.
+		CHECK_FALSE(resolve("Shot.png"));
+		CHECK(error.find("no project") != std::string::npos);
+		const std::filesystem::path absolute = directory / "Elsewhere" / "Shot.png";
+		CHECK(resolve(FileSystem::ToUTF8(absolute)) == absolute.lexically_normal());
+
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory / "Game") }, { "name", "Game" } });
+		const std::filesystem::path projectDirectory = harness.Context.GetProject()->GetProjectDirectory();
+		CHECK(resolve("Captures/Shot.png") == (projectDirectory / "Captures" / "Shot.png").lexically_normal());
+		CHECK(resolve("Captures/../Shot.PNG") == (projectDirectory / "Shot.PNG").lexically_normal());
+
+		// Network and device paths, paths that are neither relative nor fully absolute, reserved device names and other
+		// extensions are refused.
+		for (const char* refused : { "\\\\server\\share\\Shot.png", "//server/share/Shot.png", "\\\\?\\C:\\Shot.png", "\\\\.\\NUL.png", "NUL.png",
+			"Captures/con.png", "com1.png", "Captures/LPT9.dump.png", "Shot.jpg", "Shot" })
+		{
+			CAPTURE(refused);
+			CHECK_FALSE(resolve(refused));
+			CHECK_FALSE(error.empty());
+		}
+#if defined(ST_PLATFORM_WINDOWS)
+		CHECK_FALSE(resolve("C:Shot.png"));   // Relative to the drive's current folder
+		CHECK_FALSE(resolve("\\Shot.png")); // On the current drive
+#endif
+
+		// An existing file is replaced only on request; a folder never.
+		REQUIRE(FileSystem::WriteText(projectDirectory / "Existing.png", "old"));
+		CHECK_FALSE(resolve("Existing.png"));
+		CHECK(error.find("overwrite") != std::string::npos);
+		CHECK(resolve("Existing.png", true) == (projectDirectory / "Existing.png").lexically_normal());
+		REQUIRE(FileSystem::CreateDirectories(projectDirectory / "Folder.png"));
+		CHECK_FALSE(resolve("Folder.png", true));
+		CHECK(error.find("not a regular file") != std::string::npos);
+		CHECK(harness.Error("viewport.capture", { { "path", "Existing.png" } }).find("overwrite") != std::string::npos);
 	}
 
 	TEST_CASE("The view follows the play state")

@@ -36,8 +36,9 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
 - doctest filters split on commas. A test name containing a comma must be matched with `?`/`*`, e.g.
   `--test-case="Hierarchy?*"`.
 - CTest runs: `StrataTests.Core` (everything but GPU suites), `StrataTests.GPU` (label `gpu`),
-  `StrataEditor.Smoke` (the real editor with `StrataTests/Editor/SmokeCommands.json`, label `gpu`; it captures the
-  viewport to `SmokeViewport.png`/`SmokeSceneCamera.png` in `build/<preset>/bin/<Config>/`), the editor script checks
+  `StrataEditor.Smoke` (the real editor with `StrataTests/Editor/SmokeCommands.json.in`, configured into the build tree,
+  label `gpu`; it captures the viewport to `SmokeViewport.png`/`SmokeSceneCamera.png` in
+  `build/<preset>/StrataTests/SmokeCaptures/`), the editor script checks
   (`StrataEditor.FailingScript`, `WaitingScript`, `UnfinishedScript`, `CaptureWithoutGPU`), and the export chain
   `StrataExport.Clean` → `StrataEditor.Export` (`--no-gpu`) → `StrataRuntime.Smoke` (the exported game, headless) →
   `StrataRuntime.Render` (windowed, saves `build/<preset>/StrataTests/ExportSmoke/RuntimeScreenshot.png`, label `gpu`)

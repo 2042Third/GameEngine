@@ -274,6 +274,34 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Captures save into the project and replace files only on request")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("ViewportCaptureProject");
+		ViewportGPUHarness harness;
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory / "Game") }, { "name", "Game" } });
+		harness.AddScene();
+		const std::filesystem::path expected = harness.Context.GetProject()->GetProjectDirectory() / "Captures" / "Shot.png";
+
+		nlohmann::json result;
+		harness.Capture({ { "width", 32 }, { "height", 32 }, { "path", "Captures/Shot.png" } }, &result);
+		CHECK(FileSystem::FromUTF8(result["path"].get<std::string>()) == expected.lexically_normal());
+		const std::optional<std::vector<uint8_t>> first = FileSystem::ReadBytes(expected);
+		REQUIRE(first);
+
+		// The same path again: refused unless replacing is asked for, and then replaced.
+		const EditorCommandResult refused = harness.RunFrames("viewport.capture", { { "width", 32 }, { "height", 32 }, { "path", "Captures/Shot.png" } });
+		CHECK_FALSE(refused.Success);
+		CHECK(refused.Error.find("overwrite") != std::string::npos);
+		CHECK(FileSystem::ReadBytes(expected) == first);
+		harness.Capture({ { "width", 48 }, { "height", 32 }, { "path", "Captures/Shot.png" }, { "overwrite", true } }, &result);
+		const std::optional<std::vector<uint8_t>> second = FileSystem::ReadBytes(expected);
+		REQUIRE(second);
+		CHECK(DecodePNG(*second).Width == 48);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Playing without a camera captures the editor camera with a notice")
 	{
 		Tests::GPUContext gpu;

@@ -301,8 +301,9 @@ Building and loading scripts:
   or the script has not finished by the last of `--frames N` frames, the process exit code becomes 1.
   `--frames N` stops after N frames (without saving the panel layout), `--screenshot out.png` captures
   the last frame (viewport included), `--no-gpu` runs headless without a graphics device (export, asset processing).
-  CTest runs `StrataTests/Editor/SmokeCommands.json` (it builds a scene and captures the viewport) and checks that
-  failing and unfinished scripts fail the process.
+  CTest runs `StrataTests/Editor/SmokeCommands.json.in` (configured into the build tree; it builds a scene and captures
+  the viewport into `build/<preset>/StrataTests/SmokeCaptures/`) and checks that failing and unfinished scripts fail the
+  process.
 - Mutating commands report a `warning` in their result while the scene is playing: such changes apply
   to the running copy and are discarded by `play.stop`. Unknown or missing parameters are errors.
 - **Viewport state** lives in the core: `EditorContext::GetViewport()` (`EditorViewport`) holds the editor camera
@@ -326,10 +327,13 @@ Building and loading scripts:
   image is a plain `Dummy` while the mouse is over the gizmo.
 - **View commands** change no scene data and record no undo: `camera.get`, `camera.set {position, target, yaw, pitch,
   distance, fov, near, far, flySpeed}` (position + target looks from one at the other) and `camera.focus {entities?}`
-  (frames them, or the whole scene). `viewport.capture {width?, height?, camera?: "editor" | "scene", overlays?, path?}`
-  renders on the next frame, reads the image back without stalling and returns `{"Image": {"MimeType": "image/png",
-  "Data": <base64>}, "width", "height", "camera", "overlays", "pendingAssets", "notice"?, "path"?}`; it defaults to
-  the viewport's size, camera and overlays and fails without a GPU.
+  (frames them, or the whole scene). `viewport.capture {width?, height?, camera?: "editor" | "scene", overlays?, path?,
+  overwrite?}` renders on the next frame, reads the image back without stalling, encodes it on a job thread and returns
+  `{"Image": {"MimeType": "image/png", "Data": <base64>}, "width", "height", "camera", "overlays", "pendingAssets",
+  "notice"?, "path"?}`; it defaults to the viewport's size, camera and overlays and fails without a GPU.
+- Files commands write for clients go through `CommandUtils::ResolveOutputPath`: relative paths are relative to the
+  project directory (an error without a project), network/device paths and reserved device names are refused, and an
+  existing file is replaced only with `overwrite: true`.
 
 ## Rendering
 
