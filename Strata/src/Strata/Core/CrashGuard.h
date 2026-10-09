@@ -36,10 +36,14 @@ namespace Strata
 	// Guards may be nested and are per thread.
 	//
 	// POSIX: the first Invoke installs process-wide handlers for the fault signals (and an alternate signal stack per
-	// thread). Signals no guard handles - raised outside guarded calls, or sent by another process - go to the handlers
-	// installed before (called directly, so the guard keeps its own), or take their default action. Code that replaces
-	// these handlers later (crash reporters, test frameworks catching signals) must be set up first, or crashes are no
-	// longer contained. Thread cancellation (glibc's forced unwinding) passes through guarded calls.
+	// thread, on macOS with a small recovery stack: there the handler leaves by returning, the only way that makes the
+	// kernel forget that the thread runs on its alternate stack). Signals no guard handles - raised outside guarded
+	// calls, or sent by another process - go to the handlers installed before (called directly, so the guard keeps its
+	// own), or take their default action. Code that replaces these handlers later (crash reporters, test frameworks
+	// catching signals) must be set up first, or crashes are no longer contained. On macOS a previous handler that leaves
+	// with longjmp instead of returning leaves the thread marked as running on the alternate stack, so stack overflows
+	// on that thread can no longer be contained (the guard logs an error after its next contained fault). Thread
+	// cancellation (glibc's forced unwinding) passes through guarded calls.
 	class CrashGuard
 	{
 	public:
