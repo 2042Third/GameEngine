@@ -191,20 +191,22 @@ namespace Strata
 		}
 	}
 
-	bool ScriptModule::LoadLibraryGuarded(const std::filesystem::path& path, const std::string& displayPath, std::string& outError)
+	bool ScriptModule::LoadLibraryGuarded(const std::filesystem::path& path, const std::filesystem::path& dependencyDirectory, const std::string& displayPath,
+		std::string& outError)
 	{
 		struct LibraryLoad
 		{
 			DynamicLibrary* Library;
 			const std::filesystem::path* Path;
+			const std::filesystem::path* DependencyDirectory;
 			bool Loaded;
 		};
-		LibraryLoad libraryLoad { &m_Library, &path, false };
+		LibraryLoad libraryLoad { &m_Library, &path, &dependencyDirectory, false };
 		CrashInfo crash;
 		if (!CrashGuard::Invoke([](void* data)
 		{
 			LibraryLoad* load = static_cast<LibraryLoad*>(data);
-			load->Loaded = load->Library->Load(*load->Path);
+			load->Loaded = load->Library->Load(*load->Path, *load->DependencyDirectory);
 		}, &libraryLoad, &crash))
 		{
 			RecordFault(ScriptCallSite { nullptr, "static initialization" }, crash);
@@ -246,7 +248,7 @@ namespace Strata
 		bool loaded = false;
 		if (mode == ScriptModuleLoadMode::InPlace)
 		{
-			if (!module->LoadLibraryGuarded(path, displayPath, error))
+			if (!module->LoadLibraryGuarded(path, {}, displayPath, error))
 				return fail(std::move(error));
 			if (RegisterLibrary(module->m_Library.GetNativeHandle()))
 			{
@@ -274,7 +276,8 @@ namespace Strata
 				return fail(fmt::format("Cannot copy script module '{}' (it may still be being written)", displayPath), true);
 			module->m_LoadedPath = copyPath; // From now on the destructor removes the copy
 
-			if (!module->LoadLibraryGuarded(copyPath, displayPath, error))
+			// The libraries the module depends on stay next to the original.
+			if (!module->LoadLibraryGuarded(copyPath, path.parent_path(), displayPath, error))
 				return fail(std::move(error));
 			if (!RegisterLibrary(module->m_Library.GetNativeHandle()))
 			{

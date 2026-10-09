@@ -326,6 +326,31 @@ TEST_SUITE("Scripting.Module")
 		scene.OnRuntimeStop();
 	}
 
+	TEST_CASE("Libraries a module depends on are found next to it, also when it runs from a copy")
+	{
+		// The dependency is built into a directory of its own (not next to the test executable), so only the module's
+		// directory provides it.
+		const std::filesystem::path directory = CreateTemporaryDirectory("ScriptDependency");
+		const std::filesystem::path module = directory / FileSystem::FromUTF8(STRATA_TEST_SCRIPTS_DEPENDENT);
+		REQUIRE(FileSystem::Copy(GetTestScriptModule(STRATA_TEST_SCRIPTS_DEPENDENT), module));
+		const std::filesystem::path dependency = FileSystem::FromUTF8(STRATA_TEST_SCRIPT_DEPENDENCY);
+		REQUIRE(FileSystem::Copy(dependency, directory / dependency.filename()));
+
+		for (const bool hotReload : { false, true })
+		{
+			INFO("Hot reload: ", hotReload);
+			ScriptEngine engine;
+			engine.SetHotReloadEnabled(hotReload);
+			std::string error;
+			REQUIRE_MESSAGE(engine.LoadModule(module, &error), error);
+			CHECK(engine.GetModule()->IsLoadedFromCopy() == hotReload);
+			const ScriptClassInfo* info = engine.FindClass("UsesDependency");
+			REQUIRE(info);
+			REQUIRE(info->Fields.size() == 1);
+			CHECK(info->Fields[0].DefaultValue == PropertyValue(int32_t(42)));
+		}
+	}
+
 	TEST_CASE("Copy directories left behind by ended processes are removed")
 	{
 		// A process that ended; the object keeps its ID from being reused on Windows (the process handle stays open).

@@ -253,6 +253,10 @@ Building and loading scripts:
   loaded (a reload, another engine) is always loaded from a copy, because loading it again would share the running
   module's state. A failed (re)load keeps the running module. Poll `IsFaulted()`/`GetFault()` to stop play mode after a
   crash; reloading clears the fault.
+- Shared libraries a module links against: on Windows they are found next to the module file, also when it runs from a
+  copy (the original's directory is searched, never the current directory or PATH). On Linux and macOS the loader
+  resolves them through the module's RUNPATH: CMake's default (absolute) build RPATH works, but `$ORIGIN` /
+  `@loader_path` name the directory of the file actually loaded, which is the private copy's directory under hot reload.
 - Hot reload during play snapshots every instance's fields, deletes the instances (no `OnDestroy`), loads the new
   module, recreates the instances, restores fields that still exist with the same name and type and calls `OnReload`
   (not `OnCreate`). Classes that disappeared lose their instances; new classes start normally.

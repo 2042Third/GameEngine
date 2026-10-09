@@ -101,9 +101,10 @@ namespace Strata
 	private:
 		ScriptModule() = default;
 
-		// Loads the library under the crash guard (loading runs the module's static initializers). On failure `outError`
-		// is the complete message.
-		bool LoadLibraryGuarded(const std::filesystem::path& path, const std::string& displayPath, std::string& outError);
+		// Loads the library under the crash guard (loading runs the module's static initializers); see DynamicLibrary::Load
+		// for `dependencyDirectory`. On failure `outError` is the complete message.
+		bool LoadLibraryGuarded(const std::filesystem::path& path, const std::filesystem::path& dependencyDirectory, const std::string& displayPath,
+			std::string& outError);
 		template<typename Function>
 		ScriptCallResult Call(const ScriptCallSite& site, Function&& function);
 		void RecordFault(const ScriptCallSite& site, const CrashInfo& crash);

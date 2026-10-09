@@ -142,6 +142,10 @@ runs a private copy of the module and reloads the new build once the file is com
 load (or crashes while loading) leaves the running version in place. Field values survive the reload when the field
 keeps its name and type. Without hot reload (shipped games) the module runs from its file.
 
+Prefer static libraries for third-party code in scripts. Shared libraries the module links against must sit next to the
+module file (Windows) or be reachable through its RUNPATH (Linux, macOS; `$ORIGIN` does not work under hot reload,
+because the module then runs from a private copy - see AGENTS.md).
+
 ## Testing scripts
 
 Engine-side tests load a module, play a scene and inspect fields: see `StrataTests/src/Scripting/` (helpers in

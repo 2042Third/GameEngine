@@ -13,7 +13,18 @@ set_target_properties(StrataTestLibrary PROPERTIES CXX_VISIBILITY_PRESET hidden 
 #   ReloadV1/V2 two versions of one module for the hot reload tests
 #   Faults      scripts that crash on purpose; LoadFault crashes while loading
 #   ABIMismatch and Malformed are written against the C ABI directly and are refused by the engine
+#   Dependent   links StrataTestScriptDependency, a library built into a directory of its own
 set(STRATA_TEST_SCRIPTS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Scripts")
+add_library(StrataTestScriptDependency SHARED "${STRATA_TEST_SCRIPTS_DIR}/Dependency/ScriptDependency.cpp")
+strata_configure_target(StrataTestScriptDependency)
+set_target_properties(StrataTestScriptDependency PROPERTIES
+	CXX_VISIBILITY_PRESET hidden
+	VISIBILITY_INLINES_HIDDEN ON
+	RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>/ScriptDependency"
+	LIBRARY_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/$<CONFIG>/ScriptDependency"
+	FOLDER "Strata/TestScripts")
+strata_add_script_module(StrataTestScriptsDependent SOURCES "${STRATA_TEST_SCRIPTS_DIR}/Dependent/DependentScripts.cpp")
+target_link_libraries(StrataTestScriptsDependent PRIVATE StrataTestScriptDependency)
 strata_add_script_module(StrataTestScriptsAPI SOURCE_DIR "${STRATA_TEST_SCRIPTS_DIR}/API")
 strata_add_script_module(StrataTestScriptsReloadV1 SOURCES "${STRATA_TEST_SCRIPTS_DIR}/Reload/ReloadScripts.cpp")
 target_compile_definitions(StrataTestScriptsReloadV1 PRIVATE ST_TEST_RELOAD_VERSION=1)
@@ -30,7 +41,8 @@ set(STRATA_TEST_SCRIPT_MODULES
 	StrataTestScriptsFaults
 	StrataTestScriptsLoadFault
 	StrataTestScriptsABIMismatch
-	StrataTestScriptsMalformed)
+	StrataTestScriptsMalformed
+	StrataTestScriptsDependent)
 foreach(module IN LISTS STRATA_TEST_SCRIPT_MODULES)
 	strata_configure_target(${module})
 	set_target_properties(${module} PROPERTIES FOLDER "Strata/TestScripts")
@@ -58,6 +70,7 @@ endif()
 target_include_directories(StrataTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_compile_definitions(StrataTests PRIVATE
 	"STRATA_TEST_LIBRARY_NAME=\"$<TARGET_FILE_NAME:StrataTestLibrary>\""
+	"STRATA_TEST_SCRIPT_DEPENDENCY=\"$<TARGET_FILE:StrataTestScriptDependency>\""
 	"STRATA_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
 foreach(module IN LISTS STRATA_TEST_SCRIPT_MODULES)
 	string(REPLACE "StrataTestScripts" "" moduleKind "${module}")
