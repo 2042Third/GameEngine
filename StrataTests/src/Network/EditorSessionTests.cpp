@@ -149,12 +149,25 @@ TEST_SUITE("Network.EditorSession")
 		REQUIRE(EditorSession::FindSessions(sessionDirectory).size() == 1);
 		CHECK(EditorSession::ReadProjectSession(project, sessionDirectory).has_value());
 
+		// A session of a process that exited is stale, and FindSessions deletes it. (If a new process has taken the
+		// id by now, its start time differs, so the verdict is the same.)
 		Tests::ExitedProcess exited;
 		EditorSessionInfo gone = MakeSession(exited.GetProcessId(), 46004, "2026-01-01T00:00:00Z");
 		gone.ProcessStartTime = exited.GetStartTime();
+		CHECK(EditorSession::GetSessionProcessState(gone) == SessionProcessState::Exited);
 		CHECK_FALSE(EditorSession::IsSessionProcessRunning(gone));
-		// Even without a start time, a session whose process is gone is stale.
+		REQUIRE(WriteSession(sessionDirectory, gone));
+		CHECK(EditorSession::FindSessions(sessionDirectory).size() == 1);
+		CHECK_FALSE(FileSystem::Exists(EditorSession::GetSessionFilePath(sessionDirectory, gone.ProcessId)));
+
+		// Without a start time, a session whose process is gone is stale too. Only a reused id (possible on POSIX,
+		// where the exited process was reaped) would make it unverifiable instead.
 		gone.ProcessStartTime = 0;
+		const SessionProcessState withoutStartTime = EditorSession::GetSessionProcessState(gone);
+		if (Platform::IsProcessAlive(gone.ProcessId))
+			CHECK(withoutStartTime == SessionProcessState::Unverifiable);
+		else
+			CHECK(withoutStartTime == SessionProcessState::Exited);
 		CHECK_FALSE(EditorSession::IsSessionProcessRunning(gone));
 	}
 
