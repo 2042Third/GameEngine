@@ -238,8 +238,11 @@ Conventions:
   text with many distinct glyphs render until no glyphs are pending.
 - Font files are untrusted input and stb_truetype does no bounds checking: `Font::Create` validates
   everything stb_truetype can read (`Renderer/FontValidation.h`), rejects malformed fonts and fonts with
-  CFF outlines (OTTO), and disables kerning that is not fully bounded. Before calling another
-  stb_truetype function, extend the validator to cover what it reads, with crafted-font tests.
+  CFF outlines (OTTO), and disables kerning that is not fully bounded (in what stb_truetype reads,
+  in the GPOS lookups it searches per glyph pair, and in the work to validate it). Bound time as
+  well as reads: offsets in font tables may share targets, so count work with repeats. Before
+  calling another stb_truetype function, extend the validator to cover what it reads, with
+  crafted-font tests.
 - GPU tests of the scene renderer share `StrataTests/src/Renderer/SceneRendererTestUtils.h`. Verify that a
   new regression test fails without its fix before relying on it.
 

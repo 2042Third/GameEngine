@@ -85,7 +85,8 @@ namespace Strata
 		// malformed font cannot make the rasterizer allocate or compute without bound.
 		static constexpr uint64_t c_MaxGlyphTexels = 192;
 		static constexpr uint64_t c_MaxGlyphRasterCost = 8ull * 1024 * 1024;
-		// BeginFrame drops cached glyphs that are not in the atlas, and the code point cache, beyond this many entries.
+		// BeginFrame drops cached glyphs that are not in the atlas, and the code point cache, beyond this many entries; the
+		// kerning cache is cleared when it reaches it.
 		static constexpr size_t c_GlyphCacheLimit = 4096;
 
 		// Null (with an error) when the font data cannot be read.
@@ -109,8 +110,9 @@ namespace Strata
 		const GlyphInfo& GetGlyph(uint32_t codepoint);
 		// A glyph by its index in the font (out of range: the missing glyph).
 		const GlyphInfo& GetGlyphByIndex(uint32_t glyphIndex);
-		// Extra advance between two glyphs (kerning), in em units.
-		float GetKerning(const GlyphInfo& left, const GlyphInfo& right) const;
+		// Extra advance between two glyphs (kerning), in em units. Cached per glyph pair: stb_truetype searches the font's
+		// kerning tables on every call.
+		float GetKerning(const GlyphInfo& left, const GlyphInfo& right);
 
 		// Creates the GPU texture array or uploads what changed since the last upload. False when a texture cannot be
 		// created (the changes then stay pending).
@@ -120,6 +122,7 @@ namespace Strata
 		uint32_t GetPageCount() const { return static_cast<uint32_t>(m_Pages.size()); }
 		const std::vector<uint8_t>& GetPagePixels(uint32_t page) const; // c_PageSize squared texels, rows top to bottom
 		size_t GetCachedGlyphCount() const { return m_Glyphs.size(); }
+		size_t GetCachedKerningCount() const { return m_Kerning.size(); }
 		const FontAtlasStats& GetStats() const { return m_Stats; }
 	private:
 		static constexpr uint32_t c_FreeCell = std::numeric_limits<uint32_t>::max();
@@ -168,6 +171,7 @@ namespace Strata
 		FontMetrics m_Metrics;
 
 		std::unordered_map<uint32_t, uint32_t> m_CodepointGlyphs; // Code point -> glyph index
+		std::unordered_map<uint32_t, float> m_Kerning;            // Glyph pair (left << 16 | right) -> kerning
 		std::unordered_map<uint32_t, GlyphEntry> m_Glyphs;        // Glyph index -> glyph
 		std::vector<Page> m_Pages;
 		uint64_t m_Frame = 0;

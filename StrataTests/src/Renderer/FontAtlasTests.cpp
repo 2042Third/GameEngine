@@ -225,4 +225,27 @@ TEST_SUITE("Renderer.FontAtlas")
 		CHECK(atlas->GetGlyphByIndex(pending.front()).Visible);
 		CHECK(atlas->GetStats().RasterizedGlyphs == rasterized + 2); // Not evicted, so not rasterized again
 	}
+
+	TEST_CASE("Kerning is looked up once per glyph pair, in a bounded cache")
+	{
+		Scope<FontAtlas> atlas = FontAtlas::Create(Font::GetDefault());
+		REQUIRE(atlas);
+		TextLayout layout;
+		LayoutText(*atlas, "AVAVAV", TextAlignment::Left, layout);
+		CHECK(atlas->GetCachedKerningCount() == 2); // AV and VA
+		const float kerning = atlas->GetKerning(atlas->GetGlyph('A'), atlas->GetGlyph('V'));
+		CHECK(kerning < 0.0f);
+		CHECK(atlas->GetCachedKerningCount() == 2);
+
+		// More pairs than the cache holds: it is cleared rather than grown, and answers stay the same.
+		GlyphInfo left;
+		GlyphInfo right;
+		for (left.GlyphIndex = 0; left.GlyphIndex < 100; left.GlyphIndex++)
+		{
+			for (right.GlyphIndex = 0; right.GlyphIndex < 100; right.GlyphIndex++)
+				atlas->GetKerning(left, right);
+		}
+		CHECK(atlas->GetCachedKerningCount() <= FontAtlas::c_GlyphCacheLimit);
+		CHECK(atlas->GetKerning(atlas->GetGlyph('A'), atlas->GetGlyph('V')) == kerning);
+	}
 }

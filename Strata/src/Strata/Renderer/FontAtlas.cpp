@@ -360,11 +360,20 @@ namespace Strata
 		}
 	}
 
-	float FontAtlas::GetKerning(const GlyphInfo& left, const GlyphInfo& right) const
+	float FontAtlas::GetKerning(const GlyphInfo& left, const GlyphInfo& right)
 	{
 		if (!m_Font->HasUsableKerning())
 			return 0.0f;
-		return static_cast<float>(stbtt_GetGlyphKernAdvance(&m_Info->Info, static_cast<int>(left.GlyphIndex), static_cast<int>(right.GlyphIndex))) * m_EmScale;
+		// Glyph indices are below 65536 (the font's glyph count is 16-bit).
+		const uint32_t pair = (left.GlyphIndex << 16) | right.GlyphIndex;
+		auto cached = m_Kerning.find(pair);
+		if (cached != m_Kerning.end())
+			return cached->second;
+		const float kerning = static_cast<float>(stbtt_GetGlyphKernAdvance(&m_Info->Info, static_cast<int>(left.GlyphIndex), static_cast<int>(right.GlyphIndex))) * m_EmScale;
+		if (m_Kerning.size() >= c_GlyphCacheLimit)
+			m_Kerning.clear(); // Bounded: pairs are cheap to look up again
+		m_Kerning.emplace(pair, kerning);
+		return kerning;
 	}
 
 	const std::vector<uint8_t>& FontAtlas::GetPagePixels(uint32_t page) const

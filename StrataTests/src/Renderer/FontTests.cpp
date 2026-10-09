@@ -152,6 +152,65 @@ namespace
 		return FontPatcher(Font::GetDefault()->GetData());
 	}
 
+	// The font with one of its tables replaced by `table`, appended to the file.
+	std::vector<uint8_t> ReplaceTable(const FontPatcher& font, const std::string& tag, const std::vector<uint8_t>& table)
+	{
+		FontPatcher patched = font;
+		patched.Data.resize((patched.Data.size() + 3) & ~size_t(3), 0);
+		patched.SetU32(patched.Record(tag) + 8, static_cast<uint32_t>(patched.Data.size()));
+		patched.SetU32(patched.Record(tag) + 12, static_cast<uint32_t>(table.size()));
+		patched.Data.insert(patched.Data.end(), table.begin(), table.end());
+		return patched.Data;
+	}
+
+	void Write16(std::vector<uint8_t>& data, size_t offset, uint32_t value)
+	{
+		data[offset] = static_cast<uint8_t>(value >> 8);
+		data[offset + 1] = static_cast<uint8_t>(value);
+	}
+
+	// A GPOS table whose lookup list points `lookups` times at one pair adjustment lookup, whose subtable list points
+	// `subtables` times at one subtable. Its coverage has `ranges` ranges, one of them `first`, the others glyphs the font
+	// lacks; its one pair set kerns `first` followed by `second` by `advance` font units.
+	std::vector<uint8_t> SharedPairPositioning(uint32_t lookups, uint32_t subtables, uint32_t ranges, uint32_t first, uint32_t second, int16_t advance)
+	{
+		const size_t lookupList = 10;
+		const size_t lookup = lookupList + 2 + 2 * static_cast<size_t>(lookups);
+		const size_t subtable = lookup + 6 + 2 * static_cast<size_t>(subtables);
+		const size_t coverage = subtable + 14;
+		const size_t pairSet = coverage + 4 + 6 * static_cast<size_t>(ranges);
+		REQUIRE(lookup - lookupList <= 0xFFFF);
+		REQUIRE(subtable - lookup <= 0xFFFF);
+		REQUIRE(pairSet - subtable <= 0xFFFF);
+		std::vector<uint8_t> gpos(pairSet + 6, 0);
+		Write16(gpos, 0, 1); // Version 1.0
+		Write16(gpos, 8, static_cast<uint32_t>(lookupList));
+		Write16(gpos, lookupList, lookups);
+		for (size_t index = 0; index < lookups; index++)
+			Write16(gpos, lookupList + 2 + 2 * index, static_cast<uint32_t>(lookup - lookupList));
+		Write16(gpos, lookup, 2); // Pair adjustment
+		Write16(gpos, lookup + 4, subtables);
+		for (size_t index = 0; index < subtables; index++)
+			Write16(gpos, lookup + 6 + 2 * index, static_cast<uint32_t>(subtable - lookup));
+		Write16(gpos, subtable, 1);      // Pairs of glyphs
+		Write16(gpos, subtable + 2, static_cast<uint32_t>(coverage - subtable));
+		Write16(gpos, subtable + 4, 4);  // X advance of the first glyph only
+		Write16(gpos, subtable + 8, 1);  // One pair set
+		Write16(gpos, subtable + 10, static_cast<uint32_t>(pairSet - subtable));
+		Write16(gpos, coverage, 2);      // Glyph ranges, sorted
+		Write16(gpos, coverage + 2, ranges);
+		for (size_t range = 0; range < ranges; range++)
+		{
+			const uint32_t glyph = range == 0 ? first : 60000 + static_cast<uint32_t>(range);
+			Write16(gpos, coverage + 4 + 6 * range, glyph);
+			Write16(gpos, coverage + 6 + 6 * range, glyph);
+		}
+		Write16(gpos, pairSet, 1);
+		Write16(gpos, pairSet + 2, second);
+		Write16(gpos, pairSet + 4, static_cast<uint16_t>(advance));
+		return gpos;
+	}
+
 	// Font::Create must reject the bytes, with an error containing `reason`.
 	void CheckRejected(std::vector<uint8_t> data, const std::string& reason)
 	{
@@ -204,6 +263,7 @@ TEST_SUITE("Renderer.Font")
 			Scope<FontAtlas> atlas = FontAtlas::Create(font, &error);
 			REQUIRE_MESSAGE(atlas, error);
 			CHECK(atlas->GetGlyph('A').Visible);
+			CHECK(font->HasUsableKerning());
 		}
 
 		const Ref<Font>& roboto = Font::GetDefault();
@@ -545,6 +605,96 @@ TEST_SUITE("Renderer.Font")
 		CHECK(kernAtlas->GetKerning(kernAtlas->GetGlyph('A'), kernAtlas->GetGlyph('V')) < 0.0f);
 		kern.SetU16(kern.Table("kern") + 10, 0xFFFF);
 		checkKerningDisabled(kern.Data);
+	}
+
+	TEST_CASE("Kerning that stb_truetype would search or validate without bound is disabled")
+	{
+		const FontPatcher font = DefaultFont();
+		const float unitsPerEm = static_cast<float>(font.U16(font.Table("head") + 18));
+		Scope<FontAtlas> reference = FontAtlas::Create(Font::GetDefault());
+		REQUIRE(reference);
+		const uint32_t a = reference->GetGlyph('A').GlyphIndex;
+		const uint32_t v = reference->GetGlyph('V').GlyphIndex;
+		QuietLog quiet;
+
+		// Shared offsets are fine while the search stays short, and stb_truetype finds the pair through them.
+		std::vector<uint8_t> shared = ReplaceTable(font, "GPOS", SharedPairPositioning(8, 16, 20, a, v, -200));
+		TrueTypeFontFacts facts;
+		std::string error;
+		REQUIRE_MESSAGE(ValidateTrueTypeFont(shared, facts, error), error);
+		CHECK(facts.KerningUsable);
+		CHECK(facts.KerningLookupVisits == 8 + 8 * 16);
+		Ref<Font> loaded = Font::Create(std::move(shared), &error);
+		REQUIRE_MESSAGE(loaded, error);
+		Scope<FontAtlas> atlas = FontAtlas::Create(loaded);
+		REQUIRE(atlas);
+		CHECK(atlas->GetKerning(atlas->GetGlyph('A'), atlas->GetGlyph('V')) == doctest::Approx(-200.0f / unitsPerEm));
+		CHECK(atlas->GetKerning(atlas->GetGlyph('V'), atlas->GetGlyph('A')) == 0.0f);
+
+		// Every lookup offset, or every subtable offset, pointing at one target: stb_truetype would search 30000 lookups,
+		// or 30000 subtables of 2000 coverage ranges, for every glyph pair (and validating each visit took billions of
+		// steps). Validation stops at once and the font has no kerning.
+		struct Case
+		{
+			uint32_t Lookups;
+			uint32_t Subtables;
+			const char* Reason;
+		};
+		for (const Case& sharedCase : { Case { 30000, 30000, "too many lookups" }, Case { 1, 30000, "too many pair adjustment subtables" } })
+		{
+			CAPTURE(sharedCase.Reason);
+			std::vector<uint8_t> data = ReplaceTable(font, "GPOS", SharedPairPositioning(sharedCase.Lookups, sharedCase.Subtables, 2000, a, v, -200));
+			REQUIRE_MESSAGE(ValidateTrueTypeFont(data, facts, error), error);
+			CHECK_FALSE(facts.KerningUsable);
+			CHECK(facts.KerningIssue.find(sharedCase.Reason) != std::string::npos);
+			Ref<Font> unbounded = Font::Create(std::move(data), &error);
+			REQUIRE_MESSAGE(unbounded, error);
+			CHECK_FALSE(unbounded->HasUsableKerning());
+			Scope<FontAtlas> unboundedAtlas = FontAtlas::Create(unbounded);
+			REQUIRE(unboundedAtlas);
+			CHECK(unboundedAtlas->GetKerning(unboundedAtlas->GetGlyph('A'), unboundedAtlas->GetGlyph('V')) == 0.0f);
+		}
+
+		// 200 distinct subtables (a short search) that each cover every glyph, so each has 131071 pair set offsets to
+		// check: validation stops when its budget is spent.
+		constexpr uint32_t c_Lookups = 200;
+		const size_t lookupList = 10;
+		const size_t firstLookup = lookupList + 2 + 2 * c_Lookups;
+		const size_t firstSubtable = firstLookup + 8 * c_Lookups;
+		const size_t coverage = firstSubtable + 16 * c_Lookups;
+		std::vector<uint8_t> gpos(coverage + 10 + 2 * 131071 + 0x10000, 0);
+		Write16(gpos, 0, 1);
+		Write16(gpos, 8, static_cast<uint32_t>(lookupList));
+		Write16(gpos, lookupList, c_Lookups);
+		for (size_t index = 0; index < c_Lookups; index++)
+		{
+			const size_t lookup = firstLookup + 8 * index;
+			const size_t subtable = firstSubtable + 16 * index;
+			Write16(gpos, lookupList + 2 + 2 * index, static_cast<uint32_t>(lookup - lookupList));
+			Write16(gpos, lookup, 2);
+			Write16(gpos, lookup + 4, 1);
+			Write16(gpos, lookup + 6, static_cast<uint32_t>(subtable - lookup));
+			Write16(gpos, subtable, 1);
+			Write16(gpos, subtable + 2, static_cast<uint32_t>(coverage - subtable));
+			Write16(gpos, subtable + 4, 4);
+		}
+		Write16(gpos, coverage, 2);
+		Write16(gpos, coverage + 2, 1);
+		Write16(gpos, coverage + 6, 0xFFFF); // Glyphs 0 to 65535
+		Write16(gpos, coverage + 8, 0xFFFF); // From coverage index 65535
+		REQUIRE_MESSAGE(ValidateTrueTypeFont(ReplaceTable(font, "GPOS", gpos), facts, error), error);
+		CHECK(facts.KerningLookupVisits == 2 * c_Lookups);
+		CHECK_FALSE(facts.KerningUsable);
+		CHECK(facts.KerningIssue.find("too large to validate") != std::string::npos);
+
+		// The vendored fonts search a few lookups.
+		for (const char* path : c_VendoredTrueTypeFonts)
+		{
+			CAPTURE(path);
+			REQUIRE(ValidateTrueTypeFont(Tests::ReadSourceFile(path), facts, error));
+			CHECK(facts.KerningUsable);
+			CHECK(facts.KerningLookupVisits <= 16);
+		}
 	}
 
 	TEST_CASE("Fonts truncated at any table boundary are rejected")
