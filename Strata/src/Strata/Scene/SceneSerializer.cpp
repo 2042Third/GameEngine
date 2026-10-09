@@ -25,13 +25,20 @@ namespace Strata
 			return json;
 		}
 
-		void CollectSubtree(Entity entity, std::vector<Entity>& outEntities, std::unordered_set<UUID>& visited)
+		void CollectSubtree(Entity root, std::vector<Entity>& outEntities, std::unordered_set<UUID>& visited)
 		{
-			if (!visited.insert(entity.GetUUID()).second)
-				return;
-			outEntities.push_back(entity);
-			for (Entity child : entity.GetChildren())
-				CollectSubtree(child, outEntities, visited);
+			// Parents before children, iteratively (hierarchies can be arbitrarily deep).
+			std::vector<Entity> stack = { root };
+			while (!stack.empty())
+			{
+				const Entity entity = stack.back();
+				stack.pop_back();
+				if (!visited.insert(entity.GetUUID()).second)
+					continue;
+				outEntities.push_back(entity);
+				const std::vector<Entity> children = entity.GetChildren();
+				stack.insert(stack.end(), children.rbegin(), children.rend());
+			}
 		}
 
 		void RemapEntityReferences(entt::registry& registry, entt::entity handle, const std::unordered_map<UUID, UUID>& mapping)
@@ -307,16 +314,29 @@ namespace Strata
 		// Pass 3: hierarchy. Parent links are resolved within the snapshot; a link that would close a cycle
 		// (possible in hand-written data) is dropped and the entity is attached at the top level instead.
 		std::unordered_map<UUID, UUID> acceptedParents; // Source id -> source parent id
+		// Accepted links form a forest in which each child is still a root when its link is considered (ids are unique),
+		// so a link closes a cycle exactly when both ends are already connected. Union-find answers that in near-constant
+		// time, keeping deep hierarchies linear to load.
+		std::unordered_map<UUID, UUID> connected; // Union-find parent; ids without an entry are their own representative
+		auto findRepresentative = [&](UUID id)
+		{
+			UUID representative = id;
+			for (auto it = connected.find(representative); it != connected.end(); it = connected.find(representative))
+				representative = it->second;
+			while (id != representative) // Path compression
+			{
+				UUID& next = connected[id];
+				id = std::exchange(next, representative);
+			}
+			return representative;
+		};
 		auto createsCycle = [&](UUID child, UUID parent)
 		{
-			UUID current = parent;
-			for (size_t steps = 0; steps <= entities.size() && current.IsValid(); steps++)
-			{
-				if (current == child)
-					return true;
-				auto it = acceptedParents.find(current);
-				current = it != acceptedParents.end() ? it->second : UUID::Null();
-			}
+			const UUID childRepresentative = findRepresentative(child);
+			const UUID parentRepresentative = findRepresentative(parent);
+			if (childRepresentative == parentRepresentative)
+				return true;
+			connected[childRepresentative] = parentRepresentative;
 			return false;
 		};
 

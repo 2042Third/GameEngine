@@ -35,4 +35,15 @@ namespace Strata
 		return std::nullopt;
 	}
 
+	std::string_view GetNativeAssetExtension(AssetType type)
+	{
+		switch (type)
+		{
+			case AssetType::Scene:    return ".stscene";
+			case AssetType::Prefab:   return ".stprefab";
+			case AssetType::Material: return ".stmat";
+			default:                  return {};
+		}
+	}
+
 }

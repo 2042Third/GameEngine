@@ -3,10 +3,12 @@
 #include "Strata/Core/Platform.h"
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace Strata::Tests
 {
@@ -28,6 +30,16 @@ namespace Strata::Tests
 		}
 		return condition();
 	}
+
+	// Builds a 16-bit PCM WAV file containing a sine wave (the same signal on every channel), optionally preceded by
+	// silence.
+	std::vector<uint8_t> CreateSineWav(float durationSeconds, uint32_t sampleRate = 48000, uint16_t channels = 1, float frequency = 440.0f,
+		float silentSeconds = 0.0f, float amplitude = 0.5f);
+
+	// Encodes 8-bit RGBA pixels (tightly packed rows) as a PNG file.
+	std::vector<uint8_t> EncodePNG(uint32_t width, uint32_t height, const std::vector<uint8_t>& rgba);
+	// A PNG filled with one color.
+	std::vector<uint8_t> CreateSolidPNG(uint32_t width, uint32_t height, uint8_t red, uint8_t green, uint8_t blue, uint8_t alpha = 255);
 
 	inline std::filesystem::path GetTestExecutablePath()
 	{

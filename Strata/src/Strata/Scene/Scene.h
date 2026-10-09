@@ -141,8 +141,12 @@ namespace Strata
 		void DestroyEntityImmediate(entt::entity handle);
 		void FlushPendingDestroys();
 		void RemoveFromParent(entt::entity handle);
-		void UpdateWorldTransformRecursive(entt::entity handle, const glm::mat4& parentMatrix, bool parentActive);
-		void CollectHierarchy(UUID uuid, std::vector<Entity>& outEntities) const;
+		struct HierarchyStackEntry
+		{
+			entt::entity Handle;
+			entt::entity Parent; // entt::null for the subtree root
+		};
+		void UpdateSubtreeWorldTransforms(entt::entity root, std::vector<HierarchyStackEntry>& stack);
 	private:
 		std::string m_Name;
 		entt::registry m_Registry;

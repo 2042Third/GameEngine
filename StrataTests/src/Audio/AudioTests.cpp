@@ -29,53 +29,7 @@ namespace
 	// Frames to mix after moving a spatial voice or the listener so the spatializer's gain smoothing settles.
 	constexpr uint64_t c_SettleFrames = 2400;
 
-	// Builds a 16-bit PCM WAV file containing a sine wave (the same signal on every channel), optionally preceded by
-	// silence.
-	std::vector<uint8_t> CreateSineWav(float durationSeconds, uint32_t sampleRate = c_SampleRate, uint16_t channels = 1, float frequency = 440.0f, float silentSeconds = 0.0f)
-	{
-		const uint32_t silentFrames = static_cast<uint32_t>(std::lround(silentSeconds * static_cast<float>(sampleRate)));
-		const uint32_t frameCount = static_cast<uint32_t>(std::lround(durationSeconds * static_cast<float>(sampleRate)));
-		const uint32_t blockAlign = channels * 2u;
-		const uint32_t dataSize = frameCount * blockAlign;
-
-		std::vector<uint8_t> wav;
-		wav.reserve(44 + dataSize);
-		const auto writeTag = [&](const char* tag) { wav.insert(wav.end(), tag, tag + 4); };
-		const auto writeU16 = [&](uint16_t value)
-		{
-			wav.push_back(static_cast<uint8_t>(value & 0xFF));
-			wav.push_back(static_cast<uint8_t>(value >> 8));
-		};
-		const auto writeU32 = [&](uint32_t value)
-		{
-			for (uint32_t byte = 0; byte < 4; byte++)
-				wav.push_back(static_cast<uint8_t>(value >> (byte * 8)));
-		};
-
-		writeTag("RIFF");
-		writeU32(36 + dataSize);
-		writeTag("WAVE");
-
-		writeTag("fmt ");
-		writeU32(16);
-		writeU16(1); // PCM
-		writeU16(channels);
-		writeU32(sampleRate);
-		writeU32(sampleRate * blockAlign);
-		writeU16(static_cast<uint16_t>(blockAlign));
-		writeU16(16); // Bits per sample
-
-		writeTag("data");
-		writeU32(dataSize);
-		for (uint32_t frame = 0; frame < frameCount; frame++)
-		{
-			const double phase = 2.0 * std::numbers::pi * frequency * static_cast<double>(frame) / static_cast<double>(sampleRate);
-			const int16_t sample = frame < silentFrames ? int16_t(0) : static_cast<int16_t>(std::lround(c_SineAmplitude * std::sin(phase) * 32767.0));
-			for (uint16_t channel = 0; channel < channels; channel++)
-				writeU16(static_cast<uint16_t>(sample));
-		}
-		return wav;
-	}
+	using Tests::CreateSineWav;
 
 	Ref<AudioClip> CreateSineClip(float durationSeconds, AudioClipLoadMode mode = AudioClipLoadMode::Decompressed, uint32_t sampleRate = c_SampleRate)
 	{

@@ -200,6 +200,18 @@ namespace Strata
 		return !GetRelativePath(path, base).empty();
 	}
 
+	bool FileSystem::IsInsideResolved(const std::filesystem::path& path, const std::filesystem::path& base)
+	{
+		std::error_code error;
+		const std::filesystem::path resolvedPath = std::filesystem::weakly_canonical(path, error);
+		if (error)
+			return false;
+		const std::filesystem::path resolvedBase = std::filesystem::weakly_canonical(base, error);
+		if (error)
+			return false;
+		return IsInside(resolvedPath, resolvedBase);
+	}
+
 	std::filesystem::path FileSystem::GetUniquePath(const std::filesystem::path& desiredPath)
 	{
 		if (!Exists(desiredPath))

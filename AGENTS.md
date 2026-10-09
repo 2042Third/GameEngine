@@ -158,7 +158,31 @@ Conventions:
 - **Scripting isolation:** game scripts only see `StrataScriptCore`. Every call into script code goes
   through `CrashGuard`; anything crossing the ABI is plain data (no STL types, no exceptions).
 - **Assets:** referenced by `AssetHandle` (UUID), never by path at runtime. Loading is asynchronous;
-  code must handle "not loaded yet" every frame instead of blocking.
+  code must handle "not loaded yet" every frame instead of blocking. See [Asset pipeline](#asset-pipeline).
+
+## Asset pipeline
+
+- A project's assets are the files under its asset directory (`Assets/`). Each file has a sidecar
+  `<file>.meta` (JSON: handle + import settings) that is committed with it; moving or renaming must go
+  through `EditorAssetManager::MoveAsset` (or move the `.meta` along) so the handle survives.
+- Importers (`Asset/AssetImporter.h`, built-ins in `Asset/AssetImporters.cpp`) turn source files into
+  the stored form, cached per handle in `<project>/.strata/Cache` (derived data, never committed). A
+  cached import is redone when the source content, the import settings, the importer's `GetVersion()`
+  or another file the import read change — **bump the version whenever an importer's output format
+  changes.** Importers read files other than their source only through `ReadImportDependency`, which
+  confines reads to the asset directory and records the file as a dependency.
+- Engine-native assets (`.stscene`, `.stprefab`, `.stmat`) are JSON documents with a
+  `{ "Strata": { "Format": ..., "Version": ... } }` header, stored as-is. Their loaders validate fully;
+  JSON entry points are named `FromJson`, byte entry points `Deserialize`.
+- Importers may produce sub-assets (e.g. meshes of a model); their handles are derived from the parent
+  handle and a stable key (`DeriveSubAssetHandle`), so they are stable across re-imports and machines.
+- Built-in assets (primitive meshes, default material) have fixed handles 1–255 (`BuiltinAssets`) and
+  exist in every asset manager.
+- Shipped games read an asset pack (`.stpak`, `AssetPack`) through `RuntimeAssetManager`; the editor
+  builds it with `EditorAssetManager::BuildAssetPack`.
+- Adding an asset type: an `Asset` subclass with a cooked/serialized form, a loader in
+  `Asset/AssetRegistration.cpp`, an importer if it comes from external files, and tests for round trips
+  and corrupt data (every loader must reject truncated or garbage bytes without crashing).
 
 ## Pre-commit review checklist
 

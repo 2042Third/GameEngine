@@ -81,6 +81,28 @@ TEST_SUITE("Core.FileSystem")
 		CHECK(FileSystem::GetUniquePath(desired).filename() == "Scene (1).stscene");
 	}
 
+	TEST_CASE("Resolved containment follows symbolic links")
+	{
+		const std::filesystem::path root = Tests::CreateTemporaryDirectory("FileSystemLinks");
+		const std::filesystem::path base = root / "Assets";
+		REQUIRE(FileSystem::WriteText(base / "Inside.txt", "inside"));
+		REQUIRE(FileSystem::WriteText(root / "Outside.txt", "outside"));
+		CHECK(FileSystem::IsInsideResolved(base / "Inside.txt", base));
+		CHECK(FileSystem::IsInsideResolved(base / "Missing.txt", base)); // Not yet existing files resolve lexically
+		CHECK_FALSE(FileSystem::IsInsideResolved(base / ".." / "Outside.txt", base));
+
+		// Creating links needs privileges on Windows (developer mode); the check is skipped without them.
+		std::error_code error;
+		std::filesystem::create_symlink(root / "Outside.txt", base / "Escape.txt", error);
+		if (error)
+		{
+			MESSAGE("Symbolic links cannot be created here; skipping the link checks: " << error.message());
+			return;
+		}
+		CHECK(FileSystem::IsInside(base / "Escape.txt", base)); // Lexically inside...
+		CHECK_FALSE(FileSystem::IsInsideResolved(base / "Escape.txt", base)); // ...but leads outside
+	}
+
 	TEST_CASE("Copy, rename and remove")
 	{
 		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("FileSystemOps");

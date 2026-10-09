@@ -2,6 +2,7 @@
 
 #include "Strata/Core/Base.h"
 #include "Strata/Reflection/Property.h"
+#include "Strata/Reflection/PropertyBuilder.h"
 
 #include <entt/entt.hpp>
 #include <nlohmann/json.hpp>
@@ -81,44 +82,12 @@ namespace Strata
 		static void EnsureInitialized();
 	};
 
-	namespace Detail
-	{
-
-		template<typename Member>
-		constexpr PropertyType DeducePropertyType(bool color)
-		{
-			if constexpr (std::is_same_v<Member, bool>)
-				return PropertyType::Bool;
-			else if constexpr (std::is_same_v<Member, int32_t>)
-				return PropertyType::Int;
-			else if constexpr (std::is_same_v<Member, uint32_t>)
-				return PropertyType::UInt;
-			else if constexpr (std::is_same_v<Member, float>)
-				return PropertyType::Float;
-			else if constexpr (std::is_same_v<Member, glm::vec2>)
-				return PropertyType::Vec2;
-			else if constexpr (std::is_same_v<Member, glm::vec3>)
-				return color ? PropertyType::Color3 : PropertyType::Vec3;
-			else if constexpr (std::is_same_v<Member, glm::vec4>)
-				return color ? PropertyType::Color4 : PropertyType::Vec4;
-			else if constexpr (std::is_same_v<Member, glm::quat>)
-				return PropertyType::Quat;
-			else if constexpr (std::is_same_v<Member, std::string>)
-				return PropertyType::String;
-			else
-				static_assert(sizeof(Member) == 0, "Unsupported property member type (use EnumProperty, AssetProperty or EntityProperty)");
-		}
-
-		void ApplyPropertyOptions(PropertyInfo& property, const std::string& name, PropertyType type, const PropertyOptions& options);
-
-	}
-
 	template<typename T>
-	class ComponentInfoBuilder
+	class ComponentInfoBuilder : public PropertyBuilderBase<T, ComponentInfoBuilder<T>>
 	{
 	public:
 		explicit ComponentInfoBuilder(ComponentInfo& info)
-			: m_Info(info)
+			: PropertyBuilderBase<T, ComponentInfoBuilder<T>>(info.Properties), m_Info(info)
 		{
 		}
 
@@ -143,58 +112,6 @@ namespace Strata
 		ComponentInfoBuilder& Flags(ComponentFlags flags)
 		{
 			m_Info.Flags = flags;
-			return *this;
-		}
-
-		template<typename Member>
-		ComponentInfoBuilder& Property(std::string name, Member T::* member, const PropertyOptions& options = {})
-		{
-			PropertyInfo& property = m_Info.Properties.emplace_back();
-			Detail::ApplyPropertyOptions(property, name, Detail::DeducePropertyType<Member>(options.Color), options);
-			property.Getter = [member](const void* object) -> PropertyValue { return static_cast<const T*>(object)->*member; };
-			property.Setter = [member](void* object, const PropertyValue& value) { static_cast<T*>(object)->*member = std::get<Member>(value); };
-			return *this;
-		}
-
-		template<typename EnumType>
-		ComponentInfoBuilder& EnumProperty(std::string name, EnumType T::* member, std::vector<EnumValue> values, const PropertyOptions& options = {})
-		{
-			static_assert(std::is_enum_v<EnumType>, "EnumProperty requires an enum member");
-			PropertyInfo& property = m_Info.Properties.emplace_back();
-			Detail::ApplyPropertyOptions(property, name, PropertyType::Enum, options);
-			property.EnumValues = std::move(values);
-			property.Getter = [member](const void* object) -> PropertyValue { return static_cast<int32_t>(static_cast<const T*>(object)->*member); };
-			property.Setter = [member](void* object, const PropertyValue& value) { static_cast<T*>(object)->*member = static_cast<EnumType>(std::get<int32_t>(value)); };
-			return *this;
-		}
-
-		ComponentInfoBuilder& AssetProperty(std::string name, UUID T::* member, AssetType assetType, const PropertyOptions& options = {})
-		{
-			PropertyInfo& property = m_Info.Properties.emplace_back();
-			Detail::ApplyPropertyOptions(property, name, PropertyType::Asset, options);
-			property.AssetFilter = assetType;
-			property.Getter = [member](const void* object) -> PropertyValue { return static_cast<const T*>(object)->*member; };
-			property.Setter = [member](void* object, const PropertyValue& value) { static_cast<T*>(object)->*member = std::get<UUID>(value); };
-			return *this;
-		}
-
-		ComponentInfoBuilder& EntityProperty(std::string name, UUID T::* member, const PropertyOptions& options = {})
-		{
-			PropertyInfo& property = m_Info.Properties.emplace_back();
-			Detail::ApplyPropertyOptions(property, name, PropertyType::Entity, options);
-			property.Getter = [member](const void* object) -> PropertyValue { return static_cast<const T*>(object)->*member; };
-			property.Setter = [member](void* object, const PropertyValue& value) { static_cast<T*>(object)->*member = std::get<UUID>(value); };
-			return *this;
-		}
-
-		// Property backed by accessor functions instead of a data member.
-		ComponentInfoBuilder& CustomProperty(std::string name, PropertyType type, std::function<PropertyValue(const T&)> getter,
-			std::function<void(T&, const PropertyValue&)> setter, const PropertyOptions& options = {})
-		{
-			PropertyInfo& property = m_Info.Properties.emplace_back();
-			Detail::ApplyPropertyOptions(property, name, type, options);
-			property.Getter = [getter](const void* object) { return getter(*static_cast<const T*>(object)); };
-			property.Setter = [setter](void* object, const PropertyValue& value) { setter(*static_cast<T*>(object), value); };
 			return *this;
 		}
 
