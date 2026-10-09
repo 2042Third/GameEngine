@@ -41,14 +41,15 @@ namespace Strata
 		if (!EnsureVoice())
 			return;
 
-		// A finished voice is replaced, not rewound (see AudioVoice::Start); the new one starts at the beginning.
-		if (m_Voice->HasEnded())
-		{
-			m_Voice.reset();
-			if (!EnsureVoice())
-				return;
-		}
-		if (m_Voice->Start())
+		// A finished voice is replaced rather than restarted (see AudioVoice::Start); the new one starts at the beginning.
+		// That creates a voice on this thread for every replay, for a streamed clip including a decoder over its data.
+		if (m_Voice->HasEnded() && !ReplaceFinishedVoice())
+			return;
+		bool started = m_Voice->Start();
+		// The audio thread may have finished the voice since HasEnded: replace it and try once more.
+		if (!started && m_Voice->HasEnded() && ReplaceFinishedVoice())
+			started = m_Voice->Start();
+		if (started)
 			m_Paused = false;
 	}
 
@@ -240,6 +241,12 @@ namespace Strata
 			m_Voice->SeekToFrame(SecondsToFrames(m_StartPosition));
 		m_StartPosition = 0.0f;
 		return true;
+	}
+
+	bool AudioSource::ReplaceFinishedVoice()
+	{
+		m_Voice.reset();
+		return EnsureVoice();
 	}
 
 	void AudioSource::ReleaseVoice()

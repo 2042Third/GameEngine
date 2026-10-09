@@ -242,9 +242,10 @@ namespace Strata
 	{
 		ma_sound& sound = m_Data->Sound;
 
-		// ma_sound_start rewinds a finished voice by seeking its data source on this thread, while the audio thread may
-		// still be finishing the voice (and a streamed clip's decoder is not thread-safe): finished voices are replaced.
-		ST_CORE_ASSERT(!ma_sound_at_end(&sound), "AudioVoice::Start: '{}' played to its end; replace the voice instead", m_Data->Clip->GetDebugName());
+		// A voice that played to its end stays started until the audio thread processes it once more, and that pass stops
+		// it. A restart from here (ma_sound_start rewinds it and marks it started) can be undone by that deferred stop, and
+		// would be lost silently, so finished voices are replaced instead (see AudioSource::Play). The audio thread may
+		// mark the voice finished at any moment, including right after a caller checked HasEnded: then this returns false.
 		if (ma_sound_at_end(&sound))
 			return false;
 

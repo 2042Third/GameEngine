@@ -112,6 +112,8 @@ namespace Strata
 		float GetPlaybackPosition() const;
 	private:
 		bool EnsureVoice();
+		// Replaces a voice that played to its end with a fresh one at m_StartPosition. Returns false if none could be created.
+		bool ReplaceFinishedVoice();
 		void ReleaseVoice();
 		void ResetVoice(); // Moves a voice that is not playing to m_StartPosition
 		void ApplyAttenuation();

@@ -8,6 +8,8 @@
 #include "TestHelpers.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <numbers>
@@ -618,6 +620,37 @@ TEST_SUITE("Audio.Source")
 		CHECK(ComputeRms(Render(2400)) == doctest::Approx(c_SineRms).epsilon(0.05));
 		CHECK(std::abs(source.GetPlaybackPosition() - 0.05f) < c_PositionTolerance);
 		CHECK(AudioEngine::GetStats().AllocatedVoices == 1); // The finished voice was released
+	}
+
+	TEST_CASE("Playing a source again the moment it finishes restarts it")
+	{
+		ScopedAudioEngine engine;
+		REQUIRE(engine.Initialized);
+		AudioSource source;
+		REQUIRE(source.SetClip(CreateSineClip(0.01f)));
+
+		// A thread mixing like an output device finishes the voice at any moment, while this thread keeps calling Play,
+		// like a script playing a short sound every frame.
+		std::atomic<bool> mixing = true;
+		std::thread mixer([&mixing]()
+		{
+			std::vector<float> output(64 * c_Channels);
+			while (mixing.load())
+				AudioEngine::ReadFrames(output.data(), 64);
+		});
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
+		uint32_t plays = 0;
+		while (std::chrono::steady_clock::now() < deadline)
+		{
+			source.Play();
+			plays++;
+		}
+		mixing = false;
+		mixer.join();
+
+		CHECK(plays > 0);
+		source.Play();
+		CHECK(source.IsPlaying());
 	}
 
 	TEST_CASE("Seek moves the playback position")
