@@ -1,0 +1,45 @@
+[
+	{ "command": "script.build", "expect": { "/success": { "equals": true } } },
+	{ "command": "script.setField", "parameters": { "entity": "72E590A9EEB83AFC", "class": "TetrisBoard", "field": "LinesPerLevel", "value": 1 } },
+	{ "command": "script.setField", "parameters": { "entity": "72E590A9EEB83AFC", "class": "TetrisBoard", "field": "StartInterval", "value": 100 } },
+	{ "command": "play.start", "expect": { "/state": { "equals": "Play" } } },
+	{ "command": "component.get", "parameters": { "entity": "893AE784EA121440", "component": "Text" }, "expect": { "/values/Text": { "equals": "Score: 0" } } },
+
+	{ "command": "input.key", "parameters": { "key": "Left" }, "expect": { "/held/keys": { "equals": [] } } },
+	{ "command": "input.key", "parameters": { "key": "Left" } },
+	{ "command": "input.key", "parameters": { "key": "Left" } },
+	{ "command": "input.key", "parameters": { "key": "Space" } },
+
+	{ "command": "input.key", "parameters": { "key": "Up" } },
+	{ "command": "input.key", "parameters": { "key": "Z" } },
+	{ "command": "input.key", "parameters": { "key": "Down" } },
+	{ "command": "input.key", "parameters": { "key": "Space" } },
+
+	{ "command": "input.key", "parameters": { "key": "Right" } },
+	{ "command": "input.key", "parameters": { "key": "Right" } },
+	{ "command": "input.key", "parameters": { "key": "Right" } },
+	{ "command": "input.key", "parameters": { "key": "Right" } },
+	{ "command": "input.key", "parameters": { "key": "Space" } },
+
+	{ "command": "component.get", "parameters": { "entity": "479A9674867A5955", "component": "Text" }, "expect": { "/values/Text": { "equals": "Lines: 1" } } },
+	{ "command": "component.get", "parameters": { "entity": "893AE784EA121440", "component": "Text" }, "expect": { "/values/Text": { "equals": "Score: 209" } } },
+	{ "command": "component.get", "parameters": { "entity": "25892A97AD67432E", "component": "Text" }, "expect": { "/values/Text": { "equals": "Level: 2" } } },
+
+	{ "command": "script.setField", "parameters": { "entity": "72E590A9EEB83AFC", "class": "TetrisBoard", "field": "MinInterval", "value": 0.01 } },
+	{ "command": "script.setField", "parameters": { "entity": "72E590A9EEB83AFC", "class": "TetrisBoard", "field": "StartInterval", "value": 0.01 } },
+	{ "command": "editor.wait", "parameters": { "frames": 300 } },
+	{ "command": "component.get", "parameters": { "entity": "3AB0E777DCA23EC4", "component": "Text" },
+		"expect": { "/values/Text": { "equals": "GAME OVER\nPress R or Enter to play again" } } },
+
+	{ "command": "script.setField", "parameters": { "entity": "72E590A9EEB83AFC", "class": "TetrisBoard", "field": "StartInterval", "value": 100 } },
+	{ "command": "input.key", "parameters": { "key": "R" } },
+	{ "command": "component.get", "parameters": { "entity": "3AB0E777DCA23EC4", "component": "Text" }, "expect": { "/values/Text": { "equals": "" } } },
+	{ "command": "component.get", "parameters": { "entity": "893AE784EA121440", "component": "Text" }, "expect": { "/values/Text": { "equals": "Score: 0" } } },
+	{ "command": "component.get", "parameters": { "entity": "479A9674867A5955", "component": "Text" }, "expect": { "/values/Text": { "equals": "Lines: 0" } } },
+
+	{ "command": "play.stop", "expect": { "/state": { "equals": "Edit" } } },
+	{ "command": "edit.undo" },
+	{ "command": "edit.undo" },
+	{ "command": "scene.info", "expect": { "/modified": { "equals": false } } },
+	{ "command": "project.export", "parameters": { "directory": "@TETRIS_EXPORT_DIR@" } }
+]

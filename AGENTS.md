@@ -33,6 +33,7 @@ This file is the source of truth for how to work on Strata. Read it fully before
 | `StrataScriptCore/` | Script ABI (C header) and the header-only C++ SDK game scripts are written against. Script modules never link the engine. |
 | `StrataCLI/` | Command-line client for the editor automation API; also an MCP server (`StrataCLI mcp`). |
 | `StrataTests/` | doctest unit tests, test helpers, and the feature test project. |
+| `Samples/` | Games made through the editor by an AI agent, as projects (`.stproj`, `Assets/` with `.meta` files, `Scripts/`): `Tetris` (played and exported by the CTest `StrataEditor.Tetris`). Open one with `StrataEditor --project Samples/<Game>`. |
 | `CMake/` | CMake modules (configurations, compiler options, shader compilation, manifest). |
 | `Docs/` | Architecture and API documentation. |
 | `.claude/skills/` | Task-specific skills for agents (build/test, adding components, script API, editor automation, game creation). |
@@ -154,7 +155,10 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   compiler at test time, like the other `package` tests: `StrataTests.Package` (doctest suites named `Package*`, e.g.
   `Package.ScriptBuild`: script.build, hot reload while playing, compiler diagnostics, export) and
   `StrataEditor.Scripts` (`Editor/ScriptsEndToEnd.cmake`: the real editor creates a project, builds and attaches a
-  script, plays and exports, and the game runs headless). The `Package*` suites build in the system temp directory,
+  script, plays and exports, and the game runs headless) and `StrataEditor.Tetris` (`Editor/TetrisSample.cmake`: the real
+  editor builds a copy of `Samples/Tetris`, plays it with `input.*` commands and `expect`s on its HUD from
+  `Editor/TetrisCommands.json.in`, and exports it; the game runs headless). A change to the sample's scene or scripts
+  must keep that command script passing. The `Package*` suites build in the system temp directory,
   where MSBuild does not track files (MSB8029) and may relink unchanged modules: do not rely on a build leaving the
   module unchanged there (use the fake CMake instead).
 

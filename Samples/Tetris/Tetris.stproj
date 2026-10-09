@@ -1,0 +1,15 @@
+{
+	"Project": {
+		"AssetDirectory": "Assets",
+		"Name": "Tetris",
+		"Scripts": {
+			"ModuleName": "TetrisScripts",
+			"SourceDirectory": "Scripts"
+		},
+		"StartScene": "BD75622ED18E84E4"
+	},
+	"Strata": {
+		"Format": "Project",
+		"Version": 2
+	}
+}

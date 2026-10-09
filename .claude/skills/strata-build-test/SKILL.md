@@ -42,7 +42,7 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
   (`StrataEditor.FailingScript`, `WaitingScript`, `UnfinishedScript`, `QuitScript`, `QuitBeforeScriptEnds`,
   `CaptureWithoutGPU`), the export chain `StrataExport.Clean` → `StrataEditor.Export` (`--no-gpu`; it exports the smoke
   game twice, the second time starting in a scene without a camera) → `StrataRuntime.Smoke` (the exported game,
-  headless) → `StrataRuntime.Render` (windowed, saves `build/<preset>/StrataTests/ExportSmoke/RuntimeScreenshot.png`,
+  headless; `StrataRuntime.HeadlessPacing` checks that headless runs keep 60 frames per second) → `StrataRuntime.Render` (windowed, saves `build/<preset>/StrataTests/ExportSmoke/RuntimeScreenshot.png`,
   label `gpu`) → `StrataRuntime.RenderCheck` (`StrataTests --strata-test-helper=check-image <png> [--dominant
   red|green|blue <percent>]`: not black, not a single color, and here at least 1% of the blue box), plus
   `StrataRuntime.NoCameraScreenshot` (a screenshot of the missing-camera message fails the run),
@@ -52,9 +52,10 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
   `StrataRuntime.FeatureTest` (the real executables with a copy of `StrataTests/FeatureTest`). See AGENTS.md
   ("Testing") for what the feature test enforces when you add components or script API. Label `package` marks the
   tests that build script modules with CMake and the compiler at test time: `StrataScriptCore.Package` and
-  `.PackageDist`, `StrataTests.Package` (suites `Package*`) and `StrataEditor.Scripts` (the real editor builds, plays
-  and exports a scripted game, `StrataTests/Editor/ScriptsEndToEnd.cmake`); `-LE package` skips them on machines
-  without a toolchain.
+  `.PackageDist`, `StrataTests.Package` (suites `Package*`), `StrataEditor.Scripts` (the real editor builds, plays
+  and exports a scripted game, `StrataTests/Editor/ScriptsEndToEnd.cmake`) and `StrataEditor.Tetris` (the editor plays
+  `Samples/Tetris` with simulated input and checks its HUD, `StrataTests/Editor/TetrisSample.cmake`); `-LE package`
+  skips them on machines without a toolchain.
 - Scripted editor runs in CTest pass `--no-automation`, so they never publish sessions for real clients.
 - Tests that expect a process to fail with exit code 1 and a message use `StrataTests/ExpectFailure.cmake`.
 - To look at rendering changes, read those PNGs, or run `StrataEditor --windowed --frames N --commands <script>

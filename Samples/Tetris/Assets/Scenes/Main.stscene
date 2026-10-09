@@ -1,0 +1,759 @@
+{
+	"Scene": {
+		"Entities": [
+			{
+				"Components": {
+					"Camera": {
+						"ClearColor": [
+							0.02,
+							0.02,
+							0.035,
+							1
+						],
+						"OrthographicFar": 1000,
+						"OrthographicNear": 0.1,
+						"OrthographicSize": 10,
+						"PerspectiveFOV": 45,
+						"PerspectiveFar": 1000,
+						"PerspectiveNear": 0.1,
+						"Primary": true,
+						"Projection": "Perspective"
+					},
+					"Name": {
+						"Name": "Camera"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							5.5,
+							9.5,
+							30
+						]
+					}
+				},
+				"ID": "528432BE84E14409"
+			},
+			{
+				"Components": {
+					"DirectionalLight": {
+						"CastShadows": true,
+						"Color": [
+							1,
+							1,
+							1
+						],
+						"Intensity": 3,
+						"ShadowBias": 1,
+						"ShadowDistance": 80,
+						"ShadowNormalBias": 1.5,
+						"ShadowSoftness": 1
+					},
+					"Name": {
+						"Name": "Sun"
+					},
+					"Transform": {
+						"Rotation": [
+							-0.2961374,
+							0.16561121,
+							0.052217014,
+							0.9392278
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "277346EA57451703"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Environment"
+					},
+					"PostProcess": {
+						"AmbientOcclusion": true,
+						"AmbientOcclusionIntensity": 1,
+						"AmbientOcclusionRadius": 0.6,
+						"AntiAliasing": true,
+						"AutoExposure": false,
+						"AutoExposureMaxEV": 12,
+						"AutoExposureMinEV": -4,
+						"AutoExposureSpeed": 1.5,
+						"Bloom": true,
+						"BloomIntensity": 0.04,
+						"BloomThreshold": 0,
+						"Contrast": 1,
+						"Exposure": 0,
+						"Saturation": 1,
+						"Tonemapper": "ACES",
+						"Vignette": 0.2
+					},
+					"SkyLight": {
+						"AmbientColor": [
+							0.25,
+							0.27,
+							0.32
+						],
+						"BackgroundBlur": 0,
+						"EnvironmentMap": "0000000000000000",
+						"Intensity": 1,
+						"Rotation": 0,
+						"ShowBackground": true
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "AD2CB84CCF8DB096"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Well"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "C3E70BCF051FAC1E"
+			},
+			{
+				"Components": {
+					"MeshRenderer": {
+						"CastShadows": true,
+						"Material": "EE7A0D520BD86A07",
+						"Mesh": "0000000000000001"
+					},
+					"Name": {
+						"Name": "LeftWall"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							22,
+							1
+						],
+						"Translation": [
+							-1,
+							9.5,
+							0
+						]
+					}
+				},
+				"ID": "79E30B4DFBF2265C",
+				"Parent": "C3E70BCF051FAC1E"
+			},
+			{
+				"Components": {
+					"MeshRenderer": {
+						"CastShadows": true,
+						"Material": "EE7A0D520BD86A07",
+						"Mesh": "0000000000000001"
+					},
+					"Name": {
+						"Name": "RightWall"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							22,
+							1
+						],
+						"Translation": [
+							10,
+							9.5,
+							0
+						]
+					}
+				},
+				"ID": "42DDFFF6A43F9713",
+				"Parent": "C3E70BCF051FAC1E"
+			},
+			{
+				"Components": {
+					"MeshRenderer": {
+						"CastShadows": true,
+						"Material": "EE7A0D520BD86A07",
+						"Mesh": "0000000000000001"
+					},
+					"Name": {
+						"Name": "Floor"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							10,
+							1,
+							1
+						],
+						"Translation": [
+							4.5,
+							-1,
+							0
+						]
+					}
+				},
+				"ID": "1CB39B1A1ABCFC13",
+				"Parent": "C3E70BCF051FAC1E"
+			},
+			{
+				"Components": {
+					"MeshRenderer": {
+						"CastShadows": true,
+						"Material": "BBC8F307BBC53B58",
+						"Mesh": "0000000000000001"
+					},
+					"Name": {
+						"Name": "Backdrop"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							10,
+							20,
+							0.5
+						],
+						"Translation": [
+							4.5,
+							9.5,
+							-0.75
+						]
+					}
+				},
+				"ID": "B35D3679ABED1608",
+				"Parent": "C3E70BCF051FAC1E"
+			},
+			{
+				"Components": {
+					"MeshRenderer": {
+						"CastShadows": true,
+						"Material": "BBC8F307BBC53B58",
+						"Mesh": "0000000000000001"
+					},
+					"Name": {
+						"Name": "PreviewBackdrop"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							5,
+							4,
+							0.5
+						],
+						"Translation": [
+							13.5,
+							16,
+							-0.75
+						]
+					}
+				},
+				"ID": "2091D7B16441B0A2",
+				"Parent": "C3E70BCF051FAC1E"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Board"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "TetrisBoard",
+								"Fields": {
+									"CellMesh": {
+										"Type": "Asset",
+										"Value": "0000000000000001"
+									},
+									"ClearSound": {
+										"Type": "Asset",
+										"Value": "5B86FEE18C4A6357"
+									},
+									"GameOverSound": {
+										"Type": "Asset",
+										"Value": "C46F2B2BCFDF6058"
+									},
+									"GhostMaterial": {
+										"Type": "Asset",
+										"Value": "620E69E3BED02CC6"
+									},
+									"LevelText": {
+										"Type": "Entity",
+										"Value": "25892A97AD67432E"
+									},
+									"LinesText": {
+										"Type": "Entity",
+										"Value": "479A9674867A5955"
+									},
+									"LockSound": {
+										"Type": "Asset",
+										"Value": "E77575181E2BE37E"
+									},
+									"MaterialI": {
+										"Type": "Asset",
+										"Value": "FD3B66D85B120698"
+									},
+									"MaterialJ": {
+										"Type": "Asset",
+										"Value": "ED0A86F5B8DB2688"
+									},
+									"MaterialL": {
+										"Type": "Asset",
+										"Value": "77EA35340442C327"
+									},
+									"MaterialO": {
+										"Type": "Asset",
+										"Value": "A8060D0AC651A2ED"
+									},
+									"MaterialS": {
+										"Type": "Asset",
+										"Value": "4D89287E52DC7BC3"
+									},
+									"MaterialT": {
+										"Type": "Asset",
+										"Value": "B1EDD7220FEB0D2A"
+									},
+									"MaterialZ": {
+										"Type": "Asset",
+										"Value": "62D9729FD5AB916A"
+									},
+									"MessageText": {
+										"Type": "Entity",
+										"Value": "3AB0E777DCA23EC4"
+									},
+									"MoveSound": {
+										"Type": "Asset",
+										"Value": "6ABDAB5F811CBC4F"
+									},
+									"ScoreText": {
+										"Type": "Entity",
+										"Value": "893AE784EA121440"
+									}
+								}
+							}
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "72E590A9EEB83AFC"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "HUD"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "3AB1E47E2C8DEEFD"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "ScoreText"
+					},
+					"Text": {
+						"Alignment": "Left",
+						"Color": [
+							1,
+							1,
+							1,
+							1
+						],
+						"Font": "0000000000000000",
+						"FontSize": 40,
+						"ScreenAnchor": [
+							0.05,
+							0.1
+						],
+						"ScreenOffset": [
+							0,
+							0
+						],
+						"ScreenSpace": true,
+						"Text": "Score: 0"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "893AE784EA121440",
+				"Parent": "3AB1E47E2C8DEEFD"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "LevelText"
+					},
+					"Text": {
+						"Alignment": "Left",
+						"Color": [
+							0.85,
+							0.9,
+							1,
+							1
+						],
+						"Font": "0000000000000000",
+						"FontSize": 40,
+						"ScreenAnchor": [
+							0.05,
+							0.1
+						],
+						"ScreenOffset": [
+							0,
+							56
+						],
+						"ScreenSpace": true,
+						"Text": "Level: 1"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "25892A97AD67432E",
+				"Parent": "3AB1E47E2C8DEEFD"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "LinesText"
+					},
+					"Text": {
+						"Alignment": "Left",
+						"Color": [
+							0.85,
+							0.9,
+							1,
+							1
+						],
+						"Font": "0000000000000000",
+						"FontSize": 40,
+						"ScreenAnchor": [
+							0.05,
+							0.1
+						],
+						"ScreenOffset": [
+							0,
+							112
+						],
+						"ScreenSpace": true,
+						"Text": "Lines: 0"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "479A9674867A5955",
+				"Parent": "3AB1E47E2C8DEEFD"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "MessageText"
+					},
+					"Text": {
+						"Alignment": "Center",
+						"Color": [
+							1,
+							0.9,
+							0.3,
+							1
+						],
+						"Font": "0000000000000000",
+						"FontSize": 56,
+						"ScreenAnchor": [
+							0.5,
+							0.42
+						],
+						"ScreenOffset": [
+							0,
+							0
+						],
+						"ScreenSpace": true,
+						"Text": ""
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "3AB0E777DCA23EC4",
+				"Parent": "3AB1E47E2C8DEEFD"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "ControlsText"
+					},
+					"Text": {
+						"Alignment": "Left",
+						"Color": [
+							0.6,
+							0.65,
+							0.75,
+							1
+						],
+						"Font": "0000000000000000",
+						"FontSize": 20,
+						"ScreenAnchor": [
+							0.05,
+							0.8
+						],
+						"ScreenOffset": [
+							0,
+							0
+						],
+						"ScreenSpace": true,
+						"Text": "Left/Right: move   Up/X, Z: rotate\nDown: soft drop   Space: hard drop\nP: pause   R: restart   Esc: quit"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F8F4019443CE5826",
+				"Parent": "3AB1E47E2C8DEEFD"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "NextLabel"
+					},
+					"Text": {
+						"Alignment": "Center",
+						"Color": [
+							0.85,
+							0.9,
+							1,
+							1
+						],
+						"Font": "0000000000000000",
+						"FontSize": 1,
+						"ScreenAnchor": [
+							0.5,
+							0.5
+						],
+						"ScreenOffset": [
+							0,
+							0
+						],
+						"ScreenSpace": false,
+						"Text": "NEXT"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							13.5,
+							18.6,
+							0
+						]
+					}
+				},
+				"ID": "DA60D11190208D30"
+			}
+		],
+		"Name": "Main",
+		"Settings": {
+			"FixedTimestep": 0.016666668,
+			"Gravity": [
+				0,
+				-9.81,
+				0
+			],
+			"MaxFixedStepsPerFrame": 8
+		}
+	},
+	"Strata": {
+		"Format": "Scene",
+		"Version": 1
+	}
+}
