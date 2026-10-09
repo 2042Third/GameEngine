@@ -3,6 +3,7 @@
 #include "Network/NetworkTestHelpers.h"
 #include "Strata/Core/Crypto.h"
 #include "Strata/Network/RpcClient.h"
+#include "Strata/Network/RpcConnectionLimits.h"
 #include "Strata/Network/RpcServer.h"
 #include "TestHelpers.h"
 
@@ -789,15 +790,41 @@ TEST_SUITE("Network.RpcServer")
 		CHECK_FALSE(hoarders[survivor].WasClosedByPeer());
 	}
 
-	TEST_CASE("A connection is not evicted before it had a chance to send")
+	TEST_CASE("The pending connection to evict is the oldest that had a chance to send")
+	{
+		using State = PendingConnectionState;
+		auto choose = [](std::initializer_list<State> states) { return ChoosePendingConnectionToEvict(std::vector<State>(states)); };
+		const State fresh { false, false };
+		const State idle { true, false };
+		const State started { true, true };
+		const State freshStarted { false, true }; // Its request was read before its first poll
+
+		// Connections that have not been through a poll yet are never evicted: the newcomer is turned away.
+		CHECK_FALSE(choose({}).has_value());
+		CHECK_FALSE(choose({ fresh, fresh }).has_value());
+		CHECK_FALSE(choose({ freshStarted }).has_value());
+
+		CHECK(choose({ idle, fresh }) == size_t(0));
+		CHECK(choose({ fresh, idle }) == size_t(1));
+		CHECK(choose({ idle, idle }) == size_t(0));
+
+		// Connections in the middle of the handshake are evicted only when no idle one is left.
+		CHECK(choose({ started, idle }) == size_t(1));
+		CHECK(choose({ started, fresh, idle }) == size_t(2));
+		CHECK(choose({ started, started, fresh }) == size_t(0));
+		CHECK(choose({ fresh, started }) == size_t(1));
+	}
+
+	TEST_CASE("A request sent before eviction is still answered")
 	{
 		Tests::PumpedRpcServer server;
 		RpcServerSpecification specification = Tests::MakeTestServerSpecification();
 		specification.MaxPendingConnections = 1;
 		REQUIRE(server.Start(specification));
 
-		// The server accepts every waiting connection in one go. A connection that sent its first request before
-		// the next one arrived is always answered, even when both are accepted together and only one may wait.
+		// With one pending slot, every second connection evicts the first or is turned away. A connection that sent
+		// its first request before the next one arrived is always answered: either it is kept (both were accepted
+		// in one go), or what it sent is handled before it is evicted.
 		for (int round = 0; round < 100; round++)
 		{
 			CAPTURE(round);
@@ -810,6 +837,8 @@ TEST_SUITE("Network.RpcServer")
 
 			std::optional<nlohmann::json> firstAnswer = first.ReadMessage();
 			REQUIRE(firstAnswer.has_value());
+			const std::string firstText = firstAnswer->dump();
+			CAPTURE(firstText);
 			CHECK(firstAnswer->contains("result"));
 
 			// The second one is either answered too (the first was evicted afterwards) or turned away itself.

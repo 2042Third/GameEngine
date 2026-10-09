@@ -3,6 +3,7 @@
 
 #include "Strata/Core/Crypto.h"
 #include "Strata/Core/Platform.h"
+#include "Strata/Network/RpcConnectionLimits.h"
 #include "Strata/Network/Socket.h"
 
 #include <condition_variable>
@@ -423,6 +424,7 @@ namespace Strata
 		uint32_t AcceptConnections();
 		void ReadFrom(Connection& connection);
 		void ProcessBufferedLines(Connection& connection);
+		void CatchUpPendingConnections();
 		void HandleMessage(Connection& connection, const std::string& line);
 		void HandleHandshakeMessage(Connection& connection, const std::optional<nlohmann::json>& message);
 		void TransferResponses(Connection& connection);
@@ -470,6 +472,21 @@ namespace Strata
 			}
 		}
 	};
+
+	std::optional<size_t> ChoosePendingConnectionToEvict(std::span<const PendingConnectionState> pending)
+	{
+		std::optional<size_t> oldestStarted;
+		for (size_t index = 0; index < pending.size(); index++)
+		{
+			if (!pending[index].Polled)
+				continue; // Never evicted before it had a chance to send
+			if (!pending[index].HandshakeStarted)
+				return index;
+			if (!oldestStarted)
+				oldestStarted = index;
+		}
+		return oldestStarted;
+	}
 
 	std::vector<RpcMethodInfo> RpcServer::Impl::GetMethods() const
 	{
@@ -634,30 +651,39 @@ namespace Strata
 			accepted++;
 			uint64_t suppressed = 0;
 
-			// Connections that have not authenticated never lock out new ones: the oldest of them makes room. A
-			// legitimate client authenticates within milliseconds, so it is the hoarded slots that get recycled.
-			// Connections that have not started the handshake go first, and connections accepted since the last poll
-			// (this loop drains the whole backlog at once) are never evicted before they had a chance to send.
+			// Connections that have not authenticated never lock out new ones: one of them makes room (see
+			// ChoosePendingConnectionToEvict). A legitimate client authenticates within milliseconds, so it is the
+			// hoarded slots that get recycled. Connections accepted since the last poll (this loop drains the whole
+			// backlog at once) are never evicted before they had a chance to send, and whatever the others have sent
+			// is handled first.
 			bool refuse = false;
 			if (CountConnections(false) >= Specification.MaxPendingConnections)
+				CatchUpPendingConnections();
+			if (CountConnections(false) >= Specification.MaxPendingConnections)
 			{
-				Connection* oldest = FindOldestConnection([](const Connection& candidate)
+				// Connections are kept in the order they were accepted, so the candidates are listed oldest first.
+				std::vector<Connection*> candidates;
+				std::vector<PendingConnectionState> states;
+				for (const Scope<Connection>& existing : Connections)
 				{
-					return !candidate.Authenticated && !candidate.Closing && candidate.Polled && candidate.ServerNonce.empty();
-				});
-				if (!oldest)
-					oldest = FindOldestConnection([](const Connection& candidate) { return !candidate.Authenticated && !candidate.Closing && candidate.Polled; });
+					if (existing->Authenticated || existing->Closing || existing->Closed)
+						continue;
+					candidates.push_back(existing.get());
+					states.push_back(PendingConnectionState { existing->Polled, !existing->ServerNonce.empty() });
+				}
 
-				if (oldest)
+				if (const std::optional<size_t> evicted = ChoosePendingConnectionToEvict(states))
 				{
+					Connection& victim = *candidates[*evicted];
 					if (RejectionWarnings.Allow(suppressed))
-						ST_CORE_WARN("RpcServer: closing client {}, which has not authenticated, to make room for a new connection{}", oldest->Id, DescribeSuppressed(suppressed));
-					Send(*oldest, JsonRpc::MakeError(nullptr, JsonRpc::ErrorCode::ServerBusy, "Too many connections are waiting to authenticate; this one was the oldest"));
-					BeginClose(*oldest, c_ErrorCloseLinger);
+						ST_CORE_WARN("RpcServer: closing client {}, which has not authenticated, to make room for a new connection{}", victim.Id, DescribeSuppressed(suppressed));
+					Send(victim, JsonRpc::MakeError(nullptr, JsonRpc::ErrorCode::ServerBusy, "Too many connections are waiting to authenticate; this one was the oldest"));
+					BeginClose(victim, c_ErrorCloseLinger);
 				}
 				else
 				{
-					// Every waiting connection arrived in this same burst: the newest one is turned away instead.
+					// No waiting connection has had a chance to send yet (they all arrived in this burst), so the new
+					// one is turned away instead.
 					refuse = true;
 				}
 			}
@@ -703,6 +729,19 @@ namespace Strata
 
 		UpdateClientCount();
 		return accepted;
+	}
+
+	void RpcServer::Impl::CatchUpPendingConnections()
+	{
+		// Input that arrived since the last poll is handled before choosing a connection to evict, so the choice
+		// sees each connection's latest state (e.g. a handshake it just sent) and never discards a request that is
+		// already here. A connection that authenticates this way frees its pending slot.
+		for (const Scope<Connection>& connection : Connections)
+		{
+			if (connection->Authenticated || connection->Closing || connection->Closed || connection->PeerFinished)
+				continue;
+			Guard(*connection, [&]() { ReadFrom(*connection); });
+		}
 	}
 
 	void RpcServer::Impl::ReadFrom(Connection& connection)
