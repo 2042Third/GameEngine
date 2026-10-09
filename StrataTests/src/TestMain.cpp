@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT
 #include <doctest/doctest.h>
 
+#include "Network/FakeEditorProcess.h"
 #include "Renderer/GPUTestUtils.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Log.h"
@@ -78,6 +79,10 @@ int main(int argc, char** argv)
 	constexpr std::string_view helperPrefix = "--strata-test-helper=";
 	if (argc > 1 && std::string_view(argv[1]).substr(0, helperPrefix.size()) == helperPrefix)
 		return RunHelperMode(std::string_view(argv[1]).substr(helperPrefix.size()), argc, argv);
+
+	// Launched as an editor by the CLI launch tests (see Network/FakeEditorProcess.h).
+	if (Strata::Tests::IsFakeEditorLaunch(argc, argv))
+		return Strata::Tests::RunFakeEditor(argc, argv);
 
 	Strata::LogSpecification logSpecification;
 	logSpecification.Level = Strata::LogLevel::Warn;

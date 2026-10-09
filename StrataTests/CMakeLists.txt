@@ -66,6 +66,12 @@ foreach(module IN LISTS STRATA_TEST_SCRIPT_MODULES)
 endforeach()
 add_dependencies(StrataTests StrataTestLibrary ${STRATA_TEST_SCRIPT_MODULES})
 
+# The CLI tests (src/CLI) compile only when StrataCLI is part of the build.
+if(TARGET StrataCLILib)
+	target_link_libraries(StrataTests PRIVATE StrataCLILib)
+	target_compile_definitions(StrataTests PRIVATE STRATA_TESTS_HAVE_CLI)
+endif()
+
 if(WIN32)
 	target_sources(StrataTests PRIVATE "${PROJECT_SOURCE_DIR}/CMake/Strata.manifest")
 endif()

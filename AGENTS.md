@@ -40,7 +40,8 @@ This file is the source of truth for how to work on Strata. Read it fully before
 Engine modules (`Strata/src/Strata/`): `Core` (application, logging, jobs, platform services),
 `Events`, `Input`, `Math`, `Reflection`, `Scene` (ECS, components, serialization, prefabs),
 `Asset` (asset database, importers, cooking, streaming, packs), `Renderer`, `Physics`, `Audio`,
-`Scripting`, `Project` (projects, game manifests), `Runtime` (running exported games), `ImGui`.
+`Scripting`, `Project` (projects, game manifests), `Runtime` (running exported games), `Network` (sockets,
+JSON-RPC, editor automation sessions), `ImGui`.
 
 ## Building
 
@@ -332,6 +333,38 @@ Building and loading scripts:
   `strata_embed_file` from `CMake/StrataEmbeddedFiles.cmake`).
 - GPU tests of the scene renderer share `StrataTests/src/Renderer/SceneRendererTestUtils.h`. Verify that a
   new regression test fails without its fix before relying on it.
+
+## Automation (editor RPC + MCP)
+
+The editor exposes its features to tools and AI agents through `RpcServer` (`Strata/src/Strata/Network/`):
+JSON-RPC 2.0, one compact JSON message per line, over TCP on loopback. `StrataCLI` is the client (`call`,
+`list`, `status`, `launch`) and an MCP server on stdio (`StrataCLI mcp`).
+
+- **Security model:** any local process, and any web page in a local browser, can reach the port; only
+  holders of the session token are trusted. The server binds loopback addresses only and refuses to start
+  without a token (`EditorSession::GenerateSessionToken`, from the OS secure random generator). Every
+  connection starts with a challenge-response handshake (`RpcAuthentication`) in which the token never
+  crosses the wire: `rpc.handshake` sends a client nonce and returns a server nonce with the server's HMAC
+  proof, which `RpcClient` verifies before it proves anything in return (so clients never talk to a process
+  that took over a dead editor's port); `rpc.authenticate` then sends the client's HMAC proof. Anything else
+  closes the connection. Clients refuse to connect without a token. Unauthenticated connections get tiny
+  limits and a deadline; authenticated ones get size limits and backpressure. Never log or print tokens.
+- **Session files:** `<user data>/Strata/Sessions/<pid>.json` holds the full session (address, port, token,
+  process start time). It is written owner-only (`Platform::WritePrivateFile`) into a private directory. A
+  session counts only while its process id is alive with the recorded start time (a reused id does not
+  match). Files of exited editors are pruned; a live process whose start time cannot be verified is skipped,
+  never deleted. `<project>/.strata/EditorSession.json` only names the editor's process; it
+  is untrusted (the project may be shared) and never contains the port or token.
+- **Environment:** `STRATA_SESSION_DIR` overrides the session directory (tests use it to stay isolated from
+  real editors). `STRATA_EDITOR_PORT`/`STRATA_EDITOR_TOKEN` select an explicit endpoint, and
+  `STRATA_EDITOR_PATH` the editor executable for `launch`/`strata_launch_editor`.
+- **Adding editor methods:** `RpcServer::RegisterMethod` with a description and a JSON Schema for the params.
+  Handlers run on the main thread from `ProcessRequests()`; keep the `Ref<RpcResponder>` to answer later
+  (e.g. after advancing frames). Methods become MCP tools automatically (`entity.create` -> `entity_create`).
+  Return images as `{"Image": {"MimeType": ..., "Data": <base64>}}` to have MCP clients receive image content.
+- **Tests** never need a real editor: `Tests::PumpedRpcServer` plays the editor, `Tests::LiveProcess` gives
+  fake sessions a running process id, and `STRATA_TEST_FAKE_EDITOR=1` makes the test executable act as a
+  launched editor (see `StrataTests/src/Network/FakeEditorProcess.h`).
 
 ## Pre-commit review checklist
 
