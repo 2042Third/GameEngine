@@ -96,7 +96,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   run headless by CTest. Extend it whenever you add a component or script API.
 - Script modules the tests load are CMake targets in `StrataTests/CMakeLists.txt` (sources in `StrataTests/Scripts/`),
   built with the tests. The CTest `StrataScriptCore.Package` (label `package`) builds `StrataTests/PackageProject` through
-  the StrataScriptCore package the way a game project does; it needs CMake and the compiler at test time.
+  the StrataScriptCore package the way a game project does (and checks that the package's glm definitions match the
+  engine's glm target); it needs CMake and the compiler at test time.
 
 ## Code style (Hazel conventions)
 

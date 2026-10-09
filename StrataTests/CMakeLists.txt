@@ -80,12 +80,14 @@ add_test(NAME StrataTests.GPU
 set_tests_properties(StrataTests.GPU PROPERTIES LABELS "gpu")
 
 # Builds a game project's scripts through the StrataScriptCore package (outside this build, as game projects do) and
-# checks that the engine loads the result.
+# checks that the engine loads the result. The package must give scripts the same glm definitions as the engine's glm
+# target ('|'-separated, checked by the package project).
 add_test(NAME StrataScriptCore.Package
 	COMMAND "${CMAKE_COMMAND}"
 		"-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/PackageProject"
 		"-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/PackageProject/$<CONFIG>"
 		"-DENGINE_DIR=${PROJECT_SOURCE_DIR}"
+		"-DEXPECTED_GLM_DEFINITIONS=$<JOIN:$<TARGET_PROPERTY:glm,INTERFACE_COMPILE_DEFINITIONS>,|>"
 		"-DGENERATOR=${CMAKE_GENERATOR}"
 		"-DPLATFORM=${CMAKE_GENERATOR_PLATFORM}"
 		"-DTOOLSET=${CMAKE_GENERATOR_TOOLSET}"
