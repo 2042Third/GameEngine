@@ -22,6 +22,11 @@ layout(push_constant) uniform GridParameters
 layout(location = 0) in vec2 v_UV;
 layout(location = 0) out vec4 o_Color;
 
+// Depth bias toward the camera, in depth slopes per pixel: a surface in the grid's plane (a floor at y = 0) is rasterized
+// with vertex positions snapped to the subpixel grid, so its depth differs from the exact plane by up to about a pixel's
+// worth of slope, most at grazing angles. Geometry further than that above the plane still hides the grid.
+const float c_DepthSlopeBias = 2.0;
+
 // Coverage (0-1) of one pixel wide lines at whole grid coordinates.
 float LineCoverage(vec2 coordinate, vec2 derivative)
 {
@@ -56,6 +61,9 @@ void main()
 
 	vec4 clip = u_Frame.ViewProjection * vec4(position, 1.0);
 	float depth = clip.z / clip.w;
+	// Neighbors whose rays miss the plane give no usable slope (NaN, infinite or the whole depth range).
+	float depthSlope = fwidth(depth);
+	depthSlope = depthSlope < 1.0 ? depthSlope : 0.0;
 	if (!(t > 0.0) || !(depth > 0.0 && depth <= 1.0))
 		discard;
 
@@ -71,5 +79,5 @@ void main()
 	if (color.a <= 0.0)
 		discard;
 	o_Color = color;
-	gl_FragDepth = depth;
+	gl_FragDepth = min(depth + depthSlope * c_DepthSlopeBias, 1.0); // Reversed-Z: larger is nearer
 }

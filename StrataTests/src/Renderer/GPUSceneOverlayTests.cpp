@@ -103,6 +103,67 @@ TEST_SUITE("GPU.SceneRenderer.Overlays")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("The grid stays visible on a floor at its height")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		// A floor exactly in the grid's plane: both have the same depth, up to rounding.
+		Entity floor = AddMesh(scene, BuiltinAssets::PlaneMesh, assets.AddMaterial(UnlitColor({ 0.1f, 0.1f, 0.1f, 1.0f })), glm::vec3(0.0f), "Floor");
+		floor.GetComponent<TransformComponent>().Scale = glm::vec3(400.0f);
+
+		SceneRenderOptions options;
+		options.ShowGrid = true;
+		options.GridMinorColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+		options.GridMajorColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+		options.GridAxisXColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+		options.GridAxisZColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Size, c_Size);
+		auto render = [&](const SceneCamera& camera, bool grid, bool withFloor)
+		{
+			floor.SetActive(withFloor);
+			SceneRenderOptions frameOptions = options;
+			frameOptions.ShowGrid = grid;
+			REQUIRE(renderer.Render(scene, camera, nullptr, frameOptions));
+			ReadbackImage image;
+			REQUIRE(Renderer::ReadTexture(renderer.GetOutputTexture(), image));
+			return image;
+		};
+
+		// The grid over the floor must look like the grid over nothing, blended onto the floor's color: wherever the
+		// floor's depth wins a tie, a line would disappear. Grazing and distant views compute the two depths most
+		// differently.
+		for (const SceneCamera& camera : { TopDownCamera(), LookAt(glm::vec3(0.3f, 4.0f, 5.0f), glm::vec3(0.0f)), LookAt(glm::vec3(0.37f, 0.8f, 5.0f), glm::vec3(0.0f, 0.0f, -1.0f)),
+			LookAt(glm::vec3(1.3f, 9.0f, 12.0f), glm::vec3(0.0f)) })
+		{
+			const ReadbackImage floorOnly = render(camera, false, true);
+			const ReadbackImage gridOnly = render(camera, true, false);
+			const ReadbackImage gridOnFloor = render(camera, true, true);
+			const int floorValue = Red(floorOnly, c_Size / 2, c_Size - 1);
+			REQUIRE(std::abs(floorValue - 89) <= 1); // 0.1 linear, sRGB-encoded
+			uint32_t gridPixels = 0;
+			uint32_t mismatches = 0;
+			for (uint32_t y = 0; y < c_Size; y++)
+			{
+				for (uint32_t x = 0; x < c_Size; x++)
+				{
+					if (Red(floorOnly, x, y) == 0)
+						continue; // Beyond the floor
+					const int line = Red(gridOnly, x, y);
+					gridPixels += line > 0 ? 1u : 0u;
+					const int expected = line + (255 - line) * floorValue / 255;
+					mismatches += std::abs(Red(gridOnFloor, x, y) - expected) > 3 ? 1u : 0u;
+				}
+			}
+			CHECK(gridPixels > 100);
+			CHECK(mismatches == 0);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Selected entities get an outline around their visible silhouette")
 	{
 		GPUContext gpu;
