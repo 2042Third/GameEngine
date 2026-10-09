@@ -37,8 +37,8 @@ namespace Strata
 		class StrataJoltJobSystem final : public JPH::JobSystemWithBarrier
 		{
 		public:
-			StrataJoltJobSystem(JPH::uint maxJobs, JPH::uint maxBarriers, std::atomic<uint64_t>* workerJobCount)
-				: JPH::JobSystemWithBarrier(maxBarriers), m_WorkerJobCount(workerJobCount)
+			StrataJoltJobSystem(JPH::uint maxJobs, JPH::uint maxBarriers, PhysicsJobCounters* counters)
+				: JPH::JobSystemWithBarrier(maxBarriers), m_Counters(counters)
 			{
 				m_Jobs.Init(maxJobs, maxJobs);
 			}
@@ -67,19 +67,22 @@ namespace Strata
 
 			JobHandle CreateJob(const char* name, JPH::ColorArg color, const JobFunction& function, JPH::uint32 dependencyCount) override
 			{
-				// Without workers every job runs on the stepping thread, so there is nothing to count.
-				if (m_WorkerJobCount && ::Strata::JobSystem::IsInitialized())
+				if (!m_Counters)
+					return CreateStoredJob(name, color, function, dependencyCount);
+
+				m_Counters->Jobs.fetch_add(1, std::memory_order_relaxed);
+				// Without workers every job runs on the stepping thread, so there is nothing more to count.
+				if (!::Strata::JobSystem::IsInitialized())
+					return CreateStoredJob(name, color, function, dependencyCount);
+
+				std::atomic<uint64_t>* workerJobs = &m_Counters->WorkerJobs;
+				const JobFunction counted = [workerJobs, function]()
 				{
-					std::atomic<uint64_t>* counter = m_WorkerJobCount;
-					const JobFunction counted = [counter, function]()
-					{
-						if (::Strata::JobSystem::IsWorkerThread())
-							counter->fetch_add(1, std::memory_order_relaxed);
-						function();
-					};
-					return CreateStoredJob(name, color, counted, dependencyCount);
-				}
-				return CreateStoredJob(name, color, function, dependencyCount);
+					if (::Strata::JobSystem::IsWorkerThread())
+						workerJobs->fetch_add(1, std::memory_order_relaxed);
+					function();
+				};
+				return CreateStoredJob(name, color, counted, dependencyCount);
 			}
 
 			void WaitForJobs(Barrier* barrier) override
@@ -194,14 +197,14 @@ namespace Strata
 			std::deque<Job*> m_ReadyJobs;                  // Each entry holds a reference to its job
 			uint32_t m_ActiveDrainTasks = 0;
 			std::vector<::Strata::JobHandle> m_DrainTasks; // Submitted drain tasks (completed ones are pruned)
-			std::atomic<uint64_t>* m_WorkerJobCount = nullptr;
+			PhysicsJobCounters* m_Counters = nullptr;
 		};
 
 	}
 
-	Scope<JPH::JobSystem> CreatePhysicsJobSystem(std::atomic<uint64_t>* workerJobCount)
+	Scope<JPH::JobSystem> CreatePhysicsJobSystem(PhysicsJobCounters* counters)
 	{
-		return CreateScope<StrataJoltJobSystem>(static_cast<JPH::uint>(JPH::cMaxPhysicsJobs), static_cast<JPH::uint>(JPH::cMaxPhysicsBarriers), workerJobCount);
+		return CreateScope<StrataJoltJobSystem>(static_cast<JPH::uint>(JPH::cMaxPhysicsJobs), static_cast<JPH::uint>(JPH::cMaxPhysicsBarriers), counters);
 	}
 
 }

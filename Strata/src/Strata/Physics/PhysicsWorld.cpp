@@ -641,7 +641,7 @@ namespace Strata
 		UserLayerPairFilter LayerPairFilter;
 		ContactCollector Contacts;
 		ActivationCollector Activations;
-		std::atomic<uint64_t> WorkerJobCount = 0;
+		PhysicsJobCounters JobCounters;
 		Scope<JPH::TempAllocator> Allocator;
 		Scope<JPH::JobSystem> Jobs;
 		std::unordered_map<AssetHandle, MeshShapeCacheEntry> ConvexMeshShapes;
@@ -2274,7 +2274,7 @@ namespace Strata
 
 		PhysicsWorldData& data = *m_Data;
 		data.Allocator = CreateScope<JPH::TempAllocatorImplWithMallocFallback>(data.Settings.TempAllocatorSize);
-		data.Jobs = CreatePhysicsJobSystem(&data.WorkerJobCount);
+		data.Jobs = CreatePhysicsJobSystem(&data.JobCounters);
 		data.JoltSystem = CreateScope<JPH::PhysicsSystem>();
 		data.JoltSystem->Init(data.Settings.MaxBodies, 0, data.Settings.MaxBodyPairs, data.Settings.MaxContactConstraints, data.BroadPhaseLayers, data.ObjectVsBroadPhase, data.LayerPairFilter);
 		data.JoltSystem->SetContactListener(&data.Contacts);
@@ -2699,7 +2699,8 @@ namespace Strata
 		stats.ActiveBodyCount = data.JoltSystem->GetNumActiveBodies(JPH::EBodyType::RigidBody);
 		stats.ContactPairCount = static_cast<uint32_t>(data.TouchingPairs.size());
 		stats.StepCount = data.StepCount;
-		stats.WorkerJobCount = data.WorkerJobCount.load(std::memory_order_relaxed);
+		stats.JobCount = data.JobCounters.Jobs.load(std::memory_order_relaxed);
+		stats.WorkerJobCount = data.JobCounters.WorkerJobs.load(std::memory_order_relaxed);
 		stats.LastStepTime = data.LastStepTime;
 		return stats;
 	}
