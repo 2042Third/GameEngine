@@ -37,6 +37,19 @@ namespace Strata
 		if (std::optional<std::string> commands = commandLine.GetOption("--commands"))
 			options.CommandScript = FileSystem::FromUTF8(*commands);
 
+		// Automation (StrataCLI, MCP): on by default, on a free loopback port unless --automation-port picks one.
+		options.EnableAutomation = !commandLine.HasFlag("--no-automation");
+		if (commandLine.HasFlag("--automation-port"))
+		{
+			const std::optional<int64_t> port = commandLine.GetIntOption("--automation-port");
+			if (!port || *port < 0 || *port > UINT16_MAX)
+			{
+				ST_ERROR("--automation-port expects a port number from 0 to 65535 (0 picks a free port)");
+				return nullptr;
+			}
+			options.AutomationPort = static_cast<uint16_t>(*port);
+		}
+
 		ApplicationSpecification specification;
 		specification.Name = "Strata Editor";
 		specification.CommandLineArgs = commandLine;

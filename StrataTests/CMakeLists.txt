@@ -104,30 +104,30 @@ set_tests_properties(StrataScriptCore.Package PROPERTIES LABELS "package")
 # The real editor, driven by a command script for a few frames: catches startup, UI and shutdown failures.
 if(TARGET StrataEditor)
 	add_test(NAME StrataEditor.Smoke
-		COMMAND StrataEditor --frames 30 --windowed --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/SmokeCommands.json"
+		COMMAND StrataEditor --no-automation --frames 30 --windowed --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/SmokeCommands.json"
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
 	set_tests_properties(StrataEditor.Smoke PROPERTIES LABELS "gpu")
 
 	# A failing command must fail the process, so scripted runs notice.
 	add_test(NAME StrataEditor.FailingScript
-		COMMAND StrataEditor --no-gpu --frames 2 --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/FailingCommands.json"
+		COMMAND StrataEditor --no-gpu --no-automation --frames 2 --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/FailingCommands.json"
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
 	set_tests_properties(StrataEditor.FailingScript PROPERTIES WILL_FAIL TRUE)
 
 	# Commands that take frames (editor.wait) hold the script; the script must finish within the --frames budget...
 	add_test(NAME StrataEditor.WaitingScript
-		COMMAND StrataEditor --no-gpu --frames 10 --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/WaitCommands.json"
+		COMMAND StrataEditor --no-gpu --no-automation --frames 10 --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/WaitCommands.json"
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
 	# ...or the run fails.
 	add_test(NAME StrataEditor.UnfinishedScript
-		COMMAND StrataEditor --no-gpu --frames 5 --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/UnfinishedCommands.json"
+		COMMAND StrataEditor --no-gpu --no-automation --frames 5 --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/UnfinishedCommands.json"
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
 	set_tests_properties(StrataEditor.UnfinishedScript PROPERTIES WILL_FAIL TRUE)
 
 	# Without --frames a headless editor runs until editor.quit (here at the end of its script); a quit that does not
 	# close it runs into the timeout.
 	add_test(NAME StrataEditor.QuitScript
-		COMMAND StrataEditor --no-gpu --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/QuitCommands.json"
+		COMMAND StrataEditor --no-gpu --no-automation --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/QuitCommands.json"
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
 	set_tests_properties(StrataEditor.QuitScript PROPERTIES TIMEOUT 60)
 endif()
@@ -141,7 +141,7 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	set_tests_properties(StrataExport.Clean PROPERTIES FIXTURES_SETUP StrataExportClean)
 
 	add_test(NAME StrataEditor.Export
-		COMMAND StrataEditor --no-gpu --frames 2 --commands "${CMAKE_CURRENT_BINARY_DIR}/ExportCommands.json"
+		COMMAND StrataEditor --no-gpu --no-automation --frames 2 --commands "${CMAKE_CURRENT_BINARY_DIR}/ExportCommands.json"
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
 	set_tests_properties(StrataEditor.Export PROPERTIES FIXTURES_REQUIRED StrataExportClean FIXTURES_SETUP StrataExportedGame)
 

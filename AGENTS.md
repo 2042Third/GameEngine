@@ -306,6 +306,10 @@ Building and loading scripts:
   the last frame, `--no-gpu` runs headless without a graphics device (export, asset processing).
   Without `--frames`, a headless editor runs until `editor.quit` (which refuses to discard unsaved
   scene changes unless `force` is true) or a signal; headless editors run at most 60 frames per second.
+  The editor serves automation by default (`EditorAutomation`, see [Automation](#automation-editor-rpc--mcp));
+  `--no-automation` turns it off and `--automation-port <port>` picks the port (default 0: a free one).
+  A headless editor without `--frames` whose automation cannot start exits with code 1. CTest runs of
+  command scripts pass `--no-automation`.
   CTest runs `StrataTests/Editor/SmokeCommands.json` and checks that failing and unfinished scripts
   fail the process.
 - `editor.status` summarizes the editor (project, scene, play state, selection, undo history); other
