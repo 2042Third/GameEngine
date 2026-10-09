@@ -398,6 +398,7 @@ namespace Strata
 
 		std::atomic<bool> Running = false;
 		std::atomic<uint16_t> Port = 0;
+		std::string LastError; // Why Start failed (owning thread)
 		std::atomic<uint32_t> ClientCount = 0;
 
 		mutable std::mutex MethodsMutex;
@@ -1312,24 +1313,21 @@ namespace Strata
 	bool RpcServer::Start(const RpcServerSpecification& specification)
 	{
 		Stop();
+		m_Impl->LastError.clear();
+		auto fail = [this](std::string error)
+		{
+			ST_CORE_ERROR("RpcServer: {}", error);
+			m_Impl->LastError = std::move(error);
+			return false;
+		};
 
 		// Automation grants full control over the editor, so it is never exposed beyond this machine.
 		if (!IsLoopbackAddress(specification.BindAddress))
-		{
-			ST_CORE_ERROR("RpcServer: refusing to listen on '{}': only loopback addresses (127.0.0.0/8 or ::1) are allowed", specification.BindAddress);
-			return false;
-		}
+			return fail(fmt::format("refusing to listen on '{}': only loopback addresses (127.0.0.0/8 or ::1) are allowed", specification.BindAddress));
 		if (specification.AuthToken.empty())
-		{
-			ST_CORE_ERROR("RpcServer: refusing to start without an authentication token");
-			return false;
-		}
-
+			return fail("refusing to start without an authentication token");
 		if (!m_Impl->Listener.Listen(specification.BindAddress, specification.Port))
-		{
-			ST_CORE_ERROR("RpcServer: {}", m_Impl->Listener.GetLastError());
-			return false;
-		}
+			return fail(m_Impl->Listener.GetLastError());
 
 		RpcServerSpecification& active = m_Impl->Specification;
 		active = specification;
@@ -1399,6 +1397,11 @@ namespace Strata
 	bool RpcServer::IsRunning() const
 	{
 		return m_Impl->Running.load();
+	}
+
+	const std::string& RpcServer::GetLastError() const
+	{
+		return m_Impl->LastError;
 	}
 
 	uint16_t RpcServer::GetPort() const

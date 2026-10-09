@@ -46,6 +46,7 @@ namespace Strata
 		ST_ASSERT(!command.Name.empty() && command.Handler, "Editor commands need a name and a handler");
 		std::string name = command.Name;
 		m_Commands.insert_or_assign(std::move(name), std::move(command));
+		m_Revision++;
 	}
 
 	const EditorCommand* EditorCommandRegistry::Find(std::string_view name) const

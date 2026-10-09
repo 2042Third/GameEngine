@@ -5,6 +5,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <optional>
@@ -86,6 +87,8 @@ namespace Strata
 		void Register(EditorCommand command);
 		const EditorCommand* Find(std::string_view name) const;
 		std::vector<const EditorCommand*> GetAll() const; // Sorted by name
+		// Changes whenever a command is registered, so users that mirror the commands (automation) notice additions.
+		uint64_t GetRevision() const { return m_Revision; }
 
 		// Runs a command. Unknown commands, parameters that are not an object and failures inside the handler
 		// (including exceptions from third-party code) become error results. The result may be pending (see
@@ -93,6 +96,7 @@ namespace Strata
 		EditorCommandResult Execute(EditorContext& context, std::string_view name, const nlohmann::json& parameters = nlohmann::json::object()) const;
 	private:
 		std::map<std::string, EditorCommand, std::less<>> m_Commands;
+		uint64_t m_Revision = 0;
 	};
 
 	// Reads command parameters. Getters record the first problem (missing or mistyped parameter) and return a

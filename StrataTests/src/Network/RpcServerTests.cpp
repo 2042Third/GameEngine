@@ -126,14 +126,24 @@ TEST_SUITE("Network.RpcServer")
 			specification.BindAddress = address;
 			CHECK_FALSE(server.Start(specification));
 			CHECK_FALSE(server.IsRunning());
+			CHECK(server.GetLastError().find("loopback") != std::string::npos);
 		}
 
 		RpcServerSpecification withoutToken = Tests::MakeTestServerSpecification();
 		withoutToken.AuthToken.clear();
 		CHECK_FALSE(server.Start(withoutToken));
+		CHECK(server.GetLastError().find("token") != std::string::npos);
 
 		CHECK(server.Start(Tests::MakeTestServerSpecification()));
 		CHECK(server.IsRunning());
+		CHECK(server.GetLastError().empty());
+
+		// A port that is taken is reported as well.
+		RpcServer second;
+		RpcServerSpecification samePort = Tests::MakeTestServerSpecification();
+		samePort.Port = server.GetPort();
+		CHECK_FALSE(second.Start(samePort));
+		CHECK_FALSE(second.GetLastError().empty());
 	}
 
 	TEST_CASE("rpc.listMethods describes built-in and registered methods")

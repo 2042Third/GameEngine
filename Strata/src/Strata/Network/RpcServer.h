@@ -178,6 +178,8 @@ namespace Strata
 		// period plus the time a forced stop takes.
 		void Stop(std::chrono::milliseconds gracePeriod = std::chrono::milliseconds(0));
 		bool IsRunning() const;
+		// Why the last Start failed (empty after a successful one). Owning thread only.
+		const std::string& GetLastError() const;
 		uint16_t GetPort() const;
 		uint32_t GetClientCount() const;
 
