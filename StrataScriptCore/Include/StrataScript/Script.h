@@ -565,8 +565,9 @@ namespace Strata
 #define ST_SCRIPT_FIELD(Member) \
 	stScriptBuilder.template Field<&std::remove_reference_t<decltype(stScriptBuilder)>::ClassType::Member>(#Member)
 
+// The registrar is not const: registering the next class links it into this one (ClassRegistration::Next).
 #define ST_SCRIPT_DETAIL_CLASS(Type, Counter) ST_SCRIPT_DETAIL_CLASS_IMPL(Type, Counter)
 #define ST_SCRIPT_DETAIL_CLASS_IMPL(Type, Counter) \
 	static void StrataScriptDescribe##Counter(::Strata::ScriptClassBuilder<Type>& stScriptBuilder); \
-	static const ::Strata::Detail::ClassRegistrar<Type> s_StrataScriptRegistrar##Counter(#Type, &StrataScriptDescribe##Counter); \
+	static ::Strata::Detail::ClassRegistrar<Type> s_StrataScriptRegistrar##Counter(#Type, &StrataScriptDescribe##Counter); \
 	static void StrataScriptDescribe##Counter([[maybe_unused]] ::Strata::ScriptClassBuilder<Type>& stScriptBuilder)
