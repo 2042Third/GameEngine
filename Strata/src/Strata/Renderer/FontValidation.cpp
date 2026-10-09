@@ -8,6 +8,7 @@
 #include <cstring>
 #include <limits>
 #include <optional>
+#include <unordered_set>
 
 namespace Strata
 {
@@ -58,14 +59,15 @@ namespace Strata
 			Status State = Status::Unvisited;
 			uint32_t Height = 0;     // Composite nesting below this glyph
 			uint32_t Components = 0; // Components after expanding nested composites (0 for simple glyphs)
-			uint32_t Points = 0;     // After expanding components, saturating
-			double MaxX = 0.0;     // Largest absolute coordinate stb_truetype can produce for the outline
+			GlyphShapeCost Shape;
+			double MaxX = 0.0;       // Largest absolute coordinate stb_truetype can produce for the outline
 			double MaxY = 0.0;
 		};
 
-		uint32_t SaturatingAdd(uint32_t a, uint32_t b)
+		template<typename T>
+		T SaturatingAdd(T a, T b)
 		{
-			return a > std::numeric_limits<uint32_t>::max() - b ? std::numeric_limits<uint32_t>::max() : a + b;
+			return a > std::numeric_limits<T>::max() - b ? std::numeric_limits<T>::max() : a + b;
 		}
 
 		class Validator
@@ -210,12 +212,12 @@ namespace Strata
 			bool ValidateGlyphs()
 			{
 				m_Glyphs.assign(m_GlyphCount, GlyphSummary());
-				m_Facts.GlyphPoints.resize(m_GlyphCount);
+				m_Facts.GlyphShapes.resize(m_GlyphCount);
 				for (uint32_t glyph = 0; glyph < m_GlyphCount; glyph++)
 				{
 					if (!ValidateGlyph(glyph, 0))
 						return false;
-					m_Facts.GlyphPoints[glyph] = m_Glyphs[glyph].Points;
+					m_Facts.GlyphShapes[glyph] = m_Glyphs[glyph].Shape;
 				}
 				return true;
 			}
@@ -261,6 +263,9 @@ namespace Strata
 						return Fail(fmt::format("Glyph {}'s contour end points do not increase", glyph));
 				}
 				const uint32_t pointCount = m_ContourEnds.back() + 1u;
+				m_TotalPoints += pointCount;
+				if (m_TotalPoints > FontLimits::c_MaxOutlinePoints)
+					return Fail(fmt::format("The font has more than {} outline points", FontLimits::c_MaxOutlinePoints));
 				cursor += 2ull * contours;
 				cursor += 2ull + U16(cursor); // Instructions
 				if (cursor > end)
@@ -330,8 +335,14 @@ namespace Strata
 					}
 				}
 
+				// stb_truetype allocates (and emits at most) a vertex per point plus two per contour; each run of off-curve
+				// points becomes as many curves, closing a contour may add one more.
+				uint32_t offCurve = 0;
+				for (uint32_t point = 0; point < pointCount; point++)
+					offCurve += (m_PointFlags[point] & c_OnCurve) ? 0u : 1u;
 				GlyphSummary& summary = m_Glyphs[glyph];
-				summary.Points = pointCount;
+				summary.Shape.Vertices = pointCount + 2 * contours;
+				summary.Shape.Curves = offCurve + contours;
 				summary.MaxX = maxX;
 				summary.MaxY = maxY;
 				return true;
@@ -341,7 +352,7 @@ namespace Strata
 			bool ValidateCompositeGlyph(uint32_t glyph, uint64_t start, uint64_t end, uint32_t depth)
 			{
 				uint64_t cursor = start + 10;
-				uint32_t points = 0;
+				GlyphShapeCost shape;
 				uint32_t height = 0;
 				uint32_t components = 0;
 				double maxX = 0.0;
@@ -412,7 +423,7 @@ namespace Strata
 					height = std::max(height, child.Height + 1);
 					if (height > FontLimits::c_MaxCompositeDepth)
 						return Fail(fmt::format("Composite glyphs are nested more than {} levels deep", FontLimits::c_MaxCompositeDepth));
-					components = SaturatingAdd(components, SaturatingAdd(child.Components, 1));
+					components = SaturatingAdd(components, SaturatingAdd(child.Components, 1u));
 					if (components > FontLimits::c_MaxCompositeComponents)
 						return Fail(fmt::format("Composite glyph {} expands to more than {} components", glyph, FontLimits::c_MaxCompositeComponents));
 
@@ -425,12 +436,18 @@ namespace Strata
 						return Fail(fmt::format("Composite glyph {} moves a component beyond the coordinate range", glyph));
 					maxX = std::max(maxX, boundX);
 					maxY = std::max(maxY, boundY);
-					points = SaturatingAdd(points, child.Points);
+
+					// stb_truetype transforms the component's vertices, then copies the vertices gathered so far and the
+					// component's into a new array.
+					shape.CompositeCopies = SaturatingAdd(shape.CompositeCopies, SaturatingAdd(child.Shape.CompositeCopies,
+						2ull * child.Shape.Vertices + shape.Vertices));
+					shape.Vertices = SaturatingAdd(shape.Vertices, child.Shape.Vertices);
+					shape.Curves = SaturatingAdd(shape.Curves, child.Shape.Curves);
 					more = (flags & c_MoreComponents) != 0;
 				}
 
 				GlyphSummary& summary = m_Glyphs[glyph];
-				summary.Points = points;
+				summary.Shape = shape;
 				summary.Height = height;
 				summary.Components = components;
 				summary.MaxX = maxX;
@@ -507,8 +524,9 @@ namespace Strata
 				}
 			}
 
-			// Format 4: stb_truetype's binary search trusts searchRange, entrySelector and rangeShift, so they must be
-			// exactly what the segment count implies; glyph index arrays must lie inside the table.
+			// Format 4: glyph index arrays must lie inside the table. stb_truetype's binary search trusts searchRange,
+			// entrySelector and rangeShift; fonts that store inconsistent ones exist, so the values the segment count implies
+			// are recorded for Font::Create to write into its copy of the font.
 			bool ValidateSegmentMap(uint64_t subtable, uint64_t available)
 			{
 				if (available < 14)
@@ -524,7 +542,10 @@ namespace Strata
 					log2++;
 				const uint32_t searchRange = 2u << log2;
 				if (U16(subtable + 8) != searchRange || U16(subtable + 10) != log2 || U16(subtable + 12) != segmentsTimesTwo - searchRange)
-					return Fail("The font's character map (format 4) has inconsistent search parameters");
+				{
+					m_Facts.SearchFix = CharacterMapSearchFix { static_cast<uint32_t>(subtable), static_cast<uint16_t>(searchRange),
+						static_cast<uint16_t>(log2), static_cast<uint16_t>(segmentsTimesTwo - searchRange) };
+				}
 				for (uint64_t segment = 0; segment < segments; segment++)
 				{
 					const uint16_t last = U16(subtable + 14 + 2 * segment);
@@ -575,115 +596,159 @@ namespace Strata
 				return true;
 			}
 
-			// GPOS pair adjustment lookups, as stb_truetype reads them (offsets are relative to the GPOS table).
+			// GPOS pair adjustment lookups, as stb_truetype reads them (offsets are relative to the GPOS table). For every
+			// glyph pair it kerns, stb_truetype walks all lookups and all subtables of the pair adjustment lookups: the walk
+			// is bounded, counted with repeats since offsets may share their targets. Each distinct subtable is then
+			// validated once, within a total work budget.
 			bool ValidatePositioning(std::string& outIssue)
 			{
-				const TableRange& gpos = m_Gpos;
-				auto has = [&](uint64_t offset, uint64_t size) { return gpos.Has(offset, size); };
-				auto u16 = [&](uint64_t offset) { return U16(gpos.Offset + offset); };
 				auto fail = [&](const char* issue)
 				{
 					outIssue = issue;
 					return false;
 				};
 
-				if (!has(0, 4))
+				if (!GposHas(0, 4))
 					return fail("GPOS header is too short");
-				if (u16(0) != 1 || u16(2) != 0)
+				if (GposU16(0) != 1 || GposU16(2) != 0)
 					return true; // Other versions: stb_truetype stops here
-				if (!has(0, 10))
+				if (!GposHas(0, 10))
 					return fail("GPOS header is too short");
-				const uint64_t lookupList = u16(8);
-				if (!has(lookupList, 2) || !has(lookupList + 2, 2ull * u16(lookupList)))
+				const uint64_t lookupList = GposU16(8);
+				if (!GposHas(lookupList, 2) || !GposHas(lookupList + 2, 2ull * GposU16(lookupList)))
 					return fail("GPOS lookup list exceeds the table");
-				const uint32_t lookupCount = u16(lookupList);
+				const uint32_t lookupCount = GposU16(lookupList);
+				uint64_t visits = lookupCount;
+				if (visits > FontLimits::c_MaxKerningLookupVisits)
+					return fail("GPOS has too many lookups to search for every glyph pair");
 				for (uint32_t lookup = 0; lookup < lookupCount; lookup++)
 				{
-					const uint64_t lookupTable = lookupList + u16(lookupList + 2 + 2ull * lookup);
-					if (!has(lookupTable, 6))
+					const uint64_t lookupTable = lookupList + GposU16(lookupList + 2 + 2ull * lookup);
+					if (!GposHas(lookupTable, 6))
 						return fail("GPOS lookup exceeds the table");
-					if (u16(lookupTable) != 2)
-						continue; // Only pair adjustment lookups are read
-					const uint32_t subtableCount = u16(lookupTable + 4);
-					if (!has(lookupTable + 6, 2ull * subtableCount))
+					if (GposU16(lookupTable) != 2)
+						continue; // Only pair adjustment lookups are searched
+					const uint32_t subtableCount = GposU16(lookupTable + 4);
+					visits += subtableCount;
+					if (visits > FontLimits::c_MaxKerningLookupVisits)
+						return fail("GPOS has too many pair adjustment subtables to search for every glyph pair");
+					if (!GposHas(lookupTable + 6, 2ull * subtableCount))
 						return fail("GPOS lookup exceeds the table");
-					for (uint32_t index = 0; index < subtableCount; index++)
+				}
+				m_Facts.KerningLookupVisits = static_cast<uint32_t>(visits);
+
+				std::unordered_set<uint64_t> validated;
+				uint64_t work = 0;
+				for (uint32_t lookup = 0; lookup < lookupCount; lookup++)
+				{
+					const uint64_t lookupTable = lookupList + GposU16(lookupList + 2 + 2ull * lookup);
+					if (GposU16(lookupTable) != 2)
+						continue;
+					for (uint32_t index = 0; index < GposU16(lookupTable + 4); index++)
 					{
-						const uint64_t subtable = lookupTable + u16(lookupTable + 6 + 2ull * index);
-						if (!has(subtable, 4))
-							return fail("GPOS pair subtable exceeds the table");
-
-						// The coverage table is searched before the subtable's format is looked at.
-						const uint64_t coverage = subtable + u16(subtable + 2);
-						int64_t maxCoverageIndex = -1;
-						if (!has(coverage, 2))
-							return fail("GPOS coverage exceeds the table");
-						const uint16_t coverageFormat = u16(coverage);
-						if (coverageFormat == 1)
-						{
-							if (!has(coverage, 4) || !has(coverage + 4, 2ull * u16(coverage + 2)))
-								return fail("GPOS coverage exceeds the table");
-							maxCoverageIndex = static_cast<int64_t>(u16(coverage + 2)) - 1;
-						}
-						else if (coverageFormat == 2)
-						{
-							if (!has(coverage, 4) || !has(coverage + 4, 6ull * u16(coverage + 2)))
-								return fail("GPOS coverage exceeds the table");
-							for (uint32_t range = 0; range < u16(coverage + 2); range++)
-							{
-								const uint64_t record = coverage + 4 + 6ull * range;
-								if (u16(record) <= u16(record + 2))
-									maxCoverageIndex = std::max<int64_t>(maxCoverageIndex, static_cast<int64_t>(u16(record + 4)) + u16(record + 2) - u16(record));
-							}
-						}
-						if (maxCoverageIndex < 0)
-							continue; // No glyph is covered: stb_truetype skips the subtable
-
-						const uint16_t format = u16(subtable);
-						if (format != 1 && format != 2)
-							continue;
-						if (!has(subtable, 8))
-							return fail("GPOS pair subtable exceeds the table");
-						if (u16(subtable + 4) != 4 || u16(subtable + 6) != 0)
-							continue; // Value formats stb_truetype does not read
-						if (format == 1)
-						{
-							// A covered glyph's pair set offset, and the value count it points to, are read before the glyph's
-							// coverage index is checked against the pair set count.
-							if (!has(subtable, 10))
-								return fail("GPOS pair subtable exceeds the table");
-							const uint32_t pairSetCount = u16(subtable + 8);
-							const uint64_t offsetsRead = std::max<uint64_t>(pairSetCount, static_cast<uint64_t>(maxCoverageIndex + 1));
-							if (!has(subtable + 10, 2 * offsetsRead))
-								return fail("GPOS pair sets exceed the table");
-							for (uint64_t pairSet = 0; pairSet < offsetsRead; pairSet++)
-							{
-								const uint64_t values = subtable + u16(subtable + 10 + 2 * pairSet);
-								if (!has(values, 2) || (pairSet < pairSetCount && !has(values + 2, 4ull * u16(values))))
-									return fail("GPOS pair values exceed the table");
-							}
-						}
-						else
-						{
-							if (!has(subtable, 16))
-								return fail("GPOS class pair subtable exceeds the table");
-							for (uint64_t classDefinition : { subtable + u16(subtable + 8), subtable + u16(subtable + 10) })
-							{
-								if (!has(classDefinition, 2))
-									return fail("GPOS class definition exceeds the table");
-								const uint16_t classFormat = u16(classDefinition);
-								if (classFormat == 1 && (!has(classDefinition, 6) || !has(classDefinition + 6, 2ull * u16(classDefinition + 4))))
-									return fail("GPOS class definition exceeds the table");
-								if (classFormat == 2 && (!has(classDefinition, 4) || !has(classDefinition + 4, 6ull * u16(classDefinition + 2))))
-									return fail("GPOS class definition exceeds the table");
-							}
-							if (!has(subtable + 16, 2ull * u16(subtable + 12) * u16(subtable + 14)))
-								return fail("GPOS class pair values exceed the table");
-						}
+						const uint64_t subtable = lookupTable + GposU16(lookupTable + 6 + 2ull * index);
+						if (validated.insert(subtable).second && !ValidatePairSubtable(subtable, work, outIssue))
+							return false;
 					}
 				}
 				return true;
 			}
+
+			bool ValidatePairSubtable(uint64_t subtable, uint64_t& work, std::string& outIssue)
+			{
+				auto fail = [&](const char* issue)
+				{
+					outIssue = issue;
+					return false;
+				};
+				// Steps of the loops below, so that crafted tables cannot make validation run without bound.
+				auto spend = [&](uint64_t steps)
+				{
+					work += steps;
+					return work <= FontLimits::c_MaxKerningValidationWork;
+				};
+				const char* tooLarge = "GPOS kerning data is too large to validate";
+				if (!spend(1))
+					return fail(tooLarge);
+				if (!GposHas(subtable, 4))
+					return fail("GPOS pair subtable exceeds the table");
+
+				// The coverage table is searched before the subtable's format is looked at.
+				const uint64_t coverage = subtable + GposU16(subtable + 2);
+				int64_t maxCoverageIndex = -1;
+				if (!GposHas(coverage, 2))
+					return fail("GPOS coverage exceeds the table");
+				const uint16_t coverageFormat = GposU16(coverage);
+				if (coverageFormat == 1)
+				{
+					if (!GposHas(coverage, 4) || !GposHas(coverage + 4, 2ull * GposU16(coverage + 2)))
+						return fail("GPOS coverage exceeds the table");
+					maxCoverageIndex = static_cast<int64_t>(GposU16(coverage + 2)) - 1;
+				}
+				else if (coverageFormat == 2)
+				{
+					const uint32_t rangeCount = GposU16(coverage + 2);
+					if (!GposHas(coverage, 4) || !GposHas(coverage + 4, 6ull * rangeCount))
+						return fail("GPOS coverage exceeds the table");
+					if (!spend(rangeCount))
+						return fail(tooLarge);
+					for (uint32_t range = 0; range < rangeCount; range++)
+					{
+						const uint64_t record = coverage + 4 + 6ull * range;
+						if (GposU16(record) <= GposU16(record + 2))
+							maxCoverageIndex = std::max<int64_t>(maxCoverageIndex, static_cast<int64_t>(GposU16(record + 4)) + GposU16(record + 2) - GposU16(record));
+					}
+				}
+				if (maxCoverageIndex < 0)
+					return true; // No glyph is covered: stb_truetype skips the subtable
+
+				const uint16_t format = GposU16(subtable);
+				if (format != 1 && format != 2)
+					return true;
+				if (!GposHas(subtable, 8))
+					return fail("GPOS pair subtable exceeds the table");
+				if (GposU16(subtable + 4) != 4 || GposU16(subtable + 6) != 0)
+					return true; // Value formats stb_truetype does not read
+				if (format == 1)
+				{
+					// A covered glyph's pair set offset, and the value count it points to, are read before the glyph's
+					// coverage index is checked against the pair set count.
+					if (!GposHas(subtable, 10))
+						return fail("GPOS pair subtable exceeds the table");
+					const uint32_t pairSetCount = GposU16(subtable + 8);
+					const uint64_t offsetsRead = std::max<uint64_t>(pairSetCount, static_cast<uint64_t>(maxCoverageIndex + 1));
+					if (!GposHas(subtable + 10, 2 * offsetsRead))
+						return fail("GPOS pair sets exceed the table");
+					if (!spend(offsetsRead))
+						return fail(tooLarge);
+					for (uint64_t pairSet = 0; pairSet < offsetsRead; pairSet++)
+					{
+						const uint64_t values = subtable + GposU16(subtable + 10 + 2 * pairSet);
+						if (!GposHas(values, 2) || (pairSet < pairSetCount && !GposHas(values + 2, 4ull * GposU16(values))))
+							return fail("GPOS pair values exceed the table");
+					}
+					return true;
+				}
+
+				if (!GposHas(subtable, 16))
+					return fail("GPOS class pair subtable exceeds the table");
+				for (uint64_t classDefinition : { subtable + GposU16(subtable + 8), subtable + GposU16(subtable + 10) })
+				{
+					if (!GposHas(classDefinition, 2))
+						return fail("GPOS class definition exceeds the table");
+					const uint16_t classFormat = GposU16(classDefinition);
+					if (classFormat == 1 && (!GposHas(classDefinition, 6) || !GposHas(classDefinition + 6, 2ull * GposU16(classDefinition + 4))))
+						return fail("GPOS class definition exceeds the table");
+					if (classFormat == 2 && (!GposHas(classDefinition, 4) || !GposHas(classDefinition + 4, 6ull * GposU16(classDefinition + 2))))
+						return fail("GPOS class definition exceeds the table");
+				}
+				if (!GposHas(subtable + 16, 2ull * GposU16(subtable + 12) * GposU16(subtable + 14)))
+					return fail("GPOS class pair values exceed the table");
+				return true;
+			}
+
+			bool GposHas(uint64_t offset, uint64_t size) const { return m_Gpos.Has(offset, size); }
+			uint16_t GposU16(uint64_t offset) const { return U16(m_Gpos.Offset + offset); }
 		private:
 			std::span<const uint8_t> m_Data;
 			TrueTypeFontFacts& m_Facts;
@@ -700,6 +765,7 @@ namespace Strata
 			TableRange m_Gpos;
 			uint32_t m_LocaFormat = 0;
 			uint32_t m_GlyphCount = 0;
+			uint64_t m_TotalPoints = 0; // Of the simple glyphs validated so far
 			std::vector<uint64_t> m_GlyphOffsets; // Relative to glyf; one more than glyphs
 			std::vector<GlyphSummary> m_Glyphs;
 			std::vector<uint16_t> m_ContourEnds; // Scratch

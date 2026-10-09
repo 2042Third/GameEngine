@@ -152,6 +152,71 @@ namespace
 		return FontPatcher(Font::GetDefault()->GetData());
 	}
 
+	// The font with one of its tables replaced by `table`, appended to the file.
+	std::vector<uint8_t> ReplaceTable(const FontPatcher& font, const std::string& tag, const std::vector<uint8_t>& table)
+	{
+		FontPatcher patched = font;
+		patched.Data.resize((patched.Data.size() + 3) & ~size_t(3), 0);
+		patched.SetU32(patched.Record(tag) + 8, static_cast<uint32_t>(patched.Data.size()));
+		patched.SetU32(patched.Record(tag) + 12, static_cast<uint32_t>(table.size()));
+		patched.Data.insert(patched.Data.end(), table.begin(), table.end());
+		return patched.Data;
+	}
+
+	void Write16(std::vector<uint8_t>& data, size_t offset, uint32_t value)
+	{
+		data[offset] = static_cast<uint8_t>(value >> 8);
+		data[offset + 1] = static_cast<uint8_t>(value);
+	}
+
+	void Write32(std::vector<uint8_t>& data, size_t offset, uint32_t value)
+	{
+		Write16(data, offset, value >> 16);
+		Write16(data, offset + 2, value & 0xFFFF);
+	}
+
+	// A GPOS table whose lookup list points `lookups` times at one pair adjustment lookup, whose subtable list points
+	// `subtables` times at one subtable. Its coverage has `ranges` ranges, one of them `first`, the others glyphs the font
+	// lacks; its one pair set kerns `first` followed by `second` by `advance` font units.
+	std::vector<uint8_t> SharedPairPositioning(uint32_t lookups, uint32_t subtables, uint32_t ranges, uint32_t first, uint32_t second, int16_t advance)
+	{
+		const size_t lookupList = 10;
+		const size_t lookup = lookupList + 2 + 2 * static_cast<size_t>(lookups);
+		const size_t subtable = lookup + 6 + 2 * static_cast<size_t>(subtables);
+		const size_t coverage = subtable + 14;
+		const size_t pairSet = coverage + 4 + 6 * static_cast<size_t>(ranges);
+		REQUIRE(lookup - lookupList <= 0xFFFF);
+		REQUIRE(subtable - lookup <= 0xFFFF);
+		REQUIRE(pairSet - subtable <= 0xFFFF);
+		std::vector<uint8_t> gpos(pairSet + 6, 0);
+		Write16(gpos, 0, 1); // Version 1.0
+		Write16(gpos, 8, static_cast<uint32_t>(lookupList));
+		Write16(gpos, lookupList, lookups);
+		for (size_t index = 0; index < lookups; index++)
+			Write16(gpos, lookupList + 2 + 2 * index, static_cast<uint32_t>(lookup - lookupList));
+		Write16(gpos, lookup, 2); // Pair adjustment
+		Write16(gpos, lookup + 4, subtables);
+		for (size_t index = 0; index < subtables; index++)
+			Write16(gpos, lookup + 6 + 2 * index, static_cast<uint32_t>(subtable - lookup));
+		Write16(gpos, subtable, 1);      // Pairs of glyphs
+		Write16(gpos, subtable + 2, static_cast<uint32_t>(coverage - subtable));
+		Write16(gpos, subtable + 4, 4);  // X advance of the first glyph only
+		Write16(gpos, subtable + 8, 1);  // One pair set
+		Write16(gpos, subtable + 10, static_cast<uint32_t>(pairSet - subtable));
+		Write16(gpos, coverage, 2);      // Glyph ranges, sorted
+		Write16(gpos, coverage + 2, ranges);
+		for (size_t range = 0; range < ranges; range++)
+		{
+			const uint32_t glyph = range == 0 ? first : 60000 + static_cast<uint32_t>(range);
+			Write16(gpos, coverage + 4 + 6 * range, glyph);
+			Write16(gpos, coverage + 6 + 6 * range, glyph);
+		}
+		Write16(gpos, pairSet, 1);
+		Write16(gpos, pairSet + 2, second);
+		Write16(gpos, pairSet + 4, static_cast<uint16_t>(advance));
+		return gpos;
+	}
+
 	// Font::Create must reject the bytes, with an error containing `reason`.
 	void CheckRejected(std::vector<uint8_t> data, const std::string& reason)
 	{
@@ -204,12 +269,13 @@ TEST_SUITE("Renderer.Font")
 			Scope<FontAtlas> atlas = FontAtlas::Create(font, &error);
 			REQUIRE_MESSAGE(atlas, error);
 			CHECK(atlas->GetGlyph('A').Visible);
+			CHECK(font->HasUsableKerning());
 		}
 
 		const Ref<Font>& roboto = Font::GetDefault();
 		CHECK(roboto->HasUsableKerning());
 		CHECK(roboto->GetFontOffset() == 0);
-		CHECK(roboto->GetGlyphPointCount(roboto->GetGlyphCount()) == 0); // Out of range
+		CHECK(roboto->GetGlyphShape(roboto->GetGlyphCount()).Vertices == 0); // Out of range
 	}
 
 	TEST_CASE("Font collections use their first font")
@@ -314,13 +380,38 @@ TEST_SUITE("Renderer.Font")
 		FontPatcher segments = DefaultFont();
 		format4(segments);
 		std::string error;
-		CHECK_MESSAGE(Font::Create(segments.Data, &error), error);
-		CheckRejected(patched([&](FontPatcher& font)
+		Ref<Font> segmentFont = Font::Create(segments.Data, &error);
+		REQUIRE_MESSAGE(segmentFont, error);
+		CHECK(segmentFont->GetData() == segments.Data);
+		Scope<FontAtlas> segmentAtlas = FontAtlas::Create(segmentFont);
+		REQUIRE(segmentAtlas);
+		segmentAtlas->SetRasterBudget({ 0, 0 }); // Glyph lookups only
+
+		// Inconsistent binary search parameters (stb_truetype would search outside the segments) are corrected in the
+		// font's copy: characters map as with the right ones.
+		const size_t subtable = segments.SelectedCmapSubtable();
+		const uint16_t searchRange = segments.U16(subtable + 8);
+		const uint16_t entrySelector = segments.U16(subtable + 10);
+		const uint16_t rangeShift = segments.U16(subtable + 12);
+		for (const auto& [field, value] : { std::pair<size_t, uint16_t> { 8, 0xFFFE }, { 10, static_cast<uint16_t>(entrySelector + 1) }, { 10, 15 }, { 12, 0xFFFE } })
 		{
-			format4(font);
-			const size_t subtable = font.SelectedCmapSubtable();
-			font.SetU16(subtable + 10, static_cast<uint16_t>(font.U16(subtable + 10) + 1)); // entrySelector
-		}), "search parameters");
+			CAPTURE(field);
+			FontPatcher inconsistent = segments;
+			inconsistent.SetU16(subtable + field, value);
+			Ref<Font> corrected = Font::Create(inconsistent.Data, &error);
+			REQUIRE_MESSAGE(corrected, error);
+			const FontPatcher stored(corrected->GetData());
+			CHECK(stored.U16(subtable + 8) == searchRange);
+			CHECK(stored.U16(subtable + 10) == entrySelector);
+			CHECK(stored.U16(subtable + 12) == rangeShift);
+			Scope<FontAtlas> atlas = FontAtlas::Create(corrected);
+			REQUIRE(atlas);
+			atlas->SetRasterBudget({ 0, 0 });
+			bool sameGlyphs = true;
+			for (uint32_t codepoint = 0; codepoint < 0x3000; codepoint++)
+				sameGlyphs = sameGlyphs && atlas->GetGlyph(codepoint).GlyphIndex == segmentAtlas->GetGlyph(codepoint).GlyphIndex;
+			CHECK(sameGlyphs);
+		}
 		CheckRejected(patched([&](FontPatcher& font)
 		{
 			format4(font);
@@ -458,6 +549,110 @@ TEST_SUITE("Renderer.Font")
 		}), "shorter than its header");
 	}
 
+	TEST_CASE("Fonts with more outline points than the limit are rejected")
+	{
+		// 300 glyphs of 65535 points, two flag bytes per 256 points (on the curve, repeated, coordinates unchanged):
+		// almost 20 million points in 160 KB.
+		FontPatcher font = DefaultFont();
+		constexpr uint32_t c_LargeGlyphs = 300;
+		std::vector<uint8_t> glyph(14 + 512, 0);
+		Write16(glyph, 0, 1);      // One contour
+		Write16(glyph, 10, 65534); // Ending at point 65534; no instructions
+		for (size_t flag = 0; flag < 256; flag++)
+		{
+			glyph[14 + 2 * flag] = 0x39;
+			glyph[15 + 2 * flag] = 255;
+		}
+		std::vector<uint8_t> glyf;
+		std::vector<uint8_t> loca(4 * (static_cast<size_t>(font.GlyphCount()) + 1), 0);
+		for (uint32_t index = 0; index <= font.GlyphCount(); index++)
+		{
+			Write32(loca, 4 * static_cast<size_t>(index), static_cast<uint32_t>(glyf.size()));
+			if (index < c_LargeGlyphs)
+				glyf.insert(glyf.end(), glyph.begin(), glyph.end());
+		}
+		font.SetU16(font.Table("head") + 50, 1); // Long glyph offsets
+		const std::vector<uint8_t> data = ReplaceTable(FontPatcher(ReplaceTable(font, "glyf", glyf)), "loca", loca);
+		CHECK(data.size() < 1024 * 1024);
+		CheckRejected(data, "outline points");
+	}
+
+	TEST_CASE("Assembling composite glyphs counts toward their rasterization cost")
+	{
+		// A character's glyph replaced by a composite of 256 copies of the font's largest simple glyph, with a tiny box: few
+		// texels, but stb_truetype copies the vertices gathered so far for each component (quadratic in the component count).
+		FontPatcher font = DefaultFont();
+		const Ref<Font>& roboto = Font::GetDefault();
+		Scope<FontAtlas> reference = FontAtlas::Create(roboto);
+		REQUIRE(reference);
+		uint32_t largest = 0;
+		for (uint32_t glyph = 0; glyph < roboto->GetGlyphCount(); glyph++)
+		{
+			if (font.Contours(glyph) > 0 && roboto->GetGlyphShape(glyph).Vertices > roboto->GetGlyphShape(largest).Vertices)
+				largest = glyph;
+		}
+		// A character whose glyph no other glyph uses as a component (that one would have more than 256 components).
+		std::vector<bool> used(font.GlyphCount(), false);
+		used[largest] = true;
+		for (uint32_t glyph : font.GlyphsWhere(true))
+		{
+			for (size_t component : font.Components(glyph))
+				used[font.U16(component + 2)] = true;
+		}
+		uint32_t character = '!';
+		while (character < 0x7F && used[reference->GetGlyph(character).GlyphIndex])
+			character++;
+		REQUIRE(character < 0x7F);
+		const uint32_t target = reference->GetGlyph(character).GlyphIndex;
+		constexpr uint32_t c_Components = 256;
+		std::vector<uint8_t> composite(10 + 6 * c_Components, 0);
+		Write16(composite, 0, 0xFFFF); // Composite
+		Write16(composite, 6, 10);     // Box of 10 by 10 font units
+		Write16(composite, 8, 10);
+		for (uint32_t component = 0; component < c_Components; component++)
+		{
+			const size_t record = 10 + 6 * static_cast<size_t>(component);
+			Write16(composite, record, component + 1 < c_Components ? 0x0022 : 0x0002); // Offsets as bytes, more components
+			Write16(composite, record + 2, largest);
+		}
+
+		std::vector<uint8_t> glyf;
+		std::vector<uint8_t> loca(4 * (static_cast<size_t>(font.GlyphCount()) + 1), 0);
+		for (uint32_t index = 0; index <= font.GlyphCount(); index++)
+		{
+			Write32(loca, 4 * static_cast<size_t>(index), static_cast<uint32_t>(glyf.size()));
+			if (index == target)
+			{
+				glyf.insert(glyf.end(), composite.begin(), composite.end());
+			}
+			else if (index < font.GlyphCount())
+			{
+				const auto [start, end] = font.Glyph(index);
+				glyf.insert(glyf.end(), font.Data.begin() + static_cast<std::ptrdiff_t>(start), font.Data.begin() + static_cast<std::ptrdiff_t>(end));
+			}
+		}
+		font.SetU16(font.Table("head") + 50, 1); // Long glyph offsets
+		std::string error;
+		Ref<Font> loaded = Font::Create(ReplaceTable(FontPatcher(ReplaceTable(font, "glyf", glyf)), "loca", loca), &error);
+		REQUIRE_MESSAGE(loaded, error);
+
+		const uint64_t vertices = roboto->GetGlyphShape(largest).Vertices;
+		const GlyphShapeCost& shape = loaded->GetGlyphShape(target);
+		CHECK(shape.Vertices == c_Components * vertices);
+		// Each component is transformed (its vertices) and copied with everything before it.
+		CHECK(shape.CompositeCopies == 2 * c_Components * vertices + vertices * c_Components * (c_Components - 1) / 2);
+		CHECK(FontAtlas::GetRasterCost(glm::uvec2(16), shape) > FontAtlas::c_MaxGlyphRasterCost);
+
+		QuietLog quiet;
+		Scope<FontAtlas> atlas = FontAtlas::Create(loaded);
+		REQUIRE(atlas);
+		const GlyphInfo& glyph = atlas->GetGlyph(character);
+		CHECK(glyph.GlyphIndex == target);
+		CHECK_FALSE(glyph.Visible);
+		CHECK_FALSE(glyph.Pending);
+		CHECK(atlas->GetGlyphByIndex(largest).Visible);
+	}
+
 	TEST_CASE("Glyphs too large to rasterize are skipped instead of allocated")
 	{
 		// The reviewer's heap overrun: few units per em and huge glyph boxes make the distance field gigantic.
@@ -545,6 +740,96 @@ TEST_SUITE("Renderer.Font")
 		CHECK(kernAtlas->GetKerning(kernAtlas->GetGlyph('A'), kernAtlas->GetGlyph('V')) < 0.0f);
 		kern.SetU16(kern.Table("kern") + 10, 0xFFFF);
 		checkKerningDisabled(kern.Data);
+	}
+
+	TEST_CASE("Kerning that stb_truetype would search or validate without bound is disabled")
+	{
+		const FontPatcher font = DefaultFont();
+		const float unitsPerEm = static_cast<float>(font.U16(font.Table("head") + 18));
+		Scope<FontAtlas> reference = FontAtlas::Create(Font::GetDefault());
+		REQUIRE(reference);
+		const uint32_t a = reference->GetGlyph('A').GlyphIndex;
+		const uint32_t v = reference->GetGlyph('V').GlyphIndex;
+		QuietLog quiet;
+
+		// Shared offsets are fine while the search stays short, and stb_truetype finds the pair through them.
+		std::vector<uint8_t> shared = ReplaceTable(font, "GPOS", SharedPairPositioning(8, 16, 20, a, v, -200));
+		TrueTypeFontFacts facts;
+		std::string error;
+		REQUIRE_MESSAGE(ValidateTrueTypeFont(shared, facts, error), error);
+		CHECK(facts.KerningUsable);
+		CHECK(facts.KerningLookupVisits == 8 + 8 * 16);
+		Ref<Font> loaded = Font::Create(std::move(shared), &error);
+		REQUIRE_MESSAGE(loaded, error);
+		Scope<FontAtlas> atlas = FontAtlas::Create(loaded);
+		REQUIRE(atlas);
+		CHECK(atlas->GetKerning(atlas->GetGlyph('A'), atlas->GetGlyph('V')) == doctest::Approx(-200.0f / unitsPerEm));
+		CHECK(atlas->GetKerning(atlas->GetGlyph('V'), atlas->GetGlyph('A')) == 0.0f);
+
+		// Every lookup offset, or every subtable offset, pointing at one target: stb_truetype would search 30000 lookups,
+		// or 30000 subtables of 2000 coverage ranges, for every glyph pair (and validating each visit took billions of
+		// steps). Validation stops at once and the font has no kerning.
+		struct Case
+		{
+			uint32_t Lookups;
+			uint32_t Subtables;
+			const char* Reason;
+		};
+		for (const Case& sharedCase : { Case { 30000, 30000, "too many lookups" }, Case { 1, 30000, "too many pair adjustment subtables" } })
+		{
+			CAPTURE(sharedCase.Reason);
+			std::vector<uint8_t> data = ReplaceTable(font, "GPOS", SharedPairPositioning(sharedCase.Lookups, sharedCase.Subtables, 2000, a, v, -200));
+			REQUIRE_MESSAGE(ValidateTrueTypeFont(data, facts, error), error);
+			CHECK_FALSE(facts.KerningUsable);
+			CHECK(facts.KerningIssue.find(sharedCase.Reason) != std::string::npos);
+			Ref<Font> unbounded = Font::Create(std::move(data), &error);
+			REQUIRE_MESSAGE(unbounded, error);
+			CHECK_FALSE(unbounded->HasUsableKerning());
+			Scope<FontAtlas> unboundedAtlas = FontAtlas::Create(unbounded);
+			REQUIRE(unboundedAtlas);
+			CHECK(unboundedAtlas->GetKerning(unboundedAtlas->GetGlyph('A'), unboundedAtlas->GetGlyph('V')) == 0.0f);
+		}
+
+		// 200 distinct subtables (a short search) that each cover every glyph, so each has 131071 pair set offsets to
+		// check: validation stops when its budget is spent.
+		constexpr uint32_t c_Lookups = 200;
+		const size_t lookupList = 10;
+		const size_t firstLookup = lookupList + 2 + 2 * c_Lookups;
+		const size_t firstSubtable = firstLookup + 8 * c_Lookups;
+		const size_t coverage = firstSubtable + 16 * c_Lookups;
+		std::vector<uint8_t> gpos(coverage + 10 + 2 * 131071 + 0x10000, 0);
+		Write16(gpos, 0, 1);
+		Write16(gpos, 8, static_cast<uint32_t>(lookupList));
+		Write16(gpos, lookupList, c_Lookups);
+		for (size_t index = 0; index < c_Lookups; index++)
+		{
+			const size_t lookup = firstLookup + 8 * index;
+			const size_t subtable = firstSubtable + 16 * index;
+			Write16(gpos, lookupList + 2 + 2 * index, static_cast<uint32_t>(lookup - lookupList));
+			Write16(gpos, lookup, 2);
+			Write16(gpos, lookup + 4, 1);
+			Write16(gpos, lookup + 6, static_cast<uint32_t>(subtable - lookup));
+			Write16(gpos, subtable, 1);
+			Write16(gpos, subtable + 2, static_cast<uint32_t>(coverage - subtable));
+			Write16(gpos, subtable + 4, 4);
+		}
+		Write16(gpos, coverage, 2);
+		Write16(gpos, coverage + 2, 1);
+		Write16(gpos, coverage + 6, 0xFFFF); // Glyphs 0 to 65535
+		Write16(gpos, coverage + 8, 0xFFFF); // From coverage index 65535
+		REQUIRE_MESSAGE(ValidateTrueTypeFont(ReplaceTable(font, "GPOS", gpos), facts, error), error);
+		CHECK(facts.KerningLookupVisits == 2 * c_Lookups);
+		CHECK_FALSE(facts.KerningUsable);
+		CHECK(facts.KerningIssue.find("too large to validate") != std::string::npos);
+
+		// The vendored fonts search a few lookups.
+		for (const char* path : c_VendoredTrueTypeFonts)
+		{
+			CAPTURE(path);
+			REQUIRE(ValidateTrueTypeFont(Tests::ReadSourceFile(path), facts, error));
+			CHECK(facts.KerningUsable);
+			CHECK(facts.KerningLookupVisits <= 16);
+		}
 	}
 
 	TEST_CASE("Fonts truncated at any table boundary are rejected")

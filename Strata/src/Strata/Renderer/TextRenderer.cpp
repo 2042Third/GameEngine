@@ -16,6 +16,9 @@
 namespace Strata
 {
 
+	// A glyph may overdraw the frame budget by its own cost: keep that within a few budgets.
+	static_assert(FontAtlas::c_MaxGlyphRasterCost <= 4 * TextRenderer::c_FrameRasterBudget.Cost);
+
 	TextRenderer::TextRenderer(const std::string& debugName, nvrhi::IBuffer* frameConstants)
 		: m_DebugName(debugName), m_Errors("TextRenderer '" + debugName + "'"), m_FrameConstants(frameConstants)
 	{

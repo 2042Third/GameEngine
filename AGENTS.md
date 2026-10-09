@@ -365,11 +365,19 @@ Building and loading scripts:
   array pages, the least recently used ones (never those of the current frame) are evicted, and only
   changed rows are uploaded. New glyphs are rasterized within `TextRenderer::c_FrameRasterBudget` per
   frame; the rest are drawn on later frames (`SceneRendererStats::PendingTextGlyphs`), so GPU tests of
-  text with many distinct glyphs render until no glyphs are pending.
+  text with many distinct glyphs render until no glyphs are pending. A glyph whose rasterization would
+  cost more than `FontAtlas::c_MaxGlyphRasterCost` (four frame budgets; `FontAtlas::GetRasterCost`
+  counts texels times vertices, curves and composite assembly) is rasterized at half or a quarter of
+  the resolution, and not drawn beyond that.
 - Font files are untrusted input and stb_truetype does no bounds checking: `Font::Create` validates
   everything stb_truetype can read (`Renderer/FontValidation.h`), rejects malformed fonts and fonts with
-  CFF outlines (OTTO), and disables kerning that is not fully bounded. Before calling another
-  stb_truetype function, extend the validator to cover what it reads, with crafted-font tests.
+  CFF outlines (OTTO), and disables kerning that is not fully bounded (in what stb_truetype reads,
+  in the GPOS lookups it searches per glyph pair, and in the work to validate it). Inconsistent
+  format 4 character map search parameters, which stb_truetype trusts, are corrected in the font's
+  copy (`Font::GetData`) rather than rejected. Bound time as
+  well as reads: offsets in font tables may share targets, so count work with repeats. Before
+  calling another stb_truetype function, extend the validator to cover what it reads, with
+  crafted-font tests.
 - GPU tests of the scene renderer share `StrataTests/src/Renderer/SceneRendererTestUtils.h`. Verify that a
   new regression test fails without its fix before relying on it.
 

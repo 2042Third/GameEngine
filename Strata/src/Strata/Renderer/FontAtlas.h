@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Strata/Core/Base.h"
+#include "Strata/Renderer/FontValidation.h"
 
 #include <glm/glm.hpp>
 #include <nvrhi/nvrhi.h>
@@ -45,7 +46,7 @@ namespace Strata
 	struct GlyphRasterBudget
 	{
 		uint32_t Glyphs = std::numeric_limits<uint32_t>::max();
-		uint64_t Cost = std::numeric_limits<uint64_t>::max(); // Texels times outline points: the rasterization time is about proportional
+		uint64_t Cost = std::numeric_limits<uint64_t>::max(); // See FontAtlas::GetRasterCost
 	};
 
 	struct FontAtlasSpecification
@@ -80,13 +81,21 @@ namespace Strata
 		static constexpr uint32_t c_CellSize = 42;
 		static constexpr uint32_t c_CellsPerRow = c_PageSize / c_CellSize;
 		static constexpr uint32_t c_UploadBandRows = 64; // Changed rows are uploaded in bands of this height
-		// Glyphs larger than this (texels, padding included) or costlier to rasterize than c_MaxGlyphRasterCost (texels
-		// times outline points; real glyphs stay far below, a Latin letter costs about 20 thousand) are not drawn: a
-		// malformed font cannot make the rasterizer allocate or compute without bound.
+		// Rasterization cost (GetRasterCost) is about proportional to time: about 4 ns per unit in an optimized build on a
+		// desktop CPU, up to twice that for curve-heavy outlines such as emoji. Glyphs larger than c_MaxGlyphTexels (padding
+		// included) or costlier than c_MaxGlyphRasterCost (four times TextRenderer's frame budget) are rasterized at half
+		// or a quarter of the resolution, and beyond that not drawn: a malformed font cannot make the rasterizer allocate
+		// or compute without bound. Among the vendored fonts only a few dozen emoji are drawn at reduced resolution.
 		static constexpr uint64_t c_MaxGlyphTexels = 192;
-		static constexpr uint64_t c_MaxGlyphRasterCost = 8ull * 1024 * 1024;
-		// BeginFrame drops cached glyphs that are not in the atlas, and the code point cache, beyond this many entries.
+		static constexpr uint64_t c_MaxGlyphRasterCost = 2 * 1024 * 1024;
+		static constexpr uint32_t c_MaxResolutionReduction = 4;
+		static constexpr uint64_t c_CurveCostWeight = 2; // Extra cost of a curve vertex over a line vertex
+		// BeginFrame drops cached glyphs that are not in the atlas, and the code point cache, beyond this many entries; the
+		// kerning cache is cleared when it reaches it.
 		static constexpr size_t c_GlyphCacheLimit = 4096;
+
+		// The cost of rasterizing a glyph of `shape` into a distance field of `size` texels (see GlyphRasterBudget::Cost).
+		static uint64_t GetRasterCost(const glm::uvec2& size, const GlyphShapeCost& shape);
 
 		// Null (with an error) when the font data cannot be read.
 		static Scope<FontAtlas> Create(const Ref<Font>& font, std::string* outError = nullptr, const FontAtlasSpecification& specification = {});
@@ -109,8 +118,9 @@ namespace Strata
 		const GlyphInfo& GetGlyph(uint32_t codepoint);
 		// A glyph by its index in the font (out of range: the missing glyph).
 		const GlyphInfo& GetGlyphByIndex(uint32_t glyphIndex);
-		// Extra advance between two glyphs (kerning), in em units.
-		float GetKerning(const GlyphInfo& left, const GlyphInfo& right) const;
+		// Extra advance between two glyphs (kerning), in em units. Cached per glyph pair: stb_truetype searches the font's
+		// kerning tables on every call.
+		float GetKerning(const GlyphInfo& left, const GlyphInfo& right);
 
 		// Creates the GPU texture array or uploads what changed since the last upload. False when a texture cannot be
 		// created (the changes then stay pending).
@@ -120,6 +130,7 @@ namespace Strata
 		uint32_t GetPageCount() const { return static_cast<uint32_t>(m_Pages.size()); }
 		const std::vector<uint8_t>& GetPagePixels(uint32_t page) const; // c_PageSize squared texels, rows top to bottom
 		size_t GetCachedGlyphCount() const { return m_Glyphs.size(); }
+		size_t GetCachedKerningCount() const { return m_Kerning.size(); }
 		const FontAtlasStats& GetStats() const { return m_Stats; }
 	private:
 		static constexpr uint32_t c_FreeCell = std::numeric_limits<uint32_t>::max();
@@ -128,6 +139,7 @@ namespace Strata
 		{
 			GlyphInfo Info;
 			glm::uvec2 Size = glm::uvec2(0); // Distance field texels of a glyph with a shape
+			float Scale = 0.0f;              // Font units to texels: the atlas's, or reduced for costly glyphs
 			uint64_t Cost = 0;
 			uint64_t LastUsed = 0;           // Frame
 		};
@@ -168,6 +180,7 @@ namespace Strata
 		FontMetrics m_Metrics;
 
 		std::unordered_map<uint32_t, uint32_t> m_CodepointGlyphs; // Code point -> glyph index
+		std::unordered_map<uint32_t, float> m_Kerning;            // Glyph pair (left << 16 | right) -> kerning
 		std::unordered_map<uint32_t, GlyphEntry> m_Glyphs;        // Glyph index -> glyph
 		std::vector<Page> m_Pages;
 		uint64_t m_Frame = 0;

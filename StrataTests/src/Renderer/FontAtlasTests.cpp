@@ -225,4 +225,69 @@ TEST_SUITE("Renderer.FontAtlas")
 		CHECK(atlas->GetGlyphByIndex(pending.front()).Visible);
 		CHECK(atlas->GetStats().RasterizedGlyphs == rasterized + 2); // Not evicted, so not rasterized again
 	}
+
+	TEST_CASE("Kerning is looked up once per glyph pair, in a bounded cache")
+	{
+		Scope<FontAtlas> atlas = FontAtlas::Create(Font::GetDefault());
+		REQUIRE(atlas);
+		TextLayout layout;
+		LayoutText(*atlas, "AVAVAV", TextAlignment::Left, layout);
+		CHECK(atlas->GetCachedKerningCount() == 2); // AV and VA
+		const float kerning = atlas->GetKerning(atlas->GetGlyph('A'), atlas->GetGlyph('V'));
+		CHECK(kerning < 0.0f);
+		CHECK(atlas->GetCachedKerningCount() == 2);
+
+		// More pairs than the cache holds: it is cleared rather than grown, and answers stay the same.
+		GlyphInfo left;
+		GlyphInfo right;
+		for (left.GlyphIndex = 0; left.GlyphIndex < 100; left.GlyphIndex++)
+		{
+			for (right.GlyphIndex = 0; right.GlyphIndex < 100; right.GlyphIndex++)
+				atlas->GetKerning(left, right);
+		}
+		CHECK(atlas->GetCachedKerningCount() <= FontAtlas::c_GlyphCacheLimit);
+		CHECK(atlas->GetKerning(atlas->GetGlyph('A'), atlas->GetGlyph('V')) == kerning);
+	}
+
+	TEST_CASE("Glyphs costlier than the ceiling are rasterized at reduced resolution, within it")
+	{
+		// The resolution a glyph was rasterized at: its quad's size in atlas texels at full resolution over its texels.
+		auto reduction = [](const GlyphInfo& glyph) { return (glyph.PlaneMax.x - glyph.PlaneMin.x) * FontAtlas::c_GlyphEmSize / static_cast<float>(glyph.AtlasSize.x); };
+
+		// Text glyphs keep the full resolution.
+		const Ref<Font>& roboto = Font::GetDefault();
+		Scope<FontAtlas> atlas = FontAtlas::Create(roboto, nullptr, FontAtlasSpecification { 64 });
+		REQUIRE(atlas);
+		uint32_t drawn = 0;
+		for (uint32_t index = 0; index < roboto->GetGlyphCount(); index++)
+		{
+			const GlyphInfo& glyph = atlas->GetGlyphByIndex(index);
+			if (!glyph.Visible)
+				continue;
+			CAPTURE(index);
+			drawn++;
+			CHECK(reduction(glyph) == doctest::Approx(1.0f));
+			CHECK(FontAtlas::GetRasterCost(glyph.AtlasSize, roboto->GetGlyphShape(index)) <= FontAtlas::c_MaxGlyphRasterCost);
+		}
+		CHECK(drawn > 1000);
+
+		// Emoji with hundreds of curves would take 10 to 20 ms each at full resolution (one with 2675 vertices even more):
+		// they are drawn at half or a quarter of it, each within the ceiling.
+		std::string error;
+		const Ref<Font> emoji = Font::Create(Tests::ReadSourceFile("Strata/vendor/tracy/profiler/src/font/NotoEmoji-Regular.ttf"), &error);
+		REQUIRE_MESSAGE(emoji, error);
+		Scope<FontAtlas> emojiAtlas = FontAtlas::Create(emoji);
+		REQUIRE(emojiAtlas);
+		for (uint32_t index : { 261u, 483u, 715u, 1088u })
+		{
+			CAPTURE(index);
+			const GlyphInfo& glyph = emojiAtlas->GetGlyphByIndex(index);
+			REQUIRE(glyph.Visible);
+			CHECK(FontAtlas::GetRasterCost(glyph.AtlasSize, emoji->GetGlyphShape(index)) <= FontAtlas::c_MaxGlyphRasterCost);
+			const float reduced = reduction(glyph);
+			CHECK((reduced == doctest::Approx(2.0f) || reduced == doctest::Approx(4.0f)));
+			if (index == 715)
+				CHECK(reduced == doctest::Approx(4.0f));
+		}
+	}
 }

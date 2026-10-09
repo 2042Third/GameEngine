@@ -124,6 +124,13 @@ namespace Strata
 		return entry.Info;
 	}
 
+	uint64_t FontAtlas::GetRasterCost(const glm::uvec2& size, const GlyphShapeCost& shape)
+	{
+		// Every texel measures its distance to every vertex (curves cost more), after composite glyphs were assembled.
+		const uint64_t vertexWork = static_cast<uint64_t>(shape.Vertices) + c_CurveCostWeight * static_cast<uint64_t>(shape.Curves);
+		return static_cast<uint64_t>(size.x) * size.y * vertexWork + shape.CompositeCopies;
+	}
+
 	FontAtlas::GlyphEntry FontAtlas::DescribeGlyph(uint32_t glyphIndex) const
 	{
 		const stbtt_fontinfo* info = &m_Info->Info;
@@ -135,31 +142,47 @@ namespace Strata
 		entry.Info.Advance = static_cast<float>(advance) * m_EmScale;
 
 		// The rasterizer allocates and visits every texel of the glyph's box (from the glyph's header, which a malformed font
-		// can make huge) once per outline vertex: check both before rasterizing.
-		const uint32_t points = m_Font->GetGlyphPointCount(glyphIndex);
-		int boxX0 = 0;
-		int boxY0 = 0;
-		int boxX1 = 0;
-		int boxY1 = 0;
-		stbtt_GetGlyphBitmapBox(info, static_cast<int>(glyphIndex), m_Scale, m_Scale, &boxX0, &boxY0, &boxX1, &boxY1);
-		if (points == 0 || boxX1 <= boxX0 || boxY1 <= boxY0)
+		// can make huge) for every outline vertex: check both before rasterizing. Glyphs too large or costly at the atlas
+		// resolution are rasterized at half or a quarter of it (as sharp at small sizes, softer when shown large); beyond
+		// that they are not drawn.
+		const GlyphShapeCost& shape = m_Font->GetGlyphShape(glyphIndex);
+		if (shape.Vertices == 0)
 			return entry; // Nothing to draw (whitespace)
-		const uint64_t width = static_cast<uint64_t>(static_cast<int64_t>(boxX1) - boxX0) + 2 * c_DistancePadding;
-		const uint64_t height = static_cast<uint64_t>(static_cast<int64_t>(boxY1) - boxY0) + 2 * c_DistancePadding;
-		if (width > c_MaxGlyphTexels || height > c_MaxGlyphTexels || width * height * points > c_MaxGlyphRasterCost)
+		uint64_t width = 0;
+		uint64_t height = 0;
+		uint64_t cost = 0;
+		for (uint32_t reduction = 1; reduction <= c_MaxResolutionReduction; reduction *= 2)
 		{
-			ST_CORE_WARN("Font: glyph {} is too large or complex to draw ({}x{} texels, {} points)", glyphIndex, width, height, points);
+			const float scale = m_Scale / static_cast<float>(reduction);
+			int boxX0 = 0;
+			int boxY0 = 0;
+			int boxX1 = 0;
+			int boxY1 = 0;
+			stbtt_GetGlyphBitmapBox(info, static_cast<int>(glyphIndex), scale, scale, &boxX0, &boxY0, &boxX1, &boxY1);
+			if (boxX1 <= boxX0 || boxY1 <= boxY0)
+				return entry; // An empty box: nothing to draw
+			width = static_cast<uint64_t>(static_cast<int64_t>(boxX1) - boxX0) + 2 * c_DistancePadding;
+			height = static_cast<uint64_t>(static_cast<int64_t>(boxY1) - boxY0) + 2 * c_DistancePadding;
+			if (width > c_MaxGlyphTexels || height > c_MaxGlyphTexels)
+				continue;
+			cost = GetRasterCost(glm::uvec2(static_cast<uint32_t>(width), static_cast<uint32_t>(height)), shape);
+			if (cost > c_MaxGlyphRasterCost)
+				continue;
+
+			// The distance field covers the box plus the padding; its offsets are in texels with +Y down from the pen.
+			const float texelsPerEm = c_GlyphEmSize / static_cast<float>(reduction);
+			const float left = static_cast<float>(boxX0 - c_DistancePadding);
+			const float top = static_cast<float>(boxY0 - c_DistancePadding);
+			entry.Info.Pending = true;
+			entry.Info.PlaneMin = glm::vec2(left, -(top + static_cast<float>(height))) / texelsPerEm;
+			entry.Info.PlaneMax = glm::vec2(left + static_cast<float>(width), -top) / texelsPerEm;
+			entry.Size = glm::uvec2(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+			entry.Scale = scale;
+			entry.Cost = cost;
 			return entry;
 		}
-
-		// The distance field covers the box plus the padding; its offsets are in texels with +Y down from the pen.
-		const float left = static_cast<float>(boxX0 - c_DistancePadding);
-		const float top = static_cast<float>(boxY0 - c_DistancePadding);
-		entry.Info.Pending = true;
-		entry.Info.PlaneMin = glm::vec2(left, -(top + static_cast<float>(height))) / c_GlyphEmSize;
-		entry.Info.PlaneMax = glm::vec2(left + static_cast<float>(width), -top) / c_GlyphEmSize;
-		entry.Size = glm::uvec2(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
-		entry.Cost = width * height * points;
+		ST_CORE_WARN("Font: glyph {} is too large or complex to draw ({} vertices, {} composite copies, {}x{} texels at a quarter of the resolution)",
+			glyphIndex, shape.Vertices, shape.CompositeCopies, width, height);
 		return entry;
 	}
 
@@ -180,7 +203,7 @@ namespace Strata
 		int height = 0;
 		int offsetX = 0;
 		int offsetY = 0;
-		unsigned char* distances = stbtt_GetGlyphSDF(&m_Info->Info, m_Scale, static_cast<int>(glyphIndex), c_DistancePadding, c_OnEdgeValue,
+		unsigned char* distances = stbtt_GetGlyphSDF(&m_Info->Info, entry.Scale, static_cast<int>(glyphIndex), c_DistancePadding, c_OnEdgeValue,
 			static_cast<float>(c_OnEdgeValue) / static_cast<float>(c_DistancePadding), &width, &height, &offsetX, &offsetY);
 		entry.Info.Pending = false;
 		if (!distances || width != static_cast<int>(entry.Size.x) || height != static_cast<int>(entry.Size.y))
@@ -360,11 +383,20 @@ namespace Strata
 		}
 	}
 
-	float FontAtlas::GetKerning(const GlyphInfo& left, const GlyphInfo& right) const
+	float FontAtlas::GetKerning(const GlyphInfo& left, const GlyphInfo& right)
 	{
 		if (!m_Font->HasUsableKerning())
 			return 0.0f;
-		return static_cast<float>(stbtt_GetGlyphKernAdvance(&m_Info->Info, static_cast<int>(left.GlyphIndex), static_cast<int>(right.GlyphIndex))) * m_EmScale;
+		// Glyph indices are below 65536 (the font's glyph count is 16-bit).
+		const uint32_t pair = (left.GlyphIndex << 16) | right.GlyphIndex;
+		auto cached = m_Kerning.find(pair);
+		if (cached != m_Kerning.end())
+			return cached->second;
+		const float kerning = static_cast<float>(stbtt_GetGlyphKernAdvance(&m_Info->Info, static_cast<int>(left.GlyphIndex), static_cast<int>(right.GlyphIndex))) * m_EmScale;
+		if (m_Kerning.size() >= c_GlyphCacheLimit)
+			m_Kerning.clear(); // Bounded: pairs are cheap to look up again
+		m_Kerning.emplace(pair, kerning);
+		return kerning;
 	}
 
 	const std::vector<uint8_t>& FontAtlas::GetPagePixels(uint32_t page) const
