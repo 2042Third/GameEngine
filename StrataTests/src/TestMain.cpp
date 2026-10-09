@@ -61,6 +61,25 @@ namespace
 // When launched with --strata-test-helper=<mode>, the test executable acts as a child process for the
 // Process tests (and checks build products for CTest scripts) instead of running the test suites. This keeps
 // those tests free of external programs.
+// What a process running a script module from a private copy relies on: the copy in its copy directory, and the owner
+// lock it holds there. Empty if all is well, else what is wrong.
+static std::string CheckOwnModuleCopy(const Strata::ScriptEngine& engine, const std::filesystem::path& directory)
+{
+	const Strata::ScriptModule* module = engine.GetModule();
+	if (!module || !module->IsLoadedFromCopy())
+		return "the module does not run from a copy";
+	if (module->GetLoadedPath().parent_path() != directory)
+		return "the module moved to another copy directory";
+	if (!Strata::FileSystem::Exists(module->GetLoadedPath()))
+		return "the copy is gone";
+	const std::filesystem::path ownerLock = directory / "Owner.lock";
+	if (!Strata::FileSystem::Exists(ownerLock))
+		return "the owner lock file is gone";
+	if (Strata::FileLock::TryAcquire(ownerLock))
+		return "the owner lock is not held";
+	return {};
+}
+
 static int RunHelperMode(std::string_view mode, int argc, char** argv)
 {
 	if (mode == "echo")
@@ -215,24 +234,37 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 	}
 	if (mode == "script-module-reloads")
 	{
-		// <module path> <count>: loads the module from a private copy (as with hot reload) and reloads it <count> times.
+		// <module path> <rounds>: every round loads the module from a private copy (as with hot reload), reloads it and
+		// unloads it again, so each round creates a new copy directory - and removes the stale ones of other processes.
+		// After every load the process checks that its copy, the copy directory and the owner lock it holds there are
+		// intact: other processes doing the same at the same time must never remove them.
 		if (argc < 4)
 			return 2;
-		Strata::ScriptEngine engine;
-		engine.SetHotReloadEnabled(true);
-		std::string error;
-		if (!engine.LoadModule(Strata::FileSystem::FromUTF8(argv[2]), &error))
+		const int rounds = std::atoi(argv[3]);
+		for (int round = 0; round < rounds; round++)
 		{
-			std::fprintf(stderr, "%s\n", error.c_str());
-			return 1;
-		}
-		const int count = std::atoi(argv[3]);
-		for (int index = 0; index < count; index++)
-		{
-			if (!engine.Reload(&error) || engine.GetClasses().empty())
+			Strata::ScriptEngine engine;
+			engine.SetHotReloadEnabled(true);
+			std::string error;
+			if (!engine.LoadModule(Strata::FileSystem::FromUTF8(argv[2]), &error))
 			{
-				std::fprintf(stderr, "Reload %d failed: %s\n", index, error.c_str());
+				std::fprintf(stderr, "Round %d: the load failed: %s\n", round, error.c_str());
 				return 1;
+			}
+			const std::filesystem::path directory = engine.GetModule()->GetLoadedPath().parent_path();
+			for (int reload = 0; reload <= 2; reload++)
+			{
+				if (reload > 0 && !engine.Reload(&error))
+				{
+					std::fprintf(stderr, "Round %d: reload %d failed: %s\n", round, reload, error.c_str());
+					return 1;
+				}
+				const std::string problem = CheckOwnModuleCopy(engine, directory);
+				if (!problem.empty() || engine.GetClasses().empty())
+				{
+					std::fprintf(stderr, "Round %d, reload %d: %s\n", round, reload, problem.empty() ? "the module has no classes" : problem.c_str());
+					return 1;
+				}
 			}
 		}
 		return 0;

@@ -679,32 +679,47 @@ TEST_SUITE("Scripting.Module")
 
 	TEST_CASE("Processes load script modules concurrently without disturbing each other")
 	{
-		// Each process keeps its copies in its own directory and removes only its own (or ones whose owner is gone).
-		constexpr int c_Reloads = 25;
+		// Each process keeps its copies in its own directory and removes only its own (or ones whose owner is gone). The
+		// helpers create a new copy directory every round, removing stale ones of the others each time, and check after
+		// every load that their own copy, directory and owner lock are intact; this process keeps one directory in use
+		// all along and checks the same after every reload.
+		constexpr int c_Rounds = 10;
+		constexpr int c_MaxReloads = 500;
+		ScriptEngine engine;
+		engine.SetHotReloadEnabled(true);
+		std::string error;
+		REQUIRE_MESSAGE(engine.LoadModule(GetTestScriptModule(STRATA_TEST_SCRIPTS_API), &error), error);
+		const std::filesystem::path directory = engine.GetModule()->GetLoadedPath().parent_path();
+		const std::filesystem::path ownerLock = directory / "Owner.lock";
+
 		std::vector<Scope<Process>> processes;
 		for (int index = 0; index < 3; index++)
 		{
 			ProcessSpecification specification;
 			specification.Executable = GetTestExecutablePath();
 			specification.Arguments = { "--strata-test-helper=script-module-reloads", FileSystem::ToUTF8(GetTestScriptModule(STRATA_TEST_SCRIPTS_API)),
-				std::to_string(c_Reloads) };
+				std::to_string(c_Rounds) };
 			Scope<Process> process = CreateScope<Process>();
 			REQUIRE(process->Start(specification));
 			processes.push_back(std::move(process));
 		}
 
-		// This process does the same meanwhile.
+		auto anyRunning = [&]()
 		{
-			ScriptEngine engine;
-			engine.SetHotReloadEnabled(true);
-			std::string error;
-			REQUIRE_MESSAGE(engine.LoadModule(GetTestScriptModule(STRATA_TEST_SCRIPTS_API), &error), error);
-			for (int index = 0; index < c_Reloads; index++)
-			{
-				REQUIRE_MESSAGE(engine.Reload(&error), error);
-				CHECK(engine.FindClass("Lifecycle") != nullptr);
-			}
-		}
+			return std::any_of(processes.begin(), processes.end(), [](const Scope<Process>& process) { return process->IsRunning(); });
+		};
+		int reloads = 0;
+		do
+		{
+			REQUIRE_MESSAGE(engine.Reload(&error), error);
+			reloads++;
+			CHECK(engine.FindClass("Lifecycle") != nullptr);
+			const std::filesystem::path copy = engine.GetModule()->GetLoadedPath();
+			CHECK(copy.parent_path() == directory);
+			CHECK(FileSystem::Exists(copy));
+			CHECK(FileSystem::Exists(ownerLock));
+			CHECK(FileLock::TryAcquire(ownerLock) == nullptr);
+		} while (anyRunning() && reloads < c_MaxReloads);
 
 		for (const Scope<Process>& process : processes)
 		{
@@ -713,6 +728,8 @@ TEST_SUITE("Scripting.Module")
 			REQUIRE(exitCode.has_value());
 			CHECK(*exitCode == 0);
 		}
+		CHECK(FileSystem::Exists(engine.GetModule()->GetLoadedPath()));
+		CHECK(FileLock::TryAcquire(ownerLock) == nullptr);
 	}
 
 	TEST_CASE("Scenes play without a script engine or module")
