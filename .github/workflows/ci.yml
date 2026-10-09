@@ -48,11 +48,29 @@ jobs:
         run: brew install ninja
 
       - name: Configure
-        run: cmake --preset ${{ matrix.preset }}
+        shell: bash
+        run: |
+          set -o pipefail
+          cmake --preset ${{ matrix.preset }} 2>&1 | tee configure.log
 
       - name: Build (Release)
-        run: cmake --build --preset ${{ matrix.preset }}-release --parallel
+        shell: bash
+        run: |
+          set -o pipefail
+          cmake --build --preset ${{ matrix.preset }}-release --parallel 2>&1 | tee build.log
 
       # Hosted runners have no GPU: suites that need one carry the "gpu" label.
       - name: Test (Release)
-        run: ctest --preset ${{ matrix.preset }}-release -LE gpu
+        shell: bash
+        run: |
+          set -o pipefail
+          ctest --preset ${{ matrix.preset }}-release -LE gpu --output-on-failure 2>&1 | tee test.log
+
+      # Job logs need repository admin rights to download; annotations are public, so failures are readable from the
+      # checks API and the pull request UI.
+      - name: Annotate failures
+        if: failure()
+        shell: bash
+        run: |
+          python=$(command -v python3 || command -v python)
+          "$python" .github/scripts/annotate_failures.py configure.log build.log test.log
