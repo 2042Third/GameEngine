@@ -554,9 +554,14 @@ namespace Strata
 	// SceneSystemRegistry
 	////////////////////////////////////////////////////////////////////////////////
 
+	// Defined in SceneSystemRegistration.cpp.
+	void RegisterBuiltinSceneSystems();
+
 	static std::vector<SceneSystemDescriptor>& GetSceneSystemDescriptors()
 	{
 		static std::vector<SceneSystemDescriptor> s_Descriptors;
+		static std::once_flag s_BuiltinsRegistered;
+		std::call_once(s_BuiltinsRegistered, []() { RegisterBuiltinSceneSystems(); });
 		return s_Descriptors;
 	}
 
