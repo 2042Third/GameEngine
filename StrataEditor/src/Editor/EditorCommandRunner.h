@@ -44,7 +44,7 @@ namespace Strata
 		// Once per frame: polls the pending commands in the order they were issued. Commands issued by completions are
 		// polled from the next frame on.
 		void Update(EditorContext& context);
-		// Completes every pending command with the error `reason` (e.g. the editor is closing).
+		// Completes every pending command with a Cancelled error carrying `reason` (e.g. the editor is closing).
 		void CancelAll(const std::string& reason);
 
 		size_t GetPendingCount() const;

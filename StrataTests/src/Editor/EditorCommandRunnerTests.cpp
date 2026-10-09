@@ -116,6 +116,7 @@ TEST_SUITE("Editor.CommandRunner")
 		CHECK_FALSE(harness.Run("test.defer", { { "polls", 0 } }));
 		REQUIRE(harness.Results.size() == 1);
 		CHECK_FALSE(harness.Results[0].Success);
+		CHECK(harness.Results[0].ErrorKind == EditorCommandError::InvalidParameters);
 		CHECK(harness.Runner.GetPendingCount() == 0);
 	}
 
@@ -128,8 +129,10 @@ TEST_SUITE("Editor.CommandRunner")
 		harness.Runner.Update(harness.Context);
 		REQUIRE(harness.Results.size() == 2);
 		CHECK(harness.Results[0].Error == "Failed on purpose");
+		CHECK(harness.Results[0].ErrorKind == EditorCommandError::Failed);
 		CHECK_FALSE(harness.Results[1].Success);
 		CHECK(harness.Results[1].Error.find("broken poll") != std::string::npos);
+		CHECK(harness.Results[1].ErrorKind == EditorCommandError::Internal);
 		CHECK(harness.Runner.GetPendingCount() == 1); // The chain moved to its second stage
 
 		harness.Runner.Update(harness.Context);
@@ -165,6 +168,7 @@ TEST_SUITE("Editor.CommandRunner")
 		{
 			CHECK_FALSE(result.Success);
 			CHECK(result.Error == "Closing");
+			CHECK(result.ErrorKind == EditorCommandError::Cancelled);
 		}
 		CHECK(harness.Runner.GetPendingCount() == 0);
 		harness.Runner.Update(harness.Context);

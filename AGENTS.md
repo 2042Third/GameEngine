@@ -283,6 +283,10 @@ Building and loading scripts:
   automation exposes them as tools, so descriptions must tell an agent what the command does. Use
   `CommandArguments` to read parameters (no exceptions), reject invalid input without side effects
   (roll back the transaction) and record exactly one undo step per successful mutating command.
+  Failures carry an `EditorCommandError` kind: a request the command cannot accept (unknown, missing or
+  mistyped parameter, a reference to nothing) is `InvalidParameters` (`CommandArguments::Fail`,
+  `EditorCommandResult::InvalidParameters`); a valid request that cannot be carried out in the current
+  state is `Failed` (`EditorCommandResult::Fail`). Automation reports them with different error codes.
 - Undo works on entity snapshots: a `SceneEditTransaction` captures the entities an edit touches
   (`Track`, `TrackSubtree` before changing or deleting them, `TrackCreated` after creating them) and
   `EditorContext::CommitEdit` records the difference. Edits while playing are not recorded.

@@ -42,7 +42,7 @@ namespace Strata
 		catch (const std::exception& exception)
 		{
 			// Engine code does not throw; this guards third-party code (JSON access) used by poll functions.
-			finished = EditorCommandResult::Fail(fmt::format("Command failed: {}", exception.what()));
+			finished = EditorCommandResult::Fail(fmt::format("Command failed: {}", exception.what()), EditorCommandError::Internal);
 		}
 		if (!finished)
 			return false;
@@ -106,7 +106,7 @@ namespace Strata
 		for (size_t index = 0; index < m_Pending.size(); index++)
 		{
 			if (!m_Pending[index].Done)
-				Finish(index, EditorCommandResult::Fail(reason));
+				Finish(index, EditorCommandResult::Fail(reason, EditorCommandError::Cancelled));
 		}
 		// During an update, the entries are erased when it ends.
 		if (!m_Updating)

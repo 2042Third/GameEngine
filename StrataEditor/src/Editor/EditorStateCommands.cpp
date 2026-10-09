@@ -56,13 +56,13 @@ namespace Strata
 			{
 				auto entities = parameters.find("entities");
 				if (entities == parameters.end() || !entities->is_array())
-					return EditorCommandResult::Fail("Parameter 'entities' must be an array of entity IDs");
+					return EditorCommandResult::InvalidParameters("Parameter 'entities' must be an array of entity IDs");
 				std::vector<UUID> selection;
 				for (const nlohmann::json& element : *entities)
 				{
 					std::optional<UUID> id = UUIDFromJson(element);
 					if (!id || !context.GetActiveScene()->GetEntityByUUID(*id))
-						return EditorCommandResult::Fail(fmt::format("No entity {} in the scene", element.dump()));
+						return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'entities': no entity {} in the scene", element.dump()));
 					selection.push_back(*id);
 				}
 				context.SetSelection(std::move(selection));
