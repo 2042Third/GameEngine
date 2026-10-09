@@ -108,14 +108,26 @@ namespace Strata
 		}
 
 		// Sent by another process (kill, sigqueue) rather than raised by the code running on this thread: not a fault of
-		// a guarded call, even when one runs.
-		bool IsSentByAnotherProcess(const siginfo_t* info)
+		// a guarded call, even when one runs. (One this process sends itself, say with raise(), counts as the guarded
+		// code's own where the platform reports the sender.) The sender's process id is only read for sent signals: for
+		// faults, Linux keeps the fault address in the same place.
+		bool IsSentByAnotherProcess([[maybe_unused]] int signal, const siginfo_t* info)
 		{
 			if (!info)
 				return false;
-			bool sent = info->si_code == SI_USER || info->si_code == SI_QUEUE;
-#if defined(SI_TKILL)
-			sent = sent || info->si_code == SI_TKILL;
+#if defined(ST_PLATFORM_MACOS)
+			// macOS reports SI_USER or SI_QUEUE for sent signals - except SIGSEGV, SIGBUS, SIGILL and SIGFPE, whose code the
+			// kernel derives from the thread's last hardware exception, and which carry no sender. One that no exception
+			// caused gets the "no code" value 0 (SEGV_NOOP, BUS_NOOP, ILL_NOOP, FPE_NOOP); faults have positive codes
+			// (SEGV_MAPERR, BUS_ADRERR, FPE_INTDIV, ...). Without a sender, one this process raises itself counts as sent as
+			// well. (A thread that faulted before may be given that fault's code again for a sent signal, which then cannot be
+			// told apart from a fault.)
+			const bool derivedFromException = signal == SIGSEGV || signal == SIGBUS || signal == SIGILL || signal == SIGFPE;
+			const bool sent = info->si_code == SI_USER || info->si_code == SI_QUEUE || (derivedFromException && info->si_code == 0);
+#else
+			// Linux: the kernel's own signals, faults among them, have positive codes; sent ones zero or negative (SI_USER,
+			// SI_QUEUE, SI_TKILL, ...).
+			const bool sent = info->si_code <= 0;
 #endif
 			return sent && info->si_pid != getpid();
 		}
@@ -185,7 +197,7 @@ namespace Strata
 		void SignalHandler(int signal, siginfo_t* info, void* context)
 		{
 			GuardFrame* frame = t_CurrentFrame;
-			if (frame && !IsSentByAnotherProcess(info))
+			if (frame && !IsSentByAnotherProcess(signal, info))
 			{
 				if (signal == SIGABRT)
 				{

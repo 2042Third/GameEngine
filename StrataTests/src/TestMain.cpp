@@ -37,10 +37,12 @@
 #endif
 
 #if defined(ST_PLATFORM_POSIX)
+	#include <cerrno>
 	#include <csetjmp>
 	#include <csignal>
 	#include <pthread.h>
 	#include <sys/types.h>
+	#include <sys/wait.h>
 	#include <unistd.h>
 
 namespace
@@ -67,6 +69,58 @@ namespace
 	{
 		if (sigsetjmp(s_ForeignHandlerJump, 1) == 0)
 			WriteToNull(nullptr);
+	}
+
+	volatile sig_atomic_t s_RecordedSignalCode = 0;
+	volatile sig_atomic_t s_RecordedSignalSender = 0;
+	volatile sig_atomic_t s_SignalRecorded = 0;
+
+	void RecordSignal(int, siginfo_t* info, void*)
+	{
+		s_RecordedSignalCode = info ? info->si_code : 0;
+		s_RecordedSignalSender = info ? info->si_pid : 0;
+		s_SignalRecorded = 1;
+	}
+
+	// Prints what this platform reports for a SIGFPE another process sends (si_code, si_pid), which the crash guard uses
+	// to tell it from a fault: a test that fails shows it in its output. Leaves the signal's handler as it was.
+	void ReportSentSignalInformation()
+	{
+		struct sigaction record = {};
+		record.sa_sigaction = RecordSignal;
+		record.sa_flags = SA_SIGINFO;
+		sigemptyset(&record.sa_mask);
+		struct sigaction previous = {};
+		if (sigaction(SIGFPE, &record, &previous) != 0)
+		{
+			std::printf("SIGFPE from another process: cannot install a handler to record it\n");
+			std::fflush(stdout);
+			return;
+		}
+
+		const pid_t sender = fork();
+		if (sender == 0)
+		{
+			kill(getppid(), SIGFPE);
+			_exit(0);
+		}
+		// The signal interrupts the wait (the handler is installed without SA_RESTART).
+		while (sender > 0 && waitpid(sender, nullptr, 0) < 0 && errno == EINTR)
+		{
+		}
+		for (int attempt = 0; attempt < 500 && sender > 0 && !s_SignalRecorded; attempt++)
+			usleep(10000);
+		sigaction(SIGFPE, &previous, nullptr);
+		if (sender > 0 && s_SignalRecorded)
+		{
+			std::printf("SIGFPE from another process: si_code %d, si_pid %d (sender %d)\n", static_cast<int>(s_RecordedSignalCode),
+				static_cast<int>(s_RecordedSignalSender), static_cast<int>(sender));
+		}
+		else
+		{
+			std::printf("SIGFPE from another process: not recorded\n");
+		}
+		std::fflush(stdout);
 	}
 
 }
@@ -216,6 +270,7 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 	{
 		// A guarded call during which another process (a child) sends SIGFPE: not a fault of the call, so the signal takes
 		// its default action and ends this process instead of being contained.
+		ReportSentSignalInformation();
 		const pid_t parent = getpid();
 		const pid_t child = fork();
 		if (child < 0)
