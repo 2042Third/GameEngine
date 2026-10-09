@@ -273,6 +273,16 @@ TEST_SUITE("CLI.Commands")
 		const CliRun invalidInput = Run(Concat({ "call", "math.add", "-" }, ExplicitEndpoint(editor)), "not json");
 		CHECK(invalidInput.ExitCode == ExitCode::UsageError);
 		CHECK(invalidInput.ErrorOutput.find("standard input") != std::string::npos);
+
+		// A UTF-8 byte order mark (as Windows tools write) is skipped; UTF-16 is refused with a hint.
+		const std::filesystem::path withBom = file.parent_path() / "bom.json";
+		REQUIRE(FileSystem::WriteText(withBom, "\xEF\xBB\xBF{\"a\": 4, \"b\": 4}"));
+		const CliRun fromBomFile = Run(Concat({ "call", "math.add", "@" + FileSystem::ToUTF8(withBom) }, ExplicitEndpoint(editor)));
+		CHECK(fromBomFile.ExitCode == ExitCode::Success);
+		CHECK(JsonRpc::Parse(fromBomFile.Output).value() == 8.0);
+		const CliRun utf16 = Run(Concat({ "call", "math.add", "-" }, ExplicitEndpoint(editor)), std::string("\xFF\xFE{\0}\0", 6));
+		CHECK(utf16.ExitCode == ExitCode::UsageError);
+		CHECK(utf16.ErrorOutput.find("UTF-16") != std::string::npos);
 	}
 
 	TEST_CASE("call saves image results to a file")

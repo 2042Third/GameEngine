@@ -144,6 +144,15 @@ namespace Strata::CLI
 				text = argument;
 			}
 
+			// Windows tools (e.g. PowerShell 5's Set-Content and Out-File) like to write byte order marks.
+			if (text.starts_with("\xEF\xBB\xBF"))
+				text.erase(0, 3);
+			else if (text.starts_with("\xFF\xFE") || text.starts_with("\xFE\xFF"))
+			{
+				error = fmt::format("{} is UTF-16 text; write it as UTF-8", source);
+				return std::nullopt;
+			}
+
 			std::optional<nlohmann::json> parsed = JsonRpc::Parse(text);
 			if (!parsed || (!parsed->is_object() && !parsed->is_array()))
 			{
