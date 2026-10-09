@@ -2146,10 +2146,6 @@
 									"QuitCode": {
 										"Type": "Int",
 										"Value": 3
-									},
-									"QuitFrame": {
-										"Type": "Int",
-										"Value": 200
 									}
 								}
 							}

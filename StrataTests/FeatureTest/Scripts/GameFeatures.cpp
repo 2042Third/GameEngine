@@ -1,7 +1,8 @@
-// The gameplay helpers (Random, Timer, KeyRepeat) and the game flow (Game) on "Game Features". The scene sets QuitFrame to
-// the frame the runners play after the scenario: in it, the script asks for scene loads and then to quit with QuitCode,
-// and the runners check that whoever runs the scene (the headless scene itself, the editor, the game runtime) honors the
-// quit.
+// The gameplay helpers (Random, Timer, KeyRepeat) and the game flow (Game) on "Game Features". The in-process runners set
+// QuitFrame to the frame they play after the scenario (PlayFeatureQuitFrame): in it, the script asks for scene loads and
+// then to quit with QuitCode (set by the scene), and the runners check that whoever runs the scene (the headless scene
+// itself, the editor, the game runtime) honors the quit. The real executables' runs never set it, so their games keep
+// running for as many frames as they play.
 
 #include "FeatureScript.h"
 
@@ -15,7 +16,7 @@ public:
 	static constexpr int32_t c_TickFrames = 60;
 	static constexpr int32_t c_CheckFrame = 90;
 
-	int32_t QuitFrame = 0;
+	int32_t QuitFrame = -1; // Never, unless a runner sets it
 	int32_t QuitCode = 0;
 	int32_t CountdownFrame = -1; // The frame the one-shot timer elapsed in
 	int32_t Ticks = 0;           // Times the repeating timer elapsed during the first c_TickFrames frames
@@ -24,7 +25,7 @@ public:
 	void OnCreate() override
 	{
 		Journal(*this, "GameFeatures", "OnCreate");
-		Expect(QuitFrame > 0 && QuitCode != 0, "the scene sets the quit frame and exit code");
+		Expect(QuitCode != 0, "the scene sets the exit code");
 		CheckRandom();
 		m_Countdown.Start(0.5f);
 		m_Ticker.Start(0.1f, true);

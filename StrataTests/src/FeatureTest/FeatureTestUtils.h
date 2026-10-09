@@ -101,8 +101,8 @@ namespace Strata::Tests
 	// its scenario without a failed check, and the engine side agrees with what the scripts observed.
 	void CheckFeatureResults(Scene& scene, const ScriptEngine& engine);
 
-	// After CheckFeatureResults, while the scene still runs: plays GameFeatures' QuitFrame, the frame after the scenario, in
-	// which it asks for scene loads and then to quit, and returns the exit code it quits with. The caller checks that the
+	// After CheckFeatureResults, while the scene still runs: makes the next frame GameFeatures' QuitFrame and plays it (the
+	// script asks for scene loads and then to quit), and returns the exit code it quits with. The caller checks that the
 	// owner of the scene honored the quit (the scene may have stopped then).
 	int32_t PlayFeatureQuitFrame(Scene& scene, ScriptEngine& engine, const std::function<void()>& advanceFrame);
 	// After stopping: the scene's journal ("<Class>.<Event>@<Entity>" entries the scripts record) shows that every class

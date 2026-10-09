@@ -322,12 +322,12 @@ namespace Strata::Tests
 
 	int32_t PlayFeatureQuitFrame(Scene& scene, ScriptEngine& engine, const std::function<void()>& advanceFrame)
 	{
-		const ScriptSystem& system = GetScriptSystem(scene);
+		ScriptSystem& system = GetScriptSystem(scene);
 		const Entity gameFeatures = RequireEntity(scene, "Game Features");
-		const int32_t quitFrame = GetField<int32_t>(system, gameFeatures, "GameFeatures", "QuitFrame");
+		REQUIRE(GetField<int32_t>(system, gameFeatures, "GameFeatures", "QuitFrame") == -1); // Nothing quit during the scenario
 		const int32_t quitCode = GetField<int32_t>(system, gameFeatures, "GameFeatures", "QuitCode");
-		REQUIRE(quitFrame == c_FeatureFrames);
-		REQUIRE(scene.GetFrameIndex() == static_cast<uint64_t>(quitFrame));
+		REQUIRE(scene.GetFrameIndex() == static_cast<uint64_t>(c_FeatureFrames));
+		REQUIRE(system.SetFieldValue(gameFeatures, "GameFeatures", "QuitFrame", PropertyValue(static_cast<int32_t>(c_FeatureFrames))));
 		REQUIRE_FALSE(scene.GetQuitRequest().has_value());
 
 		ScopedInput input;
