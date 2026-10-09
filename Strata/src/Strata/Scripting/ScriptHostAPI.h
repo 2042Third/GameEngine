@@ -2,6 +2,10 @@
 
 #include "StrataScript/ScriptABI.h"
 
+#include <cstdint>
+#include <string_view>
+#include <vector>
+
 namespace Strata
 {
 
@@ -14,5 +18,17 @@ namespace Strata
 	// the thread that registered them (the main thread). Registration is main-thread only.
 	StrataScriptContext* RegisterScriptContext(ScriptSystem& system);
 	void UnregisterScriptContext(ScriptSystem& system);
+
+	struct ScriptHostFunctionCalls
+	{
+		std::string_view Name; // The member's name in StrataScriptHostAPI
+		uint64_t Calls = 0;
+	};
+
+	// Diagnostics: every function of the host API table in declaration order, with the number of calls made through the
+	// table (by any module, scene or thread; calls that were rejected count too) since the process started or the last
+	// reset. The feature test uses it to prove that every host function is exercised. Thread-safe.
+	std::vector<ScriptHostFunctionCalls> GetScriptHostCallCounts();
+	void ResetScriptHostCallCounts();
 
 }

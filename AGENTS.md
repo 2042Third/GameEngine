@@ -236,8 +236,10 @@ Adding a host function (or a module callback):
 
 1. Append it at the **end** of `StrataScriptHostAPI` (callbacks: `StrataScriptClassDesc`) with a comment. Never insert,
    reorder or remove members; that is an incompatible change.
-2. Implement it in `ScriptHostAPI.cpp` and assign it in `CreateHostAPI()` (callbacks: `ScriptModule` reads them only
-   when the descriptor's `StructSize` covers them, see `ST_SCRIPT_HAS_MEMBER`).
+2. Implement it in `ScriptHostAPI.cpp` as `Host<Name>` and append `X(<Name>)` to `ST_SCRIPT_HOST_FUNCTIONS` there,
+   which assigns it in `CreateHostAPI()` with a call counter (a `static_assert` fails the build until the list matches
+   the struct). Callbacks: `ScriptModule` reads them only when the descriptor's `StructSize` covers them, see
+   `ST_SCRIPT_HAS_MEMBER`.
 3. Wrap it in the SDK. Functions appended after an ABI version's initial set are optional for modules: check
    `ST_SCRIPT_HAS_MEMBER(StrataScriptHostAPI, host, Name) && host->Name` and degrade gracefully.
 4. Exercise it in the API test module (`StrataTests/Scripts/API`) and test it in `StrataTests/src/Scripting/` (and the
