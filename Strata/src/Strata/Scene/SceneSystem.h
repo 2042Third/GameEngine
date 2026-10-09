@@ -34,6 +34,11 @@ namespace Strata
 		virtual void OnFixedUpdate(float) {}
 		virtual void OnLateUpdate(Timestep) {}
 
+		// Called while the scene is running when it is paused or resumed (Scene::SetPaused, e.g. the editor's pause button).
+		// While paused the scene calls no update functions (except for Scene::Step), so systems that keep running on their own
+		// (audio playback) halt here.
+		virtual void OnPausedChanged(bool) {}
+
 		// Called while the scene is running, right before an entity is destroyed (descendants before their ancestors).
 		// The entity is still complete and valid. Destruction requested from here is deferred; entities attached to
 		// the dying hierarchy from here are announced (and destroyed) as well.

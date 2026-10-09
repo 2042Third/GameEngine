@@ -20,11 +20,13 @@ namespace
 		static inline int FixedUpdates = 0;
 		static inline int LateUpdates = 0;
 		static inline float LastFixedTimestep = 0.0f;
+		static inline std::vector<bool> PauseChanges;
 
 		static void Reset()
 		{
 			Started = Stopped = Updates = FixedUpdates = LateUpdates = 0;
 			LastFixedTimestep = 0.0f;
+			PauseChanges.clear();
 		}
 
 		void OnRuntimeStart() override { Started++; }
@@ -36,6 +38,7 @@ namespace
 			LastFixedTimestep = timestep;
 		}
 		void OnLateUpdate(Timestep) override { LateUpdates++; }
+		void OnPausedChanged(bool paused) override { PauseChanges.push_back(paused); }
 	};
 
 	struct DestroyingSystem : public SceneSystem
@@ -401,6 +404,29 @@ TEST_SUITE("Scene")
 		scene.OnRuntimeStop();
 		CHECK(CountingSystem::Stopped == 1);
 		CHECK_FALSE(scene.IsRunning());
+	}
+
+	TEST_CASE("Systems are told when the running scene is paused or resumed")
+	{
+		ScopedCountingSystem system;
+		Scene scene;
+		// Not running: nothing to tell, and starting resets the scene to unpaused.
+		scene.SetPaused(true);
+		CHECK(scene.IsPaused());
+		scene.OnRuntimeStart();
+		CHECK_FALSE(scene.IsPaused());
+		CHECK(CountingSystem::PauseChanges.empty());
+
+		scene.SetPaused(true);
+		scene.SetPaused(true); // No change
+		scene.OnUpdateRuntime(0.1f);
+		scene.SetPaused(false);
+		CHECK(CountingSystem::PauseChanges == std::vector<bool> { true, false });
+		CHECK(CountingSystem::Updates == 0);
+
+		scene.OnRuntimeStop();
+		scene.SetPaused(true);
+		CHECK(CountingSystem::PauseChanges.size() == 2);
 	}
 
 	TEST_CASE("Simulate mode only creates systems that support it")

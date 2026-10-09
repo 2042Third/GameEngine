@@ -109,7 +109,9 @@ namespace Strata
 		bool IsRunning() const { return m_IsRunning; }
 		SceneRuntimeMode GetRuntimeMode() const { return m_RuntimeMode; }
 		bool IsUpdating() const { return m_IsUpdating; }
-		void SetPaused(bool paused) { m_IsPaused = paused; }
+		// Pausing stops the updates of the running systems and tells them (SceneSystem::OnPausedChanged). Starting the scene
+		// resets it to unpaused.
+		void SetPaused(bool paused);
 		bool IsPaused() const { return m_IsPaused; }
 		// While paused, lets the next `frames` updates each advance the simulation by exactly one fixed step.
 		void Step(uint32_t frames = 1) { m_StepFrames += frames; }

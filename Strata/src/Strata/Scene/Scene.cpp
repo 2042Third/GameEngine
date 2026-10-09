@@ -578,6 +578,18 @@ namespace Strata
 		UpdateWorldTransforms();
 	}
 
+	void Scene::SetPaused(bool paused)
+	{
+		if (paused == m_IsPaused)
+			return;
+
+		m_IsPaused = paused;
+		if (!m_IsRunning)
+			return;
+		for (const Scope<SceneSystem>& system : m_Systems)
+			system->OnPausedChanged(paused);
+	}
+
 	void Scene::OnUpdateEditor(Timestep)
 	{
 		ST_PROFILE_FUNCTION();
