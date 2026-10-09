@@ -267,11 +267,17 @@ namespace Strata
 			while (!finished.load() && std::chrono::steady_clock::now() < deadline)
 				std::this_thread::sleep_for(std::chrono::milliseconds(2));
 
+			// A grandchild may still hold the pipe open: cancel the blocking read. A cancellation that arrives while the
+			// reader is between checking the flag and entering ReadFile has nothing to cancel, so it is repeated until
+			// the reader has seen the flag and finished.
 			if (!finished.load())
 			{
-				// A grandchild may still hold the pipe open; cancel the blocking read.
 				m_StopReading = true;
-				CancelSynchronousIo(thread.native_handle());
+				while (!finished.load())
+				{
+					CancelSynchronousIo(thread.native_handle());
+					std::this_thread::sleep_for(std::chrono::milliseconds(1));
+				}
 			}
 			thread.join();
 		};
