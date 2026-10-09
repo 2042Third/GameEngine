@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Scripting/ScriptTestUtils.h"
+#include "Strata/Core/CrashGuard.h"
 #include "Strata/Core/DynamicLibrary.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Platform.h"
@@ -18,6 +19,7 @@
 #include <cstring>
 #include <iterator>
 #include <set>
+#include <thread>
 #include <string>
 #include <vector>
 
@@ -281,6 +283,54 @@ TEST_SUITE("Scripting.Module")
 		CHECK(second->Fields[0].Name == "B");
 		CHECK(second->Fields[0].DefaultValue == PropertyValue(int32_t(1)));
 		CHECK(second->Callbacks == 0);
+	}
+
+	TEST_CASE("Exceptions escaping a module without the SDK are contained like crashes")
+	{
+		// Script calls are bracketed for the host API and the watchdog; an exception must not leave a call open (the
+		// watchdog would report it once the timeout passed).
+		constexpr std::chrono::milliseconds c_WatchdogTimeout(200);
+		{
+			ScopedMalformedCase scopedCase("Throws");
+			ScriptEngine engine;
+			engine.SetWatchdogTimeout(c_WatchdogTimeout);
+			std::string error;
+			CHECK_FALSE(engine.LoadModule(GetTestScriptModule(STRATA_TEST_SCRIPTS_MALFORMED), &error));
+			CHECK(Contains(error, "crashed while initializing"));
+			CHECK(Contains(error, "C++ exception"));
+			CHECK(ScriptModule::GetCurrentCall() == nullptr);
+			std::this_thread::sleep_for(c_WatchdogTimeout * 3);
+			CHECK(engine.GetWatchdogReportCount() == 0);
+		}
+		{
+			ScopedMalformedCase scopedCase("ThrowsInCreate");
+			ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_MALFORMED));
+			engine->SetWatchdogTimeout(c_WatchdogTimeout);
+			Scene scene;
+			Entity entity = scene.CreateEntity("Entity");
+			AddScriptEntry(entity, "First");
+			scene.OnRuntimeStart();
+			CHECK(ScriptModule::GetCurrentCall() == nullptr);
+			REQUIRE(engine->IsFaulted());
+			const std::optional<ScriptFault> fault = engine->GetFault();
+			REQUIRE(fault.has_value());
+			CHECK(fault->ClassName == "First");
+			CHECK(fault->Method == "Create");
+			CHECK(fault->Entity == entity.GetUUID());
+			CHECK(Contains(fault->Description, "C++ exception"));
+			RunFrames(scene, 1);
+			scene.OnRuntimeStop();
+			std::this_thread::sleep_for(c_WatchdogTimeout * 3);
+			CHECK(engine->GetWatchdogReportCount() == 0);
+		}
+
+		// The crash guard still contains faults afterwards.
+		CrashInfo crash;
+		CHECK_FALSE(CrashGuard::Invoke([](void*)
+		{
+			volatile int* pointer = nullptr;
+			*pointer = 42;
+		}, nullptr, &crash));
 	}
 
 	TEST_CASE("Class functions are read once, while the module loads")

@@ -6,6 +6,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <stdexcept>
 
 namespace
 {
@@ -14,11 +15,20 @@ namespace
 	// "ChangesDescriptors": the first Create clears the functions of every class descriptor, as if the module had
 	// overwritten its memory. The engine must keep calling the functions it read while loading.
 	bool s_ChangeDescriptorsInCreate = false;
+	// "ThrowsInCreate": Create lets a C++ exception escape (there is no SDK to catch it).
+	bool s_ThrowInCreate = false;
 
 	void ClearDescriptorFunctions();
 
+	[[noreturn]] void ThrowOnPurpose(const char* message)
+	{
+		throw std::runtime_error(message);
+	}
+
 	uint32_t Create(StrataScriptContext*, StrataScriptEntityID, StrataScriptInstance* outInstance)
 	{
+		if (s_ThrowInCreate)
+			ThrowOnPurpose("Create threw on purpose");
 		if (s_ChangeDescriptorsInCreate)
 			ClearDescriptorFunctions();
 		*outInstance = &s_InstanceStorage;
@@ -83,6 +93,8 @@ ST_SCRIPT_EXTERN_C ST_SCRIPT_EXPORT uint32_t StrataScript_Load(const StrataScrip
 		return StrataScriptResult_ABIMismatch;
 
 	const char* testCase = std::getenv("STRATA_TEST_MALFORMED_CASE");
+	if (Is(testCase, "Throws"))
+		ThrowOnPurpose("StrataScript_Load threw on purpose");
 	if (Is(testCase, "Exception"))
 	{
 		host->ReportException(Text("Broken on purpose"));
@@ -151,5 +163,6 @@ ST_SCRIPT_EXTERN_C ST_SCRIPT_EXPORT uint32_t StrataScript_Load(const StrataScrip
 	else if (Is(testCase, "NullClassList"))
 		outModule->Classes = nullptr;
 	s_ChangeDescriptorsInCreate = Is(testCase, "ChangesDescriptors");
+	s_ThrowInCreate = Is(testCase, "ThrowsInCreate");
 	return StrataScriptResult_Ok;
 }

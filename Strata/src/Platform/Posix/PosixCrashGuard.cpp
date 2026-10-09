@@ -72,6 +72,22 @@ namespace Strata
 				t_AlternateStackInstalled = true;
 		}
 
+		// Runs the guarded function; false if a C++ exception escaped it. Exceptions must not unwind through Invoke (they
+		// would leave the guard frame registered), and keeping the handler out of Invoke keeps exception handling and
+		// sigsetjmp in separate frames.
+		bool CallCatchingExceptions(CrashGuard::GuardedFunction function, void* userData)
+		{
+			try
+			{
+				function(userData);
+				return true;
+			}
+			catch (...)
+			{
+				return false;
+			}
+		}
+
 		std::string DescribeSignal(int signal, void* address)
 		{
 			switch (signal)
@@ -97,9 +113,19 @@ namespace Strata
 		if (sigsetjmp(frame.JumpBuffer, 1) == 0)
 		{
 			t_CurrentFrame = &frame;
-			function(userData);
+			const bool returned = CallCatchingExceptions(function, userData);
 			t_CurrentFrame = frame.Previous;
-			return true;
+			if (returned)
+				return true;
+
+			// An escaping exception is a fault of the guarded code, as on Windows (where it is a structured exception).
+			if (outInfo)
+			{
+				outInfo->Description = "Unhandled C++ exception";
+				outInfo->Code = 0;
+				outInfo->Address = 0;
+			}
+			return false;
 		}
 
 		// Arrived here through siglongjmp from the signal handler (which already popped the frame).

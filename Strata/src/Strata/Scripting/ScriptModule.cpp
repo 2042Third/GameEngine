@@ -102,6 +102,37 @@ namespace Strata
 			return ReadScriptString(text, out) && !out.empty() && out.size() <= c_MaxScriptNameSize;
 		}
 
+		// Marks a call into script code for the host API (GetCurrentCall) and the watchdog, and undoes both however the
+		// call ends.
+		class ScriptCallScope
+		{
+		public:
+			ScriptCallScope(const ScriptCallSite& site, ScriptWatchdog* watchdog, const char* className)
+				: m_Previous(t_CurrentCall)
+			{
+				if (watchdog)
+				{
+					watchdog->BeginCall(className, site.Method, site.Entity);
+					m_Watchdog = watchdog; // Ends only a call that began
+				}
+				t_CurrentCall = &site;
+				t_PendingException.clear();
+			}
+
+			~ScriptCallScope()
+			{
+				t_CurrentCall = m_Previous;
+				if (m_Watchdog)
+					m_Watchdog->EndCall();
+			}
+
+			ScriptCallScope(const ScriptCallScope&) = delete;
+			ScriptCallScope& operator=(const ScriptCallScope&) = delete;
+		private:
+			const ScriptCallSite* m_Previous;
+			ScriptWatchdog* m_Watchdog = nullptr;
+		};
+
 	}
 
 	Ref<ScriptModuleCopyDirectory> ScriptModuleCopyDirectory::Acquire(std::string& outError)
@@ -152,22 +183,16 @@ namespace Strata
 		};
 		Invocation invocation { &function, StrataScriptResult_Ok };
 
-		const ScriptCallSite* previousCall = t_CurrentCall;
-		t_CurrentCall = &site;
-		t_PendingException.clear();
-		if (m_Watchdog)
-			m_Watchdog->BeginCall(site.Class ? site.Class->Name.c_str() : m_Name.c_str(), site.Method, site.Entity);
-
 		CrashInfo crash;
-		const bool completed = CrashGuard::Invoke([](void* data)
+		bool completed = false;
 		{
-			Invocation* call = static_cast<Invocation*>(data);
-			call->Result = (*call->Body)();
-		}, &invocation, &crash);
-
-		if (m_Watchdog)
-			m_Watchdog->EndCall();
-		t_CurrentCall = previousCall;
+			const ScriptCallScope scope(site, m_Watchdog, site.Class ? site.Class->Name.c_str() : m_Name.c_str());
+			completed = CrashGuard::Invoke([](void* data)
+			{
+				Invocation* call = static_cast<Invocation*>(data);
+				call->Result = (*call->Body)();
+			}, &invocation, &crash);
+		}
 
 		if (!completed)
 		{

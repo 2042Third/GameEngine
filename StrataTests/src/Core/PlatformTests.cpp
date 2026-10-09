@@ -10,6 +10,8 @@
 
 #include <chrono>
 #include <climits>
+#include <stdexcept>
+#include <string>
 
 #if defined(ST_PLATFORM_POSIX)
 	#include <sys/stat.h>
@@ -68,6 +70,18 @@ namespace
 	{
 		CrashInfo innerInfo;
 		const bool innerSucceeded = CrashGuard::Invoke(WriteToNull, nullptr, &innerInfo);
+		*static_cast<bool*>(userData) = !innerSucceeded;
+	}
+
+	void ThrowException(void*)
+	{
+		throw std::runtime_error("Thrown on purpose");
+	}
+
+	void NestedThrow(void* userData)
+	{
+		CrashInfo innerInfo;
+		const bool innerSucceeded = CrashGuard::Invoke(ThrowException, nullptr, &innerInfo);
 		*static_cast<bool*>(userData) = !innerSucceeded;
 	}
 }
@@ -292,5 +306,22 @@ TEST_SUITE("Core.Platform")
 		bool innerCaught = false;
 		CHECK(CrashGuard::Invoke(NestedGuard, &innerCaught));
 		CHECK(innerCaught);
+	}
+
+	TEST_CASE("CrashGuard contains C++ exceptions")
+	{
+		CrashInfo info;
+		CHECK_FALSE(CrashGuard::Invoke(ThrowException, nullptr, &info));
+		CHECK(info.Description.find("C++ exception") != std::string::npos);
+
+		bool innerCaught = false;
+		CHECK(CrashGuard::Invoke(NestedThrow, &innerCaught));
+		CHECK(innerCaught);
+
+		// The guard keeps working: later faults are still contained.
+		CHECK_FALSE(CrashGuard::Invoke(WriteToNull, nullptr, &info));
+		bool flag = false;
+		CHECK(CrashGuard::Invoke(SetFlag, &flag));
+		CHECK(flag);
 	}
 }
