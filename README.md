@@ -23,8 +23,11 @@ can drive in the same way, plus a runtime that plays exported games.
 - **Audio:** miniaudio playback with spatial sources, a listener that follows the camera or a listener
   component, and one-shot sounds.
 - **Scripting:** game logic in C++ script modules built against a small SDK and a C ABI, so they never link
-  the engine. Script crashes (access violations, aborts, exceptions) disable the script instead of taking
-  down the editor or the game, and modules hot reload while the game plays, keeping their fields.
+  the engine. Scripts create, change and destroy entities and components, spawn prefabs, read input, drive
+  physics (forces, velocities, raycasts, collision and trigger callbacks), play audio, and load scenes or
+  quit the game. Script crashes (access violations, exceptions, and on Windows aborts) disable the script
+  instead of taking down the editor or the game, and modules hot reload while the game plays, keeping their
+  fields.
 - **Editor:** dockable panels (viewport with gizmos, hierarchy, inspector, content browser, console),
   undo/redo for every edit, play and simulate modes, building and hot reloading game scripts, and game
   export. Every operation is an editor command with a JSON Schema, so scripts, tests and AI agents use the
