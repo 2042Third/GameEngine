@@ -199,7 +199,8 @@ the next scene through fields set in that scene, or rebuild it there.
 - `Random` (StrataScript/Gameplay.h): seedable and deterministic on every platform - `Random random(seed);
   random.Range(1, 6); random.Range(-1.0f, 1.0f); random.NextFloat(); random.Chance(0.25f); random.Seed(seed)`.
 - `Timer`: `Timer spawn(2.0f, true);` then `for (int32_t i = spawn.Update(deltaTime); i > 0; i--) SpawnEnemy();`
-  (`Start`, `Stop`, `IsRunning`, `GetRemaining`, `GetProgress`). Pass scaled delta times so pauses stop it.
+  (`Start`, `Stop`, `IsRunning`, `GetRemaining`, `GetProgress`). Pass scaled delta times so pauses stop it. A duration that is
+  not positive leaves the timer stopped (a designer's 0 never floods the game).
 - `KeyRepeat`: `KeyRepeat left { Key::Left, 0.2f, 0.05f };` and `if (left.Update(deltaTime)) MoveLeft();` - fires on
   the press, after the delay, then at the interval while held (menus, falling-block games).
 - Helpers and other members that are not fields start over on hot reload: keep what matters in fields, re-create the

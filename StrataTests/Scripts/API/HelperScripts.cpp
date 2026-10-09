@@ -4,6 +4,7 @@
 #include "TestScripts.h"
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -89,6 +90,24 @@ private:
 		Expect(floatsInRange, "NextFloat lies in [0, 1), Range(float) in [min, max)");
 		Expect(lowest < 0.01f && highest > 0.99f, "NextFloat covers its range");
 
+		// Seed 6789416 starts with the largest draw, where min + (max - min) * unit rounds up to max.
+		Random edge(6789416);
+		Expect(edge.NextFloat() == 16777215.0f / 16777216.0f, "seed 6789416 starts with the largest NextFloat");
+		edge.Seed(6789416);
+		const float belowOneAndAHalf = edge.Range(1.0f, 1.5f);
+		edge.Seed(6789416);
+		const float belowHundred = edge.Range(100.0f, 100.25f);
+		Expect(belowOneAndAHalf < 1.5f && belowOneAndAHalf > 1.4999f && belowHundred < 100.25f && belowHundred > 100.2499f,
+			"Range(float) never returns max");
+		edge.Seed(6789416);
+		const float swappedFloat = edge.Range(1.5f, 1.0f);
+		Expect(swappedFloat >= 1.0f && swappedFloat < 1.5f, "float bounds may come in either order");
+		Expect(dice.Range(2.0f, 2.0f) == 2.0f, "equal float bounds give that value");
+		bool finite = true;
+		for (int index = 0; index < 64; index++)
+			finite &= std::isfinite(dice.Range(-std::numeric_limits<float>::max(), std::numeric_limits<float>::max()));
+		Expect(finite, "Range(float) of the extreme bounds stays finite");
+
 		int32_t never = 0;
 		int32_t always = 0;
 		int32_t quarter = 0;
@@ -122,7 +141,16 @@ private:
 		repeating.Start(2.0f);
 		Expect(repeating.IsRunning() && repeating.GetRemaining() == 2.0f && repeating.Update(2.0f) == 1 && !repeating.IsRunning(), "Start restarts, as a one-shot timer");
 
-		Timer tiny(0.0f, true);
+		Timer zero(0.0f, true);
+		Timer negative(-1.0f);
+		Timer notANumber(std::numeric_limits<float>::quiet_NaN(), true);
+		Expect(!zero.IsRunning() && zero.Update(1.0f) == 0 && !negative.IsRunning() && negative.Update(1.0f) == 0 && !notANumber.IsRunning()
+			&& notANumber.Update(1.0f) == 0, "timers without a positive duration do not run");
+		Timer restarted(1.0f, true);
+		restarted.Start(0.0f, true);
+		Expect(!restarted.IsRunning() && restarted.Update(5.0f) == 0 && restarted.GetRemaining() == 0.0f, "starting without a duration stops a timer");
+
+		Timer tiny(1e-6f, true);
 		const int32_t elapsed = tiny.Update(1.0f);
 		Expect(elapsed > 900000 && elapsed < 1100000 && tiny.IsRunning(), "huge counts are computed, not looped");
 		Timer endless(std::numeric_limits<float>::infinity());

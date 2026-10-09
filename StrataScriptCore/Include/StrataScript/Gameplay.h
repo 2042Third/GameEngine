@@ -72,10 +72,25 @@ namespace Strata
 			return static_cast<float>(NextUInt() >> 8u) * (1.0f / 16777216.0f);
 		}
 
-		// Uniform in [min, max).
+		// Uniform in [min, max), never max itself; the bounds may come in either order, and equal bounds give that value.
+		// The bounds must be finite.
 		float Range(float min, float max)
 		{
-			return min + (max - min) * NextFloat();
+			if (min > max)
+			{
+				const float swap = min;
+				min = max;
+				max = swap;
+			}
+			if (!(min < max))
+				return min;
+			const float unit = NextFloat();
+			// Interpolated: min + (max - min) * unit would overflow for bounds of opposite signs near the float limits.
+			const float value = min * (1.0f - unit) + max * unit;
+			// Rounding can reach max (e.g. Range(1.0f, 1.5f) for the largest unit), or fall below min.
+			if (value >= max)
+				return std::nextafter(max, min);
+			return value < min ? min : value;
 		}
 
 		// True with the given probability (0: never, 1: always).
@@ -103,13 +118,14 @@ namespace Strata
 			Start(duration, repeat);
 		}
 
-		// (Re)starts the timer. Durations are at least a microsecond; an infinite one never elapses.
+		// (Re)starts the timer. A duration that is not positive (zero, negative, NaN) stops it instead: a repeating timer
+		// without length would elapse without bound. An infinite duration never elapses.
 		void Start(float duration, bool repeat = false)
 		{
-			m_Duration = duration > c_MinDuration ? duration : c_MinDuration;
-			m_Remaining = m_Duration;
 			m_Repeat = repeat;
-			m_Running = true;
+			m_Running = duration > 0.0f;
+			m_Duration = m_Running ? duration : 0.0f;
+			m_Remaining = m_Duration;
 		}
 
 		void Stop()
@@ -118,7 +134,8 @@ namespace Strata
 		}
 
 		// Advances the timer and returns how often it elapsed during this step: 0 or 1, or more for a repeating timer whose
-		// period is shorter than the step. A one-shot timer stops when it elapses.
+		// period is shorter than the step (a period far below the frame time gives huge counts: treat the result as a flag
+		// then rather than looping over it). A one-shot timer stops when it elapses.
 		int32_t Update(float deltaTime)
 		{
 			if (!m_Running || !(deltaTime > 0.0f) || !std::isfinite(deltaTime))
@@ -148,8 +165,6 @@ namespace Strata
 		// The part of the current period that passed, from 0 to 1.
 		float GetProgress() const { return m_Duration > 0.0f && std::isfinite(m_Duration) ? 1.0f - m_Remaining / m_Duration : 0.0f; }
 	private:
-		static constexpr float c_MinDuration = 1e-6f;
-
 		float m_Duration = 0.0f;
 		float m_Remaining = 0.0f;
 		bool m_Repeat = false;

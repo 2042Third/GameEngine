@@ -20,7 +20,7 @@ TEST_SUITE("Scripting.Helpers")
 		Entity entity = scene.CreateEntity("Helpers");
 		AddScriptEntry(entity, "HelperChecks");
 		scene.OnRuntimeStart();
-		CheckScriptChecks(GetScriptSystem(scene), entity, "HelperChecks", 25);
+		CheckScriptChecks(GetScriptSystem(scene), entity, "HelperChecks", 32);
 		scene.OnRuntimeStop();
 	}
 
