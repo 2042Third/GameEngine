@@ -22,6 +22,10 @@ namespace Strata
 	// Destructors of objects in the faulting call frames do not run, so the guarded code may leak.
 	// Callers must treat the guarded module as unusable after a fault (e.g. stop play mode and unload it).
 	// Guards may be nested and are per thread.
+	//
+	// POSIX: the first Invoke installs process-wide handlers for the fault signals (and an alternate signal stack per
+	// thread); faults outside a guard go to the handlers installed before. Code that replaces these handlers later
+	// (crash reporters, test frameworks catching signals) must be set up first, or crashes are no longer contained.
 	class CrashGuard
 	{
 	public:

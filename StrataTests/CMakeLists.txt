@@ -71,7 +71,11 @@ if(TARGET StrataEditorCore)
 	target_link_libraries(StrataTests PRIVATE StrataEditorCore)
 endif()
 target_include_directories(StrataTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+# DOCTEST_CONFIG_NO_POSIX_SIGNALS: CrashGuard owns the fault signals (and the alternate signal stack) of the process.
+# doctest would install its own handlers around every test case and then restore the ones from before, removing the
+# guard's handlers and leaving crashes in scripts uncontained (or reported as test failures).
 target_compile_definitions(StrataTests PRIVATE
+	DOCTEST_CONFIG_NO_POSIX_SIGNALS
 	"STRATA_TEST_LIBRARY_NAME=\"$<TARGET_FILE_NAME:StrataTestLibrary>\""
 	"STRATA_TEST_SCRIPT_DEPENDENCY=\"$<TARGET_FILE:StrataTestScriptDependency>\""
 	"STRATA_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
