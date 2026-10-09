@@ -411,6 +411,41 @@ TEST_SUITE("Physics.Simulation")
 		CHECK(Math::IsNearlyEqual(GetWorldPosition(scene, mirrored), glm::vec3(5.0f, 3.0f, 0.0f), 1.0e-4f));
 	}
 
+	TEST_CASE("Scale tweens of small mirrored bodies are kept and rebuild their shape")
+	{
+		Scene scene;
+		CreateGround(scene);
+		// A centimeter-scale prop mirrored on Y: its box collider is 1 m across in the world.
+		Entity prop = CreateDynamicBox(scene, "Prop", glm::vec3(0.0f, 0.5f, 0.0f), glm::vec3(50.0f));
+		prop.GetTransform().Scale = glm::vec3(0.01f, -0.01f, 0.01f);
+
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		StepScene(scene, 30);
+
+		// Grown by half a percent every frame through the signaled path: every edit survives the write-back.
+		for (int frame = 0; frame < 20; frame++)
+		{
+			prop.GetTransform().Scale += glm::vec3(5.0e-5f, -5.0e-5f, 5.0e-5f);
+			const glm::vec3 expected = prop.GetTransform().Scale;
+			prop.MarkModified<TransformComponent>();
+			StepScene(scene, 1);
+			CHECK(Math::IsNearlyEqual(prop.GetComponent<TransformComponent>().Scale, expected, 1.0e-7f));
+		}
+		const TransformComponent& transform = prop.GetComponent<TransformComponent>();
+		CHECK(transform.Scale.x == doctest::Approx(0.011f));
+		CHECK(transform.Scale.y == doctest::Approx(-0.011f)); // Still mirrored on Y
+		CHECK(Math::IsNearlyEqual(transform.Rotation, glm::quat(1.0f, 0.0f, 0.0f, 0.0f), 1.0e-3f));
+
+		// The collider grew with it: 0.011 * 50 = 0.55 half extent.
+		StepScene(scene, 60);
+		CHECK(std::abs(GetWorldPosition(scene, prop).y - 0.55f) < 0.03f);
+		std::optional<RaycastHit> top = physics.Raycast(GetWorldPosition(scene, prop) + glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), 10.0f);
+		REQUIRE(top);
+		CHECK(top->HitEntity == prop);
+		CHECK(top->Point.y == doctest::Approx(GetWorldPosition(scene, prop).y + 0.55f).epsilon(1.0e-3));
+	}
+
 	TEST_CASE("Several colliders on one entity form a compound shape")
 	{
 		Scene scene;

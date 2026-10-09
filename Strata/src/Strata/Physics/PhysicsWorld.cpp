@@ -53,8 +53,10 @@ namespace Strata
 
 		// Collider dimensions (after scaling) are clamped to at least this size so that Jolt never sees degenerate shapes.
 		constexpr float c_MinColliderExtent = 1.0e-3f;
-		// Relative change of an entity's world scale that rebuilds its body's shape.
+		// Relative change of an entity's world scale that rebuilds its body's shape, and the smallest absolute change that
+		// counts (scales this small are degenerate anyway).
 		constexpr float c_ScaleChangeTolerance = 1.0e-4f;
+		constexpr float c_MinScaleChange = 1.0e-10f;
 		constexpr float c_MaxRaycastDistance = 1.0e5f;
 		// Bodies within this distance of a body that is removed or moved are woken up, so that nothing keeps sleeping on
 		// top of a body that is no longer there.
@@ -604,6 +606,7 @@ namespace Strata
 			uint64_t WriteBackPass = 0;                     // Last write-back pass that wrote this body
 			uint64_t SyncPass = 0;                          // Last step whose synchronization handled this record
 			glm::vec3 ShapeScale = glm::vec3(1.0f);         // World scale baked into the shape
+			glm::vec3 WorldScale = glm::vec3(1.0f);         // Entity world scale at the last synchronization (ShapeScale within tolerance)
 			glm::mat4 LastWorldTransform = glm::mat4(1.0f); // Entity world transform the body was last synchronized with
 			glm::vec3 KinematicTargetPosition = glm::vec3(0.0f);
 			glm::quat KinematicTargetRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
@@ -805,11 +808,24 @@ namespace Strata
 				data.IssuedWarnings.erase(MakeWarningKey(entityID, static_cast<PhysicsWarning>(warning)));
 		}
 
+		// Whether a world scale differs from the one baked into a shape enough to rebuild it: by more than
+		// c_ScaleChangeTolerance relative to the baked scale on some axis. Relative also for small scales: with an absolute
+		// tolerance, edits of centimeter-sized props were neither rebuilt nor matched by the scale written back with the pose.
 		bool HasScaleChanged(const glm::vec3& scale, const glm::vec3& previous)
 		{
 			const glm::vec3 difference = glm::abs(scale - previous);
-			const glm::vec3 tolerance = glm::max(glm::abs(previous), glm::vec3(1.0f)) * c_ScaleChangeTolerance;
+			const glm::vec3 tolerance = glm::max(glm::abs(previous) * c_ScaleChangeTolerance, glm::vec3(c_MinScaleChange));
 			return glm::any(glm::greaterThan(difference, tolerance));
+		}
+
+		// The world scale of an entity right now, as DecomposeTransform folds it (the scale a shape would be built with), or
+		// the fallback if the world transform is degenerate.
+		glm::vec3 GetWorldScale(const Scene& scene, Entity entity, const glm::vec3& fallback)
+		{
+			glm::vec3 translation;
+			glm::quat rotation;
+			glm::vec3 scale;
+			return Math::DecomposeTransform(scene.GetWorldTransform(entity), translation, rotation, scale) ? scale : fallback;
 		}
 
 		uint32_t GetHierarchyDepth(Entity entity)
@@ -1020,6 +1036,7 @@ namespace Strata
 					return PlacementResult::DegenerateTransform;
 				if (HasScaleChanged(scale, record.ShapeScale))
 					return PlacementResult::ScaleChanged;
+				record.WorldScale = scale;
 
 				bodies.SetPositionAndRotation(record.BodyID, ToJoltPosition(position), ToJolt(rotation), JPH::EActivation::DontActivate);
 				record.LastWorldTransform = worldTransform;
@@ -1634,6 +1651,7 @@ namespace Strata
 			record.BodyID = body->GetID();
 			record.Failure = BuildFailure::None;
 			record.ShapeScale = scale;
+			record.WorldScale = scale;
 			record.LastWorldTransform = worldTransform;
 			record.KinematicTargetPosition = position;
 			record.KinematicTargetRotation = rotation;
@@ -2076,6 +2094,7 @@ namespace Strata
 				data.OwnerRefreshes.Add(handle);
 				return;
 			}
+			record->WorldScale = scale;
 
 			switch (record->Type)
 			{
@@ -2384,7 +2403,18 @@ namespace Strata
 					continue;
 				}
 
-				if (!WriteWorldTransform(scene, entity, Math::ComposeTransform(position, glm::normalize(rotation), record.ShapeScale)))
+				// The entity keeps its own scale: the pose is composed with its world scale as of the last synchronization (the
+				// shape's within tolerance), or its current one if it was edited without a signal while the body slept, in which
+				// case the shape is rebuilt before the next step.
+				glm::vec3 worldScale = record.WorldScale;
+				if (scene.GetWorldTransform(entity) != record.LastWorldTransform)
+				{
+					worldScale = GetWorldScale(scene, entity, record.WorldScale);
+					if (HasScaleChanged(worldScale, record.ShapeScale))
+						data.OwnerRefreshes.Add(handle);
+				}
+
+				if (!WriteWorldTransform(scene, entity, Math::ComposeTransform(position, glm::normalize(rotation), worldScale)))
 				{
 					// The parent cannot be inverted (the sync before the step notices this only when the transform changed):
 					// the body goes back to its entity's pose and leaves the simulation until the parent is valid again.
@@ -2402,6 +2432,7 @@ namespace Strata
 					continue;
 				}
 				record.LastWorldTransform = scene.GetWorldTransform(entity);
+				record.WorldScale = worldScale;
 				UpdateDescendantsOfMovedBody(data, entity, true);
 			}
 		}
@@ -2831,13 +2862,19 @@ namespace Strata
 			return false;
 		const glm::quat normalizedRotation = rotation / rotationLength;
 
+		// The entity keeps its world scale; if it was edited without a signal and no longer matches the shape, the shape is
+		// rebuilt before the next step.
 		Scene& scene = *data.OwnerScene;
-		if (!WriteWorldTransform(scene, entity, Math::ComposeTransform(position, normalizedRotation, record->ShapeScale)))
+		const glm::vec3 worldScale = GetWorldScale(scene, entity, record->WorldScale);
+		if (HasScaleChanged(worldScale, record->ShapeScale))
+			data.OwnerRefreshes.Add(entity.GetHandle());
+		if (!WriteWorldTransform(scene, entity, Math::ComposeTransform(position, normalizedRotation, worldScale)))
 		{
 			ST_CORE_WARN("Physics: cannot teleport '{}': its parent is scaled to (nearly) zero", entity.GetName());
 			return false;
 		}
 		record->LastWorldTransform = scene.GetWorldTransform(entity);
+		record->WorldScale = worldScale;
 		record->KinematicTargetPosition = position;
 		record->KinematicTargetRotation = normalizedRotation;
 		record->KinematicMoving = false;
