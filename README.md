@@ -111,4 +111,6 @@ assets, scripts, scene, play-testing, export); `.claude/skills/strata-editor-aut
 
 `AGENTS.md` is the development guide for people and AI agents: code style (Hazel conventions),
 architecture rules, the asset pipeline, scripting, editor commands, testing, and the review checklist every
-change goes through. Third-party components and their licenses are listed in `ThirdPartyNotices.md`.
+change goes through. `Docs/Architecture.md` explains how the engine fits together: targets, modules, the frame
+loop, threading, the asset pipeline, scripting, the editor and export. Third-party components and their licenses
+are listed in `ThirdPartyNotices.md`.

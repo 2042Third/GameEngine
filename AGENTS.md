@@ -481,8 +481,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   UI builds with Scripts > Build Scripts (Ctrl+B) or the toolbar.
 - Commands never block a frame. One that has to wait (frames, a build, a GPU readback) returns
   `EditorCommandResult::Defer(poll)`; `EditorCommandRunner` polls it once per frame, starting with the
-  next frame, and reports through a completion callback. The UI, command scripts and automation all
-  run commands through the runner (UI helpers that expect an immediate result reject pending ones).
+  next frame, and reports through a completion callback. Command scripts, automation and UI actions that
+  can take frames (e.g. Build Scripts) run commands through the runner; UI actions that finish at once
+  call the registry through `RunEditorCommand`, which rejects pending results.
   Poll functions own their data (copy parameters, never capture them by reference). `editor.wait
   {frames}` returns after that many frames, e.g. to let a playing scene run.
 - `StrataEditor --commands script.json` runs a JSON array of `{"command", "parameters", "expect"}` at startup
