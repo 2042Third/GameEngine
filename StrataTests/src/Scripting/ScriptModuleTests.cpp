@@ -87,7 +87,7 @@ TEST_SUITE("Scripting.Module")
 			"RemoveOnDestroy", "Fragile", "Readder", "Replicator", "MassSpawner", "PendingSpawner", "InvalidArguments", "PhysicsAPI", "PhysicsMisuse",
 			"OlderEnginePhysics", "PhysicsWithoutWorld", "ContactRecorder", "DestroySelfOnContact", "DestroyOtherOnContact", "RemoveSelfOnContact",
 			"ContactThrower", "ContactCounter", "AudioAPI", "AudioMisuse", "AudioUnavailable", "GameFlow",
-			"GameFlowMisuse"
+			"GameFlowMisuse", "HelperChecks", "KeyRepeatProbe"
 		};
 		std::set<std::string> classes;
 		for (const ScriptClassInfo& info : engine.GetClasses())

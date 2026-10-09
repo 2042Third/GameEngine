@@ -342,7 +342,7 @@ TEST_SUITE("FeatureTest")
 		// Guards against a reader regression that would make the coverage checks below vacuous.
 		CHECK(surface.Functions.size() >= 80);
 		for (const char* className : { "Entity", "Component", "TransformComponent", "AssetHandle", "Assets", "Scene", "Script", "ScriptClassBuilder",
-				 "Input", "Log", "Time", "RigidBody", "Physics", "AudioSource", "Audio", "Game" })
+				 "Input", "Log", "Time", "RigidBody", "Physics", "AudioSource", "Audio", "Game", "Random", "Timer", "KeyRepeat" })
 		{
 			INFO("Class ", className);
 			CHECK(surface.Classes.contains(className));
