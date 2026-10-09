@@ -31,8 +31,10 @@
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 
+#include <array>
+#include <bit>
 #include <map>
-#include <set>
+#include <span>
 
 namespace Strata
 {
@@ -292,11 +294,14 @@ namespace Strata
 		}
 
 		// Visits root and its descendants depth first, parents before children. The visitor returns whether to descend into
-		// the visited entity's children.
+		// the visited entity's children. The stack is scratch memory reused between calls (empty when a visit ends), so
+		// visitors must not start a visit with the same stack.
 		template<typename Visitor>
-		void VisitSubtree(const Scene& scene, Entity root, Visitor&& visitor)
+		void VisitSubtree(const Scene& scene, Entity root, std::vector<Entity>& stack, Visitor&& visitor)
 		{
-			std::vector<Entity> stack { root };
+			ST_CORE_ASSERT(stack.empty(), "VisitSubtree: the stack is in use by another visit");
+			stack.clear();
+			stack.push_back(root);
 			while (!stack.empty())
 			{
 				Entity entity = stack.back();
@@ -316,10 +321,10 @@ namespace Strata
 		}
 
 		// Collider entities in the subtree of a rigid body that belong to its body (stops at descendants with a rigid body).
-		std::vector<entt::entity> CollectMergedEntities(const Scene& scene, Entity owner)
+		std::vector<entt::entity> CollectMergedEntities(const Scene& scene, Entity owner, std::vector<Entity>& stack)
 		{
 			std::vector<entt::entity> merged;
-			VisitSubtree(scene, owner, [&](Entity entity)
+			VisitSubtree(scene, owner, stack, [&](Entity entity)
 			{
 				if (entity == owner)
 					return true;
@@ -403,11 +408,53 @@ namespace Strata
 		}
 
 		//////////////////////////////////////////////////////////////////////////
+		// Contact pairs
+		//////////////////////////////////////////////////////////////////////////
+
+		// Contacts are tracked per pair of entities (not bodies), so that rebuilding a body keeps its contacts.
+		struct PairKey
+		{
+			uint64_t Low = 0;
+			uint64_t High = 0;
+
+			bool operator==(const PairKey& other) const { return Low == other.Low && High == other.High; }
+			bool operator<(const PairKey& other) const { return Low != other.Low ? Low < other.Low : High < other.High; }
+		};
+
+		struct PairKeyHash
+		{
+			size_t operator()(const PairKey& key) const
+			{
+				return static_cast<size_t>(Hash::Combine(key.Low, key.High));
+			}
+		};
+
+		PairKey MakePairKey(UUID a, UUID b)
+		{
+			const uint64_t first = static_cast<uint64_t>(a);
+			const uint64_t second = static_cast<uint64_t>(b);
+			return first < second ? PairKey { first, second } : PairKey { second, first };
+		}
+
+		struct TouchingPair
+		{
+			UUID A = UUID::Null();
+			UUID B = UUID::Null();
+			bool IsTrigger = false;
+			uint64_t CheckStep = 0;  // Step during which the pair ends unless it is reported (see CollectCheckedPairs)
+			uint64_t ReportStep = 0; // Last step during which the pair was reported
+			uint64_t SortKey = 0;
+			glm::vec3 Point = glm::vec3(0.0f);
+			glm::vec3 Normal = glm::vec3(0.0f); // From A towards B
+		};
+
+		//////////////////////////////////////////////////////////////////////////
 		// Listeners (called from Jolt's worker threads during a step)
 		//////////////////////////////////////////////////////////////////////////
 
 		struct ContactReport
 		{
+			PairKey Pair;
 			// Entity of Jolt's body 1: the body with the higher motion type (dynamic, then kinematic, then static); the lower
 			// body ID only breaks ties between bodies of the same motion type.
 			UUID EntityA = UUID::Null();
@@ -418,6 +465,22 @@ namespace Strata
 			glm::vec3 Normal = glm::vec3(0.0f);
 			bool IsTrigger = false;
 		};
+
+		// A strict total order of the reports of a step that does not depend on the order in which worker threads reported
+		// them: by pair, then by sub shape pair, then (several collision steps report the same sub shapes) by contact.
+		bool IsReportOrderedBefore(const ContactReport& a, const ContactReport& b)
+		{
+			if (!(a.Pair == b.Pair))
+				return a.Pair < b.Pair;
+			if (a.SubShapeKey != b.SubShapeKey)
+				return a.SubShapeKey < b.SubShapeKey;
+			const auto bits = [](const ContactReport& report)
+			{
+				return std::array<uint32_t, 6> { std::bit_cast<uint32_t>(report.Point.x), std::bit_cast<uint32_t>(report.Point.y), std::bit_cast<uint32_t>(report.Point.z),
+					std::bit_cast<uint32_t>(report.Normal.x), std::bit_cast<uint32_t>(report.Normal.y), std::bit_cast<uint32_t>(report.Normal.z) };
+			};
+			return bits(a) < bits(b);
+		}
 
 		// Records every contact that exists during a step. Contact begin/end is derived from these reports on the main
 		// thread after the step (see ProcessContacts), so OnContactRemoved is not needed: it would also fire when a body
@@ -435,12 +498,13 @@ namespace Strata
 				Record(body1, body2, manifold);
 			}
 
-			std::vector<ContactReport> TakeReports()
+			// Moves the reports collected since the last call into `reports` (discarding its contents) and keeps the other
+			// buffer for the next step: both keep their capacity, so steps after the first allocate nothing.
+			void SwapReports(std::vector<ContactReport>& reports)
 			{
+				reports.clear();
 				std::scoped_lock<std::mutex> lock(m_Mutex);
-				std::vector<ContactReport> reports = std::move(m_Reports);
-				m_Reports.clear();
-				return reports;
+				m_Reports.swap(reports);
 			}
 		private:
 			void Record(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold& manifold)
@@ -448,6 +512,7 @@ namespace Strata
 				ContactReport report;
 				report.EntityA = UUID(body1.GetUserData());
 				report.EntityB = UUID(body2.GetUserData());
+				report.Pair = MakePairKey(report.EntityA, report.EntityB);
 				report.SortKey = (static_cast<uint64_t>(body1.GetID().GetIndexAndSequenceNumber()) << 32) | body2.GetID().GetIndexAndSequenceNumber();
 				report.SubShapeKey = (static_cast<uint64_t>(manifold.mSubShapeID1.GetValue()) << 32) | manifold.mSubShapeID2.GetValue();
 				report.IsTrigger = body1.IsSensor() || body2.IsSensor();
@@ -495,12 +560,12 @@ namespace Strata
 				m_Deactivated.clear();
 			}
 
-			std::vector<JPH::BodyID> Take()
+			// Like ContactCollector::SwapReports: double buffered, so that steps allocate nothing.
+			void SwapDeactivated(std::vector<JPH::BodyID>& bodies)
 			{
+				bodies.clear();
 				std::scoped_lock<std::mutex> lock(m_Mutex);
-				std::vector<JPH::BodyID> bodies = std::move(m_Deactivated);
-				m_Deactivated.clear();
-				return bodies;
+				m_Deactivated.swap(bodies);
 			}
 		private:
 			std::mutex m_Mutex;
@@ -523,7 +588,9 @@ namespace Strata
 			bool Suspended = false;                         // Out of the simulation because the world transform is degenerate
 			bool WaitsForParent = false;                    // Not built because the parent cannot be inverted (dynamic bodies)
 			bool KinematicMoving = false;                   // MoveKinematic gave the body a velocity during the last step
-			bool TransformDirty = false;                    // Re-synchronize with the entity at the next step (static bodies)
+			bool TransformDirty = false;                    // A signaled transform change to apply at the next step
+			bool Polled = false;                            // Listed in PhysicsWorldData::PolledBodies
+			uint64_t WriteBackPass = 0;                     // Last write-back pass that wrote this body
 			glm::vec3 ShapeScale = glm::vec3(1.0f);         // World scale baked into the shape
 			glm::mat4 LastWorldTransform = glm::mat4(1.0f); // Entity world transform the body was last synchronized with
 			glm::vec3 KinematicTargetPosition = glm::vec3(0.0f);
@@ -536,41 +603,6 @@ namespace Strata
 			std::vector<AssetHandle> MissingMeshes;   // Mesh colliders left out because their data was not available
 
 			bool HasBody() const { return !BodyID.IsInvalid(); }
-		};
-
-		// Contacts are tracked per pair of entities (not bodies), so that rebuilding a body keeps its contacts.
-		struct PairKey
-		{
-			uint64_t Low = 0;
-			uint64_t High = 0;
-
-			bool operator==(const PairKey& other) const { return Low == other.Low && High == other.High; }
-		};
-
-		struct PairKeyHash
-		{
-			size_t operator()(const PairKey& key) const
-			{
-				return static_cast<size_t>(Hash::Combine(key.Low, key.High));
-			}
-		};
-
-		PairKey MakePairKey(UUID a, UUID b)
-		{
-			const uint64_t first = static_cast<uint64_t>(a);
-			const uint64_t second = static_cast<uint64_t>(b);
-			return first < second ? PairKey { first, second } : PairKey { second, first };
-		}
-
-		struct TouchingPair
-		{
-			UUID A = UUID::Null();
-			UUID B = UUID::Null();
-			bool IsTrigger = false;
-			bool Awake = true; // At least one body could report the contact during the current step
-			uint64_t SortKey = 0;
-			glm::vec3 Point = glm::vec3(0.0f);
-			glm::vec3 Normal = glm::vec3(0.0f); // From A towards B
 		};
 
 		struct MeshShapeCacheEntry
@@ -591,10 +623,12 @@ namespace Strata
 
 			bool IsEmpty() const { return m_List.empty(); }
 
-			std::vector<entt::entity> Take()
+			// Moves the recorded entities into `list` (discarding its contents); the list's buffer is reused for the next
+			// changes, so applying changes does not allocate once the buffers have grown.
+			const std::vector<entt::entity>& TakeInto(std::vector<entt::entity>& list)
 			{
-				std::vector<entt::entity> list = std::move(m_List);
-				m_List.clear();
+				list.clear();
+				m_List.swap(list);
 				m_Set.clear();
 				return list;
 			}
@@ -652,16 +686,36 @@ namespace Strata
 
 		std::map<entt::entity, BodyRecord> Bodies;                    // Ordered: per-step processing is deterministic
 		std::unordered_map<entt::entity, entt::entity> MergedOwners;  // Collider entity -> rigid body entity owning its body
-		std::set<entt::entity> PolledBodies;                          // Records that need attention every step
+		// Records that need attention at the next step besides the awake bodies (see NeedsPolling). Entries are dropped
+		// lazily, so the list may hold records that no longer need it (or no longer exist).
+		std::vector<entt::entity> PolledBodies;
 		std::unordered_map<JPH::uint32, entt::entity> BodyEntities;   // Body ID (index and sequence number) -> entity
 		std::unordered_map<PairKey, TouchingPair, PairKeyHash> TouchingPairs;
 		std::unordered_map<UUID, std::vector<PairKey>> EntityPairs;   // Touching pairs of each entity
+		std::vector<UUID> RecheckedEntities;                          // Built or rebuilt since the last step: their pairs are checked
 		std::vector<CollisionEvent> PendingEvents;
 		std::vector<UUID> LeftAfterStep;                              // Bodies removed between the step and contact processing
 		std::unordered_set<uint64_t> IssuedWarnings;                  // Hash of (entity, PhysicsWarning)
 		JPH::EPhysicsUpdateError ReportedErrors = JPH::EPhysicsUpdateError::None;
 		uint64_t StepCount = 0;
+		uint64_t WriteBackPass = 0;
 		float LastStepTime = 0.0f;
+		uint32_t LastSyncedBodies = 0;
+		uint32_t LastCheckedPairs = 0;
+		uint32_t LastWrittenBodies = 0;
+
+		// Scratch buffers reused by every step, so that steps allocate nothing once they have grown.
+		std::vector<entt::entity> SyncCandidates;
+		std::vector<PairKey> CheckedPairs;
+		std::vector<ContactReport> Reports;
+		std::vector<TouchingPair> EndedPairs;
+		std::vector<TouchingPair> BegunPairs;
+		std::vector<JPH::BodyID> MovedBodies;
+		std::vector<JPH::BodyID> DeactivatedBodies;
+		std::vector<std::pair<uint32_t, entt::entity>> WriteBacks;   // Hierarchy depth and entity of the bodies to write back
+		std::vector<Entity> VisitStack;                               // See VisitSubtree
+		std::vector<entt::entity> ChangeScratch;                      // See ChangeList::TakeInto
+		std::unordered_set<entt::entity> VisitedOwners;
 
 		// Recorded by registry signals, applied by ApplyPendingChanges.
 		ChangeList StructureChanges; // Components added, removed or modified; entity destroyed
@@ -742,19 +796,23 @@ namespace Strata
 			return record && record->Type == RigidBodyType::Dynamic ? record : nullptr;
 		}
 
+		// Whether a record needs attention at the next step although its body may be asleep or out of the simulation (awake
+		// bodies are synchronized anyway): a build to retry, a suspended body to bring back, a signaled transform change,
+		// missing mesh data.
 		bool NeedsPolling(const BodyRecord& record)
 		{
 			if (!record.HasBody())
 				return record.Failure == BuildFailure::DegenerateTransform || record.Failure == BuildFailure::MissingMesh || record.Failure == BuildFailure::BodyLimit;
-			return record.Type != RigidBodyType::Static || record.Suspended || record.TransformDirty || !record.MissingMeshes.empty();
+			return record.Suspended || record.TransformDirty || !record.MissingMeshes.empty();
 		}
 
-		void UpdatePolling(PhysicsWorldData& data, entt::entity handle, const BodyRecord& record)
+		// Lists a record for the next step if it needs it. Records that no longer need it are dropped by the step.
+		void UpdatePolling(PhysicsWorldData& data, entt::entity handle, BodyRecord& record)
 		{
-			if (NeedsPolling(record))
-				data.PolledBodies.insert(handle);
-			else
-				data.PolledBodies.erase(handle);
+			if (record.Polled || !NeedsPolling(record))
+				return;
+			record.Polled = true;
+			data.PolledBodies.push_back(handle);
 		}
 
 		//////////////////////////////////////////////////////////////////////////
@@ -978,6 +1036,7 @@ namespace Strata
 			data.Bodies.clear();
 			data.MergedOwners.clear();
 			data.PolledBodies.clear();
+			data.RecheckedEntities.clear();
 			data.BodyEntities.clear();
 			data.TouchingPairs.clear();
 			data.EntityPairs.clear();
@@ -1338,8 +1397,7 @@ namespace Strata
 			}
 
 			const UUID entityID = record.EntityID;
-			data.PolledBodies.erase(handle);
-			data.Bodies.erase(it);
+			data.Bodies.erase(it); // A PolledBodies entry is dropped by the next step
 			EndContactsOf(data, entityID);
 		}
 
@@ -1413,7 +1471,7 @@ namespace Strata
 			}
 
 			// Collider descendants only merge into rigid bodies; collider entities without one are static bodies of their own.
-			UpdateMergedEntities(data, handle, record, rigidBody ? CollectMergedEntities(scene, entity) : std::vector<entt::entity>());
+			UpdateMergedEntities(data, handle, record, rigidBody ? CollectMergedEntities(scene, entity, data.VisitStack) : std::vector<entt::entity>());
 
 			const glm::mat4 worldTransform = scene.GetWorldTransform(entity);
 			glm::vec3 position;
@@ -1549,6 +1607,8 @@ namespace Strata
 
 			if (!IsSimulated(scene, entity) || AddToSimulation(data, record, entity) != PlacementResult::Added)
 				EndContactsOf(data, record.EntityID);
+			else if (data.EntityPairs.find(record.EntityID) != data.EntityPairs.end())
+				data.RecheckedEntities.push_back(record.EntityID); // Its contacts carried over: the next step confirms or ends them
 			UpdatePolling(data, handle, record);
 		}
 
@@ -1606,10 +1666,10 @@ namespace Strata
 			for (uint32_t round = 0; round < c_MaxChangeRounds && hasChanges(); round++)
 			{
 				// Hierarchy changes may move any physics entity of the subtree to another body.
-				for (entt::entity handle : data.SubtreeChanges.Take())
+				for (entt::entity handle : data.SubtreeChanges.TakeInto(data.ChangeScratch))
 				{
 					data.StructureChanges.Add(handle);
-					VisitSubtree(scene, Entity(handle, &scene), [&](Entity entity)
+					VisitSubtree(scene, Entity(handle, &scene), data.VisitStack, [&](Entity entity)
 					{
 						if (HasPhysicsComponent(entity))
 							data.StructureChanges.Add(entity.GetHandle());
@@ -1619,7 +1679,7 @@ namespace Strata
 
 				// Activity is inherited: bodies of the subtree enter or leave the simulation; colliders merged into a body above
 				// the changed entity join or leave that body's shape.
-				for (entt::entity handle : data.ActivityChanges.Take())
+				for (entt::entity handle : data.ActivityChanges.TakeInto(data.ChangeScratch))
 				{
 					const Entity changed(handle, &scene);
 					if (!changed.IsValid())
@@ -1628,8 +1688,9 @@ namespace Strata
 						continue;
 					}
 
-					std::unordered_set<entt::entity> visitedOwners;
-					VisitSubtree(scene, changed, [&](Entity entity)
+					std::unordered_set<entt::entity>& visitedOwners = data.VisitedOwners;
+					visitedOwners.clear();
+					VisitSubtree(scene, changed, data.VisitStack, [&](Entity entity)
 					{
 						if (BodyRecord* record = FindRecord(data, entity.GetHandle()))
 						{
@@ -1648,10 +1709,11 @@ namespace Strata
 
 				// A transform change moves the bodies of the subtree; colliders merged into a body above the changed entity
 				// moved relative to that body, which changes its shape.
-				for (entt::entity handle : data.TransformChanges.Take())
+				for (entt::entity handle : data.TransformChanges.TakeInto(data.ChangeScratch))
 				{
-					std::unordered_set<entt::entity> visitedOwners;
-					VisitSubtree(scene, Entity(handle, &scene), [&](Entity entity)
+					std::unordered_set<entt::entity>& visitedOwners = data.VisitedOwners;
+					visitedOwners.clear();
+					VisitSubtree(scene, Entity(handle, &scene), data.VisitStack, [&](Entity entity)
 					{
 						if (BodyRecord* record = FindRecord(data, entity.GetHandle()))
 						{
@@ -1670,7 +1732,7 @@ namespace Strata
 				}
 
 				// The bodies an entity was part of, and the one it is part of now.
-				for (entt::entity handle : data.StructureChanges.Take())
+				for (entt::entity handle : data.StructureChanges.TakeInto(data.ChangeScratch))
 				{
 					if (data.Bodies.find(handle) != data.Bodies.end())
 						data.OwnerRefreshes.Add(handle);
@@ -1686,7 +1748,7 @@ namespace Strata
 						data.OwnerRefreshes.Add(owner.GetHandle());
 				}
 
-				for (entt::entity handle : data.OwnerRefreshes.Take())
+				for (entt::entity handle : data.OwnerRefreshes.TakeInto(data.ChangeScratch))
 					RefreshOwner(data, handle);
 			}
 
@@ -1773,16 +1835,92 @@ namespace Strata
 		// Stepping
 		//////////////////////////////////////////////////////////////////////////
 
-		// Brings the bodies that need attention every step in line with their entities: kinematic targets, teleports,
-		// activity, degenerate transforms, scale changes and retries of bodies that could not be built.
+		// The bodies Jolt simulates in the next step (awake dynamic and kinematic bodies). Between steps only the main thread
+		// changes the list, so reading it without a lock is safe.
+		std::span<const JPH::BodyID> GetAwakeBodies(const PhysicsWorldData& data)
+		{
+			const JPH::BodyID* bodies = data.JoltSystem->GetActiveBodiesUnsafe(JPH::EBodyType::RigidBody);
+			return std::span<const JPH::BodyID>(bodies, data.JoltSystem->GetNumActiveBodies(JPH::EBodyType::RigidBody));
+		}
+
+		// Bodies of entities about to be destroyed (Scene::DestroyEntity during an update) leave the simulation before the
+		// next step; static bodies stay until the entity is destroyed (queries skip them already). Colliders about to be
+		// destroyed leave the shape of the body they belong to.
+		void RemovePendingDestroys(PhysicsWorldData& data)
+		{
+			Scene& scene = *data.OwnerScene;
+			for (UUID entityID : scene.GetPendingDestroys())
+			{
+				const Entity root = scene.GetEntityByUUID(entityID);
+				if (!root)
+					continue;
+
+				VisitSubtree(scene, root, data.VisitStack, [&](Entity entity)
+				{
+					if (BodyRecord* record = FindRecord(data, entity.GetHandle()))
+					{
+						if (record->Type != RigidBodyType::Static)
+							RemoveFromSimulation(data, *record);
+						return true;
+					}
+
+					auto merged = data.MergedOwners.find(entity.GetHandle());
+					if (merged == data.MergedOwners.end())
+						return true;
+					const BodyRecord* owner = FindRecord(data, merged->second);
+					const bool inShape = owner && std::find(owner->ShapeEntities.begin(), owner->ShapeEntities.end(), entity.GetHandle()) != owner->ShapeEntities.end();
+					if (inShape && !IsPendingDestroyInHierarchy(scene, Entity(merged->second, &scene)))
+						data.OwnerRefreshes.Add(merged->second);
+					return true;
+				});
+			}
+		}
+
+		// Brings the bodies in line with their entities before a step: kinematic targets, teleports, degenerate transforms,
+		// scale changes and retries of bodies that could not be built. Only awake bodies (whose entities may have been moved
+		// without a signal) and the records that need attention (see NeedsPolling) are visited, so sleeping and static
+		// bodies cost nothing.
 		void SyncEntitiesToBodies(PhysicsWorldData& data, float timestep)
 		{
 			ST_PROFILE_FUNCTION();
 
 			Scene& scene = *data.OwnerScene;
 			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
-			const std::vector<entt::entity> polled(data.PolledBodies.begin(), data.PolledBodies.end());
-			for (entt::entity handle : polled)
+			RemovePendingDestroys(data);
+
+			std::vector<entt::entity>& candidates = data.SyncCandidates;
+			candidates.clear();
+			for (const JPH::BodyID& bodyID : GetAwakeBodies(data))
+			{
+				auto it = data.BodyEntities.find(bodyID.GetIndexAndSequenceNumber());
+				if (it != data.BodyEntities.end())
+					candidates.push_back(it->second);
+			}
+
+			// The polled records that still need attention; the others, and stale or duplicate entries, are dropped.
+			size_t kept = 0;
+			for (size_t index = 0; index < data.PolledBodies.size(); index++)
+			{
+				const entt::entity handle = data.PolledBodies[index];
+				BodyRecord* record = FindRecord(data, handle);
+				if (!record || !record->Polled)
+					continue;
+				record->Polled = false; // Set again below for the records that stay listed; skips duplicates meanwhile
+				if (!NeedsPolling(*record))
+					continue;
+				data.PolledBodies[kept++] = handle;
+				candidates.push_back(handle);
+			}
+			data.PolledBodies.resize(kept);
+			for (entt::entity handle : data.PolledBodies)
+				FindRecord(data, handle)->Polled = true;
+
+			// Processed in a fixed order, whatever the order of Jolt's active list.
+			std::sort(candidates.begin(), candidates.end());
+			candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+			data.LastSyncedBodies = static_cast<uint32_t>(candidates.size());
+
+			for (entt::entity handle : candidates)
 			{
 				BodyRecord* record = FindRecord(data, handle);
 				if (!record)
@@ -1795,11 +1933,11 @@ namespace Strata
 					continue;
 				}
 
-				const bool simulated = IsSimulated(scene, entity);
 				if (!record->HasBody())
 				{
+					// A build whose cause of failure may have gone away is retried.
 					bool retry = false;
-					if (simulated)
+					if (IsSimulated(scene, entity))
 					{
 						switch (record->Failure)
 						{
@@ -1816,33 +1954,26 @@ namespace Strata
 					continue;
 				}
 
-				if (!simulated)
-				{
-					RemoveFromSimulation(data, *record);
-					UpdatePolling(data, handle, *record);
-					continue;
-				}
-
-				// Mesh data that arrived, or merged colliders that left the shape (about to be destroyed, for instance), change
-				// the shape.
-				const bool partLeftShape = std::any_of(record->ShapeEntities.begin(), record->ShapeEntities.end(), [&](entt::entity part)
-				{
-					return part != handle && !IsPartOfOwnerShape(scene, Entity(part, &scene), entity);
-				});
-				if (partLeftShape || (!record->MissingMeshes.empty() && IsAnyMeshAvailable(record->MissingMeshes)))
-				{
-					data.OwnerRefreshes.Add(handle);
-					continue;
-				}
-
 				if (!record->InSimulation)
 				{
-					// Back from a degenerate transform or from being inactive.
-					const PlacementResult result = AddToSimulation(data, *record, entity);
-					record->Suspended = result == PlacementResult::DegenerateTransform;
-					if (result == PlacementResult::ScaleChanged)
-						data.OwnerRefreshes.Add(handle);
+					// A suspended body comes back once its transform is valid. Bodies of inactive entities or entities about to
+					// be destroyed wait: activity changes bring them back, and their pose is taken from the entity then.
+					if (record->Suspended && IsSimulated(scene, entity))
+					{
+						const PlacementResult result = AddToSimulation(data, *record, entity);
+						record->Suspended = result == PlacementResult::DegenerateTransform;
+						if (result == PlacementResult::ScaleChanged)
+							data.OwnerRefreshes.Add(handle);
+					}
+					record->TransformDirty = false;
 					UpdatePolling(data, handle, *record);
+					continue;
+				}
+
+				// Mesh data that arrived changes the shape.
+				if (!record->MissingMeshes.empty() && IsAnyMeshAvailable(record->MissingMeshes))
+				{
+					data.OwnerRefreshes.Add(handle);
 					continue;
 				}
 
@@ -1856,7 +1987,6 @@ namespace Strata
 						record->KinematicMoving = false;
 					}
 					record->TransformDirty = false;
-					UpdatePolling(data, handle, *record);
 					continue;
 				}
 
@@ -1877,6 +2007,7 @@ namespace Strata
 					}
 					RemoveFromSimulation(data, *record);
 					record->Suspended = true;
+					record->TransformDirty = false;
 					UpdatePolling(data, handle, *record);
 					continue;
 				}
@@ -1886,28 +2017,31 @@ namespace Strata
 					continue;
 				}
 
-				// Bodies resting on a moved body must notice that it is gone: Jolt only activates the moved body itself.
-				WakeBodiesAround(data, record->BodyID);
 				switch (record->Type)
 				{
 					case RigidBodyType::Static:
+						// Jolt only activates a body that is moved itself, so bodies resting on it at the old and the new place
+						// are woken up explicitly.
+						WakeBodiesAround(data, record->BodyID);
 						bodies.SetPositionAndRotation(record->BodyID, ToJoltPosition(position), ToJolt(rotation), JPH::EActivation::DontActivate);
 						WakeBodiesAround(data, record->BodyID);
 						break;
 					case RigidBodyType::Kinematic:
+						// Moved with a velocity: the bodies it touches, also those resting on it, wake up through their contacts.
 						bodies.MoveKinematic(record->BodyID, ToJoltPosition(position), ToJolt(rotation), timestep);
 						record->KinematicMoving = true;
 						record->KinematicTargetPosition = position;
 						record->KinematicTargetRotation = rotation;
 						break;
 					case RigidBodyType::Dynamic:
-						// Moved from outside physics (gameplay code, editor gizmo, a moving parent): teleport, keeping velocity.
+						// Moved from outside physics (gameplay code, editor gizmo, a moving parent): teleport, keeping velocity,
+						// and wake the bodies that rested on it.
+						WakeBodiesAround(data, record->BodyID);
 						bodies.SetPositionAndRotation(record->BodyID, ToJoltPosition(position), ToJolt(rotation), JPH::EActivation::Activate);
 						break;
 				}
 				record->LastWorldTransform = worldTransform;
 				record->TransformDirty = false;
-				UpdatePolling(data, handle, *record);
 			}
 
 			ApplyChanges(data);
@@ -1938,67 +2072,87 @@ namespace Strata
 			return state;
 		}
 
-		// Jolt only reports contacts of awake bodies. Before a step, flag the touching pairs that Jolt is able to report;
-		// pairs that are not reported during the step end only if they were able to be reported. Pairs of sleeping bodies stay
-		// touching until a body wakes up, and pairs of two static bodies (which can never touch) end.
-		void FlagReportablePairs(PhysicsWorldData& data)
+		// Whether a touching pair must end unless the next step reports it: a body is awake (Jolt reports the contacts of
+		// awake bodies), or the pair can never be reported again (a body left the simulation, or both bodies are static).
+		bool MustBeReported(PhysicsWorldData& data, const TouchingPair& pair)
 		{
-			for (auto& [key, pair] : data.TouchingPairs)
-			{
-				const ParticipantState a = GetParticipantState(data, pair.A);
-				const ParticipantState b = GetParticipantState(data, pair.B);
-				pair.Awake = !a.Simulated || !b.Simulated || a.Active || b.Active || (a.Static && b.Static);
-			}
+			const ParticipantState a = GetParticipantState(data, pair.A);
+			const ParticipantState b = GetParticipantState(data, pair.B);
+			return !a.Simulated || !b.Simulated || a.Active || b.Active || (a.Static && b.Static);
 		}
 
+		// Collects the touching pairs that end unless the step reports them: those of awake bodies, and those of bodies built
+		// since the last step whose contacts carried over (see MustBeReported). Pairs of sleeping bodies stay touching until a
+		// body wakes up, and are not visited at all.
+		void CollectCheckedPairs(PhysicsWorldData& data)
+		{
+			ST_PROFILE_FUNCTION();
+
+			data.CheckedPairs.clear();
+			const uint64_t step = data.StepCount;
+			const auto checkPairsOf = [&](UUID entityID, bool awake)
+			{
+				auto indexIt = data.EntityPairs.find(entityID);
+				if (indexIt == data.EntityPairs.end())
+					return;
+				for (const PairKey& key : indexIt->second)
+				{
+					auto pairIt = data.TouchingPairs.find(key);
+					if (pairIt == data.TouchingPairs.end() || pairIt->second.CheckStep == step)
+						continue;
+					if (!awake && !MustBeReported(data, pairIt->second))
+						continue;
+					pairIt->second.CheckStep = step;
+					data.CheckedPairs.push_back(key);
+				}
+			};
+
+			const JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterfaceNoLock();
+			for (const JPH::BodyID& bodyID : GetAwakeBodies(data))
+				checkPairsOf(UUID(bodies.GetUserData(bodyID)), true);
+			for (UUID entityID : data.RecheckedEntities)
+				checkPairsOf(entityID, false);
+			data.RecheckedEntities.clear();
+			data.LastCheckedPairs = static_cast<uint32_t>(data.CheckedPairs.size());
+		}
+
+		// Turns the contacts reported during the step into events: reported pairs that were not touching begin, checked pairs
+		// (see CollectCheckedPairs) that were not reported end.
 		void ProcessContacts(PhysicsWorldData& data)
 		{
 			ST_PROFILE_FUNCTION();
 
-			// Several sub shape pairs of the same entity pair may touch; keep the lowest sub shape key so that the reported
-			// point does not depend on the order in which worker threads reported them.
-			std::unordered_map<PairKey, ContactReport, PairKeyHash> current;
+			const uint64_t step = data.StepCount;
+			std::vector<ContactReport>& reports = data.Reports;
+			data.Contacts.SwapReports(reports);
+			// Several sub shape pairs of an entity pair may touch (and several collision steps report them again); the first
+			// report of each pair in this order, which does not depend on thread timing, describes the contact.
+			std::sort(reports.begin(), reports.end(), IsReportOrderedBefore);
+
 			const auto leftAfterStep = [&](UUID entityID) { return std::find(data.LeftAfterStep.begin(), data.LeftAfterStep.end(), entityID) != data.LeftAfterStep.end(); };
-			for (const ContactReport& report : data.Contacts.TakeReports())
+			std::vector<TouchingPair>& begun = data.BegunPairs;
+			begun.clear();
+			for (size_t index = 0; index < reports.size(); index++)
 			{
+				const ContactReport& report = reports[index];
+				if (index > 0 && reports[index - 1].Pair == report.Pair)
+					continue;
 				// The contacts of a body that left the simulation after the step ended already.
 				if (!data.LeftAfterStep.empty() && (leftAfterStep(report.EntityA) || leftAfterStep(report.EntityB)))
 					continue;
-				auto [it, inserted] = current.try_emplace(MakePairKey(report.EntityA, report.EntityB), report);
-				if (!inserted && report.SubShapeKey < it->second.SubShapeKey)
-					it->second = report;
-			}
 
-			std::vector<TouchingPair> ended;
-			for (auto it = data.TouchingPairs.begin(); it != data.TouchingPairs.end();)
-			{
-				if (it->second.Awake && current.find(it->first) == current.end())
-				{
-					ended.push_back(it->second);
-					RemovePairFromIndex(data, it->second.A, it->first);
-					RemovePairFromIndex(data, it->second.B, it->first);
-					it = data.TouchingPairs.erase(it);
-				}
-				else
-				{
-					++it;
-				}
-			}
-
-			std::vector<TouchingPair> begun;
-			for (const auto& [key, report] : current)
-			{
-				auto it = data.TouchingPairs.find(key);
+				auto it = data.TouchingPairs.find(report.Pair);
 				if (it == data.TouchingPairs.end())
 				{
 					TouchingPair pair;
 					pair.A = report.EntityA;
 					pair.B = report.EntityB;
 					pair.IsTrigger = report.IsTrigger;
+					pair.ReportStep = step;
 					pair.SortKey = report.SortKey;
 					pair.Point = report.Point;
 					pair.Normal = report.Normal;
-					AddTouchingPair(data, key, pair);
+					AddTouchingPair(data, report.Pair, pair);
 					begun.push_back(pair);
 				}
 				else
@@ -2007,9 +2161,23 @@ namespace Strata
 					// and with them Jolt's order.
 					TouchingPair& pair = it->second;
 					pair.IsTrigger = report.IsTrigger;
+					pair.ReportStep = step;
 					pair.Point = report.Point;
 					pair.Normal = report.EntityA == pair.A ? report.Normal : -report.Normal;
 				}
+			}
+
+			std::vector<TouchingPair>& ended = data.EndedPairs;
+			ended.clear();
+			for (const PairKey& key : data.CheckedPairs)
+			{
+				auto it = data.TouchingPairs.find(key);
+				if (it == data.TouchingPairs.end() || it->second.ReportStep == step)
+					continue;
+				ended.push_back(it->second);
+				RemovePairFromIndex(data, it->second.A, key);
+				RemovePairFromIndex(data, it->second.B, key);
+				data.TouchingPairs.erase(it);
 			}
 
 			const auto bySortKey = [](const TouchingPair& a, const TouchingPair& b) { return a.SortKey < b.SortKey; };
@@ -2021,28 +2189,29 @@ namespace Strata
 				QueueEvent(data, CollisionEventType::Begin, pair);
 		}
 
-		// After physics moved an entity: dynamic descendants that are simulated on their own keep their world pose (unless they
-		// are written themselves), and static descendants (whose bodies are only re-synchronized on demand) are marked to
-		// follow. With keepDynamicPoses false (an explicit teleport), dynamic descendants follow like any external move.
-		void UpdateDescendantsOfMovedBody(PhysicsWorldData& data, Entity moved, const std::unordered_set<entt::entity>& written, bool keepDynamicPoses)
+		// After an entity was moved by physics: with simulatedMove (written back from the simulation), dynamic descendants
+		// simulated on their own keep their world pose (unless they are written themselves in this pass). The bodies of the
+		// other descendants (static and kinematic ones, and dynamic ones after a teleport) follow their entities at the next
+		// step: physics writes transforms without emitting on_update, so they are marked here instead.
+		void UpdateDescendantsOfMovedBody(PhysicsWorldData& data, Entity moved, bool simulatedMove)
 		{
 			Scene& scene = *data.OwnerScene;
 			const RelationshipComponent* relationship = moved.TryGetComponent<RelationshipComponent>();
 			if (!relationship || relationship->Children.empty())
 				return;
 
-			VisitSubtree(scene, moved, [&](Entity entity)
+			VisitSubtree(scene, moved, data.VisitStack, [&](Entity entity)
 			{
 				if (entity == moved)
 					return true;
-				if (written.find(entity.GetHandle()) != written.end())
-					return false; // Written itself, after this one (deeper entities are written later)
 
 				BodyRecord* record = FindRecord(data, entity.GetHandle());
 				if (!record || !record->HasBody())
 					return true;
+				if (simulatedMove && record->WriteBackPass == data.WriteBackPass)
+					return false; // Written itself, after this one (deeper entities are written later)
 
-				if (keepDynamicPoses && record->Type == RigidBodyType::Dynamic && record->InSimulation)
+				if (simulatedMove && record->Type == RigidBodyType::Dynamic && record->InSimulation)
 				{
 					// Its world pose, and with it the poses of its own descendants, stays where its body is. (If the entity
 					// cannot take the pose, it moved with its parent; the next step notices and suspends the body.)
@@ -2050,11 +2219,8 @@ namespace Strata
 						record->LastWorldTransform = scene.GetWorldTransform(entity);
 					return false;
 				}
-				if (record->Type == RigidBodyType::Static)
-				{
-					record->TransformDirty = true;
-					UpdatePolling(data, entity.GetHandle(), *record);
-				}
+				record->TransformDirty = true;
+				UpdatePolling(data, entity.GetHandle(), *record);
 				return true;
 			});
 		}
@@ -2067,18 +2233,14 @@ namespace Strata
 
 			Scene& scene = *data.OwnerScene;
 			const JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterfaceNoLock();
-			JPH::BodyIDVector movedBodies;
-			data.JoltSystem->GetActiveBodies(JPH::EBodyType::RigidBody, movedBodies);
-			for (const JPH::BodyID& bodyID : data.Activations.Take())
-				movedBodies.push_back(bodyID);
+			std::vector<JPH::BodyID>& movedBodies = data.MovedBodies;
+			const std::span<const JPH::BodyID> awake = GetAwakeBodies(data);
+			movedBodies.assign(awake.begin(), awake.end());
+			data.Activations.SwapDeactivated(data.DeactivatedBodies);
+			movedBodies.insert(movedBodies.end(), data.DeactivatedBodies.begin(), data.DeactivatedBodies.end());
 
-			struct WriteBack
-			{
-				uint32_t Depth = 0;
-				entt::entity Handle = entt::null;
-			};
-			std::vector<WriteBack> writeBacks;
-			writeBacks.reserve(movedBodies.size());
+			std::vector<std::pair<uint32_t, entt::entity>>& writeBacks = data.WriteBacks;
+			writeBacks.clear();
 			for (const JPH::BodyID& bodyID : movedBodies)
 			{
 				auto entityIt = data.BodyEntities.find(bodyID.GetIndexAndSequenceNumber());
@@ -2087,22 +2249,21 @@ namespace Strata
 				const BodyRecord* record = FindRecord(data, entityIt->second);
 				if (!record || record->Type != RigidBodyType::Dynamic || !record->InSimulation)
 					continue;
-				writeBacks.push_back({ GetHierarchyDepth(Entity(entityIt->second, &scene)), entityIt->second });
+				writeBacks.emplace_back(GetHierarchyDepth(Entity(entityIt->second, &scene)), entityIt->second);
 			}
-			std::sort(writeBacks.begin(), writeBacks.end(), [](const WriteBack& a, const WriteBack& b)
-			{
-				return a.Depth != b.Depth ? a.Depth < b.Depth : a.Handle < b.Handle;
-			});
-			writeBacks.erase(std::unique(writeBacks.begin(), writeBacks.end(), [](const WriteBack& a, const WriteBack& b) { return a.Handle == b.Handle; }), writeBacks.end());
+			// By depth, then by entity: deterministic, parents first.
+			std::sort(writeBacks.begin(), writeBacks.end());
+			writeBacks.erase(std::unique(writeBacks.begin(), writeBacks.end()), writeBacks.end());
+			data.LastWrittenBodies = static_cast<uint32_t>(writeBacks.size());
 
-			std::unordered_set<entt::entity> written;
-			for (const WriteBack& writeBack : writeBacks)
-				written.insert(writeBack.Handle);
+			data.WriteBackPass++;
+			for (const auto& [depth, handle] : writeBacks)
+				FindRecord(data, handle)->WriteBackPass = data.WriteBackPass;
 
-			for (const WriteBack& writeBack : writeBacks)
+			for (const auto& [depth, handle] : writeBacks)
 			{
-				BodyRecord& record = *FindRecord(data, writeBack.Handle); // Filtered above
-				const Entity entity(writeBack.Handle, &scene);
+				BodyRecord& record = *FindRecord(data, handle); // Filtered above
+				const Entity entity(handle, &scene);
 
 				JPH::RVec3 bodyPosition;
 				JPH::Quat bodyRotation;
@@ -2129,12 +2290,12 @@ namespace Strata
 						data.JoltSystem->GetBodyInterface().SetPositionAndRotation(record.BodyID, ToJoltPosition(entityPosition), ToJolt(entityRotation), JPH::EActivation::DontActivate);
 					RemoveFromSimulation(data, record);
 					record.Suspended = true;
-					UpdatePolling(data, writeBack.Handle, record);
+					UpdatePolling(data, handle, record);
 					data.LeftAfterStep.push_back(record.EntityID);
 					continue;
 				}
 				record.LastWorldTransform = scene.GetWorldTransform(entity);
-				UpdateDescendantsOfMovedBody(data, entity, written, true);
+				UpdateDescendantsOfMovedBody(data, entity, true);
 			}
 		}
 
@@ -2356,11 +2517,12 @@ namespace Strata
 
 		PhysicsWorldData& data = *m_Data;
 		const auto startTime = std::chrono::steady_clock::now();
+		data.StepCount++; // Identifies this step in the contact pairs' check and report marks
 
 		ApplyChanges(data);
 		SyncEntitiesToBodies(data, timestep);
 
-		FlagReportablePairs(data);
+		CollectCheckedPairs(data);
 		data.Activations.Clear();
 		{
 			ST_PROFILE_SCOPE("PhysicsWorld::Simulate - Jolt");
@@ -2373,7 +2535,6 @@ namespace Strata
 		WriteBackDynamicBodies(data);
 		ProcessContacts(data);
 
-		data.StepCount++;
 		data.LastStepTime = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - startTime).count();
 	}
 
@@ -2587,7 +2748,7 @@ namespace Strata
 		}
 
 		// The entity's descendants moved with it.
-		UpdateDescendantsOfMovedBody(data, entity, {}, false);
+		UpdateDescendantsOfMovedBody(data, entity, false);
 		return true;
 	}
 
@@ -2701,6 +2862,9 @@ namespace Strata
 		}
 		stats.ActiveBodyCount = data.JoltSystem->GetNumActiveBodies(JPH::EBodyType::RigidBody);
 		stats.ContactPairCount = static_cast<uint32_t>(data.TouchingPairs.size());
+		stats.SyncedBodyCount = data.LastSyncedBodies;
+		stats.CheckedPairCount = data.LastCheckedPairs;
+		stats.WrittenBodyCount = data.LastWrittenBodies;
 		stats.StepCount = data.StepCount;
 		stats.JobCount = data.JobCounters.Jobs.load(std::memory_order_relaxed);
 		stats.WorkerJobCount = data.JobCounters.WorkerJobs.load(std::memory_order_relaxed);

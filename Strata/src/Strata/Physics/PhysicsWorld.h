@@ -39,17 +39,19 @@ namespace Strata
 	// The world listens to the scene registry: component, reparenting (Scene::SetParent), activity and entity-destruction
 	// changes are applied by ApplyPendingChanges (called by Simulate and by PhysicsSystem before queries); reparenting
 	// moves colliders between bodies. Each step:
-	//  - kinematic bodies are moved towards their entity's transform; dynamic bodies whose transform was changed from
-	//    outside physics are teleported (waking bodies resting on them); both are checked every step;
-	//  - static bodies follow their entity's transform when a change is signaled (TransformComponent on_update, e.g.
-	//    Entity::MarkModified or ComponentAccess, on the entity or an ancestor) or through Teleport; direct field writes
-	//    without a signal are not noticed (move colliders that change every frame with a kinematic rigid body);
+	//  - bodies follow transform changes of their entity: kinematic bodies move towards it, dynamic bodies are teleported
+	//    (waking bodies resting on them) and static bodies are repositioned. Changes are noticed when they are signaled
+	//    (TransformComponent on_update, e.g. Entity::MarkModified or ComponentAccess, on the entity or an ancestor) and,
+	//    for awake bodies, also without a signal. Sleeping and static bodies are never polled, so direct field writes
+	//    without a signal go unnoticed for them (a kinematic body moved every step stays awake);
 	//  - entities that are inactive in the hierarchy or pending destruction (or under such an ancestor) leave the
 	//    simulation; static bodies pending destruction stay until they are destroyed, but queries skip them;
 	//  - dynamic bodies write their simulated pose back to their entity, parents before children, changing only its
 	//    translation and rotation (the authored scale stays, mirrored axes included, unless a sheared parent makes that
 	//    impossible). Dynamic descendants of a moving dynamic body keep their own world pose; kinematic and static
 	//    descendants follow it.
+	// The work of a step grows with the awake bodies, their contacts and the signaled changes, not with sleeping or static
+	// bodies (see PhysicsStats::SyncedBodyCount, CheckedPairCount and WrittenBodyCount).
 	//
 	// Main thread only. Jolt runs the step on Strata's JobSystem workers when it is initialized.
 	class PhysicsWorld

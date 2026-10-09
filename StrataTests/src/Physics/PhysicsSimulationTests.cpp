@@ -615,12 +615,15 @@ TEST_SUITE("Physics.Simulation")
 			StepScene(scene, 120);
 			REQUIRE(physics.IsSleeping(top));
 
+			// The bottom box sleeps too, so transform edits are signaled (sleeping bodies only follow signaled changes).
+			REQUIRE(physics.IsSleeping(bottom));
 			switch (move)
 			{
 				case Move::Teleport: CHECK(physics.Teleport(bottom, glm::vec3(5.0f, 0.5f, 0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f))); break;
-				case Move::TransformEdit: bottom.GetTransform().Translation.x = 5.0f; break; // Dynamic bodies are checked every step
-				case Move::Kinematic: bottom.GetTransform().Translation.y = -5.0f; break;   // Drops away below the ground
+				case Move::TransformEdit: bottom.GetTransform().Translation.x = 5.0f; break;
+				case Move::Kinematic: bottom.GetTransform().Translation.y = -5.0f; break; // Drops away below the ground
 			}
+			bottom.MarkModified<TransformComponent>();
 			StepScene(scene, 90);
 			return GetWorldPosition(scene, top).y;
 		};
@@ -628,6 +631,83 @@ TEST_SUITE("Physics.Simulation")
 		CHECK(std::abs(topHeightAfterMove(Move::Teleport) - 0.5f) < 0.03f);
 		CHECK(std::abs(topHeightAfterMove(Move::TransformEdit) - 0.5f) < 0.03f);
 		CHECK(std::abs(topHeightAfterMove(Move::Kinematic) - 0.5f) < 0.03f);
+	}
+
+	TEST_CASE("Per-step work grows with the awake bodies, not with the sleeping ones")
+	{
+		Scene scene;
+		CreateGround(scene);
+		// A grid of boxes resting on the ground (they fall asleep and keep touching it) and a ball outside the grid.
+		std::vector<Entity> boxes;
+		for (int x = 0; x < 20; x++)
+		{
+			for (int z = 0; z < 20; z++)
+				boxes.push_back(CreateDynamicBox(scene, "Box", glm::vec3(static_cast<float>(x) * 2.0f - 19.0f, 0.5f, static_cast<float>(z) * 2.0f - 19.0f)));
+		}
+		Entity ball = CreateDynamicSphere(scene, "Ball", glm::vec3(30.0f, 0.5f, 0.0f), 0.5f);
+
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		CollisionRecorder recorder(physics);
+		StepScene(scene, 90);
+		PhysicsStats stats = physics.GetStats();
+		REQUIRE(stats.ActiveBodyCount == 0);
+		CHECK(stats.ContactPairCount == 401);
+
+		// Everything sleeps: nothing is visited.
+		StepScene(scene, 1);
+		stats = physics.GetStats();
+		CHECK(stats.SyncedBodyCount == 0);
+		CHECK(stats.CheckedPairCount == 0);
+		CHECK(stats.WrittenBodyCount == 0);
+
+		// One body in motion: only it and its contact are visited.
+		CHECK(physics.SetLinearVelocity(ball, glm::vec3(2.0f, 0.0f, 0.0f)));
+		StepScene(scene, 1);
+		stats = physics.GetStats();
+		CHECK(stats.SyncedBodyCount == 1);
+		CHECK(stats.CheckedPairCount == 1);
+		CHECK(stats.WrittenBodyCount == 1);
+		CHECK(stats.ContactPairCount == 401);
+
+		// A signaled move of a sleeping body adds that body (lifted off the ground, it stops touching it and falls back).
+		Entity lifted = boxes.front();
+		lifted.GetTransform().Translation.y = 1.5f;
+		lifted.MarkModified<TransformComponent>();
+		StepScene(scene, 1);
+		stats = physics.GetStats();
+		CHECK(stats.SyncedBodyCount == 2);
+		CHECK(stats.CheckedPairCount == 2);
+		CHECK(stats.WrittenBodyCount == 2);
+		CHECK(stats.ContactPairCount == 400);
+		CHECK(recorder.Count(CollisionEventType::End) == 1);
+
+		// Unsignaled edits of sleeping bodies are not looked for: the body stays until the change is signaled.
+		Entity edited = boxes.back();
+		const glm::vec3 restingPlace = GetWorldPosition(scene, edited);
+		edited.GetTransform().Translation.z += 0.75f;
+		StepScene(scene, 1);
+		CHECK(physics.GetStats().SyncedBodyCount == 2);
+		std::optional<RaycastHit> hit = physics.Raycast(restingPlace + glm::vec3(0.0f, 0.0f, -0.4f) + glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), 10.0f);
+		REQUIRE(hit);
+		CHECK(hit->HitEntity == edited);
+		edited.MarkModified<TransformComponent>();
+		StepScene(scene, 1);
+		CHECK(physics.GetStats().SyncedBodyCount == 3);
+		hit = physics.Raycast(restingPlace + glm::vec3(0.0f, 5.0f, -0.4f), glm::vec3(0.0f, -1.0f, 0.0f), 10.0f);
+		CHECK((!hit || hit->HitEntity != edited));
+
+		// Once everything sleeps again, steps visit nothing, while all contacts are kept.
+		CHECK(physics.SetLinearVelocity(ball, glm::vec3(0.0f)));
+		CHECK(physics.SetAngularVelocity(ball, glm::vec3(0.0f)));
+		StepScene(scene, 90);
+		stats = physics.GetStats();
+		REQUIRE(stats.ActiveBodyCount == 0);
+		CHECK(stats.SyncedBodyCount == 0);
+		CHECK(stats.CheckedPairCount == 0);
+		CHECK(stats.WrittenBodyCount == 0);
+		CHECK(stats.ContactPairCount == 401);
+		CHECK(recorder.Count(CollisionEventType::Begin) == recorder.Count(CollisionEventType::End) + 401);
 	}
 
 	TEST_CASE("Kinematic bodies reach their target when a frame runs several fixed steps")

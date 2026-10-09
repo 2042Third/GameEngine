@@ -115,6 +115,10 @@ namespace Strata
 		uint32_t ActiveBodyCount = 0;    // Awake bodies (sleeping and static bodies are not simulated)
 		uint32_t PendingBodyCount = 0;   // Entities waiting for a body that cannot be built yet (degenerate transform, mesh not loaded, world full)
 		uint32_t ContactPairCount = 0;   // Pairs of entities currently touching (including triggers)
+		// Work of the last step, which grows with the awake bodies and the signaled changes, not with sleeping bodies:
+		uint32_t SyncedBodyCount = 0;    // Bodies compared with their entity before the step (awake ones and those with changes)
+		uint32_t CheckedPairCount = 0;   // Touching pairs that could end during the step (those of awake or rebuilt bodies)
+		uint32_t WrittenBodyCount = 0;   // Dynamic bodies whose pose was written back to their entity
 		uint64_t StepCount = 0;          // Simulation steps since the world was created
 		uint64_t JobCount = 0;           // Simulation jobs run since the world was created, on any thread
 		uint64_t WorkerJobCount = 0;     // The part of JobCount run by JobSystem worker threads (depends on thread timing)

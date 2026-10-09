@@ -27,7 +27,8 @@ namespace Strata
 	// on_construct/on_update/on_destroy; property edits must emit on_update, e.g. through Entity::MarkModified or
 	// ComponentAccess), entity destruction and (de)activation are applied before the next update, body API call or query.
 	// Transforms changed outside physics are applied to the bodies at the next fixed step, so queries made in between see the
-	// bodies where they were after the last step (Teleport moves a body immediately).
+	// bodies where they were after the last step (Teleport moves a body immediately). Signal transform edits too (sleeping
+	// and static bodies only follow signaled changes, see PhysicsWorld).
 	//
 	// Collision events are collected during each step and dispatched afterwards on the main thread to the registered
 	// listeners. Listeners may use the whole scene and physics API, including destroying entities; End events caused by

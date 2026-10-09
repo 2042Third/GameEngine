@@ -53,6 +53,8 @@ namespace Strata
 		// destruction is deferred to the end of the frame, so handles stay valid for the rest of the frame.
 		void DestroyEntity(Entity entity);
 		bool IsPendingDestroy(Entity entity) const;
+		// Entities whose destruction was deferred to the end of the current update (each with its descendants).
+		const std::vector<UUID>& GetPendingDestroys() const { return m_PendingDestroy; }
 
 		// Deep copy of an entity and its descendants with fresh UUIDs, inserted after the original.
 		// References between entities inside the copied hierarchy are remapped to the copies.
