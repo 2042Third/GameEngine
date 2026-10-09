@@ -545,8 +545,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   without a pending step, so input given while paused arrives in the next frame `play.step` runs or after resuming, with its
   transitions, and a tap of N frames lasts N game updates. A command answers once the game has seen its input (a tap: its
   release; `seen: true`) or, with `wait: false` (the default while paused, where waiting would block a client that has to step
-  the game), at once. Holds outlive the client that made them; starting or stopping play drops them
-  (`Input::ClearSimulated`).
+  the game), at once. Holds outlive the client that made them (no attempt is made to tie them to connections): the status
+  bar lists them with a Release button (`input.releaseAll`), and starting or stopping play drops them (`Input::ClearSimulated`).
 - Files commands write for clients go through `CommandUtils::ResolveOutputPath`: relative paths are relative to the
   project directory (an error without a project), network/device paths and reserved device names are refused, and an
   existing file is replaced only with `overwrite: true`.

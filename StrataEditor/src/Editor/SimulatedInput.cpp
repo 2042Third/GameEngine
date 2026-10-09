@@ -1,6 +1,7 @@
 #include "Editor/SimulatedInput.h"
 
 #include <Strata/Input/Input.h>
+#include <Strata/Input/InputNames.h>
 
 #include <algorithm>
 
@@ -100,6 +101,26 @@ namespace Strata
 		}
 		std::sort(codes.begin(), codes.end());
 		return codes;
+	}
+
+	std::string SimulatedInput::DescribeHolds() const
+	{
+		std::string text;
+		auto append = [&text](const std::string& name)
+		{
+			text += (text.empty() ? "" : ", ") + name;
+		};
+		for (uint16_t key : GetHeld(SimulatedButtonType::Key))
+		{
+			const char* name = InputNames::GetKeyName(key);
+			append(name ? std::string(name) : "Key " + std::to_string(key));
+		}
+		for (uint16_t button : GetHeld(SimulatedButtonType::MouseButton))
+		{
+			const char* name = InputNames::GetMouseButtonName(button);
+			append("Mouse " + (name ? std::string(name) : std::to_string(button)));
+		}
+		return text;
 	}
 
 	bool SimulatedInput::IsHeld(SimulatedButtonType type, uint16_t code) const

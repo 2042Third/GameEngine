@@ -589,6 +589,20 @@ namespace Strata
 		{
 			ImGui::TextDisabled("|  Automation off");
 		}
+		// Keys a tool holds stay down after it disconnects: show them, with a way out that does not need the tool.
+		if (const SimulatedInput& simulated = m_Context.GetSimulatedInput(); simulated.HasHolds())
+		{
+			ImGui::SameLine();
+			ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "|  Simulated input holds %s", simulated.DescribeHolds().c_str());
+			if (ImGui::IsItemHovered())
+			{
+				ImGui::SetTooltip("Keys and mouse buttons a tool holds down in the running game (input.* commands).\n"
+					"They stay down until the tool releases them, also after it disconnected, or until play stops.");
+			}
+			ImGui::SameLine();
+			if (ImGui::SmallButton("Release"))
+				RunEditorCommand(m_Context, m_Commands, "input.releaseAll", { { "wait", false } });
+		}
 		if (EditorAssetManager* assets = m_Context.GetAssetManager())
 		{
 			const AssetManagerStats stats = assets->GetStats();

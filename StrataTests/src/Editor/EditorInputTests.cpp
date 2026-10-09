@@ -413,4 +413,26 @@ TEST_SUITE("Editor.Input")
 		harness.Frame();
 		CHECK(harness.ProbeField("LeftReleased"));
 	}
+
+	TEST_CASE("Holds are listed for people, so they can be released when the tool is gone")
+	{
+		InputHarness harness;
+		harness.Run("play.start");
+		const SimulatedInput& simulated = harness.Context.GetSimulatedInput();
+		CHECK_FALSE(simulated.HasHolds());
+		CHECK(simulated.DescribeHolds().empty());
+
+		harness.Run("input.key", { { "key", "W" }, { "action", "press" }, { "wait", false } });
+		harness.Run("input.key", { { "key", "Space" }, { "frames", 100 }, { "wait", false } });
+		harness.Run("input.mouseButton", { { "button", "Left" }, { "action", "press" }, { "wait", false } });
+		CHECK(simulated.HasHolds());
+		CHECK(simulated.DescribeHolds() == "Space, W, Mouse Left");
+
+		// What the status bar's Release button runs.
+		harness.Run("input.releaseAll", { { "wait", false } });
+		CHECK_FALSE(simulated.HasHolds());
+		harness.Frame();
+		CHECK_FALSE(harness.ProbeField("WDown"));
+		CHECK_FALSE(harness.ProbeField("LeftDown"));
+	}
 }

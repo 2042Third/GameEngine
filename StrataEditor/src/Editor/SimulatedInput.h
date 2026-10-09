@@ -3,6 +3,7 @@
 #include <Strata/Core/Base.h>
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace Strata
@@ -30,7 +31,8 @@ namespace Strata
 	// command holds what it pressed: holds of one button stack (two taps of a key overlap), the button goes down with the
 	// first and up with the last, and a tap ends only its own hold. Frames are input frames (Input::GetFrameIndex), which
 	// stop while the game is paused (Input::SetSuspended), so a tap lasts its number of game updates even when the game is
-	// stepped. Holds outlive the client that made them; play mode starting or stopping forgets them. Main thread only.
+	// stepped. Holds outlive the client that made them (the editor's status bar lists them, with a button that releases them);
+	// play mode starting or stopping forgets them. Main thread only.
 	class SimulatedInput
 	{
 	public:
@@ -50,6 +52,8 @@ namespace Strata
 		// The buttons of a type the holds keep down, in code order.
 		std::vector<uint16_t> GetHeld(SimulatedButtonType type) const;
 		bool HasHolds() const { return !m_Holds.empty(); }
+		// "Space, W, Mouse Left": what the holds keep down, for people (the editor's status bar). Empty without holds.
+		std::string DescribeHolds() const;
 	private:
 		bool IsHeld(SimulatedButtonType type, uint16_t code) const;
 		// Marks a hold ended, removes it and lets the button go when no other hold keeps it down.
