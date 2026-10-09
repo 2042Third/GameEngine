@@ -26,6 +26,8 @@ namespace Strata
 	namespace
 	{
 
+		constexpr const char* c_ViewportStateFile = "EditorViewport.json";
+
 		// The asset manager of an editor without a project: only the built-in assets (primitive meshes, default material),
 		// which are memory assets, so nothing is ever read from storage.
 		class BuiltinAssetManager final : public AssetManagerBase
@@ -66,6 +68,11 @@ namespace Strata
 		AssetManager::SetActive(m_BuiltinAssets);
 	}
 
+	std::filesystem::path EditorContext::GetViewportStateFile() const
+	{
+		return m_Project ? m_Project->GetIntermediateDirectory() / c_ViewportStateFile : std::filesystem::path();
+	}
+
 	////////////////////////////////////////////////////////////////////////////////
 	// Project
 	////////////////////////////////////////////////////////////////////////////////
@@ -95,6 +102,12 @@ namespace Strata
 		m_Project = project;
 		Project::SetActive(m_Project);
 
+		// The editor camera and viewport settings continue where they were when the project was last closed.
+		const std::filesystem::path viewportState = GetViewportStateFile();
+		std::string viewportError;
+		if (FileSystem::Exists(viewportState) && !m_Viewport.Load(viewportState, &viewportError))
+			ST_WARN("The saved viewport state is ignored: {}", viewportError);
+
 		EditorAssetManagerSpecification specification;
 		specification.AssetDirectory = m_Project->GetAssetDirectory();
 		specification.CacheDirectory = m_Project->GetCacheDirectory();
@@ -120,6 +133,13 @@ namespace Strata
 	void EditorContext::ReleaseProject(bool activateBuiltinAssets)
 	{
 		Stop();
+		if (m_Project)
+		{
+			std::string error;
+			if (!m_Viewport.Save(GetViewportStateFile(), &error))
+				ST_WARN("The viewport state was not saved: {}", error);
+			m_Viewport.ResetState();
+		}
 		ResetScene(CreateRef<Scene>(), UUID::Null());
 		if (m_AssetManager)
 		{
@@ -367,6 +387,7 @@ namespace Strata
 		else
 			m_EditScene->OnUpdateEditor(timestep);
 		PruneSelection();
+		m_Viewport.UpdatePicking(*this);
 	}
 
 }

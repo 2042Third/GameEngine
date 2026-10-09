@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Editor/EditorViewport.h"
 #include "Editor/SceneEdit.h"
 #include "Editor/UndoStack.h"
 
@@ -30,8 +31,9 @@ namespace Strata
 	};
 
 	// The editor's state independent of any UI: the open project and its assets, the edited scene, play mode, the
-	// selection and the undo history. Every editor operation (UI, automation, tests) goes through it. Without a project,
-	// an asset manager with only the built-in assets is active, so built-in meshes and materials render. Main thread only.
+	// selection, the undo history and the viewport (editor camera, overlays, rendering). Every editor operation (UI,
+	// automation, tests) goes through it. Without a project, an asset manager with only the built-in assets is active, so
+	// built-in meshes and materials render. Main thread only.
 	class EditorContext
 	{
 	public:
@@ -49,6 +51,7 @@ namespace Strata
 		bool CreateProject(const std::filesystem::path& directory, const std::string& name, std::string* outError = nullptr);
 		// Opens a project file, or the project in a directory. Closes the current project first.
 		bool OpenProject(const std::filesystem::path& path, std::string* outError = nullptr);
+		// Saves the project's viewport state (editor camera and settings) to its intermediate directory, then closes it.
 		void CloseProject();
 		bool HasProject() const { return m_Project != nullptr; }
 		const Ref<Project>& GetProject() const { return m_Project; }
@@ -116,14 +119,25 @@ namespace Strata
 		bool Undo();
 		bool Redo();
 
-		// Once per frame: asset hot reload and loading, then the scene update (simulation while playing).
+		//////////////////////////////////////////////////////////////////////////
+		// Viewport
+		//////////////////////////////////////////////////////////////////////////
+
+		// The editor camera, viewport settings and viewport rendering. Its state is saved per project in
+		// "<project>/.strata/EditorViewport.json" when the project closes and restored when it opens.
+		EditorViewport& GetViewport() { return m_Viewport; }
+		const EditorViewport& GetViewport() const { return m_Viewport; }
+
+		// Once per frame: asset hot reload and loading, then the scene update (simulation while playing), then finished
+		// viewport picks.
 		void Update(Timestep timestep);
 	private:
 		bool StartRuntime(SceneRuntimeMode mode, std::string* outError);
 		void ResetScene(Ref<Scene> scene, AssetHandle handle);
-		// Closes the project; with activateBuiltinAssets the built-in asset manager becomes active.
+		// Saves the viewport state and closes the project; with activateBuiltinAssets the built-in asset manager becomes active.
 		void ReleaseProject(bool activateBuiltinAssets);
 		void ActivateBuiltinAssets();
+		std::filesystem::path GetViewportStateFile() const;
 	private:
 		EditorContextSpecification m_Specification;
 		Ref<Project> m_Project;
@@ -137,6 +151,7 @@ namespace Strata
 		std::vector<UUID> m_Selection;
 		UndoStack m_UndoStack;
 		Ref<AssetManagerBase> m_BuiltinAssets; // Active while no project is open
+		EditorViewport m_Viewport;
 	};
 
 }
