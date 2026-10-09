@@ -762,6 +762,7 @@ TEST_SUITE("Network.RpcServer")
 		// Each connection beyond the two pending slots turns one connection away with ServerBusy: an older one
 		// once it had a chance to send, else (within one burst) the new one itself. Two hoarders remain.
 		std::vector<bool> turnedAway(hoarders.size(), false);
+		std::vector<std::string> reasons(hoarders.size());
 		auto countTurnedAway = [&]()
 		{
 			for (size_t index = 0; index < hoarders.size(); index++)
@@ -770,11 +771,15 @@ TEST_SUITE("Network.RpcServer")
 					continue;
 				std::optional<nlohmann::json> message = hoarders[index].ReadMessage(std::chrono::milliseconds(1));
 				if (message && (*message)["error"]["code"] == JsonRpc::ErrorCode::ServerBusy)
+				{
 					turnedAway[index] = true;
+					reasons[index] = (*message)["error"]["message"].get<std::string>();
+				}
 			}
 			return static_cast<size_t>(std::count(turnedAway.begin(), turnedAway.end(), true));
 		};
 		REQUIRE(Tests::WaitUntil([&]() { return countTurnedAway() == hoarders.size() - 2; }));
+		const std::vector<bool> turnedAwayBefore = turnedAway;
 
 		// A legitimate client still gets in: its connection evicts the oldest hoarder, and it authenticates at once.
 		RpcClient client;
@@ -782,6 +787,16 @@ TEST_SUITE("Network.RpcServer")
 		CHECK(client.Call("rpc.ping", nlohmann::json::object(), c_CallTimeout).IsSuccess());
 		CHECK(server.GetServer().GetClientCount() == 1);
 		CHECK(Tests::WaitUntil([&]() { return countTurnedAway() == hoarders.size() - 1; }));
+
+		// The evicted hoarder is told why; it was not necessarily the oldest connection, only the one chosen.
+		for (size_t index = 0; index < hoarders.size(); index++)
+		{
+			if (turnedAway[index] && !turnedAwayBefore[index])
+			{
+				CHECK(reasons[index].find("chosen to make room") != std::string::npos);
+				CHECK(reasons[index].find("oldest") == std::string::npos);
+			}
+		}
 
 		// The newest remaining hoarder keeps its slot.
 		const size_t survivor = static_cast<size_t>(std::find(turnedAway.begin(), turnedAway.end(), false) - turnedAway.begin());

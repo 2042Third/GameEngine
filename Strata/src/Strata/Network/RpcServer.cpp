@@ -677,7 +677,7 @@ namespace Strata
 					Connection& victim = *candidates[*evicted];
 					if (RejectionWarnings.Allow(suppressed))
 						ST_CORE_WARN("RpcServer: closing client {}, which has not authenticated, to make room for a new connection{}", victim.Id, DescribeSuppressed(suppressed));
-					Send(victim, JsonRpc::MakeError(nullptr, JsonRpc::ErrorCode::ServerBusy, "Too many connections are waiting to authenticate; this one was the oldest"));
+					Send(victim, JsonRpc::MakeError(nullptr, JsonRpc::ErrorCode::ServerBusy, "Too many connections are waiting to authenticate; this one was chosen to make room"));
 					BeginClose(victim, c_ErrorCloseLinger);
 				}
 				else
