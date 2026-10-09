@@ -179,12 +179,17 @@ TEST_SUITE("Package.ScriptBuild")
 		CHECK(engine->FindClass("Spinner")); // The example script of new projects
 		CHECK(engine->IsHotReloadEnabled());
 
-		// One build at a time: a request while one runs fails; the build that runs reuses the configured tree.
+		// One build at a time: a request while one runs fails; the build that runs reuses the configured tree. The
+		// module's file watcher stays paused through the refused request, so the relinked module loads exactly once.
+		harness.WriteScript(MakeCounterScript(1) + "\nint CounterRebuildMarker() { return 1; }\n");
+		const uint64_t loadsBeforeRebuild = engine->GetLoadCount();
 		const nlohmann::json started = harness.Run("script.build", { { "wait", false } });
 		CHECK(started["running"] == true);
+		CHECK_FALSE(engine->IsHotReloadEnabled());
 		const EditorCommandResult second = harness.Commands.Execute(harness.Context, "script.build");
 		CHECK_FALSE(second.Success);
 		CHECK(second.Error.find("still running") != std::string::npos);
+		CHECK_FALSE(engine->IsHotReloadEnabled());
 		const auto deadline = std::chrono::steady_clock::now() + c_BuildTimeout;
 		while (harness.Context.GetScriptBuilder().IsRunning() && std::chrono::steady_clock::now() < deadline)
 		{
@@ -193,8 +198,12 @@ TEST_SUITE("Package.ScriptBuild")
 		}
 		REQUIRE_FALSE(harness.Context.GetScriptBuilder().IsRunning());
 		CHECK(harness.Context.GetScriptBuilder().GetLastResult().Success);
+		CHECK(harness.Context.GetScriptBuilder().GetLastResult().ModuleChanged);
 		CHECK_FALSE(harness.Context.GetScriptBuilder().GetLastResult().Configured);
 		CHECK(harness.Context.GetLastScriptBuildLoad().Loaded);
+		harness.Frames(10);
+		CHECK(engine->GetLoadCount() == loadsBeforeRebuild + 1);
+		CHECK(engine->IsHotReloadEnabled());
 
 		// Attach and play.
 		const std::string id = harness.Run("entity.create", { { "name", "Counter Host" } })["id"].get<std::string>();

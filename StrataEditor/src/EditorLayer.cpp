@@ -182,7 +182,8 @@ namespace Strata
 			SaveSceneAs();
 		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_D, global))
 			DuplicateSelection();
-		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_B, global))
+		// Like the menu item and the toolbar button, the shortcut does nothing while a build runs.
+		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_B, global) && !m_Context.GetScriptBuilder().IsRunning())
 			BuildScripts();
 		if (ImGui::Shortcut(ImGuiKey_Delete, global))
 			DeleteSelection();

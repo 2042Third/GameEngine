@@ -439,13 +439,12 @@ namespace Strata
 				*outError = "No project is open (project.open or project.create)";
 			return false;
 		}
-		// The build reloads the module itself once it finished; the file watcher would reload it a second time.
-		m_ScriptEngine->SetHotReloadEnabled(false);
+		// A refused request (e.g. while a build runs) leaves the file watcher alone: a running build has paused it.
 		if (!m_ScriptBuilder.Start(*m_Project, m_Specification.ScriptBuild, outError))
-		{
-			m_ScriptEngine->SetHotReloadEnabled(m_Specification.HotReloadScripts);
 			return false;
-		}
+		// The build reloads the module itself once it finished; the file watcher would reload it a second time when the
+		// linker writes it.
+		m_ScriptEngine->SetHotReloadEnabled(false);
 		return true;
 	}
 
