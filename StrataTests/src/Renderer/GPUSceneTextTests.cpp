@@ -1,8 +1,10 @@
+#include "Renderer/FontTestUtils.h"
 #include "Renderer/SceneRendererTestUtils.h"
 
 #include "Strata/Renderer/Font.h"
 #include "Strata/Renderer/FontAtlas.h"
 #include "Strata/Renderer/TextLayout.h"
+#include "Strata/Renderer/TextRenderer.h"
 
 #include <map>
 
@@ -285,6 +287,59 @@ TEST_SUITE("GPU.SceneRenderer.Text")
 		text.Text.clear();
 		CHECK(MeasureCoverage(Render(renderer, scene, camera), glm::u8vec4(0, 0, 0, 255)).Pixels == 0);
 		CHECK(renderer.GetStats().Texts == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Text with many new glyphs completes over frames within the rasterization budget")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		// 62 distinct glyphs in two fonts: more than one frame's budget, which the fonts share.
+		const std::string letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+		AddText(scene, letters.substr(0, 31), 6.0f, "Default").ScreenAnchor = glm::vec2(0.5f, 0.3f);
+		std::string error;
+		const Ref<Font> cousine = Font::Create(ReadSourceFile("Strata/vendor/imgui/misc/fonts/Cousine-Regular.ttf"), &error);
+		REQUIRE_MESSAGE(cousine, error);
+		TextComponent& second = AddText(scene, letters.substr(31), 6.0f, "Cousine");
+		second.Font = assets.Add(cousine, "Cousine");
+		second.ScreenAnchor = glm::vec2(0.5f, 0.7f);
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 0.0f, 3.0f), glm::vec3(0.0f), static_cast<float>(c_Width) / static_cast<float>(c_Height));
+
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Width, c_Height);
+		ReadbackImage first;
+		ReadbackImage image;
+		uint32_t frames = 0;
+		uint32_t previousGlyphs = 0;
+		do
+		{
+			image = Render(renderer, scene, camera);
+			if (frames == 0)
+				first = image;
+			const SceneRendererStats& stats = renderer.GetStats();
+			CHECK(stats.RasterizedTextGlyphs <= TextRenderer::c_FrameRasterBudget.Glyphs);
+			CHECK(stats.TextGlyphs == previousGlyphs + stats.RasterizedTextGlyphs); // Every glyph appears once
+			CHECK(stats.TextGlyphs + stats.PendingTextGlyphs == letters.size());
+			previousGlyphs = stats.TextGlyphs;
+			frames++;
+		} while (renderer.GetStats().PendingTextGlyphs > 0 && frames < 64);
+		CHECK(renderer.GetStats().PendingTextGlyphs == 0);
+		CHECK(frames > 1);
+		CHECK(MaxDifference(first, image) > 0); // Glyphs were missing at first
+
+		// Complete text renders the same in every later frame, and the same as in another renderer.
+		CHECK(MaxDifference(Render(renderer, scene, camera), image) == 0);
+		CHECK(renderer.GetStats().RasterizedTextGlyphs == 0);
+		SceneRenderer other;
+		other.SetViewportSize(c_Width, c_Height);
+		ReadbackImage otherImage;
+		for (uint32_t frame = 0; frame < frames; frame++)
+			otherImage = Render(other, scene, camera);
+		CHECK(other.GetStats().PendingTextGlyphs == 0);
+		CHECK(MaxDifference(otherImage, image) == 0);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

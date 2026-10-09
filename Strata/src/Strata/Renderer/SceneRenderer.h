@@ -117,6 +117,8 @@ namespace Strata
 		uint32_t OutlinedEntities = 0;    // Selected entities of the rendered scene
 		uint32_t Texts = 0;               // Text components drawn
 		uint32_t TextGlyphs = 0;
+		uint32_t PendingTextGlyphs = 0;   // Glyphs waiting for rasterization (budgeted per frame), drawn on a later frame
+		uint32_t RasterizedTextGlyphs = 0; // Glyphs added to font atlases this frame (see TextRenderer::c_FrameRasterBudget)
 	};
 
 	// Renders a scene: depth/normal/entity-id prepass, ground-truth ambient occlusion, forward physically based

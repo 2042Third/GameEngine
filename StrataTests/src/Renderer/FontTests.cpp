@@ -479,14 +479,13 @@ TEST_SUITE("Renderer.Font")
 		REQUIRE_MESSAGE(loaded, error);
 		Scope<FontAtlas> atlas = FontAtlas::Create(loaded, &error);
 		REQUIRE(atlas);
-		const glm::uvec2 size = atlas->GetSize();
 		for (uint32_t codepoint : { uint32_t('A'), uint32_t('g'), uint32_t(0xE9) })
 		{
 			const GlyphInfo& glyph = atlas->GetGlyph(codepoint);
 			CHECK_FALSE(glyph.Visible);
 			CHECK(glyph.Advance > 0.0f);
 		}
-		CHECK(atlas->GetSize() == size);
+		CHECK(atlas->GetPageCount() == 0); // Nothing was allocated
 	}
 
 	TEST_CASE("Malformed kerning disables kerning instead of rejecting the font")

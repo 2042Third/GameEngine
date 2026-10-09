@@ -1900,6 +1900,8 @@ namespace Strata
 		const bool text = m_TextRenderer->Prepare(scene, m_ViewportSize, commandList, textStats);
 		m_Stats.Texts = textStats.Texts;
 		m_Stats.TextGlyphs = textStats.Glyphs;
+		m_Stats.PendingTextGlyphs = textStats.PendingGlyphs;
+		m_Stats.RasterizedTextGlyphs = textStats.RasterizedGlyphs;
 		m_Stats.PendingAssets += textStats.PendingFonts;
 
 		// Overlays (and text) are composed in the output texture, which is then copied into the target.
