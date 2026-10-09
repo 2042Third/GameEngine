@@ -7,6 +7,8 @@
 
 #include <miniaudio.h>
 
+#include <atomic>
+
 namespace Strata
 {
 
@@ -17,6 +19,10 @@ namespace Strata
 		constexpr uint32_t c_MaxSampleRate = 384000;
 		constexpr ma_uint32 c_ListenerIndex = 0;
 		constexpr float c_MinDirectionLengthSquared = 1e-12f;
+		// AdvanceNullDevice mixes in chunks of this many frames, and at most this much time per call (a longer hitch drops the
+		// backlog, like an output device that underruns).
+		constexpr uint64_t c_NullDeviceChunkFrames = 1024;
+		constexpr double c_MaxNullDeviceAdvance = 1.0;
 
 		// Engine-wide settings, kept while the engine is not initialized so the next Init can apply them.
 		struct AudioEngineSettings
@@ -31,13 +37,29 @@ namespace Strata
 			glm::vec3 ListenerVelocity = glm::vec3(0.0f);
 		};
 
+		// The listener's world up vector on its way to the thread that mixes. miniaudio stores it without atomics and reads it
+		// while mixing, so only that thread writes it (ApplyPendingWorldUp, after each mixing period). A sequence lock
+		// carries the vector: neither side ever waits, and the mixer skips a vector that is being written and takes it
+		// after the next period.
+		struct PendingWorldUp
+		{
+			std::atomic<uint32_t> Sequence = 0; // Odd while the vector is being written
+			std::atomic<float> X = 0.0f;
+			std::atomic<float> Y = 1.0f;
+			std::atomic<float> Z = 0.0f;
+			uint32_t AppliedSequence = 0;       // Mixing thread only
+		};
+
 		// Exists while the engine is initialized. Heap-allocated because miniaudio keeps pointers into ma_engine.
 		struct AudioEngineData
 		{
 			ma_engine Engine;
+			PendingWorldUp WorldUp;
 			bool NullDevice = false;
 			uint32_t MaxOneShots = 0;
 			std::vector<Scope<AudioVoice>> OneShots; // Oldest first
+			double PendingNullDeviceFrames = 0.0;    // Fraction of a frame AdvanceNullDevice has not mixed yet
+			std::vector<float> DiscardedFrames;      // Scratch output of AdvanceNullDevice
 		};
 
 		AudioEngineData* s_Data = nullptr;
@@ -49,6 +71,39 @@ namespace Strata
 		AudioSource* s_FirstSource = nullptr;
 		uint32_t s_SourceCount = 0;
 
+		// Main thread: hands a new world up vector to the mixing thread.
+		void PublishWorldUp(PendingWorldUp& pending, const glm::vec3& up)
+		{
+			const uint32_t sequence = pending.Sequence.load(std::memory_order_relaxed);
+			pending.Sequence.store(sequence + 1, std::memory_order_relaxed);
+			std::atomic_thread_fence(std::memory_order_release);
+			pending.X.store(up.x, std::memory_order_relaxed);
+			pending.Y.store(up.y, std::memory_order_relaxed);
+			pending.Z.store(up.z, std::memory_order_relaxed);
+			pending.Sequence.store(sequence + 2, std::memory_order_release);
+		}
+
+		// miniaudio's onProcess callback, called by the thread that mixes (the device's audio thread, or the caller of
+		// ReadFrames for the null device) after each mixing period: the only place the world up vector is written.
+		void ApplyPendingWorldUp(void* userData, float*, ma_uint64)
+		{
+			AudioEngineData& data = *static_cast<AudioEngineData*>(userData);
+			PendingWorldUp& pending = data.WorldUp;
+			const uint32_t sequence = pending.Sequence.load(std::memory_order_acquire);
+			if (sequence == pending.AppliedSequence || (sequence & 1u) != 0)
+				return;
+
+			const float x = pending.X.load(std::memory_order_relaxed);
+			const float y = pending.Y.load(std::memory_order_relaxed);
+			const float z = pending.Z.load(std::memory_order_relaxed);
+			std::atomic_thread_fence(std::memory_order_acquire);
+			if (pending.Sequence.load(std::memory_order_relaxed) != sequence)
+				return; // Rewritten meanwhile: taken after the next period
+			ma_engine_listener_set_world_up(&data.Engine, c_ListenerIndex, x, y, z);
+			pending.AppliedSequence = sequence;
+		}
+
+		// Before the engine mixes (nothing reads the listener yet), so the world up vector may be written directly.
 		void ApplyListener(ma_engine& engine)
 		{
 			const AudioEngineSettings& settings = s_Settings;
@@ -60,9 +115,12 @@ namespace Strata
 
 		// Creates the mixer (with or without an output device), applies the engine settings and starts the device
 		// unless the engine is paused. On failure the engine is left uninitialized.
-		ma_result InitializeEngine(ma_engine& engine, ma_engine_config config, bool useDevice)
+		ma_result InitializeEngine(AudioEngineData& data, ma_engine_config config, bool useDevice)
 		{
+			ma_engine& engine = data.Engine;
 			config.noDevice = useDevice ? MA_FALSE : MA_TRUE;
+			config.onProcess = ApplyPendingWorldUp;
+			config.pProcessUserData = &data;
 			// Start the device only once the listener and volume are set. This also avoids ma_engine_init's
 			// auto-start failure path, which does not uninitialize its internal resource manager.
 			config.noAutoStart = MA_TRUE;
@@ -166,7 +224,7 @@ namespace Strata
 		bool nullDevice = specification.NullDevice;
 		if (!nullDevice)
 		{
-			const ma_result result = InitializeEngine(data->Engine, config, true);
+			const ma_result result = InitializeEngine(*data, config, true);
 			if (result != MA_SUCCESS)
 			{
 				ST_CORE_WARN("AudioEngine: no usable audio output device ({}); continuing without audio output", ma_result_description(result));
@@ -175,7 +233,7 @@ namespace Strata
 		}
 		if (nullDevice)
 		{
-			const ma_result result = InitializeEngine(data->Engine, config, false);
+			const ma_result result = InitializeEngine(*data, config, false);
 			if (result != MA_SUCCESS)
 			{
 				ST_CORE_ERROR("AudioEngine: failed to create the mixer ({})", ma_result_description(result));
@@ -314,15 +372,26 @@ namespace Strata
 		if (!s_Data)
 			return;
 
+		// Position, direction and velocity are atomics in miniaudio; the up vector is not, so the mixing thread applies it.
 		ma_engine& engine = s_Data->Engine;
 		ma_engine_listener_set_position(&engine, c_ListenerIndex, position.x, position.y, position.z);
 		ma_engine_listener_set_direction(&engine, c_ListenerIndex, forward.x, forward.y, forward.z);
 		ma_engine_listener_set_velocity(&engine, c_ListenerIndex, velocity.x, velocity.y, velocity.z);
-		// Unlike position, direction and velocity, miniaudio stores the up vector without atomics, so the audio thread
-		// could read a half-updated vector (merely skewing panning for one mixing period). Writing it only when it
-		// changes makes that rare; listeners that do not roll can keep passing +Y.
 		if (upChanged)
-			ma_engine_listener_set_world_up(&engine, c_ListenerIndex, up.x, up.y, up.z);
+			PublishWorldUp(s_Data->WorldUp, up);
+	}
+
+	AudioListenerState AudioEngine::GetListener()
+	{
+		return { s_Settings.ListenerPosition, s_Settings.ListenerForward, s_Settings.ListenerUp, s_Settings.ListenerVelocity };
+	}
+
+	std::optional<glm::vec3> AudioEngine::GetMixedListenerUp()
+	{
+		if (!s_Data || !s_Data->NullDevice)
+			return std::nullopt;
+		const ma_vec3f up = ma_engine_listener_get_world_up(&s_Data->Engine, c_ListenerIndex);
+		return glm::vec3(up.x, up.y, up.z);
 	}
 
 	bool AudioEngine::PlayOneShot(const Ref<AudioClip>& clip, float volume, float pitch)
@@ -388,6 +457,27 @@ namespace Strata
 			return 0;
 		}
 		return frameCount;
+	}
+
+	void AudioEngine::AdvanceNullDevice(float seconds)
+	{
+		ST_PROFILE_FUNCTION();
+
+		if (!s_Data || !s_Data->NullDevice || s_Settings.Paused || !std::isfinite(seconds) || seconds <= 0.0f)
+			return;
+
+		s_Data->PendingNullDeviceFrames += std::min(static_cast<double>(seconds), c_MaxNullDeviceAdvance) * static_cast<double>(GetSampleRate());
+		uint64_t frames = static_cast<uint64_t>(s_Data->PendingNullDeviceFrames);
+		s_Data->PendingNullDeviceFrames -= static_cast<double>(frames);
+
+		s_Data->DiscardedFrames.resize(static_cast<size_t>(c_NullDeviceChunkFrames * GetChannelCount()));
+		while (frames > 0)
+		{
+			const uint64_t chunk = std::min(frames, c_NullDeviceChunkFrames);
+			if (ReadFrames(s_Data->DiscardedFrames.data(), chunk) != chunk)
+				return; // Mixing failed (logged)
+			frames -= chunk;
+		}
 	}
 
 	AudioStats AudioEngine::GetStats()

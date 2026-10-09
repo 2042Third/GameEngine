@@ -41,6 +41,13 @@ namespace Strata
 		if (!EnsureVoice())
 			return;
 
+		// A finished voice is replaced, not rewound (see AudioVoice::Start); the new one starts at the beginning.
+		if (m_Voice->HasEnded())
+		{
+			m_Voice.reset();
+			if (!EnsureVoice())
+				return;
+		}
 		if (m_Voice->Start())
 			m_Paused = false;
 	}

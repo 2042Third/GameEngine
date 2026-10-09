@@ -292,6 +292,29 @@ Building and loading scripts:
   (`/MD`) or without the SDK's entry points (`NO_SDK_ENTRY`), and calls that end the process (`exit`,
   `TerminateProcess`).
 
+## Audio
+
+`Strata/src/Strata/Audio/` holds `AudioEngine` (the miniaudio mixer, output device and listener), `AudioClip` (sound data,
+decoded or streamed; `AudioClipAsset` is its asset), `AudioSource` (a voice with volume, pitch, looping and 3D settings)
+and `AudioSystem`, the built-in "Audio" scene system.
+
+- **Initialization:** `Application` initializes the `AudioEngine` (`ApplicationSpecification::EnableAudio`, on by default)
+  and shuts it down after the layers, so editor play mode and exported games produce sound without further setup.
+  Headless runs (`--headless`, the editor's `--no-gpu`) and machines without an output device mix without a device (the
+  null device); the application advances it by the frame time (`AudioEngine::AdvanceNullDevice`), so sounds still
+  progress and end. Tests initialize the null device themselves and pull the mix with `AudioEngine::ReadFrames` to
+  measure levels (`StrataTests/src/Audio/AudioTestUtils.h`).
+- **Scenes:** `AudioSystem` runs in Play mode only (not in Simulate mode) and updates in `OnLateUpdate`, after scripts and
+  physics. Every active entity with an `AudioSourceComponent` owns an `AudioSource`, released when the component, the
+  entity or its activity goes away. Clips load asynchronously and start once ready (`PlayOnStart` or `Play`). Component
+  values are compared with the applied ones every frame, so plain field writes apply without a signal. Spatial sources
+  follow their world transform; their velocity (Doppler) is their rigid body's, or else derived from their moves. The
+  listener is the first active `AudioListenerComponent` in hierarchy order, else the primary camera. Pausing the scene
+  (`Scene::SetPaused`, which calls `SceneSystem::OnPausedChanged`) pauses its sound; stopping it releases every voice.
+- **Gameplay API:** `AudioSystem::Play`, `Pause`, `Stop`, `IsPlaying`, `Seek` and `GetPlaybackPosition` per entity,
+  `PlayOneShot`/`PlayOneShotAt` by clip handle and the engine-wide master volume. Game code goes through the system rather
+  than `AudioEngine` directly, so that its sounds pause and stop with the scene.
+
 ## Editor
 
 - `StrataEditorCore` (`StrataEditor/src/Editor/`) is the editor without UI: `EditorContext` (project, asset

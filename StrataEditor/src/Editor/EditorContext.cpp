@@ -1,6 +1,7 @@
 #include "Editor/EditorContext.h"
 
 #include <Strata/Asset/AssetManager.h>
+#include <Strata/Audio/AudioEngine.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
@@ -206,6 +207,7 @@ namespace Strata
 			return false;
 		}
 		m_UndoStack.BreakMerge();
+		m_MasterVolumeBeforePlay = AudioEngine::GetMasterVolume();
 		m_RuntimeScene = Scene::Copy(m_EditScene);
 		m_RuntimeScene->OnRuntimeStart(mode);
 		m_SceneState = mode == SceneRuntimeMode::Play ? SceneState::Play : SceneState::Simulate;
@@ -219,6 +221,8 @@ namespace Strata
 		m_RuntimeScene->OnRuntimeStop();
 		m_RuntimeScene.reset();
 		m_SceneState = SceneState::Edit;
+		// A game's volume setting belongs to the game session, not to the editor.
+		AudioEngine::SetMasterVolume(m_MasterVolumeBeforePlay);
 		PruneSelection(); // Entities created during play are gone
 	}
 

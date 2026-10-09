@@ -31,7 +31,9 @@ namespace Strata
 		bool Headless = false;     // No window or swapchain; offscreen rendering remains available
 		bool EnableRenderer = true;
 		bool EnableImGui = false;
-		bool EnableAudio = true; // Headless applications mix without an output device
+		// Initializes the AudioEngine. Headless applications (and machines without an output device) mix without a device,
+		// advanced by the frame time so that playback still progresses.
+		bool EnableAudio = true;
 		std::filesystem::path ImGuiLayoutFile; // Where ImGui persists its layout (empty: not persisted)
 		std::optional<bool> GraphicsValidation; // Defaults to enabled in Debug builds
 

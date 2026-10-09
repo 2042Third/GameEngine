@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Audio/AudioTestUtils.h"
 #include "Strata/Audio/AudioClip.h"
 #include "Strata/Audio/AudioEngine.h"
 #include "Strata/Audio/AudioSource.h"
@@ -16,71 +17,14 @@
 #include <vector>
 
 using namespace Strata;
+using namespace Strata::Tests;
 
 namespace
 {
 
-	constexpr uint32_t c_SampleRate = 48000;
-	constexpr uint32_t c_Channels = 2;
-	constexpr float c_SineAmplitude = 0.5f;
-	constexpr float c_SineRms = 0.35355339f; // c_SineAmplitude / sqrt(2)
-	// The playback cursor runs ahead of the mixed output by up to one mixing period (~11 ms at 48 kHz).
-	constexpr float c_PositionTolerance = 0.025f;
-	// Frames to mix after moving a spatial voice or the listener so the spatializer's gain smoothing settles.
-	constexpr uint64_t c_SettleFrames = 2400;
-
-	using Tests::CreateSineWav;
-
 	Ref<AudioClip> CreateSineClip(float durationSeconds, AudioClipLoadMode mode = AudioClipLoadMode::Decompressed, uint32_t sampleRate = c_SampleRate)
 	{
 		return AudioClip::LoadFromMemory(CreateSineWav(durationSeconds, sampleRate), "Sine", mode);
-	}
-
-	// Initializes the audio engine without an output device for the duration of a test.
-	struct ScopedAudioEngine
-	{
-		explicit ScopedAudioEngine(uint32_t maxOneShots = 128)
-		{
-			AudioEngineSpecification specification;
-			specification.NullDevice = true;
-			specification.SampleRate = c_SampleRate;
-			specification.Channels = c_Channels;
-			specification.MaxOneShots = maxOneShots;
-			Initialized = AudioEngine::Init(specification);
-		}
-
-		~ScopedAudioEngine()
-		{
-			AudioEngine::Shutdown();
-		}
-
-		ScopedAudioEngine(const ScopedAudioEngine&) = delete;
-		ScopedAudioEngine& operator=(const ScopedAudioEngine&) = delete;
-
-		bool Initialized = false;
-	};
-
-	// Pulls the next frames of the mix. The buffer is pre-filled with a non-zero value so tests notice unwritten frames.
-	std::vector<float> Render(uint64_t frameCount)
-	{
-		std::vector<float> output(static_cast<size_t>(frameCount) * c_Channels, -1.0f);
-		CHECK(AudioEngine::ReadFrames(output.data(), frameCount) == frameCount);
-		return output;
-	}
-
-	// Root mean square of every sample, or of one channel of the interleaved stereo mix.
-	float ComputeRms(const std::vector<float>& samples, int channel = -1)
-	{
-		double sum = 0.0;
-		size_t count = 0;
-		for (size_t index = 0; index < samples.size(); index++)
-		{
-			if (channel >= 0 && index % c_Channels != static_cast<size_t>(channel))
-				continue;
-			sum += static_cast<double>(samples[index]) * static_cast<double>(samples[index]);
-			count++;
-		}
-		return count > 0 ? static_cast<float>(std::sqrt(sum / static_cast<double>(count))) : 0.0f;
 	}
 
 	// Sign changes on the first channel; proportional to the frequency of a sine.
@@ -93,13 +37,6 @@ namespace
 				crossings++;
 		}
 		return crossings;
-	}
-
-	// Steady-state level of the mix: lets gain smoothing settle, then measures.
-	float MeasureRms(int channel = -1)
-	{
-		Render(c_SettleFrames);
-		return ComputeRms(Render(4800), channel);
 	}
 
 }
@@ -281,6 +218,51 @@ TEST_SUITE("Audio.Engine")
 		// The source and the one-shot started while paused now both play in phase.
 		CHECK(ComputeRms(Render(4800)) > c_SineRms * 1.5f);
 		CHECK(source.GetPlaybackPosition() == doctest::Approx(pausedPosition + 0.1f).epsilon(0.1));
+	}
+
+	TEST_CASE("The null device advances playback by the time it is given")
+	{
+		// Without the engine, or with nothing to advance, nothing happens.
+		AudioEngine::AdvanceNullDevice(1.0f);
+
+		ScopedAudioEngine engine;
+		REQUIRE(engine.Initialized);
+		AudioSource source;
+		REQUIRE(source.SetClip(CreateSineClip(0.5f)));
+		source.Play();
+
+		AudioEngine::AdvanceNullDevice(0.2f);
+		CHECK(std::abs(source.GetPlaybackPosition() - 0.2f) < c_PositionTolerance);
+
+		// Fractions of a frame add up over many short frames.
+		for (int frame = 0; frame < 5000; frame++)
+			AudioEngine::AdvanceNullDevice(0.00002f); // 0.96 frames at 48 kHz
+		CHECK(std::abs(source.GetPlaybackPosition() - 0.3f) < c_PositionTolerance);
+
+		// Invalid times and a paused engine leave playback where it is.
+		const float position = source.GetPlaybackPosition();
+		AudioEngine::AdvanceNullDevice(-1.0f);
+		AudioEngine::AdvanceNullDevice(std::numeric_limits<float>::quiet_NaN());
+		AudioEngine::AdvanceNullDevice(std::numeric_limits<float>::infinity());
+		AudioEngine::SetPaused(true);
+		AudioEngine::AdvanceNullDevice(0.1f);
+		CHECK(source.GetPlaybackPosition() == position);
+		AudioEngine::SetPaused(false);
+
+		// A long hitch advances at most one second, like an output device that underruns.
+		AudioSource longSource;
+		REQUIRE(longSource.SetClip(CreateSineClip(3.0f)));
+		longSource.Play();
+		AudioEngine::AdvanceNullDevice(5.0f);
+		CHECK(std::abs(longSource.GetPlaybackPosition() - 1.0f) < c_PositionTolerance);
+		CHECK(longSource.IsPlaying());
+
+		// Sounds end, so finished one-shots are reclaimed.
+		REQUIRE(AudioEngine::PlayOneShot(CreateSineClip(0.1f)));
+		AudioEngine::AdvanceNullDevice(0.25f);
+		CHECK_FALSE(source.IsPlaying());
+		AudioEngine::Update();
+		CHECK(AudioEngine::GetStats().ActiveOneShots == 0);
 	}
 
 	TEST_CASE("Settings made before Init are applied and Shutdown resets them")
@@ -615,8 +597,12 @@ TEST_SUITE("Audio.Source")
 	{
 		ScopedAudioEngine engine;
 		REQUIRE(engine.Initialized);
+		// Streamed clips decode on the audio thread: their finished voices must be replaced, never rewound from here.
+		AudioClipLoadMode mode = AudioClipLoadMode::Decompressed;
+		SUBCASE("Decompressed") {}
+		SUBCASE("Streamed") { mode = AudioClipLoadMode::Streamed; }
 		AudioSource source;
-		REQUIRE(source.SetClip(CreateSineClip(0.1f)));
+		REQUIRE(source.SetClip(CreateSineClip(0.1f, mode)));
 		source.Play();
 
 		// Play again the moment the source reports that it finished, before the mixer has processed its end.
@@ -631,6 +617,7 @@ TEST_SUITE("Audio.Source")
 		CHECK(source.IsPlaying());
 		CHECK(ComputeRms(Render(2400)) == doctest::Approx(c_SineRms).epsilon(0.05));
 		CHECK(std::abs(source.GetPlaybackPosition() - 0.05f) < c_PositionTolerance);
+		CHECK(AudioEngine::GetStats().AllocatedVoices == 1); // The finished voice was released
 	}
 
 	TEST_CASE("Seek moves the playback position")
@@ -1047,6 +1034,38 @@ TEST_SUITE("Audio.Spatial")
 		left = MeasureRms(0);
 		right = MeasureRms(1);
 		CHECK(left == doctest::Approx(right).epsilon(0.01));
+	}
+
+	TEST_CASE("The listener's up vector reaches the mix through the mixing thread")
+	{
+		ScopedAudioEngine engine;
+		REQUIRE(engine.Initialized);
+		AudioSource source;
+		REQUIRE(source.SetClip(CreateSineClip(1.0f)));
+		source.SetLooping(true);
+		source.SetSpatial(true);
+		source.SetPosition(glm::vec3(5.0f, 0.0f, 0.0f));
+		source.Play();
+		CHECK(MeasureRms(1) > MeasureRms(0) * 1.5f);
+
+		// Rolled upside down, +X is on the left. The vector is applied after a mixing period, so the next ones use it.
+		const glm::vec3 position(0.0f, 0.0f, 1.0f);
+		AudioEngine::SetListener(position, glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+		const AudioListenerState listener = AudioEngine::GetListener();
+		CHECK(listener.Position == position);
+		CHECK(listener.Forward == glm::vec3(0.0f, 0.0f, -1.0f));
+		CHECK(listener.Up == glm::vec3(0.0f, -1.0f, 0.0f));
+		CHECK(listener.Velocity == glm::vec3(1.0f, 0.0f, 0.0f));
+		CHECK(AudioEngine::GetMixedListenerUp() == glm::vec3(0.0f, 1.0f, 0.0f)); // Not written from this call
+		Render(64);
+		CHECK(AudioEngine::GetMixedListenerUp() == glm::vec3(0.0f, -1.0f, 0.0f));
+		CHECK(MeasureRms(0) > MeasureRms(1) * 1.5f);
+
+		// Changed many times between periods, the latest vector wins.
+		for (int index = 0; index < 100; index++)
+			AudioEngine::SetListener(position, glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, index % 2 == 0 ? 1.0f : -1.0f, 0.0f));
+		CHECK(MeasureRms(0) > MeasureRms(1) * 1.5f);
+		CHECK(AudioEngine::GetMixedListenerUp() == glm::vec3(0.0f, -1.0f, 0.0f));
 	}
 
 	TEST_CASE("Non-spatial sources ignore their position")

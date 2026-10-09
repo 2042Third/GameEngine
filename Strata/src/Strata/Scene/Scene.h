@@ -67,6 +67,9 @@ namespace Strata
 
 		// Root entities in hierarchy order.
 		const std::vector<UUID>& GetRootEntities() const { return m_RootEntities; }
+		// Changes whenever the hierarchy order may have changed (entities created or destroyed, reparented or reordered among
+		// their siblings), so that results depending on it can be cached.
+		uint64_t GetHierarchyVersion() const { return m_HierarchyVersion; }
 		// Every entity in depth-first hierarchy order (parents before children).
 		std::vector<Entity> GetEntitiesInHierarchyOrder() const;
 
@@ -109,7 +112,9 @@ namespace Strata
 		bool IsRunning() const { return m_IsRunning; }
 		SceneRuntimeMode GetRuntimeMode() const { return m_RuntimeMode; }
 		bool IsUpdating() const { return m_IsUpdating; }
-		void SetPaused(bool paused) { m_IsPaused = paused; }
+		// Pausing stops the updates of the running systems and tells them (SceneSystem::OnPausedChanged). Starting the scene
+		// resets it to unpaused.
+		void SetPaused(bool paused);
 		bool IsPaused() const { return m_IsPaused; }
 		// While paused, lets the next `frames` updates each advance the simulation by exactly one fixed step.
 		void Step(uint32_t frames = 1) { m_StepFrames += frames; }
@@ -165,6 +170,7 @@ namespace Strata
 		entt::registry m_Registry;
 		std::unordered_map<UUID, entt::entity> m_EntityMap;
 		std::vector<UUID> m_RootEntities;
+		uint64_t m_HierarchyVersion = 0;
 		SceneSettings m_Settings;
 
 		std::vector<Scope<SceneSystem>> m_Systems;

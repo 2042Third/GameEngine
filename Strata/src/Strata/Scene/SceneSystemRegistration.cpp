@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Scene/SceneSystem.h"
 
+#include "Strata/Audio/AudioSystem.h"
 #include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Scripting/ScriptEngine.h"
 #include "Strata/Scripting/ScriptSystem.h"
@@ -19,6 +20,9 @@ namespace Strata
 			return CreateScope<ScriptSystem>(scene, ScriptEngine::GetActive());
 		} });
 		descriptors.push_back({ "Physics", true, [](Scene& scene) -> Scope<SceneSystem> { return CreateScope<PhysicsSystem>(scene); } });
+		// Audio updates last (in OnLateUpdate), so sources and the listener follow the transforms scripts and physics produced this
+		// frame. Like scripts, it does not run in simulate mode.
+		descriptors.push_back({ "Audio", false, [](Scene& scene) -> Scope<SceneSystem> { return CreateScope<AudioSystem>(scene); } });
 	}
 
 }

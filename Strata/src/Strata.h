@@ -27,6 +27,7 @@
 #include "Strata/Audio/AudioClipAsset.h"
 #include "Strata/Audio/AudioEngine.h"
 #include "Strata/Audio/AudioSource.h"
+#include "Strata/Audio/AudioSystem.h"
 
 #include "Strata/Input/Input.h"
 #include "Strata/Input/KeyCodes.h"

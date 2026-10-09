@@ -20,11 +20,13 @@ namespace
 		static inline int FixedUpdates = 0;
 		static inline int LateUpdates = 0;
 		static inline float LastFixedTimestep = 0.0f;
+		static inline std::vector<bool> PauseChanges;
 
 		static void Reset()
 		{
 			Started = Stopped = Updates = FixedUpdates = LateUpdates = 0;
 			LastFixedTimestep = 0.0f;
+			PauseChanges.clear();
 		}
 
 		void OnRuntimeStart() override { Started++; }
@@ -36,6 +38,7 @@ namespace
 			LastFixedTimestep = timestep;
 		}
 		void OnLateUpdate(Timestep) override { LateUpdates++; }
+		void OnPausedChanged(bool paused) override { PauseChanges.push_back(paused); }
 	};
 
 	struct DestroyingSystem : public SceneSystem
@@ -208,6 +211,46 @@ TEST_SUITE("Scene")
 		REQUIRE(observer.Updated.size() == 3);
 		CHECK(observer.Updated[2] == child.GetHandle());
 		CHECK_FALSE(observer.SeenParents[2].IsValid());
+	}
+
+	TEST_CASE("The hierarchy version changes with the hierarchy order")
+	{
+		Scene scene;
+		uint64_t version = scene.GetHierarchyVersion();
+		const auto changed = [&]()
+		{
+			const uint64_t current = scene.GetHierarchyVersion();
+			const bool result = current != version;
+			version = current;
+			return result;
+		};
+
+		Entity a = scene.CreateEntity("A");
+		CHECK(changed());
+		Entity b = scene.CreateEntity("B");
+		CHECK(changed());
+		Entity child = scene.CreateChildEntity(a, "Child");
+		CHECK(changed());
+
+		// Neither transforms, activity nor components change the order.
+		a.GetTransform().Translation.x = 1.0f;
+		a.SetActive(false);
+		a.SetActive(true);
+		b.AddComponent<CameraComponent>();
+		CHECK_FALSE(changed());
+
+		CHECK(scene.SetParent(b, a));
+		CHECK(changed());
+		CHECK(scene.SetParent(b, a)); // Already its parent
+		CHECK_FALSE(changed());
+		CHECK(scene.SetSiblingIndex(b, 0));
+		CHECK(changed());
+		CHECK(scene.DuplicateEntity(child));
+		CHECK(changed());
+		scene.DestroyEntity(child);
+		CHECK(changed());
+		CHECK(scene.SetParent(b, Entity()));
+		CHECK(changed());
 	}
 
 	TEST_CASE("World transforms follow the hierarchy")
@@ -401,6 +444,29 @@ TEST_SUITE("Scene")
 		scene.OnRuntimeStop();
 		CHECK(CountingSystem::Stopped == 1);
 		CHECK_FALSE(scene.IsRunning());
+	}
+
+	TEST_CASE("Systems are told when the running scene is paused or resumed")
+	{
+		ScopedCountingSystem system;
+		Scene scene;
+		// Not running: nothing to tell, and starting resets the scene to unpaused.
+		scene.SetPaused(true);
+		CHECK(scene.IsPaused());
+		scene.OnRuntimeStart();
+		CHECK_FALSE(scene.IsPaused());
+		CHECK(CountingSystem::PauseChanges.empty());
+
+		scene.SetPaused(true);
+		scene.SetPaused(true); // No change
+		scene.OnUpdateRuntime(0.1f);
+		scene.SetPaused(false);
+		CHECK(CountingSystem::PauseChanges == std::vector<bool> { true, false });
+		CHECK(CountingSystem::Updates == 0);
+
+		scene.OnRuntimeStop();
+		scene.SetPaused(true);
+		CHECK(CountingSystem::PauseChanges.size() == 2);
 	}
 
 	TEST_CASE("Simulate mode only creates systems that support it")
