@@ -11,6 +11,7 @@
 #include <utility>
 
 #if !defined(ST_PLATFORM_WINDOWS)
+	#include <pthread.h>
 	#include <signal.h>
 	#include <unistd.h>
 #endif
@@ -110,7 +111,17 @@ namespace
 		WriteToStandardError(" in test case: ");
 		WriteToStandardError(s_CurrentTestCase[0] ? s_CurrentTestCase : "(none)");
 		WriteToStandardError("\n");
-		// SA_RESETHAND restored the default action: raising again ends the process with the same signal.
+		// End the process with the signal's default action. The crash guard calls this handler directly for faults outside
+		// guarded calls (SA_RESETHAND only applies when the kernel invokes it), so restore the default action and unblock
+		// the signal explicitly; raising it again would otherwise come back to the guard.
+		struct sigaction defaultAction = {};
+		defaultAction.sa_handler = SIG_DFL;
+		sigemptyset(&defaultAction.sa_mask);
+		sigaction(signal, &defaultAction, nullptr);
+		sigset_t unblock;
+		sigemptyset(&unblock);
+		sigaddset(&unblock, signal);
+		pthread_sigmask(SIG_UNBLOCK, &unblock, nullptr);
 		raise(signal);
 	}
 
