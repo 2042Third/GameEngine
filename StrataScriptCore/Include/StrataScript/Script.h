@@ -48,8 +48,9 @@ namespace Strata
 	// Contacts: scripts on an entity that owns a physics body (its RigidBody entity; colliders on descendants belong to it)
 	// learn when the body starts touching another body and when they part (or one leaves the simulation), after the fixed
 	// step that found it. The trigger callbacks report contacts where either body is a trigger (no collision response), the
-	// collision callbacks all others. Both entities' scripts are called. Destroying entities in these callbacks is safe:
-	// destruction happens at the end of the frame.
+	// collision callbacks all others. Both entities' scripts are called. Every Enter a script got is followed by one Exit,
+	// also when the entity was deactivated meanwhile (pooled objects end their contacts that way); a script added during a
+	// contact gets neither. Destroying entities in these callbacks is safe: destruction happens at the end of the frame.
 	//
 	// Script classes must be default constructible; the module constructs one instance when it loads to read the field
 	// defaults. Do gameplay initialization in OnCreate, not in the constructor.

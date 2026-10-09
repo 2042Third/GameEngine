@@ -284,7 +284,8 @@ Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; t
   `PhysicsSystem`, also in `OnCreate`: scenes start every system before the scripts (`SceneSystem::OnRuntimeStarted`).
   Contacts reach scripts as `OnCollisionEnter/Exit` and `OnTriggerEnter/Exit` (class descriptor callbacks taking a
   `StrataScriptCollision`): `ScriptSystem` listens to the `PhysicsSystem` while it runs and calls the scripts of both
-  entities, skipping removed, disabled, not yet started and inactive instances.
+  entities, skipping removed, disabled and not yet started instances; contacts begin only for active entities, and each
+  instance that got an Enter gets its Exit, also after its entity was deactivated.
 - Audio: `AudioSource` and `Audio` go through the scene's `AudioSystem`; without it (simulate mode) the calls fail.
 - Game flow: `Game::Quit`, `LoadScene` and `ReloadScene` set `Scene::RequestQuit`/`RequestSceneLoad`, which the scene's owner
   honors after the frame (see [Editor](#editor)).

@@ -226,20 +226,22 @@ namespace Strata
 		ScriptCallback callback = begin ? ScriptCallback::OnCollisionEnter : ScriptCallback::OnCollisionExit;
 		if (event.IsTrigger)
 			callback = begin ? ScriptCallback::OnTriggerEnter : ScriptCallback::OnTriggerExit;
-		DeliverContact(event.AID, event.BID, callback, event.Point, event.Normal);
-		DeliverContact(event.BID, event.AID, callback, event.Point, -event.Normal);
+		DeliverContact(event.AID, event.BID, begin, callback, event.Point, event.Normal);
+		DeliverContact(event.BID, event.AID, begin, callback, event.Point, -event.Normal);
 	}
 
-	void ScriptSystem::DeliverContact(UUID entityID, UUID otherID, ScriptCallback callback, const glm::vec3& point, const glm::vec3& normal)
+	void ScriptSystem::DeliverContact(UUID entityID, UUID otherID, bool begin, ScriptCallback callback, const glm::vec3& point, const glm::vec3& normal)
 	{
 		if (!m_Running || !GetUsableModule())
 			return;
 		auto it = m_Instances.find(entityID);
 		if (it == m_Instances.end())
 			return;
-		// Like the update callbacks: entities destroyed during this frame still receive them, inactive ones do not.
+		// Like the update callbacks, contacts begin for the scripts of active entities only (entities destroyed during this
+		// frame included). A contact that began ends for the scripts that were told, also when their entity was deactivated
+		// meanwhile (that ends its contacts): every Enter has its Exit.
 		const Entity entity = m_Scene.GetEntityByUUID(entityID);
-		if (!entity || !m_Scene.IsActiveInHierarchy(entity))
+		if (!entity || (begin && !m_Scene.IsActiveInHierarchy(entity)))
 			return;
 
 		StrataScriptCollision contact = {};
@@ -255,7 +257,14 @@ namespace Strata
 		const std::vector<Ref<Instance>> instances = it->second;
 		for (const Ref<Instance>& instance : instances)
 		{
-			if (instance->Removed || instance->Disabled || !instance->Created || !instance->Handle || !instance->Class->Implements(callback))
+			if (instance->Removed || instance->Disabled || !instance->Created || !instance->Handle)
+				continue;
+			// Whether or not the script implements the callback: one that only implements the Exit still gets it.
+			if (begin)
+				instance->Contacts.insert(otherID);
+			else if (instance->Contacts.erase(otherID) == 0)
+				continue;
+			if (!instance->Class->Implements(callback))
 				continue;
 
 			ScriptModule* module = GetUsableModule();
@@ -821,8 +830,9 @@ namespace Strata
 				m_PendingReloads.push_back(instance);
 			else
 			{
-				// Never started, or its state was lost with a crashed module: it starts over.
+				// Never started, or its state was lost with a crashed module: it starts over (and knows of no contacts).
 				instance->Created = false;
+				instance->Contacts.clear();
 				m_PendingStart.push_back(instance);
 			}
 			instance->Restore = false;

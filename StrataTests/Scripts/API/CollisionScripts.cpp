@@ -68,6 +68,30 @@ ST_SCRIPT_CLASS(ContactRecorder)
 	ST_SCRIPT_FIELD(LastOtherValid);
 }
 
+// Added to an entity while its body touches another: counts its contact callbacks (none for a contact that began before
+// it existed).
+class LateContactProbe : public Script
+{
+public:
+	int32_t Enters = 0;
+	int32_t Exits = 0;
+
+	void OnCollisionEnter(const Collision&) override
+	{
+		Enters++;
+	}
+
+	void OnCollisionExit(const Collision&) override
+	{
+		Exits++;
+	}
+};
+
+ST_SCRIPT_CLASS(LateContactProbe)
+{
+	ST_SCRIPT_FIELD(Enters);
+	ST_SCRIPT_FIELD(Exits);
+}
 // Destroys its own entity when it first touches something.
 class DestroySelfOnContact : public Script
 {

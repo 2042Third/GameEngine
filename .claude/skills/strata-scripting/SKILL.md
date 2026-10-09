@@ -165,8 +165,10 @@ void OnTriggerEnter(const Collision& collision) override {}   // Either body is 
 void OnTriggerExit(const Collision& collision) override {}
 ```
 
-They run after the fixed step that found the change, for the scripts of both entities. `collision.Other` may name an
-entity that is already gone in an Exit caused by its destruction: check `IsValid()` before using it.
+They run after the fixed step that found the change, for the scripts of both entities. Every Enter is followed by one
+Exit, also when the entity is deactivated meanwhile (a pooled pickup ends its contacts when it is disabled), so
+counters of touching bodies stay balanced. `collision.Other` may name an entity that is already gone in an Exit caused by
+its destruction: check `IsValid()` before using it.
 
 ### Audio
 

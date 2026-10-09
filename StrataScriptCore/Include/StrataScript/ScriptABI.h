@@ -381,7 +381,8 @@ extern "C"
 		 * StructSize covers them). They reach the scripts on the entities owning the two bodies (RigidBody entities, or
 		 * colliders without one), after the fixed step that found the change: Enter when the bodies start touching, Exit when
 		 * they part or one of them leaves the simulation. The trigger callbacks report contacts where either body is a
-		 * trigger, the collision callbacks the others. Scripts on inactive entities receive none.
+		 * trigger, the collision callbacks the others. Contacts begin only for scripts on active entities; every instance
+		 * that got an Enter gets its Exit, also when its entity was deactivated meanwhile (deactivation ends its contacts).
 		 */
 		uint32_t (*OnCollisionEnter)(StrataScriptInstance instance, const StrataScriptCollision* collision);
 		uint32_t (*OnCollisionExit)(StrataScriptInstance instance, const StrataScriptCollision* collision);

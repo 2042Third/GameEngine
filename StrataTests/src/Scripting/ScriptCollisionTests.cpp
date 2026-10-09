@@ -100,7 +100,7 @@ TEST_SUITE("Scripting.Collisions")
 		scene.OnRuntimeStop();
 	}
 
-	TEST_CASE("Scripts on inactive entities receive no contact callbacks")
+	TEST_CASE("Every contact that began ends for the same scripts, also when an entity was deactivated meanwhile")
 	{
 		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
 		Scene scene;
@@ -111,15 +111,29 @@ TEST_SUITE("Scripting.Collisions")
 		AddScriptEntry(cube, "ContactRecorder");
 		scene.OnRuntimeStart();
 		RunFrames(scene, 30);
-		const ScriptSystem& system = GetScriptSystem(scene);
+		ScriptSystem& system = GetScriptSystem(scene);
 		REQUIRE(GetField<int32_t>(system, cube, "ContactRecorder", "CollisionEnters") == 1);
 
-		// Deactivating the resting cube takes its body out of the simulation: the contact ends for the ground only.
+		// A script added during the contact knows of no contact that began before it existed.
+		REQUIRE(system.AddScript(cube, "LateContactProbe"));
+		RunFrames(scene, 1);
+
+		// Deactivating the resting cube takes its body out of the simulation: the contact ends for both entities' scripts
+		// that saw it begin (pooled objects get their Exit before they are reused).
 		cube.SetActive(false);
 		RunFrames(scene, 2);
 		CHECK(GetField<int32_t>(system, ground, "ContactRecorder", "CollisionExits") == 1);
-		CHECK(GetField<int32_t>(system, cube, "ContactRecorder", "CollisionExits") == 0);
-		CHECK_FALSE(Contains(GetLog(scene), "Cube.ContactRecorder.CollisionExit;"));
+		CHECK(GetField<int32_t>(system, cube, "ContactRecorder", "CollisionExits") == 1);
+		CHECK(Contains(GetLog(scene), "Cube.ContactRecorder.CollisionExit;"));
+		CHECK(GetField<int32_t>(system, cube, "LateContactProbe", "Exits") == 0);
+
+		// Active again, the cube touches the ground again: a new contact for every script.
+		cube.SetActive(true);
+		RunFrames(scene, 5);
+		CHECK(GetField<int32_t>(system, cube, "ContactRecorder", "CollisionEnters") == 2);
+		CHECK(GetField<int32_t>(system, ground, "ContactRecorder", "CollisionEnters") == 2);
+		CHECK(GetField<int32_t>(system, cube, "LateContactProbe", "Enters") == 1);
+		CHECK_FALSE(engine->IsFaulted());
 		scene.OnRuntimeStop();
 	}
 	TEST_CASE("Triggers report trigger callbacks to both entities")

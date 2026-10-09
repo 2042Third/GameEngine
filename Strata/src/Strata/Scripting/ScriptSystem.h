@@ -49,9 +49,10 @@ namespace Strata
 	//
 	// Contacts: the scene's PhysicsSystem reports contact changes after each step; the scripts on both entities (those owning
 	// the bodies) receive OnCollisionEnter/Exit, or OnTriggerEnter/Exit when either body is a trigger, with the other entity
-	// and the contact normal pointing towards it. Scripts on inactive entities receive none. The callbacks run while the scene
-	// updates, so the entities they destroy stay valid until the frame ends; the other side of an Exit caused by destruction
-	// may already be gone.
+	// and the contact normal pointing towards it. Contacts begin only for the scripts of active entities; each instance that got
+	// an Enter gets the matching Exit, also when its entity was deactivated meanwhile (but not once the script was removed or
+	// disabled, or its entity destroyed). The callbacks run while the scene updates, so the entities they destroy stay valid
+	// until the frame ends; the other side of an Exit caused by destruction may already be gone.
 	class ScriptSystem final : public SceneSystem
 	{
 	public:
@@ -117,6 +118,9 @@ namespace Strata
 			bool Removed = false;                   // Destroyed or about to be; no further callbacks
 			bool Restore = false;                   // Reload: ReloadFields hold a snapshot to restore
 			std::vector<ScriptFieldValue> ReloadFields;
+			// Entities whose contacts with this one began for this instance and have not ended yet: the Exit goes to exactly the
+			// instances that got the Enter (kept across hot reloads).
+			std::unordered_set<UUID> Contacts;
 		};
 
 		friend class ScriptEngine;
@@ -167,7 +171,7 @@ namespace Strata
 
 		void OnCollision(const CollisionEvent& event);
 		// Calls a contact callback on the scripts of an entity, for its contact with "other" (the normal points towards it).
-		void DeliverContact(UUID entityID, UUID otherID, ScriptCallback callback, const glm::vec3& point, const glm::vec3& normal);
+		void DeliverContact(UUID entityID, UUID otherID, bool begin, ScriptCallback callback, const glm::vec3& point, const glm::vec3& normal);
 	private:
 		Scene& m_Scene;
 		Ref<ScriptEngine> m_Engine;
