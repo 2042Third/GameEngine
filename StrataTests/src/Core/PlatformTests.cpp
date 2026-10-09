@@ -14,6 +14,8 @@
 #include <string>
 
 #if defined(ST_PLATFORM_POSIX)
+	#include <csignal>
+	#include <pthread.h>
 	#include <sys/stat.h>
 	#include <unistd.h>
 #endif
@@ -307,6 +309,32 @@ TEST_SUITE("Core.Platform")
 		CHECK(CrashGuard::Invoke(NestedGuard, &innerCaught));
 		CHECK(innerCaught);
 	}
+
+#if defined(ST_PLATFORM_POSIX)
+	TEST_CASE("CrashGuard leaves the signal mask as it was")
+	{
+		// The guard does not save the mask on every call; after a fault the delivered signal must be unblocked again.
+		sigset_t before;
+		REQUIRE(pthread_sigmask(SIG_BLOCK, nullptr, &before) == 0);
+		for (int attempt = 0; attempt < 2; attempt++)
+		{
+			CrashInfo info;
+			CHECK_FALSE(CrashGuard::Invoke(WriteToNull, nullptr, &info));
+#if !defined(__aarch64__)
+			// Integer division by zero does not trap on ARM64.
+			int divisor = 0;
+			CHECK_FALSE(CrashGuard::Invoke(DivideByZero, &divisor, &info));
+#endif
+			sigset_t after;
+			REQUIRE(pthread_sigmask(SIG_BLOCK, nullptr, &after) == 0);
+			for (int signal = 1; signal < NSIG; signal++)
+			{
+				INFO("Signal ", signal);
+				CHECK(sigismember(&after, signal) == sigismember(&before, signal));
+			}
+		}
+	}
+#endif
 
 	TEST_CASE("CrashGuard contains C++ exceptions")
 	{
