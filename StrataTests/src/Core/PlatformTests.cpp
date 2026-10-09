@@ -101,27 +101,6 @@ namespace
 	}
 
 #if defined(ST_PLATFORM_WINDOWS)
-	// Points STRATA_RUNTIME_DIR somewhere else for the scope.
-	class ScopedRuntimeDirectory
-	{
-	public:
-		explicit ScopedRuntimeDirectory(const std::filesystem::path& directory)
-			: m_Previous(Platform::GetEnvVar("STRATA_RUNTIME_DIR").value_or(""))
-		{
-			Platform::SetEnvVar("STRATA_RUNTIME_DIR", FileSystem::ToUTF8(directory));
-		}
-
-		~ScopedRuntimeDirectory()
-		{
-			Platform::SetEnvVar("STRATA_RUNTIME_DIR", m_Previous);
-		}
-
-		ScopedRuntimeDirectory(const ScopedRuntimeDirectory&) = delete;
-		ScopedRuntimeDirectory& operator=(const ScopedRuntimeDirectory&) = delete;
-	private:
-		std::string m_Previous;
-	};
-
 	std::vector<uint8_t> SidBytes(PSID sid)
 	{
 		const uint8_t* bytes = static_cast<const uint8_t*>(sid);
@@ -301,9 +280,11 @@ TEST_SUITE("Core.Platform")
 		CHECK(Platform::GetUserRuntimeDirectory("StrataTests") == runtime);
 
 		// Without it, every user has a location (with a temporary-directory fallback on POSIX). Removed again afterwards.
-		REQUIRE(Platform::SetEnvVar("STRATA_RUNTIME_DIR", ""));
-		const std::filesystem::path user = Platform::GetUserRuntimeDirectory("StrataTestsUser");
-		REQUIRE(Platform::SetEnvVar("STRATA_RUNTIME_DIR", *configured));
+		std::filesystem::path user;
+		{
+			const Tests::ScopedEnvironmentVariable noOverride("STRATA_RUNTIME_DIR", "");
+			user = Platform::GetUserRuntimeDirectory("StrataTestsUser");
+		}
 		REQUIRE_FALSE(user.empty());
 		CHECK(FileSystem::IsDirectory(user));
 		CHECK(user != runtime);
@@ -349,7 +330,7 @@ TEST_SUITE("Core.Platform")
 	TEST_CASE("Runtime and private directories grant only the current user access")
 	{
 		const std::filesystem::path root = Tests::CreateTemporaryDirectory("RuntimeSecurity");
-		const ScopedRuntimeDirectory scopedRuntime(root);
+		const Tests::ScopedEnvironmentVariable scopedRuntime("STRATA_RUNTIME_DIR", FileSystem::ToUTF8(root));
 
 		// New directories get an owner-only DACL instead of inheriting the parent's entries.
 		const std::filesystem::path runtime = Platform::GetUserRuntimeDirectory("StrataSecurity");
@@ -379,11 +360,11 @@ TEST_SUITE("Core.Platform")
 			// The directory containing it.
 			const std::filesystem::path shared = root / "Shared";
 			REQUIRE(CreateSharedDirectory(shared));
-			const ScopedRuntimeDirectory scopedRuntime(shared);
+			const Tests::ScopedEnvironmentVariable scopedRuntime("STRATA_RUNTIME_DIR", FileSystem::ToUTF8(shared));
 			CHECK(Platform::GetUserRuntimeDirectory("StrataRefused").empty());
 		}
 
-		const ScopedRuntimeDirectory scopedRuntime(root);
+		const Tests::ScopedEnvironmentVariable scopedRuntime("STRATA_RUNTIME_DIR", FileSystem::ToUTF8(root));
 		REQUIRE(CreateSharedDirectory(root / "StrataShared"));
 		CHECK(Platform::GetUserRuntimeDirectory("StrataShared").empty());
 
