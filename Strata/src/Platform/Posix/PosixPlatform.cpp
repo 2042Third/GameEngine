@@ -136,6 +136,7 @@ namespace Strata
 				return std::nullopt;
 			}
 			return contents;
+		}
 
 		// The directory exists (as a directory; a symbolic link only if `followLinks`), belongs to this user and is
 		// writable by nobody else, so other users cannot add, replace or rename entries in it.
