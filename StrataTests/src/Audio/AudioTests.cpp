@@ -8,6 +8,8 @@
 #include "TestHelpers.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <numbers>
@@ -620,6 +622,96 @@ TEST_SUITE("Audio.Source")
 		CHECK(AudioEngine::GetStats().AllocatedVoices == 1); // The finished voice was released
 	}
 
+	TEST_CASE("Playing a source again the moment it finishes restarts it")
+	{
+		ScopedAudioEngine engine;
+		REQUIRE(engine.Initialized);
+		Ref<AudioClip> clip = CreateSineClip(0.01f);
+		AudioSource source;
+		REQUIRE(source.SetClip(clip));
+
+		// A thread mixing like an output device finishes the voice at any moment, while this thread keeps calling Play,
+		// like a script playing a short sound every frame.
+		std::atomic<bool> mixing = true;
+		std::thread mixer([&mixing]()
+		{
+			std::vector<float> output(64 * c_Channels);
+			while (mixing.load())
+				AudioEngine::ReadFrames(output.data(), 64);
+		});
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
+		uint32_t plays = 0;
+		uint32_t stalled = 0;
+		while (std::chrono::steady_clock::now() < deadline)
+		{
+			source.Play();
+			plays++;
+			// Started, or already finished again: never stopped short. (Restarting a finished voice instead of replacing it
+			// could leave it stopped at its beginning, though only in a window too narrow to hit reliably here.)
+			if (!source.IsPlaying() && source.GetPlaybackPosition() < clip->GetLength() - 1e-6f)
+				stalled++;
+		}
+		mixing = false;
+		mixer.join();
+
+		CHECK(plays > 0);
+		CHECK(stalled == 0);
+		source.Play();
+		CHECK(source.IsPlaying());
+	}
+
+	TEST_CASE("A seek made as a source finishes applies to its next Play")
+	{
+		ScopedAudioEngine engine;
+		REQUIRE(engine.Initialized);
+		// 264 frames: the mixer's last read (64 frames at a time) finds the end in the middle of a period.
+		Ref<AudioClip> clip = AudioClip::LoadFromMemory(CreateSineWav(264.0f / static_cast<float>(c_SampleRate)), "Short");
+		REQUIRE(clip);
+		REQUIRE(clip->GetFrameCount() == 264);
+		AudioSource source;
+		REQUIRE(source.SetClip(clip));
+		const float target = 200.0f / static_cast<float>(c_SampleRate);
+		// The mixer has read up to the last period, which finds the end.
+		const float lastPeriod = 256.0f / static_cast<float>(c_SampleRate);
+
+		std::atomic<bool> mixing = true;
+		std::thread mixer([&mixing]()
+		{
+			std::vector<float> output(64 * c_Channels);
+			while (mixing.load())
+				AudioEngine::ReadFrames(output.data(), 64);
+		});
+
+		// Seeks near the end, while the mixer may be finishing the voice. When the voice finishes before it takes the seek,
+		// it still reports the seek target as its position, and the next Play must start there.
+		uint32_t finishedWithSeek = 0;
+		for (int round = 0; round < 2000; round++)
+		{
+			source.Stop();
+			source.Play();
+			while (source.IsPlaying() && source.GetPlaybackPosition() < lastPeriod)
+				continue;
+			// Then a little later each round (up to 30 microseconds), so that some seeks land while the mixer reads the end.
+			const auto seekTime = std::chrono::steady_clock::now() + std::chrono::nanoseconds((round * 397) % 30000);
+			while (std::chrono::steady_clock::now() < seekTime)
+				continue;
+			if (!source.IsPlaying())
+				continue;
+			source.Seek(target);
+			while (source.IsPlaying())
+				continue;
+			if (std::abs(source.GetPlaybackPosition() - target) > 1e-5f)
+				continue; // The voice took the seek and played on to the end
+			finishedWithSeek++;
+			source.Play();
+			const float position = source.GetPlaybackPosition();
+			CHECK(position >= target - 1e-5f);
+		}
+		mixing = false;
+		mixer.join();
+		MESSAGE("Rounds in which the voice finished before taking the seek: ", finishedWithSeek);
+	}
+
 	TEST_CASE("Seek moves the playback position")
 	{
 		ScopedAudioEngine engine;
@@ -1061,11 +1153,12 @@ TEST_SUITE("Audio.Spatial")
 		CHECK(AudioEngine::GetMixedListenerUp() == glm::vec3(0.0f, -1.0f, 0.0f));
 		CHECK(MeasureRms(0) > MeasureRms(1) * 1.5f);
 
-		// Changed many times between periods, the latest vector wins.
-		for (int index = 0; index < 100; index++)
+		// Changed many times between periods, the latest vector wins (upright again: a handoff that dropped updates would
+		// leave the mixer upside down).
+		for (int index = 0; index <= 100; index++)
 			AudioEngine::SetListener(position, glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, index % 2 == 0 ? 1.0f : -1.0f, 0.0f));
-		CHECK(MeasureRms(0) > MeasureRms(1) * 1.5f);
-		CHECK(AudioEngine::GetMixedListenerUp() == glm::vec3(0.0f, -1.0f, 0.0f));
+		CHECK(MeasureRms(1) > MeasureRms(0) * 1.5f);
+		CHECK(AudioEngine::GetMixedListenerUp() == glm::vec3(0.0f, 1.0f, 0.0f));
 	}
 
 	TEST_CASE("Non-spatial sources ignore their position")

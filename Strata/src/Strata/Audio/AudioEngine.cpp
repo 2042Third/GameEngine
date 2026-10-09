@@ -4,10 +4,9 @@
 #include "Strata/Audio/AudioClip.h"
 #include "Strata/Audio/AudioSource.h"
 #include "Strata/Audio/AudioVoice.h"
+#include "Strata/Core/SequenceLock.h"
 
 #include <miniaudio.h>
-
-#include <atomic>
 
 namespace Strata
 {
@@ -37,24 +36,13 @@ namespace Strata
 			glm::vec3 ListenerVelocity = glm::vec3(0.0f);
 		};
 
-		// The listener's world up vector on its way to the thread that mixes. miniaudio stores it without atomics and reads it
-		// while mixing, so only that thread writes it (ApplyPendingWorldUp, after each mixing period). A sequence lock
-		// carries the vector: neither side ever waits, and the mixer skips a vector that is being written and takes it
-		// after the next period.
-		struct PendingWorldUp
-		{
-			std::atomic<uint32_t> Sequence = 0; // Odd while the vector is being written
-			std::atomic<float> X = 0.0f;
-			std::atomic<float> Y = 1.0f;
-			std::atomic<float> Z = 0.0f;
-			uint32_t AppliedSequence = 0;       // Mixing thread only
-		};
-
 		// Exists while the engine is initialized. Heap-allocated because miniaudio keeps pointers into ma_engine.
 		struct AudioEngineData
 		{
 			ma_engine Engine;
-			PendingWorldUp WorldUp;
+			// The listener's world up vector on its way to the thread that mixes: miniaudio stores it without atomics and reads
+			// it while mixing, so only that thread writes it (ApplyPendingWorldUp, after each mixing period).
+			SequenceLockedValue<glm::vec3> WorldUp;
 			bool NullDevice = false;
 			uint32_t MaxOneShots = 0;
 			std::vector<Scope<AudioVoice>> OneShots; // Oldest first
@@ -71,36 +59,15 @@ namespace Strata
 		AudioSource* s_FirstSource = nullptr;
 		uint32_t s_SourceCount = 0;
 
-		// Main thread: hands a new world up vector to the mixing thread.
-		void PublishWorldUp(PendingWorldUp& pending, const glm::vec3& up)
-		{
-			const uint32_t sequence = pending.Sequence.load(std::memory_order_relaxed);
-			pending.Sequence.store(sequence + 1, std::memory_order_relaxed);
-			std::atomic_thread_fence(std::memory_order_release);
-			pending.X.store(up.x, std::memory_order_relaxed);
-			pending.Y.store(up.y, std::memory_order_relaxed);
-			pending.Z.store(up.z, std::memory_order_relaxed);
-			pending.Sequence.store(sequence + 2, std::memory_order_release);
-		}
-
 		// miniaudio's onProcess callback, called by the thread that mixes (the device's audio thread, or the caller of
 		// ReadFrames for the null device) after each mixing period: the only place the world up vector is written.
 		void ApplyPendingWorldUp(void* userData, float*, ma_uint64)
 		{
 			AudioEngineData& data = *static_cast<AudioEngineData*>(userData);
-			PendingWorldUp& pending = data.WorldUp;
-			const uint32_t sequence = pending.Sequence.load(std::memory_order_acquire);
-			if (sequence == pending.AppliedSequence || (sequence & 1u) != 0)
-				return;
-
-			const float x = pending.X.load(std::memory_order_relaxed);
-			const float y = pending.Y.load(std::memory_order_relaxed);
-			const float z = pending.Z.load(std::memory_order_relaxed);
-			std::atomic_thread_fence(std::memory_order_acquire);
-			if (pending.Sequence.load(std::memory_order_relaxed) != sequence)
-				return; // Rewritten meanwhile: taken after the next period
-			ma_engine_listener_set_world_up(&data.Engine, c_ListenerIndex, x, y, z);
-			pending.AppliedSequence = sequence;
+			// A vector being written right now is taken after the next period.
+			glm::vec3 up;
+			if (data.WorldUp.TakeNew(up))
+				ma_engine_listener_set_world_up(&data.Engine, c_ListenerIndex, up.x, up.y, up.z);
 		}
 
 		// Before the engine mixes (nothing reads the listener yet), so the world up vector may be written directly.
@@ -378,7 +345,7 @@ namespace Strata
 		ma_engine_listener_set_direction(&engine, c_ListenerIndex, forward.x, forward.y, forward.z);
 		ma_engine_listener_set_velocity(&engine, c_ListenerIndex, velocity.x, velocity.y, velocity.z);
 		if (upChanged)
-			PublishWorldUp(s_Data->WorldUp, up);
+			s_Data->WorldUp.Publish(up);
 	}
 
 	AudioListenerState AudioEngine::GetListener()
