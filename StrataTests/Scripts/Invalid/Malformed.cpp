@@ -1,6 +1,6 @@
 // A hand-written script module (no SDK) that describes two classes through the C ABI directly. The environment
-// variable STRATA_TEST_MALFORMED_CASE, read when the module loads, selects a defect for the validation tests; without it
-// the module is valid.
+// variable STRATA_TEST_MALFORMED_CASE, read when the module loads, selects a defect (or a crash) for the validation and
+// crash containment tests; without it the module is valid.
 
 #include "StrataScript/ScriptABI.h"
 
@@ -78,6 +78,36 @@ namespace
 			descriptor.SetField = nullptr;
 		}
 	}
+
+	void CrashNow()
+	{
+		volatile int* pointer = nullptr;
+		*pointer = 42;
+	}
+
+	// "CrashInStaticInitialization" / "CrashInStaticDestruction": a static object crashes while the library loads
+	// (before the engine calls any entry point) or while it unloads.
+	class StaticCrasher
+	{
+	public:
+		StaticCrasher()
+		{
+			const char* testCase = std::getenv("STRATA_TEST_MALFORMED_CASE");
+			if (Is(testCase, "CrashInStaticInitialization"))
+				CrashNow();
+			m_CrashWhenDestroyed = Is(testCase, "CrashInStaticDestruction");
+		}
+
+		~StaticCrasher()
+		{
+			if (m_CrashWhenDestroyed)
+				CrashNow();
+		}
+	private:
+		bool m_CrashWhenDestroyed = false;
+	};
+
+	StaticCrasher s_StaticCrasher;
 
 }
 

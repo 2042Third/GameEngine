@@ -84,7 +84,7 @@ TEST_SUITE("Scripting.Module")
 		const std::set<std::string> expectedClasses = {
 			"Lifecycle", "LifecycleSecond", "Idle", "HiddenCallbacks", "FieldTypes", "Thrower", "ThrowingConstructor", "EntityAPI", "Destroyer", "ScriptAdder",
 			"ComponentAPI", "PropertyProbe", "TransformAPI", "Spawned", "Spawner", "Listener", "Talker", "InputProbe", "TimeProbe", "SceneProbe",
-			"RemoveOnDestroy", "Fragile", "Readder", "Replicator", "MassSpawner", "PendingSpawner"
+			"RemoveOnDestroy", "Fragile", "Readder", "Replicator", "MassSpawner", "PendingSpawner", "InvalidArguments"
 		};
 		std::set<std::string> classes;
 		for (const ScriptClassInfo& info : engine.GetClasses())
@@ -333,6 +333,50 @@ TEST_SUITE("Scripting.Module")
 			volatile int* pointer = nullptr;
 			*pointer = 42;
 		}, nullptr, &crash));
+	}
+
+	TEST_CASE("Crashes in a module's static initialization and destruction are contained")
+	{
+		// In a child process: a crash inside the platform's loader may leave it in an undefined state (see ScriptEngine).
+		auto run = [](const char* testCase)
+		{
+			ScopedMalformedCase scopedCase(testCase);
+			ProcessSpecification specification;
+			specification.Executable = GetTestExecutablePath();
+			specification.Arguments = { "--strata-test-helper=script-module-lifecycle", FileSystem::ToUTF8(GetTestScriptModule(STRATA_TEST_SCRIPTS_MALFORMED)),
+				FileSystem::ToUTF8(GetTestScriptModule(STRATA_TEST_SCRIPTS_API)) };
+			return Process::Run(specification, std::chrono::milliseconds(60000));
+		};
+
+		// The load fails; the engine keeps working. (The exit code is not checked: what the failed library left behind
+		// can make the process crash while it exits - on Windows, Release builds do.)
+		const Process::RunResult initialization = run("CrashInStaticInitialization");
+		INFO("Static initialization: ", initialization.Output);
+		REQUIRE(initialization.Started);
+		CHECK_FALSE(initialization.TimedOut);
+		CHECK(Contains(initialization.Output, "first module: unloaded"));
+		CHECK_FALSE(Contains(initialization.Output, "first module: loaded"));
+#if defined(ST_PLATFORM_WINDOWS)
+		// The Windows loader contains exceptions in a library's initialization itself (ERROR_DLL_INIT_FAILED).
+		CHECK(Contains(initialization.Output, "error 1114"));
+#else
+		CHECK(Contains(initialization.Output, "crashed while loading"));
+#endif
+		CHECK(Contains(initialization.Output, "second module: loaded"));
+
+		// Unloading completes (the library may stay loaded); the engine keeps working.
+		const Process::RunResult destruction = run("CrashInStaticDestruction");
+		INFO("Static destruction: ", destruction.Output);
+		REQUIRE(destruction.Started);
+		CHECK_FALSE(destruction.TimedOut);
+		CHECK(Contains(destruction.Output, "first module: loaded"));
+		CHECK(Contains(destruction.Output, "first module: unloaded"));
+#if !defined(ST_PLATFORM_WINDOWS)
+		// (The Windows loader contains exceptions while a library unloads itself.)
+		CHECK(Contains(destruction.Output, "crashed while unloading"));
+#endif
+		CHECK(Contains(destruction.Output, "second module: loaded"));
+		CHECK(destruction.ExitCode == 0);
 	}
 
 	TEST_CASE("Class functions are read once, while the module loads")

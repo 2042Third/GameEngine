@@ -268,8 +268,10 @@ Building and loading scripts:
   `std::terminate`; POSIX catches SIGABRT, Windows modules turn it into `ST_SCRIPT_ABORT_EXCEPTION_CODE` through a
   SIGABRT handler `ScriptModuleEntry.cpp` installs in their static C runtime) and C++ exceptions escaping module code.
 - Limitations: native code cannot be preempted (an infinite loop blocks the main thread; `SetWatchdogTimeout` reports
-  long calls); a crash inside a module's static initializers or destructors is reported, but may leave the platform
-  loader in an undefined state; after `std::terminate` the C++ runtime keeps the abandoned exception; stray writes into
+  long calls); a crash inside a module's static initializers or destructors fails the load or abandons the library (the
+  Windows loader contains it itself; elsewhere it is reported), but may make the process crash when it exits, and outside
+  Windows may leave the platform loader in an undefined state;
+  after `std::terminate` the C++ runtime keeps the abandoned exception; stray writes into
   engine memory are not detected; memory of instances abandoned after a crash is leaked. Not contained (the process
   ends): Windows fail-fast terminations (`__fastfail`: `/GS` buffer overrun checks, C runtime invalid-parameter
   failures, heap corruption the system detects), `abort()` in Windows modules with a dynamically linked C runtime

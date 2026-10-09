@@ -456,6 +456,19 @@ TEST_SUITE("Scripting.API")
 		scene.OnRuntimeStop();
 	}
 
+	TEST_CASE("Host functions refuse invalid buffers, pointers and strings harmlessly")
+	{
+		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
+		Scene scene;
+		Entity tester = scene.CreateEntity("Tester");
+		AddScriptEntry(tester, "InvalidArguments");
+		scene.OnRuntimeStart();
+		CheckScriptChecks(GetScriptSystem(scene), tester, "InvalidArguments", 34);
+		CHECK_FALSE(engine->IsFaulted());
+		CHECK(tester.GetComponent<TextComponent>().Text == "Hello");
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("The host API rejects calls from outside script callbacks")
 	{
 		const StrataScriptHostAPI& host = GetScriptHostAPI();

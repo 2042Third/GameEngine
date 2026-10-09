@@ -87,6 +87,41 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		}
 		return 0;
 	}
+	if (mode == "script-module-lifecycle")
+	{
+		// <module> <healthy module>: loads and unloads the first module (whatever happens), then shows that the engine
+		// still works by loading the second. Engine messages go to the output too. The process ends without exit
+		// handlers: a library abandoned after a crash in its static destructors must not run them again.
+		if (argc < 4)
+			return 2;
+		Strata::LogSpecification logSpecification;
+		logSpecification.Level = Strata::LogLevel::Warn;
+		Strata::Log::Init(logSpecification);
+		int result = 0;
+		{
+			Strata::ScriptEngine engine;
+			std::string error;
+			const bool loaded = engine.LoadModule(Strata::FileSystem::FromUTF8(argv[2]), &error);
+			std::printf("first module: %s\n", loaded ? "loaded" : error.c_str());
+			std::fflush(stdout);
+			engine.UnloadModule();
+			std::printf("first module: unloaded\n");
+			std::fflush(stdout);
+			if (engine.LoadModule(Strata::FileSystem::FromUTF8(argv[3]), &error) && !engine.GetClasses().empty())
+			{
+				std::printf("second module: loaded\n");
+			}
+			else
+			{
+				std::printf("second module: %s\n", error.c_str());
+				result = 1;
+			}
+		}
+		Strata::Log::Shutdown();
+		std::fflush(stdout);
+		std::fflush(stderr);
+		std::_Exit(result);
+	}
 	if (mode == "load-script-module")
 	{
 		// <module path> <class name>...: succeeds if the module loads and contains every class.

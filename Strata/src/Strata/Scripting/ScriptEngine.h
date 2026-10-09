@@ -30,9 +30,11 @@ namespace Strata
 	//
 	// Limitations: native code cannot be preempted, so an infinite loop in a script blocks the main thread (an optional
 	// watchdog reports it); a crash inside the module's static initializers or destructors (run while the library loads
-	// or unloads) is reported, but may leave the platform's loader in an undefined state; std::terminate (an exception
-	// leaving a noexcept function or a destructor) is contained through abort(), but the C++ runtime keeps the abandoned
-	// exception; stray writes into engine memory are not detected; memory of instances abandoned after a crash is leaked.
+	// or unloads) fails the load or abandons the library (the Windows loader contains such crashes itself; elsewhere the
+	// crash guard reports them), but what the library left behind may make the process crash when it exits, and outside
+	// Windows the platform's loader may be left in an undefined state; std::terminate (an exception leaving a noexcept
+	// function or a destructor) is contained through abort(), but the C++ runtime keeps the abandoned exception; stray
+	// writes into engine memory are not detected; memory of instances abandoned after a crash is leaked.
 	// Not contained at all (the process ends): Windows fail-fast terminations (__fastfail: /GS buffer overrun checks,
 	// invalid-parameter failures of the C runtime, heap corruption the system detects), abort() in Windows modules that
 	// link the C runtime dynamically (/MD) or do not use the SDK's entry points, and calls that end the process (exit,
