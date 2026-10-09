@@ -293,7 +293,8 @@ Building and loading scripts:
   find_package(StrataScriptCore CONFIG REQUIRED PATHS "<engine>/StrataScriptCore/CMake" NO_DEFAULT_PATH)
   strata_add_script_module(MyGameScripts SOURCE_DIR Scripts)
   ```
-  Use the engine's compiler and configuration. The module is `<Name>.dll`/`.so`/`.dylib` (`ScriptEngine::GetModuleFileName`).
+  Use the engine's compiler and configuration (the package defines Dist with the Release flags, like the engine; multi-config
+  generators get it added to `CMAKE_CONFIGURATION_TYPES`). The module is `<Name>.dll`/`.so`/`.dylib` (`ScriptEngine::GetModuleFileName`).
 - **Project scripts.** A project's scripts live in its script directory (`ProjectScriptSettings::SourceDirectory`,
   "Scripts"), whose `CMakeLists.txt` builds every `.cpp`/`.h` below it into the module `ModuleName` (stored in the
   `.stproj`, version 2: `"Scripts": {"SourceDirectory", "ModuleName"}`; version 1 files derive the name from the project

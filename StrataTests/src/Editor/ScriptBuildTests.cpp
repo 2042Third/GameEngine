@@ -110,6 +110,35 @@ TEST_SUITE("Editor.ScriptBuild")
 		CHECK_FALSE(Contains(ninjaConfigure, "-A"));
 		CHECK_FALSE(Contains(ninjaConfigure, "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG=C:/Game/.strata/Scripts/Bin"));
 		CHECK_FALSE(Contains(MakeScriptBuildArguments(ninja, build), "/nodeReuse:false"));
+		for (const std::string& argument : ninjaConfigure)
+			CHECK(argument.rfind("-DCMAKE_CONFIGURATION_TYPES=", 0) != 0);
+	}
+
+	TEST_CASE("Dist script builds name their configuration to every generator")
+	{
+		const std::filesystem::path source = "C:/Game/Scripts";
+		const std::filesystem::path build = "C:/Game/.strata/Scripts/Build";
+		const std::filesystem::path binary = "C:/Game/.strata/Scripts/Bin";
+
+		// CMake has no Dist configuration of its own: multi-config build trees are limited to (and so define) it.
+		ScriptBuildSettings visualStudio = MakeVisualStudioSettings();
+		visualStudio.Configuration = "Dist";
+		const std::vector<std::string> configure = MakeScriptConfigureArguments(visualStudio, source, build, binary);
+		CHECK(Contains(configure, "-DCMAKE_CONFIGURATION_TYPES=Dist"));
+		CHECK(Contains(configure, "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_DIST=C:/Game/.strata/Scripts/Bin"));
+		CHECK(GetOption(MakeScriptBuildArguments(visualStudio, build), "--config") == "Dist");
+
+		ScriptBuildSettings ninjaMulti = MakeNinjaSettings();
+		ninjaMulti.Generator = "Ninja Multi-Config";
+		ninjaMulti.Configuration = "Dist";
+		CHECK(ninjaMulti.IsMultiConfig());
+		CHECK(Contains(MakeScriptConfigureArguments(ninjaMulti, source, build, binary), "-DCMAKE_CONFIGURATION_TYPES=Dist"));
+
+		ScriptBuildSettings ninja = MakeNinjaSettings();
+		ninja.Configuration = "Dist";
+		const std::vector<std::string> ninjaConfigure = MakeScriptConfigureArguments(ninja, source, build, binary);
+		CHECK(Contains(ninjaConfigure, "-DCMAKE_BUILD_TYPE=Dist"));
+		CHECK(GetOption(MakeScriptBuildArguments(ninja, build), "--config") == "Dist");
 	}
 
 	TEST_CASE("Build diagnostics are parsed from MSVC, GCC, Clang, linker and CMake output")

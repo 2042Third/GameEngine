@@ -29,6 +29,17 @@ if(NOT result EQUAL 0)
 	message(FATAL_ERROR "Configuring the package project failed (${result})")
 endif()
 
+# The package defines the engine's Dist configuration with the Release flags (an empty flag set would build unoptimized).
+if(CONFIG STREQUAL "Dist")
+	file(STRINGS "${BINARY_DIR}/CMakeCache.txt" distFlags REGEX "^CMAKE_CXX_FLAGS_DIST:")
+	file(STRINGS "${BINARY_DIR}/CMakeCache.txt" releaseFlags REGEX "^CMAKE_CXX_FLAGS_RELEASE:")
+	string(REGEX REPLACE "^[^=]*=" "" distFlags "${distFlags}")
+	string(REGEX REPLACE "^[^=]*=" "" releaseFlags "${releaseFlags}")
+	if(distFlags STREQUAL "" OR NOT distFlags STREQUAL releaseFlags)
+		message(FATAL_ERROR "The package's Dist flags ('${distFlags}') differ from its Release flags ('${releaseFlags}')")
+	endif()
+endif()
+
 execute_process(COMMAND "${CMAKE_COMMAND}" --build "${BINARY_DIR}" --config "${CONFIG}" RESULT_VARIABLE result)
 if(NOT result EQUAL 0)
 	message(FATAL_ERROR "Building the package project failed (${result})")

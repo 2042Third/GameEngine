@@ -121,6 +121,22 @@ add_test(NAME StrataScriptCore.Package
 		-P "${CMAKE_CURRENT_SOURCE_DIR}/PackageProject/BuildPackageProject.cmake")
 set_tests_properties(StrataScriptCore.Package PROPERTIES LABELS "package")
 
+# The same in the Dist configuration, whatever this build's configuration: CMake does not define Dist, so the package
+# must for the scripts of a Dist engine to build.
+add_test(NAME StrataScriptCore.PackageDist
+	COMMAND "${CMAKE_COMMAND}"
+		"-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/PackageProject"
+		"-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/PackageProject/DistCheck-$<CONFIG>"
+		"-DENGINE_DIR=${PROJECT_SOURCE_DIR}"
+		"-DGENERATOR=${CMAKE_GENERATOR}"
+		"-DPLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+		"-DTOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+		"-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
+		"-DCONFIG=Dist"
+		"-DTEST_EXECUTABLE=$<TARGET_FILE:StrataTests>"
+		-P "${CMAKE_CURRENT_SOURCE_DIR}/PackageProject/BuildPackageProject.cmake")
+set_tests_properties(StrataScriptCore.PackageDist PROPERTIES LABELS "package")
+
 # The real editor, driven by a command script for a few frames: catches startup, UI and shutdown failures.
 if(TARGET StrataEditor)
 	add_test(NAME StrataEditor.Smoke

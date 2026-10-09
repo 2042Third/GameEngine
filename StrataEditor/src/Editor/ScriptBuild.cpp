@@ -291,8 +291,10 @@ namespace Strata
 			arguments.push_back("-DCMAKE_CXX_COMPILER=" + FileSystem::ToUTF8(settings.CXXCompiler));
 		if (!ownToolchain && !settings.MakeProgram.empty())
 			arguments.push_back("-DCMAKE_MAKE_PROGRAM=" + FileSystem::ToUTF8(settings.MakeProgram));
-		if (!settings.IsMultiConfig() && !settings.Configuration.empty())
-			arguments.push_back("-DCMAKE_BUILD_TYPE=" + settings.Configuration);
+		// The build tree only needs the engine's configuration. Naming it also makes it exist for multi-config generators
+		// when CMake does not know it (Dist; the StrataScriptCore package defines its flags).
+		if (!settings.Configuration.empty())
+			arguments.push_back((settings.IsMultiConfig() ? "-DCMAKE_CONFIGURATION_TYPES=" : "-DCMAKE_BUILD_TYPE=") + settings.Configuration);
 		arguments.push_back("-DSTRATA_ENGINE_DIR=" + FileSystem::ToUTF8(settings.EngineDirectory));
 
 		// Script modules are MODULE libraries, which always go to the library output directory. Multi-config generators

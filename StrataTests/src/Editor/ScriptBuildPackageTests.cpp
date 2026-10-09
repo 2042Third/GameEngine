@@ -32,15 +32,38 @@ namespace
 	// A build of a whole script module (configure included) stays well within this on a developer machine or CI runner.
 	constexpr std::chrono::minutes c_BuildTimeout(10);
 
+	// The value of a CMakeCache.txt entry ("NAME:TYPE=value"), empty when missing.
+	std::string GetCacheEntry(const std::string& cache, const std::string& name)
+	{
+		const std::string prefix = "\n" + name + ":";
+		const size_t start = ("\n" + cache).find(prefix);
+		if (start == std::string::npos)
+			return {};
+		const size_t equals = cache.find('=', start);
+		if (equals == std::string::npos)
+			return {};
+		const size_t end = cache.find_first_of("\r\n", equals);
+		return cache.substr(equals + 1, end == std::string::npos ? std::string::npos : end - equals - 1);
+	}
+
+	// The engine's script build settings in another configuration (empty: the engine's own).
+	EditorContextSpecification MakeSpecification(const std::string& configuration)
+	{
+		EditorContextSpecification specification { false, true };
+		if (!configuration.empty())
+			specification.ScriptBuild.Configuration = configuration;
+		return specification;
+	}
+
 	struct BuildHarness
 	{
-		EditorContext Context { EditorContextSpecification { false, true } };
+		EditorContext Context;
 		EditorCommandRegistry Commands;
 		EditorCommandRunner Runner;
 		std::filesystem::path Directory;
 
-		BuildHarness()
-			: Directory(CreateTemporaryDirectory("ScriptBuildPackage") / "Counter Game")
+		explicit BuildHarness(const std::string& configuration = {})
+			: Context(MakeSpecification(configuration)), Directory(CreateTemporaryDirectory("ScriptBuildPackage") / "Counter Game")
 		{
 			Run("project.create", { { "directory", FileSystem::ToUTF8(Directory) }, { "name", "Counter Game" } });
 		}
@@ -243,5 +266,24 @@ TEST_SUITE("Package.ScriptBuild")
 			game->Update(Timestep(1.0f / 60.0f));
 		const Entity gameHost = game->GetScene()->FindEntityByName("Counter Host");
 		CHECK(GetField<int32_t>(GetScriptSystem(*game->GetScene()), gameHost, "Counter", "Count") == 2 * 200);
+	}
+
+	TEST_CASE("Scripts build in the Dist configuration")
+	{
+		// A Dist editor builds its scripts in Dist, a configuration CMake does not define. Modules talk to the engine
+		// through the C ABI only, so this (Debug or Release) engine loads them as well.
+		BuildHarness harness("Dist");
+		harness.WriteScript(MakeCounterScript(1));
+		const nlohmann::json built = harness.Run("script.build");
+		CHECK(built["loaded"] == true);
+		CHECK(harness.Context.GetScriptEngine()->FindClass("Counter"));
+		CHECK(harness.Context.GetScriptEngine()->GetModulePath() == harness.Context.GetProject()->GetScriptModulePath());
+
+		// Dist compiles with the Release flags (CMake leaves the flags of configurations it does not know empty).
+		const std::optional<std::string> cache = FileSystem::ReadText(harness.Context.GetProject()->GetScriptBuildDirectory() / "CMakeCache.txt");
+		REQUIRE(cache);
+		const std::string distFlags = GetCacheEntry(*cache, "CMAKE_CXX_FLAGS_DIST");
+		CHECK_FALSE(distFlags.empty());
+		CHECK(distFlags == GetCacheEntry(*cache, "CMAKE_CXX_FLAGS_RELEASE"));
 	}
 }
