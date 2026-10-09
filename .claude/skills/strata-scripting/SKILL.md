@@ -121,8 +121,8 @@ null entity) and the engine logs a warning naming the calling script.
 - Do not keep `T*` from `GetScript<T>()` across frames - fetch it when needed (the target may be destroyed or reloaded).
   Store `Entity` values instead; check `IsValid()`.
 - Exceptions thrown by a script disable that instance (logged with the message); other scripts keep running.
-- A crash (null pointer, division by zero, stack overflow, `abort()` or a failed `assert()`) disables the whole module
-  (`ScriptEngine::IsFaulted`; hosts
+- A crash (null pointer, division by zero, stack overflow; on Windows also `abort()` or a failed `assert()`, which end
+  the process on Linux and macOS) disables the whole module (`ScriptEngine::IsFaulted`; hosts
   such as the editor stop play mode) and the log names the class, callback and entity. Fix it and rebuild; reloading the
   module clears the fault.
 - Never block: no sleeps, no busy loops, no synchronous file or network I/O. An infinite loop freezes the editor.

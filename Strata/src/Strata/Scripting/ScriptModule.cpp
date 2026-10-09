@@ -10,6 +10,7 @@
 #include "Strata/Scripting/ScriptValue.h"
 #include "Strata/Scripting/ScriptWatchdog.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <unordered_set>
 
@@ -66,37 +67,146 @@ namespace Strata
 		// Libraries script modules run from (native handles). Loading a file that is already loaded yields the same
 		// library, whose module state belongs to the module that loaded it first. Libraries abandoned after their unload
 		// code crashed stay registered: they remain loaded until the process ends.
-		std::mutex s_LibrariesMutex;
-		std::unordered_set<void*> s_Libraries;
+		struct LoadedLibraries
+		{
+			std::mutex Mutex;
+			std::unordered_set<void*> Handles;
+			// Files whose library crashed in its static initializers or destructors, i.e. inside the platform's loader. The
+			// loader may still hold such a library, half initialized or half destroyed, and would hand it out again when
+			// the file is loaded: these files are only loaded from copies for the rest of the process.
+			std::vector<std::filesystem::path> AbandonedFiles;
+		};
+
+		// Intentionally never destroyed: an engine that is still active when the program ends (ScriptEngine::SetActive)
+		// unloads its module from a static destructor, which may run after this object would have been destroyed.
+		LoadedLibraries& GetLoadedLibraries()
+		{
+			static LoadedLibraries* s_Libraries = new LoadedLibraries();
+			return *s_Libraries;
+		}
 
 		bool RegisterLibrary(void* handle)
 		{
-			std::scoped_lock<std::mutex> lock(s_LibrariesMutex);
-			return s_Libraries.insert(handle).second;
+			LoadedLibraries& libraries = GetLoadedLibraries();
+			std::scoped_lock<std::mutex> lock(libraries.Mutex);
+			return libraries.Handles.insert(handle).second;
 		}
 
 		void UnregisterLibrary(void* handle)
 		{
-			std::scoped_lock<std::mutex> lock(s_LibrariesMutex);
-			s_Libraries.erase(handle);
+			LoadedLibraries& libraries = GetLoadedLibraries();
+			std::scoped_lock<std::mutex> lock(libraries.Mutex);
+			libraries.Handles.erase(handle);
 		}
 
-		// Copy directories of processes that are gone: anyone can take their owner lock. A directory without a lock file
-		// is left alone (its owner may be creating it right now). Removal is best effort: another process may be removing
-		// the same directory, and whatever remains is tried again by later sessions.
+		// One spelling per file name (absolute, lexically normal); links to a file are recognized by IsAbandonedFile.
+		std::filesystem::path NormalizeLibraryPath(const std::filesystem::path& path)
+		{
+			std::error_code error;
+			const std::filesystem::path absolute = std::filesystem::absolute(path, error);
+			return (error ? path : absolute).lexically_normal();
+		}
+
+		bool IsAbandonedFile(const std::filesystem::path& path)
+		{
+			const std::filesystem::path normalized = NormalizeLibraryPath(path);
+			std::vector<std::filesystem::path> abandonedFiles;
+			{
+				LoadedLibraries& libraries = GetLoadedLibraries();
+				std::scoped_lock<std::mutex> lock(libraries.Mutex);
+				abandonedFiles = libraries.AbandonedFiles;
+			}
+			for (const std::filesystem::path& abandoned : abandonedFiles)
+			{
+				// Loaders know libraries by name and by file identity (another link to the same file yields the library too).
+				std::error_code error;
+				if (abandoned == normalized || std::filesystem::equivalent(abandoned, normalized, error))
+					return true;
+			}
+			return false;
+		}
+
+		// After a crash in a library's static initializers or destructors (code the platform's loader runs) the loader
+		// may be left in an undefined state - outside Windows the crash guard leaves it from the middle of its work. Only
+		// a restart of the process cleans that up.
+		void AbandonLibraryFile(const std::filesystem::path& path, const std::string& moduleName)
+		{
+			{
+				const std::filesystem::path normalized = NormalizeLibraryPath(path);
+				LoadedLibraries& libraries = GetLoadedLibraries();
+				std::scoped_lock<std::mutex> lock(libraries.Mutex);
+				if (std::find(libraries.AbandonedFiles.begin(), libraries.AbandonedFiles.end(), normalized) == libraries.AbandonedFiles.end())
+					libraries.AbandonedFiles.push_back(normalized);
+			}
+			ST_CORE_ERROR("Script module '{}' crashed inside the platform's library loader, which may now be in an undefined state: restarting the "
+				"application is recommended. Until then '{}' is only loaded from copies", moduleName, FileSystem::ToUTF8(path));
+		}
+
+		// A copy directory without an owner lock file is being created right now - or its owner ended before it got that
+		// far. Only one this old is certainly abandoned.
+		constexpr std::chrono::hours c_LocklessCopyDirectoryAge(1);
+
+		// Removes everything in a copy directory except its owner lock file. False if something remains (a copy still in
+		// use).
+		bool RemoveCopiesExceptLock(const std::filesystem::path& directory)
+		{
+			const std::filesystem::path lockName = FileSystem::FromUTF8(c_OwnerLockName);
+			std::vector<std::filesystem::path> entries;
+			std::error_code error;
+			for (std::filesystem::directory_iterator it(directory, error), end; !error && it != end; it.increment(error))
+			{
+				if (it->path().filename() != lockName)
+					entries.push_back(it->path());
+			}
+			bool removed = !error;
+			for (const std::filesystem::path& entry : entries)
+				removed = FileSystem::Remove(entry) && removed;
+			return removed;
+		}
+
+		// Removes a copy directory, its owner lock file last: one that cannot be removed completely keeps the lock file,
+		// so later sessions recognize it as stale and try again. Call without holding the lock (Windows cannot delete a
+		// file that is held open). Removal is best effort: another session may be removing the same directory.
+		bool RemoveCopyDirectory(const std::filesystem::path& directory)
+		{
+			if (!RemoveCopiesExceptLock(directory))
+				return false;
+			return FileSystem::Remove(directory / FileSystem::FromUTF8(c_OwnerLockName)) && FileSystem::Remove(directory);
+		}
+
+		// Copy directories of processes that are gone: anyone can take their owner lock (it is released when its process
+		// ends, however it ends). Lock-less ones are removed once they are old enough.
 		void RemoveStaleCopyDirectories(const std::filesystem::path& parent)
 		{
-			std::vector<std::filesystem::path> stale;
+			std::vector<std::filesystem::path> candidates;
 			std::error_code error;
 			for (std::filesystem::directory_iterator it(parent, error), end; !error && it != end; it.increment(error))
 			{
-				if (!FileSystem::ToUTF8(it->path().filename()).starts_with(c_CopyDirectoryPrefix))
-					continue;
-				if (FileLock::TryAcquire(it->path() / FileSystem::FromUTF8(c_OwnerLockName)))
-					stale.push_back(it->path()); // The lock is released again right away (the temporary is destroyed)
+				if (FileSystem::ToUTF8(it->path().filename()).starts_with(c_CopyDirectoryPrefix))
+					candidates.push_back(it->path());
 			}
-			for (const std::filesystem::path& directory : stale)
-				FileSystem::Remove(directory);
+
+			const std::filesystem::file_time_type now = std::filesystem::file_time_type::clock::now();
+			for (const std::filesystem::path& directory : candidates)
+			{
+				const std::filesystem::path lockPath = directory / FileSystem::FromUTF8(c_OwnerLockName);
+				if (Scope<FileLock> ownerLock = FileLock::TryAcquire(lockPath))
+				{
+					// Holding the lock while the copies go keeps other sessions out; the lock file goes last.
+					const bool copiesRemoved = RemoveCopiesExceptLock(directory);
+					ownerLock.reset();
+					if (copiesRemoved)
+						RemoveCopyDirectory(directory);
+					continue;
+				}
+
+				std::error_code checkError;
+				if (std::filesystem::exists(lockPath, checkError) || checkError)
+					continue; // Its owner runs
+				const std::filesystem::file_time_type modified = std::filesystem::last_write_time(directory, checkError);
+				if (!checkError && now - modified > c_LocklessCopyDirectoryAge)
+					RemoveCopyDirectory(directory);
+			}
 		}
 
 		bool ReadName(const StrataScriptString& text, std::string& out)
@@ -174,10 +284,12 @@ namespace Strata
 
 	ScriptModuleCopyDirectory::~ScriptModuleCopyDirectory()
 	{
-		// The lock file can only be deleted once it is released. Removal fails only while a copy is still in use (a library
-		// abandoned after a crash) - or when a scanning session removes the released directory at the same time.
+		// The copies go while the lock still marks the directory as in use, the lock file last (once released: Windows
+		// cannot delete it while it is held). A copy still in use (a library abandoned after a crash) keeps the lock file
+		// in place, so a later session recognizes the directory as stale and removes it.
+		const bool copiesRemoved = RemoveCopiesExceptLock(m_Path);
 		m_OwnerLock.reset();
-		if (!FileSystem::Remove(m_Path) && FileSystem::Exists(m_Path))
+		if ((!copiesRemoved || !RemoveCopyDirectory(m_Path)) && FileSystem::Exists(m_Path))
 			ST_CORE_WARN("Cannot remove the script module directory '{}'; it is removed by a later session", FileSystem::ToUTF8(m_Path));
 	}
 
@@ -246,6 +358,7 @@ namespace Strata
 		}, &libraryLoad, &crash))
 		{
 			RecordFault(ScriptCallSite { nullptr, "static initialization" }, crash);
+			AbandonLibraryFile(path, m_Name);
 			outError = fmt::format("Script module '{}' crashed while loading: {}", displayPath, crash.Description);
 			return false;
 		}
@@ -282,7 +395,7 @@ namespace Strata
 
 		std::string error;
 		bool loaded = false;
-		if (mode == ScriptModuleLoadMode::InPlace)
+		if (mode == ScriptModuleLoadMode::InPlace && !IsAbandonedFile(path))
 		{
 			if (!module->LoadLibraryGuarded(path, {}, displayPath, error))
 				return fail(std::move(error));
@@ -419,6 +532,7 @@ namespace Strata
 				// The library stays registered: it remains loaded, so loading its file again would return it.
 				ST_CORE_ERROR("Script module '{}' crashed while unloading ({}); it stays loaded", m_Name, crash.Description);
 				m_Library.Release();
+				AbandonLibraryFile(m_LoadedPath, m_Name);
 			}
 		}
 

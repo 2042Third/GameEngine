@@ -14,8 +14,8 @@ namespace Strata
 	class FileLock
 	{
 	public:
-		// Creates the file `path`, which must not exist, already locked: nobody ever finds it unlocked while this lock
-		// exists. Null on failure.
+		// Creates the file `path` already locked: nobody ever finds it unlocked while this lock exists. Fails (null) if
+		// `path` exists - an existing file is never replaced - or cannot be created.
 		static Scope<FileLock> Create(const std::filesystem::path& path);
 		// Locks an existing file. Null if it does not exist, cannot be opened, or someone holds its lock.
 		static Scope<FileLock> TryAcquire(const std::filesystem::path& path);

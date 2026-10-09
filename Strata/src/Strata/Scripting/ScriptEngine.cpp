@@ -275,6 +275,11 @@ namespace Strata
 		return m_Watchdog ? m_Watchdog->GetReportCount() : 0;
 	}
 
+	size_t ScriptEngine::GetWatchdogActiveCallCount() const
+	{
+		return m_Watchdog ? m_Watchdog->GetActiveCallCount() : 0;
+	}
+
 	void ScriptEngine::AttachSystem(ScriptSystem& system)
 	{
 		m_Systems.push_back(&system);

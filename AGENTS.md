@@ -97,7 +97,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   `STRATA_TEST_EDITOR_PATH`/`STRATA_TEST_CLI_PATH`, else next to the test executable) and run as the CTest
   `StrataEditor.Automation`, not in `StrataTests.Core`. They need no GPU (`--no-gpu`), use private session
   directories, free ports and timeouts, and terminate the processes they started when they fail.
-- Use `Strata::Tests::CreateTemporaryDirectory()` for files; never write into the source tree.
+- Use `Strata::Tests::CreateTemporaryDirectory()` for files; never write into the source tree. The test process sets
+  `STRATA_RUNTIME_DIR` to a private temporary directory (`TestMain.cpp`), so runtime files such as script module copies
+  never go to the user's runtime directory; helper processes inherit it.
 - `StrataTests.exe --strata-test-helper=<mode>` turns the test binary into a child process for
   process tests (see `TestMain.cpp`), so tests never depend on external programs.
 - **Feature test** (golden rule 6): `StrataTests/FeatureTest/` is a real project (`FeatureTest.stproj`, `Assets/`
@@ -326,15 +328,19 @@ Building and loading scripts:
 - Hot reload during play snapshots every instance's fields, deletes the instances (no `OnDestroy`), loads the new
   module, recreates the instances, restores fields that still exist with the same name and type and calls `OnReload`
   (not `OnCreate`). Classes that disappeared lose their instances; new classes start normally.
-- Contained: access violations, division by zero, stack overflow, `abort()` (also from a failed `assert()` and from
-  `std::terminate`; POSIX catches SIGABRT, Windows modules turn it into `ST_SCRIPT_ABORT_EXCEPTION_CODE` through a
-  SIGABRT handler `ScriptModuleEntry.cpp` installs in their static C runtime) and C++ exceptions escaping module code.
+- Contained: access violations, division by zero, stack overflow, C++ exceptions escaping module code and, on Windows,
+  `abort()` (also from a failed `assert()` and from `std::terminate`: modules turn it into
+  `ST_SCRIPT_ABORT_EXCEPTION_CODE` through a SIGABRT handler `ScriptModuleEntry.cpp` installs in their static C
+  runtime before the module's own static initializers run; an abort in one of those fails the load). On Linux and
+  macOS `abort()` is reported on stderr and ends the process: the C library also aborts on heap corruption while it
+  holds allocator locks, and jumping out would leave them locked (the next allocation would hang).
 - Limitations: native code cannot be preempted (an infinite loop blocks the main thread; `SetWatchdogTimeout` reports
   long calls); a crash inside a module's static initializers or destructors fails the load or abandons the library (the
-  Windows loader contains it itself; elsewhere it is reported), but may make the process crash when it exits, and outside
-  Windows may leave the platform loader in an undefined state;
-  after `std::terminate` the C++ runtime keeps the abandoned exception; stray writes into
-  engine memory are not detected; memory of instances abandoned after a crash is leaked. Not contained (the process
+  Windows loader contains it itself; elsewhere it is reported), but may make the process crash when it exits, and
+  outside Windows may leave the platform loader in an undefined state (the engine logs that a restart is recommended
+  and loads that file only from copies until then, so the loader never hands out the broken library again); after
+  `std::terminate` the C++ runtime keeps the abandoned exception; stray writes into engine memory are not detected;
+  memory of instances abandoned after a crash is leaked. Not contained (the process
   ends): Windows fail-fast terminations (`__fastfail`: `/GS` buffer overrun checks, C runtime invalid-parameter
   failures, heap corruption the system detects), `abort()` in Windows modules with a dynamically linked C runtime
   (`/MD`) or without the SDK's entry points (`NO_SDK_ENTRY`), and calls that end the process (`exit`,

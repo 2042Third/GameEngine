@@ -16,11 +16,11 @@
 
 #include <algorithm>
 #include <chrono>
+#include <csignal>
 #include <cstddef>
 #include <cstring>
 #include <iterator>
 #include <set>
-#include <thread>
 #include <string>
 #include <vector>
 
@@ -290,8 +290,9 @@ TEST_SUITE("Scripting.Module")
 	TEST_CASE("Exceptions escaping a module without the SDK are contained like crashes")
 	{
 		// Script calls are bracketed for the host API and the watchdog; an exception must not leave a call open (the
-		// watchdog would report it once the timeout passed).
-		constexpr std::chrono::milliseconds c_WatchdogTimeout(200);
+		// watchdog would report it once the timeout passed). The timeout only has to keep the watchdog from reporting
+		// anything while the test runs; open calls are counted directly.
+		constexpr std::chrono::minutes c_WatchdogTimeout(10);
 		{
 			ScopedMalformedCase scopedCase("Throws");
 			ScriptEngine engine;
@@ -301,8 +302,7 @@ TEST_SUITE("Scripting.Module")
 			CHECK(Contains(error, "crashed while initializing"));
 			CHECK(Contains(error, "C++ exception"));
 			CHECK(ScriptModule::GetCurrentCall() == nullptr);
-			std::this_thread::sleep_for(c_WatchdogTimeout * 3);
-			CHECK(engine.GetWatchdogReportCount() == 0);
+			CHECK(engine.GetWatchdogActiveCallCount() == 0);
 		}
 		{
 			ScopedMalformedCase scopedCase("ThrowsInCreate");
@@ -320,10 +320,10 @@ TEST_SUITE("Scripting.Module")
 			CHECK(fault->Method == "Create");
 			CHECK(fault->Entity == entity.GetUUID());
 			CHECK(Contains(fault->Description, "C++ exception"));
+			CHECK(engine->GetWatchdogActiveCallCount() == 0);
 			RunFrames(scene, 1);
 			scene.OnRuntimeStop();
-			std::this_thread::sleep_for(c_WatchdogTimeout * 3);
-			CHECK(engine->GetWatchdogReportCount() == 0);
+			CHECK(engine->GetWatchdogActiveCallCount() == 0);
 		}
 
 		// The crash guard still contains faults afterwards.
@@ -356,11 +356,17 @@ TEST_SUITE("Scripting.Module")
 		CHECK_FALSE(initialization.TimedOut);
 		CHECK(Contains(initialization.Output, "first module: unloaded"));
 		CHECK_FALSE(Contains(initialization.Output, "first module: loaded"));
+		// Loading the file again runs its static initializers again (they crash again): the platform's loader must not
+		// hand out the half-initialized library left behind by the first attempt.
+		CHECK_FALSE(Contains(initialization.Output, "first module again: loaded"));
 #if defined(ST_PLATFORM_WINDOWS)
 		// The Windows loader contains exceptions in a library's initialization itself (ERROR_DLL_INIT_FAILED).
 		CHECK(Contains(initialization.Output, "error 1114"));
 #else
+		// The crash guard left the loader from the middle of its work; the file now only loads from copies.
 		CHECK(Contains(initialization.Output, "crashed while loading"));
+		CHECK(Contains(initialization.Output, "restarting the application is recommended"));
+		CHECK(Contains(initialization.Output, "first module again: Script module"));
 #endif
 		CHECK(Contains(initialization.Output, "second module: loaded"));
 
@@ -371,12 +377,55 @@ TEST_SUITE("Scripting.Module")
 		CHECK_FALSE(destruction.TimedOut);
 		CHECK(Contains(destruction.Output, "first module: loaded"));
 		CHECK(Contains(destruction.Output, "first module: unloaded"));
-#if !defined(ST_PLATFORM_WINDOWS)
-		// (The Windows loader contains exceptions while a library unloads itself.)
+#if defined(ST_PLATFORM_WINDOWS)
+		// The Windows loader contains exceptions while a library unloads itself and finishes unloading it: the file loads
+		// in place again.
+		CHECK(Contains(destruction.Output, "first module again: loaded in place"));
+#else
+		// The half-destroyed library stays loaded; the file only loads from copies from now on.
 		CHECK(Contains(destruction.Output, "crashed while unloading"));
+		CHECK(Contains(destruction.Output, "restarting the application is recommended"));
+		CHECK(Contains(destruction.Output, "first module again: loaded from a copy"));
 #endif
 		CHECK(Contains(destruction.Output, "second module: loaded"));
 		CHECK(destruction.ExitCode == 0);
+	}
+
+	TEST_CASE("abort() in a module's static initialization fails the load (Windows) or is reported (elsewhere)")
+	{
+		// In a child process; the LoadFault module aborts from a static object while the library loads.
+		REQUIRE(Platform::SetEnvVar("STRATA_TEST_LOADFAULT_ABORT", "1"));
+		ProcessSpecification specification;
+		specification.Executable = GetTestExecutablePath();
+		specification.Arguments = { "--strata-test-helper=script-module-lifecycle", FileSystem::ToUTF8(GetTestScriptModule(STRATA_TEST_SCRIPTS_LOADFAULT)),
+			FileSystem::ToUTF8(GetTestScriptModule(STRATA_TEST_SCRIPTS_API)) };
+		const Process::RunResult result = Process::Run(specification, std::chrono::milliseconds(60000));
+		REQUIRE(Platform::SetEnvVar("STRATA_TEST_LOADFAULT_ABORT", ""));
+		INFO("Output: ", result.Output);
+		REQUIRE(result.Started);
+		CHECK_FALSE(result.TimedOut);
+		CHECK_FALSE(Contains(result.Output, "first module: loaded"));
+#if defined(ST_PLATFORM_WINDOWS)
+		// The SDK's abort handler is in place before the module's own static objects; the loader contains the exception
+		// it raises (ERROR_DLL_INIT_FAILED) and the engine keeps working. (The exit code is not checked, see above.)
+		CHECK(Contains(result.Output, "error 1114"));
+		CHECK(Contains(result.Output, "second module: loaded"));
+#else
+		CHECK(result.ExitCode == 128 + SIGABRT);
+		CHECK(Contains(result.Output, "called abort()"));
+#endif
+	}
+
+	TEST_CASE("An engine still active when the program ends unloads its module cleanly")
+	{
+		ProcessSpecification specification;
+		specification.Executable = GetTestExecutablePath();
+		specification.Arguments = { "--strata-test-helper=active-engine-at-exit", FileSystem::ToUTF8(GetTestScriptModule(STRATA_TEST_SCRIPTS_API)) };
+		const Process::RunResult result = Process::Run(specification, std::chrono::milliseconds(60000));
+		INFO("Output: ", result.Output);
+		REQUIRE(result.Started);
+		CHECK_FALSE(result.TimedOut);
+		CHECK(result.ExitCode == 0);
 	}
 
 	TEST_CASE("Class functions are read once, while the module loads")
@@ -544,14 +593,13 @@ TEST_SUITE("Scripting.Module")
 		REQUIRE(FileSystem::WriteBytes(stale / "Game-Leftover.dll", CreateGarbage(16)));
 		REQUIRE(FileLock::Create(stale / "Owner.lock") != nullptr);
 
-		// Owned by a running process: a child holds its owner lock.
+		// Owned by a running process: a child creates and holds its owner lock (so it is never seen unlocked).
 		const std::filesystem::path owned = runtime / FileSystem::FromUTF8("ScriptModules-Owned" + suffix);
 		REQUIRE(FileSystem::WriteBytes(owned / "Game-InUse.dll", CreateGarbage(16)));
-		REQUIRE(FileLock::Create(owned / "Owner.lock") != nullptr);
 		Process owner;
 		ProcessSpecification specification;
 		specification.Executable = GetTestExecutablePath();
-		specification.Arguments = { "--strata-test-helper=hold-file-lock", FileSystem::ToUTF8(owned / "Owner.lock") };
+		specification.Arguments = { "--strata-test-helper=hold-file-lock", FileSystem::ToUTF8(owned / "Owner.lock"), "create" };
 		REQUIRE(owner.Start(specification));
 		std::string output;
 		REQUIRE(WaitUntil([&]()
@@ -580,34 +628,98 @@ TEST_SUITE("Scripting.Module")
 		}
 	}
 
+	TEST_CASE("A copy directory that cannot be removed yet keeps its owner lock until a later session removes it")
+	{
+		std::filesystem::path copyDirectory;
+		DynamicLibrary extraReference;
+		{
+			ScriptEngine engine;
+			engine.SetHotReloadEnabled(true);
+			REQUIRE(engine.LoadModule(GetTestScriptModule(STRATA_TEST_SCRIPTS_API)));
+			copyDirectory = engine.GetModule()->GetLoadedPath().parent_path();
+			// Another reference keeps the copy loaded after the engine unloads it (on Windows it cannot be deleted then).
+			REQUIRE(extraReference.Load(engine.GetModule()->GetLoadedPath()));
+		}
+		if (FileSystem::Exists(copyDirectory))
+			CHECK(FileSystem::Exists(copyDirectory / "Owner.lock"));
+
+		extraReference.Unload();
+		{
+			ScriptEngine engine;
+			engine.SetHotReloadEnabled(true);
+			REQUIRE(engine.LoadModule(GetTestScriptModule(STRATA_TEST_SCRIPTS_API)));
+			CHECK_FALSE(FileSystem::Exists(copyDirectory));
+		}
+	}
+
+	TEST_CASE("Copy directories without an owner lock are removed once they are old")
+	{
+		// A process that ended right after creating its directory leaves it without a lock; a young one may be in the
+		// making.
+		const std::filesystem::path runtime = Platform::GetUserRuntimeDirectory("Strata");
+		REQUIRE_FALSE(runtime.empty());
+		const std::string suffix = UUID().ToString();
+		const std::filesystem::path old = runtime / FileSystem::FromUTF8("ScriptModules-Old" + suffix);
+		const std::filesystem::path young = runtime / FileSystem::FromUTF8("ScriptModules-Young" + suffix);
+		REQUIRE(FileSystem::WriteBytes(old / "Game-Leftover.dll", CreateGarbage(16)));
+		REQUIRE(FileSystem::WriteBytes(young / "Game-Leftover.dll", CreateGarbage(16)));
+		std::error_code error;
+		std::filesystem::last_write_time(old, std::filesystem::file_time_type::clock::now() - std::chrono::hours(2), error);
+		REQUIRE_FALSE(error);
+
+		{
+			ScriptEngine engine;
+			engine.SetHotReloadEnabled(true);
+			REQUIRE(engine.LoadModule(GetTestScriptModule(STRATA_TEST_SCRIPTS_API)));
+		}
+		CHECK_FALSE(FileSystem::Exists(old));
+		CHECK(FileSystem::Exists(young / "Game-Leftover.dll"));
+		CHECK(FileSystem::Remove(young));
+	}
+
 	TEST_CASE("Processes load script modules concurrently without disturbing each other")
 	{
-		// Each process keeps its copies in its own directory and removes only its own (or ones whose owner is gone).
-		constexpr int c_Reloads = 25;
+		// Each process keeps its copies in its own directory and removes only its own (or ones whose owner is gone). The
+		// helpers create a new copy directory every round, removing stale ones of the others each time, and check after
+		// every load that their own copy, directory and owner lock are intact; this process keeps one directory in use
+		// all along and checks the same after every reload.
+		constexpr int c_Rounds = 10;
+		constexpr int c_MaxReloads = 500;
+		ScriptEngine engine;
+		engine.SetHotReloadEnabled(true);
+		std::string error;
+		REQUIRE_MESSAGE(engine.LoadModule(GetTestScriptModule(STRATA_TEST_SCRIPTS_API), &error), error);
+		const std::filesystem::path directory = engine.GetModule()->GetLoadedPath().parent_path();
+		const std::filesystem::path ownerLock = directory / "Owner.lock";
+
 		std::vector<Scope<Process>> processes;
 		for (int index = 0; index < 3; index++)
 		{
 			ProcessSpecification specification;
 			specification.Executable = GetTestExecutablePath();
 			specification.Arguments = { "--strata-test-helper=script-module-reloads", FileSystem::ToUTF8(GetTestScriptModule(STRATA_TEST_SCRIPTS_API)),
-				std::to_string(c_Reloads) };
+				std::to_string(c_Rounds) };
 			Scope<Process> process = CreateScope<Process>();
 			REQUIRE(process->Start(specification));
 			processes.push_back(std::move(process));
 		}
 
-		// This process does the same meanwhile.
+		auto anyRunning = [&]()
 		{
-			ScriptEngine engine;
-			engine.SetHotReloadEnabled(true);
-			std::string error;
-			REQUIRE_MESSAGE(engine.LoadModule(GetTestScriptModule(STRATA_TEST_SCRIPTS_API), &error), error);
-			for (int index = 0; index < c_Reloads; index++)
-			{
-				REQUIRE_MESSAGE(engine.Reload(&error), error);
-				CHECK(engine.FindClass("Lifecycle") != nullptr);
-			}
-		}
+			return std::any_of(processes.begin(), processes.end(), [](const Scope<Process>& process) { return process->IsRunning(); });
+		};
+		int reloads = 0;
+		do
+		{
+			REQUIRE_MESSAGE(engine.Reload(&error), error);
+			reloads++;
+			CHECK(engine.FindClass("Lifecycle") != nullptr);
+			const std::filesystem::path copy = engine.GetModule()->GetLoadedPath();
+			CHECK(copy.parent_path() == directory);
+			CHECK(FileSystem::Exists(copy));
+			CHECK(FileSystem::Exists(ownerLock));
+			CHECK(FileLock::TryAcquire(ownerLock) == nullptr);
+		} while (anyRunning() && reloads < c_MaxReloads);
 
 		for (const Scope<Process>& process : processes)
 		{
@@ -616,6 +728,8 @@ TEST_SUITE("Scripting.Module")
 			REQUIRE(exitCode.has_value());
 			CHECK(*exitCode == 0);
 		}
+		CHECK(FileSystem::Exists(engine.GetModule()->GetLoadedPath()));
+		CHECK(FileLock::TryAcquire(ownerLock) == nullptr);
 	}
 
 	TEST_CASE("Scenes play without a script engine or module")
