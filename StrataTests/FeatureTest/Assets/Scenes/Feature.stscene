@@ -915,6 +915,189 @@
 			},
 			{
 				"Components": {
+					"BoxCollider": {
+						"HalfExtents": [
+							0.5,
+							0.5,
+							0.5
+						],
+						"Offset": [
+							0,
+							0,
+							0
+						]
+					},
+					"Name": {
+						"Name": "Physics Probe"
+					},
+					"RigidBody": {
+						"AngularDamping": 0,
+						"ContinuousCollision": false,
+						"Friction": 0.5,
+						"GravityScale": 0,
+						"IsTrigger": false,
+						"Layer": 0,
+						"LinearDamping": 0,
+						"LockRotationX": false,
+						"LockRotationY": false,
+						"LockRotationZ": false,
+						"Mass": 1,
+						"Restitution": 0,
+						"Type": "Dynamic"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "PhysicsApiFeatures",
+								"Fields": {}
+							}
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							-8,
+							6,
+							8
+						]
+					}
+				},
+				"ID": "F7E000000000001E"
+			},
+			{
+				"Components": {
+					"BoxCollider": {
+						"HalfExtents": [
+							0.5,
+							0.5,
+							0.5
+						],
+						"Offset": [
+							0,
+							0,
+							0
+						]
+					},
+					"Name": {
+						"Name": "Collision Probe"
+					},
+					"RigidBody": {
+						"AngularDamping": 0.05,
+						"ContinuousCollision": false,
+						"Friction": 0.5,
+						"GravityScale": 1,
+						"IsTrigger": false,
+						"Layer": 0,
+						"LinearDamping": 0.05,
+						"LockRotationX": false,
+						"LockRotationY": false,
+						"LockRotationZ": false,
+						"Mass": 1,
+						"Restitution": 0,
+						"Type": "Dynamic"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "CollisionFeatures",
+								"Fields": {}
+							}
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							0.5,
+							0.5,
+							0.5
+						],
+						"Translation": [
+							8.5,
+							2.6,
+							5.5
+						]
+					}
+				},
+				"ID": "F7E000000000001F"
+			},
+			{
+				"Components": {
+					"BoxCollider": {
+						"HalfExtents": [
+							0.5,
+							0.5,
+							0.5
+						],
+						"Offset": [
+							0,
+							0,
+							0
+						]
+					},
+					"Name": {
+						"Name": "Fragile Probe"
+					},
+					"RigidBody": {
+						"AngularDamping": 0.05,
+						"ContinuousCollision": false,
+						"Friction": 0.5,
+						"GravityScale": 1,
+						"IsTrigger": false,
+						"Layer": 0,
+						"LinearDamping": 0.05,
+						"LockRotationX": false,
+						"LockRotationY": false,
+						"LockRotationZ": false,
+						"Mass": 1,
+						"Restitution": 0,
+						"Type": "Dynamic"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "FragileProbe",
+								"Fields": {}
+							}
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							0.5,
+							0.5,
+							0.5
+						],
+						"Translation": [
+							-6,
+							1,
+							8
+						]
+					}
+				},
+				"ID": "F7E000000000002A"
+			},
+			{
+				"Components": {
 					"AudioSource": {
 						"Clip": "F7A0000000000007",
 						"Loop": true,
@@ -928,6 +1111,14 @@
 					},
 					"Name": {
 						"Name": "Speaker"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "AudioFeatures",
+								"Fields": {}
+							}
+						]
 					},
 					"Transform": {
 						"Rotation": [
@@ -1941,6 +2132,45 @@
 					}
 				},
 				"ID": "F7E000000000004B"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Game Features"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "GameFeatures",
+								"Fields": {
+									"QuitCode": {
+										"Type": "Int",
+										"Value": 3
+									}
+								}
+							}
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E000000000004C"
 			},
 			{
 				"Components": {

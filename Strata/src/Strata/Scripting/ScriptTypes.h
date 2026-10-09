@@ -20,7 +20,12 @@ namespace Strata
 		OnFixedUpdate,
 		OnLateUpdate,
 		OnDestroy,
-		OnReload
+		OnReload,
+		// Contacts of the entity's physics body (see StrataScriptClassDesc and ScriptSystem).
+		OnCollisionEnter,
+		OnCollisionExit,
+		OnTriggerEnter,
+		OnTriggerExit
 	};
 
 	const char* ScriptCallbackToString(ScriptCallback callback);

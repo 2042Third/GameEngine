@@ -97,8 +97,10 @@ namespace Strata
 		ScriptCallResult DestroyInstance(const ScriptCallSite& site, StrataScriptInstance instance);
 		ScriptCallResult GetField(const ScriptCallSite& site, StrataScriptInstance instance, uint32_t fieldIndex, PropertyValue& outValue);
 		ScriptCallResult SetField(const ScriptCallSite& site, StrataScriptInstance instance, uint32_t fieldIndex, const PropertyValue& value);
-		// `argument` is the delta time of the update callbacks (ignored by the others).
+		// `argument` is the delta time of the update callbacks (ignored by the others). Contact callbacks are rejected here.
 		ScriptCallResult InvokeCallback(const ScriptCallSite& site, StrataScriptInstance instance, ScriptCallback callback, float argument);
+		// The contact callbacks (OnCollisionEnter/Exit, OnTriggerEnter/Exit) with the contact they report.
+		ScriptCallResult InvokeContactCallback(const ScriptCallSite& site, StrataScriptInstance instance, ScriptCallback callback, const StrataScriptCollision& contact);
 
 		// Script host API support: the exception message a module reports for its current call, and the innermost call
 		// into script code running on this thread (null outside script code).
@@ -125,6 +127,11 @@ namespace Strata
 			decltype(StrataScriptClassDesc::OnLateUpdate) OnLateUpdate = nullptr;
 			decltype(StrataScriptClassDesc::OnDestroy) OnDestroy = nullptr;
 			decltype(StrataScriptClassDesc::OnReload) OnReload = nullptr;
+			// Appended to the descriptor later: null when the module's descriptor is too small to hold them.
+			decltype(StrataScriptClassDesc::OnCollisionEnter) OnCollisionEnter = nullptr;
+			decltype(StrataScriptClassDesc::OnCollisionExit) OnCollisionExit = nullptr;
+			decltype(StrataScriptClassDesc::OnTriggerEnter) OnTriggerEnter = nullptr;
+			decltype(StrataScriptClassDesc::OnTriggerExit) OnTriggerExit = nullptr;
 		};
 
 		template<typename Function>

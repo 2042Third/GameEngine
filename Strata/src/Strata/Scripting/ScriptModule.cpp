@@ -696,8 +696,38 @@ namespace Strata
 				const auto function = functions->OnReload;
 				return function ? Call(site, [&]() { return function(instance); }) : ScriptCallResult::Unavailable;
 			}
+			case ScriptCallback::OnCollisionEnter:
+			case ScriptCallback::OnCollisionExit:
+			case ScriptCallback::OnTriggerEnter:
+			case ScriptCallback::OnTriggerExit:
+				return ScriptCallResult::Rejected; // They take a contact (InvokeContactCallback)
 		}
 		return ScriptCallResult::Rejected;
+	}
+
+	ScriptCallResult ScriptModule::InvokeContactCallback(const ScriptCallSite& site, StrataScriptInstance instance, ScriptCallback callback,
+		const StrataScriptCollision& contact)
+	{
+		const ClassFunctions* functions = GetFunctions(site);
+		if (!functions || !instance)
+			return ScriptCallResult::Rejected;
+
+		decltype(ClassFunctions::OnCollisionEnter) function = nullptr;
+		switch (callback)
+		{
+			case ScriptCallback::OnCollisionEnter: function = functions->OnCollisionEnter; break;
+			case ScriptCallback::OnCollisionExit:  function = functions->OnCollisionExit; break;
+			case ScriptCallback::OnTriggerEnter:   function = functions->OnTriggerEnter; break;
+			case ScriptCallback::OnTriggerExit:    function = functions->OnTriggerExit; break;
+			case ScriptCallback::OnCreate:
+			case ScriptCallback::OnUpdate:
+			case ScriptCallback::OnFixedUpdate:
+			case ScriptCallback::OnLateUpdate:
+			case ScriptCallback::OnDestroy:
+			case ScriptCallback::OnReload:
+				return ScriptCallResult::Rejected; // Not contact callbacks (InvokeCallback)
+		}
+		return function ? Call(site, [&]() { return function(instance, &contact); }) : ScriptCallResult::Unavailable;
 	}
 
 	bool ScriptModule::ReadModuleDescription(std::string& outName, std::vector<ScriptClassInfo>& outClasses, std::vector<ClassFunctions>& outFunctions,
@@ -756,6 +786,15 @@ namespace Strata
 			functions.OnLateUpdate = descriptor->OnLateUpdate;
 			functions.OnDestroy = descriptor->OnDestroy;
 			functions.OnReload = descriptor->OnReload;
+			// Callbacks appended to the descriptor exist only when the module's descriptor is large enough to hold them.
+			if (ST_SCRIPT_HAS_MEMBER(StrataScriptClassDesc, descriptor, OnCollisionEnter))
+				functions.OnCollisionEnter = descriptor->OnCollisionEnter;
+			if (ST_SCRIPT_HAS_MEMBER(StrataScriptClassDesc, descriptor, OnCollisionExit))
+				functions.OnCollisionExit = descriptor->OnCollisionExit;
+			if (ST_SCRIPT_HAS_MEMBER(StrataScriptClassDesc, descriptor, OnTriggerEnter))
+				functions.OnTriggerEnter = descriptor->OnTriggerEnter;
+			if (ST_SCRIPT_HAS_MEMBER(StrataScriptClassDesc, descriptor, OnTriggerExit))
+				functions.OnTriggerExit = descriptor->OnTriggerExit;
 			if (!functions.Create || !functions.Destroy || !functions.GetField || !functions.SetField)
 			{
 				outError = fmt::format("class '{}' lacks its lifetime or field functions", info.Name);
@@ -768,7 +807,11 @@ namespace Strata
 				{ ScriptCallback::OnFixedUpdate, functions.OnFixedUpdate != nullptr },
 				{ ScriptCallback::OnLateUpdate, functions.OnLateUpdate != nullptr },
 				{ ScriptCallback::OnDestroy, functions.OnDestroy != nullptr },
-				{ ScriptCallback::OnReload, functions.OnReload != nullptr }
+				{ ScriptCallback::OnReload, functions.OnReload != nullptr },
+				{ ScriptCallback::OnCollisionEnter, functions.OnCollisionEnter != nullptr },
+				{ ScriptCallback::OnCollisionExit, functions.OnCollisionExit != nullptr },
+				{ ScriptCallback::OnTriggerEnter, functions.OnTriggerEnter != nullptr },
+				{ ScriptCallback::OnTriggerExit, functions.OnTriggerExit != nullptr }
 			};
 			for (const auto& [callback, implemented] : callbacks)
 			{

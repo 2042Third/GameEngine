@@ -2,10 +2,13 @@
 #include "Strata/Scripting/ScriptHostAPI.h"
 
 #include "Strata/Asset/AssetManager.h"
+#include "Strata/Audio/AudioSystem.h"
 #include "Strata/Input/Input.h"
 #include "Strata/Math/Math.h"
+#include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Scene/ComponentAccess.h"
+#include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/Scene.h"
@@ -19,6 +22,7 @@
 #include <cstddef>
 #include <exception>
 #include <iterator>
+#include <optional>
 #include <thread>
 
 namespace Strata
@@ -167,6 +171,47 @@ namespace Strata
 			return true;
 		}
 
+		void WriteVector3(const glm::vec3& value, float out[3])
+		{
+			out[0] = value.x;
+			out[1] = value.y;
+			out[2] = value.z;
+		}
+
+		// Reads a vector a script passes, reporting a missing or non-finite one (`what` names it in the message).
+		std::optional<glm::vec3> ReadVector3(ScriptSystem& system, const float* values, const char* what, const char* function)
+		{
+			if (!values)
+			{
+				system.ReportProblem(function, fmt::format("the {} pointer is null", what));
+				return std::nullopt;
+			}
+			if (!IsFinite(values, 3))
+			{
+				system.ReportProblem(function, fmt::format("the {} must be finite", what));
+				return std::nullopt;
+			}
+			return glm::vec3(values[0], values[1], values[2]);
+		}
+
+		// Reads a rotation (x, y, z, w) a script passes and normalizes it, reporting a missing, non-finite or zero one.
+		std::optional<glm::quat> ReadRotation(ScriptSystem& system, const float* values, const char* function)
+		{
+			if (!values)
+			{
+				system.ReportProblem(function, "the rotation pointer is null");
+				return std::nullopt;
+			}
+			const glm::quat value(values[3], values[0], values[1], values[2]);
+			const float length = glm::length(value);
+			if (!IsFinite(values, 4) || !(length > 1e-6f))
+			{
+				system.ReportProblem(function, "the rotation must be a finite, non-zero quaternion");
+				return std::nullopt;
+			}
+			return value / length;
+		}
+
 		void WriteTransform(const glm::vec3& translation, const glm::quat& rotation, const glm::vec3& scale, StrataScriptTransform& out)
 		{
 			for (int index = 0; index < 3; index++)
@@ -196,14 +241,10 @@ namespace Strata
 			}
 			if (parts & StrataScriptTransformPart_Rotation)
 			{
-				const glm::quat value(transform.Rotation[3], transform.Rotation[0], transform.Rotation[1], transform.Rotation[2]);
-				const float length = glm::length(value);
-				if (!IsFinite(transform.Rotation, 4) || !(length > 1e-6f))
-				{
-					system.ReportProblem(function, "the rotation must be a finite, non-zero quaternion");
+				const std::optional<glm::quat> value = ReadRotation(system, transform.Rotation, function);
+				if (!value)
 					return false;
-				}
-				rotation = value / length;
+				rotation = *value;
 			}
 			if (parts & StrataScriptTransformPart_Translation)
 				translation = glm::vec3(transform.Translation[0], transform.Translation[1], transform.Translation[2]);
@@ -1020,6 +1061,504 @@ namespace Strata
 		}
 
 		////////////////////////////////////////////////////////////////////////////////
+		// Physics
+		////////////////////////////////////////////////////////////////////////////////
+
+		PhysicsSystem* GetPhysics(ScriptSystem& system)
+		{
+			return system.GetScene().GetSystem<PhysicsSystem>();
+		}
+
+		// The entity a body function acts on, reporting why it cannot: the entity does not exist, has no body in the
+		// simulation, or (dynamicOnly) its body is not dynamic.
+		Entity RequireBody(ScriptSystem& system, StrataScriptEntityID id, bool dynamicOnly, const char* function)
+		{
+			const Entity entity = RequireEntity(system, id, function);
+			if (!entity)
+				return {};
+			PhysicsSystem* physics = GetPhysics(system);
+			if (!physics || !physics->HasBody(entity))
+			{
+				system.ReportProblem(function, fmt::format("'{}' has no body in the physics simulation (bodies are active entities with a RigidBody "
+					"component and colliders)", entity.GetName()));
+				return {};
+			}
+			// Colliders without a RigidBody component are static bodies of their own.
+			const RigidBodyComponent* rigidBody = entity.TryGetComponent<RigidBodyComponent>();
+			if (dynamicOnly && (!rigidBody || rigidBody->Type != RigidBodyType::Dynamic))
+			{
+				system.ReportProblem(function, fmt::format("'{}' is not a dynamic body (only dynamic bodies have velocities, forces and impulses "
+					"applied to them)", entity.GetName()));
+				return {};
+			}
+			return entity;
+		}
+
+		template<typename Query>
+		bool GetBodyVector(StrataScriptContext* context, StrataScriptEntityID entity, float out[3], const char* function, Query&& query)
+		{
+			return HostCall(function, false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, function);
+				if (!system)
+					return false;
+				if (!out)
+				{
+					system->ReportProblem(function, "the output pointer is null");
+					return false;
+				}
+				const Entity body = RequireBody(*system, entity, false, function);
+				if (!body)
+					return false;
+				WriteVector3(query(*GetPhysics(*system), body), out);
+				return true;
+			});
+		}
+
+		// A function changing a dynamic body by a vector: a velocity, force, impulse or torque.
+		template<typename Change>
+		bool ChangeBody(StrataScriptContext* context, StrataScriptEntityID entity, const float* vector, const char* vectorName, const char* function, Change&& change)
+		{
+			return HostCall(function, false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, function);
+				const Entity body = system ? RequireBody(*system, entity, true, function) : Entity();
+				const std::optional<glm::vec3> value = body ? ReadVector3(*system, vector, vectorName, function) : std::nullopt;
+				return value && change(*GetPhysics(*system), body, *value);
+			});
+		}
+
+		// A function changing a dynamic body by a vector acting at a world position: a force or impulse.
+		template<typename Change>
+		bool ChangeBodyAt(StrataScriptContext* context, StrataScriptEntityID entity, const float* vector, const char* vectorName, const float* position,
+			const char* function, Change&& change)
+		{
+			return HostCall(function, false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, function);
+				const Entity body = system ? RequireBody(*system, entity, true, function) : Entity();
+				const std::optional<glm::vec3> value = body ? ReadVector3(*system, vector, vectorName, function) : std::nullopt;
+				const std::optional<glm::vec3> point = value ? ReadVector3(*system, position, "position", function) : std::nullopt;
+				return point && change(*GetPhysics(*system), body, *value, *point);
+			});
+		}
+
+		bool HostGetLinearVelocity(StrataScriptContext* context, StrataScriptEntityID entity, float outVelocity[3])
+		{
+			return GetBodyVector(context, entity, outVelocity, "GetLinearVelocity", [](PhysicsSystem& physics, Entity body) { return physics.GetLinearVelocity(body); });
+		}
+
+		bool HostSetLinearVelocity(StrataScriptContext* context, StrataScriptEntityID entity, const float velocity[3])
+		{
+			return ChangeBody(context, entity, velocity, "velocity", "SetLinearVelocity",
+				[](PhysicsSystem& physics, Entity body, const glm::vec3& value) { return physics.SetLinearVelocity(body, value); });
+		}
+
+		bool HostGetAngularVelocity(StrataScriptContext* context, StrataScriptEntityID entity, float outVelocity[3])
+		{
+			return GetBodyVector(context, entity, outVelocity, "GetAngularVelocity", [](PhysicsSystem& physics, Entity body) { return physics.GetAngularVelocity(body); });
+		}
+
+		bool HostSetAngularVelocity(StrataScriptContext* context, StrataScriptEntityID entity, const float velocity[3])
+		{
+			return ChangeBody(context, entity, velocity, "velocity", "SetAngularVelocity",
+				[](PhysicsSystem& physics, Entity body, const glm::vec3& value) { return physics.SetAngularVelocity(body, value); });
+		}
+
+		bool HostAddForce(StrataScriptContext* context, StrataScriptEntityID entity, const float force[3])
+		{
+			return ChangeBody(context, entity, force, "force", "AddForce",
+				[](PhysicsSystem& physics, Entity body, const glm::vec3& value) { return physics.AddForce(body, value); });
+		}
+
+		bool HostAddForceAtPosition(StrataScriptContext* context, StrataScriptEntityID entity, const float force[3], const float worldPosition[3])
+		{
+			return ChangeBodyAt(context, entity, force, "force", worldPosition, "AddForceAtPosition",
+				[](PhysicsSystem& physics, Entity body, const glm::vec3& value, const glm::vec3& position) { return physics.AddForceAtPosition(body, value, position); });
+		}
+
+		bool HostAddImpulse(StrataScriptContext* context, StrataScriptEntityID entity, const float impulse[3])
+		{
+			return ChangeBody(context, entity, impulse, "impulse", "AddImpulse",
+				[](PhysicsSystem& physics, Entity body, const glm::vec3& value) { return physics.AddImpulse(body, value); });
+		}
+
+		bool HostAddImpulseAtPosition(StrataScriptContext* context, StrataScriptEntityID entity, const float impulse[3], const float worldPosition[3])
+		{
+			return ChangeBodyAt(context, entity, impulse, "impulse", worldPosition, "AddImpulseAtPosition",
+				[](PhysicsSystem& physics, Entity body, const glm::vec3& value, const glm::vec3& position) { return physics.AddImpulseAtPosition(body, value, position); });
+		}
+
+		bool HostAddTorque(StrataScriptContext* context, StrataScriptEntityID entity, const float torque[3])
+		{
+			return ChangeBody(context, entity, torque, "torque", "AddTorque",
+				[](PhysicsSystem& physics, Entity body, const glm::vec3& value) { return physics.AddTorque(body, value); });
+		}
+
+		bool HostAddAngularImpulse(StrataScriptContext* context, StrataScriptEntityID entity, const float impulse[3])
+		{
+			return ChangeBody(context, entity, impulse, "impulse", "AddAngularImpulse",
+				[](PhysicsSystem& physics, Entity body, const glm::vec3& value) { return physics.AddAngularImpulse(body, value); });
+		}
+
+		bool HostTeleport(StrataScriptContext* context, StrataScriptEntityID entity, const float position[3], const float rotation[4])
+		{
+			return HostCall("Teleport", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "Teleport");
+				const Entity body = system ? RequireBody(*system, entity, false, "Teleport") : Entity();
+				if (!body)
+					return false;
+				const std::optional<glm::vec3> worldPosition = ReadVector3(*system, position, "position", "Teleport");
+				const std::optional<glm::quat> worldRotation = worldPosition ? ReadRotation(*system, rotation, "Teleport") : std::nullopt;
+				if (!worldRotation)
+					return false;
+				if (!GetPhysics(*system)->Teleport(body, *worldPosition, *worldRotation))
+				{
+					system->ReportProblem("Teleport", fmt::format("'{}' cannot be placed there (its parent is scaled to zero)", body.GetName()));
+					return false;
+				}
+				return true;
+			});
+		}
+
+		void WriteRaycastHit(const RaycastHit& hit, StrataScriptRaycastHit& out)
+		{
+			out = {};
+			out.Entity = static_cast<uint64_t>(hit.EntityID);
+			WriteVector3(hit.Point, out.Point);
+			WriteVector3(hit.Normal, out.Normal);
+			out.Distance = hit.Distance;
+		}
+
+		struct RayArguments
+		{
+			glm::vec3 Origin = glm::vec3(0.0f);
+			glm::vec3 Direction = glm::vec3(0.0f);
+			Entity Ignored;
+		};
+
+		// Validates a ray a script passes (a finite origin, a finite non-zero direction, a positive distance) and resolves the
+		// entity to ignore (one that does not exist ignores nothing).
+		std::optional<RayArguments> ReadRay(ScriptSystem& system, const float* origin, const float* direction, float maxDistance, StrataScriptEntityID ignoreEntity,
+			const char* function)
+		{
+			RayArguments ray;
+			const std::optional<glm::vec3> start = ReadVector3(system, origin, "origin", function);
+			const std::optional<glm::vec3> heading = start ? ReadVector3(system, direction, "direction", function) : std::nullopt;
+			if (!heading)
+				return std::nullopt;
+			if (!(glm::length(*heading) > 1e-12f))
+			{
+				system.ReportProblem(function, "the direction must not be zero");
+				return std::nullopt;
+			}
+			if (!(maxDistance > 0.0f))
+			{
+				system.ReportProblem(function, "the maximum distance must be positive");
+				return std::nullopt;
+			}
+			ray.Origin = *start;
+			ray.Direction = *heading;
+			ray.Ignored = FindEntity(system, ignoreEntity);
+			return ray;
+		}
+
+		bool HostRaycast(StrataScriptContext* context, const float origin[3], const float direction[3], float maxDistance, uint32_t layerMask,
+			StrataScriptEntityID ignoreEntity, bool includeTriggers, StrataScriptRaycastHit* outHit)
+		{
+			return HostCall("Raycast", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "Raycast");
+				const std::optional<RayArguments> ray = system ? ReadRay(*system, origin, direction, maxDistance, ignoreEntity, "Raycast") : std::nullopt;
+				PhysicsSystem* physics = ray ? GetPhysics(*system) : nullptr;
+				if (!physics)
+					return false;
+				const std::optional<RaycastHit> hit = physics->Raycast(ray->Origin, ray->Direction, maxDistance, layerMask, ray->Ignored, includeTriggers);
+				if (!hit)
+					return false;
+				if (outHit)
+					WriteRaycastHit(*hit, *outHit);
+				return true;
+			});
+		}
+
+		uint32_t HostRaycastAll(StrataScriptContext* context, const float origin[3], const float direction[3], float maxDistance, uint32_t layerMask,
+			StrataScriptEntityID ignoreEntity, bool includeTriggers, StrataScriptRaycastHit* outHits, uint32_t capacity)
+		{
+			return HostCall("RaycastAll", uint32_t(0), [&]() -> uint32_t
+			{
+				ScriptSystem* system = ResolveContext(context, "RaycastAll");
+				const std::optional<RayArguments> ray = system ? ReadRay(*system, origin, direction, maxDistance, ignoreEntity, "RaycastAll") : std::nullopt;
+				PhysicsSystem* physics = ray ? GetPhysics(*system) : nullptr;
+				if (!physics)
+					return 0;
+				const std::vector<RaycastHit> hits = physics->RaycastAll(ray->Origin, ray->Direction, maxDistance, layerMask, ray->Ignored, includeTriggers);
+				if (outHits)
+				{
+					const size_t count = std::min<size_t>(capacity, hits.size());
+					for (size_t index = 0; index < count; index++)
+						WriteRaycastHit(hits[index], outHits[index]);
+				}
+				return static_cast<uint32_t>(hits.size());
+			});
+		}
+
+		uint32_t HostOverlapSphere(StrataScriptContext* context, const float center[3], float radius, uint32_t layerMask, bool includeTriggers,
+			StrataScriptEntityID* outEntities, uint32_t capacity)
+		{
+			return HostCall("OverlapSphere", uint32_t(0), [&]() -> uint32_t
+			{
+				ScriptSystem* system = ResolveContext(context, "OverlapSphere");
+				const std::optional<glm::vec3> position = system ? ReadVector3(*system, center, "center", "OverlapSphere") : std::nullopt;
+				if (!position)
+					return 0;
+				if (!std::isfinite(radius) || !(radius > 0.0f))
+				{
+					system->ReportProblem("OverlapSphere", "the radius must be positive and finite");
+					return 0;
+				}
+				PhysicsSystem* physics = GetPhysics(*system);
+				return physics ? CopyEntityIDs(physics->OverlapSphere(*position, radius, layerMask, includeTriggers), outEntities, capacity) : 0;
+			});
+		}
+
+		uint32_t HostOverlapBox(StrataScriptContext* context, const float center[3], const float halfExtents[3], const float rotation[4], uint32_t layerMask,
+			bool includeTriggers, StrataScriptEntityID* outEntities, uint32_t capacity)
+		{
+			return HostCall("OverlapBox", uint32_t(0), [&]() -> uint32_t
+			{
+				ScriptSystem* system = ResolveContext(context, "OverlapBox");
+				const std::optional<glm::vec3> position = system ? ReadVector3(*system, center, "center", "OverlapBox") : std::nullopt;
+				const std::optional<glm::vec3> size = position ? ReadVector3(*system, halfExtents, "half extents", "OverlapBox") : std::nullopt;
+				const std::optional<glm::quat> orientation = size ? ReadRotation(*system, rotation, "OverlapBox") : std::nullopt;
+				if (!orientation)
+					return 0;
+				if (glm::any(glm::lessThanEqual(*size, glm::vec3(0.0f))))
+				{
+					system->ReportProblem("OverlapBox", "the half extents must be positive");
+					return 0;
+				}
+				PhysicsSystem* physics = GetPhysics(*system);
+				return physics ? CopyEntityIDs(physics->OverlapBox(*position, *size, *orientation, layerMask, includeTriggers), outEntities, capacity) : 0;
+			});
+		}
+
+		////////////////////////////////////////////////////////////////////////////////
+		// Audio
+		////////////////////////////////////////////////////////////////////////////////
+
+		// The scene's audio system, reporting when the scene plays without audio.
+		AudioSystem* RequireAudio(ScriptSystem& system, const char* function)
+		{
+			AudioSystem* audio = system.GetScene().GetSystem<AudioSystem>();
+			if (!audio)
+				system.ReportProblem(function, "the scene plays without audio");
+			return audio;
+		}
+
+		// The entity whose AudioSource a function acts on, reporting why there is none.
+		Entity RequireAudioSource(ScriptSystem& system, StrataScriptEntityID id, const char* function)
+		{
+			const Entity entity = RequireEntity(system, id, function);
+			if (!entity)
+				return {};
+			if (!entity.HasComponent<AudioSourceComponent>())
+			{
+				system.ReportProblem(function, fmt::format("'{}' has no AudioSource component", entity.GetName()));
+				return {};
+			}
+			if (!system.GetScene().IsActiveInHierarchy(entity))
+			{
+				system.ReportProblem(function, fmt::format("'{}' is inactive, so its AudioSource is silent", entity.GetName()));
+				return {};
+			}
+			return entity;
+		}
+
+		template<typename Result, typename Action>
+		Result ControlSource(StrataScriptContext* context, StrataScriptEntityID entity, const char* function, Result failure, Action&& action)
+		{
+			return HostCall(function, failure, [&]() -> Result
+			{
+				ScriptSystem* system = ResolveContext(context, function);
+				AudioSystem* audio = system ? RequireAudio(*system, function) : nullptr;
+				const Entity source = audio ? RequireAudioSource(*system, entity, function) : Entity();
+				return source ? action(*system, *audio, source) : failure;
+			});
+		}
+
+		bool HostAudioPlay(StrataScriptContext* context, StrataScriptEntityID entity)
+		{
+			return ControlSource(context, entity, "AudioPlay", false, [](ScriptSystem& system, AudioSystem& audio, Entity source)
+			{
+				if (audio.Play(source))
+					return true;
+				system.ReportProblem("AudioPlay", fmt::format("'{}' cannot play: its clip is missing or unusable, or there is no audio output",
+					source.GetName()));
+				return false;
+			});
+		}
+
+		bool HostAudioPause(StrataScriptContext* context, StrataScriptEntityID entity)
+		{
+			return ControlSource(context, entity, "AudioPause", false, [](ScriptSystem&, AudioSystem& audio, Entity source) { return audio.Pause(source); });
+		}
+
+		bool HostAudioStop(StrataScriptContext* context, StrataScriptEntityID entity)
+		{
+			return ControlSource(context, entity, "AudioStop", false, [](ScriptSystem&, AudioSystem& audio, Entity source) { return audio.Stop(source); });
+		}
+
+		bool HostAudioIsPlaying(StrataScriptContext* context, StrataScriptEntityID entity)
+		{
+			return ControlSource(context, entity, "AudioIsPlaying", false, [](ScriptSystem&, AudioSystem& audio, Entity source) { return audio.IsPlaying(source); });
+		}
+
+		bool HostAudioSeek(StrataScriptContext* context, StrataScriptEntityID entity, float seconds)
+		{
+			return ControlSource(context, entity, "AudioSeek", false, [seconds](ScriptSystem& system, AudioSystem& audio, Entity source)
+			{
+				if (!std::isfinite(seconds))
+				{
+					system.ReportProblem("AudioSeek", "the position must be finite");
+					return false;
+				}
+				return audio.Seek(source, seconds);
+			});
+		}
+
+		float HostAudioGetPlaybackPosition(StrataScriptContext* context, StrataScriptEntityID entity)
+		{
+			return ControlSource(context, entity, "AudioGetPlaybackPosition", 0.0f,
+				[](ScriptSystem&, AudioSystem& audio, Entity source) { return audio.GetPlaybackPosition(source); });
+		}
+
+		// Checks a one-shot's clip, volume and pitch, reporting what is wrong.
+		bool ValidateOneShot(ScriptSystem& system, StrataScriptAssetHandle clip, float volume, float pitch, const char* function)
+		{
+			if (clip == 0)
+			{
+				system.ReportProblem(function, "the clip is null");
+				return false;
+			}
+			AssetManagerBase* manager = RequireAssetManager(system, function);
+			if (!manager)
+				return false;
+			if (manager->GetAssetType(AssetHandle(clip)) != AssetType::AudioClip)
+			{
+				system.ReportProblem(function, fmt::format("asset {} is not an audio clip", AssetHandle(clip).ToString()));
+				return false;
+			}
+			if (!std::isfinite(volume) || volume < 0.0f)
+			{
+				system.ReportProblem(function, "the volume must be finite and not negative");
+				return false;
+			}
+			if (!std::isfinite(pitch) || !(pitch > 0.0f))
+			{
+				system.ReportProblem(function, "the pitch must be finite and positive");
+				return false;
+			}
+			return true;
+		}
+
+		bool HostAudioPlayOneShot(StrataScriptContext* context, StrataScriptAssetHandle clip, float volume, float pitch)
+		{
+			return HostCall("AudioPlayOneShot", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "AudioPlayOneShot");
+				AudioSystem* audio = system ? RequireAudio(*system, "AudioPlayOneShot") : nullptr;
+				if (!audio || !ValidateOneShot(*system, clip, volume, pitch, "AudioPlayOneShot"))
+					return false;
+				if (audio->PlayOneShot(AssetHandle(clip), volume, pitch))
+					return true;
+				system->ReportProblem("AudioPlayOneShot", fmt::format("clip {} cannot play (it failed to load, or there is no audio output)",
+					AssetHandle(clip).ToString()));
+				return false;
+			});
+		}
+
+		bool HostAudioPlayOneShotAt(StrataScriptContext* context, StrataScriptAssetHandle clip, const float position[3], float volume, float pitch)
+		{
+			return HostCall("AudioPlayOneShotAt", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "AudioPlayOneShotAt");
+				AudioSystem* audio = system ? RequireAudio(*system, "AudioPlayOneShotAt") : nullptr;
+				if (!audio || !ValidateOneShot(*system, clip, volume, pitch, "AudioPlayOneShotAt"))
+					return false;
+				const std::optional<glm::vec3> worldPosition = ReadVector3(*system, position, "position", "AudioPlayOneShotAt");
+				if (!worldPosition)
+					return false;
+				if (audio->PlayOneShotAt(AssetHandle(clip), *worldPosition, volume, pitch))
+					return true;
+				system->ReportProblem("AudioPlayOneShotAt", fmt::format("clip {} cannot play (it failed to load, or there is no audio output)",
+					AssetHandle(clip).ToString()));
+				return false;
+			});
+		}
+
+		void HostAudioSetMasterVolume(StrataScriptContext* context, float volume)
+		{
+			HostCallVoid("AudioSetMasterVolume", [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "AudioSetMasterVolume");
+				if (!system)
+					return;
+				if (!std::isfinite(volume))
+				{
+					system->ReportProblem("AudioSetMasterVolume", "the volume must be finite");
+					return;
+				}
+				AudioSystem::SetMasterVolume(volume);
+			});
+		}
+
+		float HostAudioGetMasterVolume(StrataScriptContext* context)
+		{
+			return HostCall("AudioGetMasterVolume", 0.0f, [&]()
+			{
+				return ResolveContext(context, "AudioGetMasterVolume") ? AudioSystem::GetMasterVolume() : 0.0f;
+			});
+		}
+		////////////////////////////////////////////////////////////////////////////////
+		// Game flow
+		////////////////////////////////////////////////////////////////////////////////
+
+		void HostQuitGame(StrataScriptContext* context, int32_t exitCode)
+		{
+			HostCallVoid("QuitGame", [&]()
+			{
+				if (ScriptSystem* system = ResolveContext(context, "QuitGame"))
+					system->GetScene().RequestQuit(exitCode);
+			});
+		}
+
+		bool HostLoadScene(StrataScriptContext* context, StrataScriptAssetHandle scene)
+		{
+			return HostCall("LoadScene", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "LoadScene");
+				if (!system)
+					return false;
+				// The null handle restarts the running scene, whatever it was loaded from.
+				if (scene != 0)
+				{
+					AssetManagerBase* manager = RequireAssetManager(*system, "LoadScene");
+					if (!manager)
+						return false;
+					if (manager->GetAssetType(AssetHandle(scene)) != AssetType::Scene)
+					{
+						system->ReportProblem("LoadScene", fmt::format("asset {} is not a scene", AssetHandle(scene).ToString()));
+						return false;
+					}
+				}
+				system->GetScene().RequestSceneLoad(UUID(scene));
+				return true;
+			});
+		}
+
+		////////////////////////////////////////////////////////////////////////////////
 		// The table
 		////////////////////////////////////////////////////////////////////////////////
 
@@ -1078,7 +1617,34 @@ namespace Strata
 	X(IsMouseButtonReleased) \
 	X(GetMousePosition) \
 	X(GetMouseDelta) \
-	X(GetScrollDelta)
+	X(GetScrollDelta) \
+	X(GetLinearVelocity) \
+	X(SetLinearVelocity) \
+	X(GetAngularVelocity) \
+	X(SetAngularVelocity) \
+	X(AddForce) \
+	X(AddForceAtPosition) \
+	X(AddImpulse) \
+	X(AddImpulseAtPosition) \
+	X(AddTorque) \
+	X(AddAngularImpulse) \
+	X(Teleport) \
+	X(Raycast) \
+	X(RaycastAll) \
+	X(OverlapSphere) \
+	X(OverlapBox) \
+	X(AudioPlay) \
+	X(AudioPause) \
+	X(AudioStop) \
+	X(AudioIsPlaying) \
+	X(AudioSeek) \
+	X(AudioGetPlaybackPosition) \
+	X(AudioPlayOneShot) \
+	X(AudioPlayOneShotAt) \
+	X(AudioSetMasterVolume) \
+	X(AudioGetMasterVolume) \
+	X(QuitGame) \
+	X(LoadScene)
 
 		struct HostFunctionEntry
 		{

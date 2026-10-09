@@ -279,8 +279,10 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DEXPECT=${STRATA_FEATURE_SCRIPTS_RAN}" -P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
 	set_tests_properties(StrataEditor.FeatureTest PROPERTIES FIXTURES_REQUIRED StrataFeatureTestProject FIXTURES_SETUP StrataFeatureTestGame LABELS "feature")
 
+	# The game runs longer than the in-process feature scenario (200 frames), where nothing may end it: its scripts quit only
+	# when a test runner asks them to.
 	add_test(NAME StrataRuntime.FeatureTest
-		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=${STRATA_FEATURE_RUN_DIR}/Build/FeatureTest${CMAKE_EXECUTABLE_SUFFIX}" "-DARGUMENTS=--headless|--frames|120"
+		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=${STRATA_FEATURE_RUN_DIR}/Build/FeatureTest${CMAKE_EXECUTABLE_SUFFIX}" "-DARGUMENTS=--headless|--frames|240"
 			"-DEXPECT=${STRATA_FEATURE_SCRIPTS_RAN}" -P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
 	set_tests_properties(StrataRuntime.FeatureTest PROPERTIES FIXTURES_REQUIRED StrataFeatureTestGame LABELS "feature")
 endif()

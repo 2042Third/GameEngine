@@ -111,9 +111,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   failure, `Completed` marks the end of a scenario, and `Journal()` records events in the scene's "Journal" entity.
   The runners:
   - `StrataTests.FeatureTest` (label `feature`, no GPU) plays the scripted scenario (`PlayFeatureScene`: 200 frames,
-    simulated input, a hot reload of the module halfway) three times: headless (suite `FeatureTest`,
-    `src/FeatureTest/`), through editor commands in-process, and in the exported game in `GameRuntime` (suite
-    `Editor.FeatureTest`);
+    simulated input, a hot reload of the module halfway, audio on the null device) three times: headless (suite
+    `FeatureTest`, `src/FeatureTest/`), through editor commands in-process, and in the exported game in `GameRuntime`
+    (suite `Editor.FeatureTest`);
   - `GPU.FeatureTest` (in `StrataTests.GPU`) renders the scene for 4 frames without playing it (no scripts) and checks
     entities in the ID buffer, text and stats;
   - `StrataEditor.FeatureTest` and `StrataRuntime.FeatureTest` (label `feature`): the real executables open a copy of
@@ -271,12 +271,27 @@ Writing scripts is described in `.claude/skills/strata-scripting/SKILL.md`.
 | Where | What |
 | --- | --- |
 | `StrataScriptCore/Include/StrataScript/ScriptABI.h` | The versioned C ABI: host API table, module/class/field descriptors, values. |
-| `StrataScriptCore/Include/StrataScript/*.h` | Header-only C++ SDK (`StrataScript.h` includes all): `Script`, `Entity`, `Scene`, `Assets`, `Input`, `Time`, `Log`, `ST_SCRIPT_CLASS`/`ST_SCRIPT_FIELD`. |
+| `StrataScriptCore/Include/StrataScript/*.h` | Header-only C++ SDK (`StrataScript.h` includes all): `Script`, `Entity`, `Scene`, `Assets`, `Input`, `Time`, `Log`, `RigidBody` and `Physics` (bodies and queries; `Collision` for the contact callbacks of `Script`), `AudioSource` and `Audio`, `Game` (quit, scene loads), `ST_SCRIPT_CLASS`/`ST_SCRIPT_FIELD`. |
 | `StrataScriptCore/Source/ScriptModuleEntry.cpp` | The module entry points, compiled into every module by `strata_add_script_module()`. |
 | `StrataScriptCore/CMake/` | `strata_add_script_module()` and the package game projects use (`StrataScriptCoreConfig.cmake`). |
 | `Strata/src/Strata/Scripting/` | `ScriptEngine` (module, hot reload, faults, watchdog), `ScriptModule` (loading, validation, guarded calls), `ScriptSystem` (instances and lifecycle), `ScriptHostAPI` (the host table), `ScriptValue` (value conversion). |
 | `StrataTests/Scripts/`, `StrataTests/src/Scripting/` | Test modules (API, reload V1/V2, faults, invalid modules) and the `Scripting.*` suites. |
 | `StrataTests/FeatureTest/Scripts/`, `StrataTests/src/FeatureTest/` | The feature test's script module (the whole SDK in a real scene) and its runners (see [Testing](#testing)). |
+
+Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; the skill has an overview with recipes):
+
+- Physics: `RigidBody` (velocities, forces, impulses, `Teleport`) and `Physics` (raycasts, overlaps) go through the scene's
+  `PhysicsSystem`, also in `OnCreate`: scenes start every system before the scripts (`SceneSystem::OnRuntimeStarted`).
+  Contacts reach scripts as `OnCollisionEnter/Exit` and `OnTriggerEnter/Exit` (class descriptor callbacks taking a
+  `StrataScriptCollision`): `ScriptSystem` listens to the `PhysicsSystem` while it runs and calls the scripts of both
+  entities, skipping removed, disabled and not yet started instances; contacts begin only for active entities, and each
+  instance that got an Enter gets its Exit, also after its entity was deactivated.
+- Audio: `AudioSource` and `Audio` go through the scene's `AudioSystem`; without it (simulate mode) the calls fail.
+- Game flow: `Game::Quit`, `LoadScene` and `ReloadScene` set `Scene::RequestQuit`/`RequestSceneLoad`, which the scene's owner
+  honors after the frame (see [Editor](#editor)).
+- `Random`, `Timer` and `KeyRepeat` (`StrataScript/Gameplay.h`) run entirely in the module. The engine has classes named
+  `Random` and `Timer` too, so SDK helpers are tested inside a script module, never in an engine translation unit (that
+  would violate the one-definition rule).
 
 ABI rules:
 
@@ -305,7 +320,8 @@ Adding a host function (or a module callback):
    the struct). Callbacks: `ScriptModule` reads them only when the descriptor's `StructSize` covers them, see
    `ST_SCRIPT_HAS_MEMBER`.
 3. Wrap it in the SDK. Functions appended after an ABI version's initial set are optional for modules: check
-   `ST_SCRIPT_HAS_MEMBER(StrataScriptHostAPI, host, Name) && host->Name` and degrade gracefully.
+   `ST_SCRIPT_HAS_MEMBER(StrataScriptHostAPI, host, Name) && host->Name` and degrade gracefully (the SDK's
+   `ST_SCRIPT_DETAIL_HOST_WITH(Name)`, in `StrataScript/Host.h`, returns the table only then).
 4. Exercise it in the API test module (`StrataTests/Scripts/API`), test it in `StrataTests/src/Scripting/`, and call it
    from the feature scripts (`StrataTests/FeatureTest/Scripts`): the feature test fails while a host function or a
    public SDK function is never used there.
@@ -413,7 +429,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   (`Scene::SetPaused`, which calls `SceneSystem::OnPausedChanged`) pauses its sound; stopping it releases every voice.
 - **Gameplay API:** `AudioSystem::Play`, `Pause`, `Stop`, `IsPlaying`, `Seek` and `GetPlaybackPosition` per entity,
   `PlayOneShot`/`PlayOneShotAt` by clip handle and the engine-wide master volume. Game code goes through the system rather
-  than `AudioEngine` directly, so that its sounds pause and stop with the scene.
+  than `AudioEngine` directly, so that its sounds pause and stop with the scene. Scripts reach the same API through the SDK's
+  `AudioSource` (`Entity::GetAudioSource`) and `Audio` (`StrataScript/Audio.h`).
 
 ## Editor
 
@@ -439,6 +456,11 @@ and `AudioSystem`, the built-in "Audio" scene system.
 - `project.export` writes a playable game outside the project: the asset pack (`<Game>.stpak`), the script module, the
   manifest (`<Game>.stgame`, start scene, script module and window settings) and the runtime executable renamed after
   the game. CTest exports a small game (`StrataEditor --no-gpu`) and runs it headless.
+- A running game asks its owner to quit or to switch scenes through `Scene::RequestQuit`/`RequestSceneLoad` (scripts: the
+  SDK's `Game`), honored after each update: the editor stops play mode, or replaces the running scene (a paused game stays
+  paused, with its pending steps; `play.stop` still returns to the edited scene); `GameRuntime` ends the game
+  (`GetQuitRequest`; StrataRuntime exits with the code) or loads the scene from the pack. A null handle restarts the running
+  scene.
 - **Scripts through commands** (see Scripting, "Project scripts"): `script.status` (loaded module, classes with fields
   and callbacks, faults, the running and last build with diagnostics), `script.build {wait}` (deferred; fails with the
   first compiler errors), `script.reload`, `script.load {path}`, `script.init {example}`, `script.add {entity, class,

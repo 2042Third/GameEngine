@@ -20,7 +20,9 @@ namespace Strata
 	};
 
 	// A runtime subsystem attached to a scene while it is playing (physics world, script instances, audio).
-	// Systems are created on Scene::OnRuntimeStart in registration order and destroyed on OnRuntimeStop.
+	// Systems are created on Scene::OnRuntimeStart in registration order and destroyed on OnRuntimeStop. Starting has two
+	// phases: every system's OnRuntimeStart, then every system's OnRuntimeStarted (both in registration order), so that
+	// game code run while starting (the scripts' OnCreate, in OnRuntimeStarted) finds every system running.
 	// Per frame the scene calls OnUpdate, then OnFixedUpdate zero or more times at the fixed timestep,
 	// then OnLateUpdate. React to entity/component changes through the registry's EnTT signals.
 	class SceneSystem
@@ -29,6 +31,9 @@ namespace Strata
 		virtual ~SceneSystem() = default;
 
 		virtual void OnRuntimeStart() {}
+		// After every system of the scene ran OnRuntimeStart: work that uses other systems, or that should see what earlier
+		// systems did here (the scripts' OnCreate runs in the scripting system's).
+		virtual void OnRuntimeStarted() {}
 		virtual void OnRuntimeStop() {}
 		virtual void OnUpdate(Timestep) {}
 		virtual void OnFixedUpdate(float) {}

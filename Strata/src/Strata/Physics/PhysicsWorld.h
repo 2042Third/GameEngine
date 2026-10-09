@@ -126,12 +126,14 @@ namespace Strata
 		glm::vec3 GetAngularVelocity(Entity entity) const;                  // Radians per second
 		bool SetAngularVelocity(Entity entity, const glm::vec3& velocity);  // Dynamic bodies only
 
-		// Forces and torques act during the next step only; impulses change the velocity immediately. Dynamic bodies only.
+		// Forces and torques act during the next step only; impulses (linear and angular) change the velocity immediately.
+		// Dynamic bodies only.
 		bool AddForce(Entity entity, const glm::vec3& force);
 		bool AddForceAtPosition(Entity entity, const glm::vec3& force, const glm::vec3& worldPosition);
 		bool AddImpulse(Entity entity, const glm::vec3& impulse);
 		bool AddImpulseAtPosition(Entity entity, const glm::vec3& impulse, const glm::vec3& worldPosition);
 		bool AddTorque(Entity entity, const glm::vec3& torque);
+		bool AddAngularImpulse(Entity entity, const glm::vec3& impulse);
 
 		// Updates the body and the entity's RigidBodyComponent::GravityScale.
 		bool SetGravityScale(Entity entity, float gravityScale);

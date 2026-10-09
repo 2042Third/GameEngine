@@ -225,6 +225,12 @@ namespace Strata
 		return m_World && m_World->AddTorque(entity, torque);
 	}
 
+	bool PhysicsSystem::AddAngularImpulse(Entity entity, const glm::vec3& impulse)
+	{
+		ApplyPendingChanges();
+		return m_World && m_World->AddAngularImpulse(entity, impulse);
+	}
+
 	bool PhysicsSystem::SetGravityScale(Entity entity, float gravityScale)
 	{
 		ApplyPendingChanges();

@@ -213,6 +213,13 @@ TEST_SUITE("Physics.Simulation")
 		CHECK(physics.AddForceAtPosition(pushed, glm::vec3(0.0f, 0.0f, 100.0f), GetWorldPosition(scene, pushed) + glm::vec3(0.5f, 0.0f, 0.0f)));
 		StepScene(scene, 1);
 		CHECK(glm::length(physics.GetAngularVelocity(pushed)) > 0.1f);
+
+		// An angular impulse changes the angular velocity immediately by the inverse inertia times the impulse: for a unit cube
+		// of mass 1 the inertia is m * (1 + 1) / 12 = 1/6 around every axis.
+		CHECK(physics.SetAngularVelocity(damped, glm::vec3(0.0f)));
+		CHECK(physics.AddAngularImpulse(damped, glm::vec3(0.0f, 0.5f, 0.0f)));
+		CHECK(physics.GetAngularVelocity(damped).y == doctest::Approx(3.0f).epsilon(0.01));
+		CHECK_FALSE(physics.AddAngularImpulse(damped, glm::vec3(std::numeric_limits<float>::quiet_NaN())));
 	}
 
 	TEST_CASE("Locked rotation axes stay fixed")

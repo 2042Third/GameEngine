@@ -4,6 +4,8 @@
 
 #include "StrataScript/ScriptABI.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
@@ -40,10 +42,20 @@ namespace
 		return StrataScriptResult_Ok;
 	}
 
+	// Contact callbacks called so far ("OlderClass"); every field reads as this count.
+	int64_t s_ContactCalls = 0;
+
 	uint32_t GetField(StrataScriptInstance, uint32_t, StrataScriptValue* outValue)
 	{
 		*outValue = StrataScriptValue {};
 		outValue->Type = StrataScriptValueType_Int;
+		outValue->As.Int = s_ContactCalls;
+		return StrataScriptResult_Ok;
+	}
+
+	uint32_t CountContact(StrataScriptInstance, const StrataScriptCollision*)
+	{
+		s_ContactCalls++;
 		return StrataScriptResult_Ok;
 	}
 
@@ -175,6 +187,19 @@ ST_SCRIPT_EXTERN_C ST_SCRIPT_EXPORT uint32_t StrataScript_Load(const StrataScrip
 		s_ClassPointers[1] = nullptr;
 	else if (Is(testCase, "SmallClass"))
 		s_Classes[0].StructSize = 8;
+	else if (Is(testCase, "OlderClass"))
+	{
+		// Both classes have contact callbacks, but "First" describes itself as built before they were appended: the engine
+		// must not read them.
+		for (StrataScriptClassDesc& descriptor : s_Classes)
+		{
+			descriptor.OnCollisionEnter = &CountContact;
+			descriptor.OnCollisionExit = &CountContact;
+			descriptor.OnTriggerEnter = &CountContact;
+			descriptor.OnTriggerExit = &CountContact;
+		}
+		s_Classes[0].StructSize = static_cast<uint32_t>(offsetof(StrataScriptClassDesc, OnCollisionEnter));
+	}
 	else if (Is(testCase, "BadFieldType"))
 		s_Fields[0].Type = 999;
 	else if (Is(testCase, "BadDefault"))

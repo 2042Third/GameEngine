@@ -70,7 +70,10 @@ TEST_SUITE("Scripting.Module")
 		const std::set<std::string> expectedClasses = {
 			"Lifecycle", "LifecycleSecond", "Idle", "HiddenCallbacks", "FieldTypes", "Thrower", "ThrowingConstructor", "EntityAPI", "Destroyer", "ScriptAdder",
 			"ComponentAPI", "PropertyProbe", "TransformAPI", "Spawned", "Spawner", "Listener", "Talker", "InputProbe", "TimeProbe", "SceneProbe",
-			"RemoveOnDestroy", "Fragile", "Readder", "Replicator", "MassSpawner", "PendingSpawner", "InvalidArguments"
+			"RemoveOnDestroy", "Fragile", "Readder", "Replicator", "MassSpawner", "PendingSpawner", "InvalidArguments", "PhysicsAPI", "PhysicsMisuse",
+			"OlderEnginePhysics", "PhysicsWithoutWorld", "PhysicsAtStart", "SpawnedBody", "ContactRecorder", "DestroySelfOnContact",
+			"DestroyOtherOnContact", "RemoveSelfOnContact", "ContactThrower", "ContactCounter", "AudioAPI", "AudioMisuse", "AudioUnavailable",
+			"GameFlow", "GameFlowMisuse", "HelperChecks", "KeyRepeatProbe", "LateContactProbe"
 		};
 		std::set<std::string> classes;
 		for (const ScriptClassInfo& info : engine.GetClasses())
@@ -434,6 +437,39 @@ TEST_SUITE("Scripting.Module")
 		CHECK_FALSE(engine->IsFaulted());
 	}
 
+	TEST_CASE("Contact callbacks are read only from class descriptors large enough to hold them")
+	{
+		// Both classes have contact callbacks, but "First" has the descriptor size of an SDK that predates them.
+		ScopedEnvironmentVariable scopedCase("STRATA_TEST_MALFORMED_CASE", "OlderClass");
+		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_MALFORMED));
+		const ScriptClassInfo* first = engine->FindClass("First");
+		const ScriptClassInfo* second = engine->FindClass("Second");
+		REQUIRE(first);
+		REQUIRE(second);
+		for (ScriptCallback callback : { ScriptCallback::OnCollisionEnter, ScriptCallback::OnCollisionExit, ScriptCallback::OnTriggerEnter, ScriptCallback::OnTriggerExit })
+		{
+			INFO("Callback ", ScriptCallbackToString(callback));
+			CHECK_FALSE(first->Implements(callback));
+			CHECK(second->Implements(callback));
+		}
+
+		// A body with both scripts lands on the ground: only Second's callback runs (the module's fields read the call count).
+		Scene scene;
+		Entity ground = scene.CreateEntity("Ground");
+		ground.GetComponent<TransformComponent>().Translation = { 0.0f, -0.5f, 0.0f };
+		ground.AddComponent<BoxColliderComponent>().HalfExtents = { 10.0f, 0.5f, 10.0f };
+		Entity body = scene.CreateEntity("Body");
+		body.GetComponent<TransformComponent>().Translation = { 0.0f, 0.55f, 0.0f };
+		body.AddComponent<RigidBodyComponent>();
+		body.AddComponent<BoxColliderComponent>();
+		AddScriptEntry(body, "First");
+		AddScriptEntry(body, "Second");
+		scene.OnRuntimeStart();
+		RunFrames(scene, 30);
+		CHECK(GetField<int32_t>(GetScriptSystem(scene), body, "Second", "B") == 1);
+		scene.OnRuntimeStop();
+		CHECK_FALSE(engine->IsFaulted());
+	}
 	TEST_CASE("A failed load keeps the previous module")
 	{
 		const std::filesystem::path directory = CreateTemporaryDirectory("ScriptFailedLoad");

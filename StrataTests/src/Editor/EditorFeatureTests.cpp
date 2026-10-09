@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Audio/AudioTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "FeatureTest/FeatureTestUtils.h"
@@ -59,6 +60,10 @@ TEST_SUITE("Editor.FeatureTest")
 	{
 		const std::filesystem::path directory = CreateTemporaryDirectory("EditorFeatureTest");
 		const std::filesystem::path projectFile = CopyFeatureProject(directory / "Project");
+		// Audio without an output device (the editor's and the game's applications would initialize it), so that the scripts'
+		// sounds play.
+		ScopedAudioEngine audio;
+		REQUIRE(audio.Initialized);
 		ScopedScriptLogLevel scriptLogLevel;
 		LogCapture log;
 
@@ -87,7 +92,10 @@ TEST_SUITE("Editor.FeatureTest")
 		const nlohmann::json edit = editor.Run("component.set", { { "entity", sign }, { "component", "Text" }, { "values", { { "Text", "Edited while playing" } } } });
 		CHECK(edit.contains("warning"));
 
-		editor.Run("play.stop");
+		// The game quits after the scenario: play mode stops.
+		PlayFeatureQuitFrame(*played, *engine, [&]() { editor.Context.Update(Timestep(c_FeatureFrameTime)); });
+		CHECK_FALSE(editor.Context.IsPlaying());
+		CHECK_FALSE(played->IsRunning());
 		CheckFeatureJournal(*played, *engine);
 		// The edited scene is untouched by play mode.
 		CHECK(editor.GetHeight(ball) == doctest::Approx(4.0f));
@@ -108,9 +116,13 @@ TEST_SUITE("Editor.FeatureTest")
 		CHECK(gameEngine != engine);
 		CHECK(ScriptEngine::GetActive() == gameEngine);
 		const Ref<Scene> gameScene = game->GetScene();
-		PlayFeatureScene(*gameScene, *gameEngine, [&]() { game->Update(Timestep(c_FeatureFrameTime)); });
+		const auto advanceGame = [&]() { game->Update(Timestep(c_FeatureFrameTime)); };
+		PlayFeatureScene(*gameScene, *gameEngine, advanceGame);
 		CheckFeatureResults(*gameScene, *gameEngine);
 		CHECK_FALSE(game->GetScriptFault());
+		// The game quits after the scenario: the runtime reports the exit code (StrataRuntime would exit with it).
+		const int32_t exitCode = PlayFeatureQuitFrame(*gameScene, *gameEngine, advanceGame);
+		CHECK(game->GetQuitRequest() == exitCode);
 		game.reset(); // Stops the scene
 		CheckFeatureJournal(*gameScene, *gameEngine);
 

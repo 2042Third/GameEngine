@@ -55,6 +55,15 @@
  */
 #define ST_SCRIPT_ABORT_EXCEPTION_CODE 0xE0535441u
 
+/* Layout checks of the ABI's structs, on every compiler that builds the engine or a module. */
+#if defined(__cplusplus)
+	#define ST_SCRIPT_DETAIL_STATIC_ASSERT(condition, message) static_assert(condition, message)
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+	#define ST_SCRIPT_DETAIL_STATIC_ASSERT(condition, message) _Static_assert(condition, message)
+#else
+	#define ST_SCRIPT_DETAIL_STATIC_ASSERT(condition, message)
+#endif
+
 /* True when the struct behind `pointer` (which starts with a StructSize member) is large enough to contain `member`. */
 #define ST_SCRIPT_HAS_MEMBER(type, pointer, member) \
 	((pointer)->StructSize >= offsetof(type, member) + sizeof(((type*)0)->member))
@@ -146,6 +155,41 @@ extern "C"
 		StrataScriptTransformPart_Scale = 4,
 		StrataScriptTransformPart_All = 7
 	} StrataScriptTransformPart;
+
+	/* A hit of a physics ray: the entity owning the body, the world space point and surface normal, and the distance from
+	 * the ray's origin. Its layout is frozen for the ABI version: modules pass arrays of it (RaycastAll) that the engine
+	 * fills, and they carry no size, so a member appended later would overrun the buffers of older modules. More data
+	 * needs a new struct and function. */
+	typedef struct StrataScriptRaycastHit
+	{
+		StrataScriptEntityID Entity;
+		float Point[3];
+		float Normal[3];
+		float Distance;
+		uint32_t Padding;
+	} StrataScriptRaycastHit;
+
+	ST_SCRIPT_DETAIL_STATIC_ASSERT(sizeof(StrataScriptRaycastHit) == 40 && offsetof(StrataScriptRaycastHit, Entity) == 0
+		&& offsetof(StrataScriptRaycastHit, Point) == 8 && offsetof(StrataScriptRaycastHit, Normal) == 20
+		&& offsetof(StrataScriptRaycastHit, Distance) == 32 && offsetof(StrataScriptRaycastHit, Padding) == 36,
+		"StrataScriptRaycastHit's layout is part of the ABI");
+
+	/* A contact passed to the contact callbacks of StrataScriptClassDesc. Engine memory, valid during the call; read members
+	 * appended later only when StructSize covers them. Other is the entity on the other side (it may be destroyed already
+	 * when the contact ended because of that); Point is in world space (the last known one when a contact ends) and Normal
+	 * points from the script's entity towards the other. */
+	typedef struct StrataScriptCollision
+	{
+		uint32_t StructSize; /* sizeof(StrataScriptCollision) as built into the engine */
+		uint32_t Padding;
+		StrataScriptEntityID Other;
+		float Point[3];
+		float Normal[3];
+	} StrataScriptCollision;
+
+	ST_SCRIPT_DETAIL_STATIC_ASSERT(sizeof(StrataScriptCollision) == 40 && offsetof(StrataScriptCollision, StructSize) == 0
+		&& offsetof(StrataScriptCollision, Other) == 8 && offsetof(StrataScriptCollision, Point) == 16
+		&& offsetof(StrataScriptCollision, Normal) == 28, "StrataScriptCollision's layout is part of the ABI");
 
 	/*
 	 * Engine services for scripts. Unless noted otherwise, functions taking a context only work while the engine is
@@ -242,6 +286,80 @@ extern "C"
 		void (*GetMouseDelta)(StrataScriptContext* context, float outDelta[2]);
 		void (*GetScrollDelta)(StrataScriptContext* context, float outDelta[2]);
 
+		/*
+		 * Physics bodies (added after the initial set of ABI version 1: check ST_SCRIPT_HAS_MEMBER before use). A body is an
+		 * active entity with a RigidBody component and colliders; the functions fail for other entities. Vectors are in
+		 * world space, angular values in radians. Velocities can be read from any body, but only dynamic bodies accept
+		 * velocities, forces and impulses. Forces and torques act during the next fixed step, impulses change the velocity
+		 * at once. A transform written through SetTransform/SetWorldTransform moves the body at the next fixed step;
+		 * Teleport moves it (and its entity) at once, keeping its velocities, so queries see it there right away.
+		 */
+		bool (*GetLinearVelocity)(StrataScriptContext* context, StrataScriptEntityID entity, float outVelocity[3]);
+		bool (*SetLinearVelocity)(StrataScriptContext* context, StrataScriptEntityID entity, const float velocity[3]);
+		bool (*GetAngularVelocity)(StrataScriptContext* context, StrataScriptEntityID entity, float outVelocity[3]);
+		bool (*SetAngularVelocity)(StrataScriptContext* context, StrataScriptEntityID entity, const float velocity[3]);
+		bool (*AddForce)(StrataScriptContext* context, StrataScriptEntityID entity, const float force[3]);
+		bool (*AddForceAtPosition)(StrataScriptContext* context, StrataScriptEntityID entity, const float force[3], const float worldPosition[3]);
+		bool (*AddImpulse)(StrataScriptContext* context, StrataScriptEntityID entity, const float impulse[3]);
+		bool (*AddImpulseAtPosition)(StrataScriptContext* context, StrataScriptEntityID entity, const float impulse[3], const float worldPosition[3]);
+		bool (*AddTorque)(StrataScriptContext* context, StrataScriptEntityID entity, const float torque[3]);
+		bool (*AddAngularImpulse)(StrataScriptContext* context, StrataScriptEntityID entity, const float impulse[3]);
+		/* rotation: x, y, z, w (normalized by the engine). */
+		bool (*Teleport)(StrataScriptContext* context, StrataScriptEntityID entity, const float position[3], const float rotation[4]);
+
+		/*
+		 * Physics queries, against the bodies as of the last fixed step (or Teleport). layerMask selects RigidBody layers
+		 * (bit n: layer n; 0xFFFFFFFF: every layer). Triggers are skipped unless includeTriggers is set. Rays: the direction
+		 * need not be normalized, maxDistance must be positive (infinity is clamped to 1e5), ignoreEntity is skipped (0 or
+		 * an entity that does not exist: none), and a ray starting inside a convex collider does not hit it. Results name
+		 * the entity owning the body (a RigidBody entity, also for colliders on its descendants).
+		 */
+		/* The closest hit; false if nothing is hit. outHit may be null. */
+		bool (*Raycast)(StrataScriptContext* context, const float origin[3], const float direction[3], float maxDistance, uint32_t layerMask,
+			StrataScriptEntityID ignoreEntity, bool includeTriggers, StrataScriptRaycastHit* outHit);
+		/* The closest hit on every body along the ray, sorted by distance. */
+		uint32_t (*RaycastAll)(StrataScriptContext* context, const float origin[3], const float direction[3], float maxDistance, uint32_t layerMask,
+			StrataScriptEntityID ignoreEntity, bool includeTriggers, StrataScriptRaycastHit* outHits, uint32_t capacity);
+		/* The entities whose bodies overlap a sphere or an oriented box (rotation x, y, z, w), in a deterministic order. */
+		uint32_t (*OverlapSphere)(StrataScriptContext* context, const float center[3], float radius, uint32_t layerMask, bool includeTriggers,
+			StrataScriptEntityID* outEntities, uint32_t capacity);
+		uint32_t (*OverlapBox)(StrataScriptContext* context, const float center[3], const float halfExtents[3], const float rotation[4], uint32_t layerMask,
+			bool includeTriggers, StrataScriptEntityID* outEntities, uint32_t capacity);
+
+		/*
+		 * Audio (added after the initial set of ABI version 1: check ST_SCRIPT_HAS_MEMBER before use). Sources are entities
+		 * with an AudioSource component, which holds the clip, volume, pitch, looping and 3D settings. The functions fail
+		 * (false, 0) while the scene plays without audio, for entities without an AudioSource component or inactive ones,
+		 * and for clips that are not audio clips. AudioPlay starts the clip or resumes it (a clip that is still loading
+		 * starts once it is ready); AudioPause keeps the position, AudioStop rewinds; AudioIsPlaying is also true while the
+		 * start waits for the clip or the scene is paused. Positions are in seconds.
+		 */
+		bool (*AudioPlay)(StrataScriptContext* context, StrataScriptEntityID entity);
+		bool (*AudioPause)(StrataScriptContext* context, StrataScriptEntityID entity);
+		bool (*AudioStop)(StrataScriptContext* context, StrataScriptEntityID entity);
+		bool (*AudioIsPlaying)(StrataScriptContext* context, StrataScriptEntityID entity);
+		bool (*AudioSeek)(StrataScriptContext* context, StrataScriptEntityID entity, float seconds);
+		float (*AudioGetPlaybackPosition)(StrataScriptContext* context, StrataScriptEntityID entity);
+		/* Sounds that belong to no entity: they pause and stop with the scene. Without spatialization, or at a world position.
+		 * volume >= 0 and pitch > 0 (1: the clip's own). A clip that takes longer than a quarter second to load is dropped. */
+		bool (*AudioPlayOneShot)(StrataScriptContext* context, StrataScriptAssetHandle clip, float volume, float pitch);
+		bool (*AudioPlayOneShotAt)(StrataScriptContext* context, StrataScriptAssetHandle clip, const float position[3], float volume, float pitch);
+		/* The engine-wide master volume (1: unchanged; negative values count as 0). It outlives the scene, like a game's
+		 * sound option; the editor restores its own when play mode stops. */
+		void (*AudioSetMasterVolume)(StrataScriptContext* context, float volume);
+		float (*AudioGetMasterVolume)(StrataScriptContext* context);
+
+		/*
+		 * Game flow (added after the initial set of ABI version 1: check ST_SCRIPT_HAS_MEMBER before use). Both are requests
+		 * honored once the current frame's update is done (scripts keep running until then); quitting wins over loading and
+		 * later requests replace earlier ones. QuitGame ends the game with an exit code: an exported game exits with it, the
+		 * editor stops play mode. LoadScene replaces the running scene with a scene asset (every entity of the current scene
+		 * goes away), or restarts the running scene for the null handle; it fails for assets that are not scenes. The switch
+		 * loads the scene asset synchronously (the frame waits for it unless it was loaded before, see RequestAssetLoad).
+		 */
+		void (*QuitGame)(StrataScriptContext* context, int32_t exitCode);
+		bool (*LoadScene)(StrataScriptContext* context, StrataScriptAssetHandle scene);
+
 		/* New functions are appended here (see the compatibility rules above). */
 	} StrataScriptHostAPI;
 
@@ -278,6 +396,19 @@ extern "C"
 		uint32_t (*OnLateUpdate)(StrataScriptInstance instance, float deltaTime);
 		uint32_t (*OnDestroy)(StrataScriptInstance instance);
 		uint32_t (*OnReload)(StrataScriptInstance instance);
+
+		/*
+		 * Contacts of the entity's physics body (added after the initial set of ABI version 1: the engine reads them only when
+		 * StructSize covers them). They reach the scripts on the entities owning the two bodies (RigidBody entities, or
+		 * colliders without one), after the fixed step that found the change: Enter when the bodies start touching, Exit when
+		 * they part or one of them leaves the simulation. The trigger callbacks report contacts where either body is a
+		 * trigger, the collision callbacks the others. Contacts begin only for scripts on active entities; every instance
+		 * that got an Enter gets its Exit, also when its entity was deactivated meanwhile (deactivation ends its contacts).
+		 */
+		uint32_t (*OnCollisionEnter)(StrataScriptInstance instance, const StrataScriptCollision* collision);
+		uint32_t (*OnCollisionExit)(StrataScriptInstance instance, const StrataScriptCollision* collision);
+		uint32_t (*OnTriggerEnter)(StrataScriptInstance instance, const StrataScriptCollision* collision);
+		uint32_t (*OnTriggerExit)(StrataScriptInstance instance, const StrataScriptCollision* collision);
 
 		/* New callbacks are appended here. */
 	} StrataScriptClassDesc;

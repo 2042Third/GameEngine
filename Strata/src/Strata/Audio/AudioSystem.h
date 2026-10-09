@@ -88,6 +88,8 @@ namespace Strata
 		AudioSystem& operator=(const AudioSystem&) = delete;
 
 		void OnRuntimeStart() override;
+		// The first update of the sources and the listener, after the scripts' OnCreate (they may configure sources there).
+		void OnRuntimeStarted() override;
 		void OnRuntimeStop() override;
 		void OnLateUpdate(Timestep timestep) override;
 		void OnPausedChanged(bool paused) override;

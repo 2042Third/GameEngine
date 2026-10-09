@@ -88,9 +88,12 @@ namespace Strata
 
 	void GameRuntime::Update(Timestep timestep)
 	{
+		if (m_QuitRequest)
+			return;
 		m_AssetManager->Update();
 		m_Scene->OnUpdateRuntime(timestep);
 		CheckScriptFault();
+		HandleSceneRequests();
 	}
 
 	void GameRuntime::CheckScriptFault()
@@ -100,6 +103,24 @@ namespace Strata
 		m_ScriptFault = m_ScriptEngine->GetFault();
 		if (m_ScriptFault)
 			ST_CORE_ERROR("The scripts of '{}' crashed and stay disabled for the rest of the session: {}", m_Manifest.Name, m_ScriptFault->Description);
+	}
+
+	void GameRuntime::HandleSceneRequests()
+	{
+		if (const std::optional<int32_t> exitCode = m_Scene->GetQuitRequest())
+		{
+			m_QuitRequest = exitCode;
+			ST_CORE_INFO("'{}' quit with exit code {}", m_Manifest.Name, *exitCode);
+			return;
+		}
+
+		const std::optional<UUID> request = m_Scene->TakeSceneLoadRequest();
+		if (!request)
+			return;
+		const AssetHandle scene = request->IsValid() ? *request : m_SceneHandle;
+		std::string error;
+		if (!LoadScene(scene, &error))
+			ST_CORE_ERROR("'{}' cannot switch scenes: {}", m_Manifest.Name, error);
 	}
 
 }
