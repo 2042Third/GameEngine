@@ -283,6 +283,27 @@ TEST_SUITE("Scripting.Module")
 		CHECK(second->Callbacks == 0);
 	}
 
+	TEST_CASE("Class functions are read once, while the module loads")
+	{
+		// The module clears the functions in its class descriptors when the first instance is created; the engine keeps
+		// calling the ones it copied while loading (and never reads the descriptors outside the crash guard).
+		ScopedMalformedCase scopedCase("ChangesDescriptors");
+		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_MALFORMED));
+		Scene scene;
+		Entity entity = scene.CreateEntity("Entity");
+		AddScriptEntry(entity, "First");
+		AddScriptEntry(entity, "Second");
+		scene.OnRuntimeStart();
+		ScriptSystem& system = GetScriptSystem(scene);
+		CHECK(system.HasInstance(entity, "First"));
+		CHECK(system.HasInstance(entity, "Second"));
+		CHECK(system.GetFieldValue(entity, "Second", "B").has_value());
+		CHECK(system.SetFieldValue(entity, "Second", "B", int32_t(3)));
+		RunFrames(scene, 1);
+		scene.OnRuntimeStop();
+		CHECK_FALSE(engine->IsFaulted());
+	}
+
 	TEST_CASE("A failed load keeps the previous module")
 	{
 		const std::filesystem::path directory = CreateTemporaryDirectory("ScriptFailedLoad");

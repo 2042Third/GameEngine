@@ -330,20 +330,20 @@ namespace Strata
 		// The description lives in module memory; reading it is guarded like any other module access.
 		std::string name;
 		std::vector<ScriptClassInfo> classes;
-		std::vector<const StrataScriptClassDesc*> descriptors;
+		std::vector<ClassFunctions> functions;
 		std::string descriptionError;
 		bool descriptionValid = false;
 		const ScriptCallResult descriptionResult = module->Call({ nullptr, "module description" }, [&]()
 		{
 			std::string readName;
 			std::vector<ScriptClassInfo> readClasses;
-			std::vector<const StrataScriptClassDesc*> readDescriptors;
+			std::vector<ClassFunctions> readFunctions;
 			std::string readError;
-			const bool valid = module->ReadModuleDescription(readName, readClasses, readDescriptors, readError);
+			const bool valid = module->ReadModuleDescription(readName, readClasses, readFunctions, readError);
 			// Moving engine objects cannot fault, so the outputs are either untouched or complete.
 			name = std::move(readName);
 			classes = std::move(readClasses);
-			descriptors = std::move(readDescriptors);
+			functions = std::move(readFunctions);
 			descriptionError = std::move(readError);
 			descriptionValid = valid;
 			return static_cast<uint32_t>(StrataScriptResult_Ok);
@@ -356,7 +356,7 @@ namespace Strata
 		if (!name.empty())
 			module->m_Name = std::move(name);
 		module->m_Classes = std::move(classes);
-		module->m_Descriptors = std::move(descriptors);
+		module->m_Functions = std::move(functions);
 		module->m_Ready = true;
 		return module;
 	}
@@ -428,25 +428,25 @@ namespace Strata
 			m_Fault = std::move(fault);
 	}
 
-	const StrataScriptClassDesc* ScriptModule::GetDescriptor(const ScriptCallSite& site) const
+	const ScriptModule::ClassFunctions* ScriptModule::GetFunctions(const ScriptCallSite& site) const
 	{
-		if (!site.Class || site.Class->Index >= m_Descriptors.size() || &m_Classes[site.Class->Index] != site.Class)
+		if (!site.Class || site.Class->Index >= m_Functions.size() || &m_Classes[site.Class->Index] != site.Class)
 		{
 			ST_CORE_ASSERT(false, "Script call site refers to a class of another module");
 			return nullptr;
 		}
-		return m_Descriptors[site.Class->Index];
+		return &m_Functions[site.Class->Index];
 	}
 
 	ScriptCallResult ScriptModule::CreateInstance(const ScriptCallSite& site, StrataScriptContext* context, StrataScriptInstance* outInstance)
 	{
 		*outInstance = nullptr;
-		const StrataScriptClassDesc* descriptor = GetDescriptor(site);
-		if (!descriptor)
+		const ClassFunctions* functions = GetFunctions(site);
+		if (!functions)
 			return ScriptCallResult::Rejected;
 
 		StrataScriptInstance instance = nullptr;
-		const auto create = descriptor->Create;
+		const auto create = functions->Create;
 		const uint64_t entity = static_cast<uint64_t>(site.Entity);
 		const ScriptCallResult result = Call(site, [&]() { return create(context, entity, &instance); });
 		if (result == ScriptCallResult::Ok && !instance)
@@ -458,20 +458,20 @@ namespace Strata
 
 	ScriptCallResult ScriptModule::DestroyInstance(const ScriptCallSite& site, StrataScriptInstance instance)
 	{
-		const StrataScriptClassDesc* descriptor = GetDescriptor(site);
-		if (!descriptor || !instance)
+		const ClassFunctions* functions = GetFunctions(site);
+		if (!functions || !instance)
 			return ScriptCallResult::Rejected;
-		const auto destroy = descriptor->Destroy;
+		const auto destroy = functions->Destroy;
 		return Call(site, [&]() { return destroy(instance); });
 	}
 
 	ScriptCallResult ScriptModule::GetField(const ScriptCallSite& site, StrataScriptInstance instance, uint32_t fieldIndex, PropertyValue& outValue)
 	{
-		const StrataScriptClassDesc* descriptor = GetDescriptor(site);
-		if (!descriptor || !instance || fieldIndex >= site.Class->Fields.size())
+		const ClassFunctions* functions = GetFunctions(site);
+		if (!functions || !instance || fieldIndex >= site.Class->Fields.size())
 			return ScriptCallResult::Rejected;
 
-		const auto getField = descriptor->GetField;
+		const auto getField = functions->GetField;
 		const PropertyType type = site.Class->Fields[fieldIndex].Type;
 		std::optional<PropertyValue> result;
 		const ScriptCallResult callResult = Call(site, [&]()
@@ -495,8 +495,8 @@ namespace Strata
 
 	ScriptCallResult ScriptModule::SetField(const ScriptCallSite& site, StrataScriptInstance instance, uint32_t fieldIndex, const PropertyValue& value)
 	{
-		const StrataScriptClassDesc* descriptor = GetDescriptor(site);
-		if (!descriptor || !instance || fieldIndex >= site.Class->Fields.size())
+		const ClassFunctions* functions = GetFunctions(site);
+		if (!functions || !instance || fieldIndex >= site.Class->Fields.size())
 			return ScriptCallResult::Rejected;
 
 		const PropertyType type = site.Class->Fields[fieldIndex].Type;
@@ -504,53 +504,53 @@ namespace Strata
 			return ScriptCallResult::Rejected;
 
 		const StrataScriptValue scriptValue = FieldValueToScriptValue(value, type);
-		const auto setField = descriptor->SetField;
+		const auto setField = functions->SetField;
 		return Call(site, [&]() { return setField(instance, fieldIndex, &scriptValue); });
 	}
 
 	ScriptCallResult ScriptModule::InvokeCallback(const ScriptCallSite& site, StrataScriptInstance instance, ScriptCallback callback, float argument)
 	{
-		const StrataScriptClassDesc* descriptor = GetDescriptor(site);
-		if (!descriptor || !instance)
+		const ClassFunctions* functions = GetFunctions(site);
+		if (!functions || !instance)
 			return ScriptCallResult::Rejected;
 
 		switch (callback)
 		{
 			case ScriptCallback::OnCreate:
 			{
-				const auto function = descriptor->OnCreate;
+				const auto function = functions->OnCreate;
 				return function ? Call(site, [&]() { return function(instance); }) : ScriptCallResult::Unavailable;
 			}
 			case ScriptCallback::OnUpdate:
 			{
-				const auto function = descriptor->OnUpdate;
+				const auto function = functions->OnUpdate;
 				return function ? Call(site, [&]() { return function(instance, argument); }) : ScriptCallResult::Unavailable;
 			}
 			case ScriptCallback::OnFixedUpdate:
 			{
-				const auto function = descriptor->OnFixedUpdate;
+				const auto function = functions->OnFixedUpdate;
 				return function ? Call(site, [&]() { return function(instance, argument); }) : ScriptCallResult::Unavailable;
 			}
 			case ScriptCallback::OnLateUpdate:
 			{
-				const auto function = descriptor->OnLateUpdate;
+				const auto function = functions->OnLateUpdate;
 				return function ? Call(site, [&]() { return function(instance, argument); }) : ScriptCallResult::Unavailable;
 			}
 			case ScriptCallback::OnDestroy:
 			{
-				const auto function = descriptor->OnDestroy;
+				const auto function = functions->OnDestroy;
 				return function ? Call(site, [&]() { return function(instance); }) : ScriptCallResult::Unavailable;
 			}
 			case ScriptCallback::OnReload:
 			{
-				const auto function = descriptor->OnReload;
+				const auto function = functions->OnReload;
 				return function ? Call(site, [&]() { return function(instance); }) : ScriptCallResult::Unavailable;
 			}
 		}
 		return ScriptCallResult::Rejected;
 	}
 
-	bool ScriptModule::ReadModuleDescription(std::string& outName, std::vector<ScriptClassInfo>& outClasses, std::vector<const StrataScriptClassDesc*>& outDescriptors,
+	bool ScriptModule::ReadModuleDescription(std::string& outName, std::vector<ScriptClassInfo>& outClasses, std::vector<ClassFunctions>& outFunctions,
 		std::string& outError) const
 	{
 		const StrataScriptModuleAPI& api = m_API;
@@ -593,19 +593,32 @@ namespace Strata
 				outError = fmt::format("class '{}' is registered twice", info.Name);
 				return false;
 			}
-			if (!descriptor->Create || !descriptor->Destroy || !descriptor->GetField || !descriptor->SetField)
+			// The functions are copied now: the descriptor is never read again, so later calls cannot be redirected by (or
+			// fault on) module memory read outside the guard.
+			ClassFunctions functions;
+			functions.Create = descriptor->Create;
+			functions.Destroy = descriptor->Destroy;
+			functions.GetField = descriptor->GetField;
+			functions.SetField = descriptor->SetField;
+			functions.OnCreate = descriptor->OnCreate;
+			functions.OnUpdate = descriptor->OnUpdate;
+			functions.OnFixedUpdate = descriptor->OnFixedUpdate;
+			functions.OnLateUpdate = descriptor->OnLateUpdate;
+			functions.OnDestroy = descriptor->OnDestroy;
+			functions.OnReload = descriptor->OnReload;
+			if (!functions.Create || !functions.Destroy || !functions.GetField || !functions.SetField)
 			{
 				outError = fmt::format("class '{}' lacks its lifetime or field functions", info.Name);
 				return false;
 			}
 
 			const std::pair<ScriptCallback, bool> callbacks[] = {
-				{ ScriptCallback::OnCreate, descriptor->OnCreate != nullptr },
-				{ ScriptCallback::OnUpdate, descriptor->OnUpdate != nullptr },
-				{ ScriptCallback::OnFixedUpdate, descriptor->OnFixedUpdate != nullptr },
-				{ ScriptCallback::OnLateUpdate, descriptor->OnLateUpdate != nullptr },
-				{ ScriptCallback::OnDestroy, descriptor->OnDestroy != nullptr },
-				{ ScriptCallback::OnReload, descriptor->OnReload != nullptr }
+				{ ScriptCallback::OnCreate, functions.OnCreate != nullptr },
+				{ ScriptCallback::OnUpdate, functions.OnUpdate != nullptr },
+				{ ScriptCallback::OnFixedUpdate, functions.OnFixedUpdate != nullptr },
+				{ ScriptCallback::OnLateUpdate, functions.OnLateUpdate != nullptr },
+				{ ScriptCallback::OnDestroy, functions.OnDestroy != nullptr },
+				{ ScriptCallback::OnReload, functions.OnReload != nullptr }
 			};
 			for (const auto& [callback, implemented] : callbacks)
 			{
@@ -658,7 +671,7 @@ namespace Strata
 				field.DefaultValue = std::move(*defaultValue);
 			}
 
-			outDescriptors.push_back(descriptor);
+			outFunctions.push_back(functions);
 		}
 		return true;
 	}

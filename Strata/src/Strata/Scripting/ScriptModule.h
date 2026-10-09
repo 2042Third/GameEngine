@@ -105,12 +105,28 @@ namespace Strata
 		// for `dependencyDirectory`. On failure `outError` is the complete message.
 		bool LoadLibraryGuarded(const std::filesystem::path& path, const std::filesystem::path& dependencyDirectory, const std::string& displayPath,
 			std::string& outError);
+		// The functions of a script class, copied out of the module's descriptor while the description is read (guarded):
+		// calls never read module memory outside the guard.
+		struct ClassFunctions
+		{
+			decltype(StrataScriptClassDesc::Create) Create = nullptr;
+			decltype(StrataScriptClassDesc::Destroy) Destroy = nullptr;
+			decltype(StrataScriptClassDesc::GetField) GetField = nullptr;
+			decltype(StrataScriptClassDesc::SetField) SetField = nullptr;
+			decltype(StrataScriptClassDesc::OnCreate) OnCreate = nullptr;
+			decltype(StrataScriptClassDesc::OnUpdate) OnUpdate = nullptr;
+			decltype(StrataScriptClassDesc::OnFixedUpdate) OnFixedUpdate = nullptr;
+			decltype(StrataScriptClassDesc::OnLateUpdate) OnLateUpdate = nullptr;
+			decltype(StrataScriptClassDesc::OnDestroy) OnDestroy = nullptr;
+			decltype(StrataScriptClassDesc::OnReload) OnReload = nullptr;
+		};
+
 		template<typename Function>
 		ScriptCallResult Call(const ScriptCallSite& site, Function&& function);
 		void RecordFault(const ScriptCallSite& site, const CrashInfo& crash);
-		const StrataScriptClassDesc* GetDescriptor(const ScriptCallSite& site) const;
+		const ClassFunctions* GetFunctions(const ScriptCallSite& site) const;
 		// Validates the module description and builds the class metadata. Reads module memory: call guarded.
-		bool ReadModuleDescription(std::string& outName, std::vector<ScriptClassInfo>& outClasses, std::vector<const StrataScriptClassDesc*>& outDescriptors,
+		bool ReadModuleDescription(std::string& outName, std::vector<ScriptClassInfo>& outClasses, std::vector<ClassFunctions>& outFunctions,
 			std::string& outError) const;
 	private:
 		std::filesystem::path m_SourcePath;
@@ -122,7 +138,7 @@ namespace Strata
 		bool m_Initialized = false; // StrataScript_Load succeeded; Unload is due
 		bool m_Ready = false;       // Validated and in use (crashes before that are reported as load failures)
 		std::vector<ScriptClassInfo> m_Classes;
-		std::vector<const StrataScriptClassDesc*> m_Descriptors; // Per class index
+		std::vector<ClassFunctions> m_Functions; // Per class index
 		std::optional<ScriptFault> m_Fault;
 		std::string m_LastException;
 		ScriptWatchdog* m_Watchdog = nullptr;

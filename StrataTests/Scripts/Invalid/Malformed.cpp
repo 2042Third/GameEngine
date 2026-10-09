@@ -11,9 +11,16 @@ namespace
 {
 
 	int s_InstanceStorage = 0;
+	// "ChangesDescriptors": the first Create clears the functions of every class descriptor, as if the module had
+	// overwritten its memory. The engine must keep calling the functions it read while loading.
+	bool s_ChangeDescriptorsInCreate = false;
+
+	void ClearDescriptorFunctions();
 
 	uint32_t Create(StrataScriptContext*, StrataScriptEntityID, StrataScriptInstance* outInstance)
 	{
+		if (s_ChangeDescriptorsInCreate)
+			ClearDescriptorFunctions();
 		*outInstance = &s_InstanceStorage;
 		return StrataScriptResult_Ok;
 	}
@@ -50,6 +57,17 @@ namespace
 	const StrataScriptFieldDesc* s_DuplicateFieldPointers[2];
 	StrataScriptClassDesc s_Classes[2];
 	const StrataScriptClassDesc* s_ClassPointers[2];
+
+	void ClearDescriptorFunctions()
+	{
+		for (StrataScriptClassDesc& descriptor : s_Classes)
+		{
+			descriptor.Create = nullptr;
+			descriptor.Destroy = nullptr;
+			descriptor.GetField = nullptr;
+			descriptor.SetField = nullptr;
+		}
+	}
 
 }
 
@@ -132,5 +150,6 @@ ST_SCRIPT_EXTERN_C ST_SCRIPT_EXPORT uint32_t StrataScript_Load(const StrataScrip
 		outModule->ClassCount = 1u << 20;
 	else if (Is(testCase, "NullClassList"))
 		outModule->Classes = nullptr;
+	s_ChangeDescriptorsInCreate = Is(testCase, "ChangesDescriptors");
 	return StrataScriptResult_Ok;
 }
