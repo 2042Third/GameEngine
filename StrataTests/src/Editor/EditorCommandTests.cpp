@@ -277,8 +277,28 @@ TEST_SUITE("Editor.Commands")
 		CHECK(harness.Run("project.info")["name"] == "Game");
 
 		const std::string material = harness.Run("material.create", { { "path", "Materials/Red.stmat" }, { "properties", { { "BaseColor", { 1, 0, 0, 1 } }, { "Roughness", 0.3 } } } })["asset"].get<std::string>();
-		CHECK_FALSE(harness.Error("material.create", { { "path", "Materials/Bad.stmat" }, { "properties", { { "Shininess", 1 } } } }).empty());
+		// An unknown property names the ones that exist, so a client can correct itself.
+		const std::string unknown = harness.Error("material.create", { { "path", "Materials/Bad.stmat" }, { "properties", { { "Shininess", 1 } } } });
+		CHECK(unknown.find("'Shininess'") != std::string::npos);
+		CHECK(unknown.find("BaseColor") != std::string::npos);
+		CHECK(unknown.find("AlphaMode") != std::string::npos);
 		harness.Run("material.set", { { "material", "Materials/Red.stmat" }, { "properties", { { "Metallic", 1.0 } } } });
+
+		// material.get: the values and what every property accepts.
+		const nlohmann::json described = harness.Run("material.get", { { "material", "Materials/Red.stmat" } });
+		CHECK(described["asset"] == material);
+		CHECK(described["values"]["BaseColor"] == nlohmann::json { 1.0, 0.0, 0.0, 1.0 });
+		CHECK(described["values"]["Metallic"] == 1.0);
+		bool describesAlphaMode = false;
+		for (const nlohmann::json& property : described["properties"])
+		{
+			if (property["Name"] == "AlphaMode")
+				describesAlphaMode = property["Type"] == "Enum" && property["Options"] == nlohmann::json { "Opaque", "Mask", "Blend" };
+		}
+		CHECK(describesAlphaMode);
+		CHECK(described["properties"].size() == described["values"].size());
+		CHECK(harness.Run("material.get", { { "material", "Builtin/DefaultMaterial" } })["values"]["BaseColor"].is_array());
+		CHECK_FALSE(harness.Error("material.get", { { "material", "Builtin/Cube" } }).empty());
 		const nlohmann::json materialInfo = harness.Run("asset.info", { { "asset", material } });
 		CHECK(materialInfo["type"] == "Material");
 		CHECK(materialInfo["path"] == "Materials/Red.stmat");

@@ -43,6 +43,15 @@ namespace Strata
 			return { reinterpret_cast<const uint8_t*>(text.data()), text.size() };
 		}
 
+		// "AlphaCutoff, AlphaMode, BaseColor, ...": what material.create and material.set accept.
+		std::string ListMaterialProperties()
+		{
+			std::string names;
+			for (const PropertyInfo& property : Material::GetPropertyInfos())
+				names += (names.empty() ? "" : ", ") + property.Name;
+			return names;
+		}
+
 		// A material document from the defaults with the given property values applied; validated by the loader.
 		std::optional<std::string> BuildMaterialDocument(const nlohmann::json& base, const nlohmann::json* properties, std::string* outError)
 		{
@@ -56,7 +65,7 @@ namespace Strata
 					if (!known)
 					{
 						if (outError)
-							*outError = fmt::format("Unknown material property '{}'", name);
+							*outError = fmt::format("Unknown material property '{}' (properties: {}; material.get describes them)", name, ListMaterialProperties());
 						return std::nullopt;
 					}
 					document["Material"][name] = value;
@@ -341,10 +350,34 @@ namespace Strata
 		// Materials and prefabs
 		////////////////////////////////////////////////////////////////////////////////
 
+		registry.Register({ "material.get",
+			"A material asset's property values, and every material property with its type, range or options: what material.create and "
+			"material.set accept.",
+			ObjectSchema({ { "material", AssetSchema("Material: handle, path or Builtin/DefaultMaterial") } }, { "material" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				CommandArguments arguments(parameters);
+				const AssetHandle handle = ResolveAsset(context, arguments, "material", AssetType::Material);
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				Ref<Material> material = AssetManager::LoadAssetSync<Material>(handle);
+				if (!material)
+				{
+					const EditorAssetManager* assets = context.GetAssetManager();
+					return EditorCommandResult::Fail(fmt::format("Loading the material failed: {}", assets ? assets->GetAssetError(handle) : "not loadable"));
+				}
+				nlohmann::json properties = nlohmann::json::array();
+				for (const PropertyInfo& property : Material::GetPropertyInfos())
+					properties.push_back(DescribeProperty(property));
+				nlohmann::json values = material->Serialize()["Material"];
+				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) }, { "values", std::move(values) }, { "properties", std::move(properties) } });
+			} });
+
 		registry.Register({ "material.create", "Creates a material asset (.stmat) from the default material with the given property values.",
 			ObjectSchema({
 				{ "path", StringSchema("Path relative to the asset directory, e.g. \"Materials/Red.stmat\"") },
-				{ "properties", AnyObjectSchema("Property values, e.g. {\"BaseColor\": [1, 0, 0, 1], \"Roughness\": 0.3}") } }, { "path" }),
+				{ "properties", AnyObjectSchema(fmt::format("Property values, e.g. {{\"BaseColor\": [1, 0, 0, 1], \"Roughness\": 0.3}}. Properties: {} "
+					"(material.get describes their types)", ListMaterialProperties())) } }, { "path" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				std::string error;

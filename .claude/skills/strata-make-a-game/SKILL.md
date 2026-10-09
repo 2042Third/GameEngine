@@ -49,7 +49,7 @@ Design the code for verification before writing it:
 - Materials: `material.create {"path": "Materials/Red.stmat", "properties": {...}}`. Properties: `BaseColor` [r,g,b,a],
   `Metallic`, `Roughness`, `EmissiveColor` [r,g,b], `EmissiveIntensity`, `AlphaMode` (`Opaque`, `Mask`, `Blend`; with an
   alpha below 1 for see-through), `AlphaCutoff`, `DoubleSided`, `Unlit`, texture maps by asset (`BaseColorMap`, ...),
-  `UVTiling`, `UVOffset`. Unknown names fail ("Unknown material property").
+  `UVTiling`, `UVOffset`. `material.get {"material": "Builtin/DefaultMaterial"}` describes them all.
 - Sounds: write a small 16-bit PCM WAV with a script of your own (outside the project), then
   `asset.import {"file": "<absolute>", "directory": "Sounds"}`. Models, textures and fonts import the same way.
 - Built-in meshes: `Builtin/Cube`, `Sphere`, `Plane`, `Quad`, `Cylinder`, `Capsule`, `Cone`, `Torus` (also reachable

@@ -528,6 +528,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   encodes it on a job thread and returns `{"Image": {"MimeType": "image/png", "Data": <base64>}, "width", "height",
   "camera", "overlays", "pendingAssets", "pendingTextGlyphs", "notice"?, "path"?}`; it defaults to the viewport's size,
   camera and overlays and fails without a GPU.
+- Materials: `material.create {path, properties}`, `material.set {material, properties}` and `material.get {material}` (its
+  values and every material property described like `component.list` describes component properties); an unknown property
+  name fails with the list of known ones.
 - **Simulated input** (`Editor/EditorInputCommands.cpp`) lets tools play a running game (play mode only) as a person would:
   `input.key {key, action: tap|press|release, frames}`, `input.mouseButton {button, action, frames}`, `input.mouseMove
   {position}` (pixels from the game view's top-left corner), `input.scroll {delta}`, `input.releaseAll` and `input.state`. Keys
