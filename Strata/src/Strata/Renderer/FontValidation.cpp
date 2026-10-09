@@ -59,14 +59,15 @@ namespace Strata
 			Status State = Status::Unvisited;
 			uint32_t Height = 0;     // Composite nesting below this glyph
 			uint32_t Components = 0; // Components after expanding nested composites (0 for simple glyphs)
-			uint32_t Points = 0;     // After expanding components, saturating
-			double MaxX = 0.0;     // Largest absolute coordinate stb_truetype can produce for the outline
+			GlyphShapeCost Shape;
+			double MaxX = 0.0;       // Largest absolute coordinate stb_truetype can produce for the outline
 			double MaxY = 0.0;
 		};
 
-		uint32_t SaturatingAdd(uint32_t a, uint32_t b)
+		template<typename T>
+		T SaturatingAdd(T a, T b)
 		{
-			return a > std::numeric_limits<uint32_t>::max() - b ? std::numeric_limits<uint32_t>::max() : a + b;
+			return a > std::numeric_limits<T>::max() - b ? std::numeric_limits<T>::max() : a + b;
 		}
 
 		class Validator
@@ -211,12 +212,12 @@ namespace Strata
 			bool ValidateGlyphs()
 			{
 				m_Glyphs.assign(m_GlyphCount, GlyphSummary());
-				m_Facts.GlyphPoints.resize(m_GlyphCount);
+				m_Facts.GlyphShapes.resize(m_GlyphCount);
 				for (uint32_t glyph = 0; glyph < m_GlyphCount; glyph++)
 				{
 					if (!ValidateGlyph(glyph, 0))
 						return false;
-					m_Facts.GlyphPoints[glyph] = m_Glyphs[glyph].Points;
+					m_Facts.GlyphShapes[glyph] = m_Glyphs[glyph].Shape;
 				}
 				return true;
 			}
@@ -334,8 +335,14 @@ namespace Strata
 					}
 				}
 
+				// stb_truetype allocates (and emits at most) a vertex per point plus two per contour; each run of off-curve
+				// points becomes as many curves, closing a contour may add one more.
+				uint32_t offCurve = 0;
+				for (uint32_t point = 0; point < pointCount; point++)
+					offCurve += (m_PointFlags[point] & c_OnCurve) ? 0u : 1u;
 				GlyphSummary& summary = m_Glyphs[glyph];
-				summary.Points = pointCount;
+				summary.Shape.Vertices = pointCount + 2 * contours;
+				summary.Shape.Curves = offCurve + contours;
 				summary.MaxX = maxX;
 				summary.MaxY = maxY;
 				return true;
@@ -345,7 +352,7 @@ namespace Strata
 			bool ValidateCompositeGlyph(uint32_t glyph, uint64_t start, uint64_t end, uint32_t depth)
 			{
 				uint64_t cursor = start + 10;
-				uint32_t points = 0;
+				GlyphShapeCost shape;
 				uint32_t height = 0;
 				uint32_t components = 0;
 				double maxX = 0.0;
@@ -416,7 +423,7 @@ namespace Strata
 					height = std::max(height, child.Height + 1);
 					if (height > FontLimits::c_MaxCompositeDepth)
 						return Fail(fmt::format("Composite glyphs are nested more than {} levels deep", FontLimits::c_MaxCompositeDepth));
-					components = SaturatingAdd(components, SaturatingAdd(child.Components, 1));
+					components = SaturatingAdd(components, SaturatingAdd(child.Components, 1u));
 					if (components > FontLimits::c_MaxCompositeComponents)
 						return Fail(fmt::format("Composite glyph {} expands to more than {} components", glyph, FontLimits::c_MaxCompositeComponents));
 
@@ -429,12 +436,18 @@ namespace Strata
 						return Fail(fmt::format("Composite glyph {} moves a component beyond the coordinate range", glyph));
 					maxX = std::max(maxX, boundX);
 					maxY = std::max(maxY, boundY);
-					points = SaturatingAdd(points, child.Points);
+
+					// stb_truetype transforms the component's vertices, then copies the vertices gathered so far and the
+					// component's into a new array.
+					shape.CompositeCopies = SaturatingAdd(shape.CompositeCopies, SaturatingAdd(child.Shape.CompositeCopies,
+						2ull * child.Shape.Vertices + shape.Vertices));
+					shape.Vertices = SaturatingAdd(shape.Vertices, child.Shape.Vertices);
+					shape.Curves = SaturatingAdd(shape.Curves, child.Shape.Curves);
 					more = (flags & c_MoreComponents) != 0;
 				}
 
 				GlyphSummary& summary = m_Glyphs[glyph];
-				summary.Points = points;
+				summary.Shape = shape;
 				summary.Height = height;
 				summary.Components = components;
 				summary.MaxX = maxX;

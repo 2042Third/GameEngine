@@ -8,6 +8,15 @@
 namespace Strata
 {
 
+	// What stb_truetype builds for a glyph: its distance field rasterizer visits every outline vertex for every texel, and
+	// composite glyphs are assembled by transforming and copying their components' vertices.
+	struct GlyphShapeCost
+	{
+		uint32_t Vertices = 0;        // After expanding composite glyphs (0: nothing to draw), saturating
+		uint32_t Curves = 0;          // Of these, quadratic curves (costlier to measure distances to than lines)
+		uint64_t CompositeCopies = 0; // Vertices transformed and copied while assembling a composite glyph, saturating
+	};
+
 	// What validating a TrueType font established (see ValidateTrueTypeFont).
 	struct TrueTypeFontFacts
 	{
@@ -17,8 +26,8 @@ namespace Strata
 		bool KerningUsable = true;
 		std::string KerningIssue; // Why kerning was disabled
 		uint32_t KerningLookupVisits = 0; // GPOS lookups and pair adjustment subtables stb_truetype searches per glyph pair
-		// Per glyph: outline points after expanding composite glyphs (0 for empty glyphs), saturating.
-		std::vector<uint32_t> GlyphPoints;
+		// Per glyph: the outline stb_truetype builds.
+		std::vector<GlyphShapeCost> GlyphShapes;
 	};
 
 	namespace FontLimits

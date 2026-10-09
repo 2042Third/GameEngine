@@ -26,8 +26,14 @@ namespace Strata
 		font->m_Data = std::move(fontData);
 		font->m_FontOffset = facts.FontOffset;
 		font->m_KerningUsable = facts.KerningUsable;
-		font->m_GlyphPoints = std::move(facts.GlyphPoints);
+		font->m_GlyphShapes = std::move(facts.GlyphShapes);
 		return font;
+	}
+
+	const GlyphShapeCost& Font::GetGlyphShape(uint32_t glyph) const
+	{
+		static const GlyphShapeCost s_None;
+		return glyph < m_GlyphShapes.size() ? m_GlyphShapes[glyph] : s_None;
 	}
 
 	const Ref<Font>& Font::GetDefault()

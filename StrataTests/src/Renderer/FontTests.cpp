@@ -275,7 +275,7 @@ TEST_SUITE("Renderer.Font")
 		const Ref<Font>& roboto = Font::GetDefault();
 		CHECK(roboto->HasUsableKerning());
 		CHECK(roboto->GetFontOffset() == 0);
-		CHECK(roboto->GetGlyphPointCount(roboto->GetGlyphCount()) == 0); // Out of range
+		CHECK(roboto->GetGlyphShape(roboto->GetGlyphCount()).Vertices == 0); // Out of range
 	}
 
 	TEST_CASE("Font collections use their first font")
@@ -550,6 +550,82 @@ TEST_SUITE("Renderer.Font")
 		const std::vector<uint8_t> data = ReplaceTable(FontPatcher(ReplaceTable(font, "glyf", glyf)), "loca", loca);
 		CHECK(data.size() < 1024 * 1024);
 		CheckRejected(data, "outline points");
+	}
+
+	TEST_CASE("Assembling composite glyphs counts toward their rasterization cost")
+	{
+		// A character's glyph replaced by a composite of 256 copies of the font's largest simple glyph, with a tiny box: few
+		// texels, but stb_truetype copies the vertices gathered so far for each component (quadratic in the component count).
+		FontPatcher font = DefaultFont();
+		const Ref<Font>& roboto = Font::GetDefault();
+		Scope<FontAtlas> reference = FontAtlas::Create(roboto);
+		REQUIRE(reference);
+		uint32_t largest = 0;
+		for (uint32_t glyph = 0; glyph < roboto->GetGlyphCount(); glyph++)
+		{
+			if (font.Contours(glyph) > 0 && roboto->GetGlyphShape(glyph).Vertices > roboto->GetGlyphShape(largest).Vertices)
+				largest = glyph;
+		}
+		// A character whose glyph no other glyph uses as a component (that one would have more than 256 components).
+		std::vector<bool> used(font.GlyphCount(), false);
+		used[largest] = true;
+		for (uint32_t glyph : font.GlyphsWhere(true))
+		{
+			for (size_t component : font.Components(glyph))
+				used[font.U16(component + 2)] = true;
+		}
+		uint32_t character = '!';
+		while (character < 0x7F && used[reference->GetGlyph(character).GlyphIndex])
+			character++;
+		REQUIRE(character < 0x7F);
+		const uint32_t target = reference->GetGlyph(character).GlyphIndex;
+		constexpr uint32_t c_Components = 256;
+		std::vector<uint8_t> composite(10 + 6 * c_Components, 0);
+		Write16(composite, 0, 0xFFFF); // Composite
+		Write16(composite, 6, 10);     // Box of 10 by 10 font units
+		Write16(composite, 8, 10);
+		for (uint32_t component = 0; component < c_Components; component++)
+		{
+			const size_t record = 10 + 6 * static_cast<size_t>(component);
+			Write16(composite, record, component + 1 < c_Components ? 0x0022 : 0x0002); // Offsets as bytes, more components
+			Write16(composite, record + 2, largest);
+		}
+
+		std::vector<uint8_t> glyf;
+		std::vector<uint8_t> loca(4 * (static_cast<size_t>(font.GlyphCount()) + 1), 0);
+		for (uint32_t index = 0; index <= font.GlyphCount(); index++)
+		{
+			Write32(loca, 4 * static_cast<size_t>(index), static_cast<uint32_t>(glyf.size()));
+			if (index == target)
+			{
+				glyf.insert(glyf.end(), composite.begin(), composite.end());
+			}
+			else if (index < font.GlyphCount())
+			{
+				const auto [start, end] = font.Glyph(index);
+				glyf.insert(glyf.end(), font.Data.begin() + static_cast<std::ptrdiff_t>(start), font.Data.begin() + static_cast<std::ptrdiff_t>(end));
+			}
+		}
+		font.SetU16(font.Table("head") + 50, 1); // Long glyph offsets
+		std::string error;
+		Ref<Font> loaded = Font::Create(ReplaceTable(FontPatcher(ReplaceTable(font, "glyf", glyf)), "loca", loca), &error);
+		REQUIRE_MESSAGE(loaded, error);
+
+		const uint64_t vertices = roboto->GetGlyphShape(largest).Vertices;
+		const GlyphShapeCost& shape = loaded->GetGlyphShape(target);
+		CHECK(shape.Vertices == c_Components * vertices);
+		// Each component is transformed (its vertices) and copied with everything before it.
+		CHECK(shape.CompositeCopies == 2 * c_Components * vertices + vertices * c_Components * (c_Components - 1) / 2);
+		CHECK(FontAtlas::GetRasterCost(glm::uvec2(16), shape) > FontAtlas::c_MaxGlyphRasterCost);
+
+		QuietLog quiet;
+		Scope<FontAtlas> atlas = FontAtlas::Create(loaded);
+		REQUIRE(atlas);
+		const GlyphInfo& glyph = atlas->GetGlyph(character);
+		CHECK(glyph.GlyphIndex == target);
+		CHECK_FALSE(glyph.Visible);
+		CHECK_FALSE(glyph.Pending);
+		CHECK(atlas->GetGlyphByIndex(largest).Visible);
 	}
 
 	TEST_CASE("Glyphs too large to rasterize are skipped instead of allocated")

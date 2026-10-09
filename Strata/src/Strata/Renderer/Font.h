@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Strata/Asset/Asset.h"
+#include "Strata/Renderer/FontValidation.h"
 
 #include <string>
 #include <vector>
@@ -21,14 +22,14 @@ namespace Strata
 		// The engine's built-in font (Roboto Medium), used by text without a font of its own. Created on first use.
 		static const Ref<Font>& GetDefault();
 
-		uint64_t GetMemoryUsage() const override { return m_Data.size() + m_GlyphPoints.size() * sizeof(uint32_t); }
+		uint64_t GetMemoryUsage() const override { return m_Data.size() + m_GlyphShapes.size() * sizeof(GlyphShapeCost); }
 		const std::vector<uint8_t>& GetData() const { return m_Data; }
 
 		uint32_t GetFontOffset() const { return m_FontOffset; } // Start of the font in the file (collections)
-		uint32_t GetGlyphCount() const { return static_cast<uint32_t>(m_GlyphPoints.size()); }
-		// Outline points of a glyph after expanding composite glyphs (0 for empty glyphs and invalid indices).
-		uint32_t GetGlyphPointCount(uint32_t glyph) const { return glyph < m_GlyphPoints.size() ? m_GlyphPoints[glyph] : 0; }
-		// False when the font's kerning data is malformed: text then uses the glyph advances only.
+		uint32_t GetGlyphCount() const { return static_cast<uint32_t>(m_GlyphShapes.size()); }
+		// The outline stb_truetype builds for a glyph (no vertices for empty glyphs and invalid indices).
+		const GlyphShapeCost& GetGlyphShape(uint32_t glyph) const;
+		// False when the font's kerning data is malformed or too costly to search: text then uses the glyph advances only.
 		bool HasUsableKerning() const { return m_KerningUsable; }
 	private:
 		Font() = default;
@@ -36,7 +37,7 @@ namespace Strata
 		std::vector<uint8_t> m_Data;
 		uint32_t m_FontOffset = 0;
 		bool m_KerningUsable = false;
-		std::vector<uint32_t> m_GlyphPoints;
+		std::vector<GlyphShapeCost> m_GlyphShapes;
 	};
 
 }

@@ -35,9 +35,9 @@ namespace Strata
 	{
 	public:
 		// Glyph rasterization per frame, shared by all fonts, so new text never stalls a frame for long (the cost allows
-		// about 2.5 ms of rasterization in an optimized build on a desktop CPU: a dozen Latin letters or one emoji).
+		// about 2 ms of rasterization in an optimized build on a desktop CPU: about ten Latin letters or one emoji).
 		// Glyphs over it are drawn on the following frames (see TextRenderStats::PendingGlyphs).
-		static constexpr GlyphRasterBudget c_FrameRasterBudget = { 32, 256 * 1024 };
+		static constexpr GlyphRasterBudget c_FrameRasterBudget = { 32, 512 * 1024 };
 
 		// frameConstants: the frame constant buffer of the owning SceneRenderer (view-projection of world-space text).
 		TextRenderer(const std::string& debugName, nvrhi::IBuffer* frameConstants);

@@ -235,7 +235,10 @@ Conventions:
   array pages, the least recently used ones (never those of the current frame) are evicted, and only
   changed rows are uploaded. New glyphs are rasterized within `TextRenderer::c_FrameRasterBudget` per
   frame; the rest are drawn on later frames (`SceneRendererStats::PendingTextGlyphs`), so GPU tests of
-  text with many distinct glyphs render until no glyphs are pending.
+  text with many distinct glyphs render until no glyphs are pending. A glyph whose rasterization would
+  cost more than `FontAtlas::c_MaxGlyphRasterCost` (four frame budgets; `FontAtlas::GetRasterCost`
+  counts texels times vertices, curves and composite assembly) is rasterized at half or a quarter of
+  the resolution, and not drawn beyond that.
 - Font files are untrusted input and stb_truetype does no bounds checking: `Font::Create` validates
   everything stb_truetype can read (`Renderer/FontValidation.h`), rejects malformed fonts and fonts with
   CFF outlines (OTTO), and disables kerning that is not fully bounded (in what stb_truetype reads,
