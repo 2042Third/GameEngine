@@ -48,6 +48,13 @@
 #define ST_SCRIPT_GET_ABI_VERSION_SYMBOL "StrataScript_GetABIVersion"
 #define ST_SCRIPT_LOAD_SYMBOL "StrataScript_Load"
 
+/*
+ * Windows: the structured exception a module raises when its code calls abort() (a failed assert(), std::abort()). The
+ * engine reports it as a crash of the current call instead of the C runtime ending the process. Modules built with the
+ * SDK raise it from a SIGABRT handler installed in their own, statically linked C runtime (ScriptModuleEntry.cpp).
+ */
+#define ST_SCRIPT_ABORT_EXCEPTION_CODE 0xE0535441u
+
 /* True when the struct behind `pointer` (which starts with a StructSize member) is large enough to contain `member`. */
 #define ST_SCRIPT_HAS_MEMBER(type, pointer, member) \
 	((pointer)->StructSize >= offsetof(type, member) + sizeof(((type*)0)->member))

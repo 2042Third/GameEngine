@@ -10,6 +10,7 @@
 
 #include <chrono>
 #include <climits>
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
 
@@ -79,6 +80,14 @@ namespace
 	{
 		throw std::runtime_error("Thrown on purpose");
 	}
+
+#if defined(ST_PLATFORM_POSIX)
+	// Windows guards contain abort() only where the aborting code's C runtime reports it (see the script SDK).
+	void CallAbort(void*)
+	{
+		std::abort();
+	}
+#endif
 
 	void NestedThrow(void* userData)
 	{
@@ -320,6 +329,9 @@ TEST_SUITE("Core.Platform")
 		{
 			CrashInfo info;
 			CHECK_FALSE(CrashGuard::Invoke(WriteToNull, nullptr, &info));
+			// abort() may change the mask itself before it raises SIGABRT (macOS blocks every other signal).
+			CHECK_FALSE(CrashGuard::Invoke(CallAbort, nullptr, &info));
+			CHECK(info.Description.find("abort()") != std::string::npos);
 #if !defined(__aarch64__)
 			// Integer division by zero does not trap on ARM64.
 			int divisor = 0;

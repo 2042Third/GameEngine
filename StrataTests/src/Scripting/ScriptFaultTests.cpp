@@ -16,7 +16,8 @@ namespace
 
 	std::vector<const char*> GetFaultKinds()
 	{
-		std::vector<const char*> faults = { "NullDereference", "StackOverflow" };
+		// abort(): directly, from a failed assert() (active in every configuration) and from std::terminate.
+		std::vector<const char*> faults = { "NullDereference", "StackOverflow", "Abort", "Assert", "Terminate", "TerminateFromNoexcept" };
 #if !defined(__aarch64__) && !defined(_M_ARM64)
 		// Integer division by zero does not trap on ARM64 (it returns 0).
 		faults.push_back("DivideByZero");
@@ -80,6 +81,8 @@ TEST_SUITE("Scripting.Faults")
 				CHECK(report->Entity == faulty.GetUUID());
 				CHECK(report->EntityName == "Faulty");
 				CHECK_FALSE(report->Description.empty());
+				if (std::string(fault) != "NullDereference" && std::string(fault) != "StackOverflow" && std::string(fault) != "DivideByZero")
+					CHECK(report->Description.find("abort()") != std::string::npos);
 
 				// A faulted module refuses further work but can still be unloaded.
 				engine->UnloadModule();

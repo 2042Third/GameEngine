@@ -21,7 +21,8 @@ namespace Strata
 			void* volatile FaultAddress = nullptr;
 		};
 
-		constexpr int c_GuardedSignals[] = { SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGTRAP };
+		// SIGABRT: abort() raises it (a failed assert(), std::abort(), a stack protector or a C++ runtime ending in abort).
+		constexpr int c_GuardedSignals[] = { SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGTRAP, SIGABRT };
 		constexpr size_t c_AlternateStackSize = 64 * 1024;
 
 		// Whether sigsetjmp saves the signal mask for siglongjmp to restore, which costs a system call per guarded call.
@@ -56,9 +57,11 @@ namespace Strata
 			}
 
 			// Not inside a guard: restore the previous disposition. Returning re-executes the faulting
-			// instruction, which then reaches the previous handler (or the default action).
+			// instruction, which then reaches the previous handler (or the default action). A trap or abort()
+			// does not happen again by returning, so it is raised again: the signal stays blocked until this
+			// handler returns, and is then delivered to the restored disposition.
 			sigaction(signal, &s_PreviousActions[signal], nullptr);
-			if (signal == SIGTRAP)
+			if (signal == SIGTRAP || signal == SIGABRT)
 				raise(signal);
 		}
 
@@ -112,6 +115,7 @@ namespace Strata
 				case SIGFPE:  return "Arithmetic exception (e.g. integer division by zero)";
 				case SIGILL:  return "Illegal instruction";
 				case SIGTRAP: return "Breakpoint trap without a debugger attached";
+				case SIGABRT: return "abort() called (for example by a failed assertion)";
 			}
 			return fmt::format("Signal {}", signal);
 		}

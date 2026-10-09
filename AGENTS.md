@@ -263,10 +263,17 @@ Building and loading scripts:
 - Hot reload during play snapshots every instance's fields, deletes the instances (no `OnDestroy`), loads the new
   module, recreates the instances, restores fields that still exist with the same name and type and calls `OnReload`
   (not `OnCreate`). Classes that disappeared lose their instances; new classes start normally.
+- Contained: access violations, division by zero, stack overflow, `abort()` (also from a failed `assert()` and from
+  `std::terminate`; POSIX catches SIGABRT, Windows modules turn it into `ST_SCRIPT_ABORT_EXCEPTION_CODE` through a
+  SIGABRT handler `ScriptModuleEntry.cpp` installs in their static C runtime) and C++ exceptions escaping module code.
 - Limitations: native code cannot be preempted (an infinite loop blocks the main thread; `SetWatchdogTimeout` reports
   long calls); a crash inside a module's static initializers or destructors is reported, but may leave the platform
-  loader in an undefined state; `std::terminate` (an exception leaving a `noexcept` function or a destructor) ends the
-  process; memory of instances abandoned after a crash is leaked.
+  loader in an undefined state; after `std::terminate` the C++ runtime keeps the abandoned exception; stray writes into
+  engine memory are not detected; memory of instances abandoned after a crash is leaked. Not contained (the process
+  ends): Windows fail-fast terminations (`__fastfail`: `/GS` buffer overrun checks, C runtime invalid-parameter
+  failures, heap corruption the system detects), `abort()` in Windows modules with a dynamically linked C runtime
+  (`/MD`) or without the SDK's entry points (`NO_SDK_ENTRY`), and calls that end the process (`exit`,
+  `TerminateProcess`).
 
 ## Editor
 

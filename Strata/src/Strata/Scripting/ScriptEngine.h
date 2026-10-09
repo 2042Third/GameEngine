@@ -23,16 +23,20 @@ namespace Strata
 	// it (ScriptSystem). Main thread only.
 	//
 	// Crash containment: every call into the module is guarded. When script code crashes (access violation, division by
-	// zero, stack overflow, an exception escaping the SDK), the module is marked faulted: it is not called again and
-	// every script instance becomes inert, while the engine keeps running. Poll IsFaulted()/GetFault() to react (the
-	// editor stops play mode). Reloading the module clears the fault. Exceptions thrown by scripts are caught by the SDK
-	// and only disable the instance that threw.
+	// zero, stack overflow, abort() - also from a failed assert() or std::terminate - or an exception escaping the SDK),
+	// the module is marked faulted: it is not called again and every script instance becomes inert, while the engine
+	// keeps running. Poll IsFaulted()/GetFault() to react (the editor stops play mode). Reloading the module clears the
+	// fault. Exceptions thrown by scripts are caught by the SDK and only disable the instance that threw.
 	//
 	// Limitations: native code cannot be preempted, so an infinite loop in a script blocks the main thread (an optional
 	// watchdog reports it); a crash inside the module's static initializers or destructors (run while the library loads
-	// or unloads) is reported, but may leave the platform's loader in an undefined state; std::terminate (e.g. an
-	// exception leaving a noexcept function or a destructor) ends the process; memory of instances abandoned after a
-	// crash is leaked.
+	// or unloads) is reported, but may leave the platform's loader in an undefined state; std::terminate (an exception
+	// leaving a noexcept function or a destructor) is contained through abort(), but the C++ runtime keeps the abandoned
+	// exception; stray writes into engine memory are not detected; memory of instances abandoned after a crash is leaked.
+	// Not contained at all (the process ends): Windows fail-fast terminations (__fastfail: /GS buffer overrun checks,
+	// invalid-parameter failures of the C runtime, heap corruption the system detects), abort() in Windows modules that
+	// link the C runtime dynamically (/MD) or do not use the SDK's entry points, and calls that end the process (exit,
+	// TerminateProcess).
 	class ScriptEngine
 	{
 	public:

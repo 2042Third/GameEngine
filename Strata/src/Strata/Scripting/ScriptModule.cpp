@@ -16,6 +16,8 @@
 namespace Strata
 {
 
+	static_assert(ST_SCRIPT_ABORT_EXCEPTION_CODE == c_CrashGuardAbortExceptionCode, "Modules report abort() with the code the crash guard contains");
+
 	// The private directory module copies are loaded from (in Platform::GetUserRuntimeDirectory): one per process,
 	// created on first use and removed with the last copy. Its name carries the process ID, so directories left behind by
 	// processes that ended without unloading (crashes, debugger stops) are removed by later sessions.
