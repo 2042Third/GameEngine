@@ -124,11 +124,14 @@ if(TARGET StrataEditor)
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
 	set_tests_properties(StrataEditor.UnfinishedScript PROPERTIES WILL_FAIL TRUE)
 
-	# Viewport captures need a GPU: without one the command fails with a clear error (the exit code is then 1).
+	# Viewport captures need a GPU: without one the command fails with a clear error and the run with exit code 1.
 	add_test(NAME StrataEditor.CaptureWithoutGPU
-		COMMAND StrataEditor --no-gpu --frames 2 --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/NoGpuCaptureCommands.json"
+		COMMAND "${CMAKE_COMMAND}"
+			"-DEDITOR=$<TARGET_FILE:StrataEditor>"
+			"-DCOMMANDS=${CMAKE_CURRENT_SOURCE_DIR}/Editor/NoGpuCaptureCommands.json"
+			"-DEXPECTED_OUTPUT=viewport[.]capture failed: viewport[.]capture needs a GPU"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/ExpectCommandFailure.cmake"
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
-	set_tests_properties(StrataEditor.CaptureWithoutGPU PROPERTIES PASS_REGULAR_EXPRESSION "viewport[.]capture failed: viewport[.]capture needs a GPU")
 endif()
 
 # Editor export to a playable game, then the exported runtime: headless without a GPU (--no-gpu, --headless), then in a
