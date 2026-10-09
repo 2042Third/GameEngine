@@ -47,7 +47,7 @@ target_link_libraries(Strata
 		Jolt)
 
 if(WIN32)
-	target_link_libraries(Strata PRIVATE shell32 ole32)
+	target_link_libraries(Strata PRIVATE shell32 ole32 ws2_32)
 elseif(APPLE)
 	target_link_libraries(Strata PRIVATE "-framework CoreFoundation")
 else()
