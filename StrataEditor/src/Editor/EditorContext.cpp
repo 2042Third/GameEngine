@@ -8,6 +8,7 @@
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
+#include <Strata/Input/Input.h>
 #include <Strata/Scene/Prefab.h>
 #include <Strata/Scene/SceneSerializer.h>
 
@@ -311,6 +312,8 @@ namespace Strata
 		m_MasterVolumeBeforePlay = AudioEngine::GetMasterVolume();
 		m_RuntimeScene = Scene::Copy(m_EditScene);
 		m_RuntimeSceneAsset = UUID::Null();
+		// Keys a tool held down in an earlier session (input.* commands) must not leak into this one.
+		Input::ClearSimulated();
 		m_RuntimeScene->OnRuntimeStart(mode);
 		m_SceneState = mode == SceneRuntimeMode::Play ? SceneState::Play : SceneState::Simulate;
 		return true;
@@ -327,6 +330,7 @@ namespace Strata
 		// A game's volume setting belongs to the game session, not to the editor.
 		AudioEngine::SetMasterVolume(m_MasterVolumeBeforePlay);
 		m_GameInputActive = false;
+		Input::ClearSimulated(); // The game that a tool's simulated input was meant for is gone
 		PruneSelection(); // Entities created during play are gone
 	}
 

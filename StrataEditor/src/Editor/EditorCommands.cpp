@@ -32,6 +32,7 @@ namespace Strata
 		RegisterEditorStateCommands(*this);
 		RegisterViewportCommands(*this);
 		RegisterScriptCommands(*this);
+		RegisterInputCommands(*this);
 
 		Register({ "editor.commands", "Every editor command with its description and JSON Schema of its parameters.", CommandUtils::ObjectSchema({}),
 			[this](EditorContext&, const nlohmann::json&)

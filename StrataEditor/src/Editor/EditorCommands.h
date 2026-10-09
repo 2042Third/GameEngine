@@ -137,5 +137,6 @@ namespace Strata
 	void RegisterEditorStateCommands(EditorCommandRegistry& registry);
 	void RegisterViewportCommands(EditorCommandRegistry& registry);
 	void RegisterScriptCommands(EditorCommandRegistry& registry);
+	void RegisterInputCommands(EditorCommandRegistry& registry);
 
 }

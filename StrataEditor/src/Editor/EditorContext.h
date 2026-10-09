@@ -116,7 +116,8 @@ namespace Strata
 		// The running game's requests are honored after each update (Update): a quit (Scene::RequestQuit) stops play mode and
 		// logs the exit code; a scene load (Scene::RequestSceneLoad) replaces the running scene with that scene asset, or restarts
 		// the running one for the null handle (a fresh copy of the edited scene when that is what runs). Stop returns to the edited
-		// scene either way.
+		// scene either way. Starting and stopping drop simulated input (Input::ClearSimulated, the input.* commands), so keys a
+		// tool held never carry over into another session.
 		bool Play(std::string* outError = nullptr);
 		// Like Play, but only physics runs (no scripts or audio).
 		bool Simulate(std::string* outError = nullptr);

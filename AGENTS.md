@@ -522,6 +522,14 @@ and `AudioSystem`, the built-in "Audio" scene system.
   overwrite?}` renders on the next frame, reads the image back without stalling, encodes it on a job thread and returns
   `{"Image": {"MimeType": "image/png", "Data": <base64>}, "width", "height", "camera", "overlays", "pendingAssets",
   "notice"?, "path"?}`; it defaults to the viewport's size, camera and overlays and fails without a GPU.
+- **Simulated input** (`Editor/EditorInputCommands.cpp`) lets tools play a running game (play mode only) as a person would:
+  `input.key {key, action: tap|press|release, frames}`, `input.mouseButton {button, action, frames}`, `input.mouseMove
+  {position}` (pixels from the game view's top-left corner), `input.scroll {delta}`, `input.releaseAll` and `input.state`. Keys
+  and buttons are named like the `Key::`/`Mouse::` constants (`InputNames`, ignoring case). The commands feed the engine's
+  virtual device (`Input::SimulateKey` and friends): its events apply at the next `Input::BeginFrame`, are merged with device
+  input and reach the game even while the viewport has no focus. A tap holds for `frames` frames and answers once the game saw
+  the release; the other commands answer after one frame, so a client can sequence moves call after call. A paused game only
+  sees input in the frames `play.step` runs; starting and stopping play drops simulated input (`Input::ClearSimulated`).
 - Files commands write for clients go through `CommandUtils::ResolveOutputPath`: relative paths are relative to the
   project directory (an error without a project), network/device paths and reserved device names are refused, and an
   existing file is replaced only with `overwrite: true`.

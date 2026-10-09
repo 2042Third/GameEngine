@@ -1,6 +1,6 @@
 ---
 name: strata-editor-automation
-description: Drive the Strata editor from outside, as an AI agent, through StrataCLI or its MCP server - start or find an editor (headless), discover its commands, create projects, import assets, build scenes from entities, components and prefabs, play and inspect, undo, save, capture the viewport and export a playable game. Use whenever you need the editor to do something (build or change a game, check a scene, export) rather than change the engine's code.
+description: Drive the Strata editor from outside, as an AI agent, through StrataCLI or its MCP server - start or find an editor (headless), discover its commands, create projects, import assets, build scenes from entities, components and prefabs, play and inspect (with simulated keyboard and mouse input), undo, save, capture the viewport and export a playable game. Use whenever you need the editor to do something (build or change a game, check a scene, export) rather than change the engine's code.
 ---
 
 # Driving the Strata editor (StrataCLI and MCP)
@@ -139,6 +139,26 @@ with `prefab.instantiate`.
 **Play and inspect**: `play.start` -> `editor.wait {"frames": 120}` (about two seconds) -> `entity.get` /
 `component.get` / `log.read` -> `play.stop`. `play.pause {"paused": true}` and `play.step {"frames": n}` advance
 a paused scene by fixed steps. `play.simulate` runs physics only.
+
+**Play it (simulated input)**: while the game runs (`play.start`), the `input.*` commands press keys and buttons the way a
+player would; scripts see them through `Input::IsKeyDown/IsKeyPressed/IsKeyReleased` (also while the viewport has no focus).
+
+```text
+input.key         {"key": "Left"}                         # tap: down for 1 frame, answers after the game saw the release
+input.key         {"key": "Space", "frames": 30}          # held for half a second
+input.key         {"key": "Right", "action": "press"}     # held across commands ... until
+input.key         {"key": "Right", "action": "release"}
+input.mouseMove   {"position": [640, 360]}                # pixels from the game view's top-left corner
+input.mouseButton {"button": "Left"}                      # Left, Right, Middle, Button3..7; same actions as keys
+input.scroll      {"delta": [0, 1]}
+input.state       {}                                      # what simulated input holds; input.releaseAll lets go of it
+```
+
+Keys are named like the SDK's `Key::` constants (`Left`, `Up`, `Space`, `Enter`, `Escape`, `A`, `D1`, `F5`, `LeftShift`;
+case does not matter). Each command answers after the game had the frame with the input, so issue them one after another and
+read the effect (`component.get`, `log.read`, `viewport.capture`). Notes: input only reaches play mode (not edit or simulate); a
+paused game only sees input in `play.step` frames; `play.stop` drops held keys; a tap of 1 frame is one key press for games that
+act on `IsKeyPressed` or on `KeyRepeat`, use `frames` (or press/release) to hold a key for repeats.
 
 **Look at it** (needs rendering, not `--no-gpu`): `camera.focus` or `camera.set`, then
 `StrataCLI call viewport.capture '{"camera": "scene"}' --save-image shot.png` and open `shot.png`; with MCP the

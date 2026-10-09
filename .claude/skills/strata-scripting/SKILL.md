@@ -108,9 +108,10 @@ ST_SCRIPT_CLASS(Turret)
 - `Assets`: `Find(path)`, `IsLoaded`, `RequestLoad`. `Instantiate` never waits: for an asset that is not loaded yet it
   starts the load and returns a null entity - request assets early (in `OnCreate`) and spawn once `IsLoaded`.
 - `Input`: `IsKeyDown/Pressed/Released(Key::W)`, `IsMouseButtonDown/Pressed/Released(Mouse::ButtonLeft)`,
-  `GetMousePosition` (viewport pixels), `GetMouseDelta`, `GetScrollDelta`. In the editor, scripts receive input only
+  `GetMousePosition` (viewport pixels), `GetMouseDelta`, `GetScrollDelta`. In the editor, scripts receive device input only
   while the viewport is the focused game view (playing through the scene's primary camera); positions are relative to
-  the image.
+  the image. Tools play the game with the `input.*` editor commands (simulated input, see the editor automation skill),
+  which reach the scripts whether or not the viewport has the focus.
 - `Time`: `GetDeltaTime`, `GetFixedDeltaTime`, `GetElapsedTime`, `GetFrameIndex`, `Get/SetTimeScale`.
 - `Log::Info/Warn/Error/Trace(args...)` - arguments are concatenated (`Log::Info("Health ", health)`).
 - `RigidBody` (`GetEntity().GetRigidBody()`), `Physics` (raycasts, overlaps), `Collision` (contact callbacks),
@@ -341,8 +342,10 @@ every step below is a command, and source files are written with your own file t
    bool, integer, number, arrays for vec2/3/4, `[x, y, z, w]` or Euler degrees `[pitch, yaw, roll]` for quaternions,
    text, an entity ID, an asset handle or path. Save the scene (`scene.save`) to keep them.
 6. **Play and observe.** `play.start`, `editor.wait {"frames": 60}`, then read state with `component.get`,
-   `entity.find`, `scene.hierarchy`; script `Log::Info(...)` output is in `log.read`. While playing, `script.setField`
-   changes the live instance too (and the running copy only: `play.stop` discards it).
+   `entity.find`, `scene.hierarchy`; script `Log::Info(...)` output is in `log.read`. Play it like a person with
+   simulated input: `input.key {"key": "Left"}` (a tap), `{"key": "Space", "frames": 20}` (held), `input.mouseMove`,
+   `input.mouseButton`. While playing, `script.setField` changes the live instance too (and the running copy only:
+   `play.stop` discards it).
 7. **Iterate with hot reload.** Edit the sources and `script.build` again while the scene plays: the module is reloaded
    in place, every instance keeps its field values (same name and type) and gets `OnReload` instead of `OnCreate`.
    A build that fails keeps the running module. `script.reload` reloads the module file without building.
