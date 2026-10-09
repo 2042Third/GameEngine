@@ -560,6 +560,34 @@ TEST_SUITE("Physics.Simulation")
 		CHECK(hit->Point.y == doctest::Approx(5.1f).epsilon(1.0e-3));
 	}
 
+	TEST_CASE("Sleeping and static bodies follow Scene::SetWorldTransform")
+	{
+		Scene scene;
+		CreateGround(scene);
+		Entity box = CreateDynamicBox(scene, "Box", glm::vec3(0.0f, 0.5f, 0.0f));
+		Entity post = CreateStaticBox(scene, "Post", glm::vec3(5.0f, 1.0f, 0.0f), glm::vec3(0.25f, 1.0f, 0.25f));
+
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		StepScene(scene, 90);
+		REQUIRE(physics.IsSleeping(box));
+
+		// Neither body is polled, so the moves reach physics through the signal SetWorldTransform emits.
+		CHECK(scene.SetWorldTransform(box, glm::translate(glm::mat4(1.0f), glm::vec3(10.0f, 0.5f, 0.0f))));
+		CHECK(scene.SetWorldTransform(post, glm::translate(glm::mat4(1.0f), glm::vec3(-5.0f, 1.0f, 0.0f))));
+		StepScene(scene, 1);
+		const glm::vec3 down(0.0f, -1.0f, 0.0f);
+		std::optional<RaycastHit> hit = physics.Raycast(glm::vec3(10.0f, 5.0f, 0.0f), down, 10.0f);
+		REQUIRE(hit);
+		CHECK(hit->HitEntity == box);
+		hit = physics.Raycast(glm::vec3(-5.0f, 5.0f, 0.0f), down, 10.0f);
+		REQUIRE(hit);
+		CHECK(hit->HitEntity == post);
+		hit = physics.Raycast(glm::vec3(5.0f, 5.0f, 0.0f), down, 10.0f);
+		REQUIRE(hit);
+		CHECK(hit->HitEntity != post);
+	}
+
 	TEST_CASE("Gravity follows the scene settings and wakes sleeping bodies")
 	{
 		Scene scene;
