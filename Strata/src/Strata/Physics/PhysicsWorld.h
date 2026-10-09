@@ -55,6 +55,13 @@ namespace Strata
 	// The work of a step grows with the awake bodies, their contacts and the signaled changes, not with sleeping or static
 	// bodies (see PhysicsStats::SyncedBodyCount, CheckedPairCount and WrittenBodyCount).
 	//
+	// The simulation waits for mesh colliders at the start: while a mesh collider that exists before the first step waits for
+	// mesh data the provider is loading or for its shape to be cooked, Simulate holds the step (nothing moves and no
+	// collision events occur, but changes are still applied and queries work), so that bodies do not fall through mesh
+	// floors that are not there yet. PhysicsStats::WaitingForMeshes and HeldStepCount report it. The wait ends after at
+	// most PhysicsSettings::MeshWaitTimeout seconds of simulation time, with a warning naming the colliders that are still
+	// missing; mesh colliders added later, unknown meshes and meshes that failed to load are not waited for.
+	//
 	// Main thread only. Jolt runs the step on Strata's JobSystem workers when it is initialized.
 	class PhysicsWorld
 	{
@@ -90,7 +97,8 @@ namespace Strata
 		Entity GetBodyEntity(Entity entity) const;
 
 		// Applies pending changes, synchronizes entity transforms to the bodies, advances the simulation by `timestep`
-		// seconds, writes dynamic bodies back to their entities and updates the contact state.
+		// seconds, writes dynamic bodies back to their entities and updates the contact state. At the start, steps are held
+		// while mesh colliders wait for their meshes (see above).
 		void Simulate(float timestep);
 
 		// Collision events queued since the last call, in the order they occurred. Entity handles are resolved now. Events

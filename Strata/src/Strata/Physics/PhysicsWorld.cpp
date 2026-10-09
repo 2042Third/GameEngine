@@ -710,6 +710,7 @@ namespace Strata
 			result.MaxContactConstraints = std::clamp(settings.MaxContactConstraints, 1u, static_cast<uint32_t>(JPH::PhysicsSystem::cMaxContactConstraintsLimit));
 			result.CollisionSteps = std::clamp(settings.CollisionSteps, 1u, 64u);
 			result.TempAllocatorSize = std::max(settings.TempAllocatorSize, 64u * 1024u);
+			result.MeshWaitTimeout = std::isfinite(settings.MeshWaitTimeout) ? std::max(settings.MeshWaitTimeout, 0.0f) : 0.0f;
 			return result;
 		}
 
@@ -765,11 +766,16 @@ namespace Strata
 		uint32_t LastWrittenBodies = 0;
 		uint64_t BuildCount = 0;
 		uint64_t MeshCheckCount = 0;
+		// The start of the simulation waits for meshes (see HoldForMeshes).
+		bool HasStarted = false;
+		bool HeldLastStep = false;
+		float HeldTime = 0.0f;
+		uint64_t HeldStepCount = 0;
 
 		// Scratch buffers reused by every step, so that steps allocate nothing once they have grown.
 		std::vector<entt::entity> SyncCandidates;
 		std::vector<entt::entity> SyncFollowers;                      // See MarkMovedDescendants
-		std::vector<entt::entity> MeshChecks;                         // See RefreshMeshBodies
+		std::vector<entt::entity> MeshChecks;                         // Scratch of RefreshMeshBodies and HoldForMeshes
 		std::vector<AssetHandle> ChangedMeshes;
 		std::vector<PairKey> CheckedPairs;
 		std::vector<ContactReport> Reports;
@@ -2106,6 +2112,71 @@ namespace Strata
 			}
 		}
 
+		// Whether the start of the simulation waits for a body: its entity takes part in the simulation and one of its mesh
+		// colliders waits for a shape being cooked or for mesh data the provider is loading. Meshes that are unknown or failed
+		// to load are not waited for (they may never arrive).
+		bool HoldsStart(PhysicsWorldData& data, PhysicsMeshProvider& provider, entt::entity handle)
+		{
+			const BodyRecord* record = FindRecord(data, handle);
+			const Entity entity(handle, data.OwnerScene);
+			if (!record || !entity.IsValid() || !IsSimulated(*data.OwnerScene, entity))
+				return false;
+
+			return std::any_of(record->MeshSources.begin(), record->MeshSources.end(), [&](const MeshSource& source)
+			{
+				// With data, the source waits for its shape to be cooked, which always ends.
+				return source.Waiting && (!source.Data.expired() || provider.IsMeshLoading(source.Mesh));
+			});
+		}
+
+		// Before its first step, the simulation waits for the mesh colliders that exist by then and wait for their mesh data
+		// (loading) or shape (cooking), so that bodies do not fall through mesh floors that are not there yet: the step is held
+		// (nothing moves, no collision events) while one of them waits, for at most PhysicsSettings::MeshWaitTimeout of
+		// simulation time, then the simulation starts anyway and warns. Mesh colliders added later are not waited for. Returns
+		// whether to hold this step.
+		bool HoldForMeshes(PhysicsWorldData& data, float timestep)
+		{
+			if (data.HasStarted)
+				return false;
+
+			// Mesh data that arrived or finished cooking builds the waiting bodies now.
+			RefreshMeshBodies(data);
+			ApplyChanges(data);
+
+			PhysicsMeshProvider& provider = GetActiveMeshProvider();
+			std::vector<entt::entity>& waiting = data.MeshChecks;
+			waiting.clear();
+			for (entt::entity handle : data.WaitingMeshBodies)
+			{
+				if (HoldsStart(data, provider, handle))
+					waiting.push_back(handle);
+			}
+			if (!waiting.empty() && data.HeldTime < data.Settings.MeshWaitTimeout)
+			{
+				data.HeldTime += timestep;
+				return true;
+			}
+
+			// Without a wait (MeshWaitTimeout 0), starting without the meshes is what was asked for.
+			if (!waiting.empty() && data.Settings.MeshWaitTimeout > 0.0f)
+			{
+				constexpr size_t maxNames = 5;
+				std::string names;
+				for (size_t i = 0; i < std::min(waiting.size(), maxNames); i++)
+				{
+					if (i > 0)
+						names += ", ";
+					names += fmt::format("'{}'", Entity(waiting[i], data.OwnerScene).GetName());
+				}
+				if (waiting.size() > maxNames)
+					names += fmt::format(" and {} more", waiting.size() - maxNames);
+				ST_CORE_WARN("Physics: scene '{}' starts simulating after waiting {} s for meshes, without the mesh colliders of {}",
+					data.OwnerScene->GetName(), data.Settings.MeshWaitTimeout, names);
+			}
+			data.HasStarted = true;
+			return false;
+		}
+
 		// Bodies of entities about to be destroyed (Scene::DestroyEntity during an update) leave the simulation before the
 		// next step; static bodies stay until the entity is destroyed (queries skip them already). Colliders about to be
 		// destroyed leave the shape of the body they belong to.
@@ -2824,9 +2895,16 @@ namespace Strata
 
 		PhysicsWorldData& data = *m_Data;
 		const auto startTime = std::chrono::steady_clock::now();
-		data.StepCount++; // Identifies this step in the contact pairs' check and report marks
-
 		ApplyChanges(data);
+		data.HeldLastStep = HoldForMeshes(data, timestep);
+		if (data.HeldLastStep)
+		{
+			data.HeldStepCount++;
+			data.LastStepTime = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - startTime).count();
+			return;
+		}
+
+		data.StepCount++; // Identifies this step in the contact pairs' check and report marks
 		SyncEntitiesToBodies(data, timestep);
 
 		CollectCheckedPairs(data);
@@ -3180,6 +3258,8 @@ namespace Strata
 		stats.WrittenBodyCount = data.LastWrittenBodies;
 		stats.BuildCount = data.BuildCount;
 		stats.MeshCheckCount = data.MeshCheckCount;
+		stats.WaitingForMeshes = data.HeldLastStep;
+		stats.HeldStepCount = data.HeldStepCount;
 		stats.StepCount = data.StepCount;
 		stats.JobCount = data.JobCounters.Jobs.load(std::memory_order_relaxed);
 		stats.WorkerJobCount = data.JobCounters.WorkerJobs.load(std::memory_order_relaxed);

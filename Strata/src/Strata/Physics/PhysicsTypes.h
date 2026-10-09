@@ -28,6 +28,9 @@ namespace Strata
 		uint32_t MaxContactConstraints = 10240;  // Contacts that can be solved per step
 		uint32_t CollisionSteps = 1;             // Collision sub-steps per fixed update (raise for very fast bodies)
 		uint32_t TempAllocatorSize = 10u * 1024u * 1024u; // Per-step scratch memory in bytes (falls back to the heap when exceeded)
+		// Longest wait, in seconds of simulation time, at the start for the meshes of mesh colliders (still loading or being
+		// cooked) before the first step; 0 does not wait. See PhysicsWorld.
+		float MeshWaitTimeout = 10.0f;
 
 		// Layer collision matrix: bit j of LayerCollisionMasks[i] is set when layer i collides with layer j. Two layers
 		// collide only if both of their masks allow it, so an asymmetric edit disables the pair. Everything collides by
@@ -122,6 +125,8 @@ namespace Strata
 		uint64_t BuildCount = 0;         // Bodies built or rebuilt since the world was created (attempts that failed included)
 		uint64_t MeshCheckCount = 0;     // Mesh collider bodies checked for changed, arrived or cooked mesh data since then
 		uint64_t StepCount = 0;          // Simulation steps since the world was created
+		bool WaitingForMeshes = false;   // The last step was held: the simulation waits for mesh colliders' meshes to start
+		uint64_t HeldStepCount = 0;      // Steps held at the start while waiting for meshes (not counted in StepCount)
 		uint64_t JobCount = 0;           // Simulation jobs run since the world was created, on any thread
 		uint64_t WorkerJobCount = 0;     // The part of JobCount run by JobSystem worker threads (depends on thread timing)
 		float LastStepTime = 0.0f;       // Wall time of the last step in milliseconds, including transform synchronization
@@ -149,6 +154,9 @@ namespace Strata
 		// Like GetMeshData, but never starts loading a mesh: physics uses it to check whether the meshes of built colliders
 		// changed, so that a mesh unloaded on purpose is not loaded again (the colliders keep their shape).
 		virtual Ref<const PhysicsMeshData> PeekMeshData(AssetHandle mesh) { return GetMeshData(mesh); }
+		// Whether the data of a mesh that GetMeshData does not return yet is on its way (loading), as opposed to unknown or
+		// unusable: before its first step, the simulation waits for such meshes (see PhysicsSettings::MeshWaitTimeout).
+		virtual bool IsMeshLoading([[maybe_unused]] AssetHandle mesh) { return false; }
 		// Changes whenever GetMeshData may return a different result than before for some mesh (data that finished
 		// loading, was reloaded or was dropped). Physics asks for mesh data again only when it changes.
 		virtual uint64_t GetVersion() = 0;

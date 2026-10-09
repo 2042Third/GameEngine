@@ -14,6 +14,8 @@
 
 #include <atomic>
 #include <chrono>
+#include <limits>
+#include <optional>
 #include <thread>
 
 using namespace Strata;
@@ -95,6 +97,45 @@ namespace
 		rock.AddComponent<RigidBodyComponent>();
 		rock.AddComponent<MeshColliderComponent>().Mesh = mesh;
 	}
+
+	// Keeps every JobSystem worker busy until released, so that jobs submitted meanwhile (cooks) stay queued.
+	class WorkerBlocker
+	{
+	public:
+		WorkerBlocker()
+		{
+			for (uint32_t index = 0; index < JobSystem::GetWorkerThreadCount(); index++)
+			{
+				m_Jobs.push_back(JobSystem::Submit([this]()
+				{
+					m_Blocked++;
+					while (!m_Release)
+						std::this_thread::sleep_for(std::chrono::milliseconds(1));
+				}));
+			}
+			while (m_Blocked < JobSystem::GetWorkerThreadCount())
+				std::this_thread::yield();
+		}
+
+		~WorkerBlocker()
+		{
+			Release();
+		}
+
+		WorkerBlocker(const WorkerBlocker&) = delete;
+		WorkerBlocker& operator=(const WorkerBlocker&) = delete;
+
+		void Release()
+		{
+			m_Release = true;
+			JobSystem::WaitAll(m_Jobs);
+			m_Jobs.clear();
+		}
+	private:
+		std::atomic<bool> m_Release = false;
+		std::atomic<uint32_t> m_Blocked = 0;
+		std::vector<JobHandle> m_Jobs;
+	};
 
 }
 
@@ -207,13 +248,19 @@ TEST_SUITE("Physics.AssetMeshes")
 		// The imported mesh was requested but is still loading: its collider waits, nothing blocks.
 		CHECK_FALSE(physics.HasBody(floor));
 		CHECK(physics.GetStats().PendingBodyCount == 1);
-		StepScene(scene, 1);
+		StepScene(scene, 10);
 		CHECK_FALSE(physics.HasBody(floor));
+		// The simulation waits for the floor to start: the crate stays where it is.
+		CHECK(physics.GetStats().WaitingForMeshes);
+		CHECK(physics.GetStats().StepCount == 0);
+		CHECK(GetWorldPosition(scene, crate) == glm::vec3(1.0f, 2.0f, 1.0f));
 
-		// Once the asset manager finished loading it, the next step builds the body.
+		// Once the asset manager finished loading it, the next step builds the body and starts the simulation.
 		REQUIRE(project.Manager->WaitForPendingLoads());
 		StepScene(scene, 1);
 		REQUIRE(physics.HasBody(floor));
+		CHECK_FALSE(physics.GetStats().WaitingForMeshes);
+		CHECK(physics.GetStats().StepCount == 1);
 		std::optional<RaycastHit> hit = physics.Raycast(glm::vec3(4.0f, 5.0f, -4.0f), glm::vec3(0.0f, -1.0f, 0.0f), 10.0f);
 		REQUIRE(hit);
 		CHECK(hit->HitEntity == floor);
@@ -361,20 +408,7 @@ TEST_SUITE("Physics.AssetMeshes")
 		ScopedMeshProvider provider(CreateRef<FunctionMeshProvider>([&](AssetHandle) { return box; }));
 
 		// While every worker is busy the cook stays queued.
-		std::atomic<bool> release = false;
-		std::atomic<uint32_t> blocked = 0;
-		std::vector<JobHandle> blockers;
-		for (uint32_t index = 0; index < JobSystem::GetWorkerThreadCount(); index++)
-		{
-			blockers.push_back(JobSystem::Submit([&]()
-			{
-				blocked++;
-				while (!release)
-					std::this_thread::sleep_for(std::chrono::milliseconds(1));
-			}));
-		}
-		while (blocked < JobSystem::GetWorkerThreadCount())
-			std::this_thread::yield();
+		WorkerBlocker blocker;
 
 		Scene scene;
 		CreateGround(scene);
@@ -387,12 +421,12 @@ TEST_SUITE("Physics.AssetMeshes")
 		PhysicsSystem& physics = GetPhysics(scene);
 		CHECK_FALSE(physics.HasBody(rock));
 		CHECK(physics.GetStats().PendingBodyCount == 1);
-		StepScene(scene, 5); // The simulation goes on meanwhile
+		StepScene(scene, 5); // The scene keeps running, the simulation waits for the cook to start
 		CHECK_FALSE(physics.HasBody(rock));
-		CHECK(physics.GetStats().StepCount == 5);
+		CHECK(physics.GetStats().StepCount == 0);
+		CHECK(physics.GetStats().HeldStepCount == 5);
 
-		release = true;
-		JobSystem::WaitAll(blockers);
+		blocker.Release();
 		CHECK(WaitUntil([&]()
 		{
 			StepScene(scene, 1);
@@ -400,5 +434,150 @@ TEST_SUITE("Physics.AssetMeshes")
 		}, std::chrono::milliseconds(10000)));
 		StepScene(scene, 120);
 		CHECK(std::abs(GetWorldPosition(scene, rock).y - 0.5f) < 0.03f);
+	}
+
+	TEST_CASE("The simulation starts once the mesh floors are cooked")
+	{
+		ScopedJobSystem jobSystem(2);
+		const Ref<const PhysicsMeshData> slab = CreateBoxMesh(glm::vec3(5.0f, 0.5f, 5.0f));
+		ScopedMeshProvider provider(CreateRef<FunctionMeshProvider>([&](AssetHandle) { return slab; }));
+		WorkerBlocker blocker;
+
+		Scene scene;
+		Entity floor = scene.CreateEntity("Floor");
+		floor.GetTransform().Translation = glm::vec3(0.0f, -0.5f, 0.0f);
+		MeshColliderComponent& floorCollider = floor.AddComponent<MeshColliderComponent>();
+		floorCollider.Mesh = UUID(0x7003);
+		floorCollider.Convex = false;
+		Entity crate = CreateDynamicBox(scene, "Crate", glm::vec3(0.0f, 1.0f, 0.0f));
+		Entity spinner = CreateDynamicBox(scene, "Spinner", glm::vec3(20.0f, 5.0f, 0.0f));
+
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		CollisionRecorder recorder(physics);
+		REQUIRE(physics.HasBody(crate));
+		CHECK_FALSE(physics.HasBody(floor));
+
+		// While the floor cooks, the scene runs but nothing moves (half a second, during which the crate would fall through).
+		StepScene(scene, 30);
+		CHECK_FALSE(physics.HasBody(floor));
+		CHECK(physics.GetStats().WaitingForMeshes);
+		CHECK(physics.GetStats().StepCount == 0);
+		CHECK(physics.GetStats().HeldStepCount == 30);
+		CHECK(GetWorldPosition(scene, crate) == glm::vec3(0.0f, 1.0f, 0.0f));
+		CHECK(GetWorldPosition(scene, spinner) == glm::vec3(20.0f, 5.0f, 0.0f));
+		CHECK(recorder.GetEvents().empty());
+		// Changes made meanwhile still apply, and queries see the bodies.
+		CHECK(physics.SetLinearVelocity(spinner, glm::vec3(0.0f, 0.0f, 1.0f)));
+		const std::optional<RaycastHit> hit = physics.Raycast(glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), 10.0f);
+		REQUIRE(hit);
+		CHECK(hit->HitEntity == crate);
+
+		// The step after the cook finished builds the floor and starts the simulation, with the crate on top of it.
+		const uint64_t completedCooks = PhysicsMeshShapes::GetCompletedCount();
+		blocker.Release();
+		REQUIRE(WaitUntil([&]() { return PhysicsMeshShapes::GetCompletedCount() != completedCooks; }, std::chrono::milliseconds(10000)));
+		StepScene(scene, 1);
+		CHECK(physics.HasBody(floor));
+		CHECK_FALSE(physics.GetStats().WaitingForMeshes);
+		CHECK(physics.GetStats().StepCount == 1);
+		StepScene(scene, 90);
+		CHECK(std::abs(GetWorldPosition(scene, crate).y - 0.5f) < 0.03f);
+		CHECK(GetWorldPosition(scene, spinner).z > 1.0f);
+		CHECK(physics.GetStats().HeldStepCount == 30);
+	}
+
+	TEST_CASE("The start waits for loading meshes at most MeshWaitTimeout")
+	{
+		PhysicsSettings settings;
+		settings.MeshWaitTimeout = 0.5f;
+		ScopedPhysicsSettings scopedSettings(settings);
+		Ref<FunctionMeshProvider> meshes = CreateRef<FunctionMeshProvider>([](AssetHandle) { return Ref<const PhysicsMeshData>(); });
+		meshes->SetLoading(true); // Never arrives
+		ScopedMeshProvider provider(meshes);
+
+		Scene scene;
+		REQUIRE(scene.GetSettings().FixedTimestep == doctest::Approx(1.0f / 60.0f));
+		CreateGround(scene);
+		Entity crate = CreateDynamicBox(scene, "Crate", glm::vec3(0.0f, 3.0f, 0.0f));
+		Entity rock = scene.CreateEntity("Rock");
+		rock.AddComponent<MeshColliderComponent>().Mesh = UUID(0x7004);
+
+		const uint64_t logSequence = Log::GetBuffer().GetLatestSequence();
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		StepScene(scene, 28);
+		CHECK(physics.GetStats().WaitingForMeshes);
+		CHECK(physics.GetStats().StepCount == 0);
+		CHECK(GetWorldPosition(scene, crate).y == 3.0f);
+		CHECK(CountLogMessages(logSequence, "starts simulating") == 0);
+
+		// After half a second (30 steps), the simulation starts without the mesh collider, warning once.
+		StepScene(scene, 4);
+		CHECK_FALSE(physics.GetStats().WaitingForMeshes);
+		CHECK(physics.GetStats().HeldStepCount >= 29);
+		CHECK(physics.GetStats().HeldStepCount <= 31);
+		CHECK(physics.GetStats().StepCount + physics.GetStats().HeldStepCount == 32);
+		CHECK(CountLogMessages(logSequence, "starts simulating after waiting 0.5 s for meshes, without the mesh colliders of 'Rock'") == 1);
+		StepScene(scene, 30);
+		CHECK(GetWorldPosition(scene, crate).y < 2.5f);
+		CHECK_FALSE(physics.HasBody(rock));
+		CHECK(CountLogMessages(logSequence, "starts simulating") == 1);
+
+		// Mesh colliders added once the simulation runs are not waited for.
+		const uint64_t steps = physics.GetStats().StepCount;
+		Entity late = scene.CreateEntity("Late");
+		late.AddComponent<MeshColliderComponent>().Mesh = UUID(0x7005);
+		StepScene(scene, 1);
+		CHECK(physics.GetStats().StepCount == steps + 1);
+		CHECK_FALSE(physics.GetStats().WaitingForMeshes);
+	}
+
+	TEST_CASE("The start does not wait for meshes that are not loading, inactive colliders or without a timeout")
+	{
+		Ref<FunctionMeshProvider> meshes = CreateRef<FunctionMeshProvider>([](AssetHandle) { return Ref<const PhysicsMeshData>(); });
+		ScopedMeshProvider provider(meshes);
+		PhysicsSettings settings;
+		float expectedTimeout = settings.MeshWaitTimeout;
+
+		Scene scene;
+		CreateGround(scene);
+		Entity crate = CreateDynamicBox(scene, "Crate", glm::vec3(0.0f, 3.0f, 0.0f));
+		Entity rock = scene.CreateEntity("Rock");
+		rock.AddComponent<MeshColliderComponent>().Mesh = UUID(0x7006);
+
+		SUBCASE("Unknown or failed meshes")
+		{
+			meshes->SetLoading(false);
+		}
+		SUBCASE("Inactive mesh colliders")
+		{
+			meshes->SetLoading(true);
+			rock.SetActive(false);
+		}
+		SUBCASE("No wait")
+		{
+			meshes->SetLoading(true);
+			settings.MeshWaitTimeout = 0.0f;
+			expectedTimeout = 0.0f;
+		}
+		SUBCASE("Invalid wait (sanitized to none)")
+		{
+			meshes->SetLoading(true);
+			settings.MeshWaitTimeout = std::numeric_limits<float>::quiet_NaN();
+			expectedTimeout = 0.0f;
+		}
+		ScopedPhysicsSettings scopedSettings(settings);
+		const uint64_t logSequence = Log::GetBuffer().GetLatestSequence();
+		scene.OnRuntimeStart();
+
+		PhysicsSystem& physics = GetPhysics(scene);
+		REQUIRE(physics.GetWorld() != nullptr);
+		CHECK(physics.GetWorld()->GetSettings().MeshWaitTimeout == expectedTimeout);
+		StepScene(scene, 1);
+		CHECK(physics.GetStats().StepCount == 1);
+		CHECK(physics.GetStats().HeldStepCount == 0);
+		CHECK(GetWorldPosition(scene, crate).y < 3.0f);
+		CHECK(CountLogMessages(logSequence, "starts simulating") == 0);
 	}
 }

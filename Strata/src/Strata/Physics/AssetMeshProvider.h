@@ -28,6 +28,8 @@ namespace Strata
 	public:
 		Ref<const PhysicsMeshData> GetMeshData(AssetHandle mesh) override;
 		Ref<const PhysicsMeshData> PeekMeshData(AssetHandle mesh) override;
+		// A mesh the asset manager is loading.
+		bool IsMeshLoading(AssetHandle mesh) override;
 		uint64_t GetVersion() override;
 		bool GetChangedMeshes(uint64_t version, std::vector<AssetHandle>& outMeshes) override;
 

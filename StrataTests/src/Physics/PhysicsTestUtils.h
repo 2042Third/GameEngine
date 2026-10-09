@@ -162,14 +162,18 @@ namespace Strata::Tests
 			return m_Function(mesh);
 		}
 
+		// While SetLoading(true), meshes the function does not serve count as loading (the simulation waits for them at the start).
+		bool IsMeshLoading(AssetHandle) override { return m_Loading; }
 		uint64_t GetVersion() override { return m_Version; }
 
 		void Changed() { m_Version++; }
+		void SetLoading(bool loading) { m_Loading = loading; }
 		uint32_t GetRequestCount() const { return m_RequestCount; }
 	private:
 		MeshFunction m_Function;
 		uint64_t m_Version = 0;
 		uint32_t m_RequestCount = 0;
+		bool m_Loading = false;
 	};
 
 	// Replaces the mesh provider while it exists; the default provider (the active asset manager) is restored afterwards.

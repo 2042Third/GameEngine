@@ -82,6 +82,12 @@ namespace Strata
 		return GetMeshData(mesh);
 	}
 
+	bool AssetMeshProvider::IsMeshLoading(AssetHandle mesh)
+	{
+		const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
+		return manager && mesh.IsValid() && manager->GetAssetState(mesh) == AssetState::Loading;
+	}
+
 	uint64_t AssetMeshProvider::GetVersion()
 	{
 		const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
