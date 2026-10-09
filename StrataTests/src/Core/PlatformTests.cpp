@@ -438,6 +438,25 @@ TEST_SUITE("Core.Platform")
 		}
 	}
 
+	TEST_CASE("Faults outside guarded calls go to the handler installed before the guard, every time")
+	{
+		const Process::RunResult result = Process::Run(HelperProcess({ "--strata-test-helper=signal-chaining" }), std::chrono::milliseconds(60000));
+		INFO("Output: ", result.Output);
+		REQUIRE(result.Started);
+		CHECK_FALSE(result.TimedOut);
+		CHECK(result.ExitCode == 0);
+	}
+
+	TEST_CASE("Signals another process sends during a guarded call are not contained")
+	{
+		const Process::RunResult result = Process::Run(HelperProcess({ "--strata-test-helper=external-signal" }), std::chrono::milliseconds(60000));
+		INFO("Output: ", result.Output);
+		REQUIRE(result.Started);
+		CHECK_FALSE(result.TimedOut);
+		CHECK(result.ExitCode == 128 + SIGFPE);
+		CHECK(result.Output.find("contained") == std::string::npos);
+	}
+
 	TEST_CASE("abort() in guarded code is reported and ends the process")
 	{
 		// It cannot be contained safely (the C library may hold allocator locks), so it must neither be swallowed nor hang.
@@ -448,6 +467,18 @@ TEST_SUITE("Core.Platform")
 		CHECK(result.ExitCode == 128 + SIGABRT);
 		CHECK(result.Output.find("called abort()") != std::string::npos);
 		CHECK(result.Output.find("contained") == std::string::npos);
+	}
+#endif
+
+#if defined(ST_PLATFORM_LINUX)
+	TEST_CASE("Thread cancellation passes through guarded calls")
+	{
+		// glibc ends a thread (pthread_exit, pthread_cancel) by unwinding it with an exception that must not be swallowed.
+		const Process::RunResult result = Process::Run(HelperProcess({ "--strata-test-helper=guarded-thread-exit" }), std::chrono::milliseconds(60000));
+		INFO("Output: ", result.Output);
+		REQUIRE(result.Started);
+		CHECK(result.ExitCode == 0);
+		CHECK(result.Output.find("exited") != std::string::npos);
 	}
 #endif
 

@@ -21,6 +21,42 @@
 #include <string_view>
 #include <thread>
 
+#if defined(ST_PLATFORM_POSIX)
+	#include <csetjmp>
+	#include <csignal>
+	#include <pthread.h>
+	#include <sys/types.h>
+	#include <unistd.h>
+
+namespace
+{
+
+	sigjmp_buf s_ForeignHandlerJump;
+	volatile sig_atomic_t s_ForeignHandlerCalls = 0;
+
+	// A SIGSEGV handler some other component installed before the crash guard; it recovers by jumping back.
+	void ForeignSegfaultHandler(int)
+	{
+		s_ForeignHandlerCalls = s_ForeignHandlerCalls + 1;
+		siglongjmp(s_ForeignHandlerJump, 1);
+	}
+
+	void WriteToNull(void*)
+	{
+		volatile int* pointer = nullptr;
+		*pointer = 42;
+	}
+
+	// Faults outside any guarded call; the foreign handler jumps back here.
+	void FaultOutsideGuard()
+	{
+		if (sigsetjmp(s_ForeignHandlerJump, 1) == 0)
+			WriteToNull(nullptr);
+	}
+
+}
+#endif
+
 // When launched with --strata-test-helper=<mode>, the test executable acts as a child process for the
 // Process tests (and checks build products for CTest scripts) instead of running the test suites. This keeps
 // those tests free of external programs.
@@ -62,6 +98,68 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		std::fflush(stdout);
 		return 0;
 	}
+#if defined(ST_PLATFORM_POSIX)
+	if (mode == "signal-chaining")
+	{
+		// A handler installed before the guard gets every fault outside guarded calls, and guarded calls stay contained
+		// in between (the guard keeps its own handler). Exit code 0 if both happened twice.
+		struct sigaction action = {};
+		action.sa_handler = ForeignSegfaultHandler;
+		sigemptyset(&action.sa_mask);
+		sigaction(SIGSEGV, &action, nullptr);
+		Strata::CrashGuard::Invoke([](void*) {}, nullptr); // Installs the guard's handlers
+		int contained = 0;
+		for (int round = 0; round < 2; round++)
+		{
+			FaultOutsideGuard();
+			if (!Strata::CrashGuard::Invoke(WriteToNull, nullptr))
+				contained++;
+		}
+		std::printf("foreign handler calls: %d, contained: %d\n", static_cast<int>(s_ForeignHandlerCalls), contained);
+		std::fflush(stdout);
+		return s_ForeignHandlerCalls == 2 && contained == 2 ? 0 : 1;
+	}
+	if (mode == "external-signal")
+	{
+		// A guarded call during which another process (a child) sends SIGFPE: not a fault of the call, so the signal takes
+		// its default action and ends this process instead of being contained.
+		const pid_t parent = getpid();
+		const pid_t child = fork();
+		if (child < 0)
+			return 2;
+		if (child == 0)
+		{
+			usleep(300000);
+			kill(parent, SIGFPE);
+			_exit(0);
+		}
+		const bool completed = Strata::CrashGuard::Invoke([](void*)
+		{
+			for (int index = 0; index < 100; index++)
+				usleep(100000);
+		}, nullptr);
+		std::printf("%s\n", completed ? "completed" : "contained");
+		std::fflush(stdout);
+		return 0;
+	}
+	if (mode == "guarded-thread-exit")
+	{
+		// pthread_exit inside a guarded call on another thread: the thread must end normally (exit code 0).
+		pthread_t thread;
+		auto run = [](void*) -> void*
+		{
+			Strata::CrashGuard::Invoke([](void*) { pthread_exit(nullptr); }, nullptr);
+			return reinterpret_cast<void*>(1);
+		};
+		if (pthread_create(&thread, nullptr, run, nullptr) != 0)
+			return 2;
+		void* result = reinterpret_cast<void*>(1);
+		pthread_join(thread, &result);
+		std::printf("%s\n", result == nullptr ? "exited" : "returned");
+		std::fflush(stdout);
+		return result == nullptr ? 0 : 1;
+	}
+#endif
 	if (mode == "play-faulty-script")
 	{
 		// <faults module> <fault>: plays a scene whose Faulty script crashes with <fault> in OnUpdate. Prints "contained"

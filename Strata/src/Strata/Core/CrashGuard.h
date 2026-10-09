@@ -36,8 +36,10 @@ namespace Strata
 	// Guards may be nested and are per thread.
 	//
 	// POSIX: the first Invoke installs process-wide handlers for the fault signals (and an alternate signal stack per
-	// thread); faults outside a guard go to the handlers installed before. Code that replaces these handlers later
-	// (crash reporters, test frameworks catching signals) must be set up first, or crashes are no longer contained.
+	// thread). Signals no guard handles - raised outside guarded calls, or sent by another process - go to the handlers
+	// installed before (called directly, so the guard keeps its own), or take their default action. Code that replaces
+	// these handlers later (crash reporters, test frameworks catching signals) must be set up first, or crashes are no
+	// longer contained. Thread cancellation (glibc's forced unwinding) passes through guarded calls.
 	class CrashGuard
 	{
 	public:
