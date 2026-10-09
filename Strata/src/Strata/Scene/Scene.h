@@ -120,6 +120,8 @@ namespace Strata
 		bool IsPaused() const { return m_IsPaused; }
 		// While paused, lets the next `frames` updates each advance the simulation by exactly one fixed step.
 		void Step(uint32_t frames = 1) { m_StepFrames += frames; }
+		// Steps requested with Step that have not run yet.
+		uint32_t GetStepFrames() const { return m_StepFrames; }
 
 		// Simulation time since OnRuntimeStart (seconds) and number of runtime updates.
 		double GetTime() const { return m_Time; }

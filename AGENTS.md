@@ -457,9 +457,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   manifest (`<Game>.stgame`, start scene, script module and window settings) and the runtime executable renamed after
   the game. CTest exports a small game (`StrataEditor --no-gpu`) and runs it headless.
 - A running game asks its owner to quit or to switch scenes through `Scene::RequestQuit`/`RequestSceneLoad` (scripts: the
-  SDK's `Game`), honored after each update: the editor stops play mode, or replaces the running scene (`play.stop` still
-  returns to the edited scene); `GameRuntime` ends the game (`GetQuitRequest`; StrataRuntime exits with the code) or loads
-  the scene from the pack. A null handle restarts the running scene.
+  SDK's `Game`), honored after each update: the editor stops play mode, or replaces the running scene (a paused game stays
+  paused, with its pending steps; `play.stop` still returns to the edited scene); `GameRuntime` ends the game
+  (`GetQuitRequest`; StrataRuntime exits with the code) or loads the scene from the pack. A null handle restarts the running
+  scene.
 - **Scripts through commands** (see Scripting, "Project scripts"): `script.status` (loaded module, classes with fields
   and callbacks, faults, the running and last build with diagnostics), `script.build {wait}` (deferred; fails with the
   first compiler errors), `script.reload`, `script.load {path}`, `script.init {example}`, `script.add {entity, class,

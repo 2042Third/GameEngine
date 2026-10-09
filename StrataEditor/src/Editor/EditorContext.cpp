@@ -375,14 +375,23 @@ namespace Strata
 				return fail(fmt::format("scene {} is invalid: {}", target.ToString(), error));
 		}
 
+		// The new scene continues the way play mode was going: paused (with the steps still to run) or running.
 		const SceneRuntimeMode mode = m_RuntimeScene->GetRuntimeMode();
+		const bool paused = m_RuntimeScene->IsPaused();
+		const uint32_t steps = m_RuntimeScene->GetStepFrames();
 		m_RuntimeScene->OnRuntimeStop();
 		m_RuntimeScene = std::move(next);
 		m_RuntimeSceneAsset = target;
 		m_RuntimeScene->OnRuntimeStart(mode);
+		if (paused)
+		{
+			m_RuntimeScene->SetPaused(true);
+			m_RuntimeScene->Step(steps);
+		}
 		PruneSelection(); // The selection named entities of the previous scene
 		return true;
 	}
+
 	void EditorContext::SetGameInputActive(bool active)
 	{
 		m_GameInputActive = active && m_SceneState == SceneState::Play;

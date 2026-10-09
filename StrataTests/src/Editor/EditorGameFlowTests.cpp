@@ -160,6 +160,26 @@ TEST_SUITE("Editor.GameFlow")
 		CHECK(context.GetActiveScene() == context.GetEditScene());
 	}
 
+	TEST_CASE("A scene switch keeps play mode paused, with the steps still to run")
+	{
+		GameFlowProject project(CreateTemporaryDirectory("EditorGameFlowPause") / "Flow");
+		EditorContext& context = project.Context;
+		project.Run("play.start");
+		project.Run("play.pause", { { "paused", true } });
+		project.Run("play.step", { { "frames", 3 } });
+		context.GetActiveScene()->RequestSceneLoad(project.LevelTwo);
+		project.Update(); // Runs one step, then the switch
+
+		const Ref<Scene> switched = context.GetActiveScene();
+		REQUIRE(switched->FindEntityByName("Boss").IsValid());
+		CHECK(context.IsPaused());
+		CHECK(switched->GetStepFrames() == 2);
+		for (int32_t frame = 0; frame < 3; frame++)
+			project.Update();
+		CHECK(switched->GetFrameIndex() == 2); // The two remaining steps, then nothing: still paused
+		CHECK(context.IsPaused());
+		project.Run("play.stop");
+	}
 	TEST_CASE("Exported games quit with an exit code and switch scenes when their scene asks")
 	{
 		const std::filesystem::path directory = CreateTemporaryDirectory("GameRuntimeFlow");
