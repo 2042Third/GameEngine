@@ -6,6 +6,7 @@
 #include "Strata/Audio/AudioClipAsset.h"
 #include "Strata/Audio/AudioEngine.h"
 #include "Strata/Audio/AudioSource.h"
+#include "Strata/Audio/AudioVoice.h"
 #include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Scene/Scene.h"
 
@@ -34,11 +35,6 @@ namespace Strata
 			return std::bit_cast<uint32_t>(a) == std::bit_cast<uint32_t>(b);
 		}
 
-		bool IsFinite(const glm::vec3& value)
-		{
-			return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
-		}
-
 		// Whether a weak and a shared pointer refer to the same object (also when the weak one expired since: a new object
 		// at the same address is not confused with it).
 		bool IsSameOwner(const std::weak_ptr<AssetManagerBase>& a, const Ref<AssetManagerBase>& b)
@@ -53,7 +49,7 @@ namespace Strata
 			if (!(elapsed > 0.0f))
 				return std::nullopt;
 			const glm::vec3 velocity = (current - previous) / elapsed;
-			if (!IsFinite(velocity) || glm::dot(velocity, velocity) > AudioSystem::c_MaxDopplerSpeed * AudioSystem::c_MaxDopplerSpeed)
+			if (!AudioUtils::IsFinite(velocity) || glm::dot(velocity, velocity) > AudioSystem::c_MaxDopplerSpeed * AudioSystem::c_MaxDopplerSpeed)
 				return std::nullopt;
 			return velocity;
 		}
@@ -62,7 +58,7 @@ namespace Strata
 		// grows without bound.
 		glm::vec3 LimitSpeed(const glm::vec3& velocity)
 		{
-			if (!IsFinite(velocity))
+			if (!AudioUtils::IsFinite(velocity))
 				return glm::vec3(0.0f);
 			const float speed = glm::length(velocity);
 			return speed > AudioSystem::c_MaxDopplerSpeed ? velocity * (AudioSystem::c_MaxDopplerSpeed / speed) : velocity;
@@ -316,7 +312,7 @@ namespace Strata
 
 	bool AudioSystem::PlayOneShotAt(AssetHandle clip, const glm::vec3& position, float volume, float pitch)
 	{
-		if (!IsFinite(position))
+		if (!AudioUtils::IsFinite(position))
 		{
 			ST_CORE_WARN("AudioSystem::PlayOneShotAt: ignoring non-finite position");
 			return false;
@@ -558,7 +554,7 @@ namespace Strata
 		if (!record.Applied.Spatial)
 			return;
 		const glm::vec3 position = glm::vec3(m_Scene.GetWorldTransform(entity)[3]);
-		if (IsFinite(position))
+		if (AudioUtils::IsFinite(position))
 			record.Source->SetPosition(position);
 	}
 
@@ -568,7 +564,7 @@ namespace Strata
 			return;
 
 		const glm::vec3 position = glm::vec3(m_Scene.GetWorldTransform(entity)[3]);
-		if (!IsFinite(position))
+		if (!AudioUtils::IsFinite(position))
 			return; // A degenerate transform keeps the last position
 		record.Source->SetPosition(position);
 		record.Source->SetVelocity(UpdateMotion(record.Motion, entity, position, timestep));
@@ -738,7 +734,7 @@ namespace Strata
 		const glm::vec3 up = glm::vec3(transform[1]);
 		const glm::vec3 right = glm::vec3(transform[0]);
 		// A degenerate transform (zero scale) has no orientation: the listener stays where it was.
-		if (!IsFinite(position) || !IsFinite(forward) || !IsFinite(up) || glm::dot(forward, forward) < c_MinDirectionLengthSquared || glm::dot(up, up) < c_MinDirectionLengthSquared)
+		if (!AudioUtils::IsFinite(position) || !AudioUtils::IsFinite(forward) || !AudioUtils::IsFinite(up) || glm::dot(forward, forward) < c_MinDirectionLengthSquared || glm::dot(up, up) < c_MinDirectionLengthSquared)
 			return;
 
 		if (listener != m_ListenerEntity)
