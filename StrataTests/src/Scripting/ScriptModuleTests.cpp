@@ -47,20 +47,6 @@ namespace
 		return text.find(part) != std::string::npos;
 	}
 
-	// Restores an environment variable read by the Malformed test module.
-	struct ScopedMalformedCase
-	{
-		explicit ScopedMalformedCase(const std::string& testCase)
-		{
-			Platform::SetEnvVar("STRATA_TEST_MALFORMED_CASE", testCase);
-		}
-
-		~ScopedMalformedCase()
-		{
-			Platform::SetEnvVar("STRATA_TEST_MALFORMED_CASE", "");
-		}
-	};
-
 }
 
 TEST_SUITE("Scripting.Module")
@@ -263,7 +249,7 @@ TEST_SUITE("Scripting.Module")
 		for (const char* testCase : cases)
 		{
 			INFO("Case ", testCase);
-			ScopedMalformedCase scopedCase(testCase);
+			ScopedEnvironmentVariable scopedCase("STRATA_TEST_MALFORMED_CASE", testCase);
 			ScriptEngine engine;
 			std::string error;
 			CHECK_FALSE(engine.LoadModule(GetTestScriptModule(STRATA_TEST_SCRIPTS_MALFORMED), &error));
@@ -294,7 +280,7 @@ TEST_SUITE("Scripting.Module")
 		// anything while the test runs; open calls are counted directly.
 		constexpr std::chrono::minutes c_WatchdogTimeout(10);
 		{
-			ScopedMalformedCase scopedCase("Throws");
+			ScopedEnvironmentVariable scopedCase("STRATA_TEST_MALFORMED_CASE", "Throws");
 			ScriptEngine engine;
 			engine.SetWatchdogTimeout(c_WatchdogTimeout);
 			std::string error;
@@ -305,7 +291,7 @@ TEST_SUITE("Scripting.Module")
 			CHECK(engine.GetWatchdogActiveCallCount() == 0);
 		}
 		{
-			ScopedMalformedCase scopedCase("ThrowsInCreate");
+			ScopedEnvironmentVariable scopedCase("STRATA_TEST_MALFORMED_CASE", "ThrowsInCreate");
 			ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_MALFORMED));
 			engine->SetWatchdogTimeout(c_WatchdogTimeout);
 			Scene scene;
@@ -340,7 +326,7 @@ TEST_SUITE("Scripting.Module")
 		// In a child process: a crash inside the platform's loader may leave it in an undefined state (see ScriptEngine).
 		auto run = [](const char* testCase)
 		{
-			ScopedMalformedCase scopedCase(testCase);
+			ScopedEnvironmentVariable scopedCase("STRATA_TEST_MALFORMED_CASE", testCase);
 			ProcessSpecification specification;
 			specification.Executable = GetTestExecutablePath();
 			specification.Arguments = { "--strata-test-helper=script-module-lifecycle", FileSystem::ToUTF8(GetTestScriptModule(STRATA_TEST_SCRIPTS_MALFORMED)),
@@ -394,13 +380,12 @@ TEST_SUITE("Scripting.Module")
 	TEST_CASE("abort() in a module's static initialization fails the load (Windows) or is reported (elsewhere)")
 	{
 		// In a child process; the LoadFault module aborts from a static object while the library loads.
-		REQUIRE(Platform::SetEnvVar("STRATA_TEST_LOADFAULT_ABORT", "1"));
+		ScopedEnvironmentVariable abortWhileLoading("STRATA_TEST_LOADFAULT_ABORT", "1");
 		ProcessSpecification specification;
 		specification.Executable = GetTestExecutablePath();
 		specification.Arguments = { "--strata-test-helper=script-module-lifecycle", FileSystem::ToUTF8(GetTestScriptModule(STRATA_TEST_SCRIPTS_LOADFAULT)),
 			FileSystem::ToUTF8(GetTestScriptModule(STRATA_TEST_SCRIPTS_API)) };
 		const Process::RunResult result = Process::Run(specification, std::chrono::milliseconds(60000));
-		REQUIRE(Platform::SetEnvVar("STRATA_TEST_LOADFAULT_ABORT", ""));
 		INFO("Output: ", result.Output);
 		REQUIRE(result.Started);
 		CHECK_FALSE(result.TimedOut);
@@ -432,7 +417,7 @@ TEST_SUITE("Scripting.Module")
 	{
 		// The module clears the functions in its class descriptors when the first instance is created; the engine keeps
 		// calling the ones it copied while loading (and never reads the descriptors outside the crash guard).
-		ScopedMalformedCase scopedCase("ChangesDescriptors");
+		ScopedEnvironmentVariable scopedCase("STRATA_TEST_MALFORMED_CASE", "ChangesDescriptors");
 		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_MALFORMED));
 		Scene scene;
 		Entity entity = scene.CreateEntity("Entity");

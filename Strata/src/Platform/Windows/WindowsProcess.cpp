@@ -46,34 +46,8 @@ namespace Strata
 			return result;
 		}
 
-		// Owns a kernel handle until it is released or the owner goes out of scope, so every early return of Start
-		// closes the pipe ends it created.
-		class ScopedHandle
-		{
-		public:
-			ScopedHandle() = default;
-			~ScopedHandle() { Reset(); }
-
-			ScopedHandle(const ScopedHandle&) = delete;
-			ScopedHandle& operator=(const ScopedHandle&) = delete;
-
-			HANDLE Get() const { return m_Handle; }
-			HANDLE* Receive()
-			{
-				Reset();
-				return &m_Handle;
-			}
-			HANDLE Release() { return std::exchange(m_Handle, nullptr); }
-			void Reset(HANDLE handle = nullptr)
-			{
-				if (m_Handle && m_Handle != INVALID_HANDLE_VALUE)
-					CloseHandle(m_Handle);
-				m_Handle = handle;
-			}
-			bool IsValid() const { return m_Handle && m_Handle != INVALID_HANDLE_VALUE; }
-		private:
-			HANDLE m_Handle = nullptr;
-		};
+		// Start owns the pipe ends it creates through scoped handles, so every early return closes them.
+		using WindowsUtils::ScopedHandle;
 
 		bool OpenNullDevice(ScopedHandle& handle, DWORD access, SECURITY_ATTRIBUTES* security, std::string& error)
 		{

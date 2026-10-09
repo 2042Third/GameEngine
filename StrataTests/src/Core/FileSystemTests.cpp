@@ -74,6 +74,21 @@ TEST_SUITE("Core.FileSystem")
 		CHECK(FileSystem::ReadText(path).value() == "unicode");
 	}
 
+	TEST_CASE("Trailing separators are removed, roots are kept")
+	{
+		using std::filesystem::path;
+		CHECK(FileSystem::RemoveTrailingSeparators(path("a/b/")) == path("a/b"));
+		CHECK(FileSystem::RemoveTrailingSeparators(path("a/b//")) == path("a/b"));
+		CHECK(FileSystem::RemoveTrailingSeparators(path("a/b")) == path("a/b"));
+		CHECK(FileSystem::RemoveTrailingSeparators(path("a/")) == path("a"));
+		CHECK(FileSystem::RemoveTrailingSeparators(path("/")) == path("/"));
+		CHECK(FileSystem::RemoveTrailingSeparators(path()).empty());
+#if defined(ST_PLATFORM_WINDOWS)
+		CHECK(FileSystem::RemoveTrailingSeparators(path(L"C:\\Data\\")) == path(L"C:\\Data"));
+		CHECK(FileSystem::RemoveTrailingSeparators(path(L"C:\\")) == path(L"C:\\"));
+#endif
+	}
+
 	TEST_CASE("Relative paths, containment and unique names")
 	{
 		const std::filesystem::path base = FileSystem::FromUTF8("/project/Assets");
