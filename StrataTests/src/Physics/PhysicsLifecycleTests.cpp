@@ -501,6 +501,103 @@ TEST_SUITE("Physics.Lifecycle")
 		CHECK(std::abs(GetWorldPosition(scene, flat).y - 0.5f) < 0.03f);
 	}
 
+	TEST_CASE("Rebuilding a body in a full world keeps the body and its motion")
+	{
+		PhysicsSettings settings;
+		settings.MaxBodies = 2;
+		ScopedPhysicsSettings scopedSettings(settings);
+
+		Scene scene;
+		scene.GetSettings().Gravity = glm::vec3(0.0f);
+		Entity mover = CreateDynamicBox(scene, "Mover", glm::vec3(0.0f));
+		mover.GetComponent<RigidBodyComponent>().LinearDamping = 0.0f;
+		Entity other = CreateDynamicBox(scene, "Other", glm::vec3(0.0f, 10.0f, 0.0f));
+
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		REQUIRE(physics.GetStats().BodyCount == 2);
+		CHECK(physics.SetLinearVelocity(mover, glm::vec3(1.0f, 0.0f, 0.0f)));
+		CHECK(physics.SetAngularVelocity(mover, glm::vec3(0.0f, 0.5f, 0.0f)));
+		StepScene(scene, 30);
+		const glm::vec3 angularVelocity = physics.GetAngularVelocity(mover);
+
+		// Rebuilds need a second body while the world is full: the old one makes room instead of being lost.
+		const uint64_t logStart = Log::GetBuffer().GetLatestSequence();
+		mover.GetComponent<RigidBodyComponent>().Friction = 0.25f;
+		mover.MarkModified<RigidBodyComponent>();
+		CHECK(physics.HasBody(mover));
+		CHECK(physics.GetLinearVelocity(mover).x == doctest::Approx(1.0f));
+		CHECK(Math::IsNearlyEqual(physics.GetAngularVelocity(mover), angularVelocity, 1.0e-5f));
+		mover.GetComponent<BoxColliderComponent>().HalfExtents = glm::vec3(0.25f);
+		mover.MarkModified<BoxColliderComponent>();
+		CHECK(physics.HasBody(mover));
+		CHECK(physics.GetLinearVelocity(mover).x == doctest::Approx(1.0f));
+		CHECK(physics.GetStats().BodyCount == 2);
+		CHECK(physics.GetStats().PendingBodyCount == 0);
+		CHECK(CountLogMessages(logStart, "limit of 2 bodies") == 0);
+
+		const float x = GetWorldPosition(scene, mover).x;
+		StepScene(scene, 30);
+		CHECK(GetWorldPosition(scene, mover).x == doctest::Approx(x + 0.5f).epsilon(0.01));
+		// The new, smaller box (spinning about Y, so its top stays level).
+		std::optional<RaycastHit> hit = physics.Raycast(GetWorldPosition(scene, mover) + glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), 10.0f);
+		REQUIRE(hit);
+		CHECK(hit->HitEntity == mover);
+		CHECK(hit->Distance == doctest::Approx(4.75f).epsilon(1.0e-3));
+
+		// New bodies wait for a free slot.
+		Entity late = CreateDynamicBox(scene, "Late", glm::vec3(0.0f, -10.0f, 0.0f));
+		CHECK_FALSE(physics.HasBody(late));
+		CHECK(physics.GetStats().PendingBodyCount == 1);
+		CHECK(CountLogMessages(logStart, "'Late': the world's limit of 2 bodies is reached") == 1);
+		scene.DestroyEntity(other);
+		StepScene(scene, 1);
+		CHECK(physics.HasBody(late));
+		CHECK(physics.HasBody(mover));
+	}
+
+	TEST_CASE("A dynamic body whose mesh is briefly unavailable resumes its motion")
+	{
+		Ref<PhysicsMeshData> cube = CreateRef<PhysicsMeshData>();
+		for (int index = 0; index < 8; index++)
+			cube->Positions.emplace_back((index & 1) ? 0.5f : -0.5f, (index & 2) ? 0.5f : -0.5f, (index & 4) ? 0.5f : -0.5f);
+		const AssetHandle firstMesh = UUID(0x6001);
+		const AssetHandle secondMesh = UUID(0x6002);
+		bool secondLoaded = false;
+		ScopedMeshProvider provider([&](AssetHandle mesh) -> Ref<const PhysicsMeshData>
+		{
+			return mesh == firstMesh || (mesh == secondMesh && secondLoaded) ? cube : nullptr;
+		});
+
+		Scene scene;
+		scene.GetSettings().Gravity = glm::vec3(0.0f);
+		Entity rock = scene.CreateEntity("Rock");
+		rock.AddComponent<RigidBodyComponent>().LinearDamping = 0.0f;
+		rock.AddComponent<MeshColliderComponent>().Mesh = firstMesh;
+
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		REQUIRE(physics.HasBody(rock));
+		CHECK(physics.SetLinearVelocity(rock, glm::vec3(0.0f, 0.0f, 2.0f)));
+		StepScene(scene, 30);
+
+		// Switched to a mesh that is still loading: the body waits outside the simulation.
+		rock.GetComponent<MeshColliderComponent>().Mesh = secondMesh;
+		rock.MarkModified<MeshColliderComponent>();
+		CHECK_FALSE(physics.HasBody(rock));
+		const float z = GetWorldPosition(scene, rock).z;
+		CHECK(z == doctest::Approx(1.0f).epsilon(0.01));
+		StepScene(scene, 10);
+		CHECK(GetWorldPosition(scene, rock).z == doctest::Approx(z));
+
+		secondLoaded = true;
+		StepScene(scene, 1);
+		REQUIRE(physics.HasBody(rock));
+		CHECK(physics.GetLinearVelocity(rock).z == doctest::Approx(2.0f));
+		StepScene(scene, 29);
+		CHECK(GetWorldPosition(scene, rock).z == doctest::Approx(z + 1.0f).epsilon(0.01));
+	}
+
 	TEST_CASE("A body whose transform becomes degenerate leaves the simulation without restoring its scale")
 	{
 		Scene scene;

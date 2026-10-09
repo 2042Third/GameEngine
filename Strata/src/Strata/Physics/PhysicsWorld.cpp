@@ -780,21 +780,27 @@ namespace Strata
 				data.JoltSystem->GetBodyInterface().ActivateBodies(bodies.data(), static_cast<int>(bodies.size()));
 		}
 
+		// Keeps the motion of a dynamic body that leaves the simulation (Jolt clears it on removal) so that it resumes when
+		// the body is back, also when the body is rebuilt in between.
+		void SaveVelocities(PhysicsWorldData& data, BodyRecord& record)
+		{
+			if (!record.HasBody() || !record.InSimulation || record.Type != RigidBodyType::Dynamic)
+				return;
+
+			JPH::Vec3 linearVelocity;
+			JPH::Vec3 angularVelocity;
+			data.JoltSystem->GetBodyInterface().GetLinearAndAngularVelocity(record.BodyID, linearVelocity, angularVelocity);
+			record.SavedLinearVelocity = ToGlm(linearVelocity);
+			record.SavedAngularVelocity = ToGlm(angularVelocity);
+		}
+
 		void RemoveFromSimulation(PhysicsWorldData& data, BodyRecord& record)
 		{
 			if (!record.InSimulation)
 				return;
 
+			SaveVelocities(data, record);
 			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
-			if (record.Type == RigidBodyType::Dynamic)
-			{
-				JPH::Vec3 linearVelocity;
-				JPH::Vec3 angularVelocity;
-				bodies.GetLinearAndAngularVelocity(record.BodyID, linearVelocity, angularVelocity);
-				record.SavedLinearVelocity = ToGlm(linearVelocity);
-				record.SavedAngularVelocity = ToGlm(angularVelocity);
-			}
-
 			WakeBodiesAround(data, record.BodyID);
 			bodies.RemoveBody(record.BodyID);
 			record.InSimulation = false;
@@ -1284,9 +1290,16 @@ namespace Strata
 			record.MergedEntities = std::move(merged);
 		}
 
-		// Marks a record as unable to have a body for now; the old body (if any) is destroyed and its contacts end.
+		// Marks a record as unable to have a body for now; the old body (if any) is destroyed and its contacts end. A dynamic
+		// body keeps its motion for when it can be built again. Expects record.Type to be the type the body is built with.
 		void SetBuildFailure(PhysicsWorldData& data, entt::entity handle, BodyRecord& record, BuildFailure failure, const glm::mat4& worldTransform)
 		{
+			SaveVelocities(data, record);
+			if (record.Type != RigidBodyType::Dynamic)
+			{
+				record.SavedLinearVelocity = glm::vec3(0.0f);
+				record.SavedAngularVelocity = glm::vec3(0.0f);
+			}
 			DestroyJoltBody(data, record);
 			record.Failure = failure;
 			record.LastWorldTransform = worldTransform;
@@ -1390,12 +1403,13 @@ namespace Strata
 				return;
 			}
 
-			// A dynamic body rebuilt because a property changed keeps moving as before.
+			// A dynamic body rebuilt because a property changed keeps moving as before; one that was out of the simulation (or
+			// had no body after a failed build) resumes the motion it had.
 			glm::vec3 linearVelocity(0.0f);
 			glm::vec3 angularVelocity(0.0f);
-			if (record.HasBody() && record.Type == RigidBodyType::Dynamic)
+			if (type == RigidBodyType::Dynamic)
 			{
-				if (record.InSimulation)
+				if (record.HasBody() && record.InSimulation)
 				{
 					JPH::Vec3 currentLinear;
 					JPH::Vec3 currentAngular;
@@ -1412,10 +1426,19 @@ namespace Strata
 
 			const JPH::BodyCreationSettings settings = MakeBodySettings(data, entity, rigidBody, type, shape.GetPtr(), position, rotation);
 			JPH::Body* body = bodies.CreateBody(settings);
+			if (!body && record.HasBody())
+			{
+				// The world is full: free the old body's slot for its replacement instead of losing the body (its motion
+				// was read above, and its contacts carry over like in any rebuild).
+				DestroyJoltBody(data, record);
+				body = bodies.CreateBody(settings);
+			}
 			if (!body)
 			{
 				if (ShouldWarn(data, record.EntityID, PhysicsWarning::BodyLimit))
 					ST_CORE_ERROR("Physics: cannot create a body for '{}': the world's limit of {} bodies is reached", entity.GetName(), data.Settings.MaxBodies);
+				record.SavedLinearVelocity = linearVelocity;
+				record.SavedAngularVelocity = angularVelocity;
 				SetBuildFailure(data, handle, record, BuildFailure::BodyLimit, worldTransform);
 				return;
 			}
