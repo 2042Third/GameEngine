@@ -3057,6 +3057,16 @@ namespace Strata
 		return true;
 	}
 
+	bool PhysicsWorld::AddAngularImpulse(Entity entity, const glm::vec3& impulse)
+	{
+		const BodyRecord* record = FindDynamicRecord(*m_Data, entity);
+		if (!record || !IsFinite(impulse))
+			return false;
+
+		m_Data->JoltSystem->GetBodyInterface().AddAngularImpulse(record->BodyID, ToJolt(impulse));
+		return true;
+	}
+
 	bool PhysicsWorld::SetGravityScale(Entity entity, float gravityScale)
 	{
 		const BodyRecord* record = FindSimulatedRecord(*m_Data, entity);

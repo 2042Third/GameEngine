@@ -95,6 +95,7 @@ namespace Strata
 		bool AddImpulse(Entity entity, const glm::vec3& impulse);
 		bool AddImpulseAtPosition(Entity entity, const glm::vec3& impulse, const glm::vec3& worldPosition);
 		bool AddTorque(Entity entity, const glm::vec3& torque);
+		bool AddAngularImpulse(Entity entity, const glm::vec3& impulse);
 		bool SetGravityScale(Entity entity, float gravityScale);
 		bool IsSleeping(Entity entity);
 		bool WakeUp(Entity entity);

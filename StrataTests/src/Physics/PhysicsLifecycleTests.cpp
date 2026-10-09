@@ -320,6 +320,7 @@ TEST_SUITE("Physics.Lifecycle")
 			CHECK_FALSE(physics.AddImpulse(entity, one));
 			CHECK_FALSE(physics.AddImpulseAtPosition(entity, one, one));
 			CHECK_FALSE(physics.AddTorque(entity, one));
+			CHECK_FALSE(physics.AddAngularImpulse(entity, one));
 			CHECK_FALSE(physics.SetGravityScale(entity, 0.0f));
 			CHECK_FALSE(physics.IsSleeping(entity));
 			CHECK_FALSE(physics.WakeUp(entity));
@@ -330,6 +331,7 @@ TEST_SUITE("Physics.Lifecycle")
 		CHECK(physics.HasBody(wall));
 		CHECK_FALSE(physics.SetLinearVelocity(wall, one));
 		CHECK_FALSE(physics.AddForce(wall, one));
+		CHECK_FALSE(physics.AddAngularImpulse(wall, one));
 		CHECK_FALSE(physics.IsSleeping(wall));
 		CHECK_FALSE(physics.WakeUp(wall));
 		CHECK(physics.GetLinearVelocity(wall) == glm::vec3(0.0f));
