@@ -746,6 +746,8 @@ namespace Strata
 		std::unordered_map<UUID, std::vector<PairKey>> EntityPairs;   // Touching pairs of each entity
 		std::vector<UUID> RecheckedEntities;                          // Built or rebuilt since the last step: their pairs are checked
 		std::set<entt::entity> MeshBodies;                            // Records with MeshSources (ordered: deterministic rebuilds)
+		std::set<entt::entity> WaitingMeshBodies;                     // Records with a MeshSource that waits for data or cooking
+		std::unordered_map<AssetHandle, std::vector<entt::entity>> MeshUsers; // Mesh -> records whose MeshSources use it
 		// The mesh provider and cook state that the MeshSources of the records were last checked against.
 		uint64_t SeenMeshProviderGeneration = 0;
 		uint64_t SeenMeshProviderVersion = 0;
@@ -762,10 +764,13 @@ namespace Strata
 		uint32_t LastCheckedPairs = 0;
 		uint32_t LastWrittenBodies = 0;
 		uint64_t BuildCount = 0;
+		uint64_t MeshCheckCount = 0;
 
 		// Scratch buffers reused by every step, so that steps allocate nothing once they have grown.
 		std::vector<entt::entity> SyncCandidates;
 		std::vector<entt::entity> SyncFollowers;                      // See MarkMovedDescendants
+		std::vector<entt::entity> MeshChecks;                         // See RefreshMeshBodies
+		std::vector<AssetHandle> ChangedMeshes;
 		std::vector<PairKey> CheckedPairs;
 		std::vector<ContactReport> Reports;
 		std::vector<TouchingPair> EndedPairs;
@@ -1124,6 +1129,8 @@ namespace Strata
 			data.PolledBodies.clear();
 			data.RecheckedEntities.clear();
 			data.MeshBodies.clear();
+			data.WaitingMeshBodies.clear();
+			data.MeshUsers.clear();
 			data.BodyEntities.clear();
 			data.TouchingPairs.clear();
 			data.EntityPairs.clear();
@@ -1440,6 +1447,40 @@ namespace Strata
 		// Bodies of entities
 		//////////////////////////////////////////////////////////////////////////
 
+		// Records the meshes a body's colliders use, indexed so that changes of a mesh only check the bodies using it (see
+		// RefreshMeshBodies).
+		void SetMeshSources(PhysicsWorldData& data, entt::entity handle, BodyRecord& record, std::vector<MeshSource> sources)
+		{
+			for (const MeshSource& source : record.MeshSources)
+			{
+				auto users = data.MeshUsers.find(source.Mesh);
+				if (users == data.MeshUsers.end())
+					continue;
+				std::erase(users->second, handle);
+				if (users->second.empty())
+					data.MeshUsers.erase(users);
+			}
+
+			record.MeshSources = std::move(sources);
+			bool waiting = false;
+			for (const MeshSource& source : record.MeshSources)
+			{
+				std::vector<entt::entity>& users = data.MeshUsers[source.Mesh];
+				if (std::find(users.begin(), users.end(), handle) == users.end())
+					users.push_back(handle);
+				waiting |= source.Waiting;
+			}
+
+			if (record.MeshSources.empty())
+				data.MeshBodies.erase(handle);
+			else
+				data.MeshBodies.insert(handle);
+			if (waiting)
+				data.WaitingMeshBodies.insert(handle);
+			else
+				data.WaitingMeshBodies.erase(handle);
+		}
+
 		// Removes the record of an entity that no longer owns a body. Its contacts end, and the colliders that were merged into
 		// it are re-evaluated (they belong to another body now, or to none).
 		void DestroyRecord(PhysicsWorldData& data, entt::entity handle)
@@ -1461,7 +1502,7 @@ namespace Strata
 			}
 
 			const UUID entityID = record.EntityID;
-			data.MeshBodies.erase(handle);
+			SetMeshSources(data, handle, record, {});
 			data.Bodies.erase(it); // A PolledBodies entry is dropped by the next step
 			EndContactsOf(data, entityID);
 		}
@@ -1586,11 +1627,7 @@ namespace Strata
 			}
 
 			record.Type = type;
-			record.MeshSources = std::move(build.MeshSources);
-			if (record.MeshSources.empty())
-				data.MeshBodies.erase(handle);
-			else
-				data.MeshBodies.insert(handle);
+			SetMeshSources(data, handle, record, std::move(build.MeshSources));
 
 			const JPH::RefConst<JPH::Shape> shape = CombineParts(data, entity, build.Parts);
 			if (!shape)
@@ -2001,31 +2038,63 @@ namespace Strata
 			data.SeenCompletedCooks = PhysicsMeshShapes::GetCompletedCount();
 		}
 
-		// Rebuilds the bodies whose mesh data changed (hot reload), arrived, or finished cooking. Mesh data is only asked for
-		// again when the provider reports a change or a cook finished, so steps without such changes cost nothing. The state
-		// is read before the meshes, so a change that happens meanwhile is noticed at the next step.
+		// Rebuilds the bodies whose mesh data changed (hot reload), arrived, or finished cooking. Only the bodies that use a
+		// mesh the provider reports as changed (all of them if it cannot tell) and, when a cook finished, the bodies waiting for
+		// one are checked, so steps without such changes cost nothing and unrelated asset changes (texture streaming) do not
+		// visit mesh colliders. The state is read before the meshes, so a change that happens meanwhile is noticed at the next
+		// step.
 		void RefreshMeshBodies(PhysicsWorldData& data)
 		{
 			const uint64_t generation = GetMeshProviderStorage().Generation;
 			PhysicsMeshProvider& provider = GetActiveMeshProvider();
 			const uint64_t version = provider.GetVersion();
 			const uint64_t completedCooks = PhysicsMeshShapes::GetCompletedCount();
-			if (generation == data.SeenMeshProviderGeneration && version == data.SeenMeshProviderVersion && completedCooks == data.SeenCompletedCooks)
+			const bool providerChanged = generation != data.SeenMeshProviderGeneration || version != data.SeenMeshProviderVersion;
+			const bool cooksFinished = completedCooks != data.SeenCompletedCooks;
+			if (!providerChanged && !cooksFinished)
 				return;
+
+			std::vector<entt::entity>& checks = data.MeshChecks;
+			checks.clear();
+			if (providerChanged)
+			{
+				std::vector<AssetHandle>& changedMeshes = data.ChangedMeshes;
+				changedMeshes.clear();
+				if (generation == data.SeenMeshProviderGeneration && provider.GetChangedMeshes(data.SeenMeshProviderVersion, changedMeshes))
+				{
+					for (AssetHandle mesh : changedMeshes)
+					{
+						auto users = data.MeshUsers.find(mesh);
+						if (users != data.MeshUsers.end())
+							checks.insert(checks.end(), users->second.begin(), users->second.end());
+					}
+				}
+				else
+				{
+					checks.assign(data.MeshBodies.begin(), data.MeshBodies.end());
+				}
+			}
+			if (cooksFinished)
+				checks.insert(checks.end(), data.WaitingMeshBodies.begin(), data.WaitingMeshBodies.end());
 			data.SeenMeshProviderGeneration = generation;
 			data.SeenMeshProviderVersion = version;
 			data.SeenCompletedCooks = completedCooks;
 
-			for (entt::entity handle : data.MeshBodies)
+			// In a fixed order: rebuilds happen in the order they are recorded.
+			std::sort(checks.begin(), checks.end());
+			checks.erase(std::unique(checks.begin(), checks.end()), checks.end());
+			for (entt::entity handle : checks)
 			{
 				const BodyRecord* record = FindRecord(data, handle);
 				if (!record)
 					continue;
 
+				data.MeshCheckCount++;
 				const bool changed = std::any_of(record->MeshSources.begin(), record->MeshSources.end(), [&](const MeshSource& source)
 				{
-					// Data that went away (an unloaded mesh) leaves the body as it is.
-					const Ref<const PhysicsMeshData> current = provider.GetMeshData(source.Mesh);
+					// A collider waiting for its mesh wants it loaded; the meshes of built colliders are only looked at, so that
+					// a mesh unloaded on purpose is not loaded again. Data that went away leaves the body as it is.
+					const Ref<const PhysicsMeshData> current = source.Waiting ? provider.GetMeshData(source.Mesh) : provider.PeekMeshData(source.Mesh);
 					if (!current)
 						return false;
 					if (current != source.Data.lock())
@@ -3110,6 +3179,7 @@ namespace Strata
 		stats.CheckedPairCount = data.LastCheckedPairs;
 		stats.WrittenBodyCount = data.LastWrittenBodies;
 		stats.BuildCount = data.BuildCount;
+		stats.MeshCheckCount = data.MeshCheckCount;
 		stats.StepCount = data.StepCount;
 		stats.JobCount = data.JobCounters.Jobs.load(std::memory_order_relaxed);
 		stats.WorkerJobCount = data.JobCounters.WorkerJobs.load(std::memory_order_relaxed);

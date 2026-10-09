@@ -8,6 +8,7 @@
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Physics/AssetMeshProvider.h"
 #include "Strata/Physics/PhysicsMeshShapes.h"
+#include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/Mesh.h"
 #include "TestHelpers.h"
 
@@ -236,6 +237,78 @@ TEST_SUITE("Physics.AssetMeshes")
 		CHECK(hit->HitEntity == floor);
 		StepScene(scene, 30);
 		CHECK(std::abs(GetWorldPosition(scene, crate).y - 0.5f) < 0.03f);
+	}
+
+	TEST_CASE("Mesh changes are checked only for the colliders using the changed meshes")
+	{
+		FloorProject project(5.0f);
+		ScopedActiveAssetManager active(project.Manager);
+
+		Scene scene;
+		Entity floor = scene.CreateEntity("Floor");
+		MeshColliderComponent& floorCollider = floor.AddComponent<MeshColliderComponent>();
+		floorCollider.Mesh = project.FloorMesh;
+		floorCollider.Convex = false;
+		for (int index = 0; index < 20; index++)
+		{
+			Entity block = scene.CreateEntity("Block");
+			block.GetTransform().Translation = glm::vec3(20.0f + 2.0f * static_cast<float>(index), 0.5f, 0.0f);
+			block.AddComponent<MeshColliderComponent>().Mesh = BuiltinAssets::CubeMesh;
+		}
+
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		REQUIRE(project.Manager->WaitForPendingLoads());
+		StepScene(scene, 2);
+		REQUIRE(physics.HasBody(floor));
+		uint64_t checks = physics.GetStats().MeshCheckCount;
+		const auto floorHitAt = [&](float x)
+		{
+			std::optional<RaycastHit> hit = physics.Raycast(glm::vec3(x, 5.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), 10.0f);
+			return hit && hit->HitEntity == floor;
+		};
+
+		// Other asset changes (e.g. textures streaming in) check no mesh collider.
+		for (int index = 0; index < 10; index++)
+		{
+			AssetMetadata metadata;
+			metadata.Name = "Runtime";
+			project.Manager->AddMemoryAsset(Material::Create(), metadata);
+			StepScene(scene, 1);
+		}
+		CHECK(physics.GetStats().MeshCheckCount == checks);
+
+		// A reloaded mesh checks, and rebuilds, only the collider using it.
+		const uint64_t builds = physics.GetStats().BuildCount;
+		CHECK_FALSE(floorHitAt(7.0f));
+		project.WriteFloor(10.0f);
+		REQUIRE(project.Manager->ReimportAsset(project.Model));
+		REQUIRE(project.Manager->WaitForPendingLoads());
+		StepScene(scene, 1);
+		CHECK(physics.GetStats().MeshCheckCount == checks + 1);
+		CHECK(physics.GetStats().BuildCount == builds + 1);
+		CHECK(floorHitAt(7.0f));
+
+		// Cooks finishing for another world check nothing here.
+		checks = physics.GetStats().MeshCheckCount;
+		{
+			Scene other;
+			Entity ball = other.CreateEntity("Ball");
+			MeshColliderComponent& ballCollider = ball.AddComponent<MeshColliderComponent>();
+			ballCollider.Mesh = BuiltinAssets::SphereMesh;
+			ballCollider.Convex = false;
+			other.OnRuntimeStart();
+			CHECK(GetPhysics(other).HasBody(ball));
+		}
+		StepScene(scene, 1);
+		CHECK(physics.GetStats().MeshCheckCount == checks);
+
+		// A mesh unloaded on purpose is not loaded again, and its collider keeps its shape.
+		project.Manager->UnloadAsset(project.FloorMesh);
+		StepScene(scene, 1);
+		CHECK(project.Manager->GetAssetState(project.FloorMesh) == AssetState::Unloaded);
+		CHECK(physics.HasBody(floor));
+		CHECK(floorHitAt(7.0f));
 	}
 
 	TEST_CASE("Cooked mesh shapes are reused by later worlds and dropped with their data")

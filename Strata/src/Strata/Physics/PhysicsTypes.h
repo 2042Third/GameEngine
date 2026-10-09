@@ -120,6 +120,7 @@ namespace Strata
 		uint32_t CheckedPairCount = 0;   // Touching pairs that could end during the step (those of awake or rebuilt bodies)
 		uint32_t WrittenBodyCount = 0;   // Dynamic bodies whose pose was written back to their entity
 		uint64_t BuildCount = 0;         // Bodies built or rebuilt since the world was created (attempts that failed included)
+		uint64_t MeshCheckCount = 0;     // Mesh collider bodies checked for changed, arrived or cooked mesh data since then
 		uint64_t StepCount = 0;          // Simulation steps since the world was created
 		uint64_t JobCount = 0;           // Simulation jobs run since the world was created, on any thread
 		uint64_t WorkerJobCount = 0;     // The part of JobCount run by JobSystem worker threads (depends on thread timing)
@@ -145,9 +146,16 @@ namespace Strata
 		// cached process-wide per data object (for as long as the object lives, so that worlds created later reuse them),
 		// and colliders are rebuilt when a mesh's data object changes (hot reload).
 		virtual Ref<const PhysicsMeshData> GetMeshData(AssetHandle mesh) = 0;
+		// Like GetMeshData, but never starts loading a mesh: physics uses it to check whether the meshes of built colliders
+		// changed, so that a mesh unloaded on purpose is not loaded again (the colliders keep their shape).
+		virtual Ref<const PhysicsMeshData> PeekMeshData(AssetHandle mesh) { return GetMeshData(mesh); }
 		// Changes whenever GetMeshData may return a different result than before for some mesh (data that finished
 		// loading, was reloaded or was dropped). Physics asks for mesh data again only when it changes.
 		virtual uint64_t GetVersion() = 0;
+		// Appends the meshes for which GetMeshData may return a different result than when GetVersion returned `version`
+		// (other handles may be included), so that physics checks only the colliders using them. Returns false if the
+		// provider cannot tell; then physics checks every mesh collider.
+		virtual bool GetChangedMeshes([[maybe_unused]] uint64_t version, [[maybe_unused]] std::vector<AssetHandle>& outMeshes) { return false; }
 	};
 
 }
