@@ -46,6 +46,44 @@ namespace
 		return *audio;
 	}
 
+	// Registers a scene system for the lifetime of the object (also when a test fails early).
+	struct ScopedSceneSystemRegistration
+	{
+		explicit ScopedSceneSystemRegistration(SceneSystemDescriptor descriptor)
+			: Name(descriptor.Name)
+		{
+			SceneSystemRegistry::Register(std::move(descriptor));
+		}
+
+		~ScopedSceneSystemRegistration()
+		{
+			SceneSystemRegistry::Unregister(Name);
+		}
+
+		ScopedSceneSystemRegistration(const ScopedSceneSystemRegistration&) = delete;
+		ScopedSceneSystemRegistration& operator=(const ScopedSceneSystemRegistration&) = delete;
+
+		std::string Name;
+	};
+
+	// Moves "Mover" along +Z at Speed on every fixed step, like a script's OnFixedUpdate.
+	struct FixedMoverSystem : public SceneSystem
+	{
+		explicit FixedMoverSystem(Scene& scene)
+			: TargetScene(scene)
+		{
+		}
+
+		void OnFixedUpdate(float timestep) override
+		{
+			if (Entity mover = TargetScene.FindEntityByName("Mover"))
+				mover.GetTransform().Translation.z += Speed * timestep;
+		}
+
+		Scene& TargetScene;
+		static inline float Speed = 0.0f;
+	};
+
 	// Destroys "Doomed" during its update, so the entity is pending destruction for the rest of the frame.
 	struct DoomingSystem : public SceneSystem
 	{
@@ -398,13 +436,16 @@ TEST_SUITE("Audio.System")
 		StepScene(scene, 1);
 		CHECK(MeasureRms(0) > MeasureRms(1) * 1.5f);
 
-		// Velocities come from the distance moved in the last frame; teleports have none.
+		// Velocities come from the moves (smoothed); an entity that stops has none, and teleports have none.
 		const float timestep = scene.GetSettings().FixedTimestep;
-		entity.GetTransform().Translation = glm::vec3(5.0f, 0.0f, -17.0f);
-		StepScene(scene, 1);
-		CHECK(source->GetVelocity().z == doctest::Approx(1.0f / timestep));
+		for (int frame = 0; frame < 60; frame++)
+		{
+			entity.GetTransform().Translation.z += 1.0f;
+			StepScene(scene, 1);
+		}
+		CHECK(source->GetVelocity().z == doctest::Approx(1.0f / timestep).epsilon(0.01));
 		CHECK(source->GetVelocity().x == 0.0f);
-		StepScene(scene, 1);
+		StepScene(scene, 3); // Longer than two fixed steps without a move
 		CHECK(source->GetVelocity() == glm::vec3(0.0f));
 		listener.GetTransform().Translation = glm::vec3(0.0f, 1.0f, -18.0f);
 		entity.GetTransform().Translation = glm::vec3(1000.0f, 0.0f, 0.0f);
@@ -423,6 +464,59 @@ TEST_SUITE("Audio.System")
 		parent.GetTransform().Translation = glm::vec3(20.0f, 0.0f, 0.0f);
 		StepScene(scene, 1);
 		CHECK(source->GetPosition() == glm::vec3(1010.0f, 0.0f, 0.0f));
+	}
+
+	TEST_CASE("Doppler velocities stay steady when frames and fixed steps differ")
+	{
+		ScopedAudioEngine engine;
+		REQUIRE(engine.Initialized);
+		AudioProject project;
+		const AssetHandle clip = project.AddClip(1.0f);
+		ScopedSceneSystemRegistration moverSystem({ "TestFixedMover", false, [](Scene& scene) { return CreateScope<FixedMoverSystem>(scene); } });
+
+		Scene scene;
+		REQUIRE(scene.GetSettings().FixedTimestep == doctest::Approx(1.0f / 60.0f));
+		Entity mover = CreateSource(scene, "Mover", clip);
+		mover.GetComponent<AudioSourceComponent>().Spatial = true;
+		Entity box = CreateDynamicBox(scene, "Box", glm::vec3(10.0f, 100.0f, 0.0f));
+		box.AddComponent<AudioSourceComponent>().Clip = clip;
+		Entity attached = scene.CreateChildEntity(box, "Attached");
+		attached.GetTransform().Translation = glm::vec3(1.0f, 0.0f, 0.0f);
+		attached.AddComponent<AudioSourceComponent>().Clip = clip;
+
+		scene.OnRuntimeStart();
+		AudioSystem& audio = GetAudio(scene);
+		PhysicsSystem& physics = GetPhysics(scene);
+		REQUIRE(physics.SetAngularVelocity(box, glm::vec3(0.0f, 2.0f, 0.0f)));
+		const AudioSource* moverSource = audio.GetAudioSource(mover);
+		REQUIRE(moverSource);
+
+		// At 144 frames per second the mover moves on two or three frames out of five; its velocity still holds steady.
+		const float frameTime = 1.0f / 144.0f;
+		for (const float speed : { 30.0f, 70.0f })
+		{
+			FixedMoverSystem::Speed = speed;
+			for (int frame = 0; frame < 144; frame++)
+			{
+				scene.OnUpdateRuntime(frameTime);
+				if (frame >= 72)
+					CHECK(std::abs(moverSource->GetVelocity().z - speed) < speed * 0.05f);
+			}
+		}
+
+		// Rigid bodies, and entities below them, use the simulated velocity.
+		const glm::vec3 boxVelocity = physics.GetLinearVelocity(box);
+		CHECK(boxVelocity.y < -10.0f);
+		CHECK(glm::length(audio.GetAudioSource(box)->GetVelocity() - boxVelocity) < 1e-4f);
+		const glm::vec3 attachedVelocity = boxVelocity + glm::cross(physics.GetAngularVelocity(box), GetWorldPosition(scene, attached) - GetWorldPosition(scene, box));
+		CHECK(glm::length(audio.GetAudioSource(attached)->GetVelocity() - attachedVelocity) < 1e-3f);
+		CHECK(glm::length(attachedVelocity - boxVelocity) > 1.0f);
+
+		// A mover that stops has no velocity within two fixed steps.
+		FixedMoverSystem::Speed = 0.0f;
+		for (int frame = 0; frame < 8; frame++)
+			scene.OnUpdateRuntime(frameTime);
+		CHECK(moverSource->GetVelocity() == glm::vec3(0.0f));
 	}
 
 	TEST_CASE("Level listeners keep +Y as their up vector; rolled and vertical ones pass their own")

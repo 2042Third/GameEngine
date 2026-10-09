@@ -21,6 +21,7 @@ namespace Strata
 	class AssetManagerBase;
 	class AudioClip;
 	class AudioSource;
+	class PhysicsSystem;
 	class Scene;
 
 	struct AudioSystemStats
@@ -46,12 +47,15 @@ namespace Strata
 	// Changes: component values are compared every frame (and before each gameplay call on the entity) with the values
 	// last applied, so field writes, ComponentAccess and the inspector all apply without a signal. Changing the clip stops
 	// the source (Play starts the new clip). Spatial sources take their position from the entity's world transform every
-	// frame and their velocity (for the Doppler effect) from the distance moved since the last frame; moves faster than
-	// c_MaxDopplerSpeed count as teleports and leave the velocity at zero.
+	// frame. Their velocity (for the Doppler effect) is that of the rigid body they belong to (the entity's own body or an
+	// ancestor's, including its rotation), limited to c_MaxDopplerSpeed. Other entities get it from their moves: the
+	// distance moved over the time since the position last changed, smoothed over c_VelocitySmoothingTime, so transforms
+	// that change only on fixed steps give a steady velocity at any frame rate; moves faster than c_MaxDopplerSpeed count
+	// as teleports (no velocity), and an entity that has not moved for two fixed steps has stopped.
 	//
 	// Listener: the first active AudioListenerComponent (Active set, entity active) in hierarchy order, or else the
 	// primary camera; without either, the listener stays at the origin facing -Z. Its position, orientation (forward -Z,
-	// up +Y of the entity) and velocity follow the entity every frame. The AudioEngine has one listener, so with several
+	// up +Y of the entity) and velocity (like a source's) follow the entity every frame. The AudioEngine has one listener, so with several
 	// running scenes the last one updated places it.
 	//
 	// Pause: pausing the scene (Scene::SetPaused, e.g. the editor's pause button) pauses its sources and one-shots and
@@ -66,6 +70,8 @@ namespace Strata
 		// Faster than this (world units per second), a move counts as a teleport and gives no Doppler shift. Far below the
 		// speed of sound, where the Doppler pitch shift becomes infinite.
 		static constexpr float c_MaxDopplerSpeed = 150.0f;
+		// Time constant, in seconds, of the smoothing of velocities derived from moves.
+		static constexpr float c_VelocitySmoothingTime = 0.1f;
 		// One-shots playing at once per scene; beyond, the oldest one is cut off.
 		static constexpr uint32_t c_MaxOneShots = 64;
 		// Longest wait, in seconds of scene time, of a one-shot for its clip to load; a sound that would come later is
@@ -134,6 +140,15 @@ namespace Strata
 			Unavailable  // The clip cannot be loaded (reported once); retried when the asset changes
 		};
 
+		// Follows an entity's moves to derive its velocity (see UpdateMotion).
+		struct MotionTracker
+		{
+			glm::vec3 Position = glm::vec3(0.0f); // Where the entity was when it last moved
+			glm::vec3 Velocity = glm::vec3(0.0f);
+			float TimeSinceMove = 0.0f;
+			bool HasPosition = false;
+		};
+
 		struct SourceRecord
 		{
 			Scope<AudioSource> Source;
@@ -142,8 +157,7 @@ namespace Strata
 			bool PlayRequested = false;          // Start once the clip is ready and the scene runs
 			bool PausedByScene = false;          // Was playing when the scene paused; resumes with it
 			std::optional<float> PendingSeek;    // Seek requested before the clip was ready
-			glm::vec3 LastPosition = glm::vec3(0.0f);
-			bool HasLastPosition = false;
+			MotionTracker Motion;
 			uint64_t SeenUpdate = 0;             // Last update that found the component (others are released)
 		};
 
@@ -166,6 +180,10 @@ namespace Strata
 		void RefreshClip(SourceRecord& record, Entity entity, const AudioSourceComponent& component);
 		void StartIfRequested(SourceRecord& record);
 		void UpdateSourcePosition(SourceRecord& record, Entity entity, float timestep);
+		// The velocity of an entity at `position`: its rigid body's, or derived from its moves (see the class comment).
+		glm::vec3 UpdateMotion(MotionTracker& motion, Entity entity, const glm::vec3& position, float timestep);
+		// The velocity at `position` of the rigid body simulating the entity or its nearest ancestor with a RigidBodyComponent.
+		bool GetBodyVelocity(Entity entity, const glm::vec3& position, glm::vec3& outVelocity);
 		void UpdateSources(float timestep);
 		void ProcessAssetChanges();
 		void UpdateListener(float timestep);
@@ -175,6 +193,7 @@ namespace Strata
 		bool TryStartOneShot(OneShot& oneShot);
 	private:
 		Scene& m_Scene;
+		PhysicsSystem* m_Physics = nullptr; // The scene's physics while it runs
 		bool m_Stopped = false;
 		bool m_Paused = false;
 		uint64_t m_UpdateIndex = 0;
@@ -187,7 +206,7 @@ namespace Strata
 		std::vector<AssetHandle> m_ChangedAssets; // Scratch
 
 		Entity m_ListenerEntity;
-		glm::vec3 m_ListenerPosition = glm::vec3(0.0f);
+		MotionTracker m_ListenerMotion;
 		std::vector<Entity> m_ListenerCandidates; // Scratch
 	};
 

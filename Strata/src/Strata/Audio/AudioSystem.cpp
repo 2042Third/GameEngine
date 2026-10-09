@@ -6,11 +6,13 @@
 #include "Strata/Audio/AudioClipAsset.h"
 #include "Strata/Audio/AudioEngine.h"
 #include "Strata/Audio/AudioSource.h"
+#include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Scene/Scene.h"
 
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <optional>
 
 namespace Strata
 {
@@ -23,6 +25,8 @@ namespace Strata
 		constexpr float c_MaxLevelRoll = 1e-3f;
 		// Looking up or down more steeply than this (the sine of the pitch), forward x +Y no longer gives a usable right axis.
 		constexpr float c_MaxLevelPitch = 0.99f;
+		// An entity that has not moved for this many fixed steps has stopped (fixed-step movers move at least once a step).
+		constexpr float c_StopAfterFixedSteps = 2.0f;
 
 		// Bitwise comparison, so that a value the source rejects (NaN) is applied, and reported, once instead of every frame.
 		bool IsSameFloat(float a, float b)
@@ -42,15 +46,26 @@ namespace Strata
 			return !a.owner_before(b) && !b.owner_before(a);
 		}
 
-		// Velocity from the distance moved during the last frame; implausibly fast moves are teleports (no Doppler shift).
-		glm::vec3 ComputeVelocity(const glm::vec3& previous, const glm::vec3& current, float timestep)
+		// The velocity of a move over the time it took, or nothing for a teleport: a move without elapsed time, or one faster
+		// than AudioSystem::c_MaxDopplerSpeed.
+		std::optional<glm::vec3> ComputeVelocity(const glm::vec3& previous, const glm::vec3& current, float elapsed)
 		{
-			if (!(timestep > 0.0f))
-				return glm::vec3(0.0f);
-			const glm::vec3 velocity = (current - previous) / timestep;
+			if (!(elapsed > 0.0f))
+				return std::nullopt;
+			const glm::vec3 velocity = (current - previous) / elapsed;
 			if (!IsFinite(velocity) || glm::dot(velocity, velocity) > AudioSystem::c_MaxDopplerSpeed * AudioSystem::c_MaxDopplerSpeed)
-				return glm::vec3(0.0f);
+				return std::nullopt;
 			return velocity;
+		}
+
+		// A simulated velocity, limited to AudioSystem::c_MaxDopplerSpeed: near the speed of sound the Doppler pitch shift
+		// grows without bound.
+		glm::vec3 LimitSpeed(const glm::vec3& velocity)
+		{
+			if (!IsFinite(velocity))
+				return glm::vec3(0.0f);
+			const float speed = glm::length(velocity);
+			return speed > AudioSystem::c_MaxDopplerSpeed ? velocity * (AudioSystem::c_MaxDopplerSpeed / speed) : velocity;
 		}
 
 		// The up vector to give the AudioEngine for a listener. miniaudio derives the right axis from forward x up, so +Y gives
@@ -137,6 +152,7 @@ namespace Strata
 
 		// Scripts may have used the API in their OnCreate already (systems start in registration order).
 		m_Paused = m_Scene.IsPaused();
+		m_Physics = m_Scene.GetSystem<PhysicsSystem>();
 		UpdateSources(0.0f);
 		UpdateListener(0.0f);
 	}
@@ -150,6 +166,7 @@ namespace Strata
 		m_Sources.clear();
 		m_OneShots.clear();
 		m_ListenerEntity = {};
+		m_Physics = nullptr;
 		// The next scene to play starts from the default listener.
 		AudioEngine::SetListener(glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, 1.0f, 0.0f));
 	}
@@ -424,7 +441,7 @@ namespace Strata
 		if (component.Spatial != applied.Spatial)
 		{
 			source.SetSpatial(component.Spatial);
-			record.HasLastPosition = false; // No velocity from a position that is no longer followed
+			record.Motion = MotionTracker(); // No velocity from a position that was not followed
 		}
 		if (!IsSameFloat(component.MinDistance, applied.MinDistance))
 			source.SetMinDistance(component.MinDistance);
@@ -552,11 +569,65 @@ namespace Strata
 		const glm::vec3 position = glm::vec3(m_Scene.GetWorldTransform(entity)[3]);
 		if (!IsFinite(position))
 			return; // A degenerate transform keeps the last position
-		const glm::vec3 velocity = record.HasLastPosition ? ComputeVelocity(record.LastPosition, position, timestep) : glm::vec3(0.0f);
 		record.Source->SetPosition(position);
-		record.Source->SetVelocity(velocity);
-		record.LastPosition = position;
-		record.HasLastPosition = true;
+		record.Source->SetVelocity(UpdateMotion(record.Motion, entity, position, timestep));
+	}
+
+	glm::vec3 AudioSystem::UpdateMotion(MotionTracker& motion, Entity entity, const glm::vec3& position, float timestep)
+	{
+		glm::vec3 bodyVelocity;
+		if (GetBodyVelocity(entity, position, bodyVelocity))
+		{
+			motion = MotionTracker { position, LimitSpeed(bodyVelocity), 0.0f, true };
+			return motion.Velocity;
+		}
+
+		if (!motion.HasPosition || !(timestep > 0.0f))
+		{
+			// The first position, or a move while no time passes (e.g. edited while the scene is paused): a teleport.
+			if (!motion.HasPosition || position != motion.Position)
+				motion = MotionTracker { position, glm::vec3(0.0f), 0.0f, true };
+			return motion.Velocity;
+		}
+
+		motion.TimeSinceMove += timestep;
+		if (position != motion.Position)
+		{
+			// Over the time since the last move rather than the last frame: a transform that changes only on fixed steps
+			// would otherwise alternate between standing still and moving fast. The moves are still seen one or two frames
+			// apart, so the velocity is smoothed.
+			if (const std::optional<glm::vec3> velocity = ComputeVelocity(motion.Position, position, motion.TimeSinceMove))
+				motion.Velocity += (*velocity - motion.Velocity) * (1.0f - std::exp(-motion.TimeSinceMove / c_VelocitySmoothingTime));
+			else
+				motion.Velocity = glm::vec3(0.0f);
+			motion.Position = position;
+			motion.TimeSinceMove = 0.0f;
+		}
+		else
+		{
+			const float fixedTimestep = m_Scene.GetSettings().FixedTimestep > 0.0f ? m_Scene.GetSettings().FixedTimestep : 1.0f / 60.0f;
+			if (motion.TimeSinceMove > c_StopAfterFixedSteps * fixedTimestep)
+				motion.Velocity = glm::vec3(0.0f);
+		}
+		return motion.Velocity;
+	}
+
+	bool AudioSystem::GetBodyVelocity(Entity entity, const glm::vec3& position, glm::vec3& outVelocity)
+	{
+		if (!m_Physics)
+			return false;
+		for (Entity current = entity; current.IsValid(); current = current.GetParent())
+		{
+			if (!current.HasComponent<RigidBodyComponent>())
+				continue;
+			if (!m_Physics->HasBody(current))
+				return false;
+			// Entities below a body move with it, rotation included.
+			const glm::vec3 origin = glm::vec3(m_Scene.GetWorldTransform(current)[3]);
+			outVelocity = m_Physics->GetLinearVelocity(current) + glm::cross(m_Physics->GetAngularVelocity(current), position - origin);
+			return true;
+		}
+		return false;
 	}
 
 	void AudioSystem::UpdateSources(float timestep)
@@ -669,10 +740,11 @@ namespace Strata
 		if (!IsFinite(position) || !IsFinite(forward) || !IsFinite(up) || glm::dot(forward, forward) < c_MinDirectionLengthSquared || glm::dot(up, up) < c_MinDirectionLengthSquared)
 			return;
 
-		const glm::vec3 velocity = listener == m_ListenerEntity ? ComputeVelocity(m_ListenerPosition, position, timestep) : glm::vec3(0.0f);
+		if (listener != m_ListenerEntity)
+			m_ListenerMotion = MotionTracker();
+		const glm::vec3 velocity = UpdateMotion(m_ListenerMotion, listener, position, timestep);
 		AudioEngine::SetListener(position, forward, GetListenerUp(forward, up, right), velocity);
 		m_ListenerEntity = listener;
-		m_ListenerPosition = position;
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
