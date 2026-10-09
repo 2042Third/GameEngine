@@ -119,6 +119,7 @@ namespace Strata
 		uint32_t SyncedBodyCount = 0;    // Bodies compared with their entity before the step (awake ones and those with changes)
 		uint32_t CheckedPairCount = 0;   // Touching pairs that could end during the step (those of awake or rebuilt bodies)
 		uint32_t WrittenBodyCount = 0;   // Dynamic bodies whose pose was written back to their entity
+		uint64_t BuildCount = 0;         // Bodies built or rebuilt since the world was created (attempts that failed included)
 		uint64_t StepCount = 0;          // Simulation steps since the world was created
 		uint64_t JobCount = 0;           // Simulation jobs run since the world was created, on any thread
 		uint64_t WorkerJobCount = 0;     // The part of JobCount run by JobSystem worker threads (depends on thread timing)

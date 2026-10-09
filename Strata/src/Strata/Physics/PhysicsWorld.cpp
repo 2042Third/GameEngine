@@ -580,6 +580,14 @@ namespace Strata
 		// World state
 		//////////////////////////////////////////////////////////////////////////
 
+		// An entity whose colliders are part of a body's shape, with its transform relative to the body (position and rotation
+		// of the body, without its scale) when the shape was built.
+		struct ShapeMember
+		{
+			entt::entity Handle = entt::null;
+			glm::mat4 PoseInBody = glm::mat4(1.0f);
+		};
+
 		// A mesh used by the colliders of a body, remembered to notice when its data changes, arrives or finishes cooking.
 		struct MeshSource
 		{
@@ -614,7 +622,7 @@ namespace Strata
 			glm::vec3 SavedLinearVelocity = glm::vec3(0.0f);
 			glm::vec3 SavedAngularVelocity = glm::vec3(0.0f);
 			std::vector<entt::entity> MergedEntities; // Collider descendants that belong to this body
-			std::vector<entt::entity> ShapeEntities;  // Descendants whose colliders are part of the current shape
+			std::vector<ShapeMember> ShapeMembers;    // Entities whose colliders are part of the current shape
 			std::vector<MeshSource> MeshSources;      // Meshes of the colliders considered by the last build
 
 			bool HasBody() const { return !BodyID.IsInvalid(); }
@@ -753,6 +761,7 @@ namespace Strata
 		uint32_t LastSyncedBodies = 0;
 		uint32_t LastCheckedPairs = 0;
 		uint32_t LastWrittenBodies = 0;
+		uint64_t BuildCount = 0;
 
 		// Scratch buffers reused by every step, so that steps allocate nothing once they have grown.
 		std::vector<entt::entity> SyncCandidates;
@@ -874,6 +883,12 @@ namespace Strata
 			if (!record.HasBody())
 				return record.Failure == BuildFailure::DegenerateTransform || record.Failure == BuildFailure::BodyLimit;
 			return record.Suspended || record.TransformDirty;
+		}
+
+		const ShapeMember* FindShapeMember(const BodyRecord& record, entt::entity handle)
+		{
+			auto it = std::find_if(record.ShapeMembers.begin(), record.ShapeMembers.end(), [handle](const ShapeMember& member) { return member.Handle == handle; });
+			return it != record.ShapeMembers.end() ? &*it : nullptr;
 		}
 
 		// Lists a record for the next step if it needs it. Records that no longer need it are dropped by the step.
@@ -1174,7 +1189,7 @@ namespace Strata
 		struct ShapeBuild
 		{
 			std::vector<ShapePart> Parts;
-			std::vector<entt::entity> ShapeEntities; // Descendants that contributed colliders
+			std::vector<ShapeMember> ShapeMembers;   // Entities that contributed colliders
 			std::vector<MeshSource> MeshSources;     // Meshes of the mesh colliders considered
 			bool WaitsForMesh = false;               // A mesh collider was left out until its data arrives or is cooked
 			uint32_t ColliderCount = 0;              // Collider components considered, usable or not
@@ -1242,7 +1257,7 @@ namespace Strata
 		}
 
 		// Adds the colliders of an entity whose transform in body space is (translation, rotation, scale).
-		void AddColliderParts(PhysicsWorldData& data, const Entity& entity, const glm::vec3& translation, const glm::quat& rotation, const glm::vec3& scale, RigidBodyType bodyType, ShapeBuild& build)
+		void AddColliderParts(PhysicsWorldData& data, const Entity& entity, const glm::mat4& poseInBody, const glm::vec3& translation, const glm::quat& rotation, const glm::vec3& scale, RigidBodyType bodyType, ShapeBuild& build)
 		{
 			const glm::vec3 absoluteScale = glm::abs(scale);
 			const float maxScale = std::max({ absoluteScale.x, absoluteScale.y, absoluteScale.z });
@@ -1337,7 +1352,7 @@ namespace Strata
 			}
 
 			if (build.Parts.size() > partCount)
-				build.ShapeEntities.push_back(entity.GetHandle());
+				build.ShapeMembers.push_back({ entity.GetHandle(), poseInBody });
 		}
 
 		JPH::RefConst<JPH::Shape> CombineParts(PhysicsWorldData& data, const Entity& owner, const std::vector<ShapePart>& parts)
@@ -1493,7 +1508,7 @@ namespace Strata
 			DestroyJoltBody(data, record);
 			record.Failure = failure;
 			record.LastWorldTransform = worldTransform;
-			record.ShapeEntities.clear();
+			record.ShapeMembers.clear();
 			EndContactsOf(data, record.EntityID);
 			UpdatePolling(data, handle, record);
 		}
@@ -1502,6 +1517,7 @@ namespace Strata
 		void BuildBody(PhysicsWorldData& data, Entity entity)
 		{
 			ST_PROFILE_FUNCTION();
+			data.BuildCount++;
 
 			Scene& scene = *data.OwnerScene;
 			const entt::entity handle = entity.GetHandle();
@@ -1545,7 +1561,7 @@ namespace Strata
 			record.WaitsForParent = false;
 
 			ShapeBuild build;
-			AddColliderParts(data, entity, glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), scale, type, build);
+			AddColliderParts(data, entity, glm::mat4(1.0f), glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), scale, type, build);
 
 			// Merged colliders are placed with their transform relative to the body (position and rotation, without scale).
 			const glm::mat4 bodyToWorld = Math::ComposeTransform(position, rotation, glm::vec3(1.0f));
@@ -1556,16 +1572,17 @@ namespace Strata
 				if (!IsPartOfOwnerShape(scene, merged, entity))
 					continue;
 
+				const glm::mat4 poseInBody = worldToBody * scene.GetWorldTransform(merged); // As in HasShapePartChanged
 				glm::vec3 partTranslation;
 				glm::quat partRotation;
 				glm::vec3 partScale;
-				if (!Math::DecomposeTransform(worldToBody * scene.GetWorldTransform(merged), partTranslation, partRotation, partScale))
+				if (!Math::DecomposeTransform(poseInBody, partTranslation, partRotation, partScale))
 				{
 					if (ShouldWarn(data, merged.GetUUID(), PhysicsWarning::DegenerateTransform))
 						ST_CORE_WARN("Physics: the colliders of '{}' have a degenerate transform and are left out of the body of '{}'", merged.GetName(), entity.GetName());
 					continue;
 				}
-				AddColliderParts(data, merged, partTranslation, partRotation, partScale, type, build);
+				AddColliderParts(data, merged, poseInBody, partTranslation, partRotation, partScale, type, build);
 			}
 
 			record.Type = type;
@@ -1657,7 +1674,7 @@ namespace Strata
 			record.KinematicTargetRotation = rotation;
 			record.SavedLinearVelocity = type == RigidBodyType::Dynamic ? linearVelocity : glm::vec3(0.0f); // Applied when added
 			record.SavedAngularVelocity = type == RigidBodyType::Dynamic ? angularVelocity : glm::vec3(0.0f);
-			record.ShapeEntities = std::move(build.ShapeEntities);
+			record.ShapeMembers = std::move(build.ShapeMembers);
 			data.BodyEntities[record.BodyID.GetIndexAndSequenceNumber()] = handle;
 			ClearWarnings(data, record.EntityID, c_TransientWarnings);
 
@@ -1709,6 +1726,86 @@ namespace Strata
 			UpdatePolling(data, handle, record);
 		}
 
+		bool IsNearlyEqualTransform(const glm::mat4& a, const glm::mat4& b)
+		{
+			constexpr float tolerance = 1.0e-5f;
+			for (int column = 0; column < 4; column++)
+			{
+				for (int row = 0; row < 4; row++)
+				{
+					if (!(glm::abs(a[column][row] - b[column][row]) <= tolerance * std::max(1.0f, glm::abs(b[column][row]))))
+						return false;
+				}
+			}
+			return true;
+		}
+
+		// Whether a merged collider entity (staying with the same body) changes its body's shape: it joins or leaves the
+		// shape (activity, pending destruction), or it moved relative to the body.
+		bool HasShapePartChanged(PhysicsWorldData& data, const BodyRecord& ownerRecord, Entity owner, Entity part)
+		{
+			const Scene& scene = *data.OwnerScene;
+			if (!scene.IsDescendantOf(part, owner))
+				return true; // Moved away from the body (re-evaluated as a structure change)
+			const ShapeMember* member = FindShapeMember(ownerRecord, part.GetHandle());
+			const bool inShape = IsPartOfOwnerShape(scene, part, owner);
+			if (!member || !inShape)
+				return member || inShape; // Joins or leaves the shape (or a part left out before may fit now)
+
+			glm::vec3 position;
+			glm::quat rotation;
+			glm::vec3 scale;
+			if (!Math::DecomposeTransform(scene.GetWorldTransform(owner), position, rotation, scale))
+				return true;
+			const glm::mat4 worldToBody = glm::inverse(Math::ComposeTransform(position, rotation, glm::vec3(1.0f)));
+			return !IsNearlyEqualTransform(worldToBody * scene.GetWorldTransform(part), member->PoseInBody); // As in BuildBody
+		}
+
+		// Rebuilds a body if a change of one of its merged collider entities changed its shape.
+		void RefreshOwnerIfShapeChanged(PhysicsWorldData& data, entt::entity owner, Entity part)
+		{
+			const BodyRecord* ownerRecord = FindRecord(data, owner);
+			if (!ownerRecord || HasShapePartChanged(data, *ownerRecord, Entity(owner, data.OwnerScene), part))
+				data.OwnerRefreshes.Add(owner);
+		}
+
+		// A reparented subtree: physics entities that stay with their body only follow their entity's transform and activity
+		// (a merged collider changes its body's shape only if it moved relative to the body, or joined or left the shape);
+		// entities that change bodies are re-evaluated like any structure change. This keeps reparenting from rebuilding
+		// every body below the moved entity.
+		void ApplyHierarchyChange(PhysicsWorldData& data, entt::entity handle)
+		{
+			Scene& scene = *data.OwnerScene;
+			VisitSubtree(scene, Entity(handle, &scene), data.VisitStack, [&](Entity entity)
+			{
+				if (!HasPhysicsComponent(entity))
+					return true;
+
+				const Entity owner = FindBodyOwner(entity);
+				if (BodyRecord* record = FindRecord(data, entity.GetHandle()))
+				{
+					if (owner != entity)
+					{
+						data.StructureChanges.Add(entity.GetHandle()); // Its colliders join an ancestor's body
+						return true;
+					}
+					RefreshActivity(data, entity.GetHandle(), *record);
+					record->TransformDirty = true;
+					UpdatePolling(data, entity.GetHandle(), *record);
+					return true;
+				}
+
+				auto merged = data.MergedOwners.find(entity.GetHandle());
+				if (merged == data.MergedOwners.end() || !owner || owner.GetHandle() != merged->second)
+				{
+					data.StructureChanges.Add(entity.GetHandle()); // Changes bodies
+					return true;
+				}
+				RefreshOwnerIfShapeChanged(data, merged->second, entity);
+				return true;
+			});
+		}
+
 		void ApplyChanges(PhysicsWorldData& data)
 		{
 			ST_PROFILE_FUNCTION();
@@ -1724,17 +1821,14 @@ namespace Strata
 				// Hierarchy changes may move any physics entity of the subtree to another body.
 				for (entt::entity handle : data.SubtreeChanges.TakeInto(data.ChangeScratch))
 				{
-					data.StructureChanges.Add(handle);
-					VisitSubtree(scene, Entity(handle, &scene), data.VisitStack, [&](Entity entity)
-					{
-						if (HasPhysicsComponent(entity))
-							data.StructureChanges.Add(entity.GetHandle());
-						return true;
-					});
+					if (Entity(handle, &scene).IsValid())
+						ApplyHierarchyChange(data, handle);
+					else
+						data.StructureChanges.Add(handle);
 				}
 
 				// Activity is inherited: bodies of the subtree enter or leave the simulation; colliders merged into a body above
-				// the changed entity join or leave that body's shape.
+				// the changed entity may join or leave that body's shape.
 				for (entt::entity handle : data.ActivityChanges.TakeInto(data.ChangeScratch))
 				{
 					const Entity changed(handle, &scene);
@@ -1757,14 +1851,14 @@ namespace Strata
 						{
 							auto merged = data.MergedOwners.find(entity.GetHandle());
 							if (merged != data.MergedOwners.end() && visitedOwners.find(merged->second) == visitedOwners.end())
-								data.OwnerRefreshes.Add(merged->second);
+								RefreshOwnerIfShapeChanged(data, merged->second, entity);
 						}
 						return true;
 					});
 				}
 
 				// A transform change moves the bodies of the subtree; colliders merged into a body above the changed entity
-				// moved relative to that body, which changes its shape.
+				// may have moved relative to that body, which changes its shape.
 				for (entt::entity handle : data.TransformChanges.TakeInto(data.ChangeScratch))
 				{
 					std::unordered_set<entt::entity>& visitedOwners = data.VisitedOwners;
@@ -1781,7 +1875,7 @@ namespace Strata
 						{
 							auto merged = data.MergedOwners.find(entity.GetHandle());
 							if (merged != data.MergedOwners.end() && visitedOwners.find(merged->second) == visitedOwners.end())
-								data.OwnerRefreshes.Add(merged->second);
+								RefreshOwnerIfShapeChanged(data, merged->second, entity);
 						}
 						return true;
 					});
@@ -1968,7 +2062,7 @@ namespace Strata
 					if (merged == data.MergedOwners.end())
 						return true;
 					const BodyRecord* owner = FindRecord(data, merged->second);
-					const bool inShape = owner && std::find(owner->ShapeEntities.begin(), owner->ShapeEntities.end(), entity.GetHandle()) != owner->ShapeEntities.end();
+					const bool inShape = owner && FindShapeMember(*owner, entity.GetHandle()) != nullptr;
 					if (inShape && !IsPendingDestroyInHierarchy(scene, Entity(merged->second, &scene)))
 						data.OwnerRefreshes.Add(merged->second);
 					return true;
@@ -3012,6 +3106,7 @@ namespace Strata
 		stats.SyncedBodyCount = data.LastSyncedBodies;
 		stats.CheckedPairCount = data.LastCheckedPairs;
 		stats.WrittenBodyCount = data.LastWrittenBodies;
+		stats.BuildCount = data.BuildCount;
 		stats.StepCount = data.StepCount;
 		stats.JobCount = data.JobCounters.Jobs.load(std::memory_order_relaxed);
 		stats.WorkerJobCount = data.JobCounters.WorkerJobs.load(std::memory_order_relaxed);

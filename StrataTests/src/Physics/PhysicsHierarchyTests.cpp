@@ -258,6 +258,71 @@ TEST_SUITE("Physics.Hierarchy")
 		CHECK(recorder.Count(CollisionEventType::Begin) == recorder.Count(CollisionEventType::End));
 	}
 
+	TEST_CASE("Reparenting rebuilds only the bodies whose colliders change")
+	{
+		Scene scene;
+		scene.GetSettings().Gravity = glm::vec3(0.0f);
+		Car car = CreateCar(scene, glm::vec3(0.0f, 5.0f, 0.0f));
+		Entity mount = scene.CreateChildEntity(car.Chassis, "Mount");
+		mount.GetTransform().Translation = glm::vec3(0.0f, 0.5f, -1.5f);
+		Entity truck = CreateDynamicBox(scene, "Truck", glm::vec3(10.0f, 5.0f, 0.0f));
+		Entity post = CreateStaticBox(scene, "Post", glm::vec3(20.0f, 1.0f, 0.0f), glm::vec3(0.25f, 1.0f, 0.25f));
+		Entity garage = scene.CreateEntity("Garage");
+
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		const auto builds = [&]()
+		{
+			physics.HasBody(car.Chassis); // Applies the pending changes
+			return physics.GetStats().BuildCount;
+		};
+		const uint64_t initialBuilds = builds();
+		const auto antennaTop = [&]()
+		{
+			std::optional<RaycastHit> hit = CastDown(physics, GetWorldPosition(scene, car.Antenna));
+			return hit && hit->HitEntity == car.Chassis ? hit->Point.y : -1.0f;
+		};
+		const float antennaHeight = antennaTop();
+		REQUIRE(antennaHeight > 6.0f);
+
+		// Bodies moved under other entities, keeping their pose, stay as they are (a rigid body below another one stays a
+		// body of its own).
+		CHECK(scene.SetParent(car.Chassis, garage));
+		CHECK(scene.SetParent(post, garage));
+		CHECK(scene.SetParent(truck, car.Chassis));
+		CHECK(builds() == initialBuilds);
+		CHECK(physics.GetBodyEntity(car.Antenna) == car.Chassis);
+		CHECK(physics.GetBodyEntity(truck) == truck);
+		CHECK(antennaTop() == doctest::Approx(antennaHeight).epsilon(1.0e-4));
+
+		// A merged collider moved within its body without changing its pose does not change the body either...
+		CHECK(scene.SetParent(car.Antenna, mount));
+		CHECK(builds() == initialBuilds);
+		CHECK(antennaTop() == doctest::Approx(antennaHeight).epsilon(1.0e-4));
+		// ...but moved relative to the body (the local transform kept, now relative to the chassis), it does.
+		CHECK(scene.SetParent(car.Antenna, car.Chassis, false));
+		CHECK(builds() == initialBuilds + 1);
+		CHECK(antennaTop() == doctest::Approx(5.0f + 1.25f + 0.2f).epsilon(1.0e-3)); // 1.25 above the mount before
+
+		// A collider handed to another body rebuilds both bodies.
+		CHECK(scene.SetParent(car.Cabin, truck));
+		CHECK(builds() == initialBuilds + 3);
+		CHECK(physics.GetBodyEntity(car.Cabin) == truck);
+
+		// Activity still follows the hierarchy: below an inactive entity a body leaves the simulation, without a rebuild.
+		Entity storage = scene.CreateEntity("Storage");
+		storage.SetActive(false);
+		CHECK(scene.SetParent(post, storage));
+		CHECK_FALSE(physics.HasBody(post));
+		CHECK(scene.SetParent(post, garage));
+		CHECK(physics.HasBody(post));
+		CHECK(builds() == initialBuilds + 3);
+		StepScene(scene, 1);
+		std::optional<RaycastHit> postHit = CastDown(physics, GetWorldPosition(scene, post));
+		REQUIRE(postHit);
+		CHECK(postHit->HitEntity == post);
+	}
+
 	TEST_CASE("Bodies below a body moved without a signal follow it in the same step")
 	{
 		Scene scene;
