@@ -533,13 +533,20 @@ and `AudioSystem`, the built-in "Audio" scene system.
   values and every material property described like `component.list` describes component properties); an unknown property
   name fails with the list of known ones.
 - **Simulated input** (`Editor/EditorInputCommands.cpp`) lets tools play a running game (play mode only) as a person would:
-  `input.key {key, action: tap|press|release, frames}`, `input.mouseButton {button, action, frames}`, `input.mouseMove
-  {position}` (pixels from the game view's top-left corner), `input.scroll {delta}`, `input.releaseAll` and `input.state`. Keys
-  and buttons are named like the `Key::`/`Mouse::` constants (`InputNames`, ignoring case). The commands feed the engine's
-  virtual device (`Input::SimulateKey` and friends): its events apply at the next `Input::BeginFrame`, are merged with device
-  input and reach the game even while the viewport has no focus. A tap holds for `frames` frames and answers once the game saw
-  the release; the other commands answer after one frame, so a client can sequence moves call after call. A paused game only
-  sees input in the frames `play.step` runs; starting and stopping play drops simulated input (`Input::ClearSimulated`).
+  `input.key {key, action: tap|press|release, frames, wait}`, `input.mouseButton {button, action, frames, wait}`,
+  `input.mouseMove {position, wait}` (pixels from the game view's top-left corner), `input.scroll {delta, wait}`,
+  `input.releaseAll {wait}` and `input.state`. Keys and buttons are named like the `Key::`/`Mouse::` constants (`InputNames`,
+  ignoring case). The commands feed the engine's virtual device (`Input::SimulateKey` and friends): its events apply at the
+  next input frame, are merged with device input (one source pressing a key the other holds is no transition) and reach the
+  game even while the viewport has no focus. Holds belong to commands (`SimulatedInput`, owned by `EditorContext`): a tap ends
+  only its own hold, overlapping holds of a button keep it down until the last ends, a release ends every hold of its button,
+  and `input.releaseAll` ends all of them and drops presses still queued (`Input::ReleaseAllSimulated`). Frames are input
+  frames, and those follow the game's updates: `EditorContext` suspends them (`Input::SetSuspended`) while the game is paused
+  without a pending step, so input given while paused arrives in the next frame `play.step` runs or after resuming, with its
+  transitions, and a tap of N frames lasts N game updates. A command answers once the game has seen its input (a tap: its
+  release; `seen: true`) or, with `wait: false` (the default while paused, where waiting would block a client that has to step
+  the game), at once. Holds outlive the client that made them; starting or stopping play drops them
+  (`Input::ClearSimulated`).
 - Files commands write for clients go through `CommandUtils::ResolveOutputPath`: relative paths are relative to the
   project directory (an error without a project), network/device paths and reserved device names are refused, and an
   existing file is replaced only with `overwrite: true`.

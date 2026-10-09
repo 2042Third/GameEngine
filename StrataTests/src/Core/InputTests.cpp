@@ -198,6 +198,65 @@ TEST_SUITE("Core.Input")
 		Input::Reset();
 	}
 
+	TEST_CASE("Suspended input frames keep their transitions and queued events for the next frame")
+	{
+		Input::Reset();
+		Input::BeginFrame();
+		const uint64_t frame = Input::GetFrameIndex();
+		Input::ProcessKey(Key::A, true);
+		Input::SimulateMouseMove({ 4.0f, 4.0f });
+
+		// While suspended (the game does not update), no frame starts: the frame the game saw ends, queued simulated events
+		// wait, and device events collect for the game's next update.
+		Input::SetSuspended(true);
+		CHECK(Input::IsSuspended());
+		Input::SimulateKey(Key::S, true);
+		Input::BeginFrame();
+		CHECK_FALSE(Input::IsKeyPressed(Key::A));
+		CHECK(Input::IsKeyDown(Key::A));
+		Input::ProcessKey(Key::D, true);
+		Input::ProcessScroll({ 0.0f, 1.0f });
+		Input::BeginFrame();
+		Input::BeginFrame();
+		CHECK(Input::GetFrameIndex() == frame);
+		CHECK_FALSE(Input::IsKeyDown(Key::S));
+		CHECK(Input::HasQueuedSimulatedInput());
+
+		Input::SetSuspended(false);
+		Input::BeginFrame();
+		CHECK(Input::GetFrameIndex() == frame + 1);
+		CHECK_FALSE(Input::HasQueuedSimulatedInput());
+		CHECK(Input::IsKeyPressed(Key::S));
+		CHECK(Input::IsKeyPressed(Key::D)); // Pressed while the game was paused: reported in its next update
+		CHECK(Input::GetScrollDelta() == glm::vec2(0.0f, 1.0f));
+		CHECK_FALSE(Input::IsKeyPressed(Key::A));
+		CHECK(Input::GetMousePosition() == glm::vec2(4.0f, 4.0f));
+		Input::BeginFrame();
+		CHECK_FALSE(Input::IsKeyPressed(Key::D));
+		CHECK(Input::GetScrollDelta() == glm::vec2(0.0f));
+		Input::Reset();
+		CHECK_FALSE(Input::IsSuspended());
+	}
+
+	TEST_CASE("Releasing all simulated input also drops presses still queued")
+	{
+		Input::Reset();
+		Input::BeginFrame();
+		Input::SimulateKey(Key::Q, true);
+		Input::SimulateMouseButton(Mouse::ButtonMiddle, true);
+		Input::BeginFrame();
+		Input::SimulateKey(Key::E, true);         // Not applied yet
+		Input::SimulateMouseMove({ 9.0f, 9.0f }); // Stays queued
+		Input::ReleaseAllSimulated();
+		Input::BeginFrame();
+		CHECK(Input::IsKeyReleased(Key::Q));
+		CHECK(Input::IsMouseButtonReleased(Mouse::ButtonMiddle));
+		CHECK_FALSE(Input::IsKeyDown(Key::E));
+		CHECK_FALSE(Input::IsKeyPressed(Key::E));
+		CHECK(Input::GetMousePosition() == glm::vec2(9.0f, 9.0f));
+		Input::Reset();
+	}
+
 	TEST_CASE("Simulated input reaches the game while device input is disabled")
 	{
 		Input::Reset();

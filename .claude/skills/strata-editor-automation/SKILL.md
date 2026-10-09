@@ -158,10 +158,18 @@ input.state       {}                                      # what simulated input
 ```
 
 Keys are named like the SDK's `Key::` constants (`Left`, `Up`, `Space`, `Enter`, `Escape`, `A`, `D1`, `F5`, `LeftShift`;
-case does not matter). Each command answers after the game had the frame with the input, so issue them one after another and
-read the effect (`component.get`, `log.read`, `viewport.capture`). Notes: input only reaches play mode (not edit or simulate); a
-paused game only sees input in `play.step` frames; `play.stop` drops held keys; a tap of 1 frame is one key press for games that
-act on `IsKeyPressed` or on `KeyRepeat`, use `frames` (or press/release) to hold a key for repeats.
+case does not matter). Each command answers once the game has seen its input (`"seen": true`), so issue them one after another
+and read the effect (`component.get`, `log.read`, `viewport.capture`). Notes:
+
+- Input only reaches play mode (not edit or simulate); `play.stop` drops held keys.
+- Frames are game frames. While the game is paused (`play.pause`), input waits for the next frame `play.step` runs (or for
+  `play.pause {"paused": false}`) and arrives with its press: `input.key {"key": "Space"}` then `play.step {"frames": 1}` makes the
+  game see Space pressed in that step, and released in the following one. Commands answer at once while paused
+  (`"seen": false`), because waiting would block you from stepping; pass `"wait": true` to wait anyway.
+- Each command ends only its own hold: overlapping taps of a key keep it down until the last ends; `"action": "release"` ends
+  every hold of the key and `input.releaseAll` every hold of every button. Holds outlive your connection.
+- A tap of 1 frame is one key press for games that act on `IsKeyPressed` or `KeyRepeat`; use `frames` (or press/release) to
+  hold a key for repeats.
 
 **Look at it** (needs rendering, not `--no-gpu`): `camera.focus` or `camera.set`, then
 `StrataCLI call viewport.capture '{"camera": "scene"}' --save-image shot.png` and open `shot.png`; with MCP the

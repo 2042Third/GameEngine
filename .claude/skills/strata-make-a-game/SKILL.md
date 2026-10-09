@@ -103,7 +103,8 @@ play.stop
 
 - Look at every capture you take. `pendingAssets` above 0: wait (`editor.wait`) and capture again.
 - Gravity and other timers keep running between your calls (a call takes about 0.1 s): plan sequences and send them in
-  one go, set slow timings with `script.setField` while exploring, or `play.pause` to freeze the picture.
+  one go, set slow timings with `script.setField` while exploring, or `play.pause` the game and advance it with `play.step`:
+  input given while paused arrives in the next stepped frame.
 - Check every feature you built: movement, rotation, repeats, scoring, level changes, game over, restart, pause.
 
 ## 7. Leave a regression test
@@ -143,7 +144,7 @@ The exported game has no `--help`: unknown arguments are ignored and the game st
 | Symptom | Cause and fix |
 | --- | --- |
 | `input.key` fails "start it with play.start" | Input only reaches play mode (not edit or `play.simulate`). |
-| A tap does nothing | The game was paused (input only reaches it in `play.step` frames), or it reacts to keys held over time: hold longer with `frames` or press/release. |
+| A tap does nothing | The game is paused: the tap waits for the next `play.step` (or resuming). Or the game reacts to keys held over time: hold longer with `frames` or press/release. |
 | HUD text cut off at the left edge | `Text` alignment defaults to `Center`; set `Alignment: Left`. |
 | Everything looks washed out or gray | Automatic exposure; add `PostProcess` with `AutoExposure: false`. |
 | The score differs by a few points between runs | Gravity ticked between commands; make the check deterministic (slow gravity via a field). |

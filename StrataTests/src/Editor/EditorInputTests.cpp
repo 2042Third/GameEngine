@@ -266,4 +266,125 @@ TEST_SUITE("Editor.Input")
 		CHECK_FALSE(harness.ProbeField("WDown"));
 		CHECK_FALSE(harness.ProbeField("WReleased"));
 	}
+
+	TEST_CASE("Input given while the game is paused reaches the next stepped frame")
+	{
+		InputHarness harness;
+		harness.Run("play.start");
+		harness.Frame();
+		harness.Run("play.pause", { { "paused", true } });
+
+		// While paused the commands answer at once: the game has not seen the input yet.
+		nlohmann::json pressed = harness.Run("input.key", { { "key", "W" }, { "action", "press" } });
+		CHECK(pressed["seen"] == false);
+		CHECK(pressed["held"]["keys"] == nlohmann::json { "W" });
+		nlohmann::json state = harness.Run("input.state");
+		CHECK(state["paused"] == true);
+		CHECK(state["queued"] == true);
+		for (int frame = 0; frame < 5; frame++)
+			harness.Frame();
+		CHECK_FALSE(harness.ProbeField("WDown")); // The probe has not run since the press
+
+		// The first stepped frame sees the press as a press, not just a held key.
+		harness.Run("play.step", { { "frames", 1 } });
+		harness.Frame();
+		CHECK(harness.ProbeField("WDown"));
+		CHECK(harness.ProbeField("WPressed"));
+		harness.Frame();
+		harness.Run("play.step", { { "frames", 1 } });
+		harness.Frame();
+		CHECK(harness.ProbeField("WDown"));
+		CHECK_FALSE(harness.ProbeField("WPressed"));
+
+		// A one-frame tap while paused: down in the next stepped frame, up in the one after.
+		harness.Run("input.key", { { "key", "W" }, { "action", "release" } });
+		harness.Run("input.mouseButton", { { "button", "Left" } });
+		harness.Run("play.step", { { "frames", 1 } });
+		harness.Frame();
+		CHECK(harness.ProbeField("WReleased"));
+		CHECK(harness.ProbeField("LeftPressed"));
+		CHECK(harness.ProbeField("LeftDown"));
+		for (int frame = 0; frame < 3; frame++)
+			harness.Frame();
+		harness.Run("play.step", { { "frames", 1 } });
+		harness.Frame();
+		CHECK_FALSE(harness.ProbeField("LeftDown"));
+		CHECK(harness.ProbeField("LeftReleased"));
+
+		// Asked to wait, a tap answers once a stepped frame saw its release.
+		std::optional<EditorCommandResult> tap;
+		harness.Start("input.key", { { "key", "W" }, { "wait", true } }, tap);
+		for (int frame = 0; frame < 3; frame++)
+			harness.Frame();
+		CHECK_FALSE(tap);
+		harness.Run("play.step", { { "frames", 2 } });
+		harness.Frame();
+		CHECK(harness.ProbeField("WPressed"));
+		CHECK_FALSE(tap);
+		harness.Frame();
+		CHECK(harness.ProbeField("WReleased"));
+		REQUIRE(tap);
+		REQUIRE(tap->Success);
+		CHECK(tap->Value["seen"] == true);
+		CHECK(tap->Value["interrupted"] == false);
+
+		// Resuming applies what waited, too.
+		harness.Run("input.key", { { "key", "W" }, { "action", "press" } });
+		harness.Run("play.pause", { { "paused", false } });
+		CHECK(harness.Run("input.state")["paused"] == false);
+		harness.Frame();
+		CHECK(harness.ProbeField("WPressed"));
+	}
+
+	TEST_CASE("Each command ends only its own hold")
+	{
+		InputHarness harness;
+		harness.Run("play.start");
+		harness.Frame();
+
+		// Overlapping taps of one key: down with the first, up when the longer one ends.
+		std::optional<EditorCommandResult> longTap;
+		std::optional<EditorCommandResult> shortTap;
+		harness.Start("input.key", { { "key", "W" }, { "frames", 4 } }, longTap);
+		harness.Start("input.key", { { "key", "W" }, { "frames", 1 } }, shortTap);
+		harness.Frame();
+		CHECK(harness.ProbeField("WPressed"));
+		harness.Frame();
+		REQUIRE(shortTap); // Its hold ended; the key stays down for the other
+		CHECK(shortTap->Value["seen"] == true);
+		CHECK(shortTap->Value["held"]["keys"] == nlohmann::json { "W" });
+		for (int frame = 0; frame < 2; frame++)
+		{
+			harness.Frame();
+			CHECK(harness.ProbeField("WDown"));
+			CHECK_FALSE(harness.ProbeField("WReleased"));
+		}
+		CHECK_FALSE(longTap);
+		harness.Frame();
+		CHECK(harness.ProbeField("WReleased"));
+		REQUIRE(longTap);
+		CHECK(longTap->Value["interrupted"] == false);
+
+		// releaseAll ends a running tap; a later press of the key is not ended when the tap's frames run out.
+		std::optional<EditorCommandResult> interrupted;
+		harness.Start("input.key", { { "key", "D" }, { "frames", 5 } }, interrupted);
+		harness.Frame();
+		CHECK(harness.ProbeField("WDown") == false);
+		harness.Run("input.releaseAll", { { "wait", false } });
+		harness.Run("input.key", { { "key", "D" }, { "action", "press" }, { "wait", false } });
+		for (int frame = 0; frame < 8; frame++)
+			harness.Frame();
+		REQUIRE(interrupted);
+		CHECK(interrupted->Value["interrupted"] == true);
+		CHECK(harness.Run("input.state")["keys"] == nlohmann::json { "D" });
+
+		// releaseAll also drops a press that is still waiting for its frame.
+		harness.Run("input.releaseAll", { { "wait", false } });
+		harness.Run("input.key", { { "key", "W" }, { "action", "press" }, { "wait", false } });
+		harness.Run("input.releaseAll", { { "wait", false } });
+		harness.Frame();
+		CHECK_FALSE(harness.ProbeField("WDown"));
+		CHECK_FALSE(harness.ProbeField("WPressed"));
+		CHECK(harness.Run("input.state")["keys"].empty());
+	}
 }

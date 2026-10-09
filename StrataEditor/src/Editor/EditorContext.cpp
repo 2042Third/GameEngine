@@ -313,9 +313,10 @@ namespace Strata
 		m_RuntimeScene = Scene::Copy(m_EditScene);
 		m_RuntimeSceneAsset = UUID::Null();
 		// Keys a tool held down in an earlier session (input.* commands) must not leak into this one.
-		Input::ClearSimulated();
+		ResetSimulatedInput();
 		m_RuntimeScene->OnRuntimeStart(mode);
 		m_SceneState = mode == SceneRuntimeMode::Play ? SceneState::Play : SceneState::Simulate;
+		UpdateInputSuspension();
 		return true;
 	}
 
@@ -330,7 +331,8 @@ namespace Strata
 		// A game's volume setting belongs to the game session, not to the editor.
 		AudioEngine::SetMasterVolume(m_MasterVolumeBeforePlay);
 		m_GameInputActive = false;
-		Input::ClearSimulated(); // The game that a tool's simulated input was meant for is gone
+		ResetSimulatedInput(); // The game that a tool's simulated input was meant for is gone
+		UpdateInputSuspension();
 		PruneSelection(); // Entities created during play are gone
 	}
 
@@ -393,6 +395,7 @@ namespace Strata
 			m_RuntimeScene->Step(steps);
 		}
 		PruneSelection(); // The selection named entities of the previous scene
+		UpdateInputSuspension();
 		return true;
 	}
 
@@ -405,6 +408,7 @@ namespace Strata
 	{
 		if (m_RuntimeScene)
 			m_RuntimeScene->SetPaused(paused);
+		UpdateInputSuspension();
 	}
 
 	bool EditorContext::IsPaused() const
@@ -416,6 +420,19 @@ namespace Strata
 	{
 		if (m_RuntimeScene && m_RuntimeScene->IsPaused())
 			m_RuntimeScene->Step(frames);
+		UpdateInputSuspension();
+	}
+
+	void EditorContext::UpdateInputSuspension()
+	{
+		// The game updates in the next frame unless it is paused without a step to run: only then may input frames go on.
+		Input::SetSuspended(m_RuntimeScene && m_RuntimeScene->IsPaused() && m_RuntimeScene->GetStepFrames() == 0);
+	}
+
+	void EditorContext::ResetSimulatedInput()
+	{
+		Input::ClearSimulated();
+		m_SimulatedInput.Reset();
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -716,6 +733,10 @@ namespace Strata
 		{
 			m_EditScene->OnUpdateEditor(timestep);
 		}
+		// After the game's update and before the next input frame: taps whose frames passed let go, and input frames stop
+		// while the game is paused (a step was used up, or play mode stopped).
+		m_SimulatedInput.Update();
+		UpdateInputSuspension();
 		PruneSelection();
 		m_Viewport.UpdatePicking(*this);
 	}

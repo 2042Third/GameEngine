@@ -3,6 +3,7 @@
 
 #include "Strata/Core/Window.h"
 
+#include <algorithm>
 #include <bitset>
 #include <cmath>
 #include <vector>
@@ -85,6 +86,9 @@ namespace Strata
 
 			SimulatedState Simulated;
 
+			bool Suspended = false;
+			bool FrameSeen = true; // Whether the game has had the current transitions (false once suspended frames collect them)
+			uint64_t FrameIndex = 0;
 			bool Enabled = true;
 			glm::vec2 ViewportOrigin = { 0.0f, 0.0f };
 			glm::vec2 ViewportSize = { 0.0f, 0.0f };
@@ -253,21 +257,33 @@ namespace Strata
 
 	void Input::BeginFrame()
 	{
-		s_State.Keys.ClearTransitions();
-		s_State.MouseButtons.ClearTransitions();
-		s_State.MouseDelta = glm::vec2(0.0f);
-		s_State.ScrollDelta = glm::vec2(0.0f);
-		for (GamepadState& gamepad : s_State.Gamepads)
-			std::copy(std::begin(gamepad.Buttons), std::end(gamepad.Buttons), std::begin(gamepad.PreviousButtons));
+		// Transitions and movement are cleared once the game has had them (the first BeginFrame after a frame it updated in);
+		// while input frames are suspended, what happens meanwhile accumulates for the game's next update.
+		if (s_State.FrameSeen)
+		{
+			s_State.Keys.ClearTransitions();
+			s_State.MouseButtons.ClearTransitions();
+			s_State.MouseDelta = glm::vec2(0.0f);
+			s_State.ScrollDelta = glm::vec2(0.0f);
+			for (GamepadState& gamepad : s_State.Gamepads)
+				std::copy(std::begin(gamepad.Buttons), std::end(gamepad.Buttons), std::begin(gamepad.PreviousButtons));
 
+			SimulatedState& simulated = s_State.Simulated;
+			simulated.Keys.ClearTransitions();
+			simulated.MouseButtons.ClearTransitions();
+			simulated.MouseDelta = glm::vec2(0.0f);
+			simulated.ScrollDelta = glm::vec2(0.0f);
+			s_State.FrameSeen = false;
+		}
+		if (s_State.Suspended)
+			return;
+
+		s_State.FrameIndex++;
 		SimulatedState& simulated = s_State.Simulated;
-		simulated.Keys.ClearTransitions();
-		simulated.MouseButtons.ClearTransitions();
-		simulated.MouseDelta = glm::vec2(0.0f);
-		simulated.ScrollDelta = glm::vec2(0.0f);
 		for (const SimulatedEvent& event : simulated.Queue)
 			ApplySimulatedEvent(simulated, event);
 		simulated.Queue.clear();
+		s_State.FrameSeen = true; // The game updates in this frame
 	}
 
 	void Input::Reset()
@@ -275,6 +291,21 @@ namespace Strata
 		Window* window = s_State.TargetWindow;
 		s_State = InputState();
 		s_State.TargetWindow = window;
+	}
+
+	void Input::SetSuspended(bool suspended)
+	{
+		s_State.Suspended = suspended;
+	}
+
+	bool Input::IsSuspended()
+	{
+		return s_State.Suspended;
+	}
+
+	uint64_t Input::GetFrameIndex()
+	{
+		return s_State.FrameIndex;
 	}
 
 	void Input::SetEnabled(bool enabled)
@@ -360,9 +391,33 @@ namespace Strata
 			s_State.Simulated.Queue.push_back({ SimulatedEventType::Scroll, 0, false, offset });
 	}
 
+	void Input::ReleaseAllSimulated()
+	{
+		std::vector<SimulatedEvent>& queue = s_State.Simulated.Queue;
+		queue.erase(std::remove_if(queue.begin(), queue.end(), [](const SimulatedEvent& event)
+		{
+			return event.Type == SimulatedEventType::Key || event.Type == SimulatedEventType::MouseButton;
+		}), queue.end());
+		for (KeyCode key = 0; key < c_MaxKeyCode; key++)
+		{
+			if (s_State.Simulated.Keys.Down.test(key))
+				SimulateKey(key, false);
+		}
+		for (MouseCode button = 0; button < c_MaxMouseButtons; button++)
+		{
+			if (s_State.Simulated.MouseButtons.Down.test(button))
+				SimulateMouseButton(button, false);
+		}
+	}
+
 	void Input::ClearSimulated()
 	{
 		s_State.Simulated = SimulatedState();
+	}
+
+	bool Input::HasQueuedSimulatedInput()
+	{
+		return !s_State.Simulated.Queue.empty();
 	}
 
 	bool Input::IsSimulatedKeyDown(KeyCode key)

@@ -3,6 +3,7 @@
 #include "Editor/EditorViewport.h"
 #include "Editor/SceneEdit.h"
 #include "Editor/ScriptBuild.h"
+#include "Editor/SimulatedInput.h"
 #include "Editor/UndoStack.h"
 
 #include <Strata/Asset/EditorAssetManager.h>
@@ -133,6 +134,10 @@ namespace Strata
 		// for the game never change it. Only play mode can have game input; stopping ends it.
 		void SetGameInputActive(bool active);
 		bool IsGameInputActive() const { return m_GameInputActive; }
+		// The keys and mouse buttons the input.* commands hold in the running game. Input frames (Input::SetSuspended) stop
+		// while the game is paused without a pending step, so simulated input given meanwhile reaches its next update.
+		SimulatedInput& GetSimulatedInput() { return m_SimulatedInput; }
+		const SimulatedInput& GetSimulatedInput() const { return m_SimulatedInput; }
 		// Whether keyboard shortcuts that edit the scene or the project (undo, delete, duplicate, save) may act now.
 		bool AcceptsEditShortcuts() const { return !m_GameInputActive; }
 
@@ -218,6 +223,10 @@ namespace Strata
 		bool OpenProjectInternal(const std::filesystem::path& path, bool created, std::string* outError);
 		bool StartRuntime(SceneRuntimeMode mode, std::string* outError);
 		void HandleRuntimeRequests();
+		// Suspends input frames while the running game is paused without a step to run (see GetSimulatedInput).
+		void UpdateInputSuspension();
+		// Drops the simulated device's state and the commands' holds (play mode starts or stops).
+		void ResetSimulatedInput();
 		// Replaces the running scene with a scene asset, or with a restart of the running scene for the null handle.
 		bool SwitchRuntimeScene(AssetHandle scene, std::string* outError);
 		void ResetScene(Ref<Scene> scene, AssetHandle handle);
@@ -245,6 +254,7 @@ namespace Strata
 		SceneState m_SceneState = SceneState::Edit;
 		float m_MasterVolumeBeforePlay = 1.0f;
 		bool m_GameInputActive = false;
+		SimulatedInput m_SimulatedInput;
 
 		std::vector<UUID> m_Selection;
 		UndoStack m_UndoStack;

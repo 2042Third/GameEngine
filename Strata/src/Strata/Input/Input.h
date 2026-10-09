@@ -50,9 +50,18 @@ namespace Strata
 		// Engine integration (application, window backends, editor, automation)
 		//////////////////////////////////////////////////////////////////////////
 
-		// Starts a new input frame: clears per-frame transitions and deltas.
+		// Starts a new input frame: clears per-frame transitions and deltas and applies queued simulated events. While input
+		// frames are suspended it only ends the frame the game has seen.
 		static void BeginFrame();
 		static void Reset();
+
+		// Input frames follow the game's updates: while the game does not update (the editor's play mode is paused without a
+		// pending step), suspend them, so that transitions, movement and queued simulated events wait for the game's next
+		// update instead of passing unseen. Device events keep updating the state meanwhile and are reported in that update.
+		static void SetSuspended(bool suspended);
+		static bool IsSuspended();
+		// Input frames started so far (BeginFrame calls while not suspended). Simulated input counts its frames in them.
+		static uint64_t GetFrameIndex();
 
 		static void SetEnabled(bool enabled);
 		static bool IsEnabled();
@@ -82,8 +91,13 @@ namespace Strata
 		// From then on GetMousePosition reports it, and GetMouseDelta includes the moves after the first.
 		static void SimulateMouseMove(const glm::vec2& viewportPosition);
 		static void SimulateScroll(const glm::vec2& offset);
+		// Lets go of every simulated key and mouse button in the next input frame, also of presses still queued (queued button
+		// events are dropped; pointer moves and scrolling stay queued).
+		static void ReleaseAllSimulated();
 		// Drops the simulated state and the queued events at once, without reporting releases (the game session ended).
 		static void ClearSimulated();
+		// Whether simulated events wait for the next input frame.
+		static bool HasQueuedSimulatedInput();
 
 		// The simulated state as of the current frame (events still queued are not included).
 		static bool IsSimulatedKeyDown(KeyCode key);
