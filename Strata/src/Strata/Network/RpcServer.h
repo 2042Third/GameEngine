@@ -109,7 +109,12 @@ namespace Strata
 		std::chrono::milliseconds AuthenticationTimeout = std::chrono::milliseconds(5000); // From accept to rpc.authenticate
 		size_t MaxMessageSize = c_DefaultMaxRpcMessageSize;  // Per message, in both directions
 		uint32_t MaxQueuedRequests = 1024;                   // Waiting for ProcessRequests, across all clients
-		uint32_t MaxRequestsInFlightPerClient = 64;          // Further requests of that client wait (backpressure)
+		size_t MaxQueuedBytes = 256ull * 1024 * 1024;        // Their total size; beyond it, no further requests are read
+		// Requests and notifications of one client that are queued, being handled, or answered but not yet sent;
+		// further ones of that client wait in its connection (backpressure).
+		uint32_t MaxRequestsInFlightPerClient = 64;
+		// A client that has output waiting but has not accepted a byte of it for this long is disconnected.
+		std::chrono::milliseconds StalledClientTimeout = std::chrono::milliseconds(30000);
 		bool UseWakeupNotifier = true; // Diagnostics: false makes the network thread poll at a short interval instead
 	};
 
@@ -126,9 +131,12 @@ namespace Strata
 	// A new connection must send rpc.authenticate with the token as its first message, within
 	// AuthenticationTimeout; any other first message, a wrong token, or malformed input closes the connection.
 	// Until then it is limited to tiny messages and output, and only MaxPendingConnections such connections are
-	// kept. Authenticated connections count toward MaxClients (rejected with ServerBusy beyond it). A client that
-	// does not read its responses stops being read from (backpressure), and is dropped once its pending output
-	// exceeds MaxMessageSize plus a small margin; responses larger than MaxMessageSize are replaced by an error.
+	// kept (a new one evicts the oldest). Authenticated connections count toward MaxClients (rejected with
+	// ServerBusy beyond it). A client's requests are only read while it has few enough in flight and little
+	// output waiting; its answered responses wait in its connection until the socket takes them, and a client
+	// that stops accepting output for StalledClientTimeout is dropped. Replies larger than MaxMessageSize are
+	// replaced by an error, request ids longer than 256 characters are refused rather than echoed, and method
+	// names quoted in error messages are shortened.
 	//
 	// Built-in methods (answered without waiting for ProcessRequests):
 	//   rpc.authenticate {"token", "nonce"} -> {"authenticated": true, "proof"} (see RpcAuthentication)

@@ -6,6 +6,7 @@
 #include "Strata/Network/Socket.h"
 
 #include <condition_variable>
+#include <deque>
 #include <map>
 
 namespace Strata
@@ -44,6 +45,26 @@ namespace Strata
 		constexpr size_t c_MaxClosingConnections = 16;
 		// Repeated warnings (e.g. from a port scanner or a hostile process) are logged at most this often.
 		constexpr std::chrono::seconds c_WarningInterval = std::chrono::seconds(5);
+		// Request ids are echoed in every reply; longer ones are refused rather than amplified.
+		constexpr size_t c_MaxIdLength = 256;
+		// Method names echoed in error messages are cut to this length.
+		constexpr size_t c_MaxQuotedMethodLength = 64;
+
+		// A method name for messages and logs: quoted, and shortened so a huge name cannot inflate a reply.
+		std::string QuoteMethod(std::string_view method)
+		{
+			if (method.size() <= c_MaxQuotedMethodLength)
+				return fmt::format("'{}'", method);
+			return fmt::format("'{}...'", method.substr(0, c_MaxQuotedMethodLength));
+		}
+
+		bool IsIdTooLong(const nlohmann::json& id)
+		{
+			// A string is measured directly: serializing it first would copy a huge id just to measure it.
+			if (id.is_string())
+				return id.get_ref<const std::string&>().size() > c_MaxIdLength;
+			return JsonRpc::Serialize(id).size() > c_MaxIdLength;
+		}
 
 		nlohmann::json MakeEmptyObjectSchema()
 		{
@@ -133,6 +154,7 @@ namespace Strata
 			uint64_t ConnectionId = 0;
 			nlohmann::json Id;
 			RpcResult Result;
+			bool IsNotification = false; // Only marks the end of a notification's handling; nothing is sent
 		};
 
 		struct QueuedRequest
@@ -142,6 +164,7 @@ namespace Strata
 			bool IsNotification = false;
 			std::string Method;
 			nlohmann::json Params;
+			size_t Size = 0; // Size of the request line, for the queue's byte budget
 		};
 
 		struct RegisteredMethod
@@ -188,7 +211,7 @@ namespace Strata
 		try
 		{
 			if (m_Deliver)
-				m_Deliver(RpcResult::Failure(JsonRpc::ErrorCode::InternalError, fmt::format("request dropped: '{}' finished without responding", m_Method)));
+				m_Deliver(RpcResult::Failure(JsonRpc::ErrorCode::InternalError, fmt::format("request dropped: {} finished without responding", QuoteMethod(m_Method))));
 		}
 		catch (...)
 		{
@@ -208,7 +231,7 @@ namespace Strata
 		}
 		catch (const std::exception& exception)
 		{
-			ST_CORE_ERROR("RpcResponder: failed to deliver the response to '{}': {}", m_Method, exception.what());
+			ST_CORE_ERROR("RpcResponder: failed to deliver the response to {}: {}", QuoteMethod(m_Method), exception.what());
 		}
 		return true;
 	}
@@ -216,7 +239,7 @@ namespace Strata
 	void RpcResponder::Respond(RpcResult result)
 	{
 		if (!TryRespond(std::move(result)))
-			ST_CORE_WARN("RpcResponder: '{}' already responded; ignoring the second response", m_Method);
+			ST_CORE_WARN("RpcResponder: {} already responded; ignoring the second response", QuoteMethod(m_Method));
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -267,14 +290,22 @@ namespace Strata
 			// the notifier safely once it has cleared Running.
 			SocketNotifier Notifier;
 
-			void Deliver(uint64_t connectionId, nlohmann::json id, RpcResult result)
+			void Deliver(uint64_t connectionId, nlohmann::json id, RpcResult result, bool isNotification)
 			{
 				std::scoped_lock<std::mutex> lock(Mutex);
 				if (!Running || !OpenConnections.contains(connectionId))
 					return;
 
-				Outgoing.push_back(OutgoingResponse { connectionId, std::move(id), std::move(result) });
+				Outgoing.push_back(OutgoingResponse { connectionId, std::move(id), std::move(result), isNotification });
 				Notifier.Notify();
+			}
+
+			// Wakes the network thread, e.g. once the main thread has drained the queue it was waiting on.
+			void Wake()
+			{
+				std::scoped_lock<std::mutex> lock(Mutex);
+				if (Running)
+					Notifier.Notify();
 			}
 		};
 
@@ -294,7 +325,15 @@ namespace Strata
 			size_t SendOffset = 0;
 			bool Authenticated = false;
 			std::chrono::steady_clock::time_point AuthenticationDeadline;
-			uint32_t OutstandingRequests = 0; // Queued requests whose response has not arrived yet
+
+			// Requests and notifications admitted for this client that are queued, being handled, or answered but
+			// not yet moved into SendBuffer (backpressure counts all of them).
+			uint32_t RequestsInFlight = 0;
+			// Answers waiting for room in SendBuffer: they are serialized only when the socket keeps up, so the
+			// memory a slow client can hold is bounded by its requests in flight.
+			std::deque<OutgoingResponse> PendingResponses;
+			// When the socket last accepted output (or output started waiting), to detect clients that stall.
+			std::chrono::steady_clock::time_point LastSendProgress;
 
 			// A closing connection processes no more requests. Once its responses are flushed it shuts down its
 			// sending side and waits for the client's end of stream (input is read and discarded meanwhile), so the
@@ -330,6 +369,9 @@ namespace Strata
 
 		std::mutex QueueMutex;
 		std::vector<QueuedRequest> Queue;
+		std::atomic<size_t> QueuedBytes = 0;
+		// Set when the network thread held back requests because of the byte budget; ProcessRequests then wakes it.
+		std::atomic<bool> QueueBackpressured = false;
 
 		// Network thread state
 		std::vector<Scope<Connection>> Connections;
@@ -349,7 +391,8 @@ namespace Strata
 		void HandleMessage(Connection& connection, const std::string& line);
 		void HandleFirstMessage(Connection& connection, const std::optional<nlohmann::json>& message);
 		RpcResult CheckToken(const nlohmann::json& params) const;
-		void DeliverResponse(Connection& connection, const OutgoingResponse& response);
+		void TransferResponses(Connection& connection);
+		std::string SerializeBounded(const nlohmann::json& message);
 		void Send(Connection& connection, const nlohmann::json& message);
 		void SendSerialized(Connection& connection, std::string serialized);
 		void Flush(Connection& connection);
@@ -357,10 +400,23 @@ namespace Strata
 		void BeginClose(Connection& connection, std::chrono::milliseconds linger);
 		void RemoveClosedConnections();
 		void UpdateClientCount();
-		bool CanProcessRequests(const Connection& connection) const;
-		bool WantsInput(const Connection& connection) const;
+		bool CanProcessRequests(const Connection& connection);
+		bool HasQueueRoom();
+		bool WantsInput(const Connection& connection);
 		size_t CountConnections(bool authenticated) const;
 		Connection* FindConnection(uint64_t id);
+
+		// The first open connection (in order of acceptance) that matches.
+		template<typename Predicate>
+		Connection* FindOldestConnection(Predicate&& predicate)
+		{
+			for (const Scope<Connection>& connection : Connections)
+			{
+				if (!connection->Closed && predicate(*connection))
+					return connection.get();
+			}
+			return nullptr;
+		}
 
 		// Runs per-connection work so that a failure (in practice an allocation failure) closes that connection
 		// instead of escaping the network thread and terminating the process.
@@ -443,21 +499,34 @@ namespace Strata
 
 	bool RpcServer::Impl::RunIteration(std::vector<OutgoingResponse>& outgoing, std::vector<SocketPollEntry>& pollEntries)
 	{
-		for (const OutgoingResponse& response : outgoing)
+		for (OutgoingResponse& response : outgoing)
 		{
-			if (Connection* connection = FindConnection(response.ConnectionId))
-				Guard(*connection, [&]() { DeliverResponse(*connection, response); });
+			Connection* connection = FindConnection(response.ConnectionId);
+			if (!connection)
+				continue;
+			Guard(*connection, [&]()
+			{
+				if (response.IsNotification)
+				{
+					if (connection->RequestsInFlight > 0)
+						connection->RequestsInFlight--;
+					return;
+				}
+				connection->PendingResponses.push_back(std::move(response));
+			});
 		}
 
-		// Write eagerly (waiting for writability is only needed once a send buffer is full), resume clients whose
-		// backpressure has cleared, and enforce deadlines.
+		// Move answers into send buffers that have room and write eagerly (waiting for writability is only needed
+		// once a socket's buffer is full), resume clients whose backpressure has cleared, and enforce deadlines.
 		const auto now = std::chrono::steady_clock::now();
 		for (const Scope<Connection>& connection : Connections)
 		{
 			Guard(*connection, [&]()
 			{
+				TransferResponses(*connection);
 				if (!connection->Closed && connection->GetPendingOutput() > 0)
 					Flush(*connection);
+				TransferResponses(*connection);
 				ProcessBufferedLines(*connection);
 				CheckDeadlines(*connection, now);
 			});
@@ -479,6 +548,11 @@ namespace Strata
 				deadline = connection->CloseDeadline;
 			else if (!connection->Authenticated)
 				deadline = connection->AuthenticationDeadline;
+			if (connection->GetPendingOutput() > 0)
+			{
+				const auto stallDeadline = connection->LastSendProgress + Specification.StalledClientTimeout;
+				deadline = deadline ? std::min(*deadline, stallDeadline) : stallDeadline;
+			}
 			if (deadline)
 			{
 				const auto untilDeadline = std::chrono::duration_cast<std::chrono::milliseconds>(*deadline - now);
@@ -503,7 +577,10 @@ namespace Strata
 				if (entry.Readable && !connection.PeerFinished && !connection.Closed)
 					ReadFrom(connection);
 				if (entry.Writable && !connection.Closed)
+				{
 					Flush(connection);
+					TransferResponses(connection);
+				}
 			});
 		}
 
@@ -521,12 +598,34 @@ namespace Strata
 		{
 			accepted++;
 			uint64_t suppressed = 0;
-			const size_t trackedLimit = static_cast<size_t>(Specification.MaxClients) + Specification.MaxPendingConnections + c_MaxClosingConnections;
-			if (Connections.size() >= trackedLimit)
+
+			// Connections that have not authenticated never lock out new ones: the oldest of them makes room. A
+			// legitimate client authenticates within milliseconds, so it is the hoarded slots that get recycled.
+			if (CountConnections(false) >= Specification.MaxPendingConnections)
 			{
-				if (RejectionWarnings.Allow(suppressed))
-					ST_CORE_WARN("RpcServer: dropping a connection, {} connections are open{}", Connections.size(), DescribeSuppressed(suppressed));
-				continue; // Closed when the socket goes out of scope
+				Connection* oldest = FindOldestConnection([](const Connection& candidate) { return !candidate.Authenticated && !candidate.Closing; });
+				if (oldest)
+				{
+					if (RejectionWarnings.Allow(suppressed))
+						ST_CORE_WARN("RpcServer: closing client {}, which has not authenticated, to make room for a new connection{}", oldest->Id, DescribeSuppressed(suppressed));
+					Send(*oldest, JsonRpc::MakeError(nullptr, JsonRpc::ErrorCode::ServerBusy, "Too many connections are waiting to authenticate; this one was the oldest"));
+					BeginClose(*oldest, c_ErrorCloseLinger);
+				}
+			}
+
+			// Connections still finishing a close are kept only up to a limit; beyond it the oldest one is dropped.
+			const size_t trackedLimit = static_cast<size_t>(Specification.MaxClients) + Specification.MaxPendingConnections + c_MaxClosingConnections;
+			const size_t tracked = static_cast<size_t>(std::count_if(Connections.begin(), Connections.end(), [](const Scope<Connection>& existing) { return !existing->Closed; }));
+			if (tracked >= trackedLimit)
+			{
+				Connection* oldestClosing = FindOldestConnection([](const Connection& candidate) { return candidate.Closing; });
+				if (!oldestClosing)
+				{
+					if (RejectionWarnings.Allow(suppressed))
+						ST_CORE_WARN("RpcServer: dropping a connection, {} connections are open{}", tracked, DescribeSuppressed(suppressed));
+					continue; // Closed when the socket goes out of scope
+				}
+				oldestClosing->Closed = true;
 			}
 
 			socket->SetNoDelay(true);
@@ -539,17 +638,7 @@ namespace Strata
 				Shared->OpenConnections.insert(connection->Id);
 			}
 
-			if (CountConnections(false) >= Specification.MaxPendingConnections)
-			{
-				if (RejectionWarnings.Allow(suppressed))
-					ST_CORE_WARN("RpcServer: rejecting a connection, {} connections are already waiting to authenticate{}", Specification.MaxPendingConnections, DescribeSuppressed(suppressed));
-				Send(*connection, JsonRpc::MakeError(nullptr, JsonRpc::ErrorCode::ServerBusy, "Too many connections are waiting to authenticate"));
-				BeginClose(*connection, c_ErrorCloseLinger);
-			}
-			else
-			{
-				ST_CORE_TRACE("RpcServer: client {} connected", connection->Id);
-			}
+			ST_CORE_TRACE("RpcServer: client {} connected", connection->Id);
 			Connections.push_back(std::move(connection));
 		}
 
@@ -627,6 +716,11 @@ namespace Strata
 			return; // The server never sends requests, so there is nothing to match a response against
 
 		const JsonRpc::RequestValidation validation = JsonRpc::ValidateRequest(*message);
+		if (IsIdTooLong(validation.Id))
+		{
+			Send(connection, JsonRpc::MakeError(nullptr, JsonRpc::ErrorCode::InvalidRequest, fmt::format("The request id is longer than {} characters", c_MaxIdLength)));
+			return;
+		}
 		if (!validation.Valid)
 		{
 			Send(connection, JsonRpc::MakeError(validation.Id, JsonRpc::ErrorCode::InvalidRequest, validation.Error));
@@ -671,7 +765,7 @@ namespace Strata
 		}
 		if (!registered)
 		{
-			reply(RpcResult::Failure(JsonRpc::ErrorCode::MethodNotFound, fmt::format("Method '{}' not found", method)));
+			reply(RpcResult::Failure(JsonRpc::ErrorCode::MethodNotFound, fmt::format("Method {} not found", QuoteMethod(method))));
 			return;
 		}
 
@@ -682,10 +776,11 @@ namespace Strata
 				reply(RpcResult::Failure(JsonRpc::ErrorCode::ServerBusy, "Too many pending requests; the server is not keeping up"));
 				return;
 			}
-			Queue.push_back(QueuedRequest { connection.Id, validation.Id, validation.IsNotification, method, std::move(params) });
+			Queue.push_back(QueuedRequest { connection.Id, validation.Id, validation.IsNotification, method, std::move(params), line.size() });
+			QueuedBytes += line.size();
 		}
-		if (!validation.IsNotification)
-			connection.OutstandingRequests++;
+		// Notifications count as well: they produce no response, but their handling still costs the main thread.
+		connection.RequestsInFlight++;
 	}
 
 	void RpcServer::Impl::HandleFirstMessage(Connection& connection, const std::optional<nlohmann::json>& message)
@@ -709,6 +804,11 @@ namespace Strata
 		}
 
 		const JsonRpc::RequestValidation validation = JsonRpc::ValidateRequest(*message);
+		if (IsIdTooLong(validation.Id))
+		{
+			reject(nullptr, JsonRpc::ErrorCode::InvalidRequest, "The request id is too long", true);
+			return;
+		}
 		if (!validation.Valid)
 		{
 			reject(validation.Id, JsonRpc::ErrorCode::InvalidRequest, validation.Error, true);
@@ -768,27 +868,43 @@ namespace Strata
 		return RpcResult::Success(nlohmann::json { { "authenticated", true }, { "proof", RpcAuthentication::ComputeServerProof(Specification.AuthToken, nonceText) } });
 	}
 
-	void RpcServer::Impl::DeliverResponse(Connection& connection, const OutgoingResponse& response)
+	void RpcServer::Impl::TransferResponses(Connection& connection)
 	{
-		if (connection.OutstandingRequests > 0)
-			connection.OutstandingRequests--;
-
-		std::string serialized = JsonRpc::Serialize(MakeResponse(response.Id, response.Result));
-		if (serialized.size() > Specification.MaxMessageSize)
+		// Answers are serialized only while the send buffer has room, so a client that reads slowly holds at most
+		// its in-flight answers as values plus about one threshold of serialized output.
+		while (!connection.Closed && !connection.PendingResponses.empty() && connection.GetPendingOutput() < c_OutputBackpressureThreshold)
 		{
-			// The client could not read it (its reader enforces the same limit), so send an error instead.
-			uint64_t suppressed = 0;
-			if (ProtocolWarnings.Allow(suppressed))
-				ST_CORE_WARN("RpcServer: a {} byte response exceeds the message size limit{}", serialized.size(), DescribeSuppressed(suppressed));
-			serialized = JsonRpc::Serialize(JsonRpc::MakeError(response.Id, JsonRpc::ErrorCode::InternalError,
-				fmt::format("The response ({} bytes) exceeds the maximum message size of {} bytes", serialized.size(), Specification.MaxMessageSize)));
+			const OutgoingResponse response = std::move(connection.PendingResponses.front());
+			connection.PendingResponses.pop_front();
+			if (connection.RequestsInFlight > 0)
+				connection.RequestsInFlight--;
+			SendSerialized(connection, SerializeBounded(MakeResponse(response.Id, response.Result)));
 		}
-		SendSerialized(connection, std::move(serialized));
+	}
+
+	std::string RpcServer::Impl::SerializeBounded(const nlohmann::json& message)
+	{
+		std::string serialized = JsonRpc::Serialize(message);
+		if (serialized.size() <= Specification.MaxMessageSize)
+			return serialized;
+
+		// The client could not read it (its reader enforces the same limit), so send an error instead.
+		uint64_t suppressed = 0;
+		if (ProtocolWarnings.Allow(suppressed))
+			ST_CORE_WARN("RpcServer: a {} byte reply exceeds the message size limit{}", serialized.size(), DescribeSuppressed(suppressed));
+
+		const std::string reason = fmt::format("The response ({} bytes) exceeds the maximum message size of {} bytes", serialized.size(), Specification.MaxMessageSize);
+		const auto id = message.is_object() ? message.find("id") : message.end();
+		std::string error = JsonRpc::Serialize(JsonRpc::MakeError(id != message.end() ? *id : nlohmann::json(), JsonRpc::ErrorCode::InternalError, reason));
+		if (error.size() <= Specification.MaxMessageSize)
+			return error;
+		// Only reachable with an id too long to echo (requests with such ids are refused before they get here).
+		return JsonRpc::Serialize(JsonRpc::MakeError(nullptr, JsonRpc::ErrorCode::InternalError, reason));
 	}
 
 	void RpcServer::Impl::Send(Connection& connection, const nlohmann::json& message)
 	{
-		SendSerialized(connection, JsonRpc::Serialize(message));
+		SendSerialized(connection, SerializeBounded(message));
 	}
 
 	void RpcServer::Impl::SendSerialized(Connection& connection, std::string serialized)
@@ -796,17 +912,20 @@ namespace Strata
 		if (connection.Closed)
 			return;
 
+		// Output that starts waiting now has made no progress yet; the stall timeout counts from here.
+		if (connection.GetPendingOutput() == 0)
+			connection.LastSendProgress = std::chrono::steady_clock::now();
 		connection.SendBuffer += serialized;
 		connection.SendBuffer += '\n';
 
-		// Backpressure keeps a well-behaved client far below this; a client that pipelines requests without reading
-		// the responses is dropped before its output can exhaust memory.
-		const size_t limit = connection.Authenticated ? Specification.MaxMessageSize + c_OutputBackpressureThreshold : c_PreAuthMaxPendingOutput;
-		if (connection.GetPendingOutput() > limit)
+		// Authenticated connections are bounded by backpressure (no request is read and no answer is moved in
+		// while about a threshold of output waits) and by the stall timeout. Before authentication the only
+		// output is an error or two, so anything more means the peer is not reading at all.
+		if (!connection.Authenticated && connection.GetPendingOutput() > c_PreAuthMaxPendingOutput)
 		{
 			uint64_t suppressed = 0;
 			if (ProtocolWarnings.Allow(suppressed))
-				ST_CORE_WARN("RpcServer: client {} is not reading its responses; disconnecting{}", connection.Id, DescribeSuppressed(suppressed));
+				ST_CORE_WARN("RpcServer: unauthenticated client {} is not reading its output; disconnecting{}", connection.Id, DescribeSuppressed(suppressed));
 			connection.Closed = true;
 		}
 	}
@@ -826,6 +945,7 @@ namespace Strata
 			if (*sent == 0)
 				break;
 			connection.SendOffset += *sent;
+			connection.LastSendProgress = std::chrono::steady_clock::now();
 		}
 
 		if (connection.SendOffset == connection.SendBuffer.size())
@@ -845,6 +965,17 @@ namespace Strata
 		if (connection.Closed)
 			return;
 
+		// A client that keeps its connection open but stops reading would otherwise hold its output and its
+		// in-flight slots forever. Nothing more can be sent to it, so it is dropped without a goodbye.
+		if (connection.GetPendingOutput() > 0 && now - connection.LastSendProgress >= Specification.StalledClientTimeout)
+		{
+			uint64_t suppressed = 0;
+			if (ProtocolWarnings.Allow(suppressed))
+				ST_CORE_WARN("RpcServer: client {} has not accepted any output for {} ms; disconnecting{}", connection.Id, Specification.StalledClientTimeout.count(), DescribeSuppressed(suppressed));
+			connection.Closed = true;
+			return;
+		}
+
 		if (!connection.Authenticated && !connection.Closing && now >= connection.AuthenticationDeadline)
 		{
 			uint64_t suppressed = 0;
@@ -861,7 +992,7 @@ namespace Strata
 			connection.Closed = true;
 			return;
 		}
-		if (connection.GetPendingOutput() > 0 || connection.OutstandingRequests > 0)
+		if (connection.GetPendingOutput() > 0 || connection.RequestsInFlight > 0)
 			return;
 
 		// Everything is sent: end our stream once, then wait for the client's end so the close is orderly.
@@ -913,14 +1044,26 @@ namespace Strata
 		ClientCount = static_cast<uint32_t>(CountConnections(true));
 	}
 
-	bool RpcServer::Impl::CanProcessRequests(const Connection& connection) const
+	bool RpcServer::Impl::CanProcessRequests(const Connection& connection)
 	{
 		if (!connection.Authenticated)
 			return true; // Only the first message is ever handled, and it is size-limited
-		return connection.GetPendingOutput() < c_OutputBackpressureThreshold && connection.OutstandingRequests < Specification.MaxRequestsInFlightPerClient;
+		return connection.GetPendingOutput() < c_OutputBackpressureThreshold && connection.RequestsInFlight < Specification.MaxRequestsInFlightPerClient && HasQueueRoom();
 	}
 
-	bool RpcServer::Impl::WantsInput(const Connection& connection) const
+	bool RpcServer::Impl::HasQueueRoom()
+	{
+		if (QueuedBytes.load() < Specification.MaxQueuedBytes)
+			return true;
+
+		// ProcessRequests wakes this thread after draining the queue, but only if it sees the flag. Checking again
+		// after raising it means a drain that happened in between is not missed (the atomics are sequentially
+		// consistent: either ProcessRequests sees the flag, or this load sees the drained size).
+		QueueBackpressured = true;
+		return QueuedBytes.load() < Specification.MaxQueuedBytes;
+	}
+
+	bool RpcServer::Impl::WantsInput(const Connection& connection)
 	{
 		if (connection.Closed || connection.PeerFinished)
 			return false; // A finished peer stays readable (end of stream) forever
@@ -990,6 +1133,8 @@ namespace Strata
 		active.MaxQueuedRequests = std::max(specification.MaxQueuedRequests, 1u);
 		active.MaxRequestsInFlightPerClient = std::max(specification.MaxRequestsInFlightPerClient, 1u);
 		active.MaxMessageSize = std::max(specification.MaxMessageSize, c_PreAuthMaxMessageSize);
+		active.MaxQueuedBytes = std::max(specification.MaxQueuedBytes, size_t(1));
+		active.StalledClientTimeout = ClampSocketTimeout(specification.StalledClientTimeout);
 
 		m_Impl->Shared = CreateRef<RpcServerShared>();
 		if (specification.UseWakeupNotifier && !m_Impl->Shared->Notifier.Open())
@@ -1022,6 +1167,8 @@ namespace Strata
 		{
 			std::scoped_lock<std::mutex> lock(m_Impl->QueueMutex);
 			m_Impl->Queue.clear();
+			m_Impl->QueuedBytes = 0;
+			m_Impl->QueueBackpressured = false;
 		}
 
 		m_Impl->Running = false;
@@ -1110,7 +1257,14 @@ namespace Strata
 		{
 			std::scoped_lock<std::mutex> lock(m_Impl->QueueMutex);
 			requests.swap(m_Impl->Queue);
+			size_t dequeuedBytes = 0;
+			for (const QueuedRequest& request : requests)
+				dequeuedBytes += request.Size;
+			m_Impl->QueuedBytes -= dequeuedBytes;
 		}
+		// The network thread stopped reading because the queue was full; now that it is drained, let it resume.
+		if (m_Impl->QueueBackpressured.exchange(false) && m_Impl->Shared)
+			m_Impl->Shared->Wake();
 		if (requests.empty() || !m_Impl->Shared)
 			return 0;
 
@@ -1130,18 +1284,18 @@ namespace Strata
 				}
 			}
 
+			// A notification's "response" is never sent; delivering it only tells the network thread that the
+			// notification no longer counts toward its client's in-flight budget.
 			RpcResponder::DeliveryFunction deliver = [weakShared, connectionId = request.ConnectionId, id = request.Id, isNotification = request.IsNotification](RpcResult result)
 			{
-				if (isNotification)
-					return;
 				if (Ref<RpcServerShared> shared = weakShared.lock())
-					shared->Deliver(connectionId, id, std::move(result));
+					shared->Deliver(connectionId, id, isNotification ? RpcResult::Success(nullptr) : std::move(result), isNotification);
 			};
 			Ref<RpcResponder> responder = CreateRef<RpcResponder>(request.Method, std::move(deliver));
 
 			if (!handler)
 			{
-				responder->Respond(RpcResult::Failure(JsonRpc::ErrorCode::MethodNotFound, fmt::format("Method '{}' not found", request.Method)));
+				responder->Respond(RpcResult::Failure(JsonRpc::ErrorCode::MethodNotFound, fmt::format("Method {} not found", QuoteMethod(request.Method))));
 				continue;
 			}
 
@@ -1153,13 +1307,13 @@ namespace Strata
 			}
 			catch (const std::exception& exception)
 			{
-				if (!responder->TryRespond(RpcResult::Failure(JsonRpc::ErrorCode::InternalError, fmt::format("Method '{}' failed: {}", request.Method, exception.what()))))
-					ST_CORE_ERROR("RpcServer: method '{}' threw after responding: {}", request.Method, exception.what());
+				if (!responder->TryRespond(RpcResult::Failure(JsonRpc::ErrorCode::InternalError, fmt::format("Method {} failed: {}", QuoteMethod(request.Method), exception.what()))))
+					ST_CORE_ERROR("RpcServer: method {} threw after responding: {}", QuoteMethod(request.Method), exception.what());
 			}
 			catch (...)
 			{
-				if (!responder->TryRespond(RpcResult::Failure(JsonRpc::ErrorCode::InternalError, fmt::format("Method '{}' failed with an unknown exception", request.Method))))
-					ST_CORE_ERROR("RpcServer: method '{}' threw after responding", request.Method);
+				if (!responder->TryRespond(RpcResult::Failure(JsonRpc::ErrorCode::InternalError, fmt::format("Method {} failed with an unknown exception", QuoteMethod(request.Method)))))
+					ST_CORE_ERROR("RpcServer: method {} threw after responding", QuoteMethod(request.Method));
 			}
 
 			// Release the handler copy before signalling, so UnregisterMethod callers may destroy its captures.

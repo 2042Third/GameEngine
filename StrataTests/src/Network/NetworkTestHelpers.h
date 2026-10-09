@@ -90,7 +90,6 @@ namespace Strata::Tests
 			return true;
 		}
 
-		// Sends rpc.authenticate as the first message; returns whether the server accepted it.
 		// Sends rpc.authenticate as the first message; returns whether the server accepted it and proved that it
 		// knows the token.
 		bool Authenticate(const std::string& token = c_TestServerToken)

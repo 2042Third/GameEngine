@@ -586,15 +586,15 @@ TEST_SUITE("Network.RpcServer")
 		CHECK(first.Call("rpc.ping", nlohmann::json::object(), c_CallTimeout).IsSuccess());
 		CHECK(server.GetServer().GetClientCount() == 1);
 
-		// With two connections waiting to authenticate, a third one is turned away.
+		// With two connections waiting to authenticate, a third one makes room by closing the oldest of them.
 		Tests::RawRpcConnection idleSecond;
 		REQUIRE(idleSecond.Connect(server.GetPort()));
-		Tests::RawRpcConnection overflow;
-		REQUIRE(overflow.Connect(server.GetPort()));
-		CheckRejectedAndClosed(overflow, JsonRpc::ErrorCode::ServerBusy);
+		Tests::RawRpcConnection idleThird;
+		REQUIRE(idleThird.Connect(server.GetPort()));
+		CheckRejectedAndClosed(idleFirst, JsonRpc::ErrorCode::ServerBusy);
 
-		// The idle connections give up (the server notices the end of their streams and closes them).
-		for (Tests::RawRpcConnection* idle : { &idleFirst, &idleSecond })
+		// The other idle connections give up (the server notices the end of their streams and closes them).
+		for (Tests::RawRpcConnection* idle : { &idleSecond, &idleThird })
 		{
 			REQUIRE(idle->GetSocket().ShutdownSend());
 			CHECK_FALSE(idle->ReadMessage().has_value());
@@ -616,6 +616,31 @@ TEST_SUITE("Network.RpcServer")
 		RpcClient third;
 		ConnectClient(third, server.GetPort());
 		CHECK(third.Call("rpc.ping", nlohmann::json::object(), c_CallTimeout).IsSuccess());
+	}
+
+	TEST_CASE("Connections that hoard pending slots cannot lock out a client")
+	{
+		Tests::PumpedRpcServer server;
+		RpcServerSpecification specification = Tests::MakeTestServerSpecification();
+		specification.MaxPendingConnections = 2;
+		specification.AuthenticationTimeout = std::chrono::milliseconds(30000); // The hoarders never time out here
+		REQUIRE(server.Start(specification));
+
+		// A hostile process opens many connections and never authenticates.
+		std::vector<Tests::RawRpcConnection> hoarders(6);
+		for (Tests::RawRpcConnection& hoarder : hoarders)
+			REQUIRE(hoarder.Connect(server.GetPort()));
+
+		// A legitimate client still gets in: its connection evicts the oldest hoarder, and it authenticates at once.
+		RpcClient client;
+		ConnectClient(client, server.GetPort());
+		CHECK(client.Call("rpc.ping", nlohmann::json::object(), c_CallTimeout).IsSuccess());
+		CHECK(server.GetServer().GetClientCount() == 1);
+
+		// Every hoarder but the newest one was evicted with an error and an orderly close.
+		CheckRejectedAndClosed(hoarders.front(), JsonRpc::ErrorCode::ServerBusy);
+		CHECK_FALSE(hoarders.back().ReadMessage(std::chrono::milliseconds(100)).has_value());
+		CHECK_FALSE(hoarders.back().WasClosedByPeer());
 	}
 
 	TEST_CASE("Deferred responders can answer from another thread")
@@ -820,7 +845,7 @@ TEST_SUITE("Network.RpcServer")
 			return RpcResult::Success(std::string(512 * 1024, 'z'));
 		}));
 		RpcServerSpecification specification = Tests::MakeTestServerSpecification();
-		specification.MaxMessageSize = 1024 * 1024;   // Pending output beyond about 2 MiB would disconnect the client
+		specification.MaxMessageSize = 1024 * 1024;
 		specification.MaxRequestsInFlightPerClient = 1; // One response at a time, so only output backpressure applies
 		REQUIRE(server.Start(specification));
 
@@ -852,6 +877,208 @@ TEST_SUITE("Network.RpcServer")
 			CHECK((*response)["id"] == id);
 			CHECK((*response)["result"].get_ref<const std::string&>().size() == 512 * 1024);
 		}
+	}
+
+	TEST_CASE("Pipelined large responses reach a client that reads them late")
+	{
+		Tests::PumpedRpcServer server;
+		constexpr size_t c_ResponseSize = 900 * 1024;
+		REQUIRE(server.GetServer().RegisterMethod(MakeMethod("test.large"), [](const nlohmann::json&)
+		{
+			return RpcResult::Success(std::string(c_ResponseSize, 'p'));
+		}));
+		RpcServerSpecification specification = Tests::MakeTestServerSpecification();
+		specification.MaxMessageSize = 1024 * 1024;
+		specification.MaxRequestsInFlightPerClient = 32;
+		REQUIRE(server.Start(specification));
+
+		// All requests are admitted at once and answered long before the client reads: about 28 MiB of responses,
+		// far more than socket buffers hold. They wait in the server until the client catches up.
+		constexpr int c_RequestCount = 32;
+		Tests::RawRpcConnection connection;
+		REQUIRE(connection.Connect(server.GetPort()));
+		REQUIRE(connection.Authenticate());
+		std::string requests;
+		for (int id = 1; id <= c_RequestCount; id++)
+			requests += MakeRequestLine(id, "test.large") + "\n";
+		REQUIRE(connection.GetSocket().SendAll(requests, std::chrono::milliseconds(5000)));
+		std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+		std::vector<int> answered;
+		for (int index = 0; index < c_RequestCount; index++)
+		{
+			std::optional<nlohmann::json> response = connection.ReadMessage();
+			REQUIRE(response.has_value());
+			REQUIRE(response->contains("result"));
+			CHECK((*response)["result"].get_ref<const std::string&>().size() == c_ResponseSize);
+			answered.push_back((*response)["id"].get<int>());
+		}
+		std::vector<int> expected(c_RequestCount);
+		for (int index = 0; index < c_RequestCount; index++)
+			expected[index] = index + 1;
+		CHECK(answered == expected);
+
+		REQUIRE(connection.SendLine(MakeRequestLine("after", "rpc.ping")));
+		std::optional<nlohmann::json> pong = connection.ReadMessage();
+		REQUIRE(pong.has_value());
+		CHECK((*pong)["id"] == "after");
+	}
+
+	TEST_CASE("A client that stops accepting output is disconnected after the stall timeout")
+	{
+		Tests::PumpedRpcServer server;
+		REQUIRE(server.GetServer().RegisterMethod(MakeMethod("test.large"), [](const nlohmann::json&)
+		{
+			return RpcResult::Success(std::string(512 * 1024, 's'));
+		}));
+		RpcServerSpecification specification = Tests::MakeTestServerSpecification();
+		specification.MaxMessageSize = 1024 * 1024;
+		specification.StalledClientTimeout = std::chrono::milliseconds(300);
+		REQUIRE(server.Start(specification));
+
+		Tests::RawRpcConnection stalled;
+		REQUIRE(stalled.Connect(server.GetPort()));
+		REQUIRE(stalled.Authenticate());
+		std::string requests;
+		for (int id = 1; id <= 64; id++)
+			requests += MakeRequestLine(id, "test.large") + "\n";
+		REQUIRE(stalled.GetSocket().SendAll(requests, std::chrono::milliseconds(5000)));
+		CHECK(server.GetServer().GetClientCount() == 1);
+
+		// Once the socket buffers are full, nothing moves; the server gives up on the client and frees its slot.
+		CHECK(Tests::WaitUntil([&]() { return server.GetServer().GetClientCount() == 0; }, std::chrono::milliseconds(15000)));
+
+		RpcClient client;
+		ConnectClient(client, server.GetPort());
+		CHECK(client.Call("rpc.ping", nlohmann::json::object(), c_CallTimeout).IsSuccess());
+	}
+
+	TEST_CASE("Notifications count toward a client's requests in flight")
+	{
+		RpcServer server;
+		std::atomic<int> notified = 0;
+		REQUIRE(server.RegisterMethod(MakeMethod("test.notify"), [&notified](const nlohmann::json&)
+		{
+			notified++;
+			return RpcResult::Success(nullptr);
+		}));
+		RpcServerSpecification specification = Tests::MakeTestServerSpecification();
+		specification.MaxRequestsInFlightPerClient = 2;
+		REQUIRE(server.Start(specification));
+
+		Tests::RawRpcConnection connection;
+		REQUIRE(connection.Connect(server.GetPort()));
+		REQUIRE(connection.Authenticate());
+		for (int index = 0; index < 6; index++)
+			REQUIRE(connection.SendLine(JsonRpc::Serialize(JsonRpc::MakeNotification("test.notify"))));
+		REQUIRE(connection.SendLine(MakeRequestLine("last", "test.notify")));
+
+		// The network thread admits at most two of them at a time, notifications included.
+		uint32_t processed = 0;
+		uint32_t largestBatch = 0;
+		std::optional<nlohmann::json> response;
+		CHECK(Tests::WaitUntil([&]()
+		{
+			const uint32_t batch = server.ProcessRequests();
+			processed += batch;
+			largestBatch = std::max(largestBatch, batch);
+			if (!response)
+				response = connection.ReadMessage(std::chrono::milliseconds(1));
+			return response.has_value() && processed == 7;
+		}));
+		CHECK(largestBatch <= 2);
+		CHECK(notified == 7);
+		REQUIRE(response.has_value());
+		CHECK((*response)["id"] == "last");
+	}
+
+	TEST_CASE("The request queue's size in bytes is bounded")
+	{
+		RpcServer server;
+		RegisterEcho(server);
+		RpcServerSpecification specification = Tests::MakeTestServerSpecification();
+		specification.MaxQueuedBytes = 64 * 1024;
+		REQUIRE(server.Start(specification));
+
+		// Twenty requests of about 16 KiB: only about four fit in the queue's budget at a time. The rest wait in the
+		// connection, and the server resumes reading as soon as ProcessRequests drains the queue.
+		constexpr int c_RequestCount = 20;
+		Tests::RawRpcConnection connection;
+		REQUIRE(connection.Connect(server.GetPort()));
+		REQUIRE(connection.Authenticate());
+		std::string requests;
+		for (int id = 1; id <= c_RequestCount; id++)
+			requests += MakeRequestLine(id, "test.echo", nlohmann::json { { "value", std::string(16000, 'q') } }) + "\n";
+		REQUIRE(connection.GetSocket().SendAll(requests, std::chrono::milliseconds(5000)));
+
+		uint32_t processed = 0;
+		uint32_t largestBatch = 0;
+		std::vector<int> answered;
+		CHECK(Tests::WaitUntil([&]()
+		{
+			const uint32_t batch = server.ProcessRequests();
+			processed += batch;
+			largestBatch = std::max(largestBatch, batch);
+			while (std::optional<nlohmann::json> response = connection.ReadMessage(std::chrono::milliseconds(1)))
+				answered.push_back((*response)["id"].get<int>());
+			return answered.size() == c_RequestCount;
+		}, std::chrono::milliseconds(15000)));
+		CHECK(processed == c_RequestCount);
+		CHECK(largestBatch >= 1);
+		CHECK(largestBatch <= 5);
+		std::sort(answered.begin(), answered.end());
+		CHECK(answered.front() == 1);
+		CHECK(answered.back() == c_RequestCount);
+	}
+
+	TEST_CASE("Replies stay bounded whatever the request contains")
+	{
+		Tests::PumpedRpcServer server;
+		for (int index = 0; index < 20; index++)
+			REQUIRE(server.GetServer().RegisterMethod(MakeMethod("test.method" + std::to_string(index), std::string(1024, 'd')), [](const nlohmann::json&) { return RpcResult::Success(true); }));
+		RpcServerSpecification specification = Tests::MakeTestServerSpecification();
+		specification.MaxMessageSize = 8 * 1024;
+		REQUIRE(server.Start(specification));
+
+		Tests::RawRpcConnection connection;
+		REQUIRE(connection.Connect(server.GetPort()));
+		REQUIRE(connection.Authenticate());
+
+		SUBCASE("A built-in reply larger than the message size limit becomes an error")
+		{
+			REQUIRE(connection.SendLine(MakeRequestLine(1, "rpc.listMethods")));
+			std::optional<nlohmann::json> response = connection.ReadMessage();
+			REQUIRE(response.has_value());
+			CHECK((*response)["id"] == 1);
+			CHECK((*response)["error"]["code"] == JsonRpc::ErrorCode::InternalError);
+			CHECK((*response)["error"]["message"].get<std::string>().find("exceeds the maximum message size") != std::string::npos);
+		}
+
+		SUBCASE("A long method name is shortened in the error message")
+		{
+			REQUIRE(connection.SendLine(MakeRequestLine(2, std::string(6000, 'm'))));
+			std::optional<nlohmann::json> response = connection.ReadMessage();
+			REQUIRE(response.has_value());
+			CHECK((*response)["error"]["code"] == JsonRpc::ErrorCode::MethodNotFound);
+			const std::string message = (*response)["error"]["message"].get<std::string>();
+			CHECK(message.size() < 128);
+			CHECK(message.find("...") != std::string::npos);
+		}
+
+		SUBCASE("A long request id is refused instead of echoed")
+		{
+			REQUIRE(connection.SendLine(MakeRequestLine(std::string(1000, 'i'), "rpc.ping")));
+			std::optional<nlohmann::json> response = connection.ReadMessage();
+			REQUIRE(response.has_value());
+			CHECK((*response)["id"].is_null());
+			CHECK((*response)["error"]["code"] == JsonRpc::ErrorCode::InvalidRequest);
+		}
+
+		// The connection stays usable.
+		REQUIRE(connection.SendLine(MakeRequestLine("ping", "rpc.ping")));
+		std::optional<nlohmann::json> pong = connection.ReadMessage();
+		REQUIRE(pong.has_value());
+		CHECK((*pong)["result"]["pong"] == true);
 	}
 
 	TEST_CASE("Unregistering a method waits for its running handler")
