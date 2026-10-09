@@ -617,6 +617,55 @@ TEST_SUITE("Scripting.Module")
 		}
 	}
 
+	TEST_CASE("A copy directory that cannot be removed yet keeps its owner lock until a later session removes it")
+	{
+		std::filesystem::path copyDirectory;
+		DynamicLibrary extraReference;
+		{
+			ScriptEngine engine;
+			engine.SetHotReloadEnabled(true);
+			REQUIRE(engine.LoadModule(GetTestScriptModule(STRATA_TEST_SCRIPTS_API)));
+			copyDirectory = engine.GetModule()->GetLoadedPath().parent_path();
+			// Another reference keeps the copy loaded after the engine unloads it (on Windows it cannot be deleted then).
+			REQUIRE(extraReference.Load(engine.GetModule()->GetLoadedPath()));
+		}
+		if (FileSystem::Exists(copyDirectory))
+			CHECK(FileSystem::Exists(copyDirectory / "Owner.lock"));
+
+		extraReference.Unload();
+		{
+			ScriptEngine engine;
+			engine.SetHotReloadEnabled(true);
+			REQUIRE(engine.LoadModule(GetTestScriptModule(STRATA_TEST_SCRIPTS_API)));
+			CHECK_FALSE(FileSystem::Exists(copyDirectory));
+		}
+	}
+
+	TEST_CASE("Copy directories without an owner lock are removed once they are old")
+	{
+		// A process that ended right after creating its directory leaves it without a lock; a young one may be in the
+		// making.
+		const std::filesystem::path runtime = Platform::GetUserRuntimeDirectory("Strata");
+		REQUIRE_FALSE(runtime.empty());
+		const std::string suffix = UUID().ToString();
+		const std::filesystem::path old = runtime / FileSystem::FromUTF8("ScriptModules-Old" + suffix);
+		const std::filesystem::path young = runtime / FileSystem::FromUTF8("ScriptModules-Young" + suffix);
+		REQUIRE(FileSystem::WriteBytes(old / "Game-Leftover.dll", CreateGarbage(16)));
+		REQUIRE(FileSystem::WriteBytes(young / "Game-Leftover.dll", CreateGarbage(16)));
+		std::error_code error;
+		std::filesystem::last_write_time(old, std::filesystem::file_time_type::clock::now() - std::chrono::hours(2), error);
+		REQUIRE_FALSE(error);
+
+		{
+			ScriptEngine engine;
+			engine.SetHotReloadEnabled(true);
+			REQUIRE(engine.LoadModule(GetTestScriptModule(STRATA_TEST_SCRIPTS_API)));
+		}
+		CHECK_FALSE(FileSystem::Exists(old));
+		CHECK(FileSystem::Exists(young / "Game-Leftover.dll"));
+		CHECK(FileSystem::Remove(young));
+	}
+
 	TEST_CASE("Processes load script modules concurrently without disturbing each other")
 	{
 		// Each process keeps its copies in its own directory and removes only its own (or ones whose owner is gone).
