@@ -37,8 +37,8 @@ namespace Strata
 		class StrataJoltJobSystem final : public JPH::JobSystemWithBarrier
 		{
 		public:
-			StrataJoltJobSystem(JPH::uint maxJobs, JPH::uint maxBarriers)
-				: JPH::JobSystemWithBarrier(maxBarriers)
+			StrataJoltJobSystem(JPH::uint maxJobs, JPH::uint maxBarriers, std::atomic<uint64_t>* workerJobCount)
+				: JPH::JobSystemWithBarrier(maxBarriers), m_WorkerJobCount(workerJobCount)
 			{
 				m_Jobs.Init(maxJobs, maxJobs);
 			}
@@ -67,21 +67,19 @@ namespace Strata
 
 			JobHandle CreateJob(const char* name, JPH::ColorArg color, const JobFunction& function, JPH::uint32 dependencyCount) override
 			{
-				JPH::uint32 index = m_Jobs.ConstructObject(name, color, this, function, dependencyCount);
-				if (index == JobStorage::cInvalidObjectIndex)
+				// Without workers every job runs on the stepping thread, so there is nothing to count.
+				if (m_WorkerJobCount && ::Strata::JobSystem::IsInitialized())
 				{
-					// Every job slot is in use: wait for running jobs to finish and free theirs. Jolt never needs more
-					// than JPH::cMaxPhysicsJobs jobs at once, so this only happens with a misconfigured world.
-					ST_CORE_ERROR("Physics: the job pool is exhausted; waiting for running jobs");
-					while ((index = m_Jobs.ConstructObject(name, color, this, function, dependencyCount)) == JobStorage::cInvalidObjectIndex)
-						std::this_thread::yield();
+					std::atomic<uint64_t>* counter = m_WorkerJobCount;
+					const JobFunction counted = [counter, function]()
+					{
+						if (::Strata::JobSystem::IsWorkerThread())
+							counter->fetch_add(1, std::memory_order_relaxed);
+						function();
+					};
+					return CreateStoredJob(name, color, counted, dependencyCount);
 				}
-
-				Job* job = &m_Jobs.Get(index);
-				JobHandle handle(job); // Keeps the job alive while it is queued and possibly completes right away
-				if (dependencyCount == 0)
-					QueueJob(job);
-				return handle;
+				return CreateStoredJob(name, color, function, dependencyCount);
 			}
 
 			void WaitForJobs(Barrier* barrier) override
@@ -133,6 +131,25 @@ namespace Strata
 				m_Jobs.DestructObject(job);
 			}
 		private:
+			JobHandle CreateStoredJob(const char* name, JPH::ColorArg color, const JobFunction& function, JPH::uint32 dependencyCount)
+			{
+				JPH::uint32 index = m_Jobs.ConstructObject(name, color, this, function, dependencyCount);
+				if (index == JobStorage::cInvalidObjectIndex)
+				{
+					// Every job slot is in use: wait for running jobs to finish and free theirs. Jolt never needs more
+					// than JPH::cMaxPhysicsJobs jobs at once, so this only happens with a misconfigured world.
+					ST_CORE_ERROR("Physics: the job pool is exhausted; waiting for running jobs");
+					while ((index = m_Jobs.ConstructObject(name, color, this, function, dependencyCount)) == JobStorage::cInvalidObjectIndex)
+						std::this_thread::yield();
+				}
+
+				Job* job = &m_Jobs.Get(index);
+				JobHandle handle(job); // Keeps the job alive while it is queued and possibly completes right away
+				if (dependencyCount == 0)
+					QueueJob(job);
+				return handle;
+			}
+
 			// Runs on a Strata worker: executes queued jobs until the queue is empty. The task count is updated under the
 			// queue lock, so a job queued after the last task saw an empty queue always starts a new task.
 			void DrainQueue()
@@ -177,13 +194,14 @@ namespace Strata
 			std::deque<Job*> m_ReadyJobs;                  // Each entry holds a reference to its job
 			uint32_t m_ActiveDrainTasks = 0;
 			std::vector<::Strata::JobHandle> m_DrainTasks; // Submitted drain tasks (completed ones are pruned)
+			std::atomic<uint64_t>* m_WorkerJobCount = nullptr;
 		};
 
 	}
 
-	Scope<JPH::JobSystem> CreatePhysicsJobSystem()
+	Scope<JPH::JobSystem> CreatePhysicsJobSystem(std::atomic<uint64_t>* workerJobCount)
 	{
-		return CreateScope<StrataJoltJobSystem>(static_cast<JPH::uint>(JPH::cMaxPhysicsJobs), static_cast<JPH::uint>(JPH::cMaxPhysicsBarriers));
+		return CreateScope<StrataJoltJobSystem>(static_cast<JPH::uint>(JPH::cMaxPhysicsJobs), static_cast<JPH::uint>(JPH::cMaxPhysicsBarriers), workerJobCount);
 	}
 
 }

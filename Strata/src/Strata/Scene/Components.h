@@ -214,6 +214,11 @@ namespace Strata
 	// Physics
 	////////////////////////////////////////////////////////////////////////////////
 
+	// Bodies: an entity with a RigidBodyComponent is one body, made of its own colliders and the colliders of descendants
+	// without a RigidBodyComponent of their own (placed by their transform relative to it). Collider entities without a
+	// RigidBodyComponent on themselves or any ancestor are static bodies of their own. Collision events and queries report the
+	// entity that owns the body.
+
 	enum class RigidBodyType : uint8_t
 	{
 		Static = 0,

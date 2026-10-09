@@ -123,7 +123,7 @@ TEST_SUITE("Physics.Simulation")
 		CHECK(stats.ActiveBodyCount == 0);
 		CHECK(stats.ContactPairCount == 1);
 		CHECK(stats.StepCount == 180);
-		CHECK(stats.LastStepTime >= 0.0f);
+		CHECK(stats.PendingBodyCount == 0);
 	}
 
 	TEST_CASE("Restitution makes a sphere bounce")
@@ -443,8 +443,9 @@ TEST_SUITE("Physics.Simulation")
 		CHECK(std::abs(GetWorldPosition(scene, flat).y - 0.25f) < 0.03f);
 		CHECK(Math::IsNearlyEqual(flat.GetComponent<TransformComponent>().Scale, glm::vec3(1.0f, 0.5f, 1.0f), 1.0e-4f));
 
-		// Changing the scale at runtime rebuilds the shape.
+		// Changing the scale at runtime rebuilds the shape (static bodies follow signaled transform changes).
 		slab.GetTransform().Scale = glm::vec3(2.0f, 1.0f, 2.0f);
+		slab.MarkModified<TransformComponent>();
 		StepScene(scene, 1);
 		CHECK_FALSE(hitsSlab(1.9f, 0.0f));
 		CHECK(hitsSlab(0.9f, 0.0f));
@@ -461,10 +462,25 @@ TEST_SUITE("Physics.Simulation")
 		StepScene(scene, 120);
 		REQUIRE(physics.IsSleeping(box));
 
-		// Like dragging the platform in the editor while simulating.
+		// Like dragging the platform in the editor while simulating (edits go through ComponentAccess, which signals the
+		// change; static bodies are not polled every step).
 		platform.GetTransform().Translation.y = -2.5f;
+		platform.MarkModified<TransformComponent>();
 		StepScene(scene, 120);
 		CHECK(std::abs(GetWorldPosition(scene, box).y + 1.5f) < 0.03f);
+
+		// Moving an ancestor moves static descendants as well.
+		Entity holder = scene.CreateEntity("Holder");
+		Entity shelf = CreateStaticBox(scene, "Shelf", glm::vec3(20.0f, 0.0f, 0.0f), glm::vec3(1.0f, 0.1f, 1.0f));
+		scene.SetParent(shelf, holder);
+		StepScene(scene, 1);
+		holder.GetTransform().Translation.y = 5.0f;
+		holder.MarkModified<TransformComponent>();
+		StepScene(scene, 1);
+		std::optional<RaycastHit> hit = physics.Raycast(glm::vec3(20.0f, 10.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), 20.0f);
+		REQUIRE(hit);
+		CHECK(hit->HitEntity == shelf);
+		CHECK(hit->Point.y == doctest::Approx(5.1f).epsilon(1.0e-3));
 	}
 
 	TEST_CASE("Gravity follows the scene settings and wakes sleeping bodies")
@@ -528,6 +544,71 @@ TEST_SUITE("Physics.Simulation")
 		CHECK(AreIdentical(first, threaded));
 	}
 
+	TEST_CASE("Moving a body wakes the bodies resting on it")
+	{
+		enum class Move
+		{
+			Teleport,
+			TransformEdit,
+			Kinematic
+		};
+
+		// Two stacked boxes fall asleep; then the bottom one is moved away from under the top one, which must fall.
+		const auto topHeightAfterMove = [](Move move)
+		{
+			Scene scene;
+			CreateGround(scene);
+			Entity bottom = CreateDynamicBox(scene, "Bottom", glm::vec3(0.0f, 0.5f, 0.0f));
+			if (move == Move::Kinematic)
+				bottom.GetComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
+			Entity top = CreateDynamicBox(scene, "Top", glm::vec3(0.0f, 1.5f, 0.0f));
+
+			scene.OnRuntimeStart();
+			PhysicsSystem& physics = GetPhysics(scene);
+			StepScene(scene, 120);
+			REQUIRE(physics.IsSleeping(top));
+
+			switch (move)
+			{
+				case Move::Teleport: CHECK(physics.Teleport(bottom, glm::vec3(5.0f, 0.5f, 0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f))); break;
+				case Move::TransformEdit: bottom.GetTransform().Translation.x = 5.0f; break; // Dynamic bodies are checked every step
+				case Move::Kinematic: bottom.GetTransform().Translation.y = -5.0f; break;   // Drops away below the ground
+			}
+			StepScene(scene, 90);
+			return GetWorldPosition(scene, top).y;
+		};
+
+		CHECK(std::abs(topHeightAfterMove(Move::Teleport) - 0.5f) < 0.03f);
+		CHECK(std::abs(topHeightAfterMove(Move::TransformEdit) - 0.5f) < 0.03f);
+		CHECK(std::abs(topHeightAfterMove(Move::Kinematic) - 0.5f) < 0.03f);
+	}
+
+	TEST_CASE("Kinematic bodies reach their target when a frame runs several fixed steps")
+	{
+		Scene scene;
+		scene.GetSettings().FixedTimestep = 1.0f / 120.0f;
+		scene.GetSettings().Gravity = glm::vec3(0.0f);
+		Entity pusher = CreateDynamicBox(scene, "Pusher", glm::vec3(0.0f));
+		pusher.GetComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
+
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		for (int frame = 1; frame <= 30; frame++)
+		{
+			pusher.GetTransform().Translation.x = 0.1f * static_cast<float>(frame);
+			scene.OnUpdateRuntime(1.0f / 60.0f); // Two fixed steps: the first moves the body, the second holds it there
+
+			// The body sits exactly where its entity is, at rest, after every frame.
+			const float x = pusher.GetComponent<TransformComponent>().Translation.x;
+			std::optional<RaycastHit> inside = physics.Raycast(glm::vec3(x + 0.45f, 5.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), 10.0f);
+			std::optional<RaycastHit> outside = physics.Raycast(glm::vec3(x + 0.55f, 5.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), 10.0f);
+			CHECK(inside.has_value());
+			CHECK_FALSE(outside.has_value());
+			CHECK(glm::length(physics.GetLinearVelocity(pusher)) < 1.0e-4f);
+		}
+		CHECK(physics.GetStats().StepCount == 60);
+	}
+
 	TEST_CASE("Steps complete while every worker thread is busy")
 	{
 		// Physics jobs handed to the worker pool must never be required for a step to finish, and jobs the stepping thread
@@ -566,8 +647,20 @@ TEST_SUITE("Physics.Simulation")
 		CHECK(CountLogMessages(logStart, "job pool is exhausted") == 0);
 	}
 
-	TEST_CASE("A thousand bodies simulate without errors")
+	TEST_CASE("A thousand bodies simulate without errors, using the worker threads")
 	{
+		// Without a JobSystem every job runs on the stepping thread.
+		{
+			Scene scene;
+			CreateGround(scene);
+			CreateDynamicBox(scene, "Box", glm::vec3(0.0f, 1.0f, 0.0f));
+			scene.OnRuntimeStart();
+			StepScene(scene, 5);
+			CHECK(GetPhysics(scene).GetStats().WorkerJobCount == 0);
+		}
+
+		// With one, workers pick up part of the step (this scene's jobs are long enough for them to get there first).
+		ScopedJobSystem jobSystem(3);
 		Scene scene("Stress");
 		CreateGround(scene);
 		std::vector<Entity> bodies;
@@ -593,6 +686,7 @@ TEST_SUITE("Physics.Simulation")
 		CHECK(stats.DynamicBodyCount == 1000);
 		CHECK(stats.StepCount == 15);
 		CHECK(stats.ContactPairCount >= 100); // At least the bottom layer rests on the ground
+		CHECK(stats.WorkerJobCount > 0);
 		size_t valid = 0;
 		for (Entity body : bodies)
 		{

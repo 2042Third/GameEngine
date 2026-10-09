@@ -16,24 +16,23 @@ namespace Strata
 			return s_DefaultSettings;
 		}
 
-		template<typename Component, auto Candidate, typename Instance>
-		void ConnectChangeSignals(entt::registry& registry, Instance& instance, std::vector<entt::scoped_connection>& connections)
-		{
-			connections.emplace_back(registry.on_construct<Component>().template connect<Candidate>(instance));
-			connections.emplace_back(registry.on_update<Component>().template connect<Candidate>(instance));
-			connections.emplace_back(registry.on_destroy<Component>().template connect<Candidate>(instance));
-		}
-
 		// Bitwise comparison, so that a non-finite gravity is not re-applied (and re-rejected) every step.
 		bool IsSameVector(const glm::vec3& a, const glm::vec3& b)
 		{
 			return std::memcmp(&a, &b, sizeof(glm::vec3)) == 0;
 		}
 
+		template<typename Component>
+		bool HasAny(const entt::registry& registry)
+		{
+			const auto* storage = registry.storage<Component>();
+			return storage && !storage->empty();
+		}
+
 	}
 
 	PhysicsSystem::PhysicsSystem(Scene& scene)
-		: m_Scene(scene)
+		: m_Scene(scene), m_Settings(GetDefaultSettings())
 	{
 	}
 
@@ -56,22 +55,30 @@ namespace Strata
 	{
 		ST_PROFILE_FUNCTION();
 
-		if (m_World)
+		if (m_Running)
 			return;
 
-		m_World = CreateScope<PhysicsWorld>(m_Scene, GetDefaultSettings());
-		m_AppliedGravity = m_Scene.GetSettings().Gravity;
-		ConnectSignals();
-		m_World->CreateAllBodies();
+		m_Running = true;
+		if (SceneHasPhysicsComponents())
+		{
+			CreateWorld();
+			return;
+		}
+
+		// No physics yet: create the world (and allocate Jolt's per-world buffers) only once a physics component appears.
+		entt::registry& registry = m_Scene.GetRegistry();
+		m_CreationConnections.emplace_back(registry.on_construct<RigidBodyComponent>().connect<&PhysicsSystem::OnPhysicsComponentAdded>(*this));
+		m_CreationConnections.emplace_back(registry.on_construct<BoxColliderComponent>().connect<&PhysicsSystem::OnPhysicsComponentAdded>(*this));
+		m_CreationConnections.emplace_back(registry.on_construct<SphereColliderComponent>().connect<&PhysicsSystem::OnPhysicsComponentAdded>(*this));
+		m_CreationConnections.emplace_back(registry.on_construct<CapsuleColliderComponent>().connect<&PhysicsSystem::OnPhysicsComponentAdded>(*this));
+		m_CreationConnections.emplace_back(registry.on_construct<MeshColliderComponent>().connect<&PhysicsSystem::OnPhysicsComponentAdded>(*this));
 	}
 
 	void PhysicsSystem::OnRuntimeStop()
 	{
-		m_Connections.clear();
-		m_PendingRebuilds.clear();
-		m_PendingRebuildSet.clear();
-		m_PendingActivity.clear();
-		m_PendingActivitySet.clear();
+		m_CreationConnections.clear();
+		m_WorldRequested = false;
+		m_Running = false;
 		m_World.reset(); // Bodies are destroyed without collision events: the whole world goes away
 	}
 
@@ -85,10 +92,10 @@ namespace Strata
 	{
 		ST_PROFILE_FUNCTION();
 
+		ApplyPendingChanges();
 		if (!m_World)
 			return;
 
-		ApplyPendingChanges();
 		SyncGravity();
 		m_World->Simulate(timestep);
 		DispatchCollisionEvents();
@@ -138,12 +145,13 @@ namespace Strata
 	void PhysicsSystem::SetLayersCollide(uint32_t layerA, uint32_t layerB, bool collide)
 	{
 		if (m_World)
-			m_World->SetLayersCollide(layerA, layerB, collide);
+			m_World->SetLayersCollide(layerA, layerB, collide); // Validates and warns
+		m_Settings.SetLayersCollide(layerA, layerB, collide);
 	}
 
 	bool PhysicsSystem::DoLayersCollide(uint32_t layerA, uint32_t layerB) const
 	{
-		return m_World ? m_World->DoLayersCollide(layerA, layerB) : GetDefaultSettings().DoLayersCollide(layerA, layerB);
+		return m_Settings.DoLayersCollide(layerA, layerB);
 	}
 
 	PhysicsStats PhysicsSystem::GetStats() const
@@ -155,6 +163,12 @@ namespace Strata
 	{
 		ApplyPendingChanges();
 		return m_World && m_World->HasBody(entity);
+	}
+
+	Entity PhysicsSystem::GetBodyEntity(Entity entity)
+	{
+		ApplyPendingChanges();
+		return m_World ? m_World->GetBodyEntity(entity) : Entity();
 	}
 
 	glm::vec3 PhysicsSystem::GetLinearVelocity(Entity entity)
@@ -267,81 +281,40 @@ namespace Strata
 		return m_World->OverlapBox(center, halfExtents, rotation, layerMask, includeTriggers);
 	}
 
-	void PhysicsSystem::ConnectSignals()
+	bool PhysicsSystem::SceneHasPhysicsComponents() const
 	{
-		entt::registry& registry = m_Scene.GetRegistry();
-		ConnectChangeSignals<RigidBodyComponent, &PhysicsSystem::OnBodyComponentChanged>(registry, *this, m_Connections);
-		ConnectChangeSignals<BoxColliderComponent, &PhysicsSystem::OnBodyComponentChanged>(registry, *this, m_Connections);
-		ConnectChangeSignals<SphereColliderComponent, &PhysicsSystem::OnBodyComponentChanged>(registry, *this, m_Connections);
-		ConnectChangeSignals<CapsuleColliderComponent, &PhysicsSystem::OnBodyComponentChanged>(registry, *this, m_Connections);
-		ConnectChangeSignals<MeshColliderComponent, &PhysicsSystem::OnBodyComponentChanged>(registry, *this, m_Connections);
-		ConnectChangeSignals<MeshRendererComponent, &PhysicsSystem::OnMeshRendererChanged>(registry, *this, m_Connections);
-
-		// Every entity has an IDComponent until it is destroyed, so its removal reports entity destruction.
-		m_Connections.emplace_back(registry.on_destroy<IDComponent>().connect<&PhysicsSystem::OnBodyComponentChanged>(*this));
-		m_Connections.emplace_back(registry.on_construct<InactiveComponent>().connect<&PhysicsSystem::OnActivityChanged>(*this));
-		m_Connections.emplace_back(registry.on_destroy<InactiveComponent>().connect<&PhysicsSystem::OnActivityChanged>(*this));
+		const entt::registry& registry = m_Scene.GetRegistry();
+		return HasAny<RigidBodyComponent>(registry) || HasAny<BoxColliderComponent>(registry) || HasAny<SphereColliderComponent>(registry)
+			|| HasAny<CapsuleColliderComponent>(registry) || HasAny<MeshColliderComponent>(registry);
 	}
 
-	void PhysicsSystem::OnBodyComponentChanged(entt::registry&, entt::entity handle)
+	void PhysicsSystem::OnPhysicsComponentAdded(entt::registry&, entt::entity)
 	{
-		// Applied later: on_destroy fires before the component is removed, and new components are usually filled in right
-		// after they are added.
-		if (m_PendingRebuildSet.insert(handle).second)
-			m_PendingRebuilds.push_back(handle);
+		// Created later: the component is usually filled in right after it is added.
+		m_WorldRequested = true;
 	}
 
-	void PhysicsSystem::OnMeshRendererChanged(entt::registry& registry, entt::entity handle)
+	void PhysicsSystem::CreateWorld()
 	{
-		// Mesh colliders without a mesh of their own use the renderer's mesh.
-		if (registry.all_of<MeshColliderComponent>(handle))
-			OnBodyComponentChanged(registry, handle);
-	}
-
-	void PhysicsSystem::OnActivityChanged(entt::registry& registry, entt::entity handle)
-	{
-		MarkActivityChanged(registry, handle);
-	}
-
-	void PhysicsSystem::MarkActivityChanged(entt::registry& registry, entt::entity handle)
-	{
-		// Activity is inherited, so the whole subtree may have changed.
-		if (m_PendingActivitySet.insert(handle).second)
-			m_PendingActivity.push_back(handle);
-
-		const RelationshipComponent* relationship = registry.try_get<RelationshipComponent>(handle);
-		if (!relationship)
-			return;
-		for (UUID child : relationship->Children)
-		{
-			if (const Entity childEntity = m_Scene.GetEntityByUUID(child))
-				MarkActivityChanged(registry, childEntity.GetHandle());
-		}
+		m_CreationConnections.clear();
+		m_WorldRequested = false;
+		m_World = CreateScope<PhysicsWorld>(m_Scene, m_Settings);
+		m_AppliedGravity = m_Scene.GetSettings().Gravity;
 	}
 
 	void PhysicsSystem::ApplyPendingChanges()
 	{
-		if (!m_World)
+		if (!m_Running)
 			return;
 
-		// Each list is moved out first: applying a change never records new ones, but this keeps the loops safe regardless.
-		if (!m_PendingRebuilds.empty())
+		if (!m_World)
 		{
-			std::vector<entt::entity> rebuilds = std::move(m_PendingRebuilds);
-			m_PendingRebuilds.clear();
-			m_PendingRebuildSet.clear();
-			for (entt::entity handle : rebuilds)
-				m_World->RefreshBody(handle);
+			// The components may have been removed again before the world was needed.
+			if (m_WorldRequested && SceneHasPhysicsComponents())
+				CreateWorld();
+			return;
 		}
-
-		if (!m_PendingActivity.empty())
-		{
-			std::vector<entt::entity> activity = std::move(m_PendingActivity);
-			m_PendingActivity.clear();
-			m_PendingActivitySet.clear();
-			for (entt::entity handle : activity)
-				m_World->RefreshActivity(handle);
-		}
+		m_World->ApplyPendingChanges();
 	}
 
 	void PhysicsSystem::SyncGravity()

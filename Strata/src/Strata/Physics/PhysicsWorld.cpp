@@ -32,6 +32,7 @@
 #include <Jolt/Physics/PhysicsSystem.h>
 
 #include <map>
+#include <set>
 
 namespace Strata
 {
@@ -50,17 +51,44 @@ namespace Strata
 		// Relative change of an entity's world scale that rebuilds its body's shape.
 		constexpr float c_ScaleChangeTolerance = 1.0e-4f;
 		constexpr float c_MaxRaycastDistance = 1.0e5f;
-		// Bodies within this distance of a body that is removed or teleported are woken up, so that nothing keeps sleeping
-		// on top of a body that is no longer there.
+		// Bodies within this distance of a body that is removed or moved are woken up, so that nothing keeps sleeping on
+		// top of a body that is no longer there.
 		constexpr float c_WakeMargin = 0.1f;
 		constexpr float c_MinimumMass = 0.001f;
+		// Applying a change can move colliders to another body, which is a change in turn; this many rounds always settle
+		// a consistent hierarchy, so hitting the limit means a bug rather than a big change.
+		constexpr uint32_t c_MaxChangeRounds = 16;
 
+		// Warnings are issued once per entity and kind. The transient kinds are reset when the entity's body is built, so
+		// that a recurring problem is reported again.
 		enum class PhysicsWarning : uint8_t
 		{
 			MissingCollider = 1,
-			InvalidLayer,
 			DegenerateTransform,
-			NonFiniteState
+			MissingMesh,
+			NoUsableCollider,
+			BodyLimit,
+			// Kinds below are reported once for the entity's lifetime
+			InvalidLayer,
+			InvalidType,
+			InvalidCollider,
+			InvalidMesh,
+			UnsupportedMesh,
+			NonFiniteState,
+			Count
+		};
+
+		constexpr PhysicsWarning c_TransientWarnings[] = { PhysicsWarning::MissingCollider, PhysicsWarning::DegenerateTransform, PhysicsWarning::MissingMesh, PhysicsWarning::NoUsableCollider, PhysicsWarning::BodyLimit };
+
+		// Why an entity that needs a body has none.
+		enum class BuildFailure : uint8_t
+		{
+			None = 0,
+			NoCollider,          // A rigid body without colliders; waits for a component change
+			InvalidColliders,    // Every collider has invalid data; waits for a component change
+			DegenerateTransform, // Retried when the world transform changes
+			MissingMesh,         // Retried every step: mesh data may still be loading
+			BodyLimit            // Retried every step while the world is full
 		};
 
 		//////////////////////////////////////////////////////////////////////////
@@ -199,32 +227,107 @@ namespace Strata
 			uint32_t m_LayerMask;
 		};
 
-		// Query filter skipping an ignored body, triggers (unless requested) and bodies whose entity was destroyed but whose
-		// destruction the world has not processed yet. Queries run on the main thread, so reading the scene is safe.
-		class QueryBodyFilter final : public JPH::BodyFilter
+		//////////////////////////////////////////////////////////////////////////
+		// Hierarchy
+		//////////////////////////////////////////////////////////////////////////
+
+		bool HasCollider(const Entity& entity)
 		{
-		public:
-			QueryBodyFilter(const Scene& scene, const JPH::BodyID& ignoredBody, bool includeTriggers)
-				: m_Scene(scene), m_IgnoredBody(ignoredBody), m_IncludeTriggers(includeTriggers)
-			{
-			}
+			return entity.HasAnyComponent<BoxColliderComponent, SphereColliderComponent, CapsuleColliderComponent, MeshColliderComponent>();
+		}
 
-			bool ShouldCollide(const JPH::BodyID& bodyID) const override
-			{
-				return bodyID != m_IgnoredBody;
-			}
+		bool HasPhysicsComponent(const Entity& entity)
+		{
+			return entity.HasComponent<RigidBodyComponent>() || HasCollider(entity);
+		}
 
-			bool ShouldCollideLocked(const JPH::Body& body) const override
+		// The entity whose body holds this entity's colliders: the entity itself if it has a rigid body, else (if it has
+		// colliders) its nearest ancestor with a rigid body, or the entity itself (a static body of its own). Invalid for
+		// entities without physics components.
+		Entity FindBodyOwner(Entity entity)
+		{
+			if (!entity.IsValid())
+				return {};
+			if (entity.HasComponent<RigidBodyComponent>())
+				return entity;
+			if (!HasCollider(entity))
+				return {};
+			for (Entity parent = entity.GetParent(); parent.IsValid(); parent = parent.GetParent())
 			{
-				if (!m_IncludeTriggers && body.IsSensor())
+				if (parent.HasComponent<RigidBodyComponent>())
+					return parent;
+			}
+			return entity;
+		}
+
+		bool IsPendingDestroyInHierarchy(const Scene& scene, Entity entity)
+		{
+			for (Entity current = entity; current.IsValid(); current = current.GetParent())
+			{
+				if (scene.IsPendingDestroy(current))
+					return true;
+			}
+			return false;
+		}
+
+		// Active in the hierarchy and not about to be destroyed: such entities take part in the simulation.
+		bool IsSimulated(const Scene& scene, Entity entity)
+		{
+			return scene.IsActiveInHierarchy(entity) && !IsPendingDestroyInHierarchy(scene, entity);
+		}
+
+		// Whether a merged collider entity contributes to its owner's shape: neither it nor an entity between it and the
+		// owner is inactive or pending destruction. (The owner's own state decides whether the whole body is simulated.)
+		bool IsPartOfOwnerShape(const Scene& scene, Entity entity, Entity owner)
+		{
+			for (Entity current = entity; current.IsValid() && current != owner; current = current.GetParent())
+			{
+				if (current.HasComponent<InactiveComponent>() || scene.IsPendingDestroy(current))
 					return false;
-				return m_Scene.GetEntityByUUID(UUID(body.GetUserData())).IsValid();
 			}
-		private:
-			const Scene& m_Scene;
-			JPH::BodyID m_IgnoredBody;
-			bool m_IncludeTriggers;
-		};
+			return true;
+		}
+
+		// Visits root and its descendants depth first, parents before children. The visitor returns whether to descend into
+		// the visited entity's children.
+		template<typename Visitor>
+		void VisitSubtree(const Scene& scene, Entity root, Visitor&& visitor)
+		{
+			std::vector<Entity> stack { root };
+			while (!stack.empty())
+			{
+				Entity entity = stack.back();
+				stack.pop_back();
+				if (!entity.IsValid() || !visitor(entity))
+					continue;
+
+				const RelationshipComponent* relationship = entity.TryGetComponent<RelationshipComponent>();
+				if (!relationship)
+					continue;
+				for (auto it = relationship->Children.rbegin(); it != relationship->Children.rend(); ++it)
+				{
+					if (const Entity child = scene.GetEntityByUUID(*it))
+						stack.push_back(child);
+				}
+			}
+		}
+
+		// Collider entities in the subtree of a rigid body that belong to its body (stops at descendants with a rigid body).
+		std::vector<entt::entity> CollectMergedEntities(const Scene& scene, Entity owner)
+		{
+			std::vector<entt::entity> merged;
+			VisitSubtree(scene, owner, [&](Entity entity)
+			{
+				if (entity == owner)
+					return true;
+				if (entity.HasComponent<RigidBodyComponent>())
+					return false;
+				if (HasCollider(entity))
+					merged.push_back(entity.GetHandle());
+				return true;
+			});
+			return merged;
+		}
 
 		//////////////////////////////////////////////////////////////////////////
 		// Listeners (called from Jolt's worker threads during a step)
@@ -333,13 +436,18 @@ namespace Strata
 		// World state
 		//////////////////////////////////////////////////////////////////////////
 
+		// An entity that owns a body (a rigid body, or a collider entity without a rigid body ancestor). The record exists as
+		// long as the entity needs a body, also while the body cannot be built (see BuildFailure).
 		struct BodyRecord
 		{
 			UUID EntityID = UUID::Null();
-			JPH::BodyID BodyID;
+			JPH::BodyID BodyID;                             // Invalid while the body cannot be built
 			RigidBodyType Type = RigidBodyType::Static;
+			BuildFailure Failure = BuildFailure::None;
 			bool InSimulation = false;
+			bool Suspended = false;                         // Out of the simulation because the world transform is degenerate
 			bool KinematicMoving = false;                   // MoveKinematic gave the body a velocity during the last step
+			bool TransformDirty = false;                    // Re-synchronize with the entity at the next step (static bodies)
 			glm::vec3 ShapeScale = glm::vec3(1.0f);         // World scale baked into the shape
 			glm::mat4 LastWorldTransform = glm::mat4(1.0f); // Entity world transform the body was last synchronized with
 			glm::vec3 KinematicTargetPosition = glm::vec3(0.0f);
@@ -347,6 +455,11 @@ namespace Strata
 			// Velocities of a dynamic body while it is out of the simulation (Jolt clears them on removal).
 			glm::vec3 SavedLinearVelocity = glm::vec3(0.0f);
 			glm::vec3 SavedAngularVelocity = glm::vec3(0.0f);
+			std::vector<entt::entity> MergedEntities; // Collider descendants that belong to this body
+			std::vector<entt::entity> ShapeEntities;  // Descendants whose colliders are part of the current shape
+			std::vector<AssetHandle> MissingMeshes;   // Mesh colliders left out because their data was not available
+
+			bool HasBody() const { return !BodyID.IsInvalid(); }
 		};
 
 		// Contacts are tracked per pair of entities (not bodies), so that rebuilding a body keeps its contacts.
@@ -390,6 +503,36 @@ namespace Strata
 			JPH::RefConst<JPH::Shape> Shape;
 		};
 
+		// Entities whose changes are applied by the next ApplyPendingChanges, in the order they were recorded.
+		class ChangeList
+		{
+		public:
+			void Add(entt::entity handle)
+			{
+				if (m_Set.insert(handle).second)
+					m_List.push_back(handle);
+			}
+
+			bool IsEmpty() const { return m_List.empty(); }
+
+			std::vector<entt::entity> Take()
+			{
+				std::vector<entt::entity> list = std::move(m_List);
+				m_List.clear();
+				m_Set.clear();
+				return list;
+			}
+
+			void Clear()
+			{
+				m_List.clear();
+				m_Set.clear();
+			}
+		private:
+			std::vector<entt::entity> m_List;
+			std::unordered_set<entt::entity> m_Set;
+		};
+
 		PhysicsMeshProvider& GetMeshProviderStorage()
 		{
 			static PhysicsMeshProvider s_MeshProvider;
@@ -424,28 +567,63 @@ namespace Strata
 		UserLayerPairFilter LayerPairFilter;
 		ContactCollector Contacts;
 		ActivationCollector Activations;
+		std::atomic<uint64_t> WorkerJobCount = 0;
 		Scope<JPH::TempAllocator> Allocator;
 		Scope<JPH::JobSystem> Jobs;
 		std::unordered_map<AssetHandle, MeshShapeCacheEntry> ConvexMeshShapes;
 		std::unordered_map<AssetHandle, MeshShapeCacheEntry> TriangleMeshShapes;
 		Scope<JPH::PhysicsSystem> JoltSystem; // Destroyed before the listeners, filters and allocators it references
 
-		std::map<entt::entity, BodyRecord> Bodies;                  // Ordered: per-step processing is deterministic
-		std::unordered_map<JPH::uint32, entt::entity> BodyEntities; // Body ID (index and sequence number) -> entity
+		std::map<entt::entity, BodyRecord> Bodies;                    // Ordered: per-step processing is deterministic
+		std::unordered_map<entt::entity, entt::entity> MergedOwners;  // Collider entity -> rigid body entity owning its body
+		std::set<entt::entity> PolledBodies;                          // Records that need attention every step
+		std::unordered_map<JPH::uint32, entt::entity> BodyEntities;   // Body ID (index and sequence number) -> entity
 		std::unordered_map<PairKey, TouchingPair, PairKeyHash> TouchingPairs;
+		std::unordered_map<UUID, std::vector<PairKey>> EntityPairs;   // Touching pairs of each entity
 		std::vector<CollisionEvent> PendingEvents;
-		std::unordered_set<uint64_t> IssuedWarnings;                // Hash of (entity, PhysicsWarning)
+		std::unordered_set<uint64_t> IssuedWarnings;                  // Hash of (entity, PhysicsWarning)
 		JPH::EPhysicsUpdateError ReportedErrors = JPH::EPhysicsUpdateError::None;
 		uint64_t StepCount = 0;
 		float LastStepTime = 0.0f;
+
+		// Recorded by registry signals, applied by ApplyPendingChanges.
+		ChangeList StructureChanges; // Components added, removed or modified; entity destroyed
+		ChangeList SubtreeChanges;   // Hierarchy changed: re-evaluate every physics entity of the subtree
+		ChangeList ActivityChanges;
+		ChangeList TransformChanges;
+		ChangeList OwnerRefreshes;   // Bodies to rebuild
+
+		// Declared last: disconnected first, before anything the handlers use is destroyed.
+		std::vector<entt::scoped_connection> Connections;
 	};
 
 	namespace
 	{
 
+		//////////////////////////////////////////////////////////////////////////
+		// Records and warnings
+		//////////////////////////////////////////////////////////////////////////
+
+		uint64_t MakeWarningKey(UUID entityID, PhysicsWarning warning)
+		{
+			return Hash::Combine(static_cast<uint64_t>(entityID), static_cast<uint64_t>(warning));
+		}
+
 		bool ShouldWarn(PhysicsWorldData& data, UUID entityID, PhysicsWarning warning)
 		{
-			return data.IssuedWarnings.insert(Hash::Combine(static_cast<uint64_t>(entityID), static_cast<uint64_t>(warning))).second;
+			return data.IssuedWarnings.insert(MakeWarningKey(entityID, warning)).second;
+		}
+
+		void ClearWarnings(PhysicsWorldData& data, UUID entityID, std::span<const PhysicsWarning> warnings)
+		{
+			for (PhysicsWarning warning : warnings)
+				data.IssuedWarnings.erase(MakeWarningKey(entityID, warning));
+		}
+
+		void ClearAllWarnings(PhysicsWorldData& data, UUID entityID)
+		{
+			for (uint8_t warning = 1; warning < static_cast<uint8_t>(PhysicsWarning::Count); warning++)
+				data.IssuedWarnings.erase(MakeWarningKey(entityID, static_cast<PhysicsWarning>(warning)));
 		}
 
 		bool HasScaleChanged(const glm::vec3& scale, const glm::vec3& previous)
@@ -463,33 +641,48 @@ namespace Strata
 			return depth;
 		}
 
-		BodyRecord* FindRecord(PhysicsWorldData& data, entt::entity handle)
+		template<typename Data>
+		auto FindRecord(Data& data, entt::entity handle) -> decltype(&data.Bodies.begin()->second)
 		{
 			auto it = data.Bodies.find(handle);
 			return it != data.Bodies.end() ? &it->second : nullptr;
 		}
 
 		// The record of an entity whose body is part of the simulation, or nullptr.
-		BodyRecord* FindSimulatedRecord(PhysicsWorldData& data, Entity entity)
+		template<typename Data>
+		auto FindSimulatedRecord(Data& data, Entity entity) -> decltype(&data.Bodies.begin()->second)
 		{
 			if (!entity.IsValid() || entity.GetScene() != data.OwnerScene)
 				return nullptr;
-			auto it = data.Bodies.find(entity.GetHandle());
-			if (it == data.Bodies.end() || !it->second.InSimulation)
-				return nullptr;
-			return &it->second;
+			auto record = FindRecord(data, entity.GetHandle());
+			return record && record->InSimulation ? record : nullptr;
 		}
 
-		const BodyRecord* FindSimulatedRecord(const PhysicsWorldData& data, Entity entity)
+		template<typename Data>
+		auto FindDynamicRecord(Data& data, Entity entity) -> decltype(&data.Bodies.begin()->second)
 		{
-			return FindSimulatedRecord(const_cast<PhysicsWorldData&>(data), entity);
-		}
-
-		const BodyRecord* FindDynamicRecord(const PhysicsWorldData& data, Entity entity)
-		{
-			const BodyRecord* record = FindSimulatedRecord(data, entity);
+			auto record = FindSimulatedRecord(data, entity);
 			return record && record->Type == RigidBodyType::Dynamic ? record : nullptr;
 		}
+
+		bool NeedsPolling(const BodyRecord& record)
+		{
+			if (!record.HasBody())
+				return record.Failure == BuildFailure::DegenerateTransform || record.Failure == BuildFailure::MissingMesh || record.Failure == BuildFailure::BodyLimit;
+			return record.Type != RigidBodyType::Static || record.Suspended || record.TransformDirty || !record.MissingMeshes.empty();
+		}
+
+		void UpdatePolling(PhysicsWorldData& data, entt::entity handle, const BodyRecord& record)
+		{
+			if (NeedsPolling(record))
+				data.PolledBodies.insert(handle);
+			else
+				data.PolledBodies.erase(handle);
+		}
+
+		//////////////////////////////////////////////////////////////////////////
+		// Contacts
+		//////////////////////////////////////////////////////////////////////////
 
 		void QueueEvent(PhysicsWorldData& data, CollisionEventType type, const TouchingPair& pair)
 		{
@@ -503,27 +696,56 @@ namespace Strata
 			data.PendingEvents.push_back(event);
 		}
 
+		void RemovePairFromIndex(PhysicsWorldData& data, UUID entityID, const PairKey& key)
+		{
+			auto it = data.EntityPairs.find(entityID);
+			if (it == data.EntityPairs.end())
+				return;
+
+			std::vector<PairKey>& keys = it->second;
+			keys.erase(std::remove(keys.begin(), keys.end(), key), keys.end());
+			if (keys.empty())
+				data.EntityPairs.erase(it);
+		}
+
+		void AddTouchingPair(PhysicsWorldData& data, const PairKey& key, const TouchingPair& pair)
+		{
+			data.TouchingPairs.emplace(key, pair);
+			data.EntityPairs[pair.A].push_back(key);
+			data.EntityPairs[pair.B].push_back(key);
+		}
+
 		// Ends every contact of an entity (its body left the simulation).
 		void EndContactsOf(PhysicsWorldData& data, UUID entityID)
 		{
+			auto indexIt = data.EntityPairs.find(entityID);
+			if (indexIt == data.EntityPairs.end())
+				return;
+
+			const std::vector<PairKey> keys = std::move(indexIt->second);
+			data.EntityPairs.erase(indexIt);
+
 			std::vector<TouchingPair> ended;
-			for (auto it = data.TouchingPairs.begin(); it != data.TouchingPairs.end();)
+			for (const PairKey& key : keys)
 			{
-				if (it->second.A == entityID || it->second.B == entityID)
-				{
-					ended.push_back(it->second);
-					it = data.TouchingPairs.erase(it);
-				}
-				else
-				{
-					++it;
-				}
+				auto pairIt = data.TouchingPairs.find(key);
+				if (pairIt == data.TouchingPairs.end())
+					continue;
+
+				const TouchingPair pair = pairIt->second;
+				data.TouchingPairs.erase(pairIt);
+				RemovePairFromIndex(data, pair.A == entityID ? pair.B : pair.A, key);
+				ended.push_back(pair);
 			}
 
 			std::sort(ended.begin(), ended.end(), [](const TouchingPair& a, const TouchingPair& b) { return a.SortKey < b.SortKey; });
 			for (const TouchingPair& pair : ended)
 				QueueEvent(data, CollisionEventType::End, pair);
 		}
+
+		//////////////////////////////////////////////////////////////////////////
+		// Simulation membership
+		//////////////////////////////////////////////////////////////////////////
 
 		// Wakes the bodies around a body (which may rest on it) before it is removed, moved or reshaped.
 		void WakeBodiesAround(PhysicsWorldData& data, const JPH::BodyID& bodyID)
@@ -577,12 +799,18 @@ namespace Strata
 			EndContactsOf(data, record.EntityID);
 		}
 
-		// Adds the body back at its entity's current pose. Returns false if the body cannot be placed as it is (the world
-		// scale changed or the transform is degenerate) and must be rebuilt instead.
-		bool AddToSimulation(PhysicsWorldData& data, BodyRecord& record, Entity entity)
+		enum class PlacementResult : uint8_t
+		{
+			Added,
+			DegenerateTransform, // The body stays out of the simulation until the transform is valid
+			ScaleChanged         // The shape must be rebuilt
+		};
+
+		// Adds a built body back to the simulation at its entity's current pose.
+		PlacementResult AddToSimulation(PhysicsWorldData& data, BodyRecord& record, Entity entity)
 		{
 			if (record.InSimulation)
-				return true;
+				return PlacementResult::Added;
 
 			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
 			const glm::mat4 worldTransform = data.OwnerScene->GetWorldTransform(entity);
@@ -591,8 +819,10 @@ namespace Strata
 				glm::vec3 position;
 				glm::quat rotation;
 				glm::vec3 scale;
-				if (!Math::DecomposeTransform(worldTransform, position, rotation, scale) || HasScaleChanged(scale, record.ShapeScale))
-					return false;
+				if (!Math::DecomposeTransform(worldTransform, position, rotation, scale))
+					return PlacementResult::DegenerateTransform;
+				if (HasScaleChanged(scale, record.ShapeScale))
+					return PlacementResult::ScaleChanged;
 
 				bodies.SetPositionAndRotation(record.BodyID, ToJoltPosition(position), ToJolt(rotation), JPH::EActivation::DontActivate);
 				record.LastWorldTransform = worldTransform;
@@ -609,13 +839,18 @@ namespace Strata
 				record.SavedAngularVelocity = glm::vec3(0.0f);
 			}
 			record.InSimulation = true;
+			record.Suspended = false;
 			record.KinematicMoving = false;
-			return true;
+			record.TransformDirty = false;
+			return PlacementResult::Added;
 		}
 
 		// Destroys the Jolt body of a record (the record itself stays). Contacts are left alone.
 		void DestroyJoltBody(PhysicsWorldData& data, BodyRecord& record)
 		{
+			if (!record.HasBody())
+				return;
+
 			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
 			if (record.InSimulation)
 			{
@@ -625,6 +860,9 @@ namespace Strata
 			}
 			bodies.DestroyBody(record.BodyID);
 			data.BodyEntities.erase(record.BodyID.GetIndexAndSequenceNumber());
+			record.BodyID = JPH::BodyID();
+			record.Suspended = false;
+			record.KinematicMoving = false;
 		}
 
 		void DestroyAllBodies(PhysicsWorldData& data)
@@ -633,6 +871,8 @@ namespace Strata
 			std::vector<JPH::BodyID> all;
 			for (const auto& [handle, record] : data.Bodies)
 			{
+				if (!record.HasBody())
+					continue;
 				if (record.InSimulation)
 					added.push_back(record.BodyID);
 				all.push_back(record.BodyID);
@@ -645,8 +885,11 @@ namespace Strata
 				bodies.DestroyBodies(all.data(), static_cast<int>(all.size()));
 
 			data.Bodies.clear();
+			data.MergedOwners.clear();
+			data.PolledBodies.clear();
 			data.BodyEntities.clear();
 			data.TouchingPairs.clear();
+			data.EntityPairs.clear();
 			data.PendingEvents.clear();
 		}
 
@@ -654,18 +897,19 @@ namespace Strata
 		// Shapes
 		//////////////////////////////////////////////////////////////////////////
 
-		JPH::RefConst<JPH::Shape> CreateShape(const JPH::ShapeSettings& settings, const Entity& entity, std::string_view what)
+		JPH::RefConst<JPH::Shape> CreateShape(PhysicsWorldData& data, const JPH::ShapeSettings& settings, const Entity& entity, std::string_view what, PhysicsWarning warning)
 		{
 			JPH::ShapeSettings::ShapeResult result = settings.Create();
 			if (result.HasError())
 			{
-				ST_CORE_WARN("Physics: the {} of '{}' is invalid and is ignored: {}", what, entity.GetName(), result.GetError().c_str());
+				if (ShouldWarn(data, entity.GetUUID(), warning))
+					ST_CORE_WARN("Physics: the {} of '{}' is invalid and is ignored: {}", what, entity.GetName(), result.GetError().c_str());
 				return nullptr;
 			}
 			return result.Get();
 		}
 
-		JPH::RefConst<JPH::Shape> CreateConvexHullShape(const PhysicsMeshData& mesh, const Entity& entity)
+		JPH::RefConst<JPH::Shape> CreateConvexHullShape(PhysicsWorldData& data, const PhysicsMeshData& mesh, const Entity& entity)
 		{
 			JPH::Array<JPH::Vec3> points;
 			points.reserve(mesh.Positions.size());
@@ -673,21 +917,23 @@ namespace Strata
 			{
 				if (!IsFinite(position))
 				{
-					ST_CORE_WARN("Physics: the mesh collider of '{}' has non-finite vertex positions and is ignored", entity.GetName());
+					if (ShouldWarn(data, entity.GetUUID(), PhysicsWarning::InvalidMesh))
+						ST_CORE_WARN("Physics: the mesh collider of '{}' has non-finite vertex positions and is ignored", entity.GetName());
 					return nullptr;
 				}
 				points.push_back(ToJolt(position));
 			}
 
 			const JPH::ConvexHullShapeSettings settings(points, JPH::cDefaultConvexRadius);
-			return CreateShape(settings, entity, "convex mesh collider");
+			return CreateShape(data, settings, entity, "convex mesh collider", PhysicsWarning::InvalidMesh);
 		}
 
-		JPH::RefConst<JPH::Shape> CreateTriangleMeshShape(const PhysicsMeshData& mesh, const Entity& entity)
+		JPH::RefConst<JPH::Shape> CreateTriangleMeshShape(PhysicsWorldData& data, const PhysicsMeshData& mesh, const Entity& entity)
 		{
 			if (mesh.Indices.empty() || mesh.Indices.size() % 3 != 0)
 			{
-				ST_CORE_WARN("Physics: the mesh collider of '{}' needs a triangle list (index count {} is not a positive multiple of 3); it is ignored", entity.GetName(), mesh.Indices.size());
+				if (ShouldWarn(data, entity.GetUUID(), PhysicsWarning::InvalidMesh))
+					ST_CORE_WARN("Physics: the mesh collider of '{}' needs a triangle list (index count {} is not a positive multiple of 3); it is ignored", entity.GetName(), mesh.Indices.size());
 				return nullptr;
 			}
 
@@ -697,7 +943,8 @@ namespace Strata
 			{
 				if (!IsFinite(position))
 				{
-					ST_CORE_WARN("Physics: the mesh collider of '{}' has non-finite vertex positions and is ignored", entity.GetName());
+					if (ShouldWarn(data, entity.GetUUID(), PhysicsWarning::InvalidMesh))
+						ST_CORE_WARN("Physics: the mesh collider of '{}' has non-finite vertex positions and is ignored", entity.GetName());
 					return nullptr;
 				}
 				vertices.push_back(JPH::Float3(position.x, position.y, position.z));
@@ -712,7 +959,8 @@ namespace Strata
 				const uint32_t i2 = mesh.Indices[index + 2];
 				if (i0 >= vertices.size() || i1 >= vertices.size() || i2 >= vertices.size())
 				{
-					ST_CORE_WARN("Physics: the mesh collider of '{}' references vertex indices beyond its {} vertices; it is ignored", entity.GetName(), vertices.size());
+					if (ShouldWarn(data, entity.GetUUID(), PhysicsWarning::InvalidMesh))
+						ST_CORE_WARN("Physics: the mesh collider of '{}' references vertex indices beyond its {} vertices; it is ignored", entity.GetName(), vertices.size());
 					return nullptr;
 				}
 				triangles.push_back(JPH::IndexedTriangle(i0, i1, i2));
@@ -720,23 +968,64 @@ namespace Strata
 
 			// The settings remove degenerate and duplicate triangles; a mesh without any valid triangle fails to build.
 			const JPH::MeshShapeSettings settings(std::move(vertices), std::move(triangles));
-			return CreateShape(settings, entity, "mesh collider");
+			return CreateShape(data, settings, entity, "mesh collider", PhysicsWarning::InvalidMesh);
 		}
 
-		// Unscaled mesh shape for an asset, built once per asset data and reused (also across entities).
-		JPH::RefConst<JPH::Shape> GetMeshShape(PhysicsWorldData& data, const Entity& entity, AssetHandle mesh, bool convex)
+		Ref<const PhysicsMeshData> RequestMeshData(AssetHandle mesh)
 		{
 			const PhysicsMeshProvider& provider = GetMeshProviderStorage();
-			if (!provider)
+			return provider ? provider(mesh) : nullptr;
+		}
+
+		bool IsAnyMeshAvailable(const std::vector<AssetHandle>& meshes)
+		{
+			for (AssetHandle mesh : meshes)
 			{
-				ST_CORE_WARN("Physics: the mesh collider of '{}' is ignored: no physics mesh provider is registered", entity.GetName());
+				if (RequestMeshData(mesh))
+					return true;
+			}
+			return false;
+		}
+
+		struct ShapePart
+		{
+			JPH::RefConst<JPH::Shape> Shape;
+			JPH::Vec3 Position = JPH::Vec3::sZero(); // Body space
+			JPH::Quat Rotation = JPH::Quat::sIdentity();
+		};
+
+		struct ShapeBuild
+		{
+			std::vector<ShapePart> Parts;
+			std::vector<entt::entity> ShapeEntities; // Descendants that contributed colliders
+			std::vector<AssetHandle> MissingMeshes;
+			uint32_t ColliderCount = 0;              // Collider components considered, usable or not
+		};
+
+		void WarnNonFiniteCollider(PhysicsWorldData& data, const Entity& entity, std::string_view collider)
+		{
+			if (ShouldWarn(data, entity.GetUUID(), PhysicsWarning::InvalidCollider))
+				ST_CORE_WARN("Physics: the {} of '{}' has non-finite dimensions and is ignored", collider, entity.GetName());
+		}
+
+		// Unscaled mesh shape for an asset, built once per asset data and reused (also across entities). Returns nullptr and
+		// records the mesh as missing if its data is not available (yet).
+		JPH::RefConst<JPH::Shape> GetMeshShape(PhysicsWorldData& data, const Entity& entity, AssetHandle mesh, bool convex, ShapeBuild& build)
+		{
+			if (!GetMeshProviderStorage())
+			{
+				if (ShouldWarn(data, entity.GetUUID(), PhysicsWarning::MissingMesh))
+					ST_CORE_WARN("Physics: the mesh collider of '{}' waits for mesh data: no physics mesh provider is registered", entity.GetName());
+				build.MissingMeshes.push_back(mesh);
 				return nullptr;
 			}
 
-			Ref<const PhysicsMeshData> meshData = provider(mesh);
+			Ref<const PhysicsMeshData> meshData = RequestMeshData(mesh);
 			if (!meshData)
 			{
-				ST_CORE_WARN("Physics: the mesh collider of '{}' is ignored: mesh {} is not available", entity.GetName(), mesh.ToString());
+				if (ShouldWarn(data, entity.GetUUID(), PhysicsWarning::MissingMesh))
+					ST_CORE_WARN("Physics: the mesh collider of '{}' waits for mesh {}, which is not available yet", entity.GetName(), mesh.ToString());
+				build.MissingMeshes.push_back(mesh);
 				return nullptr;
 			}
 
@@ -745,7 +1034,7 @@ namespace Strata
 			if (it != cache.end() && it->second.Data == meshData)
 				return it->second.Shape;
 
-			JPH::RefConst<JPH::Shape> shape = convex ? CreateConvexHullShape(*meshData, entity) : CreateTriangleMeshShape(*meshData, entity);
+			JPH::RefConst<JPH::Shape> shape = convex ? CreateConvexHullShape(data, *meshData, entity) : CreateTriangleMeshShape(data, *meshData, entity);
 			if (!shape)
 				return nullptr;
 
@@ -753,77 +1042,69 @@ namespace Strata
 			return shape;
 		}
 
-		struct ShapePart
-		{
-			JPH::RefConst<JPH::Shape> Shape;
-			JPH::Vec3 Position = JPH::Vec3::sZero(); // Body space position of the collider (offset scaled with the entity)
-		};
-
-		void WarnNonFiniteCollider(const Entity& entity, std::string_view collider)
-		{
-			ST_CORE_WARN("Physics: the {} of '{}' has non-finite dimensions and is ignored", collider, entity.GetName());
-		}
-
-		// Builds the body shape of an entity from its colliders with the entity's world scale baked in. Returns nullptr if
-		// no collider is usable.
-		JPH::RefConst<JPH::Shape> BuildBodyShape(PhysicsWorldData& data, const Entity& entity, const glm::vec3& scale, RigidBodyType type)
+		// Adds the colliders of an entity whose transform in body space is (translation, rotation, scale).
+		void AddColliderParts(PhysicsWorldData& data, const Entity& entity, const glm::vec3& translation, const glm::quat& rotation, const glm::vec3& scale, RigidBodyType bodyType, ShapeBuild& build)
 		{
 			const glm::vec3 absoluteScale = glm::abs(scale);
 			const float maxScale = std::max({ absoluteScale.x, absoluteScale.y, absoluteScale.z });
-			std::vector<ShapePart> parts;
+			const JPH::Quat partRotation = ToJolt(rotation);
+			const auto placeAt = [&](const glm::vec3& offset) { return ToJolt(translation + rotation * (offset * scale)); };
+			const size_t partCount = build.Parts.size();
 
 			if (const BoxColliderComponent* box = entity.TryGetComponent<BoxColliderComponent>())
 			{
+				build.ColliderCount++;
 				if (IsFinite(box->HalfExtents) && IsFinite(box->Offset))
 				{
 					const glm::vec3 halfExtents = glm::max(glm::abs(box->HalfExtents) * absoluteScale, glm::vec3(c_MinColliderExtent));
-					const JPH::BoxShapeSettings settings(ToJolt(halfExtents));
-					if (JPH::RefConst<JPH::Shape> shape = CreateShape(settings, entity, "box collider"))
-						parts.push_back({ shape, ToJolt(box->Offset * scale) });
+					if (JPH::RefConst<JPH::Shape> shape = CreateShape(data, JPH::BoxShapeSettings(ToJolt(halfExtents)), entity, "box collider", PhysicsWarning::InvalidCollider))
+						build.Parts.push_back({ shape, placeAt(box->Offset), partRotation });
 				}
 				else
 				{
-					WarnNonFiniteCollider(entity, "box collider");
+					WarnNonFiniteCollider(data, entity, "box collider");
 				}
 			}
 
 			if (const SphereColliderComponent* sphere = entity.TryGetComponent<SphereColliderComponent>())
 			{
+				build.ColliderCount++;
 				if (std::isfinite(sphere->Radius) && IsFinite(sphere->Offset))
 				{
 					const float radius = std::max(std::abs(sphere->Radius) * maxScale, c_MinColliderExtent);
-					const JPH::SphereShapeSettings settings(radius);
-					if (JPH::RefConst<JPH::Shape> shape = CreateShape(settings, entity, "sphere collider"))
-						parts.push_back({ shape, ToJolt(sphere->Offset * scale) });
+					if (JPH::RefConst<JPH::Shape> shape = CreateShape(data, JPH::SphereShapeSettings(radius), entity, "sphere collider", PhysicsWarning::InvalidCollider))
+						build.Parts.push_back({ shape, placeAt(sphere->Offset), partRotation });
 				}
 				else
 				{
-					WarnNonFiniteCollider(entity, "sphere collider");
+					WarnNonFiniteCollider(data, entity, "sphere collider");
 				}
 			}
 
 			if (const CapsuleColliderComponent* capsule = entity.TryGetComponent<CapsuleColliderComponent>())
 			{
+				build.ColliderCount++;
 				if (std::isfinite(capsule->Radius) && std::isfinite(capsule->HalfHeight) && IsFinite(capsule->Offset))
 				{
 					const float radius = std::max(std::abs(capsule->Radius) * std::max(absoluteScale.x, absoluteScale.z), c_MinColliderExtent);
 					const float halfHeight = std::abs(capsule->HalfHeight) * absoluteScale.y;
 					JPH::RefConst<JPH::Shape> shape;
 					if (halfHeight < c_MinColliderExtent)
-						shape = CreateShape(JPH::SphereShapeSettings(radius), entity, "capsule collider"); // No cylindrical part
+						shape = CreateShape(data, JPH::SphereShapeSettings(radius), entity, "capsule collider", PhysicsWarning::InvalidCollider); // No cylindrical part
 					else
-						shape = CreateShape(JPH::CapsuleShapeSettings(halfHeight, radius), entity, "capsule collider");
+						shape = CreateShape(data, JPH::CapsuleShapeSettings(halfHeight, radius), entity, "capsule collider", PhysicsWarning::InvalidCollider);
 					if (shape)
-						parts.push_back({ shape, ToJolt(capsule->Offset * scale) });
+						build.Parts.push_back({ shape, placeAt(capsule->Offset), partRotation });
 				}
 				else
 				{
-					WarnNonFiniteCollider(entity, "capsule collider");
+					WarnNonFiniteCollider(data, entity, "capsule collider");
 				}
 			}
 
 			if (const MeshColliderComponent* meshCollider = entity.TryGetComponent<MeshColliderComponent>())
 			{
+				build.ColliderCount++;
 				AssetHandle mesh = meshCollider->Mesh;
 				if (!mesh.IsValid())
 				{
@@ -833,44 +1114,52 @@ namespace Strata
 
 				if (!mesh.IsValid())
 				{
-					ST_CORE_WARN("Physics: the mesh collider of '{}' has no mesh (and no Mesh Renderer mesh to fall back to); it is ignored", entity.GetName());
+					if (ShouldWarn(data, entity.GetUUID(), PhysicsWarning::InvalidMesh))
+						ST_CORE_WARN("Physics: the mesh collider of '{}' has no mesh (and no Mesh Renderer mesh to fall back to); it is ignored", entity.GetName());
 				}
-				else if (!meshCollider->Convex && type != RigidBodyType::Static)
+				else if (!meshCollider->Convex && bodyType != RigidBodyType::Static)
 				{
-					ST_CORE_WARN("Physics: the non-convex mesh collider of '{}' is ignored: triangle meshes are only supported on static bodies (enable Convex)", entity.GetName());
+					if (ShouldWarn(data, entity.GetUUID(), PhysicsWarning::UnsupportedMesh))
+						ST_CORE_WARN("Physics: the non-convex mesh collider of '{}' is ignored: triangle meshes are only supported on static bodies (enable Convex)", entity.GetName());
 				}
-				else if (JPH::RefConst<JPH::Shape> meshShape = GetMeshShape(data, entity, mesh, meshCollider->Convex))
+				else if (JPH::RefConst<JPH::Shape> meshShape = GetMeshShape(data, entity, mesh, meshCollider->Convex, build))
 				{
 					if (scale == glm::vec3(1.0f))
 					{
-						parts.push_back({ meshShape, JPH::Vec3::sZero() });
+						build.Parts.push_back({ meshShape, ToJolt(translation), partRotation });
 					}
 					else
 					{
 						// Convex hulls and triangle meshes support any non-zero scale, including mirroring.
-						const JPH::ScaledShapeSettings settings(meshShape.GetPtr(), ToJolt(scale));
-						if (JPH::RefConst<JPH::Shape> shape = CreateShape(settings, entity, "mesh collider"))
-							parts.push_back({ shape, JPH::Vec3::sZero() });
+						if (JPH::RefConst<JPH::Shape> shape = CreateShape(data, JPH::ScaledShapeSettings(meshShape.GetPtr(), ToJolt(scale)), entity, "mesh collider", PhysicsWarning::InvalidMesh))
+							build.Parts.push_back({ shape, ToJolt(translation), partRotation });
 					}
 				}
 			}
 
+			if (build.Parts.size() > partCount)
+				build.ShapeEntities.push_back(entity.GetHandle());
+		}
+
+		JPH::RefConst<JPH::Shape> CombineParts(PhysicsWorldData& data, const Entity& owner, const std::vector<ShapePart>& parts)
+		{
 			if (parts.empty())
 				return nullptr;
 
 			if (parts.size() == 1)
 			{
-				if (parts.front().Position.IsNearZero(0.0f))
-					return parts.front().Shape;
+				const ShapePart& part = parts.front();
+				if (part.Position.IsNearZero(0.0f) && part.Rotation == JPH::Quat::sIdentity())
+					return part.Shape;
 
-				const JPH::RotatedTranslatedShapeSettings settings(parts.front().Position, JPH::Quat::sIdentity(), parts.front().Shape.GetPtr());
-				return CreateShape(settings, entity, "collider offset");
+				const JPH::RotatedTranslatedShapeSettings settings(part.Position, part.Rotation, part.Shape.GetPtr());
+				return CreateShape(data, settings, owner, "collider placement", PhysicsWarning::InvalidCollider);
 			}
 
 			JPH::StaticCompoundShapeSettings compound;
 			for (const ShapePart& part : parts)
-				compound.AddShape(part.Position, JPH::Quat::sIdentity(), part.Shape.GetPtr());
-			return CreateShape(compound, entity, "compound collider");
+				compound.AddShape(part.Position, part.Rotation, part.Shape.GetPtr());
+			return CreateShape(data, compound, owner, "compound collider", PhysicsWarning::InvalidCollider);
 		}
 
 		float SanitizeNonNegative(float value, float fallback)
@@ -934,8 +1223,570 @@ namespace Strata
 		}
 
 		//////////////////////////////////////////////////////////////////////////
+		// Bodies of entities
+		//////////////////////////////////////////////////////////////////////////
+
+		// Removes the record of an entity that no longer owns a body. Its contacts end, and the colliders that were merged into
+		// it are re-evaluated (they belong to another body now, or to none).
+		void DestroyRecord(PhysicsWorldData& data, entt::entity handle)
+		{
+			auto it = data.Bodies.find(handle);
+			if (it == data.Bodies.end())
+				return;
+
+			BodyRecord& record = it->second;
+			DestroyJoltBody(data, record);
+			for (entt::entity merged : record.MergedEntities)
+			{
+				auto mergedIt = data.MergedOwners.find(merged);
+				if (mergedIt != data.MergedOwners.end() && mergedIt->second == handle)
+				{
+					data.MergedOwners.erase(mergedIt);
+					data.StructureChanges.Add(merged);
+				}
+			}
+
+			const UUID entityID = record.EntityID;
+			data.PolledBodies.erase(handle);
+			data.Bodies.erase(it);
+			EndContactsOf(data, entityID);
+		}
+
+		// Records which collider entities belong to an owner's body, handing entities that left it (or that it took from
+		// another body) over to be re-evaluated.
+		void UpdateMergedEntities(PhysicsWorldData& data, entt::entity owner, BodyRecord& record, std::vector<entt::entity> merged)
+		{
+			for (entt::entity previous : record.MergedEntities)
+			{
+				if (std::find(merged.begin(), merged.end(), previous) != merged.end())
+					continue;
+				auto it = data.MergedOwners.find(previous);
+				if (it != data.MergedOwners.end() && it->second == owner)
+				{
+					data.MergedOwners.erase(it);
+					data.StructureChanges.Add(previous);
+				}
+			}
+
+			for (entt::entity entity : merged)
+			{
+				auto it = data.MergedOwners.find(entity);
+				if (it != data.MergedOwners.end() && it->second != owner)
+					data.OwnerRefreshes.Add(it->second); // Taken from another body
+				data.MergedOwners[entity] = owner;
+				if (data.Bodies.find(entity) != data.Bodies.end())
+					DestroyRecord(data, entity); // Was a static body of its own
+			}
+
+			record.MergedEntities = std::move(merged);
+		}
+
+		// Marks a record as unable to have a body for now; the old body (if any) is destroyed and its contacts end.
+		void SetBuildFailure(PhysicsWorldData& data, entt::entity handle, BodyRecord& record, BuildFailure failure, const glm::mat4& worldTransform)
+		{
+			DestroyJoltBody(data, record);
+			record.Failure = failure;
+			record.LastWorldTransform = worldTransform;
+			record.ShapeEntities.clear();
+			EndContactsOf(data, record.EntityID);
+			UpdatePolling(data, handle, record);
+		}
+
+		// (Re)builds the body of an owner entity from its components, its collider descendants and its world transform.
+		void BuildBody(PhysicsWorldData& data, Entity entity)
+		{
+			ST_PROFILE_FUNCTION();
+
+			Scene& scene = *data.OwnerScene;
+			const entt::entity handle = entity.GetHandle();
+			const RigidBodyComponent* rigidBody = entity.TryGetComponent<RigidBodyComponent>();
+
+			auto [recordIt, created] = data.Bodies.try_emplace(handle);
+			BodyRecord& record = recordIt->second;
+			if (created)
+				record.EntityID = entity.GetUUID();
+
+			RigidBodyType type = rigidBody ? rigidBody->Type : RigidBodyType::Static;
+			if (type != RigidBodyType::Static && type != RigidBodyType::Dynamic && type != RigidBodyType::Kinematic)
+			{
+				if (ShouldWarn(data, record.EntityID, PhysicsWarning::InvalidType))
+					ST_CORE_WARN("Physics: '{}' has an invalid rigid body type {}; it is treated as static", entity.GetName(), static_cast<int>(type));
+				type = RigidBodyType::Static;
+			}
+
+			// Collider descendants only merge into rigid bodies; collider entities without one are static bodies of their own.
+			UpdateMergedEntities(data, handle, record, rigidBody ? CollectMergedEntities(scene, entity) : std::vector<entt::entity>());
+
+			const glm::mat4 worldTransform = scene.GetWorldTransform(entity);
+			glm::vec3 position;
+			glm::quat rotation;
+			glm::vec3 scale;
+			if (!Math::DecomposeTransform(worldTransform, position, rotation, scale))
+			{
+				if (ShouldWarn(data, record.EntityID, PhysicsWarning::DegenerateTransform))
+					ST_CORE_WARN("Physics: '{}' has a degenerate world transform (zero scale or non-finite values); it gets its body once the transform is valid", entity.GetName());
+				record.Type = type;
+				SetBuildFailure(data, handle, record, BuildFailure::DegenerateTransform, worldTransform);
+				return;
+			}
+
+			ShapeBuild build;
+			AddColliderParts(data, entity, glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), scale, type, build);
+
+			// Merged colliders are placed with their transform relative to the body (position and rotation, without scale).
+			const glm::mat4 bodyToWorld = Math::ComposeTransform(position, rotation, glm::vec3(1.0f));
+			const glm::mat4 worldToBody = glm::inverse(bodyToWorld);
+			for (entt::entity mergedHandle : record.MergedEntities)
+			{
+				const Entity merged(mergedHandle, &scene);
+				if (!IsPartOfOwnerShape(scene, merged, entity))
+					continue;
+
+				glm::vec3 partTranslation;
+				glm::quat partRotation;
+				glm::vec3 partScale;
+				if (!Math::DecomposeTransform(worldToBody * scene.GetWorldTransform(merged), partTranslation, partRotation, partScale))
+				{
+					if (ShouldWarn(data, merged.GetUUID(), PhysicsWarning::DegenerateTransform))
+						ST_CORE_WARN("Physics: the colliders of '{}' have a degenerate transform and are left out of the body of '{}'", merged.GetName(), entity.GetName());
+					continue;
+				}
+				AddColliderParts(data, merged, partTranslation, partRotation, partScale, type, build);
+			}
+
+			record.Type = type;
+			record.MissingMeshes = build.MissingMeshes;
+			const JPH::RefConst<JPH::Shape> shape = CombineParts(data, entity, build.Parts);
+			if (!shape)
+			{
+				BuildFailure failure = BuildFailure::InvalidColliders;
+				if (!build.MissingMeshes.empty())
+				{
+					failure = BuildFailure::MissingMesh;
+				}
+				else if (build.ColliderCount == 0)
+				{
+					failure = BuildFailure::NoCollider;
+					if (rigidBody && ShouldWarn(data, record.EntityID, PhysicsWarning::MissingCollider))
+						ST_CORE_WARN("Physics: '{}' has a Rigid Body but no collider; it is not simulated", entity.GetName());
+				}
+				else if (ShouldWarn(data, record.EntityID, PhysicsWarning::NoUsableCollider))
+				{
+					ST_CORE_WARN("Physics: '{}' has no usable collider; it is not simulated", entity.GetName());
+				}
+				SetBuildFailure(data, handle, record, failure, worldTransform);
+				return;
+			}
+
+			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
+			if (!record.HasBody() && data.JoltSystem->GetNumBodies() >= data.Settings.MaxBodies)
+			{
+				if (ShouldWarn(data, record.EntityID, PhysicsWarning::BodyLimit))
+					ST_CORE_ERROR("Physics: cannot create a body for '{}': the world's limit of {} bodies is reached", entity.GetName(), data.Settings.MaxBodies);
+				SetBuildFailure(data, handle, record, BuildFailure::BodyLimit, worldTransform);
+				return;
+			}
+
+			// A dynamic body rebuilt because a property changed keeps moving as before.
+			glm::vec3 linearVelocity(0.0f);
+			glm::vec3 angularVelocity(0.0f);
+			if (record.HasBody() && record.Type == RigidBodyType::Dynamic)
+			{
+				if (record.InSimulation)
+				{
+					JPH::Vec3 currentLinear;
+					JPH::Vec3 currentAngular;
+					bodies.GetLinearAndAngularVelocity(record.BodyID, currentLinear, currentAngular);
+					linearVelocity = ToGlm(currentLinear);
+					angularVelocity = ToGlm(currentAngular);
+				}
+				else
+				{
+					linearVelocity = record.SavedLinearVelocity;
+					angularVelocity = record.SavedAngularVelocity;
+				}
+			}
+
+			const JPH::BodyCreationSettings settings = MakeBodySettings(data, entity, rigidBody, type, shape.GetPtr(), position, rotation);
+			JPH::Body* body = bodies.CreateBody(settings);
+			if (!body)
+			{
+				if (ShouldWarn(data, record.EntityID, PhysicsWarning::BodyLimit))
+					ST_CORE_ERROR("Physics: cannot create a body for '{}': the world's limit of {} bodies is reached", entity.GetName(), data.Settings.MaxBodies);
+				SetBuildFailure(data, handle, record, BuildFailure::BodyLimit, worldTransform);
+				return;
+			}
+
+			// Contacts are tracked per entity pair and carry over to the new body; the next step confirms or ends them.
+			DestroyJoltBody(data, record);
+			record.BodyID = body->GetID();
+			record.Failure = BuildFailure::None;
+			record.ShapeScale = scale;
+			record.LastWorldTransform = worldTransform;
+			record.KinematicTargetPosition = position;
+			record.KinematicTargetRotation = rotation;
+			record.SavedLinearVelocity = type == RigidBodyType::Dynamic ? linearVelocity : glm::vec3(0.0f); // Applied when added
+			record.SavedAngularVelocity = type == RigidBodyType::Dynamic ? angularVelocity : glm::vec3(0.0f);
+			record.ShapeEntities = std::move(build.ShapeEntities);
+			data.BodyEntities[record.BodyID.GetIndexAndSequenceNumber()] = handle;
+			ClearWarnings(data, record.EntityID, c_TransientWarnings);
+
+			if (!IsSimulated(scene, entity) || AddToSimulation(data, record, entity) != PlacementResult::Added)
+				EndContactsOf(data, record.EntityID);
+			UpdatePolling(data, handle, record);
+		}
+
+		// Re-evaluates an entity that may own a body: builds or rebuilds the body, or removes the record if the entity no
+		// longer owns one (destroyed, lost its components, or its colliders now belong to an ancestor's rigid body).
+		void RefreshOwner(PhysicsWorldData& data, entt::entity handle)
+		{
+			const Entity entity(handle, data.OwnerScene);
+			const Entity owner = FindBodyOwner(entity);
+			if (owner == entity && entity.IsValid())
+			{
+				BuildBody(data, entity);
+				return;
+			}
+
+			DestroyRecord(data, handle);
+			if (owner.IsValid())
+				data.OwnerRefreshes.Add(owner.GetHandle()); // Its colliders are part of the ancestor's body now
+		}
+
+		void RefreshActivity(PhysicsWorldData& data, entt::entity handle, BodyRecord& record)
+		{
+			const Entity entity(handle, data.OwnerScene);
+			if (!entity.IsValid())
+			{
+				data.StructureChanges.Add(handle);
+				return;
+			}
+
+			if (!IsSimulated(*data.OwnerScene, entity))
+			{
+				RemoveFromSimulation(data, record);
+			}
+			else if (record.HasBody() && !record.InSimulation)
+			{
+				const PlacementResult result = AddToSimulation(data, record, entity);
+				if (result == PlacementResult::DegenerateTransform)
+					record.Suspended = true;
+				else if (result == PlacementResult::ScaleChanged)
+					data.OwnerRefreshes.Add(handle);
+			}
+			UpdatePolling(data, handle, record);
+		}
+
+		void ApplyChanges(PhysicsWorldData& data)
+		{
+			ST_PROFILE_FUNCTION();
+
+			Scene& scene = *data.OwnerScene;
+			const auto hasChanges = [&]()
+			{
+				return !data.StructureChanges.IsEmpty() || !data.SubtreeChanges.IsEmpty() || !data.ActivityChanges.IsEmpty() || !data.TransformChanges.IsEmpty() || !data.OwnerRefreshes.IsEmpty();
+			};
+
+			for (uint32_t round = 0; round < c_MaxChangeRounds && hasChanges(); round++)
+			{
+				// Hierarchy changes may move any physics entity of the subtree to another body.
+				for (entt::entity handle : data.SubtreeChanges.Take())
+				{
+					data.StructureChanges.Add(handle);
+					VisitSubtree(scene, Entity(handle, &scene), [&](Entity entity)
+					{
+						if (HasPhysicsComponent(entity))
+							data.StructureChanges.Add(entity.GetHandle());
+						return true;
+					});
+				}
+
+				// Activity is inherited: bodies of the subtree enter or leave the simulation; colliders merged into a body above
+				// the changed entity join or leave that body's shape.
+				for (entt::entity handle : data.ActivityChanges.Take())
+				{
+					const Entity changed(handle, &scene);
+					if (!changed.IsValid())
+					{
+						data.StructureChanges.Add(handle);
+						continue;
+					}
+
+					std::unordered_set<entt::entity> visitedOwners;
+					VisitSubtree(scene, changed, [&](Entity entity)
+					{
+						if (BodyRecord* record = FindRecord(data, entity.GetHandle()))
+						{
+							visitedOwners.insert(entity.GetHandle());
+							RefreshActivity(data, entity.GetHandle(), *record);
+						}
+						else
+						{
+							auto merged = data.MergedOwners.find(entity.GetHandle());
+							if (merged != data.MergedOwners.end() && visitedOwners.find(merged->second) == visitedOwners.end())
+								data.OwnerRefreshes.Add(merged->second);
+						}
+						return true;
+					});
+				}
+
+				// A transform change moves the bodies of the subtree; colliders merged into a body above the changed entity
+				// moved relative to that body, which changes its shape.
+				for (entt::entity handle : data.TransformChanges.Take())
+				{
+					std::unordered_set<entt::entity> visitedOwners;
+					VisitSubtree(scene, Entity(handle, &scene), [&](Entity entity)
+					{
+						if (BodyRecord* record = FindRecord(data, entity.GetHandle()))
+						{
+							visitedOwners.insert(entity.GetHandle());
+							record->TransformDirty = true;
+							UpdatePolling(data, entity.GetHandle(), *record);
+						}
+						else
+						{
+							auto merged = data.MergedOwners.find(entity.GetHandle());
+							if (merged != data.MergedOwners.end() && visitedOwners.find(merged->second) == visitedOwners.end())
+								data.OwnerRefreshes.Add(merged->second);
+						}
+						return true;
+					});
+				}
+
+				// The bodies an entity was part of, and the one it is part of now.
+				for (entt::entity handle : data.StructureChanges.Take())
+				{
+					if (data.Bodies.find(handle) != data.Bodies.end())
+						data.OwnerRefreshes.Add(handle);
+					auto merged = data.MergedOwners.find(handle);
+					if (merged != data.MergedOwners.end())
+					{
+						const entt::entity previousOwner = merged->second;
+						if (FindBodyOwner(Entity(handle, &scene)).GetHandle() != previousOwner)
+							data.MergedOwners.erase(merged);
+						data.OwnerRefreshes.Add(previousOwner);
+					}
+					if (const Entity owner = FindBodyOwner(Entity(handle, &scene)))
+						data.OwnerRefreshes.Add(owner.GetHandle());
+				}
+
+				for (entt::entity handle : data.OwnerRefreshes.Take())
+					RefreshOwner(data, handle);
+			}
+
+			if (hasChanges())
+			{
+				ST_CORE_ERROR("Physics: scene '{}' did not settle after {} rounds of changes; remaining changes are dropped", scene.GetName(), c_MaxChangeRounds);
+				data.StructureChanges.Clear();
+				data.SubtreeChanges.Clear();
+				data.ActivityChanges.Clear();
+				data.TransformChanges.Clear();
+				data.OwnerRefreshes.Clear();
+			}
+		}
+
+		//////////////////////////////////////////////////////////////////////////
+		// Registry signals
+		//////////////////////////////////////////////////////////////////////////
+
+		// Changes are only recorded here and applied later: on_destroy fires before the component is removed, and new
+		// components are usually filled in right after they are added.
+		void OnStructureChanged(PhysicsWorldData& data, entt::registry&, entt::entity handle)
+		{
+			data.StructureChanges.Add(handle);
+		}
+
+		void OnMeshRendererChanged(PhysicsWorldData& data, entt::registry& registry, entt::entity handle)
+		{
+			// Mesh colliders without a mesh of their own use the renderer's mesh.
+			if (registry.all_of<MeshColliderComponent>(handle))
+				data.StructureChanges.Add(handle);
+		}
+
+		void OnEntityDestroyed(PhysicsWorldData& data, entt::registry& registry, entt::entity handle)
+		{
+			data.StructureChanges.Add(handle);
+			// The IDComponent is still attached while its on_destroy listeners run.
+			if (const IDComponent* id = registry.try_get<IDComponent>(handle))
+				ClearAllWarnings(data, id->ID);
+		}
+
+		void OnHierarchyChanged(PhysicsWorldData& data, entt::registry&, entt::entity handle)
+		{
+			data.SubtreeChanges.Add(handle);
+		}
+
+		void OnActivityChanged(PhysicsWorldData& data, entt::registry&, entt::entity handle)
+		{
+			data.ActivityChanges.Add(handle);
+		}
+
+		void OnTransformChanged(PhysicsWorldData& data, entt::registry&, entt::entity handle)
+		{
+			data.TransformChanges.Add(handle);
+		}
+
+		template<typename Component, auto Candidate>
+		void ConnectChangeSignals(PhysicsWorldData& data, entt::registry& registry)
+		{
+			data.Connections.emplace_back(registry.on_construct<Component>().template connect<Candidate>(data));
+			data.Connections.emplace_back(registry.on_update<Component>().template connect<Candidate>(data));
+			data.Connections.emplace_back(registry.on_destroy<Component>().template connect<Candidate>(data));
+		}
+
+		void ConnectSignals(PhysicsWorldData& data)
+		{
+			entt::registry& registry = data.OwnerScene->GetRegistry();
+			ConnectChangeSignals<RigidBodyComponent, &OnStructureChanged>(data, registry);
+			ConnectChangeSignals<BoxColliderComponent, &OnStructureChanged>(data, registry);
+			ConnectChangeSignals<SphereColliderComponent, &OnStructureChanged>(data, registry);
+			ConnectChangeSignals<CapsuleColliderComponent, &OnStructureChanged>(data, registry);
+			ConnectChangeSignals<MeshColliderComponent, &OnStructureChanged>(data, registry);
+			ConnectChangeSignals<MeshRendererComponent, &OnMeshRendererChanged>(data, registry);
+			// Entity creation and destruction are reported by the other signals; this covers hierarchy edits that patch it.
+			data.Connections.emplace_back(registry.on_update<RelationshipComponent>().connect<&OnHierarchyChanged>(data));
+			data.Connections.emplace_back(registry.on_update<TransformComponent>().connect<&OnTransformChanged>(data));
+			data.Connections.emplace_back(registry.on_construct<InactiveComponent>().connect<&OnActivityChanged>(data));
+			data.Connections.emplace_back(registry.on_destroy<InactiveComponent>().connect<&OnActivityChanged>(data));
+			// Every entity has an IDComponent until it is destroyed, so its removal reports entity destruction.
+			data.Connections.emplace_back(registry.on_destroy<IDComponent>().connect<&OnEntityDestroyed>(data));
+		}
+
+		//////////////////////////////////////////////////////////////////////////
 		// Stepping
 		//////////////////////////////////////////////////////////////////////////
+
+		// Brings the bodies that need attention every step in line with their entities: kinematic targets, teleports,
+		// activity, degenerate transforms, scale changes and retries of bodies that could not be built.
+		void SyncEntitiesToBodies(PhysicsWorldData& data, float timestep)
+		{
+			ST_PROFILE_FUNCTION();
+
+			Scene& scene = *data.OwnerScene;
+			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
+			const std::vector<entt::entity> polled(data.PolledBodies.begin(), data.PolledBodies.end());
+			for (entt::entity handle : polled)
+			{
+				BodyRecord* record = FindRecord(data, handle);
+				if (!record)
+					continue;
+
+				const Entity entity(handle, &scene);
+				if (!entity.IsValid())
+				{
+					data.StructureChanges.Add(handle);
+					continue;
+				}
+
+				const bool simulated = IsSimulated(scene, entity);
+				if (!record->HasBody())
+				{
+					bool retry = false;
+					if (simulated)
+					{
+						switch (record->Failure)
+						{
+							case BuildFailure::DegenerateTransform: retry = scene.GetWorldTransform(entity) != record->LastWorldTransform; break;
+							case BuildFailure::MissingMesh: retry = IsAnyMeshAvailable(record->MissingMeshes); break;
+							case BuildFailure::BodyLimit: retry = data.JoltSystem->GetNumBodies() < data.Settings.MaxBodies; break;
+							default: break;
+						}
+					}
+					if (retry)
+						data.OwnerRefreshes.Add(handle);
+					continue;
+				}
+
+				if (!simulated)
+				{
+					RemoveFromSimulation(data, *record);
+					UpdatePolling(data, handle, *record);
+					continue;
+				}
+
+				// Mesh data that arrived, or merged colliders that left the shape (about to be destroyed, for instance), change
+				// the shape.
+				const bool partLeftShape = std::any_of(record->ShapeEntities.begin(), record->ShapeEntities.end(), [&](entt::entity part)
+				{
+					return part != handle && !IsPartOfOwnerShape(scene, Entity(part, &scene), entity);
+				});
+				if (partLeftShape || (!record->MissingMeshes.empty() && IsAnyMeshAvailable(record->MissingMeshes)))
+				{
+					data.OwnerRefreshes.Add(handle);
+					continue;
+				}
+
+				if (!record->InSimulation)
+				{
+					// Back from a degenerate transform or from being inactive.
+					const PlacementResult result = AddToSimulation(data, *record, entity);
+					record->Suspended = result == PlacementResult::DegenerateTransform;
+					if (result == PlacementResult::ScaleChanged)
+						data.OwnerRefreshes.Add(handle);
+					UpdatePolling(data, handle, *record);
+					continue;
+				}
+
+				const glm::mat4 worldTransform = scene.GetWorldTransform(entity);
+				if (worldTransform == record->LastWorldTransform)
+				{
+					// A kinematic body keeps the velocity of its last move; stop it at its target.
+					if (record->KinematicMoving)
+					{
+						bodies.MoveKinematic(record->BodyID, ToJoltPosition(record->KinematicTargetPosition), ToJolt(record->KinematicTargetRotation), timestep);
+						record->KinematicMoving = false;
+					}
+					record->TransformDirty = false;
+					UpdatePolling(data, handle, *record);
+					continue;
+				}
+
+				glm::vec3 position;
+				glm::quat rotation;
+				glm::vec3 scale;
+				if (!Math::DecomposeTransform(worldTransform, position, rotation, scale))
+				{
+					// Out of the simulation (like an inactive entity) until the transform is valid again; the transform is
+					// left as it is.
+					if (ShouldWarn(data, record->EntityID, PhysicsWarning::DegenerateTransform))
+						ST_CORE_WARN("Physics: '{}' has a degenerate world transform; its body leaves the simulation until the transform is valid", entity.GetName());
+					RemoveFromSimulation(data, *record);
+					record->Suspended = true;
+					UpdatePolling(data, handle, *record);
+					continue;
+				}
+				if (HasScaleChanged(scale, record->ShapeScale))
+				{
+					data.OwnerRefreshes.Add(handle);
+					continue;
+				}
+
+				// Bodies resting on a moved body must notice that it is gone: Jolt only activates the moved body itself.
+				WakeBodiesAround(data, record->BodyID);
+				switch (record->Type)
+				{
+					case RigidBodyType::Static:
+						bodies.SetPositionAndRotation(record->BodyID, ToJoltPosition(position), ToJolt(rotation), JPH::EActivation::DontActivate);
+						WakeBodiesAround(data, record->BodyID);
+						break;
+					case RigidBodyType::Kinematic:
+						bodies.MoveKinematic(record->BodyID, ToJoltPosition(position), ToJolt(rotation), timestep);
+						record->KinematicMoving = true;
+						record->KinematicTargetPosition = position;
+						record->KinematicTargetRotation = rotation;
+						break;
+					case RigidBodyType::Dynamic:
+						// Moved from outside physics (gameplay code, editor gizmo, a moving parent): teleport, keeping velocity.
+						bodies.SetPositionAndRotation(record->BodyID, ToJoltPosition(position), ToJolt(rotation), JPH::EActivation::Activate);
+						break;
+				}
+				record->LastWorldTransform = worldTransform;
+				record->TransformDirty = false;
+				UpdatePolling(data, handle, *record);
+			}
+
+			ApplyChanges(data);
+		}
 
 		struct ParticipantState
 		{
@@ -955,9 +1806,10 @@ namespace Strata
 			if (!record || !record->InSimulation)
 				return state;
 
+			// Between steps only the main thread touches the bodies, so the locks can be skipped.
 			state.Simulated = true;
 			state.Static = record->Type == RigidBodyType::Static;
-			state.Active = !state.Static && data.JoltSystem->GetBodyInterface().IsActive(record->BodyID);
+			state.Active = !state.Static && data.JoltSystem->GetBodyInterfaceNoLock().IsActive(record->BodyID);
 			return state;
 		}
 
@@ -994,6 +1846,8 @@ namespace Strata
 				if (it->second.Awake && current.find(it->first) == current.end())
 				{
 					ended.push_back(it->second);
+					RemovePairFromIndex(data, it->second.A, it->first);
+					RemovePairFromIndex(data, it->second.B, it->first);
 					it = data.TouchingPairs.erase(it);
 				}
 				else
@@ -1015,7 +1869,7 @@ namespace Strata
 					pair.SortKey = report.SortKey;
 					pair.Point = report.Point;
 					pair.Normal = report.Normal;
-					data.TouchingPairs.emplace(key, pair);
+					AddTouchingPair(data, key, pair);
 					begun.push_back(pair);
 				}
 				else
@@ -1037,6 +1891,106 @@ namespace Strata
 				QueueEvent(data, CollisionEventType::Begin, pair);
 		}
 
+		// After physics moved an entity: dynamic descendants that are simulated on their own keep their world pose (unless they
+		// are written themselves), and static descendants (whose bodies are only re-synchronized on demand) are marked to
+		// follow. With keepDynamicPoses false (an explicit teleport), dynamic descendants follow like any external move.
+		void UpdateDescendantsOfMovedBody(PhysicsWorldData& data, Entity moved, const std::unordered_set<entt::entity>& written, bool keepDynamicPoses)
+		{
+			Scene& scene = *data.OwnerScene;
+			const RelationshipComponent* relationship = moved.TryGetComponent<RelationshipComponent>();
+			if (!relationship || relationship->Children.empty())
+				return;
+
+			VisitSubtree(scene, moved, [&](Entity entity)
+			{
+				if (entity == moved)
+					return true;
+				if (written.find(entity.GetHandle()) != written.end())
+					return false; // Written itself, after this one (deeper entities are written later)
+
+				BodyRecord* record = FindRecord(data, entity.GetHandle());
+				if (!record || !record->HasBody())
+					return true;
+
+				if (keepDynamicPoses && record->Type == RigidBodyType::Dynamic && record->InSimulation)
+				{
+					// Its world pose, and with it the poses of its own descendants, stays where its body is.
+					scene.SetWorldTransform(entity, record->LastWorldTransform);
+					record->LastWorldTransform = scene.GetWorldTransform(entity);
+					return false;
+				}
+				if (record->Type == RigidBodyType::Static)
+				{
+					record->TransformDirty = true;
+					UpdatePolling(data, entity.GetHandle(), *record);
+				}
+				return true;
+			});
+		}
+
+		// Writes the poses of the dynamic bodies that moved (awake, or fell asleep during this step) to their entities, parents
+		// before children so that every child's local transform is computed against its parent's final pose.
+		void WriteBackDynamicBodies(PhysicsWorldData& data)
+		{
+			ST_PROFILE_FUNCTION();
+
+			Scene& scene = *data.OwnerScene;
+			const JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterfaceNoLock();
+			JPH::BodyIDVector movedBodies;
+			data.JoltSystem->GetActiveBodies(JPH::EBodyType::RigidBody, movedBodies);
+			for (const JPH::BodyID& bodyID : data.Activations.Take())
+				movedBodies.push_back(bodyID);
+
+			struct WriteBack
+			{
+				uint32_t Depth = 0;
+				entt::entity Handle = entt::null;
+			};
+			std::vector<WriteBack> writeBacks;
+			writeBacks.reserve(movedBodies.size());
+			for (const JPH::BodyID& bodyID : movedBodies)
+			{
+				auto entityIt = data.BodyEntities.find(bodyID.GetIndexAndSequenceNumber());
+				if (entityIt == data.BodyEntities.end())
+					continue;
+				const BodyRecord* record = FindRecord(data, entityIt->second);
+				if (!record || record->Type != RigidBodyType::Dynamic || !record->InSimulation)
+					continue;
+				writeBacks.push_back({ GetHierarchyDepth(Entity(entityIt->second, &scene)), entityIt->second });
+			}
+			std::sort(writeBacks.begin(), writeBacks.end(), [](const WriteBack& a, const WriteBack& b)
+			{
+				return a.Depth != b.Depth ? a.Depth < b.Depth : a.Handle < b.Handle;
+			});
+			writeBacks.erase(std::unique(writeBacks.begin(), writeBacks.end(), [](const WriteBack& a, const WriteBack& b) { return a.Handle == b.Handle; }), writeBacks.end());
+
+			std::unordered_set<entt::entity> written;
+			for (const WriteBack& writeBack : writeBacks)
+				written.insert(writeBack.Handle);
+
+			for (const WriteBack& writeBack : writeBacks)
+			{
+				BodyRecord& record = *FindRecord(data, writeBack.Handle); // Filtered above
+				const Entity entity(writeBack.Handle, &scene);
+
+				JPH::RVec3 bodyPosition;
+				JPH::Quat bodyRotation;
+				bodies.GetPositionAndRotation(record.BodyID, bodyPosition, bodyRotation);
+				const glm::vec3 position = ToGlm(bodyPosition);
+				const glm::quat rotation = ToGlm(bodyRotation);
+				if (!IsFinite(position) || !IsFinite(rotation))
+				{
+					if (ShouldWarn(data, record.EntityID, PhysicsWarning::NonFiniteState))
+						ST_CORE_ERROR("Physics: the simulation produced a non-finite pose for '{}'; its transform is not updated", entity.GetName());
+					continue;
+				}
+
+				scene.SetWorldTransform(entity, Math::ComposeTransform(position, glm::normalize(rotation), record.ShapeScale));
+				record.LastWorldTransform = scene.GetWorldTransform(entity);
+				UpdateDescendantsOfMovedBody(data, entity, written, true);
+			}
+		}
+
 		void ReportUpdateErrors(PhysicsWorldData& data, JPH::EPhysicsUpdateError errors)
 		{
 			const auto reportOnce = [&](JPH::EPhysicsUpdateError error, const char* message)
@@ -1052,6 +2006,38 @@ namespace Strata
 			reportOnce(JPH::EPhysicsUpdateError::ContactConstraintsFull, "the contact constraint buffer is full, raise PhysicsSettings::MaxContactConstraints");
 		}
 
+		//////////////////////////////////////////////////////////////////////////
+		// Queries
+		//////////////////////////////////////////////////////////////////////////
+
+		// Query filter skipping an ignored body, triggers (unless requested) and bodies of entities that are destroyed or about
+		// to be. Queries run on the main thread, so reading the scene is safe.
+		class QueryBodyFilter final : public JPH::BodyFilter
+		{
+		public:
+			QueryBodyFilter(const Scene& scene, const JPH::BodyID& ignoredBody, bool includeTriggers)
+				: m_Scene(scene), m_IgnoredBody(ignoredBody), m_IncludeTriggers(includeTriggers)
+			{
+			}
+
+			bool ShouldCollide(const JPH::BodyID& bodyID) const override
+			{
+				return bodyID != m_IgnoredBody;
+			}
+
+			bool ShouldCollideLocked(const JPH::Body& body) const override
+			{
+				if (!m_IncludeTriggers && body.IsSensor())
+					return false;
+				const Entity entity = m_Scene.GetEntityByUUID(UUID(body.GetUserData()));
+				return entity.IsValid() && !IsPendingDestroyInHierarchy(m_Scene, entity);
+			}
+		private:
+			const Scene& m_Scene;
+			JPH::BodyID m_IgnoredBody;
+			bool m_IncludeTriggers;
+		};
+
 		bool MakeRay(const glm::vec3& origin, const glm::vec3& direction, float maxDistance, JPH::RRayCast& outRay, float& outLength)
 		{
 			if (!IsFinite(origin) || !IsFinite(direction) || std::isnan(maxDistance) || !(maxDistance > 0.0f))
@@ -1066,12 +2052,21 @@ namespace Strata
 			return true;
 		}
 
+		Entity GetBodyEntityOf(const PhysicsWorldData& data, Entity entity)
+		{
+			if (!entity.IsValid() || entity.GetScene() != data.OwnerScene)
+				return {};
+			if (data.Bodies.find(entity.GetHandle()) != data.Bodies.end())
+				return entity;
+			auto merged = data.MergedOwners.find(entity.GetHandle());
+			return merged != data.MergedOwners.end() ? Entity(merged->second, data.OwnerScene) : Entity();
+		}
+
 		JPH::BodyID GetIgnoredBody(const PhysicsWorldData& data, Entity ignoreEntity)
 		{
-			if (!ignoreEntity.IsValid() || ignoreEntity.GetScene() != data.OwnerScene)
-				return JPH::BodyID();
-			auto it = data.Bodies.find(ignoreEntity.GetHandle());
-			return it != data.Bodies.end() ? it->second.BodyID : JPH::BodyID();
+			const Entity owner = GetBodyEntityOf(data, ignoreEntity);
+			const BodyRecord* record = owner.IsValid() ? FindRecord(data, owner.GetHandle()) : nullptr;
+			return record ? record->BodyID : JPH::BodyID();
 		}
 
 		std::optional<RaycastHit> MakeRaycastHit(const PhysicsWorldData& data, const JPH::RRayCast& ray, float length, const JPH::RayCastResult& result)
@@ -1131,9 +2126,11 @@ namespace Strata
 	PhysicsWorld::PhysicsWorld(Scene& scene, const PhysicsSettings& settings)
 		: m_Data(CreateScope<PhysicsWorldData>(scene, SanitizeSettings(settings)))
 	{
+		ST_PROFILE_FUNCTION();
+
 		PhysicsWorldData& data = *m_Data;
 		data.Allocator = CreateScope<JPH::TempAllocatorImplWithMallocFallback>(data.Settings.TempAllocatorSize);
-		data.Jobs = CreatePhysicsJobSystem();
+		data.Jobs = CreatePhysicsJobSystem(&data.WorkerJobCount);
 		data.JoltSystem = CreateScope<JPH::PhysicsSystem>();
 		data.JoltSystem->Init(data.Settings.MaxBodies, 0, data.Settings.MaxBodyPairs, data.Settings.MaxContactConstraints, data.BroadPhaseLayers, data.ObjectVsBroadPhase, data.LayerPairFilter);
 		data.JoltSystem->SetContactListener(&data.Contacts);
@@ -1149,10 +2146,22 @@ namespace Strata
 			ST_CORE_WARN("Physics: scene '{}' has a non-finite gravity; the default is used", scene.GetName());
 			data.JoltSystem->SetGravity(ToJolt(SceneSettings().Gravity));
 		}
+
+		ConnectSignals(data);
+		for (const Entity entity : scene.GetEntitiesInHierarchyOrder())
+		{
+			if (HasPhysicsComponent(entity))
+				data.StructureChanges.Add(entity.GetHandle());
+		}
+		ApplyChanges(data);
+
+		// Bodies were inserted one by one; rebuilding the broad phase trees once makes the first queries and steps fast.
+		data.JoltSystem->OptimizeBroadPhase();
 	}
 
 	PhysicsWorld::~PhysicsWorld()
 	{
+		m_Data->Connections.clear();
 		DestroyAllBodies(*m_Data);
 	}
 
@@ -1176,166 +2185,19 @@ namespace Strata
 		return m_Data->Settings;
 	}
 
-	void PhysicsWorld::CreateAllBodies()
+	void PhysicsWorld::ApplyPendingChanges()
 	{
-		ST_PROFILE_FUNCTION();
-
-		for (const Entity entity : m_Data->OwnerScene->GetEntitiesInHierarchyOrder())
-		{
-			if (entity.HasAnyComponent<RigidBodyComponent, BoxColliderComponent, SphereColliderComponent, CapsuleColliderComponent, MeshColliderComponent>())
-				RefreshBody(entity.GetHandle());
-		}
-
-		// Bodies were inserted one by one; rebuilding the broad phase trees once makes the first queries and steps fast.
-		m_Data->JoltSystem->OptimizeBroadPhase();
-	}
-
-	bool PhysicsWorld::RefreshBody(entt::entity handle)
-	{
-		ST_PROFILE_FUNCTION();
-
-		PhysicsWorldData& data = *m_Data;
-		Scene& scene = *data.OwnerScene;
-		const Entity entity(handle, &scene);
-		if (!entity.IsValid())
-		{
-			DestroyBody(handle);
-			return false;
-		}
-
-		const RigidBodyComponent* rigidBody = entity.TryGetComponent<RigidBodyComponent>();
-		if (!entity.HasAnyComponent<BoxColliderComponent, SphereColliderComponent, CapsuleColliderComponent, MeshColliderComponent>())
-		{
-			if (rigidBody && ShouldWarn(data, entity.GetUUID(), PhysicsWarning::MissingCollider))
-				ST_CORE_WARN("Physics: '{}' has a Rigid Body but no collider; it is not simulated", entity.GetName());
-			DestroyBody(handle);
-			return false;
-		}
-
-		const glm::mat4 worldTransform = scene.GetWorldTransform(entity);
-		glm::vec3 position;
-		glm::quat rotation;
-		glm::vec3 scale;
-		if (!Math::DecomposeTransform(worldTransform, position, rotation, scale))
-		{
-			ST_CORE_WARN("Physics: '{}' has a degenerate world transform (zero scale or non-finite values); it is not simulated", entity.GetName());
-			DestroyBody(handle);
-			return false;
-		}
-
-		RigidBodyType type = rigidBody ? rigidBody->Type : RigidBodyType::Static;
-		if (type != RigidBodyType::Static && type != RigidBodyType::Dynamic && type != RigidBodyType::Kinematic)
-		{
-			ST_CORE_WARN("Physics: '{}' has an invalid rigid body type {}; it is treated as static", entity.GetName(), static_cast<int>(type));
-			type = RigidBodyType::Static;
-		}
-
-		const JPH::RefConst<JPH::Shape> shape = BuildBodyShape(data, entity, scale, type);
-		if (!shape)
-		{
-			ST_CORE_WARN("Physics: '{}' has no usable collider; it is not simulated", entity.GetName());
-			DestroyBody(handle);
-			return false;
-		}
-
-		JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
-		JPH::BodyCreationSettings settings = MakeBodySettings(data, entity, rigidBody, type, shape.GetPtr(), position, rotation);
-
-		// A dynamic body rebuilt because a property changed keeps moving as before.
-		BodyRecord* existing = FindRecord(data, handle);
-		glm::vec3 linearVelocity(0.0f);
-		glm::vec3 angularVelocity(0.0f);
-		if (existing && existing->Type == RigidBodyType::Dynamic && type == RigidBodyType::Dynamic)
-		{
-			if (existing->InSimulation)
-			{
-				JPH::Vec3 currentLinear;
-				JPH::Vec3 currentAngular;
-				bodies.GetLinearAndAngularVelocity(existing->BodyID, currentLinear, currentAngular);
-				linearVelocity = ToGlm(currentLinear);
-				angularVelocity = ToGlm(currentAngular);
-			}
-			else
-			{
-				linearVelocity = existing->SavedLinearVelocity;
-				angularVelocity = existing->SavedAngularVelocity;
-			}
-		}
-
-		JPH::Body* body = bodies.CreateBody(settings);
-		if (!body)
-		{
-			ST_CORE_ERROR("Physics: cannot create a body for '{}': the world's limit of {} bodies is reached", entity.GetName(), data.Settings.MaxBodies);
-			DestroyBody(handle);
-			return false;
-		}
-
-		BodyRecord record;
-		record.EntityID = entity.GetUUID();
-		record.BodyID = body->GetID();
-		record.Type = type;
-		record.ShapeScale = scale;
-		record.LastWorldTransform = worldTransform;
-		record.KinematicTargetPosition = position;
-		record.KinematicTargetRotation = rotation;
-		record.SavedLinearVelocity = linearVelocity; // Applied when the body enters the simulation
-		record.SavedAngularVelocity = angularVelocity;
-
-		if (existing)
-		{
-			// Contacts are tracked per entity pair and carry over to the new body; the next step confirms or ends them.
-			DestroyJoltBody(data, *existing);
-			*existing = record;
-		}
-		else
-		{
-			existing = &data.Bodies.emplace(handle, record).first->second;
-		}
-		data.BodyEntities[record.BodyID.GetIndexAndSequenceNumber()] = handle;
-
-		if (scene.IsActiveInHierarchy(entity))
-			AddToSimulation(data, *existing, entity);
-		else
-			EndContactsOf(data, record.EntityID);
-		return true;
-	}
-
-	void PhysicsWorld::RefreshActivity(entt::entity handle)
-	{
-		PhysicsWorldData& data = *m_Data;
-		BodyRecord* record = FindRecord(data, handle);
-		if (!record)
-			return;
-
-		const Entity entity(handle, data.OwnerScene);
-		if (!entity.IsValid())
-		{
-			DestroyBody(handle);
-			return;
-		}
-
-		if (!data.OwnerScene->IsActiveInHierarchy(entity))
-			RemoveFromSimulation(data, *record);
-		else if (!record->InSimulation && !AddToSimulation(data, *record, entity))
-			RefreshBody(handle);
-	}
-
-	void PhysicsWorld::DestroyBody(entt::entity handle)
-	{
-		PhysicsWorldData& data = *m_Data;
-		auto it = data.Bodies.find(handle);
-		if (it == data.Bodies.end())
-			return;
-
-		const UUID entityID = it->second.EntityID;
-		DestroyJoltBody(data, it->second);
-		data.Bodies.erase(it);
-		EndContactsOf(data, entityID);
+		ApplyChanges(*m_Data);
 	}
 
 	bool PhysicsWorld::HasBody(Entity entity) const
 	{
 		return FindSimulatedRecord(*m_Data, entity) != nullptr;
+	}
+
+	Entity PhysicsWorld::GetBodyEntity(Entity entity) const
+	{
+		return GetBodyEntityOf(*m_Data, entity);
 	}
 
 	void PhysicsWorld::Simulate(float timestep)
@@ -1346,88 +2208,11 @@ namespace Strata
 			return;
 
 		PhysicsWorldData& data = *m_Data;
-		Scene& scene = *data.OwnerScene;
-		JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
 		const auto startTime = std::chrono::steady_clock::now();
 
-		// Entities -> bodies: activity, teleports, kinematic targets and scale changes.
-		std::vector<entt::entity> destroyed;
-		std::vector<entt::entity> rebuild;
-		for (auto& [handle, record] : data.Bodies)
-		{
-			const Entity entity(handle, &scene);
-			if (!entity.IsValid())
-			{
-				destroyed.push_back(handle);
-				continue;
-			}
+		ApplyChanges(data);
+		SyncEntitiesToBodies(data, timestep);
 
-			if (!scene.IsActiveInHierarchy(entity))
-			{
-				RemoveFromSimulation(data, record);
-				continue;
-			}
-			if (!record.InSimulation)
-			{
-				if (!AddToSimulation(data, record, entity))
-					rebuild.push_back(handle);
-				continue;
-			}
-
-			const glm::mat4 worldTransform = scene.GetWorldTransform(entity);
-			if (worldTransform == record.LastWorldTransform)
-			{
-				// A kinematic body keeps the velocity of its last move; stop it at its target.
-				if (record.KinematicMoving)
-				{
-					bodies.MoveKinematic(record.BodyID, ToJoltPosition(record.KinematicTargetPosition), ToJolt(record.KinematicTargetRotation), timestep);
-					record.KinematicMoving = false;
-				}
-				continue;
-			}
-
-			glm::vec3 position;
-			glm::quat rotation;
-			glm::vec3 scale;
-			if (!Math::DecomposeTransform(worldTransform, position, rotation, scale))
-			{
-				if (ShouldWarn(data, record.EntityID, PhysicsWarning::DegenerateTransform))
-					ST_CORE_WARN("Physics: '{}' has a degenerate world transform; its body keeps its last pose", entity.GetName());
-				continue;
-			}
-			if (HasScaleChanged(scale, record.ShapeScale))
-			{
-				rebuild.push_back(handle);
-				continue;
-			}
-
-			switch (record.Type)
-			{
-				case RigidBodyType::Static:
-					WakeBodiesAround(data, record.BodyID);
-					bodies.SetPositionAndRotation(record.BodyID, ToJoltPosition(position), ToJolt(rotation), JPH::EActivation::DontActivate);
-					WakeBodiesAround(data, record.BodyID);
-					break;
-				case RigidBodyType::Kinematic:
-					bodies.MoveKinematic(record.BodyID, ToJoltPosition(position), ToJolt(rotation), timestep);
-					record.KinematicMoving = true;
-					record.KinematicTargetPosition = position;
-					record.KinematicTargetRotation = rotation;
-					break;
-				case RigidBodyType::Dynamic:
-					// Moved from outside physics (gameplay code, editor gizmo, a moving parent): teleport, keeping velocity.
-					bodies.SetPositionAndRotation(record.BodyID, ToJoltPosition(position), ToJolt(rotation), JPH::EActivation::Activate);
-					break;
-			}
-			record.LastWorldTransform = worldTransform;
-		}
-
-		for (entt::entity handle : destroyed)
-			DestroyBody(handle);
-		for (entt::entity handle : rebuild)
-			RefreshBody(handle);
-
-		// Step.
 		FlagReportablePairs(data);
 		data.Activations.Clear();
 		{
@@ -1437,57 +2222,7 @@ namespace Strata
 				ReportUpdateErrors(data, errors);
 		}
 
-		// Bodies -> entities: dynamic bodies that moved (awake, or fell asleep during this step), parents before children so
-		// that every child's local transform is computed against its parent's final pose.
-		JPH::BodyIDVector movedBodies;
-		data.JoltSystem->GetActiveBodies(JPH::EBodyType::RigidBody, movedBodies);
-		for (const JPH::BodyID& bodyID : data.Activations.Take())
-			movedBodies.push_back(bodyID);
-
-		struct WriteBack
-		{
-			uint32_t Depth = 0;
-			entt::entity Handle = entt::null;
-		};
-		std::vector<WriteBack> writeBacks;
-		writeBacks.reserve(movedBodies.size());
-		for (const JPH::BodyID& bodyID : movedBodies)
-		{
-			auto entityIt = data.BodyEntities.find(bodyID.GetIndexAndSequenceNumber());
-			if (entityIt == data.BodyEntities.end())
-				continue;
-			const BodyRecord* record = FindRecord(data, entityIt->second);
-			if (!record || record->Type != RigidBodyType::Dynamic || !record->InSimulation)
-				continue;
-			writeBacks.push_back({ GetHierarchyDepth(Entity(entityIt->second, &scene)), entityIt->second });
-		}
-		std::sort(writeBacks.begin(), writeBacks.end(), [](const WriteBack& a, const WriteBack& b)
-		{
-			return a.Depth != b.Depth ? a.Depth < b.Depth : a.Handle < b.Handle;
-		});
-		writeBacks.erase(std::unique(writeBacks.begin(), writeBacks.end(), [](const WriteBack& a, const WriteBack& b) { return a.Handle == b.Handle; }), writeBacks.end());
-
-		for (const WriteBack& writeBack : writeBacks)
-		{
-			BodyRecord& record = *FindRecord(data, writeBack.Handle); // Filtered above
-			const Entity entity(writeBack.Handle, &scene);
-
-			JPH::RVec3 bodyPosition;
-			JPH::Quat bodyRotation;
-			bodies.GetPositionAndRotation(record.BodyID, bodyPosition, bodyRotation);
-			const glm::vec3 position = ToGlm(bodyPosition);
-			const glm::quat rotation = ToGlm(bodyRotation);
-			if (!IsFinite(position) || !IsFinite(rotation))
-			{
-				if (ShouldWarn(data, record.EntityID, PhysicsWarning::NonFiniteState))
-					ST_CORE_ERROR("Physics: the simulation produced a non-finite pose for '{}'; its transform is not updated", entity.GetName());
-				continue;
-			}
-
-			scene.SetWorldTransform(entity, Math::ComposeTransform(position, glm::normalize(rotation), record.ShapeScale));
-			record.LastWorldTransform = scene.GetWorldTransform(entity);
-		}
-
+		WriteBackDynamicBodies(data);
 		ProcessContacts(data);
 
 		data.StepCount++;
@@ -1668,8 +2403,8 @@ namespace Strata
 	bool PhysicsWorld::Teleport(Entity entity, const glm::vec3& position, const glm::quat& rotation)
 	{
 		PhysicsWorldData& data = *m_Data;
-		BodyRecord* simulatedRecord = FindSimulatedRecord(data, entity);
-		if (!simulatedRecord || !IsFinite(position) || !IsFinite(rotation))
+		BodyRecord* record = FindSimulatedRecord(data, entity);
+		if (!record || !IsFinite(position) || !IsFinite(rotation))
 			return false;
 
 		const float rotationLength = glm::length(rotation);
@@ -1677,28 +2412,31 @@ namespace Strata
 			return false;
 		const glm::quat normalizedRotation = rotation / rotationLength;
 
-		BodyRecord& record = *simulatedRecord;
 		Scene& scene = *data.OwnerScene;
-		if (!scene.SetWorldTransform(entity, Math::ComposeTransform(position, normalizedRotation, record.ShapeScale)))
+		if (!scene.SetWorldTransform(entity, Math::ComposeTransform(position, normalizedRotation, record->ShapeScale)))
 			return false;
-		record.LastWorldTransform = scene.GetWorldTransform(entity);
-		record.KinematicTargetPosition = position;
-		record.KinematicTargetRotation = normalizedRotation;
-		record.KinematicMoving = false;
+		record->LastWorldTransform = scene.GetWorldTransform(entity);
+		record->KinematicTargetPosition = position;
+		record->KinematicTargetRotation = normalizedRotation;
+		record->KinematicMoving = false;
 
+		// Bodies resting on it must notice that it left: Jolt only activates the moved body itself.
+		WakeBodiesAround(data, record->BodyID);
 		JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
-		if (record.Type == RigidBodyType::Static)
+		if (record->Type == RigidBodyType::Static)
 		{
-			WakeBodiesAround(data, record.BodyID);
-			bodies.SetPositionAndRotation(record.BodyID, ToJoltPosition(position), ToJolt(normalizedRotation), JPH::EActivation::DontActivate);
-			WakeBodiesAround(data, record.BodyID);
+			bodies.SetPositionAndRotation(record->BodyID, ToJoltPosition(position), ToJolt(normalizedRotation), JPH::EActivation::DontActivate);
+			WakeBodiesAround(data, record->BodyID);
 		}
 		else
 		{
-			if (record.Type == RigidBodyType::Kinematic)
-				bodies.SetLinearAndAngularVelocity(record.BodyID, JPH::Vec3::sZero(), JPH::Vec3::sZero());
-			bodies.SetPositionAndRotation(record.BodyID, ToJoltPosition(position), ToJolt(normalizedRotation), JPH::EActivation::Activate);
+			if (record->Type == RigidBodyType::Kinematic)
+				bodies.SetLinearAndAngularVelocity(record->BodyID, JPH::Vec3::sZero(), JPH::Vec3::sZero());
+			bodies.SetPositionAndRotation(record->BodyID, ToJoltPosition(position), ToJolt(normalizedRotation), JPH::EActivation::Activate);
 		}
+
+		// The entity's descendants moved with it.
+		UpdateDescendantsOfMovedBody(data, entity, {}, false);
 		return true;
 	}
 
@@ -1793,6 +2531,12 @@ namespace Strata
 		PhysicsStats stats;
 		for (const auto& [handle, record] : data.Bodies)
 		{
+			if (!record.HasBody())
+			{
+				if (NeedsPolling(record))
+					stats.PendingBodyCount++;
+				continue;
+			}
 			if (!record.InSimulation)
 				continue;
 
@@ -1807,6 +2551,7 @@ namespace Strata
 		stats.ActiveBodyCount = data.JoltSystem->GetNumActiveBodies(JPH::EBodyType::RigidBody);
 		stats.ContactPairCount = static_cast<uint32_t>(data.TouchingPairs.size());
 		stats.StepCount = data.StepCount;
+		stats.WorkerJobCount = data.WorkerJobCount.load(std::memory_order_relaxed);
 		stats.LastStepTime = data.LastStepTime;
 		return stats;
 	}

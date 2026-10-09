@@ -158,6 +158,32 @@ TEST_SUITE("Physics.Events")
 		CHECK(recorder.Count(CollisionEventType::Begin, ground.GetUUID(), second.GetUUID()) == 2);
 	}
 
+	TEST_CASE("Static triggers detect kinematic bodies moving through them")
+	{
+		Scene scene;
+		Entity trigger = CreateStaticBox(scene, "Trigger", glm::vec3(3.0f, 0.0f, 0.0f), glm::vec3(1.0f));
+		trigger.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Static;
+		trigger.GetComponent<RigidBodyComponent>().IsTrigger = true;
+		Entity mover = CreateDynamicBox(scene, "Mover", glm::vec3(0.0f));
+		mover.GetComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
+
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		CollisionRecorder recorder(physics);
+		for (int frame = 0; frame < 60; frame++)
+		{
+			mover.GetTransform().Translation.x += 0.1f;
+			StepScene(scene, 1);
+		}
+
+		CHECK(recorder.Count(CollisionEventType::Begin, trigger.GetUUID(), mover.GetUUID()) == 1);
+		CHECK(recorder.Count(CollisionEventType::End, trigger.GetUUID(), mover.GetUUID()) == 1);
+		const CollisionEvent* begin = recorder.Find(CollisionEventType::Begin, trigger.GetUUID(), mover.GetUUID());
+		REQUIRE(begin);
+		CHECK(begin->IsTrigger);
+		CHECK(recorder.GetEvents().front().Type == CollisionEventType::Begin);
+	}
+
 	TEST_CASE("Kinematic triggers detect static colliders")
 	{
 		Scene scene;

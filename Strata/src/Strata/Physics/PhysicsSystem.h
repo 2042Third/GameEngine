@@ -12,7 +12,6 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <optional>
-#include <unordered_set>
 #include <vector>
 
 namespace Strata
@@ -22,19 +21,19 @@ namespace Strata
 
 	// Rigid body physics for a running scene (Play and Simulate modes).
 	//
-	// On runtime start every active entity with colliders gets a body (see PhysicsWorld for how components map to bodies),
-	// and the scene's gravity and fixed timestep drive the simulation: each fixed update steps the world once. Adding,
-	// removing or modifying RigidBody/collider components (EnTT on_construct/on_update/on_destroy; property edits must
-	// emit on_update, e.g. through Entity::MarkModified or ComponentAccess), destroying entities and (de)activating them
-	// are picked up automatically before the next update, body API call or query. Transforms changed outside physics are
-	// applied to the bodies at the next fixed step, so queries made in between see the bodies where they were after the last
-	// step (Teleport moves a body immediately).
+	// The simulation (a PhysicsWorld, see there for how components map to bodies) is created when the scene starts running
+	// with physics components, or as soon as the first one is added, so scenes without physics cost nothing. The scene's
+	// gravity and fixed timestep drive it: each fixed update steps the world once. Component edits (EnTT
+	// on_construct/on_update/on_destroy; property edits must emit on_update, e.g. through Entity::MarkModified or
+	// ComponentAccess), entity destruction and (de)activation are applied before the next update, body API call or query.
+	// Transforms changed outside physics are applied to the bodies at the next fixed step, so queries made in between see the
+	// bodies where they were after the last step (Teleport moves a body immediately).
 	//
 	// Collision events are collected during each step and dispatched afterwards on the main thread to the registered
 	// listeners. Listeners may use the whole scene and physics API, including destroying entities; End events caused by
 	// changes made outside a step are dispatched after the next update.
 	//
-	// Main thread only. Functions return false / zero / empty results while the system is not running.
+	// Main thread only. Functions return false / zero / empty results while there is no simulation.
 	class PhysicsSystem : public SceneSystem
 	{
 	public:
@@ -44,7 +43,7 @@ namespace Strata
 		PhysicsSystem(const PhysicsSystem&) = delete;
 		PhysicsSystem& operator=(const PhysicsSystem&) = delete;
 
-		// Project-wide settings (capacities, layer matrix) used by physics systems started afterwards.
+		// Project-wide settings (capacities, layer matrix) copied by physics systems created afterwards.
 		static void SetDefaultSettings(const PhysicsSettings& settings);
 		static const PhysicsSettings& GetDefaultSettings();
 
@@ -53,8 +52,8 @@ namespace Strata
 		void OnUpdate(Timestep timestep) override;
 		void OnFixedUpdate(float timestep) override;
 
-		bool IsRunning() const { return m_World != nullptr; }
-		// The simulation backing this system; nullptr while not running.
+		bool IsRunning() const { return m_Running; }
+		// The simulation backing this system; nullptr while not running or while the scene has no physics components.
 		PhysicsWorld* GetWorld() { return m_World.get(); }
 		const PhysicsWorld* GetWorld() const { return m_World.get(); }
 
@@ -74,6 +73,7 @@ namespace Strata
 		// Sets the scene's gravity (SceneSettings::Gravity) and applies it immediately. Non-finite values are rejected.
 		bool SetGravity(const glm::vec3& gravity);
 		glm::vec3 GetGravity() const;
+		// This scene's layer matrix (initialized from the default settings); applies to the running simulation too.
 		void SetLayersCollide(uint32_t layerA, uint32_t layerB, bool collide);
 		bool DoLayersCollide(uint32_t layerA, uint32_t layerB) const;
 		PhysicsStats GetStats() const;
@@ -83,6 +83,7 @@ namespace Strata
 		//////////////////////////////////////////////////////////////////////////
 
 		bool HasBody(Entity entity);
+		Entity GetBodyEntity(Entity entity);
 		glm::vec3 GetLinearVelocity(Entity entity);
 		bool SetLinearVelocity(Entity entity, const glm::vec3& velocity);
 		glm::vec3 GetAngularVelocity(Entity entity);
@@ -113,25 +114,20 @@ namespace Strata
 			bool Removed = false;
 		};
 
-		void ConnectSignals();
-		void OnBodyComponentChanged(entt::registry& registry, entt::entity handle);
-		void OnMeshRendererChanged(entt::registry& registry, entt::entity handle);
-		void OnActivityChanged(entt::registry& registry, entt::entity handle);
-		void MarkActivityChanged(entt::registry& registry, entt::entity handle);
-
-		// Applies component, destruction and activity changes recorded by the signals since the last call.
+		bool SceneHasPhysicsComponents() const;
+		void OnPhysicsComponentAdded(entt::registry& registry, entt::entity handle);
+		void CreateWorld();
+		// Creates the world once physics components exist, then applies the changes recorded since the last call.
 		void ApplyPendingChanges();
 		void SyncGravity();
 		void DispatchCollisionEvents();
 	private:
 		Scene& m_Scene;
+		PhysicsSettings m_Settings;
 		Scope<PhysicsWorld> m_World;
-		std::vector<entt::scoped_connection> m_Connections;
-
-		std::vector<entt::entity> m_PendingRebuilds; // In signal order, so that changes are applied deterministically
-		std::unordered_set<entt::entity> m_PendingRebuildSet;
-		std::vector<entt::entity> m_PendingActivity;
-		std::unordered_set<entt::entity> m_PendingActivitySet;
+		bool m_Running = false;
+		bool m_WorldRequested = false;
+		std::vector<entt::scoped_connection> m_CreationConnections; // Watch for the first physics component
 
 		std::vector<Ref<CollisionListener>> m_CollisionListeners;
 		CollisionListenerID m_NextListenerID = 1;

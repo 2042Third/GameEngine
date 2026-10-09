@@ -113,8 +113,10 @@ namespace Strata
 		uint32_t DynamicBodyCount = 0;
 		uint32_t KinematicBodyCount = 0;
 		uint32_t ActiveBodyCount = 0;    // Awake bodies (sleeping and static bodies are not simulated)
+		uint32_t PendingBodyCount = 0;   // Entities waiting for a body that cannot be built yet (degenerate transform, mesh not loaded, world full)
 		uint32_t ContactPairCount = 0;   // Pairs of entities currently touching (including triggers)
 		uint64_t StepCount = 0;          // Simulation steps since the world was created
+		uint64_t WorkerJobCount = 0;     // Simulation jobs executed by JobSystem worker threads since the world was created
 		float LastStepTime = 0.0f;       // Wall time of the last step in milliseconds, including transform synchronization
 	};
 

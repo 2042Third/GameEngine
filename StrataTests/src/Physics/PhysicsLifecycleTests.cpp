@@ -10,14 +10,88 @@
 using namespace Strata;
 using namespace Strata::Tests;
 
+namespace
+{
+
+	// Destroys entities from inside the scene update (destruction is deferred to the end of the frame) and records what
+	// physics reports for them in between. Runs after the physics system, which is registered first.
+	struct DeferredDestroySystem : public SceneSystem
+	{
+		explicit DeferredDestroySystem(Scene& scene)
+			: TargetScene(scene)
+		{
+		}
+
+		static void Reset()
+		{
+			Armed = false;
+			Checked = false;
+			QueryHitDoomed = QueryHitChild = QueryHitWall = true;
+			DoomedSimulated = ChildSimulated = true;
+		}
+
+		void OnUpdate(Timestep) override
+		{
+			if (!Armed)
+				return;
+			TargetScene.DestroyEntity(TargetScene.FindEntityByName("Doomed"));
+			TargetScene.DestroyEntity(TargetScene.FindEntityByName("DoomedWall"));
+		}
+
+		void OnLateUpdate(Timestep) override
+		{
+			if (!Armed)
+				return;
+			Armed = false;
+
+			PhysicsSystem* physics = TargetScene.GetSystem<PhysicsSystem>();
+			const auto hits = [&](float x, std::string_view name)
+			{
+				std::optional<RaycastHit> hit = physics->Raycast(glm::vec3(x, 10.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), 20.0f);
+				return hit && hit->HitEntity == TargetScene.FindEntityByName(name);
+			};
+			QueryHitDoomed = hits(0.0f, "Doomed");
+			QueryHitChild = hits(3.0f, "DoomedChild");
+			QueryHitWall = hits(-3.0f, "DoomedWall");
+			DoomedSimulated = physics->HasBody(TargetScene.FindEntityByName("Doomed"));
+			ChildSimulated = physics->HasBody(TargetScene.FindEntityByName("DoomedChild"));
+			Checked = true;
+		}
+
+		Scene& TargetScene;
+		static inline bool Armed = false;
+		static inline bool Checked = false;
+		static inline bool QueryHitDoomed = true;
+		static inline bool QueryHitChild = true;
+		static inline bool QueryHitWall = true;
+		static inline bool DoomedSimulated = true;
+		static inline bool ChildSimulated = true;
+	};
+
+}
+
 TEST_SUITE("Physics.Lifecycle")
 {
+	TEST_CASE("The physics system is a built-in scene system that also runs in simulate mode")
+	{
+		const std::vector<SceneSystemDescriptor>& descriptors = SceneSystemRegistry::GetAll();
+		auto it = std::find_if(descriptors.begin(), descriptors.end(), [](const SceneSystemDescriptor& descriptor) { return descriptor.Name == "Physics"; });
+		REQUIRE(it != descriptors.end());
+		CHECK(it->RunsInSimulateMode);
+
+		Scene scene;
+		const Scope<SceneSystem> system = it->Create(scene);
+		CHECK(dynamic_cast<PhysicsSystem*>(system.get()) != nullptr);
+	}
+
 	TEST_CASE("Jolt is initialized while a physics world exists")
 	{
 		REQUIRE_FALSE(PhysicsRuntime::IsInitialized());
 		{
 			Scene first;
 			Scene second;
+			CreateGround(first);
+			CreateGround(second);
 			first.OnRuntimeStart();
 			CHECK(PhysicsRuntime::GetReferenceCount() == 1);
 			second.OnRuntimeStart();
@@ -32,7 +106,6 @@ TEST_SUITE("Physics.Lifecycle")
 		Entity box = CreateDynamicBox(scene, "Box", glm::vec3(0.0f, 2.0f, 0.0f));
 		{
 			PhysicsWorld world(scene);
-			world.CreateAllBodies();
 			CHECK(world.HasBody(box));
 			world.Simulate(1.0f / 60.0f);
 			world.Simulate(0.0f); // Ignored
@@ -353,6 +426,146 @@ TEST_SUITE("Physics.Lifecycle")
 		scene.OnRuntimeStart();
 		CHECK(GetPhysics(scene).HasBody(box));
 	}
+
+	TEST_CASE("Scenes without physics components create the simulation only when needed")
+	{
+		Scene scene;
+		scene.CreateEntity("Empty");
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		CHECK(physics.IsRunning());
+		CHECK(physics.GetWorld() == nullptr);
+		CHECK_FALSE(PhysicsRuntime::IsInitialized());
+		StepScene(scene, 5);
+		CHECK(physics.GetWorld() == nullptr);
+		CHECK_FALSE(physics.Raycast(glm::vec3(0.0f, 10.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), 20.0f));
+
+		Entity box = CreateDynamicBox(scene, "Box", glm::vec3(0.0f, 5.0f, 0.0f));
+		StepScene(scene, 10);
+		CHECK(physics.GetWorld() != nullptr);
+		CHECK(physics.HasBody(box));
+		CHECK(GetWorldPosition(scene, box).y < 5.0f);
+	}
+
+	TEST_CASE("Entities whose body cannot be built yet get it once possible")
+	{
+		const Ref<const PhysicsMeshData> cube = []()
+		{
+			Ref<PhysicsMeshData> mesh = CreateRef<PhysicsMeshData>();
+			for (int index = 0; index < 8; index++)
+				mesh->Positions.emplace_back((index & 1) ? 0.5f : -0.5f, (index & 2) ? 0.5f : -0.5f, (index & 4) ? 0.5f : -0.5f);
+			return Ref<const PhysicsMeshData>(mesh);
+		}();
+		bool meshLoaded = false;
+		uint32_t requests = 0;
+		ScopedMeshProvider provider([&](AssetHandle) -> Ref<const PhysicsMeshData>
+		{
+			requests++;
+			return meshLoaded ? cube : nullptr;
+		});
+
+		Scene scene;
+		CreateGround(scene);
+		Entity flat = CreateDynamicBox(scene, "Flat", glm::vec3(0.0f, 3.0f, 0.0f));
+		flat.GetTransform().Scale = glm::vec3(0.0f);
+		Entity rock = scene.CreateEntity("Rock");
+		rock.GetTransform().Translation = glm::vec3(10.0f, 0.5f, 0.0f);
+		rock.AddComponent<MeshColliderComponent>().Mesh = UUID(0x5001);
+
+		const uint64_t logStart = Log::GetBuffer().GetLatestSequence();
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		CHECK_FALSE(physics.HasBody(flat));
+		CHECK_FALSE(physics.HasBody(rock));
+		CHECK(physics.GetStats().PendingBodyCount == 2);
+
+		// Retried every step without repeating the warnings.
+		StepScene(scene, 5);
+		CHECK_FALSE(physics.HasBody(rock));
+		CHECK(requests >= 5);
+		CHECK(CountLogMessages(logStart, "'Flat' has a degenerate world transform") == 1);
+		CHECK(CountLogMessages(logStart, "'Rock' waits for mesh") == 1);
+		CHECK(Math::IsNearlyEqual(flat.GetComponent<TransformComponent>().Scale, glm::vec3(0.0f)));
+
+		flat.GetTransform().Scale = glm::vec3(1.0f);
+		meshLoaded = true;
+		StepScene(scene, 1);
+		CHECK(physics.HasBody(flat));
+		CHECK(physics.HasBody(rock));
+		CHECK(physics.GetStats().PendingBodyCount == 0);
+		std::optional<RaycastHit> hit = physics.Raycast(glm::vec3(10.0f, 5.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), 10.0f);
+		REQUIRE(hit);
+		CHECK(hit->HitEntity == rock);
+
+		StepScene(scene, 150);
+		CHECK(std::abs(GetWorldPosition(scene, flat).y - 0.5f) < 0.03f);
+	}
+
+	TEST_CASE("A body whose transform becomes degenerate leaves the simulation without restoring its scale")
+	{
+		Scene scene;
+		CreateGround(scene);
+		Entity box = CreateDynamicBox(scene, "Box", glm::vec3(0.0f, 5.0f, 0.0f));
+		box.GetComponent<RigidBodyComponent>().LinearDamping = 0.0f;
+
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		StepScene(scene, 10);
+		const float speed = physics.GetLinearVelocity(box).y;
+		REQUIRE(speed < -1.0f);
+
+		box.GetTransform().Scale = glm::vec3(0.0f);
+		StepScene(scene, 1);
+		CHECK_FALSE(physics.HasBody(box));
+		const glm::vec3 frozen = box.GetComponent<TransformComponent>().Translation;
+		StepScene(scene, 10);
+		const TransformComponent& transform = box.GetComponent<TransformComponent>();
+		CHECK(transform.Scale == glm::vec3(0.0f));
+		CHECK(transform.Translation == frozen);
+
+		// Back with a valid scale it continues with the velocity it had.
+		box.GetTransform().Scale = glm::vec3(1.0f);
+		StepScene(scene, 1);
+		CHECK(physics.HasBody(box));
+		CHECK(physics.GetLinearVelocity(box).y < speed);
+		StepScene(scene, 120);
+		CHECK(std::abs(GetWorldPosition(scene, box).y - 0.5f) < 0.03f);
+	}
+
+	TEST_CASE("Entities pending destruction leave the simulation and queries right away")
+	{
+		DeferredDestroySystem::Reset();
+		SceneSystemRegistry::Register({ "TestDeferredDestroy", false, [](Scene& scene) { return CreateScope<DeferredDestroySystem>(scene); } });
+		{
+			Scene scene;
+			Entity doomed = CreateDynamicBox(scene, "Doomed", glm::vec3(0.0f, 5.0f, 0.0f));
+			doomed.GetComponent<RigidBodyComponent>().GravityScale = 0.0f;
+			Entity child = CreateDynamicBox(scene, "DoomedChild", glm::vec3(3.0f, 5.0f, 0.0f));
+			child.GetComponent<RigidBodyComponent>().GravityScale = 0.0f;
+			scene.SetParent(child, doomed);
+			Entity wall = CreateStaticBox(scene, "DoomedWall", glm::vec3(-3.0f, 5.0f, 0.0f), glm::vec3(0.5f));
+
+			scene.OnRuntimeStart();
+			PhysicsSystem& physics = GetPhysics(scene);
+			CHECK(physics.HasBody(doomed));
+			CHECK(physics.HasBody(child));
+			CHECK(physics.HasBody(wall));
+
+			DeferredDestroySystem::Armed = true;
+			StepScene(scene, 1);
+			CHECK(DeferredDestroySystem::Checked);
+			CHECK_FALSE(DeferredDestroySystem::QueryHitDoomed);
+			CHECK_FALSE(DeferredDestroySystem::QueryHitChild);
+			CHECK_FALSE(DeferredDestroySystem::QueryHitWall);
+			CHECK_FALSE(DeferredDestroySystem::DoomedSimulated);
+			CHECK_FALSE(DeferredDestroySystem::ChildSimulated);
+			CHECK_FALSE(doomed.IsValid());
+			CHECK_FALSE(wall.IsValid());
+			StepScene(scene, 1);
+			CHECK(physics.GetStats().BodyCount == 0);
+		}
+		SceneSystemRegistry::Unregister("TestDeferredDestroy");
+	}
 }
 
 TEST_SUITE("Physics.Layers")
@@ -409,5 +622,51 @@ TEST_SUITE("Physics.Layers")
 		StepScene(scene, 90);
 		CHECK(GetWorldPosition(scene, first).y < -2.0f);
 		CHECK(GetWorldPosition(scene, second).y < -2.0f);
+	}
+
+	TEST_CASE("A scene's layer matrix can be configured before it runs")
+	{
+		Scene scene;
+		Entity ground = CreateGround(scene);
+		ground.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Static;
+		ground.GetComponent<RigidBodyComponent>().Layer = 3;
+		Entity box = CreateDynamicBox(scene, "Box", glm::vec3(0.0f, 1.0f, 0.0f));
+		box.GetComponent<RigidBodyComponent>().Layer = 4;
+
+		PhysicsSystem physics(scene);
+		physics.SetLayersCollide(3, 4, false);
+		CHECK_FALSE(physics.DoLayersCollide(3, 4));
+		CHECK_FALSE(physics.DoLayersCollide(4, 3));
+		CHECK(physics.DoLayersCollide(3, 3));
+		CHECK(PhysicsSystem::GetDefaultSettings().DoLayersCollide(3, 4)); // Only this scene is affected
+
+		physics.OnRuntimeStart();
+		REQUIRE(physics.GetWorld() != nullptr);
+		CHECK_FALSE(physics.GetWorld()->DoLayersCollide(3, 4));
+		for (int step = 0; step < 90; step++)
+			physics.OnFixedUpdate(1.0f / 60.0f);
+		CHECK(GetWorldPosition(scene, box).y < -2.0f);
+	}
+
+	TEST_CASE("Changing the layer matrix wakes sleeping bodies")
+	{
+		Scene scene;
+		Entity ground = CreateGround(scene);
+		ground.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Static;
+		ground.GetComponent<RigidBodyComponent>().Layer = 1;
+		Entity box = CreateDynamicBox(scene, "Box", glm::vec3(0.0f, 0.5f, 0.0f));
+		box.GetComponent<RigidBodyComponent>().Layer = 2;
+
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		CollisionRecorder recorder(physics);
+		StepScene(scene, 90);
+		REQUIRE(physics.IsSleeping(box));
+		REQUIRE(recorder.Count(CollisionEventType::Begin) == 1);
+
+		physics.SetLayersCollide(1, 2, false);
+		StepScene(scene, 60);
+		CHECK(GetWorldPosition(scene, box).y < -0.5f);
+		CHECK(recorder.Count(CollisionEventType::End, ground.GetUUID(), box.GetUUID()) == 1);
 	}
 }
