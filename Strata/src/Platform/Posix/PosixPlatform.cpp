@@ -4,10 +4,8 @@
 #include "Strata/Core/FileSystem.h"
 
 #include <cerrno>
-#include <csignal>
 #include <cstdlib>
 #include <fstream>
-#include <limits>
 #include <pthread.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -191,15 +189,6 @@ namespace Strata
 	uint32_t Platform::GetProcessID()
 	{
 		return static_cast<uint32_t>(getpid());
-	}
-
-	bool Platform::IsProcessRunning(uint32_t processID)
-	{
-		// kill() treats 0 and negative values as process groups.
-		if (processID == 0 || processID > static_cast<uint32_t>(std::numeric_limits<pid_t>::max()))
-			return false;
-		// Signal 0 only checks that the process exists; EPERM means it exists but belongs to another user.
-		return kill(static_cast<pid_t>(processID), 0) == 0 || errno == EPERM;
 	}
 
 	std::optional<std::string> Platform::GetEnvVar(std::string_view name)

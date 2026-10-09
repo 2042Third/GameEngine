@@ -2,6 +2,7 @@
 
 #include "Strata/Core/CrashGuard.h"
 #include "Strata/Core/DynamicLibrary.h"
+#include "Strata/Core/FileLock.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Platform.h"
 #include "Strata/Core/PlatformDetection.h"
@@ -154,17 +155,41 @@ TEST_SUITE("Core.Platform")
 		CHECK(FileSystem::Remove(second));
 	}
 
-	TEST_CASE("Process liveness")
+	TEST_CASE("File locks are exclusive")
 	{
-		CHECK(Platform::IsProcessRunning(Platform::GetProcessID()));
-		CHECK_FALSE(Platform::IsProcessRunning(0));
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("FileLock");
+		const std::filesystem::path path = directory / "Test.lock";
+		Scope<FileLock> lock = FileLock::Create(path);
+		REQUIRE(lock);
+		CHECK(FileSystem::Exists(path));
+		CHECK_FALSE(FileLock::Create(path));     // It exists already
+		CHECK_FALSE(FileLock::TryAcquire(path)); // Held, also from within this process
 
-		// The Process object keeps the ended process's ID from being reused while it exists (Windows keeps the handle open).
-		Process process;
-		REQUIRE(process.Start(HelperProcess({ "--strata-test-helper=exit-code", "0" })));
-		const uint32_t processID = process.GetProcessID();
-		REQUIRE(process.Wait(std::chrono::milliseconds(30000)).has_value());
-		CHECK_FALSE(Platform::IsProcessRunning(processID));
+		lock.reset();
+		const Scope<FileLock> again = FileLock::TryAcquire(path);
+		CHECK(again);
+		CHECK_FALSE(FileLock::TryAcquire(directory / "Missing.lock"));
+	}
+
+	TEST_CASE("File locks are released when their process ends")
+	{
+		const std::filesystem::path path = Tests::CreateTemporaryDirectory("FileLockProcess") / "Owner.lock";
+		REQUIRE(FileLock::Create(path)); // Released right away; the child takes it
+
+		Process holder;
+		REQUIRE(holder.Start(HelperProcess({ "--strata-test-helper=hold-file-lock", FileSystem::ToUTF8(path) })));
+		std::string output;
+		REQUIRE(Tests::WaitUntil([&]()
+		{
+			output += holder.TakeOutput();
+			return output.find("locked") != std::string::npos || !holder.IsRunning();
+		}, std::chrono::milliseconds(30000)));
+		REQUIRE(output.find("locked") != std::string::npos);
+		CHECK_FALSE(FileLock::TryAcquire(path));
+
+		// The holder ends without releasing anything (as in a crash): the system releases the lock.
+		CHECK(holder.Terminate());
+		CHECK(Tests::WaitUntil([&]() { return FileLock::TryAcquire(path) != nullptr; }, std::chrono::milliseconds(10000)));
 	}
 
 	TEST_CASE("DynamicLibrary loads, resolves symbols and unloads")

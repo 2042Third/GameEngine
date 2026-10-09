@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Scripting/ScriptModule.h"
 
+#include "Strata/Core/FileLock.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Platform.h"
 #include "Strata/Scene/Entity.h"
@@ -9,7 +10,6 @@
 #include "Strata/Scripting/ScriptValue.h"
 #include "Strata/Scripting/ScriptWatchdog.h"
 
-#include <charconv>
 #include <cstddef>
 #include <unordered_set>
 
@@ -19,8 +19,10 @@ namespace Strata
 	static_assert(ST_SCRIPT_ABORT_EXCEPTION_CODE == c_CrashGuardAbortExceptionCode, "Modules report abort() with the code the crash guard contains");
 
 	// The private directory module copies are loaded from (in Platform::GetUserRuntimeDirectory): one per process,
-	// created on first use and removed with the last copy. Its name carries the process ID, so directories left behind by
-	// processes that ended without unloading (crashes, debugger stops) are removed by later sessions.
+	// created on first use and removed with the last copy. Several processes of the user (editors, tests, games) have
+	// their directories side by side; each holds a lock file in its own for as long as it runs, so directories left
+	// behind by processes that ended without unloading (crashes, debugger stops) can be told apart and are removed by
+	// later sessions - never a directory whose owner still runs.
 	class ScriptModuleCopyDirectory
 	{
 	public:
@@ -32,12 +34,13 @@ namespace Strata
 
 		const std::filesystem::path& GetPath() const { return m_Path; }
 	private:
-		explicit ScriptModuleCopyDirectory(std::filesystem::path path)
-			: m_Path(std::move(path))
+		ScriptModuleCopyDirectory(std::filesystem::path path, Scope<FileLock> ownerLock)
+			: m_Path(std::move(path)), m_OwnerLock(std::move(ownerLock))
 		{
 		}
 	private:
 		std::filesystem::path m_Path;
+		Scope<FileLock> m_OwnerLock;
 	};
 
 	namespace
@@ -57,6 +60,8 @@ namespace Strata
 		constexpr size_t c_RequiredFieldDescSize = offsetof(StrataScriptFieldDesc, DefaultValue) + sizeof(StrataScriptFieldDesc::DefaultValue);
 
 		constexpr std::string_view c_CopyDirectoryPrefix = "ScriptModules-";
+		// In every copy directory, locked by the owning process while it runs.
+		constexpr std::string_view c_OwnerLockName = "Owner.lock";
 
 		// Libraries script modules run from (native handles). Loading a file that is already loaded yields the same
 		// library, whose module state belongs to the module that loaded it first. Libraries abandoned after their unload
@@ -76,27 +81,22 @@ namespace Strata
 			s_Libraries.erase(handle);
 		}
 
-		// Copy directories ("ScriptModules-<process id>-<random>") of processes that are no longer running.
+		// Copy directories of processes that are gone: anyone can take their owner lock. A directory without a lock file
+		// is left alone (its owner may be creating it right now). Removal is best effort: another process may be removing
+		// the same directory, and whatever remains is tried again by later sessions.
 		void RemoveStaleCopyDirectories(const std::filesystem::path& parent)
 		{
+			std::vector<std::filesystem::path> stale;
 			std::error_code error;
 			for (std::filesystem::directory_iterator it(parent, error), end; !error && it != end; it.increment(error))
 			{
-				const std::string name = FileSystem::ToUTF8(it->path().filename());
-				if (!name.starts_with(c_CopyDirectoryPrefix))
+				if (!FileSystem::ToUTF8(it->path().filename()).starts_with(c_CopyDirectoryPrefix))
 					continue;
-
-				const char* first = name.data() + c_CopyDirectoryPrefix.size();
-				const char* last = name.data() + name.size();
-				uint32_t processID = 0;
-				const auto [next, parseError] = std::from_chars(first, last, processID);
-				if (parseError != std::errc() || next == first || next == last || *next != '-')
-					continue;
-				if (processID == Platform::GetProcessID() || Platform::IsProcessRunning(processID))
-					continue;
-				if (!FileSystem::Remove(it->path()))
-					ST_CORE_WARN("Cannot remove the stale script module directory '{}'", FileSystem::ToUTF8(it->path()));
+				if (FileLock::TryAcquire(it->path() / FileSystem::FromUTF8(c_OwnerLockName)))
+					stale.push_back(it->path()); // The lock is released again right away (the temporary is destroyed)
 			}
+			for (const std::filesystem::path& directory : stale)
+				FileSystem::Remove(directory);
 		}
 
 		bool ReadName(const StrataScriptString& text, std::string& out)
@@ -154,21 +154,30 @@ namespace Strata
 		}
 		RemoveStaleCopyDirectories(parent);
 
-		std::filesystem::path path = Platform::CreatePrivateDirectory(parent, fmt::format("{}{}-", c_CopyDirectoryPrefix, Platform::GetProcessID()));
+		std::filesystem::path path = Platform::CreatePrivateDirectory(parent, c_CopyDirectoryPrefix);
 		if (path.empty())
 		{
 			outError = fmt::format("cannot create a private directory in '{}'", FileSystem::ToUTF8(parent));
 			return nullptr;
 		}
-		Ref<ScriptModuleCopyDirectory> directory(new ScriptModuleCopyDirectory(std::move(path)));
+		Scope<FileLock> ownerLock = FileLock::Create(path / FileSystem::FromUTF8(c_OwnerLockName));
+		if (!ownerLock)
+		{
+			FileSystem::Remove(path);
+			outError = fmt::format("cannot create the owner lock of '{}'", FileSystem::ToUTF8(path));
+			return nullptr;
+		}
+		Ref<ScriptModuleCopyDirectory> directory(new ScriptModuleCopyDirectory(std::move(path), std::move(ownerLock)));
 		s_Current = directory;
 		return directory;
 	}
 
 	ScriptModuleCopyDirectory::~ScriptModuleCopyDirectory()
 	{
-		// Fails only while a copy is still in use (a library abandoned after a crash); a later session removes it then.
-		if (!FileSystem::Remove(m_Path))
+		// The lock file can only be deleted once it is released. Removal fails only while a copy is still in use (a library
+		// abandoned after a crash) - or when a scanning session removes the released directory at the same time.
+		m_OwnerLock.reset();
+		if (!FileSystem::Remove(m_Path) && FileSystem::Exists(m_Path))
 			ST_CORE_WARN("Cannot remove the script module directory '{}'; it is removed by a later session", FileSystem::ToUTF8(m_Path));
 	}
 

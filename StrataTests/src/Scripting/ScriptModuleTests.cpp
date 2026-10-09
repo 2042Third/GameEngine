@@ -3,6 +3,7 @@
 #include "Scripting/ScriptTestUtils.h"
 #include "Strata/Core/CrashGuard.h"
 #include "Strata/Core/DynamicLibrary.h"
+#include "Strata/Core/FileLock.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Platform.h"
 #include "Strata/Core/Process.h"
@@ -392,10 +393,13 @@ TEST_SUITE("Scripting.Module")
 		CHECK(FileSystem::Exists(loadedPath));
 		CHECK(engine.GetModule()->GetSourcePath() == module.lexically_normal());
 
-		// The copy is in a directory of this process inside the user's private runtime directory.
+		// The copy is in a directory of this process inside the user's private runtime directory; the process holds its
+		// owner lock while it runs.
 		const std::filesystem::path copyDirectory = loadedPath.parent_path();
 		CHECK(copyDirectory.parent_path() == Platform::GetUserRuntimeDirectory("Strata"));
-		CHECK(StringUtils::StartsWith(FileSystem::ToUTF8(copyDirectory.filename()), fmt::format("ScriptModules-{}-", Platform::GetProcessID())));
+		CHECK(StringUtils::StartsWith(FileSystem::ToUTF8(copyDirectory.filename()), "ScriptModules-"));
+		CHECK(FileSystem::Exists(copyDirectory / "Owner.lock"));
+		CHECK_FALSE(FileLock::TryAcquire(copyDirectory / "Owner.lock"));
 
 		// The build can replace or delete the original while the module is in use.
 		CHECK(FileSystem::WriteBytes(module, CreateGarbage(128)));
@@ -485,26 +489,89 @@ TEST_SUITE("Scripting.Module")
 		}
 	}
 
-	TEST_CASE("Copy directories left behind by ended processes are removed")
+	TEST_CASE("Copy directories are removed once their owner process is gone, and never before")
 	{
-		// A process that ended; the object keeps its ID from being reused on Windows (the process handle stays open).
-		Process ended;
-		ProcessSpecification specification;
-		specification.Executable = GetTestExecutablePath();
-		specification.Arguments = { "--strata-test-helper=exit-code", "0" };
-		REQUIRE(ended.Start(specification));
-		REQUIRE(ended.Wait(std::chrono::milliseconds(30000)).has_value());
-
 		const std::filesystem::path runtime = Platform::GetUserRuntimeDirectory("Strata");
 		REQUIRE_FALSE(runtime.empty());
-		const std::filesystem::path stale = runtime / FileSystem::FromUTF8(fmt::format("ScriptModules-{}-Stale", ended.GetProcessID()));
-		REQUIRE(FileSystem::WriteBytes(stale / "Game-Leftover.dll", CreateGarbage(16)));
+		const std::string suffix = UUID().ToString();
 
-		ScriptEngine engine;
-		engine.SetHotReloadEnabled(true);
-		REQUIRE(engine.LoadModule(GetTestScriptModule(STRATA_TEST_SCRIPTS_API)));
-		CHECK_FALSE(FileSystem::Exists(stale));
-		engine.UnloadModule();
+		// Left behind by a process that ended without cleaning up: nobody holds its owner lock.
+		const std::filesystem::path stale = runtime / FileSystem::FromUTF8("ScriptModules-Stale" + suffix);
+		REQUIRE(FileSystem::WriteBytes(stale / "Game-Leftover.dll", CreateGarbage(16)));
+		REQUIRE(FileLock::Create(stale / "Owner.lock") != nullptr);
+
+		// Owned by a running process: a child holds its owner lock.
+		const std::filesystem::path owned = runtime / FileSystem::FromUTF8("ScriptModules-Owned" + suffix);
+		REQUIRE(FileSystem::WriteBytes(owned / "Game-InUse.dll", CreateGarbage(16)));
+		REQUIRE(FileLock::Create(owned / "Owner.lock") != nullptr);
+		Process owner;
+		ProcessSpecification specification;
+		specification.Executable = GetTestExecutablePath();
+		specification.Arguments = { "--strata-test-helper=hold-file-lock", FileSystem::ToUTF8(owned / "Owner.lock") };
+		REQUIRE(owner.Start(specification));
+		std::string output;
+		REQUIRE(WaitUntil([&]()
+		{
+			output += owner.TakeOutput();
+			return output.find("locked") != std::string::npos || !owner.IsRunning();
+		}, std::chrono::milliseconds(30000)));
+		REQUIRE(output.find("locked") != std::string::npos);
+
+		{
+			ScriptEngine engine;
+			engine.SetHotReloadEnabled(true);
+			REQUIRE(engine.LoadModule(GetTestScriptModule(STRATA_TEST_SCRIPTS_API)));
+			CHECK_FALSE(FileSystem::Exists(stale));
+			CHECK(FileSystem::Exists(owned / "Game-InUse.dll"));
+		}
+
+		// The owner ends without cleaning up (as in a crash); the next session removes its directory.
+		CHECK(owner.Terminate());
+		REQUIRE(WaitUntil([&]() { return FileLock::TryAcquire(owned / "Owner.lock") != nullptr; }, std::chrono::milliseconds(10000)));
+		{
+			ScriptEngine engine;
+			engine.SetHotReloadEnabled(true);
+			REQUIRE(engine.LoadModule(GetTestScriptModule(STRATA_TEST_SCRIPTS_API)));
+			CHECK_FALSE(FileSystem::Exists(owned));
+		}
+	}
+
+	TEST_CASE("Processes load script modules concurrently without disturbing each other")
+	{
+		// Each process keeps its copies in its own directory and removes only its own (or ones whose owner is gone).
+		constexpr int c_Reloads = 25;
+		std::vector<Scope<Process>> processes;
+		for (int index = 0; index < 3; index++)
+		{
+			ProcessSpecification specification;
+			specification.Executable = GetTestExecutablePath();
+			specification.Arguments = { "--strata-test-helper=script-module-reloads", FileSystem::ToUTF8(GetTestScriptModule(STRATA_TEST_SCRIPTS_API)),
+				std::to_string(c_Reloads) };
+			Scope<Process> process = CreateScope<Process>();
+			REQUIRE(process->Start(specification));
+			processes.push_back(std::move(process));
+		}
+
+		// This process does the same meanwhile.
+		{
+			ScriptEngine engine;
+			engine.SetHotReloadEnabled(true);
+			std::string error;
+			REQUIRE_MESSAGE(engine.LoadModule(GetTestScriptModule(STRATA_TEST_SCRIPTS_API), &error), error);
+			for (int index = 0; index < c_Reloads; index++)
+			{
+				REQUIRE_MESSAGE(engine.Reload(&error), error);
+				CHECK(engine.FindClass("Lifecycle") != nullptr);
+			}
+		}
+
+		for (const Scope<Process>& process : processes)
+		{
+			const std::optional<int> exitCode = process->Wait(std::chrono::milliseconds(120000));
+			INFO("Output: ", process->TakeOutput());
+			REQUIRE(exitCode.has_value());
+			CHECK(*exitCode == 0);
+		}
 	}
 
 	TEST_CASE("Scenes play without a script engine or module")

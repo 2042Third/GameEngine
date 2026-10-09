@@ -106,19 +106,6 @@ namespace Strata
 		return static_cast<uint32_t>(::GetCurrentProcessId());
 	}
 
-	bool Platform::IsProcessRunning(uint32_t processID)
-	{
-		if (processID == 0)
-			return false;
-		HANDLE process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(processID));
-		if (!process)
-			return ::GetLastError() == ERROR_ACCESS_DENIED; // It exists, but belongs to someone else
-		// A process object outlives the process while handles to it are open; it is signaled once the process ended.
-		const DWORD state = WaitForSingleObject(process, 0);
-		CloseHandle(process);
-		return state == WAIT_TIMEOUT;
-	}
-
 	std::optional<std::string> Platform::GetEnvVar(std::string_view name)
 	{
 		const std::wstring wideName = WindowsUtils::Utf8ToWide(name);

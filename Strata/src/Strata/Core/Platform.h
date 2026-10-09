@@ -42,8 +42,6 @@ namespace Strata
 		static bool IsDebuggerAttached();
 		static void SetCurrentThreadName(std::string_view name);
 		static uint32_t GetProcessID();
-		// Whether a process with this ID exists (false for 0 and for processes that ended).
-		static bool IsProcessRunning(uint32_t processID);
 
 		static std::optional<std::string> GetEnvVar(std::string_view name);
 		static bool SetEnvVar(std::string_view name, std::string_view value);

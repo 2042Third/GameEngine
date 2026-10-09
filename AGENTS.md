@@ -251,7 +251,8 @@ Building and loading scripts:
 - The host: `ScriptEngine::LoadModule(path)`, `ScriptEngine::SetActive(engine)` before scenes start playing,
   `SetHotReloadEnabled(true)` (before loading) and `Update()` once per frame (outside scene updates) for hot reload. With
   hot reload the module runs from a private copy in a directory only the user can modify
-  (`Platform::GetUserRuntimeDirectory`, one directory per process, removed with its last copy), so the build can
+  (`Platform::GetUserRuntimeDirectory`; one directory per process, removed with its last copy; the process holds a
+  `FileLock` in it while it runs, so other sessions remove only directories whose owner is gone), so the build can
   overwrite the original at any time; without it (shipped games) the module loads in place. A file that is already
   loaded (a reload, another engine) is always loaded from a copy, because loading it again would share the running
   module's state. A failed (re)load keeps the running module. Poll `IsFaulted()`/`GetFault()` to stop play mode after a
