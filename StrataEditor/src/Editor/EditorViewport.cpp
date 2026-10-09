@@ -97,6 +97,38 @@ namespace Strata
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
+	// ViewportImageArea
+	////////////////////////////////////////////////////////////////////////////////
+
+	glm::uvec2 ViewportImageArea::GetPixelSize() const
+	{
+		const glm::vec2 pixels = glm::max(Size * PixelScale, glm::vec2(0.0f));
+		if (!std::isfinite(pixels.x) || !std::isfinite(pixels.y))
+			return glm::uvec2(0);
+		return glm::uvec2(pixels);
+	}
+
+	glm::vec2 ViewportImageArea::ChoosePixelScale(const glm::vec2& viewportScale, const glm::vec2& displayScale)
+	{
+		auto valid = [](const glm::vec2& scale) { return scale.x > 0.0f && scale.y > 0.0f && std::isfinite(scale.x) && std::isfinite(scale.y); };
+		if (valid(viewportScale))
+			return viewportScale;
+		if (valid(displayScale))
+			return displayScale;
+		return glm::vec2(1.0f);
+	}
+
+	std::optional<glm::uvec2> ViewportImageArea::ToPixel(const glm::vec2& position) const
+	{
+		const glm::uvec2 size = GetPixelSize();
+		const glm::vec2 local = position - Min;
+		if (size.x == 0 || size.y == 0 || !(local.x >= 0.0f && local.y >= 0.0f && local.x < Size.x && local.y < Size.y))
+			return std::nullopt;
+		// Pixels are cut off at the image's last full pixel, so positions in the remainder land on it.
+		return glm::min(glm::uvec2(local * PixelScale), size - glm::uvec2(1));
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
 	// EditorViewport
 	////////////////////////////////////////////////////////////////////////////////
 

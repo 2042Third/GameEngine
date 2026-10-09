@@ -12,11 +12,12 @@
 namespace Strata
 {
 
-	// One frame of viewport input for the editor camera, in viewport pixels. The viewport fills it only while it is
-	// hovered or focused, or while a drag that started in it continues.
+	// One frame of viewport input for the editor camera. Mouse movement and the viewport size share one unit: the
+	// viewport uses UI units (screen points), so the camera turns equally fast on high-density displays. The viewport fills
+	// it only while it is hovered or focused, or while a drag that started in it continues.
 	struct EditorCameraInput
 	{
-		glm::vec2 MouseDelta = { 0.0f, 0.0f }; // Pixels the mouse moved since the last frame (+Y down)
+		glm::vec2 MouseDelta = { 0.0f, 0.0f }; // How far the mouse moved since the last frame (+Y down)
 		float Scroll = 0.0f;                    // Mouse wheel steps (positive: away from the user)
 		bool Orbit = false;                     // Rotate around the target (Alt + left button)
 		bool Pan = false;                       // Move the target with the mouse (middle button)

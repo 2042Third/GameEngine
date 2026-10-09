@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Editor/EditorViewport.h"
 #include "Editor/TransformEdit.h"
 
 #include <glm/glm.hpp>
@@ -49,9 +50,7 @@ namespace Strata
 		bool m_Focused = false;
 		bool m_Hovered = false;
 		bool m_GameView = false;  // Playing through the scene's camera
-		glm::vec2 m_ImageMin = { 0.0f, 0.0f };  // ImGui coordinates
-		glm::vec2 m_ImageSize = { 0.0f, 0.0f }; // ImGui units
-		float m_PixelScale = 1.0f;              // Framebuffer pixels per ImGui unit
+		ViewportImageArea m_Image;
 		CameraDrag m_CameraDrag = CameraDrag::None;
 		bool m_CursorLocked = false;     // By fly mode
 		bool m_GameInputEnabled = false;

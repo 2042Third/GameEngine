@@ -14,6 +14,9 @@
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/SceneSerializer.h>
 
+#include <cmath>
+#include <limits>
+
 using namespace Strata;
 
 namespace
@@ -236,6 +239,39 @@ TEST_SUITE("Editor.Viewport")
 		REQUIRE(view);
 		CHECK_FALSE(view->FromScene);
 		context.Stop();
+	}
+
+	TEST_CASE("The viewport image maps UI positions to framebuffer pixels")
+	{
+		ViewportImageArea area;
+		area.Min = glm::vec2(100.0f, 40.0f);
+		area.Size = glm::vec2(320.5f, 180.0f);
+		CHECK(area.GetPixelSize() == glm::uvec2(320, 180));
+		CHECK(area.ToPixel(glm::vec2(100.0f, 40.0f)) == glm::uvec2(0, 0));
+		CHECK(area.ToPixel(glm::vec2(420.0f, 219.5f)) == glm::uvec2(319, 179)); // The remainder of the last pixel
+		CHECK_FALSE(area.ToPixel(glm::vec2(99.9f, 50.0f)));
+		CHECK_FALSE(area.ToPixel(glm::vec2(420.5f, 50.0f)));
+		CHECK_FALSE(area.ToPixel(glm::vec2(200.0f, 220.0f)));
+
+		// A Retina display has two pixels per unit: the image is rendered at twice the size and positions scale with it.
+		area.PixelScale = glm::vec2(2.0f);
+		CHECK(area.GetPixelSize() == glm::uvec2(641, 360));
+		CHECK(area.ToPixel(glm::vec2(110.25f, 45.75f)) == glm::uvec2(20, 11));
+		CHECK(area.ToPixel(glm::vec2(420.4f, 219.9f)) == glm::uvec2(640, 359));
+
+		// Viewports have no scale of their own without multi-viewport support: the display's applies (Retina: 2).
+		CHECK(ViewportImageArea::ChoosePixelScale(glm::vec2(0.0f), glm::vec2(2.0f)) == glm::vec2(2.0f));
+		CHECK(ViewportImageArea::ChoosePixelScale(glm::vec2(1.5f), glm::vec2(2.0f)) == glm::vec2(1.5f));
+		CHECK(ViewportImageArea::ChoosePixelScale(glm::vec2(0.0f), glm::vec2(0.0f)) == glm::vec2(1.0f));
+		CHECK(ViewportImageArea::ChoosePixelScale(glm::vec2(-1.0f), glm::vec2(std::nanf(""))) == glm::vec2(1.0f));
+
+		// Empty or degenerate areas have no pixels.
+		area.Size = glm::vec2(0.0f, 10.0f);
+		CHECK(area.GetPixelSize().x == 0);
+		CHECK_FALSE(area.ToPixel(area.Min));
+		area.Size = glm::vec2(10.0f);
+		area.PixelScale = glm::vec2(std::numeric_limits<float>::infinity());
+		CHECK(area.GetPixelSize() == glm::uvec2(0));
 	}
 
 	TEST_CASE("Only a playing game takes the input, and edit shortcuts stay off meanwhile")

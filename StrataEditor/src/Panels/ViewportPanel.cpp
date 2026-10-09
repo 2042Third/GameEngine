@@ -109,10 +109,17 @@ namespace Strata
 
 		DrawToolbar(context);
 
-		// The image fills the rest of the panel, in framebuffer pixels (Retina displays have more than one per unit).
+		// The image fills the rest of the panel, rendered in framebuffer pixels (Retina displays have more than one per
+		// unit). Viewports only get a framebuffer scale of their own with multi-viewport support; like ImGui's renderer
+		// data, the panel falls back to the display's otherwise.
 		const ImVec2 available = ImGui::GetContentRegionAvail();
-		m_PixelScale = std::max(ImGui::GetWindowViewport()->FramebufferScale.y, 1.0f);
-		const glm::uvec2 size(static_cast<uint32_t>(std::max(available.x, 0.0f) * m_PixelScale), static_cast<uint32_t>(std::max(available.y, 0.0f) * m_PixelScale));
+		const ImVec2 imageMin = ImGui::GetCursorScreenPos();
+		const ImVec2 viewportScale = ImGui::GetWindowViewport()->FramebufferScale;
+		const ImVec2 displayScale = ImGui::GetIO().DisplayFramebufferScale;
+		m_Image.Min = glm::vec2(imageMin.x, imageMin.y);
+		m_Image.Size = glm::max(glm::vec2(available.x, available.y), glm::vec2(0.0f));
+		m_Image.PixelScale = ViewportImageArea::ChoosePixelScale(glm::vec2(viewportScale.x, viewportScale.y), glm::vec2(displayScale.x, displayScale.y));
+		const glm::uvec2 size = m_Image.GetPixelSize();
 		viewport.SetSize(size);
 		if (size.x == 0 || size.y == 0)
 		{
@@ -120,9 +127,6 @@ namespace Strata
 			ImGui::End();
 			return;
 		}
-		const ImVec2 imageMin = ImGui::GetCursorScreenPos();
-		m_ImageMin = glm::vec2(imageMin.x, imageMin.y);
-		m_ImageSize = glm::vec2(available.x, available.y);
 
 		// Elsewhere an item covering the image takes the clicks, so dragging in the viewport never moves a floating window.
 		if (overGizmo)
@@ -144,10 +148,9 @@ namespace Strata
 			const ImGuiIO& io = ImGui::GetIO();
 			if (m_Hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt && !ImGuizmo::IsOver() && !ImGuizmo::IsUsing())
 			{
-				const glm::vec2 local = (glm::vec2(io.MousePos.x, io.MousePos.y) - m_ImageMin) * m_PixelScale;
-				const glm::uvec2 pixel = glm::min(glm::uvec2(glm::max(local, glm::vec2(0.0f))), size - glm::uvec2(1));
 				const ViewportPickMode mode = io.KeyCtrl ? ViewportPickMode::Toggle : (io.KeyShift ? ViewportPickMode::Add : ViewportPickMode::Replace);
-				viewport.RequestPick(pixel, mode);
+				if (const std::optional<glm::uvec2> pixel = m_Image.ToPixel(glm::vec2(io.MousePos.x, io.MousePos.y)))
+					viewport.RequestPick(*pixel, mode);
 			}
 			// The camera may have moved this frame.
 			view = ResolveViewportView(context, ViewportCameraSource::Automatic, aspectRatio);
@@ -371,7 +374,7 @@ namespace Strata
 		if (m_CameraDrag != CameraDrag::None && !ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsMouseClicked(ImGuiMouseButton_Right)
 			&& !ImGui::IsMouseClicked(ImGuiMouseButton_Middle))
 		{
-			input.MouseDelta = glm::vec2(io.MouseDelta.x, io.MouseDelta.y) * m_PixelScale;
+			input.MouseDelta = glm::vec2(io.MouseDelta.x, io.MouseDelta.y);
 		}
 		if (!std::isfinite(input.MouseDelta.x) || !std::isfinite(input.MouseDelta.y))
 			input.MouseDelta = glm::vec2(0.0f);
@@ -390,7 +393,7 @@ namespace Strata
 			input.MoveDown = ImGui::IsKeyDown(ImGuiKey_Q);
 			input.Fast = io.KeyShift;
 		}
-		context.GetViewport().GetCamera().Update(input, io.DeltaTime, m_ImageSize * m_PixelScale);
+		context.GetViewport().GetCamera().Update(input, io.DeltaTime, m_Image.Size);
 	}
 
 	void ViewportPanel::EndCameraDrag()
@@ -424,7 +427,7 @@ namespace Strata
 		if (enabled)
 		{
 			const ImVec2 origin = ImGui::GetMainViewport()->Pos;
-			Input::SetViewport(glm::vec2(m_ImageMin.x - origin.x, m_ImageMin.y - origin.y), m_ImageSize);
+			Input::SetViewport(glm::vec2(m_Image.Min.x - origin.x, m_Image.Min.y - origin.y), m_Image.Size);
 		}
 	}
 
@@ -446,7 +449,7 @@ namespace Strata
 		ImGuizmo::Enable(m_CameraDrag == CameraDrag::None);
 		ImGuizmo::SetOrthographic(view.Camera.Orthographic);
 		ImGuizmo::SetDrawlist();
-		ImGuizmo::SetRect(m_ImageMin.x, m_ImageMin.y, m_ImageSize.x, m_ImageSize.y);
+		ImGuizmo::SetRect(m_Image.Min.x, m_Image.Min.y, m_Image.Size.x, m_Image.Size.y);
 
 		const float snapStep = settings.Gizmo == GizmoOperation::Translate ? settings.TranslateSnap
 			: (settings.Gizmo == GizmoOperation::Rotate ? settings.RotateSnap : settings.ScaleSnap);
@@ -491,8 +494,8 @@ namespace Strata
 	void ViewportPanel::DrawOverlays(EditorContext& context, const ViewportView& view)
 	{
 		ImDrawList* drawList = ImGui::GetWindowDrawList();
-		const ImVec2 imageMin(m_ImageMin.x, m_ImageMin.y);
-		const ImVec2 imageMax(m_ImageMin.x + m_ImageSize.x, m_ImageMin.y + m_ImageSize.y);
+		const ImVec2 imageMin(m_Image.Min.x, m_Image.Min.y);
+		const ImVec2 imageMax(m_Image.Min.x + m_Image.Size.x, m_Image.Min.y + m_Image.Size.y);
 		const float margin = ImGui::GetStyle().ItemSpacing.x;
 
 		// A colored frame while the scene runs: changes made now are discarded when it stops.
@@ -506,7 +509,7 @@ namespace Strata
 		if (!view.Notice.empty())
 		{
 			const float width = ImGui::CalcTextSize(view.Notice.c_str()).x + ImGui::GetStyle().FramePadding.x * 2.0f;
-			DrawTextBox(drawList, ImVec2(std::max(imageMin.x + (m_ImageSize.x - width) * 0.5f, imageMin.x), imageMin.y + margin), { view.Notice },
+			DrawTextBox(drawList, ImVec2(std::max(imageMin.x + (m_Image.Size.x - width) * 0.5f, imageMin.x), imageMin.y + margin), { view.Notice },
 				ImGui::ColorConvertFloat4ToU32(c_PausedColor));
 		}
 

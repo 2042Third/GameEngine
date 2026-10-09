@@ -48,6 +48,24 @@ namespace Strata
 		bool FromJson(const nlohmann::json& json, std::string* outError = nullptr);
 	};
 
+	// Where the viewport panel shows the rendered image: its rectangle in UI units (ImGui coordinates, screen points) and
+	// the framebuffer pixels per unit (above 1 on Retina and other high-density displays). The image is rendered at its
+	// pixel size; mouse positions convert to pixels of it.
+	struct ViewportImageArea
+	{
+		glm::vec2 Min = { 0.0f, 0.0f };
+		glm::vec2 Size = { 0.0f, 0.0f };
+		glm::vec2 PixelScale = { 1.0f, 1.0f };
+
+		glm::uvec2 GetPixelSize() const;
+		// The image pixel under a UI position; nullopt outside the image or for an empty one.
+		std::optional<glm::uvec2> ToPixel(const glm::vec2& position) const;
+
+		// Pixels per unit of a window: its viewport's own scale where the UI has one (multi-viewport support), otherwise
+		// the display's, and 1 where neither is known (zero or invalid).
+		static glm::vec2 ChoosePixelScale(const glm::vec2& viewportScale, const glm::vec2& displayScale);
+	};
+
 	// How a click in the viewport changes the selection.
 	enum class ViewportPickMode : uint8_t
 	{
