@@ -82,6 +82,7 @@ namespace Strata
 		void OnRuntimeStop() override;
 		void OnLateUpdate(Timestep timestep) override;
 		void OnPausedChanged(bool paused) override;
+		void OnEntityDestroying(const Entity& entity) override;
 
 		//////////////////////////////////////////////////////////////////////////
 		// Gameplay API (entities with an AudioSourceComponent)
@@ -161,8 +162,8 @@ namespace Strata
 		SourceRecord* PrepareSource(Entity entity);
 		SourceRecord& CreateSource(Entity entity, const AudioSourceComponent& component);
 		void ApplyComponent(SourceRecord& record, const AudioSourceComponent& component);
-		void ResolveClip(SourceRecord& record, Entity entity);
-		void RefreshClip(SourceRecord& record, Entity entity);
+		void ResolveClip(SourceRecord& record, Entity entity, const AudioSourceComponent& component);
+		void RefreshClip(SourceRecord& record, Entity entity, const AudioSourceComponent& component);
 		void StartIfRequested(SourceRecord& record);
 		void UpdateSourcePosition(SourceRecord& record, Entity entity, float timestep);
 		void UpdateSources(float timestep);

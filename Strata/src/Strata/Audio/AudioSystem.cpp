@@ -160,10 +160,18 @@ namespace Strata
 
 		if (m_Stopped)
 			return;
-		ProcessAssetChanges();
+		// Sources first: the records of removed components and of destroyed or deactivated entities go before anything else
+		// looks at them.
 		UpdateSources(timestep);
+		ProcessAssetChanges();
 		UpdateListener(timestep);
 		UpdateOneShots(timestep);
+	}
+
+	void AudioSystem::OnEntityDestroying(const Entity& entity)
+	{
+		// Silent at once, also when the entity is destroyed between updates.
+		m_Sources.erase(entity.GetHandle());
 	}
 
 	void AudioSystem::OnPausedChanged(bool paused)
@@ -373,7 +381,7 @@ namespace Strata
 		// Changes made since the last update apply first, e.g. a new clip followed by Play.
 		ApplyComponent(it->second, *component);
 		if (it->second.Applied.Clip != component->Clip)
-			ResolveClip(it->second, entity);
+			ResolveClip(it->second, entity, *component);
 		return &it->second;
 	}
 
@@ -399,7 +407,7 @@ namespace Strata
 		record.State = component.Clip.IsValid() ? ClipState::Waiting : ClipState::NoClip;
 		record.PlayRequested = component.PlayOnStart && record.State == ClipState::Waiting;
 		if (record.State == ClipState::Waiting)
-			ResolveClip(record, entity);
+			ResolveClip(record, entity, component);
 		return record;
 	}
 
@@ -431,9 +439,8 @@ namespace Strata
 		applied.Clip = previousClip;
 	}
 
-	void AudioSystem::ResolveClip(SourceRecord& record, Entity entity)
+	void AudioSystem::ResolveClip(SourceRecord& record, Entity entity, const AudioSourceComponent& component)
 	{
-		const AudioSourceComponent& component = entity.GetComponent<AudioSourceComponent>();
 		if (record.Applied.Clip != component.Clip)
 		{
 			// A new clip stops the source; Play starts the new one.
@@ -490,7 +497,7 @@ namespace Strata
 		ST_CORE_WARN("Audio: the clip {} of '{}' cannot be played: {}", handle.ToString(), entity.GetName(), reason);
 	}
 
-	void AudioSystem::RefreshClip(SourceRecord& record, Entity entity)
+	void AudioSystem::RefreshClip(SourceRecord& record, Entity entity, const AudioSourceComponent& component)
 	{
 		switch (record.State)
 		{
@@ -500,7 +507,7 @@ namespace Strata
 			case ClipState::Unavailable:
 				// The asset changed (e.g. reimported): try again.
 				record.State = ClipState::Waiting;
-				ResolveClip(record, entity);
+				ResolveClip(record, entity, component);
 				return;
 			case ClipState::Ready:
 				break;
@@ -575,7 +582,7 @@ namespace Strata
 			record.SeenUpdate = m_UpdateIndex;
 			ApplyComponent(record, component);
 			if (record.Applied.Clip != component.Clip || record.State == ClipState::Waiting)
-				ResolveClip(record, entity);
+				ResolveClip(record, entity, component);
 			UpdateSourcePosition(record, entity, timestep);
 		}
 
@@ -609,8 +616,12 @@ namespace Strata
 		{
 			if (!record.Applied.Clip.IsValid())
 				continue;
-			if (checkAll || std::binary_search(m_ChangedAssets.begin(), m_ChangedAssets.end(), record.Applied.Clip))
-				RefreshClip(record, Entity(handle, &m_Scene));
+			if (!checkAll && !std::binary_search(m_ChangedAssets.begin(), m_ChangedAssets.end(), record.Applied.Clip))
+				continue;
+			// Records are pruned before this runs; anything gone since is left to the next update.
+			const Entity entity(handle, &m_Scene);
+			if (const AudioSourceComponent* component = entity.TryGetComponent<AudioSourceComponent>())
+				RefreshClip(record, entity, *component);
 		}
 	}
 

@@ -238,6 +238,47 @@ TEST_SUITE("Audio.System")
 		CHECK(CountLogMessages(logSequence, "cannot be played") == 2);
 	}
 
+	TEST_CASE("Sources whose component or entity goes away are not looked at again")
+	{
+		ScopedAudioEngine engine;
+		REQUIRE(engine.Initialized);
+		AudioProject project;
+		const std::vector<uint8_t> garbage(256, 0x5A);
+		REQUIRE(FileSystem::WriteBytes(project.Sounds / "Broken.wav", garbage));
+		project.Manager->Scan();
+		const AssetHandle broken = project.Manager->FindAssetByPath("Sounds/Broken.wav");
+		REQUIRE(broken.IsValid());
+
+		Scene scene;
+		Entity removed = CreateSource(scene, "Removed", broken);
+		Entity destroyed = CreateSource(scene, "Destroyed", broken);
+		scene.OnRuntimeStart();
+		AudioSystem& audio = GetAudio(scene);
+		REQUIRE(project.Manager->WaitForPendingLoads());
+		StepScene(scene, 1);
+		REQUIRE(project.Manager->GetAssetState(broken) == AssetState::Failed);
+		CHECK_FALSE(audio.Play(removed)); // Unavailable: retried when the clip changes
+
+		// The clip is repaired, and its change lands in the frame in which the sources go away.
+		project.WriteClipFile("Broken", 1.0f, c_SineAmplitude);
+		REQUIRE(project.Manager->ReimportAsset(broken));
+		REQUIRE(project.Manager->WaitForPendingLoads());
+		removed.RemoveComponent<AudioSourceComponent>();
+		scene.DestroyEntity(destroyed);
+		CHECK(audio.GetStats().SourceCount == 1); // A destroyed entity's source goes at once
+		StepScene(scene, 1);
+		CHECK(audio.GetStats().SourceCount == 0);
+		CHECK(AudioEngine::GetStats().SourceCount == 0);
+
+		// A source added again plays the repaired clip.
+		AudioSourceComponent& component = removed.AddComponent<AudioSourceComponent>();
+		component.Clip = broken;
+		component.Spatial = false;
+		StepScene(scene, 1);
+		CHECK(audio.IsPlaying(removed));
+		CHECK(AudioEngine::GetStats().ActiveVoices == 1);
+	}
+
 	TEST_CASE("Component changes apply while playing, with or without a signal")
 	{
 		ScopedAudioEngine engine;
