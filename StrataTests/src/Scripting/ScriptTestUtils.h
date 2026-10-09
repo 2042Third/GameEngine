@@ -3,6 +3,7 @@
 #include <doctest/doctest.h>
 
 #include "Strata/Core/Base.h"
+#include "Strata/Core/DynamicLibrary.h"
 #include "Strata/Reflection/Property.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
@@ -41,6 +42,20 @@ namespace Strata::Tests
 	private:
 		Ref<ScriptEngine> m_Engine;
 		Ref<ScriptEngine> m_Previous;
+	};
+
+	// Live instances of the API test module's counted scripts (ScriptTests::CountedScript), read through the module's
+	// export. Holds a reference to the module's library while it exists.
+	class LiveInstanceCounter
+	{
+	public:
+		// The engine's loaded module must be the API test module (REQUIREd).
+		explicit LiveInstanceCounter(const ScriptEngine& engine);
+
+		int64_t Get() const;
+	private:
+		DynamicLibrary m_Library;
+		int64_t (*m_GetCount)() = nullptr;
 	};
 
 	// The script system of a playing scene (REQUIREs one).

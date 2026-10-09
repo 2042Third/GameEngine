@@ -135,7 +135,13 @@ namespace Strata
 		void ApplyFieldOverrides(Instance& instance, const std::vector<ScriptFieldValue>& fields, bool reportProblems);
 		void DestroyInstance(Instance& instance, bool callOnDestroy);
 		void DestroyAllInstances(bool callOnDestroy);
+		// Destroys the instances RemoveScript flagged (OnDestroy, then deletion) in reverse `order` without creating any:
+		// where the sync point that would destroy them does not come in time.
+		void DestroyRemovedInstances(std::vector<Ref<Instance>> order);
+		// Drops the entity's instances that are removed and deleted. Flagged instances whose script object still exists
+		// stay until they are destroyed: dropping them would leak them without OnDestroy.
 		void RemoveDestroyedInstances(UUID entity);
+		static bool IsDestroyed(const Ref<Instance>& instance) { return instance->Removed && !instance->Handle; }
 		void RebuildUpdateOrder();
 		// Every instance in update order, followed by those of entities that left the scene without notice.
 		std::vector<Ref<Instance>> CollectInstances();

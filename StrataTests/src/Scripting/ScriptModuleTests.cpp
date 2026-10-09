@@ -82,7 +82,8 @@ TEST_SUITE("Scripting.Module")
 
 		const std::set<std::string> expectedClasses = {
 			"Lifecycle", "LifecycleSecond", "Idle", "HiddenCallbacks", "FieldTypes", "Thrower", "ThrowingConstructor", "EntityAPI", "Destroyer", "ScriptAdder",
-			"ComponentAPI", "PropertyProbe", "TransformAPI", "Spawned", "Spawner", "Listener", "Talker", "InputProbe", "TimeProbe", "SceneProbe"
+			"ComponentAPI", "PropertyProbe", "TransformAPI", "Spawned", "Spawner", "Listener", "Talker", "InputProbe", "TimeProbe", "SceneProbe",
+			"RemoveOnDestroy", "Fragile", "Readder", "Replicator"
 		};
 		std::set<std::string> classes;
 		for (const ScriptClassInfo& info : engine.GetClasses())

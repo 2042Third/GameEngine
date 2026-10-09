@@ -233,6 +233,8 @@ namespace Strata
 			{
 				ReportProblem("Scripting", fmt::format("scripts keep creating scripted entities while starting; the rest is created at the next update "
 					"(after {} rounds)", c_MaxSyncRounds));
+				// Removals still complete now (each instance is destroyed once, so this ends); creation waits.
+				DestroyRemovedInstances(m_UpdateOrder);
 				return;
 			}
 
@@ -557,13 +559,37 @@ namespace Strata
 		return instances;
 	}
 
+	void ScriptSystem::DestroyRemovedInstances(std::vector<Ref<Instance>> order)
+	{
+		// OnDestroy may remove further scripts, also of instances this pass already went by: repeat until a pass finds
+		// none. Every instance is destroyed at most once, so this ends.
+		bool destroyedAny = true;
+		while (destroyedAny)
+		{
+			destroyedAny = false;
+			for (auto it = order.rbegin(); it != order.rend(); ++it)
+			{
+				Instance& instance = **it;
+				if (!instance.Removed || !instance.Handle)
+					continue;
+				DestroyInstance(instance, m_Scene.GetEntityByUUID(instance.Entity).IsValid());
+				destroyedAny = true;
+			}
+		}
+		for (const Ref<Instance>& instance : order)
+		{
+			if (instance->Removed)
+				RemoveDestroyedInstances(instance->Entity);
+		}
+	}
+
 	void ScriptSystem::RemoveDestroyedInstances(UUID entity)
 	{
 		auto it = m_Instances.find(entity);
 		if (it == m_Instances.end())
 			return;
 		std::vector<Ref<Instance>>& instances = it->second;
-		instances.erase(std::remove_if(instances.begin(), instances.end(), [](const Ref<Instance>& instance) { return instance->Removed; }), instances.end());
+		instances.erase(std::remove_if(instances.begin(), instances.end(), &IsDestroyed), instances.end());
 		if (instances.empty())
 			m_Instances.erase(it);
 	}
@@ -574,7 +600,7 @@ namespace Strata
 		for (auto it = m_Instances.begin(); it != m_Instances.end();)
 		{
 			std::vector<Ref<Instance>>& instances = it->second;
-			instances.erase(std::remove_if(instances.begin(), instances.end(), [](const Ref<Instance>& instance) { return instance->Removed; }), instances.end());
+			instances.erase(std::remove_if(instances.begin(), instances.end(), &IsDestroyed), instances.end());
 			it = instances.empty() ? m_Instances.erase(it) : std::next(it);
 		}
 		if (m_Instances.empty())
@@ -599,6 +625,8 @@ namespace Strata
 
 		// Script code run by the destructors must not create instances in the module that is going away.
 		m_CreationBlocked = true;
+		// Scripts that were removed but not destroyed yet end in the old module (with OnDestroy); they are not carried over.
+		DestroyRemovedInstances(CollectInstances());
 		m_ReloadOrder = CollectInstances();
 		m_UpdateOrder.clear();
 		m_PendingStart.clear();
@@ -607,6 +635,14 @@ namespace Strata
 		{
 			instance->ReloadFields.clear();
 			instance->Restore = false;
+
+			// Removed by script code that ran during this loop (a destructor): it ends here as well.
+			if (instance->Removed)
+			{
+				DestroyInstance(*instance, m_Scene.GetEntityByUUID(instance->Entity).IsValid());
+				instance->Class = nullptr;
+				continue;
+			}
 
 			// Without a usable module (it crashed) instances cannot be saved: they are abandoned and start over.
 			ScriptModule* module = GetUsableModule();

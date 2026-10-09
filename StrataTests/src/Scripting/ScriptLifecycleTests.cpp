@@ -216,6 +216,112 @@ TEST_SUITE("Scripting.Lifecycle")
 		scene.OnRuntimeStop();
 	}
 
+	TEST_CASE("Scripts removed while the frame's destruction is flushed are destroyed when the scene stops")
+	{
+		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
+		const LiveInstanceCounter liveInstances(*engine);
+		const int64_t baseline = liveInstances.Get();
+		Scene scene;
+		CreateLogEntity(scene);
+		Entity remover = scene.CreateEntity("Remover");
+		ScriptEntry& removerEntry = AddScriptEntry(remover, "RemoveOnDestroy");
+		AddFieldOverride(removerEntry, "Target", PropertyType::String, std::string("Victim"));
+		AddFieldOverride(removerEntry, "DestroySelf", PropertyType::Bool, true);
+		Entity victim = scene.CreateEntity("Victim");
+		AddFieldOverride(AddScriptEntry(victim, "Lifecycle"), "RecordUpdates", PropertyType::Bool, false);
+
+		scene.OnRuntimeStart();
+		CHECK(liveInstances.Get() == baseline + 1);
+		ClearLog(scene);
+		// The remover destroys its entity; its OnDestroy, while the scene flushes destruction at the end of the frame,
+		// removes the victim's script. The instance is destroyed at the next sync point - here, when the scene stops.
+		scene.OnUpdateRuntime(0.0f);
+		CHECK_FALSE(remover.IsValid());
+		CHECK_FALSE(GetScriptSystem(scene).HasInstance(victim, "Lifecycle"));
+		CHECK(GetLog(scene).empty());
+
+		scene.OnRuntimeStop();
+		CHECK(GetLog(scene) == Events({ "Victim.Lifecycle.Destroy" }));
+		CHECK(liveInstances.Get() == baseline);
+	}
+
+	TEST_CASE("Scripts removed while the frame's destruction is flushed are destroyed by a reload")
+	{
+		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
+		Scene scene;
+		CreateLogEntity(scene);
+		Entity remover = scene.CreateEntity("Remover");
+		ScriptEntry& removerEntry = AddScriptEntry(remover, "RemoveOnDestroy");
+		AddFieldOverride(removerEntry, "Target", PropertyType::String, std::string("Victim"));
+		AddFieldOverride(removerEntry, "DestroySelf", PropertyType::Bool, true);
+		Entity victim = scene.CreateEntity("Victim");
+		AddFieldOverride(AddScriptEntry(victim, "Lifecycle"), "RecordUpdates", PropertyType::Bool, false);
+
+		scene.OnRuntimeStart();
+		ScriptSystem& system = GetScriptSystem(scene);
+		ClearLog(scene);
+		scene.OnUpdateRuntime(0.0f);
+		CHECK(GetLog(scene).empty());
+
+		// The removed script ends in the old module, with OnDestroy, and is not carried over.
+		REQUIRE(engine->Reload());
+		CHECK(GetLog(scene) == Events({ "Victim.Lifecycle.Destroy" }));
+		scene.OnUpdateRuntime(0.0f);
+		CHECK_FALSE(system.HasInstance(victim, "Lifecycle"));
+		CHECK(system.GetInstanceCount() == 0);
+		scene.OnRuntimeStop();
+		CHECK(GetLog(scene) == Events({ "Victim.Lifecycle.Destroy" }));
+	}
+
+	TEST_CASE("A script removed and added again while it cannot be constructed is still destroyed")
+	{
+		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
+		const LiveInstanceCounter liveInstances(*engine);
+		const int64_t baseline = liveInstances.Get();
+		Scene scene;
+		CreateLogEntity(scene);
+		Entity entity = scene.CreateEntity("Entity");
+		AddScriptEntry(entity, "Readder");
+		AddFieldOverride(AddScriptEntry(entity, "Fragile"), "RecordUpdates", PropertyType::Bool, false);
+
+		scene.OnRuntimeStart();
+		ScriptSystem& system = GetScriptSystem(scene);
+		CHECK(liveInstances.Get() == baseline + 1);
+		ClearLog(scene);
+
+		// Readder removes Fragile, then fails to add it again. The removed instance gets OnDestroy and is deleted at the
+		// end of the update; the entry the failed AddScript left behind gets a new instance once Fragile constructs again.
+		scene.OnUpdateRuntime(0.0f);
+		CheckScriptChecks(system, entity, "Readder", 2);
+		CHECK(GetLog(scene).starts_with(Events({ "Entity.Fragile.Destroy", "Entity.Fragile.Create" })));
+		CHECK(system.HasInstance(entity, "Fragile"));
+		CHECK(liveInstances.Get() == baseline + 1);
+
+		scene.OnRuntimeStop();
+		CHECK(liveInstances.Get() == baseline);
+	}
+
+	TEST_CASE("Scripts removed when a sync point stops early are destroyed")
+	{
+		// Each Replicator generation creates the next and removes the previous one: far more than one sync point runs, so
+		// sync points stop early with a removal pending.
+		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
+		const LiveInstanceCounter liveInstances(*engine);
+		const int64_t baseline = liveInstances.Get();
+		Scene scene;
+		Entity origin = scene.CreateEntity("Origin");
+		AddFieldOverride(AddScriptEntry(origin, "Replicator"), "MaxGenerations", PropertyType::Int, int32_t(300));
+
+		scene.OnRuntimeStart();
+		RunFrames(scene, 10);
+		// Only the last generation is left; every other instance was deleted.
+		CHECK(GetScriptSystem(scene).GetInstanceCount() == 1);
+		CHECK(liveInstances.Get() == baseline + 1);
+
+		scene.OnRuntimeStop();
+		CHECK(liveInstances.Get() == baseline);
+	}
+
 	TEST_CASE("Restarting creates fresh instances; play copies leave the edited scene alone")
 	{
 		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
