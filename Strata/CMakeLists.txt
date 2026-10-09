@@ -54,6 +54,11 @@ strata_add_shaders(Strata
 		PostProcess/Exposure.comp
 		PostProcess/Bloom.comp
 		PostProcess/FXAA.frag
+		PostProcess/Copy.frag
+		Overlay/Grid.frag
+		Overlay/Outline.frag
+		Overlay/DebugLine.vert
+		Overlay/DebugLine.frag
 	VARIANTS
 		"Scene/Forward.frag|Scene/ForwardTransparent.frag|ST_FORWARD_TRANSPARENT")
 

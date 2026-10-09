@@ -399,6 +399,7 @@ namespace Strata
 			&& m_HistogramPipeline && m_ExposurePipeline && m_HistogramBuffer && m_ExposureBuffer && m_BloomBindingLayout && m_BloomPipeline && m_FXAABindingLayout,
 			"SceneRenderer: failed to create GPU resources");
 		CreateIBLResources();
+		CreateOverlayResources();
 	}
 
 	void SceneRenderer::CreateIBLResources()
@@ -1048,7 +1049,7 @@ namespace Strata
 		}
 	}
 
-	bool SceneRenderer::EnsureBufferCapacity(nvrhi::BufferHandle& buffer, size_t elementCount, size_t elementSize, const char* name, bool& outRecreated)
+	bool SceneRenderer::EnsureBufferCapacity(nvrhi::BufferHandle& buffer, size_t elementCount, size_t elementSize, const char* name, bool& outRecreated, bool vertexBuffer)
 	{
 		const uint64_t required = std::max<uint64_t>(elementCount, 1) * elementSize;
 		if (buffer && buffer->getDesc().byteSize >= required)
@@ -1061,9 +1062,17 @@ namespace Strata
 
 		nvrhi::BufferDesc desc;
 		desc.byteSize = capacity;
-		desc.structStride = static_cast<uint32_t>(elementSize);
 		desc.debugName = m_Specification.DebugName + "." + name;
-		desc.initialState = nvrhi::ResourceStates::ShaderResource;
+		if (vertexBuffer)
+		{
+			desc.isVertexBuffer = true;
+			desc.initialState = nvrhi::ResourceStates::VertexBuffer;
+		}
+		else
+		{
+			desc.structStride = static_cast<uint32_t>(elementSize);
+			desc.initialState = nvrhi::ResourceStates::ShaderResource;
+		}
 		desc.keepInitialState = true;
 		nvrhi::BufferHandle created = m_Device->createBuffer(desc);
 		if (!created)
@@ -1133,6 +1142,9 @@ namespace Strata
 		m_FXAABindingSet = nullptr;
 		m_SceneBindingSet = nullptr; // References the ambient occlusion texture
 		m_ShadowBindingSet = nullptr;
+		m_OverlayFramebuffer = nullptr;
+		m_CopyBindingSet = nullptr;
+		m_OutlineBindingSet = nullptr; // References the entity-ID texture
 	}
 
 	bool SceneRenderer::CreateRenderTargets()
@@ -1272,6 +1284,16 @@ namespace Strata
 		m_FXAABindingSet = m_Device->createBindingSet(fxaaSet, m_FXAABindingLayout);
 		if (!m_TonemapBindingSet || !m_FXAABindingSet)
 			return fail("post-processing bindings");
+
+		// Overlays are drawn into the output texture, tested against the scene depth (which they never change).
+		m_OverlayFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc()
+			.addColorAttachment(m_OutputTexture)
+			.setDepthAttachment(nvrhi::FramebufferAttachment().setTexture(m_DepthTexture).setReadOnly(true)));
+		nvrhi::BindingSetDesc copySet;
+		copySet.bindings = { nvrhi::BindingSetItem::Texture_SRV(0, m_OutputTexture), nvrhi::BindingSetItem::Sampler(0, m_PointClampSampler) };
+		m_CopyBindingSet = m_Device->createBindingSet(copySet, m_FXAABindingLayout);
+		if (!m_OverlayFramebuffer || !m_CopyBindingSet)
+			return fail("overlay targets");
 		return true;
 	}
 
@@ -1706,7 +1728,7 @@ namespace Strata
 		return true;
 	}
 
-	bool SceneRenderer::Render(Scene& scene, const SceneCamera& camera, nvrhi::IFramebuffer* target)
+	bool SceneRenderer::Render(Scene& scene, const SceneCamera& camera, nvrhi::IFramebuffer* target, const SceneRenderOptions& options)
 	{
 		ST_PROFILE_FUNCTION();
 		m_Stats = {};
@@ -1879,7 +1901,9 @@ namespace Strata
 		tonemap.Operator = static_cast<int32_t>(postProcess.Tonemapper);
 		tonemap.BloomAdditive = postProcess.BloomThreshold > 0.0f ? 1u : 0u;
 
-		nvrhi::IFramebuffer* output = target ? target : m_OutputFramebuffer.Get();
+		// Overlays are composed in the output texture, which is then copied into the target.
+		const bool overlays = HasOverlays(options);
+		nvrhi::IFramebuffer* output = target && !overlays ? target : m_OutputFramebuffer.Get();
 		auto drawFullscreen = [&](nvrhi::IGraphicsPipeline* pipeline, nvrhi::IFramebuffer* framebuffer, nvrhi::IBindingSet* bindingSet, const void* pushConstants,
 			size_t pushConstantSize)
 		{
@@ -1906,6 +1930,21 @@ namespace Strata
 			commandList->endMarker();
 		}
 
+		if (overlays)
+		{
+			commandList->beginMarker("Overlays");
+			const bool overlaysDrawn = RenderOverlays(commandList, scene, options);
+			commandList->endMarker();
+			if (!overlaysDrawn)
+				degraded = true; // The image is complete without them; RenderOverlays reported why
+			if (target)
+			{
+				commandList->beginMarker("Copy");
+				drawFullscreen(GetFullscreenPipeline(m_CopyPipelines, m_CopyPixelShader, m_FXAABindingLayout, target->getFramebufferInfo()), target, m_CopyBindingSet, nullptr, 0);
+				commandList->endMarker();
+			}
+		}
+
 		commandList->endMarker();
 		commandList->close();
 		m_Device->executeCommandList(commandList);
@@ -1914,6 +1953,205 @@ namespace Strata
 		m_HasRenderedFrame = true;
 		if (!degraded)
 			m_LastError.clear();
+		return true;
+	}
+
+	void SceneRenderer::CreateOverlayResources()
+	{
+		ShaderLibrary& shaders = Renderer::GetShaderLibrary();
+		m_GridPixelShader = shaders.Get("Overlay/Grid.frag");
+		m_OutlinePixelShader = shaders.Get("Overlay/Outline.frag");
+		m_DebugLineVertexShader = shaders.Get("Overlay/DebugLine.vert");
+		m_DebugLinePixelShader = shaders.Get("Overlay/DebugLine.frag");
+		m_CopyPixelShader = shaders.Get("PostProcess/Copy.frag");
+		ST_CORE_VERIFY(m_GridPixelShader && m_OutlinePixelShader && m_DebugLineVertexShader && m_DebugLinePixelShader && m_CopyPixelShader,
+			"SceneRenderer overlay shaders are missing");
+
+		// Slot 1: register b0 belongs to the frame constants.
+		nvrhi::BindingLayoutDesc gridLayout;
+		gridLayout.visibility = nvrhi::ShaderType::Pixel;
+		gridLayout.bindings = { nvrhi::BindingLayoutItem::VolatileConstantBuffer(0), nvrhi::BindingLayoutItem::PushConstants(1, sizeof(RenderData::GridParameters)) };
+		m_GridBindingLayout = m_Device->createBindingLayout(gridLayout);
+		nvrhi::BindingSetDesc gridSet;
+		gridSet.bindings = { nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer), nvrhi::BindingSetItem::PushConstants(1, sizeof(RenderData::GridParameters)) };
+		m_GridBindingSet = m_Device->createBindingSet(gridSet, m_GridBindingLayout);
+
+		nvrhi::BindingLayoutDesc outlineLayout;
+		outlineLayout.visibility = nvrhi::ShaderType::Pixel;
+		outlineLayout.bindings = {
+			nvrhi::BindingLayoutItem::Texture_SRV(0),
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),
+			nvrhi::BindingLayoutItem::PushConstants(0, sizeof(RenderData::OutlineParameters))
+		};
+		m_OutlineBindingLayout = m_Device->createBindingLayout(outlineLayout);
+
+		nvrhi::BindingLayoutDesc debugLineLayout;
+		debugLineLayout.visibility = nvrhi::ShaderType::Vertex;
+		debugLineLayout.bindings = { nvrhi::BindingLayoutItem::VolatileConstantBuffer(0) };
+		m_DebugLineBindingLayout = m_Device->createBindingLayout(debugLineLayout);
+		nvrhi::BindingSetDesc debugLineSet;
+		debugLineSet.bindings = { nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer) };
+		m_DebugLineBindingSet = m_Device->createBindingSet(debugLineSet, m_DebugLineBindingLayout);
+		const nvrhi::VertexAttributeDesc lineAttributes[] = {
+			nvrhi::VertexAttributeDesc().setName("POSITION").setFormat(nvrhi::Format::RGB32_FLOAT).setBufferIndex(0)
+				.setOffset(offsetof(DebugLineVertex, Position)).setElementStride(sizeof(DebugLineVertex)),
+			nvrhi::VertexAttributeDesc().setName("COLOR").setFormat(nvrhi::Format::RGBA8_UNORM).setBufferIndex(0)
+				.setOffset(offsetof(DebugLineVertex, Color)).setElementStride(sizeof(DebugLineVertex))
+		};
+		m_DebugLineInputLayout = m_Device->createInputLayout(lineAttributes, static_cast<uint32_t>(std::size(lineAttributes)), m_DebugLineVertexShader);
+
+		bool recreated = false;
+		const bool buffersCreated = EnsureBufferCapacity(m_SelectionBuffer, 64, sizeof(uint32_t), "Selection", recreated)
+			&& EnsureBufferCapacity(m_DebugLineBuffer, 1024, sizeof(DebugLineVertex), "DebugLines", recreated, true);
+		ST_CORE_VERIFY(buffersCreated && m_GridBindingLayout && m_GridBindingSet && m_OutlineBindingLayout && m_DebugLineBindingLayout && m_DebugLineBindingSet
+			&& m_DebugLineInputLayout, "SceneRenderer: failed to create overlay resources");
+	}
+
+	bool SceneRenderer::HasOverlays(const SceneRenderOptions& options)
+	{
+		return options.ShowGrid || !options.SelectedEntities.empty() || (options.DebugShapes && !options.DebugShapes->IsEmpty());
+	}
+
+	void SceneRenderer::DrawDebugLines(nvrhi::ICommandList* commandList, DebugDrawDepth depth, uint32_t firstVertex, uint32_t vertexCount)
+	{
+		nvrhi::GraphicsState state;
+		state.pipeline = m_DebugLinePipelines[static_cast<size_t>(depth)];
+		state.framebuffer = m_OverlayFramebuffer;
+		state.viewport.addViewportAndScissorRect(nvrhi::Viewport(static_cast<float>(m_ViewportSize.x), static_cast<float>(m_ViewportSize.y)));
+		state.bindings = { m_DebugLineBindingSet };
+		state.vertexBuffers = { nvrhi::VertexBufferBinding { m_DebugLineBuffer, 0, 0 } };
+		commandList->setGraphicsState(state);
+		commandList->draw(nvrhi::DrawArguments().setVertexCount(vertexCount).setStartVertexLocation(firstVertex));
+	}
+
+	bool SceneRenderer::RenderOverlays(nvrhi::ICommandList* commandList, Scene& scene, const SceneRenderOptions& options)
+	{
+		if (!m_GridPipeline)
+		{
+			// Blended over the image; depth-tested passes compare against the scene depth without writing it.
+			nvrhi::BlendState::RenderTarget blend;
+			blend.setBlendEnable(true)
+				.setSrcBlend(nvrhi::BlendFactor::SrcAlpha)
+				.setDestBlend(nvrhi::BlendFactor::InvSrcAlpha)
+				.setSrcBlendAlpha(nvrhi::BlendFactor::One)
+				.setDestBlendAlpha(nvrhi::BlendFactor::InvSrcAlpha);
+			nvrhi::GraphicsPipelineDesc desc;
+			desc.primType = nvrhi::PrimitiveType::TriangleList;
+			desc.VS = m_FullscreenVertexShader;
+			desc.PS = m_GridPixelShader;
+			desc.bindingLayouts = { m_GridBindingLayout };
+			desc.renderState.rasterState.setCullNone();
+			desc.renderState.blendState.setRenderTarget(0, blend);
+			desc.renderState.depthStencilState.setDepthTestEnable(true).setDepthWriteEnable(false).setDepthFunc(nvrhi::ComparisonFunc::GreaterOrEqual);
+			const nvrhi::FramebufferInfo& info = m_OverlayFramebuffer->getFramebufferInfo();
+			m_GridPipeline = m_Device->createGraphicsPipeline(desc, info);
+
+			desc.PS = m_OutlinePixelShader;
+			desc.bindingLayouts = { m_OutlineBindingLayout };
+			desc.renderState.depthStencilState.setDepthTestEnable(false);
+			m_OutlinePipeline = m_Device->createGraphicsPipeline(desc, info);
+
+			desc.primType = nvrhi::PrimitiveType::LineList;
+			desc.inputLayout = m_DebugLineInputLayout;
+			desc.VS = m_DebugLineVertexShader;
+			desc.PS = m_DebugLinePixelShader;
+			desc.bindingLayouts = { m_DebugLineBindingLayout };
+			m_DebugLinePipelines[static_cast<size_t>(DebugDrawDepth::OnTop)] = m_Device->createGraphicsPipeline(desc, info);
+			desc.renderState.depthStencilState.setDepthTestEnable(true);
+			m_DebugLinePipelines[static_cast<size_t>(DebugDrawDepth::Tested)] = m_Device->createGraphicsPipeline(desc, info);
+			ST_CORE_VERIFY(m_GridPipeline && m_OutlinePipeline && m_DebugLinePipelines[0] && m_DebugLinePipelines[1], "SceneRenderer: failed to create the overlay pipelines");
+		}
+		const nvrhi::Viewport viewport(static_cast<float>(m_ViewportSize.x), static_cast<float>(m_ViewportSize.y));
+
+		if (options.ShowGrid)
+		{
+			RenderData::GridParameters parameters = {};
+			parameters.MinorColor = options.GridMinorColor;
+			parameters.MajorColor = options.GridMajorColor;
+			parameters.AxisXColor = options.GridAxisXColor;
+			parameters.AxisZColor = options.GridAxisZColor;
+			parameters.Spacing = std::max(options.GridSpacing, 1e-4f);
+			parameters.MajorEvery = static_cast<float>(std::max(options.GridMajorEvery, 1u));
+			parameters.FadeDistance = std::max(options.GridFadeDistance, 1e-3f);
+			nvrhi::GraphicsState state;
+			state.pipeline = m_GridPipeline;
+			state.framebuffer = m_OverlayFramebuffer;
+			state.viewport.addViewportAndScissorRect(viewport);
+			state.bindings = { m_GridBindingSet };
+			commandList->setGraphicsState(state);
+			commandList->setPushConstants(&parameters, sizeof(parameters));
+			commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
+		}
+
+		// Both depth modes share one upload: tested lines first.
+		uint32_t testedVertices = 0;
+		uint32_t onTopVertices = 0;
+		if (options.DebugShapes && !options.DebugShapes->IsEmpty())
+		{
+			const std::span<const DebugLineVertex> tested = options.DebugShapes->GetLines(DebugDrawDepth::Tested);
+			const std::span<const DebugLineVertex> onTop = options.DebugShapes->GetLines(DebugDrawDepth::OnTop);
+			bool recreated = false;
+			if (!EnsureBufferCapacity(m_DebugLineBuffer, tested.size() + onTop.size(), sizeof(DebugLineVertex), "DebugLines", recreated, true))
+				return false;
+			if (!tested.empty())
+				commandList->writeBuffer(m_DebugLineBuffer, tested.data(), tested.size_bytes(), 0);
+			if (!onTop.empty())
+				commandList->writeBuffer(m_DebugLineBuffer, onTop.data(), onTop.size_bytes(), tested.size_bytes());
+			testedVertices = static_cast<uint32_t>(tested.size());
+			onTopVertices = static_cast<uint32_t>(onTop.size());
+			m_Stats.DebugLines = (testedVertices + onTopVertices) / 2;
+		}
+		if (testedVertices > 0)
+			DrawDebugLines(commandList, DebugDrawDepth::Tested, 0, testedVertices);
+
+		// Selection outline from the entity-ID buffer (ids + 1, sorted for the shader's binary search).
+		m_SelectionIDs.clear();
+		for (const Entity& entity : options.SelectedEntities)
+		{
+			if (entity.GetScene() == &scene && entity.IsValid())
+				m_SelectionIDs.push_back(static_cast<uint32_t>(entity.GetHandle()) + 1);
+		}
+		std::sort(m_SelectionIDs.begin(), m_SelectionIDs.end());
+		m_SelectionIDs.erase(std::unique(m_SelectionIDs.begin(), m_SelectionIDs.end()), m_SelectionIDs.end());
+		if (!m_SelectionIDs.empty())
+		{
+			bool recreated = false;
+			if (!EnsureBufferCapacity(m_SelectionBuffer, m_SelectionIDs.size(), sizeof(uint32_t), "Selection", recreated))
+				return false;
+			if (recreated || !m_OutlineBindingSet)
+			{
+				nvrhi::BindingSetDesc desc;
+				desc.bindings = {
+					nvrhi::BindingSetItem::Texture_SRV(0, m_EntityIDTexture),
+					nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_SelectionBuffer),
+					nvrhi::BindingSetItem::PushConstants(0, sizeof(RenderData::OutlineParameters))
+				};
+				m_OutlineBindingSet = m_Device->createBindingSet(desc, m_OutlineBindingLayout);
+				if (!m_OutlineBindingSet)
+				{
+					ReportError("failed to create the selection outline bindings");
+					return false;
+				}
+			}
+			commandList->writeBuffer(m_SelectionBuffer, m_SelectionIDs.data(), m_SelectionIDs.size() * sizeof(uint32_t));
+
+			RenderData::OutlineParameters parameters = {};
+			parameters.Color = options.SelectionColor;
+			parameters.Width = static_cast<int32_t>(std::clamp(options.OutlineWidth, 1u, 8u));
+			parameters.SelectedCount = static_cast<uint32_t>(m_SelectionIDs.size());
+			nvrhi::GraphicsState state;
+			state.pipeline = m_OutlinePipeline;
+			state.framebuffer = m_OverlayFramebuffer;
+			state.viewport.addViewportAndScissorRect(viewport);
+			state.bindings = { m_OutlineBindingSet };
+			commandList->setGraphicsState(state);
+			commandList->setPushConstants(&parameters, sizeof(parameters));
+			commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
+			m_Stats.OutlinedEntities = parameters.SelectedCount;
+		}
+
+		if (onTopVertices > 0)
+			DrawDebugLines(commandList, DebugDrawDepth::OnTop, testedVertices, onTopVertices);
 		return true;
 	}
 

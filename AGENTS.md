@@ -221,6 +221,11 @@ Conventions:
   pipelines with clockwise front faces and flip their tangent handedness (`c_InstanceMirrored`).
 - Everything streams: meshes, materials and textures that are still loading are skipped or drawn with
   fallbacks and counted in `SceneRendererStats::PendingAssets`; never block a frame on an asset.
+- Overlays (`SceneRenderOptions`, all off by default) are drawn after post-processing with exact display
+  colors into the output texture (then copied into an external target): the infinite ground grid, the
+  selection outline (from the entity-ID buffer, so alpha-blended surfaces get none) and `DebugDraw` line
+  lists, depth-tested against the scene or always on top. Fill a `DebugDraw` each frame (gameplay
+  debugging, or `DrawSceneGizmos` for light, camera and collider shapes) and pass it to `Render`.
 - GPU tests of the scene renderer share `StrataTests/src/Renderer/SceneRendererTestUtils.h`. Verify that a
   new regression test fails without its fix before relying on it.
 

@@ -2,6 +2,7 @@
 
 #include "Strata/Asset/AssetTypes.h"
 #include "Strata/Core/Base.h"
+#include "Strata/Renderer/DebugDraw.h"
 #include "Strata/Renderer/SceneRenderData.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
@@ -12,6 +13,7 @@
 #include <array>
 #include <chrono>
 #include <optional>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -64,6 +66,33 @@ namespace Strata
 		uint32_t ShadowCascades = 4;   // 1-4
 	};
 
+	// Overlays drawn over the finished image (after tone mapping and anti-aliasing) with exact display colors, mainly for
+	// editors. Everything is off by default.
+	struct SceneRenderOptions
+	{
+		// Infinite ground grid on the y = 0 plane, hidden behind scene geometry: minor lines every GridSpacing world units,
+		// a major line every GridMajorEvery lines, the X axis in GridAxisXColor and the Z axis in GridAxisZColor. It fades out
+		// between half the fade distance and the fade distance from the camera.
+		bool ShowGrid = false;
+		float GridSpacing = 1.0f;
+		uint32_t GridMajorEvery = 10;
+		float GridFadeDistance = 100.0f;
+		glm::vec4 GridMinorColor = { 0.5f, 0.5f, 0.5f, 0.35f };
+		glm::vec4 GridMajorColor = { 0.6f, 0.6f, 0.6f, 0.6f };
+		glm::vec4 GridAxisXColor = { 0.9f, 0.2f, 0.2f, 1.0f };
+		glm::vec4 GridAxisZColor = { 0.2f, 0.35f, 0.95f, 1.0f };
+
+		// Entities outlined as selected: OutlineWidth pixels around their visible silhouette. The outline follows the
+		// entity-ID buffer, so it covers opaque and alpha-masked surfaces (not alpha-blended ones). Entities of other scenes
+		// are ignored. The span must stay valid during Render.
+		std::span<const Entity> SelectedEntities;
+		glm::vec4 SelectionColor = { 1.0f, 0.55f, 0.1f, 1.0f };
+		uint32_t OutlineWidth = 2; // 1-8 pixels
+
+		// Debug lines to draw this frame (null for none); see DebugDraw.
+		const DebugDraw* DebugShapes = nullptr;
+	};
+
 	struct SceneRendererStats
 	{
 		static constexpr size_t c_LODStatCount = 8;
@@ -82,6 +111,8 @@ namespace Strata
 		uint32_t PendingAssets = 0;   // Meshes, materials or textures still loading (drawn with fallbacks or skipped)
 		bool EnvironmentLighting = false; // A sky light's environment map lights the scene
 		uint32_t ShadowCasters = 0;       // Instances drawn into shadow cascades (summed over cascades)
+		uint32_t DebugLines = 0;          // Lines drawn from SceneRenderOptions::DebugShapes
+		uint32_t OutlinedEntities = 0;    // Selected entities of the rendered scene
 	};
 
 	// Renders a scene: depth/normal/entity-id prepass, ground-truth ambient occlusion, forward physically based
@@ -90,6 +121,7 @@ namespace Strata
 	// surfaces; then post-processing from the scene's PostProcessComponent: automatic exposure, bloom, tone mapping,
 	// color grading and FXAA into a display target. Meshes, materials and textures come from the active asset manager
 	// and render as soon as they are loaded (fallback textures and the default material are used meanwhile).
+	// Editor overlays (grid, selection outline, debug lines) are optional; see SceneRenderOptions.
 	// Main thread only.
 	class SceneRenderer
 	{
@@ -109,8 +141,8 @@ namespace Strata
 		// (the renderer never rescales) and a single-sampled, non-sRGB UNORM color attachment 0, e.g. the swapchain:
 		// values are written sRGB-encoded. Returns false, with GetStats().Rendered false, when nothing was rendered: an
 		// empty viewport, or an invalid target or render targets (both logged). Updates the scene's cached world
-		// transforms.
-		bool Render(Scene& scene, const SceneCamera& camera, nvrhi::IFramebuffer* target = nullptr);
+		// transforms. With overlays and a target, the image is composed in the output texture and then copied.
+		bool Render(Scene& scene, const SceneCamera& camera, nvrhi::IFramebuffer* target = nullptr, const SceneRenderOptions& options = {});
 
 		// RGBA8 UNORM with sRGB-encoded values (display-ready), valid after Render without a target.
 		nvrhi::ITexture* GetOutputTexture() const { return m_OutputTexture; }
@@ -238,8 +270,8 @@ namespace Strata
 		// Fullscreen-triangle pipeline for a pixel shader and target format, cached per format.
 		nvrhi::IGraphicsPipeline* GetFullscreenPipeline(std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>>& cache, nvrhi::IShader* pixelShader,
 			nvrhi::IBindingLayout* layout, const nvrhi::FramebufferInfo& framebufferInfo);
-		// Grows a structured buffer to hold elementCount elements; false when the allocation failed.
-		bool EnsureBufferCapacity(nvrhi::BufferHandle& buffer, size_t elementCount, size_t elementSize, const char* name, bool& outRecreated);
+		// Grows a structured (or vertex) buffer to hold elementCount elements; false when the allocation failed.
+		bool EnsureBufferCapacity(nvrhi::BufferHandle& buffer, size_t elementCount, size_t elementSize, const char* name, bool& outRecreated, bool vertexBuffer = false);
 
 		uint32_t GetMaterialIndex(const Ref<Material>& material);
 		void CountPendingAsset(AssetHandle handle);
@@ -258,6 +290,11 @@ namespace Strata
 		void DrawBatches(nvrhi::ICommandList* commandList, Pass pass, bool transparent);
 		void DrawShadows(nvrhi::ICommandList* commandList, uint32_t cascadeCount);
 		void BuildLightClusters(nvrhi::ICommandList* commandList);
+		void CreateOverlayResources();
+		static bool HasOverlays(const SceneRenderOptions& options);
+		// Draws the overlays into the output texture (which must hold the finished image); false when GPU resources failed.
+		bool RenderOverlays(nvrhi::ICommandList* commandList, Scene& scene, const SceneRenderOptions& options);
+		void DrawDebugLines(nvrhi::ICommandList* commandList, DebugDrawDepth depth, uint32_t firstVertex, uint32_t vertexCount);
 	private:
 		SceneRendererSpecification m_Specification;
 		nvrhi::IDevice* m_Device = nullptr;
@@ -373,6 +410,29 @@ namespace Strata
 		std::vector<std::pair<PipelineKey, nvrhi::GraphicsPipelineHandle>> m_ScenePipelines;
 		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_TonemapPipelines;
 		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_FXAAPipelines;
+
+		// Overlays (SceneRenderOptions)
+		nvrhi::ShaderHandle m_GridPixelShader;
+		nvrhi::ShaderHandle m_OutlinePixelShader;
+		nvrhi::ShaderHandle m_DebugLineVertexShader;
+		nvrhi::ShaderHandle m_DebugLinePixelShader;
+		nvrhi::ShaderHandle m_CopyPixelShader;
+		nvrhi::BindingLayoutHandle m_GridBindingLayout;
+		nvrhi::BindingSetHandle m_GridBindingSet;
+		nvrhi::GraphicsPipelineHandle m_GridPipeline;
+		nvrhi::BindingLayoutHandle m_OutlineBindingLayout;
+		nvrhi::BindingSetHandle m_OutlineBindingSet; // Entity IDs and selection; recreated with either
+		nvrhi::GraphicsPipelineHandle m_OutlinePipeline;
+		nvrhi::BufferHandle m_SelectionBuffer;
+		std::vector<uint32_t> m_SelectionIDs;
+		nvrhi::BindingLayoutHandle m_DebugLineBindingLayout;
+		nvrhi::BindingSetHandle m_DebugLineBindingSet;
+		nvrhi::InputLayoutHandle m_DebugLineInputLayout;
+		std::array<nvrhi::GraphicsPipelineHandle, 2> m_DebugLinePipelines; // Indexed by DebugDrawDepth
+		nvrhi::BufferHandle m_DebugLineBuffer;
+		nvrhi::FramebufferHandle m_OverlayFramebuffer; // Output texture with the scene depth (read-only)
+		nvrhi::BindingSetHandle m_CopyBindingSet;      // Output texture, copied into external targets
+		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_CopyPipelines;
 
 		// Per-frame gathered data (kept between frames to reuse the allocations)
 		std::vector<RenderData::InstanceData> m_Instances;

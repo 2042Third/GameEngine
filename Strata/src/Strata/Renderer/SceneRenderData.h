@@ -153,6 +153,31 @@ namespace Strata
 		};
 		static_assert(sizeof(ExposureParameters) == 32);
 
+		// Overlay/Grid.frag
+		struct GridParameters
+		{
+			glm::vec4 MinorColor;
+			glm::vec4 MajorColor;
+			glm::vec4 AxisXColor;
+			glm::vec4 AxisZColor;
+			float Spacing;
+			float MajorEvery;
+			float FadeDistance;
+			float Padding;
+		};
+		static_assert(sizeof(GridParameters) == 80);
+
+		// Overlay/Outline.frag
+		struct OutlineParameters
+		{
+			glm::vec4 Color;
+			int32_t Width;
+			uint32_t SelectedCount;
+			uint32_t Padding0;
+			uint32_t Padding1;
+		};
+		static_assert(sizeof(OutlineParameters) == 32);
+
 		constexpr uint32_t c_BloomPrefilter = 0;
 		constexpr uint32_t c_BloomDownsample = 1;
 		constexpr uint32_t c_BloomUpsample = 2;
