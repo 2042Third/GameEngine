@@ -83,6 +83,7 @@ namespace Strata
 		outLayout.Min = glm::vec2(0.0f);
 		outLayout.Max = glm::vec2(0.0f);
 		outLayout.LineCount = 0;
+		outLayout.PendingGlyphs = 0;
 
 		std::vector<uint32_t> codepoints;
 		DecodeUTF8(text, codepoints);
@@ -123,9 +124,14 @@ namespace Strata
 					TextGlyphQuad quad;
 					quad.Min = glm::vec2(pen, baseline) + glyph.PlaneMin;
 					quad.Max = glm::vec2(pen, baseline) + glyph.PlaneMax;
+					quad.Page = glyph.Page;
 					quad.AtlasPosition = glyph.AtlasPosition;
 					quad.AtlasSize = glyph.AtlasSize;
 					outLayout.Quads.push_back(quad);
+				}
+				else if (glyph.Pending)
+				{
+					outLayout.PendingGlyphs++;
 				}
 				pen += glyph.Advance;
 				previous = &glyph;

@@ -59,6 +59,7 @@ namespace Strata
 		std::span<const DebugLineVertex> GetLines(DebugDrawDepth depth) const { return m_Lines[static_cast<size_t>(depth)]; }
 		size_t GetLineCount() const;
 
+		// RGBA8 with red in the lowest byte; components are clamped to [0, 1] and non-finite ones become 0.
 		static uint32_t PackColor(const glm::vec4& color);
 	private:
 		void AddLine(const glm::vec3& from, const glm::vec3& to, uint32_t color, DebugDrawDepth depth);
