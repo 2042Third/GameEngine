@@ -27,6 +27,10 @@ UNLOCATED = re.compile(
     r"The following tests FAILED)")
 
 
+FAILED_TEST = re.compile(r"Test\s+#\d+:.*\*\*\*(Failed|Exception|Timeout)")
+NEXT_TEST = re.compile(r"^\s+Start\s+\d+:|tests passed|tests failed")
+
+
 def escape_data(text):
     return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
@@ -69,7 +73,12 @@ def main():
                 marked.update(range(max(0, index - c_ContextLines), min(len(lines), index + c_ContextLines + 1)))
             elif UNLOCATED.search(line):
                 marked.update(range(max(0, index - c_ContextLines), min(len(lines), index + c_ContextLines + 1)))
-        # The end of the log names the test case a crashed process was running (STRATA_TEST_TRACE).
+        # CTest prints a failed test's output after its result line; the end of that output names the test case a
+        # crashed process was running (STRATA_TEST_TRACE), so keep the lines before the next test starts.
+        for index, line in enumerate(lines):
+            if FAILED_TEST.search(line):
+                end = next((later for later in range(index + 1, len(lines)) if NEXT_TEST.search(lines[later])), len(lines))
+                marked.update(range(max(index, end - c_TailLines), end))
         marked.update(range(max(0, len(lines) - c_TailLines), len(lines)))
         if marked and (located or any(UNLOCATED.search(lines[index]) for index in marked)):
             section = []
