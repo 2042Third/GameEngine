@@ -105,18 +105,31 @@ namespace Strata
 
 	void Scene::DestroyEntityImmediate(entt::entity handle)
 	{
-		// Children first; copy the list because destroying a child edits it.
-		const std::vector<UUID> children = m_Registry.get<RelationshipComponent>(handle).Children;
-		for (UUID child : children)
+		// The subtree in hierarchy order (iteratively: hierarchies can be arbitrarily deep). Only the subtree root
+		// leaves its parent; the links inside the subtree disappear with the entities.
+		std::vector<entt::entity> subtree;
+		std::vector<entt::entity> stack = { handle };
+		while (!stack.empty())
 		{
-			auto it = m_EntityMap.find(child);
-			if (it != m_EntityMap.end())
-				DestroyEntityImmediate(it->second);
+			const entt::entity current = stack.back();
+			stack.pop_back();
+			subtree.push_back(current);
+			const std::vector<UUID>& children = m_Registry.get<RelationshipComponent>(current).Children;
+			for (auto it = children.rbegin(); it != children.rend(); ++it)
+			{
+				auto child = m_EntityMap.find(*it);
+				if (child != m_EntityMap.end())
+					stack.push_back(child->second);
+			}
 		}
 
 		RemoveFromParent(handle);
-		m_EntityMap.erase(m_Registry.get<IDComponent>(handle).ID);
-		m_Registry.destroy(handle);
+		// Children before their parents.
+		for (auto it = subtree.rbegin(); it != subtree.rend(); ++it)
+		{
+			m_EntityMap.erase(m_Registry.get<IDComponent>(*it).ID);
+			m_Registry.destroy(*it);
+		}
 	}
 
 	void Scene::FlushPendingDestroys()
@@ -206,23 +219,23 @@ namespace Strata
 		return result;
 	}
 
-	void Scene::CollectHierarchy(UUID uuid, std::vector<Entity>& outEntities) const
-	{
-		auto it = m_EntityMap.find(uuid);
-		if (it == m_EntityMap.end())
-			return;
-
-		outEntities.emplace_back(it->second, const_cast<Scene*>(this));
-		for (UUID child : m_Registry.get<RelationshipComponent>(it->second).Children)
-			CollectHierarchy(child, outEntities);
-	}
-
 	std::vector<Entity> Scene::GetEntitiesInHierarchyOrder() const
 	{
+		// Depth-first, parents before children, iteratively (hierarchies can be arbitrarily deep).
 		std::vector<Entity> entities;
 		entities.reserve(m_EntityMap.size());
-		for (UUID root : m_RootEntities)
-			CollectHierarchy(root, entities);
+		std::vector<UUID> stack(m_RootEntities.rbegin(), m_RootEntities.rend());
+		while (!stack.empty())
+		{
+			auto it = m_EntityMap.find(stack.back());
+			stack.pop_back();
+			if (it == m_EntityMap.end())
+				continue;
+
+			entities.emplace_back(it->second, const_cast<Scene*>(this));
+			const std::vector<UUID>& children = m_Registry.get<RelationshipComponent>(it->second).Children;
+			stack.insert(stack.end(), children.rbegin(), children.rend());
+		}
 		return entities;
 	}
 
@@ -230,15 +243,17 @@ namespace Strata
 	{
 		if (!child.IsValid() || child.GetScene() != this)
 			return false;
-		if (parent.IsValid() && (parent.GetScene() != this || parent == child || IsDescendantOf(parent, child)))
+		RelationshipComponent& relationship = child.GetComponent<RelationshipComponent>();
+		// A cycle needs the new parent below the child; without children nothing is below it (building long chains
+		// stays linear).
+		if (parent.IsValid() && (parent.GetScene() != this || parent == child || (!relationship.Children.empty() && IsDescendantOf(parent, child))))
 			return false;
 
-		RelationshipComponent& relationship = child.GetComponent<RelationshipComponent>();
 		const UUID newParent = parent.IsValid() ? parent.GetUUID() : UUID::Null();
 		if (relationship.Parent == newParent)
 			return true;
 
-		const glm::mat4 worldTransform = GetWorldTransform(child);
+		const glm::mat4 worldTransform = keepWorldTransform ? GetWorldTransform(child) : glm::mat4(1.0f);
 		RemoveFromParent(child.GetHandle());
 		if (parent.IsValid())
 		{
@@ -292,18 +307,35 @@ namespace Strata
 		return false;
 	}
 
-	void Scene::UpdateWorldTransformRecursive(entt::entity handle, const glm::mat4& parentMatrix, bool parentActive)
+	void Scene::UpdateSubtreeWorldTransforms(entt::entity root, std::vector<HierarchyStackEntry>& stack)
 	{
-		const TransformComponent& transform = m_Registry.get<TransformComponent>(handle);
-		WorldTransformComponent& worldTransform = m_Registry.get<WorldTransformComponent>(handle);
-		worldTransform.Matrix = parentMatrix * transform.GetTransform();
-		worldTransform.ActiveInHierarchy = parentActive && !m_Registry.all_of<InactiveComponent>(handle);
-
-		for (UUID child : m_Registry.get<RelationshipComponent>(handle).Children)
+		// Parents before children, iteratively (hierarchies can be arbitrarily deep).
+		stack.clear();
+		stack.push_back({ root, entt::null });
+		while (!stack.empty())
 		{
-			auto it = m_EntityMap.find(child);
-			if (it != m_EntityMap.end())
-				UpdateWorldTransformRecursive(it->second, worldTransform.Matrix, worldTransform.ActiveInHierarchy);
+			const HierarchyStackEntry entry = stack.back();
+			stack.pop_back();
+
+			glm::mat4 parentMatrix(1.0f);
+			bool parentActive = true;
+			if (entry.Parent != entt::null)
+			{
+				const WorldTransformComponent& parent = m_Registry.get<WorldTransformComponent>(entry.Parent);
+				parentMatrix = parent.Matrix;
+				parentActive = parent.ActiveInHierarchy;
+			}
+			WorldTransformComponent& worldTransform = m_Registry.get<WorldTransformComponent>(entry.Handle);
+			worldTransform.Matrix = parentMatrix * m_Registry.get<TransformComponent>(entry.Handle).GetTransform();
+			worldTransform.ActiveInHierarchy = parentActive && !m_Registry.all_of<InactiveComponent>(entry.Handle);
+
+			const std::vector<UUID>& children = m_Registry.get<RelationshipComponent>(entry.Handle).Children;
+			for (auto it = children.rbegin(); it != children.rend(); ++it)
+			{
+				auto child = m_EntityMap.find(*it);
+				if (child != m_EntityMap.end())
+					stack.push_back({ child->second, entry.Handle });
+			}
 		}
 	}
 
@@ -311,11 +343,15 @@ namespace Strata
 	{
 		ST_PROFILE_FUNCTION();
 
-		auto updateRoot = [this](size_t index)
+		auto updateRoots = [this](size_t begin, size_t end)
 		{
-			auto it = m_EntityMap.find(m_RootEntities[index]);
-			if (it != m_EntityMap.end())
-				UpdateWorldTransformRecursive(it->second, glm::mat4(1.0f), true);
+			std::vector<HierarchyStackEntry> stack;
+			for (size_t index = begin; index < end; index++)
+			{
+				auto it = m_EntityMap.find(m_RootEntities[index]);
+				if (it != m_EntityMap.end())
+					UpdateSubtreeWorldTransforms(it->second, stack);
+			}
 		};
 
 		// Each root subtree touches only its own entities, so subtrees can be processed in parallel.
@@ -323,14 +359,12 @@ namespace Strata
 		{
 			JobSystem::ParallelFor(static_cast<uint32_t>(m_RootEntities.size()), 64, [&](uint32_t begin, uint32_t end)
 			{
-				for (uint32_t index = begin; index < end; index++)
-					updateRoot(index);
+				updateRoots(begin, end);
 			});
 		}
 		else
 		{
-			for (size_t index = 0; index < m_RootEntities.size(); index++)
-				updateRoot(index);
+			updateRoots(0, m_RootEntities.size());
 		}
 	}
 

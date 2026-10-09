@@ -4,6 +4,9 @@
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Reflection/PropertyJson.h"
 #include "Strata/Scene/ComponentAccess.h"
+#include "Strata/Scene/Components.h"
+#include "Strata/Scene/Entity.h"
+#include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneSerializer.h"
 #include "TestHelpers.h"
 
@@ -212,5 +215,45 @@ TEST_SUITE("Scene.Robustness")
 		CHECK(FixedCounter::Count == 1);
 		scene.OnRuntimeStop();
 		SceneSystemRegistry::Unregister("TestFixedCounter");
+	}
+
+	TEST_CASE("Very deep hierarchies never exhaust the stack")
+	{
+		// Far deeper than any call stack could recurse; scripts and imported files can build such chains.
+		constexpr int c_Depth = 50000;
+		Scene scene;
+		Entity root = scene.CreateEntity("Root");
+		Entity leaf = root;
+		for (int depth = 1; depth < c_Depth; depth++)
+		{
+			leaf = scene.CreateChildEntity(leaf, "Node");
+			leaf.GetTransform().Translation.x = 1.0f;
+		}
+
+		scene.UpdateWorldTransforms();
+		CHECK(leaf.GetComponent<WorldTransformComponent>().Matrix[3].x == doctest::Approx(static_cast<float>(c_Depth - 1)));
+		root.SetActive(false);
+		scene.UpdateWorldTransforms();
+		CHECK_FALSE(leaf.GetComponent<WorldTransformComponent>().ActiveInHierarchy);
+
+		const std::vector<Entity> order = scene.GetEntitiesInHierarchyOrder();
+		REQUIRE(order.size() == c_Depth);
+		CHECK(order.front() == root);
+		CHECK(order.back() == leaf);
+		const nlohmann::json snapshot = SceneSerializer::SerializeEntities(scene, { root });
+		CHECK(snapshot["Entities"].size() == c_Depth);
+
+		// Loading the chain back stays linear too (the cycle check of parent links).
+		Scene copy;
+		std::string error;
+		const std::vector<Entity> copiedRoots = SceneSerializer::DeserializeEntities(copy, snapshot, {}, &error);
+		REQUIRE_MESSAGE(copiedRoots.size() == 1, error);
+		CHECK(copy.GetEntityCount() == c_Depth);
+		copy.UpdateWorldTransforms();
+		CHECK(copy.GetEntitiesInHierarchyOrder().back().GetComponent<WorldTransformComponent>().Matrix[3].x == doctest::Approx(static_cast<float>(c_Depth - 1)));
+
+		scene.DestroyEntity(root);
+		CHECK(scene.GetEntityCount() == 0);
+		CHECK(scene.GetRootEntities().empty());
 	}
 }
