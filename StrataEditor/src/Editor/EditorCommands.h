@@ -18,14 +18,28 @@ namespace Strata
 	class EditorContext;
 	class Scene;
 
+	struct EditorCommandResult;
+
+	// Polled once per frame, on the main thread, while a command is pending: returns the final result once the command
+	// has finished (which may itself be pending again), nullopt while it is still running.
+	using EditorCommandPoll = std::function<std::optional<EditorCommandResult>(EditorContext& context)>;
+
 	struct EditorCommandResult
 	{
 		bool Success = true;
 		nlohmann::json Value; // Result data (null when the command returns nothing)
 		std::string Error;
+		// Set for commands that finish over the next frames (waiting for frames, a build or a GPU readback) instead of
+		// blocking the frame. Success, Value and Error are meaningless while it is set. Run commands that may defer through
+		// EditorCommandRunner, which polls them.
+		EditorCommandPoll Pending;
 
-		static EditorCommandResult Ok(nlohmann::json value = nullptr) { return { true, std::move(value), {} }; }
-		static EditorCommandResult Fail(std::string error) { return { false, nullptr, std::move(error) }; }
+		bool IsPending() const { return static_cast<bool>(Pending); }
+
+		static EditorCommandResult Ok(nlohmann::json value = nullptr) { return { true, std::move(value), {}, {} }; }
+		static EditorCommandResult Fail(std::string error) { return { false, nullptr, std::move(error), {} }; }
+		// The poll function must own everything it uses: copy the parameters, never capture them by reference.
+		static EditorCommandResult Defer(EditorCommandPoll poll) { return { true, nullptr, {}, std::move(poll) }; }
 	};
 
 	using EditorCommandHandler = std::function<EditorCommandResult(EditorContext& context, const nlohmann::json& parameters)>;
@@ -57,7 +71,8 @@ namespace Strata
 		std::vector<const EditorCommand*> GetAll() const; // Sorted by name
 
 		// Runs a command. Unknown commands, parameters that are not an object and failures inside the handler
-		// (including exceptions from third-party code) become error results.
+		// (including exceptions from third-party code) become error results. The result may be pending (see
+		// EditorCommandResult::Pending); EditorCommandRunner handles that.
 		EditorCommandResult Execute(EditorContext& context, std::string_view name, const nlohmann::json& parameters = nlohmann::json::object()) const;
 	private:
 		std::map<std::string, EditorCommand, std::less<>> m_Commands;

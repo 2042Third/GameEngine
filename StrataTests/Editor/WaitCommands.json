@@ -1,0 +1,6 @@
+[
+	{ "command": "scene.new", "parameters": { "name": "BeforeWait" } },
+	{ "command": "editor.wait", "parameters": { "frames": 3 } },
+	{ "command": "scene.new", "parameters": { "name": "AfterWait" } },
+	{ "command": "editor.wait" }
+]

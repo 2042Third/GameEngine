@@ -1,0 +1,3 @@
+[
+	{ "command": "editor.wait", "parameters": { "frames": 1000 } }
+]

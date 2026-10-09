@@ -2,7 +2,6 @@
 
 #include "UI/FileDialogs.h"
 
-#include <Strata/Core/JsonUtils.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/ImageWriter.h>
 
@@ -31,43 +30,44 @@ namespace Strata
 			if (!m_Context.OpenProject(m_Options.ProjectPath, &error))
 				ST_ERROR("Could not open the project '{}': {}", FileSystem::ToUTF8(m_Options.ProjectPath), error);
 		}
-		// A failed startup script fails the process, so scripted runs (CI, automation) notice.
-		if (!m_Options.CommandScript.empty() && !RunCommandScript(m_Options.CommandScript))
-			Application::Get().SetExitCode(1);
-	}
-
-	bool EditorLayer::RunCommandScript(const std::filesystem::path& path)
-	{
-		std::optional<std::string> text = FileSystem::ReadText(path);
-		std::string error;
-		std::optional<nlohmann::json> script = text ? JsonUtils::Parse(*text, &error) : std::nullopt;
-		if (!script || !script->is_array())
+		if (!m_Options.CommandScript.empty())
 		{
-			ST_ERROR("Command script '{}' must be a JSON array of {{\"command\": ..., \"parameters\": {{...}}}}: {}", FileSystem::ToUTF8(path),
-				text ? error : "cannot read the file");
-			return false;
-		}
-		bool success = true;
-		for (const nlohmann::json& step : *script)
-		{
-			const std::string name = step.is_object() ? JsonUtils::GetString(step, "command") : std::string();
-			const nlohmann::json* parameters = step.is_object() ? JsonUtils::Find(step, "parameters") : nullptr;
-			const EditorCommandResult result = m_Commands.Execute(m_Context, name, parameters ? *parameters : nlohmann::json::object());
-			if (result.Success)
+			std::string error;
+			m_CommandScript = EditorCommandScript::Load(m_Options.CommandScript, &error);
+			if (m_CommandScript)
 			{
-				ST_INFO("{} -> {}", name, result.Value.is_null() ? std::string("ok") : JsonUtils::Dump(result.Value));
+				// Commands that finish at once run before the first frame.
+				UpdateCommandScript();
 			}
 			else
 			{
-				ST_ERROR("{} failed: {}", name.empty() ? std::string("(missing \"command\")") : name, result.Error);
-				success = false;
+				ST_ERROR("Command script: {}", error);
+				Application::Get().SetExitCode(1);
 			}
 		}
-		return success;
+	}
+
+	void EditorLayer::UpdateCommandScript()
+	{
+		if (!m_CommandScript || !m_CommandScript->Update(m_CommandRunner, m_Context, m_Commands))
+			return;
+		// A failed script fails the process, so scripted runs (CI, automation) notice.
+		if (m_CommandScript->HasFailed())
+		{
+			ST_ERROR("Command script finished with errors");
+			Application::Get().SetExitCode(1);
+		}
+		else
+		{
+			ST_INFO("Command script finished ({} commands)", m_CommandScript->GetStepCount());
+		}
+		m_CommandScript.reset();
 	}
 
 	void EditorLayer::OnDetach()
 	{
+		// Before the project closes: completions may still look at the editor state.
+		m_CommandRunner.CancelAll("The editor is closing");
 		m_Context.CloseProject();
 		FileDialogs::Shutdown();
 	}
@@ -75,10 +75,18 @@ namespace Strata
 	void EditorLayer::OnUpdate(Timestep timestep)
 	{
 		m_Context.Update(timestep);
+		m_CommandRunner.Update(m_Context);
+		UpdateCommandScript();
 		UpdateWindowTitle();
 
 		Application& application = Application::Get();
 		const bool lastFrame = m_Options.MaxFrames && application.GetFrameCount() + 1 == *m_Options.MaxFrames;
+		if (lastFrame && m_CommandScript)
+		{
+			ST_ERROR("The command script did not finish within {} frames ({} of {} commands done)", *m_Options.MaxFrames,
+				m_CommandScript->GetCompletedCount(), m_CommandScript->GetStepCount());
+			application.SetExitCode(1);
+		}
 		if (lastFrame && !m_Options.ScreenshotPath.empty())
 		{
 			application.RequestBackBufferCapture([path = m_Options.ScreenshotPath](const ReadbackImage& image)

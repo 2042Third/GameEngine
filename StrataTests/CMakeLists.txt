@@ -113,6 +113,16 @@ if(TARGET StrataEditor)
 		COMMAND StrataEditor --no-gpu --frames 2 --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/FailingCommands.json"
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
 	set_tests_properties(StrataEditor.FailingScript PROPERTIES WILL_FAIL TRUE)
+
+	# Commands that take frames (editor.wait) hold the script; the script must finish within the --frames budget...
+	add_test(NAME StrataEditor.WaitingScript
+		COMMAND StrataEditor --no-gpu --frames 10 --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/WaitCommands.json"
+		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
+	# ...or the run fails.
+	add_test(NAME StrataEditor.UnfinishedScript
+		COMMAND StrataEditor --no-gpu --frames 5 --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/UnfinishedCommands.json"
+		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
+	set_tests_properties(StrataEditor.UnfinishedScript PROPERTIES WILL_FAIL TRUE)
 endif()
 
 # Editor export to a playable game, then the exported runtime: neither needs a GPU (--no-gpu, headless runtime).

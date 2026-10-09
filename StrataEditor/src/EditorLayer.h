@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Panels/ConsolePanel.h"
@@ -21,7 +22,8 @@ namespace Strata
 	{
 		std::filesystem::path ProjectPath;
 		std::filesystem::path ScreenshotPath; // Saves the editor window to this PNG on the last frame (with --frames)
-		// JSON array of {"command": name, "parameters": {...}} run after startup (after opening ProjectPath).
+		// JSON array of {"command": name, "parameters": {...}} run after startup (after opening ProjectPath), see
+		// EditorCommandScript. With MaxFrames, a script that has not finished by the last frame fails the run.
 		std::filesystem::path CommandScript;
 		std::optional<uint64_t> MaxFrames;
 		bool ShowImGuiDemo = false;
@@ -44,6 +46,7 @@ namespace Strata
 
 		EditorContext& GetContext() { return m_Context; }
 		const EditorCommandRegistry& GetCommands() const { return m_Commands; }
+		EditorCommandRunner& GetCommandRunner() { return m_CommandRunner; }
 	private:
 		void DrawDockspace();
 		// Docks the panels into the default arrangement (first run, or Window > Reset Layout).
@@ -55,8 +58,8 @@ namespace Strata
 		void DrawUnsavedChangesModal();
 		void HandleShortcuts();
 		void UpdateWindowTitle();
-		// Runs the startup command script; returns false if it could not be read or a command failed.
-		bool RunCommandScript(const std::filesystem::path& path);
+		// Advances the startup command script; once it finished, reports the result (a failed script fails the process).
+		void UpdateCommandScript();
 
 		// Runs an action that replaces the edited scene, asking first whether unsaved changes should be saved.
 		void RequestDiscardChanges(std::function<void()> action);
@@ -70,6 +73,10 @@ namespace Strata
 		EditorOptions m_Options;
 		EditorContext m_Context;
 		EditorCommandRegistry m_Commands;
+		// Declared before the runner: cancelling pending commands when the runner is destroyed calls the script's
+		// completions, so the script must outlive it.
+		Scope<EditorCommandScript> m_CommandScript;
+		EditorCommandRunner m_CommandRunner;
 
 		SceneHierarchyPanel m_Hierarchy;
 		InspectorPanel m_Inspector;

@@ -15,6 +15,9 @@ namespace Strata
 	namespace
 	{
 
+		// About four and a half hours at 60 frames per second.
+		constexpr int64_t c_MaxWaitFrames = 1'000'000;
+
 		nlohmann::json DescribePlayState(const EditorContext& context)
 		{
 			return { { "state", SceneStateToString(context.GetSceneState()) }, { "paused", context.IsPaused() } };
@@ -94,6 +97,28 @@ namespace Strata
 			[](EditorContext& context, const nlohmann::json&)
 			{
 				return EditorCommandResult::Ok(DescribeHistory(context));
+			} });
+
+		////////////////////////////////////////////////////////////////////////////////
+		// Frames
+		////////////////////////////////////////////////////////////////////////////////
+
+		registry.Register({ "editor.wait",
+			"Returns after the given number of frames. Use it to let a playing scene run, assets load or the viewport render before the next command.",
+			ObjectSchema({ { "frames", IntegerSchema("Frames to wait (default 1)", 1, c_MaxWaitFrames) } }),
+			[](EditorContext&, const nlohmann::json& parameters)
+			{
+				CommandArguments arguments(parameters);
+				const int64_t frames = arguments.GetInt("frames", 1, 1, c_MaxWaitFrames);
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				// Polled once per frame from the frame after this one, so it finishes when `frames` frames have passed.
+				return EditorCommandResult::Defer([frames, remaining = frames](EditorContext&) mutable -> std::optional<EditorCommandResult>
+				{
+					if (--remaining > 0)
+						return std::nullopt;
+					return EditorCommandResult::Ok({ { "frames", frames } });
+				});
 			} });
 
 		////////////////////////////////////////////////////////////////////////////////

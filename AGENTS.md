@@ -289,11 +289,19 @@ Building and loading scripts:
 - `project.export` writes a playable game outside the project: the asset pack (`<Game>.stpak`), the
   manifest (`<Game>.stgame`, start scene and window settings) and the runtime executable renamed after
   the game. CTest exports a small game (`StrataEditor --no-gpu`) and runs it headless.
-- `StrataEditor --commands script.json` runs a JSON array of `{"command", "parameters"}` at startup; if
-  one fails, the process exit code becomes 1. `--frames N` stops after N frames (without saving the
-  panel layout), `--screenshot out.png` captures the last frame, `--no-gpu` runs headless without a
-  graphics device (export, asset processing). CTest runs `StrataTests/Editor/SmokeCommands.json` and
-  checks that a failing script fails the process.
+- Commands never block a frame. One that has to wait (frames, a build, a GPU readback) returns
+  `EditorCommandResult::Defer(poll)`; `EditorCommandRunner` polls it once per frame, starting with the
+  next frame, and reports through a completion callback. The UI, command scripts and automation all
+  run commands through the runner (UI helpers that expect an immediate result reject pending ones).
+  Poll functions own their data (copy parameters, never capture them by reference). `editor.wait
+  {frames}` returns after that many frames, e.g. to let a playing scene run.
+- `StrataEditor --commands script.json` runs a JSON array of `{"command", "parameters"}` at startup
+  (`EditorCommandScript`); a pending command holds the script until it completes. If a command fails,
+  or the script has not finished by the last of `--frames N` frames, the process exit code becomes 1.
+  `--frames N` stops after N frames (without saving the panel layout), `--screenshot out.png` captures
+  the last frame, `--no-gpu` runs headless without a graphics device (export, asset processing).
+  CTest runs `StrataTests/Editor/SmokeCommands.json` and checks that failing and unfinished scripts
+  fail the process.
 - Mutating commands report a `warning` in their result while the scene is playing: such changes apply
   to the running copy and are discarded by `play.stop`. Unknown or missing parameters are errors.
 
