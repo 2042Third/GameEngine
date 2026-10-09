@@ -5,12 +5,94 @@
 
 #include "Platform/Windows/WindowsUtils.h"
 
+#include <bcrypt.h>
+#include <fcntl.h>
+#include <io.h>
 #include <psapi.h>
 #include <shellapi.h>
 #include <shlobj.h>
 
+#include <atomic>
+#include <climits>
+#include <cstdio>
+
 namespace Strata
 {
+
+	namespace
+	{
+
+		// Replacing a file fails while a reader has it open without delete sharing (e.g. a tool polling it).
+		// That is transient, so the final rename of WritePrivateFile is retried for a moment.
+		constexpr int c_ReplaceAttempts = 10;
+		constexpr DWORD c_ReplaceRetryDelayMilliseconds = 20;
+
+		std::string GetLastErrorMessage()
+		{
+			return WindowsUtils::GetErrorMessage(::GetLastError());
+		}
+
+		// Security attributes whose DACL grants access to the current user only, protected from inheriting the
+		// parent directory's entries.
+		class OwnerOnlySecurity
+		{
+		public:
+			bool Initialize(std::string& error)
+			{
+				HANDLE token = nullptr;
+				if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+				{
+					error = "OpenProcessToken failed: " + GetLastErrorMessage();
+					return false;
+				}
+
+				DWORD size = 0;
+				GetTokenInformation(token, TokenUser, nullptr, 0, &size);
+				m_TokenUser.resize(size);
+				const BOOL queried = size > 0 && GetTokenInformation(token, TokenUser, m_TokenUser.data(), size, &size);
+				const std::string queryError = queried ? std::string() : GetLastErrorMessage();
+				CloseHandle(token);
+				if (!queried)
+				{
+					error = "GetTokenInformation failed: " + queryError;
+					return false;
+				}
+
+				PSID user = reinterpret_cast<TOKEN_USER*>(m_TokenUser.data())->User.Sid;
+				const DWORD aclSize = static_cast<DWORD>(sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE) + GetLengthSid(user));
+				m_Acl.resize(aclSize);
+				PACL acl = reinterpret_cast<PACL>(m_Acl.data());
+				if (!InitializeAcl(acl, aclSize, ACL_REVISION) || !AddAccessAllowedAce(acl, ACL_REVISION, FILE_ALL_ACCESS, user)
+					|| !InitializeSecurityDescriptor(&m_Descriptor, SECURITY_DESCRIPTOR_REVISION)
+					|| !SetSecurityDescriptorDacl(&m_Descriptor, TRUE, acl, FALSE)
+					|| !SetSecurityDescriptorControl(&m_Descriptor, SE_DACL_PROTECTED, SE_DACL_PROTECTED))
+				{
+					error = "Failed to build an owner-only security descriptor: " + GetLastErrorMessage();
+					return false;
+				}
+
+				m_Attributes.nLength = sizeof(m_Attributes);
+				m_Attributes.lpSecurityDescriptor = &m_Descriptor;
+				m_Attributes.bInheritHandle = FALSE;
+				return true;
+			}
+
+			SECURITY_ATTRIBUTES* GetAttributes() { return &m_Attributes; }
+		private:
+			std::vector<uint8_t> m_TokenUser;
+			std::vector<uint8_t> m_Acl;
+			SECURITY_DESCRIPTOR m_Descriptor = {};
+			SECURITY_ATTRIBUTES m_Attributes = {};
+		};
+
+		bool SetError(std::string* error, std::string message)
+		{
+			if (error)
+				*error = std::move(message);
+			return false;
+		}
+
+	}
 
 	std::string_view Platform::GetName()
 	{
@@ -41,20 +123,29 @@ namespace Strata
 
 	std::filesystem::path Platform::GetUserDataDirectory(std::string_view applicationName)
 	{
-		std::filesystem::path base;
+		if (std::optional<std::filesystem::path> directory = FindUserDataDirectory(applicationName))
+			return *directory;
+
+		std::error_code error;
+		std::filesystem::path directory = std::filesystem::temp_directory_path(error) / FileSystem::FromUTF8(applicationName);
+		FileSystem::CreateDirectories(directory);
+		return directory;
+	}
+
+	std::optional<std::filesystem::path> Platform::FindUserDataDirectory(std::string_view applicationName)
+	{
 		PWSTR knownFolder = nullptr;
-		if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_CREATE, nullptr, &knownFolder)))
+		if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_CREATE, nullptr, &knownFolder)))
 		{
-			base = std::filesystem::path(knownFolder);
-			CoTaskMemFree(knownFolder);
-		}
-		else
-		{
-			base = std::filesystem::temp_directory_path();
+			if (knownFolder)
+				CoTaskMemFree(knownFolder);
+			return std::nullopt;
 		}
 
-		std::filesystem::path directory = base / FileSystem::FromUTF8(applicationName);
-		FileSystem::CreateDirectories(directory);
+		std::filesystem::path directory = std::filesystem::path(knownFolder) / FileSystem::FromUTF8(applicationName);
+		CoTaskMemFree(knownFolder);
+		if (!FileSystem::CreateDirectories(directory))
+			return std::nullopt;
 		return directory;
 	}
 
@@ -107,6 +198,126 @@ namespace Strata
 		if (GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters)))
 			return static_cast<uint64_t>(counters.WorkingSetSize);
 		return 0;
+	}
+
+	bool Platform::IsProcessAlive(uint32_t processId)
+	{
+		if (processId == 0)
+			return false;
+
+		HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, static_cast<DWORD>(processId));
+		if (!process)
+			return ::GetLastError() == ERROR_ACCESS_DENIED; // It exists but belongs to a more privileged account
+
+		// The process object (and its id) outlives the process while handles to it are open, so check for exit.
+		const bool alive = WaitForSingleObject(process, 0) == WAIT_TIMEOUT;
+		CloseHandle(process);
+		return alive;
+	}
+
+	bool Platform::GenerateSecureRandom(std::span<uint8_t> buffer)
+	{
+		size_t offset = 0;
+		while (offset < buffer.size())
+		{
+			const ULONG chunk = static_cast<ULONG>(std::min<size_t>(buffer.size() - offset, ULONG_MAX));
+			if (!BCRYPT_SUCCESS(BCryptGenRandom(nullptr, buffer.data() + offset, chunk, BCRYPT_USE_SYSTEM_PREFERRED_RNG)))
+				return false;
+			offset += chunk;
+		}
+		return true;
+	}
+
+	bool Platform::WritePrivateFile(const std::filesystem::path& path, std::string_view contents, std::string* error)
+	{
+		std::error_code directoryError;
+		if (path.has_parent_path())
+			std::filesystem::create_directories(path.parent_path(), directoryError);
+
+		OwnerOnlySecurity security;
+		std::string securityError;
+		if (!security.Initialize(securityError))
+			return SetError(error, securityError);
+
+		static std::atomic<uint32_t> s_TemporaryCounter = 0;
+		std::filesystem::path temporaryPath = path;
+		temporaryPath += FileSystem::FromUTF8(fmt::format(".tmp-{}-{}", GetCurrentProcessId(), s_TemporaryCounter.fetch_add(1)));
+
+		// CREATE_NEW never opens an existing file or link, so the data only ever lands in a file created here.
+		HANDLE file = CreateFileW(temporaryPath.c_str(), GENERIC_WRITE, 0, security.GetAttributes(), CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+		if (file == INVALID_HANDLE_VALUE)
+			return SetError(error, fmt::format("Failed to create '{}': {}", FileSystem::ToUTF8(temporaryPath), GetLastErrorMessage()));
+
+		bool written = true;
+		size_t offset = 0;
+		while (offset < contents.size())
+		{
+			const DWORD chunk = static_cast<DWORD>(std::min<size_t>(contents.size() - offset, 1u << 30));
+			DWORD bytesWritten = 0;
+			if (!WriteFile(file, contents.data() + offset, chunk, &bytesWritten, nullptr) || bytesWritten == 0)
+			{
+				written = false;
+				break;
+			}
+			offset += bytesWritten;
+		}
+		const std::string writeError = written ? std::string() : GetLastErrorMessage();
+		CloseHandle(file);
+		if (!written)
+		{
+			DeleteFileW(temporaryPath.c_str());
+			return SetError(error, fmt::format("Failed to write '{}': {}", FileSystem::ToUTF8(temporaryPath), writeError));
+		}
+
+		DWORD moveError = ERROR_SUCCESS;
+		for (int attempt = 0; attempt < c_ReplaceAttempts; attempt++)
+		{
+			if (attempt > 0)
+				Sleep(c_ReplaceRetryDelayMilliseconds);
+			if (MoveFileExW(temporaryPath.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING))
+				return true;
+			moveError = ::GetLastError();
+			if (moveError != ERROR_ACCESS_DENIED && moveError != ERROR_SHARING_VIOLATION)
+				break;
+		}
+
+		DeleteFileW(temporaryPath.c_str());
+		return SetError(error, fmt::format("Failed to replace '{}': {}", FileSystem::ToUTF8(path), WindowsUtils::GetErrorMessage(moveError)));
+	}
+
+	bool Platform::EnsurePrivateDirectory(const std::filesystem::path& directory, std::string* error)
+	{
+		if (!FileSystem::CreateDirectories(directory))
+			return SetError(error, fmt::format("Failed to create the directory '{}'", FileSystem::ToUTF8(directory)));
+
+		const DWORD attributes = GetFileAttributesW(directory.c_str());
+		if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0)
+			return SetError(error, fmt::format("'{}' is not a directory", FileSystem::ToUTF8(directory)));
+		if (attributes & FILE_ATTRIBUTE_REPARSE_POINT)
+			return SetError(error, fmt::format("'{}' is a link or junction, which is not trusted", FileSystem::ToUTF8(directory)));
+		return true;
+	}
+
+	bool Platform::IsTrustedFile(const std::filesystem::path& path, std::string* error)
+	{
+		const DWORD attributes = GetFileAttributesW(path.c_str());
+		if (attributes == INVALID_FILE_ATTRIBUTES)
+			return SetError(error, fmt::format("'{}' does not exist", FileSystem::ToUTF8(path)));
+		if (attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))
+			return SetError(error, fmt::format("'{}' is not a regular file", FileSystem::ToUTF8(path)));
+		return true;
+	}
+
+	bool Platform::RenameNoReplace(const std::filesystem::path& from, const std::filesystem::path& to)
+	{
+		// Without MOVEFILE_REPLACE_EXISTING the move fails if the destination exists.
+		return MoveFileExW(from.c_str(), to.c_str(), 0) != FALSE;
+	}
+
+	void Platform::SetBinaryStandardStreams()
+	{
+		_setmode(_fileno(stdin), _O_BINARY);
+		_setmode(_fileno(stdout), _O_BINARY);
 	}
 
 }
