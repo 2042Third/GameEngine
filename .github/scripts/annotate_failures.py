@@ -12,6 +12,7 @@ import sys
 c_MaxLocatedErrors = 8
 c_MaxSummaryCharacters = 60000
 c_ContextLines = 6
+c_TailLines = 40
 
 PATTERNS = [
     # GCC, Clang and doctest built with them: path:line[:column]: [fatal] error: message / path:line: ERROR: message
@@ -67,7 +68,9 @@ def main():
                 marked.update(range(max(0, index - c_ContextLines), min(len(lines), index + c_ContextLines + 1)))
             elif UNLOCATED.search(line):
                 marked.update(range(max(0, index - c_ContextLines), min(len(lines), index + c_ContextLines + 1)))
-        if marked:
+        # The end of the log names the test case a crashed process was running (STRATA_TEST_TRACE).
+        marked.update(range(max(0, len(lines) - c_TailLines), len(lines)))
+        if marked and (located or any(UNLOCATED.search(lines[index]) for index in marked)):
             summary.append("==== %s ====" % os.path.basename(log))
             previous = None
             for index in sorted(marked):

@@ -65,6 +65,8 @@ jobs:
       # Hosted runners have no GPU: suites that need one carry the "gpu" label.
       - name: Test (Release)
         shell: bash
+        env:
+          STRATA_TEST_TRACE: "1" # Tests print each test case as it starts, so a crash names its test
         run: |
           set -o pipefail
           ctest --preset ${{ matrix.preset }}-release -LE gpu --output-on-failure 2>&1 | tee test.log
