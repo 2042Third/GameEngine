@@ -96,8 +96,36 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
 - Use `Strata::Tests::CreateTemporaryDirectory()` for files; never write into the source tree.
 - `StrataTests.exe --strata-test-helper=<mode>` turns the test binary into a child process for
   process tests (see `TestMain.cpp`), so tests never depend on external programs.
-- The feature test project exercises every component and the entire scripting API in a real scene,
-  run headless by CTest. Extend it whenever you add a component or script API.
+- **Feature test** (golden rule 6): `StrataTests/FeatureTest/` is a real project (`FeatureTest.stproj`, `Assets/`
+  with committed `.meta` files). Its scene `Scenes/Feature.stscene` contains every registered component, the project
+  has assets of every type (the tiny binary ones come from `Tools/GenerateAssets.py`, whose outputs are committed), and
+  its script module `Scripts/` (target `StrataTestScriptsFeatureTest`) exercises the whole script SDK. Feature scripts
+  derive from `FeatureTest::FeatureScript`: `Expect(condition, "description")` counts checks and keeps the first
+  failure, `Completed` marks the end of a scenario, and `Journal()` records events in the scene's "Journal" entity.
+  Every runner plays the same scenario (200 frames, simulated input, a hot reload of the module halfway):
+  - `StrataTests.FeatureTest` (label `feature`, no GPU): suite `FeatureTest` (`src/FeatureTest/`, headless) and
+    `Editor.FeatureTest` (editor commands in-process, then the exported game in `GameRuntime`);
+  - `GPU.FeatureTest` (in `StrataTests.GPU`): renders the scene, checks entities in the ID buffer, text and stats;
+  - `StrataEditor.FeatureTest` and `StrataRuntime.FeatureTest` (label `feature`): the real executables open, step,
+    export and run a copy of the project (they do not load script modules yet).
+- **The feature test enforces coverage.** It fails when:
+  - a registered component is missing from the feature scene, or a property has its default value on every entity
+    with the component (new properties need a non-default value there, which also proves that they serialize);
+  - a script field type is not overridden in the scene, or a `ScriptCallback` is implemented by no feature script;
+  - a host function of `StrataScriptHostAPI` was never called during the run. `GetScriptHostCallCounts()`
+    (`Scripting/ScriptHostAPI.h`) counts calls per table entry; the table is built from `ST_SCRIPT_HOST_FUNCTIONS` in
+    `ScriptHostAPI.cpp`, and a `static_assert` fails the build when that list and the struct disagree;
+  - a public SDK class, member function or macro (`StrataScript/*.h` outside `Detail`) is not used by the feature
+    scripts (`SDKCoverageTests.cpp` reads the headers; the check is by name, so overloads count together);
+  - a feature script fails a check or does not complete, a script class never runs, or the run logs a warning or error
+    other than the messages the scripts log on purpose (`c_ExpectedLogMessages` in `FeatureTestUtils.cpp`);
+  - an asset type has no asset in the project, an asset imports with warnings, or importing rewrites a `.meta` file.
+- **Extending the feature test:** a new component gets an entity (or joins one) in `Feature.stscene` with a non-default
+  value for every property; edit the JSON, or open a copy of the project in the editor, edit and save, and copy the
+  scene back. A new script API is called from a feature script (extend the matching `Scripts/*Features.cpp`, or add a
+  class with an entity in the scene and journal its `OnCreate`) that `Expect`s its effect; a new host function is also
+  listed in `ST_SCRIPT_HOST_FUNCTIONS`. A new asset type gets a small asset with its `.meta` in `Assets/`. Messages
+  scripts log on purpose go into `c_ExpectedLogMessages`.
 - Script modules the tests load are CMake targets in `StrataTests/CMakeLists.txt` (sources in `StrataTests/Scripts/`),
   built with the tests. The CTest `StrataScriptCore.Package` (label `package`) builds `StrataTests/PackageProject` through
   the StrataScriptCore package the way a game project does; it needs CMake and the compiler at test time.
@@ -216,6 +244,7 @@ Writing scripts is described in `.claude/skills/strata-scripting/SKILL.md`.
 | `StrataScriptCore/CMake/` | `strata_add_script_module()` and the package game projects use (`StrataScriptCoreConfig.cmake`). |
 | `Strata/src/Strata/Scripting/` | `ScriptEngine` (module, hot reload, faults, watchdog), `ScriptModule` (loading, validation, guarded calls), `ScriptSystem` (instances and lifecycle), `ScriptHostAPI` (the host table), `ScriptValue` (value conversion). |
 | `StrataTests/Scripts/`, `StrataTests/src/Scripting/` | Test modules (API, reload V1/V2, faults, invalid modules) and the `Scripting.*` suites. |
+| `StrataTests/FeatureTest/Scripts/`, `StrataTests/src/FeatureTest/` | The feature test's script module (the whole SDK in a real scene) and its runners (see [Testing](#testing)). |
 
 ABI rules:
 
@@ -242,8 +271,9 @@ Adding a host function (or a module callback):
    `ST_SCRIPT_HAS_MEMBER`.
 3. Wrap it in the SDK. Functions appended after an ABI version's initial set are optional for modules: check
    `ST_SCRIPT_HAS_MEMBER(StrataScriptHostAPI, host, Name) && host->Name` and degrade gracefully.
-4. Exercise it in the API test module (`StrataTests/Scripts/API`) and test it in `StrataTests/src/Scripting/` (and the
-   feature test project).
+4. Exercise it in the API test module (`StrataTests/Scripts/API`), test it in `StrataTests/src/Scripting/`, and call it
+   from the feature scripts (`StrataTests/FeatureTest/Scripts`): the feature test fails while a host function or a
+   public SDK function is never used there.
 5. Appending keeps `ST_SCRIPT_ABI_VERSION`. Any incompatible change (signature, meaning, struct layout of
    `StrataScriptValue`/`StrataScriptTransform`/`StrataScriptString`, removals) bumps it; the engine then refuses older
    modules with a clear error. On a bump, move the SDK's baseline check in `Detail::LoadModule` to the new version's
