@@ -7,6 +7,7 @@
 #include "Strata/Core/Platform.h"
 #include "Strata/Core/Version.h"
 #include "Strata/Network/JsonRpc.h"
+#include "Strata/Network/Socket.h"
 
 #include <spdlog/sinks/stdout_sinks.h>
 
@@ -357,12 +358,14 @@ namespace Strata::CLI
 			}
 			else if (name == "--timeout" || name == "--wait-timeout")
 			{
-				const std::optional<int64_t> milliseconds = ParseInteger(value);
+				std::optional<int64_t> milliseconds = ParseInteger(value);
 				if (!milliseconds || *milliseconds <= 0)
 				{
 					error = fmt::format("{} expects a positive number of milliseconds, got '{}'", name, value);
 					return std::nullopt;
 				}
+				// Longer waits are clamped like every socket timeout, which keeps deadline arithmetic from overflowing.
+				milliseconds = std::min(*milliseconds, static_cast<int64_t>(c_MaxSocketTimeout.count()));
 				if (name == "--timeout")
 					result.TimeoutMilliseconds = milliseconds;
 				else

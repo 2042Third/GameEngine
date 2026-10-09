@@ -401,6 +401,17 @@ TEST_SUITE("CLI.Discovery")
 			CHECK(std::chrono::steady_clock::now() - start < std::chrono::milliseconds(5000));
 			CHECK(error.find("exited") != std::string::npos);
 		}
+
+		SUBCASE("An unbounded wait does not overflow its deadline")
+		{
+			// milliseconds::max() is far beyond what steady_clock can add; the wait must still run until the
+			// editor exits rather than time out at once.
+			std::atomic<int> checks = 0;
+			std::string error;
+			CHECK_FALSE(WaitForEditorSession(782, sessionDirectory, std::chrono::milliseconds::max(), [&checks]() { return ++checks < 3; }, &error).has_value());
+			CHECK(checks == 3);
+			CHECK(error.find("exited") != std::string::npos);
+		}
 	}
 }
 

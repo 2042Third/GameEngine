@@ -6,6 +6,7 @@
 #include "CLI/FakeEditor.h"
 #include "Strata/Core/Version.h"
 #include "Strata/Network/JsonRpc.h"
+#include "Strata/Network/Socket.h"
 #include "TestHelpers.h"
 
 #include <sstream>
@@ -78,6 +79,12 @@ TEST_SUITE("CLI.Commands")
 		CHECK(parsed->TimeoutMilliseconds.value() == 250);
 		CHECK(parsed->Headless);
 		CHECK_FALSE(parsed->Json);
+
+		// Huge timeouts are clamped to the longest wait sockets accept.
+		std::optional<CliArguments> unbounded = ParseCliArguments({ "mcp", "--wait-timeout", "9223372036854775807", "--timeout", "100000000000" }, error);
+		REQUIRE_MESSAGE(unbounded.has_value(), error);
+		CHECK(unbounded->WaitTimeoutMilliseconds.value() == c_MaxSocketTimeout.count());
+		CHECK(unbounded->TimeoutMilliseconds.value() == c_MaxSocketTimeout.count());
 
 		std::optional<CliArguments> separated = ParseCliArguments({ "call", "--", "--weird-method" }, error);
 		REQUIRE(separated.has_value());

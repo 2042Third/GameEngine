@@ -44,7 +44,8 @@ namespace Strata::CLI
 
 	// Waits until the session file of processId exists in sessionDirectory and its endpoint accepts an
 	// authenticated connection. isProcessAlive (optional) ends the wait early when the editor exits.
-	// Returns nullopt on timeout or early exit, with the reason in error (if given).
+	// Returns nullopt on timeout or early exit, with the reason in error (if given). The timeout is clamped to
+	// c_MaxSocketTimeout.
 	std::optional<EditorSessionInfo> WaitForEditorSession(uint32_t processId, const std::filesystem::path& sessionDirectory, std::chrono::milliseconds timeout,
 		const std::function<bool()>& isProcessAlive = {}, std::string* error = nullptr);
 

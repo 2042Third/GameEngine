@@ -111,7 +111,9 @@ namespace Strata::CLI
 		const std::function<bool()>& isProcessAlive, std::string* error)
 	{
 		const std::filesystem::path sessionFile = EditorSession::GetSessionFilePath(sessionDirectory, processId);
-		const auto deadline = std::chrono::steady_clock::now() + timeout;
+		// Clamped so that the deadline cannot overflow (e.g. for milliseconds::max() meaning "wait as long as it takes").
+		const std::chrono::milliseconds limit = ClampSocketTimeout(timeout);
+		const auto deadline = std::chrono::steady_clock::now() + limit;
 		std::string lastProblem = "no session file was written";
 		while (true)
 		{
@@ -139,7 +141,7 @@ namespace Strata::CLI
 			if (std::chrono::steady_clock::now() >= deadline)
 			{
 				if (error)
-					*error = fmt::format("Timed out after {} ms waiting for the editor (process {}): {}", timeout.count(), processId, lastProblem);
+					*error = fmt::format("Timed out after {} ms waiting for the editor (process {}): {}", limit.count(), processId, lastProblem);
 				return std::nullopt;
 			}
 			std::this_thread::sleep_for(c_SessionPollInterval);
