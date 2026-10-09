@@ -262,6 +262,9 @@ namespace Strata
 						return Fail(fmt::format("Glyph {}'s contour end points do not increase", glyph));
 				}
 				const uint32_t pointCount = m_ContourEnds.back() + 1u;
+				m_TotalPoints += pointCount;
+				if (m_TotalPoints > FontLimits::c_MaxOutlinePoints)
+					return Fail(fmt::format("The font has more than {} outline points", FontLimits::c_MaxOutlinePoints));
 				cursor += 2ull * contours;
 				cursor += 2ull + U16(cursor); // Instructions
 				if (cursor > end)
@@ -745,6 +748,7 @@ namespace Strata
 			TableRange m_Gpos;
 			uint32_t m_LocaFormat = 0;
 			uint32_t m_GlyphCount = 0;
+			uint64_t m_TotalPoints = 0; // Of the simple glyphs validated so far
 			std::vector<uint64_t> m_GlyphOffsets; // Relative to glyf; one more than glyphs
 			std::vector<GlyphSummary> m_Glyphs;
 			std::vector<uint16_t> m_ContourEnds; // Scratch

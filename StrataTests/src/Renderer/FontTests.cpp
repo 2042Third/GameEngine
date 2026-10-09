@@ -169,6 +169,12 @@ namespace
 		data[offset + 1] = static_cast<uint8_t>(value);
 	}
 
+	void Write32(std::vector<uint8_t>& data, size_t offset, uint32_t value)
+	{
+		Write16(data, offset, value >> 16);
+		Write16(data, offset + 2, value & 0xFFFF);
+	}
+
 	// A GPOS table whose lookup list points `lookups` times at one pair adjustment lookup, whose subtable list points
 	// `subtables` times at one subtable. Its coverage has `ranges` ranges, one of them `first`, the others glyphs the font
 	// lacks; its one pair set kerns `first` followed by `second` by `advance` font units.
@@ -516,6 +522,34 @@ TEST_SUITE("Renderer.Font")
 			const size_t entry = font.Table("loca") + 2 * static_cast<size_t>(glyph + 1);
 			font.SetU16(entry, static_cast<uint16_t>(font.U16(entry - 2) + 2));
 		}), "shorter than its header");
+	}
+
+	TEST_CASE("Fonts with more outline points than the limit are rejected")
+	{
+		// 300 glyphs of 65535 points, two flag bytes per 256 points (on the curve, repeated, coordinates unchanged):
+		// almost 20 million points in 160 KB.
+		FontPatcher font = DefaultFont();
+		constexpr uint32_t c_LargeGlyphs = 300;
+		std::vector<uint8_t> glyph(14 + 512, 0);
+		Write16(glyph, 0, 1);      // One contour
+		Write16(glyph, 10, 65534); // Ending at point 65534; no instructions
+		for (size_t flag = 0; flag < 256; flag++)
+		{
+			glyph[14 + 2 * flag] = 0x39;
+			glyph[15 + 2 * flag] = 255;
+		}
+		std::vector<uint8_t> glyf;
+		std::vector<uint8_t> loca(4 * (static_cast<size_t>(font.GlyphCount()) + 1), 0);
+		for (uint32_t index = 0; index <= font.GlyphCount(); index++)
+		{
+			Write32(loca, 4 * static_cast<size_t>(index), static_cast<uint32_t>(glyf.size()));
+			if (index < c_LargeGlyphs)
+				glyf.insert(glyf.end(), glyph.begin(), glyph.end());
+		}
+		font.SetU16(font.Table("head") + 50, 1); // Long glyph offsets
+		const std::vector<uint8_t> data = ReplaceTable(FontPatcher(ReplaceTable(font, "glyf", glyf)), "loca", loca);
+		CHECK(data.size() < 1024 * 1024);
+		CheckRejected(data, "outline points");
 	}
 
 	TEST_CASE("Glyphs too large to rasterize are skipped instead of allocated")

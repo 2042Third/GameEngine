@@ -26,6 +26,9 @@ namespace Strata
 		constexpr size_t c_MaxFontSize = 64ull * 1024 * 1024;
 		constexpr uint32_t c_MaxCompositeDepth = 8;          // Nesting of composite glyphs
 		constexpr uint32_t c_MaxCompositeComponents = 256;   // Components of a glyph after expanding nested composites
+		// Points of all simple glyphs: flag repeats let two bytes describe 256 points, so the file size alone does not bound
+		// the time to validate them. Real fonts have far fewer.
+		constexpr uint64_t c_MaxOutlinePoints = 16ull * 1024 * 1024;
 		constexpr double c_MaxTransformedCoordinate = 32000.0; // Composite transforms must stay within int16 coordinates
 		// stb_truetype searches every GPOS lookup, and every subtable of the pair adjustment lookups, for each glyph pair it
 		// kerns: fonts whose search is longer, or whose kerning tables take more steps to validate, get no kerning (real fonts
@@ -37,12 +40,13 @@ namespace Strata
 	// Verifies, before stb_truetype ever reads the font, everything it can dereference: the table directory and the tables
 	// it uses (head, hhea, maxp, hmtx, loca, glyf, cmap, kern, GPOS) with their minimum sizes, numberOfHMetrics against
 	// hmtx, loca entries increasing within glyf, the cmap subtable stb_truetype selects (formats 0, 4, 6, 12 and 13 with
-	// their arrays bounded), and every glyph: contours, flags and coordinates of simple glyphs within their glyf range,
-	// components of composite glyphs (valid indices, positioned by offsets, no cycles, at most c_MaxCompositeDepth deep
-	// and c_MaxCompositeComponents components when expanded, transforms that keep coordinates representable). Kerning
-	// that is not fully bounded (in what it reads, in the lookups searched per glyph pair and in the work to validate it) is
-	// disabled instead of rejecting the font. Rejects CFF-flavoured OpenType fonts ("OTTO"): stb_truetype parses their CFF
-	// data unbounded. Returns false with the reason for malformed or unsupported fonts.
+	// their arrays bounded), and every glyph: contours, flags and coordinates of simple glyphs within their glyf range (at
+	// most c_MaxOutlinePoints points in all), components of composite glyphs (valid indices, positioned by offsets, no
+	// cycles, at most c_MaxCompositeDepth deep and c_MaxCompositeComponents components when expanded, transforms that keep
+	// coordinates representable). Kerning that is not fully bounded (in what it reads, in the lookups searched per glyph
+	// pair and in the work to validate it) is disabled instead of rejecting the font. Rejects CFF-flavoured OpenType fonts
+	// ("OTTO"): stb_truetype parses their CFF data unbounded. Returns false with the reason for malformed or unsupported
+	// fonts.
 	bool ValidateTrueTypeFont(std::span<const uint8_t> data, TrueTypeFontFacts& outFacts, std::string& outError);
 
 }
