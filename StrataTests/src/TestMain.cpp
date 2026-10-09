@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT
 #include <doctest/doctest.h>
 
+#include "Renderer/GPUTestUtils.h"
 #include "Strata/Core/Log.h"
 #include "TestHelpers.h"
 
@@ -59,6 +60,7 @@ int main(int argc, char** argv)
 	doctest::Context context(argc, argv);
 	const int result = context.run();
 
+	Strata::Tests::GPUContext::ShutdownShared();
 	Strata::Log::Shutdown();
 	Strata::Tests::CleanupTemporaryDirectories();
 	return result;

@@ -17,6 +17,10 @@
 namespace Strata
 {
 
+	class GraphicsDevice;
+	struct ReadbackImage;
+	class ImGuiLayer;
+
 	struct ApplicationSpecification
 	{
 		std::string Name = "Strata Application";
@@ -27,7 +31,8 @@ namespace Strata
 		bool Headless = false;     // No window or swapchain; offscreen rendering remains available
 		bool EnableRenderer = true;
 		bool EnableImGui = false;
-		bool EnableAudio = true;
+		bool EnableAudio = true; // Headless applications mix without an output device
+		std::filesystem::path ImGuiLayoutFile; // Where ImGui persists its layout (empty: not persisted)
 		std::optional<bool> GraphicsValidation; // Defaults to enabled in Debug builds
 
 		JobSystemSpecification Jobs;
@@ -55,12 +60,21 @@ namespace Strata
 
 		// Null in headless mode.
 		Window* GetWindow() const { return m_Window.get(); }
+		// Null when the renderer is disabled or no GPU is available.
+		GraphicsDevice* GetGraphicsDevice() const { return m_GraphicsDevice.get(); }
+		ImGuiLayer* GetImGuiLayer() const { return m_ImGuiLayer; }
 		const ApplicationSpecification& GetSpecification() const { return m_Specification; }
+		// Frames that ran (minimized or skipped frames are not counted).
 		uint64_t GetFrameCount() const { return m_FrameCount; }
 		Timestep GetLastTimestep() const { return m_LastTimestep; }
 
 		// Queues a function to run on the main thread at the start of the next frame. Thread-safe.
 		void SubmitToMainThread(std::function<void()> function);
+
+		// Reads back the window's back buffer at the end of the next rendered frame (after the UI is drawn, before
+		// presenting) and passes it to the callback on the main thread. Used for editor screenshots. The image is empty
+		// (Width 0) when there is nothing to capture (no renderer, headless, read failure). Thread-safe.
+		void RequestBackBufferCapture(std::function<void(const ReadbackImage&)> callback);
 
 		static Application& Get() { return *s_Instance; }
 		static bool IsInitialized() { return s_Instance != nullptr; }
@@ -68,13 +82,19 @@ namespace Strata
 		virtual void OnInit() {}
 		virtual void OnShutdown() {}
 	private:
-		void RunFrame(Timestep timestep);
+		bool InitializeGraphics();
+		// Returns false when the frame was skipped (minimized, nothing to render to).
+		bool RunFrame(Timestep timestep);
+		void ProcessBackBufferCaptures(bool frameRendered);
+		void RenderImGui();
 		bool OnWindowClose(WindowCloseEvent& event);
 		bool OnWindowResize(WindowResizeEvent& event);
 		void ExecuteMainThreadQueue();
 	private:
 		ApplicationSpecification m_Specification;
 		Scope<Window> m_Window;
+		Scope<GraphicsDevice> m_GraphicsDevice;
+		ImGuiLayer* m_ImGuiLayer = nullptr;
 		LayerStack m_LayerStack;
 
 		bool m_Running = true;
@@ -85,6 +105,8 @@ namespace Strata
 
 		std::mutex m_MainThreadQueueMutex;
 		std::vector<std::function<void()>> m_MainThreadQueue;
+		std::mutex m_CaptureMutex;
+		std::vector<std::function<void(const ReadbackImage&)>> m_BackBufferCaptures;
 	private:
 		static Application* s_Instance;
 	};

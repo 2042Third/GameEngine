@@ -6,7 +6,9 @@
 #include "Strata/Events/KeyEvent.h"
 #include "Strata/Events/MouseEvent.h"
 #include "Strata/Input/Input.h"
+#include "Platform/Vulkan/VulkanLoader.h"
 
+// The Vulkan header comes first so GLFW declares its Vulkan functions (glfwInitVulkanLoader).
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
@@ -37,6 +39,10 @@ namespace Strata
 		if (s_GLFWWindowCount == 0)
 		{
 			glfwSetErrorCallback(GLFWErrorCallback);
+			// GLFW must use the engine's Vulkan loader: surfaces created through another loader are not valid for
+			// the engine's instance.
+			if (PFN_vkGetInstanceProcAddr getInstanceProcAddr = VulkanLoader::GetInstanceProcAddr())
+				glfwInitVulkanLoader(getInstanceProcAddr);
 			const int success = glfwInit();
 			ST_CORE_VERIFY(success, "Could not initialize GLFW");
 		}
