@@ -23,14 +23,47 @@ namespace Strata
 		return "Unknown";
 	}
 
+	namespace
+	{
+
+		// The asset manager of an editor without a project: only the built-in assets (primitive meshes, default material),
+		// which are memory assets, so nothing is ever read from storage.
+		class BuiltinAssetManager final : public AssetManagerBase
+		{
+		public:
+			~BuiltinAssetManager() override
+			{
+				WaitForInFlightLoads();
+			}
+		protected:
+			bool ReadAssetData(const AssetMetadata& metadata, std::vector<uint8_t>&, std::string* outError) override
+			{
+				if (outError)
+					*outError = fmt::format("'{}' is not available without a project", metadata.Name);
+				return false;
+			}
+		};
+
+	}
+
 	EditorContext::EditorContext(const EditorContextSpecification& specification)
 		: m_Specification(specification), m_EditScene(CreateRef<Scene>())
 	{
+		ActivateBuiltinAssets();
 	}
 
 	EditorContext::~EditorContext()
 	{
-		CloseProject();
+		ReleaseProject(false);
+		if (m_BuiltinAssets && AssetManager::GetActive() == m_BuiltinAssets)
+			AssetManager::SetActive(nullptr);
+	}
+
+	void EditorContext::ActivateBuiltinAssets()
+	{
+		if (!m_BuiltinAssets)
+			m_BuiltinAssets = CreateRef<BuiltinAssetManager>();
+		AssetManager::SetActive(m_BuiltinAssets);
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -81,6 +114,11 @@ namespace Strata
 
 	void EditorContext::CloseProject()
 	{
+		ReleaseProject(true);
+	}
+
+	void EditorContext::ReleaseProject(bool activateBuiltinAssets)
+	{
 		Stop();
 		ResetScene(CreateRef<Scene>(), UUID::Null());
 		if (m_AssetManager)
@@ -95,6 +133,8 @@ namespace Strata
 				Project::SetActive(nullptr);
 			m_Project.reset();
 		}
+		if (activateBuiltinAssets)
+			ActivateBuiltinAssets();
 	}
 
 	////////////////////////////////////////////////////////////////////////////////

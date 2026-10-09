@@ -30,7 +30,8 @@ namespace Strata
 	};
 
 	// The editor's state independent of any UI: the open project and its assets, the edited scene, play mode, the
-	// selection and the undo history. Every editor operation (UI, automation, tests) goes through it. Main thread only.
+	// selection and the undo history. Every editor operation (UI, automation, tests) goes through it. Without a project,
+	// an asset manager with only the built-in assets is active, so built-in meshes and materials render. Main thread only.
 	class EditorContext
 	{
 	public:
@@ -120,6 +121,9 @@ namespace Strata
 	private:
 		bool StartRuntime(SceneRuntimeMode mode, std::string* outError);
 		void ResetScene(Ref<Scene> scene, AssetHandle handle);
+		// Closes the project; with activateBuiltinAssets the built-in asset manager becomes active.
+		void ReleaseProject(bool activateBuiltinAssets);
+		void ActivateBuiltinAssets();
 	private:
 		EditorContextSpecification m_Specification;
 		Ref<Project> m_Project;
@@ -132,6 +136,7 @@ namespace Strata
 
 		std::vector<UUID> m_Selection;
 		UndoStack m_UndoStack;
+		Ref<AssetManagerBase> m_BuiltinAssets; // Active while no project is open
 	};
 
 }
