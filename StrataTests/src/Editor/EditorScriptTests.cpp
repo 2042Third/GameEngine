@@ -58,6 +58,15 @@ namespace
 			return result.Error;
 		}
 
+		// The kind of a failure: a mistake in the request, or a state that does not allow the command.
+		EditorCommandError ErrorKind(std::string_view name, const nlohmann::json& parameters = nlohmann::json::object())
+		{
+			EditorCommandResult result = Commands.Execute(Context, name, parameters);
+			REQUIRE_FALSE(result.IsPending());
+			CHECK_FALSE(result.Success);
+			return result.ErrorKind;
+		}
+
 		std::string CreateEntity(const std::string& name)
 		{
 			return Run("entity.create", { { "name", name } })["id"].get<std::string>();
@@ -518,5 +527,25 @@ TEST_SUITE("Editor.Scripts")
 			CHECK(command->Parameters["type"] == "object");
 		}
 		CHECK(harness.Error("script.setField", { { "entity", "1" }, { "class", "A" }, { "field", "B" } }).find("value") != std::string::npos);
+
+		// Mistakes in a request are InvalidParameters; requests the editor's state does not allow are Failed.
+		const std::string entity = harness.CreateEntity("Holder");
+		CHECK(harness.ErrorKind("script.add", { { "entity", entity }, { "class", "Idle" } }) == EditorCommandError::Failed); // No module yet
+		CHECK(harness.ErrorKind("script.load", { { "path", "Missing.dll" } }) == EditorCommandError::InvalidParameters);
+		harness.LoadModule(STRATA_TEST_SCRIPTS_API);
+		CHECK(harness.ErrorKind("script.add", { { "entity", entity }, { "class", "NoSuchClass" } }) == EditorCommandError::InvalidParameters);
+		CHECK(harness.ErrorKind("script.add", { { "entity", entity }, { "class", "FieldTypes" }, { "fields", { { "Missing", 1 } } } })
+			== EditorCommandError::InvalidParameters);
+		CHECK(harness.ErrorKind("script.add", { { "entity", entity }, { "class", "FieldTypes" }, { "fields", { { "IntField", "seven" } } } })
+			== EditorCommandError::InvalidParameters);
+		CHECK(harness.ErrorKind("script.remove", { { "entity", entity }, { "class", "FieldTypes" } }) == EditorCommandError::InvalidParameters);
+		harness.Run("script.add", { { "entity", entity }, { "class", "FieldTypes" } });
+		CHECK(harness.ErrorKind("script.add", { { "entity", entity }, { "class", "FieldTypes" } }) == EditorCommandError::Failed); // Attached already
+		CHECK(harness.ErrorKind("script.setField", { { "entity", entity }, { "class", "FieldTypes" }, { "field", "Nope" }, { "value", 1 } })
+			== EditorCommandError::InvalidParameters);
+		CHECK(harness.ErrorKind("script.setField", { { "entity", entity }, { "class", "FieldTypes" }, { "field", "IntField" }, { "value", "seven" } })
+			== EditorCommandError::InvalidParameters);
+		CHECK(harness.ErrorKind("script.setField", { { "entity", entity }, { "class", "Idle" }, { "field", "Nope" }, { "value", 1 } })
+			== EditorCommandError::InvalidParameters);
 	}
 }

@@ -107,13 +107,15 @@ namespace Strata
 			return status;
 		}
 
-		// The class of the loaded module, or an error telling the agent what to do.
-		const ScriptClassInfo* RequireClass(EditorContext& context, const std::string& className, std::string& outError)
+		// The class of the loaded module, or the failure telling the agent what to do: without a module the editor's state
+		// is the problem (Failed), an unknown class is a mistake in the request (InvalidParameters).
+		const ScriptClassInfo* RequireClass(EditorContext& context, const std::string& className, EditorCommandResult& outFailure)
 		{
 			const Ref<ScriptEngine>& engine = context.GetScriptEngine();
 			if (!engine || !engine->IsModuleLoaded())
 			{
-				outError = "No script module is loaded, so script classes and fields cannot be checked: build the project's scripts first (script.build)";
+				outFailure = EditorCommandResult::Fail(
+					"No script module is loaded, so script classes and fields cannot be checked: build the project's scripts first (script.build)");
 				return nullptr;
 			}
 			if (const ScriptClassInfo* info = engine->FindClass(className))
@@ -121,7 +123,8 @@ namespace Strata
 			std::string classes;
 			for (const ScriptClassInfo& info : engine->GetClasses())
 				classes += (classes.empty() ? "" : ", ") + info.Name;
-			outError = fmt::format("The script module has no class '{}' (classes: {})", className, classes.empty() ? std::string("none") : classes);
+			outFailure = EditorCommandResult::InvalidParameters(
+				fmt::format("The script module has no class '{}' (classes: {})", className, classes.empty() ? std::string("none") : classes));
 			return nullptr;
 		}
 
@@ -223,6 +226,8 @@ namespace Strata
 				std::filesystem::path path = FileSystem::FromUTF8(pathText);
 				if (path.is_relative())
 					path = context.GetProject()->GetProjectDirectory() / path;
+				if (!FileSystem::IsRegularFile(path))
+					return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'path': no file '{}'", FileSystem::ToUTF8(path)));
 				std::string error;
 				if (!context.LoadScriptModule(path, &error))
 					return EditorCommandResult::Fail(error);
@@ -271,10 +276,11 @@ namespace Strata
 				if (!arguments.IsValid())
 					return arguments.Fail();
 
-				std::string error;
-				const ScriptClassInfo* info = RequireClass(context, className, error);
+				EditorCommandResult failure;
+				const ScriptClassInfo* info = RequireClass(context, className, failure);
 				if (!info)
-					return EditorCommandResult::Fail(error);
+					return failure;
+				std::string error;
 				std::vector<ScriptFieldValue> fields;
 				if (fieldsJson)
 				{
@@ -282,10 +288,10 @@ namespace Strata
 					{
 						const ScriptFieldInfo* field = info->FindField(name);
 						if (!field)
-							return EditorCommandResult::Fail(fmt::format("{} has no field '{}' (see script.status)", info->Name, name));
+							return EditorCommandResult::InvalidParameters(fmt::format("{} has no field '{}' (see script.status)", info->Name, name));
 						std::optional<PropertyValue> value = ScriptEdit::FieldValueFromJson(valueJson, *field, scene, &error);
 						if (!value)
-							return EditorCommandResult::Fail(error);
+							return EditorCommandResult::InvalidParameters(error);
 						fields.push_back(ScriptFieldValue { field->Name, field->Type, std::move(*value) });
 					}
 				}
@@ -306,9 +312,10 @@ namespace Strata
 				const std::string className = arguments.GetString("class");
 				if (!arguments.IsValid())
 					return arguments.Fail();
+				// The entity has no such script: a mistake in the request.
 				std::string error;
 				if (!ScriptEdit::RemoveScript(context, entity, className, &error))
-					return EditorCommandResult::Fail(error);
+					return EditorCommandResult::InvalidParameters(error);
 				return FinishScriptEdit(context, { { "entity", UUIDToJson(entity.GetUUID()) }, { "class", className } });
 			} });
 
@@ -337,28 +344,30 @@ namespace Strata
 				if (!arguments.IsValid())
 					return arguments.Fail();
 
-				std::string error;
-				const ScriptClassInfo* info = RequireClass(context, className, error);
+				EditorCommandResult failure;
+				const ScriptClassInfo* info = RequireClass(context, className, failure);
 				if (!info)
-					return EditorCommandResult::Fail(error);
+					return failure;
 				const ScriptFieldInfo* field = info->FindField(fieldName);
 				if (!field)
-					return EditorCommandResult::Fail(fmt::format("{} has no field '{}' (see script.status)", info->Name, fieldName));
+					return EditorCommandResult::InvalidParameters(fmt::format("{} has no field '{}' (see script.status)", info->Name, fieldName));
 
+				std::string error;
 				const nlohmann::json& valueJson = *valueIt;
 				std::optional<PropertyValue> value;
 				if (!valueJson.is_null())
 				{
 					value = ScriptEdit::FieldValueFromJson(valueJson, *field, scene, &error);
 					if (!value)
-						return EditorCommandResult::Fail(error);
+						return EditorCommandResult::InvalidParameters(error);
 				}
 				// SetField merges consecutive edits of a field (for inspector drags); every command is an undo step of its own.
 				context.GetUndoStack().BreakMerge();
 				const bool set = ScriptEdit::SetField(context, entity, info->Name, *field, value, &error);
 				context.GetUndoStack().BreakMerge();
+				// The entity has no such script: a mistake in the request.
 				if (!set)
-					return EditorCommandResult::Fail(error);
+					return EditorCommandResult::InvalidParameters(error);
 				return FinishScriptEdit(context, { { "entity", UUIDToJson(entity.GetUUID()) }, { "script", DescribeEntry(*entity.GetComponent<ScriptComponent>().FindScript(info->Name)) } });
 			} });
 	}
