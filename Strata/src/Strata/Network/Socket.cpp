@@ -1,9 +1,7 @@
 #include "stpch.h"
 #include "Strata/Network/Socket.h"
 
-#include <random>
-
-// Platform-independent parts of the socket layer. The system calls live in
+// Platform-independent parts of the socket layer. The system calls (and SocketNotifier::Open) live in
 // Platform/Windows/WindowsSocket.cpp and Platform/Posix/PosixSocket.cpp.
 
 namespace Strata
@@ -14,8 +12,6 @@ namespace Strata
 
 		// Longest single wait while sending without a deadline, so a stalled peer is re-checked periodically.
 		constexpr std::chrono::milliseconds c_UnboundedSendWaitSlice = std::chrono::milliseconds(1000);
-		constexpr std::chrono::milliseconds c_NotifierSetupTimeout = std::chrono::milliseconds(2000);
-		constexpr size_t c_NotifierCookieSize = 16;
 
 	}
 
@@ -48,6 +44,7 @@ namespace Strata
 		if (!IsValid())
 			return false;
 
+		const std::optional<std::chrono::milliseconds> limit = timeout ? std::optional(ClampSocketTimeout(*timeout)) : std::nullopt;
 		const auto start = std::chrono::steady_clock::now();
 		size_t offset = 0;
 		while (offset < data.size())
@@ -64,12 +61,12 @@ namespace Strata
 
 			// The send buffer is full: wait until the peer drains it.
 			std::chrono::milliseconds wait = c_UnboundedSendWaitSlice;
-			if (timeout)
+			if (limit)
 			{
 				const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
-				if (elapsed >= *timeout)
+				if (elapsed >= *limit)
 					return false;
-				wait = std::min(wait, *timeout - elapsed);
+				wait = std::min(wait, *limit - elapsed);
 			}
 
 			SocketPollEntry entry;
@@ -116,68 +113,6 @@ namespace Strata
 	// SocketNotifier
 	////////////////////////////////////////////////////////////////////////////////
 
-	bool SocketNotifier::Open()
-	{
-		Close();
-
-		TcpListener listener;
-		if (!listener.Listen("127.0.0.1", 0))
-		{
-			ST_CORE_WARN("SocketNotifier: failed to listen on loopback: {}", listener.GetLastError());
-			return false;
-		}
-
-		std::string error;
-		std::optional<TcpSocket> sender = TcpSocket::Connect("127.0.0.1", listener.GetPort(), c_NotifierSetupTimeout, &error);
-		if (!sender)
-		{
-			ST_CORE_WARN("SocketNotifier: failed to connect the loopback pair: {}", error);
-			return false;
-		}
-		sender->SetNoDelay(true);
-
-		// Another local process could connect to the temporary listener first. The sender proves its identity
-		// with a random cookie, and connections that do not present it are discarded.
-		std::array<uint8_t, c_NotifierCookieSize> cookie = {};
-		std::random_device randomDevice;
-		for (uint8_t& byte : cookie)
-			byte = static_cast<uint8_t>(randomDevice() & 0xFF);
-		if (!sender->SendAll(std::span<const uint8_t>(cookie), c_NotifierSetupTimeout))
-		{
-			ST_CORE_WARN("SocketNotifier: failed to send the pairing cookie");
-			return false;
-		}
-
-		const auto deadline = std::chrono::steady_clock::now() + c_NotifierSetupTimeout;
-		while (std::chrono::steady_clock::now() < deadline)
-		{
-			auto remaining = [&]()
-			{
-				return std::max(std::chrono::milliseconds(0), std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()));
-			};
-
-			std::optional<TcpSocket> candidate = listener.Accept(remaining());
-			if (!candidate)
-				continue;
-
-			std::vector<uint8_t> received;
-			SocketReceiveStatus status = SocketReceiveStatus::Data;
-			while (received.size() < cookie.size() && status == SocketReceiveStatus::Data)
-				status = candidate->Receive(received, remaining());
-
-			if (received.size() == cookie.size() && std::equal(received.begin(), received.end(), cookie.begin()))
-			{
-				std::scoped_lock<std::mutex> lock(m_SenderMutex);
-				m_Sender = std::move(*sender);
-				m_Receiver = std::move(*candidate);
-				return true;
-			}
-		}
-
-		ST_CORE_WARN("SocketNotifier: the loopback pair could not be verified");
-		return false;
-	}
-
 	void SocketNotifier::Close()
 	{
 		std::scoped_lock<std::mutex> lock(m_SenderMutex);
@@ -211,7 +146,7 @@ namespace Strata
 			if (status != SocketReceiveStatus::Timeout)
 			{
 				// The pair broke. Close it, since a closed receiver would otherwise poll as readable forever.
-				ST_CORE_WARN("SocketNotifier: the loopback pair was closed unexpectedly");
+				ST_CORE_WARN("SocketNotifier: the socket pair was closed unexpectedly");
 				Close();
 			}
 			return;

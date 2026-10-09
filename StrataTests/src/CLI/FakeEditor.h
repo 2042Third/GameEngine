@@ -100,13 +100,4 @@ namespace Strata::Tests
 		return WaitUntil([&]() { return FileSystem::WriteText(path, text); }, std::chrono::milliseconds(2000));
 	}
 
-	// A loopback port with nothing listening on it (as left behind by an editor that crashed).
-	inline uint16_t GetClosedPort()
-	{
-		TcpListener listener;
-		if (!listener.Listen())
-			return 0;
-		return listener.GetPort(); // Closed when the listener goes out of scope
-	}
-
 }

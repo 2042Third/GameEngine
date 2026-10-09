@@ -4,7 +4,6 @@
 #include <arpa/inet.h>
 #include <cerrno>
 #include <climits>
-#include <cstring>
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -12,6 +11,7 @@
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <system_error>
 #include <unistd.h>
 
 namespace Strata
@@ -49,9 +49,10 @@ namespace Strata
 #endif
 		}
 
+		// Thread-safe, unlike std::strerror.
 		std::string GetErrorMessage(int errorCode)
 		{
-			return std::strerror(errorCode);
+			return std::generic_category().message(errorCode);
 		}
 
 		int ToPollTimeout(std::chrono::milliseconds timeout)
@@ -107,6 +108,19 @@ namespace Strata
 			return descriptor;
 		}
 
+		std::optional<uint16_t> GetBoundPort(int descriptor)
+		{
+			sockaddr_storage address = {};
+			socklen_t length = sizeof(address);
+			if (getsockname(descriptor, reinterpret_cast<sockaddr*>(&address), &length) != 0)
+				return std::nullopt;
+			if (address.ss_family == AF_INET6)
+				return ntohs(reinterpret_cast<const sockaddr_in6*>(&address)->sin6_port);
+			if (address.ss_family == AF_INET)
+				return ntohs(reinterpret_cast<const sockaddr_in*>(&address)->sin_port);
+			return std::nullopt;
+		}
+
 		// Waits for a non-blocking connect to finish and reports its outcome.
 		bool WaitForConnect(int descriptor, std::chrono::steady_clock::time_point deadline, std::string& error)
 		{
@@ -151,7 +165,7 @@ namespace Strata
 
 	std::optional<TcpSocket> TcpSocket::Connect(std::string_view host, uint16_t port, std::chrono::milliseconds timeout, std::string* error)
 	{
-		const auto deadline = std::chrono::steady_clock::now() + std::max(timeout, std::chrono::milliseconds(0));
+		const auto deadline = std::chrono::steady_clock::now() + ClampSocketTimeout(timeout);
 		std::string lastError;
 
 		addrinfo hints = {};
@@ -235,7 +249,7 @@ namespace Strata
 		if (!IsValid())
 			return SocketReceiveStatus::Error;
 
-		const auto deadline = std::chrono::steady_clock::now() + std::max(timeout, std::chrono::milliseconds(0));
+		const auto deadline = std::chrono::steady_clock::now() + ClampSocketTimeout(timeout);
 		while (true)
 		{
 			SocketPollEntry entry;
@@ -292,6 +306,13 @@ namespace Strata
 		return setsockopt(ToNative(m_Handle), IPPROTO_TCP, TCP_NODELAY, &value, sizeof(value)) == 0;
 	}
 
+	uint16_t TcpSocket::GetLocalPort() const
+	{
+		if (!IsValid())
+			return 0;
+		return GetBoundPort(ToNative(m_Handle)).value_or(uint16_t(0));
+	}
+
 	////////////////////////////////////////////////////////////////////////////////
 	// TcpListener
 	////////////////////////////////////////////////////////////////////////////////
@@ -340,19 +361,15 @@ namespace Strata
 				continue;
 			}
 
-			sockaddr_storage boundAddress = {};
-			socklen_t boundLength = sizeof(boundAddress);
-			if (getsockname(descriptor, reinterpret_cast<sockaddr*>(&boundAddress), &boundLength) != 0)
+			const std::optional<uint16_t> boundPort = GetBoundPort(descriptor);
+			if (!boundPort)
 			{
 				m_LastError = "getsockname() failed: " + GetErrorMessage(errno);
 				close(descriptor);
 				continue;
 			}
 
-			if (boundAddress.ss_family == AF_INET6)
-				m_Port = ntohs(reinterpret_cast<const sockaddr_in6*>(&boundAddress)->sin6_port);
-			else
-				m_Port = ntohs(reinterpret_cast<const sockaddr_in*>(&boundAddress)->sin_port);
+			m_Port = *boundPort;
 			m_Handle = FromNative(descriptor);
 		}
 
@@ -374,7 +391,7 @@ namespace Strata
 		if (!IsListening())
 			return std::nullopt;
 
-		const auto deadline = std::chrono::steady_clock::now() + std::max(timeout, std::chrono::milliseconds(0));
+		const auto deadline = std::chrono::steady_clock::now() + ClampSocketTimeout(timeout);
 		while (true)
 		{
 			SocketPollEntry entry;
@@ -444,7 +461,7 @@ namespace Strata
 			entryIndices.push_back(index);
 		}
 
-		const auto deadline = std::chrono::steady_clock::now() + std::max(timeout, std::chrono::milliseconds(0));
+		const auto deadline = std::chrono::steady_clock::now() + ClampSocketTimeout(timeout);
 		int ready = 0;
 		while (true)
 		{
@@ -464,6 +481,55 @@ namespace Strata
 			entry.Readable = entry.WantRead && ((events & POLLIN) != 0 || failed);
 			entry.Writable = entry.WantWrite && ((events & POLLOUT) != 0 || failed);
 		}
+		return true;
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
+	// Addresses and SocketNotifier
+	////////////////////////////////////////////////////////////////////////////////
+
+	bool IsLoopbackAddress(std::string_view address)
+	{
+		if (address.empty() || address.find('\0') != std::string_view::npos)
+			return false;
+
+		const std::string text(address);
+		in_addr ipv4 = {};
+		if (inet_pton(AF_INET, text.c_str(), &ipv4) == 1)
+			return (ntohl(ipv4.s_addr) >> 24) == 127;
+		in6_addr ipv6 = {};
+		if (inet_pton(AF_INET6, text.c_str(), &ipv6) == 1)
+			return IN6_IS_ADDR_LOOPBACK(&ipv6) != 0;
+		return false;
+	}
+
+	bool SocketNotifier::Open()
+	{
+		Close();
+
+		// A private, unnamed socket pair: no other process can connect to it.
+		int descriptors[2] = { -1, -1 };
+#if defined(SOCK_CLOEXEC)
+		const int type = SOCK_STREAM | SOCK_CLOEXEC;
+#else
+		const int type = SOCK_STREAM;
+#endif
+		if (socketpair(AF_UNIX, type, 0, descriptors) != 0)
+		{
+			ST_CORE_WARN("SocketNotifier: socketpair() failed: {}", GetErrorMessage(errno));
+			return false;
+		}
+		if (!ConfigureSocket(descriptors[0]) || !ConfigureSocket(descriptors[1]))
+		{
+			ST_CORE_WARN("SocketNotifier: failed to configure the socket pair: {}", GetErrorMessage(errno));
+			close(descriptors[0]);
+			close(descriptors[1]);
+			return false;
+		}
+
+		std::scoped_lock<std::mutex> lock(m_SenderMutex);
+		m_Sender = TcpSocket(FromNative(descriptors[0]));
+		m_Receiver = TcpSocket(FromNative(descriptors[1]));
 		return true;
 	}
 

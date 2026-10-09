@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -85,14 +86,19 @@ namespace Strata
 
 	struct RpcServerSpecification
 	{
-		std::string BindAddress = "127.0.0.1"; // Loopback only by default; automation must not be reachable remotely
+		std::string BindAddress = "127.0.0.1"; // Must be a numeric loopback address (127.0.0.0/8 or ::1)
 		uint16_t Port = 0;                     // 0 picks a free ephemeral port (see RpcServer::GetPort)
-		std::string AuthToken;                 // Non-empty: clients must call rpc.authenticate first
-		uint32_t MaxClients = 8;
-		size_t MaxMessageSize = c_DefaultMaxRpcMessageSize;
+		std::string AuthToken;                 // Required; see EditorSession::GenerateSessionToken
+		uint32_t MaxClients = 8;               // Authenticated connections
+		uint32_t MaxPendingConnections = 8;    // Connections that have not authenticated yet
+		std::chrono::milliseconds AuthenticationTimeout = std::chrono::milliseconds(5000); // From accept to rpc.authenticate
+		size_t MaxMessageSize = c_DefaultMaxRpcMessageSize;  // Per message, in both directions
+		uint32_t MaxQueuedRequests = 1024;                   // Waiting for ProcessRequests, across all clients
+		uint32_t MaxRequestsInFlightPerClient = 64;          // Further requests of that client wait (backpressure)
+		bool UseWakeupNotifier = true; // Diagnostics: false makes the network thread poll at a short interval instead
 	};
 
-	// JSON-RPC 2.0 server over TCP (newline-delimited messages, see JsonRpc.h).
+	// JSON-RPC 2.0 server over TCP (newline-delimited messages, see JsonRpc.h) for editor automation.
 	//
 	// Threading: a background thread owns all network I/O (accepting, reading, writing) and answers the built-in
 	// methods itself. Requests for registered methods are queued and their handlers run on the thread that calls
@@ -100,12 +106,19 @@ namespace Strata
 	// may be produced from any thread. Start, Stop and ProcessRequests belong to the owning thread;
 	// RegisterMethod, UnregisterMethod, GetMethods and the getters are thread-safe.
 	//
-	// Built-in methods (always available, answered without waiting for ProcessRequests):
+	// Security model: every local process (and any web page in a local browser) may reach the port, so only
+	// holders of the session token are trusted. The server binds loopback addresses only and requires a token.
+	// A new connection must send rpc.authenticate with the token as its first message, within
+	// AuthenticationTimeout; any other first message, a wrong token, or malformed input closes the connection.
+	// Until then it is limited to tiny messages and output, and only MaxPendingConnections such connections are
+	// kept. Authenticated connections count toward MaxClients (rejected with ServerBusy beyond it). A client that
+	// does not read its responses stops being read from (backpressure), and is dropped once its pending output
+	// exceeds MaxMessageSize plus a small margin; responses larger than MaxMessageSize are replaced by an error.
+	//
+	// Built-in methods (answered without waiting for ProcessRequests):
 	//   rpc.authenticate {"token": "..."} -> {"authenticated": true}
 	//   rpc.ping                          -> {"pong": true}
 	//   rpc.listMethods                   -> {"methods": [{"name", "description", "paramsSchema"}, ...]}
-	// When an auth token is configured, every request other than rpc.authenticate fails with Unauthorized until
-	// the connection has authenticated.
 	class RpcServer
 	{
 	public:
@@ -115,7 +128,8 @@ namespace Strata
 		RpcServer(const RpcServer&) = delete;
 		RpcServer& operator=(const RpcServer&) = delete;
 
-		// Starts listening (stopping a previous session first). Returns false if the address/port is unavailable.
+		// Starts listening (stopping a previous session first). Returns false for a non-loopback bind address, an
+		// empty token, or an unavailable address/port.
 		bool Start(const RpcServerSpecification& specification);
 		// Closes every connection and joins the network thread. Queued requests are discarded; pending responders
 		// become inert.
@@ -128,6 +142,8 @@ namespace Strata
 		// duplicate name. A missing or non-object ParamsSchema is replaced by an empty object schema.
 		bool RegisterMethod(RpcMethodInfo info, RpcHandler handler);
 		bool RegisterMethod(RpcMethodInfo info, RpcSyncHandler handler);
+		// Removes a method. If its handler is running on the owning thread, waits for it to return, so the caller
+		// may destroy whatever the handler captured afterwards (calling it from inside a handler does not wait).
 		void UnregisterMethod(const std::string& name);
 		// Every callable method, built-ins first, then registered methods sorted by name.
 		std::vector<RpcMethodInfo> GetMethods() const;

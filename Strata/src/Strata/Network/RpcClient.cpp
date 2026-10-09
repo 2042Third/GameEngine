@@ -72,11 +72,12 @@ namespace Strata
 		return CallLocked(method, params, timeout);
 	}
 
-	RpcResult RpcClient::CallLocked(const std::string& method, const nlohmann::json& params, std::chrono::milliseconds timeout)
+	RpcResult RpcClient::CallLocked(const std::string& method, const nlohmann::json& params, std::chrono::milliseconds requestedTimeout)
 	{
 		if (!m_Socket.IsValid())
 			return FailLocked(JsonRpc::ErrorCode::ConnectionClosed, "Not connected", false);
 
+		const std::chrono::milliseconds timeout = ClampSocketTimeout(requestedTimeout);
 		const int64_t id = m_NextId++;
 		std::string request = JsonRpc::Serialize(JsonRpc::MakeRequest(id, method, params));
 		request += '\n';

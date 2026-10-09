@@ -2,6 +2,7 @@
 
 #include "Strata/Core/Base.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <mutex>
@@ -19,6 +20,19 @@ namespace Strata
 	using SocketHandle = intptr_t;
 	constexpr SocketHandle c_InvalidSocketHandle = -1;
 
+	// Longest wait any socket operation accepts. Longer (or negative) timeouts are clamped, which also keeps
+	// deadline arithmetic (now + timeout) from overflowing.
+	constexpr std::chrono::milliseconds c_MaxSocketTimeout = std::chrono::hours(24);
+
+	inline std::chrono::milliseconds ClampSocketTimeout(std::chrono::milliseconds timeout)
+	{
+		return std::clamp(timeout, std::chrono::milliseconds(0), c_MaxSocketTimeout);
+	}
+
+	// Whether address is a numeric loopback address: IPv4 127.0.0.0/8 (dotted decimal) or IPv6 ::1. Host names
+	// (including "localhost") are not accepted, since they may resolve elsewhere.
+	bool IsLoopbackAddress(std::string_view address);
+
 	enum class SocketReceiveStatus : uint8_t
 	{
 		Data,    // At least one byte was appended
@@ -30,8 +44,9 @@ namespace Strata
 	// Connected TCP stream socket (move-only; the destructor closes it).
 	//
 	// Sockets are kept in non-blocking mode internally; every blocking operation is implemented by waiting
-	// for readiness with a timeout, so no call can hang forever unless explicitly asked to. Writing to a
-	// connection the peer has closed never raises SIGPIPE. A socket may be used by one thread at a time.
+	// for readiness with a timeout (clamped to c_MaxSocketTimeout), so no call can hang forever unless explicitly
+	// asked to. Writing to a connection the peer has closed never raises SIGPIPE. A socket may be used by one
+	// thread at a time.
 	class TcpSocket
 	{
 	public:
@@ -66,6 +81,8 @@ namespace Strata
 		// Disables (true) or enables (false) Nagle's algorithm. Request/response protocols want it disabled.
 		bool SetNoDelay(bool enabled);
 
+		// The local port this socket is bound to (0 if unknown).
+		uint16_t GetLocalPort() const;
 		SocketHandle GetHandle() const { return m_Handle; }
 	private:
 		explicit TcpSocket(SocketHandle handle)
@@ -76,6 +93,7 @@ namespace Strata
 		SocketHandle m_Handle = c_InvalidSocketHandle;
 
 		friend class TcpListener;
+		friend class SocketNotifier;
 	};
 
 	// Listening TCP socket (move-only; the destructor closes it).
@@ -130,9 +148,10 @@ namespace Strata
 	};
 
 	// Wakes a thread blocked in SocketPoller::Poll from any other thread: include GetHandle() in the poll set
-	// (WantRead), call Drain() once it becomes readable, and Notify() from other threads. Built on a connected
-	// loopback TCP pair because Windows can only poll sockets (no pipes or events). If the pair breaks, Drain
-	// closes it and IsValid() turns false; callers then fall back to polling with a short timeout.
+	// (WantRead), call Drain() once it becomes readable, and Notify() from other threads. Built on a socket pair:
+	// socketpair() on POSIX, a verified loopback TCP connection on Windows (which can only poll sockets, not pipes
+	// or events). If the pair breaks, Drain closes it and IsValid() turns false; callers then fall back to polling
+	// with a short timeout. Open, Close, Drain and GetHandle belong to the polling thread.
 	class SocketNotifier
 	{
 	public:

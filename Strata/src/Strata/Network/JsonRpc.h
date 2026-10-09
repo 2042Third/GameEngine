@@ -37,6 +37,8 @@ namespace Strata
 		const std::string& GetError() const { return m_Error; }
 		size_t GetBufferedSize() const { return m_Buffer.size() - m_ReadOffset; }
 		size_t GetMaxMessageSize() const { return m_MaxMessageSize; }
+		// Changes the limit for lines not extracted yet, e.g. raising it once a connection has authenticated.
+		void SetMaxMessageSize(size_t maxMessageSize);
 		void Reset();
 	private:
 		void Compact();
@@ -72,6 +74,9 @@ namespace Strata
 		};
 
 		constexpr const char* c_Version = "2.0";
+		// Deepest nesting of arrays and objects Parse accepts. The parser itself is iterative, but copying, comparing
+		// and serializing values recurse, so untrusted documents must not be able to exhaust the stack.
+		constexpr size_t c_MaxJsonDepth = 256;
 
 		// Message builders. A null params value omits "params" (allowed by JSON-RPC 2.0).
 		nlohmann::json MakeRequest(const nlohmann::json& id, std::string_view method, nlohmann::json params = nlohmann::json::object());
@@ -81,7 +86,7 @@ namespace Strata
 
 		// Compact single-line serialization. Invalid UTF-8 in strings is replaced (U+FFFD) instead of failing.
 		std::string Serialize(const nlohmann::json& message);
-		// Returns nullopt if text is not valid JSON.
+		// Returns nullopt if text is not valid JSON or nests arrays/objects deeper than c_MaxJsonDepth.
 		std::optional<nlohmann::json> Parse(std::string_view text);
 
 		// Request ids must be strings, numbers or null.

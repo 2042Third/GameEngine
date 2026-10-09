@@ -95,7 +95,8 @@ TEST_SUITE("CLI.Discovery")
 		REQUIRE(Tests::StartFakeEditor(editor));
 
 		// A newer session left behind by an editor that is gone, and an older one that is alive.
-		REQUIRE(Tests::WriteFakeSessionFile(sessionDirectory, Tests::MakeFakeSession(201, Tests::GetClosedPort(), "2026-05-01T00:00:00Z")));
+		Tests::RefusingPort deadEditorPort;
+		REQUIRE(Tests::WriteFakeSessionFile(sessionDirectory, Tests::MakeFakeSession(201, deadEditorPort.GetPort(), "2026-05-01T00:00:00Z")));
 		REQUIRE(Tests::WriteFakeSessionFile(sessionDirectory, Tests::MakeFakeSession(202, editor.GetPort(), "2026-01-01T00:00:00Z")));
 
 		EditorConnection connection(MakeOptions(sessionDirectory));
@@ -185,10 +186,11 @@ TEST_SUITE("CLI.Discovery")
 		SUBCASE("The session is found once it is written and accepts connections")
 		{
 			// The editor writes its session file a little after starting, first with a port that is not up yet.
+			Tests::RefusingPort notListeningYet;
 			std::thread writer([&]()
 			{
 				std::this_thread::sleep_for(std::chrono::milliseconds(50));
-				Tests::WriteFakeSessionFile(sessionDirectory, Tests::MakeFakeSession(777, Tests::GetClosedPort(), "2026-01-01T00:00:00Z"));
+				Tests::WriteFakeSessionFile(sessionDirectory, Tests::MakeFakeSession(777, notListeningYet.GetPort(), "2026-01-01T00:00:00Z"));
 				std::this_thread::sleep_for(std::chrono::milliseconds(100));
 				Tests::WriteFakeSessionFile(sessionDirectory, Tests::MakeFakeSession(777, editor.GetPort(), "2026-01-01T00:00:00Z"));
 			});

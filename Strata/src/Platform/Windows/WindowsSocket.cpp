@@ -1,6 +1,8 @@
 #include "stpch.h"
 #include "Strata/Network/Socket.h"
 
+#include "Strata/Core/Platform.h"
+
 #include "Platform/Windows/WindowsUtils.h"
 
 // WIN32_LEAN_AND_MEAN keeps <Windows.h> from pulling in the legacy <winsock.h>, so Winsock 2 can follow it.
@@ -8,6 +10,7 @@
 #include <ws2tcpip.h>
 #include <mstcpip.h>
 
+#include <array>
 #include <climits>
 
 namespace Strata
@@ -17,6 +20,10 @@ namespace Strata
 	{
 
 		constexpr size_t c_ReceiveChunkSize = 64 * 1024;
+		constexpr std::chrono::milliseconds c_NotifierSetupTimeout = std::chrono::milliseconds(2000);
+		// How long an accepted connection gets to present the notifier cookie before it is discarded.
+		constexpr std::chrono::milliseconds c_NotifierCandidateTimeout = std::chrono::milliseconds(250);
+		constexpr size_t c_NotifierCookieSize = 16;
 
 		// Winsock must be started before any socket call. It is started on first use (WSAStartup is itself
 		// reference counted, so this cooperates with other Winsock users in the process) and intentionally never
@@ -119,6 +126,17 @@ namespace Strata
 			WSAIoctl(socket, SIO_TCP_INITIAL_RTO, &parameters, sizeof(parameters), nullptr, 0, &bytesReturned, nullptr, nullptr);
 		}
 
+		std::optional<uint16_t> GetBoundPort(SOCKET socket)
+		{
+			sockaddr_storage address = {};
+			int length = sizeof(address);
+			if (getsockname(socket, reinterpret_cast<sockaddr*>(&address), &length) != 0)
+				return std::nullopt;
+			if (address.ss_family == AF_INET6)
+				return ntohs(reinterpret_cast<const sockaddr_in6*>(&address)->sin6_port);
+			return ntohs(reinterpret_cast<const sockaddr_in*>(&address)->sin_port);
+		}
+
 		// Waits for a non-blocking connect to finish. select() is used instead of WSAPoll because WSAPoll does
 		// not report failed connection attempts on older Windows 10 builds.
 		bool WaitForConnect(SOCKET socket, std::chrono::steady_clock::time_point deadline, std::string& error)
@@ -166,7 +184,7 @@ namespace Strata
 
 	std::optional<TcpSocket> TcpSocket::Connect(std::string_view host, uint16_t port, std::chrono::milliseconds timeout, std::string* error)
 	{
-		const auto deadline = std::chrono::steady_clock::now() + std::max(timeout, std::chrono::milliseconds(0));
+		const auto deadline = std::chrono::steady_clock::now() + ClampSocketTimeout(timeout);
 		std::string lastError;
 
 		if (!EnsureWinsockStarted(&lastError))
@@ -254,7 +272,7 @@ namespace Strata
 		if (!IsValid())
 			return SocketReceiveStatus::Error;
 
-		const auto deadline = std::chrono::steady_clock::now() + std::max(timeout, std::chrono::milliseconds(0));
+		const auto deadline = std::chrono::steady_clock::now() + ClampSocketTimeout(timeout);
 		while (true)
 		{
 			SocketPollEntry entry;
@@ -313,6 +331,13 @@ namespace Strata
 		return setsockopt(ToNative(m_Handle), IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&value), sizeof(value)) == 0;
 	}
 
+	uint16_t TcpSocket::GetLocalPort() const
+	{
+		if (!IsValid())
+			return 0;
+		return GetBoundPort(ToNative(m_Handle)).value_or(uint16_t(0));
+	}
+
 	////////////////////////////////////////////////////////////////////////////////
 	// TcpListener
 	////////////////////////////////////////////////////////////////////////////////
@@ -364,19 +389,15 @@ namespace Strata
 				continue;
 			}
 
-			sockaddr_storage boundAddress = {};
-			int boundLength = sizeof(boundAddress);
-			if (getsockname(socket, reinterpret_cast<sockaddr*>(&boundAddress), &boundLength) != 0)
+			const std::optional<uint16_t> boundPort = GetBoundPort(socket);
+			if (!boundPort)
 			{
 				m_LastError = fmt::format("getsockname() failed: {}", GetSocketErrorMessage(WSAGetLastError()));
 				closesocket(socket);
 				continue;
 			}
 
-			if (boundAddress.ss_family == AF_INET6)
-				m_Port = ntohs(reinterpret_cast<const sockaddr_in6*>(&boundAddress)->sin6_port);
-			else
-				m_Port = ntohs(reinterpret_cast<const sockaddr_in*>(&boundAddress)->sin_port);
+			m_Port = *boundPort;
 			m_Handle = FromNative(socket);
 		}
 
@@ -398,7 +419,7 @@ namespace Strata
 		if (!IsListening())
 			return std::nullopt;
 
-		const auto deadline = std::chrono::steady_clock::now() + std::max(timeout, std::chrono::milliseconds(0));
+		const auto deadline = std::chrono::steady_clock::now() + ClampSocketTimeout(timeout);
 		while (true)
 		{
 			SocketPollEntry entry;
@@ -466,11 +487,11 @@ namespace Strata
 		if (descriptors.empty())
 		{
 			// Nothing to wait for: honor the timeout so callers never spin.
-			std::this_thread::sleep_for(std::max(timeout, std::chrono::milliseconds(0)));
+			std::this_thread::sleep_for(ClampSocketTimeout(timeout));
 			return true;
 		}
 
-		const int ready = WSAPoll(descriptors.data(), static_cast<ULONG>(descriptors.size()), ToPollTimeout(timeout));
+		const int ready = WSAPoll(descriptors.data(), static_cast<ULONG>(descriptors.size()), ToPollTimeout(ClampSocketTimeout(timeout)));
 		if (ready == SOCKET_ERROR)
 			return false;
 
@@ -483,6 +504,81 @@ namespace Strata
 			entry.Writable = entry.WantWrite && ((events & POLLWRNORM) != 0 || failed);
 		}
 		return true;
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
+	// Addresses and SocketNotifier
+	////////////////////////////////////////////////////////////////////////////////
+
+	bool IsLoopbackAddress(std::string_view address)
+	{
+		if (address.empty() || address.find('\0') != std::string_view::npos || !EnsureWinsockStarted(nullptr))
+			return false;
+
+		const std::wstring wideAddress = WindowsUtils::Utf8ToWide(address);
+		IN_ADDR ipv4 = {};
+		if (InetPtonW(AF_INET, wideAddress.c_str(), &ipv4) == 1)
+			return (ntohl(ipv4.s_addr) >> 24) == 127;
+		IN6_ADDR ipv6 = {};
+		if (InetPtonW(AF_INET6, wideAddress.c_str(), &ipv6) == 1)
+			return IN6_IS_ADDR_LOOPBACK(&ipv6) != 0;
+		return false;
+	}
+
+	bool SocketNotifier::Open()
+	{
+		Close();
+
+		TcpListener listener;
+		if (!listener.Listen("127.0.0.1", 0))
+		{
+			ST_CORE_WARN("SocketNotifier: failed to listen on loopback: {}", listener.GetLastError());
+			return false;
+		}
+
+		std::string error;
+		std::optional<TcpSocket> sender = TcpSocket::Connect("127.0.0.1", listener.GetPort(), c_NotifierSetupTimeout, &error);
+		if (!sender)
+		{
+			ST_CORE_WARN("SocketNotifier: failed to connect the loopback pair: {}", error);
+			return false;
+		}
+		sender->SetNoDelay(true);
+
+		// Another local process could connect to the temporary listener first. The sender proves its identity with
+		// a random cookie; connections that do not present it promptly are discarded, so an intruder can delay the
+		// setup by at most a short wait per connection it makes.
+		std::array<uint8_t, c_NotifierCookieSize> cookie = {};
+		if (!Platform::GenerateSecureRandom(cookie) || !sender->SendAll(std::span<const uint8_t>(cookie), c_NotifierSetupTimeout))
+		{
+			ST_CORE_WARN("SocketNotifier: failed to send the pairing cookie");
+			return false;
+		}
+
+		const auto deadline = std::chrono::steady_clock::now() + c_NotifierSetupTimeout;
+		while (std::chrono::steady_clock::now() < deadline)
+		{
+			std::optional<TcpSocket> candidate = listener.Accept(Remaining(deadline));
+			if (!candidate)
+				continue;
+
+			const auto candidateDeadline = std::min(deadline, std::chrono::steady_clock::now() + c_NotifierCandidateTimeout);
+			std::vector<uint8_t> received;
+			SocketReceiveStatus status = SocketReceiveStatus::Data;
+			while (received.size() < cookie.size() && status == SocketReceiveStatus::Data)
+				status = candidate->Receive(received, Remaining(candidateDeadline));
+
+			if (received.size() == cookie.size() && std::equal(received.begin(), received.end(), cookie.begin()))
+			{
+				std::scoped_lock<std::mutex> lock(m_SenderMutex);
+				m_Sender = std::move(*sender);
+				m_Receiver = std::move(*candidate);
+				return true;
+			}
+		}
+
+		ST_CORE_WARN("SocketNotifier: the loopback pair could not be verified");
+		return false;
 	}
 
 }

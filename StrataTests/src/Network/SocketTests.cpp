@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Network/NetworkTestHelpers.h"
 #include "Strata/Network/Socket.h"
 #include "TestHelpers.h"
 
@@ -187,19 +188,61 @@ TEST_SUITE("Network.Socket")
 		CHECK(failed);
 	}
 
-	TEST_CASE("Connecting to a closed port fails promptly")
+	TEST_CASE("Connecting to a port nobody listens on fails promptly")
 	{
-		TcpListener listener;
-		REQUIRE(listener.Listen());
-		const uint16_t port = listener.GetPort();
-		listener.Close();
+		Tests::RefusingPort refusingPort;
+		REQUIRE(refusingPort.GetPort() != 0);
 
 		std::string error;
 		const auto start = std::chrono::steady_clock::now();
-		std::optional<TcpSocket> socket = TcpSocket::Connect("127.0.0.1", port, std::chrono::milliseconds(5000), &error);
+		std::optional<TcpSocket> socket = TcpSocket::Connect("127.0.0.1", refusingPort.GetPort(), std::chrono::milliseconds(5000), &error);
 		CHECK_FALSE(socket.has_value());
 		CHECK_FALSE(error.empty());
 		CHECK(std::chrono::steady_clock::now() - start < std::chrono::milliseconds(3000));
+	}
+
+	TEST_CASE("Sockets report their local port")
+	{
+		TcpListener listener;
+		REQUIRE(listener.Listen());
+		SocketPair pair = ConnectPair(listener);
+		CHECK(pair.Server.GetLocalPort() == listener.GetPort());
+		CHECK(pair.Client.GetLocalPort() != 0);
+		CHECK(pair.Client.GetLocalPort() != listener.GetPort());
+		CHECK(TcpSocket().GetLocalPort() == 0);
+	}
+
+	TEST_CASE("Huge timeouts are clamped instead of overflowing")
+	{
+		CHECK(ClampSocketTimeout(std::chrono::milliseconds::max()) == c_MaxSocketTimeout);
+		CHECK(ClampSocketTimeout(std::chrono::milliseconds(-5)) == std::chrono::milliseconds(0));
+		CHECK(ClampSocketTimeout(std::chrono::milliseconds(250)) == std::chrono::milliseconds(250));
+
+		TcpListener listener;
+		REQUIRE(listener.Listen());
+		std::optional<TcpSocket> client = TcpSocket::Connect("127.0.0.1", listener.GetPort(), std::chrono::milliseconds::max());
+		REQUIRE(client.has_value());
+		std::optional<TcpSocket> server = listener.Accept(std::chrono::milliseconds::max());
+		REQUIRE(server.has_value());
+
+		REQUIRE(client->SendAll(std::string_view("ok"), std::chrono::milliseconds::max()));
+		std::vector<uint8_t> buffer;
+		CHECK(server->Receive(buffer, std::chrono::milliseconds::max()) == SocketReceiveStatus::Data);
+	}
+
+	TEST_CASE("Loopback addresses are recognized numerically")
+	{
+		for (const char* address : { "127.0.0.1", "127.0.0.2", "127.255.255.254", "::1", "0:0:0:0:0:0:0:1" })
+		{
+			INFO(address);
+			CHECK(IsLoopbackAddress(address));
+		}
+		for (const char* address : { "", "0.0.0.0", "::", "localhost", "128.0.0.1", "10.0.0.1", "192.168.1.10", "::ffff:127.0.0.1", "[::1]", "127.0.0.1 ", "127.1", "fe80::1" })
+		{
+			INFO(address);
+			CHECK_FALSE(IsLoopbackAddress(address));
+		}
+		CHECK_FALSE(IsLoopbackAddress(std::string_view("127.0.0.1\0.5", 11)));
 	}
 
 	TEST_CASE("Connecting by name tries every resolved address")

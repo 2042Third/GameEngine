@@ -191,7 +191,8 @@ TEST_SUITE("CLI.Commands")
 		const CliRun unauthorized = Run({ "call", "rpc.ping", "--port", std::to_string(editor.GetPort()), "--token", "wrong" });
 		CHECK(unauthorized.ExitCode == ExitCode::ConnectionFailure);
 
-		const CliRun unreachable = Run({ "call", "rpc.ping", "--port", std::to_string(Tests::GetClosedPort()) });
+		Tests::RefusingPort refusingPort;
+		const CliRun unreachable = Run({ "call", "rpc.ping", "--port", std::to_string(refusingPort.GetPort()) });
 		CHECK(unreachable.ExitCode == ExitCode::ConnectionFailure);
 		CHECK(unreachable.ErrorOutput.find("error:") != std::string::npos);
 

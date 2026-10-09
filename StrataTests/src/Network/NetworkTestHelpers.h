@@ -7,15 +7,27 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 namespace Strata::Tests
 {
+
+	constexpr const char* c_TestServerToken = "0123456789abcdef0123456789abcdef";
+
+	// Specification of a test server: loopback, with the test token.
+	inline RpcServerSpecification MakeTestServerSpecification()
+	{
+		RpcServerSpecification specification;
+		specification.AuthToken = c_TestServerToken;
+		return specification;
+	}
 
 	// An RpcServer whose queued requests are processed by a helper thread standing in for the main loop.
 	class PumpedRpcServer
@@ -30,7 +42,7 @@ namespace Strata::Tests
 		PumpedRpcServer(const PumpedRpcServer&) = delete;
 		PumpedRpcServer& operator=(const PumpedRpcServer&) = delete;
 
-		bool Start(const RpcServerSpecification& specification = {})
+		bool Start(const RpcServerSpecification& specification = MakeTestServerSpecification())
 		{
 			if (!m_Server.Start(specification))
 				return false;
@@ -76,6 +88,16 @@ namespace Strata::Tests
 			return true;
 		}
 
+		// Sends rpc.authenticate as the first message; returns whether the server accepted it.
+		bool Authenticate(const std::string& token = c_TestServerToken)
+		{
+			const nlohmann::json request = JsonRpc::MakeRequest("authenticate", "rpc.authenticate", nlohmann::json { { "token", token } });
+			if (!SendLine(JsonRpc::Serialize(request)))
+				return false;
+			const std::optional<nlohmann::json> response = ReadMessage();
+			return response && response->is_object() && response->contains("result");
+		}
+
 		bool SendLine(std::string_view text)
 		{
 			std::string line(text);
@@ -92,27 +114,59 @@ namespace Strata::Tests
 				if (std::optional<std::string> line = m_Reader.NextLine())
 					return JsonRpc::Parse(*line);
 
+				// Always attempt one read, even when less than a millisecond remains.
 				const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
-				if (remaining.count() <= 0)
-					return std::nullopt;
-
 				std::vector<uint8_t> buffer;
-				const SocketReceiveStatus status = m_Socket.Receive(buffer, remaining);
+				const SocketReceiveStatus status = m_Socket.Receive(buffer, std::max(remaining, std::chrono::milliseconds(0)));
 				if (status == SocketReceiveStatus::Closed || status == SocketReceiveStatus::Error)
 				{
 					m_PeerClosed = true;
+					m_PeerReset = status == SocketReceiveStatus::Error;
 					return std::nullopt;
 				}
+				if (status == SocketReceiveStatus::Timeout)
+					return std::nullopt;
 				m_Reader.Append(buffer);
 			}
 		}
 
+		// Whether the server ended the connection, and whether it did so with a reset instead of an orderly close.
 		bool WasClosedByPeer() const { return m_PeerClosed; }
+		bool WasResetByPeer() const { return m_PeerReset; }
 		TcpSocket& GetSocket() { return m_Socket; }
 	private:
 		TcpSocket m_Socket;
 		JsonLineReader m_Reader;
 		bool m_PeerClosed = false;
+		bool m_PeerReset = false;
+	};
+
+	// A loopback port on which connections are refused: it stays bound by a connected socket (whose local port it
+	// is) while nothing listens on it, so, unlike a port that was merely closed, no other listener can take it over
+	// while this object lives.
+	class RefusingPort
+	{
+	public:
+		RefusingPort()
+		{
+			TcpListener listener;
+			if (!listener.Listen())
+				return;
+			std::optional<TcpSocket> client = TcpSocket::Connect("127.0.0.1", listener.GetPort(), std::chrono::milliseconds(2000));
+			std::optional<TcpSocket> server = listener.Accept(std::chrono::milliseconds(2000));
+			if (!client || !server)
+				return;
+			m_Client = std::move(*client);
+			m_Server = std::move(*server);
+		}
+
+		RefusingPort(const RefusingPort&) = delete;
+		RefusingPort& operator=(const RefusingPort&) = delete;
+
+		uint16_t GetPort() const { return m_Client.GetLocalPort(); }
+	private:
+		TcpSocket m_Client;
+		TcpSocket m_Server;
 	};
 
 	// Sets an environment variable for the lifetime of the object. An empty value counts as unset for every

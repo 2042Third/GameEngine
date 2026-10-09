@@ -10,6 +10,42 @@ namespace Strata
 		// Consumed bytes are discarded once they exceed this size and half of the buffer, keeping appends amortized O(1).
 		constexpr size_t c_CompactThreshold = 64 * 1024;
 
+		// Scans the raw text, so a hostile document is rejected before any value is built.
+		bool ExceedsNestingDepth(std::string_view text, size_t maxDepth)
+		{
+			size_t depth = 0;
+			bool inString = false;
+			bool escaped = false;
+			for (const char character : text)
+			{
+				if (inString)
+				{
+					if (escaped)
+						escaped = false;
+					else if (character == '\\')
+						escaped = true;
+					else if (character == '"')
+						inString = false;
+					continue;
+				}
+
+				if (character == '"')
+				{
+					inString = true;
+				}
+				else if (character == '[' || character == '{')
+				{
+					if (++depth > maxDepth)
+						return true;
+				}
+				else if ((character == ']' || character == '}') && depth > 0)
+				{
+					depth--;
+				}
+			}
+			return false;
+		}
+
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -75,6 +111,11 @@ namespace Strata
 				return line;
 		}
 		return std::nullopt;
+	}
+
+	void JsonLineReader::SetMaxMessageSize(size_t maxMessageSize)
+	{
+		m_MaxMessageSize = maxMessageSize > 0 ? maxMessageSize : 1;
 	}
 
 	void JsonLineReader::Reset()
@@ -171,6 +212,9 @@ namespace Strata
 
 		std::optional<nlohmann::json> Parse(std::string_view text)
 		{
+			if (ExceedsNestingDepth(text, c_MaxJsonDepth))
+				return std::nullopt;
+
 			// Non-throwing overload: invalid input yields a "discarded" value.
 			nlohmann::json value = nlohmann::json::parse(text.begin(), text.end(), nullptr, false);
 			if (value.is_discarded())
