@@ -162,6 +162,12 @@ namespace Strata
 		return ids;
 	}
 
+	bool TransformDrag::IsForSelection(const EditorContext& context) const
+	{
+		const Entity primary = context.GetPrimarySelection();
+		return primary && primary.GetUUID() == m_Primary;
+	}
+
 	bool TransformDrag::Update(EditorContext& context, const glm::mat4& primaryWorld, std::string* outError)
 	{
 		auto fail = [outError](std::string message)
@@ -176,6 +182,9 @@ namespace Strata
 			return fail("The scene changed during the drag");
 		if (!scene->GetEntityByUUID(m_Primary))
 			return fail("The dragged entity no longer exists");
+		// The gizmo's matrix belongs to the primary selection; applying it to the drag's entities would make them jump.
+		if (!IsForSelection(context))
+			return fail("The selection changed during the drag");
 
 		glm::vec3 startTranslation;
 		glm::quat startRotation;

@@ -324,6 +324,22 @@ TEST_SUITE("Editor.TransformEdit")
 		CHECK_FALSE(drag->Update(context, glm::translate(glm::mat4(1.0f), glm::vec3(3.0f, 0.0f, 0.0f)), &error));
 		scene.GetRegistry().on_update<TransformComponent>().disconnect(&counter);
 
+		// Another selection during a drag ends it: the gizmo's matrix belongs to the new primary entity.
+		Entity d = CreateEntity(scene, "D", glm::vec3(0.0f));
+		Entity e = CreateEntity(scene, "E", glm::vec3(5.0f, 0.0f, 0.0f));
+		context.Select(d.GetUUID());
+		drag = TransformDrag::Begin(context, GizmoOperation::Translate);
+		REQUIRE(drag);
+		CHECK(drag->IsForSelection(context));
+		context.Select(e.GetUUID());
+		CHECK_FALSE(drag->IsForSelection(context));
+		CHECK_FALSE(drag->Update(context, glm::translate(glm::mat4(1.0f), glm::vec3(5.0f, 1.0f, 0.0f)), &error));
+		CHECK(error.find("selection changed") != std::string::npos);
+		CHECK(Near(WorldPosition(scene, d), glm::vec3(0.0f)));
+		CHECK(Near(WorldPosition(scene, e), glm::vec3(5.0f, 0.0f, 0.0f)));
+		context.Select(d.GetUUID(), true); // Back as the primary selection: the drag continues
+		CHECK(drag->IsForSelection(context));
+
 		// Without a selection there is nothing to drag.
 		context.ClearSelection();
 		CHECK_FALSE(TransformDrag::Begin(context, GizmoOperation::Translate));

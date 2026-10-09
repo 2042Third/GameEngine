@@ -445,6 +445,10 @@ namespace Strata
 			return;
 		}
 
+		// A selection changed under a drag (a late pick, automation) ends it: the gizmo now belongs to another entity.
+		if (m_GizmoDrag && !m_GizmoDrag->IsForSelection(context))
+			EndGizmoDrag(context);
+
 		// Shown but inert while the camera is being dragged.
 		ImGuizmo::Enable(m_CameraDrag == CameraDrag::None);
 		ImGuizmo::SetOrthographic(view.Camera.Orthographic);

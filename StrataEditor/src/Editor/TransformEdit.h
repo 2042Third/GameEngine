@@ -67,10 +67,13 @@ namespace Strata
 		GizmoOperation GetOperation() const { return m_Operation; }
 		// The entities the drag writes (top-level selected entities).
 		std::vector<UUID> GetEntities() const;
+		// Whether the context's primary selection is still the entity the drag started on. Another selection (a click, or
+		// automation) ends the drag: the gizmo now sits on another entity.
+		bool IsForSelection(const EditorContext& context) const;
 
 		// Applies the gizmo's world transform of the primary entity. Fails (changing nothing) when the active scene was
-		// replaced since Begin (play mode started or stopped), the primary entity is gone or the matrix is degenerate.
-		// Entities deleted meanwhile are skipped.
+		// replaced since Begin (play mode started or stopped), the primary selection changed, the primary entity is gone
+		// or the matrix is degenerate. Entities deleted meanwhile are skipped.
 		bool Update(EditorContext& context, const glm::mat4& primaryWorld, std::string* outError = nullptr);
 		// Ends the drag: the next edit starts a new undo step.
 		void End(EditorContext& context);
