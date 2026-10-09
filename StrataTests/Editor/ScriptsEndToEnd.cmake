@@ -15,16 +15,23 @@ foreach(variable EDITOR WORK_DIR SCRIPT MODULE_SUFFIX)
 	endif()
 endforeach()
 
+include("${CMAKE_CURRENT_LIST_DIR}/JsonEscape.cmake")
+
 file(REMOVE_RECURSE "${WORK_DIR}")
 file(MAKE_DIRECTORY "${WORK_DIR}")
 set(project "${WORK_DIR}/Project")
+strata_json_escape(project_json "${project}")
+strata_json_escape(build_json "${WORK_DIR}/Build")
+# A command that never answers must fail the run long before CTest's timeout: the editor gives up after this many frames
+# (15 minutes at its 60 frames per second; --quit-after-commands ends it as soon as the script is done).
+set(max_frames 54000)
 
 # Runs the editor with a command script; the output must contain every EXPECT text.
 function(run_editor name commands)
 	cmake_parse_arguments(PARSE_ARGV 2 ARG "" "" "ARGUMENTS;EXPECT")
 	set(script "${WORK_DIR}/${name}.json")
 	file(WRITE "${script}" "${commands}")
-	execute_process(COMMAND "${EDITOR}" --no-gpu --no-automation --quit-after-commands ${ARG_ARGUMENTS} --commands "${script}"
+	execute_process(COMMAND "${EDITOR}" --no-gpu --no-automation --quit-after-commands --frames ${max_frames} ${ARG_ARGUMENTS} --commands "${script}"
 		WORKING_DIRECTORY "${WORK_DIR}" OUTPUT_VARIABLE output ERROR_VARIABLE output RESULT_VARIABLE result)
 	message("${output}")
 	if(NOT result EQUAL 0)
@@ -40,7 +47,7 @@ endfunction()
 
 # 1. A project with a saved start scene holding one entity.
 run_editor(Create "[
-	{ \"command\": \"project.create\", \"parameters\": { \"directory\": \"${project}\", \"name\": \"Greeting Game\" } },
+	{ \"command\": \"project.create\", \"parameters\": { \"directory\": \"${project_json}\", \"name\": \"Greeting Game\" } },
 	{ \"command\": \"entity.create\", \"parameters\": { \"name\": \"Greeter Host\" } },
 	{ \"command\": \"scene.saveAs\", \"parameters\": { \"path\": \"Scenes/Main.stscene\" } },
 	{ \"command\": \"project.setStartScene\", \"parameters\": { \"scene\": \"Scenes/Main.stscene\" } }
@@ -78,7 +85,7 @@ run_editor(BuildPlayExport "[
 	{ \"command\": \"editor.wait\", \"parameters\": { \"frames\": 3 } },
 	{ \"command\": \"component.get\", \"parameters\": { \"entity\": \"${entity}\", \"component\": \"Name\" } },
 	{ \"command\": \"play.stop\" },
-	{ \"command\": \"project.export\", \"parameters\": { \"directory\": \"${WORK_DIR}/Build\" } }
+	{ \"command\": \"project.export\", \"parameters\": { \"directory\": \"${build_json}\" } }
 ]"
 	ARGUMENTS --project "${project}"
 	EXPECT "\"Name\":\"Howdy from Greeter\"" "Greeter ran on 'Howdy from Greeter'")

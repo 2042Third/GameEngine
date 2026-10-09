@@ -41,5 +41,5 @@
 	{ "command": "edit.undo" },
 	{ "command": "edit.undo" },
 	{ "command": "scene.info", "expect": { "/modified": { "equals": false } } },
-	{ "command": "project.export", "parameters": { "directory": "@TETRIS_EXPORT_DIR@" } }
+	{ "command": "project.export", "parameters": { "directory": "@TETRIS_EXPORT_DIR_JSON@" } }
 ]

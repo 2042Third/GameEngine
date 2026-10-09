@@ -15,6 +15,11 @@ foreach(variable EDITOR SAMPLE_DIR COMMANDS WORK_DIR)
 		message(FATAL_ERROR "TetrisSample: ${variable} is required")
 	endif()
 endforeach()
+include("${CMAKE_CURRENT_LIST_DIR}/JsonEscape.cmake")
+
+# A command that never answers must fail the run long before CTest's timeout: the editor gives up after this many frames
+# (15 minutes at its 60 frames per second; --quit-after-commands ends it as soon as the script is done).
+set(max_frames 54000)
 
 file(REMOVE_RECURSE "${WORK_DIR}")
 file(MAKE_DIRECTORY "${WORK_DIR}/Project")
@@ -33,8 +38,9 @@ if(NOT EXISTS "${project}/Tetris.stproj" OR NOT EXISTS "${project}/Scripts/Tetri
 endif()
 
 # 2. Build, play, move, check, export.
+strata_json_escape(TETRIS_EXPORT_DIR_JSON "${TETRIS_EXPORT_DIR}")
 configure_file("${COMMANDS}" "${WORK_DIR}/TetrisCommands.json" @ONLY)
-execute_process(COMMAND "${EDITOR}" --no-gpu --no-automation --quit-after-commands --project "${project}"
+execute_process(COMMAND "${EDITOR}" --no-gpu --no-automation --quit-after-commands --frames ${max_frames} --project "${project}"
 		--commands "${WORK_DIR}/TetrisCommands.json"
 	WORKING_DIRECTORY "${WORK_DIR}" OUTPUT_VARIABLE output ERROR_VARIABLE output RESULT_VARIABLE result)
 message("${output}")
