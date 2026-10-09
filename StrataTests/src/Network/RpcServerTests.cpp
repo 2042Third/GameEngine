@@ -1378,6 +1378,62 @@ TEST_SUITE("Network.RpcServer")
 		CHECK(finishedWhenUnregistered);
 	}
 
+	TEST_CASE("Replacing a method swaps its description and handler in one step")
+	{
+		Tests::PumpedRpcServer server;
+		RpcServer& rpc = server.GetServer();
+		auto answer = [](std::string value)
+		{
+			return RpcHandler([value](const nlohmann::json&, const Ref<RpcResponder>& responder) { responder->Respond(RpcResult::Success(value)); });
+		};
+		CHECK(rpc.ReplaceMethod(MakeMethod("test.swap", "First"), answer("first"))); // Registers a new method
+		REQUIRE(server.Start());
+		RpcClient client;
+		ConnectClient(client, server.GetPort());
+		CHECK(client.Call("test.swap", nlohmann::json::object(), c_CallTimeout).GetValue() == "first");
+
+		CHECK(rpc.ReplaceMethod(MakeMethod("test.swap", "Second"), answer("second")));
+		CHECK(client.Call("test.swap", nlohmann::json::object(), c_CallTimeout).GetValue() == "second");
+		const std::vector<RpcMethodInfo> methods = rpc.GetMethods();
+		REQUIRE(methods.size() == 5);
+		CHECK(methods[4].Description == "Second");
+
+		CHECK_FALSE(rpc.ReplaceMethod(MakeMethod("rpc.swap"), answer("x")));
+		CHECK_FALSE(rpc.ReplaceMethod(MakeMethod("test.swap"), RpcHandler()));
+		CHECK(client.Call("test.swap", nlohmann::json::object(), c_CallTimeout).GetValue() == "second");
+	}
+
+	TEST_CASE("Replacing a method waits for its running handler")
+	{
+		RpcServer server;
+		std::atomic<bool> started = false;
+		std::atomic<bool> finished = false;
+		REQUIRE(server.RegisterMethod(MakeMethod("test.slow"), [&](const nlohmann::json&)
+		{
+			started = true;
+			std::this_thread::sleep_for(std::chrono::milliseconds(100));
+			finished = true;
+			return RpcResult::Success(true);
+		}));
+		REQUIRE(server.Start(Tests::MakeTestServerSpecification()));
+
+		RpcClient client;
+		ConnectClient(client, server.GetPort());
+		std::thread caller([&]() { client.Call("test.slow", nlohmann::json::object(), c_CallTimeout); });
+
+		bool finishedWhenReplaced = false;
+		std::thread replacer([&]()
+		{
+			Tests::WaitUntil([&]() { return started.load(); });
+			server.ReplaceMethod(MakeMethod("test.slow"), RpcHandler([](const nlohmann::json&, const Ref<RpcResponder>& responder) { responder->Respond(RpcResult::Success(false)); }));
+			finishedWhenReplaced = finished.load();
+		});
+		CHECK(Tests::WaitUntil([&]() { return server.ProcessRequests() > 0; }));
+		replacer.join();
+		caller.join();
+		CHECK(finishedWhenReplaced);
+	}
+
 	TEST_CASE("Several clients are served concurrently")
 	{
 		Tests::PumpedRpcServer server;

@@ -187,6 +187,10 @@ namespace Strata
 		// duplicate name. A missing or non-object ParamsSchema is replaced by an empty object schema.
 		bool RegisterMethod(RpcMethodInfo info, RpcHandler handler);
 		bool RegisterMethod(RpcMethodInfo info, RpcSyncHandler handler);
+		// Registers a method, or replaces the description, schema and handler of one with the same name in a single step,
+		// so a request arriving meanwhile never finds the method missing. Waits for a running handler of the replaced
+		// method like UnregisterMethod. Returns false for an invalid name or a missing handler.
+		bool ReplaceMethod(RpcMethodInfo info, RpcHandler handler);
 		// Removes a method. If its handler is running on the owning thread, waits for it to return, so the caller
 		// may destroy whatever the handler captured afterwards (calling it from inside a handler does not wait).
 		void UnregisterMethod(const std::string& name);

@@ -415,8 +415,8 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
   use it to stay isolated from real editors). `STRATA_EDITOR_PORT`/`STRATA_EDITOR_TOKEN` select an explicit
   endpoint, and `STRATA_EDITOR_PATH` the editor executable for `launch`/`strata_launch_editor`.
 - **Other methods:** endpoints that are not editor commands use `RpcServer::RegisterMethod` with a description
-  and a JSON Schema. Handlers run on the main thread from `ProcessRequests()`; keep the `Ref<RpcResponder>` to
-  answer later. Names starting with `rpc.` are reserved.
+  and a JSON Schema (`ReplaceMethod` swaps one in a single step). Handlers run on the main thread from
+  `ProcessRequests()`; keep the `Ref<RpcResponder>` to answer later. Names starting with `rpc.` are reserved.
 - **Tests:** `Editor.Automation` drives `EditorAutomation` in-process with `RpcClient`; the CLI and MCP suites
   never need a real editor (`Tests::PumpedRpcServer` plays the editor, `Tests::LiveProcess` gives fake sessions
   a running process id, and `STRATA_TEST_FAKE_EDITOR=1` makes the test executable act as a launched editor, see

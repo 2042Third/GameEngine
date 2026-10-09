@@ -225,16 +225,14 @@ namespace Strata
 				synced.emplace(command->Name, existing->second);
 				continue;
 			}
-			// Replaced with another description or schema: offered again, so listings show the new one.
-			if (existing != m_Methods.end())
-				m_Server.UnregisterMethod(command->Name);
-
+			// New, or registered again with another description or schema: replaced in one step, so listings show the new
+			// one and no request in between finds the method missing.
 			Ref<const CommandMethod> method = CreateRef<CommandMethod>(CommandMethod { command->Name, command->Description, command->Parameters });
 			RpcMethodInfo info;
 			info.Name = command->Name;
 			info.Description = command->Description;
 			info.ParamsSchema = command->Parameters;
-			const bool registered = m_Server.RegisterMethod(std::move(info), RpcHandler([this, method](const nlohmann::json& params, const Ref<RpcResponder>& responder)
+			const bool registered = m_Server.ReplaceMethod(std::move(info), RpcHandler([this, method](const nlohmann::json& params, const Ref<RpcResponder>& responder)
 			{
 				HandleRequest(method, params, responder);
 			}));

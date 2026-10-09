@@ -71,6 +71,21 @@ namespace Strata
 			return nlohmann::json { { "type", "object" }, { "properties", nlohmann::json::object() } };
 		}
 
+		bool IsValidMethod(const RpcMethodInfo& info, const RpcHandler& handler)
+		{
+			if (info.Name.empty() || info.Name.starts_with(c_ReservedMethodPrefix))
+			{
+				ST_CORE_ERROR("RpcServer: invalid method name '{}' (names must be non-empty and not start with 'rpc.')", info.Name);
+				return false;
+			}
+			if (!handler)
+			{
+				ST_CORE_ERROR("RpcServer: method '{}' has no handler", info.Name);
+				return false;
+			}
+			return true;
+		}
+
 		nlohmann::json NormalizeParamsSchema(nlohmann::json schema)
 		{
 			if (!schema.is_object())
@@ -1419,17 +1434,8 @@ namespace Strata
 
 	bool RpcServer::RegisterMethod(RpcMethodInfo info, RpcHandler handler)
 	{
-		if (info.Name.empty() || info.Name.starts_with(c_ReservedMethodPrefix))
-		{
-			ST_CORE_ERROR("RpcServer: invalid method name '{}' (names must be non-empty and not start with 'rpc.')", info.Name);
+		if (!IsValidMethod(info, handler))
 			return false;
-		}
-		if (!handler)
-		{
-			ST_CORE_ERROR("RpcServer: method '{}' has no handler", info.Name);
-			return false;
-		}
-
 		info.ParamsSchema = NormalizeParamsSchema(std::move(info.ParamsSchema));
 
 		std::scoped_lock<std::mutex> lock(m_Impl->MethodsMutex);
@@ -1456,6 +1462,23 @@ namespace Strata
 		{
 			responder->Respond(handler(params));
 		}));
+	}
+
+	bool RpcServer::ReplaceMethod(RpcMethodInfo info, RpcHandler handler)
+	{
+		if (!IsValidMethod(info, handler))
+			return false;
+		info.ParamsSchema = NormalizeParamsSchema(std::move(info.ParamsSchema));
+
+		const std::string name = info.Name;
+		std::unique_lock<std::mutex> lock(m_Impl->MethodsMutex);
+		const bool replaced = m_Impl->Methods.contains(name);
+		m_Impl->Methods.insert_or_assign(name, RegisteredMethod { std::move(info), std::move(handler) });
+
+		// As in UnregisterMethod: the caller may destroy what the previous handler captured once this returns.
+		if (replaced && m_Impl->ProcessingThread != std::this_thread::get_id())
+			m_Impl->MethodsCondition.wait(lock, [&]() { return m_Impl->RunningMethod != name; });
+		return true;
 	}
 
 	void RpcServer::UnregisterMethod(const std::string& name)
