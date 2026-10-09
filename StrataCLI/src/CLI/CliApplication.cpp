@@ -27,6 +27,7 @@ namespace Strata::CLI
 	{
 
 		constexpr std::chrono::milliseconds c_DefaultCallTimeout = std::chrono::milliseconds(30000);
+		constexpr int64_t c_MaxIdleTimeoutSeconds = 7 * 24 * 60 * 60; // A week, as the editor accepts
 		constexpr const char* c_EditorPortVariable = "STRATA_EDITOR_PORT";
 		constexpr const char* c_EditorTokenVariable = "STRATA_EDITOR_TOKEN";
 
@@ -45,6 +46,7 @@ namespace Strata::CLI
 			{ "--timeout", true },
 			{ "--wait-timeout", true },
 			{ "--save-image", true },
+			{ "--idle-timeout", true },
 			{ "--headless", false },
 			{ "--no-gpu", false },
 			{ "--json", false },
@@ -288,6 +290,8 @@ namespace Strata::CLI
 				specification.ProjectDirectory = ToAbsolutePath(*arguments.Project);
 			specification.Headless = arguments.Headless;
 			specification.NoGpu = arguments.NoGpu;
+			if (arguments.IdleTimeoutSeconds && *arguments.IdleTimeoutSeconds > 0)
+				specification.IdleTimeout = std::chrono::seconds(*arguments.IdleTimeoutSeconds);
 			if (arguments.WaitTimeoutMilliseconds)
 				specification.WaitTimeout = std::chrono::milliseconds(*arguments.WaitTimeoutMilliseconds);
 
@@ -320,6 +324,8 @@ namespace Strata::CLI
 				specification.CallTimeout = std::chrono::milliseconds(*arguments.TimeoutMilliseconds);
 			if (arguments.WaitTimeoutMilliseconds)
 				specification.LaunchTimeout = std::chrono::milliseconds(*arguments.WaitTimeoutMilliseconds);
+			if (arguments.IdleTimeoutSeconds)
+				specification.LaunchIdleTimeout = std::chrono::seconds(*arguments.IdleTimeoutSeconds);
 
 			std::mutex outputMutex;
 			McpServer server(std::move(specification), [&output, &outputMutex](const std::string& message)
@@ -432,6 +438,16 @@ namespace Strata::CLI
 			}
 			else if (name == "--save-image")
 				result.SaveImage = value;
+			else if (name == "--idle-timeout")
+			{
+				const std::optional<int64_t> seconds = ParseInteger(value);
+				if (!seconds || *seconds < 0 || *seconds > c_MaxIdleTimeoutSeconds)
+				{
+					error = fmt::format("--idle-timeout expects a number of seconds from 0 to {} (0: never), got '{}'", c_MaxIdleTimeoutSeconds, value);
+					return std::nullopt;
+				}
+				result.IdleTimeoutSeconds = seconds;
+			}
 			else if (name == "--headless")
 				result.Headless = true;
 			else if (name == "--no-gpu")
@@ -502,8 +518,9 @@ namespace Strata::CLI
 			"  StrataCLI call <method> [params] [connection options] [--timeout <ms>] [--save-image <file>]\n"
 			"  StrataCLI list [connection options] [--json]\n"
 			"  StrataCLI status [connection options]\n"
-			"  StrataCLI launch [--project <dir>] [--headless | --no-gpu] [--editor <path>] [--wait-timeout <ms>]\n"
-			"  StrataCLI mcp [connection options] [--editor <path>] [--timeout <ms>]\n"
+			"  StrataCLI launch [--project <dir>] [--headless | --no-gpu] [--idle-timeout <s>] [--editor <path>]\n"
+			"                   [--wait-timeout <ms>]\n"
+			"  StrataCLI mcp [connection options] [--editor <path>] [--timeout <ms>] [--idle-timeout <s>]\n"
 			"  StrataCLI --help | --version\n"
 			"\n"
 			"Commands:\n"
@@ -514,9 +531,10 @@ namespace Strata::CLI
 			"  list     List the editor's methods and their descriptions (--json: with parameter schemas)\n"
 			"  status   Show whether an editor is reachable, and the known editor sessions\n"
 			"  launch   Start an editor (for a project, if given) and wait until it accepts connections. It keeps\n"
-			"           running until 'call editor.quit'. --headless runs without a window, --no-gpu also without\n"
-			"           a graphics device (no rendering)\n"
-			"  mcp      Serve the Model Context Protocol on stdin/stdout (for AI agents)\n"
+			"           running until 'call editor.quit', or until no client has been connected for --idle-timeout\n"
+			"           seconds. --headless runs without a window, --no-gpu also without a graphics device\n"
+			"  mcp      Serve the Model Context Protocol on stdin/stdout (for AI agents). Editors it starts close\n"
+			"           themselves after --idle-timeout seconds without a client (default 600, 0: never)\n"
 			"\n"
 			"Connection options, in discovery order:\n"
 			"  --port <n>                Explicit endpoint (else STRATA_EDITOR_PORT), authenticated with the\n"

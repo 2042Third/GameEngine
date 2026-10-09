@@ -94,6 +94,14 @@ TEST_SUITE("CLI.Commands")
 		CHECK(fromInput->SaveImage.value() == "shot.png");
 		CHECK(fromInput->NoGpu);
 
+		std::optional<CliArguments> idle = ParseCliArguments({ "launch", "--idle-timeout", "300" }, error);
+		REQUIRE_MESSAGE(idle.has_value(), error);
+		CHECK(idle->IdleTimeoutSeconds.value() == 300);
+		CHECK(ParseCliArguments({ "mcp", "--idle-timeout", "0" }, error)->IdleTimeoutSeconds.value() == 0);
+		CHECK_FALSE(ParseCliArguments({ "launch", "--idle-timeout", "-1" }, error).has_value());
+		CHECK(error.find("--idle-timeout") != std::string::npos);
+		CHECK_FALSE(ParseCliArguments({ "launch", "--idle-timeout", "soon" }, error).has_value());
+
 		std::optional<CliArguments> separated = ParseCliArguments({ "call", "--", "--weird-method" }, error);
 		REQUIRE(separated.has_value());
 		CHECK(separated->Positionals == std::vector<std::string> { "--weird-method" });

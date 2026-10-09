@@ -389,8 +389,9 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
   commands (their clients get `Cancelled`), removes the session files and stops the server with a grace period
   (`RpcServer::Stop(gracePeriod)`) so the last answers, such as `editor.quit`'s, still arrive. A headless editor
   without `--frames` runs until `editor.quit` or a signal (a killed editor leaves a stale session file, which
-  clients prune). The status bar shows the port and the connected clients; `editor.status` has an
-  `automation` section.
+  clients prune), or, with `--idle-timeout <seconds>`, until no client has been connected and no request
+  pending for that long (unsaved changes are then discarded, with a warning). The status bar shows the port
+  and the connected clients; `editor.status` has an `automation` section.
 - **Security model:** any local process, and any web page in a local browser, can reach the port; only
   holders of the session token are trusted. The server binds loopback addresses only and refuses to start
   without a token (`EditorSession::GenerateSessionToken`, from the OS secure random generator). Every
@@ -411,7 +412,10 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
   session. A connection that has connected stays with that editor process (also after it opens another
   project) or, after a restart, an editor with the same project; it never switches to another editor silently.
   `launch`/`strata_launch_editor` start an editor (optionally for a project; `--headless`, `--no-gpu`) that runs
-  until `editor.quit`. `call` reads params as JSON text, from stdin (`-`) or a file (`@path`).
+  until `editor.quit`; an editor that does not become reachable in time is stopped. Editors the MCP server
+  starts get `--idle-timeout 600` (`StrataCLI mcp --idle-timeout <s>`, 0: never) so they do not outlive the agent
+  session, and a request for another editor without a project reuses the one it started. `launch` passes
+  `--idle-timeout` only when given. `call` reads params as JSON text, from stdin (`-`) or a file (`@path`).
 - **Environment:** `STRATA_SESSION_DIR` overrides the session directory for editors and clients alike (tests
   use it to stay isolated from real editors). `STRATA_EDITOR_PORT`/`STRATA_EDITOR_TOKEN` select an explicit
   endpoint, and `STRATA_EDITOR_PATH` the editor executable for `launch`/`strata_launch_editor`.

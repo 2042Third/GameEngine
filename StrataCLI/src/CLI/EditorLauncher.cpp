@@ -85,6 +85,11 @@ namespace Strata::CLI
 			processSpecification.Arguments.push_back("--headless");
 		if (specification.NoGpu)
 			processSpecification.Arguments.push_back("--no-gpu");
+		if (specification.IdleTimeout)
+		{
+			processSpecification.Arguments.push_back("--idle-timeout");
+			processSpecification.Arguments.push_back(std::to_string(specification.IdleTimeout->count()));
+		}
 		processSpecification.Output = ProcessOutputMode::Discard;
 		processSpecification.Detached = true;
 
@@ -103,7 +108,12 @@ namespace Strata::CLI
 		std::optional<EditorSessionInfo> session = WaitForEditorSession(processId, sessionDirectory, specification.WaitTimeout,
 			[&process]() { return process.IsRunning(); }, &result.Error);
 		if (!session)
+		{
+			// Nobody could reach it (and it may never quit by itself): stop it rather than leave it running unseen.
+			if (process.IsRunning() && process.Terminate())
+				result.Error += "; the editor was stopped";
 			return result;
+		}
 
 		result.Success = true;
 		result.Session = std::move(*session);

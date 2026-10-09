@@ -30,6 +30,9 @@ namespace Strata::CLI
 		std::optional<std::string> EditorPath; // For strata_launch_editor (see ResolveEditorPath)
 		std::chrono::milliseconds CallTimeout = std::chrono::milliseconds(120000);
 		std::chrono::milliseconds LaunchTimeout = std::chrono::milliseconds(60000);
+		// Editors started by strata_launch_editor close themselves after this long without a connected client (the MCP
+		// server stays connected while it runs), so they do not outlive the agent session. Zero: never.
+		std::chrono::seconds LaunchIdleTimeout = std::chrono::seconds(600);
 	};
 
 	// Model Context Protocol server exposing the Strata editor to AI agents as tools.
@@ -77,9 +80,18 @@ namespace Strata::CLI
 		void RefreshEditorState();
 		nlohmann::json BuildEditorTools() const;
 		void AnnounceToolChanges();
+		// The session of a still running editor without a project that this server started with the same options.
+		std::optional<EditorSessionInfo> FindReusableEditor(bool headless, bool noGpu);
 		void ReapLaunchedEditors();
 		void Send(const nlohmann::json& message);
 	private:
+		struct LaunchedEditor
+		{
+			Scope<Process> EditorProcess;
+			bool Headless = false;
+			bool NoGpu = false;
+		};
+
 		McpServerSpecification m_Specification;
 		OutputFunction m_Output;
 		EditorConnection m_Connection;
@@ -92,7 +104,7 @@ namespace Strata::CLI
 		// Editor tool set the client last saw (via tools/list or a change notification); nullopt until then.
 		std::optional<std::string> m_AnnouncedEditorTools;
 
-		std::vector<Scope<Process>> m_LaunchedEditors;
+		std::vector<LaunchedEditor> m_LaunchedEditors; // Oldest first
 	};
 
 	// Maps an editor method name to an MCP tool name.

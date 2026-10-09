@@ -116,6 +116,7 @@ namespace Strata
 
 		m_Context.SetStatusProvider(c_StatusSection, [this]() { return DescribeStatus(); });
 		m_State->RefreshSession = [this]() { UpdateSession(); };
+		m_LastActivity = std::chrono::steady_clock::now();
 		ST_INFO("Automation: listening on {}:{}{}", specification.BindAddress, m_Server.GetPort(),
 			m_Session ? " (StrataCLI and its MCP server find this editor through its session file)" : "");
 		return true;
@@ -153,6 +154,8 @@ namespace Strata
 		SyncMethods();
 		UpdateSession();
 		m_Server.ProcessRequests();
+		if (m_Server.GetClientCount() > 0 || m_State->PendingRequests > 0)
+			m_LastActivity = std::chrono::steady_clock::now();
 	}
 
 	uint16_t EditorAutomation::GetPort() const
@@ -173,6 +176,13 @@ namespace Strata
 	uint64_t EditorAutomation::GetCompletedRequestCount() const
 	{
 		return m_State->CompletedRequests;
+	}
+
+	bool EditorAutomation::HasIdledOut() const
+	{
+		if (!m_Server.IsRunning() || m_Specification.IdleTimeout.count() <= 0)
+			return false;
+		return std::chrono::steady_clock::now() - m_LastActivity >= m_Specification.IdleTimeout;
 	}
 
 	nlohmann::json EditorAutomation::DescribeStatus() const

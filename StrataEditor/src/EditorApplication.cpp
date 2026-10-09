@@ -7,6 +7,7 @@ namespace Strata
 {
 
 	constexpr uint32_t c_HeadlessFrameRate = 60;
+	constexpr int64_t c_MaxIdleTimeoutSeconds = 7 * 24 * 60 * 60; // A week
 
 	class EditorApplication : public Application
 	{
@@ -48,6 +49,17 @@ namespace Strata
 				return nullptr;
 			}
 			options.AutomationPort = static_cast<uint16_t>(*port);
+		}
+		// Editors started by tools close themselves once no client has been connected for this long.
+		if (commandLine.HasFlag("--idle-timeout"))
+		{
+			const std::optional<int64_t> seconds = commandLine.GetIntOption("--idle-timeout");
+			if (!seconds || *seconds < 0 || *seconds > c_MaxIdleTimeoutSeconds)
+			{
+				ST_ERROR("--idle-timeout expects a number of seconds from 0 to {} (0: never)", c_MaxIdleTimeoutSeconds);
+				return nullptr;
+			}
+			options.IdleTimeout = std::chrono::seconds(*seconds);
 		}
 
 		ApplicationSpecification specification;

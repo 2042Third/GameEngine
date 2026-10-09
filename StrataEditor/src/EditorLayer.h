@@ -11,6 +11,7 @@
 
 #include <Strata.h>
 
+#include <chrono>
 #include <filesystem>
 #include <functional>
 #include <optional>
@@ -32,6 +33,9 @@ namespace Strata
 		// Serve the commands to tools and AI agents (EditorAutomation) on loopback, published through a session file.
 		bool EnableAutomation = true;
 		uint16_t AutomationPort = 0; // 0 picks a free port
+		// Close the editor after this long without a connected automation client (0: never), e.g. a headless editor
+		// started for an MCP server that went away.
+		std::chrono::seconds IdleTimeout = std::chrono::seconds(0);
 	};
 
 	// The editor application layer: owns the editor state (EditorContext), the command registry shared with automation,

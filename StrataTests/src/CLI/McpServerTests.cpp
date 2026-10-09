@@ -5,7 +5,9 @@
 #include "CLI/FakeEditor.h"
 #include "CLI/McpServer.h"
 #include "Strata/Core/Version.h"
+#include "Strata/Network/EditorSession.h"
 #include "Strata/Network/JsonRpc.h"
+#include "Strata/Network/RpcClient.h"
 #include "TestHelpers.h"
 
 #include <algorithm>
@@ -484,11 +486,48 @@ TEST_SUITE("CLI.Mcp")
 		REQUIRE_MESSAGE(launched["isError"] == false, GetText(launched));
 		CHECK(launched["structuredContent"]["launched"] == true);
 		CHECK(launched["structuredContent"]["session"]["ProjectPath"] == "");
+		const uint32_t firstProcess = launched["structuredContent"]["session"]["ProcessId"].get<uint32_t>();
 		nlohmann::json info = client.CallTool("editor_info");
 		REQUIRE(info["isError"] == false);
 		CHECK(info["structuredContent"]["NoGpu"] == true);
 		CHECK(info["structuredContent"]["Project"] == "");
+		// Editors the server starts close themselves once it is gone (default: ten minutes without a client).
+		CHECK(info["structuredContent"]["IdleTimeout"] == "600");
+
+		// Asking again reuses that editor instead of leaving it running unused; other options start another one.
+		nlohmann::json again = client.CallTool("strata_launch_editor", nlohmann::json { { "noGpu", true } });
+		REQUIRE_MESSAGE(again["isError"] == false, GetText(again));
+		CHECK(again["structuredContent"]["launched"] == false);
+		CHECK(again["structuredContent"]["session"]["ProcessId"] == firstProcess);
+		nlohmann::json other = client.CallTool("strata_launch_editor", nlohmann::json { { "headless", true } });
+		REQUIRE_MESSAGE(other["isError"] == false, GetText(other));
+		CHECK(other["structuredContent"]["launched"] == true);
+		CHECK(other["structuredContent"]["session"]["ProcessId"] != firstProcess);
 		CHECK(client.CallTool("editor_quit")["isError"] == false);
+
+		// The first editor is still running; quit it through its session.
+		const std::optional<EditorSessionInfo> firstSession = EditorSession::ReadSessionFile(EditorSession::GetSessionFilePath(sessionDirectory, firstProcess));
+		REQUIRE(firstSession.has_value());
+		RpcClient first;
+		REQUIRE(first.Connect(firstSession->Address, firstSession->Port, firstSession->Token, std::chrono::milliseconds(3000)));
+		CHECK(first.Call("editor.quit", nlohmann::json::object(), std::chrono::milliseconds(5000)).IsSuccess());
+	}
+
+	TEST_CASE("Launching stops an editor that never becomes reachable")
+	{
+		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("McpLaunchSilent") / "Sessions";
+		Tests::ScopedEnvironmentVariable fakeEditor("STRATA_TEST_FAKE_EDITOR", "silent");
+		Tests::ScopedEnvironmentVariable sessionOverride("STRATA_SESSION_DIR", FileSystem::ToUTF8(sessionDirectory));
+
+		McpServerSpecification specification = MakeSpecification(sessionDirectory);
+		specification.EditorPath = FileSystem::ToUTF8(Tests::GetTestExecutablePath());
+		specification.LaunchTimeout = std::chrono::milliseconds(1000);
+		McpTestClient client(specification);
+		client.Initialize();
+
+		nlohmann::json launched = client.CallTool("strata_launch_editor", nlohmann::json { { "noGpu", true } });
+		CHECK(launched["isError"] == true);
+		CHECK(GetText(launched).find("the editor was stopped") != std::string::npos);
 	}
 
 	TEST_CASE("Another project's editor does not replace a disconnected one")

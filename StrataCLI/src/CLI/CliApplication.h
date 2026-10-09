@@ -36,6 +36,8 @@ namespace Strata::CLI
 		std::optional<int64_t> TimeoutMilliseconds;
 		std::optional<int64_t> WaitTimeoutMilliseconds;
 		std::optional<std::string> SaveImage; // call: where to write an image result
+		// launch/mcp: launched editors close themselves after this many seconds without a client (0: never)
+		std::optional<int64_t> IdleTimeoutSeconds;
 		bool Headless = false;
 		bool NoGpu = false;
 		bool Json = false;

@@ -34,6 +34,9 @@ namespace Strata
 		bool Headless = false; // Recorded in the session
 		// How long Stop keeps delivering answers (e.g. to editor.quit, or the cancellation of pending commands).
 		std::chrono::milliseconds ShutdownGracePeriod = std::chrono::milliseconds(2000);
+		// After this long without a connected client or a pending request, HasIdledOut reports true, so an editor started
+		// for a tool that went away can close itself ("--idle-timeout"). Zero: never.
+		std::chrono::milliseconds IdleTimeout = std::chrono::milliseconds(0);
 	};
 
 	// Serves the editor to tools and AI agents: JSON-RPC 2.0 on loopback (RpcServer), authenticated with the session token.
@@ -76,6 +79,9 @@ namespace Strata
 		size_t GetPendingRequestCount() const;
 		// Requests answered since Start.
 		uint64_t GetCompletedRequestCount() const;
+		// Whether the idle timeout has passed since a client was last connected or a request last pending (always false
+		// without an idle timeout). Measured by Update.
+		bool HasIdledOut() const;
 		// The published session (nullopt when not running or not published). Holds the token: never log it.
 		const std::optional<EditorSessionInfo>& GetSession() const { return m_Session; }
 		// The "automation" section of editor.status.
@@ -122,6 +128,7 @@ namespace Strata
 		std::optional<uint64_t> m_SyncedRevision;                    // Registry revision m_Methods reflects
 		Ref<RequestState> m_State;
 		std::optional<EditorSessionInfo> m_Session;
+		std::chrono::steady_clock::time_point m_LastActivity; // A client connected or a request pending (see HasIdledOut)
 	};
 
 }

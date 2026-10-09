@@ -72,6 +72,7 @@ namespace Strata
 		EditorAutomationSpecification specification;
 		specification.Port = m_Options.AutomationPort;
 		specification.Headless = m_Options.Headless;
+		specification.IdleTimeout = m_Options.IdleTimeout;
 		std::string error;
 		if (m_Automation.Start(specification, &error))
 			return;
@@ -134,6 +135,13 @@ namespace Strata
 					m_CommandScript->GetStepCount());
 				application.SetExitCode(1);
 			}
+			application.Close();
+		}
+		// Started for a tool that has gone away (--idle-timeout): nobody is left to quit it.
+		if (m_Automation.HasIdledOut() && application.IsRunning())
+		{
+			ST_WARN("No automation client for {} s (--idle-timeout): closing the editor{}", m_Options.IdleTimeout.count(),
+				m_Context.IsSceneModified() ? " and discarding unsaved scene changes" : "");
 			application.Close();
 		}
 		const bool lastFrame = m_Options.MaxFrames && application.GetFrameCount() + 1 == *m_Options.MaxFrames;

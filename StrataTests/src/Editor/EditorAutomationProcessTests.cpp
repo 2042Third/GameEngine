@@ -463,6 +463,23 @@ TEST_SUITE("EndToEnd.EditorAutomation")
 			CHECK(editor.TakeOutput().find("--automation-port") != std::string::npos);
 		}
 
+		// With an idle timeout, an editor nobody connects to closes itself, cleanly.
+		{
+			EditorProcess editor;
+			REQUIRE(editor.Start({ "--no-gpu", "--idle-timeout", "1" }));
+			const std::optional<int> exitCode = editor.Wait();
+			REQUIRE(exitCode.has_value());
+			CHECK_MESSAGE(*exitCode == 0, editor.TakeOutput());
+			CHECK(editor.TakeOutput().find("--idle-timeout") != std::string::npos);
+			CHECK(EditorSession::FindSessions(environment.SessionDirectory).empty());
+
+			EditorProcess invalid;
+			REQUIRE(invalid.Start({ "--no-gpu", "--idle-timeout", "-5" }));
+			const std::optional<int> invalidExitCode = invalid.Wait();
+			REQUIRE(invalidExitCode.has_value());
+			CHECK(*invalidExitCode != 0);
+		}
+
 		// Without automation, a scripted run publishes no session.
 		{
 			EditorProcess editor;

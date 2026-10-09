@@ -374,6 +374,48 @@ TEST_SUITE("CLI.Discovery")
 		CHECK_FALSE(FileSystem::Exists(EditorSession::GetProjectSessionFilePath(project)));
 	}
 
+	TEST_CASE("Launching stops an editor that never becomes reachable")
+	{
+		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("LaunchSilentSessions") / "Sessions";
+		Tests::ScopedEnvironmentVariable fakeEditor("STRATA_TEST_FAKE_EDITOR", "silent");
+		Tests::ScopedEnvironmentVariable sessionOverride("STRATA_SESSION_DIR", FileSystem::ToUTF8(sessionDirectory));
+
+		EditorLaunchSpecification specification;
+		specification.EditorPath = Tests::GetTestExecutablePath();
+		specification.Headless = true;
+		specification.WaitTimeout = std::chrono::milliseconds(1000);
+		EditorLaunchResult result = LaunchEditor(specification);
+		CHECK_FALSE(result.Success);
+		CHECK(result.Error.find("Timed out") != std::string::npos);
+		CHECK(result.Error.find("the editor was stopped") != std::string::npos);
+		REQUIRE(result.EditorProcess != nullptr);
+		CHECK_FALSE(result.EditorProcess->IsRunning());
+	}
+
+	TEST_CASE("Launching passes the idle timeout to the editor")
+	{
+		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("LaunchIdleSessions") / "Sessions";
+		Tests::ScopedEnvironmentVariable fakeEditor("STRATA_TEST_FAKE_EDITOR", "1");
+		Tests::ScopedEnvironmentVariable sessionOverride("STRATA_SESSION_DIR", FileSystem::ToUTF8(sessionDirectory));
+
+		EditorLaunchSpecification specification;
+		specification.EditorPath = Tests::GetTestExecutablePath();
+		specification.Headless = true;
+		specification.IdleTimeout = std::chrono::seconds(42);
+		specification.WaitTimeout = std::chrono::milliseconds(20000);
+		EditorLaunchResult result = LaunchEditor(specification);
+		REQUIRE_MESSAGE(result.Success, result.Error);
+
+		RpcClient client;
+		REQUIRE_MESSAGE(client.Connect("127.0.0.1", result.Session.Port, result.Session.Token, std::chrono::milliseconds(3000)), client.GetLastError());
+		const RpcResult info = client.Call("editor.info", nlohmann::json::object(), std::chrono::milliseconds(5000));
+		REQUIRE(info.IsSuccess());
+		CHECK(info.GetValue()["IdleTimeout"] == "42");
+		CHECK(client.Call("editor.quit", nlohmann::json::object(), std::chrono::milliseconds(5000)).IsSuccess());
+		client.Close();
+		REQUIRE(result.EditorProcess->Wait(std::chrono::milliseconds(10000)).has_value());
+	}
+
 	TEST_CASE("Launching without a project starts an editor without one")
 	{
 		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("LaunchEmptySessions") / "Sessions";

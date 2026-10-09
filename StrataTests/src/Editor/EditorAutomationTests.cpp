@@ -395,6 +395,45 @@ TEST_SUITE("Editor.Automation")
 		CHECK_FALSE(harness.Automation.GetSession().has_value());
 	}
 
+	TEST_CASE("The idle timeout runs while no client is connected and nothing is pending")
+	{
+		AutomationHarness harness;
+		EditorAutomationSpecification specification;
+		specification.AuthToken = Tests::c_TestServerToken;
+		specification.PublishSession = false;
+		specification.IdleTimeout = std::chrono::milliseconds(300);
+		REQUIRE(harness.Automation.Start(specification));
+		CHECK_FALSE(harness.Automation.HasIdledOut());
+
+		// A connected client keeps the editor alive, however long it stays quiet.
+		{
+			RpcClient client;
+			harness.Connect(client);
+			REQUIRE(harness.RunFramesUntil([&]() { return harness.Automation.GetClientCount() == 1; }));
+			const auto connectedUntil = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+			while (std::chrono::steady_clock::now() < connectedUntil)
+			{
+				harness.Frame();
+				CHECK_FALSE(harness.Automation.HasIdledOut());
+				std::this_thread::sleep_for(std::chrono::milliseconds(5));
+			}
+		}
+
+		// Once it is gone, the timeout runs from its last frame.
+		REQUIRE(harness.RunFramesUntil([&]() { return harness.Automation.GetClientCount() == 0; }));
+		CHECK_FALSE(harness.Automation.HasIdledOut());
+		CHECK(harness.RunFramesUntil([&]() { return harness.Automation.HasIdledOut(); }));
+
+		// Without a timeout, never.
+		harness.Automation.Stop();
+		CHECK_FALSE(harness.Automation.HasIdledOut());
+		specification.IdleTimeout = std::chrono::milliseconds(0);
+		REQUIRE(harness.Automation.Start(specification));
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		harness.Frame();
+		CHECK_FALSE(harness.Automation.HasIdledOut());
+	}
+
 	TEST_CASE("Start reports why the editor cannot be served")
 	{
 		AutomationHarness harness;
