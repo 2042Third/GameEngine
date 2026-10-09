@@ -26,6 +26,15 @@ target_include_directories(Strata PUBLIC
 	"${CMAKE_CURRENT_BINARY_DIR}/Generated")
 target_precompile_headers(Strata PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/stpch.h")
 
+# Engine shaders, compiled to SPIR-V at build time and embedded in the library.
+strata_add_shaders(Strata
+	SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
+	SHADERS
+		ImGui.vert
+		ImGui.frag
+		Debug/ColorTriangle.vert
+		Debug/ColorTriangle.frag)
+
 target_link_libraries(Strata
 	PUBLIC
 		glm

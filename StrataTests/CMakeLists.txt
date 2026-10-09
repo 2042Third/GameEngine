@@ -15,7 +15,7 @@ file(GLOB_RECURSE STRATA_TEST_SOURCES CONFIGURE_DEPENDS
 add_executable(StrataTests ${STRATA_TEST_SOURCES})
 strata_configure_target(StrataTests)
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${STRATA_TEST_SOURCES})
-target_link_libraries(StrataTests PRIVATE Strata doctest)
+target_link_libraries(StrataTests PRIVATE Strata doctest stb)
 target_include_directories(StrataTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_compile_definitions(StrataTests PRIVATE
 	"STRATA_TEST_LIBRARY_NAME=\"$<TARGET_FILE_NAME:StrataTestLibrary>\""
