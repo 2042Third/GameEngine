@@ -92,6 +92,13 @@ namespace Strata
 		bool IsPaused() const;
 		// While paused, advances the simulation by `frames` fixed steps over the next updates.
 		void Step(uint32_t frames = 1);
+		// Whether the viewport's game view feeds keyboard and mouse input to the running game (play mode through the
+		// scene's camera with the viewport focused). Editor shortcuts that edit the scene stay off meanwhile, so keys meant
+		// for the game never change it. Only play mode can have game input; stopping ends it.
+		void SetGameInputActive(bool active);
+		bool IsGameInputActive() const { return m_GameInputActive; }
+		// Whether keyboard shortcuts that edit the scene or the project (undo, delete, duplicate, save) may act now.
+		bool AcceptsEditShortcuts() const { return !m_GameInputActive; }
 
 		//////////////////////////////////////////////////////////////////////////
 		// Selection (entities of the active scene)
@@ -147,6 +154,7 @@ namespace Strata
 		Ref<Scene> m_RuntimeScene;
 		AssetHandle m_SceneHandle = UUID::Null();
 		SceneState m_SceneState = SceneState::Edit;
+		bool m_GameInputActive = false;
 
 		std::vector<UUID> m_Selection;
 		UndoStack m_UndoStack;

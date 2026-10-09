@@ -92,6 +92,9 @@ namespace Strata
 		ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
 		if (overGizmo)
 			windowFlags |= ImGuiWindowFlags_NoMove;
+		// While the game has the input, arrows, Space and Enter belong to it, not to keyboard navigation of the toolbar.
+		if (context.IsGameInputActive())
+			windowFlags |= ImGuiWindowFlags_NoNavInputs;
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
 		const bool visible = ImGui::Begin("Viewport", nullptr, windowFlags);
 		ImGui::PopStyleVar();
@@ -416,6 +419,7 @@ namespace Strata
 		if (m_GameInputEnabled && !enabled && !m_CursorLocked && Input::GetCursorMode() != CursorMode::Normal)
 			Input::SetCursorMode(CursorMode::Normal);
 		m_GameInputEnabled = enabled;
+		context.SetGameInputActive(enabled);
 		Input::SetEnabled(enabled);
 		if (enabled)
 		{

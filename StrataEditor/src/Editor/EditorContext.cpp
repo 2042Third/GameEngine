@@ -279,7 +279,13 @@ namespace Strata
 		m_RuntimeScene->OnRuntimeStop();
 		m_RuntimeScene.reset();
 		m_SceneState = SceneState::Edit;
+		m_GameInputActive = false;
 		PruneSelection(); // Entities created during play are gone
+	}
+
+	void EditorContext::SetGameInputActive(bool active)
+	{
+		m_GameInputActive = active && m_SceneState == SceneState::Play;
 	}
 
 	void EditorContext::SetPaused(bool paused)

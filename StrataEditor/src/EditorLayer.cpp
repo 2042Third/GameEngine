@@ -170,6 +170,17 @@ namespace Strata
 		if (ImGui::GetTopMostPopupModal())
 			return;
 		const ImGuiInputFlags global = ImGuiInputFlags_RouteGlobal;
+		// Play mode toggles always: it is also the way out of a game that has the input.
+		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_P, global))
+		{
+			if (m_Context.IsPlaying())
+				m_Context.Stop();
+			else
+				RunEditorCommand(m_Context, m_Commands, "play.start");
+		}
+		// Keys the running game receives (e.g. Delete, or Ctrl+D with Ctrl to crouch) must not edit the scene.
+		if (!m_Context.AcceptsEditShortcuts())
+			return;
 		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Z, global))
 			m_Context.Undo();
 		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Y, global) || ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_Z, global))
@@ -182,13 +193,6 @@ namespace Strata
 			DuplicateSelection();
 		if (ImGui::Shortcut(ImGuiKey_Delete, global))
 			DeleteSelection();
-		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_P, global))
-		{
-			if (m_Context.IsPlaying())
-				m_Context.Stop();
-			else
-				RunEditorCommand(m_Context, m_Commands, "play.start");
-		}
 	}
 
 	void EditorLayer::RequestDiscardChanges(std::function<void()> action)

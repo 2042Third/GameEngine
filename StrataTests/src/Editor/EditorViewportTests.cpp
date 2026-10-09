@@ -238,6 +238,31 @@ TEST_SUITE("Editor.Viewport")
 		context.Stop();
 	}
 
+	TEST_CASE("Only a playing game takes the input, and edit shortcuts stay off meanwhile")
+	{
+		EditorContext context(EditorContextSpecification { false });
+		CHECK(context.AcceptsEditShortcuts());
+		context.SetGameInputActive(true); // Editing: there is no game to receive input
+		CHECK_FALSE(context.IsGameInputActive());
+		CHECK(context.AcceptsEditShortcuts());
+
+		REQUIRE(context.Simulate());
+		context.SetGameInputActive(true); // Simulating runs no game logic
+		CHECK_FALSE(context.IsGameInputActive());
+		context.Stop();
+
+		REQUIRE(context.Play());
+		context.SetGameInputActive(true);
+		CHECK(context.IsGameInputActive());
+		CHECK_FALSE(context.AcceptsEditShortcuts());
+		context.SetGameInputActive(false); // The game view lost focus
+		CHECK(context.AcceptsEditShortcuts());
+		context.SetGameInputActive(true);
+		context.Stop(); // Stopping ends the game's input
+		CHECK_FALSE(context.IsGameInputActive());
+		CHECK(context.AcceptsEditShortcuts());
+	}
+
 	TEST_CASE("Clicks select, toggle, add and clear")
 	{
 		EditorContext context(EditorContextSpecification { false });
