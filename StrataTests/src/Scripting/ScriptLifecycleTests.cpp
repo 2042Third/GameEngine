@@ -79,6 +79,26 @@ TEST_SUITE("Scripting.Lifecycle")
 		CHECK(scene.GetSystem<ScriptSystem>() == nullptr);
 	}
 
+	TEST_CASE("Private and protected callback overrides run")
+	{
+		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
+		const ScriptClassInfo* info = engine->FindClass("HiddenCallbacks");
+		REQUIRE(info);
+		CHECK(info->Implements(ScriptCallback::OnCreate));
+		CHECK(info->Implements(ScriptCallback::OnUpdate));
+		CHECK_FALSE(info->Implements(ScriptCallback::OnLateUpdate));
+
+		Scene scene;
+		Entity entity = scene.CreateEntity("Hidden");
+		AddScriptEntry(entity, "HiddenCallbacks");
+		scene.OnRuntimeStart();
+		const ScriptSystem& system = GetScriptSystem(scene);
+		RunFrames(scene, 2);
+		CHECK(GetField<int32_t>(system, entity, "HiddenCallbacks", "Creates") == 1);
+		CHECK(GetField<int32_t>(system, entity, "HiddenCallbacks", "Updates") == 2);
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("Inactive entities receive no updates")
 	{
 		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));

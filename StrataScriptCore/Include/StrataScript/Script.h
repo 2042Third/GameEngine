@@ -33,7 +33,7 @@ namespace Strata
 	//   OnDestroy       when the entity is destroyed, the script is removed or the scene stops playing
 	//   OnReload        after a hot reload, instead of OnCreate (see below)
 	// Instances update in entity hierarchy order (parents first), then in the order of the scripts on the entity.
-	// Inactive entities receive no updates.
+	// Inactive entities receive no updates. Overrides may be public, protected or private.
 	//
 	// Hot reload: when the module is rebuilt while the game runs, each instance is deleted (its destructor runs, but
 	// not OnDestroy) and a new instance of the new code is constructed. Field values (see ST_SCRIPT_FIELD) carry over
@@ -259,22 +259,78 @@ namespace Strata
 			CallbackFlag_OnReload = 1u << 5
 		};
 
-		// `&T::OnUpdate` has type `void (Script::*)(float)` unless T (or a base between T and Script) declares it.
+		// Whether T overrides a callback. `&T::OnUpdate` names Script::OnUpdate (type `void (Script::*)(float)`) unless T,
+		// or a base between T and Script, declares OnUpdate. When that declaration is not accessible here (a private or
+		// protected override), the expression is invalid: the class then declares the callback itself.
+		template<typename T>
+		constexpr bool OverridesOnCreate()
+		{
+			if constexpr (requires { &T::OnCreate; })
+				return !std::is_same_v<decltype(&T::OnCreate), void (Script::*)()>;
+			else
+				return true;
+		}
+
+		template<typename T>
+		constexpr bool OverridesOnUpdate()
+		{
+			if constexpr (requires { &T::OnUpdate; })
+				return !std::is_same_v<decltype(&T::OnUpdate), void (Script::*)(float)>;
+			else
+				return true;
+		}
+
+		template<typename T>
+		constexpr bool OverridesOnFixedUpdate()
+		{
+			if constexpr (requires { &T::OnFixedUpdate; })
+				return !std::is_same_v<decltype(&T::OnFixedUpdate), void (Script::*)(float)>;
+			else
+				return true;
+		}
+
+		template<typename T>
+		constexpr bool OverridesOnLateUpdate()
+		{
+			if constexpr (requires { &T::OnLateUpdate; })
+				return !std::is_same_v<decltype(&T::OnLateUpdate), void (Script::*)(float)>;
+			else
+				return true;
+		}
+
+		template<typename T>
+		constexpr bool OverridesOnDestroy()
+		{
+			if constexpr (requires { &T::OnDestroy; })
+				return !std::is_same_v<decltype(&T::OnDestroy), void (Script::*)()>;
+			else
+				return true;
+		}
+
+		template<typename T>
+		constexpr bool OverridesOnReload()
+		{
+			if constexpr (requires { &T::OnReload; })
+				return !std::is_same_v<decltype(&T::OnReload), void (Script::*)()>;
+			else
+				return true;
+		}
+
 		template<typename T>
 		constexpr uint32_t GetCallbackFlags()
 		{
 			uint32_t flags = 0;
-			if constexpr (!std::is_same_v<decltype(&T::OnCreate), void (Script::*)()>)
+			if constexpr (OverridesOnCreate<T>())
 				flags |= CallbackFlag_OnCreate;
-			if constexpr (!std::is_same_v<decltype(&T::OnUpdate), void (Script::*)(float)>)
+			if constexpr (OverridesOnUpdate<T>())
 				flags |= CallbackFlag_OnUpdate;
-			if constexpr (!std::is_same_v<decltype(&T::OnFixedUpdate), void (Script::*)(float)>)
+			if constexpr (OverridesOnFixedUpdate<T>())
 				flags |= CallbackFlag_OnFixedUpdate;
-			if constexpr (!std::is_same_v<decltype(&T::OnLateUpdate), void (Script::*)(float)>)
+			if constexpr (OverridesOnLateUpdate<T>())
 				flags |= CallbackFlag_OnLateUpdate;
-			if constexpr (!std::is_same_v<decltype(&T::OnDestroy), void (Script::*)()>)
+			if constexpr (OverridesOnDestroy<T>())
 				flags |= CallbackFlag_OnDestroy;
-			if constexpr (!std::is_same_v<decltype(&T::OnReload), void (Script::*)()>)
+			if constexpr (OverridesOnReload<T>())
 				flags |= CallbackFlag_OnReload;
 			return flags;
 		}

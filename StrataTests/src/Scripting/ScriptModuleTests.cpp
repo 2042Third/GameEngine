@@ -72,7 +72,7 @@ TEST_SUITE("Scripting.Module")
 		CHECK(engine.GetModulePath().filename() == FileSystem::FromUTF8(STRATA_TEST_SCRIPTS_API));
 
 		const std::set<std::string> expectedClasses = {
-			"Lifecycle", "LifecycleSecond", "Idle", "FieldTypes", "Thrower", "ThrowingConstructor", "EntityAPI", "Destroyer", "ScriptAdder",
+			"Lifecycle", "LifecycleSecond", "Idle", "HiddenCallbacks", "FieldTypes", "Thrower", "ThrowingConstructor", "EntityAPI", "Destroyer", "ScriptAdder",
 			"ComponentAPI", "PropertyProbe", "TransformAPI", "Spawned", "Spawner", "Listener", "Talker", "InputProbe", "TimeProbe", "SceneProbe"
 		};
 		std::set<std::string> classes;

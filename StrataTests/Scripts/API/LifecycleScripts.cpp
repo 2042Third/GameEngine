@@ -36,6 +36,24 @@ class Idle : public Script
 
 ST_SCRIPT_CLASS(Idle) {}
 
+// Overrides callbacks privately and protectedly; they run like public ones.
+class HiddenCallbacks : public Script
+{
+public:
+	int32_t Creates = 0;
+	int32_t Updates = 0;
+protected:
+	void OnCreate() override { Creates++; }
+private:
+	void OnUpdate(float) override { Updates++; }
+};
+
+ST_SCRIPT_CLASS(HiddenCallbacks)
+{
+	ST_SCRIPT_FIELD(Creates);
+	ST_SCRIPT_FIELD(Updates);
+}
+
 // One field of every supported type, with distinctive defaults.
 class FieldTypes : public Script
 {
