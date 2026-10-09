@@ -30,9 +30,10 @@ namespace Strata
 	//    parent) cannot be represented and is approximated by the decomposed scale.
 	//  - Lock rotation flags refer to world axes. Collision events and query hits report the entity that owns the body.
 	//
-	// An entity whose body cannot be built yet keeps a pending record and is retried every step: a degenerate (e.g. zero
-	// scale) world transform until it becomes valid, a mesh collider until the mesh provider returns its data, a full world
-	// until bodies are freed. A body whose world transform becomes degenerate leaves the simulation until it is valid again.
+	// An entity whose body cannot be built yet keeps a pending record and is retried once that can succeed: a degenerate
+	// (e.g. zero scale) world transform when it becomes valid, a mesh collider when its mesh data is available and its shape
+	// cooked (see SetMeshProvider), a full world when bodies are freed. A body whose world transform becomes degenerate
+	// leaves the simulation until it is valid again.
 	// Dynamic bodies write their pose back relative to their parent, so for them a parent scaled to (nearly) zero, which
 	// cannot be inverted, counts as a degenerate transform too.
 	//
@@ -64,10 +65,12 @@ namespace Strata
 		PhysicsWorld(const PhysicsWorld&) = delete;
 		PhysicsWorld& operator=(const PhysicsWorld&) = delete;
 
-		// Source of triangle data for MeshColliderComponent (process-wide, main thread). While there is no provider, or it
-		// returns nullptr for a mesh (e.g. still loading), the collider is missing from its body and is retried every step.
-		static void SetMeshProvider(PhysicsMeshProvider provider);
-		static bool HasMeshProvider();
+		// Source of the triangle data of MeshColliderComponent meshes (process-wide, main thread). By default meshes come from
+		// the active asset manager (AssetMeshProvider); a null provider restores that default. While a mesh's data is not
+		// available (still loading) or its shape is being cooked (on the JobSystem), the collider is missing from its body
+		// (a body without other colliders is pending); bodies are rebuilt when the provider reports changed mesh data.
+		static void SetMeshProvider(Ref<PhysicsMeshProvider> provider);
+		static PhysicsMeshProvider& GetMeshProvider();
 
 		Scene& GetScene() const;
 		const PhysicsSettings& GetSettings() const;

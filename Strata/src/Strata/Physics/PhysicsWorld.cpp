@@ -3,13 +3,16 @@
 
 #include "Strata/Core/Hash.h"
 #include "Strata/Math/Math.h"
+#include "Strata/Physics/AssetMeshProvider.h"
 #include "Strata/Physics/PhysicsJobSystem.h"
+#include "Strata/Physics/PhysicsMeshShapes.h"
 #include "Strata/Physics/PhysicsRuntime.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
 
 #include <Jolt/Jolt.h>
 #include <Jolt/Core/JobSystem.h>
+#include <Jolt/Core/StreamIn.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/BodyActivationListener.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
@@ -23,8 +26,6 @@
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
-#include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
-#include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Collision/Shape/ScaledShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
@@ -33,7 +34,9 @@
 
 #include <array>
 #include <bit>
+#include <cstring>
 #include <map>
+#include <set>
 #include <span>
 
 namespace Strata
@@ -576,6 +579,15 @@ namespace Strata
 		// World state
 		//////////////////////////////////////////////////////////////////////////
 
+		// A mesh used by the colliders of a body, remembered to notice when its data changes, arrives or finishes cooking.
+		struct MeshSource
+		{
+			AssetHandle Mesh = UUID::Null();
+			bool Convex = true;
+			std::weak_ptr<const PhysicsMeshData> Data; // The data the provider returned (empty if none)
+			bool Waiting = false;                      // The data was not available, or its shape was still cooking
+		};
+
 		// An entity that owns a body (a rigid body, or a collider entity without a rigid body ancestor). The record exists as
 		// long as the entity needs a body, also while the body cannot be built (see BuildFailure).
 		struct BodyRecord
@@ -600,14 +612,31 @@ namespace Strata
 			glm::vec3 SavedAngularVelocity = glm::vec3(0.0f);
 			std::vector<entt::entity> MergedEntities; // Collider descendants that belong to this body
 			std::vector<entt::entity> ShapeEntities;  // Descendants whose colliders are part of the current shape
-			std::vector<AssetHandle> MissingMeshes;   // Mesh colliders left out because their data was not available
+			std::vector<MeshSource> MeshSources;      // Meshes of the colliders considered by the last build
 
 			bool HasBody() const { return !BodyID.IsInvalid(); }
 		};
 
-		struct MeshShapeCacheEntry
+		// A cooked mesh shape restored in a world, shared by the colliders using the same data.
+		struct MeshShapeKey
 		{
-			Ref<const PhysicsMeshData> Data;
+			const PhysicsMeshData* Data = nullptr;
+			bool Convex = false;
+
+			bool operator==(const MeshShapeKey& other) const { return Data == other.Data && Convex == other.Convex; }
+		};
+
+		struct MeshShapeKeyHash
+		{
+			size_t operator()(const MeshShapeKey& key) const
+			{
+				return static_cast<size_t>(Hash::Combine(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(key.Data)), key.Convex ? 1u : 0u));
+			}
+		};
+
+		struct RestoredMeshShape
+		{
+			std::weak_ptr<const PhysicsMeshData> Source; // The entry belongs to its key only while the source is alive
 			JPH::RefConst<JPH::Shape> Shape;
 		};
 
@@ -643,10 +672,23 @@ namespace Strata
 			std::unordered_set<entt::entity> m_Set;
 		};
 
-		PhysicsMeshProvider& GetMeshProviderStorage()
+		struct MeshProviderStorage
 		{
-			static PhysicsMeshProvider s_MeshProvider;
-			return s_MeshProvider;
+			AssetMeshProvider Default;
+			Ref<PhysicsMeshProvider> Custom;
+			uint64_t Generation = 0; // Changes whenever the provider is replaced
+		};
+
+		MeshProviderStorage& GetMeshProviderStorage()
+		{
+			static MeshProviderStorage s_Storage;
+			return s_Storage;
+		}
+
+		PhysicsMeshProvider& GetActiveMeshProvider()
+		{
+			MeshProviderStorage& storage = GetMeshProviderStorage();
+			return storage.Custom ? *storage.Custom : static_cast<PhysicsMeshProvider&>(storage.Default);
 		}
 
 		PhysicsSettings SanitizeSettings(const PhysicsSettings& settings)
@@ -680,8 +722,7 @@ namespace Strata
 		PhysicsJobCounters JobCounters;
 		Scope<JPH::TempAllocator> Allocator;
 		Scope<JPH::JobSystem> Jobs;
-		std::unordered_map<AssetHandle, MeshShapeCacheEntry> ConvexMeshShapes;
-		std::unordered_map<AssetHandle, MeshShapeCacheEntry> TriangleMeshShapes;
+		std::unordered_map<MeshShapeKey, RestoredMeshShape, MeshShapeKeyHash> MeshShapes; // See PhysicsMeshShapes
 		Scope<JPH::PhysicsSystem> JoltSystem; // Destroyed before the listeners, filters and allocators it references
 
 		std::map<entt::entity, BodyRecord> Bodies;                    // Ordered: per-step processing is deterministic
@@ -693,6 +734,11 @@ namespace Strata
 		std::unordered_map<PairKey, TouchingPair, PairKeyHash> TouchingPairs;
 		std::unordered_map<UUID, std::vector<PairKey>> EntityPairs;   // Touching pairs of each entity
 		std::vector<UUID> RecheckedEntities;                          // Built or rebuilt since the last step: their pairs are checked
+		std::set<entt::entity> MeshBodies;                            // Records with MeshSources (ordered: deterministic rebuilds)
+		// The mesh provider and cook state that the MeshSources of the records were last checked against.
+		uint64_t SeenMeshProviderGeneration = 0;
+		uint64_t SeenMeshProviderVersion = 0;
+		uint64_t SeenCompletedCooks = 0;
 		std::vector<CollisionEvent> PendingEvents;
 		std::vector<UUID> LeftAfterStep;                              // Bodies removed between the step and contact processing
 		std::unordered_set<uint64_t> IssuedWarnings;                  // Hash of (entity, PhysicsWarning)
@@ -796,14 +842,20 @@ namespace Strata
 			return record && record->Type == RigidBodyType::Dynamic ? record : nullptr;
 		}
 
+		// Whether a record without a body waits for a body that can be built later (rather than for a component change).
+		bool IsPending(const BodyRecord& record)
+		{
+			return !record.HasBody() && (record.Failure == BuildFailure::DegenerateTransform || record.Failure == BuildFailure::MissingMesh || record.Failure == BuildFailure::BodyLimit);
+		}
+
 		// Whether a record needs attention at the next step although its body may be asleep or out of the simulation (awake
-		// bodies are synchronized anyway): a build to retry, a suspended body to bring back, a signaled transform change,
-		// missing mesh data.
+		// bodies are synchronized anyway): a build to retry, a suspended body to bring back, a signaled transform change.
+		// (Mesh data is checked when the mesh provider reports changes, see RefreshMeshBodies.)
 		bool NeedsPolling(const BodyRecord& record)
 		{
 			if (!record.HasBody())
-				return record.Failure == BuildFailure::DegenerateTransform || record.Failure == BuildFailure::MissingMesh || record.Failure == BuildFailure::BodyLimit;
-			return record.Suspended || record.TransformDirty || !record.MissingMeshes.empty();
+				return record.Failure == BuildFailure::DegenerateTransform || record.Failure == BuildFailure::BodyLimit;
+			return record.Suspended || record.TransformDirty;
 		}
 
 		// Lists a record for the next step if it needs it. Records that no longer need it are dropped by the step.
@@ -1037,6 +1089,7 @@ namespace Strata
 			data.MergedOwners.clear();
 			data.PolledBodies.clear();
 			data.RecheckedEntities.clear();
+			data.MeshBodies.clear();
 			data.BodyEntities.clear();
 			data.TouchingPairs.clear();
 			data.EntityPairs.clear();
@@ -1059,83 +1112,38 @@ namespace Strata
 			return result.Get();
 		}
 
-		JPH::RefConst<JPH::Shape> CreateConvexHullShape(PhysicsWorldData& data, const PhysicsMeshData& mesh, const Entity& entity)
+		// Reads a shape saved in Jolt's binary state format (see PhysicsMeshShapes).
+		class ByteStreamIn final : public JPH::StreamIn
 		{
-			JPH::Array<JPH::Vec3> points;
-			points.reserve(mesh.Positions.size());
-			for (const glm::vec3& position : mesh.Positions)
+		public:
+			explicit ByteStreamIn(std::span<const uint8_t> bytes)
+				: m_Bytes(bytes)
 			{
-				if (!IsFinite(position))
+			}
+
+			void ReadBytes(void* outData, size_t byteCount) override
+			{
+				if (byteCount == 0)
+					return; // Empty arrays may pass a null destination
+				if (byteCount > m_Bytes.size() - m_Offset)
 				{
-					if (ShouldWarn(data, entity.GetUUID(), PhysicsWarning::InvalidMesh))
-						ST_CORE_WARN("Physics: the mesh collider of '{}' has non-finite vertex positions and is ignored", entity.GetName());
-					return nullptr;
+					// Reading past the end: the data is incomplete.
+					std::memset(outData, 0, byteCount);
+					m_Offset = m_Bytes.size();
+					m_PastEnd = true;
+					return;
 				}
-				points.push_back(ToJolt(position));
+				std::memcpy(outData, m_Bytes.data() + m_Offset, byteCount);
+				m_Offset += byteCount;
 			}
 
-			const JPH::ConvexHullShapeSettings settings(points, JPH::cDefaultConvexRadius);
-			return CreateShape(data, settings, entity, "convex mesh collider", PhysicsWarning::InvalidMesh);
-		}
-
-		JPH::RefConst<JPH::Shape> CreateTriangleMeshShape(PhysicsWorldData& data, const PhysicsMeshData& mesh, const Entity& entity)
-		{
-			if (mesh.Indices.empty() || mesh.Indices.size() % 3 != 0)
-			{
-				if (ShouldWarn(data, entity.GetUUID(), PhysicsWarning::InvalidMesh))
-					ST_CORE_WARN("Physics: the mesh collider of '{}' needs a triangle list (index count {} is not a positive multiple of 3); it is ignored", entity.GetName(), mesh.Indices.size());
-				return nullptr;
-			}
-
-			JPH::VertexList vertices;
-			vertices.reserve(mesh.Positions.size());
-			for (const glm::vec3& position : mesh.Positions)
-			{
-				if (!IsFinite(position))
-				{
-					if (ShouldWarn(data, entity.GetUUID(), PhysicsWarning::InvalidMesh))
-						ST_CORE_WARN("Physics: the mesh collider of '{}' has non-finite vertex positions and is ignored", entity.GetName());
-					return nullptr;
-				}
-				vertices.push_back(JPH::Float3(position.x, position.y, position.z));
-			}
-
-			JPH::IndexedTriangleList triangles;
-			triangles.reserve(mesh.Indices.size() / 3);
-			for (size_t index = 0; index < mesh.Indices.size(); index += 3)
-			{
-				const uint32_t i0 = mesh.Indices[index];
-				const uint32_t i1 = mesh.Indices[index + 1];
-				const uint32_t i2 = mesh.Indices[index + 2];
-				if (i0 >= vertices.size() || i1 >= vertices.size() || i2 >= vertices.size())
-				{
-					if (ShouldWarn(data, entity.GetUUID(), PhysicsWarning::InvalidMesh))
-						ST_CORE_WARN("Physics: the mesh collider of '{}' references vertex indices beyond its {} vertices; it is ignored", entity.GetName(), vertices.size());
-					return nullptr;
-				}
-				triangles.push_back(JPH::IndexedTriangle(i0, i1, i2));
-			}
-
-			// The settings remove degenerate and duplicate triangles; a mesh without any valid triangle fails to build.
-			const JPH::MeshShapeSettings settings(std::move(vertices), std::move(triangles));
-			return CreateShape(data, settings, entity, "mesh collider", PhysicsWarning::InvalidMesh);
-		}
-
-		Ref<const PhysicsMeshData> RequestMeshData(AssetHandle mesh)
-		{
-			const PhysicsMeshProvider& provider = GetMeshProviderStorage();
-			return provider ? provider(mesh) : nullptr;
-		}
-
-		bool IsAnyMeshAvailable(const std::vector<AssetHandle>& meshes)
-		{
-			for (AssetHandle mesh : meshes)
-			{
-				if (RequestMeshData(mesh))
-					return true;
-			}
-			return false;
-		}
+			bool IsEOF() const override { return m_PastEnd; }
+			bool IsFailed() const override { return m_PastEnd; }
+		private:
+			std::span<const uint8_t> m_Bytes;
+			size_t m_Offset = 0;
+			bool m_PastEnd = false;
+		};
 
 		struct ShapePart
 		{
@@ -1148,7 +1156,8 @@ namespace Strata
 		{
 			std::vector<ShapePart> Parts;
 			std::vector<entt::entity> ShapeEntities; // Descendants that contributed colliders
-			std::vector<AssetHandle> MissingMeshes;
+			std::vector<MeshSource> MeshSources;     // Meshes of the mesh colliders considered
+			bool WaitsForMesh = false;               // A mesh collider was left out until its data arrives or is cooked
 			uint32_t ColliderCount = 0;              // Collider components considered, usable or not
 		};
 
@@ -1158,37 +1167,58 @@ namespace Strata
 				ST_CORE_WARN("Physics: the {} of '{}' has non-finite dimensions and is ignored", collider, entity.GetName());
 		}
 
-		// Unscaled mesh shape for an asset, built once per asset data and reused (also across entities). Returns nullptr and
-		// records the mesh as missing if its data is not available (yet).
+		// The unscaled shape of a mesh collider: cooked once per mesh data object (process-wide, see PhysicsMeshShapes) and
+		// restored once per world, shared by every collider using the data. Returns nullptr if there is no shape: the mesh
+		// data has not arrived or is still cooking (the build waits for it, see RefreshMeshBodies), or it cannot be used.
 		JPH::RefConst<JPH::Shape> GetMeshShape(PhysicsWorldData& data, const Entity& entity, AssetHandle mesh, bool convex, ShapeBuild& build)
 		{
-			if (!GetMeshProviderStorage())
-			{
-				if (ShouldWarn(data, entity.GetUUID(), PhysicsWarning::MissingMesh))
-					ST_CORE_WARN("Physics: the mesh collider of '{}' waits for mesh data: no physics mesh provider is registered", entity.GetName());
-				build.MissingMeshes.push_back(mesh);
-				return nullptr;
-			}
-
-			Ref<const PhysicsMeshData> meshData = RequestMeshData(mesh);
+			const Ref<const PhysicsMeshData> meshData = GetActiveMeshProvider().GetMeshData(mesh);
+			MeshSource& source = build.MeshSources.emplace_back(MeshSource { mesh, convex, meshData, false });
 			if (!meshData)
 			{
 				if (ShouldWarn(data, entity.GetUUID(), PhysicsWarning::MissingMesh))
 					ST_CORE_WARN("Physics: the mesh collider of '{}' waits for mesh {}, which is not available yet", entity.GetName(), mesh.ToString());
-				build.MissingMeshes.push_back(mesh);
+				source.Waiting = true;
+				build.WaitsForMesh = true;
 				return nullptr;
 			}
 
-			std::unordered_map<AssetHandle, MeshShapeCacheEntry>& cache = convex ? data.ConvexMeshShapes : data.TriangleMeshShapes;
-			auto it = cache.find(mesh);
-			if (it != cache.end() && it->second.Data == meshData)
+			const MeshShapeKey key { meshData.get(), convex };
+			auto it = data.MeshShapes.find(key);
+			if (it != data.MeshShapes.end() && !it->second.Source.expired())
 				return it->second.Shape;
 
-			JPH::RefConst<JPH::Shape> shape = convex ? CreateConvexHullShape(data, *meshData, entity) : CreateTriangleMeshShape(data, *meshData, entity);
-			if (!shape)
+			const PhysicsMeshShapes::Result cooked = PhysicsMeshShapes::Request(meshData, convex);
+			if (cooked.CookState == PhysicsMeshShapes::State::Cooking)
+			{
+				source.Waiting = true;
+				build.WaitsForMesh = true;
 				return nullptr;
+			}
 
-			cache[mesh] = MeshShapeCacheEntry { meshData, shape };
+			JPH::RefConst<JPH::Shape> shape;
+			std::string error = cooked.Error;
+			if (cooked.CookState == PhysicsMeshShapes::State::Ready)
+			{
+				ByteStreamIn stream(*cooked.Shape);
+				JPH::Shape::ShapeResult restored = JPH::Shape::sRestoreFromBinaryState(stream);
+				if (restored.HasError())
+					error = restored.GetError().c_str();
+				else if (stream.IsFailed())
+					error = "its cooked shape is incomplete";
+				else
+					shape = restored.Get();
+			}
+			if (!shape)
+			{
+				if (ShouldWarn(data, entity.GetUUID(), PhysicsWarning::InvalidMesh))
+					ST_CORE_WARN("Physics: the mesh collider of '{}' cannot use mesh {} and is ignored: {}", entity.GetName(), mesh.ToString(), error);
+				return nullptr;
+			}
+
+			// Shapes of data that no longer exists go (which includes an entry left at this address).
+			std::erase_if(data.MeshShapes, [](const auto& entry) { return entry.second.Source.expired(); });
+			data.MeshShapes[key] = RestoredMeshShape { meshData, shape };
 			return shape;
 		}
 
@@ -1397,6 +1427,7 @@ namespace Strata
 			}
 
 			const UUID entityID = record.EntityID;
+			data.MeshBodies.erase(handle);
 			data.Bodies.erase(it); // A PolledBodies entry is dropped by the next step
 			EndContactsOf(data, entityID);
 		}
@@ -1519,12 +1550,17 @@ namespace Strata
 			}
 
 			record.Type = type;
-			record.MissingMeshes = build.MissingMeshes;
+			record.MeshSources = std::move(build.MeshSources);
+			if (record.MeshSources.empty())
+				data.MeshBodies.erase(handle);
+			else
+				data.MeshBodies.insert(handle);
+
 			const JPH::RefConst<JPH::Shape> shape = CombineParts(data, entity, build.Parts);
 			if (!shape)
 			{
 				BuildFailure failure = BuildFailure::InvalidColliders;
-				if (!build.MissingMeshes.empty())
+				if (build.WaitsForMesh)
 				{
 					failure = BuildFailure::MissingMesh;
 				}
@@ -1843,6 +1879,50 @@ namespace Strata
 			return std::span<const JPH::BodyID>(bodies, data.JoltSystem->GetNumActiveBodies(JPH::EBodyType::RigidBody));
 		}
 
+		// The state of the mesh provider and of cooking that mesh sources are checked against.
+		void RememberMeshState(PhysicsWorldData& data)
+		{
+			data.SeenMeshProviderGeneration = GetMeshProviderStorage().Generation;
+			data.SeenMeshProviderVersion = GetActiveMeshProvider().GetVersion();
+			data.SeenCompletedCooks = PhysicsMeshShapes::GetCompletedCount();
+		}
+
+		// Rebuilds the bodies whose mesh data changed (hot reload), arrived, or finished cooking. Mesh data is only asked for
+		// again when the provider reports a change or a cook finished, so steps without such changes cost nothing. The state
+		// is read before the meshes, so a change that happens meanwhile is noticed at the next step.
+		void RefreshMeshBodies(PhysicsWorldData& data)
+		{
+			const uint64_t generation = GetMeshProviderStorage().Generation;
+			PhysicsMeshProvider& provider = GetActiveMeshProvider();
+			const uint64_t version = provider.GetVersion();
+			const uint64_t completedCooks = PhysicsMeshShapes::GetCompletedCount();
+			if (generation == data.SeenMeshProviderGeneration && version == data.SeenMeshProviderVersion && completedCooks == data.SeenCompletedCooks)
+				return;
+			data.SeenMeshProviderGeneration = generation;
+			data.SeenMeshProviderVersion = version;
+			data.SeenCompletedCooks = completedCooks;
+
+			for (entt::entity handle : data.MeshBodies)
+			{
+				const BodyRecord* record = FindRecord(data, handle);
+				if (!record)
+					continue;
+
+				const bool changed = std::any_of(record->MeshSources.begin(), record->MeshSources.end(), [&](const MeshSource& source)
+				{
+					// Data that went away (an unloaded mesh) leaves the body as it is.
+					const Ref<const PhysicsMeshData> current = provider.GetMeshData(source.Mesh);
+					if (!current)
+						return false;
+					if (current != source.Data.lock())
+						return true;
+					return source.Waiting && PhysicsMeshShapes::Request(current, source.Convex).CookState != PhysicsMeshShapes::State::Cooking;
+				});
+				if (changed)
+					data.OwnerRefreshes.Add(handle);
+			}
+		}
+
 		// Bodies of entities about to be destroyed (Scene::DestroyEntity during an update) leave the simulation before the
 		// next step; static bodies stay until the entity is destroyed (queries skip them already). Colliders about to be
 		// destroyed leave the shape of the body they belong to.
@@ -1887,6 +1967,7 @@ namespace Strata
 			Scene& scene = *data.OwnerScene;
 			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
 			RemovePendingDestroys(data);
+			RefreshMeshBodies(data);
 
 			std::vector<entt::entity>& candidates = data.SyncCandidates;
 			candidates.clear();
@@ -1944,7 +2025,6 @@ namespace Strata
 							case BuildFailure::DegenerateTransform:
 								retry = scene.GetWorldTransform(entity) != record->LastWorldTransform || (record->WaitsForParent && HasInvertibleParent(scene, entity));
 								break;
-							case BuildFailure::MissingMesh: retry = IsAnyMeshAvailable(record->MissingMeshes); break;
 							case BuildFailure::BodyLimit: retry = data.JoltSystem->GetNumBodies() < data.Settings.MaxBodies; break;
 							default: break;
 						}
@@ -1967,13 +2047,6 @@ namespace Strata
 					}
 					record->TransformDirty = false;
 					UpdatePolling(data, handle, *record);
-					continue;
-				}
-
-				// Mesh data that arrived changes the shape.
-				if (!record->MissingMeshes.empty() && IsAnyMeshAvailable(record->MissingMeshes))
-				{
-					data.OwnerRefreshes.Add(handle);
 					continue;
 				}
 
@@ -2456,6 +2529,7 @@ namespace Strata
 		}
 
 		ConnectSignals(data);
+		RememberMeshState(data); // Before the bodies read mesh data: later changes are noticed against it
 		for (const Entity entity : scene.GetEntitiesInHierarchyOrder())
 		{
 			if (HasPhysicsComponent(entity))
@@ -2473,14 +2547,16 @@ namespace Strata
 		DestroyAllBodies(*m_Data);
 	}
 
-	void PhysicsWorld::SetMeshProvider(PhysicsMeshProvider provider)
+	void PhysicsWorld::SetMeshProvider(Ref<PhysicsMeshProvider> provider)
 	{
-		GetMeshProviderStorage() = std::move(provider);
+		MeshProviderStorage& storage = GetMeshProviderStorage();
+		storage.Custom = std::move(provider);
+		storage.Generation++;
 	}
 
-	bool PhysicsWorld::HasMeshProvider()
+	PhysicsMeshProvider& PhysicsWorld::GetMeshProvider()
 	{
-		return static_cast<bool>(GetMeshProviderStorage());
+		return GetActiveMeshProvider();
 	}
 
 	Scene& PhysicsWorld::GetScene() const
@@ -2845,7 +2921,7 @@ namespace Strata
 		{
 			if (!record.HasBody())
 			{
-				if (NeedsPolling(record))
+				if (IsPending(record))
 					stats.PendingBodyCount++;
 				continue;
 			}

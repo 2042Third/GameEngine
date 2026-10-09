@@ -132,8 +132,21 @@ namespace Strata
 		std::vector<uint32_t> Indices;    // Triangle list (three indices per triangle, counter-clockwise front faces)
 	};
 
-	// Returns the collision data of a mesh asset, or nullptr if it is unknown or not loaded. Returning the same object
-	// for the same data lets physics worlds reuse the shapes built from it.
-	using PhysicsMeshProvider = std::function<Ref<const PhysicsMeshData>(AssetHandle mesh)>;
+	// Supplies the triangle data of the meshes that MeshColliderComponents reference. Called on the main thread. The default
+	// provider reads the meshes of the active asset manager (see AssetMeshProvider).
+	class PhysicsMeshProvider
+	{
+	public:
+		virtual ~PhysicsMeshProvider() = default;
+
+		// The collision data of a mesh asset, or nullptr while it is not available (unknown, or still loading: this must
+		// not block). Return the same object for as long as the mesh does not change: the shapes cooked from mesh data are
+		// cached process-wide per data object (for as long as the object lives, so that worlds created later reuse them),
+		// and colliders are rebuilt when a mesh's data object changes (hot reload).
+		virtual Ref<const PhysicsMeshData> GetMeshData(AssetHandle mesh) = 0;
+		// Changes whenever GetMeshData may return a different result than before for some mesh (data that finished
+		// loading, was reloaded or was dropped). Physics asks for mesh data again only when it changes.
+		virtual uint64_t GetVersion() = 0;
+	};
 
 }

@@ -457,12 +457,11 @@ TEST_SUITE("Physics.Lifecycle")
 			return Ref<const PhysicsMeshData>(mesh);
 		}();
 		bool meshLoaded = false;
-		uint32_t requests = 0;
-		ScopedMeshProvider provider([&](AssetHandle) -> Ref<const PhysicsMeshData>
+		Ref<FunctionMeshProvider> meshes = CreateRef<FunctionMeshProvider>([&](AssetHandle) -> Ref<const PhysicsMeshData>
 		{
-			requests++;
 			return meshLoaded ? cube : nullptr;
 		});
+		ScopedMeshProvider provider(meshes);
 
 		Scene scene;
 		CreateGround(scene);
@@ -479,16 +478,20 @@ TEST_SUITE("Physics.Lifecycle")
 		CHECK_FALSE(physics.HasBody(rock));
 		CHECK(physics.GetStats().PendingBodyCount == 2);
 
-		// Retried every step without repeating the warnings.
+		// Retried once the cause can be gone (the transform changes, the provider reports new mesh data): steps in between
+		// neither repeat the warnings nor ask for the mesh again.
+		const uint32_t requests = meshes->GetRequestCount();
+		CHECK(requests >= 1);
 		StepScene(scene, 5);
 		CHECK_FALSE(physics.HasBody(rock));
-		CHECK(requests >= 5);
+		CHECK(meshes->GetRequestCount() == requests);
 		CHECK(CountLogMessages(logStart, "'Flat' has a degenerate world transform") == 1);
 		CHECK(CountLogMessages(logStart, "'Rock' waits for mesh") == 1);
 		CHECK(Math::IsNearlyEqual(flat.GetComponent<TransformComponent>().Scale, glm::vec3(0.0f)));
 
 		flat.GetTransform().Scale = glm::vec3(1.0f);
 		meshLoaded = true;
+		meshes->Changed();
 		StepScene(scene, 1);
 		CHECK(physics.HasBody(flat));
 		CHECK(physics.HasBody(rock));
@@ -564,10 +567,11 @@ TEST_SUITE("Physics.Lifecycle")
 		const AssetHandle firstMesh = UUID(0x6001);
 		const AssetHandle secondMesh = UUID(0x6002);
 		bool secondLoaded = false;
-		ScopedMeshProvider provider([&](AssetHandle mesh) -> Ref<const PhysicsMeshData>
+		Ref<FunctionMeshProvider> meshes = CreateRef<FunctionMeshProvider>([&](AssetHandle mesh) -> Ref<const PhysicsMeshData>
 		{
 			return mesh == firstMesh || (mesh == secondMesh && secondLoaded) ? cube : nullptr;
 		});
+		ScopedMeshProvider provider(meshes);
 
 		Scene scene;
 		scene.GetSettings().Gravity = glm::vec3(0.0f);
@@ -591,6 +595,7 @@ TEST_SUITE("Physics.Lifecycle")
 		CHECK(GetWorldPosition(scene, rock).z == doctest::Approx(z));
 
 		secondLoaded = true;
+		meshes->Changed();
 		StepScene(scene, 1);
 		REQUIRE(physics.HasBody(rock));
 		CHECK(physics.GetLinearVelocity(rock).z == doctest::Approx(2.0f));

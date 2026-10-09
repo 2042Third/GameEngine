@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Strata/Asset/AssetManager.h"
 #include "Strata/Core/JobSystem.h"
 #include "Strata/Core/Log.h"
 #include "Strata/Math/Math.h"
@@ -14,6 +15,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -143,21 +145,67 @@ namespace Strata::Tests
 		return count;
 	}
 
+	// Mesh provider serving meshes from a function; Changed() tells physics that the function's results changed.
+	class FunctionMeshProvider final : public PhysicsMeshProvider
+	{
+	public:
+		using MeshFunction = std::function<Ref<const PhysicsMeshData>(AssetHandle mesh)>;
+
+		explicit FunctionMeshProvider(MeshFunction function)
+			: m_Function(std::move(function))
+		{
+		}
+
+		Ref<const PhysicsMeshData> GetMeshData(AssetHandle mesh) override
+		{
+			m_RequestCount++;
+			return m_Function(mesh);
+		}
+
+		uint64_t GetVersion() override { return m_Version; }
+
+		void Changed() { m_Version++; }
+		uint32_t GetRequestCount() const { return m_RequestCount; }
+	private:
+		MeshFunction m_Function;
+		uint64_t m_Version = 0;
+		uint32_t m_RequestCount = 0;
+	};
+
+	// Replaces the mesh provider while it exists; the default provider (the active asset manager) is restored afterwards.
 	class ScopedMeshProvider
 	{
 	public:
-		explicit ScopedMeshProvider(PhysicsMeshProvider provider)
+		explicit ScopedMeshProvider(Ref<PhysicsMeshProvider> provider)
 		{
 			PhysicsWorld::SetMeshProvider(std::move(provider));
 		}
 
 		~ScopedMeshProvider()
 		{
-			PhysicsWorld::SetMeshProvider({});
+			PhysicsWorld::SetMeshProvider(nullptr);
 		}
 
 		ScopedMeshProvider(const ScopedMeshProvider&) = delete;
 		ScopedMeshProvider& operator=(const ScopedMeshProvider&) = delete;
+	};
+
+	// Makes an asset manager the active one while it exists.
+	class ScopedActiveAssetManager
+	{
+	public:
+		explicit ScopedActiveAssetManager(const Ref<AssetManagerBase>& manager)
+		{
+			AssetManager::SetActive(manager);
+		}
+
+		~ScopedActiveAssetManager()
+		{
+			AssetManager::SetActive(nullptr);
+		}
+
+		ScopedActiveAssetManager(const ScopedActiveAssetManager&) = delete;
+		ScopedActiveAssetManager& operator=(const ScopedActiveAssetManager&) = delete;
 	};
 
 	class ScopedPhysicsSettings

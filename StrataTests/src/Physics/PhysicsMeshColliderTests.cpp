@@ -36,7 +36,7 @@ namespace
 	}
 
 	// Fake asset system: serves the meshes above and counts requests.
-	class FakeMeshAssets
+	class FakeMeshAssets final : public PhysicsMeshProvider
 	{
 	public:
 		FakeMeshAssets()
@@ -50,20 +50,27 @@ namespace
 			m_Meshes[c_BrokenMesh] = broken;
 		}
 
-		PhysicsMeshProvider GetProvider()
+		Ref<const PhysicsMeshData> GetMeshData(AssetHandle handle) override
 		{
-			return [this](AssetHandle handle) -> Ref<const PhysicsMeshData>
-			{
-				m_Requests++;
-				auto it = m_Meshes.find(static_cast<uint64_t>(handle));
-				return it != m_Meshes.end() ? it->second : nullptr;
-			};
+			m_Requests++;
+			auto it = m_Meshes.find(static_cast<uint64_t>(handle));
+			return it != m_Meshes.end() ? it->second : nullptr;
+		}
+
+		uint64_t GetVersion() override { return m_Version; }
+
+		// Replaces a mesh's data (like a hot reload).
+		void SetMesh(uint64_t handle, Ref<const PhysicsMeshData> mesh)
+		{
+			m_Meshes[handle] = std::move(mesh);
+			m_Version++;
 		}
 
 		uint32_t GetRequestCount() const { return m_Requests; }
 	private:
 		std::unordered_map<uint64_t, Ref<const PhysicsMeshData>> m_Meshes;
 		uint32_t m_Requests = 0;
+		uint64_t m_Version = 0;
 	};
 
 	Entity CreateMeshEntity(Scene& scene, const std::string& name, const glm::vec3& position, uint64_t mesh, bool convex)
@@ -82,9 +89,9 @@ TEST_SUITE("Physics.MeshColliders")
 {
 	TEST_CASE("A static triangle mesh works as ground")
 	{
-		FakeMeshAssets assets;
-		ScopedMeshProvider provider(assets.GetProvider());
-		REQUIRE(PhysicsWorld::HasMeshProvider());
+		Ref<FakeMeshAssets> assets = CreateRef<FakeMeshAssets>();
+		ScopedMeshProvider provider(assets);
+		REQUIRE(&PhysicsWorld::GetMeshProvider() == assets.get());
 
 		Scene scene;
 		Entity ground = CreateMeshEntity(scene, "Terrain", glm::vec3(0.0f), c_GroundMesh, false);
@@ -107,8 +114,8 @@ TEST_SUITE("Physics.MeshColliders")
 
 	TEST_CASE("Convex mesh colliders simulate as dynamic bodies and share their shape")
 	{
-		FakeMeshAssets assets;
-		ScopedMeshProvider provider(assets.GetProvider());
+		Ref<FakeMeshAssets> assets = CreateRef<FakeMeshAssets>();
+		ScopedMeshProvider provider(assets);
 
 		Scene scene;
 		CreateGround(scene);
@@ -122,7 +129,7 @@ TEST_SUITE("Physics.MeshColliders")
 		PhysicsSystem& physics = GetPhysics(scene);
 		REQUIRE(physics.HasBody(first));
 		REQUIRE(physics.HasBody(second));
-		CHECK(assets.GetRequestCount() == 2);
+		CHECK(assets->GetRequestCount() == 2);
 
 		StepScene(scene, 150);
 		CHECK(std::abs(GetWorldPosition(scene, first).y - 0.5f) < 0.03f);
@@ -135,8 +142,8 @@ TEST_SUITE("Physics.MeshColliders")
 
 	TEST_CASE("The Mesh Renderer's mesh is used when the collider has none")
 	{
-		FakeMeshAssets assets;
-		ScopedMeshProvider provider(assets.GetProvider());
+		Ref<FakeMeshAssets> assets = CreateRef<FakeMeshAssets>();
+		ScopedMeshProvider provider(assets);
 
 		Scene scene;
 		Entity rock = CreateMeshEntity(scene, "Rock", glm::vec3(0.0f, 1.0f, 0.0f), 0, true);
@@ -167,9 +174,47 @@ TEST_SUITE("Physics.MeshColliders")
 		CHECK_FALSE(physics.Raycast(glm::vec3(21.0f, 5.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), 10.0f));
 	}
 
+	TEST_CASE("Bodies follow mesh data changes the provider reports")
+	{
+		Ref<FakeMeshAssets> assets = CreateRef<FakeMeshAssets>();
+		ScopedMeshProvider provider(assets);
+
+		Scene scene;
+		Entity rock = CreateMeshEntity(scene, "Rock", glm::vec3(0.0f), c_CubeMesh, true);
+		Entity other = CreateMeshEntity(scene, "Other", glm::vec3(5.0f, 0.0f, 0.0f), c_GroundMesh, false);
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		const auto topOf = [&](float x)
+		{
+			std::optional<RaycastHit> hit = physics.Raycast(glm::vec3(x, 5.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), 10.0f);
+			return hit ? hit->Point.y : -1.0f;
+		};
+		CHECK(topOf(0.0f) == doctest::Approx(0.5f).epsilon(1.0e-3));
+
+		// Steps without reported changes do not ask for mesh data again.
+		StepScene(scene, 1);
+		const uint32_t requests = assets->GetRequestCount();
+		StepScene(scene, 5);
+		CHECK(assets->GetRequestCount() == requests);
+
+		// New data for a mesh (a hot reload) rebuilds the colliders using it, and only those.
+		assets->SetMesh(c_CubeMesh, CreateBoxMesh(glm::vec3(0.5f, 2.0f, 0.5f)));
+		StepScene(scene, 1);
+		CHECK(physics.HasBody(rock));
+		CHECK(topOf(0.0f) == doctest::Approx(2.0f).epsilon(1.0e-3));
+		CHECK(physics.HasBody(other));
+		CHECK(topOf(5.0f) == doctest::Approx(0.0f).epsilon(1.0e-4));
+
+		// Data that becomes unavailable (an unloaded mesh) leaves the body as it is.
+		assets->SetMesh(c_CubeMesh, nullptr);
+		StepScene(scene, 1);
+		CHECK(physics.HasBody(rock));
+		CHECK(topOf(0.0f) == doctest::Approx(2.0f).epsilon(1.0e-3));
+	}
+
 	TEST_CASE("Unusable mesh colliders are skipped with a warning")
 	{
-		FakeMeshAssets assets;
+		Ref<FakeMeshAssets> assets = CreateRef<FakeMeshAssets>();
 		Scene scene;
 		Entity dynamicTerrain = CreateMeshEntity(scene, "DynamicTerrain", glm::vec3(0.0f), c_GroundMesh, false);
 		dynamicTerrain.AddComponent<RigidBodyComponent>();
@@ -181,16 +226,19 @@ TEST_SUITE("Physics.MeshColliders")
 		mixed.AddComponent<SphereColliderComponent>();
 
 		{
-			// Without a provider nothing can be built.
+			// The default provider reads the active asset manager: without one, mesh colliders wait.
+			REQUIRE_FALSE(AssetManager::HasActive());
 			const uint64_t logStart = Log::GetBuffer().GetLatestSequence();
-			Scene withoutProvider;
-			CreateMeshEntity(withoutProvider, "Orphan", glm::vec3(0.0f), c_CubeMesh, true);
-			withoutProvider.OnRuntimeStart();
-			CHECK(GetPhysics(withoutProvider).GetStats().BodyCount == 0);
-			CHECK(CountLogMessages(logStart, "no physics mesh provider is registered") == 1);
+			Scene withoutAssets;
+			Entity orphan = CreateMeshEntity(withoutAssets, "Orphan", glm::vec3(0.0f), c_CubeMesh, true);
+			withoutAssets.OnRuntimeStart();
+			StepScene(withoutAssets, 2);
+			CHECK_FALSE(GetPhysics(withoutAssets).HasBody(orphan));
+			CHECK(GetPhysics(withoutAssets).GetStats().PendingBodyCount == 1);
+			CHECK(CountLogMessages(logStart, "'Orphan' waits for mesh") == 1);
 		}
 
-		ScopedMeshProvider provider(assets.GetProvider());
+		ScopedMeshProvider provider(assets);
 		const uint64_t logStart = Log::GetBuffer().GetLatestSequence();
 		scene.OnRuntimeStart();
 		PhysicsSystem& physics = GetPhysics(scene);
