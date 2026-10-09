@@ -1,9 +1,13 @@
 #include <doctest/doctest.h>
 
+#include <Strata/Core/Platform.h>
 #include <Strata/Core/PlatformDetection.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
+#include <optional>
+#include <string>
 #include <utility>
 
 #if !defined(ST_PLATFORM_WINDOWS)
@@ -42,14 +46,33 @@ namespace
 		s_CurrentTestCase[length] = '\0';
 	}
 
+	// STRATA_TEST_TRACE=1 also prints every test case as it starts (CI sets it): the last one printed before a process
+	// dies names the culprit even when the crash bypasses the signal handler below.
+	bool IsTraceEnabled()
+	{
+		const std::optional<std::string> value = Strata::Platform::GetEnvVar("STRATA_TEST_TRACE");
+		return value && *value == "1";
+	}
+
 	struct CurrentTestCaseListener final : doctest::IReporter
 	{
-		explicit CurrentTestCaseListener(const doctest::ContextOptions&) {}
+		explicit CurrentTestCaseListener(const doctest::ContextOptions&)
+			: m_Trace(IsTraceEnabled())
+		{
+		}
 
 		void report_query(const doctest::QueryData&) override {}
 		void test_run_start() override {}
 		void test_run_end(const doctest::TestRunStats&) override {}
-		void test_case_start(const doctest::TestCaseData& data) override { SetCurrentTestCase(data.m_test_suite, data.m_name); }
+		void test_case_start(const doctest::TestCaseData& data) override
+		{
+			SetCurrentTestCase(data.m_test_suite, data.m_name);
+			if (m_Trace)
+			{
+				std::fprintf(stderr, "[test case] %s\n", s_CurrentTestCase);
+				std::fflush(stderr);
+			}
+		}
 		void test_case_reenter(const doctest::TestCaseData&) override {}
 		void test_case_end(const doctest::CurrentTestCaseStats&) override {}
 		void test_case_exception(const doctest::TestCaseException&) override {}
@@ -58,6 +81,8 @@ namespace
 		void log_assert(const doctest::AssertData&) override {}
 		void log_message(const doctest::MessageData&) override {}
 		void test_case_skipped(const doctest::TestCaseData&) override {}
+	private:
+		bool m_Trace = false;
 	};
 
 #if !defined(ST_PLATFORM_WINDOWS)
