@@ -302,6 +302,36 @@ TEST_SUITE("Physics.Simulation")
 		CHECK(fire(true) < 5.95f);  // The linear cast stops it in front of the wall
 	}
 
+	TEST_CASE("Collision sub-steps catch fast bodies that one collision step misses")
+	{
+		// At 240 m/s a projectile advances 4 m per step: one collision step per step tests it at x = 4 and x = 8, both clear
+		// of the wall between x = 5.7 and 6.9; four collision steps test it every meter, and at x = 6 it is in the wall.
+		const auto fire = [](uint32_t collisionSteps)
+		{
+			PhysicsSettings settings;
+			settings.CollisionSteps = collisionSteps;
+			ScopedPhysicsSettings scopedSettings(settings);
+
+			Scene scene;
+			scene.GetSettings().Gravity = glm::vec3(0.0f);
+			CreateStaticBox(scene, "Wall", glm::vec3(6.3f, 0.0f, 0.0f), glm::vec3(0.6f, 5.0f, 5.0f));
+			Entity projectile = CreateDynamicSphere(scene, "Projectile", glm::vec3(0.0f), 0.1f);
+			projectile.GetComponent<RigidBodyComponent>().LinearDamping = 0.0f;
+
+			scene.OnRuntimeStart();
+			PhysicsSystem& physics = GetPhysics(scene);
+			REQUIRE(physics.GetWorld() != nullptr);
+			CHECK(physics.GetWorld()->GetSettings().CollisionSteps == collisionSteps);
+			CHECK(physics.SetLinearVelocity(projectile, glm::vec3(240.0f, 0.0f, 0.0f)));
+			StepScene(scene, 5);
+			CHECK(physics.GetStats().StepCount == 5); // Collision steps subdivide a step; they are not steps of their own
+			return GetWorldPosition(scene, projectile).x;
+		};
+
+		CHECK(fire(1) > 6.9f);
+		CHECK(fire(4) < 5.7f);
+	}
+
 	TEST_CASE("Parented dynamic bodies write their world transform through the hierarchy")
 	{
 		Scene scene;
