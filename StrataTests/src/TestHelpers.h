@@ -41,6 +41,12 @@ namespace Strata::Tests
 	// A PNG filled with one color.
 	std::vector<uint8_t> CreateSolidPNG(uint32_t width, uint32_t height, uint8_t red, uint8_t green, uint8_t blue, uint8_t alpha = 255);
 
+#if defined(ST_PLATFORM_WINDOWS)
+	// Creates a junction (a mount-point reparse point, which needs no special privilege) at link that redirects to target.
+	// False when it cannot be created (e.g. on file systems without reparse points, such as exFAT).
+	bool CreateJunction(const std::filesystem::path& link, const std::filesystem::path& target);
+#endif
+
 	inline std::filesystem::path GetTestExecutablePath()
 	{
 		return Platform::GetExecutablePath();

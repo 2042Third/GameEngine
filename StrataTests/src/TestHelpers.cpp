@@ -9,6 +9,14 @@
 #include <numbers>
 #include <vector>
 
+#if defined(ST_PLATFORM_WINDOWS)
+	#include <Windows.h>
+	#include <winioctl.h>
+
+	#include <cstring>
+	#include <string>
+#endif
+
 namespace Strata::Tests
 {
 
@@ -95,6 +103,45 @@ namespace Strata::Tests
 			pixels.insert(pixels.end(), { red, green, blue, alpha });
 		return EncodePNG(width, height, pixels);
 	}
+
+#if defined(ST_PLATFORM_WINDOWS)
+	bool CreateJunction(const std::filesystem::path& link, const std::filesystem::path& target)
+	{
+		if (!CreateDirectoryW(link.c_str(), nullptr))
+			return false;
+		HANDLE handle = CreateFileW(link.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+		if (handle == INVALID_HANDLE_VALUE)
+			return false;
+
+		// The mount point layout of REPARSE_DATA_BUFFER (declared in the driver kit, not the user-mode headers):
+		// tag, data length, reserved, then the substitute and print names' offsets and lengths, then both names.
+		const std::wstring printName = std::filesystem::absolute(target).wstring();
+		const std::wstring substituteName = L"\\??\\" + printName;
+		const size_t substituteBytes = (substituteName.size() + 1) * sizeof(wchar_t);
+		const size_t printBytes = (printName.size() + 1) * sizeof(wchar_t);
+		const size_t dataSize = 4 * sizeof(USHORT) + substituteBytes + printBytes;
+		std::vector<uint8_t> buffer(8 + dataSize);
+		auto write16 = [&buffer](size_t offset, size_t value)
+		{
+			const USHORT narrowed = static_cast<USHORT>(value);
+			std::memcpy(buffer.data() + offset, &narrowed, sizeof(narrowed));
+		};
+		const DWORD tag = IO_REPARSE_TAG_MOUNT_POINT;
+		std::memcpy(buffer.data(), &tag, sizeof(tag));
+		write16(4, dataSize);
+		write16(8, 0);
+		write16(10, substituteBytes - sizeof(wchar_t));
+		write16(12, substituteBytes);
+		write16(14, printBytes - sizeof(wchar_t));
+		std::memcpy(buffer.data() + 16, substituteName.c_str(), substituteBytes);
+		std::memcpy(buffer.data() + 16 + substituteBytes, printName.c_str(), printBytes);
+
+		DWORD returned = 0;
+		const BOOL created = DeviceIoControl(handle, FSCTL_SET_REPARSE_POINT, buffer.data(), static_cast<DWORD>(buffer.size()), nullptr, 0, &returned, nullptr);
+		CloseHandle(handle);
+		return created != FALSE;
+	}
+#endif
 
 	void CleanupTemporaryDirectories()
 	{
