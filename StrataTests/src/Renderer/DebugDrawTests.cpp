@@ -52,6 +52,11 @@ TEST_SUITE("Renderer.DebugDraw")
 		CHECK(debugDraw.GetLines(DebugDrawDepth::Tested)[0].Color == 0xFF0080FFu); // RGBA8, red in the lowest byte
 		CHECK(debugDraw.GetLines(DebugDrawDepth::OnTop)[0].Color == 0x80FF0000u);
 		CHECK(DebugDraw::PackColor(glm::vec4(2.0f, -1.0f, 0.0f, 1.0f)) == 0xFF0000FFu); // Clamped
+		// Non-finite components (e.g. a broken TextComponent color) become 0 instead of an undefined conversion.
+		const float nan = std::numeric_limits<float>::quiet_NaN();
+		const float infinity = std::numeric_limits<float>::infinity();
+		CHECK(DebugDraw::PackColor(glm::vec4(nan, infinity, -infinity, 1.0f)) == 0xFF000000u);
+		CHECK(DebugDraw::PackColor(glm::vec4(1.0f, 1.0f, 1.0f, nan)) == 0x00FFFFFFu);
 
 		// Non-finite input is dropped instead of producing garbage lines.
 		debugDraw.Line(glm::vec3(std::numeric_limits<float>::quiet_NaN()), glm::vec3(0.0f), glm::vec4(1.0f));
