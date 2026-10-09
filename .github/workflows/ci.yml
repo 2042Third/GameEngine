@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-2022
+            preset: windows-vs2022
+          - name: Linux
+            os: ubuntu-24.04
+            preset: linux
+          - name: macOS
+            os: macos-14
+            preset: macos
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build gcc-14 g++-14 xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols \
+            libgtk-3-dev libvulkan-dev pkg-config
+          echo "CC=gcc-14" >> "$GITHUB_ENV"
+          echo "CXX=g++-14" >> "$GITHUB_ENV"
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build (Release)
+        run: cmake --build --preset ${{ matrix.preset }}-release --parallel
+
+      # Hosted runners have no GPU: suites that need one carry the "gpu" label.
+      - name: Test (Release)
+        run: ctest --preset ${{ matrix.preset }}-release -LE gpu
