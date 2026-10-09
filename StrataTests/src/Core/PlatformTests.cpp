@@ -183,6 +183,22 @@ TEST_SUITE("Core.Platform")
 		CHECK(process.GetExitCode().has_value());
 	}
 
+	TEST_CASE("Captured output reports when it ended")
+	{
+		Process idle;
+		CHECK(idle.IsOutputFinished()); // Nothing captured
+
+		Process process;
+		REQUIRE(process.Start(HelperProcess({ "--strata-test-helper=echo", "last words" })));
+		REQUIRE(process.Wait(std::chrono::seconds(30)));
+		// The output can end after the exit; then everything is there.
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+		while (!process.IsOutputFinished() && std::chrono::steady_clock::now() < deadline)
+			std::this_thread::sleep_for(std::chrono::milliseconds(5));
+		REQUIRE(process.IsOutputFinished());
+		CHECK(process.TakeOutput().find("last words") != std::string::npos);
+	}
+
 	TEST_CASE("Terminating a process tree ends the processes the child started")
 	{
 		// The child starts a grandchild that appends to a file every 10 ms; both stop once the stop file exists, which the

@@ -58,6 +58,10 @@ namespace Strata
 
 		// Returns captured output produced since the previous call (thread-safe).
 		std::string TakeOutput();
+		// True once the captured output has ended: every process holding it (the child, and descendants that inherited it)
+		// closed it, and everything was read (TakeOutput returns the rest). Output can still arrive after the child exited.
+		// Always true when output is not captured.
+		bool IsOutputFinished() const { return m_ReaderFinished.load(); }
 		std::optional<int> GetExitCode() const { return m_ExitCode; }
 		uint32_t GetProcessID() const { return m_ProcessID; }
 		const std::string& GetLastError() const { return m_LastError; }

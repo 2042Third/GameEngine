@@ -269,6 +269,36 @@ TEST_SUITE("Editor.ScriptBuild")
 		CHECK(diagnostics[4].Code == "C4100");
 	}
 
+	TEST_CASE("Streamed build output is split into bounded lines")
+	{
+		OutputLineSplitter splitter(8);
+		CHECK(splitter.Append("first\r\nsec").size() == 1);
+		CHECK(splitter.GetPendingSize() == 3);
+		const std::vector<std::string> lines = splitter.Append("ond\n\nthird\r");
+		REQUIRE(lines.size() == 2);
+		CHECK(lines[0] == "second");
+		CHECK(lines[1].empty());
+		CHECK(splitter.Flush() == std::optional<std::string>("third"));
+		CHECK_FALSE(splitter.Flush());
+
+		// Output without newlines does not accumulate: it comes out in parts of the maximum size.
+		std::vector<std::string> parts;
+		for (int chunk = 0; chunk < 100; chunk++)
+		{
+			for (std::string& part : splitter.Append("abcde"))
+				parts.push_back(std::move(part));
+			CHECK(splitter.GetPendingSize() < 8);
+		}
+		CHECK(parts.size() == 500 / 8);
+		CHECK(parts.front() == "abcdeabc");
+		// A newline right after a cut part ends no extra (empty) line.
+		OutputLineSplitter exact(4);
+		const std::vector<std::string> cut = exact.Append("abcd\nef\n");
+		REQUIRE(cut.size() == 2);
+		CHECK(cut[0] == "abcd");
+		CHECK(cut[1] == "ef");
+	}
+
 	TEST_CASE("The log tail keeps the last lines")
 	{
 		CHECK(GetLogTail("a\nb\nc\nd\n", 2) == "c\nd\n");

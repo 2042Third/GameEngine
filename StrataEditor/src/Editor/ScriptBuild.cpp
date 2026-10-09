@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cctype>
 #include <optional>
+#include <utility>
 
 namespace Strata
 {
@@ -27,8 +28,11 @@ namespace Strata
 		constexpr size_t c_MaxDiagnosticMessageSize = 4096;
 		constexpr size_t c_ErrorsInSummary = 5;
 		constexpr size_t c_LogTailLines = 40;
-		// After a process exited, output still in the pipe is collected for this long.
-		constexpr std::chrono::milliseconds c_DrainTime(100);
+		// After a process exited, its output is collected until it ends, but no longer than this: a process it started may
+		// keep the output open (it is ended with the process tree).
+		constexpr std::chrono::seconds c_OutputDrainLimit(5);
+		// Longer output lines are split (e.g. a tool that never prints a newline).
+		constexpr size_t c_MaxOutputLineSize = 64 * 1024;
 		constexpr std::string_view c_CMakeError = "CMake Error";
 		constexpr std::string_view c_CMakeWarning = "CMake Warning";
 
@@ -396,6 +400,65 @@ namespace Strata
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
+	// OutputLineSplitter
+	////////////////////////////////////////////////////////////////////////////////
+
+	OutputLineSplitter::OutputLineSplitter(size_t maxLineSize)
+		: m_MaxLineSize(std::max<size_t>(maxLineSize, 1))
+	{
+	}
+
+	std::vector<std::string> OutputLineSplitter::Append(std::string_view output)
+	{
+		std::vector<std::string> lines;
+		while (!output.empty())
+		{
+			const size_t newline = output.find('\n');
+			std::string_view piece = output.substr(0, newline);
+			while (!piece.empty())
+			{
+				const size_t take = std::min(piece.size(), m_MaxLineSize - m_Pending.size());
+				m_Pending.append(piece.substr(0, take));
+				piece.remove_prefix(take);
+				m_PendingWasCut = false;
+				if (m_Pending.size() == m_MaxLineSize)
+				{
+					lines.push_back(std::exchange(m_Pending, std::string()));
+					m_PendingWasCut = true;
+				}
+			}
+			if (newline == std::string_view::npos)
+				break;
+
+			if (!m_PendingWasCut)
+			{
+				if (!m_Pending.empty() && m_Pending.back() == '\r')
+					m_Pending.pop_back();
+				lines.push_back(std::exchange(m_Pending, std::string()));
+			}
+			m_PendingWasCut = false;
+			output.remove_prefix(newline + 1);
+		}
+		return lines;
+	}
+
+	std::optional<std::string> OutputLineSplitter::Flush()
+	{
+		m_PendingWasCut = false;
+		if (m_Pending.empty())
+			return std::nullopt;
+		if (m_Pending.back() == '\r')
+			m_Pending.pop_back();
+		return std::exchange(m_Pending, std::string());
+	}
+
+	void OutputLineSplitter::Reset()
+	{
+		m_Pending.clear();
+		m_PendingWasCut = false;
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
 	// ScriptBuilder
 	////////////////////////////////////////////////////////////////////////////////
 
@@ -410,7 +473,10 @@ namespace Strata
 		return "Unknown";
 	}
 
-	ScriptBuilder::ScriptBuilder() = default;
+	ScriptBuilder::ScriptBuilder()
+		: m_OutputLines(c_MaxOutputLineSize)
+	{
+	}
 
 	ScriptBuilder::~ScriptBuilder()
 	{
@@ -447,7 +513,7 @@ namespace Strata
 		m_ModuleExistedBefore = FileSystem::IsRegularFile(m_Module);
 		m_ModuleTimeBefore = FileSystem::GetLastWriteTime(m_Module).value_or(0);
 		m_Log.clear();
-		m_PartialLine.clear();
+		m_OutputLines.Reset();
 		m_StartTime = std::chrono::steady_clock::now();
 		m_LastResult.ID = 0;
 		const uint64_t id = m_NextID++;
@@ -520,27 +586,20 @@ namespace Strata
 
 	void ScriptBuilder::CollectOutput(bool flushPartialLine)
 	{
+		std::vector<std::string> lines;
 		if (m_Process)
-			m_PartialLine += m_Process->TakeOutput();
-
-		size_t start = 0;
-		for (size_t end = m_PartialLine.find('\n'); end != std::string::npos; end = m_PartialLine.find('\n', start))
+			lines = m_OutputLines.Append(m_Process->TakeOutput());
+		if (flushPartialLine)
 		{
-			std::string_view line(m_PartialLine.data() + start, end - start);
-			if (!line.empty() && line.back() == '\r')
-				line.remove_suffix(1);
-			m_Log.append(line);
+			if (std::optional<std::string> rest = m_OutputLines.Flush())
+				lines.push_back(std::move(*rest));
+		}
+		for (const std::string& line : lines)
+		{
+			m_Log += line;
 			m_Log += '\n';
 			if (!line.empty())
 				ST_INFO("[Scripts] {}", line);
-			start = end + 1;
-		}
-		m_PartialLine.erase(0, start);
-		if (flushPartialLine && !m_PartialLine.empty())
-		{
-			m_Log += m_PartialLine + "\n";
-			ST_INFO("[Scripts] {}", m_PartialLine);
-			m_PartialLine.clear();
 		}
 
 		if (m_Log.size() > c_MaxLogSize)
@@ -553,17 +612,21 @@ namespace Strata
 			return false;
 
 		CollectOutput(false);
-		const auto now = std::chrono::steady_clock::now();
 		if (!m_Draining)
 		{
 			if (m_Process->IsRunning())
 				return false;
 			m_Draining = true;
-			m_DrainUntil = now + c_DrainTime;
-			return false;
+			m_ExitTime = std::chrono::steady_clock::now();
 		}
-		if (now < m_DrainUntil)
-			return false;
+		// The last lines (often the errors) may still be on their way: wait until the output ended.
+		if (!m_Process->IsOutputFinished())
+		{
+			if (std::chrono::steady_clock::now() - m_ExitTime < c_OutputDrainLimit)
+				return false;
+			ST_WARN("[Scripts] The build's output did not end within {} s after CMake exited; a process it started still holds it",
+				c_OutputDrainLimit.count());
+		}
 
 		CollectOutput(true);
 		const int exitCode = m_Process->GetExitCode().value_or(-1);

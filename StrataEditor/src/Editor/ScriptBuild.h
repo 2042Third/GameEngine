@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -61,6 +62,25 @@ namespace Strata
 	std::string FormatScriptDiagnostic(const ScriptDiagnostic& diagnostic);
 	// The last `lineCount` lines of a log.
 	std::string GetLogTail(std::string_view log, size_t lineCount);
+
+	// Splits streamed process output into lines (without "\n" or "\r\n"). Every byte is scanned once, and a line is cut
+	// after `maxLineSize` bytes, so output that never ends its line cannot grow without bound.
+	class OutputLineSplitter
+	{
+	public:
+		explicit OutputLineSplitter(size_t maxLineSize);
+
+		// Appends output; returns the lines it completed (and the parts of overlong lines).
+		std::vector<std::string> Append(std::string_view output);
+		// The unterminated rest at the end of the output, if any.
+		std::optional<std::string> Flush();
+		void Reset();
+		size_t GetPendingSize() const { return m_Pending.size(); }
+	private:
+		size_t m_MaxLineSize;
+		std::string m_Pending;
+		bool m_PendingWasCut = false; // The pending line was just emitted as a cut part; its newline ends no new line
+	};
 
 	struct ScriptBuildResult
 	{
@@ -128,11 +148,12 @@ namespace Strata
 		ScriptBuildPhase m_Phase = ScriptBuildPhase::Idle;
 		bool m_Configured = false;
 		std::chrono::steady_clock::time_point m_StartTime;
-		// After the process exited its last output may still be in transit: it is collected until this time.
-		std::chrono::steady_clock::time_point m_DrainUntil;
+		// After the process exited its last output may still be in transit (or held by a process it started): it is
+		// collected until the output ends, for a limited time after the exit.
+		std::chrono::steady_clock::time_point m_ExitTime;
 		bool m_Draining = false;
 		std::string m_Log;
-		std::string m_PartialLine;
+		OutputLineSplitter m_OutputLines;
 		std::string m_PendingStamp; // Written once the configure step succeeded
 
 		uint64_t m_NextID = 1;
