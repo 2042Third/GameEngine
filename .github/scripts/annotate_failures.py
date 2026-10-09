@@ -10,7 +10,8 @@ import re
 import sys
 
 c_MaxLocatedErrors = 8
-c_MaxSummaryCharacters = 60000
+c_MaxSummaryCharacters = 45000
+c_MaxLogCharacters = 15000
 c_ContextLines = 6
 c_TailLines = 40
 
@@ -21,7 +22,7 @@ PATTERNS = [
     re.compile(r"^\s*(?P<file>[^\s(][^(]*)\((?P<line>\d+)(?:,(?P<column>\d+))?\):\s*(?:fatal )?(?:error|ERROR)(?:\s+\w+)?:\s*(?P<message>.*)$"),
 ]
 UNLOCATED = re.compile(
-    r"(undefined reference|Undefined symbols|ld: |error LNK|collect2|CMake Error|\*\*\*Failed|\*\*\*Exception|"
+    r"(undefined reference|Undefined symbols|ld: error|ld: symbol|error LNK|collect2|CMake Error|\*\*\*Failed|\*\*\*Exception|"
     r"Subprocess aborted|Timeout|SegFault|FATAL ERROR|Fatal signal|terminate called|Assertion|Sanitizer|"
     r"The following tests FAILED)")
 
@@ -71,13 +72,21 @@ def main():
         # The end of the log names the test case a crashed process was running (STRATA_TEST_TRACE).
         marked.update(range(max(0, len(lines) - c_TailLines), len(lines)))
         if marked and (located or any(UNLOCATED.search(lines[index]) for index in marked)):
-            summary.append("==== %s ====" % os.path.basename(log))
+            section = []
             previous = None
             for index in sorted(marked):
                 if previous is not None and index != previous + 1:
-                    summary.append("...")
-                summary.append(lines[index])
+                    section.append("...")
+                section.append(lines[index])
                 previous = index
+            # Each log gets its own budget, keeping its start (first errors) and its end (where a crash shows), so one
+            # long log cannot crowd out another.
+            text = "\n".join(section)
+            if len(text) > c_MaxLogCharacters:
+                half = c_MaxLogCharacters // 2
+                text = text[:half] + "\n... (cut) ...\n" + text[-half:]
+            summary.append("==== %s ====" % os.path.basename(log))
+            summary.append(text)
 
     for path, line, column, message in located[:c_MaxLocatedErrors]:
         properties = "file=%s,line=%s" % (escape_property(path), line)
