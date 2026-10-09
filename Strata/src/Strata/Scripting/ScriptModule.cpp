@@ -2,17 +2,41 @@
 #include "Strata/Scripting/ScriptModule.h"
 
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Core/Platform.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scripting/ScriptHostAPI.h"
 #include "Strata/Scripting/ScriptValue.h"
 #include "Strata/Scripting/ScriptWatchdog.h"
 
+#include <charconv>
 #include <cstddef>
 #include <unordered_set>
 
 namespace Strata
 {
+
+	// The private directory module copies are loaded from (in Platform::GetUserRuntimeDirectory): one per process,
+	// created on first use and removed with the last copy. Its name carries the process ID, so directories left behind by
+	// processes that ended without unloading (crashes, debugger stops) are removed by later sessions.
+	class ScriptModuleCopyDirectory
+	{
+	public:
+		static Ref<ScriptModuleCopyDirectory> Acquire(std::string& outError);
+		~ScriptModuleCopyDirectory();
+
+		ScriptModuleCopyDirectory(const ScriptModuleCopyDirectory&) = delete;
+		ScriptModuleCopyDirectory& operator=(const ScriptModuleCopyDirectory&) = delete;
+
+		const std::filesystem::path& GetPath() const { return m_Path; }
+	private:
+		explicit ScriptModuleCopyDirectory(std::filesystem::path path)
+			: m_Path(std::move(path))
+		{
+		}
+	private:
+		std::filesystem::path m_Path;
+	};
 
 	namespace
 	{
@@ -30,25 +54,46 @@ namespace Strata
 		constexpr size_t c_RequiredClassDescSize = offsetof(StrataScriptClassDesc, OnReload) + sizeof(StrataScriptClassDesc::OnReload);
 		constexpr size_t c_RequiredFieldDescSize = offsetof(StrataScriptFieldDesc, DefaultValue) + sizeof(StrataScriptFieldDesc::DefaultValue);
 
-		std::filesystem::path GetModuleCopyDirectory()
+		constexpr std::string_view c_CopyDirectoryPrefix = "ScriptModules-";
+
+		// Libraries script modules run from (native handles). Loading a file that is already loaded yields the same
+		// library, whose module state belongs to the module that loaded it first. Libraries abandoned after their unload
+		// code crashed stay registered: they remain loaded until the process ends.
+		std::mutex s_LibrariesMutex;
+		std::unordered_set<void*> s_Libraries;
+
+		bool RegisterLibrary(void* handle)
 		{
-			std::error_code error;
-			const std::filesystem::path temporary = std::filesystem::temp_directory_path(error);
-			if (error)
-				return {};
-			return temporary / "StrataScriptModules";
+			std::scoped_lock<std::mutex> lock(s_LibrariesMutex);
+			return s_Libraries.insert(handle).second;
 		}
 
-		// Copies left behind by processes that ended without unloading (crashes, debugger stops). Copies still loaded
-		// by a running process cannot be deleted on Windows; on POSIX deleting them is harmless (the mapping stays).
-		void RemoveStaleModuleCopies(const std::filesystem::path& directory)
+		void UnregisterLibrary(void* handle)
+		{
+			std::scoped_lock<std::mutex> lock(s_LibrariesMutex);
+			s_Libraries.erase(handle);
+		}
+
+		// Copy directories ("ScriptModules-<process id>-<random>") of processes that are no longer running.
+		void RemoveStaleCopyDirectories(const std::filesystem::path& parent)
 		{
 			std::error_code error;
-			for (std::filesystem::directory_iterator it(directory, error), end; !error && it != end; it.increment(error))
+			for (std::filesystem::directory_iterator it(parent, error), end; !error && it != end; it.increment(error))
 			{
-				std::error_code removeError;
-				if (it->is_regular_file(removeError))
-					std::filesystem::remove(it->path(), removeError);
+				const std::string name = FileSystem::ToUTF8(it->path().filename());
+				if (!name.starts_with(c_CopyDirectoryPrefix))
+					continue;
+
+				const char* first = name.data() + c_CopyDirectoryPrefix.size();
+				const char* last = name.data() + name.size();
+				uint32_t processID = 0;
+				const auto [next, parseError] = std::from_chars(first, last, processID);
+				if (parseError != std::errc() || next == first || next == last || *next != '-')
+					continue;
+				if (processID == Platform::GetProcessID() || Platform::IsProcessRunning(processID))
+					continue;
+				if (!FileSystem::Remove(it->path()))
+					ST_CORE_WARN("Cannot remove the stale script module directory '{}'", FileSystem::ToUTF8(it->path()));
 			}
 		}
 
@@ -57,6 +102,41 @@ namespace Strata
 			return ReadScriptString(text, out) && !out.empty() && out.size() <= c_MaxScriptNameSize;
 		}
 
+	}
+
+	Ref<ScriptModuleCopyDirectory> ScriptModuleCopyDirectory::Acquire(std::string& outError)
+	{
+		static std::mutex s_Mutex;
+		static std::weak_ptr<ScriptModuleCopyDirectory> s_Current;
+
+		std::scoped_lock<std::mutex> lock(s_Mutex);
+		if (Ref<ScriptModuleCopyDirectory> current = s_Current.lock())
+			return current;
+
+		const std::filesystem::path parent = Platform::GetUserRuntimeDirectory("Strata");
+		if (parent.empty())
+		{
+			outError = "there is no per-user runtime directory that only this user can modify";
+			return nullptr;
+		}
+		RemoveStaleCopyDirectories(parent);
+
+		std::filesystem::path path = Platform::CreatePrivateDirectory(parent, fmt::format("{}{}-", c_CopyDirectoryPrefix, Platform::GetProcessID()));
+		if (path.empty())
+		{
+			outError = fmt::format("cannot create a private directory in '{}'", FileSystem::ToUTF8(parent));
+			return nullptr;
+		}
+		Ref<ScriptModuleCopyDirectory> directory(new ScriptModuleCopyDirectory(std::move(path)));
+		s_Current = directory;
+		return directory;
+	}
+
+	ScriptModuleCopyDirectory::~ScriptModuleCopyDirectory()
+	{
+		// Fails only while a copy is still in use (a library abandoned after a crash); a later session removes it then.
+		if (!FileSystem::Remove(m_Path))
+			ST_CORE_WARN("Cannot remove the script module directory '{}'; it is removed by a later session", FileSystem::ToUTF8(m_Path));
 	}
 
 	template<typename Function>
@@ -111,7 +191,35 @@ namespace Strata
 		}
 	}
 
-	Scope<ScriptModule> ScriptModule::Load(const std::filesystem::path& path, ScriptWatchdog* watchdog, ScriptModuleLoadError* outError)
+	bool ScriptModule::LoadLibraryGuarded(const std::filesystem::path& path, const std::string& displayPath, std::string& outError)
+	{
+		struct LibraryLoad
+		{
+			DynamicLibrary* Library;
+			const std::filesystem::path* Path;
+			bool Loaded;
+		};
+		LibraryLoad libraryLoad { &m_Library, &path, false };
+		CrashInfo crash;
+		if (!CrashGuard::Invoke([](void* data)
+		{
+			LibraryLoad* load = static_cast<LibraryLoad*>(data);
+			load->Loaded = load->Library->Load(*load->Path);
+		}, &libraryLoad, &crash))
+		{
+			RecordFault(ScriptCallSite { nullptr, "static initialization" }, crash);
+			outError = fmt::format("Script module '{}' crashed while loading: {}", displayPath, crash.Description);
+			return false;
+		}
+		if (!libraryLoad.Loaded)
+		{
+			outError = fmt::format("Cannot load script module '{}': {}", displayPath, m_Library.GetLastError());
+			return false;
+		}
+		return true;
+	}
+
+	Scope<ScriptModule> ScriptModule::Load(const std::filesystem::path& path, ScriptModuleLoadMode mode, ScriptWatchdog* watchdog, ScriptModuleLoadError* outError)
 	{
 		ST_PROFILE_FUNCTION();
 
@@ -129,44 +237,51 @@ namespace Strata
 		if (!FileSystem::IsRegularFile(path))
 			return fail(fmt::format("Script module '{}' does not exist", displayPath), true);
 
-		// Load a private copy so the build can replace the original file while the module is in use.
-		const std::filesystem::path copyDirectory = GetModuleCopyDirectory();
-		if (copyDirectory.empty() || !FileSystem::CreateDirectories(copyDirectory))
-			return fail("Cannot create the temporary directory for script modules");
-		static std::once_flag s_StaleCopiesRemoved;
-		std::call_once(s_StaleCopiesRemoved, [&]() { RemoveStaleModuleCopies(copyDirectory); });
-
-		const std::filesystem::path copyPath = copyDirectory / FileSystem::FromUTF8(fmt::format("{}-{}{}", FileSystem::ToUTF8(path.stem()), UUID().ToString(), FileSystem::ToUTF8(path.extension())));
-		if (!FileSystem::Copy(path, copyPath, false))
-			return fail(fmt::format("Cannot copy script module '{}' (it may still be being written)", displayPath), true);
-
 		Scope<ScriptModule> module(new ScriptModule());
 		module->m_SourcePath = path;
-		module->m_LoadedPath = copyPath;
 		module->m_Name = FileSystem::ToUTF8(path.stem());
 		module->m_Watchdog = watchdog;
 
-		// Loading runs the module's static initializers.
-		struct LibraryLoad
+		std::string error;
+		bool loaded = false;
+		if (mode == ScriptModuleLoadMode::InPlace)
 		{
-			DynamicLibrary* Library;
-			const std::filesystem::path* Path;
-			bool Loaded;
-		};
-		LibraryLoad libraryLoad { &module->m_Library, &copyPath, false };
-		CrashInfo crash;
-		const ScriptCallSite loadSite { nullptr, "static initialization" };
-		if (!CrashGuard::Invoke([](void* data)
-		{
-			LibraryLoad* load = static_cast<LibraryLoad*>(data);
-			load->Loaded = load->Library->Load(*load->Path);
-		}, &libraryLoad, &crash))
-		{
-			module->RecordFault(loadSite, crash);
-			return fail(fmt::format("Script module '{}' crashed while loading: {}", displayPath, crash.Description));
+			if (!module->LoadLibraryGuarded(path, displayPath, error))
+				return fail(std::move(error));
+			if (RegisterLibrary(module->m_Library.GetNativeHandle()))
+			{
+				module->m_LoadedPath = path;
+				loaded = true;
+			}
+			else
+			{
+				// The file is loaded already (a reload, another engine): this load only added a reference to that library,
+				// whose module state is in use. Dropping the reference runs no module code; the module loads from a copy.
+				module->m_Library.Unload();
+			}
 		}
-		if (!libraryLoad.Loaded)
-			return fail(fmt::format("Cannot load script module '{}': {}", displayPath, module->m_Library.GetLastError()));
+
+		if (!loaded)
+		{
+			// A private copy, so the build can replace the original file while the module is in use.
+			module->m_CopyDirectory = ScriptModuleCopyDirectory::Acquire(error);
+			if (!module->m_CopyDirectory)
+				return fail(fmt::format("Cannot load script module '{}' from a private copy: {}", displayPath, error));
+
+			const std::filesystem::path copyPath = module->m_CopyDirectory->GetPath()
+				/ FileSystem::FromUTF8(fmt::format("{}-{}{}", FileSystem::ToUTF8(path.stem()), UUID().ToString(), FileSystem::ToUTF8(path.extension())));
+			if (!FileSystem::Copy(path, copyPath, false))
+				return fail(fmt::format("Cannot copy script module '{}' (it may still be being written)", displayPath), true);
+			module->m_LoadedPath = copyPath; // From now on the destructor removes the copy
+
+			if (!module->LoadLibraryGuarded(copyPath, displayPath, error))
+				return fail(std::move(error));
+			if (!RegisterLibrary(module->m_Library.GetNativeHandle()))
+			{
+				module->m_Library.Unload();
+				return fail(fmt::format("Cannot load script module '{}': its private copy resolved to a library that is already loaded", displayPath));
+			}
+		}
 
 		const auto getVersion = module->m_Library.GetFunction<StrataScriptGetABIVersionFunction>(ST_SCRIPT_GET_ABI_VERSION_SYMBOL);
 		const auto load = module->m_Library.GetFunction<StrataScriptLoadFunction>(ST_SCRIPT_LOAD_SYMBOL);
@@ -252,16 +367,23 @@ namespace Strata
 		if (m_Library.IsLoaded())
 		{
 			// Unloading runs the module's static destructors.
+			void* library = m_Library.GetNativeHandle();
 			CrashInfo crash;
-			if (!CrashGuard::Invoke([](void* data) { static_cast<DynamicLibrary*>(data)->Unload(); }, &m_Library, &crash))
+			if (CrashGuard::Invoke([](void* data) { static_cast<DynamicLibrary*>(data)->Unload(); }, &m_Library, &crash))
 			{
+				UnregisterLibrary(library);
+			}
+			else
+			{
+				// The library stays registered: it remains loaded, so loading its file again would return it.
 				ST_CORE_ERROR("Script module '{}' crashed while unloading ({}); it stays loaded", m_Name, crash.Description);
 				m_Library.Release();
 			}
 		}
 
-		if (!m_LoadedPath.empty() && FileSystem::Exists(m_LoadedPath) && !FileSystem::Remove(m_LoadedPath))
-			ST_CORE_WARN("Cannot remove the temporary script module copy '{}'; it is removed by a later session", FileSystem::ToUTF8(m_LoadedPath));
+		// The copy goes with the module (its directory with the last copy).
+		if (m_CopyDirectory && !m_LoadedPath.empty() && FileSystem::Exists(m_LoadedPath) && !FileSystem::Remove(m_LoadedPath))
+			ST_CORE_WARN("Cannot remove the script module copy '{}'; it is removed by a later session", FileSystem::ToUTF8(m_LoadedPath));
 	}
 
 	const ScriptClassInfo* ScriptModule::FindClass(std::string_view name) const

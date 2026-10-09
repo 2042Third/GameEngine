@@ -52,7 +52,7 @@ TEST_SUITE("Scripting.Reload")
 	{
 		RebuildableModule module("ScriptReloadPlay");
 		module.Install(STRATA_TEST_SCRIPTS_RELOADV1);
-		ScopedScriptEngine engine(module.Path);
+		ScopedScriptEngine engine(module.Path, true);
 
 		Scene scene;
 		Entity target = scene.CreateEntity("Target");
@@ -120,6 +120,7 @@ TEST_SUITE("Scripting.Reload")
 		RebuildableModule module("ScriptReloadEdit");
 		module.Install(STRATA_TEST_SCRIPTS_RELOADV1);
 		ScriptEngine engine;
+		engine.SetHotReloadEnabled(true);
 		REQUIRE(engine.LoadModule(module.Path));
 		CHECK(engine.FindClass("OnlyInV1") != nullptr);
 		CHECK(HasField(engine.FindClass("Counter"), "RemovedInV2", PropertyType::Int));
@@ -141,7 +142,7 @@ TEST_SUITE("Scripting.Reload")
 	{
 		RebuildableModule module("ScriptReloadBroken");
 		module.Install(STRATA_TEST_SCRIPTS_RELOADV1);
-		ScopedScriptEngine engine(module.Path);
+		ScopedScriptEngine engine(module.Path, true);
 		Scene scene;
 		Entity entity = scene.CreateEntity("Counting");
 		AddScriptEntry(entity, "Counter");
@@ -173,8 +174,7 @@ TEST_SUITE("Scripting.Reload")
 	{
 		RebuildableModule module("ScriptHotReload");
 		module.Install(STRATA_TEST_SCRIPTS_RELOADV1);
-		ScopedScriptEngine engine(module.Path);
-		engine->SetHotReloadEnabled(true);
+		ScopedScriptEngine engine(module.Path, true);
 		CHECK(engine->IsHotReloadEnabled());
 
 		Scene scene;

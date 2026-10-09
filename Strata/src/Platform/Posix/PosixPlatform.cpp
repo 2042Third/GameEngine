@@ -3,10 +3,16 @@
 
 #include "Strata/Core/FileSystem.h"
 
+#include <cerrno>
+#include <csignal>
 #include <cstdlib>
 #include <fstream>
+#include <limits>
 #include <pthread.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
+#include <vector>
 
 #if defined(ST_PLATFORM_MACOS)
 	#include <mach-o/dyld.h>
@@ -17,6 +23,40 @@
 
 namespace Strata
 {
+
+	namespace
+	{
+
+		// The directory exists (as a directory; a symbolic link only if `followLinks`), belongs to this user and is
+		// writable by nobody else, so other users cannot add, replace or rename entries in it.
+		bool IsPrivateDirectory(const std::filesystem::path& path, bool followLinks)
+		{
+			struct stat info = {};
+			const int result = followLinks ? stat(path.c_str(), &info) : lstat(path.c_str(), &info);
+			return result == 0 && S_ISDIR(info.st_mode) && info.st_uid == geteuid() && (info.st_mode & (S_IWGRP | S_IWOTH)) == 0;
+		}
+
+		// <base>/<applicationName>, created with mode 0700 where missing, or empty unless both pass IsPrivateDirectory.
+		// The base may be a link (a relocated cache directory, say); the application's directory must be a real one.
+		std::filesystem::path PreparePrivateSubdirectory(const std::filesystem::path& base, std::string_view applicationName)
+		{
+			if (base.empty() || !base.is_absolute())
+				return {};
+			// A missing base is created (e.g. ~/.cache of a new account); an existing one is only checked.
+			if (mkdir(base.c_str(), 0700) != 0 && errno != EEXIST)
+				return {};
+			if (!IsPrivateDirectory(base, true))
+				return {};
+
+			std::filesystem::path directory = base / FileSystem::FromUTF8(applicationName);
+			if (mkdir(directory.c_str(), 0700) != 0 && errno != EEXIST)
+				return {};
+			if (!IsPrivateDirectory(directory, false))
+				return {};
+			return directory;
+		}
+
+	}
 
 	std::string_view Platform::GetName()
 	{
@@ -72,6 +112,48 @@ namespace Strata
 		return directory;
 	}
 
+	std::filesystem::path Platform::GetUserRuntimeDirectory(std::string_view applicationName)
+	{
+		std::vector<std::filesystem::path> candidates;
+		const std::optional<std::string> home = GetEnvVar("HOME");
+#if defined(ST_PLATFORM_MACOS)
+		// The per-user temporary directory (what $TMPDIR names in a login session).
+		const size_t size = confstr(_CS_DARWIN_USER_TEMP_DIR, nullptr, 0);
+		if (size > 0)
+		{
+			std::string buffer(size, '\0');
+			if (confstr(_CS_DARWIN_USER_TEMP_DIR, buffer.data(), buffer.size()) == size)
+				candidates.push_back(FileSystem::FromUTF8(buffer.c_str()));
+		}
+		if (home && !home->empty())
+			candidates.push_back(FileSystem::FromUTF8(*home) / "Library" / "Caches");
+#else
+		if (const std::optional<std::string> runtime = GetEnvVar("XDG_RUNTIME_DIR"); runtime && !runtime->empty())
+			candidates.push_back(FileSystem::FromUTF8(*runtime));
+		if (const std::optional<std::string> cache = GetEnvVar("XDG_CACHE_HOME"); cache && !cache->empty())
+			candidates.push_back(FileSystem::FromUTF8(*cache));
+		else if (home && !home->empty())
+			candidates.push_back(FileSystem::FromUTF8(*home) / ".cache");
+#endif
+
+		for (const std::filesystem::path& candidate : candidates)
+		{
+			std::filesystem::path directory = PreparePrivateSubdirectory(candidate, applicationName);
+			if (!directory.empty())
+				return directory;
+		}
+		return {};
+	}
+
+	std::filesystem::path Platform::CreatePrivateDirectory(const std::filesystem::path& parent, std::string_view prefix)
+	{
+		// mkdtemp picks an unused name and creates the directory with mode 0700 in one step.
+		std::string pattern = (parent / FileSystem::FromUTF8(fmt::format("{}XXXXXX", prefix))).string();
+		if (!mkdtemp(pattern.data()))
+			return {};
+		return std::filesystem::path(pattern);
+	}
+
 	bool Platform::IsDebuggerAttached()
 	{
 #if defined(ST_PLATFORM_MACOS)
@@ -109,6 +191,15 @@ namespace Strata
 	uint32_t Platform::GetProcessID()
 	{
 		return static_cast<uint32_t>(getpid());
+	}
+
+	bool Platform::IsProcessRunning(uint32_t processID)
+	{
+		// kill() treats 0 and negative values as process groups.
+		if (processID == 0 || processID > static_cast<uint32_t>(std::numeric_limits<pid_t>::max()))
+			return false;
+		// Signal 0 only checks that the process exists; EPERM means it exists but belongs to another user.
+		return kill(static_cast<pid_t>(processID), 0) == 0 || errno == EPERM;
 	}
 
 	std::optional<std::string> Platform::GetEnvVar(std::string_view name)

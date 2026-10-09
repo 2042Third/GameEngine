@@ -4,12 +4,14 @@
 #include "Strata/Core/DynamicLibrary.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Platform.h"
+#include "Strata/Core/Process.h"
 #include "Strata/Core/StringUtils.h"
 #include "Strata/Scripting/ScriptModule.h"
 #include "TestHelpers.h"
 
 #include "StrataScript/ScriptABI.h"
 
+#include <chrono>
 #include <set>
 #include <string>
 #include <vector>
@@ -240,19 +242,26 @@ TEST_SUITE("Scripting.Module")
 		CHECK(Contains(error, "No script module"));
 	}
 
-	TEST_CASE("Modules run from a private copy that is removed when unloaded")
+	TEST_CASE("Hot-reloadable modules run from a private copy that is removed when unloaded")
 	{
 		const std::filesystem::path directory = CreateTemporaryDirectory("ScriptCopy");
 		const std::filesystem::path module = directory / FileSystem::FromUTF8(ScriptEngine::GetModuleFileName("Game"));
 		REQUIRE(FileSystem::Copy(GetTestScriptModule(STRATA_TEST_SCRIPTS_API), module));
 
 		ScriptEngine engine;
+		engine.SetHotReloadEnabled(true);
 		REQUIRE(engine.LoadModule(module));
 		REQUIRE(engine.GetModule());
+		CHECK(engine.GetModule()->IsLoadedFromCopy());
 		const std::filesystem::path loadedPath = engine.GetModule()->GetLoadedPath();
 		CHECK(loadedPath != module);
 		CHECK(FileSystem::Exists(loadedPath));
 		CHECK(engine.GetModule()->GetSourcePath() == module.lexically_normal());
+
+		// The copy is in a directory of this process inside the user's private runtime directory.
+		const std::filesystem::path copyDirectory = loadedPath.parent_path();
+		CHECK(copyDirectory.parent_path() == Platform::GetUserRuntimeDirectory("Strata"));
+		CHECK(StringUtils::StartsWith(FileSystem::ToUTF8(copyDirectory.filename()), fmt::format("ScriptModules-{}-", Platform::GetProcessID())));
 
 		// The build can replace or delete the original while the module is in use.
 		CHECK(FileSystem::WriteBytes(module, CreateGarbage(128)));
@@ -261,7 +270,82 @@ TEST_SUITE("Scripting.Module")
 
 		engine.UnloadModule();
 		CHECK_FALSE(FileSystem::Exists(loadedPath));
+		CHECK_FALSE(FileSystem::Exists(copyDirectory)); // Removed with its last copy
 		CHECK_FALSE(engine.IsModuleLoaded());
+	}
+
+	TEST_CASE("Modules load in place until hot reload is enabled")
+	{
+		const std::filesystem::path module = CreateTemporaryDirectory("ScriptInPlace") / FileSystem::FromUTF8(ScriptEngine::GetModuleFileName("Game"));
+		REQUIRE(FileSystem::Copy(GetTestScriptModule(STRATA_TEST_SCRIPTS_API), module));
+
+		ScriptEngine engine;
+		REQUIRE(engine.LoadModule(module));
+		REQUIRE(engine.GetModule());
+		CHECK_FALSE(engine.GetModule()->IsLoadedFromCopy());
+		CHECK(engine.GetModule()->GetLoadedPath() == module.lexically_normal());
+		CHECK_FALSE(engine.IsReloadPending());
+
+		// Enabling hot reload moves the module to a private copy at the next update, so the build can replace the file.
+		engine.SetHotReloadEnabled(true);
+		CHECK(engine.IsReloadPending());
+		engine.Update();
+		CHECK_FALSE(engine.IsReloadPending());
+		CHECK(engine.GetLoadCount() == 2);
+		REQUIRE(engine.GetModule());
+		CHECK(engine.GetModule()->IsLoadedFromCopy());
+		CHECK(FileSystem::WriteBytes(module, CreateGarbage(128)));
+		CHECK(engine.FindClass("Lifecycle") != nullptr);
+		engine.UnloadModule();
+	}
+
+	TEST_CASE("A module file that is already loaded is loaded again from a copy")
+	{
+		// Loading a loaded file again would return the same library, sharing its module state; each engine gets its own.
+		ScriptEngine first;
+		ScopedScriptEngine second;
+		REQUIRE(first.LoadModule(GetTestScriptModule(STRATA_TEST_SCRIPTS_API)));
+		REQUIRE(second->LoadModule(GetTestScriptModule(STRATA_TEST_SCRIPTS_API)));
+		CHECK_FALSE(first.GetModule()->IsLoadedFromCopy());
+		CHECK(second->GetModule()->IsLoadedFromCopy());
+
+		// A reload of a module that runs in place loads the new version from a copy, next to the running one.
+		REQUIRE(first.Reload());
+		CHECK(first.GetModule()->IsLoadedFromCopy());
+		CHECK(first.GetModule()->GetLoadedPath() != second->GetModule()->GetLoadedPath());
+		first.UnloadModule();
+
+		// The other engine's module is unaffected.
+		Scene scene;
+		Entity entity = scene.CreateEntity("Counter");
+		ScriptEntry& entry = AddScriptEntry(entity, "Lifecycle");
+		AddFieldOverride(entry, "RecordUpdates", PropertyType::Bool, false);
+		scene.OnRuntimeStart();
+		RunFrames(scene, 2);
+		CHECK(GetField<int32_t>(GetScriptSystem(scene), entity, "Lifecycle", "Updates") == 2);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Copy directories left behind by ended processes are removed")
+	{
+		// A process that ended; the object keeps its ID from being reused on Windows (the process handle stays open).
+		Process ended;
+		ProcessSpecification specification;
+		specification.Executable = GetTestExecutablePath();
+		specification.Arguments = { "--strata-test-helper=exit-code", "0" };
+		REQUIRE(ended.Start(specification));
+		REQUIRE(ended.Wait(std::chrono::milliseconds(30000)).has_value());
+
+		const std::filesystem::path runtime = Platform::GetUserRuntimeDirectory("Strata");
+		REQUIRE_FALSE(runtime.empty());
+		const std::filesystem::path stale = runtime / FileSystem::FromUTF8(fmt::format("ScriptModules-{}-Stale", ended.GetProcessID()));
+		REQUIRE(FileSystem::WriteBytes(stale / "Game-Leftover.dll", CreateGarbage(16)));
+
+		ScriptEngine engine;
+		engine.SetHotReloadEnabled(true);
+		REQUIRE(engine.LoadModule(GetTestScriptModule(STRATA_TEST_SCRIPTS_API)));
+		CHECK_FALSE(FileSystem::Exists(stale));
+		engine.UnloadModule();
 	}
 
 	TEST_CASE("Scenes play without a script engine or module")

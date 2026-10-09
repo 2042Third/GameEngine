@@ -137,9 +137,10 @@ find_package(StrataScriptCore CONFIG REQUIRED PATHS "<engine>/StrataScriptCore/C
 strata_add_script_module(MyGameScripts SOURCE_DIR Scripts)
 ```
 
-Rebuilding while the game runs is safe: the engine runs a private copy of the module and, with hot reload enabled
-(`ScriptEngine::SetHotReloadEnabled`), reloads the new build once the file is completely written. A build that fails to load (or crashes while loading) leaves the running version in
-place. Field values survive the reload when the field keeps its name and type.
+Rebuilding while the game runs is safe with hot reload enabled (`ScriptEngine::SetHotReloadEnabled`): the engine then
+runs a private copy of the module and reloads the new build once the file is completely written. A build that fails to
+load (or crashes while loading) leaves the running version in place. Field values survive the reload when the field
+keeps its name and type. Without hot reload (shipped games) the module runs from its file.
 
 ## Testing scripts
 

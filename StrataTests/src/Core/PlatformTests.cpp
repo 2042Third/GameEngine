@@ -4,10 +4,17 @@
 #include "Strata/Core/DynamicLibrary.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Platform.h"
+#include "Strata/Core/PlatformDetection.h"
 #include "Strata/Core/Process.h"
 #include "TestHelpers.h"
 
+#include <chrono>
 #include <climits>
+
+#if defined(ST_PLATFORM_POSIX)
+	#include <sys/stat.h>
+	#include <unistd.h>
+#endif
 
 using namespace Strata;
 
@@ -85,6 +92,54 @@ TEST_SUITE("Core.Platform")
 	{
 		const std::filesystem::path directory = Platform::GetUserDataDirectory("StrataTests");
 		CHECK(FileSystem::IsDirectory(directory));
+	}
+
+	TEST_CASE("Private directories are unique and only the user can modify them")
+	{
+		const std::filesystem::path runtime = Platform::GetUserRuntimeDirectory("StrataTests");
+		REQUIRE_FALSE(runtime.empty());
+		CHECK(FileSystem::IsDirectory(runtime));
+		CHECK(Platform::GetUserRuntimeDirectory("StrataTests") == runtime);
+
+		const std::filesystem::path first = Platform::CreatePrivateDirectory(runtime, "Private-");
+		const std::filesystem::path second = Platform::CreatePrivateDirectory(runtime, "Private-");
+		REQUIRE_FALSE(first.empty());
+		REQUIRE_FALSE(second.empty());
+		CHECK(first != second);
+		CHECK(first.parent_path() == runtime);
+		CHECK(FileSystem::ToUTF8(first.filename()).starts_with("Private-"));
+		CHECK(FileSystem::IsDirectory(first));
+		CHECK(FileSystem::IsDirectory(second));
+#if defined(ST_PLATFORM_POSIX)
+		for (const std::filesystem::path& directory : { runtime, first })
+		{
+			struct stat info = {};
+			REQUIRE(lstat(directory.c_str(), &info) == 0);
+			CHECK(S_ISDIR(info.st_mode));
+			CHECK(info.st_uid == geteuid());
+			CHECK((info.st_mode & (S_IWGRP | S_IWOTH)) == 0);
+		}
+		struct stat created = {};
+		REQUIRE(stat(first.c_str(), &created) == 0);
+		CHECK((created.st_mode & 0777) == 0700);
+#endif
+		CHECK(Platform::CreatePrivateDirectory(runtime / "Missing", "Private-").empty());
+
+		CHECK(FileSystem::Remove(first));
+		CHECK(FileSystem::Remove(second));
+	}
+
+	TEST_CASE("Process liveness")
+	{
+		CHECK(Platform::IsProcessRunning(Platform::GetProcessID()));
+		CHECK_FALSE(Platform::IsProcessRunning(0));
+
+		// The Process object keeps the ended process's ID from being reused while it exists (Windows keeps the handle open).
+		Process process;
+		REQUIRE(process.Start(HelperProcess({ "--strata-test-helper=exit-code", "0" })));
+		const uint32_t processID = process.GetProcessID();
+		REQUIRE(process.Wait(std::chrono::milliseconds(30000)).has_value());
+		CHECK_FALSE(Platform::IsProcessRunning(processID));
 	}
 
 	TEST_CASE("DynamicLibrary loads, resolves symbols and unloads")

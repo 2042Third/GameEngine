@@ -246,9 +246,13 @@ Building and loading scripts:
   ```
   Use the engine's compiler and configuration. The module is `<Name>.dll`/`.so`/`.dylib` (`ScriptEngine::GetModuleFileName`).
 - The host: `ScriptEngine::LoadModule(path)`, `ScriptEngine::SetActive(engine)` before scenes start playing,
-  `SetHotReloadEnabled(true)` and `Update()` once per frame (outside scene updates) for hot reload. The module is loaded
-  from a private temporary copy, so the build can overwrite the original at any time; a failed (re)load keeps the
-  running module. Poll `IsFaulted()`/`GetFault()` to stop play mode after a crash; reloading clears the fault.
+  `SetHotReloadEnabled(true)` (before loading) and `Update()` once per frame (outside scene updates) for hot reload. With
+  hot reload the module runs from a private copy in a directory only the user can modify
+  (`Platform::GetUserRuntimeDirectory`, one directory per process, removed with its last copy), so the build can
+  overwrite the original at any time; without it (shipped games) the module loads in place. A file that is already
+  loaded (a reload, another engine) is always loaded from a copy, because loading it again would share the running
+  module's state. A failed (re)load keeps the running module. Poll `IsFaulted()`/`GetFault()` to stop play mode after a
+  crash; reloading clears the fault.
 - Hot reload during play snapshots every instance's fields, deletes the instances (no `OnDestroy`), loads the new
   module, recreates the instances, restores fields that still exist with the same name and type and calls `OnReload`
   (not `OnCreate`). Classes that disappeared lose their instances; new classes start normally.

@@ -42,8 +42,10 @@ namespace Strata
 		ScriptEngine(const ScriptEngine&) = delete;
 		ScriptEngine& operator=(const ScriptEngine&) = delete;
 
-		// Loads the module at `path`. If a module is already loaded this is a reload: running scenes keep their script
-		// state (see Reload). On failure the current module (if any) keeps running and the error is logged.
+		// Loads the module at `path`: from the file itself, or from a private copy while hot reload is enabled (see
+		// SetHotReloadEnabled). A file that is already loaded (by this or another engine) is always loaded from a copy. If
+		// a module is already loaded this is a reload: running scenes keep their script state (see Reload). On failure
+		// the current module (if any) keeps running and the error is logged.
 		bool LoadModule(const std::filesystem::path& path, std::string* outError = nullptr);
 		// Loads the module file again (hot reload). Running scenes snapshot every script's fields, destroy the instances
 		// without OnDestroy, recreate them from the new code with the fields that still exist (same name and type) and
@@ -60,7 +62,10 @@ namespace Strata
 		// Number of successful loads and reloads.
 		uint64_t GetLoadCount() const { return m_LoadCount; }
 
-		// Watches the module file and reloads it in Update() when it changes (once the file is completely written).
+		// Watches the module file and reloads it in Update() when it changes (once the file is completely written). While
+		// enabled, modules load from a private copy in a directory only the user can modify, so the build can replace the
+		// file; enable it before LoadModule (a module that already runs from its file is moved to a copy at the next
+		// Update(), like a reload). Without hot reload (shipped games) modules load in place.
 		void SetHotReloadEnabled(bool enabled);
 		bool IsHotReloadEnabled() const { return m_HotReloadEnabled; }
 		// Once per frame, outside scene updates: performs pending hot reloads.

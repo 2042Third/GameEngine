@@ -27,8 +27,9 @@ namespace Strata::Tests
 	{
 	public:
 		ScopedScriptEngine();
-		// Loads the module (REQUIREs success).
-		explicit ScopedScriptEngine(const std::filesystem::path& module);
+		// Loads the module (REQUIREs success). With hot reload enabled first, the module runs from a private copy, so tests
+		// can overwrite the file ("rebuild" it) while it is loaded.
+		explicit ScopedScriptEngine(const std::filesystem::path& module, bool enableHotReload = false);
 		~ScopedScriptEngine();
 
 		ScopedScriptEngine(const ScopedScriptEngine&) = delete;

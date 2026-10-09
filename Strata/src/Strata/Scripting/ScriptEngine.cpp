@@ -76,9 +76,11 @@ namespace Strata
 			return false;
 		}
 
-		// The new module loads next to the old one, so a broken build never disturbs the running game.
+		// The new module loads next to the old one, so a broken build never disturbs the running game. With hot reload it
+		// runs from a private copy, so the build can replace the file while it is loaded.
 		ScriptModuleLoadError loadError;
-		Scope<ScriptModule> module = ScriptModule::Load(path, m_Watchdog.get(), &loadError);
+		const ScriptModuleLoadMode mode = m_HotReloadEnabled ? ScriptModuleLoadMode::Copy : ScriptModuleLoadMode::InPlace;
+		Scope<ScriptModule> module = ScriptModule::Load(path, mode, m_Watchdog.get(), &loadError);
 		if (!module)
 		{
 			ST_CORE_ERROR("{}{}", loadError.Message, m_Module ? "; the previously loaded module keeps running" : "");
@@ -155,6 +157,15 @@ namespace Strata
 			StartWatching();
 		else
 			StopWatching();
+
+		// A module running from its file keeps the build from replacing it (on Windows the file is locked): move it to a
+		// private copy at the next Update().
+		if (enabled && m_Module && !m_Module->IsLoadedFromCopy())
+		{
+			m_ReloadPending = true;
+			m_ReloadAttempts = 0;
+			m_NextReloadAttempt = std::chrono::steady_clock::now();
+		}
 	}
 
 	void ScriptEngine::StartWatching()

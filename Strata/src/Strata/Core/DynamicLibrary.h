@@ -28,6 +28,10 @@ namespace Strata
 		void Release();
 
 		bool IsLoaded() const { return m_Handle != nullptr; }
+		// The platform's handle (HMODULE, dlopen handle). Loading a library file that is already loaded in the process
+		// returns the same handle: the platform counts references instead of loading it again, so both users share all of
+		// the library's state.
+		void* GetNativeHandle() const { return m_Handle; }
 		const std::filesystem::path& GetPath() const { return m_Path; }
 		const std::string& GetLastError() const { return m_LastError; }
 
