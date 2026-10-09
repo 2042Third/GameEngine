@@ -95,7 +95,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   build. Rendering features are tested on pixels read back with `Renderer::ReadTexture`.
 - Use `Strata::Tests::CreateTemporaryDirectory()` for files; never write into the source tree.
 - `StrataTests.exe --strata-test-helper=<mode>` turns the test binary into a child process for
-  process tests (see `TestMain.cpp`), so tests never depend on external programs.
+  process tests (see `TestMain.cpp`), so tests never depend on external programs. With `STRATA_TEST_FAKE_CMAKE=succeed`
+  it also stands in for CMake in script builds (`ScriptBuildSettings::CMake`), building nothing.
 - **Feature test** (golden rule 6): `StrataTests/FeatureTest/` is a real project (`FeatureTest.stproj`, `Assets/`
   with committed `.meta` files). Its scene `Scenes/Feature.stscene` contains every registered component, the project
   has assets of every type (the tiny binary ones come from `Tools/GenerateAssets.py`, whose outputs are committed), and
@@ -133,6 +134,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   `package` tests: `StrataTests.Package` (doctest suites named `Package*`, e.g. `Package.ScriptBuild`: script.build,
   hot reload while playing, compiler diagnostics, export) and `StrataEditor.Scripts` (`Editor/ScriptsEndToEnd.cmake`:
   the real editor creates a project, builds and attaches a script, plays and exports, and the game runs headless).
+  The `Package*` suites build in the system temp directory, where MSBuild does not track files (MSB8029) and may relink
+  unchanged modules: do not rely on a build leaving the module unchanged there (use the fake CMake instead).
 
 ## Code style (Hazel conventions)
 
