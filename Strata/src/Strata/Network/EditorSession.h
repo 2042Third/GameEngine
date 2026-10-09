@@ -21,7 +21,7 @@ namespace Strata
 		uint64_t ProcessStartTime = 0;  // Platform::GetProcessStartTime of ProcessId, to detect a reused process id
 		std::string Address = "127.0.0.1"; // The loopback address the editor listens on
 		uint16_t Port = 0;
-		std::string Token;              // Secret required by rpc.authenticate
+		std::string Token;              // Secret both sides prove in the handshake (see RpcAuthentication); never sent
 		std::string ProjectPath;        // UTF-8; empty when no project is open
 		std::string EditorVersion;
 		bool Headless = false;
