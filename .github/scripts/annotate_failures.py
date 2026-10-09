@@ -23,7 +23,7 @@ PATTERNS = [
 ]
 UNLOCATED = re.compile(
     r"(undefined reference|Undefined symbols|ld: error|ld: symbol|error LNK|collect2|CMake Error|\*\*\*Failed|\*\*\*Exception|"
-    r"Subprocess aborted|Timeout|SegFault|FATAL ERROR|Fatal signal|terminate called|Assertion|Sanitizer|"
+    r"Subprocess aborted|Timeout|SegFault|FATAL ERROR|Fatal signal|Output flood|terminate called|Assertion|Sanitizer|"
     r"The following tests FAILED)")
 
 
