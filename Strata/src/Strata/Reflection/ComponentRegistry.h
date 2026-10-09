@@ -22,7 +22,8 @@ namespace Strata
 		Hidden = ST_BIT(0),       // Internal: not shown in the inspector or add-component menus
 		NotRemovable = ST_BIT(1), // Present on every entity (e.g. Transform)
 		NoCopy = ST_BIT(2),       // Not copied when entering play mode
-		NoSerialize = ST_BIT(3)   // Not written as a component (the scene serializer stores it itself, e.g. ID, parent)
+		NoSerialize = ST_BIT(3),  // Not written as a component (the scene serializer stores it itself, e.g. ID, parent)
+		EngineAdded = ST_BIT(4)   // Added only by the engine (e.g. prefab links): visible and removable, never added by users or tools
 	};
 	ST_DEFINE_ENUM_FLAG_OPERATORS(ComponentFlags)
 
@@ -50,6 +51,7 @@ namespace Strata
 
 		bool IsHidden() const { return HasFlag(Flags, ComponentFlags::Hidden); }
 		bool IsRemovable() const { return !HasFlag(Flags, ComponentFlags::NotRemovable); }
+		bool IsAddable() const { return !IsHidden() && !HasFlag(Flags, ComponentFlags::EngineAdded) && !HasFlag(Flags, ComponentFlags::NoSerialize); }
 		bool IsCopyable() const { return !HasFlag(Flags, ComponentFlags::NoCopy); }
 
 		const PropertyInfo* FindProperty(std::string_view name) const; // Case-insensitive

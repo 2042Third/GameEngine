@@ -32,6 +32,7 @@
 #include "Strata/Input/KeyCodes.h"
 #include "Strata/Input/MouseCodes.h"
 
+#include "Strata/Project/GameManifest.h"
 #include "Strata/Project/Project.h"
 
 #include "Strata/Renderer/Material.h"
@@ -39,6 +40,8 @@
 #include "Strata/Renderer/MeshFactory.h"
 #include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/Texture.h"
+
+#include "Strata/Runtime/GameRuntime.h"
 
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"

@@ -148,6 +148,15 @@ namespace Strata
 				*outError = fmt::format("Component '{}' is internal and cannot be added directly", info.Name);
 			return false;
 		}
+		// Already present: nothing to add, even for components only the engine adds.
+		if (info.Has(entity.GetScene()->GetRegistry(), entity.GetHandle()))
+			return true;
+		if (HasFlag(info.Flags, ComponentFlags::EngineAdded))
+		{
+			if (outError)
+				*outError = fmt::format("Component '{}' is added by the engine (e.g. when instantiating a prefab) and cannot be added directly", info.Name);
+			return false;
+		}
 
 		info.Add(entity.GetScene()->GetRegistry(), entity.GetHandle());
 		return true;

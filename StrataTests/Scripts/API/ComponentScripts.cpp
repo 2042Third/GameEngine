@@ -22,6 +22,7 @@ public:
 		Expect(self.AddComponent("Camera"), "adding a present component is a no-op");
 		Expect(!self.AddComponent("NoSuchComponent"), "AddComponent of an unknown component");
 		Expect(!self.AddComponent("ID") && !self.AddComponent("Inactive"), "internal components cannot be added");
+		Expect(!self.AddComponent("PrefabInstance") && !self.HasComponent("PrefabInstance"), "engine-added components cannot be added");
 
 		// Float, with range clamping and integer conversion.
 		Expect(self.SetProperty("Camera", "PerspectiveFOV", 75.0f), "SetProperty float");

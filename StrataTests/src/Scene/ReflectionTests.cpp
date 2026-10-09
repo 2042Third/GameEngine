@@ -2,7 +2,10 @@
 
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Reflection/PropertyJson.h"
+#include "Strata/Scene/ComponentAccess.h"
 #include "Strata/Scene/Components.h"
+#include "Strata/Scene/Entity.h"
+#include "Strata/Scene/Scene.h"
 
 using namespace Strata;
 
@@ -148,5 +151,25 @@ TEST_SUITE("Reflection")
 
 		const PropertyInfo* mesh = ComponentRegistry::Find<MeshRendererComponent>()->FindProperty("Mesh");
 		CHECK(DescribeProperty(*mesh)["AssetType"] == "Mesh");
+	}
+
+	TEST_CASE("Components added by the engine cannot be added directly")
+	{
+		Scene scene;
+		Entity entity = scene.CreateEntity("Instance");
+		const ComponentInfo& prefabInstance = *ComponentRegistry::Find<PrefabInstanceComponent>();
+		CHECK_FALSE(prefabInstance.IsAddable());
+		CHECK(prefabInstance.IsRemovable());
+		CHECK(ComponentRegistry::Find<PointLightComponent>()->IsAddable());
+		CHECK_FALSE(ComponentRegistry::Find<RelationshipComponent>()->IsAddable());
+
+		std::string error;
+		CHECK_FALSE(ComponentAccess::AddComponent(entity, prefabInstance, &error));
+		CHECK(error.find("added by the engine") != std::string::npos);
+		CHECK_FALSE(entity.HasComponent<PrefabInstanceComponent>());
+		// Once the engine added it (prefab instantiation), adding again is a no-op that succeeds.
+		entity.AddComponent<PrefabInstanceComponent>();
+		CHECK(ComponentAccess::AddComponent(entity, prefabInstance, &error));
+		CHECK(ComponentAccess::RemoveComponent(entity, prefabInstance, &error));
 	}
 }

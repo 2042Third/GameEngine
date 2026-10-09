@@ -143,7 +143,7 @@ TEST_SUITE("Scripting.API")
 		AddScriptEntry(entity, "ComponentAPI");
 		scene.OnRuntimeStart();
 
-		CheckScriptChecks(GetScriptSystem(scene), entity, "ComponentAPI", 45);
+		CheckScriptChecks(GetScriptSystem(scene), entity, "ComponentAPI", 46);
 		CHECK_FALSE(entity.HasComponent<CameraComponent>());
 		REQUIRE(entity.HasComponent<TextComponent>());
 		CHECK(entity.GetComponent<TextComponent>().Text == "Score: 10");
@@ -168,6 +168,11 @@ TEST_SUITE("Scripting.API")
 		int32_t probes = 0;
 		for (const ComponentInfo* info : ComponentRegistry::GetAll())
 		{
+			// Scripts cannot add components only the engine adds (the probe's AddComponent fails), but their properties
+			// must still be reachable on entities that have them.
+			if (HasFlag(info->Flags, ComponentFlags::EngineAdded) && !info->Has(scene.GetRegistry(), probe.GetHandle()))
+				info->Add(scene.GetRegistry(), probe.GetHandle());
+
 			for (const PropertyInfo& property : info->Properties)
 			{
 				INFO("Property ", info->Name, ".", property.Name);

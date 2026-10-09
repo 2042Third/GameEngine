@@ -1,0 +1,15 @@
+[
+	{ "command": "editor.commands" },
+	{ "command": "entity.create", "parameters": { "name": "Floor", "components": { "MeshRenderer": { "Mesh": "0000000000000003" }, "Transform": { "Scale": [10, 1, 10] } } } },
+	{ "command": "entity.create", "parameters": { "name": "Sun", "components": { "DirectionalLight": { "Intensity": 3 } } } },
+	{ "command": "entity.create", "parameters": { "name": "Lamp", "components": { "PointLight": { "Intensity": 5, "Range": 8 } } } },
+	{ "command": "scene.setSettings", "parameters": { "gravity": [0, -9.81, 0] } },
+	{ "command": "edit.undo" },
+	{ "command": "edit.redo" },
+	{ "command": "play.start" },
+	{ "command": "play.pause", "parameters": { "paused": true } },
+	{ "command": "play.step", "parameters": { "frames": 2 } },
+	{ "command": "play.stop" },
+	{ "command": "scene.hierarchy" },
+	{ "command": "log.read", "parameters": { "minLevel": "Warn" } }
+]
