@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Audio/AudioTestUtils.h"
 #include "FeatureTest/FeatureTestUtils.h"
 #include "Scripting/ScriptTestUtils.h"
 #include "Strata/Core/FileSystem.h"
@@ -169,6 +170,9 @@ TEST_SUITE("FeatureTest")
 
 	TEST_CASE("The feature scene plays headless with every script check passing")
 	{
+		// Audio without an output device, as headless games have it, so that the scripts' sounds play.
+		ScopedAudioEngine audio;
+		REQUIRE(audio.Initialized);
 		FeatureProject project;
 		LoadAllAssets(*project.GetAssetManager());
 		const Ref<Scene> scene = project.LoadStartScene();

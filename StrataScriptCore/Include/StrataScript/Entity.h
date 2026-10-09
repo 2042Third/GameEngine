@@ -15,6 +15,7 @@
 namespace Strata
 {
 
+	class AudioSource;
 	class Component;
 	class RigidBody;
 	class TransformComponent;
@@ -70,6 +71,8 @@ namespace Strata
 		TransformComponent GetTransform() const;
 		// The entity's physics body (see Physics.h).
 		RigidBody GetRigidBody() const;
+		// Playback of the entity's AudioSource component (see Audio.h).
+		AudioSource GetAudioSource() const;
 
 		// Script instances on this entity, by class (must be registered with ST_SCRIPT_CLASS) or by class name.
 		template<typename T>

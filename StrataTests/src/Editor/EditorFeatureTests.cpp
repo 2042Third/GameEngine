@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Audio/AudioTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "FeatureTest/FeatureTestUtils.h"
@@ -59,6 +60,10 @@ TEST_SUITE("Editor.FeatureTest")
 	{
 		const std::filesystem::path directory = CreateTemporaryDirectory("EditorFeatureTest");
 		const std::filesystem::path projectFile = CopyFeatureProject(directory / "Project");
+		// Audio without an output device (the editor's and the game's applications would initialize it), so that the scripts'
+		// sounds play.
+		ScopedAudioEngine audio;
+		REQUIRE(audio.Initialized);
 		// Scenes played while it is active (by the editor and by the exported game) run the feature scripts.
 		ScopedScriptEngine engine(GetFeatureScriptModule());
 		ScopedScriptLogLevel scriptLogLevel;

@@ -2,6 +2,7 @@
 #include "Strata/Scripting/ScriptHostAPI.h"
 
 #include "Strata/Asset/AssetManager.h"
+#include "Strata/Audio/AudioSystem.h"
 #include "Strata/Input/Input.h"
 #include "Strata/Math/Math.h"
 #include "Strata/Physics/PhysicsSystem.h"
@@ -1344,6 +1345,183 @@ namespace Strata
 		}
 
 		////////////////////////////////////////////////////////////////////////////////
+		// Audio
+		////////////////////////////////////////////////////////////////////////////////
+
+		// The scene's audio system, reporting when the scene plays without audio.
+		AudioSystem* RequireAudio(ScriptSystem& system, const char* function)
+		{
+			AudioSystem* audio = system.GetScene().GetSystem<AudioSystem>();
+			if (!audio)
+				system.ReportProblem(function, "the scene plays without audio");
+			return audio;
+		}
+
+		// The entity whose AudioSource a function acts on, reporting why there is none.
+		Entity RequireAudioSource(ScriptSystem& system, StrataScriptEntityID id, const char* function)
+		{
+			const Entity entity = RequireEntity(system, id, function);
+			if (!entity)
+				return {};
+			if (!entity.HasComponent<AudioSourceComponent>())
+			{
+				system.ReportProblem(function, fmt::format("'{}' has no AudioSource component", entity.GetName()));
+				return {};
+			}
+			if (!system.GetScene().IsActiveInHierarchy(entity))
+			{
+				system.ReportProblem(function, fmt::format("'{}' is inactive, so its AudioSource is silent", entity.GetName()));
+				return {};
+			}
+			return entity;
+		}
+
+		template<typename Result, typename Action>
+		Result ControlSource(StrataScriptContext* context, StrataScriptEntityID entity, const char* function, Result failure, Action&& action)
+		{
+			return HostCall(function, failure, [&]() -> Result
+			{
+				ScriptSystem* system = ResolveContext(context, function);
+				AudioSystem* audio = system ? RequireAudio(*system, function) : nullptr;
+				const Entity source = audio ? RequireAudioSource(*system, entity, function) : Entity();
+				return source ? action(*system, *audio, source) : failure;
+			});
+		}
+
+		bool HostAudioPlay(StrataScriptContext* context, StrataScriptEntityID entity)
+		{
+			return ControlSource(context, entity, "AudioPlay", false, [](ScriptSystem& system, AudioSystem& audio, Entity source)
+			{
+				if (audio.Play(source))
+					return true;
+				system.ReportProblem("AudioPlay", fmt::format("'{}' cannot play: its clip is missing or unusable, or there is no audio output",
+					source.GetName()));
+				return false;
+			});
+		}
+
+		bool HostAudioPause(StrataScriptContext* context, StrataScriptEntityID entity)
+		{
+			return ControlSource(context, entity, "AudioPause", false, [](ScriptSystem&, AudioSystem& audio, Entity source) { return audio.Pause(source); });
+		}
+
+		bool HostAudioStop(StrataScriptContext* context, StrataScriptEntityID entity)
+		{
+			return ControlSource(context, entity, "AudioStop", false, [](ScriptSystem&, AudioSystem& audio, Entity source) { return audio.Stop(source); });
+		}
+
+		bool HostAudioIsPlaying(StrataScriptContext* context, StrataScriptEntityID entity)
+		{
+			return ControlSource(context, entity, "AudioIsPlaying", false, [](ScriptSystem&, AudioSystem& audio, Entity source) { return audio.IsPlaying(source); });
+		}
+
+		bool HostAudioSeek(StrataScriptContext* context, StrataScriptEntityID entity, float seconds)
+		{
+			return ControlSource(context, entity, "AudioSeek", false, [seconds](ScriptSystem& system, AudioSystem& audio, Entity source)
+			{
+				if (!std::isfinite(seconds))
+				{
+					system.ReportProblem("AudioSeek", "the position must be finite");
+					return false;
+				}
+				return audio.Seek(source, seconds);
+			});
+		}
+
+		float HostAudioGetPlaybackPosition(StrataScriptContext* context, StrataScriptEntityID entity)
+		{
+			return ControlSource(context, entity, "AudioGetPlaybackPosition", 0.0f,
+				[](ScriptSystem&, AudioSystem& audio, Entity source) { return audio.GetPlaybackPosition(source); });
+		}
+
+		// Checks a one-shot's clip, volume and pitch, reporting what is wrong.
+		bool ValidateOneShot(ScriptSystem& system, StrataScriptAssetHandle clip, float volume, float pitch, const char* function)
+		{
+			if (clip == 0)
+			{
+				system.ReportProblem(function, "the clip is null");
+				return false;
+			}
+			AssetManagerBase* manager = RequireAssetManager(system, function);
+			if (!manager)
+				return false;
+			if (manager->GetAssetType(AssetHandle(clip)) != AssetType::AudioClip)
+			{
+				system.ReportProblem(function, fmt::format("asset {} is not an audio clip", AssetHandle(clip).ToString()));
+				return false;
+			}
+			if (!std::isfinite(volume) || volume < 0.0f)
+			{
+				system.ReportProblem(function, "the volume must be finite and not negative");
+				return false;
+			}
+			if (!std::isfinite(pitch) || !(pitch > 0.0f))
+			{
+				system.ReportProblem(function, "the pitch must be finite and positive");
+				return false;
+			}
+			return true;
+		}
+
+		bool HostAudioPlayOneShot(StrataScriptContext* context, StrataScriptAssetHandle clip, float volume, float pitch)
+		{
+			return HostCall("AudioPlayOneShot", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "AudioPlayOneShot");
+				AudioSystem* audio = system ? RequireAudio(*system, "AudioPlayOneShot") : nullptr;
+				if (!audio || !ValidateOneShot(*system, clip, volume, pitch, "AudioPlayOneShot"))
+					return false;
+				if (audio->PlayOneShot(AssetHandle(clip), volume, pitch))
+					return true;
+				system->ReportProblem("AudioPlayOneShot", fmt::format("clip {} cannot play (it failed to load, or there is no audio output)",
+					AssetHandle(clip).ToString()));
+				return false;
+			});
+		}
+
+		bool HostAudioPlayOneShotAt(StrataScriptContext* context, StrataScriptAssetHandle clip, const float position[3], float volume, float pitch)
+		{
+			return HostCall("AudioPlayOneShotAt", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "AudioPlayOneShotAt");
+				AudioSystem* audio = system ? RequireAudio(*system, "AudioPlayOneShotAt") : nullptr;
+				if (!audio || !ValidateOneShot(*system, clip, volume, pitch, "AudioPlayOneShotAt"))
+					return false;
+				const std::optional<glm::vec3> worldPosition = ReadVector3(*system, position, "position", "AudioPlayOneShotAt");
+				if (!worldPosition)
+					return false;
+				if (audio->PlayOneShotAt(AssetHandle(clip), *worldPosition, volume, pitch))
+					return true;
+				system->ReportProblem("AudioPlayOneShotAt", fmt::format("clip {} cannot play (it failed to load, or there is no audio output)",
+					AssetHandle(clip).ToString()));
+				return false;
+			});
+		}
+
+		void HostAudioSetMasterVolume(StrataScriptContext* context, float volume)
+		{
+			HostCallVoid("AudioSetMasterVolume", [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "AudioSetMasterVolume");
+				if (!system)
+					return;
+				if (!std::isfinite(volume))
+				{
+					system->ReportProblem("AudioSetMasterVolume", "the volume must be finite");
+					return;
+				}
+				AudioSystem::SetMasterVolume(volume);
+			});
+		}
+
+		float HostAudioGetMasterVolume(StrataScriptContext* context)
+		{
+			return HostCall("AudioGetMasterVolume", 0.0f, [&]()
+			{
+				return ResolveContext(context, "AudioGetMasterVolume") ? AudioSystem::GetMasterVolume() : 0.0f;
+			});
+		}
+		////////////////////////////////////////////////////////////////////////////////
 		// The table
 		////////////////////////////////////////////////////////////////////////////////
 
@@ -1417,7 +1595,17 @@ namespace Strata
 	X(Raycast) \
 	X(RaycastAll) \
 	X(OverlapSphere) \
-	X(OverlapBox)
+	X(OverlapBox) \
+	X(AudioPlay) \
+	X(AudioPause) \
+	X(AudioStop) \
+	X(AudioIsPlaying) \
+	X(AudioSeek) \
+	X(AudioGetPlaybackPosition) \
+	X(AudioPlayOneShot) \
+	X(AudioPlayOneShotAt) \
+	X(AudioSetMasterVolume) \
+	X(AudioGetMasterVolume)
 
 		struct HostFunctionEntry
 		{

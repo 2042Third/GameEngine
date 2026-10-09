@@ -1112,6 +1112,14 @@
 					"Name": {
 						"Name": "Speaker"
 					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "AudioFeatures",
+								"Fields": {}
+							}
+						]
+					},
 					"Transform": {
 						"Rotation": [
 							0,

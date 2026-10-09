@@ -306,6 +306,29 @@ extern "C"
 		uint32_t (*OverlapBox)(StrataScriptContext* context, const float center[3], const float halfExtents[3], const float rotation[4], uint32_t layerMask,
 			bool includeTriggers, StrataScriptEntityID* outEntities, uint32_t capacity);
 
+		/*
+		 * Audio (added after the initial set of ABI version 1: check ST_SCRIPT_HAS_MEMBER before use). Sources are entities
+		 * with an AudioSource component, which holds the clip, volume, pitch, looping and 3D settings. The functions fail
+		 * (false, 0) while the scene plays without audio, for entities without an AudioSource component or inactive ones,
+		 * and for clips that are not audio clips. AudioPlay starts the clip or resumes it (a clip that is still loading
+		 * starts once it is ready); AudioPause keeps the position, AudioStop rewinds; AudioIsPlaying is also true while the
+		 * start waits for the clip or the scene is paused. Positions are in seconds.
+		 */
+		bool (*AudioPlay)(StrataScriptContext* context, StrataScriptEntityID entity);
+		bool (*AudioPause)(StrataScriptContext* context, StrataScriptEntityID entity);
+		bool (*AudioStop)(StrataScriptContext* context, StrataScriptEntityID entity);
+		bool (*AudioIsPlaying)(StrataScriptContext* context, StrataScriptEntityID entity);
+		bool (*AudioSeek)(StrataScriptContext* context, StrataScriptEntityID entity, float seconds);
+		float (*AudioGetPlaybackPosition)(StrataScriptContext* context, StrataScriptEntityID entity);
+		/* Sounds that belong to no entity: they pause and stop with the scene. Without spatialization, or at a world position.
+		 * volume >= 0 and pitch > 0 (1: the clip's own). A clip that takes longer than a quarter second to load is dropped. */
+		bool (*AudioPlayOneShot)(StrataScriptContext* context, StrataScriptAssetHandle clip, float volume, float pitch);
+		bool (*AudioPlayOneShotAt)(StrataScriptContext* context, StrataScriptAssetHandle clip, const float position[3], float volume, float pitch);
+		/* The engine-wide master volume (1: unchanged; negative values count as 0). It outlives the scene, like a game's
+		 * sound option; the editor restores its own when play mode stops. */
+		void (*AudioSetMasterVolume)(StrataScriptContext* context, float volume);
+		float (*AudioGetMasterVolume)(StrataScriptContext* context);
+
 		/* New functions are appended here (see the compatibility rules above). */
 	} StrataScriptHostAPI;
 
