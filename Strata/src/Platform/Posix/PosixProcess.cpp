@@ -171,17 +171,17 @@ namespace Strata
 	void Process::StartOutputReaders()
 	{
 		m_StopReading = false;
-		auto startReader = [this](int pipe, std::string& target, std::atomic<bool>& finished, std::thread& thread)
+		auto startReader = [this](int readEnd, std::string& target, std::atomic<bool>& finished, std::thread& thread)
 		{
-			if (pipe < 0)
+			if (readEnd < 0)
 				return;
 			finished = false;
-			thread = std::thread([this, pipe, &target, &finished]()
+			thread = std::thread([this, readEnd, &target, &finished]()
 			{
 				char buffer[4096];
 				while (!m_StopReading.load())
 				{
-					pollfd descriptor = { pipe, POLLIN, 0 };
+					pollfd descriptor = { readEnd, POLLIN, 0 };
 					const int ready = poll(&descriptor, 1, 50);
 					if (ready < 0)
 					{
@@ -192,7 +192,7 @@ namespace Strata
 					if (ready == 0)
 						continue;
 
-					const ssize_t bytesRead = read(pipe, buffer, sizeof(buffer));
+					const ssize_t bytesRead = read(readEnd, buffer, sizeof(buffer));
 					if (bytesRead < 0 && errno == EINTR)
 						continue;
 					if (bytesRead <= 0)
