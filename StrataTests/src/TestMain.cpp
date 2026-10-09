@@ -11,6 +11,7 @@
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scripting/ScriptEngine.h"
+#include "Strata/Scripting/ScriptModule.h"
 #include "TestHelpers.h"
 
 #include <chrono>
@@ -238,9 +239,10 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 	}
 	if (mode == "script-module-lifecycle")
 	{
-		// <module> <healthy module>: loads and unloads the first module (whatever happens), then shows that the engine
-		// still works by loading the second. Engine messages go to the output too. The process ends without exit
-		// handlers: a library abandoned after a crash in its static destructors must not run them again.
+		// <module> <healthy module>: loads and unloads the first module (whatever happens), loads its file once more the
+		// way shipped games do (in place unless that is unsafe) and reports how, then shows that the engine still works by
+		// loading the second. Engine messages go to the output too. The process ends without exit handlers: a library
+		// abandoned after a crash in its static destructors must not run them again.
 		if (argc < 4)
 			return 2;
 		Strata::LogSpecification logSpecification;
@@ -256,6 +258,13 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 			engine.UnloadModule();
 			std::printf("first module: unloaded\n");
 			std::fflush(stdout);
+			{
+				Strata::ScriptModuleLoadError againError;
+				const Strata::Scope<Strata::ScriptModule> again = Strata::ScriptModule::Load(Strata::FileSystem::FromUTF8(argv[2]),
+					Strata::ScriptModuleLoadMode::InPlace, nullptr, &againError);
+				std::printf("first module again: %s\n", again ? (again->IsLoadedFromCopy() ? "loaded from a copy" : "loaded in place") : againError.Message.c_str());
+				std::fflush(stdout);
+			}
 			if (engine.LoadModule(Strata::FileSystem::FromUTF8(argv[3]), &error) && !engine.GetClasses().empty())
 			{
 				std::printf("second module: loaded\n");

@@ -10,6 +10,7 @@
 #include "Strata/Scripting/ScriptValue.h"
 #include "Strata/Scripting/ScriptWatchdog.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <unordered_set>
 
@@ -70,6 +71,10 @@ namespace Strata
 		{
 			std::mutex Mutex;
 			std::unordered_set<void*> Handles;
+			// Files whose library crashed in its static initializers or destructors, i.e. inside the platform's loader. The
+			// loader may still hold such a library, half initialized or half destroyed, and would hand it out again when
+			// the file is loaded: these files are only loaded from copies for the rest of the process.
+			std::vector<std::filesystem::path> AbandonedFiles;
 		};
 
 		// Intentionally never destroyed: an engine that is still active when the program ends (ScriptEngine::SetActive)
@@ -92,6 +97,49 @@ namespace Strata
 			LoadedLibraries& libraries = GetLoadedLibraries();
 			std::scoped_lock<std::mutex> lock(libraries.Mutex);
 			libraries.Handles.erase(handle);
+		}
+
+		// One spelling per file name (absolute, lexically normal); links to a file are recognized by IsAbandonedFile.
+		std::filesystem::path NormalizeLibraryPath(const std::filesystem::path& path)
+		{
+			std::error_code error;
+			const std::filesystem::path absolute = std::filesystem::absolute(path, error);
+			return (error ? path : absolute).lexically_normal();
+		}
+
+		bool IsAbandonedFile(const std::filesystem::path& path)
+		{
+			const std::filesystem::path normalized = NormalizeLibraryPath(path);
+			std::vector<std::filesystem::path> abandonedFiles;
+			{
+				LoadedLibraries& libraries = GetLoadedLibraries();
+				std::scoped_lock<std::mutex> lock(libraries.Mutex);
+				abandonedFiles = libraries.AbandonedFiles;
+			}
+			for (const std::filesystem::path& abandoned : abandonedFiles)
+			{
+				// Loaders know libraries by name and by file identity (another link to the same file yields the library too).
+				std::error_code error;
+				if (abandoned == normalized || std::filesystem::equivalent(abandoned, normalized, error))
+					return true;
+			}
+			return false;
+		}
+
+		// After a crash in a library's static initializers or destructors (code the platform's loader runs) the loader
+		// may be left in an undefined state - outside Windows the crash guard leaves it from the middle of its work. Only
+		// a restart of the process cleans that up.
+		void AbandonLibraryFile(const std::filesystem::path& path, const std::string& moduleName)
+		{
+			{
+				const std::filesystem::path normalized = NormalizeLibraryPath(path);
+				LoadedLibraries& libraries = GetLoadedLibraries();
+				std::scoped_lock<std::mutex> lock(libraries.Mutex);
+				if (std::find(libraries.AbandonedFiles.begin(), libraries.AbandonedFiles.end(), normalized) == libraries.AbandonedFiles.end())
+					libraries.AbandonedFiles.push_back(normalized);
+			}
+			ST_CORE_ERROR("Script module '{}' crashed inside the platform's library loader, which may now be in an undefined state: restarting the "
+				"application is recommended. Until then '{}' is only loaded from copies", moduleName, FileSystem::ToUTF8(path));
 		}
 
 		// A copy directory without an owner lock file is being created right now - or its owner ended before it got that
@@ -310,6 +358,7 @@ namespace Strata
 		}, &libraryLoad, &crash))
 		{
 			RecordFault(ScriptCallSite { nullptr, "static initialization" }, crash);
+			AbandonLibraryFile(path, m_Name);
 			outError = fmt::format("Script module '{}' crashed while loading: {}", displayPath, crash.Description);
 			return false;
 		}
@@ -346,7 +395,7 @@ namespace Strata
 
 		std::string error;
 		bool loaded = false;
-		if (mode == ScriptModuleLoadMode::InPlace)
+		if (mode == ScriptModuleLoadMode::InPlace && !IsAbandonedFile(path))
 		{
 			if (!module->LoadLibraryGuarded(path, {}, displayPath, error))
 				return fail(std::move(error));
@@ -483,6 +532,7 @@ namespace Strata
 				// The library stays registered: it remains loaded, so loading its file again would return it.
 				ST_CORE_ERROR("Script module '{}' crashed while unloading ({}); it stays loaded", m_Name, crash.Description);
 				m_Library.Release();
+				AbandonLibraryFile(m_LoadedPath, m_Name);
 			}
 		}
 

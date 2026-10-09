@@ -357,11 +357,17 @@ TEST_SUITE("Scripting.Module")
 		CHECK_FALSE(initialization.TimedOut);
 		CHECK(Contains(initialization.Output, "first module: unloaded"));
 		CHECK_FALSE(Contains(initialization.Output, "first module: loaded"));
+		// Loading the file again runs its static initializers again (they crash again): the platform's loader must not
+		// hand out the half-initialized library left behind by the first attempt.
+		CHECK_FALSE(Contains(initialization.Output, "first module again: loaded"));
 #if defined(ST_PLATFORM_WINDOWS)
 		// The Windows loader contains exceptions in a library's initialization itself (ERROR_DLL_INIT_FAILED).
 		CHECK(Contains(initialization.Output, "error 1114"));
 #else
+		// The crash guard left the loader from the middle of its work; the file now only loads from copies.
 		CHECK(Contains(initialization.Output, "crashed while loading"));
+		CHECK(Contains(initialization.Output, "restarting the application is recommended"));
+		CHECK(Contains(initialization.Output, "first module again: Script module"));
 #endif
 		CHECK(Contains(initialization.Output, "second module: loaded"));
 
@@ -372,9 +378,15 @@ TEST_SUITE("Scripting.Module")
 		CHECK_FALSE(destruction.TimedOut);
 		CHECK(Contains(destruction.Output, "first module: loaded"));
 		CHECK(Contains(destruction.Output, "first module: unloaded"));
-#if !defined(ST_PLATFORM_WINDOWS)
-		// (The Windows loader contains exceptions while a library unloads itself.)
+#if defined(ST_PLATFORM_WINDOWS)
+		// The Windows loader contains exceptions while a library unloads itself and finishes unloading it: the file loads
+		// in place again.
+		CHECK(Contains(destruction.Output, "first module again: loaded in place"));
+#else
+		// The half-destroyed library stays loaded; the file only loads from copies from now on.
 		CHECK(Contains(destruction.Output, "crashed while unloading"));
+		CHECK(Contains(destruction.Output, "restarting the application is recommended"));
+		CHECK(Contains(destruction.Output, "first module again: loaded from a copy"));
 #endif
 		CHECK(Contains(destruction.Output, "second module: loaded"));
 		CHECK(destruction.ExitCode == 0);

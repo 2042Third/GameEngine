@@ -32,13 +32,14 @@ namespace Strata
 	// watchdog reports it); a crash inside the module's static initializers or destructors (run while the library loads
 	// or unloads) fails the load or abandons the library (the Windows loader contains such crashes itself; elsewhere the
 	// crash guard reports them), but what the library left behind may make the process crash when it exits, and outside
-	// Windows the platform's loader may be left in an undefined state; std::terminate (an exception leaving a noexcept
-	// function or a destructor) is contained on Windows through abort(), but the C++ runtime keeps the abandoned
-	// exception; a crash inside the C library's allocator (a corrupted heap) can leave it locked, so the main thread
-	// blocks at its next allocation; stray writes into engine memory are not detected; memory of instances abandoned
-	// after a crash is leaked. Not contained at all (the process ends): on Linux and macOS abort() (also a failed
-	// assert() or std::terminate), because the C library also aborts on heap corruption while it holds allocator locks -
-	// it is reported on stderr first; Windows fail-fast terminations (__fastfail: /GS buffer overrun checks,
+	// Windows the platform's loader may be left in an undefined state (an error recommends a restart; until then that file
+	// is only loaded from copies, so the loader never hands out the broken library again); std::terminate (an exception
+	// leaving a noexcept function or a destructor) is contained on Windows through abort(), but the C++ runtime keeps the
+	// abandoned exception; a crash inside the C library's allocator (a corrupted heap) can leave it locked, so the main
+	// thread blocks at its next allocation; stray writes into engine memory are not detected; memory of instances
+	// abandoned after a crash is leaked. Not contained at all (the process ends): on Linux and macOS abort() (also a
+	// failed assert() or std::terminate), because the C library also aborts on heap corruption while it holds allocator
+	// locks - it is reported on stderr first; Windows fail-fast terminations (__fastfail: /GS buffer overrun checks,
 	// invalid-parameter failures of the C runtime, heap corruption the system detects); abort() in Windows modules that
 	// link the C runtime dynamically (/MD) or do not use the SDK's entry points; and calls that end the process (exit,
 	// TerminateProcess).

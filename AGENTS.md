@@ -269,14 +269,16 @@ Building and loading scripts:
 - Contained: access violations, division by zero, stack overflow, C++ exceptions escaping module code and, on Windows,
   `abort()` (also from a failed `assert()` and from `std::terminate`: modules turn it into
   `ST_SCRIPT_ABORT_EXCEPTION_CODE` through a SIGABRT handler `ScriptModuleEntry.cpp` installs in their static C
-  runtime before the module's own static initializers run; an abort in one of those fails the load). On Linux and macOS `abort()` is reported on stderr and ends the process: the C library also aborts on heap
-  corruption while it holds allocator locks, and jumping out would leave them locked (the next allocation would hang).
+  runtime before the module's own static initializers run; an abort in one of those fails the load). On Linux and
+  macOS `abort()` is reported on stderr and ends the process: the C library also aborts on heap corruption while it
+  holds allocator locks, and jumping out would leave them locked (the next allocation would hang).
 - Limitations: native code cannot be preempted (an infinite loop blocks the main thread; `SetWatchdogTimeout` reports
   long calls); a crash inside a module's static initializers or destructors fails the load or abandons the library (the
-  Windows loader contains it itself; elsewhere it is reported), but may make the process crash when it exits, and outside
-  Windows may leave the platform loader in an undefined state;
-  after `std::terminate` the C++ runtime keeps the abandoned exception; stray writes into
-  engine memory are not detected; memory of instances abandoned after a crash is leaked. Not contained (the process
+  Windows loader contains it itself; elsewhere it is reported), but may make the process crash when it exits, and
+  outside Windows may leave the platform loader in an undefined state (the engine logs that a restart is recommended
+  and loads that file only from copies until then, so the loader never hands out the broken library again); after
+  `std::terminate` the C++ runtime keeps the abandoned exception; stray writes into engine memory are not detected;
+  memory of instances abandoned after a crash is leaked. Not contained (the process
   ends): Windows fail-fast terminations (`__fastfail`: `/GS` buffer overrun checks, C runtime invalid-parameter
   failures, heap corruption the system detects), `abort()` in Windows modules with a dynamically linked C runtime
   (`/MD`) or without the SDK's entry points (`NO_SDK_ENTRY`), and calls that end the process (`exit`,
