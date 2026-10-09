@@ -18,5 +18,7 @@ void main()
 {
 	v_Color = a_Color;
 	gl_Position = u_Frame.ViewProjection * vec4(a_Position, 1.0);
-	gl_Position.z = min(gl_Position.z * (1.0 + c_DepthBias), gl_Position.w);
+	// Scaling z is a linear change of clip space applied to every vertex alike, so lines crossing the near plane or reaching
+	// behind the camera (w < 0) are still clipped where they leave the view (clamping z would move their ends).
+	gl_Position.z *= 1.0 + c_DepthBias;
 }

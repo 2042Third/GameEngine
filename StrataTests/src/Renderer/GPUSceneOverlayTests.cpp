@@ -279,6 +279,57 @@ TEST_SUITE("GPU.SceneRenderer.Overlays")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Debug lines reaching behind the camera are clipped where they leave the view")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Size, c_Size);
+		const glm::u8vec4 green(0, 255, 0, 255);
+		DebugDraw debugDraw;
+		SceneRenderOptions options;
+		options.DebugShapes = &debugDraw;
+		auto render = [&](const SceneCamera& camera)
+		{
+			REQUIRE(renderer.Render(scene, camera, nullptr, options));
+			ReadbackImage image;
+			REQUIRE(Renderer::ReadTexture(renderer.GetOutputTexture(), image));
+			return image;
+		};
+
+		// Perspective: from 10 units ahead to 10 units behind the camera. The visible part runs from the far end to the
+		// edge of the image.
+		const SceneCamera perspective = LookAt(glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, -1.0f));
+		debugDraw.Line(glm::vec3(0.5f, -0.3f, -10.0f), glm::vec3(0.5f, -0.3f, 10.0f), glm::vec4(0.0f, 1.0f, 0.0f, 1.0f));
+		ReadbackImage image = render(perspective);
+		for (float z : { -9.0f, -5.0f, -2.0f, -1.0f })
+		{
+			CAPTURE(z);
+			CHECK(HasColorNear(image, ProjectToPixel(perspective, glm::vec3(0.5f, -0.3f, z), c_Size), green));
+		}
+
+		// Orthographic: the part beyond the near plane (behind the camera) is cut off, the rest is drawn.
+		debugDraw.Clear();
+		debugDraw.Line(glm::vec3(-2.0f, 0.5f, -5.0f), glm::vec3(2.0f, 0.5f, 15.0f), glm::vec4(0.0f, 1.0f, 0.0f, 1.0f));
+		const SceneCamera orthographic = OrthographicLookAt(glm::vec3(0.0f, 0.0f, 5.0f), glm::vec3(0.0f), 6.0f);
+		image = render(orthographic);
+		auto pointAt = [](float z) { return glm::vec3(-2.0f + 4.0f * (z + 5.0f) / 20.0f, 0.5f, z); };
+		for (float z : { -4.0f, 0.0f, 4.0f })
+		{
+			CAPTURE(z);
+			CHECK(HasColorNear(image, ProjectToPixel(orthographic, pointAt(z), c_Size), green));
+		}
+		for (float z : { 7.0f, 10.0f, 14.0f })
+		{
+			CAPTURE(z);
+			CHECK_FALSE(HasColorNear(image, ProjectToPixel(orthographic, pointAt(z), c_Size), green));
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Scene gizmos and overlays render into external framebuffers")
 	{
 		GPUContext gpu;
