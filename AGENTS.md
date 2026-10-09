@@ -263,6 +263,18 @@ Writing scripts is described in `.claude/skills/strata-scripting/SKILL.md`.
 | `StrataTests/Scripts/`, `StrataTests/src/Scripting/` | Test modules (API, reload V1/V2, faults, invalid modules) and the `Scripting.*` suites. |
 | `StrataTests/FeatureTest/Scripts/`, `StrataTests/src/FeatureTest/` | The feature test's script module (the whole SDK in a real scene) and its runners (see [Testing](#testing)). |
 
+Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; the skill has an overview with recipes):
+
+- Physics: `RigidBody` (velocities, forces, impulses, `Teleport`) and `Physics` (raycasts, overlaps) go through the scene's
+  `PhysicsSystem`. Contacts reach scripts as `OnCollisionEnter/Exit` and `OnTriggerEnter/Exit` (class descriptor callbacks
+  taking a `StrataScriptCollision`): `ScriptSystem` listens to the `PhysicsSystem` while it runs and calls the scripts of
+  both entities, skipping removed, disabled, not yet started and inactive instances.
+- Audio: `AudioSource` and `Audio` go through the scene's `AudioSystem`; without it (simulate mode) the calls fail.
+- Game flow: `Game::Quit`, `LoadScene` and `ReloadScene` set `Scene::RequestQuit`/`RequestSceneLoad`, which the scene's owner
+  honors after the frame (see [Editor](#editor)).
+- `Random`, `Timer` and `KeyRepeat` (`StrataScript/Gameplay.h`) run entirely in the module. The engine has classes named
+  `Random` and `Timer` too, so SDK helpers are tested inside a script module, never in an engine translation unit (that
+  would violate the one-definition rule).
 ABI rules:
 
 - Only plain C data crosses the boundary: strings as (pointer, size) UTF-8, entities and assets as 64-bit UUIDs, math
