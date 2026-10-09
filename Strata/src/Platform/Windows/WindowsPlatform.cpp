@@ -43,27 +43,6 @@ namespace Strata
 			return false;
 		}
 
-		// Closes a handle when it goes out of scope.
-		class HandleGuard
-		{
-		public:
-			explicit HandleGuard(HANDLE handle)
-				: m_Handle(handle)
-			{
-			}
-
-			~HandleGuard()
-			{
-				if (m_Handle && m_Handle != INVALID_HANDLE_VALUE)
-					CloseHandle(m_Handle);
-			}
-
-			HandleGuard(const HandleGuard&) = delete;
-			HandleGuard& operator=(const HandleGuard&) = delete;
-		private:
-			HANDLE m_Handle;
-		};
-
 		enum class ObjectKind
 		{
 			File,
@@ -99,7 +78,7 @@ namespace Strata
 			HANDLE handle = OpenForInspection(path, kind, followLink);
 			if (handle == INVALID_HANDLE_VALUE)
 				return SetError(error, fmt::format("Cannot open '{}': {}", name, GetLastErrorMessage()));
-			HandleGuard handleGuard(handle);
+			const WindowsUtils::ScopedHandle handleGuard(handle);
 
 			BY_HANDLE_FILE_INFORMATION information = {};
 			if (!GetFileInformationByHandle(handle, &information))
@@ -126,7 +105,7 @@ namespace Strata
 				SetError(error, fmt::format("Cannot open '{}': {}", name, GetLastErrorMessage()));
 				return std::nullopt;
 			}
-			HandleGuard fileGuard(file);
+			const WindowsUtils::ScopedHandle fileGuard(file);
 
 			BY_HANDLE_FILE_INFORMATION information = {};
 			if (GetFileType(file) != FILE_TYPE_DISK || !GetFileInformationByHandle(file, &information) || (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
@@ -369,7 +348,7 @@ namespace Strata
 		HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(processId));
 		if (!process)
 			return std::nullopt;
-		HandleGuard processGuard(process);
+		const WindowsUtils::ScopedHandle processGuard(process);
 
 		FILETIME creation = {};
 		FILETIME exit = {};
