@@ -77,7 +77,8 @@ namespace Strata
 
 		// Writes the per-process file and, when ProjectPath is set, the project pointer. Writing again replaces the
 		// per-process file atomically, e.g. after the editor opened another project (remove the old project's pointer
-		// with RemoveProjectPointer).
+		// with RemoveProjectPointer). Returns false only when the per-process file cannot be written: the pointer is
+		// best-effort (a warning), since clients also find sessions by the ProjectPath they record.
 		static bool WriteSessionFiles(const EditorSessionInfo& info, std::string* error = nullptr);
 		// Removes the per-process file and the project pointer (see RemoveProjectPointer).
 		static void RemoveSessionFiles(const EditorSessionInfo& info);

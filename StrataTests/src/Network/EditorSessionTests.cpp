@@ -401,6 +401,28 @@ TEST_SUITE("Network.EditorSession")
 		CHECK_FALSE(FileSystem::Exists(EditorSession::GetProjectSessionFilePath(secondProject)));
 	}
 
+	TEST_CASE("A project that cannot hold the pointer still gets a session")
+	{
+		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("EditorSessionsNoPointer") / "Sessions";
+		const std::filesystem::path projectDirectory = Tests::CreateTemporaryDirectory("EditorSessionNoPointerProject");
+		Tests::ScopedEnvironmentVariable sessionOverride("STRATA_SESSION_DIR", FileSystem::ToUTF8(sessionDirectory));
+		// A file where the project's .strata directory would be: the pointer cannot be written.
+		REQUIRE(FileSystem::WriteText(projectDirectory / ".strata", "not a directory"));
+		Tests::LiveProcess editorProcess;
+
+		const EditorSessionInfo session = MakeSession(editorProcess.GetProcessId(), 47001, "2026-01-01T10:00:00Z", FileSystem::ToUTF8(projectDirectory));
+		std::string error;
+		CHECK(EditorSession::WriteSessionFiles(session, &error));
+		const std::vector<EditorSessionInfo> sessions = EditorSession::FindSessions();
+		REQUIRE(sessions.size() == 1);
+		CHECK(EditorSession::IsSameProject(sessions[0].ProjectPath, projectDirectory));
+		CHECK_FALSE(EditorSession::ReadProjectSession(projectDirectory).has_value());
+
+		EditorSession::RemoveSessionFiles(session);
+		CHECK(EditorSession::FindSessions().empty());
+		CHECK(FileSystem::ReadText(projectDirectory / ".strata").value_or("") == "not a directory");
+	}
+
 	TEST_CASE("Removing a session keeps a project pointer that another editor took over")
 	{
 		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("EditorSessionsTakeover") / "Sessions";
