@@ -153,3 +153,28 @@ because the module then runs from a private copy - see AGENTS.md).
 
 Engine-side tests load a module, play a scene and inspect fields: see `StrataTests/src/Scripting/` (helpers in
 `ScriptTestUtils.h`: `ScopedScriptEngine`, `AddScriptEntry`, `AddFieldOverride`, `GetField<T>`, `RunFrames`).
+
+## Extending the script API: the feature test
+
+`StrataTests/FeatureTest/Scripts/` is a script module that uses the **whole** SDK in the feature scene
+(`StrataTests/FeatureTest/Assets/Scenes/Feature.stscene`), and `StrataTests.FeatureTest` fails when any public SDK
+function or macro is unused there, or any host function of `StrataScriptHostAPI` is never called during the run.
+When you add or change script API:
+
+1. Use it in the feature script whose topic fits (`EntityFeatures`, `ComponentFeatures`, `TransformFeatures`,
+   `FieldFeatures`, `LifecycleFeatures`, `TimeFeatures`, `InputFeatures`, `SpawnFeatures`, `ScriptFeatures`,
+   `PhysicsFeatures`, `LogFeatures`), or add a class deriving from `FeatureTest::FeatureScript` on a new entity of the
+   scene. Verify the effect with `Expect(condition, "what is checked")` and set `Completed = true` when the scenario
+   ended; journal `OnCreate` with `Journal(*this, "<Class>", "OnCreate")`. Keep state that spans frames in fields: the
+   runner hot reloads the module after frame 100. The coverage check counts a call only on the class it belongs to:
+   call static functions as `Class::Name(...)` and member functions on a receiver of declared type (`Entity target =
+   ...; target.Name(...)`), see `StrataTests/src/FeatureTest/SDKReader.h`.
+2. A new host function is also appended to `ST_SCRIPT_HOST_FUNCTIONS` in `ScriptHostAPI.cpp` (the build fails until
+   it is). A new field type, callback or asset type is picked up automatically by the coverage checks: declare a field
+   of the new type in a feature script, register it with `ST_SCRIPT_FIELD` and override it in the scene; implement the
+   callback in a feature script that runs and journal its first call (`Journal(*this, "<Class>", "<Callback>")`, as
+   `LifecycleFeatures` does); add such an asset.
+3. Input the scripts need is simulated by `PlayFeatureScene` (`StrataTests/src/FeatureTest/FeatureTestUtils.cpp`);
+   messages logged on purpose belong in `c_ExpectedLogMessages` there (any other warning or error fails the run).
+4. Run `StrataTests.exe --test-suite=FeatureTest,Editor.FeatureTest` (or `ctest -L feature`). A failure names the
+   class, entity and check, the unused SDK function or the uncalled host function.

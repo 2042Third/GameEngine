@@ -15,6 +15,8 @@ set_target_properties(StrataTestLibrary PROPERTIES CXX_VISIBILITY_PRESET hidden 
 #   ABIMismatch and Malformed are written against the C ABI directly and are refused by the engine
 #   NewerSDK    describes itself with a larger StrataScriptModuleAPI, as a module of a newer SDK would
 #   Dependent   links StrataTestScriptDependency, a library built into a directory of its own
+#   FeatureTest the scripts of the feature test project (FeatureTest/Scripts), which exercise every SDK and host API
+#               function in the feature scene (see AGENTS.md, "Testing")
 set(STRATA_TEST_SCRIPTS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Scripts")
 add_library(StrataTestScriptDependency SHARED "${STRATA_TEST_SCRIPTS_DIR}/Dependency/ScriptDependency.cpp")
 strata_configure_target(StrataTestScriptDependency)
@@ -36,6 +38,8 @@ strata_add_script_module(StrataTestScriptsLoadFault SOURCE_DIR "${STRATA_TEST_SC
 strata_add_script_module(StrataTestScriptsABIMismatch NO_SDK_ENTRY SOURCES "${STRATA_TEST_SCRIPTS_DIR}/Invalid/ABIMismatch.cpp")
 strata_add_script_module(StrataTestScriptsMalformed NO_SDK_ENTRY SOURCES "${STRATA_TEST_SCRIPTS_DIR}/Invalid/Malformed.cpp")
 strata_add_script_module(StrataTestScriptsNewerSDK NO_SDK_ENTRY SOURCES "${STRATA_TEST_SCRIPTS_DIR}/NewerSDK/NewerSDKModule.cpp")
+set(STRATA_FEATURE_TEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/FeatureTest")
+strata_add_script_module(StrataTestScriptsFeatureTest SOURCE_DIR "${STRATA_FEATURE_TEST_DIR}/Scripts")
 set(STRATA_TEST_SCRIPT_MODULES
 	StrataTestScriptsAPI
 	StrataTestScriptsReloadV1
@@ -45,7 +49,8 @@ set(STRATA_TEST_SCRIPT_MODULES
 	StrataTestScriptsABIMismatch
 	StrataTestScriptsMalformed
 	StrataTestScriptsNewerSDK
-	StrataTestScriptsDependent)
+	StrataTestScriptsDependent
+	StrataTestScriptsFeatureTest)
 foreach(module IN LISTS STRATA_TEST_SCRIPT_MODULES)
 	strata_configure_target(${module})
 	set_target_properties(${module} PROPERTIES FOLDER "Strata/TestScripts")
@@ -78,7 +83,8 @@ target_compile_definitions(StrataTests PRIVATE
 	DOCTEST_CONFIG_NO_POSIX_SIGNALS
 	"STRATA_TEST_LIBRARY_NAME=\"$<TARGET_FILE_NAME:StrataTestLibrary>\""
 	"STRATA_TEST_SCRIPT_DEPENDENCY=\"$<TARGET_FILE:StrataTestScriptDependency>\""
-	"STRATA_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
+	"STRATA_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\""
+	"STRATA_FEATURE_TEST_DIR=\"${STRATA_FEATURE_TEST_DIR}\"")
 foreach(module IN LISTS STRATA_TEST_SCRIPT_MODULES)
 	string(REPLACE "StrataTestScripts" "" moduleKind "${module}")
 	string(TOUPPER "${moduleKind}" moduleKind)
@@ -96,9 +102,17 @@ if(WIN32)
 	target_sources(StrataTests PRIVATE "${PROJECT_SOURCE_DIR}/CMake/Strata.manifest")
 endif()
 
+# The feature test (FeatureTest/, see AGENTS.md "Testing") runs as its own test; its GPU suite runs with the GPU tests.
+set(STRATA_FEATURE_TEST_SUITES "FeatureTest,Editor.FeatureTest")
+
 add_test(NAME StrataTests.Core
-	COMMAND StrataTests --test-suite-exclude=GPU*,EndToEnd* --no-intro=true
+	COMMAND StrataTests "--test-suite-exclude=GPU*,EndToEnd*,${STRATA_FEATURE_TEST_SUITES}" --no-intro=true
 	WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
+
+add_test(NAME StrataTests.FeatureTest
+	COMMAND StrataTests "--test-suite=${STRATA_FEATURE_TEST_SUITES}" --no-intro=true
+	WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
+set_tests_properties(StrataTests.FeatureTest PROPERTIES LABELS "feature")
 
 add_test(NAME StrataTests.GPU
 	COMMAND StrataTests --test-suite=GPU* --no-intro=true
@@ -216,4 +230,28 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DEXPECTED_OUTPUT=The screenshot shows the missing-camera message"
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
 	set_tests_properties(StrataRuntime.NoCameraScreenshot PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataExportedGame)
+endif()
+
+# The real executables with the feature test project: the editor opens a copy of it, steps the feature scene's physics
+# (the command script's "expect" conditions require the ball to come to rest on the platform, and play.stop to restore
+# it) and exports it; the exported game then runs headless. The editor executable does not load script modules yet, so
+# the feature scripts run in StrataTests.FeatureTest (which also drives the editor and the exported game in-process).
+if(TARGET StrataEditor AND TARGET StrataRuntime)
+	set(STRATA_FEATURE_RUN_DIR "${CMAKE_CURRENT_BINARY_DIR}/FeatureTestRun")
+	configure_file("${CMAKE_CURRENT_SOURCE_DIR}/Editor/FeatureCommands.json.in" "${CMAKE_CURRENT_BINARY_DIR}/FeatureCommands.json" @ONLY)
+
+	add_test(NAME StrataFeatureTest.Clean COMMAND "${CMAKE_COMMAND}" -E rm -rf "${STRATA_FEATURE_RUN_DIR}")
+	set_tests_properties(StrataFeatureTest.Clean PROPERTIES FIXTURES_SETUP StrataFeatureTestClean LABELS "feature")
+
+	add_test(NAME StrataFeatureTest.Copy COMMAND "${CMAKE_COMMAND}" -E copy_directory "${STRATA_FEATURE_TEST_DIR}" "${STRATA_FEATURE_RUN_DIR}/Project")
+	set_tests_properties(StrataFeatureTest.Copy PROPERTIES FIXTURES_REQUIRED StrataFeatureTestClean FIXTURES_SETUP StrataFeatureTestProject LABELS "feature")
+
+	add_test(NAME StrataEditor.FeatureTest
+		COMMAND StrataEditor --no-gpu --no-automation --frames 300 --project "${STRATA_FEATURE_RUN_DIR}/Project/FeatureTest.stproj"
+			--commands "${CMAKE_CURRENT_BINARY_DIR}/FeatureCommands.json"
+		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
+	set_tests_properties(StrataEditor.FeatureTest PROPERTIES FIXTURES_REQUIRED StrataFeatureTestProject FIXTURES_SETUP StrataFeatureTestGame LABELS "feature")
+
+	add_test(NAME StrataRuntime.FeatureTest COMMAND "${STRATA_FEATURE_RUN_DIR}/Build/FeatureTest${CMAKE_EXECUTABLE_SUFFIX}" --headless --frames 120)
+	set_tests_properties(StrataRuntime.FeatureTest PROPERTIES FIXTURES_REQUIRED StrataFeatureTestGame LABELS "feature")
 endif()

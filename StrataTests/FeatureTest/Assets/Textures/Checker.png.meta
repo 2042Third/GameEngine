@@ -1,0 +1,16 @@
+{
+	"Handle": "F7A0000000000005",
+	"ImportSettings": {
+		"Filter": "Nearest",
+		"FlipVertically": false,
+		"GenerateMips": true,
+		"MaxSize": 0,
+		"Usage": "Color",
+		"Wrap": "Repeat"
+	},
+	"Strata": {
+		"Format": "AssetMeta",
+		"Version": 1
+	},
+	"Type": "Texture"
+}

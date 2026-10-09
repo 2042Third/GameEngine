@@ -11,9 +11,11 @@
 
 #include "StrataScript/ScriptABI.h"
 
+#include <cstddef>
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -523,5 +525,52 @@ TEST_SUITE("Scripting.API")
 
 		CHECK(scene.GetEntityCount() == 1);
 		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Every host function has a call counter")
+	{
+		const StrataScriptHostAPI& host = GetScriptHostAPI();
+#if defined(ST_DIST)
+		// Dist builds do not count calls.
+		CHECK_FALSE(host.IsEntityValid(nullptr, 1));
+		CHECK(GetScriptHostCallCounts().empty());
+		ResetScriptHostCallCounts();
+		CHECK(GetScriptHostCallCounts().empty());
+#else
+		const std::vector<ScriptHostFunctionCalls> before = GetScriptHostCallCounts();
+
+		// One counter per function of the table, in declaration order.
+		const size_t firstFunction = offsetof(StrataScriptHostAPI, ABIVersion) + sizeof(host.ABIVersion);
+		REQUIRE(before.size() == (sizeof(StrataScriptHostAPI) - firstFunction) / sizeof(host.Log));
+		CHECK(before.front().Name == "Log");
+		CHECK(before.back().Name == "GetScrollDelta");
+		std::unordered_set<std::string_view> names;
+		for (const ScriptHostFunctionCalls& entry : before)
+		{
+			CHECK_FALSE(entry.Name.empty());
+			CHECK(names.insert(entry.Name).second);
+		}
+
+		// Calls through the table count (rejected ones too); the other counters do not change.
+		host.Log(StrataScriptLogLevel_Trace, ABIString("Counted host call"));
+		host.Log(StrataScriptLogLevel_Trace, ABIString("Counted host call"));
+		CHECK_FALSE(host.IsEntityValid(nullptr, 1));
+		const std::vector<ScriptHostFunctionCalls> after = GetScriptHostCallCounts();
+		REQUIRE(after.size() == before.size());
+		for (size_t index = 0; index < after.size(); index++)
+		{
+			INFO("Host function ", std::string(after[index].Name));
+			uint64_t expected = 0;
+			if (after[index].Name == "Log")
+				expected = 2;
+			else if (after[index].Name == "IsEntityValid")
+				expected = 1;
+			CHECK(after[index].Calls - before[index].Calls == expected);
+		}
+
+		ResetScriptHostCallCounts();
+		for (const ScriptHostFunctionCalls& entry : GetScriptHostCallCounts())
+			CHECK(entry.Calls == 0);
+#endif
 	}
 }

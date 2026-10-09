@@ -145,12 +145,107 @@ namespace Strata
 		return !error;
 	}
 
-	bool FileSystem::CopyDirectory(const std::filesystem::path& from, const std::filesystem::path& to)
+	namespace
+	{
+
+		// The type of the object at path itself (a link is not followed); not_found when nothing is there.
+		std::optional<std::filesystem::file_type> GetOwnFileType(const std::filesystem::path& path, std::error_code& error)
+		{
+			const std::filesystem::file_type type = std::filesystem::symlink_status(path, error).type();
+			if (type == std::filesystem::file_type::not_found)
+			{
+				error.clear();
+				return type;
+			}
+			if (error)
+				return std::nullopt;
+			return type;
+		}
+
+		bool SetCopyError(std::string* outError, std::string error)
+		{
+			if (outError)
+				*outError = std::move(error);
+			return false;
+		}
+
+	}
+
+	bool FileSystem::CopyDirectory(const std::filesystem::path& from, const std::filesystem::path& to, std::string* outError)
 	{
 		std::error_code error;
+		if (!std::filesystem::is_directory(from, error))
+			return SetCopyError(outError, fmt::format("'{}' is not a directory", ToUTF8(from)));
+
+		// A destination inside the source would be copied into itself again and again.
+		const std::filesystem::path resolvedFrom = std::filesystem::weakly_canonical(from, error);
+		if (error)
+			return SetCopyError(outError, fmt::format("Cannot resolve '{}': {}", ToUTF8(from), error.message()));
+		const std::filesystem::path resolvedTo = std::filesystem::weakly_canonical(to, error);
+		if (error)
+			return SetCopyError(outError, fmt::format("Cannot resolve '{}': {}", ToUTF8(to), error.message()));
+		if (IsInside(resolvedTo, resolvedFrom))
+			return SetCopyError(outError, fmt::format("Cannot copy '{}' into itself ('{}')", ToUTF8(from), ToUTF8(to)));
+
 		std::filesystem::create_directories(to, error);
-		std::filesystem::copy(from, to, std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, error);
-		return !error;
+		if (error)
+			return SetCopyError(outError, fmt::format("Cannot create '{}': {}", ToUTF8(to), error.message()));
+		if (!std::filesystem::is_directory(to, error))
+			return SetCopyError(outError, fmt::format("Cannot copy into '{}': it is not a directory", ToUTF8(to)));
+
+		// Entry by entry rather than with std::filesystem::copy: MSVC's implementation compares file identities first,
+		// which fails (ERROR_INVALID_PARAMETER) on file systems without 128-bit file ids, such as exFAT. Every entry has
+		// its own error code: one shared with the iteration would be cleared by the next successful increment.
+		std::filesystem::recursive_directory_iterator it(from, error);
+		if (error)
+			return SetCopyError(outError, fmt::format("Cannot list '{}': {}", ToUTF8(from), error.message()));
+		const std::filesystem::recursive_directory_iterator end;
+		while (it != end)
+		{
+			const std::filesystem::path source = it->path();
+			const std::filesystem::path target = to / source.lexically_relative(from);
+			std::error_code entryError;
+			const std::optional<std::filesystem::file_type> sourceType = GetOwnFileType(source, entryError);
+			if (!sourceType)
+				return SetCopyError(outError, fmt::format("Cannot read '{}': {}", ToUTF8(source), entryError.message()));
+
+			if (*sourceType == std::filesystem::file_type::directory)
+			{
+				const std::optional<std::filesystem::file_type> targetType = GetOwnFileType(target, entryError);
+				if (!targetType)
+					return SetCopyError(outError, fmt::format("Cannot read '{}': {}", ToUTF8(target), entryError.message()));
+				if (*targetType == std::filesystem::file_type::not_found)
+					std::filesystem::create_directory(target, entryError);
+				else if (*targetType != std::filesystem::file_type::directory)
+					return SetCopyError(outError, fmt::format("Cannot copy the directory '{}': '{}' exists and is not a directory", ToUTF8(source), ToUTF8(target)));
+				if (entryError)
+					return SetCopyError(outError, fmt::format("Cannot create '{}': {}", ToUTF8(target), entryError.message()));
+			}
+			else if (*sourceType == std::filesystem::file_type::regular)
+			{
+				// Overwriting a link would write through it, possibly outside the destination.
+				const std::optional<std::filesystem::file_type> targetType = GetOwnFileType(target, entryError);
+				if (!targetType)
+					return SetCopyError(outError, fmt::format("Cannot read '{}': {}", ToUTF8(target), entryError.message()));
+				if (*targetType != std::filesystem::file_type::not_found && *targetType != std::filesystem::file_type::regular)
+					return SetCopyError(outError, fmt::format("Cannot copy '{}': '{}' exists and is not a regular file", ToUTF8(source), ToUTF8(target)));
+				std::filesystem::copy_file(source, target, std::filesystem::copy_options::overwrite_existing, entryError);
+				if (entryError)
+					return SetCopyError(outError, fmt::format("Cannot copy '{}' to '{}': {}", ToUTF8(source), ToUTF8(target), entryError.message()));
+			}
+			else
+			{
+				// Symbolic links, junctions (which MSVC's std::filesystem does not report as symbolic links) and special
+				// files. Following a link could copy from outside the source tree: never descend into one.
+				it.disable_recursion_pending();
+				ST_CORE_WARN("Copying '{}': skipped '{}' (links and special files are not copied)", ToUTF8(from), ToUTF8(source));
+			}
+
+			it.increment(error);
+			if (error)
+				return SetCopyError(outError, fmt::format("Cannot list '{}': {}", ToUTF8(from), error.message()));
+		}
+		return true;
 	}
 
 	std::optional<uint64_t> FileSystem::GetFileSize(const std::filesystem::path& path)

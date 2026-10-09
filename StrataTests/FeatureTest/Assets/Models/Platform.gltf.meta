@@ -1,0 +1,18 @@
+{
+	"Handle": "F7A0000000000004",
+	"ImportSettings": {
+		"GenerateLODs": true,
+		"ImportCameras": true,
+		"ImportLights": true,
+		"ImportMaterials": true,
+		"LODCount": 3,
+		"MaxTextureSize": 0,
+		"OptimizeMeshes": true,
+		"Scale": 1.0
+	},
+	"Strata": {
+		"Format": "AssetMeta",
+		"Version": 1
+	},
+	"Type": "Model"
+}

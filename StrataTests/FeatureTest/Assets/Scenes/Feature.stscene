@@ -1,0 +1,2009 @@
+{
+	"Scene": {
+		"Entities": [
+			{
+				"Components": {
+					"AudioListener": {
+						"Active": true
+					},
+					"Camera": {
+						"ClearColor": [
+							0.08,
+							0.1,
+							0.16,
+							1
+						],
+						"OrthographicFar": 1000,
+						"OrthographicNear": 0.1,
+						"OrthographicSize": 10,
+						"PerspectiveFOV": 55,
+						"PerspectiveFar": 300,
+						"PerspectiveNear": 0.05,
+						"Primary": true,
+						"Projection": "Perspective"
+					},
+					"Name": {
+						"Name": "Main Camera"
+					},
+					"Tag": {
+						"Tag": "MainCamera"
+					},
+					"Transform": {
+						"Rotation": [
+							-0.17364818,
+							0,
+							0,
+							0.9848077
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							5,
+							12
+						]
+					}
+				},
+				"ID": "F7E0000000000001"
+			},
+			{
+				"Components": {
+					"AudioListener": {
+						"Active": false
+					},
+					"Camera": {
+						"ClearColor": [
+							0.05,
+							0.05,
+							0.07,
+							1
+						],
+						"OrthographicFar": 60,
+						"OrthographicNear": -10,
+						"OrthographicSize": 24,
+						"PerspectiveFOV": 60,
+						"PerspectiveFar": 1000,
+						"PerspectiveNear": 0.1,
+						"Primary": false,
+						"Projection": "Orthographic"
+					},
+					"Name": {
+						"Name": "Overview Camera"
+					},
+					"Transform": {
+						"Rotation": [
+							-0.70710677,
+							0,
+							0,
+							0.70710677
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							20,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000002"
+			},
+			{
+				"Components": {
+					"DirectionalLight": {
+						"CastShadows": true,
+						"Color": [
+							1,
+							0.95,
+							0.85
+						],
+						"Intensity": 4,
+						"ShadowBias": 1.2,
+						"ShadowDistance": 40,
+						"ShadowNormalBias": 2,
+						"ShadowSoftness": 0.6
+					},
+					"Name": {
+						"Name": "Sun"
+					},
+					"Transform": {
+						"Rotation": [
+							-0.40821788,
+							0.23456971,
+							0.10938165,
+							0.8754261
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000003"
+			},
+			{
+				"Components": {
+					"DirectionalLight": {
+						"CastShadows": false,
+						"Color": [
+							0.6,
+							0.7,
+							1
+						],
+						"Intensity": 0.2,
+						"ShadowBias": 1,
+						"ShadowDistance": 80,
+						"ShadowNormalBias": 1.5,
+						"ShadowSoftness": 1
+					},
+					"Inactive": {},
+					"Name": {
+						"Name": "Moon"
+					},
+					"Transform": {
+						"Rotation": [
+							-0.25881904,
+							0,
+							0,
+							0.9659258
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000004"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Lamp"
+					},
+					"PointLight": {
+						"Color": [
+							1,
+							0.6,
+							0.3
+						],
+						"Intensity": 25,
+						"Range": 7
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							-4,
+							3,
+							2
+						]
+					}
+				},
+				"ID": "F7E0000000000005"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Spot"
+					},
+					"SpotLight": {
+						"Color": [
+							0.5,
+							0.8,
+							1
+						],
+						"InnerConeAngle": 18,
+						"Intensity": 60,
+						"OuterConeAngle": 28,
+						"Range": 14
+					},
+					"Transform": {
+						"Rotation": [
+							-0.5,
+							0,
+							0,
+							0.8660254
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							4,
+							5,
+							3
+						]
+					}
+				},
+				"ID": "F7E0000000000006"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Environment"
+					},
+					"PostProcess": {
+						"AmbientOcclusion": true,
+						"AmbientOcclusionIntensity": 1.5,
+						"AmbientOcclusionRadius": 0.8,
+						"AntiAliasing": true,
+						"AutoExposure": false,
+						"AutoExposureMaxEV": 10,
+						"AutoExposureMinEV": -3,
+						"AutoExposureSpeed": 2,
+						"Bloom": true,
+						"BloomIntensity": 0.08,
+						"BloomThreshold": 1,
+						"Contrast": 1.05,
+						"Exposure": 0.25,
+						"Saturation": 1.1,
+						"Tonemapper": "AgX",
+						"Vignette": 0.1
+					},
+					"SkyLight": {
+						"AmbientColor": [
+							0.05,
+							0.06,
+							0.08
+						],
+						"BackgroundBlur": 0.25,
+						"EnvironmentMap": "F7A0000000000006",
+						"Intensity": 0.7,
+						"Rotation": 45,
+						"ShowBackground": true
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000007"
+			},
+			{
+				"Components": {
+					"Inactive": {},
+					"Name": {
+						"Name": "Alternate Grading"
+					},
+					"PostProcess": {
+						"AmbientOcclusion": false,
+						"AmbientOcclusionIntensity": 1,
+						"AmbientOcclusionRadius": 0.6,
+						"AntiAliasing": false,
+						"AutoExposure": true,
+						"AutoExposureMaxEV": 12,
+						"AutoExposureMinEV": -4,
+						"AutoExposureSpeed": 1.5,
+						"Bloom": false,
+						"BloomIntensity": 0.04,
+						"BloomThreshold": 0,
+						"Contrast": 1,
+						"Exposure": 0,
+						"Saturation": 1,
+						"Tonemapper": "KhronosNeutral",
+						"Vignette": 0.2
+					},
+					"SkyLight": {
+						"AmbientColor": [
+							0.03,
+							0.03,
+							0.04
+						],
+						"BackgroundBlur": 0,
+						"EnvironmentMap": "0000000000000000",
+						"Intensity": 1,
+						"Rotation": 0,
+						"ShowBackground": false
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000008"
+			},
+			{
+				"Components": {
+					"BoxCollider": {
+						"HalfExtents": [
+							0.5,
+							0.5,
+							0.5
+						],
+						"Offset": [
+							0,
+							0,
+							0
+						]
+					},
+					"MeshRenderer": {
+						"CastShadows": false,
+						"Material": "F7A0000000000003",
+						"Mesh": "0000000000000001"
+					},
+					"Name": {
+						"Name": "Ground"
+					},
+					"RigidBody": {
+						"AngularDamping": 0.05,
+						"ContinuousCollision": false,
+						"Friction": 0.9,
+						"GravityScale": 1,
+						"IsTrigger": false,
+						"Layer": 0,
+						"LinearDamping": 0.05,
+						"LockRotationX": false,
+						"LockRotationY": false,
+						"LockRotationZ": false,
+						"Mass": 1,
+						"Restitution": 0,
+						"Type": "Static"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							20,
+							1,
+							20
+						],
+						"Translation": [
+							0,
+							-0.5,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000010"
+			},
+			{
+				"Components": {
+					"MeshCollider": {
+						"Convex": false,
+						"Mesh": "3B6DC9952C34A8F5"
+					},
+					"MeshRenderer": {
+						"CastShadows": true,
+						"Material": "0000000000000000",
+						"Mesh": "3B6DC9952C34A8F5"
+					},
+					"Name": {
+						"Name": "Platform"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							-4,
+							1,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000011"
+			},
+			{
+				"Components": {
+					"MeshRenderer": {
+						"CastShadows": true,
+						"Material": "0D93594D3538FCE5",
+						"Mesh": "0000000000000002"
+					},
+					"Name": {
+						"Name": "Ball"
+					},
+					"RigidBody": {
+						"AngularDamping": 0.3,
+						"ContinuousCollision": true,
+						"Friction": 0.6,
+						"GravityScale": 1,
+						"IsTrigger": false,
+						"Layer": 0,
+						"LinearDamping": 0.1,
+						"LockRotationX": false,
+						"LockRotationY": false,
+						"LockRotationZ": false,
+						"Mass": 2,
+						"Restitution": 0.1,
+						"Type": "Dynamic"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "PhysicsFeatures",
+								"Fields": {
+									"RestHeight": {
+										"Type": "Float",
+										"Value": 1.65
+									},
+									"Tolerance": {
+										"Type": "Float",
+										"Value": 0.05
+									}
+								}
+							}
+						]
+					},
+					"SphereCollider": {
+						"Offset": [
+							0,
+							0,
+							0
+						],
+						"Radius": 0.5
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							0.8,
+							0.8,
+							0.8
+						],
+						"Translation": [
+							-4,
+							4,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000012"
+			},
+			{
+				"Components": {
+					"CapsuleCollider": {
+						"HalfHeight": 0.4,
+						"Offset": [
+							0,
+							0.1,
+							0
+						],
+						"Radius": 0.3
+					},
+					"Name": {
+						"Name": "Pill"
+					},
+					"RigidBody": {
+						"AngularDamping": 0.05,
+						"ContinuousCollision": false,
+						"Friction": 0.5,
+						"GravityScale": 1,
+						"IsTrigger": false,
+						"Layer": 0,
+						"LinearDamping": 0.05,
+						"LockRotationX": true,
+						"LockRotationY": true,
+						"LockRotationZ": true,
+						"Mass": 1,
+						"Restitution": 0,
+						"Type": "Dynamic"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "PhysicsFeatures",
+								"Fields": {
+									"RestHeight": {
+										"Type": "Float",
+										"Value": 0.6
+									},
+									"Tolerance": {
+										"Type": "Float",
+										"Value": 0.05
+									}
+								}
+							}
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							2,
+							3,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000013"
+			},
+			{
+				"Components": {
+					"MeshRenderer": {
+						"CastShadows": true,
+						"Material": "0000000000000000",
+						"Mesh": "0000000000000006"
+					},
+					"Name": {
+						"Name": "Pill Visual"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							0.6,
+							0.7,
+							0.6
+						],
+						"Translation": [
+							0,
+							0.1,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000014",
+				"Parent": "F7E0000000000013"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Compound"
+					},
+					"RigidBody": {
+						"AngularDamping": 0.05,
+						"ContinuousCollision": false,
+						"Friction": 0.5,
+						"GravityScale": 1.5,
+						"IsTrigger": false,
+						"Layer": 0,
+						"LinearDamping": 0.05,
+						"LockRotationX": false,
+						"LockRotationY": false,
+						"LockRotationZ": false,
+						"Mass": 3,
+						"Restitution": 0,
+						"Type": "Dynamic"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "PhysicsFeatures",
+								"Fields": {
+									"RestHeight": {
+										"Type": "Float",
+										"Value": 0
+									},
+									"Tolerance": {
+										"Type": "Float",
+										"Value": 0.05
+									}
+								}
+							}
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							5,
+							3,
+							-2
+						]
+					}
+				},
+				"ID": "F7E0000000000015"
+			},
+			{
+				"Components": {
+					"BoxCollider": {
+						"HalfExtents": [
+							0.5,
+							0.25,
+							0.5
+						],
+						"Offset": [
+							0,
+							0.25,
+							0
+						]
+					},
+					"Name": {
+						"Name": "Compound Box"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000016",
+				"Parent": "F7E0000000000015"
+			},
+			{
+				"Components": {
+					"MeshRenderer": {
+						"CastShadows": true,
+						"Material": "0000000000000000",
+						"Mesh": "0000000000000001"
+					},
+					"Name": {
+						"Name": "Compound Box Visual"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							0.5,
+							1
+						],
+						"Translation": [
+							0,
+							0.25,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000017",
+				"Parent": "F7E0000000000016"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Compound Knob"
+					},
+					"SphereCollider": {
+						"Offset": [
+							0,
+							0.7,
+							0
+						],
+						"Radius": 0.2
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000018",
+				"Parent": "F7E0000000000015"
+			},
+			{
+				"Components": {
+					"BoxCollider": {
+						"HalfExtents": [
+							0.5,
+							0.5,
+							0.5
+						],
+						"Offset": [
+							0,
+							0,
+							0
+						]
+					},
+					"MeshRenderer": {
+						"CastShadows": true,
+						"Material": "0000000000000000",
+						"Mesh": "0000000000000001"
+					},
+					"Name": {
+						"Name": "Elevator"
+					},
+					"RigidBody": {
+						"AngularDamping": 0.05,
+						"ContinuousCollision": false,
+						"Friction": 0.5,
+						"GravityScale": 1,
+						"IsTrigger": false,
+						"Layer": 0,
+						"LinearDamping": 0.05,
+						"LockRotationX": false,
+						"LockRotationY": false,
+						"LockRotationZ": false,
+						"Mass": 1,
+						"Restitution": 0,
+						"Type": "Kinematic"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "KinematicMover",
+								"Fields": {
+									"Amplitude": {
+										"Type": "Float",
+										"Value": 0.5
+									},
+									"BaseHeight": {
+										"Type": "Float",
+										"Value": 1
+									}
+								}
+							}
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							2,
+							0.2,
+							2
+						],
+						"Translation": [
+							-8,
+							1,
+							-4
+						]
+					}
+				},
+				"ID": "F7E0000000000019"
+			},
+			{
+				"Components": {
+					"BoxCollider": {
+						"HalfExtents": [
+							1,
+							1,
+							1
+						],
+						"Offset": [
+							0,
+							1,
+							0
+						]
+					},
+					"Name": {
+						"Name": "Trigger Zone"
+					},
+					"RigidBody": {
+						"AngularDamping": 0.05,
+						"ContinuousCollision": false,
+						"Friction": 0.5,
+						"GravityScale": 1,
+						"IsTrigger": true,
+						"Layer": 3,
+						"LinearDamping": 0.05,
+						"LockRotationX": false,
+						"LockRotationY": false,
+						"LockRotationZ": false,
+						"Mass": 1,
+						"Restitution": 0,
+						"Type": "Static"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							8,
+							0,
+							6
+						]
+					}
+				},
+				"ID": "F7E000000000001A"
+			},
+			{
+				"Components": {
+					"AudioSource": {
+						"Clip": "F7A0000000000007",
+						"Loop": true,
+						"MaxDistance": 30,
+						"MinDistance": 2,
+						"Pitch": 1.5,
+						"PlayOnStart": false,
+						"Rolloff": 0.5,
+						"Spatial": false,
+						"Volume": 0.5
+					},
+					"Name": {
+						"Name": "Speaker"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							-2,
+							1,
+							4
+						]
+					}
+				},
+				"ID": "F7E000000000001B"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "HUD"
+					},
+					"Text": {
+						"Alignment": "Left",
+						"Color": [
+							1,
+							0.9,
+							0.2,
+							1
+						],
+						"Font": "F7A0000000000008",
+						"FontSize": 24,
+						"ScreenAnchor": [
+							0.03,
+							0.05
+						],
+						"ScreenOffset": [
+							4,
+							6
+						],
+						"ScreenSpace": true,
+						"Text": "Strata Feature Test"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E000000000001C"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Sign"
+					},
+					"Text": {
+						"Alignment": "Right",
+						"Color": [
+							0.2,
+							1,
+							0.6,
+							1
+						],
+						"Font": "0000000000000000",
+						"FontSize": 1,
+						"ScreenAnchor": [
+							0.5,
+							0.5
+						],
+						"ScreenOffset": [
+							0,
+							0
+						],
+						"ScreenSpace": false,
+						"Text": "Hello, Strata"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							2.5,
+							-3
+						]
+					}
+				},
+				"ID": "F7E000000000001D"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Hierarchy Root"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000020"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Branch A"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000021",
+				"Parent": "F7E0000000000020"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Leaf"
+					},
+					"Tag": {
+						"Tag": "Feature"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000022",
+				"Parent": "F7E0000000000021"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Branch B"
+					},
+					"Tag": {
+						"Tag": "Feature"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000023",
+				"Parent": "F7E0000000000020"
+			},
+			{
+				"Components": {
+					"Inactive": {},
+					"Name": {
+						"Name": "Dormant"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000024"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Dormant Child"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "InactiveProbe",
+								"Fields": {}
+							}
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000025",
+				"Parent": "F7E0000000000024"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Toggled"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "ActivationProbe",
+								"Fields": {}
+							}
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000026"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Doomed"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "DoomedProbe",
+								"Fields": {}
+							}
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000027"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Transform Parent"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0.70710677,
+							0,
+							0.70710677
+						],
+						"Scale": [
+							2,
+							2,
+							2
+						],
+						"Translation": [
+							1,
+							2,
+							3
+						]
+					}
+				},
+				"ID": "F7E0000000000028"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Transform Child"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							1,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000029",
+				"Parent": "F7E0000000000028"
+			},
+			{
+				"Components": {
+					"BoxCollider": {
+						"HalfExtents": [
+							0.5,
+							0.5,
+							0.5
+						],
+						"Offset": [
+							0,
+							0,
+							0
+						]
+					},
+					"MeshRenderer": {
+						"CastShadows": true,
+						"Material": "F7A0000000000003",
+						"Mesh": "0000000000000001"
+					},
+					"Name": {
+						"Name": "Crate"
+					},
+					"PrefabInstance": {
+						"Prefab": "F7A0000000000002",
+						"PrefabEntityID": "F7C0000000000001"
+					},
+					"RigidBody": {
+						"AngularDamping": 0.05,
+						"ContinuousCollision": false,
+						"Friction": 0.5,
+						"GravityScale": 1,
+						"IsTrigger": false,
+						"Layer": 0,
+						"LinearDamping": 0.05,
+						"LockRotationX": false,
+						"LockRotationY": false,
+						"LockRotationZ": false,
+						"Mass": 0.5,
+						"Restitution": 0,
+						"Type": "Dynamic"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "CrateScript",
+								"Fields": {
+									"Value": {
+										"Type": "Int",
+										"Value": 3
+									}
+								}
+							}
+						]
+					},
+					"Tag": {
+						"Tag": "Crate"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							0.6,
+							0.6,
+							0.6
+						],
+						"Translation": [
+							6,
+							2,
+							2
+						]
+					}
+				},
+				"ID": "F7E0000000000030"
+			},
+			{
+				"Components": {
+					"MeshRenderer": {
+						"CastShadows": true,
+						"Material": "0000000000000000",
+						"Mesh": "0000000000000001"
+					},
+					"Name": {
+						"Name": "Crate Lid"
+					},
+					"PrefabInstance": {
+						"Prefab": "F7A0000000000002",
+						"PrefabEntityID": "F7C0000000000002"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1.1,
+							0.1,
+							1.1
+						],
+						"Translation": [
+							0,
+							0.55,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000031",
+				"Parent": "F7E0000000000030"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Entity Features"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "EntityFeatures",
+								"Fields": {}
+							}
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000040"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Component Features"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "ComponentFeatures",
+								"Fields": {}
+							}
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000041"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Transform Features"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "TransformFeatures",
+								"Fields": {}
+							}
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000042"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Field Features"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "FieldFeatures",
+								"Fields": {
+									"Count": {
+										"Type": "Int",
+										"Value": -7
+									},
+									"Flag": {
+										"Type": "Bool",
+										"Value": true
+									},
+									"Label": {
+										"Type": "String",
+										"Value": "overridden"
+									},
+									"Offset": {
+										"Type": "Vec3",
+										"Value": [
+											1,
+											-2,
+											3
+										]
+									},
+									"Orientation": {
+										"Type": "Quat",
+										"Value": [
+											0,
+											0,
+											0.70710677,
+											0.70710677
+										]
+									},
+									"Size": {
+										"Type": "Vec2",
+										"Value": [
+											3,
+											4
+										]
+									},
+									"Speed": {
+										"Type": "Float",
+										"Value": 2.5
+									},
+									"Target": {
+										"Type": "Entity",
+										"Value": "F7E0000000000022"
+									},
+									"Texture": {
+										"Type": "Asset",
+										"Value": "F7A0000000000005"
+									},
+									"Tint": {
+										"Type": "Vec4",
+										"Value": [
+											0.1,
+											0.2,
+											0.3,
+											0.4
+										]
+									}
+								}
+							}
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000043"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Lifecycle Features"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "LifecycleFeatures",
+								"Fields": {}
+							}
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000044"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Time Features"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "TimeFeatures",
+								"Fields": {}
+							}
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000045"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Input Features"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "InputFeatures",
+								"Fields": {
+									"PressFrame": {
+										"Type": "Int",
+										"Value": 10
+									}
+								}
+							}
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000046"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Spawn Features"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "SpawnFeatures",
+								"Fields": {
+									"Model": {
+										"Type": "Asset",
+										"Value": "F7A0000000000004"
+									},
+									"Prefab": {
+										"Type": "Asset",
+										"Value": "F7A0000000000002"
+									},
+									"PrefabPath": {
+										"Type": "String",
+										"Value": "Prefabs/Crate.stprefab"
+									}
+								}
+							}
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							9,
+							0,
+							-5
+						]
+					}
+				},
+				"ID": "F7E0000000000047"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Script Features"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "Messenger",
+								"Fields": {}
+							}
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000048"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Receiver Host"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "Receiver",
+								"Fields": {}
+							}
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000049"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Log Features"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "LogFeatures",
+								"Fields": {}
+							}
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E000000000004A"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Exception Probe"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "ExceptionProbe",
+								"Fields": {}
+							},
+							{
+								"Class": "ExceptionObserver",
+								"Fields": {}
+							}
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E000000000004B"
+			},
+			{
+				"Components": {
+					"Inactive": {},
+					"Name": {
+						"Name": "Journal"
+					},
+					"Text": {
+						"Alignment": "Center",
+						"Color": [
+							1,
+							1,
+							1,
+							1
+						],
+						"Font": "0000000000000000",
+						"FontSize": 32,
+						"ScreenAnchor": [
+							0.5,
+							0.5
+						],
+						"ScreenOffset": [
+							0,
+							0
+						],
+						"ScreenSpace": true,
+						"Text": ""
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000050"
+			}
+		],
+		"Name": "Feature",
+		"Settings": {
+			"FixedTimestep": 0.02,
+			"Gravity": [
+				0,
+				-9.81,
+				0
+			],
+			"MaxFixedStepsPerFrame": 4
+		}
+	},
+	"Strata": {
+		"Format": "Scene",
+		"Version": 1
+	}
+}

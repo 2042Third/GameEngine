@@ -32,7 +32,12 @@ namespace Strata
 		static bool Remove(const std::filesystem::path& path); // Files, or directories recursively
 		static bool Rename(const std::filesystem::path& from, const std::filesystem::path& to);
 		static bool Copy(const std::filesystem::path& from, const std::filesystem::path& to, bool overwrite = true);
-		static bool CopyDirectory(const std::filesystem::path& from, const std::filesystem::path& to);
+		// Copies the directories and regular files below `from` into `to` (created if needed), overwriting files. Fails, with
+		// a description in outError, when an entry cannot be copied (e.g. a directory is in the way of a file); entries
+		// copied before the failure stay. The copy never leaves the two trees: links (symbolic links, junctions) and
+		// special files below `from` are neither followed nor copied but skipped with a logged warning, existing links in
+		// `to` are never written through, and copying into `from` itself (or a directory inside it) is refused.
+		static bool CopyDirectory(const std::filesystem::path& from, const std::filesystem::path& to, std::string* outError = nullptr);
 
 		static std::optional<uint64_t> GetFileSize(const std::filesystem::path& path);
 		// Last modification time as an opaque, monotonic-per-file tick count.
