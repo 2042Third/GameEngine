@@ -458,8 +458,8 @@ namespace Strata
 		struct ContactReport
 		{
 			PairKey Pair;
-			// Entity of Jolt's body 1: the body with the higher motion type (dynamic, then kinematic, then static); the lower
-			// body ID only breaks ties between bodies of the same motion type.
+			// Entity of Jolt's body 1, the body with the lower ID: the contact constraint manager sorts the bodies by ID before
+			// calling the contact listener (the order by motion type only applies to collision detection and validation).
 			UUID EntityA = UUID::Null();
 			UUID EntityB = UUID::Null();
 			uint64_t SortKey = 0;        // Both body IDs; orders events independently of thread timing
@@ -2230,8 +2230,7 @@ namespace Strata
 				}
 				else
 				{
-					// Keep the pair's orientation from when it began: rebuilds change body IDs (and type edits motion types),
-					// and with them Jolt's order.
+					// Keep the pair's orientation from when it began (body IDs, and thus Jolt's order, change on rebuilds).
 					TouchingPair& pair = it->second;
 					pair.IsTrigger = report.IsTrigger;
 					pair.ReportStep = step;
