@@ -1245,25 +1245,39 @@ TEST_SUITE("Network.RpcServer")
 		for (int id = 1; id <= c_RequestCount; id++)
 			requests += MakeRequestLine(id, "test.echo", nlohmann::json { { "value", std::string(16000, 'q') } }) + "\n";
 
-		// Sent from another thread while this one plays the main loop: the server stops reading once the queue is
-		// full, so with small socket buffers the requests only go through as ProcessRequests drains the queue.
+		// The server stops reading once the queue is full, so with small socket buffers the requests only go through
+		// as ProcessRequests drains the queue: a helper thread sends them while this thread plays the main loop. A
+		// socket is used by one thread at a time, so the responses are read only once the sender has finished.
+		// They fit in the server's output allowance meanwhile, so it keeps reading.
 		std::atomic<bool> sent = false;
-		std::thread sender([&]() { sent = connection.GetSocket().SendAll(requests, std::chrono::milliseconds(15000)); });
+		std::atomic<bool> sending = true;
+		std::thread sender([&]()
+		{
+			sent = connection.GetSocket().SendAll(requests, std::chrono::milliseconds(15000));
+			sending = false;
+		});
 
 		uint32_t processed = 0;
 		uint32_t largestBatch = 0;
-		std::vector<int> answered;
 		CHECK(Tests::WaitUntil([&]()
 		{
 			const uint32_t batch = server.ProcessRequests();
 			processed += batch;
 			largestBatch = std::max(largestBatch, batch);
-			while (std::optional<nlohmann::json> response = connection.ReadMessage(std::chrono::milliseconds(1)))
-				answered.push_back((*response)["id"].get<int>());
-			return answered.size() == c_RequestCount;
+			return !sending.load() && processed == c_RequestCount;
 		}, std::chrono::milliseconds(15000)));
 		sender.join();
 		CHECK(sent.load());
+
+		std::vector<int> answered;
+		while (answered.size() < c_RequestCount)
+		{
+			std::optional<nlohmann::json> response = connection.ReadMessage();
+			if (!response)
+				break;
+			answered.push_back((*response)["id"].get<int>());
+		}
+		REQUIRE(answered.size() == c_RequestCount);
 		CHECK(processed == c_RequestCount);
 		CHECK(largestBatch >= 1);
 		CHECK(largestBatch <= 5);
