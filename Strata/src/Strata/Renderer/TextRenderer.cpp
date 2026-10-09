@@ -17,7 +17,7 @@ namespace Strata
 {
 
 	TextRenderer::TextRenderer(const std::string& debugName, nvrhi::IBuffer* frameConstants)
-		: m_DebugName(debugName), m_FrameConstants(frameConstants)
+		: m_DebugName(debugName), m_Errors("TextRenderer '" + debugName + "'"), m_FrameConstants(frameConstants)
 	{
 		ST_CORE_VERIFY(Renderer::IsInitialized() && frameConstants, "TextRenderer requires an initialized renderer and frame constants");
 		m_Device = Renderer::GetDevice();
@@ -63,7 +63,7 @@ namespace Strata
 			CachedAtlas cached;
 			cached.Atlas = FontAtlas::Create(font, &error);
 			if (!cached.Atlas)
-				ST_CORE_ERROR("TextRenderer '{}': cannot use a font: {}", m_DebugName, error); // Cached as unusable: reported once
+				m_Errors.Report(fmt::format("cannot use a font: {}", error)); // Cached as unusable, so not retried every frame
 			it = m_Atlases.emplace(font.get(), std::move(cached)).first;
 		}
 		it->second.Used = true;
@@ -168,7 +168,7 @@ namespace Strata
 				CachedAtlas& cached = *range.Atlas;
 				if (!cached.Atlas->Upload(m_Device, commandList))
 				{
-					ST_CORE_ERROR("TextRenderer '{}': failed to create a glyph atlas texture", m_DebugName);
+					m_Errors.Report("failed to create a glyph atlas texture");
 					return false;
 				}
 				if (cached.BoundTexture != cached.Atlas->GetTexture())
@@ -183,7 +183,7 @@ namespace Strata
 					cached.BindingSet = m_Device->createBindingSet(desc, m_BindingLayout);
 					if (!cached.BindingSet)
 					{
-						ST_CORE_ERROR("TextRenderer '{}': failed to create a glyph atlas binding set", m_DebugName);
+						m_Errors.Report("failed to create a glyph atlas binding set");
 						return false;
 					}
 					cached.BoundTexture = cached.Atlas->GetTexture();
@@ -206,12 +206,13 @@ namespace Strata
 			nvrhi::BufferHandle buffer = m_Device->createBuffer(desc);
 			if (!buffer)
 			{
-				ST_CORE_ERROR("TextRenderer '{}': failed to allocate {} bytes of text vertices", m_DebugName, capacity);
+				m_Errors.Report(fmt::format("failed to allocate {} bytes of text vertices", capacity));
 				return false;
 			}
 			m_VertexBuffer = buffer;
 		}
 		commandList->writeBuffer(m_VertexBuffer, m_Vertices.data(), requiredBytes);
+		m_Errors.Clear();
 		return true;
 	}
 

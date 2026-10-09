@@ -2,6 +2,7 @@
 
 #include "Strata/Asset/AssetTypes.h"
 #include "Strata/Core/Base.h"
+#include "Strata/Core/ErrorThrottle.h"
 #include "Strata/Renderer/DebugDraw.h"
 #include "Strata/Renderer/SceneRenderData.h"
 #include "Strata/Scene/Components.h"
@@ -253,8 +254,6 @@ namespace Strata
 		// Recreates the viewport-sized targets; false (targets released, error logged) when they cannot be created.
 		bool CreateRenderTargets();
 		void ReleaseRenderTargets();
-		// Logs a rendering failure, once until a frame renders successfully again (avoids a message every frame).
-		void ReportError(const std::string& message);
 		bool ValidateTarget(nvrhi::IFramebuffer* target);
 		// Finds the scene's sky light; (re)computes the environment maps when its environment texture changed.
 		void UpdateEnvironment(Scene& scene, RenderData::FrameConstants& frame, nvrhi::ICommandList* commandList);
@@ -305,7 +304,7 @@ namespace Strata
 		glm::uvec2 m_ViewportSize = { 0, 0 };
 		bool m_TargetsValid = false;
 		bool m_HasRenderedFrame = false; // Since the render targets were (re)created
-		std::string m_LastError;
+		ErrorThrottle m_Errors; // Rendering failures, logged once until a frame renders successfully again
 		bool m_WarnedLightOverflow = false;
 		SceneRendererStats m_Stats;
 

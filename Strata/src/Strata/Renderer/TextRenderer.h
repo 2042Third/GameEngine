@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Strata/Core/Base.h"
+#include "Strata/Core/ErrorThrottle.h"
 #include "Strata/Renderer/FontAtlas.h"
 #include "Strata/Renderer/TextLayout.h"
 
@@ -73,6 +74,7 @@ namespace Strata
 		nvrhi::IGraphicsPipeline* GetPipeline(const nvrhi::FramebufferInfo& framebufferInfo, bool screenSpace);
 	private:
 		std::string m_DebugName;
+		ErrorThrottle m_Errors; // Failures repeat every frame: logged once until text renders again
 		nvrhi::IDevice* m_Device = nullptr;
 		nvrhi::ShaderHandle m_VertexShader;
 		nvrhi::ShaderHandle m_PixelShader;

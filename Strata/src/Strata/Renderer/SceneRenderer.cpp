@@ -158,7 +158,7 @@ namespace Strata
 	}
 
 	SceneRenderer::SceneRenderer(const SceneRendererSpecification& specification)
-		: m_Specification(specification)
+		: m_Specification(specification), m_Errors("SceneRenderer '" + specification.DebugName + "'")
 	{
 		ST_CORE_VERIFY(Renderer::IsInitialized(), "SceneRenderer requires an initialized renderer");
 		m_Device = Renderer::GetDevice();
@@ -1079,20 +1079,12 @@ namespace Strata
 		nvrhi::BufferHandle created = m_Device->createBuffer(desc);
 		if (!created)
 		{
-			ReportError(fmt::format("failed to allocate the {} buffer ({} bytes)", name, capacity));
+			m_Errors.Report(fmt::format("failed to allocate the {} buffer ({} bytes)", name, capacity));
 			return false;
 		}
 		buffer = created;
 		outRecreated = true;
 		return true;
-	}
-
-	void SceneRenderer::ReportError(const std::string& message)
-	{
-		if (message == m_LastError)
-			return;
-		m_LastError = message;
-		ST_CORE_ERROR("SceneRenderer '{}': {}", m_Specification.DebugName, message);
 	}
 
 	void SceneRenderer::SetViewportSize(uint32_t width, uint32_t height)
@@ -1112,7 +1104,7 @@ namespace Strata
 		if (width > limit || height > limit)
 		{
 			ReleaseRenderTargets();
-			ReportError(fmt::format("viewport size {}x{} exceeds the device's texture size limit ({})", width, height, limit));
+			m_Errors.Report(fmt::format("viewport size {}x{} exceeds the device's texture size limit ({})", width, height, limit));
 			return;
 		}
 		m_TargetsValid = CreateRenderTargets();
@@ -1158,7 +1150,7 @@ namespace Strata
 		auto fail = [&](const char* what)
 		{
 			ReleaseRenderTargets();
-			ReportError(fmt::format("failed to create the {} for a {}x{} viewport", what, width, height));
+			m_Errors.Report(fmt::format("failed to create the {} for a {}x{} viewport", what, width, height));
 			return false;
 		};
 
@@ -1712,18 +1704,18 @@ namespace Strata
 		const nvrhi::FramebufferInfoEx& info = target->getFramebufferInfo();
 		if (desc.colorAttachments.empty() || !desc.colorAttachments[0].texture)
 		{
-			ReportError("the target framebuffer has no color attachment");
+			m_Errors.Report("the target framebuffer has no color attachment");
 			return false;
 		}
 		const nvrhi::FormatInfo& format = nvrhi::getFormatInfo(info.colorFormats[0]);
 		if (format.kind != nvrhi::FormatKind::Normalized || format.isSigned || format.isSRGB || info.sampleCount != 1)
 		{
-			ReportError(fmt::format("the target's color format {} is not supported (single-sampled, non-sRGB UNORM required)", format.name));
+			m_Errors.Report(fmt::format("the target's color format {} is not supported (single-sampled, non-sRGB UNORM required)", format.name));
 			return false;
 		}
 		if (info.width != m_ViewportSize.x || info.height != m_ViewportSize.y)
 		{
-			ReportError(fmt::format("the target is {}x{} but the viewport is {}x{}; the renderer does not rescale", info.width, info.height, m_ViewportSize.x,
+			m_Errors.Report(fmt::format("the target is {}x{} but the viewport is {}x{}; the renderer does not rescale", info.width, info.height, m_ViewportSize.x,
 				m_ViewportSize.y));
 			return false;
 		}
@@ -1738,7 +1730,7 @@ namespace Strata
 			return false; // Nothing to show (e.g. a minimized window); not an error
 		if (!m_TargetsValid)
 		{
-			ReportError("the render targets are unavailable (see the previous error)");
+			m_Errors.Report("the render targets are unavailable (see the previous error)");
 			return false;
 		}
 		if (target && !ValidateTarget(target))
@@ -1769,7 +1761,7 @@ namespace Strata
 		bool degraded = false; // Rendered with a reported limitation: keep the error so it is not logged every frame
 		if (frame.ShadowParams.w > 0.0f && !EnsureShadowMap())
 		{
-			ReportError("failed to create the shadow map; rendering without shadows");
+			m_Errors.Report("failed to create the shadow map; rendering without shadows");
 			frame.ShadowParams.w = 0.0f;
 			degraded = true;
 		}
@@ -1801,7 +1793,7 @@ namespace Strata
 			commandList->endMarker();
 			commandList->close();
 			m_Device->executeCommandList(commandList); // Keeps the environment processing that was recorded
-			ReportError("failed to create the scene binding sets");
+			m_Errors.Report("failed to create the scene binding sets");
 			m_Stats = {};
 			return false;
 		}
@@ -1960,7 +1952,7 @@ namespace Strata
 		m_Stats.Rendered = true;
 		m_HasRenderedFrame = true;
 		if (!degraded)
-			m_LastError.clear();
+			m_Errors.Clear();
 		return true;
 	}
 
@@ -2139,7 +2131,7 @@ namespace Strata
 				m_OutlineBindingSet = m_Device->createBindingSet(desc, m_OutlineBindingLayout);
 				if (!m_OutlineBindingSet)
 				{
-					ReportError("failed to create the selection outline bindings");
+					m_Errors.Report("failed to create the selection outline bindings");
 					return false;
 				}
 			}
