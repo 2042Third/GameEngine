@@ -186,6 +186,9 @@ namespace Strata
 		if (!Math::DecomposeTransform(m_PrimaryStart, startTranslation, startRotation, startScale) || !Math::DecomposeTransform(primaryWorld, translation, rotation, scale))
 			return fail("The gizmo transform is degenerate");
 
+		// Back at the start, everything returns exactly to where it was (so a drag back to its start records no step).
+		const bool atStart = primaryWorld == m_PrimaryStart;
+
 		// Computed for every entity before anything is written, so a failure changes nothing.
 		std::vector<std::pair<Entity, TransformComponent>> results;
 		for (const DraggedEntity& dragged : m_Entities)
@@ -197,15 +200,15 @@ namespace Strata
 			const glm::mat4 parentWorld = parent ? scene->GetWorldTransform(parent) : glm::mat4(1.0f);
 
 			TransformComponent local = dragged.StartLocal;
-			switch (m_Operation)
+			switch (atStart ? GizmoOperation::None : m_Operation)
 			{
 				case GizmoOperation::Translate:
 				{
-					// Only the position changes, so rotation and scale stay exactly as they were.
-					const glm::vec3 worldPosition = glm::vec3(dragged.StartWorld[3]) + (translation - startTranslation);
+					// Only the position changes, so rotation and scale stay exactly as they were. The world offset is
+					// converted into the parent's space (a direction: the parent's translation does not apply).
 					if (!(std::abs(glm::determinant(parentWorld)) > Scene::c_MinInvertibleDeterminant))
 						return fail(fmt::format("'{}' cannot move: its parent's transform is singular", entity.GetName()));
-					local.Translation = glm::vec3(glm::inverse(parentWorld) * glm::vec4(worldPosition, 1.0f));
+					local.Translation = dragged.StartLocal.Translation + glm::vec3(glm::inverse(parentWorld) * glm::vec4(translation - startTranslation, 0.0f));
 					break;
 				}
 				case GizmoOperation::Rotate:
@@ -224,7 +227,7 @@ namespace Strata
 					local.Scale = dragged.StartLocal.Scale * (scale / startScale);
 					break;
 				case GizmoOperation::None:
-					return fail("No gizmo operation");
+					break; // At the start
 			}
 			if (!IsFinite(local.Translation) || !IsFinite(local.Scale) || !std::isfinite(local.Rotation.w))
 				return fail(fmt::format("'{}': the transform is not finite", entity.GetName()));

@@ -169,6 +169,15 @@ TEST_SUITE("Editor.TransformEdit")
 		REQUIRE(context.Redo());
 		CHECK(Snapshot(context) == after);
 
+		// A drag that ends where it started leaves no step.
+		drag = TransformDrag::Begin(context, GizmoOperation::Translate);
+		REQUIRE(drag);
+		REQUIRE(drag->Update(context, glm::translate(glm::mat4(1.0f), glm::vec3(3.0f, 0.0f, 0.0f)) * drag->GetStartTransform()));
+		REQUIRE(drag->Update(context, drag->GetStartTransform()));
+		drag->End(context);
+		CHECK(context.GetUndoStack().GetHistory().size() == 1);
+		CHECK(Snapshot(context) == after);
+
 		// A second drag is a second step, even for the same entity.
 		drag = TransformDrag::Begin(context, GizmoOperation::Translate);
 		REQUIRE(drag);

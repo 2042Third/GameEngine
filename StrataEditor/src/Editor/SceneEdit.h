@@ -54,6 +54,7 @@ namespace Strata
 		bool Execute(std::string* outError) override;
 		void Undo() override;
 		bool MergeWith(const EditorAction& next) override;
+		bool IsNoOp() const override { return m_Before == m_After; }
 
 		const std::vector<EntityState>& GetBefore() const { return m_Before; }
 		const std::vector<EntityState>& GetAfter() const { return m_After; }

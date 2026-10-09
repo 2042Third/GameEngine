@@ -3,6 +3,7 @@
 #include "Editor/UndoStack.h"
 
 #include <string>
+#include <vector>
 
 using namespace Strata;
 
@@ -42,6 +43,8 @@ namespace
 			m_Delta += add->m_Delta;
 			return true;
 		}
+
+		bool IsNoOp() const override { return m_Delta == 0; }
 
 		void SetFails(bool fails) { m_Fails = fails; }
 	private:
@@ -109,6 +112,28 @@ TEST_SUITE("Editor.Undo")
 		CHECK(value == 6);
 		stack.Undo();
 		CHECK(value == 0);
+	}
+
+	TEST_CASE("A continuous edit that returns to its start leaves no step")
+	{
+		int value = 0;
+		UndoStack stack;
+		stack.Execute(CreateScope<AddAction>(value, 5));
+		stack.MarkSaved();
+		stack.Execute(CreateScope<AddAction>(value, 2, true));
+		CHECK(stack.IsModified());
+		stack.Execute(CreateScope<AddAction>(value, -2, true));
+		CHECK(value == 5);
+		CHECK(stack.GetHistory() == std::vector<std::string> { "Add 5" });
+		CHECK(stack.GetPosition() == 1);
+		CHECK_FALSE(stack.IsModified());
+
+		// The next edit is a step of its own, even though it could have merged.
+		stack.Execute(CreateScope<AddAction>(value, 3, true));
+		stack.Execute(CreateScope<AddAction>(value, 1, true));
+		CHECK(stack.GetHistory() == std::vector<std::string> { "Add 5", "Add 3" });
+		REQUIRE(stack.Undo());
+		CHECK(value == 5);
 	}
 
 	TEST_CASE("The save point tracks modifications")

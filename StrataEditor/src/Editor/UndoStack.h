@@ -24,6 +24,9 @@ namespace Strata
 		// Continuous edits (dragging a value) become one undo step: when the stack's latest action accepts the next
 		// one, it absorbs its effect (the next action has already been applied) and the next action is dropped.
 		virtual bool MergeWith(const EditorAction& /*next*/) { return false; }
+		// Whether the action changes nothing (e.g. a merged drag that returned to its start). The stack drops a merged
+		// step that became a no-op, so dragging a value back and forth leaves no undo step.
+		virtual bool IsNoOp() const { return false; }
 	};
 
 	// Linear undo history with redo, a capacity limit and save-point tracking (for "modified" indicators).
