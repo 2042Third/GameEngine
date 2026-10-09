@@ -25,17 +25,12 @@ namespace Strata
 	namespace
 	{
 
-		// A pipe whose parent end (read or write) is closed on exec, so it does not leak into the child or later children.
-		bool CreateChildPipe(int (&descriptors)[2], bool parentReads, std::string& error)
-		{
-			if (pipe(descriptors) != 0)
-			{
-				error = fmt::format("pipe() failed: {}", std::strerror(errno));
-				return false;
-			}
-			fcntl(parentReads ? descriptors[0] : descriptors[1], F_SETFD, FD_CLOEXEC);
-			return true;
-		}
+#if !defined(ST_PLATFORM_LINUX)
+		// Without pipe2, a pipe is created first and marked close-on-exec afterwards; a child spawned by another thread in
+		// between would inherit both ends and hold them open (the reader would never see the end of the output). Creating
+		// pipes and spawning children are serialized instead.
+		std::mutex s_SpawnMutex;
+#endif
 
 		void CloseDescriptor(int& descriptor)
 		{
@@ -43,6 +38,47 @@ namespace Strata
 				return;
 			close(descriptor);
 			descriptor = -1;
+		}
+
+		// The child receives its end through dup2 onto a standard handle, which clears close-on-exec on the copy. An end
+		// that already is a standard handle (possible only when this process runs with one closed) would be duplicated
+		// onto itself and keep the flag, so it moves above them.
+		bool MoveAboveStandardHandles(int& descriptor)
+		{
+			if (descriptor > STDERR_FILENO)
+				return true;
+			const int moved = fcntl(descriptor, F_DUPFD_CLOEXEC, STDERR_FILENO + 1);
+			if (moved < 0)
+				return false;
+			close(descriptor);
+			descriptor = moved;
+			return true;
+		}
+
+		// A pipe for a child's standard handle. Both ends are close-on-exec, so neither leaks into this child (beyond the
+		// standard handle it receives) or into any other child. A pipe this process writes to never raises SIGPIPE on
+		// macOS, where that signal would go to the whole process rather than the writing thread (see WriteInput).
+		// parentWrites is only needed where F_SETNOSIGPIPE exists.
+		bool CreateChildPipe(int (&descriptors)[2], [[maybe_unused]] bool parentWrites, std::string& error)
+		{
+#if defined(ST_PLATFORM_LINUX)
+			const bool created = pipe2(descriptors, O_CLOEXEC) == 0;
+#else
+			const bool created = pipe(descriptors) == 0 && fcntl(descriptors[0], F_SETFD, FD_CLOEXEC) == 0 && fcntl(descriptors[1], F_SETFD, FD_CLOEXEC) == 0;
+#endif
+#if defined(F_SETNOSIGPIPE)
+			const bool configured = created && (!parentWrites || fcntl(descriptors[1], F_SETNOSIGPIPE, 1) == 0);
+#else
+			const bool configured = created;
+#endif
+			if (!configured || !MoveAboveStandardHandles(descriptors[0]) || !MoveAboveStandardHandles(descriptors[1]))
+			{
+				error = fmt::format("Creating a pipe failed: {}", std::strerror(errno));
+				CloseDescriptor(descriptors[0]);
+				CloseDescriptor(descriptors[1]);
+				return false;
+			}
+			return true;
 		}
 
 	}
@@ -78,39 +114,30 @@ namespace Strata
 				CloseDescriptor(*descriptor);
 		};
 
+#if !defined(ST_PLATFORM_LINUX)
+		std::scoped_lock<std::mutex> spawnLock(s_SpawnMutex);
+#endif
 		const bool captureOutput = specification.Output == ProcessOutputMode::Capture || specification.Output == ProcessOutputMode::CaptureSeparate;
 		const bool separateErrors = specification.Output == ProcessOutputMode::CaptureSeparate;
-		if ((captureOutput && !CreateChildPipe(outputPipe, true, m_LastError)) || (separateErrors && !CreateChildPipe(errorPipe, true, m_LastError))
-			|| (specification.PipeInput && !CreateChildPipe(inputPipe, false, m_LastError)))
+		if ((captureOutput && !CreateChildPipe(outputPipe, false, m_LastError)) || (separateErrors && !CreateChildPipe(errorPipe, false, m_LastError))
+			|| (specification.PipeInput && !CreateChildPipe(inputPipe, true, m_LastError)))
 		{
 			closePipes();
 			return false;
 		}
 
+		// Every pipe end is close-on-exec: the child keeps only the standard handles duplicated onto below.
 		posix_spawn_file_actions_t actions;
 		posix_spawn_file_actions_init(&actions);
 		if (specification.PipeInput)
-		{
 			posix_spawn_file_actions_adddup2(&actions, inputPipe[0], STDIN_FILENO);
-			posix_spawn_file_actions_addclose(&actions, inputPipe[0]);
-			posix_spawn_file_actions_addclose(&actions, inputPipe[1]);
-		}
 		else if (specification.Output != ProcessOutputMode::Inherit)
-		{
 			posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
-		}
 
 		if (captureOutput)
 		{
 			posix_spawn_file_actions_adddup2(&actions, outputPipe[1], STDOUT_FILENO);
 			posix_spawn_file_actions_adddup2(&actions, separateErrors ? errorPipe[1] : outputPipe[1], STDERR_FILENO);
-			posix_spawn_file_actions_addclose(&actions, outputPipe[0]);
-			posix_spawn_file_actions_addclose(&actions, outputPipe[1]);
-			if (separateErrors)
-			{
-				posix_spawn_file_actions_addclose(&actions, errorPipe[0]);
-				posix_spawn_file_actions_addclose(&actions, errorPipe[1]);
-			}
 		}
 		else if (specification.Output == ProcessOutputMode::Discard)
 		{
@@ -284,9 +311,10 @@ namespace Strata
 		if (m_InputWrite < 0)
 			return false;
 
-		// Writing to a pipe whose reader is gone raises SIGPIPE, which would end this process. The signal is blocked on
-		// this thread while writing, and one raised by the write (it is directed at the writing thread) is consumed
-		// before the previous mask comes back.
+		// Writing to a pipe whose reader is gone raises SIGPIPE, which would end this process. On macOS the signal would
+		// be directed at the process (any thread could receive it), so the pipe was created with F_SETNOSIGPIPE and
+		// raises none. On Linux it is directed at the writing thread: it is blocked on this thread while writing, and
+		// one raised by the write is consumed before the previous mask comes back.
 		sigset_t pipeSignal;
 		sigemptyset(&pipeSignal);
 		sigaddset(&pipeSignal, SIGPIPE);
