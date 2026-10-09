@@ -242,7 +242,9 @@ Conventions:
 - Font files are untrusted input and stb_truetype does no bounds checking: `Font::Create` validates
   everything stb_truetype can read (`Renderer/FontValidation.h`), rejects malformed fonts and fonts with
   CFF outlines (OTTO), and disables kerning that is not fully bounded (in what stb_truetype reads,
-  in the GPOS lookups it searches per glyph pair, and in the work to validate it). Bound time as
+  in the GPOS lookups it searches per glyph pair, and in the work to validate it). Inconsistent
+  format 4 character map search parameters, which stb_truetype trusts, are corrected in the font's
+  copy (`Font::GetData`) rather than rejected. Bound time as
   well as reads: offsets in font tables may share targets, so count work with repeats. Before
   calling another stb_truetype function, extend the validator to cover what it reads, with
   crafted-font tests.

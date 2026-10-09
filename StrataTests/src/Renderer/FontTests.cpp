@@ -380,13 +380,38 @@ TEST_SUITE("Renderer.Font")
 		FontPatcher segments = DefaultFont();
 		format4(segments);
 		std::string error;
-		CHECK_MESSAGE(Font::Create(segments.Data, &error), error);
-		CheckRejected(patched([&](FontPatcher& font)
+		Ref<Font> segmentFont = Font::Create(segments.Data, &error);
+		REQUIRE_MESSAGE(segmentFont, error);
+		CHECK(segmentFont->GetData() == segments.Data);
+		Scope<FontAtlas> segmentAtlas = FontAtlas::Create(segmentFont);
+		REQUIRE(segmentAtlas);
+		segmentAtlas->SetRasterBudget({ 0, 0 }); // Glyph lookups only
+
+		// Inconsistent binary search parameters (stb_truetype would search outside the segments) are corrected in the
+		// font's copy: characters map as with the right ones.
+		const size_t subtable = segments.SelectedCmapSubtable();
+		const uint16_t searchRange = segments.U16(subtable + 8);
+		const uint16_t entrySelector = segments.U16(subtable + 10);
+		const uint16_t rangeShift = segments.U16(subtable + 12);
+		for (const auto& [field, value] : { std::pair<size_t, uint16_t> { 8, 0xFFFE }, { 10, static_cast<uint16_t>(entrySelector + 1) }, { 10, 15 }, { 12, 0xFFFE } })
 		{
-			format4(font);
-			const size_t subtable = font.SelectedCmapSubtable();
-			font.SetU16(subtable + 10, static_cast<uint16_t>(font.U16(subtable + 10) + 1)); // entrySelector
-		}), "search parameters");
+			CAPTURE(field);
+			FontPatcher inconsistent = segments;
+			inconsistent.SetU16(subtable + field, value);
+			Ref<Font> corrected = Font::Create(inconsistent.Data, &error);
+			REQUIRE_MESSAGE(corrected, error);
+			const FontPatcher stored(corrected->GetData());
+			CHECK(stored.U16(subtable + 8) == searchRange);
+			CHECK(stored.U16(subtable + 10) == entrySelector);
+			CHECK(stored.U16(subtable + 12) == rangeShift);
+			Scope<FontAtlas> atlas = FontAtlas::Create(corrected);
+			REQUIRE(atlas);
+			atlas->SetRasterBudget({ 0, 0 });
+			bool sameGlyphs = true;
+			for (uint32_t codepoint = 0; codepoint < 0x3000; codepoint++)
+				sameGlyphs = sameGlyphs && atlas->GetGlyph(codepoint).GlyphIndex == segmentAtlas->GetGlyph(codepoint).GlyphIndex;
+			CHECK(sameGlyphs);
+		}
 		CheckRejected(patched([&](FontPatcher& font)
 		{
 			format4(font);

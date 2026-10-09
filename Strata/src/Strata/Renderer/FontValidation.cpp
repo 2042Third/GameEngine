@@ -524,8 +524,9 @@ namespace Strata
 				}
 			}
 
-			// Format 4: stb_truetype's binary search trusts searchRange, entrySelector and rangeShift, so they must be
-			// exactly what the segment count implies; glyph index arrays must lie inside the table.
+			// Format 4: glyph index arrays must lie inside the table. stb_truetype's binary search trusts searchRange,
+			// entrySelector and rangeShift; fonts that store inconsistent ones exist, so the values the segment count implies
+			// are recorded for Font::Create to write into its copy of the font.
 			bool ValidateSegmentMap(uint64_t subtable, uint64_t available)
 			{
 				if (available < 14)
@@ -541,7 +542,10 @@ namespace Strata
 					log2++;
 				const uint32_t searchRange = 2u << log2;
 				if (U16(subtable + 8) != searchRange || U16(subtable + 10) != log2 || U16(subtable + 12) != segmentsTimesTwo - searchRange)
-					return Fail("The font's character map (format 4) has inconsistent search parameters");
+				{
+					m_Facts.SearchFix = CharacterMapSearchFix { static_cast<uint32_t>(subtable), static_cast<uint16_t>(searchRange),
+						static_cast<uint16_t>(log2), static_cast<uint16_t>(segmentsTimesTwo - searchRange) };
+				}
 				for (uint64_t segment = 0; segment < segments; segment++)
 				{
 					const uint16_t last = U16(subtable + 14 + 2 * segment);

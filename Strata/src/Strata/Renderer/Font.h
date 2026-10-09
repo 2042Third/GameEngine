@@ -23,6 +23,7 @@ namespace Strata
 		static const Ref<Font>& GetDefault();
 
 		uint64_t GetMemoryUsage() const override { return m_Data.size() + m_GlyphShapes.size() * sizeof(GlyphShapeCost); }
+		// The font file as stb_truetype reads it: inconsistent format 4 character map search parameters are corrected.
 		const std::vector<uint8_t>& GetData() const { return m_Data; }
 
 		uint32_t GetFontOffset() const { return m_FontOffset; } // Start of the font in the file (collections)
