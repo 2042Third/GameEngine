@@ -1,9 +1,12 @@
 #include "stpch.h"
 #include "Strata/Core/CrashGuard.h"
 
+#include "Strata/Core/Log.h"
+
 #include <cerrno>
 #include <csetjmp>
 #include <csignal>
+#include <cstdint>
 #include <cstdlib>
 #include <mutex>
 #include <pthread.h>
@@ -14,8 +17,24 @@
 	#include <cxxabi.h>
 #endif
 
+#if defined(ST_PLATFORM_MACOS)
+	#include <sys/ucontext.h>
+#endif
+
 namespace Strata
 {
+
+	// Leaving the signal handler after a contained fault. The handler runs on the thread's alternate signal stack (so it
+	// can run after a stack overflow), and the kernel delivers a later signal on that stack only if it knows that the
+	// thread has left it:
+	//  - Linux tells from the stack pointer, so the handler jumps straight back into Invoke (siglongjmp).
+	//  - macOS keeps a per-thread "on the alternate stack" flag that sigreturn - returning from the handler - resets to
+	//    what it was before the signal. Jumping out leaves it set (the arm64 longjmp does not reset it), and the kernel
+	//    then delivers the next signal on the interrupted stack; after a stack overflow it cannot, and it ends the process
+	//    with SIGILL instead. So the handler rewrites the interrupted thread state to continue in ResumeAfterFault on a
+	//    small stack of its own and returns; ResumeAfterFault then jumps back into Invoke from ordinary code.
+	// Either way sigsetjmp does not save the signal mask (that would cost a system call per guarded call); Invoke unblocks
+	// the delivered signal on the fault path (on macOS sigreturn has already restored the mask).
 
 	namespace
 	{
@@ -26,28 +45,26 @@ namespace Strata
 			GuardFrame* Previous = nullptr;
 			volatile sig_atomic_t Signal = 0;
 			void* volatile FaultAddress = nullptr;
+#if defined(ST_PLATFORM_MACOS)
+			// End of this thread's recovery stack (see ResumeAfterReturn), copied here so the handler reads no thread-local
+			// state beyond the current frame.
+			void* RecoveryStackTop = nullptr;
+#endif
 		};
 
 		// SIGABRT is not contained, only reported (see AbortFromGuardedCode).
 		constexpr int c_GuardedSignals[] = { SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGTRAP, SIGABRT };
 		constexpr size_t c_AlternateStackSize = 64 * 1024;
-
-		// Whether sigsetjmp saves the signal mask for siglongjmp to restore, which costs a system call per guarded call.
 #if defined(ST_PLATFORM_MACOS)
-		// macOS: only the mask-restoring siglongjmp also clears the kernel's record that the thread runs on the alternate
-		// signal stack. Without it, signals after a fault would no longer switch to that stack, and a second stack
-		// overflow could not be handled.
-		constexpr int c_SaveSignalMask = 1;
-#else
-		// Linux tells from the stack pointer whether a thread runs on the alternate stack, so jumping out of the handler
-		// needs no cleanup. The one mask change to undo is the delivered signal, which the kernel blocks while its handler
-		// runs (sa_mask is empty and SA_NODEFER is not set); Invoke unblocks it on the fault path. Nested guards are no
-		// different: each fault path undoes the block of the signal it handled.
-		constexpr int c_SaveSignalMask = 0;
+		// ResumeAfterFault only calls siglongjmp.
+		constexpr size_t c_RecoveryStackSize = 16 * 1024;
 #endif
 
 		thread_local GuardFrame* t_CurrentFrame = nullptr;
 		thread_local bool t_AlternateStackInstalled = false;
+#if defined(ST_PLATFORM_MACOS)
+		thread_local void* t_RecoveryStackTop = nullptr;
+#endif
 
 		struct sigaction s_PreviousActions[NSIG];
 		std::once_flag s_InstallOnce;
@@ -91,14 +108,26 @@ namespace Strata
 		}
 
 		// Sent by another process (kill, sigqueue) rather than raised by the code running on this thread: not a fault of
-		// a guarded call, even when one runs.
-		bool IsSentByAnotherProcess(const siginfo_t* info)
+		// a guarded call, even when one runs. (One this process sends itself, say with raise(), counts as the guarded
+		// code's own where the platform reports the sender.) The sender's process id is only read for sent signals: for
+		// faults, Linux keeps the fault address in the same place.
+		bool IsSentByAnotherProcess([[maybe_unused]] int signal, const siginfo_t* info)
 		{
 			if (!info)
 				return false;
-			bool sent = info->si_code == SI_USER || info->si_code == SI_QUEUE;
-#if defined(SI_TKILL)
-			sent = sent || info->si_code == SI_TKILL;
+#if defined(ST_PLATFORM_MACOS)
+			// macOS reports SI_USER or SI_QUEUE for sent signals - except SIGSEGV, SIGBUS, SIGILL and SIGFPE, whose code the
+			// kernel derives from the thread's last hardware exception, and which carry no sender. One that no exception
+			// caused gets the "no code" value 0 (SEGV_NOOP, BUS_NOOP, ILL_NOOP, FPE_NOOP); faults have positive codes
+			// (SEGV_MAPERR, BUS_ADRERR, FPE_INTDIV, ...). Without a sender, one this process raises itself counts as sent as
+			// well. (A thread that faulted before may be given that fault's code again for a sent signal, which then cannot be
+			// told apart from a fault.)
+			const bool derivedFromException = signal == SIGSEGV || signal == SIGBUS || signal == SIGILL || signal == SIGFPE;
+			const bool sent = info->si_code == SI_USER || info->si_code == SI_QUEUE || (derivedFromException && info->si_code == 0);
+#else
+			// Linux: the kernel's own signals, faults among them, have positive codes; sent ones zero or negative (SI_USER,
+			// SI_QUEUE, SI_TKILL, ...).
+			const bool sent = info->si_code <= 0;
 #endif
 			return sent && info->si_pid != getpid();
 		}
@@ -115,10 +144,60 @@ namespace Strata
 			ForwardToPreviousHandler(SIGABRT, info, context);
 		}
 
+#if defined(ST_PLATFORM_MACOS)
+		// Where a contained fault continues once the handler has returned: on the recovery stack, as if called with the
+		// faulted guard's frame as its argument (it has no caller to return to).
+		[[noreturn]] void ResumeAfterFault(GuardFrame* frame)
+		{
+			siglongjmp(frame->JumpBuffer, 1);
+		}
+
+		// Makes the interrupted thread continue in ResumeAfterFault(frame) when the handler returns, on the recovery stack:
+		// the stack it was interrupted on may be exhausted. False if that cannot be arranged; the handler then has to jump
+		// out directly.
+		bool ResumeAfterReturn(void* context, GuardFrame* frame)
+		{
+			ucontext_t* interrupted = static_cast<ucontext_t*>(context);
+			if (!interrupted || !interrupted->uc_mcontext || !frame->RecoveryStackTop)
+				return false;
+
+			// Aligned as both ABIs require for the stack pointer at a call (unused on other architectures).
+			[[maybe_unused]] const uintptr_t stackTop = reinterpret_cast<uintptr_t>(frame->RecoveryStackTop) & ~static_cast<uintptr_t>(15);
+	#if defined(__aarch64__)
+			// The SDK's accessors also work where pointer authentication makes the registers opaque (arm64e).
+			auto& state = interrupted->uc_mcontext->__ss;
+			state.__x[0] = reinterpret_cast<uint64_t>(frame);
+		#if defined(__darwin_arm_thread_state64_set_sp)
+			__darwin_arm_thread_state64_set_sp(state, stackTop);
+		#else
+			state.__sp = stackTop;
+		#endif
+		#if defined(__darwin_arm_thread_state64_set_pc_fptr)
+			__darwin_arm_thread_state64_set_pc_fptr(state, &ResumeAfterFault);
+		#else
+			state.__pc = reinterpret_cast<uint64_t>(&ResumeAfterFault);
+		#endif
+			return true;
+	#elif defined(__x86_64__)
+			// At a function's entry the stack pointer is 8 below a 16-byte boundary, where the call left its return address;
+			// this entry has none (zero ends stack walks there).
+			const uintptr_t entryStackPointer = stackTop - sizeof(uint64_t);
+			*reinterpret_cast<uint64_t*>(entryStackPointer) = 0;
+			auto& state = interrupted->uc_mcontext->__ss;
+			state.__rdi = reinterpret_cast<uint64_t>(frame);
+			state.__rsp = entryStackPointer;
+			state.__rip = reinterpret_cast<uint64_t>(&ResumeAfterFault);
+			return true;
+	#else
+			return false;
+	#endif
+		}
+#endif
+
 		void SignalHandler(int signal, siginfo_t* info, void* context)
 		{
 			GuardFrame* frame = t_CurrentFrame;
-			if (frame && !IsSentByAnotherProcess(info))
+			if (frame && !IsSentByAnotherProcess(signal, info))
 			{
 				if (signal == SIGABRT)
 				{
@@ -128,6 +207,10 @@ namespace Strata
 				frame->Signal = signal;
 				frame->FaultAddress = info ? info->si_addr : nullptr;
 				t_CurrentFrame = frame->Previous;
+#if defined(ST_PLATFORM_MACOS)
+				if (ResumeAfterReturn(context, frame))
+					return;
+#endif
 				siglongjmp(frame->JumpBuffer, 1);
 			}
 			ForwardToPreviousHandler(signal, info, context);
@@ -148,14 +231,35 @@ namespace Strata
 			if (t_AlternateStackInstalled)
 				return;
 
-			// Required to run the handler after a stack overflow. Intentionally leaked: the stack must stay
-			// valid for the remaining lifetime of the thread.
+			// Required to run the handler after a stack overflow. Intentionally leaked: the stacks must stay valid for the
+			// remaining lifetime of the thread.
+			void* alternateStack = std::malloc(c_AlternateStackSize);
+#if defined(ST_PLATFORM_MACOS)
+			// Without a recovery stack the handler would have to jump out and leave the thread marked as running on the
+			// alternate stack (see above), so the alternate stack is installed only together with one.
+			void* recoveryStack = std::malloc(c_RecoveryStackSize);
+			if (!recoveryStack)
+			{
+				std::free(alternateStack);
+				return;
+			}
+#endif
 			stack_t stack = {};
-			stack.ss_sp = std::malloc(c_AlternateStackSize);
+			stack.ss_sp = alternateStack;
 			stack.ss_size = c_AlternateStackSize;
 			stack.ss_flags = 0;
-			if (stack.ss_sp && sigaltstack(&stack, nullptr) == 0)
-				t_AlternateStackInstalled = true;
+			if (!alternateStack || sigaltstack(&stack, nullptr) != 0)
+			{
+				std::free(alternateStack);
+#if defined(ST_PLATFORM_MACOS)
+				std::free(recoveryStack);
+#endif
+				return;
+			}
+			t_AlternateStackInstalled = true;
+#if defined(ST_PLATFORM_MACOS)
+			t_RecoveryStackTop = static_cast<char*>(recoveryStack) + c_RecoveryStackSize;
+#endif
 		}
 
 		// Runs the guarded function; false if a C++ exception escaped it. Exceptions must not unwind through Invoke (they
@@ -205,7 +309,10 @@ namespace Strata
 
 		GuardFrame frame;
 		frame.Previous = t_CurrentFrame;
-		if (sigsetjmp(frame.JumpBuffer, c_SaveSignalMask) == 0)
+#if defined(ST_PLATFORM_MACOS)
+		frame.RecoveryStackTop = t_RecoveryStackTop;
+#endif
+		if (sigsetjmp(frame.JumpBuffer, 0) == 0)
 		{
 			t_CurrentFrame = &frame;
 			const bool returned = CallCatchingExceptions(function, userData, frame);
@@ -223,16 +330,19 @@ namespace Strata
 			return false;
 		}
 
-		// Arrived here through siglongjmp from the signal handler (which already popped the frame).
-		if constexpr (c_SaveSignalMask == 0)
-		{
-			// The handler ran with the delivered signal blocked and the mask was not restored: unblock it, or the next fault
-			// of the same kind could not be delivered (the kernel kills a process whose fault signal is blocked).
-			sigset_t delivered;
-			sigemptyset(&delivered);
-			sigaddset(&delivered, frame.Signal);
-			pthread_sigmask(SIG_UNBLOCK, &delivered, nullptr);
-		}
+		// Arrived here after a fault (the handler already popped the frame). Where the handler jumped out, it ran with the
+		// delivered signal blocked and the mask was not restored: unblock it, or the next fault of the same kind could not
+		// be delivered (the kernel kills a process whose fault signal is blocked). Nested guards are no different: each
+		// fault path undoes the block of the signal it handled.
+		sigset_t delivered;
+		sigemptyset(&delivered);
+		sigaddset(&delivered, frame.Signal);
+		pthread_sigmask(SIG_UNBLOCK, &delivered, nullptr);
+
+		// The thread must have left its alternate signal stack, or the next fault could not be contained (see above).
+		stack_t signalStack = {};
+		if (sigaltstack(nullptr, &signalStack) == 0 && (signalStack.ss_flags & SS_ONSTACK) != 0)
+			ST_CORE_ERROR("CrashGuard: this thread still counts as running on its alternate signal stack after a contained fault; a stack overflow on it can no longer be contained");
 
 		if (outInfo)
 		{

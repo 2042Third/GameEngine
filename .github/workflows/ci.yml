@@ -69,13 +69,31 @@ jobs:
           STRATA_TEST_TRACE: "1" # Tests print each test case as it starts, so a crash names its test
         run: |
           set -o pipefail
-          ctest --preset ${{ matrix.preset }}-release -LE gpu --output-on-failure 2>&1 | tee test.log
+          # Linux overcommits memory: a test that runs away with memory or disk would take the whole runner down (the
+          # job ends with exit code 143 and no annotations). Limits make such a test fail on its own instead.
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            ulimit -v 10000000 # KiB of address space per process
+            ulimit -f 2097152  # KiB per file
+          fi
+          status=0
+          exclude=()
+          if [ "$RUNNER_OS" != "Windows" ]; then
+            # Diagnostic while a POSIX-only output flood in StrataTests.Core is tracked down: CTest keeps a test's output in
+            # memory, so the core suites run outside it with bounded output (same arguments as the CTest entry).
+            python=$(command -v python3 || command -v python)
+            (cd "build/${{ matrix.preset }}/bin/Release" && "$python" "$GITHUB_WORKSPACE/.github/scripts/run_limited.py" \
+              "$GITHUB_WORKSPACE/core.log" 300000000 ./StrataTests \
+              "--test-suite-exclude=GPU*,EndToEnd*,Package*,FeatureTest,Editor.FeatureTest" --no-intro=true) || status=1
+            exclude=(-E '^StrataTests\.Core$')
+          fi
+          ctest --preset ${{ matrix.preset }}-release -LE gpu "${exclude[@]}" --output-on-failure --timeout 900 2>&1 | tee test.log || status=1
+          exit $status
 
       # Job logs need repository admin rights to download; annotations are public, so failures are readable from the
       # checks API and the pull request UI.
       - name: Annotate failures
-        if: failure()
+        if: failure() || cancelled()
         shell: bash
         run: |
           python=$(command -v python3 || command -v python)
-          "$python" .github/scripts/annotate_failures.py configure.log build.log test.log
+          "$python" .github/scripts/annotate_failures.py configure.log build.log core.log test.log

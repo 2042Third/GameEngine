@@ -16,6 +16,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -144,9 +145,12 @@ namespace
 		}
 	};
 
+	// The file's write time: an opaque tick count that can be negative (libstdc++ counts from the year 2174).
 	int64_t GetWriteTime(const std::filesystem::path& path)
 	{
-		return FileSystem::GetLastWriteTime(path).value_or(-1);
+		const std::optional<int64_t> time = FileSystem::GetLastWriteTime(path);
+		REQUIRE_MESSAGE(time.has_value(), FileSystem::ToUTF8(path), " does not exist");
+		return *time;
 	}
 
 	Ref<Texture> LoadTexture(EditorAssetManager& manager, AssetHandle handle)
@@ -210,8 +214,8 @@ TEST_SUITE("Asset.Editor")
 			REQUIRE(material);
 			CHECK(std::static_pointer_cast<Material>(material)->GetProperties().Roughness == doctest::Approx(0.3f));
 
+			CHECK(FileSystem::Exists(project.Cache / (brick.ToString() + ".bin")));
 			cachedTime = GetWriteTime(project.Cache / (brick.ToString() + ".bin"));
-			CHECK(cachedTime >= 0);
 		}
 
 		// Reopening keeps handles and reuses the cached import.

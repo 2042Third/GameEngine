@@ -466,7 +466,8 @@ TEST_SUITE("Editor.Scripts")
 
 		// A crash disables the game's scripts; the runtime reports it and keeps the scene running.
 		const std::string crasher = harness.CreateEntity("Crasher");
-		harness.Run("script.add", { { "entity", crasher }, { "class", "Faulty" }, { "fields", { { "Fault", "DivideByZero" }, { "FaultIn", "OnUpdate" } } } });
+		// A null dereference crashes on every platform (integer division by zero does not trap on ARM64).
+		harness.Run("script.add", { { "entity", crasher }, { "class", "Faulty" }, { "fields", { { "Fault", "NullDereference" }, { "FaultIn", "OnUpdate" } } } });
 		harness.Run("scene.save");
 		const nlohmann::json crashing = harness.Run("project.export", { { "directory", FileSystem::ToUTF8(build) }, { "includeRuntime", false } });
 		std::string error;

@@ -10,6 +10,8 @@ namespace Strata
 
 	std::optional<std::vector<uint8_t>> FileSystem::ReadBytes(const std::filesystem::path& path)
 	{
+		if (!IsRegularFile(path))
+			return std::nullopt;
 		std::ifstream stream(path, std::ios::binary | std::ios::ate);
 		if (!stream)
 			return std::nullopt;
@@ -28,6 +30,8 @@ namespace Strata
 
 	std::optional<std::string> FileSystem::ReadText(const std::filesystem::path& path)
 	{
+		if (!IsRegularFile(path))
+			return std::nullopt;
 		std::ifstream stream(path, std::ios::binary | std::ios::ate);
 		if (!stream)
 			return std::nullopt;

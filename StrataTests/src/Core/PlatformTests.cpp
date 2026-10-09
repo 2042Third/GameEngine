@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -50,6 +51,27 @@ namespace
 		volatile int divisor = *static_cast<int*>(userData);
 		volatile int result = 100 / divisor;
 		(void)result;
+	}
+#endif
+
+#if defined(ST_PLATFORM_POSIX)
+	// Whether a helper process printed this exact line (its own result, as opposed to words in other messages).
+	bool HasOutputLine(const std::string& output, std::string_view line)
+	{
+		size_t start = 0;
+		while (start <= output.size())
+		{
+			size_t end = output.find('\n', start);
+			if (end == std::string::npos)
+				end = output.size();
+			std::string_view current(output.data() + start, end - start);
+			if (!current.empty() && current.back() == '\r')
+				current.remove_suffix(1);
+			if (current == line)
+				return true;
+			start = end + 1;
+		}
+		return false;
 	}
 #endif
 
@@ -93,6 +115,43 @@ namespace
 		CrashInfo innerInfo;
 		const bool innerSucceeded = CrashGuard::Invoke(ThrowException, nullptr, &innerInfo);
 		*static_cast<bool*>(userData) = !innerSucceeded;
+	}
+
+	// Whether the kernel considers the calling thread to run on its alternate signal stack. After a contained fault it must
+	// not: the next signal would then be delivered on the faulting stack, which a stack overflow has exhausted - macOS
+	// ends the process with SIGILL then. (Windows has no alternate signal stack.)
+	bool IsOnAlternateSignalStack()
+	{
+#if defined(ST_PLATFORM_POSIX)
+		stack_t state = {};
+		return sigaltstack(nullptr, &state) == 0 && (state.ss_flags & SS_ONSTACK) != 0;
+#else
+		return false;
+#endif
+	}
+
+	struct RepeatedFaults
+	{
+		int Contained = 0;
+		int OnAlternateStackAfterwards = 0;
+	};
+
+	// Access violations and stack overflows, alternating, three of each on the calling thread: an overflow after another
+	// fault is what macOS could not deliver while the thread still counted as running on its alternate signal stack.
+	RepeatedFaults FaultRepeatedly()
+	{
+		RepeatedFaults faults;
+		for (int round = 0; round < 3; round++)
+		{
+			for (CrashGuard::GuardedFunction function : { WriteToNull, OverflowStack })
+			{
+				if (!CrashGuard::Invoke(function, nullptr))
+					faults.Contained++;
+				if (IsOnAlternateSignalStack())
+					faults.OnAlternateStackAfterwards++;
+			}
+		}
+		return faults;
 	}
 
 }
@@ -527,12 +586,14 @@ TEST_SUITE("Core.Platform")
 		CrashInfo info;
 		CHECK_FALSE(CrashGuard::Invoke(WriteToNull, nullptr, &info));
 		CHECK_FALSE(info.Description.empty());
+		CHECK_FALSE(IsOnAlternateSignalStack());
 
 		// The guard keeps working after a fault.
 		bool flag = false;
 		CHECK(CrashGuard::Invoke(SetFlag, &flag));
 		CHECK(flag);
 		CHECK_FALSE(CrashGuard::Invoke(WriteToNull, nullptr, &info));
+		CHECK_FALSE(IsOnAlternateSignalStack());
 	}
 
 	TEST_CASE("CrashGuard contains integer division by zero")
@@ -545,6 +606,7 @@ TEST_SUITE("Core.Platform")
 		CrashInfo info;
 		CHECK_FALSE(CrashGuard::Invoke(DivideByZero, &divisor, &info));
 		CHECK_FALSE(info.Description.empty());
+		CHECK_FALSE(IsOnAlternateSignalStack());
 #endif
 	}
 
@@ -555,6 +617,26 @@ TEST_SUITE("Core.Platform")
 			CrashInfo info;
 			CHECK_FALSE(CrashGuard::Invoke(OverflowStack, nullptr, &info));
 			CHECK_FALSE(info.Description.empty());
+			CHECK_FALSE(IsOnAlternateSignalStack());
+		}
+
+		// Also after other faults.
+		const RepeatedFaults faults = FaultRepeatedly();
+		CHECK(faults.Contained == 6);
+		CHECK(faults.OnAlternateStackAfterwards == 0);
+	}
+
+	TEST_CASE("CrashGuard contains repeated faults on other threads")
+	{
+		// Each thread gets its own alternate signal stack (and on macOS its own recovery stack).
+		for (int threadIndex = 0; threadIndex < 2; threadIndex++)
+		{
+			RepeatedFaults faults;
+			std::thread thread([&faults]() { faults = FaultRepeatedly(); });
+			thread.join();
+			INFO("Thread ", threadIndex);
+			CHECK(faults.Contained == 6);
+			CHECK(faults.OnAlternateStackAfterwards == 0);
 		}
 	}
 
@@ -563,6 +645,11 @@ TEST_SUITE("Core.Platform")
 		bool innerCaught = false;
 		CHECK(CrashGuard::Invoke(NestedGuard, &innerCaught));
 		CHECK(innerCaught);
+		CHECK_FALSE(IsOnAlternateSignalStack());
+
+		// A stack overflow is still contained after a fault in a nested guard.
+		CHECK_FALSE(CrashGuard::Invoke(OverflowStack, nullptr));
+		CHECK_FALSE(IsOnAlternateSignalStack());
 	}
 
 #if defined(ST_PLATFORM_POSIX)
@@ -586,6 +673,7 @@ TEST_SUITE("Core.Platform")
 				INFO("Signal ", signal);
 				CHECK(sigismember(&after, signal) == sigismember(&before, signal));
 			}
+			CHECK_FALSE(IsOnAlternateSignalStack());
 		}
 	}
 
@@ -605,7 +693,7 @@ TEST_SUITE("Core.Platform")
 		REQUIRE(result.Started);
 		CHECK_FALSE(result.TimedOut);
 		CHECK(result.ExitCode == 128 + SIGFPE);
-		CHECK(result.Output.find("contained") == std::string::npos);
+		CHECK_FALSE(HasOutputLine(result.Output, "contained"));
 	}
 
 	TEST_CASE("abort() in guarded code is reported and ends the process")
@@ -617,7 +705,7 @@ TEST_SUITE("Core.Platform")
 		CHECK_FALSE(result.TimedOut);
 		CHECK(result.ExitCode == 128 + SIGABRT);
 		CHECK(result.Output.find("called abort()") != std::string::npos);
-		CHECK(result.Output.find("contained") == std::string::npos);
+		CHECK_FALSE(HasOutputLine(result.Output, "contained"));
 	}
 #endif
 
