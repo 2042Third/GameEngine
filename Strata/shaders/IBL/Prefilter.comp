@@ -1,0 +1,61 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "Include/IBL.glsl"
+#include "Include/PBR.glsl"
+
+// Specular prefiltered environment (split-sum approximation): one mip per roughness level, GGX importance sampling
+// with N = V = R, filtered importance sampling from the environment's mips.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = ST_SRV(0)) uniform textureCube u_Environment;
+layout(set = 0, binding = ST_SAMPLER(0)) uniform sampler u_Sampler;
+layout(set = 0, binding = ST_UAV(0), rgba16f) uniform writeonly image2DArray o_Output;
+
+layout(push_constant) uniform Parameters
+{
+	uint OutputSize;
+	uint SourceSize;
+	float Roughness;
+	uint SampleCount;
+} u_Parameters;
+
+void main()
+{
+	uvec3 id = gl_GlobalInvocationID;
+	if (id.x >= u_Parameters.OutputSize || id.y >= u_Parameters.OutputSize)
+		return;
+
+	vec3 normal = CubeTexelDirection(id.xy, id.z, u_Parameters.OutputSize);
+	if (u_Parameters.Roughness <= 0.0)
+	{
+		imageStore(o_Output, ivec3(id), vec4(textureLod(samplerCube(u_Environment, u_Sampler), normal, 0.0).rgb, 1.0));
+		return;
+	}
+
+	float alpha = u_Parameters.Roughness * u_Parameters.Roughness;
+	float sourceSize = float(u_Parameters.SourceSize);
+	float texelSolidAngle = 4.0 * PI / (6.0 * sourceSize * sourceSize);
+	float maxMip = log2(sourceSize);
+
+	vec3 sum = vec3(0.0);
+	float weight = 0.0;
+	for (uint index = 0u; index < u_Parameters.SampleCount; index++)
+	{
+		vec3 halfVector = ImportanceSampleGGX(Hammersley(index, u_Parameters.SampleCount), normal, alpha);
+		vec3 light = reflect(-normal, halfVector);
+		float NoL = dot(normal, light);
+		if (NoL <= 0.0)
+			continue;
+
+		// With N = V the half-vector pdf reduces to D(NoH) / 4.
+		float NoH = clamp(dot(normal, halfVector), 0.0, 1.0);
+		float pdf = DistributionGGX(NoH, alpha) * 0.25;
+		float sampleSolidAngle = 1.0 / (float(u_Parameters.SampleCount) * pdf + 1e-4);
+		float mip = clamp(0.5 * log2(sampleSolidAngle / texelSolidAngle) + 1.0, 0.0, maxMip);
+		sum += textureLod(samplerCube(u_Environment, u_Sampler), light, mip).rgb * NoL;
+		weight += NoL;
+	}
+	imageStore(o_Output, ivec3(id), vec4(sum / max(weight, 1e-4), 1.0));
+}

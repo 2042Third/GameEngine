@@ -163,7 +163,7 @@ namespace Strata
 	nvrhi::ITexture* Renderer::GetFlatNormalTexture() { return s_Data->FlatNormalTexture; }
 	nvrhi::ITexture* Renderer::GetBlackCubeTexture() { return s_Data->BlackCubeTexture; }
 
-	bool Renderer::ReadTexture(nvrhi::ITexture* texture, ReadbackImage& outImage)
+	bool Renderer::ReadTexture(nvrhi::ITexture* texture, ReadbackImage& outImage, uint32_t mipLevel, uint32_t arraySlice)
 	{
 		if (!s_Data || !texture)
 			return false;
@@ -175,11 +175,18 @@ namespace Strata
 			ST_CORE_ERROR("Renderer::ReadTexture: format of '{}' cannot be read back", sourceDesc.debugName);
 			return false;
 		}
+		if (mipLevel >= sourceDesc.mipLevels || arraySlice >= sourceDesc.arraySize || sourceDesc.dimension == nvrhi::TextureDimension::Texture3D)
+		{
+			ST_CORE_ERROR("Renderer::ReadTexture: '{}' has no 2D subresource at mip {}, slice {}", sourceDesc.debugName, mipLevel, arraySlice);
+			return false;
+		}
 
+		const uint32_t width = std::max(sourceDesc.width >> mipLevel, 1u);
+		const uint32_t height = std::max(sourceDesc.height >> mipLevel, 1u);
 		nvrhi::IDevice* device = GetDevice();
 		nvrhi::TextureDesc stagingDesc;
-		stagingDesc.width = sourceDesc.width;
-		stagingDesc.height = sourceDesc.height;
+		stagingDesc.width = width;
+		stagingDesc.height = height;
 		stagingDesc.format = sourceDesc.format;
 		stagingDesc.debugName = "ReadbackStaging";
 		stagingDesc.initialState = nvrhi::ResourceStates::CopyDest;
@@ -190,7 +197,7 @@ namespace Strata
 
 		nvrhi::CommandListHandle commandList = device->createCommandList();
 		commandList->open();
-		commandList->copyTexture(staging, nvrhi::TextureSlice(), texture, nvrhi::TextureSlice());
+		commandList->copyTexture(staging, nvrhi::TextureSlice(), texture, nvrhi::TextureSlice().setMipLevel(mipLevel).setArraySlice(arraySlice));
 		commandList->close();
 		device->executeCommandList(commandList);
 		device->waitForIdle();
@@ -200,13 +207,13 @@ namespace Strata
 		if (!mapped)
 			return false;
 
-		outImage.Width = sourceDesc.width;
-		outImage.Height = sourceDesc.height;
+		outImage.Width = width;
+		outImage.Height = height;
 		outImage.Format = sourceDesc.format;
 		outImage.BytesPerPixel = bytesPerPixel;
-		const size_t packedRow = static_cast<size_t>(sourceDesc.width) * bytesPerPixel;
-		outImage.Pixels.resize(packedRow * sourceDesc.height);
-		for (uint32_t row = 0; row < sourceDesc.height; row++)
+		const size_t packedRow = static_cast<size_t>(width) * bytesPerPixel;
+		outImage.Pixels.resize(packedRow * height);
+		for (uint32_t row = 0; row < height; row++)
 			std::memcpy(outImage.Pixels.data() + row * packedRow, mapped + row * rowPitch, packedRow);
 
 		device->unmapStagingTexture(staging);

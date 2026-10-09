@@ -32,6 +32,7 @@ TEST_SUITE("GPU.Renderer")
 		REQUIRE(gpu.IsValid());
 		const GraphicsDeviceInfo& info = gpu.GetDevice().GetInfo();
 		CHECK_FALSE(info.AdapterName.empty());
+		CHECK(info.MaxTextureDimension2D >= 4096); // Vulkan's guaranteed minimum
 		CHECK_FALSE(gpu.GetDevice().HasSwapchain());
 		CHECK(Renderer::GetWhiteTexture() != nullptr);
 		CHECK(Renderer::GetShaderLibrary().Get("ImGui.vert") != nullptr);

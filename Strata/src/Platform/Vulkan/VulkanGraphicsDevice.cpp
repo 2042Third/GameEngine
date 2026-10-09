@@ -548,6 +548,7 @@ namespace Strata
 			m_Info.IsDiscreteGPU = properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
 			m_Info.SupportsBCCompression = features.features.textureCompressionBC == VK_TRUE;
 			m_Info.SupportsWireframe = features.features.fillModeNonSolid == VK_TRUE;
+			m_Info.MaxTextureDimension2D = properties.limits.maxImageDimension2D;
 			m_ApiVersion = deviceApiVersion;
 
 			// Dedicated async compute and transfer families, when the GPU has them.

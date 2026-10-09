@@ -211,29 +211,26 @@ namespace Strata
 			.Property("CastShadows", &DirectionalLightComponent::CastShadows)
 			.Property("ShadowDistance", &DirectionalLightComponent::ShadowDistance, Range(1.0f, 10000.0f, 1.0f))
 			.Property("ShadowSoftness", &DirectionalLightComponent::ShadowSoftness, Range(0.0f, 10.0f, 0.01f))
-			.Property("ShadowBias", &DirectionalLightComponent::ShadowBias, Range(0.0f, 0.1f, 0.0001f))
-			.Property("ShadowNormalBias", &DirectionalLightComponent::ShadowNormalBias, Range(0.0f, 1.0f, 0.001f));
+			.Property("ShadowBias", &DirectionalLightComponent::ShadowBias, Range(0.0f, 10.0f, 0.01f))
+			.Property("ShadowNormalBias", &DirectionalLightComponent::ShadowNormalBias, Range(0.0f, 10.0f, 0.01f));
 
 		ComponentRegistry::Register<PointLightComponent>("PointLight")
 			.DisplayName("Point Light")
 			.Category("Lighting")
+			.Description("Light shining in every direction from the entity's position (casts no shadows)")
 			.Property("Color", &PointLightComponent::Color, Color())
 			.Property("Intensity", &PointLightComponent::Intensity, Range(0.0f, c_Unbounded, 0.1f))
-			.Property("Range", &PointLightComponent::Range, Range(0.01f, c_Unbounded, 0.1f))
-			.Property("CastShadows", &PointLightComponent::CastShadows)
-			.Property("SourceRadius", &PointLightComponent::SourceRadius, Range(0.0f, 10.0f, 0.01f));
+			.Property("Range", &PointLightComponent::Range, WithTooltip(Range(0.01f, c_Unbounded, 0.1f), "Light fades to zero at this distance"));
 
 		ComponentRegistry::Register<SpotLightComponent>("SpotLight")
 			.DisplayName("Spot Light")
 			.Category("Lighting")
-			.Description("Cone light shining along the entity's forward (-Z) direction")
+			.Description("Cone light shining along the entity's forward (-Z) direction (casts no shadows)")
 			.Property("Color", &SpotLightComponent::Color, Color())
 			.Property("Intensity", &SpotLightComponent::Intensity, Range(0.0f, c_Unbounded, 0.1f))
 			.Property("Range", &SpotLightComponent::Range, Range(0.01f, c_Unbounded, 0.1f))
 			.Property("InnerConeAngle", &SpotLightComponent::InnerConeAngle, WithTooltip(Range(0.0f, 89.0f, 0.1f), "Half angle in degrees"))
-			.Property("OuterConeAngle", &SpotLightComponent::OuterConeAngle, WithTooltip(Range(0.1f, 89.9f, 0.1f), "Half angle in degrees"))
-			.Property("CastShadows", &SpotLightComponent::CastShadows)
-			.Property("SourceRadius", &SpotLightComponent::SourceRadius, Range(0.0f, 10.0f, 0.01f));
+			.Property("OuterConeAngle", &SpotLightComponent::OuterConeAngle, WithTooltip(Range(0.1f, 89.9f, 0.1f), "Half angle in degrees"));
 
 		ComponentRegistry::Register<SkyLightComponent>("SkyLight")
 			.DisplayName("Sky Light")
@@ -253,19 +250,22 @@ namespace Strata
 			.EnumProperty("Tonemapper", &PostProcessComponent::Tonemapper, { { "None", 0 }, { "Reinhard", 1 }, { "ACES", 2 }, { "AgX", 3 }, { "KhronosNeutral", 4 } })
 			.Property("Exposure", &PostProcessComponent::Exposure, WithTooltip(Range(-16.0f, 16.0f, 0.05f), "Exposure compensation in EV"))
 			.Property("AutoExposure", &PostProcessComponent::AutoExposure)
-			.Property("AutoExposureMinEV", &PostProcessComponent::AutoExposureMinEV, Range(-20.0f, 20.0f, 0.1f))
-			.Property("AutoExposureMaxEV", &PostProcessComponent::AutoExposureMaxEV, Range(-20.0f, 20.0f, 0.1f))
-			.Property("AutoExposureSpeed", &PostProcessComponent::AutoExposureSpeed, Range(0.01f, 20.0f, 0.05f))
+			.Property("AutoExposureMinEV", &PostProcessComponent::AutoExposureMinEV,
+				WithTooltip(Range(-12.0f, 16.0f, 0.1f), "Darkest average scene luminance (log2) automatic exposure brightens up to"))
+			.Property("AutoExposureMaxEV", &PostProcessComponent::AutoExposureMaxEV,
+				WithTooltip(Range(-12.0f, 16.0f, 0.1f), "Brightest average scene luminance (log2) automatic exposure darkens down to"))
+			.Property("AutoExposureSpeed", &PostProcessComponent::AutoExposureSpeed, WithTooltip(Range(0.0f, 20.0f, 0.05f), "Adaptation rate per second; 0 = instant"))
 			.Property("Bloom", &PostProcessComponent::Bloom)
-			.Property("BloomIntensity", &PostProcessComponent::BloomIntensity, Slider(0.0f, 1.0f))
-			.Property("BloomThreshold", &PostProcessComponent::BloomThreshold, Range(0.0f, 20.0f, 0.05f))
+			.Property("BloomIntensity", &PostProcessComponent::BloomIntensity, WithTooltip(Slider(0.0f, 1.0f), "Fraction of the light scattered into the glow"))
+			.Property("BloomThreshold", &PostProcessComponent::BloomThreshold,
+				WithTooltip(Range(0.0f, 20.0f, 0.05f), "Only light brighter than this (after exposure) blooms; 0 = all light, physically based"))
 			.Property("AmbientOcclusion", &PostProcessComponent::AmbientOcclusion)
-			.Property("AmbientOcclusionRadius", &PostProcessComponent::AmbientOcclusionRadius, Range(0.01f, 10.0f, 0.01f))
+			.Property("AmbientOcclusionRadius", &PostProcessComponent::AmbientOcclusionRadius, WithTooltip(Range(0.01f, 10.0f, 0.01f), "World units"))
 			.Property("AmbientOcclusionIntensity", &PostProcessComponent::AmbientOcclusionIntensity, Slider(0.0f, 4.0f))
-			.Property("AntiAliasing", &PostProcessComponent::AntiAliasing)
+			.Property("AntiAliasing", &PostProcessComponent::AntiAliasing, WithTooltip({}, "Fast approximate anti-aliasing (FXAA)"))
 			.Property("Vignette", &PostProcessComponent::Vignette, Slider(0.0f, 1.0f))
 			.Property("Saturation", &PostProcessComponent::Saturation, Slider(0.0f, 2.0f))
-			.Property("Contrast", &PostProcessComponent::Contrast, Slider(0.5f, 2.0f));
+			.Property("Contrast", &PostProcessComponent::Contrast, WithTooltip(Slider(0.5f, 2.0f), "Around middle gray; 1 = unchanged"));
 
 		ComponentRegistry::Register<TextComponent>("Text")
 			.Category("UI")

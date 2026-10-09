@@ -40,4 +40,15 @@ vec3 SRGBToLinear(vec3 color)
 	return mix(high, low, lessThanEqual(color, vec3(0.04045)));
 }
 
+// Largest value written to half-float color targets (the format's maximum is 65504; anything above becomes Inf).
+const float c_MaxHDRValue = 65000.0;
+
+// Makes a linear color safe to store and process: NaN becomes 0, negative values 0 and overflowing ones (Inf
+// included) c_MaxHDRValue. Inf or NaN in an HDR target would turn black or spread through the post-processing.
+vec3 SanitizeHDR(vec3 color)
+{
+	color = mix(color, vec3(0.0), isnan(color));
+	return clamp(color, vec3(0.0), vec3(c_MaxHDRValue));
+}
+
 #endif

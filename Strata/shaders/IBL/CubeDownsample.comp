@@ -1,0 +1,36 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_samplerless_texture_functions : require
+
+#include "Include/Common.glsl"
+
+// Builds one cubemap mip from the previous one (2x2 box filter per face).
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = ST_SRV(0)) uniform texture2DArray u_Source;
+layout(set = 0, binding = ST_SAMPLER(0)) uniform sampler u_Sampler;
+layout(set = 0, binding = ST_UAV(0), rgba16f) uniform writeonly image2DArray o_Output;
+
+layout(push_constant) uniform Parameters
+{
+	uint OutputSize;
+	uint SourceSize;
+	float Roughness;
+	uint SampleCount;
+} u_Parameters;
+
+void main()
+{
+	uvec3 id = gl_GlobalInvocationID;
+	if (id.x >= u_Parameters.OutputSize || id.y >= u_Parameters.OutputSize)
+		return;
+	ivec2 source = ivec2(id.xy) * 2;
+	int last = int(u_Parameters.SourceSize) - 1;
+	int layer = int(id.z);
+	vec4 sum = texelFetch(u_Source, ivec3(min(source, ivec2(last)), layer), 0)
+		+ texelFetch(u_Source, ivec3(min(source + ivec2(1, 0), ivec2(last)), layer), 0)
+		+ texelFetch(u_Source, ivec3(min(source + ivec2(0, 1), ivec2(last)), layer), 0)
+		+ texelFetch(u_Source, ivec3(min(source + ivec2(1, 1), ivec2(last)), layer), 0);
+	imageStore(o_Output, ivec3(id), sum * 0.25);
+}

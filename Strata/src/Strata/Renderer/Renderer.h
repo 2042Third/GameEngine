@@ -50,9 +50,10 @@ namespace Strata
 		static nvrhi::ITexture* GetFlatNormalTexture();
 		static nvrhi::ITexture* GetBlackCubeTexture();
 
-		// Copies a 2D texture (mip 0, array slice 0) to the CPU. Blocks until the GPU is done; meant for
-		// screenshots, picking fallbacks and tests, not per-frame use.
-		static bool ReadTexture(nvrhi::ITexture* texture, ReadbackImage& outImage);
+		// Copies one subresource of a 2D, 2D-array or cube texture (a mip level of an array slice or cube face) to the
+		// CPU. Blocks until the GPU is done; meant for screenshots, picking fallbacks and tests, not per-frame use.
+		// Returns false for missing textures, block-compressed formats and out-of-range subresources.
+		static bool ReadTexture(nvrhi::ITexture* texture, ReadbackImage& outImage, uint32_t mipLevel = 0, uint32_t arraySlice = 0);
 	};
 
 }

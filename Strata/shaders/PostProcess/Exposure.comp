@@ -1,0 +1,89 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "Include/Common.glsl"
+#include "Include/Exposure.glsl"
+
+// Automatic exposure: the average log2 luminance of the histogram (ignoring the darkest and brightest pixels),
+// clamped to the allowed range, adapts smoothly over time and is mapped to middle gray.
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = ST_UAV(0), std430) buffer HistogramBuffer
+{
+	uint u_Histogram[];
+};
+layout(set = 0, binding = ST_UAV(1), std430) buffer ExposureBuffer
+{
+	float u_Exposure[];
+};
+
+layout(push_constant) uniform ExposureParameters
+{
+	float MinLog2;        // Range the average luminance is clamped to
+	float MaxLog2;
+	float AdaptFactor;    // Fraction of the way to the target this frame; 1 = jump to it
+	float Compensation;   // Linear exposure compensation
+	float LowPercentile;  // Pixels below this fraction (darkest) and above HighPercentile (brightest) are ignored
+	float HighPercentile;
+	float Padding0;
+	float Padding1;
+} u_Parameters;
+
+const float c_MiddleGray = 0.18;
+
+shared uint s_Bins[ST_HISTOGRAM_BINS];
+
+void main()
+{
+	uint bin = gl_LocalInvocationIndex;
+	s_Bins[bin] = u_Histogram[bin];
+	barrier();
+	if (bin != 0u)
+		return;
+
+	// Bin 0 holds black pixels (empty background, unlit areas). They say nothing about how bright the visible content
+	// is, and metering them would over-expose a small lit object on a black background, so they are left out.
+	float total = 0.0;
+	for (uint index = 1u; index < ST_HISTOGRAM_BINS; index++)
+		total += float(s_Bins[index]);
+
+	bool metered = false;
+	float target = 0.0;
+	if (total > 0.0)
+	{
+		// Weighted mean of the bins, counting only the part of each bin inside the percentile window.
+		float low = total * u_Parameters.LowPercentile;
+		float high = total * u_Parameters.HighPercentile;
+		float accumulated = 0.0;
+		float sum = 0.0;
+		float weight = 0.0;
+		for (uint index = 1u; index < ST_HISTOGRAM_BINS; index++)
+		{
+			float count = float(s_Bins[index]);
+			float inside = max(min(accumulated + count, high) - max(accumulated, low), 0.0);
+			sum += inside * HistogramBinToLog2(index);
+			weight += inside;
+			accumulated += count;
+		}
+		if (weight > 0.0)
+		{
+			target = sum / weight;
+			metered = true;
+		}
+	}
+	target = clamp(target, u_Parameters.MinLog2, u_Parameters.MaxLog2);
+
+	// The previous value is ignored when jumping, so an uninitialized buffer never leaks into the result. A black image
+	// keeps the current adaptation (or starts from an average luminance of 1 when jumping).
+	float previous = u_Exposure[ST_EXPOSURE_LOG_LUMINANCE];
+	float adapted;
+	if (u_Parameters.AdaptFactor >= 1.0)
+		adapted = target;
+	else if (metered)
+		adapted = mix(previous, target, u_Parameters.AdaptFactor);
+	else
+		adapted = previous;
+	u_Exposure[ST_EXPOSURE_LOG_LUMINANCE] = adapted;
+	u_Exposure[ST_EXPOSURE_MULTIPLIER] = u_Parameters.Compensation * c_MiddleGray / exp2(adapted);
+}

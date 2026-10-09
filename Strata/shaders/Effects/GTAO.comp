@@ -1,0 +1,132 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_samplerless_texture_functions : require
+
+#include "Include/Scene.glsl"
+
+// Ground-truth ambient occlusion (horizon-based, cosine-weighted visibility per screen-space slice) from the
+// prepass depth and normals. Each pixel integrates a few rotated slices; the noise is removed by AOBlur.comp.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = ST_SRV(8)) uniform texture2D u_Depth;
+layout(set = 0, binding = ST_SRV(9)) uniform texture2D u_Normals;
+layout(set = 0, binding = ST_UAV(0), r32f) uniform writeonly image2D o_AmbientOcclusion;
+
+layout(push_constant) uniform AOParameters
+{
+	float Radius;       // World units
+	float Intensity;    // Exponent applied to the visibility
+	uint SliceCount;
+	uint StepsPerSide;
+} u_AO;
+
+vec3 ViewPositionFromDepth(vec2 uv, float depth)
+{
+	vec4 view = u_Frame.InverseProjection * vec4(UVToNDC(uv), depth, 1.0);
+	return view.xyz / view.w;
+}
+
+float InterleavedGradientNoise(vec2 pixel)
+{
+	return fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715))));
+}
+
+void main()
+{
+	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 size = ivec2(u_Frame.ViewportSize.xy);
+	if (pixel.x >= size.x || pixel.y >= size.y)
+		return;
+
+	float depth = texelFetch(u_Depth, pixel, 0).r;
+	if (depth <= 0.0) // Background (reversed-Z far plane)
+	{
+		imageStore(o_AmbientOcclusion, pixel, vec4(1.0));
+		return;
+	}
+
+	vec2 uv = (vec2(pixel) + 0.5) * u_Frame.ViewportSize.zw;
+	vec3 position = ViewPositionFromDepth(uv, depth);
+	// Toward the viewer: along the view axis for orthographic projections, toward the eye for perspective ones.
+	vec3 view = u_Frame.CameraForward.w > 0.5 ? vec3(0.0, 0.0, 1.0) : normalize(-position);
+	vec3 normal = OctahedralDecode(texelFetch(u_Normals, pixel, 0).rg);
+
+	// World radius projected to pixels (orthographic projections have a constant scale).
+	float pixelsPerUnit = u_Frame.Projection[1][1] * 0.5 * u_Frame.ViewportSize.y;
+	if (u_Frame.CameraForward.w < 0.5)
+		pixelsPerUnit /= max(-position.z, 1e-4);
+	float radiusPixels = min(u_AO.Radius * pixelsPerUnit, 256.0);
+	if (radiusPixels < 1.0)
+	{
+		imageStore(o_AmbientOcclusion, pixel, vec4(1.0));
+		return;
+	}
+
+	float noise = InterleavedGradientNoise(vec2(pixel));
+	float jitter = fract(noise * 7.13 + 0.5);
+	float falloffStart = u_AO.Radius * 0.6;
+	// Samples closer than this many pixels would read the pixel itself.
+	float minStep = 1.3 / radiusPixels;
+	float visibility = 0.0;
+	for (uint slice = 0u; slice < u_AO.SliceCount; slice++)
+	{
+		float phi = (float(slice) + noise) * PI / float(u_AO.SliceCount);
+		vec3 direction = vec3(cos(phi), sin(phi), 0.0); // View space; screen space y points down
+		vec2 screenOffset = vec2(direction.x, -direction.y) * radiusPixels;
+
+		// Normal projected into the slice plane, and its angle to the view vector.
+		vec3 orthoDirection = direction - dot(direction, view) * view;
+		vec3 axis = normalize(cross(direction, view));
+		vec3 projectedNormal = normal - axis * dot(normal, axis);
+		float projectedLength = length(projectedNormal);
+		if (projectedLength < 1e-4)
+		{
+			visibility += 1.0;
+			continue;
+		}
+		float signNormal = sign(dot(orthoDirection, projectedNormal));
+		float cosNormal = clamp(dot(projectedNormal, view) / projectedLength, 0.0, 1.0);
+		float n = signNormal * acos(cosNormal);
+
+		// Horizons start at the edge of the hemisphere around the normal (nothing occludes).
+		vec2 lowHorizonCos = vec2(cos(n + 0.5 * PI), cos(n - 0.5 * PI));
+		vec2 horizonCos = lowHorizonCos;
+		for (int side = 0; side < 2; side++)
+		{
+			float sideSign = side == 0 ? 1.0 : -1.0;
+			for (uint step = 0u; step < u_AO.StepsPerSide; step++)
+			{
+				float t = (float(step) + jitter) / float(u_AO.StepsPerSide);
+				// Denser samples near the pixel. Samples are snapped to pixel centers: a position rebuilt from another
+				// point of the pixel than its depth belongs to would leave the surface and occlude flat ground.
+				ivec2 samplePixel = pixel + ivec2(round(screenOffset * (t * t + minStep))) * int(sideSign);
+				if (any(lessThan(samplePixel, ivec2(0))) || any(greaterThanEqual(samplePixel, size)))
+					break;
+				vec2 sampleUV = (vec2(samplePixel) + 0.5) * u_Frame.ViewportSize.zw;
+				float sampleDepth = texelFetch(u_Depth, samplePixel, 0).r;
+				if (sampleDepth <= 0.0)
+					continue;
+				vec3 delta = ViewPositionFromDepth(sampleUV, sampleDepth) - position;
+				float distance = length(delta);
+				if (distance < 1e-5)
+					continue;
+				// Occluders fade out toward the radius so distant geometry does not darken.
+				float weight = clamp((u_AO.Radius - distance) / max(u_AO.Radius - falloffStart, 1e-4), 0.0, 1.0);
+				float sampleCos = mix(lowHorizonCos[side], dot(delta / distance, view), weight);
+				horizonCos[side] = max(horizonCos[side], sampleCos);
+			}
+		}
+
+		// Horizon angles relative to the view vector, clamped to the hemisphere around the normal.
+		float h0 = n + clamp(-acos(horizonCos.y) - n, -0.5 * PI, 0.5 * PI);
+		float h1 = n + clamp(acos(horizonCos.x) - n, -0.5 * PI, 0.5 * PI);
+		float sinN = sin(n);
+		float arc0 = -cos(2.0 * h0 - n) + cosNormal + 2.0 * h0 * sinN;
+		float arc1 = -cos(2.0 * h1 - n) + cosNormal + 2.0 * h1 * sinN;
+		visibility += projectedLength * 0.25 * (arc0 + arc1);
+	}
+
+	float ao = clamp(visibility / float(u_AO.SliceCount), 0.0, 1.0);
+	imageStore(o_AmbientOcclusion, pixel, vec4(pow(ao, u_AO.Intensity)));
+}

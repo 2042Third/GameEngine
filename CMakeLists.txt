@@ -27,6 +27,7 @@ option(STRATA_WARNINGS_AS_ERRORS "Treat compiler warnings as errors in first-par
 include(StrataConfigurations)
 include(StrataCompilerOptions)
 include(StrataShaders)
+include(StrataEmbeddedFiles)
 
 add_subdirectory(Strata/vendor)
 add_subdirectory(StrataScriptCore)
