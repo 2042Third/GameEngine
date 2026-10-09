@@ -96,6 +96,9 @@ namespace Strata
 		void SetWatchdogTimeout(std::chrono::milliseconds timeout);
 		std::chrono::milliseconds GetWatchdogTimeout() const;
 		uint64_t GetWatchdogReportCount() const;
+		// Script calls the watchdog is timing at the moment (each nested call counts): nonzero only while script code
+		// runs, always zero without a watchdog. Shows that every call into script code ended, however it ended.
+		size_t GetWatchdogActiveCallCount() const;
 
 		// Engine-internal access to the loaded module (null when none is loaded).
 		ScriptModule* GetModule() const { return m_Module.get(); }

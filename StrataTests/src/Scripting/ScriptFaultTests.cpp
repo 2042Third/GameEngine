@@ -222,10 +222,13 @@ TEST_SUITE("Scripting.Faults")
 
 	TEST_CASE("The watchdog reports long-running script calls")
 	{
+		// Calls that return at once stay far below the timeout even on a busy machine; the slow call stays far above it
+		// (the watchdog checks every quarter of the timeout).
+		constexpr std::chrono::milliseconds c_Timeout(250);
 		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_FAULTS));
 		CHECK(engine->GetWatchdogTimeout().count() == 0);
-		engine->SetWatchdogTimeout(std::chrono::milliseconds(20));
-		CHECK(engine->GetWatchdogTimeout() == std::chrono::milliseconds(20));
+		engine->SetWatchdogTimeout(c_Timeout);
+		CHECK(engine->GetWatchdogTimeout() == c_Timeout);
 
 		Scene scene;
 		Entity entity = scene.CreateEntity("Slow");
@@ -234,11 +237,13 @@ TEST_SUITE("Scripting.Faults")
 		scene.OnRuntimeStart();
 		scene.OnUpdateRuntime(0.0f);
 		CHECK(engine->GetWatchdogReportCount() == 0);
+		CHECK(engine->GetWatchdogActiveCallCount() == 0);
 
 		// A call far longer than the timeout is reported (once), and it still completes normally.
-		REQUIRE(GetScriptSystem(scene).SetFieldValue(entity, "Slow", "Milliseconds", int32_t(600)));
+		REQUIRE(GetScriptSystem(scene).SetFieldValue(entity, "Slow", "Milliseconds", int32_t(c_Timeout.count() * 6)));
 		scene.OnUpdateRuntime(0.0f);
 		CHECK(engine->GetWatchdogReportCount() == 1);
+		CHECK(engine->GetWatchdogActiveCallCount() == 0);
 		CHECK_FALSE(engine->IsFaulted());
 
 		engine->SetWatchdogTimeout(std::chrono::milliseconds(0));

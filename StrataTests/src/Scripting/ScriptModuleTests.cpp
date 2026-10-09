@@ -21,7 +21,6 @@
 #include <cstring>
 #include <iterator>
 #include <set>
-#include <thread>
 #include <string>
 #include <vector>
 
@@ -291,8 +290,9 @@ TEST_SUITE("Scripting.Module")
 	TEST_CASE("Exceptions escaping a module without the SDK are contained like crashes")
 	{
 		// Script calls are bracketed for the host API and the watchdog; an exception must not leave a call open (the
-		// watchdog would report it once the timeout passed).
-		constexpr std::chrono::milliseconds c_WatchdogTimeout(200);
+		// watchdog would report it once the timeout passed). The timeout only has to keep the watchdog from reporting
+		// anything while the test runs; open calls are counted directly.
+		constexpr std::chrono::minutes c_WatchdogTimeout(10);
 		{
 			ScopedMalformedCase scopedCase("Throws");
 			ScriptEngine engine;
@@ -302,8 +302,7 @@ TEST_SUITE("Scripting.Module")
 			CHECK(Contains(error, "crashed while initializing"));
 			CHECK(Contains(error, "C++ exception"));
 			CHECK(ScriptModule::GetCurrentCall() == nullptr);
-			std::this_thread::sleep_for(c_WatchdogTimeout * 3);
-			CHECK(engine.GetWatchdogReportCount() == 0);
+			CHECK(engine.GetWatchdogActiveCallCount() == 0);
 		}
 		{
 			ScopedMalformedCase scopedCase("ThrowsInCreate");
@@ -321,10 +320,10 @@ TEST_SUITE("Scripting.Module")
 			CHECK(fault->Method == "Create");
 			CHECK(fault->Entity == entity.GetUUID());
 			CHECK(Contains(fault->Description, "C++ exception"));
+			CHECK(engine->GetWatchdogActiveCallCount() == 0);
 			RunFrames(scene, 1);
 			scene.OnRuntimeStop();
-			std::this_thread::sleep_for(c_WatchdogTimeout * 3);
-			CHECK(engine->GetWatchdogReportCount() == 0);
+			CHECK(engine->GetWatchdogActiveCallCount() == 0);
 		}
 
 		// The crash guard still contains faults afterwards.

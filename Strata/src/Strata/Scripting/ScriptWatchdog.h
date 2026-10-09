@@ -31,6 +31,8 @@ namespace Strata
 
 		std::chrono::milliseconds GetTimeout() const { return m_Timeout; }
 		uint64_t GetReportCount() const { return m_ReportCount.load(); }
+		// Calls that began and have not ended yet (each nested call counts).
+		size_t GetActiveCallCount() const;
 	private:
 		void Run();
 	private:
@@ -44,7 +46,7 @@ namespace Strata
 		};
 
 		const std::chrono::milliseconds m_Timeout;
-		std::mutex m_Mutex;
+		mutable std::mutex m_Mutex;
 		std::condition_variable m_Condition;
 		std::vector<ActiveCall> m_Calls; // Innermost call last
 		uint64_t m_NextSerial = 1;
