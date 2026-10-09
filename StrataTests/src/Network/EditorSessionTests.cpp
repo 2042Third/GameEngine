@@ -158,6 +158,36 @@ TEST_SUITE("Network.EditorSession")
 		CHECK_FALSE(EditorSession::IsSessionProcessRunning(gone));
 	}
 
+	TEST_CASE("A stale session file is deleted only while it is still stale")
+	{
+		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("EditorSessionsRace");
+		Tests::LiveProcess running;
+		const std::filesystem::path path = EditorSession::GetSessionFilePath(sessionDirectory, running.GetProcessId());
+
+		// FindSessions read a stale session (the id with another start time, as after the id was reused)...
+		EditorSessionInfo stale = MakeSession(running.GetProcessId(), 47001, "2026-01-01T00:00:00Z");
+		stale.ProcessStartTime += 1;
+		REQUIRE(EditorSession::GetSessionProcessState(stale) == SessionProcessState::Exited);
+		REQUIRE(WriteSession(sessionDirectory, stale));
+
+		// ...but before deleting it, the process that now has the id wrote its own session at the same path.
+		const EditorSessionInfo replacement = MakeSession(running.GetProcessId(), 47002, "2026-02-01T00:00:00Z");
+		REQUIRE(EditorSession::GetSessionProcessState(replacement) == SessionProcessState::Running);
+		REQUIRE(WriteSession(sessionDirectory, replacement));
+		CHECK_FALSE(EditorSession::RemoveStaleSessionFile(path));
+		const std::optional<EditorSessionInfo> kept = EditorSession::ReadSessionFile(path);
+		REQUIRE(kept.has_value());
+		CHECK(kept->Port == replacement.Port);
+		CHECK(CountEntries(sessionDirectory) == 1); // Nothing is left behind
+
+		// A file that is still stale is deleted, and a missing one is left alone.
+		REQUIRE(WriteSession(sessionDirectory, stale));
+		CHECK(EditorSession::RemoveStaleSessionFile(path));
+		CHECK_FALSE(FileSystem::Exists(path));
+		CHECK(CountEntries(sessionDirectory) == 0);
+		CHECK_FALSE(EditorSession::RemoveStaleSessionFile(path));
+	}
+
 	TEST_CASE("Session files are written owner-only, found and removed")
 	{
 		const std::filesystem::path root = Tests::CreateTemporaryDirectory("EditorSessions");
