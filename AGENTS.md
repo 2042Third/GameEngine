@@ -269,7 +269,7 @@ Building and loading scripts:
 - Contained: access violations, division by zero, stack overflow, C++ exceptions escaping module code and, on Windows,
   `abort()` (also from a failed `assert()` and from `std::terminate`: modules turn it into
   `ST_SCRIPT_ABORT_EXCEPTION_CODE` through a SIGABRT handler `ScriptModuleEntry.cpp` installs in their static C
-  runtime). On Linux and macOS `abort()` is reported on stderr and ends the process: the C library also aborts on heap
+  runtime before the module's own static initializers run; an abort in one of those fails the load). On Linux and macOS `abort()` is reported on stderr and ends the process: the C library also aborts on heap
   corruption while it holds allocator locks, and jumping out would leave them locked (the next allocation would hang).
 - Limitations: native code cannot be preempted (an infinite loop blocks the main thread; `SetWatchdogTimeout` reports
   long calls); a crash inside a module's static initializers or destructors fails the load or abandons the library (the

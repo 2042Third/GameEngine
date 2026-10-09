@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <csignal>
 #include <cstddef>
 #include <cstring>
 #include <iterator>
@@ -377,6 +378,31 @@ TEST_SUITE("Scripting.Module")
 #endif
 		CHECK(Contains(destruction.Output, "second module: loaded"));
 		CHECK(destruction.ExitCode == 0);
+	}
+
+	TEST_CASE("abort() in a module's static initialization fails the load (Windows) or is reported (elsewhere)")
+	{
+		// In a child process; the LoadFault module aborts from a static object while the library loads.
+		REQUIRE(Platform::SetEnvVar("STRATA_TEST_LOADFAULT_ABORT", "1"));
+		ProcessSpecification specification;
+		specification.Executable = GetTestExecutablePath();
+		specification.Arguments = { "--strata-test-helper=script-module-lifecycle", FileSystem::ToUTF8(GetTestScriptModule(STRATA_TEST_SCRIPTS_LOADFAULT)),
+			FileSystem::ToUTF8(GetTestScriptModule(STRATA_TEST_SCRIPTS_API)) };
+		const Process::RunResult result = Process::Run(specification, std::chrono::milliseconds(60000));
+		REQUIRE(Platform::SetEnvVar("STRATA_TEST_LOADFAULT_ABORT", ""));
+		INFO("Output: ", result.Output);
+		REQUIRE(result.Started);
+		CHECK_FALSE(result.TimedOut);
+		CHECK_FALSE(Contains(result.Output, "first module: loaded"));
+#if defined(ST_PLATFORM_WINDOWS)
+		// The SDK's abort handler is in place before the module's own static objects; the loader contains the exception
+		// it raises (ERROR_DLL_INIT_FAILED) and the engine keeps working. (The exit code is not checked, see above.)
+		CHECK(Contains(result.Output, "error 1114"));
+		CHECK(Contains(result.Output, "second module: loaded"));
+#else
+		CHECK(result.ExitCode == 128 + SIGABRT);
+		CHECK(Contains(result.Output, "called abort()"));
+#endif
 	}
 
 	TEST_CASE("Class functions are read once, while the module loads")
