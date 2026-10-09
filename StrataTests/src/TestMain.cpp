@@ -5,6 +5,7 @@
 #include "Renderer/GPUTestUtils.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Log.h"
+#include "Strata/Core/Platform.h"
 #include "Strata/Scripting/ScriptEngine.h"
 #include "TestHelpers.h"
 
@@ -40,6 +41,27 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		std::fprintf(stderr, "error-output\n");
 		std::fflush(stderr);
 		return 0;
+	}
+	if (mode == "split-output")
+	{
+		std::fprintf(stdout, "to-stdout\n");
+		std::fflush(stdout);
+		std::fprintf(stderr, "to-stderr\n");
+		std::fflush(stderr);
+		return 0;
+	}
+	if (mode == "cat")
+	{
+		// Copies stdin (text without NUL characters) to stdout line by line as it arrives, until the end of the input.
+		Strata::Platform::SetBinaryStandardStreams();
+		char buffer[4096];
+		while (std::fgets(buffer, sizeof(buffer), stdin))
+		{
+			if (std::fputs(buffer, stdout) < 0)
+				return 1;
+			std::fflush(stdout);
+		}
+		return std::ferror(stdin) ? 1 : 0;
 	}
 	if (mode == "exit-code")
 		return argc > 2 ? std::atoi(argv[2]) : 0;

@@ -6,6 +6,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <poll.h>
+#include <pthread.h>
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -21,6 +22,31 @@ extern char** environ;
 namespace Strata
 {
 
+	namespace
+	{
+
+		// A pipe whose parent end (read or write) is closed on exec, so it does not leak into the child or later children.
+		bool CreateChildPipe(int (&descriptors)[2], bool parentReads, std::string& error)
+		{
+			if (pipe(descriptors) != 0)
+			{
+				error = fmt::format("pipe() failed: {}", std::strerror(errno));
+				return false;
+			}
+			fcntl(parentReads ? descriptors[0] : descriptors[1], F_SETFD, FD_CLOEXEC);
+			return true;
+		}
+
+		void CloseDescriptor(int& descriptor)
+		{
+			if (descriptor < 0)
+				return;
+			close(descriptor);
+			descriptor = -1;
+		}
+
+	}
+
 	Process::~Process()
 	{
 		Close();
@@ -34,30 +60,57 @@ namespace Strata
 		{
 			std::scoped_lock<std::mutex> lock(m_OutputMutex);
 			m_Output.clear();
+			m_ErrorOutput.clear();
 		}
 
-		int pipeFds[2] = { -1, -1 };
-		if (specification.Output == ProcessOutputMode::Capture)
+		if (specification.PipeInput && specification.Output == ProcessOutputMode::Inherit)
 		{
-			if (pipe(pipeFds) != 0)
-			{
-				m_LastError = fmt::format("pipe() failed: {}", std::strerror(errno));
-				return false;
-			}
-			fcntl(pipeFds[0], F_SETFD, FD_CLOEXEC);
+			m_LastError = "Piped input needs captured or discarded output";
+			return false;
+		}
+
+		int outputPipe[2] = { -1, -1 };
+		int errorPipe[2] = { -1, -1 };
+		int inputPipe[2] = { -1, -1 };
+		auto closePipes = [&]()
+		{
+			for (int* descriptor : { &outputPipe[0], &outputPipe[1], &errorPipe[0], &errorPipe[1], &inputPipe[0], &inputPipe[1] })
+				CloseDescriptor(*descriptor);
+		};
+
+		const bool captureOutput = specification.Output == ProcessOutputMode::Capture || specification.Output == ProcessOutputMode::CaptureSeparate;
+		const bool separateErrors = specification.Output == ProcessOutputMode::CaptureSeparate;
+		if ((captureOutput && !CreateChildPipe(outputPipe, true, m_LastError)) || (separateErrors && !CreateChildPipe(errorPipe, true, m_LastError))
+			|| (specification.PipeInput && !CreateChildPipe(inputPipe, false, m_LastError)))
+		{
+			closePipes();
+			return false;
 		}
 
 		posix_spawn_file_actions_t actions;
 		posix_spawn_file_actions_init(&actions);
-		if (specification.Output != ProcessOutputMode::Inherit)
-			posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
-
-		if (specification.Output == ProcessOutputMode::Capture)
+		if (specification.PipeInput)
 		{
-			posix_spawn_file_actions_adddup2(&actions, pipeFds[1], STDOUT_FILENO);
-			posix_spawn_file_actions_adddup2(&actions, pipeFds[1], STDERR_FILENO);
-			posix_spawn_file_actions_addclose(&actions, pipeFds[0]);
-			posix_spawn_file_actions_addclose(&actions, pipeFds[1]);
+			posix_spawn_file_actions_adddup2(&actions, inputPipe[0], STDIN_FILENO);
+			posix_spawn_file_actions_addclose(&actions, inputPipe[0]);
+			posix_spawn_file_actions_addclose(&actions, inputPipe[1]);
+		}
+		else if (specification.Output != ProcessOutputMode::Inherit)
+		{
+			posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+		}
+
+		if (captureOutput)
+		{
+			posix_spawn_file_actions_adddup2(&actions, outputPipe[1], STDOUT_FILENO);
+			posix_spawn_file_actions_adddup2(&actions, separateErrors ? errorPipe[1] : outputPipe[1], STDERR_FILENO);
+			posix_spawn_file_actions_addclose(&actions, outputPipe[0]);
+			posix_spawn_file_actions_addclose(&actions, outputPipe[1]);
+			if (separateErrors)
+			{
+				posix_spawn_file_actions_addclose(&actions, errorPipe[0]);
+				posix_spawn_file_actions_addclose(&actions, errorPipe[1]);
+			}
 		}
 		else if (specification.Output == ProcessOutputMode::Discard)
 		{
@@ -94,69 +147,82 @@ namespace Strata
 
 		posix_spawn_file_actions_destroy(&actions);
 		posix_spawnattr_destroy(&attributes);
-		if (pipeFds[1] >= 0)
-			close(pipeFds[1]);
+		// The child has its own copies of its ends (or failed to start).
+		CloseDescriptor(outputPipe[1]);
+		CloseDescriptor(errorPipe[1]);
+		CloseDescriptor(inputPipe[0]);
 
 		if (result != 0)
 		{
-			if (pipeFds[0] >= 0)
-				close(pipeFds[0]);
+			closePipes();
 			m_LastError = fmt::format("Failed to start '{}': {}", executable, std::strerror(result));
 			return false;
 		}
 
 		m_ProcessPid = pid;
 		m_ProcessID = static_cast<uint32_t>(pid);
-		m_OutputRead = pipeFds[0];
-		if (m_OutputRead >= 0)
-			StartOutputReader();
+		m_OutputRead = std::exchange(outputPipe[0], -1);
+		m_ErrorRead = std::exchange(errorPipe[0], -1);
+		m_InputWrite = std::exchange(inputPipe[1], -1);
+		StartOutputReaders();
 		return true;
 	}
 
-	void Process::StartOutputReader()
+	void Process::StartOutputReaders()
 	{
 		m_StopReading = false;
-		m_ReaderFinished = false;
-		m_OutputThread = std::thread([this]()
+		auto startReader = [this](int pipe, std::string& target, std::atomic<bool>& finished, std::thread& thread)
 		{
-			char buffer[4096];
-			while (!m_StopReading.load())
+			if (pipe < 0)
+				return;
+			finished = false;
+			thread = std::thread([this, pipe, &target, &finished]()
 			{
-				pollfd descriptor = { m_OutputRead, POLLIN, 0 };
-				const int ready = poll(&descriptor, 1, 50);
-				if (ready < 0)
+				char buffer[4096];
+				while (!m_StopReading.load())
 				{
-					if (errno == EINTR)
+					pollfd descriptor = { pipe, POLLIN, 0 };
+					const int ready = poll(&descriptor, 1, 50);
+					if (ready < 0)
+					{
+						if (errno == EINTR)
+							continue;
+						break;
+					}
+					if (ready == 0)
 						continue;
-					break;
+
+					const ssize_t bytesRead = read(pipe, buffer, sizeof(buffer));
+					if (bytesRead < 0 && errno == EINTR)
+						continue;
+					if (bytesRead <= 0)
+						break; // EOF: every writer has exited
+
+					std::scoped_lock<std::mutex> lock(m_OutputMutex);
+					target.append(buffer, static_cast<size_t>(bytesRead));
 				}
-				if (ready == 0)
-					continue;
-
-				const ssize_t bytesRead = read(m_OutputRead, buffer, sizeof(buffer));
-				if (bytesRead < 0 && errno == EINTR)
-					continue;
-				if (bytesRead <= 0)
-					break; // EOF: every writer has exited
-
-				std::scoped_lock<std::mutex> lock(m_OutputMutex);
-				m_Output.append(buffer, static_cast<size_t>(bytesRead));
-			}
-			m_ReaderFinished = true;
-		});
+				finished = true;
+			});
+		};
+		startReader(m_OutputRead, m_Output, m_ReaderFinished, m_OutputThread);
+		startReader(m_ErrorRead, m_ErrorOutput, m_ErrorReaderFinished, m_ErrorThread);
 	}
 
-	void Process::StopOutputReader(std::chrono::milliseconds gracePeriod)
+	void Process::StopOutputReaders(std::chrono::milliseconds gracePeriod)
 	{
-		if (!m_OutputThread.joinable())
-			return;
-
 		const auto deadline = std::chrono::steady_clock::now() + gracePeriod;
-		while (!m_ReaderFinished.load() && std::chrono::steady_clock::now() < deadline)
-			std::this_thread::sleep_for(std::chrono::milliseconds(2));
+		for (std::atomic<bool>* finished : { &m_ReaderFinished, &m_ErrorReaderFinished })
+		{
+			while (!finished->load() && std::chrono::steady_clock::now() < deadline)
+				std::this_thread::sleep_for(std::chrono::milliseconds(2));
+		}
 
+		// The readers poll with a short timeout and see the flag (a grandchild may still hold a pipe open).
 		m_StopReading = true;
-		m_OutputThread.join();
+		if (m_OutputThread.joinable())
+			m_OutputThread.join();
+		if (m_ErrorThread.joinable())
+			m_ErrorThread.join();
 	}
 
 	bool Process::IsRunning()
@@ -213,27 +279,85 @@ namespace Strata
 		return true;
 	}
 
+	bool Process::WriteInput(std::string_view data)
+	{
+		if (m_InputWrite < 0)
+			return false;
+
+		// Writing to a pipe whose reader is gone raises SIGPIPE, which would end this process. The signal is blocked on
+		// this thread while writing, and one raised by the write (it is directed at the writing thread) is consumed
+		// before the previous mask comes back.
+		sigset_t pipeSignal;
+		sigemptyset(&pipeSignal);
+		sigaddset(&pipeSignal, SIGPIPE);
+		sigset_t previousMask;
+		if (pthread_sigmask(SIG_BLOCK, &pipeSignal, &previousMask) != 0)
+			return false;
+		sigset_t pendingBefore;
+		sigemptyset(&pendingBefore);
+		sigpending(&pendingBefore);
+		const bool pipeSignalWasPending = sigismember(&pendingBefore, SIGPIPE) == 1;
+
+		bool written = true;
+		while (!data.empty())
+		{
+			const ssize_t count = write(m_InputWrite, data.data(), data.size());
+			if (count < 0)
+			{
+				if (errno == EINTR)
+					continue;
+				written = false; // EPIPE: the child closed its end
+				break;
+			}
+			data.remove_prefix(static_cast<size_t>(count));
+		}
+
+		if (!written && !pipeSignalWasPending)
+		{
+			sigset_t pending;
+			sigemptyset(&pending);
+			if (sigpending(&pending) == 0 && sigismember(&pending, SIGPIPE) == 1)
+			{
+				int consumed = 0;
+				sigwait(&pipeSignal, &consumed);
+			}
+		}
+		pthread_sigmask(SIG_SETMASK, &previousMask, nullptr);
+		return written;
+	}
+
+	void Process::CloseInput()
+	{
+		CloseDescriptor(m_InputWrite);
+	}
+
 	std::string Process::TakeOutput()
 	{
 		std::scoped_lock<std::mutex> lock(m_OutputMutex);
 		return std::exchange(m_Output, std::string());
 	}
 
+	std::string Process::TakeErrorOutput()
+	{
+		std::scoped_lock<std::mutex> lock(m_OutputMutex);
+		return std::exchange(m_ErrorOutput, std::string());
+	}
+
 	void Process::Close()
 	{
-		StopOutputReader(std::chrono::milliseconds(0));
-		if (m_OutputRead >= 0)
-		{
-			close(m_OutputRead);
-			m_OutputRead = -1;
-		}
+		CloseInput();
+		StopOutputReaders(std::chrono::milliseconds(0));
+		CloseDescriptor(m_OutputRead);
+		CloseDescriptor(m_ErrorRead);
 		m_ProcessPid = -1;
 		m_ProcessID = 0;
 	}
 
 	Process::RunResult Process::Run(ProcessSpecification specification, std::optional<std::chrono::milliseconds> timeout)
 	{
-		specification.Output = ProcessOutputMode::Capture;
+		if (specification.Output != ProcessOutputMode::CaptureSeparate)
+			specification.Output = ProcessOutputMode::Capture;
+		specification.PipeInput = false;
 
 		RunResult result;
 		Process process;
@@ -252,9 +376,10 @@ namespace Strata
 			exitCode = process.Wait(std::chrono::milliseconds(5000));
 		}
 
-		process.StopOutputReader(std::chrono::milliseconds(2000));
+		process.StopOutputReaders(std::chrono::milliseconds(2000));
 		result.ExitCode = exitCode.value_or(-1);
 		result.Output = process.TakeOutput();
+		result.ErrorOutput = process.TakeErrorOutput();
 		return result;
 	}
 
