@@ -69,12 +69,18 @@ jobs:
           STRATA_TEST_TRACE: "1" # Tests print each test case as it starts, so a crash names its test
         run: |
           set -o pipefail
-          ctest --preset ${{ matrix.preset }}-release -LE gpu --output-on-failure 2>&1 | tee test.log
+          # Linux overcommits memory: a test that runs away with memory or disk would take the whole runner down (the
+          # job ends with exit code 143 and no annotations). Limits make such a test fail on its own instead.
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            ulimit -v 10000000 # KiB of address space per process
+            ulimit -f 2097152  # KiB per file
+          fi
+          ctest --preset ${{ matrix.preset }}-release -LE gpu --output-on-failure --timeout 900 2>&1 | tee test.log
 
       # Job logs need repository admin rights to download; annotations are public, so failures are readable from the
       # checks API and the pull request UI.
       - name: Annotate failures
-        if: failure()
+        if: failure() || cancelled()
         shell: bash
         run: |
           python=$(command -v python3 || command -v python)
