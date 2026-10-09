@@ -7,6 +7,7 @@
 #include "Panels/ContentBrowserPanel.h"
 #include "Panels/InspectorPanel.h"
 #include "Panels/SceneHierarchyPanel.h"
+#include "Panels/ViewportPanel.h"
 
 #include <Strata.h>
 
@@ -54,7 +55,6 @@ namespace Strata
 		void DrawMenuBar();
 		void DrawToolbar();
 		void DrawStatusBar();
-		void DrawViewport();
 		void DrawUnsavedChangesModal();
 		void HandleShortcuts();
 		void UpdateWindowTitle();
@@ -82,6 +82,7 @@ namespace Strata
 		InspectorPanel m_Inspector;
 		ContentBrowserPanel m_ContentBrowser;
 		ConsolePanel m_Console;
+		ViewportPanel m_Viewport;
 
 		std::function<void()> m_PendingDiscardAction;
 		bool m_OpenUnsavedChangesModal = false;

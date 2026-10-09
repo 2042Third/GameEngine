@@ -106,7 +106,9 @@ ST_SCRIPT_CLASS(Turret)
 - `Assets`: `Find(path)`, `IsLoaded`, `RequestLoad`. `Instantiate` never waits: for an asset that is not loaded yet it
   starts the load and returns a null entity - request assets early (in `OnCreate`) and spawn once `IsLoaded`.
 - `Input`: `IsKeyDown/Pressed/Released(Key::W)`, `IsMouseButtonDown/Pressed/Released(Mouse::ButtonLeft)`,
-  `GetMousePosition` (viewport pixels), `GetMouseDelta`, `GetScrollDelta`.
+  `GetMousePosition` (viewport pixels), `GetMouseDelta`, `GetScrollDelta`. In the editor, scripts receive input only
+  while the viewport is the focused game view (playing through the scene's primary camera); positions are relative to
+  the image.
 - `Time`: `GetDeltaTime`, `GetFixedDeltaTime`, `GetElapsedTime`, `GetFrameIndex`, `Get/SetTimeScale`.
 - `Log::Info/Warn/Error/Trace(args...)` - arguments are concatenated (`Log::Info("Health ", health)`).
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Editor/EditorViewport.h"
 #include "Editor/SceneEdit.h"
 #include "Editor/UndoStack.h"
 
@@ -30,7 +31,9 @@ namespace Strata
 	};
 
 	// The editor's state independent of any UI: the open project and its assets, the edited scene, play mode, the
-	// selection and the undo history. Every editor operation (UI, automation, tests) goes through it. Main thread only.
+	// selection, the undo history and the viewport (editor camera, overlays, rendering). Every editor operation (UI,
+	// automation, tests) goes through it. Without a project, an asset manager with only the built-in assets is active, so
+	// built-in meshes and materials render. Main thread only.
 	class EditorContext
 	{
 	public:
@@ -48,6 +51,7 @@ namespace Strata
 		bool CreateProject(const std::filesystem::path& directory, const std::string& name, std::string* outError = nullptr);
 		// Opens a project file, or the project in a directory. Closes the current project first.
 		bool OpenProject(const std::filesystem::path& path, std::string* outError = nullptr);
+		// Saves the project's viewport state (editor camera and settings) to its intermediate directory, then closes it.
 		void CloseProject();
 		bool HasProject() const { return m_Project != nullptr; }
 		const Ref<Project>& GetProject() const { return m_Project; }
@@ -89,6 +93,13 @@ namespace Strata
 		bool IsPaused() const;
 		// While paused, advances the simulation by `frames` fixed steps over the next updates.
 		void Step(uint32_t frames = 1);
+		// Whether the viewport's game view feeds keyboard and mouse input to the running game (play mode through the
+		// scene's camera with the viewport focused). Editor shortcuts that edit the scene stay off meanwhile, so keys meant
+		// for the game never change it. Only play mode can have game input; stopping ends it.
+		void SetGameInputActive(bool active);
+		bool IsGameInputActive() const { return m_GameInputActive; }
+		// Whether keyboard shortcuts that edit the scene or the project (undo, delete, duplicate, save) may act now.
+		bool AcceptsEditShortcuts() const { return !m_GameInputActive; }
 
 		//////////////////////////////////////////////////////////////////////////
 		// Selection (entities of the active scene)
@@ -116,11 +127,25 @@ namespace Strata
 		bool Undo();
 		bool Redo();
 
-		// Once per frame: asset hot reload and loading, then the scene update (simulation while playing).
+		//////////////////////////////////////////////////////////////////////////
+		// Viewport
+		//////////////////////////////////////////////////////////////////////////
+
+		// The editor camera, viewport settings and viewport rendering. Its state is saved per project in
+		// "<project>/.strata/EditorViewport.json" when the project closes and restored when it opens.
+		EditorViewport& GetViewport() { return m_Viewport; }
+		const EditorViewport& GetViewport() const { return m_Viewport; }
+
+		// Once per frame: asset hot reload and loading, then the scene update (simulation while playing), then finished
+		// viewport picks.
 		void Update(Timestep timestep);
 	private:
 		bool StartRuntime(SceneRuntimeMode mode, std::string* outError);
 		void ResetScene(Ref<Scene> scene, AssetHandle handle);
+		// Saves the viewport state and closes the project; with activateBuiltinAssets the built-in asset manager becomes active.
+		void ReleaseProject(bool activateBuiltinAssets);
+		void ActivateBuiltinAssets();
+		std::filesystem::path GetViewportStateFile() const;
 	private:
 		EditorContextSpecification m_Specification;
 		Ref<Project> m_Project;
@@ -131,9 +156,12 @@ namespace Strata
 		AssetHandle m_SceneHandle = UUID::Null();
 		SceneState m_SceneState = SceneState::Edit;
 		float m_MasterVolumeBeforePlay = 1.0f;
+		bool m_GameInputActive = false;
 
 		std::vector<UUID> m_Selection;
 		UndoStack m_UndoStack;
+		Ref<AssetManagerBase> m_BuiltinAssets; // Active while no project is open
+		EditorViewport m_Viewport;
 	};
 
 }

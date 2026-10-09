@@ -24,14 +24,54 @@ namespace Strata
 		return "Unknown";
 	}
 
+	namespace
+	{
+
+		constexpr const char* c_ViewportStateFile = "EditorViewport.json";
+
+		// The asset manager of an editor without a project: only the built-in assets (primitive meshes, default material),
+		// which are memory assets, so nothing is ever read from storage.
+		class BuiltinAssetManager final : public AssetManagerBase
+		{
+		public:
+			~BuiltinAssetManager() override
+			{
+				WaitForInFlightLoads();
+			}
+		protected:
+			bool ReadAssetData(const AssetMetadata& metadata, std::vector<uint8_t>&, std::string* outError) override
+			{
+				if (outError)
+					*outError = fmt::format("'{}' is not available without a project", metadata.Name);
+				return false;
+			}
+		};
+
+	}
+
 	EditorContext::EditorContext(const EditorContextSpecification& specification)
 		: m_Specification(specification), m_EditScene(CreateRef<Scene>())
 	{
+		ActivateBuiltinAssets();
 	}
 
 	EditorContext::~EditorContext()
 	{
-		CloseProject();
+		ReleaseProject(false);
+		if (m_BuiltinAssets && AssetManager::GetActive() == m_BuiltinAssets)
+			AssetManager::SetActive(nullptr);
+	}
+
+	void EditorContext::ActivateBuiltinAssets()
+	{
+		if (!m_BuiltinAssets)
+			m_BuiltinAssets = CreateRef<BuiltinAssetManager>();
+		AssetManager::SetActive(m_BuiltinAssets);
+	}
+
+	std::filesystem::path EditorContext::GetViewportStateFile() const
+	{
+		return m_Project ? m_Project->GetIntermediateDirectory() / c_ViewportStateFile : std::filesystem::path();
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -63,6 +103,12 @@ namespace Strata
 		m_Project = project;
 		Project::SetActive(m_Project);
 
+		// The editor camera and viewport settings continue where they were when the project was last closed.
+		const std::filesystem::path viewportState = GetViewportStateFile();
+		std::string viewportError;
+		if (FileSystem::Exists(viewportState) && !m_Viewport.Load(viewportState, &viewportError))
+			ST_WARN("The saved viewport state is ignored: {}", viewportError);
+
 		EditorAssetManagerSpecification specification;
 		specification.AssetDirectory = m_Project->GetAssetDirectory();
 		specification.CacheDirectory = m_Project->GetCacheDirectory();
@@ -82,7 +128,19 @@ namespace Strata
 
 	void EditorContext::CloseProject()
 	{
+		ReleaseProject(true);
+	}
+
+	void EditorContext::ReleaseProject(bool activateBuiltinAssets)
+	{
 		Stop();
+		if (m_Project)
+		{
+			std::string error;
+			if (!m_Viewport.Save(GetViewportStateFile(), &error))
+				ST_WARN("The viewport state was not saved: {}", error);
+			m_Viewport.ResetState();
+		}
 		ResetScene(CreateRef<Scene>(), UUID::Null());
 		if (m_AssetManager)
 		{
@@ -96,6 +154,8 @@ namespace Strata
 				Project::SetActive(nullptr);
 			m_Project.reset();
 		}
+		if (activateBuiltinAssets)
+			ActivateBuiltinAssets();
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -223,7 +283,13 @@ namespace Strata
 		m_SceneState = SceneState::Edit;
 		// A game's volume setting belongs to the game session, not to the editor.
 		AudioEngine::SetMasterVolume(m_MasterVolumeBeforePlay);
+		m_GameInputActive = false;
 		PruneSelection(); // Entities created during play are gone
+	}
+
+	void EditorContext::SetGameInputActive(bool active)
+	{
+		m_GameInputActive = active && m_SceneState == SceneState::Play;
 	}
 
 	void EditorContext::SetPaused(bool paused)
@@ -331,6 +397,7 @@ namespace Strata
 		else
 			m_EditScene->OnUpdateEditor(timestep);
 		PruneSelection();
+		m_Viewport.UpdatePicking(*this);
 	}
 
 }

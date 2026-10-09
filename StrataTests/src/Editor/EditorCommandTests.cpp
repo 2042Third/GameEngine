@@ -9,6 +9,7 @@
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/Material.h>
+#include <Strata/Renderer/Mesh.h>
 #include <Strata/Runtime/GameRuntime.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/SceneSerializer.h>
@@ -260,6 +261,28 @@ TEST_SUITE("Editor.Commands")
 		CHECK(reopened.Run("scene.info")["scene"] == scene);
 		CHECK(reopened.SceneSnapshot() == saved);
 		CHECK(prefab.size() == 16);
+	}
+
+	TEST_CASE("Editors without a project have the built-in assets")
+	{
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("EditorBuiltinAssets");
+		{
+			CommandHarness harness;
+			REQUIRE(AssetManager::HasActive());
+			CHECK(harness.Context.GetAssetManager() == nullptr); // No project assets
+			CHECK(AssetManager::GetAsset<Mesh>(BuiltinAssets::CubeMesh) != nullptr);
+			CHECK(AssetManager::GetAsset<Material>(BuiltinAssets::DefaultMaterial) != nullptr);
+			const std::string cube = harness.Run("entity.create", { { "components", { { "MeshRenderer", { { "Mesh", "Builtin/Cube" } } } } } })["id"].get<std::string>();
+			CHECK(harness.Run("component.get", { { "entity", cube }, { "component", "MeshRenderer" } })["values"]["Mesh"] == UUIDToJson(BuiltinAssets::CubeMesh));
+
+			// A project's asset manager replaces it while the project is open.
+			harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory / "Game") }, { "name", "Game" } });
+			CHECK(AssetManager::GetActive().get() == harness.Context.GetAssetManager());
+			harness.Context.CloseProject();
+			REQUIRE(AssetManager::HasActive());
+			CHECK(AssetManager::GetAsset<Mesh>(BuiltinAssets::CubeMesh) != nullptr);
+		}
+		CHECK_FALSE(AssetManager::HasActive());
 	}
 
 	TEST_CASE("Exported games run in the game runtime")

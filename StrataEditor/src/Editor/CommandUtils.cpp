@@ -4,11 +4,15 @@
 
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/BuiltinAssets.h>
+#include <Strata/Core/FileSystem.h>
+#include <Strata/Core/StringUtils.h>
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/ComponentAccess.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Scene.h>
+
+#include <system_error>
 
 namespace Strata
 {
@@ -138,6 +142,59 @@ namespace Strata
 				{ "children", std::move(children) },
 				{ "components", ComponentAccess::SerializeEntityComponents(entity) }
 			};
+		}
+
+		std::optional<std::filesystem::path> ResolveOutputPath(const EditorContext& context, std::string_view path, std::string_view extension, bool overwrite,
+			std::string* outError)
+		{
+			auto fail = [outError](std::string message) -> std::optional<std::filesystem::path>
+			{
+				if (outError)
+					*outError = std::move(message);
+				return std::nullopt;
+			};
+
+			if (path.empty())
+				return fail("the path is empty");
+			// "\\server\share", "//server" and the "\\?\" and "\\.\" device namespaces all start with two separators.
+			auto isSeparator = [](char character) { return character == '/' || character == '\\'; };
+			if (path.size() >= 2 && isSeparator(path[0]) && isSeparator(path[1]))
+				return fail("network and device paths are not allowed");
+			const std::filesystem::path file = FileSystem::FromUTF8(path);
+			// Windows "C:file" (relative to the drive's current folder) and "\file" (on the current drive) are neither.
+			if (!file.is_absolute() && (file.has_root_name() || file.has_root_directory()))
+				return fail("the path must be relative or fully absolute (with its drive on Windows)");
+			if (!StringUtils::EqualsIgnoreCase(FileSystem::ToUTF8(file.extension()), extension))
+				return fail(fmt::format("the path must name a {} file", extension));
+			// Windows opens devices for these names in any folder and with any extension.
+			for (const std::filesystem::path& part : file.relative_path())
+			{
+				std::string name = StringUtils::ToLower(FileSystem::ToUTF8(part));
+				name = name.substr(0, name.find('.'));
+				const bool numbered = name.size() == 4 && (name.starts_with("com") || name.starts_with("lpt")) && name[3] >= '0' && name[3] <= '9';
+				if (name == "con" || name == "prn" || name == "aux" || name == "nul" || name == "conin$" || name == "conout$" || numbered)
+					return fail(fmt::format("'{}' is a reserved device name", FileSystem::ToUTF8(part)));
+			}
+
+			std::filesystem::path resolved = file;
+			if (file.is_relative())
+			{
+				if (!context.HasProject())
+					return fail("relative paths are relative to the project directory, and no project is open (pass an absolute path)");
+				resolved = context.GetProject()->GetProjectDirectory() / file;
+			}
+			resolved = resolved.lexically_normal();
+
+			std::error_code error;
+			const std::filesystem::file_status status = std::filesystem::symlink_status(resolved, error);
+			if (!error && std::filesystem::exists(status))
+			{
+				if (!std::filesystem::is_regular_file(status))
+					return fail(fmt::format("'{}' exists and is not a regular file", FileSystem::ToUTF8(resolved)));
+				if (!overwrite)
+					return fail(fmt::format("'{}' already exists (pass overwrite: true to replace it)", FileSystem::ToUTF8(resolved)));
+			}
+			return resolved;
 		}
 
 		bool ApplyComponents(Entity entity, const nlohmann::json& components, std::string* outError)

@@ -114,5 +114,6 @@ namespace Strata
 	void RegisterSceneCommands(EditorCommandRegistry& registry);
 	void RegisterAssetCommands(EditorCommandRegistry& registry);
 	void RegisterEditorStateCommands(EditorCommandRegistry& registry);
+	void RegisterViewportCommands(EditorCommandRegistry& registry);
 
 }

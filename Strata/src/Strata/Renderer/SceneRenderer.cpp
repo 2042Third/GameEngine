@@ -2164,18 +2164,41 @@ namespace Strata
 
 	Entity SceneRenderer::GetEntityAt(Scene& scene, uint32_t x, uint32_t y)
 	{
-		if (!m_HasRenderedFrame || !m_EntityIDTexture || x >= m_ViewportSize.x || y >= m_ViewportSize.y)
+		Scope<TextureReadback> readback = ReadEntityIDAsync(x, y);
+		if (!readback)
 			return {};
-
+		readback->Wait();
 		ReadbackImage image;
-		if (!Renderer::ReadTexture(m_EntityIDTexture, image) || image.BytesPerPixel != sizeof(uint32_t))
+		if (!readback->GetResult(image) || image.BytesPerPixel != sizeof(uint32_t) || image.Pixels.size() < sizeof(uint32_t))
 			return {};
 
 		uint32_t id = 0;
-		std::memcpy(&id, image.Pixels.data() + (static_cast<size_t>(y) * image.Width + x) * sizeof(uint32_t), sizeof(uint32_t));
+		std::memcpy(&id, image.Pixels.data(), sizeof(uint32_t));
+		return GetEntityFromID(scene, id);
+	}
+
+	Scope<TextureReadback> SceneRenderer::ReadEntityIDAsync(uint32_t x, uint32_t y)
+	{
+		if (!m_HasRenderedFrame || !m_EntityIDTexture || x >= m_ViewportSize.x || y >= m_ViewportSize.y)
+			return nullptr;
+
+		TextureReadbackRegion region;
+		region.X = x;
+		region.Y = y;
+		region.Width = 1;
+		region.Height = 1;
+		std::string error;
+		Scope<TextureReadback> readback = TextureReadback::Create(m_EntityIDTexture, region, &error);
+		if (!readback)
+			ReportError(fmt::format("reading the entity ID at ({}, {}) failed: {}", x, y, error));
+		return readback;
+	}
+
+	Entity SceneRenderer::GetEntityFromID(Scene& scene, uint32_t id)
+	{
+		// The prepass writes the entity handle + 1, so 0 means that nothing was drawn.
 		if (id == 0)
 			return {};
-
 		const entt::entity handle = static_cast<entt::entity>(id - 1);
 		if (!scene.GetRegistry().valid(handle))
 			return {};

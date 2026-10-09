@@ -5,6 +5,7 @@
 #include "Strata/Core/ErrorThrottle.h"
 #include "Strata/Renderer/DebugDraw.h"
 #include "Strata/Renderer/SceneRenderData.h"
+#include "Strata/Renderer/TextureReadback.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 
@@ -166,8 +167,15 @@ namespace Strata
 		nvrhi::ITexture* GetBloomTexture() const { return m_BloomTexture; } // Level 0 of the bloom chain (half resolution)
 
 		// Entity visible at a pixel of the last rendered frame (invalid when none, or when no frame was rendered since
-		// the last resize). Blocks until the GPU is idle; meant for editor clicks and tests.
+		// the last resize). Blocks until the GPU is done; meant for tests and tools (editors use ReadEntityIDAsync).
 		Entity GetEntityAt(Scene& scene, uint32_t x, uint32_t y);
+		// Starts reading the entity ID at a pixel of the last rendered frame without waiting for the GPU. Null when no
+		// frame was rendered since the last resize, the pixel is outside the viewport or the copy cannot be made. Once
+		// the readback is ready, its single R32_UINT pixel resolves with GetEntityFromID (against the scene that was
+		// rendered: entities destroyed meanwhile resolve to an invalid entity).
+		Scope<TextureReadback> ReadEntityIDAsync(uint32_t x, uint32_t y);
+		// The entity an entity-ID buffer value refers to; invalid for 0 (nothing drawn) or entities that no longer exist.
+		static Entity GetEntityFromID(Scene& scene, uint32_t id);
 
 		// Automatic exposure adapts gradually; this makes the next frame jump to the scene's brightness (camera cuts,
 		// scene loads).
