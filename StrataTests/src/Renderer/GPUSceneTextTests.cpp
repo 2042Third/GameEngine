@@ -237,22 +237,29 @@ TEST_SUITE("GPU.SceneRenderer.Text")
 		renderer.SetViewportSize(c_Width, c_Height);
 		const ReadbackImage withDefault = Render(renderer, scene, camera);
 		CHECK(renderer.GetStats().PendingAssets == 0);
+		REQUIRE(MeasureCoverage(withDefault, glm::u8vec4(0, 0, 0, 255)).Pixels > 50);
 
-		// The same font as an asset of its own renders the same glyphs.
-		const std::vector<uint8_t>& defaultData = Font::GetDefault()->GetData();
-		const AssetHandle fontAsset = assets.Add(Font::Create(std::vector<uint8_t>(defaultData.begin(), defaultData.end())), "Font");
-		text.Font = fontAsset;
-		CHECK(MaxDifference(Render(renderer, scene, camera), withDefault) == 0);
+		// A font asset of its own draws its glyphs (Cousine, monospaced, unlike the default Roboto).
+		const std::vector<uint8_t> cousineData = ReadSourceFile("Strata/vendor/imgui/misc/fonts/Cousine-Regular.ttf");
+		std::string error;
+		const Ref<Font> cousine = Font::Create(cousineData, &error);
+		REQUIRE_MESSAGE(cousine, error);
+		text.Font = assets.Add(cousine, "Cousine");
+		const ReadbackImage withCousine = Render(renderer, scene, camera);
+		CHECK(renderer.GetStats().PendingTextGlyphs == 0);
+		CHECK(renderer.GetStats().TextGlyphs == 6);
+		CHECK(MeasureCoverage(withCousine, glm::u8vec4(0, 0, 0, 255)).Pixels > 50);
+		CHECK(MaxDifference(withCousine, withDefault) > 128);
 
-		// A font that is still loading counts as pending; the text shows in the default font meanwhile.
+		// A font that is still loading counts as pending; the text shows in the default font meanwhile, then in its own.
 		const std::filesystem::path path = CreateTemporaryDirectory("TextFonts") / "Fonts.stpak";
 		AssetMetadata metadata;
 		metadata.Handle = UUID(0xF0F0);
 		metadata.Type = AssetType::Font;
 		metadata.Path = "Fonts/Packed.ttf";
-		REQUIRE(AssetPack::Write(path, { metadata }, [&defaultData](const AssetMetadata&, std::vector<uint8_t>& outData, std::string*)
+		REQUIRE(AssetPack::Write(path, { metadata }, [&cousineData](const AssetMetadata&, std::vector<uint8_t>& outData, std::string*)
 		{
-			outData = defaultData;
+			outData = cousineData;
 			return true;
 		}));
 		Ref<RuntimeAssetManager> manager = RuntimeAssetManager::Create(path);
@@ -262,7 +269,7 @@ TEST_SUITE("GPU.SceneRenderer.Text")
 		CHECK(MaxDifference(Render(renderer, scene, camera), withDefault) == 0);
 		CHECK(renderer.GetStats().PendingAssets == 1);
 		REQUIRE(manager->WaitForPendingLoads());
-		CHECK(MaxDifference(Render(renderer, scene, camera), withDefault) == 0);
+		CHECK(MaxDifference(Render(renderer, scene, camera), withCousine) == 0);
 		CHECK(renderer.GetStats().PendingAssets == 0);
 		AssetManager::SetActive(assets.Manager);
 
