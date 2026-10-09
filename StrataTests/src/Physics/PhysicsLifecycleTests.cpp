@@ -489,7 +489,9 @@ TEST_SUITE("Physics.Lifecycle")
 		CHECK(CountLogMessages(logStart, "'Rock' waits for mesh") == 1);
 		CHECK(Math::IsNearlyEqual(flat.GetComponent<TransformComponent>().Scale, glm::vec3(0.0f)));
 
+		// Records waiting for a valid transform are retried when a transform change is signaled.
 		flat.GetTransform().Scale = glm::vec3(1.0f);
+		flat.MarkModified<TransformComponent>();
 		meshLoaded = true;
 		meshes->Changed();
 		StepScene(scene, 1);
@@ -625,13 +627,57 @@ TEST_SUITE("Physics.Lifecycle")
 		CHECK(transform.Scale == glm::vec3(0.0f));
 		CHECK(transform.Translation == frozen);
 
-		// Back with a valid scale it continues with the velocity it had.
+		// Back with a valid scale (signaled: the suspended body is not polled) it continues with the velocity it had.
 		box.GetTransform().Scale = glm::vec3(1.0f);
+		box.MarkModified<TransformComponent>();
 		StepScene(scene, 1);
 		CHECK(physics.HasBody(box));
 		CHECK(physics.GetLinearVelocity(box).y < speed);
 		StepScene(scene, 120);
 		CHECK(std::abs(GetWorldPosition(scene, box).y - 0.5f) < 0.03f);
+	}
+
+	TEST_CASE("Bodies waiting for a valid transform are not polled")
+	{
+		Scene scene;
+		CreateGround(scene);
+		Entity flat = CreateDynamicBox(scene, "Flat", glm::vec3(0.0f, 3.0f, 0.0f));
+		flat.GetTransform().Scale = glm::vec3(0.0f);
+		Entity holder = scene.CreateEntity("Holder");
+		Entity box = CreateDynamicBox(scene, "Box", glm::vec3(5.0f, 3.0f, 0.0f));
+		REQUIRE(scene.SetParent(box, holder));
+
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		StepScene(scene, 1);
+		// The falling box gets a degenerate transform (noticed without a signal: it is awake), then its parent is
+		// deactivated.
+		box.GetTransform().Scale = glm::vec3(0.0f);
+		StepScene(scene, 1);
+		REQUIRE_FALSE(physics.HasBody(box));
+		holder.SetActive(false);
+		StepScene(scene, 1);
+
+		// Neither the record that cannot be built nor the suspended body costs anything per step.
+		StepScene(scene, 5);
+		CHECK(physics.GetStats().SyncedBodyCount == 0);
+		CHECK(physics.GetStats().PendingBodyCount == 1);
+
+		// A signaled transform change retries the build.
+		flat.GetTransform().Scale = glm::vec3(1.0f);
+		StepScene(scene, 1);
+		CHECK_FALSE(physics.HasBody(flat)); // Not signaled yet
+		flat.MarkModified<TransformComponent>();
+		StepScene(scene, 1);
+		CHECK(physics.HasBody(flat));
+
+		// Reactivation brings the suspended body back once its transform is valid.
+		box.GetTransform().Scale = glm::vec3(1.0f);
+		holder.SetActive(true);
+		CHECK(physics.HasBody(box));
+		StepScene(scene, 120);
+		CHECK(std::abs(GetWorldPosition(scene, box).y - 0.5f) < 0.03f);
+		CHECK(std::abs(GetWorldPosition(scene, flat).y - 0.5f) < 0.03f);
 	}
 
 	TEST_CASE("Dynamic bodies below a parent scaled to nearly zero wait until it is restored")
@@ -669,13 +715,15 @@ TEST_SUITE("Physics.Lifecycle")
 		CHECK(box.GetComponent<TransformComponent>().Translation == glm::vec3(0.0f, 3.0f * huge, 0.0f));
 		CHECK(warnings() == 1);
 
-		// Rescales the parent keeping the box's world pose (exactly).
+		// Rescales the parent keeping the box's world pose (exactly). The edit is signaled: bodies waiting for a valid
+		// transform are not polled.
 		const auto setParentScale = [&](float scale)
 		{
 			const glm::vec3 boxWorld = GetWorldPosition(scene, box);
 			parent.GetTransform().Scale = glm::vec3(scale);
 			box.GetTransform().Translation = boxWorld / scale;
 			box.GetTransform().Scale = glm::vec3(1.0f / scale);
+			parent.MarkModified<TransformComponent>();
 		};
 
 		// Restored (the box's world transform does not change): the body is built and falls.

@@ -452,6 +452,10 @@ namespace Strata
 			ST_CORE_WARN("Cannot set the world transform of '{}': the transform is degenerate", entity.GetName());
 			return false;
 		}
+
+		// Systems that mirror transforms (e.g. physics bodies, which only follow signaled edits while they sleep) learn about
+		// the change like about any other component edit.
+		m_Registry.patch<TransformComponent>(entity.GetHandle());
 		return true;
 	}
 

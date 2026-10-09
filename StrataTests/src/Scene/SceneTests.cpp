@@ -235,6 +235,38 @@ TEST_SUITE("Scene")
 		CHECK(Math::IsNearlyEqual(glm::vec3(scene.GetWorldTransform(child)[3]), glm::vec3(0.0f, 4.0f, 0.0f), 1e-4f));
 	}
 
+	TEST_CASE("Setting a world transform notifies transform listeners")
+	{
+		struct Observer
+		{
+			int Updates = 0;
+			glm::vec3 SeenTranslation = glm::vec3(0.0f);
+
+			void OnUpdate(entt::registry& registry, entt::entity entity)
+			{
+				Updates++;
+				SeenTranslation = registry.get<TransformComponent>(entity).Translation;
+			}
+		};
+
+		Scene scene;
+		Entity parent = scene.CreateEntity("Parent");
+		parent.GetTransform().Translation = { 10.0f, 0.0f, 0.0f };
+		Entity child = scene.CreateChildEntity(parent, "Child");
+		Observer observer;
+		scene.GetRegistry().on_update<TransformComponent>().connect<&Observer::OnUpdate>(observer);
+
+		// Listeners see the new local transform.
+		CHECK(scene.SetWorldTransform(child, glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 4.0f, 0.0f))));
+		CHECK(observer.Updates == 1);
+		CHECK(Math::IsNearlyEqual(observer.SeenTranslation, glm::vec3(-10.0f, 4.0f, 0.0f), 1e-4f));
+
+		// A transform that cannot be set leaves the entity unchanged and emits nothing.
+		parent.GetTransform().Scale = glm::vec3(0.0f);
+		CHECK_FALSE(scene.SetWorldTransform(child, glm::mat4(1.0f)));
+		CHECK(observer.Updates == 1);
+	}
+
 	TEST_CASE("Activity propagates down the hierarchy")
 	{
 		Scene scene;

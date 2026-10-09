@@ -258,6 +258,140 @@ TEST_SUITE("Physics.Hierarchy")
 		CHECK(recorder.Count(CollisionEventType::Begin) == recorder.Count(CollisionEventType::End));
 	}
 
+	TEST_CASE("Reparenting rebuilds only the bodies whose colliders change")
+	{
+		Scene scene;
+		scene.GetSettings().Gravity = glm::vec3(0.0f);
+		Car car = CreateCar(scene, glm::vec3(0.0f, 5.0f, 0.0f));
+		Entity mount = scene.CreateChildEntity(car.Chassis, "Mount");
+		mount.GetTransform().Translation = glm::vec3(0.0f, 0.5f, -1.5f);
+		Entity truck = CreateDynamicBox(scene, "Truck", glm::vec3(10.0f, 5.0f, 0.0f));
+		Entity post = CreateStaticBox(scene, "Post", glm::vec3(20.0f, 1.0f, 0.0f), glm::vec3(0.25f, 1.0f, 0.25f));
+		Entity garage = scene.CreateEntity("Garage");
+
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		const auto builds = [&]()
+		{
+			physics.HasBody(car.Chassis); // Applies the pending changes
+			return physics.GetStats().BuildCount;
+		};
+		const uint64_t initialBuilds = builds();
+		const auto antennaTop = [&]()
+		{
+			std::optional<RaycastHit> hit = CastDown(physics, GetWorldPosition(scene, car.Antenna));
+			return hit && hit->HitEntity == car.Chassis ? hit->Point.y : -1.0f;
+		};
+		const float antennaHeight = antennaTop();
+		REQUIRE(antennaHeight > 6.0f);
+
+		// Bodies moved under other entities, keeping their pose, stay as they are (a rigid body below another one stays a
+		// body of its own).
+		CHECK(scene.SetParent(car.Chassis, garage));
+		CHECK(scene.SetParent(post, garage));
+		CHECK(scene.SetParent(truck, car.Chassis));
+		CHECK(builds() == initialBuilds);
+		CHECK(physics.GetBodyEntity(car.Antenna) == car.Chassis);
+		CHECK(physics.GetBodyEntity(truck) == truck);
+		CHECK(antennaTop() == doctest::Approx(antennaHeight).epsilon(1.0e-4));
+
+		// A merged collider moved within its body without changing its pose does not change the body either...
+		CHECK(scene.SetParent(car.Antenna, mount));
+		CHECK(builds() == initialBuilds);
+		CHECK(antennaTop() == doctest::Approx(antennaHeight).epsilon(1.0e-4));
+		// ...but moved relative to the body (the local transform kept, now relative to the chassis), it does.
+		CHECK(scene.SetParent(car.Antenna, car.Chassis, false));
+		CHECK(builds() == initialBuilds + 1);
+		CHECK(antennaTop() == doctest::Approx(5.0f + 1.25f + 0.2f).epsilon(1.0e-3)); // 1.25 above the mount before
+
+		// A collider handed to another body rebuilds both bodies.
+		CHECK(scene.SetParent(car.Cabin, truck));
+		CHECK(builds() == initialBuilds + 3);
+		CHECK(physics.GetBodyEntity(car.Cabin) == truck);
+
+		// Activity still follows the hierarchy: below an inactive entity a body leaves the simulation, without a rebuild.
+		Entity storage = scene.CreateEntity("Storage");
+		storage.SetActive(false);
+		CHECK(scene.SetParent(post, storage));
+		CHECK_FALSE(physics.HasBody(post));
+		CHECK(scene.SetParent(post, garage));
+		CHECK(physics.HasBody(post));
+		CHECK(builds() == initialBuilds + 3);
+		StepScene(scene, 1);
+		std::optional<RaycastHit> postHit = CastDown(physics, GetWorldPosition(scene, post));
+		REQUIRE(postHit);
+		CHECK(postHit->HitEntity == post);
+	}
+
+	TEST_CASE("Bodies below a body moved without a signal follow it in the same step")
+	{
+		Scene scene;
+		CreateGround(scene);
+		// A kinematic platform carrying a static railing and a kinematic door, bodies of their own.
+		Entity platform = CreateDynamicBox(scene, "Platform", glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(2.0f, 0.25f, 2.0f));
+		platform.GetComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
+		Entity railing = CreateStaticBox(scene, "Railing", glm::vec3(1.5f, 1.0f, 0.0f), glm::vec3(0.1f, 0.5f, 2.0f));
+		railing.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Static;
+		REQUIRE(scene.SetParent(railing, platform, false)); // World (1.5, 2, 0)
+		Entity door = CreateStaticBox(scene, "Door", glm::vec3(-1.5f, 1.0f, 0.0f), glm::vec3(0.1f, 0.5f, 1.0f));
+		door.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
+		REQUIRE(scene.SetParent(door, platform, false)); // World (-1.5, 2, 0)
+
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		StepScene(scene, 90);
+		REQUIRE(physics.IsSleeping(platform));
+		REQUIRE(physics.IsSleeping(door));
+
+		// Driven by direct writes every frame, which the awake platform notices without a signal.
+		CHECK(physics.WakeUp(platform));
+		for (int frame = 0; frame < 30; frame++)
+		{
+			platform.GetTransform().Translation.y += 0.1f;
+			StepScene(scene, 1);
+		}
+		REQUIRE(GetWorldPosition(scene, platform).y == doctest::Approx(4.0f));
+		for (Entity rider : { railing, door })
+		{
+			const glm::vec3 position = GetWorldPosition(scene, rider);
+			std::optional<RaycastHit> hit = CastDown(physics, position);
+			REQUIRE(hit);
+			CHECK(hit->HitEntity == rider);
+			CHECK(hit->Point.y == doctest::Approx(position.y + 0.5f).epsilon(1.0e-3));
+		}
+		// Nothing is left behind where the riders started.
+		std::optional<RaycastHit> below = physics.Raycast(glm::vec3(1.5f, 3.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), 10.0f);
+		REQUIRE(below);
+		CHECK(below->HitEntity != railing);
+	}
+
+	TEST_CASE("Sleeping dynamic children move along with a parent moved without a signal")
+	{
+		Scene scene;
+		CreateGround(scene);
+		Entity parent = CreateDynamicBox(scene, "Parent", glm::vec3(0.0f, 5.0f, 0.0f));
+		parent.GetComponent<RigidBodyComponent>().GravityScale = 0.0f;
+		Entity child = CreateDynamicBox(scene, "Child", glm::vec3(10.0f, 0.5f, 0.0f));
+		REQUIRE(scene.SetParent(child, parent));
+
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		StepScene(scene, 90);
+		REQUIRE(physics.IsSleeping(child));
+
+		// The awake parent is moved by a direct write: the child moves along, as after a signaled edit.
+		CHECK(physics.WakeUp(parent));
+		parent.GetTransform().Translation.x += 3.0f;
+		StepScene(scene, 1);
+		CHECK(GetWorldPosition(scene, parent).x == doctest::Approx(3.0f).epsilon(1.0e-3));
+		CHECK(GetWorldPosition(scene, child).x == doctest::Approx(13.0f).epsilon(1.0e-3));
+		std::optional<RaycastHit> hit = CastDown(physics, glm::vec3(13.0f, 0.0f, 0.0f));
+		REQUIRE(hit);
+		CHECK(hit->HitEntity == child);
+		StepScene(scene, 30);
+		CHECK(GetWorldPosition(scene, child).x == doctest::Approx(13.0f).epsilon(1.0e-3));
+	}
+
 	TEST_CASE("Bodies rebuilt while inactive keep their merged colliders")
 	{
 		Scene scene;

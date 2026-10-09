@@ -31,9 +31,9 @@ namespace Strata
 	//  - Lock rotation flags refer to world axes. Collision events and query hits report the entity that owns the body.
 	//
 	// An entity whose body cannot be built yet keeps a pending record and is retried once that can succeed: a degenerate
-	// (e.g. zero scale) world transform when it becomes valid, a mesh collider when its mesh data is available and its shape
-	// cooked (see SetMeshProvider), a full world when bodies are freed. A body whose world transform becomes degenerate
-	// leaves the simulation until it is valid again.
+	// (e.g. zero scale) world transform when a transform change is signaled (see below), a mesh collider when its mesh data
+	// is available and its shape cooked (see SetMeshProvider), a full world when bodies are freed. A body whose world
+	// transform becomes degenerate leaves the simulation until a signaled change (or reactivation) makes it valid again.
 	// Dynamic bodies write their pose back relative to their parent, so for them a parent scaled to (nearly) zero, which
 	// cannot be inverted, counts as a degenerate transform too.
 	//
@@ -42,9 +42,10 @@ namespace Strata
 	// moves colliders between bodies. Each step:
 	//  - bodies follow transform changes of their entity: kinematic bodies move towards it, dynamic bodies are teleported
 	//    (waking bodies resting on them) and static bodies are repositioned. Changes are noticed when they are signaled
-	//    (TransformComponent on_update, e.g. Entity::MarkModified or ComponentAccess, on the entity or an ancestor) and,
-	//    for awake bodies, also without a signal. Sleeping and static bodies are never polled, so direct field writes
-	//    without a signal go unnoticed for them (a kinematic body moved every step stays awake);
+	//    (TransformComponent on_update, e.g. Entity::MarkModified, ComponentAccess or Scene::SetWorldTransform, on the
+	//    entity or an ancestor) and, for awake bodies, also without a signal; the bodies below an awake body found moved
+	//    that way follow it in the same step. Sleeping and static bodies are never polled otherwise, so direct field
+	//    writes without a signal go unnoticed for them (a kinematic body moved every step stays awake);
 	//  - entities that are inactive in the hierarchy or pending destruction (or under such an ancestor) leave the
 	//    simulation; static bodies pending destruction stay until they are destroyed, but queries skip them;
 	//  - dynamic bodies write their simulated pose back to their entity, parents before children, changing only its
@@ -53,6 +54,13 @@ namespace Strata
 	//    descendants follow it.
 	// The work of a step grows with the awake bodies, their contacts and the signaled changes, not with sleeping or static
 	// bodies (see PhysicsStats::SyncedBodyCount, CheckedPairCount and WrittenBodyCount).
+	//
+	// The simulation waits for mesh colliders at the start: while a mesh collider that exists before the first step waits for
+	// mesh data the provider is loading or for its shape to be cooked, Simulate holds the step (nothing moves and no
+	// collision events occur, but changes are still applied and queries work), so that bodies do not fall through mesh
+	// floors that are not there yet. PhysicsStats::WaitingForMeshes and HeldStepCount report it. The wait ends after at
+	// most PhysicsSettings::MeshWaitTimeout seconds of simulation time, with a warning naming the colliders that are still
+	// missing; mesh colliders added later, unknown meshes and meshes that failed to load are not waited for.
 	//
 	// Main thread only. Jolt runs the step on Strata's JobSystem workers when it is initialized.
 	class PhysicsWorld
@@ -89,7 +97,8 @@ namespace Strata
 		Entity GetBodyEntity(Entity entity) const;
 
 		// Applies pending changes, synchronizes entity transforms to the bodies, advances the simulation by `timestep`
-		// seconds, writes dynamic bodies back to their entities and updates the contact state.
+		// seconds, writes dynamic bodies back to their entities and updates the contact state. At the start, steps are held
+		// while mesh colliders wait for their meshes (see above).
 		void Simulate(float timestep);
 
 		// Collision events queued since the last call, in the order they occurred. Entity handles are resolved now. Events

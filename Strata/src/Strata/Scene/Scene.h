@@ -75,8 +75,9 @@ namespace Strata
 		//////////////////////////////////////////////////////////////////////////
 
 		// Re-parents child under parent (an invalid parent makes it a root). Returns false if this would create a
-		// cycle. With keepWorldTransform the child's world transform is preserved. A change of parent emits the child's
-		// RelationshipComponent on_update signal (the old and new parents' Children lists change silently).
+		// cycle. With keepWorldTransform the child's world transform is preserved (through SetWorldTransform, which signals
+		// the new local transform). A change of parent emits the child's RelationshipComponent on_update signal (the old and
+		// new parents' Children lists change silently).
 		bool SetParent(Entity child, Entity parent, bool keepWorldTransform = true);
 		// Moves an entity to position `index` among its siblings (or among the roots). Only the order changes, so no
 		// signal is emitted.
@@ -87,8 +88,9 @@ namespace Strata
 		void UpdateWorldTransforms();
 		// World transform computed from the hierarchy right now (always current, independent of the cache).
 		glm::mat4 GetWorldTransform(Entity entity) const;
-		// Returns false (leaving the entity unchanged) if the transform cannot be represented, e.g. under a parent
-		// with zero scale.
+		// Sets the entity's local transform so that its world transform becomes `worldTransform`, and emits the
+		// TransformComponent on_update signal like Entity::MarkModified. Returns false (leaving the entity unchanged, without
+		// a signal) if the transform cannot be represented, e.g. under a parent with zero scale.
 		bool SetWorldTransform(Entity entity, const glm::mat4& worldTransform);
 		// A parent whose world transform's determinant is not above this (in magnitude) cannot be inverted, so the world
 		// transforms of its children cannot be set.
