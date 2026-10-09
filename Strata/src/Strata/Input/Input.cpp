@@ -94,13 +94,34 @@ namespace Strata
 
 		InputState s_State;
 
-		// A query over both sources: the devices count only while input is enabled, simulated input always.
+		// Whether a source held a button through the whole input frame (down, without a transition).
 		template<size_t Count>
-		bool Query(std::bitset<Count> ButtonStates<Count>::* states, const ButtonStates<Count>& device, const ButtonStates<Count>& simulated, size_t index)
+		bool IsHeldThroughout(const ButtonStates<Count>& states, size_t index)
+		{
+			return states.Down.test(index) && !states.Pressed.test(index) && !states.Released.test(index);
+		}
+
+		// The game sees the devices (only while input is enabled) and simulated input merged: a button is down while either source
+		// holds it.
+		template<size_t Count>
+		bool IsMergedDown(const ButtonStates<Count>& device, const ButtonStates<Count>& simulated, size_t index)
+		{
+			return index < Count && ((s_State.Enabled && device.Down.test(index)) || simulated.Down.test(index));
+		}
+
+		// A press or release of one source is a transition of the merged button only if the other source did not hold the button
+		// through the frame: a tool pressing or letting go of a key a person holds (or the other way round) changes nothing the game
+		// sees, and never restarts a key repeat.
+		template<size_t Count>
+		bool IsMergedTransition(std::bitset<Count> ButtonStates<Count>::* transition, const ButtonStates<Count>& device, const ButtonStates<Count>& simulated,
+			size_t index)
 		{
 			if (index >= Count)
 				return false;
-			return (s_State.Enabled && (device.*states).test(index)) || (simulated.*states).test(index);
+			const bool deviceTransition = s_State.Enabled && (device.*transition).test(index);
+			const bool deviceHeld = s_State.Enabled && IsHeldThroughout(device, index);
+			const bool simulatedTransition = (simulated.*transition).test(index);
+			return (deviceTransition && !IsHeldThroughout(simulated, index)) || (simulatedTransition && !deviceHeld);
 		}
 
 		bool IsFinite(const glm::vec2& value)
@@ -134,32 +155,32 @@ namespace Strata
 
 	bool Input::IsKeyDown(KeyCode key)
 	{
-		return Query(&ButtonStates<c_MaxKeyCode>::Down, s_State.Keys, s_State.Simulated.Keys, key);
+		return IsMergedDown(s_State.Keys, s_State.Simulated.Keys, key);
 	}
 
 	bool Input::IsKeyPressed(KeyCode key)
 	{
-		return Query(&ButtonStates<c_MaxKeyCode>::Pressed, s_State.Keys, s_State.Simulated.Keys, key);
+		return IsMergedTransition(&ButtonStates<c_MaxKeyCode>::Pressed, s_State.Keys, s_State.Simulated.Keys, key);
 	}
 
 	bool Input::IsKeyReleased(KeyCode key)
 	{
-		return Query(&ButtonStates<c_MaxKeyCode>::Released, s_State.Keys, s_State.Simulated.Keys, key);
+		return IsMergedTransition(&ButtonStates<c_MaxKeyCode>::Released, s_State.Keys, s_State.Simulated.Keys, key);
 	}
 
 	bool Input::IsMouseButtonDown(MouseCode button)
 	{
-		return Query(&ButtonStates<c_MaxMouseButtons>::Down, s_State.MouseButtons, s_State.Simulated.MouseButtons, button);
+		return IsMergedDown(s_State.MouseButtons, s_State.Simulated.MouseButtons, button);
 	}
 
 	bool Input::IsMouseButtonPressed(MouseCode button)
 	{
-		return Query(&ButtonStates<c_MaxMouseButtons>::Pressed, s_State.MouseButtons, s_State.Simulated.MouseButtons, button);
+		return IsMergedTransition(&ButtonStates<c_MaxMouseButtons>::Pressed, s_State.MouseButtons, s_State.Simulated.MouseButtons, button);
 	}
 
 	bool Input::IsMouseButtonReleased(MouseCode button)
 	{
-		return Query(&ButtonStates<c_MaxMouseButtons>::Released, s_State.MouseButtons, s_State.Simulated.MouseButtons, button);
+		return IsMergedTransition(&ButtonStates<c_MaxMouseButtons>::Released, s_State.MouseButtons, s_State.Simulated.MouseButtons, button);
 	}
 
 	glm::vec2 Input::GetMousePosition()

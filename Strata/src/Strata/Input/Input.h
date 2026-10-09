@@ -72,9 +72,10 @@ namespace Strata
 
 		// A virtual keyboard and mouse for tools that play the game (the editor's input.* commands). Its events are
 		// queued and apply at the start of the next input frame (BeginFrame), before that frame's updates, so every
-		// transition is seen for one whole frame like a device event. Simulated input is merged with the devices' (a key
-		// is down while either holds it) and reaches the game even while device input is disabled: a tool drives the game
-		// on purpose, whether or not the editor's game view has the focus. Invalid codes and non-finite values are ignored.
+		// transition is seen for one whole frame like a device event. Simulated input is merged with the devices': a key is
+		// down while either holds it, and one source pressing or releasing a key the other held through the frame is no
+		// transition. It reaches the game even while device input is disabled: a tool drives the game on purpose, whether
+		// or not the editor's game view has the focus. Invalid codes and non-finite values are ignored.
 		static void SimulateKey(KeyCode key, bool down);
 		static void SimulateMouseButton(MouseCode button, bool down);
 		// Moves the simulated pointer to a position relative to the top-left corner of the input viewport, in pixels.

@@ -150,6 +150,54 @@ TEST_SUITE("Core.Input")
 		Input::Reset();
 	}
 
+	TEST_CASE("A source pressing or releasing a button the other source holds reports no transition")
+	{
+		Input::Reset();
+		Input::BeginFrame();
+		Input::ProcessKey(Key::W, true); // A person holds W
+		Input::BeginFrame();
+
+		// A tool presses W too: the game sees W held, not pressed again (a key repeat would restart).
+		Input::SimulateKey(Key::W, true);
+		Input::BeginFrame();
+		CHECK(Input::IsKeyDown(Key::W));
+		CHECK_FALSE(Input::IsKeyPressed(Key::W));
+		CHECK_FALSE(Input::IsKeyReleased(Key::W));
+
+		// The tool lets go while the person still holds it: no release.
+		Input::SimulateKey(Key::W, false);
+		Input::BeginFrame();
+		CHECK(Input::IsKeyDown(Key::W));
+		CHECK_FALSE(Input::IsKeyReleased(Key::W));
+
+		// The person lets go now: released.
+		Input::ProcessKey(Key::W, false);
+		CHECK_FALSE(Input::IsKeyDown(Key::W));
+		CHECK(Input::IsKeyReleased(Key::W));
+
+		// The other way round, with a mouse button the tool holds.
+		Input::SimulateMouseButton(Mouse::ButtonLeft, true);
+		Input::BeginFrame();
+		CHECK(Input::IsMouseButtonPressed(Mouse::ButtonLeft));
+		Input::BeginFrame();
+		Input::ProcessMouseButton(Mouse::ButtonLeft, true);
+		CHECK(Input::IsMouseButtonDown(Mouse::ButtonLeft));
+		CHECK_FALSE(Input::IsMouseButtonPressed(Mouse::ButtonLeft));
+		Input::BeginFrame();
+		Input::ProcessMouseButton(Mouse::ButtonLeft, false);
+		CHECK(Input::IsMouseButtonDown(Mouse::ButtonLeft));
+		CHECK_FALSE(Input::IsMouseButtonReleased(Mouse::ButtonLeft));
+
+		// A device the game cannot see (input disabled) holds nothing for it: the tool's transitions count.
+		Input::SetEnabled(false);
+		Input::BeginFrame();
+		Input::ProcessKey(Key::E, true);
+		Input::SimulateKey(Key::E, true);
+		Input::BeginFrame();
+		CHECK(Input::IsKeyPressed(Key::E));
+		Input::Reset();
+	}
+
 	TEST_CASE("Simulated input reaches the game while device input is disabled")
 	{
 		Input::Reset();
