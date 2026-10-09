@@ -142,7 +142,7 @@ namespace Strata
 		glm::uvec2 GetViewportSize() const { return m_ViewportSize; }
 
 		// Renders the scene into the output texture, or into `target` when given. A target must have the viewport size
-		// (the renderer never rescales) and a single-sampled, non-sRGB UNORM color attachment 0, e.g. the swapchain:
+		// (the renderer never rescales) and exactly one color attachment, single-sampled non-sRGB UNORM, e.g. the swapchain:
 		// values are written sRGB-encoded. Returns false, with GetStats().Rendered false, when nothing was rendered: an
 		// empty viewport, or an invalid target or render targets (both logged). Updates the scene's cached world
 		// transforms. With overlays and a target, the image is composed in the output texture and then copied.

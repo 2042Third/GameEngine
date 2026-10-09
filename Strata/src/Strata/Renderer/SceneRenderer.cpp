@@ -1702,9 +1702,10 @@ namespace Strata
 	{
 		const nvrhi::FramebufferDesc& desc = target->getDesc();
 		const nvrhi::FramebufferInfoEx& info = target->getFramebufferInfo();
-		if (desc.colorAttachments.empty() || !desc.colorAttachments[0].texture)
+		// The final passes write one color output: further attachments would be left undefined.
+		if (desc.colorAttachments.size() != 1 || !desc.colorAttachments[0].texture)
 		{
-			m_Errors.Report("the target framebuffer has no color attachment");
+			m_Errors.Report(fmt::format("the target framebuffer has {} color attachments; exactly one is required", desc.colorAttachments.size()));
 			return false;
 		}
 		const nvrhi::FormatInfo& format = nvrhi::getFormatInfo(info.colorFormats[0]);
