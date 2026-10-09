@@ -8,6 +8,7 @@
 #include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/SceneSerializer.h"
 #include "Strata/Scripting/ScriptSystem.h"
+#include "Strata/Scripting/ScriptTypes.h"
 #include "TestHelpers.h"
 
 #include <algorithm>
@@ -123,6 +124,19 @@ namespace Strata::Tests
 				}
 			}
 			return checked;
+		}
+
+		// Every ScriptCallback value (derived from their names, so new callbacks are included).
+		std::vector<ScriptCallback> GetScriptCallbacks()
+		{
+			std::vector<ScriptCallback> callbacks;
+			for (uint32_t value = 0; value < 256; value++)
+			{
+				const ScriptCallback callback = static_cast<ScriptCallback>(value);
+				if (std::string_view(ScriptCallbackToString(callback)) != "Unknown")
+					callbacks.push_back(callback);
+			}
+			return callbacks;
 		}
 
 		std::vector<std::string> GetJournal(Scene& scene)
@@ -315,6 +329,16 @@ namespace Strata::Tests
 				created |= entry.rfind(prefix, 0) == 0;
 			CHECK_MESSAGE(created, "Script class ", info.Name, " never ran in the feature scene: attach it to an entity of "
 				"StrataTests/FeatureTest/Assets/Scenes/Feature.stscene (or spawn it) and journal its OnCreate");
+		}
+
+		// Every callback the engine offers ran (the scripts journal their callbacks, see FeatureScript.h).
+		for (const ScriptCallback callback : GetScriptCallbacks())
+		{
+			const std::string name = ScriptCallbackToString(callback);
+			const std::string event = "." + name + "@";
+			const bool ran = std::any_of(journal.begin(), journal.end(), [&](const std::string& entry) { return entry.find(event) != std::string::npos; });
+			CHECK_MESSAGE(ran, "Script callback ", name, " never ran: implement it in a feature script that runs and journal its call (Journal(*this, "
+				"\"<Class>\", \"", name, "\"))");
 		}
 
 		for (const char* expected : { "DoomedProbe.OnDestroy@Doomed", "Helper.OnDestroy@Script Features", "LifecycleFeatures.OnReload@Lifecycle Features",

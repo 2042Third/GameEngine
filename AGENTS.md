@@ -114,7 +114,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   - a script field type is not overridden in the scene: every C++ type the SDK accepts for fields
     (`Detail::c_IsFieldType` in `StrataScript/Script.h`) needs a feature script field of that type, registered with
     `ST_SCRIPT_FIELD` and overridden in `Feature.stscene` (and every engine property type fields map to is overridden);
-  - a `ScriptCallback` is implemented by no feature script;
+  - a `ScriptCallback` was never called during the run (feature scripts journal their callbacks, `LifecycleFeatures`
+    the first call of each, and the runners look for an entry of every callback in the journal);
   - a host function of `StrataScriptHostAPI` was never called during the run. `GetScriptHostCallCounts()`
     (`Scripting/ScriptHostAPI.h`) counts calls per table entry (Dist builds do not count); the table is built from
     `ST_SCRIPT_HOST_FUNCTIONS` in `ScriptHostAPI.cpp`, and a `static_assert` fails the build when that list and the

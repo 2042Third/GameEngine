@@ -10,7 +10,8 @@
 // Journal: OnCreate (and selected other callbacks) append "<Class>.<Event>@<Entity>;" to the Text of the scene's
 // "Journal" entity, so the runner can check events of instances that no longer exist (destroyed entities, removed
 // scripts, OnDestroy when play stops). Every class journals its OnCreate: the runner requires each class of the module
-// to have run.
+// to have run. The runner also requires an entry of every engine callback ("<Class>.OnFixedUpdate@..." etc.), so that
+// each callback is known to have been called; LifecycleFeatures journals the first call of each.
 //
 // State that spans frames lives in fields: the runner hot reloads the module halfway through play, which recreates every
 // instance and only keeps field values.

@@ -23,8 +23,12 @@ public:
 		Expect(Updates == 0 && FixedUpdates == 0 && LateUpdates == 0, "OnCreate runs before every update");
 	}
 
+	// The update callbacks journal their first call (the others journal every call): the runner requires an entry of every
+	// engine callback in the journal.
 	void OnUpdate(float) override
 	{
+		if (Updates == 0)
+			Journal(*this, "LifecycleFeatures", "OnUpdate");
 		const int32_t frame = GetFrame();
 		Expect(frame == LastUpdateFrame + 1, "OnUpdate runs once per frame");
 		Expect(LastLateFrame == LastUpdateFrame, "the previous frame ended with OnLateUpdate");
@@ -34,6 +38,8 @@ public:
 
 	void OnFixedUpdate(float fixedDeltaTime) override
 	{
+		if (FixedUpdates == 0)
+			Journal(*this, "LifecycleFeatures", "OnFixedUpdate");
 		Expect(LastUpdateFrame == GetFrame() && LastLateFrame < LastUpdateFrame, "OnFixedUpdate runs between OnUpdate and OnLateUpdate");
 		Expect(Near(fixedDeltaTime, Time::GetFixedDeltaTime()), "the fixed update gets the fixed timestep");
 		FixedUpdates++;
@@ -41,6 +47,8 @@ public:
 
 	void OnLateUpdate(float) override
 	{
+		if (LateUpdates == 0)
+			Journal(*this, "LifecycleFeatures", "OnLateUpdate");
 		Expect(LastUpdateFrame == GetFrame() && LastLateFrame < LastUpdateFrame, "OnLateUpdate follows OnUpdate");
 		LastLateFrame = GetFrame();
 		LateUpdates++;

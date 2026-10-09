@@ -101,7 +101,7 @@ namespace Strata::Tests
 	void CheckFeatureResults(Scene& scene, const ScriptEngine& engine);
 
 	// After stopping: the scene's journal ("<Class>.<Event>@<Entity>" entries the scripts record) shows that every class
-	// of the module ran, and the destruction and reload events.
+	// of the module ran, that every script callback the engine offers was called, and the destruction and reload events.
 	void CheckFeatureJournal(Scene& scene, const ScriptEngine& engine);
 
 	// The log of `runs` feature runs: every message the feature scripts log on purpose once per run, and no other warning
