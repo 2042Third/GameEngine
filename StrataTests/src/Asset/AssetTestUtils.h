@@ -15,6 +15,7 @@
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace Strata::Tests
@@ -124,18 +125,14 @@ namespace Strata::Tests
 		// with another type than c_FakeAssetType read like fake assets but fail to load (the type's real loader refuses them).
 		AssetHandle Add(uint64_t handle, const AssetMemoryUsage& usage, uint64_t storedSize = 0, AssetType type = c_FakeAssetType)
 		{
-			AssetMetadata metadata;
-			metadata.Handle = UUID(handle);
-			metadata.Type = type;
-			metadata.Path = "Fake/" + std::to_string(handle);
-			metadata.Name = metadata.Path;
-			metadata.StoredSize = storedSize;
-			{
-				std::scoped_lock<std::mutex> lock(m_Mutex);
-				m_Data[metadata.Handle] = EncodeFakeAsset(usage);
-			}
-			RegisterAsset(metadata);
-			return metadata.Handle;
+			return Register(handle, type, EncodeFakeAsset(usage), storedSize);
+		}
+
+		// Registers an asset whose stored form is `data`, decoded by the real loader of `type` (a material document, say).
+		AssetHandle AddStored(uint64_t handle, AssetType type, std::vector<uint8_t> data)
+		{
+			const uint64_t storedSize = data.size();
+			return Register(handle, type, std::move(data), storedSize);
 		}
 
 		void Remove(AssetHandle handle) { UnregisterAsset(handle); }
@@ -221,6 +218,22 @@ namespace Strata::Tests
 			}
 			outData = it->second;
 			return true;
+		}
+	private:
+		AssetHandle Register(uint64_t handle, AssetType type, std::vector<uint8_t> data, uint64_t storedSize)
+		{
+			AssetMetadata metadata;
+			metadata.Handle = UUID(handle);
+			metadata.Type = type;
+			metadata.Path = "Fake/" + std::to_string(handle);
+			metadata.Name = metadata.Path;
+			metadata.StoredSize = storedSize;
+			{
+				std::scoped_lock<std::mutex> lock(m_Mutex);
+				m_Data[metadata.Handle] = std::move(data);
+			}
+			RegisterAsset(metadata);
+			return metadata.Handle;
 		}
 	private:
 		mutable std::mutex m_Mutex;

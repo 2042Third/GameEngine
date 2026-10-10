@@ -119,10 +119,12 @@ namespace Strata
 
 	AssetFinalizeResult Material::FinalizeOnMainThread(const AssetFinalizeContext& context)
 	{
-		// Textures the manager prefetched with the material are on their way (AssetManagerBase::GetDependencies); the material
-		// requests the others itself: those of managers that know no dependencies (version 1 packs), and those no prefetch
-		// started (the budgets had no room for them then, or they were dropped on arrival).
-		if (context.Manager)
+		// Textures the manager prefetched with the material are on their way (AssetManagerBase::GetDependencies); a material
+		// that was requested asks for the others itself: those of managers that know no dependencies (version 1 packs), and
+		// those no prefetch started (the budgets had no room for them then, or they were dropped on arrival). A material that
+		// arrives only prefetched asks for nothing: its textures would load outside the room its prefetch was allowed (and
+		// requests make room by evicting), for a material nothing may ever use.
+		if (context.Manager && !context.Prefetched)
 		{
 			for (AssetHandle texture : GetTextureHandles())
 			{

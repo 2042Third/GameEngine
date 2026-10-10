@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <condition_variable>
 #include <unordered_set>
+#include <utility>
 
 namespace Strata
 {
@@ -201,8 +202,9 @@ namespace Strata
 				return nullptr;
 			TouchLocked(it->second);
 			current = it->second.Loaded; // Also the previous version while a reload is in progress
-			// A load that is still queued is raised to this priority.
-			requestLoad = it->second.State == AssetState::Unloaded || it->second.State == AssetState::Loading;
+			// A load that is still queued is raised to this priority, and the dependencies of an asset that was read while it
+			// was only prefetched are prefetched now (RequestLoad).
+			requestLoad = it->second.State == AssetState::Unloaded || it->second.State == AssetState::Loading || it->second.DependenciesDeferred;
 		}
 		if (requestLoad)
 			RequestLoad(handle, priority);
@@ -257,6 +259,8 @@ namespace Strata
 	void AssetManagerBase::RequestLoad(AssetHandle handle, AssetPriority priority, float score)
 	{
 		bool newRequest = false;
+		bool loading = false;
+		bool prefetchDependencies = false;
 		uint64_t generation = 0;
 		uint64_t storedSize = 0;
 		{
@@ -266,17 +270,18 @@ namespace Strata
 				return;
 			AssetEntry& entry = it->second;
 			TouchLocked(entry);
-			entry.PrefetchOnly = false; // Requested now: its own dependencies are prefetched when it is read
+			// Requested now: its own dependencies are prefetched when it is read, or now if it was read while it was only
+			// prefetched (see PrefetchDependencies).
+			entry.PrefetchOnly = false;
+			const bool deferred = std::exchange(entry.DependenciesDeferred, false);
 			if (entry.State == AssetState::Unloaded)
 			{
 				entry.State = AssetState::Loading;
 				entry.Error.clear();
 				newRequest = true;
 			}
-			else if (entry.State != AssetState::Loading)
-			{
-				return; // Ready or failed
-			}
+			loading = entry.State == AssetState::Loading;
+			prefetchDependencies = deferred && !newRequest && entry.State != AssetState::Failed;
 			generation = entry.Generation;
 			storedSize = entry.Metadata.StoredSize;
 		}
@@ -287,10 +292,12 @@ namespace Strata
 			m_Queue.Enqueue(handle, priority, score, storedSize, generation);
 			m_Queue.Pump();
 		}
-		else if (m_Queue.Raise(handle, priority, score))
+		else if (loading && m_Queue.Raise(handle, priority, score))
 		{
 			m_Queue.Pump();
 		}
+		if (prefetchDependencies)
+			PrefetchDependencies(handle, priority);
 	}
 
 	bool AssetManagerBase::DispatchLoad(const AssetStreamingRequest& request)
@@ -704,10 +711,12 @@ namespace Strata
 
 			Completion& completion = completions.front();
 			bool current = false;
+			bool prefetched = false; // Requested by nobody yet: its finalization requests nothing (prefetches do not chain)
 			{
 				std::scoped_lock<std::mutex> lock(m_Mutex);
 				auto it = m_Entries.find(completion.Handle);
 				current = it != m_Entries.end() && it->second.Generation == completion.Generation;
+				prefetched = current && it->second.PrefetchOnly;
 				if (!current)
 					m_Reserved -= completion.Reserved;
 			}
@@ -783,6 +792,7 @@ namespace Strata
 			if (completion.LoadedAsset)
 			{
 				AssetFinalizeContext context { commandList, this };
+				context.Prefetched = prefetched;
 				if (applyBudget)
 				{
 					context.UploadBudget = budgets.UploadBytesPerFrame - std::min(uploadedBytes, budgets.UploadBytesPerFrame);
@@ -1081,9 +1091,15 @@ namespace Strata
 		{
 			std::scoped_lock<std::mutex> lock(m_Mutex);
 			auto it = m_Entries.find(handle);
-			// Prefetches do not chain: what an asset that was only prefetched references loads once something requests it.
-			if (it == m_Entries.end() || it->second.PrefetchOnly || !PrefetchesDependencies(it->second.Metadata.Type))
+			if (it == m_Entries.end() || !PrefetchesDependencies(it->second.Metadata.Type))
 				return;
+			// Prefetches do not chain: what an asset that was only prefetched references is prefetched once something requests
+			// it (RequestLoad), and the asset requests nothing when it is finalized (AssetFinalizeContext::Prefetched).
+			if (it->second.PrefetchOnly)
+			{
+				it->second.DependenciesDeferred = true;
+				return;
+			}
 			// What is on its way already (requested loads, earlier prefetches) arrives first: prefetches take only the headroom
 			// the budgets have beside it, so they never evict anything in use. The queue's lock may be taken inside the
 			// manager's (never the other way round).
@@ -1105,6 +1121,7 @@ namespace Strata
 					entry.State = AssetState::Loading;
 					entry.Error.clear();
 					entry.PrefetchOnly = true;
+					entry.DependenciesDeferred = false; // Its read decides again
 					started.push_back(Request { dependency, entry.Generation, entry.Metadata.StoredSize });
 				}
 				else if (entry.State == AssetState::Loading)

@@ -375,7 +375,8 @@ The threading model, frame loop and pipelines these rules protect are described 
   record them (each valid handle once, never the asset itself: `AssetManagerBase::NormalizeReferences`, which code that
   compares scanned references with recorded ones uses too). Reads of requested assets other than scenes, prefabs and
   models prefetch their direct dependencies (only into the budgets' headroom beside what is on its way and a window of
-  loads in flight, never evicting, not chaining);
+  loads in flight, never evicting, not chaining: a finalizer must not request what an asset that arrives only prefetched
+  references, `AssetFinalizeContext::Prefetched`, and its dependencies are prefetched once something requests it);
   loading screens pin a whole closure with `RequestLoadWithDependencies` (`AssetGroupRequest`: progress by bytes, cancel).
 - **Residency** ([Docs/Architecture.md](Docs/Architecture.md), "Streaming and residency"): memory is bounded by budgets
   per pool (`AssetResidencyBudgets`: GPU textures 50% and GPU buffers 15% of the device's memory budget, CPU unlimited;

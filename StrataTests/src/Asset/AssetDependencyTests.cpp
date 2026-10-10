@@ -796,6 +796,85 @@ TEST_SUITE("Asset.Groups")
 		CHECK(manager->GetAssetState(UUID(0x5201)) == AssetState::Ready);
 	}
 
+	TEST_CASE("A material that arrives only prefetched requests none of its textures; they are prefetched once it is requested")
+	{
+		ScopedFakeLoader loader;
+		Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		const AssetHandle used = manager->Add(0x100, MakeUsage(100), 100);
+		const AssetHandle parent = manager->Add(0x200, MakeUsage(10), 10);
+		const AssetHandle textureA = manager->Add(0x300, MakeUsage(10'000), 10'000);
+		const AssetHandle textureB = manager->Add(0x301, MakeUsage(10'000), 10'000);
+		MaterialProperties properties;
+		properties.BaseColorMap = textureA;
+		properties.NormalMap = textureB;
+		const std::vector<uint8_t> document = ToBytes(Material::Create(properties)->Serialize());
+		const AssetHandle material = manager->AddStored(0x400, AssetType::Material, document);
+		// As the asset pipeline records them: e.g. a mesh's default material, and the material's textures.
+		manager->SetDependencies(parent, { material });
+		manager->SetDependencies(material, { textureA, textureB });
+
+		// Room for what is used, the parent and the material's prefetch beside a window of 100 bytes in flight, not for the
+		// textures: requesting them would evict.
+		const uint64_t builtin = manager->GetStats().Resident.Cpu;
+		AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
+		budgets.Cpu = builtin + 100 + 10 + 100 + document.size() + 50;
+		budgets.InFlightBytes = 100;
+		manager->SetResidencyBudgets(budgets);
+		REQUIRE(manager->LoadAssetSync(used));
+		// Past the eviction grace window of the first frames, where never requested counts as recently requested.
+		for (int frame = 0; frame < 10; frame++)
+			manager->Update();
+
+		// The parent's read prefetches the material, which arrives and is published, but asks for none of its textures.
+		manager->GetAsset(parent);
+		REQUIRE(manager->WaitForPendingLoads());
+		CHECK(manager->GetAssetState(parent) == AssetState::Ready);
+		CHECK(manager->GetAssetState(material) == AssetState::Ready);
+		CHECK(manager->GetStats().DependencyPrefetches == 1);
+		for (AssetHandle texture : { textureA, textureB })
+		{
+			CHECK(manager->GetAssetState(texture) == AssetState::Unloaded);
+			CHECK(manager->GetReadCount(texture) == 0);
+		}
+		CHECK(manager->GetAssetState(used) == AssetState::Ready);
+		CHECK(manager->GetStats().Evictions == 0);
+
+		// Requested (as whatever draws with it does), the material's textures are prefetched like a requested material's,
+		// into the room the budgets have: still none here, so the material asks for nothing.
+		CHECK(manager->GetAsset(material));
+		REQUIRE(manager->WaitForPendingLoads());
+		CHECK(manager->GetStats().DependencyPrefetches == 1);
+		CHECK(manager->GetAssetState(textureA) == AssetState::Unloaded);
+
+		// The next material that arrives only prefetched, with room for its textures once it is requested.
+		budgets.Cpu = AssetResidencyBudgets::c_Unlimited;
+		manager->SetResidencyBudgets(budgets);
+		const AssetHandle otherParent = manager->Add(0x201, MakeUsage(10), 10);
+		const AssetHandle otherMaterial = manager->AddStored(0x401, AssetType::Material, document);
+		manager->SetDependencies(otherParent, { otherMaterial });
+		manager->SetDependencies(otherMaterial, { textureA, textureB });
+		manager->GetAsset(otherParent);
+		REQUIRE(manager->WaitForPendingLoads());
+		CHECK(manager->GetAssetState(otherMaterial) == AssetState::Ready);
+		CHECK(manager->GetStats().DependencyPrefetches == 2);
+		CHECK(manager->GetAssetState(textureA) == AssetState::Unloaded);
+		CHECK(manager->GetAsset(otherMaterial));
+		REQUIRE(manager->WaitForPendingLoads());
+		CHECK(manager->GetStats().DependencyPrefetches == 4);
+		for (AssetHandle texture : { textureA, textureB })
+		{
+			CHECK(manager->GetAssetState(texture) == AssetState::Ready);
+			CHECK(manager->GetReadCount(texture) == 1);
+		}
+		// Prefetched, not requested: nothing was used, nothing evicted.
+		for (const AssetResidencyInfo& info : manager->GetResidencyInfo())
+		{
+			if (info.Handle == textureA || info.Handle == textureB)
+				CHECK(info.LastRequestedFrame == 0);
+		}
+		CHECK(manager->GetStats().Evictions == 0);
+	}
+
 	TEST_CASE("A prefetched dependency that no longer fits when it arrives is dropped unfinalized")
 	{
 		ScopedFakeLoader loader;

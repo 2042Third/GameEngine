@@ -323,7 +323,9 @@ namespace Strata
 		//   resident, reserved and still on its way (it would be uploaded only to be evicted); otherwise it is published
 		//   without making room, and is the first to be evicted until something requests it (a prefetch marks nothing as
 		//   used);
-		// - prefetches do not chain (the dependencies of an asset that was only prefetched load once something requests it);
+		// - prefetches do not chain: an asset that arrives only prefetched requests nothing when it is finalized (its finalizer
+		//   sees AssetFinalizeContext::Prefetched; a material leaves its textures alone), and its own dependencies are
+		//   prefetched, like those of a requested asset, once something requests it (GetAsset, RequestLoad, Pin);
 		// - the streaming queue bounds them like any load (in-flight bytes and reads).
 		std::vector<AssetHandle> GetDependencies(AssetHandle handle) const;
 		// The asset and everything it depends on, transitively: the asset, then breadth first, each once. Unknown handles are
@@ -411,6 +413,8 @@ namespace Strata
 			std::optional<AABB> Bounds;
 			// Loading because an asset that depends on it was read, and requested by nobody since (see GetDependencies).
 			bool PrefetchOnly = false;
+			// Read while PrefetchOnly, so its own dependencies were not prefetched: its next request prefetches them.
+			bool DependenciesDeferred = false;
 		};
 
 		struct Completion

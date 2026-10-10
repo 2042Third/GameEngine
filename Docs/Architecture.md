@@ -697,10 +697,13 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   on its way still raised its peak by about 25 MB on average); and an arrival nobody requested meanwhile is dropped
   unfinalized when what it holds does not fit beside what is resident, reserved and on its way (it would be uploaded
   only to be evicted). They are not requests either: no use is recorded, so their arrivals make no room and are evicted
-  first until something requests them, and they do not chain (an asset that was only prefetched prefetches nothing until
-  it is requested). The queue bounds them like every load. `asset.stats` reports the prefetches started and dropped.
-  Materials request the textures no prefetch is loading when they are finalized (all of them, from managers that know no
-  dependencies: version 1 packs), as they always did.
+  first until something requests them, and they do not chain: an asset that was only prefetched prefetches nothing, and
+  its finalizer requests nothing (`AssetFinalizeContext::Prefetched`), until something requests it (`GetAsset`,
+  `RequestLoad`, `Pin`); its dependencies are prefetched then, as they are when a requested asset is read. The queue
+  bounds them like every load. `asset.stats` reports the prefetches started and dropped. Requested materials request the
+  textures no prefetch is loading when they are finalized (all of them, from managers that know no dependencies:
+  version 1 packs), as they always did; a material that arrives only prefetched leaves its textures to whatever draws
+  with it (requests make room by evicting, which a prefetch must never cause).
 - **Group loads** (`RequestLoadWithDependencies`, `AssetGroupRequest`). A loading screen pins an asset's dependency closure
   (`GetDependencyClosure`, breadth first) at a priority: `Progress` (the share of the members' stored bytes that finished,
   never decreasing), `IsComplete`, `HasFailed` and `Cancel` (releases the pins and abandons the loads that have not

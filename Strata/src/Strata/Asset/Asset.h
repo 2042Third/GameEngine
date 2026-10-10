@@ -79,6 +79,10 @@ namespace Strata
 		// When set, the GPU bytes the call uploaded are added to it (upload budgets and statistics); it holds what the
 		// frame's earlier calls uploaded.
 		uint64_t* UploadedBytes = nullptr;
+		// The asset arrives as a dependency prefetch nobody has requested (see AssetManagerBase::GetDependencies): it must not
+		// request what it references, because prefetches do not chain. The manager prefetches its dependencies once
+		// something requests it, and whatever uses them requests them.
+		bool Prefetched = false;
 	};
 
 	// Memory an asset holds, per residency pool (see AssetResidencyBudgets): each pool has its own budget, because
