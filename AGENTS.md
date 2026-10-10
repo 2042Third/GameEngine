@@ -35,7 +35,7 @@ together (targets, modules, frame loop, threading, asset pipeline, scripting, ed
 | `StrataScriptCore/` | Script ABI (C header) and the header-only C++ SDK game scripts are written against. Script modules never link the engine. |
 | `StrataCLI/` | Command-line client for the editor automation API; also an MCP server (`StrataCLI mcp`). |
 | `StrataTests/` | doctest unit tests, test helpers, and the feature test project. |
-| `Samples/` | Games made through the editor by an AI agent, as projects (`.stproj`, `Assets/` with `.meta` files, `Scripts/`): `Tetris` (played and exported by the CTest `StrataEditor.Tetris`). `Samples.json` lists them; the build copies them next to the executables (`StrataSamples`), where `project.openSample` offers them as copies. Open one in place only to change the sample: `StrataEditor --project Samples/<Game>`. |
+| `Samples/` | Games made through the editor by an AI agent, as projects (`.stproj`, `Assets/` with `.meta` files, `Scripts/`): `Tetris` (played and exported by the CTest `StrataEditor.Tetris`). `Samples.json` lists them; the build copies them next to the executables (`StrataSamples`), where the launcher's Open Sample and `project.openSample` offer them as copies. Open one in place only to change the sample: `StrataEditor --project Samples/<Game>`. |
 | `CMake/` | CMake modules (configurations, compiler options, shader compilation, manifest, the build's git commit). |
 | `Tools/` | Generators whose outputs are committed (standard-library Python): `GenerateBrandAssets.py` draws the strata mark into `StrataEditor/Resources/Brand/` (PNGs, raw RGBA for the window icon, the `.ico` of the executables). |
 | `Docs/` | Documentation of how the engine works, linked to the code: `README.md` (index), `Architecture.md` (targets and dependencies, modules, frame loop, threading, asset pipeline, scripting, editor, export and runtime). |
@@ -461,15 +461,20 @@ and `AudioSystem`, the built-in "Audio" scene system.
     16, so the UI follows the UI scale (the window's content scale, or `--ui-scale`).
   - Panels are `EditorPanel`s registered with `EditorPanelRegistry` (`UI/EditorPanelRegistry.h`, built-ins in
     `EditorLayer::RegisterBuiltinPanels`): the registry begins their windows (icon and title, `###<id>`), toggles them in
-    the View menu and keeps their open state in imgui.ini (`StrataPanels`); panels never call `ImGui::Begin`.
+    the View menu and keeps their open state in imgui.ini (`StrataPanels`); panels never call `ImGui::Begin`. The launcher
+    (`Panels/WelcomePanel`) is the one panel with `EditorPanelPlacement::Launcher`: drawn instead of the dock space while
+    no project is open. Panels ask the editor window for its dialogs (New Project, Open Sample, About Strata) and for the
+    unsaved-changes question through `EditorPanelContext::Shell` (`UI/EditorShell.h`).
   - Text uses the editor's fonts (`UI/EditorFonts.h`, embedded from `StrataEditor/Resources/Fonts`): Inter for the UI
     with the Lucide icons merged in, Inter SemiBold for headers, JetBrains Mono for logs, IDs and numbers, at the type
     scale's sizes (`UI::PushFont(EditorFont, TextSize)`: 12, 14, 17, 24). Icons are text (`UI/Icons.h`, generated from the
     font by `StrataEditor/Tools/GenerateIconHeader.py`). ImGui's built-in font is never added.
-  - Controls come from the widget kit (`UI/Widgets.h`: toolbar and icon buttons, chips, status pills, section headers,
-    headings, cards, modal dialogs); every kit widget records its rectangle in `UI::ItemProbe` under its id.
+  - Controls come from the widget kit (`UI/Widgets.h`: toolbar, icon and action buttons, links, chips, status pills,
+    section headers, headings, cards and entry cards, text fields, copyable code, the brand mark, modal dialogs); every kit
+    widget records its rectangle in `UI::ItemProbe` under its id.
   - UI tests draw the real `EditorLayer` without a window or GPU through `StrataTests/src/Editor/ImGuiHarness.h` (a fake
-    `EditorHost`, ImGui's texture requests honored without a renderer, injected input, `ClickItem` by probe key).
+    `EditorHost`, ImGui's texture requests honored without a renderer, injected input and typed text, a clipboard of its
+    own, `ClickItem` by probe key) and `HarnessEditor.h` (an editor on that harness, `ReplaceText` for kit text fields).
   - Idle throttling: a windowed editor runs at the full rate while anything happens (input in the last 0.5 s, a running
     unpaused scene or pending steps, loading assets, pending commands, an automation request in the last second, a
     script build, a panel's `IsAnimating`) and otherwise at 30 frames per second (10 without the focus), through
@@ -539,7 +544,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   the viewport into `build/<preset>/StrataTests/SmokeCaptures/`) and checks that failing and unfinished scripts fail the
   process.
 - `editor.status` summarizes the editor (project, scene, play state, selection, undo history); other
-  parts of the editor add sections to it through `EditorContext::SetStatusProvider`.
+  parts of the editor add sections to it through `EditorContext::SetStatusProvider`. Its `editor` section says whether the
+  launcher shows (`launcher`), the GPU (`gpu`) and the startup time (`startupSeconds`: from the process's creation to
+  its first frame on screen, `Platform::GetProcessUptime`, also logged as "Started in ... s").
 - Mutating commands report a `warning` in their result while the scene is playing: such changes apply
   to the running copy and are discarded by `play.stop`. Unknown or missing parameters are errors.
 - **Viewport state** lives in the core: `EditorContext::GetViewport()` (`EditorViewport`) holds the editor camera
@@ -568,12 +575,22 @@ and `AudioSystem`, the built-in "Audio" scene system.
   the executable (`Editor/ProjectSamples`, `EditorContextSpecification::SamplesDirectory` in tests) and
   `project.openSample {sample, directory}` copies one (without `.strata`) into a new or empty directory and opens the
   copy; `project.close` closes the project.
+- **Launcher** (`Panels/WelcomePanel`): while no project is open the editor shows it instead of the dock space (under a
+  File and Help menu bar), until a project opens or the user picks Continue without a project; closing the project
+  shows it again. It offers New Project (`UI/ProjectDialogs`: template cards, name, location; the location used last is
+  remembered in imgui.ini, first `<home>/StrataProjects`, which keeps script build paths short), Open Project, Open
+  Sample, the recent projects as cards (context menu: show in folder, copy path, remove from list), template and sample
+  cards, "Connect an AI agent" (the exact `claude mcp add strata -- "<bin>/StrataCLI" mcp` line with a copy button, and
+  the automation state) and a footer with version, commit, GPU and startup time. Its actions report failures on it;
+  dropping a `.stproj` on the window opens that project. Help > About Strata (`UI/AboutDialog`) shows the build, GPU,
+  driver, Vulkan version, startup time and the compiled-in `ThirdPartyNotices.md`.
 - **Viewport panel** (`Panels/ViewportPanel`): renders into a texture of the panel's pixel size and takes input only
   while hovered or focused: Alt + left drag orbits, middle drag pans, the wheel dollies, right drag flies (WASD, Q/E
   down/up, Shift faster, wheel = speed), F frames the selection, Home everything, W/E/R/Q pick the gizmo (as do the main
   toolbar's tool buttons, next to the gizmo space and the snap toggle, `ViewportSettings::Snap`; holding Ctrl inverts
-  snapping). Chips over the image's top left hold the camera settings and the overlay toggles (grid, outline, gizmos,
-  stats); a strip in the play state's color tops the image while the scene runs. The selection outline is the theme's
+  snapping). Chips over the image's top left hold the camera settings, the overlay toggles (grid, outline, gizmos,
+  stats) and the editor-view settings (preview lighting, game UI); a strip in the play state's color tops the image while
+  the scene runs. The selection outline is the theme's
   accent (`ViewportSettings::SelectionColor`, set by the UI, not saved).
   Clicks pick without blocking (`EditorViewport::RequestPick` reads one pixel of the entity-ID buffer; Ctrl toggles,
   Shift adds, empty space clears) and never when they hit the gizmo. Gizmo drags go through `TransformDrag`

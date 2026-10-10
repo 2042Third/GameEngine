@@ -40,6 +40,8 @@ namespace Strata::Tests
 			uint32_t FrameRateChanges = 0; // SetMaxFrameRate calls that changed the rate
 			std::string WindowTitle;
 			uint32_t ScreenshotRequests = 0;
+			std::optional<double> ProcessUptime = 0.25;
+			std::optional<GraphicsDeviceInfo> GraphicsDevice;
 		};
 
 		explicit FakeEditorHost(Ref<State> state)
@@ -52,7 +54,10 @@ namespace Strata::Tests
 		void SetExitCode(int exitCode) override { m_State->ExitCode = exitCode; }
 		uint64_t GetFrameCount() const override { return m_State->FrameCount; }
 		double GetTime() const override { return m_State->Time; }
+		std::optional<double> GetProcessUptime() const override { return m_State->ProcessUptime; }
+		// Rendering needs a real device: the fake only describes one (GraphicsDevice), for what the UI shows about it.
 		bool HasGraphicsDevice() const override { return false; }
+		std::optional<GraphicsDeviceInfo> GetGraphicsDeviceInfo() const override { return m_State->GraphicsDevice; }
 		// No window: the layer neither opens native file dialogs nor sets a title.
 		bool HasWindow() const override { return false; }
 		void SetWindowTitle(const std::string& title) override { m_State->WindowTitle = title; }
@@ -77,7 +82,8 @@ namespace Strata::Tests
 	// - frames run NewFrame, the drawing and Render; ImGui's texture requests (the font atlas) are honored without a
 	//   renderer, marking each texture ready with a dummy id;
 	// - mouse and keyboard input is injected through ImGui's input queue and applies at the next frame;
-	// - widgets of the kit are found through UI::ItemProbe (ClickItem).
+	// - widgets of the kit are found through UI::ItemProbe (ClickItem);
+	// - the clipboard is the harness's own (GetClipboard), never the system's.
 	// ConfigDebugHighlightIdConflicts is on: GetHoveredItemIdCount tells whether the item hovered in the frame before the
 	// last shares its id with another item. One harness at a time (it owns the current ImGui context).
 	struct ImGuiHarnessSpecification
@@ -113,6 +119,8 @@ namespace Strata::Tests
 		void MoveMouse(const ImVec2& position);
 		void SetMouseButton(ImGuiMouseButton button, bool down);
 		void SetKey(ImGuiKey key, bool down);
+		// Types text into the active text field (as characters, like a keyboard's text input).
+		void TypeText(std::string_view text);
 		// Clicks the widget the probe recorded under the key in the last frame: moves the mouse onto it, presses and
 		// releases the left button over three frames of the layer. False (and no input) when the probe has no unique,
 		// enabled widget under that key.
@@ -124,6 +132,8 @@ namespace Strata::Tests
 		ImGuiID GetPreviouslyHoveredId() const;
 		// Texture creations and updates honored so far.
 		uint32_t GetTextureRequestCount() const { return m_TextureRequests; }
+		// The harness's clipboard: ImGui's copy and paste use it instead of the system's, so tests leave the user's alone.
+		const std::string& GetClipboard() const { return m_Clipboard; }
 
 		static constexpr float c_DeltaTime = 1.0f / 60.0f;
 	private:
@@ -133,6 +143,7 @@ namespace Strata::Tests
 		ImGuiLayer m_ImGuiLayer;
 		bool m_FontsLoaded = false;
 		uint32_t m_TextureRequests = 0;
+		std::string m_Clipboard;
 	};
 
 }

@@ -25,6 +25,16 @@ namespace Strata::Tests
 		// The harness stands in for a renderer that supports ImGui's texture protocol (see HonorTextureRequests).
 		io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures | ImGuiBackendFlags_RendererHasVtxOffset;
 		io.ConfigDebugHighlightIdConflicts = true;
+		ImGuiPlatformIO& platform = ImGui::GetPlatformIO();
+		platform.Platform_ClipboardUserData = &m_Clipboard;
+		platform.Platform_SetClipboardTextFn = [](ImGuiContext*, const char* text)
+		{
+			*static_cast<std::string*>(ImGui::GetPlatformIO().Platform_ClipboardUserData) = text ? text : "";
+		};
+		platform.Platform_GetClipboardTextFn = [](ImGuiContext*) -> const char*
+		{
+			return static_cast<std::string*>(ImGui::GetPlatformIO().Platform_ClipboardUserData)->c_str();
+		};
 		io.DisplaySize = specification.DisplaySize;
 		io.DeltaTime = c_DeltaTime;
 
@@ -75,6 +85,11 @@ namespace Strata::Tests
 	void ImGuiHarness::SetKey(ImGuiKey key, bool down)
 	{
 		ImGui::GetIO().AddKeyEvent(key, down);
+	}
+
+	void ImGuiHarness::TypeText(std::string_view text)
+	{
+		ImGui::GetIO().AddInputCharactersUTF8(std::string(text).c_str());
 	}
 
 	bool ImGuiHarness::ClickItem(std::string_view probeKey, Layer& layer)

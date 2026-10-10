@@ -312,8 +312,14 @@ namespace Strata
 		UI::ToggleChip("Viewport.Gizmos", Icons::Shapes, "Gizmos", &settings.ShowSceneGizmos, "Light, camera and collider shapes");
 		ImGui::SameLine();
 		UI::ToggleChip("Viewport.Stats", Icons::Gauge, "Stats", &settings.ShowStats, "Frame time, draw calls and loading assets");
+		// View settings of the editor camera outside play mode only: the game always looks the way it will ship.
+		ImGui::SameLine();
+		UI::ToggleChip("Viewport.PreviewLighting", Icons::SunMedium, "Preview lighting", &settings.PreviewLighting,
+			"Light scenes without a light of their own with a preview sun and sky, so their shapes read (editor view only: the game stays unlit)");
+		ImGui::SameLine();
+		UI::ToggleChip("Viewport.GameUI", Icons::Gamepad2, "Game UI", &settings.ShowGameUI,
+			"Show the game's screen-space text (its HUD) in the editor view; the game and the scene camera always show it");
 	}
-
 
 	////////////////////////////////////////////////////////////////////////////////
 	// Input

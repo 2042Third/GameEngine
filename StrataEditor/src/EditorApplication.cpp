@@ -32,7 +32,14 @@ namespace Strata
 		void SetExitCode(int exitCode) override { m_Application.SetExitCode(exitCode); }
 		uint64_t GetFrameCount() const override { return m_Application.GetFrameCount(); }
 		double GetTime() const override { return Time::GetTime(); }
+		std::optional<double> GetProcessUptime() const override { return Platform::GetProcessUptime(); }
 		bool HasGraphicsDevice() const override { return m_Application.GetGraphicsDevice() != nullptr; }
+
+		std::optional<GraphicsDeviceInfo> GetGraphicsDeviceInfo() const override
+		{
+			const GraphicsDevice* device = m_Application.GetGraphicsDevice();
+			return device ? std::optional<GraphicsDeviceInfo>(device->GetInfo()) : std::nullopt;
+		}
 
 		bool HasWindow() const override { return m_Application.GetWindow() != nullptr; }
 

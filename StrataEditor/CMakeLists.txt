@@ -55,6 +55,8 @@ strata_embed_file(StrataEditorUI "${STRATA_EDITOR_FONTS_DIR}/Inter-Regular.ttf" 
 strata_embed_file(StrataEditorUI "${STRATA_EDITOR_FONTS_DIR}/Inter-SemiBold.ttf" GetInterSemiBoldFont)
 strata_embed_file(StrataEditorUI "${STRATA_EDITOR_FONTS_DIR}/JetBrainsMono-Regular.ttf" GetJetBrainsMonoFont)
 strata_embed_file(StrataEditorUI "${STRATA_EDITOR_FONTS_DIR}/Lucide.ttf" GetLucideFont)
+# About Strata shows the third-party notices (UI/AboutDialog.cpp).
+strata_embed_file(StrataEditorUI "${PROJECT_SOURCE_DIR}/ThirdPartyNotices.md" GetThirdPartyNotices)
 
 set(STRATA_EDITOR_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/EditorApplication.cpp")
 add_executable(StrataEditor ${STRATA_EDITOR_SOURCES})
@@ -76,8 +78,8 @@ foreach(size IN ITEMS 16 32 48)
 	strata_embed_file(StrataEditor "${CMAKE_CURRENT_SOURCE_DIR}/Resources/Brand/StrataMark${size}.rgba" GetStrataMark${size})
 endforeach()
 
-# The sample projects next to the executables, where the editor offers them (project.openSample copies one into a new
-# directory). Synced at every build, without local editor data (CMake/StrataCopySamples.cmake).
+# The sample projects next to the executables, where the editor's launcher offers them (Open Sample copies one into a
+# folder the user picks). Synced at every build, without local editor data (CMake/StrataCopySamples.cmake).
 add_custom_target(StrataSamples
 	COMMAND "${CMAKE_COMMAND}" "-DSOURCE=${PROJECT_SOURCE_DIR}/Samples" "-DDESTINATION=$<TARGET_FILE_DIR:StrataEditor>/Samples"
 		-P "${PROJECT_SOURCE_DIR}/CMake/StrataCopySamples.cmake"

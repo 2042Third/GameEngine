@@ -57,15 +57,17 @@ Binaries land in `build/<preset>/bin/<Config>/`:
 
 | Executable | Purpose |
 | --- | --- |
-| `StrataEditor` | The editor. `--project <dir>` opens a project, `--commands <script.json>` runs editor commands at startup, `--headless` runs without UI for automation. |
+| `StrataEditor` | The editor. Without a project it opens its launcher (recent projects, templates, samples, connecting an AI agent). `--project <dir>` opens a project, `--commands <script.json>` runs editor commands at startup, `--headless` runs without UI for automation. |
 | `StrataRuntime` | Plays an exported game; the export copies it next to the game files under the game's name. |
 | `StrataCLI` | Command-line client and MCP server (`StrataCLI mcp`) for controlling a running editor. |
 | `StrataTests` | Unit, integration, GPU and end-to-end tests (doctest). |
 
 ## Making a game
 
-1. Start the editor and create a project (**File > New Project**). The project gets a `Scripts/` folder with
-   a CMake project for its C++ scripts. Drop models, textures and sounds onto the window to import them.
+1. Start the editor and create a project from its launcher (**New Project**, or **File > New Project**): pick a
+   template (Basic 3D starts lit, with a camera, a sun, a sky and a ground), a name and a location. The project gets a
+   `Scripts/` folder with a CMake project for its C++ scripts. Drop models, textures and sounds onto the window to
+   import them.
 2. Build scenes in the viewport, hierarchy and inspector. Write scripts in `Scripts/`, build them with
    **Scripts > Build Scripts** (Ctrl+B), attach them in the inspector, and try the scene with **Play**. Rebuilding
    while the game plays hot reloads the scripts.
@@ -76,8 +78,8 @@ Binaries land in `build/<preset>/bin/<Config>/`:
 Games can be play-tested without a person: while a game runs in the editor, the `input.key`, `input.mouseButton`,
 `input.mouseMove` and `input.scroll` commands press keys and buttons the way a player would, and `viewport.capture`
 returns the frame as a PNG. [`Samples/Tetris`](Samples/Tetris) is a complete game an AI agent made this way, entirely
-through editor commands: open it with `StrataEditor --project Samples/Tetris`, build its scripts (Ctrl+B) and press Play
-(arrow keys, Space, Z, P, R).
+through editor commands: open a copy of it from the launcher (**Open Sample**), build its scripts (Ctrl+B) and press
+Play (arrow keys, Space, Z, P, R).
 
 Every step is also available as an editor command. For example, this command script creates a lit cube
 and saves the scene:

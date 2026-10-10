@@ -1,10 +1,12 @@
 #include "EditorLayer.h"
 
+#include "Editor/GameExport.h"
 #include "Panels/ConsolePanel.h"
 #include "Panels/ContentBrowserPanel.h"
 #include "Panels/InspectorPanel.h"
 #include "Panels/SceneHierarchyPanel.h"
 #include "Panels/ViewportPanel.h"
+#include "Panels/WelcomePanel.h"
 #include "UI/EditorFonts.h"
 #include "UI/FileDialogs.h"
 #include "UI/Icons.h"
@@ -58,6 +60,13 @@ namespace Strata
 			return fmt::format("{:.1f} MB", static_cast<double>(bytes) / (1024.0 * 1024.0));
 		}
 
+		nlohmann::json DescribeGraphicsDevice(const std::optional<GraphicsDeviceInfo>& device)
+		{
+			if (!device)
+				return nullptr;
+			return { { "name", device->AdapterName }, { "driver", device->DriverVersion }, { "api", device->API }, { "apiVersion", device->APIVersion } };
+		}
+
 	}
 
 	EditorLayer::EditorLayer(const EditorOptions& options, Scope<EditorHost> host)
@@ -70,12 +79,14 @@ namespace Strata
 
 	void EditorLayer::RegisterBuiltinPanels()
 	{
-		auto add = [this](const char* id, const char* title, const char* icon, std::function<Scope<EditorPanel>()> create)
+		auto add = [this](const char* id, const char* title, const char* icon, std::function<Scope<EditorPanel>()> create,
+			EditorPanelPlacement placement = EditorPanelPlacement::Docked)
 		{
 			EditorPanelDescriptor descriptor;
 			descriptor.Id = id;
 			descriptor.Title = title;
 			descriptor.Icon = icon;
+			descriptor.Placement = placement;
 			descriptor.Create = std::move(create);
 			std::string error;
 			if (!m_Panels.Register(std::move(descriptor), &error))
@@ -87,6 +98,7 @@ namespace Strata
 		add(EditorPanels::c_Inspector, "Inspector", Icons::SlidersHorizontal, []() { return CreateScope<InspectorPanel>(); });
 		add(EditorPanels::c_Console, "Console", Icons::Terminal, []() { return CreateScope<ConsolePanel>(); });
 		add(EditorPanels::c_ContentBrowser, "Content Browser", Icons::FolderOpen, []() { return CreateScope<ContentBrowserPanel>(); });
+		add(EditorPanels::c_Welcome, "Welcome", Icons::House, []() { return CreateScope<WelcomePanel>(); }, EditorPanelPlacement::Launcher);
 
 		if (ContentBrowserPanel* contentBrowser = m_Panels.Get<ContentBrowserPanel>(EditorPanels::c_ContentBrowser))
 		{
@@ -100,9 +112,15 @@ namespace Strata
 	void EditorLayer::OnAttach()
 	{
 		if (!m_Options.Headless && m_Host->HasWindow())
-			FileDialogs::Init();
+			m_ProjectDialogs.SetFolderPickerAvailable(FileDialogs::Init());
 		if (ImGui::GetCurrentContext())
+		{
 			m_Panels.InstallSettingsHandler();
+			m_ProjectDialogs.InstallSettingsHandler();
+		}
+		// The automation client agents connect through (the launcher shows how), when it was built next to the editor.
+		if (const std::filesystem::path cli = Platform::GetExecutableDirectory() / GetExecutableFileName("StrataCLI"); FileSystem::IsRegularFile(cli))
+			m_CLIExecutable = cli;
 		// The selection outline carries the accent, like selected rows.
 		m_Context.GetViewport().GetSettings().SelectionColor = ToVec4(UI::GetThemeColors().Accent);
 		// Startup counts as activity: the layout settles at the full rate.
@@ -112,7 +130,7 @@ namespace Strata
 		{
 			std::string error;
 			if (!m_Context.OpenProject(m_Options.ProjectPath, &error))
-				ST_ERROR("Could not open the project '{}': {}", FileSystem::ToUTF8(m_Options.ProjectPath), error);
+				ReportError(fmt::format("Could not open the project '{}': {}", FileSystem::ToUTF8(m_Options.ProjectPath), error));
 		}
 
 		m_Context.SetStatusProvider(c_EditorStatusSection, [this]()
@@ -130,6 +148,9 @@ namespace Strata
 				{ "frame", m_Host->GetFrameCount() },
 				{ "maxFrames", m_Options.MaxFrames ? nlohmann::json(*m_Options.MaxFrames) : nlohmann::json(nullptr) },
 				{ "uiScale", m_Host->GetUIScale() },
+				{ "launcher", IsLauncherShown() },
+				{ "startupSeconds", m_StartupSeconds ? nlohmann::json(*m_StartupSeconds) : nlohmann::json(nullptr) },
+				{ "gpu", DescribeGraphicsDevice(m_Host->GetGraphicsDeviceInfo()) },
 				{ "frameRate", {
 					{ "average", GetAverageFrameRate() },
 					{ "cap", m_Host->GetMaxFrameRate() },
@@ -206,10 +227,11 @@ namespace Strata
 		m_CommandRunner.CancelAll("The editor is closing");
 		if (m_UIDrawn)
 		{
-			EditorPanelContext panelContext { m_Context, m_Commands, m_CommandRunner };
+			EditorPanelContext panelContext = MakePanelContext();
 			m_Panels.OnDetach(panelContext);
 		}
 		m_Panels.RemoveSettingsHandler();
+		m_ProjectDialogs.RemoveSettingsHandler();
 		m_Automation.Stop();
 		m_Context.SetStatusProvider(c_EditorStatusSection, nullptr);
 		m_Context.CloseProject();
@@ -218,7 +240,18 @@ namespace Strata
 
 	void EditorLayer::OnUpdate(Timestep timestep)
 	{
+		// The first frame is on screen once the second one starts: that is when the editor has started.
+		if (!m_StartupMeasured && m_Host->GetFrameCount() >= 1)
+		{
+			m_StartupMeasured = true;
+			m_StartupSeconds = m_Host->GetProcessUptime();
+			if (m_StartupSeconds)
+				ST_INFO("Started in {:.2f} s", *m_StartupSeconds);
+		}
 		m_Context.Update(timestep);
+		// The launcher returns when the next project closes.
+		if (m_Context.HasProject())
+			m_LauncherDismissed = false;
 		m_CommandRunner.Update(m_Context);
 		m_Automation.Update();
 		UpdateCommandScript();
@@ -237,7 +270,7 @@ namespace Strata
 			m_FrameTimes.pop_front();
 		if (!m_Options.Headless)
 		{
-			EditorPanelContext panelContext { m_Context, m_Commands, m_CommandRunner };
+			EditorPanelContext panelContext = MakePanelContext();
 			m_Panels.OnUpdate(panelContext);
 		}
 
@@ -285,14 +318,18 @@ namespace Strata
 	{
 		if (!m_Host->HasWindow())
 			return;
+		// The launcher has no scene to name.
 		std::string title = "Strata Editor";
-		if (m_Context.HasProject())
-			title += " - " + m_Context.GetProject()->GetConfig().Name;
-		title += " - " + m_Context.GetEditScene()->GetName();
-		if (m_Context.IsSceneModified())
-			title += " *";
-		if (m_Context.IsPlaying())
-			title += fmt::format(" [{}]", SceneStateToString(m_Context.GetSceneState()));
+		if (!IsLauncherShown())
+		{
+			if (m_Context.HasProject())
+				title += " - " + m_Context.GetProject()->GetConfig().Name;
+			title += " - " + m_Context.GetEditScene()->GetName();
+			if (m_Context.IsSceneModified())
+				title += " *";
+			if (m_Context.IsPlaying())
+				title += fmt::format(" [{}]", SceneStateToString(m_Context.GetSceneState()));
+		}
 		if (title != m_WindowTitle)
 		{
 			m_Host->SetWindowTitle(title);
@@ -304,10 +341,19 @@ namespace Strata
 	{
 		m_UIDrawn = true;
 		TrackInput();
-		HandleShortcuts();
-		DrawDockspace();
-		EditorPanelContext panelContext { m_Context, m_Commands, m_CommandRunner };
-		m_Panels.OnImGuiRender(panelContext);
+		EditorPanelContext panelContext = MakePanelContext();
+		if (IsLauncherShown())
+		{
+			DrawLauncher(panelContext);
+		}
+		else
+		{
+			HandleShortcuts();
+			DrawDockspace();
+			m_Panels.OnImGuiRender(panelContext);
+		}
+		m_ProjectDialogs.Draw(panelContext);
+		m_AboutDialog.Draw(GetEnvironment());
 		DrawUnsavedChangesModal();
 		if (m_ShowImGuiDemo)
 			ImGui::ShowDemoWindow(&m_ShowImGuiDemo);
@@ -330,9 +376,25 @@ namespace Strata
 		});
 		dispatcher.Dispatch<WindowFileDropEvent>([this](WindowFileDropEvent& drop)
 		{
+			// A project file dropped on the editor opens that project (on the launcher too).
+			const std::vector<std::filesystem::path>& paths = drop.GetPaths();
+			const auto project = std::find_if(paths.begin(), paths.end(), [](const std::filesystem::path& path)
+			{
+				return FileSystem::ToUTF8(path.extension()) == Project::c_FileExtension && FileSystem::IsRegularFile(path);
+			});
+			if (project != paths.end())
+			{
+				RequestDiscardChanges([this, file = *project]()
+				{
+					const EditorCommandResult result = m_Commands.Execute(m_Context, "project.open", { { "path", FileSystem::ToUTF8(file) } });
+					if (!result.Success)
+						ReportError(fmt::format("Could not open {}: {}", FileSystem::ToUTF8(file), result.Error));
+				});
+				return true;
+			}
 			if (!m_Context.HasProject())
 			{
-				ST_WARN("Open or create a project before importing files");
+				ReportError("Open or create a project before importing files (a dropped .stproj file opens its project)");
 				return true;
 			}
 			if (ContentBrowserPanel* contentBrowser = m_Panels.Get<ContentBrowserPanel>(EditorPanels::c_ContentBrowser))
@@ -446,6 +508,93 @@ namespace Strata
 		action();
 	}
 
+	void EditorLayer::ReportError(const std::string& message)
+	{
+		ST_ERROR("{}", message);
+		if (IsLauncherShown())
+		{
+			if (WelcomePanel* welcome = m_Panels.Get<WelcomePanel>(EditorPanels::c_Welcome))
+				welcome->ShowError(message);
+		}
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
+	// Shell (what panels ask of the editor window)
+	////////////////////////////////////////////////////////////////////////////////
+
+	EditorPanelContext EditorLayer::MakePanelContext()
+	{
+		return EditorPanelContext { m_Context, m_Commands, m_CommandRunner, this };
+	}
+
+	bool EditorLayer::IsLauncherShown() const
+	{
+		return !m_Options.Headless && !m_Context.HasProject() && !m_LauncherDismissed && m_Panels.HasLauncher();
+	}
+
+	void EditorLayer::ShowNewProjectDialog(const std::string& templateId)
+	{
+		// Asked first: creating the project replaces the scene, and the dialog should not stand between the question and it.
+		RequestDiscardChanges([this, templateId]()
+		{
+			EditorPanelContext panelContext = MakePanelContext();
+			m_ProjectDialogs.OpenNewProject(panelContext, templateId);
+		});
+	}
+
+	void EditorLayer::ShowOpenSampleDialog(const std::string& sampleId)
+	{
+		RequestDiscardChanges([this, sampleId]()
+		{
+			EditorPanelContext panelContext = MakePanelContext();
+			std::string error;
+			if (!m_ProjectDialogs.OpenSample(panelContext, sampleId, &error))
+				ReportError(fmt::format("The sample '{}' cannot be opened: {}", sampleId, error));
+		});
+	}
+
+	void EditorLayer::ShowOpenProjectDialog()
+	{
+		std::optional<std::filesystem::path> file = FileDialogs::OpenFile({ { "Strata Project", "stproj" } }, m_ProjectDialogs.GetLocation());
+		if (!file)
+			return;
+		RequestDiscardChanges([this, file = *file]()
+		{
+			const EditorCommandResult result = m_Commands.Execute(m_Context, "project.open", { { "path", FileSystem::ToUTF8(file) } });
+			if (!result.Success)
+				ReportError(fmt::format("Could not open {}: {}", FileSystem::ToUTF8(file), result.Error));
+		});
+	}
+
+	void EditorLayer::ShowAboutDialog()
+	{
+		m_AboutDialog.Open();
+	}
+
+	void EditorLayer::DismissLauncher()
+	{
+		m_LauncherDismissed = true;
+	}
+
+	EditorEnvironment EditorLayer::GetEnvironment() const
+	{
+		EditorEnvironment environment;
+		environment.GraphicsDevice = m_Host->GetGraphicsDeviceInfo();
+		environment.StartupSeconds = m_StartupSeconds;
+		environment.UIScale = m_Host->GetUIScale();
+		environment.CLIExecutable = m_CLIExecutable;
+		return environment;
+	}
+
+	EditorAutomationState EditorLayer::GetAutomationState() const
+	{
+		EditorAutomationState state;
+		state.Running = m_Automation.IsRunning();
+		state.Port = state.Running ? m_Automation.GetPort() : 0;
+		state.Clients = state.Running ? m_Automation.GetClientCount() : 0;
+		return state;
+	}
+
 	bool EditorLayer::SaveScene()
 	{
 		if (m_Context.IsPlaying())
@@ -476,31 +625,6 @@ namespace Strata
 			return false;
 		}
 		return !RunEditorCommand(m_Context, m_Commands, "scene.saveAs", { { "path", FileSystem::ToUTF8(relative) } }).is_null();
-	}
-
-	void EditorLayer::NewProject()
-	{
-		std::optional<std::filesystem::path> directory = FileDialogs::PickFolder();
-		if (!directory)
-			return;
-		// People start from the lit template; "empty" stays the command's default for automation.
-		RequestDiscardChanges([this, directory = *directory]()
-		{
-			RunEditorCommand(m_Context, m_Commands, "project.create",
-				{ { "directory", FileSystem::ToUTF8(directory) }, { "name", FileSystem::ToUTF8(directory.filename()) },
-					{ "template", std::string(ProjectTemplates::c_Basic3D) } });
-		});
-	}
-
-	void EditorLayer::OpenProject()
-	{
-		std::optional<std::filesystem::path> file = FileDialogs::OpenFile({ { "Strata Project", "stproj" } });
-		if (!file)
-			return;
-		RequestDiscardChanges([this, file = *file]()
-		{
-			RunEditorCommand(m_Context, m_Commands, "project.open", { { "path", FileSystem::ToUTF8(file) } });
-		});
 	}
 
 	void EditorLayer::DeleteSelection()
@@ -560,6 +684,27 @@ namespace Strata
 		ImGui::DockBuilderFinish(dockspaceId);
 		// The Content Browser is the bottom area's visible tab on first run.
 		m_Panels.SelectTab(EditorPanels::c_ContentBrowser, bottom);
+	}
+
+	void EditorLayer::DrawLauncher(EditorPanelContext& panelContext)
+	{
+		const ImGuiViewport* viewport = ImGui::GetMainViewport();
+		ImGui::SetNextWindowPos(viewport->WorkPos);
+		ImGui::SetNextWindowSize(viewport->WorkSize);
+		ImGui::SetNextWindowViewport(viewport->ID);
+		const ImGuiWindowFlags windowFlags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar
+			| ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar
+			| ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoSavedSettings;
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+		ImGui::PushStyleColor(ImGuiCol_WindowBg, UI::GetThemeColors().Chrome);
+		ImGui::Begin("EditorLauncher", nullptr, windowFlags);
+		ImGui::PopStyleColor();
+		ImGui::PopStyleVar(3);
+		DrawMenuBar();
+		m_Panels.DrawLauncher(panelContext);
+		ImGui::End();
 	}
 
 	void EditorLayer::DrawDockspace()
@@ -632,25 +777,51 @@ namespace Strata
 		if (!ImGui::BeginMenuBar())
 			return;
 
+		// The launcher offers only what makes sense before a project is open.
+		const bool launcher = IsLauncherShown();
 		if (ImGui::BeginMenu("File"))
 		{
 			if (ImGui::MenuItem("New Project..."))
-				NewProject();
+				ShowNewProjectDialog({});
 			if (ImGui::MenuItem("Open Project..."))
-				OpenProject();
-			ImGui::Separator();
-			if (ImGui::MenuItem("New Scene", nullptr, false, !m_Context.IsPlaying()))
-				RequestDiscardChanges([this]() { RunEditorCommand(m_Context, m_Commands, "scene.new"); });
-			if (ImGui::MenuItem("Save Scene", "Ctrl+S", false, !m_Context.IsPlaying()))
-				SaveScene();
-			if (ImGui::MenuItem("Save Scene As...", "Ctrl+Shift+S", false, m_Context.HasProject() && !m_Context.IsPlaying()))
-				SaveSceneAs();
-			if (ImGui::MenuItem("Set as Start Scene", nullptr, false, m_Context.HasProject() && m_Context.GetSceneHandle().IsValid()))
-				RunEditorCommand(m_Context, m_Commands, "project.setStartScene", { { "scene", UUIDToJson(m_Context.GetSceneHandle()) } });
+				ShowOpenProjectDialog();
+			if (ImGui::BeginMenu("Open Sample"))
+			{
+				DrawSampleMenu();
+				ImGui::EndMenu();
+			}
+			if (!launcher)
+			{
+				if (ImGui::MenuItem("Close Project", nullptr, false, m_Context.HasProject()))
+					RequestDiscardChanges([this]() { RunEditorCommand(m_Context, m_Commands, "project.close"); });
+				ImGui::Separator();
+				if (ImGui::MenuItem("New Scene", nullptr, false, !m_Context.IsPlaying()))
+					RequestDiscardChanges([this]() { RunEditorCommand(m_Context, m_Commands, "scene.new"); });
+				if (ImGui::MenuItem("Save Scene", "Ctrl+S", false, !m_Context.IsPlaying()))
+					SaveScene();
+				if (ImGui::MenuItem("Save Scene As...", "Ctrl+Shift+S", false, m_Context.HasProject() && !m_Context.IsPlaying()))
+					SaveSceneAs();
+				if (ImGui::MenuItem("Set as Start Scene", nullptr, false, m_Context.HasProject() && m_Context.GetSceneHandle().IsValid()))
+					RunEditorCommand(m_Context, m_Commands, "project.setStartScene", { { "scene", UUIDToJson(m_Context.GetSceneHandle()) } });
+			}
 			ImGui::Separator();
 			if (ImGui::MenuItem("Exit"))
 				RequestDiscardChanges([this]() { m_Host->Close(); });
 			ImGui::EndMenu();
+		}
+
+		if (launcher)
+		{
+			if (ImGui::BeginMenu("Help"))
+			{
+				if (ImGui::MenuItem("About Strata"))
+					ShowAboutDialog();
+				if (m_Options.ShowImGuiDemo)
+					ImGui::MenuItem("ImGui Demo", nullptr, &m_ShowImGuiDemo);
+				ImGui::EndMenu();
+			}
+			ImGui::EndMenuBar();
+			return;
 		}
 
 		if (ImGui::BeginMenu("Edit"))
@@ -703,14 +874,38 @@ namespace Strata
 			ImGui::EndMenu();
 		}
 
-		// ImGui's demo is a reference for UI work, not part of the product: only with --imgui-demo.
-		if (m_Options.ShowImGuiDemo && ImGui::BeginMenu("Help"))
+		if (ImGui::BeginMenu("Help"))
 		{
-			ImGui::MenuItem("ImGui Demo", nullptr, &m_ShowImGuiDemo);
+			if (ImGui::MenuItem("About Strata"))
+				ShowAboutDialog();
+			// ImGui's demo is a reference for UI work, not part of the product: only with --imgui-demo.
+			if (m_Options.ShowImGuiDemo)
+				ImGui::MenuItem("ImGui Demo", nullptr, &m_ShowImGuiDemo);
 			ImGui::EndMenu();
 		}
 
 		ImGui::EndMenuBar();
+	}
+
+	void EditorLayer::DrawSampleMenu()
+	{
+		if (!m_SampleMenuRead)
+		{
+			m_SampleMenuRead = true;
+			const EditorCommandResult result = m_Commands.Execute(m_Context, "project.samples", nlohmann::json::object());
+			if (result.Success && result.Value.contains("samples"))
+			{
+				for (const nlohmann::json& sample : result.Value["samples"])
+					m_SampleMenu.emplace_back(sample.value("id", ""), sample.value("name", ""));
+			}
+		}
+		if (m_SampleMenu.empty())
+			ImGui::MenuItem("No samples were installed", nullptr, false, false);
+		for (const auto& [id, name] : m_SampleMenu)
+		{
+			if (ImGui::MenuItem((name + "...").c_str()))
+				ShowOpenSampleDialog(id);
+		}
 	}
 
 	void EditorLayer::DrawToolbar()

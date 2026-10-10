@@ -77,6 +77,7 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | Which projects did the user (or an agent) open lately? | `editor.recentProjects` (name, project file path for `project.open`, `lastOpened`); `editor.removeRecentProject {path}` takes one off |
 | What can a new project or scene start from? | `project.templates` (`empty`, `basic3d`) |
 | Is there a finished game to learn from? | `project.samples` (e.g. `Tetris`); `project.openSample {sample, directory}` opens a copy in a new directory (the sample stays as shipped; build its scripts with `script.build` before playing) |
+| Does the person at the editor see the launcher or the editor? | `editor.status` (`editor.launcher`; also `editor.gpu` and `editor.startupSeconds`) |
 | Which commands and parameters exist? | `editor.commands` (or `list --json`) |
 | Which components and properties (types, ranges, enum values)? | `component.list` |
 | Which assets exist? | `asset.list` (`type`, `path` filters), `asset.info` |
@@ -102,6 +103,10 @@ editor started with `--no-gpu` (use `--headless`):
 - `camera.get`; `camera.set {position?, target?, yaw?, pitch?, distance?, fov?, near?, far?, flySpeed?}`;
   `camera.focus {entities?}` frames the given (or selected) entities. Every scene remembers its own editor camera; a
   scene opened for the first time is framed on what it renders, seen from the direction of its primary camera.
+- A windowed editor without a project shows its launcher (recent projects, templates, samples, how to connect an
+  agent) instead of the editor; opening or creating a project (`project.open`, `project.create`, `project.openSample`)
+  shows the editor, and `project.close` returns to the launcher. Changes to the untitled scene are not visible to the
+  person while the launcher shows: create or open a project first.
 - Game logic: write C++ scripts into the project's `Scripts/` folder and use `script.build`, `script.status`,
   `script.add`, `script.setField`, `script.reload` (see `.claude/skills/strata-scripting/SKILL.md`, "The workflow in a
   game project"). Builds need CMake and the engine's compiler on the machine; they work with `--no-gpu`.

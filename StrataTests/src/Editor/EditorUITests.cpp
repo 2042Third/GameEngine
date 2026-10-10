@@ -1,9 +1,9 @@
 #include <doctest/doctest.h>
 
 #include "Audio/AudioTestUtils.h"
+#include "Editor/HarnessEditor.h"
 #include "Editor/ImGuiHarness.h"
 #include "EditorLayer.h"
-#include "FeatureTest/FeatureTestUtils.h"
 #include "Panels/ConsolePanel.h"
 #include "Panels/ViewportPanel.h"
 #include "TestHelpers.h"
@@ -32,76 +32,6 @@ using namespace Strata::Tests;
 
 namespace
 {
-
-	// An EditorLayer drawn by an ImGuiHarness through a fake host: no automation, no file watchers, no native dialogs.
-	struct HarnessEditor
-	{
-		Ref<FakeEditorHost::State> Host = CreateRef<FakeEditorHost::State>();
-		ImGuiHarness Harness;
-		Scope<EditorLayer> Layer;
-
-		// iniSettings: imgui.ini contents loaded before the first frame (the editor's saved layout and panel states).
-		explicit HarnessEditor(const ImGuiHarness::Specification& specification = {}, EditorOptions options = {}, const std::string& iniSettings = {})
-			: Harness(specification)
-		{
-			options.EnableAutomation = false;
-			options.WatchFiles = false;
-			Host->UIScale = specification.ContentScale;
-			Layer = CreateScope<EditorLayer>(options, CreateScope<FakeEditorHost>(Host));
-			Layer->OnAttach();
-			if (!iniSettings.empty())
-				ImGui::LoadIniSettingsFromMemory(iniSettings.c_str(), iniSettings.size());
-		}
-
-		~HarnessEditor()
-		{
-			Layer->OnDetach();
-		}
-
-		HarnessEditor(const HarnessEditor&) = delete;
-		HarnessEditor& operator=(const HarnessEditor&) = delete;
-
-		// Frames of the application: the host's clock and frame count advance with them.
-		void Frames(int count, float seconds = ImGuiHarness::c_DeltaTime)
-		{
-			for (int frame = 0; frame < count; frame++)
-			{
-				Host->Time += seconds;
-				Harness.Frame(*Layer, seconds);
-				Host->FrameCount++;
-			}
-		}
-
-		bool Click(std::string_view probeKey)
-		{
-			Host->Time += 3.0 * ImGuiHarness::c_DeltaTime;
-			const bool clicked = Harness.ClickItem(probeKey, *Layer);
-			Host->FrameCount += 3;
-			return clicked;
-		}
-
-		EditorContext& Context() { return Layer->GetContext(); }
-
-		nlohmann::json Run(std::string_view name, const nlohmann::json& parameters = nlohmann::json::object())
-		{
-			const EditorCommandResult result = Layer->GetCommands().Execute(Context(), name, parameters);
-			INFO(std::string(name), ": ", result.Error);
-			REQUIRE(result.Success);
-			return result.Value;
-		}
-
-		ImGuiWindow* FindPanelWindow(const char* id)
-		{
-			return ImGui::FindWindowByName(Layer->GetPanels().GetWindowName(id).c_str());
-		}
-	};
-
-	EditorOptions WithFeatureProject(const std::string& directoryName)
-	{
-		EditorOptions options;
-		options.ProjectPath = CopyFeatureProject(CreateTemporaryDirectory(directoryName) / "Project");
-		return options;
-	}
 
 	float GetWindowFraction(ImGuiWindow* window, const ImVec2& display, bool width)
 	{
@@ -328,9 +258,11 @@ TEST_SUITE("Editor.UI")
 
 	TEST_CASE("Panels close and reopen, and imgui.ini remembers which are open")
 	{
+		// Without a project, past the launcher (Continue without a project): the dock space and its panels.
 		std::string settings;
 		{
 			HarnessEditor editor;
+			editor.Layer->DismissLauncher();
 			editor.Frames(2);
 			EditorPanelRegistry& panels = editor.Layer->GetPanels();
 			CHECK(panels.IsOpen(EditorPanels::c_Console));
@@ -350,6 +282,7 @@ TEST_SUITE("Editor.UI")
 		{
 			// A new session with those settings keeps the Console closed until it is focused (e.g. by the errors pill).
 			HarnessEditor editor({}, {}, settings);
+			editor.Layer->DismissLauncher();
 			editor.Frames(2);
 			EditorPanelRegistry& panels = editor.Layer->GetPanels();
 			CHECK_FALSE(panels.IsOpen(EditorPanels::c_Console));
@@ -368,6 +301,7 @@ TEST_SUITE("Editor.UI")
 			const std::string version = "Version=" + std::to_string(EditorLayer::c_LayoutVersion);
 			outdated.replace(outdated.find(version), version.size(), "Version=1");
 			HarnessEditor editor({}, {}, outdated);
+			editor.Layer->DismissLauncher();
 			editor.Frames(2);
 			CHECK(editor.Layer->GetPanels().IsOpen(EditorPanels::c_Console));
 		}
@@ -505,7 +439,9 @@ TEST_SUITE("Editor.UI")
 
 	TEST_CASE("The status bar counts unread errors and opens the Console")
 	{
+		// The status bar belongs to the editor past the launcher.
 		HarnessEditor editor;
+		editor.Layer->DismissLauncher();
 		editor.Frames(2);
 		CHECK_FALSE(UI::ItemProbe::Find("Status.Errors").has_value());
 		editor.Layer->GetPanels().SetOpen(EditorPanels::c_Console, false);

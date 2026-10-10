@@ -441,12 +441,25 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
 
 - **UI** (`StrataEditorUI`). `EditorLayer` (`StrataEditor/src/EditorLayer.h`) reaches the application only through
   `EditorHost` (close, exit code, frame count, time, window title, size and focus, UI scale, frame rate cap,
-  screenshots), which `EditorApplication.cpp` implements on `Application` and the UI tests fake. Each frame it draws the
+  screenshots, process uptime, GPU description), which `EditorApplication.cpp` implements on `Application` and the UI
+  tests fake. Each frame it draws either the **launcher** or the editor. While no project is open (and the user did not
+  choose Continue without a project) it draws a window with a short menu bar (File, Help) and the launcher panel
+  (`Panels/WelcomePanel`, registered with `EditorPanelPlacement::Launcher` and drawn by `EditorPanelRegistry::DrawLauncher`
+  instead of the docked panels): a hero band with the strata, New Project, Open Project and Open Sample, the recent
+  projects as cards, template and sample cards, "Connect an AI agent" (the `claude mcp add` line for `StrataCLI mcp`
+  next to the editor, and the automation server's state) and a footer with the version, commit, GPU and the startup time
+  (process creation to the first frame on screen, `Platform::GetProcessUptime`). Otherwise it draws the
   dock space host (menu bar, the main toolbar under it, the dock space) and the status bar, then the panels through
   `EditorPanelRegistry` (`UI/EditorPanelRegistry.h`), which begins each open panel's window (`###<id>` names, so docking
   and settings survive title changes), asks the panel for window options, calls `OnImGuiRender` while it is visible
   and `OnHidden` otherwise, and saves which panels are open with the layout version in imgui.ini (`StrataPanels`); a
-  saved layout of another version is replaced by the default one (`EditorLayer::c_LayoutVersion`). The look comes from
+  saved layout of another version is replaced by the default one (`EditorLayer::c_LayoutVersion`). Over either, the
+  layer draws the dialogs it owns: New Project and Open Sample (`UI/ProjectDialogs`: template cards from
+  `project.templates`, name and location fields, then `project.create` or `project.openSample`; the location they last
+  used is kept in imgui.ini, `StrataLauncher`, first `<home>/StrataProjects`), About Strata (`UI/AboutDialog`: build,
+  GPU, startup time, and `ThirdPartyNotices.md` compiled in and shown through `UI/Markdown`) and the unsaved-changes
+  question. Panels reach them through `EditorPanelContext::Shell` (`UI/EditorShell.h`, implemented by `EditorLayer`).
+  A `.stproj` file dropped on the window opens its project. The look comes from
   `UI/Theme` (the Bedrock palette and its meanings; `ApplyTheme` is the `ImGuiLayer` style callback), `UI/EditorFonts`
   (Inter, Inter SemiBold and JetBrains Mono embedded with `strata_embed_file`, Lucide's icons merged into the Inter
   fonts' Private Use Area) and the widget kit (`UI/Widgets`), whose widgets record their rectangles in `UI/ItemProbe`.
@@ -454,8 +467,9 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   sets the cap to 0 (full rate) while anything happens and to 30 (10 unfocused) frames per second otherwise; headless,
   `--frames` and command-script runs are never throttled. **UI tests** (`StrataTests/src/Editor/ImGuiHarness.h`) create
   an ImGui context with the editor's fonts and theme (styled by an unattached `ImGuiLayer`), honor ImGui's texture
-  requests without a renderer, inject input, and find kit widgets through the probe; the `Editor.UI` suites draw the
-  real `EditorLayer` this way, with a `FakeEditorHost`.
+  requests without a renderer, inject input (clicks, keys, typed text), keep their own clipboard, and find kit widgets
+  through the probe; the `Editor.UI` and `Editor.Launcher` suites draw the real `EditorLayer` this way, with a
+  `FakeEditorHost` (`StrataTests/src/Editor/HarnessEditor.h`).
 - **EditorContext** (`StrataEditor/src/Editor/EditorContext.h`) is the state with no UI. Opening a project creates and
   activates its `EditorAssetManager` (scan included), opens a `ScriptEngine` (hot reload on by default,
   `EditorContextSpecification::HotReloadScripts`) and loads the built module, restores the viewport state, opens
