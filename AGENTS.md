@@ -147,7 +147,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   destroy entities, scripts destroying 10,000 of 100,000 sibling roots in one frame) and, in `src/Editor/`,
   `Perf.Editor` (entity commands among 100,000 roots) and `PerfGPU.Editor`, which runs the real `StrataEditor`
   maximized on generated 100,000- and 1,000,000-entity scenes and checks the median CPU frame time its `editor.wait`
-  steps report. Time calls that take nanoseconds in batches (the clock's resolution is about 0.1 microseconds).
+  steps report (when the editor fails, the test describes the scene files on disk with `Tests::DescribeJsonFile`,
+  which tells a damaged file from a failed read or parse). Time calls that take nanoseconds in batches (the clock's
+  resolution is about 0.1 microseconds).
   A process's peak memory includes everything it did before, so a test that measures peak memory
   runs the measured work in a helper process (`--strata-test-helper=<mode>`, see `TestMain.cpp`): `PerfGPU.Streaming`
   runs its camera sweep over the stress project (`src/Perf/StressProject.h`, also usable by other suites) that way, one

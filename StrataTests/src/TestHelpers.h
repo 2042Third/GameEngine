@@ -26,6 +26,12 @@ namespace Strata::Tests
 	// open the samples in place.
 	std::filesystem::path CopySampleProject(const std::string& name, std::string* outError = nullptr);
 
+	// Describes a JSON file a process failed to load, for the failure message: its path and size, and whether it is valid
+	// JSON or else the parser's error with the last 64 bytes it read, up to the one it stopped at (non-printable bytes as
+	// \xNN). Tells a damaged file from a reader that failed on a good one. Reads without building a document, so huge
+	// files cost little memory.
+	std::string DescribeJsonFile(const std::filesystem::path& file);
+
 	// Appends one RGBA texel to a pixel buffer. Tests use it instead of insert(end(), { r, g, b, a }), for which GCC 14 at
 	// -O3 reports a false -Wstringop-overflow on byte vectors.
 	inline void AppendPixel(std::vector<uint8_t>& pixels, uint8_t red, uint8_t green, uint8_t blue, uint8_t alpha)

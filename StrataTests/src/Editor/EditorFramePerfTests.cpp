@@ -106,8 +106,9 @@ TEST_SUITE("PerfGPU.Editor")
 		REQUIRE_MESSAGE(project, error);
 		const std::filesystem::path scenes = project->GetAssetDirectory() / "Scenes";
 		REQUIRE(FileSystem::CreateDirectories(scenes));
-		WriteNestedScene(scenes / "Nested100k.stscene", 100'000);
-		WriteNestedScene(scenes / "Nested1M.stscene", 1'000'000);
+		const std::vector<std::filesystem::path> sceneFiles = { scenes / "Nested100k.stscene", scenes / "Nested1M.stscene" };
+		WriteNestedScene(sceneFiles[0], 100'000);
+		WriteNestedScene(sceneFiles[1], 1'000'000);
 
 		// Each scene is edited for 120 frames, then played for 120 frames.
 		const nlohmann::json script = nlohmann::json::array({
@@ -134,6 +135,14 @@ TEST_SUITE("PerfGPU.Editor")
 			INFO("Editor output:\n", run.Output);
 			REQUIRE_MESSAGE(run.Started, run.Error);
 			REQUIRE_FALSE(run.TimedOut);
+			if (run.ExitCode != 0)
+			{
+				// Once, under load, the editor failed to open the million-entity scene ("Invalid JSON", cause unknown) that
+				// every other run opened: whether the file on disk is damaged, or the editor's read or parse failed on a good
+				// one, tells where to look next.
+				for (const std::filesystem::path& sceneFile : sceneFiles)
+					MESSAGE(DescribeJsonFile(sceneFile));
+			}
 			REQUIRE(run.ExitCode == 0);
 
 			const std::vector<nlohmann::json> waits = FindWaitResults(run.Output);
