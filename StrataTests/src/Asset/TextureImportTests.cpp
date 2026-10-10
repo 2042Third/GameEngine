@@ -310,8 +310,8 @@ TEST_SUITE("Asset.TextureImport")
 	{
 		// The feature test's checker and a smooth gradient: imported with the default settings they are BC7, which reaches
 		// the 40 dB the cooking work asks of compressed color and is never worse than BC1 at High (what color was before
-		// BC7 could be encoded). BC7 at Fast (what translucent color and data get at Fast) reaches 36 dB; opaque color at
-		// Fast is BC1.
+		// BC7 could be encoded). BC7 at Fast (what translucent color gets at Fast) reaches 36 dB; opaque color at Fast is
+		// BC1.
 		const std::optional<std::vector<uint8_t>> checker = FileSystem::ReadBytes(
 			FileSystem::FromUTF8(STRATA_SOURCE_DIR) / "StrataTests" / "FeatureTest" / "Assets" / "Textures" / "Checker.png");
 		REQUIRE(checker);
@@ -367,7 +367,8 @@ TEST_SUITE("Asset.TextureImport")
 		// An occlusion-roughness-metallic texture: radial occlusion in red, roughness waves in green and metallic tiles of
 		// 7 x 9 texels in blue, whose edges cut through most blocks. BC1 keeps a block's colors on one line through RGB space,
 		// so it would shift the roughness along the metallic edges by up to 32 of 255 (31 dB); BC7 keeps every channel, with
-		// partitions along the edges or the metallic channel stored apart.
+		// partitions along the edges or the metallic channel stored apart. At either quality: mode 6 alone (Fast's BC7 for
+		// blocks of color whose alpha does not vary) has BC1's line and would lose the roughness the same way (31 dB).
 		constexpr uint32_t c_Size = 256;
 		std::vector<uint8_t> pixels;
 		for (uint32_t y = 0; y < c_Size; y++)
@@ -384,32 +385,39 @@ TEST_SUITE("Asset.TextureImport")
 				pixels.push_back(metallic ? 255 : 0);
 			}
 		}
-		TextureImportSettings settings;
-		settings.Usage = TextureUsage::Data;
-		const Ref<Texture> texture = Import(Tests::EncodePNG(c_Size, c_Size, 3, pixels), settings, "Platform_orm.png");
-		CHECK(texture->GetSpecification().Format == TextureFormat::BC7);
-		CHECK_FALSE(texture->GetSpecification().Grayscale);
-
-		const std::vector<uint8_t> stored = DecodeLevel(*texture, 0);
-		const uint32_t storedChannels = GetTextureFormatInfo(GetDecodedFormat(texture->GetSpecification().Format)).Channels;
-		REQUIRE(stored.size() == static_cast<size_t>(c_Size) * c_Size * storedChannels);
-		for (uint32_t channel = 0; channel < 3; channel++)
+		const std::vector<uint8_t> image = Tests::EncodePNG(c_Size, c_Size, 3, pixels);
+		for (TextureQuality quality : { TextureQuality::High, TextureQuality::Fast })
 		{
-			CAPTURE(channel);
-			double squaredError = 0.0;
-			int maxError = 0;
-			for (size_t texel = 0; texel < static_cast<size_t>(c_Size) * c_Size; texel++)
+			const std::string qualityName = TextureQualityToString(quality);
+			CAPTURE(qualityName);
+			TextureImportSettings settings;
+			settings.Usage = TextureUsage::Data;
+			settings.Quality = quality;
+			const Ref<Texture> texture = Import(image, settings, "Platform_orm.png");
+			CHECK(texture->GetSpecification().Format == TextureFormat::BC7);
+			CHECK_FALSE(texture->GetSpecification().Grayscale);
+
+			const std::vector<uint8_t> stored = DecodeLevel(*texture, 0);
+			const uint32_t storedChannels = GetTextureFormatInfo(GetDecodedFormat(texture->GetSpecification().Format)).Channels;
+			REQUIRE(stored.size() == static_cast<size_t>(c_Size) * c_Size * storedChannels);
+			for (uint32_t channel = 0; channel < 3; channel++)
 			{
-				const int error = std::abs(static_cast<int>(stored[texel * storedChannels + channel]) - static_cast<int>(pixels[texel * 3 + channel]));
-				squaredError += static_cast<double>(error) * error;
-				maxError = std::max(maxError, error);
+				CAPTURE(channel);
+				double squaredError = 0.0;
+				int maxError = 0;
+				for (size_t texel = 0; texel < static_cast<size_t>(c_Size) * c_Size; texel++)
+				{
+					const int error = std::abs(static_cast<int>(stored[texel * storedChannels + channel]) - static_cast<int>(pixels[texel * 3 + channel]));
+					squaredError += static_cast<double>(error) * error;
+					maxError = std::max(maxError, error);
+				}
+				const double meanSquaredError = squaredError / (static_cast<double>(c_Size) * c_Size);
+				const double psnr = meanSquaredError == 0.0 ? 100.0 : 10.0 * std::log10(255.0 * 255.0 / meanSquaredError);
+				MESSAGE("Data channel ", channel, " stored as ", std::string(TextureFormatToString(texture->GetSpecification().Format)), " at ",
+					qualityName, ": PSNR ", psnr, " dB, error at most ", maxError);
+				CHECK(psnr >= 40.0);
+				CHECK(maxError <= 16);
 			}
-			const double meanSquaredError = squaredError / (static_cast<double>(c_Size) * c_Size);
-			const double psnr = meanSquaredError == 0.0 ? 100.0 : 10.0 * std::log10(255.0 * 255.0 / meanSquaredError);
-			MESSAGE("Data channel ", channel, " stored as ", std::string(TextureFormatToString(texture->GetSpecification().Format)), ": PSNR ", psnr,
-				" dB, error at most ", maxError);
-			CHECK(psnr >= 40.0);
-			CHECK(maxError <= 16);
 		}
 	}
 

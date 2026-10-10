@@ -520,7 +520,9 @@ TEST_SUITE("Asset.Gltf")
 		CHECK(output.Result.Warnings.size() == defaults.Result.Warnings.size());
 		CHECK(fast.Color->GetSpecification().Format == TextureFormat::BC1SRGB);
 		CHECK(fast.Data->GetSpecification().Format == TextureFormat::BC7);
-		CHECK(fast.Data->Serialize() != high.Data->Serialize());
+		// Data is searched in full at either quality: Fast's BC7 modes would merge its independent channels (see
+		// "Data channels stay apart").
+		CHECK(fast.Data->Serialize() == high.Data->Serialize());
 
 		// Unknown values warn once each and keep the defaults.
 		const CookedTextures unknownCompression = cook({ { "TextureCompression", "Zip" } }, output);

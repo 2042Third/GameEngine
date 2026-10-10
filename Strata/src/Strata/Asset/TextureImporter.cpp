@@ -429,7 +429,11 @@ namespace Strata
 			cook.AlphaWeighted = color && hasAlpha;
 			cook.NormalMap = settings.Usage == TextureUsage::NormalMap;
 			cook.Wrap = settings.Wrap;
-			cook.HighQuality = settings.Quality == TextureQuality::High;
+			// Fast's BC7 tries only the single-subset modes (6, and 5 when alpha varies), which keep a block's colors on one
+			// line through RGB space as BC1 does. Color mostly follows such lines; the channels of data vary independently,
+			// and a metallic edge would shift the roughness beside it (see ChooseFormat), so data is searched in full at
+			// either quality.
+			cook.HighQuality = settings.Quality == TextureQuality::High || settings.Usage == TextureUsage::Data;
 			if (!TextureCooker::CookLevels(std::move(level0), cook, mips, &error))
 				return fail(error);
 		}

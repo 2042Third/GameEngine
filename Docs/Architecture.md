@@ -573,7 +573,8 @@ Textures are stored the way the GPU samples them: block-compressed, with their m
   residency, staging).
 - **Import** (`Asset/TextureImporter`, cooking in `Asset/TextureCooker`, both pipeline-only). Settings (`.meta`):
   `Usage`, `Compression` (`Auto`, the default, or `Uncompressed`), `Quality` (`High`, the default, or `Fast`: opaque
-  color as BC1, half of BC7's bytes, and BC7 searched over modes 6 and 5 only), `GenerateMips`, `Filter`, `Wrap`,
+  color as BC1, half of BC7's bytes, and translucent color's BC7 searched over modes 6 and 5 only; normal maps, data and
+  HDR are stored the same at either quality), `GenerateMips`, `Filter`, `Wrap`,
   `MaxSize`, `FlipVertically`. The importer writes every setting into a new `.meta`; files from before keep the
   defaults for keys they lack (the feature project's `.meta` files hold every key, which its test checks). The image
   decodes with only the channels its format needs (color keeps RGB or RGBA, gray color becomes RGB, normal maps XYZ,
@@ -583,7 +584,9 @@ Textures are stored the way the GPU samples them: block-compressed, with their m
   roughness and metallic in one texture): the colors of a BC1 or BC3 block lie on one line through RGB space, so a
   metallic edge inside a block would shift the roughness beside it by up to a sixth of its range, while BC7 splits such
   a block into subsets or stores one channel apart (the 256x256 test texture of `Asset.TextureImport` keeps every
-  channel at 45.9 dB or more). `GltfImporter` cooks a model's textures the same way (base color and emissive as color, the
+  channel at 45.9 dB or more). BC7's single-subset modes 6 and 5, which `Fast` tries, have BC1's line too (in mode 6
+  alone that texture's roughness falls to 31 dB, with errors up to 31 of 255), so data's BC7 is searched over every
+  mode at either quality. `GltfImporter` cooks a model's textures the same way (base color and emissive as color, the
   normal texture as a normal map, metallic-roughness and occlusion as data; its `TextureCompression` and
   `TextureQuality` settings).
 - **Mips** are filtered from the previous level with stb_image_resize2's Mitchell filter: sRGB color in linear space,
@@ -606,8 +609,9 @@ Textures are stored the way the GPU samples them: block-compressed, with their m
   mode 6 in full (three refits, every p-bit combination), so no block ends worse than mode 6 alone. Blocks of one color
   are mode 5, exact; once a candidate errs by at most one squared step per texel, partitions are not searched; mode 7
   is skipped in opaque blocks, where mode 3 stores everything it can. `Fast` fits mode 6 (and mode 5 when alpha varies)
-  with one refit. Opaque blocks always decode with alpha 255 (alpha endpoints are pinned to 255). The error is the sum
-  of squared RGBA differences; the encoder reports it and the texels it predicts, which the tests compare with the
+  with one refit; the importer uses it for color only. Opaque blocks always decode with alpha 255 (alpha endpoints are
+  pinned to 255). The error is the sum of squared RGBA differences; the encoder reports it and the texels it predicts,
+  which the tests compare with the
   decoder. Measured (Release, one thread of an i7-13700K, `Perf.TextureCook.BC7High` and `BC7Fast`): about 15 us per
   block at `High` and 1.2 us at `Fast` on the stress textures' noise (every block searched in full); the feature
   test's checker is exact and a smooth 256x256 gradient reaches 54 dB at `High` (BC1: 43.6 and 45.6 dB).

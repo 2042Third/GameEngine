@@ -29,8 +29,9 @@ namespace Strata
 		Uncompressed
 	};
 
-	// How hard the block compressor works. High: color is BC7 searched over all of its modes (BC7Encoder). Fast: opaque
-	// color is BC1, and BC7 tries modes 6 and 5 only. BC4 and BC5 encode the same either way.
+	// How hard the block compressor works on color. High: color is BC7 searched over all of its modes (BC7Encoder). Fast:
+	// opaque color is BC1, and translucent color's BC7 tries modes 6 and 5 only. Normal maps, data and HDR are stored the
+	// same either way: data's BC7 is always searched in full, as Fast's modes would merge its independent channels.
 	enum class TextureQuality : uint8_t
 	{
 		High = 0,
@@ -71,7 +72,7 @@ namespace Strata
 
 		AssetType GetType() const override { return AssetType::Texture; }
 		std::vector<std::string> GetExtensions() const override;
-		uint32_t GetVersion() const override { return 3; }
+		uint32_t GetVersion() const override { return 4; }
 		nlohmann::json GetDefaultSettings(const std::filesystem::path& sourcePath) const override;
 		bool Import(const ImportContext& context, ImportResult& result, std::string* outError) const override;
 

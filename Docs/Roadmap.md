@@ -92,10 +92,11 @@ Open items and deferrals later waves own:
 - `texture-cook-v2`: textures cook to GPU block compression - BC7 for color and for data of several channels, encoded
   by Strata's own encoder (`Asset/BC7Encoder`: all eight modes, partitions ranked by an estimate and the best fitted;
   the feature test's checker exact, a smooth gradient at 54 dB where BC1 reached 45.6), BC1 for opaque color at `Fast`
-  quality, BC4 for one-channel data (sampled as gray), BC5 for normal maps (Z reconstructed when shading) - with mips
-  filtered by a Mitchell filter (sRGB in linear space, alpha-weighted, wrapping like the texture, normal maps
-  renormalized), encoded in parallel, and stored in `STTX` version 2 with the mip tail first, so streaming can read it
-  by byte range. Devices without BC support decode at load time. The stress project's 447.4 MB of RGBA8 textures cook
+  quality (data keeps the full BC7 search there, which keeps its channels apart), BC4 for one-channel data (sampled as
+  gray), BC5 for normal maps (Z reconstructed when shading) - with mips filtered by a Mitchell filter (sRGB in linear
+  space, alpha-weighted, wrapping like the texture, normal maps renormalized), encoded in parallel, and stored in
+  `STTX` version 2 with the mip tail first, so streaming can read it by byte range. Devices without BC support decode
+  at load time. The stress project's 447.4 MB of RGBA8 textures cook
   to 111.8 MB (5.6 MB per 2048² texture, 22.4 MB for the 4096² one) in about 7.7 s with 23 workers
   (`Perf.TextureCook`; BC7 takes about 15 us per block on one thread at `High`, 1.2 us at `Fast`), and its pack
   shrinks from 472.7 MB to 137.2 MB. `PerfGPU.Streaming`'s all-resident sweep (1920x1080, 300 frames, every texture
