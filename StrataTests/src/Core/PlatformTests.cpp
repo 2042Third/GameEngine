@@ -11,8 +11,12 @@
 
 #include <chrono>
 #include <climits>
+#include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -165,11 +169,51 @@ TEST_SUITE("Core.Platform")
 		CHECK(FileSystem::Exists(executable));
 		CHECK(Platform::GetExecutableDirectory() == executable.parent_path());
 		CHECK(Platform::GetProcessID() != 0);
-		CHECK(Platform::GetProcessMemoryUsage() > 0);
 
 		REQUIRE(Platform::SetEnvVar("STRATA_TEST_VARIABLE", "value \xC3\xA9"));
 		CHECK(Platform::GetEnvVar("STRATA_TEST_VARIABLE").value() == "value \xC3\xA9");
 		CHECK_FALSE(Platform::GetEnvVar("STRATA_TEST_VARIABLE_THAT_DOES_NOT_EXIST").has_value());
+	}
+
+	TEST_CASE("Process memory reports current values and peaks at least as large")
+	{
+		const std::optional<ProcessMemoryInfo> memory = Platform::GetProcessMemory();
+		REQUIRE(memory.has_value());
+		CHECK(memory->PrivateBytes > 0);
+		CHECK(memory->WorkingSet > 0);
+		CHECK(memory->PeakPrivateBytes >= memory->PrivateBytes);
+		CHECK(memory->PeakWorkingSet >= memory->WorkingSet);
+	}
+
+	TEST_CASE("Process memory grows with a touched allocation and its peaks keep the growth")
+	{
+		constexpr size_t c_AllocationSize = 256 * 1024 * 1024;
+		// Other threads of the test process may allocate or free a little meanwhile.
+		constexpr uint64_t c_MinimumGrowth = c_AllocationSize / 2;
+
+		const std::optional<ProcessMemoryInfo> before = Platform::GetProcessMemory();
+		REQUIRE(before.has_value());
+		std::optional<ProcessMemoryInfo> during;
+		{
+			std::unique_ptr<uint8_t[]> block(new uint8_t[c_AllocationSize]);
+			// Writes a nonzero byte to every page, through a volatile pointer so the stores cannot be optimized away:
+			// untouched pages need no physical memory.
+			volatile uint8_t* bytes = block.get();
+			for (size_t offset = 0; offset < c_AllocationSize; offset += 4096)
+				bytes[offset] = static_cast<uint8_t>((offset >> 12) | 1);
+			during = Platform::GetProcessMemory();
+		}
+		REQUIRE(during.has_value());
+		CHECK(during->PrivateBytes >= before->PrivateBytes + c_MinimumGrowth);
+		CHECK(during->WorkingSet >= before->WorkingSet + c_MinimumGrowth);
+		CHECK(during->PeakPrivateBytes >= during->PrivateBytes);
+		CHECK(during->PeakWorkingSet >= during->WorkingSet);
+
+		// The block is freed again; the peaks still cover it.
+		const std::optional<ProcessMemoryInfo> after = Platform::GetProcessMemory();
+		REQUIRE(after.has_value());
+		CHECK(after->PeakPrivateBytes >= during->PrivateBytes);
+		CHECK(after->PeakWorkingSet >= during->WorkingSet);
 	}
 
 	TEST_CASE("User data directory is created")

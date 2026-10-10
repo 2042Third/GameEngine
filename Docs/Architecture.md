@@ -79,7 +79,8 @@ Applications built on `Application` (editor, runtime) get `main` from `Core/Entr
 **Core** (`Core/`). `Application` owns the window, the graphics device, the layer stack and the main-thread queue
 and runs the frame loop; `Layer`/`LayerStack` hold the client's behavior; `Window` is implemented by
 `Platform/GLFW/GLFWWindow`. Services: `Log` (spdlog; `LogBuffer` backs the editor console and `log.read`), `Assert`,
-`JobSystem`, `FileSystem` (UTF-8 paths), `FileWatcher`, `FileLock`, `Platform` (OS services, private directories),
+`JobSystem`, `FileSystem` (UTF-8 paths), `FileWatcher`, `FileLock`, `Platform` (OS services, private directories,
+process memory with peaks: `GetProcessMemory`),
 `Process` (child processes), `DynamicLibrary`, `CrashGuard`, `UUID`, `Crypto` (SHA-256, peer authentication), `Base64`,
 `CommandLine`, `Timer`/`FramePacer`, `JsonUtils` (exception-free JSON reads), `SequenceLock` (lock-free hand-off to the
 audio thread) and `Profiling` (Tracy with `STRATA_ENABLE_TRACY`).

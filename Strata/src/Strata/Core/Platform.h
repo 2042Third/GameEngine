@@ -11,6 +11,26 @@
 namespace Strata
 {
 
+	// Memory of the current process in bytes, as the operating system accounts it (Platform::GetProcessMemory).
+	// PrivateBytes is memory that only this process uses; WorkingSet is what is resident in physical memory, including
+	// pages shared with other processes (code, mapped files). Peaks are the largest values since the process started.
+	//   Windows: PrivateBytes is the commit charge (committed private memory, also pages never touched yet), WorkingSet
+	//            the working set; the system tracks both peaks.
+	//   Linux:   PrivateBytes is anonymous resident memory plus swapped-out memory (RssAnon + VmSwap of
+	//            /proc/self/status: every private page the process has touched), WorkingSet is VmRSS and its peak VmHWM.
+	//            The kernel keeps no peak of private memory: PeakPrivateBytes is the largest PrivateBytes any call in this
+	//            process has seen, so a spike between two calls is missed.
+	//   macOS:   PrivateBytes is the physical footprint (dirty private and compressed memory, what Activity Monitor
+	//            shows), WorkingSet the resident size; the kernel tracks both peaks (kernels too old to report the
+	//            footprint's peak fall back to the largest value seen, as on Linux).
+	struct ProcessMemoryInfo
+	{
+		uint64_t PrivateBytes = 0;
+		uint64_t WorkingSet = 0;
+		uint64_t PeakPrivateBytes = 0;
+		uint64_t PeakWorkingSet = 0;
+	};
+
 	// Operating-system services. Implemented per platform in Platform/<OS>/.
 	class Platform
 	{
@@ -113,8 +133,9 @@ namespace Strata
 		// Opens a file, folder or URL with the system's default handler.
 		static bool OpenWithDefaultApplication(const std::string& pathOrUrl);
 
-		// Resident memory of the current process in bytes (0 if unavailable).
-		static uint64_t GetProcessMemoryUsage();
+		// Current and peak memory of this process (see ProcessMemoryInfo); nullopt if the system does not report it. (Not
+		// named GetProcessMemoryInfo: <psapi.h> defines that name as a macro.)
+		static std::optional<ProcessMemoryInfo> GetProcessMemory();
 	};
 
 }
