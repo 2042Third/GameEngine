@@ -15,7 +15,7 @@ namespace Strata
 	struct ReadbackImage;
 
 	// What the editor's UI layer (EditorLayer) needs from the application that runs it: closing, the exit code, the frame
-	// count, the window (title, size, focus, UI scale), the frame rate and screenshots. EditorApplication implements it on
+	// count, the window (title, size, focus, UI scale), the frame rate and frame time, and screenshots. EditorApplication implements it on
 	// top of Application; UI tests supply a fake (ImGuiHarness), so the layer runs without an Application, a window or a GPU.
 	class EditorHost
 	{
@@ -48,6 +48,8 @@ namespace Strata
 		// Frames per second the application does not exceed from the next frame on (0: unlimited).
 		virtual void SetMaxFrameRate(uint32_t framesPerSecond) = 0;
 		virtual uint32_t GetMaxFrameRate() const = 0;
+		// Seconds the last frame took to run, without the wait for the frame rate cap (Application::GetLastFrameWorkTime).
+		virtual double GetLastFrameWorkTime() const = 0;
 
 		// Reads the window back at the end of the next rendered frame (with the UI) and passes the image to the callback on
 		// the main thread; the image is empty when nothing can be captured.

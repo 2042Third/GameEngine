@@ -1,6 +1,7 @@
 #include "UI/PropertyWidgets.h"
 
 #include "UI/Icons.h"
+#include "UI/Widgets.h"
 
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/BuiltinAssets.h>
@@ -102,7 +103,11 @@ namespace Strata
 							if (!filter.empty() && StringUtils::ToLower(label).find(filter) == std::string::npos)
 								continue;
 							ImGui::PushID(metadata.Handle.ToString().c_str());
-							if (ImGui::Selectable(label.c_str(), metadata.Handle == handle))
+							const bool current = metadata.Handle == handle;
+							UI::PushSelectionColors(current);
+							const bool picked = ImGui::Selectable(label.c_str(), current);
+							UI::PopSelectionColors();
+							if (picked)
 							{
 								handle = metadata.Handle;
 								changed = true;
@@ -229,7 +234,11 @@ namespace Strata
 				{
 					for (const EnumValue& option : property.EnumValues)
 					{
-						if (ImGui::Selectable(option.Name.c_str(), option.Value == selected))
+						const bool isSelected = option.Value == selected;
+						UI::PushSelectionColors(isSelected);
+						const bool picked = ImGui::Selectable(option.Name.c_str(), isSelected);
+						UI::PopSelectionColors();
+						if (picked)
 						{
 							result.Changed = option.Value != selected;
 							selected = option.Value;

@@ -20,14 +20,24 @@ namespace Strata
 	class EditorContext;
 	class EditorShell;
 
+	// The editor's frame timing this frame, as the status bar shows it.
+	struct EditorFrameStats
+	{
+		// What a frame costs: its run time averaged over the last frames, without the wait of the idle frame rate cap.
+		float WorkMilliseconds = 0.0f;
+		float FramesPerSecond = 0.0f; // Frames drawn per second (ImGui's average); lowered while the editor idles
+		bool Idle = false;            // Nothing happens: the editor draws at its idle frame rate
+	};
+
 	// What panels work with: the editor state, the commands (every change goes through them), the runner (commands that
-	// take frames) and the editor window around them (EditorShell: its dialogs, the question about unsaved changes, facts
-	// about the running editor; null where panels are drawn without one, e.g. in registry tests).
+	// take frames), the frame timing and the editor window around them (EditorShell: its dialogs, the question about
+	// unsaved changes, facts about the running editor; null where panels are drawn without one, e.g. in registry tests).
 	struct EditorPanelContext
 	{
 		EditorContext& Context;
 		const EditorCommandRegistry& Commands;
 		EditorCommandRunner& Runner;
+		EditorFrameStats Frame = {};
 		EditorShell* Shell = nullptr;
 	};
 

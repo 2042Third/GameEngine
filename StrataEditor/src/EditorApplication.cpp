@@ -69,6 +69,7 @@ namespace Strata
 
 		void SetMaxFrameRate(uint32_t framesPerSecond) override { m_Application.SetMaxFrameRate(framesPerSecond); }
 		uint32_t GetMaxFrameRate() const override { return m_Application.GetMaxFrameRate(); }
+		double GetLastFrameWorkTime() const override { return m_Application.GetLastFrameWorkTime(); }
 
 		void RequestScreenshot(std::function<void(const ReadbackImage&)> callback) override
 		{

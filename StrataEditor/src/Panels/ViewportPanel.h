@@ -22,7 +22,8 @@ namespace Strata
 	// inverted while Ctrl is held), F to frame the selection and Home to frame everything. A row of chips over the image's
 	// top left holds the camera settings and the overlay toggles (grid, selection outline, scene gizmos, stats), and a strip
 	// in the play state's color tops the image while the scene runs. While playing through the scene's camera the panel is
-	// the game view: game input goes to the scene and editor tools are off.
+	// the game view: game input goes to the scene while it is focused and editor tools are off; of the chips only the stats
+	// toggle remains, shown while the game does not have the input, so that clicks on the image always belong to the game.
 	class ViewportPanel : public EditorPanel
 	{
 	public:
@@ -48,10 +49,11 @@ namespace Strata
 		};
 
 		void DrawChips(EditorContext& context);
+		void DrawStatsChip(ViewportSettings& settings);
 		void HandleShortcuts(EditorContext& context);
 		void UpdateCamera(EditorContext& context, bool hovered);
 		void UpdateGizmo(EditorContext& context, const ViewportView& view);
-		void DrawOverlays(EditorContext& context, const ViewportView& view, float chipRowBottom);
+		void DrawOverlays(EditorContext& context, const ViewportView& view, float chipRowBottom, const EditorFrameStats& frame);
 		void AcceptAssetDrops(EditorContext& context, const EditorCommandRegistry& commands);
 		void EndCameraDrag();
 		void EndGizmoDrag(EditorContext& context);

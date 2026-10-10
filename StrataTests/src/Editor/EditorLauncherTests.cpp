@@ -11,6 +11,7 @@
 #include "UI/ItemProbe.h"
 #include "UI/ProjectDialogs.h"
 #include "UI/TextFormat.h"
+#include "UI/Theme.h"
 
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/Platform.h>
@@ -349,6 +350,22 @@ TEST_SUITE("Editor.Launcher")
 #endif
 		// Automation is off in the harness: the card says so instead of a port.
 		CHECK_FALSE(editor.Layer->GetAutomationState().Running);
+		CHECK(editor.GetPillColor("Welcome.AgentStatus") == UI::ToColorU32(UI::GetThemeColors().Warning));
+	}
+
+	TEST_CASE("The agent card says why automation could not start")
+	{
+		// Asked for, but its session file cannot be written (the session directory would be inside a file).
+		const std::filesystem::path blocker = CreateTemporaryDirectory("LauncherAutomationFailure") / "File";
+		REQUIRE(FileSystem::WriteText(blocker, "not a directory"));
+		ScopedEnvironmentVariable sessions("STRATA_SESSION_DIR", FileSystem::ToUTF8(blocker / "Sessions"));
+		HarnessEditor editor({}, {}, {}, true);
+		editor.Frames(2);
+		const EditorAutomationState automation = editor.Layer->GetAutomationState();
+		CHECK(automation.Enabled);
+		CHECK_FALSE(automation.Running);
+		CHECK_FALSE(automation.Error.empty());
+		CHECK(editor.GetPillColor("Welcome.AgentStatus") == UI::ToColorU32(UI::GetThemeColors().Error));
 	}
 
 	TEST_CASE("About Strata shows the build, the GPU, the startup time and the notices")

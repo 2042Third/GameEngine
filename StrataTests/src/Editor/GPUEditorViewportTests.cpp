@@ -570,4 +570,43 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(result["screenSpaceTexts"].get<int>() >= 4);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
+
+	TEST_CASE("The selection outline has the color of the viewport's settings")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.AddScene();
+		Entity cube = harness.Context.GetActiveScene()->FindEntityByName("Cube");
+		REQUIRE(cube);
+		harness.Context.Select(cube.GetUUID());
+		// The outline is the only overlay.
+		ViewportSettings& settings = harness.Context.GetViewport().GetSettings();
+		settings.ShowGrid = false;
+		settings.ShowSceneGizmos = false;
+		REQUIRE(settings.ShowSelectionOutline);
+
+		// The editor's UI sets the color (its theme's accent); outlines are drawn in exact display colors.
+		const auto countPixels = [](const DecodedImage& image, const glm::ivec3& color)
+		{
+			int count = 0;
+			for (int y = 0; y < image.Height; y++)
+			{
+				for (int x = 0; x < image.Width; x++)
+					count += glm::all(glm::lessThanEqual(glm::abs(glm::ivec3(image.At(x, y)) - color), glm::ivec3(24))) ? 1 : 0;
+			}
+			return count;
+		};
+		const glm::ivec3 magenta(255, 0, 255);
+		const glm::ivec3 cyan(0, 255, 255);
+		settings.SelectionColor = glm::vec4(1.0f, 0.0f, 1.0f, 1.0f);
+		const DecodedImage first = harness.Capture({ { "width", 64 }, { "height", 64 }, { "overlays", true } });
+		settings.SelectionColor = glm::vec4(0.0f, 1.0f, 1.0f, 1.0f);
+		const DecodedImage second = harness.Capture({ { "width", 64 }, { "height", 64 }, { "overlays", true } });
+		CHECK(countPixels(first, magenta) > 20);
+		CHECK(countPixels(first, cyan) == 0);
+		CHECK(countPixels(second, cyan) > 20);
+		CHECK(countPixels(second, magenta) == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
 }

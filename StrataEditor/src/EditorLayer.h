@@ -12,6 +12,7 @@
 
 #include <Strata.h>
 
+#include <array>
 #include <chrono>
 #include <deque>
 #include <filesystem>
@@ -50,6 +51,9 @@ namespace Strata
 		// Watch the project's assets and script module for changes made outside the editor (hot reload). UI tests turn it off:
 		// they need no watcher threads.
 		bool WatchFiles = true;
+		// The toolchain script builds use instead of the engine's (EditorContextSpecification::ScriptBuild); UI tests build
+		// with a stand-in for CMake.
+		std::optional<ScriptBuildSettings> ScriptBuild;
 	};
 
 	// Built-in panel ids (EditorPanelRegistry).
@@ -108,6 +112,12 @@ namespace Strata
 		// Frames per second over the last c_FrameRateWindowSeconds (or since startup).
 		double GetAverageFrameRate() const;
 		static constexpr double c_FrameRateWindowSeconds = 5.0;
+		// The frame timing the status bar and the panels show this frame; the work time is averaged over the last
+		// c_FrameWorkSamples frames.
+		const EditorFrameStats& GetFrameStats() const { return m_FrameStats; }
+		static constexpr size_t c_FrameWorkSamples = 60;
+		// How often the status bar looks for a script build to offer while no script module is loaded.
+		static constexpr double c_ScriptBuildCheckSeconds = 1.0;
 		// Whether this frame shows the launcher instead of the dock space.
 		bool IsLauncherShown() const;
 		ProjectDialogs& GetProjectDialogs() { return m_ProjectDialogs; }
@@ -138,6 +148,9 @@ namespace Strata
 		void DrawPlayControls();
 		void DrawBuildControls();
 		void DrawStatusBar();
+		// The status bar's pills of automation and scripts; true when the pill was clicked to show the Console.
+		bool DrawAutomationPill();
+		bool DrawScriptsPill();
 		void DrawUnsavedChangesModal();
 		void HandleShortcuts();
 		void UpdateWindowTitle();
@@ -148,6 +161,11 @@ namespace Strata
 		// Chooses the frame rate for the next frames (idle throttling) and records frame times.
 		void UpdateFrameRate();
 		bool IsBusy(double now) const;
+		// Fills m_FrameStats for this frame's status bar and panels.
+		void UpdateFrameStats();
+		// Whether the open project has a script build (EditorContext::HasScriptBuild), looked up at most once per
+		// c_ScriptBuildCheckSeconds.
+		bool HasScriptBuild();
 
 		bool SaveScene();
 		bool SaveSceneAs();
@@ -179,6 +197,9 @@ namespace Strata
 		bool m_LayoutChecked = false;
 		bool m_UIDrawn = false; // OnImGuiRender ran at least once
 		std::string m_WindowTitle;
+		std::string m_AutomationError; // Why automation did not start (when it was asked for)
+		bool m_HasScriptBuild = false;
+		std::optional<double> m_ScriptBuildCheckTime;
 		bool m_LauncherDismissed = false; // Continue without a project (until a project opens)
 		std::filesystem::path m_CLIExecutable;
 		// The samples File > Open Sample offers (project.samples), read when the menu first opens.
@@ -195,6 +216,12 @@ namespace Strata
 		uint64_t m_LastAutomationRequests = 0;
 		bool m_Idle = false;
 		std::deque<double> m_FrameTimes; // Within the last c_FrameRateWindowSeconds
+
+		// Frame timing.
+		std::array<double, c_FrameWorkSamples> m_FrameWorkTimes = {}; // Seconds, a ring of the last frames' work times
+		size_t m_FrameWorkCount = 0;
+		size_t m_NextFrameWork = 0;
+		EditorFrameStats m_FrameStats;
 	};
 
 }

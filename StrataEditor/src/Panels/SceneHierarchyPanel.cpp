@@ -3,6 +3,7 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "UI/PropertyWidgets.h"
+#include "UI/Widgets.h"
 
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/BuiltinAssets.h>
@@ -208,14 +209,17 @@ namespace Strata
 				| ImGuiTreeNodeFlags_NoTreePushOnOpen;
 			if (children.empty())
 				flags |= ImGuiTreeNodeFlags_Leaf;
-			if (m_Selected.contains(id))
+			const bool selected = m_Selected.contains(id);
+			if (selected)
 				flags |= ImGuiTreeNodeFlags_Selected;
 
 			if (depth > 0)
 				ImGui::Indent(indent * static_cast<float>(depth));
 			if (!active)
 				ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+			UI::PushSelectionColors(selected);
 			const bool open = ImGui::TreeNodeEx(ToImGuiID(id), flags, "%s", name.c_str());
+			UI::PopSelectionColors();
 			if (!active)
 				ImGui::PopStyleColor();
 			if (depth > 0)

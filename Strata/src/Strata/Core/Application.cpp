@@ -195,6 +195,7 @@ namespace Strata
 				if (m_Specification.MaxFrames && m_FrameCount >= *m_Specification.MaxFrames)
 					m_Running = false;
 			}
+			m_LastFrameWorkTime = Time::GetTime() - time;
 			if (m_Running)
 				m_FramePacer.WaitForNextFrame();
 		}

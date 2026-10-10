@@ -522,11 +522,21 @@ namespace Strata
 			UI::Heading("Connect an AI agent", UI::TextSize::Title);
 
 			std::string state;
+			std::string tooltip = "The editor's automation server: agents find it through its session file (StrataCLI)";
 			ImVec4 stateColor = colors.TextSecondary;
 			const char* stateIcon = Icons::Radio;
-			if (!automation.Running)
+			if (!automation.Running && automation.Enabled)
+			{
+				// Asked for, but it could not start (a taken --automation-port, a session file that cannot be written).
+				state = "Automation failed";
+				tooltip = "Automation could not start, so agents cannot reach this editor: " + automation.Error;
+				stateColor = colors.Error;
+				stateIcon = Icons::CircleAlert;
+			}
+			else if (!automation.Running)
 			{
 				state = "Automation is off";
+				tooltip = "Started with --no-automation: agents cannot reach this editor";
 				stateColor = colors.Warning;
 				stateIcon = Icons::CircleAlert;
 			}
@@ -543,9 +553,7 @@ namespace Strata
 			UI::PushFont(UI::EditorFont::Regular, UI::TextSize::Caption);
 			const float pillWidth = style.FramePadding.x * 2.0f + ImGui::CalcTextSize(stateIcon).x + style.ItemInnerSpacing.x + ImGui::CalcTextSize(state.c_str()).x;
 			ImGui::SameLine(std::max(ImGui::GetWindowWidth() - style.WindowPadding.x - pillWidth, ImGui::GetCursorPosX()));
-			UI::Pill("Welcome.AgentStatus", stateIcon, state, stateColor,
-				automation.Running ? "The editor's automation server: agents find it through its session file (StrataCLI)"
-								   : "Started with --no-automation: agents cannot reach this editor");
+			UI::Pill("Welcome.AgentStatus", stateIcon, state, stateColor, tooltip.c_str());
 			ImGui::PopFont();
 
 			WrappedText("Claude Code and other MCP clients work in this editor with the same commands as its menus: they create projects, "

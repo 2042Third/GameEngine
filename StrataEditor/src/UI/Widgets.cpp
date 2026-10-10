@@ -121,7 +121,9 @@ namespace Strata::UI
 			const ImVec2 labelSize = hasLabel ? ImGui::CalcTextSize(label) : ImVec2(0.0f, 0.0f);
 			const float width = style.FramePadding.x * 2.0f + iconSize.x + (hasLabel ? style.ItemInnerSpacing.x + labelSize.x : 0.0f);
 
-			const bool pressed = ImGui::InvisibleButton(id, ImVec2(width, height));
+			// Chips lie over what their window shows: a click on one leaves the focus where it was, so that a chip over the
+			// game view does not hand the game the input.
+			const bool pressed = ImGui::InvisibleButton(id, ImVec2(width, height), ImGuiButtonFlags_NoFocus | ImGuiButtonFlags_NoNavFocus);
 			const bool hovered = ImGui::IsItemHovered();
 			const bool held = ImGui::IsItemActive();
 			const ImVec2 min = ImGui::GetItemRectMin();
@@ -216,8 +218,20 @@ namespace Strata::UI
 		AddText(drawList, ImVec2(iconX + iconSize.x + style.ItemInnerSpacing.x, textY), color, text);
 
 		ShowTooltip(tooltip);
-		ItemProbe::Record(id);
+		ItemProbe::Record(id, true, ToColorU32(color));
 		return pressed;
+	}
+
+	void PushSelectionColors(bool selected)
+	{
+		// Always one color, so the pop does not depend on the row.
+		const ImVec4 hovered = selected ? GetThemeColors().SelectionHovered : ImGui::GetStyleColorVec4(ImGuiCol_HeaderHovered);
+		ImGui::PushStyleColor(ImGuiCol_HeaderHovered, hovered);
+	}
+
+	void PopSelectionColors()
+	{
+		ImGui::PopStyleColor();
 	}
 
 	bool SectionHeader(const char* id, const char* label, ImGuiTreeNodeFlags flags)

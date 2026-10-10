@@ -35,7 +35,9 @@ namespace Strata
 
 	void ConsolePanel::OnImGuiRender(EditorPanelContext&)
 	{
-		if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))
+		// Errors count as read once the Console has the focus, but not on the frame its window appears: a new window takes
+		// the focus then (at startup too, before its dock node shows another tab), when nobody has seen it.
+		if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::IsWindowAppearing())
 			m_UnreadErrors = 0;
 
 		if (ImGui::Button("Clear"))

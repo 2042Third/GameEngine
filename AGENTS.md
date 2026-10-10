@@ -455,10 +455,16 @@ and `AudioSystem`, the built-in "Audio" scene system.
 - **Editor UI rules** (the 'Bedrock' look; `Editor.UI.Source` scans the UI code for the first three, with an empty
   allowlist):
   - Colors come only from the theme's tokens (`UI/Theme.h`: the `ThemePalette` and, preferably, what they mean in
-    `ThemeColors`): no `ImVec4`/`ImColor` literals or `IM_COL32` outside `UI/Theme.cpp`. `UI::ApplyTheme` styles every
-    `ImGuiCol_`; an ImGui upgrade with new colors fails the build until they get a token.
-  - Sizes are relative to the font (multiples of `ImGui::GetFontSize()` or `GetFrameHeight()`), never fixed pixels above
-    16, so the UI follows the UI scale (the window's content scale, or `--ui-scale`).
+    `ThemeColors`): no colors spelled in numbers outside `UI/Theme.cpp`, however they are written (`ImVec4`, `ImColor` or
+    `glm::vec4` built or declared from numbers, `IM_COL32`, packed hex colors, braced numbers passed to color
+    functions). `UI::ApplyTheme` styles every `ImGuiCol_`; an ImGui upgrade with new colors fails the build until they
+    get a token. Rows of lists with a selection draw through `UI::PushSelectionColors`, so hovering stays neutral and a
+    selected row keeps the accent under the mouse.
+  - Sizes are relative to the font (multiples of `ImGui::GetFontSize()` or `GetFrameHeight()`, or the style's sizes),
+    never fixed pixels above 16, so the UI follows the UI scale (the window's content scale, or `--ui-scale`). The scan
+    judges every value passed to size-taking calls by the product it is part of, and follows names that hold sizes
+    (`const float width = 200.0f` used later is found too). `UI::ApplyTheme` sets every size ImGui scales to an even
+    base (hairlines stay one pixel), so 150% and 200% give exact multiples.
   - Panels are `EditorPanel`s registered with `EditorPanelRegistry` (`UI/EditorPanelRegistry.h`, built-ins in
     `EditorLayer::RegisterBuiltinPanels`): the registry begins their windows (icon and title, `###<id>`), toggles them in
     the View menu and keeps their open state in imgui.ini (`StrataPanels`); panels never call `ImGui::Begin`. The launcher
@@ -479,8 +485,13 @@ and `AudioSystem`, the built-in "Audio" scene system.
     unpaused scene or pending steps, loading assets, pending commands, an automation request in the last second, a
     script build, a panel's `IsAnimating`) and otherwise at 30 frames per second (10 without the focus), through
     `EditorHost::SetMaxFrameRate`. Headless editors, `--frames` runs and command scripts are never throttled; a panel that
-    animates without input reports it through `EditorPanel::IsAnimating`. `editor.status` reports the measured rate
-    (`editor.frameRate`).
+    animates without input reports it through `EditorPanel::IsAnimating`. The frame time the status bar, the viewport's
+    stats and `editor.status` (`editor.frameRate.frameMilliseconds`, with the measured rate) show is what frames take to
+    run (`Application::GetLastFrameWorkTime`, without the wait of the frame rate cap; `EditorPanelContext::Frame` for
+    panels), so an idle editor does not read as a slow one.
+  - Status pills say what is wrong and lead to it: errors (unread since the Console was last focused, not counting the
+    frame its window appears in), a failed automation start (`--no-automation` is shown as off), scripts that are not
+    built (click to build) or failed, assets that failed to load.
 - **Every change to the scene or project goes through a command** (`EditorCommandRegistry::Execute`) or,
   for continuous UI edits, through `SceneEditTransaction` / `SetPropertyWithUndo`. That keeps the UI,
   automation (AI agents) and tests identical, and makes every edit undoable.
@@ -589,9 +600,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   down/up, Shift faster, wheel = speed), F frames the selection, Home everything, W/E/R/Q pick the gizmo (as do the main
   toolbar's tool buttons, next to the gizmo space and the snap toggle, `ViewportSettings::Snap`; holding Ctrl inverts
   snapping). Chips over the image's top left hold the camera settings, the overlay toggles (grid, outline, gizmos,
-  stats) and the editor-view settings (preview lighting, game UI); a strip in the play state's color tops the image while
-  the scene runs. The selection outline is the theme's
-  accent (`ViewportSettings::SelectionColor`, set by the UI, not saved).
+  stats) and the editor-view settings (preview lighting, game UI); clicking a chip does not focus the panel. A strip in
+  the play state's color tops the image while the scene runs. In the game view only the stats chip remains, and only
+  while the game does not have the input: once the view is clicked, every click on the image is the game's. The
+  selection outline is the theme's accent (`ViewportSettings::SelectionColor`, set by the UI, not saved).
   Clicks pick without blocking (`EditorViewport::RequestPick` reads one pixel of the entity-ID buffer; Ctrl toggles,
   Shift adds, empty space clears) and never when they hit the gizmo. Gizmo drags go through `TransformDrag`
   (`Editor/TransformEdit.h`): selected entities without a selected ancestor follow the primary one, local transforms

@@ -38,6 +38,7 @@ namespace Strata::Tests
 			float UIScale = 1.0f;
 			uint32_t MaxFrameRate = 0;
 			uint32_t FrameRateChanges = 0; // SetMaxFrameRate calls that changed the rate
+			double FrameWorkTime = 0.0;    // Reported as the last frame's work time
 			std::string WindowTitle;
 			uint32_t ScreenshotRequests = 0;
 			std::optional<double> ProcessUptime = 0.25;
@@ -71,6 +72,7 @@ namespace Strata::Tests
 			m_State->MaxFrameRate = framesPerSecond;
 		}
 		uint32_t GetMaxFrameRate() const override { return m_State->MaxFrameRate; }
+		double GetLastFrameWorkTime() const override { return m_State->FrameWorkTime; }
 		void RequestScreenshot(std::function<void(const ReadbackImage&)>) override { m_State->ScreenshotRequests++; }
 	private:
 		Ref<State> m_State;

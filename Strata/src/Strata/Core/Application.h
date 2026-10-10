@@ -76,6 +76,9 @@ namespace Strata
 		// Frames that ran (minimized or skipped frames are not counted).
 		uint64_t GetFrameCount() const { return m_FrameCount; }
 		Timestep GetLastTimestep() const { return m_LastTimestep; }
+		// How long the last frame took to run, in seconds: the timestep without the frame pacer's wait (a frame rate cap
+		// lowers the rate, not the cost of a frame). Includes waiting for the display (vsync) and skipped frames' sleeps.
+		double GetLastFrameWorkTime() const { return m_LastFrameWorkTime; }
 
 		// Frames per second the main loop does not exceed from the next frame on (0: unlimited), on top of vsync. Starts at
 		// ApplicationSpecification::MaxFrameRate; the editor lowers it while it is idle. Setting the current rate again
@@ -116,6 +119,7 @@ namespace Strata
 		bool m_Minimized = false;
 		double m_LastFrameTime = 0.0;
 		Timestep m_LastTimestep;
+		double m_LastFrameWorkTime = 0.0;
 		uint64_t m_FrameCount = 0;
 		FramePacer m_FramePacer;
 

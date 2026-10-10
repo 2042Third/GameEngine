@@ -47,6 +47,8 @@ namespace Strata
 			specification.RecentProjectsReadOnly = options.RecentProjectsReadOnly;
 			specification.WatchAssetFiles = options.WatchFiles;
 			specification.HotReloadScripts = options.WatchFiles;
+			if (options.ScriptBuild)
+				specification.ScriptBuild = *options.ScriptBuild;
 			return specification;
 		}
 
@@ -153,6 +155,7 @@ namespace Strata
 				{ "gpu", DescribeGraphicsDevice(m_Host->GetGraphicsDeviceInfo()) },
 				{ "frameRate", {
 					{ "average", GetAverageFrameRate() },
+					{ "frameMilliseconds", m_FrameStats.WorkMilliseconds },
 					{ "cap", m_Host->GetMaxFrameRate() },
 					{ "idle", m_Idle },
 					{ "throttling", IsThrottlingEnabled() } } } };
@@ -192,6 +195,7 @@ namespace Strata
 			return;
 
 		ST_ERROR("Automation is unavailable: {}", error);
+		m_AutomationError = std::move(error);
 		// Nothing could reach a headless editor that runs until it is told to quit.
 		if (m_Options.Headless && !m_Options.MaxFrames)
 		{
@@ -268,6 +272,7 @@ namespace Strata
 		m_FrameTimes.push_back(now);
 		while (!m_FrameTimes.empty() && now - m_FrameTimes.front() > c_FrameRateWindowSeconds)
 			m_FrameTimes.pop_front();
+		UpdateFrameStats();
 		if (!m_Options.Headless)
 		{
 			EditorPanelContext panelContext = MakePanelContext();
@@ -464,6 +469,24 @@ namespace Strata
 		return span > 0.0 ? static_cast<double>(m_FrameTimes.size() - 1) / span : 0.0;
 	}
 
+	void EditorLayer::UpdateFrameStats()
+	{
+		// The host measures a frame once it ran: this is the previous frame's work time (none before the first frame).
+		if (const double work = m_Host->GetLastFrameWorkTime(); work > 0.0)
+		{
+			m_FrameWorkTimes[m_NextFrameWork] = work;
+			m_NextFrameWork = (m_NextFrameWork + 1) % c_FrameWorkSamples;
+			m_FrameWorkCount = std::min(m_FrameWorkCount + 1, c_FrameWorkSamples);
+		}
+		double total = 0.0;
+		for (size_t index = 0; index < m_FrameWorkCount; index++)
+			total += m_FrameWorkTimes[index];
+		// The frame rate shows the throttling; the work time what a frame costs (a capped frame rate says nothing about it).
+		m_FrameStats.WorkMilliseconds = m_FrameWorkCount > 0 ? static_cast<float>(total / static_cast<double>(m_FrameWorkCount) * 1000.0) : 0.0f;
+		m_FrameStats.FramesPerSecond = ImGui::GetCurrentContext() ? ImGui::GetIO().Framerate : static_cast<float>(GetAverageFrameRate());
+		m_FrameStats.Idle = m_Idle;
+	}
+
 	////////////////////////////////////////////////////////////////////////////////
 	// Actions
 	////////////////////////////////////////////////////////////////////////////////
@@ -524,7 +547,7 @@ namespace Strata
 
 	EditorPanelContext EditorLayer::MakePanelContext()
 	{
-		return EditorPanelContext { m_Context, m_Commands, m_CommandRunner, this };
+		return EditorPanelContext { m_Context, m_Commands, m_CommandRunner, m_FrameStats, this };
 	}
 
 	bool EditorLayer::IsLauncherShown() const
@@ -589,9 +612,12 @@ namespace Strata
 	EditorAutomationState EditorLayer::GetAutomationState() const
 	{
 		EditorAutomationState state;
+		state.Enabled = m_Options.EnableAutomation;
 		state.Running = m_Automation.IsRunning();
 		state.Port = state.Running ? m_Automation.GetPort() : 0;
 		state.Clients = state.Running ? m_Automation.GetClientCount() : 0;
+		if (state.Enabled && !state.Running)
+			state.Error = m_AutomationError.empty() ? std::string("see the Console") : m_AutomationError;
 		return state;
 	}
 
@@ -1066,13 +1092,13 @@ namespace Strata
 			: (state == SceneState::Play ? colors.PlayState.Play : (state == SceneState::Simulate ? colors.PlayState.Simulate : colors.PlayState.Edit));
 		UI::Pill("Status.PlayState", stateIcon, stateText, stateColor, "The scene's state: changes made while it runs are discarded when it stops");
 
-		// Frame time.
-		const float framerate = ImGui::GetIO().Framerate;
-		const std::string frame = fmt::format("{:.1f} ms{}{:.0f} FPS{}", framerate > 0.0f ? 1000.0f / framerate : 0.0f, c_Separator, framerate,
-			m_Idle ? std::string(c_Separator) + "idle" : std::string());
+		// Frame time: what a frame takes to run, not the interval the idle frame rate cap stretches it to.
+		const std::string frame = fmt::format("{:.1f} ms{}{:.0f} FPS{}", m_FrameStats.WorkMilliseconds, c_Separator, m_FrameStats.FramesPerSecond,
+			m_FrameStats.Idle ? std::string(c_Separator) + "idle" : std::string());
 		ImGui::SameLine();
 		UI::Pill("Status.Frame", Icons::Gauge, frame, colors.TextSecondary,
-			"Frame time and rate. While nothing happens the editor redraws less often (idle) and returns to the full rate on input.");
+			"Frame time (what a frame takes to run, without waiting for the next one) and frame rate. While nothing happens the editor "
+			"redraws less often (idle) and returns to the full rate on input.");
 
 		// Assets.
 		if (const EditorAssetManager* assets = m_Context.GetAssetManager())
@@ -1087,48 +1113,10 @@ namespace Strata
 			UI::Pill("Status.Assets", Icons::Package, text, stats.FailedAssets > 0 ? colors.Error : colors.TextSecondary, tooltip.c_str());
 		}
 
-		// Automation.
 		ImGui::SameLine();
-		if (m_Automation.IsRunning())
-		{
-			const uint32_t clients = m_Automation.GetClientCount();
-			const std::string text = fmt::format("port {}{}{} {}", m_Automation.GetPort(), c_Separator, clients, clients == 1 ? "client" : "clients");
-			const std::string tooltip = fmt::format("Tools and AI agents control this editor through StrataCLI (or its MCP server, StrataCLI mcp), which "
-				"finds it through its session file.\n{} pending requests, {} answered", m_Automation.GetPendingRequestCount(), m_Automation.GetCompletedRequestCount());
-			UI::Pill("Status.Automation", Icons::Bot, text, clients > 0 ? colors.Info : colors.TextSecondary, tooltip.c_str());
-		}
-		else
-		{
-			UI::Pill("Status.Automation", Icons::Bot, "Automation off", colors.TextDisabled, "Started with --no-automation: tools cannot control this editor");
-		}
-
-		// Scripts.
-		const ScriptBuilder& builder = m_Context.GetScriptBuilder();
-		const Ref<ScriptEngine>& engine = m_Context.GetScriptEngine();
+		bool showConsole = DrawAutomationPill();
 		ImGui::SameLine();
-		bool showConsole = false;
-		if (builder.IsRunning())
-		{
-			UI::Pill("Status.Scripts", Icons::LoaderCircle, fmt::format("Building {:.0f} s", builder.GetElapsedSeconds()), colors.Info,
-				"The project's scripts are being built (the output goes to the Console)");
-		}
-		else if (engine && engine->IsFaulted())
-		{
-			showConsole = UI::Pill("Status.Scripts", Icons::CircleAlert, "Scripts crashed", colors.Error, "The scripts crashed: rebuild or reload them (see the Console)");
-		}
-		else if (builder.GetLastResult().ID != 0 && !builder.GetLastResult().Success)
-		{
-			showConsole = UI::Pill("Status.Scripts", Icons::CircleAlert, "Build failed", colors.Error, "The last script build failed (see the Console)");
-		}
-		else if (engine && engine->IsModuleLoaded())
-		{
-			const std::string text = fmt::format("{}{}{} classes", engine->GetModuleName(), c_Separator, engine->GetClasses().size());
-			UI::Pill("Status.Scripts", Icons::FileCode, text, colors.TextSecondary, "The loaded script module");
-		}
-		else
-		{
-			UI::Pill("Status.Scripts", Icons::FileCode, "No scripts", colors.TextDisabled, "No script module is loaded (Scripts > Build Scripts)");
-		}
+		showConsole |= DrawScriptsPill();
 
 		// Keys a tool holds stay down after it disconnects: show them, with a way out that does not need the tool.
 		if (const SimulatedInput& simulated = m_Context.GetSimulatedInput(); simulated.HasHolds())
@@ -1152,6 +1140,78 @@ namespace Strata
 		}
 		if (showConsole)
 			m_Panels.Focus(EditorPanels::c_Console);
+	}
+
+	bool EditorLayer::DrawAutomationPill()
+	{
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		if (m_Automation.IsRunning())
+		{
+			const uint32_t clients = m_Automation.GetClientCount();
+			const std::string text = fmt::format("port {}{}{} {}", m_Automation.GetPort(), c_Separator, clients, clients == 1 ? "client" : "clients");
+			const std::string tooltip = fmt::format("Tools and AI agents control this editor through StrataCLI (or its MCP server, StrataCLI mcp), which "
+				"finds it through its session file.\n{} pending requests, {} answered", m_Automation.GetPendingRequestCount(), m_Automation.GetCompletedRequestCount());
+			UI::Pill("Status.Automation", Icons::Bot, text, clients > 0 ? colors.Info : colors.TextSecondary, tooltip.c_str());
+			return false;
+		}
+		if (!m_Options.EnableAutomation)
+		{
+			UI::Pill("Status.Automation", Icons::Bot, "Automation off", colors.TextSecondary, "Started with --no-automation: tools cannot control this editor");
+			return false;
+		}
+		// Asked for, but it could not start (a taken --automation-port, a session file that cannot be written).
+		const std::string tooltip = fmt::format("Automation could not start, so tools cannot control this editor: {}\nClick to open the Console.",
+			m_AutomationError.empty() ? std::string("see the Console") : m_AutomationError);
+		return UI::Pill("Status.Automation", Icons::Bot, "Automation failed", colors.Error, tooltip.c_str());
+	}
+
+	bool EditorLayer::DrawScriptsPill()
+	{
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		const ScriptBuilder& builder = m_Context.GetScriptBuilder();
+		const Ref<ScriptEngine>& engine = m_Context.GetScriptEngine();
+		if (builder.IsRunning())
+		{
+			UI::Pill("Status.Scripts", Icons::LoaderCircle, fmt::format("Building {:.0f} s", builder.GetElapsedSeconds()), colors.Info,
+				"The project's scripts are being built (the output goes to the Console)");
+			return false;
+		}
+		if (engine && engine->IsFaulted())
+			return UI::Pill("Status.Scripts", Icons::CircleAlert, "Scripts crashed", colors.Error, "The scripts crashed: rebuild or reload them (see the Console)");
+		if (builder.GetLastResult().ID != 0 && !builder.GetLastResult().Success)
+			return UI::Pill("Status.Scripts", Icons::CircleAlert, "Build failed", colors.Error, "The last script build failed (see the Console)");
+		if (engine && engine->IsModuleLoaded())
+		{
+			const std::string text = fmt::format("{}{}{} classes", engine->GetModuleName(), c_Separator, engine->GetClasses().size());
+			UI::Pill("Status.Scripts", Icons::FileCode, text, colors.TextSecondary, "The loaded script module");
+			return false;
+		}
+		// The project has scripts but no module runs them: never built here (e.g. a fresh copy of a sample), or built by
+		// another engine version and refused.
+		if (HasScriptBuild())
+		{
+			if (UI::Pill("Status.Scripts", Icons::Hammer, "Scripts not built", colors.Warning,
+				"The project has scripts, but no script module is loaded: they are not built yet, or their module could not be loaded "
+				"(see the Console). Click to build them (Ctrl+B)."))
+			{
+				BuildScripts();
+			}
+			return false;
+		}
+		UI::Pill("Status.Scripts", Icons::FileCode, "No scripts", colors.TextSecondary,
+			m_Context.HasProject() ? "The project has no scripts (Scripts > Create Script Build adds them)" : "No project is open");
+		return false;
+	}
+
+	bool EditorLayer::HasScriptBuild()
+	{
+		const double now = m_Host->GetTime();
+		if (!m_ScriptBuildCheckTime || now - *m_ScriptBuildCheckTime >= c_ScriptBuildCheckSeconds || now < *m_ScriptBuildCheckTime)
+		{
+			m_HasScriptBuild = m_Context.HasScriptBuild();
+			m_ScriptBuildCheckTime = now;
+		}
+		return m_HasScriptBuild;
 	}
 
 	void EditorLayer::DrawUnsavedChangesModal()

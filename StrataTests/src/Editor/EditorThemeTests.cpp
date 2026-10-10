@@ -25,20 +25,53 @@ namespace
 		return SameColor(ImVec4(a.x, a.y, a.z, 1.0f), ImVec4(b.x, b.y, b.z, 1.0f));
 	}
 
-	// The sizes the theme sets and scales (borders stay hairlines and are not part of it).
-	std::vector<std::pair<std::string, float>> CollectThemeSizes(const ImGuiStyle& style)
+	using NamedSizes = std::vector<std::pair<std::string, float>>;
+
+	// Every size ImGuiStyle::ScaleAllSizes scales (imgui.cpp), but the hairlines and the tab close button settings
+	// below: they all scale with the UI.
+	NamedSizes CollectScaledSizes(const ImGuiStyle& style)
 	{
 		return {
 			{ "WindowPadding.x", style.WindowPadding.x }, { "WindowPadding.y", style.WindowPadding.y },
+			{ "WindowRounding", style.WindowRounding },
+			{ "WindowMinSize.x", style.WindowMinSize.x }, { "WindowMinSize.y", style.WindowMinSize.y },
+			{ "WindowBorderHoverPadding", style.WindowBorderHoverPadding },
+			{ "ChildRounding", style.ChildRounding }, { "PopupRounding", style.PopupRounding },
 			{ "FramePadding.x", style.FramePadding.x }, { "FramePadding.y", style.FramePadding.y },
+			{ "FrameRounding", style.FrameRounding },
 			{ "ItemSpacing.x", style.ItemSpacing.x }, { "ItemSpacing.y", style.ItemSpacing.y },
 			{ "ItemInnerSpacing.x", style.ItemInnerSpacing.x }, { "ItemInnerSpacing.y", style.ItemInnerSpacing.y },
 			{ "CellPadding.x", style.CellPadding.x }, { "CellPadding.y", style.CellPadding.y },
-			{ "IndentSpacing", style.IndentSpacing }, { "ScrollbarSize", style.ScrollbarSize }, { "GrabMinSize", style.GrabMinSize },
-			{ "WindowMinSize.x", style.WindowMinSize.x }, { "WindowMinSize.y", style.WindowMinSize.y },
-			{ "PopupRounding", style.PopupRounding }, { "FrameRounding", style.FrameRounding }, { "GrabRounding", style.GrabRounding },
-			{ "TabRounding", style.TabRounding }, { "ScrollbarRounding", style.ScrollbarRounding },
-			{ "TabBarOverlineSize", style.TabBarOverlineSize }, { "SeparatorTextBorderSize", style.SeparatorTextBorderSize }
+			{ "TouchExtraPadding.x", style.TouchExtraPadding.x }, { "TouchExtraPadding.y", style.TouchExtraPadding.y },
+			{ "IndentSpacing", style.IndentSpacing }, { "ColumnsMinSpacing", style.ColumnsMinSpacing },
+			{ "ScrollbarSize", style.ScrollbarSize }, { "ScrollbarRounding", style.ScrollbarRounding }, { "ScrollbarPadding", style.ScrollbarPadding },
+			{ "GrabMinSize", style.GrabMinSize }, { "GrabRounding", style.GrabRounding }, { "LogSliderDeadzone", style.LogSliderDeadzone },
+			{ "ImageRounding", style.ImageRounding }, { "ImageBorderSize", style.ImageBorderSize },
+			{ "TabRounding", style.TabRounding }, { "TabBorderSize", style.TabBorderSize }, { "TabMinWidthShrink", style.TabMinWidthShrink },
+			{ "TabBarOverlineSize", style.TabBarOverlineSize },
+			{ "TreeLinesRounding", style.TreeLinesRounding }, { "MenuItemRounding", style.MenuItemRounding },
+			{ "SelectableRounding", style.SelectableRounding },
+			{ "DragDropTargetRounding", style.DragDropTargetRounding }, { "DragDropTargetBorderSize", style.DragDropTargetBorderSize },
+			{ "DragDropTargetPadding", style.DragDropTargetPadding }, { "ColorMarkerSize", style.ColorMarkerSize },
+			{ "SeparatorTextBorderSize", style.SeparatorTextBorderSize },
+			{ "SeparatorTextPadding.x", style.SeparatorTextPadding.x }, { "SeparatorTextPadding.y", style.SeparatorTextPadding.y },
+			{ "DockingSeparatorSize", style.DockingSeparatorSize },
+			{ "DisplayWindowPadding.x", style.DisplayWindowPadding.x }, { "DisplayWindowPadding.y", style.DisplayWindowPadding.y },
+			{ "DisplaySafeAreaPadding.x", style.DisplaySafeAreaPadding.x }, { "DisplaySafeAreaPadding.y", style.DisplaySafeAreaPadding.y },
+			{ "MouseCursorScale", style.MouseCursorScale }
+		};
+	}
+
+	// The exceptions: one-pixel lines (and the smallest tab width, one pixel: no minimum) stay one pixel up to a UI scale of
+	// 2, rather than turning into blurry 1.5 pixel lines at 150%.
+	NamedSizes CollectHairlines(const ImGuiStyle& style)
+	{
+		return {
+			{ "WindowBorderSize", style.WindowBorderSize }, { "ChildBorderSize", style.ChildBorderSize },
+			{ "PopupBorderSize", style.PopupBorderSize }, { "FrameBorderSize", style.FrameBorderSize },
+			{ "TabBarBorderSize", style.TabBarBorderSize }, { "TreeLinesSize", style.TreeLinesSize },
+			{ "InputTextCursorSize", style.InputTextCursorSize }, { "SeparatorSize", style.SeparatorSize },
+			{ "TabMinWidthBase", style.TabMinWidthBase }
 		};
 	}
 
@@ -117,22 +150,72 @@ TEST_SUITE("Editor.Theme")
 		CHECK_FALSE(base.DockingNodeHasCloseButton);
 		CHECK(base.FontSizeBase == UI::GetTextSize(UI::TextSize::Body));
 
-		const std::vector<std::pair<std::string, float>> baseSizes = CollectThemeSizes(base);
+		const NamedSizes baseSizes = CollectScaledSizes(base);
+		for (const std::pair<std::string, float>& hairline : CollectHairlines(base))
+		{
+			CAPTURE(hairline.first);
+			CHECK(hairline.second == 1.0f);
+		}
 		for (const float scale : { 1.0f, 1.5f, 2.0f })
 		{
+			CAPTURE(scale);
 			ImGuiStyle scaled;
 			UI::ApplyTheme(scaled, scale);
-			const std::vector<std::pair<std::string, float>> sizes = CollectThemeSizes(scaled);
+			const NamedSizes sizes = CollectScaledSizes(scaled);
 			REQUIRE(sizes.size() == baseSizes.size());
 			for (size_t index = 0; index < sizes.size(); index++)
 			{
-				CAPTURE(scale);
 				CAPTURE(sizes[index].first);
 				CHECK(std::abs(sizes[index].second - baseSizes[index].second * scale) <= 0.01f);
 			}
-			// Hairline borders: one pixel up to 2x.
-			CHECK(scaled.WindowBorderSize == std::floor(scale));
+			for (const std::pair<std::string, float>& hairline : CollectHairlines(scaled))
+			{
+				CAPTURE(hairline.first);
+				CHECK(hairline.second == std::floor(scale));
+			}
+			// Not sizes: always shown on the selected tab, on hover on the others.
+			CHECK(scaled.TabCloseButtonMinWidthSelected == -1.0f);
+			CHECK(scaled.TabCloseButtonMinWidthUnselected == 0.0f);
 		}
+
+		// The theme sets every size: a style that was scaled before gets the same sizes as a fresh one.
+		ImGuiStyle reused;
+		reused.ScaleAllSizes(3.0f);
+		UI::ApplyTheme(reused, 1.5f);
+		ImGuiStyle fresh;
+		UI::ApplyTheme(fresh, 1.5f);
+		const NamedSizes reusedSizes = CollectScaledSizes(reused);
+		const NamedSizes freshSizes = CollectScaledSizes(fresh);
+		for (size_t index = 0; index < freshSizes.size(); index++)
+		{
+			CAPTURE(freshSizes[index].first);
+			CHECK(reusedSizes[index].second == freshSizes[index].second);
+		}
+		CHECK(CollectHairlines(reused) == CollectHairlines(fresh));
+	}
+
+	TEST_CASE("Hovered rows stay neutral, and selected rows keep the accent under the mouse")
+	{
+		ImGuiStyle style;
+		UI::ApplyTheme(style, 1.0f);
+		const UI::ThemePalette& palette = UI::GetThemePalette();
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		// Selected rows carry the accent family, hovered ones a neutral surface (hovering is not selecting).
+		CHECK(SameRGB(style.Colors[ImGuiCol_Header], palette.Umber));
+		CHECK(SameRGB(style.Colors[ImGuiCol_HeaderHovered], palette.Flint));
+		// A selected row under the mouse: the accent's pressed hue, on the panel brighter than a selected row and warm.
+		CHECK(SameRGB(colors.SelectionHovered, palette.Rust));
+		const auto overPanel = [&](const ImVec4& color)
+		{
+			const ImVec4& panel = colors.Panel;
+			return ImVec4(color.x * color.w + panel.x * (1.0f - color.w), color.y * color.w + panel.y * (1.0f - color.w),
+				color.z * color.w + panel.z * (1.0f - color.w), 1.0f);
+		};
+		const ImVec4 selected = overPanel(style.Colors[ImGuiCol_Header]);
+		const ImVec4 selectedHovered = overPanel(colors.SelectionHovered);
+		CHECK(selectedHovered.x > selected.x + 0.08f);
+		CHECK(selectedHovered.x > selectedHovered.y);
+		CHECK(selectedHovered.y > selectedHovered.z);
 	}
 
 	TEST_CASE("The type scale")

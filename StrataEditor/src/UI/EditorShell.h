@@ -27,9 +27,11 @@ namespace Strata
 	// The automation server that tools and AI agents drive the editor through (EditorAutomation).
 	struct EditorAutomationState
 	{
+		bool Enabled = false; // Asked for (not --no-automation)
 		bool Running = false;
 		uint16_t Port = 0;
 		uint32_t Clients = 0;
+		std::string Error; // Why it did not start, when it was asked for
 	};
 
 	// What panels may ask of the editor window around them (EditorLayer) beyond the commands: its dialogs, the question

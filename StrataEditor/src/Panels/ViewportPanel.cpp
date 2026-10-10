@@ -220,17 +220,18 @@ namespace Strata
 		if (view && !m_GameView)
 			UpdateGizmo(context, *view);
 
-		// The chips go over the image (the game view keeps it clear).
+		// The chips go over the image's top left. The game view keeps only the stats toggle, and only while the game does not
+		// have the input (before the view is clicked, or after Shift+F1): while it has, every click on the image is the game's.
 		const ImGuiStyle& style = ImGui::GetStyle();
-		float chipRowBottom = imageMin.y;
+		const ImVec2 chipsMin(imageMin.x + style.ItemSpacing.x, imageMin.y + style.ItemSpacing.y);
+		ImGui::SetCursorScreenPos(chipsMin);
 		if (!m_GameView)
-		{
-			ImGui::SetCursorScreenPos(ImVec2(imageMin.x + style.ItemSpacing.x, imageMin.y + style.ItemSpacing.y));
 			DrawChips(context);
-			chipRowBottom = ImGui::GetItemRectMax().y;
-		}
+		else if (!m_GameInputEnabled)
+			DrawStatsChip(viewport.GetSettings());
+		// Text boxes go below the chip row, also while it is hidden, so they stay in place when it comes and goes.
 		if (view)
-			DrawOverlays(context, *view, chipRowBottom);
+			DrawOverlays(context, *view, chipsMin.y + ImGui::GetFrameHeight(), panelContext.Frame);
 	}
 
 	void ViewportPanel::OnHidden(EditorPanelContext& context)
@@ -311,7 +312,7 @@ namespace Strata
 		ImGui::SameLine();
 		UI::ToggleChip("Viewport.Gizmos", Icons::Shapes, "Gizmos", &settings.ShowSceneGizmos, "Light, camera and collider shapes");
 		ImGui::SameLine();
-		UI::ToggleChip("Viewport.Stats", Icons::Gauge, "Stats", &settings.ShowStats, "Frame time, draw calls and loading assets");
+		DrawStatsChip(settings);
 		// View settings of the editor camera outside play mode only: the game always looks the way it will ship.
 		ImGui::SameLine();
 		UI::ToggleChip("Viewport.PreviewLighting", Icons::SunMedium, "Preview lighting", &settings.PreviewLighting,
@@ -319,6 +320,11 @@ namespace Strata
 		ImGui::SameLine();
 		UI::ToggleChip("Viewport.GameUI", Icons::Gamepad2, "Game UI", &settings.ShowGameUI,
 			"Show the game's screen-space text (its HUD) in the editor view; the game and the scene camera always show it");
+	}
+
+	void ViewportPanel::DrawStatsChip(ViewportSettings& settings)
+	{
+		UI::ToggleChip("Viewport.Stats", Icons::Gauge, "Stats", &settings.ShowStats, "Frame time, draw calls and loading assets");
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -516,7 +522,7 @@ namespace Strata
 	// Overlays and drops
 	////////////////////////////////////////////////////////////////////////////////
 
-	void ViewportPanel::DrawOverlays(EditorContext& context, const ViewportView& view, float chipRowBottom)
+	void ViewportPanel::DrawOverlays(EditorContext& context, const ViewportView& view, float chipRowBottom, const EditorFrameStats& frame)
 	{
 		ImDrawList* drawList = ImGui::GetWindowDrawList();
 		const ImVec2 imageMin(m_Image.Min.x, m_Image.Min.y);
@@ -536,10 +542,10 @@ namespace Strata
 		if (viewport.GetSettings().ShowStats && renderer)
 		{
 			const SceneRendererStats& stats = renderer->GetStats();
-			const ImGuiIO& io = ImGui::GetIO();
 			const glm::uvec2 size = renderer->GetSize();
+			// The frame's own time: while the editor idles, its frame rate is capped, which says nothing about what frames cost.
 			const std::vector<std::string> lines = {
-				fmt::format("{:.2f} ms ({:.0f} FPS)", io.Framerate > 0.0f ? 1000.0f / io.Framerate : 0.0f, io.Framerate),
+				fmt::format("{:.2f} ms ({:.0f} FPS{})", frame.WorkMilliseconds, frame.FramesPerSecond, frame.Idle ? ", idle" : ""),
 				fmt::format("{} x {} pixels", size.x, size.y),
 				fmt::format("{} draw calls, {} instances", stats.DrawCalls, stats.Instances),
 				fmt::format("{} triangles, {} lights", stats.Triangles, stats.Lights),

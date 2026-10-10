@@ -19,7 +19,7 @@ namespace Strata::UI
 
 	}
 
-	void ItemProbe::Record(std::string_view key, bool enabled)
+	void ItemProbe::Record(std::string_view key, bool enabled, ImU32 color)
 	{
 		const int frame = ImGui::GetFrameCount();
 		Item& item = s_Items[HashKey(key)];
@@ -28,6 +28,7 @@ namespace Strata::UI
 		item.Max = ImGui::GetItemRectMax();
 		item.Frame = frame;
 		item.Enabled = enabled;
+		item.Color = color;
 	}
 
 	std::optional<ItemProbe::Item> ItemProbe::Find(std::string_view key)

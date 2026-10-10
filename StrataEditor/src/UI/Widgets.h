@@ -36,7 +36,7 @@ namespace Strata::UI
 	bool ToolbarButton(const char* id, const char* icon, const char* label, const char* tooltip, const ButtonStyle& style = {});
 
 	// A rounded chip with an icon and a label on a translucent surface (for overlays such as the viewport's) that opens
-	// something: a popup or a menu. Returns true when clicked.
+	// something: a popup or a menu. Clicking a chip does not focus its window. Returns true when clicked.
 	bool Chip(const char* id, const char* icon, const char* label, const char* tooltip);
 	// A chip that toggles a setting: accent-tinted while on. Flips *value when clicked and returns true then.
 	bool ToggleChip(const char* id, const char* icon, const char* label, bool* value, const char* tooltip);
@@ -44,6 +44,13 @@ namespace Strata::UI
 	// A status pill: an icon and text in a color on a tint of that color, sized to its text in the current font. Returns
 	// true when clicked (pills that lead somewhere, e.g. the errors pill opening the Console).
 	bool Pill(const char* id, const char* icon, std::string_view text, const ImVec4& color, const char* tooltip = nullptr);
+
+	// Rows of lists with a selection (tree nodes and selectables, e.g. the Hierarchy's). ImGui draws every hovered row in
+	// ImGuiCol_HeaderHovered, selected or not, and the theme keeps that neutral so that hovering is not mistaken for
+	// selecting. Between PushSelectionColors(selected) and PopSelectionColors() a selected row keeps the accent under the
+	// mouse instead (ThemeColors::SelectionHovered).
+	void PushSelectionColors(bool selected);
+	void PopSelectionColors();
 
 	// A collapsible section header in the SemiBold font on a raised surface (CollapsingHeader). Add
 	// ImGuiTreeNodeFlags_AllowOverlap to place buttons on it. Returns whether the section is open.
