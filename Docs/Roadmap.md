@@ -72,8 +72,9 @@ module-foundation, ran as its own workstream):
   editor frame while a 4096x4096 texture re-imports is about 3 ms, it was the whole import); `HierarchyView`, the
   hierarchy's rows without UI (an unchanged frame costs about 10 ns at 100,000 roots, a rebuild 0.6 ms), with
   `c:`/`t:` filters, reveal and drop zones; one-step commands for many entities (`entity.setParent {entities, index}`,
-  `entity.copy`, `entity.paste`, `entity.duplicate {entities}`, `component.set {entities}`) and multi-entity property
-  edits. Undo now restores sibling orders whose recorded positions agree by chance, and copying many roots is linear.
+  `entity.copy`, `entity.paste`, `entity.duplicate {entities}`, `entity.setActive {entities}`, `component.add` and
+  `component.remove {entities}`, `component.set {entities}`) and multi-entity property edits. Undo now restores
+  sibling orders whose recorded positions agree by chance, and copying many roots is linear.
 - `editor-authoring`, phase B (the panels): an Asset tab next to the Inspector (materials edited live, a drag one undo
   step; import settings as a draft applied in the background; texture preview); a Hierarchy that draws only the rows in
   view (about 0.012 ms per frame at 100,000 roots, it was 12.9 ms), with multi-selection (Ctrl, Shift, a box), drops

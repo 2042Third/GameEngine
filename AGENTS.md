@@ -632,7 +632,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   entities take `entities` (besides `entity` where one was taken before) and record one step: `entity.setParent {entities,
   parent, index}` (index: the final position of the first; reorders siblings and top-level entities too),
   `entity.duplicate {entities}`, `entity.copy {entities}` and `entity.paste {data, parent, index}` (fresh IDs, references
-  among the pasted entities remapped, no prefab links added), `component.set {entities}`. The inspector edits a
+  among the pasted entities remapped, no prefab links added), `entity.setActive {entities}`, `component.add {entities}`
+  (where the component is missing), `component.remove {entities}` (every listed entity must have the component, or
+  nothing is removed) and `component.set {entities}`. The inspector edits a
   multi-selection through `PropertyEdit` (`GetSharedProperty`, multi-entity `SetPropertyWithUndo`,
   `GetDefaultComponentValues` for Reset).
 - `project.export` writes a playable game outside the project: the asset pack (`<Game>.stpak`), the script module, the
