@@ -63,6 +63,18 @@ module-foundation, ran as its own workstream):
   Project, Open Sample, About and "Connect an AI agent", the strata mark as window and executable icon, and the build's
   git commit in its version.
 
+**Wave 2** (in progress):
+
+- `editor-authoring`, phase A (the editor core; the panels follow in phase B): an inspection target (entities or one
+  asset); material edits that show in the same frame, preview while dragged and undo as one step
+  (`AssetDocumentAction`, `AssetManagerBase::ReplaceLoadedAsset`); every importer's settings described as properties and
+  validated, and re-imports in the background (`asset.setImportSettings`, `asset.reimport` answer deferred; the longest
+  editor frame while a 4096x4096 texture re-imports is about 3 ms, it was the whole import); `HierarchyView`, the
+  hierarchy's rows without UI (an unchanged frame costs about 10 ns at 100,000 roots, a rebuild 0.6 ms), with
+  `c:`/`t:` filters, reveal and drop zones; one-step commands for many entities (`entity.setParent {entities, index}`,
+  `entity.copy`, `entity.paste`, `entity.duplicate {entities}`, `component.set {entities}`) and multi-entity property
+  edits. Undo now restores sibling orders whose recorded positions agree by chance, and copying many roots is linear.
+
 Open items and deferrals later waves own:
 
 - The allowlist's 14 exceptions: the application shell's service wiring (7, `engine-modules`), asset finalization on
