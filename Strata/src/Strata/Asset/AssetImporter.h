@@ -111,8 +111,9 @@ namespace Strata
 	};
 
 	// Checks settings an editor or tool wants to change against the importer's GetSettingsProperties and writes them in
-	// canonical form into outSettings (the setting's exact name, enum option names, numbers clamped to their range). Fails,
-	// naming the importer's settings, for unknown settings and invalid values; an importer without settings accepts none.
+	// canonical form into outSettings (the setting's exact name, enum option names). Fails, naming the importer's settings,
+	// for unknown settings and invalid values, and with the range for numbers outside their setting's range (never clamped:
+	// a tool asking for another value must learn it); an importer without settings accepts none.
 	bool NormalizeImportSettings(const AssetImporter& importer, const nlohmann::json& settings, nlohmann::json& outSettings, std::string* outError = nullptr);
 
 	// Importers by source file extension, part of the asset pipeline (tooling): RegisterAssetPipeline opens the registry and

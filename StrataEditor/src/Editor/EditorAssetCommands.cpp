@@ -464,7 +464,8 @@ namespace Strata
 		registry.Register({ "asset.setImportSettings",
 			"Changes import settings (merged into the current ones; asset.info lists every setting with its type, range or options), saves the .meta "
 			"and imports the asset again in the background, without blocking the editor. Returns when the import is done (settings, warnings) and "
-			"fails when it failed; wait: false returns at once. Unknown settings and invalid values change nothing.",
+			"fails when it failed; wait: false returns at once. Unknown settings, invalid values and numbers outside a setting's range change "
+			"nothing (they are refused, never clamped).",
 			ObjectSchema({
 				{ "asset", AssetSchema("Asset") },
 				{ "settings", AnyObjectSchema("Settings to change, e.g. {\"MaxSize\": 1024} for a texture or {\"Scale\": 0.01} for a model") },

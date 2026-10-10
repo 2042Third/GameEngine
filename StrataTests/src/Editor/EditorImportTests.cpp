@@ -265,6 +265,7 @@ TEST_SUITE("Editor.ImportSettings")
 		CHECK(fail({ { "asset", texture }, { "settings", { { "Compresion", "Auto" } } } }).find("Unknown import setting 'Compresion'") != std::string::npos);
 		CHECK(fail({ { "asset", texture }, { "settings", { { "Usage", "Albedo" } } } }).find("Color, NormalMap, Data, HDR") != std::string::npos);
 		CHECK(fail({ { "asset", texture }, { "settings", { { "MaxSize", 64 }, { "Wrap", 9 } } } }).find("Wrap") != std::string::npos);
+		CHECK(fail({ { "asset", texture }, { "settings", { { "MaxSize", 99999 } } } }).find("99999 is outside its range, 0 to 16384") != std::string::npos);
 		CHECK(fail({ { "asset", material }, { "settings", { { "Size", 1 } } } }).find("Material assets have no import settings") != std::string::npos);
 		CHECK(fail({ { "asset", "Builtin/Cube" }, { "settings", nlohmann::json::object() } }).find("not a file of the project") != std::string::npos);
 		CHECK(fail({ { "asset", texture }, { "settings", nlohmann::json::object() }, { "wait", 1 } }).find("wait") != std::string::npos);

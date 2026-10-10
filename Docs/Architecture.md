@@ -526,7 +526,8 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   `ImportSettings`). `AssetImporter::GetSettingsProperties` describes them as reflected properties of that object (built
   with `ImportSettingsBuilder`: getters read a setting or its default, setters write its canonical JSON), so the asset
   inspector draws them with the property widgets, `asset.info` lists them (`importSettingsProperties`) and
-  `NormalizeImportSettings` checks and canonicalizes what `asset.setImportSettings` is given.
+  `NormalizeImportSettings` checks and canonicalizes what `asset.setImportSettings` is given (a number outside its
+  setting's range is refused with the range rather than clamped into it).
 - **Importers and stored forms** (`Asset/AssetImporters.cpp`; the loaders that read the stored form are registered by
   the module that owns each type, one `Deserialize` per type, `Font::Create` for fonts):
 

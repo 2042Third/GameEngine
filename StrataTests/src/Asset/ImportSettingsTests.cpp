@@ -142,10 +142,9 @@ TEST_SUITE("Asset.ImportSettings")
 		const AssetImporter& textures = GetImporter(".png");
 		nlohmann::json normalized;
 		std::string error;
-		REQUIRE_MESSAGE(NormalizeImportSettings(textures, { { "usage", "normalmap" }, { "MaxSize", 99999 }, { "GenerateMips", false }, { "Filter", 1 } },
+		REQUIRE_MESSAGE(NormalizeImportSettings(textures, { { "usage", "normalmap" }, { "MaxSize", 2048 }, { "GenerateMips", false }, { "Filter", 1 } },
 			normalized, &error), error);
-		CHECK(normalized == nlohmann::json { { "Usage", "NormalMap" }, { "MaxSize", TextureImporter::c_MaxImageDimension }, { "GenerateMips", false },
-			{ "Filter", "Nearest" } });
+		CHECK(normalized == nlohmann::json { { "Usage", "NormalMap" }, { "MaxSize", 2048 }, { "GenerateMips", false }, { "Filter", "Nearest" } });
 		REQUIRE(NormalizeImportSettings(textures, nlohmann::json::object(), normalized, &error));
 		CHECK(normalized.empty());
 
@@ -160,11 +159,21 @@ TEST_SUITE("Asset.ImportSettings")
 		CHECK_FALSE(NormalizeImportSettings(textures, { { "MaxSize", "big" } }, normalized, &error));
 		CHECK_FALSE(NormalizeImportSettings(textures, nlohmann::json::array(), normalized, &error));
 
+		// A value outside a setting's range is refused with the range, never clamped into it: a tool asking for 99999 or a
+		// scale of 0.00001 must not get another value without being told.
+		CHECK_FALSE(NormalizeImportSettings(textures, { { "MaxSize", 99999 } }, normalized, &error));
+		CHECK(error == "Import setting 'MaxSize': 99999 is outside its range, 0 to 16384");
+
 		const AssetImporter& models = GetImporter(".gltf");
-		REQUIRE(NormalizeImportSettings(models, { { "Scale", 0.01 }, { "LODCount", 20 } }, normalized, &error));
+		REQUIRE(NormalizeImportSettings(models, { { "Scale", 0.01 }, { "LODCount", 8 } }, normalized, &error));
 		CHECK(normalized["Scale"].get<float>() == doctest::Approx(0.01f));
 		CHECK(normalized["LODCount"] == 8);
 		CHECK_FALSE(NormalizeImportSettings(models, { { "Scale", "huge" } }, normalized, &error));
+		CHECK_FALSE(NormalizeImportSettings(models, { { "LODCount", 20 } }, normalized, &error));
+		CHECK(error == "Import setting 'LODCount': 20 is outside its range, 0 to 8");
+		CHECK_FALSE(NormalizeImportSettings(models, { { "Scale", 0.00001 } }, normalized, &error));
+		CHECK(error == "Import setting 'Scale': 1e-05 is outside its range, 0.0001 to 10000");
+		CHECK_FALSE(NormalizeImportSettings(models, { { "Scale", 0 } }, normalized, &error));
 
 		CHECK_FALSE(NormalizeImportSettings(GetImporter(".ttf"), { { "Size", 12 } }, normalized, &error));
 		CHECK(error == "Font assets have no import settings ('Size' is none)");

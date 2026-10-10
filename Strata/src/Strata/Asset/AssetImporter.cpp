@@ -26,6 +26,23 @@ namespace Strata
 			return s_Storage;
 		}
 
+		// Why a number is not within its setting's range, or nothing when it is (or the setting has no range).
+		std::optional<std::string> CheckRange(const PropertyInfo& property, const PropertyValue& value)
+		{
+			if (!property.HasRange())
+				return std::nullopt;
+			const auto outside = [&property](double number) { return !(number >= property.Min && number <= property.Max); };
+			if (const float* number = std::get_if<float>(&value); number && property.Type == PropertyType::Float && outside(*number))
+				return fmt::format("{} is outside its range, {} to {}", *number, property.Min, property.Max);
+			const int64_t min = static_cast<int64_t>(property.Min);
+			const int64_t max = static_cast<int64_t>(property.Max);
+			if (const uint32_t* number = std::get_if<uint32_t>(&value); number && property.Type == PropertyType::UInt && outside(*number))
+				return fmt::format("{} is outside its range, {} to {}", *number, min, max);
+			if (const int32_t* number = std::get_if<int32_t>(&value); number && property.Type == PropertyType::Int && outside(*number))
+				return fmt::format("{} is outside its range, {} to {}", *number, min, max);
+			return std::nullopt;
+		}
+
 		ImporterStorage& GetImporterStorage()
 		{
 			ImporterStorage& storage = GetImporterStorageUnchecked();
@@ -168,7 +185,13 @@ namespace Strata
 			}
 			std::string error;
 			const std::optional<PropertyValue> parsed = PropertyValueFromJson(*property, value, &error);
-			if (!parsed || !property->SetValue(&normalized, *parsed, &error))
+			if (!parsed)
+				return fail(fmt::format("Import setting '{}': {}", property->Name, error.empty() ? std::string("invalid value") : error));
+			// Refused rather than clamped (as PropertyInfo::SetValue would): whoever asked for a value outside the range
+			// learns the range instead of silently getting another value.
+			if (const std::optional<std::string> outside = CheckRange(*property, *parsed))
+				return fail(fmt::format("Import setting '{}': {}", property->Name, *outside));
+			if (!property->SetValue(&normalized, *parsed, &error))
 				return fail(fmt::format("Import setting '{}': {}", property->Name, error.empty() ? std::string("invalid value") : error));
 		}
 		outSettings = std::move(normalized);

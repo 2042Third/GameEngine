@@ -44,7 +44,8 @@ namespace Strata
 		constexpr uint64_t c_MaxGeometryBudget = 1ull << 28;
 		constexpr uint32_t c_MaxHierarchyDepth = 1024;
 
-		// The range editors offer for the Scale setting (any positive scale imports).
+		// The range of the Scale setting, which editors offer and asset.setImportSettings accepts (a .meta written by hand may
+		// hold any positive scale, which imports).
 		constexpr float c_MinImportScale = 0.0001f;
 		constexpr float c_MaxImportScale = 10000.0f;
 		constexpr uint32_t c_MaxLODCount = 8;
