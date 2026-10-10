@@ -54,14 +54,18 @@ namespace Strata
 		Hidden = ST_BIT(1),    // Not shown in the inspector (still serialized)
 		Transient = ST_BIT(2), // Not serialized (runtime state)
 		MultiLine = ST_BIT(3), // String edited in a multi-line text box
-		Slider = ST_BIT(4)     // Numeric value edited with a slider over [Min, Max]
+		Slider = ST_BIT(4),    // Numeric value edited with a slider over [Min, Max]
+		PowerOfTwoLimit = ST_BIT(5) // Unsigned limit chosen among the powers of two up to Max, where 0 means no limit
 	};
 	ST_DEFINE_ENUM_FLAG_OPERATORS(PropertyFlags)
 
 	struct EnumValue
 	{
-		std::string Name;
+		std::string Name; // Stable identifier used in files and APIs, e.g. "NormalMap"
 		int32_t Value = 0;
+		std::string DisplayName; // What editors show, e.g. "Normal Map" (empty: the name)
+
+		const std::string& GetDisplayName() const { return DisplayName.empty() ? Name : DisplayName; }
 	};
 
 	struct PropertyInfo

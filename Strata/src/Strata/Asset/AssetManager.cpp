@@ -536,6 +536,74 @@ namespace Strata
 		return AssetSourceRevisions { it->second.SourceRevision, it->second.LoadedRevision };
 	}
 
+	bool AssetManagerBase::ReplaceLoadedAsset(AssetHandle handle, const Ref<Asset>& asset, std::string* outError)
+	{
+		auto fail = [outError](std::string message)
+		{
+			if (outError)
+				*outError = std::move(message);
+			return false;
+		};
+
+		if (!asset)
+			return fail("No asset object to publish");
+		if (m_ProcessingCompletions)
+			return fail("Assets cannot be replaced while assets are being finalized (from Asset::FinalizeOnMainThread)");
+		{
+			std::scoped_lock<std::mutex> lock(m_Mutex);
+			auto it = m_Entries.find(handle);
+			if (it == m_Entries.end())
+				return fail(fmt::format("Unknown asset {}", handle.ToString()));
+			if (it->second.IsMemoryAsset)
+				return fail(fmt::format("'{}' exists only in memory and cannot be replaced", it->second.Metadata.Name));
+			if (it->second.Metadata.Type != asset->GetType())
+			{
+				return fail(fmt::format("'{}' is a {}, not a {}", it->second.Metadata.Name, AssetTypeToString(it->second.Metadata.Type),
+					AssetTypeToString(asset->GetType())));
+			}
+		}
+
+		// Finalized like an arrival without a budget, on the upload command list (main thread only, and not open here: the
+		// finalization of completions is not running).
+		asset->Handle = handle;
+		nvrhi::ICommandList* commandList = nullptr;
+		if (Renderer::IsInitialized())
+		{
+			if (!m_UploadCommandList)
+				m_UploadCommandList = Renderer::GetDevice()->createCommandList();
+			m_UploadCommandList->open();
+			commandList = m_UploadCommandList;
+		}
+		uint64_t uploadedBytes = 0;
+		AssetFinalizeContext context { commandList, this };
+		context.UploadedBytes = &uploadedBytes;
+		const AssetFinalizeResult result = asset->FinalizeOnMainThread(context);
+		if (commandList)
+		{
+			m_UploadCommandList->close();
+			Renderer::GetDevice()->executeCommandList(m_UploadCommandList);
+		}
+		if (result != AssetFinalizeResult::Done)
+			return fail("The asset could not be finalized");
+
+		Ref<Asset> released; // Released after the lock: destroying assets may be slow
+		std::scoped_lock<std::mutex> lock(m_Mutex);
+		m_FrameUploadedBytes += uploadedBytes;
+		auto it = m_Entries.find(handle);
+		if (it == m_Entries.end())
+			return fail(fmt::format("Asset {} was unregistered while it was finalized", handle.ToString()));
+		AssetEntry& entry = it->second;
+		if (AbandonLoadLocked(entry))
+			m_Cancellations++;
+		released = SetLoadedLocked(entry, asset);
+		SetStateLocked(entry, AssetState::Ready);
+		entry.Error.clear();
+		entry.Generation = m_NextGeneration++; // A load still in flight is discarded when it completes
+		TouchLocked(entry);
+		PublishContentChange(handle);
+		return true;
+	}
+
 	AssetHandle AssetManagerBase::AddMemoryAsset(const Ref<Asset>& asset, AssetMetadata metadata)
 	{
 		if (!metadata.Handle.IsValid())

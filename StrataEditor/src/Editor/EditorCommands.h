@@ -131,6 +131,11 @@ namespace Strata
 		std::string m_Error;
 	};
 
+	// The format entity.copy marks its data with ({"Strata": {"Format": ..., "Version": ...}, "Entities": [...]}), which
+	// entity.paste takes (the editor's clipboard holds that data too).
+	constexpr const char* c_EntityDataFormat = "Entities";
+	constexpr uint32_t c_EntityDataFormatVersion = 1;
+
 	// Built-in command groups (EditorCommands*.cpp).
 	void RegisterSceneCommands(EditorCommandRegistry& registry);
 	void RegisterAssetCommands(EditorCommandRegistry& registry);

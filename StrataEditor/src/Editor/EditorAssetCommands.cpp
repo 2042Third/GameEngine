@@ -1,3 +1,4 @@
+#include "Editor/AssetEdit.h"
 #include "Editor/CommandUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
@@ -45,45 +46,66 @@ namespace Strata
 			return { reinterpret_cast<const uint8_t*>(text.data()), text.size() };
 		}
 
-		// "AlphaCutoff, AlphaMode, BaseColor, ...": what material.create and material.set accept.
-		std::string ListMaterialProperties()
+		// A source asset of the project (a file in its asset directory): sub-assets and built-in assets have no import of
+		// their own.
+		bool CheckSourceAsset(const EditorAssetManager& assets, AssetHandle handle, std::string* outError)
 		{
-			std::string names;
-			for (const PropertyInfo& property : Material::GetPropertyInfos())
-				names += (names.empty() ? "" : ", ") + property.Name;
-			return names;
-		}
-
-		// A material document from the defaults with the given property values applied; validated by the loader.
-		std::optional<std::string> BuildMaterialDocument(const nlohmann::json& base, const nlohmann::json* properties, std::string* outError)
-		{
-			nlohmann::json document = base;
-			if (properties)
-			{
-				for (const auto& [name, value] : properties->items())
-				{
-					const auto& infos = Material::GetPropertyInfos();
-					const bool known = std::any_of(infos.begin(), infos.end(), [&](const PropertyInfo& property) { return property.Name == name; });
-					if (!known)
-					{
-						if (outError)
-							*outError = fmt::format("Unknown material property '{}' (properties: {}; material.get describes them)", name, ListMaterialProperties());
-						return std::nullopt;
-					}
-					document["Material"][name] = value;
-				}
-			}
-			std::vector<std::string> warnings;
-			Ref<Material> material = Material::FromJson(document, outError, &warnings);
-			if (!material)
-				return std::nullopt;
-			if (!warnings.empty())
+			const std::optional<AssetMetadata> metadata = assets.GetMetadata(handle);
+			if (!metadata || metadata->IsBuiltin())
 			{
 				if (outError)
-					*outError = warnings.front();
-				return std::nullopt;
+					*outError = fmt::format("{} is not a file of the project", metadata ? metadata->Name : handle.ToString());
+				return false;
 			}
-			return JsonUtils::Dump(material->Serialize(), 1, '\t') + "\n";
+			if (metadata->IsSubAsset())
+			{
+				const std::optional<AssetMetadata> parent = assets.GetMetadata(metadata->Parent);
+				if (outError)
+					*outError = fmt::format("'{}' is imported with '{}': import that asset instead", metadata->Name, parent ? parent->Path : metadata->Parent.ToString());
+				return false;
+			}
+			return true;
+		}
+
+		nlohmann::json DescribeImport(const EditorAssetManager& assets, AssetHandle handle)
+		{
+			const AssetImportInfo info = assets.GetImportInfo(handle);
+			return {
+				{ "asset", UUIDToJson(handle) },
+				{ "importSettings", assets.GetImportSettings(handle) },
+				{ "imported", info.Imported },
+				{ "importError", info.Error },
+				{ "importWarnings", info.Warnings } };
+		}
+
+		// Answers a re-import once the background import of `handle` is applied (the editor's frames call
+		// EditorAssetManager::Update), or at once with `wait` false. The import's failure fails the command.
+		EditorCommandResult FinishImport(EditorAssetManager& assets, AssetHandle handle, bool wait)
+		{
+			if (!wait)
+			{
+				nlohmann::json result = DescribeImport(assets, handle);
+				result["importing"] = assets.IsImportPending(handle);
+				return EditorCommandResult::Ok(std::move(result));
+			}
+			const std::weak_ptr<AssetManagerBase> started = assets.weak_from_this();
+			return EditorCommandResult::Defer([started, handle](EditorContext& context) -> std::optional<EditorCommandResult>
+			{
+				const Ref<AssetManagerBase> manager = started.lock();
+				EditorAssetManager* current = context.GetAssetManager();
+				if (!manager || manager.get() != current)
+					return EditorCommandResult::Fail("The project was closed before the import finished");
+				if (current->IsImportPending(handle))
+					return std::nullopt;
+				if (!current->GetMetadata(handle))
+					return EditorCommandResult::Fail("The asset was deleted before its import finished");
+				const AssetImportInfo info = current->GetImportInfo(handle);
+				if (!info.Error.empty())
+					return EditorCommandResult::Fail(fmt::format("Import failed: {}", info.Error));
+				nlohmann::json result = DescribeImport(*current, handle);
+				result["importing"] = false;
+				return EditorCommandResult::Ok(std::move(result));
+			});
 		}
 
 	}
@@ -423,7 +445,9 @@ namespace Strata
 				return EditorCommandResult::Ok({ { "assets", std::move(assets) } });
 			} });
 
-		registry.Register({ "asset.info", "An asset's metadata, load state, import errors and warnings, sub-assets and import settings.",
+		registry.Register({ "asset.info",
+			"An asset's metadata, load state, import errors and warnings, sub-assets, import settings with the description of every setting "
+			"(importSettingsProperties: type, range, options; what asset.setImportSettings accepts) and whether an import is running.",
 			ObjectSchema({ { "asset", AssetSchema("Asset") } }, { "asset" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
@@ -449,6 +473,16 @@ namespace Strata
 					result["importWarnings"] = info.Warnings;
 					result["subAssets"] = std::move(subAssets);
 					result["importSettings"] = assets->GetImportSettings(handle);
+					// What asset.setImportSettings accepts (sub-assets have none of their own).
+					nlohmann::json settingsProperties = nlohmann::json::array();
+					const AssetImporter* importer = assets->GetImporter(handle);
+					if (importer && !manager->GetMetadata(handle)->IsSubAsset())
+					{
+						for (const PropertyInfo& property : importer->GetSettingsProperties())
+							settingsProperties.push_back(DescribeProperty(property));
+					}
+					result["importSettingsProperties"] = std::move(settingsProperties);
+					result["importing"] = assets->IsImportPending(handle);
 				}
 				return EditorCommandResult::Ok(std::move(result));
 			} });
@@ -512,8 +546,11 @@ namespace Strata
 				return EditorCommandResult::Ok();
 			} });
 
-		registry.Register({ "asset.reimport", "Imports an asset again from its source file.",
-			ObjectSchema({ { "asset", AssetSchema("Asset") } }, { "asset" }),
+		registry.Register({ "asset.reimport",
+			"Imports an asset again from its source file, in the background (the editor keeps running and the asset keeps its previous version until "
+			"the new one is loaded). Returns when the import is done (its settings, warnings) and fails when it failed; wait: false returns at once "
+			"(asset.info tells when it is done).",
+			ObjectSchema({ { "asset", AssetSchema("Asset") }, { "wait", BoolSchema("Return when the import is done (default true)") } }, { "asset" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				std::string error;
@@ -522,15 +559,25 @@ namespace Strata
 					return EditorCommandResult::Fail(error);
 				CommandArguments arguments(parameters);
 				const AssetHandle handle = ResolveAsset(context, arguments, "asset", AssetType::None);
+				const bool wait = arguments.GetBool("wait", true);
+				if (arguments.IsValid() && !CheckSourceAsset(*assets, handle, &error))
+					arguments.SetError(fmt::format("Parameter 'asset': {}", error));
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				if (!assets->ReimportAsset(handle, &error))
+				if (!assets->ReimportAssetInBackground(handle, &error))
 					return EditorCommandResult::Fail(error);
-				return EditorCommandResult::Ok();
+				return FinishImport(*assets, handle, wait);
 			} });
 
-		registry.Register({ "asset.setImportSettings", "Changes import settings (merged into the current ones), saves the .meta and imports again.",
-			ObjectSchema({ { "asset", AssetSchema("Asset") }, { "settings", AnyObjectSchema("Settings to change, e.g. {\"Scale\": 0.01}") } }, { "asset", "settings" }),
+		registry.Register({ "asset.setImportSettings",
+			"Changes import settings (merged into the current ones; asset.info lists every setting with its type, range or options), saves the .meta "
+			"and imports the asset again in the background, without blocking the editor. Returns when the import is done (settings, warnings) and "
+			"fails when it failed; wait: false returns at once. Unknown settings, invalid values and numbers outside a setting's range change "
+			"nothing (they are refused, never clamped).",
+			ObjectSchema({
+				{ "asset", AssetSchema("Asset") },
+				{ "settings", AnyObjectSchema("Settings to change, e.g. {\"MaxSize\": 1024} for a texture or {\"Scale\": 0.01} for a model") },
+				{ "wait", BoolSchema("Return when the import is done (default true)") } }, { "asset", "settings" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				std::string error;
@@ -540,11 +587,18 @@ namespace Strata
 				CommandArguments arguments(parameters);
 				const AssetHandle handle = ResolveAsset(context, arguments, "asset", AssetType::None);
 				const nlohmann::json& settings = arguments.GetObject("settings");
+				const bool wait = arguments.GetBool("wait", true);
+				if (arguments.IsValid() && !CheckSourceAsset(*assets, handle, &error))
+					arguments.SetError(fmt::format("Parameter 'asset': {}", error));
+				const AssetImporter* importer = arguments.IsValid() ? assets->GetImporter(handle) : nullptr;
+				nlohmann::json normalized;
+				if (arguments.IsValid() && (!importer || !NormalizeImportSettings(*importer, settings, normalized, &error)))
+					arguments.SetError(fmt::format("Parameter 'settings': {}", importer ? error : std::string("the asset has no importer")));
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				if (!assets->SetImportSettings(handle, settings, &error))
+				if (!assets->SetImportSettingsInBackground(handle, normalized, &error))
 					return EditorCommandResult::Fail(error);
-				return EditorCommandResult::Ok({ { "importSettings", assets->GetImportSettings(handle) } });
+				return FinishImport(*assets, handle, wait);
 			} });
 
 		////////////////////////////////////////////////////////////////////////////////
@@ -553,7 +607,7 @@ namespace Strata
 
 		registry.Register({ "material.get",
 			"A material asset's property values, and every material property with its type, range or options: what material.create and "
-			"material.set accept.",
+			"material.set accept. \"saved\" is false while values previewed with material.set {save: false} are not saved.",
 			ObjectSchema({ { "material", AssetSchema("Material: handle, path or Builtin/DefaultMaterial") } }, { "material" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
@@ -562,23 +616,22 @@ namespace Strata
 				if (!arguments.IsValid())
 					return arguments.Fail();
 				Ref<Material> material = AssetManager::LoadAssetSync<Material>(handle);
+				EditorAssetManager* assets = context.GetAssetManager();
 				if (!material)
-				{
-					const EditorAssetManager* assets = context.GetAssetManager();
 					return EditorCommandResult::Fail(fmt::format("Loading the material failed: {}", assets ? assets->GetAssetError(handle) : "not loadable"));
-				}
 				nlohmann::json properties = nlohmann::json::array();
 				for (const PropertyInfo& property : Material::GetPropertyInfos())
 					properties.push_back(DescribeProperty(property));
 				nlohmann::json values = material->Serialize()["Material"];
-				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) }, { "values", std::move(values) }, { "properties", std::move(properties) } });
+				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) }, { "values", std::move(values) }, { "properties", std::move(properties) },
+					{ "saved", !assets || AssetEdit::IsMaterialSaved(*assets, handle) } });
 			} });
 
 		registry.Register({ "material.create", "Creates a material asset (.stmat) from the default material with the given property values.",
 			ObjectSchema({
 				{ "path", StringSchema("Path relative to the asset directory, e.g. \"Materials/Red.stmat\"") },
 				{ "properties", AnyObjectSchema(fmt::format("Property values, e.g. {{\"BaseColor\": [1, 0, 0, 1], \"Roughness\": 0.3}}. Properties: {} "
-					"(material.get describes their types)", ListMaterialProperties())) } }, { "path" }),
+					"(material.get describes their types)", AssetEdit::ListMaterialProperties())) } }, { "path" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				std::string error;
@@ -590,37 +643,47 @@ namespace Strata
 				const nlohmann::json* properties = arguments.FindObject("properties");
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				const std::optional<std::string> document = BuildMaterialDocument(Material::Create()->Serialize(), properties, &error);
+				EditorCommandError kind = EditorCommandError::Failed;
+				const std::optional<std::string> document = AssetEdit::BuildMaterialDocument(Material::Create()->Serialize(), properties, &error, &kind);
 				if (!document)
-					return EditorCommandResult::Fail(error);
+					return EditorCommandResult::Fail(error, kind);
 				const AssetHandle handle = assets->CreateNativeAsset(path, AsBytes(*document), &error);
 				if (!handle.IsValid())
 					return EditorCommandResult::Fail(error);
 				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) } });
 			} });
 
-		registry.Register({ "material.set", "Changes property values of a material asset and saves it; entities using it update.",
-			ObjectSchema({ { "material", AssetSchema("Material") }, { "properties", AnyObjectSchema("Property values to change") } }, { "material", "properties" }),
+		registry.Register({ "material.set",
+			"Changes property values of a material asset of the project; entities using it show the change in the same frame. By default it saves the "
+			"material (one undo step, edit.undo restores the file and the loaded values); save: false only previews the values in the loaded material "
+			"(no file is written, no undo step), e.g. while a value is dragged, until a saving material.set (which saves them too), an undo or a "
+			"reload replaces them. Returns the material's values.",
+			ObjectSchema({
+				{ "material", AssetSchema("Material") },
+				{ "properties", AnyObjectSchema(fmt::format("Property values to change, e.g. {{\"BaseColor\": [1, 0, 0, 1]}}. Properties: {} (material.get "
+					"describes their types)", AssetEdit::ListMaterialProperties())) },
+				{ "save", BoolSchema("Save the material and record an undo step (default true); false previews the values without saving") } },
+				{ "material", "properties" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				std::string error;
-				EditorAssetManager* assets = RequireAssets(context, &error);
-				if (!assets)
+				if (!RequireAssets(context, &error))
 					return EditorCommandResult::Fail(error);
 				CommandArguments arguments(parameters);
 				const AssetHandle handle = ResolveAsset(context, arguments, "material", AssetType::Material);
 				const nlohmann::json& properties = arguments.GetObject("properties");
+				const bool save = arguments.GetBool("save", true);
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				Ref<Material> current = AssetManager::LoadAssetSync<Material>(handle);
-				if (!current)
-					return EditorCommandResult::Fail(fmt::format("Loading the material failed: {}", assets->GetAssetError(handle)));
-				const std::optional<std::string> document = BuildMaterialDocument(current->Serialize(), &properties, &error);
-				if (!document)
-					return EditorCommandResult::Fail(error);
-				if (!assets->SaveNativeAsset(handle, AsBytes(*document), true, &error))
-					return EditorCommandResult::Fail(error);
-				return EditorCommandResult::Ok();
+				AssetEdit::MaterialEdit edit;
+				edit.Preview = !save;
+				EditorCommandError kind = EditorCommandError::Failed;
+				if (!AssetEdit::SetMaterialProperties(context, handle, properties, edit, &error, &kind))
+					return EditorCommandResult::Fail(error, kind);
+				Ref<Material> material = AssetManager::LoadAssetSync<Material>(handle);
+				if (!material)
+					return EditorCommandResult::Fail(fmt::format("Loading the material failed: {}", context.GetAssetManager()->GetAssetError(handle)));
+				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) }, { "values", material->Serialize()["Material"] }, { "saved", save } });
 			} });
 
 		registry.Register({ "prefab.create", "Saves entities and their descendants as a new prefab asset (.stprefab).",

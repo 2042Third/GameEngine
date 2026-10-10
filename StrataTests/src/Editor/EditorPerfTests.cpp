@@ -1,18 +1,36 @@
 #include <doctest/doctest.h>
 
+#include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/HarnessEditor.h"
+#include "Editor/HierarchyView.h"
+#include "EditorLayer.h"
 #include "Perf/PerfUtils.h"
 #include "Perf/SceneGenerators.h"
+#include "Perf/StressProject.h"
+#include "Renderer/GPUTestUtils.h"
+#include "TestHelpers.h"
 
+#include <Strata/Asset/AssetManager.h>
+#include <Strata/Core/Timestep.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Renderer/GraphicsDevice.h>
+#include <Strata/Renderer/Renderer.h>
+#include <Strata/Renderer/SceneRenderer.h>
+#include <Strata/Renderer/Texture.h>
+#include <Strata/Scene/Prefab.h>
 #include <Strata/Scene/Scene.h>
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <chrono>
+#include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 // Perf tests of editor commands on generated scenes (CTest StrataTests.Perf, Release and Dist only; see AGENTS.md "Testing").
@@ -26,6 +44,23 @@ namespace
 {
 
 	constexpr size_t c_Roots = 100'000;
+
+	// A stress project with one 4096x4096 texture, the material that uses it and an entity drawing it.
+	StressProjectSpec GetLargeTextureSpec()
+	{
+		StressProjectSpec spec;
+		spec.Textures2k = 0;
+		spec.Textures4k = 1;
+		spec.Materials = 1;
+		spec.Entities = 1;
+		spec.GridResolution = 2;
+		return spec;
+	}
+
+	std::optional<StressProject> WriteLargeTextureProject(const std::string& name, std::string& error)
+	{
+		return WriteStressProject(CreateTemporaryDirectory(name) / "Project", GetLargeTextureSpec(), error);
+	}
 
 	// An editor without a UI, whose edited scene holds `roots` empty root entities.
 	struct EditorWithRoots
@@ -144,5 +179,224 @@ TEST_SUITE("Perf.Editor")
 		CHECK(scene.GetRootEntities() == rootIds);
 		std::string error;
 		CHECK_MESSAGE(scene.ValidateHierarchy(&error), error);
+	}
+
+	TEST_CASE("The hierarchy's rows of 100,000 roots: idle frames cost nothing, a change rebuilds them")
+	{
+		EditorWithRoots editor(c_Roots);
+		const Ref<Scene>& scene = editor.Context.GetEditScene();
+		HierarchyView view;
+		REQUIRE(view.Update(scene));
+		REQUIRE(view.GetRows().size() == c_Roots);
+
+		// Unchanged frames: a few comparisons, whatever the scene's size (timed in batches: each call takes nanoseconds).
+		constexpr int c_Batch = 1000;
+		const Perf::Measurement idle = Perf::Measure("Perf.Editor.HierarchyIdleUpdate100kRoots", 10, 100, [&]
+		{
+			for (int call = 0; call < c_Batch; call++)
+				view.Update(scene);
+		});
+		CHECK(view.GetRebuildCount() == 1);
+		Perf::CheckBudget("Perf.Editor.HierarchyIdleUpdate100kRoots", idle.MedianMs * 1000.0 / c_Batch);
+
+		// An entity created among them: the rows are rebuilt once, in the next frame.
+		const Perf::Measurement rebuild = Perf::Measure("Perf.Editor.HierarchyRebuild100kRoots", 5, 50, [&]
+		{
+			scene->CreateEntity("Created");
+			REQUIRE(view.Update(scene));
+		});
+		CHECK(view.GetRows().size() == c_Roots + 55);
+		Perf::CheckBudget("Perf.Editor.HierarchyRebuild100kRoots", rebuild.MedianMs);
+	}
+
+	TEST_CASE("The Hierarchy panel's share of an editor frame with 100,000 roots")
+	{
+		// The real editor UI on the harness (no GPU: the viewport draws nothing, so the frames are the UI's own work), with
+		// the launcher dismissed and 100,000 top-level entities in the edited scene.
+		HarnessEditor editor;
+		editor.Layer->DismissLauncher();
+		Perf::CreateFlatRoots(*editor.Context().GetEditScene(), c_Roots);
+		editor.Context().GetEditScene()->UpdateWorldTransforms();
+		editor.Frames(3);
+		EditorPanelRegistry& panels = editor.Layer->GetPanels();
+		REQUIRE(panels.IsOpen(EditorPanels::c_Hierarchy));
+		ImGuiWindow* window = editor.FindPanelWindow(EditorPanels::c_Hierarchy);
+		REQUIRE(window);
+		REQUIRE(window->Active);
+
+		// The same frames with the panel open and closed: the difference of the medians is what the panel costs.
+		constexpr uint32_t c_Warmup = 10;
+		constexpr uint32_t c_Frames = 200;
+		const Perf::Measurement open = Perf::Measure("Perf.Editor.EditorFrame100kRootsHierarchyOpen", c_Warmup, c_Frames, [&] { editor.Frames(1); });
+		panels.SetOpen(EditorPanels::c_Hierarchy, false);
+		editor.Frames(2);
+		REQUIRE_FALSE(window->Active);
+		const Perf::Measurement closed = Perf::Measure("Perf.Editor.EditorFrame100kRootsHierarchyClosed", c_Warmup, c_Frames, [&] { editor.Frames(1); });
+		const double cost = std::max(open.MedianMs - closed.MedianMs, 0.0);
+		MESSAGE("Hierarchy panel: " << cost << " ms of a " << open.MedianMs << " ms frame");
+		// The authoring workstream's acceptance limit (the panel that drew every root cost 12.9 ms here).
+		CHECK(cost <= 0.3);
+		Perf::CheckBudget("Perf.Editor.HierarchyPanelFrame100kRoots", cost * 1000.0);
+	}
+
+	TEST_CASE("What 100,000 selected entities add to an editor frame")
+	{
+		HarnessEditor editor;
+		editor.Layer->DismissLauncher();
+		const std::vector<Entity> roots = Perf::CreateFlatRoots(*editor.Context().GetEditScene(), c_Roots);
+		editor.Context().GetEditScene()->UpdateWorldTransforms();
+		std::vector<UUID> all;
+		for (const Entity root : roots)
+			all.push_back(root.GetUUID());
+		editor.Frames(3);
+		const Perf::Measurement none = Perf::Measure("Perf.Editor.EditorFrameNothingSelected", 5, 50, [&] { editor.Frames(1); });
+		editor.Context().SetSelection(all);
+		editor.Frames(3);
+		const Perf::Measurement selected = Perf::Measure("Perf.Editor.EditorFrame100kSelected", 5, 50, [&] { editor.Frames(1); });
+		// The Inspector compares every selected entity's values each frame (mixed values), the Hierarchy marks the rows in view.
+		const double cost = std::max(selected.MedianMs - none.MedianMs, 0.0);
+		MESSAGE("100,000 entities selected: " << cost << " ms per frame");
+		Perf::CheckBudget("Perf.Editor.SelectionFrame100kSelected", cost);
+	}
+
+	TEST_CASE("Changing the import settings of a 4096x4096 texture never holds a frame")
+	{
+		// The editor's job system: the import and the reload run on its I/O and worker threads.
+		Perf::ScopedApplicationJobSystem jobs;
+		std::string error;
+		const std::optional<StressProject> project = WriteLargeTextureProject("PerfImportSettings", error);
+		REQUIRE_MESSAGE(project, error);
+		const AssetHandle texture = project->Textures.front();
+
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		EditorCommandRunner runner;
+		REQUIRE_MESSAGE(context.OpenProject(project->Directory, &error), error);
+		REQUIRE(AssetManager::LoadAssetSync<Texture>(texture));
+
+		constexpr int c_Rounds = 3;
+		std::vector<double> maxFrames;
+		for (int round = 0; round < c_Rounds; round++)
+		{
+			// Frames as the editor runs them: the context's update, then the commands', while the viewport uses the texture.
+			auto completed = std::make_shared<std::optional<EditorCommandResult>>();
+			const std::string usage = round % 2 == 0 ? "Data" : "Color";
+			auto start = std::chrono::steady_clock::now();
+			runner.Run(context, commands, "asset.setImportSettings", { { "asset", UUIDToJson(texture) }, { "settings", { { "Usage", usage } } } },
+				[completed](const EditorCommandResult& result) { *completed = result; });
+			double maxFrame = MillisecondsSince(start);
+			uint32_t frames = 0;
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2);
+			while ((!*completed || AssetManager::GetAssetState(texture) != AssetState::Ready) && std::chrono::steady_clock::now() < deadline)
+			{
+				start = std::chrono::steady_clock::now();
+				AssetManager::GetAsset<Texture>(texture);
+				context.Update(Timestep(1.0f / 60.0f));
+				runner.Update(context);
+				maxFrame = std::max(maxFrame, MillisecondsSince(start));
+				frames++;
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			REQUIRE(*completed);
+			INFO((*completed)->Error);
+			REQUIRE((*completed)->Success);
+			REQUIRE(AssetManager::GetAssetState(texture) == AssetState::Ready);
+			CHECK(frames > 1); // The import outlasted a frame: it really ran beside them
+			// The acceptance limit of the authoring workstream: no editor frame over 33 ms (two frames at 60 Hz).
+			CHECK(maxFrame <= 33.0);
+			maxFrames.push_back(maxFrame);
+		}
+		CHECK(AssetManager::GetAsset<Texture>(texture)->GetWidth() == 4096u);
+		Perf::CheckBudget("Perf.Editor.ImportSettings4kMaxFrame", Perf::Summarize(maxFrames).MedianMs);
+	}
+}
+
+TEST_SUITE("PerfGPU.Editor")
+{
+	TEST_CASE("Changing the import settings of a 4096x4096 texture never holds a frame that uploads and draws it")
+	{
+		// The test above without a GPU leaves out the part of a re-import that runs on the main thread: the reloaded texture's
+		// upload (Texture::FinalizeOnMainThread, in steps within the frame's upload budget). Here the editor's frames run on
+		// the shared device, as the editor runs them (device frame, renderer frame, the context's update with the assets'
+		// finalization, the commands', then the scene drawn with the texture), and each frame's work between the device's
+		// begin and end is timed (what the editor's frame time shows: without the waits for the GPU).
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		GraphicsDevice& device = gpu.GetDevice();
+		Perf::ScopedApplicationJobSystem jobs;
+		std::string error;
+		const std::optional<StressProject> project = WriteLargeTextureProject("PerfGPUImportSettings", error);
+		REQUIRE_MESSAGE(project, error);
+		const AssetHandle texture = project->Textures.front();
+
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		EditorCommandRunner runner;
+		REQUIRE_MESSAGE(context.OpenProject(project->Directory, &error), error);
+		Ref<Scene> scene;
+		{
+			Ref<SceneAsset> sceneAsset = AssetManager::LoadAssetSync<SceneAsset>(project->WorldScene);
+			REQUIRE(sceneAsset);
+			scene = sceneAsset->CreateScene(&error);
+			REQUIRE_MESSAGE(scene, error);
+		}
+		constexpr uint32_t c_Width = 1280;
+		constexpr uint32_t c_Height = 720;
+		const SceneCamera camera = GetStressSweepFrame(GetLargeTextureSpec(), StressSweepPath(), 0, static_cast<float>(c_Width) / static_cast<float>(c_Height)).Camera;
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Width, c_Height);
+		// One frame; returns its work in milliseconds.
+		const auto frame = [&]()
+		{
+			REQUIRE(device.BeginFrame());
+			const auto start = std::chrono::steady_clock::now();
+			Renderer::BeginFrame();
+			AssetManager::GetAsset<Texture>(texture);
+			context.Update(Timestep(1.0f / 60.0f));
+			runner.Update(context);
+			CHECK(renderer.Render(*scene, camera));
+			const double milliseconds = MillisecondsSince(start);
+			device.EndFrame();
+			return milliseconds;
+		};
+		// The texture uploaded and drawn before the measured re-imports.
+		const auto loaded = std::chrono::steady_clock::now() + std::chrono::minutes(2);
+		while (!(AssetManager::GetAssetState(texture) == AssetState::Ready && renderer.GetStats().PendingAssets == 0) && std::chrono::steady_clock::now() < loaded)
+			frame();
+		REQUIRE(AssetManager::GetAssetState(texture) == AssetState::Ready);
+
+		constexpr int c_Rounds = 3;
+		std::vector<double> maxFrames;
+		for (int round = 0; round < c_Rounds; round++)
+		{
+			auto completed = std::make_shared<std::optional<EditorCommandResult>>();
+			const std::string usage = round % 2 == 0 ? "Data" : "Color";
+			const auto start = std::chrono::steady_clock::now();
+			runner.Run(context, commands, "asset.setImportSettings", { { "asset", UUIDToJson(texture) }, { "settings", { { "Usage", usage } } } },
+				[completed](const EditorCommandResult& result) { *completed = result; });
+			double maxFrame = MillisecondsSince(start);
+			uint32_t frames = 0;
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2);
+			// Until the new texture is uploaded and drawn.
+			while ((!*completed || AssetManager::GetAssetState(texture) != AssetState::Ready || renderer.GetStats().PendingAssets > 0)
+				&& std::chrono::steady_clock::now() < deadline)
+			{
+				maxFrame = std::max(maxFrame, frame());
+				frames++;
+			}
+			REQUIRE(*completed);
+			INFO((*completed)->Error);
+			REQUIRE((*completed)->Success);
+			REQUIRE(AssetManager::GetAssetState(texture) == AssetState::Ready);
+			CHECK(frames > 1);
+			// The acceptance limit of the authoring workstream: no editor frame over 33 ms (two frames at 60 Hz).
+			CHECK(maxFrame <= 33.0);
+			MESSAGE("Round ", round + 1, ": ", frames, " frames, the longest ", maxFrame, " ms");
+			maxFrames.push_back(maxFrame);
+		}
+		device.WaitForIdle();
+		CHECK(AssetManager::GetAsset<Texture>(texture)->GetWidth() == 4096u);
+		CHECK(gpu.GetNewErrorCount() == 0);
+		Perf::CheckBudget("PerfGPU.Editor.ImportSettings4kMaxFrame", Perf::Summarize(maxFrames).MedianMs);
 	}
 }

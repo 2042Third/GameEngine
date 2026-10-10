@@ -258,13 +258,22 @@ namespace Strata
 	{
 		std::vector<Entity> entities;
 		std::unordered_set<UUID> visited;
+		std::unordered_set<UUID> listed;
 		for (const Entity root : roots)
 		{
-			// Skip roots nested inside another listed root; they are serialized as part of that subtree.
+			if (root.IsValid() && root.GetScene() == &scene)
+				listed.insert(root.GetUUID());
+		}
+		for (const Entity root : roots)
+		{
+			// Skip roots nested inside another listed root; they are serialized as part of that subtree. Looking at each root's
+			// ancestors keeps this linear in the number of roots (copying a selection of 100,000 entities).
+			if (!root.IsValid() || root.GetScene() != &scene)
+				continue;
 			bool nested = false;
-			for (const Entity other : roots)
-				nested |= other != root && scene.IsDescendantOf(root, other);
-			if (root.IsValid() && !nested)
+			for (Entity ancestor = root.GetParent(); ancestor && !nested; ancestor = ancestor.GetParent())
+				nested = listed.contains(ancestor.GetUUID());
+			if (!nested)
 				CollectSubtree(root, entities, visited);
 		}
 

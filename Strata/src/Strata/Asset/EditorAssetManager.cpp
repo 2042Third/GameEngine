@@ -1023,7 +1023,7 @@ namespace Strata
 		}
 	}
 
-	void EditorAssetManager::QueueImport(AssetHandle handle)
+	void EditorAssetManager::QueueImport(AssetHandle handle, bool force)
 	{
 		ImportRequest request;
 		{
@@ -1033,11 +1033,14 @@ namespace Strata
 				return;
 			if (it->second.ImportInFlight)
 			{
+				// The running import read an earlier state: one more runs when it is done.
 				it->second.ImportQueuedAgain = true;
+				it->second.ForceImportAgain = it->second.ForceImportAgain || force;
 				return;
 			}
 			it->second.ImportInFlight = true;
 			request = MakeImportRequest(it->second);
+			request.Force = force;
 		}
 
 		{
@@ -1049,7 +1052,7 @@ namespace Strata
 			ImportOutcome outcome;
 			try
 			{
-				if (!LoadCurrentImport(request, outcome))
+				if (request.Force || !LoadCurrentImport(request, outcome))
 					outcome = RunImport(request);
 			}
 			catch (const std::exception& exception)
@@ -1086,6 +1089,7 @@ namespace Strata
 				{
 					it->second.ImportInFlight = false;
 					it->second.ImportQueuedAgain = false;
+					it->second.ForceImportAgain = false;
 				}
 			}
 			std::scoped_lock<std::mutex> lock(m_ImportMutex);
@@ -1121,19 +1125,22 @@ namespace Strata
 		{
 			const AssetHandle handle = outcome.Handle;
 			bool importAgain = false;
+			bool forceAgain = false;
 			{
 				std::scoped_lock<std::mutex> lock(m_SourceMutex);
 				auto it = m_Sources.find(handle);
 				if (it != m_Sources.end())
 				{
 					importAgain = it->second.ImportQueuedAgain;
+					forceAgain = it->second.ForceImportAgain;
 					it->second.ImportInFlight = false;
 					it->second.ImportQueuedAgain = false;
+					it->second.ForceImportAgain = false;
 				}
 			}
 			ApplyImportOutcome(std::move(outcome), true);
 			if (importAgain)
-				QueueImport(handle);
+				QueueImport(handle, forceAgain);
 		}
 	}
 
@@ -1580,7 +1587,16 @@ namespace Strata
 		return it != m_Sources.end() ? it->second.Settings : nlohmann::json();
 	}
 
-	bool EditorAssetManager::SetImportSettings(AssetHandle handle, const nlohmann::json& settings, std::string* outError)
+	const AssetImporter* EditorAssetManager::GetImporter(AssetHandle handle) const
+	{
+		if (std::optional<AssetMetadata> metadata = GetMetadata(handle); metadata && metadata->IsSubAsset())
+			handle = metadata->Parent;
+		std::scoped_lock<std::mutex> lock(m_SourceMutex);
+		auto it = m_Sources.find(handle);
+		return it != m_Sources.end() ? it->second.Importer : nullptr;
+	}
+
+	bool EditorAssetManager::WriteImportSettings(AssetHandle handle, const nlohmann::json& settings, std::string* outError)
 	{
 		if (!settings.is_object())
 		{
@@ -1589,45 +1605,73 @@ namespace Strata
 			return false;
 		}
 
+		std::scoped_lock<std::mutex> lock(m_SourceMutex);
+		auto it = m_Sources.find(handle);
+		if (it == m_Sources.end())
+		{
+			if (outError)
+				*outError = "Not a source asset of the project";
+			return false;
+		}
+		// An invalid .meta on disk is never overwritten: it may hold a merge conflict.
+		const MetaContents meta = ReadMetaFile(GetMetaPath(ToAbsolute(it->second.Path)));
+		if (meta.Status == MetaStatus::Invalid)
+		{
+			if (outError)
+				*outError = fmt::format("The .meta file of '{}' is invalid ({}); fix or delete it first", it->second.Path, meta.Error);
+			return false;
+		}
+
+		nlohmann::json previousSettings = it->second.Settings;
+		MergeSettings(it->second.Settings, settings);
+		if (!WriteMetaFile(it->second))
+		{
+			it->second.Settings = std::move(previousSettings);
+			if (outError)
+				*outError = fmt::format("Could not write the .meta file of '{}'", it->second.Path);
+			return false;
+		}
+		return true;
+	}
+
+	bool EditorAssetManager::SetImportSettings(AssetHandle handle, const nlohmann::json& settings, std::string* outError)
+	{
+		return WriteImportSettings(handle, settings, outError) && ReimportAsset(handle, outError);
+	}
+
+	bool EditorAssetManager::SetImportSettingsInBackground(AssetHandle handle, const nlohmann::json& settings, std::string* outError)
+	{
+		return WriteImportSettings(handle, settings, outError) && QueueBackgroundImport(handle, false, outError);
+	}
+
+	void EditorAssetManager::ReloadDirectSource(AssetHandle handle)
+	{
+		uint64_t sourceSize = 0;
 		{
 			std::scoped_lock<std::mutex> lock(m_SourceMutex);
 			auto it = m_Sources.find(handle);
 			if (it == m_Sources.end())
-			{
-				if (outError)
-					*outError = "Not a source asset of the project";
-				return false;
-			}
-			// An invalid .meta on disk is never overwritten: it may hold a merge conflict.
-			const MetaContents meta = ReadMetaFile(GetMetaPath(ToAbsolute(it->second.Path)));
-			if (meta.Status == MetaStatus::Invalid)
-			{
-				if (outError)
-					*outError = fmt::format("The .meta file of '{}' is invalid ({}); fix or delete it first", it->second.Path, meta.Error);
-				return false;
-			}
-
-			nlohmann::json previousSettings = it->second.Settings;
-			MergeSettings(it->second.Settings, settings);
-			if (!WriteMetaFile(it->second))
-			{
-				it->second.Settings = std::move(previousSettings);
-				if (outError)
-					*outError = fmt::format("Could not write the .meta file of '{}'", it->second.Path);
-				return false;
-			}
+				return;
+			const std::filesystem::path path = ToAbsolute(it->second.Path);
+			it->second.SourceSize = FileSystem::GetFileSize(path).value_or(0);
+			it->second.SourceTime = FileSystem::GetLastWriteTime(path).value_or(0);
+			it->second.Import.Imported = true;
+			it->second.Import.Error.clear();
+			sourceSize = it->second.SourceSize;
 		}
-		return ReimportAsset(handle, outError);
+		SetStoredSize(handle, sourceSize);
+		QueueNativeReferences(handle);
+		ReloadAsset(handle);
 	}
 
-	bool EditorAssetManager::ReimportAsset(AssetHandle handle, std::string* outError)
+	bool EditorAssetManager::ReimportAssetInBackground(AssetHandle handle, std::string* outError)
 	{
-		// Finish background imports first: their results would otherwise overwrite this one.
-		WaitForImports();
+		return QueueBackgroundImport(handle, true, outError);
+	}
 
-		ImportRequest request;
+	bool EditorAssetManager::QueueBackgroundImport(AssetHandle handle, bool force, std::string* outError)
+	{
 		bool direct = false;
-		uint64_t sourceSize = 0;
 		{
 			std::scoped_lock<std::mutex> lock(m_SourceMutex);
 			auto it = m_Sources.find(handle);
@@ -1638,26 +1682,47 @@ namespace Strata
 				return false;
 			}
 			direct = it->second.Importer->StoresSourceDirectly();
-			if (direct)
+		}
+		if (direct)
+			ReloadDirectSource(handle);
+		else
+			QueueImport(handle, force);
+		return true;
+	}
+
+	bool EditorAssetManager::IsImportPending(AssetHandle handle) const
+	{
+		if (std::optional<AssetMetadata> metadata = GetMetadata(handle); metadata && metadata->IsSubAsset())
+			handle = metadata->Parent;
+		std::scoped_lock<std::mutex> lock(m_SourceMutex);
+		auto it = m_Sources.find(handle);
+		return it != m_Sources.end() && (it->second.ImportInFlight || it->second.ImportQueuedAgain);
+	}
+
+	bool EditorAssetManager::ReimportAsset(AssetHandle handle, std::string* outError)
+	{
+		// Finish background imports first: their results would otherwise overwrite this one.
+		WaitForImports();
+
+		ImportRequest request;
+		bool direct = false;
+		{
+			std::scoped_lock<std::mutex> lock(m_SourceMutex);
+			auto it = m_Sources.find(handle);
+			if (it == m_Sources.end())
 			{
-				const std::filesystem::path path = ToAbsolute(it->second.Path);
-				it->second.SourceSize = FileSystem::GetFileSize(path).value_or(0);
-				it->second.SourceTime = FileSystem::GetLastWriteTime(path).value_or(0);
-				it->second.Import.Imported = true;
-				it->second.Import.Error.clear();
-				sourceSize = it->second.SourceSize;
+				if (outError)
+					*outError = "Not a source asset of the project";
+				return false;
 			}
-			else
-			{
+			direct = it->second.Importer->StoresSourceDirectly();
+			if (!direct)
 				request = MakeImportRequest(it->second);
-			}
 		}
 
 		if (direct)
 		{
-			SetStoredSize(handle, sourceSize);
-			QueueNativeReferences(handle);
-			ReloadAsset(handle);
+			ReloadDirectSource(handle);
 			return true;
 		}
 

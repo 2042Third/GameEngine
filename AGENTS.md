@@ -96,7 +96,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   with the asset pipeline (`Engine::RegisterBuiltinModules`) before the suites and the helper modes run; a test that
   needs its own component registers it in a child process (`--strata-test-helper=custom-component`,
   `Engine/ModuleRegistrationHelpers.cpp`). The editor's UI is tested headless with `ImGuiHarness` (suites `Editor.UI`,
-  `Editor.Theme`, `Editor.UI.Source`; see Editor, "Editor UI rules").
+  `Editor.UI.Hierarchy`, `Editor.UI.Inspector`, `Editor.UI.AssetInspector`, `Editor.Theme`, `Editor.UI.Source`; see
+  Editor, "Editor UI rules").
 - Suites whose names start with `GPU` need a Vulkan device and are registered separately under the
   CTest label `gpu`. They share one device per process through `Tests::GPUContext` (never create
   devices in tests) and end with `CHECK(gpu.GetNewErrorCount() == 0)`, so validation errors fail the
@@ -154,15 +155,19 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   are tracked; creating 10,000 bodies in one frame; the memory a world at the largest capacities reserves),
   `Perf.TextureCook` (cold imports of the stress project, its stored texture and pack sizes, the BC7 encoder's time per
   block on one thread), `PerfGPU.Renderer` (`SceneRenderer::Render` alone on 100,000 and 300,000 cubes and on 10,000
-  cubes with unique materials) and, in `src/Editor/`, `Perf.Editor` (entity commands among 100,000 roots),
-  `PerfGPU.Editor`, which runs the real `StrataEditor` maximized on generated 100,000- and 1,000,000-entity scenes and
-  checks the median CPU frame time its `editor.wait` steps report (when the editor fails, the test describes the scene
-  files on disk with `Tests::DescribeJsonFile`, which tells a damaged file from a failed read or parse), and exports the
-  stress project (every frame meanwhile at most 50 ms), and the editor frames of `PerfGPU.Renderer` (cube grids of
-  100,000, also with all of them selected, and of 300,000, a narrow view of 50,000, 10,000 point lights, 10,000 unique
-  materials); `PerfGPU.Pack` compares pack versions 2 and 1 of the stress project (size, opening, streaming the world;
-  the acceptance limit of 110% is the budget of a `ratio` metric, version 2's time to version 1's, so it is checked like
-  any budget). Time calls that take nanoseconds in batches (the clock's resolution is about 0.1 microseconds).
+  cubes with unique materials) and, in `src/Editor/`, `Perf.Editor` (entity commands among 100,000 roots; the
+  hierarchy's rows of 100,000 roots, idle and rebuilt; the Hierarchy panel's share of an editor frame with 100,000
+  roots, open against closed; what 100,000 selected entities add to a frame; the longest editor frame while a
+  4096x4096 texture re-imports with new settings), `PerfGPU.Editor`, which runs the real `StrataEditor` maximized on
+  generated 100,000- and 1,000,000-entity scenes and checks the median CPU frame time its `editor.wait` steps report
+  (when the editor fails, the test describes the scene files on disk with `Tests::DescribeJsonFile`, which tells a
+  damaged file from a failed read or parse), exports the stress project (every frame meanwhile at most 50 ms) and times
+  the editor's frames on the shared device while that texture re-imports, uploads and is drawn, and the editor frames of
+  `PerfGPU.Renderer` (cube grids of 100,000, also with all of them selected, and of 300,000, a narrow view of 50,000,
+  10,000 point lights, 10,000 unique materials); `PerfGPU.Pack` compares pack versions 2 and 1 of the stress project
+  (size, opening, streaming the world; the acceptance limit of 110% is the budget of a `ratio` metric, version 2's time
+  to version 1's, so it is checked like any budget). Time calls that take nanoseconds in batches (the clock's resolution
+  is about 0.1 microseconds).
   A process's peak memory includes everything it did before, so a test that measures peak memory
   runs the measured work in a helper process (`--strata-test-helper=<mode>`, see `TestMain.cpp`): `PerfGPU.Streaming`
   runs its camera sweeps over the stress project (`src/Perf/StressProject.h`, also usable by other suites;
@@ -405,7 +410,13 @@ The threading model, frame loop and pipelines these rules protect are described 
   cached import is redone when the source content, the import settings, the importer's `GetVersion()`
   or another file the import read change — **bump the version whenever an importer's output format
   changes.** Importers read files other than their source only through `ReadImportDependency`, which
-  confines reads to the asset directory and records the file as a dependency.
+  confines reads to the asset directory and records the file as a dependency. An importer with settings describes every
+  one in `GetSettingsProperties` (one `ImportSettingsBuilder` entry each: type, default, range or choices, tooltip;
+  choices show in words, "NormalMap" as "Normal Map", and `PowerOfTwoLimit` makes a size limit a choice of "No limit" or
+  a power of two), matching the keys of `GetDefaultSettings`; the asset inspector draws them and
+  `asset.setImportSettings` validates against them (`NormalizeImportSettings`), so a new setting is one entry there. Editors re-import in the background
+  (`EditorAssetManager::SetImportSettingsInBackground`, `ReimportAssetInBackground`, `IsImportPending`); the blocking
+  forms are for tools and tests.
 - Engine-native assets (`.stscene`, `.stprefab`, `.stmat`) are JSON documents with a
   `{ "Strata": { "Format": ..., "Version": ... } }` header, stored as-is. Their loaders validate fully;
   JSON entry points are named `FromJson`, byte entry points `Deserialize`.
@@ -720,7 +731,15 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `EditorContext::CommitEdit` records the difference. Edits while playing are not recorded. Continuous edits merge
   into one step (`EditorAction::MergeWith`); a merged step that ends where it started (`IsNoOp`) is dropped. Capturing
   reads cached sibling positions and applying a step removes and places entities in batches (`Scene::DestroyEntities`,
-  `Scene::PlaceEntities`), so edits of many entities in long sibling lists stay linear.
+  `Scene::PlaceEntities`), so edits of many entities in long sibling lists stay linear. Commands that act on several
+  entities take `entities` (besides `entity` where one was taken before) and record one step: `entity.setParent {entities,
+  parent, index}` (index: the final position of the first; reorders siblings and top-level entities too),
+  `entity.duplicate {entities}`, `entity.copy {entities}` and `entity.paste {data, parent, index}` (fresh IDs, references
+  among the pasted entities remapped, no prefab links added), `entity.setActive {entities}`, `component.add {entities}`
+  (where the component is missing), `component.remove {entities}` (every listed entity must have the component, or
+  nothing is removed) and `component.set {entities}`. The inspector edits a
+  multi-selection through `PropertyEdit` (`GetSharedProperty`, multi-entity `SetPropertyWithUndo`, `RotationAnglesEdit`
+  for rotations edited as Euler angles, `GetDefaultComponentValues` for Reset).
 - `project.export` writes a playable game outside the project in the background (`GameExport`; the command answers when
   it finished, so command scripts that export need frames: `--quit-after-commands`): the asset pack (`<Game>.stpak`,
   ordered by first use; `prune` leaves out what neither the scenes nor `Export.AlwaysInclude` use and lists it in
@@ -751,7 +770,7 @@ and `AudioSystem`, the built-in "Audio" scene system.
   fields need a loaded module, which validates class and field names and types; removing works without one. Script edits
   are undoable (`ScriptEdit`, shared with the inspector's Script drawer) and reach the live instances while playing. The
   UI builds with Scripts > Build Scripts (Ctrl+B) or the toolbar.
-- Commands never block a frame. One that has to wait (frames, a build, a GPU readback) returns
+- Commands never block a frame. One that has to wait (frames, a build, an import, a GPU readback) returns
   `EditorCommandResult::Defer(poll)`; `EditorCommandRunner` polls it once per frame, starting with the
   next frame, and reports through a completion callback. Command scripts, automation and UI actions that
   can take frames (e.g. Build Scripts) run commands through the runner; UI actions that finish at once
@@ -788,6 +807,27 @@ and `AudioSystem`, the built-in "Audio" scene system.
   build tree, builds a scene and captures the viewport into `build/<preset>/StrataTests/SmokeCaptures/`), checks that a
   windowed editor without a project opens into the launcher (`Editor/LauncherCommands.json`) and that failing and
   unfinished scripts fail the process.
+- The hierarchy panel draws the rows of `Editor/HierarchyView` (the visible entities as a flat list; a filter with
+  `c:`/`t:` terms shows matches with their ancestors), which are rebuilt only when the hierarchy, the expansion or the
+  filter changed: never walk the scene per frame in UI code, and draw long lists through `ImGuiListClipper` (only the
+  rows in view). The rows sit in one `ImGui::BeginMultiSelect` scope whose requests set `EditorContext::SetSelection`
+  (rows identify themselves by their entity's handle, never by row index, which changes as rows appear; while filtering,
+  Ctrl+A, ranges and boxes take the matches only); drops map to `entity.setParent {entities, parent, index}` through
+  `HierarchyView::GetDropTarget`; F2 or a double click renames in place.
+- The inspectors show the selected entities or one asset (`EditorContext::SetInspectedAsset`, `selection.set {asset}`;
+  the entities stay selected). Selecting an entity, deleting the asset or closing the project returns to the entities;
+  `GetInspectionVersion` changes with every switch and every asset inspected (again), and the editor brings the
+  matching tab (Inspector or Asset) forward without taking the keyboard focus. The Inspector edits every selected entity
+  at once (shared components only; values that differ show as mixed; one undo step per edit), offers per component
+  Reset, Copy Values and Paste Values (the values component.set can set; not for components without such properties)
+  and Remove (not for components the engine adds), and shows the scene's settings and sky with nothing selected; the
+  Asset tab edits materials (`UI/MaterialEditor`: a drag previews, its release is one undo step) and import settings
+  (Apply runs `asset.setImportSettings` through the runner). Property widgets come from `UI/PropertyWidgets.h`
+  (`DrawPropertyWidget` with `PropertyWidgetOptions` for mixed values, axis resets and probe keys).
+- **Shortcuts:** `EditorLayer` handles the global ones (Ctrl+Z, Ctrl+Y, Ctrl+S, Ctrl+Shift+S, Ctrl+P, Ctrl+B).
+  Shortcuts that act on the selection (Delete, Ctrl+D, Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+A, F2) are
+  `ImGuiInputFlags_RouteFocused` shortcuts of the Hierarchy and the Viewport (`UI/EditorActions.h`,
+  `HandleSelectionShortcuts`): a key pressed in another panel never edits the scene. The Edit menu runs the same actions.
 - `editor.status` summarizes the editor (project, scene, play state, selection, undo history); other
   parts of the editor add sections to it through `EditorContext::SetStatusProvider`: `automation`, `assets` (the
   totals of `asset.stats`) and `editor`: the window, UI scale and frame rate, whether the launcher shows (`launcher`),
@@ -888,9 +928,13 @@ and `AudioSystem`, the built-in "Audio" scene system.
   snap, translateSnap, rotateSnap, scaleSnap, debugView}` read and change the view settings (validated as a whole: an
   invalid value changes nothing; the debug view is saved with them); `allColliders` draws the collider shapes of every
   entity instead of only the selection's.
-- Materials: `material.create {path, properties}`, `material.set {material, properties}` and `material.get {material}` (its
-  values and every material property described like `component.list` describes component properties); an unknown property
-  name fails with the list of known ones.
+- Materials: `material.create {path, properties}`, `material.set {material, properties, save}` and `material.get {material}`
+  (its values, whether they are saved, and every material property described like `component.list` describes component
+  properties); an unknown property name fails with the list of known ones. Edits of asset documents go through
+  `Editor/AssetEdit` (also the asset inspector's): a saved edit writes the file and publishes the new document as the
+  loaded asset at once (`AssetManagerBase::ReplaceLoadedAsset`), recording an `AssetDocumentAction` (the document's bytes
+  before and after; merged by key for drags); `save: false` only previews the values in the loaded material. Such steps
+  do not change the scene (`EditorAction::ChangesScene`), so they never mark it unsaved.
 - **Simulated input** (`Editor/EditorInputCommands.cpp`) lets tools play a running game (play mode only) as a person
   would: `input.key {key, action: tap|press|release, frames, wait}`, `input.mouseButton {button, action, frames, wait}`,
   `input.mouseMove {position, wait}` (pixels from the game view's top-left corner), `input.scroll {delta, wait}`,

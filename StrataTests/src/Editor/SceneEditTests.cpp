@@ -134,6 +134,49 @@ TEST_SUITE("Editor.SceneEdit")
 		CHECK(Snapshot(scene) == swapped);
 	}
 
+	TEST_CASE("Sibling orders are restored also where recorded positions agree by chance")
+	{
+		Scene scene;
+		std::vector<Entity> roots;
+		for (const char* name : { "A", "B", "C", "D" })
+			roots.push_back(scene.CreateEntity(name));
+		const nlohmann::json original = Snapshot(scene);
+		auto names = [&scene]()
+		{
+			std::vector<std::string> result;
+			for (UUID id : scene.GetRootEntities())
+				result.push_back(scene.GetEntityByUUID(id).GetName());
+			return result;
+		};
+
+		// D and B move to the front: B keeps position 1, but it now comes before A.
+		UndoStack undo;
+		SceneEditTransaction transaction(scene, "Reorder", { roots[3].GetUUID(), roots[1].GetUUID() });
+		const std::vector<Scene::EntityPlacement> placements = { { roots[3].GetUUID(), UUID::Null(), 0 }, { roots[1].GetUUID(), UUID::Null(), 1 } };
+		REQUIRE(scene.PlaceEntities(placements));
+		REQUIRE(transaction.Commit(undo));
+		CHECK(names() == std::vector<std::string> { "D", "B", "A", "C" });
+		REQUIRE(undo.Undo());
+		CHECK(names() == std::vector<std::string> { "A", "B", "C", "D" });
+		CHECK(Snapshot(scene) == original);
+
+		// Recreated entities are appended first: C's copy lands at its recorded position 4 by chance, before A's copy is
+		// inserted in front of it.
+		SceneEditTransaction duplicate(scene, "Duplicate", {});
+		const Entity copyOfC = scene.DuplicateEntity(roots[2]);
+		const Entity copyOfA = scene.DuplicateEntity(roots[0]);
+		duplicate.TrackCreated(copyOfC.GetUUID());
+		duplicate.TrackCreated(copyOfA.GetUUID());
+		REQUIRE(duplicate.Commit(undo));
+		CHECK(names() == std::vector<std::string> { "A", "A", "B", "C", "C", "D" });
+		const nlohmann::json duplicated = Snapshot(scene);
+		REQUIRE(undo.Undo());
+		REQUIRE(undo.Redo());
+		CHECK(Snapshot(scene) == duplicated);
+		std::string error;
+		CHECK_MESSAGE(scene.ValidateHierarchy(&error), error);
+	}
+
 	TEST_CASE("Edits without changes record nothing and continuous edits merge")
 	{
 		TestHierarchy hierarchy;

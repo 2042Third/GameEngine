@@ -1,8 +1,9 @@
 #include "Panels/ContentBrowserPanel.h"
 
+#include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
-#include "Panels/SceneHierarchyPanel.h"
+#include "UI/EditorActions.h"
 #include "UI/FileDialogs.h"
 #include "UI/Icons.h"
 #include "UI/PropertyWidgets.h"
@@ -95,6 +96,22 @@ namespace Strata
 		m_Filter.clear();
 		m_RefreshRequested = true;
 		return true;
+	}
+
+	void ContentBrowserPanel::SetCurrentDirectory(std::string directory)
+	{
+		m_CurrentDirectory = std::move(directory);
+		m_RefreshRequested = true;
+	}
+
+	std::optional<ContentBrowserPanel::ItemRect> ContentBrowserPanel::FindItemRect(AssetHandle asset) const
+	{
+		for (const ItemRect& item : m_ItemRects)
+		{
+			if (item.Asset == asset)
+				return item;
+		}
+		return std::nullopt;
 	}
 
 	void ContentBrowserPanel::OpenScene(EditorContext& context, const EditorCommandRegistry& commands, AssetHandle scene)
@@ -222,6 +239,7 @@ namespace Strata
 	{
 		EditorContext& context = panelContext.Context;
 		const EditorCommandRegistry& commands = panelContext.Commands;
+		m_ItemRects.clear();
 		if (!context.GetAssetManager())
 		{
 			ImGui::TextDisabled("Open or create a project to manage its assets (File menu)");
@@ -252,13 +270,22 @@ namespace Strata
 				const bool failed = !item.ImportError.empty();
 				if (failed)
 					ImGui::PushStyleColor(ImGuiCol_Text, UI::GetThemeColors().Error);
-				// The open scene is the selected row, and so is an asset revealed from elsewhere (the Streaming panel).
+				// The inspected asset is the selected row, and so is an asset revealed from elsewhere (the Streaming panel) until
+				// another row is clicked; clicking an asset shows it in the asset inspector.
+				const bool inspected = metadata.Handle == context.GetInspectedAsset();
 				const bool revealed = metadata.Handle == m_Revealed;
-				const bool selected = metadata.Handle == context.GetSceneHandle() || revealed;
+				const bool selected = inspected || revealed;
+				// The open scene says so.
+				const std::string label = metadata.Handle == context.GetSceneHandle() ? item.Label + "  (open)" : item.Label;
 				UI::PushSelectionColors(selected);
-				if (ImGui::Selectable(item.Label.c_str(), selected, ImGuiSelectableFlags_AllowDoubleClick) && !revealed)
-					m_Revealed = UUID::Null();
+				if (ImGui::Selectable(label.c_str(), selected, ImGuiSelectableFlags_AllowDoubleClick))
+				{
+					context.SetInspectedAsset(metadata.Handle);
+					if (!revealed)
+						m_Revealed = UUID::Null();
+				}
 				UI::PopSelectionColors();
+				m_ItemRects.push_back({ metadata.Handle, ImGui::GetItemRectMin(), ImGui::GetItemRectMax() });
 				if (revealed && m_ScrollToRevealed)
 				{
 					ImGui::SetScrollHereY(0.5f);
@@ -291,8 +318,15 @@ namespace Strata
 						openScene = metadata.Handle;
 					if (ImGui::MenuItem("Rename"))
 						openRename = true;
+					// Imports run in the background: the command answers frames later.
 					if (ImGui::MenuItem("Reimport"))
-						RunEditorCommand(context, commands, "asset.reimport", { { "asset", UUIDToJson(metadata.Handle) } });
+					{
+						panelContext.Runner.Run(context, commands, "asset.reimport", { { "asset", UUIDToJson(metadata.Handle) } }, [](const EditorCommandResult& result)
+						{
+							if (!result.Success)
+								ST_ERROR("Reimport: {}", result.Error);
+						});
+					}
 					ImGui::Separator();
 					if (ImGui::MenuItem("Delete"))
 					{

@@ -94,6 +94,16 @@ namespace Strata
 				return settings;
 			}
 
+			std::vector<PropertyInfo> GetSettingsProperties() const override
+			{
+				std::vector<PropertyInfo> properties;
+				ImportSettingsBuilder(properties)
+					.Enum("LoadMode", { "Decompressed", "Streamed" }, "Decompressed")
+						.Tooltip("Decompressed: decoded once when loaded (short sound effects). Streamed: decoded while it plays (music, ambience); new "
+							"files over 1 MiB start streamed");
+				return properties;
+			}
+
 			bool Import(const ImportContext& context, ImportResult& result, std::string* outError) const override
 			{
 				std::vector<uint8_t> encoded;

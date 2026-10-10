@@ -27,6 +27,16 @@ namespace Strata
 	};
 	ST_DEFINE_ENUM_FLAG_OPERATORS(ComponentFlags)
 
+	// Hears of changes of a component type in a registry (ComponentInfo::Observe): caches and filters that depend on which
+	// entities have a component, or on its values, without knowing the type.
+	class ComponentObserver
+	{
+	public:
+		virtual ~ComponentObserver() = default;
+		// The component was added to, changed on (when observed with updates) or is being removed from the entity.
+		virtual void OnComponentChanged(entt::registry& registry, entt::entity entity) = 0;
+	};
+
 	// Reflection metadata and type-erased ECS operations for one component type.
 	struct ComponentInfo
 	{
@@ -44,6 +54,11 @@ namespace Strata
 		std::function<void(entt::registry&, entt::entity)> Remove;
 		std::function<void(entt::registry&, entt::entity)> MarkModified;  // Emits the registry's on_update signal
 		std::function<void(entt::registry& destination, entt::entity destinationEntity, const entt::registry& source, entt::entity sourceEntity)> Copy;
+		// Connects the observer to the registry's signals of this type: additions and removals, and with `updates` the
+		// on_update signal too (value changes that are signaled, see Entity::MarkModified). Release the returned connections
+		// (entt::connection::release) while the registry exists, at the latest when the observer goes; a registry that is
+		// destroyed ends them itself, and releasing them afterwards would touch freed memory.
+		std::function<std::vector<entt::connection>(entt::registry& registry, ComponentObserver& observer, bool updates)> Observe;
 
 		// Optional serialization of data that is not expressed as properties (e.g. script fields).
 		std::function<void(const void* component, nlohmann::json& out)> SerializeExtra;
@@ -219,6 +234,15 @@ namespace Strata
 				if (const T* component = source.try_get<T>(sourceEntity))
 					destination.emplace_or_replace<T>(destinationEntity, *component);
 			}
+		};
+		info.Observe = [](entt::registry& registry, ComponentObserver& observer, bool updates)
+		{
+			std::vector<entt::connection> connections;
+			connections.emplace_back(registry.on_construct<T>().template connect<&ComponentObserver::OnComponentChanged>(observer));
+			connections.emplace_back(registry.on_destroy<T>().template connect<&ComponentObserver::OnComponentChanged>(observer));
+			if (updates)
+				connections.emplace_back(registry.on_update<T>().template connect<&ComponentObserver::OnComponentChanged>(observer));
+			return connections;
 		};
 
 		return ComponentInfoBuilder<T>(registered);

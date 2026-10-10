@@ -641,7 +641,11 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   through `ReloadAsset`: loaded assets load again, and every reloaded asset gets a new source revision
   (`GetSourceRevisions`), announced as a content change at once when no object of it is loaded. The cache record
   (`<handle>.import`) remembers the source state, settings, importer version and dependencies, so a current import is
-  reused.
+  reused. Editor commands take the same background path: `SetImportSettingsInBackground` saves the `.meta` and queues
+  the import, `ReimportAssetInBackground` queues one even when the cached import is current (`ImportRequest::Force`;
+  assets stored as-is reload at once and their references are searched again), and `IsImportPending` tells a deferred
+  command (`asset.setImportSettings`, `asset.reimport`) when `Update` applied it; `SetImportSettings` and
+  `ReimportAsset` import on the calling thread (tools, tests, `asset.import`).
 - **References and bounds** (`Asset/AssetDependencies.h`). What an asset references is recorded with its import:
   importers add what their stored form does not show as a document (`ImportResult::References`; a glTF mesh's default
   materials) and the local bounds of meshes (`Bounds`), and `AssetDependencies::Scan` reads the documents (scenes,
@@ -656,6 +660,12 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   The manager hands them to `AssetManagerBase::SetAssetReferences`, which keeps each valid handle once and leaves out the
   asset itself (`NormalizeReferences`); packs carry them as their dependency table and entry bounds, so `GetDependencies`
   and `GetBounds` answer the same in the editor and in the game, before anything loads.
+- **Import settings** are a JSON object per asset (the importer's `GetDefaultSettings`, merged with the `.meta`'s
+  `ImportSettings`). `AssetImporter::GetSettingsProperties` describes them as reflected properties of that object (built
+  with `ImportSettingsBuilder`: getters read a setting or its default, setters write its canonical JSON), so the asset
+  inspector draws them with the property widgets, `asset.info` lists them (`importSettingsProperties`) and
+  `NormalizeImportSettings` checks and canonicalizes what `asset.setImportSettings` is given (a number outside its
+  setting's range is refused with the range rather than clamped into it).
 - **Importers and stored forms** (`Asset/AssetImporters.cpp`; the loaders that read the stored form are registered by
   the module that owns each type, one `Deserialize` per type, `Font::Create` for fonts):
 
@@ -675,7 +685,9 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   `Update` finalizes completions on the main thread: `Asset::FinalizeOnMainThread` creates GPU resources on one upload
   command list, in steps, until the frame's upload or time budget is used up (`AssetFinalizeResult::Pending`: the asset
   continues next frame, first in line). Generations discard results of loads that were superseded by a reload, unload
-  or cancellation. `LoadAssetSync` is for tools, tests and scene switches (unbudgeted: it finishes at once). Budgets,
+  or cancellation. `LoadAssetSync` is for tools, tests and scene switches (unbudgeted: it finishes at once);
+  `ReplaceLoadedAsset` publishes an object made in memory for a registered asset at once (editors' document edits).
+  Budgets,
   eviction, uploads and the queue are described in [Streaming and residency](#streaming-and-residency).
 - **Streaming**. Assets load on first use and code handles "not loaded yet" every frame: `SceneRenderer` skips or
   substitutes what is pending and counts it (`SceneRendererStats::PendingAssets`), `AssetMeshProvider` reports meshes
@@ -790,9 +802,10 @@ Textures are stored the way the GPU samples them: block-compressed, with their m
   test's checker is exact and a smooth 256x256 gradient reaches 54 dB at `High` (BC1: 43.6 and 45.6 dB).
 - **Where imports run**: `EditorAssetManager::Scan` imports what needs it in parallel on the worker pool while its
   caller waits (the editor, when it opens a project); re-imports after file changes run on I/O jobs and are applied
-  between frames; the editor's `asset.import`, `asset.reimport` and `asset.setImportSettings` still import on the main
-  thread inside the command (encoding on all workers: about a fifth of the stress project's cold import, 1.5 s, for a
-  4096x4096 color texture in Release), until `content-and-prefabs` makes them asynchronous (Docs/Roadmap.md).
+  between frames, and so do `asset.reimport` and `asset.setImportSettings` (see [Importing](#asset-pipeline): their
+  commands answer once the import is applied); the editor's `asset.import` still imports on the main thread inside the
+  command (encoding on all workers: about a fifth of the stress project's cold import, 1.5 s, for a 4096x4096 color
+  texture in Release), until `content-and-prefabs` makes it asynchronous (Docs/Roadmap.md).
 - **Cooked form** (`Renderer/CookedTexture.h`, `STTX` version 2): a 40-byte header (format, size, mip count, flags,
   filter, wrap, name length, data offset), a mip table (width, height, offset, size per level), the debug name, then the
   levels smallest first, each 16-byte aligned. The mip tail - every level up to 128x128 - is therefore one range right
@@ -1131,8 +1144,11 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
  --------------------------------------------------------------------------------------------------------------
  StrataEditorUI    EditorLayer            owns everything below: menu bar, main toolbar, status pills, default
                                           layout, shortcuts, idle throttling, file dialogs (nfd)
-                   EditorPanelRegistry    the panels (Viewport, Hierarchy, Inspector, Console, Content Browser,
-                                          Streaming, Performance): windows, View menu, open state in imgui.ini
+                   EditorPanelRegistry    the panels (Viewport, Hierarchy, Inspector, Asset, Console, Content
+                                          Browser, Streaming, Performance): windows, View menu, open state in
+                                          imgui.ini
+                   EditorActions          selection actions (delete, duplicate, cut, copy, paste, select all)
+                                          for the Edit menu and the focus-scoped shortcuts
                    UI kit                 Theme (palette, ApplyTheme), EditorFonts, Icons, Widgets, ItemProbe
  --------------------------------------------------------------------------------------------------------------
  StrataEditorCore  EditorContext          project, EditorAssetManager, edited and running scene, play mode,
@@ -1212,7 +1228,11 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   (`CMake/StrataCopySamples.cmake`, without local `.strata` data); `project.openSample` copies one, again without its
   `.strata`, into a new directory and opens the copy, so the shipped sample never changes. Opening a scene restores the editor camera it was last shown with (stored per
   scene handle in the viewport state) or frames what it renders (`EditorViewport::FrameScene`, `SceneBounds`).
-  `GetActiveScene` is the running copy while playing, else the edited scene.
+  `GetActiveScene` is the running copy while playing, else the edited scene. The **inspection target** says what the
+  inspectors show: the selected entities, or one asset (`SetInspectedAsset`, from the Content Browser or
+  `selection.set {asset}`), which keeps the entities selected. Selecting an entity, deleting the asset or closing the
+  project returns to the entities; `GetInspectionVersion` changes with every switch and every asset inspected (also
+  the one shown already), so the panels bring the matching inspector to the front.
 - **Commands** (`EditorCommands.h`). Handlers take a JSON object and return an `EditorCommandResult`: a value, an error
   with an `EditorCommandError` kind, or `Defer(poll)`. The built-in groups are registered by
   `EditorSceneCommands.cpp` (scene, entity, component, prefab), `EditorAssetCommands.cpp` (asset, material, prefab,
@@ -1226,13 +1246,86 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
 - **Runner** (`EditorCommandRunner.h`). `Run` executes a command; a deferred one is polled once per frame from the next
   frame on, in issue order, and reports through its completion callback. Automation and command scripts always use the
   runner. UI actions that finish at once call the registry through `RunEditorCommand`
-  (`Panels/SceneHierarchyPanel.cpp`), which rejects pending results; Build Scripts uses the runner (`EditorLayer.cpp`).
+  (`UI/EditorActions.cpp`), which rejects pending results; Build Scripts, Apply of import settings and Reimport use the
+  runner (`EditorLayer.cpp`, `Panels/AssetInspectorPanel.cpp`).
 - **Undo** (`SceneEdit.h`, `UndoStack.h`). A `SceneEditTransaction` snapshots the entities an edit touches as
   `EntityState` (components as JSON, parent, sibling index from `Scene::GetSiblingIndex`); `Commit` records a
   `SceneEditAction` holding the states before and after, and undo or redo re-applies them with the same UUIDs
-  (`SceneEdit::ApplyEntities`: one `DestroyEntities` batch, one recreation batch, one `PlaceEntities` batch). Continuous
-  edits merge by key; the stack keeps 512 steps and a save point for the modified flag. Edits while playing are not
-  recorded. The selection keeps its order in a vector and answers `IsSelected` from a set.
+  (`SceneEdit::ApplyEntities`: one `DestroyEntities` batch, one recreation batch, one `PlaceEntities` batch of every
+  recorded entity of each sibling list in which one differs, since positions can agree by chance while the order does
+  not). Commands that change many entities record one step: `entity.setParent {entities, index}` (one `PlaceEntities`
+  batch), `entity.duplicate {entities}` (one deserialization of all of them, so references between copies in different
+  sibling lists are remapped too, then one placement batch), `entity.paste`, `entity.setActive {entities}`,
+  `component.add {entities}`, `component.remove {entities}` (all or nothing) and `component.set {entities}`;
+  `PropertyEdit`'s multi-entity `SetPropertyWithUndo` is the inspector's
+  form (it writes only the vector components an edit changed). Continuous
+  edits merge by key; the stack keeps 512 steps and a save point for the modified flag, which only steps that change the
+  scene move (`EditorAction::ChangesScene`). Edits while playing are not recorded. The selection keeps its order in a
+  vector and answers `IsSelected` from a set.
+- **Hierarchy model** (`HierarchyView.h`). The hierarchy panel's rows without UI: the visible entities of the active
+  scene as a flat depth-first list (`HierarchyRow`: handle, ID, depth, has-children, expanded, match), walked along the
+  scene's sibling links into expanded entities only, or, with a filter (`HierarchyFilter`: name words, `c:` component,
+  `t:` tag, all case-insensitive substrings), the matches with their ancestors. `Update` rebuilds only when the scene
+  (a weak reference, so a new scene at the same address is noticed), its hierarchy version, the expansion or the filter
+  changed, or, while filtering, a name, tag or filtered component did: it connects to those types' signals through
+  `ComponentInfo::Observe` only while a filter is on. An unchanged frame costs about 10 ns and rebuilding 100,000
+  top-level rows about 0.6 ms (`Perf.Editor`). `Reveal` expands an entity's collapsed ancestors and returns its row,
+  `GetDropTarget` maps a drop at a fraction of a row's height (top quarter before, bottom quarter after, the middle
+  inside) to `entity.setParent`'s parent and final index, and `GetTopmostInHierarchyOrder` orders a selection for
+  moving, copying and duplicating.
+- **Asset documents** (`AssetEdit.h`). Materials (and any engine-native document) are edited through `AssetEdit`:
+  `ApplyDocument` validates the new document with the type's loader, writes the file (`EditorAssetManager::SaveNativeAsset`)
+  and publishes the loaded object at once (`AssetManagerBase::ReplaceLoadedAsset`, which finalizes it, discards a load in
+  flight and publishes a content change), so the viewport shows an edit in the frame it is made; `PreviewDocument` only
+  publishes (`material.set {save: false}`, a value being dragged). `SetMaterialProperties` (used by `material.set` and
+  the asset inspector) records an `AssetDocumentAction` holding the document's bytes before (the file, previews not
+  included) and after; undo and redo apply them again, and steps with the same merge key
+  (`Material/<handle>/<property>`) merge until `UndoStack::BreakMerge`, so a drag that saves every frame is one step.
+  The action refers to the project's asset manager weakly and does not change the scene, so it never marks it unsaved.
+- **Authoring panels** (`Panels/SceneHierarchyPanel`, `InspectorPanel`, `AssetInspectorPanel`, `UI/PropertyWidgets`,
+  `UI/MaterialEditor`, `UI/EditorActions`). They draw state and run commands, and their cost follows what is on screen:
+  - The **Hierarchy** draws `HierarchyView`'s rows through `ImGuiListClipper` inside one `ImGui::BeginMultiSelect` scope
+    (the entity's handle as selection data, so a range still starts at the entity clicked first when rows appear above
+    it, e.g. a parent opened with its arrow; requests applied to `EditorContext::SetSelection`, the row clicked last
+    being the primary selection; clicks select on release so any row can be dragged, a box starts in the empty space;
+    while filtering, Ctrl+A, ranges and boxes skip the ancestors shown for context).
+    A primary selection that changed elsewhere is revealed (`HierarchyView::Reveal`, then the list scrolls to its row).
+    Rows are tree nodes with the entity's icon (`UI/EntityIcons`), its name, a prefab badge on an instance's root (a
+    click inspects the prefab) and an eye (`entity.setActive`); a drag carries the topmost dragged entities
+    (`DragDrop::c_Entities`) and a drop asks `HierarchyView::GetDropTarget` for `entity.setParent`'s parent and index.
+    The rename field is drawn after the selection's scope and activated by id: a keyboard move out of that scope would
+    make ImGui clear the selection. With 100,000 roots the panel costs about 0.012 ms per frame (it drew every root
+    before: 12.9 ms; `Perf.Editor`).
+  - The **Inspector** shows the components every selected entity has. `GetSharedProperty` gives each widget its value and
+    which components (axes, Euler angles) differ, which `DrawPropertyWidget` shows as mixed; an edit goes through the
+    multi-entity `SetPropertyComponentsWithUndo` with the components the widget changed (one step; each entity keeps its
+    other components), or `SetPropertyWithUndo` for other types. Rotations of several entities go through a
+    `RotationAnglesEdit` with the Euler angles the widget edited, kept by the Inspector until the widget reports the edit
+    finished: each entity's own angles are read once, when the edit begins, in the form closest to the angles shown (a
+    rotation has two sets, and reading one back from the quaternion folds a yaw past 90 degrees; at a yaw of exactly
+    90 degrees only the difference of pitch and roll survives), and every frame of a drag replaces the edited angles in
+    them. The edit continues only while the entities keep the rotations it gave them (`Continues`), and the first entity
+    gets exactly the widget's angles: the rotation widget keeps the angles it edits only while the rotation is exactly
+    the one they made, so any other change (an undo) shows the angles of the rotation the entity has. Axis labels reset
+    their axis to the value of a new component (`GetDefaultPropertyValues`). Property tables (`UI::BeginPropertyTable`)
+    are instances of one ImGui table per window, so the label column has one width in a panel, resizable by its
+    divider; float fields show numbers as people write them ("0.8", "-4", up to three decimals; ImGui's own text is
+    drawn transparent), and values and labels that do not fit end in an ellipsis with the whole text in a tooltip, so a
+    laptop-sized window clips nothing. Colors are channel fields behind R, G, B, A labels in the axis colors and a
+    swatch (the swatch alone where the fields would be unreadable) that opens a picker with the channels under it; mixed
+    channels, colors and texts show "--". Sliders are a track with a handle and the number in a field beside it. A
+    component's menu copies and pastes its settable values through the clipboard as JSON
+    (`EditorActions::CopyComponentValues`) and runs `component.set`/`component.remove {entities}`. With nothing selected
+    it shows the scene's settings, applied by one `scene.setSettings` when a drag ends, and the first active sky light
+    (the renderer's).
+  - The **Asset** inspector is tabbed with the Inspector: `EditorLayer` brings the tab of the inspection target forward
+    when `GetInspectionVersion` changes (`EditorPanelRegistry::ShowTab`, which leaves the keyboard focus where it is).
+    Materials are drawn by `MaterialEditor` (a drag previews, its release saves: one write and one undo step), import
+    settings as a draft of the settings JSON that Apply hands to `asset.setImportSettings` through the runner.
+  - **Shortcuts**: `EditorLayer` keeps the global ones (Ctrl+Z, Ctrl+Y, Ctrl+S, Ctrl+P, Ctrl+B); Delete, Ctrl+D, Ctrl+C,
+    Ctrl+X, Ctrl+V, Ctrl+A and F2 are `ImGuiInputFlags_RouteFocused` shortcuts of the Hierarchy and the Viewport
+    (`EditorActions::HandleSelectionShortcuts`), so they act only where the keyboard focus is; the clipboard holds
+    `entity.copy`'s data.
 - **Automation** (`EditorAutomation.h`, `Network/RpcServer.h`). The server's network thread does the socket work;
   each frame `EditorAutomation::Update` registers new or changed commands as methods and runs queued requests through
   the runner, so a deferred command answers when it completes. Clients find the editor through session files

@@ -86,31 +86,59 @@ namespace Strata
 		// Selection
 		////////////////////////////////////////////////////////////////////////////////
 
-		registry.Register({ "selection.get", "The selected entities; the last one is the primary selection.", ObjectSchema({}),
+		registry.Register({ "selection.get",
+			"The selected entities (the last one is the primary selection) and the asset the inspector shows instead of them (inspectedAsset, null "
+			"while the entities are inspected).",
+			ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
 				nlohmann::json ids = nlohmann::json::array();
 				for (UUID id : context.GetSelection())
 					ids.push_back(UUIDToJson(id));
-				return EditorCommandResult::Ok({ { "entities", std::move(ids) } });
+				const AssetHandle inspected = context.GetInspectedAsset();
+				return EditorCommandResult::Ok({ { "entities", std::move(ids) },
+					{ "inspectedAsset", inspected.IsValid() ? UUIDToJson(inspected) : nlohmann::json(nullptr) } });
 			} });
 
-		registry.Register({ "selection.set", "Replaces the selection (an empty array clears it).",
-			ObjectSchema({ { "entities", { { "type", "array" }, { "items", { { "type", "string" } } }, { "description", "Entity IDs" } } } }, { "entities" }),
+		registry.Register({ "selection.set",
+			"Replaces the selection of entities (an empty array clears it; selecting entities shows them in the inspector) and/or shows an asset in "
+			"the asset inspector (asset; null returns to the entities), as clicking it in the Content Browser does. The entities stay selected "
+			"while an asset is inspected.",
+			ObjectSchema({
+				{ "entities", { { "type", "array" }, { "items", { { "type", "string" } } }, { "description", "Entity IDs" } } },
+				{ "asset", { { "type", { "string", "null" } }, { "description", "Asset to inspect (handle or path), or null for the entities" } } } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
-				auto entities = parameters.find("entities");
-				if (entities == parameters.end() || !entities->is_array())
-					return EditorCommandResult::InvalidParameters("Parameter 'entities' must be an array of entity IDs");
-				std::vector<UUID> selection;
-				for (const nlohmann::json& element : *entities)
+				const auto entities = parameters.find("entities");
+				const auto asset = parameters.find("asset");
+				if (entities == parameters.end() && asset == parameters.end())
+					return EditorCommandResult::InvalidParameters("Missing parameter 'entities' (or 'asset')");
+				std::optional<std::vector<UUID>> selection;
+				if (entities != parameters.end())
 				{
-					std::optional<UUID> id = UUIDFromJson(element);
-					if (!id || !context.GetActiveScene()->GetEntityByUUID(*id))
-						return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'entities': no entity {} in the scene", element.dump()));
-					selection.push_back(*id);
+					if (!entities->is_array())
+						return EditorCommandResult::InvalidParameters("Parameter 'entities' must be an array of entity IDs");
+					selection.emplace();
+					for (const nlohmann::json& element : *entities)
+					{
+						std::optional<UUID> id = UUIDFromJson(element);
+						if (!id || !context.GetActiveScene()->GetEntityByUUID(*id))
+							return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'entities': no entity {} in the scene", element.dump()));
+						selection->push_back(*id);
+					}
 				}
-				context.SetSelection(std::move(selection));
+				AssetHandle inspected = UUID::Null();
+				if (asset != parameters.end() && !asset->is_null())
+				{
+					CommandArguments arguments(parameters);
+					inspected = ResolveAsset(context, arguments, "asset", AssetType::None);
+					if (!arguments.IsValid())
+						return arguments.Fail();
+				}
+				if (selection)
+					context.SetSelection(std::move(*selection));
+				if (asset != parameters.end() && !context.SetInspectedAsset(inspected))
+					return EditorCommandResult::Fail("The asset is not available to inspect");
 				return EditorCommandResult::Ok();
 			} });
 
@@ -170,7 +198,8 @@ namespace Strata
 					{ "play", DescribePlayState(context) },
 					{ "selection", {
 						{ "count", context.GetSelection().size() },
-						{ "primary", primary ? UUIDToJson(primary.GetUUID()) : nlohmann::json(nullptr) } } },
+						{ "primary", primary ? UUIDToJson(primary.GetUUID()) : nlohmann::json(nullptr) },
+						{ "inspectedAsset", context.GetInspectedAsset().IsValid() ? UUIDToJson(context.GetInspectedAsset()) : nlohmann::json(nullptr) } } },
 					{ "undo", {
 						{ "position", undo.GetPosition() },
 						{ "count", undo.GetHistory().size() },

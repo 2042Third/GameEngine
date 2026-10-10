@@ -725,6 +725,71 @@ TEST_SUITE("Asset.Editor")
 		}
 	}
 
+	TEST_CASE("Background re-imports run on the I/O pool and apply on the next updates")
+	{
+		RegisterTestModelImporter();
+		ScopedJobSystem jobs;
+		TestProject project("EditorBackgroundImport");
+		project.Write("Models/Robot.sttestmodel", { 'r' });
+		project.Write("Materials/Red.stmat", CreateMaterialBytes(0.3f));
+		Ref<EditorAssetManager> manager = project.Open();
+		const AssetHandle model = manager->FindAssetByPath("Models/Robot.sttestmodel");
+		REQUIRE(model.IsValid());
+		const AssetHandle mesh = DeriveSubAssetHandle(model, "Mesh/1");
+		REQUIRE(manager->IsHandleValid(mesh));
+		CHECK_FALSE(manager->IsImportPending(model));
+		CHECK(manager->GetImporter(mesh) == manager->GetImporter(model));
+		REQUIRE(manager->GetImporter(model) != nullptr);
+		CHECK(manager->GetImporter(BuiltinAssets::CubeMesh) == nullptr);
+
+		// A slow import: the call returns before it ran, with the .meta saved and the import pending.
+		std::string error;
+		REQUIRE_MESSAGE(manager->SetImportSettingsInBackground(model, { { "MeshCount", 1 }, { "DelayMs", 300 } }, &error), error);
+		CHECK(manager->IsImportPending(model));
+		CHECK(manager->IsImportPending(mesh)); // Sub-assets report their parent's import
+		CHECK(manager->GetImportSettings(model)["MeshCount"] == 1);
+		CHECK(manager->IsHandleValid(mesh)); // Nothing applied yet
+		const std::optional<std::string> meta = FileSystem::ReadText(project.Assets / "Models" / "Robot.sttestmodel.meta");
+		REQUIRE(meta);
+		CHECK(meta->find("\"MeshCount\": 1") != std::string::npos);
+
+		REQUIRE(Tests::WaitUntil([&]()
+		{
+			manager->Update();
+			return !manager->IsImportPending(model);
+		}, std::chrono::seconds(20)));
+		CHECK_FALSE(manager->IsHandleValid(mesh));
+		CHECK(manager->GetImportInfo(model).Error.empty());
+
+		// A requested re-import runs even though the cached import is current; engine documents reload at once.
+		const uint32_t imports = TestModelImporter::s_ImportCount;
+		REQUIRE(manager->ReimportAssetInBackground(model, &error));
+		REQUIRE(Tests::WaitUntil([&]()
+		{
+			manager->Update();
+			return !manager->IsImportPending(model);
+		}, std::chrono::seconds(20)));
+		CHECK(TestModelImporter::s_ImportCount == imports + 1);
+		const AssetHandle red = manager->FindAssetByPath("Materials/Red.stmat");
+		REQUIRE(manager->LoadAssetSync(red));
+		REQUIRE(manager->ReimportAssetInBackground(red, &error));
+		CHECK_FALSE(manager->IsImportPending(red));
+		CHECK(manager->GetAssetState(red) == AssetState::Loading);
+
+		// A failing import is pending like any other and reports its failure once applied.
+		REQUIRE(manager->SetImportSettingsInBackground(model, { { "Fail", true }, { "DelayMs", 0 } }, &error));
+		REQUIRE(Tests::WaitUntil([&]()
+		{
+			manager->Update();
+			return !manager->IsImportPending(model);
+		}, std::chrono::seconds(20)));
+		CHECK(manager->GetImportInfo(model).Error == "Requested failure");
+
+		CHECK_FALSE(manager->ReimportAssetInBackground(UUID(0x777), &error));
+		CHECK_FALSE(manager->SetImportSettingsInBackground(model, nlohmann::json::array(), &error));
+		CHECK_FALSE(manager->IsImportPending(UUID(0x777)));
+	}
+
 	TEST_CASE("Files changed on disk are hot reloaded")
 	{
 		ScopedJobSystem jobs;

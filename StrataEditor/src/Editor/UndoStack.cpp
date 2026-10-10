@@ -57,10 +57,15 @@ namespace Strata
 		m_MergeBroken = false;
 		if (m_Actions.size() > m_Capacity)
 		{
+			// A save point before the dropped step stays at the front when that step did not change the scene (a material
+			// edit): the scene there is the saved one. After a dropped scene edit, the saved scene can no longer be reached.
+			const bool dropsSceneChange = m_Actions.front()->ChangesScene();
 			m_Actions.pop_front();
 			m_Position--;
-			if (m_SavedPosition != c_NoSavePoint)
-				m_SavedPosition = m_SavedPosition == 0 ? c_NoSavePoint : m_SavedPosition - 1;
+			if (m_SavedPosition == 0)
+				m_SavedPosition = dropsSceneChange ? c_NoSavePoint : 0;
+			else if (m_SavedPosition != c_NoSavePoint)
+				m_SavedPosition--;
 		}
 	}
 
@@ -120,7 +125,17 @@ namespace Strata
 
 	bool UndoStack::IsModified() const
 	{
-		return m_SavedPosition != m_Position;
+		// A save point that was trimmed or discarded can no longer be reached: whatever lies between is unknown.
+		if (m_SavedPosition == c_NoSavePoint)
+			return true;
+		const size_t first = std::min(m_SavedPosition, m_Position);
+		const size_t last = std::max(m_SavedPosition, m_Position);
+		for (size_t index = first; index < last; index++)
+		{
+			if (m_Actions[index]->ChangesScene())
+				return true;
+		}
+		return false;
 	}
 
 	void UndoStack::Clear()

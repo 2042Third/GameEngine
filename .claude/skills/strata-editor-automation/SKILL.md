@@ -84,6 +84,7 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | What does a material hold, which properties exist? | `material.get` (values, and each property's type, range, options) |
 | What state do the scripts hold (a score, a timer)? | `script.get` (live field values while playing) |
 | What is in the scene? | `scene.hierarchy`, `entity.find` (`name`, `tag`, `component`), `entity.get` |
+| What does the person have selected, what does the inspector show? | `selection.get` (`entities`, the last is the primary one; `inspectedAsset` while the inspector shows an asset); `selection.set {entities?, asset?}` changes them |
 | What happened (errors, script output)? | `log.read` (`after` = the previous `latest` to page; `minLevel`) |
 | How much memory do assets use, what is loaded or streaming? | `asset.stats` (`assets: true` lists them; `sort`, `limit`); `asset.setBudget` changes the open project's budgets (MB) |
 | Where does the frame time go (scripts, physics, uploads, rendering, UI)? | `editor.perf {frames?}` (per stage `avgMs`/`p50Ms`/`p95Ms`/`maxMs`, the frame, FPS, job threads' busy %) |
@@ -132,7 +133,8 @@ editor started with `--no-gpu` (use `--headless`):
 - **Component values** use the scene file format: `{"Transform": {"Translation": [0, 1, 0], "Rotation": [0, 90, 0],
   "Scale": [1, 1, 1]}}`. Rotations accept Euler degrees `[pitch, yaw, roll]` or a quaternion `[x, y, z, w]` (read
   back as a quaternion). Property names are case-insensitive. `component.get` shows the accepted format of every value.
-- **Undo**: every successful mutating command is one undo step (`edit.undo`, `edit.redo`, `edit.history`).
+- **Undo**: every successful mutating command is one undo step (`edit.undo`, `edit.redo`, `edit.history`). Material
+  edits are steps of the same history, but they save their file themselves, so they never mark the scene unsaved.
 - **Play mode**: `play.start` runs a copy of the scene. Changes made while playing apply to that copy, carry a
   `warning` in the result, and are discarded by `play.stop`. Undo and redo are not available while playing;
   `scene.save` saves the edited scene, never the running copy.
@@ -164,22 +166,42 @@ sun with `component.set` (find their IDs with `entity.find {"name": "Main Camera
 
 **Assets**: `asset.import {"file": "<absolute path>", "directory": "Models"}` copies a file into the project and
 imports it: models `.gltf`/`.glb`, textures `.png`/`.jpg`/`.tga`/`.bmp`/`.psd`/`.gif`/`.hdr`, audio
-`.wav`/`.mp3`/`.flac`/`.ogg`, fonts `.ttf`/`.otf`. `asset.info` reports import errors and warnings;
-`asset.setImportSettings` changes them. Textures are block-compressed by default (`"Compression": "Auto"`; the
-format follows `"Usage"`: `Color`, `NormalMap`, `Data` or `HDR`; color and multi-channel data are BC7);
-`"Quality": "Fast"` imports large color textures several times faster (opaque color as BC1, half the bytes, a little
-less exact; normal maps and data are stored the same at either quality); `"Compression": "Uncompressed"` keeps exact
-texels, e.g. for pixel art or textures a test compares texel for texel. Models expose sub-assets (meshes, materials)
-and are instantiated whole with `prefab.instantiate`.
+`.wav`/`.mp3`/`.flac`/`.ogg`, fonts `.ttf`/`.otf`. `asset.info` reports import errors and warnings, the import
+settings and what each accepts (`importSettingsProperties`: textures `Usage`, `Compression`, `Quality`, `MaxSize`,
+`Filter`, `Wrap`, `GenerateMips`, `FlipVertically`; models `Scale`, `GenerateLODs`, `LODCount`, `MaxTextureSize`,
+`TextureCompression`, `TextureQuality`, `OptimizeMeshes`, `Import*`; audio `LoadMode`; fonts and the engine's own files
+have none). `asset.setImportSettings {"asset", "settings":
+{"MaxSize": 1024}}` changes them and `asset.reimport` imports again; both import in the background (the editor keeps
+running, the asset keeps its previous version until the new one is loaded) and answer when the import is done, failing
+when it failed (`"wait": false` answers at once; `asset.info` says `importing`). Unknown settings, invalid values and
+numbers outside a setting's range (e.g. `MaxSize` above 16384) are rejected with what is accepted, never clamped.
+Textures are block-compressed by default (`"Compression": "Auto"`; the format follows `"Usage"`: `Color`, `NormalMap`,
+`Data` or `HDR`; color and multi-channel data are BC7); `"Quality": "Fast"` imports large color textures several times
+faster (opaque color as BC1, half the bytes, a little less exact; normal maps and data are stored the same at either
+quality); `"Compression": "Uncompressed"` keeps exact texels, e.g. for pixel art or textures a test compares texel for
+texel. Models expose sub-assets (meshes, materials) and are instantiated whole with `prefab.instantiate`.
 
-**Hierarchy and prefabs**: `entity.create {"parent": "<id>"}`, `entity.setParent`, `entity.duplicate`,
+**Hierarchy and prefabs**: `entity.create {"parent": "<id>"}`;
+`entity.setParent {"entities": ["<id>", ...], "parent": "<id>" | null, "index": 0}` moves entities (in the order given;
+`index` is the final position of the first one, also to reorder top-level entities or siblings; without it entities that
+change parent go last) in one undo step; `entity.duplicate {"entities": [...]}` puts each copy right after its original;
+`entity.copy {"entities": [...]}` returns `data` that `entity.paste {"data", "parent"?, "index"?}` turns into new
+entities (fresh IDs, references among them remapped, also in another scene);
 `prefab.create {"entities": ["<id>"], "path": "Prefabs/Block.stprefab"}`, then
 `prefab.instantiate {"prefab": "Prefabs/Block.stprefab", "components": {"Transform": {"Translation": [2, 0, 0]}}}`.
 
 **Edit**: `component.add` (adds if missing, then sets values), `component.set` (component must exist),
-`component.remove`, `entity.rename`, `entity.setActive`, `entity.delete`, `scene.setSettings` (gravity, timestep, and
-`physicsCapacity {maxBodies, maxBodyPairs, maxContactConstraints}` for scenes that spawn many bodies while they play;
-0 sizes a capacity from the bodies the scene starts with; set capacities in edit mode: they apply when play starts).
+`component.remove`, `entity.setActive`: each takes `"entities": [...]` instead of `"entity"` to change all of them in one
+undo step (as the inspector does for a multi-selection); `entity.rename`, `entity.delete`, `scene.setSettings` (gravity,
+timestep, and `physicsCapacity {maxBodies, maxBodyPairs, maxContactConstraints}` for scenes that spawn many bodies while
+they play; 0 sizes a capacity from the bodies the scene starts with; set capacities in edit mode: they apply when play
+starts).
+
+**Materials**: `material.set {"material": "Materials/Red.stmat", "properties": {"Roughness": 0.3}}` saves the material
+file and is one undo step (`edit.undo` restores the file and what entities show); entities using it show the change in
+the same frame. `"save": false` only previews the values in the loaded material (no file, no undo step) until a saving
+`material.set` saves them too; `material.get` says `"saved": false` meanwhile. Built-in materials and those imported
+with a model cannot be changed: make one with `material.create` and assign it.
 
 **Play and inspect**: `play.start` -> `editor.wait {"frames": 120}` (about two seconds) -> `entity.get` /
 `component.get` / `log.read` -> `play.stop`. `play.pause {"paused": true}` and `play.step {"frames": n}` advance

@@ -232,6 +232,93 @@ namespace Strata::UI
 		return pressed;
 	}
 
+	void Banner(const char* id, const char* icon, std::string_view text, const ImVec4& color)
+	{
+		const ImGuiStyle& style = ImGui::GetStyle();
+		const ThemeColors& colors = GetThemeColors();
+		const float width = std::max(ImGui::GetContentRegionAvail().x, ImGui::GetFrameHeight());
+		const ImVec2 padding = style.FramePadding;
+		const float iconWidth = ImGui::CalcTextSize(icon).x;
+		const float textX = padding.x + iconWidth + style.ItemInnerSpacing.x;
+		const float wrapWidth = std::max(width - textX - padding.x, 1.0f);
+		const ImVec2 textSize = ImGui::CalcTextSize(text.data(), text.data() + text.size(), false, wrapWidth);
+		const ImVec2 min = ImGui::GetCursorScreenPos();
+		const ImVec2 size(width, std::max(textSize.y, ImGui::GetFontSize()) + padding.y * 2.0f);
+		ImGui::Dummy(size);
+		const ImVec2 max(min.x + size.x, min.y + size.y);
+		ImDrawList* drawList = ImGui::GetWindowDrawList();
+		drawList->AddRectFilled(min, max, ToDrawColor(WithAlpha(color, 0.14f)), style.FrameRounding);
+		drawList->AddRect(min, max, ToDrawColor(WithAlpha(color, 0.45f)), style.FrameRounding);
+		AddText(drawList, ImVec2(min.x + padding.x, min.y + padding.y), color, icon);
+		drawList->AddText(ImGui::GetFont(), ImGui::GetFontSize(), ImVec2(min.x + textX, min.y + padding.y), ToDrawColor(colors.Text), text.data(),
+			text.data() + text.size(), wrapWidth);
+		ItemProbe::Record(id, true, ToColorU32(color), text);
+	}
+
+	void CenteredText(const char* id, std::string_view text, const ImVec4& color)
+	{
+		const float width = std::max(ImGui::GetContentRegionAvail().x, ImGui::GetFontSize());
+		ImFont* font = ImGui::GetFont();
+		const float size = ImGui::GetFontSize();
+		const char* begin = text.data();
+		const char* const end = text.data() + text.size();
+		ImGui::BeginGroup();
+		ImGui::PushStyleColor(ImGuiCol_Text, color);
+		while (begin < end)
+		{
+			// A line ends where the font wraps it or at a line break.
+			const char* lineEnd = font->CalcWordWrapPosition(size, begin, end, width);
+			if (lineEnd <= begin)
+			{
+				// A word wider than the line: one character (with its UTF-8 continuation bytes) at least.
+				lineEnd = begin + 1;
+				while (lineEnd < end && (static_cast<unsigned char>(*lineEnd) & 0xC0) == 0x80)
+					lineEnd++;
+			}
+			const char* lineBreak = std::find(begin, lineEnd, '\n');
+			const char* next = lineBreak != lineEnd ? lineBreak + 1 : lineEnd;
+			lineEnd = lineBreak;
+			const char* trimmed = lineEnd;
+			while (trimmed > begin && trimmed[-1] == ' ')
+				trimmed--;
+			const float lineWidth = ImGui::CalcTextSize(begin, trimmed).x;
+			ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max((width - lineWidth) * 0.5f, 0.0f));
+			ImGui::TextUnformatted(begin, trimmed);
+			// The spaces the line was wrapped at belong to no line.
+			begin = next;
+			while (begin < end && *begin == ' ')
+				begin++;
+		}
+		ImGui::PopStyleColor();
+		ImGui::EndGroup();
+		ItemProbe::Record(id, true, 0, text);
+	}
+
+	bool SearchField(const char* id, std::string& text, const char* hint, float width, const char* tooltip)
+	{
+		const ImGuiStyle& style = ImGui::GetStyle();
+		ImGui::PushID(id);
+		const float clearWidth = text.empty() ? 0.0f : ImGui::GetFrameHeight() + style.ItemInnerSpacing.x;
+		const float fieldWidth = (width < 0.0f ? ImGui::GetContentRegionAvail().x : width) - clearWidth;
+		ImGui::SetNextItemWidth(std::max(fieldWidth, ImGui::GetFrameHeight()));
+		const std::string fullHint = std::string(Icons::Search) + "  " + (hint ? hint : "");
+		bool changed = ImGui::InputTextWithHint("##Search", fullHint.c_str(), &text);
+		ShowTooltip(tooltip);
+		ItemProbe::Record(id);
+		if (!text.empty())
+		{
+			ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
+			const std::string clearId = std::string(id) + ".Clear";
+			if (IconButton(clearId.c_str(), Icons::X, "Clear the search"))
+			{
+				text.clear();
+				changed = true;
+			}
+		}
+		ImGui::PopID();
+		return changed;
+	}
+
 	void PushSelectionColors(bool selected)
 	{
 		// Always one color, so the pop does not depend on the row.

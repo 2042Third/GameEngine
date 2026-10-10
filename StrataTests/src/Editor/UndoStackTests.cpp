@@ -55,6 +55,33 @@ namespace
 		std::string m_Name;
 	};
 
+	// An edit outside the scene (like an asset document's), which saves itself.
+	class OutsideAction final : public EditorAction
+	{
+	public:
+		explicit OutsideAction(int& value)
+			: m_Value(value)
+		{
+		}
+
+		const std::string& GetName() const override
+		{
+			static const std::string s_Name = "Outside";
+			return s_Name;
+		}
+
+		bool Execute(std::string*) override
+		{
+			m_Value++;
+			return true;
+		}
+
+		void Undo() override { m_Value--; }
+		bool ChangesScene() const override { return false; }
+	private:
+		int& m_Value;
+	};
+
 }
 
 TEST_SUITE("Editor.Undo")
@@ -165,6 +192,37 @@ TEST_SUITE("Editor.Undo")
 		CHECK(stack.IsModified());
 	}
 
+	TEST_CASE("Steps that do not change the scene never make it unsaved")
+	{
+		int value = 0;
+		int outside = 0;
+		UndoStack stack;
+		stack.Execute(CreateScope<OutsideAction>(outside));
+		CHECK_FALSE(stack.IsModified());
+		stack.Execute(CreateScope<AddAction>(value, 1));
+		CHECK(stack.IsModified());
+		stack.Execute(CreateScope<OutsideAction>(outside));
+		stack.MarkSaved();
+		CHECK_FALSE(stack.IsModified());
+
+		// Undoing and redoing outside steps on either side of the save point changes nothing saving the scene would save.
+		stack.Execute(CreateScope<OutsideAction>(outside));
+		CHECK_FALSE(stack.IsModified());
+		stack.Undo();
+		stack.Undo();
+		CHECK(outside == 1);
+		CHECK_FALSE(stack.IsModified());
+		stack.Undo();
+		CHECK(value == 0);
+		CHECK(stack.IsModified());
+		stack.Redo();
+		CHECK_FALSE(stack.IsModified());
+		stack.Redo();
+		stack.Redo();
+		CHECK(outside == 3);
+		CHECK_FALSE(stack.IsModified());
+	}
+
 	TEST_CASE("The capacity drops the oldest steps")
 	{
 		int value = 0;
@@ -178,6 +236,35 @@ TEST_SUITE("Editor.Undo")
 		}
 		CHECK(value == 3); // 1 + 2 cannot be undone any more
 		CHECK(stack.IsModified()); // The saved state (0) was trimmed away
+	}
+
+	TEST_CASE("Trimming steps that do not change the scene keeps the save point")
+	{
+		int value = 0;
+		int outside = 0;
+		UndoStack stack(3);
+		stack.MarkSaved();
+		// Many material edits after a save: the oldest are dropped, the scene is still as saved.
+		for (int step = 0; step < 5; step++)
+			stack.Execute(CreateScope<OutsideAction>(outside));
+		CHECK(stack.GetHistory().size() == 3);
+		CHECK_FALSE(stack.IsModified());
+		// A scene edit after them makes it modified, and undoing it returns to the saved scene.
+		stack.Execute(CreateScope<AddAction>(value, 1));
+		CHECK(stack.IsModified());
+		REQUIRE(stack.Undo());
+		CHECK_FALSE(stack.IsModified());
+		// Once a scene edit right after the save point is dropped, the saved state cannot be reached any more.
+		stack.Clear();
+		stack.MarkSaved();
+		stack.Execute(CreateScope<AddAction>(value, 1));
+		for (int step = 0; step < 3; step++)
+			stack.Execute(CreateScope<OutsideAction>(outside));
+		CHECK(stack.IsModified());
+		while (stack.Undo())
+		{
+		}
+		CHECK(stack.IsModified());
 	}
 
 	TEST_CASE("A redo that fails drops the redo history and the save point in it")

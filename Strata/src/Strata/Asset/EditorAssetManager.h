@@ -92,10 +92,22 @@ namespace Strata
 		// Import state of a source asset (sub-assets report their parent's).
 		AssetImportInfo GetImportInfo(AssetHandle handle) const;
 		nlohmann::json GetImportSettings(AssetHandle handle) const;
+		// The importer of a source asset (sub-assets: their parent's); null for unknown and built-in assets. Thread-safe.
+		const AssetImporter* GetImporter(AssetHandle handle) const;
 		// Merges the given settings into the asset's settings, saves its .meta and re-imports it (blocking).
 		bool SetImportSettings(AssetHandle handle, const nlohmann::json& settings, std::string* outError = nullptr);
 		// Re-imports a source asset (blocking) and hot reloads it.
 		bool ReimportAsset(AssetHandle handle, std::string* outError = nullptr);
+		// Like SetImportSettings, but the import runs on the I/O pool like a hot reload: returns once the .meta is saved and
+		// the import is queued. Update applies the result and reloads what was loaded; IsImportPending tells when. Settings
+		// that equal those of the cached import find it current, so nothing is imported again.
+		bool SetImportSettingsInBackground(AssetHandle handle, const nlohmann::json& settings, std::string* outError = nullptr);
+		// Like ReimportAsset, in the background (see SetImportSettingsInBackground). The import runs even when the cached one
+		// is current. Engine documents (stored as their source) are reloaded at once instead.
+		bool ReimportAssetInBackground(AssetHandle handle, std::string* outError = nullptr);
+		// Whether an import of the source asset (for a sub-asset: of its parent) is queued or running, or finished without
+		// Update having applied it yet. False for unknown assets.
+		bool IsImportPending(AssetHandle handle) const;
 
 		// Copies an external file into the asset directory (relative target directory) and imports it. If the name is
 		// taken, " (n)" is appended. Returns the new handle, or null.
@@ -163,6 +175,7 @@ namespace Strata
 			uint64_t PathGeneration = 0;           // Incremented whenever the file moves
 			bool ImportInFlight = false;
 			bool ImportQueuedAgain = false; // Changed again while importing
+			bool ForceImportAgain = false;  // The import queued again must run even when the cached one is current
 			// Of assets stored as-is: incremented whenever a search of what it references starts, so that only the latest
 			// search's result is recorded (see QueueNativeReferences).
 			uint64_t ReferencesGeneration = 0;
@@ -175,6 +188,7 @@ namespace Strata
 			std::string Path;
 			const AssetImporter* Importer = nullptr;
 			nlohmann::json Settings;
+			bool Force = false; // Import even when the cached import is current (a requested re-import)
 		};
 
 		struct ImportOutcome
@@ -219,7 +233,15 @@ namespace Strata
 		bool LoadCurrentImport(const ImportRequest& request, ImportOutcome& outOutcome) const;
 		ImportOutcome RunImport(const ImportRequest& request) const; // Any thread
 		void ApplyImportOutcome(ImportOutcome outcome, bool reload);
-		void QueueImport(AssetHandle handle);
+		// Queues an import on the I/O pool (hot reload); with force, also when the cached import is current.
+		void QueueImport(AssetHandle handle, bool force = false);
+		// Merges settings into the asset's and saves its .meta (an invalid .meta is never overwritten).
+		bool WriteImportSettings(AssetHandle handle, const nlohmann::json& settings, std::string* outError);
+		// Engine documents are read from their source: a re-import only takes the file's current state and reloads it.
+		void ReloadDirectSource(AssetHandle handle);
+		// Queues the import of a source asset (with force, also when the cached import is current), or reloads an engine
+		// document. Fails for assets that are no source of the project.
+		bool QueueBackgroundImport(AssetHandle handle, bool force, std::string* outError);
 		void ProcessFileChanges();
 		void ProcessCompletedImports();
 		AssetHandle ResolveProjectFile(const std::filesystem::path& absolutePath) const;

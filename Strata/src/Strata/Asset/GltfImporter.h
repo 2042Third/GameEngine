@@ -27,6 +27,7 @@ namespace Strata
 		std::vector<std::string> GetExtensions() const override { return { ".gltf", ".glb" }; }
 		uint32_t GetVersion() const override { return 4; }
 		nlohmann::json GetDefaultSettings(const std::filesystem::path& sourcePath) const override;
+		std::vector<PropertyInfo> GetSettingsProperties() const override;
 		bool Import(const ImportContext& context, ImportResult& result, std::string* outError) const override;
 	};
 

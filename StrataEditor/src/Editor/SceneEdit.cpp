@@ -9,6 +9,7 @@
 #include <Strata/Scene/UnknownComponents.h>
 
 #include <unordered_map>
+#include <unordered_set>
 
 namespace Strata
 {
@@ -173,20 +174,25 @@ namespace Strata
 					ApplyComponents(scene, entity, state.Components);
 			}
 
-			// Hierarchy: only entities whose parent or position differs move, in one batch (detached first so that no
-			// intermediate parent link can form a cycle, then each lands at its recorded position), so that restoring many
-			// positions in a long sibling list stays linear.
-			std::vector<Scene::EntityPlacement> placements;
+			// Hierarchy: the sibling lists in which an entity's parent or position differs are placed again, in one batch
+			// (detached first so that no intermediate parent link can form a cycle, then each lands at its recorded position),
+			// so that restoring many positions in a long sibling list stays linear. Every recorded entity of such a list is
+			// placed, not only those whose position differs: positions can agree by chance while the order does not (two
+			// entities moved around an untracked one, or a recreated entity appended where its recorded position lies).
+			std::unordered_set<UUID> listsToPlace; // By recorded parent (null: the roots)
 			for (const EntityState& state : states)
 			{
 				if (!state.Exists)
 					continue;
 				Entity entity = scene.GetEntityByUUID(state.ID);
-				if (!entity)
-					continue;
-				if (entity.GetComponent<RelationshipComponent>().Parent == state.Parent && scene.GetSiblingIndex(entity) == state.SiblingIndex)
-					continue;
-				placements.push_back({ state.ID, state.Parent, state.SiblingIndex });
+				if (entity && (entity.GetComponent<RelationshipComponent>().Parent != state.Parent || scene.GetSiblingIndex(entity) != state.SiblingIndex))
+					listsToPlace.insert(state.Parent);
+			}
+			std::vector<Scene::EntityPlacement> placements;
+			for (const EntityState& state : states)
+			{
+				if (state.Exists && listsToPlace.contains(state.Parent) && scene.GetEntityByUUID(state.ID))
+					placements.push_back({ state.ID, state.Parent, state.SiblingIndex });
 			}
 			if (!scene.PlaceEntities(placements))
 				ST_WARN("Restoring the hierarchy: some entities could not be placed under their recorded parent and stay at the top level");

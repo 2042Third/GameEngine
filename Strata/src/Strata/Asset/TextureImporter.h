@@ -74,6 +74,8 @@ namespace Strata
 		std::vector<std::string> GetExtensions() const override;
 		uint32_t GetVersion() const override { return 4; }
 		nlohmann::json GetDefaultSettings(const std::filesystem::path& sourcePath) const override;
+		// Usage, MaxSize, Filter, Wrap, GenerateMips, FlipVertically (TextureImportSettings).
+		std::vector<PropertyInfo> GetSettingsProperties() const override;
 		bool Import(const ImportContext& context, ImportResult& result, std::string* outError) const override;
 
 		// Decodes an encoded image and cooks it into a texture: resized to MaxSize, each mip filtered from the previous level

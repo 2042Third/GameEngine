@@ -133,6 +133,15 @@ namespace Strata
 		entry->FocusAttempts = 0;
 	}
 
+	void EditorPanelRegistry::ShowTab(std::string_view id)
+	{
+		Entry* entry = FindEntry(id);
+		if (!entry)
+			return;
+		SetOpen(id, true);
+		entry->ShowTabRequested = true;
+	}
+
 	void EditorPanelRegistry::SelectTab(std::string_view id, ImGuiID dockNodeId) const
 	{
 		const Entry* entry = FindEntry(id);
@@ -170,6 +179,28 @@ namespace Strata
 			const bool focusing = entry.FocusRequested;
 			if (focusing)
 				ImGui::SetNextWindowFocus();
+			if (entry.ShowTabRequested)
+			{
+				// The tab of a docked window is selected in its node's tab bar (or, before the bar exists, in the node);
+				// a floating window comes to the front. Neither takes the keyboard focus. A window that does not exist yet
+				// (the first frame) is shown once it does.
+				if (ImGuiWindow* window = ImGui::FindWindowByName(entry.WindowName.c_str()))
+				{
+					entry.ShowTabRequested = false;
+					if (ImGuiDockNode* node = window->DockNode)
+					{
+						ImGuiTabItem* tab = node->TabBar ? ImGui::TabBarFindTabByID(node->TabBar, window->TabId) : nullptr;
+						if (tab)
+							ImGui::TabBarQueueFocus(node->TabBar, tab);
+						else
+							node->SelectedTabId = window->TabId;
+					}
+					else
+					{
+						ImGui::BringWindowToDisplayFront(window);
+					}
+				}
+			}
 			if (options.NoPadding)
 				ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
 			bool open = true;

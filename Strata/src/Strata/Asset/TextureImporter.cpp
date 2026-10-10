@@ -291,6 +291,35 @@ namespace Strata
 		return TextureImportSettings::GetDefaults(sourcePath).ToJson();
 	}
 
+	std::vector<PropertyInfo> TextureImporter::GetSettingsProperties() const
+	{
+		const TextureImportSettings defaults;
+		std::vector<PropertyInfo> properties;
+		ImportSettingsBuilder(properties)
+			.Enum("Usage", { "Color", "NormalMap", "Data", "HDR" }, TextureUsageToString(defaults.Usage))
+				.Tooltip("How the pixels are read: Color (sRGB albedo, emissive, UI), NormalMap (linear, mips renormalized), Data (linear roughness, "
+					"metallic, occlusion, masks) or HDR (16-bit float, environment maps)")
+			.Enum("Compression", { "Auto", "Uncompressed" }, TextureCompressionToString(defaults.Compression))
+				.Tooltip("Auto stores the texture block-compressed in the format its usage needs (BC7 for color and for data of several "
+					"channels, BC4 for one channel, BC5 for normal maps; HDR stays 16-bit float); Uncompressed keeps every texel exact "
+					"(pixel art, textures compared texel for texel)")
+			.Enum("Quality", { "High", "Fast" }, TextureQualityToString(defaults.Quality))
+				.Tooltip("How hard compression works on color: High searches every BC7 mode; Fast stores opaque color as BC1 (half the "
+					"bytes, a little less exact) and imports large textures several times faster. Normal maps and data are stored the same "
+					"either way")
+			.UInt("MaxSize", defaults.MaxSize, c_MaxImageDimension).PowerOfTwoLimit()
+				.Tooltip("Longest side in pixels: larger images are scaled down, keeping their aspect ratio. No limit (0): only the engine's limit")
+			.Enum("Filter", { "Linear", "Nearest" }, TextureFilterToString(defaults.Filter))
+				.Tooltip("Linear blends neighboring texels; Nearest keeps them sharp (pixel art)")
+			.Enum("Wrap", { "Repeat", "Clamp", "Mirror" }, TextureWrapToString(defaults.Wrap))
+				.Tooltip("What texture coordinates outside 0..1 show: the texture repeated, its edge, or the texture mirrored")
+			.Bool("GenerateMips", defaults.GenerateMips)
+				.Tooltip("Store the smaller versions of the image that keep distant surfaces from shimmering")
+			.Bool("FlipVertically", defaults.FlipVertically)
+				.Tooltip("Store the image upside down (for images whose rows start at the bottom)");
+		return properties;
+	}
+
 	bool TextureImporter::Import(const ImportContext& context, ImportResult& result, std::string* outError) const
 	{
 		std::optional<std::vector<uint8_t>> encoded = FileSystem::ReadBytes(context.SourcePath);

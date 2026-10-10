@@ -41,6 +41,13 @@ namespace Strata
 
 	const char* SceneStateToString(SceneState state);
 
+	// What the inspector panels show: the selected entities, or one asset (EditorContext::SetInspectedAsset).
+	enum class InspectionTarget : uint8_t
+	{
+		Entities = 0,
+		Asset
+	};
+
 	struct EditorContextSpecification
 	{
 		bool WatchAssetFiles = true;  // Hot reload of files changed outside the editor
@@ -187,6 +194,22 @@ namespace Strata
 		void PruneSelection();
 
 		//////////////////////////////////////////////////////////////////////////
+		// Inspection
+		//////////////////////////////////////////////////////////////////////////
+
+		// Shows an asset in the asset inspector instead of the selected entities, which stay selected (the viewport keeps
+		// their outline and gizmo). Selecting an entity (Select, or SetSelection with entities) makes the entities the target
+		// again, as does the null handle; an asset that is deleted, or the project closing, ends the inspection. Returns false
+		// (changing nothing) for handles the active asset manager does not know.
+		bool SetInspectedAsset(AssetHandle handle);
+		// The null handle while the entities are inspected.
+		AssetHandle GetInspectedAsset() const { return m_InspectedAsset; }
+		InspectionTarget GetInspectionTarget() const { return m_InspectedAsset.IsValid() ? InspectionTarget::Asset : InspectionTarget::Entities; }
+		// Changes whenever the target changes and whenever an asset is inspected (again), so panels can bring the inspector
+		// that shows it to the front.
+		uint64_t GetInspectionVersion() const { return m_InspectionVersion; }
+
+		//////////////////////////////////////////////////////////////////////////
 		// Undo
 		//////////////////////////////////////////////////////////////////////////
 
@@ -307,6 +330,8 @@ namespace Strata
 		bool StopOnScriptFault();
 		// Saves the viewport state and closes the project; with activateBuiltinAssets the built-in asset manager becomes active.
 		void ReleaseProject(bool activateBuiltinAssets);
+		// The entities become the inspection target (an entity was selected, the inspected asset went away).
+		void InspectEntities();
 		void ActivateBuiltinAssets();
 		std::filesystem::path GetViewportStateFile() const;
 	private:
@@ -325,6 +350,8 @@ namespace Strata
 
 		std::vector<UUID> m_Selection;
 		std::unordered_set<UUID> m_SelectionSet; // The same entities, for IsSelected
+		AssetHandle m_InspectedAsset = UUID::Null();
+		uint64_t m_InspectionVersion = 0;
 		UndoStack m_UndoStack;
 
 		Ref<ScriptEngine> m_ScriptEngine;

@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Editor/CommandUtils.h"
+#include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/PropertyEdit.h"
@@ -10,11 +11,15 @@
 #include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/Log.h>
+#include <Strata/Core/Timestep.h>
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/SceneSerializer.h>
 
+#include <chrono>
+#include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 
@@ -27,13 +32,33 @@ namespace
 	{
 		EditorContext Context { EditorContextSpecification { false } };
 		EditorCommandRegistry Commands;
+		EditorCommandRunner Runner;
 
 		nlohmann::json Run(std::string_view name, const nlohmann::json& parameters = nlohmann::json::object())
 		{
 			EditorCommandResult result = Commands.Execute(Context, name, parameters);
 			INFO(name, ": ", result.Error);
 			REQUIRE(result.Success);
+			// A deferred command has not done its work yet: run it with Finish.
+			REQUIRE_FALSE(result.IsPending());
 			return result.Value;
+		}
+
+		// Runs a command through the runner with editor frames until it completed (deferred commands such as imports), and
+		// requires it to succeed.
+		nlohmann::json Finish(std::string_view name, const nlohmann::json& parameters)
+		{
+			auto completed = std::make_shared<std::optional<EditorCommandResult>>();
+			Runner.Run(Context, Commands, name, parameters, [completed](const EditorCommandResult& result) { *completed = result; });
+			REQUIRE(Tests::WaitUntil([&]()
+			{
+				Context.Update(Timestep(1.0f / 60.0f));
+				Runner.Update(Context);
+				return completed->has_value();
+			}, std::chrono::seconds(60)));
+			INFO(name, ": ", (*completed)->Error);
+			REQUIRE((*completed)->Success);
+			return (*completed)->Value;
 		}
 
 		std::string Error(std::string_view name, const nlohmann::json& parameters = nlohmann::json::object())
@@ -351,10 +376,16 @@ TEST_SUITE("Editor.Validation")
 		CHECK(imported["importError"] == "");
 		CHECK_FALSE(harness.Error("asset.import", { { "file", FileSystem::ToUTF8(directory / "Missing.png") } }).empty());
 
+		// Both import in the background and answer when the import is done.
 		const std::string texture = imported["asset"].get<std::string>();
-		harness.Run("asset.setImportSettings", { { "asset", texture }, { "settings", { { "MaxSize", 4 } } } });
+		const nlohmann::json configured = harness.Finish("asset.setImportSettings", { { "asset", texture }, { "settings", { { "MaxSize", 4 } } } });
+		CHECK(configured["importSettings"]["MaxSize"] == 4);
+		CHECK(configured["importError"] == "");
+		CHECK(configured["importing"] == false);
 		CHECK(harness.Run("asset.info", { { "asset", texture } })["importSettings"]["MaxSize"] == 4);
-		harness.Run("asset.reimport", { { "asset", "Textures/Brick.png" } });
+		const nlohmann::json reimported = harness.Finish("asset.reimport", { { "asset", "Textures/Brick.png" } });
+		CHECK(reimported["importError"] == "");
+		CHECK(reimported["importing"] == false);
 
 		harness.Run("asset.move", { { "asset", texture }, { "path", "Textures/Wall.png" } });
 		CHECK(harness.Run("asset.info", { { "asset", texture } })["path"] == "Textures/Wall.png");

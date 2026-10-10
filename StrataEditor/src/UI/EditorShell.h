@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Strata/Core/UUID.h>
 #include <Strata/Renderer/GraphicsDevice.h>
 
 #include <cstdint>
@@ -55,6 +56,9 @@ namespace Strata
 		virtual void ShowAboutDialog() = 0;
 		// Leaves the launcher for the editor without opening a project (an untitled scene with the built-in assets).
 		virtual void DismissLauncher() = 0;
+		// Renames an entity in place in the Hierarchy (F2 in the viewport): the Hierarchy comes to the front with the entity's
+		// row revealed and its name in a text field.
+		virtual void RenameEntity(UUID entity) = 0;
 
 		virtual EditorEnvironment GetEnvironment() const = 0;
 		virtual EditorAutomationState GetAutomationState() const = 0;

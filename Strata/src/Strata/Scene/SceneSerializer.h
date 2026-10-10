@@ -48,7 +48,8 @@ namespace Strata
 		static bool SaveToFile(const Scene& scene, const std::filesystem::path& path, std::string* outError = nullptr);
 		static Ref<Scene> LoadFromFile(const std::filesystem::path& path, std::string* outError = nullptr);
 
-		// Snapshot of entity hierarchies: {"Entities": [...]} containing each root and all its descendants.
+		// Snapshot of entity hierarchies: {"Entities": [...]} containing each root and all its descendants. Roots below another
+		// listed root are part of its subtree; invalid roots and roots of other scenes are left out.
 		static nlohmann::json SerializeEntities(const Scene& scene, const std::vector<Entity>& roots);
 		// Instantiates a snapshot produced by SerializeEntities (or the "Entities" of a scene/prefab document).
 		// Returns the created top-level entities in order.

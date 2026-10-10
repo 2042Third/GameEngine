@@ -104,8 +104,9 @@ render-scene, streaming-observatory, editor-authoring:
   reference display) and at 658-659 MB in a 1920x1080 window there, which renders 2880x1620 pixels.
 
   Open:
-  - The editor's `asset.import`, `asset.reimport` and `asset.setImportSettings` still cook on the main thread (encoding
-    on every worker; about 1.5 s for a 4096x4096 BC7 color texture), which `content-and-prefabs` makes asynchronous.
+  - The editor's `asset.import` still cooks on the main thread (encoding on every worker; about 1.5 s for a 4096x4096
+    BC7 color texture), which `content-and-prefabs` makes asynchronous; `asset.reimport` and `asset.setImportSettings`
+    import in the background since `editor-authoring`.
   - HDR textures stay RGBA16F (8 bytes per texel) until a BC6H encoder exists.
   - With BC7 color an upload step carries twice the bytes, and `PerfGPU.Streaming.MaxFinalizeTime` (measured before
     `perf-gates` merged as the median of three sweeps' longest finalization) measured 4.1, 5.3 and 7.2 ms in three runs
@@ -157,6 +158,32 @@ render-scene, streaming-observatory, editor-authoring:
   asset) and the Performance panel (a stacked stage timeline, about 0.065 ms per frame at the 95th percentile),
   status pills that open them, `editor.showPanel`, and the viewport's streaming and LOD debug views
   (`SceneRenderOptions::EntityTints`, `Overlay/StatusTint.frag`, `LODSelection`; `viewport.capture {debugView}`).
+- `editor-authoring`, phase A (the editor core; the panels follow in phase B): an inspection target (entities or one
+  asset); material edits that show in the same frame, preview while dragged and undo as one step
+  (`AssetDocumentAction`, `AssetManagerBase::ReplaceLoadedAsset`); every importer's settings described as properties and
+  validated, and re-imports in the background (`asset.setImportSettings`, `asset.reimport` answer deferred; the longest
+  editor frame while a 4096x4096 texture re-imports is about 3 ms, 4 ms with its upload and drawing on a GPU, it was the
+  whole import); `HierarchyView`, the
+  hierarchy's rows without UI (an unchanged frame costs about 10 ns at 100,000 roots, a rebuild 0.6 ms), with
+  `c:`/`t:` filters, reveal and drop zones; one-step commands for many entities (`entity.setParent {entities, index}`,
+  `entity.copy`, `entity.paste`, `entity.duplicate {entities}`, `entity.setActive {entities}`, `component.add` and
+  `component.remove {entities}`, `component.set {entities}`) and multi-entity property edits. Undo now restores
+  sibling orders whose recorded positions agree by chance, and copying many roots is linear.
+- `editor-authoring`, phase B (the panels): an Asset tab next to the Inspector (materials edited live, a drag one undo
+  step; import settings as a draft applied in the background; texture preview); a Hierarchy that draws only the rows in
+  view (about 0.012 ms per frame at 100,000 roots, it was 12.9 ms), with multi-selection (Ctrl, Shift, a box), drops
+  before, after and into rows, rename in place, icons, an eye, prefab badges, a search box and reveal of entities
+  selected elsewhere; an Inspector that edits every selected entity at once (mixed values, axis labels that reset,
+  component menus with Copy and Paste Values, searchable entity and asset pickers, the scene's settings and sky with
+  nothing selected, New Material and the material in place); a play-mode banner; and selection shortcuts (Delete, Ctrl+D,
+  Ctrl+C/X/V, Ctrl+A, F2) that act only where the keyboard focus is.
+- `editor-authoring`, after review: the Inspector shows values and labels whole in a laptop's window (shared resizable
+  label column, numbers without trailing zeros, ellipses with tooltips where nothing else fits), colors as channels in
+  the axis colors with a picker, mixed colors and texts as mixed, sliders as a track beside the number; Hierarchy ranges
+  anchored on entities and, while filtering, taking only the matches; Apply sending only changed import settings and
+  out-of-range settings refused; duplicates of several sibling lists remapped together; multi-entity yaw edits past and
+  through 90 degrees that keep each entity's pitch and roll (its angles read once per edit), and rotation fields that
+  follow an undo; the Asset tab naming types and choices in words, with size limits as choices.
 
 Open items and deferrals later waves own:
 
@@ -175,9 +202,11 @@ Open items and deferrals later waves own:
   and `GetResidencySamples` walk every registered asset (`GetStats` keeps counts instead; eviction walks only the
   resident assets of the pools over budget, least recently requested first), which a world of many registered assets
   will feel (`world-partition`).
-- Deleting one entity among 100,000 sibling roots renumbers the sibling list (about 0.5 ms), and the Hierarchy panel
-  draws every root each frame (Hierarchy v2 in `editor-authoring`). Starting play copies a 1,000,000-entity scene in
-  about 0.7 s (`scene-streaming`).
+- Deleting one entity among 100,000 sibling roots renumbers the sibling list (about 0.5 ms). Starting play copies a
+  1,000,000-entity scene in about 0.7 s (`scene-streaming`). The Inspector reads the values of every selected entity each
+  frame (to show mixed values): a selection of 100,000 entities adds about 8 ms to a frame while it lasts
+  (`Perf.Editor.SelectionFrame100kSelected`); a cache invalidated by component signals and the transforms version would
+  make it follow changes instead.
 - The editor starts in 0.7-1.0 s (Release, to its first frame on screen), not the 0.4 s the pillar names. An idle
   editor answers input and automation requests on its next throttled frame (up to 33 ms, 100 ms unfocused) until it
   waits on events instead. Project thumbnails and search in the recent projects move to `content-and-prefabs`.

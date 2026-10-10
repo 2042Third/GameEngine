@@ -4,13 +4,17 @@
 #include "Editor/EditorContext.h"
 #include "Editor/PropertyEdit.h"
 #include "Editor/ScriptEdit.h"
-#include "Panels/SceneHierarchyPanel.h"
+#include "UI/EditorActions.h"
 #include "UI/EditorFonts.h"
+#include "UI/EntityIcons.h"
 #include "UI/Icons.h"
+#include "UI/ItemProbe.h"
 #include "UI/PropertyWidgets.h"
 #include "UI/Theme.h"
 #include "UI/Widgets.h"
 
+#include <Strata/Asset/AssetManager.h>
+#include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Core/StringUtils.h>
@@ -18,12 +22,15 @@
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/ComponentAccess.h>
 #include <Strata/Scene/Components.h>
+#include <Strata/Scene/Entity.h>
 #include <Strata/Scripting/ScriptSystem.h>
 
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <imgui_stdlib.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cfloat>
 #include <map>
 #include <optional>
@@ -37,42 +44,32 @@ namespace Strata
 	{
 
 		constexpr float c_AddComponentWidthInFontSizes = 14.0f;
+		constexpr float c_AddComponentListHeightInFontSizes = 20.0f;
 
-		void DrawComponentProperties(EditorContext& context, Entity entity, const ComponentInfo& info)
+		const ImVec4& GetPlayStateColor(const EditorContext& context)
 		{
-			if (!ImGui::BeginTable("Properties", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp))
-				return;
-			ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 0.4f);
-			ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 0.6f);
-			for (const PropertyInfo& property : info.Properties)
+			const UI::ThemeColors::PlayStateColors& colors = UI::GetThemeColors().PlayState;
+			if (context.IsPaused())
+				return colors.Paused;
+			return context.GetSceneState() == SceneState::Simulate ? colors.Simulate : colors.Play;
+		}
+
+		nlohmann::json ToJson(std::span<const Entity> entities)
+		{
+			nlohmann::json ids = nlohmann::json::array();
+			for (const Entity entity : entities)
+				ids.push_back(UUIDToJson(entity.GetUUID()));
+			return ids;
+		}
+
+		bool HasComponentOnAll(std::span<const Entity> entities, const ComponentInfo& info)
+		{
+			for (const Entity entity : entities)
 			{
-				if (property.IsHidden() || property.IsTransient())
-					continue;
-				std::optional<PropertyValue> value = ComponentAccess::GetProperty(entity, info, property);
-				if (!value)
-					continue;
-
-				ImGui::TableNextRow();
-				ImGui::TableSetColumnIndex(0);
-				ImGui::AlignTextToFramePadding();
-				ImGui::TextUnformatted(property.DisplayName.c_str());
-				if (!property.Tooltip.empty() && ImGui::IsItemHovered())
-					ImGui::SetTooltip("%s", property.Tooltip.c_str());
-
-				ImGui::TableSetColumnIndex(1);
-				ImGui::BeginDisabled(property.IsReadOnly());
-				const PropertyEditResult result = DrawPropertyWidget(property, *value, *entity.GetScene());
-				ImGui::EndDisabled();
-				if (result.Changed)
-				{
-					std::string error;
-					if (!SetPropertyWithUndo(context, entity, info, property, *value, &error))
-						ST_WARN("{}.{}: {}", info.Name, property.Name, error);
-				}
-				if (result.Finished)
-					context.GetUndoStack().BreakMerge();
+				if (!info.Has(entity.GetScene()->GetRegistry(), entity.GetHandle()))
+					return false;
 			}
-			ImGui::EndTable();
+			return true;
 		}
 
 		// The value a field shows: the live instance's while the scene plays, else the stored override or the default.
@@ -97,10 +94,12 @@ namespace Strata
 				ImGui::TextDisabled("No fields");
 				return;
 			}
-			if (!ImGui::BeginTable("Fields", 3, ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp))
+			// Laid out like the property tables (UI::BeginPropertyTable), with a column for the reset buttons.
+			if (!ImGui::BeginTable("Fields", 3, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV
+				| ImGuiTableFlags_NoBordersInBodyUntilResize))
 				return;
-			ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 0.4f);
-			ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 0.6f);
+			ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 0.42f);
+			ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 0.58f);
 			ImGui::TableSetupColumn("Reset", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFrameHeight());
 			for (const ScriptFieldInfo& field : info.Fields)
 			{
@@ -112,17 +111,9 @@ namespace Strata
 				property.Type = field.Type;
 				PropertyValue value = GetShownFieldValue(entity, entry, field);
 
-				ImGui::TableNextRow();
-				ImGui::TableSetColumnIndex(0);
-				ImGui::AlignTextToFramePadding();
-				ImGui::TextUnformatted(property.DisplayName.c_str());
-				if (ImGui::IsItemHovered())
-				{
-					ImGui::SetTooltip("%s (%s), default %s%s", field.Name.c_str(), PropertyTypeToString(field.Type),
-						JsonUtils::Dump(ScriptEdit::FieldValueToJson(field.DefaultValue, field.Type)).c_str(), overridden ? "; overridden on this entity" : "");
-				}
-
-				ImGui::TableSetColumnIndex(1);
+				const std::string tooltip = fmt::format("{} ({}), default {}{}", field.Name, PropertyTypeToString(field.Type),
+					JsonUtils::Dump(ScriptEdit::FieldValueToJson(field.DefaultValue, field.Type)), overridden ? "; overridden on this entity" : "");
+				UI::PropertyLabel(property.DisplayName, tooltip);
 				const PropertyEditResult result = DrawPropertyWidget(property, value, *entity.GetScene());
 				std::string error;
 				if (result.Changed && !ScriptEdit::SetField(context, entity, entry.ClassName, field, value, &error))
@@ -152,6 +143,491 @@ namespace Strata
 				ImGui::TextDisabled("%s = %s", field.Name.c_str(), JsonUtils::Dump(ScriptEdit::FieldValueToJson(field.Value, field.Type)).c_str());
 		}
 
+		// A file name made of a name an entity has: letters, digits, spaces, '-' and '_' only.
+		std::string ToFileName(const std::string& name)
+		{
+			std::string result;
+			for (const char character : name)
+			{
+				const unsigned char byte = static_cast<unsigned char>(character);
+				result += std::isalnum(byte) || character == ' ' || character == '-' || character == '_' ? character : '_';
+			}
+			const size_t first = result.find_first_not_of(" _");
+			return first == std::string::npos ? std::string("Material") : result.substr(first);
+		}
+
+		// The editable settings of the scene, as properties the property widgets draw.
+		struct SceneSettingProperties
+		{
+			PropertyInfo Gravity;
+			PropertyInfo FixedTimestep;
+			PropertyInfo MaxFixedSteps;
+		};
+
+		const SceneSettingProperties& GetSceneSettingProperties()
+		{
+			static const SceneSettingProperties s_Properties = []()
+			{
+				SceneSettingProperties properties;
+				properties.Gravity.Name = "Gravity";
+				properties.Gravity.DisplayName = "Gravity";
+				properties.Gravity.Tooltip = "Acceleration of rigid bodies in m/s\xC2\xB2";
+				properties.Gravity.Type = PropertyType::Vec3;
+				properties.Gravity.Speed = 0.05f;
+				properties.FixedTimestep.Name = "FixedTimestep";
+				properties.FixedTimestep.DisplayName = "Fixed Timestep";
+				properties.FixedTimestep.Tooltip = "Seconds per physics step (1/1000 to 1/10)";
+				properties.FixedTimestep.Type = PropertyType::Float;
+				properties.FixedTimestep.Min = 0.001f;
+				properties.FixedTimestep.Max = 0.1f;
+				properties.FixedTimestep.Speed = 0.0005f;
+				properties.MaxFixedSteps.Name = "MaxFixedStepsPerFrame";
+				properties.MaxFixedSteps.DisplayName = "Max Steps per Frame";
+				properties.MaxFixedSteps.Tooltip = "Physics steps one frame may run at most (a slow frame drops the rest)";
+				properties.MaxFixedSteps.Type = PropertyType::UInt;
+				properties.MaxFixedSteps.Min = 1.0f;
+				properties.MaxFixedSteps.Max = 64.0f;
+				return properties;
+			}();
+			return s_Properties;
+		}
+
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
+	// Panel
+	////////////////////////////////////////////////////////////////////////////////
+
+	void InspectorPanel::OnImGuiRender(EditorPanelContext& panelContext)
+	{
+		EditorContext& context = panelContext.Context;
+		const EditorCommandRegistry& commands = panelContext.Commands;
+		if (context.IsPlaying())
+		{
+			UI::Banner("Inspector.PlayBanner", Icons::Play, "Playing: changes are discarded when play stops", GetPlayStateColor(context));
+			ImGui::Spacing();
+		}
+
+		// The selection in selection order (the last is the primary one).
+		std::vector<Entity> entities;
+		entities.reserve(context.GetSelection().size());
+		for (const UUID id : context.GetSelection())
+		{
+			if (Entity entity = context.GetActiveScene()->GetEntityByUUID(id))
+				entities.push_back(entity);
+		}
+		if (entities.empty())
+		{
+			m_MaterialEditor.CommitPending(context);
+			DrawSceneSettings(context, commands);
+			return;
+		}
+
+		DrawHeader(context, commands, entities);
+		for (const ComponentInfo* info : ComponentRegistry::GetAll())
+		{
+			// The name is the header's; hidden and internal components are not shown.
+			if (info->IsHidden() || HasFlag(info->Flags, ComponentFlags::NoSerialize) || info->TypeId == entt::type_id<NameComponent>().hash())
+				continue;
+			if (!HasComponentOnAll(entities, *info))
+				continue;
+			DrawComponent(context, commands, entities, *info);
+		}
+		if (entities.size() > 1)
+		{
+			ImGui::Spacing();
+			ImGui::PushStyleColor(ImGuiCol_Text, UI::GetThemeColors().TextSecondary);
+			ImGui::TextWrapped("Components that only some of the selected entities have are not shown.");
+			ImGui::PopStyleColor();
+		}
+
+		ImGui::Spacing();
+		const float buttonWidth = ImGui::GetFontSize() * c_AddComponentWidthInFontSizes;
+		ImGui::SetCursorPosX(std::max((ImGui::GetContentRegionAvail().x - buttonWidth) * 0.5f, 0.0f) + ImGui::GetCursorPosX());
+		if (UI::ActionButton("Inspector.AddComponent", Icons::Plus, "Add Component", "Add a component to the selected entities", {}, buttonWidth))
+			ImGui::OpenPopup("AddComponent");
+		DrawAddComponentPopup(context, commands, entities);
+	}
+
+	void InspectorPanel::OnHidden(EditorPanelContext& context)
+	{
+		m_MaterialEditor.CommitPending(context.Context);
+		m_SettingsDraft.reset();
+		m_RotationEdit.reset();
+	}
+
+	const std::vector<std::optional<PropertyValue>>& InspectorPanel::GetDefaults(const ComponentInfo& info)
+	{
+		auto it = m_Defaults.find(&info);
+		if (it == m_Defaults.end())
+			it = m_Defaults.emplace(&info, GetDefaultPropertyValues(info)).first;
+		return it->second;
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
+	// Header
+	////////////////////////////////////////////////////////////////////////////////
+
+	void InspectorPanel::DrawHeader(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities)
+	{
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		const ImGuiStyle& style = ImGui::GetStyle();
+		const Entity primary = entities.back();
+		Scene& scene = *primary.GetScene();
+		const bool single = entities.size() == 1;
+
+		// The icon, the name (or the count) and the active toggle on one line.
+		UI::PushFont(UI::EditorFont::Regular, UI::TextSize::Title);
+		ImGui::AlignTextToFramePadding();
+		ImGui::TextColored(colors.Accent, "%s", single ? UI::GetEntityIcon(scene.GetRegistry(), primary.GetHandle()) : Icons::Layers);
+		ImGui::PopFont();
+		ImGui::SameLine();
+		const float toggleWidth = ImGui::GetFrameHeight();
+		const float nameWidth = std::max(ImGui::GetContentRegionAvail().x - toggleWidth - style.ItemSpacing.x, ImGui::GetFrameHeight());
+		if (single)
+		{
+			// The text typed stays while the field is active; otherwise it shows the entity's name.
+			const ImGuiID nameId = ImGui::GetID("##Name");
+			if (ImGui::GetActiveID() != nameId || m_NameEntity != primary.GetUUID())
+			{
+				m_NameEntity = primary.GetUUID();
+				m_NameText = primary.GetName();
+			}
+			ImGui::SetNextItemWidth(nameWidth);
+			UI::PushFont(UI::EditorFont::SemiBold, UI::TextSize::Body);
+			const bool entered = ImGui::InputTextWithHint("##Name", "Name", &m_NameText, ImGuiInputTextFlags_EnterReturnsTrue);
+			ImGui::PopFont();
+			UI::ItemProbe::Record("Inspector.Name");
+			if ((entered || ImGui::IsItemDeactivatedAfterEdit()) && m_NameText != primary.GetName())
+				RunEditorCommand(context, commands, "entity.rename", { { "entity", UUIDToJson(primary.GetUUID()) }, { "name", m_NameText } });
+		}
+		else
+		{
+			ImGui::AlignTextToFramePadding();
+			UI::PushFont(UI::EditorFont::SemiBold, UI::TextSize::Body);
+			ImGui::Text("%zu entities", entities.size());
+			ImGui::PopFont();
+			ImGui::SameLine(0.0f, 0.0f);
+			ImGui::Dummy(ImVec2(std::max(nameWidth - ImGui::GetItemRectSize().x, 0.0f), ImGui::GetFrameHeight()));
+		}
+
+		ImGui::SameLine();
+		bool active = primary.IsActive();
+		bool mixed = false;
+		for (const Entity entity : entities)
+			mixed |= entity.IsActive() != active;
+		ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, mixed);
+		if (ImGui::Checkbox("##Active", &active))
+			RunEditorCommand(context, commands, "entity.setActive", { { "entities", ToJson(entities) }, { "active", mixed ? true : active } });
+		ImGui::PopItemFlag();
+		UI::ItemProbe::Record("Inspector.Active");
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+		{
+			ImGui::SetTooltip("%s", mixed ? "Some of the entities are inactive: click to activate them all"
+				: "Active: inactive entities and their children are neither simulated nor drawn");
+		}
+
+		// The ID (in the form commands take) with a copy button, and the prefab the entity comes from.
+		if (single)
+		{
+			const std::string id = UUIDToJson(primary.GetUUID()).get<std::string>();
+			UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Caption);
+			ImGui::AlignTextToFramePadding();
+			ImGui::TextColored(colors.TextSecondary, "ID %s", id.c_str());
+			ImGui::PopFont();
+			ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
+			if (UI::IconButton("Inspector.CopyID", Icons::Copy, "Copy the ID (as commands and scripts take it)"))
+				ImGui::SetClipboardText(id.c_str());
+			if (const PrefabInstanceComponent* prefab = scene.GetRegistry().try_get<PrefabInstanceComponent>(primary.GetHandle()))
+			{
+				std::string name = "Prefab";
+				if (AssetManager::HasActive())
+				{
+					if (const std::optional<AssetMetadata> metadata = AssetManager::GetActive()->GetMetadata(prefab->Prefab))
+						name = metadata->Name.empty() ? metadata->Path : metadata->Name;
+				}
+				ImGui::SameLine();
+				UI::PushFont(UI::EditorFont::Regular, UI::TextSize::Caption);
+				UI::Pill("Inspector.Prefab", Icons::Package, name, colors.Info, "An instance of this prefab or model");
+				ImGui::PopFont();
+			}
+		}
+		ImGui::Spacing();
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
+	// Components
+	////////////////////////////////////////////////////////////////////////////////
+
+	void InspectorPanel::DrawComponent(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info)
+	{
+		const ImGuiStyle& style = ImGui::GetStyle();
+		ImGui::PushID(info.Name.c_str());
+		const float headerRight = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
+		const std::string label = fmt::format("{}  {}", UI::GetComponentIcon(info), info.DisplayName);
+		// The menu (Reset, Copy and Paste Values for components with settable properties, Remove for those people may remove:
+		// not those the engine adds, such as prefab links), and Remove as a button. A component with neither, such as a prefab
+		// link, has no menu.
+		const bool removable = info.IsRemovable() && !HasFlag(info.Flags, ComponentFlags::EngineAdded);
+		const bool settable = HasSettableProperties(info);
+		const bool hasMenu = settable || removable;
+		const bool open = UI::SectionHeader("Component", label.c_str(), ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap);
+		if (hasMenu && ImGui::IsItemClicked(ImGuiMouseButton_Right))
+			ImGui::OpenPopup("ComponentMenu");
+		if (!info.Description.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+			ImGui::SetTooltip("%s", info.Description.c_str());
+
+		const float buttons = ImGui::GetFrameHeight() * ((hasMenu ? 1.0f : 0.0f) + (removable ? 1.0f : 0.0f)) + (hasMenu && removable ? style.ItemInnerSpacing.x : 0.0f);
+		if (hasMenu)
+		{
+			ImGui::SameLine(headerRight - buttons);
+			const std::string menuId = fmt::format("Inspector.{}.Menu", info.Name);
+			if (UI::IconButton(menuId.c_str(), Icons::EllipsisVertical, settable ? "Reset, copy, paste or remove" : "Remove"))
+				ImGui::OpenPopup("ComponentMenu");
+		}
+		bool remove = false;
+		if (removable)
+		{
+			ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
+			const std::string removeId = fmt::format("Inspector.{}.Remove", info.Name);
+			const std::string tooltip = "Remove " + info.DisplayName;
+			remove = UI::IconButton(removeId.c_str(), Icons::X, tooltip.c_str());
+		}
+		DrawComponentMenu(context, commands, entities, info);
+
+		if (remove)
+			RunEditorCommand(context, commands, "component.remove", { { "entities", ToJson(entities) }, { "component", info.Name } });
+		// The menu may have removed it too.
+		if (open && HasComponentOnAll(entities, info))
+		{
+			if (info.TypeId == entt::type_id<ScriptComponent>().hash())
+			{
+				if (entities.size() == 1)
+					DrawScripts(context, commands, entities.front());
+				else
+					ImGui::TextDisabled("Select one entity to edit its scripts");
+			}
+			else if (info.Properties.empty())
+			{
+				ImGui::TextDisabled(info.SerializeExtra ? "Edited in its own section" : "No properties");
+			}
+			else
+			{
+				DrawProperties(context, entities, info);
+			}
+			if (info.TypeId == entt::type_id<MeshRendererComponent>().hash())
+				DrawMaterialSection(context, commands, entities);
+			ImGui::Spacing();
+		}
+		ImGui::PopID();
+	}
+
+	void InspectorPanel::DrawComponentMenu(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info)
+	{
+		if (!ImGui::BeginPopup("ComponentMenu"))
+			return;
+		const nlohmann::json ids = ToJson(entities);
+		const std::string probe = fmt::format("Inspector.{}.Menu.", info.Name);
+		// Reset, Copy and Paste work on the properties component.set can set; a component without any has none of them.
+		const bool settable = HasSettableProperties(info);
+		if (settable)
+		{
+			if (ImGui::MenuItem("Reset"))
+				RunEditorCommand(context, commands, "component.set", { { "entities", ids }, { "component", info.Name }, { "values", GetDefaultComponentValues(info) } });
+			UI::ItemProbe::Record(probe + "Reset");
+			if (ImGui::MenuItem("Copy Values"))
+			{
+				// The primary entity's.
+				const nlohmann::json values = RunEditorCommand(context, commands, "component.get",
+					{ { "entity", UUIDToJson(entities.back().GetUUID()) }, { "component", info.Name } });
+				if (values.is_object() && values.contains("values"))
+					EditorActions::CopyComponentValues(info, values["values"]);
+			}
+			UI::ItemProbe::Record(probe + "Copy");
+			const std::optional<nlohmann::json> clipboard = EditorActions::ReadComponentValues(info);
+			const std::string pasteLabel = entities.size() == 1 ? std::string("Paste Values") : fmt::format("Paste Values to {} Entities", entities.size());
+			if (ImGui::MenuItem(pasteLabel.c_str(), nullptr, false, clipboard.has_value()))
+				RunEditorCommand(context, commands, "component.set", { { "entities", ids }, { "component", info.Name }, { "values", *clipboard } });
+			UI::ItemProbe::Record(probe + "Paste", clipboard.has_value());
+		}
+		if (info.IsRemovable() && !HasFlag(info.Flags, ComponentFlags::EngineAdded))
+		{
+			if (settable)
+				ImGui::Separator();
+			if (ImGui::MenuItem("Remove"))
+				RunEditorCommand(context, commands, "component.remove", { { "entities", ids }, { "component", info.Name } });
+			UI::ItemProbe::Record(probe + "Remove");
+		}
+		ImGui::EndPopup();
+	}
+
+	void InspectorPanel::DrawProperties(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info)
+	{
+		if (!UI::BeginPropertyTable("Properties"))
+			return;
+		const std::vector<std::optional<PropertyValue>>& defaults = GetDefaults(info);
+		Scene& scene = *entities.front().GetScene();
+		for (size_t index = 0; index < info.Properties.size(); index++)
+		{
+			const PropertyInfo& property = info.Properties[index];
+			if (property.IsHidden() || property.IsTransient())
+				continue;
+			const std::optional<SharedPropertyValue> shared = GetSharedProperty(entities, info, property);
+			if (!shared)
+				continue;
+
+			const std::string probe = fmt::format("Inspector.{}.{}", info.Name, property.Name);
+			UI::PropertyLabel(property.DisplayName, property.Tooltip, probe);
+			PropertyWidgetOptions options;
+			options.Mixed = shared->Mixed;
+			options.MixedComponents = shared->MixedComponents;
+			options.DefaultValue = index < defaults.size() && defaults[index] ? &*defaults[index] : nullptr;
+			options.ProbeKey = probe;
+			PropertyValue value = shared->Value;
+			ImGui::BeginDisabled(property.IsReadOnly());
+			const PropertyEditResult result = DrawPropertyWidget(property, value, scene, options);
+			ImGui::EndDisabled();
+			if (result.Changed)
+			{
+				// Several entities: the components (axes) the edit changed are written, each entity keeps its own others.
+				std::string error;
+				const bool partial = std::any_of(result.ChangedComponents.begin(), result.ChangedComponents.end(), [](bool changed) { return changed; });
+				bool set = false;
+				if (entities.size() == 1)
+					set = SetPropertyWithUndo(context, entities.front(), info, property, value, &error);
+				else if (partial && property.Type == PropertyType::Quat)
+					set = UpdateRotationEdit(context, entities, info, property, result, &error);
+				else if (partial)
+					set = SetPropertyComponentsWithUndo(context, entities, info, property, value, result.ChangedComponents, &error);
+				else
+					set = SetPropertyWithUndo(context, entities, info, property, shared->Value, value, &error);
+				if (!set)
+					ST_WARN("{}.{}: {}", info.Name, property.Name, error);
+			}
+			if (result.Finished)
+			{
+				context.GetUndoStack().BreakMerge();
+				// The next edit reads the entities' angles again, as the fields show them then.
+				m_RotationEdit.reset();
+			}
+		}
+		UI::EndPropertyTable();
+	}
+
+	bool InspectorPanel::UpdateRotationEdit(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info, const PropertyInfo& property,
+		const PropertyEditResult& result, std::string* outError)
+	{
+		if (!m_RotationEdit || !m_RotationEdit->Continues(entities, info, property))
+			m_RotationEdit = RotationAnglesEdit::Begin(entities, info, property, result.EulerAnglesBefore, outError);
+		return m_RotationEdit && m_RotationEdit->Update(context, entities, info, property, result.EulerAngles, result.ChangedComponents, outError);
+	}
+
+	void InspectorPanel::DrawMaterialSection(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities)
+	{
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		const ComponentInfo* info = ComponentRegistry::Find<MeshRendererComponent>();
+		const PropertyInfo* property = info ? info->FindProperty("Material") : nullptr;
+		const std::optional<SharedPropertyValue> shared = property ? GetSharedProperty(entities, *info, *property) : std::nullopt;
+		if (!shared)
+			return;
+		const AssetHandle material = std::get<UUID>(shared->Value);
+
+		// A new material of the project for the selected entities: the file (material.create), then the component (one undo
+		// step of the scene).
+		const bool canCreate = context.HasProject() && !context.IsPlaying();
+		UI::ButtonStyle style;
+		style.Enabled = canCreate;
+		ImGui::Indent(ImGui::GetStyle().IndentSpacing * 0.5f);
+		if (UI::ToolbarButton("Inspector.MeshRenderer.NewMaterial", Icons::Plus, "New Material",
+			canCreate ? "Create a material of the project (Materials/) and give it to the selected entities"
+					  : (context.IsPlaying() ? "Stop playing to create materials" : "Open a project to create materials"), style))
+		{
+			const std::filesystem::path assets = context.GetProject()->GetAssetDirectory();
+			const std::string name = ToFileName(entities.back().GetName());
+			const std::filesystem::path file = FileSystem::GetUniquePath(assets / "Materials" / FileSystem::FromUTF8(name + ".stmat"));
+			std::string relative = FileSystem::ToUTF8(FileSystem::GetRelativePath(file, assets));
+			std::replace(relative.begin(), relative.end(), '\\', '/');
+			const nlohmann::json created = RunEditorCommand(context, commands, "material.create", { { "path", relative } });
+			if (created.is_object() && created.contains("asset"))
+			{
+				RunEditorCommand(context, commands, "component.set", { { "entities", ToJson(entities) }, { "component", info->Name },
+					{ "values", { { "Material", created["asset"] } } } });
+			}
+		}
+
+		if (shared->Mixed)
+		{
+			ImGui::TextColored(colors.TextSecondary, "The selected entities use different materials");
+		}
+		else if (material.IsValid())
+		{
+			std::string name = material.ToString();
+			if (AssetManager::HasActive())
+			{
+				if (const std::optional<AssetMetadata> metadata = AssetManager::GetActive()->GetMetadata(material))
+					name = metadata->Name.empty() ? metadata->Path : metadata->Name;
+			}
+			const bool open = ImGui::TreeNodeEx("EditMaterial", ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding, "%s  Edit material (shared)",
+				Icons::Palette);
+			UI::ItemProbe::Record("Inspector.MeshRenderer.EditMaterial");
+			if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+				ImGui::SetTooltip("%s: changes apply to every entity that uses this material", name.c_str());
+			if (open)
+			{
+				m_MaterialEditor.Draw(context, material, "Inspector.Material");
+				ImGui::TreePop();
+			}
+		}
+		ImGui::Unindent(ImGui::GetStyle().IndentSpacing * 0.5f);
+	}
+
+	void InspectorPanel::DrawAddComponentPopup(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities)
+	{
+		// Constraints only for the popup's window: set while no other window could take them.
+		if (ImGui::IsPopupOpen("AddComponent"))
+		{
+			ImGui::SetNextWindowSizeConstraints(ImVec2(ImGui::GetFontSize() * c_AddComponentWidthInFontSizes, 0.0f),
+				ImVec2(FLT_MAX, ImGui::GetFontSize() * c_AddComponentListHeightInFontSizes));
+		}
+		if (!ImGui::BeginPopup("AddComponent"))
+			return;
+		if (ImGui::IsWindowAppearing())
+		{
+			m_ComponentFilter.clear();
+			ImGui::SetKeyboardFocusHere();
+		}
+		UI::SearchField("Inspector.AddComponent.Search", m_ComponentFilter);
+		const std::string filter = StringUtils::ToLower(m_ComponentFilter);
+
+		// Grouped by category, in registration order within each: those that some selected entity lacks.
+		std::map<std::string, std::vector<const ComponentInfo*>> categories;
+		for (const ComponentInfo* info : ComponentRegistry::GetAll())
+		{
+			if (!info->IsAddable() || HasComponentOnAll(entities, *info))
+				continue;
+			if (!filter.empty() && StringUtils::ToLower(info->DisplayName).find(filter) == std::string::npos)
+				continue;
+			categories[info->Category.empty() ? "General" : info->Category].push_back(info);
+		}
+
+		for (const auto& [category, infos] : categories)
+		{
+			ImGui::SeparatorText(category.c_str());
+			for (const ComponentInfo* info : infos)
+			{
+				const std::string label = fmt::format("{}  {}", UI::GetComponentIcon(*info), info->DisplayName);
+				if (ImGui::Selectable(label.c_str()))
+				{
+					RunEditorCommand(context, commands, "component.add", { { "entities", ToJson(entities) }, { "component", info->Name } });
+					ImGui::CloseCurrentPopup();
+				}
+				if (!info->Description.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+					ImGui::SetTooltip("%s", info->Description.c_str());
+			}
+		}
+		if (categories.empty())
+			ImGui::TextDisabled("No components match");
+		ImGui::EndPopup();
 	}
 
 	void InspectorPanel::DrawScripts(EditorContext& context, const EditorCommandRegistry& commands, Entity entity)
@@ -159,7 +635,11 @@ namespace Strata
 		const Ref<ScriptEngine>& engine = context.GetScriptEngine();
 		const bool moduleLoaded = engine && engine->IsModuleLoaded();
 		if (!moduleLoaded)
+		{
+			ImGui::PushStyleColor(ImGuiCol_Text, UI::GetThemeColors().TextSecondary);
 			ImGui::TextWrapped("No script module is loaded: build the scripts (Scripts > Build Scripts) to edit their fields.");
+			ImGui::PopStyleColor();
+		}
 
 		// A copy: removing a script changes the component while it is drawn.
 		const std::vector<ScriptEntry> entries = entity.GetComponent<ScriptComponent>().Scripts;
@@ -168,8 +648,8 @@ namespace Strata
 		{
 			ImGui::PushID(entry.ClassName.c_str());
 			const float headerRight = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
-			const bool open = ImGui::TreeNodeEx("##Script", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap | ImGuiTreeNodeFlags_SpanAvailWidth,
-				"%s", entry.ClassName.c_str());
+			const bool open = ImGui::TreeNodeEx("##Script", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap | ImGuiTreeNodeFlags_SpanAvailWidth
+				| ImGuiTreeNodeFlags_FramePadding, "%s  %s", Icons::FileCode, entry.ClassName.c_str());
 			ImGui::SameLine(headerRight - ImGui::GetFrameHeight());
 			const std::string removeTooltip = "Remove the script " + entry.ClassName;
 			const bool remove = UI::IconButton("RemoveScript", Icons::X, removeTooltip.c_str());
@@ -219,116 +699,115 @@ namespace Strata
 		}
 	}
 
-	void InspectorPanel::DrawAddComponentPopup(EditorContext& context, const EditorCommandRegistry& commands, Entity entity)
+	////////////////////////////////////////////////////////////////////////////////
+	// Scene settings (nothing selected)
+	////////////////////////////////////////////////////////////////////////////////
+
+	void InspectorPanel::DrawSceneSettings(EditorContext& context, const EditorCommandRegistry& commands)
 	{
-		if (!ImGui::BeginPopup("AddComponent"))
-			return;
-		if (ImGui::IsWindowAppearing())
-		{
-			m_ComponentFilter.clear();
-			ImGui::SetKeyboardFocusHere();
-		}
-		ImGui::InputTextWithHint("##Filter", "Search", &m_ComponentFilter);
-		const std::string filter = StringUtils::ToLower(m_ComponentFilter);
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		Scene& scene = *context.GetActiveScene();
+		UI::PushFont(UI::EditorFont::Regular, UI::TextSize::Title);
+		ImGui::AlignTextToFramePadding();
+		ImGui::TextColored(colors.Accent, "%s", Icons::Clapperboard);
+		ImGui::PopFont();
+		ImGui::SameLine();
+		ImGui::BeginGroup();
+		UI::Heading(scene.GetName(), UI::TextSize::Body);
+		UI::PushFont(UI::EditorFont::Regular, UI::TextSize::Caption);
+		ImGui::TextColored(colors.TextSecondary, "Scene \xC2\xB7 %zu %s \xC2\xB7 select an entity to edit it", scene.GetEntityCount(),
+			scene.GetEntityCount() == 1 ? "entity" : "entities");
+		ImGui::PopFont();
+		ImGui::EndGroup();
+		UI::ItemProbe::Record("Inspector.SceneSettings");
+		ImGui::Spacing();
 
-		// Grouped by category, in registration order within each.
-		std::map<std::string, std::vector<const ComponentInfo*>> categories;
-		entt::registry& registry = entity.GetScene()->GetRegistry();
-		for (const ComponentInfo* info : ComponentRegistry::GetAll())
+		if (UI::SectionHeader("Inspector.Physics", (std::string(Icons::Orbit) + "  Physics").c_str()))
 		{
-			if (!info->IsAddable() || info->Has(registry, entity.GetHandle()))
-				continue;
-			if (!filter.empty() && StringUtils::ToLower(info->DisplayName).find(filter) == std::string::npos)
-				continue;
-			categories[info->Category.empty() ? "General" : info->Category].push_back(info);
-		}
-
-		for (const auto& [category, infos] : categories)
-		{
-			ImGui::SeparatorText(category.c_str());
-			for (const ComponentInfo* info : infos)
+			const SceneSettingProperties& properties = GetSceneSettingProperties();
+			SceneSettings shown = m_SettingsDraft.value_or(scene.GetSettings());
+			bool changed = false;
+			bool finished = false;
+			const SceneSettings defaults;
+			if (UI::BeginPropertyTable("Settings"))
 			{
-				if (ImGui::Selectable(info->DisplayName.c_str()))
+				auto draw = [&](const PropertyInfo& property, PropertyValue value, const PropertyValue& fallback, auto&& apply)
 				{
-					RunEditorCommand(context, commands, "component.add", { { "entity", UUIDToJson(entity.GetUUID()) }, { "component", info->Name } });
-					ImGui::CloseCurrentPopup();
-				}
-				if (!info->Description.empty() && ImGui::IsItemHovered())
-					ImGui::SetTooltip("%s", info->Description.c_str());
+					const std::string probe = "Inspector.Scene." + property.Name;
+					UI::PropertyLabel(property.DisplayName, property.Tooltip, probe);
+					PropertyWidgetOptions options;
+					options.DefaultValue = &fallback;
+					options.ProbeKey = probe;
+					const PropertyEditResult result = DrawPropertyWidget(property, value, scene, options);
+					if (result.Changed)
+						apply(value);
+					changed |= result.Changed;
+					finished |= result.Finished;
+				};
+				draw(properties.Gravity, shown.Gravity, PropertyValue(defaults.Gravity), [&](const PropertyValue& value) { shown.Gravity = std::get<glm::vec3>(value); });
+				draw(properties.FixedTimestep, shown.FixedTimestep, PropertyValue(defaults.FixedTimestep),
+					[&](const PropertyValue& value) { shown.FixedTimestep = std::get<float>(value); });
+				draw(properties.MaxFixedSteps, shown.MaxFixedStepsPerFrame, PropertyValue(defaults.MaxFixedStepsPerFrame),
+					[&](const PropertyValue& value) { shown.MaxFixedStepsPerFrame = std::get<uint32_t>(value); });
+				UI::EndPropertyTable();
+			}
+			// A drag shows its value here and applies it once, when it ends: one scene.setSettings, one undo step.
+			if (changed)
+				m_SettingsDraft = shown;
+			if (finished && m_SettingsDraft)
+			{
+				const SceneSettings settings = *m_SettingsDraft;
+				m_SettingsDraft.reset();
+				RunEditorCommand(context, commands, "scene.setSettings", {
+					{ "gravity", { settings.Gravity.x, settings.Gravity.y, settings.Gravity.z } },
+					{ "fixedTimestep", settings.FixedTimestep },
+					{ "maxFixedStepsPerFrame", settings.MaxFixedStepsPerFrame } });
 			}
 		}
-		if (categories.empty())
-			ImGui::TextDisabled("No components match");
-		ImGui::EndPopup();
+		DrawSky(context, commands);
 	}
 
-	void InspectorPanel::OnImGuiRender(EditorPanelContext& panelContext)
+	void InspectorPanel::DrawSky(EditorContext& context, const EditorCommandRegistry& commands)
 	{
-		EditorContext& context = panelContext.Context;
-		const EditorCommandRegistry& commands = panelContext.Commands;
-		Entity entity = context.GetPrimarySelection();
-		if (!entity)
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		Scene& scene = *context.GetActiveScene();
+		if (!UI::SectionHeader("Inspector.Sky", (std::string(Icons::CloudSun) + "  Sky").c_str()))
+			return;
+		// The sky the renderer uses: the first active sky light.
+		Entity sky;
+		for (auto [entity, light, world] : scene.GetRegistry().view<SkyLightComponent, WorldTransformComponent>().each())
 		{
-			ImGui::TextDisabled("Select an entity to edit it");
+			if (world.ActiveInHierarchy)
+			{
+				sky = Entity(entity, &scene);
+				break;
+			}
+		}
+		if (!sky)
+		{
+			ImGui::PushStyleColor(ImGuiCol_Text, colors.TextSecondary);
+			ImGui::TextWrapped("The scene has no sky light: only its lights light it, and the background is black.");
+			ImGui::PopStyleColor();
+			// The scene stays shown (nothing is selected): the new sky appears here.
+			if (UI::ToolbarButton("Inspector.AddSky", Icons::CloudSun, "Add Procedural Sky", "Create an entity with a procedural sky light"))
+				RunEditorCommand(context, commands, "entity.create", { { "name", "Sky" }, { "components", { { "SkyLight", { { "Source", "Procedural" } } } } } });
 			return;
 		}
-		if (context.GetSelection().size() > 1)
-			ImGui::TextDisabled("%zu entities selected; editing the last one", context.GetSelection().size());
-
-		bool active = entity.IsActive();
-		if (ImGui::Checkbox("##Active", &active))
-			RunEditorCommand(context, commands, "entity.setActive", { { "entity", UUIDToJson(entity.GetUUID()) }, { "active", active } });
-		if (ImGui::IsItemHovered())
-			ImGui::SetTooltip("Active");
-		ImGui::SameLine();
-		UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Caption);
 		ImGui::AlignTextToFramePadding();
-		ImGui::TextDisabled("ID %s", entity.GetUUID().ToString().c_str());
-		ImGui::PopFont();
-
-		entt::registry& registry = entity.GetScene()->GetRegistry();
-		for (const ComponentInfo* info : ComponentRegistry::GetAll())
+		ImGui::TextColored(colors.TextSecondary, "From '%s'", sky.GetName().c_str());
+		ImGui::SameLine();
+		if (UI::ToolbarButton("Inspector.SelectSky", Icons::MousePointerClick, "Select", "Select the entity that holds the sky"))
 		{
-			if (info->IsHidden() || HasFlag(info->Flags, ComponentFlags::NoSerialize) || !info->Has(registry, entity.GetHandle()))
-				continue;
-			// The entity may lose components below (removal); stop drawing it then.
-			if (!entity)
-				break;
-
-			ImGui::PushID(info->Name.c_str());
-			const float headerRight = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
-			const bool open = UI::SectionHeader("Component", info->DisplayName.c_str(), ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap);
-			if (!info->Description.empty() && ImGui::IsItemHovered())
-				ImGui::SetTooltip("%s", info->Description.c_str());
-			bool remove = false;
-			if (info->IsRemovable())
-			{
-				ImGui::SameLine(headerRight - ImGui::GetFrameHeight());
-				const std::string tooltip = "Remove " + info->DisplayName;
-				remove = UI::IconButton("RemoveComponent", Icons::X, tooltip.c_str());
-			}
-
-			if (open && !remove)
-			{
-				if (info->TypeId == entt::type_id<ScriptComponent>().hash())
-					DrawScripts(context, commands, entity);
-				else if (info->Properties.empty())
-					ImGui::TextDisabled(info->SerializeExtra ? "Edited in its own section" : "No properties");
-				else
-					DrawComponentProperties(context, entity, *info);
-			}
-			ImGui::PopID();
-
-			if (remove)
-				RunEditorCommand(context, commands, "component.remove", { { "entity", UUIDToJson(entity.GetUUID()) }, { "component", info->Name } });
+			context.Select(sky.GetUUID());
+			return;
 		}
-
-		ImGui::Spacing();
-		const float buttonWidth = ImGui::GetFontSize() * c_AddComponentWidthInFontSizes;
-		ImGui::SetCursorPosX(std::max((ImGui::GetContentRegionAvail().x - buttonWidth) * 0.5f, 0.0f) + ImGui::GetCursorPosX());
-		if (ImGui::Button("Add Component", ImVec2(buttonWidth, 0.0f)))
-			ImGui::OpenPopup("AddComponent");
-		DrawAddComponentPopup(context, commands, entity);
+		const ComponentInfo* info = ComponentRegistry::Find<SkyLightComponent>();
+		if (!info)
+			return;
+		const Entity entities[] = { sky };
+		ImGui::PushID("Sky");
+		DrawProperties(context, entities, *info);
+		ImGui::PopID();
 	}
 
 }

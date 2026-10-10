@@ -127,6 +127,9 @@ namespace Strata
 		// following frames while its docked tab does not show yet (a layout built in that frame). Until then neither a layout
 		// reset nor the saved open states read at the first frame close it.
 		void Focus(std::string_view id);
+		// Opens the panel if needed and shows its tab in its dock node when it is drawn next, without taking the keyboard
+		// focus from the window that has it (the Asset tab when the Content Browser inspects an asset).
+		void ShowTab(std::string_view id);
 		// Selects the panel's tab in its dock node without giving it the keyboard focus (layouts).
 		void SelectTab(std::string_view id, ImGuiID dockNodeId) const;
 
@@ -169,6 +172,7 @@ namespace Strata
 			bool Open = true;
 			bool FocusRequested = false;
 			uint32_t FocusAttempts = 0; // Frames the focus was asked for without the panel's tab showing
+			bool ShowTabRequested = false;
 		};
 		// Frames a focus request is repeated while its docked tab does not show (see OnImGuiRender).
 		static constexpr uint32_t c_MaxFocusAttempts = 4;
