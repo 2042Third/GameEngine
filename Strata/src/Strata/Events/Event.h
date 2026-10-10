@@ -15,7 +15,7 @@ namespace Strata
 	enum class EventType
 	{
 		None = 0,
-		WindowClose, WindowResize, WindowFocus, WindowLostFocus, WindowMoved, WindowFileDrop,
+		WindowClose, WindowResize, WindowFocus, WindowLostFocus, WindowMoved, WindowFileDrop, WindowContentScale,
 		KeyPressed, KeyReleased, KeyTyped,
 		MouseButtonPressed, MouseButtonReleased, MouseMoved, MouseScrolled
 	};

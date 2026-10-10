@@ -4,6 +4,7 @@
 #include "Strata/Core/CommandLine.h"
 #include "Strata/Core/JobSystem.h"
 #include "Strata/Core/LayerStack.h"
+#include "Strata/Core/Timer.h"
 #include "Strata/Core/Timestep.h"
 #include "Strata/Core/Window.h"
 #include "Strata/Events/ApplicationEvent.h"
@@ -80,6 +81,12 @@ namespace Strata
 		// frame-rate cap are not counted, so it measures what a frame costs whatever the display's refresh rate.
 		double GetLastFrameWorkTime() const { return m_LastFrameWorkTime; }
 
+		// Frames per second the main loop does not exceed from the next frame on (0: unlimited), on top of vsync. Starts at
+		// ApplicationSpecification::MaxFrameRate; the editor lowers it while it is idle. Setting the current rate again
+		// keeps the frame schedule, so it may be set every frame. Main thread only.
+		void SetMaxFrameRate(uint32_t framesPerSecond) { m_FramePacer.SetMaxFrameRate(framesPerSecond); }
+		uint32_t GetMaxFrameRate() const { return m_FramePacer.GetMaxFrameRate(); }
+
 		// Queues a function to run on the main thread at the start of the next frame. Thread-safe.
 		void SubmitToMainThread(std::function<void()> function);
 
@@ -115,6 +122,7 @@ namespace Strata
 		Timestep m_LastTimestep;
 		double m_LastFrameWorkTime = 0.0;
 		uint64_t m_FrameCount = 0;
+		FramePacer m_FramePacer;
 
 		std::mutex m_MainThreadQueueMutex;
 		std::vector<std::function<void()>> m_MainThreadQueue;

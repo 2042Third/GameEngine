@@ -4,7 +4,10 @@
 #include "Editor/EditorContext.h"
 #include "Panels/SceneHierarchyPanel.h"
 #include "UI/FileDialogs.h"
+#include "UI/Icons.h"
 #include "UI/PropertyWidgets.h"
+#include "UI/Theme.h"
+#include "UI/Widgets.h"
 
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/Log.h>
@@ -47,19 +50,19 @@ namespace Strata
 			return text;
 		}
 
-		const char* GetTypeTag(AssetType type)
+		const char* GetTypeIcon(AssetType type)
 		{
 			switch (type)
 			{
-				case AssetType::Scene:     return "[Scene]";
-				case AssetType::Prefab:    return "[Prefab]";
-				case AssetType::Model:     return "[Model]";
-				case AssetType::Mesh:      return "[Mesh]";
-				case AssetType::Material:  return "[Material]";
-				case AssetType::Texture:   return "[Texture]";
-				case AssetType::AudioClip: return "[Audio]";
-				case AssetType::Font:      return "[Font]";
-				default:                   return "[Asset]";
+				case AssetType::Scene:     return Icons::Clapperboard;
+				case AssetType::Prefab:    return Icons::Package;
+				case AssetType::Model:     return Icons::Shapes;
+				case AssetType::Mesh:      return Icons::Box;
+				case AssetType::Material:  return Icons::Palette;
+				case AssetType::Texture:   return Icons::Image;
+				case AssetType::AudioClip: return Icons::AudioLines;
+				case AssetType::Font:      return Icons::Type;
+				default:                   return Icons::File;
 			}
 		}
 
@@ -118,7 +121,7 @@ namespace Strata
 				continue;
 			Item item;
 			item.FileName = FileSystem::ToUTF8(FileSystem::FromUTF8(metadata.Path).filename());
-			item.Label = fmt::format("{}  {}", GetTypeTag(metadata.Type), item.FileName);
+			item.Label = fmt::format("{}  {}", GetTypeIcon(metadata.Type), item.FileName);
 			const AssetImportInfo importInfo = assets->GetImportInfo(metadata.Handle);
 			item.ImportError = importInfo.Error;
 			item.ImportWarnings = JoinLines(importInfo.Warnings);
@@ -178,7 +181,7 @@ namespace Strata
 			ImGui::EndPopup();
 		}
 		ImGui::SameLine();
-		ImGui::SetNextItemWidth(std::max(ImGui::GetContentRegionAvail().x, 60.0f));
+		ImGui::SetNextItemWidth(std::max(ImGui::GetContentRegionAvail().x, ImGui::GetFontSize() * 4.0f));
 		if (ImGui::InputTextWithHint("##Filter", "Search", &m_Filter))
 			m_RefreshRequested = true;
 	}
@@ -200,18 +203,14 @@ namespace Strata
 		ImGui::EndPopup();
 	}
 
-	void ContentBrowserPanel::OnImGuiRender(EditorContext& context, const EditorCommandRegistry& commands)
+	void ContentBrowserPanel::OnImGuiRender(EditorPanelContext& panelContext)
 	{
-		if (!ImGui::Begin("Content Browser"))
-		{
-			ImGui::End();
-			return;
-		}
+		EditorContext& context = panelContext.Context;
+		const EditorCommandRegistry& commands = panelContext.Commands;
 		if (!context.GetAssetManager())
 		{
 			ImGui::TextDisabled("Open or create a project to manage its assets (File menu)");
 			m_RefreshRequested = true;
-			ImGui::End();
 			return;
 		}
 
@@ -225,7 +224,7 @@ namespace Strata
 			std::string enterFolder;
 			for (const std::string& folder : m_Folders)
 			{
-				ImGui::Selectable(fmt::format("[Folder]  {}", folder).c_str(), false, ImGuiSelectableFlags_AllowDoubleClick);
+				ImGui::Selectable(fmt::format("{}  {}", Icons::Folder, folder).c_str(), false, ImGuiSelectableFlags_AllowDoubleClick);
 				if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 					enterFolder = folder;
 			}
@@ -237,8 +236,12 @@ namespace Strata
 				ImGui::PushID(metadata.Handle.ToString().c_str());
 				const bool failed = !item.ImportError.empty();
 				if (failed)
-					ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.35f, 1.0f));
-				ImGui::Selectable(item.Label.c_str(), metadata.Handle == context.GetSceneHandle(), ImGuiSelectableFlags_AllowDoubleClick);
+					ImGui::PushStyleColor(ImGuiCol_Text, UI::GetThemeColors().Error);
+				// The open scene is the selected row.
+				const bool open = metadata.Handle == context.GetSceneHandle();
+				UI::PushSelectionColors(open);
+				ImGui::Selectable(item.Label.c_str(), open, ImGuiSelectableFlags_AllowDoubleClick);
+				UI::PopSelectionColors();
 				if (failed)
 					ImGui::PopStyleColor();
 				if (ImGui::IsItemHovered())
@@ -298,7 +301,6 @@ namespace Strata
 				OpenScene(context, commands, openScene);
 		}
 		ImGui::EndChild();
-		ImGui::End();
 	}
 
 }

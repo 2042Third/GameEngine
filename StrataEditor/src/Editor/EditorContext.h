@@ -184,6 +184,9 @@ namespace Strata
 		// Starts building the project's scripts in the background (one build at a time). When the build succeeds, its
 		// module is loaded, or reloaded if it changed; the outcome is GetLastScriptBuildLoad.
 		bool BuildScripts(std::string* outError = nullptr);
+		// Whether the open project has a script build, a CMakeLists.txt in its script directory, that BuildScripts can run
+		// (false without a project). Looks at the file system.
+		bool HasScriptBuild() const;
 		const ScriptBuilder& GetScriptBuilder() const { return m_ScriptBuilder; }
 		const ScriptBuildLoad& GetLastScriptBuildLoad() const { return m_LastScriptBuildLoad; }
 		// The script crash that stopped play mode last; cleared when a module loads.

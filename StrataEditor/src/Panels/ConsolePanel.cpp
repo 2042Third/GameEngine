@@ -1,5 +1,8 @@
 #include "Panels/ConsolePanel.h"
 
+#include "UI/EditorFonts.h"
+#include "UI/Theme.h"
+
 #include <Strata/Core/StringUtils.h>
 
 #include <imgui.h>
@@ -8,21 +11,19 @@
 namespace Strata
 {
 
-	bool ConsolePanel::Poll()
+	void ConsolePanel::OnUpdate(EditorPanelContext&)
 	{
 		LogBuffer& buffer = Log::GetBuffer();
-		bool changed = false;
 		for (LogEntry& entry : buffer.GetEntries(m_LastSequence))
 		{
 			m_LastSequence = entry.Sequence;
 			if (entry.Level >= LogLevel::Error)
 				m_UnreadErrors++;
 			m_Entries.push_back(std::move(entry));
-			changed = true;
+			m_EntriesChanged = true;
 		}
 		while (m_Entries.size() > buffer.GetCapacity())
 			m_Entries.pop_front();
-		return changed;
 	}
 
 	bool ConsolePanel::IsVisible(const LogEntry& entry, const std::string& lowerFilter) const
@@ -32,22 +33,18 @@ namespace Strata
 		return levelShown && (lowerFilter.empty() || StringUtils::ToLower(entry.Message).find(lowerFilter) != std::string::npos);
 	}
 
-	void ConsolePanel::OnImGuiRender()
+	void ConsolePanel::OnImGuiRender(EditorPanelContext&)
 	{
-		bool changed = Poll();
-		if (!ImGui::Begin("Console"))
-		{
-			ImGui::End();
-			return;
-		}
-		if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))
+		// Errors count as read once the Console has the focus, but not on the frame its window appears: a new window takes
+		// the focus then (at startup too, before its dock node shows another tab), when nobody has seen it.
+		if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::IsWindowAppearing())
 			m_UnreadErrors = 0;
 
 		if (ImGui::Button("Clear"))
 		{
 			m_Entries.clear();
 			m_UnreadErrors = 0;
-			changed = true;
+			m_EntriesChanged = true;
 		}
 		ImGui::SameLine();
 		ImGui::Checkbox("Trace", &m_ShowTrace);
@@ -67,7 +64,7 @@ namespace Strata
 		// The filtered view is rebuilt only when the entries or the filters change.
 		const std::string filter = StringUtils::ToLower(m_Filter);
 		const std::string key = fmt::format("{}{}{}{}|{}", m_ShowTrace, m_ShowInfo, m_ShowWarnings, m_ShowErrors, filter);
-		if (changed || key != m_VisibleKey)
+		if (m_EntriesChanged || key != m_VisibleKey)
 		{
 			m_Visible.clear();
 			for (size_t index = 0; index < m_Entries.size(); index++)
@@ -76,8 +73,11 @@ namespace Strata
 					m_Visible.push_back(index);
 			}
 			m_VisibleKey = key;
+			m_EntriesChanged = false;
 		}
 
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Caption);
 		if (ImGui::BeginChild("Messages", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar))
 		{
 			ImGuiListClipper clipper;
@@ -87,13 +87,13 @@ namespace Strata
 				for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; row++)
 				{
 					const LogEntry& entry = m_Entries[m_Visible[static_cast<size_t>(row)]];
-					ImVec4 color = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+					ImVec4 color = colors.Text;
 					if (entry.Level == LogLevel::Trace)
-						color = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+						color = colors.TextSecondary;
 					else if (entry.Level == LogLevel::Warn)
-						color = ImVec4(1.0f, 0.8f, 0.3f, 1.0f);
+						color = colors.Warning;
 					else if (entry.Level >= LogLevel::Error)
-						color = ImVec4(1.0f, 0.4f, 0.35f, 1.0f);
+						color = colors.Error;
 					ImGui::PushStyleColor(ImGuiCol_Text, color);
 					ImGui::TextUnformatted(fmt::format("[{:8.2f}] [{}] {}", entry.Timestamp, entry.Logger, entry.Message).c_str());
 					ImGui::PopStyleColor();
@@ -103,7 +103,7 @@ namespace Strata
 				ImGui::SetScrollHereY(1.0f);
 		}
 		ImGui::EndChild();
-		ImGui::End();
+		ImGui::PopFont();
 	}
 
 }

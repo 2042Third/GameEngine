@@ -4,15 +4,14 @@
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
-#include "Panels/ConsolePanel.h"
-#include "Panels/ContentBrowserPanel.h"
-#include "Panels/InspectorPanel.h"
-#include "Panels/SceneHierarchyPanel.h"
-#include "Panels/ViewportPanel.h"
+#include "EditorHost.h"
+#include "UI/EditorPanelRegistry.h"
 
 #include <Strata.h>
 
+#include <array>
 #include <chrono>
+#include <deque>
 #include <filesystem>
 #include <functional>
 #include <optional>
@@ -30,22 +29,54 @@ namespace Strata
 		std::filesystem::path CommandScript;
 		std::optional<uint64_t> MaxFrames;
 		bool QuitAfterCommands = false; // Close the editor once the command script finished (e.g. after a script build)
-		bool ShowImGuiDemo = false;
+		bool ShowImGuiDemo = false;     // Offer ImGui's demo window (Help menu), for UI work only (--imgui-demo)
 		bool Headless = false; // No UI: the editor runs for automation only
+		// A fixed UI scale (--ui-scale) instead of the window's content scale (DPI); unset follows the window.
+		std::optional<float> UIScale;
 		// Serve the commands to tools and AI agents (EditorAutomation) on loopback, published through a session file.
 		bool EnableAutomation = true;
 		uint16_t AutomationPort = 0; // 0 picks a free port
 		// Close the editor after this long without a connected automation client (0: never), e.g. a headless editor
 		// started for an MCP server that went away.
 		std::chrono::seconds IdleTimeout = std::chrono::seconds(0);
+		// Watch the project's assets and script module for changes made outside the editor (hot reload). UI tests turn it off:
+		// they need no watcher threads.
+		bool WatchFiles = true;
+		// The toolchain script builds use instead of the engine's (EditorContextSpecification::ScriptBuild); UI tests build
+		// with a stand-in for CMake.
+		std::optional<ScriptBuildSettings> ScriptBuild;
 	};
 
+	// Built-in panel ids (EditorPanelRegistry).
+	namespace EditorPanels
+	{
+		constexpr const char* c_Viewport = "Viewport";
+		constexpr const char* c_Hierarchy = "Hierarchy";
+		constexpr const char* c_Inspector = "Inspector";
+		constexpr const char* c_ContentBrowser = "ContentBrowser";
+		constexpr const char* c_Console = "Console";
+	}
+
 	// The editor application layer: owns the editor state (EditorContext), the command registry shared with automation,
-	// and the ImGui interface (menus, toolbar, panels).
+	// and the ImGui interface: the menu bar, the main toolbar, the panels (EditorPanelRegistry), the status bar and the
+	// default layout. It reaches the application only through its EditorHost.
+	//
+	// Idle throttling: a windowed editor redraws at the full rate (vsync) while anything happens - input within the last
+	// c_InputActivitySeconds, a camera or gizmo drag, a running and unpaused scene (or pending steps), loading assets,
+	// pending commands, an automation request within the last c_AutomationActivitySeconds, or a script build - and
+	// otherwise at c_IdleFrameRate (c_UnfocusedIdleFrameRate without the focus). Headless editors, --frames runs and
+	// command scripts are never throttled.
 	class EditorLayer : public Layer
 	{
 	public:
-		explicit EditorLayer(const EditorOptions& options);
+		static constexpr uint32_t c_IdleFrameRate = 30;
+		static constexpr uint32_t c_UnfocusedIdleFrameRate = 10;
+		static constexpr double c_InputActivitySeconds = 0.5;
+		static constexpr double c_AutomationActivitySeconds = 1.0;
+		// Version of the default layout: a saved layout of another version is replaced by the default one.
+		static constexpr int c_LayoutVersion = 2;
+
+		EditorLayer(const EditorOptions& options, Scope<EditorHost> host);
 		~EditorLayer() override = default;
 
 		void OnAttach() override;
@@ -57,19 +88,51 @@ namespace Strata
 		EditorContext& GetContext() { return m_Context; }
 		const EditorCommandRegistry& GetCommands() const { return m_Commands; }
 		EditorCommandRunner& GetCommandRunner() { return m_CommandRunner; }
+		EditorPanelRegistry& GetPanels() { return m_Panels; }
+		EditorHost& GetHost() { return *m_Host; }
+		// Whether idle throttling applies to this editor at all (windowed, no --frames, no command script).
+		bool IsThrottlingEnabled() const;
+		// Whether the last frame found nothing to do (the frame rate is then lowered).
+		bool IsIdle() const { return m_Idle; }
+		// Frames per second over the last c_FrameRateWindowSeconds (or since startup).
+		double GetAverageFrameRate() const;
+		static constexpr double c_FrameRateWindowSeconds = 5.0;
+		// The frame timing the status bar and the panels show this frame; the work time is averaged over the last
+		// c_FrameWorkSamples frames.
+		const EditorFrameStats& GetFrameStats() const { return m_FrameStats; }
+		static constexpr size_t c_FrameWorkSamples = 60;
+		// How often the status bar looks for a script build to offer while no script module is loaded.
+		static constexpr double c_ScriptBuildCheckSeconds = 1.0;
 	private:
 		void StartAutomation();
+		void RegisterBuiltinPanels();
 		void DrawDockspace();
-		// Docks the panels into the default arrangement (first run, or Window > Reset Layout).
+		// Docks the panels into the default arrangement (first run, a saved layout of another version, View > Reset Layout).
 		void BuildDefaultLayout(unsigned int dockspaceId);
 		void DrawMenuBar();
 		void DrawToolbar();
+		void DrawGizmoControls();
+		void DrawPlayControls();
+		void DrawBuildControls();
 		void DrawStatusBar();
+		// The status bar's pills of automation and scripts; true when the pill was clicked to show the Console.
+		bool DrawAutomationPill();
+		bool DrawScriptsPill();
 		void DrawUnsavedChangesModal();
 		void HandleShortcuts();
 		void UpdateWindowTitle();
 		// Advances the startup command script; once it finished, reports the result (a failed script fails the process).
 		void UpdateCommandScript();
+		// Notes input that arrived this frame (ImGui's input events, held keys and buttons).
+		void TrackInput();
+		// Chooses the frame rate for the next frames (idle throttling) and records frame times.
+		void UpdateFrameRate();
+		bool IsBusy(double now) const;
+		// Fills m_FrameStats for this frame's status bar and panels.
+		void UpdateFrameStats();
+		// Whether the open project has a script build (EditorContext::HasScriptBuild), looked up at most once per
+		// c_ScriptBuildCheckSeconds.
+		bool HasScriptBuild();
 
 		// Runs an action that replaces the edited scene, asking first whether unsaved changes should be saved.
 		void RequestDiscardChanges(std::function<void()> action);
@@ -83,6 +146,7 @@ namespace Strata
 		void BuildScripts();
 	private:
 		EditorOptions m_Options;
+		Scope<EditorHost> m_Host;
 		EditorContext m_Context;
 		EditorCommandRegistry m_Commands;
 		// Declared before the runner: cancelling pending commands when the runner is destroyed calls the script's
@@ -91,19 +155,31 @@ namespace Strata
 		EditorCommandRunner m_CommandRunner;
 		// Declared after what it serves, so it stops before they go away.
 		EditorAutomation m_Automation;
-
-		SceneHierarchyPanel m_Hierarchy;
-		InspectorPanel m_Inspector;
-		ContentBrowserPanel m_ContentBrowser;
-		ConsolePanel m_Console;
-		ViewportPanel m_Viewport;
+		EditorPanelRegistry m_Panels;
 
 		std::function<void()> m_PendingDiscardAction;
 		bool m_OpenUnsavedChangesModal = false;
 		bool m_ShowImGuiDemo = false;
 		bool m_ResetLayout = false;
 		bool m_LayoutChecked = false;
+		bool m_UIDrawn = false; // OnImGuiRender ran at least once
 		std::string m_WindowTitle;
+		std::string m_AutomationError; // Why automation did not start (when it was asked for)
+		bool m_HasScriptBuild = false;
+		std::optional<double> m_ScriptBuildCheckTime;
+
+		// Idle throttling.
+		double m_LastInputTime = 0.0;
+		double m_LastAutomationTime = 0.0;
+		uint64_t m_LastAutomationRequests = 0;
+		bool m_Idle = false;
+		std::deque<double> m_FrameTimes; // Within the last c_FrameRateWindowSeconds
+
+		// Frame timing.
+		std::array<double, c_FrameWorkSamples> m_FrameWorkTimes = {}; // Seconds, a ring of the last frames' work times
+		size_t m_FrameWorkCount = 0;
+		size_t m_NextFrameWork = 0;
+		EditorFrameStats m_FrameStats;
 	};
 
 }

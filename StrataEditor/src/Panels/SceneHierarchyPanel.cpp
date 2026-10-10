@@ -3,6 +3,7 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "UI/PropertyWidgets.h"
+#include "UI/Widgets.h"
 
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/BuiltinAssets.h>
@@ -174,14 +175,11 @@ namespace Strata
 		ImGui::EndDragDropTarget();
 	}
 
-	void SceneHierarchyPanel::OnImGuiRender(EditorContext& context, const EditorCommandRegistry& commands)
+	void SceneHierarchyPanel::OnImGuiRender(EditorPanelContext& panelContext)
 	{
+		EditorContext& context = panelContext.Context;
+		const EditorCommandRegistry& commands = panelContext.Commands;
 		m_Deferred.clear();
-		if (!ImGui::Begin("Hierarchy"))
-		{
-			ImGui::End();
-			return;
-		}
 
 		Scene& scene = *context.GetActiveScene();
 		m_Selected = std::unordered_set<UUID>(context.GetSelection().begin(), context.GetSelection().end());
@@ -211,14 +209,17 @@ namespace Strata
 				| ImGuiTreeNodeFlags_NoTreePushOnOpen;
 			if (children.empty())
 				flags |= ImGuiTreeNodeFlags_Leaf;
-			if (m_Selected.contains(id))
+			const bool selected = m_Selected.contains(id);
+			if (selected)
 				flags |= ImGuiTreeNodeFlags_Selected;
 
 			if (depth > 0)
 				ImGui::Indent(indent * static_cast<float>(depth));
 			if (!active)
 				ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+			UI::PushSelectionColors(selected);
 			const bool open = ImGui::TreeNodeEx(ToImGuiID(id), flags, "%s", name.c_str());
+			UI::PopSelectionColors();
 			if (!active)
 				ImGui::PopStyleColor();
 			if (depth > 0)
@@ -263,7 +264,6 @@ namespace Strata
 			DrawCreateMenu(context, commands, UUID::Null(), [this](std::function<void()> action) { m_Deferred.push_back(std::move(action)); });
 			ImGui::EndPopup();
 		}
-		ImGui::End();
 
 		// Applied after drawing, so the tree is never changed while it is being walked.
 		std::vector<std::function<void()>> deferred = std::move(m_Deferred);

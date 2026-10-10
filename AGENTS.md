@@ -30,7 +30,7 @@ together (targets, modules, frame loop, threading, asset pipeline, scripting, ed
 | Path | Contents |
 | --- | --- |
 | `Strata/` | Engine static library. `src/Strata/<Module>/` holds the engine modules, `src/Platform/<OS or backend>/` the platform implementations, `shaders/` the GLSL sources, `vendor/` the pinned third-party submodules. |
-| `StrataEditor/` | Editor executable (ImGui docking UI, gizmos, undo/redo, automation server). |
+| `StrataEditor/` | The editor: `src/Editor/` the UI-independent core (`StrataEditorCore`), `src/UI/`, `src/Panels/` and `EditorLayer` the ImGui interface (`StrataEditorUI`: Bedrock theme, widget kit, panel registry), the executable (`EditorApplication.cpp`); `Resources/Fonts/` the embedded fonts, `Tools/` the icon header generator. |
 | `StrataRuntime/` | Runtime executable that plays exported games (`GameRuntime`, drawn by `GameRenderer`): it runs the `.stgame` manifest next to it, or `--game <file>`; `--headless` runs without window and GPU at 60 frames per second (servers, CI); `--screenshot out.png` with `--frames N` saves the last frame (and fails the run when it shows the missing-camera message); `--asset-budget-mb <n>` sets the GPU texture budget of the game's assets. |
 | `StrataScriptCore/` | Script ABI (C header) and the header-only C++ SDK game scripts are written against. Script modules never link the engine. |
 | `StrataCLI/` | Command-line client for the editor automation API; also an MCP server (`StrataCLI mcp`). |
@@ -94,7 +94,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   Name suites after the module (`TEST_SUITE("Scene.Serialization")`). `TestMain.cpp` registers the engine's modules
   with the asset pipeline (`Engine::RegisterBuiltinModules`) before the suites and the helper modes run; a test that
   needs its own component registers it in a child process (`--strata-test-helper=custom-component`,
-  `Engine/ModuleRegistrationHelpers.cpp`).
+  `Engine/ModuleRegistrationHelpers.cpp`). The editor's UI is tested headless with `ImGuiHarness` (suites `Editor.UI`,
+  `Editor.Theme`, `Editor.UI.Source`; see Editor, "Editor UI rules").
 - Suites whose names start with `GPU` need a Vulkan device and are registered separately under the
   CTest label `gpu`. They share one device per process through `Tests::GPUContext` (never create
   devices in tests) and end with `CHECK(gpu.GetNewErrorCount() == 0)`, so validation errors fail the
@@ -542,8 +543,45 @@ and `AudioSystem`, the built-in "Audio" scene system.
 ## Editor
 
 - `StrataEditorCore` (`StrataEditor/src/Editor/`) is the editor without UI: `EditorContext` (project, asset
-  manager, edited scene, play mode, selection, undo history) and `EditorCommandRegistry`. The ImGui
-  panels (`StrataEditor/src/Panels/`, `UI/`) only draw state and call commands; the tests link the core.
+  manager, edited scene, play mode, selection, undo history) and `EditorCommandRegistry`. `StrataEditorUI`
+  (`StrataEditor/src/UI/`, `Panels/`, `EditorLayer`) is the ImGui interface on top of it; it reaches the application only
+  through `EditorHost` (implemented in `EditorApplication.cpp`), and the `StrataEditor` executable runs it. The panels
+  only draw state and call commands; the tests link both libraries.
+- **Editor UI rules** (the 'Bedrock' look; `Editor.UI.Source` scans the UI code for the first three, with an empty
+  allowlist):
+  - Colors come only from the theme's tokens (`UI/Theme.h`: the `ThemePalette` and, preferably, what they mean in
+    `ThemeColors`): no colors spelled in numbers outside `UI/Theme.cpp`, however they are written (`ImVec4`, `ImColor` or
+    `glm::vec4` built or declared from numbers, `IM_COL32`, packed hex colors, braced numbers passed to color
+    functions). `UI::ApplyTheme` styles every `ImGuiCol_`; an ImGui upgrade with new colors fails the build until they
+    get a token. Rows of lists with a selection draw through `UI::PushSelectionColors`, so hovering stays neutral and a
+    selected row keeps the accent under the mouse.
+  - Sizes are relative to the font (multiples of `ImGui::GetFontSize()` or `GetFrameHeight()`, or the style's sizes),
+    never fixed pixels above 16, so the UI follows the UI scale (the window's content scale, or `--ui-scale`). The scan
+    judges every value passed to size-taking calls by the product it is part of, and follows names that hold sizes
+    (`const float width = 200.0f` used later is found too). `UI::ApplyTheme` sets every size ImGui scales to an even
+    base (hairlines stay one pixel), so 150% and 200% give exact multiples.
+  - Panels are `EditorPanel`s registered with `EditorPanelRegistry` (`UI/EditorPanelRegistry.h`, built-ins in
+    `EditorLayer::RegisterBuiltinPanels`): the registry begins their windows (icon and title, `###<id>`), toggles them in
+    the View menu and keeps their open state in imgui.ini (`StrataPanels`); panels never call `ImGui::Begin`.
+  - Text uses the editor's fonts (`UI/EditorFonts.h`, embedded from `StrataEditor/Resources/Fonts`): Inter for the UI
+    with the Lucide icons merged in, Inter SemiBold for headers, JetBrains Mono for logs, IDs and numbers, at the type
+    scale's sizes (`UI::PushFont(EditorFont, TextSize)`: 12, 14, 17, 24). Icons are text (`UI/Icons.h`, generated from the
+    font by `StrataEditor/Tools/GenerateIconHeader.py`). ImGui's built-in font is never added.
+  - Controls come from the widget kit (`UI/Widgets.h`: toolbar and icon buttons, chips, status pills, section headers,
+    headings, cards, modal dialogs); every kit widget records its rectangle in `UI::ItemProbe` under its id.
+  - UI tests draw the real `EditorLayer` without a window or GPU through `StrataTests/src/Editor/ImGuiHarness.h` (a fake
+    `EditorHost`, ImGui's texture requests honored without a renderer, injected input, `ClickItem` by probe key).
+  - Idle throttling: a windowed editor runs at the full rate while anything happens (input in the last 0.5 s, a running
+    unpaused scene or pending steps, loading assets, pending commands, an automation request in the last second, a
+    script build, a panel's `IsAnimating`) and otherwise at 30 frames per second (10 without the focus), through
+    `EditorHost::SetMaxFrameRate`. Headless editors, `--frames` runs and command scripts are never throttled; a panel that
+    animates without input reports it through `EditorPanel::IsAnimating`. The frame time the status bar, the viewport's
+    stats and `editor.status` (`editor.frameRate.frameMilliseconds`, with the measured rate) show is what frames cost
+    (`Application::GetLastFrameWorkTime`: CPU time without the waits for the GPU, the display and the frame rate cap;
+    `EditorPanelContext::Frame` for panels), so an idle editor does not read as a slow one.
+  - Status pills say what is wrong and lead to it: errors (unread since the Console was last focused, not counting the
+    frame its window appears in), a failed automation start (`--no-automation` is shown as off), scripts that are not
+    built (click to build) or failed, assets that failed to load.
 - **Every change to the scene or project goes through a command** (`EditorCommandRegistry::Execute`) or,
   for continuous UI edits, through `SceneEditTransaction` / `SetPropertyWithUndo`. That keeps the UI,
   automation (AI agents) and tests identical, and makes every edit undoable.
@@ -598,7 +636,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `--frames N` stops after N frames (without saving the panel layout), `--screenshot out.png` captures
   the last frame (viewport included), `--no-gpu` runs headless without a graphics device (export, asset processing),
   and `--quit-after-commands` closes the editor once the command script finished (for scripts of unknown length, e.g.
-  with `script.build`, whose duration no frame budget can bound).
+  with `script.build`, whose duration no frame budget can bound). `--ui-scale <factor>` draws the UI at a fixed scale
+  instead of the display's (e.g. 1 to check it at 100% on a 150% display), `--layout <file>` keeps the panel layout in
+  that file instead of the user's (`<user data>/Strata/EditorLayout.ini`), and `--imgui-demo` offers ImGui's demo window
+  (Help menu) for UI work.
   Without `--frames`, a headless editor runs until `editor.quit` (which refuses to discard unsaved
   scene changes unless `force` is true) or a signal; headless editors run at most 60 frames per second.
   The editor serves automation by default (`EditorAutomation`, see [Automation](#automation-editor-rpc--mcp));
@@ -632,7 +673,13 @@ and `AudioSystem`, the built-in "Audio" scene system.
   asset manager with only the built-in assets active, so built-in meshes render.
 - **Viewport panel** (`Panels/ViewportPanel`): renders into a texture of the panel's pixel size and takes input only
   while hovered or focused: Alt + left drag orbits, middle drag pans, the wheel dollies, right drag flies (WASD, Q/E
-  down/up, Shift faster, wheel = speed), F frames the selection, Home everything, W/E/R/Q pick the gizmo, Ctrl snaps.
+  down/up, Shift faster, wheel = speed), F frames the selection, Home everything, W/E/R/Q pick the gizmo (as do the main
+  toolbar's tool buttons, next to the gizmo space and the snap toggle, `ViewportSettings::Snap`; holding Ctrl inverts
+  snapping). Chips over the image's top left hold the camera settings and the overlay toggles (grid, outline, gizmos,
+  stats); clicking a chip does not focus the panel. A strip in the play state's color tops the image while the scene
+  runs. In the game view only the stats chip remains, and only while the game does not have the input: once the view is
+  clicked, every click on the image is the game's. The selection outline is the theme's accent
+  (`ViewportSettings::SelectionColor`, set by the UI, not saved).
   Clicks pick without blocking (`EditorViewport::RequestPick` reads one pixel of the entity-ID buffer; Ctrl toggles,
   Shift adds, empty space clears) and never when they hit the gizmo. Gizmo drags go through `TransformDrag`
   (`Editor/TransformEdit.h`): selected entities without a selected ancestor follow the primary one, local transforms
@@ -666,8 +713,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   the next frame `play.step` runs or after resuming, with its transitions, and a tap of N frames lasts N game updates. A
   command answers once the game has seen its input (a tap: its release; `seen: true`) or, with `wait: false` (the
   default while paused, where waiting would block a client that has to step the game), at once. Holds outlive the client
-  that made them (no attempt is made to tie them to connections): the status bar lists them with a Release button
-  (`input.releaseAll`), and starting or stopping play drops them (`Input::ClearSimulated`).
+  that made them (no attempt is made to tie them to connections): the status bar lists them in a pill that releases them
+  when clicked (`input.releaseAll`), and starting or stopping play drops them (`Input::ClearSimulated`).
 - Files commands write for clients go through `CommandUtils::ResolveOutputPath`: relative paths are relative to the
   project directory (an error without a project), network/device paths and reserved device names are refused, and an
   existing file is replaced only with `overwrite: true`.
@@ -828,3 +875,8 @@ All dependencies are pinned shallow submodules in `Strata/vendor/`, wrapped by
 `Strata/vendor/CMakeLists.txt` (vendor code builds with warnings disabled and is consumed as SYSTEM
 includes). To upgrade: check out the new tag in the submodule, rebuild, run all tests, update
 `ThirdPartyNotices.md`, commit the submodule bump separately.
+
+The editor's fonts are not submodules: the release files of Inter, JetBrains Mono and Lucide (with Lucide's codepoint
+map) and their licenses are committed in `StrataEditor/Resources/Fonts/` and compiled in (`strata_embed_file`). To
+upgrade one, replace its files with those of the new release, update `ThirdPartyNotices.md` and, for Lucide, run
+`StrataEditor/Tools/GenerateIconHeader.py --version <release>` and commit the regenerated `UI/Icons.h` with it.
