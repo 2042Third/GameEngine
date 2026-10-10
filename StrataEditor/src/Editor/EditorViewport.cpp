@@ -9,6 +9,7 @@
 #include <Strata/Renderer/Renderer.h>
 #include <Strata/Scene/Scene.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <tuple>
@@ -36,6 +37,8 @@ namespace Strata
 			{ "ShowSelectionOutline", ShowSelectionOutline },
 			{ "ShowSceneGizmos", ShowSceneGizmos },
 			{ "ShowStats", ShowStats },
+			{ "PreviewLighting", PreviewLighting },
+			{ "ShowGameUI", ShowGameUI },
 			{ "Gizmo", GizmoOperationToString(Gizmo) },
 			{ "Space", GizmoSpaceToString(Space) },
 			{ "TranslateSnap", TranslateSnap },
@@ -57,7 +60,8 @@ namespace Strata
 
 		ViewportSettings result = *this;
 		for (const auto& [key, flag] : { std::pair<const char*, bool*> { "ShowGrid", &result.ShowGrid }, { "ShowSelectionOutline", &result.ShowSelectionOutline },
-			{ "ShowSceneGizmos", &result.ShowSceneGizmos }, { "ShowStats", &result.ShowStats } })
+			{ "ShowSceneGizmos", &result.ShowSceneGizmos }, { "ShowStats", &result.ShowStats }, { "PreviewLighting", &result.PreviewLighting },
+			{ "ShowGameUI", &result.ShowGameUI } })
 		{
 			if (const auto it = json.find(key); it != json.end())
 			{
@@ -162,6 +166,59 @@ namespace Strata
 		return m_Camera.Focus(bounds, GetAspectRatio());
 	}
 
+	bool EditorViewport::FrameScene(EditorContext& context, std::vector<AssetHandle>* outPendingMeshes)
+	{
+		Scene& scene = *context.GetActiveScene();
+		const AABB bounds = SceneBounds::GetSceneBounds(scene, outPendingMeshes);
+		if (!bounds.IsValid())
+			return false;
+		// The direction the game looks at the scene from is the one its author chose to show it.
+		EditorCamera camera = m_Camera;
+		if (Entity primary = scene.GetPrimaryCameraEntity())
+		{
+			const glm::vec3 forward = glm::vec3(scene.GetWorldTransform(primary) * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f));
+			const float length = glm::length(forward);
+			if (length > 1e-6f && std::isfinite(length))
+			{
+				const glm::vec3 direction = forward / length;
+				camera.SetOrientation(glm::degrees(std::atan2(-direction.x, -direction.z)), glm::degrees(std::asin(std::clamp(direction.y, -1.0f, 1.0f))));
+			}
+		}
+		if (!camera.FitBounds(bounds, GetAspectRatio()))
+			return false;
+		m_Camera = camera;
+		return true;
+	}
+
+	void EditorViewport::StoreSceneCamera(AssetHandle scene)
+	{
+		if (scene.IsValid())
+			m_SceneCameras.insert_or_assign(scene, m_Camera);
+	}
+
+	bool EditorViewport::RestoreSceneCamera(AssetHandle scene)
+	{
+		if (const auto it = m_SceneCameras.find(scene); it != m_SceneCameras.end())
+		{
+			m_Camera = it->second;
+			return true;
+		}
+		// A state file from before per-scene cameras: its camera belongs to the scene that was open, which is the one the
+		// project opens first.
+		if (m_UnassignedCamera)
+		{
+			m_Camera = *m_UnassignedCamera;
+			m_UnassignedCamera.reset();
+			return true;
+		}
+		return false;
+	}
+
+	void EditorViewport::PruneSceneCameras(const std::function<bool(AssetHandle)>& keep)
+	{
+		std::erase_if(m_SceneCameras, [&keep](const auto& entry) { return !keep(entry.first); });
+	}
+
 	////////////////////////////////////////////////////////////////////////////////
 	// Picking
 	////////////////////////////////////////////////////////////////////////////////
@@ -238,9 +295,13 @@ namespace Strata
 
 	nlohmann::json EditorViewport::ToJson() const
 	{
+		nlohmann::json cameras = nlohmann::json::object();
+		for (const auto& [scene, camera] : m_SceneCameras)
+			cameras[scene.ToString()] = camera.ToJson();
 		return {
 			{ "Strata", { { "Format", c_StateFormat }, { "Version", c_StateVersion } } },
 			{ "Camera", m_Camera.ToJson() },
+			{ "Cameras", std::move(cameras) },
 			{ "Settings", m_Settings.ToJson() }
 		};
 	}
@@ -260,7 +321,7 @@ namespace Strata
 		if (version < 1 || version > c_StateVersion)
 			return fail(fmt::format("unsupported version {} (supported: 1 to {})", version, c_StateVersion));
 
-		// Both parts are validated before either changes.
+		// Every part is validated before anything changes.
 		EditorCamera camera = m_Camera;
 		ViewportSettings settings = m_Settings;
 		std::string error;
@@ -268,8 +329,32 @@ namespace Strata
 			return fail(fmt::format("camera: {}", error));
 		if (const nlohmann::json* settingsJson = JsonUtils::Find(json, "Settings"); settingsJson && !settings.FromJson(*settingsJson, &error))
 			return fail(fmt::format("settings: {}", error));
+		const nlohmann::json* camerasJson = JsonUtils::Find(json, "Cameras");
+		std::map<AssetHandle, EditorCamera> sceneCameras;
+		if (camerasJson)
+		{
+			if (!camerasJson->is_object())
+				return fail("'Cameras' must be an object of scene handles");
+			for (const auto& [key, value] : camerasJson->items())
+			{
+				const std::optional<UUID> scene = UUID::FromString(key);
+				if (!scene || !scene->IsValid())
+					return fail(fmt::format("cameras: '{}' is not a scene handle", key));
+				// Unset values take the defaults, not the current camera's.
+				EditorCamera sceneCamera;
+				if (!sceneCamera.FromJson(value, &error))
+					return fail(fmt::format("camera of scene {}: {}", key, error));
+				sceneCameras.insert_or_assign(*scene, sceneCamera);
+			}
+		}
 		m_Camera = camera;
 		m_Settings = settings;
+		m_SceneCameras = std::move(sceneCameras);
+		// Files from before per-scene cameras only know the camera of the scene that was open.
+		if (camerasJson)
+			m_UnassignedCamera.reset();
+		else
+			m_UnassignedCamera = camera;
 		return true;
 	}
 
@@ -313,6 +398,8 @@ namespace Strata
 	void EditorViewport::ResetState()
 	{
 		m_Camera.Reset();
+		m_SceneCameras.clear();
+		m_UnassignedCamera.reset();
 		m_Settings = ViewportSettings();
 		m_Pick.reset();
 	}

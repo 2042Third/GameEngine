@@ -6,7 +6,9 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 
 using namespace Strata;
 
@@ -256,6 +258,61 @@ TEST_SUITE("Editor.Camera")
 		CHECK(camera.GetFar() > camera.GetDistance() + glm::length(glm::vec3(5000.0f)));
 		CHECK(camera.GetFar() > farClip);
 		CHECK(camera.GetNear() < camera.GetFar());
+	}
+
+	TEST_CASE("Fitting bounds frames their box tightly without changing the orientation")
+	{
+		const glm::vec2 viewport(1600.0f, 900.0f);
+		const float aspect = viewport.x / viewport.y;
+		// A tall, flat box like a game board, seen from the front and from the default angle.
+		const AABB bounds(glm::vec3(-1.5f, -1.5f, -1.0f), glm::vec3(16.0f, 20.5f, 0.5f));
+		for (const float yaw : { 0.0f, 45.0f })
+		{
+			CAPTURE(yaw);
+			EditorCamera camera;
+			camera.SetOrientation(yaw, yaw == 0.0f ? 0.0f : -30.0f);
+			const float pitch = camera.GetPitch();
+			REQUIRE(camera.FitBounds(bounds, aspect));
+			CHECK(Near(camera.GetTarget(), bounds.GetCenter()));
+			CHECK(camera.GetYaw() == doctest::Approx(yaw));
+			CHECK(camera.GetPitch() == doctest::Approx(pitch));
+
+			// Every corner is in view, and at least one comes close to an edge: the box fills the view as much as its
+			// shape allows, with the focus margin around it.
+			glm::vec2 minimum(std::numeric_limits<float>::max());
+			glm::vec2 maximum(std::numeric_limits<float>::lowest());
+			for (int corner = 0; corner < 8; corner++)
+			{
+				const glm::vec3 point((corner & 1) ? bounds.Max.x : bounds.Min.x, (corner & 2) ? bounds.Max.y : bounds.Min.y, (corner & 4) ? bounds.Max.z : bounds.Min.z);
+				const glm::vec2 pixel = Project(camera, point, viewport);
+				minimum = glm::min(minimum, pixel);
+				maximum = glm::max(maximum, pixel);
+			}
+			CHECK(minimum.x >= 0.0f);
+			CHECK(minimum.y >= 0.0f);
+			CHECK(maximum.x <= viewport.x);
+			CHECK(maximum.y <= viewport.y);
+			const glm::vec2 covered = (maximum - minimum) / viewport;
+			CAPTURE(covered);
+			CHECK(std::max(covered.x, covered.y) > 0.85f);
+
+			// The bounding sphere fit of Focus stands further back.
+			EditorCamera focused = camera;
+			REQUIRE(focused.Focus(bounds, aspect));
+			CHECK(focused.GetDistance() > camera.GetDistance());
+		}
+
+		// A flat box seen edge-on and tiny bounds keep a distance beyond the near plane; invalid bounds change nothing.
+		EditorCamera camera;
+		camera.SetOrientation(0.0f, 0.0f);
+		REQUIRE(camera.FitBounds(AABB(glm::vec3(-5.0f, 0.0f, -5.0f), glm::vec3(5.0f, 0.0f, 5.0f)), aspect));
+		CHECK(camera.GetDistance() > 5.0f + camera.GetNear());
+		REQUIRE(camera.FitBounds(AABB(glm::vec3(2.0f), glm::vec3(2.0f)), aspect));
+		CHECK(camera.GetDistance() >= EditorCamera::c_MinFocusRadius);
+		const EditorCamera before = camera;
+		CHECK_FALSE(camera.FitBounds(AABB(), aspect));
+		CHECK_FALSE(camera.FitBounds(AABB(glm::vec3(0.0f), glm::vec3(std::numeric_limits<float>::infinity())), aspect));
+		CHECK(camera == before);
 	}
 
 	TEST_CASE("LookAt, positions and settings")

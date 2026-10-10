@@ -320,7 +320,7 @@ every step below is a command, and source files are written with your own file t
 
 1. **Project.** `project.create {"directory": "<absolute>", "name": "Tetris"}` creates `Tetris.stproj`, `Assets/` and
    `Scripts/` with a `CMakeLists.txt` (do not change the module's name or output directory) and an example script
-   `Scripts/Spinner.cpp`. Older projects get the same with `script.init {"example": true}`. `script.status` shows the
+   `Scripts/Spinner.cpp`; with `"template": "basic3d"` it also saves a lit start scene (camera, sun, sky, ground). Older projects get the same with `script.init {"example": true}`. `script.status` shows the
    script directory (`sourceDirectory`), the module file the build produces (`projectModule`, and `projectModuleBuilt`)
    and, once a module is loaded, its name (`moduleName`, empty before) and file (`module`).
 2. **Write scripts.** Put `.cpp`/`.h` files anywhere under `Scripts/` (one `ST_SCRIPT_CLASS` per class, see above). New

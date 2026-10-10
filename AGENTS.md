@@ -100,9 +100,10 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   `STRATA_TEST_EDITOR_PATH`/`STRATA_TEST_CLI_PATH`, else next to the test executable) and run as the CTest
   `StrataEditor.Automation`, not in `StrataTests.Core`. They need no GPU (`--no-gpu`), use private session
   directories, free ports and timeouts, and terminate the processes they started when they fail.
-- Use `Strata::Tests::CreateTemporaryDirectory()` for files; never write into the source tree. The test process sets
-  `STRATA_RUNTIME_DIR` to a private temporary directory (`TestMain.cpp`), so runtime files such as script module copies
-  never go to the user's runtime directory; helper processes inherit it.
+- Use `Strata::Tests::CreateTemporaryDirectory()` for files; never write into the source tree, and never open the
+  samples in place (`Tests::CopySampleProject("Tetris")` copies one). The test process sets `STRATA_RUNTIME_DIR` to a
+  private temporary directory (`TestMain.cpp`), so runtime files such as script module copies never go to the user's
+  runtime directory; helper processes inherit it.
 - `StrataTests.exe --strata-test-helper=<mode>` turns the test binary into a child process for
   process tests (see `TestMain.cpp`), so tests never depend on external programs. With `STRATA_TEST_FAKE_CMAKE=succeed`
   it also stands in for CMake in script builds (`ScriptBuildSettings::CMake`), building nothing.
@@ -511,12 +512,23 @@ and `AudioSystem`, the built-in "Audio" scene system.
   to the running copy and are discarded by `play.stop`. Unknown or missing parameters are errors.
 - **Viewport state** lives in the core: `EditorContext::GetViewport()` (`EditorViewport`) holds the editor camera
   (`EditorCamera`: a target that is also the orbit pivot, distance, yaw/pitch in degrees, FOV, clip planes, fly speed),
-  the `ViewportSettings` (grid, selection outline, light/camera/collider shapes, stats, gizmo mode and space, snap
-  steps) and two `ViewportRenderer`s (the panel's and the captures'), created on first use and only with a GPU. Camera
-  and settings are saved per project in `<project>/.strata/EditorViewport.json` when it closes and restored when it
-  opens. `ResolveViewportView` picks the camera: the scene's primary camera while playing (the editor camera with a
-  notice when there is none), the editor camera when editing or simulating. Without a project the context keeps an
-  asset manager with only the built-in assets active, so built-in meshes render.
+  the `ViewportSettings` (grid, selection outline, light/camera/collider shapes, stats, preview lighting, game UI, gizmo
+  mode and space, snap steps) and two `ViewportRenderer`s (the panel's and the captures'), created on first use and only
+  with a GPU. Settings and the editor camera of every scene asset the project showed (`"Cameras": {"<scene handle>":
+  ...}`) are saved per project in `<project>/.strata/EditorViewport.json` when it closes and restored when it opens;
+  files from before per-scene cameras hold one `"Camera"`, given to the first scene that opens. `EditorContext::OpenScene`
+  restores the scene's camera, or frames a scene shown for the first time (`EditorViewport::FrameScene`: along the
+  scene's primary camera, `EditorCamera::FitBounds` on what renders, `SceneBounds`), again once meshes that were still
+  loading arrive unless the camera moved. `ResolveViewportView` picks the camera: the scene's primary camera while
+  playing (the editor camera with a notice when there is none), the editor camera when editing or simulating. Views of
+  the editor camera outside play mode are *editor views* (`ViewportView::EditorView`): with `PreviewLighting` (on by
+  default) a scene with neither a directional light nor a sky light gets a preview sun and procedural sky, and the game's
+  screen-space text is hidden unless `ShowGameUI` is on (`GetViewportRenderOptions`). Without a project the context keeps
+  an asset manager with only the built-in assets active, so built-in meshes render.
+- **Templates:** `project.create {template}` and `scene.new {template}` start from `Editor/ProjectTemplates`
+  (`project.templates` lists them): `empty` (the commands' default, what they always did) or `basic3d` (a saved, lit
+  start scene `Scenes/Main.stscene`: Main Camera with an audio listener, Sun, procedural Sky, Ground, Post Process; the
+  editor UI and the skills use it).
 - **Viewport panel** (`Panels/ViewportPanel`): renders into a texture of the panel's pixel size and takes input only
   while hovered or focused: Alt + left drag orbits, middle drag pans, the wheel dollies, right drag flies (WASD, Q/E
   down/up, Shift faster, wheel = speed), F frames the selection, Home everything, W/E/R/Q pick the gizmo, Ctrl snaps.
@@ -534,8 +546,11 @@ and `AudioSystem`, the built-in "Audio" scene system.
   overwrite?}` renders on the next frame (again on the following frames, up to `c_MaxCaptureTextFrames`, while glyphs of
   the scene's text are still being rasterized, so text is never half drawn), reads the image back without stalling,
   encodes it on a job thread and returns `{"Image": {"MimeType": "image/png", "Data": <base64>}, "width", "height",
-  "camera", "overlays", "pendingAssets", "pendingTextGlyphs", "notice"?, "path"?}`; it defaults to the viewport's size,
-  camera and overlays and fails without a GPU.
+  "camera", "overlays", "pendingAssets", "pendingTextGlyphs", "previewLighting", "screenSpaceTexts",
+  "hiddenScreenSpaceTexts", "notice"?, "path"?}`; it defaults to the viewport's size, camera and overlays and fails
+  without a GPU. `viewport.getSettings` and `viewport.setSettings {grid, selectionOutline, sceneGizmos, stats,
+  previewLighting, gameUI, gizmo, space, translateSnap, rotateSnap, scaleSnap}` read and change the view settings
+  (validated as a whole: an invalid value changes nothing).
 - Materials: `material.create {path, properties}`, `material.set {material, properties}` and `material.get {material}` (its
   values and every material property described like `component.list` describes component properties); an unknown property
   name fails with the list of known ones.

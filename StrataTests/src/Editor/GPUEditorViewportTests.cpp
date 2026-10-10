@@ -12,11 +12,14 @@
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JobSystem.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Renderer/SceneRenderer.h>
 
 #include <stb_image.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <memory>
 #include <optional>
 #include <thread>
@@ -47,6 +50,79 @@ namespace
 		REQUIRE(pixels);
 		image.Pixels.assign(pixels, pixels + static_cast<size_t>(image.Width) * image.Height * 4);
 		stbi_image_free(pixels);
+		return image;
+	}
+
+	struct LumaStats
+	{
+		double Mean = 0.0;
+		double StandardDeviation = 0.0;
+	};
+
+	// Luma of display values (Rec. 709 weights on the sRGB-encoded channels, 0..255).
+	double GetLuma(const glm::ivec4& pixel)
+	{
+		return 0.2126 * pixel.r + 0.7152 * pixel.g + 0.0722 * pixel.b;
+	}
+
+	LumaStats MeasureLuma(const DecodedImage& image)
+	{
+		double sum = 0.0;
+		double squares = 0.0;
+		for (int y = 0; y < image.Height; y++)
+		{
+			for (int x = 0; x < image.Width; x++)
+			{
+				const double luma = GetLuma(image.At(x, y));
+				sum += luma;
+				squares += luma * luma;
+			}
+		}
+		const double count = static_cast<double>(image.Width) * static_cast<double>(image.Height);
+		LumaStats stats;
+		stats.Mean = sum / count;
+		stats.StandardDeviation = std::sqrt(std::max(squares / count - stats.Mean * stats.Mean, 0.0));
+		return stats;
+	}
+
+	// Mean luma of the 7x7 pixels around where a world point appears.
+	double MeanLumaAround(const DecodedImage& image, const SceneCamera& camera, const glm::vec3& point)
+	{
+		const glm::vec4 clip = camera.Projection * camera.View * glm::vec4(point, 1.0f);
+		REQUIRE(clip.w > 0.0f);
+		const glm::vec2 ndc = glm::vec2(clip) / clip.w;
+		const int centerX = static_cast<int>((ndc.x * 0.5f + 0.5f) * static_cast<float>(image.Width));
+		const int centerY = static_cast<int>((0.5f - ndc.y * 0.5f) * static_cast<float>(image.Height));
+		REQUIRE(centerX >= 3);
+		REQUIRE(centerY >= 3);
+		REQUIRE(centerX + 3 < image.Width);
+		REQUIRE(centerY + 3 < image.Height);
+		double sum = 0.0;
+		for (int y = centerY - 3; y <= centerY + 3; y++)
+		{
+			for (int x = centerX - 3; x <= centerX + 3; x++)
+				sum += GetLuma(image.At(x, y));
+		}
+		return sum / 49.0;
+	}
+
+	// The active scene rendered by a scene renderer of its own with the default options: what the scene shows without
+	// any editor view settings.
+	DecodedImage RenderDirectly(EditorContext& context, const SceneCamera& camera, int width, int height)
+	{
+		SceneRenderer renderer;
+		renderer.SetViewportSize(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+		REQUIRE(renderer.Render(*context.GetActiveScene(), camera));
+		ReadbackImage readback;
+		REQUIRE(Renderer::ReadTexture(renderer.GetOutputTexture(), readback));
+		REQUIRE(readback.BytesPerPixel == 4);
+		DecodedImage image;
+		image.Width = static_cast<int>(readback.Width);
+		image.Height = static_cast<int>(readback.Height);
+		image.Pixels = std::move(readback.Pixels); // Tightly packed RGBA8 rows, like a decoded PNG
+		// Captures are encoded opaque (ImageWriter::EncodePNG).
+		for (size_t index = 3; index < image.Pixels.size(); index += 4)
+			image.Pixels[index] = 255;
 		return image;
 	}
 
@@ -175,6 +251,8 @@ TEST_SUITE("GPU.Editor.Viewport")
 		REQUIRE(gpu.IsValid());
 		ViewportGPUHarness harness;
 		harness.AddScene();
+		// Screen-space text is the game's UI, which editor views draw only with gameUI on.
+		harness.Run("viewport.setSettings", { { "gameUI", true } });
 		// More distinct glyphs than a render may rasterize (TextRenderer::c_FrameRasterBudget), new to the capture renderer.
 		harness.Run("entity.create", { { "name", "HUD" }, { "components", { { "Text", { { "Text", "ABCDEFGHIJKLMNOPQRSTUVWXYZ\nabcdefghijklmnopqrstuvwxyz\n0123456789" },
 			{ "ScreenSpace", true }, { "ScreenAnchor", { 0.0, 0.0 } }, { "FontSize", 20.0 }, { "Alignment", "Left" } } } } } });
@@ -399,6 +477,97 @@ TEST_SUITE("GPU.Editor.Viewport")
 		finishPick();
 		CHECK(context.GetSelection().empty());
 		context.Stop();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A new project made from the basic3d template captures lit")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("LitTemplate") / "Lit";
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Lit" }, { "template", "basic3d" } });
+
+		// The default capture: the viewport's size (1280x720 while it is hidden), the editor camera and its overlays.
+		nlohmann::json result;
+		const DecodedImage image = harness.Capture(nlohmann::json::object(), &result);
+		CHECK(result["previewLighting"] == false); // The template's own sun and sky light it
+		CHECK(result["pendingAssets"] == 0);
+		const LumaStats luma = MeasureLuma(image);
+		MESSAGE("basic3d capture: mean luma ", luma.Mean, ", standard deviation ", luma.StandardDeviation);
+		CHECK(luma.Mean >= 60.0);
+		CHECK(luma.StandardDeviation >= 15.0);
+		// The game's view, through the template's camera, is lit the same way.
+		const DecodedImage game = harness.Capture({ { "camera", "scene" } }, &result);
+		CHECK(MeasureLuma(game).Mean >= 60.0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Preview lighting shows the shape of a cube in a scene without lights")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.Run("entity.create", { { "name", "Cube" }, { "components", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } } } } });
+		const int width = 320;
+		const int height = 180;
+		const nlohmann::json size = { { "width", width }, { "height", height }, { "overlays", false } };
+
+		// The default editor camera looks at the origin from the +X+Z side and above: the top, +X and +Z faces show.
+		nlohmann::json result;
+		const DecodedImage lit = harness.Capture(size, &result);
+		CHECK(result["previewLighting"] == true);
+		const SceneCamera camera = harness.Context.GetViewport().GetCamera().GetSceneCamera(static_cast<float>(width) / static_cast<float>(height));
+		const double top = MeanLumaAround(lit, camera, glm::vec3(0.0f, 0.5f, 0.0f));
+		const double right = MeanLumaAround(lit, camera, glm::vec3(0.5f, 0.0f, 0.0f));
+		const double front = MeanLumaAround(lit, camera, glm::vec3(0.0f, 0.0f, 0.5f));
+		MESSAGE("face luma: top ", top, ", +X ", right, ", +Z ", front);
+		CHECK(std::abs(top - right) >= 10.0);
+		CHECK(std::abs(right - front) >= 10.0);
+		CHECK(std::abs(top - front) >= 10.0);
+
+		// Without preview lighting the image is what the scene renders by itself.
+		const DecodedImage reference = RenderDirectly(harness.Context, camera, width, height);
+		harness.Run("viewport.setSettings", { { "previewLighting", false } });
+		const DecodedImage plain = harness.Capture(size, &result);
+		CHECK(result["previewLighting"] == false);
+		CHECK(harness.CountDifferences(plain, reference) == 0);
+		CHECK(std::abs(MeanLumaAround(plain, camera, glm::vec3(0.0f, 0.5f, 0.0f)) - MeanLumaAround(plain, camera, glm::vec3(0.5f, 0.0f, 0.0f))) < 10.0);
+
+		// The scene's camera always shows the scene by itself.
+		harness.Run("viewport.setSettings", { { "previewLighting", true } });
+		harness.Run("entity.create", { { "name", "Camera" }, { "components", { { "Camera", nlohmann::json::object() },
+			{ "Transform", { { "Translation", { 2, 2, 3 } }, { "Rotation", { -30, 35, 0 } } } } } } });
+		const DecodedImage scene = harness.Capture({ { "width", width }, { "height", height }, { "camera", "scene" } }, &result);
+		CHECK(result["previewLighting"] == false);
+		Entity cameraEntity = harness.Context.GetEditScene()->FindEntityByName("Camera");
+		REQUIRE(cameraEntity);
+		const SceneCamera sceneCamera = SceneCamera::FromEntity(*harness.Context.GetEditScene(), cameraEntity, static_cast<float>(width) / static_cast<float>(height));
+		CHECK(harness.CountDifferences(scene, RenderDirectly(harness.Context, sceneCamera, width, height)) == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Editor captures of Tetris leave out its HUD, the game's camera shows it")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		std::string error;
+		const std::filesystem::path tetris = Tests::CopySampleProject("Tetris", &error);
+		REQUIRE_MESSAGE(!tetris.empty(), error);
+		ViewportGPUHarness harness;
+		harness.Run("project.open", { { "path", FileSystem::ToUTF8(tetris) } });
+
+		nlohmann::json result;
+		harness.Capture({ { "width", 320 }, { "height", 180 }, { "camera", "editor" } }, &result);
+		CHECK(result["screenSpaceTexts"] == 0);
+		CHECK(result["hiddenScreenSpaceTexts"].get<int>() >= 4); // Score, level, lines and controls (the message is empty)
+		harness.Capture({ { "width", 320 }, { "height", 180 }, { "camera", "scene" } }, &result);
+		CHECK(result["screenSpaceTexts"].get<int>() >= 4);
+		CHECK(result["hiddenScreenSpaceTexts"] == 0);
+		// gameUI shows it in editor views too.
+		harness.Run("viewport.setSettings", { { "gameUI", true } });
+		harness.Capture({ { "width", 320 }, { "height", 180 }, { "camera", "editor" } }, &result);
+		CHECK(result["screenSpaceTexts"].get<int>() >= 4);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

@@ -422,12 +422,15 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
 - **EditorContext** (`StrataEditor/src/Editor/EditorContext.h`) is the state with no UI. Opening a project creates and
   activates its `EditorAssetManager` (scan included), opens a `ScriptEngine` (hot reload on by default,
   `EditorContextSpecification::HotReloadScripts`) and loads the built module, restores the viewport state and opens
-  the start scene. `GetActiveScene` is the running copy while playing, else the edited scene.
+  the start scene. Creating a project applies a template (`ProjectTemplates`: `empty`, or `basic3d` with a saved, lit
+  start scene). Opening a scene restores the editor camera it was last shown with (stored per scene handle in the
+  viewport state) or frames what it renders (`EditorViewport::FrameScene`, `SceneBounds`). `GetActiveScene` is the
+  running copy while playing, else the edited scene.
 - **Commands** (`EditorCommands.h`). Handlers take a JSON object and return an `EditorCommandResult`: a value, an error
   with an `EditorCommandError` kind, or `Defer(poll)`. The built-in groups are registered by
   `EditorSceneCommands.cpp` (scene, entity, component, prefab), `EditorAssetCommands.cpp` (asset, material, prefab,
-  project), `EditorStateCommands.cpp` (edit, editor, log, play, selection), `EditorViewportCommands.cpp` (camera,
-  viewport), `EditorScriptCommands.cpp` (script), `EditorInputCommands.cpp` (input) and `EditorCommands.cpp`
+  project, including `project.templates`), `EditorStateCommands.cpp` (edit, editor, log, play, selection),
+  `EditorViewportCommands.cpp` (camera, viewport), `EditorScriptCommands.cpp` (script), `EditorInputCommands.cpp` (input) and `EditorCommands.cpp`
   (`editor.commands`). Conventions: AGENTS.md, "Editor".
 - **Runner** (`EditorCommandRunner.h`). `Run` executes a command; a deferred one is polled once per frame from the next
   frame on, in issue order, and reports through its completion callback. Automation and command scripts always use the
@@ -442,9 +445,11 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   the runner, so a deferred command answers when it completes. Clients find the editor through session files
   (`Network/EditorSession.h`). StrataCLI (`StrataCLI/src/CLI/`) connects with `RpcClient` (`EditorConnection`),
   starts editors (`EditorLauncher`) and serves MCP (`McpServer`, one tool per command).
-- **Viewport** (`EditorViewport.h`, `ViewportRenderer.h`). `EditorViewport` holds the editor camera, the settings and
-  two `ViewportRenderer`s (panel and captures). The panel renders during `OnImGuiRender`; `ResolveViewportView` picks
-  the scene's primary camera while playing and the editor camera otherwise. Picking reads one pixel of the entity-ID
+- **Viewport** (`EditorViewport.h`, `ViewportRenderer.h`). `EditorViewport` holds the editor camera (and the cameras of
+  the project's other scenes), the settings and two `ViewportRenderer`s (panel and captures). The panel renders during
+  `OnImGuiRender`; `ResolveViewportView` picks the scene's primary camera while playing and the editor camera otherwise,
+  and `GetViewportRenderOptions` gives editor views (the editor camera outside play mode) preview lighting and a hidden
+  HUD as the settings say (`viewport.getSettings`, `viewport.setSettings`). Picking reads one pixel of the entity-ID
   buffer asynchronously and completes in `EditorContext::Update`. `viewport.capture` renders on the next frame, polls a
   `TextureReadback`, encodes the PNG on a worker and saves on an I/O thread (`EditorViewportCommands.cpp`).
 - **Script builds** (`ScriptBuild.h`). `ScriptBuilder` runs CMake configure and build as child processes (one build at

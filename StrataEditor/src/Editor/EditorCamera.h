@@ -81,6 +81,11 @@ namespace Strata
 		// bounding sphere fit the view; the far plane moves out if the bounds would reach past it. Returns false
 		// (changing nothing) for invalid bounds.
 		bool Focus(const AABB& bounds, float aspectRatio);
+		// Keeps the orientation and frames the bounds tightly for a first view of them: the target moves to their center
+		// and the distance makes every corner of the box fit the view (with c_FocusMargin around), so the content fills
+		// as much of the view as its shape allows; orbiting may then cut parts off (Focus never does). The far plane
+		// moves out like Focus's. Returns false (changing nothing) for invalid bounds.
+		bool FitBounds(const AABB& bounds, float aspectRatio);
 		// Looks from `position` at `target`. Returns false (changing nothing) unless they are finite and between
 		// c_MinDistance and c_MaxDistance apart.
 		bool LookAt(const glm::vec3& position, const glm::vec3& target);
@@ -120,6 +125,8 @@ namespace Strata
 		// Applies a ToJson document; absent values keep their current value. Fails (changing nothing) on values that
 		// are not numbers, not finite or out of range.
 		bool FromJson(const nlohmann::json& json, std::string* outError = nullptr);
+
+		bool operator==(const EditorCamera&) const = default;
 	private:
 		glm::vec3 m_Target = { 0.0f, 0.0f, 0.0f };
 		float m_Distance = 10.0f;

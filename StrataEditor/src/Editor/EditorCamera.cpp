@@ -133,6 +133,42 @@ namespace Strata
 		return true;
 	}
 
+	bool EditorCamera::FitBounds(const AABB& bounds, float aspectRatio)
+	{
+		if (!bounds.IsValid() || !IsFinite(bounds.Min) || !IsFinite(bounds.Max))
+			return false;
+		const float aspect = aspectRatio > 0.0f && std::isfinite(aspectRatio) ? aspectRatio : 1.0f;
+		const float tanVertical = std::tan(glm::radians(m_FOV) * 0.5f);
+		const float tanHorizontal = tanVertical * aspect;
+		const glm::vec3 center = bounds.GetCenter();
+		const glm::vec3 forward = GetForward();
+		const glm::vec3 right = GetRight();
+		const glm::vec3 up = GetUp();
+
+		// A corner at (x, y) across the view and z along it (from the center) is inside the view, with the margin, once
+		// the camera is far enough from the center: |x| <= tanHorizontal * (distance + z) / margin, likewise for y. It must
+		// also stay beyond the near plane.
+		float distance = c_MinFocusRadius * c_FocusMargin / std::min(tanVertical, tanHorizontal);
+		float farthest = 0.0f;
+		for (int corner = 0; corner < 8; corner++)
+		{
+			const glm::vec3 point((corner & 1) ? bounds.Max.x : bounds.Min.x, (corner & 2) ? bounds.Max.y : bounds.Min.y, (corner & 4) ? bounds.Max.z : bounds.Min.z);
+			const glm::vec3 offset = point - center;
+			const float x = std::abs(glm::dot(offset, right));
+			const float y = std::abs(glm::dot(offset, up));
+			const float z = glm::dot(offset, forward);
+			distance = std::max({ distance, c_FocusMargin * x / tanHorizontal - z, c_FocusMargin * y / tanVertical - z, m_Near * 2.0f - z });
+			farthest = std::max(farthest, z);
+		}
+		if (!std::isfinite(distance))
+			return false;
+		SetTarget(center);
+		SetDistance(distance);
+		if (m_Distance + farthest > m_Far)
+			m_Far = std::min((m_Distance + farthest) * c_FocusMargin, c_MaxFar);
+		return true;
+	}
+
 	bool EditorCamera::LookAt(const glm::vec3& position, const glm::vec3& target)
 	{
 		const glm::vec3 direction = target - position;

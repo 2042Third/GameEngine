@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Editor/EditorViewport.h"
+#include "Editor/ProjectTemplates.h"
 #include "Editor/SceneEdit.h"
 #include "Editor/ScriptBuild.h"
 #include "Editor/SimulatedInput.h"
@@ -16,11 +17,13 @@
 
 #include <nlohmann/json.hpp>
 
+#include <chrono>
 #include <filesystem>
 #include <functional>
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Strata
@@ -78,8 +81,11 @@ namespace Strata
 		// Project
 		//////////////////////////////////////////////////////////////////////////
 
-		// Creates a project in `directory` and opens it.
-		bool CreateProject(const std::filesystem::path& directory, const std::string& name, std::string* outError = nullptr);
+		// Creates a project in `directory` from a template (ProjectTemplates) and opens it. Templates with content save their
+		// scene as the start scene (ProjectTemplates::c_StartScenePath) and open it in the template's editor view. An
+		// unknown template fails before anything is created.
+		bool CreateProject(const std::filesystem::path& directory, const std::string& name, std::string_view templateId = ProjectTemplates::c_Empty,
+			std::string* outError = nullptr);
 		// Opens a project file, or the project in a directory. Closes the current project first.
 		bool OpenProject(const std::filesystem::path& path, std::string* outError = nullptr);
 		// Saves the project's viewport state (editor camera and settings) to its intermediate directory, then closes it.
@@ -93,8 +99,13 @@ namespace Strata
 		// Scene
 		//////////////////////////////////////////////////////////////////////////
 
-		// Replaces the edited scene with an empty one (stops play mode, clears selection and history).
-		void NewScene(const std::string& name = "Untitled");
+		// Replaces the edited scene with a new one (stops play mode, clears selection and history): empty, or with a
+		// template's content (ProjectTemplates; the editor camera then takes the template's view). False (nothing changed)
+		// for an unknown template.
+		bool NewScene(const std::string& name = "Untitled", std::string_view templateId = ProjectTemplates::c_Empty);
+		// Opens a scene asset for editing. The editor camera returns to where it was when the scene was last shown; a scene
+		// shown for the first time is framed (EditorViewport::FrameScene), and framed again once meshes that were still
+		// loading have loaded, unless the camera was moved meanwhile.
 		bool OpenScene(AssetHandle handle, std::string* outError = nullptr);
 		// Saves the edited scene to its asset; fails for scenes that were never saved (use SaveSceneAs).
 		bool SaveScene(std::string* outError = nullptr);
@@ -230,6 +241,10 @@ namespace Strata
 		// Replaces the running scene with a scene asset, or with a restart of the running scene for the null handle.
 		bool SwitchRuntimeScene(AssetHandle scene, std::string* outError);
 		void ResetScene(Ref<Scene> scene, AssetHandle handle);
+		// Gives a template's new scene its start scene file and the template's editor view (CreateProject).
+		bool SaveTemplateStartScene(std::string_view templateId, std::string* outError);
+		// Frames the scene again once the meshes that were loading when it was first framed have loaded (OpenScene).
+		void UpdatePendingFrame();
 		void OpenScriptEngine(bool created);
 		void CloseScriptEngine();
 		// Fingerprints the loaded module's file after a load. `expected` is its digest from before the load (if known):
@@ -268,6 +283,15 @@ namespace Strata
 		uint64_t m_ScriptModuleLoadCount = 0;
 		Ref<AssetManagerBase> m_BuiltinAssets; // Active while no project is open
 		EditorViewport m_Viewport;
+		// A first view of a scene that was framed while some of its meshes were still loading.
+		struct PendingFrame
+		{
+			AssetHandle Scene = UUID::Null();
+			std::vector<AssetHandle> Meshes;
+			EditorCamera FramedCamera;
+			std::chrono::steady_clock::time_point Deadline;
+		};
+		std::optional<PendingFrame> m_PendingFrame;
 
 		bool m_QuitRequested = false;
 		std::map<std::string, StatusProvider> m_StatusProviders;

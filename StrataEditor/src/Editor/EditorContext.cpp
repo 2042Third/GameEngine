@@ -32,6 +32,8 @@ namespace Strata
 	{
 
 		constexpr const char* c_ViewportStateFile = "EditorViewport.json";
+		// A scene's first view is framed again when its meshes load within this time (EditorContext::OpenScene).
+		constexpr std::chrono::seconds c_PendingFrameTimeout { 30 };
 
 		// The asset manager of an editor without a project: only the built-in assets (primitive meshes, default material),
 		// which are memory assets, so nothing is ever read from storage.
@@ -88,15 +90,49 @@ namespace Strata
 	// Project
 	////////////////////////////////////////////////////////////////////////////////
 
-	bool EditorContext::CreateProject(const std::filesystem::path& directory, const std::string& name, std::string* outError)
+	bool EditorContext::CreateProject(const std::filesystem::path& directory, const std::string& name, std::string_view templateId, std::string* outError)
 	{
+		if (!ProjectTemplates::Find(templateId))
+		{
+			if (outError)
+				*outError = fmt::format("Unknown project template '{}' (templates: {})", templateId, ProjectTemplates::ListIds());
+			return false;
+		}
 		Ref<Project> project = Project::Create(directory, name, outError);
 		if (!project)
 			return false;
 		// New projects come with their script build and an example script.
 		if (!CreateScriptProjectFiles(*project, true, nullptr, outError))
 			return false;
-		return OpenProjectInternal(project->GetProjectFile(), true, outError);
+		if (!OpenProjectInternal(project->GetProjectFile(), true, outError))
+			return false;
+		return !ProjectTemplates::HasStartScene(templateId) || SaveTemplateStartScene(templateId, outError);
+	}
+
+	bool EditorContext::SaveTemplateStartScene(std::string_view templateId, std::string* outError)
+	{
+		if (!NewScene("Main", templateId))
+		{
+			if (outError)
+				*outError = fmt::format("Unknown project template '{}'", templateId);
+			return false;
+		}
+		std::string error;
+		if (!SaveSceneAs(std::string(ProjectTemplates::c_StartScenePath), &error))
+		{
+			if (outError)
+				*outError = fmt::format("The project was created, but its start scene could not be saved: {}", error);
+			return false;
+		}
+		Project& project = *m_Project;
+		project.GetConfig().StartScene = m_SceneHandle;
+		if (!project.Save(&error))
+		{
+			if (outError)
+				*outError = fmt::format("The project was created, but its start scene could not be set: {}", error);
+			return false;
+		}
+		return true;
 	}
 
 	bool EditorContext::OpenProject(const std::filesystem::path& path, std::string* outError)
@@ -153,14 +189,21 @@ namespace Strata
 	void EditorContext::ReleaseProject(bool activateBuiltinAssets)
 	{
 		Stop();
-		if (m_Project)
+		const bool hadProject = m_Project != nullptr;
+		if (hadProject)
 		{
+			m_Viewport.StoreSceneCamera(m_SceneHandle);
+			// Cameras of scenes deleted since are not kept.
+			if (m_AssetManager)
+				m_Viewport.PruneSceneCameras([this](AssetHandle scene) { return m_AssetManager->GetAssetType(scene) == AssetType::Scene; });
 			std::string error;
 			if (!m_Viewport.Save(GetViewportStateFile(), &error))
 				ST_WARN("The viewport state was not saved: {}", error);
-			m_Viewport.ResetState();
 		}
 		ResetScene(CreateRef<Scene>(), UUID::Null());
+		// After the scene went: the next project starts from the default view, with none of this project's scene cameras.
+		if (hadProject)
+			m_Viewport.ResetState();
 		CloseScriptEngine();
 		if (m_AssetManager)
 		{
@@ -185,15 +228,24 @@ namespace Strata
 	void EditorContext::ResetScene(Ref<Scene> scene, AssetHandle handle)
 	{
 		Stop();
+		// The scene that goes keeps its view for when it opens again.
+		m_Viewport.StoreSceneCamera(m_SceneHandle);
+		m_PendingFrame.reset();
 		m_EditScene = std::move(scene);
 		m_SceneHandle = handle;
 		m_Selection.clear();
 		m_UndoStack.Clear();
 	}
 
-	void EditorContext::NewScene(const std::string& name)
+	bool EditorContext::NewScene(const std::string& name, std::string_view templateId)
 	{
-		ResetScene(CreateRef<Scene>(name), UUID::Null());
+		Ref<Scene> scene = CreateRef<Scene>(name);
+		if (!ProjectTemplates::Populate(templateId, *scene))
+			return false;
+		ResetScene(std::move(scene), UUID::Null());
+		if (const std::optional<TemplateView> view = ProjectTemplates::GetEditorView(templateId))
+			m_Viewport.GetCamera().LookAt(view->Position, view->Target);
+		return true;
 	}
 
 	bool EditorContext::OpenScene(AssetHandle handle, std::string* outError)
@@ -221,7 +273,37 @@ namespace Strata
 			return fail(fmt::format("The scene is invalid: {}", error));
 
 		ResetScene(scene, handle);
+		if (!m_Viewport.RestoreSceneCamera(handle))
+		{
+			// Shown for the first time: frame what it renders. Meshes that are still loading stand in as placeholder boxes,
+			// so the view is framed again once they are known.
+			std::vector<AssetHandle> pendingMeshes;
+			if (m_Viewport.FrameScene(*this, &pendingMeshes) && !pendingMeshes.empty())
+			{
+				m_PendingFrame = PendingFrame { handle, std::move(pendingMeshes), m_Viewport.GetCamera(),
+					std::chrono::steady_clock::now() + c_PendingFrameTimeout };
+			}
+		}
 		return true;
+	}
+
+	void EditorContext::UpdatePendingFrame()
+	{
+		if (!m_PendingFrame)
+			return;
+		// Only the first view of the scene is framed again, and never once the user moved the camera.
+		if (m_PendingFrame->Scene != m_SceneHandle || IsPlaying() || !(m_Viewport.GetCamera() == m_PendingFrame->FramedCamera)
+			|| std::chrono::steady_clock::now() > m_PendingFrame->Deadline)
+		{
+			m_PendingFrame.reset();
+			return;
+		}
+		const bool loading = std::any_of(m_PendingFrame->Meshes.begin(), m_PendingFrame->Meshes.end(),
+			[](AssetHandle mesh) { return AssetManager::GetAssetState(mesh) == AssetState::Loading; });
+		if (loading)
+			return;
+		m_PendingFrame.reset();
+		m_Viewport.FrameScene(*this);
 	}
 
 	bool EditorContext::SaveScene(std::string* outError)
@@ -739,6 +821,7 @@ namespace Strata
 		UpdateInputSuspension();
 		PruneSelection();
 		m_Viewport.UpdatePicking(*this);
+		UpdatePendingFrame();
 	}
 
 	////////////////////////////////////////////////////////////////////////////////

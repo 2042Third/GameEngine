@@ -19,6 +19,10 @@ namespace Strata::Tests
 	// are removed when the test run finishes.
 	std::filesystem::path CreateTemporaryDirectory(const std::string& name);
 	void CleanupTemporaryDirectories();
+	// Copies a sample project of the repository (Samples/<name>, without editor state in .strata) into a new temporary
+	// directory and returns the copy's directory, or an empty path when the copy failed (outError says why). Tests never
+	// open the samples in place.
+	std::filesystem::path CopySampleProject(const std::string& name, std::string* outError = nullptr);
 
 	// Appends one RGBA texel to a pixel buffer. Tests use it instead of insert(end(), { r, g, b, a }), for which GCC 14 at
 	// -O3 reports a false -Wstringop-overflow on byte vectors.

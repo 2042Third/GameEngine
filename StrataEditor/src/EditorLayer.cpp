@@ -314,10 +314,12 @@ namespace Strata
 		std::optional<std::filesystem::path> directory = FileDialogs::PickFolder();
 		if (!directory)
 			return;
+		// People start from the lit template; "empty" stays the command's default for automation.
 		RequestDiscardChanges([this, directory = *directory]()
 		{
 			RunEditorCommand(m_Context, m_Commands, "project.create",
-				{ { "directory", FileSystem::ToUTF8(directory) }, { "name", FileSystem::ToUTF8(directory.filename()) } });
+				{ { "directory", FileSystem::ToUTF8(directory) }, { "name", FileSystem::ToUTF8(directory.filename()) },
+					{ "template", std::string(ProjectTemplates::c_Basic3D) } });
 		});
 	}
 

@@ -464,4 +464,277 @@ TEST_SUITE("Editor.Viewport")
 		CHECK_FALSE(viewport.FromJson({ { "Strata", { { "Format", "EditorViewport" }, { "Version", 99 } } } }, &error));
 		CHECK(error.find("version") != std::string::npos);
 	}
+
+	TEST_CASE("Scene bounds count what renders and ignore cameras, lights and HUD holders")
+	{
+		EditorContext context(EditorContextSpecification { false });
+		Scene& scene = *context.GetEditScene();
+		Entity cube = CreateEntity(scene, "Cube", glm::vec3(0.0f, 1.0f, 0.0f));
+		cube.AddComponent<MeshRendererComponent>().Mesh = BuiltinAssets::CubeMesh;
+		CreateEntity(scene, "Camera", glm::vec3(0.0f, 5.0f, 40.0f)).AddComponent<CameraComponent>();
+		CreateEntity(scene, "Sun", glm::vec3(-30.0f, 0.0f, 0.0f)).AddComponent<DirectionalLightComponent>();
+		CreateEntity(scene, "Lamp", glm::vec3(0.0f, -20.0f, 0.0f)).AddComponent<PointLightComponent>();
+		CreateEntity(scene, "Empty", glm::vec3(25.0f, 0.0f, 0.0f));
+		TextComponent& hud = CreateEntity(scene, "HUD", glm::vec3(0.0f, 0.0f, -30.0f)).AddComponent<TextComponent>();
+		hud.Text = "Score: 0";
+
+		std::vector<AssetHandle> pending;
+		AABB bounds = SceneBounds::GetSceneBounds(scene, &pending);
+		CHECK(Near(bounds.Min, glm::vec3(-0.5f, 0.5f, -0.5f)));
+		CHECK(Near(bounds.Max, glm::vec3(0.5f, 1.5f, 0.5f)));
+		CHECK(pending.empty()); // Built-in meshes are always loaded
+
+		// World-space text renders: its extent counts (FontSize world units per em, centered on its entity).
+		Entity sign = CreateEntity(scene, "Sign", glm::vec3(10.0f, 0.0f, 0.0f));
+		TextComponent& text = sign.AddComponent<TextComponent>();
+		text.Text = "AB\nC";
+		text.ScreenSpace = false;
+		text.FontSize = 1.0f;
+		bounds = SceneBounds::GetSceneBounds(scene);
+		CHECK(bounds.Max.x > 10.4f);
+		CHECK(bounds.Max.x < 11.0f);
+		CHECK(bounds.Min.y < -1.0f);
+		CHECK(bounds.Min.z == doctest::Approx(-0.5f));
+		sign.SetActive(false);
+
+		// A mesh that is still loading (or cannot be found) stands as a placeholder box; loading ones are reported.
+		Entity unknown = CreateEntity(scene, "Unknown", glm::vec3(0.0f, 0.0f, 8.0f));
+		unknown.AddComponent<MeshRendererComponent>().Mesh = UUID(0x1234567);
+		pending.clear();
+		bounds = SceneBounds::GetSceneBounds(scene, &pending);
+		CHECK(bounds.Max.z == doctest::Approx(8.0f + SceneBounds::c_PlaceholderExtent));
+		CHECK(pending.empty()); // Unknown to the asset manager: nothing will arrive
+		unknown.SetActive(false);
+
+		// Without anything that renders, every active entity counts as a placeholder box, so there is still a view.
+		cube.SetActive(false);
+		bounds = SceneBounds::GetSceneBounds(scene);
+		REQUIRE(bounds.IsValid());
+		CHECK(bounds.Max.z == doctest::Approx(40.0f + SceneBounds::c_PlaceholderExtent));
+		CHECK(bounds.Min.y == doctest::Approx(-20.0f - SceneBounds::c_PlaceholderExtent));
+
+		// An entity that renders nothing still frames itself when asked for, also next to one that renders.
+		cube.SetActive(true);
+		Entity sun = scene.FindEntityByName("Sun");
+		REQUIRE(sun);
+		const std::vector<Entity> selection = { cube, sun };
+		bounds = SceneBounds::GetEntitiesBounds(scene, selection);
+		CHECK(bounds.Min.x == doctest::Approx(-30.0f - SceneBounds::c_PlaceholderExtent));
+		CHECK(bounds.Max.y == doctest::Approx(1.5f));
+	}
+
+	TEST_CASE("Editor views get preview lighting and hide the game UI; the game's views do not")
+	{
+		ViewportHarness harness;
+		EditorContext& context = harness.Context;
+		const ViewportSettings& settings = context.GetViewport().GetSettings();
+		CHECK(settings.PreviewLighting);
+		CHECK_FALSE(settings.ShowGameUI);
+
+		auto optionsFor = [&](ViewportCameraSource source)
+		{
+			const std::optional<ViewportView> view = ResolveViewportView(context, source, 1.5f);
+			REQUIRE(view);
+			return std::make_pair(*view, GetViewportRenderOptions(*view, context.GetViewport().GetSettings()));
+		};
+
+		auto [edit, editOptions] = optionsFor(ViewportCameraSource::Automatic);
+		CHECK(edit.EditorView);
+		CHECK(editOptions.PreviewEnvironment);
+		CHECK_FALSE(editOptions.DrawScreenSpaceText);
+
+		// The settings turn either off, and are view settings: no undo step.
+		harness.Run("viewport.setSettings", { { "previewLighting", false }, { "gameUI", true } });
+		auto [changed, changedOptions] = optionsFor(ViewportCameraSource::Automatic);
+		CHECK_FALSE(changedOptions.PreviewEnvironment);
+		CHECK(changedOptions.DrawScreenSpaceText);
+		harness.Run("viewport.setSettings", { { "previewLighting", true }, { "gameUI", false } });
+
+		// Playing without a camera shows the editor camera, but as the game: no preview, the HUD drawn.
+		REQUIRE(context.Play());
+		auto [fallback, fallbackOptions] = optionsFor(ViewportCameraSource::Automatic);
+		CHECK_FALSE(fallback.FromScene);
+		CHECK_FALSE(fallback.EditorView);
+		CHECK_FALSE(fallbackOptions.PreviewEnvironment);
+		CHECK(fallbackOptions.DrawScreenSpaceText);
+		context.Stop();
+
+		// Simulating is still working on the scene in the editor camera.
+		REQUIRE(context.Simulate());
+		CHECK(optionsFor(ViewportCameraSource::Automatic).first.EditorView);
+		context.Stop();
+
+		// The scene's camera always shows what the game shows.
+		harness.Run("entity.create", { { "name", "Camera" }, { "components", { { "Camera", nlohmann::json::object() } } } });
+		auto [sceneView, sceneOptions] = optionsFor(ViewportCameraSource::Scene);
+		CHECK(sceneView.FromScene);
+		CHECK_FALSE(sceneView.EditorView);
+		CHECK_FALSE(sceneOptions.PreviewEnvironment);
+		CHECK(sceneOptions.DrawScreenSpaceText);
+		CHECK(harness.Context.GetUndoStack().GetHistory().size() == 1); // The camera entity only
+	}
+
+	TEST_CASE("viewport.getSettings and viewport.setSettings change view settings atomically")
+	{
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("ViewportSettingsProject");
+		{
+			ViewportHarness harness;
+			harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory / "Game") }, { "name", "Game" } });
+			nlohmann::json settings = harness.Run("viewport.getSettings");
+			for (const char* key : { "grid", "selectionOutline", "sceneGizmos", "stats", "previewLighting", "gameUI", "gizmo", "space", "translateSnap",
+				"rotateSnap", "scaleSnap" })
+			{
+				CAPTURE(key);
+				CHECK(settings.contains(key));
+			}
+			CHECK(settings["previewLighting"] == true);
+			CHECK(settings["gameUI"] == false);
+
+			settings = harness.Run("viewport.setSettings", { { "grid", false }, { "gameUI", true }, { "previewLighting", false }, { "gizmo", "Rotate" },
+				{ "space", "Local" }, { "rotateSnap", 45 } });
+			CHECK(settings["grid"] == false);
+			CHECK(settings["gameUI"] == true);
+			CHECK(settings["previewLighting"] == false);
+			CHECK(settings["gizmo"] == "Rotate");
+			CHECK(settings["space"] == "Local");
+			CHECK(settings["rotateSnap"] == 45.0);
+			CHECK(harness.Run("viewport.getSettings") == settings);
+
+			// An invalid value names the parameter and changes nothing, not even the valid values next to it.
+			const std::string error = harness.Error("viewport.setSettings", { { "grid", true }, { "scaleSnap", 0 } });
+			CHECK(error.find("'scaleSnap'") != std::string::npos);
+			CHECK(harness.Error("viewport.setSettings", { { "previewLighting", "yes" } }).find("'previewLighting'") != std::string::npos);
+			CHECK(harness.Error("viewport.setSettings", { { "gizmo", "Move" } }).find("'gizmo'") != std::string::npos);
+			CHECK(harness.Error("viewport.setSettings", { { "lighting", true } }).find("Unknown parameter") != std::string::npos);
+			CHECK(harness.Run("viewport.getSettings") == settings);
+			CHECK(harness.Context.GetUndoStack().GetHistory().empty());
+		}
+
+		// Saved with the project's editor state.
+		ViewportHarness harness;
+		harness.Run("project.open", { { "path", FileSystem::ToUTF8(directory / "Game") } });
+		CHECK_FALSE(harness.Context.GetViewport().GetSettings().PreviewLighting);
+		CHECK(harness.Context.GetViewport().GetSettings().ShowGameUI);
+		CHECK_FALSE(harness.Context.GetViewport().GetSettings().ShowGrid);
+	}
+
+	TEST_CASE("Every scene keeps its own editor camera, and a scene seen for the first time is framed")
+	{
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("SceneCameraProject") / "Game";
+		const std::filesystem::path stateFile = directory / ".strata" / "EditorViewport.json";
+		std::string first;
+		std::string second;
+		nlohmann::json movedCamera;
+		{
+			ViewportHarness harness;
+			harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+			harness.Run("scene.new", { { "name", "First" } });
+			harness.Run("entity.create", { { "name", "Cube" }, { "components", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } } } } });
+			first = harness.Run("scene.saveAs", { { "path", "Scenes/First.stscene" } })["scene"].get<std::string>();
+			harness.Run("scene.new", { { "name", "Second" } });
+			harness.Run("entity.create", { { "name", "Far" }, { "components", { { "Transform", { { "Translation", { 50, 0, 0 } } } },
+				{ "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } } } } });
+			second = harness.Run("scene.saveAs", { { "path", "Scenes/Second.stscene" } })["scene"].get<std::string>();
+			harness.Run("project.setStartScene", { { "scene", first } });
+			// Scenes saved in the editor keep the camera they were made with: the saved state goes, so both are new.
+			harness.Run("scene.new");
+		}
+		REQUIRE(FileSystem::Remove(stateFile));
+		{
+			ViewportHarness harness;
+			// First views frame each scene's content.
+			harness.Run("project.open", { { "path", FileSystem::ToUTF8(directory) } });
+			CHECK(Near(ToVec3(harness.Run("camera.get")["target"]), glm::vec3(0.0f)));
+			movedCamera = harness.Run("camera.set", { { "position", { 2, 3, 4 } }, { "target", { 0, 0.5f, 0 } } });
+			harness.Run("scene.open", { { "scene", second } });
+			CHECK(Near(ToVec3(harness.Run("camera.get")["target"]), glm::vec3(50.0f, 0.0f, 0.0f)));
+
+			// Back to the first scene: the view it was left with.
+			harness.Run("scene.open", { { "scene", first } });
+			CHECK(harness.Run("camera.get") == movedCamera);
+		}
+
+		// The cameras are saved per scene handle and come back with the project.
+		const std::optional<std::string> text = FileSystem::ReadText(stateFile);
+		REQUIRE(text);
+		const std::optional<nlohmann::json> saved = JsonUtils::Parse(*text);
+		REQUIRE(saved);
+		REQUIRE((*saved)["Cameras"].is_object());
+		CHECK((*saved)["Cameras"].size() == 2);
+		CHECK((*saved)["Cameras"].contains(first));
+		CHECK((*saved)["Cameras"].contains(second));
+		std::string third;
+		{
+			ViewportHarness harness;
+			harness.Run("project.open", { { "path", FileSystem::ToUTF8(directory) } }); // Opens the start scene, the first one
+			CHECK(harness.Run("camera.get") == movedCamera);
+			harness.Run("scene.open", { { "scene", second } });
+			CHECK(Near(ToVec3(harness.Run("camera.get")["target"]), glm::vec3(50.0f, 0.0f, 0.0f)));
+			// A scene deleted meanwhile loses its camera when the project closes.
+			harness.Run("scene.new", { { "name", "Third" } });
+			third = harness.Run("scene.saveAs", { { "path", "Scenes/Third.stscene" } })["scene"].get<std::string>();
+			harness.Run("scene.open", { { "scene", first } });
+			CHECK(harness.Context.GetViewport().HasSceneCamera(*UUIDFromJson(third)));
+			harness.Run("asset.delete", { { "asset", third } });
+		}
+		const std::optional<nlohmann::json> pruned = JsonUtils::Parse(*FileSystem::ReadText(stateFile));
+		REQUIRE(pruned);
+		CHECK((*pruned)["Cameras"].size() == 2);
+		CHECK_FALSE((*pruned)["Cameras"].contains(third));
+
+		// A state file written before per-scene cameras has one camera: the start scene gets it instead of framing.
+		REQUIRE(FileSystem::WriteText(stateFile, "{ \"Strata\": { \"Format\": \"EditorViewport\", \"Version\": 1 }, \"Camera\": { \"Target\": [7, 8, 9], "
+			"\"Distance\": 3, \"Yaw\": 10, \"Pitch\": -5, \"FOV\": 40 }, \"Settings\": { \"ShowGrid\": false } }"));
+		ViewportHarness harness;
+		harness.Run("project.open", { { "path", FileSystem::ToUTF8(directory) } });
+		const nlohmann::json camera = harness.Run("camera.get");
+		CHECK(Near(ToVec3(camera["target"]), glm::vec3(7.0f, 8.0f, 9.0f)));
+		CHECK(camera["fov"] == 40.0);
+		CHECK_FALSE(harness.Context.GetViewport().GetSettings().ShowGrid);
+		// It belonged to that scene: the other scene gets a first view of its own.
+		harness.Run("scene.open", { { "scene", second } });
+		CHECK(Near(ToVec3(harness.Run("camera.get")["target"]), glm::vec3(50.0f, 0.0f, 0.0f)));
+	}
+
+	TEST_CASE("Opening a copy of the Tetris sample frames its well")
+	{
+		std::string error;
+		const std::filesystem::path copy = Tests::CopySampleProject("Tetris", &error);
+		REQUIRE_MESSAGE(!copy.empty(), error);
+
+		EditorContext context(EditorContextSpecification { false });
+		REQUIRE_MESSAGE(context.OpenProject(copy, &error), error);
+		REQUIRE(context.GetSceneHandle().IsValid());
+
+		// The renderable content (walls, floor, backdrops, the world-space label; not the camera, light or HUD) projected
+		// into the default capture size covers a good part of the image and lies fully inside it.
+		Scene& scene = *context.GetEditScene();
+		const AABB bounds = SceneBounds::GetSceneBounds(scene);
+		REQUIRE(bounds.IsValid());
+		CHECK(bounds.Max.z < 2.0f); // The camera at z = 30 does not count
+		const glm::vec2 size(static_cast<float>(EditorViewport::c_DefaultWidth), static_cast<float>(EditorViewport::c_DefaultHeight));
+		const EditorCamera& camera = context.GetViewport().GetCamera();
+		const glm::mat4 viewProjection = camera.GetProjectionMatrix(size.x / size.y) * camera.GetViewMatrix();
+		glm::vec2 minimum(std::numeric_limits<float>::max());
+		glm::vec2 maximum(std::numeric_limits<float>::lowest());
+		for (int corner = 0; corner < 8; corner++)
+		{
+			const glm::vec3 point((corner & 1) ? bounds.Max.x : bounds.Min.x, (corner & 2) ? bounds.Max.y : bounds.Min.y, (corner & 4) ? bounds.Max.z : bounds.Min.z);
+			const glm::vec4 clip = viewProjection * glm::vec4(point, 1.0f);
+			REQUIRE(clip.w > 0.0f);
+			const glm::vec2 pixel = (glm::vec2(clip.x, -clip.y) / clip.w * 0.5f + 0.5f) * size;
+			minimum = glm::min(minimum, pixel);
+			maximum = glm::max(maximum, pixel);
+		}
+		CHECK(minimum.x >= 0.0f);
+		CHECK(minimum.y >= 0.0f);
+		CHECK(maximum.x <= size.x);
+		CHECK(maximum.y <= size.y);
+		const float coverage = (maximum.x - minimum.x) * (maximum.y - minimum.y) / (size.x * size.y);
+		MESSAGE("Tetris: the renderable bounds cover ", coverage * 100.0f, "% of the first view");
+		CHECK(coverage >= 0.30f);
+		// Seen from where the game's camera looks: straight along -Z.
+		CHECK(camera.GetYaw() == doctest::Approx(0.0f));
+		CHECK(camera.GetPitch() == doctest::Approx(0.0f));
+	}
 }

@@ -1,5 +1,6 @@
 #include "TestHelpers.h"
 
+#include "Strata/Core/FileSystem.h"
 #include "Strata/Core/UUID.h"
 
 #include <stb_image_write.h>
@@ -33,6 +34,22 @@ namespace Strata::Tests
 		std::scoped_lock<std::mutex> lock(s_TemporaryDirectoriesMutex);
 		s_TemporaryDirectories.push_back(directory);
 		return directory;
+	}
+
+	std::filesystem::path CopySampleProject(const std::string& name, std::string* outError)
+	{
+		const std::filesystem::path copy = CreateTemporaryDirectory("Sample" + name) / FileSystem::FromUTF8(name);
+		if (!FileSystem::CopyDirectory(FileSystem::FromUTF8(STRATA_SOURCE_DIR) / "Samples" / FileSystem::FromUTF8(name), copy, outError))
+			return {};
+		// Only the sample's committed files: no editor state that opening it elsewhere may have left next to it.
+		const std::filesystem::path editorState = copy / ".strata";
+		if (FileSystem::Exists(editorState) && !FileSystem::Remove(editorState))
+		{
+			if (outError)
+				*outError = "the copy's .strata directory could not be removed";
+			return {};
+		}
+		return copy;
 	}
 
 	std::vector<uint8_t> CreateSineWav(float durationSeconds, uint32_t sampleRate, uint16_t channels, float frequency, float silentSeconds, float amplitude)

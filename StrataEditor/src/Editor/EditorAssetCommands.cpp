@@ -2,6 +2,7 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/GameExport.h"
+#include "Editor/ProjectTemplates.h"
 
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Core/FileSystem.h>
@@ -98,19 +99,50 @@ namespace Strata
 				return EditorCommandResult::Ok(DescribeProject(context));
 			} });
 
-		registry.Register({ "project.create", "Creates a project in a directory and opens it.",
-			ObjectSchema({ { "directory", StringSchema("Absolute directory for the project") }, { "name", StringSchema("Project name") } }, { "directory", "name" }),
+		registry.Register({ "project.templates",
+			"The templates project.create and scene.new accept: id, name and what a project made from it contains. \"basic3d\" starts lit (camera, sun, "
+			"procedural sky, ground, post-processing); \"empty\" is the default and has no scene.",
+			ObjectSchema({}),
+			[](EditorContext&, const nlohmann::json&)
+			{
+				nlohmann::json templates = nlohmann::json::array();
+				for (const ProjectTemplate& projectTemplate : ProjectTemplates::GetAll())
+				{
+					templates.push_back({
+						{ "id", projectTemplate.Id },
+						{ "name", projectTemplate.Name },
+						{ "description", projectTemplate.Description },
+						{ "startScene", ProjectTemplates::HasStartScene(projectTemplate.Id) ? nlohmann::json(ProjectTemplates::c_StartScenePath) : nlohmann::json(nullptr) } });
+				}
+				return EditorCommandResult::Ok({ { "templates", std::move(templates) }, { "default", ProjectTemplates::c_Empty } });
+			} });
+
+		registry.Register({ "project.create",
+			"Creates a project in a directory and opens it. With template \"basic3d\" it starts with a saved, lit start scene (Scenes/Main.stscene: Main "
+			"Camera, Sun, Sky, Ground, Post Process); the default \"empty\" has no scene (see project.templates).",
+			ObjectSchema({
+				{ "directory", StringSchema("Absolute directory for the project") },
+				{ "name", StringSchema("Project name") },
+				{ "template", { { "type", "string" }, { "enum", { ProjectTemplates::c_Empty, ProjectTemplates::c_Basic3D } },
+					{ "description", "What the project starts with (default \"empty\"; see project.templates)" } } } }, { "directory", "name" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const std::string directory = arguments.GetString("directory");
 				const std::string name = arguments.GetString("name");
+				const std::string templateId = arguments.GetString("template", std::string(ProjectTemplates::c_Empty));
+				if (arguments.IsValid() && !ProjectTemplates::Find(templateId))
+					arguments.SetError(fmt::format("Unknown template '{}' (templates: {})", templateId, ProjectTemplates::ListIds()));
 				if (!arguments.IsValid())
 					return arguments.Fail();
 				std::string error;
-				if (!context.CreateProject(FileSystem::FromUTF8(directory), name, &error))
+				if (!context.CreateProject(FileSystem::FromUTF8(directory), name, templateId, &error))
 					return EditorCommandResult::Fail(error);
-				return EditorCommandResult::Ok({ { "projectFile", FileSystem::ToUTF8(context.GetProject()->GetProjectFile()) } });
+				const AssetHandle startScene = context.GetProject()->GetConfig().StartScene;
+				return EditorCommandResult::Ok({
+					{ "projectFile", FileSystem::ToUTF8(context.GetProject()->GetProjectFile()) },
+					{ "template", templateId },
+					{ "startScene", startScene.IsValid() ? UUIDToJson(startScene) : nlohmann::json(nullptr) } });
 			} });
 
 		registry.Register({ "project.open", "Opens a project file or the project in a directory (unsaved scene changes are discarded).",
