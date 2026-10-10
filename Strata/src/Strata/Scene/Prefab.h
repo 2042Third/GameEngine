@@ -18,8 +18,10 @@ namespace Strata
 	{
 	public:
 		// Instantiates the hierarchy with fresh UUIDs under `parent` (scene root when invalid). Returns the top-level
-		// entities. Every created entity is linked to this asset through a PrefabInstanceComponent.
-		std::vector<Entity> Instantiate(Scene& scene, Entity parent = {}) const;
+		// entities. Every created entity is linked to this asset through a PrefabInstanceComponent. Instantiation fails as a
+		// whole, creating nothing, when the snapshot is invalid or the scene cannot hold its entities: the error is logged
+		// and stored in outError.
+		std::vector<Entity> Instantiate(Scene& scene, Entity parent = {}, std::string* outError = nullptr) const;
 
 		const nlohmann::json& GetSnapshot() const { return m_Snapshot; }
 		size_t GetEntityCount() const;

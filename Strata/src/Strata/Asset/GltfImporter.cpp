@@ -372,9 +372,16 @@ namespace Strata
 				return true;
 			}
 
-			// Rejects parent chains deeper than the hierarchy limit, which includes cycles (depths are memoized: linear).
+			// Rejects more nodes than the model's scene can hold (an entity per node below the model's root) and parent chains
+			// deeper than the hierarchy limit, which includes cycles (depths are memoized: linear).
 			bool ValidateHierarchy(std::string& outError) const
 			{
+				if (m_Data->nodes_count >= Scene::c_MaxEntities)
+				{
+					outError = fmt::format("the file has {} nodes; a model holds at most {}", m_Data->nodes_count, Scene::c_MaxEntities - 1);
+					return false;
+				}
+
 				std::vector<uint32_t> depths(m_Data->nodes_count, 0); // 0 = not known yet
 				std::vector<cgltf_size> chain;
 				for (cgltf_size index = 0; index < m_Data->nodes_count; index++)
@@ -1031,6 +1038,11 @@ namespace Strata
 					const cgltf_size nodeIndex = cgltf_node_index(m_Data.get(), &node);
 					// Entity ids derive from the model handle, so re-imports produce the same ids.
 					Entity entity = scene.CreateEntityWithUUID(DeriveSubAssetHandle(m_Context.Handle, fmt::format("Node/{}", nodeIndex)), GetName(node.name, "Node", nodeIndex));
+					if (!entity)
+					{
+						outError = "the model has more nodes than a scene can hold";
+						return false;
+					}
 					scene.SetParent(entity, pending.Parent, false);
 					SetupEntity(entity, node);
 

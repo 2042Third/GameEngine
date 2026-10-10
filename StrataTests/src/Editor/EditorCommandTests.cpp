@@ -303,6 +303,37 @@ TEST_SUITE("Editor.Commands")
 		CHECK(harness.Context.GetUndoStack().GetHistory().size() == history);
 	}
 
+	TEST_CASE("Creating entities in a full scene fails without changing the scene or the history")
+	{
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("EditorCommandFullScene");
+		CommandHarness harness;
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory / "Game") }, { "name", "Game" } });
+		const std::string cube = harness.Run("entity.create", { { "name", "Cube" } })["id"].get<std::string>();
+		harness.Run("prefab.create", { { "entities", { cube } }, { "path", "Prefabs/Cube.stprefab" } });
+
+		// The registry is filled with plain EnTT entities: they count against its limit like scene entities, and are much
+		// quicker to make.
+		entt::registry& registry = harness.Context.GetEditScene()->GetRegistry();
+		std::vector<entt::entity> filler(Scene::c_MaxEntities - registry.storage<entt::entity>().free_list());
+		registry.create(filler.begin(), filler.end());
+		const nlohmann::json before = harness.SceneSnapshot();
+		const size_t history = harness.Context.GetUndoStack().GetHistory().size();
+
+		CHECK(harness.Error("entity.create", { { "name", "OneTooMany" } }) == "The scene is full: it holds at most 1048575 entities");
+		CHECK(harness.Error("entity.create", { { "name", "ChildTooMany" }, { "parent", cube } }) == "The scene is full: it holds at most 1048575 entities");
+		const std::string instantiateError = harness.Error("prefab.instantiate", { { "prefab", "Prefabs/Cube.stprefab" } });
+		CHECK(instantiateError.find("Instantiating 'Prefabs/Cube.stprefab' failed") != std::string::npos);
+		CHECK(instantiateError.find("at most 1048575 entities") != std::string::npos);
+		CHECK(harness.SceneSnapshot() == before);
+		CHECK(harness.Context.GetUndoStack().GetHistory().size() == history);
+
+		// Room again once an entity is gone.
+		registry.destroy(filler.back());
+		harness.Run("entity.create", { { "name", "Fits" }, { "parent", cube } });
+		CHECK(harness.Run("scene.info")["entityCount"] == 2);
+		CHECK(harness.Context.GetUndoStack().GetHistory().size() == history + 1);
+	}
+
 	TEST_CASE("Hierarchy, duplication, components and selection")
 	{
 		CommandHarness harness;

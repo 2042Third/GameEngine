@@ -263,6 +263,8 @@ namespace Strata
 
 				SceneEditTransaction transaction(scene, "Create Entity", {});
 				Entity entity = parent ? scene.CreateChildEntity(parent, name) : scene.CreateEntity(name);
+				if (!entity)
+					return RollBack(transaction, fmt::format("The scene is full: it holds at most {} entities", Scene::c_MaxEntities), EditorCommandError::Failed);
 				transaction.TrackCreated(entity.GetUUID());
 				std::string error;
 				if (components && !ApplyComponents(entity, *components, &error))
@@ -538,7 +540,11 @@ namespace Strata
 					return EditorCommandResult::Fail("Loading the prefab failed");
 
 				SceneEditTransaction transaction(scene, "Instantiate Prefab", {});
-				const std::vector<Entity> roots = asset->Instantiate(scene, parent);
+				std::string instantiateError;
+				const std::vector<Entity> roots = asset->Instantiate(scene, parent, &instantiateError);
+				// Instantiation fails as a whole, e.g. when the scene cannot hold the entities.
+				if (!instantiateError.empty())
+					return RollBack(transaction, fmt::format("Instantiating '{}' failed: {}", parameters["prefab"].get<std::string>(), instantiateError), EditorCommandError::Failed);
 				nlohmann::json ids = nlohmann::json::array();
 				for (Entity root : roots)
 				{

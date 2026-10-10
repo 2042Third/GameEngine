@@ -699,6 +699,21 @@ TEST_SUITE("Asset.Gltf")
 		CHECK_FALSE(FindChild(root, "Lamp"));
 	}
 
+	TEST_CASE("Files with more nodes than a scene holds are rejected")
+	{
+		// Empty nodes, all at the top level (without a scene every root node is part of the model): with the model's root
+		// entity, one more entity than a scene holds.
+		const std::filesystem::path assets = Tests::CreateTemporaryDirectory("GltfNodeCount");
+		std::string document = R"({"asset":{"version":"2.0"},"nodes":[{})";
+		document.reserve(document.size() + Scene::c_MaxEntities * 3 + 2);
+		for (size_t index = 1; index < Scene::c_MaxEntities; index++)
+			document += ",{}";
+		document += "]}";
+		const ImportOutput output = RunImport(assets, "Crowd.gltf", std::vector<uint8_t>(document.begin(), document.end()));
+		CHECK_FALSE(output.Success);
+		CHECK(output.Error == "Crowd.gltf: the file has 1048575 nodes; a model holds at most 1048574");
+	}
+
 	TEST_CASE("Missing normals become flat normals and tangents follow UV seams")
 	{
 		const std::filesystem::path assets = Tests::CreateTemporaryDirectory("GltfShading");
