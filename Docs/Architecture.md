@@ -410,7 +410,10 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   the game's.
 - **Instances** (`ScriptSystem`). One instance per Script component entry, constructed with its field overrides;
   `OnCreate` runs at the next sync point (in `OnRuntimeStarted` for the initial set). Updates follow hierarchy order,
-  then entry order. Contacts come from the `PhysicsSystem` collision listener. Entity destruction requested by scripts
+  then entry order; the order is recomputed only when the scene's hierarchy version or the set of instances changed
+  (`GetUpdateOrderRebuildCount`), and each update callback walks a list of just the instances whose class implements
+  it, reading activity from the cached `ActiveInHierarchy` through each instance's entity handle. Contacts come from
+  the `PhysicsSystem` collision listener. Entity destruction requested by scripts
   waits until the scene can do it safely (`ScriptSystem::DestroyEntity`), and removed instances are destroyed at the
   next sync point.
 - **Host functions** (`ScriptHostAPI.cpp`). Every function runs in `HostCall` (no exception unwinds into the module)

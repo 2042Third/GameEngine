@@ -110,7 +110,7 @@ namespace Strata
 		m_CreationBlocked = true;
 		DestroyAllInstances(true);
 		m_Connections.clear();
-		m_UpdateOrder.clear();
+		ClearUpdateOrder();
 		m_PendingStart.clear();
 		m_PendingReloads.clear();
 		m_DirtyEntities.clear();
@@ -176,23 +176,31 @@ namespace Strata
 		if (!module || !m_Running)
 			return;
 
-		// Instances created during this phase are appended and wait for the next phase (indices stay valid).
-		const size_t count = m_UpdateOrder.size();
+		// Only instances whose class implements the callback are listed. Instances created during this phase are appended
+		// and wait for the next phase (indices stay valid; the list is read by index because appending may reallocate it).
+		// The instances stay alive while listed: m_UpdateOrder owns them and is not rebuilt during the walk.
+		const std::vector<Instance*>& dispatch = GetDispatchList(callback);
+		const entt::registry& registry = m_Scene.GetRegistry();
+		const bool wasDispatching = m_Dispatching;
+		m_Dispatching = true;
+		const size_t count = dispatch.size();
 		for (size_t index = 0; index < count; index++)
 		{
-			const Ref<Instance> instance = m_UpdateOrder[index];
-			if (instance->Removed || instance->Disabled || !instance->Created || !instance->Handle || !instance->Class->Implements(callback))
+			Instance& instance = *dispatch[index];
+			if (instance.Removed || instance.Disabled || !instance.Created || !instance.Handle)
 				continue;
 
 			// Entities destroyed during this frame keep updating until the frame ends, like every other system sees them.
-			const Entity entity = m_Scene.GetEntityByUUID(instance->Entity);
-			if (!entity || !m_Scene.IsActiveInHierarchy(entity))
+			// Activity is read from the cache the scene keeps exact.
+			const entt::entity handle = instance.EntityHandle;
+			if (!registry.valid(handle) || registry.get<IDComponent>(handle).ID != instance.Entity || !registry.get<WorldTransformComponent>(handle).ActiveInHierarchy)
 				continue;
 
-			Invoke(*instance, callback, argument);
+			Invoke(instance, callback, argument);
 			if (module->IsFaulted())
-				return;
+				break;
 		}
+		m_Dispatching = wasDispatching;
 	}
 
 	void ScriptSystem::Invoke(Instance& instance, ScriptCallback callback, float argument)
@@ -522,12 +530,14 @@ namespace Strata
 	{
 		Ref<Instance> instance = CreateRef<Instance>();
 		instance->Entity = entity.GetUUID();
+		instance->EntityHandle = entity.GetHandle();
 		instance->ClassName = info.Name;
 		instance->Class = &info;
 
 		// Registered before construction, so script code run by the constructor sees it as existing (and never creates it
 		// a second time).
 		m_Instances[instance->Entity].push_back(instance);
+		m_InstanceSetVersion++;
 		if (!ConstructInstance(*instance, &entry))
 		{
 			instance->Removed = true;
@@ -535,7 +545,7 @@ namespace Strata
 			return nullptr;
 		}
 
-		m_UpdateOrder.push_back(instance);
+		AppendToUpdateOrder(instance);
 		m_PendingStart.push_back(instance);
 		return instance;
 	}
@@ -607,6 +617,7 @@ namespace Strata
 		if (instance.Removed && !instance.Handle)
 			return;
 		instance.Removed = true;
+		m_InstanceSetVersion++;
 		if (!instance.Handle)
 			return;
 
@@ -639,7 +650,7 @@ namespace Strata
 			DestroyInstance(*instance, callOnDestroy && m_Scene.GetEntityByUUID(instance->Entity).IsValid());
 
 		m_Instances.clear();
-		m_UpdateOrder.clear();
+		ClearUpdateOrder();
 		m_PendingStart.clear();
 		m_PendingReloads.clear();
 	}
@@ -694,28 +705,79 @@ namespace Strata
 		if (it == m_Instances.end())
 			return;
 		std::vector<Ref<Instance>>& instances = it->second;
+		const size_t count = instances.size();
 		instances.erase(std::remove_if(instances.begin(), instances.end(), &IsDestroyed), instances.end());
+		if (instances.size() != count)
+			m_InstanceSetVersion++;
 		if (instances.empty())
 			m_Instances.erase(it);
 	}
 
 	void ScriptSystem::RebuildUpdateOrder()
 	{
-		m_UpdateOrder.clear();
+		const uint64_t hierarchyVersion = m_Scene.GetHierarchyVersion();
+		if (m_OrderInstanceSetVersion == m_InstanceSetVersion && m_OrderHierarchyVersion == hierarchyVersion)
+			return;
+
+		ClearUpdateOrder();
+		m_UpdateOrderRebuildCount++;
 		for (auto it = m_Instances.begin(); it != m_Instances.end();)
 		{
 			std::vector<Ref<Instance>>& instances = it->second;
 			instances.erase(std::remove_if(instances.begin(), instances.end(), &IsDestroyed), instances.end());
 			it = instances.empty() ? m_Instances.erase(it) : std::next(it);
 		}
-		if (m_Instances.empty())
-			return;
 
-		for (const Entity entity : m_Scene.GetEntitiesInHierarchyOrder())
+		if (!m_Instances.empty())
 		{
-			auto it = m_Instances.find(entity.GetUUID());
-			if (it != m_Instances.end())
-				m_UpdateOrder.insert(m_UpdateOrder.end(), it->second.begin(), it->second.end());
+			for (const Entity entity : m_Scene.GetEntitiesInHierarchyOrder())
+			{
+				auto it = m_Instances.find(entity.GetUUID());
+				if (it == m_Instances.end())
+					continue;
+				for (const Ref<Instance>& instance : it->second)
+				{
+					instance->EntityHandle = entity.GetHandle();
+					AppendToUpdateOrder(instance);
+				}
+			}
+		}
+		m_OrderInstanceSetVersion = m_InstanceSetVersion;
+		m_OrderHierarchyVersion = hierarchyVersion;
+	}
+
+	void ScriptSystem::ClearUpdateOrder()
+	{
+		ST_CORE_ASSERT(!m_Dispatching, "The script update order changed while callbacks were dispatched from it");
+		m_UpdateOrder.clear();
+		m_UpdateDispatch.clear();
+		m_FixedUpdateDispatch.clear();
+		m_LateUpdateDispatch.clear();
+		m_InstanceSetVersion++;
+	}
+
+	void ScriptSystem::AppendToUpdateOrder(const Ref<Instance>& instance)
+	{
+		m_UpdateOrder.push_back(instance);
+		if (!instance->Class)
+			return;
+		if (instance->Class->Implements(ScriptCallback::OnUpdate))
+			m_UpdateDispatch.push_back(instance.get());
+		if (instance->Class->Implements(ScriptCallback::OnFixedUpdate))
+			m_FixedUpdateDispatch.push_back(instance.get());
+		if (instance->Class->Implements(ScriptCallback::OnLateUpdate))
+			m_LateUpdateDispatch.push_back(instance.get());
+	}
+
+	std::vector<ScriptSystem::Instance*>& ScriptSystem::GetDispatchList(ScriptCallback callback)
+	{
+		switch (callback)
+		{
+			case ScriptCallback::OnFixedUpdate: return m_FixedUpdateDispatch;
+			case ScriptCallback::OnLateUpdate: return m_LateUpdateDispatch;
+			default:
+				ST_CORE_ASSERT(callback == ScriptCallback::OnUpdate, "Only update callbacks are dispatched from lists");
+				return m_UpdateDispatch;
 		}
 	}
 
@@ -733,7 +795,7 @@ namespace Strata
 		// Scripts that were removed but not destroyed yet end in the old module (with OnDestroy); they are not carried over.
 		DestroyRemovedInstances(CollectInstances());
 		m_ReloadOrder = CollectInstances();
-		m_UpdateOrder.clear();
+		ClearUpdateOrder();
 		m_PendingStart.clear();
 
 		for (const Ref<Instance>& instance : m_ReloadOrder)
@@ -843,6 +905,8 @@ namespace Strata
 			if (instance->Removed)
 				RemoveDestroyedInstances(instance->Entity);
 		}
+		// The instances now belong to the new module's classes, which may implement other callbacks.
+		m_InstanceSetVersion++;
 		RebuildUpdateOrder();
 		m_CreationBlocked = false;
 		// Scripts whose class was missing before may exist now, and scripts added meanwhile are still to be created.
