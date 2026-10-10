@@ -1,6 +1,12 @@
 #include "EditorLayer.h"
 
+#include "Panels/ConsolePanel.h"
+#include "Panels/ContentBrowserPanel.h"
+#include "Panels/InspectorPanel.h"
+#include "Panels/SceneHierarchyPanel.h"
+#include "Panels/ViewportPanel.h"
 #include "UI/FileDialogs.h"
+#include "UI/Icons.h"
 
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/ImageWriter.h>
@@ -13,6 +19,7 @@ namespace Strata
 
 	namespace
 	{
+
 		constexpr const char* c_EditorStatusSection = "editor";
 
 		EditorContextSpecification MakeContextSpecification(const EditorOptions& options)
@@ -22,6 +29,7 @@ namespace Strata
 			specification.HotReloadScripts = options.WatchFiles;
 			return specification;
 		}
+
 	}
 
 	EditorLayer::EditorLayer(const EditorOptions& options, Scope<EditorHost> host)
@@ -29,16 +37,45 @@ namespace Strata
 		m_Automation(m_Context, m_Commands, m_CommandRunner), m_ShowImGuiDemo(options.ShowImGuiDemo)
 	{
 		ST_ASSERT(m_Host, "The editor layer needs a host");
+		RegisterBuiltinPanels();
+	}
+
+	void EditorLayer::RegisterBuiltinPanels()
+	{
+		auto add = [this](const char* id, const char* title, const char* icon, std::function<Scope<EditorPanel>()> create)
+		{
+			EditorPanelDescriptor descriptor;
+			descriptor.Id = id;
+			descriptor.Title = title;
+			descriptor.Icon = icon;
+			descriptor.Create = std::move(create);
+			std::string error;
+			if (!m_Panels.Register(std::move(descriptor), &error))
+				ST_ERROR("Could not register the panel '{}': {}", id, error);
+		};
+		// Drawn in this order; the Content Browser comes after the Console, which shares its dock node.
+		add(EditorPanels::c_Viewport, "Viewport", Icons::Box, []() { return CreateScope<ViewportPanel>(); });
+		add(EditorPanels::c_Hierarchy, "Hierarchy", Icons::ListTree, []() { return CreateScope<SceneHierarchyPanel>(); });
+		add(EditorPanels::c_Inspector, "Inspector", Icons::SlidersHorizontal, []() { return CreateScope<InspectorPanel>(); });
+		add(EditorPanels::c_Console, "Console", Icons::Terminal, []() { return CreateScope<ConsolePanel>(); });
+		add(EditorPanels::c_ContentBrowser, "Content Browser", Icons::FolderOpen, []() { return CreateScope<ContentBrowserPanel>(); });
+
+		if (ContentBrowserPanel* contentBrowser = m_Panels.Get<ContentBrowserPanel>(EditorPanels::c_ContentBrowser))
+		{
+			contentBrowser->SetOpenSceneHandler([this](AssetHandle scene)
+			{
+				RequestDiscardChanges([this, scene]() { RunEditorCommand(m_Context, m_Commands, "scene.open", { { "scene", UUIDToJson(scene) } }); });
+			});
+		}
 	}
 
 	void EditorLayer::OnAttach()
 	{
 		if (!m_Options.Headless && m_Host->HasWindow())
 			FileDialogs::Init();
-		m_ContentBrowser.SetOpenSceneHandler([this](AssetHandle scene)
-		{
-			RequestDiscardChanges([this, scene]() { RunEditorCommand(m_Context, m_Commands, "scene.open", { { "scene", UUIDToJson(scene) } }); });
-		});
+		if (ImGui::GetCurrentContext())
+			m_Panels.InstallSettingsHandler();
+
 		if (!m_Options.ProjectPath.empty())
 		{
 			std::string error;
@@ -122,8 +159,12 @@ namespace Strata
 		// Before the project closes: completions may still look at the editor state. Automation stops afterwards, so the
 		// clients of cancelled commands still get their answers.
 		m_CommandRunner.CancelAll("The editor is closing");
-		if (!m_Options.Headless)
-			m_Viewport.Reset(m_Context);
+		if (m_UIDrawn)
+		{
+			EditorPanelContext panelContext { m_Context, m_Commands, m_CommandRunner };
+			m_Panels.OnDetach(panelContext);
+		}
+		m_Panels.RemoveSettingsHandler();
 		m_Automation.Stop();
 		m_Context.SetStatusProvider(c_EditorStatusSection, nullptr);
 		m_Context.CloseProject();
@@ -137,6 +178,11 @@ namespace Strata
 		m_Automation.Update();
 		UpdateCommandScript();
 		UpdateWindowTitle();
+		if (!m_Options.Headless)
+		{
+			EditorPanelContext panelContext { m_Context, m_Commands, m_CommandRunner };
+			m_Panels.OnUpdate(panelContext);
+		}
 
 		// editor.quit answered already (it checked for unsaved changes); this frame is the last one.
 		if (m_Context.IsQuitRequested() && m_Host->IsRunning())
@@ -199,14 +245,12 @@ namespace Strata
 
 	void EditorLayer::OnImGuiRender()
 	{
+		m_UIDrawn = true;
 		HandleShortcuts();
 		DrawDockspace();
 		DrawToolbar();
-		m_Viewport.OnImGuiRender(m_Context, m_Commands);
-		m_Hierarchy.OnImGuiRender(m_Context, m_Commands);
-		m_Inspector.OnImGuiRender(m_Context, m_Commands);
-		m_ContentBrowser.OnImGuiRender(m_Context, m_Commands);
-		m_Console.OnImGuiRender();
+		EditorPanelContext panelContext { m_Context, m_Commands, m_CommandRunner };
+		m_Panels.OnImGuiRender(panelContext);
 		DrawUnsavedChangesModal();
 		if (m_ShowImGuiDemo)
 			ImGui::ShowDemoWindow(&m_ShowImGuiDemo);
@@ -230,7 +274,8 @@ namespace Strata
 				ST_WARN("Open or create a project before importing files");
 				return true;
 			}
-			m_ContentBrowser.ImportFiles(m_Context, m_Commands, drop.GetPaths());
+			if (ContentBrowserPanel* contentBrowser = m_Panels.Get<ContentBrowserPanel>(EditorPanels::c_ContentBrowser))
+				contentBrowser->ImportFiles(m_Context, m_Commands, drop.GetPaths());
 			return true;
 		});
 	}
@@ -389,12 +434,12 @@ namespace Strata
 		if (ImGuiDockNode* toolbar = ImGui::DockBuilderGetNode(top))
 			toolbar->LocalFlags |= static_cast<ImGuiDockNodeFlags>(ImGuiDockNodeFlags_NoTabBar) | static_cast<ImGuiDockNodeFlags>(ImGuiDockNodeFlags_NoResize);
 
-		ImGui::DockBuilderDockWindow("Hierarchy", left);
-		ImGui::DockBuilderDockWindow("Inspector", right);
-		ImGui::DockBuilderDockWindow("Content Browser", bottom);
-		ImGui::DockBuilderDockWindow("Console", bottom);
+		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Hierarchy).c_str(), left);
+		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Inspector).c_str(), right);
+		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_ContentBrowser).c_str(), bottom);
+		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Console).c_str(), bottom);
 		ImGui::DockBuilderDockWindow("Toolbar", top);
-		ImGui::DockBuilderDockWindow("Viewport", center);
+		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Viewport).c_str(), center);
 		ImGui::DockBuilderFinish(dockspaceId);
 	}
 
@@ -418,17 +463,20 @@ namespace Strata
 
 		DrawMenuBar();
 		const ImGuiID dockspaceId = ImGui::GetID("EditorDockspaceID");
-		// Without a saved arrangement (first run) the panels get the default one; checked once, so a user who undocks
-		// every panel keeps that choice.
+		// Without a saved arrangement of the current layout version (first run, or an older editor's) the panels get the
+		// default one; checked once, so a user who undocks every panel keeps that choice.
 		if (!m_LayoutChecked)
 		{
 			const ImGuiDockNode* node = ImGui::DockBuilderGetNode(dockspaceId);
-			m_ResetLayout |= !node || (node->IsLeafNode() && node->Windows.Size == 0);
+			const bool empty = !node || (node->IsLeafNode() && node->Windows.Size == 0);
+			m_ResetLayout |= empty || m_Panels.GetSavedLayoutVersion() != c_LayoutVersion;
 			m_LayoutChecked = true;
 		}
 		if (m_ResetLayout)
 		{
+			m_Panels.ResetOpenStates();
 			BuildDefaultLayout(dockspaceId);
+			m_Panels.SetLayoutVersion(c_LayoutVersion);
 			m_ResetLayout = false;
 		}
 		ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
@@ -489,6 +537,15 @@ namespace Strata
 			ImGui::EndMenu();
 		}
 
+		if (ImGui::BeginMenu("View"))
+		{
+			m_Panels.DrawMenuItems();
+			ImGui::Separator();
+			if (ImGui::MenuItem("Reset Layout"))
+				m_ResetLayout = true;
+			ImGui::EndMenu();
+		}
+
 		if (ImGui::BeginMenu("Entity"))
 		{
 			SceneHierarchyPanel::DrawCreateMenu(m_Context, m_Commands, UUID::Null());
@@ -514,14 +571,8 @@ namespace Strata
 			ImGui::EndMenu();
 		}
 
-		if (ImGui::BeginMenu("Window"))
-		{
-			if (ImGui::MenuItem("Reset Layout"))
-				m_ResetLayout = true;
-			ImGui::EndMenu();
-		}
-
-		if (ImGui::BeginMenu("Help"))
+		// ImGui's demo is a reference for UI work, not part of the product: only with --imgui-demo.
+		if (m_Options.ShowImGuiDemo && ImGui::BeginMenu("Help"))
 		{
 			ImGui::MenuItem("ImGui Demo", nullptr, &m_ShowImGuiDemo);
 			ImGui::EndMenu();
@@ -632,7 +683,8 @@ namespace Strata
 			ImGui::SameLine();
 			ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.35f, 1.0f), "|  Script build failed (see Console)");
 		}
-		if (const uint32_t errors = m_Console.GetUnreadErrors(); errors > 0)
+		const ConsolePanel* console = m_Panels.Get<ConsolePanel>(EditorPanels::c_Console);
+		if (const uint32_t errors = console ? console->GetUnreadErrors() : 0; errors > 0)
 		{
 			ImGui::SameLine();
 			ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.35f, 1.0f), "|  %u new errors (see Console)", errors);

@@ -30,7 +30,7 @@ together (targets, modules, frame loop, threading, asset pipeline, scripting, ed
 | Path | Contents |
 | --- | --- |
 | `Strata/` | Engine static library. `src/Strata/<Module>/` holds the engine modules, `src/Platform/<OS or backend>/` the platform implementations, `shaders/` the GLSL sources, `vendor/` the pinned third-party submodules. |
-| `StrataEditor/` | The editor: `src/Editor/` the UI-independent core (`StrataEditorCore`), `src/UI/`, `src/Panels/` and `EditorLayer` the ImGui interface (`StrataEditorUI`: Bedrock theme, widget kit), the executable (`EditorApplication.cpp`); `Resources/Fonts/` the embedded fonts, `Tools/` the icon header generator. |
+| `StrataEditor/` | The editor: `src/Editor/` the UI-independent core (`StrataEditorCore`), `src/UI/`, `src/Panels/` and `EditorLayer` the ImGui interface (`StrataEditorUI`: Bedrock theme, widget kit, panel registry), the executable (`EditorApplication.cpp`); `Resources/Fonts/` the embedded fonts, `Tools/` the icon header generator. |
 | `StrataRuntime/` | Runtime executable that plays exported games (`GameRuntime`, drawn by `GameRenderer`): it runs the `.stgame` manifest next to it, or `--game <file>`; `--headless` runs without window and GPU at 60 frames per second (servers, CI); `--screenshot out.png` with `--frames N` saves the last frame (and fails the run when it shows the missing-camera message). |
 | `StrataScriptCore/` | Script ABI (C header) and the header-only C++ SDK game scripts are written against. Script modules never link the engine. |
 | `StrataCLI/` | Command-line client for the editor automation API; also an MCP server (`StrataCLI mcp`). |
@@ -450,6 +450,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   through `EditorHost` (implemented in `EditorApplication.cpp`), and the `StrataEditor` executable runs it. The panels
   only draw state and call commands; the tests link both libraries.
 - **Editor UI rules** (the 'Bedrock' look):
+  - Panels are `EditorPanel`s registered with `EditorPanelRegistry` (`UI/EditorPanelRegistry.h`, built-ins in
+    `EditorLayer::RegisterBuiltinPanels`): the registry begins their windows (icon and title, `###<id>`), toggles them in
+    the View menu and keeps their open state in imgui.ini (`StrataPanels`); panels never call `ImGui::Begin`.
   - Text uses the editor's fonts (`UI/EditorFonts.h`, embedded from `StrataEditor/Resources/Fonts`): Inter for the UI
     with the Lucide icons merged in, Inter SemiBold for headers, JetBrains Mono for logs, IDs and numbers, at the type
     scale's sizes (`UI::PushFont(EditorFont, TextSize)`: 12, 14, 17, 24). Icons are text (`UI/Icons.h`, generated from the

@@ -5,11 +5,7 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "EditorHost.h"
-#include "Panels/ConsolePanel.h"
-#include "Panels/ContentBrowserPanel.h"
-#include "Panels/InspectorPanel.h"
-#include "Panels/SceneHierarchyPanel.h"
-#include "Panels/ViewportPanel.h"
+#include "UI/EditorPanelRegistry.h"
 
 #include <Strata.h>
 
@@ -31,7 +27,7 @@ namespace Strata
 		std::filesystem::path CommandScript;
 		std::optional<uint64_t> MaxFrames;
 		bool QuitAfterCommands = false; // Close the editor once the command script finished (e.g. after a script build)
-		bool ShowImGuiDemo = false;
+		bool ShowImGuiDemo = false;     // Offer ImGui's demo window (Help menu), for UI work only (--imgui-demo)
 		bool Headless = false; // No UI: the editor runs for automation only
 		// A fixed UI scale (--ui-scale) instead of the window's content scale (DPI); unset follows the window.
 		std::optional<float> UIScale;
@@ -46,11 +42,25 @@ namespace Strata
 		bool WatchFiles = true;
 	};
 
+	// Built-in panel ids (EditorPanelRegistry).
+	namespace EditorPanels
+	{
+		constexpr const char* c_Viewport = "Viewport";
+		constexpr const char* c_Hierarchy = "Hierarchy";
+		constexpr const char* c_Inspector = "Inspector";
+		constexpr const char* c_ContentBrowser = "ContentBrowser";
+		constexpr const char* c_Console = "Console";
+	}
+
 	// The editor application layer: owns the editor state (EditorContext), the command registry shared with automation,
-	// and the ImGui interface (menus, toolbar, panels). It reaches the application only through its EditorHost.
+	// and the ImGui interface: the menu bar, the toolbar, the panels (EditorPanelRegistry), the status bar and the
+	// default layout. It reaches the application only through its EditorHost.
 	class EditorLayer : public Layer
 	{
 	public:
+		// Version of the default layout: a saved layout of another version is replaced by the default one.
+		static constexpr int c_LayoutVersion = 2;
+
 		EditorLayer(const EditorOptions& options, Scope<EditorHost> host);
 		~EditorLayer() override = default;
 
@@ -63,11 +73,13 @@ namespace Strata
 		EditorContext& GetContext() { return m_Context; }
 		const EditorCommandRegistry& GetCommands() const { return m_Commands; }
 		EditorCommandRunner& GetCommandRunner() { return m_CommandRunner; }
+		EditorPanelRegistry& GetPanels() { return m_Panels; }
 		EditorHost& GetHost() { return *m_Host; }
 	private:
 		void StartAutomation();
+		void RegisterBuiltinPanels();
 		void DrawDockspace();
-		// Docks the panels into the default arrangement (first run, or Window > Reset Layout).
+		// Docks the panels into the default arrangement (first run, a saved layout of another version, View > Reset Layout).
 		void BuildDefaultLayout(unsigned int dockspaceId);
 		void DrawMenuBar();
 		void DrawToolbar();
@@ -99,18 +111,14 @@ namespace Strata
 		EditorCommandRunner m_CommandRunner;
 		// Declared after what it serves, so it stops before they go away.
 		EditorAutomation m_Automation;
-
-		SceneHierarchyPanel m_Hierarchy;
-		InspectorPanel m_Inspector;
-		ContentBrowserPanel m_ContentBrowser;
-		ConsolePanel m_Console;
-		ViewportPanel m_Viewport;
+		EditorPanelRegistry m_Panels;
 
 		std::function<void()> m_PendingDiscardAction;
 		bool m_OpenUnsavedChangesModal = false;
 		bool m_ShowImGuiDemo = false;
 		bool m_ResetLayout = false;
 		bool m_LayoutChecked = false;
+		bool m_UIDrawn = false; // OnImGuiRender ran at least once
 		std::string m_WindowTitle;
 	};
 

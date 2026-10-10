@@ -5,6 +5,7 @@
 #include "FeatureTest/FeatureTestUtils.h"
 #include "TestHelpers.h"
 #include "UI/EditorFonts.h"
+#include "UI/EditorPanelRegistry.h"
 #include "UI/Icons.h"
 #include "UI/ItemProbe.h"
 #include "UI/Theme.h"
@@ -33,7 +34,8 @@ namespace
 		ImGuiHarness Harness;
 		Scope<EditorLayer> Layer;
 
-		explicit HarnessEditor(const ImGuiHarness::Specification& specification = {}, EditorOptions options = {})
+		// iniSettings: imgui.ini contents loaded before the first frame (the editor's saved layout and panel states).
+		explicit HarnessEditor(const ImGuiHarness::Specification& specification = {}, EditorOptions options = {}, const std::string& iniSettings = {})
 			: Harness(specification)
 		{
 			options.EnableAutomation = false;
@@ -41,6 +43,8 @@ namespace
 			Host->UIScale = specification.ContentScale;
 			Layer = CreateScope<EditorLayer>(options, CreateScope<FakeEditorHost>(Host));
 			Layer->OnAttach();
+			if (!iniSettings.empty())
+				ImGui::LoadIniSettingsFromMemory(iniSettings.c_str(), iniSettings.size());
 		}
 
 		~HarnessEditor()
@@ -71,6 +75,11 @@ namespace
 			REQUIRE(result.Success);
 			return result.Value;
 		}
+
+		ImGuiWindow* FindPanelWindow(const char* id)
+		{
+			return ImGui::FindWindowByName(Layer->GetPanels().GetWindowName(id).c_str());
+		}
 	};
 
 	EditorOptions WithFeatureProject(const std::string& directoryName)
@@ -78,6 +87,27 @@ namespace
 		EditorOptions options;
 		options.ProjectPath = CopyFeatureProject(CreateTemporaryDirectory(directoryName) / "Project");
 		return options;
+	}
+
+	// A panel for registry tests.
+	class TestPanel : public EditorPanel
+	{
+	public:
+		void OnImGuiRender(EditorPanelContext&) override { Draws++; }
+		void OnHidden(EditorPanelContext&) override { Hides++; }
+
+		int Draws = 0;
+		int Hides = 0;
+	};
+
+	EditorPanelDescriptor MakeTestPanel(std::string id, std::string title = "Test Panel")
+	{
+		EditorPanelDescriptor descriptor;
+		descriptor.Id = std::move(id);
+		descriptor.Title = std::move(title);
+		descriptor.Icon = Icons::Box;
+		descriptor.Create = []() { return CreateScope<TestPanel>(); };
+		return descriptor;
 	}
 
 }
@@ -143,6 +173,16 @@ TEST_SUITE("Editor.UI")
 		editor.Frames(3);
 		CHECK(editor.Harness.GetHoveredItemIdCount() <= 1);
 
+		// The panels are up.
+		for (const char* panel : { EditorPanels::c_Viewport, EditorPanels::c_Hierarchy, EditorPanels::c_Inspector, EditorPanels::c_ContentBrowser,
+			EditorPanels::c_Console })
+		{
+			CAPTURE(panel);
+			ImGuiWindow* window = editor.FindPanelWindow(panel);
+			REQUIRE(window);
+			CHECK(window->Active);
+		}
+
 		// With an entity selected the inspector shows its components; then the mouse goes over the whole window, so every
 		// item that reacts to the mouse is hovered once: none shares its id with another (ConfigDebugHighlightIdConflicts).
 		const nlohmann::json found = editor.Run("entity.find", { { "name", "Ball" } })["entities"];
@@ -206,6 +246,98 @@ TEST_SUITE("Editor.UI")
 		editor.Frames(1);
 		CHECK_FALSE(editor.Host->Running);
 		CHECK(editor.Host->ExitCode == 0);
+	}
+
+	TEST_CASE("Panels close and reopen, and imgui.ini remembers which are open")
+	{
+		std::string settings;
+		{
+			HarnessEditor editor;
+			editor.Frames(2);
+			EditorPanelRegistry& panels = editor.Layer->GetPanels();
+			CHECK(panels.IsOpen(EditorPanels::c_Console));
+			panels.SetOpen(EditorPanels::c_Console, false);
+			editor.Frames(1);
+			ImGuiWindow* console = editor.FindPanelWindow(EditorPanels::c_Console);
+			REQUIRE(console);
+			CHECK_FALSE(console->Active);
+
+			size_t size = 0;
+			settings = ImGui::SaveIniSettingsToMemory(&size);
+			CHECK(settings.find("[StrataPanels][Open]") != std::string::npos);
+			CHECK(settings.find("Console=0") != std::string::npos);
+			CHECK(settings.find("Hierarchy=1") != std::string::npos);
+			CHECK(settings.find("[StrataPanels][Layout]\nVersion=" + std::to_string(EditorLayer::c_LayoutVersion)) != std::string::npos);
+		}
+		{
+			// A new session with those settings keeps the Console closed until it is focused (e.g. by the errors pill).
+			HarnessEditor editor({}, {}, settings);
+			editor.Frames(2);
+			EditorPanelRegistry& panels = editor.Layer->GetPanels();
+			CHECK_FALSE(panels.IsOpen(EditorPanels::c_Console));
+			CHECK(panels.IsOpen(EditorPanels::c_Viewport));
+			panels.Focus(EditorPanels::c_Console);
+			editor.Frames(2);
+			CHECK(panels.IsOpen(EditorPanels::c_Console));
+			ImGuiWindow* console = editor.FindPanelWindow(EditorPanels::c_Console);
+			REQUIRE(console);
+			CHECK(console->Active);
+			CHECK_FALSE(console->Hidden);
+		}
+		{
+			// Settings of an older default layout are replaced by the current default layout, with every panel open.
+			std::string outdated = settings;
+			const std::string version = "Version=" + std::to_string(EditorLayer::c_LayoutVersion);
+			outdated.replace(outdated.find(version), version.size(), "Version=1");
+			HarnessEditor editor({}, {}, outdated);
+			editor.Frames(2);
+			CHECK(editor.Layer->GetPanels().IsOpen(EditorPanels::c_Console));
+		}
+	}
+
+	TEST_CASE("The panel registry checks what registers and draws open panels in their windows")
+	{
+		ImGuiHarness harness;
+		EditorPanelRegistry registry;
+		std::string error;
+		CHECK_FALSE(registry.Register(MakeTestPanel(""), &error));
+		CHECK_FALSE(registry.Register(MakeTestPanel("Bad=Id"), &error));
+		CHECK_FALSE(registry.Register(MakeTestPanel("Bad###Id"), &error));
+		CHECK_FALSE(registry.Register(MakeTestPanel("Untitled", ""), &error));
+		EditorPanelDescriptor noFactory = MakeTestPanel("NoFactory");
+		noFactory.Create = nullptr;
+		CHECK_FALSE(registry.Register(std::move(noFactory), &error));
+		EditorPanelDescriptor emptyFactory = MakeTestPanel("EmptyFactory");
+		emptyFactory.Create = []() { return Scope<EditorPanel>(); };
+		CHECK_FALSE(registry.Register(std::move(emptyFactory), &error));
+		CHECK(registry.GetCount() == 0);
+
+		REQUIRE_MESSAGE(registry.Register(MakeTestPanel("Test"), &error), error);
+		CHECK_FALSE(registry.Register(MakeTestPanel("Test"), &error));
+		EditorPanelDescriptor closed = MakeTestPanel("Closed", "Closed Panel");
+		closed.OpenByDefault = false;
+		closed.MenuPath = "Debug";
+		REQUIRE(registry.Register(std::move(closed), &error));
+		CHECK(registry.GetCount() == 2);
+		CHECK(registry.GetWindowName("Test") == std::string(Icons::Box) + "  Test Panel###Test");
+		CHECK(registry.GetWindowName("Missing").empty());
+		CHECK_FALSE(registry.IsOpen("Closed"));
+
+		TestPanel* open = registry.Get<TestPanel>("Test");
+		TestPanel* hidden = registry.Get<TestPanel>("Closed");
+		REQUIRE(open);
+		REQUIRE(hidden);
+		EditorContext context(EditorContextSpecification { false, false });
+		EditorCommandRegistry commands;
+		EditorCommandRunner runner;
+		EditorPanelContext panelContext { context, commands, runner };
+		harness.Frame([&]() { registry.OnImGuiRender(panelContext); });
+		CHECK(open->Draws == 1);
+		CHECK(hidden->Draws == 0);
+		CHECK(hidden->Hides == 1);
+		registry.SetOpen("Closed", true);
+		harness.Frame([&]() { registry.OnImGuiRender(panelContext); });
+		CHECK(hidden->Draws == 1);
 	}
 
 	TEST_CASE("The widget kit: buttons, chips, pills, cards and dialogs")

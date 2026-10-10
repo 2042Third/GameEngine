@@ -261,19 +261,14 @@ namespace Strata
 		ImGui::EndPopup();
 	}
 
-	void InspectorPanel::OnImGuiRender(EditorContext& context, const EditorCommandRegistry& commands)
+	void InspectorPanel::OnImGuiRender(EditorPanelContext& panelContext)
 	{
-		if (!ImGui::Begin("Inspector"))
-		{
-			ImGui::End();
-			return;
-		}
-
+		EditorContext& context = panelContext.Context;
+		const EditorCommandRegistry& commands = panelContext.Commands;
 		Entity entity = context.GetPrimarySelection();
 		if (!entity)
 		{
 			ImGui::TextDisabled("Select an entity to edit it");
-			ImGui::End();
 			return;
 		}
 		if (context.GetSelection().size() > 1)
@@ -332,7 +327,6 @@ namespace Strata
 		if (ImGui::Button("Add Component", ImVec2(buttonWidth, 0.0f)))
 			ImGui::OpenPopup("AddComponent");
 		DrawAddComponentPopup(context, commands, entity);
-		ImGui::End();
 	}
 
 }

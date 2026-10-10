@@ -8,21 +8,19 @@
 namespace Strata
 {
 
-	bool ConsolePanel::Poll()
+	void ConsolePanel::OnUpdate(EditorPanelContext&)
 	{
 		LogBuffer& buffer = Log::GetBuffer();
-		bool changed = false;
 		for (LogEntry& entry : buffer.GetEntries(m_LastSequence))
 		{
 			m_LastSequence = entry.Sequence;
 			if (entry.Level >= LogLevel::Error)
 				m_UnreadErrors++;
 			m_Entries.push_back(std::move(entry));
-			changed = true;
+			m_EntriesChanged = true;
 		}
 		while (m_Entries.size() > buffer.GetCapacity())
 			m_Entries.pop_front();
-		return changed;
 	}
 
 	bool ConsolePanel::IsVisible(const LogEntry& entry, const std::string& lowerFilter) const
@@ -32,14 +30,8 @@ namespace Strata
 		return levelShown && (lowerFilter.empty() || StringUtils::ToLower(entry.Message).find(lowerFilter) != std::string::npos);
 	}
 
-	void ConsolePanel::OnImGuiRender()
+	void ConsolePanel::OnImGuiRender(EditorPanelContext&)
 	{
-		bool changed = Poll();
-		if (!ImGui::Begin("Console"))
-		{
-			ImGui::End();
-			return;
-		}
 		if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))
 			m_UnreadErrors = 0;
 
@@ -47,7 +39,7 @@ namespace Strata
 		{
 			m_Entries.clear();
 			m_UnreadErrors = 0;
-			changed = true;
+			m_EntriesChanged = true;
 		}
 		ImGui::SameLine();
 		ImGui::Checkbox("Trace", &m_ShowTrace);
@@ -67,7 +59,7 @@ namespace Strata
 		// The filtered view is rebuilt only when the entries or the filters change.
 		const std::string filter = StringUtils::ToLower(m_Filter);
 		const std::string key = fmt::format("{}{}{}{}|{}", m_ShowTrace, m_ShowInfo, m_ShowWarnings, m_ShowErrors, filter);
-		if (changed || key != m_VisibleKey)
+		if (m_EntriesChanged || key != m_VisibleKey)
 		{
 			m_Visible.clear();
 			for (size_t index = 0; index < m_Entries.size(); index++)
@@ -76,6 +68,7 @@ namespace Strata
 					m_Visible.push_back(index);
 			}
 			m_VisibleKey = key;
+			m_EntriesChanged = false;
 		}
 
 		if (ImGui::BeginChild("Messages", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar))
@@ -103,7 +96,6 @@ namespace Strata
 				ImGui::SetScrollHereY(1.0f);
 		}
 		ImGui::EndChild();
-		ImGui::End();
 	}
 
 }

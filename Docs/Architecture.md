@@ -415,8 +415,10 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
 ```text
  StrataEditor      EditorApplication      options, Bedrock theme and fonts installed into ImGuiLayer, EditorHost
  --------------------------------------------------------------------------------------------------------------
- StrataEditorUI    EditorLayer            owns everything below: panels (Viewport, Hierarchy, Inspector,
-                                          ContentBrowser, Console), toolbar, shortcuts, file dialogs (nfd)
+ StrataEditorUI    EditorLayer            owns everything below: menu bar, toolbar, status bar, default
+                                          layout, shortcuts, file dialogs (nfd)
+                   EditorPanelRegistry    the panels (Viewport, Hierarchy, Inspector, Console, Content Browser):
+                                          windows, View menu, open state in imgui.ini
                    UI kit                 Theme (palette, ApplyTheme), EditorFonts, Icons, Widgets, ItemProbe
  --------------------------------------------------------------------------------------------------------------
  StrataEditorCore  EditorContext          project, EditorAssetManager, edited and running scene, play mode,
@@ -427,6 +429,21 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
                    EditorAutomation       RpcServer exposing the commands; session files
 ```
 
+- **UI** (`StrataEditorUI`). `EditorLayer` (`StrataEditor/src/EditorLayer.h`) reaches the application only through
+  `EditorHost` (close, exit code, frame count, time, window title, size and focus, UI scale, frame rate cap,
+  screenshots), which `EditorApplication.cpp` implements on `Application` and the UI tests fake. Each frame it draws the
+  dock space host (menu bar and dock space), the toolbar's window and the status bar, then the panels through
+  `EditorPanelRegistry` (`UI/EditorPanelRegistry.h`), which begins each open panel's window (`###<id>` names, so docking
+  and settings survive title changes), asks the panel for window options, calls `OnImGuiRender` while it is visible
+  and `OnHidden` otherwise, and saves which panels are open with the layout version in imgui.ini (`StrataPanels`); a
+  saved layout of another version is replaced by the default one (`EditorLayer::c_LayoutVersion`). The look comes from
+  `UI/Theme` (the Bedrock palette and its meanings; `ApplyTheme` is the `ImGuiLayer` style callback), `UI/EditorFonts`
+  (Inter, Inter SemiBold and JetBrains Mono embedded with `strata_embed_file`, Lucide's icons merged into the Inter
+  fonts' Private Use Area) and the widget kit (`UI/Widgets`), whose widgets record their rectangles in `UI/ItemProbe`.
+  Rules for UI code: AGENTS.md, "Editor UI rules". **UI tests** (`StrataTests/src/Editor/ImGuiHarness.h`) create
+  an ImGui context with the editor's fonts and theme (styled by an unattached `ImGuiLayer`), honor ImGui's texture
+  requests without a renderer, inject input, and find kit widgets through the probe; the `Editor.UI` suites draw the
+  real `EditorLayer` this way, with a `FakeEditorHost`.
 - **EditorContext** (`StrataEditor/src/Editor/EditorContext.h`) is the state with no UI. Opening a project creates and
   activates its `EditorAssetManager` (scan included), opens a `ScriptEngine` (hot reload on by default,
   `EditorContextSpecification::HotReloadScripts`) and loads the built module, restores the viewport state and opens

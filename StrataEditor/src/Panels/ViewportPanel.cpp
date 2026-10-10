@@ -81,30 +81,28 @@ namespace Strata
 
 	}
 
-	void ViewportPanel::OnImGuiRender(EditorContext& context, const EditorCommandRegistry& commands)
+	EditorPanelWindowOptions ViewportPanel::GetWindowOptions(EditorPanelContext& context)
 	{
 		ImGuizmo::BeginFrame();
-		EditorViewport& viewport = context.GetViewport();
 
 		// ImGuizmo starts a drag only while no ImGui item is hovered or active, so over the gizmo (as of the last frame)
 		// the image is not an item; the window then must not move with the mouse either (when it floats).
-		const bool overGizmo = ImGuizmo::IsOver();
-		ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
-		if (overGizmo)
-			windowFlags |= ImGuiWindowFlags_NoMove;
+		m_OverGizmo = ImGuizmo::IsOver();
+		EditorPanelWindowOptions options;
+		options.NoPadding = true;
+		options.Flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+		if (m_OverGizmo)
+			options.Flags |= ImGuiWindowFlags_NoMove;
 		// While the game has the input, arrows, Space and Enter belong to it, not to keyboard navigation of the toolbar.
-		if (context.IsGameInputActive())
-			windowFlags |= ImGuiWindowFlags_NoNavInputs;
-		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-		const bool visible = ImGui::Begin("Viewport", nullptr, windowFlags);
-		ImGui::PopStyleVar();
-		if (!visible)
-		{
-			// Hidden behind another tab or collapsed: nothing is rendered and held interactions end.
-			Reset(context);
-			ImGui::End();
-			return;
-		}
+		if (context.Context.IsGameInputActive())
+			options.Flags |= ImGuiWindowFlags_NoNavInputs;
+		return options;
+	}
+
+	void ViewportPanel::OnImGuiRender(EditorPanelContext& panelContext)
+	{
+		EditorContext& context = panelContext.Context;
+		EditorViewport& viewport = context.GetViewport();
 		m_Focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
 
 		DrawToolbar(context);
@@ -124,17 +122,16 @@ namespace Strata
 		if (size.x == 0 || size.y == 0)
 		{
 			Reset(context);
-			ImGui::End();
 			return;
 		}
 
 		// Elsewhere an item covering the image takes the clicks, so dragging in the viewport never moves a floating window.
-		if (overGizmo)
+		if (m_OverGizmo)
 			ImGui::Dummy(available);
 		else
 			ImGui::InvisibleButton("SceneImage", available, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
 		m_Hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
-		AcceptAssetDrops(context, commands);
+		AcceptAssetDrops(context, panelContext.Commands);
 
 		const float aspectRatio = static_cast<float>(size.x) / static_cast<float>(size.y);
 		std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Automatic, aspectRatio);
@@ -183,7 +180,17 @@ namespace Strata
 				UpdateGizmo(context, *view);
 			DrawOverlays(context, *view);
 		}
-		ImGui::End();
+	}
+
+	void ViewportPanel::OnHidden(EditorPanelContext& context)
+	{
+		// Hidden behind another tab, collapsed or closed: nothing is rendered and held interactions end.
+		Reset(context.Context);
+	}
+
+	void ViewportPanel::OnDetach(EditorPanelContext& context)
+	{
+		Reset(context.Context);
 	}
 
 	void ViewportPanel::Reset(EditorContext& context)

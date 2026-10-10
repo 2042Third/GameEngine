@@ -200,18 +200,14 @@ namespace Strata
 		ImGui::EndPopup();
 	}
 
-	void ContentBrowserPanel::OnImGuiRender(EditorContext& context, const EditorCommandRegistry& commands)
+	void ContentBrowserPanel::OnImGuiRender(EditorPanelContext& panelContext)
 	{
-		if (!ImGui::Begin("Content Browser"))
-		{
-			ImGui::End();
-			return;
-		}
+		EditorContext& context = panelContext.Context;
+		const EditorCommandRegistry& commands = panelContext.Commands;
 		if (!context.GetAssetManager())
 		{
 			ImGui::TextDisabled("Open or create a project to manage its assets (File menu)");
 			m_RefreshRequested = true;
-			ImGui::End();
 			return;
 		}
 
@@ -298,7 +294,6 @@ namespace Strata
 				OpenScene(context, commands, openScene);
 		}
 		ImGui::EndChild();
-		ImGui::End();
 	}
 
 }
