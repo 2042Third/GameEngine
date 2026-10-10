@@ -122,6 +122,7 @@ TEST_SUITE("GPU.SceneRenderer")
 		CHECK(GetPixelRGBA8(back, c_Size / 2, c_Size / 2) == glm::u8vec4(0, 0, 0, 255));
 
 		quad.GetComponent<MeshRendererComponent>().Material = doubleSided;
+		quad.MarkModified<MeshRendererComponent>();
 		const ReadbackImage backDoubleSided = RenderToImage(renderer, scene, LookAt(glm::vec3(0.0f, 0.0f, -2.0f), glm::vec3(0.0f)));
 		CHECK(GetPixelRGBA8(backDoubleSided, c_Size / 2, c_Size / 2) == glm::u8vec4(0, 255, 0, 255));
 		CHECK(gpu.GetNewErrorCount() == 0);
@@ -235,7 +236,7 @@ TEST_SUITE("GPU.SceneRenderer")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("Identical meshes with the same material are drawn with one instanced draw call")
+	TEST_CASE("Instances of a mesh are drawn with one instanced draw call, whatever their materials")
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
@@ -267,10 +268,25 @@ TEST_SUITE("GPU.SceneRenderer")
 			CHECK(renderer.GetEntityAt(scene, pixel.x, pixel.y) == cubes[index]);
 		}
 
-		// A different material splits the batch.
+		// A different material joins the batch: shaders read the material of each instance.
 		cubes[4].GetComponent<MeshRendererComponent>().Material = green;
-		renderer.Render(scene, camera);
-		CHECK(renderer.GetStats().DrawCalls == 2);
+		cubes[4].MarkModified<MeshRendererComponent>();
+		const ReadbackImage mixed = RenderToImage(renderer, scene, camera);
+		CHECK(renderer.GetStats().DrawCalls == 1);
+		CHECK(renderer.GetStats().Instances == 5);
+		for (size_t index = 0; index < cubes.size(); index++)
+		{
+			const glm::uvec2 pixel = ProjectToPixel(camera, glm::vec3(static_cast<float>(index) * 1.5f - 3.0f, 0.0f, 0.4f), c_Size);
+			CHECK(GetPixelRGBA8(mixed, pixel.x, pixel.y) == (index == 4 ? glm::u8vec4(0, 255, 0, 255) : glm::u8vec4(255, 0, 0, 255)));
+		}
+
+		// Split by material on request, with the same image.
+		SceneRendererSpecification specification;
+		specification.BatchAcrossMaterials = false;
+		SceneRenderer split(specification);
+		split.SetViewportSize(c_Size, c_Size);
+		CHECK(MaxDifference(RenderToImage(split, scene, camera), mixed) == 0);
+		CHECK(split.GetStats().DrawCalls == 2);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
@@ -461,6 +477,7 @@ TEST_SUITE("GPU.SceneRenderer")
 		wall.GetComponent<TransformComponent>().Scale = glm::vec3(0.5f);
 		wall.MarkModified<TransformComponent>();
 		wall.GetComponent<MeshRendererComponent>().Material = broken;
+		wall.MarkModified<MeshRendererComponent>();
 		AddMesh(scene, BuiltinAssets::QuadMesh, assets.AddMaterial(Emitting(0.5f)), glm::vec3(0.0f, 0.0f, -0.5f), "Background")
 			.GetComponent<TransformComponent>().Scale = glm::vec3(20.0f);
 		postProcess.Tonemapper = TonemapOperator::ACES;
@@ -633,6 +650,7 @@ TEST_SUITE("GPU.SceneRenderer")
 		auto renderCenter = [&](const MaterialProperties& properties)
 		{
 			quad.GetComponent<MeshRendererComponent>().Material = assets.AddMaterial(properties);
+			quad.MarkModified<MeshRendererComponent>();
 			return GetPixelRGBA8(RenderToImage(renderer, scene, camera), c_Size / 2, c_Size / 2);
 		};
 

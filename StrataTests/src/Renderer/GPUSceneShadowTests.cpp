@@ -69,9 +69,11 @@ TEST_SUITE("GPU.SceneRenderer.Shadows")
 
 		// Meshes that do not cast shadows, and lights without shadows, leave the floor lit.
 		shadowScene.Cube.GetComponent<MeshRendererComponent>().CastShadows = false;
+		shadowScene.Cube.MarkModified<MeshRendererComponent>();
 		const auto [noCaster, litNoCaster] = render();
 		CHECK(noCaster == litNoCaster);
 		shadowScene.Cube.GetComponent<MeshRendererComponent>().CastShadows = true;
+		shadowScene.Cube.MarkModified<MeshRendererComponent>();
 		shadowScene.Sun.GetComponent<DirectionalLightComponent>().CastShadows = false;
 		const auto [noShadows, litNoShadows] = render();
 		CHECK(noShadows == litNoShadows);

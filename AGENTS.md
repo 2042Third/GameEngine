@@ -328,14 +328,18 @@ The threading model, frame loop and pipelines these rules protect are described 
   `TransformComponent` fields directly must signal the change**: `Entity::MarkModified<TransformComponent>()` or
   `registry.patch` (`ComponentAccess`, `Scene::SetWorldTransform`, the script API and `TransformEdit` do), or
   `Scene::MarkTransformChanged` where listeners must not hear an `on_update` (physics writing simulated poses back).
-  Writes to `NameComponent::Name` and `TagComponent::Tag` must signal the same way. Entities created since the last
-  `UpdateWorldTransforms` are recomputed anyway. Hierarchy changes go through `Scene` (`SetParent`, `SetSiblingIndex`,
-  `PlaceEntities`, `DestroyEntities`...); never edit `RelationshipComponent` or `HierarchyComponent` directly. Debug
-  builds assert after every `OnUpdateRuntime` and `OnUpdateEditor` that the caches match a full recomputation
-  (`Scene::ValidateWorldTransforms`, `ValidateHierarchy`); a "has inconsistent caches" assertion names the entity
-  whose write was not signaled. Read sibling positions with `Scene::GetSiblingIndex` (cached), never by searching the
-  child list, and remove many entities with one `DestroyEntities` call. A registry holds at most
-  `Scene::c_MaxEntities` (1,048,575) live entities; creating more fails with an error.
+  Writes to `NameComponent::Name` and `TagComponent::Tag` must signal the same way, and so must writes to
+  `MeshRendererComponent` fields (the renderer's proxies, `RenderScene`, and physics' mesh colliders follow the
+  component's `on_update`). Entities created since the last `UpdateWorldTransforms` (or the last frame rendered) are
+  read anyway, so values written right after `AddComponent` need no signal. Hierarchy changes go through `Scene`
+  (`SetParent`, `SetSiblingIndex`, `PlaceEntities`, `DestroyEntities`...); never edit `RelationshipComponent` or
+  `HierarchyComponent` directly. Debug builds assert after every `OnUpdateRuntime` and `OnUpdateEditor` that the caches
+  match a full recomputation (`Scene::ValidateWorldTransforms`, `ValidateHierarchy`); a "has inconsistent caches"
+  assertion names the entity whose write was not signaled. They also compare the render proxies with the scene after
+  every `RenderScene::Sync` ("The render proxies of scene ... differ"). Read sibling positions with
+  `Scene::GetSiblingIndex` (cached), never by searching the child list, and remove many entities with one
+  `DestroyEntities` call. A registry holds at most `Scene::c_MaxEntities` (1,048,575) live entities; creating more
+  fails with an error.
 
 ## Asset pipeline
 
@@ -805,6 +809,21 @@ and `AudioSystem`, the built-in "Audio" scene system.
   point and spot intensity like luminous intensity with inverse-square falloff (cut off at `Range`).
   Automatic exposure maps the average luminance of the non-black pixels to middle gray; tests that
   compare exact colors disable it (see `AddNeutralPostProcess` in `SceneRendererTestUtils.h`).
+- **Render scene** (Docs/Architecture.md, "Render scene"): what a frame draws comes from the scene's `RenderScene`, one
+  per scene (in its registry's context, shared by every renderer of it): render proxies of the mesh renderers, updated
+  only where components were signaled or transforms changed, in a `SpatialIndex` (loose grid) that the view frustum,
+  the prefetch sphere and the shadow cascades query. Only meshes and materials of proxies in view are requested (High
+  above 5% of the viewport height, Normal below), those within `SceneRendererSpecification::PrefetchDistance` at Low;
+  each asset is looked up once per frame (`AssetResolveCache`), and nothing is held past the next frame, so what leaves
+  the view becomes evictable. Never resolve assets per entity in renderer code: go through the proxies and the cache.
+- Batching is material-free: instances of a mesh, submesh and level of detail with the same pipeline state share one
+  draw whatever their materials (shaders read `u_Materials[instance.MaterialIndex]`); transparent surfaces are drawn
+  one by one, back to front. Draws are gathered in parallel chunks merged in chunk order (results do not depend on
+  the threads) and sorted with `RadixSort` (`Core/RadixSort.h`). `RenderData::InstanceData` (64 bytes: a 3x4 world
+  matrix, the material slot, the entity ID, flags) persists in a buffer indexed through the frame's draw list
+  (`u_DrawList[gl_InstanceIndex]`); only changed instances, materials and draw list ranges are uploaded, so a still
+  frame uploads nothing (`SceneRendererStats::InstanceBytesUploaded`, `ProxyUpdates`). Shaders derive the normal
+  matrix from the 3x4 rows (`TransformNormal` in `Include/Scene.glsl`).
 - Point and spot lights are frustum culled on the CPU, ranked by relevance (projected size of their
   range) and capped at `MaxLights`; `Scene/LightClusters.comp` then lists the lights reaching each
   cluster of a 16x9x24 froxel grid (exponential depth slices) and `Forward.frag` loops only over its
