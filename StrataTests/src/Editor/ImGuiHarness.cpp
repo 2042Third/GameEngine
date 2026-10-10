@@ -1,5 +1,8 @@
 #include "Editor/ImGuiHarness.h"
 
+#include "UI/EditorFonts.h"
+#include "UI/Theme.h"
+
 #include <Strata/Core/Layer.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Events/Event.h>
@@ -24,7 +27,9 @@ namespace Strata::Tests
 		io.DisplaySize = specification.DisplaySize;
 		io.DeltaTime = c_DeltaTime;
 
+		m_FontsLoaded = UI::EditorFonts::Load();
 		m_ImGuiLayer.SetContentScale(specification.ContentScale);
+		m_ImGuiLayer.SetStyleCallback(UI::ApplyTheme);
 	}
 
 	ImGuiHarness::~ImGuiHarness()

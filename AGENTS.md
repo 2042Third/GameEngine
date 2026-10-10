@@ -711,3 +711,8 @@ All dependencies are pinned shallow submodules in `Strata/vendor/`, wrapped by
 `Strata/vendor/CMakeLists.txt` (vendor code builds with warnings disabled and is consumed as SYSTEM
 includes). To upgrade: check out the new tag in the submodule, rebuild, run all tests, update
 `ThirdPartyNotices.md`, commit the submodule bump separately.
+
+The editor's fonts are not submodules: the release files of Inter, JetBrains Mono and Lucide (with Lucide's codepoint
+map) and their licenses are committed in `StrataEditor/Resources/Fonts/` and compiled in (`strata_embed_file`). To
+upgrade one, replace its files with those of the new release, update `ThirdPartyNotices.md` and, for Lucide, run
+`StrataEditor/Tools/GenerateIconHeader.py --version <release>` and commit the regenerated `UI/Icons.h` with it.

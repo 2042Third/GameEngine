@@ -31,8 +31,8 @@ configure_file("${CMAKE_CURRENT_SOURCE_DIR}/src/Editor/ScriptBuildConfig.h.in" "
 target_include_directories(StrataEditorCore PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/Generated")
 target_compile_definitions(StrataEditorCore PRIVATE "ST_SCRIPT_BUILD_CONFIGURATION=\"$<CONFIG>\"")
 
-# StrataEditorUI is the ImGui interface on top of the core: EditorLayer and the panels. It is a library so the tests can
-# draw it without a window or a GPU (StrataTests' ImGuiHarness).
+# StrataEditorUI is the ImGui interface on top of the core: EditorLayer, the panels, the widget kit, the Bedrock theme and
+# the editor's fonts. It is a library so the tests can draw it without a window or a GPU (StrataTests' ImGuiHarness).
 file(GLOB_RECURSE STRATA_EDITOR_UI_SOURCES CONFIGURE_DEPENDS
 	"${CMAKE_CURRENT_SOURCE_DIR}/src/UI/*.h"
 	"${CMAKE_CURRENT_SOURCE_DIR}/src/UI/*.cpp"
@@ -48,6 +48,14 @@ strata_configure_target(StrataEditorUI)
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${STRATA_EDITOR_UI_SOURCES})
 target_link_libraries(StrataEditorUI PUBLIC StrataEditorCore PRIVATE nfd)
 
+# The editor's typefaces are compiled in (UI/EditorFonts.cpp), so the editor reads no font files. Licenses and versions:
+# ThirdPartyNotices.md. UI/Icons.h is generated from the icon font's codepoint map by Tools/GenerateIconHeader.py.
+set(STRATA_EDITOR_FONTS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Resources/Fonts")
+strata_embed_file(StrataEditorUI "${STRATA_EDITOR_FONTS_DIR}/Inter-Regular.ttf" GetInterRegularFont)
+strata_embed_file(StrataEditorUI "${STRATA_EDITOR_FONTS_DIR}/Inter-SemiBold.ttf" GetInterSemiBoldFont)
+strata_embed_file(StrataEditorUI "${STRATA_EDITOR_FONTS_DIR}/JetBrainsMono-Regular.ttf" GetJetBrainsMonoFont)
+strata_embed_file(StrataEditorUI "${STRATA_EDITOR_FONTS_DIR}/Lucide.ttf" GetLucideFont)
+
 set(STRATA_EDITOR_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/EditorApplication.cpp")
 add_executable(StrataEditor ${STRATA_EDITOR_SOURCES})
 strata_configure_target(StrataEditor)
@@ -60,7 +68,3 @@ endif()
 
 set_target_properties(StrataEditor PROPERTIES
 	VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
-
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Resources")
-	strata_copy_runtime_resources(StrataEditor "${CMAKE_CURRENT_SOURCE_DIR}/Resources" "Resources")
-endif()

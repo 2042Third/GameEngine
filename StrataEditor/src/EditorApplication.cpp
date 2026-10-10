@@ -4,6 +4,12 @@
 
 #include "EditorHost.h"
 #include "EditorLayer.h"
+#include "UI/EditorFonts.h"
+#include "UI/Theme.h"
+
+#include <nlohmann/json.hpp>
+
+#include <cmath>
 
 namespace Strata
 {
@@ -70,9 +76,19 @@ namespace Strata
 		EditorApplication(const ApplicationSpecification& specification, const EditorOptions& options)
 			: Application(specification)
 		{
+			if (!IsRunning())
+				return;
+			// The editor's look: the Bedrock theme at the UI scale, and its own fonts (ImGui's built-in font is never used).
+			if (ImGuiLayer* imgui = GetImGuiLayer(); imgui && imgui->IsInitialized())
+			{
+				if (options.UIScale)
+					imgui->SetContentScaleOverride(*options.UIScale);
+				imgui->SetStyleCallback(UI::ApplyTheme);
+				if (!UI::EditorFonts::Load())
+					ST_ERROR("The editor's fonts are unavailable; the UI uses ImGui's default font");
+			}
 			// The layer owns its host; the application outlives its layers.
-			if (IsRunning())
-				PushLayer(new EditorLayer(options, CreateScope<ApplicationEditorHost>(*this)));
+			PushLayer(new EditorLayer(options, CreateScope<ApplicationEditorHost>(*this)));
 		}
 	};
 
@@ -118,6 +134,20 @@ namespace Strata
 				return nullptr;
 			}
 			options.IdleTimeout = std::chrono::seconds(*seconds);
+		}
+		// A fixed UI scale instead of the display's (e.g. 1 to check the UI at 100% on a 150% display).
+		if (commandLine.HasFlag("--ui-scale"))
+		{
+			// Parsed as a JSON number: independent of the C locale, unlike strtof.
+			const std::optional<std::string> value = commandLine.GetOption("--ui-scale");
+			const nlohmann::json parsed = value ? nlohmann::json::parse(*value, nullptr, false) : nlohmann::json();
+			const double scale = parsed.is_number() ? parsed.get<double>() : 0.0;
+			if (!std::isfinite(scale) || scale < ImGuiLayer::c_MinScale || scale > ImGuiLayer::c_MaxScale)
+			{
+				ST_ERROR("--ui-scale expects a factor from {} to {} (1 is 100%)", ImGuiLayer::c_MinScale, ImGuiLayer::c_MaxScale);
+				return nullptr;
+			}
+			options.UIScale = static_cast<float>(scale);
 		}
 
 		ApplicationSpecification specification;

@@ -71,7 +71,8 @@ namespace Strata::Tests
 	};
 
 	// Draws ImGui without a window or a GPU, for tests of the editor's UI (EditorLayer, panels, widgets):
-	// - an ImGui context styled for a content scale by an unattached engine ImGuiLayer, as in the editor;
+	// - an ImGui context with the editor's fonts (UI::EditorFonts) and theme, styled for a content scale by an unattached
+	//   engine ImGuiLayer, as in the editor;
 	// - frames run NewFrame, the drawing and Render; ImGui's texture requests (the font atlas) are honored without a
 	//   renderer, marking each texture ready with a dummy id;
 	// - mouse and keyboard input is injected through ImGui's input queue and applies at the next frame.
@@ -95,7 +96,8 @@ namespace Strata::Tests
 		ImGuiHarness(const ImGuiHarness&) = delete;
 		ImGuiHarness& operator=(const ImGuiHarness&) = delete;
 
-		// Styles this context; it is not attached, so it has no platform or renderer backend.
+		bool AreFontsLoaded() const { return m_FontsLoaded; }
+		// Styles this context (Bedrock theme); it is not attached, so it has no platform or renderer backend.
 		ImGuiLayer& GetImGuiLayer() { return m_ImGuiLayer; }
 
 		// One frame: the drawing runs between NewFrame and Render; then the frame's texture requests are honored.
@@ -123,6 +125,7 @@ namespace Strata::Tests
 	private:
 		ImGuiContext* m_Context = nullptr;
 		ImGuiLayer m_ImGuiLayer;
+		bool m_FontsLoaded = false;
 		uint32_t m_TextureRequests = 0;
 	};
 

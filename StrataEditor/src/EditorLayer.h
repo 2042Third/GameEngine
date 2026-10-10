@@ -33,6 +33,8 @@ namespace Strata
 		bool QuitAfterCommands = false; // Close the editor once the command script finished (e.g. after a script build)
 		bool ShowImGuiDemo = false;
 		bool Headless = false; // No UI: the editor runs for automation only
+		// A fixed UI scale (--ui-scale) instead of the window's content scale (DPI); unset follows the window.
+		std::optional<float> UIScale;
 		// Serve the commands to tools and AI agents (EditorAutomation) on loopback, published through a session file.
 		bool EnableAutomation = true;
 		uint16_t AutomationPort = 0; // 0 picks a free port

@@ -4,6 +4,9 @@
 #include "EditorLayer.h"
 #include "FeatureTest/FeatureTestUtils.h"
 #include "TestHelpers.h"
+#include "UI/EditorFonts.h"
+#include "UI/Icons.h"
+#include "UI/Theme.h"
 
 #include <Strata/Events/ApplicationEvent.h>
 
@@ -78,6 +81,58 @@ namespace
 
 TEST_SUITE("Editor.UI")
 {
+	TEST_CASE("The editor's fonts: Inter by default, SemiBold and Mono, with every icon")
+	{
+		ImGuiHarness harness;
+		REQUIRE(harness.AreFontsLoaded());
+		const ImGuiIO& io = ImGui::GetIO();
+		ImFont* regular = UI::EditorFonts::Get(UI::EditorFont::Regular);
+		ImFont* semiBold = UI::EditorFonts::Get(UI::EditorFont::SemiBold);
+		ImFont* mono = UI::EditorFonts::Get(UI::EditorFont::Mono);
+		REQUIRE(regular);
+		REQUIRE(semiBold);
+		REQUIRE(mono);
+		CHECK(io.FontDefault == regular);
+		CHECK(std::string_view(regular->GetDebugName()) == "Inter Regular");
+		CHECK(std::string_view(semiBold->GetDebugName()) == "Inter SemiBold");
+		CHECK(std::string_view(mono->GetDebugName()) == "JetBrains Mono");
+		// Exactly the editor's fonts: ImGui's built-in one (AddFontDefault) is never added.
+		REQUIRE(io.Fonts->Fonts.Size == 3);
+		for (const ImFont* font : io.Fonts->Fonts)
+			CHECK(std::string_view(font->GetDebugName()).find("Proggy") == std::string_view::npos);
+
+		harness.Frame([&]()
+		{
+			// A frame draws with Inter at the body size.
+			CHECK(ImGui::GetFont() == regular);
+			CHECK(ImGui::GetFontSize() == doctest::Approx(UI::GetTextSize(UI::TextSize::Body)));
+			UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Display);
+			CHECK(ImGui::GetFont() == mono);
+			CHECK(ImGui::GetFontSize() == doctest::Approx(UI::GetTextSize(UI::TextSize::Display)));
+			ImGui::PopFont();
+
+			// Every icon of UI/Icons.h has a glyph in the UI fonts (the icon font is merged into them), also in the text
+			// fonts' own sizes.
+			ImFontBaked* body = regular->GetFontBaked(UI::GetTextSize(UI::TextSize::Body));
+			ImFontBaked* header = semiBold->GetFontBaked(UI::GetTextSize(UI::TextSize::Title));
+			int missing = 0;
+			for (const Icons::IconGlyph& icon : Icons::c_All)
+			{
+				if (!body->FindGlyphNoFallback(static_cast<ImWchar>(icon.Codepoint)) || !header->FindGlyphNoFallback(static_cast<ImWchar>(icon.Codepoint)))
+				{
+					if (missing++ < 5)
+						FAIL_CHECK("No glyph for the icon " << icon.Name);
+				}
+			}
+			CHECK(missing == 0);
+			CHECK(Icons::c_All.size() > 1000);
+			// Text glyphs come from Inter, not from the icon font.
+			CHECK(body->FindGlyphNoFallback('A'));
+			CHECK_FALSE(mono->GetFontBaked(UI::GetTextSize(UI::TextSize::Body))->FindGlyphNoFallback(static_cast<ImWchar>(Icons::c_FirstCodepoint)));
+		});
+		CHECK(harness.GetTextureRequestCount() > 0);
+	}
+
 	TEST_CASE("The editor draws its UI headless with the feature project, without id conflicts")
 	{
 		HarnessEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f }, WithFeatureProject("EditorUIFeature"));
@@ -127,11 +182,15 @@ TEST_SUITE("Editor.UI")
 		CHECK(after.FramePadding.y == before.FramePadding.y * 2.0f);
 		CHECK(after.ItemSpacing.x == before.ItemSpacing.x * 2.0f);
 		CHECK(after.ItemSpacing.y == before.ItemSpacing.y * 2.0f);
+		CHECK(after.IndentSpacing == before.IndentSpacing * 2.0f);
+		CHECK(after.ScrollbarSize == before.ScrollbarSize * 2.0f);
+		// Still the theme, not ImGui's style.
+		CHECK(after.Colors[ImGuiCol_CheckMark].x == UI::GetThemeColors().Accent.x);
 
 		editor.Frames(1);
 		editor.Harness.Frame([]()
 		{
-			CHECK(ImGui::GetFontSize() == doctest::Approx(ImGui::GetStyle().FontSizeBase * 2.0f));
+			CHECK(ImGui::GetFontSize() == doctest::Approx(UI::GetTextSize(UI::TextSize::Body) * 2.0f));
 		});
 	}
 
