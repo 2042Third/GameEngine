@@ -43,6 +43,8 @@ namespace Strata
 			EditorContextSpecification specification;
 			specification.WatchAssetFiles = options.WatchFiles;
 			specification.HotReloadScripts = options.WatchFiles;
+			if (options.ScriptBuild)
+				specification.ScriptBuild = *options.ScriptBuild;
 			return specification;
 		}
 
@@ -170,6 +172,7 @@ namespace Strata
 			return;
 
 		ST_ERROR("Automation is unavailable: {}", error);
+		m_AutomationError = std::move(error);
 		// Nothing could reach a headless editor that runs until it is told to quit.
 		if (m_Options.Headless && !m_Options.MaxFrames)
 		{
@@ -908,48 +911,10 @@ namespace Strata
 			UI::Pill("Status.Assets", Icons::Package, text, stats.FailedAssets > 0 ? colors.Error : colors.TextSecondary, tooltip.c_str());
 		}
 
-		// Automation.
 		ImGui::SameLine();
-		if (m_Automation.IsRunning())
-		{
-			const uint32_t clients = m_Automation.GetClientCount();
-			const std::string text = fmt::format("port {}{}{} {}", m_Automation.GetPort(), c_Separator, clients, clients == 1 ? "client" : "clients");
-			const std::string tooltip = fmt::format("Tools and AI agents control this editor through StrataCLI (or its MCP server, StrataCLI mcp), which "
-				"finds it through its session file.\n{} pending requests, {} answered", m_Automation.GetPendingRequestCount(), m_Automation.GetCompletedRequestCount());
-			UI::Pill("Status.Automation", Icons::Bot, text, clients > 0 ? colors.Info : colors.TextSecondary, tooltip.c_str());
-		}
-		else
-		{
-			UI::Pill("Status.Automation", Icons::Bot, "Automation off", colors.TextDisabled, "Started with --no-automation: tools cannot control this editor");
-		}
-
-		// Scripts.
-		const ScriptBuilder& builder = m_Context.GetScriptBuilder();
-		const Ref<ScriptEngine>& engine = m_Context.GetScriptEngine();
+		bool showConsole = DrawAutomationPill();
 		ImGui::SameLine();
-		bool showConsole = false;
-		if (builder.IsRunning())
-		{
-			UI::Pill("Status.Scripts", Icons::LoaderCircle, fmt::format("Building {:.0f} s", builder.GetElapsedSeconds()), colors.Info,
-				"The project's scripts are being built (the output goes to the Console)");
-		}
-		else if (engine && engine->IsFaulted())
-		{
-			showConsole = UI::Pill("Status.Scripts", Icons::CircleAlert, "Scripts crashed", colors.Error, "The scripts crashed: rebuild or reload them (see the Console)");
-		}
-		else if (builder.GetLastResult().ID != 0 && !builder.GetLastResult().Success)
-		{
-			showConsole = UI::Pill("Status.Scripts", Icons::CircleAlert, "Build failed", colors.Error, "The last script build failed (see the Console)");
-		}
-		else if (engine && engine->IsModuleLoaded())
-		{
-			const std::string text = fmt::format("{}{}{} classes", engine->GetModuleName(), c_Separator, engine->GetClasses().size());
-			UI::Pill("Status.Scripts", Icons::FileCode, text, colors.TextSecondary, "The loaded script module");
-		}
-		else
-		{
-			UI::Pill("Status.Scripts", Icons::FileCode, "No scripts", colors.TextDisabled, "No script module is loaded (Scripts > Build Scripts)");
-		}
+		showConsole |= DrawScriptsPill();
 
 		// Keys a tool holds stay down after it disconnects: show them, with a way out that does not need the tool.
 		if (const SimulatedInput& simulated = m_Context.GetSimulatedInput(); simulated.HasHolds())
@@ -973,6 +938,78 @@ namespace Strata
 		}
 		if (showConsole)
 			m_Panels.Focus(EditorPanels::c_Console);
+	}
+
+	bool EditorLayer::DrawAutomationPill()
+	{
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		if (m_Automation.IsRunning())
+		{
+			const uint32_t clients = m_Automation.GetClientCount();
+			const std::string text = fmt::format("port {}{}{} {}", m_Automation.GetPort(), c_Separator, clients, clients == 1 ? "client" : "clients");
+			const std::string tooltip = fmt::format("Tools and AI agents control this editor through StrataCLI (or its MCP server, StrataCLI mcp), which "
+				"finds it through its session file.\n{} pending requests, {} answered", m_Automation.GetPendingRequestCount(), m_Automation.GetCompletedRequestCount());
+			UI::Pill("Status.Automation", Icons::Bot, text, clients > 0 ? colors.Info : colors.TextSecondary, tooltip.c_str());
+			return false;
+		}
+		if (!m_Options.EnableAutomation)
+		{
+			UI::Pill("Status.Automation", Icons::Bot, "Automation off", colors.TextSecondary, "Started with --no-automation: tools cannot control this editor");
+			return false;
+		}
+		// Asked for, but it could not start (a taken --automation-port, a session file that cannot be written).
+		const std::string tooltip = fmt::format("Automation could not start, so tools cannot control this editor: {}\nClick to open the Console.",
+			m_AutomationError.empty() ? std::string("see the Console") : m_AutomationError);
+		return UI::Pill("Status.Automation", Icons::Bot, "Automation failed", colors.Error, tooltip.c_str());
+	}
+
+	bool EditorLayer::DrawScriptsPill()
+	{
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		const ScriptBuilder& builder = m_Context.GetScriptBuilder();
+		const Ref<ScriptEngine>& engine = m_Context.GetScriptEngine();
+		if (builder.IsRunning())
+		{
+			UI::Pill("Status.Scripts", Icons::LoaderCircle, fmt::format("Building {:.0f} s", builder.GetElapsedSeconds()), colors.Info,
+				"The project's scripts are being built (the output goes to the Console)");
+			return false;
+		}
+		if (engine && engine->IsFaulted())
+			return UI::Pill("Status.Scripts", Icons::CircleAlert, "Scripts crashed", colors.Error, "The scripts crashed: rebuild or reload them (see the Console)");
+		if (builder.GetLastResult().ID != 0 && !builder.GetLastResult().Success)
+			return UI::Pill("Status.Scripts", Icons::CircleAlert, "Build failed", colors.Error, "The last script build failed (see the Console)");
+		if (engine && engine->IsModuleLoaded())
+		{
+			const std::string text = fmt::format("{}{}{} classes", engine->GetModuleName(), c_Separator, engine->GetClasses().size());
+			UI::Pill("Status.Scripts", Icons::FileCode, text, colors.TextSecondary, "The loaded script module");
+			return false;
+		}
+		// The project has scripts but no module runs them: never built here (e.g. a fresh copy of a sample), or built by
+		// another engine version and refused.
+		if (HasScriptBuild())
+		{
+			if (UI::Pill("Status.Scripts", Icons::Hammer, "Scripts not built", colors.Warning,
+				"The project has scripts, but no script module is loaded: they are not built yet, or their module could not be loaded "
+				"(see the Console). Click to build them (Ctrl+B)."))
+			{
+				BuildScripts();
+			}
+			return false;
+		}
+		UI::Pill("Status.Scripts", Icons::FileCode, "No scripts", colors.TextSecondary,
+			m_Context.HasProject() ? "The project has no scripts (Scripts > Create Script Build adds them)" : "No project is open");
+		return false;
+	}
+
+	bool EditorLayer::HasScriptBuild()
+	{
+		const double now = m_Host->GetTime();
+		if (!m_ScriptBuildCheckTime || now - *m_ScriptBuildCheckTime >= c_ScriptBuildCheckSeconds || now < *m_ScriptBuildCheckTime)
+		{
+			m_HasScriptBuild = m_Context.HasScriptBuild();
+			m_ScriptBuildCheckTime = now;
+		}
+		return m_HasScriptBuild;
 	}
 
 	void EditorLayer::DrawUnsavedChangesModal()

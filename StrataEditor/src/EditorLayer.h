@@ -42,6 +42,9 @@ namespace Strata
 		// Watch the project's assets and script module for changes made outside the editor (hot reload). UI tests turn it off:
 		// they need no watcher threads.
 		bool WatchFiles = true;
+		// The toolchain script builds use instead of the engine's (EditorContextSpecification::ScriptBuild); UI tests build
+		// with a stand-in for CMake.
+		std::optional<ScriptBuildSettings> ScriptBuild;
 	};
 
 	// Built-in panel ids (EditorPanelRegistry).
@@ -98,6 +101,8 @@ namespace Strata
 		// c_FrameWorkSamples frames.
 		const EditorFrameStats& GetFrameStats() const { return m_FrameStats; }
 		static constexpr size_t c_FrameWorkSamples = 60;
+		// How often the status bar looks for a script build to offer while no script module is loaded.
+		static constexpr double c_ScriptBuildCheckSeconds = 1.0;
 	private:
 		void StartAutomation();
 		void RegisterBuiltinPanels();
@@ -110,6 +115,9 @@ namespace Strata
 		void DrawPlayControls();
 		void DrawBuildControls();
 		void DrawStatusBar();
+		// The status bar's pills of automation and scripts; true when the pill was clicked to show the Console.
+		bool DrawAutomationPill();
+		bool DrawScriptsPill();
 		void DrawUnsavedChangesModal();
 		void HandleShortcuts();
 		void UpdateWindowTitle();
@@ -122,6 +130,9 @@ namespace Strata
 		bool IsBusy(double now) const;
 		// Fills m_FrameStats for this frame's status bar and panels.
 		void UpdateFrameStats();
+		// Whether the open project has a script build (EditorContext::HasScriptBuild), looked up at most once per
+		// c_ScriptBuildCheckSeconds.
+		bool HasScriptBuild();
 
 		// Runs an action that replaces the edited scene, asking first whether unsaved changes should be saved.
 		void RequestDiscardChanges(std::function<void()> action);
@@ -153,6 +164,9 @@ namespace Strata
 		bool m_LayoutChecked = false;
 		bool m_UIDrawn = false; // OnImGuiRender ran at least once
 		std::string m_WindowTitle;
+		std::string m_AutomationError; // Why automation did not start (when it was asked for)
+		bool m_HasScriptBuild = false;
+		std::optional<double> m_ScriptBuildCheckTime;
 
 		// Idle throttling.
 		double m_LastInputTime = 0.0;

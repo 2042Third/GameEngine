@@ -14,6 +14,7 @@
 #include "UI/Theme.h"
 #include "UI/Widgets.h"
 
+#include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Events/ApplicationEvent.h>
@@ -22,10 +23,13 @@
 #include <imgui_internal.h>
 #include <nlohmann/json.hpp>
 
+#include <chrono>
 #include <cmath>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 
 using namespace Strata;
 using namespace Strata::Tests;
@@ -33,7 +37,8 @@ using namespace Strata::Tests;
 namespace
 {
 
-	// An EditorLayer drawn by an ImGuiHarness through a fake host: no automation, no file watchers, no native dialogs.
+	// An EditorLayer drawn by an ImGuiHarness through a fake host: no file watchers, no native dialogs, and no automation
+	// unless asked for. The log starts empty, as in a new editor process (the Console reads the log from its start).
 	struct HarnessEditor
 	{
 		Ref<FakeEditorHost::State> Host = CreateRef<FakeEditorHost::State>();
@@ -41,12 +46,14 @@ namespace
 		Scope<EditorLayer> Layer;
 
 		// iniSettings: imgui.ini contents loaded before the first frame (the editor's saved layout and panel states).
-		explicit HarnessEditor(const ImGuiHarness::Specification& specification = {}, EditorOptions options = {}, const std::string& iniSettings = {})
+		explicit HarnessEditor(const ImGuiHarness::Specification& specification = {}, EditorOptions options = {}, const std::string& iniSettings = {},
+			bool automation = false)
 			: Harness(specification)
 		{
-			options.EnableAutomation = false;
+			options.EnableAutomation = automation;
 			options.WatchFiles = false;
 			Host->UIScale = specification.ContentScale;
+			Log::GetBuffer().Clear();
 			Layer = CreateScope<EditorLayer>(options, CreateScope<FakeEditorHost>(Host));
 			Layer->OnAttach();
 			if (!iniSettings.empty())
@@ -80,6 +87,20 @@ namespace
 			return clicked;
 		}
 
+		// Runs frames (with a little sleep, for work on other threads) until the condition holds or ten seconds passed.
+		bool FramesUntil(const std::function<bool()>& condition)
+		{
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+			while (!condition())
+			{
+				if (std::chrono::steady_clock::now() > deadline)
+					return false;
+				Frames(1);
+				std::this_thread::sleep_for(std::chrono::milliseconds(2));
+			}
+			return true;
+		}
+
 		EditorContext& Context() { return Layer->GetContext(); }
 
 		nlohmann::json Run(std::string_view name, const nlohmann::json& parameters = nlohmann::json::object())
@@ -94,7 +115,28 @@ namespace
 		{
 			return ImGui::FindWindowByName(Layer->GetPanels().GetWindowName(id).c_str());
 		}
+
+		// The color a status pill was drawn in last.
+		ImU32 GetPillColor(std::string_view probeKey)
+		{
+			const std::optional<UI::ItemProbe::Item> pill = UI::ItemProbe::Find(probeKey);
+			REQUIRE_MESSAGE(pill.has_value(), "No ", std::string(probeKey), " in the last frame");
+			return pill->Color;
+		}
 	};
+
+	ImU32 ToColor(const ImVec4& color)
+	{
+		return UI::ToColorU32(color);
+	}
+
+	// Script builds that run the test executable as CMake (STRATA_TEST_FAKE_CMAKE=succeed): they build nothing.
+	ScriptBuildSettings MakeFakeScriptBuild()
+	{
+		ScriptBuildSettings settings = ScriptBuildSettings::GetEngineDefaults();
+		settings.CMake = GetTestExecutablePath();
+		return settings;
+	}
 
 	EditorOptions WithFeatureProject(const std::string& directoryName)
 	{
@@ -516,11 +558,123 @@ TEST_SUITE("Editor.UI")
 		CHECK(console->GetUnreadErrors() == 1);
 		REQUIRE(UI::ItemProbe::Find("Status.Errors").has_value());
 
+		// The Console appears, is read on the frame after (not on the one it appears in, see the next test), and the status
+		// bar, drawn before the panels, drops the pill in the frame after that.
 		REQUIRE(editor.Click("Status.Errors"));
-		editor.Frames(2);
+		editor.Frames(3);
 		CHECK(editor.Layer->GetPanels().IsOpen(EditorPanels::c_Console));
 		CHECK(console->GetUnreadErrors() == 0);
 		CHECK_FALSE(UI::ItemProbe::Find("Status.Errors").has_value());
+	}
+
+	TEST_CASE("Errors logged before the first frame reach the errors pill")
+	{
+		// A project that cannot be opened is reported while the editor starts, before the Console was ever drawn. Its
+		// window takes the focus on the frame it appears in, before its dock node shows the Content Browser's tab instead:
+		// that is no reading of the error.
+		EditorOptions options;
+		options.ProjectPath = CreateTemporaryDirectory("EditorUIStartupError") / "Missing";
+		HarnessEditor editor({}, options);
+		editor.Frames(3);
+		const ConsolePanel* console = editor.Layer->GetPanels().Get<ConsolePanel>(EditorPanels::c_Console);
+		REQUIRE(console);
+		CHECK(console->GetUnreadErrors() >= 1);
+		CHECK(editor.GetPillColor("Status.Errors") == ToColor(UI::GetThemeColors().Error));
+		ImGuiWindow* window = editor.FindPanelWindow(EditorPanels::c_Console);
+		REQUIRE(window);
+		CHECK(window->Hidden);
+
+		REQUIRE(editor.Click("Status.Errors"));
+		editor.Frames(3);
+		CHECK_FALSE(window->Hidden);
+		CHECK(console->GetUnreadErrors() == 0);
+		CHECK_FALSE(UI::ItemProbe::Find("Status.Errors").has_value());
+	}
+
+	TEST_CASE("The automation pill tells whether and why tools cannot control the editor")
+	{
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		{
+			// --no-automation: off, as asked.
+			HarnessEditor editor;
+			editor.Frames(2);
+			CHECK(editor.GetPillColor("Status.Automation") == ToColor(colors.TextSecondary));
+		}
+		{
+			// Asked for, but it cannot start: its session file cannot be written (the session directory would be inside a
+			// file). The pill is an error that leads to the Console.
+			const std::filesystem::path blocker = CreateTemporaryDirectory("EditorUIAutomationFailure") / "File";
+			REQUIRE(FileSystem::WriteText(blocker, "not a directory"));
+			ScopedEnvironmentVariable sessions("STRATA_SESSION_DIR", FileSystem::ToUTF8(blocker / "Sessions"));
+			HarnessEditor editor({}, {}, {}, true);
+			editor.Frames(2);
+			CHECK(editor.GetPillColor("Status.Automation") == ToColor(colors.Error));
+			editor.Layer->GetPanels().SetOpen(EditorPanels::c_Console, false);
+			editor.Frames(1);
+			REQUIRE(editor.Click("Status.Automation"));
+			editor.Frames(2);
+			CHECK(editor.Layer->GetPanels().IsOpen(EditorPanels::c_Console));
+		}
+	}
+
+	TEST_CASE("The assets pill turns red when an asset fails to load")
+	{
+		EditorOptions options = WithFeatureProject("EditorUIFailedAsset");
+		// An image that is none: it fails to import, and so to load.
+		REQUIRE(FileSystem::WriteText(options.ProjectPath.parent_path() / "Assets" / "Textures" / "Broken.png", "not a PNG"));
+		HarnessEditor editor({}, options);
+		editor.Frames(2);
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		CHECK(editor.GetPillColor("Status.Assets") == ToColor(colors.TextSecondary));
+
+		EditorAssetManager* assets = editor.Context().GetAssetManager();
+		REQUIRE(assets);
+		AssetHandle broken = UUID::Null();
+		REQUIRE(editor.FramesUntil([&]()
+		{
+			broken = assets->FindAssetByPath("Textures/Broken.png");
+			if (!broken.IsValid())
+				return false;
+			assets->GetAsset(broken);
+			return assets->GetAssetState(broken) == AssetState::Failed;
+		}));
+		editor.Frames(1);
+		CHECK(editor.GetPillColor("Status.Assets") == ToColor(colors.Error));
+	}
+
+	TEST_CASE("The scripts pill offers to build scripts that are not built, and script builds keep the full frame rate")
+	{
+		// The test executable stands in for CMake (it builds nothing, see TestMain.cpp).
+		ScopedEnvironmentVariable fakeCMake("STRATA_TEST_FAKE_CMAKE", "succeed");
+		EditorOptions options = WithFeatureProject("EditorUIScripts");
+		options.ScriptBuild = MakeFakeScriptBuild();
+		// The test build builds the feature project's scripts; this copy gets a script build of its own.
+		const std::filesystem::path scripts = options.ProjectPath.parent_path() / "Scripts";
+		REQUIRE(FileSystem::CreateDirectories(scripts));
+		REQUIRE(FileSystem::WriteText(scripts / "CMakeLists.txt", "# Built by the stand-in for CMake\n"));
+		HarnessEditor editor({}, options);
+		editor.Frames(2);
+		CHECK(editor.GetPillColor("Status.Scripts") == ToColor(UI::GetThemeColors().Warning));
+
+		// Clicking the pill builds them, as does the toolbar's Build Scripts.
+		const ScriptBuilder& builder = editor.Context().GetScriptBuilder();
+		REQUIRE(editor.Click("Status.Scripts"));
+		REQUIRE(editor.FramesUntil([&builder]() { return !builder.IsRunning() && builder.GetLastResult().ID != 0; }));
+		const uint64_t firstBuild = builder.GetLastResult().ID;
+		REQUIRE(editor.Click("Toolbar.BuildScripts"));
+		REQUIRE(editor.FramesUntil([&builder, firstBuild]() { return !builder.IsRunning() && builder.GetLastResult().ID > firstBuild; }));
+
+		// A running build keeps the frame rate up, also without a command waiting for it.
+		editor.Frames(1, 1.0f);
+		REQUIRE(editor.Host->MaxFrameRate == EditorLayer::c_IdleFrameRate);
+		std::string error;
+		REQUIRE_MESSAGE(editor.Context().BuildScripts(&error), error);
+		editor.Frames(1, 1.0f);
+		CHECK(builder.IsRunning());
+		CHECK(editor.Host->MaxFrameRate == 0);
+		REQUIRE(editor.FramesUntil([&builder]() { return !builder.IsRunning(); }));
+		editor.Frames(1, 1.0f);
+		CHECK(editor.Host->MaxFrameRate == EditorLayer::c_IdleFrameRate);
 	}
 
 	TEST_CASE("The frame time is what frames take, not the interval of the idle frame rate")

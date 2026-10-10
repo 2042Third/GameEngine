@@ -535,7 +535,7 @@ namespace Strata
 			if (!LoadScriptModule(module, &error))
 				ST_WARN("The project's script module '{}' could not be loaded: {}", FileSystem::ToUTF8(module), error);
 		}
-		else if (!created && FileSystem::IsRegularFile(m_Project->GetScriptSourceDirectory() / "CMakeLists.txt"))
+		else if (!created && HasScriptBuild())
 		{
 			ST_WARN("The scripts of '{}' are not built yet; build them with script.build (Scripts > Build Scripts)", m_Project->GetConfig().Name);
 		}
@@ -659,6 +659,11 @@ namespace Strata
 		// linker writes it.
 		m_ScriptEngine->SetHotReloadEnabled(false);
 		return true;
+	}
+
+	bool EditorContext::HasScriptBuild() const
+	{
+		return m_Project && FileSystem::IsRegularFile(m_Project->GetScriptSourceDirectory() / "CMakeLists.txt");
 	}
 
 	void EditorContext::OnScriptBuildFinished()

@@ -209,7 +209,7 @@ namespace Strata::UI
 		AddText(drawList, ImVec2(iconX + iconSize.x + style.ItemInnerSpacing.x, textY), color, text);
 
 		ShowTooltip(tooltip);
-		ItemProbe::Record(id);
+		ItemProbe::Record(id, true, ToColorU32(color));
 		return pressed;
 	}
 

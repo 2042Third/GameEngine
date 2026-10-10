@@ -475,6 +475,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
     stats and `editor.status` (`editor.frameRate.frameMilliseconds`, with the measured rate) show is what frames take to
     run (`Application::GetLastFrameWorkTime`, without the wait of the frame rate cap; `EditorPanelContext::Frame` for
     panels), so an idle editor does not read as a slow one.
+  - Status pills say what is wrong and lead to it: errors (unread since the Console was last focused, not counting the
+    frame its window appears in), a failed automation start (`--no-automation` is shown as off), scripts that are not
+    built (click to build) or failed, assets that failed to load.
 - **Every change to the scene or project goes through a command** (`EditorCommandRegistry::Execute`) or,
   for continuous UI edits, through `SceneEditTransaction` / `SetPropertyWithUndo`. That keeps the UI,
   automation (AI agents) and tests identical, and makes every edit undoable.
