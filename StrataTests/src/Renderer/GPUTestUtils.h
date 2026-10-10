@@ -29,6 +29,12 @@ namespace Strata::Tests
 		// Validation errors reported since this context was created.
 		uint32_t GetNewErrorCount() const { return m_Device->GetErrorCount() - m_InitialErrorCount; }
 
+		// Executes a closed command list, waits for the GPU and recycles its command buffer the way the engine does after
+		// every frame (nvrhi::IDevice::runGarbageCollection): the buffer releases the resources it referenced and returns
+		// to the queue's pool. Without that, every later open() creates a new command pool and buffer, so tests that
+		// submit repeatedly (perf tests above all) go through this. False if the device was lost.
+		bool ExecuteAndWait(nvrhi::ICommandList* commandList);
+
 		// Destroys the shared device (end of the test run).
 		static void ShutdownShared();
 	private:

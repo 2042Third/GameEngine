@@ -56,6 +56,16 @@ namespace Strata::Tests
 		m_Device->GetDevice()->runGarbageCollection();
 	}
 
+	bool GPUContext::ExecuteAndWait(nvrhi::ICommandList* commandList)
+	{
+		nvrhi::IDevice* device = GetNvrhiDevice();
+		device->executeCommandList(commandList);
+		if (!device->waitForIdle())
+			return false;
+		device->runGarbageCollection();
+		return true;
+	}
+
 	void GPUContext::ShutdownShared()
 	{
 		SharedGPU& shared = GetSharedGPU();

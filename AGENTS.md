@@ -111,10 +111,12 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   **Budgets only go down:** a change that makes a metric cheaper lowers its entry in the same commit, a metric over
   budget is a regression to fix rather than a budget to raise, and commits that add or lower budgets state the
   measured values. Lower must be better (time per item, not items per second). GPU perf suites get the shared device
-  without validation layers (the CTest sets `STRATA_TEST_GPU_VALIDATION=0`; `PerfGPU.Harness` fails without it).
-  Complexity claims belong in ordinary unit tests with deterministic counters, which run everywhere. CI's hosted
-  runners skip the label `perf` because budgets hold for the reference machine only: run `-L perf` there before
-  merging a change that can affect performance.
+  without validation layers (the CTest sets `STRATA_TEST_GPU_VALIDATION=0`; `PerfGPU.Harness` fails without it)
+  and submit through `GPUContext::ExecuteAndWait`, which recycles the command buffer like the engine does every frame
+  (a plain `executeCommandList` + `waitForIdle` makes every later `open()` create a command pool). Complexity claims
+  belong in ordinary unit tests with deterministic counters, which run everywhere. CI's hosted runners skip the label
+  `perf` because budgets hold for the reference machine only: run `-L perf` there before merging a change that can
+  affect performance.
 - Suites whose names start with `EndToEnd` start the built `StrataEditor` and `StrataCLI` (paths in
   `STRATA_TEST_EDITOR_PATH`/`STRATA_TEST_CLI_PATH`, else next to the test executable) and run as the CTest
   `StrataEditor.Automation`, not in `StrataTests.Core`. They need no GPU (`--no-gpu`), use private session
