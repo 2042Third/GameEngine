@@ -706,7 +706,8 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   largest one, finalize no frame for more than 8 ms, show each camera stop complete within 60 frames at rest, fail no
   load and stay below 650 MB of private memory; `StrataTests/Perf/Budgets.json` then judges the peak private bytes of
   the best run (the graphics driver's commit charge varies from run to run), the largest resident texture memory of any
-  run and the finalization time of the median run.
+  run and the finalization time of the median run. `Perf.TextureCook` (`TextureCookPerfTests.cpp`) imports the same
+  project cold three times and checks the median import time, the stored size of every texture and the pack size.
   `GPU.Assets.Streaming` runs the same sweep on a small stress project under the validation layers.
 
 ## Scripting
