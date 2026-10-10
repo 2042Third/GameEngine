@@ -141,6 +141,7 @@ namespace Strata
 
 	void RegisterAssetPipeline()
 	{
+		AssetImporterRegistry::BeginRegistration();
 		AssetImporterRegistry::Register(CreateScope<NativeAssetImporter>(AssetType::Scene, GetNativeAssetExtension(AssetType::Scene)));
 		AssetImporterRegistry::Register(CreateScope<NativeAssetImporter>(AssetType::Prefab, GetNativeAssetExtension(AssetType::Prefab)));
 		AssetImporterRegistry::Register(CreateScope<NativeAssetImporter>(AssetType::Material, GetNativeAssetExtension(AssetType::Material)));

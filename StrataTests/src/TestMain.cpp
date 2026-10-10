@@ -4,6 +4,7 @@
 #include "Engine/ModuleRegistrationHelpers.h"
 #include "Network/FakeEditorProcess.h"
 #include "Renderer/GPUTestUtils.h"
+#include "Strata/Asset/AssetImporter.h"
 #include "Strata/Core/CrashGuard.h"
 #include "Strata/Core/FileLock.h"
 #include "Strata/Core/FileSystem.h"
@@ -619,8 +620,10 @@ int main(int argc, char** argv)
 			return *result;
 	}
 
-	// Like every program that uses the engine, before anything touches a registry.
-	Strata::Engine::RegisterBuiltinModules();
+	// Like every program that uses the engine, before anything touches a registry; with the asset pipeline, like the editor.
+	Strata::Engine::ModuleRegistrationOptions modules;
+	modules.AssetPipeline = Strata::RegisterAssetPipeline;
+	Strata::Engine::RegisterBuiltinModules(modules);
 
 	if (isHelper)
 		return RunHelperMode(helperMode, argc, argv);

@@ -73,9 +73,10 @@ namespace Strata
 		virtual bool Import(const ImportContext& context, ImportResult& result, std::string* outError) const = 0;
 	};
 
-	// Importers by source file extension. Engine::RegisterBuiltinModules opens the registry and registers the built-in
-	// importers (RegisterAssetPipeline) unless the application runs without the asset pipeline; later registrations
-	// override them. Using the registry before BeginRegistration fails ST_CORE_VERIFY.
+	// Importers by source file extension, part of the asset pipeline (tooling): RegisterAssetPipeline opens the registry and
+	// registers the built-in importers when a program hands it to Engine::RegisterBuiltinModules; later registrations
+	// override them. Programs without the asset pipeline (shipped games) never open it: using the registry before
+	// BeginRegistration fails ST_CORE_VERIFY.
 	class AssetImporterRegistry
 	{
 	public:
@@ -85,7 +86,8 @@ namespace Strata
 		static std::vector<const AssetImporter*> GetAll();
 	};
 
-	// Registers the built-in importers (AssetImporters.cpp). Called by Engine::RegisterBuiltinModules only.
+	// Opens the importer registry and registers the built-in importers (AssetImporters.cpp). The editor and tools pass it as
+	// Engine::ModuleRegistrationOptions::AssetPipeline, and Engine::RegisterBuiltinModules calls it; nothing else does.
 	void RegisterAssetPipeline();
 
 	// Deterministic handle of a sub-asset: stable across re-imports and machines for the same parent and key.

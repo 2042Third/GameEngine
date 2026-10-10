@@ -1,4 +1,5 @@
 #include <Strata.h>
+#include <Strata/Asset/AssetImporter.h>
 #include <Strata/Core/EntryPoint.h>
 
 #include "EditorLayer.h"
@@ -28,6 +29,12 @@ namespace Strata
 		logSpecification.LogFile = userData / "Logs" / "StrataEditor.log";
 		Log::Init(logSpecification);
 		ST_INFO("Strata Editor {} ({})", c_EngineVersion, Platform::GetName());
+
+		// The editor imports assets: it registers the modules with the asset pipeline, before the Application constructor
+		// would register them without it.
+		Engine::ModuleRegistrationOptions modules;
+		modules.AssetPipeline = RegisterAssetPipeline;
+		Engine::RegisterBuiltinModules(modules);
 
 		EditorOptions options;
 		options.ShowImGuiDemo = commandLine.HasFlag("--imgui-demo");

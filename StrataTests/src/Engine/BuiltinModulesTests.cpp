@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace Strata;
@@ -85,12 +86,16 @@ TEST_SUITE("Engine.Modules")
 		const size_t importers = AssetImporterRegistry::GetAll().size();
 		const uint64_t before = Log::GetBuffer().GetLatestSequence();
 		bool extraRan = false;
+		bool pipelineRan = false;
 		Engine::ModuleRegistrationOptions options;
+		options.AssetPipeline = [&]() { pipelineRan = true; };
 		options.Extra.push_back([&]() { extraRan = true; });
 		Engine::RegisterBuiltinModules(options);
 		Engine::RegisterBuiltinModules();
 		CHECK_FALSE(extraRan);
+		CHECK_FALSE(pipelineRan);
 		CHECK(CountErrors(before, "extra registrations, which are ignored") == 1);
+		CHECK(CountErrors(before, "called again with the asset pipeline, which is ignored") == 1);
 		CHECK(ComponentRegistry::GetAll().size() == components);
 		CHECK(AssetImporterRegistry::GetAll().size() == importers);
 		CHECK(GetSystemNames() == systems);
@@ -150,8 +155,24 @@ TEST_SUITE("Engine.Modules")
 			CHECK_FALSE(result.TimedOut);
 			CHECK(result.ExitCode == c_VerifyExitCode);
 			CHECK(result.Output.find("verify failed:") != std::string::npos);
-			CHECK(result.Output.find("before Engine::RegisterBuiltinModules() registered the engine's modules") != std::string::npos);
+			// The importer registry belongs to the asset pipeline, which programs hand in.
+			const std::string_view expected = std::string_view(registry) == "importers"
+				? "before Engine::RegisterBuiltinModules() registered the asset pipeline (ModuleRegistrationOptions::AssetPipeline"
+				: "before Engine::RegisterBuiltinModules() registered the engine's modules";
+			CHECK(result.Output.find(expected) != std::string::npos);
 		}
+	}
+
+	TEST_CASE("Without the asset pipeline every module registers, and the importer registry stays closed")
+	{
+		// A shipped game's registration (no options), in a child process: registration happens once per process.
+		const Process::RunResult result = RunHelper({ "--strata-test-helper=no-asset-pipeline" });
+		INFO("Output: ", result.Output);
+		REQUIRE(result.Started);
+		CHECK_FALSE(result.TimedOut);
+		CHECK(result.Output.find("loaders: 8, systems: Scripting Physics Audio") != std::string::npos);
+		CHECK(result.ExitCode == c_VerifyExitCode);
+		CHECK(result.Output.find("verify failed: The asset importer registry is used before Engine::RegisterBuiltinModules() registered the asset pipeline") != std::string::npos);
 	}
 
 	TEST_CASE("Built-in asset factories are accepted only for built-in handles")

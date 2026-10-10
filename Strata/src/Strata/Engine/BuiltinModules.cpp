@@ -1,7 +1,6 @@
 #include "stpch.h"
 #include "Strata/Engine/BuiltinModules.h"
 
-#include "Strata/Asset/AssetImporter.h"
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Audio/AudioRegistration.h"
@@ -37,6 +36,9 @@ namespace Strata::Engine
 		ST_CORE_VERIFY(state != RegistrationState::Registering, "Engine::RegisterBuiltinModules() is called while the engine's modules are being registered");
 		if (state == RegistrationState::Registered)
 		{
+			// E.g. a program that registers with options after constructing its Application, which registered without them.
+			if (options.AssetPipeline)
+				ST_CORE_ERROR("Engine::RegisterBuiltinModules() is called again with the asset pipeline, which is ignored: the modules are registered already");
 			if (!options.Extra.empty())
 				ST_CORE_ERROR("Engine::RegisterBuiltinModules() is called again with {} extra registrations, which are ignored: the modules are registered already", options.Extra.size());
 			return;
@@ -45,7 +47,6 @@ namespace Strata::Engine
 
 		ComponentRegistry::BeginRegistration();
 		AssetLoaderRegistry::BeginRegistration();
-		AssetImporterRegistry::BeginRegistration();
 		BuiltinAssets::BeginRegistration();
 		SceneSystemRegistry::BeginRegistration();
 
@@ -56,8 +57,9 @@ namespace Strata::Engine
 		RegisterScriptingModule();
 		RegisterPhysicsModule();
 		RegisterAudioModule();
+		// Tooling, handed in by the program (see ModuleRegistrationOptions::AssetPipeline).
 		if (options.AssetPipeline)
-			RegisterAssetPipeline();
+			options.AssetPipeline();
 
 		for (const std::function<void()>& registration : options.Extra)
 		{

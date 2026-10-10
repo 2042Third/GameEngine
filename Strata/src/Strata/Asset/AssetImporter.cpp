@@ -28,7 +28,8 @@ namespace Strata
 		{
 			ImporterStorage& storage = GetImporterStorageUnchecked();
 			ST_CORE_VERIFY(storage.Open.load(std::memory_order_acquire),
-				"The asset importer registry is used before Engine::RegisterBuiltinModules() registered the engine's modules");
+				"The asset importer registry is used before Engine::RegisterBuiltinModules() registered the asset pipeline "
+				"(ModuleRegistrationOptions::AssetPipeline, which programs without importers, such as shipped games, leave empty)");
 			return storage;
 		}
 

@@ -90,9 +90,9 @@
 		},
 		{
 			"Name": "Engine",
-			"Notes": "The composition root (Engine/BuiltinModules) and the umbrella header applications include.",
+			"Notes": "The composition root (Engine/BuiltinModules) and the umbrella header applications include. Both are part of every program, shipped games included, so they never name the asset pipeline: tools hand its registration in (ModuleRegistrationOptions::AssetPipeline), and the importers stay out of games.",
 			"Paths": [ "Strata/Engine/**", "Strata.h" ],
-			"MayInclude": [ "Core", "Input", "App", "Asset", "Reflection", "Scene", "Renderer", "Physics", "Audio", "Scripting", "Project", "Runtime", "Network", "ImGui", "AssetPipeline" ]
+			"MayInclude": [ "Core", "Input", "App", "Asset", "Reflection", "Scene", "Renderer", "Physics", "Audio", "Scripting", "Project", "Runtime", "Network", "ImGui" ]
 		}
 	]
 }

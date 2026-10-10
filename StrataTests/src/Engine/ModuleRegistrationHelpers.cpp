@@ -13,6 +13,7 @@
 #include "Strata/Scene/SceneSerializer.h"
 #include "Strata/Scene/SceneSystem.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -63,9 +64,13 @@ namespace Strata::Tests
 
 			bool duplicateTypeRefused = false;
 			bool duplicateNameRefused = false;
+			bool pipelineBeforeExtra = false;
 			Engine::ModuleRegistrationOptions options;
+			options.AssetPipeline = RegisterAssetPipeline;
 			options.Extra.push_back([&]()
 			{
+				// The asset pipeline registers before the extra registrations, which may override its importers.
+				pipelineBeforeExtra = AssetImporterRegistry::FindByExtension(".gltf") != nullptr;
 				ComponentRegistry::Register<TestVehicleComponent>("TestVehicle")
 					.Category("Tests")
 					.Property("Speed", &TestVehicleComponent::Speed)
@@ -83,6 +88,8 @@ namespace Strata::Tests
 				return Fail("the extra component is not registered as given");
 			if (!ComponentRegistry::Find("Transform"))
 				return Fail("the built-in components are missing");
+			if (!pipelineBeforeExtra)
+				return Fail("the asset pipeline was not registered before the extra registrations");
 			if (!duplicateTypeRefused || !duplicateNameRefused || ComponentRegistry::Find("TestVehicleAgain"))
 				return Fail("a component type or name was registered twice");
 			std::printf("registered: TestVehicle\n");
@@ -151,6 +158,29 @@ namespace Strata::Tests
 			return 1;
 		}
 
+		// A shipped game's registration: every module, no asset pipeline.
+		int RunWithoutAssetPipeline()
+		{
+			SetAssertHandler(ExitOnVerify);
+			Engine::RegisterBuiltinModules();
+			if (!Engine::AreBuiltinModulesRegistered() || !ComponentRegistry::Find("Transform"))
+				return Fail("the modules are not registered");
+
+			uint32_t loaders = 0;
+			for (AssetType type : { AssetType::Scene, AssetType::Prefab, AssetType::Model, AssetType::Texture, AssetType::Mesh, AssetType::Material, AssetType::Font, AssetType::AudioClip })
+				loaders += AssetLoaderRegistry::Find(type) ? 1 : 0;
+			std::string systems;
+			for (const SceneSystemDescriptor& descriptor : SceneSystemRegistry::GetAll())
+				systems += " " + descriptor.Name;
+			std::printf("loaders: %u, systems:%s\n", loaders, systems.c_str());
+			std::fflush(stdout);
+
+			// Never opened: the verify fails and exits.
+			std::printf("%zu importers\n", AssetImporterRegistry::GetAll().size());
+			std::fflush(stdout);
+			return 1;
+		}
+
 	}
 
 	std::optional<int> RunModuleRegistrationHelper(std::string_view mode, int argc, char** argv)
@@ -166,6 +196,8 @@ namespace Strata::Tests
 		}
 		if (mode == "unregistered-registry")
 			return UseUnregisteredRegistry(argc, argv);
+		if (mode == "no-asset-pipeline")
+			return RunWithoutAssetPipeline();
 		return std::nullopt;
 	}
 

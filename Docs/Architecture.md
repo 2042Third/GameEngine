@@ -174,7 +174,7 @@ enabled and a window and graphics device exist, and calls `Begin`/`End` around t
 `ImGuiRenderer` is the NVRHI backend (user textures are `nvrhi::ITexture*`). Only the editor enables it.
 
 **Engine** (`Engine/`). `BuiltinModules`, the composition root (below), and nothing else: the only code that knows every
-module.
+runtime module (tooling, the asset pipeline, is handed in by the programs that use it).
 
 ### Layers
 
@@ -198,7 +198,7 @@ layer and of the layers it lists, which are always lower ones:
 | Network | `Network/**`, `Platform/*/*Socket.cpp` | Core |
 | ImGui | `ImGui/**` | Core, Input, App, Renderer |
 | AssetPipeline | `Asset/EditorAssetManager.*`, `AssetImporter.*`, `AssetImporters.cpp`, `GltfImporter.*`, `TextureImporter.*` | Core, Asset, Reflection, Scene, Renderer, Audio |
-| Engine | `Engine/**`, `Strata.h` | everything |
+| Engine | `Engine/**`, `Strata.h` | everything but AssetPipeline (shipped games link the composition root too; see below) |
 
 `Architecture.Layering` (`StrataTests/src/Architecture/LayeringTests.cpp`, in `StrataTests.Core`) reads every C, C++ and
 Objective-C(++) source and header under `Strata/src` (`STRATA_SOURCE_DIR`; `.h`, `.hpp`, `.inl`, `.c`, `.cpp`, `.m`, `.mm`,
@@ -221,24 +221,28 @@ bytes), `BuiltinAssets` (objects of the built-in assets) and `SceneSystemRegistr
 them:
 
 ```text
-open every registry (BeginRegistration)
+open the registries (BeginRegistration; not the importers')
 RegisterSceneModule        Scene/SceneRegistration.cpp         components (ComponentRegistration.cpp); Scene, Prefab, Model loaders
 RegisterRendererModule     Renderer/RendererRegistration.cpp   Texture, Mesh, Material, Font loaders; built-in meshes and material
 RegisterScriptingModule    Scripting/ScriptingRegistration.cpp "Scripting" system
 RegisterPhysicsModule      Physics/PhysicsRegistration.cpp     "Physics" system
 RegisterAudioModule        Audio/AudioRegistration.cpp         AudioClip loader, "Audio" system
-RegisterAssetPipeline      Asset/AssetImporters.cpp            importers (ModuleRegistrationOptions::AssetPipeline)
+options.AssetPipeline      RegisterAssetPipeline, Asset/AssetImporters.cpp: opens the importer registry, importers
 options.Extra              registrations of games, tools and tests
 ComponentRegistry::Freeze
 ```
 
-- **Callers.** The `Application` constructor calls it first thing, so the editor and the runtime are covered; a client
-  that needs options calls it earlier (StrataRuntime, in `CreateApplication`, runs without the asset pipeline: games
-  read cooked packs). `StrataTests` calls it in `main` before doctest runs and in its helper modes. A second call is a
-  no-op (with an error when it carries `Extra` registrations, which would be lost).
+- **Callers.** The `Application` constructor calls it first thing, without options, so every application is covered;
+  a client that needs options calls it earlier. The editor does, in `CreateApplication`, to hand in the asset pipeline
+  (`ModuleRegistrationOptions::AssetPipeline = RegisterAssetPipeline`); `StrataTests` does in `main`, before doctest
+  runs and the helper modes start. StrataRuntime keeps the constructor's call: games read cooked packs, and since the
+  composition root never names the importers (the Engine layer may not include AssetPipeline), the linker leaves them
+  out of the runtime. A second call is a no-op (with an error when it carries an asset pipeline or `Extra`
+  registrations, which would be lost).
 - **Use before registration** fails `ST_CORE_VERIFY` with a message naming `Engine::RegisterBuiltinModules`, in every
   registry: a program that forgot the composition root stops at its first lookup instead of running without
-  components or loaders.
+  components or loaders. The importer registry stays closed in programs without the asset pipeline, so a game that
+  reached for an importer stops there too.
 - **Component lifecycle.** `ComponentRegistry` is closed, then open (`BeginRegistration`: `Register<T>` is valid from
   any registering code), then frozen (`Freeze`): the set of components never changes afterwards, so reads take no lock
   and are safe from any thread (asset loads deserialize scenes on workers). `Register<T>` after `Freeze`, for a type

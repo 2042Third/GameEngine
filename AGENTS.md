@@ -91,8 +91,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
 
 - Unit tests live in `StrataTests/src/<Module>/*Tests.cpp` and use [doctest](https://github.com/doctest/doctest).
   Name suites after the module (`TEST_SUITE("Scene.Serialization")`). `TestMain.cpp` registers the engine's modules
-  (`Engine::RegisterBuiltinModules`) before the suites and the helper modes run; a test that needs its own component
-  registers it in a child process (`--strata-test-helper=custom-component`, `Engine/ModuleRegistrationHelpers.cpp`).
+  with the asset pipeline (`Engine::RegisterBuiltinModules`) before the suites and the helper modes run; a test that
+  needs its own component registers it in a child process (`--strata-test-helper=custom-component`,
+  `Engine/ModuleRegistrationHelpers.cpp`).
 - Suites whose names start with `GPU` need a Vulkan device and are registered separately under the
   CTest label `gpu`. They share one device per process through `Tests::GPUContext` (never create
   devices in tests) and end with `CHECK(gpu.GetNewErrorCount() == 0)`, so validation errors fail the
@@ -260,12 +261,15 @@ The threading model, frame loop and pipelines these rules protect are described 
   has one registration function in its own folder (`Register<Module>Module` in `<Module>/<Module>Registration.cpp`);
   only `Engine::RegisterBuiltinModules` (`Engine/BuiltinModules.cpp`, the composition root) calls them, once per
   process, before anything reads a registry (the `Application` constructor; `StrataTests`' `main`). A new module adds
-  its function there, in dependency order. Components can only be registered while it runs (the registry freezes at
-  its end): games and tests pass theirs in `ModuleRegistrationOptions::Extra`. Scene systems declare their update
-  order (`SceneSystemDescriptor::After`/`Before`) instead of relying on registration order, and are made with
-  `MakeSceneSystemDescriptor<T>` so that `Scene::GetSystem<T>` finds them. Scenes keep the components of modules a
-  build lacks: they load with one warning per component name into `UnknownComponentsComponent` and are saved back
-  unchanged (also through play mode, prefab snapshots, duplication and undo). Details: Docs/Architecture.md,
+  its function there, in dependency order. Tooling stays out of the composition root, which shipped games link too: the
+  asset pipeline's `RegisterAssetPipeline` is handed in by the programs that import assets
+  (`ModuleRegistrationOptions::AssetPipeline`: the editor's `CreateApplication`, `StrataTests`' `main`), so the
+  importers are not linked into StrataRuntime. Components can only be registered while the composition root runs (the
+  registry freezes at its end): games and tests pass theirs in `ModuleRegistrationOptions::Extra`. Scene systems
+  declare their update order (`SceneSystemDescriptor::After`/`Before`) instead of relying on registration order, and
+  are made with `MakeSceneSystemDescriptor<T>` so that `Scene::GetSystem<T>` finds them. Scenes keep the components of
+  modules a build lacks: they load with one warning per component name into `UnknownComponentsComponent` and are saved
+  back unchanged (also through play mode, prefab snapshots, duplication and undo). Details: Docs/Architecture.md,
   "Composition root and registries" and "Scene runtime lifecycle".
 
 ## Asset pipeline
