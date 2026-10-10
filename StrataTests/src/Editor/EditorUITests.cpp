@@ -300,6 +300,29 @@ TEST_SUITE("Editor.UI")
 		// The Content Browser is the bottom area's visible tab on first run.
 		CHECK_FALSE(contentBrowser->Hidden);
 		CHECK(console->Hidden);
+
+		// The Asset tab shares the Inspector's place, behind it until an asset is inspected.
+		ImGuiWindow* inspector = editor.FindPanelWindow(EditorPanels::c_Inspector);
+		ImGuiWindow* assetInspector = editor.FindPanelWindow(EditorPanels::c_AssetInspector);
+		REQUIRE(inspector);
+		REQUIRE(assetInspector);
+		CHECK(assetInspector->DockNode == inspector->DockNode);
+		CHECK_FALSE(inspector->Hidden);
+		CHECK(assetInspector->Hidden);
+		// The instruments are closed until asked for (their status pills open them), and then join the bottom area.
+		EditorPanelRegistry& panels = editor.Layer->GetPanels();
+		for (const char* instrument : { EditorPanels::c_Streaming, EditorPanels::c_Performance })
+		{
+			CAPTURE(instrument);
+			CHECK_FALSE(panels.IsOpen(instrument));
+			panels.Focus(instrument);
+			editor.Frames(2);
+			ImGuiWindow* window = editor.FindPanelWindow(instrument);
+			REQUIRE(window);
+			CHECK(window->DockNode == console->DockNode);
+			CHECK_FALSE(window->Hidden);
+		}
+		CHECK(viewport->GetImageArea().Size.x * viewport->GetImageArea().Size.y == doctest::Approx(image.x * image.y));
 	}
 
 	TEST_CASE("Panels close and reopen, and imgui.ini remembers which are open")
