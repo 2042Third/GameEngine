@@ -200,7 +200,8 @@ namespace Strata
 		// The null handle while the entities are inspected.
 		AssetHandle GetInspectedAsset() const { return m_InspectedAsset; }
 		InspectionTarget GetInspectionTarget() const { return m_InspectedAsset.IsValid() ? InspectionTarget::Asset : InspectionTarget::Entities; }
-		// Changes whenever the target changes, so panels can bring the inspector that shows it to the front.
+		// Changes whenever the target changes and whenever an asset is inspected (again), so panels can bring the inspector
+		// that shows it to the front.
 		uint64_t GetInspectionVersion() const { return m_InspectionVersion; }
 
 		//////////////////////////////////////////////////////////////////////////

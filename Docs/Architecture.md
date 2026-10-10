@@ -787,8 +787,8 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   `GetActiveScene` is the running copy while playing, else the edited scene. The **inspection target** says what the
   inspectors show: the selected entities, or one asset (`SetInspectedAsset`, from the Content Browser or
   `selection.set {asset}`), which keeps the entities selected. Selecting an entity, deleting the asset or closing the
-  project returns to the entities; `GetInspectionVersion` changes with every switch, so the panels bring the matching
-  inspector to the front.
+  project returns to the entities; `GetInspectionVersion` changes with every switch and every asset inspected (also
+  the one shown already), so the panels bring the matching inspector to the front.
 - **Commands** (`EditorCommands.h`). Handlers take a JSON object and return an `EditorCommandResult`: a value, an error
   with an `EditorCommandError` kind, or `Defer(poll)`. The built-in groups are registered by
   `EditorSceneCommands.cpp` (scene, entity, component, prefab), `EditorAssetCommands.cpp` (asset, material, prefab,

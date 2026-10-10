@@ -694,8 +694,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `HierarchyView::GetDropTarget`; F2 or a double click renames in place.
 - The inspectors show the selected entities or one asset (`EditorContext::SetInspectedAsset`, `selection.set {asset}`;
   the entities stay selected). Selecting an entity, deleting the asset or closing the project returns to the entities;
-  `GetInspectionVersion` changes with every switch, and the editor brings the matching tab (Inspector or Asset) forward
-  without taking the keyboard focus. The Inspector edits every selected entity at once (shared components only; values
+  `GetInspectionVersion` changes with every switch and every asset inspected (again), and the editor brings the
+  matching tab (Inspector or Asset) forward without taking the keyboard focus. The Inspector edits every selected entity at once (shared components only; values
   that differ show as mixed; one undo step per edit), offers Reset, Copy Values, Paste Values and Remove per component
   (not for components the engine adds) and shows the scene's settings and sky with nothing selected; the Asset tab edits
   materials (`UI/MaterialEditor`: a drag previews, its release is one undo step) and import settings (Apply runs

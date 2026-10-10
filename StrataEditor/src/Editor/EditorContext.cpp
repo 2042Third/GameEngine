@@ -643,11 +643,10 @@ namespace Strata
 		}
 		if (!AssetManager::IsHandleValid(handle))
 			return false;
-		if (m_InspectedAsset != handle)
-		{
-			m_InspectedAsset = handle;
-			m_InspectionVersion++;
-		}
+		// Every request is a new one, also for the asset shown already: a click on it brings its tab back after the user
+		// looked at another one.
+		m_InspectedAsset = handle;
+		m_InspectionVersion++;
 		return true;
 	}
 

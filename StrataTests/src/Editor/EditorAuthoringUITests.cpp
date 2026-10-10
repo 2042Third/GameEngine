@@ -855,6 +855,44 @@ TEST_SUITE("Editor.UI.AssetInspector")
 		CHECK(assetWindow->Hidden);
 	}
 
+	TEST_CASE("Clicking the asset the Asset tab shows brings the tab back after another tab came forward")
+	{
+		AuthoringEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f }, WithFeatureProject("EditorAuthoringInspectAgain"));
+		EditorAssetManager* assets = editor.Context().GetAssetManager();
+		REQUIRE(assets);
+		const AssetHandle material = assets->FindAssetByPath("Materials/Feature.stmat");
+		ContentBrowserPanel* browser = editor.Layer->GetPanels().Get<ContentBrowserPanel>(EditorPanels::c_ContentBrowser);
+		REQUIRE(browser);
+		browser->SetCurrentDirectory("Materials");
+		editor.Frames(3);
+		const auto clickMaterial = [&]()
+		{
+			const std::optional<ContentBrowserPanel::ItemRect> item = browser->FindItemRect(material);
+			REQUIRE(item);
+			editor.ClickAt(ImVec2((item->Min.x + item->Max.x) * 0.5f, (item->Min.y + item->Max.y) * 0.5f));
+			editor.Frames(2);
+		};
+		clickMaterial();
+		ImGuiWindow* assetWindow = editor.FindPanelWindow(EditorPanels::c_AssetInspector);
+		REQUIRE(assetWindow);
+		REQUIRE_FALSE(assetWindow->Hidden);
+
+		// The user looks at the Inspector tab, then clicks the same asset again: it comes back.
+		editor.FocusPanel(EditorPanels::c_Inspector);
+		REQUIRE(assetWindow->Hidden);
+		editor.Pause();
+		clickMaterial();
+		CHECK(editor.Context().GetInspectedAsset() == material);
+		CHECK_FALSE(assetWindow->Hidden);
+
+		// The same through selection.set.
+		editor.FocusPanel(EditorPanels::c_Inspector);
+		REQUIRE(assetWindow->Hidden);
+		editor.Run("selection.set", { { "asset", UUIDToJson(material) } });
+		editor.Frames(2);
+		CHECK_FALSE(assetWindow->Hidden);
+	}
+
 	TEST_CASE("A material drag in the Asset tab previews, saves the file once and is one undo step")
 	{
 		AuthoringEditor editor({}, WithFeatureProject("EditorAuthoringMaterialDrag"));
