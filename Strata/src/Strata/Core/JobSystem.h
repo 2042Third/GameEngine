@@ -53,6 +53,12 @@ namespace Strata
 	{
 		uint32_t WorkerThreadCount = 0; // 0 = hardware threads - 1 (at least 1)
 		uint32_t IOThreadCount = 2;     // 0 = I/O jobs run on the worker pool
+		// Workers run below the priority of other threads (Platform's ThreadPriority::BelowNormal) unless this is false. A
+		// pool of hardware threads - 1 workers busy with long jobs (an import compressing textures on every core) would
+		// otherwise share the processors evenly with the main thread and the graphics driver's threads, and stretch frames
+		// by whole scheduling quanta. Frame work loses nothing: a thread that waits for jobs runs queued ones itself (Wait,
+		// ParallelFor). I/O threads, which mostly wait, keep the normal priority.
+		bool LowerWorkerPriority = true;
 	};
 
 	// The work of one thread pool since JobSystem::Init: what its own threads ran (a job that a waiting thread runs itself,

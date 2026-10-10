@@ -12,6 +12,19 @@
 namespace Strata
 {
 
+	// How the operating system schedules a thread against the process's other threads (Platform::SetCurrentThreadPriority).
+	//   Normal:      what new threads get (Windows THREAD_PRIORITY_NORMAL, Linux nice 0, macOS the default scheduling
+	//                priority of the time-sharing policy).
+	//   BelowNormal: ranked below Normal threads, which take the processor first when there are not enough for all: the job
+	//                system's workers, so that long jobs (an import's block compression on every core) never take it from
+	//                the main thread or the graphics driver's threads (Windows THREAD_PRIORITY_BELOW_NORMAL, Linux nice 5,
+	//                macOS four steps below the default scheduling priority).
+	enum class ThreadPriority : uint8_t
+	{
+		Normal = 0,
+		BelowNormal
+	};
+
 	// Memory of the current process in bytes, as the operating system accounts it (Platform::GetProcessMemory).
 	// PrivateBytes is memory that only this process uses; WorkingSet is what is resident in physical memory, including
 	// pages shared with other processes (code, mapped files). Peaks are the largest values since the process started.
@@ -102,6 +115,11 @@ namespace Strata
 
 		static bool IsDebuggerAttached();
 		static void SetCurrentThreadName(std::string_view name);
+		// Sets the calling thread's scheduling priority (ThreadPriority). Returns false if the system refused it: the thread
+		// keeps its priority (Linux lets a thread lower its priority, but raising it again may need privileges).
+		static bool SetCurrentThreadPriority(ThreadPriority priority);
+		// The calling thread's scheduling priority: BelowNormal if it is below what new threads get, else Normal.
+		static ThreadPriority GetCurrentThreadPriority();
 		static uint32_t GetProcessID();
 		// Whether a process with this id is running (false once it has exited, even while a handle keeps its id).
 		static bool IsProcessAlive(uint32_t processId);

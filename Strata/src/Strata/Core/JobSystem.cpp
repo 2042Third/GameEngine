@@ -130,7 +130,7 @@ namespace Strata
 		class JobPool
 		{
 		public:
-			void Start(uint32_t threadCount, const std::string& namePrefix, bool workerThreads)
+			void Start(uint32_t threadCount, const std::string& namePrefix, bool workerThreads, bool lowerPriority)
 			{
 				m_Stopping = false;
 				// Before the threads start: they write their activity from their first job on.
@@ -139,9 +139,13 @@ namespace Strata
 				for (uint32_t index = 0; index < threadCount; index++)
 				{
 					std::string name = fmt::format("{} {}", namePrefix, index);
-					m_Threads.emplace_back([this, name = std::move(name), workerThreads, index]()
+					m_Threads.emplace_back([this, name = std::move(name), workerThreads, lowerPriority, index]()
 					{
 						Platform::SetCurrentThreadName(name);
+						// A thread the system keeps at its priority still runs every job: only the frame's share of the processors
+						// suffers, so this is not an error.
+						if (lowerPriority && !Platform::SetCurrentThreadPriority(ThreadPriority::BelowNormal))
+							ST_CORE_WARN("{} keeps the normal thread priority: the system refused to lower it", name);
 						t_IsWorkerThread = workerThreads;
 						ThreadMain(m_Activity[index]);
 					});
@@ -311,10 +315,10 @@ namespace Strata
 		}
 
 		auto* data = new JobSystemData();
-		data->Workers.Start(workerCount, "Strata Worker", true);
+		data->Workers.Start(workerCount, "Strata Worker", true, specification.LowerWorkerPriority);
 		if (specification.IOThreadCount > 0)
 		{
-			data->IO.Start(specification.IOThreadCount, "Strata IO", false);
+			data->IO.Start(specification.IOThreadCount, "Strata IO", false, false);
 			data->HasIOPool = true;
 		}
 		s_Data.store(data);

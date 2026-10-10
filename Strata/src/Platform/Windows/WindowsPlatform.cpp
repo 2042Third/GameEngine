@@ -327,6 +327,18 @@ namespace Strata
 		SetThreadDescription(GetCurrentThread(), wideName.c_str());
 	}
 
+	bool Platform::SetCurrentThreadPriority(ThreadPriority priority)
+	{
+		const int value = priority == ThreadPriority::BelowNormal ? THREAD_PRIORITY_BELOW_NORMAL : THREAD_PRIORITY_NORMAL;
+		return SetThreadPriority(GetCurrentThread(), value) != FALSE;
+	}
+
+	ThreadPriority Platform::GetCurrentThreadPriority()
+	{
+		const int value = GetThreadPriority(GetCurrentThread());
+		return value != THREAD_PRIORITY_ERROR_RETURN && value < THREAD_PRIORITY_NORMAL ? ThreadPriority::BelowNormal : ThreadPriority::Normal;
+	}
+
 	uint32_t Platform::GetProcessID()
 	{
 		return static_cast<uint32_t>(::GetCurrentProcessId());

@@ -572,8 +572,13 @@ rules"). Other threads:
 
 - **Job workers** (`JobSystem::Init`, `Core/JobSystem.cpp`; hardware threads - 1 by default): `JobSystem::Submit` and
   `ParallelFor` work such as asset decoding, the initial imports of a project scan, Jolt's jobs, mesh shape cooking,
-  world transform propagation, the renderer's extraction of draws (see [Render scene](#render-scene)) and PNG encoding of
-  captures.
+  world transform propagation, the renderer's extraction of draws (see [Render scene](#render-scene)), texture
+  compression of imports and PNG encoding of captures. They run below the normal thread priority
+  (`JobSystemSpecification::LowerWorkerPriority`, `Platform::SetCurrentThreadPriority`): a pool as large as the processors
+  busy with long jobs (an import compressing a 4096x4096 texture keeps every worker busy for seconds) would otherwise
+  share them evenly with the main thread and the graphics driver's threads, and the editor's frames, which take about
+  3 ms, would stretch to 10-30 ms by whole scheduling quanta. Frame work loses nothing: a thread that waits for jobs runs
+  queued ones itself.
 - **I/O threads** (`JobSystem::Init`; 2 by default): `JobSystem::SubmitIO` work such as asset reads (dispatched by the
   streaming queue, at most two per I/O thread at a time; a pack read hands its blocks to worker jobs to decompress while
   it reads on, and never runs other jobs while it waits for them), background re-imports, saving captures and game

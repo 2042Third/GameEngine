@@ -328,7 +328,8 @@ The threading model, frame loop and pipelines these rules protect are described 
 [Docs/Architecture.md](Docs/Architecture.md).
 
 - **Threading:** the main thread owns the scene, input, scripts and rendering submission. Background
-  work goes through `JobSystem` (`Submit` for CPU work, `SubmitIO` for blocking I/O). Results return to
+  work goes through `JobSystem` (`Submit` for CPU work, `SubmitIO` for blocking I/O), whose workers run below the normal
+  thread priority so that long jobs never take the processors from the frame. Results return to
   the main thread through `Application::SubmitToMainThread` or polled queues — never callbacks that
   touch engine state from worker threads.
 - **Renderer conventions:** NVRHI flips the Vulkan viewport to D3D conventions: framebuffer origin is

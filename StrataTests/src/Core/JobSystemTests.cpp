@@ -1,10 +1,13 @@
 #include <doctest/doctest.h>
 
 #include "Strata/Core/JobSystem.h"
+#include "Strata/Core/Platform.h"
 
 #include <atomic>
+#include <chrono>
 #include <numeric>
 #include <thread>
+#include <utility>
 #include <vector>
 
 using namespace Strata;
@@ -79,6 +82,55 @@ TEST_SUITE("Core.JobSystem")
 		JobHandle handle = JobSystem::SubmitIO([&]() { onWorker = JobSystem::IsWorkerThread(); });
 		handle.Wait();
 		CHECK_FALSE(onWorker.load());
+	}
+
+	TEST_CASE("Workers run below the normal thread priority; I/O threads and the threads that wait for jobs keep it")
+	{
+		REQUIRE(Platform::GetCurrentThreadPriority() == ThreadPriority::Normal);
+		// Which kind of thread ran a job, at what priority. Polled rather than waited for: a waiting thread runs queued jobs
+		// itself.
+		const auto runAndRead = [](bool io)
+		{
+			std::atomic<bool> onWorker = false;
+			std::atomic<ThreadPriority> priority = ThreadPriority::Normal;
+			const auto job = [&]()
+			{
+				onWorker = JobSystem::IsWorkerThread();
+				priority = Platform::GetCurrentThreadPriority();
+			};
+			const JobHandle handle = io ? JobSystem::SubmitIO(job) : JobSystem::Submit(job);
+			while (!handle.IsComplete())
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			return std::pair(onWorker.load(), priority.load());
+		};
+		{
+			ScopedJobSystem jobSystem;
+			const auto [workerRan, workerPriority] = runAndRead(false);
+			CHECK(workerRan);
+			CHECK(workerPriority == ThreadPriority::BelowNormal);
+			const auto [ioOnWorker, ioPriority] = runAndRead(true);
+			CHECK_FALSE(ioOnWorker);
+			CHECK(ioPriority == ThreadPriority::Normal);
+			CHECK(Platform::GetCurrentThreadPriority() == ThreadPriority::Normal);
+		}
+		{
+			JobSystemSpecification specification;
+			specification.WorkerThreadCount = 2;
+			specification.LowerWorkerPriority = false;
+			JobSystem::Init(specification);
+			const auto [workerRan, workerPriority] = runAndRead(false);
+			JobSystem::Shutdown();
+			CHECK(workerRan);
+			CHECK(workerPriority == ThreadPriority::Normal);
+		}
+		// The priority is the calling thread's own.
+		std::thread([]()
+		{
+			CHECK(Platform::GetCurrentThreadPriority() == ThreadPriority::Normal);
+			CHECK(Platform::SetCurrentThreadPriority(ThreadPriority::BelowNormal));
+			CHECK(Platform::GetCurrentThreadPriority() == ThreadPriority::BelowNormal);
+		}).join();
+		CHECK(Platform::GetCurrentThreadPriority() == ThreadPriority::Normal);
 	}
 
 	TEST_CASE("Jobs may wait on other jobs without deadlocking")

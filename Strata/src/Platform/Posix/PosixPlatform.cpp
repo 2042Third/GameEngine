@@ -19,7 +19,9 @@
 #include <fstream>
 #include <limits>
 #include <pthread.h>
+#include <sched.h>
 #include <sstream>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <system_error>
@@ -39,6 +41,7 @@
 #else
 	#include <sys/random.h>
 	#include <sys/statvfs.h>
+	#include <sys/syscall.h>
 #endif
 
 namespace Strata
@@ -53,6 +56,36 @@ namespace Strata
 		// /proc/<pid>/stat is a few hundred bytes and /proc/self/status a few kilobytes; the limit only guards against
 		// something unexpected.
 		constexpr size_t c_MaxProcStatSize = 64 * 1024;
+#endif
+
+#if defined(ST_PLATFORM_MACOS)
+		// How far below the time-sharing policy's default priority BelowNormal threads run (its priorities run from 15 to
+		// 47, and threads start in the middle).
+		constexpr int c_BelowNormalPrioritySteps = 4;
+
+		int GetNormalSchedulingPriority()
+		{
+			return (sched_get_priority_min(SCHED_OTHER) + sched_get_priority_max(SCHED_OTHER)) / 2;
+		}
+#else
+		// How much nicer than the process's main thread BelowNormal threads are (each step gives a thread about a tenth less
+		// of a processor others want too).
+		constexpr int c_BelowNormalNice = 5;
+		constexpr int c_MaxNice = 19;
+
+		// Linux schedules every thread by its own nice value; the main thread's (whose id is the process id) is the
+		// process's Normal.
+		int GetNormalNice()
+		{
+			errno = 0;
+			const int value = getpriority(PRIO_PROCESS, static_cast<id_t>(getpid()));
+			return errno == 0 ? value : 0;
+		}
+
+		id_t GetCurrentThreadID()
+		{
+			return static_cast<id_t>(syscall(SYS_gettid));
+		}
 #endif
 
 		// The largest private memory GetProcessMemory has reported, the peak on systems that do not track one.
@@ -450,6 +483,34 @@ namespace Strata
 		// Linux limits thread names to 15 characters plus the terminator.
 		const std::string threadName(name.substr(0, 15));
 		pthread_setname_np(pthread_self(), threadName.c_str());
+#endif
+	}
+
+	bool Platform::SetCurrentThreadPriority(ThreadPriority priority)
+	{
+#if defined(ST_PLATFORM_MACOS)
+		sched_param parameter {};
+		parameter.sched_priority = GetNormalSchedulingPriority() - (priority == ThreadPriority::BelowNormal ? c_BelowNormalPrioritySteps : 0);
+		return pthread_setschedparam(pthread_self(), SCHED_OTHER, &parameter) == 0;
+#else
+		const int normal = GetNormalNice();
+		const int nice = priority == ThreadPriority::BelowNormal ? std::min(normal + c_BelowNormalNice, c_MaxNice) : normal;
+		return setpriority(PRIO_PROCESS, GetCurrentThreadID(), nice) == 0;
+#endif
+	}
+
+	ThreadPriority Platform::GetCurrentThreadPriority()
+	{
+#if defined(ST_PLATFORM_MACOS)
+		int policy = 0;
+		sched_param parameter {};
+		if (pthread_getschedparam(pthread_self(), &policy, &parameter) != 0)
+			return ThreadPriority::Normal;
+		return parameter.sched_priority < GetNormalSchedulingPriority() ? ThreadPriority::BelowNormal : ThreadPriority::Normal;
+#else
+		errno = 0;
+		const int nice = getpriority(PRIO_PROCESS, GetCurrentThreadID());
+		return errno == 0 && nice > GetNormalNice() ? ThreadPriority::BelowNormal : ThreadPriority::Normal;
 #endif
 	}
 
