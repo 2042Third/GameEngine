@@ -6,6 +6,7 @@
 #include <doctest/doctest.h>
 #include <glm/gtc/quaternion.hpp>
 
+#include <cmath>
 #include <string>
 
 namespace Strata::Tests::Perf
@@ -77,6 +78,39 @@ namespace Strata::Tests::Perf
 			entities.push_back(entity);
 		}
 		return entities;
+	}
+
+	BoxStacks CreateBoxStacks(Scene& scene, size_t count, uint32_t height)
+	{
+		REQUIRE(height > 0);
+		constexpr float boxSize = 1.0f;
+		constexpr float gap = 0.2f;
+		constexpr float pitch = boxSize + gap;
+		const size_t columns = (count + height - 1) / height;
+		const size_t side = static_cast<size_t>(std::ceil(std::sqrt(static_cast<double>(columns))));
+		const float extent = 0.5f * static_cast<float>(side) * pitch;
+
+		BoxStacks stacks;
+		stacks.Floor = Created(scene.CreateEntity("Floor"));
+		stacks.Floor.GetTransform().Translation = glm::vec3(0.0f, -0.5f, 0.0f);
+		stacks.Floor.AddComponent<BoxColliderComponent>().HalfExtents = glm::vec3(extent + 10.0f, 0.5f, extent + 10.0f);
+
+		stacks.Boxes.reserve(count);
+		for (size_t index = 0; index < count; index++)
+		{
+			const size_t column = index / height;
+			const size_t level = index % height;
+			const float x = (static_cast<float>(column % side) + 0.5f) * pitch - extent;
+			const float z = (static_cast<float>(column / side) + 0.5f) * pitch - extent;
+			const float y = gap + 0.5f * boxSize + static_cast<float>(level) * pitch;
+
+			Entity box = Created(scene.CreateEntity("Box"));
+			box.GetTransform().Translation = glm::vec3(x, y, z);
+			box.AddComponent<RigidBodyComponent>();
+			box.AddComponent<BoxColliderComponent>().HalfExtents = glm::vec3(0.5f * boxSize);
+			stacks.Boxes.push_back(box);
+		}
+		return stacks;
 	}
 
 	void AddCameraAndLight(Scene& scene)

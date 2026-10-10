@@ -125,7 +125,10 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   children per entity, entities running the API test module's trivial script) under
   `Perf::ScopedApplicationJobSystem` (the job system as applications start it): `Perf.Scene` (transform updates and
   idle frames up to a million entities), `Perf.Scripting` (100,000 and 300,000 trivial scripts, frames that spawn and
-  destroy entities, scripts destroying 10,000 of 100,000 sibling roots in one frame) and, in `src/Editor/`,
+  destroy entities, scripts destroying 10,000 of 100,000 sibling roots in one frame), `Perf.Physics` (box stacks of
+  `CreateBoxStacks`: the first frames of 30,000 boxes with time dilation, 70,000 boxes that all get a body, the busy
+  frames of 70,000 and 10,000 boxes with Strata's part of a step below Jolt's, creating 10,000 bodies in one frame) and,
+  in `src/Editor/`,
   `Perf.Editor` (entity commands among 100,000 roots) and `PerfGPU.Editor`, which runs the real `StrataEditor`
   maximized on generated 100,000- and 1,000,000-entity scenes and checks the median CPU frame time its `editor.wait`
   steps report. Time calls that take nanoseconds in batches (the clock's resolution is about 0.1 microseconds).
