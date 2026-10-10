@@ -18,9 +18,11 @@ namespace Strata
 	// The scene viewport: renders the active scene (EditorViewport) into a texture the size of the panel, shows it, and
 	// handles the viewport's input while it is hovered or focused: the editor camera (Alt + left drag orbits, middle drag
 	// pans, the wheel dollies, right drag flies with WASD/QE, Shift faster and the wheel setting the speed), clicks that
-	// select entities (Ctrl toggles, Shift adds), the transform gizmo (W/E/R/Q, snapping while Ctrl is held), F to frame
-	// the selection and Home to frame everything. While playing through the scene's camera the panel is the game view:
-	// game input goes to the scene and editor tools are off.
+	// select entities (Ctrl toggles, Shift adds), the transform gizmo (W/E/R/Q; snapping per the toolbar's snap toggle,
+	// inverted while Ctrl is held), F to frame the selection and Home to frame everything. A row of chips over the image's
+	// top left holds the camera settings and the overlay toggles (grid, selection outline, scene gizmos, stats), and a strip
+	// in the play state's color tops the image while the scene runs. While playing through the scene's camera the panel is
+	// the game view: game input goes to the scene and editor tools are off.
 	class ViewportPanel : public EditorPanel
 	{
 	public:
@@ -41,11 +43,11 @@ namespace Strata
 			Fly
 		};
 
-		void DrawToolbar(EditorContext& context);
+		void DrawChips(EditorContext& context);
 		void HandleShortcuts(EditorContext& context);
 		void UpdateCamera(EditorContext& context, bool hovered);
 		void UpdateGizmo(EditorContext& context, const ViewportView& view);
-		void DrawOverlays(EditorContext& context, const ViewportView& view);
+		void DrawOverlays(EditorContext& context, const ViewportView& view, float chipRowBottom);
 		void AcceptAssetDrops(EditorContext& context, const EditorCommandRegistry& commands);
 		void EndCameraDrag();
 		void EndGizmoDrag(EditorContext& context);

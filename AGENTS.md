@@ -460,7 +460,7 @@ and `AudioSystem`, the built-in "Audio" scene system.
   - Controls come from the widget kit (`UI/Widgets.h`: toolbar and icon buttons, chips, status pills, section headers,
     headings, cards, modal dialogs); every kit widget records its rectangle in `UI::ItemProbe` under its id.
   - UI tests draw the real `EditorLayer` without a window or GPU through `StrataTests/src/Editor/ImGuiHarness.h` (a fake
-    `EditorHost`, ImGui's texture requests honored without a renderer, injected input, kit widgets found by probe key).
+    `EditorHost`, ImGui's texture requests honored without a renderer, injected input, `ClickItem` by probe key).
 - **Every change to the scene or project goes through a command** (`EditorCommandRegistry::Execute`) or,
   for continuous UI edits, through `SceneEditTransaction` / `SetPropertyWithUndo`. That keeps the UI,
   automation (AI agents) and tests identical, and makes every edit undoable.
@@ -534,7 +534,11 @@ and `AudioSystem`, the built-in "Audio" scene system.
   asset manager with only the built-in assets active, so built-in meshes render.
 - **Viewport panel** (`Panels/ViewportPanel`): renders into a texture of the panel's pixel size and takes input only
   while hovered or focused: Alt + left drag orbits, middle drag pans, the wheel dollies, right drag flies (WASD, Q/E
-  down/up, Shift faster, wheel = speed), F frames the selection, Home everything, W/E/R/Q pick the gizmo, Ctrl snaps.
+  down/up, Shift faster, wheel = speed), F frames the selection, Home everything, W/E/R/Q pick the gizmo (as do the main
+  toolbar's tool buttons, next to the gizmo space and the snap toggle, `ViewportSettings::Snap`; holding Ctrl inverts
+  snapping). Chips over the image's top left hold the camera settings and the overlay toggles (grid, outline, gizmos,
+  stats); a strip in the play state's color tops the image while the scene runs. The selection outline is the theme's
+  accent (`ViewportSettings::SelectionColor`, set by the UI, not saved).
   Clicks pick without blocking (`EditorViewport::RequestPick` reads one pixel of the entity-ID buffer; Ctrl toggles,
   Shift adds, empty space clears) and never when they hit the gizmo. Gizmo drags go through `TransformDrag`
   (`Editor/TransformEdit.h`): selected entities without a selected ancestor follow the primary one, local transforms

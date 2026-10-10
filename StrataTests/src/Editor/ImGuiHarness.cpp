@@ -77,6 +77,22 @@ namespace Strata::Tests
 		ImGui::GetIO().AddKeyEvent(key, down);
 	}
 
+	bool ImGuiHarness::ClickItem(std::string_view probeKey, Layer& layer)
+	{
+		const std::optional<UI::ItemProbe::Item> item = UI::ItemProbe::Find(probeKey);
+		if (!item || item->Duplicate || !item->Enabled)
+			return false;
+		// Hover first (ImGui decides what is hovered from the previous frame), then press and release: buttons act on the
+		// release.
+		MoveMouse(item->GetCenter());
+		Frame(layer);
+		SetMouseButton(ImGuiMouseButton_Left, true);
+		Frame(layer);
+		SetMouseButton(ImGuiMouseButton_Left, false);
+		Frame(layer);
+		return true;
+	}
+
 	int ImGuiHarness::GetHoveredItemIdCount() const
 	{
 		return GImGui->HoveredIdPreviousFrameItemCount;

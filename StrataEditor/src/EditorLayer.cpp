@@ -7,12 +7,16 @@
 #include "Panels/ViewportPanel.h"
 #include "UI/FileDialogs.h"
 #include "UI/Icons.h"
+#include "UI/Theme.h"
+#include "UI/Widgets.h"
 
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/ImageWriter.h>
 
 #include <imgui.h>
 #include <imgui_internal.h>
+
+#include <algorithm>
 
 namespace Strata
 {
@@ -22,12 +26,20 @@ namespace Strata
 
 		constexpr const char* c_EditorStatusSection = "editor";
 
+		// Fields of the snap steps popup, in text heights.
+		constexpr float c_SnapFieldWidthInFontSizes = 8.0f;
+
 		EditorContextSpecification MakeContextSpecification(const EditorOptions& options)
 		{
 			EditorContextSpecification specification;
 			specification.WatchAssetFiles = options.WatchFiles;
 			specification.HotReloadScripts = options.WatchFiles;
 			return specification;
+		}
+
+		glm::vec4 ToVec4(const ImVec4& color)
+		{
+			return glm::vec4(color.x, color.y, color.z, color.w);
 		}
 
 	}
@@ -75,6 +87,8 @@ namespace Strata
 			FileDialogs::Init();
 		if (ImGui::GetCurrentContext())
 			m_Panels.InstallSettingsHandler();
+		// The selection outline carries the accent, like selected rows.
+		m_Context.GetViewport().GetSettings().SelectionColor = ToVec4(UI::GetThemeColors().Accent);
 
 		if (!m_Options.ProjectPath.empty())
 		{
@@ -248,7 +262,6 @@ namespace Strata
 		m_UIDrawn = true;
 		HandleShortcuts();
 		DrawDockspace();
-		DrawToolbar();
 		EditorPanelContext panelContext { m_Context, m_Commands, m_CommandRunner };
 		m_Panels.OnImGuiRender(panelContext);
 		DrawUnsavedChangesModal();
@@ -292,12 +305,7 @@ namespace Strata
 		const ImGuiInputFlags global = ImGuiInputFlags_RouteGlobal;
 		// Play mode toggles always: it is also the way out of a game that has the input.
 		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_P, global))
-		{
-			if (m_Context.IsPlaying())
-				m_Context.Stop();
-			else
-				RunEditorCommand(m_Context, m_Commands, "play.start");
-		}
+			RunEditorCommand(m_Context, m_Commands, m_Context.IsPlaying() ? "play.stop" : "play.start");
 		// Keys the running game receives (e.g. Delete, or Ctrl+D with Ctrl to crouch) must not edit the scene.
 		if (!m_Context.AcceptsEditShortcuts())
 			return;
@@ -424,21 +432,17 @@ namespace Strata
 	{
 		ImGui::DockBuilderRemoveNode(dockspaceId);
 		ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
-		ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetMainViewport()->WorkSize);
+		ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetContentRegionAvail());
 
 		ImGuiID center = dockspaceId;
 		const ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.18f, nullptr, &center);
 		const ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.26f, nullptr, &center);
 		const ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.3f, nullptr, &center);
-		const ImGuiID top = ImGui::DockBuilderSplitNode(center, ImGuiDir_Up, 0.05f, nullptr, &center);
-		if (ImGuiDockNode* toolbar = ImGui::DockBuilderGetNode(top))
-			toolbar->LocalFlags |= static_cast<ImGuiDockNodeFlags>(ImGuiDockNodeFlags_NoTabBar) | static_cast<ImGuiDockNodeFlags>(ImGuiDockNodeFlags_NoResize);
 
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Hierarchy).c_str(), left);
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Inspector).c_str(), right);
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_ContentBrowser).c_str(), bottom);
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Console).c_str(), bottom);
-		ImGui::DockBuilderDockWindow("Toolbar", top);
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Viewport).c_str(), center);
 		ImGui::DockBuilderFinish(dockspaceId);
 	}
@@ -458,10 +462,13 @@ namespace Strata
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+		ImGui::PushStyleColor(ImGuiCol_WindowBg, UI::GetThemeColors().Chrome);
 		ImGui::Begin("EditorDockspace", nullptr, windowFlags);
+		ImGui::PopStyleColor();
 		ImGui::PopStyleVar(3);
 
 		DrawMenuBar();
+		DrawToolbar();
 		const ImGuiID dockspaceId = ImGui::GetID("EditorDockspaceID");
 		// Without a saved arrangement of the current layout version (first run, or an older editor's) the panels get the
 		// default one; checked once, so a user who undocks every panel keeps that choice.
@@ -583,46 +590,147 @@ namespace Strata
 
 	void EditorLayer::DrawToolbar()
 	{
-		ImGui::Begin("Toolbar", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-		const SceneState state = m_Context.GetSceneState();
-		const float width = ImGui::GetFrameHeight() * 4.0f;
-		const float lineStart = ImGui::GetCursorPosX();
-		const float lineWidth = ImGui::GetContentRegionAvail().x;
+		const ImGuiStyle& style = ImGui::GetStyle();
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		const float bandPadding = style.FramePadding.y;
+		const float height = ImGui::GetFrameHeight() + bandPadding * 2.0f;
 
-		// Scripts build at the left; play controls in the center.
-		const bool building = m_Context.GetScriptBuilder().IsRunning();
-		ImGui::BeginDisabled(!m_Context.HasProject() || building);
-		if (ImGui::Button(building ? "Building..." : "Build Scripts", ImVec2(width * 1.5f, 0.0f)))
-			BuildScripts();
-		ImGui::EndDisabled();
-		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-			ImGui::SetTooltip("Build the project's scripts and hot-reload them (Ctrl+B)");
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(style.WindowPadding.x, bandPadding));
+		ImGui::PushStyleColor(ImGuiCol_ChildBg, colors.Chrome);
+		ImGui::BeginChild("MainToolbar", ImVec2(0.0f, height), ImGuiChildFlags_AlwaysUseWindowPadding,
+			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+		ImGui::PopStyleColor();
+		ImGui::PopStyleVar();
+
+		// Transform tools at the left, play controls in the center, the script build at the right.
+		DrawGizmoControls();
+		const float buttonSize = ImGui::GetFrameHeight();
+		const float playWidth = buttonSize * 5.0f + style.ItemSpacing.x * 4.0f;
 		ImGui::SameLine();
-		ImGui::SetCursorPosX(std::max(lineStart + (lineWidth - width * 4.0f) * 0.5f, ImGui::GetCursorPosX()));
+		ImGui::SetCursorPosX(std::max((ImGui::GetWindowWidth() - playWidth) * 0.5f, ImGui::GetCursorPosX() + style.ItemSpacing.x * 2.0f));
+		DrawPlayControls();
+		DrawBuildControls();
+		ImGui::EndChild();
 
-		if (state == SceneState::Edit)
+		// A hairline closes the chrome band above the panels.
+		const ImVec2 min = ImGui::GetItemRectMin();
+		const ImVec2 max = ImGui::GetItemRectMax();
+		ImGui::GetWindowDrawList()->AddLine(ImVec2(min.x, max.y - 1.0f), ImVec2(max.x, max.y - 1.0f), ImGui::GetColorU32(colors.Border));
+	}
+
+	void EditorLayer::DrawGizmoControls()
+	{
+		ViewportSettings& settings = m_Context.GetViewport().GetSettings();
+		auto gizmoButton = [&settings](const char* id, const char* icon, GizmoOperation operation, const char* tooltip)
 		{
-			if (ImGui::Button("Play", ImVec2(width, 0.0f)))
-				RunEditorCommand(m_Context, m_Commands, "play.start");
+			UI::ButtonStyle style;
+			style.Active = settings.Gizmo == operation;
+			if (UI::ToolbarButton(id, icon, nullptr, tooltip, style))
+				settings.Gizmo = operation;
 			ImGui::SameLine();
-			if (ImGui::Button("Simulate", ImVec2(width, 0.0f)))
-				RunEditorCommand(m_Context, m_Commands, "play.simulate");
-		}
-		else
+		};
+		gizmoButton("Toolbar.Select", Icons::MousePointer2, GizmoOperation::None, "Select: no transform gizmo (Q)");
+		gizmoButton("Toolbar.Move", Icons::Move3d, GizmoOperation::Translate, "Move the selection (W)");
+		gizmoButton("Toolbar.Rotate", Icons::Rotate3d, GizmoOperation::Rotate, "Rotate the selection (E)");
+		gizmoButton("Toolbar.Scale", Icons::Scale3d, GizmoOperation::Scale, "Scale the selection (R)");
+
+		const ImGuiStyle& style = ImGui::GetStyle();
+		ImGui::SameLine(0.0f, style.ItemSpacing.x * 3.0f);
+		const bool world = settings.Space == GizmoSpace::World;
+		if (UI::ToolbarButton("Toolbar.Space", world ? Icons::Globe : Icons::Box, world ? "World" : "Local",
+			"Gizmo axes: the world's or the entity's own (scaling always uses the entity's)"))
 		{
-			if (ImGui::Button("Stop", ImVec2(width, 0.0f)))
-				m_Context.Stop();
-			ImGui::SameLine();
-			const bool paused = m_Context.IsPaused();
-			if (ImGui::Button(paused ? "Resume" : "Pause", ImVec2(width, 0.0f)))
-				m_Context.SetPaused(!paused);
-			ImGui::SameLine();
-			ImGui::BeginDisabled(!paused);
-			if (ImGui::Button("Step", ImVec2(width, 0.0f)))
-				m_Context.Step();
-			ImGui::EndDisabled();
+			settings.Space = world ? GizmoSpace::Local : GizmoSpace::World;
 		}
-		ImGui::End();
+		ImGui::SameLine();
+		UI::ButtonStyle snapStyle;
+		snapStyle.Active = settings.Snap;
+		if (UI::ToolbarButton("Toolbar.Snap", Icons::Magnet, nullptr, "Snap gizmo drags to steps (holding Ctrl inverts this)", snapStyle))
+			settings.Snap = !settings.Snap;
+		ImGui::SameLine(0.0f, 0.0f);
+		if (UI::ToolbarButton("Toolbar.SnapSteps", Icons::ChevronDown, nullptr, "Snapping steps"))
+			ImGui::OpenPopup("SnapSettings");
+		if (ImGui::BeginPopup("SnapSettings"))
+		{
+			const float fieldWidth = ImGui::GetFontSize() * c_SnapFieldWidthInFontSizes;
+			ImGui::SetNextItemWidth(fieldWidth);
+			ImGui::DragFloat("Move (units)", &settings.TranslateSnap, 0.05f, 0.001f, ViewportSettings::c_MaxTranslateSnap, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::SetNextItemWidth(fieldWidth);
+			ImGui::DragFloat("Rotate (degrees)", &settings.RotateSnap, 0.5f, 0.1f, ViewportSettings::c_MaxRotateSnap, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::SetNextItemWidth(fieldWidth);
+			ImGui::DragFloat("Scale (factor)", &settings.ScaleSnap, 0.01f, 0.001f, ViewportSettings::c_MaxScaleSnap, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::EndPopup();
+		}
+	}
+
+	void EditorLayer::DrawPlayControls()
+	{
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		const SceneState state = m_Context.GetSceneState();
+		const bool playing = m_Context.IsPlaying();
+		const bool paused = m_Context.IsPaused();
+
+		// Play is the primary action while editing; while a mode runs, its button shows it in the mode's color.
+		UI::ButtonStyle play;
+		play.Enabled = !playing;
+		play.Primary = !playing;
+		play.Active = state == SceneState::Play;
+		play.ActiveColor = colors.PlayState.Play;
+		if (UI::ToolbarButton("Toolbar.Play", Icons::Play, nullptr, playing ? "Playing" : "Play: run the scene with scripts, physics and audio (Ctrl+P)", play))
+			RunEditorCommand(m_Context, m_Commands, "play.start");
+		ImGui::SameLine();
+
+		UI::ButtonStyle simulate;
+		simulate.Enabled = !playing;
+		simulate.Active = state == SceneState::Simulate;
+		simulate.ActiveColor = colors.PlayState.Simulate;
+		if (UI::ToolbarButton("Toolbar.Simulate", Icons::Atom, nullptr, "Simulate: run the scene's physics only", simulate))
+			RunEditorCommand(m_Context, m_Commands, "play.simulate");
+		ImGui::SameLine();
+
+		UI::ButtonStyle pause;
+		pause.Enabled = playing;
+		pause.Active = paused;
+		pause.ActiveColor = colors.PlayState.Paused;
+		if (UI::ToolbarButton("Toolbar.Pause", Icons::Pause, nullptr, paused ? "Resume" : "Pause", pause))
+			RunEditorCommand(m_Context, m_Commands, "play.pause", { { "paused", !paused } });
+		ImGui::SameLine();
+
+		UI::ButtonStyle step;
+		step.Enabled = paused;
+		if (UI::ToolbarButton("Toolbar.Step", Icons::StepForward, nullptr, "Step one fixed update while paused", step))
+			RunEditorCommand(m_Context, m_Commands, "play.step");
+		ImGui::SameLine();
+
+		UI::ButtonStyle stop;
+		stop.Enabled = playing;
+		if (UI::ToolbarButton("Toolbar.Stop", Icons::Square, nullptr, "Stop and return to the edited scene (Ctrl+P)", stop))
+			RunEditorCommand(m_Context, m_Commands, "play.stop");
+	}
+
+	void EditorLayer::DrawBuildControls()
+	{
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		const ImGuiStyle& style = ImGui::GetStyle();
+		const ScriptBuilder& builder = m_Context.GetScriptBuilder();
+		const bool building = builder.IsRunning();
+		const bool failed = !building && builder.GetLastResult().ID != 0 && !builder.GetLastResult().Success;
+
+		const std::string label = building ? fmt::format("Building {:.0f} s", builder.GetElapsedSeconds()) : std::string("Build Scripts");
+		const char* icon = building ? Icons::LoaderCircle : (failed ? Icons::CircleAlert : Icons::Hammer);
+		UI::ButtonStyle buildStyle;
+		buildStyle.Enabled = m_Context.HasProject() && !building;
+		buildStyle.Active = building || failed;
+		buildStyle.ActiveColor = building ? colors.Info : colors.Error;
+		const char* tooltip = failed ? "The last build failed (see the Console): build the scripts again (Ctrl+B)"
+			: "Build the project's scripts and hot-reload them (Ctrl+B)";
+
+		// Right-aligned.
+		const float width = style.FramePadding.x * 2.0f + ImGui::CalcTextSize(icon).x + style.ItemInnerSpacing.x + ImGui::CalcTextSize(label.c_str()).x;
+		ImGui::SameLine();
+		ImGui::SetCursorPosX(std::max(ImGui::GetWindowWidth() - style.WindowPadding.x - width, ImGui::GetCursorPosX()));
+		if (UI::ToolbarButton("Toolbar.BuildScripts", icon, label.c_str(), tooltip, buildStyle))
+			BuildScripts();
 	}
 
 	void EditorLayer::DrawStatusBar()

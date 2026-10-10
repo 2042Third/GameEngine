@@ -53,7 +53,7 @@ namespace Strata
 	}
 
 	// The editor application layer: owns the editor state (EditorContext), the command registry shared with automation,
-	// and the ImGui interface: the menu bar, the toolbar, the panels (EditorPanelRegistry), the status bar and the
+	// and the ImGui interface: the menu bar, the main toolbar, the panels (EditorPanelRegistry), the status bar and the
 	// default layout. It reaches the application only through its EditorHost.
 	class EditorLayer : public Layer
 	{
@@ -83,6 +83,9 @@ namespace Strata
 		void BuildDefaultLayout(unsigned int dockspaceId);
 		void DrawMenuBar();
 		void DrawToolbar();
+		void DrawGizmoControls();
+		void DrawPlayControls();
+		void DrawBuildControls();
 		void DrawStatusBar();
 		void DrawUnsavedChangesModal();
 		void HandleShortcuts();

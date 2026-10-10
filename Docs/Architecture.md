@@ -415,7 +415,7 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
 ```text
  StrataEditor      EditorApplication      options, Bedrock theme and fonts installed into ImGuiLayer, EditorHost
  --------------------------------------------------------------------------------------------------------------
- StrataEditorUI    EditorLayer            owns everything below: menu bar, toolbar, status bar, default
+ StrataEditorUI    EditorLayer            owns everything below: menu bar, main toolbar, status bar, default
                                           layout, shortcuts, file dialogs (nfd)
                    EditorPanelRegistry    the panels (Viewport, Hierarchy, Inspector, Console, Content Browser):
                                           windows, View menu, open state in imgui.ini
@@ -432,7 +432,7 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
 - **UI** (`StrataEditorUI`). `EditorLayer` (`StrataEditor/src/EditorLayer.h`) reaches the application only through
   `EditorHost` (close, exit code, frame count, time, window title, size and focus, UI scale, frame rate cap,
   screenshots), which `EditorApplication.cpp` implements on `Application` and the UI tests fake. Each frame it draws the
-  dock space host (menu bar and dock space), the toolbar's window and the status bar, then the panels through
+  dock space host (menu bar, the main toolbar under it, the dock space) and the status bar, then the panels through
   `EditorPanelRegistry` (`UI/EditorPanelRegistry.h`), which begins each open panel's window (`###<id>` names, so docking
   and settings survive title changes), asks the panel for window options, calls `OnImGuiRender` while it is visible
   and `OnHidden` otherwise, and saves which panels are open with the layout version in imgui.ini (`StrataPanels`); a

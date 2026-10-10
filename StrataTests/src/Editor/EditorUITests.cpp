@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Audio/AudioTestUtils.h"
 #include "Editor/ImGuiHarness.h"
 #include "EditorLayer.h"
 #include "FeatureTest/FeatureTestUtils.h"
@@ -64,6 +65,14 @@ namespace
 				Harness.Frame(*Layer, seconds);
 				Host->FrameCount++;
 			}
+		}
+
+		bool Click(std::string_view probeKey)
+		{
+			Host->Time += 3.0 * ImGuiHarness::c_DeltaTime;
+			const bool clicked = Harness.ClickItem(probeKey, *Layer);
+			Host->FrameCount += 3;
+			return clicked;
 		}
 
 		EditorContext& Context() { return Layer->GetContext(); }
@@ -173,7 +182,7 @@ TEST_SUITE("Editor.UI")
 		editor.Frames(3);
 		CHECK(editor.Harness.GetHoveredItemIdCount() <= 1);
 
-		// The panels are up.
+		// The panels are up, and the toolbar.
 		for (const char* panel : { EditorPanels::c_Viewport, EditorPanels::c_Hierarchy, EditorPanels::c_Inspector, EditorPanels::c_ContentBrowser,
 			EditorPanels::c_Console })
 		{
@@ -181,6 +190,11 @@ TEST_SUITE("Editor.UI")
 			ImGuiWindow* window = editor.FindPanelWindow(panel);
 			REQUIRE(window);
 			CHECK(window->Active);
+		}
+		for (const char* item : { "Toolbar.Play", "Toolbar.Move", "Toolbar.BuildScripts", "Viewport.Grid" })
+		{
+			CAPTURE(item);
+			CHECK(UI::ItemProbe::Find(item).has_value());
 		}
 
 		// With an entity selected the inspector shows its components; then the mouse goes over the whole window, so every
@@ -206,6 +220,28 @@ TEST_SUITE("Editor.UI")
 			}
 		}
 		CHECK(conflicts == 0);
+	}
+
+	TEST_CASE("Clicking Play on the toolbar runs play.start, and Stop play.stop")
+	{
+		ScopedAudioEngine audio;
+		REQUIRE(audio.Initialized);
+		HarnessEditor editor({}, WithFeatureProject("EditorUIPlay"));
+		editor.Frames(2);
+		REQUIRE_FALSE(editor.Context().IsPlaying());
+		// Stop is disabled while editing: the harness refuses to click it.
+		CHECK_FALSE(editor.Click("Toolbar.Stop"));
+
+		REQUIRE(editor.Click("Toolbar.Play"));
+		CHECK(editor.Context().GetSceneState() == SceneState::Play);
+		CHECK(editor.Context().GetActiveScene() != editor.Context().GetEditScene());
+		editor.Frames(1);
+		// Play is shown active (disabled while playing); Pause becomes available.
+		CHECK_FALSE(UI::ItemProbe::Find("Toolbar.Play")->Enabled);
+		REQUIRE(editor.Click("Toolbar.Pause"));
+		CHECK(editor.Context().IsPaused());
+		REQUIRE(editor.Click("Toolbar.Stop"));
+		CHECK_FALSE(editor.Context().IsPlaying());
 	}
 
 	TEST_CASE("A content scale event restyles the UI and scales its fonts")
