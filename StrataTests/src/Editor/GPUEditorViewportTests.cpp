@@ -690,4 +690,53 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(countPixels(second, magenta) == 0);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
+
+	TEST_CASE("viewport.capture shows the LOD and streaming debug views")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.AddScene();
+		// No overlays: the debug views apply without them.
+		const nlohmann::json size = { { "width", 64 }, { "height", 64 }, { "overlays", false } };
+		auto withView = [&size](const char* view)
+		{
+			nlohmann::json parameters = size;
+			parameters["debugView"] = view;
+			return parameters;
+		};
+
+		nlohmann::json result;
+		const DecodedImage plain = harness.Capture(withView("none"), &result);
+		CHECK(result["debugView"]["view"] == "none");
+		CHECK(result["debugView"]["tintedEntities"] == 0);
+
+		// The cube (a built-in mesh with one level of detail) is drawn at level 0: tinted in that level's color.
+		ViewportDebugColors& colors = harness.Context.GetViewport().GetSettings().DebugColors;
+		colors.LOD[0] = glm::vec4(0.0f, 1.0f, 0.0f, 1.0f);
+		const DecodedImage lod = harness.Capture(withView("lod"), &result);
+		CHECK(result["debugView"]["view"] == "lod");
+		CHECK(result["debugView"]["tintedEntities"] == 1);
+		CHECK(result["debugView"]["entitiesPerLOD"] == nlohmann::json::array({ 1, 0, 0, 0 }));
+		CHECK(lod.At(32, 32) == glm::ivec4(0, 255, 0, 255));
+		CHECK(lod.At(1, 1) == plain.At(1, 1)); // The background is untouched
+		CHECK(harness.CountDifferences(lod, plain) > 50);
+
+		// Nothing is loading: the streaming view tints nothing.
+		const DecodedImage streaming = harness.Capture(withView("streaming"), &result);
+		CHECK(result["debugView"]["view"] == "streaming");
+		CHECK(result["debugView"]["tintedEntities"] == 0);
+		CHECK(result["debugView"]["pendingEntities"] == 0);
+		CHECK(result["debugView"]["placeholderBoxes"] == 0);
+		CHECK(harness.CountDifferences(streaming, plain) == 0);
+
+		// Captures default to the viewport's debug view; unknown views are refused.
+		harness.Run("viewport.setSettings", { { "debugView", "lod" } });
+		harness.Capture(size, &result);
+		CHECK(result["debugView"]["view"] == "lod");
+		const EditorCommandResult invalid = harness.Commands.Execute(harness.Context, "viewport.capture", withView("mips"));
+		CHECK(invalid.ErrorKind == EditorCommandError::InvalidParameters);
+		CHECK(invalid.Error.find("debugView") != std::string::npos);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
 }

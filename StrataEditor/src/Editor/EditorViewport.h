@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Editor/EditorCamera.h"
+#include "Editor/StreamingView.h"
 #include "Editor/TransformEdit.h"
 #include "Editor/ViewportRenderer.h"
 
@@ -55,6 +56,11 @@ namespace Strata
 		float ScaleSnap = 0.1f;
 		// The selection outline's display color. Not saved: the editor's theme sets it (its accent).
 		glm::vec4 SelectionColor = SceneRenderOptions().SelectionColor;
+		// Colors the image by streaming state or level of detail (StreamingView), in every view of the viewport, the game
+		// view too.
+		ViewportDebugView DebugView = ViewportDebugView::None;
+		// The debug views' colors. Not saved: the editor's theme sets them.
+		ViewportDebugColors DebugColors;
 
 		nlohmann::json ToJson() const;
 		// Applies a ToJson document; absent values keep their current value. Fails (changing nothing) on invalid values.

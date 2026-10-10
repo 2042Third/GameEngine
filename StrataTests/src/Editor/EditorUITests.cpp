@@ -761,6 +761,30 @@ TEST_SUITE("Editor.UI")
 		CHECK(ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId));
 	}
 
+	TEST_CASE("The viewport's debug view chip lights while a debug view colors the image")
+	{
+		HarnessEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f }, WithFeatureProject("EditorUIDebugView"));
+		editor.Frames(2);
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		REQUIRE(UI::ItemProbe::Find("Viewport.DebugView").has_value());
+		const ImU32 off = UI::ItemProbe::Find("Viewport.DebugView")->Color;
+		CHECK(off != ToColor(colors.Accent));
+
+		editor.Run("viewport.setSettings", { { "debugView", "lod" } });
+		editor.Frames(1);
+		CHECK(UI::ItemProbe::Find("Viewport.DebugView")->Color == ToColor(colors.Accent));
+
+		// The editor's theme gives the debug views their colors: loading is a warning, failing an error.
+		const ViewportDebugColors& debugColors = editor.Context().GetViewport().GetSettings().DebugColors;
+		CHECK(ToColor(ImVec4(debugColors.Pending.r, debugColors.Pending.g, debugColors.Pending.b, 1.0f)) == ToColor(colors.Warning));
+		CHECK(ToColor(ImVec4(debugColors.Failed.r, debugColors.Failed.g, debugColors.Failed.b, 1.0f)) == ToColor(colors.Error));
+		CHECK(ToColor(ImVec4(debugColors.LOD[0].r, debugColors.LOD[0].g, debugColors.LOD[0].b, 1.0f)) == ToColor(colors.Success));
+
+		// Clicking the chip offers the views instead of toggling.
+		REQUIRE(editor.Click("Viewport.DebugView"));
+		CHECK(editor.Context().GetViewport().GetSettings().DebugView == ViewportDebugView::LOD);
+	}
+
 	TEST_CASE("Simulate, Pause and Step on the toolbar")
 	{
 		ScopedAudioEngine audio;

@@ -44,7 +44,8 @@ namespace Strata
 			{ "Snap", Snap },
 			{ "TranslateSnap", TranslateSnap },
 			{ "RotateSnap", RotateSnap },
-			{ "ScaleSnap", ScaleSnap }
+			{ "ScaleSnap", ScaleSnap },
+			{ "DebugView", ViewportDebugViewToString(DebugView) }
 		};
 	}
 
@@ -84,6 +85,13 @@ namespace Strata
 			if (!space)
 				return fail("'Space' must be \"Local\" or \"World\"");
 			result.Space = *space;
+		}
+		if (const auto it = json.find("DebugView"); it != json.end())
+		{
+			const std::optional<ViewportDebugView> view = it->is_string() ? ViewportDebugViewFromString(it->get<std::string>()) : std::nullopt;
+			if (!view)
+				return fail("'DebugView' must be \"none\", \"streaming\" or \"lod\"");
+			result.DebugView = *view;
 		}
 		for (const auto& [key, value, maximum] : { std::tuple<const char*, float*, float> { "TranslateSnap", &result.TranslateSnap, c_MaxTranslateSnap },
 			{ "RotateSnap", &result.RotateSnap, c_MaxRotateSnap }, { "ScaleSnap", &result.ScaleSnap, c_MaxScaleSnap } })

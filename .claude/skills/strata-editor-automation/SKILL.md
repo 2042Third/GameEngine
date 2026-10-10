@@ -92,16 +92,25 @@ Commands added at run time (for example `script.*`, `viewport.*`, `camera.*` whe
 appear in `editor.commands` and as tools automatically. The viewport commands need rendering: they fail in an
 editor started with `--no-gpu` (use `--headless`):
 
-- `viewport.capture {width?, height?, camera?: "editor" | "scene", overlays?, path?}` returns
+- `viewport.capture {width?, height?, camera?: "editor" | "scene", overlays?, debugView?, path?}` returns
   `{"Image": {"MimeType": "image/png", "Data"}, width, height, camera, overlays, pendingAssets, pendingTextGlyphs,
-  previewLighting, screenSpaceTexts, hiddenScreenSpaceTexts, notice?, path?}`. Text is complete in the picture (the
-  capture waits a few frames for new glyphs).
+  previewLighting, screenSpaceTexts, hiddenScreenSpaceTexts, debugView, notice?, path?}`. Text is complete in the
+  picture (the capture waits a few frames for new glyphs).
+- **Debug views** show what streaming and level-of-detail selection do: `debugView: "streaming"` tints entities whose
+  mesh, material or textures are still loading (yellow, Sulfur) or failed (red, Cinnabar) and draws a box where a mesh
+  is not loaded yet; `"lod"` tints entities by the level of detail they are drawn at (green 0, blue 1, yellow 2, red 3+);
+  `"none"` is the plain image. Pass it to `viewport.capture` for one picture, or set it for the viewport with
+  `viewport.setSettings {"debugView": ...}` (it then colors the person's viewport too, also the game view). The result's
+  `debugView` counts what it found among the entities in view: `{view, tintedEntities, pendingEntities, failedEntities,
+  placeholderBoxes, entitiesPerLOD: [LOD0, LOD1, LOD2, LOD3+]}`, so you need not read colors: e.g. capture with
+  `"streaming"` until `pendingEntities` and `placeholderBoxes` are 0.
 - **Editor views are not the game's view.** With the editor camera outside play mode, a scene without any light (no
   directional, point, spot or sky light) is lit by *preview lighting* (a sun and a procedural sky that the game will not
   have: the result says `"previewLighting": true`), and the game's screen-space text (its HUD) is hidden
   (`hiddenScreenSpaceTexts` counts it). To see what a player sees, capture with `{"camera": "scene"}` (or while playing).
   `viewport.getSettings` / `viewport.setSettings {previewLighting?, gameUI?, grid?, selectionOutline?, sceneGizmos?,
-  stats?, gizmo?, space?, ...}` change these view settings (no undo step; saved with the project's editor state).
+  stats?, gizmo?, space?, debugView?, ...}` change these view settings (no undo step; saved with the project's editor
+  state).
 - `camera.get`; `camera.set {position?, target?, yaw?, pitch?, distance?, fov?, near?, far?, flySpeed?}`;
   `camera.focus {entities?}` frames the given (or selected) entities. Every scene remembers its own editor camera; a
   scene opened for the first time is framed on what it renders, seen from the direction of its primary camera.

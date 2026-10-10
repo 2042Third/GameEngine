@@ -742,10 +742,13 @@ and `AudioSystem`, the built-in "Audio" scene system.
   down/up, Shift faster, wheel = speed), F frames the selection, Home everything, W/E/R/Q pick the gizmo (as do the main
   toolbar's tool buttons, next to the gizmo space and the snap toggle, `ViewportSettings::Snap`; holding Ctrl inverts
   snapping). Chips over the image's top left hold the camera settings, the overlay toggles (grid, outline, gizmos,
-  stats) and the editor-view settings (preview lighting, game UI); clicking a chip does not focus the panel. A strip in
-  the play state's color tops the image while the scene runs. In the game view only the stats chip remains, and only
-  while the game does not have the input: once the view is clicked, every click on the image is the game's. The
-  selection outline is the theme's accent (`ViewportSettings::SelectionColor`, set by the UI, not saved).
+  stats), the editor-view settings (preview lighting, game UI) and the debug view (lit while one colors the image; a
+  click offers Lit, Streaming and LOD); clicking a chip does not focus the panel. A strip in the play state's color tops
+  the image while the scene runs. In the game view only the stats and debug view chips remain, and only while the game
+  does not have the input: once the view is clicked, every click on the image is the game's. A debug view shows a legend
+  at the image's bottom left (its colors with the number of entities in view per color, and the placeholder boxes). The
+  selection outline is the theme's accent and the debug views use its meanings (`ViewportSettings::SelectionColor` and
+  `DebugColors`, set by the UI, not saved).
   Clicks pick without blocking (`EditorViewport::RequestPick` reads one pixel of the entity-ID buffer; Ctrl toggles,
   Shift adds, empty space clears) and never when they hit the gizmo. Gizmo drags go through `TransformDrag`
   (`Editor/TransformEdit.h`): selected entities without a selected ancestor follow the primary one, local transforms
@@ -756,15 +759,17 @@ and `AudioSystem`, the built-in "Audio" scene system.
   image is a plain `Dummy` while the mouse is over the gizmo.
 - **View commands** change no scene data and record no undo: `camera.get`, `camera.set {position, target, yaw, pitch,
   distance, fov, near, far, flySpeed}` (position + target looks from one at the other) and `camera.focus {entities?}`
-  (frames them, or the whole scene). `viewport.capture {width?, height?, camera?: "editor" | "scene", overlays?, path?,
-  overwrite?}` renders on the next frame (again on the following frames, up to `c_MaxCaptureTextFrames`, while glyphs of
-  the scene's text are still being rasterized, so text is never half drawn), reads the image back without stalling,
-  encodes it on a job thread and returns `{"Image": {"MimeType": "image/png", "Data": <base64>}, "width", "height",
-  "camera", "overlays", "pendingAssets", "pendingTextGlyphs", "previewLighting", "screenSpaceTexts",
-  "hiddenScreenSpaceTexts", "notice"?, "path"?}`; it defaults to the viewport's size, camera and overlays and fails
-  without a GPU. `viewport.getSettings` and `viewport.setSettings {grid, selectionOutline, sceneGizmos, stats,
-  previewLighting, gameUI, gizmo, space, snap, translateSnap, rotateSnap, scaleSnap}` read and change the view settings
-  (validated as a whole: an invalid value changes nothing).
+  (frames them, or the whole scene). `viewport.capture {width?, height?, camera?: "editor" | "scene", overlays?,
+  debugView?: "none" | "streaming" | "lod", path?, overwrite?}` renders on the next frame (again on the following frames,
+  up to `c_MaxCaptureTextFrames`, while glyphs of the scene's text are still being rasterized, so text is never half
+  drawn), reads the image back without stalling, encodes it on a job thread and returns `{"Image": {"MimeType":
+  "image/png", "Data": <base64>}, "width", "height", "camera", "overlays", "pendingAssets", "pendingTextGlyphs",
+  "previewLighting", "screenSpaceTexts", "hiddenScreenSpaceTexts", "debugView": {"view", "tintedEntities",
+  "pendingEntities", "failedEntities", "placeholderBoxes", "entitiesPerLOD"}, "notice"?, "path"?}`; it defaults to the
+  viewport's size, camera, overlays and debug view and fails without a GPU. `viewport.getSettings` and
+  `viewport.setSettings {grid, selectionOutline, sceneGizmos, stats, previewLighting, gameUI, gizmo, space, snap,
+  translateSnap, rotateSnap, scaleSnap, debugView}` read and change the view settings (validated as a whole: an invalid
+  value changes nothing; the debug view is saved with them).
 - Materials: `material.create {path, properties}`, `material.set {material, properties}` and `material.get {material}` (its
   values and every material property described like `component.list` describes component properties); an unknown property
   name fails with the list of known ones.
@@ -832,7 +837,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   colors into the output texture (then copied into an external target): the infinite ground grid, the
   selection outline (from the entity-ID buffer, so alpha-blended surfaces get none) and `DebugDraw` line
   lists, depth-tested against the scene or always on top. Fill a `DebugDraw` each frame (gameplay
-  debugging, or `DrawSceneGizmos` for light, camera and collider shapes) and pass it to `Render`.
+  debugging, or `DrawSceneGizmos` for light, camera and collider shapes) and pass it to `Render`. Entity tints
+  (`EntityTints`, `Overlay/StatusTint.frag`) come first: listed entities' pixels in the entity-ID buffer are blended with
+  their color and no other pixel changes (debug views such as the editor's streaming and LOD views). Code that needs the
+  level of detail the renderer draws uses `LODSelection` (`Renderer/LODSelection.h`), the functions `SceneRenderer` calls.
 - `TextComponent`s are drawn with the overlays by `TextRenderer`: signed distance field glyphs from a
   per-font `FontAtlas` (stb_truetype, filled on demand), laid out by `LayoutText` (UTF-8, lines,
   alignment). World-space text is depth-tested, screen-space text goes over everything. Text without a

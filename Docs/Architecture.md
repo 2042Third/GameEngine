@@ -160,10 +160,13 @@ and text) into render targets of its viewport size, which it hands to the `Defer
 (the viewport panel, the game window) or freed (captures). Its image-based lighting comes from the sky light's
 environment map or its procedural sky (`IBL/ProceduralSky.comp` writes mip 0 of the environment cube, then the shared
 filtering chain runs), computed again only when the source or the procedural parameters change; editor views can ask
-for preview lighting and leave out screen-space text (`SceneRenderOptions`). Assets:
-`Mesh`, `Material`, `Texture`, `Font`; procedural primitives come from `MeshFactory`. Also `TextRenderer`/`FontAtlas`,
-`DebugDraw`/`SceneGizmos`, `TextureReadback` (non-blocking GPU readback) and `ImageWriter` (PNG). Conventions and
-rules: AGENTS.md, "Architecture rules" and "Rendering".
+for preview lighting, leave out screen-space text and tint entities (`SceneRenderOptions::EntityTints`: the first
+overlay, `Overlay/StatusTint.frag`, blends the listed entities' colors over exactly their pixels of the entity-ID buffer,
+found by binary search in a sorted (id, color) buffer like the selection outline's). How a mesh's level of detail is
+chosen is a pure function (`LODSelection::GetScreenFraction`, `SelectLOD`), so tools show the level the renderer draws.
+Assets: `Mesh`, `Material`, `Texture`, `Font`; procedural primitives come from `MeshFactory`. Also
+`TextRenderer`/`FontAtlas`, `DebugDraw`/`SceneGizmos`, `TextureReadback` (non-blocking GPU readback) and `ImageWriter`
+(PNG). Conventions and rules: AGENTS.md, "Architecture rules" and "Rendering".
 
 **Physics** (`Physics/`). `PhysicsSystem` is the "Physics" scene system (Play and Simulate). `PhysicsWorld` builds a
 Jolt world from RigidBody and collider components and steps it; `PhysicsRuntime` reference-counts Jolt's global
@@ -834,9 +837,18 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   the project's other scenes), the settings and two `ViewportRenderer`s (panel and captures). The panel renders during
   `OnImGuiRender`; `ResolveViewportView` picks the scene's primary camera while playing and the editor camera otherwise,
   and `GetViewportRenderOptions` gives editor views (the editor camera outside play mode) preview lighting and a hidden
-  HUD as the settings say (`viewport.getSettings`, `viewport.setSettings`). Picking reads one pixel of the entity-ID
-  buffer asynchronously and completes in `EditorContext::Update`. `viewport.capture` renders on the next frame, polls a
-  `TextureReadback`, encodes the PNG on a worker and saves on an I/O thread (`EditorViewportCommands.cpp`).
+  HUD as the settings say (`viewport.getSettings`, `viewport.setSettings`). The settings' debug view
+  (`ViewportDebugView`: `none`, `streaming`, `lod`) colors every view of the viewport, the game view too: before each
+  render `StreamingView` (`Editor/StreamingView.h`) walks the active mesh renderers in view and lists tints for the
+  renderer (`SceneRenderOptions::EntityTints`). The streaming view reads the active asset manager's states without
+  requesting anything, with the renderer's choice of mesh, material and textures: entities with a mesh, material or
+  texture still loading are tinted in the pending color, failed ones in the failed color, and entities whose mesh is
+  not there (nothing is drawn, so nothing can be tinted) get a placeholder box (at most `c_MaxPlaceholderBoxes`). The
+  LOD view tints each entity by the most simplified level its submeshes are drawn at (`LODSelection`, with the viewport
+  renderer's threshold). The colors are `ViewportSettings::DebugColors`, which the UI sets from the theme (not saved).
+  Picking reads one pixel of the entity-ID buffer asynchronously and completes in `EditorContext::Update`.
+  `viewport.capture` renders on the next frame (with its own `debugView` if given), polls a `TextureReadback`, encodes
+  the PNG on a worker and saves on an I/O thread (`EditorViewportCommands.cpp`).
 - **Script builds** (`ScriptBuild.h`). `ScriptBuilder` runs CMake configure and build as child processes (one build at
   a time, ended as a process tree when cancelled), polled once per frame; its output streams to the log and is parsed
   into diagnostics. When a build finishes, `EditorContext` loads or hot reloads the module. With a Visual Studio

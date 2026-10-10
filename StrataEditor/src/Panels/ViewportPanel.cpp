@@ -227,9 +227,18 @@ namespace Strata
 		const ImVec2 chipsMin(imageMin.x + style.ItemSpacing.x, imageMin.y + style.ItemSpacing.y);
 		ImGui::SetCursorScreenPos(chipsMin);
 		if (!m_GameView)
+		{
 			DrawChips(context);
+		}
 		else if (!m_GameInputEnabled)
+		{
 			DrawStatsChip(viewport.GetSettings());
+			// Debug views apply to the game view too: streaming while playing is what they are for.
+			ImGui::SameLine();
+			DrawDebugViewChip(viewport.GetSettings());
+		}
+		if (rendered && viewport.GetSettings().DebugView != ViewportDebugView::None)
+			DrawDebugViewLegend(context);
 		// Text boxes go below the chip row, also while it is hidden, so they stay in place when it comes and goes.
 		if (view)
 			DrawOverlays(context, *view, chipsMin.y + ImGui::GetFrameHeight(), panelContext.Frame);
@@ -327,11 +336,92 @@ namespace Strata
 		ImGui::SameLine();
 		UI::ToggleChip("Viewport.GameUI", Icons::Gamepad2, "Game UI", &settings.ShowGameUI,
 			"Show the game's screen-space text (its HUD) in the editor view; the game and the scene camera always show it");
+		ImGui::SameLine();
+		DrawDebugViewChip(settings);
 	}
 
 	void ViewportPanel::DrawStatsChip(ViewportSettings& settings)
 	{
 		UI::ToggleChip("Viewport.Stats", Icons::Gauge, "Stats", &settings.ShowStats, "Frame time, draw calls and loading assets");
+	}
+
+	void ViewportPanel::DrawDebugViewChip(ViewportSettings& settings)
+	{
+		// Lit while a debug view colors the image; a click opens the choice rather than toggling.
+		const bool active = settings.DebugView != ViewportDebugView::None;
+		bool clicked = active;
+		const char* label = settings.DebugView == ViewportDebugView::Streaming ? "Streaming" : (settings.DebugView == ViewportDebugView::LOD ? "LOD" : "View");
+		if (UI::ToggleChip("Viewport.DebugView", Icons::Layers, label, &clicked,
+			"Debug views: color the scene by streaming state (meshes, materials and textures still loading or failed) or by the level of detail "
+			"meshes are drawn at"))
+		{
+			ImGui::OpenPopup("DebugView");
+		}
+		if (!ImGui::BeginPopup("DebugView"))
+			return;
+		const std::pair<ViewportDebugView, const char*> views[] = {
+			{ ViewportDebugView::None, "Lit (no debug view)" },
+			{ ViewportDebugView::Streaming, "Streaming: loading and failed assets" },
+			{ ViewportDebugView::LOD, "LOD: level of detail drawn" }
+		};
+		for (const auto& [view, name] : views)
+		{
+			if (ImGui::MenuItem(name, nullptr, settings.DebugView == view))
+				settings.DebugView = view;
+		}
+		ImGui::EndPopup();
+	}
+
+	void ViewportPanel::DrawDebugViewLegend(EditorContext& context)
+	{
+		ViewportRenderer* renderer = context.GetViewport().GetRenderer();
+		if (!renderer)
+			return;
+		const ViewportSettings& settings = context.GetViewport().GetSettings();
+		const StreamingViewStats& stats = renderer->GetDebugViewStats();
+		std::vector<std::pair<glm::vec4, std::string>> entries;
+		if (settings.DebugView == ViewportDebugView::Streaming)
+		{
+			entries.emplace_back(settings.DebugColors.Pending, fmt::format("Loading  {}", stats.PendingEntities));
+			entries.emplace_back(settings.DebugColors.Failed, fmt::format("Failed  {}", stats.FailedEntities));
+		}
+		else
+		{
+			for (size_t level = 0; level < settings.DebugColors.LOD.size(); level++)
+			{
+				const bool last = level + 1 == settings.DebugColors.LOD.size();
+				entries.emplace_back(settings.DebugColors.LOD[level], fmt::format("LOD {}{}  {}", level, last ? "+" : "", stats.EntitiesPerLOD[level]));
+			}
+		}
+
+		// Swatches and lines on a dark box at the image's bottom left.
+		UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Caption);
+		const ImGuiStyle& style = ImGui::GetStyle();
+		const float lineHeight = ImGui::GetTextLineHeightWithSpacing();
+		const float swatch = ImGui::GetFontSize() * 0.7f;
+		float width = 0.0f;
+		for (const auto& [color, text] : entries)
+			width = std::max(width, ImGui::CalcTextSize(text.c_str()).x);
+		const std::string note = settings.DebugView == ViewportDebugView::Streaming && stats.PlaceholderBoxes > 0
+			? fmt::format("{} boxes: meshes not there yet", stats.PlaceholderBoxes) : std::string();
+		width = std::max(width + swatch + style.ItemInnerSpacing.x, ImGui::CalcTextSize(note.c_str()).x);
+		const float lines = static_cast<float>(entries.size()) + (note.empty() ? 0.0f : 1.0f);
+		const ImVec2 size(width + style.FramePadding.x * 2.0f, lineHeight * lines + style.FramePadding.y * 2.0f);
+		const ImVec2 position(m_Image.Min.x + style.ItemSpacing.x, m_Image.Min.y + m_Image.Size.y - size.y - style.ItemSpacing.y);
+		ImDrawList* drawList = ImGui::GetWindowDrawList();
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		drawList->AddRectFilled(position, ImVec2(position.x + size.x, position.y + size.y), ImGui::GetColorU32(colors.Overlay), style.FrameRounding);
+		float y = position.y + style.FramePadding.y;
+		for (const auto& [color, text] : entries)
+		{
+			const ImVec2 swatchMin(position.x + style.FramePadding.x, y + (ImGui::GetFontSize() - swatch) * 0.5f);
+			drawList->AddRectFilled(swatchMin, ImVec2(swatchMin.x + swatch, swatchMin.y + swatch), UI::ToColorU32(ImVec4(color.r, color.g, color.b, color.a)));
+			drawList->AddText(ImVec2(swatchMin.x + swatch + style.ItemInnerSpacing.x, y), ImGui::GetColorU32(colors.Text), text.c_str());
+			y += lineHeight;
+		}
+		if (!note.empty())
+			drawList->AddText(ImVec2(position.x + style.FramePadding.x, y), ImGui::GetColorU32(colors.TextSecondary), note.c_str());
+		ImGui::PopFont();
 	}
 
 	////////////////////////////////////////////////////////////////////////////////

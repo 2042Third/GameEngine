@@ -42,6 +42,9 @@ namespace Strata
 		// Fields of the snap steps popup, in text heights.
 		constexpr float c_SnapFieldWidthInFontSizes = 8.0f;
 
+		// How strongly the viewport's debug views tint the scene: enough to read the color, little enough to see the shapes.
+		constexpr float c_DebugTintAlpha = 0.6f;
+
 		EditorContextSpecification MakeContextSpecification(const EditorOptions& options)
 		{
 			EditorContextSpecification specification;
@@ -125,8 +128,16 @@ namespace Strata
 		// The automation client agents connect through (the launcher shows how), when it was built next to the editor.
 		if (const std::filesystem::path cli = Platform::GetExecutableDirectory() / GetExecutableFileName("StrataCLI"); FileSystem::IsRegularFile(cli))
 			m_CLIExecutable = cli;
-		// The selection outline carries the accent, like selected rows.
-		m_Context.GetViewport().GetSettings().SelectionColor = ToVec4(UI::GetThemeColors().Accent);
+		// The selection outline carries the accent, like selected rows; the debug views speak the theme's meanings (loading is a
+		// warning, failing an error) and tell the levels of detail apart from success to error.
+		ViewportSettings& viewportSettings = m_Context.GetViewport().GetSettings();
+		const UI::ThemeColors& themeColors = UI::GetThemeColors();
+		viewportSettings.SelectionColor = ToVec4(themeColors.Accent);
+		viewportSettings.DebugColors.Pending = ToVec4(UI::WithAlpha(themeColors.Warning, c_DebugTintAlpha));
+		viewportSettings.DebugColors.Failed = ToVec4(UI::WithAlpha(themeColors.Error, c_DebugTintAlpha));
+		const ImVec4* lodColors[] = { &themeColors.Success, &themeColors.Info, &themeColors.Warning, &themeColors.Error };
+		for (size_t level = 0; level < viewportSettings.DebugColors.LOD.size(); level++)
+			viewportSettings.DebugColors.LOD[level] = ToVec4(UI::WithAlpha(*lodColors[level], c_DebugTintAlpha));
 		// Startup counts as activity: the layout settles at the full rate.
 		m_LastInputTime = m_Host->GetTime();
 

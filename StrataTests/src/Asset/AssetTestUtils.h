@@ -136,6 +136,23 @@ namespace Strata::Tests
 			return metadata.Handle;
 		}
 
+		// Registers an asset of any type whose stored form is `data` (loaded by the type's registered loader).
+		AssetHandle AddStored(uint64_t handle, AssetType type, std::vector<uint8_t> data, const std::string& name)
+		{
+			AssetMetadata metadata;
+			metadata.Handle = UUID(handle);
+			metadata.Type = type;
+			metadata.Path = name;
+			metadata.Name = name;
+			metadata.StoredSize = data.size();
+			{
+				std::scoped_lock<std::mutex> lock(m_Mutex);
+				m_Data[metadata.Handle] = std::move(data);
+			}
+			RegisterAsset(metadata);
+			return metadata.Handle;
+		}
+
 		void Remove(AssetHandle handle) { UnregisterAsset(handle); }
 
 		// Reads wait at the gate while it is closed, until AllowReads lets them through.
