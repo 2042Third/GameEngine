@@ -179,7 +179,11 @@ slot and are reported in one error, steps that overflow the pair or contact buff
 scene's next world is sized for it. Other systems use physics through the scene services
 `PhysicsSystem` offers (`ICollisionEventSource`, `IBodyMotionQuery`, `IBodyControl`, `IPhysicsQueries`, with
 `CollisionEvent` and `RaycastHit`, in `Scene/SceneServices.h`); collision events collected during a step are dispatched
-afterwards on the main thread to the listeners.
+afterwards on the main thread to the listeners. Contacts are tracked only for pairs someone wants (every pair while a
+listener of all entities is registered, otherwise pairs with a watched entity, such as one whose script has contact
+callbacks): Jolt's job threads record those into buffers of their own, without a lock, which are merged and sorted after
+the step, and each touching pair knows its position in the pair lists of both its entities, so it is added and removed
+in constant time (`PhysicsStats::PairIndexOperations` counts the list writes).
 
 **Audio** (`Audio/`). `AudioEngine` wraps the miniaudio mixer, output device, listener and one-shots (main-thread
 API; mixing runs on miniaudio's audio thread, or is pulled with `AdvanceNullDevice`/`ReadFrames` without a device).

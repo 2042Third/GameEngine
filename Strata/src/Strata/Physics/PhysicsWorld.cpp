@@ -3,6 +3,7 @@
 
 #include "Strata/Core/ErrorThrottle.h"
 #include "Strata/Core/Hash.h"
+#include "Strata/Core/JobSystem.h"
 #include "Strata/Math/Math.h"
 #include "Strata/Physics/AssetMeshProvider.h"
 #include "Strata/Physics/PhysicsJobSystem.h"
@@ -35,6 +36,7 @@
 #include <Jolt/Physics/PhysicsSystem.h>
 
 #include <array>
+#include <atomic>
 #include <bit>
 #include <cstring>
 #include <map>
@@ -477,6 +479,10 @@ namespace Strata
 		{
 			UUID A = UUID::Null();
 			UUID B = UUID::Null();
+			// Positions of the pair in the touching pairs of A and of B (PhysicsWorldData::EntityPairs), so that removing it
+			// takes constant time.
+			uint32_t IndexInA = 0;
+			uint32_t IndexInB = 0;
 			bool IsTrigger = false;
 			uint64_t CheckStep = 0;  // Step during which the pair ends unless it is reported (see CollectCheckedPairs)
 			uint64_t ReportStep = 0; // Last step during which the pair was reported
@@ -519,9 +525,26 @@ namespace Strata
 			return bits(a) < bits(b);
 		}
 
-		// Records every contact that exists during a step. Contact begin/end is derived from these reports on the main
-		// thread after the step (see ProcessContacts), so OnContactRemoved is not needed: it would also fire when a body
-		// merely falls asleep, which must not end a contact.
+		// The contact buffer a thread fills during a step (see ContactCollector), cached per thread: valid while Collector and
+		// Step match the collector's.
+		struct ContactBufferSlot
+		{
+			uint64_t Collector = 0;
+			uint64_t Step = 0;
+			std::vector<ContactReport>* Reports = nullptr;
+		};
+		thread_local ContactBufferSlot t_ContactBuffer;
+		std::atomic<uint64_t> s_NextContactCollectorID { 1 };
+
+		// Records the contacts that exist during a step and that someone wants (see ICollisionEventSource): every pair while
+		// tracking all of them, otherwise the pairs with a body of interest. Contact begin/end is derived from these reports on
+		// the main thread after the step (see ProcessContacts), so OnContactRemoved is not needed: it would also fire when a
+		// body merely falls asleep, which must not end a contact.
+		//
+		// Jolt reports from its job threads. Each thread appends to a buffer of its own, claimed once per step with one atomic
+		// increment, so recording takes no lock; the buffers are merged after the step (a thread beyond the expected number,
+		// which the job system never runs, shares a locked buffer). The buffers keep their capacity, so steps after the first
+		// allocate nothing.
 		class ContactCollector final : public JPH::ContactListener
 		{
 		public:
@@ -535,17 +558,62 @@ namespace Strata
 				Record(body1, body2, manifold);
 			}
 
-			// Moves the reports collected since the last call into `reports` (discarding its contents) and keeps the other
-			// buffer for the next step: both keep their capacity, so steps after the first allocate nothing.
-			void SwapReports(std::vector<ContactReport>& reports)
+			// Main thread, between steps: what to record. `bodyCapacity` is the world's MaxBodies (the range of body indices).
+			void Initialize(uint32_t bodyCapacity)
+			{
+				m_BodyInterest.assign(bodyCapacity, 0);
+			}
+
+			void SetTrackAll(bool trackAll) { m_TrackAll = trackAll; }
+			bool IsTrackingAll() const { return m_TrackAll; }
+			void SetBodyInterest(const JPH::BodyID& body, bool interested)
+			{
+				const uint32_t index = body.GetIndex();
+				if (index < m_BodyInterest.size())
+					m_BodyInterest[index] = interested ? 1 : 0;
+			}
+
+			// Main thread, before a step: the threads that report in it claim their buffers anew.
+			void BeginStep()
+			{
+				m_Step++;
+				m_ClaimedBuffers.store(0, std::memory_order_relaxed);
+				// The stepping thread and every worker may report; the count follows the job system as it is now.
+				const size_t threads = static_cast<size_t>(JobSystem::IsInitialized() ? JobSystem::GetWorkerThreadCount() : 0) + 1;
+				while (m_Buffers.size() < threads)
+					m_Buffers.push_back(CreateScope<ReportBuffer>());
+			}
+
+			// Main thread, after a step: moves the step's reports into `reports` (discarding its contents).
+			void TakeReports(std::vector<ContactReport>& reports)
 			{
 				reports.clear();
-				std::scoped_lock<std::mutex> lock(m_Mutex);
-				m_Reports.swap(reports);
+				const size_t claimed = std::min<size_t>(m_ClaimedBuffers.load(std::memory_order_relaxed), m_Buffers.size());
+				for (size_t index = 0; index < claimed; index++)
+				{
+					std::vector<ContactReport>& buffer = m_Buffers[index]->Reports;
+					reports.insert(reports.end(), buffer.begin(), buffer.end());
+					buffer.clear();
+				}
+				std::scoped_lock<std::mutex> lock(m_SharedMutex);
+				reports.insert(reports.end(), m_SharedReports.begin(), m_SharedReports.end());
+				m_SharedReports.clear();
 			}
 		private:
+			bool IsWanted(const JPH::Body& body1, const JPH::Body& body2) const
+			{
+				if (m_TrackAll)
+					return true;
+				const uint32_t index1 = body1.GetID().GetIndex();
+				const uint32_t index2 = body2.GetID().GetIndex();
+				return (index1 < m_BodyInterest.size() && m_BodyInterest[index1]) || (index2 < m_BodyInterest.size() && m_BodyInterest[index2]);
+			}
+
 			void Record(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold& manifold)
 			{
+				if (!IsWanted(body1, body2))
+					return;
+
 				ContactReport report;
 				report.EntityA = UUID(body1.GetUserData());
 				report.EntityB = UUID(body2.GetUserData());
@@ -569,12 +637,37 @@ namespace Strata
 					report.Point = ToGlm(0.5f * (body1.GetCenterOfMassPosition() + body2.GetCenterOfMassPosition()));
 				}
 
-				std::scoped_lock<std::mutex> lock(m_Mutex);
-				m_Reports.push_back(report);
+				ContactBufferSlot& slot = t_ContactBuffer;
+				if (slot.Collector != m_ID || slot.Step != m_Step)
+				{
+					const size_t index = m_ClaimedBuffers.fetch_add(1, std::memory_order_relaxed);
+					slot = ContactBufferSlot { m_ID, m_Step, index < m_Buffers.size() ? &m_Buffers[index]->Reports : nullptr };
+				}
+				if (slot.Reports)
+				{
+					slot.Reports->push_back(report);
+					return;
+				}
+				std::scoped_lock<std::mutex> lock(m_SharedMutex);
+				m_SharedReports.push_back(report);
 			}
 		private:
-			std::mutex m_Mutex;
-			std::vector<ContactReport> m_Reports;
+			// Padded to a cache line, so that the headers of buffers threads append to concurrently never share one.
+			struct ReportBuffer
+			{
+				std::vector<ContactReport> Reports;
+				std::byte Padding[64 - sizeof(std::vector<ContactReport>)] = {};
+			};
+			static_assert(sizeof(ReportBuffer) == 64, "A contact buffer fills one cache line");
+
+			const uint64_t m_ID = s_NextContactCollectorID.fetch_add(1, std::memory_order_relaxed);
+			uint64_t m_Step = 0;
+			bool m_TrackAll = true;
+			std::vector<uint8_t> m_BodyInterest; // Per Jolt body index: its entity is of interest
+			std::vector<Scope<ReportBuffer>> m_Buffers;
+			std::atomic<size_t> m_ClaimedBuffers = 0;
+			std::mutex m_SharedMutex;
+			std::vector<ContactReport> m_SharedReports;
 		};
 
 		// Bodies that fall asleep at the end of a step moved during it; they are written back with the active ones.
@@ -805,7 +898,9 @@ namespace Strata
 		std::vector<entt::entity> PolledBodies;
 		std::unordered_map<JPH::uint32, entt::entity> BodyEntities;   // Body ID (index and sequence number) -> entity
 		std::unordered_map<PairKey, TouchingPair, PairKeyHash> TouchingPairs;
-		std::unordered_map<UUID, std::vector<PairKey>> EntityPairs;   // Touching pairs of each entity
+		std::unordered_map<UUID, std::vector<PairKey>> EntityPairs;   // Touching pairs of each entity (see AddTouchingPair)
+		uint64_t PairIndexOperations = 0;                             // Entries of EntityPairs written since the world was created
+		std::unordered_set<UUID> ContactInterest;                     // Entities whose contacts are wanted (see SetContactInterest)
 		std::vector<UUID> RecheckedEntities;                          // Built or rebuilt since the last step: their pairs are checked
 		std::set<entt::entity> MeshBodies;                            // Records with MeshSources (ordered: deterministic rebuilds)
 		std::set<entt::entity> WaitingMeshBodies;                     // Records with a MeshSource that waits for data or cooking
@@ -1041,23 +1136,52 @@ namespace Strata
 			data.PendingEvents.push_back(event);
 		}
 
-		void RemovePairFromIndex(PhysicsWorldData& data, UUID entityID, const PairKey& key)
+		// The touching pairs of each entity are listed in EntityPairs, and each pair knows its position in the lists of both
+		// its entities: adding and removing a pair take constant time, however many pairs an entity has (a floor under
+		// thousands of boxes). PairIndexOperations counts the list entries written.
+		void AddTouchingPair(PhysicsWorldData& data, const PairKey& key, TouchingPair pair)
+		{
+			std::vector<PairKey>& pairsOfA = data.EntityPairs[pair.A];
+			pair.IndexInA = static_cast<uint32_t>(pairsOfA.size());
+			pairsOfA.push_back(key);
+			std::vector<PairKey>& pairsOfB = data.EntityPairs[pair.B];
+			pair.IndexInB = static_cast<uint32_t>(pairsOfB.size());
+			pairsOfB.push_back(key);
+			data.PairIndexOperations += 2;
+			data.TouchingPairs.emplace(key, pair);
+		}
+
+		uint32_t& GetIndexIn(TouchingPair& pair, UUID entityID)
+		{
+			return pair.A == entityID ? pair.IndexInA : pair.IndexInB;
+		}
+
+		// Removes a touching pair (still in TouchingPairs) from the list of one of its entities: the list's last pair takes its
+		// place.
+		void RemovePairFromIndex(PhysicsWorldData& data, UUID entityID, TouchingPair& pair)
 		{
 			auto it = data.EntityPairs.find(entityID);
 			if (it == data.EntityPairs.end())
 				return;
 
 			std::vector<PairKey>& keys = it->second;
-			keys.erase(std::remove(keys.begin(), keys.end(), key), keys.end());
+			const uint32_t index = GetIndexIn(pair, entityID);
+			ST_CORE_ASSERT(index < keys.size(), "Physics: the touching pair index of an entity is inconsistent");
+			if (index >= keys.size())
+				return;
+			data.PairIndexOperations++;
+			if (index + 1 < keys.size())
+			{
+				keys[index] = keys.back();
+				auto moved = data.TouchingPairs.find(keys[index]);
+				ST_CORE_ASSERT(moved != data.TouchingPairs.end(), "Physics: an entity lists a pair that is not touching");
+				if (moved != data.TouchingPairs.end())
+					GetIndexIn(moved->second, entityID) = index;
+				data.PairIndexOperations++;
+			}
+			keys.pop_back();
 			if (keys.empty())
 				data.EntityPairs.erase(it);
-		}
-
-		void AddTouchingPair(PhysicsWorldData& data, const PairKey& key, const TouchingPair& pair)
-		{
-			data.TouchingPairs.emplace(key, pair);
-			data.EntityPairs[pair.A].push_back(key);
-			data.EntityPairs[pair.B].push_back(key);
 		}
 
 		// Ends every contact of an entity (its body left the simulation).
@@ -1070,6 +1194,7 @@ namespace Strata
 			const std::vector<PairKey> keys = std::move(indexIt->second);
 			data.EntityPairs.erase(indexIt);
 
+			data.PairIndexOperations += keys.size();
 			std::vector<TouchingPair> ended;
 			for (const PairKey& key : keys)
 			{
@@ -1077,10 +1202,9 @@ namespace Strata
 				if (pairIt == data.TouchingPairs.end())
 					continue;
 
-				const TouchingPair pair = pairIt->second;
+				RemovePairFromIndex(data, pairIt->second.A == entityID ? pairIt->second.B : pairIt->second.A, pairIt->second);
+				ended.push_back(pairIt->second);
 				data.TouchingPairs.erase(pairIt);
-				RemovePairFromIndex(data, pair.A == entityID ? pair.B : pair.A, key);
-				ended.push_back(pair);
 			}
 
 			std::sort(ended.begin(), ended.end(), [](const TouchingPair& a, const TouchingPair& b) { return a.SortKey < b.SortKey; });
@@ -1220,6 +1344,7 @@ namespace Strata
 			}
 			bodies.DestroyBody(record.BodyID);
 			data.BodyEntities.erase(record.BodyID.GetIndexAndSequenceNumber());
+			data.Contacts.SetBodyInterest(record.BodyID, false);
 			record.BodyID = JPH::BodyID();
 			record.Suspended = false;
 			record.KinematicMoving = false;
@@ -1832,6 +1957,7 @@ namespace Strata
 			record.SavedAngularVelocity = type == RigidBodyType::Dynamic ? angularVelocity : glm::vec3(0.0f);
 			record.ShapeMembers = std::move(build.ShapeMembers);
 			data.BodyEntities[record.BodyID.GetIndexAndSequenceNumber()] = handle;
+			data.Contacts.SetBodyInterest(record.BodyID, data.ContactInterest.contains(record.EntityID));
 			ClearWarnings(data, record.EntityID, c_TransientWarnings);
 
 			if (!IsSimulated(scene, entity) || AddToSimulation(data, record, entity) != PlacementResult::Added)
@@ -2599,7 +2725,7 @@ namespace Strata
 
 			const uint64_t step = data.StepCount;
 			std::vector<ContactReport>& reports = data.Reports;
-			data.Contacts.SwapReports(reports);
+			data.Contacts.TakeReports(reports);
 			// Several sub shape pairs of an entity pair may touch (and several collision steps report them again); the first
 			// report of each pair in this order, which does not depend on thread timing, describes the contact.
 			std::sort(reports.begin(), reports.end(), IsReportOrderedBefore);
@@ -2649,8 +2775,8 @@ namespace Strata
 				if (it == data.TouchingPairs.end() || it->second.ReportStep == step)
 					continue;
 				ended.push_back(it->second);
-				RemovePairFromIndex(data, it->second.A, key);
-				RemovePairFromIndex(data, it->second.B, key);
+				RemovePairFromIndex(data, it->second.A, it->second);
+				RemovePairFromIndex(data, it->second.B, it->second);
 				data.TouchingPairs.erase(it);
 			}
 
@@ -2949,6 +3075,7 @@ namespace Strata
 		data.Jobs = CreatePhysicsJobSystem(&data.JobCounters);
 		data.JoltSystem = CreateScope<JPH::PhysicsSystem>();
 		data.JoltSystem->Init(data.Settings.MaxBodies, 0, data.Settings.MaxBodyPairs, data.Settings.MaxContactConstraints, data.BroadPhaseLayers, data.ObjectVsBroadPhase, data.LayerPairFilter);
+		data.Contacts.Initialize(data.Settings.MaxBodies);
 		data.JoltSystem->SetContactListener(&data.Contacts);
 		data.JoltSystem->SetBodyActivationListener(&data.Activations);
 
@@ -3033,6 +3160,27 @@ namespace Strata
 		return m_Data->Demand;
 	}
 
+	void PhysicsWorld::SetTrackAllContacts(bool trackAll)
+	{
+		m_Data->Contacts.SetTrackAll(trackAll);
+	}
+
+	bool PhysicsWorld::IsTrackingAllContacts() const
+	{
+		return m_Data->Contacts.IsTrackingAll();
+	}
+
+	void PhysicsWorld::SetContactInterest(UUID entityID, bool interested)
+	{
+		PhysicsWorldData& data = *m_Data;
+		if (interested ? !data.ContactInterest.insert(entityID).second : data.ContactInterest.erase(entityID) == 0)
+			return;
+		const Entity entity = data.OwnerScene->GetEntityByUUID(entityID);
+		const BodyRecord* record = entity.IsValid() ? FindRecord(data, entity.GetHandle()) : nullptr;
+		if (record && record->HasBody())
+			data.Contacts.SetBodyInterest(record->BodyID, interested);
+	}
+
 	void PhysicsWorld::ApplyPendingChanges()
 	{
 		ApplyChanges(*m_Data);
@@ -3071,6 +3219,7 @@ namespace Strata
 
 		CollectCheckedPairs(data);
 		data.Activations.Clear();
+		data.Contacts.BeginStep();
 		{
 			ST_PROFILE_SCOPE("PhysicsWorld::Simulate - Jolt");
 			const JPH::EPhysicsUpdateError errors = data.JoltSystem->Update(timestep, static_cast<int>(data.Settings.CollisionSteps), data.Allocator.get(), data.Jobs.get());
@@ -3425,6 +3574,7 @@ namespace Strata
 		}
 		stats.ActiveBodyCount = data.JoltSystem->GetNumActiveBodies(JPH::EBodyType::RigidBody);
 		stats.ContactPairCount = static_cast<uint32_t>(data.TouchingPairs.size());
+		stats.PairIndexOperations = data.PairIndexOperations;
 		stats.MaxBodies = data.Settings.MaxBodies;
 		stats.MaxBodyPairs = data.Settings.MaxBodyPairs;
 		stats.MaxContactConstraints = data.Settings.MaxContactConstraints;

@@ -108,6 +108,7 @@ TEST_SUITE("Physics.Simulation")
 
 		scene.OnRuntimeStart();
 		PhysicsSystem& physics = GetPhysics(scene);
+		CollisionRecorder recorder(physics); // Contacts are tracked for listeners (ContactPairCount)
 		REQUIRE(physics.HasBody(box));
 
 		StepScene(scene, 180);
@@ -941,6 +942,7 @@ TEST_SUITE("Physics.Simulation")
 
 		scene.OnRuntimeStart();
 		PhysicsSystem& physics = GetPhysics(scene);
+		CollisionRecorder recorder(physics); // Contacts are tracked for listeners (ContactPairCount)
 		StepScene(scene, 15);
 
 		const PhysicsStats stats = physics.GetStats();

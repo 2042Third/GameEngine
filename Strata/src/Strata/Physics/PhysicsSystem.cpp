@@ -155,12 +155,14 @@ namespace Strata
 		listener->Callback = std::move(callback);
 		listener->Scope = scope;
 		m_CollisionListeners.push_back(listener);
+		UpdateContactTracking();
 		return listener->ID;
 	}
 
 	void PhysicsSystem::WatchCollisions(UUID entity)
 	{
-		m_CollisionWatches[entity]++;
+		if (m_CollisionWatches[entity]++ == 0 && m_World)
+			m_World->SetContactInterest(entity, true);
 	}
 
 	void PhysicsSystem::UnwatchCollisions(UUID entity)
@@ -168,8 +170,20 @@ namespace Strata
 		auto it = m_CollisionWatches.find(entity);
 		if (it == m_CollisionWatches.end())
 			return;
-		if (--it->second == 0)
-			m_CollisionWatches.erase(it);
+		if (--it->second > 0)
+			return;
+		m_CollisionWatches.erase(it);
+		if (m_World)
+			m_World->SetContactInterest(entity, false);
+	}
+
+	void PhysicsSystem::UpdateContactTracking()
+	{
+		if (!m_World)
+			return;
+		const bool trackAll = std::any_of(m_CollisionListeners.begin(), m_CollisionListeners.end(),
+			[](const Ref<CollisionListener>& listener) { return listener->Scope == CollisionListenerScope::AllEntities; });
+		m_World->SetTrackAllContacts(trackAll);
 	}
 
 	bool PhysicsSystem::IsWatchingCollisions(UUID entity) const
@@ -186,6 +200,7 @@ namespace Strata
 		// A dispatch in progress holds its own references; the flag stops it from calling this listener again.
 		(*it)->Removed = true;
 		m_CollisionListeners.erase(it);
+		UpdateContactTracking();
 		return true;
 	}
 
@@ -389,6 +404,10 @@ namespace Strata
 			settings.MaxContactConstraints = capacity.MaxContactConstraints;
 		m_World = CreateScope<PhysicsWorld>(m_Scene, settings, GetRememberedCapacityDemand(m_Scene.GetName()));
 		m_AppliedGravity = m_Scene.GetSettings().Gravity;
+		// Contacts are tracked for the listeners and watches registered so far.
+		UpdateContactTracking();
+		for (const auto& [entity, count] : m_CollisionWatches)
+			m_World->SetContactInterest(entity, true);
 	}
 
 	void PhysicsSystem::ApplyPendingChanges()

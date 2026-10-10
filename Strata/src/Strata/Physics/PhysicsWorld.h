@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Strata/Core/Base.h"
+#include "Strata/Core/UUID.h"
 #include "Strata/Physics/PhysicsTypes.h"
 #include "Strata/Scene/Entity.h"
 
@@ -124,6 +125,14 @@ namespace Strata
 		// Collision events queued since the last call, in the order they occurred. Entity handles are resolved now. Events
 		// accumulate until taken (PhysicsSystem takes them after every update).
 		std::vector<CollisionEvent> TakeCollisionEvents();
+
+		// Which contacts become events (see ICollisionEventSource): while tracking all contacts (the default) every touching
+		// pair, otherwise only pairs with an entity of interest (one owning a body). Contacts of pairs nobody wants are not
+		// recorded during the step, so they cost nothing beyond Jolt's own work. A pair is tracked from the first step that
+		// reports it while it is wanted; one that stops being wanted ends at the next step that checks it.
+		void SetTrackAllContacts(bool trackAll);
+		bool IsTrackingAllContacts() const;
+		void SetContactInterest(UUID entity, bool interested);
 
 		//////////////////////////////////////////////////////////////////////////
 		// World settings

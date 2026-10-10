@@ -91,7 +91,8 @@ namespace Strata
 		uint32_t KinematicBodyCount = 0;
 		uint32_t ActiveBodyCount = 0;    // Awake bodies (sleeping and static bodies are not simulated)
 		uint32_t PendingBodyCount = 0;   // Entities waiting for a body that cannot be built yet (degenerate transform, mesh not loaded, world full)
-		uint32_t ContactPairCount = 0;   // Pairs of entities currently touching (including triggers)
+		uint32_t ContactPairCount = 0;   // Touching pairs of entities that are tracked (those someone listens to, see ICollisionEventSource)
+		uint64_t PairIndexOperations = 0; // Entries of the per-entity touching pair lists written since the world was created
 		// Capacities of the world (as resolved when it was created) and what overflowed them.
 		uint32_t MaxBodies = 0;
 		uint32_t MaxBodyPairs = 0;

@@ -142,6 +142,8 @@ namespace Strata
 		void ApplyPendingChanges();
 		void SyncGravity();
 		void DispatchCollisionEvents();
+		// Tells the world which contacts to track: all of them while a listener of every entity is registered.
+		void UpdateContactTracking();
 	private:
 		Scene& m_Scene;
 		PhysicsSettings m_Settings;
