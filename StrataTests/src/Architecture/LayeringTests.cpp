@@ -207,15 +207,43 @@ TEST_SUITE("Architecture.Layering")
 		CHECK(report.Violations.empty());
 		sources.Allowlist.pop_back();
 
-		// A line whose include went away.
-		std::string& contents = sources.Files["Strata/Scripting/ScriptSystem.h"];
-		const size_t include = contents.find("#include \"Strata/Physics/PhysicsTypes.h\"");
-		REQUIRE(include != std::string::npos);
-		contents.insert(include, "// ");
+		// A line whose include went away: the first entry of the real list, so that the test outlives every entry that is
+		// removed until the list is empty.
+		if (sources.Allowlist.empty())
+		{
+			MESSAGE("The allowlist is empty: no entry can lose its include");
+			return;
+		}
+		const AllowlistEntry entry = sources.Allowlist.front();
+		REQUIRE(sources.Files.contains(entry.File));
 		report = CheckLayering(sources.Table, sources.Files, sources.Allowlist);
+		REQUIRE(report.StaleEntries.empty());
+
+		// Comment out every line that includes the header (in whichever form); line numbers do not move.
+		std::string& contents = sources.Files[entry.File];
+		size_t commentedOut = 0;
+		for (const Violation& violation : report.Allowlisted)
+		{
+			if (violation.File != entry.File || violation.Header != entry.Header)
+				continue;
+			size_t start = 0;
+			for (uint32_t line = 1; line < violation.Line; line++)
+			{
+				start = contents.find('\n', start);
+				REQUIRE(start != std::string::npos);
+				start++;
+			}
+			contents.insert(start, "// ");
+			commentedOut++;
+		}
+		REQUIRE(commentedOut > 0);
+
+		report = CheckLayering(sources.Table, sources.Files, sources.Allowlist);
+		CHECK(report.Violations.empty());
 		REQUIRE(report.StaleEntries.size() == 1);
-		CHECK(report.StaleEntries.front().File == "Strata/Scripting/ScriptSystem.h");
-		CHECK(report.StaleEntries.front().Header == "Strata/Physics/PhysicsTypes.h");
+		CHECK(report.StaleEntries.front().File == entry.File);
+		CHECK(report.StaleEntries.front().Header == entry.Header);
+		CHECK(report.StaleEntries.front().Line == entry.Line);
 	}
 
 	TEST_CASE("Includes are read from code only: comments, literals and #if 0 blocks are skipped")
