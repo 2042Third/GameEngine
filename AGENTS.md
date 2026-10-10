@@ -132,8 +132,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   steps report. Time calls that take nanoseconds in batches (the clock's resolution is about 0.1 microseconds).
   A process's peak memory includes everything it did before, so a test that measures peak memory
   runs the measured work in a helper process (`--strata-test-helper=<mode>`, see `TestMain.cpp`): `PerfGPU.Streaming`
-  runs its camera sweep over the stress project (`src/Perf/StressProject.h`, also usable by other suites) that way,
-  three times. Every run must meet the acceptance limits; the budgets then judge peak private memory by the best run,
+  runs its camera sweeps over the stress project (`src/Perf/StressProject.h`, also usable by other suites) that way,
+  each three times: one that evicts within a small texture budget and one at 1920x1080 with every texture resident.
+  Every run must meet the acceptance limits; the budgets then judge peak private memory by the best run,
   because the graphics driver keeps commit charge of freed device memory for a while (on Windows device memory counts
   in private bytes), finalization time by the median run, which a spike from other work on the machine does not move,
   and resident texture memory by the largest of any run.

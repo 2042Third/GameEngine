@@ -40,5 +40,6 @@
 	"PerfGPU.Editor.PlayFrameNested1M": { "Measured": 0.2159, "Budget": 0.3238, "Unit": "ms" },
 	"PerfGPU.Streaming.MaxFinalizeTime": { "Measured": 3.63, "Budget": 5.44, "Unit": "ms" },
 	"PerfGPU.Streaming.MaxResidentTextures": { "Measured": 16.78, "Budget": 25.17, "Unit": "MB" },
-	"PerfGPU.Streaming.PeakPrivateMemory": { "Measured": 356.0, "Budget": 534.0, "Unit": "MB" }
+	"PerfGPU.Streaming.PeakPrivateMemory": { "Measured": 356.0, "Budget": 534.0, "Unit": "MB" },
+	"PerfGPU.Streaming.PeakPrivateMemoryAllResident": { "Measured": 450.1, "Budget": 675.1, "Unit": "MB" }
 }

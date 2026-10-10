@@ -71,7 +71,7 @@ Open items and deferrals later waves own:
   lack need a policy once subsystems become optional (`engine-modules`).
 - A world seen all at once still peaks at about 970 MiB of private memory in the exported runtime: no budget can evict
   what is in view, so this needs BC textures and mip streaming (`texture-cook-v2`, `mip-streaming`; with BC textures the
-  stress world peaks at about 465 MB, see wave 2). Mesh uploads still
+  stress world peaks at about 450 MB, see wave 2). Mesh uploads still
   go through NVRHI's upload manager until the budgeted upload queue (`mip-streaming`); `AssetManagerBase::GetStats`
   and eviction scans are linear in the registered assets (`render-scene`, `world-partition`).
 - Deleting one entity among 100,000 sibling roots renumbers the sibling list (about 0.5 ms), and the Hierarchy panel
@@ -81,25 +81,33 @@ Open items and deferrals later waves own:
   editor answers input and automation requests on its next throttled frame (up to 33 ms, 100 ms unfocused) until it
   waits on events instead. Project thumbnails and search in the recent projects move to `content-and-prefabs`.
 - Perf budgets hold for the reference machine only, so CI's hosted runners skip the `perf` label; a self-hosted runner
-  on the reference machine would make them an automatic gate. Even there, `PerfGPU.Streaming` passes only some runs: its
-  750 MB limit on the best of three sweeps' peak private memory and its 6 ms finalization budget sit inside the
-  run-to-run spread of the graphics driver's memory and of a maximum over 600 frames, so they need steadier measures.
+  on the reference machine would make them an automatic gate. Even there, `PerfGPU.Streaming`'s finalization budget (the
+  median of three sweeps' maximum over 600 frames) sits inside the run-to-run spread of a maximum over 600 frames, so it
+  needs a steadier measure; its memory limits have room since textures are block-compressed (wave 2).
   Platform code first compiled by CI on Linux and macOS: `GetProcessMemory`, `GetProcessUptime`, `FindHomeDirectory`
   and `FindFallbackFontFiles`.
 
 **Wave 2 (in progress).**
 
-- `texture-cook-v2`: textures cook to GPU block compression - BC1/BC3 for color and data, BC4 for one-channel data
-  (sampled as gray), BC5 for normal maps (Z reconstructed when shading) - with mips filtered by a Mitchell filter (sRGB
-  in linear space, alpha-weighted, wrapping like the texture, normal maps renormalized), encoded in parallel, and stored
-  in `STTX` version 2 with the mip tail first, so streaming can read it by byte range. Devices without BC support decode
-  at load time. The stress project's 447.4 MB of RGBA8 textures cook to 55.9 MB (2.8 MB per 2048² texture, 11.2 MB for
-  the 4096² one) in about 1.2 s with 23 workers (`Perf.TextureCook`), its pack shrinks from 472.7 MB to 81.2 MB, and a
-  1920x1080 run with all of its textures resident peaks at 461-467 MB of private memory instead of 970-987 MB (the
-  exported game in a 1920x1080 window: 548-569 MB instead of 853-859 MB). Open: BC7 (and with it higher-quality color
-  at 1 byte per texel) loads, uploads and decodes, but the importer has no BC7 encoder yet, because the planned encoder
-  library (bc7enc_rdo) was not vendored; the editor's `asset.import`, `asset.reimport` and `asset.setImportSettings`
-  still cook on the main thread (as they imported before), which `content-and-prefabs` makes asynchronous.
+- `texture-cook-v2`: textures cook to GPU block compression - BC1/BC3 for color, BC4 for one-channel data (sampled as
+  gray), BC5 for normal maps (Z reconstructed when shading); data of several channels stays RGBA8 - with mips filtered
+  by a Mitchell filter (sRGB in linear space, alpha-weighted, wrapping like the texture, normal maps renormalized),
+  encoded in parallel, and stored in `STTX` version 2 with the mip tail first, so streaming can read it by byte range.
+  Devices without BC support decode at load time. The stress project's 447.4 MB of RGBA8 textures cook to 55.9 MB (2.8
+  MB per 2048² texture, 11.2 MB for the 4096² one) in about 1.2 s with 23 workers (`Perf.TextureCook`), and its pack
+  shrinks from 472.7 MB to 81.2 MB. `PerfGPU.Streaming`'s all-resident sweep (1920x1080, 300 frames, every texture
+  resident) peaks at 450-461 MB of private memory instead of 970-987 MB with RGBA8 textures; the exported game peaks at
+  543-558 MB rendering 1920x1080 pixels (a 1280x720 window on the 150% reference display) and at 658-659 MB in a
+  1920x1080 window there, which renders 2880x1620 pixels.
+
+  Open:
+  - BC7 (and with it the planned color default and multi-channel data at 1 byte per texel, and a `Quality` that picks
+    the format) loads, uploads and decodes, but the importer has no BC7 encoder: the planned library (bc7enc_rdo) was
+    not vendored, which needs the owner's decision (a new submodule, or an encoder written here). Switching color to
+    BC7 doubles its bytes, so that change re-baselines `Perf.TextureCook.StoredTextures` and `PackSize` and the
+    `PerfGPU.Streaming` budgets, which were measured with BC1 color: a format change, not a regression.
+  - The editor's `asset.import`, `asset.reimport` and `asset.setImportSettings` still cook on the main thread (as they
+    imported before, now faster), which `content-and-prefabs` makes asynchronous.
 
 ## Waves
 

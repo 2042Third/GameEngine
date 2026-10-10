@@ -714,13 +714,19 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
 - **Measured** by the perf test `PerfGPU.Streaming` (`StrataTests/src/Perf/StreamingPerfTests.cpp`): it writes the
   stress project (`StrataTests/src/Perf/StressProject.h`: 16 textures of 2048² and one of 4096², which cook to 55.9 MB
   of BC1 (447.4 MB of RGBA8 before texture cooking v2), one material per district of a 2000-unit world, 2,000 objects
-  over a 512² terrain grid), imports it and builds its pack, then runs a 600-frame camera sweep at 60 frames per second
-  with a 16 MB texture budget (the share of the textures the 128 MB budget held of their RGBA8 form) in a helper process
-  (peak memory belongs to a whole process), three times. Every run must keep the textures within the budget plus the
-  largest one, finalize no frame for more than 8 ms, show each camera stop complete within 60 frames at rest, fail no
-  load and stay below 650 MB of private memory; `StrataTests/Perf/Budgets.json` then judges the peak private bytes of
-  the best run (the graphics driver's commit charge varies from run to run), the largest resident texture memory of any
-  run and the finalization time of the median run. `Perf.TextureCook` (`TextureCookPerfTests.cpp`) imports the same
+  over a 512² terrain grid), imports it and builds its pack, then runs two camera sweeps at 60 frames per second in
+  helper processes (peak memory belongs to a whole process), each three times:
+  - the evicting sweep: 600 frames at 1280x720 with a 16 MB texture budget (the share of the textures the 128 MB budget
+    held of their RGBA8 form). Every run must keep the textures within the budget plus the largest one, evict, finalize
+    no frame for more than 8 ms, show each camera stop complete within 60 frames at rest and fail no load;
+  - the all-resident sweep: 300 frames at 1920x1080 over twelve stops whose views take in every district, with a budget
+    that holds every texture. Every run must bring every texture in and evict none, finalize no frame for more than 8 ms
+    and fail no load.
+
+  The best run of each sweep must stay below 650 MB of private memory (texture cooking's limit, for the all-resident
+  sweep), and `StrataTests/Perf/Budgets.json` judges the peak private bytes of each sweep's best run (the graphics
+  driver's commit charge varies from run to run), the largest resident texture memory of any evicting run and the
+  finalization time of the median evicting run. `Perf.TextureCook` (`TextureCookPerfTests.cpp`) imports the same
   project cold three times and checks the median import time, the stored size of every texture and the pack size.
   `GPU.Assets.Streaming` runs the same sweep on a small stress project under the validation layers.
 
