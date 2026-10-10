@@ -536,6 +536,69 @@ TEST_SUITE("Renderer.RenderScene")
 		CheckProxies(renderScene);
 	}
 
+	TEST_CASE("Meshes whose bounds the asset database recorded are placed with them before they load, and follow new records")
+	{
+		const Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		// Recorded as imports and packs record a model's meshes, before anything draws them.
+		const AssetHandle recorded = manager->AddStored(0x5E40, AssetType::Mesh, CreatePartedCube(4.0f, 2)->Serialize());
+		manager->SetDependencies(recorded, {}, AABB(glm::vec3(-2.0f), glm::vec3(2.0f)));
+		const AssetHandle late = manager->AddStored(0x5E41, AssetType::Mesh, MeshFactory::CreateCube()->Serialize());
+		Scene scene("Recorded");
+		Entity entity = AddCube(scene, glm::vec3(100.0f, 0.0f, 0.0f), UUID::Null(), recorded);
+		Entity lateUser = AddCube(scene, glm::vec3(-100.0f, 0.0f, 0.0f), UUID::Null(), late);
+		RenderScene& renderScene = RenderScene::Get(scene);
+		renderScene.Sync(manager);
+		const uint32_t proxy = renderScene.FindProxy(entity.GetHandle());
+		const uint32_t slot = renderScene.GetMeshSlot(proxy);
+		const uint32_t lateProxy = renderScene.FindProxy(lateUser.GetHandle());
+		const uint32_t lateSlot = renderScene.GetMeshSlot(lateProxy);
+
+		// Not loaded and not requested: the recorded bounds place its proxy where the mesh is, so renderers cull it like a
+		// loaded one. Instances wait for the layout (the submeshes and their materials).
+		CHECK(manager->GetAssetState(recorded) == AssetState::Unloaded);
+		CHECK_FALSE(renderScene.IsMeshLayoutKnown(slot));
+		CHECK((renderScene.GetProxyFlags(proxy) & RenderProxyFlags::MeshBounds) != 0);
+		CHECK(renderScene.GetWorldBounds(proxy).Min.x == doctest::Approx(98.0f));
+		CHECK(renderScene.GetWorldBounds(proxy).Max.x == doctest::Approx(102.0f));
+		CHECK(renderScene.GetInstanceCount(proxy) == 0);
+		std::vector<uint32_t> found;
+		renderScene.GetSpatialIndex().QuerySphere(glm::vec3(101.5f, 0.0f, 0.0f), 0.25f, found);
+		CHECK(found == std::vector<uint32_t> { proxy });
+		// The other mesh has no record yet: its bounds are unknown.
+		REQUIRE(renderScene.GetMeshesWithoutBounds().size() == 1);
+		CHECK(renderScene.GetMeshesWithoutBounds()[0] == lateSlot);
+		CheckProxies(renderScene);
+
+		// Bounds recorded after the scene was synced (an import that finished later): the next sync reads them. The same
+		// record again changes nothing.
+		manager->SetDependencies(late, {}, AABB(glm::vec3(-0.5f), glm::vec3(0.5f)));
+		CHECK(renderScene.Sync(manager) == 1);
+		CHECK(renderScene.GetStats().LastSyncMeshChecks == 1);
+		CHECK(renderScene.GetMeshesWithoutBounds().empty());
+		CHECK((renderScene.GetProxyFlags(lateProxy) & RenderProxyFlags::MeshBounds) != 0);
+		CHECK(renderScene.GetWorldBounds(lateProxy).Max.x == doctest::Approx(-99.5f));
+		manager->SetDependencies(late, {}, AABB(glm::vec3(-0.5f), glm::vec3(0.5f)));
+		CHECK(renderScene.Sync(manager) == 0);
+		CHECK(renderScene.GetStats().LastSyncMeshChecks == 0);
+		CheckProxies(renderScene);
+
+		// Loaded: the layout (the mesh's own bounds and its submeshes) takes the record's place.
+		REQUIRE(manager->LoadAssetSync(recorded));
+		CHECK(renderScene.Sync(manager) == 1);
+		CHECK(renderScene.IsMeshLayoutKnown(slot));
+		CHECK(renderScene.GetInstanceCount(proxy) == 2);
+		CHECK(renderScene.GetWorldBounds(proxy).Max.x == doctest::Approx(102.0f));
+		CheckProxies(renderScene);
+
+		// A record without bounds: unknown again, until the mesh loads.
+		manager->SetDependencies(late, {}, std::nullopt);
+		CHECK(renderScene.Sync(manager) == 1);
+		REQUIRE(renderScene.GetMeshesWithoutBounds().size() == 1);
+		CHECK(renderScene.GetMeshesWithoutBounds()[0] == lateSlot);
+		CHECK((renderScene.GetProxyFlags(lateProxy) & RenderProxyFlags::MeshBounds) == 0);
+		CheckProxies(renderScene);
+	}
+
 	TEST_CASE("Signals queue each entity once, however often they come before the next sync")
 	{
 		Scene scene("Pending");

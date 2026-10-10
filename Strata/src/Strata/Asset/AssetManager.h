@@ -330,9 +330,9 @@ namespace Strata
 		uint64_t GetMetadataVersion() const { return m_MetadataVersion.load(std::memory_order_acquire); }
 
 		// Changes whenever an asset object is published, replaced or dropped (a load or reload finished, a memory asset was
-		// added, an asset was unloaded, evicted or unregistered) and when an asset without a loaded object is reloaded (its
-		// source changed: see ReloadAsset), so that caches of data derived from assets can check cheaply whether to
-		// revalidate.
+		// added, an asset was unloaded, evicted or unregistered), when an asset without a loaded object is reloaded (its
+		// source changed: see ReloadAsset) and when the bounds recorded for an asset change (GetBounds), so that caches of
+		// data derived from assets can check cheaply whether to revalidate.
 		uint64_t GetContentVersion() const { return m_ContentVersion.load(std::memory_order_acquire); }
 		// Appends the handles of the assets whose objects changed after content version `sinceVersion` (a handle may appear
 		// more than once), so that such caches revalidate only what changed. Returns false, appending nothing, if the
@@ -376,7 +376,9 @@ namespace Strata
 		// The asset and everything it depends on, transitively: the asset, then breadth first, each once. Unknown handles are
 		// left out (an empty list for an unknown asset).
 		std::vector<AssetHandle> GetDependencyClosure(AssetHandle handle) const;
-		// The local bounds of a mesh as recorded when it was imported, known before the mesh loads (nullopt for other assets).
+		// The local bounds of a mesh as recorded when it was imported, known before the mesh loads: valid and finite, or nullopt
+		// (other assets, meshes without a record). A change is a content change (GetContentChanges), so that render scenes
+		// cull meshes that are not loaded with them (RenderScene::ResolveUnloadedBounds).
 		std::optional<AABB> GetBounds(AssetHandle handle) const;
 		// What recorded dependencies are made of (SetAssetReferences): the valid handles of `references`, each once in the
 		// order given, without `handle` itself (a scene whose script loads it again depends on nothing for that). Code that

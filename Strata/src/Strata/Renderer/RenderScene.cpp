@@ -163,10 +163,10 @@ namespace Strata
 		return m_Transforms[proxy].ToMatrix();
 	}
 
-	std::optional<AABB> RenderScene::ResolveUnloadedBounds(const AssetManagerBase&, AssetHandle)
+	std::optional<AABB> RenderScene::ResolveUnloadedBounds(const AssetManagerBase& assets, AssetHandle mesh)
 	{
-		// No asset manager records bounds of meshes before they load yet: the mesh's bounds stay unknown until it loads.
-		return std::nullopt;
+		// What the asset pipeline recorded: the editor's import records, a game's pack tables (valid and finite, or none).
+		return assets.GetBounds(mesh);
 	}
 
 	AABB RenderScene::GetPlaceholderBounds()

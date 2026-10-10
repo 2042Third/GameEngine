@@ -990,11 +990,13 @@ and `AudioSystem`, the built-in "Audio" scene system.
   environment cache holds the sky light's environment map until the environment changes, and `TextRenderer`'s glyph
   atlases hold their fonts (an atlas lives as long as its font is loaded). Mesh layouts (bounds, submeshes) follow the
   asset manager's content changes in `RenderScene::Sync`, whoever renders the scene; an evicted mesh keeps its layout
-  until a reimport changes its source revision (`AssetManagerBase::GetSourceRevisions`). A mesh whose bounds are
-  unknown (never loaded, reimported while evicted, none recorded: `RenderScene::GetMeshesWithoutBounds`) is requested
-  as if in view while any of its entities is active, since its proxies' placeholder bounds say nothing about where it
-  is; recorded bounds come from `RenderScene::ResolveUnloadedBounds`. Never resolve assets per entity in renderer code:
-  go through the proxies and the cache.
+  until a reimport changes its source revision (`AssetManagerBase::GetSourceRevisions`). Until a mesh's layout is known,
+  the bounds the asset pipeline recorded for it place it (`AssetManagerBase::GetBounds`: import records, a pack's bounds
+  table; read through `RenderScene::ResolveUnloadedBounds`, and a change of them is a content change), so imported and
+  packed meshes are culled before they load. A mesh whose bounds are unknown (not loaded and no bounds recorded:
+  `RenderScene::GetMeshesWithoutBounds`) is requested as if in view while any of its entities is active, since its
+  proxies' placeholder bounds say nothing about where it is. Never resolve assets per entity in renderer code: go
+  through the proxies and the cache.
 - Batching is material-free: instances of a mesh, submesh and level of detail with the same pipeline state share one
   draw whatever their materials (shaders read `u_Materials[instance.MaterialIndex]`); transparent surfaces are drawn
   one by one, back to front. Draws are gathered in parallel chunks merged in chunk order (results do not depend on

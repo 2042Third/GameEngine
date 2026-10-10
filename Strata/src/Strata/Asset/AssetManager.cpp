@@ -6,6 +6,7 @@
 #include "Strata/Renderer/Renderer.h"
 
 #include <algorithm>
+#include <cmath>
 #include <condition_variable>
 #include <unordered_set>
 #include <utility>
@@ -1112,7 +1113,8 @@ namespace Strata
 	void AssetManagerBase::SetAssetReferences(AssetHandle handle, std::span<const AssetHandle> dependencies, std::optional<AABB> bounds)
 	{
 		std::vector<AssetHandle> unique = NormalizeReferences(handle, dependencies);
-		if (bounds && !bounds->IsValid())
+		const auto isFinite = [](const glm::vec3& point) { return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z); };
+		if (bounds && (!bounds->IsValid() || !isFinite(bounds->Min) || !isFinite(bounds->Max)))
 			bounds.reset();
 
 		std::scoped_lock<std::mutex> lock(m_Mutex);
@@ -1120,7 +1122,13 @@ namespace Strata
 		if (it == m_Entries.end())
 			return;
 		it->second.Dependencies = std::move(unique);
+		const std::optional<AABB>& previous = it->second.Bounds;
+		const bool boundsChanged = previous.has_value() != bounds.has_value() || (bounds && (previous->Min != bounds->Min || previous->Max != bounds->Max));
 		it->second.Bounds = bounds;
+		// Caches that place meshes by their recorded bounds before they load (render scenes) learn of new bounds like of new
+		// content: an import recorded after a scene was first drawn, or a pack mounted over another.
+		if (boundsChanged)
+			PublishContentChange(handle);
 	}
 
 	std::vector<AssetHandle> AssetManagerBase::GetDependencies(AssetHandle handle) const

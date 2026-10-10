@@ -1016,12 +1016,16 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   when it happened; a sync after which nothing loaded, reloaded or was dropped compares no mesh
   (`RenderSceneStats::LastSyncMeshChecks`). A mesh that is not loaded keeps its layout while its source revision is the
   one the layout was learned from (`AssetSourceRevisions`): an eviction keeps it, but a reimport of the evicted mesh,
-  which publishes a content change without loading anything, makes its bounds unknown (below), so it is requested and
-  learned again rather than culled with bounds it may no longer have. While a reload of a loaded mesh is under way the
+  which publishes a content change without loading anything, makes the render scene forget it: the bounds the reimport
+  recorded stand in (below), or, without a record, its bounds are unknown, so it is never culled with bounds it may no
+  longer have. While a reload of a loaded mesh is under way the
   previous version's layout stays, as renderers draw that version meanwhile.
 - **Unknown bounds are visible**. Until a mesh's layout is known, the bounds the asset database recorded for it stand in
-  (`RenderScene::ResolveUnloadedBounds`; none yet: `pack-v2`'s `AssetManagerBase::GetBounds` is wired in there). A mesh
-  with neither has unknown bounds (`GetMeshesWithoutBounds`): its proxies sit in the spatial index with placeholder
+  (`RenderScene::ResolveUnloadedBounds`: `AssetManagerBase::GetBounds`, from the editor's import records and from the
+  bounds table of a game's pack), so an imported or packed mesh is culled and requested where it is before it ever
+  loads; recorded bounds that change (an import finished after the scene was first drawn, a patch pack) are content
+  changes, which the next sync reads. A mesh with neither (one the manager does not know, a record without bounds) has
+  unknown bounds (`GetMeshesWithoutBounds`): its proxies sit in the spatial index with placeholder
   bounds (`GetPlaceholderBounds`, a box of one unit around the entity's origin, scaled with it) that say nothing about
   the mesh, so every renderer requests such a mesh as if it were in view, at Normal priority (High where a placeholder
   is large in view), while any of its proxies is active (`GetIndexedUserCount`;

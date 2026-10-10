@@ -45,9 +45,9 @@ namespace Strata
 		uint32_t Materials = 0;        // Distinct material handles in use
 		uint32_t LastSyncUpdates = 0;  // Proxies the latest Sync updated
 		uint64_t FullRefreshes = 0;    // Syncs that compared every proxy (the scene no longer knew which transforms changed)
-		// Meshes the latest Sync compared with the asset manager: those whose objects or sources changed, new ones, or all of
-		// them after the manager changed (or forgot the changes); none in a sync after which nothing loaded, reloaded or was
-		// dropped.
+		// Meshes the latest Sync compared with the asset manager: those whose objects, sources or recorded bounds changed, new
+		// ones, or all of them after the manager changed (or forgot the changes); none in a sync after which nothing loaded,
+		// reloaded, was dropped or got other recorded bounds.
 		uint32_t LastSyncMeshChecks = 0;
 	};
 
@@ -67,7 +67,8 @@ namespace Strata
 	// catches up) and the meshes new to the scene are compared with their loaded objects. A mesh that is not loaded keeps
 	// its layout while its source is the one the layout was learned from (AssetSourceRevisions); one reimported while it
 	// was not loaded loses it, so its new bounds are not culled with the old ones. Until a mesh's layout is known, the
-	// bounds the asset database recorded for it stand in (ResolveUnloadedBounds). A mesh with neither has unknown bounds
+	// bounds the asset database recorded for it stand in (ResolveUnloadedBounds: imported meshes and the meshes of packs
+	// have them). A mesh with neither (a mesh the manager does not know, a record without bounds) has unknown bounds
 	// (GetMeshesWithoutBounds): its proxies sit in the spatial index with placeholder bounds around their entities, which
 	// say nothing about where the mesh is, so renderers request such a mesh as if it were in view while any of its proxies
 	// is active (GetIndexedUserCount) - a terrain whose origin is out of view may well fill it. Its layout follows once it
@@ -167,9 +168,9 @@ namespace Strata
 		const RenderSceneStats& GetStats() const { return m_Stats; }
 
 		// The local bounds the asset database recorded for a mesh that `assets` has not loaded (for the layout that is not
-		// known yet), or nullopt when it recorded none. The asset managers record no bounds of meshes they have not loaded
-		// yet; once packs and imports record them (pack-v2's AssetManagerBase::GetBounds), this returns them, and meshes
-		// known that way are culled and requested where they are instead of as if in view.
+		// known yet), or nullopt when it recorded none: AssetManagerBase::GetBounds, from the editor's import records and from
+		// a game's pack tables. Meshes known that way are culled and requested where they are instead of as if in view; a
+		// change of the recorded bounds is a content change of the mesh, which the next Sync reads.
 		static std::optional<AABB> ResolveUnloadedBounds(const AssetManagerBase& assets, AssetHandle mesh);
 		// Local bounds of a proxy whose mesh bounds are unknown: a box of one unit around the entity's origin, scaled with
 		// it. It keeps the proxy in the spatial index (queries near the entity find it) but says nothing about the mesh.

@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <limits>
 #include <map>
 #include <set>
 #include <string>
@@ -580,6 +581,43 @@ TEST_SUITE("Asset.Dependencies")
 		REQUIRE(manager->GetPacks()[1]->ReadData(patched, whole, &error));
 		REQUIRE(manager->ReadStoredRange(UUID(0x8002), 3, 10, range, &error));
 		CHECK(std::vector<uint8_t>(whole.begin() + 3, whole.begin() + 13) == range);
+	}
+
+	TEST_CASE("Recorded bounds are valid and finite or none, and a change of them is a content change")
+	{
+		const Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		const AssetHandle mesh = manager->AddStored(0x8E01, AssetType::Mesh, std::vector<uint8_t> { 1 });
+		std::vector<AssetHandle> changes;
+		const auto changedSince = [&](uint64_t version)
+		{
+			changes.clear();
+			REQUIRE(manager->GetContentChanges(version, changes));
+			return std::find(changes.begin(), changes.end(), mesh) != changes.end();
+		};
+
+		uint64_t version = manager->GetContentVersion();
+		const AABB box(glm::vec3(-1.0f, 0.0f, -2.0f), glm::vec3(1.0f, 3.0f, 2.0f));
+		manager->SetDependencies(mesh, {}, box);
+		REQUIRE(manager->GetBounds(mesh));
+		CHECK(manager->GetBounds(mesh)->Min == box.Min);
+		CHECK(manager->GetBounds(mesh)->Max == box.Max);
+		CHECK(changedSince(version));
+
+		// The same bounds again (a re-import that did not move the mesh) change nothing.
+		version = manager->GetContentVersion();
+		manager->SetDependencies(mesh, {}, box);
+		CHECK(manager->GetContentVersion() == version);
+
+		// Boxes that say nothing about where the mesh is are recorded as none: that is a change too.
+		manager->SetDependencies(mesh, {}, AABB(glm::vec3(0.0f), glm::vec3(std::numeric_limits<float>::infinity())));
+		CHECK_FALSE(manager->GetBounds(mesh));
+		CHECK(changedSince(version));
+		version = manager->GetContentVersion();
+		manager->SetDependencies(mesh, {}, AABB(glm::vec3(std::numeric_limits<float>::quiet_NaN()), glm::vec3(1.0f)));
+		manager->SetDependencies(mesh, {}, AABB());
+		CHECK_FALSE(manager->GetBounds(mesh));
+		CHECK(manager->GetContentVersion() == version);
+		CHECK_FALSE(manager->GetBounds(UUID(0x8E02))); // Unknown assets have none
 	}
 }
 

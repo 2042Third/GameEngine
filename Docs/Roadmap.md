@@ -138,10 +138,10 @@ render-scene, streaming-observatory, editor-authoring:
   `SceneRenderer::Render` costs about 0.9 ms for 100,000 cubes and 2.9 ms for 300,000; edit frames of grids under one
   root take 1.6 and 4.4 ms (the scaling audit measured 42.9 and 113.6 ms with the cubes as roots, which also pays the
   Hierarchy panel's cost of about 14 ms per 100,000 roots), 10,000 point lights 1.6 ms and 10,000 unique materials
-  1.9 ms (19.4 and 7.47 in the audit); `GetVisibleMaterials` publishes what mip streaming needs. Meshes whose bounds
-  are unknown (never loaded) are requested as if in view, as every mesh was before, so a world's worth of meshes not
-  yet seen loads in a burst at its start, until `pack-v2`'s recorded bounds are wired into
-  `RenderScene::ResolveUnloadedBounds` (the integrator's step, with a test of a recorded mesh culled before it loads).
+  1.9 ms (19.4 and 7.47 in the audit); `GetVisibleMaterials` publishes what mip streaming needs. Meshes that have not
+  loaded are placed by the bounds `pack-v2` records (`AssetManagerBase::GetBounds` through
+  `RenderScene::ResolveUnloadedBounds`, wired at integration), so a world's meshes not yet seen are culled before they
+  load; only meshes without a record (unknown bounds) are requested as if in view.
   Editor frames of scenes with 100,000 or more root entities are still dominated by the Hierarchy panel drawing every
   root (`editor-authoring`). Two caches besides the resolve cache still hold assets between frames: `SceneRenderer`'s
   environment cache the sky light's environment map until the environment changes (`first-light`), and

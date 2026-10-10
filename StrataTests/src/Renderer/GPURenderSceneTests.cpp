@@ -473,6 +473,49 @@ TEST_SUITE("GPU.RenderScene")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Meshes with recorded bounds are culled with them before they load: requested where those reach into view, not elsewhere")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		// Both meshes' bounds recorded, as the editor's imports and a game's pack record them.
+		const Ref<Mesh> plane = MeshFactory::CreatePlane(1000.0f);
+		const AssetHandle ground = manager->AddStored(0x6E41, AssetType::Mesh, plane->Serialize());
+		manager->SetDependencies(ground, {}, plane->GetBounds());
+		const Ref<Mesh> cube = MeshFactory::CreateCube();
+		const AssetHandle box = manager->AddStored(0x6E42, AssetType::Mesh, cube->Serialize());
+		manager->SetDependencies(box, {}, cube->GetBounds());
+		AssetManager::SetActive(manager);
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		// The ground's origin lies behind the camera, far away, but its bounds reach under the camera; the box lies behind the
+		// camera beyond the prefetch distance.
+		const glm::vec3 boxPosition(300.0f, 0.0f, 300.0f);
+		const Entity groundEntity = AddMesh(scene, ground, UUID::Null(), glm::vec3(400.0f, 0.0f, 400.0f), "Ground");
+		AddMesh(scene, box, UUID::Null(), boxPosition, "Box");
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Size, c_Size);
+		const SceneCamera camera = ViewFrom(glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(-20.0f, 0.0f, -20.0f), 500.0f);
+		REQUIRE(glm::distance(camera.Position, boxPosition) > renderer.GetSpecification().PrefetchDistance * 2.0f);
+
+		// Neither has loaded, yet both are placed where they are: the ground is in view and requested, the box is culled and
+		// not requested (without its record it would be requested as if in view).
+		RunFrame(gpu, *manager, renderer, scene, camera);
+		CHECK(renderer.GetStats().MeshesWithoutBounds == 0);
+		CHECK(renderer.GetStats().VisibleProxies == 1);
+		CHECK(manager->GetAssetState(ground) != AssetState::Unloaded);
+		CHECK(manager->GetAssetState(box) == AssetState::Unloaded);
+		for (int frame = 0; frame < 120 && renderer.GetStats().Instances == 0; frame++)
+			RunFrame(gpu, *manager, renderer, scene, camera);
+		CHECK(renderer.GetStats().Instances == 1);
+		CHECK(renderer.GetEntityAt(scene, c_Size / 2, c_Size - 4) == groundEntity);
+		CHECK(manager->GetAssetState(box) == AssetState::Unloaded);
+		REQUIRE(manager->WaitForPendingLoads());
+		gpu.GetDevice().WaitForIdle();
+		AssetManager::SetActive(nullptr);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Meshes of inactive entities are not requested while their bounds are unknown")
 	{
 		GPUContext gpu;
@@ -704,19 +747,19 @@ TEST_SUITE("GPU.RenderScene")
 		REQUIRE(allowed.size() < project->Materials.size());
 
 		RunFrame(gpu, *manager, renderer, *scene, outward);
-		// The terrain's mesh never loaded, so its bounds are unknown: it is requested as if in view.
-		CHECK(renderer.GetStats().MeshesWithoutBounds == 1);
-		CHECK(manager->GetAssetState(project->GridMesh) != AssetState::Unloaded);
-		for (int frame = 1; frame < 30; frame++)
-			RunFrame(gpu, *manager, renderer, *scene, outward);
-		CHECK(renderer.GetStats().PrefetchRequests > 0);
-		// Loaded, it gives the terrain its real bounds, which lie under the camera, within the prefetch distance. It is the
-		// only thing the view may show.
+		// The pack recorded the terrain mesh's bounds: before the mesh loads, its proxy has its real bounds, which lie under the
+		// camera, within the prefetch distance, so it is requested. It is the only thing the view may show.
 		RenderScene& renderScene = RenderScene::Get(*scene);
 		CHECK(renderScene.GetMeshesWithoutBounds().empty());
 		CHECK(renderer.GetStats().MeshesWithoutBounds == 0);
+		CHECK(manager->GetAssetState(project->GridMesh) != AssetState::Unloaded);
 		const uint32_t terrain = renderScene.FindProxy(scene->FindEntityByName("Terrain").GetHandle());
 		REQUIRE(terrain != RenderScene::c_InvalidIndex);
+		CHECK((renderScene.GetProxyFlags(terrain) & RenderProxyFlags::MeshBounds) != 0);
+		for (int frame = 1; frame < 30; frame++)
+			RunFrame(gpu, *manager, renderer, *scene, outward);
+		CHECK(renderer.GetStats().PrefetchRequests > 0);
+		CHECK(renderer.GetStats().MeshesWithoutBounds == 0);
 		const AABB& terrainBounds = renderScene.GetWorldBounds(terrain);
 		CHECK(terrainBounds.Min.x == doctest::Approx(-c_StressWorldSize * 0.5f));
 		CHECK(terrainBounds.Max.z == doctest::Approx(c_StressWorldSize * 0.5f));
