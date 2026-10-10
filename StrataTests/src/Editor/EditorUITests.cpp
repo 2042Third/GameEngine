@@ -6,7 +6,9 @@
 #include "TestHelpers.h"
 #include "UI/EditorFonts.h"
 #include "UI/Icons.h"
+#include "UI/ItemProbe.h"
 #include "UI/Theme.h"
+#include "UI/Widgets.h"
 
 #include <Strata/Events/ApplicationEvent.h>
 
@@ -14,6 +16,7 @@
 #include <imgui_internal.h>
 #include <nlohmann/json.hpp>
 
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -203,5 +206,89 @@ TEST_SUITE("Editor.UI")
 		editor.Frames(1);
 		CHECK_FALSE(editor.Host->Running);
 		CHECK(editor.Host->ExitCode == 0);
+	}
+
+	TEST_CASE("The widget kit: buttons, chips, pills, cards and dialogs")
+	{
+		ImGuiHarness harness;
+		bool toggle = false;
+		int pillClicks = 0;
+		int cardClicks = 0;
+		int disabledClicks = 0;
+		bool modalShown = false;
+		bool modalOpen = true;
+		const auto draw = [&]()
+		{
+			ImGui::Begin("Widgets");
+			UI::ToggleChip("Test.Chip", Icons::Grid3x3, "Grid", &toggle, "A toggle");
+			if (UI::Pill("Test.Pill", Icons::Gauge, "16.7 ms", UI::GetThemeColors().TextSecondary, "A pill"))
+				pillClicks++;
+			UI::ButtonStyle disabled;
+			disabled.Enabled = false;
+			if (UI::ToolbarButton("Test.Disabled", Icons::Play, "Disabled", nullptr, disabled))
+				disabledClicks++;
+			if (UI::Card("Test.Card", Icons::Box, "Empty", "A project with nothing in it", ImVec2(ImGui::GetFontSize() * 12.0f, ImGui::GetFontSize() * 8.0f)))
+				cardClicks++;
+			UI::IconButton("Test.Twice", Icons::X, nullptr);
+			ImGui::PushID("Other");
+			UI::IconButton("Test.Twice", Icons::X, nullptr);
+			ImGui::PopID();
+			if (UI::SectionHeader("Test.Section", "Section"))
+				UI::Heading("Heading", UI::TextSize::Display);
+			ImGui::End();
+
+			if (!modalShown)
+			{
+				UI::OpenModal("Test Modal");
+				modalShown = true;
+			}
+			if (UI::BeginModal("Test Modal", "A dialog", &modalOpen))
+			{
+				UI::DialogButton("Test.Ok", "OK", true);
+				UI::EndModal();
+			}
+		};
+		harness.Frame(draw);
+		harness.Frame(draw);
+
+		const auto click = [&](std::string_view key)
+		{
+			const std::optional<UI::ItemProbe::Item> item = UI::ItemProbe::Find(key);
+			REQUIRE(item.has_value());
+			harness.MoveMouse(item->GetCenter());
+			harness.Frame(draw);
+			harness.SetMouseButton(ImGuiMouseButton_Left, true);
+			harness.Frame(draw);
+			harness.SetMouseButton(ImGuiMouseButton_Left, false);
+			harness.Frame(draw);
+		};
+		// The modal is open first: its close button ends it.
+		CHECK(UI::ItemProbe::Find("Test.Ok").has_value());
+		click("Modal.Close");
+		CHECK_FALSE(modalOpen);
+		harness.Frame(draw);
+		CHECK_FALSE(UI::ItemProbe::Find("Test.Ok").has_value());
+
+		click("Test.Chip");
+		CHECK(toggle);
+		click("Test.Chip");
+		CHECK_FALSE(toggle);
+		click("Test.Pill");
+		CHECK(pillClicks == 1);
+		click("Test.Card");
+		CHECK(cardClicks == 1);
+		click("Test.Disabled");
+		CHECK(disabledClicks == 0);
+		CHECK_FALSE(UI::ItemProbe::Find("Test.Disabled")->Enabled);
+		// A key that names two widgets is marked, so tests cannot click the wrong one.
+		CHECK(UI::ItemProbe::Find("Test.Twice")->Duplicate);
+		CHECK_FALSE(UI::ItemProbe::Find("Test.Pill")->Duplicate);
+		// Sizes follow the font: the pill is as tall as a frame.
+		const UI::ItemProbe::Item pill = *UI::ItemProbe::Find("Test.Pill");
+		harness.Frame([&]()
+		{
+			CHECK(pill.Max.y - pill.Min.y == doctest::Approx(ImGui::GetFrameHeight()));
+			draw();
+		});
 	}
 }

@@ -48,8 +48,8 @@ Each target is defined in the `CMakeLists.txt` of its directory; script modules 
 | `Strata` | static library | Engine modules, platform code, embedded shaders and default font (`Strata/src/`). |
 | `StrataScriptCore` | interface library | Script C ABI and header-only C++ SDK; links glm only (`StrataScriptCore/`). |
 | `StrataEditorCore` | static library | The editor without UI (`StrataEditor/src/Editor/`). |
-| `StrataEditorUI` | static library | The ImGui interface on the core: `EditorLayer` and the panels; links `nfd` (`StrataEditor/src/UI/`, `Panels/`, `EditorLayer.*`). |
-| `StrataEditor` | executable | Runs the UI: `EditorApplication` (options, `EditorHost`) (`StrataEditor/src/EditorApplication.cpp`). |
+| `StrataEditorUI` | static library | The ImGui interface on the core: `EditorLayer`, panels, widget kit, theme, embedded fonts; links `nfd` (`StrataEditor/src/UI/`, `Panels/`, `EditorLayer.*`). |
+| `StrataEditor` | executable | Runs the UI: `EditorApplication` (options, theme and fonts, `EditorHost`) (`StrataEditor/src/EditorApplication.cpp`). |
 | `StrataRuntime` | executable | Plays exported games (`StrataRuntime/src/RuntimeApplication.cpp`). |
 | `StrataCLILib`, `StrataCLI` | static library, executable | Automation client and MCP server (`StrataCLI/src/`). |
 | `StrataTests` | executable | doctest suites; builds the test script modules as dependencies (`StrataTests/`). |
@@ -413,8 +413,11 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
 ## Editor
 
 ```text
- StrataEditor      EditorApplication -> EditorLayer (owns everything below): panels (Viewport, Hierarchy,
-                   Inspector, ContentBrowser, Console), toolbar, shortcuts, file dialogs (nfd)
+ StrataEditor      EditorApplication      options, Bedrock theme and fonts installed into ImGuiLayer, EditorHost
+ --------------------------------------------------------------------------------------------------------------
+ StrataEditorUI    EditorLayer            owns everything below: panels (Viewport, Hierarchy, Inspector,
+                                          ContentBrowser, Console), toolbar, shortcuts, file dialogs (nfd)
+                   UI kit                 Theme (palette, ApplyTheme), EditorFonts, Icons, Widgets, ItemProbe
  --------------------------------------------------------------------------------------------------------------
  StrataEditorCore  EditorContext          project, EditorAssetManager, edited and running scene, play mode,
                                           selection, UndoStack, ScriptEngine + ScriptBuilder, EditorViewport,

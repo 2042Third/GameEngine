@@ -30,7 +30,7 @@ together (targets, modules, frame loop, threading, asset pipeline, scripting, ed
 | Path | Contents |
 | --- | --- |
 | `Strata/` | Engine static library. `src/Strata/<Module>/` holds the engine modules, `src/Platform/<OS or backend>/` the platform implementations, `shaders/` the GLSL sources, `vendor/` the pinned third-party submodules. |
-| `StrataEditor/` | Editor executable (ImGui docking UI, gizmos, undo/redo, automation server). |
+| `StrataEditor/` | The editor: `src/Editor/` the UI-independent core (`StrataEditorCore`), `src/UI/`, `src/Panels/` and `EditorLayer` the ImGui interface (`StrataEditorUI`: Bedrock theme, widget kit), the executable (`EditorApplication.cpp`); `Resources/Fonts/` the embedded fonts, `Tools/` the icon header generator. |
 | `StrataRuntime/` | Runtime executable that plays exported games (`GameRuntime`, drawn by `GameRenderer`): it runs the `.stgame` manifest next to it, or `--game <file>`; `--headless` runs without window and GPU at 60 frames per second (servers, CI); `--screenshot out.png` with `--frames N` saves the last frame (and fails the run when it shows the missing-camera message). |
 | `StrataScriptCore/` | Script ABI (C header) and the header-only C++ SDK game scripts are written against. Script modules never link the engine. |
 | `StrataCLI/` | Command-line client for the editor automation API; also an MCP server (`StrataCLI mcp`). |
@@ -90,7 +90,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
 ```
 
 - Unit tests live in `StrataTests/src/<Module>/*Tests.cpp` and use [doctest](https://github.com/doctest/doctest).
-  Name suites after the module (`TEST_SUITE("Scene.Serialization")`).
+  Name suites after the module (`TEST_SUITE("Scene.Serialization")`). The editor's UI is tested headless with
+  `ImGuiHarness` (suites `Editor.UI`, `Editor.Theme`; see Editor, "Editor UI rules").
 - Suites whose names start with `GPU` need a Vulkan device and are registered separately under the
   CTest label `gpu`. They share one device per process through `Tests::GPUContext` (never create
   devices in tests) and end with `CHECK(gpu.GetNewErrorCount() == 0)`, so validation errors fail the
@@ -444,8 +445,19 @@ and `AudioSystem`, the built-in "Audio" scene system.
 ## Editor
 
 - `StrataEditorCore` (`StrataEditor/src/Editor/`) is the editor without UI: `EditorContext` (project, asset
-  manager, edited scene, play mode, selection, undo history) and `EditorCommandRegistry`. The ImGui
-  panels (`StrataEditor/src/Panels/`, `UI/`) only draw state and call commands; the tests link the core.
+  manager, edited scene, play mode, selection, undo history) and `EditorCommandRegistry`. `StrataEditorUI`
+  (`StrataEditor/src/UI/`, `Panels/`, `EditorLayer`) is the ImGui interface on top of it; it reaches the application only
+  through `EditorHost` (implemented in `EditorApplication.cpp`), and the `StrataEditor` executable runs it. The panels
+  only draw state and call commands; the tests link both libraries.
+- **Editor UI rules** (the 'Bedrock' look):
+  - Text uses the editor's fonts (`UI/EditorFonts.h`, embedded from `StrataEditor/Resources/Fonts`): Inter for the UI
+    with the Lucide icons merged in, Inter SemiBold for headers, JetBrains Mono for logs, IDs and numbers, at the type
+    scale's sizes (`UI::PushFont(EditorFont, TextSize)`: 12, 14, 17, 24). Icons are text (`UI/Icons.h`, generated from the
+    font by `StrataEditor/Tools/GenerateIconHeader.py`). ImGui's built-in font is never added.
+  - Controls come from the widget kit (`UI/Widgets.h`: toolbar and icon buttons, chips, status pills, section headers,
+    headings, cards, modal dialogs); every kit widget records its rectangle in `UI::ItemProbe` under its id.
+  - UI tests draw the real `EditorLayer` without a window or GPU through `StrataTests/src/Editor/ImGuiHarness.h` (a fake
+    `EditorHost`, ImGui's texture requests honored without a renderer, injected input, kit widgets found by probe key).
 - **Every change to the scene or project goes through a command** (`EditorCommandRegistry::Execute`) or,
   for continuous UI edits, through `SceneEditTransaction` / `SetPropertyWithUndo`. That keeps the UI,
   automation (AI agents) and tests identical, and makes every edit undoable.
