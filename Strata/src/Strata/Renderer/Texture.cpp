@@ -20,6 +20,14 @@ namespace Strata
 		// predict whether the next step still fits before a finalization deadline. Main thread only (finalization).
 		float s_UploadBytesPerMs = 4.0e6f;
 
+		// Freeing a large block hands its pages back to the system, which takes milliseconds for tens of megabytes (2 to
+		// 3 ms for the 89.5 MB of a 4096x4096 RGBA8 chain). A CPU copy from this size on is freed like an upload step: not
+		// started when it would end after the finalization deadline, at the speed of the latest frees. It is not handed to
+		// a worker: the next allocations of the frame would then come before the memory is back, raising the peak.
+		constexpr uint64_t c_TimedReleaseBytes = 1ull << 20;
+		// How fast freeing CPU copies goes (bytes per millisecond), averaged over the latest frees. Main thread only.
+		float s_ReleaseBytesPerMs = 3.0e7f;
+
 		struct CookedTextureHeader
 		{
 			uint32_t Magic;
@@ -418,17 +426,20 @@ namespace Strata
 			m_UploadRow = 0;
 		}
 
-		// Steps until the chain is uploaded or the budget is used up; the first step of a call is always taken, so a texture
-		// larger than any frame's budget still arrives. Budgeted calls also wait for staging memory (it frees up as frames
-		// complete), so a burst of arrivals cannot pile up staging; unbudgeted ones (LoadAssetSync, memory assets) finish.
-		const bool budgeted = context.UploadBudget != std::numeric_limits<uint64_t>::max();
+		// Steps until the chain is uploaded or the budget is used up; the first step of a call is always taken as far as the
+		// upload budget and the deadline go, so a texture larger than any frame's budget still arrives. Steps also wait for
+		// staging memory (it frees up as frames complete) beyond the context's StagingBytes, so a burst of arrivals cannot
+		// pile up staging, except the frame's first step (nothing uploaded yet): every frame makes progress, also where no
+		// device frames recycle staging (tools, tests). Unbudgeted calls (LoadAssetSync, memory assets) have no staging
+		// limit and finish.
 		const StagingTexturePool& stagingPool = Renderer::GetStagingTextures();
+		const bool framesFirstCall = !context.UploadedBytes || *context.UploadedBytes == 0;
 		uint64_t uploaded = 0;
 		bool firstStep = true;
 		while (m_UploadLevel < m_MipCount)
 		{
 			const UploadStep step = GetNextUploadStep();
-			if (budgeted && !stagingPool.HasRoomFor(step.Bytes))
+			if (!(firstStep && framesFirstCall) && !stagingPool.HasRoomFor(step.Bytes, context.StagingBytes))
 				break;
 			// A step that would end after the deadline (at the copy speed seen so far) waits for the next call.
 			const auto now = std::chrono::steady_clock::now();
@@ -453,6 +464,18 @@ namespace Strata
 		if (m_UploadLevel < m_MipCount)
 			return AssetFinalizeResult::Pending;
 
+		// The chain is uploaded; the CPU copy goes before the texture is published. Freeing a large one takes time like a
+		// step: when it would end after the deadline it is the next call's work (a call that took no step does it anyway).
+		const uint64_t cpuCopyBytes = GetCPUCopyBytes();
+		if (!firstStep && cpuCopyBytes >= c_TimedReleaseBytes)
+		{
+			const auto now = std::chrono::steady_clock::now();
+			const auto predicted = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+				std::chrono::duration<float, std::milli>(static_cast<float>(cpuCopyBytes) / s_ReleaseBytesPerMs));
+			if (now >= context.Deadline || context.Deadline - now < predicted)
+				return AssetFinalizeResult::Pending;
+		}
+
 		m_BindlessSlot = Renderer::GetBindlessTextures().Allocate(m_GPUTexture);
 		if (m_BindlessSlot == BindlessTextureTable::c_InvalidSlot)
 		{
@@ -461,11 +484,26 @@ namespace Strata
 		}
 
 		// The GPU copy is authoritative from now on; streaming re-reads cooked data when it needs pixels again.
+		const auto releaseStart = std::chrono::steady_clock::now();
 		m_Mips.clear();
 		m_Mips.shrink_to_fit();
 		std::vector<uint8_t>().swap(m_Cooked);
 		m_CookedOffsets.clear();
+		if (cpuCopyBytes >= c_TimedReleaseBytes)
+		{
+			const float releaseMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - releaseStart).count();
+			if (releaseMs > 0.01f)
+				s_ReleaseBytesPerMs = 0.8f * s_ReleaseBytesPerMs + 0.2f * (static_cast<float>(cpuCopyBytes) / releaseMs);
+		}
 		return AssetFinalizeResult::Done;
+	}
+
+	uint64_t Texture::GetCPUCopyBytes() const
+	{
+		uint64_t bytes = m_Cooked.capacity();
+		for (const TextureMip& mip : m_Mips)
+			bytes += mip.Data.capacity();
+		return bytes;
 	}
 
 	Texture::UploadStep Texture::GetNextUploadStep() const

@@ -12,6 +12,8 @@
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneSerializer.h"
 
+#include <algorithm>
+#include <cstring>
 #include <random>
 #include <set>
 #include <span>
@@ -65,6 +67,7 @@ TEST_SUITE("Asset.Residency")
 		CHECK(unlimited.InFlightBytes == 128 * c_MB);
 		CHECK(unlimited.UploadBytesPerFrame == 64 * c_MB);
 		CHECK(unlimited.FinalizeMsPerFrame == doctest::Approx(4.0f));
+		CHECK(unlimited.StagingBytes == 64 * c_MB);
 
 		const AssetResidencyBudgets device = AssetResidencyBudgets::FromDeviceBudget(8000 * c_MB);
 		CHECK(device.GpuTextures == 4000 * c_MB);
@@ -104,14 +107,14 @@ TEST_SUITE("Asset.Residency")
 				roots.push_back(scene.CreateEntity("Entity " + std::to_string(index)));
 			return SceneSerializer::SerializeEntities(scene, roots);
 		};
-		const Ref<Prefab> small = Prefab::CreateFromSnapshot(makeSnapshot(1));
-		const Ref<Prefab> large = Prefab::CreateFromSnapshot(makeSnapshot(100));
-		CHECK(small->GetMemoryUsage().Cpu > 0);
-		CHECK(large->GetMemoryUsage().Cpu > 50 * small->GetMemoryUsage().Cpu);
-		CHECK(large->GetMemoryUsage().Cpu > JsonUtils::Dump(large->GetSnapshot()).size()); // Parsed JSON takes more than its text
-		CHECK(large->GetMemoryUsage().GetGpu() == 0);
+		const Ref<Prefab> smallPrefab = Prefab::CreateFromSnapshot(makeSnapshot(1));
+		const Ref<Prefab> largePrefab = Prefab::CreateFromSnapshot(makeSnapshot(100));
+		CHECK(smallPrefab->GetMemoryUsage().Cpu > 0);
+		CHECK(largePrefab->GetMemoryUsage().Cpu > 50 * smallPrefab->GetMemoryUsage().Cpu);
+		CHECK(largePrefab->GetMemoryUsage().Cpu > JsonUtils::Dump(largePrefab->GetSnapshot()).size()); // Parsed JSON takes more than its text
+		CHECK(largePrefab->GetMemoryUsage().GetGpu() == 0);
 		const Ref<Model> model = Model::CreateFromSnapshot(makeSnapshot(10));
-		CHECK(model->GetMemoryUsage().Cpu > small->GetMemoryUsage().Cpu);
+		CHECK(model->GetMemoryUsage().Cpu > smallPrefab->GetMemoryUsage().Cpu);
 
 		Scene scene("Document");
 		for (int index = 0; index < 20; index++)
@@ -245,6 +248,103 @@ TEST_SUITE("Asset.Residency")
 		for (size_t index : { size_t(7), size_t(8), size_t(9), size_t(10) })
 			CHECK(manager->GetAssetState(textures[index]) == AssetState::Ready);
 		CHECK(manager->GetStats().Evictions == 6);
+	}
+
+	TEST_CASE("Eviction for a pool over budget looks only at the assets holding memory of that pool")
+	{
+		ScopedFakeLoader loader;
+		Ref<FakeAssetManager> manager = CreateManager(MakeBudgets(AssetResidencyBudgets::c_Unlimited, 4 * c_MB, AssetResidencyBudgets::c_Unlimited));
+		const uint32_t grace = manager->GetEvictionGraceFrames();
+
+		// A long session: thousands of documents and materials loaded once and never used again (the CPU pool is unlimited,
+		// so they stay), and a texture that went out of use.
+		constexpr uint64_t c_StaleCount = 3000;
+		std::vector<AssetHandle> stale;
+		for (uint64_t index = 0; index < c_StaleCount; index++)
+			stale.push_back(manager->Add(0x90000 + index, MakeUsage(1 * c_KB)));
+		const AssetHandle oldTexture = manager->Add(0x9F000, MakeUsage(0, 1 * c_MB));
+		for (AssetHandle handle : stale)
+			manager->RequestLoad(handle);
+		manager->RequestLoad(oldTexture);
+		REQUIRE(manager->WaitForPendingLoads()); // Too many for one update's finalization time
+		REQUIRE(manager->GetAssetState(oldTexture) == AssetState::Ready);
+		for (uint32_t frame = 0; frame <= grace; frame++)
+			manager->Update();
+
+		// Now the textures in use exceed the texture budget: the pool stays over budget, and a new texture arrives every
+		// frame. Each update and each arrival looks at the stale texture once and at the textures in the grace window, never
+		// at the stale documents.
+		constexpr uint32_t c_Frames = 40;
+		std::vector<AssetHandle> textures;
+		for (uint64_t index = 0; index < c_Frames + 6; index++)
+			textures.push_back(manager->Add(0xA0000 + index, MakeUsage(0, 1 * c_MB)));
+		const uint64_t checksBefore = manager->GetStats().EvictionChecks;
+		for (uint32_t frame = 0; frame < c_Frames; frame++)
+		{
+			for (uint32_t inUse = 0; inUse < 6; inUse++)
+				manager->GetAsset(textures[frame + inUse]);
+			manager->Update();
+		}
+		const AssetManagerStats stats = manager->GetStats();
+		CHECK(stats.Resident.GpuTextures > 4 * c_MB); // Over budget throughout: what is in use stays
+		CHECK(manager->GetAssetState(oldTexture) == AssetState::Unloaded);
+		const size_t staleReady = std::count_if(stale.begin(), stale.end(), [&](AssetHandle handle) { return manager->GetAssetState(handle) == AssetState::Ready; });
+		CHECK(staleReady == c_StaleCount);
+		// Two evictions per frame (an update and an arrival), each looking at the textures of the grace window and one
+		// more: far below one look at each stale document per frame.
+		const uint64_t checks = stats.EvictionChecks - checksBefore;
+		INFO("Eviction checks: ", checks);
+		CHECK(checks <= c_Frames * 2 * (6 + grace + 2));
+		CHECK(checks > 0);
+
+		// A trim looks at everything it evicts.
+		const uint64_t checksBeforeTrim = manager->GetStats().EvictionChecks;
+		CHECK(manager->TrimUnused(0) >= c_StaleCount);
+		CHECK(manager->GetStats().EvictionChecks - checksBeforeTrim >= c_StaleCount);
+	}
+
+	TEST_CASE("Arrivals are placed in the eviction order by their latest request, however long ago it was")
+	{
+		ScopedFakeLoader loader;
+		ScopedJobSystem jobs(2, 1);
+		Ref<FakeAssetManager> manager = CreateManager(MakeBudgets(AssetResidencyBudgets::c_Unlimited, 3 * c_MB, AssetResidencyBudgets::c_Unlimited));
+		// One load in flight at a time, so the queue decides the order in which they arrive.
+		AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
+		budgets.InFlightBytes = 1;
+		manager->SetResidencyBudgets(budgets);
+		const uint32_t grace = manager->GetEvictionGraceFrames();
+		const AssetHandle blocker = manager->Add(0xB0000, MakeUsage(1 * c_KB));
+		const AssetHandle early = manager->Add(0xB0001, MakeUsage(0, 1 * c_MB));
+		const AssetHandle middle = manager->Add(0xB0002, MakeUsage(0, 1 * c_MB));
+		const AssetHandle late = manager->Add(0xB0003, MakeUsage(0, 1 * c_MB));
+		const AssetHandle last = manager->Add(0xB0004, MakeUsage(0, 1 * c_MB));
+
+		// The early texture is requested first, at a low priority, while another load holds the flight; the others are
+		// requested in later frames at a high priority and overtake it: it arrives last.
+		manager->CloseGate();
+		manager->GetAsset(blocker);
+		REQUIRE(manager->WaitForWaitingReads(1));
+		manager->RequestLoad(early, AssetPriority::Low);
+		manager->Update();
+		manager->RequestLoad(middle, AssetPriority::High);
+		manager->Update();
+		manager->RequestLoad(late, AssetPriority::High);
+		manager->OpenGate();
+		REQUIRE(manager->WaitForPendingLoads());
+		CHECK(manager->GetReadOrder() == std::vector<AssetHandle> { blocker, middle, late, early });
+		for (uint32_t frame = 0; frame <= grace + 1; frame++)
+			manager->Update();
+		REQUIRE(manager->GetStats().Resident.GpuTextures == 3 * c_MB);
+
+		// One more texture is one too many: the least recently requested goes, the early one, although it arrived last.
+		manager->GetAsset(last);
+		REQUIRE(manager->WaitForPendingLoads());
+		manager->Update();
+		CHECK(manager->GetAssetState(early) == AssetState::Unloaded);
+		CHECK(manager->GetAssetState(middle) == AssetState::Ready);
+		CHECK(manager->GetAssetState(late) == AssetState::Ready);
+		CHECK(manager->GetAssetState(last) == AssetState::Ready);
+		CHECK(manager->GetStats().Evictions == 1);
 	}
 
 	TEST_CASE("Pinned assets and assets requested within the grace window are never evicted")

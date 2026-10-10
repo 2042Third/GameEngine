@@ -38,11 +38,11 @@ namespace Strata
 		uint64_t GetPendingBytes() const { return m_PendingBytes; } // Released, but frames in flight may still read them
 		uint64_t GetCreatedCount() const { return m_CreatedCount; }  // Staging textures created so far
 
-		// Whether `bytes` more staging fit beside what frames in flight may still read (c_MaxUploadBytesInFlight). Budgeted
-		// uploads wait for room (Texture::FinalizeOnMainThread): staging memory stays bounded however fast data arrives.
-		bool HasRoomFor(uint64_t bytes) const { return m_PendingBytes + bytes <= c_MaxUploadBytesInFlight; }
+		// Whether `bytes` more staging fit beside what frames in flight may still read, within `limit` bytes. Budgeted uploads
+		// wait for room (Texture::FinalizeOnMainThread, with the manager's AssetResidencyBudgets::StagingBytes): staging
+		// memory stays bounded however fast data arrives.
+		bool HasRoomFor(uint64_t bytes, uint64_t limit) const { return m_PendingBytes <= limit && bytes <= limit - m_PendingBytes; }
 
-		static constexpr uint64_t c_MaxUploadBytesInFlight = 64ull << 20;
 		static constexpr uint64_t c_MaxIdleBytes = 16ull << 20;
 		static constexpr uint32_t c_IdleReleaseFrames = 120;
 		// At most this much waits for frames in flight to become reusable; more is not pooled (it is freed once the GPU is

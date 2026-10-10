@@ -5,7 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <iterator>
+#include <map>
 
 namespace Strata
 {
@@ -192,15 +192,59 @@ namespace Strata
 
 	void AssetManagerBase::TouchLocked(AssetEntry& entry)
 	{
+		if (entry.LastRequestedFrame == m_FrameIndex)
+			return; // Requested in this frame already: its place in the orders is the frame's
 		entry.LastRequestedFrame = m_FrameIndex;
-		// The recency order stays sorted by the frame of the latest request: the most recent one goes last.
-		if (entry.InRecencyOrder)
-			m_RecencyOrder.splice(m_RecencyOrder.end(), m_RecencyOrder, entry.RecencyPosition);
+		if (!entry.InRecencyOrders)
+			return;
+
+		// The latest request goes last, which is where inserting with the end as hint takes constant time.
+		const RecencyKey key { m_FrameIndex, m_NextRecencySequence++ };
+		for (AssetMemoryPool pool : c_AssetMemoryPools)
+		{
+			if (GetPoolBytes(entry.Usage, pool) == 0)
+				continue;
+			std::map<RecencyKey, AssetHandle>& order = m_RecencyOrders[static_cast<size_t>(pool)];
+			auto node = order.extract(entry.Recency);
+			ST_CORE_ASSERT(!node.empty(), "Asset {} is missing from a recency order", entry.Metadata.Handle.ToString());
+			if (node.empty())
+				continue;
+			node.key() = key;
+			order.insert(order.end(), std::move(node));
+		}
+		entry.Recency = key;
+	}
+
+	void AssetManagerBase::LinkRecencyLocked(AssetEntry& entry)
+	{
+		// Arriving is no request: the entry goes where its latest request puts it, so an asset whose load outlasted every
+		// request for it may go at once.
+		entry.Recency = RecencyKey { entry.LastRequestedFrame, m_NextRecencySequence++ };
+		for (AssetMemoryPool pool : c_AssetMemoryPools)
+		{
+			if (GetPoolBytes(entry.Usage, pool) > 0)
+				m_RecencyOrders[static_cast<size_t>(pool)].emplace(entry.Recency, entry.Metadata.Handle);
+		}
+		entry.InRecencyOrders = true;
+	}
+
+	void AssetManagerBase::UnlinkRecencyLocked(AssetEntry& entry)
+	{
+		if (!entry.InRecencyOrders)
+			return;
+		for (AssetMemoryPool pool : c_AssetMemoryPools)
+		{
+			if (GetPoolBytes(entry.Usage, pool) > 0)
+				m_RecencyOrders[static_cast<size_t>(pool)].erase(entry.Recency);
+		}
+		entry.InRecencyOrders = false;
 	}
 
 	Ref<Asset> AssetManagerBase::SetLoadedLocked(AssetEntry& entry, Ref<Asset> asset)
 	{
 		Ref<Asset> previous = std::move(entry.Loaded);
+		// The orders the entry is in follow from its Usage: leave them before it changes.
+		UnlinkRecencyLocked(entry);
 		m_Resident -= entry.Usage;
 		entry.Usage = {};
 		entry.Loaded = std::move(asset);
@@ -208,28 +252,8 @@ namespace Strata
 		{
 			entry.Usage = entry.Loaded->GetMemoryUsage();
 			m_Resident += entry.Usage;
-		}
-
-		const bool evictable = entry.Loaded && !entry.IsMemoryAsset;
-		if (evictable && !entry.InRecencyOrder)
-		{
-			// Arriving is no request: an asset whose load outlasted every request for it may go at once. The order stays
-			// sorted by the frame of the latest request; arrivals were mostly requested recently, so the search starts last.
-			auto position = m_RecencyOrder.end();
-			while (position != m_RecencyOrder.begin())
-			{
-				const auto before = std::prev(position);
-				if (m_Entries.at(*before).LastRequestedFrame <= entry.LastRequestedFrame)
-					break;
-				position = before;
-			}
-			entry.RecencyPosition = m_RecencyOrder.insert(position, entry.Metadata.Handle);
-			entry.InRecencyOrder = true;
-		}
-		else if (!evictable && entry.InRecencyOrder)
-		{
-			m_RecencyOrder.erase(entry.RecencyPosition);
-			entry.InRecencyOrder = false;
+			if (!entry.IsMemoryAsset)
+				LinkRecencyLocked(entry);
 		}
 		return previous;
 	}
@@ -268,17 +292,22 @@ namespace Strata
 
 	uint32_t AssetManagerBase::EvictUnusedLocked(uint32_t unusedFrames, std::vector<Ref<Asset>>& released)
 	{
+		// Every evictable resident asset that holds memory is in the order of each pool it uses.
 		uint32_t evicted = 0;
-		for (auto it = m_RecencyOrder.begin(); it != m_RecencyOrder.end();)
+		for (std::map<RecencyKey, AssetHandle>& order : m_RecencyOrders)
 		{
-			AssetEntry& entry = m_Entries.at(*it);
-			++it; // Eviction removes the entry from the order
-			if (WasRequestedWithinLocked(entry, unusedFrames))
-				break; // Every later entry was requested even more recently
-			if (!CanEvictLocked(entry))
-				continue;
-			EvictLocked(entry, released);
-			evicted++;
+			for (auto it = order.begin(); it != order.end();)
+			{
+				AssetEntry& entry = m_Entries.at(it->second);
+				++it; // Eviction removes the entry from the orders
+				m_EvictionChecks++;
+				if (WasRequestedWithinLocked(entry, unusedFrames))
+					break; // Every later entry was requested even more recently
+				if (!CanEvictLocked(entry))
+					continue;
+				EvictLocked(entry, released);
+				evicted++;
+			}
 		}
 		return evicted;
 	}
@@ -288,60 +317,59 @@ namespace Strata
 		std::vector<Ref<Asset>> released;
 		{
 			std::scoped_lock<std::mutex> lock(m_Mutex);
-			EvictToFitLocked(AssetMemoryUsage {}, released);
+			for (AssetMemoryPool pool : c_AssetMemoryPools)
+				EvictToFitLocked(pool, 0, released);
 		}
 		// The evicted objects are destroyed here, after the lock: freeing large assets takes time.
 	}
 
-	void AssetManagerBase::EvictToFitLocked(const AssetMemoryUsage& incoming, std::vector<Ref<Asset>>& released)
+	void AssetManagerBase::EvictToFitLocked(AssetMemoryPool pool, uint64_t extraBytes, std::vector<Ref<Asset>>& released)
 	{
-		// The sums cannot overflow: they count bytes of memory that exists.
-		const auto isOverBudget = [this, &incoming](AssetMemoryPool pool)
-		{
-			return GetPoolBytes(m_Resident, pool) + GetPoolBytes(incoming, pool) > m_Budgets.GetPoolBudget(pool);
-		};
-		const auto anyOverBudget = [&isOverBudget]()
-		{
-			return std::any_of(c_AssetMemoryPools.begin(), c_AssetMemoryPools.end(), isOverBudget);
-		};
-		if (!anyOverBudget())
-			return;
+		const uint64_t budget = m_Budgets.GetPoolBudget(pool);
+		// The sum cannot overflow: it counts bytes of memory that exists.
+		const auto isOverBudget = [&]() { return GetPoolBytes(m_Resident, pool) + extraBytes > budget; };
 
-		// Least recently requested first; an asset goes when it holds memory of a pool that is still over budget.
-		for (auto it = m_RecencyOrder.begin(); it != m_RecencyOrder.end();)
+		// Least recently requested first. The order holds only assets with memory of this pool, so a pool that stays over
+		// budget (what is in use exceeds it) costs a look at its own stale assets, not at every stale asset.
+		std::map<RecencyKey, AssetHandle>& order = m_RecencyOrders[static_cast<size_t>(pool)];
+		for (auto it = order.begin(); it != order.end() && isOverBudget();)
 		{
-			AssetEntry& entry = m_Entries.at(*it);
-			++it; // Eviction removes the entry from the order
+			AssetEntry& entry = m_Entries.at(it->second);
+			++it; // Eviction removes the entry from the orders
+			m_EvictionChecks++;
 			if (WasRequestedWithinLocked(entry, m_EvictionGraceFrames))
 				break; // Every later entry was requested even more recently
-			const bool relieves = std::any_of(c_AssetMemoryPools.begin(), c_AssetMemoryPools.end(), [&](AssetMemoryPool pool)
-			{
-				return isOverBudget(pool) && GetPoolBytes(entry.Usage, pool) > 0;
-			});
-			if (!relieves || !CanEvictLocked(entry))
-				continue;
-			EvictLocked(entry, released);
-			if (!anyOverBudget())
-				break;
+			if (CanEvictLocked(entry))
+				EvictLocked(entry, released);
 		}
 	}
 
-	uint64_t AssetManagerBase::MakeRoomFor(AssetHandle handle, const AssetMemoryUsage& incoming)
+	AssetManagerBase::RoomResult AssetManagerBase::MakeRoomFor(AssetHandle handle, const AssetMemoryUsage& incoming)
 	{
 		std::vector<Ref<Asset>> released;
-		uint64_t evictedGpuBytes = 0;
+		RoomResult room;
 		{
 			std::scoped_lock<std::mutex> lock(m_Mutex);
 			auto it = m_Entries.find(handle);
 			// An arrival nobody requested lately is no reason to evict what is in use: it may be the next to go itself.
 			if (it == m_Entries.end() || !WasRequestedWithinLocked(it->second, m_EvictionGraceFrames))
-				return 0;
+				return room;
+
+			// Only the pools the arrival needs: pools over budget for other reasons are Update's business (an arrival must not
+			// wait for GPU memory it does not need).
 			const uint64_t residentGpuBytes = m_Resident.GetGpu();
-			EvictToFitLocked(incoming, released);
-			evictedGpuBytes = residentGpuBytes - m_Resident.GetGpu();
+			for (AssetMemoryPool pool : c_AssetMemoryPools)
+			{
+				const uint64_t bytes = GetPoolBytes(incoming, pool);
+				if (bytes > 0)
+					EvictToFitLocked(pool, bytes + GetPoolBytes(m_Reserved, pool), released);
+			}
+			room.EvictedGpuBytes = residentGpuBytes - m_Resident.GetGpu();
+			room.Reserved = incoming;
+			m_Reserved += incoming;
 		}
 		// The evicted objects are destroyed here, after the lock; their GPU memory follows once no frame in flight can use it.
-		return evictedGpuBytes;
+		return room;
 	}
 
 }

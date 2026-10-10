@@ -9,6 +9,7 @@
 
 #include <nvrhi/nvrhi.h>
 
+#include <chrono>
 #include <cstring>
 #include <limits>
 #include <vector>
@@ -125,8 +126,11 @@ TEST_SUITE("GPU.Assets.Uploads")
 			CHECK(pool.GetCreatedCount() == 1);
 			pool.Release(std::move(first));
 			CHECK(pool.GetPendingBytes() == bandBytes);
-			CHECK(pool.HasRoomFor(StagingTexturePool::c_MaxUploadBytesInFlight - bandBytes));
-			CHECK_FALSE(pool.HasRoomFor(StagingTexturePool::c_MaxUploadBytesInFlight - bandBytes + 1));
+			constexpr uint64_t c_Limit = 64ull << 20;
+			CHECK(pool.HasRoomFor(c_Limit - bandBytes, c_Limit));
+			CHECK_FALSE(pool.HasRoomFor(c_Limit - bandBytes + 1, c_Limit));
+			CHECK_FALSE(pool.HasRoomFor(1, bandBytes - 1)); // A limit below what is in flight already
+			CHECK(pool.HasRoomFor(std::numeric_limits<uint64_t>::max() - bandBytes, std::numeric_limits<uint64_t>::max()));
 
 			// Frames that may still copy from it are in flight: a new one is created.
 			pool.BeginFrame(frame + framesInFlight);
@@ -249,6 +253,121 @@ TEST_SUITE("GPU.Assets.Uploads")
 		unbudgeted.reset();
 		SettleDevice(gpu);
 		CHECK(bindless.GetAllocatedCount() == slotsBefore);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A frame's first texture band goes up while staging is full; its later bands wait for room")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SettleDevice(gpu);
+		TextureSpecification specification;
+		specification.Format = TextureFormat::RGBA8;
+		specification.DebugName = "StagingWaitTexture";
+		const Ref<Texture> source = Texture::Create(specification, CreatePatternChain(2048, 1024));
+		REQUIRE(source);
+		const std::vector<uint8_t> cooked = source->Serialize();
+		const uint64_t chainBytes = source->GetMemoryUsage().Cpu;
+
+		// Staging of this frame that no device frame has recycled yet (as in tools and tests, which run none): the
+		// budget leaves no room beside it.
+		StagingTexturePool& pool = Renderer::GetStagingTextures();
+		nvrhi::TextureDesc band;
+		band.width = 1024;
+		band.height = 1024;
+		band.format = nvrhi::Format::RGBA8_UNORM;
+		pool.Release(pool.Acquire(band));
+		const uint64_t stagingBudget = pool.GetPendingBytes();
+		REQUIRE(stagingBudget >= 4ull << 20);
+		CHECK_FALSE(pool.HasRoomFor(1, stagingBudget));
+
+		Ref<Texture> first = Texture::Deserialize(std::vector<uint8_t>(cooked));
+		Ref<Texture> second = Texture::Deserialize(std::vector<uint8_t>(cooked));
+		REQUIRE(first);
+		REQUIRE(second);
+		nvrhi::CommandListHandle commandList = gpu.GetNvrhiDevice()->createCommandList();
+		commandList->open();
+		uint64_t frameUploaded = 0;
+		AssetFinalizeContext context { commandList, nullptr };
+		context.UploadBudget = 64ull << 20;
+		context.StagingBytes = stagingBudget;
+		context.UploadedBytes = &frameUploaded;
+		// The frame's first step goes, so every frame makes progress; the next one waits for staging room.
+		CHECK(first->FinalizeOnMainThread(context) == AssetFinalizeResult::Pending);
+		CHECK(frameUploaded == Texture::c_UploadBandBytes);
+		// A later call of the same frame takes no step at all.
+		CHECK(second->FinalizeOnMainThread(context) == AssetFinalizeResult::Pending);
+		CHECK(frameUploaded == Texture::c_UploadBandBytes);
+		commandList->close();
+		REQUIRE(gpu.ExecuteAndWait(commandList));
+
+		// With room in a larger staging budget, both go on to the end.
+		uint64_t uploaded = 0;
+		CHECK(FinalizeOnce(gpu, *first, 64ull << 20, uploaded) == AssetFinalizeResult::Done);
+		CHECK(uploaded == chainBytes - Texture::c_UploadBandBytes);
+		CHECK(FinalizeOnce(gpu, *second, 64ull << 20, uploaded) == AssetFinalizeResult::Done);
+		CHECK(uploaded == chainBytes);
+		ReadbackImage level0;
+		REQUIRE(Renderer::ReadTexture(first->GetGPUTexture(), level0, 0));
+		CHECK(GetPixelRGBA8(level0, 2047, 1023) == GetPatternTexel(2047, 1023, 0));
+
+		first.reset();
+		second.reset();
+		SettleDevice(gpu);
+		CHECK(pool.GetPendingBytes() == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Freeing a large CPU copy waits for the next call when it would end after the deadline")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SettleDevice(gpu);
+		TextureSpecification specification;
+		specification.Format = TextureFormat::RGBA8;
+		specification.DebugName = "ReleasedTexture";
+		// 512 x 512 RGBA8: the whole chain (1.3 MB) is one step, and the cooked bytes the texture holds are large enough to
+		// take time to free.
+		const Ref<Texture> source = Texture::Create(specification, CreatePatternChain(512, 512));
+		REQUIRE(source);
+		const uint64_t chainBytes = source->GetMemoryUsage().Cpu;
+		Ref<Texture> texture = Texture::Deserialize(source->Serialize());
+		REQUIRE(texture);
+		REQUIRE(texture->GetMemoryUsage().Cpu >= 1ull << 20);
+
+		nvrhi::CommandListHandle commandList = gpu.GetNvrhiDevice()->createCommandList();
+		commandList->open();
+		uint64_t uploaded = 0;
+		AssetFinalizeContext context { commandList, nullptr };
+		context.UploadBudget = 64ull << 20;
+		context.Deadline = std::chrono::steady_clock::now(); // Passed: only each call's first piece of work goes
+		context.UploadedBytes = &uploaded;
+		// The call's first step uploads the chain; freeing the CPU copy would end after the deadline, so it waits.
+		CHECK(texture->FinalizeOnMainThread(context) == AssetFinalizeResult::Pending);
+		CHECK(uploaded == chainBytes);
+		CHECK(texture->GetMemoryUsage().Cpu > 0);
+		CHECK(texture->GetBindlessSlot() == BindlessTextureTable::c_InvalidSlot);
+		// It is the next call's first piece of work: that call frees it and finishes, uploading nothing.
+		uploaded = 0;
+		CHECK(texture->FinalizeOnMainThread(context) == AssetFinalizeResult::Done);
+		CHECK(uploaded == 0);
+		CHECK(texture->GetMemoryUsage() == AssetMemoryUsage { 0, chainBytes, 0 });
+		CHECK(texture->GetBindlessSlot() != BindlessTextureTable::c_InvalidSlot);
+
+		// A small CPU copy costs too little to wait: a 256 x 256 texture finishes in one call after the deadline as well.
+		Ref<Texture> smallTexture = Texture::Deserialize(Texture::Create(specification, CreatePatternChain(256, 256))->Serialize());
+		REQUIRE(smallTexture);
+		CHECK(smallTexture->FinalizeOnMainThread(context) == AssetFinalizeResult::Done);
+		CHECK(smallTexture->GetMemoryUsage().Cpu == 0);
+		commandList->close();
+		REQUIRE(gpu.ExecuteAndWait(commandList));
+
+		ReadbackImage level0;
+		REQUIRE(Renderer::ReadTexture(texture->GetGPUTexture(), level0, 0));
+		CHECK(GetPixelRGBA8(level0, 511, 511) == GetPatternTexel(511, 511, 0));
+		texture.reset();
+		smallTexture.reset();
+		SettleDevice(gpu);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

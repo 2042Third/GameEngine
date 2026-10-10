@@ -9,9 +9,10 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <compare>
 #include <deque>
 #include <functional>
-#include <list>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -53,6 +54,9 @@ namespace Strata
 		float FinalizeMsWindowMax = 0.0f;
 
 		uint64_t Evictions = 0;       // Assets evicted for budgets or trims since the manager was created
+		// Resident assets that eviction (for budgets or trims) looked at since the manager was created: the cost of keeping
+		// the budgets. Eviction for a pool looks only at assets holding memory of that pool.
+		uint64_t EvictionChecks = 0;
 		uint64_t Cancellations = 0;   // Loads abandoned before they finished (CancelLoad, or unloaded while loading)
 		uint64_t StagingReleases = 0; // Times the idle upload command list was recreated to return its staging memory
 	};
@@ -184,7 +188,11 @@ namespace Strata
 		AssetHandle AddMemoryAsset(const Ref<Asset>& asset, AssetMetadata metadata);
 
 		// Main thread, once per frame: advances the frame counter, finalizes completed loads within the upload and time
-		// budgets, runs a scheduled trim, evicts assets of the pools over budget and returns idle staging memory.
+		// budgets, runs a scheduled trim, evicts assets of the pools over budget and returns idle staging memory. An arrival
+		// in use first makes room for itself in the pools it needs (see GetEvictionGraceFrames); with a renderer, one that
+		// allocates GPU memory then waits until the GPU memory evicted for it is released (the frames in flight plus one).
+		// Arrivals are finalized in order: those behind a waiting one wait for it, making room at once (so their waits
+		// overlap) for up to UploadBytesPerFrame of GPU memory in all.
 		virtual void Update();
 		// Main thread: finalizes loads until nothing is pending or the timeout expires. Returns true if idle.
 		bool WaitForPendingLoads(std::chrono::milliseconds timeout = std::chrono::milliseconds(30000));
@@ -208,7 +216,8 @@ namespace Strata
 		static AssetResidencyBudgets GetDefaultResidencyBudgets();
 
 		// Evicts every evictable asset (see AssetResidencyBudgets) that was not requested in the last `unusedFrames`
-		// frames, whatever the budgets. Returns how many assets were evicted.
+		// frames, whatever the budgets; assets that hold no memory stay (evicting them would free nothing). Returns how
+		// many assets were evicted.
 		uint32_t TrimUnused(uint32_t unusedFrames);
 		// Runs TrimUnused(unusedFrames) in the Update `delayFrames` updates from now: after a scene switch, so that the new
 		// scene has requested what it uses first (AssetResidency::c_SceneSwitchTrimFrames). Replaces an earlier schedule.
@@ -252,6 +261,16 @@ namespace Strata
 		// Records how many bytes loading the asset reads (AssetMetadata::StoredSize).
 		void SetStoredSize(AssetHandle handle, uint64_t storedSize);
 	private:
+		// An asset's place in the recency orders (m_RecencyOrders): the frame of its latest request, then the order of
+		// requests within a frame. Ascending order is least recently requested first.
+		struct RecencyKey
+		{
+			uint64_t Frame = 0;
+			uint64_t Sequence = 0;
+
+			auto operator<=>(const RecencyKey&) const = default;
+		};
+
 		struct AssetEntry
 		{
 			AssetMetadata Metadata;
@@ -268,9 +287,10 @@ namespace Strata
 			AssetMemoryUsage Usage;          // Of Loaded, read when it was published
 			uint64_t LastRequestedFrame = 0;
 			uint32_t PinCount = 0;
-			// Position in m_RecencyOrder, which holds the evictable resident assets (loaded, not memory assets)
-			std::list<AssetHandle>::iterator RecencyPosition;
-			bool InRecencyOrder = false;
+			// While the entry is evictable and resident (loaded, not a memory asset), it is in the recency order of every pool
+			// its Usage holds memory of, with this key (whose Frame is LastRequestedFrame).
+			RecencyKey Recency;
+			bool InRecencyOrders = false;
 		};
 
 		struct Completion
@@ -281,8 +301,16 @@ namespace Strata
 			std::string Error;
 			uint64_t InFlightBytes = 0; // Counted in flight by the streaming queue until this completion is handled
 			bool RoomMade = false;        // MakeRoomFor ran for it
+			AssetMemoryUsage Reserved;    // Its memory, reserved in the budgets by MakeRoomFor until it is published
 			uint64_t FinalizeFrame = 0;   // Not finalized (with a budget) before this frame: memory evicted for it is released then
 			bool FinalizeStarted = false; // Its finalization is under way (it continues over several frames)
+		};
+
+		// What MakeRoomFor did for an arrival.
+		struct RoomResult
+		{
+			uint64_t EvictedGpuBytes = 0; // GPU memory evicted for it, released once no frame in flight can use it
+			AssetMemoryUsage Reserved;    // Its memory, now reserved (see m_Reserved)
 		};
 
 		struct LoadState;
@@ -316,9 +344,12 @@ namespace Strata
 
 		// Residency bookkeeping (AssetResidency.cpp); every function requires m_Mutex.
 		void TouchLocked(AssetEntry& entry);
-		// Replaces the loaded object (null drops it), keeping the pool totals and the recency order. Returns the previous
+		// Replaces the loaded object (null drops it), keeping the pool totals and the recency orders. Returns the previous
 		// object, to be released after the lock (destroying assets may be slow).
 		Ref<Asset> SetLoadedLocked(AssetEntry& entry, Ref<Asset> asset);
+		// Adds the entry to (removes it from) the recency orders of the pools its Usage holds memory of.
+		void LinkRecencyLocked(AssetEntry& entry);
+		void UnlinkRecencyLocked(AssetEntry& entry);
 		// Whether the entry may be evicted, apart from when it was requested (see AssetResidencyBudgets).
 		bool CanEvictLocked(const AssetEntry& entry) const;
 		// Whether the entry was requested in the last `frames` frames (or in the current one).
@@ -328,13 +359,15 @@ namespace Strata
 		// by the caller's generation change. Returns whether the entry was loading.
 		bool AbandonLoadLocked(AssetEntry& entry);
 		uint32_t EvictUnusedLocked(uint32_t unusedFrames, std::vector<Ref<Asset>>& released);
-		// Evicts the least recently requested assets of the pools that `incoming` more bytes would put over budget.
-		void EvictToFitLocked(const AssetMemoryUsage& incoming, std::vector<Ref<Asset>>& released);
+		// Evicts the least recently requested assets holding memory of the pool until `extraBytes` more fit in its budget
+		// (or the rest is protected).
+		void EvictToFitLocked(AssetMemoryPool pool, uint64_t extraBytes, std::vector<Ref<Asset>>& released);
 		void EvictToBudgets();
 		// Before an asset is finalized: when it is in use (requested within the grace window, so it will stay), evicts what
-		// its memory would put over budget. Returns the GPU bytes evicted: the arrival waits until they are released (see
-		// ProcessCompletions), so that the device holds the budget at most, not the budget plus the arrivals.
-		uint64_t MakeRoomFor(AssetHandle handle, const AssetMemoryUsage& incoming);
+		// its memory, beside the arrivals reserved before it, would put over budget in the pools it needs, and reserves its
+		// memory until it is published (see ProcessCompletions). Arrivals that need room then wait until the GPU memory
+		// evicted for them is released, so that the device holds the budget at most, not the budget plus the arrivals.
+		RoomResult MakeRoomFor(AssetHandle handle, const AssetMemoryUsage& incoming);
 		void Unpin(AssetHandle handle, uint64_t registration);
 		// Records the frame's finalization statistics and recreates an idle upload command list (main thread).
 		void EndFrameUploads();
@@ -355,9 +388,17 @@ namespace Strata
 		uint32_t m_GpuReleaseFrames = 3;
 		uint64_t m_FrameIndex = 0;
 		AssetMemoryUsage m_Resident;
-		std::list<AssetHandle> m_RecencyOrder; // Evictable resident assets, least recently requested first
+		// Memory of arrivals in use that made room for themselves and are not published yet: room made for later arrivals
+		// leaves room for these too.
+		AssetMemoryUsage m_Reserved;
+		// Per pool (indexed by AssetMemoryPool): the evictable resident assets holding memory of the pool, least recently
+		// requested first, so eviction for a pool over budget looks only at assets that free its memory. Requests move an
+		// asset to the end in constant time; an arrival requested long ago is placed in logarithmic time.
+		std::array<std::map<RecencyKey, AssetHandle>, 3> m_RecencyOrders;
+		uint64_t m_NextRecencySequence = 0;
 		std::optional<ScheduledTrim> m_ScheduledTrim;
 		uint64_t m_Evictions = 0;
+		uint64_t m_EvictionChecks = 0;
 		uint64_t m_Cancellations = 0;
 		uint64_t m_StagingReleases = 0;
 		uint64_t m_FrameUploadedBytes = 0; // Since the last Update

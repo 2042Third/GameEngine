@@ -3,11 +3,15 @@
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Project/GameManifest.h"
+#include "Strata/Renderer/Material.h"
+#include "Strata/Renderer/StagingTexturePool.h"
 #include "Strata/Runtime/GameRenderer.h"
 #include "Strata/Runtime/GameRuntime.h"
 #include "Strata/Scene/SceneSerializer.h"
 
+#include <algorithm>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <unordered_map>
@@ -22,7 +26,7 @@ namespace
 	// The megabytes of the acceptance criteria this suite checks (64 MB budget, 150 MB less device memory) are decimal.
 	constexpr uint64_t c_MB = 1000 * 1000;
 
-	// Serves cooked textures from memory: many handles may share the same bytes.
+	// Serves stored assets (cooked textures, unless told otherwise) from memory: many handles may share the same bytes.
 	class TextureManager final : public AssetManagerBase
 	{
 	public:
@@ -31,12 +35,12 @@ namespace
 			WaitForInFlightLoads();
 		}
 
-		AssetHandle Add(uint64_t handle, Ref<const std::vector<uint8_t>> cooked)
+		AssetHandle Add(uint64_t handle, Ref<const std::vector<uint8_t>> cooked, AssetType type = AssetType::Texture)
 		{
 			AssetMetadata metadata;
 			metadata.Handle = UUID(handle);
-			metadata.Type = AssetType::Texture;
-			metadata.Path = "Textures/" + std::to_string(handle) + ".png";
+			metadata.Type = type;
+			metadata.Path = "Assets/" + std::to_string(handle);
 			metadata.Name = metadata.Path;
 			metadata.StoredSize = cooked->size();
 			{
@@ -207,6 +211,81 @@ namespace
 		}
 	};
 
+	constexpr uint32_t c_ArrivalCount = 4;
+
+	struct ArrivalRun
+	{
+		uint64_t RequestFrame = 0;       // The manager's frame in which the new textures were first requested
+		uint64_t ReadyFrame = 0;         // The frame after whose update all of them were ready
+		uint64_t EvictionsOnArrival = 0; // Evictions in the update the new textures arrived in
+		uint64_t MaxResidentBytes = 0;
+		uint64_t Evictions = 0;
+	};
+
+	// c_ArrivalCount textures of 256x256 fill a budget that holds that many and go out of use; then as many new ones are
+	// used every frame, each of which needs room. Finalization uploads `uploadBytesPerFrame` per frame.
+	ArrivalRun RunArrivals(GPUContext& gpu, const Ref<const std::vector<uint8_t>>& cooked, uint64_t uploadBytesPerFrame)
+	{
+		ArrivalRun run;
+		const uint64_t textureBytes = GetTextureBytes(256);
+		{
+			Ref<TextureManager> manager = CreateRef<TextureManager>();
+			std::vector<AssetHandle> previous;
+			std::vector<AssetHandle> next;
+			for (uint64_t index = 0; index < c_ArrivalCount; index++)
+			{
+				previous.push_back(manager->Add(0x45000 + index, cooked));
+				next.push_back(manager->Add(0x46000 + index, cooked));
+			}
+			AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
+			budgets.GpuTextures = c_ArrivalCount * textureBytes + textureBytes / 2;
+			budgets.UploadBytesPerFrame = uploadBytesPerFrame;
+			manager->SetResidencyBudgets(budgets);
+			const auto allReady = [&manager](const std::vector<AssetHandle>& handles)
+			{
+				return std::all_of(handles.begin(), handles.end(), [&manager](AssetHandle handle) { return manager->GetAssetState(handle) == AssetState::Ready; });
+			};
+
+			for (uint32_t frame = 0; frame < 20 && !allReady(previous); frame++)
+			{
+				RunDeviceFrame(gpu, [&]()
+				{
+					manager->Update();
+					for (AssetHandle handle : previous)
+						manager->GetAsset(handle);
+				});
+			}
+			REQUIRE(allReady(previous));
+			for (uint32_t frame = 0; frame <= manager->GetEvictionGraceFrames() + 1; frame++)
+				RunDeviceFrame(gpu, [&]() { manager->Update(); });
+			REQUIRE(manager->GetStats().Evictions == 0);
+
+			for (uint32_t frame = 0; frame < 60 && run.ReadyFrame == 0; frame++)
+			{
+				RunDeviceFrame(gpu, [&]()
+				{
+					manager->Update();
+					const AssetManagerStats stats = manager->GetStats();
+					run.MaxResidentBytes = std::max(run.MaxResidentBytes, stats.Resident.GpuTextures);
+					if (run.RequestFrame > 0 && stats.Frame == run.RequestFrame + 1)
+						run.EvictionsOnArrival = stats.Evictions;
+					if (run.RequestFrame > 0 && allReady(next))
+						run.ReadyFrame = stats.Frame;
+					if (run.RequestFrame == 0)
+						run.RequestFrame = stats.Frame;
+					for (AssetHandle handle : next)
+						manager->GetAsset(handle);
+				});
+			}
+			REQUIRE(run.ReadyFrame > 0);
+			run.Evictions = manager->GetStats().Evictions;
+			for (AssetHandle handle : previous)
+				CHECK(manager->GetAssetState(handle) == AssetState::Unloaded);
+		}
+		SettleDevice(gpu);
+		return run;
+	}
+
 	std::vector<uint8_t> ToBytes(const nlohmann::json& json)
 	{
 		const std::string text = JsonUtils::Dump(json);
@@ -262,6 +341,9 @@ TEST_SUITE("GPU.Assets.Residency")
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
+		// The updates below run no device frames, so the staging they use is never recycled: start with none in flight
+		// (earlier tests' staging becomes reusable here), so that only the upload budget spreads them over frames.
+		SettleDevice(gpu);
 		const Ref<const std::vector<uint8_t>> cooked = CreateRef<const std::vector<uint8_t>>(CookSolidTexture(1024, glm::u8vec4(10, 200, 30, 255)));
 		const uint64_t textureBytes = GetTextureBytes(1024);
 		Ref<TextureManager> manager = CreateRef<TextureManager>();
@@ -376,6 +458,152 @@ TEST_SUITE("GPU.Assets.Residency")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Arrivals that need room wait for the release together, not one after another")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const Ref<const std::vector<uint8_t>> cooked = CreateRef<const std::vector<uint8_t>>(CookSolidTexture(256, glm::u8vec4(140, 30, 30, 255)));
+		const uint64_t textureBytes = GetTextureBytes(256);
+		const uint32_t releaseFrames = gpu.GetDevice().GetMaxFramesInFlight() + 1;
+
+		// Each arrival evicts a previous texture, and all of them are uploaded once the frames that might have used the
+		// previous ones are done: they arrive in one update and wait the release out together.
+		const ArrivalRun together = RunArrivals(gpu, cooked, 64 * c_MB);
+		CHECK(together.EvictionsOnArrival == c_ArrivalCount);
+		CHECK(together.ReadyFrame - together.RequestFrame == 1 + releaseFrames);
+		CHECK(together.MaxResidentBytes <= c_ArrivalCount * textureBytes + textureBytes / 2); // Room was made before any was published
+		CHECK(together.Evictions == c_ArrivalCount);
+
+		// Room is made ahead for at most a frame's upload budget: with one texture's worth, the arrivals behind the first
+		// make room only once it is through, each waiting for its own release.
+		const ArrivalRun oneByOne = RunArrivals(gpu, cooked, textureBytes);
+		CHECK(oneByOne.EvictionsOnArrival == 1);
+		CHECK(oneByOne.ReadyFrame - oneByOne.RequestFrame > c_ArrivalCount * releaseFrames);
+		CHECK(oneByOne.MaxResidentBytes <= c_ArrivalCount * textureBytes + textureBytes / 2);
+		CHECK(oneByOne.Evictions == c_ArrivalCount);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("An arrival that needs no GPU memory never waits for GPU memory to be released")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const Ref<const std::vector<uint8_t>> cooked = CreateRef<const std::vector<uint8_t>>(CookSolidTexture(256, glm::u8vec4(30, 60, 90, 255)));
+		const uint64_t textureBytes = GetTextureBytes(256);
+		Ref<TextureManager> manager = CreateRef<TextureManager>();
+		const AssetHandle old = manager->Add(0x47000, cooked);
+		const AssetHandle inUse = manager->Add(0x47001, cooked);
+		const AssetHandle material = manager->Add(0x47002, CreateRef<const std::vector<uint8_t>>(ToBytes(Material::Create()->Serialize())), AssetType::Material);
+		AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
+		budgets.GpuTextures = textureBytes + textureBytes / 2; // One fits: the two in use exceed it
+		manager->SetResidencyBudgets(budgets);
+
+		for (uint32_t frame = 0; frame < 10 && (manager->GetAssetState(old) != AssetState::Ready || manager->GetAssetState(inUse) != AssetState::Ready); frame++)
+		{
+			RunDeviceFrame(gpu, [&]()
+			{
+				manager->Update();
+				manager->GetAsset(old);
+				manager->GetAsset(inUse);
+			});
+		}
+		REQUIRE(manager->GetAssetState(old) == AssetState::Ready);
+		REQUIRE(manager->GetAssetState(inUse) == AssetState::Ready);
+
+		// The old texture goes out of use. The material is requested in the last frame before the old texture leaves the
+		// grace window, so it arrives in the update that evicts the texture: holding only CPU memory, it is published in
+		// that update, without waiting for the texture's memory.
+		const uint64_t lastOldRequest = manager->GetFrameIndex();
+		const uint32_t grace = manager->GetEvictionGraceFrames();
+		uint64_t evictedFrame = 0;
+		uint64_t materialReadyFrame = 0;
+		for (uint32_t frame = 0; frame < 20 && (evictedFrame == 0 || materialReadyFrame == 0); frame++)
+		{
+			RunDeviceFrame(gpu, [&]()
+			{
+				manager->Update();
+				if (evictedFrame == 0 && manager->GetAssetState(old) == AssetState::Unloaded)
+					evictedFrame = manager->GetFrameIndex();
+				if (materialReadyFrame == 0 && manager->GetAssetState(material) == AssetState::Ready)
+					materialReadyFrame = manager->GetFrameIndex();
+				manager->GetAsset(inUse);
+				if (manager->GetFrameIndex() >= lastOldRequest + grace)
+					manager->GetAsset(material);
+			});
+		}
+		REQUIRE(evictedFrame > 0);
+		REQUIRE(materialReadyFrame > 0);
+		CHECK(evictedFrame == lastOldRequest + grace + 1);
+		CHECK(materialReadyFrame == evictedFrame);
+
+		manager.reset();
+		SettleDevice(gpu);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Uploads go on without device frames, one step per update, while staging is full")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SettleDevice(gpu);
+		const Ref<const std::vector<uint8_t>> cooked = CreateRef<const std::vector<uint8_t>>(CookSolidTexture(256, glm::u8vec4(5, 10, 15, 255)));
+		Ref<TextureManager> manager = CreateRef<TextureManager>();
+		const AssetHandle first = manager->Add(0x48000, cooked);
+		const AssetHandle second = manager->Add(0x48001, cooked);
+
+		// Staging released and never recycled (no device frames run here) fills the staging budget.
+		StagingTexturePool& pool = Renderer::GetStagingTextures();
+		nvrhi::TextureDesc band;
+		band.width = 512;
+		band.height = 512;
+		band.format = nvrhi::Format::RGBA8_UNORM;
+		pool.Release(pool.Acquire(band));
+		AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
+		budgets.StagingBytes = pool.GetPendingBytes();
+		manager->SetResidencyBudgets(budgets);
+
+		// Each update's first step goes: one texture per update, never none.
+		manager->RequestLoad(first);
+		manager->RequestLoad(second);
+		manager->Update();
+		const auto ready = [&manager](AssetHandle handle) { return manager->GetAssetState(handle) == AssetState::Ready ? 1u : 0u; };
+		CHECK(ready(first) + ready(second) == 1);
+		manager->Update();
+		CHECK(ready(first) + ready(second) == 2);
+
+		manager.reset();
+		SettleDevice(gpu);
+		CHECK(pool.GetPendingBytes() == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Managers start with GPU budgets derived from the device's memory budget")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const uint64_t deviceBudgetBefore = gpu.GetDevice().GetMemoryBudget().Budget;
+		Ref<TextureManager> manager = CreateRef<TextureManager>();
+		const AssetResidencyBudgets defaults = AssetManagerBase::GetDefaultResidencyBudgets();
+		const uint64_t deviceBudgetAfter = gpu.GetDevice().GetMemoryBudget().Budget;
+		REQUIRE(deviceBudgetBefore > 0);
+
+		// The device's budget moves when other processes allocate: the defaults lie between those of the budgets read
+		// before and after.
+		const AssetResidencyBudgets low = AssetResidencyBudgets::FromDeviceBudget(std::min(deviceBudgetBefore, deviceBudgetAfter));
+		const AssetResidencyBudgets high = AssetResidencyBudgets::FromDeviceBudget(std::max(deviceBudgetBefore, deviceBudgetAfter));
+		for (const AssetResidencyBudgets& budgets : { manager->GetResidencyBudgets(), defaults })
+		{
+			CHECK(budgets.GpuTextures >= low.GpuTextures);
+			CHECK(budgets.GpuTextures <= high.GpuTextures);
+			CHECK(budgets.GpuBuffers >= low.GpuBuffers);
+			CHECK(budgets.GpuBuffers <= high.GpuBuffers);
+			CHECK(budgets.GpuTextures != AssetResidencyBudgets::c_Unlimited);
+			CHECK(budgets.GpuBuffers < budgets.GpuTextures);
+			CHECK(budgets.Cpu == AssetResidencyBudgets::c_Unlimited);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A scene switch in a game releases the textures only the previous scene used")
 	{
 		GPUContext gpu;
@@ -468,6 +696,12 @@ TEST_SUITE("GPU.Assets.Residency")
 			frame();
 		REQUIRE(renderer.GetStats().PendingAssets == 0);
 		CHECK(residentTextureBytes(0, 4) == 5 * GetTextureBytes(256));
+		CHECK(manager->GetStats().Evictions == 0);
+		// The shared texture's and material's objects: they must survive the switch, not be evicted and loaded again.
+		const std::weak_ptr<Asset> sharedTexture = manager->GetAsset(textures[4]);
+		const std::weak_ptr<Asset> sharedMaterial = manager->GetAsset(materials[4]);
+		REQUIRE_FALSE(sharedTexture.expired());
+		REQUIRE_FALSE(sharedMaterial.expired());
 
 		// The game switches to Big, the way scripts ask for it: the textures only World used are gone within five frames.
 		runtime->GetScene()->RequestSceneLoad(big.Handle);
@@ -477,6 +711,11 @@ TEST_SUITE("GPU.Assets.Residency")
 			frame();
 			if (framesUntilReleased == 0 && residentTextureBytes(0, 3) == 0)
 				framesUntilReleased = switched;
+			CAPTURE(switched);
+			CHECK(manager->GetAssetState(textures[4]) == AssetState::Ready);
+			CHECK(manager->GetAssetState(materials[4]) == AssetState::Ready);
+			CHECK_FALSE(sharedTexture.expired());
+			CHECK_FALSE(sharedMaterial.expired());
 		}
 		CHECK(runtime->GetSceneHandle() == big.Handle);
 		CHECK(framesUntilReleased > 0);
@@ -487,10 +726,12 @@ TEST_SUITE("GPU.Assets.Residency")
 			CHECK(manager->GetAssetState(textures[index]) == AssetState::Unloaded);
 			CHECK(manager->GetAssetState(materials[index]) == AssetState::Unloaded);
 		}
-		// What the new scene uses stays: the shared texture was never released, and Big's own arrived.
-		CHECK(manager->GetAssetState(textures[4]) == AssetState::Ready);
+		// What the new scene uses stays: the shared texture and material are the objects loaded for World, and Big's own
+		// arrived.
+		CHECK(manager->GetAsset(textures[4]) == sharedTexture.lock());
+		CHECK(manager->GetAsset(materials[4]) == sharedMaterial.lock());
 		CHECK(residentTextureBytes(4, 8) == 5 * GetTextureBytes(256));
-		CHECK(manager->GetStats().Evictions >= 8); // Four textures, four materials, and World's scene document
+		CHECK(manager->GetStats().Evictions == 9); // Four textures, four materials, and World's scene document
 		CHECK(manager->GetAssetState(world.Handle) == AssetState::Unloaded);
 
 		runtime.reset();

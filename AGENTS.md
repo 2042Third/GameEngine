@@ -291,15 +291,15 @@ The threading model, frame loop and pipelines these rules protect are described 
   exist in every asset manager.
 - Shipped games read an asset pack (`.stpak`, `AssetPack`) through `RuntimeAssetManager`; the editor
   builds it with `EditorAssetManager::BuildAssetPack`.
-- **Residency** ([Docs/Architecture.md](Docs/Architecture.md), "Streaming and residency"): memory is bounded by
-  budgets per pool (`AssetResidencyBudgets`: GPU textures 50% and GPU buffers 15% of the device's memory budget, CPU
-  unlimited; 128 MiB of loads in flight, 64 MiB and 4 ms of finalization per frame), and the least recently requested
-  assets of a pool over budget are evicted. Hold `AssetHandle`s across frames, not `Ref`s, and request what you use
-  every frame you use it (`GetAsset`): a held `Ref` keeps an asset from being evicted (it would free nothing), so it
-  defeats the budget. Pin what gameplay must keep whether or not it is used (`AssetManagerBase::Pin`, `AssetPin`;
-  scripts: `Assets::RequestLoad` until `Assets::Release`).
-  Code that keeps an asset's data alive in other objects reports it (`Asset::IsDataShared`). Never block on a load;
-  scene owners trim what the previous scene used after a switch (`AssetManagerBase::ScheduleTrim`).
+- **Residency** ([Docs/Architecture.md](Docs/Architecture.md), "Streaming and residency"): memory is bounded by budgets
+  per pool (`AssetResidencyBudgets`: GPU textures 50% and GPU buffers 15% of the device's memory budget, CPU unlimited;
+  128 MiB of loads in flight, 64 MiB and 4 ms of finalization per frame, 64 MiB of upload staging), and the least
+  recently requested assets of a pool over budget are evicted. Hold `AssetHandle`s across frames, not `Ref`s, and
+  request what you use every frame you use it (`GetAsset`): a held `Ref` keeps an asset from being evicted (it would
+  free nothing), so it defeats the budget. Pin what gameplay must keep whether or not it is used
+  (`AssetManagerBase::Pin`, `AssetPin`; scripts: `Assets::RequestLoad` until `Assets::Release`). Code that keeps an
+  asset's data alive in other objects reports it (`Asset::IsDataShared`). Never block on a load; scene owners trim what
+  the previous scene used after a switch (`AssetManagerBase::ScheduleTrim`).
 - Adding an asset type: an `Asset` subclass with a cooked/serialized form, a loader in
   `Asset/AssetRegistration.cpp` (it takes the stored bytes over with `AssetLoadData::TakeBytes` when the asset keeps
   them, instead of copying them), an importer if it comes from external files, `GetMemoryUsage` reporting what it holds
@@ -635,7 +635,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   fallbacks and counted in `SceneRendererStats::PendingAssets`; never block a frame on an asset. Asset uploads are
   budgeted per frame and go in steps (Docs/Architecture.md, "Streaming and residency"); texture bands use the staging
   textures of `Renderer::GetStagingTextures()` (`StagingTexturePool`, recycled in `Renderer::BeginFrame`), so code
-  that streams with a GPU must run device frames for staging to be reused.
+  that streams with a GPU must run device frames for staging to be reused (without them, a frame uploads only its first
+  step once the staging budget is used up).
 - Overlays (`SceneRenderOptions`, all off by default) are drawn after post-processing with exact display
   colors into the output texture (then copied into an external target): the infinite ground grid, the
   selection outline (from the entity-ID buffer, so alpha-blended surfaces get none) and `DebugDraw` line

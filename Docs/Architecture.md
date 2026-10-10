@@ -378,26 +378,29 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   the pack entry at runtime.
 - **Budgets** (`AssetResidencyBudgets`). With a graphics device, GPU textures may use 50% and GPU buffers 15% of the
   device's memory budget (`GraphicsDevice::GetMemoryBudget`, VK_EXT_memory_budget); without one they are unlimited. The
-  CPU pool is unlimited; loads in flight may hold 128 MiB; finalization may upload 64 MiB and take 4 ms per frame.
-  `AssetManagerBase::SetResidencyBudgets` replaces them (`GameRuntimeOptions::AssetBudgets`, StrataRuntime's
-  `--asset-budget-mb`, the editor's `asset.setBudget`).
+  CPU pool is unlimited; loads in flight may hold 128 MiB; finalization may upload 64 MiB and take 4 ms per frame, and
+  texture uploads may hold 64 MiB of staging (see Staging). `AssetManagerBase::SetResidencyBudgets` replaces them
+  (`GameRuntimeOptions::AssetBudgets`, StrataRuntime's `--asset-budget-mb`, the editor's `asset.setBudget`).
 - **Requests and pins**. Requests (`GetAsset`, `RequestLoad`, `Pin`) stamp an asset with the manager's frame counter,
   which `Update` advances. Whatever draws or uses assets requests them every frame (`SceneRenderer` resolves meshes,
-  materials and textures through `GetAsset`), so the stamp is a least-recently-used signal; arriving is no request.
-  Resident evictable assets are kept in a list ordered by it. An `AssetPin` (`AssetManagerBase::Pin`) keeps an asset
-  resident while it lives; pins add up and refer to their manager weakly. The scripts of a playing scene pin what they
-  request (`Assets::RequestLoad`, `ScriptSystem::RequestAsset`) until they release it (`Assets::Release`, the host
-  function `ReleaseAsset`) or play stops.
+  materials and textures through `GetAsset`), so the stamp is a least-recently-used signal; arriving is no request. Each
+  pool keeps its resident evictable assets that hold memory of it ordered by the stamp (a map keyed by frame and request
+  order: a request moves an asset to the end in constant time, an arrival is placed by its latest request in logarithmic
+  time), so eviction for a pool looks only at assets that free its memory. An `AssetPin` (`AssetManagerBase::Pin`) keeps
+  an asset resident while it lives; pins add up and refer to their manager weakly. The scripts of a playing scene pin
+  what they request (`Assets::RequestLoad`, `ScriptSystem::RequestAsset`) until they release it (`Assets::Release`, the
+  host function `ReleaseAsset`) or play stops.
 - **Eviction** (`Update`, after finalization). For each pool over its budget, the least recently requested assets that
   hold memory of it are evicted until it fits. Never evicted: pinned assets, assets requested within the grace window
   (`GetEvictionGraceFrames`: the device's frames in flight plus two), memory and built-in assets, and assets still in
   use outside the manager (a `Ref` held elsewhere, or `Asset::IsDataShared`, e.g. a voice playing a clip): evicting
   those would free nothing, and the next request would load a second copy. An evicted asset is Unloaded with a new
   generation and a published content change (caches revalidate; physics keeps the colliders it built and audio keeps
-  playing clips), and it loads again on its next request. `TrimUnused(frames)` evicts every evictable asset not requested in
-  that many frames, whatever the budgets; `ScheduleTrim` runs it a few updates later. `GameRuntime::LoadScene` and
-  `EditorContext::OpenScene` schedule `TrimUnused(3)` three frames after a scene switch, so what the new scene draws or
-  requests by then stays.
+  playing clips), and it loads again on its next request. `TrimUnused(frames)` evicts every evictable asset not
+  requested in that many frames, whatever the budgets (assets holding no memory stay: evicting them would free nothing);
+  `ScheduleTrim` runs it a few updates later. `GameRuntime::LoadScene` and `EditorContext::OpenScene` schedule
+  `TrimUnused(3)` three frames after a scene switch, so what the new scene draws or requests by then stays.
+  `AssetManagerStats::EvictionChecks` counts the assets eviction looked at.
 - **Streaming queue** (`AssetStreamingQueue`). A request marks the asset Loading and queues it keyed by priority, then
   score (higher first; e.g. how large on screen it is needed), then request order; repeating it raises a queued request,
   never lowers it. Loads are dispatched to `JobSystem::SubmitIO` while the stored bytes of loads not yet finalized stay
@@ -408,27 +411,43 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   requests; dispatched loads check their generation before reading and before decoding.
 - **Room before arrival**. Before an asset is finalized, the manager asks what it will hold (`GetFinalizedMemoryUsage`)
   and, when the asset is in use (requested within the grace window, so it will stay), evicts what that would put over
-  budget first (`MakeRoomFor`). GPU memory of evicted textures is released only when no frame in flight can use it (the
-  bindless table holds them frames in flight + 1 frames), so with a renderer the arrival waits that long before it
-  uploads: the device holds the budget, not the budget plus the arrivals. An arrival nobody requested lately makes no
-  room; it may be evicted itself.
+  budget in the pools it needs first (`MakeRoomFor`), beside the memory reserved for earlier arrivals that made room and
+  are not published yet; its own memory stays reserved until it is published. GPU memory of evicted textures is released
+  only when no frame in flight can use it (the bindless table holds them frames in flight + 1 frames), so with a
+  renderer an arrival that allocates GPU memory and evicted some waits that long before it uploads: the device holds the
+  budget, not the budget plus the arrivals. Arrivals that allocate no GPU memory (materials, documents) never wait for
+  that. Arrivals are finalized in order: those behind a waiting one wait for it, but make room at once for up to a
+  frame's upload budget of GPU memory in all, so that arrivals that need room in the same frame wait their releases out
+  together instead of one after another. Making room further ahead, or letting them overtake (they would allocate, and
+  materials would request their textures, while what the waiting arrival replaces and its loaded data are still held),
+  raised the peak private memory of the stress sweep by 20 to 60 MB. An arrival nobody requested lately makes no room;
+  it may be evicted itself.
 - **Bounded uploads**. Assets upload in steps of at most `c_AssetUploadStepBytes` (4 MiB, about a millisecond of
   memcpy): textures in bands of rows of a level, or the rest of the mip chain once it fits in one band; meshes in ranges
-  of their buffers. Each finalization call gets what is left of the frame's budget (`AssetFinalizeContext`: upload bytes
-  and a deadline) and takes no step beyond it except its first, so every frame makes progress and a frame overshoots
-  `UploadBytesPerFrame` or `FinalizeMsPerFrame` by one step at most; textures also skip a step that would end after the
-  deadline at the speed of the latest steps. A texture is published (and gets its bindless slot) once its whole chain is
-  uploaded. Uploads report the bytes they copied (`AssetFinalizeContext::UploadedBytes`).
+  of their buffers. Each finalization call gets what is left of the frame's budget (`AssetFinalizeContext`: upload
+  bytes, a deadline and the staging budget) and takes no step beyond the upload bytes or the deadline except its first,
+  so a frame overshoots `UploadBytesPerFrame` or `FinalizeMsPerFrame` by one step at most; textures also skip a step
+  that would end after the deadline at the speed of the latest steps. Texture steps also wait for staging room (see
+  Staging), except the frame's first step: every frame makes progress, also without device frames, while a later call
+  may take no step at all. A texture is published (and gets its bindless slot) once its whole chain is uploaded; its CPU
+  copy goes then. Freeing a large copy takes milliseconds (its pages go back to the system), so it is timed like a step
+  and waits for the next call when it would end after the deadline; it stays on the main thread, because freed on a
+  worker it would still be held while the frame's next arrivals allocate.
+  Uploads report the bytes they copied (`AssetFinalizeContext::UploadedBytes`).
 - **Staging** (`Renderer/StagingTexturePool.h`). Texture bands go through CPU-writable staging textures of the
   renderer's pool, reused once the frames that copied from them are done (`Renderer::BeginFrame`), so streaming
-  allocates no staging memory once warm. Budgeted uploads wait while the staging still in flight is at its limit
-  (64 MiB), idle staging is kept up to 16 MiB and all of it is returned after 120 frames without uploads. Mesh ranges go
-  through NVRHI's upload manager, which pools the staging memory of each command list without a limit: after
-  `c_StagingReleaseFrames` (120) frames without uploads the manager drops its upload command list (submissions in flight
-  keep it alive until the GPU is done) and creates a new one with the next upload.
+  allocates no staging memory once warm. Budgeted uploads wait while the staging still in flight is at the staging
+  budget (`AssetResidencyBudgets::StagingBytes`, 64 MiB): staging written in a frame is reusable frames in flight + 1
+  frames later, so sustained texture uploads reach at most a third of it per frame with two frames in flight, whatever
+  `UploadBytesPerFrame` allows (a loading screen raises both). Idle staging is kept up to 16 MiB and all of it is
+  returned after 120 frames without uploads. Mesh ranges go through NVRHI's upload manager, which pools the staging
+  memory of each command list without a limit: after `c_StagingReleaseFrames` (120) frames without uploads the manager
+  drops its upload command list (submissions in flight keep it alive until the GPU is done) and creates a new one with
+  the next upload.
 - **Statistics** (`GetStats`, `GetResidencyInfo`): resident bytes and budget per pool, queued loads per priority, loads
   and bytes in flight with their high-water mark, uploaded bytes and finalization milliseconds (last frame and maximum
-  of the last 120), evictions, cancellations and staging releases; per asset its state, memory, latest request and pins.
+  of the last 120) with the staging budget, evictions and eviction checks, cancellations and staging releases; per asset
+  its state, memory, latest request and pins.
   The editor reports them through `asset.stats` and the `assets` section of `editor.status`.
 - **Measured** by the perf test `PerfGPU.Streaming` (`StrataTests/src/Perf/StreamingPerfTests.cpp`): it writes the
   stress project (`StrataTests/src/Perf/StressProject.h`: 16 textures of 2048² and one of 4096², 447.4 MB of RGBA8, one

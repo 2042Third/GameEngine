@@ -680,58 +680,86 @@ namespace Strata
 		size_t processed = 0;
 		uint64_t uploadedBytes = 0;
 		std::vector<Ref<Asset>> released;
+		// Arrivals waiting until the GPU memory evicted for them is released, and those behind them (see below).
+		std::deque<Completion> waiting;
+		bool arrivalWaiting = false;
+		uint64_t waitingGpuBytes = 0; // GPU memory the waiting arrivals will allocate
+		bool makeRoomEarly = true;
 		while (!completions.empty())
 		{
-			// The frame's first upload step always proceeds, so an asset larger than the budget still loads.
+			// The frame's first finalization always proceeds, so an asset larger than the budget still loads.
 			if (applyBudget && processed > 0 && (uploadedBytes >= budgets.UploadBytesPerFrame || std::chrono::steady_clock::now() >= deadline))
 				break;
 
 			Completion& completion = completions.front();
-			processed++;
 			bool current = false;
 			{
 				std::scoped_lock<std::mutex> lock(m_Mutex);
 				auto it = m_Entries.find(completion.Handle);
 				current = it != m_Entries.end() && it->second.Generation == completion.Generation;
+				if (!current)
+					m_Reserved -= completion.Reserved;
 			}
 			if (!current)
 			{
 				// Unregistered, unloaded, cancelled or reloaded since the request (also while its upload was under way):
 				// discard. The load leaves the flight; the queue may dispatch the next one.
+				processed++;
 				m_Queue.OnLoadFinished(completion.InFlightBytes);
 				completions.pop_front();
 				continue;
 			}
 
+			if (completion.LoadedAsset && !completion.FinalizeStarted)
+			{
+				// Room first. GPU memory of what was evicted for it is released only once no frame in flight can use it; with a
+				// renderer and a budget, an arrival that allocates GPU memory waits for that, so the device never holds both.
+				const AssetMemoryUsage incoming = completion.LoadedAsset->GetFinalizedMemoryUsage();
+				// Arrivals are finalized in order: the ones behind a waiting arrival wait for it. They make room at once, so
+				// that arrivals that need room in the same frame wait their releases out together instead of one after
+				// another, but only for as much GPU memory as a frame uploads (UploadBytesPerFrame): evicting far ahead of what
+				// can be uploaded raised the memory peak of the stress sweep, as did letting them overtake (they allocate, and
+				// materials request their textures, while what the waiting arrival replaces and its loaded data are held).
+				if (applyBudget && arrivalWaiting && !completion.RoomMade)
+					makeRoomEarly = makeRoomEarly && waitingGpuBytes + incoming.GetGpu() <= budgets.UploadBytesPerFrame;
+				if (!completion.RoomMade && (!applyBudget || !arrivalWaiting || makeRoomEarly))
+				{
+					completion.RoomMade = true;
+					const RoomResult room = MakeRoomFor(completion.Handle, incoming);
+					completion.Reserved = room.Reserved;
+					// An arrival that allocates no GPU memory (a material that made room in the CPU pool) has nothing to wait
+					// for.
+					if (room.EvictedGpuBytes > 0 && incoming.GetGpu() > 0 && commandList)
+						completion.FinalizeFrame = GetFrameIndex() + m_GpuReleaseFrames;
+				}
+				const bool waits = arrivalWaiting || GetFrameIndex() < completion.FinalizeFrame;
+				if (applyBudget && waits)
+				{
+					arrivalWaiting = true;
+					waitingGpuBytes += incoming.GetGpu();
+					waiting.push_back(std::move(completion));
+					completions.pop_front();
+					continue;
+				}
+				completion.FinalizeStarted = true;
+			}
+
 			// Finalization runs without holding the lock: it may request dependent assets (e.g. a material's textures). With
 			// the budget, it gets what is left of the frame's: a large upload continues in the next frame (Pending).
+			processed++;
 			if (completion.LoadedAsset)
 			{
-				if (!completion.FinalizeStarted)
-				{
-					// Room first. GPU memory of what was evicted for it is released only once no frame in flight can use it;
-					// with a renderer and a budget the arrival waits for that (and what queues behind it), so the device
-					// never holds both.
-					if (!completion.RoomMade)
-					{
-						completion.RoomMade = true;
-						if (MakeRoomFor(completion.Handle, completion.LoadedAsset->GetFinalizedMemoryUsage()) > 0 && commandList)
-							completion.FinalizeFrame = GetFrameIndex() + m_GpuReleaseFrames;
-					}
-					if (applyBudget && GetFrameIndex() < completion.FinalizeFrame)
-						break; // Stays first in line
-					completion.FinalizeStarted = true;
-				}
 				AssetFinalizeContext context { commandList, this };
 				if (applyBudget)
 				{
 					context.UploadBudget = budgets.UploadBytesPerFrame - std::min(uploadedBytes, budgets.UploadBytesPerFrame);
 					context.Deadline = deadline;
+					context.StagingBytes = budgets.StagingBytes;
 				}
 				context.UploadedBytes = &uploadedBytes;
 				const AssetFinalizeResult result = completion.LoadedAsset->FinalizeOnMainThread(context);
 				if (result == AssetFinalizeResult::Pending && applyBudget)
-					break; // Stays first in line
+					break; // Stays in line
 				if (result != AssetFinalizeResult::Done)
 				{
 					// Without a budget an asset has to finish: one that still asks for more is broken.
@@ -747,6 +775,7 @@ namespace Strata
 			completions.pop_front();
 
 			std::scoped_lock<std::mutex> lock(m_Mutex);
+			m_Reserved -= handled.Reserved; // Counted as resident from now on, or not at all
 			auto it = m_Entries.find(handled.Handle);
 			if (it == m_Entries.end() || it->second.Generation != handled.Generation)
 				continue;
@@ -775,14 +804,18 @@ namespace Strata
 			Renderer::GetDevice()->executeCommandList(m_UploadCommandList);
 		}
 
-		// Anything left over (budget exhausted) is finalized next frame, ahead of newer completions.
-		if (!completions.empty())
+		// What is left over (waiting for released memory, or the budget ran out) is finalized in a later frame, in its place
+		// in line: ahead of newer completions.
+		if (!completions.empty() || !waiting.empty())
 		{
 			std::scoped_lock<std::mutex> lock(m_LoadState->Mutex);
-			while (!completions.empty())
+			for (std::deque<Completion>* leftOver : { &completions, &waiting })
 			{
-				m_LoadState->Completions.push_front(std::move(completions.back()));
-				completions.pop_back();
+				while (!leftOver->empty())
+				{
+					m_LoadState->Completions.push_front(std::move(leftOver->back()));
+					leftOver->pop_back();
+				}
 			}
 		}
 
@@ -906,6 +939,7 @@ namespace Strata
 				stats.FinalizeMsWindowMax = std::max(stats.FinalizeMsWindowMax, m_FinalizeMsHistory[index]);
 			}
 			stats.Evictions = m_Evictions;
+			stats.EvictionChecks = m_EvictionChecks;
 			stats.Cancellations = m_Cancellations;
 			stats.StagingReleases = m_StagingReleases;
 		}

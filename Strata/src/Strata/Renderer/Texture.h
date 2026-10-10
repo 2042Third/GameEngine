@@ -82,9 +82,10 @@ namespace Strata
 		// Creates the GPU texture and uploads the mip chain in bands of at most c_UploadBandBytes - rows of one level, or
 		// every remaining level once they fit in one band - as far as the context's upload budget allows (Pending: the next
 		// call continues where this one stopped). Bands go through staging textures of the renderer's pool
-		// (StagingTexturePool), reused once the GPU has copied them; budgeted calls wait while the staging in flight is at
-		// its limit. Once the chain is uploaded, takes a bindless slot and releases the CPU copy (copied levels go as soon
-		// as they are uploaded, cooked bytes at the end).
+		// (StagingTexturePool), reused once the GPU has copied them; steps wait while the staging in flight is at the
+		// context's StagingBytes, except the frame's first. Once the chain is uploaded, takes a bindless slot and releases
+		// the CPU copy (copied levels go as soon as they are uploaded, cooked bytes at the end). Freeing a large CPU copy is
+		// timed like a step: it waits for the next call (Pending) when it would end after the deadline.
 		AssetFinalizeResult FinalizeOnMainThread(const AssetFinalizeContext& context) override;
 		// The most one upload step copies. Steps are not started when they would end after the context's deadline (at the
 		// speed of the latest steps), except a call's first.
@@ -124,6 +125,8 @@ namespace Strata
 		UploadStep GetNextUploadStep() const;
 		// Bytes of the whole mip chain.
 		uint64_t GetChainBytes() const;
+		// Bytes the CPU copy (cooked bytes and level data) holds allocated.
+		uint64_t GetCPUCopyBytes() const;
 		// Copies the step's pixels into a staging texture of the pool, records its copy into the GPU texture, releases copied
 		// levels that are complete and advances the upload position. False if no staging texture could be created or mapped.
 		bool RecordUploadStep(nvrhi::ICommandList* commandList, const UploadStep& step);
