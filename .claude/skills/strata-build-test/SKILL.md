@@ -39,7 +39,8 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
 - CTest runs: `StrataTests.Core` (everything but the GPU, EndToEnd, `Package*`, perf and feature test suites),
   `StrataTests.GPU` (label `gpu`), the perf tests `StrataTests.Perf` and `StrataTests.PerfGPU` (suites `Perf.*`
   and `PerfGPU.*`, label `perf`, Release and Dist only, after `StrataTests.PerfResults.Clean`; budgets and the
-  ratchet rule in AGENTS.md, "Testing"), `StrataEditor.Smoke` (the real editor with
+  ratchet rule in AGENTS.md, "Testing"; `PerfGPU.Editor` writes a 100,000- and a 1,000,000-entity scene to a temporary
+  project and opens a maximized StrataEditor on them for about 20 seconds), `StrataEditor.Smoke` (the real editor with
   `StrataTests/Editor/SmokeCommands.json.in`, configured into the build tree, label `gpu`; it captures the viewport to
   `SmokeViewport.png`/`SmokeSceneCamera.png` in `build/<preset>/StrataTests/SmokeCaptures/`, checked by
   `StrataEditor.SmokeCaptureCheck`), the editor script checks (`StrataEditor.FailingScript`, `WaitingScript`,

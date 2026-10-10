@@ -116,7 +116,13 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   (a plain `executeCommandList` + `waitForIdle` makes every later `open()` create a command pool). Complexity claims
   belong in ordinary unit tests with deterministic counters, which run everywhere. CI's hosted runners skip the label
   `perf` because budgets hold for the reference machine only: run `-L perf` there before merging a change that can
-  affect performance.
+  affect performance. Scale tests build their scenes with `Perf/SceneGenerators.h` (flat roots, a nested tree with ten
+  children per entity, entities running the API test module's trivial script) under
+  `Perf::ScopedApplicationJobSystem` (the job system as applications start it): `Perf.Scene` (transform updates and
+  idle frames up to a million entities), `Perf.Scripting` (100,000 and 300,000 trivial scripts) and, in `src/Editor/`,
+  `Perf.Editor` (entity commands among 100,000 roots) and `PerfGPU.Editor`, which runs the real `StrataEditor`
+  maximized on generated 100,000- and 1,000,000-entity scenes and checks the median CPU frame time its `editor.wait`
+  steps report. Time calls that take nanoseconds in batches (the clock's resolution is about 0.1 microseconds).
 - Suites whose names start with `EndToEnd` start the built `StrataEditor` and `StrataCLI` (paths in
   `STRATA_TEST_EDITOR_PATH`/`STRATA_TEST_CLI_PATH`, else next to the test executable) and run as the CTest
   `StrataEditor.Automation`, not in `StrataTests.Core`. They need no GPU (`--no-gpu`), use private session

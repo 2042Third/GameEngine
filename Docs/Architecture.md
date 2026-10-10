@@ -56,7 +56,10 @@ Each target is defined in the `CMakeLists.txt` of its directory; script modules 
 CTest runs the `StrataTests` suites in groups selected by suite name (`StrataTests/CMakeLists.txt`; the groups and
 labels are listed in AGENTS.md, "Testing"). The perf lab is one of them: suites `Perf.*` and `PerfGPU.*`
 (`StrataTests/src/Perf/`) measure metrics against the budgets in `StrataTests/Perf/Budgets.json`, in Release and Dist
-only, and write `<build>/PerfResults/<config>.json`.
+only, and write `<build>/PerfResults/<config>.json`. `Perf.Scene` and `Perf.Scripting` measure scenes built by
+`Perf/SceneGenerators.h` (flat roots, a nested tree, scripted entities); `Perf.Editor` (editor commands) and
+`PerfGPU.Editor` (the real `StrataEditor`'s frame times on generated 100,000- and 1,000,000-entity scenes, read from
+its `editor.wait` results) live in `src/Editor/`, which only builds with the editor.
 
 What may depend on what:
 
