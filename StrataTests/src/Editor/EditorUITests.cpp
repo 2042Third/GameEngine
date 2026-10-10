@@ -690,6 +690,8 @@ TEST_SUITE("Editor.UI")
 		CHECK(frame.Idle);
 		const nlohmann::json status = editor.Run("editor.status");
 		CHECK(status["editor"]["frameRate"]["frameMilliseconds"].get<double>() == doctest::Approx(4.0));
+		// editor.wait reports the same measurement, recorded per frame from the host.
+		CHECK(editor.Context().GetLastFrameTime() == doctest::Approx(4.0));
 	}
 
 	TEST_CASE("The toolbar's tools and the viewport's chips change the viewport's settings")
