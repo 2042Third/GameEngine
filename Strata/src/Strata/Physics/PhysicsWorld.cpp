@@ -807,6 +807,33 @@ namespace Strata
 			}
 		};
 
+		// A box (half extents) or sphere (radius) shape, by the bits of its dimensions.
+		struct PrimitiveShapeKey
+		{
+			enum class ShapeKind : uint32_t
+			{
+				Box = 0,
+				Sphere
+			};
+			ShapeKind Kind = ShapeKind::Box;
+			std::array<uint32_t, 3> Dimensions = {};
+
+			bool operator==(const PrimitiveShapeKey& other) const = default;
+		};
+
+		struct PrimitiveShapeKeyHash
+		{
+			size_t operator()(const PrimitiveShapeKey& key) const
+			{
+				const uint64_t first = (static_cast<uint64_t>(key.Kind) << 32) | key.Dimensions[0];
+				const uint64_t second = (static_cast<uint64_t>(key.Dimensions[1]) << 32) | key.Dimensions[2];
+				return static_cast<size_t>(Hash::Combine(first, second));
+			}
+		};
+
+		// Distinct box and sphere sizes whose shape a world shares between its bodies; sizes beyond get shapes of their own.
+		constexpr size_t c_MaxSharedPrimitiveShapes = 4096;
+
 		struct RestoredMeshShape
 		{
 			std::weak_ptr<const PhysicsMeshData> Source; // The entry belongs to its key only while the source is alive
@@ -925,6 +952,7 @@ namespace Strata
 		Scope<JPH::TempAllocator> Allocator;
 		Scope<JPH::JobSystem> Jobs;
 		std::unordered_map<MeshShapeKey, RestoredMeshShape, MeshShapeKeyHash> MeshShapes; // See PhysicsMeshShapes
+		std::unordered_map<PrimitiveShapeKey, JPH::RefConst<JPH::Shape>, PrimitiveShapeKeyHash> PrimitiveShapes; // See GetPrimitiveShape
 		Scope<JPH::PhysicsSystem> JoltSystem; // Destroyed before the listeners, filters and allocators it references
 
 		std::map<entt::entity, BodyRecord> Bodies;                    // Ordered: per-step processing is deterministic
@@ -1037,12 +1065,16 @@ namespace Strata
 
 		void ClearWarnings(PhysicsWorldData& data, UUID entityID, std::span<const PhysicsWarning> warnings)
 		{
+			if (data.IssuedWarnings.empty())
+				return; // The usual case: nothing to look up for every body built
 			for (PhysicsWarning warning : warnings)
 				data.IssuedWarnings.erase(MakeWarningKey(entityID, warning));
 		}
 
 		void ClearAllWarnings(PhysicsWorldData& data, UUID entityID)
 		{
+			if (data.IssuedWarnings.empty())
+				return;
 			for (uint8_t warning = 1; warning < static_cast<uint8_t>(PhysicsWarning::Count); warning++)
 				data.IssuedWarnings.erase(MakeWarningKey(entityID, static_cast<PhysicsWarning>(warning)));
 		}
@@ -1618,6 +1650,21 @@ namespace Strata
 			return shape;
 		}
 
+		// The shape of a box or sphere collider of these (scaled) dimensions. Shapes are immutable, so bodies of the same size
+		// share one: a scene of thousands of identical boxes builds one shape (up to c_MaxSharedPrimitiveShapes sizes per
+		// world). Null, with a warning about the entity, for dimensions the shape rejects.
+		JPH::RefConst<JPH::Shape> GetPrimitiveShape(PhysicsWorldData& data, const Entity& entity, const PrimitiveShapeKey& key, const JPH::ShapeSettings& settings,
+			std::string_view what)
+		{
+			auto it = data.PrimitiveShapes.find(key);
+			if (it != data.PrimitiveShapes.end())
+				return it->second;
+			JPH::RefConst<JPH::Shape> shape = CreateShape(data, settings, entity, what, PhysicsWarning::InvalidCollider);
+			if (shape && data.PrimitiveShapes.size() < c_MaxSharedPrimitiveShapes)
+				data.PrimitiveShapes.emplace(key, shape);
+			return shape;
+		}
+
 		// Adds the colliders of an entity whose transform in body space is (translation, rotation, scale).
 		void AddColliderParts(PhysicsWorldData& data, const Entity& entity, const glm::mat4& poseInBody, const glm::vec3& translation, const glm::quat& rotation, const glm::vec3& scale, RigidBodyType bodyType, ShapeBuild& build)
 		{
@@ -1633,7 +1680,9 @@ namespace Strata
 				if (IsFinite(box->HalfExtents) && IsFinite(box->Offset))
 				{
 					const glm::vec3 halfExtents = glm::max(glm::abs(box->HalfExtents) * absoluteScale, glm::vec3(c_MinColliderExtent));
-					if (JPH::RefConst<JPH::Shape> shape = CreateShape(data, JPH::BoxShapeSettings(ToJolt(halfExtents)), entity, "box collider", PhysicsWarning::InvalidCollider))
+					const PrimitiveShapeKey key { PrimitiveShapeKey::ShapeKind::Box,
+						{ std::bit_cast<uint32_t>(halfExtents.x), std::bit_cast<uint32_t>(halfExtents.y), std::bit_cast<uint32_t>(halfExtents.z) } };
+					if (JPH::RefConst<JPH::Shape> shape = GetPrimitiveShape(data, entity, key, JPH::BoxShapeSettings(ToJolt(halfExtents)), "box collider"))
 						build.Parts.push_back({ shape, placeAt(box->Offset), partRotation });
 				}
 				else
@@ -1648,7 +1697,8 @@ namespace Strata
 				if (std::isfinite(sphere->Radius) && IsFinite(sphere->Offset))
 				{
 					const float radius = std::max(std::abs(sphere->Radius) * maxScale, c_MinColliderExtent);
-					if (JPH::RefConst<JPH::Shape> shape = CreateShape(data, JPH::SphereShapeSettings(radius), entity, "sphere collider", PhysicsWarning::InvalidCollider))
+					const PrimitiveShapeKey key { PrimitiveShapeKey::ShapeKind::Sphere, { std::bit_cast<uint32_t>(radius), 0, 0 } };
+					if (JPH::RefConst<JPH::Shape> shape = GetPrimitiveShape(data, entity, key, JPH::SphereShapeSettings(radius), "sphere collider"))
 						build.Parts.push_back({ shape, placeAt(sphere->Offset), partRotation });
 				}
 				else
@@ -1806,6 +1856,9 @@ namespace Strata
 		// RefreshMeshBodies).
 		void SetMeshSources(PhysicsWorldData& data, entt::entity handle, BodyRecord& record, std::vector<MeshSource> sources)
 		{
+			// Bodies without mesh colliders (most of them) are in none of the mesh indices before or after.
+			if (record.MeshSources.empty() && sources.empty())
+				return;
 			for (const MeshSource& source : record.MeshSources)
 			{
 				auto users = data.MeshUsers.find(source.Mesh);
@@ -3916,6 +3969,7 @@ namespace Strata
 		stats.WrittenBodyCount = data.LastWrittenBodies;
 		stats.BuildCount = data.BuildCount;
 		stats.AddBatchCount = data.AddBatchCount;
+		stats.SharedShapeCount = static_cast<uint32_t>(data.PrimitiveShapes.size());
 		stats.MeshCheckCount = data.MeshCheckCount;
 		stats.WaitingForMeshes = data.HeldLastStep;
 		stats.HeldStepCount = data.HeldStepCount;

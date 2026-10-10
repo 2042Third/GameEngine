@@ -162,6 +162,7 @@ TEST_SUITE("Physics.Scale")
 		CHECK(physics.HasBody(boxes.front()));
 		PhysicsStats stats = physics.GetStats();
 		CHECK(stats.AddBatchCount == batches + 2);
+		CHECK(stats.SharedShapeCount == 2); // The floor's box and one box of half a meter for the 110 others
 		CHECK(stats.DynamicBodyCount == 100);
 		CHECK(stats.StaticBodyCount == 11);
 		CHECK(stats.ActiveBodyCount == 100);
