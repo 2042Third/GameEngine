@@ -1,0 +1,68 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "Include/IBL.glsl"
+
+// Writes mip 0 of the environment cube from a procedural sky (SkyLightSource::Procedural): above the horizon a
+// gradient from the horizon color to the zenith color, below it a quick blend into the ground color, and the sun's
+// disk. The cube then goes through the same downsampling, irradiance and prefiltering as an environment map.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = ST_UAV(0), rgba16f) uniform writeonly image2DArray o_Output;
+
+// RenderData::ProceduralSkyParameters
+layout(push_constant) uniform Parameters
+{
+	vec4 ZenithColor;
+	vec4 HorizonColor;
+	vec4 GroundColor;
+	vec4 SunDirection; // xyz: toward the sun, w: angular radius in radians
+	vec4 SunRadiance;
+	uvec4 Size;        // x: face size in texels
+} u_Parameters;
+
+vec3 SkyRadiance(vec3 direction, float texelAngle)
+{
+	float height = clamp(direction.y, -1.0, 1.0);
+	vec3 color;
+	if (height >= 0.0)
+	{
+		// The horizon color is haze near the horizon: it gives way to the zenith color within about 15 degrees.
+		float zenith = 1.0 - pow(1.0 - height, 8.0);
+		color = mix(u_Parameters.HorizonColor.rgb, u_Parameters.ZenithColor.rgb, zenith);
+	}
+	else
+	{
+		// Below the horizon the ground takes over within a few degrees.
+		float ground = 1.0 - pow(1.0 + height, 16.0);
+		color = mix(u_Parameters.HorizonColor.rgb, u_Parameters.GroundColor.rgb, ground);
+	}
+
+	// The sun's disk, its edge smoothed over one texel. The angle comes from the chord between the directions, which
+	// stays precise for the small angles involved (acos of a dot product near 1 does not).
+	float radius = u_Parameters.SunDirection.w;
+	if (radius > 0.0)
+	{
+		float chord = length(direction - u_Parameters.SunDirection.xyz);
+		float angle = 2.0 * asin(min(chord * 0.5, 1.0));
+		float coverage = clamp((radius - angle) / texelAngle + 0.5, 0.0, 1.0);
+		color = mix(color, u_Parameters.SunRadiance.rgb, coverage);
+	}
+	return color;
+}
+
+void main()
+{
+	uvec3 id = gl_GlobalInvocationID;
+	uint size = u_Parameters.Size.x;
+	if (id.x >= size || id.y >= size)
+		return;
+	vec3 direction = CubeTexelDirection(id.xy, id.z, size);
+	// A texel spans 2 / size of a face at unit distance: its angle at the face's center, smaller toward the corners.
+	float texelAngle = 2.0 / float(size);
+	vec3 color = SkyRadiance(direction, texelAngle);
+	// Finite and within half-float range, like the environment maps (EquirectToCube.comp).
+	color = clamp(color, vec3(0.0), vec3(65000.0));
+	imageStore(o_Output, ivec3(id), vec4(color, 1.0));
+}

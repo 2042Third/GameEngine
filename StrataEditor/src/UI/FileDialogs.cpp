@@ -1,5 +1,7 @@
 #include "UI/FileDialogs.h"
 
+#include "UI/TextFormat.h"
+
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/Log.h>
 
@@ -26,6 +28,21 @@ namespace Strata
 					Items.push_back({ filter.Name.c_str(), filter.Extensions.c_str() });
 			}
 		};
+
+		// The directory, or its nearest parent that exists, in the system's own spelling: the dialogs fail on a default
+		// directory whose parent is missing (e.g. a remembered location that was deleted). Empty for none.
+		std::string ToDefaultDirectory(const std::filesystem::path& directory)
+		{
+			std::filesystem::path existing = directory;
+			while (!existing.empty() && !FileSystem::IsDirectory(existing))
+			{
+				std::filesystem::path parent = existing.parent_path();
+				if (parent == existing)
+					return {};
+				existing = std::move(parent);
+			}
+			return existing.empty() ? std::string() : UI::DisplayPath(existing);
+		}
 
 		std::optional<std::filesystem::path> TakeResult(nfdresult_t result, nfdu8char_t* path, const char* dialog)
 		{
@@ -67,7 +84,7 @@ namespace Strata
 			if (!s_Initialized)
 				return std::nullopt;
 			const FilterList list(filters);
-			const std::string directory = FileSystem::ToUTF8(defaultDirectory);
+			const std::string directory = ToDefaultDirectory(defaultDirectory);
 			nfdu8char_t* path = nullptr;
 			const nfdresult_t result = NFD_OpenDialogU8(&path, list.Items.empty() ? nullptr : list.Items.data(), static_cast<nfdfiltersize_t>(list.Items.size()),
 				directory.empty() ? nullptr : directory.c_str());
@@ -79,7 +96,7 @@ namespace Strata
 			if (!s_Initialized)
 				return std::nullopt;
 			const FilterList list(filters);
-			const std::string directory = FileSystem::ToUTF8(defaultDirectory);
+			const std::string directory = ToDefaultDirectory(defaultDirectory);
 			nfdu8char_t* path = nullptr;
 			const nfdresult_t result = NFD_SaveDialogU8(&path, list.Items.empty() ? nullptr : list.Items.data(), static_cast<nfdfiltersize_t>(list.Items.size()),
 				directory.empty() ? nullptr : directory.c_str(), defaultName.empty() ? nullptr : defaultName.c_str());
@@ -90,7 +107,7 @@ namespace Strata
 		{
 			if (!s_Initialized)
 				return std::nullopt;
-			const std::string directory = FileSystem::ToUTF8(defaultDirectory);
+			const std::string directory = ToDefaultDirectory(defaultDirectory);
 			nfdu8char_t* path = nullptr;
 			const nfdresult_t result = NFD_PickFolderU8(&path, directory.empty() ? nullptr : directory.c_str());
 			return TakeResult(result, path, "Folder");

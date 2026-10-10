@@ -1,7 +1,9 @@
 #include "Editor/CommandUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/RecentProjects.h"
 
+#include <Strata/Core/FileSystem.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Core/Platform.h>
 #include <Strata/Core/Version.h>
@@ -127,9 +129,9 @@ namespace Strata
 		////////////////////////////////////////////////////////////////////////////////
 
 		registry.Register({ "editor.status",
-			"Overview of the editor: engine version, open project, scene (name, asset, unsaved changes, entity count), play state, selection, "
-			"undo history, and sections such as automation (port, clients, pending requests and commands) and assets (memory and budgets per "
-			"pool, streaming queue, uploads; see asset.stats). Start here to orient yourself.",
+			"Overview of the editor: engine version and commit, open project, scene (name, asset, unsaved changes, entity count), play state, "
+			"selection, undo history, and sections such as automation (port, clients, pending requests and commands) and assets (memory and "
+			"budgets per pool, streaming queue, uploads; see asset.stats). Start here to orient yourself.",
 			ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
@@ -137,6 +139,7 @@ namespace Strata
 				const UndoStack& undo = context.GetUndoStack();
 				nlohmann::json status = {
 					{ "engineVersion", c_EngineVersion },
+					{ "engineCommit", c_EngineCommit },
 					{ "platform", std::string(Platform::GetName()) },
 					{ "project", DescribeProject(context) },
 					{ "scene", {
@@ -157,6 +160,39 @@ namespace Strata
 				for (const auto& [section, provider] : context.GetStatusProviders())
 					status.emplace(section, provider());
 				return EditorCommandResult::Ok(std::move(status));
+			} });
+
+		registry.Register({ "editor.recentProjects",
+			"The projects opened most recently, most recent first (at most 12, projects that no longer exist left out): name, path of the project "
+			"file (for project.open), lastOpened (seconds since 1970-01-01 UTC) and the engine version that opened it. The list is shared with the "
+			"editor's launcher.",
+			ObjectSchema({}),
+			[](EditorContext& context, const nlohmann::json&)
+			{
+				nlohmann::json projects = nlohmann::json::array();
+				for (const RecentProject& project : context.GetRecentProjects().GetProjects())
+				{
+					projects.push_back({
+						{ "name", project.Name },
+						{ "path", FileSystem::ToUTF8(project.Path) },
+						{ "lastOpened", project.LastOpened },
+						{ "engineVersion", project.EngineVersion } });
+				}
+				return EditorCommandResult::Ok({ { "projects", std::move(projects) } });
+			} });
+
+		registry.Register({ "editor.removeRecentProject",
+			"Takes a project off the recent projects (editor.recentProjects); its files stay where they are.",
+			ObjectSchema({ { "path", StringSchema("The project file as editor.recentProjects lists it") } }, { "path" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				CommandArguments arguments(parameters);
+				const std::string path = arguments.GetString("path");
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				if (!context.GetRecentProjects().Remove(FileSystem::FromUTF8(path)))
+					return EditorCommandResult::InvalidParameters(fmt::format("'{}' is not a recent project (editor.recentProjects lists them)", path));
+				return EditorCommandResult::Ok();
 			} });
 
 		registry.Register({ "editor.quit",

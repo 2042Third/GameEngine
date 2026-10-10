@@ -59,6 +59,31 @@ namespace Strata
 			return { { "type", "number" }, { "description", std::move(description) }, { "minimum", minimum }, { "maximum", maximum } };
 		}
 
+		// viewport.setSettings parameters and the ViewportSettings keys they set.
+		constexpr std::pair<const char*, const char*> c_ViewportSettingNames[] = {
+			{ "grid", "ShowGrid" },
+			{ "selectionOutline", "ShowSelectionOutline" },
+			{ "sceneGizmos", "ShowSceneGizmos" },
+			{ "stats", "ShowStats" },
+			{ "previewLighting", "PreviewLighting" },
+			{ "gameUI", "ShowGameUI" },
+			{ "gizmo", "Gizmo" },
+			{ "space", "Space" },
+			{ "snap", "Snap" },
+			{ "translateSnap", "TranslateSnap" },
+			{ "rotateSnap", "RotateSnap" },
+			{ "scaleSnap", "ScaleSnap" }
+		};
+
+		nlohmann::json DescribeViewportSettings(const ViewportSettings& settings)
+		{
+			const nlohmann::json values = settings.ToJson();
+			nlohmann::json result = nlohmann::json::object();
+			for (const auto& [parameter, key] : c_ViewportSettingNames)
+				result[parameter] = values[key];
+			return result;
+		}
+
 		// An optional number parameter within [minimum, maximum]; problems are recorded in `arguments`.
 		std::optional<float> ReadNumber(const nlohmann::json& parameters, CommandArguments& arguments, const char* name, float minimum, float maximum)
 		{
@@ -116,6 +141,9 @@ namespace Strata
 			bool Overlays = false;
 			uint32_t PendingAssets = 0;
 			uint32_t PendingTextGlyphs = 0;
+			bool PreviewLighting = false;
+			uint32_t ScreenSpaceTexts = 0;
+			uint32_t HiddenScreenSpaceTexts = 0;
 			uint32_t TextFrames = 0; // Renders repeated so far to complete the text
 			std::chrono::steady_clock::time_point Submitted;
 			Ref<EncodedCapture> Encoded; // Set once the pixels are on the CPU
@@ -151,8 +179,12 @@ namespace Strata
 				renderer->ReleaseTargets();
 				return EditorCommandResult::Fail("Rendering the capture failed (see the log)");
 			}
-			progress.PendingAssets = renderer->GetStats().PendingAssets;
-			progress.PendingTextGlyphs = renderer->GetStats().PendingTextGlyphs;
+			const SceneRendererStats& stats = renderer->GetStats();
+			progress.PendingAssets = stats.PendingAssets;
+			progress.PendingTextGlyphs = stats.PendingTextGlyphs;
+			progress.PreviewLighting = stats.PreviewLighting;
+			progress.ScreenSpaceTexts = stats.ScreenSpaceTexts;
+			progress.HiddenScreenSpaceTexts = stats.HiddenScreenSpaceTexts;
 			if (progress.PendingTextGlyphs > 0 && progress.TextFrames < c_MaxCaptureTextFrames)
 			{
 				progress.TextFrames++;
@@ -230,7 +262,10 @@ namespace Strata
 				{ "camera", progress.View.FromScene ? "scene" : "editor" },
 				{ "overlays", progress.Overlays },
 				{ "pendingAssets", progress.PendingAssets },
-				{ "pendingTextGlyphs", progress.PendingTextGlyphs }
+				{ "pendingTextGlyphs", progress.PendingTextGlyphs },
+				{ "previewLighting", progress.PreviewLighting },
+				{ "screenSpaceTexts", progress.ScreenSpaceTexts },
+				{ "hiddenScreenSpaceTexts", progress.HiddenScreenSpaceTexts }
 			};
 			if (!progress.View.Notice.empty())
 				result["notice"] = progress.View.Notice;
@@ -337,15 +372,75 @@ namespace Strata
 			} });
 
 		////////////////////////////////////////////////////////////////////////////////
+		// Settings
+		////////////////////////////////////////////////////////////////////////////////
+
+		registry.Register({ "viewport.getSettings",
+			"The viewport's view settings (saved with the project's editor state): which editor overlays are drawn (grid, selectionOutline, sceneGizmos, "
+			"stats), previewLighting (editor views light scenes without any light of their own with a preview sun and sky), gameUI (editor views draw the "
+			"game's screen-space text), the gizmo mode and space, whether gizmo drags snap, and the snap steps.",
+			ObjectSchema({}),
+			[](EditorContext& context, const nlohmann::json&)
+			{
+				return EditorCommandResult::Ok(DescribeViewportSettings(context.GetViewport().GetSettings()));
+			} });
+
+		registry.Register({ "viewport.setSettings",
+			"Changes view settings of the viewport (a view change: no undo step, the scene is unchanged) and returns all of them like viewport.getSettings. "
+			"Editor views are the editor camera while the game is not playing; the scene's camera and the playing game always show the scene as the game does.",
+			ObjectSchema({
+				{ "grid", BoolSchema("Draw the ground grid") },
+				{ "selectionOutline", BoolSchema("Outline the selected entities") },
+				{ "sceneGizmos", BoolSchema("Draw light, camera and collider shapes") },
+				{ "stats", BoolSchema("Show frame time, draw calls and loading assets over the image") },
+				{ "previewLighting", BoolSchema("Editor views light scenes without any light of their own (no directional, point, spot or sky light) "
+					"with a preview sun and sky (never part of the scene or the game)") },
+				{ "gameUI", BoolSchema("Editor views draw the game's screen-space text (its HUD); off by default so the HUD does not cover the scene") },
+				{ "gizmo", { { "type", "string" }, { "enum", { "None", "Translate", "Rotate", "Scale" } }, { "description", "Transform gizmo of the viewport" } } },
+				{ "space", { { "type", "string" }, { "enum", { "Local", "World" } }, { "description", "Space the gizmo works in" } } },
+				{ "snap", BoolSchema("Snap gizmo drags to the steps below (holding Ctrl inverts it)") },
+				{ "translateSnap", RangeSchema("Move snapping step in world units", 0.0, ViewportSettings::c_MaxTranslateSnap) },
+				{ "rotateSnap", RangeSchema("Rotation snapping step in degrees", 0.0, ViewportSettings::c_MaxRotateSnap) },
+				{ "scaleSnap", RangeSchema("Scale snapping step", 0.0, ViewportSettings::c_MaxScaleSnap) } }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				nlohmann::json changes = nlohmann::json::object();
+				for (const auto& [parameter, key] : c_ViewportSettingNames)
+				{
+					if (const auto it = parameters.find(parameter); it != parameters.end())
+						changes[key] = *it;
+				}
+				// Applied to a copy, so an invalid value changes nothing.
+				ViewportSettings settings = context.GetViewport().GetSettings();
+				std::string error;
+				if (!settings.FromJson(changes, &error))
+				{
+					// The settings name their values like the saved state does; the parameters are camelCase.
+					for (const auto& [parameter, key] : c_ViewportSettingNames)
+					{
+						const std::string quoted = fmt::format("'{}'", key);
+						if (const size_t position = error.find(quoted); position != std::string::npos)
+							error.replace(position, quoted.size(), fmt::format("Parameter '{}'", parameter));
+					}
+					return EditorCommandResult::InvalidParameters(error);
+				}
+				context.GetViewport().GetSettings() = settings;
+				return EditorCommandResult::Ok(DescribeViewportSettings(settings));
+			} });
+
+		////////////////////////////////////////////////////////////////////////////////
 		// Capture
 		////////////////////////////////////////////////////////////////////////////////
 
 		registry.Register({ "viewport.capture",
 			"Renders the scene on the next frame and returns the picture as a PNG image, with its width and height. By default it looks like the viewport: "
 			"its size (1280x720 while the viewport is hidden), the scene's primary camera while playing (the editor camera otherwise) and the editor overlays "
-			"(grid, selection outline, light/camera/collider shapes) for the editor camera. Text whose glyphs are still being prepared delays the picture by a "
-			"few frames, so it is complete. Also reports how many assets were still loading (pendingAssets: call editor.wait and capture again to see "
-			"them) and glyphs that could not be prepared in time (pendingTextGlyphs). Needs a GPU (fails in editors started with --no-gpu).",
+			"(grid, selection outline, light/camera/collider shapes) for the editor camera. With the editor camera outside play mode, a scene without any light "
+			"of its own is lit by preview lighting (previewLighting: true in the result; the game will be unlit) and the game's screen-space text is hidden "
+			"(hiddenScreenSpaceTexts counts it): see viewport.setSettings, or use camera \"scene\" to see what the game shows. Text whose glyphs are still being "
+			"prepared delays the picture by a few frames, so it is complete. Also reports how many assets were still loading (pendingAssets: call editor.wait "
+			"and capture again to see them) and glyphs that could not be prepared in time (pendingTextGlyphs). Needs a GPU (fails in editors started with "
+			"--no-gpu).",
 			ObjectSchema({
 				{ "width", IntegerSchema("Image width in pixels; without height the viewport's aspect ratio is kept", c_MinCaptureSize, c_MaxCaptureSize) },
 				{ "height", IntegerSchema("Image height in pixels; without width the viewport's aspect ratio is kept", c_MinCaptureSize, c_MaxCaptureSize) },

@@ -18,6 +18,7 @@ namespace Strata
 	class EditorCommandRegistry;
 	class EditorCommandRunner;
 	class EditorContext;
+	class EditorShell;
 
 	// The editor's frame timing this frame, as the status bar shows it.
 	struct EditorFrameStats
@@ -28,14 +29,23 @@ namespace Strata
 		bool Idle = false;            // Nothing happens: the editor draws at its idle frame rate
 	};
 
-	// What panels work with: the editor state, the commands (every change goes through them), the runner (commands
-	// that take frames) and the frame timing.
+	// What panels work with: the editor state, the commands (every change goes through them), the runner (commands that
+	// take frames), the frame timing and the editor window around them (EditorShell: its dialogs, the question about
+	// unsaved changes, facts about the running editor; null where panels are drawn without one, e.g. in registry tests).
 	struct EditorPanelContext
 	{
 		EditorContext& Context;
 		const EditorCommandRegistry& Commands;
 		EditorCommandRunner& Runner;
 		EditorFrameStats Frame = {};
+		EditorShell* Shell = nullptr;
+	};
+
+	// Where a panel is drawn.
+	enum class EditorPanelPlacement : uint8_t
+	{
+		Docked = 0, // A window of the dock space, shown and hidden from the View menu
+		Launcher    // The editor's launcher: drawn instead of the dock space while no project is open (DrawLauncher)
 	};
 
 	// How the registry begins a panel's window this frame.
@@ -75,6 +85,8 @@ namespace Strata
 		const char* Icon = nullptr; // An Icons:: constant shown before the title (optional)
 		std::string MenuPath;       // Submenu of the View menu the toggle lives in ("" for the menu itself, "Debug" for View > Debug)
 		bool OpenByDefault = true;
+		// A launcher panel has no View menu item and no saved open state; at most one registers.
+		EditorPanelPlacement Placement = EditorPanelPlacement::Docked;
 		std::function<Scope<EditorPanel>()> Create;
 	};
 
@@ -91,8 +103,8 @@ namespace Strata
 		EditorPanelRegistry& operator=(const EditorPanelRegistry&) = delete;
 
 		// Adds a panel and creates it. Fails (false, with the reason) for an empty or taken id, an id with characters that
-		// cannot be stored in imgui.ini ('=', '#', line breaks), an empty title, a missing factory or a factory that
-		// returns nothing. An open state saved in imgui.ini for the id wins over OpenByDefault.
+		// cannot be stored in imgui.ini ('=', '#', line breaks), an empty title, a missing factory, a factory that returns
+		// nothing or a second launcher panel. An open state saved in imgui.ini for the id wins over OpenByDefault.
 		bool Register(EditorPanelDescriptor descriptor, std::string* outError = nullptr);
 
 		EditorPanel* Find(std::string_view id) const;
@@ -118,9 +130,15 @@ namespace Strata
 		// (docking, settings) whatever its title. Empty for an unknown id.
 		std::string GetWindowName(std::string_view id) const;
 
-		// Each frame: OnUpdate of every panel, then (within an ImGui frame) the windows of the open panels.
+		// Each frame: OnUpdate of every panel, then (within an ImGui frame) either the windows of the open docked panels or
+		// the launcher (DrawLauncher). The panels that are not drawn get OnHidden.
 		void OnUpdate(EditorPanelContext& context);
 		void OnImGuiRender(EditorPanelContext& context);
+		// Whether a launcher panel is registered.
+		bool HasLauncher() const;
+		// Draws the launcher panel in the rest of the current window (in a child window filling it, without padding) instead
+		// of the docked panels, which get OnHidden. Does nothing without a launcher panel.
+		void DrawLauncher(EditorPanelContext& context);
 		// One menu item per panel to show or hide it, in submenus by MenuPath (for the View menu).
 		void DrawMenuItems();
 		bool IsAnyAnimating() const;

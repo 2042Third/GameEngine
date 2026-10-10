@@ -112,6 +112,21 @@ namespace Strata
 			uint32_t SampleCount;
 		};
 
+		// IBL/ProceduralSky.comp: what the procedural environment cube is computed from. The renderer compares it with the
+		// parameters of the current cube and regenerates the cube only when they differ.
+		struct ProceduralSkyParameters
+		{
+			glm::vec4 ZenithColor;  // rgb: linear radiance straight up
+			glm::vec4 HorizonColor; // rgb: linear radiance at the horizon
+			glm::vec4 GroundColor;  // rgb: linear radiance below the horizon
+			glm::vec4 SunDirection; // xyz: unit direction toward the sun, w: angular radius of its disk in radians
+			glm::vec4 SunRadiance;  // rgb: linear radiance of the disk
+			glm::uvec4 Size;        // x: face size of the cube in texels
+
+			bool operator==(const ProceduralSkyParameters&) const = default;
+		};
+		static_assert(sizeof(ProceduralSkyParameters) == 96);
+
 		struct AOParameters
 		{
 			float Radius;

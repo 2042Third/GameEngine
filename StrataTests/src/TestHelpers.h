@@ -19,6 +19,10 @@ namespace Strata::Tests
 	// are removed when the test run finishes.
 	std::filesystem::path CreateTemporaryDirectory(const std::string& name);
 	void CleanupTemporaryDirectories();
+	// Copies a sample project of the repository (Samples/<name>, without editor state in .strata) into a new temporary
+	// directory and returns the copy's directory, or an empty path when the copy failed (outError says why). Tests never
+	// open the samples in place.
+	std::filesystem::path CopySampleProject(const std::string& name, std::string* outError = nullptr);
 
 	// Appends one RGBA texel to a pixel buffer. Tests use it instead of insert(end(), { r, g, b, a }), for which GCC 14 at
 	// -O3 reports a false -Wstringop-overflow on byte vectors.
@@ -52,11 +56,18 @@ namespace Strata::Tests
 	std::vector<uint8_t> EncodePNG(uint32_t width, uint32_t height, const std::vector<uint8_t>& rgba);
 	// A PNG filled with one color.
 	std::vector<uint8_t> CreateSolidPNG(uint32_t width, uint32_t height, uint8_t red, uint8_t green, uint8_t blue, uint8_t alpha = 255);
+	// The pixel sizes (width; 256 for the largest) of the images in an .ico file, from its directory. Nullopt (outError
+	// says why) when it cannot be read or is no icon file.
+	std::optional<std::vector<uint32_t>> ReadIconFileSizes(const std::filesystem::path& iconFile, std::string* outError = nullptr);
 
 #if defined(ST_PLATFORM_WINDOWS)
 	// Creates a junction (a mount-point reparse point, which needs no special privilege) at link that redirects to target.
 	// False when it cannot be created (e.g. on file systems without reparse points, such as exFAT).
 	bool CreateJunction(const std::filesystem::path& link, const std::filesystem::path& target);
+	// The pixel sizes (width; 256 for the largest) of the images in an executable's first icon group (RT_GROUP_ICON),
+	// read with the executable loaded as a data file. Nullopt (outError says why) when it cannot be loaded or has no
+	// icon group.
+	std::optional<std::vector<uint32_t>> ReadExecutableIconSizes(const std::filesystem::path& executable, std::string* outError = nullptr);
 #endif
 
 	inline std::filesystem::path GetTestExecutablePath()

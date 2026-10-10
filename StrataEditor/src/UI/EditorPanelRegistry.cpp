@@ -2,6 +2,7 @@
 
 #include <imgui_internal.h>
 
+#include <algorithm>
 #include <charconv>
 #include <cstring>
 #include <map>
@@ -42,6 +43,8 @@ namespace Strata
 			return fail("The panel '" + descriptor.Id + "' has no title");
 		if (!descriptor.Create)
 			return fail("The panel '" + descriptor.Id + "' has no factory");
+		if (descriptor.Placement == EditorPanelPlacement::Launcher && HasLauncher())
+			return fail("The panel '" + descriptor.Id + "' cannot be a launcher: one is registered already");
 
 		Entry entry;
 		entry.Panel = descriptor.Create();
@@ -154,7 +157,7 @@ namespace Strata
 	{
 		for (Entry& entry : m_Entries)
 		{
-			if (!entry.Open)
+			if (!entry.Open || entry.Descriptor.Placement != EditorPanelPlacement::Docked)
 			{
 				entry.Panel->OnHidden(context);
 				continue;
@@ -187,12 +190,40 @@ namespace Strata
 		}
 	}
 
+	bool EditorPanelRegistry::HasLauncher() const
+	{
+		return std::any_of(m_Entries.begin(), m_Entries.end(), [](const Entry& entry) { return entry.Descriptor.Placement == EditorPanelPlacement::Launcher; });
+	}
+
+	void EditorPanelRegistry::DrawLauncher(EditorPanelContext& context)
+	{
+		for (Entry& entry : m_Entries)
+		{
+			if (entry.Descriptor.Placement != EditorPanelPlacement::Launcher)
+			{
+				entry.Panel->OnHidden(context);
+				continue;
+			}
+			const EditorPanelWindowOptions options = entry.Panel->GetWindowOptions(context);
+			ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+			const bool visible = ImGui::BeginChild(entry.WindowName.c_str(), ImVec2(0.0f, 0.0f), ImGuiChildFlags_None, options.Flags);
+			ImGui::PopStyleVar();
+			if (visible)
+				entry.Panel->OnImGuiRender(context);
+			else
+				entry.Panel->OnHidden(context);
+			ImGui::EndChild();
+		}
+	}
+
 	void EditorPanelRegistry::DrawMenuItems()
 	{
 		// Panels without a menu path first, then one submenu per path (sorted), each in registration order.
 		std::map<std::string, std::vector<Entry*>> submenus;
 		for (Entry& entry : m_Entries)
 		{
+			if (entry.Descriptor.Placement != EditorPanelPlacement::Docked)
+				continue;
 			if (!entry.Descriptor.MenuPath.empty())
 			{
 				submenus[entry.Descriptor.MenuPath].push_back(&entry);
@@ -279,7 +310,10 @@ namespace Strata
 		// Panels this run did not register keep their saved state.
 		std::map<std::string, bool> states(m_SavedOpenStates.begin(), m_SavedOpenStates.end());
 		for (const Entry& entry : m_Entries)
-			states[entry.Descriptor.Id] = entry.Open;
+		{
+			if (entry.Descriptor.Placement == EditorPanelPlacement::Docked)
+				states[entry.Descriptor.Id] = entry.Open;
+		}
 		for (const auto& [id, open] : states)
 			buffer.appendf("%s=%d\n", id.c_str(), open ? 1 : 0);
 		buffer.append("\n");

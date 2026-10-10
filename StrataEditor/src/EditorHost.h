@@ -1,9 +1,12 @@
 #pragma once
 
+#include <Strata/Renderer/GraphicsDevice.h>
+
 #include <glm/glm.hpp>
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 
 namespace Strata
@@ -27,7 +30,12 @@ namespace Strata
 		virtual uint64_t GetFrameCount() const = 0;
 		// Seconds since the application started (monotonic). The layer measures idle time and frame rates with it.
 		virtual double GetTime() const = 0;
+		// Seconds since the process was created (Platform::GetProcessUptime): the layer reads it once the first frame is on
+		// screen, as the editor's startup time. nullopt when the system does not tell.
+		virtual std::optional<double> GetProcessUptime() const = 0;
 		virtual bool HasGraphicsDevice() const = 0;
+		// The GPU the editor renders with (adapter, driver, API version); nullopt without a graphics device.
+		virtual std::optional<GraphicsDeviceInfo> GetGraphicsDeviceInfo() const = 0;
 
 		// The window. Without one the title is ignored, the size is zero and it never has the focus.
 		virtual bool HasWindow() const = 0;

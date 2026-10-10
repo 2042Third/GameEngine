@@ -4,6 +4,7 @@
 #include "Editor/TransformEdit.h"
 #include "Editor/ViewportRenderer.h"
 
+#include <Strata/Asset/AssetTypes.h>
 #include <Strata/Core/Base.h>
 #include <Strata/Math/AABB.h>
 #include <Strata/Renderer/TextureReadback.h>
@@ -14,10 +15,13 @@
 
 #include <chrono>
 #include <filesystem>
+#include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace Strata
 {
@@ -36,6 +40,11 @@ namespace Strata
 		bool ShowSelectionOutline = true;
 		bool ShowSceneGizmos = true; // Light, camera and collider shapes
 		bool ShowStats = false;      // Frame time, draw calls and loading assets over the image
+		// Editor views (the editor camera while the game is not playing, see ViewportView::EditorView) light scenes that
+		// have no light of their own with a preview sun and sky (SceneRenderOptions::PreviewEnvironment).
+		bool PreviewLighting = true;
+		// Editor views draw the game's screen-space text (its HUD); off, it does not cover the scene being edited.
+		bool ShowGameUI = false;
 		GizmoOperation Gizmo = GizmoOperation::Translate;
 		GizmoSpace Space = GizmoSpace::World;
 		// Gizmo drags snap to the steps below while this is on; holding Ctrl inverts it for a drag.
@@ -114,6 +123,20 @@ namespace Strata
 		// Frames the entities (with their descendants) in the editor camera, or the whole scene when the span is empty.
 		// False (camera unchanged) when there is nothing to frame.
 		bool Focus(EditorContext& context, std::span<const Entity> entities);
+		// The first view of the active scene: looks along the scene's primary camera (keeping the editor camera's
+		// orientation when there is none) and fits the scene's renderable content into the view (EditorCamera::FitBounds).
+		// outPendingMeshes receives meshes that were still loading (placeholder boxes stood in for them). False (camera
+		// unchanged) for a scene without active entities.
+		bool FrameScene(EditorContext& context, std::vector<AssetHandle>* outPendingMeshes = nullptr);
+
+		// The editor camera of each scene asset the project has shown, so every scene opens with the view it was left
+		// with. Stores the current camera for `scene` (nothing for an invalid handle).
+		void StoreSceneCamera(AssetHandle scene);
+		// Switches to the camera stored for `scene`. False (camera unchanged) when there is none.
+		bool RestoreSceneCamera(AssetHandle scene);
+		bool HasSceneCamera(AssetHandle scene) const { return m_SceneCameras.contains(scene); }
+		// Forgets the cameras of scenes for which `keep` returns false (deleted scene assets).
+		void PruneSceneCameras(const std::function<bool(AssetHandle)>& keep);
 
 		// Starts picking the entity at a pixel of the viewport renderer's last frame (a GPU readback, finished by
 		// UpdatePicking over the next frames). imageSize is the pixel size of the image the click was on: when the
@@ -127,12 +150,15 @@ namespace Strata
 		// Changes the selection as a click on `entity` (invalid: empty space) does in the given mode.
 		static void ApplyPick(EditorContext& context, Entity entity, ViewportPickMode mode);
 
-		// Editor state saved per project: {"Strata": {"Format": "EditorViewport", ...}, "Camera": {...}, "Settings": {...}}.
+		// Editor state saved per project: {"Strata": {"Format": "EditorViewport", ...}, "Camera": {...},
+		// "Cameras": {"<scene handle>": {...}}, "Settings": {...}}. "Camera" is the current camera (all that files written
+		// before per-scene cameras hold); loading a file without "Cameras" keeps it for the first scene that opens without
+		// a camera of its own.
 		nlohmann::json ToJson() const;
 		bool FromJson(const nlohmann::json& json, std::string* outError = nullptr);
 		bool Save(const std::filesystem::path& path, std::string* outError = nullptr) const;
 		bool Load(const std::filesystem::path& path, std::string* outError = nullptr);
-		// Default camera and settings (another project is opened).
+		// Default camera and settings, no scene cameras (another project is opened).
 		void ResetState();
 	private:
 		struct PendingPick
@@ -144,6 +170,9 @@ namespace Strata
 		};
 	private:
 		EditorCamera m_Camera;
+		std::map<AssetHandle, EditorCamera> m_SceneCameras;
+		// The camera of a state file without per-scene cameras, for the first scene that opens without one.
+		std::optional<EditorCamera> m_UnassignedCamera;
 		ViewportSettings m_Settings;
 		glm::uvec2 m_Size = { 0, 0 };
 		Scope<ViewportRenderer> m_Renderer;

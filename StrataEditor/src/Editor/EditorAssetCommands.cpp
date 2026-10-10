@@ -2,6 +2,8 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/GameExport.h"
+#include "Editor/ProjectSamples.h"
+#include "Editor/ProjectTemplates.h"
 
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Core/FileSystem.h>
@@ -98,19 +100,50 @@ namespace Strata
 				return EditorCommandResult::Ok(DescribeProject(context));
 			} });
 
-		registry.Register({ "project.create", "Creates a project in a directory and opens it.",
-			ObjectSchema({ { "directory", StringSchema("Absolute directory for the project") }, { "name", StringSchema("Project name") } }, { "directory", "name" }),
+		registry.Register({ "project.templates",
+			"The templates project.create and scene.new accept: id, name and what a project made from it contains. \"basic3d\" starts lit (camera, sun, "
+			"procedural sky, ground, post-processing); \"empty\" is the default and has no scene.",
+			ObjectSchema({}),
+			[](EditorContext&, const nlohmann::json&)
+			{
+				nlohmann::json templates = nlohmann::json::array();
+				for (const ProjectTemplate& projectTemplate : ProjectTemplates::GetAll())
+				{
+					templates.push_back({
+						{ "id", projectTemplate.Id },
+						{ "name", projectTemplate.Name },
+						{ "description", projectTemplate.Description },
+						{ "startScene", ProjectTemplates::HasStartScene(projectTemplate.Id) ? nlohmann::json(ProjectTemplates::c_StartScenePath) : nlohmann::json(nullptr) } });
+				}
+				return EditorCommandResult::Ok({ { "templates", std::move(templates) }, { "default", ProjectTemplates::c_Empty } });
+			} });
+
+		registry.Register({ "project.create",
+			"Creates a project in a directory and opens it. With template \"basic3d\" it starts with a saved, lit start scene (Scenes/Main.stscene: Main "
+			"Camera, Sun, Sky, Ground, Post Process); the default \"empty\" has no scene (see project.templates).",
+			ObjectSchema({
+				{ "directory", StringSchema("Absolute directory for the project") },
+				{ "name", StringSchema("Project name") },
+				{ "template", { { "type", "string" }, { "enum", { ProjectTemplates::c_Empty, ProjectTemplates::c_Basic3D } },
+					{ "description", "What the project starts with (default \"empty\"; see project.templates)" } } } }, { "directory", "name" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const std::string directory = arguments.GetString("directory");
 				const std::string name = arguments.GetString("name");
+				const std::string templateId = arguments.GetString("template", std::string(ProjectTemplates::c_Empty));
+				if (arguments.IsValid() && !ProjectTemplates::Find(templateId))
+					arguments.SetError(fmt::format("Unknown template '{}' (templates: {})", templateId, ProjectTemplates::ListIds()));
 				if (!arguments.IsValid())
 					return arguments.Fail();
 				std::string error;
-				if (!context.CreateProject(FileSystem::FromUTF8(directory), name, &error))
+				if (!context.CreateProject(FileSystem::FromUTF8(directory), name, templateId, &error))
 					return EditorCommandResult::Fail(error);
-				return EditorCommandResult::Ok({ { "projectFile", FileSystem::ToUTF8(context.GetProject()->GetProjectFile()) } });
+				const AssetHandle startScene = context.GetProject()->GetConfig().StartScene;
+				return EditorCommandResult::Ok({
+					{ "projectFile", FileSystem::ToUTF8(context.GetProject()->GetProjectFile()) },
+					{ "template", templateId },
+					{ "startScene", startScene.IsValid() ? UUIDToJson(startScene) : nlohmann::json(nullptr) } });
 			} });
 
 		registry.Register({ "project.open", "Opens a project file or the project in a directory (unsaved scene changes are discarded).",
@@ -125,6 +158,66 @@ namespace Strata
 				if (!context.OpenProject(FileSystem::FromUTF8(path), &error))
 					return EditorCommandResult::Fail(error);
 				return EditorCommandResult::Ok();
+			} });
+
+		registry.Register({ "project.close",
+			"Closes the open project (unsaved scene changes are discarded); the editor shows its launcher. Without a project it does nothing.",
+			ObjectSchema({}),
+			[](EditorContext& context, const nlohmann::json&)
+			{
+				const bool hadProject = context.HasProject();
+				context.CloseProject();
+				return EditorCommandResult::Ok({ { "closed", hadProject } });
+			} });
+
+		registry.Register({ "project.samples",
+			"The sample projects that come with the editor (finished games to learn from, e.g. Tetris): id, name, description. Open one with "
+			"project.openSample, which works on a copy.",
+			ObjectSchema({}),
+			[](EditorContext& context, const nlohmann::json&)
+			{
+				std::string error;
+				const std::optional<std::vector<ProjectSample>> samples = ProjectSamples::List(context.GetSamplesDirectory(), &error);
+				if (!samples)
+					return EditorCommandResult::Fail(error);
+				nlohmann::json list = nlohmann::json::array();
+				for (const ProjectSample& sample : *samples)
+					list.push_back({ { "id", sample.Id }, { "name", sample.Name }, { "description", sample.Description } });
+				return EditorCommandResult::Ok({ { "samples", std::move(list) } });
+			} });
+
+		registry.Register({ "project.openSample",
+			"Copies a sample project (project.samples) into a new directory and opens the copy, like project.open (unsaved scene changes are "
+			"discarded); the sample itself stays unchanged. The copy leaves out local editor data (.strata): build its scripts with script.build "
+			"before playing.",
+			ObjectSchema({
+				{ "sample", StringSchema("The sample's id from project.samples, e.g. \"Tetris\"") },
+				{ "directory", StringSchema("Absolute directory for the copy: created, or an existing empty directory") } }, { "sample", "directory" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				CommandArguments arguments(parameters);
+				const std::string id = arguments.GetString("sample");
+				const std::string directory = arguments.GetString("directory");
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				std::string error;
+				const std::optional<std::vector<ProjectSample>> samples = ProjectSamples::List(context.GetSamplesDirectory(), &error);
+				if (!samples)
+					return EditorCommandResult::Fail(error);
+				const auto sample = std::find_if(samples->begin(), samples->end(), [&id](const ProjectSample& candidate) { return candidate.Id == id; });
+				if (sample == samples->end())
+				{
+					std::string known;
+					for (const ProjectSample& candidate : *samples)
+						known += (known.empty() ? "" : ", ") + candidate.Id;
+					return EditorCommandResult::InvalidParameters(fmt::format("There is no sample '{}' (samples: {})", id, known.empty() ? "none" : known));
+				}
+				const std::filesystem::path projectFile = ProjectSamples::Copy(*sample, FileSystem::FromUTF8(directory), &error);
+				if (projectFile.empty())
+					return EditorCommandResult::Fail(error);
+				if (!context.OpenProject(projectFile, &error))
+					return EditorCommandResult::Fail(fmt::format("The sample was copied to '{}' but could not be opened: {}", directory, error));
+				return EditorCommandResult::Ok({ { "sample", sample->Id }, { "projectFile", FileSystem::ToUTF8(projectFile) } });
 			} });
 
 		registry.Register({ "project.setStartScene", "Sets the scene a built game starts with and saves the project file.",

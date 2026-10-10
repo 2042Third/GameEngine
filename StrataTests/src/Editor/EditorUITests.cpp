@@ -1,9 +1,9 @@
 #include <doctest/doctest.h>
 
 #include "Audio/AudioTestUtils.h"
+#include "Editor/HarnessEditor.h"
 #include "Editor/ImGuiHarness.h"
 #include "EditorLayer.h"
-#include "FeatureTest/FeatureTestUtils.h"
 #include "Panels/ConsolePanel.h"
 #include "Panels/ViewportPanel.h"
 #include "TestHelpers.h"
@@ -46,115 +46,6 @@ using namespace Strata::Tests;
 namespace
 {
 
-	// An EditorLayer drawn by an ImGuiHarness through a fake host: no file watchers, no native dialogs, and no automation
-	// unless asked for. The log starts empty, as in a new editor process (the Console reads the log from its start).
-	struct HarnessEditor
-	{
-		Ref<FakeEditorHost::State> Host = CreateRef<FakeEditorHost::State>();
-		ImGuiHarness Harness;
-		Scope<EditorLayer> Layer;
-
-		// iniSettings: imgui.ini contents loaded before the first frame (the editor's saved layout and panel states).
-		explicit HarnessEditor(const ImGuiHarness::Specification& specification = {}, EditorOptions options = {}, const std::string& iniSettings = {},
-			bool automation = false)
-			: Harness(specification)
-		{
-			options.EnableAutomation = automation;
-			options.WatchFiles = false;
-			Host->UIScale = specification.ContentScale;
-			Log::GetBuffer().Clear();
-			Layer = CreateScope<EditorLayer>(options, CreateScope<FakeEditorHost>(Host));
-			Layer->OnAttach();
-			if (!iniSettings.empty())
-				ImGui::LoadIniSettingsFromMemory(iniSettings.c_str(), iniSettings.size());
-		}
-
-		~HarnessEditor()
-		{
-			Layer->OnDetach();
-		}
-
-		HarnessEditor(const HarnessEditor&) = delete;
-		HarnessEditor& operator=(const HarnessEditor&) = delete;
-
-		// Frames of the application: the host's clock and frame count advance with them.
-		void Frames(int count, float seconds = ImGuiHarness::c_DeltaTime)
-		{
-			for (int frame = 0; frame < count; frame++)
-			{
-				Host->Time += seconds;
-				Harness.Frame(*Layer, seconds);
-				Host->FrameCount++;
-			}
-		}
-
-		// A frame that runs `beforeUI` between the layer's update and its UI, as if something happened in the frame then.
-		void FrameWith(const std::function<void()>& beforeUI, float seconds = ImGuiHarness::c_DeltaTime)
-		{
-			Host->Time += seconds;
-			Layer->OnUpdate(Timestep(seconds));
-			beforeUI();
-			Harness.Frame([this]() { Layer->OnImGuiRender(); }, seconds);
-			Host->FrameCount++;
-		}
-
-		bool Click(std::string_view probeKey)
-		{
-			Host->Time += 3.0 * ImGuiHarness::c_DeltaTime;
-			const bool clicked = Harness.ClickItem(probeKey, *Layer);
-			Host->FrameCount += 3;
-			return clicked;
-		}
-
-		// Moves the mouse to a point, presses and releases the left button over three frames.
-		void ClickAt(const ImVec2& position)
-		{
-			Harness.MoveMouse(position);
-			Frames(1);
-			Harness.SetMouseButton(ImGuiMouseButton_Left, true);
-			Frames(1);
-			Harness.SetMouseButton(ImGuiMouseButton_Left, false);
-			Frames(1);
-		}
-
-		// Runs frames (with a little sleep, for work on other threads) until the condition holds or ten seconds passed.
-		bool FramesUntil(const std::function<bool()>& condition)
-		{
-			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-			while (!condition())
-			{
-				if (std::chrono::steady_clock::now() > deadline)
-					return false;
-				Frames(1);
-				std::this_thread::sleep_for(std::chrono::milliseconds(2));
-			}
-			return true;
-		}
-
-		EditorContext& Context() { return Layer->GetContext(); }
-
-		nlohmann::json Run(std::string_view name, const nlohmann::json& parameters = nlohmann::json::object())
-		{
-			const EditorCommandResult result = Layer->GetCommands().Execute(Context(), name, parameters);
-			INFO(std::string(name), ": ", result.Error);
-			REQUIRE(result.Success);
-			return result.Value;
-		}
-
-		ImGuiWindow* FindPanelWindow(const char* id)
-		{
-			return ImGui::FindWindowByName(Layer->GetPanels().GetWindowName(id).c_str());
-		}
-
-		// The color a status pill was drawn in last.
-		ImU32 GetPillColor(std::string_view probeKey)
-		{
-			const std::optional<UI::ItemProbe::Item> pill = UI::ItemProbe::Find(probeKey);
-			REQUIRE_MESSAGE(pill.has_value(), "No ", std::string(probeKey), " in the last frame");
-			return pill->Color;
-		}
-	};
-
 	ImU32 ToColor(const ImVec4& color)
 	{
 		return UI::ToColorU32(color);
@@ -183,13 +74,6 @@ namespace
 			}
 		}
 		return false;
-	}
-
-	EditorOptions WithFeatureProject(const std::string& directoryName)
-	{
-		EditorOptions options;
-		options.ProjectPath = CopyFeatureProject(CreateTemporaryDirectory(directoryName) / "Project");
-		return options;
 	}
 
 	float GetWindowFraction(ImGuiWindow* window, const ImVec2& display, bool width)
@@ -417,9 +301,11 @@ TEST_SUITE("Editor.UI")
 
 	TEST_CASE("Panels close and reopen, and imgui.ini remembers which are open")
 	{
+		// Without a project, past the launcher (Continue without a project): the dock space and its panels.
 		std::string settings;
 		{
 			HarnessEditor editor;
+			editor.Layer->DismissLauncher();
 			editor.Frames(2);
 			EditorPanelRegistry& panels = editor.Layer->GetPanels();
 			CHECK(panels.IsOpen(EditorPanels::c_Console));
@@ -439,6 +325,7 @@ TEST_SUITE("Editor.UI")
 		{
 			// A new session with those settings keeps the Console closed until it is focused (e.g. by the errors pill).
 			HarnessEditor editor({}, {}, settings);
+			editor.Layer->DismissLauncher();
 			editor.Frames(2);
 			EditorPanelRegistry& panels = editor.Layer->GetPanels();
 			CHECK_FALSE(panels.IsOpen(EditorPanels::c_Console));
@@ -457,6 +344,7 @@ TEST_SUITE("Editor.UI")
 			const std::string version = "Version=" + std::to_string(EditorLayer::c_LayoutVersion);
 			outdated.replace(outdated.find(version), version.size(), "Version=1");
 			HarnessEditor editor({}, {}, outdated);
+			editor.Layer->DismissLauncher();
 			editor.Frames(2);
 			CHECK(editor.Layer->GetPanels().IsOpen(EditorPanels::c_Console));
 		}
@@ -594,7 +482,9 @@ TEST_SUITE("Editor.UI")
 
 	TEST_CASE("The status bar counts unread errors and opens the Console")
 	{
+		// The status bar belongs to the editor past the launcher.
 		HarnessEditor editor;
+		editor.Layer->DismissLauncher();
 		editor.Frames(2);
 		CHECK_FALSE(UI::ItemProbe::Find("Status.Errors").has_value());
 		editor.Layer->GetPanels().SetOpen(EditorPanels::c_Console, false);
@@ -622,6 +512,8 @@ TEST_SUITE("Editor.UI")
 		EditorOptions options;
 		options.ProjectPath = CreateTemporaryDirectory("EditorUIStartupError") / "Missing";
 		HarnessEditor editor({}, options);
+		// Without a project the launcher shows (and says why, see Editor.Launcher); the status bar is the editor's.
+		editor.Layer->DismissLauncher();
 		editor.Frames(3);
 		const ConsolePanel* console = editor.Layer->GetPanels().Get<ConsolePanel>(EditorPanels::c_Console);
 		REQUIRE(console);
@@ -642,8 +534,9 @@ TEST_SUITE("Editor.UI")
 	{
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		{
-			// --no-automation: off, as asked.
+			// --no-automation: off, as asked. The status bar is the editor's, not the launcher's.
 			HarnessEditor editor;
+			editor.Layer->DismissLauncher();
 			editor.Frames(2);
 			CHECK(editor.GetPillColor("Status.Automation") == ToColor(colors.TextSecondary));
 		}
@@ -654,6 +547,7 @@ TEST_SUITE("Editor.UI")
 			REQUIRE(FileSystem::WriteText(blocker, "not a directory"));
 			ScopedEnvironmentVariable sessions("STRATA_SESSION_DIR", FileSystem::ToUTF8(blocker / "Sessions"));
 			HarnessEditor editor({}, {}, {}, true);
+			editor.Layer->DismissLauncher();
 			editor.Frames(2);
 			CHECK(editor.GetPillColor("Status.Automation") == ToColor(colors.Error));
 			editor.Layer->GetPanels().SetOpen(EditorPanels::c_Console, false);
@@ -669,6 +563,7 @@ TEST_SUITE("Editor.UI")
 		const std::filesystem::path sessions = CreateTemporaryDirectory("EditorUIAutomationSessions");
 		ScopedEnvironmentVariable sessionOverride("STRATA_SESSION_DIR", FileSystem::ToUTF8(sessions));
 		HarnessEditor editor({}, {}, {}, true);
+		editor.Layer->DismissLauncher(); // The status bar is the editor's, not the launcher's
 		editor.Frames(2);
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		CHECK(editor.GetPillColor("Status.Automation") == ToColor(colors.TextSecondary)); // Listening, no client yet
@@ -882,6 +777,9 @@ TEST_SUITE("Editor.UI")
 		REQUIRE(editor.Context().IsPlaying());
 		CHECK_FALSE(UI::ItemProbe::Find("Viewport.Grid").has_value());
 		CHECK_FALSE(UI::ItemProbe::Find("Viewport.Camera").has_value());
+		// The editor-view settings do not apply to the game's view.
+		CHECK_FALSE(UI::ItemProbe::Find("Viewport.PreviewLighting").has_value());
+		CHECK_FALSE(UI::ItemProbe::Find("Viewport.GameUI").has_value());
 		ViewportSettings& settings = editor.Context().GetViewport().GetSettings();
 		const bool stats = settings.ShowStats;
 		REQUIRE(editor.Click("Viewport.Stats"));

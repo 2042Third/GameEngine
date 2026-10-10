@@ -79,6 +79,8 @@ target_link_libraries(StrataTests PRIVATE Strata StrataScriptCore doctest stb)
 # The editor's UI library brings the editor core; the UI tests draw it headless (src/Editor/ImGuiHarness.h).
 if(TARGET StrataEditorUI)
 	target_link_libraries(StrataTests PRIVATE StrataEditorUI)
+	# The samples the editor offers are copied next to the executables; the tests check that copy.
+	add_dependencies(StrataTests StrataSamples)
 endif()
 target_include_directories(StrataTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 # DOCTEST_CONFIG_NO_POSIX_SIGNALS: CrashGuard owns the fault signals (and the alternate signal stack) of the process.
@@ -196,18 +198,34 @@ add_test(NAME StrataScriptCore.PackageDist
 		-P "${CMAKE_CURRENT_SOURCE_DIR}/PackageProject/BuildPackageProject.cmake")
 set_tests_properties(StrataScriptCore.PackageDist PROPERTIES LABELS "package")
 
-# The real editor, driven by a command script for a few frames: catches startup, UI and shutdown failures.
+# The real editor in a window, driven by a command script: catches startup, UI and shutdown failures.
 if(TARGET StrataEditor)
-	# The script saves viewport captures into the build tree (absolute paths: it runs without a project).
+	# The script creates a project in the build tree first, so the editor (not the launcher) draws its panels and viewport,
+	# and saves viewport captures into the build tree (absolute paths, outside the project). It ends once the script is
+	# done; the frame limit only stops a script that hangs, so the run does not depend on how fast frames are.
+	set(STRATA_SMOKE_PROJECT_DIR "${CMAKE_CURRENT_BINARY_DIR}/SmokeProject")
 	set(STRATA_SMOKE_CAPTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/SmokeCaptures")
 	configure_file("${CMAKE_CURRENT_SOURCE_DIR}/Editor/SmokeCommands.json.in" "${CMAKE_CURRENT_BINARY_DIR}/SmokeCommands.json" @ONLY)
+	add_test(NAME StrataEditor.SmokeClean COMMAND "${CMAKE_COMMAND}" -E rm -rf "${STRATA_SMOKE_PROJECT_DIR}")
+	set_tests_properties(StrataEditor.SmokeClean PROPERTIES FIXTURES_SETUP StrataEditorSmokeClean)
 	add_test(NAME StrataEditor.Smoke
-		COMMAND StrataEditor --no-automation --frames 120 --windowed --commands "${CMAKE_CURRENT_BINARY_DIR}/SmokeCommands.json"
+		COMMAND StrataEditor --no-automation --quit-after-commands --frames 3600 --windowed --commands "${CMAKE_CURRENT_BINARY_DIR}/SmokeCommands.json"
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
-	set_tests_properties(StrataEditor.Smoke PROPERTIES LABELS "gpu" FIXTURES_SETUP StrataEditorSmokeCaptures)
+	set_tests_properties(StrataEditor.Smoke PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataEditorSmokeClean FIXTURES_SETUP StrataEditorSmokeCaptures)
 	# The smoke script's capture shows the scene (grid, floor, crate), not a black or empty image.
 	add_test(NAME StrataEditor.SmokeCaptureCheck COMMAND StrataTests --strata-test-helper=check-image "${STRATA_SMOKE_CAPTURE_DIR}/SmokeViewport.png")
 	set_tests_properties(StrataEditor.SmokeCaptureCheck PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataEditorSmokeCaptures)
+	# Without a project a windowed editor opens into the launcher (and closes cleanly from it).
+	add_test(NAME StrataEditor.LauncherSmoke
+		COMMAND StrataEditor --no-automation --frames 30 --windowed --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/LauncherCommands.json"
+		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
+	set_tests_properties(StrataEditor.LauncherSmoke PROPERTIES LABELS "gpu")
+
+	# The editor executable carries the strata mark as its icon (StrataEditor.rc.in).
+	if(WIN32)
+		add_test(NAME StrataEditor.Icon COMMAND StrataTests --strata-test-helper=check-icon "$<TARGET_FILE:StrataEditor>"
+			"${PROJECT_SOURCE_DIR}/StrataEditor/Resources/Brand/StrataMark.ico")
+	endif()
 
 	# A failing command must fail the process, so scripted runs notice.
 	add_test(NAME StrataEditor.FailingScript
@@ -272,6 +290,12 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 
 	add_test(NAME StrataRuntime.Smoke COMMAND "${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}" --headless --frames 30)
 	set_tests_properties(StrataRuntime.Smoke PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
+	# The exported game's executable (the runtime, renamed) carries the strata mark as its icon (StrataRuntime.rc.in).
+	if(WIN32)
+		add_test(NAME StrataRuntime.Icon COMMAND StrataTests --strata-test-helper=check-icon "${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}"
+			"${PROJECT_SOURCE_DIR}/StrataEditor/Resources/Brand/StrataMark.ico")
+		set_tests_properties(StrataRuntime.Icon PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
+	endif()
 	# Headless games run at 60 frames per second, so 180 frames are three seconds of game time (and of the clock), not a burst.
 	add_test(NAME StrataRuntime.HeadlessPacing
 		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}" "-DARGUMENTS=--headless|--frames|180"

@@ -582,6 +582,42 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		return 0;
 	}
 
+#if defined(ST_PLATFORM_WINDOWS)
+	if (mode == "check-icon")
+	{
+		// <executable> <icon file>: succeeds if the executable's icon (the first RT_GROUP_ICON) holds an image of every size
+		// the .ico file has (StrataEditor/Resources/Brand/StrataMark.ico: the strata mark).
+		if (argc != 4)
+			return 2;
+		std::string error;
+		const std::optional<std::vector<uint32_t>> sizes = Strata::Tests::ReadExecutableIconSizes(Strata::FileSystem::FromUTF8(argv[2]), &error);
+		if (!sizes)
+		{
+			std::fprintf(stderr, "'%s': %s\n", argv[2], error.c_str());
+			return 1;
+		}
+		std::printf("'%s' has an icon with %zu images:", argv[2], sizes->size());
+		for (uint32_t size : *sizes)
+			std::printf(" %u", size);
+		std::printf("\n");
+		const std::optional<std::vector<uint32_t>> expectedSizes = Strata::Tests::ReadIconFileSizes(Strata::FileSystem::FromUTF8(argv[3]), &error);
+		if (!expectedSizes || expectedSizes->empty())
+		{
+			std::fprintf(stderr, "'%s': %s\n", argv[3], expectedSizes ? "no images" : error.c_str());
+			return 1;
+		}
+		for (uint32_t expected : *expectedSizes)
+		{
+			if (std::find(sizes->begin(), sizes->end(), expected) == sizes->end())
+			{
+				std::fprintf(stderr, "The icon has no %u pixel image\n", expected);
+				return 1;
+			}
+		}
+		return 0;
+	}
+#endif
+
 #if defined(ST_PLATFORM_LINUX)
 	if (mode == "rename-when-file-exists" && argc > 2)
 	{
@@ -651,6 +687,8 @@ int main(int argc, char** argv)
 	std::error_code permissionError;
 	std::filesystem::permissions(runtimeDirectory, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace, permissionError);
 	Strata::Platform::SetEnvVar("STRATA_RUNTIME_DIR", Strata::FileSystem::ToUTF8(runtimeDirectory));
+	// Editors the tests start keep their recent projects in the test's directory, never in the user's list.
+	Strata::Platform::SetEnvVar("STRATA_RECENT_PROJECTS", Strata::FileSystem::ToUTF8(runtimeDirectory / "RecentProjects.json"));
 
 	doctest::Context context(argc, argv);
 	const int result = context.run();

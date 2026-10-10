@@ -7,6 +7,7 @@
 #include "Strata/Core/Platform.h"
 #include "Strata/Core/PlatformDetection.h"
 #include "Strata/Core/Process.h"
+#include "Strata/Core/Timer.h"
 #include "TestHelpers.h"
 
 #include <chrono>
@@ -214,6 +215,46 @@ TEST_SUITE("Core.Platform")
 		REQUIRE(after.has_value());
 		CHECK(after->PeakPrivateBytes >= during->PrivateBytes);
 		CHECK(after->PeakWorkingSet >= during->WorkingSet);
+	}
+
+	TEST_CASE("The process uptime counts from the process's creation")
+	{
+		// The engine's clock starts at its first use, after the process was created (loader, static initialization):
+		// the uptime is at least as long (Linux records the creation in clock ticks of 10 ms).
+		const double clock = Time::GetTime();
+		const std::optional<double> uptime = Platform::GetProcessUptime();
+		REQUIRE(uptime.has_value());
+		CHECK(*uptime > 0.0);
+		CHECK(*uptime >= clock - 0.02);
+		CHECK(*uptime < 7.0 * 24.0 * 60.0 * 60.0);
+
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		const std::optional<double> later = Platform::GetProcessUptime();
+		REQUIRE(later.has_value());
+		CHECK(*later - *uptime >= 0.04);
+	}
+
+	TEST_CASE("The home directory is the user's own")
+	{
+		const std::optional<std::filesystem::path> home = Platform::FindHomeDirectory();
+		REQUIRE(home.has_value());
+		CHECK(home->is_absolute());
+		CHECK(FileSystem::IsDirectory(*home));
+	}
+
+	TEST_CASE("Fallback fonts are font files of the system, at most one per group of scripts")
+	{
+		const std::vector<std::filesystem::path> files = Platform::FindFallbackFontFiles();
+		// Han characters and kana, then Hangul where the first lacks it.
+		CHECK(files.size() <= 2);
+		for (const std::filesystem::path& file : files)
+		{
+			CAPTURE(FileSystem::ToUTF8(file));
+			CHECK(file.is_absolute());
+			CHECK(FileSystem::IsRegularFile(file));
+			const std::string extension = FileSystem::ToUTF8(file.extension());
+			CHECK((extension == ".ttc" || extension == ".ttf"));
+		}
 	}
 
 	TEST_CASE("User data directory is created")

@@ -9,7 +9,8 @@ You drive the editor through its commands and write only two kinds of files your
 the project's `Scripts/` folder) and raw source assets you generate outside the project (e.g. a WAV), which `asset.import`
 copies in. Everything else - project, materials, scene, entities, fields, start scene, export - is an editor command.
 Never edit `.stscene`, `.stmat`, `.stproj` or `.meta` files by hand. Command details: `strata-editor-automation`;
-the script SDK: `strata-scripting`. `Samples/Tetris` is a finished example of everything below.
+the script SDK: `strata-scripting`. `Samples/Tetris` is a finished example of everything below; to study it in a running
+editor without touching the sample, open a copy: `project.openSample {"sample": "Tetris", "directory": "<new absolute dir>"}`.
 
 ## 1. An editor
 
@@ -30,8 +31,13 @@ StrataCLI list                       # the commands this build has; check that i
 
 ## 2. Project and plan
 
-`project.create {"directory": "<absolute>", "name": "Tetris"}` writes `Tetris.stproj`, `Assets/`, a `.gitignore` for the
-`.strata/` cache, and `Scripts/` with its `CMakeLists.txt` and an example `Spinner.cpp` (delete it if unused).
+`project.create {"directory": "<absolute>", "name": "Tetris", "template": "basic3d"}` writes `Tetris.stproj`, `Assets/`, a
+`.gitignore` for the `.strata/` cache, and `Scripts/` with its `CMakeLists.txt` and an example `Spinner.cpp` (delete it if
+unused). With the `basic3d` template (`project.templates` lists them) it also saves a lit start scene,
+`Scenes/Main.stscene`, already set as the start scene: "Main Camera" (primary, audio listener), "Sun" (directional light,
+shadows), "Sky" (procedural sky light), "Ground" (a 20 x 20 plane with the dark `Materials/Ground.stmat`, which you can
+restyle with `material.set`) and "Post Process". Keep what fits your game and change or delete the rest
+(`entity.find {"name": "Ground"}` gives the IDs). Without a template the project has no scene.
 
 Design the code for verification before writing it:
 
@@ -76,12 +82,18 @@ and `script.status` (classes, fields, defaults). Patterns that worked:
 
 ## 5. Scene
 
-Build it with `entity.create` (with `components`), `component.set`, `script.add`; then `scene.saveAs {"path":
-"Scenes/Main.stscene"}` and `project.setStartScene`.
+Build it with `entity.create` (with `components`), `component.set`, `script.add`; then `scene.save` (the template's
+start scene), or for a scene of your own `scene.saveAs {"path": "Scenes/Main.stscene"}` and `project.setStartScene`.
 
 - Camera: `{"Camera": {"Primary": true, "PerspectiveFOV": 45}}`; cameras and lights look along their -Z, so a camera at
   `+Z` looking at the origin needs no rotation. Rotations are Euler degrees `[pitch, yaw, roll]`.
-- Light: a `DirectionalLight` (Intensity ~3, pitch -35) plus a `SkyLight` with an `AmbientColor` for fill.
+- Light: a `DirectionalLight` (Intensity ~3, pitch -35) plus a `SkyLight`: `"Source": "Procedural"` for a sky (its sun
+  follows the directional light; `ZenithColor`, `HorizonColor`, `GroundColor`, `SunSize`, `SunIntensity`), or an
+  environment map, or just an `AmbientColor` for fill (`ShowBackground: false` keeps the camera's clear color).
+- Lighting you see in editor-camera captures may not be the game's: a scene without any light (directional, point, spot
+  or sky light) is shown with *preview lighting* (`"previewLighting": true` in the capture result). The game renders it
+  unlit; judge the look from `{"camera": "scene"}` captures. A scene with only point or spot lights shows as the game
+  does: as dark as they leave it.
 - Dark scenes: add a `PostProcess` with `AutoExposure: false` (automatic exposure brightens a dark backdrop to gray).
 - Text: `ScreenSpace: true`, `ScreenAnchor` (0..1, top-left origin), `ScreenOffset` (pixels, +Y down), `FontSize` in
   pixels, and `Alignment` - it defaults to `Center`, so a left-hand HUD needs `"Alignment": "Left"`. World text
@@ -102,6 +114,8 @@ play.stop
 ```
 
 - Look at every capture you take. `pendingAssets` above 0: wait (`editor.wait`) and capture again.
+- Editor-camera captures in edit mode leave the HUD out (`hiddenScreenSpaceTexts`); the scene's camera and play mode show
+  it.
 - Gravity and other timers keep running between your calls (a call takes about 0.1 s): plan sequences and send them in
   one go, set slow timings with `script.setField` while exploring, or `play.pause` the game and advance it with `play.step`:
   input given while paused arrives in the next stepped frame.
@@ -147,6 +161,8 @@ The exported game has no `--help`: unknown arguments are ignored and the game st
 | A tap does nothing | The game is paused: the tap waits for the next `play.step` (or resuming). Or the game reacts to keys held over time: hold longer with `frames` or press/release. |
 | HUD text cut off at the left edge | `Text` alignment defaults to `Center`; set `Alignment: Left`. |
 | Everything looks washed out or gray | Automatic exposure; add `PostProcess` with `AutoExposure: false`. |
+| Lit in captures, dark in the game | The capture used preview lighting (`"previewLighting": true`): add a `DirectionalLight` and a `SkyLight`. |
+| The HUD is missing from a capture | Editor views hide screen-space text: capture with `{"camera": "scene"}` or while playing. |
 | The score differs by a few points between runs | Gravity ticked between commands; make the check deterministic (slow gravity via a field). |
 | `editor.quit` refuses | Unsaved changes: `scene.save` (or `edit.undo` the test's edits), or `{"force": true}`. |
 | Script edits did nothing | Not built: `script.build` (it hot reloads while playing and restarts instances via `OnReload`). |

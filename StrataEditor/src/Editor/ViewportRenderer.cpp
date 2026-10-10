@@ -35,7 +35,16 @@ namespace Strata
 		}
 		view.Camera = context.GetViewport().GetCamera().GetSceneCamera(aspectRatio);
 		view.EditorOverlays = true;
+		view.EditorView = context.GetSceneState() != SceneState::Play;
 		return view;
+	}
+
+	SceneRenderOptions GetViewportRenderOptions(const ViewportView& view, const ViewportSettings& settings)
+	{
+		SceneRenderOptions options;
+		options.PreviewEnvironment = view.EditorView && settings.PreviewLighting;
+		options.DrawScreenSpaceText = !view.EditorView || settings.ShowGameUI;
+		return options;
 	}
 
 	ViewportRenderer::ViewportRenderer(const std::string& debugName)
@@ -52,7 +61,7 @@ namespace Strata
 		if (size.x == 0 || size.y == 0)
 			return false;
 
-		SceneRenderOptions options;
+		SceneRenderOptions options = GetViewportRenderOptions(view, settings);
 		m_DebugDraw.Clear();
 		m_Outlined.clear();
 		options.SelectionColor = settings.SelectionColor;

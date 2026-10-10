@@ -20,6 +20,17 @@ strata_configure_target(Strata)
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${STRATA_SOURCES})
 
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/src/Strata/Core/Version.h.in" "${CMAKE_CURRENT_BINARY_DIR}/Generated/Strata/Core/Version.h" @ONLY)
+# The commit the engine is built from (c_EngineCommit: editor.status, About), read from git at every build: the header is
+# rewritten only when the commit changed, so only its includers recompile after a commit or a checkout.
+find_package(Git QUIET)
+set(STRATA_VERSION_COMMIT_HEADER "${CMAKE_CURRENT_BINARY_DIR}/Generated/Strata/Core/VersionCommit.h")
+add_custom_target(StrataVersionCommit
+	COMMAND "${CMAKE_COMMAND}" "-DGIT_EXECUTABLE=${GIT_EXECUTABLE}" "-DSOURCE_DIR=${PROJECT_SOURCE_DIR}" "-DOUTPUT=${STRATA_VERSION_COMMIT_HEADER}"
+		-P "${PROJECT_SOURCE_DIR}/CMake/StrataVersionCommit.cmake"
+	BYPRODUCTS "${STRATA_VERSION_COMMIT_HEADER}"
+	COMMENT "Reading the git commit of the build"
+	VERBATIM)
+add_dependencies(Strata StrataVersionCommit)
 
 target_include_directories(Strata PUBLIC
 	"${CMAKE_CURRENT_SOURCE_DIR}/src"
@@ -42,6 +53,7 @@ strata_add_shaders(Strata
 		Scene/ShadowMask.frag
 		Scene/LightClusters.comp
 		IBL/EquirectToCube.comp
+		IBL/ProceduralSky.comp
 		IBL/CubeDownsample.comp
 		IBL/Irradiance.comp
 		IBL/Prefilter.comp

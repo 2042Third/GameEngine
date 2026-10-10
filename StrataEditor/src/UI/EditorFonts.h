@@ -35,6 +35,20 @@ namespace Strata::UI
 		static bool Load();
 		// The font in the current context's atlas; null until Load succeeded for that atlas.
 		static ImFont* Get(EditorFont font);
+
+		// Text in scripts the embedded fonts lack (Chinese, Japanese, Korean: project names, paths, logs) comes from the
+		// system's fonts (Platform::FindFallbackFontFiles), merged into the editor's fonts behind their own glyphs.
+		// BeginLoadingFallback asks for them for the current atlas (after Load) and reads the files on an I/O thread once
+		// per process (they are large: tens of megabytes); UpdateFallback, called between frames, merges them into that
+		// atlas once they were read. Glyphs are rasterized only when text needs them. Until then, and on a system without
+		// such fonts, that text shows ImGui's fallback character.
+		static void BeginLoadingFallback();
+		// True when it merged the fallback fonts into the current atlas now.
+		static bool UpdateFallback();
+		// Whether a read of the fallback fonts is under way.
+		static bool IsLoadingFallback();
+		// Whether fallback fonts are merged into the current atlas.
+		static bool HasFallback();
 	};
 
 	// Pushes one of the editor's fonts at a size of the type scale; pair it with ImGui::PopFont(). Before the fonts are

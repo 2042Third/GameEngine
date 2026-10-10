@@ -149,15 +149,31 @@ namespace Strata
 		float OuterConeAngle = 30.0f; // Degrees, half angle: no light outside
 	};
 
-	// Image-based lighting and sky background from an HDR environment map (equirectangular texture).
+	enum class SkyLightSource : uint8_t
+	{
+		EnvironmentMap = 0, // An equirectangular HDR texture
+		Procedural          // A sky gradient with the sun's disk, computed from the colors below and the directional light
+	};
+
+	// Image-based lighting and sky background, from an HDR environment map (equirectangular texture) or a procedural
+	// sky. Both go through the same filtering, so they light the scene the same way.
 	struct SkyLightComponent
 	{
 		AssetHandle EnvironmentMap = UUID::Null();
 		float Intensity = 1.0f;
-		float Rotation = 0.0f; // Degrees around +Y
+		float Rotation = 0.0f; // Degrees around +Y (environment maps only: the procedural sun follows the light)
 		bool ShowBackground = true;
 		float BackgroundBlur = 0.0f; // 0 = sharp, 1 = fully blurred
-		glm::vec3 AmbientColor = { 0.03f, 0.03f, 0.04f }; // Used when no environment map is assigned
+		glm::vec3 AmbientColor = { 0.03f, 0.03f, 0.04f }; // Used when there is no environment (no map assigned)
+		SkyLightSource Source = SkyLightSource::EnvironmentMap;
+		// Procedural sky: linear radiance straight up, at the horizon and below it. The sun's disk sits where the scene's
+		// directional light comes from (45 degrees above the horizon without one), SunSize degrees across, with the light's
+		// color times SunIntensity as its radiance.
+		glm::vec3 ZenithColor = { 0.18f, 0.32f, 0.62f };
+		glm::vec3 HorizonColor = { 0.66f, 0.74f, 0.84f };
+		glm::vec3 GroundColor = { 0.22f, 0.20f, 0.18f };
+		float SunSize = 0.53f;
+		float SunIntensity = 20.0f;
 	};
 
 	enum class TonemapOperator : uint8_t

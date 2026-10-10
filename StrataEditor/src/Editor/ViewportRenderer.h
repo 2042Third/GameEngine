@@ -26,6 +26,10 @@ namespace Strata
 		SceneCamera Camera;
 		bool FromScene = false;      // The scene's primary camera (otherwise the editor camera)
 		bool EditorOverlays = false; // Whether editor overlays and tools belong on this view by default
+		// The editor camera while the game is not playing (editing or simulating): views for working on the scene, where
+		// the viewport settings' preview lighting and hidden game UI apply. Views through the scene's camera and of the
+		// running game show the scene as the game does.
+		bool EditorView = false;
 		std::string Notice;          // Shown over the image, e.g. when the scene has no camera to play from
 	};
 
@@ -40,9 +44,14 @@ namespace Strata
 	// simulating use the editor camera. Nullopt (with an error) only for ViewportCameraSource::Scene without a camera.
 	std::optional<ViewportView> ResolveViewportView(EditorContext& context, ViewportCameraSource source, float aspectRatio, std::string* outError = nullptr);
 
+	// How a view shows the scene beyond the overlays: preview lighting and the game's screen-space text, from the viewport
+	// settings for editor views (ViewportView::EditorView), as the game shows them otherwise.
+	SceneRenderOptions GetViewportRenderOptions(const ViewportView& view, const ViewportSettings& settings);
+
 	// Renders the editor's active scene for the viewport or a capture, with the overlays the viewport settings enable:
 	// the ground grid, the selection outline (selected entities and their descendants) and the light, camera and collider
-	// shapes. Owns a SceneRenderer, so it needs an initialized renderer. Main thread only.
+	// shapes; editor views also get the settings' preview lighting and game UI (GetViewportRenderOptions). Owns a
+	// SceneRenderer, so it needs an initialized renderer. Main thread only.
 	class ViewportRenderer
 	{
 	public:

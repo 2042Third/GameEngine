@@ -360,6 +360,63 @@
 			},
 			{
 				"Components": {
+					"Inactive": {},
+					"Name": {
+						"Name": "Procedural Sky"
+					},
+					"SkyLight": {
+						"AmbientColor": [
+							0.03,
+							0.03,
+							0.04
+						],
+						"BackgroundBlur": 0.1,
+						"EnvironmentMap": "0000000000000000",
+						"GroundColor": [
+							0.15,
+							0.13,
+							0.1
+						],
+						"HorizonColor": [
+							0.7,
+							0.65,
+							0.6
+						],
+						"Intensity": 1.5,
+						"Rotation": 0,
+						"ShowBackground": true,
+						"Source": "Procedural",
+						"SunIntensity": 35,
+						"SunSize": 1.2,
+						"ZenithColor": [
+							0.1,
+							0.25,
+							0.6
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000051"
+			},
+			{
+				"Components": {
 					"BoxCollider": {
 						"HalfExtents": [
 							0.5,

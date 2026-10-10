@@ -83,7 +83,7 @@ namespace Strata
 		m_WindowedHeight = static_cast<int>(specification.Height);
 
 		if (!specification.IconPath.empty())
-			SetIcon(specification.IconPath);
+			SetIconFromFile(specification.IconPath);
 
 		glfwSetWindowUserPointer(m_Window, &m_Data);
 
@@ -346,7 +346,34 @@ namespace Strata
 		glfwMaximizeWindow(m_Window);
 	}
 
-	void GLFWWindow::SetIcon(const std::filesystem::path& iconPath)
+	void GLFWWindow::SetIcon(std::span<const WindowIconImage> images)
+	{
+		// Windows there have no icons of their own: GLFW would report the call as an error.
+		const int platform = glfwGetPlatform();
+		if (platform == GLFW_PLATFORM_COCOA || platform == GLFW_PLATFORM_WAYLAND)
+			return;
+
+		std::vector<GLFWimage> glfwImages;
+		glfwImages.reserve(images.size());
+		for (const WindowIconImage& image : images)
+		{
+			const uint64_t expectedBytes = static_cast<uint64_t>(image.Width) * image.Height * 4;
+			if (image.Width == 0 || image.Height == 0 || image.Width > INT32_MAX || image.Height > INT32_MAX || image.Pixels.size() != expectedBytes)
+			{
+				ST_CORE_WARN("Window icon image {} x {} has {} bytes of pixels, expected {}; it is skipped", image.Width, image.Height, image.Pixels.size(), expectedBytes);
+				continue;
+			}
+			GLFWimage& glfwImage = glfwImages.emplace_back();
+			glfwImage.width = static_cast<int>(image.Width);
+			glfwImage.height = static_cast<int>(image.Height);
+			// GLFW only reads the pixels (it copies them into the platform's icon).
+			glfwImage.pixels = const_cast<unsigned char*>(image.Pixels.data());
+		}
+		if (!glfwImages.empty())
+			glfwSetWindowIcon(m_Window, static_cast<int>(glfwImages.size()), glfwImages.data());
+	}
+
+	void GLFWWindow::SetIconFromFile(const std::filesystem::path& iconPath)
 	{
 		const std::optional<std::vector<uint8_t>> fileData = FileSystem::ReadBytes(iconPath);
 		if (!fileData)
@@ -365,11 +392,9 @@ namespace Strata
 			return;
 		}
 
-		GLFWimage image;
-		image.width = width;
-		image.height = height;
-		image.pixels = pixels;
-		glfwSetWindowIcon(m_Window, 1, &image);
+		const WindowIconImage image { static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+			std::span<const uint8_t>(pixels, static_cast<size_t>(width) * static_cast<size_t>(height) * 4) };
+		SetIcon(std::span<const WindowIconImage>(&image, 1));
 		stbi_image_free(pixels);
 	}
 

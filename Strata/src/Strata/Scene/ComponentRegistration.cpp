@@ -236,13 +236,21 @@ namespace Strata
 		ComponentRegistry::Register<SkyLightComponent>("SkyLight")
 			.DisplayName("Sky Light")
 			.Category("Lighting")
-			.Description("Image-based lighting and sky background from an HDR environment map")
+			.Description("Image-based lighting and sky background from an HDR environment map or a procedural sky")
+			.EnumProperty("Source", &SkyLightComponent::Source, { { "EnvironmentMap", 0 }, { "Procedural", 1 } },
+				{ .Tooltip = "EnvironmentMap: an HDR texture; Procedural: a sky computed from the colors below and the directional light" })
 			.AssetProperty("EnvironmentMap", &SkyLightComponent::EnvironmentMap, AssetType::Texture, { .Tooltip = "Equirectangular HDR texture" })
 			.Property("Intensity", &SkyLightComponent::Intensity, Range(0.0f, c_Unbounded, 0.01f))
-			.Property("Rotation", &SkyLightComponent::Rotation, WithTooltip(Range(-360.0f, 360.0f, 0.5f), "Degrees around +Y"))
+			.Property("Rotation", &SkyLightComponent::Rotation, WithTooltip(Range(-360.0f, 360.0f, 0.5f), "Degrees around +Y (environment maps only)"))
 			.Property("ShowBackground", &SkyLightComponent::ShowBackground)
 			.Property("BackgroundBlur", &SkyLightComponent::BackgroundBlur, Slider(0.0f, 1.0f))
-			.Property("AmbientColor", &SkyLightComponent::AmbientColor, WithTooltip(Color(), "Ambient light when no environment map is set"));
+			.Property("AmbientColor", &SkyLightComponent::AmbientColor, WithTooltip(Color(), "Ambient light while there is no environment (no map set)"))
+			.Property("ZenithColor", &SkyLightComponent::ZenithColor, WithTooltip(Color(), "Procedural sky: color straight up (linear radiance)"))
+			.Property("HorizonColor", &SkyLightComponent::HorizonColor, WithTooltip(Color(), "Procedural sky: color at the horizon (linear radiance)"))
+			.Property("GroundColor", &SkyLightComponent::GroundColor, WithTooltip(Color(), "Procedural sky: color below the horizon (linear radiance)"))
+			.Property("SunSize", &SkyLightComponent::SunSize, WithTooltip(Range(0.0f, 20.0f, 0.01f), "Procedural sky: angular diameter of the sun's disk in degrees (0 hides it)"))
+			.Property("SunIntensity", &SkyLightComponent::SunIntensity,
+				WithTooltip(Range(0.0f, 60000.0f, 0.1f), "Procedural sky: radiance of the sun's disk, times the directional light's color"));
 
 		ComponentRegistry::Register<PostProcessComponent>("PostProcess")
 			.DisplayName("Post Process")

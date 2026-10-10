@@ -55,6 +55,8 @@ strata_embed_file(StrataEditorUI "${STRATA_EDITOR_FONTS_DIR}/Inter-Regular.ttf" 
 strata_embed_file(StrataEditorUI "${STRATA_EDITOR_FONTS_DIR}/Inter-SemiBold.ttf" GetInterSemiBoldFont)
 strata_embed_file(StrataEditorUI "${STRATA_EDITOR_FONTS_DIR}/JetBrainsMono-Regular.ttf" GetJetBrainsMonoFont)
 strata_embed_file(StrataEditorUI "${STRATA_EDITOR_FONTS_DIR}/Lucide.ttf" GetLucideFont)
+# About Strata shows the third-party notices (UI/AboutDialog.cpp).
+strata_embed_file(StrataEditorUI "${PROJECT_SOURCE_DIR}/ThirdPartyNotices.md" GetThirdPartyNotices)
 
 set(STRATA_EDITOR_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/EditorApplication.cpp")
 add_executable(StrataEditor ${STRATA_EDITOR_SOURCES})
@@ -64,7 +66,26 @@ target_link_libraries(StrataEditor PRIVATE StrataEditorUI)
 
 if(WIN32)
 	target_sources(StrataEditor PRIVATE "${PROJECT_SOURCE_DIR}/CMake/Strata.manifest")
+	# The strata mark as the executable's icon, and version information (Explorer, taskbar, Task Manager).
+	set(STRATA_BRAND_ICON "${CMAKE_CURRENT_SOURCE_DIR}/Resources/Brand/StrataMark.ico")
+	configure_file("${CMAKE_CURRENT_SOURCE_DIR}/StrataEditor.rc.in" "${CMAKE_CURRENT_BINARY_DIR}/Generated/StrataEditor.rc" @ONLY)
+	target_sources(StrataEditor PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/Generated/StrataEditor.rc")
 endif()
+
+# The window icon: the strata mark as raw RGBA at every size of c_EditorIconSizes (Tools/GenerateBrandAssets.py), so
+# nothing is decoded at startup. Declared in src/EditorIcon.h.
+foreach(size IN ITEMS 16 20 24 28 32 40 48 56 64)
+	strata_embed_file(StrataEditor "${CMAKE_CURRENT_SOURCE_DIR}/Resources/Brand/StrataMark${size}.rgba" GetStrataMark${size})
+endforeach()
+
+# The sample projects next to the executables, where the editor's launcher offers them (Open Sample copies one into a
+# folder the user picks). Synced at every build, without local editor data (CMake/StrataCopySamples.cmake).
+add_custom_target(StrataSamples
+	COMMAND "${CMAKE_COMMAND}" "-DSOURCE=${PROJECT_SOURCE_DIR}/Samples" "-DDESTINATION=$<TARGET_FILE_DIR:StrataEditor>/Samples"
+		-P "${PROJECT_SOURCE_DIR}/CMake/StrataCopySamples.cmake"
+	COMMENT "Copying the sample projects next to the editor"
+	VERBATIM)
+add_dependencies(StrataEditor StrataSamples)
 
 set_target_properties(StrataEditor PROPERTIES
 	VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")

@@ -5,7 +5,10 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "EditorHost.h"
+#include "UI/AboutDialog.h"
 #include "UI/EditorPanelRegistry.h"
+#include "UI/EditorShell.h"
+#include "UI/ProjectDialogs.h"
 
 #include <Strata.h>
 
@@ -16,6 +19,8 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace Strata
 {
@@ -39,6 +44,10 @@ namespace Strata
 		// Close the editor after this long without a connected automation client (0: never), e.g. a headless editor
 		// started for an MCP server that went away.
 		std::chrono::seconds IdleTimeout = std::chrono::seconds(0);
+		// The user's list of recent projects (EditorContextSpecification::RecentProjectsFile): empty keeps it in memory;
+		// read-only for scripted runs (--frames, --commands), which are not the user's sessions.
+		std::filesystem::path RecentProjectsFile;
+		bool RecentProjectsReadOnly = false;
 		// Watch the project's assets and script module for changes made outside the editor (hot reload). UI tests turn it off:
 		// they need no watcher threads.
 		bool WatchFiles = true;
@@ -55,18 +64,24 @@ namespace Strata
 		constexpr const char* c_Inspector = "Inspector";
 		constexpr const char* c_ContentBrowser = "ContentBrowser";
 		constexpr const char* c_Console = "Console";
+		constexpr const char* c_Welcome = "Welcome"; // The launcher (WelcomePanel)
 	}
 
 	// The editor application layer: owns the editor state (EditorContext), the command registry shared with automation,
 	// and the ImGui interface: the menu bar, the main toolbar, the panels (EditorPanelRegistry), the status bar and the
 	// default layout. It reaches the application only through its EditorHost.
 	//
+	// While no project is open it shows the launcher (WelcomePanel) under a short menu bar instead of the dock space,
+	// until a project opens or the user continues without one (DismissLauncher); closing the project shows it again. The
+	// layer is the panels' EditorShell: it owns the dialogs (New Project, Open Sample, About Strata) and asks about unsaved
+	// changes before anything replaces the scene.
+	//
 	// Idle throttling: a windowed editor redraws at the full rate (vsync) while anything happens - input within the last
 	// c_InputActivitySeconds, a camera or gizmo drag, a running and unpaused scene (or pending steps), loading assets,
 	// pending commands, an automation request within the last c_AutomationActivitySeconds, or a script build - and
 	// otherwise at c_IdleFrameRate (c_UnfocusedIdleFrameRate without the focus). Headless editors, --frames runs and
 	// command scripts are never throttled.
-	class EditorLayer : public Layer
+	class EditorLayer : public Layer, public EditorShell
 	{
 	public:
 		static constexpr uint32_t c_IdleFrameRate = 30;
@@ -103,13 +118,33 @@ namespace Strata
 		static constexpr size_t c_FrameWorkSamples = 60;
 		// How often the status bar looks for a script build to offer while no script module is loaded.
 		static constexpr double c_ScriptBuildCheckSeconds = 1.0;
+		// Whether this frame shows the launcher instead of the dock space.
+		bool IsLauncherShown() const;
+		ProjectDialogs& GetProjectDialogs() { return m_ProjectDialogs; }
+		const AboutDialog& GetAboutDialog() const { return m_AboutDialog; }
+
+		// EditorShell
+		void RequestDiscardChanges(std::function<void()> action) override;
+		void ShowNewProjectDialog(const std::string& templateId) override;
+		void ShowOpenSampleDialog(const std::string& sampleId) override;
+		void ShowOpenProjectDialog() override;
+		void ShowAboutDialog() override;
+		void DismissLauncher() override;
+		EditorEnvironment GetEnvironment() const override;
+		EditorAutomationState GetAutomationState() const override;
 	private:
 		void StartAutomation();
 		void RegisterBuiltinPanels();
+		EditorPanelContext MakePanelContext();
+		// The launcher under a menu bar, filling the window (instead of DrawDockspace).
+		void DrawLauncher(EditorPanelContext& panelContext);
 		void DrawDockspace();
 		// Docks the panels into the default arrangement (first run, a saved layout of another version, View > Reset Layout).
 		void BuildDefaultLayout(unsigned int dockspaceId);
 		void DrawMenuBar();
+		// File > Open Recent: the recent projects (RecentProjects) the launcher lists.
+		void DrawRecentMenu();
+		void DrawSampleMenu();
 		void DrawToolbar();
 		void DrawGizmoControls();
 		void DrawPlayControls();
@@ -134,12 +169,12 @@ namespace Strata
 		// c_ScriptBuildCheckSeconds.
 		bool HasScriptBuild();
 
-		// Runs an action that replaces the edited scene, asking first whether unsaved changes should be saved.
-		void RequestDiscardChanges(std::function<void()> action);
 		bool SaveScene();
 		bool SaveSceneAs();
-		void NewProject();
-		void OpenProject();
+		// Opens a project file (project.open) once unsaved changes are dealt with; failures go to ReportError.
+		void OpenProjectFile(const std::filesystem::path& projectFile);
+		// Logs an error of a UI action, and shows it on the launcher while that is what the user sees.
+		void ReportError(const std::string& message);
 		void DeleteSelection();
 		void DuplicateSelection();
 		// Builds the project's scripts through the command runner (script.build); the build reports to the log.
@@ -156,6 +191,8 @@ namespace Strata
 		// Declared after what it serves, so it stops before they go away.
 		EditorAutomation m_Automation;
 		EditorPanelRegistry m_Panels;
+		ProjectDialogs m_ProjectDialogs;
+		AboutDialog m_AboutDialog;
 
 		std::function<void()> m_PendingDiscardAction;
 		bool m_OpenUnsavedChangesModal = false;
@@ -167,6 +204,15 @@ namespace Strata
 		std::string m_AutomationError; // Why automation did not start (when it was asked for)
 		bool m_HasScriptBuild = false;
 		std::optional<double> m_ScriptBuildCheckTime;
+		bool m_LauncherDismissed = false; // Continue without a project (until a project opens)
+		std::filesystem::path m_CLIExecutable;
+		// The samples File > Open Sample offers (project.samples), read when the menu first opens.
+		std::vector<std::pair<std::string, std::string>> m_SampleMenu;
+		bool m_SampleMenuRead = false;
+
+		// Startup: the process's age once its first frame was on screen (EditorHost::GetProcessUptime).
+		bool m_StartupMeasured = false;
+		std::optional<double> m_StartupSeconds;
 
 		// Idle throttling.
 		double m_LastInputTime = 0.0;

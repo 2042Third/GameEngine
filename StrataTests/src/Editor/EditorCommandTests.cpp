@@ -9,6 +9,7 @@
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
+#include <Strata/Core/Version.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/Material.h>
 #include <Strata/Renderer/Mesh.h>
@@ -80,6 +81,10 @@ TEST_SUITE("Editor.Commands")
 		CommandHarness harness;
 		nlohmann::json status = harness.Run("editor.status");
 		CHECK_FALSE(status["engineVersion"].get<std::string>().empty());
+		// The commit the build was configured from: a short hash in a git checkout.
+		const std::string commit = status["engineCommit"].get<std::string>();
+		CHECK(commit == c_EngineCommit);
+		CHECK((commit == "unknown" || (commit.size() == 12 && commit.find_first_not_of("0123456789abcdef") == std::string::npos)));
 		CHECK_FALSE(status["platform"].get<std::string>().empty());
 		CHECK(status["project"]["open"] == false);
 		CHECK(status["scene"]["modified"] == false);

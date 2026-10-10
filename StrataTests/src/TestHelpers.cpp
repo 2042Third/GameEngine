@@ -1,5 +1,6 @@
 #include "TestHelpers.h"
 
+#include "Strata/Core/FileSystem.h"
 #include "Strata/Core/UUID.h"
 
 #include <stb_image_write.h>
@@ -33,6 +34,22 @@ namespace Strata::Tests
 		std::scoped_lock<std::mutex> lock(s_TemporaryDirectoriesMutex);
 		s_TemporaryDirectories.push_back(directory);
 		return directory;
+	}
+
+	std::filesystem::path CopySampleProject(const std::string& name, std::string* outError)
+	{
+		const std::filesystem::path copy = CreateTemporaryDirectory("Sample" + name) / FileSystem::FromUTF8(name);
+		if (!FileSystem::CopyDirectory(FileSystem::FromUTF8(STRATA_SOURCE_DIR) / "Samples" / FileSystem::FromUTF8(name), copy, outError))
+			return {};
+		// Only the sample's committed files: no editor state that opening it elsewhere may have left next to it.
+		const std::filesystem::path editorState = copy / ".strata";
+		if (FileSystem::Exists(editorState) && !FileSystem::Remove(editorState))
+		{
+			if (outError)
+				*outError = "the copy's .strata directory could not be removed";
+			return {};
+		}
+		return copy;
 	}
 
 	std::vector<uint8_t> CreateSineWav(float durationSeconds, uint32_t sampleRate, uint16_t channels, float frequency, float silentSeconds, float amplitude)
@@ -104,6 +121,33 @@ namespace Strata::Tests
 		return EncodePNG(width, height, pixels);
 	}
 
+	std::optional<std::vector<uint32_t>> ReadIconFileSizes(const std::filesystem::path& iconFile, std::string* outError)
+	{
+		auto fail = [outError](std::string message) -> std::optional<std::vector<uint32_t>>
+		{
+			if (outError)
+				*outError = std::move(message);
+			return std::nullopt;
+		};
+		const std::optional<std::vector<uint8_t>> data = FileSystem::ReadBytes(iconFile);
+		if (!data)
+			return fail("it cannot be read");
+		// ICONDIR: reserved, type (1: icon), count (little-endian WORDs), then 16-byte entries starting with the width.
+		const auto read16 = [&data](size_t offset) { return static_cast<uint32_t>((*data)[offset] | ((*data)[offset + 1] << 8)); };
+		if (data->size() < 6 || read16(0) != 0 || read16(2) != 1)
+			return fail("it is not an icon file");
+		const uint32_t count = read16(4);
+		if (data->size() < 6 + static_cast<size_t>(count) * 16)
+			return fail("its directory is cut off");
+		std::vector<uint32_t> sizes;
+		for (uint32_t index = 0; index < count; index++)
+		{
+			const uint8_t width = (*data)[6 + static_cast<size_t>(index) * 16];
+			sizes.push_back(width == 0 ? 256u : width);
+		}
+		return sizes;
+	}
+
 #if defined(ST_PLATFORM_WINDOWS)
 	bool CreateJunction(const std::filesystem::path& link, const std::filesystem::path& target)
 	{
@@ -140,6 +184,67 @@ namespace Strata::Tests
 		const BOOL created = DeviceIoControl(handle, FSCTL_SET_REPARSE_POINT, buffer.data(), static_cast<DWORD>(buffer.size()), nullptr, 0, &returned, nullptr);
 		CloseHandle(handle);
 		return created != FALSE;
+	}
+
+	std::optional<std::vector<uint32_t>> ReadExecutableIconSizes(const std::filesystem::path& executable, std::string* outError)
+	{
+		auto fail = [outError](std::string message) -> std::optional<std::vector<uint32_t>>
+		{
+			if (outError)
+				*outError = std::move(message);
+			return std::nullopt;
+		};
+		// As a data file: its resources are readable, nothing of it runs.
+		HMODULE module = LoadLibraryExW(executable.c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+		if (!module)
+			return fail("it cannot be loaded as a data file (error " + std::to_string(GetLastError()) + ")");
+
+		// The first icon group, which Explorer shows for the executable.
+		struct FirstGroup
+		{
+			bool Found = false;
+			std::wstring Name;
+			WORD Id = 0;
+		} group;
+		EnumResourceNamesW(module, MAKEINTRESOURCEW(14) /* RT_GROUP_ICON */, [](HMODULE, LPCWSTR, LPWSTR name, LONG_PTR parameter) -> BOOL
+		{
+			FirstGroup& first = *reinterpret_cast<FirstGroup*>(parameter);
+			first.Found = true;
+			if (IS_INTRESOURCE(name))
+				first.Id = static_cast<WORD>(reinterpret_cast<ULONG_PTR>(name));
+			else
+				first.Name = name;
+			return FALSE; // Stop after the first one
+		}, reinterpret_cast<LONG_PTR>(&group));
+		std::optional<std::vector<uint32_t>> sizes;
+		if (group.Found)
+		{
+			HRSRC resource = FindResourceW(module, group.Name.empty() ? MAKEINTRESOURCEW(group.Id) : group.Name.c_str(), MAKEINTRESOURCEW(14));
+			HGLOBAL loaded = resource ? LoadResource(module, resource) : nullptr;
+			const uint8_t* data = loaded ? static_cast<const uint8_t*>(LockResource(loaded)) : nullptr;
+			const DWORD size = resource ? SizeofResource(module, resource) : 0;
+			// GRPICONDIR: reserved, type (1: icon), count (WORD each), then 14-byte entries starting with the width.
+			if (data && size >= 6)
+			{
+				WORD count = 0;
+				std::memcpy(&count, data + 4, sizeof(count));
+				if (size >= 6 + static_cast<DWORD>(count) * 14)
+				{
+					sizes.emplace();
+					for (WORD index = 0; index < count; index++)
+					{
+						const uint8_t width = data[6 + index * 14];
+						sizes->push_back(width == 0 ? 256u : width);
+					}
+				}
+			}
+		}
+		FreeLibrary(module);
+		if (!group.Found)
+			return fail("it has no icon group (RT_GROUP_ICON)");
+		if (!sizes)
+			return fail("its icon group cannot be read");
+		return sizes;
 	}
 #endif
 

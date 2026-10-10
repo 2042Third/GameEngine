@@ -1,6 +1,7 @@
 #include "Editor/CommandUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/ProjectTemplates.h"
 
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Reflection/ComponentRegistry.h>
@@ -156,15 +157,25 @@ namespace Strata
 				return EditorCommandResult::Ok({ { "entities", std::move(entities) } });
 			} });
 
-		registry.Register({ "scene.new", "Replaces the edited scene with an empty one (unsaved changes are discarded).",
-			ObjectSchema({ { "name", StringSchema("Scene name") } }),
+		registry.Register({ "scene.new",
+			"Replaces the edited scene with a new, unsaved one (unsaved changes are discarded): empty by default, or with a template's content, e.g. "
+			"\"basic3d\" (a lit start: camera, sun, procedural sky, ground, post-processing; the editor camera then looks through the scene's camera; "
+			"the ground's material Materials/Ground.stmat is added to a project that lacks it). Save it with scene.saveAs.",
+			ObjectSchema({
+				{ "name", StringSchema("Scene name") },
+				{ "template", { { "type", "string" }, { "enum", { ProjectTemplates::c_Empty, ProjectTemplates::c_Basic3D } },
+					{ "description", "What the scene starts with (default \"empty\"; see project.templates)" } } } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const std::string name = arguments.GetString("name", "Untitled");
+				const std::string templateId = arguments.GetString("template", std::string(ProjectTemplates::c_Empty));
+				if (arguments.IsValid() && !ProjectTemplates::Find(templateId))
+					arguments.SetError(fmt::format("Unknown template '{}' (templates: {})", templateId, ProjectTemplates::ListIds()));
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				context.NewScene(name);
+				if (!context.NewScene(name, templateId))
+					return EditorCommandResult::Fail(fmt::format("The template '{}' could not be applied", templateId));
 				return EditorCommandResult::Ok();
 			} });
 

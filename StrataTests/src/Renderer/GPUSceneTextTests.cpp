@@ -226,6 +226,58 @@ TEST_SUITE("GPU.SceneRenderer.Text")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Screen-space text can be left out while world-space text stays")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		TextComponent& hud = AddText(scene, "SCORE", 16.0f, "HUD");
+		hud.ScreenAnchor = glm::vec2(0.0f, 0.0f);
+		hud.Alignment = TextAlignment::Left;
+		TextComponent& sign = AddText(scene, "SIGN", 0.3f, "Sign");
+		sign.ScreenSpace = false;
+		sign.Color = glm::vec4(0.0f, 1.0f, 0.0f, 1.0f);
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 0.0f, 3.0f), glm::vec3(0.0f), static_cast<float>(c_Width) / static_cast<float>(c_Height));
+		const glm::u8vec4 black(0, 0, 0, 255);
+
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Width, c_Height);
+		auto render = [&](const SceneRenderOptions& options)
+		{
+			REQUIRE(renderer.Render(scene, camera, nullptr, options));
+			ReadbackImage image;
+			REQUIRE(Renderer::ReadTexture(renderer.GetOutputTexture(), image));
+			return image;
+		};
+		const ReadbackImage both = render({});
+		CHECK(renderer.GetStats().Texts == 2);
+		CHECK(renderer.GetStats().ScreenSpaceTexts == 1);
+		CHECK(renderer.GetStats().HiddenScreenSpaceTexts == 0);
+
+		SceneRenderOptions withoutHUD;
+		withoutHUD.DrawScreenSpaceText = false;
+		const ReadbackImage worldOnly = render(withoutHUD);
+		CHECK(renderer.GetStats().Texts == 1);
+		CHECK(renderer.GetStats().ScreenSpaceTexts == 0);
+		CHECK(renderer.GetStats().HiddenScreenSpaceTexts == 1);
+		// The HUD in the top-left corner is gone; the sign in the middle is unchanged.
+		const Coverage all = MeasureCoverage(both, black);
+		const Coverage world = MeasureCoverage(worldOnly, black);
+		CHECK(world.Pixels > 20);
+		CHECK(world.Pixels < all.Pixels);
+		CHECK(world.Min.y > 20);
+		CHECK(std::abs(world.Centroid.x - 64.0f) <= 3.0f);
+
+		// Without any world-space text nothing is drawn at all.
+		sign.Text.clear();
+		const ReadbackImage none = render(withoutHUD);
+		CHECK(renderer.GetStats().Texts == 0);
+		CHECK(MeasureCoverage(none, black).Pixels == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Text uses its font asset, the default font meanwhile, and renders into external framebuffers")
 	{
 		GPUContext gpu;

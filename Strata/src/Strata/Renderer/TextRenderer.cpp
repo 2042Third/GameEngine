@@ -104,7 +104,7 @@ namespace Strata
 			ranges.push_back(DrawRange { &atlas, firstVertex, vertexCount });
 	}
 
-	bool TextRenderer::Prepare(Scene& scene, const glm::uvec2& viewportSize, nvrhi::ICommandList* commandList, TextRenderStats& outStats)
+	bool TextRenderer::Prepare(Scene& scene, const glm::uvec2& viewportSize, bool drawScreenSpace, nvrhi::ICommandList* commandList, TextRenderStats& outStats)
 	{
 		m_Vertices.clear();
 		m_WorldRanges.clear();
@@ -123,6 +123,11 @@ namespace Strata
 		{
 			if (!world.ActiveInHierarchy || text.Text.empty() || !(text.FontSize > 0.0f) || !std::isfinite(text.FontSize) || !(text.Color.a > 0.0f))
 				continue;
+			if (text.ScreenSpace && !drawScreenSpace)
+			{
+				outStats.HiddenScreenSpaceTexts++;
+				continue;
+			}
 
 			// The default font stands in while the text's own font loads (or when it cannot be loaded).
 			Ref<Font> font;
@@ -161,6 +166,8 @@ namespace Strata
 			}
 			AppendQuads(*atlas, transform, text.Color, text.ScreenSpace);
 			outStats.Texts++;
+			if (text.ScreenSpace)
+				outStats.ScreenSpaceTexts++;
 			outStats.Glyphs += static_cast<uint32_t>(m_Layout.Quads.size());
 		}
 		outStats.RasterizedGlyphs += c_FrameRasterBudget.Glyphs - budget.Glyphs;

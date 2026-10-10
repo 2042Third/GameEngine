@@ -25,6 +25,7 @@
 *.flac binary
 *.ico binary
 *.icns binary
+*.rgba binary
 *.stpak binary
 *.stmesh binary
 *.sttex binary

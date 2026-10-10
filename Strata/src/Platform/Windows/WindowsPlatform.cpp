@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <climits>
 #include <cstdio>
+#include <initializer_list>
 
 namespace Strata
 {
@@ -231,6 +232,46 @@ namespace Strata
 		return directory;
 	}
 
+	std::optional<std::filesystem::path> Platform::FindHomeDirectory()
+	{
+		// The path must be freed even when the call fails.
+		PWSTR knownFolder = nullptr;
+		const HRESULT result = SHGetKnownFolderPath(FOLDERID_Profile, 0, nullptr, &knownFolder);
+		std::filesystem::path profile = SUCCEEDED(result) && knownFolder ? std::filesystem::path(knownFolder) : std::filesystem::path();
+		CoTaskMemFree(knownFolder);
+		if (profile.empty() || !profile.is_absolute())
+			return std::nullopt;
+		return profile;
+	}
+
+	std::vector<std::filesystem::path> Platform::FindFallbackFontFiles()
+	{
+		// The path must be freed even when the call fails.
+		PWSTR knownFolder = nullptr;
+		const HRESULT result = SHGetKnownFolderPath(FOLDERID_Fonts, 0, nullptr, &knownFolder);
+		const std::filesystem::path fonts = SUCCEEDED(result) && knownFolder ? std::filesystem::path(knownFolder) : std::filesystem::path();
+		CoTaskMemFree(knownFolder);
+		std::vector<std::filesystem::path> files;
+		if (fonts.empty())
+			return files;
+		// The first of the candidates that exists.
+		const auto addFirst = [&files, &fonts](std::initializer_list<const wchar_t*> candidates)
+		{
+			for (const wchar_t* name : candidates)
+			{
+				if (FileSystem::IsRegularFile(fonts / name))
+				{
+					files.push_back(fonts / name);
+					return;
+				}
+			}
+		};
+		// Han characters and kana (Simplified Chinese first, which covers the most), then Hangul, which those fonts lack.
+		addFirst({ L"msyh.ttc", L"msjh.ttc", L"YuGothM.ttc", L"meiryo.ttc", L"simsun.ttc" });
+		addFirst({ L"malgun.ttf", L"gulim.ttc" });
+		return files;
+	}
+
 	std::filesystem::path Platform::GetUserRuntimeDirectory(std::string_view applicationName)
 	{
 		// An explicit location (tests, sandboxes) replaces the default; it must pass the same checks.
@@ -368,6 +409,24 @@ namespace Strata
 		if (!GetProcessTimes(process, &creation, &exit, &kernel, &user))
 			return std::nullopt;
 		return (static_cast<uint64_t>(creation.dwHighDateTime) << 32) | creation.dwLowDateTime;
+	}
+
+	std::optional<double> Platform::GetProcessUptime()
+	{
+		FILETIME creation = {};
+		FILETIME exit = {};
+		FILETIME kernel = {};
+		FILETIME user = {};
+		if (!GetProcessTimes(GetCurrentProcess(), &creation, &exit, &kernel, &user))
+			return std::nullopt;
+		// Both in 100 ns intervals of the system time.
+		FILETIME now = {};
+		GetSystemTimePreciseAsFileTime(&now);
+		const uint64_t created = (static_cast<uint64_t>(creation.dwHighDateTime) << 32) | creation.dwLowDateTime;
+		const uint64_t current = (static_cast<uint64_t>(now.dwHighDateTime) << 32) | now.dwLowDateTime;
+		if (current < created)
+			return std::nullopt;
+		return static_cast<double>(current - created) * 1e-7;
 	}
 
 	bool Platform::GenerateSecureRandom(std::span<uint8_t> buffer)

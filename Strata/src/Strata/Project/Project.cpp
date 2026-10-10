@@ -87,22 +87,22 @@ namespace Strata
 			return true;
 		}
 
-		bool IsValidProjectName(std::string_view name)
-		{
-			if (name.empty() || name.size() > 128 || name.front() == ' ' || name.back() == ' ' || name.back() == '.' || IsReservedFileName(name)
-				|| HasControlCharacters(name))
-			{
-				return false;
-			}
-			for (char character : name)
-			{
-				const auto value = static_cast<unsigned char>(character);
-				if (value < 0x20 || std::string_view("<>:\"/\\|?*").find(character) != std::string_view::npos)
-					return false;
-			}
-			return true;
-		}
+	}
 
+	bool Project::IsValidName(std::string_view name)
+	{
+		if (name.empty() || name.size() > 128 || name.front() == ' ' || name.back() == ' ' || name.back() == '.' || IsReservedFileName(name)
+			|| HasControlCharacters(name))
+		{
+			return false;
+		}
+		for (char character : name)
+		{
+			const auto value = static_cast<unsigned char>(character);
+			if (value < 0x20 || std::string_view("<>:\"/\\|?*").find(character) != std::string_view::npos)
+				return false;
+		}
+		return true;
 	}
 
 	Ref<Project> Project::Create(const std::filesystem::path& directory, const std::string& name, std::string* outError)
@@ -114,7 +114,7 @@ namespace Strata
 			return nullptr;
 		};
 
-		if (!IsValidProjectName(name))
+		if (!IsValidName(name))
 			return fail(fmt::format("'{}' is not a valid project name (it becomes a file name)", name));
 
 		std::error_code error;

@@ -13,6 +13,10 @@ target_link_libraries(StrataRuntime PRIVATE Strata)
 
 if(WIN32)
 	target_sources(StrataRuntime PRIVATE "${PROJECT_SOURCE_DIR}/CMake/Strata.manifest")
+	# The strata mark as the executable's icon (exported games carry it), and version information.
+	set(STRATA_BRAND_ICON "${PROJECT_SOURCE_DIR}/StrataEditor/Resources/Brand/StrataMark.ico")
+	configure_file("${CMAKE_CURRENT_SOURCE_DIR}/StrataRuntime.rc.in" "${CMAKE_CURRENT_BINARY_DIR}/Generated/StrataRuntime.rc" @ONLY)
+	target_sources(StrataRuntime PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/Generated/StrataRuntime.rc")
 endif()
 
 # Exported games ship the third-party notices next to the executable; the export copies them from here.

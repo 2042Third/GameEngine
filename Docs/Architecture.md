@@ -42,7 +42,11 @@ graph TD
 ```
 
 Each target is defined in the `CMakeLists.txt` of its directory; script modules by `strata_add_script_module()` in
-`StrataScriptCore/CMake/StrataScriptModule.cmake`.
+`StrataScriptCore/CMake/StrataScriptModule.cmake`. The brand assets (the strata mark as PNGs, raw RGBA and `.ico`, in
+`StrataEditor/Resources/Brand/`) are drawn by `Tools/GenerateBrandAssets.py` and committed; `Core/Version.h` (from
+`Version.h.in`) carries the version and, through `Core/VersionCommit.h`, the git commit of the build (`c_EngineCommit`),
+which the `StrataVersionCommit` target reads at every build (`CMake/StrataVersionCommit.cmake`; the header changes only
+when the commit does).
 
 | Target | Kind | What it is |
 | --- | --- | --- |
@@ -50,8 +54,8 @@ Each target is defined in the `CMakeLists.txt` of its directory; script modules 
 | `StrataScriptCore` | interface library | Script C ABI and header-only C++ SDK; links glm only (`StrataScriptCore/`). |
 | `StrataEditorCore` | static library | The editor without UI (`StrataEditor/src/Editor/`). |
 | `StrataEditorUI` | static library | The ImGui interface on the core: `EditorLayer`, panels, widget kit, theme, embedded fonts; links `nfd` (`StrataEditor/src/UI/`, `Panels/`, `EditorLayer.*`). |
-| `StrataEditor` | executable | Runs the UI: `EditorApplication` (options, theme and fonts, `EditorHost`) (`StrataEditor/src/EditorApplication.cpp`). |
-| `StrataRuntime` | executable | Plays exported games (`StrataRuntime/src/RuntimeApplication.cpp`). |
+| `StrataEditor` | executable | Runs the UI: `EditorApplication` (options, theme and fonts, `EditorHost`) (`StrataEditor/src/EditorApplication.cpp`). Embeds the window icon (`EditorIcon.h`); on Windows `StrataEditor.rc.in` adds the `.ico` and version information. |
+| `StrataRuntime` | executable | Plays exported games (`StrataRuntime/src/RuntimeApplication.cpp`); on Windows `StrataRuntime.rc.in` gives it (and every exported game) the `.ico`. |
 | `StrataCLILib`, `StrataCLI` | static library, executable | Automation client and MCP server (`StrataCLI/src/`). |
 | `StrataTests` | executable | doctest suites; builds the test script modules as dependencies (`StrataTests/`). |
 | script modules | `MODULE` libraries | Game code: the tests' modules and every game project's `Scripts/`. |
@@ -90,9 +94,10 @@ Applications built on `Application` (editor, runtime) get `main` from `Core/Entr
 
 **Core** (`Core/`). `Application` owns the window, the graphics device, the layer stack and the main-thread queue
 and runs the frame loop; `Layer`/`LayerStack` hold the client's behavior; `Window` is implemented by
-`Platform/GLFW/GLFWWindow`. Services: `Log` (spdlog; `LogBuffer` backs the editor console and `log.read`), `Assert`,
+`Platform/GLFW/GLFWWindow` (`SetIcon` takes RGBA images of several sizes; macOS and Wayland windows have no icon of
+their own and ignore it). Services: `Log` (spdlog; `LogBuffer` backs the editor console and `log.read`), `Assert`,
 `JobSystem`, `FileSystem` (UTF-8 paths), `FileWatcher`, `FileLock`, `Platform` (OS services, private directories,
-process memory with peaks: `GetProcessMemory`),
+process memory with peaks: `GetProcessMemory`, process uptime: `GetProcessUptime`),
 `Process` (child processes), `DynamicLibrary`, `CrashGuard`, `UUID`, `Crypto` (SHA-256, peer authentication), `Base64`,
 `CommandLine`, `Timer`/`FramePacer`, `JsonUtils` (exception-free JSON reads), `SequenceLock` (lock-free hand-off to the
 audio thread) and `Profiling` (Tracy with `STRATA_ENABLE_TRACY`).
@@ -147,7 +152,10 @@ holds the process-wide services: the device, `ShaderLibrary` (SPIR-V compiled fr
 build time and embedded, `CMake/StrataShaders.cmake`), samplers, fallback textures, `BindlessTextureTable`,
 `StagingTexturePool` (staging memory for texture uploads, reused) and the blocking `ReadTexture`. `SceneRenderer` draws
 a scene (light clustering, shadow cascades, depth/normal/entity-ID prepass, GTAO, forward PBR, sky, transparents,
-exposure, bloom, tone mapping, FXAA, then overlays and text). Assets:
+exposure, bloom, tone mapping, FXAA, then overlays and text). Its image-based lighting comes from the sky light's
+environment map or its procedural sky (`IBL/ProceduralSky.comp` writes mip 0 of the environment cube, then the shared
+filtering chain runs), computed again only when the source or the procedural parameters change; editor views can ask
+for preview lighting and leave out screen-space text (`SceneRenderOptions`). Assets:
 `Mesh`, `Material`, `Texture`, `Font`; procedural primitives come from `MeshFactory`. Also `TextRenderer`/`FontAtlas`,
 `DebugDraw`/`SceneGizmos`, `TextureReadback` (non-blocking GPU readback) and `ImageWriter` (PNG). Conventions and
 rules: AGENTS.md, "Architecture rules" and "Rendering".
@@ -714,33 +722,60 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
 
 - **UI** (`StrataEditorUI`). `EditorLayer` (`StrataEditor/src/EditorLayer.h`) reaches the application only through
   `EditorHost` (close, exit code, frame count, time, window title, size and focus, UI scale, frame rate cap, the last
-  frame's work time, screenshots), which `EditorApplication.cpp` implements on `Application` and the UI tests fake. Each
-  frame it draws the dock space host (menu bar, the main toolbar under it, the dock space) and the status bar, then the
-  panels through `EditorPanelRegistry` (`UI/EditorPanelRegistry.h`), which begins each open panel's window (`###<id>`
-  names, so docking and settings survive title changes), asks the panel for window options, calls `OnImGuiRender` while
-  it is visible and `OnHidden` otherwise, and saves which panels are open with the layout version in imgui.ini
-  (`StrataPanels`); a saved layout of another version is replaced by the default one (`EditorLayer::c_LayoutVersion`).
-  The look comes from `UI/Theme` (the Bedrock palette and its meanings; `ApplyTheme` is the `ImGuiLayer` style
-  callback), `UI/EditorFonts` (Inter, Inter SemiBold and JetBrains Mono embedded with `strata_embed_file`, Lucide's
-  icons merged into the Inter fonts' Private Use Area) and the widget kit (`UI/Widgets`), whose widgets record their
-  rectangles in `UI/ItemProbe`. Rules for UI code: AGENTS.md, "Editor UI rules". **Idle throttling**: after drawing,
-  `EditorLayer::UpdateFrameRate` sets the cap to 0 (full rate) while anything happens and to 30 (10 unfocused) frames
-  per second otherwise; headless, `--frames` and command-script runs are never throttled. The frame time shown (status
-  bar, viewport stats, `editor.status`) is `Application::GetLastFrameWorkTime` averaged over 60 frames: a frame's CPU
-  time without the waits for the GPU, the display and the pacer, which panels get in `EditorPanelContext::Frame`. **UI tests**
-  (`StrataTests/src/Editor/ImGuiHarness.h`) create an ImGui context with the editor's fonts and theme (styled by an
-  unattached `ImGuiLayer`), honor ImGui's texture requests without a renderer, inject input, and find kit widgets
-  through the probe; the `Editor.UI` suites draw the real `EditorLayer` this way, with a `FakeEditorHost`.
+  frame's work time, screenshots, process uptime, GPU description), which `EditorApplication.cpp` implements on
+  `Application` and the UI tests fake. Each frame it draws either the **launcher** or the editor. While no project is
+  open (and the user did not choose Continue without a project) it draws a window with a short menu bar (File, Help) and
+  the launcher panel
+  (`Panels/WelcomePanel`, registered with `EditorPanelPlacement::Launcher` and drawn by `EditorPanelRegistry::DrawLauncher`
+  instead of the docked panels): a hero band with the strata, New Project, Open Project and Open Sample, the recent
+  projects as cards, template and sample cards, "Connect an AI agent" (the `claude mcp add` line for `StrataCLI mcp`
+  next to the editor, and the automation server's state) and a footer with the version, commit, GPU and the startup time
+  (process creation to the first frame on screen, `Platform::GetProcessUptime`). Otherwise it draws the
+  dock space host (menu bar, the main toolbar under it, the dock space) and the status bar, then the panels through
+  `EditorPanelRegistry` (`UI/EditorPanelRegistry.h`), which begins each open panel's window (`###<id>` names, so docking
+  and settings survive title changes), asks the panel for window options, calls `OnImGuiRender` while it is visible
+  and `OnHidden` otherwise, and saves which panels are open with the layout version in imgui.ini (`StrataPanels`); a
+  saved layout of another version is replaced by the default one (`EditorLayer::c_LayoutVersion`). Over either, the
+  layer draws the dialogs it owns: New Project and Open Sample (`UI/ProjectDialogs`: template cards from
+  `project.templates`, name and location fields, then `project.create` or `project.openSample`; the location they last
+  used is kept in imgui.ini, `StrataLauncher`, first `<home>/StrataProjects`), About Strata (`UI/AboutDialog`: build,
+  GPU, startup time, and `ThirdPartyNotices.md` compiled in and shown through `UI/Markdown`) and the unsaved-changes
+  question. Panels reach them through `EditorPanelContext::Shell` (`UI/EditorShell.h`, implemented by `EditorLayer`).
+  A `.stproj` file dropped on the window opens its project. The look comes from
+  `UI/Theme` (the Bedrock palette and its meanings; `ApplyTheme` is the `ImGuiLayer` style callback), `UI/EditorFonts`
+  (Inter, Inter SemiBold and JetBrains Mono embedded with `strata_embed_file`, Lucide's icons merged into the Inter
+  fonts' Private Use Area, and behind them the system's fonts for Chinese, Japanese and Korean, read on an I/O thread)
+  and the widget kit (`UI/Widgets`), whose widgets record their rectangles in `UI/ItemProbe`.
+  Rules for UI code: AGENTS.md, "Editor UI rules". **Idle throttling**: after drawing, `EditorLayer::UpdateFrameRate`
+  sets the cap to 0 (full rate) while anything happens and to 30 (10 unfocused) frames per second otherwise; headless,
+  `--frames` and command-script runs are never throttled. The frame time shown (status bar, viewport stats,
+  `editor.status`) is `Application::GetLastFrameWorkTime` averaged over 60 frames: a frame's CPU time without the waits
+  for the GPU, the display and the pacer, which panels get in `EditorPanelContext::Frame`. **UI tests** (`StrataTests/src/Editor/ImGuiHarness.h`) create
+  an ImGui context with the editor's fonts and theme (styled by an unattached `ImGuiLayer`), honor ImGui's texture
+  requests without a renderer, inject input (clicks, keys, typed text), keep their own clipboard, and find kit widgets
+  through the probe; the `Editor.UI` and `Editor.Launcher` suites draw the real `EditorLayer` this way, with a
+  `FakeEditorHost` (`StrataTests/src/Editor/HarnessEditor.h`).
 - **EditorContext** (`StrataEditor/src/Editor/EditorContext.h`) is the state with no UI. Opening a project creates and
   activates its `EditorAssetManager` (scan included), opens a `ScriptEngine` (hot reload on by default,
-  `EditorContextSpecification::HotReloadScripts`) and loads the built module, restores the viewport state and opens
-  the start scene. `GetActiveScene` is the running copy while playing, else the edited scene.
+  `EditorContextSpecification::HotReloadScripts`) and loads the built module, restores the viewport state, opens
+  the start scene and puts the project at the front of the recent projects (`RecentProjects`, a JSON file in the user
+  data directory that the user's editors share; changes a read-only list cannot save are kept in memory and applied over
+  every read, and the launcher reads it and checks its projects on an I/O thread). Creating a project applies a template
+  (`ProjectTemplates`: `empty`, or `basic3d` with a saved, lit start scene whose ground has a material of the project,
+  `Materials/Ground.stmat`). Samples (`ProjectSamples`) are finished projects listed by `Samples.json` in a
+  samples directory next to the executable, which the `StrataSamples` build target fills from the repository's `Samples/`
+  (`CMake/StrataCopySamples.cmake`, without local `.strata` data); `project.openSample` copies one, again without its
+  `.strata`, into a new directory and opens the copy, so the shipped sample never changes. Opening a scene restores the editor camera it was last shown with (stored per
+  scene handle in the viewport state) or frames what it renders (`EditorViewport::FrameScene`, `SceneBounds`).
+  `GetActiveScene` is the running copy while playing, else the edited scene.
 - **Commands** (`EditorCommands.h`). Handlers take a JSON object and return an `EditorCommandResult`: a value, an error
   with an `EditorCommandError` kind, or `Defer(poll)`. The built-in groups are registered by
   `EditorSceneCommands.cpp` (scene, entity, component, prefab), `EditorAssetCommands.cpp` (asset, material, prefab,
-  project), `EditorStateCommands.cpp` (edit, editor, log, play, selection), `EditorViewportCommands.cpp` (camera,
-  viewport), `EditorScriptCommands.cpp` (script), `EditorInputCommands.cpp` (input), `EditorStreamingCommands.cpp`
-  (`asset.stats`, `asset.setBudget`) and `EditorCommands.cpp` (`editor.commands`). Conventions: AGENTS.md, "Editor".
+  project, including `project.templates`, `project.samples`, `project.openSample` and `project.close`),
+  `EditorStateCommands.cpp` (edit, editor including `editor.recentProjects` and `editor.removeRecentProject`, log, play,
+  selection), `EditorViewportCommands.cpp` (camera, viewport), `EditorScriptCommands.cpp` (script),
+  `EditorInputCommands.cpp` (input), `EditorStreamingCommands.cpp` (`asset.stats`, `asset.setBudget`) and
+  `EditorCommands.cpp` (`editor.commands`). Conventions: AGENTS.md, "Editor".
 - **Runner** (`EditorCommandRunner.h`). `Run` executes a command; a deferred one is polled once per frame from the next
   frame on, in issue order, and reports through its completion callback. Automation and command scripts always use the
   runner. UI actions that finish at once call the registry through `RunEditorCommand`
@@ -756,9 +791,11 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   the runner, so a deferred command answers when it completes. Clients find the editor through session files
   (`Network/EditorSession.h`). StrataCLI (`StrataCLI/src/CLI/`) connects with `RpcClient` (`EditorConnection`),
   starts editors (`EditorLauncher`) and serves MCP (`McpServer`, one tool per command).
-- **Viewport** (`EditorViewport.h`, `ViewportRenderer.h`). `EditorViewport` holds the editor camera, the settings and
-  two `ViewportRenderer`s (panel and captures). The panel renders during `OnImGuiRender`; `ResolveViewportView` picks
-  the scene's primary camera while playing and the editor camera otherwise. Picking reads one pixel of the entity-ID
+- **Viewport** (`EditorViewport.h`, `ViewportRenderer.h`). `EditorViewport` holds the editor camera (and the cameras of
+  the project's other scenes), the settings and two `ViewportRenderer`s (panel and captures). The panel renders during
+  `OnImGuiRender`; `ResolveViewportView` picks the scene's primary camera while playing and the editor camera otherwise,
+  and `GetViewportRenderOptions` gives editor views (the editor camera outside play mode) preview lighting and a hidden
+  HUD as the settings say (`viewport.getSettings`, `viewport.setSettings`). Picking reads one pixel of the entity-ID
   buffer asynchronously and completes in `EditorContext::Update`. `viewport.capture` renders on the next frame, polls a
   `TextureReadback`, encodes the PNG on a worker and saves on an I/O thread (`EditorViewportCommands.cpp`).
 - **Script builds** (`ScriptBuild.h`). `ScriptBuilder` runs CMake configure and build as child processes (one build at

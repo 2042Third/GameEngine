@@ -74,6 +74,10 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | Question | Call |
 | --- | --- |
 | What is open, is it playing, unsaved changes? | `editor.status` |
+| Which projects did the user (or an agent) open lately? | `editor.recentProjects` (name, project file path for `project.open`, `lastOpened`; editors run with `--commands` or `--frames` list what they opened without saving it); `editor.removeRecentProject {path}` takes one off |
+| What can a new project or scene start from? | `project.templates` (`empty`, `basic3d`) |
+| Is there a finished game to learn from? | `project.samples` (e.g. `Tetris`); `project.openSample {sample, directory}` opens a copy in a new directory (the sample stays as shipped; build its scripts with `script.build` before playing) |
+| Does the person at the editor see the launcher or the editor? | `editor.status` (`editor.launcher`; also `editor.gpu` and `editor.startupSeconds`) |
 | Which commands and parameters exist? | `editor.commands` (or `list --json`) |
 | Which components and properties (types, ranges, enum values)? | `component.list` |
 | Which assets exist? | `asset.list` (`type`, `path` filters), `asset.info` |
@@ -88,10 +92,22 @@ appear in `editor.commands` and as tools automatically. The viewport commands ne
 editor started with `--no-gpu` (use `--headless`):
 
 - `viewport.capture {width?, height?, camera?: "editor" | "scene", overlays?, path?}` returns
-  `{"Image": {"MimeType": "image/png", "Data"}, width, height, camera, overlays, pendingAssets, pendingTextGlyphs, notice?,
-  path?}`. Text is complete in the picture (the capture waits a few frames for new glyphs).
+  `{"Image": {"MimeType": "image/png", "Data"}, width, height, camera, overlays, pendingAssets, pendingTextGlyphs,
+  previewLighting, screenSpaceTexts, hiddenScreenSpaceTexts, notice?, path?}`. Text is complete in the picture (the
+  capture waits a few frames for new glyphs).
+- **Editor views are not the game's view.** With the editor camera outside play mode, a scene without any light (no
+  directional, point, spot or sky light) is lit by *preview lighting* (a sun and a procedural sky that the game will not
+  have: the result says `"previewLighting": true`), and the game's screen-space text (its HUD) is hidden
+  (`hiddenScreenSpaceTexts` counts it). To see what a player sees, capture with `{"camera": "scene"}` (or while playing).
+  `viewport.getSettings` / `viewport.setSettings {previewLighting?, gameUI?, grid?, selectionOutline?, sceneGizmos?,
+  stats?, gizmo?, space?, ...}` change these view settings (no undo step; saved with the project's editor state).
 - `camera.get`; `camera.set {position?, target?, yaw?, pitch?, distance?, fov?, near?, far?, flySpeed?}`;
-  `camera.focus {entities?}` frames the given (or selected) entities.
+  `camera.focus {entities?}` frames the given (or selected) entities. Every scene remembers its own editor camera; a
+  scene opened for the first time is framed on what it renders, seen from the direction of its primary camera.
+- A windowed editor without a project shows its launcher (recent projects, templates, samples, how to connect an
+  agent) instead of the editor; opening or creating a project (`project.open`, `project.create`, `project.openSample`)
+  shows the editor, and `project.close` returns to the launcher. Changes to the untitled scene are not visible to the
+  person while the launcher shows: create or open a project first.
 - Game logic: write C++ scripts into the project's `Scripts/` folder and use `script.build`, `script.status`,
   `script.add`, `script.setField`, `script.reload` (see `.claude/skills/strata-scripting/SKILL.md`, "The workflow in a
   game project"). Builds need CMake and the engine's compiler on the machine; they work with `--no-gpu`.
@@ -116,17 +132,24 @@ editor started with `--no-gpu` (use `--headless`):
 
 ## 5. Workflows
 
-**New game from scratch**
+**New game from scratch**: start from the `basic3d` template. It saves a lit start scene `Scenes/Main.stscene` (set as
+the start scene) with "Main Camera" (primary, with an audio listener, at (0, 2, 6) looking at the origin), "Sun" (a
+directional light with shadows), "Sky" (a procedural sky light), "Ground" (a 20 x 20 plane with the dark stone material
+`Materials/Ground.stmat`, which the template adds to the project) and "Post Process"; the result names it in
+`startScene`. Without `template` the project is `empty` (no scene; build and save one yourself).
 
 ```text
-project.create      {"directory": "<absolute dir>", "name": "Tetris"}
+project.create      {"directory": "<absolute dir>", "name": "Tetris", "template": "basic3d"}
 material.create     {"path": "Materials/Red.stmat", "properties": {"BaseColor": [1, 0, 0, 1]}}
-entity.create       {"name": "Camera", "components": {"Camera": {}, "Transform": {"Translation": [0, 5, 10], "Rotation": [-26, 0, 0]}}}
-entity.create       {"name": "Sun", "components": {"DirectionalLight": {"Intensity": 3}}}
-entity.create       {"name": "Block", "components": {"MeshRenderer": {"Mesh": "Builtin/Cube", "Material": "Materials/Red.stmat"}}}
-scene.saveAs        {"path": "Scenes/Main.stscene"}
-project.setStartScene {"scene": "Scenes/Main.stscene"}
+entity.create       {"name": "Block", "components": {"MeshRenderer": {"Mesh": "Builtin/Cube", "Material": "Materials/Red.stmat"},
+                     "Transform": {"Translation": [0, 0.5, 0]}}}
+scene.save          {}
 ```
+
+`scene.new {"template": "basic3d"}` starts another scene the same way (save it with `scene.saveAs`). Move the camera or
+sun with `component.set` (find their IDs with `entity.find {"name": "Main Camera"}`). The sky is a `SkyLight` with
+`"Source": "Procedural"`: `ZenithColor`, `HorizonColor`, `GroundColor` (linear colors), `SunSize` (degrees) and
+`SunIntensity`; its sun follows the scene's directional light.
 
 **Assets**: `asset.import {"file": "<absolute path>", "directory": "Models"}` copies a file into the project and
 imports it: models `.gltf`/`.glb`, textures `.png`/`.jpg`/`.tga`/`.bmp`/`.psd`/`.gif`/`.hdr`, audio
@@ -182,7 +205,8 @@ and read the effect (`component.get`, `log.read`, `viewport.capture`). Notes:
 **Look at it** (needs rendering, not `--no-gpu`): `camera.focus` or `camera.set`, then
 `StrataCLI call viewport.capture '{"camera": "scene"}' --save-image shot.png` and open `shot.png`; with MCP the
 capture arrives as an image. `pendingAssets` above zero means assets were still loading: wait a few frames and
-capture again.
+capture again. Editor-camera captures can be lit by preview lighting and leave out the HUD (see section 3): judge the
+game's look and its HUD from `"camera": "scene"` captures.
 
 **Export**: `project.export {"directory": "<absolute dir outside the project>"}` writes `<Game>.stpak`,
 `<Game>.stgame` and the runtime renamed `<Game>[.exe]` (`"includeRuntime": false` skips it). Check the result
@@ -204,6 +228,8 @@ headless: `<dir>/<Game> --headless --frames 120` (exit code 0).
 | Headless editor exits at once with code 1 | Its automation could not start (session directory not private, port in use); read its output or `<user data>/Logs/StrataEditor.log`. |
 | The editor went away on its own | It was started with `--idle-timeout` (MCP: 10 minutes) and no client stayed connected; start it again. |
 | `viewport.*` / `camera.*` fail or are missing | The editor runs with `--no-gpu` (restart it with `--headless`), or this build has no viewport commands (check `editor.commands`). |
+| The capture is lit, but the game is dark | The capture says `"previewLighting": true`: the scene has no light of its own. Add a directional light and a sky light (or start from the `basic3d` template); check with `{"camera": "scene"}`. |
+| The HUD is missing from a capture | Editor views hide screen-space text (`hiddenScreenSpaceTexts`); capture with `{"camera": "scene"}`, while playing, or turn on `viewport.setSettings {"gameUI": true}`. |
 | Script or import errors | `log.read {"minLevel": "Warn"}`, `asset.info`. |
 
 Session files of editors that exited are removed by the clients automatically; never edit or copy them (they

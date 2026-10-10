@@ -4,6 +4,7 @@
 #include <Strata/ImGui/ImGuiLayer.h>
 
 #include "EditorHost.h"
+#include "EditorIcon.h"
 #include "EditorLayer.h"
 #include "UI/EditorFonts.h"
 #include "UI/Theme.h"
@@ -32,7 +33,14 @@ namespace Strata
 		void SetExitCode(int exitCode) override { m_Application.SetExitCode(exitCode); }
 		uint64_t GetFrameCount() const override { return m_Application.GetFrameCount(); }
 		double GetTime() const override { return Time::GetTime(); }
+		std::optional<double> GetProcessUptime() const override { return Platform::GetProcessUptime(); }
 		bool HasGraphicsDevice() const override { return m_Application.GetGraphicsDevice() != nullptr; }
+
+		std::optional<GraphicsDeviceInfo> GetGraphicsDeviceInfo() const override
+		{
+			const GraphicsDevice* device = m_Application.GetGraphicsDevice();
+			return device ? std::optional<GraphicsDeviceInfo>(device->GetInfo()) : std::nullopt;
+		}
 
 		bool HasWindow() const override { return m_Application.GetWindow() != nullptr; }
 
@@ -78,6 +86,8 @@ namespace Strata
 		EditorApplication(const ApplicationSpecification& specification, const EditorOptions& options)
 			: Application(specification)
 		{
+			if (Window* window = GetWindow())
+				window->SetIcon(GetEditorWindowIcon());
 			if (!IsRunning())
 				return;
 			// The editor's look: the Bedrock theme at the UI scale, and its own fonts (ImGui's built-in font is never used).
@@ -86,7 +96,9 @@ namespace Strata
 				if (options.UIScale)
 					imgui->SetContentScaleOverride(*options.UIScale);
 				imgui->SetStyleCallback(UI::ApplyTheme);
-				if (!UI::EditorFonts::Load())
+				if (UI::EditorFonts::Load())
+					UI::EditorFonts::BeginLoadingFallback();
+				else
 					ST_ERROR("The editor's fonts are unavailable; the UI uses ImGui's default font");
 			}
 			// The layer owns its host; the application outlives its layers.
@@ -119,6 +131,9 @@ namespace Strata
 			options.CommandScript = FileSystem::FromUTF8(*commands);
 		// Scripted runs whose length is unknown (script builds) end when their command script has finished.
 		options.QuitAfterCommands = commandLine.HasFlag("--quit-after-commands");
+		// The projects a person or an agent opens go to the user's recent projects; scripted runs only read them.
+		options.RecentProjectsFile = RecentProjects::GetDefaultFile().value_or(std::filesystem::path());
+		options.RecentProjectsReadOnly = !options.CommandScript.empty() || commandLine.GetIntOption("--frames").has_value();
 
 		// Automation (StrataCLI, MCP): on by default, on a free loopback port unless --automation-port picks one.
 		options.EnableAutomation = !commandLine.HasFlag("--no-automation");

@@ -7,6 +7,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace Strata
 {
@@ -49,6 +50,16 @@ namespace Strata
 		// Like GetUserDataDirectory, but without the shared temp-directory fallback: nullopt when no per-user
 		// location exists (or it cannot be created). Use it for anything secret.
 		static std::optional<std::filesystem::path> FindUserDataDirectory(std::string_view applicationName);
+		// The user's home directory (Windows: the profile folder, e.g. C:\Users\<name>; POSIX: $HOME), e.g. as the root of
+		// suggested project locations. nullopt when there is none (an empty or relative $HOME). Not created.
+		static std::optional<std::filesystem::path> FindHomeDirectory();
+		// Font files of the system for text in scripts that fonts made for Latin text lack: Chinese, Japanese and Korean.
+		// At most one file per group of scripts (Han characters and kana first, then Hangul where those lack it), the
+		// most complete the system has; only files that exist. Empty when the usual places hold none.
+		//   Windows: Microsoft YaHei, JhengHei, Yu Gothic, Meiryo or SimSun, then Malgun Gothic or Gulim
+		//   Linux:   Noto Sans CJK, WenQuanYi Micro Hei or Droid Sans Fallback (all with Hangul)
+		//   macOS:   PingFang, Hiragino Sans GB or STHeiti, then Apple SD Gothic Neo
+		static std::vector<std::filesystem::path> FindFallbackFontFiles();
 
 		// Private directories hold files that nobody but the current user may add, replace or rename: editor session
 		// files (tokens), the copies of script modules the engine loads. EnsurePrivateDirectory, CreatePrivateDirectory and
@@ -97,6 +108,10 @@ namespace Strata
 		// An opaque value identifying one run of a process: the same for the same process, different for a later
 		// process that reuses the id. nullopt if no such process exists or it cannot be inspected.
 		static std::optional<uint64_t> GetProcessStartTime(uint32_t processId);
+		// Seconds since the current process was created, by the operating system's record of its creation, so the time the
+		// loader and static initialization took counts too (e.g. for an application's startup time). nullopt when the
+		// system does not tell, or its clock went back since.
+		static std::optional<double> GetProcessUptime();
 
 		// Fills buffer from the operating system's cryptographically secure random number generator.
 		static bool GenerateSecureRandom(std::span<uint8_t> buffer);
