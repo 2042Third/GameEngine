@@ -61,6 +61,10 @@ namespace Strata::Tests
 	// Creates a junction (a mount-point reparse point, which needs no special privilege) at link that redirects to target.
 	// False when it cannot be created (e.g. on file systems without reparse points, such as exFAT).
 	bool CreateJunction(const std::filesystem::path& link, const std::filesystem::path& target);
+	// The pixel sizes (width; 256 for the largest) of the images in an executable's first icon group (RT_GROUP_ICON),
+	// read with the executable loaded as a data file. Nullopt (outError says why) when it cannot be loaded or has no
+	// icon group.
+	std::optional<std::vector<uint32_t>> ReadExecutableIconSizes(const std::filesystem::path& executable, std::string* outError = nullptr);
 #endif
 
 	inline std::filesystem::path GetTestExecutablePath()

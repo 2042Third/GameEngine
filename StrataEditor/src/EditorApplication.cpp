@@ -1,6 +1,7 @@
 #include <Strata.h>
 #include <Strata/Core/EntryPoint.h>
 
+#include "EditorIcon.h"
 #include "EditorLayer.h"
 
 namespace Strata
@@ -15,6 +16,8 @@ namespace Strata
 		EditorApplication(const ApplicationSpecification& specification, const EditorOptions& options)
 			: Application(specification)
 		{
+			if (Window* window = GetWindow())
+				window->SetIcon(GetEditorWindowIcon());
 			if (IsRunning())
 				PushLayer(new EditorLayer(options));
 		}

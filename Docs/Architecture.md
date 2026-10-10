@@ -40,15 +40,18 @@ graph TD
 ```
 
 Each target is defined in the `CMakeLists.txt` of its directory; script modules by `strata_add_script_module()` in
-`StrataScriptCore/CMake/StrataScriptModule.cmake`.
+`StrataScriptCore/CMake/StrataScriptModule.cmake`. The brand assets (the strata mark as PNGs, raw RGBA and `.ico`, in
+`StrataEditor/Resources/Brand/`) are drawn by `Tools/GenerateBrandAssets.py` and committed; `Core/Version.h` (from
+`Version.h.in`) carries the version and the git commit the build was configured from (`c_EngineCommit`; a commit or
+checkout makes the next build configure again).
 
 | Target | Kind | What it is |
 | --- | --- | --- |
 | `Strata` | static library | Engine modules, platform code, embedded shaders and default font (`Strata/src/`). |
 | `StrataScriptCore` | interface library | Script C ABI and header-only C++ SDK; links glm only (`StrataScriptCore/`). |
 | `StrataEditorCore` | static library | The editor without UI (`StrataEditor/src/Editor/`). |
-| `StrataEditor` | executable | ImGui panels and `EditorLayer` on top of the core; links `nfd` (`StrataEditor/src/`). |
-| `StrataRuntime` | executable | Plays exported games (`StrataRuntime/src/RuntimeApplication.cpp`). |
+| `StrataEditor` | executable | ImGui panels and `EditorLayer` on top of the core; links `nfd` (`StrataEditor/src/`). Embeds the window icon (`EditorIcon.h`); on Windows `StrataEditor.rc.in` adds the `.ico` and version information. |
+| `StrataRuntime` | executable | Plays exported games (`StrataRuntime/src/RuntimeApplication.cpp`); on Windows `StrataRuntime.rc.in` gives it (and every exported game) the `.ico`. |
 | `StrataCLILib`, `StrataCLI` | static library, executable | Automation client and MCP server (`StrataCLI/src/`). |
 | `StrataTests` | executable | doctest suites; builds the test script modules as dependencies (`StrataTests/`). |
 | script modules | `MODULE` libraries | Game code: the tests' modules and every game project's `Scripts/`. |
@@ -78,7 +81,8 @@ Applications built on `Application` (editor, runtime) get `main` from `Core/Entr
 
 **Core** (`Core/`). `Application` owns the window, the graphics device, the layer stack and the main-thread queue
 and runs the frame loop; `Layer`/`LayerStack` hold the client's behavior; `Window` is implemented by
-`Platform/GLFW/GLFWWindow`. Services: `Log` (spdlog; `LogBuffer` backs the editor console and `log.read`), `Assert`,
+`Platform/GLFW/GLFWWindow` (`SetIcon` takes RGBA images of several sizes; macOS and Wayland windows have no icon of
+their own and ignore it). Services: `Log` (spdlog; `LogBuffer` backs the editor console and `log.read`), `Assert`,
 `JobSystem`, `FileSystem` (UTF-8 paths), `FileWatcher`, `FileLock`, `Platform` (OS services, private directories),
 `Process` (child processes), `DynamicLibrary`, `CrashGuard`, `UUID`, `Crypto` (SHA-256, peer authentication), `Base64`,
 `CommandLine`, `Timer`/`FramePacer`, `JsonUtils` (exception-free JSON reads), `SequenceLock` (lock-free hand-off to the

@@ -6,12 +6,22 @@
 
 #include <glm/glm.hpp>
 
+#include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <span>
 #include <string>
 
 namespace Strata
 {
+
+	// One size of a window icon: RGBA8 pixels, rows top to bottom, Width * Height * 4 bytes.
+	struct WindowIconImage
+	{
+		uint32_t Width = 0;
+		uint32_t Height = 0;
+		std::span<const uint8_t> Pixels;
+	};
 
 	struct WindowSpecification
 	{
@@ -53,6 +63,10 @@ namespace Strata
 		virtual bool IsFocused() const = 0;
 		virtual void SetCursorMode(CursorMode mode) = 0;
 		virtual void Maximize() = 0;
+		// Sets the window's icon from images of several sizes (the system picks the sizes it shows); the pixels are copied.
+		// Images whose pixel count does not match their size are skipped with a warning. Platforms whose windows have no
+		// icon of their own (macOS: the application bundle's; Wayland: the desktop entry's) ignore it.
+		virtual void SetIcon(std::span<const WindowIconImage> images) = 0;
 
 		virtual void* GetNativeWindow() const = 0;
 

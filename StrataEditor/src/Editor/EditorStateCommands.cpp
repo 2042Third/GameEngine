@@ -108,7 +108,7 @@ namespace Strata
 		////////////////////////////////////////////////////////////////////////////////
 
 		registry.Register({ "editor.status",
-			"Overview of the editor: engine version, open project, scene (name, asset, unsaved changes, entity count), play state, selection, "
+			"Overview of the editor: engine version and commit, open project, scene (name, asset, unsaved changes, entity count), play state, selection, "
 			"undo history, and sections such as automation (port, clients, pending requests and commands). Start here to orient yourself.",
 			ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
@@ -117,6 +117,7 @@ namespace Strata
 				const UndoStack& undo = context.GetUndoStack();
 				nlohmann::json status = {
 					{ "engineVersion", c_EngineVersion },
+					{ "engineCommit", c_EngineCommit },
 					{ "platform", std::string(Platform::GetName()) },
 					{ "project", DescribeProject(context) },
 					{ "scene", {

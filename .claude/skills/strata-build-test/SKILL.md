@@ -39,7 +39,9 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
   `StrataTests.GPU` (label `gpu`), `StrataEditor.Smoke` (the real editor with
   `StrataTests/Editor/SmokeCommands.json.in`, configured into the build tree, label `gpu`; it captures the viewport to
   `SmokeViewport.png`/`SmokeSceneCamera.png` in `build/<preset>/StrataTests/SmokeCaptures/`, checked by
-  `StrataEditor.SmokeCaptureCheck`), the editor script checks (`StrataEditor.FailingScript`, `WaitingScript`,
+  `StrataEditor.SmokeCaptureCheck`), `StrataEditor.Icon` and `StrataRuntime.Icon` (Windows: the editor and the exported
+  game's executable carry the strata mark, checked with `StrataTests --strata-test-helper=check-icon <exe>`), the editor
+  script checks (`StrataEditor.FailingScript`, `WaitingScript`,
   `UnfinishedScript`, `QuitScript`, `QuitBeforeScriptEnds`, `CaptureWithoutGPU`), the export chain `StrataExport.Clean`
   → `StrataEditor.Export` (`--no-gpu`; it exports the smoke game twice, the second time starting in a scene without a
   camera) → `StrataRuntime.Smoke` (the exported game, headless; `StrataRuntime.HeadlessPacing` checks that headless runs

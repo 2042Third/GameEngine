@@ -173,6 +173,11 @@ if(TARGET StrataEditor)
 	add_test(NAME StrataEditor.SmokeCaptureCheck COMMAND StrataTests --strata-test-helper=check-image "${STRATA_SMOKE_CAPTURE_DIR}/SmokeViewport.png")
 	set_tests_properties(StrataEditor.SmokeCaptureCheck PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataEditorSmokeCaptures)
 
+	# The editor executable carries the strata mark as its icon (StrataEditor.rc.in).
+	if(WIN32)
+		add_test(NAME StrataEditor.Icon COMMAND StrataTests --strata-test-helper=check-icon "$<TARGET_FILE:StrataEditor>")
+	endif()
+
 	# A failing command must fail the process, so scripted runs notice.
 	add_test(NAME StrataEditor.FailingScript
 		COMMAND StrataEditor --no-gpu --no-automation --frames 2 --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/FailingCommands.json"
@@ -236,6 +241,11 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 
 	add_test(NAME StrataRuntime.Smoke COMMAND "${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}" --headless --frames 30)
 	set_tests_properties(StrataRuntime.Smoke PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
+	# The exported game's executable (the runtime, renamed) carries the strata mark as its icon (StrataRuntime.rc.in).
+	if(WIN32)
+		add_test(NAME StrataRuntime.Icon COMMAND StrataTests --strata-test-helper=check-icon "${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}")
+		set_tests_properties(StrataRuntime.Icon PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
+	endif()
 	# Headless games run at 60 frames per second, so 180 frames are three seconds of game time (and of the clock), not a burst.
 	add_test(NAME StrataRuntime.HeadlessPacing
 		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}" "-DARGUMENTS=--headless|--frames|180"

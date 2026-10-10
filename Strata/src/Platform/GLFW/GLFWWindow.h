@@ -30,10 +30,12 @@ namespace Strata
 		bool IsFocused() const override;
 		void SetCursorMode(CursorMode mode) override;
 		void Maximize() override;
+		void SetIcon(std::span<const WindowIconImage> images) override;
 
 		void* GetNativeWindow() const override { return m_Window; }
 	private:
-		void SetIcon(const std::filesystem::path& iconPath);
+		// Decodes a PNG file (WindowSpecification::IconPath) into the icon.
+		void SetIconFromFile(const std::filesystem::path& iconPath);
 		void PollGamepads();
 	private:
 		GLFWwindow* m_Window = nullptr;

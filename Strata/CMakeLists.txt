@@ -19,6 +19,31 @@ add_library(Strata STATIC ${STRATA_SOURCES})
 strata_configure_target(Strata)
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${STRATA_SOURCES})
 
+# The commit the engine is built from (c_EngineCommit: editor.status, About), read from git at configure time; "unknown"
+# outside a git checkout. The files git changes when HEAD moves (a commit, a checkout) are configure dependencies, so the
+# next build configures again and the header follows.
+set(STRATA_GIT_COMMIT "unknown")
+find_package(Git QUIET)
+if(GIT_FOUND)
+	execute_process(COMMAND "${GIT_EXECUTABLE}" rev-parse --short=12 HEAD
+		WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" RESULT_VARIABLE gitResult OUTPUT_VARIABLE gitCommit
+		OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+	if(gitResult EQUAL 0 AND gitCommit MATCHES "^[0-9a-f]+$")
+		set(STRATA_GIT_COMMIT "${gitCommit}")
+		execute_process(COMMAND "${GIT_EXECUTABLE}" rev-parse --symbolic-full-name HEAD
+			WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" OUTPUT_VARIABLE gitReference OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+		foreach(gitFile IN ITEMS HEAD packed-refs ${gitReference})
+			execute_process(COMMAND "${GIT_EXECUTABLE}" rev-parse --git-path "${gitFile}"
+				WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" OUTPUT_VARIABLE gitPath OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+			if(gitPath)
+				get_filename_component(gitPath "${gitPath}" ABSOLUTE BASE_DIR "${PROJECT_SOURCE_DIR}")
+				if(EXISTS "${gitPath}")
+					set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${gitPath}")
+				endif()
+			endif()
+		endforeach()
+	endif()
+endif()
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/src/Strata/Core/Version.h.in" "${CMAKE_CURRENT_BINARY_DIR}/Generated/Strata/Core/Version.h" @ONLY)
 
 target_include_directories(Strata PUBLIC

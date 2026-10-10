@@ -158,6 +158,67 @@ namespace Strata::Tests
 		CloseHandle(handle);
 		return created != FALSE;
 	}
+
+	std::optional<std::vector<uint32_t>> ReadExecutableIconSizes(const std::filesystem::path& executable, std::string* outError)
+	{
+		auto fail = [outError](std::string message) -> std::optional<std::vector<uint32_t>>
+		{
+			if (outError)
+				*outError = std::move(message);
+			return std::nullopt;
+		};
+		// As a data file: its resources are readable, nothing of it runs.
+		HMODULE module = LoadLibraryExW(executable.c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+		if (!module)
+			return fail("it cannot be loaded as a data file (error " + std::to_string(GetLastError()) + ")");
+
+		// The first icon group, which Explorer shows for the executable.
+		struct FirstGroup
+		{
+			bool Found = false;
+			std::wstring Name;
+			WORD Id = 0;
+		} group;
+		EnumResourceNamesW(module, MAKEINTRESOURCEW(14) /* RT_GROUP_ICON */, [](HMODULE, LPCWSTR, LPWSTR name, LONG_PTR parameter) -> BOOL
+		{
+			FirstGroup& first = *reinterpret_cast<FirstGroup*>(parameter);
+			first.Found = true;
+			if (IS_INTRESOURCE(name))
+				first.Id = static_cast<WORD>(reinterpret_cast<ULONG_PTR>(name));
+			else
+				first.Name = name;
+			return FALSE; // Stop after the first one
+		}, reinterpret_cast<LONG_PTR>(&group));
+		std::optional<std::vector<uint32_t>> sizes;
+		if (group.Found)
+		{
+			HRSRC resource = FindResourceW(module, group.Name.empty() ? MAKEINTRESOURCEW(group.Id) : group.Name.c_str(), MAKEINTRESOURCEW(14));
+			HGLOBAL loaded = resource ? LoadResource(module, resource) : nullptr;
+			const uint8_t* data = loaded ? static_cast<const uint8_t*>(LockResource(loaded)) : nullptr;
+			const DWORD size = resource ? SizeofResource(module, resource) : 0;
+			// GRPICONDIR: reserved, type (1: icon), count (WORD each), then 14-byte entries starting with the width.
+			if (data && size >= 6)
+			{
+				WORD count = 0;
+				std::memcpy(&count, data + 4, sizeof(count));
+				if (size >= 6 + static_cast<DWORD>(count) * 14)
+				{
+					sizes.emplace();
+					for (WORD index = 0; index < count; index++)
+					{
+						const uint8_t width = data[6 + index * 14];
+						sizes->push_back(width == 0 ? 256u : width);
+					}
+				}
+			}
+		}
+		FreeLibrary(module);
+		if (!group.Found)
+			return fail("it has no icon group (RT_GROUP_ICON)");
+		if (!sizes)
+			return fail("its icon group cannot be read");
+		return sizes;
+	}
 #endif
 
 	void CleanupTemporaryDirectories()

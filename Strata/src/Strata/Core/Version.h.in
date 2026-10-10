@@ -6,11 +6,14 @@
 #define ST_VERSION_MINOR @PROJECT_VERSION_MINOR@
 #define ST_VERSION_PATCH @PROJECT_VERSION_PATCH@
 #define ST_VERSION_STRING "@PROJECT_VERSION@"
+// Short hash of the git commit the build was configured from ("unknown" outside a git checkout).
+#define ST_VERSION_COMMIT "@STRATA_GIT_COMMIT@"
 
 namespace Strata
 {
 
 	constexpr const char* c_EngineName = "Strata";
 	constexpr const char* c_EngineVersion = ST_VERSION_STRING;
+	constexpr const char* c_EngineCommit = ST_VERSION_COMMIT;
 
 }

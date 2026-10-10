@@ -572,6 +572,36 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		return 0;
 	}
 
+#if defined(ST_PLATFORM_WINDOWS)
+	if (mode == "check-icon")
+	{
+		// <executable>: succeeds if its icon (the first RT_GROUP_ICON) holds the strata mark's 16, 32, 48 and 256 pixel
+		// images (StrataEditor/Resources/Brand/StrataMark.ico).
+		if (argc != 3)
+			return 2;
+		std::string error;
+		const std::optional<std::vector<uint32_t>> sizes = Strata::Tests::ReadExecutableIconSizes(Strata::FileSystem::FromUTF8(argv[2]), &error);
+		if (!sizes)
+		{
+			std::fprintf(stderr, "'%s': %s\n", argv[2], error.c_str());
+			return 1;
+		}
+		std::printf("'%s' has an icon with %zu images:", argv[2], sizes->size());
+		for (uint32_t size : *sizes)
+			std::printf(" %u", size);
+		std::printf("\n");
+		for (uint32_t expected : { 16u, 32u, 48u, 256u })
+		{
+			if (std::find(sizes->begin(), sizes->end(), expected) == sizes->end())
+			{
+				std::fprintf(stderr, "The icon has no %u pixel image\n", expected);
+				return 1;
+			}
+		}
+		return 0;
+	}
+#endif
+
 #if defined(ST_PLATFORM_LINUX)
 	if (mode == "rename-when-file-exists" && argc > 2)
 	{
