@@ -4,6 +4,11 @@
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
 
+#include <algorithm>
+#include <cstring>
+#include <string>
+#include <unordered_map>
+
 namespace Strata
 {
 
@@ -34,11 +39,19 @@ namespace Strata
 	PhysicsSystem::PhysicsSystem(Scene& scene)
 		: m_Scene(scene), m_Settings(GetDefaultSettings())
 	{
+		m_Scene.RegisterService<ICollisionEventSource>(*this);
+		m_Scene.RegisterService<IBodyMotionQuery>(*this);
+		m_Scene.RegisterService<IBodyControl>(*this);
+		m_Scene.RegisterService<IPhysicsQueries>(*this);
 	}
 
 	PhysicsSystem::~PhysicsSystem()
 	{
 		OnRuntimeStop();
+		m_Scene.UnregisterService<IPhysicsQueries>(*this);
+		m_Scene.UnregisterService<IBodyControl>(*this);
+		m_Scene.UnregisterService<IBodyMotionQuery>(*this);
+		m_Scene.UnregisterService<ICollisionEventSource>(*this);
 	}
 
 	void PhysicsSystem::SetDefaultSettings(const PhysicsSettings& settings)
@@ -101,7 +114,7 @@ namespace Strata
 		DispatchCollisionEvents();
 	}
 
-	CollisionListenerID PhysicsSystem::AddCollisionListener(CollisionCallback callback)
+	CollisionListenerID PhysicsSystem::AddCollisionListener(CollisionCallback callback, CollisionListenerScope scope)
 	{
 		if (!callback)
 			return c_InvalidCollisionListener;
@@ -109,8 +122,28 @@ namespace Strata
 		Ref<CollisionListener> listener = CreateRef<CollisionListener>();
 		listener->ID = m_NextListenerID++;
 		listener->Callback = std::move(callback);
+		listener->Scope = scope;
 		m_CollisionListeners.push_back(listener);
 		return listener->ID;
+	}
+
+	void PhysicsSystem::WatchCollisions(UUID entity)
+	{
+		m_CollisionWatches[entity]++;
+	}
+
+	void PhysicsSystem::UnwatchCollisions(UUID entity)
+	{
+		auto it = m_CollisionWatches.find(entity);
+		if (it == m_CollisionWatches.end())
+			return;
+		if (--it->second == 0)
+			m_CollisionWatches.erase(it);
+	}
+
+	bool PhysicsSystem::IsWatchingCollisions(UUID entity) const
+	{
+		return m_CollisionWatches.find(entity) != m_CollisionWatches.end();
 	}
 
 	bool PhysicsSystem::RemoveCollisionListener(CollisionListenerID id)
@@ -193,6 +226,15 @@ namespace Strata
 	{
 		ApplyPendingChanges();
 		return m_World && m_World->SetAngularVelocity(entity, velocity);
+	}
+
+	std::optional<glm::vec3> PhysicsSystem::GetPointVelocity(Entity entity, const glm::vec3& worldPoint)
+	{
+		ApplyPendingChanges();
+		if (!m_World || !m_World->HasBody(entity))
+			return std::nullopt;
+		const glm::vec3 origin = glm::vec3(m_Scene.GetWorldTransform(entity)[3]);
+		return m_World->GetLinearVelocity(entity) + glm::cross(m_World->GetAngularVelocity(entity), worldPoint - origin);
 	}
 
 	bool PhysicsSystem::AddForce(Entity entity, const glm::vec3& force)
@@ -349,10 +391,13 @@ namespace Strata
 		const std::vector<Ref<CollisionListener>> listeners = m_CollisionListeners;
 		for (const CollisionEvent& event : events)
 		{
+			// Watches may change during the dispatch too; each event is judged when its turn comes.
+			const bool watched = IsWatchingCollisions(event.AID) || IsWatchingCollisions(event.BID);
 			for (const Ref<CollisionListener>& listener : listeners)
 			{
-				if (!listener->Removed)
-					listener->Callback(event);
+				if (listener->Removed || (listener->Scope == CollisionListenerScope::WatchedEntities && !watched))
+					continue;
+				listener->Callback(event);
 			}
 		}
 	}

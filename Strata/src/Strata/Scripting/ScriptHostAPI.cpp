@@ -2,16 +2,16 @@
 #include "Strata/Scripting/ScriptHostAPI.h"
 
 #include "Strata/Asset/AssetManager.h"
-#include "Strata/Audio/AudioSystem.h"
+#include "Strata/Core/EngineServices.h"
 #include "Strata/Input/Input.h"
 #include "Strata/Math/Math.h"
-#include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Scene/ComponentAccess.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/Scene.h"
+#include "Strata/Scene/SceneServices.h"
 #include "Strata/Scripting/ScriptEngine.h"
 #include "Strata/Scripting/ScriptModule.h"
 #include "Strata/Scripting/ScriptSystem.h"
@@ -1081,9 +1081,23 @@ namespace Strata
 		// Physics
 		////////////////////////////////////////////////////////////////////////////////
 
-		PhysicsSystem* GetPhysics(ScriptSystem& system)
+		// The scene's physics services (Scene/SceneServices.h); null when the scene plays without physics.
+		IBodyMotionQuery* GetBodyMotion(ScriptSystem& system)
 		{
-			return system.GetScene().GetSystem<PhysicsSystem>();
+			return system.GetScene().GetService<IBodyMotionQuery>();
+		}
+
+		IBodyControl* RequireBodyControl(ScriptSystem& system, const char* function)
+		{
+			IBodyControl* control = system.GetScene().GetService<IBodyControl>();
+			if (!control)
+				system.ReportProblem(function, "the scene plays without physics");
+			return control;
+		}
+
+		IPhysicsQueries* GetPhysicsQueries(ScriptSystem& system)
+		{
+			return system.GetScene().GetService<IPhysicsQueries>();
 		}
 
 		// The entity a body function acts on, reporting why it cannot: the entity does not exist, has no body in the
@@ -1093,8 +1107,8 @@ namespace Strata
 			const Entity entity = RequireEntity(system, id, function);
 			if (!entity)
 				return {};
-			PhysicsSystem* physics = GetPhysics(system);
-			if (!physics || !physics->HasBody(entity))
+			IBodyMotionQuery* motion = GetBodyMotion(system);
+			if (!motion || !motion->HasBody(entity))
 			{
 				system.ReportProblem(function, fmt::format("'{}' has no body in the physics simulation (bodies are active entities with a RigidBody "
 					"component and colliders)", entity.GetName()));
@@ -1127,7 +1141,7 @@ namespace Strata
 				const Entity body = RequireBody(*system, entity, false, function);
 				if (!body)
 					return false;
-				WriteVector3(query(*GetPhysics(*system), body), out);
+				WriteVector3(query(*GetBodyMotion(*system), body), out);
 				return true;
 			});
 		}
@@ -1141,7 +1155,8 @@ namespace Strata
 				ScriptSystem* system = ResolveContext(context, function);
 				const Entity body = system ? RequireBody(*system, entity, true, function) : Entity();
 				const std::optional<glm::vec3> value = body ? ReadVector3(*system, vector, vectorName, function) : std::nullopt;
-				return value && change(*GetPhysics(*system), body, *value);
+				IBodyControl* control = value ? RequireBodyControl(*system, function) : nullptr;
+				return control && change(*control, body, *value);
 			});
 		}
 
@@ -1156,66 +1171,67 @@ namespace Strata
 				const Entity body = system ? RequireBody(*system, entity, true, function) : Entity();
 				const std::optional<glm::vec3> value = body ? ReadVector3(*system, vector, vectorName, function) : std::nullopt;
 				const std::optional<glm::vec3> point = value ? ReadVector3(*system, position, "position", function) : std::nullopt;
-				return point && change(*GetPhysics(*system), body, *value, *point);
+				IBodyControl* control = point ? RequireBodyControl(*system, function) : nullptr;
+				return control && change(*control, body, *value, *point);
 			});
 		}
 
 		bool HostGetLinearVelocity(StrataScriptContext* context, StrataScriptEntityID entity, float outVelocity[3])
 		{
-			return GetBodyVector(context, entity, outVelocity, "GetLinearVelocity", [](PhysicsSystem& physics, Entity body) { return physics.GetLinearVelocity(body); });
+			return GetBodyVector(context, entity, outVelocity, "GetLinearVelocity", [](IBodyMotionQuery& motion, Entity body) { return motion.GetLinearVelocity(body); });
 		}
 
 		bool HostSetLinearVelocity(StrataScriptContext* context, StrataScriptEntityID entity, const float velocity[3])
 		{
 			return ChangeBody(context, entity, velocity, "velocity", "SetLinearVelocity",
-				[](PhysicsSystem& physics, Entity body, const glm::vec3& value) { return physics.SetLinearVelocity(body, value); });
+				[](IBodyControl& control, Entity body, const glm::vec3& value) { return control.SetLinearVelocity(body, value); });
 		}
 
 		bool HostGetAngularVelocity(StrataScriptContext* context, StrataScriptEntityID entity, float outVelocity[3])
 		{
-			return GetBodyVector(context, entity, outVelocity, "GetAngularVelocity", [](PhysicsSystem& physics, Entity body) { return physics.GetAngularVelocity(body); });
+			return GetBodyVector(context, entity, outVelocity, "GetAngularVelocity", [](IBodyMotionQuery& motion, Entity body) { return motion.GetAngularVelocity(body); });
 		}
 
 		bool HostSetAngularVelocity(StrataScriptContext* context, StrataScriptEntityID entity, const float velocity[3])
 		{
 			return ChangeBody(context, entity, velocity, "velocity", "SetAngularVelocity",
-				[](PhysicsSystem& physics, Entity body, const glm::vec3& value) { return physics.SetAngularVelocity(body, value); });
+				[](IBodyControl& control, Entity body, const glm::vec3& value) { return control.SetAngularVelocity(body, value); });
 		}
 
 		bool HostAddForce(StrataScriptContext* context, StrataScriptEntityID entity, const float force[3])
 		{
 			return ChangeBody(context, entity, force, "force", "AddForce",
-				[](PhysicsSystem& physics, Entity body, const glm::vec3& value) { return physics.AddForce(body, value); });
+				[](IBodyControl& control, Entity body, const glm::vec3& value) { return control.AddForce(body, value); });
 		}
 
 		bool HostAddForceAtPosition(StrataScriptContext* context, StrataScriptEntityID entity, const float force[3], const float worldPosition[3])
 		{
 			return ChangeBodyAt(context, entity, force, "force", worldPosition, "AddForceAtPosition",
-				[](PhysicsSystem& physics, Entity body, const glm::vec3& value, const glm::vec3& position) { return physics.AddForceAtPosition(body, value, position); });
+				[](IBodyControl& control, Entity body, const glm::vec3& value, const glm::vec3& position) { return control.AddForceAtPosition(body, value, position); });
 		}
 
 		bool HostAddImpulse(StrataScriptContext* context, StrataScriptEntityID entity, const float impulse[3])
 		{
 			return ChangeBody(context, entity, impulse, "impulse", "AddImpulse",
-				[](PhysicsSystem& physics, Entity body, const glm::vec3& value) { return physics.AddImpulse(body, value); });
+				[](IBodyControl& control, Entity body, const glm::vec3& value) { return control.AddImpulse(body, value); });
 		}
 
 		bool HostAddImpulseAtPosition(StrataScriptContext* context, StrataScriptEntityID entity, const float impulse[3], const float worldPosition[3])
 		{
 			return ChangeBodyAt(context, entity, impulse, "impulse", worldPosition, "AddImpulseAtPosition",
-				[](PhysicsSystem& physics, Entity body, const glm::vec3& value, const glm::vec3& position) { return physics.AddImpulseAtPosition(body, value, position); });
+				[](IBodyControl& control, Entity body, const glm::vec3& value, const glm::vec3& position) { return control.AddImpulseAtPosition(body, value, position); });
 		}
 
 		bool HostAddTorque(StrataScriptContext* context, StrataScriptEntityID entity, const float torque[3])
 		{
 			return ChangeBody(context, entity, torque, "torque", "AddTorque",
-				[](PhysicsSystem& physics, Entity body, const glm::vec3& value) { return physics.AddTorque(body, value); });
+				[](IBodyControl& control, Entity body, const glm::vec3& value) { return control.AddTorque(body, value); });
 		}
 
 		bool HostAddAngularImpulse(StrataScriptContext* context, StrataScriptEntityID entity, const float impulse[3])
 		{
 			return ChangeBody(context, entity, impulse, "impulse", "AddAngularImpulse",
-				[](PhysicsSystem& physics, Entity body, const glm::vec3& value) { return physics.AddAngularImpulse(body, value); });
+				[](IBodyControl& control, Entity body, const glm::vec3& value) { return control.AddAngularImpulse(body, value); });
 		}
 
 		bool HostTeleport(StrataScriptContext* context, StrataScriptEntityID entity, const float position[3], const float rotation[4])
@@ -1228,9 +1244,10 @@ namespace Strata
 					return false;
 				const std::optional<glm::vec3> worldPosition = ReadVector3(*system, position, "position", "Teleport");
 				const std::optional<glm::quat> worldRotation = worldPosition ? ReadRotation(*system, rotation, "Teleport") : std::nullopt;
-				if (!worldRotation)
+				IBodyControl* control = worldRotation ? RequireBodyControl(*system, "Teleport") : nullptr;
+				if (!control)
 					return false;
-				if (!GetPhysics(*system)->Teleport(body, *worldPosition, *worldRotation))
+				if (!control->Teleport(body, *worldPosition, *worldRotation))
 				{
 					system->ReportProblem("Teleport", fmt::format("'{}' cannot be placed there (its parent is scaled to zero)", body.GetName()));
 					return false;
@@ -1288,7 +1305,7 @@ namespace Strata
 			{
 				ScriptSystem* system = ResolveContext(context, "Raycast");
 				const std::optional<RayArguments> ray = system ? ReadRay(*system, origin, direction, maxDistance, ignoreEntity, "Raycast") : std::nullopt;
-				PhysicsSystem* physics = ray ? GetPhysics(*system) : nullptr;
+				IPhysicsQueries* physics = ray ? GetPhysicsQueries(*system) : nullptr;
 				if (!physics)
 					return false;
 				const std::optional<RaycastHit> hit = physics->Raycast(ray->Origin, ray->Direction, maxDistance, layerMask, ray->Ignored, includeTriggers);
@@ -1307,7 +1324,7 @@ namespace Strata
 			{
 				ScriptSystem* system = ResolveContext(context, "RaycastAll");
 				const std::optional<RayArguments> ray = system ? ReadRay(*system, origin, direction, maxDistance, ignoreEntity, "RaycastAll") : std::nullopt;
-				PhysicsSystem* physics = ray ? GetPhysics(*system) : nullptr;
+				IPhysicsQueries* physics = ray ? GetPhysicsQueries(*system) : nullptr;
 				if (!physics)
 					return 0;
 				const std::vector<RaycastHit> hits = physics->RaycastAll(ray->Origin, ray->Direction, maxDistance, layerMask, ray->Ignored, includeTriggers);
@@ -1335,7 +1352,7 @@ namespace Strata
 					system->ReportProblem("OverlapSphere", "the radius must be positive and finite");
 					return 0;
 				}
-				PhysicsSystem* physics = GetPhysics(*system);
+				IPhysicsQueries* physics = GetPhysicsQueries(*system);
 				return physics ? CopyEntityIDs(physics->OverlapSphere(*position, radius, layerMask, includeTriggers), outEntities, capacity) : 0;
 			});
 		}
@@ -1356,7 +1373,7 @@ namespace Strata
 					system->ReportProblem("OverlapBox", "the half extents must be positive");
 					return 0;
 				}
-				PhysicsSystem* physics = GetPhysics(*system);
+				IPhysicsQueries* physics = GetPhysicsQueries(*system);
 				return physics ? CopyEntityIDs(physics->OverlapBox(*position, *size, *orientation, layerMask, includeTriggers), outEntities, capacity) : 0;
 			});
 		}
@@ -1365,13 +1382,23 @@ namespace Strata
 		// Audio
 		////////////////////////////////////////////////////////////////////////////////
 
-		// The scene's audio system, reporting when the scene plays without audio.
-		AudioSystem* RequireAudio(ScriptSystem& system, const char* function)
+		// The scene's audio service (Scene/SceneServices.h), reporting when the scene plays without audio.
+		IAudioPlayback* RequireAudio(ScriptSystem& system, const char* function)
 		{
-			AudioSystem* audio = system.GetScene().GetSystem<AudioSystem>();
+			IAudioPlayback* audio = system.GetScene().GetService<IAudioPlayback>();
 			if (!audio)
 				system.ReportProblem(function, "the scene plays without audio");
 			return audio;
+		}
+
+		// The engine's audio output (an engine service: it works whether or not the scene plays audio), reporting when the
+		// build has no audio module.
+		IAudioOutput* RequireAudioOutput(ScriptSystem& system, const char* function)
+		{
+			IAudioOutput* output = EngineServices::Get<IAudioOutput>();
+			if (!output)
+				system.ReportProblem(function, "the engine has no audio output");
+			return output;
 		}
 
 		// The entity whose AudioSource a function acts on, reporting why there is none.
@@ -1399,7 +1426,7 @@ namespace Strata
 			return HostCall(function, failure, [&]() -> Result
 			{
 				ScriptSystem* system = ResolveContext(context, function);
-				AudioSystem* audio = system ? RequireAudio(*system, function) : nullptr;
+				IAudioPlayback* audio = system ? RequireAudio(*system, function) : nullptr;
 				const Entity source = audio ? RequireAudioSource(*system, entity, function) : Entity();
 				return source ? action(*system, *audio, source) : failure;
 			});
@@ -1407,7 +1434,7 @@ namespace Strata
 
 		bool HostAudioPlay(StrataScriptContext* context, StrataScriptEntityID entity)
 		{
-			return ControlSource(context, entity, "AudioPlay", false, [](ScriptSystem& system, AudioSystem& audio, Entity source)
+			return ControlSource(context, entity, "AudioPlay", false, [](ScriptSystem& system, IAudioPlayback& audio, Entity source)
 			{
 				if (audio.Play(source))
 					return true;
@@ -1419,22 +1446,22 @@ namespace Strata
 
 		bool HostAudioPause(StrataScriptContext* context, StrataScriptEntityID entity)
 		{
-			return ControlSource(context, entity, "AudioPause", false, [](ScriptSystem&, AudioSystem& audio, Entity source) { return audio.Pause(source); });
+			return ControlSource(context, entity, "AudioPause", false, [](ScriptSystem&, IAudioPlayback& audio, Entity source) { return audio.Pause(source); });
 		}
 
 		bool HostAudioStop(StrataScriptContext* context, StrataScriptEntityID entity)
 		{
-			return ControlSource(context, entity, "AudioStop", false, [](ScriptSystem&, AudioSystem& audio, Entity source) { return audio.Stop(source); });
+			return ControlSource(context, entity, "AudioStop", false, [](ScriptSystem&, IAudioPlayback& audio, Entity source) { return audio.Stop(source); });
 		}
 
 		bool HostAudioIsPlaying(StrataScriptContext* context, StrataScriptEntityID entity)
 		{
-			return ControlSource(context, entity, "AudioIsPlaying", false, [](ScriptSystem&, AudioSystem& audio, Entity source) { return audio.IsPlaying(source); });
+			return ControlSource(context, entity, "AudioIsPlaying", false, [](ScriptSystem&, IAudioPlayback& audio, Entity source) { return audio.IsPlaying(source); });
 		}
 
 		bool HostAudioSeek(StrataScriptContext* context, StrataScriptEntityID entity, float seconds)
 		{
-			return ControlSource(context, entity, "AudioSeek", false, [seconds](ScriptSystem& system, AudioSystem& audio, Entity source)
+			return ControlSource(context, entity, "AudioSeek", false, [seconds](ScriptSystem& system, IAudioPlayback& audio, Entity source)
 			{
 				if (!std::isfinite(seconds))
 				{
@@ -1448,7 +1475,7 @@ namespace Strata
 		float HostAudioGetPlaybackPosition(StrataScriptContext* context, StrataScriptEntityID entity)
 		{
 			return ControlSource(context, entity, "AudioGetPlaybackPosition", 0.0f,
-				[](ScriptSystem&, AudioSystem& audio, Entity source) { return audio.GetPlaybackPosition(source); });
+				[](ScriptSystem&, IAudioPlayback& audio, Entity source) { return audio.GetPlaybackPosition(source); });
 		}
 
 		// Checks a one-shot's clip, volume and pitch, reporting what is wrong.
@@ -1485,7 +1512,7 @@ namespace Strata
 			return HostCall("AudioPlayOneShot", false, [&]()
 			{
 				ScriptSystem* system = ResolveContext(context, "AudioPlayOneShot");
-				AudioSystem* audio = system ? RequireAudio(*system, "AudioPlayOneShot") : nullptr;
+				IAudioPlayback* audio = system ? RequireAudio(*system, "AudioPlayOneShot") : nullptr;
 				if (!audio || !ValidateOneShot(*system, clip, volume, pitch, "AudioPlayOneShot"))
 					return false;
 				if (audio->PlayOneShot(AssetHandle(clip), volume, pitch))
@@ -1501,7 +1528,7 @@ namespace Strata
 			return HostCall("AudioPlayOneShotAt", false, [&]()
 			{
 				ScriptSystem* system = ResolveContext(context, "AudioPlayOneShotAt");
-				AudioSystem* audio = system ? RequireAudio(*system, "AudioPlayOneShotAt") : nullptr;
+				IAudioPlayback* audio = system ? RequireAudio(*system, "AudioPlayOneShotAt") : nullptr;
 				if (!audio || !ValidateOneShot(*system, clip, volume, pitch, "AudioPlayOneShotAt"))
 					return false;
 				const std::optional<glm::vec3> worldPosition = ReadVector3(*system, position, "position", "AudioPlayOneShotAt");
@@ -1527,7 +1554,8 @@ namespace Strata
 					system->ReportProblem("AudioSetMasterVolume", "the volume must be finite");
 					return;
 				}
-				AudioSystem::SetMasterVolume(volume);
+				if (IAudioOutput* output = RequireAudioOutput(*system, "AudioSetMasterVolume"))
+					output->SetMasterVolume(volume);
 			});
 		}
 
@@ -1535,7 +1563,9 @@ namespace Strata
 		{
 			return HostCall("AudioGetMasterVolume", 0.0f, [&]()
 			{
-				return ResolveContext(context, "AudioGetMasterVolume") ? AudioSystem::GetMasterVolume() : 0.0f;
+				ScriptSystem* system = ResolveContext(context, "AudioGetMasterVolume");
+				IAudioOutput* output = system ? RequireAudioOutput(*system, "AudioGetMasterVolume") : nullptr;
+				return output ? output->GetMasterVolume() : 0.0f;
 			});
 		}
 		////////////////////////////////////////////////////////////////////////////////

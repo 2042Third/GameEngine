@@ -2,7 +2,6 @@
 #include "Strata/Scripting/ScriptSystem.h"
 
 #include "Strata/Asset/AssetManager.h"
-#include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneHierarchy.h"
 #include "Strata/Scripting/ScriptEngine.h"
@@ -23,6 +22,12 @@ namespace Strata
 		constexpr uint32_t c_MaxSyncRounds = 64;
 		// Distinct API problems reported per playing scene before further ones are dropped.
 		constexpr size_t c_MaxReportedProblems = 1024;
+
+		bool ImplementsContactCallbacks(const ScriptClassInfo& info)
+		{
+			return info.Implements(ScriptCallback::OnCollisionEnter) || info.Implements(ScriptCallback::OnCollisionExit)
+				|| info.Implements(ScriptCallback::OnTriggerEnter) || info.Implements(ScriptCallback::OnTriggerExit);
+		}
 
 		std::string DescribeEntity(const Scene& scene, UUID entityID)
 		{
@@ -77,9 +82,9 @@ namespace Strata
 		m_Running = true;
 		m_CreationBlocked = false;
 		ConnectSignals();
-		// The physics system is created with this one (systems start after all of them exist) and stops before it.
-		if (PhysicsSystem* physics = m_Scene.GetSystem<PhysicsSystem>())
-			m_CollisionListener = physics->AddCollisionListener([this](const CollisionEvent& event) { OnCollision(event); });
+		// Services are offered from the creation of the systems that provide them (before any starts) until they are destroyed.
+		if (ICollisionEventSource* contacts = m_Scene.GetService<ICollisionEventSource>())
+			m_CollisionListener = contacts->AddCollisionListener([this](const CollisionEvent& event) { OnCollision(event); }, CollisionListenerScope::WatchedEntities);
 
 		const std::vector<Entity> entities = m_Scene.GetEntitiesInHierarchyOrder();
 		for (const Entity entity : entities)
@@ -108,8 +113,8 @@ namespace Strata
 
 		if (m_CollisionListener != c_InvalidCollisionListener)
 		{
-			if (PhysicsSystem* physics = m_Scene.GetSystem<PhysicsSystem>())
-				physics->RemoveCollisionListener(m_CollisionListener);
+			if (ICollisionEventSource* contacts = m_Scene.GetService<ICollisionEventSource>())
+				contacts->RemoveCollisionListener(m_CollisionListener);
 			m_CollisionListener = c_InvalidCollisionListener;
 		}
 		m_CreationBlocked = true;
@@ -243,6 +248,22 @@ namespace Strata
 			callback = begin ? ScriptCallback::OnTriggerEnter : ScriptCallback::OnTriggerExit;
 		DeliverContact(event.AID, event.BID, begin, callback, event.Point, event.Normal);
 		DeliverContact(event.BID, event.AID, begin, callback, event.Point, -event.Normal);
+	}
+
+	void ScriptSystem::UpdateContactWatch(Instance& instance)
+	{
+		const bool watch = !instance.Removed && instance.Handle && instance.Class && ImplementsContactCallbacks(*instance.Class);
+		if (watch == instance.WatchesContacts)
+			return;
+		instance.WatchesContacts = watch;
+		// The source exists for as long as instances do (see OnRuntimeStart), so watches stay balanced.
+		ICollisionEventSource* contacts = m_Scene.GetService<ICollisionEventSource>();
+		if (!contacts)
+			return;
+		if (watch)
+			contacts->WatchCollisions(instance.Entity);
+		else
+			contacts->UnwatchCollisions(instance.Entity);
 	}
 
 	void ScriptSystem::DeliverContact(UUID entityID, UUID otherID, bool begin, ScriptCallback callback, const glm::vec3& point, const glm::vec3& normal)
@@ -580,6 +601,7 @@ namespace Strata
 		}
 
 		instance.Handle = handle;
+		UpdateContactWatch(instance);
 		if (entry)
 			ApplyFieldOverrides(instance, entry->Fields, true);
 		return true;
@@ -628,6 +650,7 @@ namespace Strata
 		if (instance.Removed && !instance.Handle)
 			return;
 		instance.Removed = true;
+		UpdateContactWatch(instance);
 		m_InstanceSetVersion++;
 		// Gone once this returns; it stays in the update order (skipped) until the order is compacted.
 		m_RemovalsSinceCompaction++;
@@ -1107,6 +1130,7 @@ namespace Strata
 			}
 			instance->Handle = nullptr;
 			instance->Class = nullptr;
+			UpdateContactWatch(*instance);
 		}
 		m_PendingReloads.clear();
 	}

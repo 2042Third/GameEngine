@@ -1,7 +1,7 @@
 {
 	"Description": "The engine's layers, bottom up. Every file under SourceRoot belongs to exactly one layer (Paths minus Exclude, globs relative to SourceRoot) and may include only files of its own layer and of the layers in MayInclude, which must be listed below it. Architecture.Layering (StrataTests/src/Architecture/LayeringTests.cpp) enforces it; LayeringAllowlist.txt lists the known exceptions, each with the workstream that removes it, and holds exactly MaxAllowlistEntries lines (lower it when you remove one). Widen a MayInclude only for a proven downward dependency, with the reason in the layer's Notes; never to legalize a sideways or upward include. The paths stand in for the planned moves of files between libraries (wave 4, engine-modules).",
 	"SourceRoot": "Strata/src",
-	"MaxAllowlistEntries": 14,
+	"MaxAllowlistEntries": 9,
 	"Layers": [
 		{
 			"Name": "Core",

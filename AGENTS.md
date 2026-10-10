@@ -303,7 +303,9 @@ The threading model, frame loop and pipelines these rules protect are described 
   `Architecture.Layering` (in `StrataTests.Core`) fails on any other include, on files in no layer (new folders and
   files get a pattern) and on stale lines of `LayeringAllowlist.txt`, the known exceptions, each with the workstream
   that removes it. Never add a line or widen `MayInclude` to make a sideways or upward include pass: invert the
-  dependency (an interface in the lower layer, like `InputWindow`; a registry the higher module fills) instead. A
+  dependency (an interface in the lower layer, like `InputWindow`; a registry the higher module fills; a scene service,
+  `Scene/SceneServices.h`, through which the systems of a playing scene use each other, or an engine service,
+  `Core/EngineServices.h`, for what outlives scenes) instead. A
   proven downward dependency may widen `MayInclude`, with the reason in the layer's `Notes`. Removing an exception
   lowers `MaxAllowlistEntries`. Details: Docs/Architecture.md, "Layers".
 - **Module registration:** modules extend the engine through registries (components, asset loaders and importers,
@@ -394,13 +396,15 @@ Writing scripts is described in `.claude/skills/strata-scripting/SKILL.md`.
 
 Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; the skill has an overview with recipes):
 
-- Physics: `RigidBody` (velocities, forces, impulses, `Teleport`) and `Physics` (raycasts, overlaps) go through the scene's
-  `PhysicsSystem`, also in `OnCreate`: scenes start every system before the scripts (`SceneSystem::OnRuntimeStarted`).
-  Contacts reach scripts as `OnCollisionEnter/Exit` and `OnTriggerEnter/Exit` (class descriptor callbacks taking a
-  `StrataScriptCollision`): `ScriptSystem` listens to the `PhysicsSystem` while it runs and calls the scripts of both
-  entities, skipping removed, disabled and not yet started instances; contacts begin only for active entities, and each
-  instance that got an Enter gets its Exit, also after its entity was deactivated.
-- Audio: `AudioSource` and `Audio` go through the scene's `AudioSystem`; without it (simulate mode) the calls fail.
+- Physics: `RigidBody` (velocities, forces, impulses, `Teleport`) and `Physics` (raycasts, overlaps) go through the scene
+  services the scene's `PhysicsSystem` offers (`IBodyMotionQuery`, `IBodyControl`, `IPhysicsQueries`), also in `OnCreate`:
+  scenes start every system before the scripts (`SceneSystem::OnRuntimeStarted`). Contacts reach scripts as
+  `OnCollisionEnter/Exit` and `OnTriggerEnter/Exit` (class descriptor callbacks taking a `StrataScriptCollision`):
+  `ScriptSystem` listens to the scene's `ICollisionEventSource` while it runs and calls the scripts of both entities,
+  skipping removed, disabled and not yet started instances; contacts begin only for active entities, and each instance
+  that got an Enter gets its Exit, also after its entity was deactivated.
+- Audio: `AudioSource` and `Audio` go through the scene's `IAudioPlayback` (the `AudioSystem`); without it (simulate mode)
+  the calls fail. The master volume belongs to the engine (the engine service `IAudioOutput`), so it works in any scene.
 - Game flow: `Game::Quit`, `LoadScene` and `ReloadScene` set `Scene::RequestQuit`/`RequestSceneLoad`, which the scene's owner
   honors after the frame (see [Editor](#editor)).
 - Assets: `Assets::RequestLoad` pins the asset for the playing scene (`ScriptSystem::RequestAsset`; never evicted to meet

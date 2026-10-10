@@ -238,6 +238,32 @@ namespace Strata
 		static uint32_t GetRunningSceneCount();
 
 		//////////////////////////////////////////////////////////////////////////
+		// Services
+		//////////////////////////////////////////////////////////////////////////
+
+		// Scene services (Scene/SceneServices.h): interfaces of the running systems that other systems use, so that they never
+		// include each other's modules. A system registers each interface T it offers while it exists (in its constructor,
+		// removing it in its destructor); a scene has at most one provider per interface. Registering a second one logs an
+		// error and returns false; unregistering an object that does not provide T changes nothing.
+		template<typename T>
+		bool RegisterService(T& service)
+		{
+			return RegisterServiceProvider(entt::type_id<T>().hash(), entt::type_id<T>().name(), &service);
+		}
+		template<typename T>
+		void UnregisterService(T& service)
+		{
+			UnregisterServiceProvider(entt::type_id<T>().hash(), &service);
+		}
+		// The provider of interface T, or null when no system of the scene offers it.
+		template<typename T>
+		T* GetService() const
+		{
+			auto it = m_Services.find(entt::type_id<T>().hash());
+			return it != m_Services.end() ? static_cast<T*>(it->second) : nullptr;
+		}
+
+		//////////////////////////////////////////////////////////////////////////
 		// Requests to the scene's owner
 		//////////////////////////////////////////////////////////////////////////
 
@@ -295,6 +321,9 @@ namespace Strata
 
 		// Live entities of the registry: the scene's, and any created directly through GetRegistry().
 		size_t GetRegistryEntityCount() const;
+		// Service registry: `provider` points to the interface (already cast to it), keyed by the interface's type hash.
+		bool RegisterServiceProvider(entt::id_type type, std::string_view typeName, void* provider);
+		void UnregisterServiceProvider(entt::id_type type, const void* provider);
 		// Drops the entities that lie below another listed one (they go with it) and repeated ones, keeping the order.
 		void RemoveNestedRoots(std::vector<entt::entity>& roots) const;
 		// Destroys the subtrees (already announced to the systems) and compacts the sibling lists they leave.
@@ -396,6 +425,7 @@ namespace Strata
 
 		std::vector<Scope<SceneSystem>> m_Systems;
 		std::unordered_map<entt::id_type, SceneSystem*> m_SystemsByType; // SceneSystemDescriptor::Type -> running system
+		std::unordered_map<entt::id_type, void*> m_Services;              // Interface type -> provider (see RegisterService)
 		std::vector<UUID> m_PendingDestroy;
 		std::unordered_set<UUID> m_PendingDestroySet;
 		SceneRuntimeMode m_RuntimeMode = SceneRuntimeMode::Play;

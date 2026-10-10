@@ -7,7 +7,6 @@
 #include "Strata/Audio/AudioEngine.h"
 #include "Strata/Audio/AudioSource.h"
 #include "Strata/Audio/AudioVoice.h"
-#include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Scene/Scene.h"
 
 #include <algorithm>
@@ -111,9 +110,31 @@ namespace Strata
 
 	}
 
-	AudioSystem::AudioSystem(Scene& scene)
-		: m_Scene(scene)
+	// The scene service IAudioPlayback (Scene/SceneServices.h): the gameplay API for systems of other modules (scripts).
+	class AudioSystem::PlaybackService final : public IAudioPlayback
 	{
+	public:
+		explicit PlaybackService(AudioSystem& system)
+			: m_System(system)
+		{
+		}
+
+		bool Play(Entity entity) override { return m_System.Play(entity); }
+		bool Pause(Entity entity) override { return m_System.Pause(entity); }
+		bool Stop(Entity entity) override { return m_System.Stop(entity); }
+		bool IsPlaying(Entity entity) override { return m_System.IsPlaying(entity); }
+		bool Seek(Entity entity, float seconds) override { return m_System.Seek(entity, seconds); }
+		float GetPlaybackPosition(Entity entity) override { return m_System.GetPlaybackPosition(entity); }
+		bool PlayOneShot(AssetHandle clip, float volume, float pitch) override { return m_System.PlayOneShot(clip, volume, pitch); }
+		bool PlayOneShotAt(AssetHandle clip, const glm::vec3& position, float volume, float pitch) override { return m_System.PlayOneShotAt(clip, position, volume, pitch); }
+	private:
+		AudioSystem& m_System;
+	};
+
+	AudioSystem::AudioSystem(Scene& scene)
+		: m_Scene(scene), m_PlaybackService(CreateScope<PlaybackService>(*this))
+	{
+		m_Scene.RegisterService<IAudioPlayback>(*m_PlaybackService);
 		// Clips resolve against the current assets when sources are created; only later changes need a second look.
 		const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
 		m_AssetManager = manager;
@@ -123,6 +144,7 @@ namespace Strata
 	AudioSystem::~AudioSystem()
 	{
 		OnRuntimeStop();
+		m_Scene.UnregisterService<IAudioPlayback>(*m_PlaybackService);
 	}
 
 	void AudioSystem::OnRuntimeStart()
@@ -131,7 +153,7 @@ namespace Strata
 
 		// Before any game code runs: the scripts' OnCreate (in ScriptSystem::OnRuntimeStarted) may use the gameplay API.
 		m_Paused = m_Scene.IsPaused();
-		m_Physics = m_Scene.GetSystem<PhysicsSystem>();
+		m_Motion = m_Scene.GetService<IBodyMotionQuery>();
 	}
 
 	void AudioSystem::OnRuntimeStarted()
@@ -151,7 +173,7 @@ namespace Strata
 		m_Sources.clear();
 		m_OneShots.clear();
 		m_ListenerEntity = {};
-		m_Physics = nullptr;
+		m_Motion = nullptr;
 		// The next scene to play starts from the default listener.
 		AudioEngine::SetListener(glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, 1.0f, 0.0f));
 	}
@@ -621,17 +643,17 @@ namespace Strata
 
 	bool AudioSystem::GetBodyVelocity(Entity entity, const glm::vec3& position, glm::vec3& outVelocity)
 	{
-		if (!m_Physics)
+		if (!m_Motion)
 			return false;
 		for (Entity current = entity; current.IsValid(); current = current.GetParent())
 		{
 			if (!current.HasComponent<RigidBodyComponent>())
 				continue;
-			if (!m_Physics->HasBody(current))
-				return false;
 			// Entities below a body move with it, rotation included.
-			const glm::vec3 origin = glm::vec3(m_Scene.GetWorldTransform(current)[3]);
-			outVelocity = m_Physics->GetLinearVelocity(current) + glm::cross(m_Physics->GetAngularVelocity(current), position - origin);
+			const std::optional<glm::vec3> velocity = m_Motion->GetPointVelocity(current, position);
+			if (!velocity)
+				return false;
+			outVelocity = *velocity;
 			return true;
 		}
 		return false;

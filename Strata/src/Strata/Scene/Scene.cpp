@@ -1646,6 +1646,23 @@ namespace Strata
 		return s_RunningSceneCount.load();
 	}
 
+	bool Scene::RegisterServiceProvider(entt::id_type type, std::string_view typeName, void* provider)
+	{
+		ST_CORE_ASSERT(provider, "Scene::RegisterService: no provider");
+		auto [it, inserted] = m_Services.try_emplace(type, provider);
+		if (inserted || it->second == provider)
+			return true;
+		ST_CORE_ERROR("Scene '{}': the service {} is already provided by another system; the second provider is ignored", m_Name, typeName);
+		return false;
+	}
+
+	void Scene::UnregisterServiceProvider(entt::id_type type, const void* provider)
+	{
+		auto it = m_Services.find(type);
+		if (it != m_Services.end() && it->second == provider)
+			m_Services.erase(it);
+	}
+
 	void Scene::OnUpdateRuntime(Timestep timestep)
 	{
 		ST_PROFILE_FUNCTION();

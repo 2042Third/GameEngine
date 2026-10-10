@@ -100,7 +100,8 @@ their own and ignore it). Services: `Log` (spdlog; `LogBuffer` backs the editor 
 process memory with peaks: `GetProcessMemory`, process uptime: `GetProcessUptime`),
 `Process` (child processes), `DynamicLibrary`, `CrashGuard`, `UUID`, `Crypto` (SHA-256, peer authentication), `Base64`,
 `CommandLine`, `Timer`/`FramePacer`, `JsonUtils` (exception-free JSON reads), `SequenceLock` (lock-free hand-off to the
-audio thread) and `Profiling` (Tracy with `STRATA_ENABLE_TRACY`).
+audio thread), `EngineServices` (process-wide interfaces a module offers the modules that may not include it, such as the
+audio output's master volume, `IAudioOutput`) and `Profiling` (Tracy with `STRATA_ENABLE_TRACY`).
 
 **Events** (`Events/`). Window, key and mouse events (`ApplicationEvent.h`, `KeyEvent.h`, `MouseEvent.h`, including
 `WindowFileDropEvent` and `WindowContentScaleEvent`, raised when the window moves to a display with another DPI setting
@@ -134,8 +135,9 @@ DirectionalLight, PointLight, SpotLight, SkyLight, PostProcess, Text, RigidBody,
 CapsuleCollider, MeshCollider, AudioSource, AudioListener, Script). `ComponentAccess` reads and writes them with
 validation and change signals, `SceneSerializer` writes versioned JSON (keeping components it cannot read, see
 [Composition root and registries](#composition-root-and-registries)), and `Prefab.h` defines the scene-shaped assets
-(`EntityTemplate`, `Prefab`, `Model`, `SceneAsset`). See [Scene caches](#scene-caches) for how per-frame cost follows
-what changed.
+(`EntityTemplate`, `Prefab`, `Model`, `SceneAsset`). `SceneServices.h` defines the interfaces through which the systems
+of a playing scene use each other (see [Scene services](#scene-services)). See [Scene caches](#scene-caches) for how
+per-frame cost follows what changed.
 
 **Asset** (`Asset/`). `AssetManagerBase` (registry, asynchronous loading and residency), `AssetStreamingQueue` (the
 order and admission of loads), `AssetResidency` (memory pools, budgets, `AssetPin`, eviction), `AssetManager` (the
@@ -168,13 +170,16 @@ rules: AGENTS.md, "Architecture rules" and "Rendering".
 Jolt world from RigidBody and collider components and steps it; `PhysicsRuntime` reference-counts Jolt's global
 state; `PhysicsJobSystem` runs Jolt's jobs on the engine's worker pool; `PhysicsMeshShapes` cooks mesh collider shapes
 on jobs and caches them process-wide; `AssetMeshProvider` supplies mesh data from the active asset manager.
-`PhysicsTypes.h` has the settings, layers, `CollisionEvent` and `RaycastHit`. Collision events collected during a step
-are dispatched afterwards on the main thread to listeners (`PhysicsSystem::AddCollisionListener`).
+`PhysicsTypes.h` has the settings, layers and statistics. Other systems use physics through the scene services
+`PhysicsSystem` offers (`ICollisionEventSource`, `IBodyMotionQuery`, `IBodyControl`, `IPhysicsQueries`, with
+`CollisionEvent` and `RaycastHit`, in `Scene/SceneServices.h`); collision events collected during a step are dispatched
+afterwards on the main thread to the listeners.
 
 **Audio** (`Audio/`). `AudioEngine` wraps the miniaudio mixer, output device, listener and one-shots (main-thread
 API; mixing runs on miniaudio's audio thread, or is pulled with `AdvanceNullDevice`/`ReadFrames` without a device).
 `AudioClip` is immutable sound data, decompressed or streamed; `AudioClipAsset` is its asset, `AudioSource` a voice
-with settings, and `AudioSystem` the "Audio" scene system (Play only). Details: AGENTS.md, "Audio".
+with settings, and `AudioSystem` the "Audio" scene system (Play only), which offers the scene service `IAudioPlayback`;
+the module registers the engine service `IAudioOutput` (master volume). Details: AGENTS.md, "Audio".
 
 **Scripting** (`Scripting/`). `ScriptEngine` (the loaded module, hot reload, faults, optional watchdog),
 `ScriptModule` (loading, validation and guarded calls), `ScriptSystem` (the "Scripting" scene system: instances and
@@ -240,8 +245,9 @@ and third-party headers match no layer and are skipped), maps both ends to their
 layers and fails on every file that is in no layer or in several, on every forbidden include that is not in
 `StrataTests/Architecture/LayeringAllowlist.txt`, and on every allowlist line that matches nothing. Each allowlist line
 names the include, the roadmap workstream that removes it and the reason; the list holds exactly `MaxAllowlistEntries`
-lines (14: the application shell wiring services, asset uploads on the renderer, physics reading renderer meshes, and
-scripting and audio calling the physics and audio systems), so it can only shrink.
+lines (9: the application shell wiring services, asset uploads on the renderer and physics reading renderer meshes), so
+it can only shrink. Scripting and Audio, which used to include the physics and audio systems, reach them through scene
+services (see [Scene services](#scene-services)).
 
 ### Composition root and registries
 
@@ -381,7 +387,8 @@ are, in update order:
   running scenes created their systems from the registry.
 - **Lookup.** `MakeSceneSystemDescriptor<T>` records the class (`SceneSystemDescriptor::Type`); `OnRuntimeStart` maps
   it to the created system, so `Scene::GetSystem<T>` is a hash lookup of the exact class (null for a class that is not
-  registered, not created in the current mode, or a base class).
+  registered, not created in the current mode, or a base class). Systems of other modules use each other through scene
+  services instead (below), never through `GetSystem` of a class they would have to include.
 
 ```text
 OnRuntimeStart(mode)   reset time, pause, steps and requests; create the systems the mode runs;
@@ -404,6 +411,27 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   the requests after the update. The owners are the editor's play mode (`EditorContext::StartRuntime` plays a
   `Scene::Copy` of the edited scene; `Stop` discards it) and `GameRuntime`.
 - `SceneSettings` holds gravity, the fixed timestep (1/60 s) and `MaxFixedStepsPerFrame`.
+
+### Scene services
+
+Systems of different modules use each other through interfaces in the Scene layer (`Scene/SceneServices.h`), so that
+Scripting and Audio never include Physics or Audio headers (the layers above). A system registers each interface it offers
+with its scene for as long as it exists (`Scene::RegisterService<T>` in its constructor, `UnregisterService` in its
+destructor; one provider per interface, a second one is refused with an error), so a service is available from the first
+`OnRuntimeStart` of any system to the last `OnRuntimeStop`; consumers look it up (`Scene::GetService<T>`) and handle null,
+which means the module is not in the build or its system does not run in this mode.
+
+| Service | Provider | Consumers |
+| --- | --- | --- |
+| `ICollisionEventSource`: collision listeners (all entities, or only watched ones) and watched entities | `PhysicsSystem` | `ScriptSystem` (contact callbacks), tools and tests |
+| `IBodyMotionQuery`: bodies, velocities, the velocity of a point moving with a body | `PhysicsSystem` | script host (`RigidBody`), `AudioSystem` (Doppler) |
+| `IBodyControl`: velocities, forces, impulses, gravity scale, wake-up, teleport | `PhysicsSystem` | script host (`RigidBody`) |
+| `IPhysicsQueries`: raycasts and overlaps | `PhysicsSystem` | script host (`Physics`) |
+| `IAudioPlayback`: sources and one-shots | `AudioSystem` (an adapter object) | script host (`AudioSource`, `Audio`) |
+
+What outlives scenes is an engine service (`Core/EngineServices.h`): a module registers it in its registration function
+while the composition root runs, e.g. the Audio module's `IAudioOutput` (the master volume, which scripts change in any
+scene, also one that plays without audio).
 
 ### Scene caches
 
@@ -681,8 +709,9 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   and it walks the whole scene only after a module reload or for more changes than are worth placing one by one
   (`GetUpdateOrderRebuildCount`, `GetFullUpdateOrderBuildCount`). Each update callback walks a list of just the
   instances whose class implements it, reading activity from the cached `ActiveInHierarchy` through each instance's
-  entity handle. Contacts come from the `PhysicsSystem` collision listener. Entity destruction requested by scripts
-  waits until the scene can do it safely (`ScriptSystem::DestroyEntity`), and removed instances are destroyed at the
+  entity handle. Contacts come from the scene's `ICollisionEventSource` (the `PhysicsSystem`), whose listener only hears
+  watched entities: each instance whose class has a contact callback watches its entity. Entity destruction requested by
+  scripts waits until the scene can do it safely (`ScriptSystem::DestroyEntity`), and removed instances are destroyed at the
   next sync point.
 - **Host functions** (`ScriptHostAPI.cpp`). Every function runs in `HostCall` (no exception unwinds into the module)
   and starts with `ResolveContext`, which rejects calls from other threads, outside callbacks or from a crashed module.

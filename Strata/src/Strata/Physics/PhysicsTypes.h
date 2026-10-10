@@ -2,13 +2,11 @@
 
 #include "Strata/Asset/AssetTypes.h"
 #include "Strata/Core/Base.h"
-#include "Strata/Core/UUID.h"
-#include "Strata/Scene/Entity.h"
+#include "Strata/Scene/SceneServices.h"
 
 #include <glm/glm.hpp>
 
 #include <array>
-#include <functional>
 #include <vector>
 
 namespace Strata
@@ -68,46 +66,8 @@ namespace Strata
 		}
 	};
 
-	enum class CollisionEventType : uint8_t
-	{
-		Begin = 0, // Two bodies started touching (or a body entered a trigger)
-		End        // They stopped touching, or one of them was removed from the simulation while touching
-	};
-
-	// A change in the contact state of two entities. Every Begin is eventually followed by exactly one End for the same
-	// pair, except when the scene stops running (the world is torn down without events).
-	struct CollisionEvent
-	{
-		CollisionEventType Type = CollisionEventType::Begin;
-		bool IsTrigger = false; // At least one of the bodies is a trigger (no collision response)
-
-		// The entities involved. A handle is invalid when its entity was destroyed before the event was dispatched
-		// (typical for End events caused by destruction); AID and BID always identify the entities.
-		Entity A;
-		Entity B;
-		UUID AID = UUID::Null();
-		UUID BID = UUID::Null();
-
-		glm::vec3 Point = glm::vec3(0.0f);  // World space contact point (the last known one for End events)
-		glm::vec3 Normal = glm::vec3(0.0f); // World space contact normal pointing from A towards B
-
-		bool Involves(UUID id) const { return AID == id || BID == id; }
-		// The entity on the other side of the contact from `id` (null if `id` is not involved).
-		UUID GetOther(UUID id) const { return AID == id ? BID : (BID == id ? AID : UUID::Null()); }
-	};
-
-	using CollisionCallback = std::function<void(const CollisionEvent&)>;
-	using CollisionListenerID = uint64_t;
-	constexpr CollisionListenerID c_InvalidCollisionListener = 0;
-
-	struct RaycastHit
-	{
-		Entity HitEntity;
-		UUID EntityID = UUID::Null();
-		glm::vec3 Point = glm::vec3(0.0f);  // World space hit position
-		glm::vec3 Normal = glm::vec3(0.0f); // World space surface normal at the hit
-		float Distance = 0.0f;              // Distance from the ray origin along the ray direction
-	};
+	// CollisionEvent, the collision listener types and RaycastHit are defined with the scene services that hand them to other
+	// systems (Scene/SceneServices.h).
 
 	struct PhysicsStats
 	{
