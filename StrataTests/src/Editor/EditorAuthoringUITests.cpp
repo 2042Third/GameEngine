@@ -197,6 +197,36 @@ TEST_SUITE("Editor.UI.Hierarchy")
 		CHECK(context.GetSelection().empty());
 	}
 
+	TEST_CASE("A Shift+click range starts at the entity clicked first, also after rows appeared above it")
+	{
+		AuthoringEditor editor;
+		const UUID parent = editor.Create("Parent");
+		for (int index = 0; index < 3; index++)
+			editor.Create(fmt::format("Child {}", index), { { "parent", UUIDToJson(parent) } });
+		std::vector<UUID> rows;
+		for (int index = 0; index < 5; index++)
+			rows.push_back(editor.Create(fmt::format("Row {}", index)));
+		editor.Frames(2);
+		REQUIRE_FALSE(editor.Hierarchy().GetView().IsExpanded(parent));
+		EditorContext& context = editor.Context();
+
+		editor.ClickRow(rows[1]);
+		REQUIRE(context.GetSelection() == std::vector<UUID> { rows[1] });
+		// Opened with its arrow: three rows appear above the clicked one, and the click on the arrow selects nothing.
+		const SceneHierarchyPanel::RowRect parentRow = editor.Row(parent);
+		editor.ClickWith(ImVec2(parentRow.Min.x + ImGui::GetStyle().FramePadding.x + ImGui::GetFontSize() * 0.5f, AuthoringEditor::Center(parentRow).y), ImGuiKey_None);
+		editor.Pause();
+		REQUIRE(editor.Hierarchy().GetView().IsExpanded(parent));
+		REQUIRE(context.GetSelection() == std::vector<UUID> { rows[1] });
+
+		// The range runs from the entity clicked first to the one clicked now, whatever rows they are on now.
+		editor.ClickRow(rows[3], ImGuiMod_Shift);
+		CHECK(context.GetSelection().size() == 3);
+		for (int index = 1; index <= 3; index++)
+			CHECK(context.IsSelected(rows[static_cast<size_t>(index)]));
+		CHECK(context.GetPrimarySelection().GetUUID() == rows[3]);
+	}
+
 	TEST_CASE("Inline rename commits on Enter and cancels on Escape")
 	{
 		AuthoringEditor editor;

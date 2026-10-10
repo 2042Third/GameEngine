@@ -67,7 +67,10 @@ namespace Strata
 		void DrawRowContextMenu(EditorContext& context, const EditorCommandRegistry& commands, Scene& scene, const HierarchyRow& row);
 		void AcceptRowDrops(EditorContext& context, const EditorCommandRegistry& commands, Scene& scene, size_t row, const ImVec2& min, const ImVec2& max);
 		void AcceptBackgroundDrops(EditorContext& context, const EditorCommandRegistry& commands, Scene& scene);
-		void ApplySelectionRequests(EditorContext& context, const ImGuiMultiSelectIO& io);
+		void ApplySelectionRequests(EditorContext& context, const Scene& scene, const ImGuiMultiSelectIO& io);
+		// The row of the entity a multi-select request names by its selection data (the entity's handle); nothing when the
+		// entity is gone or has no row.
+		std::optional<size_t> FindSelectionRow(const Scene& scene, ImGuiSelectionUserData data) const;
 		// Reveals an entity selected outside the panel, and the entity being renamed.
 		void UpdateReveal(EditorContext& context);
 		// The rename field over its row (placed by DrawRowName), drawn after the rows.

@@ -27,6 +27,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <unordered_set>
 #include <utility>
 
@@ -120,6 +121,14 @@ namespace Strata
 					return metadata->Name.empty() ? metadata->Path : metadata->Name;
 			}
 			return handle.ToString();
+		}
+
+		// A row's selection data in the multi-select scope: its entity's handle, which (unlike its row index) still names the
+		// same entity when rows appear or disappear above it between the two clicks of a range. Never
+		// ImGuiSelectionUserData_Invalid (-1): handles are unsigned 32-bit.
+		ImGuiSelectionUserData ToSelectionData(entt::entity handle)
+		{
+			return static_cast<ImGuiSelectionUserData>(entt::to_integral(handle));
 		}
 
 		// A small icon button on a row (the eye, the prefab badge) without a probe key: rows come and go, the probe keeps a
@@ -382,13 +391,13 @@ namespace Strata
 			// The selection has a focus scope of its own (its ID): the rename field after it is outside the selection.
 			ImGui::PushID("Selection");
 			ImGuiMultiSelectIO* io = ImGui::BeginMultiSelect(flags, static_cast<int>(context.GetSelection().size()), static_cast<int>(rows.size()));
-			ApplySelectionRequests(context, *io);
+			ApplySelectionRequests(context, scene, *io);
 
 			ImGuiListClipper clipper;
 			clipper.Begin(static_cast<int>(rows.size()), rowHeight);
 			// The row a range selection starts from and the row being renamed are drawn even when out of view.
-			if (io->RangeSrcItem >= 0 && io->RangeSrcItem < static_cast<ImGuiSelectionUserData>(rows.size()))
-				clipper.IncludeItemByIndex(static_cast<int>(io->RangeSrcItem));
+			if (const std::optional<size_t> source = FindSelectionRow(scene, io->RangeSrcItem))
+				clipper.IncludeItemByIndex(static_cast<int>(*source));
 			if (m_Rename.Entity.IsValid())
 			{
 				// An entity the rows do not show (the filter hides it) is not renamed.
@@ -403,7 +412,7 @@ namespace Strata
 					DrawRow(context, commands, scene, static_cast<size_t>(row));
 			}
 			io = ImGui::EndMultiSelect();
-			ApplySelectionRequests(context, *io);
+			ApplySelectionRequests(context, scene, *io);
 			ImGui::PopID();
 			ImGui::PopStyleVar();
 			DrawRenameField(context, commands);
@@ -444,7 +453,7 @@ namespace Strata
 			flags |= ImGuiTreeNodeFlags_Leaf;
 		if (selected)
 			flags |= ImGuiTreeNodeFlags_Selected;
-		ImGui::SetNextItemSelectionUserData(static_cast<ImGuiSelectionUserData>(index));
+		ImGui::SetNextItemSelectionUserData(ToSelectionData(row.Handle));
 		if (row.HasChildren() && !filtering)
 			ImGui::SetNextItemOpen(row.IsExpanded());
 		UI::PushSelectionColors(selected);
@@ -733,7 +742,17 @@ namespace Strata
 		ImGui::EndDragDropTarget();
 	}
 
-	void SceneHierarchyPanel::ApplySelectionRequests(EditorContext& context, const ImGuiMultiSelectIO& io)
+	std::optional<size_t> SceneHierarchyPanel::FindSelectionRow(const Scene& scene, ImGuiSelectionUserData data) const
+	{
+		if (data < 0 || data > static_cast<ImGuiSelectionUserData>(std::numeric_limits<entt::id_type>::max()))
+			return std::nullopt;
+		const entt::entity handle = static_cast<entt::entity>(static_cast<entt::id_type>(data));
+		const entt::registry& registry = scene.GetRegistry();
+		const IDComponent* id = registry.valid(handle) ? registry.try_get<IDComponent>(handle) : nullptr;
+		return id ? m_View.FindRow(id->ID) : std::nullopt;
+	}
+
+	void SceneHierarchyPanel::ApplySelectionRequests(EditorContext& context, const Scene& scene, const ImGuiMultiSelectIO& io)
 	{
 		const std::vector<HierarchyRow>& rows = m_View.GetRows();
 		if (io.Requests.Size == 0 || rows.empty())
@@ -753,13 +772,22 @@ namespace Strata
 			}
 			if (request.Type != ImGuiSelectionRequestType_SetRange)
 				continue;
-			const int64_t lastRow = static_cast<int64_t>(rows.size()) - 1;
-			const int64_t first = std::clamp<int64_t>(std::min(request.RangeFirstItem, request.RangeLastItem), 0, lastRow);
-			const int64_t last = std::clamp<int64_t>(std::max(request.RangeFirstItem, request.RangeLastItem), 0, lastRow);
+			// The ends are entities: their rows now (rows may have appeared above the first since it was clicked). An end
+			// whose row is gone (collapsed away, deleted) leaves the range at the other one.
+			std::optional<size_t> first = FindSelectionRow(scene, request.RangeFirstItem);
+			std::optional<size_t> last = FindSelectionRow(scene, request.RangeLastItem);
+			if (!first && !last)
+				continue;
+			if (!first)
+				first = last;
+			if (!last)
+				last = first;
+			const size_t begin = std::min(*first, *last);
+			const size_t end = std::max(*first, *last);
 			std::vector<UUID> range;
-			range.reserve(static_cast<size_t>(last - first + 1));
-			for (int64_t row = first; row <= last; row++)
-				range.push_back(rows[static_cast<size_t>(row)].ID);
+			range.reserve(end - begin + 1);
+			for (size_t row = begin; row <= end; row++)
+				range.push_back(rows[row].ID);
 			// Selected rows move to the end in the order the range was made, so the row clicked last is the primary selection.
 			if (request.RangeDirection < 0)
 				std::reverse(range.begin(), range.end());

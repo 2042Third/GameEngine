@@ -837,10 +837,11 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
 - **Authoring panels** (`Panels/SceneHierarchyPanel`, `InspectorPanel`, `AssetInspectorPanel`, `UI/PropertyWidgets`,
   `UI/MaterialEditor`, `UI/EditorActions`). They draw state and run commands, and their cost follows what is on screen:
   - The **Hierarchy** draws `HierarchyView`'s rows through `ImGuiListClipper` inside one `ImGui::BeginMultiSelect` scope
-    (row index as selection data; requests applied to `EditorContext::SetSelection`, the row clicked last being the
-    primary selection; clicks select on release so any row can be dragged, a box starts in the empty space). A primary
-    selection that changed elsewhere is revealed (`HierarchyView::Reveal`, then the list scrolls to its row). Rows are tree
-    nodes with the entity's icon (`UI/EntityIcons`), its name, a prefab badge on an instance's root and an eye
+    (the entity's handle as selection data, so a range still starts at the entity clicked first when rows appear above
+    it, e.g. a parent opened with its arrow; requests applied to `EditorContext::SetSelection`, the row clicked last
+    being the primary selection; clicks select on release so any row can be dragged, a box starts in the empty space).
+    A primary selection that changed elsewhere is revealed (`HierarchyView::Reveal`, then the list scrolls to its row).
+    Rows are tree nodes with the entity's icon (`UI/EntityIcons`), its name, a prefab badge on an instance's root and an eye
     (`entity.setActive`); a drag carries the topmost dragged entities (`DragDrop::c_Entities`) and a drop asks
     `HierarchyView::GetDropTarget` for `entity.setParent`'s parent and index. The rename field is drawn after the
     selection's scope and activated by id: a keyboard move out of that scope would make ImGui clear the selection. With
