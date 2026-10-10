@@ -72,9 +72,9 @@ if(WIN32)
 	target_sources(StrataEditor PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/Generated/StrataEditor.rc")
 endif()
 
-# The window icon: the strata mark as raw RGBA at 16, 32 and 48 pixels (Tools/GenerateBrandAssets.py), so nothing is
-# decoded at startup. Declared in src/EditorIcon.h.
-foreach(size IN ITEMS 16 32 48)
+# The window icon: the strata mark as raw RGBA at every size of c_EditorIconSizes (Tools/GenerateBrandAssets.py), so
+# nothing is decoded at startup. Declared in src/EditorIcon.h.
+foreach(size IN ITEMS 16 20 24 28 32 40 48 56 64)
 	strata_embed_file(StrataEditor "${CMAKE_CURRENT_SOURCE_DIR}/Resources/Brand/StrataMark${size}.rgba" GetStrataMark${size})
 endforeach()
 

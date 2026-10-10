@@ -575,9 +575,9 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 #if defined(ST_PLATFORM_WINDOWS)
 	if (mode == "check-icon")
 	{
-		// <executable>: succeeds if its icon (the first RT_GROUP_ICON) holds the strata mark's 16, 32, 48 and 256 pixel
-		// images (StrataEditor/Resources/Brand/StrataMark.ico).
-		if (argc != 3)
+		// <executable> <icon file>: succeeds if the executable's icon (the first RT_GROUP_ICON) holds an image of every size
+		// the .ico file has (StrataEditor/Resources/Brand/StrataMark.ico: the strata mark).
+		if (argc != 4)
 			return 2;
 		std::string error;
 		const std::optional<std::vector<uint32_t>> sizes = Strata::Tests::ReadExecutableIconSizes(Strata::FileSystem::FromUTF8(argv[2]), &error);
@@ -590,7 +590,13 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		for (uint32_t size : *sizes)
 			std::printf(" %u", size);
 		std::printf("\n");
-		for (uint32_t expected : { 16u, 32u, 48u, 256u })
+		const std::optional<std::vector<uint32_t>> expectedSizes = Strata::Tests::ReadIconFileSizes(Strata::FileSystem::FromUTF8(argv[3]), &error);
+		if (!expectedSizes || expectedSizes->empty())
+		{
+			std::fprintf(stderr, "'%s': %s\n", argv[3], expectedSizes ? "no images" : error.c_str());
+			return 1;
+		}
+		for (uint32_t expected : *expectedSizes)
 		{
 			if (std::find(sizes->begin(), sizes->end(), expected) == sizes->end())
 			{

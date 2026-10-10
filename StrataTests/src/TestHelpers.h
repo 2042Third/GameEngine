@@ -56,6 +56,9 @@ namespace Strata::Tests
 	std::vector<uint8_t> EncodePNG(uint32_t width, uint32_t height, const std::vector<uint8_t>& rgba);
 	// A PNG filled with one color.
 	std::vector<uint8_t> CreateSolidPNG(uint32_t width, uint32_t height, uint8_t red, uint8_t green, uint8_t blue, uint8_t alpha = 255);
+	// The pixel sizes (width; 256 for the largest) of the images in an .ico file, from its directory. Nullopt (outError
+	// says why) when it cannot be read or is no icon file.
+	std::optional<std::vector<uint32_t>> ReadIconFileSizes(const std::filesystem::path& iconFile, std::string* outError = nullptr);
 
 #if defined(ST_PLATFORM_WINDOWS)
 	// Creates a junction (a mount-point reparse point, which needs no special privilege) at link that redirects to target.

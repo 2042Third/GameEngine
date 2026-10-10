@@ -121,6 +121,33 @@ namespace Strata::Tests
 		return EncodePNG(width, height, pixels);
 	}
 
+	std::optional<std::vector<uint32_t>> ReadIconFileSizes(const std::filesystem::path& iconFile, std::string* outError)
+	{
+		auto fail = [outError](std::string message) -> std::optional<std::vector<uint32_t>>
+		{
+			if (outError)
+				*outError = std::move(message);
+			return std::nullopt;
+		};
+		const std::optional<std::vector<uint8_t>> data = FileSystem::ReadBytes(iconFile);
+		if (!data)
+			return fail("it cannot be read");
+		// ICONDIR: reserved, type (1: icon), count (little-endian WORDs), then 16-byte entries starting with the width.
+		const auto read16 = [&data](size_t offset) { return static_cast<uint32_t>((*data)[offset] | ((*data)[offset + 1] << 8)); };
+		if (data->size() < 6 || read16(0) != 0 || read16(2) != 1)
+			return fail("it is not an icon file");
+		const uint32_t count = read16(4);
+		if (data->size() < 6 + static_cast<size_t>(count) * 16)
+			return fail("its directory is cut off");
+		std::vector<uint32_t> sizes;
+		for (uint32_t index = 0; index < count; index++)
+		{
+			const uint8_t width = (*data)[6 + static_cast<size_t>(index) * 16];
+			sizes.push_back(width == 0 ? 256u : width);
+		}
+		return sizes;
+	}
+
 #if defined(ST_PLATFORM_WINDOWS)
 	bool CreateJunction(const std::filesystem::path& link, const std::filesystem::path& target)
 	{

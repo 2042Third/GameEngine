@@ -9,13 +9,15 @@ The mark: four staggered rounded bands, graded from Sandstone at the top through
 rounded square. At 16 pixels it keeps three thicker bands, so they stay apart. Every image is drawn from signed
 distances (the coverage of a pixel is its distance to the shape's edge, clamped to one pixel), so no size is a scaled
 copy of another. Only the standard library is used (zlib and struct); a given Python installation writes the same
-bytes on every run, though another zlib may compress the PNGs differently. The outputs, in
-StrataEditor/Resources/Brand/:
-    StrataMark16.png, StrataMark32.png, StrataMark48.png, StrataMark256.png   RGBA PNGs
-    StrataMark16.rgba, StrataMark32.rgba, StrataMark48.rgba                     raw RGBA8 rows, top row first, for the
-                                                                                window icon (embedded, decoded at no cost)
-    StrataMark.ico                                                              Windows icon: 16, 32 and 48 pixels as
-                                                                                32-bit bitmaps, 256 pixels as PNG
+bytes on every run, though another zlib may compress the PNGs differently.
+
+The icon sizes cover the small (title bar) and large (taskbar, Alt+Tab) icons of Windows at 100, 125, 150, 175 and
+200% display scaling (16 and 32 pixels times the scale), so the system never stretches a smaller image: it picks the
+image whose area is closest. The outputs, in StrataEditor/Resources/Brand/:
+    StrataMark<size>.png    RGBA PNGs at every icon size and at 256 pixels
+    StrataMark<size>.rgba   raw RGBA8 rows, top row first, at every icon size, for the window icon (embedded,
+                            decoded at no cost; StrataEditor/src/EditorIcon.h lists the sizes)
+    StrataMark.ico          Windows icon: every icon size as a 32-bit bitmap, 256 pixels as PNG
 """
 
 import os
@@ -32,10 +34,13 @@ OCHRE = (0xE0, 0x8A, 0x2E)
 RUST = (0xB9, 0x56, 0x2B)
 UMBER = (0x6B, 0x3A, 0x22)
 
-PNG_SIZES = (16, 32, 48, 256)
-RAW_SIZES = (16, 32, 48)
-ICO_BITMAP_SIZES = (16, 32, 48)
+ICON_SIZES = (16, 20, 24, 28, 32, 40, 48, 56, 64)
+PNG_SIZES = ICON_SIZES + (256,)
+RAW_SIZES = ICON_SIZES
+ICO_BITMAP_SIZES = ICON_SIZES
 ICO_PNG_SIZE = 256
+# Below this size four bands and their gaps would be under two pixels each: three thicker bands stay apart.
+FOUR_BANDS_MIN_SIZE = 24
 
 
 def write_bytes(name, data):
@@ -59,7 +64,7 @@ def rounded_rectangle_distance(x, y, center_x, center_y, half_width, half_height
 
 def bands_for_size(size):
     """The bands as (color, left, right, top, bottom) in units of the image size (0..1)."""
-    if size <= 16:
+    if size < FOUR_BANDS_MIN_SIZE:
         colors = (SANDSTONE, OCHRE, RUST)
         thickness, gap = 0.16, 0.10
         width, step = 0.58, 0.08
@@ -87,7 +92,7 @@ def coverage(distance_in_pixels):
 def draw_mark(size):
     """RGBA8 rows (bytes), top row first."""
     bands = bands_for_size(size)
-    corner = 0.22 if size > 16 else 0.18
+    corner = 0.22 if size >= FOUR_BANDS_MIN_SIZE else 0.18
     rows = []
     for py in range(size):
         row = bytearray()

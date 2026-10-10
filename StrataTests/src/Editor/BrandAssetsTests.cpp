@@ -1,11 +1,14 @@
 #include <doctest/doctest.h>
 
+#include "EditorIcon.h"
 #include "TestHelpers.h"
 
 #include <Strata/Core/FileSystem.h>
 
 #include <stb_image.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <optional>
 #include <string>
@@ -60,10 +63,27 @@ namespace
 
 TEST_SUITE("Editor.Brand")
 {
+	TEST_CASE("The window icon has an exact image for the icon sizes of every common display scale")
+	{
+		// Windows asks for 16 x 16 (title bar) and 32 x 32 (taskbar) icons times the display scale, and stretches the image
+		// whose area is closest when none has the size: at 150% the 16 pixel image became a blurry 24 pixel one.
+		for (const float scale : { 1.0f, 1.25f, 1.5f, 1.75f, 2.0f })
+		{
+			for (const uint32_t base : { 16u, 32u })
+			{
+				const uint32_t size = static_cast<uint32_t>(std::lround(static_cast<float>(base) * scale));
+				CAPTURE(size);
+				CHECK(std::find(c_EditorIconSizes.begin(), c_EditorIconSizes.end(), size) != c_EditorIconSizes.end());
+			}
+		}
+		CHECK(std::is_sorted(c_EditorIconSizes.begin(), c_EditorIconSizes.end()));
+	}
+
 	TEST_CASE("The committed brand assets show the same mark in every form")
 	{
-		for (const int size : { 16, 32, 48 })
+		for (const uint32_t iconSize : c_EditorIconSizes)
 		{
+			const int size = static_cast<int>(iconSize);
 			CAPTURE(size);
 			// The window icon's raw pixels are the PNG's.
 			const std::vector<uint8_t> raw = ReadBrandFile("StrataMark" + std::to_string(size) + ".rgba");
@@ -85,12 +105,12 @@ TEST_SUITE("Editor.Brand")
 			sandstone |= large[pixel] == 0xF2 && large[pixel + 1] == 0xB8 && large[pixel + 2] == 0x72 && large[pixel + 3] == 255;
 		CHECK(sandstone);
 
-		// The Windows icon: 16, 32 and 48 pixel bitmaps and the 256 pixel PNG.
+		// The Windows icon: a bitmap at every icon size and the 256 pixel PNG.
 		const std::vector<uint8_t> icon = ReadBrandFile("StrataMark.ico");
 		CHECK(Read16(icon, 0) == 0);
 		CHECK(Read16(icon, 2) == 1);
 		const uint16_t count = Read16(icon, 4);
-		REQUIRE(count == 4);
+		REQUIRE(count == c_EditorIconSizes.size() + 1);
 		std::vector<int> sizes;
 		for (uint16_t index = 0; index < count; index++)
 		{
@@ -119,6 +139,8 @@ TEST_SUITE("Editor.Brand")
 			CHECK(image[40 + 2] == raw[lastRow + 0]);
 			CHECK(image[40 + 3] == raw[lastRow + 3]);
 		}
-		CHECK(sizes == std::vector<int> { 16, 32, 48, 256 });
+		std::vector<int> expected(c_EditorIconSizes.begin(), c_EditorIconSizes.end());
+		expected.push_back(256);
+		CHECK(sizes == expected);
 	}
 }
