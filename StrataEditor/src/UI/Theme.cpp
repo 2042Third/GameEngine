@@ -170,36 +170,67 @@ namespace Strata::UI
 		// An ImGui upgrade that adds colors fails here until they are given a token.
 		static_assert(std::size(c_ColorRoles) == ImGuiCol_COUNT, "Give every ImGuiCol_ a palette token");
 
-		// Base sizes in unscaled pixels. All even, so scaled by 1.5 or 2 they stay whole pixels (ScaleAllSizes truncates).
+		// Base sizes in unscaled pixels: every size ImGuiStyle::ScaleAllSizes scales, so the style does not depend on what it
+		// was before. All even (or zero), so scaled by 1.5 or 2 they stay exact whole pixels (ScaleAllSizes truncates);
+		// only the hairlines are 1.
 		void SetBaseSizes(ImGuiStyle& style)
 		{
 			style.WindowPadding = ImVec2(8.0f, 8.0f);
+			style.WindowMinSize = ImVec2(32.0f, 32.0f);
+			style.WindowBorderHoverPadding = 4.0f;
 			style.FramePadding = ImVec2(8.0f, 4.0f);
 			style.ItemSpacing = ImVec2(8.0f, 6.0f);
 			style.ItemInnerSpacing = ImVec2(6.0f, 4.0f);
 			style.CellPadding = ImVec2(6.0f, 4.0f);
+			style.TouchExtraPadding = ImVec2(0.0f, 0.0f);
 			style.IndentSpacing = 20.0f;
+			style.ColumnsMinSpacing = 6.0f;
 			style.ScrollbarSize = 12.0f;
+			style.ScrollbarPadding = 2.0f;
 			style.GrabMinSize = 10.0f;
-			style.WindowMinSize = ImVec2(32.0f, 32.0f);
+			style.LogSliderDeadzone = 4.0f;
+			style.TabMinWidthShrink = 80.0f;
+			style.DragDropTargetPadding = 4.0f;
+			style.ColorMarkerSize = 4.0f;
+			// Its y like the frames' padding, as ImGui recommends.
+			style.SeparatorTextPadding = ImVec2(20.0f, 4.0f);
+			style.DisplayWindowPadding = ImVec2(20.0f, 20.0f);
+			style.DisplaySafeAreaPadding = ImVec2(4.0f, 4.0f);
 
 			style.WindowRounding = 0.0f;
 			style.ChildRounding = 0.0f;
 			style.PopupRounding = 6.0f;
 			style.FrameRounding = 4.0f;
 			style.GrabRounding = 4.0f;
+			style.ImageRounding = 0.0f;
 			style.TabRounding = 4.0f;
 			style.ScrollbarRounding = 6.0f;
+			style.TreeLinesRounding = 0.0f;
+			style.MenuItemRounding = 0.0f;
+			style.SelectableRounding = 0.0f;
+			style.DragDropTargetRounding = 0.0f;
 
-			// Hairlines: one pixel up to a UI scale of 2.
+			style.TabBarOverlineSize = 2.0f;
+			style.SeparatorTextBorderSize = 2.0f;
+			style.DragDropTargetBorderSize = 2.0f;
+			style.DockingSeparatorSize = 2.0f;
+			style.TabBorderSize = 0.0f;
+			style.ImageBorderSize = 0.0f;
+
+			// Hairlines: one pixel up to a UI scale of 2. The smallest tab width is one too: no minimum.
 			style.WindowBorderSize = 1.0f;
 			style.ChildBorderSize = 1.0f;
 			style.PopupBorderSize = 1.0f;
 			style.FrameBorderSize = 1.0f;
-			style.TabBorderSize = 0.0f;
 			style.TabBarBorderSize = 1.0f;
-			style.TabBarOverlineSize = 2.0f;
-			style.SeparatorTextBorderSize = 2.0f;
+			style.TreeLinesSize = 1.0f;
+			style.InputTextCursorSize = 1.0f;
+			style.SeparatorSize = 1.0f;
+			style.TabMinWidthBase = 1.0f;
+			// Close buttons of tabs: always on the selected tab, on hover on the others (not sizes: ScaleAllSizes keeps them).
+			style.TabCloseButtonMinWidthSelected = -1.0f;
+			style.TabCloseButtonMinWidthUnselected = 0.0f;
+			style.MouseCursorScale = 1.0f;
 		}
 
 	}
@@ -226,6 +257,8 @@ namespace Strata::UI
 
 		SetBaseSizes(style);
 		style.ScaleAllSizes(scale);
+		// A factor, not a size (it also places tooltips): ScaleAllSizes truncates it to whole numbers, 1 at 150%.
+		style.MouseCursorScale = scale;
 
 		style.WindowTitleAlign = ImVec2(0.0f, 0.5f);
 		// No triangle menu and no close button on dock nodes: every tab has its own close button, and closed panels come

@@ -457,7 +457,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
     selection draw through `UI::PushSelectionColors`, so hovering stays neutral and a selected row keeps the accent
     under the mouse.
   - Sizes are relative to the font (multiples of `ImGui::GetFontSize()` or `GetFrameHeight()`), never fixed pixels above
-    16, so the UI follows the UI scale (the window's content scale, or `--ui-scale`).
+    16, so the UI follows the UI scale (the window's content scale, or `--ui-scale`). `UI::ApplyTheme` sets every size
+    ImGui scales to an even base (hairlines stay one pixel), so 150% and 200% give exact multiples.
   - Panels are `EditorPanel`s registered with `EditorPanelRegistry` (`UI/EditorPanelRegistry.h`, built-ins in
     `EditorLayer::RegisterBuiltinPanels`): the registry begins their windows (icon and title, `###<id>`), toggles them in
     the View menu and keeps their open state in imgui.ini (`StrataPanels`); panels never call `ImGui::Begin`.
