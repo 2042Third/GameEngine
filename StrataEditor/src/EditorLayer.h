@@ -64,6 +64,8 @@ namespace Strata
 		constexpr const char* c_Inspector = "Inspector";
 		constexpr const char* c_ContentBrowser = "ContentBrowser";
 		constexpr const char* c_Console = "Console";
+		constexpr const char* c_Streaming = "Streaming";     // StreamingPanel, opened from the status bar's assets pill
+		constexpr const char* c_Performance = "Performance"; // PerformancePanel, opened from the status bar's frame pill
 		constexpr const char* c_Welcome = "Welcome"; // The launcher (WelcomePanel)
 	}
 
@@ -135,6 +137,8 @@ namespace Strata
 	private:
 		void StartAutomation();
 		void RegisterBuiltinPanels();
+		// editor.showPanel: commands of the editor's window, which only the UI knows.
+		void RegisterPanelCommands();
 		EditorPanelContext MakePanelContext();
 		// The launcher under a menu bar, filling the window (instead of DrawDockspace).
 		void DrawLauncher(EditorPanelContext& panelContext);
@@ -150,9 +154,14 @@ namespace Strata
 		void DrawPlayControls();
 		void DrawBuildControls();
 		void DrawStatusBar();
+		// The status bar's pills of the frame time and of assets; clicking them opens the Performance and Streaming panels.
+		void DrawFramePill();
+		void DrawAssetsPill();
 		// The status bar's pills of automation and scripts; true when the pill was clicked to show the Console.
 		bool DrawAutomationPill();
 		bool DrawScriptsPill();
+		// Tool panels (Streaming, Performance) opened in a layout saved before they existed join the Console's dock node.
+		void DockNewToolPanels();
 		void DrawUnsavedChangesModal();
 		void HandleShortcuts();
 		void UpdateWindowTitle();

@@ -387,7 +387,8 @@ Modules and games register more (`RegisterStage`, up to 64); a scene system name
 also records how busy the job system's worker and I/O threads were since the previous frame (`JobSystem::GetStats`:
 per-thread busy time and completed jobs, written by each pool thread under a sequence lock and read without stopping it).
 `Summarize` gives mean, nearest-rank 50th and 95th percentiles and maximum per stage; frame listeners
-(`AddFrameListener`) receive every recorded frame. The editor reports it through `editor.perf`;
+(`AddFrameListener`) receive every recorded frame. The editor reports it through `editor.perf`, the Performance panel and
+the status bar's frame pill (see [Editor](#editor));
 `StrataRuntime --perf-log` writes it as CSV (`Runtime/FramePerfLog`, see
 [Export and the runtime](#export-and-the-runtime)).
 
@@ -671,8 +672,11 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
 - **Statistics** (`GetStats`, `GetResidencyInfo`): resident bytes and budget per pool, queued loads per priority, loads
   and bytes in flight with their high-water mark, uploaded bytes and finalization milliseconds (last frame and maximum
   of the last 120) with the staging budget, evictions and eviction checks, cancellations and staging releases; per asset
-  its state, memory, latest request and pins.
-  The editor reports them through `asset.stats` and the `assets` section of `editor.status`.
+  its state, memory, latest request and pins. `GetResidencySamples` gives the per-asset part without names into a
+  vector the caller reuses, and `GetMetadataVersion` changes with every registration and metadata change, so a view of
+  tens of thousands of assets reads names only when they change.
+  The editor reports them through `asset.stats`, the `assets` section of `editor.status`, the Streaming panel and the
+  status bar's assets pill.
 - **Measured** by the perf test `PerfGPU.Streaming` (`StrataTests/src/Perf/StreamingPerfTests.cpp`): it writes the
   stress project (`StrataTests/src/Perf/StressProject.h`: 16 textures of 2048² and one of 4096², 447.4 MB of RGBA8, one
   material per district of a 2000-unit world, 2,000 objects over a 512² terrain grid), imports it and builds its pack,
@@ -750,8 +754,8 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
  --------------------------------------------------------------------------------------------------------------
  StrataEditorUI    EditorLayer            owns everything below: menu bar, main toolbar, status pills, default
                                           layout, shortcuts, idle throttling, file dialogs (nfd)
-                   EditorPanelRegistry    the panels (Viewport, Hierarchy, Inspector, Console, Content Browser):
-                                          windows, View menu, open state in imgui.ini
+                   EditorPanelRegistry    the panels (Viewport, Hierarchy, Inspector, Console, Content Browser,
+                                          Streaming, Performance): windows, View menu, open state in imgui.ini
                    UI kit                 Theme (palette, ApplyTheme), EditorFonts, Icons, Widgets, ItemProbe
  --------------------------------------------------------------------------------------------------------------
  StrataEditorCore  EditorContext          project, EditorAssetManager, edited and running scene, play mode,
@@ -792,7 +796,21 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   sets the cap to 0 (full rate) while anything happens and to 30 (10 unfocused) frames per second otherwise; headless,
   `--frames` and command-script runs are never throttled. The frame time shown (status bar, viewport stats,
   `editor.status`) is `Application::GetLastFrameWorkTime` averaged over 60 frames: a frame's CPU time without the waits
-  for the GPU, the display and the pacer, which panels get in `EditorPanelContext::Frame`. **UI tests**
+  for the GPU, the display and the pacer, which panels get in `EditorPanelContext::Frame`. **Instruments**: the
+  Streaming panel (`Panels/StreamingPanel`) and the Performance panel (`Panels/PerformancePanel`) are closed until the
+  status bar's assets and frame pills (or the View menu) open them, docked beside the Console (`DockNewToolPanels` for
+  layouts saved before them). Panels collect what the status bar shows in `OnUpdate`, also while closed: the Streaming
+  panel takes the active asset manager's `GetStats` once per frame after the frame's commands ran (so its totals equal
+  what `asset.stats` returned in that frame) and keeps 120 frames of uploaded bytes, the Performance panel samples the
+  job system for the frame pill's job count. The Streaming panel draws a budget bar per pool (Ochre, Sulfur from 85% of
+  the budget, Cinnabar beyond it), the loads in flight, the queue per priority, an upload sparkline against the
+  per-frame budget, evictions and cancellations, and beside them (in a wide dock) a sortable, filtered, clipped table of
+  `GetResidencySamples`, read at most four times a second with names cached until `GetMetadataVersion` changes; a click
+  on a row reveals the asset in the Content Browser (`ContentBrowserPanel::RevealAsset`). The Performance panel stacks
+  the frame profiler's stage self times of the last 600 frames (newest at the right, untimed work on top, reference
+  lines at 16.7 and 33.3 ms), marks spikes (frames over twice the median and 1 ms), explains the frame under the mouse,
+  lists per-stage statistics and copies `editor.perf`'s JSON (Copy as JSON); its statistics are computed four times a
+  second. **UI tests**
   (`StrataTests/src/Editor/ImGuiHarness.h`) create an ImGui context with the editor's fonts and theme (styled by an
   unattached `ImGuiLayer`), honor ImGui's texture requests without a renderer, inject input (clicks, keys, typed text),
   keep their own clipboard, and find kit widgets through the probe; the `Editor.UI` and `Editor.Launcher` suites draw the
@@ -817,7 +835,8 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   `EditorStateCommands.cpp` (edit, editor including `editor.recentProjects`, `editor.removeRecentProject` and `editor.perf`,
   log, play, selection), `EditorViewportCommands.cpp` (camera, viewport), `EditorScriptCommands.cpp` (script),
   `EditorInputCommands.cpp` (input), `EditorStreamingCommands.cpp` (`asset.stats`, `asset.setBudget`) and
-  `EditorCommands.cpp` (`editor.commands`). Conventions: AGENTS.md, "Editor".
+  `EditorCommands.cpp` (`editor.commands`); the UI's `EditorLayer` adds `editor.showPanel`, the one command about its
+  window. Conventions: AGENTS.md, "Editor".
 - **Runner** (`EditorCommandRunner.h`). `Run` executes a command; a deferred one is polled once per frame from the next
   frame on, in issue order, and reports through its completion callback. Automation and command scripts always use the
   runner. UI actions that finish at once call the registry through `RunEditorCommand`

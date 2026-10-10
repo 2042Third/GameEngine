@@ -605,7 +605,12 @@ and `AudioSystem`, the built-in "Audio" scene system.
     `EditorPanelContext::Frame` for panels), so an idle editor does not read as a slow one.
   - Status pills say what is wrong and lead to it: errors (unread since the Console was last focused, not counting the
     frame its window appears in), a failed automation start (`--no-automation` is shown as off), scripts that are not
-    built (click to build) or failed, assets that failed to load.
+    built (click to build) or failed, assets that failed to load or pools close to or over their budget (the assets pill,
+    `N ready · M streaming · X/Y MB`, in Sulfur from 85% of a budget and Cinnabar beyond it or on failures; click to open
+    the Streaming panel). The frame pill (`ms · FPS · J jobs`, jobs running or queued averaged over 60 frames) opens the
+    Performance panel. Panels collect what the status bar shows about them in `OnUpdate`, which runs while they are closed.
+    `editor.showPanel {panel}` (registered by `EditorLayer`, the only command of the window itself) opens a docked panel
+    and brings it to the front, so agents can show the person what they look at.
 - **Every change to the scene or project goes through a command** (`EditorCommandRegistry::Execute`) or,
   for continuous UI edits, through `SceneEditTransaction` / `SetPropertyWithUndo`. That keeps the UI,
   automation (AI agents) and tests identical, and makes every edit undoable.
@@ -653,7 +658,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   waits for the GPU and the display, so command scripts can `expect` frame budgets. `editor.perf {frames?}` says where
   those frames went: the frame profiler's statistics (mean, nearest-rank p50 and p95, maximum) of the latest frames (120 by
   default, at most 600) for the frame, every stage (`stages/<name>`, self times, `inFrameTime` false for Present), the
-  stages added up (`stageSum`, at most the frame) and the job threads (busy percent, running and queued jobs).
+  stages added up (`stageSum`, at most the frame), the rest of each frame (`untimed`) and the job threads (busy percent,
+  running and queued jobs).
 - `StrataEditor --commands script.json` runs a JSON array of `{"command", "parameters", "expect"}` at startup
   (`EditorCommandScript`); a pending command holds the script until it completes. `expect` (optional) maps JSON
   pointers into the command's result to conditions, e.g. `{"/values/Translation/1": {"min": 1.6, "max": 1.7}}` or
@@ -690,7 +696,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   finalizeMsPerFrame?, stagingMB?, reset?}` changes the budgets of the open project's manager until the project closes
   (it fails without a project; values greater than 0; MB are 2^20 bytes; no undo, as nothing in the project changes).
   Opening a scene, and a scene switch the game asks for in play mode, schedule the release of what only the previous
-  scene used (`EditorContext::OpenScene`, `SwitchRuntimeScene`).
+  scene used (`EditorContext::OpenScene`, `SwitchRuntimeScene`). The Streaming panel (`Panels/StreamingPanel`) shows the
+  same numbers, read once per frame after the frame's commands, and the assets as a sortable, filtered table
+  (`GetResidencySamples`, names cached until `GetMetadataVersion` changes); a row click reveals the asset in the
+  Content Browser.
 - Mutating commands report a `warning` in their result while the scene is playing: such changes apply
   to the running copy and are discarded by `play.stop`. Unknown or missing parameters are errors.
 - **Viewport state** lives in the core: `EditorContext::GetViewport()` (`EditorViewport`) holds the editor camera

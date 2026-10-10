@@ -267,8 +267,10 @@ namespace Strata
 		std::vector<std::vector<float>> stageSamples(stageCount);
 		std::vector<float> work;
 		std::vector<float> stageSums;
+		std::vector<float> untimed;
 		work.reserve(count);
 		stageSums.reserve(count);
+		untimed.reserve(count);
 		double intervals = 0.0;
 		uint32_t intervalCount = 0;
 		double workerBusy = 0.0;
@@ -285,6 +287,7 @@ namespace Strata
 					sum += frame.StageMs[stage];
 			}
 			stageSums.push_back(static_cast<float>(sum));
+			untimed.push_back(std::max(frame.WorkMs - static_cast<float>(sum), 0.0f));
 			if (frame.IntervalMs > 0.0f)
 			{
 				intervals += frame.IntervalMs;
@@ -296,6 +299,7 @@ namespace Strata
 
 		summary.Work = ComputeStats(work);
 		summary.StageSum = ComputeStats(stageSums);
+		summary.Untimed = ComputeStats(untimed);
 		summary.FramesPerSecond = intervals > 0.0 ? static_cast<float>(static_cast<double>(intervalCount) * 1000.0 / intervals) : 0.0f;
 		if (count > 0)
 		{

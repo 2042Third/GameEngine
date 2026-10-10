@@ -568,6 +568,55 @@ TEST_SUITE("Asset.Residency")
 		CHECK(stats.Cancellations == 1); // The pinned asset was unloaded while its load waited to be finalized
 	}
 
+	TEST_CASE("Residency samples list what the residency info lists, and the metadata version follows registrations")
+	{
+		ScopedFakeLoader loader;
+		Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		const uint64_t initialVersion = manager->GetMetadataVersion();
+		const AssetHandle ready = manager->Add(0x71000, MakeUsage(5 * c_KB, 7 * c_KB));
+		const AssetHandle pinnedOnly = manager->Add(0x71001, MakeUsage(1 * c_KB));
+		const AssetHandle untouched = manager->Add(0x71002, MakeUsage(1 * c_KB)); // Never requested: listed by neither
+		const uint64_t registeredVersion = manager->GetMetadataVersion();
+		CHECK(registeredVersion > initialVersion);
+		LoadAll(*manager, { ready });
+		const AssetPin pin = manager->Pin(pinnedOnly);
+		manager->Update();
+
+		// The same assets with the same values; the vector is cleared, so stale entries never survive a refill.
+		std::vector<AssetResidencySample> samples(3, AssetResidencySample { UUID(0x7FFFF) });
+		manager->GetResidencySamples(samples);
+		const std::vector<AssetResidencyInfo> infos = manager->GetResidencyInfo();
+		REQUIRE(samples.size() == infos.size());
+		for (const AssetResidencyInfo& info : infos)
+		{
+			CAPTURE(info.Handle.ToString());
+			const auto sample = std::find_if(samples.begin(), samples.end(), [&info](const AssetResidencySample& s) { return s.Handle == info.Handle; });
+			REQUIRE(sample != samples.end());
+			CHECK(sample->Type == info.Type);
+			CHECK(sample->State == info.State);
+			CHECK(sample->Usage == info.Usage);
+			CHECK(sample->LastRequestedFrame == info.LastRequestedFrame);
+			CHECK(sample->PinCount == info.PinCount);
+			CHECK(sample->IsMemoryAsset == info.IsMemoryAsset);
+		}
+		CHECK(std::any_of(samples.begin(), samples.end(), [ready](const AssetResidencySample& s) { return s.Handle == ready; }));
+		CHECK(std::any_of(samples.begin(), samples.end(), [pinnedOnly](const AssetResidencySample& s) { return s.Handle == pinnedOnly && s.PinCount == 1; }));
+
+		// Loading, pinning and frames change no metadata; registering, moving and unregistering do.
+		CHECK(manager->GetMetadataVersion() == registeredVersion);
+		manager->Rename(ready, "Fake/Moved");
+		const uint64_t movedVersion = manager->GetMetadataVersion();
+		CHECK(movedVersion > registeredVersion);
+		CHECK(manager->GetMetadata(ready)->Path == "Fake/Moved");
+		AssetMetadata memoryMetadata;
+		memoryMetadata.Name = "Runtime";
+		manager->AddMemoryAsset(Material::Create(), memoryMetadata);
+		const uint64_t memoryVersion = manager->GetMetadataVersion();
+		CHECK(memoryVersion > movedVersion);
+		manager->Remove(untouched);
+		CHECK(manager->GetMetadataVersion() > memoryVersion);
+	}
+
 	TEST_CASE("An arrival in use makes room before it is finalized; one nobody requests lately does not")
 	{
 		// Fake assets that note how much the manager held when they were finalized.

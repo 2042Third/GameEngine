@@ -190,6 +190,20 @@ namespace Strata
 		return assets;
 	}
 
+	void AssetManagerBase::GetResidencySamples(std::vector<AssetResidencySample>& outAssets) const
+	{
+		outAssets.clear();
+		std::scoped_lock<std::mutex> lock(m_Mutex);
+		for (const auto& [handle, entry] : m_Entries)
+		{
+			// The same assets as GetResidencyInfo.
+			if (entry.State == AssetState::Unloaded && !entry.Loaded && entry.PinCount == 0)
+				continue;
+			outAssets.push_back(AssetResidencySample { handle, entry.Metadata.Type, entry.State, entry.Usage, entry.LastRequestedFrame, entry.PinCount,
+				entry.IsMemoryAsset });
+		}
+	}
+
 	void AssetManagerBase::TouchLocked(AssetEntry& entry)
 	{
 		if (entry.LastRequestedFrame == m_FrameIndex)

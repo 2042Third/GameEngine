@@ -75,6 +75,18 @@ namespace Strata
 		bool IsMemoryAsset = false;
 	};
 
+	// The residency of one asset without its names (AssetManagerBase::GetResidencySamples).
+	struct AssetResidencySample
+	{
+		AssetHandle Handle = UUID::Null();
+		AssetType Type = AssetType::None;
+		AssetState State = AssetState::Unloaded;
+		AssetMemoryUsage Usage;
+		uint64_t LastRequestedFrame = 0;
+		uint32_t PinCount = 0;
+		bool IsMemoryAsset = false;
+	};
+
 	// The stored bytes a loader decodes. Loaders read them as a span (it converts to one, so loaders may take a span);
 	// a loader whose asset keeps the bytes, or most of them, takes them over with TakeBytes instead of copying them,
 	// which spares a second copy of large assets while they load.
@@ -232,6 +244,13 @@ namespace Strata
 		AssetManagerStats GetStats() const;
 		// The assets that are resident, loading, failed or pinned (unloaded, unpinned ones are left out), in no order.
 		std::vector<AssetResidencyInfo> GetResidencyInfo() const;
+		// The same without names, into a vector the caller keeps (its capacity is reused): cheap enough to call several times
+		// a second with tens of thousands of assets (the editor's Streaming panel); names come from GetMetadata, which change
+		// only with GetMetadataVersion.
+		void GetResidencySamples(std::vector<AssetResidencySample>& outAssets) const;
+		// Changes whenever an asset is registered (or registered again), unregistered or gets other metadata (a move), so
+		// caches of names and paths revalidate cheaply.
+		uint64_t GetMetadataVersion() const { return m_MetadataVersion.load(std::memory_order_acquire); }
 
 		// Changes whenever an asset object is published, replaced or dropped (a load or reload finished, a memory asset was
 		// added, an asset was unloaded, evicted or unregistered), so that caches of data derived from loaded assets can
@@ -414,6 +433,7 @@ namespace Strata
 		nvrhi::CommandListHandle m_UploadCommandList;
 		uint32_t m_FramesWithoutUploads = 0; // Main thread only
 		std::atomic<uint64_t> m_ContentVersion = 0; // See GetContentVersion; changed with m_Mutex held
+		std::atomic<uint64_t> m_MetadataVersion = 0; // See GetMetadataVersion; changed with m_Mutex held
 		std::deque<ContentChange> m_ContentChanges; // The latest changes, oldest first (guarded by m_Mutex)
 		bool m_ProcessingCompletions = false; // Main thread only
 	};

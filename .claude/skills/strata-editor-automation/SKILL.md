@@ -185,8 +185,11 @@ with a window, not `--no-gpu`, to include rendering). A command script can gate 
 `editor.perf {"frames": 120}` then says where the time went, per stage of the main thread (self times in ms:
 `Input`, `Assets.Update`, `Assets.Finalize` (GPU uploads of arriving assets), `Scene.Scripts`, `Scene.Physics`,
 `Scene.Audio`, `Scene.Transforms`, `Render.Extract`, `Render.Submit`, `Editor.UI`, and `Present` outside the frame
-time), with `stageSum` (at most the frame; the rest is untimed editor work) and `jobs` (`workerBusyPercent`,
-`ioBusyPercent`, `running`, `queued`): `{"expect": {"/stages/Scene.Scripts/p95Ms": {"max": 2}}}` gates one stage.
+time), with `stageSum` (at most the frame), `untimed` (the rest of each frame) and `jobs` (`workerBusyPercent`,
+`ioBusyPercent`, `running`, `queued`): `{"expect": {"/stages/Scene.Scripts/p95Ms": {"max": 2}}}` gates one stage. The
+person at the editor sees the same in the Performance panel (click the frame pill) and the streaming numbers of
+`asset.stats` in the Streaming panel (click the assets pill); `editor.showPanel {"panel": "Streaming"}` (or
+`"Performance"`, `"Console"`, ...) brings one to the front for them.
 
 **Play it (simulated input)**: while the game runs (`play.start`), the `input.*` commands press keys and buttons the way a
 player would; scripts see them through `Input::IsKeyDown/IsKeyPressed/IsKeyReleased` (also while the viewport has no focus).

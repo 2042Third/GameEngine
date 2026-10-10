@@ -78,6 +78,7 @@ namespace Strata
 		uint32_t Frames = 0;
 		FrameTimeStats Work;        // The frames' work time
 		FrameTimeStats StageSum;    // Per frame, the stages inside the work time added up (at most the work time)
+		FrameTimeStats Untimed;     // Per frame, the work time no stage accounts for (the work time minus StageSum)
 		float FramesPerSecond = 0.0f; // Frames per second of the intervals between them (0 with fewer than two frames)
 		float WorkerBusyPercent = 0.0f;
 		float IOBusyPercent = 0.0f;

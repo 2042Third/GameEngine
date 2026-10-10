@@ -86,6 +86,7 @@ namespace Strata
 				{ "frame", DescribeFrameTimeStats(summary.Work) },
 				{ "framesPerSecond", summary.FramesPerSecond },
 				{ "stageSum", DescribeFrameTimeStats(summary.StageSum) },
+				{ "untimed", DescribeFrameTimeStats(summary.Untimed) },
 				{ "jobs", {
 					{ "workerThreads", summary.WorkerThreads },
 					{ "ioThreads", summary.IOThreads },
@@ -298,8 +299,9 @@ namespace Strata
 			"framesPerSecond, stages (per stage of the main thread: Input, Assets.Update, Assets.Finalize, Scene.Scripts, Scene.Physics, "
 			"Scene.Audio, Scene.Transforms, Render.Extract, Render.Submit, Editor.UI and Present, plus stages modules registered; each its self "
 			"time, nested stages excluded, with inFrameTime false for Present, which comes after the frame time is measured), stageSum (the "
-			"stages inside the frame time added up per frame; the rest of the frame is untimed work) and jobs (worker and I/O threads, how busy "
-			"they were in percent, running and queued jobs now). Times are milliseconds as avgMs, p50Ms and p95Ms (nearest rank) and maxMs.",
+			"stages inside the frame time added up per frame), untimed (the rest of each frame, work no stage accounts for) and jobs (worker "
+			"and I/O threads, how busy they were in percent, running and queued jobs now). Times are milliseconds as avgMs, p50Ms and p95Ms "
+			"(nearest rank) and maxMs.",
 			ObjectSchema({ { "frames", IntegerSchema("How many of the latest frames to summarize (default 120)", 1, FrameProfiler::c_DefaultCapacity) } }),
 			[](EditorContext&, const nlohmann::json& parameters)
 			{

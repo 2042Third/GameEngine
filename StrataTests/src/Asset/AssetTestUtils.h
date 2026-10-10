@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <cstring>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -199,6 +200,16 @@ namespace Strata::Tests
 		{
 			std::scoped_lock<std::mutex> lock(m_Mutex);
 			return m_ReadOrder;
+		}
+
+		// Gives a registered asset another path and name, as a move does.
+		void Rename(AssetHandle handle, const std::string& path)
+		{
+			std::optional<AssetMetadata> metadata = GetMetadata(handle);
+			REQUIRE(metadata.has_value());
+			metadata->Path = path;
+			metadata->Name = path;
+			UpdateAssetMetadata(*metadata);
 		}
 	protected:
 		bool ReadAssetData(const AssetMetadata& metadata, std::vector<uint8_t>& outData, std::string* outError) override

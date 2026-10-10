@@ -48,11 +48,12 @@ namespace
 	// The result's shape, which tools and command scripts rely on.
 	void CheckProfileSchema(const nlohmann::json& profile)
 	{
-		CHECK(GetKeys(profile) == std::set<std::string> { "frames", "frame", "framesPerSecond", "stageSum", "jobs", "stages" });
+		CHECK(GetKeys(profile) == std::set<std::string> { "frames", "frame", "framesPerSecond", "stageSum", "untimed", "jobs", "stages" });
 		CHECK(profile["frames"].is_number_unsigned());
 		CHECK(profile["framesPerSecond"].is_number());
 		CHECK(GetKeys(profile["frame"]) == c_TimeKeys);
 		CHECK(GetKeys(profile["stageSum"]) == c_TimeKeys);
+		CHECK(GetKeys(profile["untimed"]) == c_TimeKeys);
 		CHECK(GetKeys(profile["jobs"]) == std::set<std::string> { "workerThreads", "ioThreads", "workerBusyPercent", "ioBusyPercent", "running", "queued" });
 		// Every built-in stage, whether or not it ran, with the same keys.
 		const nlohmann::json& stages = profile["stages"];

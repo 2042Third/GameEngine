@@ -528,6 +528,7 @@ namespace Strata
 		if (!metadata.Path.empty() && !metadata.IsSubAsset())
 			m_PathIndex[metadata.Path] = metadata.Handle;
 		PublishContentChange(metadata.Handle);
+		m_MetadataVersion.fetch_add(1, std::memory_order_release);
 		return metadata.Handle;
 	}
 
@@ -548,6 +549,7 @@ namespace Strata
 		entry.Metadata = metadata;
 		if (!metadata.Path.empty() && !metadata.IsSubAsset())
 			m_PathIndex[metadata.Path] = metadata.Handle;
+		m_MetadataVersion.fetch_add(1, std::memory_order_release);
 	}
 
 	void AssetManagerBase::UnregisterAsset(AssetHandle handle)
@@ -567,6 +569,7 @@ namespace Strata
 		released = SetLoadedLocked(entry, nullptr);
 		AbandonLoadLocked(entry);
 		m_Entries.erase(it);
+		m_MetadataVersion.fetch_add(1, std::memory_order_release);
 	}
 
 	void AssetManagerBase::UpdateAssetMetadata(const AssetMetadata& metadata)
@@ -582,6 +585,7 @@ namespace Strata
 		it->second.Metadata = metadata;
 		if (!metadata.Path.empty() && !metadata.IsSubAsset())
 			m_PathIndex[metadata.Path] = metadata.Handle;
+		m_MetadataVersion.fetch_add(1, std::memory_order_release);
 	}
 
 	void AssetManagerBase::SetStoredSize(AssetHandle handle, uint64_t storedSize)

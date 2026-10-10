@@ -159,6 +159,7 @@ TEST_SUITE("Core.FrameProfiler")
 		const FrameProfileSummary summary = profiler.Summarize(1);
 		CHECK(summary.StageSum.Max == doctest::Approx(10.25f));
 		CHECK(summary.StageSum.Max <= summary.Work.Max);
+		CHECK(summary.Untimed.Max == doctest::Approx(12.5f - 10.25f)); // The rest of the frame
 	}
 
 	TEST_CASE("Stages time only the frame thread's frames")
