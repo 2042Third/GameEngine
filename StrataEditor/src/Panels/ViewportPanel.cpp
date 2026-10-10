@@ -227,9 +227,18 @@ namespace Strata
 		const ImVec2 chipsMin(imageMin.x + style.ItemSpacing.x, imageMin.y + style.ItemSpacing.y);
 		ImGui::SetCursorScreenPos(chipsMin);
 		if (!m_GameView)
+		{
 			DrawChips(context);
+		}
 		else if (!m_GameInputEnabled)
+		{
 			DrawStatsChip(viewport.GetSettings());
+			// Debug views apply to the game view too: streaming while playing is what they are for.
+			ImGui::SameLine();
+			DrawDebugViewChip(viewport.GetSettings());
+		}
+		if (rendered && viewport.GetSettings().DebugView != ViewportDebugView::None)
+			DrawDebugViewLegend(context);
 		// Text boxes go below the chip row, also while it is hidden, so they stay in place when it comes and goes.
 		if (view)
 			DrawOverlays(context, *view, chipsMin.y + ImGui::GetFrameHeight(), panelContext.Frame);
@@ -327,11 +336,73 @@ namespace Strata
 		ImGui::SameLine();
 		UI::ToggleChip("Viewport.GameUI", Icons::Gamepad2, "Game UI", &settings.ShowGameUI,
 			"Show the game's screen-space text (its HUD) in the editor view; the game and the scene camera always show it");
+		ImGui::SameLine();
+		DrawDebugViewChip(settings);
 	}
 
 	void ViewportPanel::DrawStatsChip(ViewportSettings& settings)
 	{
 		UI::ToggleChip("Viewport.Stats", Icons::Gauge, "Stats", &settings.ShowStats, "Frame time, draw calls and loading assets");
+	}
+
+	void ViewportPanel::DrawDebugViewChip(ViewportSettings& settings)
+	{
+		// Lit while a debug view colors the image; a click opens the choice rather than toggling.
+		const bool active = settings.DebugView != ViewportDebugView::None;
+		bool clicked = active;
+		// Named after what the image shows, like the menu's items.
+		const char* label = settings.DebugView == ViewportDebugView::Streaming ? "Streaming" : (settings.DebugView == ViewportDebugView::LOD ? "LOD" : "Lit");
+		if (UI::ToggleChip("Viewport.DebugView", Icons::Layers, label, &clicked,
+			"Debug views: color the scene by streaming state (meshes, materials and textures still loading or failed) or by the level of detail "
+			"meshes are drawn at"))
+		{
+			ImGui::OpenPopup("DebugView");
+		}
+		if (!ImGui::BeginPopup("DebugView"))
+			return;
+		const std::pair<ViewportDebugView, const char*> views[] = {
+			{ ViewportDebugView::None, "Lit (no debug view)" },
+			{ ViewportDebugView::Streaming, "Streaming: loading and failed assets" },
+			{ ViewportDebugView::LOD, "LOD: level of detail drawn" }
+		};
+		for (const auto& [view, name] : views)
+		{
+			if (ImGui::MenuItem(name, nullptr, settings.DebugView == view))
+				settings.DebugView = view;
+		}
+		ImGui::EndPopup();
+	}
+
+	void ViewportPanel::DrawDebugViewLegend(EditorContext& context)
+	{
+		ViewportRenderer* renderer = context.GetViewport().GetRenderer();
+		if (!renderer)
+			return;
+		const ViewportSettings& settings = context.GetViewport().GetSettings();
+		const StreamingViewStats& stats = renderer->GetDebugViewStats();
+		const auto toColor = [](const glm::vec4& color) { return ImVec4(color.r, color.g, color.b, color.a); };
+		std::vector<UI::LegendLine> lines;
+		if (settings.DebugView == ViewportDebugView::Streaming)
+		{
+			lines.push_back({ toColor(settings.DebugColors.Pending), "Loading", std::to_string(stats.PendingEntities) });
+			lines.push_back({ toColor(settings.DebugColors.Failed), "Failed", std::to_string(stats.FailedEntities) });
+		}
+		else
+		{
+			for (size_t level = 0; level < settings.DebugColors.LOD.size(); level++)
+			{
+				const bool last = level + 1 == settings.DebugColors.LOD.size();
+				lines.push_back({ toColor(settings.DebugColors.LOD[level]), fmt::format("LOD {}{}", level, last ? "+" : ""), std::to_string(stats.EntitiesPerLOD[level]) });
+			}
+		}
+		const std::string note = settings.DebugView == ViewportDebugView::Streaming && stats.PlaceholderBoxes > 0
+			? fmt::format("{} boxes: meshes not there yet", stats.PlaceholderBoxes) : std::string();
+
+		// At the image's bottom left.
+		UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Caption);
+		const ImGuiStyle& style = ImGui::GetStyle();
+		UI::Legend("Viewport.Legend", ImVec2(m_Image.Min.x + style.ItemSpacing.x, m_Image.Min.y + m_Image.Size.y - style.ItemSpacing.y), lines, note);
+		ImGui::PopFont();
 	}
 
 	////////////////////////////////////////////////////////////////////////////////

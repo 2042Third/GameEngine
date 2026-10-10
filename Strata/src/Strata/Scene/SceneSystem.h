@@ -67,6 +67,9 @@ namespace Strata
 		// entt::type_id of the class Create makes (set by MakeSceneSystemDescriptor), by which Scene::GetSystem finds the
 		// running system; 0 for a system that is not looked up by type.
 		entt::id_type Type = 0;
+		// The FrameProfiler stage the system's start and update callbacks are timed in (e.g. "Scene.Physics"); empty: the
+		// system is not timed on its own (its time counts for the stage around the scene's update).
+		std::string ProfileStage;
 	};
 
 	// A descriptor for a system of class T, which Scene::GetSystem<T> finds while the scene runs.

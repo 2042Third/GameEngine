@@ -5,6 +5,7 @@
 #include <imgui.h>
 
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -124,5 +125,17 @@ namespace Strata::UI
 	// Ochre, Rust and Umber, top to bottom), with the label centered over it. `fraction` is clamped to [0, 1]; a negative
 	// width fills the available width. Frame-height tall. The probe records the label as its text.
 	void StrataProgressBar(const char* id, float fraction, std::string_view label, float width = -1.0f);
+
+	// A legend drawn over an image (no item, so it takes no input): per line a color swatch, a label and a count, the counts
+	// right-aligned in a column of their own so they line up whatever the labels' lengths, then an optional note, on the
+	// overlay surface with its bottom-left corner at `bottomLeft`, in the current font. The probe records each line's label
+	// and count as "<id>.Label<n>" and "<id>.Count<n>" (n from 0; keep legends to a few lines).
+	struct LegendLine
+	{
+		ImVec4 Color;
+		std::string Label;
+		std::string Count;
+	};
+	void Legend(const char* id, const ImVec2& bottomLeft, std::span<const LegendLine> lines, std::string_view note = {});
 
 }

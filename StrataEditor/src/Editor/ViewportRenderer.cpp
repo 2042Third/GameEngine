@@ -118,9 +118,13 @@ namespace Strata
 				gizmoView.ViewportHeight = static_cast<float>(size.y);
 				gizmos.View = gizmoView;
 				DrawSceneGizmos(m_DebugDraw, *scene, gizmos);
-				options.DebugShapes = &m_DebugDraw;
 			}
 		}
+		// The debug view tints what is drawn and boxes what cannot be (meshes that are not there).
+		m_StreamingView.Build(*scene, settings.DebugView, view.Camera, m_Renderer->GetSpecification().LODThreshold, settings.DebugColors, m_DebugDraw);
+		options.EntityTints = m_StreamingView.GetTints();
+		if (!m_DebugDraw.IsEmpty())
+			options.DebugShapes = &m_DebugDraw;
 
 		const bool rendered = m_Renderer->Render(*scene, view.Camera, nullptr, options);
 		if (rendered)

@@ -1,7 +1,9 @@
 #include <doctest/doctest.h>
 
 #include "Strata/Core/Application.h"
+#include "Strata/Core/FrameProfiler.h"
 #include "Strata/Core/Layer.h"
+#include "Strata/Core/Profiling.h"
 
 #include <chrono>
 #include <vector>
@@ -12,6 +14,8 @@ namespace
 {
 
 	constexpr std::chrono::milliseconds c_FrameWork(5);
+	// The frame profiler stage of the busy layer's work.
+	constexpr const char* c_BusyStage = "Test.BusyLayer";
 
 	// Works for c_FrameWork in every update (busy, so the time is exact) and records what the application reports about
 	// the frame before.
@@ -28,6 +32,7 @@ namespace
 			Application& application = Application::Get();
 			if (application.GetFrameCount() > 0)
 				m_WorkTimes.push_back(application.GetLastFrameWorkTime());
+			ST_PROFILE_STAGE(c_BusyStage);
 			const auto end = std::chrono::steady_clock::now() + c_FrameWork;
 			while (std::chrono::steady_clock::now() < end)
 			{
@@ -83,6 +88,61 @@ TEST_SUITE("Core.Application")
 		{
 			CHECK(workTime >= minimum);
 			CHECK(workTime < 0.06);
+		}
+	}
+
+	TEST_CASE("The frame profiler records every frame with the application's work time")
+	{
+		ApplicationSpecification specification;
+		specification.Name = "FrameProfileTest";
+		specification.Headless = true;
+		specification.EnableRenderer = false;
+		specification.EnableAudio = false;
+		specification.Jobs.WorkerThreadCount = 1;
+		specification.Jobs.IOThreadCount = 1;
+		specification.MaxFrameRate = 50;
+		specification.MaxFrames = 5;
+
+		FrameProfiler& profiler = FrameProfiler::Get();
+		std::vector<float> workMs;
+		std::vector<float> busyMs;
+		std::vector<float> stageSums;
+		std::vector<double> workTimes;
+		const uint32_t listener = profiler.AddFrameListener([&](const FrameSample& frame)
+		{
+			workMs.push_back(frame.WorkMs);
+			const FrameStageID busy = profiler.FindStage(c_BusyStage);
+			busyMs.push_back(busy < frame.StageMs.size() ? frame.StageMs[busy] : 0.0f);
+			double sum = 0.0;
+			for (FrameStageID stage = 0; stage < frame.StageMs.size(); stage++)
+			{
+				if (profiler.IsStageInWorkTime(stage))
+					sum += frame.StageMs[stage];
+			}
+			stageSums.push_back(static_cast<float>(sum));
+		});
+		double lastWorkTime = 0.0;
+		{
+			BusyApplication application(specification, workTimes);
+			application.Run();
+			lastWorkTime = application.GetLastFrameWorkTime();
+		}
+		profiler.RemoveFrameListener(listener);
+		CHECK_FALSE(profiler.IsInFrame());
+
+		// One profile per frame, with the work time the application reported for it (the frame before the next one's
+		// update, and the last one after the run).
+		workTimes.push_back(lastWorkTime);
+		REQUIRE(workMs.size() == 5);
+		REQUIRE(workTimes.size() == 5);
+		const float minimumMs = static_cast<float>(std::chrono::duration<double, std::milli>(c_FrameWork).count());
+		for (size_t frame = 0; frame < workMs.size(); frame++)
+		{
+			CAPTURE(frame);
+			CHECK(workMs[frame] == doctest::Approx(static_cast<float>(workTimes[frame] * 1000.0)));
+			// The layer's stage is the frame's work, and the stages never add up to more than the frame.
+			CHECK(busyMs[frame] >= minimumMs);
+			CHECK(stageSums[frame] <= workMs[frame] + 1.0e-3f);
 		}
 	}
 }

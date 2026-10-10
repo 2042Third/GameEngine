@@ -108,8 +108,10 @@ namespace Strata
 
 	void EditorPanelRegistry::ResetOpenStates()
 	{
+		// A panel asked for (Focus) that has not shown yet stays open: the request came after the layout was decided on, e.g.
+		// a command run before the first frame of an editor without a saved layout.
 		for (Entry& entry : m_Entries)
-			SetOpen(entry.Descriptor.Id, entry.Descriptor.OpenByDefault);
+			SetOpen(entry.Descriptor.Id, entry.Descriptor.OpenByDefault || entry.FocusRequested);
 	}
 
 	void EditorPanelRegistry::SetLayoutVersion(int version)
@@ -128,6 +130,7 @@ namespace Strata
 			return;
 		SetOpen(id, true);
 		entry->FocusRequested = true;
+		entry->FocusAttempts = 0;
 	}
 
 	void EditorPanelRegistry::SelectTab(std::string_view id, ImGuiID dockNodeId) const
@@ -164,17 +167,28 @@ namespace Strata
 			}
 
 			const EditorPanelWindowOptions options = entry.Panel->GetWindowOptions(context);
-			if (entry.FocusRequested)
-			{
+			const bool focusing = entry.FocusRequested;
+			if (focusing)
 				ImGui::SetNextWindowFocus();
-				entry.FocusRequested = false;
-			}
 			if (options.NoPadding)
 				ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
 			bool open = true;
 			const bool visible = ImGui::Begin(entry.WindowName.c_str(), &open, options.Flags);
 			if (options.NoPadding)
 				ImGui::PopStyleVar();
+			if (focusing)
+			{
+				// A window docked into a layout built in this frame takes its place, and the node's tab bar the tab the layout
+				// chose, only in the next frames, despite the focus: ask again until the panel's tab shows.
+				const ImGuiWindow* window = ImGui::GetCurrentWindow();
+				const bool docked = window->DockId != 0 || window->DockIsActive;
+				const bool shown = !docked || window->DockTabIsVisible;
+				if (shown || ++entry.FocusAttempts >= c_MaxFocusAttempts)
+				{
+					entry.FocusRequested = false;
+					entry.FocusAttempts = 0;
+				}
+			}
 			if (visible)
 				entry.Panel->OnImGuiRender(context);
 			else
@@ -298,8 +312,10 @@ namespace Strata
 	void EditorPanelRegistry::ReadSetting(std::string_view id, bool open)
 	{
 		m_SavedOpenStates[std::string(id)] = open;
+		// The saved state is read at the context's first frame, which may come after a panel was asked for (Focus): the
+		// request wins.
 		if (Entry* entry = FindEntry(id))
-			entry->Open = open;
+			entry->Open = open || entry->FocusRequested;
 	}
 
 	void EditorPanelRegistry::WriteSettings(ImGuiTextBuffer& buffer) const

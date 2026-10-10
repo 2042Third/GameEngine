@@ -286,7 +286,7 @@ namespace Strata
 			const bool deferred = std::exchange(entry.DependenciesDeferred, false);
 			if (entry.State == AssetState::Unloaded)
 			{
-				entry.State = AssetState::Loading;
+				SetStateLocked(entry, AssetState::Loading);
 				entry.Error.clear();
 				newRequest = true;
 			}
@@ -474,7 +474,7 @@ namespace Strata
 		AssetEntry& entry = it->second;
 		AbandonLoadLocked(entry);
 		// A reload that is abandoned leaves the previous version in place.
-		entry.State = entry.Loaded ? AssetState::Ready : AssetState::Unloaded;
+		SetStateLocked(entry, entry.Loaded ? AssetState::Ready : AssetState::Unloaded);
 		entry.Generation = m_NextGeneration++;
 		m_Cancellations++;
 		return true;
@@ -495,7 +495,7 @@ namespace Strata
 			released = SetLoadedLocked(entry, nullptr);
 			if (AbandonLoadLocked(entry))
 				m_Cancellations++;
-			entry.State = AssetState::Unloaded;
+			SetStateLocked(entry, AssetState::Unloaded);
 			entry.Error.clear();
 			entry.Generation = m_NextGeneration++;
 		}
@@ -514,7 +514,7 @@ namespace Strata
 			wasRequested = entry.State != AssetState::Unloaded;
 			AbandonLoadLocked(entry); // A queued load of the old version is replaced by the new request
 			// Keep serving the old object until the new one is ready, so users never see the asset disappear.
-			entry.State = AssetState::Unloaded;
+			SetStateLocked(entry, AssetState::Unloaded);
 			entry.Generation = m_NextGeneration++;
 			entry.SourceRevision = NextSourceRevision();
 			// Without a loaded object the change is published now: unless the asset is requested, no arrival will tell caches
@@ -561,15 +561,15 @@ namespace Strata
 
 		Ref<Asset> released;
 		std::scoped_lock<std::mutex> lock(m_Mutex);
-		auto [it, inserted] = m_Entries.try_emplace(metadata.Handle);
-		AssetEntry& entry = it->second;
+		bool inserted = false;
+		AssetEntry& entry = AddEntryLocked(metadata.Handle, inserted);
 		if (!inserted)
 			AbandonLoadLocked(entry);
 		entry.Metadata = metadata;
 		entry.IsMemoryAsset = true; // Before the object is set: memory assets are resident but never evicted
 		entry.SourceRevision = NextSourceRevision(); // A new object is a new source, also for a memory asset added again
 		released = SetLoadedLocked(entry, asset);
-		entry.State = AssetState::Ready;
+		SetStateLocked(entry, AssetState::Ready);
 		entry.Error.clear();
 		entry.Generation = m_NextGeneration++;
 		if (inserted)
@@ -577,14 +577,15 @@ namespace Strata
 		if (!metadata.Path.empty() && !metadata.IsSubAsset())
 			m_PathIndex[metadata.Path] = metadata.Handle;
 		PublishContentChange(metadata.Handle);
+		m_MetadataVersion.fetch_add(1, std::memory_order_release);
 		return metadata.Handle;
 	}
 
 	void AssetManagerBase::RegisterAsset(const AssetMetadata& metadata)
 	{
 		std::scoped_lock<std::mutex> lock(m_Mutex);
-		auto [it, inserted] = m_Entries.try_emplace(metadata.Handle);
-		AssetEntry& entry = it->second;
+		bool inserted = false;
+		AssetEntry& entry = AddEntryLocked(metadata.Handle, inserted);
 		if (inserted)
 		{
 			entry.Generation = m_NextGeneration++;
@@ -598,6 +599,7 @@ namespace Strata
 		entry.Metadata = metadata;
 		if (!metadata.Path.empty() && !metadata.IsSubAsset())
 			m_PathIndex[metadata.Path] = metadata.Handle;
+		m_MetadataVersion.fetch_add(1, std::memory_order_release);
 	}
 
 	void AssetManagerBase::UnregisterAsset(AssetHandle handle)
@@ -616,7 +618,8 @@ namespace Strata
 			PublishContentChange(handle);
 		released = SetLoadedLocked(entry, nullptr);
 		AbandonLoadLocked(entry);
-		m_Entries.erase(it);
+		RemoveEntryLocked(it);
+		m_MetadataVersion.fetch_add(1, std::memory_order_release);
 	}
 
 	void AssetManagerBase::UpdateAssetMetadata(const AssetMetadata& metadata)
@@ -632,6 +635,7 @@ namespace Strata
 		it->second.Metadata = metadata;
 		if (!metadata.Path.empty() && !metadata.IsSubAsset())
 			m_PathIndex[metadata.Path] = metadata.Handle;
+		m_MetadataVersion.fetch_add(1, std::memory_order_release);
 	}
 
 	void AssetManagerBase::SetStoredSize(AssetHandle handle, uint64_t storedSize)
@@ -657,6 +661,7 @@ namespace Strata
 	void AssetManagerBase::Update()
 	{
 		ST_PROFILE_FUNCTION();
+		ST_PROFILE_STAGE("Assets.Update");
 
 		{
 			std::scoped_lock<std::mutex> lock(m_Mutex);
@@ -684,6 +689,7 @@ namespace Strata
 
 	size_t AssetManagerBase::ProcessCompletions(bool applyBudget)
 	{
+		ST_PROFILE_STAGE("Assets.Finalize");
 		if (m_ProcessingCompletions)
 			return 0; // Re-entered from a finalizer; the outer call processes everything
 
@@ -853,13 +859,13 @@ namespace Strata
 			if (handled.LoadedAsset)
 			{
 				released.push_back(SetLoadedLocked(entry, handled.LoadedAsset));
-				entry.State = AssetState::Ready;
+				SetStateLocked(entry, AssetState::Ready);
 				entry.Error.clear();
 				PublishContentChange(handled.Handle);
 			}
 			else
 			{
-				entry.State = AssetState::Failed;
+				SetStateLocked(entry, AssetState::Failed);
 				entry.Error = handled.Error;
 				ST_CORE_ERROR("Failed to load asset '{}' ({}): {}", entry.Metadata.Path.empty() ? entry.Metadata.Name : entry.Metadata.Path,
 					entry.Metadata.Handle.ToString(), handled.Error);
@@ -982,19 +988,12 @@ namespace Strata
 		AssetManagerStats stats;
 		{
 			std::scoped_lock<std::mutex> lock(m_Mutex);
+			// Counted as the entries change: the editor reads the statistics every frame (the status bar's assets pill).
 			stats.RegisteredAssets = static_cast<uint32_t>(m_Entries.size());
-			for (const auto& [handle, entry] : m_Entries)
-			{
-				switch (entry.State)
-				{
-					case AssetState::Ready:   stats.LoadedAssets++; break;
-					case AssetState::Loading: stats.LoadingAssets++; break;
-					case AssetState::Failed:  stats.FailedAssets++; break;
-					default: break;
-				}
-				if (entry.PinCount > 0)
-					stats.PinnedAssets++;
-			}
+			stats.LoadedAssets = m_StateCounts[static_cast<size_t>(AssetState::Ready)];
+			stats.LoadingAssets = m_StateCounts[static_cast<size_t>(AssetState::Loading)];
+			stats.FailedAssets = m_StateCounts[static_cast<size_t>(AssetState::Failed)];
+			stats.PinnedAssets = m_PinnedAssets;
 			stats.TotalLoadsCompleted = m_TotalLoadsCompleted;
 			stats.GetAssetCalls = m_GetAssetCalls;
 			stats.Frame = m_FrameIndex;
@@ -1145,7 +1144,7 @@ namespace Strata
 					if (!FitsPrefetchLocked(bytes, pendingBytes))
 						continue;
 					pendingBytes += bytes;
-					entry.State = AssetState::Loading;
+					SetStateLocked(entry, AssetState::Loading);
 					entry.Error.clear();
 					entry.PrefetchOnly = true;
 					entry.DependenciesDeferred = false; // Its read decides again
@@ -1206,7 +1205,7 @@ namespace Strata
 		if (fits)
 			return false;
 
-		entry.State = AssetState::Unloaded; // Prefetches start from Unloaded: there is no previous version to keep
+		SetStateLocked(entry, AssetState::Unloaded); // Prefetches start from Unloaded: there is no previous version to keep
 		entry.Generation = m_NextGeneration++;
 		m_DependencyPrefetchesDropped++;
 		return true;

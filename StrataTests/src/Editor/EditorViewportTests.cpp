@@ -397,17 +397,21 @@ TEST_SUITE("Editor.Viewport")
 		settings.TranslateSnap = 0.25f;
 		settings.RotateSnap = 45.0f;
 		settings.ScaleSnap = 0.5f;
+		settings.DebugView = ViewportDebugView::LOD;
 		ViewportSettings restored;
 		std::string error;
 		REQUIRE_MESSAGE(restored.FromJson(settings.ToJson(), &error), error);
 		CHECK(restored.ToJson() == settings.ToJson());
 		CHECK(restored.Snap);
-		// The selection color is the editor theme's, not saved with the project.
+		CHECK(restored.DebugView == ViewportDebugView::LOD);
+		CHECK(settings.ToJson()["DebugView"] == "lod");
+		// The selection and debug view colors are the editor theme's, not saved with the project.
 		CHECK_FALSE(settings.ToJson().contains("SelectionColor"));
+		CHECK_FALSE(settings.ToJson().contains("DebugColors"));
 
 		const nlohmann::json before = restored.ToJson();
 		for (const nlohmann::json& invalid : { nlohmann::json("x"), nlohmann::json { { "ShowGrid", 1 } }, nlohmann::json { { "Snap", "yes" } },
-			nlohmann::json { { "Gizmo", "Move" } },
+			nlohmann::json { { "Gizmo", "Move" } }, nlohmann::json { { "DebugView", "LOD" } }, nlohmann::json { { "DebugView", 1 } },
 			nlohmann::json { { "Space", "Global" } }, nlohmann::json { { "RotateSnap", 0 } }, nlohmann::json { { "TranslateSnap", 1e9 } },
 			nlohmann::json { { "ScaleSnap", -1 } }, nlohmann::json { { "ScaleSnap", 1e300 } }, nlohmann::json { { "ShowStats", false }, { "ScaleSnap", "big" } } })
 		{
@@ -594,19 +598,20 @@ TEST_SUITE("Editor.Viewport")
 			harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory / "Game") }, { "name", "Game" } });
 			nlohmann::json settings = harness.Run("viewport.getSettings");
 			for (const char* key : { "grid", "selectionOutline", "sceneGizmos", "allColliders", "stats", "previewLighting", "gameUI", "gizmo", "space",
-				"snap", "translateSnap", "rotateSnap", "scaleSnap" })
+				"snap", "translateSnap", "rotateSnap", "scaleSnap", "debugView" })
 			{
 				CAPTURE(key);
 				CHECK(settings.contains(key));
 			}
-			CHECK(settings.size() == 13);
+			CHECK(settings.size() == 14);
 			CHECK(settings["allColliders"] == false);
 			CHECK(settings["previewLighting"] == true);
 			CHECK(settings["gameUI"] == false);
 			CHECK(settings["snap"] == false);
+			CHECK(settings["debugView"] == "none");
 
 			settings = harness.Run("viewport.setSettings", { { "grid", false }, { "gameUI", true }, { "previewLighting", false }, { "gizmo", "Rotate" },
-				{ "space", "Local" }, { "snap", true }, { "rotateSnap", 45 }, { "allColliders", true } });
+				{ "space", "Local" }, { "snap", true }, { "rotateSnap", 45 }, { "allColliders", true }, { "debugView", "streaming" } });
 			CHECK(settings["grid"] == false);
 			CHECK(settings["allColliders"] == true);
 			CHECK(settings["gameUI"] == true);
@@ -616,6 +621,8 @@ TEST_SUITE("Editor.Viewport")
 			CHECK(settings["snap"] == true);
 			CHECK(harness.Context.GetViewport().GetSettings().Snap);
 			CHECK(settings["rotateSnap"] == 45.0);
+			CHECK(settings["debugView"] == "streaming");
+			CHECK(harness.Context.GetViewport().GetSettings().DebugView == ViewportDebugView::Streaming);
 			CHECK(harness.Run("viewport.getSettings") == settings);
 
 			// An invalid value names the parameter and changes nothing, not even the valid values next to it.
@@ -623,6 +630,7 @@ TEST_SUITE("Editor.Viewport")
 			CHECK(error.find("'scaleSnap'") != std::string::npos);
 			CHECK(harness.Error("viewport.setSettings", { { "previewLighting", "yes" } }).find("'previewLighting'") != std::string::npos);
 			CHECK(harness.Error("viewport.setSettings", { { "gizmo", "Move" } }).find("'gizmo'") != std::string::npos);
+			CHECK(harness.Error("viewport.setSettings", { { "debugView", "mips" } }).find("'debugView'") != std::string::npos);
 			CHECK(harness.Error("viewport.setSettings", { { "lighting", true } }).find("Unknown parameter") != std::string::npos);
 			CHECK(harness.Run("viewport.getSettings") == settings);
 			CHECK(harness.Context.GetUndoStack().GetHistory().empty());

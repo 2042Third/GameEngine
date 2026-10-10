@@ -86,23 +86,32 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | What is in the scene? | `scene.hierarchy`, `entity.find` (`name`, `tag`, `component`), `entity.get` |
 | What happened (errors, script output)? | `log.read` (`after` = the previous `latest` to page; `minLevel`) |
 | How much memory do assets use, what is loaded or streaming? | `asset.stats` (`assets: true` lists them; `sort`, `limit`); `asset.setBudget` changes the open project's budgets (MB) |
+| Where does the frame time go (scripts, physics, uploads, rendering, UI)? | `editor.perf {frames?}` (per stage `avgMs`/`p50Ms`/`p95Ms`/`maxMs`, the frame, FPS, job threads' busy %) |
 
 Commands added at run time (for example `script.*`, `viewport.*`, `camera.*` when those features are present)
 appear in `editor.commands` and as tools automatically. The viewport commands need rendering: they fail in an
 editor started with `--no-gpu` (use `--headless`):
 
-- `viewport.capture {width?, height?, camera?: "editor" | "scene", overlays?, path?}` returns
+- `viewport.capture {width?, height?, camera?: "editor" | "scene", overlays?, debugView?, path?}` returns
   `{"Image": {"MimeType": "image/png", "Data"}, width, height, camera, overlays, pendingAssets, pendingTextGlyphs,
-  previewLighting, screenSpaceTexts, hiddenScreenSpaceTexts, notice?, path?}`. Text is complete in the picture (the
-  capture waits a few frames for new glyphs).
+  previewLighting, screenSpaceTexts, hiddenScreenSpaceTexts, debugView, notice?, path?}`. Text is complete in the
+  picture (the capture waits a few frames for new glyphs).
+- **Debug views** show what streaming and level-of-detail selection do: `debugView: "streaming"` tints entities whose
+  mesh, material or textures are still loading (yellow, Sulfur) or failed (red, Cinnabar) and draws a box where a mesh
+  is not loaded yet; `"lod"` tints entities by the level of detail they are drawn at (green 0, blue 1, yellow 2, red 3+);
+  `"none"` is the plain image. Pass it to `viewport.capture` for one picture, or set it for the viewport with
+  `viewport.setSettings {"debugView": ...}` (it then colors the person's viewport too, also the game view). The result's
+  `debugView` counts what it found among the entities in view: `{view, tintedEntities, pendingEntities, failedEntities,
+  placeholderBoxes, entitiesPerLOD: [LOD0, LOD1, LOD2, LOD3+]}`, so you need not read colors: e.g. capture with
+  `"streaming"` until `pendingEntities` and `placeholderBoxes` are 0.
 - **Editor views are not the game's view.** With the editor camera outside play mode, a scene without any light (no
   directional, point, spot or sky light) is lit by *preview lighting* (a sun and a procedural sky that the game will not
   have: the result says `"previewLighting": true`), and the game's screen-space text (its HUD) is hidden
   (`hiddenScreenSpaceTexts` counts it). To see what a player sees, capture with `{"camera": "scene"}` (or while playing).
   `viewport.getSettings` / `viewport.setSettings {previewLighting?, gameUI?, grid?, selectionOutline?, sceneGizmos?,
-  allColliders?, stats?, gizmo?, space?, ...}` change these view settings (no undo step; saved with the project's editor
-  state). Collider shapes show for the selection only unless `allColliders` is on; far away lights and cameras show as
-  small icons.
+  allColliders?, stats?, gizmo?, space?, debugView?, ...}` change these view settings (no undo step; saved with the
+  project's editor state). Collider shapes show for the selection only unless `allColliders` is on; far away lights and
+  cameras show as small icons.
 - `camera.get`; `camera.set {position?, target?, yaw?, pitch?, distance?, fov?, near?, far?, flySpeed?}`;
   `camera.focus {entities?}` frames the given (or selected) entities. Every scene remembers its own editor camera; a
   scene opened for the first time is framed on what it renders, seen from the direction of its primary camera.
@@ -180,6 +189,15 @@ a paused scene by fixed steps. `play.simulate` runs physics only.
 `maxMs`): the CPU time of the frames that ran entirely during the wait, without the waits for the GPU and vsync (measure
 with a window, not `--no-gpu`, to include rendering). A command script can gate it:
 `{"command": "editor.wait", "parameters": {"frames": 120}, "expect": {"/frameTimes/medianMs": {"max": 5}}}`.
+`editor.perf {"frames": 120}` then says where the time went, per stage of the main thread (self times in ms:
+`Input`, `Assets.Update`, `Assets.Finalize` (GPU uploads of arriving assets), `Scene.Scripts`, `Scene.Physics`,
+`Scene.Audio`, `Scene.Transforms`, `Render.Extract`, `Render.Submit`, `Editor.UI`, and `Present` outside the frame
+time), with `stageSum` (at most the frame), `untimed` (the rest of each frame) and `jobs` (`workerBusyPercent`,
+`ioBusyPercent`, `running`, `queued`): `{"expect": {"/stages/Scene.Scripts/p95Ms": {"max": 2}}}` gates one stage. The
+person at the editor sees the same in the Performance panel (click the frame pill) and the streaming numbers of
+`asset.stats` in the Streaming panel (click the assets pill); `editor.showPanel {"panel": "Streaming"}` (or
+`"Performance"`, `"Console"`, ...) brings one to the front for them, also as the first command of a script (it fails
+while no project is open: the editor then shows its launcher instead of panels).
 
 **Play it (simulated input)**: while the game runs (`play.start`), the `input.*` commands press keys and buttons the way a
 player would; scripts see them through `Input::IsKeyDown/IsKeyPressed/IsKeyReleased` (also while the viewport has no focus).

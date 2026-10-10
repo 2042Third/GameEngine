@@ -1,10 +1,13 @@
 #include "EditorLayer.h"
 
+#include "Editor/CommandUtils.h"
 #include "Editor/GameExport.h"
 #include "Panels/ConsolePanel.h"
 #include "Panels/ContentBrowserPanel.h"
 #include "Panels/InspectorPanel.h"
+#include "Panels/PerformancePanel.h"
 #include "Panels/SceneHierarchyPanel.h"
+#include "Panels/StreamingPanel.h"
 #include "Panels/ViewportPanel.h"
 #include "Panels/WelcomePanel.h"
 #include "UI/EditorFonts.h"
@@ -22,6 +25,7 @@
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <optional>
 
 namespace Strata
 {
@@ -42,6 +46,9 @@ namespace Strata
 		// Fields of the snap steps popup, in text heights.
 		constexpr float c_SnapFieldWidthInFontSizes = 8.0f;
 
+		// How strongly the viewport's debug views tint the scene: enough to read the color, little enough to see the shapes.
+		constexpr float c_DebugTintAlpha = 0.6f;
+
 		EditorContextSpecification MakeContextSpecification(const EditorOptions& options)
 		{
 			EditorContextSpecification specification;
@@ -61,9 +68,11 @@ namespace Strata
 			return glm::vec4(color.x, color.y, color.z, color.w);
 		}
 
+		constexpr double c_BytesPerMB = 1024.0 * 1024.0;
+
 		std::string FormatMegabytes(uint64_t bytes)
 		{
-			return fmt::format("{:.1f} MB", static_cast<double>(bytes) / (1024.0 * 1024.0));
+			return fmt::format("{:.1f} MB", static_cast<double>(bytes) / c_BytesPerMB);
 		}
 
 		nlohmann::json DescribeGraphicsDevice(const std::optional<GraphicsDeviceInfo>& device)
@@ -81,18 +90,52 @@ namespace Strata
 	{
 		ST_ASSERT(m_Host, "The editor layer needs a host");
 		RegisterBuiltinPanels();
+		RegisterPanelCommands();
+	}
+
+	void EditorLayer::RegisterPanelCommands()
+	{
+		nlohmann::json panels = nlohmann::json::array();
+		for (size_t index = 0; index < m_Panels.GetCount(); index++)
+		{
+			if (m_Panels.GetDescriptor(index).Placement == EditorPanelPlacement::Docked)
+				panels.push_back(m_Panels.GetDescriptor(index).Id);
+		}
+		m_Commands.Register({ "editor.showPanel",
+			"Opens a panel of the editor's window and brings it to the front, e.g. to show the person at the editor what you are looking at: "
+			"Streaming (asset memory per pool against its budget, loads, uploads, the assets), Performance (where the frames go, stage by "
+			"stage), Console, ContentBrowser, Hierarchy, Inspector or Viewport. Changes no scene data and records no undo; fails in an editor "
+			"without a window (--no-gpu or headless) and while the launcher shows (no project is open).",
+			CommandUtils::ObjectSchema({ { "panel", { { "type", "string" }, { "enum", panels }, { "description", "The panel to show" } } } }, { "panel" }),
+			[this](EditorContext&, const nlohmann::json& parameters) -> EditorCommandResult
+			{
+				CommandArguments arguments(parameters);
+				const std::string panel = arguments.GetString("panel");
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				const EditorPanelDescriptor* descriptor = m_Panels.FindDescriptor(panel);
+				if (!descriptor || descriptor->Placement != EditorPanelPlacement::Docked)
+					return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'panel': the editor has no panel '{}'", panel));
+				if (m_Options.Headless)
+					return EditorCommandResult::Fail("This editor runs without a window: it has no panels to show");
+				if (IsLauncherShown())
+					return EditorCommandResult::Fail("No project is open: the editor shows its launcher instead of the panels. Open or create a project first.");
+				m_Panels.Focus(panel);
+				return EditorCommandResult::Ok({ { "panel", panel } });
+			} });
 	}
 
 	void EditorLayer::RegisterBuiltinPanels()
 	{
 		auto add = [this](const char* id, const char* title, const char* icon, std::function<Scope<EditorPanel>()> create,
-			EditorPanelPlacement placement = EditorPanelPlacement::Docked)
+			EditorPanelPlacement placement = EditorPanelPlacement::Docked, bool openByDefault = true)
 		{
 			EditorPanelDescriptor descriptor;
 			descriptor.Id = id;
 			descriptor.Title = title;
 			descriptor.Icon = icon;
 			descriptor.Placement = placement;
+			descriptor.OpenByDefault = openByDefault;
 			descriptor.Create = std::move(create);
 			std::string error;
 			if (!m_Panels.Register(std::move(descriptor), &error))
@@ -105,12 +148,25 @@ namespace Strata
 		add(EditorPanels::c_Console, "Console", Icons::Terminal, []() { return CreateScope<ConsolePanel>(); });
 		add(EditorPanels::c_ContentBrowser, "Content Browser", Icons::FolderOpen, []() { return CreateScope<ContentBrowserPanel>(); });
 		add(EditorPanels::c_Welcome, "Welcome", Icons::House, []() { return CreateScope<WelcomePanel>(); }, EditorPanelPlacement::Launcher);
+		// Instruments, closed until the status bar's pills (or the View menu) open them.
+		add(EditorPanels::c_Streaming, "Streaming", Icons::HardDrive, []() { return CreateScope<StreamingPanel>(); }, EditorPanelPlacement::Docked, false);
+		add(EditorPanels::c_Performance, "Performance", Icons::ChartColumnStacked, []() { return CreateScope<PerformancePanel>(); }, EditorPanelPlacement::Docked,
+			false);
 
 		if (ContentBrowserPanel* contentBrowser = m_Panels.Get<ContentBrowserPanel>(EditorPanels::c_ContentBrowser))
 		{
 			contentBrowser->SetOpenSceneHandler([this](AssetHandle scene)
 			{
 				RequestDiscardChanges([this, scene]() { RunEditorCommand(m_Context, m_Commands, "scene.open", { { "scene", UUIDToJson(scene) } }); });
+			});
+		}
+		if (StreamingPanel* streaming = m_Panels.Get<StreamingPanel>(EditorPanels::c_Streaming))
+		{
+			streaming->SetRevealAssetHandler([this](AssetHandle asset)
+			{
+				ContentBrowserPanel* contentBrowser = m_Panels.Get<ContentBrowserPanel>(EditorPanels::c_ContentBrowser);
+				if (contentBrowser && contentBrowser->RevealAsset(m_Context, asset))
+					m_Panels.Focus(EditorPanels::c_ContentBrowser);
 			});
 		}
 	}
@@ -131,8 +187,16 @@ namespace Strata
 		// The automation client agents connect through (the launcher shows how), when it was built next to the editor.
 		if (const std::filesystem::path cli = Platform::GetExecutableDirectory() / GetExecutableFileName("StrataCLI"); FileSystem::IsRegularFile(cli))
 			m_CLIExecutable = cli;
-		// The selection outline carries the accent, like selected rows.
-		m_Context.GetViewport().GetSettings().SelectionColor = ToVec4(UI::GetThemeColors().Accent);
+		// The selection outline carries the accent, like selected rows; the streaming view colors loading and failed assets as
+		// the Streaming panel does (GetAssetStateColor), and the LOD view tells the levels of detail apart from success to error.
+		ViewportSettings& viewportSettings = m_Context.GetViewport().GetSettings();
+		const UI::ThemeColors& themeColors = UI::GetThemeColors();
+		viewportSettings.SelectionColor = ToVec4(themeColors.Accent);
+		viewportSettings.DebugColors.Pending = ToVec4(UI::WithAlpha(GetAssetStateColor(AssetState::Loading), c_DebugTintAlpha));
+		viewportSettings.DebugColors.Failed = ToVec4(UI::WithAlpha(GetAssetStateColor(AssetState::Failed), c_DebugTintAlpha));
+		const ImVec4* lodColors[] = { &themeColors.Success, &themeColors.Info, &themeColors.Warning, &themeColors.Error };
+		for (size_t level = 0; level < viewportSettings.DebugColors.LOD.size(); level++)
+			viewportSettings.DebugColors.LOD[level] = ToVec4(UI::WithAlpha(*lodColors[level], c_DebugTintAlpha));
 		// Startup counts as activity: the layout settles at the full rate.
 		m_LastInputTime = m_Host->GetTime();
 
@@ -370,6 +434,7 @@ namespace Strata
 		{
 			HandleShortcuts();
 			DrawDockspace();
+			DockNewToolPanels();
 			m_Panels.OnImGuiRender(panelContext);
 		}
 		m_ProjectDialogs.Draw(panelContext);
@@ -727,6 +792,8 @@ namespace Strata
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Inspector).c_str(), right);
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Console).c_str(), bottom);
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_ContentBrowser).c_str(), bottom);
+		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Streaming).c_str(), bottom);
+		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Performance).c_str(), bottom);
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Viewport).c_str(), center);
 		ImGui::DockBuilderFinish(dockspaceId);
 		// The Content Browser is the bottom area's visible tab on first run.
@@ -1185,26 +1252,9 @@ namespace Strata
 			: (state == SceneState::Play ? colors.PlayState.Play : (state == SceneState::Simulate ? colors.PlayState.Simulate : colors.PlayState.Edit));
 		UI::Pill("Status.PlayState", stateIcon, stateText, stateColor, "The scene's state: changes made while it runs are discarded when it stops");
 
-		// Frame time: what a frame takes to run, not the interval the idle frame rate cap stretches it to.
-		const std::string frame = fmt::format("{:.1f} ms{}{:.0f} FPS{}", m_FrameStats.WorkMilliseconds, c_Separator, m_FrameStats.FramesPerSecond,
-			m_FrameStats.Idle ? std::string(c_Separator) + "idle" : std::string());
 		ImGui::SameLine();
-		UI::Pill("Status.Frame", Icons::Gauge, frame, colors.TextSecondary,
-			"Frame time (what a frame takes to run, without waiting for the next one) and frame rate. While nothing happens the editor "
-			"redraws less often (idle) and returns to the full rate on input.");
-
-		// Assets.
-		if (const EditorAssetManager* assets = m_Context.GetAssetManager())
-		{
-			const AssetManagerStats stats = assets->GetStats();
-			const std::string text = fmt::format("{} ready{}{} loading{}{}", stats.LoadedAssets, c_Separator, stats.LoadingAssets, c_Separator,
-				FormatMegabytes(stats.LoadedMemory));
-			const std::string tooltip = stats.FailedAssets > 0
-				? fmt::format("{} assets failed to load (see the Console). Loaded assets use {}.", stats.FailedAssets, FormatMegabytes(stats.LoadedMemory))
-				: fmt::format("Loaded assets and the memory they use; {} are registered.", stats.RegisteredAssets);
-			ImGui::SameLine();
-			UI::Pill("Status.Assets", Icons::Package, text, stats.FailedAssets > 0 ? colors.Error : colors.TextSecondary, tooltip.c_str());
-		}
+		DrawFramePill();
+		DrawAssetsPill();
 
 		ImGui::SameLine();
 		bool showConsole = DrawAutomationPill();
@@ -1233,6 +1283,89 @@ namespace Strata
 		}
 		if (showConsole)
 			m_Panels.Focus(EditorPanels::c_Console);
+	}
+
+	void EditorLayer::DrawFramePill()
+	{
+		// Frame time: what a frame takes to run, not the interval the idle frame rate cap stretches it to; then the jobs the
+		// worker and I/O threads have in hand (averaged over the last second, so the count does not flicker).
+		const PerformancePanel* performance = m_Panels.Get<PerformancePanel>(EditorPanels::c_Performance);
+		std::string text = fmt::format("{:.1f} ms{}{:.0f} FPS", m_FrameStats.WorkMilliseconds, c_Separator, m_FrameStats.FramesPerSecond);
+		std::string tooltip = "Frame time (what a frame takes to run, without waiting for the next one) and frame rate. While nothing happens the editor "
+			"redraws less often (idle) and returns to the full rate on input.";
+		if (performance)
+		{
+			const long jobs = std::lround(performance->GetAverageJobsInFlight());
+			text += fmt::format("{}{} {}", c_Separator, jobs, jobs == 1 ? "job" : "jobs");
+			const JobSystemStats& stats = performance->GetJobStats();
+			tooltip += fmt::format("\nJobs running or queued on the {} worker and {} I/O threads, averaged over the last {} frames (now {} running, {} queued). "
+				"Click to see where the frames go (Performance).", stats.Workers.Threads, stats.IO.Threads, PerformancePanel::c_JobSamples,
+				stats.Workers.RunningJobs + stats.IO.RunningJobs, stats.Workers.QueuedJobs + stats.IO.QueuedJobs);
+		}
+		if (m_FrameStats.Idle)
+			text += std::string(c_Separator) + "idle";
+		if (UI::Pill("Status.Frame", Icons::Gauge, text, UI::GetThemeColors().TextSecondary, tooltip.c_str()))
+			m_Panels.Focus(EditorPanels::c_Performance);
+	}
+
+	void EditorLayer::DrawAssetsPill()
+	{
+		// The streaming panel takes the statistics once per frame, also while it is closed; without it, nothing to show.
+		const StreamingPanel* streaming = m_Panels.Get<StreamingPanel>(EditorPanels::c_Streaming);
+		if (!m_Context.GetAssetManager() || !streaming || !streaming->GetStats())
+			return;
+		const AssetManagerStats& stats = *streaming->GetStats();
+		// The memory of the pool closest to (or furthest over) its budget, which also gives the pill its color; all loaded
+		// memory when no pool has a budget (no device).
+		const std::optional<AssetMemoryPool> shownPool = GetMostPressuredPool(stats);
+		const BudgetPressure pressure = GetWorstPoolPressure(stats);
+		std::string memory = FormatMegabytes(stats.LoadedMemory);
+		if (shownPool)
+		{
+			memory = fmt::format("{} {:.0f}/{:.0f} MB", GetMemoryPoolShortName(*shownPool), static_cast<double>(GetPoolBytes(stats.Resident, *shownPool)) / c_BytesPerMB,
+				static_cast<double>(stats.Budgets.GetPoolBudget(*shownPool)) / c_BytesPerMB);
+		}
+		const std::string text = fmt::format("{} ready{}{} streaming{}{}", stats.LoadedAssets, c_Separator, stats.LoadingAssets, c_Separator, memory);
+		std::string tooltip = stats.FailedAssets > 0 ? fmt::format("{} assets failed to load (see the Console or the Streaming panel).", stats.FailedAssets)
+			: fmt::format("Assets ready and streaming in; {} are registered.", stats.RegisteredAssets);
+		if (!shownPool)
+		{
+			tooltip += fmt::format(" Loaded assets use {}; the pools have no budgets (no graphics device).", FormatMegabytes(stats.LoadedMemory));
+		}
+		else
+		{
+			tooltip += fmt::format(" Shown: {}, the pool closest to its budget{}.", GetMemoryPoolName(*shownPool),
+				pressure == BudgetPressure::Over ? " (over it: what is in use stays resident)" : (pressure == BudgetPressure::High ? " (close to it)" : ""));
+			for (AssetMemoryPool pool : c_AssetMemoryPools)
+			{
+				const uint64_t used = GetPoolBytes(stats.Resident, pool);
+				const uint64_t budget = stats.Budgets.GetPoolBudget(pool);
+				tooltip += budget == AssetResidencyBudgets::c_Unlimited ? fmt::format("\n{}: {} (no budget)", GetMemoryPoolName(pool), FormatMegabytes(used))
+					: fmt::format("\n{}: {} of {}", GetMemoryPoolName(pool), FormatMegabytes(used), FormatMegabytes(budget));
+			}
+		}
+		tooltip += "\nClick to open the Streaming panel.";
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		// Failures matter most; then how full the budgets are (a comfortable budget is no news).
+		const ImVec4& color = stats.FailedAssets > 0 ? colors.Error
+			: (pressure == BudgetPressure::High || pressure == BudgetPressure::Over ? GetBudgetPressureColor(pressure) : colors.TextSecondary);
+		ImGui::SameLine();
+		if (UI::Pill("Status.Assets", Icons::Package, text, color, tooltip.c_str()))
+			m_Panels.Focus(EditorPanels::c_Streaming);
+	}
+
+	void EditorLayer::DockNewToolPanels()
+	{
+		const ImGuiWindow* console = ImGui::FindWindowByName(m_Panels.GetWindowName(EditorPanels::c_Console).c_str());
+		if (!console || console->DockId == 0)
+			return;
+		for (const char* id : { EditorPanels::c_Streaming, EditorPanels::c_Performance })
+		{
+			// Only windows the layout knows nothing about: a panel the user moved elsewhere stays there.
+			const std::string name = m_Panels.GetWindowName(id);
+			if (m_Panels.IsOpen(id) && !ImGui::FindWindowByName(name.c_str()) && !ImGui::FindWindowSettingsByID(ImHashStr(name.c_str())))
+				ImGui::DockBuilderDockWindow(name.c_str(), console->DockId);
+		}
 	}
 
 	bool EditorLayer::DrawAutomationPill()

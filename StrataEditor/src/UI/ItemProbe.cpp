@@ -21,11 +21,16 @@ namespace Strata::UI
 
 	void ItemProbe::Record(std::string_view key, bool enabled, ImU32 color, std::string_view text)
 	{
+		RecordRect(key, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), enabled, color, text);
+	}
+
+	void ItemProbe::RecordRect(std::string_view key, const ImVec2& min, const ImVec2& max, bool enabled, ImU32 color, std::string_view text)
+	{
 		const int frame = ImGui::GetFrameCount();
 		Item& item = s_Items[HashKey(key)];
 		item.Duplicate = item.Frame == frame;
-		item.Min = ImGui::GetItemRectMin();
-		item.Max = ImGui::GetItemRectMax();
+		item.Min = min;
+		item.Max = max;
 		item.Frame = frame;
 		item.Enabled = enabled;
 		item.Color = color;

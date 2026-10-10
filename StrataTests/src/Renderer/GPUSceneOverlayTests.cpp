@@ -3,6 +3,8 @@
 #include "Strata/Renderer/DebugDraw.h"
 #include "Strata/Renderer/SceneGizmos.h"
 
+#include <cstring>
+
 using namespace Strata;
 using namespace Strata::Tests;
 
@@ -230,6 +232,110 @@ TEST_SUITE("GPU.SceneRenderer.Overlays")
 		CHECK(renderer.GetStats().OutlinedEntities == 0);
 		REQUIRE(Renderer::ReadTexture(renderer.GetOutputTexture(), outlined));
 		CHECK(MaxDifference(outlined, plain) == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Entity tints change exactly the pixels of the listed entities")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		AddSun(scene, glm::vec3(-0.3f, -1.0f, -0.4f), 2.0f);
+		// Lit cubes (so their pixels differ) in front of a lit wall, which is no listed entity.
+		Entity left = AddMesh(scene, BuiltinAssets::CubeMesh, assets.AddMaterial(MaterialProperties()), glm::vec3(-1.2f, 0.0f, 0.0f), "Left");
+		Entity middle = AddMesh(scene, BuiltinAssets::SphereMesh, assets.AddMaterial(MaterialProperties()), glm::vec3(0.0f, 0.0f, 0.0f), "Middle");
+		Entity right = AddMesh(scene, BuiltinAssets::CubeMesh, assets.AddMaterial(MaterialProperties()), glm::vec3(1.2f, 0.0f, 0.0f), "Right");
+		Entity wall = AddMesh(scene, BuiltinAssets::QuadMesh, assets.AddMaterial(UnlitColor({ 0.2f, 0.3f, 0.4f, 1.0f })), glm::vec3(0.0f, 0.0f, -2.0f), "Wall");
+		wall.GetComponent<TransformComponent>().Scale = glm::vec3(10.0f);
+
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Size, c_Size);
+		const SceneCamera camera = LookAt(glm::vec3(0.4f, 0.8f, 4.0f), glm::vec3(0.0f));
+		const ReadbackImage plain = RenderToImage(renderer, scene, camera);
+		ReadbackImage ids;
+		REQUIRE(Renderer::ReadTexture(renderer.GetEntityIDTexture(), ids));
+		REQUIRE(ids.BytesPerPixel == sizeof(uint32_t));
+		const auto idAt = [&ids](uint32_t x, uint32_t y)
+		{
+			uint32_t id = 0;
+			std::memcpy(&id, ids.Pixels.data() + (static_cast<size_t>(y) * ids.Width + x) * sizeof(uint32_t), sizeof(uint32_t));
+			return id;
+		};
+		const uint32_t leftID = static_cast<uint32_t>(left.GetHandle()) + 1;
+		const uint32_t rightID = static_cast<uint32_t>(right.GetHandle()) + 1;
+
+		// Half-transparent on the left cube (listed twice: the first color counts), opaque on the right one, plus an entity of
+		// another scene, which is ignored.
+		Scene other;
+		const glm::vec4 leftColor(1.0f, 0.8f, 0.2f, 0.5f);
+		const glm::vec4 rightColor(0.9f, 0.3f, 0.3f, 1.0f);
+		const SceneEntityTint tints[] = { { left, leftColor }, { right, rightColor }, { other.CreateEntity("Foreign"), rightColor },
+			{ left, glm::vec4(0.0f, 0.0f, 1.0f, 1.0f) } };
+		SceneRenderOptions options;
+		options.EntityTints = tints;
+		REQUIRE(renderer.Render(scene, camera, nullptr, options));
+		CHECK(renderer.GetStats().TintedEntities == 2);
+		ReadbackImage tinted;
+		REQUIRE(Renderer::ReadTexture(renderer.GetOutputTexture(), tinted));
+		ReadbackImage tintedIDs;
+		REQUIRE(Renderer::ReadTexture(renderer.GetEntityIDTexture(), tintedIDs));
+		REQUIRE(tintedIDs.Pixels == ids.Pixels); // The same frame, the same entities where they were
+
+		// Blending in 8 bits, as the target does: the tint's color and alpha are quantized first.
+		const glm::u8vec4 leftPacked = glm::u8vec4(glm::round(glm::clamp(leftColor, 0.0f, 1.0f) * 255.0f));
+		const float leftAlpha = static_cast<float>(leftPacked.a) / 255.0f;
+		const glm::u8vec4 rightPacked = glm::u8vec4(glm::round(rightColor * 255.0f));
+		uint32_t leftPixels = 0;
+		uint32_t rightPixels = 0;
+		uint32_t otherPixels = 0;
+		uint32_t changedLeftPixels = 0;
+		uint32_t mismatches = 0;
+		for (uint32_t y = 0; y < c_Size; y++)
+		{
+			for (uint32_t x = 0; x < c_Size; x++)
+			{
+				const uint32_t id = idAt(x, y);
+				const glm::u8vec4 before = GetPixelRGBA8(plain, x, y);
+				const glm::u8vec4 after = GetPixelRGBA8(tinted, x, y);
+				if (id == leftID)
+				{
+					leftPixels++;
+					changedLeftPixels += after != before ? 1u : 0u;
+					for (int channel = 0; channel < 3; channel++)
+					{
+						const float expected = static_cast<float>(leftPacked[channel]) * leftAlpha + static_cast<float>(before[channel]) * (1.0f - leftAlpha);
+						mismatches += std::abs(static_cast<float>(after[channel]) - expected) > 1.0f ? 1u : 0u;
+					}
+				}
+				else if (id == rightID)
+				{
+					rightPixels++;
+					mismatches += glm::u8vec3(after) != glm::u8vec3(rightPacked) ? 1u : 0u;
+				}
+				else
+				{
+					// Every other pixel - the sphere, the wall, the background - is exactly as before.
+					otherPixels++;
+					mismatches += after != before ? 1u : 0u;
+				}
+			}
+		}
+		CHECK(leftPixels > 100);
+		CHECK(rightPixels > 100);
+		CHECK(otherPixels > 100);
+		CHECK(changedLeftPixels == leftPixels);
+		CHECK(mismatches == 0);
+		CHECK(idAt(c_Size / 2, c_Size / 2) == static_cast<uint32_t>(middle.GetHandle()) + 1);
+
+		// Without tints (or only foreign ones) the image is the plain one.
+		const SceneEntityTint foreign[] = { { other.CreateEntity("Foreign 2"), rightColor } };
+		options.EntityTints = foreign;
+		REQUIRE(renderer.Render(scene, camera, nullptr, options));
+		CHECK(renderer.GetStats().TintedEntities == 0);
+		REQUIRE(Renderer::ReadTexture(renderer.GetOutputTexture(), tinted));
+		CHECK(MaxDifference(tinted, plain) == 0);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

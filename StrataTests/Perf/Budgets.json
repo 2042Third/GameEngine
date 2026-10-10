@@ -32,6 +32,7 @@
 	"Perf.Scripting.SpawnFrame1MOneScript.OrderRebuilds": { "Measured": 0, "Budget": 0, "Unit": "count" },
 	"Perf.Scripting.ScriptedSpawnFrame100k": { "Measured": 2.699, "Budget": 4.048, "Unit": "ms" },
 	"Perf.Scripting.ScriptedDestroy10kOf100kRoots": { "Measured": 21.25, "Budget": 31.87, "Unit": "ms" },
+	"Perf.FrameProfiler.Frame16Stages": { "Measured": 0.631, "Budget": 0.946, "Unit": "us" },
 	"Perf.TextureCook.ColdImport": { "Measured": 7669.6, "Budget": 11504.4, "Unit": "ms" },
 	"Perf.TextureCook.PackSize": { "Measured": 137.16, "Budget": 205.74, "Unit": "MB" },
 	"Perf.TextureCook.StoredTextures": { "Measured": 111.85, "Budget": 167.77, "Unit": "MB" },
@@ -41,6 +42,9 @@
 	"Perf.Editor.EntityDelete100kRoots": { "Measured": 0.4954, "Budget": 0.7431, "Unit": "ms" },
 	"Perf.Editor.Delete10kOf100kRoots": { "Measured": 42.64, "Budget": 63.96, "Unit": "ms" },
 	"Perf.Editor.UndoDelete10kOf100kRoots": { "Measured": 41.18, "Budget": 61.77, "Unit": "ms" },
+	"Perf.EditorPanels.Performance600FramesP95": { "Measured": 0.0616, "Budget": 0.0924, "Unit": "ms" },
+	"Perf.EditorPanels.Streaming10kAssetsP95": { "Measured": 0.1448, "Budget": 0.2172, "Unit": "ms" },
+	"Perf.EditorPanels.Streaming10kAssetsRefreshFrame": { "Measured": 0.147, "Budget": 0.2205, "Unit": "ms" },
 	"Perf.Physics.Boxes30k.StartAnd30Frames": { "Measured": 274.19, "Budget": 411.2, "Unit": "ms" },
 	"Perf.Physics.Boxes30k.DroppedContactWarnings": { "Measured": 0, "Budget": 0, "Unit": "count" },
 	"Perf.Physics.Boxes70k.BodyErrors": { "Measured": 0, "Budget": 0, "Unit": "count" },
@@ -75,5 +79,6 @@
 	"PerfGPU.Streaming.MaxFinalizeTime": { "Measured": 3.63, "Budget": 5.44, "Unit": "ms" },
 	"PerfGPU.Streaming.MaxResidentTextures": { "Measured": 33.55, "Budget": 50.32, "Unit": "MB" },
 	"PerfGPU.Streaming.PeakPrivateMemory": { "Measured": 395.8, "Budget": 593.7, "Unit": "MB" },
-	"PerfGPU.Streaming.PeakPrivateMemoryAllResident": { "Measured": 518.1, "Budget": 777.1, "Unit": "MB" }
+	"PerfGPU.Streaming.PeakPrivateMemoryAllResident": { "Measured": 518.1, "Budget": 777.1, "Unit": "MB" },
+	"PerfGPU.Streaming.RuntimeMaxFinalizeStage": { "Measured": 4.587, "Budget": 6.88, "Unit": "ms" }
 }

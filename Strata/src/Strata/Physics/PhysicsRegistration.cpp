@@ -12,6 +12,7 @@ namespace Strata
 		// Physics simulates what the scripts moved this frame. It also runs in the editor's simulate mode.
 		SceneSystemDescriptor descriptor = MakeSceneSystemDescriptor<PhysicsSystem>("Physics", true, [](Scene& scene) { return CreateScope<PhysicsSystem>(scene); });
 		descriptor.After = { "Scripting" };
+		descriptor.ProfileStage = "Scene.Physics";
 		const bool registered = SceneSystemRegistry::Register(std::move(descriptor));
 		ST_CORE_VERIFY(registered, "The physics module could not register its scene system");
 	}

@@ -3,7 +3,10 @@
 
 #include "Strata/Core/Platform.h"
 
+#include <algorithm>
+#include <chrono>
 #include <deque>
+#include <memory>
 #include <thread>
 
 namespace Strata
@@ -42,21 +45,105 @@ namespace Strata
 			job.State->Condition.notify_all();
 		}
 
+		int64_t GetClockNanoseconds(std::chrono::steady_clock::time_point time)
+		{
+			return std::chrono::duration_cast<std::chrono::nanoseconds>(time.time_since_epoch()).count();
+		}
+
+		// What one pool thread is doing, written by that thread and read by any (JobSystem::GetStats) without either
+		// waiting: a sequence lock, odd while the thread updates the values, tells a reader whether the values it read belong
+		// together.
+		class ThreadActivity
+		{
+		public:
+			struct Snapshot
+			{
+				int64_t BusyNanoseconds = 0;     // Jobs finished
+				int64_t JobStartNanoseconds = 0; // Steady clock of the running job's start
+				uint64_t CompletedJobs = 0;
+				bool Running = false;
+			};
+
+			// The owning thread only.
+			void BeginJob(int64_t now)
+			{
+				const uint64_t sequence = BeginWrite();
+				m_JobStart.store(now, std::memory_order_relaxed);
+				m_Running.store(true, std::memory_order_relaxed);
+				EndWrite(sequence);
+			}
+
+			void EndJob(int64_t now)
+			{
+				const uint64_t sequence = BeginWrite();
+				const int64_t start = m_JobStart.load(std::memory_order_relaxed);
+				m_Busy.store(m_Busy.load(std::memory_order_relaxed) + std::max<int64_t>(now - start, 0), std::memory_order_relaxed);
+				m_Completed.store(m_Completed.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
+				m_Running.store(false, std::memory_order_relaxed);
+				EndWrite(sequence);
+			}
+
+			// Any thread. Retries while the owner is writing, which takes a few instructions.
+			Snapshot Read() const
+			{
+				while (true)
+				{
+					const uint64_t sequence = m_Sequence.load(std::memory_order_acquire);
+					if ((sequence & 1u) != 0)
+					{
+						std::this_thread::yield();
+						continue;
+					}
+					Snapshot snapshot;
+					snapshot.BusyNanoseconds = m_Busy.load(std::memory_order_relaxed);
+					snapshot.JobStartNanoseconds = m_JobStart.load(std::memory_order_relaxed);
+					snapshot.CompletedJobs = m_Completed.load(std::memory_order_relaxed);
+					snapshot.Running = m_Running.load(std::memory_order_relaxed);
+					// The values are read before the sequence is checked again.
+					std::atomic_thread_fence(std::memory_order_acquire);
+					if (m_Sequence.load(std::memory_order_relaxed) == sequence)
+						return snapshot;
+				}
+			}
+		private:
+			uint64_t BeginWrite()
+			{
+				const uint64_t sequence = m_Sequence.load(std::memory_order_relaxed);
+				m_Sequence.store(sequence + 1, std::memory_order_relaxed);
+				// The odd sequence becomes visible before any of the new values.
+				std::atomic_thread_fence(std::memory_order_release);
+				return sequence;
+			}
+
+			void EndWrite(uint64_t sequence)
+			{
+				m_Sequence.store(sequence + 2, std::memory_order_release);
+			}
+		private:
+			std::atomic<uint64_t> m_Sequence = 0;
+			std::atomic<int64_t> m_Busy = 0;
+			std::atomic<int64_t> m_JobStart = 0;
+			std::atomic<uint64_t> m_Completed = 0;
+			std::atomic<bool> m_Running = false;
+		};
+
 		class JobPool
 		{
 		public:
 			void Start(uint32_t threadCount, const std::string& namePrefix, bool workerThreads)
 			{
 				m_Stopping = false;
+				// Before the threads start: they write their activity from their first job on.
+				m_Activity = std::make_unique<ThreadActivity[]>(threadCount);
 				m_Threads.reserve(threadCount);
 				for (uint32_t index = 0; index < threadCount; index++)
 				{
 					std::string name = fmt::format("{} {}", namePrefix, index);
-					m_Threads.emplace_back([this, name = std::move(name), workerThreads]()
+					m_Threads.emplace_back([this, name = std::move(name), workerThreads, index]()
 					{
 						Platform::SetCurrentThreadName(name);
 						t_IsWorkerThread = workerThreads;
-						ThreadMain();
+						ThreadMain(m_Activity[index]);
 					});
 				}
 			}
@@ -108,6 +195,27 @@ namespace Strata
 			}
 
 			uint32_t GetThreadCount() const { return static_cast<uint32_t>(m_Threads.size()); }
+
+			JobPoolStats GetStats(int64_t now)
+			{
+				JobPoolStats stats;
+				stats.Threads = GetThreadCount();
+				stats.QueuedJobs = GetPendingCount();
+				int64_t busy = 0;
+				for (uint32_t index = 0; index < stats.Threads; index++)
+				{
+					const ThreadActivity::Snapshot activity = m_Activity[index].Read();
+					busy += activity.BusyNanoseconds;
+					if (activity.Running)
+					{
+						busy += std::max<int64_t>(now - activity.JobStartNanoseconds, 0);
+						stats.RunningJobs++;
+					}
+					stats.CompletedJobs += activity.CompletedJobs;
+				}
+				stats.BusyTime = std::chrono::nanoseconds(busy);
+				return stats;
+			}
 		private:
 			bool PopLocked(Job& outJob)
 			{
@@ -123,7 +231,7 @@ namespace Strata
 				return false;
 			}
 
-			void ThreadMain()
+			void ThreadMain(ThreadActivity& activity)
 			{
 				while (true)
 				{
@@ -146,7 +254,9 @@ namespace Strata
 						if (!PopLocked(job))
 							return;
 					}
+					activity.BeginJob(GetClockNanoseconds(std::chrono::steady_clock::now()));
 					ExecuteJob(job);
+					activity.EndJob(GetClockNanoseconds(std::chrono::steady_clock::now()));
 				}
 			}
 		private:
@@ -154,6 +264,7 @@ namespace Strata
 			std::condition_variable m_Condition;
 			std::deque<Job> m_Queues[3];
 			std::vector<std::thread> m_Threads;
+			std::unique_ptr<ThreadActivity[]> m_Activity; // One per thread, indexed like m_Threads
 			bool m_Stopping = false;
 			bool m_Stopped = false;
 		};
@@ -352,6 +463,20 @@ namespace Strata
 		if (!data)
 			return 0;
 		return data->Workers.GetPendingCount() + (data->HasIOPool ? data->IO.GetPendingCount() : 0);
+	}
+
+	JobSystemStats JobSystem::GetStats()
+	{
+		JobSystemStats stats;
+		stats.SampleTime = std::chrono::steady_clock::now();
+		JobSystemData* data = s_Data.load();
+		if (!data)
+			return stats;
+		const int64_t now = GetClockNanoseconds(stats.SampleTime);
+		stats.Workers = data->Workers.GetStats(now);
+		if (data->HasIOPool)
+			stats.IO = data->IO.GetStats(now);
+		return stats;
 	}
 
 }

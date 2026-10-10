@@ -225,6 +225,16 @@ namespace Strata
 		};
 		static_assert(sizeof(OutlineParameters) == 32);
 
+		// Overlay/StatusTint.frag
+		struct StatusTintParameters
+		{
+			uint32_t Count; // Entries of the tint buffer
+			uint32_t Padding0;
+			uint32_t Padding1;
+			uint32_t Padding2;
+		};
+		static_assert(sizeof(StatusTintParameters) == 16);
+
 		// Overlay/Text.vert
 		struct TextParameters
 		{

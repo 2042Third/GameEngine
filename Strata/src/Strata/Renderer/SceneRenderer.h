@@ -94,6 +94,13 @@ namespace Strata
 		float MaxUVScale = 1.0f; // Its largest texture coordinate tiling (MaterialProperties::UVTiling)
 	};
 
+	// An entity tinted over the finished image (SceneRenderOptions::EntityTints).
+	struct SceneEntityTint
+	{
+		Entity Target;
+		glm::vec4 Color = glm::vec4(0.0f); // Display color (sRGB-encoded); alpha is the tint's opacity
+	};
+
 	// How a scene is shown, beyond its own data: mainly editor views. With the defaults a scene renders exactly as a game
 	// shows it.
 	struct SceneRenderOptions
@@ -132,6 +139,13 @@ namespace Strata
 
 		// Debug lines to draw this frame (null for none); see DebugDraw.
 		const DebugDraw* DebugShapes = nullptr;
+
+		// Entities tinted first, under the other overlays (debug views such as the editor's streaming and LOD views): every
+		// pixel whose entity-ID buffer entry is a listed entity is blended with its color, every other pixel stays exactly as
+		// it was. Like the outline it follows the entity-ID buffer (opaque and alpha-masked surfaces). Entities of other
+		// scenes and invalid ones are ignored; an entity listed twice keeps its first color. The span must stay valid during
+		// Render.
+		std::span<const SceneEntityTint> EntityTints;
 	};
 
 	struct SceneRendererStats
@@ -175,6 +189,7 @@ namespace Strata
 		uint32_t ShadowCasters = 0;       // Instances drawn into shadow cascades (summed over cascades)
 		uint32_t DebugLines = 0;          // Lines drawn from SceneRenderOptions::DebugShapes
 		uint32_t OutlinedEntities = 0;    // Selected entities of the rendered scene
+		uint32_t TintedEntities = 0;      // Entities of SceneRenderOptions::EntityTints in the rendered scene
 		uint32_t Texts = 0;               // Text components drawn
 		uint32_t ScreenSpaceTexts = 0;    // Of those, screen-space ones (the HUD)
 		uint32_t HiddenScreenSpaceTexts = 0; // Screen-space text left out (SceneRenderOptions::DrawScreenSpaceText is off)
@@ -461,6 +476,8 @@ namespace Strata
 		// Draws the overlays into the output texture (which must hold the finished image); false when GPU resources failed.
 		bool RenderOverlays(nvrhi::ICommandList* commandList, Scene& scene, const SceneRenderOptions& options, bool drawText);
 		void DrawDebugLines(nvrhi::ICommandList* commandList, DebugDrawDepth depth, uint32_t firstVertex, uint32_t vertexCount);
+		// The tints of SceneRenderOptions::EntityTints (StatusTint.frag); false when GPU resources failed.
+		bool DrawEntityTints(nvrhi::ICommandList* commandList, Scene& scene, std::span<const SceneEntityTint> tints, const nvrhi::Viewport& viewport);
 	private:
 		SceneRendererSpecification m_Specification;
 		nvrhi::IDevice* m_Device = nullptr;
@@ -596,6 +613,12 @@ namespace Strata
 		uint64_t m_SelectionSceneId = 0;
 		uint64_t m_SelectionHierarchyVersion = 0;
 		bool m_SelectionUploaded = false;
+		nvrhi::ShaderHandle m_StatusTintPixelShader;
+		nvrhi::BindingLayoutHandle m_StatusTintBindingLayout;
+		nvrhi::BindingSetHandle m_StatusTintBindingSet; // Entity IDs and tints; recreated with either
+		nvrhi::GraphicsPipelineHandle m_StatusTintPipeline;
+		nvrhi::BufferHandle m_TintBuffer;
+		std::vector<glm::uvec2> m_TintEntries; // (entity id + 1, packed color), sorted by id
 		nvrhi::BindingLayoutHandle m_DebugLineBindingLayout;
 		nvrhi::BindingSetHandle m_DebugLineBindingSet;
 		nvrhi::InputLayoutHandle m_DebugLineInputLayout;

@@ -69,6 +69,7 @@ strata_add_shaders(Strata
 		PostProcess/Copy.frag
 		Overlay/Grid.frag
 		Overlay/Outline.frag
+		Overlay/StatusTint.frag
 		Overlay/DebugLine.vert
 		Overlay/DebugLine.frag
 		Overlay/Text.vert

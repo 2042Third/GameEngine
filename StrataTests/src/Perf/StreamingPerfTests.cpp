@@ -3,10 +3,12 @@
 #include "Asset/AssetTestUtils.h"
 #include "Perf/PerfUtils.h"
 #include "Perf/StressProject.h"
+#include "Runtime/PerfLogReader.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Core/Platform.h"
 #include "Strata/Core/Process.h"
+#include "Strata/Project/GameManifest.h"
 #include "TestHelpers.h"
 
 #include <spdlog/fmt/fmt.h>
@@ -64,14 +66,37 @@ namespace
 	constexpr float c_MaxFinalizeMs = 8.0f;
 	// The all-resident sweep's texture budget: far more than the 111.8 MB of textures, so nothing is evicted.
 	constexpr uint64_t c_AllResidentTextureBudget = 1000 * c_MB;
-	// The all-resident sweep runs this many times. Every run must meet the criteria. Peak private memory is judged by the
-	// best run: the graphics driver keeps commit charge of freed device memory for a while (see PeakPrivateMemory above),
-	// so the best run is the engine's own cost.
+	// The all-resident sweep runs this many times, and so does the exported game. Every run must meet the criteria. Peak
+	// private memory is judged by the best run: the graphics driver keeps commit charge of freed device memory for a while
+	// (see PeakPrivateMemory above), so the best run is the engine's own cost. The exported game's slowest frame
+	// finalization is judged by the median run, which a spike from the machine's other work does not move.
 	constexpr uint32_t c_Runs = 3;
+
+	template<typename T>
+	T Median(std::vector<T> values)
+	{
+		std::sort(values.begin(), values.end());
+		return values[values.size() / 2];
+	}
 
 	double ElapsedSeconds(std::chrono::steady_clock::time_point start)
 	{
 		return std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+	}
+
+	// Frames the exported stress game runs for its perf log: ten seconds at 60 frames per second, the initial load included.
+	constexpr uint32_t c_RuntimeFrames = 600;
+
+	// The StrataRuntime next to the test executable, or the one STRATA_TEST_RUNTIME_PATH names.
+	std::filesystem::path GetRuntimePath()
+	{
+		if (const std::optional<std::string> path = Platform::GetEnvVar("STRATA_TEST_RUNTIME_PATH"); path && !path->empty())
+			return FileSystem::FromUTF8(*path);
+#if defined(ST_PLATFORM_WINDOWS)
+		return Platform::GetExecutableDirectory() / "StrataRuntime.exe";
+#else
+		return Platform::GetExecutableDirectory() / "StrataRuntime";
+#endif
 	}
 
 	// Runs the sweep in a helper process (see RunStreamingSweepProcess) and returns its result.
@@ -117,6 +142,52 @@ namespace
 			result.MaxResidentTextureBytes / c_MBDouble, result.TextureBudget / c_MBDouble, result.PeakPrivateBytes / c_MBDouble,
 			result.PeakWorkingSetBytes / c_MBDouble, finalize.Iterations, finalize.MedianMs, finalize.P95Ms, result.MaxFinalizeMs,
 			result.MaxUploadedBytes / c_MBDouble, result.MaxInFlightBytes / c_MBDouble, result.LoadsCompleted, result.Evictions, settled);
+	}
+
+	// What a run of the exported game logged: its frames, the slowest Assets.Finalize stage and the bytes it uploaded.
+	struct RuntimePerfLogResult
+	{
+		size_t Frames = 0;
+		double MaxFinalizeMs = 0.0;
+		size_t SlowestFrame = 0;
+		double UploadedMB = 0.0;
+	};
+
+	// Runs the exported game for c_RuntimeFrames frames in a window with the stress test's texture budget and reads its perf
+	// log, which must have a row per frame.
+	RuntimePerfLogResult RunExportedGame(const std::filesystem::path& manifest, const std::filesystem::path& perfLog)
+	{
+		ProcessSpecification runtime;
+		runtime.Executable = GetRuntimePath();
+		runtime.Arguments = { "--game", FileSystem::ToUTF8(manifest), "--windowed", "--frames", std::to_string(c_RuntimeFrames), "--asset-budget-mb",
+			std::to_string(c_TextureBudget / (1024 * 1024)), "--perf-log", FileSystem::ToUTF8(perfLog) };
+		const Process::RunResult run = Process::Run(runtime, std::chrono::minutes(5));
+		INFO("Runtime output:\n", run.Output);
+		REQUIRE_MESSAGE(run.Started, run.Error);
+		REQUIRE_FALSE(run.TimedOut);
+		REQUIRE(run.ExitCode == 0);
+
+		std::string error;
+		const std::optional<PerfLogTable> table = ReadPerfLog(perfLog, error);
+		REQUIRE_MESSAGE(table, error);
+		REQUIRE_MESSAGE(ValidatePerfLog(*table, c_RuntimeFrames, error), error); // One row per frame
+		const std::optional<size_t> finalizeColumn = table->FindColumn("Assets.Finalize");
+		const std::optional<size_t> uploadedColumn = table->FindColumn("UploadedMB");
+		REQUIRE(finalizeColumn);
+		REQUIRE(uploadedColumn);
+		RuntimePerfLogResult result;
+		result.Frames = table->Rows.size();
+		for (size_t row = 0; row < table->Rows.size(); row++)
+		{
+			const double finalizeMs = table->Rows[row][*finalizeColumn];
+			if (finalizeMs > result.MaxFinalizeMs)
+			{
+				result.MaxFinalizeMs = finalizeMs;
+				result.SlowestFrame = row;
+			}
+			result.UploadedMB += table->Rows[row][*uploadedColumn];
+		}
+		return result;
 	}
 
 }
@@ -220,5 +291,29 @@ TEST_SUITE("PerfGPU.Streaming")
 		}
 		CHECK(bestAllResidentPeakPrivateBytes <= c_MaxPeakPrivateBytes);
 		Perf::CheckBudget("PerfGPU.Streaming.PeakPrivateMemoryAllResident", static_cast<double>(bestAllResidentPeakPrivateBytes) / c_MBDouble);
+
+		// The exported game, in a window, with its perf log: the runtime's own frames, from the world's overview camera,
+		// finalize within the same limit. It runs c_Runs times too: every run streams and logs every frame, and the slowest
+		// frame's finalization is judged by the median run (a stage's time is wall-clock time, which a moment of other work
+		// on the machine stretches in any one run).
+		GameManifest manifest;
+		manifest.Name = "StrataStressWorld";
+		manifest.AssetPack = "Stress.stpak";
+		manifest.StartScene = project->WorldScene;
+		const std::filesystem::path manifestPath = directory / "Stress.stgame";
+		REQUIRE_MESSAGE(manifest.Save(manifestPath, &error), error);
+		std::vector<double> runtimeMaxFinalizeMs;
+		for (uint32_t runIndex = 0; runIndex < c_Runs; runIndex++)
+		{
+			CAPTURE(runIndex);
+			const RuntimePerfLogResult result = RunExportedGame(manifestPath, directory / ("RuntimePerfLog" + std::to_string(runIndex) + ".csv"));
+			MESSAGE("Exported stress game, run ", runIndex + 1, ": ", result.Frames, " frames logged, Assets.Finalize at most ", result.MaxFinalizeMs,
+				" ms (frame ", result.SlowestFrame, "), ", result.UploadedMB, " MB uploaded");
+			CHECK(result.UploadedMB > 0.0); // It streamed
+			runtimeMaxFinalizeMs.push_back(result.MaxFinalizeMs);
+		}
+		const double runtimeFinalizeMs = Median(runtimeMaxFinalizeMs);
+		CHECK(runtimeFinalizeMs <= c_MaxFinalizeMs);
+		Perf::CheckBudget("PerfGPU.Streaming.RuntimeMaxFinalizeStage", runtimeFinalizeMs);
 	}
 }

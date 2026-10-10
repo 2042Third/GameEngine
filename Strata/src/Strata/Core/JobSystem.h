@@ -3,6 +3,7 @@
 #include "Strata/Core/Base.h"
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <functional>
 #include <mutex>
@@ -54,6 +55,26 @@ namespace Strata
 		uint32_t IOThreadCount = 2;     // 0 = I/O jobs run on the worker pool
 	};
 
+	// The work of one thread pool since JobSystem::Init: what its own threads ran (a job that a waiting thread runs itself,
+	// see JobSystem::Wait, counts for that thread instead).
+	struct JobPoolStats
+	{
+		uint32_t Threads = 0;
+		uint32_t RunningJobs = 0;  // Jobs the pool's threads are running now
+		uint64_t QueuedJobs = 0;   // Jobs waiting for a thread
+		uint64_t CompletedJobs = 0;
+		// Time the pool's threads spent running jobs, the running ones up to SampleTime included: over an interval, the
+		// difference divided by the interval and the thread count is how busy the pool was.
+		std::chrono::nanoseconds BusyTime { 0 };
+	};
+
+	struct JobSystemStats
+	{
+		JobPoolStats Workers;
+		JobPoolStats IO; // No threads when I/O jobs run on the worker pool (JobSystemSpecification::IOThreadCount 0)
+		std::chrono::steady_clock::time_point SampleTime;
+	};
+
 	// Thread pools for CPU work and blocking I/O. Jobs submitted before Init (or after Shutdown) run inline
 	// on the calling thread, so engine code never needs to special-case single-threaded operation.
 	// Waiting threads help execute queued CPU jobs, so waiting from inside a job cannot deadlock the pool.
@@ -80,6 +101,9 @@ namespace Strata
 		static uint32_t GetIOThreadCount();
 		static bool IsWorkerThread();
 		static uint64_t GetPendingJobCount();
+		// Counters of both pools, read without stopping them (each thread's counters are consistent; the pools' jobs keep
+		// running meanwhile). All zero before Init and after Shutdown. Any thread.
+		static JobSystemStats GetStats();
 	};
 
 }

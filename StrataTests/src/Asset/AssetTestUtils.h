@@ -148,6 +148,23 @@ namespace Strata::Tests
 			SetStoredSize(handle, size);
 		}
 
+		// Registers an asset of any type whose stored form is `data` (loaded by the type's registered loader).
+		AssetHandle AddStored(uint64_t handle, AssetType type, std::vector<uint8_t> data, const std::string& name)
+		{
+			AssetMetadata metadata;
+			metadata.Handle = UUID(handle);
+			metadata.Type = type;
+			metadata.Path = name;
+			metadata.Name = name;
+			metadata.StoredSize = data.size();
+			{
+				std::scoped_lock<std::mutex> lock(m_Mutex);
+				m_Data[metadata.Handle] = std::move(data);
+			}
+			RegisterAsset(metadata);
+			return metadata.Handle;
+		}
+
 		void Remove(AssetHandle handle) { UnregisterAsset(handle); }
 
 		// Records what an asset depends on, as an importer or a pack's table would.
@@ -209,6 +226,16 @@ namespace Strata::Tests
 			auto it = m_ReadFrames.find(handle);
 			return it != m_ReadFrames.end() ? std::optional<uint64_t>(it->second) : std::nullopt;
 		}
+
+		// Gives a registered asset another path and name, as a move does.
+		void Rename(AssetHandle handle, const std::string& path)
+		{
+			std::optional<AssetMetadata> metadata = GetMetadata(handle);
+			REQUIRE(metadata.has_value());
+			metadata->Path = path;
+			metadata->Name = path;
+			UpdateAssetMetadata(*metadata);
+		}
 	protected:
 		bool ReadAssetData(const AssetMetadata& metadata, std::vector<uint8_t>& outData, std::string* outError) override
 		{
@@ -258,6 +285,25 @@ namespace Strata::Tests
 		uint32_t m_AllowedReads = 0;
 		uint32_t m_WaitingReads = 0;
 	};
+
+	// Whether the statistics' counts of assets per state and of pinned assets are those of the assets themselves, recounted
+	// from GetResidencyInfo (which lists every asset that is not unloaded, and every pinned one).
+	inline bool StateCountsMatch(const AssetManagerBase& manager)
+	{
+		uint32_t ready = 0;
+		uint32_t loading = 0;
+		uint32_t failed = 0;
+		uint32_t pinned = 0;
+		for (const AssetResidencyInfo& asset : manager.GetResidencyInfo())
+		{
+			ready += asset.State == AssetState::Ready ? 1 : 0;
+			loading += asset.State == AssetState::Loading ? 1 : 0;
+			failed += asset.State == AssetState::Failed ? 1 : 0;
+			pinned += asset.PinCount > 0 ? 1 : 0;
+		}
+		const AssetManagerStats stats = manager.GetStats();
+		return stats.LoadedAssets == ready && stats.LoadingAssets == loading && stats.FailedAssets == failed && stats.PinnedAssets == pinned;
+	}
 
 	inline AssetMemoryUsage MakeUsage(uint64_t cpu, uint64_t gpuTextures = 0, uint64_t gpuBuffers = 0)
 	{

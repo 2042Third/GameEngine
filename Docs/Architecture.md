@@ -107,7 +107,8 @@ process memory with peaks: `GetProcessMemory`, process uptime: `GetProcessUptime
 instructions where it has them), `Crypto` (SHA-256, peer authentication), `Base64`,
 `CommandLine`, `Timer`/`FramePacer`, `JsonUtils` (exception-free JSON reads), `SequenceLock` (lock-free hand-off to the
 audio thread), `EngineServices` (process-wide interfaces a module offers the modules that may not include it, such as the
-audio output's master volume, `IAudioOutput`) and `Profiling` (Tracy with `STRATA_ENABLE_TRACY`).
+audio output's master volume, `IAudioOutput`), `FrameProfiler` (the always-on timer of the main thread's frame stages,
+see [Frame profiler](#frame-profiler)) and `Profiling` (`ST_PROFILE_STAGE`; Tracy with `STRATA_ENABLE_TRACY`).
 
 **Events** (`Events/`). Window, key and mouse events (`ApplicationEvent.h`, `KeyEvent.h`, `MouseEvent.h`, including
 `WindowFileDropEvent` and `WindowContentScaleEvent`, raised when the window moves to a display with another DPI setting
@@ -171,12 +172,15 @@ and text) into render targets of its viewport size, which it hands to the `Defer
 (the viewport panel, the game window) or freed (captures). Its image-based lighting comes from the sky light's
 environment map or its procedural sky (`IBL/ProceduralSky.comp` writes mip 0 of the environment cube, then the shared
 filtering chain runs), computed again only when the source or the procedural parameters change; editor views can ask
-for preview lighting and leave out screen-space text (`SceneRenderOptions`). Assets:
-`Mesh`, `Material`, `Texture`, `Font`; procedural primitives come from `MeshFactory`; texture formats, the cooked texture
-format and the block decoders are `TextureFormat`, `CookedTexture` and `BlockCompression` (see
-[Texture cooking](#texture-cooking)). Also `TextRenderer`/`FontAtlas`,
-`DebugDraw`/`SceneGizmos`, `TextureReadback` (non-blocking GPU readback) and `ImageWriter` (PNG). Conventions and
-rules: AGENTS.md, "Architecture rules" and "Rendering".
+for preview lighting, leave out screen-space text and tint entities (`SceneRenderOptions::EntityTints`: the first
+overlay, `Overlay/StatusTint.frag`, blends the listed entities' colors over exactly their pixels of the entity-ID buffer,
+found by binary search in a sorted (id, color) buffer like the selection outline's). How a mesh's level of detail is
+chosen is a pure function (`LODSelection::GetScreenFraction`, `SelectLOD`), so tools show the level the renderer draws.
+Assets: `Mesh`, `Material`, `Texture`, `Font`; procedural primitives come from `MeshFactory`; texture formats, the cooked
+texture format and the block decoders are `TextureFormat`, `CookedTexture` and `BlockCompression` (see
+[Texture cooking](#texture-cooking)). Also `TextRenderer`/`FontAtlas`, `DebugDraw`/`SceneGizmos`, `TextureReadback`
+(non-blocking GPU readback) and `ImageWriter` (PNG). Conventions and rules: AGENTS.md, "Architecture rules" and
+"Rendering".
 
 **Physics** (`Physics/`). `PhysicsSystem` is the "Physics" scene system (Play and Simulate). `PhysicsWorld` builds a
 Jolt world from RigidBody and collider components and steps it; `PhysicsRuntime` reference-counts Jolt's global
@@ -399,6 +403,38 @@ Shutdown (`Application::~Application`): layers detach and are deleted top-down, 
 are released, the main-thread queue drains, `JobSystem::Shutdown` runs the queued jobs and joins the threads, then
 audio, the renderer, the device and the window go.
 
+### Frame profiler
+
+`FrameProfiler` (`Core/FrameProfiler.h`) times the stages of every frame, always (not only with Tracy), and keeps the last
+600 frames in a ring. `Application::RunFrame` begins the profiler's frame at its start and ends it with the frame's work
+time after presenting, so its frame time is `GetLastFrameWorkTime`; a frame the application skips is never ended and is
+discarded. Code marks a stage with `ST_PROFILE_STAGE("Name")` (`Core/Profiling.h`, also a Tracy zone) for the rest of a
+scope; scopes on other threads than the one that drives the frames, and outside frames, do nothing. Stages nest and record
+their self time (the stages inside them excluded), so a frame's stages never add up to more than the frame, and a stage
+entered several times in a frame adds up. Its cost is about 0.6 microseconds per frame of 16 stages
+(`Perf.FrameProfiler`). The built-in stages, registered first in this order (`c_BuiltinFrameStages`):
+
+| Stage | Where |
+| --- | --- |
+| `Input` | `Input::BeginFrame` and the window's events (`Application::RunFrame`) |
+| `Assets.Update` | `AssetManagerBase::Update` and `EditorAssetManager::Update` (file changes, imports, eviction) |
+| `Assets.Finalize` | `AssetManagerBase::ProcessCompletions`: finalizing arrivals, GPU uploads |
+| `Scene.Scripts`, `Scene.Physics`, `Scene.Audio` | the scene systems' start and update callbacks (`SceneSystemDescriptor::ProfileStage`) |
+| `Scene.Transforms` | `Scene::UpdateWorldTransforms` when something is dirty |
+| `Render.Extract` | `SceneRenderer::CollectLights`, `CollectDraws`, `CollectShadowCasters` |
+| `Render.Submit` | the rest of `SceneRenderer::Render`: recording and submitting the command list, text |
+| `Editor.UI` | `Application::RenderImGui`: the layers' `OnImGuiRender` and ImGui's drawing (the viewport's render nests in it) |
+| `Present` | `GraphicsDevice::EndFrame`, after the work time is measured (outside the frame time) |
+
+Modules and games register more (`RegisterStage`, up to 64); a scene system names its stage in its descriptor. Each frame
+also records how busy the job system's worker and I/O threads were since the previous frame (`JobSystem::GetStats`:
+per-thread busy time and completed jobs, written by each pool thread under a sequence lock and read without stopping it).
+`Summarize` gives mean, nearest-rank 50th and 95th percentiles and maximum per stage; frame listeners
+(`AddFrameListener`) receive every recorded frame. The editor reports it through `editor.perf`, the Performance panel and
+the status bar's frame pill (see [Editor](#editor));
+`StrataRuntime --perf-log` writes it as CSV (`Runtime/FramePerfLog`, see
+[Export and the runtime](#export-and-the-runtime)).
+
 ## Scene runtime lifecycle
 
 A `Scene` that plays owns scene systems (`Scene/SceneSystem.h`), created from `SceneSystemRegistry` in update order.
@@ -426,6 +462,9 @@ are, in update order:
   it to the created system, so `Scene::GetSystem<T>` is a hash lookup of the exact class (null for a class that is not
   registered, not created in the current mode, or a base class). Systems of other modules use each other through scene
   services instead (below), never through `GetSystem` of a class they would have to include.
+- **Profiling.** A system's start and update callbacks run in the frame profiler stage its descriptor names
+  (`SceneSystemDescriptor::ProfileStage`: `Scene.Scripts`, `Scene.Physics`, `Scene.Audio`; empty: not timed on its own),
+  resolved when the scene starts; scenes updated outside a profiled frame (tests) skip the stages altogether.
 
 ```text
 OnRuntimeStart(mode)   reset time, pause, steps and requests; create the systems the mode runs;
@@ -893,9 +932,14 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   and bytes in flight with their high-water mark, uploaded bytes and finalization milliseconds (last frame and maximum
   of the last 120) with the staging budget, evictions and eviction checks, cancellations, staging releases, dependency
   prefetches started and dropped, and the `GetAsset` calls made (tests take differences to count what a frame looks
-  up); per asset its state, memory, latest request and pins.
-  The editor reports them, apart from the `GetAsset` calls, through `asset.stats` and the `assets` section of
-  `editor.status`.
+  up); per asset its state, memory, latest request and pins. `GetStats` costs the same with any number of assets: the
+  counts of assets per state and of pinned assets change with the entries (`SetStateLocked`, `AddEntryLocked`,
+  `RemoveEntryLocked`, `Pin`, `Unpin`; every change of an entry's state goes through them), so the editor reads them
+  every frame. `GetResidencySamples` gives the per-asset part without names into a vector the caller reuses, and
+  `GetMetadataVersion` changes with every registration and metadata change, so a view of tens of thousands of assets
+  reads names only when they change.
+  The editor reports them, apart from the `GetAsset` calls, through `asset.stats`, the `assets` section of
+  `editor.status`, the Streaming panel and the status bar's assets pill.
 - **Measured** by the perf test `PerfGPU.Streaming` (`StrataTests/src/Perf/StreamingPerfTests.cpp`): it writes the
   stress project (`StrataTests/src/Perf/StressProject.h`: 16 textures of 2048² and one of 4096², which cook to 111.8 MB
   of BC7 (447.4 MB of RGBA8 before texture cooking v2), one material per district of a 2000-unit world, 2,000 objects
@@ -912,8 +956,12 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
     more than 8 ms and fail no load; the best run must stay below 650 MB of private memory (texture cooking's limit),
     and `Budgets.json` judges its peak private bytes.
 
-  `Perf.TextureCook` (`TextureCookPerfTests.cpp`) imports the same project cold three times and checks the median import
-  time, the stored size of every texture and the pack size, and measures the BC7 encoder's time per block on one thread.
+  Then it exports the stress game (a `.stgame` manifest next to the pack) and runs `StrataRuntime` in a window for 600
+  frames from the world's overview camera with `--perf-log` and the evicting sweep's texture budget, three times: every
+  log must have a row per frame, and the slowest frame's `Assets.Finalize` stage, judged by the median run, may not
+  exceed 8 ms. `Perf.TextureCook` (`TextureCookPerfTests.cpp`) imports the same project cold three times and checks the
+  median import time, the stored size of every texture and the pack size, and measures the BC7 encoder's time per block
+  on one thread.
   `GPU.Assets.Streaming` runs the same sweep on a small stress project under the validation layers.
 
 ## Render scene
@@ -1083,8 +1131,8 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
  --------------------------------------------------------------------------------------------------------------
  StrataEditorUI    EditorLayer            owns everything below: menu bar, main toolbar, status pills, default
                                           layout, shortcuts, idle throttling, file dialogs (nfd)
-                   EditorPanelRegistry    the panels (Viewport, Hierarchy, Inspector, Console, Content Browser):
-                                          windows, View menu, open state in imgui.ini
+                   EditorPanelRegistry    the panels (Viewport, Hierarchy, Inspector, Console, Content Browser,
+                                          Streaming, Performance): windows, View menu, open state in imgui.ini
                    UI kit                 Theme (palette, ApplyTheme), EditorFonts, Icons, Widgets, ItemProbe
  --------------------------------------------------------------------------------------------------------------
  StrataEditorCore  EditorContext          project, EditorAssetManager, edited and running scene, play mode,
@@ -1125,7 +1173,29 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   sets the cap to 0 (full rate) while anything happens and to 30 (10 unfocused) frames per second otherwise; headless,
   `--frames` and command-script runs are never throttled. The frame time shown (status bar, viewport stats,
   `editor.status`) is `Application::GetLastFrameWorkTime` averaged over 60 frames: a frame's CPU time without the waits
-  for the GPU, the display and the pacer, which panels get in `EditorPanelContext::Frame`. **UI tests**
+  for the GPU, the display and the pacer, which panels get in `EditorPanelContext::Frame`. **Instruments**: the
+  Streaming panel (`Panels/StreamingPanel`) and the Performance panel (`Panels/PerformancePanel`) are closed until the
+  status bar's assets and frame pills (or the View menu) open them, docked beside the Console (`DockNewToolPanels` for
+  layouts saved before them). Panels collect what the status bar shows in `OnUpdate`, also while closed: the Streaming
+  panel takes the active asset manager's `GetStats` once per frame after the frame's commands ran (so its totals equal
+  what `asset.stats` returned in that frame) and keeps 120 frames of uploaded bytes, the Performance panel samples the
+  job system for the frame pill's job count. The assets pill shows the pool closest to its budget
+  (`GetMostPressuredPool`), whose pressure also colors it. The Streaming panel draws a budget bar per pool (Ochre,
+  Sulfur from 85% of the budget, Cinnabar beyond it), the loads in flight against their limit (in a neutral color: it
+  throttles reads, it is no memory budget), the queue per priority, an upload sparkline against the per-frame budget
+  (saying so when nothing was uploaded), evictions and cancellations, and beside them (in a wide dock) a sortable,
+  filtered, clipped table of the listed assets: failed ones first, loading ones in Sulfur and failed ones in Cinnabar as
+  in the viewport's streaming view (`GetAssetStateColor`), sub-assets named by their file and key. At most four times a
+  second, and when the sort or the filter changes, the main thread copies `GetResidencySamples` (and `GetAllMetadata` when
+  `GetMetadataVersion` changed) and a job (`StreamingPanel::BuildTable`) names, sorts and filters the rows, which the
+  table shows once the job finished; so no frame sorts or names tens of thousands of rows. A click on a row reveals the
+  asset in the Content Browser (`ContentBrowserPanel::RevealAsset`). The Performance panel stacks the frame profiler's
+  stage self times of the last 600 frames (newest at the right, untimed work on top, reference lines at 16.7 and 33.3
+  ms), scaled to the 95th percentile frame (taller frames are cut at the top), marks spikes (frames over twice the median
+  and a 60 FPS frame), explains the frame under the mouse, lists per-stage statistics under the frame's totals (frozen
+  under the header) and copies `editor.perf`'s JSON (Copy as JSON); its statistics are computed four times a second. The
+  timeline takes at most 40% of the panel's height, or sits beside the table in a short, wide dock, so the table keeps
+  rows in view. Color swatches are drawn as rectangles: the monospaced font has no icons. **UI tests**
   (`StrataTests/src/Editor/ImGuiHarness.h`) create an ImGui context with the editor's fonts and theme (styled by an
   unattached `ImGuiLayer`), honor ImGui's texture requests without a renderer, inject input (clicks, keys, typed text),
   keep their own clipboard, and find kit widgets through the probe; the `Editor.UI` and `Editor.Launcher` suites draw the
@@ -1148,10 +1218,11 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   `EditorSceneCommands.cpp` (scene, entity, component, prefab), `EditorAssetCommands.cpp` (asset, material, prefab,
   project, including `project.templates`, `project.samples`, `project.openSample`, `project.close`, `project.export`,
   `project.exportStatus`, `project.cancelExport` and `project.setExportSettings`),
-  `EditorStateCommands.cpp` (edit, editor including `editor.recentProjects` and `editor.removeRecentProject`, log, play,
-  selection), `EditorViewportCommands.cpp` (camera, viewport), `EditorScriptCommands.cpp` (script),
+  `EditorStateCommands.cpp` (edit, editor including `editor.recentProjects`, `editor.removeRecentProject` and `editor.perf`,
+  log, play, selection), `EditorViewportCommands.cpp` (camera, viewport), `EditorScriptCommands.cpp` (script),
   `EditorInputCommands.cpp` (input), `EditorStreamingCommands.cpp` (`asset.stats`, `asset.setBudget`) and
-  `EditorCommands.cpp` (`editor.commands`). Conventions: AGENTS.md, "Editor".
+  `EditorCommands.cpp` (`editor.commands`); the UI's `EditorLayer` adds `editor.showPanel`, the one command about its
+  window. Conventions: AGENTS.md, "Editor".
 - **Runner** (`EditorCommandRunner.h`). `Run` executes a command; a deferred one is polled once per frame from the next
   frame on, in issue order, and reports through its completion callback. Automation and command scripts always use the
   runner. UI actions that finish at once call the registry through `RunEditorCommand`
@@ -1171,9 +1242,18 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   the project's other scenes), the settings and two `ViewportRenderer`s (panel and captures). The panel renders during
   `OnImGuiRender`; `ResolveViewportView` picks the scene's primary camera while playing and the editor camera otherwise,
   and `GetViewportRenderOptions` gives editor views (the editor camera outside play mode) preview lighting and a hidden
-  HUD as the settings say (`viewport.getSettings`, `viewport.setSettings`). Picking reads one pixel of the entity-ID
-  buffer asynchronously and completes in `EditorContext::Update`. `viewport.capture` renders on the next frame, polls a
-  `TextureReadback`, encodes the PNG on a worker and saves on an I/O thread (`EditorViewportCommands.cpp`).
+  HUD as the settings say (`viewport.getSettings`, `viewport.setSettings`). The settings' debug view
+  (`ViewportDebugView`: `none`, `streaming`, `lod`) colors every view of the viewport, the game view too: before each
+  render `StreamingView` (`Editor/StreamingView.h`) walks the active mesh renderers in view and lists tints for the
+  renderer (`SceneRenderOptions::EntityTints`). The streaming view reads the active asset manager's states without
+  requesting anything, with the renderer's choice of mesh, material and textures: entities with a mesh, material or
+  texture still loading are tinted in the pending color, failed ones in the failed color, and entities whose mesh is
+  not there (nothing is drawn, so nothing can be tinted) get a placeholder box (at most `c_MaxPlaceholderBoxes`). The
+  LOD view tints each entity by the most simplified level its submeshes are drawn at (`LODSelection`, with the viewport
+  renderer's threshold). The colors are `ViewportSettings::DebugColors`, which the UI sets from the theme (not saved).
+  Picking reads one pixel of the entity-ID buffer asynchronously and completes in `EditorContext::Update`.
+  `viewport.capture` renders on the next frame (with its own `debugView` if given), polls a `TextureReadback`, encodes
+  the PNG on a worker and saves on an I/O thread (`EditorViewportCommands.cpp`).
 - **Script builds** (`ScriptBuild.h`). `ScriptBuilder` runs CMake configure and build as child processes (one build at
   a time, ended as a process tree when cancelled), polled once per frame; its output streams to the log and is parsed
   into diagnostics. When a build finishes, `EditorContext` loads or hot reloads the module. With a Visual Studio
@@ -1216,8 +1296,13 @@ shows, so a game that does lists them in `Export.AlwaysInclude` (`project.setExp
 `StrataRuntime` (`StrataRuntime/src/RuntimeApplication.cpp`) runs `--game <file>`, or the manifest found next to the
 executable (`GameManifest::FindForExecutable`). It logs to `<user data>/<Game>/Logs/Game.log`. `--headless` disables
 the window and the renderer and paces at 60 frames per second; `--windowed` overrides a fullscreen manifest, and
-`--frames N` with `--screenshot out.png` saves the last frame, and `--asset-budget-mb <n>` sets the GPU texture budget
-of the game's assets (the other budgets keep their defaults). `GameRuntime::Create` loads the manifest, makes a
+`--frames N` with `--screenshot out.png` saves the last frame, `--asset-budget-mb <n>` sets the GPU texture budget
+of the game's assets (the other budgets keep their defaults), and `--perf-log <csv>` writes a row for every frame, also
+headless (`Runtime/FramePerfLog`, a frame profiler listener, so writing costs the measured frame nothing): the frame's
+work time and interval, each stage's milliseconds, the job threads' busy percentages and the asset manager's streaming
+numbers after the frame (loading, queued and in-flight loads, uploaded MB, finalization ms, resident MB per pool,
+evictions). A log that cannot be written fails the run (exit code 1).
+`GameRuntime::Create` loads the manifest, makes a
 `RuntimeAssetManager` on the pack active (with `GameRuntimeOptions::AssetBudgets` when given; the manifest's optional
 `PatchPacks` are mounted over it in order, and a missing one stops the game), loads the script module
 into its own `ScriptEngine` without hot reload and makes it active, and starts the start scene in Play mode.

@@ -146,6 +146,17 @@ render-scene, streaming-observatory, editor-authoring:
   environment cache the sky light's environment map until the environment changes (`first-light`), and
   `TextRenderer`'s glyph atlases their fonts while the fonts are loaded, so a font once drawn is not evicted while its
   renderer lives (the text renderer's atlas cache).
+- `streaming-observatory`: an always-on frame profiler (`FrameProfiler`, `ST_PROFILE_STAGE`: Input, Assets.Update,
+  Assets.Finalize, Scene.Scripts, Scene.Physics, Scene.Audio, Scene.Transforms, Render.Extract, Render.Submit, Editor.UI,
+  Present; self times, a 600-frame ring and job-thread busy percentages, about 0.6 microseconds per frame of 16 stages),
+  `editor.perf`, `StrataRuntime --perf-log` (a CSV row per frame, which `PerfGPU.Streaming` reads from three runs of the
+  exported stress game: the slowest frame's finalization stays within 8 ms by the median run; single runs measured
+  4.4-5.6 ms here, and one spike of 12 ms under heavy load from other work), the Streaming panel (budget bars by
+  pressure, loads, uploads, a 10,000-asset table built on a job thread: every frame within about 0.15 ms at the 95th
+  percentile, the frames that refresh the table included, with `AssetManagerBase::GetStats` no longer visiting every
+  asset) and the Performance panel (a stacked stage timeline, about 0.065 ms per frame at the 95th percentile),
+  status pills that open them, `editor.showPanel`, and the viewport's streaming and LOD debug views
+  (`SceneRenderOptions::EntityTints`, `Overlay/StatusTint.frag`, `LODSelection`; `viewport.capture {debugView}`).
 
 Open items and deferrals later waves own:
 
@@ -160,9 +171,10 @@ Open items and deferrals later waves own:
 - A world seen all at once still peaks at about 970 MiB of private memory in the exported runtime: no budget can evict
   what is in view, so this needs BC textures and mip streaming (`texture-cook-v2`, `mip-streaming`; with BC textures the
   stress world peaks at about 520 MB, see wave 2). Mesh uploads still
-  go through NVRHI's upload manager until the budgeted upload queue (`mip-streaming`); `AssetManagerBase::GetStats`
-  and `GetResidencyInfo` walk every registered asset (eviction walks only the resident assets of the pools over budget,
-  least recently requested first), which a world of many registered assets will feel (`world-partition`).
+  go through NVRHI's upload manager until the budgeted upload queue (`mip-streaming`); `AssetManagerBase::GetResidencyInfo`
+  and `GetResidencySamples` walk every registered asset (`GetStats` keeps counts instead; eviction walks only the
+  resident assets of the pools over budget, least recently requested first), which a world of many registered assets
+  will feel (`world-partition`).
 - Deleting one entity among 100,000 sibling roots renumbers the sibling list (about 0.5 ms), and the Hierarchy panel
   draws every root each frame (Hierarchy v2 in `editor-authoring`). Starting play copies a 1,000,000-entity scene in
   about 0.7 s (`scene-streaming`).

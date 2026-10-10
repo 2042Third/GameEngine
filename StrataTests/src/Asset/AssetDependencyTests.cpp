@@ -911,6 +911,47 @@ TEST_SUITE("Asset.Groups")
 		CHECK(manager->GetAssetState(dependency) == AssetState::Ready);
 	}
 
+	TEST_CASE("Prefetches that start, arrive and are dropped keep the statistics' counts of assets per state exact")
+	{
+		ScopedFakeLoader loader;
+		Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		const AssetHandle parent = manager->Add(0x200, MakeUsage(10), 10);
+		const AssetHandle arriving = manager->Add(0x201, MakeUsage(20), 20);
+		// Its stored size fits, what it holds once loaded does not: dropped when it arrives.
+		const AssetHandle dropped = manager->Add(0x202, MakeUsage(500), 10);
+		manager->SetDependencies(parent, { arriving, dropped });
+		const uint64_t builtin = manager->GetStats().Resident.Cpu;
+		AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
+		budgets.Cpu = builtin + 200;
+		budgets.InFlightBytes = 50;
+		manager->SetResidencyBudgets(budgets);
+		for (int frame = 0; frame < 10; frame++)
+			manager->Update();
+		REQUIRE(StateCountsMatch(*manager));
+
+		// GetStats counts assets per state as they change (it visits none), so every change a prefetch makes must count.
+		for (int frame = 0; frame < 10; frame++)
+		{
+			manager->GetAsset(parent);
+			manager->Update();
+			CHECK(StateCountsMatch(*manager));
+		}
+		REQUIRE(manager->WaitForPendingLoads());
+		for (int frame = 0; frame < 3; frame++)
+		{
+			manager->GetAsset(parent);
+			manager->Update();
+		}
+		CHECK(manager->GetAssetState(parent) == AssetState::Ready);
+		CHECK(manager->GetAssetState(arriving) == AssetState::Ready);
+		CHECK(manager->GetAssetState(dropped) == AssetState::Unloaded);
+		const AssetManagerStats stats = manager->GetStats();
+		CHECK(stats.DependencyPrefetches == 2);
+		CHECK(stats.DependencyPrefetchesDropped == 1);
+		CHECK(stats.LoadingAssets == 0);
+		CHECK(StateCountsMatch(*manager));
+	}
+
 	TEST_CASE("A group of a model, 10 materials and 20 textures progresses by bytes to completion")
 	{
 		ScopedJobSystem jobs(2, 1);

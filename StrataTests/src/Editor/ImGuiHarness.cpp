@@ -10,6 +10,8 @@
 
 #include <imgui_internal.h>
 
+#include <vector>
+
 namespace Strata::Tests
 {
 
@@ -132,6 +134,44 @@ namespace Strata::Tests
 	ImGuiID ImGuiHarness::GetPreviouslyHoveredId() const
 	{
 		return GImGui->HoveredIdPreviousFrame;
+	}
+
+	uint32_t ImGuiHarness::CountFallbackGlyphs(ImGuiWindow* window)
+	{
+		if (!window)
+			return 0;
+		// The fallback glyph of every size each font was baked at, by its texture coordinates: a glyph quad starts with the
+		// top-left corner of its glyph's rectangle in the atlas.
+		const ImFontAtlas* atlas = ImGui::GetIO().Fonts;
+		if (!atlas->Builder)
+			return 0;
+		std::vector<ImVec2> fallbacks;
+		const ImStableVector<ImFontBaked, 32>& baked = atlas->Builder->BakedPool;
+		for (int index = 0; index < baked.Size; index++)
+		{
+			const ImFontBaked& font = baked[index];
+			if (font.FallbackGlyphIndex < 0 || font.FallbackGlyphIndex >= font.Glyphs.Size)
+				continue;
+			const ImFontGlyph& glyph = font.Glyphs[font.FallbackGlyphIndex];
+			if (glyph.Visible)
+				fallbacks.emplace_back(glyph.U0, glyph.V0);
+		}
+
+		uint32_t count = 0;
+		for (ImGuiWindow* candidate : GImGui->Windows)
+		{
+			if (!candidate->WasActive || (candidate != window && !ImGui::IsWindowChildOf(candidate, window, false, false)))
+				continue;
+			for (const ImDrawVert& vertex : candidate->DrawList->VtxBuffer)
+			{
+				for (const ImVec2& fallback : fallbacks)
+				{
+					if (vertex.uv.x == fallback.x && vertex.uv.y == fallback.y)
+						count++;
+				}
+			}
+		}
+		return count;
 	}
 
 	void ImGuiHarness::HonorTextureRequests()

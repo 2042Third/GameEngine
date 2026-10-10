@@ -29,6 +29,11 @@ namespace Strata
 		// Imports external files into the current folder.
 		void ImportFiles(EditorContext& context, const EditorCommandRegistry& commands, const std::vector<std::filesystem::path>& files);
 		const std::string& GetCurrentDirectory() const { return m_CurrentDirectory; }
+
+		// Shows an asset of the project: opens its folder, highlights it (a sub-asset: the file it comes from) and scrolls to it.
+		// False, changing nothing, for assets without a file in the project (built-in and memory assets).
+		bool RevealAsset(EditorContext& context, AssetHandle asset);
+		AssetHandle GetRevealedAsset() const { return m_Revealed; }
 	private:
 		struct Item
 		{
@@ -53,6 +58,8 @@ namespace Strata
 		double m_LastRefreshTime = -1.0;
 		bool m_RefreshRequested = true;
 
+		AssetHandle m_Revealed = UUID::Null(); // Highlighted until another item is clicked
+		bool m_ScrollToRevealed = false;
 		AssetHandle m_RenameAsset = UUID::Null();
 		std::string m_RenameText;
 		std::string m_NewFolderName;

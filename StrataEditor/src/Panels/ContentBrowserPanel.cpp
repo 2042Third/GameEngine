@@ -82,6 +82,21 @@ namespace Strata
 		m_RefreshRequested = true;
 	}
 
+	bool ContentBrowserPanel::RevealAsset(EditorContext& context, AssetHandle asset)
+	{
+		const EditorAssetManager* assets = context.GetAssetManager();
+		const std::optional<AssetMetadata> metadata = assets ? assets->GetMetadata(asset) : std::nullopt;
+		if (!metadata || metadata->IsBuiltin() || metadata->Path.empty())
+			return false;
+		// Sub-assets (a model's meshes) share their parent's file, which the listing shows.
+		m_Revealed = metadata->IsSubAsset() ? metadata->Parent : asset;
+		m_ScrollToRevealed = true;
+		m_CurrentDirectory = GetParentDirectory(metadata->Path);
+		m_Filter.clear();
+		m_RefreshRequested = true;
+		return true;
+	}
+
 	void ContentBrowserPanel::OpenScene(EditorContext& context, const EditorCommandRegistry& commands, AssetHandle scene)
 	{
 		if (m_OpenScene)
@@ -237,11 +252,18 @@ namespace Strata
 				const bool failed = !item.ImportError.empty();
 				if (failed)
 					ImGui::PushStyleColor(ImGuiCol_Text, UI::GetThemeColors().Error);
-				// The open scene is the selected row.
-				const bool open = metadata.Handle == context.GetSceneHandle();
-				UI::PushSelectionColors(open);
-				ImGui::Selectable(item.Label.c_str(), open, ImGuiSelectableFlags_AllowDoubleClick);
+				// The open scene is the selected row, and so is an asset revealed from elsewhere (the Streaming panel).
+				const bool revealed = metadata.Handle == m_Revealed;
+				const bool selected = metadata.Handle == context.GetSceneHandle() || revealed;
+				UI::PushSelectionColors(selected);
+				if (ImGui::Selectable(item.Label.c_str(), selected, ImGuiSelectableFlags_AllowDoubleClick) && !revealed)
+					m_Revealed = UUID::Null();
 				UI::PopSelectionColors();
+				if (revealed && m_ScrollToRevealed)
+				{
+					ImGui::SetScrollHereY(0.5f);
+					m_ScrollToRevealed = false;
+				}
 				if (failed)
 					ImGui::PopStyleColor();
 				if (ImGui::IsItemHovered())

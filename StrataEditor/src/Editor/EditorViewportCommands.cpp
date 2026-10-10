@@ -73,8 +73,26 @@ namespace Strata
 			{ "snap", "Snap" },
 			{ "translateSnap", "TranslateSnap" },
 			{ "rotateSnap", "RotateSnap" },
-			{ "scaleSnap", "ScaleSnap" }
+			{ "scaleSnap", "ScaleSnap" },
+			{ "debugView", "DebugView" }
 		};
+
+		nlohmann::json DebugViewSchema(std::string description)
+		{
+			return { { "type", "string" }, { "enum", { "none", "streaming", "lod" } }, { "description", std::move(description) } };
+		}
+
+		// What the debug view of a render found.
+		nlohmann::json DescribeDebugView(ViewportDebugView view, const StreamingViewStats& stats, uint32_t tintedEntities)
+		{
+			return {
+				{ "view", ViewportDebugViewToString(view) },
+				{ "tintedEntities", tintedEntities },
+				{ "pendingEntities", stats.PendingEntities },
+				{ "failedEntities", stats.FailedEntities },
+				{ "placeholderBoxes", stats.PlaceholderBoxes },
+				{ "entitiesPerLOD", stats.EntitiesPerLOD } };
+		}
 
 		nlohmann::json DescribeViewportSettings(const ViewportSettings& settings)
 		{
@@ -121,6 +139,7 @@ namespace Strata
 			glm::uvec2 Size = { 0, 0 };
 			ViewportCameraSource Camera = ViewportCameraSource::Automatic;
 			std::optional<bool> Overlays;
+			std::optional<ViewportDebugView> DebugView; // Unset: the viewport's
 			std::filesystem::path Path; // Empty: the image is only returned
 			bool Overwrite = false;
 		};
@@ -140,6 +159,9 @@ namespace Strata
 			Scope<TextureReadback> Readback;
 			ViewportView View;
 			bool Overlays = false;
+			ViewportDebugView DebugView = ViewportDebugView::None;
+			StreamingViewStats DebugViewStats;
+			uint32_t TintedEntities = 0;
 			uint32_t PendingAssets = 0;
 			uint32_t PendingTextGlyphs = 0;
 			bool PreviewLighting = false;
@@ -172,15 +194,21 @@ namespace Strata
 				return EditorCommandResult::Fail(error);
 			}
 			progress.Overlays = request.Overlays.value_or(view->EditorOverlays);
+			ViewportSettings settings = viewport.GetSettings();
+			if (request.DebugView)
+				settings.DebugView = *request.DebugView;
+			progress.DebugView = settings.DebugView;
 
 			// A capture is a single frame: its exposure is metered from this frame alone, not adapted from an earlier one.
 			renderer->GetSceneRenderer().ResetExposureAdaptation();
-			if (!renderer->Render(context, request.Size, *view, viewport.GetSettings(), progress.Overlays))
+			if (!renderer->Render(context, request.Size, *view, settings, progress.Overlays))
 			{
 				renderer->ReleaseTargets();
 				return EditorCommandResult::Fail("Rendering the capture failed (see the log)");
 			}
 			const SceneRendererStats& stats = renderer->GetStats();
+			progress.DebugViewStats = renderer->GetDebugViewStats();
+			progress.TintedEntities = stats.TintedEntities;
 			progress.PendingAssets = stats.PendingAssets;
 			progress.PendingTextGlyphs = stats.PendingTextGlyphs;
 			progress.PreviewLighting = stats.PreviewLighting;
@@ -266,7 +294,8 @@ namespace Strata
 				{ "pendingTextGlyphs", progress.PendingTextGlyphs },
 				{ "previewLighting", progress.PreviewLighting },
 				{ "screenSpaceTexts", progress.ScreenSpaceTexts },
-				{ "hiddenScreenSpaceTexts", progress.HiddenScreenSpaceTexts }
+				{ "hiddenScreenSpaceTexts", progress.HiddenScreenSpaceTexts },
+				{ "debugView", DescribeDebugView(progress.DebugView, progress.DebugViewStats, progress.TintedEntities) }
 			};
 			if (!progress.View.Notice.empty())
 				result["notice"] = progress.View.Notice;
@@ -379,7 +408,8 @@ namespace Strata
 		registry.Register({ "viewport.getSettings",
 			"The viewport's view settings (saved with the project's editor state): which editor overlays are drawn (grid, selectionOutline, sceneGizmos, "
 			"stats; allColliders: collider shapes of every entity instead of only the selection's), previewLighting (editor views light scenes without any light of their own with a preview sun and sky), gameUI (editor views draw the "
-			"game's screen-space text), the gizmo mode and space, whether gizmo drags snap, and the snap steps.",
+			"game's screen-space text), the gizmo mode and space, whether gizmo drags snap, the snap steps, and debugView (\"none\", or \"streaming\" / "
+			"\"lod\": the image colored by streaming state or level of detail).",
 			ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
@@ -403,7 +433,10 @@ namespace Strata
 				{ "snap", BoolSchema("Snap gizmo drags to the steps below (holding Ctrl inverts it)") },
 				{ "translateSnap", RangeSchema("Move snapping step in world units", 0.0, ViewportSettings::c_MaxTranslateSnap) },
 				{ "rotateSnap", RangeSchema("Rotation snapping step in degrees", 0.0, ViewportSettings::c_MaxRotateSnap) },
-				{ "scaleSnap", RangeSchema("Scale snapping step", 0.0, ViewportSettings::c_MaxScaleSnap) } }),
+				{ "scaleSnap", RangeSchema("Scale snapping step", 0.0, ViewportSettings::c_MaxScaleSnap) },
+				{ "debugView", DebugViewSchema("Color every view of the viewport: \"streaming\" tints entities whose mesh, material or textures are still "
+					"loading (Sulfur; failed ones Cinnabar; entities whose mesh is not there are drawn as boxes), \"lod\" tints entities by the level of "
+					"detail they are drawn at (0 to 3+), \"none\" shows the image as rendered") } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				nlohmann::json changes = nlohmann::json::object();
@@ -441,14 +474,18 @@ namespace Strata
 			"of its own is lit by preview lighting (previewLighting: true in the result; the game will be unlit) and the game's screen-space text is hidden "
 			"(hiddenScreenSpaceTexts counts it): see viewport.setSettings, or use camera \"scene\" to see what the game shows. Text whose glyphs are still being "
 			"prepared delays the picture by a few frames, so it is complete. Also reports how many assets were still loading (pendingAssets: call editor.wait "
-			"and capture again to see them) and glyphs that could not be prepared in time (pendingTextGlyphs). Needs a GPU (fails in editors started with "
-			"--no-gpu).",
+			"and capture again to see them) and glyphs that could not be prepared in time (pendingTextGlyphs). debugView colors the picture by streaming "
+			"state or level of detail (default: the viewport's, viewport.setSettings) and the result's debugView says what it found: {view, "
+			"tintedEntities, pendingEntities, failedEntities, placeholderBoxes, entitiesPerLOD: [LOD0, LOD1, LOD2, LOD3+]} among the entities in view. "
+			"Needs a GPU (fails in editors started with --no-gpu).",
 			ObjectSchema({
 				{ "width", IntegerSchema("Image width in pixels; without height the viewport's aspect ratio is kept", c_MinCaptureSize, c_MaxCaptureSize) },
 				{ "height", IntegerSchema("Image height in pixels; without width the viewport's aspect ratio is kept", c_MinCaptureSize, c_MaxCaptureSize) },
 				{ "camera", { { "type", "string" }, { "enum", { "editor", "scene" } },
 					{ "description", "\"editor\": the editor camera; \"scene\": the scene's primary camera (fails without one)" } } },
 				{ "overlays", BoolSchema("Draw the editor overlays enabled in the viewport (default: on for the editor camera, off for the scene camera)") },
+				{ "debugView", DebugViewSchema("\"streaming\" tints entities by streaming state (pending Sulfur, failed Cinnabar, missing meshes as boxes), "
+					"\"lod\" by level of detail, \"none\" not at all (default: the viewport's debug view)") },
 				{ "path", StringSchema("Also save the PNG to this .png file: relative to the project directory (needs an open project) or absolute; folders are "
 					"created, network and device paths are refused") },
 				{ "overwrite", BoolSchema("Replace an existing file at path (default false: an existing file is an error)") } }),
@@ -467,6 +504,12 @@ namespace Strata
 					arguments.SetError("Parameter 'camera' must be \"editor\" or \"scene\"");
 				if (arguments.Has("overlays"))
 					request.Overlays = arguments.GetBool("overlays", true);
+				if (arguments.Has("debugView"))
+				{
+					request.DebugView = ViewportDebugViewFromString(arguments.GetString("debugView"));
+					if (!request.DebugView && arguments.IsValid())
+						arguments.SetError("Parameter 'debugView' must be \"none\", \"streaming\" or \"lod\"");
+				}
 				request.Overwrite = arguments.GetBool("overwrite", false);
 				if (arguments.Has("path"))
 				{

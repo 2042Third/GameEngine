@@ -223,6 +223,7 @@ namespace Strata
 	void SceneRenderer::CullView(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum)
 	{
 		ST_PROFILE_FUNCTION();
+		ST_PROFILE_STAGE("Render.Extract");
 		const SpatialIndex& index = renderScene.GetSpatialIndex();
 		m_VisibleProxies.clear();
 		index.QueryFrustum(frustum, m_VisibleProxies);
@@ -293,6 +294,7 @@ namespace Strata
 	void SceneRenderer::FindShadowCasters(RenderScene& renderScene, const SceneCamera& camera, RenderData::FrameConstants& frame)
 	{
 		ST_PROFILE_FUNCTION();
+		ST_PROFILE_STAGE("Render.Extract");
 		m_ShadowCasters.clear();
 		m_CascadeCount = 0;
 		frame.ShadowParams = glm::vec4(0.0f);
@@ -463,6 +465,7 @@ namespace Strata
 	void SceneRenderer::ResolveAssets(RenderScene& renderScene)
 	{
 		ST_PROFILE_FUNCTION();
+		ST_PROFILE_STAGE("Render.Extract");
 		// Slot order, so the requests (and the order loads are queued in) do not depend on the order of the proxies.
 		std::sort(m_UsedMeshSlots.begin(), m_UsedMeshSlots.end());
 		for (const uint32_t slot : m_UsedMeshSlots)
@@ -575,6 +578,7 @@ namespace Strata
 	void SceneRenderer::GatherDraws(RenderScene& renderScene, const SceneCamera& camera)
 	{
 		ST_PROFILE_FUNCTION();
+		ST_PROFILE_STAGE("Render.Extract");
 		const uint32_t visible = static_cast<uint32_t>(m_VisibleProxies.size());
 		const uint32_t chunks = ChunkCount(visible);
 		const std::span<const RenderData::InstanceData> instances = renderScene.GetInstances();
@@ -686,6 +690,7 @@ namespace Strata
 	void SceneRenderer::GatherShadowDraws(RenderScene& renderScene, const SceneCamera& camera, RenderData::FrameConstants& frame)
 	{
 		ST_PROFILE_FUNCTION();
+		ST_PROFILE_STAGE("Render.Extract");
 		m_ShadowDraws.clear();
 		m_ShadowDrawInstancesBuild.clear();
 		m_ShadowBatches.clear();

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Editor/StreamingView.h"
+
 #include <Strata/Core/Base.h>
 #include <Strata/Renderer/DebugDraw.h>
 #include <Strata/Renderer/SceneRenderer.h>
@@ -50,8 +52,9 @@ namespace Strata
 
 	// Renders the editor's active scene for the viewport or a capture, with the overlays the viewport settings enable:
 	// the ground grid, the selection outline (selected entities and their descendants) and the light, camera and collider
-	// shapes; editor views also get the settings' preview lighting and game UI (GetViewportRenderOptions). Owns a
-	// SceneRenderer, so it needs an initialized renderer. Main thread only.
+	// shapes; editor views also get the settings' preview lighting and game UI (GetViewportRenderOptions). The settings'
+	// debug view (StreamingView) colors every view, with or without overlays. Owns a SceneRenderer, so it needs an
+	// initialized renderer. Main thread only.
 	class ViewportRenderer
 	{
 	public:
@@ -68,6 +71,8 @@ namespace Strata
 		nvrhi::ITexture* GetOutputTexture() const { return m_Renderer->GetOutputTexture(); }
 		glm::uvec2 GetSize() const { return m_Renderer->GetViewportSize(); }
 		const SceneRendererStats& GetStats() const { return m_Renderer->GetStats(); }
+		// What the debug view of the last Render found (empty without one).
+		const StreamingViewStats& GetDebugViewStats() const { return m_StreamingView.GetStats(); }
 		SceneRenderer& GetSceneRenderer() { return *m_Renderer; }
 		// The scene of the last successful Render.
 		const std::weak_ptr<Scene>& GetRenderedScene() const { return m_RenderedScene; }
@@ -81,6 +86,7 @@ namespace Strata
 	private:
 		Scope<SceneRenderer> m_Renderer;
 		DebugDraw m_DebugDraw;
+		StreamingView m_StreamingView;
 		std::vector<Entity> m_Outlined;
 		std::vector<UUID> m_OutlinedSelection;
 		std::weak_ptr<Scene> m_OutlinedScene;

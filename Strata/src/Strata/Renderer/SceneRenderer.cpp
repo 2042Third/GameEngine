@@ -5,6 +5,7 @@
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Math/Frustum.h"
 #include "Strata/Math/Math.h"
+#include "Strata/Renderer/LODSelection.h"
 #include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/RenderScene.h"
@@ -883,20 +884,12 @@ namespace Strata
 
 	uint32_t SceneRenderer::SelectLOD(const Submesh& submesh, float screenFraction) const
 	{
-		uint32_t lod = 0;
-		if (screenFraction < m_Specification.LODThreshold && screenFraction > 0.0f)
-			lod = 1 + static_cast<uint32_t>(std::floor(std::log2(m_Specification.LODThreshold / screenFraction)));
-		return std::min<uint32_t>(lod, static_cast<uint32_t>(submesh.LODs.size()) - 1);
+		return LODSelection::SelectLOD(screenFraction, m_Specification.LODThreshold, static_cast<uint32_t>(submesh.LODs.size()));
 	}
 
 	float SceneRenderer::GetScreenFraction(const SceneCamera& camera, const glm::vec3& center, float radius)
 	{
-		// Projected diameter of the bounding sphere as a fraction of the viewport height.
-		if (camera.Orthographic)
-			return (2.0f * radius) / std::max(camera.VerticalFOV, 1e-4f);
-		const float halfFOVTangent = std::tan(std::max(camera.VerticalFOV, 1e-3f) * 0.5f);
-		const float distance = glm::length(center - camera.Position);
-		return radius / (std::max(distance, camera.Near) * halfFOVTangent);
+		return LODSelection::GetScreenFraction(camera, center, radius);
 	}
 
 	void SceneRenderer::DrawShadows(nvrhi::ICommandList* commandList, uint32_t cascadeCount)
@@ -1039,6 +1032,7 @@ namespace Strata
 		release(m_OverlayFramebuffer);
 		release(m_CopyBindingSet);
 		release(m_OutlineBindingSet); // References the entity-ID texture
+		release(m_StatusTintBindingSet); // Likewise
 		Renderer::ReleaseDeferred(std::move(released));
 	}
 
@@ -1287,6 +1281,7 @@ namespace Strata
 
 	void SceneRenderer::CollectLights(Scene& scene, const SceneCamera& camera, bool preview, RenderData::FrameConstants& frame)
 	{
+		ST_PROFILE_STAGE("Render.Extract");
 		entt::registry& registry = scene.GetRegistry();
 
 		frame.DirectionalLightDirection = glm::vec4(0.0f, -1.0f, 0.0f, 0.0f);
@@ -1500,6 +1495,7 @@ namespace Strata
 	bool SceneRenderer::Render(Scene& scene, const SceneCamera& camera, nvrhi::IFramebuffer* target, const SceneRenderOptions& options)
 	{
 		ST_PROFILE_FUNCTION();
+		ST_PROFILE_STAGE("Render.Submit"); // Extraction (Render.Extract) nests in it
 		const bool rendered = RenderFrame(scene, camera, target, options);
 		// The references the frame resolved end with it, so a renderer that stops rendering (a capture renderer between
 		// captures, a hidden view) keeps none of the meshes, materials and textures it drew resident (the environment
@@ -1525,9 +1521,13 @@ namespace Strata
 		// layouts what the asset manager loaded.
 		const Ref<AssetManagerBase>& assets = AssetManager::GetActive();
 		RenderScene& renderScene = RenderScene::Get(scene);
-		m_Stats.ProxyUpdates = renderScene.Sync(assets);
-		m_Assets.BeginFrame(assets);
-		PrepareExtraction(renderScene);
+		{
+			// Following the scene's changes is the first part of extraction, like the culling and gathering below.
+			ST_PROFILE_STAGE("Render.Extract");
+			m_Stats.ProxyUpdates = renderScene.Sync(assets);
+			m_Assets.BeginFrame(assets);
+			PrepareExtraction(renderScene);
+		}
 
 		RenderData::FrameConstants frame = {};
 		frame.View = camera.View;
@@ -1766,11 +1766,12 @@ namespace Strata
 		ShaderLibrary& shaders = Renderer::GetShaderLibrary();
 		m_GridPixelShader = shaders.Get("Overlay/Grid.frag");
 		m_OutlinePixelShader = shaders.Get("Overlay/Outline.frag");
+		m_StatusTintPixelShader = shaders.Get("Overlay/StatusTint.frag");
 		m_DebugLineVertexShader = shaders.Get("Overlay/DebugLine.vert");
 		m_DebugLinePixelShader = shaders.Get("Overlay/DebugLine.frag");
 		m_CopyPixelShader = shaders.Get("PostProcess/Copy.frag");
-		ST_CORE_VERIFY(m_GridPixelShader && m_OutlinePixelShader && m_DebugLineVertexShader && m_DebugLinePixelShader && m_CopyPixelShader,
-			"SceneRenderer overlay shaders are missing");
+		ST_CORE_VERIFY(m_GridPixelShader && m_OutlinePixelShader && m_StatusTintPixelShader && m_DebugLineVertexShader && m_DebugLinePixelShader
+			&& m_CopyPixelShader, "SceneRenderer overlay shaders are missing");
 
 		// Slot 1: register b0 belongs to the frame constants.
 		nvrhi::BindingLayoutDesc gridLayout;
@@ -1790,6 +1791,15 @@ namespace Strata
 		};
 		m_OutlineBindingLayout = m_Device->createBindingLayout(outlineLayout);
 
+		nvrhi::BindingLayoutDesc statusTintLayout;
+		statusTintLayout.visibility = nvrhi::ShaderType::Pixel;
+		statusTintLayout.bindings = {
+			nvrhi::BindingLayoutItem::Texture_SRV(0),
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),
+			nvrhi::BindingLayoutItem::PushConstants(0, sizeof(RenderData::StatusTintParameters))
+		};
+		m_StatusTintBindingLayout = m_Device->createBindingLayout(statusTintLayout);
+
 		nvrhi::BindingLayoutDesc debugLineLayout;
 		debugLineLayout.visibility = nvrhi::ShaderType::Vertex;
 		debugLineLayout.bindings = { nvrhi::BindingLayoutItem::VolatileConstantBuffer(0) };
@@ -1807,14 +1817,65 @@ namespace Strata
 
 		bool recreated = false;
 		const bool buffersCreated = EnsureBufferCapacity(m_SelectionBuffer, 64, sizeof(uint32_t), "Selection", recreated)
+			&& EnsureBufferCapacity(m_TintBuffer, 64, sizeof(glm::uvec2), "EntityTints", recreated)
 			&& EnsureBufferCapacity(m_DebugLineBuffer, 1024, sizeof(DebugLineVertex), "DebugLines", recreated, true);
-		ST_CORE_VERIFY(buffersCreated && m_GridBindingLayout && m_GridBindingSet && m_OutlineBindingLayout && m_DebugLineBindingLayout && m_DebugLineBindingSet
-			&& m_DebugLineInputLayout, "SceneRenderer: failed to create overlay resources");
+		ST_CORE_VERIFY(buffersCreated && m_GridBindingLayout && m_GridBindingSet && m_OutlineBindingLayout && m_StatusTintBindingLayout && m_DebugLineBindingLayout
+			&& m_DebugLineBindingSet && m_DebugLineInputLayout, "SceneRenderer: failed to create overlay resources");
 	}
 
 	bool SceneRenderer::HasOverlays(const SceneRenderOptions& options)
 	{
-		return options.ShowGrid || !options.SelectedEntities.empty() || (options.DebugShapes && !options.DebugShapes->IsEmpty());
+		return options.ShowGrid || !options.SelectedEntities.empty() || (options.DebugShapes && !options.DebugShapes->IsEmpty()) || !options.EntityTints.empty();
+	}
+
+	bool SceneRenderer::DrawEntityTints(nvrhi::ICommandList* commandList, Scene& scene, std::span<const SceneEntityTint> tints, const nvrhi::Viewport& viewport)
+	{
+		// Sorted by id for the shader's binary search; the first color of an entity listed twice wins (a stable sort keeps
+		// the given order among equal ids).
+		m_TintEntries.clear();
+		for (const SceneEntityTint& tint : tints)
+		{
+			if (tint.Target.GetScene() == &scene && tint.Target.IsValid())
+				m_TintEntries.push_back(glm::uvec2(static_cast<uint32_t>(tint.Target.GetHandle()) + 1, DebugDraw::PackColor(tint.Color)));
+		}
+		std::stable_sort(m_TintEntries.begin(), m_TintEntries.end(), [](const glm::uvec2& a, const glm::uvec2& b) { return a.x < b.x; });
+		m_TintEntries.erase(std::unique(m_TintEntries.begin(), m_TintEntries.end(), [](const glm::uvec2& a, const glm::uvec2& b) { return a.x == b.x; }),
+			m_TintEntries.end());
+		if (m_TintEntries.empty())
+			return true;
+
+		bool recreated = false;
+		if (!EnsureBufferCapacity(m_TintBuffer, m_TintEntries.size(), sizeof(glm::uvec2), "EntityTints", recreated))
+			return false;
+		if (recreated || !m_StatusTintBindingSet)
+		{
+			nvrhi::BindingSetDesc desc;
+			desc.bindings = {
+				nvrhi::BindingSetItem::Texture_SRV(0, m_EntityIDTexture),
+				nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_TintBuffer),
+				nvrhi::BindingSetItem::PushConstants(0, sizeof(RenderData::StatusTintParameters))
+			};
+			m_StatusTintBindingSet = m_Device->createBindingSet(desc, m_StatusTintBindingLayout);
+			if (!m_StatusTintBindingSet)
+			{
+				m_Errors.Report("failed to create the entity tint bindings");
+				return false;
+			}
+		}
+		commandList->writeBuffer(m_TintBuffer, m_TintEntries.data(), m_TintEntries.size() * sizeof(glm::uvec2));
+
+		RenderData::StatusTintParameters parameters = {};
+		parameters.Count = static_cast<uint32_t>(m_TintEntries.size());
+		nvrhi::GraphicsState state;
+		state.pipeline = m_StatusTintPipeline;
+		state.framebuffer = m_OverlayFramebuffer;
+		state.viewport.addViewportAndScissorRect(viewport);
+		state.bindings = { m_StatusTintBindingSet };
+		commandList->setGraphicsState(state);
+		commandList->setPushConstants(&parameters, sizeof(parameters));
+		commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
+		m_Stats.TintedEntities = parameters.Count;
+		return true;
 	}
 
 	void SceneRenderer::DrawDebugLines(nvrhi::ICommandList* commandList, DebugDrawDepth depth, uint32_t firstVertex, uint32_t vertexCount)
@@ -1856,6 +1917,10 @@ namespace Strata
 			desc.renderState.depthStencilState.setDepthTestEnable(false);
 			m_OutlinePipeline = m_Device->createGraphicsPipeline(desc, info);
 
+			desc.PS = m_StatusTintPixelShader;
+			desc.bindingLayouts = { m_StatusTintBindingLayout };
+			m_StatusTintPipeline = m_Device->createGraphicsPipeline(desc, info);
+
 			desc.primType = nvrhi::PrimitiveType::LineList;
 			desc.inputLayout = m_DebugLineInputLayout;
 			desc.VS = m_DebugLineVertexShader;
@@ -1864,9 +1929,14 @@ namespace Strata
 			m_DebugLinePipelines[static_cast<size_t>(DebugDrawDepth::OnTop)] = m_Device->createGraphicsPipeline(desc, info);
 			desc.renderState.depthStencilState.setDepthTestEnable(true);
 			m_DebugLinePipelines[static_cast<size_t>(DebugDrawDepth::Tested)] = m_Device->createGraphicsPipeline(desc, info);
-			ST_CORE_VERIFY(m_GridPipeline && m_OutlinePipeline && m_DebugLinePipelines[0] && m_DebugLinePipelines[1], "SceneRenderer: failed to create the overlay pipelines");
+			ST_CORE_VERIFY(m_GridPipeline && m_OutlinePipeline && m_StatusTintPipeline && m_DebugLinePipelines[0] && m_DebugLinePipelines[1],
+				"SceneRenderer: failed to create the overlay pipelines");
 		}
 		const nvrhi::Viewport viewport(static_cast<float>(m_ViewportSize.x), static_cast<float>(m_ViewportSize.y));
+
+		// Tints color the scene itself: the other overlays go over them.
+		if (!options.EntityTints.empty() && !DrawEntityTints(commandList, scene, options.EntityTints, viewport))
+			return false;
 
 		if (options.ShowGrid)
 		{

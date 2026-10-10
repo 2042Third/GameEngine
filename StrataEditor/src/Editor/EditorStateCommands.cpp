@@ -4,6 +4,8 @@
 #include "Editor/RecentProjects.h"
 
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/FrameProfiler.h>
+#include <Strata/Core/JobSystem.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Core/Platform.h>
 #include <Strata/Core/Version.h>
@@ -23,6 +25,8 @@ namespace Strata
 
 		// About four and a half hours at 60 frames per second.
 		constexpr int64_t c_MaxWaitFrames = 1'000'000;
+		// Frames editor.perf summarizes by default: two seconds at 60 frames per second.
+		constexpr int64_t c_DefaultPerfFrames = 120;
 
 		nlohmann::json DescribePlayState(const EditorContext& context)
 		{
@@ -37,6 +41,41 @@ namespace Strata
 				{ "position", undo.GetPosition() },
 				{ "undo", undo.GetUndoName() },
 				{ "redo", undo.GetRedoName() } };
+		}
+
+		nlohmann::json DescribeFrameTimeStats(const FrameTimeStats& stats)
+		{
+			return { { "avgMs", stats.Average }, { "p50Ms", stats.P50 }, { "p95Ms", stats.P95 }, { "maxMs", stats.Max } };
+		}
+
+	}
+
+	namespace CommandUtils
+	{
+
+		nlohmann::json DescribeFrameProfile(const FrameProfileSummary& summary, const JobSystemStats& jobs)
+		{
+			nlohmann::json stages = nlohmann::json::object();
+			for (const FrameStageSummary& stage : summary.Stages)
+			{
+				nlohmann::json entry = DescribeFrameTimeStats(stage.Time);
+				entry["inFrameTime"] = stage.InWorkTime;
+				stages[stage.Name] = std::move(entry);
+			}
+			return {
+				{ "frames", summary.Frames },
+				{ "frame", DescribeFrameTimeStats(summary.Work) },
+				{ "framesPerSecond", summary.FramesPerSecond },
+				{ "stageSum", DescribeFrameTimeStats(summary.StageSum) },
+				{ "untimed", DescribeFrameTimeStats(summary.Untimed) },
+				{ "jobs", {
+					{ "workerThreads", summary.WorkerThreads },
+					{ "ioThreads", summary.IOThreads },
+					{ "workerBusyPercent", summary.WorkerBusyPercent },
+					{ "ioBusyPercent", summary.IOBusyPercent },
+					{ "running", jobs.Workers.RunningJobs + jobs.IO.RunningJobs },
+					{ "queued", jobs.Workers.QueuedJobs + jobs.IO.QueuedJobs } } },
+				{ "stages", std::move(stages) } };
 		}
 
 	}
@@ -233,6 +272,26 @@ namespace Strata
 						result["frameTimes"] = DescribeFrameTimes(std::move(frameTimes));
 					return EditorCommandResult::Ok(std::move(result));
 				});
+			} });
+
+		registry.Register({ "editor.perf",
+			"Where the editor's frames go: statistics of the latest frames the frame profiler recorded (at most 600). Returns frames (how many "
+			"were summarized), frame (the CPU time of a frame without the waits for the GPU and the display, like the status bar's frame time), "
+			"framesPerSecond, stages (per stage of the main thread: Input, Assets.Update, Assets.Finalize, Scene.Scripts, Scene.Physics, "
+			"Scene.Audio, Scene.Transforms, Render.Extract, Render.Submit, Editor.UI and Present, plus stages modules registered; each its self "
+			"time, nested stages excluded, with inFrameTime false for Present, which comes after the frame time is measured), stageSum (the "
+			"stages inside the frame time added up per frame), untimed (the rest of each frame, work no stage accounts for) and jobs (worker "
+			"and I/O threads, how busy they were in percent, running and queued jobs now). Times are milliseconds as avgMs, p50Ms and p95Ms "
+			"(nearest rank) and maxMs.",
+			ObjectSchema({ { "frames", IntegerSchema("How many of the latest frames to summarize (default 120)", 1, FrameProfiler::c_DefaultCapacity) } }),
+			[](EditorContext&, const nlohmann::json& parameters)
+			{
+				CommandArguments arguments(parameters);
+				const int64_t frames = arguments.GetInt("frames", c_DefaultPerfFrames, 1, FrameProfiler::c_DefaultCapacity);
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				const FrameProfileSummary summary = FrameProfiler::Get().Summarize(static_cast<uint32_t>(frames));
+				return EditorCommandResult::Ok(DescribeFrameProfile(summary, JobSystem::GetStats()));
 			} });
 
 		////////////////////////////////////////////////////////////////////////////////
