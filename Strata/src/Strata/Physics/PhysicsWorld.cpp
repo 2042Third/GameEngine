@@ -36,6 +36,7 @@
 #include <Jolt/Physics/Constraints/ContactConstraintManager.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <bit>
@@ -43,6 +44,7 @@
 #include <map>
 #include <set>
 #include <span>
+#include <utility>
 
 namespace Strata
 {
@@ -1009,6 +1011,7 @@ namespace Strata
 		uint32_t LastSyncedBodies = 0;
 		uint32_t LastCheckedPairs = 0;
 		uint32_t LastWrittenBodies = 0;
+		uint32_t LastOrderedSlots = 0;
 		uint64_t BuildCount = 0;
 		uint64_t MeshCheckCount = 0;
 		// The start of the simulation waits for meshes (see HoldForMeshes).
@@ -1030,7 +1033,10 @@ namespace Strata
 		std::vector<std::pair<uint32_t, entt::entity>> NestedWrites;  // Depth and entity of dynamic bodies below written ones
 		std::vector<PoseWrite> PoseWrites;                            // See WriteBackDynamicBodies
 		std::vector<entt::entity> WrittenEntities;
-		std::vector<uint64_t> MovedBodyBits;                          // Per body index: moved in this step (ordering scratch)
+		// Ordering scratch of the write-back: a bit per body index (allocated with the world, all clear between steps) and the
+		// words of it that bits were set in during this step.
+		std::vector<uint64_t> MovedBodyBits;
+		std::vector<uint32_t> MovedBodyWords;
 		std::vector<std::pair<entt::entity, BodyRecord*>> AwakeRecords; // See SyncEntitiesToBodies
 		std::vector<Entity> VisitStack;                               // See VisitSubtree
 		std::vector<entt::entity> ChangeScratch;                      // See ChangeList::TakeInto
@@ -3135,29 +3141,39 @@ namespace Strata
 			entt::registry& registry = scene.GetRegistry();
 			const JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterfaceNoLock();
 
-			// The bodies that moved, in body index order (a bitmap: Jolt's active list has no fixed order), each once.
+			// The bodies that moved, in body index order (Jolt's active list has no fixed order), each once: their bits are set
+			// in a bitmap over the body indices, and only the words that got bits are sorted, read and cleared again, so the
+			// ordering costs what moved, not the world's capacity.
 			std::vector<uint64_t>& movedBits = data.MovedBodyBits;
-			movedBits.assign((data.BodySlots.size() + 63) / 64, 0);
+			std::vector<uint32_t>& movedWords = data.MovedBodyWords;
+			movedWords.clear();
 			const auto markMoved = [&](const JPH::BodyID& bodyID)
 			{
 				const uint32_t index = bodyID.GetIndex();
-				if (index < data.BodySlots.size())
-					movedBits[index / 64] |= uint64_t(1) << (index % 64);
+				if (index >= data.BodySlots.size())
+					return;
+				uint64_t& word = movedBits[index / 64];
+				if (word == 0)
+					movedWords.push_back(index / 64);
+				word |= uint64_t(1) << (index % 64);
 			};
 			for (const JPH::BodyID& bodyID : GetAwakeBodies(data))
 				markMoved(bodyID);
 			data.Activations.SwapDeactivated(data.DeactivatedBodies);
 			for (const JPH::BodyID& bodyID : data.DeactivatedBodies)
 				markMoved(bodyID);
+			std::sort(movedWords.begin(), movedWords.end());
+			data.LastOrderedSlots = static_cast<uint32_t>(movedWords.size() * 64);
 
 			data.WriteBackPass++;
 			std::vector<PoseWrite>& writes = data.PoseWrites;
 			writes.clear();
-			for (size_t word = 0; word < movedBits.size(); word++)
+			for (const uint32_t word : movedWords)
 			{
-				for (uint64_t bits = movedBits[word]; bits != 0; bits &= bits - 1)
+				const uint64_t wordBits = std::exchange(movedBits[word], 0);
+				for (uint64_t bits = wordBits; bits != 0; bits &= bits - 1)
 				{
-					const BodySlot& slot = data.BodySlots[word * 64 + static_cast<size_t>(std::countr_zero(bits))];
+					const BodySlot& slot = data.BodySlots[size_t(word) * 64 + static_cast<size_t>(std::countr_zero(bits))];
 					BodyRecord* record = slot.Record;
 					if (!record || record->Type != RigidBodyType::Dynamic || !record->InSimulation)
 						continue;
@@ -3449,6 +3465,7 @@ namespace Strata
 		data.JoltSystem = CreateScope<JPH::PhysicsSystem>();
 		data.JoltSystem->Init(data.Settings.MaxBodies, 0, data.Settings.MaxBodyPairs, data.Settings.MaxContactConstraints, data.BroadPhaseLayers, data.ObjectVsBroadPhase, data.LayerPairFilter);
 		data.BodySlots.resize(data.Settings.MaxBodies);
+		data.MovedBodyBits.assign((data.BodySlots.size() + 63) / 64, 0);
 		data.Contacts.Initialize(data.Settings.MaxBodies);
 		data.JoltSystem->SetContactListener(&data.Contacts);
 		data.JoltSystem->SetBodyActivationListener(&data.Activations);
@@ -3968,6 +3985,7 @@ namespace Strata
 		stats.SyncedBodyCount = data.LastSyncedBodies;
 		stats.CheckedPairCount = data.LastCheckedPairs;
 		stats.WrittenBodyCount = data.LastWrittenBodies;
+		stats.OrderedSlotCount = data.LastOrderedSlots;
 		stats.BuildCount = data.BuildCount;
 		stats.AddBatchCount = data.AddBatchCount;
 		stats.SharedShapeCount = static_cast<uint32_t>(data.PrimitiveShapes.size());

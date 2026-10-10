@@ -197,7 +197,8 @@ bodies without a dynamic ancestor in parallel chunks, each touching only its own
 pointers fetched beforehand, against parent world transforms read before the writes, then tells the scene about all of them
 at once (`Scene::MarkTransformsChanged`, no `on_update`); bodies below other written dynamic bodies follow one by one,
 parents first, and the rare cases (scale edits, failed writes, descendants to update) are handled on the main thread in body
-order, so the results do not depend on the number of threads.
+order, so the results do not depend on the number of threads. Body order comes from a bitmap over the body indices of
+which only the words that got bits are sorted, read and cleared, so a step costs what moved, not the world's capacity.
 
 **Audio** (`Audio/`). `AudioEngine` wraps the miniaudio mixer, output device, listener and one-shots (main-thread
 API; mixing runs on miniaudio's audio thread, or is pulled with `AdvanceNullDevice`/`ReadFrames` without a device).

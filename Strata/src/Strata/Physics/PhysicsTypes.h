@@ -100,10 +100,13 @@ namespace Strata
 		uint32_t BodyOverflowCount = 0;  // Entities waiting for a body because the world is full (part of PendingBodyCount)
 		uint64_t ContactOverflowSteps = 0; // Steps that dropped contacts or body pairs because their buffers were full
 		PhysicsCapacityDemand Demand;    // What the world needed beyond its capacities so far (empty while they suffice)
-		// Work of the last step, which grows with the awake bodies and the signaled changes, not with sleeping bodies:
+		// Work of the last step, which grows with the awake bodies and the signaled changes, not with sleeping bodies or the
+		// world's capacity:
 		uint32_t SyncedBodyCount = 0;    // Bodies compared with their entity before the step (awake ones and those with changes)
 		uint32_t CheckedPairCount = 0;   // Touching pairs that could end during the step (those of awake or rebuilt bodies)
 		uint32_t WrittenBodyCount = 0;   // Dynamic bodies whose pose was written back to their entity
+		// Body slots read to put the moved bodies in body order for the write-back: the groups of 64 that hold a moved body.
+		uint32_t OrderedSlotCount = 0;
 		uint64_t BuildCount = 0;         // Bodies built or rebuilt since the world was created (attempts that failed included)
 		uint64_t AddBatchCount = 0;      // Batches that added new bodies to the simulation since then (one per activation mode per round of changes)
 		uint32_t SharedShapeCount = 0;   // Box and sphere shapes the world built, each shared by the bodies of its size

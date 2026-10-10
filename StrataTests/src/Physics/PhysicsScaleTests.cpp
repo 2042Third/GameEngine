@@ -250,6 +250,31 @@ TEST_SUITE("Physics.Scale")
 		CHECK(different == 0);
 	}
 
+	TEST_CASE("Putting the moved bodies in order costs what moved, not the world's capacity")
+	{
+		// A world with room for the most bodies a scene may ask for (2^21 slots): the write-back reads the slots of the groups
+		// of 64 that hold a moved body, not all of them.
+		Scene scene;
+		scene.GetSettings().PhysicsCapacity.MaxBodies = PhysicsCapacitySettings::c_MaxBodiesLimit;
+		CreateFloor(scene, 400);
+		CreateDynamicBox(scene, "Falling", glm::vec3(0.0f, 100.0f, 0.0f));
+		scene.OnRuntimeStart();
+		StepScene(scene, 2);
+		PhysicsStats stats = GetPhysics(scene).GetStats();
+		REQUIRE(stats.MaxBodies == PhysicsCapacitySettings::c_MaxBodiesLimit);
+		CHECK(stats.WrittenBodyCount == 1);
+		CHECK(stats.OrderedSlotCount == 64);
+
+		// 201 falling bodies in the slots of the first 202 bodies: four groups.
+		for (uint32_t index = 0; index < 200; index++)
+			CreateDynamicBox(scene, "Box " + std::to_string(index), glm::vec3(1.5f * static_cast<float>(index % 20), 50.0f, 1.5f * static_cast<float>(index / 20)));
+		StepScene(scene, 1);
+		stats = GetPhysics(scene).GetStats();
+		CHECK(stats.WrittenBodyCount == 201);
+		CHECK(stats.OrderedSlotCount == 4 * 64);
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("Contact events do not depend on how many threads report them")
 	{
 		// Reports from Jolt's job threads go into per-thread buffers, merged after the step: the events must come out the

@@ -55,7 +55,8 @@ namespace Strata
 	//    impossible). Dynamic descendants of a moving dynamic body keep their own world pose; kinematic and static
 	//    descendants follow it.
 	// The work of a step grows with the awake bodies, their contacts and the signaled changes, not with sleeping or static
-	// bodies (see PhysicsStats::SyncedBodyCount, CheckedPairCount and WrittenBodyCount).
+	// bodies or the world's capacity (see PhysicsStats::SyncedBodyCount, CheckedPairCount, WrittenBodyCount and
+	// OrderedSlotCount).
 	//
 	// The simulation waits for mesh colliders at the start: while a mesh collider that exists before the first step waits for
 	// mesh data the provider is loading or for its shape to be cooked, Simulate holds the step (nothing moves and no
