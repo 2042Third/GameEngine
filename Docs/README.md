@@ -6,6 +6,8 @@ design and links to the code that implements it.
 - [Architecture.md](Architecture.md): the targets and their dependencies, the engine modules, the frame loop and the
   scene runtime lifecycle, the threading model, the asset pipeline, streaming and residency (memory budgets, eviction,
   the load queue), scripting, the editor, export and the runtime.
+- [Roadmap.md](Roadmap.md): what Strata is meant to be (its pillars), the waves of workstreams that get it there, and
+  the status: what each landed wave delivered and the open items later waves own.
 
 ## Elsewhere in the repository
 
