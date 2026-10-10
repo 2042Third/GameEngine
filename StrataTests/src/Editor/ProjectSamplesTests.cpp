@@ -9,7 +9,9 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <iterator>
 #include <string>
+#include <vector>
 
 using namespace Strata;
 
@@ -73,6 +75,53 @@ namespace
 		return count;
 	}
 
+	// The files below a directory as sorted relative paths ('/' separated), without local editor data (a .strata directory
+	// at any depth), which the build's copy and project.openSample leave out: opening a sample in place to change it must
+	// not make its copies look incomplete.
+	std::vector<std::string> ListFiles(const std::filesystem::path& directory)
+	{
+		std::vector<std::string> files;
+		std::error_code error;
+		for (std::filesystem::recursive_directory_iterator it(directory, error), end; !error && it != end; it.increment(error))
+		{
+			if (it->path().filename() == ProjectSamples::c_LocalDataDirectory)
+			{
+				it.disable_recursion_pending();
+				continue;
+			}
+			if (it->is_regular_file(error))
+			{
+				std::string file = FileSystem::ToUTF8(it->path().lexically_relative(directory));
+				std::replace(file.begin(), file.end(), '\\', '/');
+				files.push_back(std::move(file));
+			}
+		}
+		std::sort(files.begin(), files.end());
+		return files;
+	}
+
+	// Checks that two directories hold the same files (ListFiles), naming the ones only one of them has.
+	void CheckSameFiles(const std::filesystem::path& expected, const std::filesystem::path& actual)
+	{
+		const std::vector<std::string> expectedFiles = ListFiles(expected);
+		const std::vector<std::string> actualFiles = ListFiles(actual);
+		std::vector<std::string> missing;
+		std::vector<std::string> extra;
+		std::set_difference(expectedFiles.begin(), expectedFiles.end(), actualFiles.begin(), actualFiles.end(), std::back_inserter(missing));
+		std::set_difference(actualFiles.begin(), actualFiles.end(), expectedFiles.begin(), expectedFiles.end(), std::back_inserter(extra));
+		std::string missingText;
+		for (const std::string& file : missing)
+			missingText += " " + file;
+		std::string extraText;
+		for (const std::string& file : extra)
+			extraText += " " + file;
+		INFO("Missing in ", FileSystem::ToUTF8(actual), ":", missingText);
+		INFO("Not in ", FileSystem::ToUTF8(expected), ":", extraText);
+		CHECK_FALSE(expectedFiles.empty());
+		CHECK(missing.empty());
+		CHECK(extra.empty());
+	}
+
 }
 
 TEST_SUITE("Editor.Samples")
@@ -92,8 +141,8 @@ TEST_SUITE("Editor.Samples")
 		CHECK(tetris.ProjectFile == directory / "Tetris" / "Tetris.stproj");
 		CHECK(FileSystem::IsRegularFile(directory / "Tetris" / "Scripts" / "CMakeLists.txt"));
 		CHECK_FALSE(FileSystem::Exists(directory / "Tetris" / ".strata"));
-		// The same files as the repository's sample.
-		CHECK(CountFiles(directory / "Tetris") == CountFiles(FileSystem::FromUTF8(STRATA_SOURCE_DIR) / "Samples" / "Tetris"));
+		// The same files as the repository's sample (without its local editor data, should it have been opened in place).
+		CheckSameFiles(FileSystem::FromUTF8(STRATA_SOURCE_DIR) / "Samples" / "Tetris", directory / "Tetris");
 	}
 
 	TEST_CASE("project.samples lists the samples, and project.openSample opens a copy of one")
@@ -128,6 +177,9 @@ TEST_SUITE("Editor.Samples")
 		CHECK(FileSystem::IsRegularFile(copy / "Assets" / "Scenes" / "Main.stscene"));
 		CHECK_FALSE(FileSystem::Exists(copy / ".strata" / "Marker.txt"));
 		CHECK(CountFiles(samples) == sampleFiles);
+		// Every other file: the sample's local data and the copy's own do not count.
+		REQUIRE(FileSystem::IsRegularFile(samples / "Tetris" / ".strata" / "Marker.txt"));
+		CheckSameFiles(samples / "Tetris", copy);
 		harness.Context.CloseProject();
 	}
 
