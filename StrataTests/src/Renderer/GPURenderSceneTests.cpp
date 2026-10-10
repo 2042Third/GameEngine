@@ -306,12 +306,16 @@ TEST_SUITE("GPU.RenderScene")
 		SceneRenderer renderer;
 		renderer.SetViewportSize(c_Size, c_Size);
 		REQUIRE(renderer.Render(scene, camera));
+		// Counted by the asset manager, so that renderer code asking it for assets past the resolve cache counts too.
+		const uint64_t callsBefore = assets.Manager->GetStats().GetAssetCalls;
 		REQUIRE(renderer.Render(scene, camera));
+		const uint64_t calls = assets.Manager->GetStats().GetAssetCalls - callsBefore;
 		const SceneRendererStats& stats = renderer.GetStats();
 		CHECK(stats.Instances == 2000);
 		const uint32_t distinct = 1 + static_cast<uint32_t>(materials.size() + textures.size()); // The cube mesh, materials, textures
 		CHECK(stats.RequestsByVisibility == distinct);
-		CHECK(stats.GetAssetCalls <= distinct);
+		CHECK(calls <= distinct);
+		CHECK(stats.GetAssetCalls == calls);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

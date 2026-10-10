@@ -566,6 +566,12 @@ TEST_SUITE("Asset.Residency")
 		CHECK(stats.Frame == 1);
 		CHECK(stats.LoadedMemory == stats.Resident.GetTotal());
 		CHECK(stats.Cancellations == 1); // The pinned asset was unloaded while its load waited to be finalized
+
+		// Lookups are counted; requests that look nothing up (the loads and the pin above) are not.
+		CHECK(stats.GetAssetCalls == 0);
+		CHECK(manager->GetAsset(ready));
+		CHECK_FALSE(manager->GetAsset(UUID(0xBAD))); // Unknown handles count too
+		CHECK(manager->GetStats().GetAssetCalls == 2);
 	}
 
 	TEST_CASE("An arrival in use makes room before it is finalized; one nobody requests lately does not")

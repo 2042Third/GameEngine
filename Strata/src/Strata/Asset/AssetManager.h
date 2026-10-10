@@ -33,6 +33,7 @@ namespace Strata
 		uint32_t FailedAssets = 0;
 		uint64_t LoadedMemory = 0;     // Resident bytes of every pool (Resident.GetTotal())
 		uint64_t TotalLoadsCompleted = 0;
+		uint64_t GetAssetCalls = 0;    // GetAsset calls since the manager was created (what callers look up, per frame by difference)
 
 		uint64_t Frame = 0;            // The manager's frame counter (advanced by Update)
 		AssetMemoryUsage Resident;     // Per pool: memory of the asset objects the manager holds (memory assets included)
@@ -380,6 +381,7 @@ namespace Strata
 		std::unordered_map<AssetHandle, AssetEntry> m_Entries;
 		std::unordered_map<std::string, AssetHandle> m_PathIndex; // Path -> top-level asset handle
 		uint64_t m_TotalLoadsCompleted = 0;
+		uint64_t m_GetAssetCalls = 0; // Guarded by m_Mutex
 		uint64_t m_NextGeneration = 1; // Guarded by m_Mutex
 		Ref<LoadState> m_LoadState;
 		AssetStreamingQueue m_Queue;

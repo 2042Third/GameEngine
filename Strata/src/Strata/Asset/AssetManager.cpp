@@ -185,6 +185,7 @@ namespace Strata
 		bool requestLoad = false;
 		{
 			std::scoped_lock<std::mutex> lock(m_Mutex);
+			m_GetAssetCalls++;
 			auto it = m_Entries.find(handle);
 			if (it == m_Entries.end())
 				return nullptr;
@@ -921,6 +922,7 @@ namespace Strata
 					stats.PinnedAssets++;
 			}
 			stats.TotalLoadsCompleted = m_TotalLoadsCompleted;
+			stats.GetAssetCalls = m_GetAssetCalls;
 			stats.Frame = m_FrameIndex;
 			stats.Resident = m_Resident;
 			stats.LoadedMemory = m_Resident.GetTotal();

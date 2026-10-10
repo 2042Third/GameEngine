@@ -638,9 +638,11 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   the next upload.
 - **Statistics** (`GetStats`, `GetResidencyInfo`): resident bytes and budget per pool, queued loads per priority, loads
   and bytes in flight with their high-water mark, uploaded bytes and finalization milliseconds (last frame and maximum
-  of the last 120) with the staging budget, evictions and eviction checks, cancellations and staging releases; per asset
-  its state, memory, latest request and pins.
-  The editor reports them through `asset.stats` and the `assets` section of `editor.status`.
+  of the last 120) with the staging budget, evictions and eviction checks, cancellations and staging releases, and the
+  `GetAsset` calls made (tests take differences to count what a frame looks up); per asset its state, memory, latest
+  request and pins.
+  The editor reports them, apart from the `GetAsset` calls, through `asset.stats` and the `assets` section of
+  `editor.status`.
 - **Measured** by the perf test `PerfGPU.Streaming` (`StrataTests/src/Perf/StreamingPerfTests.cpp`): it writes the
   stress project (`StrataTests/src/Perf/StressProject.h`: 16 textures of 2048² and one of 4096², 447.4 MB of RGBA8, one
   material per district of a 2000-unit world, 2,000 objects over a 512² terrain grid), imports it and builds its pack,
@@ -698,12 +700,13 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   High priority above `HighPriorityScreenFraction` (5%) of the viewport height and at Normal below; proxies within
   `PrefetchDistance` (100 units) of the camera request them at Low; shadow casters outside both are drawn only from
   what is resident. Each distinct mesh, material and texture is looked up once per frame (one `GetAsset`, which also
-  stamps it for the least-recently-used order). The references are held only while the frame is rendered (the command
-  lists keep the GPU resources they use, the bindless table its textures), and the manager only during the frame (a weak
-  reference tells the next frame whether it is the same one), so what leaves the view becomes evictable after the
-  manager's grace frames, also when the renderer stops rendering (a capture renderer between captures, a hidden view),
-  and a closed project's manager goes with it. Batches name meshes by slot (`SceneDrawBatch::MeshSlot`), so what
-  `GetOpaqueBatches` reports after the frame holds no pointers.
+  stamps it for the least-recently-used order; `AssetManagerStats::GetAssetCalls` counts them at the manager). The
+  references are held only while the frame is rendered (the command lists keep the GPU resources they use, the bindless
+  table its textures), and the manager only during the frame (a weak reference tells the next frame whether it is the
+  same one), so what leaves the view becomes evictable after the manager's grace frames, also when the renderer stops
+  rendering (a capture renderer between captures, a hidden view), and a closed project's manager goes with it.
+  Batches name meshes by slot (`SceneDrawBatch::MeshSlot`), so what `GetOpaqueBatches` reports after the frame holds no
+  pointers.
 - **Batching**. Draws are gathered in chunks of 2,048 proxies on the job system and merged in chunk order (the same
   result on any number of threads), then sorted with a stable radix sort (`Core/RadixSort.h`) of 64-bit keys: cascade,
   alpha mask, winding, culling, mesh slot, submesh and level of detail. The material is not in the key, so the
