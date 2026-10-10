@@ -51,6 +51,9 @@ namespace Strata
 		// RecentProjects::GetDefaultFile). Empty: in memory only, as tests need. Read-only: read but never written.
 		std::filesystem::path RecentProjectsFile;
 		bool RecentProjectsReadOnly = false;
+		// Where project.samples and project.openSample find the samples (ProjectSamples); empty: next to the executable
+		// (ProjectSamples::GetDefaultDirectory).
+		std::filesystem::path SamplesDirectory;
 	};
 
 	// What became of the module of the last finished script build.
@@ -228,6 +231,8 @@ namespace Strata
 
 		// The projects opened most recently (editor.recentProjects, the launcher).
 		RecentProjects& GetRecentProjects() { return m_RecentProjects; }
+		// The directory of the samples the editor offers (EditorContextSpecification::SamplesDirectory).
+		std::filesystem::path GetSamplesDirectory() const;
 
 		// Asks the editor to close after the current frame (editor.quit); the application layer polls the request.
 		void RequestQuit() { m_QuitRequested = true; }

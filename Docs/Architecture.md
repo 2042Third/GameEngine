@@ -461,14 +461,18 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   `EditorContextSpecification::HotReloadScripts`) and loads the built module, restores the viewport state, opens
   the start scene and puts the project at the front of the recent projects (`RecentProjects`, a JSON file in the user
   data directory that the user's editors share). Creating a project applies a template (`ProjectTemplates`: `empty`, or
-  `basic3d` with a saved, lit start scene). Opening a scene restores the editor camera it was last shown with (stored per
+  `basic3d` with a saved, lit start scene). Samples (`ProjectSamples`) are finished projects listed by `Samples.json` in a
+  samples directory next to the executable, which the `StrataSamples` build target fills from the repository's `Samples/`
+  (`CMake/StrataCopySamples.cmake`, without local `.strata` data); `project.openSample` copies one, again without its
+  `.strata`, into a new directory and opens the copy, so the shipped sample never changes. Opening a scene restores the editor camera it was last shown with (stored per
   scene handle in the viewport state) or frames what it renders (`EditorViewport::FrameScene`, `SceneBounds`).
   `GetActiveScene` is the running copy while playing, else the edited scene.
 - **Commands** (`EditorCommands.h`). Handlers take a JSON object and return an `EditorCommandResult`: a value, an error
   with an `EditorCommandError` kind, or `Defer(poll)`. The built-in groups are registered by
   `EditorSceneCommands.cpp` (scene, entity, component, prefab), `EditorAssetCommands.cpp` (asset, material, prefab,
-  project, including `project.templates`), `EditorStateCommands.cpp` (edit, editor including `editor.recentProjects`,
-  log, play, selection), `EditorViewportCommands.cpp` (camera, viewport), `EditorScriptCommands.cpp` (script),
+  project, including `project.templates`, `project.samples`, `project.openSample` and `project.close`),
+  `EditorStateCommands.cpp` (edit, editor including `editor.recentProjects` and `editor.removeRecentProject`, log, play,
+  selection), `EditorViewportCommands.cpp` (camera, viewport), `EditorScriptCommands.cpp` (script),
   `EditorInputCommands.cpp` (input) and `EditorCommands.cpp` (`editor.commands`). Conventions: AGENTS.md, "Editor".
 - **Runner** (`EditorCommandRunner.h`). `Run` executes a command; a deferred one is polled once per frame from the next
   frame on, in issue order, and reports through its completion callback. Automation and command scripts always use the

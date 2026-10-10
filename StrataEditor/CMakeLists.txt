@@ -76,5 +76,14 @@ foreach(size IN ITEMS 16 32 48)
 	strata_embed_file(StrataEditor "${CMAKE_CURRENT_SOURCE_DIR}/Resources/Brand/StrataMark${size}.rgba" GetStrataMark${size})
 endforeach()
 
+# The sample projects next to the executables, where the editor offers them (project.openSample copies one into a new
+# directory). Synced at every build, without local editor data (CMake/StrataCopySamples.cmake).
+add_custom_target(StrataSamples
+	COMMAND "${CMAKE_COMMAND}" "-DSOURCE=${PROJECT_SOURCE_DIR}/Samples" "-DDESTINATION=$<TARGET_FILE_DIR:StrataEditor>/Samples"
+		-P "${PROJECT_SOURCE_DIR}/CMake/StrataCopySamples.cmake"
+	COMMENT "Copying the sample projects next to the editor"
+	VERBATIM)
+add_dependencies(StrataEditor StrataSamples)
+
 set_target_properties(StrataEditor PROPERTIES
 	VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")

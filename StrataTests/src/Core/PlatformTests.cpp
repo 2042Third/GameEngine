@@ -7,6 +7,7 @@
 #include "Strata/Core/Platform.h"
 #include "Strata/Core/PlatformDetection.h"
 #include "Strata/Core/Process.h"
+#include "Strata/Core/Timer.h"
 #include "TestHelpers.h"
 
 #include <chrono>
@@ -170,6 +171,31 @@ TEST_SUITE("Core.Platform")
 		REQUIRE(Platform::SetEnvVar("STRATA_TEST_VARIABLE", "value \xC3\xA9"));
 		CHECK(Platform::GetEnvVar("STRATA_TEST_VARIABLE").value() == "value \xC3\xA9");
 		CHECK_FALSE(Platform::GetEnvVar("STRATA_TEST_VARIABLE_THAT_DOES_NOT_EXIST").has_value());
+	}
+
+	TEST_CASE("The process uptime counts from the process's creation")
+	{
+		// The engine's clock starts at its first use, after the process was created (loader, static initialization):
+		// the uptime is at least as long (Linux records the creation in clock ticks of 10 ms).
+		const double clock = Time::GetTime();
+		const std::optional<double> uptime = Platform::GetProcessUptime();
+		REQUIRE(uptime.has_value());
+		CHECK(*uptime > 0.0);
+		CHECK(*uptime >= clock - 0.02);
+		CHECK(*uptime < 7.0 * 24.0 * 60.0 * 60.0);
+
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		const std::optional<double> later = Platform::GetProcessUptime();
+		REQUIRE(later.has_value());
+		CHECK(*later - *uptime >= 0.04);
+	}
+
+	TEST_CASE("The home directory is the user's own")
+	{
+		const std::optional<std::filesystem::path> home = Platform::FindHomeDirectory();
+		REQUIRE(home.has_value());
+		CHECK(home->is_absolute());
+		CHECK(FileSystem::IsDirectory(*home));
 	}
 
 	TEST_CASE("User data directory is created")

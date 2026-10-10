@@ -69,6 +69,16 @@ namespace Strata
 		Save();
 	}
 
+	bool RecentProjects::Remove(const std::filesystem::path& projectFile)
+	{
+		Reload();
+		const std::filesystem::path path = NormalizePath(projectFile);
+		if (std::erase_if(m_Projects, [&path](const RecentProject& project) { return NormalizePath(project.Path) == path; }) == 0)
+			return false;
+		Save();
+		return true;
+	}
+
 	const std::vector<RecentProject>& RecentProjects::GetProjects()
 	{
 		Prune();

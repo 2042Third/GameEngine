@@ -74,8 +74,9 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | Question | Call |
 | --- | --- |
 | What is open, is it playing, unsaved changes? | `editor.status` |
-| Which projects did the user (or an agent) open lately? | `editor.recentProjects` (name, project file path for `project.open`, `lastOpened`) |
+| Which projects did the user (or an agent) open lately? | `editor.recentProjects` (name, project file path for `project.open`, `lastOpened`); `editor.removeRecentProject {path}` takes one off |
 | What can a new project or scene start from? | `project.templates` (`empty`, `basic3d`) |
+| Is there a finished game to learn from? | `project.samples` (e.g. `Tetris`); `project.openSample {sample, directory}` opens a copy in a new directory (the sample stays as shipped; build its scripts with `script.build` before playing) |
 | Which commands and parameters exist? | `editor.commands` (or `list --json`) |
 | Which components and properties (types, ranges, enum values)? | `component.list` |
 | Which assets exist? | `asset.list` (`type`, `path` filters), `asset.info` |

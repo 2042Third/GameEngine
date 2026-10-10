@@ -46,6 +46,9 @@ namespace Strata
 		// other spellings of its path), the oldest beyond c_MaxProjects drop out, and the list is saved. The file is read
 		// first, so projects other editors added meanwhile are kept.
 		void Add(const std::string& name, const std::filesystem::path& projectFile);
+		// Takes a project off the list (the launcher's "Remove from list"; its files stay) and saves the list. False when it
+		// was not on it. The file is read first, like for Add.
+		bool Remove(const std::filesystem::path& projectFile);
 		// The list, most recent first, without projects whose file is gone.
 		const std::vector<RecentProject>& GetProjects();
 		// Reads the file again: a missing file is an empty list.

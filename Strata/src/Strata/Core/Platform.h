@@ -29,6 +29,9 @@ namespace Strata
 		// Like GetUserDataDirectory, but without the shared temp-directory fallback: nullopt when no per-user
 		// location exists (or it cannot be created). Use it for anything secret.
 		static std::optional<std::filesystem::path> FindUserDataDirectory(std::string_view applicationName);
+		// The user's home directory (Windows: the profile folder, e.g. C:\Users\<name>; POSIX: $HOME), e.g. as the root of
+		// suggested project locations. nullopt when there is none (an empty or relative $HOME). Not created.
+		static std::optional<std::filesystem::path> FindHomeDirectory();
 
 		// Private directories hold files that nobody but the current user may add, replace or rename: editor session
 		// files (tokens), the copies of script modules the engine loads. EnsurePrivateDirectory, CreatePrivateDirectory and
@@ -77,6 +80,10 @@ namespace Strata
 		// An opaque value identifying one run of a process: the same for the same process, different for a later
 		// process that reuses the id. nullopt if no such process exists or it cannot be inspected.
 		static std::optional<uint64_t> GetProcessStartTime(uint32_t processId);
+		// Seconds since the current process was created, by the operating system's record of its creation, so the time the
+		// loader and static initialization took counts too (e.g. for an application's startup time). nullopt when the
+		// system does not tell, or its clock went back since.
+		static std::optional<double> GetProcessUptime();
 
 		// Fills buffer from the operating system's cryptographically secure random number generator.
 		static bool GenerateSecureRandom(std::span<uint8_t> buffer);

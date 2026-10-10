@@ -2,6 +2,7 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/GameExport.h"
+#include "Editor/ProjectSamples.h"
 #include "Editor/ProjectTemplates.h"
 
 #include <Strata/Asset/AssetManager.h>
@@ -157,6 +158,66 @@ namespace Strata
 				if (!context.OpenProject(FileSystem::FromUTF8(path), &error))
 					return EditorCommandResult::Fail(error);
 				return EditorCommandResult::Ok();
+			} });
+
+		registry.Register({ "project.close",
+			"Closes the open project (unsaved scene changes are discarded); the editor shows its launcher. Without a project it does nothing.",
+			ObjectSchema({}),
+			[](EditorContext& context, const nlohmann::json&)
+			{
+				const bool hadProject = context.HasProject();
+				context.CloseProject();
+				return EditorCommandResult::Ok({ { "closed", hadProject } });
+			} });
+
+		registry.Register({ "project.samples",
+			"The sample projects that come with the editor (finished games to learn from, e.g. Tetris): id, name, description. Open one with "
+			"project.openSample, which works on a copy.",
+			ObjectSchema({}),
+			[](EditorContext& context, const nlohmann::json&)
+			{
+				std::string error;
+				const std::optional<std::vector<ProjectSample>> samples = ProjectSamples::List(context.GetSamplesDirectory(), &error);
+				if (!samples)
+					return EditorCommandResult::Fail(error);
+				nlohmann::json list = nlohmann::json::array();
+				for (const ProjectSample& sample : *samples)
+					list.push_back({ { "id", sample.Id }, { "name", sample.Name }, { "description", sample.Description } });
+				return EditorCommandResult::Ok({ { "samples", std::move(list) } });
+			} });
+
+		registry.Register({ "project.openSample",
+			"Copies a sample project (project.samples) into a new directory and opens the copy, like project.open (unsaved scene changes are "
+			"discarded); the sample itself stays unchanged. The copy leaves out local editor data (.strata): build its scripts with script.build "
+			"before playing.",
+			ObjectSchema({
+				{ "sample", StringSchema("The sample's id from project.samples, e.g. \"Tetris\"") },
+				{ "directory", StringSchema("Absolute directory for the copy: created, or an existing empty directory") } }, { "sample", "directory" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				CommandArguments arguments(parameters);
+				const std::string id = arguments.GetString("sample");
+				const std::string directory = arguments.GetString("directory");
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				std::string error;
+				const std::optional<std::vector<ProjectSample>> samples = ProjectSamples::List(context.GetSamplesDirectory(), &error);
+				if (!samples)
+					return EditorCommandResult::Fail(error);
+				const auto sample = std::find_if(samples->begin(), samples->end(), [&id](const ProjectSample& candidate) { return candidate.Id == id; });
+				if (sample == samples->end())
+				{
+					std::string known;
+					for (const ProjectSample& candidate : *samples)
+						known += (known.empty() ? "" : ", ") + candidate.Id;
+					return EditorCommandResult::InvalidParameters(fmt::format("There is no sample '{}' (samples: {})", id, known.empty() ? "none" : known));
+				}
+				const std::filesystem::path projectFile = ProjectSamples::Copy(*sample, FileSystem::FromUTF8(directory), &error);
+				if (projectFile.empty())
+					return EditorCommandResult::Fail(error);
+				if (!context.OpenProject(projectFile, &error))
+					return EditorCommandResult::Fail(fmt::format("The sample was copied to '{}' but could not be opened: {}", directory, error));
+				return EditorCommandResult::Ok({ { "sample", sample->Id }, { "projectFile", FileSystem::ToUTF8(projectFile) } });
 			} });
 
 		registry.Register({ "project.setStartScene", "Sets the scene a built game starts with and saves the project file.",

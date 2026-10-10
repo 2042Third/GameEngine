@@ -49,6 +49,10 @@ namespace Strata
 		static Ref<Project> Load(const std::filesystem::path& projectFile, std::string* outError = nullptr);
 		// Finds the project file in a directory (exactly one ".stproj" file).
 		static std::filesystem::path FindProjectFile(const std::filesystem::path& directory, std::string* outError = nullptr);
+		// Whether Create accepts a name: it becomes the project file's name, so it is a valid file name on every platform
+		// (at most 128 bytes, none of <>:"/\|?* or control characters, no leading or trailing space, no trailing dot, no
+		// reserved device name such as CON).
+		static bool IsValidName(std::string_view name);
 
 		bool Save(std::string* outError = nullptr) const;
 

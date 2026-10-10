@@ -230,6 +230,18 @@ namespace Strata
 		return directory;
 	}
 
+	std::optional<std::filesystem::path> Platform::FindHomeDirectory()
+	{
+		// The path must be freed even when the call fails.
+		PWSTR knownFolder = nullptr;
+		const HRESULT result = SHGetKnownFolderPath(FOLDERID_Profile, 0, nullptr, &knownFolder);
+		std::filesystem::path profile = SUCCEEDED(result) && knownFolder ? std::filesystem::path(knownFolder) : std::filesystem::path();
+		CoTaskMemFree(knownFolder);
+		if (profile.empty() || !profile.is_absolute())
+			return std::nullopt;
+		return profile;
+	}
+
 	std::filesystem::path Platform::GetUserRuntimeDirectory(std::string_view applicationName)
 	{
 		// An explicit location (tests, sandboxes) replaces the default; it must pass the same checks.
@@ -357,6 +369,24 @@ namespace Strata
 		if (!GetProcessTimes(process, &creation, &exit, &kernel, &user))
 			return std::nullopt;
 		return (static_cast<uint64_t>(creation.dwHighDateTime) << 32) | creation.dwLowDateTime;
+	}
+
+	std::optional<double> Platform::GetProcessUptime()
+	{
+		FILETIME creation = {};
+		FILETIME exit = {};
+		FILETIME kernel = {};
+		FILETIME user = {};
+		if (!GetProcessTimes(GetCurrentProcess(), &creation, &exit, &kernel, &user))
+			return std::nullopt;
+		// Both in 100 ns intervals of the system time.
+		FILETIME now = {};
+		GetSystemTimePreciseAsFileTime(&now);
+		const uint64_t created = (static_cast<uint64_t>(creation.dwHighDateTime) << 32) | creation.dwLowDateTime;
+		const uint64_t current = (static_cast<uint64_t>(now.dwHighDateTime) << 32) | now.dwLowDateTime;
+		if (current < created)
+			return std::nullopt;
+		return static_cast<double>(current - created) * 1e-7;
 	}
 
 	bool Platform::GenerateSecureRandom(std::span<uint8_t> buffer)

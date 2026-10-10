@@ -35,7 +35,7 @@ together (targets, modules, frame loop, threading, asset pipeline, scripting, ed
 | `StrataScriptCore/` | Script ABI (C header) and the header-only C++ SDK game scripts are written against. Script modules never link the engine. |
 | `StrataCLI/` | Command-line client for the editor automation API; also an MCP server (`StrataCLI mcp`). |
 | `StrataTests/` | doctest unit tests, test helpers, and the feature test project. |
-| `Samples/` | Games made through the editor by an AI agent, as projects (`.stproj`, `Assets/` with `.meta` files, `Scripts/`): `Tetris` (played and exported by the CTest `StrataEditor.Tetris`). Open one with `StrataEditor --project Samples/<Game>`. |
+| `Samples/` | Games made through the editor by an AI agent, as projects (`.stproj`, `Assets/` with `.meta` files, `Scripts/`): `Tetris` (played and exported by the CTest `StrataEditor.Tetris`). `Samples.json` lists them; the build copies them next to the executables (`StrataSamples`), where `project.openSample` offers them as copies. Open one in place only to change the sample: `StrataEditor --project Samples/<Game>`. |
 | `CMake/` | CMake modules (configurations, compiler options, shader compilation, manifest, the build's git commit). |
 | `Tools/` | Generators whose outputs are committed (standard-library Python): `GenerateBrandAssets.py` draws the strata mark into `StrataEditor/Resources/Brand/` (PNGs, raw RGBA for the window icon, the `.ico` of the executables). |
 | `Docs/` | Documentation of how the engine works, linked to the code: `README.md` (index), `Architecture.md` (targets and dependencies, modules, frame loop, threading, asset pipeline, scripting, editor, export and runtime). |
@@ -563,8 +563,11 @@ and `AudioSystem`, the built-in "Audio" scene system.
   Ground, Post Process; the editor UI and the skills use it). Every opened or created project goes to the front of
   `RecentProjects` (`Editor/RecentProjects`, at most 12, missing projects left out, `editor.recentProjects`), a JSON file
   in the user data directory shared by the user's editors (`RecentProjects::GetDefaultFile`; `STRATA_RECENT_PROJECTS`
-  overrides it). Scripted runs (`--frames`, `--commands`) only read it; `EditorContextSpecification` keeps it in memory
-  by default (tests).
+  overrides it); `editor.removeRecentProject {path}` takes one off. Scripted runs (`--frames`, `--commands`) only read
+  it; `EditorContextSpecification` keeps it in memory by default (tests). `project.samples` lists the samples next to
+  the executable (`Editor/ProjectSamples`, `EditorContextSpecification::SamplesDirectory` in tests) and
+  `project.openSample {sample, directory}` copies one (without `.strata`) into a new or empty directory and opens the
+  copy; `project.close` closes the project.
 - **Viewport panel** (`Panels/ViewportPanel`): renders into a texture of the panel's pixel size and takes input only
   while hovered or focused: Alt + left drag orbits, middle drag pans, the wheel dollies, right drag flies (WASD, Q/E
   down/up, Shift faster, wheel = speed), F frames the selection, Home everything, W/E/R/Q pick the gizmo (as do the main

@@ -159,6 +159,20 @@ namespace Strata
 				return EditorCommandResult::Ok({ { "projects", std::move(projects) } });
 			} });
 
+		registry.Register({ "editor.removeRecentProject",
+			"Takes a project off the recent projects (editor.recentProjects); its files stay where they are.",
+			ObjectSchema({ { "path", StringSchema("The project file as editor.recentProjects lists it") } }, { "path" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				CommandArguments arguments(parameters);
+				const std::string path = arguments.GetString("path");
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				if (!context.GetRecentProjects().Remove(FileSystem::FromUTF8(path)))
+					return EditorCommandResult::InvalidParameters(fmt::format("'{}' is not a recent project (editor.recentProjects lists them)", path));
+				return EditorCommandResult::Ok();
+			} });
+
 		registry.Register({ "editor.quit",
 			"Closes the editor after answering (pending commands are cancelled). Fails while the scene has unsaved changes unless force is "
 			"true; save first with scene.save or scene.saveAs.",

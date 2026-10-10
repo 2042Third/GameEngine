@@ -50,9 +50,17 @@ TEST_SUITE("Project")
 		for (const char* name : { "", "Bad/Name", "Bad:Name", " Padded", "Trailing.", "Quote\"", "CON", "nul.game", "Lpt1" })
 		{
 			CAPTURE(name);
+			CHECK_FALSE(Project::IsValidName(name));
 			CHECK_FALSE(Project::Create(directory / "Invalid", name, &error));
 			CHECK_FALSE(error.empty());
 		}
+		// What the launcher checks while a name is typed is what Create accepts.
+		for (const char* name : { "Game", "My Game 2", "Caf\xC3\xA9", "v1.0 beta" })
+		{
+			CAPTURE(name);
+			CHECK(Project::IsValidName(name));
+		}
+		CHECK_FALSE(Project::IsValidName(std::string(129, 'a')));
 
 		CHECK_FALSE(Project::Load(directory / "Missing.stproj", &error));
 

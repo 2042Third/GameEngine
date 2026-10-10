@@ -9,7 +9,8 @@ You drive the editor through its commands and write only two kinds of files your
 the project's `Scripts/` folder) and raw source assets you generate outside the project (e.g. a WAV), which `asset.import`
 copies in. Everything else - project, materials, scene, entities, fields, start scene, export - is an editor command.
 Never edit `.stscene`, `.stmat`, `.stproj` or `.meta` files by hand. Command details: `strata-editor-automation`;
-the script SDK: `strata-scripting`. `Samples/Tetris` is a finished example of everything below.
+the script SDK: `strata-scripting`. `Samples/Tetris` is a finished example of everything below; to study it in a running
+editor without touching the sample, open a copy: `project.openSample {"sample": "Tetris", "directory": "<new absolute dir>"}`.
 
 ## 1. An editor
 

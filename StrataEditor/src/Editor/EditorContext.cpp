@@ -1,5 +1,6 @@
 #include "Editor/EditorContext.h"
 
+#include "Editor/ProjectSamples.h"
 #include "Editor/ScriptProject.h"
 
 #include <Strata/Asset/AssetManager.h>
@@ -829,6 +830,11 @@ namespace Strata
 	////////////////////////////////////////////////////////////////////////////////
 	// Editor services
 	////////////////////////////////////////////////////////////////////////////////
+
+	std::filesystem::path EditorContext::GetSamplesDirectory() const
+	{
+		return m_Specification.SamplesDirectory.empty() ? ProjectSamples::GetDefaultDirectory() : m_Specification.SamplesDirectory;
+	}
 
 	void EditorContext::SetStatusProvider(const std::string& section, StatusProvider provider)
 	{

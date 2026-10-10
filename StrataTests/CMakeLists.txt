@@ -75,6 +75,8 @@ target_link_libraries(StrataTests PRIVATE Strata StrataScriptCore doctest stb)
 # The editor's UI library brings the editor core; the UI tests draw it headless (src/Editor/ImGuiHarness.h).
 if(TARGET StrataEditorUI)
 	target_link_libraries(StrataTests PRIVATE StrataEditorUI)
+	# The samples the editor offers are copied next to the executables; the tests check that copy.
+	add_dependencies(StrataTests StrataSamples)
 endif()
 target_include_directories(StrataTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 # DOCTEST_CONFIG_NO_POSIX_SIGNALS: CrashGuard owns the fault signals (and the alternate signal stack) of the process.

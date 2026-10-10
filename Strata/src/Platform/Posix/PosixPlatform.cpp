@@ -19,6 +19,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <system_error>
+#include <time.h>
 #include <unistd.h>
 #include <vector>
 
@@ -275,6 +276,17 @@ namespace Strata
 		return directory;
 	}
 
+	std::optional<std::filesystem::path> Platform::FindHomeDirectory()
+	{
+		const std::optional<std::string> home = GetEnvVar("HOME");
+		if (!home || home->empty())
+			return std::nullopt;
+		std::filesystem::path directory = FileSystem::FromUTF8(*home);
+		if (!directory.is_absolute())
+			return std::nullopt;
+		return directory;
+	}
+
 	std::filesystem::path Platform::GetUserRuntimeDirectory(std::string_view applicationName)
 	{
 		// An explicit location (tests, sandboxes) replaces the search; it must pass the same checks.
@@ -459,6 +471,31 @@ namespace Strata
 			return std::nullopt;
 		return startTime;
 #endif
+	}
+
+	std::optional<double> Platform::GetProcessUptime()
+	{
+#if defined(ST_PLATFORM_MACOS)
+		// The start time is wall-clock time (microseconds since the epoch).
+		const std::optional<uint64_t> start = GetProcessStartTime(GetProcessID());
+		timespec now = {};
+		if (!start || clock_gettime(CLOCK_REALTIME, &now) != 0)
+			return std::nullopt;
+		const double current = static_cast<double>(now.tv_sec) + static_cast<double>(now.tv_nsec) * 1e-9;
+		const double started = static_cast<double>(*start) * 1e-6;
+#else
+		// The start time is in clock ticks since boot, which CLOCK_BOOTTIME also counts from.
+		const std::optional<uint64_t> start = GetProcessStartTime(GetProcessID());
+		const long ticksPerSecond = sysconf(_SC_CLK_TCK);
+		timespec now = {};
+		if (!start || ticksPerSecond <= 0 || clock_gettime(CLOCK_BOOTTIME, &now) != 0)
+			return std::nullopt;
+		const double current = static_cast<double>(now.tv_sec) + static_cast<double>(now.tv_nsec) * 1e-9;
+		const double started = static_cast<double>(*start) / static_cast<double>(ticksPerSecond);
+#endif
+		if (current < started)
+			return std::nullopt;
+		return current - started;
 	}
 
 	bool Platform::GenerateSecureRandom(std::span<uint8_t> buffer)
