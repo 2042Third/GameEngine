@@ -54,6 +54,7 @@ namespace Strata::Tests
 			return;
 		m_Device->WaitForIdle();
 		m_Device->GetDevice()->runGarbageCollection();
+		Renderer::GetDeferredReleases().Collect();
 	}
 
 	bool GPUContext::ExecuteAndWait(nvrhi::ICommandList* commandList)

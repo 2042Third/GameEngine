@@ -585,6 +585,35 @@ TEST_SUITE("GPU.SceneRenderer")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Resizing right after a frame keeps its render targets until the GPU is done with them")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		// Nothing is drawn, so frames only clear the entity IDs and normals: NVRHI's Vulkan backend does not keep cleared
+		// textures alive for the GPU, and resizing must not destroy them while the frame is in flight.
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 0.0f, 3.0f), glm::vec3(0.0f));
+		DeferredReleaseQueue& releases = Renderer::GetDeferredReleases();
+
+		SceneRenderer renderer;
+		const glm::uvec2 sizes[] = { { 64, 48 }, { 80, 64 }, { 48, 96 } };
+		for (int frame = 0; frame < 24; frame++)
+		{
+			const glm::uvec2 size = sizes[frame % 3];
+			renderer.SetViewportSize(size.x, size.y);
+			REQUIRE(renderer.Render(scene, camera));
+			CHECK(renderer.GetStats().Instances == 0);
+		}
+		renderer.SetViewportSize(0, 0);
+		CHECK(releases.GetPendingCount() > 0); // The last frame's targets, until the GPU finished it
+		gpu.GetDevice().WaitForIdle();
+		releases.Collect();
+		CHECK(releases.GetPendingCount() == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Metallic-roughness, emissive, occlusion and base color maps modulate their factors")
 	{
 		GPUContext gpu;

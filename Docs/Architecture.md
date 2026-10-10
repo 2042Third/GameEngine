@@ -150,9 +150,13 @@ factory). The asset types are Scene, Prefab, Model, Mesh, Material, Texture, Aud
 `Platform/Vulkan/VulkanGraphicsDevice.cpp`; it owns the swapchain and frames in flight, 2 by default). `Renderer`
 holds the process-wide services: the device, `ShaderLibrary` (SPIR-V compiled from `Strata/shaders` by glslang at
 build time and embedded, `CMake/StrataShaders.cmake`), samplers, fallback textures, `BindlessTextureTable`,
-`StagingTexturePool` (staging memory for texture uploads, reused) and the blocking `ReadTexture`. `SceneRenderer` draws
-a scene (light clustering, shadow cascades, depth/normal/entity-ID prepass, GTAO, forward PBR, sky, transparents,
-exposure, bloom, tone mapping, FXAA, then overlays and text). Its image-based lighting comes from the sky light's
+`StagingTexturePool` (staging memory for texture uploads, reused), `DeferredReleaseQueue` (`ReleaseDeferred`: resources
+dropped while the GPU may still use them, held until an event query set at the release completes and collected every
+frame and at every release, never waiting; NVRHI's Vulkan backend keeps what command lists reference alive, but not the
+textures of clears) and the blocking `ReadTexture`. `SceneRenderer` draws a scene (light clustering, shadow cascades,
+depth/normal/entity-ID prepass, GTAO, forward PBR, sky, transparents, exposure, bloom, tone mapping, FXAA, then overlays
+and text) into render targets of its viewport size, which it hands to the `DeferredReleaseQueue` when it is resized
+(the viewport panel, the game window) or freed (captures). Its image-based lighting comes from the sky light's
 environment map or its procedural sky (`IBL/ProceduralSky.comp` writes mip 0 of the environment cube, then the shared
 filtering chain runs), computed again only when the source or the procedural parameters change; editor views can ask
 for preview lighting and leave out screen-space text (`SceneRenderOptions`). Assets:

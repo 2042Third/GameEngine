@@ -1260,33 +1260,47 @@ namespace Strata
 
 	void SceneRenderer::ReleaseRenderTargets()
 	{
-		// Targets may still be used by frames in flight; NVRHI keeps them alive until those complete.
-		m_DepthTexture = nullptr;
-		m_NormalTexture = nullptr;
-		m_EntityIDTexture = nullptr;
-		m_HDRTexture = nullptr;
-		m_OutputTexture = nullptr;
-		m_AORawTexture = nullptr;
-		m_AOTexture = nullptr;
-		m_GTAOBindingSet = nullptr;
-		m_AOBlurBindingSet = nullptr;
-		m_PrepassFramebuffer = nullptr;
-		m_ForwardFramebuffer = nullptr;
-		m_OutputFramebuffer = nullptr;
-		m_ExposureBindingSet = nullptr;
-		m_BloomTexture = nullptr;
+		// Submitted frames may still use the targets. NVRHI keeps alive what their command lists reference, but not the
+		// textures they only cleared (in a view where nothing is drawn, the entity IDs are only cleared): the deferred
+		// release keeps everything until the GPU is done with it.
+		std::vector<nvrhi::ResourceHandle> released;
+		auto release = [&released](auto& handle)
+		{
+			if (handle)
+				released.emplace_back(handle.Get());
+			handle = nullptr;
+		};
+		release(m_DepthTexture);
+		release(m_NormalTexture);
+		release(m_EntityIDTexture);
+		release(m_HDRTexture);
+		release(m_OutputTexture);
+		release(m_AORawTexture);
+		release(m_AOTexture);
+		release(m_GTAOBindingSet);
+		release(m_AOBlurBindingSet);
+		release(m_PrepassFramebuffer);
+		release(m_ForwardFramebuffer);
+		release(m_OutputFramebuffer);
+		release(m_ExposureBindingSet);
+		release(m_BloomTexture);
 		m_BloomLevels = 0;
-		m_BloomDownsampleSets.clear();
-		m_BloomUpsampleSets.clear();
-		m_TonemapBindingSet = nullptr;
-		m_LDRTexture = nullptr;
-		m_LDRFramebuffer = nullptr;
-		m_FXAABindingSet = nullptr;
-		m_SceneBindingSet = nullptr; // References the ambient occlusion texture
-		m_ShadowBindingSet = nullptr;
-		m_OverlayFramebuffer = nullptr;
-		m_CopyBindingSet = nullptr;
-		m_OutlineBindingSet = nullptr; // References the entity-ID texture
+		for (std::vector<nvrhi::BindingSetHandle>* sets : { &m_BloomDownsampleSets, &m_BloomUpsampleSets })
+		{
+			for (nvrhi::BindingSetHandle& set : *sets)
+				release(set);
+			sets->clear();
+		}
+		release(m_TonemapBindingSet);
+		release(m_LDRTexture);
+		release(m_LDRFramebuffer);
+		release(m_FXAABindingSet);
+		release(m_SceneBindingSet); // References the ambient occlusion texture
+		release(m_ShadowBindingSet);
+		release(m_OverlayFramebuffer);
+		release(m_CopyBindingSet);
+		release(m_OutlineBindingSet); // References the entity-ID texture
+		Renderer::ReleaseDeferred(std::move(released));
 	}
 
 	bool SceneRenderer::CreateRenderTargets()

@@ -71,7 +71,8 @@ namespace Strata
 		SceneRenderer& GetSceneRenderer() { return *m_Renderer; }
 		// The scene of the last successful Render.
 		const std::weak_ptr<Scene>& GetRenderedScene() const { return m_RenderedScene; }
-		// Frees the render targets until the next Render (work already submitted keeps what it uses alive).
+		// Frees the render targets until the next Render, once the GPU has finished the work submitted with them
+		// (Renderer::ReleaseDeferred).
 		void ReleaseTargets() { m_Renderer->SetViewportSize(0, 0); }
 	private:
 		Scope<SceneRenderer> m_Renderer;

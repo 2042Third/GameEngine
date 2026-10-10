@@ -424,6 +424,38 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Captures and panel renders of changing sizes and cameras keep their render targets until the GPU is done")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		// Nothing to draw from either camera, so frames only clear the entity IDs, which NVRHI's Vulkan backend does not
+		// keep alive for the GPU. Captures free their targets right after submitting their frame, and the panel's renderer
+		// recreates them at every resize.
+		harness.Run("entity.create", { { "name", "Camera" }, { "components", { { "Camera", nlohmann::json::object() } } } });
+		EditorContext& context = harness.Context;
+		EditorViewport& viewport = context.GetViewport();
+		ViewportRenderer* panel = viewport.GetRenderer();
+		REQUIRE(panel);
+		const glm::uvec2 sizes[] = { { 64, 48 }, { 96, 64 }, { 48, 80 }, { 120, 72 } };
+		for (int round = 0; round < 16; round++)
+		{
+			const glm::uvec2 size = sizes[round % 4];
+			const char* camera = round % 2 == 0 ? "editor" : "scene";
+			nlohmann::json result;
+			harness.Capture({ { "width", size.x }, { "height", size.y }, { "camera", camera }, { "overlays", round % 3 != 0 } }, &result);
+			CHECK(result["camera"] == camera);
+
+			const glm::uvec2 panelSize = sizes[(round + 1) % 4];
+			const std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Automatic,
+				static_cast<float>(panelSize.x) / static_cast<float>(panelSize.y));
+			REQUIRE(view);
+			REQUIRE(panel->Render(context, panelSize, *view, viewport.GetSettings(), view->EditorOverlays));
+			CHECK(panel->GetStats().Instances == 0);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Playing without a camera captures the editor camera with a notice")
 	{
 		Tests::GPUContext gpu;

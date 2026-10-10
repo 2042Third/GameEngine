@@ -287,7 +287,13 @@ The threading model, frame loop and pipelines these rules protect are described 
   releases the reference and returns the raw pointer's address, so assigning through it leaves a
   dangling object. NVRHI places automatic barriers only when the binding sets change; consecutive
   dispatches through the *same* binding set that read each other's UAV writes need an explicit
-  `setBufferState`/`setTextureState(..., UnorderedAccess)` plus `commitBarriers()`.
+  `setBufferState`/`setTextureState(..., UnorderedAccess)` plus `commitBarriers()`. NVRHI keeps what a
+  command list references alive until the GPU finished it, but its Vulkan backend does not reference
+  the textures of clears (`clearTextureFloat`/`UInt`, `clearDepthStencilTexture`) and resolves: a
+  target that a frame in flight only cleared is destroyed with its last handle (a validation error,
+  and freed memory in use can lose the device). Drop render targets, and what references them, through
+  `Renderer::ReleaseDeferred` (`DeferredReleaseQueue`: held until the GPU finished the work submitted
+  before, never waiting), as `SceneRenderer` does when it is resized.
 - **Scripting isolation:** game scripts only see `StrataScriptCore`. Every call into script code goes
   through `CrashGuard`; anything crossing the ABI is plain data (no STL types, no exceptions).
 - **Assets:** referenced by `AssetHandle` (UUID), never by path at runtime. Loading is asynchronous;

@@ -2,6 +2,7 @@
 
 #include "Strata/Core/Base.h"
 #include "Strata/Renderer/BindlessTextureTable.h"
+#include "Strata/Renderer/DeferredReleaseQueue.h"
 #include "Strata/Renderer/GraphicsDevice.h"
 #include "Strata/Renderer/ShaderLibrary.h"
 #include "Strata/Renderer/StagingTexturePool.h"
@@ -37,9 +38,16 @@ namespace Strata
 		static BindlessTextureTable& GetBindlessTextures();
 		// Staging textures for uploads (textures upload through them).
 		static StagingTexturePool& GetStagingTextures();
+		// Resources dropped while the GPU may still use them (see ReleaseDeferred).
+		static DeferredReleaseQueue& GetDeferredReleases();
+		// Drops the references once the GPU has finished every command list executed so far, without waiting for it. Use
+		// it for render targets and whatever references them when they are recreated or freed: NVRHI does not keep the
+		// textures of clears alive for the GPU (DeferredReleaseQueue). Ignored without a renderer (nothing renders).
+		static void ReleaseDeferred(std::vector<nvrhi::ResourceHandle> resources);
 
-		// Called by the application after the graphics device began a frame: recycles bindless slots and staging textures
-		// and clears the back buffer (when there is one) to black, so layers render onto a defined image.
+		// Called by the application after the graphics device began a frame: recycles bindless slots and staging textures,
+		// drops deferred releases the GPU is done with and clears the back buffer (when there is one) to black, so layers
+		// render onto a defined image.
 		static void BeginFrame();
 
 		static nvrhi::ISampler* GetLinearClampSampler();

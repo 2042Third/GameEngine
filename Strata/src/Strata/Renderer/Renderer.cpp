@@ -15,6 +15,7 @@ namespace Strata
 			Scope<ShaderLibrary> Shaders;
 			Scope<BindlessTextureTable> BindlessTextures;
 			Scope<StagingTexturePool> StagingTextures;
+			Scope<DeferredReleaseQueue> DeferredReleases;
 
 			nvrhi::SamplerHandle LinearClamp;
 			nvrhi::SamplerHandle LinearWrap;
@@ -96,6 +97,7 @@ namespace Strata
 		s_Data->BindlessTextures->SetReservedTexture(BindlessTextureTable::c_BlackSlot, s_Data->BlackTexture);
 		s_Data->BindlessTextures->SetReservedTexture(BindlessTextureTable::c_FlatNormalSlot, s_Data->FlatNormalTexture);
 		s_Data->StagingTextures = CreateScope<StagingTexturePool>(nvrhiDevice, device.GetMaxFramesInFlight());
+		s_Data->DeferredReleases = CreateScope<DeferredReleaseQueue>(nvrhiDevice);
 		return true;
 	}
 
@@ -143,6 +145,18 @@ namespace Strata
 		return *s_Data->StagingTextures;
 	}
 
+	DeferredReleaseQueue& Renderer::GetDeferredReleases()
+	{
+		ST_CORE_ASSERT(s_Data, "Renderer is not initialized");
+		return *s_Data->DeferredReleases;
+	}
+
+	void Renderer::ReleaseDeferred(std::vector<nvrhi::ResourceHandle> resources)
+	{
+		if (s_Data)
+			s_Data->DeferredReleases->Release(std::move(resources));
+	}
+
 	void Renderer::BeginFrame()
 	{
 		if (!s_Data)
@@ -150,6 +164,7 @@ namespace Strata
 
 		s_Data->BindlessTextures->BeginFrame(s_Data->Device->GetFrameIndex());
 		s_Data->StagingTextures->BeginFrame(s_Data->Device->GetFrameIndex());
+		s_Data->DeferredReleases->Collect();
 		if (nvrhi::ITexture* backBuffer = s_Data->Device->GetBackBuffer())
 		{
 			s_Data->FrameCommandList->open();

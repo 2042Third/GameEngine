@@ -3,6 +3,7 @@
 #include "Strata/Runtime/GameRenderer.h"
 
 #include <functional>
+#include <vector>
 
 using namespace Strata;
 using namespace Strata::Tests;
@@ -18,11 +19,11 @@ namespace
 		nvrhi::TextureHandle Texture;
 		nvrhi::FramebufferHandle Framebuffer;
 
-		explicit WindowTarget(nvrhi::IDevice* device)
+		explicit WindowTarget(nvrhi::IDevice* device, const glm::uvec2& size = glm::uvec2(c_Size))
 		{
 			nvrhi::TextureDesc desc;
-			desc.width = c_Size;
-			desc.height = c_Size;
+			desc.width = size.x;
+			desc.height = size.y;
 			desc.format = nvrhi::Format::BGRA8_UNORM;
 			desc.isRenderTarget = true;
 			desc.debugName = "WindowTarget";
@@ -111,6 +112,29 @@ TEST_SUITE("GPU.Runtime.GameRenderer")
 		camera.SetActive(true);
 		REQUIRE(renderer.Render(scene, target.Framebuffer, size));
 		CHECK_FALSE(renderer.IsShowingMessage());
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Resizing the window right after a frame keeps the frame's render targets until the GPU is done")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		// The message frame draws no mesh, so its frames only clear the entity IDs, which NVRHI's Vulkan backend does not
+		// keep alive for the GPU; the renderer recreates its targets at every new window size.
+		Ref<Scene> scene = CreateRef<Scene>("Empty");
+		const glm::uvec2 sizes[] = { { 64, 48 }, { 80, 64 }, { 48, 72 } };
+		std::vector<WindowTarget> targets;
+		for (const glm::uvec2& size : sizes)
+			targets.emplace_back(gpu.GetNvrhiDevice(), size);
+
+		GameRenderer renderer;
+		for (int frame = 0; frame < 18; frame++)
+		{
+			const size_t index = static_cast<size_t>(frame) % targets.size();
+			REQUIRE(renderer.Render(scene, targets[index].Framebuffer, sizes[index]));
+			CHECK(renderer.IsShowingMessage());
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }
