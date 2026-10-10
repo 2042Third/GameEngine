@@ -9,6 +9,7 @@
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
+#include "Strata/Scene/SceneServices.h"
 #include "TestHelpers.h"
 
 #include <algorithm>
@@ -55,19 +56,43 @@ namespace
 		return work;
 	}
 
+	// Whose contacts are tracked while box stacks land (see ICollisionEventSource).
+	enum class ContactListening : uint8_t
+	{
+		Nobody,
+		// A listener of watched entities that counts the floor's contacts, the floor watched: what a script with contact
+		// callbacks on the floor does. Every bottom box's contact with the floor is tracked, no contact between boxes.
+		Floor
+	};
+
 	// Plays box stacks (Perf::CreateBoxStacks) while the boxes land on each other and measures that busy phase: the median
 	// 60 Hz frame (one fixed step each) against the budget of `<metric>.ActiveFrame`, and the median of Strata's part of a
 	// step (synchronization, write-back, contacts: the step minus Jolt's own) against `<metric>.StrataStepTime`, which must
 	// stay below Jolt's part.
-	void MeasureFallingBoxes(size_t count, const std::string& metric)
+	void MeasureFallingBoxes(size_t count, const std::string& metric, ContactListening listening = ContactListening::Nobody)
 	{
 		Perf::ScopedApplicationJobSystem jobs;
 		Scene scene;
-		Perf::CreateBoxStacks(scene, count);
+		const Perf::BoxStacks stacks = Perf::CreateBoxStacks(scene, count);
 		const uint64_t logStart = Log::GetBuffer().GetLatestSequence();
 		scene.OnRuntimeStart();
 		PhysicsSystem& physics = GetPhysics(scene);
 		REQUIRE(physics.GetStats().DynamicBodyCount == count);
+
+		ICollisionEventSource* contacts = scene.GetService<ICollisionEventSource>();
+		REQUIRE(contacts != nullptr);
+		size_t floorContactBegins = 0;
+		CollisionListenerID listener = c_InvalidCollisionListener;
+		if (listening == ContactListening::Floor)
+		{
+			const UUID floor = stacks.Floor.GetUUID();
+			listener = contacts->AddCollisionListener([&floorContactBegins, floor](const CollisionEvent& event)
+			{
+				if (event.Type == CollisionEventType::Begin && event.Involves(floor))
+					floorContactBegins++;
+			}, CollisionListenerScope::WatchedEntities);
+			contacts->WatchCollisions(floor);
+		}
 
 		constexpr uint32_t c_Warmup = 5;
 		constexpr uint32_t c_Frames = 40;
@@ -99,6 +124,18 @@ namespace
 		CHECK(stats.ContactOverflowSteps == 0);
 		CHECK(CountLogMessages(logStart, "contacts were dropped") == 0);
 		CHECK(strata.MedianMs < jolt.MedianMs);
+		if (listening == ContactListening::Floor)
+		{
+			// Every bottom box landed (on the floor, for good), and only those contacts are tracked.
+			const size_t columns = (count + Perf::c_BoxStackHeight - 1) / Perf::c_BoxStackHeight;
+			CHECK(stats.ContactPairCount == columns);
+			CHECK(floorContactBegins == columns);
+			CHECK(contacts->RemoveCollisionListener(listener));
+		}
+		else
+		{
+			CHECK(stats.ContactPairCount == 0);
+		}
 		scene.OnRuntimeStop();
 
 		Perf::CheckBudget(metric + ".ActiveFrame", frame.MedianMs);
@@ -159,6 +196,11 @@ TEST_SUITE("Perf.Physics")
 	TEST_CASE("10,000 falling boxes")
 	{
 		MeasureFallingBoxes(10'000, "Perf.Physics.Boxes10k");
+	}
+
+	TEST_CASE("30,000 falling boxes on a floor whose contacts are tracked")
+	{
+		MeasureFallingBoxes(30'000, "Perf.Physics.Boxes30kTracked", ContactListening::Floor);
 	}
 
 	TEST_CASE("A world at the largest capacities a scene may ask for reserves less than 1 GiB")
