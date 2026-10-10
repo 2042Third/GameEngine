@@ -293,6 +293,9 @@ namespace Strata
 		void NotifyEntitiesDestroying(entt::entity root);
 		// The entity and its descendants in depth-first hierarchy order (parents before children).
 		std::vector<entt::entity> CollectSubtree(entt::entity root) const;
+		// Destroys the subtrees of `roots` (nested and repeated ones are dropped): running systems are told about all of them
+		// first, then each sibling list they leave is compacted once.
+		void DestroyRoots(std::vector<entt::entity> roots);
 		void FlushPendingDestroys();
 		// Every entity in hierarchy order (walks the links).
 		void CollectHierarchyOrder(std::vector<entt::entity>& outEntities) const;

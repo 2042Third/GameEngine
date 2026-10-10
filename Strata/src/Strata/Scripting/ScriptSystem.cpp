@@ -342,11 +342,15 @@ namespace Strata
 	{
 		const std::vector<UUID> destroys = std::move(m_DeferredDestroys);
 		m_DeferredDestroys.clear();
+		// One batch, so that destroying many entities of a long sibling list compacts it once.
+		std::vector<Entity> entities;
+		entities.reserve(destroys.size());
 		for (UUID entityID : destroys)
 		{
 			if (const Entity entity = m_Scene.GetEntityByUUID(entityID))
-				m_Scene.DestroyEntity(entity);
+				entities.push_back(entity);
 		}
+		m_Scene.DestroyEntities(entities);
 	}
 
 	void ScriptSystem::ReconcileDirtyEntities(bool allowRemovals)

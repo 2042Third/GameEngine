@@ -8,6 +8,7 @@
 #include "Strata/Scene/SceneSerializer.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <random>
 #include <string>
 #include <string_view>
@@ -75,6 +76,36 @@ namespace
 		Scene& TargetScene;
 		static inline std::vector<std::string> Announced;
 		static inline bool AllListedAlive = true;
+	};
+
+	// Destroys the entities in Doomed during its update (the scene defers that to the end of the frame), and records how
+	// many of them still existed whenever one was announced.
+	struct DeferredDestroySystem : public SceneSystem
+	{
+		explicit DeferredDestroySystem(Scene& scene)
+			: TargetScene(scene)
+		{
+		}
+
+		void OnUpdate(Timestep) override
+		{
+			for (const Entity entity : Doomed)
+				TargetScene.DestroyEntity(entity);
+		}
+
+		void OnEntityDestroying(const Entity&) override
+		{
+			size_t alive = 0;
+			for (const Entity entity : Doomed)
+				alive += entity.IsValid() ? 1 : 0;
+			MinimumAliveWhenAnnounced = std::min(MinimumAliveWhenAnnounced, alive);
+			Announced++;
+		}
+
+		Scene& TargetScene;
+		static inline std::vector<Entity> Doomed;
+		static inline size_t MinimumAliveWhenAnnounced = SIZE_MAX;
+		static inline size_t Announced = 0;
 	};
 
 }
@@ -404,6 +435,48 @@ TEST_SUITE("Scene.Hierarchy")
 		REQUIRE(scene.SetSiblingIndex(c, 0));
 		CHECK(scene.GetEntitiesInHierarchyOrder() == std::vector<Entity> { c, a, b });
 		CHECK(scene.GetHierarchyOrderBuildCount() == builds + 2);
+	}
+
+	TEST_CASE("Destruction requested during a frame is flushed in one batch")
+	{
+		DeferredDestroySystem::Doomed.clear();
+		DeferredDestroySystem::MinimumAliveWhenAnnounced = SIZE_MAX;
+		DeferredDestroySystem::Announced = 0;
+		SceneSystemRegistry::Register({ "TestDeferredBatch", false, [](Scene& scene) { return CreateScope<DeferredDestroySystem>(scene); } });
+		{
+			// Every third of 3,000 roots, one with a child, and one nested below another doomed entity.
+			Scene scene;
+			std::vector<Entity> roots;
+			for (int index = 0; index < 3000; index++)
+				roots.push_back(scene.CreateEntity("Root" + std::to_string(index)));
+			Entity child = scene.CreateChildEntity(roots[3], "Child");
+			Entity nested = scene.CreateChildEntity(child, "Nested");
+			std::vector<UUID> expectedRoots;
+			for (size_t index = 0; index < roots.size(); index++)
+			{
+				if (index % 3 == 0)
+					DeferredDestroySystem::Doomed.push_back(roots[index]);
+				else
+					expectedRoots.push_back(roots[index].GetUUID());
+			}
+			DeferredDestroySystem::Doomed.push_back(nested);
+			scene.OnRuntimeStart();
+
+			// One compaction of the root list, after every doomed subtree was announced.
+			const uint64_t version = scene.GetHierarchyVersion();
+			scene.OnUpdateRuntime(0.016f);
+			CHECK(scene.GetHierarchyVersion() == version + 1);
+			CHECK(DeferredDestroySystem::Announced == 1000 + 2);
+			CHECK(DeferredDestroySystem::MinimumAliveWhenAnnounced == DeferredDestroySystem::Doomed.size());
+			CHECK_FALSE(child.IsValid());
+			CHECK_FALSE(nested.IsValid());
+			CHECK(scene.GetRootEntities() == expectedRoots);
+			CHECK(scene.GetEntityCount() == 2000);
+			CheckSceneCaches(scene);
+			scene.OnRuntimeStop();
+		}
+		SceneSystemRegistry::Unregister("TestDeferredBatch");
+		DeferredDestroySystem::Doomed.clear();
 	}
 
 	TEST_CASE("Hierarchy order comparisons agree with the hierarchy order")

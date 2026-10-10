@@ -194,8 +194,14 @@ namespace Strata
 		}
 		if (roots.empty())
 			return;
-		RemoveNestedRoots(roots);
+		DestroyRoots(std::move(roots));
+		// Systems reacting to the destruction may have requested more.
+		FlushPendingDestroys();
+	}
 
+	void Scene::DestroyRoots(std::vector<entt::entity> roots)
+	{
+		RemoveNestedRoots(roots);
 		// Every subtree is announced (once) while all of them still exist.
 		if (m_IsRunning && !m_Systems.empty())
 		{
@@ -206,8 +212,6 @@ namespace Strata
 			}
 		}
 		DestroySubtrees(roots);
-		// Systems reacting to the destruction may have requested more.
-		FlushPendingDestroys();
 	}
 
 	void Scene::RemoveNestedRoots(std::vector<entt::entity>& roots) const
@@ -358,24 +362,23 @@ namespace Strata
 	void Scene::FlushPendingDestroys()
 	{
 		// Destroying entities can request more destruction (systems reacting to it), so repeat until nothing is left.
-		// Each round iterates over a moved-out copy: destroying entities must not observe a list being modified.
+		// Each round destroys the requests made before it in one batch, like DestroyEntities, so that many destructions
+		// requested during a frame (scripts destroying entities of a long sibling list) compact each list once. Each round
+		// works on a moved-out copy: destroying entities must not observe a list being modified.
 		while (!m_PendingDestroy.empty())
 		{
-			std::vector<UUID> pending = std::move(m_PendingDestroy);
+			const std::vector<UUID> pending = std::move(m_PendingDestroy);
 			m_PendingDestroy.clear();
 			m_PendingDestroySet.clear();
+			std::vector<entt::entity> roots;
+			roots.reserve(pending.size());
 			for (UUID uuid : pending)
 			{
-				auto it = m_EntityMap.find(uuid);
-				if (it == m_EntityMap.end())
-					continue;
-
-				const entt::entity handle = it->second;
-				if (m_IsRunning && !m_Systems.empty())
-					NotifyEntitiesDestroying(handle);
-				if (m_Registry.valid(handle))
-					DestroySubtrees(std::span<const entt::entity>(&handle, 1));
+				if (auto it = m_EntityMap.find(uuid); it != m_EntityMap.end())
+					roots.push_back(it->second);
 			}
+			if (!roots.empty())
+				DestroyRoots(std::move(roots));
 		}
 	}
 

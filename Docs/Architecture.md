@@ -262,7 +262,7 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
 
 - While systems run (`Scene::IsUpdating`), `DestroyEntity` is deferred to the end of the update; before an entity
   goes, every system gets `OnEntityDestroying` (descendants first), so scripts receive `OnDestroy` with the entity
-  still valid (`Scene.cpp`).
+  still valid (`Scene.cpp`). The deferred requests of an update are destroyed in one batch, like `DestroyEntities`.
 - Systems react to edits through EnTT signals; `ComponentAccess` and `Entity::MarkModified` emit `on_update`.
 - Debug builds end every `OnUpdateRuntime` and `OnUpdateEditor` by asserting that the scene's caches match a full
   recomputation (`Scene::ValidateWorldTransforms`, `ValidateHierarchy`; see [Scene caches](#scene-caches)).
@@ -298,7 +298,8 @@ A frame of a scene where nothing changed costs (almost) nothing, however many en
 - **Sibling positions.** `GetSiblingIndex` and `CompareHierarchyOrder` read cached positions; the first query after a
   change of a sibling list other than an append renumbers that list (linear in its length).
 - **Batches.** `DestroyEntities` tells the systems about every subtree, then compacts each sibling list once;
-  `PlaceEntities` rebuilds each sibling list it touches once. The editor's undo uses both.
+  `PlaceEntities` rebuilds each sibling list it touches once. The editor's undo uses both, and the destruction
+  deferred during an update is flushed the same way.
 - **Capacity.** EnTT identifiers have a 20-bit index: a registry holds at most `Scene::c_MaxEntities` (1,048,575) live
   entities. `CreateEntity` fails with an error at that limit and deserialization reports it; so do the callers that
   create entities for people and scripts (`entity.create` and `prefab.instantiate` fail, the scripts' `CreateEntity`
