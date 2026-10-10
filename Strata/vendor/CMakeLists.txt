@@ -150,6 +150,44 @@ strata_vendor_option(TARGET_SAMPLES OFF)
 strata_vendor_option(TARGET_VIEWER OFF)
 add_subdirectory(JoltPhysics/Build SYSTEM)
 
+# --- zstd (zstd_decompress, zstd_compress) --------------------------------------------------------
+# Asset packs store their blocks zstd-compressed. Games only decompress; compression is a separate library that only the
+# pack writer (tooling) references, so a shipped game links none of it. Built without zstd's multithreading (packs
+# compress their independent blocks on the engine's job system), without the legacy format decoders, and without the
+# x86-64 assembly Huffman decoder: its .S file would need an assembler step on GCC and Clang only, and the portable C
+# decoder it replaces is the one MSVC builds always use, so every platform runs the same code.
+set(ZSTD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/zstd/lib")
+add_library(zstd_decompress STATIC
+	"${ZSTD_DIR}/common/debug.c"
+	"${ZSTD_DIR}/common/entropy_common.c"
+	"${ZSTD_DIR}/common/error_private.c"
+	"${ZSTD_DIR}/common/fse_decompress.c"
+	"${ZSTD_DIR}/common/pool.c"
+	"${ZSTD_DIR}/common/threading.c"
+	"${ZSTD_DIR}/common/xxhash.c"
+	"${ZSTD_DIR}/common/zstd_common.c"
+	"${ZSTD_DIR}/decompress/huf_decompress.c"
+	"${ZSTD_DIR}/decompress/zstd_ddict.c"
+	"${ZSTD_DIR}/decompress/zstd_decompress.c"
+	"${ZSTD_DIR}/decompress/zstd_decompress_block.c")
+target_include_directories(zstd_decompress SYSTEM PUBLIC "${ZSTD_DIR}")
+target_compile_definitions(zstd_decompress PUBLIC ZSTD_DISABLE_ASM=1 ZSTD_LEGACY_SUPPORT=0)
+add_library(zstd_compress STATIC
+	"${ZSTD_DIR}/compress/fse_compress.c"
+	"${ZSTD_DIR}/compress/hist.c"
+	"${ZSTD_DIR}/compress/huf_compress.c"
+	"${ZSTD_DIR}/compress/zstd_compress.c"
+	"${ZSTD_DIR}/compress/zstd_compress_literals.c"
+	"${ZSTD_DIR}/compress/zstd_compress_sequences.c"
+	"${ZSTD_DIR}/compress/zstd_compress_superblock.c"
+	"${ZSTD_DIR}/compress/zstd_double_fast.c"
+	"${ZSTD_DIR}/compress/zstd_fast.c"
+	"${ZSTD_DIR}/compress/zstd_lazy.c"
+	"${ZSTD_DIR}/compress/zstd_ldm.c"
+	"${ZSTD_DIR}/compress/zstd_opt.c"
+	"${ZSTD_DIR}/compress/zstd_preSplit.c")
+target_link_libraries(zstd_compress PUBLIC zstd_decompress)
+
 # --- glslang (glslang-standalone: build-time GLSL -> SPIR-V compiler) ------------------------------
 strata_vendor_option(BUILD_EXTERNAL OFF)
 strata_vendor_option(ENABLE_OPT OFF)
