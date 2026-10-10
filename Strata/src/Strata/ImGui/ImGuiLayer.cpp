@@ -3,6 +3,7 @@
 
 #include "Strata/Core/Application.h"
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Events/ApplicationEvent.h"
 #include "Strata/Renderer/Renderer.h"
 
 #include <imgui.h>
@@ -11,8 +12,24 @@
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
+#include <algorithm>
+#include <cmath>
+#include <optional>
+
 namespace Strata
 {
+
+	namespace
+	{
+
+		std::optional<float> ValidateScale(float scale)
+		{
+			if (!std::isfinite(scale) || scale <= 0.0f)
+				return std::nullopt;
+			return std::clamp(scale, ImGuiLayer::c_MinScale, ImGuiLayer::c_MaxScale);
+		}
+
+	}
 
 	ImGuiLayer::ImGuiLayer(std::filesystem::path layoutFile)
 		: Layer("ImGuiLayer"), m_LayoutFile(std::move(layoutFile))
@@ -43,14 +60,7 @@ namespace Strata
 			io.IniFilename = m_LayoutFileUTF8.c_str();
 		}
 
-		const float contentScale = window->GetContentScale();
-		ImGuiStyle& style = ImGui::GetStyle();
-		ImGui::StyleColorsDark();
-		SetDarkThemeColors();
-		style.WindowRounding = 2.0f;
-		style.FrameRounding = 2.0f;
-		style.ScaleAllSizes(contentScale);
-		style.FontScaleDpi = contentScale;
+		SetContentScale(window->GetContentScale());
 
 		if (!m_Renderer.Init(Renderer::GetDevice(), Renderer::GetShaderLibrary()))
 		{
@@ -78,6 +88,14 @@ namespace Strata
 
 	void ImGuiLayer::OnEvent(Event& event)
 	{
+		// Not handled: other layers may lay out differently at another scale too.
+		EventDispatcher dispatcher(event);
+		dispatcher.Dispatch<WindowContentScaleEvent>([this](WindowContentScaleEvent& scaleEvent)
+		{
+			SetContentScale(scaleEvent.GetScale());
+			return false;
+		});
+
 		if (!m_Initialized || !m_BlockEvents)
 			return;
 
@@ -111,37 +129,57 @@ namespace Strata
 		Renderer::GetDevice()->executeCommandList(m_CommandList);
 	}
 
-	void ImGuiLayer::SetDarkThemeColors()
+	void ImGuiLayer::SetStyleCallback(ImGuiStyleCallback callback)
 	{
-		ImVec4* colors = ImGui::GetStyle().Colors;
-		colors[ImGuiCol_WindowBg] = ImVec4(0.1f, 0.105f, 0.11f, 1.0f);
+		m_StyleCallback = std::move(callback);
+		ApplyStyle();
+	}
 
-		// Headers
-		colors[ImGuiCol_Header] = ImVec4(0.2f, 0.205f, 0.21f, 1.0f);
-		colors[ImGuiCol_HeaderHovered] = ImVec4(0.3f, 0.305f, 0.31f, 1.0f);
-		colors[ImGuiCol_HeaderActive] = ImVec4(0.15f, 0.1505f, 0.151f, 1.0f);
+	void ImGuiLayer::SetContentScale(float scale)
+	{
+		const std::optional<float> valid = ValidateScale(scale);
+		if (!valid)
+		{
+			ST_CORE_WARN("ImGuiLayer: ignoring the content scale {}", scale);
+			return;
+		}
+		m_ContentScale = *valid;
+		ApplyStyle();
+	}
 
-		// Buttons
-		colors[ImGuiCol_Button] = ImVec4(0.2f, 0.205f, 0.21f, 1.0f);
-		colors[ImGuiCol_ButtonHovered] = ImVec4(0.3f, 0.305f, 0.31f, 1.0f);
-		colors[ImGuiCol_ButtonActive] = ImVec4(0.15f, 0.1505f, 0.151f, 1.0f);
+	void ImGuiLayer::SetContentScaleOverride(float scale)
+	{
+		if (scale == 0.0f)
+		{
+			m_ContentScaleOverride = 0.0f;
+		}
+		else if (const std::optional<float> valid = ValidateScale(scale))
+		{
+			m_ContentScaleOverride = *valid;
+		}
+		else
+		{
+			ST_CORE_WARN("ImGuiLayer: ignoring the UI scale {}", scale);
+			return;
+		}
+		ApplyStyle();
+	}
 
-		// Frame backgrounds
-		colors[ImGuiCol_FrameBg] = ImVec4(0.2f, 0.205f, 0.21f, 1.0f);
-		colors[ImGuiCol_FrameBgHovered] = ImVec4(0.3f, 0.305f, 0.31f, 1.0f);
-		colors[ImGuiCol_FrameBgActive] = ImVec4(0.15f, 0.1505f, 0.151f, 1.0f);
+	void ImGuiLayer::ApplyStyle()
+	{
+		if (!ImGui::GetCurrentContext())
+			return;
 
-		// Tabs
-		colors[ImGuiCol_Tab] = ImVec4(0.15f, 0.1505f, 0.151f, 1.0f);
-		colors[ImGuiCol_TabHovered] = ImVec4(0.38f, 0.3805f, 0.381f, 1.0f);
-		colors[ImGuiCol_TabSelected] = ImVec4(0.28f, 0.2805f, 0.281f, 1.0f);
-		colors[ImGuiCol_TabDimmed] = ImVec4(0.15f, 0.1505f, 0.151f, 1.0f);
-		colors[ImGuiCol_TabDimmedSelected] = ImVec4(0.2f, 0.205f, 0.21f, 1.0f);
-
-		// Titles
-		colors[ImGuiCol_TitleBg] = ImVec4(0.15f, 0.1505f, 0.151f, 1.0f);
-		colors[ImGuiCol_TitleBgActive] = ImVec4(0.15f, 0.1505f, 0.151f, 1.0f);
-		colors[ImGuiCol_TitleBgCollapsed] = ImVec4(0.15f, 0.1505f, 0.151f, 1.0f);
+		// Built from the unscaled defaults every time, so scaling twice never compounds.
+		const float scale = GetUIScale();
+		ImGuiStyle style;
+		ImGui::StyleColorsDark(&style);
+		if (m_StyleCallback)
+			m_StyleCallback(style, scale);
+		else
+			style.ScaleAllSizes(scale);
+		style.FontScaleDpi = scale;
+		ImGui::GetStyle() = style;
 	}
 
 }

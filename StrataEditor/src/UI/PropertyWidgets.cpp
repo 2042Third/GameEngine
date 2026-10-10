@@ -1,5 +1,7 @@
 #include "UI/PropertyWidgets.h"
 
+#include "UI/Icons.h"
+
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/Core/StringUtils.h>
@@ -19,6 +21,10 @@ namespace Strata
 
 	namespace
 	{
+
+		// The asset picker's list, in text heights (it scales with the UI).
+		constexpr float c_AssetPickerWidthInFontSizes = 23.0f;
+		constexpr float c_AssetPickerHeightInFontSizes = 20.0f;
 
 		float GetSpeed(const PropertyInfo& property, float fallback)
 		{
@@ -68,7 +74,7 @@ namespace Strata
 				ImGui::EndDragDropTarget();
 			}
 			ImGui::SameLine();
-			if (ImGui::Button("x", ImVec2(clearWidth, 0.0f)) && handle.IsValid())
+			if (ImGui::Button(Icons::X, ImVec2(clearWidth, 0.0f)) && handle.IsValid())
 			{
 				handle = UUID::Null();
 				changed = true;
@@ -86,7 +92,7 @@ namespace Strata
 				}
 				ImGui::InputTextWithHint("##Filter", "Search", &s_Filter);
 				const std::string filter = StringUtils::ToLower(s_Filter);
-				if (ImGui::BeginChild("Assets", ImVec2(320.0f, 280.0f)))
+				if (ImGui::BeginChild("Assets", ImVec2(ImGui::GetFontSize() * c_AssetPickerWidthInFontSizes, ImGui::GetFontSize() * c_AssetPickerHeightInFontSizes)))
 				{
 					if (AssetManager::HasActive())
 					{
@@ -131,7 +137,7 @@ namespace Strata
 				ImGui::EndDragDropTarget();
 			}
 			ImGui::SameLine();
-			if (ImGui::Button("x", ImVec2(clearWidth, 0.0f)) && id.IsValid())
+			if (ImGui::Button(Icons::X, ImVec2(clearWidth, 0.0f)) && id.IsValid())
 			{
 				id = UUID::Null();
 				changed = true;

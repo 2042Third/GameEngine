@@ -116,6 +116,36 @@ TEST_SUITE("Core")
 		CHECK(std::chrono::steady_clock::now() - unlimitedStart < std::chrono::milliseconds(100));
 	}
 
+	TEST_CASE("FramePacer switches between capped and unlimited rates")
+	{
+		// Unlimited, then 50 frames per second (the editor idling), then unlimited again (activity).
+		FramePacer pacer;
+		auto measure = [&pacer](int frames)
+		{
+			const auto start = std::chrono::steady_clock::now();
+			for (int frame = 0; frame < frames; frame++)
+				pacer.WaitForNextFrame();
+			return std::chrono::steady_clock::now() - start;
+		};
+		CHECK(measure(200) < std::chrono::milliseconds(50));
+		pacer.SetMaxFrameRate(50);
+		CHECK(pacer.GetMaxFrameRate() == 50);
+		// The first capped frame waits a whole period: 5 frames take at least 5 periods.
+		CHECK(measure(5) >= std::chrono::milliseconds(95));
+		pacer.SetMaxFrameRate(0);
+		CHECK(measure(200) < std::chrono::milliseconds(50));
+
+		// Setting the current rate again keeps the schedule: a frame that already waited past its slot is not followed by
+		// a full period, as a restarted schedule would do.
+		pacer.SetMaxFrameRate(20);
+		pacer.WaitForNextFrame();
+		std::this_thread::sleep_for(std::chrono::milliseconds(30));
+		pacer.SetMaxFrameRate(20);
+		const auto start = std::chrono::steady_clock::now();
+		pacer.WaitForNextFrame();
+		CHECK(std::chrono::steady_clock::now() - start < std::chrono::milliseconds(45));
+	}
+
 	TEST_CASE("CommandLine parses flags and options")
 	{
 		CommandLine commandLine(std::vector<std::string> { "app", "--headless", "--project", "Game/Game.stproj", "--frames=120", "--bad=12x" });

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "UI/EditorPanelRegistry.h"
+
 #include <Strata/Asset/Asset.h>
 
 #include <filesystem>
@@ -16,10 +18,10 @@ namespace Strata
 	// Folders and assets of the project's asset directory. Assets are drag sources for the inspector (asset fields)
 	// and the hierarchy (prefabs and models); files dropped onto the editor window are imported into the current
 	// folder. The listing is refreshed periodically and after every action, not every frame.
-	class ContentBrowserPanel
+	class ContentBrowserPanel : public EditorPanel
 	{
 	public:
-		void OnImGuiRender(EditorContext& context, const EditorCommandRegistry& commands);
+		void OnImGuiRender(EditorPanelContext& context) override;
 
 		// Opening a scene replaces the edited one: the editor decides how (e.g. after asking about unsaved changes).
 		void SetOpenSceneHandler(std::function<void(AssetHandle)> handler) { m_OpenScene = std::move(handler); }

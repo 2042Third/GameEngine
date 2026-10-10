@@ -69,6 +69,7 @@ namespace Strata
 			{ "gameUI", "ShowGameUI" },
 			{ "gizmo", "Gizmo" },
 			{ "space", "Space" },
+			{ "snap", "Snap" },
 			{ "translateSnap", "TranslateSnap" },
 			{ "rotateSnap", "RotateSnap" },
 			{ "scaleSnap", "ScaleSnap" }
@@ -377,7 +378,7 @@ namespace Strata
 		registry.Register({ "viewport.getSettings",
 			"The viewport's view settings (saved with the project's editor state): which editor overlays are drawn (grid, selectionOutline, sceneGizmos, "
 			"stats), previewLighting (editor views light scenes without any light of their own with a preview sun and sky), gameUI (editor views draw the "
-			"game's screen-space text), the gizmo mode and space, and the snap steps.",
+			"game's screen-space text), the gizmo mode and space, whether gizmo drags snap, and the snap steps.",
 			ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
@@ -397,9 +398,10 @@ namespace Strata
 				{ "gameUI", BoolSchema("Editor views draw the game's screen-space text (its HUD); off by default so the HUD does not cover the scene") },
 				{ "gizmo", { { "type", "string" }, { "enum", { "None", "Translate", "Rotate", "Scale" } }, { "description", "Transform gizmo of the viewport" } } },
 				{ "space", { { "type", "string" }, { "enum", { "Local", "World" } }, { "description", "Space the gizmo works in" } } },
-				{ "translateSnap", RangeSchema("Move snapping step in world units (Ctrl)", 0.0, ViewportSettings::c_MaxTranslateSnap) },
-				{ "rotateSnap", RangeSchema("Rotation snapping step in degrees (Ctrl)", 0.0, ViewportSettings::c_MaxRotateSnap) },
-				{ "scaleSnap", RangeSchema("Scale snapping step (Ctrl)", 0.0, ViewportSettings::c_MaxScaleSnap) } }),
+				{ "snap", BoolSchema("Snap gizmo drags to the steps below (holding Ctrl inverts it)") },
+				{ "translateSnap", RangeSchema("Move snapping step in world units", 0.0, ViewportSettings::c_MaxTranslateSnap) },
+				{ "rotateSnap", RangeSchema("Rotation snapping step in degrees", 0.0, ViewportSettings::c_MaxRotateSnap) },
+				{ "scaleSnap", RangeSchema("Scale snapping step", 0.0, ViewportSettings::c_MaxScaleSnap) } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				nlohmann::json changes = nlohmann::json::object();

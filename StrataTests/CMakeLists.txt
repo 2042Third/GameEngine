@@ -59,8 +59,8 @@ endforeach()
 file(GLOB_RECURSE STRATA_TEST_SOURCES CONFIGURE_DEPENDS
 	"${CMAKE_CURRENT_SOURCE_DIR}/src/*.h"
 	"${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
-# Editor tests need the editor core, which is only built with the editor.
-if(NOT TARGET StrataEditorCore)
+# Editor tests need the editor's libraries, which are only built with the editor.
+if(NOT TARGET StrataEditorUI)
 	file(GLOB_RECURSE STRATA_EDITOR_TEST_SOURCES CONFIGURE_DEPENDS
 		"${CMAKE_CURRENT_SOURCE_DIR}/src/Editor/*.h"
 		"${CMAKE_CURRENT_SOURCE_DIR}/src/Editor/*.cpp")
@@ -72,8 +72,9 @@ strata_configure_target(StrataTests)
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${STRATA_TEST_SOURCES})
 # StrataScriptCore: the scripting tests call the script C ABI directly.
 target_link_libraries(StrataTests PRIVATE Strata StrataScriptCore doctest stb)
-if(TARGET StrataEditorCore)
-	target_link_libraries(StrataTests PRIVATE StrataEditorCore)
+# The editor's UI library brings the editor core; the UI tests draw it headless (src/Editor/ImGuiHarness.h).
+if(TARGET StrataEditorUI)
+	target_link_libraries(StrataTests PRIVATE StrataEditorUI)
 endif()
 target_include_directories(StrataTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 # DOCTEST_CONFIG_NO_POSIX_SIGNALS: CrashGuard owns the fault signals (and the alternate signal stack) of the process.

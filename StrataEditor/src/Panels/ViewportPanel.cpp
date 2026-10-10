@@ -5,7 +5,11 @@
 #include "Editor/EditorViewport.h"
 #include "Editor/ViewportRenderer.h"
 #include "Panels/SceneHierarchyPanel.h"
+#include "UI/EditorFonts.h"
+#include "UI/Icons.h"
 #include "UI/PropertyWidgets.h"
+#include "UI/Theme.h"
+#include "UI/Widgets.h"
 
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Core/Log.h>
@@ -29,24 +33,10 @@ namespace Strata
 	namespace
 	{
 
-		const ImVec4 c_ActiveButtonColor = { 0.24f, 0.42f, 0.70f, 1.0f };
-		const ImVec4 c_PlayColor = { 0.30f, 0.60f, 1.0f, 1.0f };
-		const ImVec4 c_SimulateColor = { 0.35f, 0.85f, 0.45f, 1.0f };
-		const ImVec4 c_PausedColor = { 1.0f, 0.65f, 0.2f, 1.0f };
-		const ImU32 c_OverlayBackground = IM_COL32(0, 0, 0, 160);
-
-		// A button that shows whether its option is on.
-		bool ToggleButton(const char* label, bool active, const char* tooltip)
-		{
-			if (active)
-				ImGui::PushStyleColor(ImGuiCol_Button, c_ActiveButtonColor);
-			const bool pressed = ImGui::Button(label);
-			if (active)
-				ImGui::PopStyleColor();
-			if (ImGui::IsItemHovered())
-				ImGui::SetTooltip("%s", tooltip);
-			return pressed;
-		}
+		// Widths of the camera popup's fields, in text heights.
+		constexpr float c_CameraFieldWidthInFontSizes = 11.0f;
+		// The play-state strip over the image, in text heights (2 pixels at the base text size).
+		constexpr float c_PlayStripInFontSizes = 1.0f / 7.0f;
 
 		ImTextureID ToTextureID(nvrhi::ITexture* texture)
 		{
@@ -66,7 +56,7 @@ namespace Strata
 		}
 
 		// Lines of text over the image, on a dark box so they stay readable on any scene.
-		void DrawTextBox(ImDrawList* drawList, const ImVec2& position, const std::vector<std::string>& lines, ImU32 color)
+		void DrawTextBox(ImDrawList* drawList, const ImVec2& position, const std::vector<std::string>& lines, const ImVec4& color)
 		{
 			const float lineHeight = ImGui::GetTextLineHeightWithSpacing();
 			const ImVec2 padding = ImGui::GetStyle().FramePadding;
@@ -74,44 +64,80 @@ namespace Strata
 			for (const std::string& line : lines)
 				width = std::max(width, ImGui::CalcTextSize(line.c_str()).x);
 			const ImVec2 size(width + padding.x * 2.0f, lineHeight * static_cast<float>(lines.size()) + padding.y * 2.0f);
-			drawList->AddRectFilled(position, ImVec2(position.x + size.x, position.y + size.y), c_OverlayBackground, ImGui::GetStyle().FrameRounding);
+			drawList->AddRectFilled(position, ImVec2(position.x + size.x, position.y + size.y), ImGui::GetColorU32(UI::GetThemeColors().Overlay),
+				ImGui::GetStyle().FrameRounding);
 			for (size_t index = 0; index < lines.size(); index++)
-				drawList->AddText(ImVec2(position.x + padding.x, position.y + padding.y + lineHeight * static_cast<float>(index)), color, lines[index].c_str());
+				drawList->AddText(ImVec2(position.x + padding.x, position.y + padding.y + lineHeight * static_cast<float>(index)), ImGui::GetColorU32(color),
+					lines[index].c_str());
+		}
+
+		// The transform gizmo in the theme's axis colors, its lines as thick (relative to the text) at every UI scale.
+		void ApplyGizmoStyle()
+		{
+			const UI::ThemeColors& colors = UI::GetThemeColors();
+			const float scale = ImGui::GetStyle().FontScaleDpi;
+			const ImGuizmo::Style defaults;
+			ImGuizmo::Style& style = ImGuizmo::GetStyle();
+			style.TranslationLineThickness = defaults.TranslationLineThickness * scale;
+			style.TranslationLineArrowSize = defaults.TranslationLineArrowSize * scale;
+			style.RotationLineThickness = defaults.RotationLineThickness * scale;
+			style.RotationOuterLineThickness = defaults.RotationOuterLineThickness * scale;
+			style.ScaleLineThickness = defaults.ScaleLineThickness * scale;
+			style.ScaleLineCircleSize = defaults.ScaleLineCircleSize * scale;
+			style.HatchedAxisLineThickness = defaults.HatchedAxisLineThickness * scale;
+			style.CenterCircleSize = defaults.CenterCircleSize * scale;
+			style.Colors[ImGuizmo::DIRECTION_X] = colors.AxisX;
+			style.Colors[ImGuizmo::DIRECTION_Y] = colors.AxisY;
+			style.Colors[ImGuizmo::DIRECTION_Z] = colors.AxisZ;
+			style.Colors[ImGuizmo::PLANE_X] = UI::WithAlpha(colors.AxisX, defaults.Colors[ImGuizmo::PLANE_X].w);
+			style.Colors[ImGuizmo::PLANE_Y] = UI::WithAlpha(colors.AxisY, defaults.Colors[ImGuizmo::PLANE_Y].w);
+			style.Colors[ImGuizmo::PLANE_Z] = UI::WithAlpha(colors.AxisZ, defaults.Colors[ImGuizmo::PLANE_Z].w);
+			style.Colors[ImGuizmo::SELECTION] = UI::WithAlpha(colors.AccentHover, defaults.Colors[ImGuizmo::SELECTION].w);
+		}
+
+		const ImVec4& GetPlayStateColor(const EditorContext& context)
+		{
+			const UI::ThemeColors::PlayStateColors& colors = UI::GetThemeColors().PlayState;
+			if (context.IsPaused())
+				return colors.Paused;
+			switch (context.GetSceneState())
+			{
+				case SceneState::Play:     return colors.Play;
+				case SceneState::Simulate: return colors.Simulate;
+				case SceneState::Edit:     break;
+			}
+			return colors.Edit;
 		}
 
 	}
 
-	void ViewportPanel::OnImGuiRender(EditorContext& context, const EditorCommandRegistry& commands)
+	EditorPanelWindowOptions ViewportPanel::GetWindowOptions(EditorPanelContext& context)
 	{
 		ImGuizmo::BeginFrame();
-		EditorViewport& viewport = context.GetViewport();
 
 		// ImGuizmo starts a drag only while no ImGui item is hovered or active, so over the gizmo (as of the last frame)
 		// the image is not an item; the window then must not move with the mouse either (when it floats).
-		const bool overGizmo = ImGuizmo::IsOver();
-		ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
-		if (overGizmo)
-			windowFlags |= ImGuiWindowFlags_NoMove;
-		// While the game has the input, arrows, Space and Enter belong to it, not to keyboard navigation of the toolbar.
-		if (context.IsGameInputActive())
-			windowFlags |= ImGuiWindowFlags_NoNavInputs;
-		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-		const bool visible = ImGui::Begin("Viewport", nullptr, windowFlags);
-		ImGui::PopStyleVar();
-		if (!visible)
-		{
-			// Hidden behind another tab or collapsed: nothing is rendered and held interactions end.
-			Reset(context);
-			ImGui::End();
-			return;
-		}
+		m_OverGizmo = ImGuizmo::IsOver();
+		EditorPanelWindowOptions options;
+		options.NoPadding = true;
+		options.Flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+		if (m_OverGizmo)
+			options.Flags |= ImGuiWindowFlags_NoMove;
+		// While the game has the input, arrows, Space and Enter belong to it, not to keyboard navigation of the chips.
+		if (context.Context.IsGameInputActive())
+			options.Flags |= ImGuiWindowFlags_NoNavInputs;
+		return options;
+	}
+
+	void ViewportPanel::OnImGuiRender(EditorPanelContext& panelContext)
+	{
+		EditorContext& context = panelContext.Context;
+		EditorViewport& viewport = context.GetViewport();
 		m_Focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
 
-		DrawToolbar(context);
-
-		// The image fills the rest of the panel, rendered in framebuffer pixels (Retina displays have more than one per
-		// unit). Viewports only get a framebuffer scale of their own with multi-viewport support; like ImGui's renderer
-		// data, the panel falls back to the display's otherwise.
+		// The image fills the panel, rendered in framebuffer pixels (Retina displays have more than one per unit). Viewports
+		// only get a framebuffer scale of their own with multi-viewport support; like ImGui's renderer data, the panel falls
+		// back to the display's otherwise.
 		const ImVec2 available = ImGui::GetContentRegionAvail();
 		const ImVec2 imageMin = ImGui::GetCursorScreenPos();
 		const ImVec2 viewportScale = ImGui::GetWindowViewport()->FramebufferScale;
@@ -124,17 +150,22 @@ namespace Strata
 		if (size.x == 0 || size.y == 0)
 		{
 			Reset(context);
-			ImGui::End();
 			return;
 		}
 
 		// Elsewhere an item covering the image takes the clicks, so dragging in the viewport never moves a floating window.
-		if (overGizmo)
+		// The chips drawn over it later take precedence where they are.
+		if (m_OverGizmo)
+		{
 			ImGui::Dummy(available);
+		}
 		else
+		{
+			ImGui::SetNextItemAllowOverlap();
 			ImGui::InvisibleButton("SceneImage", available, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
+		}
 		m_Hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
-		AcceptAssetDrops(context, commands);
+		AcceptAssetDrops(context, panelContext.Commands);
 
 		const float aspectRatio = static_cast<float>(size.x) / static_cast<float>(size.y);
 		std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Automatic, aspectRatio);
@@ -162,6 +193,7 @@ namespace Strata
 		}
 		UpdateGameInput(context, m_GameView);
 
+		const UI::ThemeColors& colors = UI::GetThemeColors();
 		ImDrawList* drawList = ImGui::GetWindowDrawList();
 		const ImVec2 imageMax(imageMin.x + available.x, imageMin.y + available.y);
 		ViewportRenderer* renderer = viewport.GetRenderer();
@@ -172,18 +204,49 @@ namespace Strata
 		}
 		else
 		{
-			drawList->AddRectFilled(imageMin, imageMax, IM_COL32(20, 20, 24, 255));
-			drawList->AddText(ImVec2(imageMin.x + 8.0f, imageMin.y + 8.0f), ImGui::GetColorU32(ImGuiCol_TextDisabled),
+			const ImVec2 padding = ImGui::GetStyle().WindowPadding;
+			drawList->AddRectFilled(imageMin, imageMax, ImGui::GetColorU32(colors.Chrome));
+			drawList->AddText(ImVec2(imageMin.x + padding.x, imageMax.y - padding.y - ImGui::GetFontSize()), ImGui::GetColorU32(colors.TextSecondary),
 				renderer ? "The scene could not be rendered (see the Console)" : "No GPU: the viewport cannot render");
 		}
 
-		if (view)
+		// A strip in the play state's color while the scene runs: changes made now are discarded when it stops.
+		if (context.IsPlaying())
 		{
-			if (!m_GameView)
-				UpdateGizmo(context, *view);
-			DrawOverlays(context, *view);
+			const float strip = std::max(1.0f, std::floor(ImGui::GetFontSize() * c_PlayStripInFontSizes));
+			drawList->AddRectFilled(imageMin, ImVec2(imageMax.x, imageMin.y + strip), ImGui::GetColorU32(GetPlayStateColor(context)));
 		}
-		ImGui::End();
+
+		if (view && !m_GameView)
+			UpdateGizmo(context, *view);
+
+		// The chips go over the image (the game view keeps it clear).
+		const ImGuiStyle& style = ImGui::GetStyle();
+		float chipRowBottom = imageMin.y;
+		if (!m_GameView)
+		{
+			ImGui::SetCursorScreenPos(ImVec2(imageMin.x + style.ItemSpacing.x, imageMin.y + style.ItemSpacing.y));
+			DrawChips(context);
+			chipRowBottom = ImGui::GetItemRectMax().y;
+		}
+		if (view)
+			DrawOverlays(context, *view, chipRowBottom);
+	}
+
+	void ViewportPanel::OnHidden(EditorPanelContext& context)
+	{
+		// Hidden behind another tab, collapsed or closed: nothing is rendered and held interactions end.
+		Reset(context.Context);
+	}
+
+	void ViewportPanel::OnDetach(EditorPanelContext& context)
+	{
+		Reset(context.Context);
+	}
+
+	bool ViewportPanel::IsAnimating() const
+	{
+		return m_CameraDrag != CameraDrag::None || m_GizmoDrag.has_value();
 	}
 
 	void ViewportPanel::Reset(EditorContext& context)
@@ -197,77 +260,30 @@ namespace Strata
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
-	// Toolbar
+	// Chips
 	////////////////////////////////////////////////////////////////////////////////
 
-	void ViewportPanel::DrawToolbar(EditorContext& context)
+	void ViewportPanel::DrawChips(EditorContext& context)
 	{
 		EditorViewport& viewport = context.GetViewport();
 		ViewportSettings& settings = viewport.GetSettings();
 		EditorCamera& camera = viewport.GetCamera();
-		const ImGuiStyle& style = ImGui::GetStyle();
-		// The window has no padding (the image reaches its edges); the toolbar keeps some room.
-		const ImVec2 start = ImGui::GetCursorPos();
-		ImGui::SetCursorPos(ImVec2(start.x + style.ItemSpacing.x, start.y + style.ItemSpacing.y));
 
-		auto gizmoButton = [&settings](const char* label, GizmoOperation operation, const char* tooltip)
-		{
-			if (ToggleButton(label, settings.Gizmo == operation, tooltip))
-				settings.Gizmo = operation;
-			ImGui::SameLine();
-		};
-		gizmoButton("Select", GizmoOperation::None, "No transform gizmo (Q)");
-		gizmoButton("Move", GizmoOperation::Translate, "Move the selection (W)");
-		gizmoButton("Rotate", GizmoOperation::Rotate, "Rotate the selection (E)");
-		gizmoButton("Scale", GizmoOperation::Scale, "Scale the selection (R)");
-		if (ToggleButton(settings.Space == GizmoSpace::World ? "World" : "Local", false,
-			"Gizmo axes: the world's or the entity's own (scaling always uses the entity's)"))
-		{
-			settings.Space = settings.Space == GizmoSpace::World ? GizmoSpace::Local : GizmoSpace::World;
-		}
-		ImGui::SameLine();
-		if (ImGui::Button("Snap"))
-			ImGui::OpenPopup("SnapSettings");
-		if (ImGui::IsItemHovered())
-			ImGui::SetTooltip("Snapping steps, used while Ctrl is held");
-		if (ImGui::BeginPopup("SnapSettings"))
-		{
-			ImGui::SetNextItemWidth(120.0f);
-			ImGui::DragFloat("Move (units)", &settings.TranslateSnap, 0.05f, 0.001f, ViewportSettings::c_MaxTranslateSnap, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-			ImGui::SetNextItemWidth(120.0f);
-			ImGui::DragFloat("Rotate (degrees)", &settings.RotateSnap, 0.5f, 0.1f, ViewportSettings::c_MaxRotateSnap, "%.1f", ImGuiSliderFlags_AlwaysClamp);
-			ImGui::SetNextItemWidth(120.0f);
-			ImGui::DragFloat("Scale (factor)", &settings.ScaleSnap, 0.01f, 0.001f, ViewportSettings::c_MaxScaleSnap, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-			ImGui::EndPopup();
-		}
-
-		ImGui::SameLine(0.0f, style.ItemSpacing.x * 3.0f);
-		if (ToggleButton("Grid", settings.ShowGrid, "Ground grid"))
-			settings.ShowGrid = !settings.ShowGrid;
-		ImGui::SameLine();
-		if (ToggleButton("Outline", settings.ShowSelectionOutline, "Outline the selection"))
-			settings.ShowSelectionOutline = !settings.ShowSelectionOutline;
-		ImGui::SameLine();
-		if (ToggleButton("Gizmos", settings.ShowSceneGizmos, "Light, camera and collider shapes"))
-			settings.ShowSceneGizmos = !settings.ShowSceneGizmos;
-		ImGui::SameLine();
-		if (ToggleButton("Stats", settings.ShowStats, "Frame time, draw calls and loading assets"))
-			settings.ShowStats = !settings.ShowStats;
-		ImGui::SameLine();
-		if (ImGui::Button("Camera"))
+		if (UI::Chip("Viewport.Camera", Icons::Video, "Camera", "Field of view, clip planes, fly speed and framing"))
 			ImGui::OpenPopup("CameraSettings");
 		if (ImGui::BeginPopup("CameraSettings"))
 		{
+			const float fieldWidth = ImGui::GetFontSize() * c_CameraFieldWidthInFontSizes;
 			float fov = camera.GetFOV();
-			ImGui::SetNextItemWidth(160.0f);
+			ImGui::SetNextItemWidth(fieldWidth);
 			if (ImGui::SliderFloat("Field of view", &fov, 10.0f, 120.0f, "%.0f deg"))
 				camera.SetFOV(fov);
 			float clip[2] = { camera.GetNear(), camera.GetFar() };
-			ImGui::SetNextItemWidth(160.0f);
+			ImGui::SetNextItemWidth(fieldWidth);
 			if (ImGui::DragFloat2("Near / far", clip, 0.1f, EditorCamera::c_MinNear, EditorCamera::c_MaxFar, "%.3g") && !camera.SetClipPlanes(clip[0], clip[1]))
 				ST_WARN("The near clip plane must be closer than the far one");
 			float speed = camera.GetFlySpeed();
-			ImGui::SetNextItemWidth(160.0f);
+			ImGui::SetNextItemWidth(fieldWidth);
 			if (ImGui::DragFloat("Fly speed", &speed, 0.1f, EditorCamera::c_MinFlySpeed, EditorCamera::c_MaxFlySpeed, "%.2f", ImGuiSliderFlags_Logarithmic))
 				camera.SetFlySpeed(speed);
 			ImGui::Separator();
@@ -288,19 +304,16 @@ namespace Strata
 			ImGui::EndPopup();
 		}
 
-		// The play state on the right.
-		const SceneState state = context.GetSceneState();
-		const bool paused = context.IsPaused();
-		const char* label = state == SceneState::Edit ? "Editing" : (state == SceneState::Play ? "Playing" : "Simulating");
-		const std::string text = paused ? fmt::format("{} (paused)", label) : std::string(label);
-		const ImVec4 color = state == SceneState::Edit ? ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled) : (paused ? c_PausedColor : (state == SceneState::Play ? c_PlayColor : c_SimulateColor));
-		const float textWidth = ImGui::CalcTextSize(text.c_str()).x;
-		ImGui::SameLine(std::max(ImGui::GetWindowWidth() - textWidth - style.ItemSpacing.x * 2.0f, ImGui::GetCursorPosX()));
-		ImGui::AlignTextToFramePadding();
-		ImGui::TextColored(color, "%s", text.c_str());
-
-		ImGui::SetCursorPosY(ImGui::GetCursorPosY() + style.ItemSpacing.y * 0.5f);
+		ImGui::SameLine();
+		UI::ToggleChip("Viewport.Grid", Icons::Grid3x3, "Grid", &settings.ShowGrid, "The ground grid");
+		ImGui::SameLine();
+		UI::ToggleChip("Viewport.Outline", Icons::SquareDashed, "Outline", &settings.ShowSelectionOutline, "Outline the selection");
+		ImGui::SameLine();
+		UI::ToggleChip("Viewport.Gizmos", Icons::Shapes, "Gizmos", &settings.ShowSceneGizmos, "Light, camera and collider shapes");
+		ImGui::SameLine();
+		UI::ToggleChip("Viewport.Stats", Icons::Gauge, "Stats", &settings.ShowStats, "Frame time, draw calls and loading assets");
 	}
+
 
 	////////////////////////////////////////////////////////////////////////////////
 	// Input
@@ -450,6 +463,7 @@ namespace Strata
 			EndGizmoDrag(context);
 
 		// Shown but inert while the camera is being dragged.
+		ApplyGizmoStyle();
 		ImGuizmo::Enable(m_CameraDrag == CameraDrag::None);
 		ImGuizmo::SetOrthographic(view.Camera.Orthographic);
 		ImGuizmo::SetDrawlist();
@@ -458,7 +472,8 @@ namespace Strata
 		const float snapStep = settings.Gizmo == GizmoOperation::Translate ? settings.TranslateSnap
 			: (settings.Gizmo == GizmoOperation::Rotate ? settings.RotateSnap : settings.ScaleSnap);
 		const float snap[3] = { snapStep, snapStep, snapStep };
-		const bool snapping = ImGui::GetIO().KeyCtrl;
+		// Ctrl inverts the snap toggle for as long as it is held.
+		const bool snapping = settings.Snap != ImGui::GetIO().KeyCtrl;
 		glm::mat4 world = context.GetActiveScene()->GetWorldTransform(primary);
 		const ImGuizmo::MODE mode = settings.Space == GizmoSpace::World ? ImGuizmo::WORLD : ImGuizmo::LOCAL;
 		const bool changed = ImGuizmo::Manipulate(&view.Camera.View[0][0], &view.Camera.Projection[0][0], ToImGuizmo(settings.Gizmo), mode, &world[0][0], nullptr,
@@ -495,26 +510,19 @@ namespace Strata
 	// Overlays and drops
 	////////////////////////////////////////////////////////////////////////////////
 
-	void ViewportPanel::DrawOverlays(EditorContext& context, const ViewportView& view)
+	void ViewportPanel::DrawOverlays(EditorContext& context, const ViewportView& view, float chipRowBottom)
 	{
 		ImDrawList* drawList = ImGui::GetWindowDrawList();
 		const ImVec2 imageMin(m_Image.Min.x, m_Image.Min.y);
-		const ImVec2 imageMax(m_Image.Min.x + m_Image.Size.x, m_Image.Min.y + m_Image.Size.y);
 		const float margin = ImGui::GetStyle().ItemSpacing.x;
-
-		// A colored frame while the scene runs: changes made now are discarded when it stops.
-		const SceneState state = context.GetSceneState();
-		if (state != SceneState::Edit)
-		{
-			const ImVec4 color = context.IsPaused() ? c_PausedColor : (state == SceneState::Play ? c_PlayColor : c_SimulateColor);
-			drawList->AddRect(imageMin, imageMax, ImGui::ColorConvertFloat4ToU32(color), 0.0f, 2.0f);
-		}
+		// Text boxes go below the chips.
+		const float top = chipRowBottom + margin;
+		const UI::ThemeColors& colors = UI::GetThemeColors();
 
 		if (!view.Notice.empty())
 		{
 			const float width = ImGui::CalcTextSize(view.Notice.c_str()).x + ImGui::GetStyle().FramePadding.x * 2.0f;
-			DrawTextBox(drawList, ImVec2(std::max(imageMin.x + (m_Image.Size.x - width) * 0.5f, imageMin.x), imageMin.y + margin), { view.Notice },
-				ImGui::ColorConvertFloat4ToU32(c_PausedColor));
+			DrawTextBox(drawList, ImVec2(std::max(imageMin.x + (m_Image.Size.x - width) * 0.5f, imageMin.x), top), { view.Notice }, colors.Warning);
 		}
 
 		EditorViewport& viewport = context.GetViewport();
@@ -532,7 +540,10 @@ namespace Strata
 				fmt::format("{} assets loading", stats.PendingAssets),
 				view.FromScene ? std::string("Scene camera") : std::string("Editor camera")
 			};
-			DrawTextBox(drawList, ImVec2(imageMin.x + margin, imageMin.y + margin), lines, IM_COL32(230, 230, 230, 255));
+			// Numbers read best in the monospaced font.
+			UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Caption);
+			DrawTextBox(drawList, ImVec2(imageMin.x + margin, top), lines, colors.Text);
+			ImGui::PopFont();
 		}
 	}
 

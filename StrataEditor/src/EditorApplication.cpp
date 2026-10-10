@@ -1,14 +1,75 @@
 #include <Strata.h>
 #include <Strata/Core/EntryPoint.h>
+#include <Strata/ImGui/ImGuiLayer.h>
 
+#include "EditorHost.h"
 #include "EditorIcon.h"
 #include "EditorLayer.h"
+#include "UI/EditorFonts.h"
+#include "UI/Theme.h"
+
+#include <nlohmann/json.hpp>
+
+#include <cmath>
 
 namespace Strata
 {
 
 	constexpr uint32_t c_HeadlessFrameRate = 60;
 	constexpr int64_t c_MaxIdleTimeoutSeconds = 7 * 24 * 60 * 60; // A week
+
+	// The editor layer's view of the application.
+	class ApplicationEditorHost final : public EditorHost
+	{
+	public:
+		explicit ApplicationEditorHost(Application& application)
+			: m_Application(application)
+		{
+		}
+
+		bool IsRunning() const override { return m_Application.IsRunning(); }
+		void Close() override { m_Application.Close(); }
+		void SetExitCode(int exitCode) override { m_Application.SetExitCode(exitCode); }
+		uint64_t GetFrameCount() const override { return m_Application.GetFrameCount(); }
+		double GetTime() const override { return Time::GetTime(); }
+		bool HasGraphicsDevice() const override { return m_Application.GetGraphicsDevice() != nullptr; }
+
+		bool HasWindow() const override { return m_Application.GetWindow() != nullptr; }
+
+		void SetWindowTitle(const std::string& title) override
+		{
+			if (Window* window = m_Application.GetWindow())
+				window->SetTitle(title);
+		}
+
+		glm::uvec2 GetWindowSize() const override
+		{
+			const Window* window = m_Application.GetWindow();
+			return window ? glm::uvec2(window->GetWidth(), window->GetHeight()) : glm::uvec2(0);
+		}
+
+		bool IsWindowFocused() const override
+		{
+			const Window* window = m_Application.GetWindow();
+			return window && window->IsFocused();
+		}
+
+		float GetUIScale() const override
+		{
+			const ImGuiLayer* imgui = m_Application.GetImGuiLayer();
+			return imgui ? imgui->GetUIScale() : 1.0f;
+		}
+
+		void SetMaxFrameRate(uint32_t framesPerSecond) override { m_Application.SetMaxFrameRate(framesPerSecond); }
+		uint32_t GetMaxFrameRate() const override { return m_Application.GetMaxFrameRate(); }
+
+		void RequestScreenshot(std::function<void(const ReadbackImage&)> callback) override
+		{
+			m_Application.RequestBackBufferCapture(std::move(callback));
+		}
+	private:
+		Application& m_Application;
+	};
 
 	class EditorApplication : public Application
 	{
@@ -18,8 +79,19 @@ namespace Strata
 		{
 			if (Window* window = GetWindow())
 				window->SetIcon(GetEditorWindowIcon());
-			if (IsRunning())
-				PushLayer(new EditorLayer(options));
+			if (!IsRunning())
+				return;
+			// The editor's look: the Bedrock theme at the UI scale, and its own fonts (ImGui's built-in font is never used).
+			if (ImGuiLayer* imgui = GetImGuiLayer(); imgui && imgui->IsInitialized())
+			{
+				if (options.UIScale)
+					imgui->SetContentScaleOverride(*options.UIScale);
+				imgui->SetStyleCallback(UI::ApplyTheme);
+				if (!UI::EditorFonts::Load())
+					ST_ERROR("The editor's fonts are unavailable; the UI uses ImGui's default font");
+			}
+			// The layer owns its host; the application outlives its layers.
+			PushLayer(new EditorLayer(options, CreateScope<ApplicationEditorHost>(*this)));
 		}
 	};
 
@@ -69,6 +141,20 @@ namespace Strata
 			}
 			options.IdleTimeout = std::chrono::seconds(*seconds);
 		}
+		// A fixed UI scale instead of the display's (e.g. 1 to check the UI at 100% on a 150% display).
+		if (commandLine.HasFlag("--ui-scale"))
+		{
+			// Parsed as a JSON number: independent of the C locale, unlike strtof.
+			const std::optional<std::string> value = commandLine.GetOption("--ui-scale");
+			const nlohmann::json parsed = value ? nlohmann::json::parse(*value, nullptr, false) : nlohmann::json();
+			const double scale = parsed.is_number() ? parsed.get<double>() : 0.0;
+			if (!std::isfinite(scale) || scale < ImGuiLayer::c_MinScale || scale > ImGuiLayer::c_MaxScale)
+			{
+				ST_ERROR("--ui-scale expects a factor from {} to {} (1 is 100%)", ImGuiLayer::c_MinScale, ImGuiLayer::c_MaxScale);
+				return nullptr;
+			}
+			options.UIScale = static_cast<float>(scale);
+		}
 
 		ApplicationSpecification specification;
 		specification.Name = "Strata Editor";
@@ -81,8 +167,11 @@ namespace Strata
 		// and playing scenes advance about as they would in a 60 Hz game.
 		if (specification.Headless)
 			specification.MaxFrameRate = c_HeadlessFrameRate;
-		// Scripted runs (a fixed number of frames) never overwrite the user's saved panel layout.
-		if (!commandLine.GetIntOption("--frames"))
+		// The panel layout: --layout picks the file; otherwise the user's, except in scripted runs (a fixed number of
+		// frames), which never overwrite it.
+		if (std::optional<std::string> layout = commandLine.GetOption("--layout"))
+			specification.ImGuiLayoutFile = FileSystem::FromUTF8(*layout);
+		else if (!commandLine.GetIntOption("--frames"))
 			specification.ImGuiLayoutFile = userData / "EditorLayout.ini";
 		specification.Window.Title = "Strata Editor";
 		specification.Window.Width = 1600;

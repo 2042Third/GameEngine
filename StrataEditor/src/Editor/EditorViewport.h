@@ -47,10 +47,14 @@ namespace Strata
 		bool ShowGameUI = false;
 		GizmoOperation Gizmo = GizmoOperation::Translate;
 		GizmoSpace Space = GizmoSpace::World;
-		// Snapping steps while Ctrl is held: world units, degrees and scale factor.
+		// Gizmo drags snap to the steps below while this is on; holding Ctrl inverts it for a drag.
+		bool Snap = false;
+		// Snapping steps: world units, degrees and scale factor.
 		float TranslateSnap = 0.5f;
 		float RotateSnap = 15.0f;
 		float ScaleSnap = 0.1f;
+		// The selection outline's display color. Not saved: the editor's theme sets it (its accent).
+		glm::vec4 SelectionColor = SceneRenderOptions().SelectionColor;
 
 		nlohmann::json ToJson() const;
 		// Applies a ToJson document; absent values keep their current value. Fails (changing nothing) on invalid values.

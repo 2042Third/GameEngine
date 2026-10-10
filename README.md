@@ -28,7 +28,8 @@ can drive in the same way, plus a runtime that plays exported games.
   quit the game. Script crashes (access violations, exceptions, and on Windows aborts) disable the script
   instead of taking down the editor or the game, and modules hot reload while the game plays, keeping their
   fields.
-- **Editor:** dockable panels (viewport with gizmos, hierarchy, inspector, content browser, console),
+- **Editor:** dockable panels (viewport with gizmos, hierarchy, inspector, content browser, console) in its own
+  "Bedrock" look (Inter and JetBrains Mono type, Lucide icons, sharp at any display scale),
   undo/redo for every edit, play and simulate modes, building and hot reloading game scripts, and game
   export. Every operation is an editor command with a JSON Schema, so scripts, tests and AI agents use the
   same API as the UI.
@@ -99,7 +100,7 @@ assets, scripts, scene, play-testing, export); `.claude/skills/strata-editor-aut
 | Path | Contents |
 | --- | --- |
 | `Strata/` | The engine library: modules in `src/Strata/`, platform code in `src/Platform/`, shaders, vendored dependencies. |
-| `StrataEditor/` | The editor: `src/Editor/` is the UI-independent core (commands, undo, automation, project, scene and script state), `src/Panels/` and `src/UI/` the interface. |
+| `StrataEditor/` | The editor: `src/Editor/` is the UI-independent core (commands, undo, automation, project, scene and script state), `src/Panels/`, `src/UI/` and `EditorLayer` the interface, `Resources/Fonts/` its embedded fonts. |
 | `StrataRuntime/` | The game player. |
 | `StrataCLI/` | The automation client and MCP server. |
 | `StrataScriptCore/` | The script SDK and ABI that game code is written against. |

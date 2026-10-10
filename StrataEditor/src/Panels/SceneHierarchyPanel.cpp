@@ -174,14 +174,11 @@ namespace Strata
 		ImGui::EndDragDropTarget();
 	}
 
-	void SceneHierarchyPanel::OnImGuiRender(EditorContext& context, const EditorCommandRegistry& commands)
+	void SceneHierarchyPanel::OnImGuiRender(EditorPanelContext& panelContext)
 	{
+		EditorContext& context = panelContext.Context;
+		const EditorCommandRegistry& commands = panelContext.Commands;
 		m_Deferred.clear();
-		if (!ImGui::Begin("Hierarchy"))
-		{
-			ImGui::End();
-			return;
-		}
 
 		Scene& scene = *context.GetActiveScene();
 		m_Selected = std::unordered_set<UUID>(context.GetSelection().begin(), context.GetSelection().end());
@@ -263,7 +260,6 @@ namespace Strata
 			DrawCreateMenu(context, commands, UUID::Null(), [this](std::function<void()> action) { m_Deferred.push_back(std::move(action)); });
 			ImGui::EndPopup();
 		}
-		ImGui::End();
 
 		// Applied after drawing, so the tree is never changed while it is being walked.
 		std::vector<std::function<void()>> deferred = std::move(m_Deferred);

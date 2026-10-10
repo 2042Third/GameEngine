@@ -132,6 +132,15 @@ namespace Strata
 				data.EventCallback(event);
 		});
 
+		glfwSetWindowContentScaleCallback(m_Window, [](GLFWwindow* window, float scaleX, float scaleY)
+		{
+			WindowData& data = *static_cast<WindowData*>(glfwGetWindowUserPointer(window));
+			// Like GetContentScale: one scale for both axes, the larger one.
+			WindowContentScaleEvent event(std::max(scaleX, scaleY));
+			if (data.EventCallback)
+				data.EventCallback(event);
+		});
+
 		glfwSetKeyCallback(m_Window, [](GLFWwindow* window, int key, int, int action, int)
 		{
 			if (key < 0)
