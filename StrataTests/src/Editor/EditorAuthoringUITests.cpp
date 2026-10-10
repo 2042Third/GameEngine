@@ -18,6 +18,7 @@
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
+#include <Strata/Math/Math.h>
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/Material.h>
@@ -621,6 +622,27 @@ TEST_SUITE("Editor.UI.Inspector")
 		CHECK(editor.Get(id).GetComponent<TransformComponent>().Translation == glm::vec3(0.0f, 2.0f, 3.0f));
 		CHECK(editor.Get(other).GetComponent<TransformComponent>().Translation == glm::vec3(0.0f, 6.0f, 7.0f));
 		CHECK(editor.UndoPosition() == position + 4);
+	}
+
+	TEST_CASE("Dragging the yaw of several entities past 90 degrees turns them past 90 degrees")
+	{
+		AuthoringEditor editor;
+		const UUID first = editor.Create("First", { { "components", { { "Transform", { { "Rotation", { 10, 80, 0 } } } } } } });
+		const UUID second = editor.Create("Second", { { "components", { { "Transform", { { "Rotation", { 20, 80, 0 } } } } } } });
+		editor.Context().SetSelection({ first, second });
+		editor.Frames(2);
+		// The yaw field right of its axis label, dragged to the right: 0.5 degrees per pixel.
+		const UI::ItemProbe::Item label = *UI::ItemProbe::Find("Inspector.Transform.Rotation.Y");
+		const ImVec2 start(label.Max.x + ImGui::GetFontSize() * 0.5f, label.GetCenter().y);
+		editor.Drag(start, ImVec2(start.x + ImGui::GetFontSize() * 6.0f, start.y));
+		// Each entity's yaw, read in the form that keeps its own pitch (a rotation has two sets of Euler angles).
+		const auto yaw = [&editor](UUID id, float pitch)
+		{
+			const glm::vec3 read = Math::QuatToEulerDegrees(editor.Get(id).GetComponent<TransformComponent>().Rotation);
+			return std::abs(read.x - pitch) < 1.0f ? read.y : 180.0f - read.y;
+		};
+		CHECK(yaw(first, 10.0f) > 100.0f);
+		CHECK(yaw(second, 20.0f) == doctest::Approx(yaw(first, 10.0f)).epsilon(0.001));
 	}
 
 	TEST_CASE("Paste Values onto three selected entities is one undo step")

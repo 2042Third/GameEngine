@@ -22,6 +22,34 @@ namespace Strata
 		// Euler angles (degrees) closer than this are the same: converting rotations back and forth is not exact.
 		constexpr float c_AngleEpsilon = 0.001f;
 
+		// An angle in degrees moved by whole turns into [-180, 180].
+		float WrapDegrees(float angle)
+		{
+			return angle - 360.0f * std::round(angle / 360.0f);
+		}
+
+		// The Euler angles (degrees) of a rotation closest to `reference`. A rotation has two sets of them, (x, y, z) and
+		// (x + 180, 180 - y, z + 180), each up to whole turns; reading them back from the quaternion always gives the one
+		// with a yaw (y) within [-90, 90], so an edit of several entities that went past 90 degrees of yaw would fold back.
+		glm::vec3 GetEulerDegreesNear(const glm::quat& rotation, const glm::vec3& reference)
+		{
+			const glm::vec3 read = Math::QuatToEulerDegrees(rotation);
+			const glm::vec3 other(read.x + 180.0f, 180.0f - read.y, read.z + 180.0f);
+			auto nearest = [&reference](glm::vec3 angles)
+			{
+				for (glm::length_t axis = 0; axis < 3; axis++)
+					angles[axis] = reference[axis] + WrapDegrees(angles[axis] - reference[axis]);
+				return angles;
+			};
+			auto distance = [&reference](const glm::vec3& angles)
+			{
+				return std::abs(angles.x - reference.x) + std::abs(angles.y - reference.y) + std::abs(angles.z - reference.z);
+			};
+			const glm::vec3 first = nearest(read);
+			const glm::vec3 second = nearest(other);
+			return distance(first) <= distance(second) ? first : second;
+		}
+
 		// Calls `function` with the vector a value holds (glm::vec2/3/4) and returns true, or returns false for other values.
 		template<typename Function>
 		bool VisitVector(PropertyValue& value, Function&& function)
@@ -88,8 +116,10 @@ namespace Strata
 			});
 			if (std::holds_alternative<glm::quat>(*other))
 			{
+				// Compared in the form closest to the first entity's: equal rotations read back in the other form would
+				// differ in every angle.
 				const glm::vec3 firstAngles = Math::QuatToEulerDegrees(std::get<glm::quat>(shared.Value));
-				const glm::vec3 ownAngles = Math::QuatToEulerDegrees(std::get<glm::quat>(*other));
+				const glm::vec3 ownAngles = GetEulerDegreesNear(std::get<glm::quat>(*other), firstAngles);
 				for (glm::length_t axis = 0; axis < 3; axis++)
 				{
 					shared.MixedComponents[static_cast<size_t>(axis)] = shared.MixedComponents[static_cast<size_t>(axis)]
@@ -104,9 +134,10 @@ namespace Strata
 	{
 
 		// Sets `value` on every entity in one undo step; with `components`, only those components of vectors and colors
-		// (Euler angles of rotations) and each entity's own values for the others.
+		// (Euler angles of rotations: `angles` when the editor gives them, else read from `value`) and each entity's own
+		// values for the others.
 		bool SetPropertyOnEntities(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& component, const PropertyInfo& property,
-			const PropertyValue& value, const std::optional<PropertyComponentMask>& components, std::string* outError)
+			const PropertyValue& value, const std::optional<PropertyComponentMask>& components, const glm::vec3* angles, std::string* outError)
 		{
 			auto fail = [outError](std::string message)
 			{
@@ -152,15 +183,16 @@ namespace Strata
 								vector[axis] = own[axis];
 						}
 					});
-					// Rotations: the Euler angles (as the inspector edits them) the edit changed replace the entity's own.
+					// Rotations: the Euler angles (as the inspector edits them) the edit changed replace the entity's own, read in
+					// the form closest to the edited ones.
 					if (std::holds_alternative<glm::quat>(target))
 					{
-						const glm::vec3 angles = Math::QuatToEulerDegrees(std::get<glm::quat>(value));
-						glm::vec3 own = Math::QuatToEulerDegrees(std::get<glm::quat>(*current));
+						const glm::vec3 edited = angles ? *angles : Math::QuatToEulerDegrees(std::get<glm::quat>(value));
+						glm::vec3 own = GetEulerDegreesNear(std::get<glm::quat>(*current), edited);
 						for (glm::length_t axis = 0; axis < 3; axis++)
 						{
 							if ((*components)[static_cast<size_t>(axis)])
-								own[axis] = angles[axis];
+								own[axis] = edited[axis];
 						}
 						target = Math::EulerDegreesToQuat(own);
 					}
@@ -189,6 +221,7 @@ namespace Strata
 		}
 		// The components that differ between what the widget showed and the new value; equal values are written whole.
 		std::optional<PropertyComponentMask> components;
+		std::optional<glm::vec3> angles; // Rotations: the new value's Euler angles in the form of the shown ones
 		if (shown != value)
 		{
 			PropertyComponentMask changed = {};
@@ -205,21 +238,33 @@ namespace Strata
 			if (std::holds_alternative<glm::quat>(value))
 			{
 				const glm::vec3 before = Math::QuatToEulerDegrees(std::get<glm::quat>(shown));
-				const glm::vec3 after = Math::QuatToEulerDegrees(std::get<glm::quat>(value));
+				angles = GetEulerDegreesNear(std::get<glm::quat>(value), before);
 				for (glm::length_t axis = 0; axis < 3; axis++)
-					changed[static_cast<size_t>(axis)] = std::abs(after[axis] - before[axis]) > c_AngleEpsilon;
+					changed[static_cast<size_t>(axis)] = std::abs((*angles)[axis] - before[axis]) > c_AngleEpsilon;
 				partial = true;
 			}
 			if (partial)
 				components = changed;
 		}
-		return SetPropertyOnEntities(context, entities, component, property, value, components, outError);
+		return SetPropertyOnEntities(context, entities, component, property, value, components, angles ? &*angles : nullptr, outError);
 	}
 
 	bool SetPropertyComponentsWithUndo(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& component, const PropertyInfo& property,
 		const PropertyValue& value, const PropertyComponentMask& components, std::string* outError)
 	{
-		return SetPropertyOnEntities(context, entities, component, property, value, components, outError);
+		return SetPropertyOnEntities(context, entities, component, property, value, components, nullptr, outError);
+	}
+
+	bool SetRotationAnglesWithUndo(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& component, const PropertyInfo& property,
+		const glm::vec3& angles, const PropertyComponentMask& components, std::string* outError)
+	{
+		if (property.Type != PropertyType::Quat)
+		{
+			if (outError)
+				*outError = fmt::format("Property '{}' is not a rotation", property.Name);
+			return false;
+		}
+		return SetPropertyOnEntities(context, entities, component, property, PropertyValue(Math::EulerDegreesToQuat(angles)), components, &angles, outError);
 	}
 
 	bool IsSettableProperty(const PropertyInfo& property)

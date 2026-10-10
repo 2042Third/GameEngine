@@ -853,7 +853,9 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   - The **Inspector** shows the components every selected entity has. `GetSharedProperty` gives each widget its value and
     which components (axes, Euler angles) differ, which `DrawPropertyWidget` shows as mixed; an edit goes through the
     multi-entity `SetPropertyComponentsWithUndo` with the components the widget changed (one step; each entity keeps its
-    other components), or `SetPropertyWithUndo` for other types. Axis labels reset their axis to the
+    other components), or `SetPropertyWithUndo` for other types. Rotations go through `SetRotationAnglesWithUndo` with
+    the Euler angles the widget edited: each entity's own angles are read in the form closest to them (a rotation has two
+    sets, and reading one back from the quaternion folds a yaw past 90 degrees). Axis labels reset their axis to the
     value of a new component (`GetDefaultPropertyValues`). A component's menu copies and pastes its values through the
     clipboard as JSON (`EditorActions::CopyComponentValues`) and runs `component.set`/`component.remove {entities}`. With
     nothing selected it shows the scene's settings, applied by one `scene.setSettings` when a drag ends, and the first

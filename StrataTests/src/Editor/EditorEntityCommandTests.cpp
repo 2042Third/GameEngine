@@ -407,6 +407,38 @@ TEST_SUITE("Editor.Commands")
 		CHECK(harness.Snapshot() == original);
 	}
 
+	TEST_CASE("A yaw dragged past 90 degrees on entities whose pitch differs turns them past 90 degrees")
+	{
+		EntityHarness harness;
+		std::vector<Entity> entities;
+		const float pitches[] = { 10.0f, 20.0f };
+		for (const float pitch : pitches)
+			entities.push_back(harness.Get(harness.Create("Turned", { { "components", { { "Transform", { { "Rotation", { pitch, 80.0, 0.0 } } } } } } })));
+		const ComponentInfo& transform = *ComponentRegistry::Find("Transform");
+		const PropertyInfo& rotation = *transform.FindProperty("Rotation");
+		const size_t position = harness.Position();
+
+		// The inspector's drag of the yaw field: the angles it shows (the first entity's) with the yaw raised 2 degrees a
+		// frame, past 90, where Euler angles read back from a rotation fold (yaw 100 reads as pitch 190, yaw 80, roll 180).
+		std::string error;
+		for (float yaw = 82.0f; yaw <= 120.0f; yaw += 2.0f)
+		{
+			REQUIRE_MESSAGE(SetRotationAnglesWithUndo(harness.Context, entities, transform, rotation, glm::vec3(pitches[0], yaw, 0.0f), { false, true, false, false },
+				&error), error);
+		}
+		CHECK(harness.Position() == position + 1);
+		// Each turned to a yaw of 120 degrees, keeping its own pitch.
+		for (size_t index = 0; index < entities.size(); index++)
+		{
+			const glm::quat expected = Math::EulerDegreesToQuat(glm::vec3(pitches[index], 120.0f, 0.0f));
+			CHECK(std::abs(glm::dot(expected, entities[index].GetComponent<TransformComponent>().Rotation)) == doctest::Approx(1.0f).epsilon(0.0001));
+		}
+		// And shown as differing in pitch only.
+		const std::optional<SharedPropertyValue> shared = GetSharedProperty(entities, transform, rotation);
+		REQUIRE(shared);
+		CHECK(shared->MixedComponents == std::array<bool, 4> { true, false, false, false });
+	}
+
 	TEST_CASE("Rotation edits of many entities change only the Euler angles the edit changed")
 	{
 		EntityHarness harness;

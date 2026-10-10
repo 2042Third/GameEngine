@@ -44,6 +44,8 @@ namespace Strata
 		// What a field shows when the selected entities' values differ.
 		constexpr const char* c_MixedText = "--";
 		constexpr const char* c_AxisNames[] = { "X", "Y", "Z", "W" };
+		// Rotations whose quaternions' dot product is this close to 1 are the same (an angle below a tenth of a degree).
+		constexpr float c_SameRotationTolerance = 1.0e-6f;
 
 		float GetSpeed(const PropertyInfo& property, float fallback)
 		{
@@ -172,19 +174,22 @@ namespace Strata
 		}
 
 		// Euler angles are not unique: converting the quaternion back every frame would make a drag past 90 degrees jump. The
-		// angles being edited are kept while the rotation is the one they produced.
+		// angles being edited are kept while the rotation is the one they produced, up to the rounding of entities that keep
+		// their own other angles (several selected entities, PropertyEdit's SetRotationAnglesWithUndo).
 		PropertyEditResult DrawRotation(const PropertyInfo& property, glm::quat& rotation, const PropertyWidgetOptions& options)
 		{
 			static ImGuiID s_EulerId = 0;
 			static glm::quat s_EulerRotation;
 			static glm::vec3 s_Euler;
 			const ImGuiID id = ImGui::GetID("##Euler");
-			glm::vec3 euler = s_EulerId == id && s_EulerRotation == rotation ? s_Euler : Math::QuatToEulerDegrees(rotation);
+			const bool same = s_EulerId == id && std::abs(glm::dot(s_EulerRotation, rotation)) >= 1.0f - c_SameRotationTolerance;
+			glm::vec3 euler = same ? s_Euler : Math::QuatToEulerDegrees(rotation);
 			std::optional<glm::vec3> defaults;
 			if (options.DefaultValue && std::holds_alternative<glm::quat>(*options.DefaultValue))
 				defaults = Math::QuatToEulerDegrees(std::get<glm::quat>(*options.DefaultValue));
-			const PropertyEditResult result = DrawAxisFields(&euler.x, 3, GetSpeed(property, 0.5f), -FLT_MAX, FLT_MAX, options,
+			PropertyEditResult result = DrawAxisFields(&euler.x, 3, GetSpeed(property, 0.5f), -FLT_MAX, FLT_MAX, options,
 				defaults ? &defaults->x : nullptr);
+			result.EulerAngles = euler;
 			if (result.Changed)
 			{
 				rotation = Math::EulerDegreesToQuat(euler);

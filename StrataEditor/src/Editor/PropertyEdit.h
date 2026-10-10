@@ -51,6 +51,12 @@ namespace Strata
 	// entities whose X differs.
 	bool SetPropertyComponentsWithUndo(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& component, const PropertyInfo& property,
 		const PropertyValue& value, const PropertyComponentMask& components, std::string* outError = nullptr);
+	// The same for a rotation edited as Euler angles (degrees, as the inspector shows them): the angles marked in
+	// `components` replace each entity's own, which are read in the form closest to `angles`. Converting the edited
+	// rotation back to angles instead would give the form with a yaw within [-90, 90], so a yaw dragged past 90 degrees
+	// would fold back.
+	bool SetRotationAnglesWithUndo(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& component, const PropertyInfo& property,
+		const glm::vec3& angles, const PropertyComponentMask& components, std::string* outError = nullptr);
 
 	// Whether component.set (and so the inspector's Reset and Paste Values) can set the property: it is neither read-only
 	// nor transient.

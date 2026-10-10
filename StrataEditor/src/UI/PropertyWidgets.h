@@ -25,6 +25,9 @@ namespace Strata
 		// Vectors and rotations: the components (Euler angles) the edit changed, also when they were already at the new value
 		// for the value shown (an axis label resetting a mixed axis).
 		std::array<bool, 4> ChangedComponents = {};
+		// Rotations: the Euler angles (degrees) the widget shows after the edit. They are what was edited: reading them back
+		// from the rotation could give the other set of angles of the same rotation (a yaw past 90 degrees folds back).
+		glm::vec3 EulerAngles = glm::vec3(0.0f);
 	};
 
 	// How DrawPropertyWidget shows a value that several entities share (the inspector's multi-selection) and what its

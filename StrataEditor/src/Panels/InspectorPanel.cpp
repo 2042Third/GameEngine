@@ -492,6 +492,8 @@ namespace Strata
 				bool set = false;
 				if (entities.size() == 1)
 					set = SetPropertyWithUndo(context, entities.front(), info, property, value, &error);
+				else if (partial && property.Type == PropertyType::Quat)
+					set = SetRotationAnglesWithUndo(context, entities, info, property, result.EulerAngles, result.ChangedComponents, &error);
 				else if (partial)
 					set = SetPropertyComponentsWithUndo(context, entities, info, property, value, result.ChangedComponents, &error);
 				else
