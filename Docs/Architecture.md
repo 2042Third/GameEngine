@@ -444,7 +444,7 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
 - `SceneSettings` holds gravity, the fixed timestep (1/60 s), `MaxFixedStepsPerFrame` and the physics world's capacities
   (`PhysicsCapacity`: bodies, body pairs and contact constraints; 0, the default, sizes one automatically; each up to a
   limit that bounds the memory a world reserves). All of it is saved with the scene and changed with `scene.setSettings`
-  (one undo step).
+  (one undo step); capacities apply when a world is created, at play start.
 - A scene knows the scene asset it was loaded from or saved as (`Scene::GetSourceAsset`, set by
   `SceneAsset::CreateScene` and by the editor's save-as) and keeps an ID across its copies (`GetLineageID`: the source
   asset, else an ID of its own), by which systems recognize it from one play session to the next.

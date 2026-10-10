@@ -164,7 +164,7 @@ with `prefab.instantiate`.
 **Edit**: `component.add` (adds if missing, then sets values), `component.set` (component must exist),
 `component.remove`, `entity.rename`, `entity.setActive`, `entity.delete`, `scene.setSettings` (gravity, timestep, and
 `physicsCapacity {maxBodies, maxBodyPairs, maxContactConstraints}` for scenes that spawn many bodies while they play;
-0 sizes a capacity from the bodies the scene starts with).
+0 sizes a capacity from the bodies the scene starts with; set capacities in edit mode: they apply when play starts).
 
 **Play and inspect**: `play.start` -> `editor.wait {"frames": 120}` (about two seconds) -> `entity.get` /
 `component.get` / `log.read` -> `play.stop`. `play.pause {"paused": true}` and `play.step {"frames": n}` advance

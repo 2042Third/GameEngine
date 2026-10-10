@@ -10,6 +10,7 @@
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Core/Version.h>
+#include <Strata/Physics/PhysicsSystem.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/Material.h>
 #include <Strata/Renderer/Mesh.h>
@@ -667,6 +668,28 @@ TEST_SUITE("Editor.Commands")
 			{ "maxContactConstraints", limits.MaxContactConstraints } } } });
 		CHECK(harness.Context.GetEditScene()->GetSettings().PhysicsCapacity == limits);
 		harness.Run("edit.undo");
+
+		// While playing, a change reaches the running copy only, which play.stop discards, and capacities do not reach the
+		// running world: the result warns about both.
+		harness.Run("entity.create", { { "name", "Crate" }, { "components", { { "RigidBody", nlohmann::json::object() }, { "BoxCollider", nlohmann::json::object() } } } });
+		harness.Run("play.start");
+		const PhysicsSystem* physics = harness.Context.GetActiveScene()->GetSystem<PhysicsSystem>();
+		REQUIRE(physics != nullptr);
+		CHECK(physics->GetStats().MaxBodies == 200000);
+		const size_t playSteps = harness.Context.GetUndoStack().GetPosition();
+		const nlohmann::json playing = harness.Run("scene.setSettings", { { "physicsCapacity", { { "maxBodies", 1000 } } } });
+		REQUIRE(playing.contains("warning"));
+		CHECK(playing["warning"].get<std::string>().find("discarded by play.stop") != std::string::npos);
+		CHECK(playing["warning"].get<std::string>().find("physics capacities apply to worlds created later") != std::string::npos);
+		CHECK(harness.Context.GetActiveScene()->GetSettings().PhysicsCapacity.MaxBodies == 1000);
+		CHECK(physics->GetStats().MaxBodies == 200000);
+		const nlohmann::json gravityOnly = harness.Run("scene.setSettings", { { "gravity", { 0, -5, 0 } } });
+		REQUIRE(gravityOnly.contains("warning"));
+		CHECK(gravityOnly["warning"].get<std::string>().find("capacities") == std::string::npos);
+		CHECK(harness.Context.GetUndoStack().GetPosition() == playSteps);
+		harness.Run("play.stop");
+		CHECK(harness.Context.GetEditScene()->GetSettings().PhysicsCapacity == PhysicsCapacitySettings { 200000, 0, 50000 });
+		CHECK_FALSE(harness.Run("scene.setSettings", { { "physicsCapacity", { { "maxBodies", 300000 } } } }).contains("warning"));
 	}
 
 	TEST_CASE("Components this build does not register survive play, duplication, prefabs, undo and saving")

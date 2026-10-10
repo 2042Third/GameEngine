@@ -111,6 +111,13 @@ namespace Strata
 			return info;
 		}
 
+		// What mutating commands report while the scene is running.
+		std::string GetRunningCopyWarning(const EditorContext& context)
+		{
+			return fmt::format("The scene is running ({}): this change applies to the running copy and is discarded by play.stop",
+				SceneStateToString(context.GetSceneState()));
+		}
+
 		// Ends a mutating command: records the undo step (edit mode) and reports the result. While playing, edits change
 		// the running copy only; the result says so, because play.stop discards them.
 		EditorCommandResult Finish(EditorContext& context, SceneEditTransaction& transaction, nlohmann::json value = nullptr)
@@ -120,8 +127,7 @@ namespace Strata
 			{
 				if (!value.is_object())
 					value = nlohmann::json::object();
-				value["warning"] = fmt::format("The scene is running ({}): this change applies to the running copy and is discarded by play.stop",
-					SceneStateToString(context.GetSceneState()));
+				value["warning"] = GetRunningCopyWarning(context);
 			}
 			return EditorCommandResult::Ok(std::move(value));
 		}
@@ -261,8 +267,9 @@ namespace Strata
 		capacitySchema["description"] = "Physics world capacities (only the given ones change), reserved in memory when play starts; raise them for "
 			"scenes that create many bodies while they play";
 		registry.Register({ "scene.setSettings",
-			"Changes physics settings of the edited scene: gravity, the fixed step and the physics world's capacities (undoable, one step; while "
-			"playing it changes the running copy only, and capacities apply from the next play start). Returns the settings.",
+			"Changes physics settings of the edited scene: gravity, the fixed step and the physics world's capacities (undoable, one step). "
+			"Capacities take effect when a physics world is created, at the next play start, so set them in edit mode: while playing, changes go "
+			"to the running copy only and play.stop discards them (the result then has a warning). Returns the settings.",
 			ObjectSchema({
 				{ "gravity", Vec3Schema("Gravity in m/s^2") },
 				{ "fixedTimestep", NumberSchema("Fixed simulation step in seconds (1/1000 to 1/10)") },
@@ -302,7 +309,16 @@ namespace Strata
 				scene.GetSettings() = after;
 				if (changed && !context.IsPlaying())
 					context.GetUndoStack().Record(CreateScope<SceneSettingsAction>(scene, before, after));
-				return EditorCommandResult::Ok({ { "settings", DescribeSettings(after) } });
+				nlohmann::json result = { { "settings", DescribeSettings(after) } };
+				if (context.IsPlaying())
+				{
+					// Like the other mutating commands; capacities do not even reach the running copy's world, which exists already.
+					std::string warning = GetRunningCopyWarning(context);
+					if (after.PhysicsCapacity != before.PhysicsCapacity)
+						warning += "; physics capacities apply to worlds created later, not to the running one, so set them in edit mode";
+					result["warning"] = std::move(warning);
+				}
+				return EditorCommandResult::Ok(std::move(result));
 			} });
 
 		////////////////////////////////////////////////////////////////////////////////
