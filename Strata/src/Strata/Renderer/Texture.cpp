@@ -16,6 +16,10 @@ namespace Strata
 		constexpr uint32_t c_TextureMagic = 0x58545453; // "STTX"
 		constexpr uint32_t c_MaxTextureSize = 16384;
 
+		// How fast upload steps copy pixels into staging memory (bytes per millisecond), averaged over the latest steps, to
+		// predict whether the next step still fits before a finalization deadline. Main thread only (finalization).
+		float s_UploadBytesPerMs = 4.0e6f;
+
 		struct CookedTextureHeader
 		{
 			uint32_t Magic;
@@ -309,7 +313,7 @@ namespace Strata
 	std::vector<uint8_t> Texture::Serialize() const
 	{
 		// Uploading releases the CPU copy.
-		if (m_Mips.empty())
+		if (m_Mips.empty() || m_UploadLevel > 0)
 			return {};
 		// Bytes taken over from cooked data are exactly what serializing would write.
 		if (!m_Cooked.empty())
@@ -390,34 +394,70 @@ namespace Strata
 		return std::span<const uint8_t>(m_Cooked.data() + m_CookedOffsets[level], size);
 	}
 
-	bool Texture::FinalizeOnMainThread(const AssetFinalizeContext& context)
+	AssetFinalizeResult Texture::FinalizeOnMainThread(const AssetFinalizeContext& context)
 	{
 		nvrhi::ICommandList* commandList = context.CommandList;
-		if (!commandList || m_GPUTexture)
-			return true; // No renderer (tools, tests): CPU data only
+		if (!commandList || m_BindlessSlot != BindlessTextureTable::c_InvalidSlot)
+			return AssetFinalizeResult::Done; // No renderer (tools, tests): CPU data only; or finalized before
 
-		nvrhi::TextureDesc desc;
-		desc.width = m_Width;
-		desc.height = m_Height;
-		desc.mipLevels = m_MipCount;
-		desc.format = ToNvrhiFormat(m_Specification.Format);
-		desc.debugName = m_Specification.DebugName.empty() ? std::string("Texture") : m_Specification.DebugName;
-		desc.initialState = nvrhi::ResourceStates::ShaderResource;
-		desc.keepInitialState = true;
-
-		m_GPUTexture = Renderer::GetDevice()->createTexture(desc);
 		if (!m_GPUTexture)
-			return false;
+		{
+			nvrhi::TextureDesc desc;
+			desc.width = m_Width;
+			desc.height = m_Height;
+			desc.mipLevels = m_MipCount;
+			desc.format = ToNvrhiFormat(m_Specification.Format);
+			desc.debugName = m_Specification.DebugName.empty() ? std::string("Texture") : m_Specification.DebugName;
+			desc.initialState = nvrhi::ResourceStates::ShaderResource;
+			desc.keepInitialState = true;
 
-		const uint32_t bytesPerPixel = GetTextureFormatBytesPerPixel(m_Specification.Format);
-		for (uint32_t level = 0; level < m_MipCount; level++)
-			commandList->writeTexture(m_GPUTexture, 0, level, GetMipData(level).data(), static_cast<size_t>(m_Mips[level].Width) * bytesPerPixel);
+			m_GPUTexture = Renderer::GetDevice()->createTexture(desc);
+			if (!m_GPUTexture)
+				return AssetFinalizeResult::Failed;
+			m_UploadLevel = 0;
+			m_UploadRow = 0;
+		}
+
+		// Steps until the chain is uploaded or the budget is used up; the first step of a call is always taken, so a texture
+		// larger than any frame's budget still arrives. Budgeted calls also wait for staging memory (it frees up as frames
+		// complete), so a burst of arrivals cannot pile up staging; unbudgeted ones (LoadAssetSync, memory assets) finish.
+		const bool budgeted = context.UploadBudget != std::numeric_limits<uint64_t>::max();
+		const StagingTexturePool& stagingPool = Renderer::GetStagingTextures();
+		uint64_t uploaded = 0;
+		bool firstStep = true;
+		while (m_UploadLevel < m_MipCount)
+		{
+			const UploadStep step = GetNextUploadStep();
+			if (budgeted && !stagingPool.HasRoomFor(step.Bytes))
+				break;
+			// A step that would end after the deadline (at the copy speed seen so far) waits for the next call.
+			const auto now = std::chrono::steady_clock::now();
+			const auto predicted = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+				std::chrono::duration<float, std::milli>(static_cast<float>(step.Bytes) / s_UploadBytesPerMs));
+			if (!firstStep && (uploaded + step.Bytes > context.UploadBudget || now >= context.Deadline || context.Deadline - now < predicted))
+				break;
+			if (!RecordUploadStep(commandList, step))
+			{
+				ST_CORE_ERROR("Texture '{}': no staging memory for its upload", m_Specification.DebugName);
+				m_GPUTexture = nullptr;
+				return AssetFinalizeResult::Failed;
+			}
+			const float stepMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - now).count();
+			if (stepMs > 0.01f)
+				s_UploadBytesPerMs = 0.8f * s_UploadBytesPerMs + 0.2f * (static_cast<float>(step.Bytes) / stepMs);
+			uploaded += step.Bytes;
+			firstStep = false;
+		}
+		if (context.UploadedBytes)
+			*context.UploadedBytes += uploaded;
+		if (m_UploadLevel < m_MipCount)
+			return AssetFinalizeResult::Pending;
 
 		m_BindlessSlot = Renderer::GetBindlessTextures().Allocate(m_GPUTexture);
 		if (m_BindlessSlot == BindlessTextureTable::c_InvalidSlot)
 		{
 			m_GPUTexture = nullptr;
-			return false; // Table full (logged by the table)
+			return AssetFinalizeResult::Failed; // Table full (logged by the table)
 		}
 
 		// The GPU copy is authoritative from now on; streaming re-reads cooked data when it needs pixels again.
@@ -425,7 +465,96 @@ namespace Strata
 		m_Mips.shrink_to_fit();
 		std::vector<uint8_t>().swap(m_Cooked);
 		m_CookedOffsets.clear();
+		return AssetFinalizeResult::Done;
+	}
+
+	Texture::UploadStep Texture::GetNextUploadStep() const
+	{
+		UploadStep step;
+		step.Level = m_UploadLevel;
+		step.Row = m_UploadRow;
+		uint64_t tailBytes = 0;
+		for (uint32_t level = m_UploadLevel; level < m_MipCount; level++)
+			tailBytes += GetMipData(level).size();
+		if (m_UploadRow == 0 && tailBytes <= c_UploadBandBytes)
+		{
+			step.Tail = true;
+			step.Rows = m_Mips[m_UploadLevel].Height;
+			step.Bytes = tailBytes;
+			return step;
+		}
+
+		const TextureMip& mip = m_Mips[m_UploadLevel];
+		const uint64_t rowBytes = static_cast<uint64_t>(mip.Width) * GetTextureFormatBytesPerPixel(m_Specification.Format);
+		const uint64_t bandRows = std::max<uint64_t>(1, c_UploadBandBytes / std::max<uint64_t>(1, rowBytes));
+		step.Rows = static_cast<uint32_t>(std::min<uint64_t>(mip.Height - m_UploadRow, bandRows));
+		step.Bytes = step.Rows * rowBytes;
+		return step;
+	}
+
+	bool Texture::RecordUploadStep(nvrhi::ICommandList* commandList, const UploadStep& step)
+	{
+		nvrhi::IDevice* device = Renderer::GetDevice();
+		const uint32_t levels = step.Tail ? m_MipCount - step.Level : 1;
+		nvrhi::TextureDesc stagingDesc;
+		stagingDesc.width = m_Mips[step.Level].Width;
+		stagingDesc.height = step.Rows;
+		stagingDesc.mipLevels = levels;
+		stagingDesc.format = ToNvrhiFormat(m_Specification.Format);
+		// The pool hands it out again once the frames that may copy from it are done.
+		StagingTexturePool& stagingPool = Renderer::GetStagingTextures();
+		nvrhi::StagingTextureHandle staging = stagingPool.Acquire(stagingDesc);
+		if (!staging)
+			return false;
+
+		const size_t bytesPerPixel = GetTextureFormatBytesPerPixel(m_Specification.Format);
+		for (uint32_t index = 0; index < levels; index++)
+		{
+			const TextureMip& source = m_Mips[step.Level + index];
+			const uint32_t firstRow = step.Tail ? 0 : step.Row;
+			const uint32_t rows = step.Tail ? source.Height : step.Rows;
+			size_t rowPitch = 0;
+			auto* destination = static_cast<uint8_t*>(device->mapStagingTexture(staging, nvrhi::TextureSlice().setMipLevel(index), nvrhi::CpuAccessMode::Write,
+				&rowPitch));
+			if (!destination)
+			{
+				stagingPool.Release(std::move(staging));
+				return false;
+			}
+			const size_t rowBytes = static_cast<size_t>(source.Width) * bytesPerPixel;
+			const uint8_t* sourceRows = GetMipData(step.Level + index).data() + static_cast<size_t>(firstRow) * rowBytes;
+			if (rowPitch == rowBytes)
+			{
+				std::memcpy(destination, sourceRows, rows * rowBytes);
+			}
+			else
+			{
+				for (uint32_t row = 0; row < rows; row++)
+					std::memcpy(destination + row * rowPitch, sourceRows + row * rowBytes, rowBytes);
+			}
+			device->unmapStagingTexture(staging);
+			commandList->copyTexture(m_GPUTexture, nvrhi::TextureSlice().setOrigin(0, firstRow, 0).setSize(source.Width, rows, 1).setMipLevel(step.Level + index),
+				staging, nvrhi::TextureSlice().setSize(source.Width, rows, 1).setMipLevel(index));
+		}
+		stagingPool.Release(std::move(staging));
+
+		// Uploaded levels are not needed on the CPU any more.
+		const uint32_t endRow = step.Row + step.Rows;
+		const bool levelComplete = step.Tail || endRow == m_Mips[step.Level].Height;
+		for (uint32_t index = 0; levelComplete && index < levels; index++)
+			std::vector<uint8_t>().swap(m_Mips[step.Level + index].Data);
+		m_UploadLevel = levelComplete ? step.Level + levels : step.Level;
+		m_UploadRow = levelComplete ? 0 : endRow;
 		return true;
+	}
+
+	uint64_t Texture::GetChainBytes() const
+	{
+		uint64_t bytes = 0;
+		const uint64_t bytesPerPixel = GetTextureFormatBytesPerPixel(m_Specification.Format);
+		for (uint32_t level = 0; level < m_MipCount; level++)
+			bytes += static_cast<uint64_t>(std::max(1u, m_Width >> level)) * std::max(1u, m_Height >> level) * bytesPerPixel;
+		return bytes;
 	}
 
 	AssetMemoryUsage Texture::GetMemoryUsage() const
@@ -434,13 +563,8 @@ namespace Strata
 		usage.Cpu = m_Cooked.size();
 		for (const TextureMip& mip : m_Mips)
 			usage.Cpu += mip.Data.size();
-
 		if (m_GPUTexture)
-		{
-			const uint64_t bytesPerPixel = GetTextureFormatBytesPerPixel(m_Specification.Format);
-			for (uint32_t level = 0; level < m_MipCount; level++)
-				usage.GpuTextures += static_cast<uint64_t>(std::max(1u, m_Width >> level)) * std::max(1u, m_Height >> level) * bytesPerPixel;
-		}
+			usage.GpuTextures = GetChainBytes();
 		return usage;
 	}
 

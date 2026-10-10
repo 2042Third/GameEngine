@@ -133,9 +133,10 @@ The asset types are Scene, Prefab, Model, Mesh, Material, Texture, AudioClip and
 **Renderer** (`Renderer/`). `GraphicsDevice` is the device interface (NVRHI on Vulkan, implemented in
 `Platform/Vulkan/VulkanGraphicsDevice.cpp`; it owns the swapchain and frames in flight, 2 by default). `Renderer`
 holds the process-wide services: the device, `ShaderLibrary` (SPIR-V compiled from `Strata/shaders` by glslang at
-build time and embedded, `CMake/StrataShaders.cmake`), samplers, fallback textures, `BindlessTextureTable` and the
-blocking `ReadTexture`. `SceneRenderer` draws a scene (light clustering, shadow cascades, depth/normal/entity-ID
-prepass, GTAO, forward PBR, sky, transparents, exposure, bloom, tone mapping, FXAA, then overlays and text). Assets:
+build time and embedded, `CMake/StrataShaders.cmake`), samplers, fallback textures, `BindlessTextureTable`,
+`StagingTexturePool` (staging memory for texture uploads, reused) and the blocking `ReadTexture`. `SceneRenderer` draws
+a scene (light clustering, shadow cascades, depth/normal/entity-ID prepass, GTAO, forward PBR, sky, transparents,
+exposure, bloom, tone mapping, FXAA, then overlays and text). Assets:
 `Mesh`, `Material`, `Texture`, `Font`; procedural primitives come from `MeshFactory`. Also `TextRenderer`/`FontAtlas`,
 `DebugDraw`/`SceneGizmos`, `TextureReadback` (non-blocking GPU readback) and `ImageWriter` (PNG). Conventions and
 rules: AGENTS.md, "Architecture rules" and "Rendering".
@@ -322,8 +323,8 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
                                      v
  AssetManagerBase: streaming queue -> I/O read -> worker decode (AssetLoadFunction) -> completion queue
                                      v
- AssetManagerBase::Update (main thread): FinalizeOnMainThread (GPU uploads) within the upload and time budgets
-                                         -> Ready; then eviction of the pools over budget
+ AssetManagerBase::Update (main thread): FinalizeOnMainThread (GPU uploads in steps through staging) within the
+                                         upload and time budgets -> Ready; then eviction of the pools over budget
 ```
 
 - **Importing** (`Asset/EditorAssetManager.h`). `Scan` registers every file with a known importer, creates missing
@@ -348,9 +349,10 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   bytes as an `AssetLoadData`: it reads them as a span, or takes them over (`TakeBytes`) when its asset keeps them
   (textures keep their cooked bytes and read pixels in place, fonts keep their file), so a load never holds two copies.
   `Update` finalizes completions on the main thread: `Asset::FinalizeOnMainThread` creates GPU resources on one upload
-  command list until the frame's upload or time budget is used up; the rest waits for the next frame. Generations
-  discard results of loads that were superseded by a reload, unload or cancellation. `LoadAssetSync` is for tools, tests
-  and scene switches. Budgets, eviction and the queue are described in [Streaming and residency](#streaming-and-residency).
+  command list, in steps, until the frame's upload or time budget is used up (`AssetFinalizeResult::Pending`: the asset
+  continues next frame, first in line). Generations discard results of loads that were superseded by a reload, unload
+  or cancellation. `LoadAssetSync` is for tools, tests and scene switches (unbudgeted: it finishes at once). Budgets,
+  eviction, uploads and the queue are described in [Streaming and residency](#streaming-and-residency).
 - **Streaming**. Assets load on first use and code handles "not loaded yet" every frame: `SceneRenderer` skips or
   substitutes what is pending and counts it (`SceneRendererStats::PendingAssets`), `AssetMeshProvider` reports meshes
   as unavailable until they load, and audio sources start when their clip is ready. The content version and change
@@ -403,9 +405,18 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   finalized. Requests, `Update`, finished reads and handled completions pump it; a pump requested while one runs is
   left to that one, so loads that run inline (no job system) never recurse. `CancelLoad` and `UnloadAsset` remove queued
   requests; dispatched loads check their generation before reading and before decoding.
-- **Bounded uploads**. `ProcessCompletions` stops finalizing once the frame's uploaded GPU bytes (the GPU memory of the
-  finalized assets) reach `UploadBytesPerFrame` or `FinalizeMsPerFrame` has passed; the first completion of a frame
-  always runs. NVRHI pools the staging memory of each command list without a limit, so after
+- **Bounded uploads**. Assets upload in steps of at most `c_AssetUploadStepBytes` (4 MiB, about a millisecond of
+  memcpy): textures in bands of rows of a level, or the rest of the mip chain once it fits in one band; meshes in ranges
+  of their buffers. Each finalization call gets what is left of the frame's budget (`AssetFinalizeContext`: upload bytes
+  and a deadline) and takes no step beyond it except its first, so every frame makes progress and a frame overshoots
+  `UploadBytesPerFrame` or `FinalizeMsPerFrame` by one step at most; textures also skip a step that would end after the
+  deadline at the speed of the latest steps. A texture is published (and gets its bindless slot) once its whole chain is
+  uploaded. Uploads report the bytes they copied (`AssetFinalizeContext::UploadedBytes`).
+- **Staging** (`Renderer/StagingTexturePool.h`). Texture bands go through CPU-writable staging textures of the
+  renderer's pool, reused once the frames that copied from them are done (`Renderer::BeginFrame`), so streaming
+  allocates no staging memory once warm. Budgeted uploads wait while the staging still in flight is at its limit
+  (64 MiB), idle staging is kept up to 16 MiB and all of it is returned after 120 frames without uploads. Mesh ranges go
+  through NVRHI's upload manager, which pools the staging memory of each command list without a limit: after
   `c_StagingReleaseFrames` (120) frames without uploads the manager drops its upload command list (submissions in flight
   keep it alive until the GPU is done) and creates a new one with the next upload.
 - **Statistics** (`GetStats`, `GetResidencyInfo`): resident bytes and budget per pool, queued loads per priority, loads

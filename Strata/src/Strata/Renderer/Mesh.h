@@ -55,8 +55,10 @@ namespace Strata
 		std::vector<uint8_t> Serialize() const;
 		static Ref<Mesh> Deserialize(std::span<const uint8_t> data, std::string* outError = nullptr);
 
-		// Creates the GPU vertex and index buffers (the CPU geometry stays for physics and picking).
-		bool FinalizeOnMainThread(const AssetFinalizeContext& context) override;
+		// Creates the GPU vertex and index buffers and uploads the geometry into them in steps of at most
+		// c_AssetUploadStepBytes, as far as the context's budget allows (Pending: the next call continues). The CPU geometry
+		// stays for physics and picking.
+		AssetFinalizeResult FinalizeOnMainThread(const AssetFinalizeContext& context) override;
 		// The CPU geometry and, once uploaded, the GPU buffers (each counted once, in its own pool).
 		AssetMemoryUsage GetMemoryUsage() const override;
 
@@ -82,6 +84,9 @@ namespace Strata
 		nvrhi::BufferHandle m_PositionBuffer;
 		nvrhi::BufferHandle m_AttributeBuffer;
 		nvrhi::BufferHandle m_IndexBuffer;
+		// Bytes of the geometry uploaded so far, counting positions, attributes and indices one after the other.
+		uint64_t m_UploadOffset = 0;
+		bool m_Uploaded = false;
 	};
 
 	namespace MeshUtils

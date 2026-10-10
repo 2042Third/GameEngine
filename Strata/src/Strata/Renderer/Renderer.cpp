@@ -14,6 +14,7 @@ namespace Strata
 			GraphicsDevice* Device = nullptr;
 			Scope<ShaderLibrary> Shaders;
 			Scope<BindlessTextureTable> BindlessTextures;
+			Scope<StagingTexturePool> StagingTextures;
 
 			nvrhi::SamplerHandle LinearClamp;
 			nvrhi::SamplerHandle LinearWrap;
@@ -94,6 +95,7 @@ namespace Strata
 		s_Data->BindlessTextures->SetReservedTexture(BindlessTextureTable::c_WhiteSlot, s_Data->WhiteTexture);
 		s_Data->BindlessTextures->SetReservedTexture(BindlessTextureTable::c_BlackSlot, s_Data->BlackTexture);
 		s_Data->BindlessTextures->SetReservedTexture(BindlessTextureTable::c_FlatNormalSlot, s_Data->FlatNormalTexture);
+		s_Data->StagingTextures = CreateScope<StagingTexturePool>(nvrhiDevice, device.GetMaxFramesInFlight());
 		return true;
 	}
 
@@ -135,12 +137,19 @@ namespace Strata
 		return *s_Data->BindlessTextures;
 	}
 
+	StagingTexturePool& Renderer::GetStagingTextures()
+	{
+		ST_CORE_ASSERT(s_Data, "Renderer is not initialized");
+		return *s_Data->StagingTextures;
+	}
+
 	void Renderer::BeginFrame()
 	{
 		if (!s_Data)
 			return;
 
 		s_Data->BindlessTextures->BeginFrame(s_Data->Device->GetFrameIndex());
+		s_Data->StagingTextures->BeginFrame(s_Data->Device->GetFrameIndex());
 		if (nvrhi::ITexture* backBuffer = s_Data->Device->GetBackBuffer())
 		{
 			s_Data->FrameCommandList->open();

@@ -164,8 +164,11 @@ namespace
 						manager->GetAsset(textures[(frame + offset) % c_TextureCount], AssetPriority::High);
 				});
 			}
-			// Everything requested last has arrived.
-			RunDeviceFrame(gpu, [&]() { manager->Update(); });
+			// Everything requested last arrives: finalization takes 4 ms per frame and uploads textures in steps.
+			uint32_t settleFrames = 0;
+			for (; settleFrames < 120 && manager->HasPendingLoads(); settleFrames++)
+				RunDeviceFrame(gpu, [&]() { manager->Update(); });
+			INFO("Frames until every load was finalized: ", settleFrames);
 			REQUIRE_FALSE(manager->HasPendingLoads());
 
 			SettleDevice(gpu);
@@ -265,23 +268,38 @@ TEST_SUITE("GPU.Assets.Residency")
 		for (uint64_t index = 0; index < 4; index++)
 			textures.push_back(manager->Add(0x20000 + index, cooked));
 
-		// 5 MB per frame: a texture of 5.6 MB uses it up, so one texture is finalized per frame.
+		// 5 MB per frame. A texture of 5.6 MB uploads in two steps (level 0 is one 4 MiB band, the smaller levels the
+		// other), and a frame takes no step beyond its budget except its first: the four textures need five frames.
 		AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
 		budgets.UploadBytesPerFrame = 5 * c_MB;
+		budgets.FinalizeMsPerFrame = 1000.0f; // Only the byte budget limits these frames, however slow the machine
 		manager->SetResidencyBudgets(budgets);
 		for (AssetHandle texture : textures)
 			manager->RequestLoad(texture);
-		for (uint32_t frame = 1; frame <= 4; frame++)
+		uint64_t uploadedTotal = 0;
+		uint32_t frames = 0;
+		uint32_t previouslyReady = 0;
+		while (frames < 10)
 		{
 			manager->Update();
+			frames++;
+			const uint64_t uploaded = manager->GetStats().UploadedBytesLastFrame;
+			CHECK(uploaded > 0);
+			CHECK(uploaded <= budgets.UploadBytesPerFrame + c_AssetUploadStepBytes);
+			uploadedTotal += uploaded;
 			uint32_t ready = 0;
 			for (AssetHandle texture : textures)
 				ready += manager->GetAssetState(texture) == AssetState::Ready ? 1 : 0;
-			CHECK(ready == frame);
-			CHECK(manager->GetStats().UploadedBytesLastFrame == textureBytes);
+			CHECK(ready >= previouslyReady);
+			CHECK(ready - previouslyReady <= 1); // Never more than a texture's worth in a frame
+			previouslyReady = ready;
+			if (ready == textures.size())
+				break;
 		}
+		CHECK(frames == 5);
+		CHECK(uploadedTotal == 4 * textureBytes);
 		AssetManagerStats stats = manager->GetStats();
-		CHECK(stats.UploadedBytesWindowMax == textureBytes);
+		CHECK(stats.UploadedBytesWindowMax <= budgets.UploadBytesPerFrame + c_AssetUploadStepBytes);
 		CHECK(stats.FinalizeMsWindowMax > 0.0f);
 		CHECK(stats.StagingReleases == 0);
 

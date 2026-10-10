@@ -41,7 +41,7 @@ namespace
 	{
 		nvrhi::CommandListHandle commandList = device.GetDevice()->createCommandList();
 		commandList->open();
-		const bool finalized = asset.FinalizeOnMainThread(AssetFinalizeContext { commandList, nullptr });
+		const bool finalized = asset.FinalizeOnMainThread(AssetFinalizeContext { commandList, nullptr }) == AssetFinalizeResult::Done;
 		commandList->close();
 		device.GetDevice()->executeCommandList(commandList);
 		return finalized;

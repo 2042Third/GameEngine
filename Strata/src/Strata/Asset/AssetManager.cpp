@@ -507,7 +507,8 @@ namespace Strata
 			commandList = Renderer::GetDevice()->createCommandList();
 			commandList->open();
 		}
-		if (!asset->FinalizeOnMainThread(AssetFinalizeContext { commandList, this }))
+		// Without an upload budget the asset finishes in this call.
+		if (asset->FinalizeOnMainThread(AssetFinalizeContext { commandList, this }) != AssetFinalizeResult::Done)
 			ST_CORE_WARN("Memory asset '{}' could not be finalized", metadata.Name);
 		if (commandList)
 		{
@@ -662,6 +663,9 @@ namespace Strata
 			std::scoped_lock<std::mutex> lock(m_Mutex);
 			budgets = m_Budgets;
 		}
+		// More than an hour is no limit (and would overflow the clock's arithmetic).
+		const float finalizeMs = std::min(budgets.FinalizeMsPerFrame, 3600.0f * 1000.0f);
+		const auto deadline = start + std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<float, std::milli>(finalizeMs));
 
 		nvrhi::ICommandList* commandList = nullptr;
 		if (Renderer::IsInitialized())
@@ -677,52 +681,74 @@ namespace Strata
 		std::vector<Ref<Asset>> released;
 		while (!completions.empty())
 		{
-			// The first completion always proceeds, so an asset larger than the budget still loads.
-			if (applyBudget && processed > 0 && (uploadedBytes >= budgets.UploadBytesPerFrame || elapsedMs() >= budgets.FinalizeMsPerFrame))
+			// The frame's first upload step always proceeds, so an asset larger than the budget still loads.
+			if (applyBudget && processed > 0 && (uploadedBytes >= budgets.UploadBytesPerFrame || std::chrono::steady_clock::now() >= deadline))
 				break;
 
-			Completion completion = std::move(completions.front());
-			completions.pop_front();
+			Completion& completion = completions.front();
 			processed++;
-			// The load leaves the flight once it is handled, whatever becomes of it; the queue may dispatch the next one.
-			m_Queue.OnLoadFinished(completion.InFlightBytes);
-
+			bool current = false;
 			{
 				std::scoped_lock<std::mutex> lock(m_Mutex);
 				auto it = m_Entries.find(completion.Handle);
-				if (it == m_Entries.end() || it->second.Generation != completion.Generation)
-					continue; // Unregistered, unloaded, cancelled or reloaded since the request: discard
+				current = it != m_Entries.end() && it->second.Generation == completion.Generation;
+			}
+			if (!current)
+			{
+				// Unregistered, unloaded, cancelled or reloaded since the request (also while its upload was under way):
+				// discard. The load leaves the flight; the queue may dispatch the next one.
+				m_Queue.OnLoadFinished(completion.InFlightBytes);
+				completions.pop_front();
+				continue;
 			}
 
-			// Finalization runs without holding the lock: it may request dependent assets (e.g. a material's textures).
-			if (completion.LoadedAsset && !completion.LoadedAsset->FinalizeOnMainThread(AssetFinalizeContext { commandList, this }))
-			{
-				completion.Error = "Failed to create GPU resources";
-				completion.LoadedAsset = nullptr;
-			}
-			// Finalizing creates and fills the asset's GPU resources: what it holds on the GPU is what it uploaded.
+			// Finalization runs without holding the lock: it may request dependent assets (e.g. a material's textures). With
+			// the budget, it gets what is left of the frame's: a large upload continues in the next frame (Pending).
 			if (completion.LoadedAsset)
-				uploadedBytes += completion.LoadedAsset->GetMemoryUsage().GetGpu();
+			{
+				AssetFinalizeContext context { commandList, this };
+				if (applyBudget)
+				{
+					context.UploadBudget = budgets.UploadBytesPerFrame - std::min(uploadedBytes, budgets.UploadBytesPerFrame);
+					context.Deadline = deadline;
+				}
+				context.UploadedBytes = &uploadedBytes;
+				const AssetFinalizeResult result = completion.LoadedAsset->FinalizeOnMainThread(context);
+				if (result == AssetFinalizeResult::Pending && applyBudget)
+					break; // Stays first in line
+				if (result != AssetFinalizeResult::Done)
+				{
+					// Without a budget an asset has to finish: one that still asks for more is broken.
+					completion.Error = result == AssetFinalizeResult::Pending ? "Finalization did not finish without an upload budget"
+						: "Failed to create GPU resources";
+					completion.LoadedAsset = nullptr;
+				}
+			}
+
+			// The load leaves the flight once it is handled, whatever becomes of it; the queue may dispatch the next one.
+			m_Queue.OnLoadFinished(completion.InFlightBytes);
+			Completion handled = std::move(completion);
+			completions.pop_front();
 
 			std::scoped_lock<std::mutex> lock(m_Mutex);
-			auto it = m_Entries.find(completion.Handle);
-			if (it == m_Entries.end() || it->second.Generation != completion.Generation)
+			auto it = m_Entries.find(handled.Handle);
+			if (it == m_Entries.end() || it->second.Generation != handled.Generation)
 				continue;
 
 			AssetEntry& entry = it->second;
-			if (completion.LoadedAsset)
+			if (handled.LoadedAsset)
 			{
-				released.push_back(SetLoadedLocked(entry, completion.LoadedAsset));
+				released.push_back(SetLoadedLocked(entry, handled.LoadedAsset));
 				entry.State = AssetState::Ready;
 				entry.Error.clear();
-				PublishContentChange(completion.Handle);
+				PublishContentChange(handled.Handle);
 			}
 			else
 			{
 				entry.State = AssetState::Failed;
-				entry.Error = completion.Error;
+				entry.Error = handled.Error;
 				ST_CORE_ERROR("Failed to load asset '{}' ({}): {}", entry.Metadata.Path.empty() ? entry.Metadata.Name : entry.Metadata.Path,
-					entry.Metadata.Handle.ToString(), completion.Error);
+					entry.Metadata.Handle.ToString(), handled.Error);
 			}
 			m_TotalLoadsCompleted++;
 		}

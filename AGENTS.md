@@ -300,7 +300,9 @@ The threading model, frame loop and pipelines these rules protect are described 
   `Asset/AssetRegistration.cpp` (it takes the stored bytes over with `AssetLoadData::TakeBytes` when the asset keeps
   them, instead of copying them), an importer if it comes from external files, `GetMemoryUsage` reporting what it holds
   in each pool once finalized, and tests for round trips and corrupt data (every loader must reject truncated or
-  garbage bytes without crashing).
+  garbage bytes without crashing). GPU uploads in `FinalizeOnMainThread` go in steps of at most
+  `c_AssetUploadStepBytes` within the context's budget (`AssetFinalizeContext`, `AssetFinalizeResult::Pending`) and
+  report their bytes; never upload an unbounded amount in one call.
 
 ## Scripting
 
@@ -625,7 +627,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   black after tone mapping). Instances with a mirroring transform (negative determinant) use
   pipelines with clockwise front faces and flip their tangent handedness (`c_InstanceMirrored`).
 - Everything streams: meshes, materials and textures that are still loading are skipped or drawn with
-  fallbacks and counted in `SceneRendererStats::PendingAssets`; never block a frame on an asset.
+  fallbacks and counted in `SceneRendererStats::PendingAssets`; never block a frame on an asset. Asset uploads are
+  budgeted per frame and go in steps (Docs/Architecture.md, "Streaming and residency"); texture bands use the staging
+  textures of `Renderer::GetStagingTextures()` (`StagingTexturePool`, recycled in `Renderer::BeginFrame`), so code
+  that streams with a GPU must run device frames for staging to be reused.
 - Overlays (`SceneRenderOptions`, all off by default) are drawn after post-processing with exact display
   colors into the output texture (then copied into an external target): the infinite ground grid, the
   selection outline (from the entity-ID buffer, so alpha-blended surfaces get none) and `DebugDraw` line

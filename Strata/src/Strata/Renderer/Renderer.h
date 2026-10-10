@@ -4,6 +4,7 @@
 #include "Strata/Renderer/BindlessTextureTable.h"
 #include "Strata/Renderer/GraphicsDevice.h"
 #include "Strata/Renderer/ShaderLibrary.h"
+#include "Strata/Renderer/StagingTexturePool.h"
 
 #include <nvrhi/nvrhi.h>
 
@@ -34,9 +35,11 @@ namespace Strata
 		static nvrhi::IDevice* GetDevice();
 		static ShaderLibrary& GetShaderLibrary();
 		static BindlessTextureTable& GetBindlessTextures();
+		// Staging textures for uploads (textures upload through them).
+		static StagingTexturePool& GetStagingTextures();
 
-		// Called by the application after the graphics device began a frame: recycles bindless slots and clears the
-		// back buffer (when there is one) to black, so layers render onto a defined image.
+		// Called by the application after the graphics device began a frame: recycles bindless slots and staging textures
+		// and clears the back buffer (when there is one) to black, so layers render onto a defined image.
 		static void BeginFrame();
 
 		static nvrhi::ISampler* GetLinearClampSampler();

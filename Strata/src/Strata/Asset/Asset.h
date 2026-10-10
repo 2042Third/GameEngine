@@ -3,8 +3,10 @@
 #include "Strata/Asset/AssetTypes.h"
 #include "Strata/Core/Base.h"
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <string>
 
 namespace nvrhi
@@ -42,10 +44,30 @@ namespace Strata
 		return handle.IsValid() && static_cast<uint64_t>(handle) <= c_MaxBuiltinAssetHandle;
 	}
 
+	// The most an asset that uploads in steps (AssetFinalizeContext) copies in one step: about a millisecond of memcpy, so a
+	// frame's finalization ends close to its deadline.
+	constexpr uint64_t c_AssetUploadStepBytes = 4ull << 20;
+
+	// What a call of Asset::FinalizeOnMainThread achieved.
+	enum class AssetFinalizeResult : uint8_t
+	{
+		Done = 0, // Finalized: the asset can be published
+		Pending,  // The call's upload budget ran out first: the asset continues in the next call (a later frame)
+		Failed
+	};
+
 	struct AssetFinalizeContext
 	{
 		nvrhi::ICommandList* CommandList = nullptr; // Upload command list; null when no renderer is running
 		AssetManagerBase* Manager = nullptr;        // Manager publishing the asset (null for standalone assets)
+		// The call's share of the frame's upload budget. Assets that upload in steps of at most c_AssetUploadStepBytes
+		// (textures: bands of rows; meshes: ranges of their buffers) take no further step once the next one would exceed
+		// UploadBudget or Deadline has passed, and return Pending; the first step of a call is always taken, so every call
+		// makes progress. Unlimited unless the manager budgets the frame (loads it finalizes in Update).
+		uint64_t UploadBudget = std::numeric_limits<uint64_t>::max();
+		std::chrono::steady_clock::time_point Deadline = std::chrono::steady_clock::time_point::max();
+		// When set, the GPU bytes the call uploaded are added to it (upload budgets and statistics).
+		uint64_t* UploadedBytes = nullptr;
 	};
 
 	// Memory an asset holds, per residency pool (see AssetResidencyBudgets): each pool has its own budget, because
@@ -88,9 +110,10 @@ namespace Strata
 		virtual AssetType GetType() const = 0;
 
 		// Called on the main thread once the asset has been loaded, before it becomes Ready. GPU assets create their
-		// GPU resources here; assets referencing others may request them from the context's manager. Must not block
-		// on other loads (no LoadAssetSync). Return false on failure.
-		virtual bool FinalizeOnMainThread(const AssetFinalizeContext&) { return true; }
+		// GPU resources here and report what they uploaded (AssetFinalizeContext::UploadedBytes); assets referencing others
+		// may request them from the context's manager. Must not block on other loads (no LoadAssetSync). Large uploads may
+		// be split over several calls within the context's budget (Pending); a call with an unlimited budget finishes.
+		virtual AssetFinalizeResult FinalizeOnMainThread(const AssetFinalizeContext&) { return AssetFinalizeResult::Done; }
 
 		// Approximate memory held by the asset, per pool. Asset managers read it once the asset is finalized (for
 		// residency budgets, upload budgets and statistics), so it must describe the asset's state from then on.
