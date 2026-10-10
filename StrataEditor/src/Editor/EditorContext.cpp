@@ -4,6 +4,7 @@
 #include "Editor/ProjectSamples.h"
 #include "Editor/ScriptProject.h"
 
+#include <Strata/Asset/AssetDependencies.h>
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Audio/AudioEngine.h>
 #include <Strata/Core/Crypto.h>
@@ -361,9 +362,13 @@ namespace Strata
 				*outError = "The scene has not been saved yet; save it under a path first";
 			return false;
 		}
-		const std::string document = JsonUtils::Dump(SceneSerializer::Serialize(*m_EditScene), 1, '\t') + "\n";
+		// What the scene references comes from the JSON at hand: saving a large scene parses no document again.
+		const nlohmann::json json = SceneSerializer::Serialize(*m_EditScene);
+		std::vector<AssetHandle> references;
+		const bool scanned = AssetDependencies::ScanDocument(AssetType::Scene, json, references);
+		const std::string document = JsonUtils::Dump(json, 1, '\t') + "\n";
 		const std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(document.data()), document.size());
-		if (!m_AssetManager->SaveNativeAsset(m_SceneHandle, bytes, false, outError))
+		if (!m_AssetManager->SaveNativeAsset(m_SceneHandle, bytes, false, outError, scanned ? &references : nullptr))
 			return false;
 		m_UndoStack.MarkSaved();
 		return true;
@@ -380,9 +385,12 @@ namespace Strata
 		// The scene takes the name of its file.
 		const std::string previousName = m_EditScene->GetName();
 		m_EditScene->SetName(FileSystem::ToUTF8(FileSystem::FromUTF8(relativePath).stem()));
-		const std::string document = JsonUtils::Dump(SceneSerializer::Serialize(*m_EditScene), 1, '\t') + "\n";
+		const nlohmann::json json = SceneSerializer::Serialize(*m_EditScene);
+		std::vector<AssetHandle> references;
+		const bool scanned = AssetDependencies::ScanDocument(AssetType::Scene, json, references);
+		const std::string document = JsonUtils::Dump(json, 1, '\t') + "\n";
 		const std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(document.data()), document.size());
-		const AssetHandle handle = m_AssetManager->CreateNativeAsset(relativePath, bytes, outError);
+		const AssetHandle handle = m_AssetManager->CreateNativeAsset(relativePath, bytes, outError, scanned ? &references : nullptr);
 		if (!handle.IsValid())
 		{
 			m_EditScene->SetName(previousName);

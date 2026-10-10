@@ -99,15 +99,21 @@ namespace Strata
 		// taken, " (n)" is appended. Returns the new handle, or null.
 		AssetHandle ImportExternalFile(const std::filesystem::path& sourceFile, const std::string& targetDirectory, std::string* outError = nullptr);
 		// Writes a new engine-native asset (".stmat", ".stprefab", ".stscene") at a relative path that must not exist.
-		AssetHandle CreateNativeAsset(const std::string& relativePath, std::span<const uint8_t> data, std::string* outError = nullptr);
+		// `references`: what the document references, when the caller has it (AssetDependencies::ScanDocument of the JSON it
+		// serialized), so that saving a large document does not parse it once more; null: the data is scanned.
+		AssetHandle CreateNativeAsset(const std::string& relativePath, std::span<const uint8_t> data, std::string* outError = nullptr,
+			const std::vector<AssetHandle>* references = nullptr);
 		// Overwrites an engine-native asset's file. With reload, loaded copies are replaced by the saved version.
-		bool SaveNativeAsset(AssetHandle handle, std::span<const uint8_t> data, bool reload, std::string* outError = nullptr);
+		// `references` as for CreateNativeAsset.
+		bool SaveNativeAsset(AssetHandle handle, std::span<const uint8_t> data, bool reload, std::string* outError = nullptr,
+			const std::vector<AssetHandle>* references = nullptr);
 		// Moves or renames an asset (and its .meta) within the asset directory; the handle does not change.
 		bool MoveAsset(AssetHandle handle, const std::string& newRelativePath, std::string* outError = nullptr);
 		// Deletes the source file, its .meta and cached data, and unregisters the asset and its sub-assets.
 		bool DeleteAsset(AssetHandle handle, std::string* outError = nullptr);
 
-		// Whether background imports (hot reload) are queued, running, or finished and not applied yet (Update applies them).
+		// Whether background imports (hot reload), or searches of what changed engine-native assets reference, are queued,
+		// running, or finished and not applied yet (Update applies them).
 		bool HasPendingImports() const;
 
 		// The assets a pack built now would hold (every project asset, not the built-in ones, or with Prune what the scenes
@@ -148,6 +154,9 @@ namespace Strata
 			uint64_t PathGeneration = 0;           // Incremented whenever the file moves
 			bool ImportInFlight = false;
 			bool ImportQueuedAgain = false; // Changed again while importing
+			// Of assets stored as-is: incremented whenever a search of what it references starts, so that only the latest
+			// search's result is recorded (see QueueNativeReferences).
+			uint64_t ReferencesGeneration = 0;
 		};
 
 		// Everything an import needs, copied so imports can run on any thread.
@@ -180,6 +189,7 @@ namespace Strata
 			AssetHandle Handle = UUID::Null();
 			std::vector<AssetHandle> References;
 			bool Scanned = false; // Found (from the record or a scan)
+			uint64_t Generation = 0; // The source's ReferencesGeneration when the search started
 		};
 
 		std::filesystem::path ToAbsolute(std::string_view relativePath) const;
@@ -212,13 +222,19 @@ namespace Strata
 		void RemoveUnusedCacheFiles();
 
 		// References of engine-native assets (AssetDependencies::Scan of the source), cached per content in the asset's
-		// import record. Any thread: reads the record, or scans the file (`data` when given, else read) and writes the record.
-		NativeReferences FindNativeReferences(AssetHandle handle, AssetType type, const std::string& relativePath, std::span<const uint8_t> data = {}) const;
+		// import record. Any thread: reads the record, or scans the file (`data` when given, else read; `references` when the
+		// caller knows them) and writes the record.
+		NativeReferences FindNativeReferences(AssetHandle handle, AssetType type, const std::string& relativePath, std::span<const uint8_t> data = {},
+			const std::vector<AssetHandle>* references = nullptr) const;
 		// Records them with the base (main thread).
 		void ApplyNativeReferences(const NativeReferences& references);
-		// Finds and records the references of a source asset stored as-is, after it was added or changed (`data`: its new
-		// contents, when the caller has them). Does nothing for imported assets. Main thread.
-		void RefreshNativeReferences(AssetHandle handle, std::span<const uint8_t> data = {});
+		// Records the references of a source asset stored as-is that the editor has just written: `references` when the
+		// caller knows them, else found in `data` (its new contents). Does nothing for imported assets. Main thread.
+		void RefreshNativeReferences(AssetHandle handle, std::span<const uint8_t> data, const std::vector<AssetHandle>* references);
+		// Finds the references of a source asset stored as-is that was added or changed on disk on an I/O job (reading the
+		// file, and parsing it unless its record is current, takes long for large scenes); Update records them unless a later
+		// search started meanwhile. Does nothing for imported assets. Main thread.
+		void QueueNativeReferences(AssetHandle handle);
 		// The stored form's file of an asset (the cache file, or the source of assets stored as-is): calls `read` with it under
 		// the shared file lock, again at its new place when it moved meanwhile. False when the asset is unknown, its import
 		// failed or `read` fails (outError says which).
@@ -243,6 +259,7 @@ namespace Strata
 		std::condition_variable m_ImportCondition;
 		uint32_t m_ImportsInFlight = 0;
 		std::vector<ImportOutcome> m_CompletedImports;
+		std::vector<NativeReferences> m_CompletedReferences; // Of QueueNativeReferences (counted in m_ImportsInFlight)
 	};
 
 }

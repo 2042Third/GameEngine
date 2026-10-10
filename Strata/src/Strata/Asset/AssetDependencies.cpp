@@ -123,11 +123,25 @@ namespace Strata
 
 		std::string error;
 		const std::optional<nlohmann::json> document = JsonUtils::Parse(std::string_view(reinterpret_cast<const char*>(storedForm.data()), storedForm.size()), &error);
-		const nlohmann::json* content = document ? JsonUtils::Find(*document, key) : nullptr;
+		if (!document)
+		{
+			if (outError)
+				*outError = fmt::format("Invalid JSON: {}", error);
+			return false;
+		}
+		return ScanDocument(type, *document, outReferences, outError);
+	}
+
+	bool AssetDependencies::ScanDocument(AssetType type, const nlohmann::json& document, std::vector<AssetHandle>& outReferences, std::string* outError)
+	{
+		const std::string_view key = GetDocumentKey(type);
+		if (key.empty())
+			return true;
+		const nlohmann::json* content = JsonUtils::Find(document, key);
 		if (!content || !content->is_object())
 		{
 			if (outError)
-				*outError = document ? fmt::format("The document has no \"{}\" object", key) : fmt::format("Invalid JSON: {}", error);
+				*outError = fmt::format("The document has no \"{}\" object", key);
 			return false;
 		}
 

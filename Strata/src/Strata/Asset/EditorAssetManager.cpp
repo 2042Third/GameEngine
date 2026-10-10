@@ -1075,9 +1075,24 @@ namespace Strata
 	void EditorAssetManager::ProcessCompletedImports()
 	{
 		std::vector<ImportOutcome> completed;
+		std::vector<NativeReferences> references;
 		{
 			std::scoped_lock<std::mutex> lock(m_ImportMutex);
 			completed.swap(m_CompletedImports);
+			references.swap(m_CompletedReferences);
+		}
+
+		// What engine-native assets reference, unless a later search started meanwhile (its result follows).
+		for (const NativeReferences& found : references)
+		{
+			bool current = false;
+			{
+				std::scoped_lock<std::mutex> lock(m_SourceMutex);
+				auto it = m_Sources.find(found.Handle);
+				current = it != m_Sources.end() && it->second.ReferencesGeneration == found.Generation;
+			}
+			if (current)
+				ApplyNativeReferences(found);
 		}
 
 		for (ImportOutcome& outcome : completed)
@@ -1111,7 +1126,7 @@ namespace Strata
 			ProcessCompletedImports();
 
 			std::scoped_lock<std::mutex> lock(m_ImportMutex);
-			if (m_ImportsInFlight == 0 && m_CompletedImports.empty())
+			if (m_ImportsInFlight == 0 && m_CompletedImports.empty() && m_CompletedReferences.empty())
 				return;
 		}
 	}
@@ -1122,7 +1137,7 @@ namespace Strata
 	}
 
 	EditorAssetManager::NativeReferences EditorAssetManager::FindNativeReferences(AssetHandle handle, AssetType type, const std::string& relativePath,
-		std::span<const uint8_t> data) const
+		std::span<const uint8_t> data, const std::vector<AssetHandle>* references) const
 	{
 		NativeReferences result;
 		result.Handle = handle;
@@ -1145,11 +1160,11 @@ namespace Strata
 				if (record && record->is_object() && JsonUtils::GetUInt(*record, "Version", 0) == c_ImportRecordVersion && JsonUtils::GetBool(*record, "Native", false)
 					&& IsFileCurrent(sourcePath, *record, "SourceSize", "SourceTime", "SourceHash", recordChanged))
 				{
-					if (std::optional<std::vector<AssetHandle>> references = ReferencesFromJson(*record))
+					if (std::optional<std::vector<AssetHandle>> recorded = ReferencesFromJson(*record))
 					{
 						if (recordChanged)
 							FileSystem::WriteText(recordPath, JsonUtils::Dump(*record, 1, '\t'));
-						result.References = std::move(*references);
+						result.References = std::move(*recorded);
 						result.Scanned = true;
 						return result;
 					}
@@ -1166,7 +1181,11 @@ namespace Strata
 				data = *file;
 			}
 			std::string error;
-			if (!AssetDependencies::Scan(type, data, result.References, &error))
+			if (references)
+			{
+				result.References = *references;
+			}
+			else if (!AssetDependencies::Scan(type, data, result.References, &error))
 			{
 				ST_CORE_WARN("The references of '{}' could not be read: {}", relativePath, error);
 				return result;
@@ -1188,7 +1207,7 @@ namespace Strata
 		catch (const std::exception& exception)
 		{
 			ST_CORE_ERROR("Finding the references of '{}' failed: {}", relativePath, exception.what());
-			result = NativeReferences { handle, {}, false };
+			result = NativeReferences { handle, {}, false, 0 };
 		}
 		return result;
 	}
@@ -1199,7 +1218,7 @@ namespace Strata
 			SetAssetReferences(references.Handle, references.References, std::nullopt);
 	}
 
-	void EditorAssetManager::RefreshNativeReferences(AssetHandle handle, std::span<const uint8_t> data)
+	void EditorAssetManager::RefreshNativeReferences(AssetHandle handle, std::span<const uint8_t> data, const std::vector<AssetHandle>* references)
 	{
 		AssetType type = AssetType::None;
 		std::string path;
@@ -1210,8 +1229,58 @@ namespace Strata
 				return;
 			type = it->second.Type;
 			path = it->second.Path;
+			it->second.ReferencesGeneration++; // A search queued before finds the previous contents
 		}
-		ApplyNativeReferences(FindNativeReferences(handle, type, path, data));
+		ApplyNativeReferences(FindNativeReferences(handle, type, path, data, references));
+	}
+
+	void EditorAssetManager::QueueNativeReferences(AssetHandle handle)
+	{
+		AssetType type = AssetType::None;
+		std::string path;
+		uint64_t generation = 0;
+		{
+			std::scoped_lock<std::mutex> lock(m_SourceMutex);
+			auto it = m_Sources.find(handle);
+			if (it == m_Sources.end() || !it->second.Importer->StoresSourceDirectly() || !AssetDependencies::CanReference(it->second.Type))
+				return;
+			type = it->second.Type;
+			path = it->second.Path;
+			generation = ++it->second.ReferencesGeneration;
+		}
+
+		// Counted like an import: WaitForImports, HasPendingImports and the destructor wait for it too.
+		{
+			std::scoped_lock<std::mutex> lock(m_ImportMutex);
+			m_ImportsInFlight++;
+		}
+		auto search = [this, handle, type, path, generation]()
+		{
+			NativeReferences references = FindNativeReferences(handle, type, path); // Catches what it may throw
+			references.Generation = generation;
+			std::scoped_lock<std::mutex> lock(m_ImportMutex);
+			m_ImportsInFlight--;
+			try
+			{
+				m_CompletedReferences.push_back(std::move(references));
+			}
+			catch (...)
+			{
+				ST_CORE_ERROR("Out of memory while recording the references of {}", path);
+			}
+			m_ImportCondition.notify_all();
+		};
+		try
+		{
+			JobSystem::SubmitIO(search, JobPriority::Normal);
+		}
+		catch (const std::exception& exception)
+		{
+			ST_CORE_ERROR("Could not queue the search of what '{}' references: {}", path, exception.what());
+			std::scoped_lock<std::mutex> lock(m_ImportMutex);
+			m_ImportsInFlight--;
+			m_ImportCondition.notify_all();
+		}
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -1326,7 +1395,7 @@ namespace Strata
 				{
 					ST_CORE_INFO("Asset '{}' added", ToRelative(path));
 					QueueImport(handle);
-					RefreshNativeReferences(handle);
+					QueueNativeReferences(handle);
 				}
 				continue;
 			}
@@ -1352,7 +1421,7 @@ namespace Strata
 			if (direct)
 			{
 				SetStoredSize(handle, size);
-				RefreshNativeReferences(handle);
+				QueueNativeReferences(handle);
 				ReloadAsset(handle);
 			}
 			else
@@ -1564,7 +1633,7 @@ namespace Strata
 		if (direct)
 		{
 			SetStoredSize(handle, sourceSize);
-			RefreshNativeReferences(handle);
+			QueueNativeReferences(handle);
 			ReloadAsset(handle);
 			return true;
 		}
@@ -1611,7 +1680,8 @@ namespace Strata
 		return handle;
 	}
 
-	AssetHandle EditorAssetManager::CreateNativeAsset(const std::string& relativePath, std::span<const uint8_t> data, std::string* outError)
+	AssetHandle EditorAssetManager::CreateNativeAsset(const std::string& relativePath, std::span<const uint8_t> data, std::string* outError,
+		const std::vector<AssetHandle>* references)
 	{
 		auto fail = [outError](std::string message)
 		{
@@ -1648,11 +1718,12 @@ namespace Strata
 			if (it != m_Sources.end())
 				it->second.Import.Imported = true;
 		}
-		RefreshNativeReferences(handle, data);
+		RefreshNativeReferences(handle, data, references);
 		return handle;
 	}
 
-	bool EditorAssetManager::SaveNativeAsset(AssetHandle handle, std::span<const uint8_t> data, bool reload, std::string* outError)
+	bool EditorAssetManager::SaveNativeAsset(AssetHandle handle, std::span<const uint8_t> data, bool reload, std::string* outError,
+		const std::vector<AssetHandle>* references)
 	{
 		auto fail = [outError](std::string message)
 		{
@@ -1696,7 +1767,7 @@ namespace Strata
 			}
 		}
 		SetStoredSize(handle, data.size());
-		RefreshNativeReferences(handle, data);
+		RefreshNativeReferences(handle, data, references);
 		if (reload)
 			ReloadAsset(handle);
 		return true;
@@ -1772,7 +1843,7 @@ namespace Strata
 	bool EditorAssetManager::HasPendingImports() const
 	{
 		std::scoped_lock<std::mutex> lock(m_ImportMutex);
-		return m_ImportsInFlight > 0 || !m_CompletedImports.empty();
+		return m_ImportsInFlight > 0 || !m_CompletedImports.empty() || !m_CompletedReferences.empty();
 	}
 
 	bool EditorAssetManager::PlanAssetPack(const AssetPackBuildOptions& options, AssetPackBuildPlan& outPlan, std::string* outError) const

@@ -531,7 +531,11 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   prefabs and models: every asset property of every registered component, found through `ComponentRegistry`, and every
   script field of asset type; materials: their texture maps). Import records (version 2) keep both per asset and
   sub-asset. Engine-native assets, which are never imported, get a record of their own (`"Native": true`, cached per
-  content like imports: size and time, else the content hash) written when they are scanned, saved or changed on disk.
+  content like imports: size and time, else the content hash) written when they are scanned, saved or changed on disk:
+  saving records what the caller found in the JSON it serialized (`EditorContext::SaveScene` passes
+  `AssetDependencies::ScanDocument` of the scene, so a save parses no document again: a 200,000-entity scene saves in
+  the time it took before references were recorded), and a file changed on disk (`asset.reimport`, the file watcher) is
+  searched on an I/O job whose result the next update records unless a later search started meanwhile.
   The manager hands them to `AssetManagerBase::SetAssetReferences`; packs carry them as their dependency table and entry
   bounds, so `GetDependencies` and `GetBounds` answer the same in the editor and in the game, before anything loads.
 - **Importers and stored forms** (`Asset/AssetImporters.cpp`; the loaders that read the stored form are registered by

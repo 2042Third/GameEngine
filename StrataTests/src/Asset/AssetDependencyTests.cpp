@@ -277,6 +277,26 @@ TEST_SUITE("Asset.Dependencies")
 			CHECK(manager->GetDependencies(UUID(0x5002)) == Handles({ 0x9003 }));
 			record = project.Cache / (UUID(0x5002).ToString() + ".import");
 			REQUIRE(FileSystem::IsRegularFile(record));
+
+			// A caller that serialized the document passes what it references, which is recorded as it is: the document is
+			// not parsed again (the editor saving a large scene).
+			const std::vector<AssetHandle> given = Handles({ 0x9008 });
+			REQUIRE(manager->SaveNativeAsset(UUID(0x5003), ToBytes(SceneSerializer::Serialize(Scene("Main"))), false, nullptr, &given));
+			CHECK(manager->GetDependencies(UUID(0x5003)) == given);
+
+			// A file changed on disk (a watcher's report, asset.reimport) is searched on an I/O job, and recorded by the next
+			// update; when it changes again meanwhile, the latest search wins.
+			project.WriteMaterial("Materials/Brick.stmat", 0x5001, 0x9006);
+			REQUIRE(manager->ReimportAsset(UUID(0x5001)));
+			CHECK(manager->HasPendingImports());
+			project.WriteMaterial("Materials/Brick.stmat", 0x5001, 0x9007);
+			REQUIRE(manager->ReimportAsset(UUID(0x5001)));
+			manager->WaitForImports();
+			CHECK_FALSE(manager->HasPendingImports());
+			CHECK(manager->GetDependencies(UUID(0x5001)) == Handles({ 0x9007 }));
+			project.WriteMaterial("Materials/Brick.stmat", 0x5001, 0x9001, 0x9002);
+			REQUIRE(manager->ReimportAsset(UUID(0x5001)));
+			manager->WaitForImports();
 		}
 
 		// A record of an unchanged file is used as it is: a planted reference shows that the file was not scanned again.
@@ -686,6 +706,8 @@ TEST_SUITE("Asset.Groups")
 		project.WriteMaterial("Materials/Wall.stmat", 0x5100, 0x5200, 0x5201);
 		Ref<EditorAssetManager> manager = project.Open();
 		REQUIRE(manager->GetDependencies(UUID(0x5100)) == Handles({ 0x5200, 0x5201 }));
+		REQUIRE(manager->IsHandleValid(UUID(0x5200)));
+		REQUIRE(manager->IsHandleValid(UUID(0x5201)));
 
 		// A budget without room for prefetches: the material's read prefetches nothing, and the material requests its textures
 		// itself when it is finalized, as it does where no dependencies are known.
