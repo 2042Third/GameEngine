@@ -8,6 +8,8 @@
 #include "Panels/SceneHierarchyPanel.h"
 #include "TestHelpers.h"
 #include "UI/EditorActions.h"
+#include "UI/EntityIcons.h"
+#include "UI/Icons.h"
 #include "UI/ItemProbe.h"
 #include "UI/PropertyWidgets.h"
 
@@ -532,6 +534,24 @@ TEST_SUITE("Editor.UI.Hierarchy")
 		ImGuiWindow* assetWindow = editor.FindPanelWindow(EditorPanels::c_AssetInspector);
 		REQUIRE(assetWindow);
 		CHECK_FALSE(assetWindow->Hidden);
+	}
+
+	TEST_CASE("Plain entities get a full-size icon: a dashed square, or a folder while they group children")
+	{
+		Scene scene("Icons");
+		const Entity plain = scene.CreateEntity("Plain");
+		const Entity group = scene.CreateEntity("Group");
+		const Entity child = scene.CreateEntity("Child");
+		REQUIRE(scene.SetParent(child, group));
+		const entt::registry& registry = scene.GetRegistry();
+		const auto icon = [&registry](Entity entity) { return std::string(UI::GetEntityIcon(registry, entity.GetHandle())); };
+		CHECK(icon(plain) == Icons::SquareDashed);
+		CHECK(icon(child) == Icons::SquareDashed);
+		CHECK(icon(group) == Icons::Folder);
+		// What an entity is still wins: a light that has children is a light.
+		Entity light = group;
+		light.AddComponent<PointLightComponent>();
+		CHECK(icon(group) == Icons::Lightbulb);
 	}
 
 	TEST_CASE("The create button and a row's context menu create entities")

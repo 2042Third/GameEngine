@@ -4,6 +4,7 @@
 
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Scene/Components.h>
+#include <Strata/Scene/SceneHierarchy.h>
 
 #include <string_view>
 
@@ -83,7 +84,10 @@ namespace Strata::UI
 			return Icons::Weight;
 		if (registry.all_of<ScriptComponent>(entity))
 			return Icons::FileCode;
-		return Icons::Dot;
+		// Nothing but a transform: a group of its children, or an empty placeholder. Both get a full-size glyph, so the row
+		// does not read as having no icon.
+		const HierarchyComponent* hierarchy = registry.try_get<HierarchyComponent>(entity);
+		return hierarchy && hierarchy->ChildCount > 0 ? Icons::Folder : Icons::SquareDashed;
 	}
 
 }

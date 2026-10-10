@@ -48,7 +48,7 @@ namespace Strata
 		std::vector<EntityPreset> GetPresets()
 		{
 			return {
-				{ Icons::Dot, "Empty", "Entity", nlohmann::json::object() },
+				{ Icons::SquareDashed, "Empty", "Entity", nlohmann::json::object() },
 				{ Icons::Box, "Cube", "Cube", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } } } },
 				{ Icons::Globe, "Sphere", "Sphere", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::SphereMesh) } } } } },
 				{ Icons::Square, "Plane", "Plane", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::PlaneMesh) } } } } },
