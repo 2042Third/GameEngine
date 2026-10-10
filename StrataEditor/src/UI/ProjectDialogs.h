@@ -49,7 +49,7 @@ namespace Strata
 		// Where new projects and sample copies go: the remembered location, else GetDefaultLocation.
 		std::filesystem::path GetLocation() const;
 		void SetLocation(const std::filesystem::path& location);
-		// <home>/StrataProjects (the user data directory's parent when there is no home directory).
+		// <home>/StrataProjects, else (without a home directory) <user data>/Strata/Projects.
 		static std::filesystem::path GetDefaultLocation();
 
 		// Registers the "StrataLauncher" settings handler with the current ImGui context (before it loads its settings),
