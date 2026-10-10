@@ -128,6 +128,34 @@ TEST_SUITE("Asset.StreamingQueue")
 		CHECK_FALSE(queue.HasWork());
 	}
 
+	TEST_CASE("A repeated request replaces the waiting one unless that one is of a later generation")
+	{
+		RecordingQueue recorder;
+		AssetStreamingQueue& queue = recorder.Queue;
+		queue.SetLimits({ 1000 * c_MB, 1 });
+		queue.Enqueue(UUID(1), AssetPriority::Normal, 0.0f, 1, 1);
+		queue.Pump(); // Reads: what follows waits
+		queue.Enqueue(UUID(2), AssetPriority::Normal, 0.0f, 1, 1);
+		queue.Enqueue(UUID(3), AssetPriority::Low, 0.0f, 1, 5);
+
+		// The owner requested asset 3 again (generation 6, e.g. after an unload): the request is replaced, in its place.
+		queue.Enqueue(UUID(3), AssetPriority::Normal, 0.0f, 2, 6);
+		CHECK(queue.GetStats().Queued == std::array<uint32_t, 3> { 0, 2, 0 });
+		// A request of an earlier generation arriving late (a thread that decided to load before the unload) is stale: the
+		// newer request stays, so the load that follows is the one the owner still expects.
+		queue.Enqueue(UUID(3), AssetPriority::High, 0.0f, 3, 5);
+		CHECK(queue.GetStats().Queued == std::array<uint32_t, 3> { 0, 2, 0 });
+		CHECK(queue.GetQueuedCount() == 2);
+
+		queue.OnReadFinished();
+		queue.OnReadFinished();
+		REQUIRE(recorder.Dispatched.size() == 3);
+		CHECK(recorder.GetDispatchedHandles() == std::vector<uint64_t> { 1, 2, 3 });
+		CHECK(recorder.Dispatched[2].Generation == 6);
+		CHECK(recorder.Dispatched[2].Bytes == 2);
+		CHECK(recorder.Dispatched[2].Priority == AssetPriority::Normal);
+	}
+
 	TEST_CASE("Bytes in flight stay below the limit plus one asset, and one load always runs")
 	{
 		RecordingQueue recorder;

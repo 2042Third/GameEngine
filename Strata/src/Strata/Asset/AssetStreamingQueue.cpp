@@ -37,6 +37,11 @@ namespace Strata
 		if (waiting != m_WaitingKeys.end())
 		{
 			auto node = m_Waiting.find(waiting->second);
+			// A request of a later generation stays: this one is stale (its owner decided to load, was overtaken by an unload
+			// and a new request on another thread, and queued afterwards). Replacing the newer request would leave a load
+			// nobody dispatches.
+			if (node->second.Generation > generation)
+				return;
 			request.Order = node->second.Order;
 			EraseLocked(node);
 		}

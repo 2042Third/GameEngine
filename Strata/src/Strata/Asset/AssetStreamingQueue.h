@@ -21,7 +21,9 @@ namespace Strata
 		float Score = 0.0f;      // Within a priority, higher scores go first (e.g. how large on screen the asset is needed)
 		uint64_t Order = 0;      // Request order: among equal priorities and scores, earlier requests go first
 		uint64_t Bytes = 0;      // Counted in flight while the load runs: the stored size, or c_UnknownSizeBytes
-		uint64_t Generation = 0; // The owner's token for the request (AssetManagerBase: the entry's generation)
+		// The owner's token for the request, growing with every new request of the asset (AssetManagerBase: the entry's
+		// generation).
+		uint64_t Generation = 0;
 	};
 
 	struct AssetStreamingLimits
@@ -68,8 +70,9 @@ namespace Strata
 		AssetStreamingQueue(const AssetStreamingQueue&) = delete;
 		AssetStreamingQueue& operator=(const AssetStreamingQueue&) = delete;
 
-		// Queues a load of the asset (replacing a waiting request for it, which keeps its place in the request order). Does
-		// not dispatch: call Pump. A storedSize of 0 counts as c_UnknownSizeBytes; a score that is not finite counts as 0.
+		// Queues a load of the asset, replacing a waiting request for it (which keeps its place in the request order) unless
+		// that one has a later generation: generations grow with every new request of an asset, so an older one is stale.
+		// Does not dispatch: call Pump. A storedSize of 0 counts as c_UnknownSizeBytes; a score that is not finite counts as 0.
 		void Enqueue(AssetHandle handle, AssetPriority priority, float score, uint64_t storedSize, uint64_t generation);
 		// Moves the waiting request for the asset up to a higher priority, or to a higher score within its priority; it keeps
 		// its place in the request order. Returns false when nothing changed (no request waits, or it ranks as high already).
