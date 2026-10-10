@@ -91,7 +91,11 @@ Open items and deferrals later waves own:
   justified in its test; `Tools/PerfStability.py` runs the perf label repeatedly and reports each metric's spread, pass
   rate and confirmations. Script dispatch prefetches instances ahead: the hardware prefetchers had followed the
   instances only in some code layouts, so a frame of 300,000 trivial scripts cost 6.6 or 9.8 ms with identical sources
-  (now about 6.2 ms in both).
+  (now about 6.2 ms in both). On the machine the seven wave-2 workstreams shared, `-L perf` passed five runs in a row
+  once it was quiet: all 11 runs at up to 22% CPU load (the perf tests' own) passed without a single confirmation, while
+  runs during the other workstreams' builds failed single metrics as well as many. Open: once in about 45 runs, under
+  load, the editor failed to open `PerfGPU.Editor`'s generated million-entity scene ("Invalid JSON", cause unknown); the
+  test now describes the scene files on disk when the editor fails (`Tests::DescribeJsonFile`).
 
 ## Waves
 
