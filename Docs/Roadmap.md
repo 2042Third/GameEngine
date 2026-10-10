@@ -74,6 +74,14 @@ module-foundation, ran as its own workstream):
   `c:`/`t:` filters, reveal and drop zones; one-step commands for many entities (`entity.setParent {entities, index}`,
   `entity.copy`, `entity.paste`, `entity.duplicate {entities}`, `component.set {entities}`) and multi-entity property
   edits. Undo now restores sibling orders whose recorded positions agree by chance, and copying many roots is linear.
+- `editor-authoring`, phase B (the panels): an Asset tab next to the Inspector (materials edited live, a drag one undo
+  step; import settings as a draft applied in the background; texture preview); a Hierarchy that draws only the rows in
+  view (about 0.012 ms per frame at 100,000 roots, it was 12.9 ms), with multi-selection (Ctrl, Shift, a box), drops
+  before, after and into rows, rename in place, icons, an eye, prefab badges, a search box and reveal of entities
+  selected elsewhere; an Inspector that edits every selected entity at once (mixed values, axis labels that reset,
+  component menus with Copy and Paste Values, searchable entity and asset pickers, the scene's settings and sky with
+  nothing selected, New Material and the material in place); a play-mode banner; and selection shortcuts (Delete, Ctrl+D,
+  Ctrl+C/X/V, Ctrl+A, F2) that act only where the keyboard focus is.
 
 Open items and deferrals later waves own:
 
@@ -85,9 +93,11 @@ Open items and deferrals later waves own:
   what is in view, so this needs BC textures and mip streaming (`texture-cook-v2`, `mip-streaming`). Mesh uploads still
   go through NVRHI's upload manager until the budgeted upload queue (`mip-streaming`); `AssetManagerBase::GetStats`
   and eviction scans are linear in the registered assets (`render-scene`, `world-partition`).
-- Deleting one entity among 100,000 sibling roots renumbers the sibling list (about 0.5 ms), and the Hierarchy panel
-  draws every root each frame (Hierarchy v2 in `editor-authoring`). Starting play copies a 1,000,000-entity scene in
-  about 0.7 s (`scene-streaming`).
+- Deleting one entity among 100,000 sibling roots renumbers the sibling list (about 0.5 ms). Starting play copies a
+  1,000,000-entity scene in about 0.7 s (`scene-streaming`). The Inspector reads the values of every selected entity each
+  frame (to show mixed values): a selection of 100,000 entities adds about 8 ms to a frame while it lasts
+  (`Perf.Editor.SelectionFrame100kSelected`); a cache invalidated by component signals and the transforms version would
+  make it follow changes instead.
 - The editor starts in 0.7-1.0 s (Release, to its first frame on screen), not the 0.4 s the pillar names. An idle
   editor answers input and automation requests on its next throttled frame (up to 33 ms, 100 ms unfocused) until it
   waits on events instead. Project thumbnails and search in the recent projects move to `content-and-prefabs`.
