@@ -174,9 +174,10 @@ entities (fresh IDs, references among them remapped, also in another scene);
 `prefab.create {"entities": ["<id>"], "path": "Prefabs/Block.stprefab"}`, then
 `prefab.instantiate {"prefab": "Prefabs/Block.stprefab", "components": {"Transform": {"Translation": [2, 0, 0]}}}`.
 
-**Edit**: `component.add` (adds if missing, then sets values), `component.set` (component must exist; `"entities": [...]`
-instead of `"entity"` sets the same values on all of them in one step), `component.remove`, `entity.rename`,
-`entity.setActive`, `entity.delete`, `scene.setSettings` (gravity, timestep).
+**Edit**: `component.add` (adds if missing, then sets values), `component.set` (component must exist),
+`component.remove`, `entity.setActive`: each takes `"entities": [...]` instead of `"entity"` to change all of them in one
+undo step (as the inspector does for a multi-selection); `entity.rename`, `entity.delete`, `scene.setSettings` (gravity,
+timestep).
 
 **Materials**: `material.set {"material": "Materials/Red.stmat", "properties": {"Roughness": 0.3}}` saves the material
 file and is one undo step (`edit.undo` restores the file and what entities show); entities using it show the change in

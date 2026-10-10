@@ -104,11 +104,8 @@ namespace Strata
 			return EditorCommandResult::Fail(std::move(error), kind);
 		}
 
-		// The format of entity.copy's data, which entity.paste takes.
-		constexpr const char* c_EntitiesFormat = "Entities";
-		constexpr uint32_t c_EntitiesFormatVersion = 1;
-
-		// The entities of a command that takes "entity" (one) or "entities" (several): exactly one of the two.
+		// The entities of a command that takes "entity" (one) or "entities" (several, each once, in the order given):
+		// exactly one of the two.
 		std::vector<Entity> GetTargets(CommandArguments& arguments, Scene& scene)
 		{
 			const bool one = arguments.Has("entity");
@@ -119,7 +116,12 @@ namespace Strata
 				return {};
 			}
 			if (many)
-				return arguments.GetEntities(scene, "entities");
+			{
+				std::vector<Entity> entities = arguments.GetEntities(scene, "entities");
+				std::unordered_set<UUID> seen;
+				std::erase_if(entities, [&seen](const Entity entity) { return !seen.insert(entity.GetUUID()).second; });
+				return entities;
+			}
 			Entity entity = arguments.GetEntity(scene, "entity");
 			return arguments.IsValid() ? std::vector<Entity> { entity } : std::vector<Entity>();
 		}
@@ -449,7 +451,7 @@ namespace Strata
 					return arguments.Fail();
 				nlohmann::json data = SceneSerializer::SerializeEntities(scene, roots);
 				const size_t count = data["Entities"].size();
-				data["Strata"] = { { "Format", c_EntitiesFormat }, { "Version", c_EntitiesFormatVersion } };
+				data["Strata"] = { { "Format", c_EntityDataFormat }, { "Version", c_EntityDataFormatVersion } };
 				return EditorCommandResult::Ok({ { "data", std::move(data) }, { "roots", ToJson(roots) }, { "count", count } });
 			} });
 
@@ -475,7 +477,7 @@ namespace Strata
 					const nlohmann::json* header = JsonUtils::Find(data, "Strata");
 					const nlohmann::json* format = header ? JsonUtils::Find(*header, "Format") : nullptr;
 					const nlohmann::json* entities = JsonUtils::Find(data, "Entities");
-					if (header && (!format || *format != c_EntitiesFormat))
+					if (header && (!format || *format != c_EntityDataFormat))
 						arguments.SetError("Parameter 'data': not entity data (its \"Strata\" header names another format)");
 					else if (!entities || !entities->is_array() || entities->empty())
 						arguments.SetError("Parameter 'data': expected entity.copy's data, with a non-empty \"Entities\" array");
@@ -614,20 +616,29 @@ namespace Strata
 				return Finish(context, transaction);
 			} });
 
-		registry.Register({ "entity.setActive", "Activates or deactivates an entity; inactive entities and their descendants are not simulated or drawn (undoable; while playing it changes the running copy only).",
-			ObjectSchema({ { "entity", EntitySchema("Entity") }, { "active", BoolSchema("Whether the entity is active") } }, { "entity", "active" }),
+		registry.Register({ "entity.setActive",
+			"Activates or deactivates entities; inactive entities and their descendants are not simulated or drawn (one undo step; while playing "
+			"it changes the running copy only).",
+			ObjectSchema({
+				{ "entity", EntitySchema("Entity") },
+				{ "entities", EntityArraySchema("Entities (instead of entity)") },
+				{ "active", BoolSchema("Whether the entities are active") } },
+				{ "active" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				Scene& scene = *context.GetActiveScene();
 				CommandArguments arguments(parameters);
-				Entity entity = arguments.GetEntity(scene, "entity");
+				const std::vector<Entity> entities = GetTargets(arguments, scene);
 				if (!arguments.Has("active"))
 					arguments.SetError("Missing parameter 'active'");
 				const bool active = arguments.GetBool("active", true);
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				SceneEditTransaction transaction(scene, active ? "Activate Entity" : "Deactivate Entity", { entity.GetUUID() });
-				entity.SetActive(active);
+				const std::string name = entities.size() == 1 ? (active ? "Activate Entity" : "Deactivate Entity")
+					: (active ? "Activate Entities" : "Deactivate Entities");
+				SceneEditTransaction transaction(scene, name, GetIds(entities));
+				for (Entity entity : entities)
+					entity.SetActive(active);
 				return Finish(context, transaction);
 			} });
 
@@ -661,42 +672,64 @@ namespace Strata
 				return EditorCommandResult::Ok({ { "components", std::move(components) } });
 			} });
 
-		registry.Register({ "component.add", "Adds a component (if missing) and sets the given property values (undoable; while playing it changes the running copy only).",
-			ObjectSchema({ { "entity", EntitySchema("Entity") }, { "component", StringSchema("Component type") }, { "values", AnyObjectSchema("Property values") } }, { "entity", "component" }),
+		registry.Register({ "component.add",
+			"Adds a component to an entity (or to every one of the entities) where it is missing and sets the given property values, in one undo "
+			"step (while playing it changes the running copy only).",
+			ObjectSchema({
+				{ "entity", EntitySchema("Entity") },
+				{ "entities", EntityArraySchema("Entities (instead of entity)") },
+				{ "component", StringSchema("Component type") },
+				{ "values", AnyObjectSchema("Property values") } },
+				{ "component" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				Scene& scene = *context.GetActiveScene();
 				CommandArguments arguments(parameters);
-				Entity entity = arguments.GetEntity(scene, "entity");
+				const std::vector<Entity> entities = GetTargets(arguments, scene);
 				const ComponentInfo* info = GetComponentInfo(arguments, "component", true);
 				const nlohmann::json* values = arguments.FindObject("values");
 				if (!arguments.IsValid())
 					return arguments.Fail();
 
-				SceneEditTransaction transaction(scene, fmt::format("Add {}", info->DisplayName), { entity.GetUUID() });
+				SceneEditTransaction transaction(scene, fmt::format("Add {}", info->DisplayName), GetIds(entities));
 				std::string error;
-				if (!ApplyComponents(entity, { { info->Name, values ? *values : nlohmann::json::object() } }, &error))
-					return RollBack(transaction, error, EditorCommandError::InvalidParameters);
+				for (Entity entity : entities)
+				{
+					if (!ApplyComponents(entity, { { info->Name, values ? *values : nlohmann::json::object() } }, &error))
+						return RollBack(transaction, error, EditorCommandError::InvalidParameters);
+				}
 				return Finish(context, transaction);
 			} });
 
-		registry.Register({ "component.remove", "Removes a component from an entity (undoable; while playing it changes the running copy only).",
-			ObjectSchema({ { "entity", EntitySchema("Entity") }, { "component", StringSchema("Component type") } }, { "entity", "component" }),
+		registry.Register({ "component.remove",
+			"Removes a component from an entity (or from every one of the entities, which must all have it), in one undo step (while playing it "
+			"changes the running copy only).",
+			ObjectSchema({
+				{ "entity", EntitySchema("Entity") },
+				{ "entities", EntityArraySchema("Entities (instead of entity)") },
+				{ "component", StringSchema("Component type") } },
+				{ "component" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				Scene& scene = *context.GetActiveScene();
 				CommandArguments arguments(parameters);
-				Entity entity = arguments.GetEntity(scene, "entity");
+				const std::vector<Entity> entities = GetTargets(arguments, scene);
 				const ComponentInfo* info = GetComponentInfo(arguments, "component", true);
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				if (!info->Has(scene.GetRegistry(), entity.GetHandle()))
-					return EditorCommandResult::Fail(fmt::format("The entity has no {} component", info->Name));
+				for (const Entity entity : entities)
+				{
+					if (!info->Has(scene.GetRegistry(), entity.GetHandle()))
+						return EditorCommandResult::Fail(fmt::format("'{}' has no {} component", entity.GetName(), info->Name));
+				}
 
-				SceneEditTransaction transaction(scene, fmt::format("Remove {}", info->DisplayName), { entity.GetUUID() });
+				SceneEditTransaction transaction(scene, fmt::format("Remove {}", info->DisplayName), GetIds(entities));
 				std::string error;
-				if (!ComponentAccess::RemoveComponent(entity, *info, &error))
-					return RollBack(transaction, error, EditorCommandError::Failed);
+				for (Entity entity : entities)
+				{
+					if (!ComponentAccess::RemoveComponent(entity, *info, &error))
+						return RollBack(transaction, error, EditorCommandError::Failed);
+				}
 				return Finish(context, transaction);
 			} });
 

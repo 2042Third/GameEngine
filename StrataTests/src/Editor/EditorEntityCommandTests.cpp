@@ -314,6 +314,52 @@ TEST_SUITE("Editor.Commands")
 		CHECK(harness.Context.GetUndoStack().CanRedo()); // Failed edits record nothing (the undone step is still there to redo)
 	}
 
+	TEST_CASE("entity.setActive, component.add and component.remove take entities and record one step")
+	{
+		EntityHarness harness;
+		std::vector<std::string> entities;
+		for (int index = 0; index < 3; index++)
+			entities.push_back(harness.Create(fmt::format("Entity {}", index)));
+		const nlohmann::json original = harness.Snapshot();
+		const size_t position = harness.Position();
+
+		harness.Run("entity.setActive", { { "entities", entities }, { "active", false } });
+		CHECK(harness.Position() == position + 1);
+		CHECK(harness.Context.GetUndoStack().GetUndoName() == "Deactivate Entities");
+		for (const std::string& id : entities)
+			CHECK_FALSE(harness.Get(id).IsActive());
+
+		// Added where it is missing, with the values given: one step for all.
+		harness.Run("component.add", { { "entity", entities[0] }, { "component", "PointLight" } });
+		harness.Run("component.add", { { "entities", entities }, { "component", "PointLight" }, { "values", { { "Range", 5.0 } } } });
+		CHECK(harness.Position() == position + 3);
+		for (const std::string& id : entities)
+			CHECK(harness.Get(id).GetComponent<PointLightComponent>().Range == 5.0f);
+
+		// Removed from all, or (when one lacks it) from none.
+		const std::string plain = harness.Create("Plain");
+		std::vector<std::string> withPlain = entities;
+		withPlain.push_back(plain);
+		const nlohmann::json before = harness.Snapshot();
+		CHECK(harness.Fail("component.remove", { { "entities", withPlain }, { "component", "PointLight" } }).ErrorKind == EditorCommandError::Failed);
+		CHECK(harness.Snapshot() == before);
+		// An entity listed twice counts once.
+		std::vector<std::string> twice = entities;
+		twice.push_back(entities[0]);
+		harness.Run("component.remove", { { "entities", twice }, { "component", "PointLight" } });
+		for (const std::string& id : entities)
+			CHECK_FALSE(harness.Get(id).HasComponent<PointLightComponent>());
+
+		// Exactly one of entity and entities.
+		CHECK(harness.Fail("entity.setActive", { { "active", true } }).ErrorKind == EditorCommandError::InvalidParameters);
+		CHECK(harness.Fail("component.add", { { "entity", entities[0] }, { "entities", entities }, { "component", "PointLight" } }).ErrorKind
+			== EditorCommandError::InvalidParameters);
+
+		for (int step = 0; step < 5; step++)
+			harness.Run("edit.undo");
+		CHECK(harness.Snapshot() == original);
+	}
+
 	TEST_CASE("Property edits of many entities are one undo step and keep what the edit did not touch")
 	{
 		EntityHarness harness;
