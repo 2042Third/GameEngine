@@ -315,7 +315,11 @@ namespace Strata
 			if (!BlockCompression::DecodeLevel(m_Specification.Format, mip.Width, mip.Height, GetMipData(level), mip.Data))
 				return fail(fmt::format("Texture '{}': mip {} could not be decoded", m_Specification.DebugName, level));
 		}
-		return Create(specification, std::move(mips), outError);
+		Ref<Texture> decoded = Create(specification, std::move(mips), outError);
+		// The levels stay where they are in the cooked data, block-compressed: streaming reads them from there again.
+		if (decoded)
+			decoded->m_CookedLayout = m_CookedLayout;
+		return decoded;
 	}
 
 	std::span<const uint8_t> Texture::GetMipData(uint32_t level) const
@@ -454,13 +458,18 @@ namespace Strata
 			tailBytes += GetMipByteSize(m_Specification.Format, m_Mips[level].Width, m_Mips[level].Height);
 			tailBlockRows += (m_Mips[level].Height + info.BlockHeight - 1) / info.BlockHeight;
 		}
-		if (m_UploadRow == 0 && tailBytes <= c_UploadBandBytes)
+		// The rest of the chain goes in one step once its staging fits in a band. Block-compressed tails are stacked in one
+		// staging texture as wide as their first level (RecordBlockUploadStep), which takes more than their bytes (1.5 times
+		// for a square chain); a level whose tail does not fit goes up in bands first (level 0 of a 2048x2048 BC1 chain in
+		// one), so the tail that follows stacks at half its width.
+		const uint64_t tailStagingBytes = info.IsBlockCompressed ? tailBlockRows * GetBlockRowByteSize(m_Specification.Format, m_Mips[m_UploadLevel].Width)
+			: tailBytes;
+		if (m_UploadRow == 0 && tailStagingBytes <= c_UploadBandBytes)
 		{
 			step.Tail = true;
 			step.Rows = m_Mips[m_UploadLevel].Height;
 			step.Bytes = tailBytes;
-			// Block-compressed tails are stacked in one staging texture as wide as their first level (RecordBlockUploadStep).
-			step.StagingBytes = info.IsBlockCompressed ? tailBlockRows * GetBlockRowByteSize(m_Specification.Format, m_Mips[m_UploadLevel].Width) : tailBytes;
+			step.StagingBytes = tailStagingBytes;
 			return step;
 		}
 

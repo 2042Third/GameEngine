@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Strata/Asset/TextureImporter.h"
+#include "Strata/Renderer/CookedTexture.h"
 #include "Strata/Renderer/Texture.h"
 #include "TestHelpers.h"
 
@@ -9,6 +10,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -137,6 +139,35 @@ TEST_SUITE("Renderer.Texture")
 		const std::span<const uint8_t> pixels = decoded->GetMipData(0);
 		CHECK(std::vector<uint8_t>(pixels.begin(), pixels.begin() + 16) == std::vector<uint8_t> { 255, 0, 0, 255, 0, 0, 255, 255, 170, 0, 85, 255, 85, 0, 170, 255 });
 		CHECK(decoded->GetMipData(2)[0] == 255);
+
+		// Decoded at load time, a texture keeps the layout of the cooked data it came from: streaming reads the
+		// block-compressed levels there again by byte range, not levels of the decoded size.
+		const std::vector<uint8_t> cooked = texture->Serialize();
+		const std::optional<CookedTextureView> view = ParseCookedTexture(cooked, &error);
+		REQUIRE_MESSAGE(view, error);
+		CHECK(view->Layout.Format == TextureFormat::BC1SRGB);
+		const Ref<Texture> loaded = Texture::Deserialize(std::vector<uint8_t>(cooked), &error);
+		REQUIRE_MESSAGE(loaded, error);
+		const Ref<Texture> loadedDecoded = loaded->Decompress(&error);
+		REQUIRE_MESSAGE(loadedDecoded, error);
+		CHECK(loadedDecoded->GetSpecification().Format == TextureFormat::RGBA8SRGB);
+		const CookedTextureLayout& layout = loadedDecoded->GetCookedLayout();
+		CHECK(layout.Format == TextureFormat::BC1SRGB);
+		CHECK(layout.HeaderSize == view->Layout.HeaderSize);
+		REQUIRE(layout.MipCount == view->Layout.MipCount);
+		for (uint32_t level = 0; level < layout.MipCount; level++)
+		{
+			CAPTURE(level);
+			CHECK(layout.Levels[level].Offset == view->Layout.Levels[level].Offset);
+			CHECK(layout.Levels[level].Size == view->Layout.Levels[level].Size);
+		}
+		const CookedTextureByteRange tail = loadedDecoded->GetMipTailByteRange();
+		const CookedTextureByteRange cookedTail = view->Layout.GetMipTailByteRange();
+		CHECK(tail.Offset == cookedTail.Offset);
+		CHECK(tail.Size == cookedTail.Size);
+		CHECK(tail.FirstLevel == cookedTail.FirstLevel);
+		CHECK(tail.LevelCount == cookedTail.LevelCount);
+		CHECK(cookedTail.Offset + cookedTail.Size <= cooked.size());
 
 		// BC4 decodes to one channel and stays grayscale.
 		TextureSpecification gray;

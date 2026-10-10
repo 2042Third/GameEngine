@@ -603,18 +603,23 @@ Textures are stored the way the GPU samples them: block-compressed, with their m
   after the header (`CookedTextureLayout::GetMipTailByteRange`, `Texture::GetMipTailByteRange`), which streaming can
   read on its own. `ParseCookedTexture` validates everything (format, sizes per level in whole blocks, offsets inside the
   data and aligned, levels that do not overlap and are stored smallest first, known flags) and returns a
-  `CookedTextureView` that refers to the data without copying; `Texture::Deserialize` builds on it. Version 1 (the
+  `CookedTextureView` that refers to the data without copying; `Texture::Deserialize` builds on it and keeps the levels'
+  `CookedTextureLayout` (offsets, sizes and their format) after the CPU copy is gone. Version 1 (the
   uncompressed formats, largest level first) is still read: packs exported before contain it. Flags: `Grayscale`
   (bit 0) marks one-channel textures that stand for gray.
 - **Loading on devices without BC support**: `Renderer::Init` sets `Texture::SetBlockCompressionSupported` from the
   device (`GraphicsDeviceInfo::SupportsBCCompression`); without it the texture loader decodes block-compressed data on
   its worker (`Texture::Decompress`, decoders in `Renderer/BlockCompression`, written from the formats' specifications)
-  to `RGBA8`/`RGBA8SRGB`, `R8` (BC4) or `RG8` (BC5), and residency counts the decoded size. GPUs decode BC7 exactly like
-  the CPU decoder; BC1 to BC5 interpolation may differ by a fraction of a block's endpoint distance (the specifications
-  leave it open; the GPU tests measure it).
+  to `RGBA8`/`RGBA8SRGB`, `R8` (BC4) or `RG8` (BC5), and residency counts the decoded size. The decoded texture keeps the
+  cooked layout of the data it came from (block-compressed, where streaming reads levels again). GPUs decode BC7 exactly
+  like the CPU decoder; BC1 to BC5 interpolation may differ by a fraction of a block's endpoint distance (the
+  specifications leave it open; the GPU tests measure it).
 - **Uploads** go in bands of whole rows of blocks; block-compressed levels are copied from single-level staging textures
   a whole number of blocks wide, the tail's levels stacked below each other in one (a staging texture with mips would
-  have levels below 4 texels, whose rows are not whole blocks).
+  have levels below 4 texels, whose rows are not whole blocks). Stacked under a level as wide as its first, a tail takes
+  more staging than its blocks (1.5 times for a square chain), so the rest of a chain goes in one step only once its
+  staging fits in a band: a 2048x2048 BC1 chain goes up as level 0 (2 MiB) and then the tail, 3.1 MB of staging for
+  2.8 MB of blocks.
 - **Shading**: material texture slots carry a grayscale bit (`RenderData::c_TextureSlotGrayscale`), so `BC4`/`R8` data
   samples as `(r, r, r, 1)` like the gray image it came from; `Forward.frag` reconstructs every normal map's Z from X and
   Y (`sqrt(saturate(1 - dot(xy, xy)))`), so `BC5` and `RGBA8` normal maps shade alike.

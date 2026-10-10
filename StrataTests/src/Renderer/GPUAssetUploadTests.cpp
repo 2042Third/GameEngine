@@ -356,6 +356,62 @@ TEST_SUITE("GPU.Assets.Uploads")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A block-compressed tail goes up in one step only once its staging fits in a band")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SettleDevice(gpu); // Nothing pending: the pool's pending bytes below are this test's staging
+		const StagingTexturePool& pool = Renderer::GetStagingTextures();
+
+		// 2048 x 2048 BC1: the whole chain (2.8 MB) is less than a band, but stacked in one staging texture as wide as level
+		// 0 it would take 1025 block rows of 4096 bytes (4.2 MB, 1.5 times its blocks and more than a band). Level 0 goes up
+		// alone, then the rest stacks at half the width: 513 block rows of 2048 bytes for 0.7 MB of blocks.
+		std::vector<TextureMip> mips;
+		for (uint32_t level = 0; level < TextureUtils::CalculateMipCount(2048, 2048); level++)
+		{
+			TextureMip mip;
+			mip.Width = 2048u >> level;
+			mip.Height = mip.Width;
+			mip.Data.resize(static_cast<size_t>(GetMipByteSize(TextureFormat::BC1, mip.Width, mip.Height)));
+			for (size_t index = 0; index < mip.Data.size(); index++)
+				mip.Data[index] = static_cast<uint8_t>(index * 7 + index / 8192 + level * 31);
+			mips.push_back(std::move(mip));
+		}
+		TextureSpecification specification;
+		specification.Format = TextureFormat::BC1SRGB;
+		specification.DebugName = "TailStaging";
+		Ref<Texture> texture = Texture::Create(specification, mips);
+		REQUIRE(texture);
+		const uint64_t chainBytes = texture->GetMemoryUsage().Cpu;
+		const uint64_t level0Bytes = GetMipByteSize(TextureFormat::BC1, 2048, 2048);
+		REQUIRE(chainBytes == 2796216);
+		REQUIRE(chainBytes <= Texture::c_UploadBandBytes);
+
+		const uint64_t pendingBefore = pool.GetPendingBytes();
+		uint64_t uploaded = 0;
+		CHECK(FinalizeOnce(gpu, *texture, 1, uploaded) == AssetFinalizeResult::Pending);
+		CHECK(uploaded == level0Bytes);
+		const uint64_t level0Staging = pool.GetPendingBytes() - pendingBefore;
+		CHECK(level0Staging == level0Bytes);
+		CHECK(FinalizeOnce(gpu, *texture, 1, uploaded) == AssetFinalizeResult::Done);
+		CHECK(uploaded == chainBytes - level0Bytes);
+		const uint64_t tailStaging = pool.GetPendingBytes() - pendingBefore - level0Staging;
+		CHECK(tailStaging == 513ull * 2048);
+		// No step stages more than a band, and the chain as a whole about an eighth more than its blocks.
+		CHECK(level0Staging <= Texture::c_UploadBandBytes);
+		CHECK(tailStaging <= Texture::c_UploadBandBytes);
+		CHECK(level0Staging + tailStaging == 3147776);
+
+		for (uint32_t level = 0; level < texture->GetMipCount(); level++)
+		{
+			CAPTURE(level);
+			CHECK(ReadBlocks(gpu, texture->GetGPUTexture(), level) == mips[level].Data);
+		}
+		texture.reset();
+		SettleDevice(gpu);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A frame's first texture band goes up while staging is full; its later bands wait for room")
 	{
 		GPUContext gpu;

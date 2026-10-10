@@ -53,8 +53,9 @@ namespace Strata
 		static Ref<Texture> Deserialize(std::vector<uint8_t>&& data, std::string* outError = nullptr);
 
 		// A copy of a block-compressed texture decoded to GetDecodedFormat (RGBA8 or RGBA8SRGB; R8 for BC4, RG8 for BC5),
-		// for devices that cannot sample block-compressed formats. Null (with the reason) when the texture is not
-		// block-compressed or its CPU copy is gone.
+		// for devices that cannot sample block-compressed formats. It keeps this texture's cooked layout (GetCookedLayout:
+		// where the block-compressed levels are in the data it was loaded from). Null (with the reason) when the texture is
+		// not block-compressed or its CPU copy is gone.
 		Ref<Texture> Decompress(std::string* outError = nullptr) const;
 
 		// Whether textures loaded as assets may keep block-compressed data: true unless the graphics device cannot sample
@@ -66,7 +67,8 @@ namespace Strata
 		~Texture() override;
 
 		// Creates the GPU texture and uploads the mip chain in bands of at most c_UploadBandBytes - rows of one level (rows
-		// of 4x4 blocks for block-compressed formats), or every remaining level once they fit in one band - as far as the
+		// of 4x4 blocks for block-compressed formats), or every remaining level once they fit in one band, staging included
+		// (a block-compressed tail's staging is larger than its bytes, see RecordBlockUploadStep) - as far as the
 		// context's upload budget allows (Pending: the next call continues where this one stopped). Bands go through staging
 		// textures of the renderer's pool (StagingTexturePool), reused once the GPU has copied them; steps wait while the
 		// staging in flight is at the context's StagingBytes, except the frame's first. Once the chain is uploaded, takes a
@@ -92,8 +94,10 @@ namespace Strata
 		// A level's pixels (or blocks) while the CPU copy exists (empty after it was released, and for levels out of range).
 		std::span<const uint8_t> GetMipData(uint32_t level) const;
 
-		// Where the levels are in the cooked form: the data the texture was loaded from, or what Serialize writes. Kept after
-		// the CPU copy is released, so streaming can read levels again by byte range.
+		// Where the levels are in the cooked form, and in which format (CookedTextureLayout::Format): the data the texture
+		// was loaded from - also when it was decoded at load time (Decompress), whose layout is the block-compressed data's
+		// - or what Serialize writes for a texture made from pixels. Kept after the CPU copy is released, so streaming can
+		// read levels again by byte range.
 		const CookedTextureLayout& GetCookedLayout() const { return m_CookedLayout; }
 		// The byte range of the cooked form holding the levels of at most maxDimension texels per side (the mip tail): in
 		// version 2 data it starts right after the header.
@@ -137,8 +141,6 @@ namespace Strata
 		// Cooked bytes the texture took over (Deserialize from a vector): they hold the pixels, level i at
 		// m_CookedLayout.Levels[i].Offset.
 		std::vector<uint8_t> m_Cooked;
-		// Whether m_Cooked is exactly what Serialize writes (version 2 in the canonical layout).
-		bool m_CookedIsCanonical = false;
 		CookedTextureLayout m_CookedLayout;
 		uint32_t m_Width = 0;
 		uint32_t m_Height = 0;

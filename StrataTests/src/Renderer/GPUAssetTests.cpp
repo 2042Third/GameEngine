@@ -520,6 +520,10 @@ TEST_SUITE("GPU.Assets")
 				const ReadbackImage image = RenderTexturedQuad(*manager, handle, c_Size);
 				const Ref<Texture> reference = Texture::Deserialize(cooked.at(static_cast<uint64_t>(handle)));
 				REQUIRE(reference);
+				// Its cooked layout is still the pack's: the block-compressed levels, where streaming would read them.
+				CHECK(texture->GetCookedLayout().Format == format);
+				CHECK(texture->GetMipTailByteRange().Offset == reference->GetMipTailByteRange().Offset);
+				CHECK(texture->GetMipTailByteRange().Size == reference->GetMipTailByteRange().Size);
 				const SamplingCheck check = CheckSampledImage(image, *reference, reference->GetMipData(0));
 				CHECK(check.Outside == 0);
 				CHECK(check.MaxStepsFromExact <= 1);

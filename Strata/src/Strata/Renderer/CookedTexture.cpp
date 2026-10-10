@@ -132,6 +132,7 @@ namespace Strata
 				return Fail(outError, fmt::format("Texture size {}x{} with {} mips is out of range", view.Width, view.Height, header.MipCount));
 
 			view.Layout.Version = 1;
+			view.Layout.Format = view.Format;
 			view.Layout.MipCount = header.MipCount;
 			view.Layout.HeaderSize = reader.GetPosition();
 			for (uint32_t level = 0; level < header.MipCount; level++)
@@ -185,6 +186,7 @@ namespace Strata
 				return Fail(outError, "Cooked texture data offset is invalid");
 
 			view.Layout.Version = 2;
+			view.Layout.Format = view.Format;
 			view.Layout.MipCount = header.MipCount;
 			view.Layout.HeaderSize = header.DataOffset;
 			for (uint32_t level = 0; level < header.MipCount; level++)
@@ -270,6 +272,7 @@ namespace Strata
 			return layout;
 
 		const size_t nameLength = std::min<size_t>(description.DebugName.size(), c_MaxCookedTextureNameLength);
+		layout.Format = description.Format;
 		layout.MipCount = description.MipCount;
 		layout.HeaderSize = AlignUp(sizeof(CookedTextureHeader) + description.MipCount * sizeof(CookedMipEntry) + nameLength, c_CookedTextureAlignment);
 		uint64_t offset = layout.HeaderSize;

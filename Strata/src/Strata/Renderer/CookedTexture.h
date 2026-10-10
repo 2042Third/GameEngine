@@ -69,6 +69,7 @@ namespace Strata
 	struct CookedTextureLayout
 	{
 		uint32_t Version = c_CookedTextureVersion;
+		TextureFormat Format = TextureFormat::None; // The format the levels are stored in
 		uint64_t HeaderSize = 0; // Bytes before the pixel data: header, mip table, name and padding
 		uint32_t MipCount = 0;
 		std::array<CookedTextureLevel, c_MaxCookedTextureMips> Levels {}; // Level 0 (the largest) first
