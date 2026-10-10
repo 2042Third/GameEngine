@@ -108,8 +108,9 @@ namespace Strata::Tests
 		ScopedJobSystem& operator=(const ScopedJobSystem&) = delete;
 	};
 
-	// An asset manager over in-memory fake assets. Records the order of reads and can hold reads at a gate: a read waits
-	// until the test lets it through (AllowReads), so tests can keep loads in flight while they queue others.
+	// An asset manager over in-memory assets: fake ones (Add) or real ones in their stored form (AddStored). Records the
+	// order of reads and can hold reads at a gate: a read waits until the test lets it through (AllowReads), so tests can
+	// keep loads in flight while they queue others.
 	class FakeAssetManager final : public AssetManagerBase
 	{
 	public:
@@ -131,6 +132,23 @@ namespace Strata::Tests
 			{
 				std::scoped_lock<std::mutex> lock(m_Mutex);
 				m_Data[metadata.Handle] = EncodeFakeAsset(usage);
+			}
+			RegisterAsset(metadata);
+			return metadata.Handle;
+		}
+
+		// Registers an asset of any type whose stored form is `data` (e.g. Mesh::Serialize), decoded by its type's loader.
+		AssetHandle AddStored(uint64_t handle, AssetType type, std::vector<uint8_t> data)
+		{
+			AssetMetadata metadata;
+			metadata.Handle = UUID(handle);
+			metadata.Type = type;
+			metadata.Path = "Stored/" + std::to_string(handle);
+			metadata.Name = metadata.Path;
+			metadata.StoredSize = data.size();
+			{
+				std::scoped_lock<std::mutex> lock(m_Mutex);
+				m_Data[metadata.Handle] = std::move(data);
 			}
 			RegisterAsset(metadata);
 			return metadata.Handle;

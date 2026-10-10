@@ -5,6 +5,7 @@
 #include "Strata/Core/Base.h"
 
 #include <cstdint>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -23,17 +24,21 @@ namespace Strata
 
 	// Resolves asset handles for one renderer, once per handle and frame: the first request of a handle in a frame asks
 	// the asset manager (one GetAsset, which also stamps the asset as used for the residency's least-recently-used order),
-	// later ones in the same frame get the same answer. The references it hands out are held until the next frame starts,
-	// so an asset the next frame does not use again becomes evictable after the manager's grace frames. BeginFrame also
-	// revalidates: it reports the assets whose loaded objects changed since the previous frame (GetContentVersion,
-	// GetContentChanges), so data derived from them can be refreshed. Main thread only.
+	// later ones in the same frame get the same answer. Nothing outlives the frame: EndFrame lets go of every reference
+	// the frame took and of the manager, so a renderer that stops rendering (a capture renderer between captures, a hidden
+	// view) keeps no asset from being evicted and no asset manager alive. BeginFrame also revalidates: it reports the
+	// assets whose loaded objects changed since the previous frame (GetContentVersion, GetContentChanges), so data derived
+	// from them can be refreshed. Main thread only.
 	class AssetResolveCache
 	{
 	public:
-		// Starts a frame with the active asset manager (null: none, every resolve fails). Appends the assets whose objects
-		// changed since the previous frame to outChanged; outAllChanged when any may have (the manager forgot, or another
-		// manager became active).
+		// Starts a frame with the active asset manager (null: none, every resolve fails), held until EndFrame. Appends the
+		// assets whose objects changed since the previous frame to outChanged; outAllChanged when any may have (the manager
+		// forgot, or another manager became active).
 		void BeginFrame(const Ref<AssetManagerBase>& manager, std::vector<AssetHandle>& outChanged, bool& outAllChanged);
+		// Ends the frame: releases the references it handed out and the manager. The GPU work recorded with the assets
+		// keeps what it uses alive by itself (command lists reference their buffers, the bindless table its textures).
+		void EndFrame();
 
 		// The loaded asset, requested at `priority` (a load starts or is raised); null while it loads, for unknown and failed
 		// handles and for another type.
@@ -68,7 +73,7 @@ namespace Strata
 		struct Entry
 		{
 			uint64_t Frame = 0;
-			Ref<Asset> Asset;
+			Ref<Asset> Asset; // Held until EndFrame
 			Lookup Kind = Lookup::None;
 		};
 
@@ -76,7 +81,8 @@ namespace Strata
 		const Ref<Asset>& ResolveAsset(AssetHandle handle, AssetPriority priority, bool residentOnly);
 		Entry& GetEntry(AssetHandle handle);
 	private:
-		Ref<AssetManagerBase> m_Manager;
+		Ref<AssetManagerBase> m_Manager;               // The frame's manager, between BeginFrame and EndFrame
+		std::weak_ptr<AssetManagerBase> m_LastManager; // The manager of the latest frame: tells whether the entries are its
 		uint64_t m_ContentVersion = 0;
 		uint64_t m_Frame = 0;
 		// Entries stay where they are while the map lives (std::unordered_map never moves its elements), so m_Used can

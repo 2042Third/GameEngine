@@ -183,7 +183,7 @@ namespace Strata
 	// One instanced draw of a frame: instances of a submesh at one level of detail with one pipeline state.
 	struct SceneDrawBatch
 	{
-		const Mesh* MeshAsset = nullptr;
+		uint32_t MeshSlot = 0; // The render scene's mesh slot (RenderScene::GetMeshHandle)
 		uint32_t SubmeshIndex = 0;
 		uint32_t LOD = 0;
 		bool DoubleSided = false;
@@ -232,7 +232,9 @@ namespace Strata
 		// (the renderer never rescales) and exactly one color attachment, single-sampled non-sRGB UNORM, e.g. the swapchain:
 		// values are written sRGB-encoded. Returns false, with GetStats().Rendered false, when nothing was rendered: an
 		// empty viewport, or an invalid target or render targets (both logged). Updates the scene's cached world
-		// transforms. With overlays and a target, the image is composed in the output texture and then copied.
+		// transforms. With overlays and a target, the image is composed in the output texture and then copied. The
+		// meshes, materials and textures the frame used are let go when it returns, so a renderer that stops rendering
+		// keeps nothing resident.
 		bool Render(Scene& scene, const SceneCamera& camera, nvrhi::IFramebuffer* target = nullptr, const SceneRenderOptions& options = {});
 
 		// RGBA8 UNORM with sRGB-encoded values (display-ready), valid after Render without a target.
@@ -412,9 +414,14 @@ namespace Strata
 		// The directional light (the preview sun with `preview`), ambient light and the visible point and spot lights.
 		void CollectLights(Scene& scene, const SceneCamera& camera, bool preview, RenderData::FrameConstants& frame);
 
+		// Render without letting go of the frame's assets (Render does that, whatever way the frame ends).
+		bool RenderFrame(Scene& scene, const SceneCamera& camera, nvrhi::IFramebuffer* target, const SceneRenderOptions& options);
+
 		// Extraction (SceneRendererExtraction.cpp): what the frame draws, from the scene's RenderScene.
 		// Sizes the per-slot state for the render scene; a render scene other than the last frame's starts it afresh.
 		void PrepareExtraction(RenderScene& renderScene);
+		// Lets go of the meshes, materials and textures the frame resolved.
+		void ReleaseFrameAssets();
 		// Learns the layouts of meshes that are loaded already (built-in meshes, meshes another view loaded).
 		void LearnResidentMeshLayouts(RenderScene& renderScene);
 		// The proxies in the view frustum and in the prefetch distance, and the assets they need.
@@ -603,7 +610,7 @@ namespace Strata
 		std::vector<LightCandidate> m_LightCandidates;
 
 		// Extraction (see SceneRendererExtraction.cpp). Slots are those of the render scene the state belongs to.
-		AssetResolveCache m_Assets;     // Holds the frame's meshes, materials and textures until the next frame starts
+		AssetResolveCache m_Assets;     // Holds the frame's meshes, materials and textures while the frame is rendered
 		std::vector<AssetHandle> m_ChangedAssets;
 		uint64_t m_RenderSceneId = 0;   // The render scene the per-slot state and the GPU copies below belong to
 		bool m_FullUpload = true;       // The GPU copies hold nothing of that render scene yet
@@ -618,7 +625,7 @@ namespace Strata
 		std::vector<ShadowCaster> m_ShadowCasters;
 		std::vector<uint32_t> m_MeshUsage;          // Per mesh slot: how the frame uses it (usage bits)
 		std::vector<uint32_t> m_UsedMeshSlots;
-		std::vector<const Mesh*> m_FrameMeshes;     // Per mesh slot: the loaded mesh with GPU buffers, if any this frame
+		std::vector<const Mesh*> m_FrameMeshes;     // Per mesh slot: the loaded mesh with GPU buffers, while the frame holds it
 		std::vector<uint32_t> m_MaterialUsage;      // Per material slot
 		std::vector<uint32_t> m_UsedMaterialSlots;
 		std::vector<uint32_t> m_MaterialFlags;      // Per material slot: how the frame draws it (material flags)

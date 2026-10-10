@@ -16,19 +16,20 @@ namespace Strata
 
 	void AssetResolveCache::BeginFrame(const Ref<AssetManagerBase>& manager, std::vector<AssetHandle>& outChanged, bool& outAllChanged)
 	{
+		// A frame that was not ended lets go of its references now.
+		EndFrame();
 		m_Frame++;
 		m_Stats = {};
-		// The previous frame's references go: what this frame does not use again becomes evictable.
-		for (Entry* entry : m_Used)
-			entry->Asset = nullptr;
-		m_Used.clear();
 		if (m_Frame % c_ForgetFrames == 0)
 			std::erase_if(m_Entries, [this](const auto& entry) { return entry.second.Frame + c_ForgetFrames < m_Frame; });
 
 		outAllChanged = false;
-		if (manager != m_Manager)
+		m_Manager = manager;
+		// Compared by ownership: a manager that took the place (and the address) of a destroyed one is another manager.
+		const bool sameManager = !m_LastManager.owner_before(manager) && !manager.owner_before(m_LastManager);
+		if (!sameManager)
 		{
-			m_Manager = manager;
+			m_LastManager = manager;
 			m_Entries.clear();
 			m_ContentVersion = manager ? manager->GetContentVersion() : 0;
 			outAllChanged = true;
@@ -42,6 +43,14 @@ namespace Strata
 		if (!manager->GetContentChanges(m_ContentVersion, outChanged))
 			outAllChanged = true;
 		m_ContentVersion = version;
+	}
+
+	void AssetResolveCache::EndFrame()
+	{
+		for (Entry* entry : m_Used)
+			entry->Asset = nullptr;
+		m_Used.clear();
+		m_Manager = nullptr;
 	}
 
 	AssetResolveCache::Entry& AssetResolveCache::GetEntry(AssetHandle handle)

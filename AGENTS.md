@@ -819,8 +819,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   only where components were signaled or transforms changed, in a `SpatialIndex` (loose grid) that the view frustum,
   the prefetch sphere and the shadow cascades query. Only meshes and materials of proxies in view are requested (High
   above 5% of the viewport height, Normal below), those within `SceneRendererSpecification::PrefetchDistance` at Low;
-  each asset is looked up once per frame (`AssetResolveCache`), and nothing is held past the next frame, so what leaves
-  the view becomes evictable. Never resolve assets per entity in renderer code: go through the proxies and the cache.
+  each asset is looked up once per frame (`AssetResolveCache`), and nothing (no asset, not the asset manager) is held
+  once `Render` returns, so what leaves the view becomes evictable, also for a renderer that stops rendering. Never
+  resolve assets per entity in renderer code: go through the proxies and the cache.
 - Batching is material-free: instances of a mesh, submesh and level of detail with the same pipeline state share one
   draw whatever their materials (shaders read `u_Materials[instance.MaterialIndex]`); transparent surfaces are drawn
   one by one, back to front. Draws are gathered in parallel chunks merged in chunk order (results do not depend on

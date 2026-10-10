@@ -156,11 +156,9 @@ namespace Strata
 		}
 		else
 		{
+			// The meshes went with the previous frame (ReleaseFrameAssets).
 			for (const uint32_t slot : m_UsedMeshSlots)
-			{
 				m_MeshUsage[slot] = 0;
-				m_FrameMeshes[slot] = nullptr;
-			}
 			for (const uint32_t slot : m_UsedMaterialSlots)
 			{
 				m_MaterialUsage[slot] = 0;
@@ -187,6 +185,13 @@ namespace Strata
 		m_VisibleMaterials.clear();
 		m_DefaultMaterialData.reset();
 		m_DefaultMaterialFlags = 0;
+	}
+
+	void SceneRenderer::ReleaseFrameAssets()
+	{
+		for (const uint32_t slot : m_UsedMeshSlots)
+			m_FrameMeshes[slot] = nullptr;
+		m_Assets.EndFrame();
 	}
 
 	void SceneRenderer::EnsureMaterialSlots(uint32_t count)
@@ -561,8 +566,7 @@ namespace Strata
 			{
 				batchKey = draw.Key;
 				SceneDrawBatch batch;
-				const uint32_t meshSlot = static_cast<uint32_t>((draw.Key >> c_KeyMeshShift) & ((1ull << c_KeyMeshBits) - 1));
-				batch.MeshAsset = m_FrameMeshes[meshSlot];
+				batch.MeshSlot = static_cast<uint32_t>((draw.Key >> c_KeyMeshShift) & ((1ull << c_KeyMeshBits) - 1));
 				batch.SubmeshIndex = static_cast<uint32_t>((draw.Key >> c_KeySubmeshShift) & (c_MaxKeySubmeshes - 1));
 				batch.LOD = static_cast<uint32_t>((draw.Key >> c_KeyLODShift) & (c_MaxKeyLODs - 1));
 				batch.DoubleSided = ((draw.Key >> c_KeyDoubleSidedShift) & 1) != 0;
@@ -679,7 +683,7 @@ namespace Strata
 		for (const TransparentDraw& draw : m_Transparent)
 		{
 			SceneDrawBatch batch;
-			batch.MeshAsset = m_FrameMeshes[draw.MeshSlot];
+			batch.MeshSlot = draw.MeshSlot;
 			batch.SubmeshIndex = draw.SubmeshIndex;
 			batch.LOD = draw.LOD;
 			batch.DoubleSided = draw.DoubleSided;

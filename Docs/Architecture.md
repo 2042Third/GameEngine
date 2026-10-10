@@ -668,6 +668,7 @@ FindShadowCasters                cascade boxes; QueryPlanes per cascade, then th
 ResolveAssets                    each mesh and material used once: Resolve, Prefetch or FindResident
 GatherDraws, GatherShadowDraws   draws per chunk on the job system, merged in chunk order; RadixSort; batches
 UploadSceneData                  changed instances, changed materials, the changed range of each draw list
+ReleaseFrameAssets               (when Render returns, however it ends) every reference the frame took, and the manager
 ```
 
 - **Proxies** (`RenderScene`). One per entity with a `MeshRendererComponent` (and a world transform), kept in
@@ -697,8 +698,12 @@ UploadSceneData                  changed instances, changed materials, the chang
   High priority above `HighPriorityScreenFraction` (5%) of the viewport height and at Normal below; proxies within
   `PrefetchDistance` (100 units) of the camera request them at Low; shadow casters outside both are drawn only from
   what is resident. Each distinct mesh, material and texture is looked up once per frame (one `GetAsset`, which also
-  stamps it for the least-recently-used order), and the references are held only until the next frame starts, so what
-  leaves the view becomes evictable after the manager's grace frames.
+  stamps it for the least-recently-used order). The references are held only while the frame is rendered (the command
+  lists keep the GPU resources they use, the bindless table its textures), and the manager only during the frame (a weak
+  reference tells the next frame whether it is the same one), so what leaves the view becomes evictable after the
+  manager's grace frames, also when the renderer stops rendering (a capture renderer between captures, a hidden view),
+  and a closed project's manager goes with it. Batches name meshes by slot (`SceneDrawBatch::MeshSlot`), so what
+  `GetOpaqueBatches` reports after the frame holds no pointers.
 - **Batching**. Draws are gathered in chunks of 2,048 proxies on the job system and merged in chunk order (the same
   result on any number of threads), then sorted with a stable radix sort (`Core/RadixSort.h`) of 64-bit keys: cascade,
   alpha mask, winding, culling, mesh slot, submesh and level of detail. The material is not in the key, so the

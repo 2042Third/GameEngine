@@ -7,6 +7,7 @@
 #include "Renderer/GPUTestUtils.h"
 #include "TestHelpers.h"
 
+#include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/Core/Base64.h>
 #include <Strata/Core/FileSystem.h>
@@ -723,6 +724,39 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(countPixels(first, cyan) == 0);
 		CHECK(countPixels(second, cyan) > 20);
 		CHECK(countPixels(second, magenta) == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Captures keep nothing resident: what only a capture showed can be evicted, and a closed project's assets go")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("CaptureResidency") / "Game";
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" }, { "template", "basic3d" } });
+		std::weak_ptr<AssetManagerBase> closed = AssetManager::GetActive();
+		{
+			const Ref<AssetManagerBase> manager = closed.lock();
+			REQUIRE(manager);
+			const AssetHandle ground = manager->FindAssetByPath("Materials/Ground.stmat");
+			REQUIRE(ground.IsValid());
+
+			// Only the capture renderer draws here (no viewport panel): its last frame showed the ground's material.
+			harness.CaptureLoaded({ { "width", 64 }, { "height", 64 } });
+			REQUIRE(manager->GetAssetState(ground) == AssetState::Ready);
+			// The editor's frames go on without captures: what the capture used goes like anything else no longer used.
+			const uint32_t grace = manager->GetEvictionGraceFrames();
+			for (uint32_t frame = 0; frame <= grace; frame++)
+				harness.Context.Update(Timestep(1.0f / 60.0f));
+			CHECK(manager->TrimUnused(grace) > 0);
+			CHECK(manager->GetAssetState(ground) == AssetState::Unloaded);
+			harness.CaptureLoaded({ { "width", 64 }, { "height", 64 } });
+			CHECK(manager->GetAssetState(ground) == AssetState::Ready);
+		}
+
+		// The project closes after a capture: its asset manager goes with it, whatever the capture renderer drew last.
+		harness.Run("project.close");
+		CHECK(closed.expired());
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

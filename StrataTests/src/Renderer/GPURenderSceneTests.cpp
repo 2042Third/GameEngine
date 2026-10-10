@@ -8,7 +8,9 @@
 #include "Strata/Scene/Prefab.h"
 
 #include <algorithm>
+#include <memory>
 #include <set>
+#include <string>
 #include <vector>
 
 // The scene renderer's persistent render scene (RenderScene): material-free instancing, uploads that follow change,
@@ -85,6 +87,28 @@ namespace
 		manager.Update();
 		CHECK(renderer.Render(scene, camera));
 		gpu.GetDevice().EndFrame();
+	}
+
+	// The stored form of a texture of one color (2x2 texels, one level), as packs and the asset cache hold it.
+	std::vector<uint8_t> StoreSolidTexture(const glm::u8vec4& color)
+	{
+		TextureMip level0;
+		level0.Width = 2;
+		level0.Height = 2;
+		for (int texel = 0; texel < 4; texel++)
+			AppendPixel(level0.Data, color.r, color.g, color.b, color.a);
+		TextureSpecification specification;
+		specification.Format = TextureFormat::RGBA8SRGB;
+		specification.DebugName = "StoredTexture";
+		const Ref<Texture> texture = Texture::Create(specification, { level0 });
+		REQUIRE(texture);
+		return texture->Serialize();
+	}
+
+	std::vector<uint8_t> StoreMaterial(const MaterialProperties& properties)
+	{
+		const std::string document = Material::Create(properties)->Serialize().dump();
+		return std::vector<uint8_t>(document.begin(), document.end());
 	}
 
 }
@@ -288,6 +312,49 @@ TEST_SUITE("GPU.RenderScene")
 		const uint32_t distinct = 1 + static_cast<uint32_t>(materials.size() + textures.size()); // The cube mesh, materials, textures
 		CHECK(stats.RequestsByVisibility == distinct);
 		CHECK(stats.GetAssetCalls <= distinct);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("An idle renderer keeps nothing: what it drew last can be evicted, and its asset manager can go")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Size, c_Size);
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 1.0f, 4.0f), glm::vec3(0.0f));
+		std::weak_ptr<AssetManagerBase> closed;
+		{
+			const Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+			closed = manager;
+			const AssetHandle texture = manager->AddStored(0x7E01, AssetType::Texture, StoreSolidTexture({ 200, 80, 40, 255 }));
+			MaterialProperties properties;
+			properties.BaseColorMap = texture;
+			const AssetHandle material = manager->AddStored(0x3A01, AssetType::Material, StoreMaterial(properties));
+			const AssetHandle mesh = manager->AddStored(0x3E01, AssetType::Mesh, MeshFactory::CreateCube()->Serialize());
+			AssetManager::SetActive(manager);
+			AddMesh(scene, mesh, material, glm::vec3(0.0f), "Cube");
+
+			// Frames until the cube shows with its texture, as a capture renders them; then the renderer idles.
+			for (int frame = 0; frame < 120 && (frame < 2 || renderer.GetStats().Instances == 0 || renderer.GetStats().PendingAssets > 0); frame++)
+				RunFrame(gpu, *manager, renderer, scene, camera);
+			REQUIRE(renderer.GetStats().Instances == 1);
+			REQUIRE(manager->GetAssetState(texture) == AssetState::Ready);
+
+			// The manager's frames go on without the renderer: what it drew goes like anything else no longer used.
+			const uint32_t grace = manager->GetEvictionGraceFrames();
+			for (uint32_t frame = 0; frame <= grace; frame++)
+				manager->Update();
+			CHECK(manager->TrimUnused(grace) == 3);
+			CHECK(manager->GetAssetState(texture) == AssetState::Unloaded);
+			CHECK(manager->GetAssetState(material) == AssetState::Unloaded);
+			CHECK(manager->GetAssetState(mesh) == AssetState::Unloaded);
+			gpu.GetDevice().WaitForIdle();
+			AssetManager::SetActive(nullptr);
+		}
+		// The renderer holds no reference to the manager either: it went with its owner, as a closed project's does.
+		CHECK(closed.expired());
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

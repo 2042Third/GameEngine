@@ -907,7 +907,8 @@ namespace Strata
 		{
 			if (batch.Cascade >= cascadeCount)
 				continue;
-			const Submesh& submesh = batch.MeshAsset->GetSubmeshes()[batch.SubmeshIndex];
+			const Mesh* mesh = m_FrameMeshes[batch.MeshSlot];
+			const Submesh& submesh = mesh->GetSubmeshes()[batch.SubmeshIndex];
 			const MeshLOD& lod = submesh.LODs[batch.LOD];
 
 			nvrhi::GraphicsState state;
@@ -916,10 +917,10 @@ namespace Strata
 			state.viewport.addViewportAndScissorRect(nvrhi::Viewport(mapSize, mapSize));
 			state.bindings = { m_ShadowBindingSet, Renderer::GetBindlessTextures().GetTable(), m_ShadowPushBindingSet };
 			state.vertexBuffers = {
-				nvrhi::VertexBufferBinding { batch.MeshAsset->GetPositionBuffer(), 0, 0 },
-				nvrhi::VertexBufferBinding { batch.MeshAsset->GetAttributeBuffer(), 1, 0 }
+				nvrhi::VertexBufferBinding { mesh->GetPositionBuffer(), 0, 0 },
+				nvrhi::VertexBufferBinding { mesh->GetAttributeBuffer(), 1, 0 }
 			};
-			state.indexBuffer = nvrhi::IndexBufferBinding { batch.MeshAsset->GetIndexBuffer(), nvrhi::Format::R32_UINT, 0 };
+			state.indexBuffer = nvrhi::IndexBufferBinding { mesh->GetIndexBuffer(), nvrhi::Format::R32_UINT, 0 };
 			commandList->setGraphicsState(state);
 			const uint32_t cascade = batch.Cascade;
 			commandList->setPushConstants(&cascade, sizeof(cascade));
@@ -1433,14 +1434,15 @@ namespace Strata
 
 		for (const SceneDrawBatch& batch : batches)
 		{
-			const Submesh& submesh = batch.MeshAsset->GetSubmeshes()[batch.SubmeshIndex];
+			const Mesh* mesh = m_FrameMeshes[batch.MeshSlot];
+			const Submesh& submesh = mesh->GetSubmeshes()[batch.SubmeshIndex];
 			const MeshLOD& lod = submesh.LODs[batch.LOD];
 			state.pipeline = GetScenePipeline(PipelineKey { pass, batch.DoubleSided, batch.Mirrored });
 			state.vertexBuffers = {
-				nvrhi::VertexBufferBinding { batch.MeshAsset->GetPositionBuffer(), 0, 0 },
-				nvrhi::VertexBufferBinding { batch.MeshAsset->GetAttributeBuffer(), 1, 0 }
+				nvrhi::VertexBufferBinding { mesh->GetPositionBuffer(), 0, 0 },
+				nvrhi::VertexBufferBinding { mesh->GetAttributeBuffer(), 1, 0 }
 			};
-			state.indexBuffer = nvrhi::IndexBufferBinding { batch.MeshAsset->GetIndexBuffer(), nvrhi::Format::R32_UINT, 0 };
+			state.indexBuffer = nvrhi::IndexBufferBinding { mesh->GetIndexBuffer(), nvrhi::Format::R32_UINT, 0 };
 			commandList->setGraphicsState(state);
 
 			nvrhi::DrawArguments arguments;
@@ -1498,6 +1500,15 @@ namespace Strata
 	bool SceneRenderer::Render(Scene& scene, const SceneCamera& camera, nvrhi::IFramebuffer* target, const SceneRenderOptions& options)
 	{
 		ST_PROFILE_FUNCTION();
+		const bool rendered = RenderFrame(scene, camera, target, options);
+		// Nothing the frame resolved outlives it, so a renderer that stops rendering (a capture renderer between captures,
+		// a hidden view) keeps no asset resident and no asset manager alive.
+		ReleaseFrameAssets();
+		return rendered;
+	}
+
+	bool SceneRenderer::RenderFrame(Scene& scene, const SceneCamera& camera, nvrhi::IFramebuffer* target, const SceneRenderOptions& options)
+	{
 		m_Stats = {};
 		if (m_ViewportSize.x == 0 || m_ViewportSize.y == 0)
 			return false; // Nothing to show (e.g. a minimized window); not an error
