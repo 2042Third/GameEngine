@@ -44,7 +44,7 @@ Engine modules (`Strata/src/Strata/`): `Core` (application, logging, jobs, platf
 `Events`, `Input`, `Math`, `Reflection`, `Scene` (ECS, components, serialization, prefabs),
 `Asset` (asset database, importers, cooking, streaming, packs), `Renderer`, `Physics`, `Audio`,
 `Scripting`, `Project` (projects, game manifests), `Runtime` (running exported games), `Network` (sockets,
-JSON-RPC, editor automation sessions), `ImGui`.
+JSON-RPC, editor automation sessions), `ImGui`, `Engine` (the composition root that registers every module).
 
 ## Building
 
@@ -245,6 +245,14 @@ The threading model, frame loop and pipelines these rules protect are described 
   through `CrashGuard`; anything crossing the ABI is plain data (no STL types, no exceptions).
 - **Assets:** referenced by `AssetHandle` (UUID), never by path at runtime. Loading is asynchronous;
   code must handle "not loaded yet" every frame instead of blocking. See [Asset pipeline](#asset-pipeline).
+- **Module registration:** modules extend the engine through registries (components, asset loaders and importers,
+  built-in asset objects, scene systems), never through lower layers calling functions of higher ones. Each module
+  has one registration function in its own folder (`Register<Module>Module` in `<Module>/<Module>Registration.cpp`);
+  only `Engine::RegisterBuiltinModules` (`Engine/BuiltinModules.cpp`, the composition root) calls them, once per
+  process, before anything reads a registry (the `Application` constructor; `StrataTests`' `main`). A new module adds
+  its function there, in dependency order. Components can only be registered while it runs (the registry freezes at
+  its end): games and tests pass theirs in `ModuleRegistrationOptions::Extra`. Details: Docs/Architecture.md,
+  "Composition root and registries".
 
 ## Asset pipeline
 
@@ -266,9 +274,10 @@ The threading model, frame loop and pipelines these rules protect are described 
   exist in every asset manager.
 - Shipped games read an asset pack (`.stpak`, `AssetPack`) through `RuntimeAssetManager`; the editor
   builds it with `EditorAssetManager::BuildAssetPack`.
-- Adding an asset type: an `Asset` subclass with a cooked/serialized form, a loader in
-  `Asset/AssetRegistration.cpp`, an importer if it comes from external files, and tests for round trips
-  and corrupt data (every loader must reject truncated or garbage bytes without crashing).
+- Adding an asset type: an `Asset` subclass with a cooked/serialized form, a loader registered by the
+  registration function of the module that owns the type (e.g. `RegisterRendererModule`), an importer if it
+  comes from external files (`RegisterAssetPipeline`), and tests for round trips and corrupt data (every
+  loader must reject truncated or garbage bytes without crashing).
 
 ## Scripting
 

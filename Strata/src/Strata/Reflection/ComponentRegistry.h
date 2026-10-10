@@ -60,11 +60,20 @@ namespace Strata
 	template<typename T>
 	class ComponentInfoBuilder;
 
-	// Registry of every reflected component type. Built-in components are registered once, on first use,
-	// and the registry is immutable afterwards (safe to read from any thread).
+	// Registry of every reflected component type.
+	//
+	// Lifecycle (driven by Engine::RegisterBuiltinModules at startup): BeginRegistration opens the registry, the engine's
+	// modules - and games and tests, through ModuleRegistrationOptions::Extra - register their components, and Freeze fixes
+	// the set. Using the registry before BeginRegistration fails ST_CORE_VERIFY. While it is open, only the registering
+	// thread may use it; once frozen it never changes, so reads need no lock and are safe from any thread.
 	class ComponentRegistry
 	{
 	public:
+		static void BeginRegistration();
+		static void Freeze();
+		static bool IsRegistrationOpen();
+		static bool IsFrozen();
+
 		static const std::vector<const ComponentInfo*>& GetAll();
 		static const ComponentInfo* Find(std::string_view name); // Case-insensitive
 
@@ -76,63 +85,94 @@ namespace Strata
 
 		static const ComponentInfo* FindByTypeId(entt::id_type typeId);
 
-		// Registers a component type. Only valid during built-in registration (see ComponentRegistration.cpp).
+		// Registers a component type under a stable name (used in files and APIs) while registration is open. A refused
+		// registration - the registry is frozen, the type is registered already or the name is taken (ignoring case) - logs
+		// an error, and the returned builder converts to false and discards what it is given.
 		template<typename T>
 		static ComponentInfoBuilder<T> Register(std::string name);
 	private:
-		static ComponentInfo& CreateInfo(std::string name, entt::id_type typeId);
-		static void EnsureInitialized();
+		// Null (with the reason logged) when the registration is refused.
+		static ComponentInfo* CreateInfo(std::string name, entt::id_type typeId);
 	};
 
+	namespace Detail
+	{
+
+		// What a component builder writes into: the registered info, or a scratch info that is discarded when the registry
+		// refused the registration (so the builder chain that follows a refused Register runs without effect). A separate
+		// base class, so that it is constructed before PropertyBuilderBase, which keeps a reference into the info.
+		class ComponentInfoTarget
+		{
+		protected:
+			explicit ComponentInfoTarget(ComponentInfo* registered)
+				: m_Registered(registered), m_Scratch(registered ? nullptr : CreateScope<ComponentInfo>())
+			{
+			}
+
+			ComponentInfo& GetTarget() { return m_Registered ? *m_Registered : *m_Scratch; }
+
+			ComponentInfo* m_Registered;
+			Scope<ComponentInfo> m_Scratch;
+		};
+
+	}
+
 	template<typename T>
-	class ComponentInfoBuilder : public PropertyBuilderBase<T, ComponentInfoBuilder<T>>
+	class ComponentInfoBuilder : private Detail::ComponentInfoTarget, public PropertyBuilderBase<T, ComponentInfoBuilder<T>>
 	{
 	public:
-		explicit ComponentInfoBuilder(ComponentInfo& info)
-			: PropertyBuilderBase<T, ComponentInfoBuilder<T>>(info.Properties), m_Info(info)
+		// `info` is the registered info, or null when the registration was refused.
+		explicit ComponentInfoBuilder(ComponentInfo* info)
+			: Detail::ComponentInfoTarget(info), PropertyBuilderBase<T, ComponentInfoBuilder<T>>(GetTarget().Properties)
 		{
 		}
 
+		// False when the registry refused the registration (see ComponentRegistry::Register).
+		bool IsRegistered() const { return m_Registered != nullptr; }
+		explicit operator bool() const { return IsRegistered(); }
+
 		ComponentInfoBuilder& DisplayName(std::string displayName)
 		{
-			m_Info.DisplayName = std::move(displayName);
+			GetTarget().DisplayName = std::move(displayName);
 			return *this;
 		}
 
 		ComponentInfoBuilder& Category(std::string category)
 		{
-			m_Info.Category = std::move(category);
+			GetTarget().Category = std::move(category);
 			return *this;
 		}
 
 		ComponentInfoBuilder& Description(std::string description)
 		{
-			m_Info.Description = std::move(description);
+			GetTarget().Description = std::move(description);
 			return *this;
 		}
 
 		ComponentInfoBuilder& Flags(ComponentFlags flags)
 		{
-			m_Info.Flags = flags;
+			GetTarget().Flags = flags;
 			return *this;
 		}
 
 		// Extra (de)serialization for data that properties cannot express.
 		ComponentInfoBuilder& Extra(std::function<void(const T&, nlohmann::json&)> serialize, std::function<bool(T&, const nlohmann::json&, std::string*)> deserialize)
 		{
-			m_Info.SerializeExtra = [serialize](const void* component, nlohmann::json& out) { serialize(*static_cast<const T*>(component), out); };
-			m_Info.DeserializeExtra = [deserialize](void* component, const nlohmann::json& in, std::string* outError) { return deserialize(*static_cast<T*>(component), in, outError); };
+			ComponentInfo& info = GetTarget();
+			info.SerializeExtra = [serialize](const void* component, nlohmann::json& out) { serialize(*static_cast<const T*>(component), out); };
+			info.DeserializeExtra = [deserialize](void* component, const nlohmann::json& in, std::string* outError) { return deserialize(*static_cast<T*>(component), in, outError); };
 			return *this;
 		}
-	private:
-		ComponentInfo& m_Info;
 	};
 
 	template<typename T>
 	ComponentInfoBuilder<T> ComponentRegistry::Register(std::string name)
 	{
-		ComponentInfo& info = CreateInfo(std::move(name), entt::type_id<T>().hash());
+		ComponentInfo* registered = CreateInfo(std::move(name), entt::type_id<T>().hash());
+		if (!registered)
+			return ComponentInfoBuilder<T>(nullptr);
 
+		ComponentInfo& info = *registered;
 		info.Has = [](const entt::registry& registry, entt::entity entity) { return registry.all_of<T>(entity); };
 		if constexpr (std::is_empty_v<T>)
 		{
@@ -181,7 +221,7 @@ namespace Strata
 			}
 		};
 
-		return ComponentInfoBuilder<T>(info);
+		return ComponentInfoBuilder<T>(registered);
 	}
 
 }

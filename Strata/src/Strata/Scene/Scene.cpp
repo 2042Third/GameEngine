@@ -658,38 +658,4 @@ namespace Strata
 			AddComponent<InactiveComponent>();
 	}
 
-	////////////////////////////////////////////////////////////////////////////////
-	// SceneSystemRegistry
-	////////////////////////////////////////////////////////////////////////////////
-
-	// Defined in SceneSystemRegistration.cpp.
-	void CreateBuiltinSceneSystems(std::vector<SceneSystemDescriptor>& descriptors);
-
-	// The built-in systems are added directly to the storage (never through Register, which would re-enter the
-	// call_once), before any other registration.
-	static std::vector<SceneSystemDescriptor>& GetSceneSystemDescriptors()
-	{
-		static std::vector<SceneSystemDescriptor> s_Descriptors;
-		static std::once_flag s_BuiltinsRegistered;
-		std::call_once(s_BuiltinsRegistered, []() { CreateBuiltinSceneSystems(s_Descriptors); });
-		return s_Descriptors;
-	}
-
-	void SceneSystemRegistry::Register(SceneSystemDescriptor descriptor)
-	{
-		Unregister(descriptor.Name);
-		GetSceneSystemDescriptors().push_back(std::move(descriptor));
-	}
-
-	void SceneSystemRegistry::Unregister(const std::string& name)
-	{
-		std::vector<SceneSystemDescriptor>& descriptors = GetSceneSystemDescriptors();
-		descriptors.erase(std::remove_if(descriptors.begin(), descriptors.end(), [&](const SceneSystemDescriptor& descriptor) { return descriptor.Name == name; }), descriptors.end());
-	}
-
-	const std::vector<SceneSystemDescriptor>& SceneSystemRegistry::GetAll()
-	{
-		return GetSceneSystemDescriptors();
-	}
-
 }

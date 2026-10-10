@@ -8,37 +8,28 @@
 namespace Strata
 {
 
-	// Defined in Asset/AssetImporters.cpp: creates the built-in importers.
-	void CreateBuiltinAssetImporters(std::vector<Scope<AssetImporter>>& importers);
-
 	namespace
 	{
 
 		struct ImporterStorage
 		{
 			std::mutex Mutex;
+			std::atomic<bool> Open = false;
 			std::vector<Scope<AssetImporter>> Importers;
 		};
 
-		ImporterStorage& GetImporterStorage()
+		ImporterStorage& GetImporterStorageUnchecked()
 		{
 			static ImporterStorage s_Storage;
 			return s_Storage;
 		}
 
-		// Built-ins are registered first, before any other registration, so later registrations override them.
-		void EnsureBuiltinImporters()
+		ImporterStorage& GetImporterStorage()
 		{
-			static std::once_flag s_Once;
-			std::call_once(s_Once, []()
-			{
-				std::vector<Scope<AssetImporter>> builtins;
-				CreateBuiltinAssetImporters(builtins);
-				ImporterStorage& storage = GetImporterStorage();
-				std::scoped_lock<std::mutex> lock(storage.Mutex);
-				for (Scope<AssetImporter>& importer : builtins)
-					storage.Importers.push_back(std::move(importer));
-			});
+			ImporterStorage& storage = GetImporterStorageUnchecked();
+			ST_CORE_VERIFY(storage.Open.load(std::memory_order_acquire),
+				"The asset importer registry is used before Engine::RegisterBuiltinModules() registered the engine's modules");
+			return storage;
 		}
 
 	}
@@ -48,9 +39,13 @@ namespace Strata
 		return nlohmann::json::object();
 	}
 
+	void AssetImporterRegistry::BeginRegistration()
+	{
+		GetImporterStorageUnchecked().Open.store(true, std::memory_order_release);
+	}
+
 	void AssetImporterRegistry::Register(Scope<AssetImporter> importer)
 	{
-		EnsureBuiltinImporters();
 		ImporterStorage& storage = GetImporterStorage();
 		std::scoped_lock<std::mutex> lock(storage.Mutex);
 		storage.Importers.push_back(std::move(importer));
@@ -58,7 +53,6 @@ namespace Strata
 
 	const AssetImporter* AssetImporterRegistry::FindByExtension(std::string_view extension)
 	{
-		EnsureBuiltinImporters();
 		const std::string lowered = StringUtils::ToLower(extension);
 		ImporterStorage& storage = GetImporterStorage();
 		std::scoped_lock<std::mutex> lock(storage.Mutex);
@@ -76,7 +70,6 @@ namespace Strata
 
 	std::vector<const AssetImporter*> AssetImporterRegistry::GetAll()
 	{
-		EnsureBuiltinImporters();
 		ImporterStorage& storage = GetImporterStorage();
 		std::scoped_lock<std::mutex> lock(storage.Mutex);
 		std::vector<const AssetImporter*> importers;

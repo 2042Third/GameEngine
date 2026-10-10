@@ -99,8 +99,9 @@ updates). `InputNames` maps key and button names for the `input.*` commands.
 angles in degrees. `AABB`, `Frustum`, `Ray`, and `Random` (thread-local generators).
 
 **Reflection** (`Reflection/`). `PropertyType` (Bool to Entity), `PropertyInfo` (ranges, enum options, flags),
-`PropertyBuilder`, `ComponentRegistry` (`ComponentInfo`: metadata plus type-erased ECS operations; built-ins are
-registered once on first use and the registry is immutable afterwards) and `PropertyJson` (canonical JSON plus lenient
+`PropertyBuilder`, `ComponentRegistry` (`ComponentInfo`: metadata plus type-erased ECS operations; components are
+registered while the composition root runs and the registry is frozen afterwards, see
+[Composition root and registries](#composition-root-and-registries)) and `PropertyJson` (canonical JSON plus lenient
 parsing for automation). Reflection is the single description of component data: `SceneSerializer`, the inspector
 (`StrataEditor/src/UI/PropertyWidgets.h`), the `component.*` commands, undo snapshots and script property access all
 go through it, mostly via `Scene/ComponentAccess`.
@@ -118,7 +119,8 @@ scenes by root entity over `JobSystem::ParallelFor` (`Scene.cpp`).
 **Asset** (`Asset/`). `AssetManagerBase` (registry and asynchronous loading), `AssetManager` (the process-wide active
 manager), `EditorAssetManager` (project files, `.meta` sidecars, imports, hot reload, pack building),
 `RuntimeAssetManager` (reads an `AssetPack`), `AssetImporter` with the built-in importers (`AssetImporters.cpp`,
-`GltfImporter`, `TextureImporter`), the loaders (`AssetRegistration.cpp`) and `BuiltinAssets`. The asset types are
+`GltfImporter`, `TextureImporter`), `AssetLoaderRegistry` (the loaders, registered by the modules that own the types)
+and `BuiltinAssets` (fixed handles; the owning module provides each object through a factory). The asset types are
 Scene, Prefab, Model, Mesh, Material, Texture, AudioClip and Font (`AssetTypes.h`). See
 [Asset pipeline](#asset-pipeline).
 
@@ -169,9 +171,49 @@ runtime does not use it. Protocol and security model: AGENTS.md, "Automation (ed
 enabled and a window and graphics device exist, and calls `Begin`/`End` around the layers' `OnImGuiRender`.
 `ImGuiRenderer` is the NVRHI backend (user textures are `nvrhi::ITexture*`). Only the editor enables it.
 
+**Engine** (`Engine/`). `BuiltinModules`, the composition root (below), and nothing else: the only code that knows every
+module.
+
+### Composition root and registries
+
+The engine is extended through registries rather than through code that knows its modules: `ComponentRegistry`
+(components), `AssetLoaderRegistry` (stored bytes to asset objects), `AssetImporterRegistry` (source files to stored
+bytes), `BuiltinAssets` (objects of the built-in assets) and `SceneSystemRegistry` (runtime systems of playing scenes).
+`Engine::RegisterBuiltinModules` (`Engine/BuiltinModules.cpp`) fills them, once per process, before anything reads
+them:
+
+```text
+open every registry (BeginRegistration)
+RegisterSceneModule        Scene/SceneRegistration.cpp         components (ComponentRegistration.cpp); Scene, Prefab, Model loaders
+RegisterRendererModule     Renderer/RendererRegistration.cpp   Texture, Mesh, Material, Font loaders; built-in meshes and material
+RegisterScriptingModule    Scripting/ScriptingRegistration.cpp "Scripting" system
+RegisterPhysicsModule      Physics/PhysicsRegistration.cpp     "Physics" system
+RegisterAudioModule        Audio/AudioRegistration.cpp         AudioClip loader, "Audio" system
+RegisterAssetPipeline      Asset/AssetImporters.cpp            importers (ModuleRegistrationOptions::AssetPipeline)
+options.Extra              registrations of games, tools and tests
+ComponentRegistry::Freeze
+```
+
+- **Callers.** The `Application` constructor calls it first thing, so the editor and the runtime are covered; a client
+  that needs options calls it earlier (StrataRuntime, in `CreateApplication`, runs without the asset pipeline: games
+  read cooked packs). `StrataTests` calls it in `main` before doctest runs and in its helper modes. A second call is a
+  no-op (with an error when it carries `Extra` registrations, which would be lost).
+- **Use before registration** fails `ST_CORE_VERIFY` with a message naming `Engine::RegisterBuiltinModules`, in every
+  registry: a program that forgot the composition root stops at its first lookup instead of running without
+  components or loaders.
+- **Component lifecycle.** `ComponentRegistry` is closed, then open (`BeginRegistration`: `Register<T>` is valid from
+  any registering code), then frozen (`Freeze`): the set of components never changes afterwards, so reads take no lock
+  and are safe from any thread (asset loads deserialize scenes on workers). `Register<T>` after `Freeze`, for a type
+  that is registered already or under a name that is taken (ignoring case), logs an error and returns a builder that
+  converts to false and discards what it is given; nothing aborts. A game registers its components through
+  `ModuleRegistrationOptions::Extra`.
+- The loader, importer, built-in asset and scene system registries stay open: tools and tests register more later
+  (a later loader or importer replaces or overrides the built-in one).
+
 ## Application and frame loop
 
-Startup (`Application::Application`, `Core/Application.cpp`): set the working directory, `JobSystem::Init`, create
+Startup (`Application::Application`, `Core/Application.cpp`): `Engine::RegisterBuiltinModules` (a no-op when the client
+registered the modules already), set the working directory, `JobSystem::Init`, create
 the window unless headless, `Input::Reset`, create the graphics device, swapchain and `Renderer` when
 `EnableRenderer` is set (no usable device: exit code 1), `AudioEngine::Init` (the null device when headless), and push
 the `ImGuiLayer` overlay. The client's constructor then pushes its layer (`EditorLayer`, `RuntimeLayer`).
@@ -225,7 +267,8 @@ audio, the renderer, the device and the window go.
 ## Scene runtime lifecycle
 
 A `Scene` that plays owns scene systems (`Scene/SceneSystem.h`), created from `SceneSystemRegistry` in registration
-order. The built-ins (`Scene/SceneSystemRegistration.cpp`) are, in update order:
+order. The built-ins (registered by their modules, see [Composition root and registries](#composition-root-and-registries))
+are, in update order:
 
 | System | Class | Modes | Role |
 | --- | --- | --- | --- |
@@ -322,8 +365,8 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   reports changes; `Update` re-registers files and queues re-imports on the I/O pool, and applies finished imports by
   reloading loaded assets (`ReloadAsset`). The cache record (`<handle>.import`) remembers the source state, settings,
   importer version and dependencies, so a current import is reused.
-- **Importers and stored forms** (`Asset/AssetImporters.cpp`; the loaders that read the stored form are in
-  `Asset/AssetRegistration.cpp`, one `Deserialize` per type, `Font::Create` for fonts):
+- **Importers and stored forms** (`Asset/AssetImporters.cpp`; the loaders that read the stored form are registered by
+  the module that owns each type, one `Deserialize` per type, `Font::Create` for fonts):
 
   | Type | Sources | Importer | Stored form |
   | --- | --- | --- | --- |

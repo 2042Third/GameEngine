@@ -130,6 +130,11 @@ namespace Strata
 
 	Application* CreateApplication(const CommandLine& commandLine)
 	{
+		// Games read cooked asset packs: they run without the asset pipeline (importers).
+		Engine::ModuleRegistrationOptions modules;
+		modules.AssetPipeline = false;
+		Engine::RegisterBuiltinModules(modules);
+
 		RuntimeOptions options;
 		if (std::optional<std::string> game = commandLine.GetOption("--game"))
 			options.ManifestPath = FileSystem::FromUTF8(*game);

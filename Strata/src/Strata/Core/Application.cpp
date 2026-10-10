@@ -5,6 +5,7 @@
 #include "Strata/Audio/AudioEngine.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Timer.h"
+#include "Strata/Engine/BuiltinModules.h"
 #include "Strata/ImGui/ImGuiLayer.h"
 #include "Strata/Input/Input.h"
 #include "Strata/Project/Project.h"
@@ -21,6 +22,9 @@ namespace Strata
 	{
 		ST_CORE_VERIFY(!s_Instance, "Only one Application may exist at a time");
 		s_Instance = this;
+
+		// Before anything uses a registry. A no-op when the client registered the modules itself (with its own options).
+		Engine::RegisterBuiltinModules();
 
 		if (!m_Specification.WorkingDirectory.empty())
 		{

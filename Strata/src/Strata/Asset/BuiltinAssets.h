@@ -2,6 +2,7 @@
 
 #include "Strata/Asset/Asset.h"
 
+#include <functional>
 #include <span>
 #include <string_view>
 
@@ -16,6 +17,9 @@ namespace Strata
 		AssetType Type;
 		std::string_view Name; // Also the asset path: "Builtin/<Name>"
 	};
+
+	// Creates the object of one built-in asset. Called for every asset manager, which owns what it gets.
+	using BuiltinAssetFactory = std::function<Ref<Asset>()>;
 
 	// Assets every project has, with fixed handles (UUIDs 1-255 are reserved for them). Scenes and scripts may
 	// reference these handles directly, e.g. a MeshRenderer using BuiltinAssets::CubeMesh.
@@ -35,7 +39,15 @@ namespace Strata
 		static bool IsBuiltin(AssetHandle handle) { return IsBuiltinAssetHandle(handle); }
 		static std::span<const BuiltinAssetInfo> GetAll();
 
-		// Adds every built-in asset to the manager as a memory asset.
+		// Opens the factory registry (Engine::RegisterBuiltinModules). Creating an asset manager before that fails
+		// ST_CORE_VERIFY.
+		static void BeginRegistration();
+		// The module that owns a built-in asset's type provides its object (the renderer module: the primitive meshes and
+		// the default material), so that the asset layer depends on no module. A later factory replaces an earlier one.
+		// Returns false (and logs) for a handle that is not one of GetAll or an empty factory.
+		static bool RegisterFactory(AssetHandle handle, BuiltinAssetFactory factory);
+
+		// Adds every built-in asset that has a factory to the manager as a memory asset.
 		static void Register(AssetManagerBase& manager);
 	};
 

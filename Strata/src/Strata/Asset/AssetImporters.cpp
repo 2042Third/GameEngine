@@ -139,15 +139,15 @@ namespace Strata
 
 	}
 
-	void CreateBuiltinAssetImporters(std::vector<Scope<AssetImporter>>& importers)
+	void RegisterAssetPipeline()
 	{
-		importers.push_back(CreateScope<NativeAssetImporter>(AssetType::Scene, GetNativeAssetExtension(AssetType::Scene)));
-		importers.push_back(CreateScope<NativeAssetImporter>(AssetType::Prefab, GetNativeAssetExtension(AssetType::Prefab)));
-		importers.push_back(CreateScope<NativeAssetImporter>(AssetType::Material, GetNativeAssetExtension(AssetType::Material)));
-		importers.push_back(CreateScope<TextureImporter>());
-		importers.push_back(CreateScope<GltfImporter>());
-		importers.push_back(CreateScope<AudioClipImporter>());
-		importers.push_back(CreateScope<FontImporter>());
+		AssetImporterRegistry::Register(CreateScope<NativeAssetImporter>(AssetType::Scene, GetNativeAssetExtension(AssetType::Scene)));
+		AssetImporterRegistry::Register(CreateScope<NativeAssetImporter>(AssetType::Prefab, GetNativeAssetExtension(AssetType::Prefab)));
+		AssetImporterRegistry::Register(CreateScope<NativeAssetImporter>(AssetType::Material, GetNativeAssetExtension(AssetType::Material)));
+		AssetImporterRegistry::Register(CreateScope<TextureImporter>());
+		AssetImporterRegistry::Register(CreateScope<GltfImporter>());
+		AssetImporterRegistry::Register(CreateScope<AudioClipImporter>());
+		AssetImporterRegistry::Register(CreateScope<FontImporter>());
 	}
 
 }

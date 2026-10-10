@@ -23,8 +23,10 @@ Add the struct to `Strata/src/Strata/Scene/Components.h` in the right section. R
 
 ## 2. Register it
 
-In `Strata/src/Strata/Scene/ComponentRegistration.cpp`, register the type with a stable name. The name is
-written to files and used by tools; never rename it later.
+In `Strata/src/Strata/Scene/ComponentRegistration.cpp` (`RegisterSceneComponents`, part of the scene module's
+registration), register the type with a stable name. The name is written to files and used by tools; never rename
+it later. Components register only while `Engine::RegisterBuiltinModules` runs (the registry freezes at its end);
+a game or test registers its own components through `ModuleRegistrationOptions::Extra`.
 
 ```cpp
 ComponentRegistry::Register<WindZoneComponent>("WindZone")
@@ -46,8 +48,9 @@ ComponentRegistry::Register<WindZoneComponent>("WindZone")
 
 ## 3. Add behaviour (if the component does something at runtime)
 
-Implement a `SceneSystem` (`Scene/SceneSystem.h`) and add its descriptor in `CreateBuiltinSceneSystems`
-(`Scene/SceneSystemRegistration.cpp`). The registration order is the update order; set
+Implement a `SceneSystem` (`Scene/SceneSystem.h`) and register its descriptor in the registration function of
+the module it belongs to (e.g. `RegisterPhysicsModule` in `Physics/PhysicsRegistration.cpp`), which
+`Engine::RegisterBuiltinModules` calls. The registration order is the update order; set
 `RunsInSimulateMode` only for systems that belong in the editor's physics-only simulate mode. React to
 edits through EnTT signals (`on_construct`, `on_update`, `on_destroy`). Edits notify through `patch`, which
 `ComponentAccess` and `Entity::MarkModified<T>()` emit, so the system must not poll every component each

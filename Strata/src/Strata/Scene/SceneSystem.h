@@ -57,12 +57,13 @@ namespace Strata
 		std::function<Scope<SceneSystem>(Scene&)> Create;
 	};
 
-	// Registry of scene system factories. The engine's own systems are created by CreateBuiltinSceneSystems
-	// (SceneSystemRegistration.cpp) on first use; applications and tools may register more. The order of registration
-	// is the update order. Main thread only; register at startup, before scenes start running.
+	// Registry of scene system factories. Engine::RegisterBuiltinModules opens it and the engine's modules register their
+	// systems; applications and tools may register more. The order of registration is the update order. Main thread only;
+	// register at startup, before scenes start running. Using the registry before BeginRegistration fails ST_CORE_VERIFY.
 	class SceneSystemRegistry
 	{
 	public:
+		static void BeginRegistration();
 		static void Register(SceneSystemDescriptor descriptor);
 		static void Unregister(const std::string& name);
 		static const std::vector<SceneSystemDescriptor>& GetAll();

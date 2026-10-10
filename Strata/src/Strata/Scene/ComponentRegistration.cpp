@@ -1,6 +1,7 @@
 #include "stpch.h"
-#include "Strata/Reflection/ComponentRegistry.h"
+#include "Strata/Scene/SceneRegistration.h"
 
+#include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Reflection/PropertyJson.h"
 #include "Strata/Scene/Components.h"
 
@@ -125,7 +126,7 @@ namespace Strata
 
 	}
 
-	void RegisterBuiltinComponents()
+	void RegisterSceneComponents()
 	{
 		////////////////////////////////////////////////////////////////////////////////
 		// Core

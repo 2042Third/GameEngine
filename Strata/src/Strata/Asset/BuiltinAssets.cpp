@@ -2,14 +2,16 @@
 #include "Strata/Asset/BuiltinAssets.h"
 
 #include "Strata/Asset/AssetManager.h"
-#include "Strata/Renderer/Material.h"
-#include "Strata/Renderer/MeshFactory.h"
+
+#include <atomic>
+#include <mutex>
 
 namespace Strata
 {
 
 	namespace
 	{
+
 		constexpr BuiltinAssetInfo c_BuiltinAssets[] = {
 			{ BuiltinAssets::CubeMesh, AssetType::Mesh, "Cube" },
 			{ BuiltinAssets::SphereMesh, AssetType::Mesh, "Sphere" },
@@ -21,6 +23,38 @@ namespace Strata
 			{ BuiltinAssets::TorusMesh, AssetType::Mesh, "Torus" },
 			{ BuiltinAssets::DefaultMaterial, AssetType::Material, "DefaultMaterial" }
 		};
+
+		struct FactoryStorage
+		{
+			std::mutex Mutex;
+			std::atomic<bool> Open = false;
+			std::unordered_map<AssetHandle, BuiltinAssetFactory> Factories;
+		};
+
+		FactoryStorage& GetFactoryStorageUnchecked()
+		{
+			static FactoryStorage s_Storage;
+			return s_Storage;
+		}
+
+		FactoryStorage& GetFactoryStorage()
+		{
+			FactoryStorage& storage = GetFactoryStorageUnchecked();
+			ST_CORE_VERIFY(storage.Open.load(std::memory_order_acquire),
+				"The built-in assets are used before Engine::RegisterBuiltinModules() registered the engine's modules");
+			return storage;
+		}
+
+		const BuiltinAssetInfo* FindInfo(AssetHandle handle)
+		{
+			for (const BuiltinAssetInfo& info : c_BuiltinAssets)
+			{
+				if (info.Handle == handle)
+					return &info;
+			}
+			return nullptr;
+		}
+
 	}
 
 	std::span<const BuiltinAssetInfo> BuiltinAssets::GetAll()
@@ -28,34 +62,61 @@ namespace Strata
 		return c_BuiltinAssets;
 	}
 
+	void BuiltinAssets::BeginRegistration()
+	{
+		GetFactoryStorageUnchecked().Open.store(true, std::memory_order_release);
+	}
+
+	bool BuiltinAssets::RegisterFactory(AssetHandle handle, BuiltinAssetFactory factory)
+	{
+		FactoryStorage& storage = GetFactoryStorage();
+		if (!FindInfo(handle))
+		{
+			ST_CORE_ERROR("Asset {} is not a built-in asset; it cannot get a built-in asset factory", handle.ToString());
+			return false;
+		}
+		if (!factory)
+		{
+			ST_CORE_ERROR("The factory of built-in asset {} is empty", handle.ToString());
+			return false;
+		}
+
+		std::scoped_lock<std::mutex> lock(storage.Mutex);
+		storage.Factories[handle] = std::move(factory);
+		return true;
+	}
+
 	void BuiltinAssets::Register(AssetManagerBase& manager)
 	{
-		auto add = [&manager](const Ref<Asset>& asset, AssetHandle handle)
+		// The factories run without the lock: they are module code.
+		std::unordered_map<AssetHandle, BuiltinAssetFactory> factories;
 		{
-			for (const BuiltinAssetInfo& info : c_BuiltinAssets)
-			{
-				if (info.Handle != handle)
-					continue;
-				AssetMetadata metadata;
-				metadata.Handle = handle;
-				metadata.Type = info.Type;
-				metadata.Name = std::string(info.Name);
-				metadata.Path = "Builtin/" + std::string(info.Name);
-				manager.AddMemoryAsset(asset, metadata);
-				return;
-			}
-		};
+			FactoryStorage& storage = GetFactoryStorage();
+			std::scoped_lock<std::mutex> lock(storage.Mutex);
+			factories = storage.Factories;
+		}
 
-		const AssetHandle material = DefaultMaterial;
-		add(Material::Create(), DefaultMaterial);
-		add(MeshFactory::CreateCube(1.0f, material), CubeMesh);
-		add(MeshFactory::CreateSphere(0.5f, 48, 24, material), SphereMesh);
-		add(MeshFactory::CreatePlane(1.0f, 1, material), PlaneMesh);
-		add(MeshFactory::CreateQuad(1.0f, material), QuadMesh);
-		add(MeshFactory::CreateCylinder(0.5f, 1.0f, 48, material), CylinderMesh);
-		add(MeshFactory::CreateCapsule(0.5f, 0.5f, 48, 12, material), CapsuleMesh);
-		add(MeshFactory::CreateCone(0.5f, 1.0f, 48, material), ConeMesh);
-		add(MeshFactory::CreateTorus(0.375f, 0.125f, 48, 24, material), TorusMesh);
+		for (const BuiltinAssetInfo& info : c_BuiltinAssets)
+		{
+			// Built-in assets of modules a build does not contain have no factory.
+			auto factory = factories.find(info.Handle);
+			if (factory == factories.end())
+				continue;
+
+			const Ref<Asset> asset = factory->second();
+			if (!asset || asset->GetType() != info.Type)
+			{
+				ST_CORE_ERROR("The factory of built-in asset '{}' did not create a {}", info.Name, AssetTypeToString(info.Type));
+				continue;
+			}
+
+			AssetMetadata metadata;
+			metadata.Handle = info.Handle;
+			metadata.Type = info.Type;
+			metadata.Name = std::string(info.Name);
+			metadata.Path = "Builtin/" + std::string(info.Name);
+			manager.AddMemoryAsset(asset, metadata);
+		}
 	}
 
 }
