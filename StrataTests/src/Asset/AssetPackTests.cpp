@@ -472,7 +472,7 @@ TEST_SUITE("Asset.Pack")
 		// The read buffers belong to the pack, which keeps a few of them (counted) for the next reads; no thread keeps any.
 		const uint64_t bufferBytes = pack->GetStats().BufferBytes;
 		CHECK(bufferBytes > 0);
-		CHECK(bufferBytes <= AssetPack::c_MaxFreeReadBuffers * 2 * AssetPack::c_ReadChunkBytes);
+		CHECK(bufferBytes <= AssetPack::c_MaxFreeReadBuffers * AssetPack::c_ReadChunkBytes);
 	}
 
 	TEST_CASE("Reads in jobs return their own bytes while other reads run")

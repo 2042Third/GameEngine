@@ -613,6 +613,9 @@ namespace Strata
 					break;
 
 				std::vector<uint8_t>& buffer = buffers[index % bufferCount];
+				// Sized for any chunk at once, rather than grown by half again (buffers are kept for the next reads).
+				if (buffer.capacity() < chunk.Bytes)
+					buffer.reserve(static_cast<size_t>(std::max(chunk.Bytes, c_ReadChunkBytes)));
 				buffer.resize(static_cast<size_t>(chunk.Bytes));
 				if (!m_Reader->ReadAt(m_Blocks[entry.FirstBlock + firstBlock + chunk.First].Offset, buffer))
 				{

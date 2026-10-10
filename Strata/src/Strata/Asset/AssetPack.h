@@ -99,7 +99,7 @@ namespace Strata
 		// buffers the pack lends and keeps for the next reads (at most c_MaxFreeReadBuffers of them; GetStats().BufferBytes).
 		static constexpr uint64_t c_ReadChunkBytes = 2ull << 20;
 		static constexpr size_t c_ReadBuffersPerRead = 3;
-		static constexpr size_t c_MaxFreeReadBuffers = 8;
+		static constexpr size_t c_MaxFreeReadBuffers = 6;
 
 		// Reads and validates the header and the tables. The file stays open (one handle, shared by every read) until the
 		// pack is destroyed.
