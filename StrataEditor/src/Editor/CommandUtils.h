@@ -66,6 +66,10 @@ namespace Strata
 		// The totals of AssetManagerBase::GetStats as asset.stats and editor.status report them (EditorStreamingCommands.cpp).
 		nlohmann::json DescribeAssetStats(const AssetManagerStats& stats);
 
+		// Statistics of frame times in milliseconds (at least one), as editor.wait and project.export report them: {count,
+		// medianMs (the mean of the two middle ones for an even count), meanMs, p95Ms (nearest rank), maxMs}.
+		nlohmann::json DescribeFrameTimes(std::vector<double> frameTimes);
+
 		// A file a command writes for its client (e.g. a capture). Relative paths resolve against the project directory
 		// and fail without a project (the editor's working directory means nothing to a client); absolute paths stay.
 		// Network (UNC) and device paths, drive-relative paths and reserved device names are refused, the extension must

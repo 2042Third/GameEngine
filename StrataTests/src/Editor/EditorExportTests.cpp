@@ -1,0 +1,260 @@
+#include <doctest/doctest.h>
+
+#include "Asset/AssetTestUtils.h"
+#include "Editor/CommandTestUtils.h"
+#include "Editor/EditorCommands.h"
+#include "Editor/EditorContext.h"
+#include "Editor/GameExport.h"
+#include "TestHelpers.h"
+
+#include <Strata/Asset/AssetPack.h>
+#include <Strata/Asset/RuntimeAssetManager.h>
+#include <Strata/Core/FileSystem.h>
+#include <Strata/Project/GameManifest.h>
+
+#include <chrono>
+#include <set>
+#include <string>
+#include <thread>
+#include <vector>
+
+using namespace Strata;
+using namespace Strata::Tests;
+
+namespace
+{
+
+	// A project with a saved start scene that draws a material, an unused material, a prefab with a material of its own and
+	// `fontMegabytes` of large font files (stored as they are; packing them takes frames, so exports show their progress).
+	struct ExportHarness
+	{
+		EditorContext Context { EditorContextSpecification { false } };
+		EditorCommandRegistry Commands;
+		std::filesystem::path Directory;
+		std::string ProjectDirectory;
+
+		explicit ExportHarness(const std::string& name, uint32_t fontMegabytes = 0)
+			: Directory(CreateTemporaryDirectory(name))
+		{
+			Run("project.create", { { "directory", FileSystem::ToUTF8(Directory / "Game") }, { "name", "Export Game" } });
+			Run("material.create", { { "path", "Materials/Used.stmat" } });
+			Run("material.create", { { "path", "Materials/Unused.stmat" } });
+			Run("material.create", { { "path", "Materials/ForEnemy.stmat" } });
+			const std::string enemy = Run("entity.create", { { "name", "Enemy" }, { "components", { { "MeshRenderer", { { "Mesh", "0000000000000001" },
+				{ "Material", "Materials/ForEnemy.stmat" } } } } } })["id"].get<std::string>();
+			Run("prefab.create", { { "entities", { enemy } }, { "path", "Prefabs/Enemy.stprefab" } });
+			Run("entity.delete", { { "entities", { enemy } } });
+			Run("entity.create", { { "name", "Box" }, { "components", { { "MeshRenderer", { { "Mesh", "0000000000000001" }, { "Material", "Materials/Used.stmat" } } } } } });
+			Run("scene.saveAs", { { "path", "Scenes/Main.stscene" } });
+			Run("project.setStartScene", { { "scene", "Scenes/Main.stscene" } });
+			ProjectDirectory = Run("project.info")["directory"].get<std::string>();
+
+			if (fontMegabytes > 0)
+			{
+				// Noise does not compress: the pack writer works through all of it.
+				const std::filesystem::path fonts = Context.GetProject()->GetAssetDirectory() / "Fonts";
+				REQUIRE(FileSystem::CreateDirectories(fonts));
+				uint32_t state = 12345;
+				for (uint32_t file = 0; file < 4; file++)
+				{
+					std::vector<uint8_t> bytes((static_cast<size_t>(fontMegabytes) << 20) / 4);
+					for (uint8_t& byte : bytes)
+					{
+						state ^= state << 13;
+						state ^= state >> 17;
+						state ^= state << 5;
+						byte = static_cast<uint8_t>(state);
+					}
+					REQUIRE(FileSystem::WriteBytes(fonts / ("Large" + std::to_string(file) + ".ttf"), bytes));
+				}
+				// Opened again, so that the new files are registered.
+				Run("project.open", { { "path", ProjectDirectory } });
+			}
+		}
+
+		nlohmann::json Run(std::string_view name, const nlohmann::json& parameters = nlohmann::json::object())
+		{
+			return RunCommandToCompletion(Context, Commands, name, parameters);
+		}
+
+		EditorCommandResult Start(const nlohmann::json& parameters)
+		{
+			return Commands.Execute(Context, "project.export", parameters);
+		}
+
+		std::string Error(std::string_view name, const nlohmann::json& parameters)
+		{
+			const EditorCommandResult result = CompleteCommand(Context, Commands.Execute(Context, name, parameters));
+			CHECK_FALSE(result.Success);
+			return result.Error;
+		}
+	};
+
+	std::set<std::string> ExcludedPaths(const nlohmann::json& result)
+	{
+		std::set<std::string> paths;
+		for (const nlohmann::json& asset : result["excludedAssets"])
+			paths.insert(asset["path"].get<std::string>());
+		return paths;
+	}
+
+}
+
+TEST_SUITE("Editor.Export")
+{
+	TEST_CASE("Exports run over frames on an I/O thread and report their progress every frame")
+	{
+		ScopedJobSystem jobs(8, 2);
+		ExportHarness harness("EditorExportProgress", 96);
+		const std::filesystem::path output = harness.Directory / "Build";
+		EditorCommandResult result = harness.Start({ { "directory", FileSystem::ToUTF8(output) }, { "includeRuntime", false } });
+		REQUIRE(result.IsPending());
+		const Ref<GameExport> exporter = harness.Context.GetGameExport();
+		REQUIRE(exporter);
+
+		// One export at a time.
+		const EditorCommandResult second = harness.Commands.Execute(harness.Context, "project.export", { { "directory", FileSystem::ToUTF8(harness.Directory / "Other") } });
+		CHECK_FALSE(second.Success);
+		CHECK(second.Error.find("running already") != std::string::npos);
+		const nlohmann::json status = harness.Run("project.exportStatus");
+		CHECK(status["running"] == true);
+
+		// Polled frame by frame like the runner does: the progress never goes back, and frames keep coming while it packs.
+		std::vector<float> progress;
+		std::set<std::string> stages;
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2);
+		while (result.IsPending() && std::chrono::steady_clock::now() < deadline)
+		{
+			harness.Context.Update(Timestep(1.0f / 60.0f));
+			progress.push_back(exporter->GetProgress());
+			stages.insert(GameExportStateToString(exporter->GetState()));
+			// The I/O thread goes on meanwhile: the status reports the progress between the readings before and after it.
+			const float before = exporter->GetProgress();
+			const nlohmann::json frameStatus = harness.Run("project.exportStatus");
+			const float after = exporter->GetProgress();
+			CHECK(frameStatus["progress"].get<float>() >= before);
+			CHECK(frameStatus["progress"].get<float>() <= after);
+			PollCommandResult(result, harness.Context);
+			std::this_thread::sleep_for(std::chrono::milliseconds(2));
+		}
+		REQUIRE_FALSE(result.IsPending());
+		INFO(result.Error);
+		REQUIRE(result.Success);
+		for (size_t index = 1; index < progress.size(); index++)
+			CHECK(progress[index] >= progress[index - 1]);
+		CHECK(std::set<float>(progress.begin(), progress.end()).size() >= 3); // Steps between 0 and 1
+		CHECK(exporter->GetProgress() == 1.0f);
+		CHECK(stages.count("Packing") == 1);
+		CHECK(exporter->GetState() == GameExportState::Succeeded);
+		CHECK(exporter->GetStage().find("Exported") != std::string::npos);
+
+		const nlohmann::json& value = result.Value;
+		CHECK(value["frames"].get<uint64_t>() >= 3);
+		CHECK(value["excludedAssets"].empty());
+		CHECK(value["packBytes"].get<uint64_t>() >= 96ull << 20); // Noise is stored as it is
+		CHECK(value["seconds"].get<double>() > 0.0);
+		CHECK(FileSystem::GetFileSize(FileSystem::FromUTF8(value["assetPack"].get<std::string>())) == value["packBytes"].get<uint64_t>());
+		const nlohmann::json finished = harness.Run("project.exportStatus");
+		CHECK(finished["running"] == false);
+		CHECK(finished["state"] == "Succeeded");
+		CHECK(finished["progress"] == 1.0f);
+
+		// The game's pack starts with the start scene and what it uses.
+		std::string error;
+		const Ref<RuntimeAssetManager> runtime = RuntimeAssetManager::Create(FileSystem::FromUTF8(value["assetPack"].get<std::string>()), &error);
+		REQUIRE_MESSAGE(runtime, error);
+		const std::vector<AssetPackEntry>& entries = runtime->GetPack().GetEntries();
+		REQUIRE(entries.size() == value["assetCount"].get<size_t>());
+		CHECK(entries[0].Metadata.Path == "Scenes/Main.stscene");
+		CHECK(entries[1].Metadata.Path == "Materials/Used.stmat");
+	}
+
+	TEST_CASE("Cancelled exports and exports of closing projects stop")
+	{
+		ScopedJobSystem jobs(8, 2);
+		ExportHarness harness("EditorExportCancel", 96);
+		CHECK(harness.Error("project.cancelExport", {}).find("No export is running") != std::string::npos);
+
+		const std::filesystem::path output = harness.Directory / "Build";
+		EditorCommandResult result = harness.Start({ { "directory", FileSystem::ToUTF8(output) }, { "includeRuntime", false } });
+		REQUIRE(result.IsPending());
+		harness.Context.Update(Timestep(1.0f / 60.0f));
+		harness.Run("project.cancelExport");
+		result = CompleteCommand(harness.Context, std::move(result));
+		CHECK_FALSE(result.Success);
+		CHECK(result.ErrorKind == EditorCommandError::Cancelled);
+		CHECK(harness.Context.GetGameExport()->GetState() == GameExportState::Cancelled);
+		CHECK_FALSE(FileSystem::Exists(output / "Export Game.stpak")); // The writer removed what it wrote
+		CHECK_FALSE(FileSystem::Exists(output / "Export Game.stgame"));
+
+		// Closing the project cancels a running export and waits for it: the project's assets go only afterwards.
+		result = harness.Start({ { "directory", FileSystem::ToUTF8(output) }, { "includeRuntime", false } });
+		REQUIRE(result.IsPending());
+		harness.Context.Update(Timestep(1.0f / 60.0f));
+		harness.Run("project.close");
+		CHECK(harness.Context.GetGameExport()->IsFinished());
+		result = CompleteCommand(harness.Context, std::move(result));
+		CHECK_FALSE(result.Success);
+		CHECK(result.ErrorKind == EditorCommandError::Cancelled);
+	}
+
+	TEST_CASE("Pruned exports keep what the scenes use and what Export.AlwaysInclude names")
+	{
+		ExportHarness harness("EditorExportPrune");
+		const std::filesystem::path output = harness.Directory / "Pruned";
+
+		// Without pruning everything ships.
+		const nlohmann::json full = harness.Run("project.export", { { "directory", FileSystem::ToUTF8(harness.Directory / "Full") }, { "includeRuntime", false } });
+		CHECK(full["excludedAssets"].empty());
+
+		// Pruned: the unused material, the prefab and its material stay home.
+		const nlohmann::json pruned = harness.Run("project.export", { { "directory", FileSystem::ToUTF8(output) }, { "includeRuntime", false }, { "prune", true } });
+		CHECK(ExcludedPaths(pruned) == std::set<std::string> { "Materials/ForEnemy.stmat", "Materials/Unused.stmat", "Prefabs/Enemy.stprefab" });
+		CHECK(pruned["assetCount"].get<size_t>() + 3 == full["assetCount"].get<size_t>());
+		CHECK(pruned["packBytes"].get<uint64_t>() < full["packBytes"].get<uint64_t>());
+
+		// A prefab scripts spawn by path is kept with what it uses once AlwaysInclude names it (saved in the project file).
+		CHECK(harness.Commands.Execute(harness.Context, "project.setExportSettings", { { "alwaysInclude", { "Prefabs/Missing.stprefab" } } }).ErrorKind
+			== EditorCommandError::InvalidParameters);
+		CHECK(harness.Commands.Execute(harness.Context, "project.setExportSettings", { { "alwaysInclude", "Prefabs" } }).ErrorKind
+			== EditorCommandError::InvalidParameters);
+		const nlohmann::json settings = harness.Run("project.setExportSettings", { { "alwaysInclude", { "Prefabs" } } });
+		CHECK(settings["alwaysInclude"] == nlohmann::json { "Prefabs" });
+		CHECK(harness.Run("project.info")["export"]["alwaysInclude"] == nlohmann::json { "Prefabs" });
+		const std::optional<std::string> projectFile = FileSystem::ReadText(harness.Context.GetProject()->GetProjectFile());
+		REQUIRE(projectFile);
+		CHECK(projectFile->find("\"AlwaysInclude\"") != std::string::npos);
+
+		const nlohmann::json kept = harness.Run("project.export", { { "directory", FileSystem::ToUTF8(output) }, { "includeRuntime", false }, { "prune", true } });
+		CHECK(ExcludedPaths(kept) == std::set<std::string> { "Materials/Unused.stmat" });
+		std::string error;
+		const Ref<RuntimeAssetManager> runtime = RuntimeAssetManager::Create(FileSystem::FromUTF8(kept["assetPack"].get<std::string>()), &error);
+		REQUIRE_MESSAGE(runtime, error);
+		CHECK(runtime->FindAssetByPath("Prefabs/Enemy.stprefab").IsValid());
+		CHECK(runtime->FindAssetByPath("Materials/ForEnemy.stmat").IsValid());
+		CHECK_FALSE(runtime->FindAssetByPath("Materials/Unused.stmat").IsValid());
+		CHECK(GameManifest::Load(FileSystem::FromUTF8(kept["manifest"].get<std::string>())).has_value());
+
+		// Clearing the list again.
+		harness.Run("project.setExportSettings", { { "alwaysInclude", nlohmann::json::array() } });
+		CHECK(harness.Run("project.info")["export"]["alwaysInclude"].empty());
+	}
+
+	TEST_CASE("Export directories are checked before anything is written, with what to do instead")
+	{
+		ExportHarness harness("EditorExportDirectories");
+		const std::filesystem::path project = harness.Context.GetProject()->GetProjectDirectory();
+		auto error = [&](const std::string& directory) { return harness.Error("project.export", { { "directory", directory }, { "includeRuntime", false } }); };
+
+		CHECK(error("").find("Choose the directory") != std::string::npos);
+		CHECK(error("relative/Build").find("absolute path") != std::string::npos);
+		CHECK(error("//server/share/Build").find("network or device path") != std::string::npos);
+		CHECK(error(FileSystem::ToUTF8(project / "Build")).find("inside the project directory") != std::string::npos);
+		CHECK(error(FileSystem::ToUTF8(harness.Directory / "Games" / "con" / "Build")).find("reserved device name") != std::string::npos);
+		const std::filesystem::path file = harness.Directory / "AFile";
+		REQUIRE(FileSystem::WriteText(file, "not a directory"));
+		CHECK(error(FileSystem::ToUTF8(file)).find("is a file, not a directory") != std::string::npos);
+		CHECK_FALSE(FileSystem::Exists(harness.Directory / "Games"));
+		CHECK_FALSE(CheckExportDirectory(harness.Directory / "Build", project).has_value());
+	}
+}

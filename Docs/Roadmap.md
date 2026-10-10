@@ -63,6 +63,19 @@ module-foundation, ran as its own workstream):
   Project, Open Sample, About and "Connect an AI agent", the strata mark as window and executable icon, and the build's
   git commit in its version.
 
+**Wave 2** (merging):
+
+- `pack-v2`: asset packs version 2 (zstd-compressed 256 KiB blocks with CRC-32C checksums from 4 KiB-aligned entries,
+  read by byte range through one shared file handle, with dependency and mesh bounds tables; version 1 still loads),
+  dependencies and bounds recorded at import and answered identically by the editor and games, dependency prefetch
+  within the budgets and group loads (`RequestLoadWithDependencies`), packs ordered by first use with optional pruning
+  (`Export.AlwaysInclude`), patch packs, and an export that runs on an I/O thread behind the Export dialog. On the
+  stress project (Release): the pack is 0.74 of version 1 (349.6 MB against 472.7 MB, before textures are
+  block-compressed), opens in 0.06 ms, streams the world in 1.00 to 1.18 times the time of version 1 (measured on a
+  loaded machine; the target is 1.1), and exports in 1.5 s with every editor frame meanwhile under 34 ms. The pack size
+  with block-compressed textures (target 140 MB) is recorded by whichever of `texture-cook-v2` and `pack-v2` merges
+  second.
+
 Open items and deferrals later waves own:
 
 - The allowlist's 14 exceptions: the application shell's service wiring (7, `engine-modules`), asset finalization on

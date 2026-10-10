@@ -35,6 +35,8 @@
 	"PerfGPU.Editor.PlayFrameNested100k": { "Measured": 0.2209, "Budget": 0.3313, "Unit": "ms" },
 	"PerfGPU.Editor.EditFrameNested1M": { "Measured": 0.2196, "Budget": 0.3294, "Unit": "ms" },
 	"PerfGPU.Editor.PlayFrameNested1M": { "Measured": 0.2159, "Budget": 0.3238, "Unit": "ms" },
+	"PerfGPU.Editor.ExportFrameStress": { "Measured": 1.154, "Budget": 1.731, "Unit": "ms" },
+	"PerfGPU.Editor.ExportStress": { "Measured": 1477.0, "Budget": 2215.0, "Unit": "ms" },
 	"PerfGPU.Pack.OpenStressPack": { "Measured": 0.0601, "Budget": 0.0901, "Unit": "ms" },
 	"PerfGPU.Pack.StreamStressWorld": { "Measured": 172.4, "Budget": 258.6, "Unit": "ms" },
 	"PerfGPU.Pack.StressPackSize": { "Measured": 333.4, "Budget": 500.1, "Unit": "MB" },

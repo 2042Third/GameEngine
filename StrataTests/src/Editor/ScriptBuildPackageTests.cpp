@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
@@ -277,7 +278,7 @@ TEST_SUITE("Package.ScriptBuild")
 		CHECK(early.Error.find("is running") != std::string::npos);
 		harness.WaitForBuild();
 		REQUIRE(harness.Context.GetScriptBuilder().GetLastResult().Success);
-		const nlohmann::json exported = harness.Run("project.export", exportParameters);
+		const nlohmann::json exported = Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.export", exportParameters);
 		REQUIRE(exported["scriptModule"].is_string());
 		std::string gameError;
 		Scope<GameRuntime> game = GameRuntime::Create(FileSystem::FromUTF8(exported["manifest"].get<std::string>()), &gameError);

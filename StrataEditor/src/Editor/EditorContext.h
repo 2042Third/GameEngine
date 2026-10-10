@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Editor/EditorViewport.h"
+#include "Editor/GameExport.h"
 #include "Editor/ProjectTemplates.h"
 #include "Editor/RecentProjects.h"
 #include "Editor/SceneEdit.h"
@@ -220,6 +221,17 @@ namespace Strata
 		bool ReadRunningScriptModule(ScriptModuleFile& outFile, std::string* outError = nullptr) const;
 
 		//////////////////////////////////////////////////////////////////////////
+		// Export
+		//////////////////////////////////////////////////////////////////////////
+
+		// Starts exporting the open project as a playable game in the background (GameExport::Start, which says what is
+		// checked at once); Update advances it. One export at a time: fails while one runs. Closing the project or the editor
+		// cancels it.
+		bool StartGameExport(const GameExportOptions& options, std::string* outError = nullptr);
+		// The running export, or the last one that finished (null before the first).
+		const Ref<GameExport>& GetGameExport() const { return m_GameExport; }
+
+		//////////////////////////////////////////////////////////////////////////
 		// Viewport
 		//////////////////////////////////////////////////////////////////////////
 
@@ -228,9 +240,9 @@ namespace Strata
 		EditorViewport& GetViewport() { return m_Viewport; }
 		const EditorViewport& GetViewport() const { return m_Viewport; }
 
-		// Once per frame: script hot reload and builds, asset hot reload and loading, then the scene update (simulation
-		// while playing) and the running game's requests, then finished viewport picks. A script crash while playing stops
-		// play mode.
+		// Once per frame: script hot reload and builds, asset hot reload and loading, a running export, then the scene update
+		// (simulation while playing) and the running game's requests, then finished viewport picks. A script crash while
+		// playing stops play mode.
 		void Update(Timestep timestep);
 
 		//////////////////////////////////////////////////////////////////////////
@@ -313,6 +325,7 @@ namespace Strata
 
 		Ref<ScriptEngine> m_ScriptEngine;
 		ScriptBuilder m_ScriptBuilder;
+		Ref<GameExport> m_GameExport;
 		ScriptBuildLoad m_LastScriptBuildLoad;
 		std::optional<ScriptFault> m_LastScriptFault;
 		// The loaded module's file as it was loaded (see ReadRunningScriptModule), and the load it belongs to.

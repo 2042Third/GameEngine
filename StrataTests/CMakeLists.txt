@@ -283,8 +283,10 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	add_test(NAME StrataExport.Clean COMMAND "${CMAKE_COMMAND}" -E rm -rf "${STRATA_EXPORT_TEST_DIR}")
 	set_tests_properties(StrataExport.Clean PROPERTIES FIXTURES_SETUP StrataExportClean)
 
+	# Exports run in the background over several frames: the editor quits once the script is done (the frame limit only
+	# bounds a hang).
 	add_test(NAME StrataEditor.Export
-		COMMAND StrataEditor --no-gpu --no-automation --frames 2 --commands "${CMAKE_CURRENT_BINARY_DIR}/ExportCommands.json"
+		COMMAND StrataEditor --no-gpu --no-automation --quit-after-commands --frames 3600 --commands "${CMAKE_CURRENT_BINARY_DIR}/ExportCommands.json"
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
 	set_tests_properties(StrataEditor.Export PROPERTIES FIXTURES_REQUIRED StrataExportClean FIXTURES_SETUP StrataExportedGame)
 

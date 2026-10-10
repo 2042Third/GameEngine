@@ -128,7 +128,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   destroy entities, scripts destroying 10,000 of 100,000 sibling roots in one frame) and, in `src/Editor/`,
   `Perf.Editor` (entity commands among 100,000 roots) and `PerfGPU.Editor`, which runs the real `StrataEditor`
   maximized on generated 100,000- and 1,000,000-entity scenes and checks the median CPU frame time its `editor.wait`
-  steps report. Time calls that take nanoseconds in batches (the clock's resolution is about 0.1 microseconds).
+  steps report, and exports the stress project (every frame meanwhile at most 50 ms); `PerfGPU.Pack` compares pack
+  versions 2 and 1 of the stress project (size, opening, streaming the world). Time calls that take nanoseconds in
+  batches (the clock's resolution is about 0.1 microseconds).
   A process's peak memory includes everything it did before, so a test that measures peak memory
   runs the measured work in a helper process (`--strata-test-helper=<mode>`, see `TestMain.cpp`): `PerfGPU.Streaming`
   runs its camera sweep over the stress project (`src/Perf/StressProject.h`, also usable by other suites) that way,
@@ -634,9 +636,16 @@ and `AudioSystem`, the built-in "Audio" scene system.
   into one step (`EditorAction::MergeWith`); a merged step that ends where it started (`IsNoOp`) is dropped. Capturing
   reads cached sibling positions and applying a step removes and places entities in batches (`Scene::DestroyEntities`,
   `Scene::PlaceEntities`), so edits of many entities in long sibling lists stay linear.
-- `project.export` writes a playable game outside the project: the asset pack (`<Game>.stpak`), the script module, the
-  manifest (`<Game>.stgame`, start scene, script module and window settings) and the runtime executable renamed after
-  the game. CTest exports a small game (`StrataEditor --no-gpu`) and runs it headless.
+- `project.export` writes a playable game outside the project in the background (`GameExport`; the command answers when
+  it finished, so command scripts that export need frames: `--quit-after-commands`): the asset pack (`<Game>.stpak`,
+  ordered by first use; `prune` leaves out what neither the scenes nor `Export.AlwaysInclude` use and lists it in
+  `excludedAssets`), the script module, the manifest (`<Game>.stgame`, start scene, script module and window settings)
+  and the runtime executable renamed after the game. It checks what it can before it starts (a usable directory outside
+  the project, among others) and fails at once otherwise. `project.exportStatus` reports its progress and stage,
+  `project.cancelExport` stops it, `project.setExportSettings {alwaysInclude}` names the assets and folders scripts load
+  by path (saved in the project file), and closing the project cancels a running export. The UI is the Export dialog
+  (`UI/ExportDialog`: File > Export Game..., the toolbar's Export button). CTest exports a small game
+  (`StrataEditor --no-gpu`) and runs it headless; `StrataEditor.Tetris` also exports Tetris pruned and runs it.
 - A running game asks its owner to quit or to switch scenes through `Scene::RequestQuit`/`RequestSceneLoad` (scripts: the
   SDK's `Game`), honored after each update: the editor stops play mode, or replaces the running scene (a paused game stays
   paused, with its pending steps; `play.stop` still returns to the edited scene); `GameRuntime` ends the game

@@ -460,7 +460,9 @@ rules"). Other threads:
   `ParallelFor` work such as asset decoding, the initial imports of a project scan, Jolt's jobs, mesh shape cooking,
   world transform propagation and PNG encoding of captures.
 - **I/O threads** (`JobSystem::Init`; 2 by default): `JobSystem::SubmitIO` work such as asset reads (dispatched by the
-  streaming queue, at most two per I/O thread at a time), background re-imports and saving captures.
+  streaming queue, at most two per I/O thread at a time; a pack read hands its blocks to the workers to decompress while
+  it reads on), background re-imports, saving captures and game exports (the pack writer compresses blocks with
+  `ParallelFor` on the workers).
 - **File watchers** (`FileWatcher::Start`): one thread per watcher, for the project's asset directory
   (`EditorAssetManager`) and for the script module's directory (`ScriptEngine`, hot reload). Each rescans its tree when
   the platform reports a change (`FileChangeNotifier`: change notifications on Windows,
@@ -486,6 +488,7 @@ Results come back to the main thread by polling, never through callbacks into en
 | File watchers | change queue | `FileWatcher::PollChanges` in `EditorAssetManager::Update`, `ScriptEngine::Update` |
 | RPC network thread | request queue | `RpcServer::ProcessRequests` from `EditorAutomation::Update` |
 | Job-based commands | `JobHandle` | deferred command polls, e.g. `viewport.capture` (`EditorViewportCommands.cpp`) |
+| Game export | `GameExport`'s shared state (atomics, outcome under a mutex) | `GameExport::Update` from `EditorContext::Update`; `project.export`'s poll |
 | Child processes | captured output | `ScriptBuilder::Update` |
 | Any thread | `Application::SubmitToMainThread` | start of the next frame |
 
@@ -821,7 +824,8 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
 - **Commands** (`EditorCommands.h`). Handlers take a JSON object and return an `EditorCommandResult`: a value, an error
   with an `EditorCommandError` kind, or `Defer(poll)`. The built-in groups are registered by
   `EditorSceneCommands.cpp` (scene, entity, component, prefab), `EditorAssetCommands.cpp` (asset, material, prefab,
-  project, including `project.templates`, `project.samples`, `project.openSample` and `project.close`),
+  project, including `project.templates`, `project.samples`, `project.openSample`, `project.close`, `project.export`,
+  `project.exportStatus`, `project.cancelExport` and `project.setExportSettings`),
   `EditorStateCommands.cpp` (edit, editor including `editor.recentProjects` and `editor.removeRecentProject`, log, play,
   selection), `EditorViewportCommands.cpp` (camera, viewport), `EditorScriptCommands.cpp` (script),
   `EditorInputCommands.cpp` (input), `EditorStreamingCommands.cpp` (`asset.stats`, `asset.setBudget`) and
@@ -857,19 +861,30 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
 
 ## Export and the runtime
 
-`project.export` (`StrataEditor/src/Editor/GameExport.cpp`) requires a saved, stopped scene, an absolute output
-directory outside the project, a start scene (or the open scene) and no running script build; a loaded script module
-must still be the file that was loaded, and scenes or prefabs that use scripts need one. It writes:
+`project.export` (`StrataEditor/src/Editor/GameExport.cpp`) exports without blocking a frame. `GameExport::Start` checks at
+once what it can and fails without side effects: a saved, stopped scene, a start scene (or the open scene), no running
+script build, a loaded script module that is still the file that was loaded (scenes or prefabs that use scripts need
+one), what `Export.AlwaysInclude` names (with `prune`), and a usable output directory (`CheckExportDirectory`: absolute,
+local, outside the project, not a file, no reserved device names; each refusal says what to do instead). It then waits
+for background imports, plans the pack on the main thread (`EditorAssetManager::PlanAssetPack`) and writes everything on
+an I/O thread, reporting its progress in bytes and stage (`GetProgress`, `GetStage`; `project.exportStatus`); one export
+runs at a time (`EditorContext::StartGameExport`), `project.cancelExport` stops it between blocks, and closing the
+project or the editor cancels it and waits for it. The command answers when it finished, with the files, the asset count,
+the excluded assets, the pack's size, the seconds it took and the editor's frame times meanwhile. The UI is the Export
+dialog (`UI/ExportDialog`: File > Export Game..., or the main toolbar's Export button, which shows the share done while
+an export runs): the command's fields, then a strata-band progress bar (`UI::StrataProgressBar`) and Open Folder. It
+writes:
 
 | File | Source |
 | --- | --- |
-| `<Game>.stpak` | `EditorAssetManager::BuildAssetPack`: every project asset |
+| `<Game>.stpak` | `EditorAssetManager::WriteAssetPack` of the plan: every project asset, or with `prune` what the scenes and `Export.AlwaysInclude` use, ordered by first use |
 | script module (and its PDB) | `EditorContext::ReadRunningScriptModule`: the loaded module, checked by digest |
-| `<Game>.stgame` | `GameManifest`: name, pack, start scene, module, window settings |
+| `<Game>.stgame` | `GameManifest` (version 3): name, pack, start scene, module, window settings |
 | `<Game>[.exe]`, `ThirdPartyNotices.md` | `StrataRuntime` from the editor's directory, renamed (`includeRuntime`) |
 
 The module's PDB is copied when it exists, except in Dist builds or with `includeScriptSymbols: false`
-(`GameExportOptions::IncludeScriptSymbols`).
+(`GameExportOptions::IncludeScriptSymbols`). Pruning is off by default: scripts may load assets by path, which no scene
+shows, so a game that does lists them in `Export.AlwaysInclude` (`project.setExportSettings`).
 
 `StrataRuntime` (`StrataRuntime/src/RuntimeApplication.cpp`) runs `--game <file>`, or the manifest found next to the
 executable (`GameManifest::FindForExecutable`). It logs to `<user data>/<Game>/Logs/Game.log`. `--headless` disables

@@ -198,6 +198,12 @@ namespace Strata
 
 	void EditorContext::ReleaseProject(bool activateBuiltinAssets)
 	{
+		// The export reads the project's assets on an I/O thread: it stops before they go.
+		if (m_GameExport && !m_GameExport->IsFinished())
+		{
+			m_GameExport->Cancel();
+			m_GameExport->Wait();
+		}
 		Stop();
 		const bool hadProject = m_Project != nullptr;
 		if (hadProject)
@@ -868,6 +874,8 @@ namespace Strata
 
 		if (m_AssetManager)
 			m_AssetManager->Update();
+		if (m_GameExport)
+			m_GameExport->Update();
 		if (m_RuntimeScene)
 		{
 			m_RuntimeScene->OnUpdateRuntime(timestep);
@@ -886,6 +894,26 @@ namespace Strata
 		PruneSelection();
 		m_Viewport.UpdatePicking(*this);
 		UpdatePendingFrame();
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
+	// Export
+	////////////////////////////////////////////////////////////////////////////////
+
+	bool EditorContext::StartGameExport(const GameExportOptions& options, std::string* outError)
+	{
+		if (m_GameExport && !m_GameExport->IsFinished())
+		{
+			if (outError)
+				*outError = fmt::format("An export is running already (to '{}'); wait for it or cancel it (project.cancelExport)",
+					FileSystem::ToUTF8(m_GameExport->GetOptions().Directory));
+			return false;
+		}
+		Ref<GameExport> exporter = GameExport::Start(*this, options, outError);
+		if (!exporter)
+			return false;
+		m_GameExport = std::move(exporter);
+		return true;
 	}
 
 	////////////////////////////////////////////////////////////////////////////////

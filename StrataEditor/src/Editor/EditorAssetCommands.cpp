@@ -242,15 +242,22 @@ namespace Strata
 				return EditorCommandResult::Ok();
 			} });
 
-		registry.Register({ "project.export", "Exports the project as a playable game (runtime executable, asset pack, script module, manifest) into a directory outside the project. The game runs the script module the editor has loaded (build it first with script.build).",
+		registry.Register({ "project.export", "Exports the project as a playable game (runtime executable, asset pack, script module, manifest) into a "
+			"directory outside the project, in the background: the editor keeps running, and the command answers when the export finished (it fails at once "
+			"when it cannot start). The pack is ordered by first use from the start scene; with prune it holds only what the scenes use and what the "
+			"project's Export.AlwaysInclude names (project.setExportSettings), and excludedAssets lists what it left out. The game runs the script module "
+			"the editor has loaded (build it first with script.build). Returns the files, assetCount, the pack's size, seconds and frameTimes (the editor's "
+			"frames while it exported, like editor.wait's).",
 			ObjectSchema({
-				{ "directory", StringSchema("Absolute output directory") },
+				{ "directory", StringSchema("Absolute output directory outside the project (created when missing)") },
 				{ "includeRuntime", BoolSchema("Copy the runtime executable (default true)") },
 				{ "includeScriptSymbols", BoolSchema("Copy the script module's debug symbols (PDB) too (default: true, false in Dist builds)") },
 				{ "runtime", StringSchema("Runtime executable to copy (default: StrataRuntime next to the editor)") },
 				{ "width", IntegerSchema("Window width (default 1280)", 1, 16384) },
 				{ "height", IntegerSchema("Window height (default 720)", 1, 16384) },
-				{ "fullscreen", BoolSchema("Start in fullscreen (default false)") } }, { "directory" }),
+				{ "fullscreen", BoolSchema("Start in fullscreen (default false)") },
+				{ "prune", BoolSchema("Leave out assets no scene uses and Export.AlwaysInclude does not name (default false: scripts may load assets by path)") } },
+				{ "directory" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
@@ -262,18 +269,121 @@ namespace Strata
 				options.WindowWidth = static_cast<uint32_t>(arguments.GetInt("width", options.WindowWidth, 1, 16384));
 				options.WindowHeight = static_cast<uint32_t>(arguments.GetInt("height", options.WindowHeight, 1, 16384));
 				options.Fullscreen = arguments.GetBool("fullscreen", false);
+				options.Prune = arguments.GetBool("prune", false);
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				GameExportResult result;
 				std::string error;
-				if (!ExportGame(context, options, result, &error))
+				if (!context.StartGameExport(options, &error))
 					return EditorCommandResult::Fail(error);
+
+				// Frames are measured like editor.wait's: from the frame after the one that started the export.
+				const Ref<GameExport> exporter = context.GetGameExport();
+				const uint64_t firstMeasured = context.GetRecordedFrameCount() + 2;
+				return EditorCommandResult::Defer([exporter, firstMeasured, frames = uint64_t(0), lastRecorded = uint64_t(0), frameTimes = std::vector<double>()](
+					EditorContext& context) mutable -> std::optional<EditorCommandResult>
+				{
+					frames++;
+					const uint64_t recorded = context.GetRecordedFrameCount();
+					if (recorded >= firstMeasured && recorded != lastRecorded)
+					{
+						frameTimes.push_back(context.GetLastFrameTime());
+						lastRecorded = recorded;
+					}
+					if (!exporter->IsFinished())
+						return std::nullopt;
+					if (exporter->GetState() == GameExportState::Cancelled)
+						return EditorCommandResult::Fail(exporter->GetError(), EditorCommandError::Cancelled);
+					if (exporter->GetState() != GameExportState::Succeeded)
+						return EditorCommandResult::Fail(exporter->GetError());
+
+					const GameExportResult& result = exporter->GetResult();
+					nlohmann::json excluded = nlohmann::json::array();
+					for (const AssetMetadata& metadata : result.ExcludedAssets)
+						excluded.push_back(DescribeAsset(metadata));
+					nlohmann::json value = {
+						{ "executable", result.Executable.empty() ? nlohmann::json(nullptr) : nlohmann::json(FileSystem::ToUTF8(result.Executable)) },
+						{ "manifest", FileSystem::ToUTF8(result.Manifest) },
+						{ "assetPack", FileSystem::ToUTF8(result.AssetPack) },
+						{ "scriptModule", result.ScriptModule.empty() ? nlohmann::json(nullptr) : nlohmann::json(FileSystem::ToUTF8(result.ScriptModule)) },
+						{ "assetCount", result.AssetCount },
+						{ "excludedAssets", std::move(excluded) },
+						{ "packBytes", result.Pack.FileSize },
+						{ "storedBytes", result.Pack.StoredBytes },
+						{ "seconds", result.Seconds },
+						{ "frames", frames } };
+					if (!frameTimes.empty())
+						value["frameTimes"] = DescribeFrameTimes(std::move(frameTimes));
+					return EditorCommandResult::Ok(std::move(value));
+				});
+			} });
+
+		registry.Register({ "project.exportStatus", "The running export (project.export) or the last one: {running, state (WaitingForImports, Packing, Copying, "
+			"Succeeded, Failed, Cancelled), progress (0 to 1), stage (what it does, or how it ended), directory}; {running: false, state: null} before the "
+			"first.",
+			ObjectSchema({}),
+			[](EditorContext& context, const nlohmann::json&)
+			{
+				const Ref<GameExport>& exporter = context.GetGameExport();
+				if (!exporter)
+					return EditorCommandResult::Ok({ { "running", false }, { "state", nullptr } });
 				return EditorCommandResult::Ok({
-					{ "executable", result.Executable.empty() ? nlohmann::json(nullptr) : nlohmann::json(FileSystem::ToUTF8(result.Executable)) },
-					{ "manifest", FileSystem::ToUTF8(result.Manifest) },
-					{ "assetPack", FileSystem::ToUTF8(result.AssetPack) },
-					{ "scriptModule", result.ScriptModule.empty() ? nlohmann::json(nullptr) : nlohmann::json(FileSystem::ToUTF8(result.ScriptModule)) },
-					{ "assetCount", result.AssetCount } });
+					{ "running", !exporter->IsFinished() },
+					{ "state", GameExportStateToString(exporter->GetState()) },
+					{ "progress", exporter->GetProgress() },
+					{ "stage", exporter->GetStage() },
+					{ "directory", FileSystem::ToUTF8(exporter->GetOptions().Directory) } });
+			} });
+
+		registry.Register({ "project.cancelExport", "Cancels the running export (project.export, which then fails as cancelled); files it wrote already stay. "
+			"Fails when no export runs.",
+			ObjectSchema({}),
+			[](EditorContext& context, const nlohmann::json&)
+			{
+				const Ref<GameExport>& exporter = context.GetGameExport();
+				if (!exporter || exporter->IsFinished())
+					return EditorCommandResult::Fail("No export is running");
+				exporter->Cancel();
+				return EditorCommandResult::Ok({ { "cancelling", true } });
+			} });
+
+		registry.Register({ "project.setExportSettings", "Sets how the project exports and saves the project file. alwaysInclude: assets (\"Prefabs/Enemy.stprefab\") "
+			"and folders (\"Prefabs\") relative to the asset directory that an export with prune keeps, with what they use, although no scene uses them "
+			"(assets scripts load by path); each must name an asset or a folder of assets.",
+			ObjectSchema({ { "alwaysInclude", { { "type", "array" }, { "items", { { "type", "string" } } },
+				{ "description", "Asset paths and folders relative to the asset directory ('/' separators); empty to keep nothing extra" } } } }, { "alwaysInclude" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				std::string error;
+				EditorAssetManager* assets = RequireAssets(context, &error);
+				if (!assets)
+					return EditorCommandResult::Fail(error);
+				const nlohmann::json* list = JsonUtils::Find(parameters, "alwaysInclude");
+				if (!list || !list->is_array())
+					return EditorCommandResult::InvalidParameters("'alwaysInclude' must be an array of asset paths");
+				std::vector<std::string> alwaysInclude;
+				for (const nlohmann::json& entry : *list)
+				{
+					if (!entry.is_string())
+						return EditorCommandResult::InvalidParameters("'alwaysInclude' must be an array of asset paths");
+					alwaysInclude.push_back(entry.get<std::string>());
+				}
+				// Every entry must name something: the plan of a pruned pack checks them.
+				AssetPackBuildOptions check;
+				check.Prune = true;
+				check.AlwaysInclude = alwaysInclude;
+				AssetPackBuildPlan plan;
+				if (!assets->PlanAssetPack(check, plan, &error))
+					return EditorCommandResult::InvalidParameters(error);
+
+				Project& project = *context.GetProject();
+				const std::vector<std::string> previous = project.GetConfig().Export.AlwaysInclude;
+				project.GetConfig().Export.AlwaysInclude = std::move(alwaysInclude);
+				if (!project.Save(&error))
+				{
+					project.GetConfig().Export.AlwaysInclude = previous;
+					return EditorCommandResult::Fail(error);
+				}
+				return EditorCommandResult::Ok({ { "alwaysInclude", project.GetConfig().Export.AlwaysInclude } });
 			} });
 
 		////////////////////////////////////////////////////////////////////////////////

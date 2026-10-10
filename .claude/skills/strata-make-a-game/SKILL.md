@@ -147,11 +147,16 @@ while checking an exact score), then turn them back to let time play its part (f
 
 ```text
 project.export {"directory": "<absolute, outside the project>"}   # <Game>[.exe], .stgame, .stpak, the script module
+project.export {"directory": "<another one>", "prune": true}       # smaller: only what the scenes use (see below)
 <dir>/<Game> --headless --frames 600       # 10 s of game time at 60 frames per second; exit code 0, the scripts' log lines
 <dir>/<Game> --windowed --frames 120 --screenshot shot.png        # look at shot.png
 ```
 
 The exported game has no `--help`: unknown arguments are ignored and the game starts (fullscreen if the manifest says so).
+The export runs in the background and answers when it finished (give the CLI call a long `--timeout` for big projects).
+A pruned export leaves out assets no scene references (its result lists them in `excludedAssets`): when the scripts load
+assets by path (`Assets::Find`, prefabs spawned by path), name them first with `project.setExportSettings
+{"alwaysInclude": [...]}`, then run the pruned game headless to make sure it still finds everything.
 
 ## Pitfalls
 

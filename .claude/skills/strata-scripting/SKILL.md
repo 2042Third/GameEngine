@@ -366,7 +366,8 @@ every step below is a command, and source files are written with your own file t
    manifest naming it. The exported game loads the module before its start scene; run it headless with
    `<Game> --headless --frames 600` to check it (exit code 2 means the scripts crashed). Export refuses while a build
    runs, when the module file changed since the editor loaded it (e.g. a build whose module did not load: fix it, or
-   `script.reload`), and when scenes use scripts but no module is loaded.
+   `script.reload`), and when scenes use scripts but no module is loaded. A pruned export (`"prune": true`) ships only
+   the assets scenes reference: assets scripts load by path need `project.setExportSettings {"alwaysInclude": [...]}`.
 
 The UI does the same with Scripts > Build Scripts (Ctrl+B), the toolbar's Build Scripts button and the inspector's
 Script section (add a class from the module, edit fields with their default shown and a reset button).

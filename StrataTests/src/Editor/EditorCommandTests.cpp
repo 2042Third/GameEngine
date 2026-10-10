@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "TestHelpers.h"
@@ -538,12 +539,12 @@ TEST_SUITE("Editor.Commands")
 		CHECK(harness.Error("project.export", { { "directory", FileSystem::ToUTF8(directory / "WithRuntime") }, { "runtime", FileSystem::ToUTF8(directory / "FakeRuntime.bin") } })
 			.find("ThirdPartyNotices") != std::string::npos);
 		REQUIRE(FileSystem::WriteText(directory / "ThirdPartyNotices.md", "notices"));
-		const nlohmann::json withRuntime = harness.Run("project.export", { { "directory", FileSystem::ToUTF8(directory / "WithRuntime") }, { "runtime", FileSystem::ToUTF8(directory / "FakeRuntime.bin") } });
+		const nlohmann::json withRuntime = Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.export", { { "directory", FileSystem::ToUTF8(directory / "WithRuntime") }, { "runtime", FileSystem::ToUTF8(directory / "FakeRuntime.bin") } });
 		CHECK(FileSystem::ReadText(FileSystem::FromUTF8(withRuntime["executable"].get<std::string>())) == "runtime");
 		CHECK(FileSystem::FromUTF8(withRuntime["executable"].get<std::string>()).stem() == "My Game_");
 		CHECK(FileSystem::ReadText(directory / "WithRuntime" / "ThirdPartyNotices.md") == "notices");
 
-		const nlohmann::json exported = harness.Run("project.export", { { "directory", FileSystem::ToUTF8(output) }, { "includeRuntime", false }, { "width", 640 } });
+		const nlohmann::json exported = Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.export", { { "directory", FileSystem::ToUTF8(output) }, { "includeRuntime", false }, { "width", 640 } });
 		CHECK(exported["executable"].is_null());
 		const std::filesystem::path manifest = FileSystem::FromUTF8(exported["manifest"].get<std::string>());
 		CHECK(manifest.filename() == "My Game_.stgame");

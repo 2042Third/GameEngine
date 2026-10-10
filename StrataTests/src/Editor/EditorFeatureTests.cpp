@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Audio/AudioTestUtils.h"
+#include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "FeatureTest/FeatureTestUtils.h"
@@ -104,7 +105,7 @@ TEST_SUITE("Editor.FeatureTest")
 
 		// The exported game (asset pack, script module and manifest) plays the same scenario in the game runtime, with its own
 		// copy of the module.
-		const nlohmann::json exported = editor.Run("project.export", { { "directory", FileSystem::ToUTF8(directory / "Build") }, { "includeRuntime", false } });
+		const nlohmann::json exported = Tests::RunCommandToCompletion(editor.Context, editor.Commands, "project.export", { { "directory", FileSystem::ToUTF8(directory / "Build") }, { "includeRuntime", false } });
 		REQUIRE(exported["scriptModule"].is_string());
 		CHECK(FileSystem::FromUTF8(exported["scriptModule"].get<std::string>()).filename() == GetFeatureScriptModule().filename());
 		const std::filesystem::path manifest = FileSystem::FromUTF8(exported["manifest"].get<std::string>());

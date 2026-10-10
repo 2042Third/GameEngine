@@ -3,8 +3,9 @@
 #   2. the editor builds its scripts, plays the scene and makes moves with simulated input (input.key) from the sample's
 #      fixed piece sequence: three hard drops that complete the bottom row, with a rotation there and back and a soft drop
 #      on the way. The command script's "expect" conditions check the HUD texts the scripts write (line cleared, exact
-#      score, level up), then let gravity end the game, restart it, undo the test's field edits and export the game;
-#   3. the exported game runs headless with the scripts.
+#      score, level up), then let gravity end the game, restart it, undo the test's field edits and export the game, also
+#      pruned (only the assets the scene uses);
+#   3. both exported games run headless with the scripts.
 # Every step must succeed. Commands and expectations: TetrisCommands.json.in (entity IDs are those of the sample's scene).
 #
 # cmake -DEDITOR=<StrataEditor> -DSAMPLE_DIR=<Samples/Tetris> -DCOMMANDS=<TetrisCommands.json.in> -DWORK_DIR=<directory>
@@ -25,6 +26,7 @@ file(REMOVE_RECURSE "${WORK_DIR}")
 file(MAKE_DIRECTORY "${WORK_DIR}/Project")
 set(project "${WORK_DIR}/Project")
 set(TETRIS_EXPORT_DIR "${WORK_DIR}/Build")
+set(TETRIS_PRUNED_EXPORT_DIR "${WORK_DIR}/BuildPruned")
 
 # 1. A clean copy of the sample.
 file(GLOB entries LIST_DIRECTORIES true RELATIVE "${SAMPLE_DIR}" "${SAMPLE_DIR}/*" "${SAMPLE_DIR}/.*")
@@ -39,6 +41,7 @@ endif()
 
 # 2. Build, play, move, check, export.
 strata_json_escape(TETRIS_EXPORT_DIR_JSON "${TETRIS_EXPORT_DIR}")
+strata_json_escape(TETRIS_PRUNED_EXPORT_DIR_JSON "${TETRIS_PRUNED_EXPORT_DIR}")
 configure_file("${COMMANDS}" "${WORK_DIR}/TetrisCommands.json" @ONLY)
 execute_process(COMMAND "${EDITOR}" --no-gpu --no-automation --quit-after-commands --frames ${max_frames} --project "${project}"
 		--commands "${WORK_DIR}/TetrisCommands.json"
@@ -54,20 +57,27 @@ foreach(expected "Tetris: new game with seed 60" "Tetris: cleared 1 line; score 
 	endif()
 endforeach()
 
-# 3. The exported game runs its scripts headless (at 60 frames per second: two seconds of play).
-set(game "${TETRIS_EXPORT_DIR}/Tetris${EXECUTABLE_SUFFIX}")
-if(NOT EXISTS "${game}" OR NOT EXISTS "${TETRIS_EXPORT_DIR}/Tetris.stgame" OR NOT EXISTS "${TETRIS_EXPORT_DIR}/Tetris.stpak")
-	message(FATAL_ERROR "TetrisSample: project.export did not write the game into '${TETRIS_EXPORT_DIR}'")
-endif()
-execute_process(COMMAND "${game}" --headless --frames 120 WORKING_DIRECTORY "${TETRIS_EXPORT_DIR}"
-	OUTPUT_VARIABLE output ERROR_VARIABLE output RESULT_VARIABLE result)
-message("${output}")
-if(NOT result EQUAL 0)
-	message(FATAL_ERROR "TetrisSample: the exported game failed (${result})")
-endif()
-foreach(expected "Loaded script module 'TetrisScripts'" "Tetris: new game with seed 60" "Tetris: piece 1 is J, next I")
-	string(FIND "${output}" "${expected}" position)
-	if(position EQUAL -1)
-		message(FATAL_ERROR "TetrisSample: the exported game did not print '${expected}'")
+# 3. The exported games run their scripts headless (at 60 frames per second: two seconds of play), the pruned one too.
+foreach(export_dir "${TETRIS_EXPORT_DIR}" "${TETRIS_PRUNED_EXPORT_DIR}")
+	set(game "${export_dir}/Tetris${EXECUTABLE_SUFFIX}")
+	if(NOT EXISTS "${game}" OR NOT EXISTS "${export_dir}/Tetris.stgame" OR NOT EXISTS "${export_dir}/Tetris.stpak")
+		message(FATAL_ERROR "TetrisSample: project.export did not write the game into '${export_dir}'")
 	endif()
+	execute_process(COMMAND "${game}" --headless --frames 120 WORKING_DIRECTORY "${export_dir}"
+		OUTPUT_VARIABLE output ERROR_VARIABLE output RESULT_VARIABLE result)
+	message("${output}")
+	if(NOT result EQUAL 0)
+		message(FATAL_ERROR "TetrisSample: the exported game in '${export_dir}' failed (${result})")
+	endif()
+	foreach(expected "Loaded script module 'TetrisScripts'" "Tetris: new game with seed 60" "Tetris: piece 1 is J, next I")
+		string(FIND "${output}" "${expected}" position)
+		if(position EQUAL -1)
+			message(FATAL_ERROR "TetrisSample: the exported game in '${export_dir}' did not print '${expected}'")
+		endif()
+	endforeach()
 endforeach()
+file(SIZE "${TETRIS_EXPORT_DIR}/Tetris.stpak" full_pack)
+file(SIZE "${TETRIS_PRUNED_EXPORT_DIR}/Tetris.stpak" pruned_pack)
+if(pruned_pack GREATER full_pack)
+	message(FATAL_ERROR "TetrisSample: the pruned pack (${pruned_pack} bytes) is larger than the full one (${full_pack} bytes)")
+endif()
