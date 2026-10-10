@@ -62,7 +62,8 @@ namespace Strata
 	}
 
 	EditorContext::EditorContext(const EditorContextSpecification& specification)
-		: m_Specification(specification), m_EditScene(CreateRef<Scene>())
+		: m_Specification(specification), m_EditScene(CreateRef<Scene>()),
+		  m_RecentProjects(specification.RecentProjectsFile, specification.RecentProjectsReadOnly)
 	{
 		ActivateBuiltinAssets();
 	}
@@ -178,6 +179,7 @@ namespace Strata
 		std::string sceneError;
 		if (startScene.IsValid() && !OpenScene(startScene, &sceneError))
 			ST_WARN("Could not open the start scene: {}", sceneError);
+		m_RecentProjects.Add(m_Project->GetConfig().Name, m_Project->GetProjectFile());
 		return true;
 	}
 

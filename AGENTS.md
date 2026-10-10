@@ -102,8 +102,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   directories, free ports and timeouts, and terminate the processes they started when they fail.
 - Use `Strata::Tests::CreateTemporaryDirectory()` for files; never write into the source tree, and never open the
   samples in place (`Tests::CopySampleProject("Tetris")` copies one). The test process sets `STRATA_RUNTIME_DIR` to a
-  private temporary directory (`TestMain.cpp`), so runtime files such as script module copies never go to the user's
-  runtime directory; helper processes inherit it.
+  private temporary directory and `STRATA_RECENT_PROJECTS` to a file in it (`TestMain.cpp`), so runtime files such as
+  script module copies never go to the user's runtime directory and editors the tests start never touch the user's
+  recent projects; helper processes inherit both.
 - `StrataTests.exe --strata-test-helper=<mode>` turns the test binary into a child process for
   process tests (see `TestMain.cpp`), so tests never depend on external programs. With `STRATA_TEST_FAKE_CMAKE=succeed`
   it also stands in for CMake in script builds (`ScriptBuildSettings::CMake`), building nothing.
@@ -525,10 +526,14 @@ and `AudioSystem`, the built-in "Audio" scene system.
   default) a scene with neither a directional light nor a sky light gets a preview sun and procedural sky, and the game's
   screen-space text is hidden unless `ShowGameUI` is on (`GetViewportRenderOptions`). Without a project the context keeps
   an asset manager with only the built-in assets active, so built-in meshes render.
-- **Templates:** `project.create {template}` and `scene.new {template}` start from `Editor/ProjectTemplates`
-  (`project.templates` lists them): `empty` (the commands' default, what they always did) or `basic3d` (a saved, lit
-  start scene `Scenes/Main.stscene`: Main Camera with an audio listener, Sun, procedural Sky, Ground, Post Process; the
-  editor UI and the skills use it).
+- **Templates and recent projects:** `project.create {template}` and `scene.new {template}` start from
+  `Editor/ProjectTemplates` (`project.templates` lists them): `empty` (the commands' default, what they always did) or
+  `basic3d` (a saved, lit start scene `Scenes/Main.stscene`: Main Camera with an audio listener, Sun, procedural Sky,
+  Ground, Post Process; the editor UI and the skills use it). Every opened or created project goes to the front of
+  `RecentProjects` (`Editor/RecentProjects`, at most 12, missing projects left out, `editor.recentProjects`), a JSON file
+  in the user data directory shared by the user's editors (`RecentProjects::GetDefaultFile`; `STRATA_RECENT_PROJECTS`
+  overrides it). Scripted runs (`--frames`, `--commands`) only read it; `EditorContextSpecification` keeps it in memory
+  by default (tests).
 - **Viewport panel** (`Panels/ViewportPanel`): renders into a texture of the panel's pixel size and takes input only
   while hovered or focused: Alt + left drag orbits, middle drag pans, the wheel dollies, right drag flies (WASD, Q/E
   down/up, Shift faster, wheel = speed), F frames the selection, Home everything, W/E/R/Q pick the gizmo, Ctrl snaps.

@@ -628,6 +628,8 @@ int main(int argc, char** argv)
 	std::error_code permissionError;
 	std::filesystem::permissions(runtimeDirectory, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace, permissionError);
 	Strata::Platform::SetEnvVar("STRATA_RUNTIME_DIR", Strata::FileSystem::ToUTF8(runtimeDirectory));
+	// Editors the tests start keep their recent projects in the test's directory, never in the user's list.
+	Strata::Platform::SetEnvVar("STRATA_RECENT_PROJECTS", Strata::FileSystem::ToUTF8(runtimeDirectory / "RecentProjects.json"));
 
 	doctest::Context context(argc, argv);
 	const int result = context.run();

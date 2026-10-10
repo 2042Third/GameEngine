@@ -2,6 +2,7 @@
 
 #include "Editor/EditorViewport.h"
 #include "Editor/ProjectTemplates.h"
+#include "Editor/RecentProjects.h"
 #include "Editor/SceneEdit.h"
 #include "Editor/ScriptBuild.h"
 #include "Editor/SimulatedInput.h"
@@ -46,6 +47,10 @@ namespace Strata
 		bool HotReloadScripts = true;
 		// The toolchain script.build uses (the engine's own by default).
 		ScriptBuildSettings ScriptBuild = ScriptBuildSettings::GetEngineDefaults();
+		// Where the list of recently opened projects is kept (RecentProjects; the editor application passes the user's,
+		// RecentProjects::GetDefaultFile). Empty: in memory only, as tests need. Read-only: read but never written.
+		std::filesystem::path RecentProjectsFile;
+		bool RecentProjectsReadOnly = false;
 	};
 
 	// What became of the module of the last finished script build.
@@ -86,7 +91,8 @@ namespace Strata
 		// unknown template fails before anything is created.
 		bool CreateProject(const std::filesystem::path& directory, const std::string& name, std::string_view templateId = ProjectTemplates::c_Empty,
 			std::string* outError = nullptr);
-		// Opens a project file, or the project in a directory. Closes the current project first.
+		// Opens a project file, or the project in a directory. Closes the current project first. Opened projects go to the
+		// front of the recent projects.
 		bool OpenProject(const std::filesystem::path& path, std::string* outError = nullptr);
 		// Saves the project's viewport state (editor camera and settings) to its intermediate directory, then closes it.
 		void CloseProject();
@@ -220,6 +226,9 @@ namespace Strata
 		// Editor services
 		//////////////////////////////////////////////////////////////////////////
 
+		// The projects opened most recently (editor.recentProjects, the launcher).
+		RecentProjects& GetRecentProjects() { return m_RecentProjects; }
+
 		// Asks the editor to close after the current frame (editor.quit); the application layer polls the request.
 		void RequestQuit() { m_QuitRequested = true; }
 		bool IsQuitRequested() const { return m_QuitRequested; }
@@ -292,6 +301,7 @@ namespace Strata
 			std::chrono::steady_clock::time_point Deadline;
 		};
 		std::optional<PendingFrame> m_PendingFrame;
+		RecentProjects m_RecentProjects;
 
 		bool m_QuitRequested = false;
 		std::map<std::string, StatusProvider> m_StatusProviders;

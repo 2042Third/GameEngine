@@ -73,6 +73,7 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | Question | Call |
 | --- | --- |
 | What is open, is it playing, unsaved changes? | `editor.status` |
+| Which projects did the user (or an agent) open lately? | `editor.recentProjects` (name, project file path for `project.open`, `lastOpened`) |
 | What can a new project or scene start from? | `project.templates` (`empty`, `basic3d`) |
 | Which commands and parameters exist? | `editor.commands` (or `list --json`) |
 | Which components and properties (types, ranges, enum values)? | `component.list` |

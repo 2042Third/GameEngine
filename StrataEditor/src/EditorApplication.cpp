@@ -39,6 +39,9 @@ namespace Strata
 			options.CommandScript = FileSystem::FromUTF8(*commands);
 		// Scripted runs whose length is unknown (script builds) end when their command script has finished.
 		options.QuitAfterCommands = commandLine.HasFlag("--quit-after-commands");
+		// The projects a person or an agent opens go to the user's recent projects; scripted runs only read them.
+		options.RecentProjectsFile = RecentProjects::GetDefaultFile().value_or(std::filesystem::path());
+		options.RecentProjectsReadOnly = !options.CommandScript.empty() || commandLine.GetIntOption("--frames").has_value();
 
 		// Automation (StrataCLI, MCP): on by default, on a free loopback port unless --automation-port picks one.
 		options.EnableAutomation = !commandLine.HasFlag("--no-automation");

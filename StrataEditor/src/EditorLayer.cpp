@@ -14,10 +14,19 @@ namespace Strata
 	namespace
 	{
 		constexpr const char* c_EditorStatusSection = "editor";
+
+		EditorContextSpecification MakeContextSpecification(const EditorOptions& options)
+		{
+			EditorContextSpecification specification;
+			specification.RecentProjectsFile = options.RecentProjectsFile;
+			specification.RecentProjectsReadOnly = options.RecentProjectsReadOnly;
+			return specification;
+		}
 	}
 
 	EditorLayer::EditorLayer(const EditorOptions& options)
-		: Layer("EditorLayer"), m_Options(options), m_Automation(m_Context, m_Commands, m_CommandRunner), m_ShowImGuiDemo(options.ShowImGuiDemo)
+		: Layer("EditorLayer"), m_Options(options), m_Context(MakeContextSpecification(options)), m_Automation(m_Context, m_Commands, m_CommandRunner),
+		  m_ShowImGuiDemo(options.ShowImGuiDemo)
 	{
 	}
 

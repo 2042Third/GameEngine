@@ -38,6 +38,10 @@ namespace Strata
 		// Close the editor after this long without a connected automation client (0: never), e.g. a headless editor
 		// started for an MCP server that went away.
 		std::chrono::seconds IdleTimeout = std::chrono::seconds(0);
+		// The user's list of recent projects (EditorContextSpecification::RecentProjectsFile): empty keeps it in memory;
+		// read-only for scripted runs (--frames, --commands), which are not the user's sessions.
+		std::filesystem::path RecentProjectsFile;
+		bool RecentProjectsReadOnly = false;
 	};
 
 	// The editor application layer: owns the editor state (EditorContext), the command registry shared with automation,

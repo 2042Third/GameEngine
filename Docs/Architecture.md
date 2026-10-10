@@ -421,17 +421,18 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
 
 - **EditorContext** (`StrataEditor/src/Editor/EditorContext.h`) is the state with no UI. Opening a project creates and
   activates its `EditorAssetManager` (scan included), opens a `ScriptEngine` (hot reload on by default,
-  `EditorContextSpecification::HotReloadScripts`) and loads the built module, restores the viewport state and opens
-  the start scene. Creating a project applies a template (`ProjectTemplates`: `empty`, or `basic3d` with a saved, lit
-  start scene). Opening a scene restores the editor camera it was last shown with (stored per scene handle in the
-  viewport state) or frames what it renders (`EditorViewport::FrameScene`, `SceneBounds`). `GetActiveScene` is the
-  running copy while playing, else the edited scene.
+  `EditorContextSpecification::HotReloadScripts`) and loads the built module, restores the viewport state, opens
+  the start scene and puts the project at the front of the recent projects (`RecentProjects`, a JSON file in the user
+  data directory that the user's editors share). Creating a project applies a template (`ProjectTemplates`: `empty`, or
+  `basic3d` with a saved, lit start scene). Opening a scene restores the editor camera it was last shown with (stored per
+  scene handle in the viewport state) or frames what it renders (`EditorViewport::FrameScene`, `SceneBounds`).
+  `GetActiveScene` is the running copy while playing, else the edited scene.
 - **Commands** (`EditorCommands.h`). Handlers take a JSON object and return an `EditorCommandResult`: a value, an error
   with an `EditorCommandError` kind, or `Defer(poll)`. The built-in groups are registered by
   `EditorSceneCommands.cpp` (scene, entity, component, prefab), `EditorAssetCommands.cpp` (asset, material, prefab,
-  project, including `project.templates`), `EditorStateCommands.cpp` (edit, editor, log, play, selection),
-  `EditorViewportCommands.cpp` (camera, viewport), `EditorScriptCommands.cpp` (script), `EditorInputCommands.cpp` (input) and `EditorCommands.cpp`
-  (`editor.commands`). Conventions: AGENTS.md, "Editor".
+  project, including `project.templates`), `EditorStateCommands.cpp` (edit, editor including `editor.recentProjects`,
+  log, play, selection), `EditorViewportCommands.cpp` (camera, viewport), `EditorScriptCommands.cpp` (script),
+  `EditorInputCommands.cpp` (input) and `EditorCommands.cpp` (`editor.commands`). Conventions: AGENTS.md, "Editor".
 - **Runner** (`EditorCommandRunner.h`). `Run` executes a command; a deferred one is polled once per frame from the next
   frame on, in issue order, and reports through its completion callback. Automation and command scripts always use the
   runner. UI actions that finish at once call the registry through `RunEditorCommand`
