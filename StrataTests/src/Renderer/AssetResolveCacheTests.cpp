@@ -6,7 +6,6 @@
 #include "Strata/Renderer/Material.h"
 #include "TestHelpers.h"
 
-#include <algorithm>
 #include <map>
 #include <memory>
 #include <string>
@@ -53,10 +52,7 @@ TEST_SUITE("Renderer.AssetResolveCache")
 		const AssetHandle second(0xC002);
 		const Ref<RuntimeAssetManager> manager = CreateManager(first, second);
 		AssetResolveCache cache;
-		std::vector<AssetHandle> changed;
-		bool allChanged = false;
-		cache.BeginFrame(manager, changed, allChanged);
-		CHECK(allChanged); // A new manager: anything may have changed
+		cache.BeginFrame(manager);
 
 		// Still loading: null, counted as pending, requested once however often it is resolved.
 		CHECK_FALSE(cache.Resolve<Material>(first, AssetPriority::High));
@@ -68,9 +64,7 @@ TEST_SUITE("Renderer.AssetResolveCache")
 		cache.EndFrame();
 		REQUIRE(manager->WaitForPendingLoads());
 
-		cache.BeginFrame(manager, changed, allChanged);
-		CHECK_FALSE(allChanged);
-		CHECK(std::find(changed.begin(), changed.end(), first) != changed.end()); // Published by the load
+		cache.BeginFrame(manager);
 		Ref<Material> material = cache.Resolve<Material>(first, AssetPriority::Normal);
 		REQUIRE(material);
 		CHECK(cache.Resolve<Material>(first, AssetPriority::Normal) == material);
@@ -88,10 +82,6 @@ TEST_SUITE("Renderer.AssetResolveCache")
 		CHECK(manager->TrimUnused(1) == 1);
 		CHECK(manager->GetAssetState(first) == AssetState::Unloaded);
 		CHECK(held.expired());
-		changed.clear();
-		cache.BeginFrame(manager, changed, allChanged);
-		CHECK(std::find(changed.begin(), changed.end(), first) != changed.end()); // The eviction is a content change
-		cache.EndFrame();
 	}
 
 	TEST_CASE("The cache keeps no asset manager alive between frames, and answers for the frame's manager only")
@@ -99,13 +89,11 @@ TEST_SUITE("Renderer.AssetResolveCache")
 		const AssetHandle first(0xC021);
 		const AssetHandle second(0xC022);
 		AssetResolveCache cache;
-		std::vector<AssetHandle> changed;
-		bool allChanged = false;
 		std::weak_ptr<AssetManagerBase> closed;
 		{
 			const Ref<RuntimeAssetManager> manager = CreateManager(first, second);
 			closed = manager;
-			cache.BeginFrame(manager, changed, allChanged);
+			cache.BeginFrame(manager);
 			CHECK_FALSE(cache.Resolve<Material>(first, AssetPriority::Normal));
 			REQUIRE(manager->WaitForPendingLoads());
 			cache.EndFrame();
@@ -114,8 +102,7 @@ TEST_SUITE("Renderer.AssetResolveCache")
 
 		// Another manager (another project): it is asked afresh.
 		const Ref<RuntimeAssetManager> next = CreateManager(first, second);
-		cache.BeginFrame(next, changed, allChanged);
-		CHECK(allChanged);
+		cache.BeginFrame(next);
 		CHECK_FALSE(cache.Resolve<Material>(first, AssetPriority::Normal));
 		CHECK(cache.GetStats().GetAssetCalls == 1);
 		CHECK(next->GetAssetState(first) == AssetState::Loading);
@@ -129,38 +116,44 @@ TEST_SUITE("Renderer.AssetResolveCache")
 		const AssetHandle second(0xC012);
 		const Ref<RuntimeAssetManager> manager = CreateManager(first, second);
 		AssetResolveCache cache;
-		std::vector<AssetHandle> changed;
-		bool allChanged = false;
-		cache.BeginFrame(manager, changed, allChanged);
+		cache.BeginFrame(manager);
 
 		CHECK_FALSE(cache.FindResident<Material>(first));
 		CHECK(manager->GetAssetState(first) == AssetState::Unloaded);
 		CHECK(cache.GetStats().ResidentLookups == 1);
 		CHECK(cache.GetStats().GetAssetCalls == 0);
-		// A request later in the same frame still asks the manager.
-		CHECK_FALSE(cache.Resolve<Material>(first, AssetPriority::Normal));
+		// A resident lookup that found nothing requested nothing: a prefetch later in the frame still requests the load.
+		cache.Prefetch(first);
+		CHECK(cache.GetStats().Prefetched == 1);
 		CHECK(manager->GetAssetState(first) == AssetState::Loading);
+		// A request still asks the manager, at its own priority.
+		CHECK_FALSE(cache.Resolve<Material>(first, AssetPriority::Normal));
+		CHECK(cache.GetStats().GetAssetCalls == 1);
 
 		cache.Prefetch(second);
 		cache.Prefetch(second);
-		CHECK(cache.GetStats().Prefetched == 1);
+		CHECK(cache.GetStats().Prefetched == 2);
 		CHECK(manager->GetAssetState(second) == AssetState::Loading);
 		cache.EndFrame();
 		REQUIRE(manager->WaitForPendingLoads());
 
-		cache.BeginFrame(manager, changed, allChanged);
+		cache.BeginFrame(manager);
 		CHECK(cache.FindResident<Material>(second));
 		CHECK(cache.GetStats().GetAssetCalls == 1);
+		// Found loaded (and stamped as used): there is nothing to prefetch.
+		cache.Prefetch(second);
+		CHECK(cache.GetStats().Prefetched == 0);
 		// Unknown handles and other types resolve to nothing.
 		CHECK_FALSE(cache.Resolve<Material>(UUID(0xBAD), AssetPriority::Normal));
 		CHECK(cache.GetStats().Pending == 0);
 		cache.EndFrame();
 
 		// Without a manager nothing resolves.
-		cache.BeginFrame(nullptr, changed, allChanged);
-		CHECK(allChanged);
+		cache.BeginFrame(nullptr);
 		CHECK_FALSE(cache.Resolve<Material>(first, AssetPriority::Normal));
+		cache.Prefetch(first);
 		CHECK(cache.GetStats().GetAssetCalls == 0);
+		CHECK(cache.GetStats().Prefetched == 0);
 		cache.EndFrame();
 	}
 }

@@ -215,26 +215,9 @@ namespace Strata
 
 	void SceneRenderer::MarkMaterial(uint32_t slot, uint32_t usage)
 	{
-		// Mesh layouts learned during the frame can add material slots.
-		EnsureMaterialSlots(slot + 1);
 		if (m_MaterialUsage[slot] == 0)
 			m_UsedMaterialSlots.push_back(slot);
 		m_MaterialUsage[slot] |= usage;
-	}
-
-	void SceneRenderer::LearnResidentMeshLayouts(RenderScene& renderScene)
-	{
-		const std::span<const uint32_t> unknown = renderScene.GetMeshesWithoutLayout();
-		if (unknown.empty())
-			return;
-		// Learning a layout takes the mesh off the list.
-		m_QueryScratch.assign(unknown.begin(), unknown.end());
-		for (const uint32_t slot : m_QueryScratch)
-		{
-			if (Ref<Mesh> mesh = m_Assets.FindResident<Mesh>(renderScene.GetMeshHandle(slot)))
-				m_Stats.ProxyUpdates += renderScene.SetMeshLayout(slot, *mesh);
-		}
-		EnsureMaterialSlots(renderScene.GetMaterialSlotCapacity());
 	}
 
 	void SceneRenderer::CullView(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum)
@@ -247,7 +230,6 @@ namespace Strata
 		m_Stats.VisibleProxies = visible;
 		m_Stats.CulledInstances = renderScene.GetStats().IndexedProxies - visible;
 		m_VisibleFractions.resize(visible);
-		m_VisibleFallback.resize(visible);
 
 		const uint32_t chunks = ChunkCount(visible);
 		if (m_Chunks.size() < chunks)
@@ -266,7 +248,6 @@ namespace Strata
 				const AABB& bounds = renderScene.GetWorldBounds(proxy);
 				const float fraction = GetScreenFraction(camera, bounds.GetCenter(), glm::length(bounds.GetExtents()));
 				m_VisibleFractions[item] = fraction;
-				m_VisibleFallback[item] = (renderScene.GetProxyFlags(proxy) & RenderProxyFlags::MeshBounds) == 0 ? 1 : 0;
 				const uint32_t usage = fraction > highFraction ? (c_UseView | c_UseHigh) : c_UseView;
 				const uint32_t overrideSlot = renderScene.GetOverrideMaterialSlot(proxy);
 				AppendMark(output.MeshMarks, renderScene.GetMeshSlot(proxy), usage | (overrideSlot == RenderScene::c_InvalidIndex ? usage << c_SubmeshMaterialsShift : 0u));
@@ -280,6 +261,17 @@ namespace Strata
 				MarkMesh(slot, usage);
 			for (const auto& [slot, usage] : m_Chunks[chunk].MaterialMarks)
 				MarkMaterial(slot, usage);
+		}
+
+		// A mesh whose bounds are unknown (never loaded, none recorded) may be anywhere, in view too, whatever the
+		// placeholder bounds of its proxies say: it is requested as if in view while any of them is active, until it loads
+		// and its layout gives them real bounds.
+		for (const uint32_t slot : renderScene.GetMeshesWithoutBounds())
+		{
+			if (renderScene.GetIndexedUserCount(slot) == 0)
+				continue;
+			MarkMesh(slot, c_UseView);
+			m_Stats.MeshesWithoutBounds++;
 		}
 
 		// Prefetch what is near the camera but outside the view.
@@ -489,8 +481,7 @@ namespace Strata
 				if ((usage & c_UseShadow) != 0)
 					mesh = m_Assets.FindResident<Mesh>(handle);
 			}
-			if (mesh && (!renderScene.IsMeshLayoutKnown(slot) || renderScene.IsMeshLayoutStale(slot)))
-				m_Stats.ProxyUpdates += renderScene.SetMeshLayout(slot, *mesh);
+			// Held by the resolve cache until the frame ends; RenderScene::Sync keeps the mesh's layout current.
 			m_FrameMeshes[slot] = mesh && mesh->GetIndexBuffer() ? mesh.get() : nullptr;
 
 			const uint32_t submeshUsage = (usage >> c_SubmeshMaterialsShift) & c_UseMask;
@@ -581,7 +572,7 @@ namespace Strata
 		}
 	}
 
-	void SceneRenderer::GatherDraws(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum)
+	void SceneRenderer::GatherDraws(RenderScene& renderScene, const SceneCamera& camera)
 	{
 		ST_PROFILE_FUNCTION();
 		const uint32_t visible = static_cast<uint32_t>(m_VisibleProxies.size());
@@ -596,7 +587,6 @@ namespace Strata
 			output.Transparent.clear();
 			output.MaterialPixelSizes.clear();
 			output.InstancesPerLOD = {};
-			output.Culled = 0;
 			output.Skipped = 0;
 			const uint32_t end = std::min(visible, (chunk + 1) * c_ExtractionChunkSize);
 			for (uint32_t item = chunk * c_ExtractionChunkSize; item < end; item++)
@@ -609,17 +599,7 @@ namespace Strata
 					continue;
 
 				const AABB& bounds = renderScene.GetWorldBounds(proxy);
-				float fraction = m_VisibleFractions[item];
-				if (m_VisibleFallback[item])
-				{
-					// Culled with the bounds of a mesh that was not loaded; it arrived during this frame.
-					if (!frustum.IsAABBVisible(bounds))
-					{
-						output.Culled++;
-						continue;
-					}
-					fraction = GetScreenFraction(camera, bounds.GetCenter(), glm::length(bounds.GetExtents()));
-				}
+				const float fraction = m_VisibleFractions[item];
 				const float viewDepth = -(camera.View * glm::vec4(bounds.GetCenter(), 1.0f)).z;
 				const bool mirrored = (renderScene.GetProxyFlags(proxy) & RenderProxyFlags::Mirrored) != 0;
 				const uint32_t first = renderScene.GetFirstInstance(proxy);
@@ -662,7 +642,6 @@ namespace Strata
 				m_Stats.InstancesPerLOD[lod] += output.InstancesPerLOD[lod];
 			for (const auto& [slot, size] : output.MaterialPixelSizes)
 				m_MaterialPixelSizes[slot] = std::max(m_MaterialPixelSizes[slot], size);
-			m_Stats.CulledInstances += output.Culled;
 			skipped += output.Skipped;
 		}
 		if (skipped > 0)

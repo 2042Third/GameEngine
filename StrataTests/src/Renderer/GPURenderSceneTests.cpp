@@ -2,6 +2,7 @@
 
 #include "Asset/AssetTestUtils.h"
 #include "Perf/StressProject.h"
+#include "Renderer/MeshTestUtils.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/MeshFactory.h"
 #include "Strata/Renderer/RenderScene.h"
@@ -319,6 +320,82 @@ TEST_SUITE("GPU.RenderScene")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Visibility sets the priority of requests: High above 5% of the view, Normal below it and for unknown bounds, Low within the prefetch distance")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ScopedJobSystem jobs(2, 2);
+		const Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		// A load that takes all the bytes loads may have in flight waits at the gate: the frame's requests stay queued.
+		AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
+		budgets.InFlightBytes = 1;
+		manager->SetResidencyBudgets(budgets);
+		auto holdLoads = [&](uint64_t handle)
+		{
+			const AssetHandle blocker = manager->AddStored(handle, AssetType::Mesh, MeshFactory::CreateCube()->Serialize());
+			manager->CloseGate();
+			manager->RequestLoad(blocker, AssetPriority::High);
+			REQUIRE(manager->WaitForWaitingReads(1));
+		};
+		auto queued = [&](AssetPriority priority) { return manager->GetStats().QueuedLoads[static_cast<size_t>(priority)]; };
+
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		std::vector<AssetHandle> stored;
+		auto addObject = [&](uint64_t handle, const glm::vec3& position, const std::string& name)
+		{
+			const AssetHandle mesh = manager->AddStored(handle, AssetType::Mesh, MeshFactory::CreateCube()->Serialize());
+			const AssetHandle material = manager->AddStored(handle + 1, AssetType::Material, StoreMaterial(UnlitColor({ 1.0f, 0.5f, 0.0f, 1.0f })));
+			AddMesh(scene, mesh, material, position, name);
+			stored.push_back(mesh);
+			stored.push_back(material);
+		};
+		addObject(0x6E31, glm::vec3(0.0f), "Near");                  // A third of the view
+		addObject(0x6E33, glm::vec3(0.0f, 0.0f, -70.0f), "Far");     // Under 5% of the view
+		addObject(0x6E35, glm::vec3(0.0f, 0.0f, 20.0f), "Behind");   // Out of view, within the prefetch distance
+		AssetManager::SetActive(manager);
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Size, c_Size);
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 0.0f, 8.0f), glm::vec3(0.0f));
+
+		// The meshes never loaded: their bounds are unknown, so each is requested as if in view, at Normal priority, or at
+		// High where its placeholder bounds are large in view. The materials follow their proxies' placeholders.
+		holdLoads(0xB10C);
+		RunFrame(gpu, *manager, renderer, scene, camera);
+		CHECK(renderer.GetStats().MeshesWithoutBounds == 3);
+		CHECK(queued(AssetPriority::High) == 2);   // Near's mesh and material
+		CHECK(queued(AssetPriority::Normal) == 3); // Far's mesh and material, Behind's mesh
+		CHECK(queued(AssetPriority::Low) == 1);    // Behind's material
+		// The meshes, the materials in view, and the default material, which stands in for materials still loading.
+		CHECK(renderer.GetStats().RequestsByVisibility == 6);
+		CHECK(renderer.GetStats().PrefetchRequests == 1);
+
+		// Loaded once, the meshes' layouts are known; unloaded again, they are culled with their real bounds.
+		manager->OpenGate();
+		REQUIRE(manager->WaitForPendingLoads());
+		RunFrame(gpu, *manager, renderer, scene, camera);
+		REQUIRE(RenderScene::Get(scene).GetMeshesWithoutBounds().empty());
+		gpu.GetDevice().WaitForIdle();
+		for (const AssetHandle handle : stored)
+			manager->UnloadAsset(handle);
+
+		holdLoads(0xB10D);
+		RunFrame(gpu, *manager, renderer, scene, camera);
+		CHECK(renderer.GetStats().MeshesWithoutBounds == 0);
+		CHECK(queued(AssetPriority::High) == 2);   // Near's mesh and material
+		CHECK(queued(AssetPriority::Normal) == 2); // Far's mesh and material
+		CHECK(queued(AssetPriority::Low) == 2);    // Behind's mesh and material, prefetched
+		CHECK(renderer.GetStats().RequestsByVisibility == 5);
+		CHECK(renderer.GetStats().PrefetchRequests == 2);
+		CHECK(manager->GetAssetState(stored[4]) == AssetState::Loading);
+
+		manager->OpenGate();
+		REQUIRE(manager->WaitForPendingLoads());
+		gpu.GetDevice().WaitForIdle();
+		AssetManager::SetActive(nullptr);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("An idle renderer keeps nothing: what it drew last can be evicted, and its asset manager can go")
 	{
 		GPUContext gpu;
@@ -359,6 +436,136 @@ TEST_SUITE("GPU.RenderScene")
 		}
 		// The renderer holds no reference to the manager either: it went with its owner, as a closed project's does.
 		CHECK(closed.expired());
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A large mesh whose origin is out of view and beyond the prefetch distance is requested while its bounds are unknown, then drawn")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		const AssetHandle ground = manager->AddStored(0x6E01, AssetType::Mesh, MeshFactory::CreatePlane(1000.0f)->Serialize());
+		AssetManager::SetActive(manager);
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		// Ground 1,000 units wide whose origin lies behind the camera, far away: only its corner is under the camera.
+		const glm::vec3 origin(400.0f, 0.0f, 400.0f);
+		const Entity entity = AddMesh(scene, ground, UUID::Null(), origin, "Ground");
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Size, c_Size);
+		const SceneCamera camera = ViewFrom(glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(-20.0f, 0.0f, -20.0f), 500.0f);
+		REQUIRE(glm::distance(camera.Position, origin) > renderer.GetSpecification().PrefetchDistance * 2.0f);
+
+		// Its proxy's placeholder bounds are out of view and beyond the prefetch distance, but they say nothing about the
+		// mesh: it is requested as if in view.
+		RunFrame(gpu, *manager, renderer, scene, camera);
+		CHECK(renderer.GetStats().VisibleProxies == 0);
+		CHECK(renderer.GetStats().MeshesWithoutBounds == 1);
+		CHECK(renderer.GetStats().RequestsByVisibility == 1);
+		CHECK(manager->GetAssetState(ground) != AssetState::Unloaded);
+		for (int frame = 0; frame < 120 && renderer.GetStats().Instances == 0; frame++)
+			RunFrame(gpu, *manager, renderer, scene, camera);
+		CHECK(renderer.GetStats().Instances == 1);
+		CHECK(renderer.GetStats().MeshesWithoutBounds == 0);
+		CHECK(renderer.GetEntityAt(scene, c_Size / 2, c_Size - 4) == entity);
+		gpu.GetDevice().WaitForIdle();
+		AssetManager::SetActive(nullptr);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Meshes of inactive entities are not requested while their bounds are unknown")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		const AssetHandle mesh = manager->AddStored(0x6E05, AssetType::Mesh, MeshFactory::CreateCube()->Serialize());
+		AssetManager::SetActive(manager);
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		Entity entity = AddMesh(scene, mesh, UUID::Null(), glm::vec3(0.0f), "Hidden");
+		entity.SetActive(false);
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Size, c_Size);
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 1.0f, 4.0f), glm::vec3(0.0f));
+		RunFrame(gpu, *manager, renderer, scene, camera);
+		CHECK(renderer.GetStats().MeshesWithoutBounds == 0);
+		CHECK(manager->GetAssetState(mesh) == AssetState::Unloaded);
+
+		entity.SetActive(true);
+		RunFrame(gpu, *manager, renderer, scene, camera);
+		CHECK(renderer.GetStats().MeshesWithoutBounds == 1);
+		CHECK(manager->GetAssetState(mesh) != AssetState::Unloaded);
+		REQUIRE(manager->WaitForPendingLoads());
+		gpu.GetDevice().WaitForIdle();
+		AssetManager::SetActive(nullptr);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A mesh reloaded with larger bounds is culled with them, also when its old bounds were out of view")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		const AssetHandle mesh = manager->AddStored(0x6E11, AssetType::Mesh, MeshFactory::CreateCube(0.1f)->Serialize());
+		AssetManager::SetActive(manager);
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		const Entity entity = AddMesh(scene, mesh, UUID::Null(), glm::vec3(0.0f), "Platform");
+		SceneRendererSpecification specification;
+		specification.PrefetchDistance = 0.0f; // Only the view, and the mesh's unknown bounds at first, load the mesh
+		SceneRenderer renderer(specification);
+		renderer.SetViewportSize(c_Size, c_Size);
+		// Looking past the small mesh, which stays out of view.
+		const SceneCamera camera = ViewFrom(glm::vec3(0.0f, 0.0f, 20.0f), glm::vec3(20.0f, 0.0f, 0.0f), 100.0f);
+		RenderScene& renderScene = RenderScene::Get(scene);
+		for (int frame = 0; frame < 10; frame++)
+			RunFrame(gpu, *manager, renderer, scene, camera);
+		REQUIRE(renderScene.GetMeshesWithoutBounds().empty());
+		REQUIRE(manager->GetAssetState(mesh) == AssetState::Ready);
+		CHECK(renderer.GetStats().Instances == 0);
+
+		// Reimported 300 times larger: it fills the view now, though its old bounds never entered it.
+		manager->SetStoredData(mesh, MeshFactory::CreateCube(30.0f)->Serialize());
+		manager->ReloadAsset(mesh);
+		for (int frame = 0; frame < 60 && renderer.GetStats().Instances == 0; frame++)
+			RunFrame(gpu, *manager, renderer, scene, camera);
+		CHECK(renderer.GetStats().Instances == 1);
+		CHECK(renderScene.GetWorldBounds(renderScene.FindProxy(entity.GetHandle())).Max.x == doctest::Approx(15.0f));
+		gpu.GetDevice().WaitForIdle();
+		AssetManager::SetActive(nullptr);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A scene not rendered while its mesh gained a submesh draws both when it is rendered again")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		const AssetHandle mesh = manager->AddStored(0x6E21, AssetType::Mesh, CreatePartedCube(2.0f, 1)->Serialize());
+		AssetManager::SetActive(manager);
+		// The edited scene and, as in play mode, another scene the same renderer draws meanwhile.
+		Scene edited;
+		AddNeutralPostProcess(edited);
+		AddMesh(edited, mesh, UUID::Null(), glm::vec3(0.0f), "Model");
+		Scene playing;
+		AddNeutralPostProcess(playing);
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Size, c_Size);
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 2.0f, 6.0f), glm::vec3(0.0f));
+		for (int frame = 0; frame < 60 && renderer.GetStats().Instances == 0; frame++)
+			RunFrame(gpu, *manager, renderer, edited, camera);
+		REQUIRE(renderer.GetStats().Instances == 1);
+
+		manager->SetStoredData(mesh, CreatePartedCube(2.0f, 2)->Serialize());
+		manager->ReloadAsset(mesh);
+		for (int frame = 0; frame < 5; frame++)
+			RunFrame(gpu, *manager, renderer, playing, camera);
+		REQUIRE(manager->GetAssetState(mesh) == AssetState::Ready);
+
+		RunFrame(gpu, *manager, renderer, edited, camera);
+		CHECK(renderer.GetStats().Instances == 2);
+		gpu.GetDevice().WaitForIdle();
+		AssetManager::SetActive(nullptr);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
@@ -452,12 +659,26 @@ TEST_SUITE("GPU.RenderScene")
 		REQUIRE(nearObjects > 0);
 		REQUIRE(allowed.size() < project->Materials.size());
 
-		for (int frame = 0; frame < 30; frame++)
+		RunFrame(gpu, *manager, renderer, *scene, outward);
+		// The terrain's mesh never loaded, so its bounds are unknown: it is requested as if in view.
+		CHECK(renderer.GetStats().MeshesWithoutBounds == 1);
+		CHECK(manager->GetAssetState(project->GridMesh) != AssetState::Unloaded);
+		for (int frame = 1; frame < 30; frame++)
 			RunFrame(gpu, *manager, renderer, *scene, outward);
-		CHECK(renderer.GetStats().Instances == 0);
 		CHECK(renderer.GetStats().PrefetchRequests > 0);
-		// The terrain is out of view (its bounds are not known before it loads), and so are the other districts.
-		CHECK(manager->GetAssetState(project->GridMesh) == AssetState::Unloaded);
+		// Loaded, it gives the terrain its real bounds, which lie under the camera, within the prefetch distance. It is the
+		// only thing the view may show.
+		RenderScene& renderScene = RenderScene::Get(*scene);
+		CHECK(renderScene.GetMeshesWithoutBounds().empty());
+		CHECK(renderer.GetStats().MeshesWithoutBounds == 0);
+		const uint32_t terrain = renderScene.FindProxy(scene->FindEntityByName("Terrain").GetHandle());
+		REQUIRE(terrain != RenderScene::c_InvalidIndex);
+		const AABB& terrainBounds = renderScene.GetWorldBounds(terrain);
+		CHECK(terrainBounds.Min.x == doctest::Approx(-c_StressWorldSize * 0.5f));
+		CHECK(terrainBounds.Max.z == doctest::Approx(c_StressWorldSize * 0.5f));
+		CHECK(SpatialIndex::IntersectsSphere(terrainBounds, outward.Position, specification.PrefetchDistance));
+		CHECK(renderer.GetStats().Instances == (frustum.IsAABBVisible(terrainBounds) ? 1u : 0u));
+		// The other districts' materials are out of view and beyond the prefetch distance.
 		for (const AssetHandle material : project->Materials)
 		{
 			CAPTURE(material);
@@ -474,7 +695,13 @@ TEST_SUITE("GPU.RenderScene")
 		const SceneCamera away = ViewFrom(glm::vec3(-5000.0f, 20.0f, -5000.0f), glm::vec3(-6000.0f, 0.0f, -6000.0f), 5000.0f, 160.0f / 90.0f);
 		const uint32_t grace = manager->GetEvictionGraceFrames();
 		for (uint32_t frame = 0; frame < grace + 2; frame++)
+		{
+			// Nothing in view or near and every mesh's bounds known: a frame asks the asset manager for nothing.
+			const uint64_t calls = manager->GetStats().GetAssetCalls;
 			RunFrame(gpu, *manager, renderer, *scene, away);
+			CHECK(manager->GetStats().GetAssetCalls == calls);
+			CHECK(renderer.GetStats().RequestsByVisibility == 0);
+		}
 		CHECK(manager->TrimUnused(grace) > 0);
 		CHECK(manager->GetAssetState(seen) == AssetState::Unloaded);
 

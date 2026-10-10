@@ -661,11 +661,11 @@ The renderer's CPU cost and asset traffic follow what is visible and what change
 A frame of `SceneRenderer::Render`:
 
 ```text
-RenderScene::Get(scene).Sync()   world transforms, then the proxies of signaled mesh renderers and changed transforms
-AssetResolveCache::BeginFrame    drops the previous frame's references; content changes make mesh layouts stale
-LearnResidentMeshLayouts         meshes that are loaded already (built-ins) give their proxies bounds and instances
+RenderScene::Get(scene).Sync()   world transforms, then the proxies of signaled mesh renderers and changed transforms,
+                                 then the mesh layouts of meshes the asset manager loaded, reloaded or dropped since
+AssetResolveCache::BeginFrame    the frame's asset manager
 CullView                         SpatialIndex::QueryFrustum; screen fractions and request priorities (parallel chunks);
-                                 QuerySphere for the prefetch distance
+                                 meshes of unknown bounds as if in view; QuerySphere for the prefetch distance
 FindShadowCasters                cascade boxes; QueryPlanes per cascade, then the exact test in light space
 ResolveAssets                    each mesh and material used once: Resolve, Prefetch or FindResident
 GatherDraws, GatherShadowDraws   draws per chunk on the job system, merged in chunk order; RadixSort; batches
@@ -683,9 +683,22 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   `MeshRendererComponent` fields must therefore signal, like transform writes (AGENTS.md, "Architecture rules"); Debug
   builds compare the proxies with the scene after every `Sync` (`RenderScene::Validate`).
 - **Mesh layouts**. The bounds, submeshes and submesh materials of a mesh are learned from the loaded mesh
-  (`SetMeshLayout`) and kept when it is evicted; a content change (a reload) makes the layout stale until the mesh is
-  resolved again. A mesh that never loaded bounds its proxies with `ResolveUnloadedBounds`: a box of one unit around the
-  entity's origin, scaled with it (the asset database's recorded bounds take its place once packs record them).
+  (`SetMeshLayout`) and kept when it is evicted. `Sync(assets)` keeps them current with the asset manager whatever the
+  renderers look at: it reads the manager's content changes since its own content version (all of them when the
+  manager changed or forgot that far back, so a scene that was not rendered for a while catches up), and compares the
+  meshes that changed, and the meshes new to the scene, with their loaded objects. A reload with other bounds or
+  submeshes therefore applies at the next sync even when the old bounds were out of view, or the scene was not rendered
+  when it happened; a sync after which nothing loaded, reloaded or was dropped compares no mesh
+  (`RenderSceneStats::LastSyncMeshChecks`).
+- **Unknown bounds are visible**. Until a mesh's layout is known, the bounds the asset database recorded for it stand in
+  (`RenderScene::ResolveUnloadedBounds`; none yet: `pack-v2`'s `AssetManagerBase::GetBounds` is wired in there). A mesh
+  with neither has unknown bounds (`GetMeshesWithoutBounds`): its proxies sit in the spatial index with placeholder
+  bounds (`GetPlaceholderBounds`, a box of one unit around the entity's origin, scaled with it) that say nothing about
+  the mesh, so every renderer requests such a mesh as if it were in view, at Normal priority (High where a placeholder
+  is large in view), while any of its proxies is active (`GetIndexedUserCount`;
+  `SceneRendererStats::MeshesWithoutBounds`). A terrain or level mesh whose origin is out of view is thus loaded, gets
+  its real bounds and is drawn; meshes that failed to load, or that the manager does not know, are asked for every
+  frame (one lookup each), so that a fixed or newly imported one shows.
 - **Slots and instances**. Meshes and materials get dense slots shared by their users. Every submesh of a proxy whose
   mesh layout is known has an `InstanceData` (64 bytes: the 3x4 world matrix, the material slot, the entity ID, flags) in
   one array that persists between frames. Changes are logged by version (`GetInstanceChanges`, the latest 65,536), so
@@ -698,8 +711,10 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   so results are exact. Edits cost constant time; bounds grow at once and shrink at `Refresh` (each `Sync`).
 - **Requests follow visibility** (`AssetResolveCache`). Proxies in the view frustum request their mesh and materials at
   High priority above `HighPriorityScreenFraction` (5%) of the viewport height and at Normal below; proxies within
-  `PrefetchDistance` (100 units) of the camera request them at Low; shadow casters outside both are drawn only from
-  what is resident. Each distinct mesh, material and texture is looked up once per frame (one `GetAsset`, which also
+  `PrefetchDistance` (100 units) of the camera request them at Low (also a mesh another lookup of the frame found not
+  loaded); meshes of unknown bounds are requested as if in view (above); shadow casters outside the view and the
+  prefetch distance are drawn only from what is resident. Each distinct mesh, material and texture is looked up once
+  per frame (one `GetAsset`, which also
   stamps it for the least-recently-used order; `AssetManagerStats::GetAssetCalls` counts them at the manager). The
   references are held only while the frame is rendered (the command lists keep the GPU resources they use, the bindless
   table its textures), and the manager only during the frame (a weak reference tells the next frame whether it is the
@@ -718,7 +733,8 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   `InstanceBytesUploaded`, `MaterialBytesUploaded`). Each frame publishes the materials it drew with their largest size
   on screen and texture tiling (`GetVisibleMaterials`, for mip streaming) and its counts and times (`VisibleProxies`,
   `ProxyUpdates`, `InstanceUploadRanges`, `ExtractMs`, `SortMs`, `RequestsByVisibility`, `PrefetchRequests`,
-  `GetAssetCalls`, `OpaqueDrawCalls`, `ShadowDrawCalls`), which the viewport's stats overlay shows.
+  `GetAssetCalls`, `MeshesWithoutBounds`, `OpaqueDrawCalls`, `ShadowDrawCalls`), most of which the viewport's stats
+  overlay shows.
 - **Overlays that scale**. `DrawSceneGizmos` given the view (`SceneGizmoView`) leaves out shapes outside it or beyond
   `MaxDistance` and draws lights and cameras whose shapes would be smaller on screen than `MinShapePixels` (too small to
   read) as icons of `IconPixels`; the editor draws collider shapes of the selection only unless

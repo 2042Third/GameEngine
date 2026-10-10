@@ -10,6 +10,8 @@
 #include <glm/glm.hpp>
 
 #include <cstdint>
+#include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -18,6 +20,7 @@
 namespace Strata
 {
 
+	class AssetManagerBase;
 	class Mesh;
 	class Scene;
 
@@ -28,7 +31,9 @@ namespace Strata
 		constexpr uint32_t CastShadows = 1u << 1;
 		constexpr uint32_t Mirrored = 1u << 2;    // The world transform mirrors (negative determinant)
 		constexpr uint32_t Indexed = 1u << 3;     // In the spatial index: active, with a mesh handle and a finite, invertible transform
-		constexpr uint32_t MeshBounds = 1u << 4;  // Its bounds come from its mesh (otherwise from ResolveUnloadedBounds)
+		// Its bounds are its mesh's (learned from the loaded mesh, or recorded by the asset database). Without it they are a
+		// placeholder around the entity (RenderScene::GetPlaceholderBounds), and renderers request the mesh as if in view.
+		constexpr uint32_t MeshBounds = 1u << 4;
 	}
 
 	struct RenderSceneStats
@@ -40,6 +45,9 @@ namespace Strata
 		uint32_t Materials = 0;        // Distinct material handles in use
 		uint32_t LastSyncUpdates = 0;  // Proxies the latest Sync updated
 		uint64_t FullRefreshes = 0;    // Syncs that compared every proxy (the scene no longer knew which transforms changed)
+		// Meshes the latest Sync compared with the asset manager: those whose objects changed, new ones, or all of them after
+		// the manager changed (or forgot the changes); none in a sync after which nothing loaded, reloaded or was dropped.
+		uint32_t LastSyncMeshChecks = 0;
 	};
 
 	// The renderer's persistent view of a scene's mesh renderers: one render proxy per entity with a MeshRendererComponent,
@@ -52,9 +60,16 @@ namespace Strata
 	// Debug builds validate the proxies after every Sync (Validate).
 	//
 	// Mesh layouts (bounds, submeshes and their materials) are learned from loaded meshes (SetMeshLayout) and kept when
-	// a mesh is evicted, so proxies keep their bounds and instance slots; a mesh whose layout was never learned bounds its
-	// proxies with ResolveUnloadedBounds. Materials and meshes get dense slots shared by all proxies that use them;
-	// instance data refers to material slots, whose GPU data each renderer resolves per frame.
+	// a mesh is evicted, so proxies keep their bounds and instance slots. Sync keeps them current with the asset manager
+	// whatever the renderers see: the meshes whose objects changed since the previous sync (the manager's content
+	// changes, read against the render scene's own content version, so a scene that was not rendered for a while catches
+	// up) and the meshes new to the scene are compared with their loaded objects. Until a mesh's layout is known, the
+	// bounds the asset database recorded for it stand in (ResolveUnloadedBounds). A mesh with neither has unknown bounds
+	// (GetMeshesWithoutBounds): its proxies sit in the spatial index with placeholder bounds around their entities, which
+	// say nothing about where the mesh is, so renderers request such a mesh as if it were in view while any of its proxies
+	// is active (GetIndexedUserCount) - a terrain whose origin is out of view may well fill it. Its layout follows once it
+	// loads. Materials and meshes get dense slots shared by all proxies that use them; instance data refers to material
+	// slots, whose GPU data each renderer resolves per frame.
 	//
 	// One per scene, created on first use (Get) in the scene's registry context and shared by every renderer of the scene
 	// (the viewport and capture renderers). Main thread only.
@@ -78,9 +93,10 @@ namespace Strata
 		// Unique in the process, so renderers can tell render scenes apart (a new scene may reuse an address).
 		uint64_t GetId() const { return m_Id; }
 
-		// Updates the scene's world transforms, then the proxies of what changed since the last sync. Returns the number of
+		// Updates the scene's world transforms, then the proxies of what changed since the last sync, then the mesh layouts
+		// from `assets` (the active asset manager; null: layouts change only through SetMeshLayout). Returns the number of
 		// proxies updated.
-		uint32_t Sync();
+		uint32_t Sync(const Ref<AssetManagerBase>& assets);
 
 		// Compares every proxy, the spatial index and the instance data with what a rebuild from the scene would produce.
 		// Returns false with the first difference.
@@ -113,19 +129,15 @@ namespace Strata
 		uint32_t GetMeshSlotCapacity() const { return static_cast<uint32_t>(m_Meshes.size()); }
 		AssetHandle GetMeshHandle(uint32_t slot) const { return m_Meshes[slot].Handle; }
 		bool IsMeshLayoutKnown(uint32_t slot) const { return m_Meshes[slot].LayoutKnown; }
-		// The mesh's object changed since its layout was learned (a reload or an eviction): the next loaded object is
-		// compared with it.
-		bool IsMeshLayoutStale(uint32_t slot) const { return m_Meshes[slot].LayoutStale; }
 		// Material slot of each submesh (the default material where the submesh has none).
 		std::span<const uint32_t> GetSubmeshMaterialSlots(uint32_t slot) const { return m_Meshes[slot].SubmeshMaterialSlots; }
-		// Mesh slots in use whose layout is not known yet.
-		std::span<const uint32_t> GetMeshesWithoutLayout() const { return m_MeshesWithoutLayout; }
+		// Mesh slots in use whose bounds are unknown: no layout learned and no bounds recorded (see the class comment).
+		std::span<const uint32_t> GetMeshesWithoutBounds() const { return m_MeshesWithoutBounds; }
+		// The mesh's proxies in the spatial index (active, drawable): while there are none, nothing needs the mesh.
+		uint32_t GetIndexedUserCount(uint32_t slot) const { return m_Meshes[slot].IndexedUsers; }
 		// Learns (or updates) the layout of a mesh from a loaded object: the bounds and instance slots of every proxy that
 		// uses it follow. Returns the number of proxies updated.
 		uint32_t SetMeshLayout(uint32_t slot, const Mesh& mesh);
-		// Assets whose loaded objects changed (AssetManagerBase::GetContentChanges): the layouts of those meshes become
-		// stale. `all`: any asset may have changed.
-		void OnAssetsChanged(std::span<const AssetHandle> handles, bool all);
 
 		uint32_t GetMaterialSlotCapacity() const { return static_cast<uint32_t>(m_Materials.size()); }
 		AssetHandle GetMaterialHandle(uint32_t slot) const { return m_Materials[slot].Handle; }
@@ -146,20 +158,27 @@ namespace Strata
 
 		const RenderSceneStats& GetStats() const { return m_Stats; }
 
-		// Local bounds of a proxy whose mesh layout is not known: a box of one unit around the entity's origin, scaled with
-		// it, which grows to the mesh's bounds when the mesh first loads.
-		static AABB ResolveUnloadedBounds(AssetHandle mesh);
+		// The local bounds the asset database recorded for a mesh that `assets` has not loaded (for the layout that is not
+		// known yet), or nullopt when it recorded none. The asset managers record no bounds of meshes they have not loaded
+		// yet; once packs and imports record them (pack-v2's AssetManagerBase::GetBounds), this returns them, and meshes
+		// known that way are culled and requested where they are instead of as if in view.
+		static std::optional<AABB> ResolveUnloadedBounds(const AssetManagerBase& assets, AssetHandle mesh);
+		// Local bounds of a proxy whose mesh bounds are unknown: a box of one unit around the entity's origin, scaled with
+		// it. It keeps the proxy in the spatial index (queries near the entity find it) but says nothing about the mesh.
+		static AABB GetPlaceholderBounds();
 	private:
 		struct MeshEntry
 		{
 			AssetHandle Handle = UUID::Null();
 			std::vector<uint32_t> Users;       // Proxies using the mesh
+			uint32_t IndexedUsers = 0;         // Users in the spatial index (RenderProxyFlags::Indexed)
 			bool LayoutKnown = false;
-			bool LayoutStale = false;
-			uint32_t WithoutLayoutPosition = c_InvalidIndex; // In m_MeshesWithoutLayout
 			AABB Bounds;
 			std::vector<AssetHandle> SubmeshMaterials;
 			std::vector<uint32_t> SubmeshMaterialSlots;
+			std::optional<AABB> RecordedBounds;                // While the layout is unknown: ResolveUnloadedBounds
+			uint32_t WithoutBoundsPosition = c_InvalidIndex;   // In m_MeshesWithoutBounds
+			uint64_t CheckedSync = 0;                          // The sync that last compared the layout with the loaded mesh
 		};
 
 		struct MaterialEntry
@@ -196,6 +215,13 @@ namespace Strata
 		uint32_t AcquireMaterial(AssetHandle handle);
 		void ReleaseMaterial(uint32_t slot);
 
+		// Mesh layouts from the asset manager (see Sync): the meshes whose objects changed and new mesh slots.
+		void UpdateMeshLayouts(const Ref<AssetManagerBase>& assets);
+		// Learns the layout from the loaded mesh, or the recorded bounds of a mesh whose layout is not known.
+		void CheckMeshLayout(uint32_t slot, AssetManagerBase& assets);
+		// Adds the slot to, or removes it from, m_MeshesWithoutBounds as its layout and recorded bounds say.
+		void UpdateBoundsMembership(uint32_t slot);
+
 		// Instance slots of the proxy for its mesh layout (released when the layout is unknown), and their data.
 		void RebuildInstances(uint32_t proxy);
 		void WriteInstances(uint32_t proxy);
@@ -230,7 +256,13 @@ namespace Strata
 		std::vector<MeshEntry> m_Meshes;
 		std::vector<uint32_t> m_FreeMeshes;
 		std::unordered_map<AssetHandle, uint32_t> m_MeshSlotsByHandle;
-		std::vector<uint32_t> m_MeshesWithoutLayout;
+		std::vector<uint32_t> m_MeshesWithoutBounds;
+		std::vector<uint32_t> m_NewMeshSlots; // Mesh slots acquired since the last sync: their meshes may be loaded already
+		// The asset manager the layouts follow, and its content version they are current with.
+		std::weak_ptr<AssetManagerBase> m_Assets;
+		uint64_t m_AssetContentVersion = 0;
+		std::vector<AssetHandle> m_AssetChangeScratch;
+		std::vector<uint32_t> m_MeshCheckScratch;
 		std::vector<MaterialEntry> m_Materials;
 		std::vector<uint32_t> m_FreeMaterials;
 		std::unordered_map<AssetHandle, uint32_t> m_MaterialSlotsByHandle;

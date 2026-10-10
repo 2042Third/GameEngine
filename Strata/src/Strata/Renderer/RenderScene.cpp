@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Renderer/RenderScene.h"
 
+#include "Strata/Asset/AssetManager.h"
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Core/Assert.h"
 #include "Strata/Renderer/Mesh.h"
@@ -53,6 +54,11 @@ namespace Strata
 		bool SameBytes(const T& a, const T& b)
 		{
 			return SameBytes(&a, &b, sizeof(T));
+		}
+
+		bool SameBounds(const std::optional<AABB>& a, const std::optional<AABB>& b)
+		{
+			return a.has_value() == b.has_value() && (!a || SameBytes(*a, *b));
 		}
 
 		AssetHandle GetSubmeshMaterial(const Submesh& submesh)
@@ -127,14 +133,18 @@ namespace Strata
 		return m_Transforms[proxy].ToMatrix();
 	}
 
-	AABB RenderScene::ResolveUnloadedBounds(AssetHandle)
+	std::optional<AABB> RenderScene::ResolveUnloadedBounds(const AssetManagerBase&, AssetHandle)
 	{
-		// Until the asset database records the bounds of meshes it has not loaded, a mesh that never loaded is taken to fill
-		// one unit around its entity's origin; its proxies grow to the mesh's bounds when it first loads (SetMeshLayout).
+		// No asset manager records bounds of meshes before they load yet: the mesh's bounds stay unknown until it loads.
+		return std::nullopt;
+	}
+
+	AABB RenderScene::GetPlaceholderBounds()
+	{
 		return AABB(glm::vec3(-1.0f), glm::vec3(1.0f));
 	}
 
-	uint32_t RenderScene::Sync()
+	uint32_t RenderScene::Sync(const Ref<AssetManagerBase>& assets)
 	{
 		ST_PROFILE_FUNCTION();
 		m_Scene->UpdateWorldTransforms();
@@ -164,6 +174,7 @@ namespace Strata
 			FullRefresh();
 		}
 		m_TransformsVersion = m_Scene->GetTransformsVersion();
+		UpdateMeshLayouts(assets);
 		m_Index.Refresh();
 		m_Stats.LastSyncUpdates = m_SyncUpdates;
 
@@ -350,19 +361,35 @@ namespace Strata
 		const float determinant = glm::determinant(glm::mat3(world));
 		const bool active = (m_Flags[proxy] & RenderProxyFlags::Active) != 0;
 		const uint32_t meshSlot = m_MeshSlots[proxy];
-		const bool layoutKnown = meshSlot != c_InvalidIndex && m_Meshes[meshSlot].LayoutKnown;
+		const MeshEntry* mesh = meshSlot != c_InvalidIndex ? &m_Meshes[meshSlot] : nullptr;
 
 		uint32_t flags = m_Flags[proxy] & (RenderProxyFlags::Active | RenderProxyFlags::CastShadows);
 		if (determinant < 0.0f)
 			flags |= RenderProxyFlags::Mirrored;
-		if (layoutKnown)
+		if (mesh && (mesh->LayoutKnown || mesh->RecordedBounds))
 			flags |= RenderProxyFlags::MeshBounds;
-		m_LocalBounds[proxy] = layoutKnown ? m_Meshes[meshSlot].Bounds : ResolveUnloadedBounds(m_MeshHandles[proxy]);
+		if (mesh && mesh->LayoutKnown)
+			m_LocalBounds[proxy] = mesh->Bounds;
+		else if (mesh && mesh->RecordedBounds)
+			m_LocalBounds[proxy] = *mesh->RecordedBounds;
+		else
+			m_LocalBounds[proxy] = GetPlaceholderBounds();
 
 		// Zero scale and non-finite transforms show nothing.
-		const bool drawable = active && meshSlot != c_InvalidIndex && std::isfinite(determinant) && std::abs(determinant) >= c_MinDeterminant && IsFiniteMatrix(world);
+		const bool drawable = active && mesh && std::isfinite(determinant) && std::abs(determinant) >= c_MinDeterminant && IsFiniteMatrix(world);
 		m_WorldBounds[proxy] = drawable ? m_LocalBounds[proxy].Transformed(world) : AABB();
 		const bool indexed = drawable && m_WorldBounds[proxy].IsValid() && IsFiniteBox(m_WorldBounds[proxy]);
+		// The mesh counts its indexed users: a proxy counts for the mesh it has while it carries the Indexed flag
+		// (ReleaseMesh takes it away from the mesh it leaves).
+		const bool wasIndexed = (m_Flags[proxy] & RenderProxyFlags::Indexed) != 0;
+		if (indexed != wasIndexed)
+		{
+			ST_CORE_ASSERT(meshSlot != c_InvalidIndex, "RenderScene: proxy {} is counted as indexed without a mesh", proxy);
+			if (indexed)
+				m_Meshes[meshSlot].IndexedUsers++;
+			else
+				m_Meshes[meshSlot].IndexedUsers--;
+		}
 		if (indexed)
 		{
 			flags |= RenderProxyFlags::Indexed;
@@ -406,9 +433,9 @@ namespace Strata
 			MeshEntry& entry = m_Meshes[slot];
 			entry = MeshEntry();
 			entry.Handle = handle;
-			entry.WithoutLayoutPosition = static_cast<uint32_t>(m_MeshesWithoutLayout.size());
-			m_MeshesWithoutLayout.push_back(slot);
+			UpdateBoundsMembership(slot); // Unknown until the next sync looks at the asset manager
 			m_MeshSlotsByHandle.emplace(handle, slot);
+			m_NewMeshSlots.push_back(slot);
 			m_Stats.Meshes++;
 		}
 		MeshEntry& entry = m_Meshes[slot];
@@ -420,6 +447,12 @@ namespace Strata
 	void RenderScene::ReleaseMesh(uint32_t slot, uint32_t proxy)
 	{
 		MeshEntry& entry = m_Meshes[slot];
+		if ((m_Flags[proxy] & RenderProxyFlags::Indexed) != 0)
+		{
+			// Counted for this mesh only; placing the proxy again counts it for its next one.
+			entry.IndexedUsers--;
+			m_Flags[proxy] &= ~RenderProxyFlags::Indexed;
+		}
 		const uint32_t position = m_MeshUserPositions[proxy];
 		const uint32_t moved = entry.Users.back();
 		entry.Users[position] = moved;
@@ -429,19 +462,34 @@ namespace Strata
 		if (!entry.Users.empty())
 			return;
 
-		if (entry.WithoutLayoutPosition != c_InvalidIndex)
-		{
-			const uint32_t movedSlot = m_MeshesWithoutLayout.back();
-			m_MeshesWithoutLayout[entry.WithoutLayoutPosition] = movedSlot;
-			m_Meshes[movedSlot].WithoutLayoutPosition = entry.WithoutLayoutPosition;
-			m_MeshesWithoutLayout.pop_back();
-		}
 		for (const uint32_t materialSlot : entry.SubmeshMaterialSlots)
 			ReleaseMaterial(materialSlot);
 		m_MeshSlotsByHandle.erase(entry.Handle);
+		entry.Handle = UUID::Null();
+		UpdateBoundsMembership(slot);
 		entry = MeshEntry();
 		m_FreeMeshes.push_back(slot);
 		m_Stats.Meshes--;
+	}
+
+	void RenderScene::UpdateBoundsMembership(uint32_t slot)
+	{
+		MeshEntry& entry = m_Meshes[slot];
+		const bool unknown = entry.Handle.IsValid() && !entry.LayoutKnown && !entry.RecordedBounds;
+		const bool listed = entry.WithoutBoundsPosition != c_InvalidIndex;
+		if (unknown == listed)
+			return;
+		if (unknown)
+		{
+			entry.WithoutBoundsPosition = static_cast<uint32_t>(m_MeshesWithoutBounds.size());
+			m_MeshesWithoutBounds.push_back(slot);
+			return;
+		}
+		const uint32_t movedSlot = m_MeshesWithoutBounds.back();
+		m_MeshesWithoutBounds[entry.WithoutBoundsPosition] = movedSlot;
+		m_Meshes[movedSlot].WithoutBoundsPosition = entry.WithoutBoundsPosition;
+		m_MeshesWithoutBounds.pop_back();
+		entry.WithoutBoundsPosition = c_InvalidIndex;
 	}
 
 	uint32_t RenderScene::AcquireMaterial(AssetHandle handle)
@@ -489,10 +537,7 @@ namespace Strata
 		for (const Submesh& submesh : mesh.GetSubmeshes())
 			materials.push_back(GetSubmeshMaterial(submesh));
 		if (entry.LayoutKnown && SameBytes(entry.Bounds, mesh.GetBounds()) && entry.SubmeshMaterials == materials)
-		{
-			entry.LayoutStale = false;
 			return 0;
-		}
 
 		// New material slots first, so slots both layouts use survive the release of the old ones.
 		std::vector<uint32_t> materialSlots;
@@ -504,16 +549,10 @@ namespace Strata
 		entry.SubmeshMaterials = std::move(materials);
 		entry.SubmeshMaterialSlots = std::move(materialSlots);
 		entry.Bounds = mesh.GetBounds();
-		entry.LayoutStale = false;
-		if (!entry.LayoutKnown)
-		{
-			entry.LayoutKnown = true;
-			const uint32_t movedSlot = m_MeshesWithoutLayout.back();
-			m_MeshesWithoutLayout[entry.WithoutLayoutPosition] = movedSlot;
-			m_Meshes[movedSlot].WithoutLayoutPosition = entry.WithoutLayoutPosition;
-			m_MeshesWithoutLayout.pop_back();
-			entry.WithoutLayoutPosition = c_InvalidIndex;
-		}
+		// The loaded mesh's own bounds replace what was recorded for it.
+		entry.LayoutKnown = true;
+		entry.RecordedBounds.reset();
+		UpdateBoundsMembership(slot);
 
 		for (const uint32_t proxy : m_Meshes[slot].Users)
 		{
@@ -524,18 +563,94 @@ namespace Strata
 		return static_cast<uint32_t>(m_Meshes[slot].Users.size());
 	}
 
-	void RenderScene::OnAssetsChanged(std::span<const AssetHandle> handles, bool all)
+	void RenderScene::UpdateMeshLayouts(const Ref<AssetManagerBase>& assets)
 	{
-		if (all)
+		ST_PROFILE_FUNCTION();
+		m_Stats.LastSyncMeshChecks = 0;
+		// Compared by ownership: a manager that took the place (and the address) of a destroyed one is another manager.
+		const bool sameManager = !m_Assets.owner_before(assets) && !assets.owner_before(m_Assets);
+		bool checkAll = false;
+		m_AssetChangeScratch.clear();
+		if (!sameManager)
 		{
-			for (MeshEntry& entry : m_Meshes)
-				entry.LayoutStale = entry.LayoutKnown;
+			// Every layout is compared with the new manager's meshes.
+			m_Assets = assets;
+			m_AssetContentVersion = assets ? assets->GetContentVersion() : 0;
+			checkAll = true;
+		}
+		else if (assets)
+		{
+			// The version is read first: a change published in between is reported again by the next sync, never missed.
+			const uint64_t version = assets->GetContentVersion();
+			if (version != m_AssetContentVersion && !assets->GetContentChanges(m_AssetContentVersion, m_AssetChangeScratch))
+				checkAll = true; // The manager no longer remembers that far back
+			m_AssetContentVersion = version;
+		}
+		if (!assets)
+		{
+			m_NewMeshSlots.clear();
 			return;
 		}
-		for (const AssetHandle handle : handles)
+
+		m_MeshCheckScratch.clear();
+		if (checkAll)
 		{
-			if (auto it = m_MeshSlotsByHandle.find(handle); it != m_MeshSlotsByHandle.end())
-				m_Meshes[it->second].LayoutStale = m_Meshes[it->second].LayoutKnown;
+			for (uint32_t slot = 0; slot < m_Meshes.size(); slot++)
+			{
+				if (m_Meshes[slot].Handle.IsValid())
+					m_MeshCheckScratch.push_back(slot);
+			}
+		}
+		else
+		{
+			for (const AssetHandle handle : m_AssetChangeScratch)
+			{
+				if (auto it = m_MeshSlotsByHandle.find(handle); it != m_MeshSlotsByHandle.end())
+					m_MeshCheckScratch.push_back(it->second);
+			}
+			// New slots released again since have no mesh; reused ones are checked for the mesh they hold now.
+			for (const uint32_t slot : m_NewMeshSlots)
+			{
+				if (m_Meshes[slot].Handle.IsValid())
+					m_MeshCheckScratch.push_back(slot);
+			}
+		}
+		m_NewMeshSlots.clear();
+		for (const uint32_t slot : m_MeshCheckScratch)
+			CheckMeshLayout(slot, *assets);
+	}
+
+	void RenderScene::CheckMeshLayout(uint32_t slot, AssetManagerBase& assets)
+	{
+		MeshEntry& entry = m_Meshes[slot];
+		if (entry.CheckedSync == m_SyncCount)
+			return;
+		entry.CheckedSync = m_SyncCount;
+		m_Stats.LastSyncMeshChecks++;
+		if (assets.GetAssetState(entry.Handle) == AssetState::Ready)
+		{
+			// The request stamps the mesh as used, which a mesh that just arrived or changed is anyway.
+			const Ref<Asset> asset = assets.GetAsset(entry.Handle, AssetPriority::Low);
+			if (asset && asset->GetType() == AssetType::Mesh && SetMeshLayout(slot, static_cast<const Mesh&>(*asset)) > 0)
+			{
+				for (const uint32_t proxy : m_Meshes[slot].Users)
+					MarkUpdated(proxy);
+			}
+			return;
+		}
+		// A known layout stays until the next loaded object shows whether it changed (its arrival is a content change).
+		if (entry.LayoutKnown)
+			return;
+		// Not loaded and never learned: the bounds the asset database recorded stand in, if it has any.
+		std::optional<AABB> recorded = ResolveUnloadedBounds(assets, entry.Handle);
+		if (SameBounds(recorded, entry.RecordedBounds))
+			return;
+		entry.RecordedBounds = std::move(recorded);
+		UpdateBoundsMembership(slot);
+		for (const uint32_t proxy : m_Meshes[slot].Users)
+		{
+			UpdateProxyPlacement(proxy);
+			MarkUpdated(proxy);
 		}
 	}
 
@@ -653,6 +768,7 @@ namespace Strata
 		const entt::registry& registry = m_Scene->GetRegistry();
 		uint32_t expected = 0;
 		uint32_t indexed = 0;
+		std::vector<uint32_t> indexedUsers(m_Meshes.size(), 0);
 		for (const auto [entity, renderer, world] : registry.view<MeshRendererComponent, WorldTransformComponent>().each())
 		{
 			expected++;
@@ -675,10 +791,11 @@ namespace Strata
 
 			const glm::mat4 matrix = world.Matrix;
 			const float determinant = glm::determinant(glm::mat3(matrix));
-			const bool layoutKnown = meshSlot != c_InvalidIndex && m_Meshes[meshSlot].LayoutKnown;
-			const AABB local = layoutKnown ? m_Meshes[meshSlot].Bounds : ResolveUnloadedBounds(renderer.Mesh);
-			const bool drawable = world.ActiveInHierarchy && meshSlot != c_InvalidIndex && std::isfinite(determinant) && std::abs(determinant) >= c_MinDeterminant
-				&& IsFiniteMatrix(matrix);
+			const MeshEntry* mesh = meshSlot != c_InvalidIndex ? &m_Meshes[meshSlot] : nullptr;
+			const bool layoutKnown = mesh && mesh->LayoutKnown;
+			const bool boundsKnown = mesh && (mesh->LayoutKnown || mesh->RecordedBounds);
+			const AABB local = layoutKnown ? mesh->Bounds : (boundsKnown ? *mesh->RecordedBounds : GetPlaceholderBounds());
+			const bool drawable = world.ActiveInHierarchy && mesh && std::isfinite(determinant) && std::abs(determinant) >= c_MinDeterminant && IsFiniteMatrix(matrix);
 			const AABB bounds = drawable ? local.Transformed(matrix) : AABB();
 			const bool shouldBeIndexed = drawable && bounds.IsValid() && IsFiniteBox(bounds);
 			if (shouldBeIndexed != m_Index.Contains(proxy) || shouldBeIndexed != ((m_Flags[proxy] & RenderProxyFlags::Indexed) != 0))
@@ -687,7 +804,11 @@ namespace Strata
 				return fail(fmt::format("the bounds of entity {} are stale", static_cast<uint32_t>(entity)));
 			if (((m_Flags[proxy] & RenderProxyFlags::Mirrored) != 0) != (determinant < 0.0f))
 				return fail(fmt::format("the mirroring of entity {} is stale", static_cast<uint32_t>(entity)));
+			if (((m_Flags[proxy] & RenderProxyFlags::MeshBounds) != 0) != boundsKnown)
+				return fail(fmt::format("entity {} has a stale MeshBounds flag", static_cast<uint32_t>(entity)));
 			indexed += shouldBeIndexed ? 1u : 0u;
+			if (shouldBeIndexed)
+				indexedUsers[meshSlot]++;
 
 			const uint32_t instanceCount = layoutKnown ? static_cast<uint32_t>(m_Meshes[meshSlot].SubmeshMaterialSlots.size()) : 0u;
 			if (m_InstanceCounts[proxy] != instanceCount)
@@ -705,6 +826,22 @@ namespace Strata
 			return fail(fmt::format("{} proxies for {} mesh renderers", m_Stats.Proxies, expected));
 		if (indexed != m_Index.GetCount() || indexed != m_Stats.IndexedProxies)
 			return fail(fmt::format("the spatial index holds {} proxies instead of {}", m_Index.GetCount(), indexed));
+
+		size_t withoutBounds = 0;
+		for (uint32_t slot = 0; slot < m_Meshes.size(); slot++)
+		{
+			const MeshEntry& mesh = m_Meshes[slot];
+			if (mesh.IndexedUsers != indexedUsers[slot])
+				return fail(fmt::format("mesh slot {} counts {} indexed users instead of {}", slot, mesh.IndexedUsers, indexedUsers[slot]));
+			const bool unknown = mesh.Handle.IsValid() && !mesh.LayoutKnown && !mesh.RecordedBounds;
+			const bool listed = mesh.WithoutBoundsPosition != c_InvalidIndex && mesh.WithoutBoundsPosition < m_MeshesWithoutBounds.size()
+				&& m_MeshesWithoutBounds[mesh.WithoutBoundsPosition] == slot;
+			if (unknown != listed)
+				return fail(fmt::format("mesh slot {} is {} the meshes without bounds", slot, unknown ? "missing from" : "wrongly in"));
+			withoutBounds += unknown ? 1u : 0u;
+		}
+		if (withoutBounds != m_MeshesWithoutBounds.size())
+			return fail(fmt::format("{} meshes are listed without bounds instead of {}", m_MeshesWithoutBounds.size(), withoutBounds));
 		return true;
 	}
 

@@ -1520,14 +1520,12 @@ namespace Strata
 		if (target && !ValidateTarget(target))
 			return false;
 
-		// The scene's render proxies follow what changed since the last frame (world transforms included).
+		// The scene's render proxies follow what changed since the last frame (world transforms included), and their mesh
+		// layouts what the asset manager loaded.
+		const Ref<AssetManagerBase>& assets = AssetManager::GetActive();
 		RenderScene& renderScene = RenderScene::Get(scene);
-		m_Stats.ProxyUpdates = renderScene.Sync();
-		m_ChangedAssets.clear();
-		bool allAssetsChanged = false;
-		m_Assets.BeginFrame(AssetManager::GetActive(), m_ChangedAssets, allAssetsChanged);
-		if (allAssetsChanged || !m_ChangedAssets.empty())
-			renderScene.OnAssetsChanged(m_ChangedAssets, allAssetsChanged);
+		m_Stats.ProxyUpdates = renderScene.Sync(assets);
+		m_Assets.BeginFrame(assets);
 		PrepareExtraction(renderScene);
 
 		RenderData::FrameConstants frame = {};
@@ -1549,11 +1547,10 @@ namespace Strata
 
 		const auto extractionStart = std::chrono::steady_clock::now();
 		const Frustum frustum(frame.ViewProjection);
-		LearnResidentMeshLayouts(renderScene);
 		CullView(renderScene, camera, frustum);
 		FindShadowCasters(renderScene, camera, frame);
 		ResolveAssets(renderScene);
-		GatherDraws(renderScene, camera, frustum);
+		GatherDraws(renderScene, camera);
 		GatherShadowDraws(renderScene, camera, frame);
 		m_Stats.ExtractMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - extractionStart).count() - m_Stats.SortMs;
 		bool degraded = false; // Rendered with a reported limitation: keep the error so it is not logged every frame

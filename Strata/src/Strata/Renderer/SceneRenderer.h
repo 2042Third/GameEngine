@@ -164,6 +164,9 @@ namespace Strata
 		uint32_t RequestsByVisibility = 0;   // Distinct meshes, materials and textures requested for drawing
 		uint32_t PrefetchRequests = 0;       // Distinct meshes and materials requested at Low priority within the prefetch distance
 		uint32_t GetAssetCalls = 0;          // Asset manager lookups: at most one per distinct asset
+		// Meshes requested as if in view because their bounds are not known yet (RenderScene::GetMeshesWithoutBounds:
+		// never loaded, none recorded), counted in RequestsByVisibility too.
+		uint32_t MeshesWithoutBounds = 0;
 		bool EnvironmentLighting = false; // A sky light's environment (map or procedural sky) lights the scene
 		// Environment cubes computed this frame (with their irradiance and prefiltered maps): 1 when the environment map
 		// or the procedural sky's parameters (colors, sun size and intensity, the sun's direction and color) changed.
@@ -352,7 +355,6 @@ namespace Strata
 			std::vector<std::pair<uint32_t, float>> MaterialPixelSizes; // (material slot, largest pixel size), runs merged
 			std::array<uint32_t, SceneRendererStats::c_LODStatCount> InstancesPerLOD = {};
 			std::array<float, RenderData::c_MaxCascades> CasterNearZ = {};
-			uint32_t Culled = 0;
 			uint32_t Skipped = 0; // Submeshes beyond what a sort key can address
 		};
 
@@ -422,16 +424,15 @@ namespace Strata
 		void PrepareExtraction(RenderScene& renderScene);
 		// Lets go of the meshes, materials and textures the frame resolved.
 		void ReleaseFrameAssets();
-		// Learns the layouts of meshes that are loaded already (built-in meshes, meshes another view loaded).
-		void LearnResidentMeshLayouts(RenderScene& renderScene);
-		// The proxies in the view frustum and in the prefetch distance, and the assets they need.
+		// The proxies in the view frustum and in the prefetch distance, and the assets they need; meshes whose bounds are
+		// unknown are needed as if in view.
 		void CullView(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum);
 		// Computes the cascades and finds the shadow casters of each; leaves ShadowParams.w at 0 without shadows.
 		void FindShadowCasters(RenderScene& renderScene, const SceneCamera& camera, RenderData::FrameConstants& frame);
 		// Resolves every mesh and material the frame uses, once each, at the priority its use asks for.
 		void ResolveAssets(RenderScene& renderScene);
 		// The view's draws in batches: opaque ones sorted by pipeline state and mesh, transparent ones back to front.
-		void GatherDraws(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum);
+		void GatherDraws(RenderScene& renderScene, const SceneCamera& camera);
 		// The shadow casters' draws per cascade, and the cascades' projections fitted to the casters.
 		void GatherShadowDraws(RenderScene& renderScene, const SceneCamera& camera, RenderData::FrameConstants& frame);
 		void MarkMesh(uint32_t slot, uint32_t usage);
@@ -611,7 +612,6 @@ namespace Strata
 
 		// Extraction (see SceneRendererExtraction.cpp). Slots are those of the render scene the state belongs to.
 		AssetResolveCache m_Assets;     // Holds the frame's meshes, materials and textures while the frame is rendered
-		std::vector<AssetHandle> m_ChangedAssets;
 		uint64_t m_RenderSceneId = 0;   // The render scene the per-slot state and the GPU copies below belong to
 		bool m_FullUpload = true;       // The GPU copies hold nothing of that render scene yet
 		uint64_t m_UploadedInstanceVersion = 0;
@@ -620,7 +620,6 @@ namespace Strata
 		std::vector<uint32_t> m_CasterStamps;       // Per proxy: m_FrameStamp when it is a shadow caster candidate
 		std::vector<uint32_t> m_VisibleProxies;
 		std::vector<float> m_VisibleFractions;      // Screen fraction of each visible proxy
-		std::vector<uint8_t> m_VisibleFallback;     // Culled with the bounds of a mesh not loaded yet: tested again
 		std::vector<uint32_t> m_QueryScratch;
 		std::vector<ShadowCaster> m_ShadowCasters;
 		std::vector<uint32_t> m_MeshUsage;          // Per mesh slot: how the frame uses it (usage bits)

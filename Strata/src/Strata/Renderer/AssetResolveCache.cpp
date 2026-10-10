@@ -14,7 +14,7 @@ namespace Strata
 
 	const Ref<Asset> AssetResolveCache::s_None;
 
-	void AssetResolveCache::BeginFrame(const Ref<AssetManagerBase>& manager, std::vector<AssetHandle>& outChanged, bool& outAllChanged)
+	void AssetResolveCache::BeginFrame(const Ref<AssetManagerBase>& manager)
 	{
 		// A frame that was not ended lets go of its references now.
 		EndFrame();
@@ -23,26 +23,12 @@ namespace Strata
 		if (m_Frame % c_ForgetFrames == 0)
 			std::erase_if(m_Entries, [this](const auto& entry) { return entry.second.Frame + c_ForgetFrames < m_Frame; });
 
-		outAllChanged = false;
-		m_Manager = manager;
 		// Compared by ownership: a manager that took the place (and the address) of a destroyed one is another manager.
 		const bool sameManager = !m_LastManager.owner_before(manager) && !manager.owner_before(m_LastManager);
 		if (!sameManager)
-		{
-			m_LastManager = manager;
 			m_Entries.clear();
-			m_ContentVersion = manager ? manager->GetContentVersion() : 0;
-			outAllChanged = true;
-			return;
-		}
-		if (!manager)
-			return;
-		const uint64_t version = manager->GetContentVersion();
-		if (version == m_ContentVersion)
-			return;
-		if (!manager->GetContentChanges(m_ContentVersion, outChanged))
-			outAllChanged = true;
-		m_ContentVersion = version;
+		m_LastManager = manager;
+		m_Manager = manager;
 	}
 
 	void AssetResolveCache::EndFrame()
@@ -60,7 +46,7 @@ namespace Strata
 		{
 			entry.Frame = m_Frame;
 			entry.Asset = nullptr;
-			entry.Kind = Lookup::None;
+			entry.Lookups = 0;
 		}
 		return entry;
 	}
@@ -70,16 +56,15 @@ namespace Strata
 		if (!m_Manager || !handle.IsValid())
 			return s_None;
 		Entry& entry = GetEntry(handle);
-		// Answered this frame: a request answers everything, a resident lookup answers other lookups and requests that
-		// found the asset loaded.
-		if (entry.Kind == Lookup::Request || (entry.Kind == Lookup::Resident && (residentOnly || entry.Asset)))
+		// Answered this frame: a request answers everything; a resident lookup answers other resident lookups, and requests
+		// when it found the asset loaded.
+		if ((entry.Lookups & c_Requested) != 0 || ((entry.Lookups & c_LookedUp) != 0 && (residentOnly || entry.Asset)))
 			return entry.Asset;
 
 		if (residentOnly)
 		{
-			if (entry.Kind == Lookup::None)
-				m_Stats.ResidentLookups++;
-			entry.Kind = Lookup::Resident;
+			entry.Lookups |= c_LookedUp;
+			m_Stats.ResidentLookups++;
 			if (m_Manager->GetAssetState(handle) == AssetState::Ready)
 			{
 				entry.Asset = m_Manager->GetAsset(handle, priority);
@@ -90,7 +75,7 @@ namespace Strata
 			return entry.Asset;
 		}
 
-		entry.Kind = Lookup::Request;
+		entry.Lookups |= c_Requested;
 		entry.Asset = m_Manager->GetAsset(handle, priority);
 		m_Stats.GetAssetCalls++;
 		m_Stats.Requested++;
@@ -111,9 +96,11 @@ namespace Strata
 		if (!m_Manager || !handle.IsValid())
 			return;
 		Entry& entry = GetEntry(handle);
-		if (entry.Kind != Lookup::None)
+		// Requested already, or found loaded by a resident lookup (which stamped it as used); a resident lookup that found
+		// nothing requested nothing, so the prefetch still has to.
+		if ((entry.Lookups & (c_Requested | c_Prefetched)) != 0 || entry.Asset)
 			return;
-		entry.Kind = Lookup::Prefetch;
+		entry.Lookups |= c_Prefetched;
 		m_Manager->RequestLoad(handle, AssetPriority::Low);
 		m_Stats.Prefetched++;
 	}

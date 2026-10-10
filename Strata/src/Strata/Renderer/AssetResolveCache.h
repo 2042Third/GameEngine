@@ -26,16 +26,12 @@ namespace Strata
 	// the asset manager (one GetAsset, which also stamps the asset as used for the residency's least-recently-used order),
 	// later ones in the same frame get the same answer. Nothing outlives the frame: EndFrame lets go of every reference
 	// the frame took and of the manager, so a renderer that stops rendering (a capture renderer between captures, a hidden
-	// view) keeps no asset from being evicted and no asset manager alive. BeginFrame also revalidates: it reports the
-	// assets whose loaded objects changed since the previous frame (GetContentVersion, GetContentChanges), so data derived
-	// from them can be refreshed. Main thread only.
+	// view) keeps no asset from being evicted and no asset manager alive. Main thread only.
 	class AssetResolveCache
 	{
 	public:
-		// Starts a frame with the active asset manager (null: none, every resolve fails), held until EndFrame. Appends the
-		// assets whose objects changed since the previous frame to outChanged; outAllChanged when any may have (the manager
-		// forgot, or another manager became active).
-		void BeginFrame(const Ref<AssetManagerBase>& manager, std::vector<AssetHandle>& outChanged, bool& outAllChanged);
+		// Starts a frame with the active asset manager (null: none, every resolve fails), held until EndFrame.
+		void BeginFrame(const Ref<AssetManagerBase>& manager);
 		// Ends the frame: releases the references it handed out and the manager. The GPU work recorded with the assets
 		// keeps what it uses alive by itself (command lists reference their buffers, the bindless table its textures).
 		void EndFrame();
@@ -62,19 +58,16 @@ namespace Strata
 
 		const AssetResolveStats& GetStats() const { return m_Stats; }
 	private:
-		enum class Lookup : uint8_t
-		{
-			None = 0,
-			Resident, // FindResident: not requested
-			Prefetch,
-			Request
-		};
+		// What the current frame asked of a handle (Entry::Lookups).
+		static constexpr uint8_t c_LookedUp = 1u << 0;   // FindResident asked whether it is loaded (without a request)
+		static constexpr uint8_t c_Prefetched = 1u << 1; // Prefetch requested it at Low priority
+		static constexpr uint8_t c_Requested = 1u << 2;  // Resolve requested it (GetAsset)
 
 		struct Entry
 		{
 			uint64_t Frame = 0;
 			Ref<Asset> Asset; // Held until EndFrame
-			Lookup Kind = Lookup::None;
+			uint8_t Lookups = 0;
 		};
 
 		// The entry's asset (null when there is none).
@@ -83,7 +76,6 @@ namespace Strata
 	private:
 		Ref<AssetManagerBase> m_Manager;               // The frame's manager, between BeginFrame and EndFrame
 		std::weak_ptr<AssetManagerBase> m_LastManager; // The manager of the latest frame: tells whether the entries are its
-		uint64_t m_ContentVersion = 0;
 		uint64_t m_Frame = 0;
 		// Entries stay where they are while the map lives (std::unordered_map never moves its elements), so m_Used can
 		// point at them.

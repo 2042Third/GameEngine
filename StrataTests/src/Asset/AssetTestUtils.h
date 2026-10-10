@@ -154,6 +154,17 @@ namespace Strata::Tests
 			return metadata.Handle;
 		}
 
+		// Replaces the stored form of an asset: its next load reads the new one (ReloadAsset loads it again if it was loaded).
+		void SetStoredData(AssetHandle handle, std::vector<uint8_t> data)
+		{
+			const uint64_t size = data.size();
+			{
+				std::scoped_lock<std::mutex> lock(m_Mutex);
+				m_Data[handle] = std::move(data);
+			}
+			SetStoredSize(handle, size);
+		}
+
 		void Remove(AssetHandle handle) { UnregisterAsset(handle); }
 
 		// Reads wait at the gate while it is closed, until AllowReads lets them through.
