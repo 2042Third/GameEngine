@@ -1,12 +1,14 @@
 #include "EditorLayer.h"
 
 #include "Editor/GameExport.h"
+#include "Panels/AssetInspectorPanel.h"
 #include "Panels/ConsolePanel.h"
 #include "Panels/ContentBrowserPanel.h"
 #include "Panels/InspectorPanel.h"
 #include "Panels/SceneHierarchyPanel.h"
 #include "Panels/ViewportPanel.h"
 #include "Panels/WelcomePanel.h"
+#include "UI/EditorActions.h"
 #include "UI/EditorFonts.h"
 #include "UI/FileDialogs.h"
 #include "UI/Icons.h"
@@ -100,6 +102,7 @@ namespace Strata
 		add(EditorPanels::c_Viewport, "Viewport", Icons::Box, []() { return CreateScope<ViewportPanel>(); });
 		add(EditorPanels::c_Hierarchy, "Hierarchy", Icons::ListTree, []() { return CreateScope<SceneHierarchyPanel>(); });
 		add(EditorPanels::c_Inspector, "Inspector", Icons::SlidersHorizontal, []() { return CreateScope<InspectorPanel>(); });
+		add(EditorPanels::c_AssetInspector, "Asset", Icons::FileBox, []() { return CreateScope<AssetInspectorPanel>(); });
 		add(EditorPanels::c_Console, "Console", Icons::Terminal, []() { return CreateScope<ConsolePanel>(); });
 		add(EditorPanels::c_ContentBrowser, "Content Browser", Icons::FolderOpen, []() { return CreateScope<ContentBrowserPanel>(); });
 		add(EditorPanels::c_Welcome, "Welcome", Icons::House, []() { return CreateScope<WelcomePanel>(); }, EditorPanelPlacement::Launcher);
@@ -364,6 +367,13 @@ namespace Strata
 		{
 			HandleShortcuts();
 			DrawDockspace();
+			// A new inspection target brings its tab forward (the Asset tab for an asset, the Inspector for the entities),
+			// leaving the keyboard focus where it is (e.g. in the Content Browser that was clicked).
+			if (m_Context.GetInspectionVersion() != m_ShownInspectionVersion)
+			{
+				m_ShownInspectionVersion = m_Context.GetInspectionVersion();
+				m_Panels.ShowTab(m_Context.GetInspectionTarget() == InspectionTarget::Asset ? EditorPanels::c_AssetInspector : EditorPanels::c_Inspector);
+			}
 			m_Panels.OnImGuiRender(panelContext);
 		}
 		m_ProjectDialogs.Draw(panelContext);
@@ -502,7 +512,9 @@ namespace Strata
 
 	void EditorLayer::HandleShortcuts()
 	{
-		// Nothing changes behind a modal dialog (global routes ignore modality).
+		// Nothing changes behind a modal dialog (global routes ignore modality). The shortcuts that act on the selection
+		// (Delete, Ctrl+D, F2, Ctrl+C/X/V, Ctrl+A) belong to the Hierarchy and the Viewport, which handle them while they have
+		// the keyboard focus (EditorActions::HandleSelectionShortcuts): a key pressed in another panel never edits the scene.
 		if (ImGui::GetTopMostPopupModal())
 			return;
 		const ImGuiInputFlags global = ImGuiInputFlags_RouteGlobal;
@@ -520,13 +532,9 @@ namespace Strata
 			SaveScene();
 		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_S, global))
 			SaveSceneAs();
-		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_D, global))
-			DuplicateSelection();
 		// Like the menu item and the toolbar button, the shortcut does nothing while a build runs.
 		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_B, global) && !m_Context.GetScriptBuilder().IsRunning())
 			BuildScripts();
-		if (ImGui::Shortcut(ImGuiKey_Delete, global))
-			DeleteSelection();
 	}
 
 	void EditorLayer::RequestDiscardChanges(std::function<void()> action)
@@ -667,14 +675,13 @@ namespace Strata
 		return !RunEditorCommand(m_Context, m_Commands, "scene.saveAs", { { "path", FileSystem::ToUTF8(relative) } }).is_null();
 	}
 
-	void EditorLayer::DeleteSelection()
+	void EditorLayer::RenameEntity(UUID entity)
 	{
-		if (m_Context.GetSelection().empty() || ImGui::GetIO().WantTextInput)
+		SceneHierarchyPanel* hierarchy = m_Panels.Get<SceneHierarchyPanel>(EditorPanels::c_Hierarchy);
+		if (!hierarchy || !m_Context.GetActiveScene()->GetEntityByUUID(entity))
 			return;
-		nlohmann::json ids = nlohmann::json::array();
-		for (UUID id : m_Context.GetSelection())
-			ids.push_back(UUIDToJson(id));
-		RunEditorCommand(m_Context, m_Commands, "entity.delete", { { "entities", ids } });
+		m_Panels.Focus(EditorPanels::c_Hierarchy);
+		hierarchy->BeginRename(entity);
 	}
 
 	void EditorLayer::BuildScripts()
@@ -687,16 +694,6 @@ namespace Strata
 			if (!result.Success && m_Context.GetScriptBuilder().GetLastResult().ID == previousBuild)
 				ST_ERROR("Build Scripts: {}", result.Error);
 		});
-	}
-
-	void EditorLayer::DuplicateSelection()
-	{
-		Entity primary = m_Context.GetPrimarySelection();
-		if (!primary)
-			return;
-		const nlohmann::json copy = RunEditorCommand(m_Context, m_Commands, "entity.duplicate", { { "entity", UUIDToJson(primary.GetUUID()) } });
-		if (copy.is_object())
-			m_Context.Select(*UUIDFromJson(copy["id"]));
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -718,12 +715,15 @@ namespace Strata
 
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Hierarchy).c_str(), left);
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Inspector).c_str(), right);
+		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_AssetInspector).c_str(), right);
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Console).c_str(), bottom);
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_ContentBrowser).c_str(), bottom);
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Viewport).c_str(), center);
 		ImGui::DockBuilderFinish(dockspaceId);
-		// The Content Browser is the bottom area's visible tab on first run.
+		// On first run the Content Browser is the bottom area's visible tab, and the Inspector the right one's (the Asset tab
+		// comes forward when an asset is inspected).
 		m_Panels.SelectTab(EditorPanels::c_ContentBrowser, bottom);
+		m_Panels.SelectTab(EditorPanels::c_Inspector, right);
 	}
 
 	void EditorLayer::DrawLauncher(EditorPanelContext& panelContext)
@@ -885,11 +885,25 @@ namespace Strata
 				m_Context.Undo();
 			if (ImGui::MenuItem(redo.empty() ? "Redo" : ("Redo " + redo).c_str(), "Ctrl+Y", false, !redo.empty() && !m_Context.IsPlaying()))
 				m_Context.Redo();
+			// The selection's actions: also shortcuts of the Hierarchy and the Viewport while they have the keyboard focus.
 			ImGui::Separator();
-			if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, m_Context.GetPrimarySelection().IsValid()))
-				DuplicateSelection();
-			if (ImGui::MenuItem("Delete", "Del", false, !m_Context.GetSelection().empty()))
-				DeleteSelection();
+			const bool selected = m_Context.GetPrimarySelection().IsValid();
+			const bool editable = m_Context.AcceptsEditShortcuts();
+			if (ImGui::MenuItem("Cut", "Ctrl+X", false, selected && editable))
+				EditorActions::CutSelection(m_Context, m_Commands);
+			if (ImGui::MenuItem("Copy", "Ctrl+C", false, selected))
+				EditorActions::CopySelection(m_Context, m_Commands);
+			if (ImGui::MenuItem("Paste", "Ctrl+V", false, editable && EditorActions::CanPaste()))
+				EditorActions::Paste(m_Context, m_Commands);
+			if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, selected && editable))
+				EditorActions::DuplicateSelection(m_Context, m_Commands);
+			if (ImGui::MenuItem("Rename", "F2", false, selected && editable))
+				RenameEntity(m_Context.GetPrimarySelection().GetUUID());
+			if (ImGui::MenuItem("Delete", "Del", false, selected && editable))
+				EditorActions::DeleteSelection(m_Context, m_Commands);
+			ImGui::Separator();
+			if (ImGui::MenuItem("Select All", "Ctrl+A"))
+				EditorActions::SelectAll(m_Context);
 			ImGui::EndMenu();
 		}
 

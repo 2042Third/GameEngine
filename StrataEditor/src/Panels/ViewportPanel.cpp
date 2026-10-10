@@ -4,8 +4,9 @@
 #include "Editor/EditorContext.h"
 #include "Editor/EditorViewport.h"
 #include "Editor/ViewportRenderer.h"
-#include "Panels/SceneHierarchyPanel.h"
+#include "UI/EditorActions.h"
 #include "UI/EditorFonts.h"
+#include "UI/EditorShell.h"
 #include "UI/Icons.h"
 #include "UI/PropertyWidgets.h"
 #include "UI/Theme.h"
@@ -173,7 +174,7 @@ namespace Strata
 		m_GameView = view && view->FromScene;
 		if (!m_GameView)
 		{
-			HandleShortcuts(context);
+			HandleShortcuts(panelContext);
 			UpdateCamera(context, m_Hovered);
 
 			// A plain click picks what is under the cursor in the image that is shown; clicks on the gizmo are its own.
@@ -338,11 +339,22 @@ namespace Strata
 	// Input
 	////////////////////////////////////////////////////////////////////////////////
 
-	void ViewportPanel::HandleShortcuts(EditorContext& context)
+	void ViewportPanel::HandleShortcuts(EditorPanelContext& panelContext)
 	{
+		EditorContext& context = panelContext.Context;
+		const ImGuiIO& io = ImGui::GetIO();
+		// The selection's shortcuts (Delete, Ctrl+D, Ctrl+C/X/V, Ctrl+A, F2) while the viewport has the keyboard focus, never
+		// during a camera fly or a gizmo drag.
+		if (m_CameraDrag != CameraDrag::Fly && !m_GizmoDrag && !ImGuizmo::IsUsing())
+		{
+			EditorActions::HandleSelectionShortcuts(context, panelContext.Commands, true);
+			const Entity primary = context.GetPrimarySelection();
+			if (primary && panelContext.Shell && context.AcceptsEditShortcuts() && ImGui::Shortcut(ImGuiKey_F2, ImGuiInputFlags_RouteFocused))
+				panelContext.Shell->RenameEntity(primary.GetUUID());
+		}
+
 		// Only while the viewport is the target of the keyboard, never while typing or flying (WASD/QE move the camera).
 		// Nor during a gizmo drag, whose operation must not change under it.
-		const ImGuiIO& io = ImGui::GetIO();
 		if (!(m_Hovered || m_Focused) || io.WantTextInput || m_CameraDrag == CameraDrag::Fly || m_GizmoDrag || ImGuizmo::IsUsing() || io.KeyCtrl || io.KeyAlt
 			|| io.KeySuper)
 		{

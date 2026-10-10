@@ -47,6 +47,15 @@ namespace Strata::UI
 	// true when clicked (pills that lead somewhere, e.g. the errors pill opening the Console).
 	bool Pill(const char* id, const char* icon, std::string_view text, const ImVec4& color, const char* tooltip = nullptr);
 
+	// A banner across the available width: an icon and text (wrapped) in a color on a tint of that color, e.g. the play-mode
+	// notice over the Hierarchy and the Inspector. The probe records its color and text.
+	void Banner(const char* id, const char* icon, std::string_view text, const ImVec4& color);
+
+	// A search field: a text field with a search icon as its hint and a clear button while it holds text, at the given
+	// width (negative: the available width), with an optional tooltip (e.g. the search syntax). Returns true when the text
+	// changed this frame (also when cleared). The probe records the field under the id.
+	bool SearchField(const char* id, std::string& text, const char* hint = "Search", float width = -1.0f, const char* tooltip = nullptr);
+
 	// Rows of lists with a selection (tree nodes and selectables, e.g. the Hierarchy's). ImGui draws every hovered row in
 	// ImGuiCol_HeaderHovered, selected or not, and the theme keeps that neutral so that hovering is not mistaken for
 	// selecting. Between PushSelectionColors(selected) and PopSelectionColors() a selected row keeps the accent under the

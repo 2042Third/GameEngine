@@ -123,6 +123,9 @@ namespace Strata
 		void ResetOpenStates();
 		// Opens the panel if needed and brings its window to the front (selecting its tab) on the next frame.
 		void Focus(std::string_view id);
+		// Opens the panel if needed and shows its tab in its dock node when it is drawn next, without taking the keyboard
+		// focus from the window that has it (the Asset tab when the Content Browser inspects an asset).
+		void ShowTab(std::string_view id);
 		// Selects the panel's tab in its dock node without giving it the keyboard focus (layouts).
 		void SelectTab(std::string_view id, ImGuiID dockNodeId) const;
 
@@ -164,6 +167,7 @@ namespace Strata
 			std::string WindowName;
 			bool Open = true;
 			bool FocusRequested = false;
+			bool ShowTabRequested = false;
 		};
 
 		Entry* FindEntry(std::string_view id);

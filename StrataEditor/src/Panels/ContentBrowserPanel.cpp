@@ -3,7 +3,7 @@
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
-#include "Panels/SceneHierarchyPanel.h"
+#include "UI/EditorActions.h"
 #include "UI/FileDialogs.h"
 #include "UI/Icons.h"
 #include "UI/PropertyWidgets.h"
@@ -81,6 +81,22 @@ namespace Strata
 			RunEditorCommand(context, commands, "asset.import", { { "file", FileSystem::ToUTF8(file) }, { "directory", m_CurrentDirectory } });
 		}
 		m_RefreshRequested = true;
+	}
+
+	void ContentBrowserPanel::SetCurrentDirectory(std::string directory)
+	{
+		m_CurrentDirectory = std::move(directory);
+		m_RefreshRequested = true;
+	}
+
+	std::optional<ContentBrowserPanel::ItemRect> ContentBrowserPanel::FindItemRect(AssetHandle asset) const
+	{
+		for (const ItemRect& item : m_ItemRects)
+		{
+			if (item.Asset == asset)
+				return item;
+		}
+		return std::nullopt;
 	}
 
 	void ContentBrowserPanel::OpenScene(EditorContext& context, const EditorCommandRegistry& commands, AssetHandle scene)
@@ -208,6 +224,7 @@ namespace Strata
 	{
 		EditorContext& context = panelContext.Context;
 		const EditorCommandRegistry& commands = panelContext.Commands;
+		m_ItemRects.clear();
 		if (!context.GetAssetManager())
 		{
 			ImGui::TextDisabled("Open or create a project to manage its assets (File menu)");
@@ -238,11 +255,15 @@ namespace Strata
 				const bool failed = !item.ImportError.empty();
 				if (failed)
 					ImGui::PushStyleColor(ImGuiCol_Text, UI::GetThemeColors().Error);
-				// The open scene is the selected row.
-				const bool open = metadata.Handle == context.GetSceneHandle();
-				UI::PushSelectionColors(open);
-				ImGui::Selectable(item.Label.c_str(), open, ImGuiSelectableFlags_AllowDoubleClick);
+				// The inspected asset is the selected row; clicking an asset shows it in the asset inspector.
+				const bool inspected = metadata.Handle == context.GetInspectedAsset();
+				// The open scene says so.
+				const std::string label = metadata.Handle == context.GetSceneHandle() ? item.Label + "  (open)" : item.Label;
+				UI::PushSelectionColors(inspected);
+				if (ImGui::Selectable(label.c_str(), inspected, ImGuiSelectableFlags_AllowDoubleClick))
+					context.SetInspectedAsset(metadata.Handle);
 				UI::PopSelectionColors();
+				m_ItemRects.push_back({ metadata.Handle, ImGui::GetItemRectMin(), ImGui::GetItemRectMax() });
 				if (failed)
 					ImGui::PopStyleColor();
 				if (ImGui::IsItemHovered())

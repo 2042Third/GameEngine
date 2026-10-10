@@ -4,8 +4,11 @@
 
 #include <Strata/Asset/Asset.h>
 
+#include <imgui.h>
+
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -29,6 +32,17 @@ namespace Strata
 		// Imports external files into the current folder.
 		void ImportFiles(EditorContext& context, const EditorCommandRegistry& commands, const std::vector<std::filesystem::path>& files);
 		const std::string& GetCurrentDirectory() const { return m_CurrentDirectory; }
+		// Shows a folder of the asset directory ('/' separators, empty for the root) from the next frame on.
+		void SetCurrentDirectory(std::string directory);
+
+		// Where an asset's row was drawn in the last frame (screen coordinates), when it was in view: for tests.
+		struct ItemRect
+		{
+			AssetHandle Asset;
+			ImVec2 Min;
+			ImVec2 Max;
+		};
+		std::optional<ItemRect> FindItemRect(AssetHandle asset) const;
 	private:
 		struct Item
 		{
@@ -50,6 +64,7 @@ namespace Strata
 
 		std::vector<std::string> m_Folders;
 		std::vector<Item> m_Items;
+		std::vector<ItemRect> m_ItemRects; // Drawn in the last frame
 		double m_LastRefreshTime = -1.0;
 		bool m_RefreshRequested = true;
 

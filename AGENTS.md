@@ -96,7 +96,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   with the asset pipeline (`Engine::RegisterBuiltinModules`) before the suites and the helper modes run; a test that
   needs its own component registers it in a child process (`--strata-test-helper=custom-component`,
   `Engine/ModuleRegistrationHelpers.cpp`). The editor's UI is tested headless with `ImGuiHarness` (suites `Editor.UI`,
-  `Editor.Theme`, `Editor.UI.Source`; see Editor, "Editor UI rules").
+  `Editor.UI.Hierarchy`, `Editor.UI.Inspector`, `Editor.UI.AssetInspector`, `Editor.Theme`, `Editor.UI.Source`; see
+  Editor, "Editor UI rules").
 - Suites whose names start with `GPU` need a Vulkan device and are registered separately under the
   CTest label `gpu`. They share one device per process through `Tests::GPUContext` (never create
   devices in tests) and end with `CHECK(gpu.GetNewErrorCount() == 0)`, so validation errors fail the
@@ -685,11 +686,23 @@ and `AudioSystem`, the built-in "Audio" scene system.
   unfinished scripts fail the process.
 - The hierarchy panel draws the rows of `Editor/HierarchyView` (the visible entities as a flat list; a filter with
   `c:`/`t:` terms shows matches with their ancestors), which are rebuilt only when the hierarchy, the expansion or the
-  filter changed: never walk the scene per frame in UI code. Drops map to `entity.setParent {entities, parent, index}`
-  through `HierarchyView::GetDropTarget`.
+  filter changed: never walk the scene per frame in UI code, and draw long lists through `ImGuiListClipper` (only the
+  rows in view). The rows sit in one `ImGui::BeginMultiSelect` scope whose requests set `EditorContext::SetSelection`;
+  drops map to `entity.setParent {entities, parent, index}` through `HierarchyView::GetDropTarget`; F2 or a double click
+  renames in place.
 - The inspectors show the selected entities or one asset (`EditorContext::SetInspectedAsset`, `selection.set {asset}`;
   the entities stay selected). Selecting an entity, deleting the asset or closing the project returns to the entities;
-  `GetInspectionVersion` changes with every switch.
+  `GetInspectionVersion` changes with every switch, and the editor brings the matching tab (Inspector or Asset) forward
+  without taking the keyboard focus. The Inspector edits every selected entity at once (shared components only; values
+  that differ show as mixed; one undo step per edit), offers Reset, Copy Values, Paste Values and Remove per component
+  (not for components the engine adds) and shows the scene's settings and sky with nothing selected; the Asset tab edits
+  materials (`UI/MaterialEditor`: a drag previews, its release is one undo step) and import settings (Apply runs
+  `asset.setImportSettings` through the runner). Property widgets come from `UI/PropertyWidgets.h`
+  (`DrawPropertyWidget` with `PropertyWidgetOptions` for mixed values, axis resets and probe keys).
+- **Shortcuts:** `EditorLayer` handles the global ones (Ctrl+Z, Ctrl+Y, Ctrl+S, Ctrl+Shift+S, Ctrl+P, Ctrl+B).
+  Shortcuts that act on the selection (Delete, Ctrl+D, Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+A, F2) are
+  `ImGuiInputFlags_RouteFocused` shortcuts of the Hierarchy and the Viewport (`UI/EditorActions.h`,
+  `HandleSelectionShortcuts`): a key pressed in another panel never edits the scene. The Edit menu runs the same actions.
 - `editor.status` summarizes the editor (project, scene, play state, selection, undo history); other
   parts of the editor add sections to it through `EditorContext::SetStatusProvider`: `automation`, `assets` (the
   totals of `asset.stats`) and `editor`: the window, UI scale and frame rate, whether the launcher shows (`launcher`),

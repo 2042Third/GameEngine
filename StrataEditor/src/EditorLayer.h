@@ -62,6 +62,7 @@ namespace Strata
 		constexpr const char* c_Viewport = "Viewport";
 		constexpr const char* c_Hierarchy = "Hierarchy";
 		constexpr const char* c_Inspector = "Inspector";
+		constexpr const char* c_AssetInspector = "AssetInspector";
 		constexpr const char* c_ContentBrowser = "ContentBrowser";
 		constexpr const char* c_Console = "Console";
 		constexpr const char* c_Welcome = "Welcome"; // The launcher (WelcomePanel)
@@ -89,7 +90,7 @@ namespace Strata
 		static constexpr double c_InputActivitySeconds = 0.5;
 		static constexpr double c_AutomationActivitySeconds = 1.0;
 		// Version of the default layout: a saved layout of another version is replaced by the default one.
-		static constexpr int c_LayoutVersion = 2;
+		static constexpr int c_LayoutVersion = 3;
 
 		EditorLayer(const EditorOptions& options, Scope<EditorHost> host);
 		~EditorLayer() override = default;
@@ -130,6 +131,7 @@ namespace Strata
 		void ShowOpenProjectDialog() override;
 		void ShowAboutDialog() override;
 		void DismissLauncher() override;
+		void RenameEntity(UUID entity) override;
 		EditorEnvironment GetEnvironment() const override;
 		EditorAutomationState GetAutomationState() const override;
 	private:
@@ -175,8 +177,6 @@ namespace Strata
 		void OpenProjectFile(const std::filesystem::path& projectFile);
 		// Logs an error of a UI action, and shows it on the launcher while that is what the user sees.
 		void ReportError(const std::string& message);
-		void DeleteSelection();
-		void DuplicateSelection();
 		// Builds the project's scripts through the command runner (script.build); the build reports to the log.
 		void BuildScripts();
 	private:
@@ -200,6 +200,8 @@ namespace Strata
 		bool m_ResetLayout = false;
 		bool m_LayoutChecked = false;
 		bool m_UIDrawn = false; // OnImGuiRender ran at least once
+		// The inspection target the inspector tabs show (EditorContext::GetInspectionVersion): a new one brings its tab forward.
+		uint64_t m_ShownInspectionVersion = 0;
 		std::string m_WindowTitle;
 		std::string m_AutomationError; // Why automation did not start (when it was asked for)
 		bool m_HasScriptBuild = false;

@@ -723,8 +723,10 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
  --------------------------------------------------------------------------------------------------------------
  StrataEditorUI    EditorLayer            owns everything below: menu bar, main toolbar, status pills, default
                                           layout, shortcuts, idle throttling, file dialogs (nfd)
-                   EditorPanelRegistry    the panels (Viewport, Hierarchy, Inspector, Console, Content Browser):
-                                          windows, View menu, open state in imgui.ini
+                   EditorPanelRegistry    the panels (Viewport, Hierarchy, Inspector, Asset, Console, Content
+                                          Browser): windows, View menu, open state in imgui.ini
+                   EditorActions          selection actions (delete, duplicate, cut, copy, paste, select all)
+                                          for the Edit menu and the focus-scoped shortcuts
                    UI kit                 Theme (palette, ApplyTheme), EditorFonts, Icons, Widgets, ItemProbe
  --------------------------------------------------------------------------------------------------------------
  StrataEditorCore  EditorContext          project, EditorAssetManager, edited and running scene, play mode,
@@ -798,7 +800,8 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
 - **Runner** (`EditorCommandRunner.h`). `Run` executes a command; a deferred one is polled once per frame from the next
   frame on, in issue order, and reports through its completion callback. Automation and command scripts always use the
   runner. UI actions that finish at once call the registry through `RunEditorCommand`
-  (`Panels/SceneHierarchyPanel.cpp`), which rejects pending results; Build Scripts uses the runner (`EditorLayer.cpp`).
+  (`UI/EditorActions.cpp`), which rejects pending results; Build Scripts, Apply of import settings and Reimport use the
+  runner (`EditorLayer.cpp`, `Panels/AssetInspectorPanel.cpp`).
 - **Undo** (`SceneEdit.h`, `UndoStack.h`). A `SceneEditTransaction` snapshots the entities an edit touches as
   `EntityState` (components as JSON, parent, sibling index from `Scene::GetSiblingIndex`); `Commit` records a
   `SceneEditAction` holding the states before and after, and undo or redo re-applies them with the same UUIDs
@@ -831,6 +834,33 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   included) and after; undo and redo apply them again, and steps with the same merge key
   (`Material/<handle>/<property>`) merge until `UndoStack::BreakMerge`, so a drag that saves every frame is one step.
   The action refers to the project's asset manager weakly and does not change the scene, so it never marks it unsaved.
+- **Authoring panels** (`Panels/SceneHierarchyPanel`, `InspectorPanel`, `AssetInspectorPanel`, `UI/PropertyWidgets`,
+  `UI/MaterialEditor`, `UI/EditorActions`). They draw state and run commands, and their cost follows what is on screen:
+  - The **Hierarchy** draws `HierarchyView`'s rows through `ImGuiListClipper` inside one `ImGui::BeginMultiSelect` scope
+    (row index as selection data; requests applied to `EditorContext::SetSelection`, the row clicked last being the
+    primary selection; clicks select on release so any row can be dragged, a box starts in the empty space). A primary
+    selection that changed elsewhere is revealed (`HierarchyView::Reveal`, then the list scrolls to its row). Rows are tree
+    nodes with the entity's icon (`UI/EntityIcons`), its name, a prefab badge on an instance's root and an eye
+    (`entity.setActive`); a drag carries the topmost dragged entities (`DragDrop::c_Entities`) and a drop asks
+    `HierarchyView::GetDropTarget` for `entity.setParent`'s parent and index. The rename field is drawn after the
+    selection's scope and activated by id: a keyboard move out of that scope would make ImGui clear the selection. With
+    100,000 roots the panel costs about 0.012 ms per frame (it drew every root before: 12.9 ms; `Perf.Editor`).
+  - The **Inspector** shows the components every selected entity has. `GetSharedProperty` gives each widget its value and
+    which components (axes, Euler angles) differ, which `DrawPropertyWidget` shows as mixed; an edit goes through the
+    multi-entity `SetPropertyComponentsWithUndo` with the components the widget changed (one step; each entity keeps its
+    other components), or `SetPropertyWithUndo` for other types. Axis labels reset their axis to the
+    value of a new component (`GetDefaultPropertyValues`). A component's menu copies and pastes its values through the
+    clipboard as JSON (`EditorActions::CopyComponentValues`) and runs `component.set`/`component.remove {entities}`. With
+    nothing selected it shows the scene's settings, applied by one `scene.setSettings` when a drag ends, and the first
+    active sky light (the renderer's).
+  - The **Asset** inspector is tabbed with the Inspector: `EditorLayer` brings the tab of the inspection target forward
+    when `GetInspectionVersion` changes (`EditorPanelRegistry::ShowTab`, which leaves the keyboard focus where it is).
+    Materials are drawn by `MaterialEditor` (a drag previews, its release saves: one write and one undo step), import
+    settings as a draft of the settings JSON that Apply hands to `asset.setImportSettings` through the runner.
+  - **Shortcuts**: `EditorLayer` keeps the global ones (Ctrl+Z, Ctrl+Y, Ctrl+S, Ctrl+P, Ctrl+B); Delete, Ctrl+D, Ctrl+C,
+    Ctrl+X, Ctrl+V, Ctrl+A and F2 are `ImGuiInputFlags_RouteFocused` shortcuts of the Hierarchy and the Viewport
+    (`EditorActions::HandleSelectionShortcuts`), so they act only where the keyboard focus is; the clipboard holds
+    `entity.copy`'s data.
 - **Automation** (`EditorAutomation.h`, `Network/RpcServer.h`). The server's network thread does the socket work;
   each frame `EditorAutomation::Update` registers new or changed commands as methods and runs queued requests through
   the runner, so a deferred command answers when it completes. Clients find the editor through session files

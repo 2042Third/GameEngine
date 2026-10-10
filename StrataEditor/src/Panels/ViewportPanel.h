@@ -50,7 +50,7 @@ namespace Strata
 
 		void DrawChips(EditorContext& context);
 		void DrawStatsChip(ViewportSettings& settings);
-		void HandleShortcuts(EditorContext& context);
+		void HandleShortcuts(EditorPanelContext& context);
 		void UpdateCamera(EditorContext& context, bool hovered);
 		void UpdateGizmo(EditorContext& context, const ViewportView& view);
 		void DrawOverlays(EditorContext& context, const ViewportView& view, float chipRowBottom, const EditorFrameStats& frame);
