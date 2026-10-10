@@ -800,7 +800,10 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   `TextureReadback`, encodes the PNG on a worker and saves on an I/O thread (`EditorViewportCommands.cpp`).
 - **Script builds** (`ScriptBuild.h`). `ScriptBuilder` runs CMake configure and build as child processes (one build at
   a time, ended as a process tree when cancelled), polled once per frame; its output streams to the log and is parsed
-  into diagnostics. When a build finishes, `EditorContext` loads or hot reloads the module.
+  into diagnostics. When a build finishes, `EditorContext` loads or hot reloads the module. With a Visual Studio
+  generator it first checks the build tree's depth (`CheckScriptBuildPathLength`): MSBuild's file tracker cannot create
+  logs at paths over 259 characters, even where Windows allows long paths, and the build would fail without naming the
+  cause, so a project in too deep a folder is refused with a message that says how much shorter its path must be.
 
 ## Export and the runtime
 

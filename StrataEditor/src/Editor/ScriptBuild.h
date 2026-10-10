@@ -3,6 +3,7 @@
 #include <Strata/Core/Base.h>
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -41,6 +42,19 @@ namespace Strata
 	std::vector<std::string> MakeScriptConfigureArguments(const ScriptBuildSettings& settings, const std::filesystem::path& sourceDirectory,
 		const std::filesystem::path& buildDirectory, const std::filesystem::path& binaryDirectory);
 	std::vector<std::string> MakeScriptBuildArguments(const ScriptBuildSettings& settings, const std::filesystem::path& buildDirectory);
+
+	// MSBuild's file tracker, which logs the files compilers and linkers touch, cannot create its logs at paths longer than
+	// this (MAX_PATH less the terminating null), even where Windows allows long paths; builds then fail with errors that
+	// do not name the cause (FTK1011 "could not create the new file tracking log file").
+	constexpr size_t c_MSBuildMaxTrackedPathLength = 259;
+	// The longest path below the build directory at which a Visual Studio generator's build of the module `targetName`
+	// writes a tracking log, counting the separator after the build directory; 0 for generators without MSBuild.
+	size_t GetScriptBuildTrackedPathDepth(const ScriptBuildSettings& settings, std::string_view targetName);
+	// Why the module `targetName` cannot be built in `buildDirectory` with these settings, or nothing when it can: with a
+	// Visual Studio generator, its tracking logs would exceed c_MSBuildMaxTrackedPathLength. Paths count as given, which is
+	// how the tools receive them.
+	std::optional<std::string> CheckScriptBuildPathLength(const ScriptBuildSettings& settings, const std::filesystem::path& buildDirectory,
+		std::string_view targetName);
 
 	// A compiler, linker or CMake message found in a build log.
 	struct ScriptDiagnostic
@@ -123,8 +137,9 @@ namespace Strata
 		ScriptBuilder(const ScriptBuilder&) = delete;
 		ScriptBuilder& operator=(const ScriptBuilder&) = delete;
 
-		// Starts building the project's scripts. Fails (returning false with a reason) while a build runs, or when the
-		// project has no CMakeLists.txt in its script directory.
+		// Starts building the project's scripts. Fails (returning false with a reason) while a build runs, when the
+		// project has no CMakeLists.txt in its script directory, or when its path is too long for the build's tools
+		// (CheckScriptBuildPathLength).
 		bool Start(const Project& project, const ScriptBuildSettings& settings, std::string* outError = nullptr);
 		// Advances a running build. Returns true in the call in which the build finished (see GetLastResult).
 		bool Update();

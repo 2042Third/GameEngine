@@ -8,7 +8,9 @@
 #include <Strata/Project/Project.h>
 
 #include <algorithm>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace Strata;
@@ -434,5 +436,69 @@ TEST_SUITE("Editor.ScriptBuild")
 		CHECK_FALSE(builder.IsRunning());
 		CHECK(builder.GetLastResult().ID == 0);
 		CHECK_FALSE(builder.Update());
+	}
+
+	TEST_CASE("Visual Studio script builds refuse build trees too deep for MSBuild's file tracker")
+	{
+		// The deepest tracking logs (measured with MSBuild 18): those of CMake's compiler check while configuring,
+		// /CMakeFiles/CMakeScratch/TryCompile-xxxxxx/cmTC_xxxxx.dir/Debug/cmTC_xxxxx.tlog/link-cvtres.write.1.tlog, unless the
+		// module target's /<target>.dir/<configuration>/<tracking name>.tlog/CustomBuild.command.1.tlog is deeper. The tracking
+		// name is the target's, or 17 characters for targets longer than 16.
+		const ScriptBuildSettings visualStudio = MakeVisualStudioSettings(); // Release
+		constexpr size_t configureDepth = 104;
+		CHECK(GetScriptBuildTrackedPathDepth(visualStudio, "TetrisScripts") == configureDepth);
+		const std::string longName(50, 'M');
+		const size_t longNameDepth = 1 + 50 + 5 + 7 + 1 + 17 + 5 + 27;
+		CHECK(GetScriptBuildTrackedPathDepth(visualStudio, longName) == longNameDepth);
+		CHECK(GetScriptBuildTrackedPathDepth(MakeNinjaSettings(), longName) == 0);
+
+		auto buildDirectory = [](size_t length) { return FileSystem::FromUTF8("C:/" + std::string(length - 3, 'b')); };
+
+		// A tree whose deepest log is exactly at the limit builds; one character more is refused, saying why and what helps.
+		const size_t fits = c_MSBuildMaxTrackedPathLength - configureDepth;
+		CHECK_FALSE(CheckScriptBuildPathLength(visualStudio, buildDirectory(fits), "TetrisScripts").has_value());
+		const std::optional<std::string> tooDeep = CheckScriptBuildPathLength(visualStudio, buildDirectory(fits + 1), "TetrisScripts");
+		REQUIRE(tooDeep.has_value());
+		CHECK(tooDeep->find("too long") != std::string::npos);
+		CHECK(tooDeep->find(FileSystem::ToUTF8(buildDirectory(fits + 1))) != std::string::npos);
+		CHECK(tooDeep->find("paths of 260 characters") != std::string::npos);
+		CHECK(tooDeep->find("at least 1 character shorter") != std::string::npos);
+		CHECK(tooDeep->find("shorter name") == std::string::npos);
+
+		// A long module name lowers the limit, and shortening it is offered too.
+		const size_t fitsLongName = c_MSBuildMaxTrackedPathLength - longNameDepth;
+		CHECK_FALSE(CheckScriptBuildPathLength(visualStudio, buildDirectory(fitsLongName), longName).has_value());
+		const std::optional<std::string> longNameTooDeep = CheckScriptBuildPathLength(visualStudio, buildDirectory(fitsLongName + 10), longName);
+		REQUIRE(longNameTooDeep.has_value());
+		CHECK(longNameTooDeep->find("at least 10 characters shorter") != std::string::npos);
+		CHECK(longNameTooDeep->find("shorter name than '" + longName + "'") != std::string::npos);
+
+		// Generators without MSBuild have no such limit.
+		CHECK_FALSE(CheckScriptBuildPathLength(MakeNinjaSettings(), buildDirectory(250), longName).has_value());
+	}
+
+	TEST_CASE("A script build in a folder too deep for MSBuild is refused before anything is written")
+	{
+		// Deep enough for the configure step's tracking logs to pass the limit (with "/.strata/Scripts/Build"), and short
+		// enough to create without long path support.
+		const std::filesystem::path base = Tests::CreateTemporaryDirectory("ScriptBuildDeep");
+		const size_t baseLength = base.native().size();
+		const size_t tooDeep = c_MSBuildMaxTrackedPathLength - GetScriptBuildTrackedPathDepth(MakeVisualStudioSettings(), "DeepScripts") -
+			std::string_view("/.strata/Scripts/Build").size() + 1;
+		const size_t folderLength = tooDeep > baseLength + 1 ? tooDeep - baseLength - 1 : 1;
+		const std::filesystem::path directory = base / FileSystem::FromUTF8(std::string(folderLength, 'd'));
+		std::string error;
+		Ref<Project> project = Project::Create(directory, "Deep", &error);
+		REQUIRE_MESSAGE(project, error);
+		REQUIRE(project->GetScriptModuleName() == "DeepScripts");
+		REQUIRE_MESSAGE(CreateScriptProjectFiles(*project, true, nullptr, &error), error);
+
+		ScriptBuilder builder;
+		CHECK_FALSE(builder.Start(*project, MakeVisualStudioSettings(), &error));
+		CHECK(error.find("too long") != std::string::npos);
+		CHECK(error.find(FileSystem::ToUTF8(project->GetScriptBuildDirectory())) != std::string::npos);
+		CHECK_FALSE(builder.IsRunning());
+		CHECK(builder.GetLastResult().ID == 0);
+		CHECK_FALSE(FileSystem::Exists(project->GetIntermediateDirectory() / "Scripts"));
 	}
 }

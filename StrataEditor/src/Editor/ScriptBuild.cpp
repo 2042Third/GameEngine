@@ -42,6 +42,36 @@ namespace Strata
 			return settings.Generator.find("Visual Studio") != std::string::npos;
 		}
 
+		// The longest paths below a build directory at which MSBuild writes tracking logs (c_MSBuildMaxTrackedPathLength),
+		// counting the separator after the build directory; 0 for generators without MSBuild.
+		struct TrackedPathDepths
+		{
+			size_t Configure = 0; // CMake's compiler check while configuring
+			size_t Target = 0;    // The module target's own build
+		};
+
+		TrackedPathDepths GetTrackedPathDepths(const ScriptBuildSettings& settings, std::string_view targetName)
+		{
+			if (!IsVisualStudio(settings))
+				return {};
+			// CMake's compiler check builds a project with random names of fixed length (TryCompile-xxxxxx, cmTC_xxxxx) in
+			// the Debug configuration.
+			constexpr std::string_view deepestConfigureLog =
+				"/CMakeFiles/CMakeScratch/TryCompile-xxxxxx/cmTC_xxxxx.dir/Debug/cmTC_xxxxx.tlog/link-cvtres.write.1.tlog";
+			// The target's own build logs into <target>.dir/<configuration>/<tracking name>.tlog/, whose longest file is the
+			// custom build step's command log. MSBuild names the directory after the target, or, for names longer than 16
+			// characters, after their first 8 characters and 8 of the project's GUID (Microsoft.BuildSteps.targets).
+			constexpr size_t maxTrackingName = 16;
+			constexpr size_t shortenedTrackingName = 8 + 1 + 8;
+			constexpr std::string_view longestTargetLog = "/CustomBuild.command.1.tlog";
+			const size_t trackingName = targetName.size() > maxTrackingName ? shortenedTrackingName : targetName.size();
+			TrackedPathDepths depths;
+			depths.Configure = deepestConfigureLog.size();
+			depths.Target = 1 + targetName.size() + std::string_view(".dir/").size() + settings.Configuration.size() + 1 + trackingName +
+				std::string_view(".tlog").size() + longestTargetLog.size();
+			return depths;
+		}
+
 		std::string ToUpper(std::string text)
 		{
 			for (char& character : text)
@@ -394,6 +424,29 @@ namespace Strata
 		return arguments;
 	}
 
+	size_t GetScriptBuildTrackedPathDepth(const ScriptBuildSettings& settings, std::string_view targetName)
+	{
+		const TrackedPathDepths depths = GetTrackedPathDepths(settings, targetName);
+		return std::max(depths.Configure, depths.Target);
+	}
+
+	std::optional<std::string> CheckScriptBuildPathLength(const ScriptBuildSettings& settings, const std::filesystem::path& buildDirectory,
+		std::string_view targetName)
+	{
+		const TrackedPathDepths depths = GetTrackedPathDepths(settings, targetName);
+		// native(): counted in the units the operating system counts (UTF-16 on Windows, the only home of MSBuild).
+		const size_t longest = buildDirectory.native().size() + std::max(depths.Configure, depths.Target);
+		if (!IsVisualStudio(settings) || longest <= c_MSBuildMaxTrackedPathLength)
+			return std::nullopt;
+		const size_t excess = longest - c_MSBuildMaxTrackedPathLength;
+		const std::string shorterName = depths.Target > depths.Configure
+			? fmt::format(", or give its script module a shorter name than '{}'", targetName) : std::string();
+		return fmt::format("The project's path is too long to build its scripts with {}: the build would write files at paths of {} characters below "
+			"'{}', and MSBuild's file tracker cannot create files at paths longer than {} characters, even where Windows allows long paths. Move "
+			"the project to a folder whose path is at least {} {} shorter, such as one in <home>/StrataProjects{}", settings.Generator, longest,
+			FileSystem::ToUTF8(buildDirectory), c_MSBuildMaxTrackedPathLength, excess, excess == 1 ? "character" : "characters", shorterName);
+	}
+
 	////////////////////////////////////////////////////////////////////////////////
 	// Diagnostics
 	////////////////////////////////////////////////////////////////////////////////
@@ -642,6 +695,9 @@ namespace Strata
 		const std::filesystem::path sourceDirectory = project.GetScriptSourceDirectory();
 		if (!FileSystem::IsRegularFile(sourceDirectory / "CMakeLists.txt"))
 			return fail(fmt::format("The project has no script build: '{}' is missing (script.init creates it)", FileSystem::ToUTF8(sourceDirectory / "CMakeLists.txt")));
+		// Refused before anything is written: the build would fail later with errors that do not name the cause.
+		if (std::optional<std::string> pathError = CheckScriptBuildPathLength(settings, project.GetScriptBuildDirectory(), project.GetScriptModuleName()))
+			return fail(std::move(*pathError));
 
 		m_Settings = settings;
 		m_BuildDirectory = project.GetScriptBuildDirectory();

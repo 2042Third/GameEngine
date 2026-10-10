@@ -335,7 +335,10 @@ every step below is a command, and source files are written with your own file t
    `script.status` -> `build.last` lists every diagnostic (`file`, `line`, `column`, `severity`, `code`, `message`)
    and the end of the build log (`log`). Fix and build again. One build runs at a time (a second request fails while
    one runs; `script.build {"wait": false}` returns at once and `script.status` -> `build.running` tells when it is
-   done). The build output also streams into the editor log (`log.read`).
+   done). The build output also streams into the editor log (`log.read`). On Windows (Visual Studio generator) a build
+   fails at once with "The project's path is too long" when the project's folder path has more than 133 characters
+   (fewer with module names over about 40 characters), which MSBuild cannot build in: create or copy the project into
+   a shorter folder such as `<home>/StrataProjects`.
 4. **Inspect.** `script.status` -> `classes` lists every class with its fields (`name`, `type`, `default`) and
    implemented callbacks. `script.get {"entity": "<id>"}` shows the field values of an entity's scripts: what the scene
    stores, or while playing what the live instances hold now.
