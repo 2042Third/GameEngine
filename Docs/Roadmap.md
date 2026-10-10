@@ -84,6 +84,12 @@ module-foundation, ran as its own workstream):
   component menus with Copy and Paste Values, searchable entity and asset pickers, the scene's settings and sky with
   nothing selected, New Material and the material in place); a play-mode banner; and selection shortcuts (Delete, Ctrl+D,
   Ctrl+C/X/V, Ctrl+A, F2) that act only where the keyboard focus is.
+- `editor-authoring`, after review: the Inspector shows values and labels whole in a laptop's window (shared resizable
+  label column, numbers without trailing zeros, ellipses with tooltips where nothing else fits), colors as channels in
+  the axis colors with a picker, mixed colors and texts as mixed, sliders as a track beside the number; Hierarchy ranges
+  anchored on entities and, while filtering, taking only the matches; Apply sending only changed import settings and
+  out-of-range settings refused; duplicates of several sibling lists remapped together; multi-entity yaw edits past 90
+  degrees; the Asset tab naming types and choices in words, with size limits as choices.
 
 Open items and deferrals later waves own:
 
