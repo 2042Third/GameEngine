@@ -39,7 +39,8 @@ StrataCLI launch --headless --project <dir>   # existing project; no window, but
 ```sh
 StrataCLI list                              # every command with its one-line description
 StrataCLI list --json                       # ... with the JSON Schema of each command's parameters
-StrataCLI call editor.status                # start here: project, scene, play state, selection, undo, automation
+StrataCLI call editor.status                # start here: project, scene, play state, selection, undo, automation,
+                                            # window, UI scale and frame rate (an idle windowed editor draws 30 per second)
 StrataCLI call entity.create '{"name": "Player"}'
 StrataCLI call entity.create @params.json   # params from a file (no shell quoting problems)
 echo '{"frames": 60}' | StrataCLI call editor.wait -     # params from stdin

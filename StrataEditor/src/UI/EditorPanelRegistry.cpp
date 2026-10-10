@@ -214,6 +214,16 @@ namespace Strata
 		}
 	}
 
+	bool EditorPanelRegistry::IsAnyAnimating() const
+	{
+		for (const Entry& entry : m_Entries)
+		{
+			if (entry.Open && entry.Panel->IsAnimating())
+				return true;
+		}
+		return false;
+	}
+
 	void EditorPanelRegistry::OnDetach(EditorPanelContext& context)
 	{
 		for (Entry& entry : m_Entries)

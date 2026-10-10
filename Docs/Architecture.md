@@ -205,8 +205,8 @@ Windowed applications are paced by vsync when it is on (`WindowSpecification::VS
 headless ones by the cap alone, which the editor and the runtime set to 60 (`MaxFrameRate`,
 `StrataEditor/src/EditorApplication.cpp`, `RuntimeApplication.cpp`). The cap is the application's `FramePacer`
 (`Core/Timer.h`) and can change while it runs (`Application::SetMaxFrameRate`; setting the current rate keeps the frame
-schedule). An exception escaping a frame (e.g. a lost device inside NVRHI) is logged and
-ends the loop.
+schedule): the editor lowers it while it is idle (see [Editor](#editor)). An exception escaping a frame (e.g. a lost
+device inside NVRHI) is logged and ends the loop.
 
 The editor's layer update (`EditorLayer::OnUpdate`, `StrataEditor/src/EditorLayer.cpp`):
 
@@ -219,8 +219,9 @@ The editor's layer update (`EditorLayer::OnUpdate`, `StrataEditor/src/EditorLaye
    queued requests (`RpcServer::ProcessRequests`) through the runner.
 4. The `--commands` script advances; quit, idle-timeout and last-frame checks run.
 
-In step 7 the editor draws its panels (`EditorLayer::OnImGuiRender`); the viewport panel renders the scene there
-through `ViewportRenderer`.
+In step 7 the editor draws its shell and panels (`EditorLayer::OnImGuiRender`); the viewport panel renders the scene
+there through `ViewportRenderer`. Last, idle throttling picks the frame rate cap for the next frames
+(`EditorLayer::UpdateFrameRate`).
 
 The runtime's layer update (`RuntimeLayer::OnUpdate`, `StrataRuntime/src/RuntimeApplication.cpp`):
 `GameRuntime::Update` (asset finalization, `Scene::OnUpdateRuntime`, script-fault check, scene requests), then the
@@ -416,7 +417,7 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
  StrataEditor      EditorApplication      options, Bedrock theme and fonts installed into ImGuiLayer, EditorHost
  --------------------------------------------------------------------------------------------------------------
  StrataEditorUI    EditorLayer            owns everything below: menu bar, main toolbar, status pills, default
-                                          layout, shortcuts, file dialogs (nfd)
+                                          layout, shortcuts, idle throttling, file dialogs (nfd)
                    EditorPanelRegistry    the panels (Viewport, Hierarchy, Inspector, Console, Content Browser):
                                           windows, View menu, open state in imgui.ini
                    UI kit                 Theme (palette, ApplyTheme), EditorFonts, Icons, Widgets, ItemProbe
@@ -440,7 +441,9 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   `UI/Theme` (the Bedrock palette and its meanings; `ApplyTheme` is the `ImGuiLayer` style callback), `UI/EditorFonts`
   (Inter, Inter SemiBold and JetBrains Mono embedded with `strata_embed_file`, Lucide's icons merged into the Inter
   fonts' Private Use Area) and the widget kit (`UI/Widgets`), whose widgets record their rectangles in `UI/ItemProbe`.
-  Rules for UI code: AGENTS.md, "Editor UI rules". **UI tests** (`StrataTests/src/Editor/ImGuiHarness.h`) create
+  Rules for UI code: AGENTS.md, "Editor UI rules". **Idle throttling**: after drawing, `EditorLayer::UpdateFrameRate`
+  sets the cap to 0 (full rate) while anything happens and to 30 (10 unfocused) frames per second otherwise; headless,
+  `--frames` and command-script runs are never throttled. **UI tests** (`StrataTests/src/Editor/ImGuiHarness.h`) create
   an ImGui context with the editor's fonts and theme (styled by an unattached `ImGuiLayer`), honor ImGui's texture
   requests without a renderer, inject input, and find kit widgets through the probe; the `Editor.UI` suites draw the
   real `EditorLayer` this way, with a `FakeEditorHost`.

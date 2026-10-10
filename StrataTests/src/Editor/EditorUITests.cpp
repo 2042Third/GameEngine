@@ -277,7 +277,7 @@ TEST_SUITE("Editor.UI")
 		// Still the theme, not ImGui's style.
 		CHECK(after.Colors[ImGuiCol_CheckMark].x == UI::GetThemeColors().Accent.x);
 
-		editor.Frames(1);
+		editor.Frames(1, ImGuiHarness::c_DeltaTime);
 		editor.Harness.Frame([]()
 		{
 			CHECK(ImGui::GetFontSize() == doctest::Approx(UI::GetTextSize(UI::TextSize::Body) * 2.0f));
@@ -416,6 +416,91 @@ TEST_SUITE("Editor.UI")
 		registry.SetOpen("Closed", true);
 		harness.Frame([&]() { registry.OnImGuiRender(panelContext); });
 		CHECK(hidden->Draws == 1);
+	}
+
+	TEST_CASE("Idle throttling lowers the frame rate only while nothing happens")
+	{
+		ScopedAudioEngine audio;
+		REQUIRE(audio.Initialized);
+		HarnessEditor editor;
+		REQUIRE(editor.Layer->IsThrottlingEnabled());
+		// Startup counts as activity.
+		editor.Frames(2);
+		CHECK(editor.Host->MaxFrameRate == 0);
+		CHECK_FALSE(editor.Layer->IsIdle());
+
+		// Nothing for a second: the focused editor idles at 30 frames per second, an unfocused one at 10.
+		editor.Frames(1, 1.0f);
+		CHECK(editor.Layer->IsIdle());
+		CHECK(editor.Host->MaxFrameRate == EditorLayer::c_IdleFrameRate);
+		editor.Host->WindowFocused = false;
+		editor.Frames(1);
+		CHECK(editor.Host->MaxFrameRate == EditorLayer::c_UnfocusedIdleFrameRate);
+		editor.Host->WindowFocused = true;
+
+		// Input: the full rate at once, and for half a second after it.
+		editor.Harness.MoveMouse(ImVec2(400.0f, 300.0f));
+		editor.Frames(1);
+		CHECK(editor.Host->MaxFrameRate == 0);
+		editor.Frames(1, 0.3f);
+		CHECK(editor.Host->MaxFrameRate == 0);
+		editor.Frames(1, 0.3f);
+		CHECK(editor.Host->MaxFrameRate == EditorLayer::c_IdleFrameRate);
+		// A held key keeps it up even with the mouse at rest (e.g. flying the camera).
+		editor.Harness.SetKey(ImGuiKey_W, true);
+		editor.Frames(1);
+		editor.Frames(1, 1.0f);
+		CHECK(editor.Host->MaxFrameRate == 0);
+		editor.Harness.SetKey(ImGuiKey_W, false);
+		editor.Frames(1);
+		editor.Frames(1, 1.0f);
+		CHECK(editor.Host->MaxFrameRate == EditorLayer::c_IdleFrameRate);
+
+		// A running scene needs every frame; a paused one does not, unless it steps.
+		editor.Run("play.start");
+		editor.Frames(1, 1.0f);
+		CHECK(editor.Host->MaxFrameRate == 0);
+		editor.Run("play.pause", { { "paused", true } });
+		editor.Frames(1, 1.0f);
+		CHECK(editor.Host->MaxFrameRate == EditorLayer::c_IdleFrameRate);
+		editor.Run("play.step", { { "frames", 5 } });
+		editor.Frames(1, 1.0f);
+		CHECK(editor.Host->MaxFrameRate == 0);
+		editor.Run("play.stop");
+		editor.Frames(1, 1.0f);
+		CHECK(editor.Host->MaxFrameRate == EditorLayer::c_IdleFrameRate);
+
+		// Commands that take frames run at the full rate.
+		bool waited = false;
+		editor.Layer->GetCommandRunner().Run(editor.Context(), editor.Layer->GetCommands(), "editor.wait", { { "frames", 3 } },
+			[&waited](const EditorCommandResult& result) { waited = result.Success; });
+		editor.Frames(1, 1.0f);
+		CHECK(editor.Host->MaxFrameRate == 0);
+		editor.Frames(4, 1.0f);
+		CHECK(waited);
+		CHECK(editor.Host->MaxFrameRate == EditorLayer::c_IdleFrameRate);
+
+		// editor.status reports it.
+		const nlohmann::json status = editor.Run("editor.status");
+		const nlohmann::json& frameRate = status["editor"]["frameRate"];
+		CHECK(frameRate["idle"] == true);
+		CHECK(frameRate["cap"] == EditorLayer::c_IdleFrameRate);
+		CHECK(frameRate["throttling"] == true);
+		CHECK(frameRate["average"].get<double>() > 0.0);
+		CHECK(status["editor"]["uiScale"] == 1.0);
+		// The fake host has no window.
+		CHECK(status["editor"]["window"].is_null());
+	}
+
+	TEST_CASE("Scripted and frame-limited editors are never throttled")
+	{
+		EditorOptions options;
+		options.MaxFrames = 1000;
+		HarnessEditor editor({}, options);
+		CHECK_FALSE(editor.Layer->IsThrottlingEnabled());
+		editor.Frames(3, 1.0f);
+		CHECK_FALSE(editor.Layer->IsIdle());
+		CHECK(editor.Host->FrameRateChanges == 0);
 	}
 
 	TEST_CASE("The status bar counts unread errors and opens the Console")

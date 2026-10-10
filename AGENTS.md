@@ -461,6 +461,12 @@ and `AudioSystem`, the built-in "Audio" scene system.
     headings, cards, modal dialogs); every kit widget records its rectangle in `UI::ItemProbe` under its id.
   - UI tests draw the real `EditorLayer` without a window or GPU through `StrataTests/src/Editor/ImGuiHarness.h` (a fake
     `EditorHost`, ImGui's texture requests honored without a renderer, injected input, `ClickItem` by probe key).
+  - Idle throttling: a windowed editor runs at the full rate while anything happens (input in the last 0.5 s, a running
+    unpaused scene or pending steps, loading assets, pending commands, an automation request in the last second, a
+    script build, a panel's `IsAnimating`) and otherwise at 30 frames per second (10 without the focus), through
+    `EditorHost::SetMaxFrameRate`. Headless editors, `--frames` runs and command scripts are never throttled; a panel that
+    animates without input reports it through `EditorPanel::IsAnimating`. `editor.status` reports the measured rate
+    (`editor.frameRate`).
 - **Every change to the scene or project goes through a command** (`EditorCommandRegistry::Execute`) or,
   for continuous UI edits, through `SceneEditTransaction` / `SetPropertyWithUndo`. That keeps the UI,
   automation (AI agents) and tests identical, and makes every edit undoable.

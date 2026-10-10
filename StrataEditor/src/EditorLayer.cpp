@@ -102,6 +102,8 @@ namespace Strata
 			m_Panels.InstallSettingsHandler();
 		// The selection outline carries the accent, like selected rows.
 		m_Context.GetViewport().GetSettings().SelectionColor = ToVec4(UI::GetThemeColors().Accent);
+		// Startup counts as activity: the layout settles at the full rate.
+		m_LastInputTime = m_Host->GetTime();
 
 		if (!m_Options.ProjectPath.empty())
 		{
@@ -112,11 +114,24 @@ namespace Strata
 
 		m_Context.SetStatusProvider(c_EditorStatusSection, [this]()
 		{
+			nlohmann::json window = nullptr;
+			if (m_Host->HasWindow())
+			{
+				const glm::uvec2 size = m_Host->GetWindowSize();
+				window = { { "width", size.x }, { "height", size.y }, { "focused", m_Host->IsWindowFocused() } };
+			}
 			return nlohmann::json {
+				{ "window", window },
 				{ "headless", m_Options.Headless },
 				{ "graphicsDevice", m_Host->HasGraphicsDevice() },
 				{ "frame", m_Host->GetFrameCount() },
-				{ "maxFrames", m_Options.MaxFrames ? nlohmann::json(*m_Options.MaxFrames) : nlohmann::json(nullptr) } };
+				{ "maxFrames", m_Options.MaxFrames ? nlohmann::json(*m_Options.MaxFrames) : nlohmann::json(nullptr) },
+				{ "uiScale", m_Host->GetUIScale() },
+				{ "frameRate", {
+					{ "average", GetAverageFrameRate() },
+					{ "cap", m_Host->GetMaxFrameRate() },
+					{ "idle", m_Idle },
+					{ "throttling", IsThrottlingEnabled() } } } };
 		});
 		if (m_Options.EnableAutomation)
 			StartAutomation();
@@ -205,6 +220,18 @@ namespace Strata
 		m_Automation.Update();
 		UpdateCommandScript();
 		UpdateWindowTitle();
+
+		const double now = m_Host->GetTime();
+		// An automation request was answered or is pending: an agent drives the editor.
+		const uint64_t answered = m_Automation.GetCompletedRequestCount();
+		if (answered != m_LastAutomationRequests || m_Automation.GetPendingRequestCount() > 0)
+		{
+			m_LastAutomationRequests = answered;
+			m_LastAutomationTime = now;
+		}
+		m_FrameTimes.push_back(now);
+		while (!m_FrameTimes.empty() && now - m_FrameTimes.front() > c_FrameRateWindowSeconds)
+			m_FrameTimes.pop_front();
 		if (!m_Options.Headless)
 		{
 			EditorPanelContext panelContext { m_Context, m_Commands, m_CommandRunner };
@@ -273,6 +300,7 @@ namespace Strata
 	void EditorLayer::OnImGuiRender()
 	{
 		m_UIDrawn = true;
+		TrackInput();
 		HandleShortcuts();
 		DrawDockspace();
 		EditorPanelContext panelContext { m_Context, m_Commands, m_CommandRunner };
@@ -280,10 +308,14 @@ namespace Strata
 		DrawUnsavedChangesModal();
 		if (m_ShowImGuiDemo)
 			ImGui::ShowDemoWindow(&m_ShowImGuiDemo);
+		UpdateFrameRate();
 	}
 
 	void EditorLayer::OnEvent(Event& event)
 	{
+		// Whatever reaches the editor (window changes, input ImGui did not take) is activity.
+		m_LastInputTime = m_Host->GetTime();
+
 		EventDispatcher dispatcher(event);
 		dispatcher.Dispatch<WindowCloseEvent>([this](WindowCloseEvent&)
 		{
@@ -304,6 +336,67 @@ namespace Strata
 				contentBrowser->ImportFiles(m_Context, m_Commands, drop.GetPaths());
 			return true;
 		});
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
+	// Idle throttling
+	////////////////////////////////////////////////////////////////////////////////
+
+	bool EditorLayer::IsThrottlingEnabled() const
+	{
+		// Scripted and headless runs measure in frames: slowing them down would only make them take longer.
+		return !m_Options.Headless && !m_Options.MaxFrames && m_Options.CommandScript.empty();
+	}
+
+	void EditorLayer::TrackInput()
+	{
+		// ImGui keeps the input events it processed this frame (mouse moves, buttons, wheel, keys, text, focus changes);
+		// held buttons and keys count too, e.g. a camera fly with the mouse at rest.
+		const ImGuiContext& imgui = *ImGui::GetCurrentContext();
+		bool active = imgui.InputEventsTrail.Size > 0 || ImGui::IsAnyMouseDown();
+		for (int key = ImGuiKey_NamedKey_BEGIN; !active && key < ImGuiKey_NamedKey_END; key++)
+			active = ImGui::IsKeyDown(static_cast<ImGuiKey>(key));
+		if (active)
+			m_LastInputTime = m_Host->GetTime();
+	}
+
+	bool EditorLayer::IsBusy(double now) const
+	{
+		if (now - m_LastInputTime < c_InputActivitySeconds || now - m_LastAutomationTime < c_AutomationActivitySeconds)
+			return true;
+		if (m_Panels.IsAnyAnimating())
+			return true;
+		if (m_Context.IsPlaying())
+		{
+			if (!m_Context.IsPaused() || m_Context.GetActiveScene()->GetStepFrames() > 0)
+				return true;
+		}
+		if (const EditorAssetManager* assets = m_Context.GetAssetManager(); assets && assets->GetStats().LoadingAssets > 0)
+			return true;
+		return m_CommandRunner.GetPendingCount() > 0 || m_Automation.GetPendingRequestCount() > 0 || m_Context.GetScriptBuilder().IsRunning()
+			|| m_Context.GetViewport().IsPickPending();
+	}
+
+	void EditorLayer::UpdateFrameRate()
+	{
+		if (!IsThrottlingEnabled())
+		{
+			m_Idle = false;
+			return;
+		}
+		m_Idle = !IsBusy(m_Host->GetTime());
+		if (m_Idle)
+			m_Host->SetMaxFrameRate(m_Host->IsWindowFocused() ? c_IdleFrameRate : c_UnfocusedIdleFrameRate);
+		else
+			m_Host->SetMaxFrameRate(0);
+	}
+
+	double EditorLayer::GetAverageFrameRate() const
+	{
+		if (m_FrameTimes.size() < 2)
+			return 0.0;
+		const double span = m_FrameTimes.back() - m_FrameTimes.front();
+		return span > 0.0 ? static_cast<double>(m_FrameTimes.size() - 1) / span : 0.0;
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -775,9 +868,11 @@ namespace Strata
 
 		// Frame time.
 		const float framerate = ImGui::GetIO().Framerate;
-		const std::string frame = fmt::format("{:.1f} ms{}{:.0f} FPS", framerate > 0.0f ? 1000.0f / framerate : 0.0f, c_Separator, framerate);
+		const std::string frame = fmt::format("{:.1f} ms{}{:.0f} FPS{}", framerate > 0.0f ? 1000.0f / framerate : 0.0f, c_Separator, framerate,
+			m_Idle ? std::string(c_Separator) + "idle" : std::string());
 		ImGui::SameLine();
-		UI::Pill("Status.Frame", Icons::Gauge, frame, colors.TextSecondary, "Frame time and rate");
+		UI::Pill("Status.Frame", Icons::Gauge, frame, colors.TextSecondary,
+			"Frame time and rate. While nothing happens the editor redraws less often (idle) and returns to the full rate on input.");
 
 		// Assets.
 		if (const EditorAssetManager* assets = m_Context.GetAssetManager())

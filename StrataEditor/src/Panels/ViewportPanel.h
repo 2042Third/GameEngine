@@ -30,6 +30,8 @@ namespace Strata
 		void OnImGuiRender(EditorPanelContext& context) override;
 		void OnHidden(EditorPanelContext& context) override;
 		void OnDetach(EditorPanelContext& context) override;
+		// A camera or gizmo drag runs.
+		bool IsAnimating() const override;
 
 		// Ends interactions that hold state (camera drags, gizmo drags, a locked cursor). Uses no ImGui functions, so it
 		// also works after the ImGui context is gone.

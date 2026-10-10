@@ -244,6 +244,11 @@ namespace Strata
 		Reset(context.Context);
 	}
 
+	bool ViewportPanel::IsAnimating() const
+	{
+		return m_CameraDrag != CameraDrag::None || m_GizmoDrag.has_value();
+	}
+
 	void ViewportPanel::Reset(EditorContext& context)
 	{
 		m_Focused = false;

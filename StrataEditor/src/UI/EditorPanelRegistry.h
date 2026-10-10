@@ -53,6 +53,9 @@ namespace Strata
 		virtual void OnHidden([[maybe_unused]] EditorPanelContext& context) {}
 		// The editor is closing. ImGui may be gone already: no ImGui calls.
 		virtual void OnDetach([[maybe_unused]] EditorPanelContext& context) {}
+		// Whether the panel needs frames at the full rate now (a drag or an animation in progress), so the editor does not
+		// throttle while it lasts.
+		virtual bool IsAnimating() const { return false; }
 	};
 
 	struct EditorPanelDescriptor
@@ -110,6 +113,7 @@ namespace Strata
 		void OnImGuiRender(EditorPanelContext& context);
 		// One menu item per panel to show or hide it, in submenus by MenuPath (for the View menu).
 		void DrawMenuItems();
+		bool IsAnyAnimating() const;
 		// Before the editor goes away (no ImGui calls).
 		void OnDetach(EditorPanelContext& context);
 
