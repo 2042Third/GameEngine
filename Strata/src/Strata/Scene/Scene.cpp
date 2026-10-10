@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cmath>
 #include <limits>
+#include <optional>
 
 namespace Strata
 {
@@ -1739,14 +1740,19 @@ namespace Strata
 			const uint32_t maxSteps = std::max(1u, m_Settings.MaxFixedStepsPerFrame);
 			// The wall time one step stands for: the fixed timestep, stretched by slow motion.
 			const double realTimePerStep = static_cast<double>(fixedTimestep) / static_cast<double>(m_TimeScale > 0.0f ? m_TimeScale : 1.0f);
-			const auto stepsStart = std::chrono::steady_clock::now();
+			// The steps are timed only when time dilation could stop one: it is on and a second step is due (the first always
+			// runs). Other frames do not read the clock. (While the accumulator holds less than two steps, subtracting one
+			// step is exact and leaves less than a step, so no second step can run.)
+			std::optional<std::chrono::steady_clock::time_point> stepsStart;
+			if (m_TimeDilation && maxSteps > 1 && m_FixedTimeAccumulator >= 2.0f * fixedTimestep)
+				stepsStart = std::chrono::steady_clock::now();
 			uint32_t steps = 0;
 			bool dilated = false;
 			while (m_FixedTimeAccumulator >= fixedTimestep && steps < maxSteps)
 			{
-				if (m_TimeDilation && steps > 0)
+				if (stepsStart && steps > 0)
 				{
-					const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - stepsStart).count();
+					const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - *stepsStart).count();
 					if (elapsed >= realTimePerStep * steps)
 					{
 						dilated = true;
