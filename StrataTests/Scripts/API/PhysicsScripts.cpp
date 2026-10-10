@@ -390,16 +390,34 @@ ST_SCRIPT_CLASS(SpawnedBody)
 	ST_SCRIPT_FIELD(Failure);
 }
 
+// Base of the scripts that run where nothing is simulated.
+class NoSimulationChecks : public CheckingScript
+{
+protected:
+	// Queries find nothing and the body functions of `entity` fail.
+	void CheckNoSimulation(Entity entity)
+	{
+		const glm::vec3 origin(0.0f, 10.0f, 0.0f);
+		const glm::vec3 down(0.0f, -1.0f, 0.0f);
+		Expect(!Physics::Raycast(origin, down).has_value(), "Raycast finds nothing");
+		Expect(Physics::RaycastAll(origin, down).empty(), "RaycastAll finds nothing");
+		Expect(Physics::OverlapSphere(origin, 100.0f).empty() && Physics::OverlapBox(origin, glm::vec3(100.0f)).empty(), "overlaps find nothing");
+		RigidBody body = entity.GetRigidBody();
+		Expect(!body.AddForce({ 0.0f, 1.0f, 0.0f }) && !body.SetLinearVelocity({ 0.0f, 1.0f, 0.0f }) && !body.Teleport(glm::vec3(1.0f)), "body functions fail");
+		Expect(body.GetLinearVelocity() == glm::vec3(0.0f), "no velocity");
+	}
+};
+
 // In a scene without physics components there is no simulation, in OnCreate as in updates: queries find nothing and body
 // functions fail. The first physics component added while the scene plays creates it, and the same calls work.
-class PhysicsWithoutWorld : public CheckingScript
+class PhysicsWithoutWorld : public NoSimulationChecks
 {
 public:
 	bool Done = false;
 
 	void OnCreate() override
 	{
-		CheckWithoutWorld();
+		CheckNoSimulation(GetEntity());
 	}
 
 	void OnUpdate(float) override
@@ -407,7 +425,7 @@ public:
 		if (Done)
 			return;
 		Done = true;
-		CheckWithoutWorld();
+		CheckNoSimulation(GetEntity());
 
 		Entity crate = Scene::CreateEntity("Late Crate");
 		crate.GetTransform().SetTranslation({ 0.0f, 5.0f, 0.0f });
@@ -415,21 +433,37 @@ public:
 		Expect(crate.GetRigidBody().SetLinearVelocity({ 1.0f, 0.0f, 0.0f }), "body functions work once the simulation exists");
 		Expect(Physics::Raycast({ 0.0f, 10.0f, 0.0f }, { 0.0f, -1.0f, 0.0f }).value_or(RaycastHit()).HitEntity == crate, "queries work once the simulation exists");
 	}
-private:
-	void CheckWithoutWorld()
-	{
-		const glm::vec3 origin(0.0f, 10.0f, 0.0f);
-		const glm::vec3 down(0.0f, -1.0f, 0.0f);
-		Expect(!Physics::Raycast(origin, down).has_value(), "Raycast finds nothing");
-		Expect(Physics::RaycastAll(origin, down).empty(), "RaycastAll finds nothing");
-		Expect(Physics::OverlapSphere(origin, 100.0f).empty() && Physics::OverlapBox(origin, glm::vec3(100.0f)).empty(), "overlaps find nothing");
-		RigidBody body = GetEntity().GetRigidBody();
-		Expect(!body.AddForce({ 0.0f, 1.0f, 0.0f }) && !body.SetLinearVelocity({ 0.0f, 1.0f, 0.0f }) && !body.Teleport(glm::vec3(1.0f)), "body functions fail");
-		Expect(body.GetLinearVelocity() == glm::vec3(0.0f), "no velocity");
-	}
 };
 
 ST_SCRIPT_CLASS(PhysicsWithoutWorld)
+{
+	ST_SCRIPT_FIELD(Checks);
+	ST_SCRIPT_FIELD(Failure);
+	ST_SCRIPT_FIELD(Done);
+}
+
+// In a scene that plays without a physics system (a build without the physics module) nothing is ever simulated: queries
+// find nothing and the body functions of "Crate", a dynamic body anywhere else, fail, in OnCreate as in updates.
+class PhysicsWithoutSystem : public NoSimulationChecks
+{
+public:
+	bool Done = false;
+
+	void OnCreate() override
+	{
+		CheckNoSimulation(Scene::FindEntityByName("Crate"));
+	}
+
+	void OnUpdate(float) override
+	{
+		if (Done)
+			return;
+		Done = true;
+		CheckNoSimulation(Scene::FindEntityByName("Crate"));
+	}
+};
+
+ST_SCRIPT_CLASS(PhysicsWithoutSystem)
 {
 	ST_SCRIPT_FIELD(Checks);
 	ST_SCRIPT_FIELD(Failure);

@@ -78,7 +78,7 @@ TEST_SUITE("Scripting.Module")
 			"Lifecycle", "LifecycleSecond", "Idle", "HiddenCallbacks", "FieldTypes", "Thrower", "ThrowingConstructor", "EntityAPI", "Destroyer", "ScriptAdder",
 			"ComponentAPI", "PropertyProbe", "TransformAPI", "Spawned", "Spawner", "Listener", "Talker", "InputProbe", "TimeProbe", "SceneProbe",
 			"RemoveOnDestroy", "Fragile", "Readder", "Replicator", "MassSpawner", "PendingSpawner", "InvalidArguments", "PhysicsAPI", "PhysicsMisuse",
-			"OlderEnginePhysics", "PhysicsWithoutWorld", "PhysicsAtStart", "SpawnedBody", "ContactRecorder", "DestroySelfOnContact",
+			"OlderEnginePhysics", "PhysicsWithoutWorld", "PhysicsWithoutSystem", "PhysicsAtStart", "SpawnedBody", "ContactRecorder", "DestroySelfOnContact",
 			"DestroyOtherOnContact", "RemoveSelfOnContact", "ContactThrower", "ContactCounter", "AudioAPI", "AudioMisuse", "AudioUnavailable",
 			"GameFlow", "GameFlowMisuse", "HelperChecks", "KeyRepeatProbe", "LateContactProbe", "AssetHolder"
 		};
