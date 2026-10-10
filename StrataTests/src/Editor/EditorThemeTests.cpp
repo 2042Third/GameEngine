@@ -135,6 +135,30 @@ TEST_SUITE("Editor.Theme")
 		}
 	}
 
+	TEST_CASE("Hovered rows stay neutral, and selected rows keep the accent under the mouse")
+	{
+		ImGuiStyle style;
+		UI::ApplyTheme(style, 1.0f);
+		const UI::ThemePalette& palette = UI::GetThemePalette();
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		// Selected rows carry the accent family, hovered ones a neutral surface (hovering is not selecting).
+		CHECK(SameRGB(style.Colors[ImGuiCol_Header], palette.Umber));
+		CHECK(SameRGB(style.Colors[ImGuiCol_HeaderHovered], palette.Flint));
+		// A selected row under the mouse: the accent's pressed hue, on the panel brighter than a selected row and warm.
+		CHECK(SameRGB(colors.SelectionHovered, palette.Rust));
+		const auto overPanel = [&](const ImVec4& color)
+		{
+			const ImVec4& panel = colors.Panel;
+			return ImVec4(color.x * color.w + panel.x * (1.0f - color.w), color.y * color.w + panel.y * (1.0f - color.w),
+				color.z * color.w + panel.z * (1.0f - color.w), 1.0f);
+		};
+		const ImVec4 selected = overPanel(style.Colors[ImGuiCol_Header]);
+		const ImVec4 selectedHovered = overPanel(colors.SelectionHovered);
+		CHECK(selectedHovered.x > selected.x + 0.08f);
+		CHECK(selectedHovered.x > selectedHovered.y);
+		CHECK(selectedHovered.y > selectedHovered.z);
+	}
+
 	TEST_CASE("The type scale")
 	{
 		CHECK(UI::GetTextSize(UI::TextSize::Caption) == 12.0f);

@@ -48,6 +48,9 @@ namespace Strata::UI
 		ImVec4 AccentHover;  // Sandstone
 		ImVec4 AccentActive; // Rust
 		ImVec4 AccentMuted;  // Umber: backgrounds of selected or active items
+		// Rust, translucent: a selected row under the mouse (UI::PushSelectionColors), brighter than a selected row, while
+		// rows that are not selected hover in a neutral color.
+		ImVec4 SelectionHovered;
 		ImVec4 Success;      // Malachite
 		ImVec4 Info;         // Azurite
 		ImVec4 Warning;      // Sulfur

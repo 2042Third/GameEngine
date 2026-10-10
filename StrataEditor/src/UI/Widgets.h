@@ -44,6 +44,13 @@ namespace Strata::UI
 	// true when clicked (pills that lead somewhere, e.g. the errors pill opening the Console).
 	bool Pill(const char* id, const char* icon, std::string_view text, const ImVec4& color, const char* tooltip = nullptr);
 
+	// Rows of lists with a selection (tree nodes and selectables, e.g. the Hierarchy's). ImGui draws every hovered row in
+	// ImGuiCol_HeaderHovered, selected or not, and the theme keeps that neutral so that hovering is not mistaken for
+	// selecting. Between PushSelectionColors(selected) and PopSelectionColors() a selected row keeps the accent under the
+	// mouse instead (ThemeColors::SelectionHovered).
+	void PushSelectionColors(bool selected);
+	void PopSelectionColors();
+
 	// A collapsible section header in the SemiBold font on a raised surface (CollapsingHeader). Add
 	// ImGuiTreeNodeFlags_AllowOverlap to place buttons on it. Returns whether the section is open.
 	bool SectionHeader(const char* id, const char* label, ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_DefaultOpen);

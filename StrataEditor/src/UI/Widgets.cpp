@@ -215,6 +215,18 @@ namespace Strata::UI
 		return pressed;
 	}
 
+	void PushSelectionColors(bool selected)
+	{
+		// Always one color, so the pop does not depend on the row.
+		const ImVec4 hovered = selected ? GetThemeColors().SelectionHovered : ImGui::GetStyleColorVec4(ImGuiCol_HeaderHovered);
+		ImGui::PushStyleColor(ImGuiCol_HeaderHovered, hovered);
+	}
+
+	void PopSelectionColors()
+	{
+		ImGui::PopStyleColor();
+	}
+
 	bool SectionHeader(const char* id, const char* label, ImGuiTreeNodeFlags flags)
 	{
 		const ThemeColors& colors = GetThemeColors();

@@ -149,6 +149,23 @@ namespace
 		return settings;
 	}
 
+	// Whether the last frame drew a filled shape of exactly this color inside the rectangle (ImGui's draw data).
+	bool DrewColor(const ImVec2& min, const ImVec2& max, ImU32 color)
+	{
+		const ImDrawData* drawData = ImGui::GetDrawData();
+		if (!drawData)
+			return false;
+		for (const ImDrawList* list : drawData->CmdLists)
+		{
+			for (const ImDrawVert& vertex : list->VtxBuffer)
+			{
+				if (vertex.col == color && vertex.pos.x >= min.x && vertex.pos.x <= max.x && vertex.pos.y >= min.y && vertex.pos.y <= max.y)
+					return true;
+			}
+		}
+		return false;
+	}
+
 	EditorOptions WithFeatureProject(const std::string& directoryName)
 	{
 		EditorOptions options;
@@ -743,6 +760,51 @@ TEST_SUITE("Editor.UI")
 		CHECK_FALSE(editor.Context().IsGameInputActive());
 		CHECK(UI::ItemProbe::Find("Viewport.Stats").has_value());
 		editor.Run("play.stop");
+	}
+
+	TEST_CASE("A selected row keeps the accent under the mouse, other rows hover in a neutral color")
+	{
+		ImGuiHarness harness;
+		ImVec2 rowMin[2];
+		ImVec2 rowMax[2];
+		const auto draw = [&]()
+		{
+			ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+			ImGui::SetNextWindowSize(ImVec2(ImGui::GetFontSize() * 20.0f, ImGui::GetFontSize() * 10.0f));
+			ImGui::Begin("Rows");
+			for (int row = 0; row < 2; row++)
+			{
+				const bool selected = row == 0;
+				UI::PushSelectionColors(selected);
+				ImGui::Selectable(selected ? "Selected" : "Other", selected);
+				UI::PopSelectionColors();
+				// Selectables draw their background into half the item spacing around them.
+				const ImVec2 spacing = ImGui::GetStyle().ItemSpacing;
+				rowMin[row] = ImVec2(ImGui::GetItemRectMin().x - spacing.x, ImGui::GetItemRectMin().y - spacing.y);
+				rowMax[row] = ImVec2(ImGui::GetItemRectMax().x + spacing.x, ImGui::GetItemRectMax().y + spacing.y);
+			}
+			ImGui::End();
+		};
+		harness.Frame(draw);
+		harness.Frame(draw);
+		const ImU32 selected = ImGui::GetColorU32(ImGuiCol_Header);
+		const ImU32 hovered = ImGui::GetColorU32(ImGuiCol_HeaderHovered);
+		const ImU32 selectedHovered = ImGui::GetColorU32(UI::GetThemeColors().SelectionHovered);
+		CHECK(DrewColor(rowMin[0], rowMax[0], selected));
+
+		const auto hover = [&](int row)
+		{
+			harness.MoveMouse(ImVec2((rowMin[row].x + rowMax[row].x) * 0.5f, (rowMin[row].y + rowMax[row].y) * 0.5f));
+			harness.Frame(draw);
+			harness.Frame(draw);
+		};
+		hover(0);
+		CHECK(DrewColor(rowMin[0], rowMax[0], selectedHovered));
+		CHECK_FALSE(DrewColor(rowMin[0], rowMax[0], hovered));
+		hover(1);
+		CHECK(DrewColor(rowMin[1], rowMax[1], hovered));
+		CHECK_FALSE(DrewColor(rowMin[1], rowMax[1], selectedHovered));
+		CHECK(DrewColor(rowMin[0], rowMax[0], selected));
 	}
 
 	TEST_CASE("The widget kit: buttons, chips, pills, cards and dialogs")

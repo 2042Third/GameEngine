@@ -453,7 +453,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   allowlist):
   - Colors come only from the theme's tokens (`UI/Theme.h`: the `ThemePalette` and, preferably, what they mean in
     `ThemeColors`): no `ImVec4`/`ImColor` literals or `IM_COL32` outside `UI/Theme.cpp`. `UI::ApplyTheme` styles every
-    `ImGuiCol_`; an ImGui upgrade with new colors fails the build until they get a token.
+    `ImGuiCol_`; an ImGui upgrade with new colors fails the build until they get a token. Rows of lists with a
+    selection draw through `UI::PushSelectionColors`, so hovering stays neutral and a selected row keeps the accent
+    under the mouse.
   - Sizes are relative to the font (multiples of `ImGui::GetFontSize()` or `GetFrameHeight()`), never fixed pixels above
     16, so the UI follows the UI scale (the window's content scale, or `--ui-scale`).
   - Panels are `EditorPanel`s registered with `EditorPanelRegistry` (`UI/EditorPanelRegistry.h`, built-ins in

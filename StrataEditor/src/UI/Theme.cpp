@@ -68,6 +68,7 @@ namespace Strata::UI
 			.AccentHover = c_Bedrock.Sandstone,
 			.AccentActive = c_Bedrock.Rust,
 			.AccentMuted = c_Bedrock.Umber,
+			.SelectionHovered = WithAlphaConstant(c_Bedrock.Rust, 0.7f),
 			.Success = c_Bedrock.Malachite,
 			.Info = c_Bedrock.Azurite,
 			.Warning = c_Bedrock.Sulfur,
@@ -123,7 +124,9 @@ namespace Strata::UI
 			{ ImGuiCol_Button, &ThemePalette::Flint, 1.0f },
 			{ ImGuiCol_ButtonHovered, &ThemePalette::Seam, 1.0f },
 			{ ImGuiCol_ButtonActive, &ThemePalette::Umber, 1.0f },
-			// Selected rows (hierarchy, combos, selectables) carry the accent, like the viewport's selection outline.
+			// Selected rows (hierarchy, combos, selectables) carry the accent, like the viewport's selection outline. Hovering
+			// is neutral, so it is not mistaken for selecting; selected rows keep the accent under the mouse through
+			// UI::PushSelectionColors (ImGui draws every hovered row in HeaderHovered).
 			{ ImGuiCol_Header, &ThemePalette::Umber, 0.9f },
 			{ ImGuiCol_HeaderHovered, &ThemePalette::Flint, 1.0f },
 			{ ImGuiCol_HeaderActive, &ThemePalette::Rust, 1.0f },

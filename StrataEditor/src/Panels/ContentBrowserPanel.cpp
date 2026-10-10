@@ -7,6 +7,7 @@
 #include "UI/Icons.h"
 #include "UI/PropertyWidgets.h"
 #include "UI/Theme.h"
+#include "UI/Widgets.h"
 
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/Log.h>
@@ -236,7 +237,11 @@ namespace Strata
 				const bool failed = !item.ImportError.empty();
 				if (failed)
 					ImGui::PushStyleColor(ImGuiCol_Text, UI::GetThemeColors().Error);
-				ImGui::Selectable(item.Label.c_str(), metadata.Handle == context.GetSceneHandle(), ImGuiSelectableFlags_AllowDoubleClick);
+				// The open scene is the selected row.
+				const bool open = metadata.Handle == context.GetSceneHandle();
+				UI::PushSelectionColors(open);
+				ImGui::Selectable(item.Label.c_str(), open, ImGuiSelectableFlags_AllowDoubleClick);
+				UI::PopSelectionColors();
 				if (failed)
 					ImGui::PopStyleColor();
 				if (ImGui::IsItemHovered())
