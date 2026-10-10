@@ -1883,7 +1883,7 @@ namespace Strata
 			std::vector<AssetHandle> references;
 			std::string scanError;
 			if (!AssetDependencies::Scan(metadata.Type, outData, references, &scanError))
-				return fail(fmt::format("it changed after the export started and cannot be read ({}); fix it and export again", scanError));
+				return fail(fmt::format("it cannot be read as a document ({}); fix it and export again", scanError));
 			const std::unordered_set<AssetHandle> recorded(source->second->Dependencies.begin(), source->second->Dependencies.end());
 			for (AssetHandle reference : references)
 			{

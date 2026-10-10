@@ -416,6 +416,13 @@ TEST_SUITE("Asset.Dependencies")
 		CHECK(error.find("Materials/Late.stmat") != std::string::npos);
 		CHECK_FALSE(FileSystem::Exists(failedPath));
 
+		// A document that cannot be read any more fails the write too, saying so.
+		REQUIRE(FileSystem::WriteText(project.Assets / "Scenes" / "Level2.stscene", "{ not a scene"));
+		CHECK_FALSE(manager->WriteAssetPack(failedPath, plan, {}, nullptr, &error));
+		CHECK(error.find("Scenes/Level2.stscene") != std::string::npos);
+		CHECK(error.find("cannot be read as a document") != std::string::npos);
+		REQUIRE(manager->SaveNativeAsset(UUID(0x6111), ToBytes(SceneSerializer::Serialize(changed)), false));
+
 		// Planned again, it ships with what it uses.
 		REQUIRE_MESSAGE(manager->PlanAssetPack(options, plan, &error), error);
 		CHECK(plan.Excluded.empty());
