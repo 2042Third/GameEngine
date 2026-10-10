@@ -510,7 +510,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `--frames N` stops after N frames (without saving the panel layout), `--screenshot out.png` captures
   the last frame (viewport included), `--no-gpu` runs headless without a graphics device (export, asset processing),
   and `--quit-after-commands` closes the editor once the command script finished (for scripts of unknown length, e.g.
-  with `script.build`, whose duration no frame budget can bound).
+  with `script.build`, whose duration no frame budget can bound). `--ui-scale <factor>` draws the UI at a fixed scale
+  instead of the display's (e.g. 1 to check it at 100% on a 150% display), `--layout <file>` keeps the panel layout in
+  that file instead of the user's (`<user data>/Strata/EditorLayout.ini`), and `--imgui-demo` offers ImGui's demo window
+  (Help menu) for UI work.
   Without `--frames`, a headless editor runs until `editor.quit` (which refuses to discard unsaved
   scene changes unless `force` is true) or a signal; headless editors run at most 60 frames per second.
   The editor serves automation by default (`EditorAutomation`, see [Automation](#automation-editor-rpc--mcp));

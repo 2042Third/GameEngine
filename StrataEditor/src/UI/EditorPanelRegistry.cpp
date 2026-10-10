@@ -127,6 +127,17 @@ namespace Strata
 		entry->FocusRequested = true;
 	}
 
+	void EditorPanelRegistry::SelectTab(std::string_view id, ImGuiID dockNodeId) const
+	{
+		const Entry* entry = FindEntry(id);
+		ImGuiDockNode* node = entry ? ImGui::DockBuilderGetNode(dockNodeId) : nullptr;
+		if (!node)
+			return;
+		// A docked window's tab id, as ImGui derives it (ImGuiWindow::TabId): the node shows that tab when its tab bar is
+		// created.
+		node->SelectedTabId = ImHashStr("#TAB", 0, ImHashStr(entry->WindowName.c_str()));
+	}
+
 	std::string EditorPanelRegistry::GetWindowName(std::string_view id) const
 	{
 		const Entry* entry = FindEntry(id);

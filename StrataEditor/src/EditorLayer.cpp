@@ -29,6 +29,11 @@ namespace Strata
 		// Between the parts of a pill's text.
 		constexpr const char* c_Separator = " \xC2\xB7 ";
 
+		// The default layout, as fractions of the dock space: the viewport gets over 45% of a 3840 x 2054 window at 150%.
+		constexpr float c_HierarchyWidth = 0.15f;
+		constexpr float c_InspectorWidth = 0.20f;
+		constexpr float c_BottomHeight = 0.22f;
+
 		// Fields of the snap steps popup, in text heights.
 		constexpr float c_SnapFieldWidthInFontSizes = 8.0f;
 
@@ -442,17 +447,21 @@ namespace Strata
 		ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
 		ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetContentRegionAvail());
 
+		// The viewport first: the side panels take a fixed share of the width, the bottom area a share of the height under
+		// the viewport only.
 		ImGuiID center = dockspaceId;
-		const ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.18f, nullptr, &center);
-		const ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.26f, nullptr, &center);
-		const ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.3f, nullptr, &center);
+		const ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, c_HierarchyWidth, nullptr, &center);
+		const ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, c_InspectorWidth / (1.0f - c_HierarchyWidth), nullptr, &center);
+		const ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, c_BottomHeight, nullptr, &center);
 
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Hierarchy).c_str(), left);
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Inspector).c_str(), right);
-		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_ContentBrowser).c_str(), bottom);
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Console).c_str(), bottom);
+		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_ContentBrowser).c_str(), bottom);
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Viewport).c_str(), center);
 		ImGui::DockBuilderFinish(dockspaceId);
+		// The Content Browser is the bottom area's visible tab on first run.
+		m_Panels.SelectTab(EditorPanels::c_ContentBrowser, bottom);
 	}
 
 	void EditorLayer::DrawDockspace()

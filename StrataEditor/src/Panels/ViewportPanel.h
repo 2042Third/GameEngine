@@ -34,6 +34,8 @@ namespace Strata
 		// Ends interactions that hold state (camera drags, gizmo drags, a locked cursor). Uses no ImGui functions, so it
 		// also works after the ImGui context is gone.
 		void Reset(EditorContext& context);
+		// Where the image was drawn last (screen coordinates), e.g. for layout tests.
+		const ViewportImageArea& GetImageArea() const { return m_Image; }
 	private:
 		enum class CameraDrag : uint8_t
 		{

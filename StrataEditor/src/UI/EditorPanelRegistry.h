@@ -98,6 +98,8 @@ namespace Strata
 		void ResetOpenStates();
 		// Opens the panel if needed and brings its window to the front (selecting its tab) on the next frame.
 		void Focus(std::string_view id);
+		// Selects the panel's tab in its dock node without giving it the keyboard focus (layouts).
+		void SelectTab(std::string_view id, ImGuiID dockNodeId) const;
 
 		// The ImGui window name of a panel: its icon and title, then "###" and its id, so the window keeps its identity
 		// (docking, settings) whatever its title. Empty for an unknown id.

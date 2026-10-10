@@ -5,6 +5,7 @@
 #include "EditorLayer.h"
 #include "FeatureTest/FeatureTestUtils.h"
 #include "Panels/ConsolePanel.h"
+#include "Panels/ViewportPanel.h"
 #include "TestHelpers.h"
 #include "UI/EditorFonts.h"
 #include "UI/EditorPanelRegistry.h"
@@ -13,6 +14,7 @@
 #include "UI/Theme.h"
 #include "UI/Widgets.h"
 
+#include <Strata/Core/FileSystem.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Events/ApplicationEvent.h>
 
@@ -20,6 +22,7 @@
 #include <imgui_internal.h>
 #include <nlohmann/json.hpp>
 
+#include <cmath>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -98,6 +101,12 @@ namespace
 		EditorOptions options;
 		options.ProjectPath = CopyFeatureProject(CreateTemporaryDirectory(directoryName) / "Project");
 		return options;
+	}
+
+	float GetWindowFraction(ImGuiWindow* window, const ImVec2& display, bool width)
+	{
+		REQUIRE(window);
+		return width ? window->Size.x / display.x : window->Size.y / display.y;
 	}
 
 	// A panel for registry tests.
@@ -284,6 +293,37 @@ TEST_SUITE("Editor.UI")
 		editor.Frames(1);
 		CHECK_FALSE(editor.Host->Running);
 		CHECK(editor.Host->ExitCode == 0);
+	}
+
+	TEST_CASE("The default layout is viewport first, with the Content Browser showing")
+	{
+		// The editor's window on this project's reference machine: 3840 x 2054 at 150%.
+		const ImVec2 display(3840.0f, 2054.0f);
+		HarnessEditor editor({ display, 1.5f }, WithFeatureProject("EditorUILayout"));
+		editor.Frames(3);
+
+		const ViewportPanel* viewport = editor.Layer->GetPanels().Get<ViewportPanel>(EditorPanels::c_Viewport);
+		REQUIRE(viewport);
+		const glm::vec2 image = viewport->GetImageArea().Size;
+		const float share = image.x * image.y / (display.x * display.y);
+		MESSAGE("Viewport image: " << image.x << " x " << image.y << " = " << share * 100.0f << "% of the window");
+		CHECK(share >= 0.45f);
+
+		// About 15% of the width for the Hierarchy, 20% for the Inspector, and the bottom area under the viewport.
+		CHECK(GetWindowFraction(editor.FindPanelWindow(EditorPanels::c_Hierarchy), display, true) == doctest::Approx(0.15).epsilon(0.05));
+		CHECK(GetWindowFraction(editor.FindPanelWindow(EditorPanels::c_Inspector), display, true) == doctest::Approx(0.20).epsilon(0.05));
+		ImGuiWindow* viewportWindow = editor.FindPanelWindow(EditorPanels::c_Viewport);
+		REQUIRE(viewportWindow);
+		ImGuiWindow* contentBrowser = editor.FindPanelWindow(EditorPanels::c_ContentBrowser);
+		ImGuiWindow* console = editor.FindPanelWindow(EditorPanels::c_Console);
+		REQUIRE(contentBrowser);
+		REQUIRE(console);
+		CHECK(contentBrowser->DockNode == console->DockNode);
+		CHECK(contentBrowser->Pos.y >= viewportWindow->Pos.y + viewportWindow->Size.y - 1.0f);
+		CHECK(contentBrowser->Size.x == doctest::Approx(viewportWindow->Size.x).epsilon(0.01));
+		// The Content Browser is the bottom area's visible tab on first run.
+		CHECK_FALSE(contentBrowser->Hidden);
+		CHECK(console->Hidden);
 	}
 
 	TEST_CASE("Panels close and reopen, and imgui.ini remembers which are open")
