@@ -719,14 +719,20 @@ namespace Strata
 		bool& valid = parent != entt::null ? const_cast<HierarchyComponent&>(GetHierarchy(parent)).ChildIndicesValid : m_RootIndicesValid;
 		if (valid)
 			return;
+		valid = true;
+		entt::entity child = GetFirstChild(parent);
+		if (child == entt::null)
+			return;
+		// Through the storage, fetched once: a registry lookup per sibling would cost more than the walk itself, and long
+		// sibling lists (every single deletion among 100,000 roots) are walked here.
+		const auto& hierarchy = *m_Registry.storage<HierarchyComponent>();
 		uint32_t index = 0;
-		for (entt::entity child = GetFirstChild(parent); child != entt::null;)
+		while (child != entt::null)
 		{
-			HierarchyComponent& node = const_cast<HierarchyComponent&>(GetHierarchy(child));
+			HierarchyComponent& node = const_cast<HierarchyComponent&>(hierarchy.get(child));
 			node.SiblingIndex = index++;
 			child = node.NextSibling;
 		}
-		valid = true;
 	}
 
 	void Scene::RefreshSubtreeDepth(entt::entity root, bool prune)
