@@ -85,7 +85,8 @@ and runs the frame loop; `Layer`/`LayerStack` hold the client's behavior; `Windo
 audio thread) and `Profiling` (Tracy with `STRATA_ENABLE_TRACY`).
 
 **Events** (`Events/`). Window, key and mouse events (`ApplicationEvent.h`, `KeyEvent.h`, `MouseEvent.h`, including
-`WindowFileDropEvent`) are dispatched synchronously: `Application::OnEvent` hands each one to the layers from the top
+`WindowFileDropEvent` and `WindowContentScaleEvent`, raised when the window moves to a display with another DPI setting
+or the setting changes) are dispatched synchronously: `Application::OnEvent` hands each one to the layers from the top
 down until one marks it handled (`EventDispatcher`). An unhandled `WindowCloseEvent` ends the application, so a layer
 can veto closing (the editor asks about unsaved changes).
 
@@ -166,7 +167,10 @@ from its primary camera, or a message frame that names the problem. See
 runtime does not use it. Protocol and security model: AGENTS.md, "Automation (editor RPC + MCP)".
 
 **ImGui** (`ImGui/`). `ImGuiLayer` owns the Dear ImGui context; `Application` pushes it as an overlay when ImGui is
-enabled and a window and graphics device exist, and calls `Begin`/`End` around the layers' `OnImGuiRender`.
+enabled and a window and graphics device exist, and calls `Begin`/`End` around the layers' `OnImGuiRender`. It styles
+the UI for the window's content scale, on attach and on every `WindowContentScaleEvent`: the style is rebuilt from
+ImGui's dark defaults by the application's style callback (`SetStyleCallback`; the editor installs its Bedrock theme) and
+the fonts' DPI scale (`ImGuiStyle::FontScaleDpi`) follows; `SetContentScaleOverride` fixes the scale (`--ui-scale`).
 `ImGuiRenderer` is the NVRHI backend (user textures are `nvrhi::ITexture*`). Only the editor enables it.
 
 ## Application and frame loop

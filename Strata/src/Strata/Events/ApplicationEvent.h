@@ -76,6 +76,29 @@ namespace Strata
 		int32_t m_Y;
 	};
 
+	// The window's content scale changed (it moved to a monitor with another DPI setting, or the setting changed): the
+	// ratio of the size its contents should have to their size at the platform's default DPI, e.g. 1.5 at 150%.
+	class WindowContentScaleEvent : public Event
+	{
+	public:
+		explicit WindowContentScaleEvent(float scale)
+			: m_Scale(scale)
+		{
+		}
+
+		float GetScale() const { return m_Scale; }
+
+		std::string ToString() const override
+		{
+			return fmt::format("WindowContentScaleEvent: {}", m_Scale);
+		}
+
+		ST_EVENT_CLASS_TYPE(WindowContentScale)
+		ST_EVENT_CLASS_CATEGORY(EventCategoryApplication)
+	private:
+		float m_Scale;
+	};
+
 	class WindowFileDropEvent : public Event
 	{
 	public:
