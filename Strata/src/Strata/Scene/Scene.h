@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Strata/Asset/AssetTypes.h"
 #include "Strata/Core/Base.h"
 #include "Strata/Core/Timestep.h"
 #include "Strata/Core/UUID.h"
@@ -324,6 +325,15 @@ namespace Strata
 
 		const std::string& GetName() const { return m_Name; }
 		void SetName(const std::string& name) { m_Name = name; }
+		// The scene asset this scene was loaded from or saved as; null for scenes made otherwise (in code, or new ones not
+		// saved yet). SceneAsset::CreateScene sets it, and so do owners that save a scene as a new asset. Copies keep it.
+		AssetHandle GetSourceAsset() const { return m_SourceAsset; }
+		void SetSourceAsset(AssetHandle asset) { m_SourceAsset = asset; }
+		// Recognizes the scene from one play session to the next, for what systems remember about it in between (PhysicsSystem:
+		// what its physics worlds lacked): its source asset, else an ID the scene got when it was constructed. Copies keep it,
+		// so the copy an owner plays has the ID of the scene it was made from; other scenes never share it, whatever their
+		// names.
+		UUID GetLineageID() const { return m_SourceAsset.IsValid() ? m_SourceAsset : m_LocalLineageID; }
 		SceneSettings& GetSettings() { return m_Settings; }
 		const SceneSettings& GetSettings() const { return m_Settings; }
 
@@ -427,6 +437,8 @@ namespace Strata
 		void OnTagRemoved(entt::registry& registry, entt::entity handle);
 	private:
 		std::string m_Name;
+		AssetHandle m_SourceAsset = UUID::Null();
+		UUID m_LocalLineageID;                     // Random; see GetLineageID
 		entt::registry m_Registry;
 		std::unordered_map<UUID, entt::entity> m_EntityMap;
 		std::vector<UUID> m_RootEntities;

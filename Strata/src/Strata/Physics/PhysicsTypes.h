@@ -71,8 +71,8 @@ namespace Strata
 	// systems (Scene/SceneServices.h).
 
 	// What a world needed beyond the capacities it was created with: entities that found it full, steps whose body pair or
-	// contact buffers were full. PhysicsSystem remembers it per scene name, and the next world it creates for that scene sizes
-	// its automatic capacities for at least this much ("the next play start grows the capacity").
+	// contact buffers were full. PhysicsSystem remembers it per scene (Scene::GetLineageID), and the next world it creates for
+	// that scene sizes its automatic capacities for at least this much ("the next play start grows the capacity").
 	struct PhysicsCapacityDemand
 	{
 		uint32_t Bodies = 0;

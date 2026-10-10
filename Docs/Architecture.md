@@ -175,8 +175,9 @@ scene does not set (`SceneSettings::PhysicsCapacity`) are sized from the bodies 
 (`PhysicsWorld::ResolveCapacities`: at least 65,536 bodies, the next power of two of twice the bodies; four body pairs per
 body slot; at least 10,240 contacts, two per body; scratch memory for them), bodies that find the world full wait for a
 slot and are reported in one error, steps that overflow the pair or contact buffers are counted
-(`PhysicsStats::BodyOverflowCount`, `ContactOverflowSteps`), and what a world lacked is remembered per scene name, so the
-scene's next world is sized for it. Jolt reserves a world's buffers when it is created
+(`PhysicsStats::BodyOverflowCount`, `ContactOverflowSteps`), and what a world lacked is remembered per scene
+(`Scene::GetLineageID`: the scene asset it was loaded from or saved as, else the scene and its copies; never another
+scene of the same name), so the scene's next world is sized for it. Jolt reserves a world's buffers when it is created
 and does not survive a failed allocation, so the capacities a scene may ask for are limited (`PhysicsCapacitySettings`:
 about 80 bytes per body, 90 per body pair and 830 per contact constraint, about 940 MiB at the limits). Other systems
 use physics through the scene services `PhysicsSystem` offers (`ICollisionEventSource`, `IBodyMotionQuery`,
@@ -444,6 +445,9 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   (`PhysicsCapacity`: bodies, body pairs and contact constraints; 0, the default, sizes one automatically; each up to a
   limit that bounds the memory a world reserves). All of it is saved with the scene and changed with `scene.setSettings`
   (one undo step).
+- A scene knows the scene asset it was loaded from or saved as (`Scene::GetSourceAsset`, set by
+  `SceneAsset::CreateScene` and by the editor's save-as) and keeps an ID across its copies (`GetLineageID`: the source
+  asset, else an ID of its own), by which systems recognize it from one play session to the next.
 
 ### Scene services
 

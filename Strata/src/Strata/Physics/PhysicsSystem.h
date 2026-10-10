@@ -14,7 +14,6 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <optional>
-#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -56,9 +55,10 @@ namespace Strata
 		static void SetDefaultSettings(const PhysicsSettings& settings);
 		static const PhysicsSettings& GetDefaultSettings();
 
-		// What the worlds of the scene named `sceneName` needed beyond their capacities in this process (remembered when
-		// they stop): a world created for the scene later sizes its automatic capacities for at least that much.
-		static PhysicsCapacityDemand GetRememberedCapacityDemand(const std::string& sceneName);
+		// What the worlds of a scene (Scene::GetLineageID: its scene asset, or the scene and its copies) needed beyond their
+		// capacities in this process (remembered when they stop): a world created for the scene later sizes its automatic
+		// capacities for at least that much. Scenes that only share a name share nothing.
+		static PhysicsCapacityDemand GetRememberedCapacityDemand(UUID sceneLineage);
 		static void ForgetCapacityDemands();
 
 		void OnRuntimeStart() override;

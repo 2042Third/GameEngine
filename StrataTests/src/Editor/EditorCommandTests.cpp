@@ -470,15 +470,18 @@ TEST_SUITE("Editor.Commands")
 
 		// Save, change, reopen: the saved state comes back.
 		CHECK_FALSE(harness.Error("scene.save").empty()); // Never saved: needs a path
+		CHECK_FALSE(harness.Context.GetEditScene()->GetSourceAsset().IsValid());
 		const std::string scene = harness.Run("scene.saveAs", { { "path", "Scenes/Main.stscene" } })["scene"].get<std::string>();
 		CHECK(harness.Run("scene.info")["modified"] == false);
 		CHECK(harness.Run("scene.info")["name"] == "Main"); // Named after its file
+		CHECK(UUIDToJson(harness.Context.GetEditScene()->GetSourceAsset()) == scene); // From now on it is that asset's scene
 		const nlohmann::json saved = harness.SceneSnapshot();
 		harness.Run("entity.delete", { { "entities", { cube } } });
 		CHECK(harness.Run("scene.info")["modified"] == true);
 		harness.Run("scene.open", { { "scene", "Scenes/Main.stscene" } });
 		CHECK(harness.SceneSnapshot() == saved);
 		CHECK(harness.Run("scene.info")["scene"] == scene);
+		CHECK(UUIDToJson(harness.Context.GetEditScene()->GetSourceAsset()) == scene);
 		CHECK_FALSE(harness.Context.GetUndoStack().CanUndo());
 
 		harness.Run("project.setStartScene", { { "scene", scene } });
@@ -559,6 +562,7 @@ TEST_SUITE("Editor.Commands")
 		CHECK(runtime->GetManifest().Name == "My Game!");
 		CHECK(runtime->GetManifest().WindowWidth == 640);
 		CHECK(UUIDToJson(runtime->GetSceneHandle()) == scene);
+		CHECK(UUIDToJson(runtime->GetScene()->GetSourceAsset()) == scene);
 		REQUIRE(runtime->GetScene()->IsRunning());
 		CHECK_FALSE(runtime->GetScene()->IsTimeDilated()); // Tools and tests step deterministically by default
 		for (int frame = 0; frame < 5; frame++)

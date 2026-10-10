@@ -433,6 +433,17 @@ TEST_SUITE("Scene")
 		CHECK(copy->GetName() == "Source");
 		CHECK(copy->GetEntityCount() == 2);
 		CHECK(copy->GetSettings().Gravity.y == doctest::Approx(-3.0f));
+		// It is the same scene from one play session to the next, unlike another scene of the same name.
+		CHECK_FALSE(copy->GetSourceAsset().IsValid());
+		CHECK(copy->GetLineageID() == source->GetLineageID());
+		CHECK(copy->GetLineageID().IsValid());
+		CHECK(Scene("Source").GetLineageID() != source->GetLineageID());
+		// A scene saved as an asset is recognized by it, and so are its copies.
+		const AssetHandle asset = UUID();
+		source->SetSourceAsset(asset);
+		CHECK(source->GetLineageID() == asset);
+		CHECK(Scene::Copy(source)->GetSourceAsset() == asset);
+		CHECK(Scene::Copy(source)->GetLineageID() == asset);
 
 		Entity copiedChild = copy->GetEntityByUUID(child.GetUUID());
 		REQUIRE(copiedChild.IsValid());

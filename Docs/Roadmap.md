@@ -81,11 +81,11 @@ Open items and deferrals later waves own:
 - The allowlist's 9 exceptions: the application shell's service wiring (7, `engine-modules`), asset finalization on
   the renderer's command list (`mip-streaming`) and physics reading the renderer's `Mesh` (Mesh v2, later). Ordering
   constraints that name systems a build may lack need a policy once subsystems become optional (`engine-modules`).
-- Physics: what an overflowing world needed is remembered per scene name for the process (an editor or game session),
-  not saved with the scene; automatic capacities reserve Jolt's buffers for the bodies a scene starts with (70,000 bodies
-  reserve about a million body pairs), and a world at the largest capacities a scene may ask for still reserves about
-  940 MiB at play start; dynamic bodies below other dynamic bodies are still written back one by one; the Inspector
-  shows the capacities once `editor-authoring`'s scene section merges.
+- Physics: what an overflowing world needed is remembered per scene (its asset, or the scene and its copies) for the
+  process (an editor or game session), not saved with the scene; automatic capacities reserve Jolt's buffers for the
+  bodies a scene starts with (70,000 bodies reserve about a million body pairs), and a world at the largest capacities a
+  scene may ask for still reserves about 940 MiB at play start; dynamic bodies below other dynamic bodies are still
+  written back one by one; the Inspector shows the capacities once `editor-authoring`'s scene section merges.
 - A world seen all at once still peaks at about 970 MiB of private memory in the exported runtime: no budget can evict
   what is in view, so this needs BC textures and mip streaming (`texture-cook-v2`, `mip-streaming`). Mesh uploads still
   go through NVRHI's upload manager until the budgeted upload queue (`mip-streaming`); `AssetManagerBase::GetStats`

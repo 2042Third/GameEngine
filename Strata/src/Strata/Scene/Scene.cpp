@@ -82,6 +82,8 @@ namespace Strata
 	{
 		Ref<Scene> destination = CreateRef<Scene>(source->m_Name);
 		destination->m_Settings = source->m_Settings;
+		destination->m_SourceAsset = source->m_SourceAsset;
+		destination->m_LocalLineageID = source->m_LocalLineageID;
 
 		// The hierarchy is rebuilt from the links instead of being copied with the components: entities are copied parents
 		// first, so appending each one to its parent reproduces every sibling order.

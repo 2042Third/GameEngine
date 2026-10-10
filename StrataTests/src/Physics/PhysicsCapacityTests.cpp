@@ -5,9 +5,13 @@
 #include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Physics/PhysicsWorld.h"
 #include "Strata/Scene/Components.h"
+#include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/Scene.h"
+#include "Strata/Scene/SceneSerializer.h"
 #include "TestHelpers.h"
 
+#include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -19,8 +23,8 @@ namespace
 
 	constexpr uint32_t c_MiB = 1024u * 1024u;
 
-	// Forgets what earlier worlds needed (process-wide, by scene name) before and after a test, so tests do not size each
-	// other's worlds.
+	// Forgets what earlier worlds needed (process-wide, per scene) before and after a test, so tests do not size each other's
+	// worlds.
 	class ScopedCapacityDemands
 	{
 	public:
@@ -173,10 +177,11 @@ TEST_SUITE("Physics.Capacity")
 		CHECK(CountLogMessages(logStart, "'Box 0' and 1 more entities") == 1);
 
 		// What the world lacked is remembered for the scene when it stops.
-		CHECK(PhysicsSystem::GetRememberedCapacityDemand("Crowded").IsEmpty());
+		CHECK(PhysicsSystem::GetRememberedCapacityDemand(scene.GetLineageID()).IsEmpty());
 		scene.OnRuntimeStop();
-		CHECK(PhysicsSystem::GetRememberedCapacityDemand("Crowded").Bodies == 10);
-		CHECK(PhysicsSystem::GetRememberedCapacityDemand("Other").IsEmpty());
+		CHECK(PhysicsSystem::GetRememberedCapacityDemand(scene.GetLineageID()).Bodies == 10);
+		const Scene other("Crowded"); // The same name, another scene
+		CHECK(PhysicsSystem::GetRememberedCapacityDemand(other.GetLineageID()).IsEmpty());
 	}
 
 	TEST_CASE("Steps that overflow the contact buffers are counted, warned about once and remembered")
@@ -202,7 +207,7 @@ TEST_SUITE("Physics.Capacity")
 		CHECK(GetPhysics(scene).GetStats().ContactOverflowSteps >= stats.ContactOverflowSteps);
 		CHECK(CountLogMessages(logStart, "contacts were dropped") == warnings);
 		scene.OnRuntimeStop();
-		CHECK(PhysicsSystem::GetRememberedCapacityDemand("Pile").ContactConstraints == 8);
+		CHECK(PhysicsSystem::GetRememberedCapacityDemand(scene.GetLineageID()).ContactConstraints == 8);
 
 		// With automatic capacities the next world has room for every contact.
 		scene.GetSettings().PhysicsCapacity = {};
@@ -212,5 +217,85 @@ TEST_SUITE("Physics.Capacity")
 		CHECK(GetPhysics(scene).GetStats().ContactOverflowSteps == 0);
 		CHECK(CountLogMessages(secondStart, "contacts were dropped") == 0);
 		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("An automatic capacity that overflowed grows in the scene's next world, and only in that scene's")
+	{
+		ScopedCapacityDemands demands;
+		// 64 weightless spheres around one point: every two of them overlap, 2,016 pairs, far more than the 4 x 64 = 256 body
+		// pairs automatic sizing gives 64 bodies (the 4 contacts keep the room the pairs share with contacts small).
+		const auto createCluster = [](Scene& scene)
+		{
+			scene.GetSettings().Gravity = glm::vec3(0.0f);
+			scene.GetSettings().PhysicsCapacity = { 64, 0, 4 };
+			for (uint32_t index = 0; index < 64; index++)
+			{
+				const glm::vec3 cell(static_cast<float>(index % 4), static_cast<float>(index / 4 % 4), static_cast<float>(index / 16));
+				CreateDynamicSphere(scene, "Sphere " + std::to_string(index), 0.1f * cell);
+			}
+		};
+		Ref<Scene> scene = CreateRef<Scene>("Cluster");
+		createCluster(*scene);
+
+		const uint64_t logStart = Log::GetBuffer().GetLatestSequence();
+		scene->OnRuntimeStart();
+		CHECK(GetPhysics(*scene).GetStats().MaxBodyPairs == 256);
+		StepScene(*scene, 2);
+		const PhysicsStats stats = GetPhysics(*scene).GetStats();
+		CHECK(stats.ContactOverflowSteps > 0);
+		CHECK(stats.Demand.BodyPairs == 512);
+		CHECK(CountLogMessages(logStart, "the body pair cache is full; contacts were dropped (reported once per world; the scene's next play start grows the "
+			"automatic capacity)") == 1);
+		scene->OnRuntimeStop();
+
+		// Its next world has room for twice the pairs, and so has a copy of it (what the editor plays); the contacts stay as
+		// the scene sets them.
+		scene->OnRuntimeStart();
+		CHECK(GetPhysics(*scene).GetStats().MaxBodyPairs == 512);
+		CHECK(GetPhysics(*scene).GetStats().MaxContactConstraints == 4);
+		scene->OnRuntimeStop();
+		Ref<Scene> copy = Scene::Copy(scene);
+		copy->OnRuntimeStart();
+		CHECK(GetPhysics(*copy).GetStats().MaxBodyPairs == 512);
+		copy->OnRuntimeStop();
+
+		// Another scene of the same name is sized for its own bodies.
+		Scene namesake("Cluster");
+		createCluster(namesake);
+		namesake.OnRuntimeStart();
+		CHECK(GetPhysics(namesake).GetStats().MaxBodyPairs == 256);
+		namesake.OnRuntimeStop();
+	}
+
+	TEST_CASE("A scene loaded from an asset is remembered by the asset, across the scenes made from it")
+	{
+		ScopedCapacityDemands demands;
+		Scene source("Crowded Level");
+		source.GetSettings().Gravity = glm::vec3(0.0f);
+		source.GetSettings().PhysicsCapacity.MaxBodies = 4;
+		CreateBoxRow(source, 10);
+		const std::string document = SceneSerializer::Serialize(source).dump();
+		std::string error;
+		const Ref<SceneAsset> asset = SceneAsset::Deserialize(std::span(reinterpret_cast<const uint8_t*>(document.data()), document.size()), &error);
+		REQUIRE_MESSAGE(asset, error);
+		asset->Handle = UUID();
+
+		// Every scene made from the asset is that asset's scene, also after the asset was loaded again.
+		const Ref<Scene> first = asset->CreateScene(&error);
+		REQUIRE_MESSAGE(first, error);
+		CHECK(first->GetSourceAsset() == asset->Handle);
+		CHECK(first->GetLineageID() == asset->Handle);
+		first->OnRuntimeStart();
+		CHECK(GetPhysics(*first).GetStats().BodyOverflowCount == 6);
+		first->OnRuntimeStop();
+		CHECK(PhysicsSystem::GetRememberedCapacityDemand(asset->Handle).Bodies == 10);
+
+		const Ref<Scene> second = asset->CreateScene(&error);
+		REQUIRE_MESSAGE(second, error);
+		CHECK(second->GetLineageID() == first->GetLineageID());
+		CHECK(Scene::Copy(second)->GetSourceAsset() == asset->Handle);
+		// The source scene, made in code, is not that asset's.
+		CHECK(source.GetLineageID() != asset->Handle);
+		CHECK(PhysicsSystem::GetRememberedCapacityDemand(source.GetLineageID()).IsEmpty());
 	}
 }

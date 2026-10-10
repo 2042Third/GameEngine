@@ -383,6 +383,7 @@ namespace Strata
 			return false;
 		}
 		m_SceneHandle = handle;
+		m_EditScene->SetSourceAsset(handle);
 		m_UndoStack.MarkSaved();
 		return true;
 	}

@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <cstring>
-#include <string>
 #include <unordered_map>
 
 namespace Strata
@@ -21,10 +20,10 @@ namespace Strata
 			return s_DefaultSettings;
 		}
 
-		// What the worlds of each scene (by name) needed beyond their capacities, in this process.
-		std::unordered_map<std::string, PhysicsCapacityDemand>& GetCapacityDemandStorage()
+		// What the worlds of each scene (by Scene::GetLineageID) needed beyond their capacities, in this process.
+		std::unordered_map<UUID, PhysicsCapacityDemand>& GetCapacityDemandStorage()
 		{
-			static std::unordered_map<std::string, PhysicsCapacityDemand> s_Demands;
+			static std::unordered_map<UUID, PhysicsCapacityDemand> s_Demands;
 			return s_Demands;
 		}
 
@@ -94,10 +93,10 @@ namespace Strata
 		m_CreationConnections.emplace_back(registry.on_construct<MeshColliderComponent>().connect<&PhysicsSystem::OnPhysicsComponentAdded>(*this));
 	}
 
-	PhysicsCapacityDemand PhysicsSystem::GetRememberedCapacityDemand(const std::string& sceneName)
+	PhysicsCapacityDemand PhysicsSystem::GetRememberedCapacityDemand(UUID sceneLineage)
 	{
 		const auto& demands = GetCapacityDemandStorage();
-		auto it = demands.find(sceneName);
+		auto it = demands.find(sceneLineage);
 		return it != demands.end() ? it->second : PhysicsCapacityDemand();
 	}
 
@@ -117,7 +116,7 @@ namespace Strata
 			const PhysicsCapacityDemand demand = m_World->GetCapacityDemand();
 			if (!demand.IsEmpty())
 			{
-				PhysicsCapacityDemand& remembered = GetCapacityDemandStorage()[m_Scene.GetName()];
+				PhysicsCapacityDemand& remembered = GetCapacityDemandStorage()[m_Scene.GetLineageID()];
 				remembered.Bodies = std::max(remembered.Bodies, demand.Bodies);
 				remembered.BodyPairs = std::max(remembered.BodyPairs, demand.BodyPairs);
 				remembered.ContactConstraints = std::max(remembered.ContactConstraints, demand.ContactConstraints);
@@ -404,7 +403,7 @@ namespace Strata
 			settings.MaxBodyPairs = capacity.MaxBodyPairs;
 		if (capacity.MaxContactConstraints != 0)
 			settings.MaxContactConstraints = capacity.MaxContactConstraints;
-		m_World = CreateScope<PhysicsWorld>(m_Scene, settings, GetRememberedCapacityDemand(m_Scene.GetName()));
+		m_World = CreateScope<PhysicsWorld>(m_Scene, settings, GetRememberedCapacityDemand(m_Scene.GetLineageID()));
 		m_AppliedGravity = m_Scene.GetSettings().Gravity;
 		// Contacts are tracked for the listeners and watches registered so far.
 		UpdateContactTracking();
