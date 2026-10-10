@@ -231,6 +231,7 @@ TEST_SUITE("GPU.ProceduralSky")
 
 		// The sun follows the light's direction and color, not its intensity.
 		light.GetComponent<TransformComponent>().Rotation = Math::LookRotation(glm::vec3(-0.5f, -1.0f, 0.1f));
+		light.MarkModified<TransformComponent>();
 		CHECK(renderUpdates() == 1);
 		light.GetComponent<DirectionalLightComponent>().Color = glm::vec3(1.0f, 0.9f, 0.8f);
 		CHECK(renderUpdates() == 1);
