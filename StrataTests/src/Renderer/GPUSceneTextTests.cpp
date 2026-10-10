@@ -207,14 +207,17 @@ TEST_SUITE("GPU.SceneRenderer.Text")
 
 		// It is part of the world: closer means larger, and the entity's transform moves it.
 		sign.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 0.0f, 1.5f);
+		sign.MarkModified<TransformComponent>();
 		coverage = MeasureCoverage(Render(renderer, scene, camera), black);
 		CHECK(coverage.Max.x - coverage.Min.x > widthAtThree * 3 / 2);
 		sign.GetComponent<TransformComponent>().Translation = glm::vec3(-0.8f, 0.0f, 0.0f);
+		sign.MarkModified<TransformComponent>();
 		coverage = MeasureCoverage(Render(renderer, scene, camera), black);
 		CHECK(coverage.Centroid.x < 64.0f - 10.0f);
 
 		// A wall in front hides it.
 		sign.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f);
+		sign.MarkModified<TransformComponent>();
 		AddMesh(scene, BuiltinAssets::QuadMesh, assets.AddMaterial(UnlitColor({ 0.0f, 0.0f, 1.0f, 1.0f })), glm::vec3(0.0f, 0.0f, 1.0f), "Wall")
 			.GetComponent<TransformComponent>().Scale = glm::vec3(10.0f);
 		coverage = MeasureCoverage(Render(renderer, scene, camera), glm::u8vec4(0, 0, 255, 255));

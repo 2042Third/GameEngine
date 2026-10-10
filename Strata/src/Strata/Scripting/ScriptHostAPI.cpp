@@ -369,6 +369,11 @@ namespace Strata
 				if (parent != 0 && !(parentEntity = RequireEntity(*system, parent, "CreateEntity")))
 					return 0;
 				const Entity entity = system->GetScene().CreateChildEntity(parentEntity, std::string(ScriptStringView(name)));
+				if (!entity)
+				{
+					system->ReportProblem("CreateEntity", fmt::format("the scene already holds the maximum of {} entities", Scene::c_MaxEntities));
+					return 0;
+				}
 				return static_cast<uint64_t>(entity.GetUUID());
 			});
 		}
@@ -852,10 +857,12 @@ namespace Strata
 					return 0;
 				}
 
-				const std::vector<Entity> roots = std::static_pointer_cast<EntityTemplate>(loaded)->Instantiate(system->GetScene(), parentEntity);
+				std::string error;
+				const std::vector<Entity> roots = std::static_pointer_cast<EntityTemplate>(loaded)->Instantiate(system->GetScene(), parentEntity, &error);
 				if (roots.empty())
 				{
-					system->ReportProblem("Instantiate", fmt::format("asset {} contains no entities", handle.ToString()));
+					system->ReportProblem("Instantiate", error.empty() ? fmt::format("asset {} contains no entities", handle.ToString())
+						: fmt::format("asset {} could not be instantiated: {}", handle.ToString(), error));
 					return 0;
 				}
 

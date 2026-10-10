@@ -41,7 +41,8 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
   `StrataTests/Architecture/Layers.json` - fix the dependency, see AGENTS.md "Architecture rules"),
   `StrataTests.GPU` (label `gpu`), the perf tests `StrataTests.Perf` and `StrataTests.PerfGPU` (suites `Perf.*`
   and `PerfGPU.*`, label `perf`, Release and Dist only, after `StrataTests.PerfResults.Clean`; budgets and the
-  ratchet rule in AGENTS.md, "Testing"), `StrataEditor.Smoke` (the real editor with
+  ratchet rule in AGENTS.md, "Testing"; `PerfGPU.Editor` writes a 100,000- and a 1,000,000-entity scene to a temporary
+  project and opens a maximized StrataEditor on them for about 20 seconds), `StrataEditor.Smoke` (the real editor with
   `StrataTests/Editor/SmokeCommands.json.in`, configured into the build tree, label `gpu`; it captures the viewport to
   `SmokeViewport.png`/`SmokeSceneCamera.png` in `build/<preset>/StrataTests/SmokeCaptures/`, checked by
   `StrataEditor.SmokeCaptureCheck`), the editor script checks (`StrataEditor.FailingScript`, `WaitingScript`,
@@ -67,6 +68,10 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
 - To look at rendering changes, read those PNGs, or run `StrataEditor --windowed --frames N --commands <script>
   --screenshot out.png` with a script that builds a scene and uses `camera.set`/`camera.focus`.
 - GPU tests must end with `CHECK(gpu.GetNewErrorCount() == 0)` so validation errors fail them.
+- Debug builds assert after every `Scene::OnUpdateRuntime`/`OnUpdateEditor` that the scene's caches match a full
+  recomputation. A test aborting with "Scene '...' has inconsistent caches: entity '...'" wrote that entity's
+  `TransformComponent` (or name or tag) without `MarkModified` after the scene was updated (AGENTS.md, "Architecture
+  rules"); in Release the same test would render or simulate stale world transforms.
 - Run both Debug and Release before committing: some bugs (uninitialized memory, timing) only show in one.
 
 ## Debugging a crash in a test

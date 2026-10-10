@@ -56,7 +56,10 @@ Each target is defined in the `CMakeLists.txt` of its directory; script modules 
 CTest runs the `StrataTests` suites in groups selected by suite name (`StrataTests/CMakeLists.txt`; the groups and
 labels are listed in AGENTS.md, "Testing"). The perf lab is one of them: suites `Perf.*` and `PerfGPU.*`
 (`StrataTests/src/Perf/`) measure metrics against the budgets in `StrataTests/Perf/Budgets.json`, in Release and Dist
-only, and write `<build>/PerfResults/<config>.json`.
+only, and write `<build>/PerfResults/<config>.json`. `Perf.Scene` and `Perf.Scripting` measure scenes built by
+`Perf/SceneGenerators.h` (flat roots, a nested tree, scripted entities); `Perf.Editor` (editor commands) and
+`PerfGPU.Editor` (the real `StrataEditor`'s frame times on generated 100,000- and 1,000,000-entity scenes, read from
+its `editor.wait` results) live in `src/Editor/`, which only builds with the editor.
 
 What may depend on what:
 
@@ -121,8 +124,8 @@ DirectionalLight, PointLight, SpotLight, SkyLight, PostProcess, Text, RigidBody,
 CapsuleCollider, MeshCollider, AudioSource, AudioListener, Script). `ComponentAccess` reads and writes them with
 validation and change signals, `SceneSerializer` writes versioned JSON (keeping components it cannot read, see
 [Composition root and registries](#composition-root-and-registries)), and `Prefab.h` defines the scene-shaped assets
-(`EntityTemplate`, `Prefab`, `Model`, `SceneAsset`). `Scene::UpdateWorldTransforms` runs every frame and splits large
-scenes by root entity over `JobSystem::ParallelFor` (`Scene.cpp`).
+(`EntityTemplate`, `Prefab`, `Model`, `SceneAsset`). See [Scene caches](#scene-caches) for how per-frame cost follows
+what changed.
 
 **Asset** (`Asset/`). `AssetManagerBase` (registry and asynchronous loading), `AssetManager` (the process-wide active
 manager), `EditorAssetManager` (project files, `.meta` sidecars, imports, hot reload, pack building),
@@ -291,13 +294,20 @@ One frame (`Application::Run` and `RunFrame`):
     frame counted; MaxFrames (--frames) closes the application; FramePacer::WaitForNextFrame
 ```
 
+`Application::GetLastFrameWorkTime` is the CPU time of the last frame: steps 1 to 7 without the wait inside
+`GraphicsDevice::BeginFrame` (for the GPU's earlier frames and the swapchain image), so it measures what a frame costs
+whatever the display's refresh rate. The editor records it every frame (`EditorContext::RecordFrameTime`) and
+`editor.wait` reports statistics of the frames it waited through (`frameTimes`), which is how command scripts and the
+`PerfGPU.Editor` perf test measure editor frames.
+
 The timestep is the wall time since the previous frame, clamped to `ApplicationSpecification::MaxTimestep` (0.25 s).
 Windowed applications are paced by vsync when it is on (`WindowSpecification::VSync`); headless ones by
 `MaxFrameRate`, which the editor and the runtime set to 60 (`StrataEditor/src/EditorApplication.cpp`,
 `RuntimeApplication.cpp`). An exception escaping a frame (e.g. a lost device inside NVRHI) is logged and ends the
 loop.
 
-The editor's layer update (`EditorLayer::OnUpdate`, `StrataEditor/src/EditorLayer.cpp`):
+The editor's layer update (`EditorLayer::OnUpdate`, `StrataEditor/src/EditorLayer.cpp`), after recording the previous
+frame's work time:
 
 1. `EditorContext::Update`: `ScriptEngine::Update` (hot reload), `ScriptBuilder::Update` (build processes),
    `EditorAssetManager::Update` (file changes, finished imports, load finalization), then either the running scene's
@@ -360,12 +370,56 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
 
 - While systems run (`Scene::IsUpdating`), `DestroyEntity` is deferred to the end of the update; before an entity
   goes, every system gets `OnEntityDestroying` (descendants first), so scripts receive `OnDestroy` with the entity
-  still valid (`Scene.cpp`).
+  still valid (`Scene.cpp`). The deferred requests of an update are destroyed in one batch, like `DestroyEntities`.
 - Systems react to edits through EnTT signals; `ComponentAccess` and `Entity::MarkModified` emit `on_update`.
+- Debug builds end every `OnUpdateRuntime` and `OnUpdateEditor` by asserting that the scene's caches match a full
+  recomputation (`Scene::ValidateWorldTransforms`, `ValidateHierarchy`; see [Scene caches](#scene-caches)).
 - Gameplay asks the scene's owner to quit or to switch scenes (`Scene::RequestQuit`, `RequestSceneLoad`); owners honor
   the requests after the update. The owners are the editor's play mode (`EditorContext::StartRuntime` plays a
   `Scene::Copy` of the edited scene; `Stop` discards it) and `GameRuntime`.
 - `SceneSettings` holds gravity, the fixed timestep (1/60 s) and `MaxFixedStepsPerFrame`.
+
+### Scene caches
+
+A frame of a scene where nothing changed costs (almost) nothing, however many entities it holds (`Scene/Scene.h`,
+`Scene.cpp`):
+
+| Cache | Kept by | Read through |
+| --- | --- | --- |
+| Hierarchy links: parent, first and last child, siblings, depth, child count, sibling position (`HierarchyComponent`, `Scene/SceneHierarchy.h`) | every structural operation (`CreateEntity`, `SetParent`, `SetSiblingIndex`, `PlaceEntities`, `DestroyEntities`, `DuplicateEntity`, `Copy`, deserialization), next to `RelationshipComponent`, which stays the serialized form and the authoritative child order | subtree walks, `IsDescendantOf`, `CompareHierarchyOrder`, `Entity::GetParent`/`GetChildren`; sibling positions are recomputed per sibling list when asked after a change (`GetSiblingIndex`) |
+| World matrices (`WorldTransformComponent::Matrix`) | `UpdateWorldTransforms`: only the subtrees of entities marked dirty, each from its parent's cached matrix; returns at once when nothing is dirty | renderer, gizmos, bounds; `GetWorldTransform` returns the cache unless the entity or an ancestor is dirty (then it computes the same matrix top-down) |
+| Activity (`WorldTransformComponent::ActiveInHierarchy`) | at once, for the affected subtree, when `InactiveComponent` is added or removed or an entity is reparented | `IsActiveInHierarchy` (constant time), script dispatch, renderer |
+| Hierarchy order | `GetEntitiesInHierarchyOrder`, once per hierarchy version | serializer, physics start, script update order after a module reload |
+| Hierarchy moves (a bounded log of the entities reparented or reordered, by hierarchy version) | `SetParent`, `SetSiblingIndex`, `PlaceEntities` | `GetHierarchyMoves`: the script update order places only the scripted entities that moved |
+| Name and tag indices (hash buckets with constant-time removal) | `NameComponent`/`TagComponent` signals, after the first lookup built them | `FindEntityByName`, `FindEntitiesByTag` (cost: the entities with that name or tag) |
+
+- **Dirty transforms.** `TransformComponent` `on_construct`/`on_update` (and `MarkTransformChanged`, which physics uses
+  for written-back poses because its own listeners must not hear them) mark the entity. An update drops the marked
+  entities with a marked ancestor (memoized, so all checks of one update are linear), then recomputes the remaining
+  subtrees level by level; once a level has 1,024 independent subtrees or more they are walked in parallel with
+  `JobSystem::ParallelFor`. Writers must signal (the transform contract, AGENTS.md "Architecture rules");
+  `ValidateWorldTransforms` names the entity whose write was not.
+- **Change reports.** `GetTransformsVersion` changes with every cache change; `GetWorldTransformChanges(since)` lists
+  the entities whose matrix or activity changed since a version, or returns false once more than
+  `c_MaxTransformChanges` changes were dropped, like `AssetManagerBase::GetContentChanges`.
+- **Primary camera.** `GetPrimaryCameraEntity` examines only the entities with a `CameraComponent` (an EnTT view), reads
+  `Primary` and the cached activity, and keeps the first in hierarchy order.
+- **Hierarchy moves.** Creating and destroying entities never changes the order of the other entities relative to
+  each other; only moves do. `GetHierarchyMoves(since)` lists the entities moved since a hierarchy version, or returns
+  false once more than `c_MaxHierarchyMoves` moves were dropped, so a cache of the hierarchy order of some entities
+  updates only the subtrees of those.
+- **Sibling positions.** `GetSiblingIndex` and `CompareHierarchyOrder` read cached positions; the first query after a
+  change of a sibling list other than an append renumbers that list (linear in its length).
+- **Batches.** `DestroyEntities` tells the systems about every subtree, then compacts each sibling list once;
+  `PlaceEntities` rebuilds each sibling list it touches once. The editor's undo uses both, and the destruction
+  deferred during an update is flushed the same way.
+- **Capacity.** EnTT identifiers have a 20-bit index: a registry holds at most `Scene::c_MaxEntities` (1,048,575) live
+  entities. `CreateEntity` fails with an error at that limit and deserialization reports it; so do the callers that
+  create entities for people and scripts (`entity.create` and `prefab.instantiate` fail, the scripts' `CreateEntity`
+  and `Instantiate` report a problem and return no entity, glTF imports reject files with more nodes).
+- Diagnostics count the work: `GetTransformUpdateCount`, `GetParallelTransformUpdateCount`,
+  `GetHierarchyOrderBuildCount`, `GetLookupVisitCount` and `GetLookupIndexBuildCount` (tests use them to prove that
+  lookups and clean updates traverse nothing).
 
 ## Threading model
 
@@ -491,7 +545,14 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   the game's.
 - **Instances** (`ScriptSystem`). One instance per Script component entry, constructed with its field overrides;
   `OnCreate` runs at the next sync point (in `OnRuntimeStarted` for the initial set). Updates follow hierarchy order,
-  then entry order. Contacts come from the `PhysicsSystem` collision listener. Entity destruction requested by scripts
+  then entry order. At the start of a frame new instances are inserted at their entity's position (a binary search
+  comparing hierarchy positions), instances of scripted entities that moved (`Scene::GetHierarchyMoves`) are placed
+  again in a pass over the instances, and destroyed ones stay listed but skipped until they could make up an eighth of
+  the order, which is then compacted; frames that only create, destroy or move entities without scripts leave it alone,
+  and it walks the whole scene only after a module reload or for more changes than are worth placing one by one
+  (`GetUpdateOrderRebuildCount`, `GetFullUpdateOrderBuildCount`). Each update callback walks a list of just the
+  instances whose class implements it, reading activity from the cached `ActiveInHierarchy` through each instance's
+  entity handle. Contacts come from the `PhysicsSystem` collision listener. Entity destruction requested by scripts
   waits until the scene can do it safely (`ScriptSystem::DestroyEntity`), and removed instances are destroyed at the
   next sync point.
 - **Host functions** (`ScriptHostAPI.cpp`). Every function runs in `HostCall` (no exception unwinds into the module)
@@ -544,9 +605,11 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   runner. UI actions that finish at once call the registry through `RunEditorCommand`
   (`Panels/SceneHierarchyPanel.cpp`), which rejects pending results; Build Scripts uses the runner (`EditorLayer.cpp`).
 - **Undo** (`SceneEdit.h`, `UndoStack.h`). A `SceneEditTransaction` snapshots the entities an edit touches as
-  `EntityState` (components as JSON, parent, sibling index); `Commit` records a `SceneEditAction` holding the states
-  before and after, and undo or redo re-applies them with the same UUIDs (`SceneEdit::ApplyEntities`). Continuous edits
-  merge by key; the stack keeps 512 steps and a save point for the modified flag. Edits while playing are not recorded.
+  `EntityState` (components as JSON, parent, sibling index from `Scene::GetSiblingIndex`); `Commit` records a
+  `SceneEditAction` holding the states before and after, and undo or redo re-applies them with the same UUIDs
+  (`SceneEdit::ApplyEntities`: one `DestroyEntities` batch, one recreation batch, one `PlaceEntities` batch). Continuous
+  edits merge by key; the stack keeps 512 steps and a save point for the modified flag. Edits while playing are not
+  recorded. The selection keeps its order in a vector and answers `IsSelected` from a set.
 - **Automation** (`EditorAutomation.h`, `Network/RpcServer.h`). The server's network thread does the socket work;
   each frame `EditorAutomation::Update` registers new or changed commands as methods and runs queued requests through
   the runner, so a deferred command answers when it completes. Clients find the editor through session files

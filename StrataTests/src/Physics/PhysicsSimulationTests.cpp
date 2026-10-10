@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstring>
 #include <limits>
+#include <string>
 #include <thread>
 
 using namespace Strata;
@@ -265,9 +266,11 @@ TEST_SUITE("Physics.Simulation")
 		scene.OnRuntimeStart();
 		PhysicsSystem& physics = GetPhysics(scene);
 		const float speed = 3.0f;
+		// The awake kinematic body follows its entity without an on_update signal (only the scene is told).
 		for (int frame = 0; frame < 90; frame++)
 		{
 			pusher.GetTransform().Translation.x += speed / 60.0f;
+			scene.MarkTransformChanged(pusher);
 			StepScene(scene, 1);
 		}
 
@@ -369,6 +372,28 @@ TEST_SUITE("Physics.Simulation")
 		CHECK(std::abs(childTransform.Translation.y - 0.25f) < 0.015f);
 		CHECK(Math::IsNearlyEqual(childTransform.Scale, glm::vec3(1.0f), 1.0e-4f));
 		CHECK(Math::IsNearlyEqual(childTransform.Rotation, glm::quat(1.0f, 0.0f, 0.0f, 0.0f), 1.0e-4f));
+	}
+
+	TEST_CASE("Written-back poses keep the scene's cached world transforms current")
+	{
+		// Physics writes poses without an on_update signal; the scene still recomputes the bodies and what hangs below them.
+		Scene scene;
+		CreateGround(scene);
+		Entity box = CreateDynamicBox(scene, "Box", glm::vec3(0.0f, 5.0f, 0.0f));
+		Entity marker = scene.CreateChildEntity(box, "Marker");
+		marker.GetTransform().Translation = glm::vec3(0.0f, 1.0f, 0.0f);
+
+		scene.OnRuntimeStart();
+		for (int frame = 0; frame < 60; frame++)
+		{
+			StepScene(scene, 1);
+			std::string error;
+			REQUIRE_MESSAGE(scene.ValidateWorldTransforms(&error), error);
+		}
+		const float boxHeight = box.GetComponent<WorldTransformComponent>().Matrix[3].y;
+		CHECK(boxHeight < 4.0f);
+		CHECK(boxHeight == doctest::Approx(GetWorldPosition(scene, box).y));
+		CHECK(marker.GetComponent<WorldTransformComponent>().Matrix[3].y == doctest::Approx(boxHeight + 1.0f).epsilon(1.0e-3));
 	}
 
 	TEST_CASE("Mirrored dynamic bodies keep their authored scale")
@@ -782,10 +807,12 @@ TEST_SUITE("Physics.Simulation")
 		CHECK(stats.ContactPairCount == 400);
 		CHECK(recorder.Count(CollisionEventType::End) == 1);
 
-		// Unsignaled edits of sleeping bodies are not looked for: the body stays until the change is signaled.
+		// Edits of sleeping bodies without an on_update signal (only the scene is told) are not looked for: the body stays
+		// until the change is signaled.
 		Entity edited = boxes.back();
 		const glm::vec3 restingPlace = GetWorldPosition(scene, edited);
 		edited.GetTransform().Translation.z += 0.75f;
+		scene.MarkTransformChanged(edited);
 		StepScene(scene, 1);
 		CHECK(physics.GetStats().SyncedBodyCount == 2);
 		std::optional<RaycastHit> hit = physics.Raycast(restingPlace + glm::vec3(0.0f, 0.0f, -0.4f) + glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), 10.0f);
@@ -823,6 +850,7 @@ TEST_SUITE("Physics.Simulation")
 		for (int frame = 1; frame <= 30; frame++)
 		{
 			pusher.GetTransform().Translation.x = 0.1f * static_cast<float>(frame);
+			scene.MarkTransformChanged(pusher); // Followed without an on_update signal: the body is awake
 			scene.OnUpdateRuntime(1.0f / 60.0f); // Two fixed steps: the first moves the body, the second holds it there
 
 			// The body sits exactly where its entity is, at rest, after every frame.

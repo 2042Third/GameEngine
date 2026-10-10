@@ -7,7 +7,9 @@
 #include <Strata/Core/Version.h>
 #include <Strata/Reflection/PropertyJson.h>
 
+#include <algorithm>
 #include <limits>
+#include <vector>
 
 namespace Strata
 {
@@ -23,6 +25,25 @@ namespace Strata
 		nlohmann::json DescribePlayState(const EditorContext& context)
 		{
 			return { { "state", SceneStateToString(context.GetSceneState()) }, { "paused", context.IsPaused() } };
+		}
+
+		// Statistics of frame times in milliseconds (at least one): the median (the mean of the two middle ones for an even
+		// count), the mean, the 95th percentile (nearest rank) and the maximum.
+		nlohmann::json DescribeFrameTimes(std::vector<double> frameTimes)
+		{
+			std::sort(frameTimes.begin(), frameTimes.end());
+			const size_t count = frameTimes.size();
+			const double median = count % 2 == 1 ? frameTimes[count / 2] : (frameTimes[count / 2 - 1] + frameTimes[count / 2]) * 0.5;
+			const size_t percentileRank = (count * 95 + 99) / 100; // ceil(0.95 * count), at least 1
+			double sum = 0.0;
+			for (const double frameTime : frameTimes)
+				sum += frameTime;
+			return {
+				{ "count", count },
+				{ "medianMs", median },
+				{ "meanMs", sum / static_cast<double>(count) },
+				{ "p95Ms", frameTimes[percentileRank - 1] },
+				{ "maxMs", frameTimes.back() } };
 		}
 
 		nlohmann::json DescribeHistory(EditorContext& context)
@@ -163,20 +184,36 @@ namespace Strata
 		////////////////////////////////////////////////////////////////////////////////
 
 		registry.Register({ "editor.wait",
-			"Returns after the given number of frames. Use it to let a playing scene run, assets load or the viewport render before the next command.",
+			"Returns after the given number of frames. Use it to let a playing scene run, assets load or the viewport render before the next "
+			"command. Returns {frames} and, when the editor measures its frames (not in tests that drive it without a window loop), "
+			"frameTimes: the CPU time of the frames that ran entirely while waiting (all but the first), in milliseconds {count, medianMs, "
+			"meanMs, p95Ms, maxMs}, without waiting for the GPU and the display, so command scripts can check frame budgets with expect.",
 			ObjectSchema({ { "frames", IntegerSchema("Frames to wait (default 1)", 1, c_MaxWaitFrames) } }),
-			[](EditorContext&, const nlohmann::json& parameters)
+			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const int64_t frames = arguments.GetInt("frames", 1, 1, c_MaxWaitFrames);
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				// Polled once per frame from the frame after this one, so it finishes when `frames` frames have passed.
-				return EditorCommandResult::Defer([frames, remaining = frames](EditorContext&) mutable -> std::optional<EditorCommandResult>
+				// Polled once per frame from the frame after this one, so it finishes when `frames` frames have passed. Each poll
+				// sees the time of the frame before it. The frame this command runs in also runs whatever came before it (in a
+				// command script, e.g. a scene load), so the measured frames start with the next one.
+				const uint64_t firstMeasured = context.GetRecordedFrameCount() + 2;
+				return EditorCommandResult::Defer([frames, remaining = frames, firstMeasured, lastRecorded = uint64_t(0), frameTimes = std::vector<double>()](
+					EditorContext& context) mutable -> std::optional<EditorCommandResult>
 				{
+					const uint64_t recorded = context.GetRecordedFrameCount();
+					if (recorded >= firstMeasured && recorded != lastRecorded)
+					{
+						frameTimes.push_back(context.GetLastFrameTime());
+						lastRecorded = recorded;
+					}
 					if (--remaining > 0)
 						return std::nullopt;
-					return EditorCommandResult::Ok({ { "frames", frames } });
+					nlohmann::json result = { { "frames", frames } };
+					if (!frameTimes.empty())
+						result["frameTimes"] = DescribeFrameTimes(std::move(frameTimes));
+					return EditorCommandResult::Ok(std::move(result));
 				});
 			} });
 

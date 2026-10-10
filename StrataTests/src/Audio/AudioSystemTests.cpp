@@ -77,7 +77,10 @@ namespace
 		void OnFixedUpdate(float timestep) override
 		{
 			if (Entity mover = TargetScene.FindEntityByName("Mover"))
+			{
 				mover.GetTransform().Translation.z += Speed * timestep;
+				mover.MarkModified<TransformComponent>();
+			}
 		}
 
 		Scene& TargetScene;
@@ -418,21 +421,25 @@ TEST_SUITE("Audio.System")
 		CHECK(audio.GetListenerEntity() == listener);
 		const float nearRms = MeasureRms();
 
-		// Moved by a plain field write: inverse distance attenuation, 1/2 against 1/20.
+		// Moved by a field write (signaled, as transform writes must be): inverse distance attenuation, 1/2 against 1/20.
 		entity.GetTransform().Translation = glm::vec3(0.0f, 0.0f, -20.0f);
+		entity.MarkModified<TransformComponent>();
 		StepScene(scene, 1);
 		CHECK(nearRms / MeasureRms() == doctest::Approx(10.0f).epsilon(0.1));
 
 		// The listener moving closer brings the level back.
 		listener.GetTransform().Translation = glm::vec3(0.0f, 0.0f, -18.0f);
+		listener.MarkModified<TransformComponent>();
 		StepScene(scene, 1);
 		CHECK(MeasureRms() / nearRms == doctest::Approx(1.0f).epsilon(0.05));
 
 		// The listener's orientation pans: a source to its right is louder on the right, until it turns around.
 		entity.GetTransform().Translation = glm::vec3(5.0f, 0.0f, -18.0f);
+		entity.MarkModified<TransformComponent>();
 		StepScene(scene, 1);
 		CHECK(MeasureRms(1) > MeasureRms(0) * 1.5f);
 		listener.GetTransform().Rotation = glm::angleAxis(std::numbers::pi_v<float>, glm::vec3(0.0f, 1.0f, 0.0f));
+		listener.MarkModified<TransformComponent>();
 		StepScene(scene, 1);
 		CHECK(MeasureRms(0) > MeasureRms(1) * 1.5f);
 
@@ -441,6 +448,7 @@ TEST_SUITE("Audio.System")
 		for (int frame = 0; frame < 60; frame++)
 		{
 			entity.GetTransform().Translation.z += 1.0f;
+			entity.MarkModified<TransformComponent>();
 			StepScene(scene, 1);
 		}
 		CHECK(source->GetVelocity().z == doctest::Approx(1.0f / timestep).epsilon(0.01));
@@ -448,7 +456,9 @@ TEST_SUITE("Audio.System")
 		StepScene(scene, 3); // Longer than two fixed steps without a move
 		CHECK(source->GetVelocity() == glm::vec3(0.0f));
 		listener.GetTransform().Translation = glm::vec3(0.0f, 1.0f, -18.0f);
+		listener.MarkModified<TransformComponent>();
 		entity.GetTransform().Translation = glm::vec3(1000.0f, 0.0f, 0.0f);
+		entity.MarkModified<TransformComponent>();
 		StepScene(scene, 1);
 		CHECK(source->GetVelocity() == glm::vec3(0.0f));
 		CHECK(source->GetPosition() == glm::vec3(1000.0f, 0.0f, 0.0f));
@@ -462,6 +472,7 @@ TEST_SUITE("Audio.System")
 		// Non-spatial sources are not positioned.
 		component.Spatial = false;
 		parent.GetTransform().Translation = glm::vec3(20.0f, 0.0f, 0.0f);
+		parent.MarkModified<TransformComponent>();
 		StepScene(scene, 1);
 		CHECK(source->GetPosition() == glm::vec3(1010.0f, 0.0f, 0.0f));
 	}
@@ -540,6 +551,7 @@ TEST_SUITE("Audio.System")
 		for (int frame = 0; frame < 10; frame++)
 		{
 			camera.GetTransform().Rotation = rotate(0.3f * static_cast<float>(frame), yAxis) * rotate(-0.6f, xAxis);
+			camera.MarkModified<TransformComponent>();
 			StepScene(scene, 1);
 			const glm::vec3 forward = camera.GetTransform().Rotation * glm::vec3(0.0f, 0.0f, -1.0f);
 			const AudioListenerState listener = AudioEngine::GetListener();
@@ -549,13 +561,16 @@ TEST_SUITE("Audio.System")
 
 		// Rolled: its own up vector.
 		camera.GetTransform().Rotation = rotate(0.5f, zAxis);
+		camera.MarkModified<TransformComponent>();
 		StepScene(scene, 1);
 		CHECK(glm::length(AudioEngine::GetListener().Up - camera.GetTransform().Rotation * yAxis) < 1e-5f);
 
 		// Looking straight down and turned by 90 degrees, the camera's right is -Z: forward x +Y would give no right axis, so
 		// its own up vector is used, and a source on its right is louder on the right.
 		camera.GetTransform().Rotation = rotate(std::numbers::pi_v<float> * 0.5f, yAxis) * rotate(-std::numbers::pi_v<float> * 0.5f, xAxis);
+		camera.MarkModified<TransformComponent>();
 		source.GetTransform().Translation = glm::vec3(0.0f, 0.0f, -5.0f);
+		source.MarkModified<TransformComponent>();
 		StepScene(scene, 1);
 		CHECK(glm::length(AudioEngine::GetListener().Up - glm::vec3(-1.0f, 0.0f, 0.0f)) < 1e-5f);
 		CHECK(MeasureRms(1) > MeasureRms(0) * 1.5f);
@@ -565,7 +580,9 @@ TEST_SUITE("Audio.System")
 		const auto checkRightSide = [&](const glm::quat& rotation)
 		{
 			camera.GetTransform().Rotation = rotation;
+			camera.MarkModified<TransformComponent>();
 			source.GetTransform().Translation = rotation * glm::vec3(5.0f, 0.0f, 0.0f);
+			source.MarkModified<TransformComponent>();
 			StepScene(scene, 1);
 			CHECK(glm::length(AudioEngine::GetListener().Up - rotation * yAxis) < 1e-5f);
 			CHECK(MeasureRms(1) > MeasureRms(0) * 1.5f);
@@ -681,6 +698,7 @@ TEST_SUITE("Audio.System")
 		for (int frame = 0; frame < 10; frame++)
 		{
 			first.GetTransform().Translation.x += 1.0f;
+			first.MarkModified<TransformComponent>();
 			StepScene(scene, 1);
 		}
 		CHECK(audio.GetListenerEntity() == first);
@@ -954,6 +972,7 @@ TEST_SUITE("Audio.System")
 		// Made spatial and moved in the frame it is played.
 		component.Spatial = true;
 		entity.GetTransform().Translation = glm::vec3(0.0f, 0.0f, -20.0f);
+		entity.MarkModified<TransformComponent>();
 		REQUIRE(audio.Play(entity));
 		CHECK(source->IsSpatial());
 		CHECK(source->GetPosition() == glm::vec3(0.0f, 0.0f, -20.0f));
@@ -962,6 +981,7 @@ TEST_SUITE("Audio.System")
 		StepScene(scene, 1);
 		REQUIRE(audio.Stop(entity));
 		entity.GetTransform().Translation = glm::vec3(5.0f, 0.0f, 0.0f);
+		entity.MarkModified<TransformComponent>();
 		REQUIRE(audio.Play(entity));
 		CHECK(source->GetPosition() == glm::vec3(5.0f, 0.0f, 0.0f));
 		// The jump is a teleport, not a velocity.

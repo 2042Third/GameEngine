@@ -129,6 +129,11 @@ add_test(NAME StrataTests.Perf
 set_tests_properties(StrataTests.Perf PROPERTIES LABELS "perf" RUN_SERIAL TRUE FIXTURES_REQUIRED StrataPerfResults)
 
 # The GPU suites measure on a device without validation layers, which would multiply the CPU cost of every GPU call.
+# PerfGPU.Editor measures the frames of the real editor (src/Editor/EditorFramePerfTests.cpp).
+set(STRATA_PERF_GPU_ENVIRONMENT "STRATA_TEST_GPU_VALIDATION=0")
+if(TARGET StrataEditor)
+	list(APPEND STRATA_PERF_GPU_ENVIRONMENT "STRATA_TEST_EDITOR_PATH=$<TARGET_FILE:StrataEditor>")
+endif()
 add_test(NAME StrataTests.PerfGPU
 	COMMAND StrataTests --test-suite=PerfGPU.* --no-intro=true
 	CONFIGURATIONS Release Dist
@@ -137,7 +142,7 @@ set_tests_properties(StrataTests.PerfGPU PROPERTIES
 	LABELS "perf;gpu"
 	RUN_SERIAL TRUE
 	FIXTURES_REQUIRED StrataPerfResults
-	ENVIRONMENT "STRATA_TEST_GPU_VALIDATION=0")
+	ENVIRONMENT "${STRATA_PERF_GPU_ENVIRONMENT}")
 
 # Suites whose names start with "Package" build script modules with the real toolchain (CMake and the compiler).
 add_test(NAME StrataTests.Package

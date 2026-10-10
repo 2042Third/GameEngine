@@ -225,6 +225,38 @@ TEST_SUITE("Editor.CommandRunner")
 		}
 		CHECK(harness.Runner.GetPendingCount() == 0);
 	}
+
+	TEST_CASE("editor.wait reports the CPU time of the frames it waited through")
+	{
+		// Without an application recording frame times there are no statistics.
+		RunnerHarness harness;
+		CHECK(harness.Run("editor.wait", { { "frames", 2 } }));
+		harness.Runner.Update(harness.Context);
+		harness.Runner.Update(harness.Context);
+		REQUIRE(harness.Results.size() == 1);
+		CHECK_FALSE(harness.Results[0].Value.contains("frameTimes"));
+
+		// Frames as the editor layer runs them: the time of the frame before, then the commands. The wait starts in a frame
+		// whose time (9 ms) also covers whatever ran before it, so only the frames after that one count.
+		harness.Context.RecordFrameTime(50.0);
+		CHECK(harness.Run("editor.wait", { { "frames", 5 } }));
+		for (const double frameTime : { 9.0, 1.0, 4.0, 2.0, 3.0 })
+		{
+			CHECK(harness.Results.size() == 1);
+			harness.Context.RecordFrameTime(frameTime);
+			harness.Runner.Update(harness.Context);
+		}
+		REQUIRE(harness.Results.size() == 2);
+		CHECK(harness.Results[1].Value["frames"] == 5);
+		const nlohmann::json& frameTimes = harness.Results[1].Value["frameTimes"];
+		CHECK(frameTimes["count"] == 4);
+		CHECK(frameTimes["medianMs"] == 2.5);
+		CHECK(frameTimes["meanMs"] == 2.5);
+		CHECK(frameTimes["p95Ms"] == 4.0);
+		CHECK(frameTimes["maxMs"] == 4.0);
+		CHECK(harness.Context.GetRecordedFrameCount() == 6);
+		CHECK(harness.Context.GetLastFrameTime() == 3.0);
+	}
 }
 
 TEST_SUITE("Editor.CommandScript")

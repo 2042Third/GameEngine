@@ -91,6 +91,8 @@ namespace Strata
 
 		UUID GetUUID() const { return GetComponent<IDComponent>().ID; }
 		const std::string& GetName() const { return GetComponent<NameComponent>().Name; }
+		// Writing the returned component requires MarkModified<TransformComponent>() afterwards, so that the scene recomputes
+		// the cached world transforms (the transform contract, see Scene).
 		TransformComponent& GetTransform() { return GetComponent<TransformComponent>(); }
 
 		Entity GetParent() const;

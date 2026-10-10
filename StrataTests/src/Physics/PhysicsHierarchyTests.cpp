@@ -343,11 +343,13 @@ TEST_SUITE("Physics.Hierarchy")
 		REQUIRE(physics.IsSleeping(platform));
 		REQUIRE(physics.IsSleeping(door));
 
-		// Driven by direct writes every frame, which the awake platform notices without a signal.
+		// Driven by direct writes every frame, which the awake platform notices without an on_update signal (the scene learns
+		// about them through MarkTransformChanged, as its transform contract requires).
 		CHECK(physics.WakeUp(platform));
 		for (int frame = 0; frame < 30; frame++)
 		{
 			platform.GetTransform().Translation.y += 0.1f;
+			scene.MarkTransformChanged(platform);
 			StepScene(scene, 1);
 		}
 		REQUIRE(GetWorldPosition(scene, platform).y == doctest::Approx(4.0f));
@@ -379,9 +381,11 @@ TEST_SUITE("Physics.Hierarchy")
 		StepScene(scene, 90);
 		REQUIRE(physics.IsSleeping(child));
 
-		// The awake parent is moved by a direct write: the child moves along, as after a signaled edit.
+		// The awake parent is moved by a direct write without an on_update signal (only the scene is told): the child moves
+		// along, as after a signaled edit.
 		CHECK(physics.WakeUp(parent));
 		parent.GetTransform().Translation.x += 3.0f;
+		scene.MarkTransformChanged(parent);
 		StepScene(scene, 1);
 		CHECK(GetWorldPosition(scene, parent).x == doctest::Approx(3.0f).epsilon(1.0e-3));
 		CHECK(GetWorldPosition(scene, child).x == doctest::Approx(13.0f).epsilon(1.0e-3));

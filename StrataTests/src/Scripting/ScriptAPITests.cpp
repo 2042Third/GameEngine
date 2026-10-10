@@ -3,6 +3,7 @@
 #include "Scripting/ScriptTestUtils.h"
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Core/JsonUtils.h"
+#include "Strata/Core/Log.h"
 #include "Strata/Input/Input.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Scene/Prefab.h"
@@ -108,6 +109,27 @@ namespace
 	StrataScriptString ABIString(const char* text)
 	{
 		return StrataScriptString { text, static_cast<uint64_t>(std::strlen(text)) };
+	}
+
+	// Number of log messages containing `text` logged after `afterSequence` (see LogBuffer::GetLatestSequence).
+	size_t CountLogMessages(uint64_t afterSequence, std::string_view text)
+	{
+		size_t count = 0;
+		for (const LogEntry& entry : Log::GetBuffer().GetEntries(afterSequence))
+		{
+			if (entry.Message.find(text) != std::string::npos)
+				count++;
+		}
+		return count;
+	}
+
+	// Fills the scene's registry with plain EnTT entities (they count against its limit like scene entities, and are much
+	// quicker to make) until only `room` more entities fit.
+	void FillRegistry(Scene& scene, size_t room)
+	{
+		entt::registry& registry = scene.GetRegistry();
+		std::vector<entt::entity> filler(Scene::c_MaxEntities - registry.storage<entt::entity>().free_list() - room);
+		registry.create(filler.begin(), filler.end());
 	}
 
 }
@@ -285,6 +307,36 @@ TEST_SUITE("Scripting.API")
 		const Entity last = scene.GetEntityByUUID(GetField<UUID>(system, spawner, "Spawner", "LastSpawned"));
 		REQUIRE(last.IsValid());
 		CHECK(GetField<int32_t>(system, last, "Spawned", "ValueSeenInCreate") == 102);
+
+		// A scene with room for one more entity cannot hold the prefab's two: nothing is created, and the problem names why.
+		FillRegistry(scene, 1);
+		REQUIRE(system.SetFieldValue(spawner, "Spawner", "SpawnPerUpdate", int32_t(1)));
+		const uint64_t logStart = Log::GetBuffer().GetLatestSequence();
+		scene.OnUpdateRuntime(0.0f);
+		CHECK(scene.GetEntityCount() == entityCount + 3 * 2);
+		CHECK_FALSE(scene.GetEntityByUUID(GetField<UUID>(system, spawner, "Spawner", "LastSpawned")).IsValid());
+		CHECK(CountLogMessages(logStart, "could not be instantiated: Cannot add 2 entities") == 1);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Creating entities in a full scene fails with a reported problem")
+	{
+		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
+		Scene scene;
+		Entity spawner = scene.CreateEntity("Spawner");
+		AddFieldOverride(AddScriptEntry(spawner, "MassSpawner"), "Count", PropertyType::Int, int32_t(5));
+		scene.OnRuntimeStart();
+		ScriptSystem& system = GetScriptSystem(scene);
+
+		// Room for two: the other three creations fail without an assertion, reported once.
+		FillRegistry(scene, 2);
+		const uint64_t logStart = Log::GetBuffer().GetLatestSequence();
+		scene.OnUpdateRuntime(0.0f);
+		CHECK(GetField<int32_t>(system, spawner, "MassSpawner", "Spawned") == 2);
+		CHECK(scene.GetEntityCount() == 3);
+		CHECK(system.GetInstanceCount() == 3);
+		CHECK(CountLogMessages(logStart, "CreateEntity (called by script 'MassSpawner' on entity 'Spawner'): the scene already holds the maximum of 1048575 entities") == 1);
+		CHECK(CountLogMessages(logStart, "cannot create entity 'Spawned'") == 3);
 		scene.OnRuntimeStop();
 	}
 

@@ -155,6 +155,7 @@ TEST_SUITE("GPU.SceneRenderer.Shadows")
 			light.ShadowNormalBias = componentBias * 1.5f;
 			light.Intensity = 2.0f / std::sin(glm::radians(elevation)); // Equally bright floors for every elevation
 			sun.GetComponent<TransformComponent>().Rotation = Math::LookRotation(SunDirection(elevation, azimuth));
+			sun.MarkModified<TransformComponent>();
 
 			light.CastShadows = true;
 			const ReadbackImage shadowed = RenderToImage(renderer, scene, camera);

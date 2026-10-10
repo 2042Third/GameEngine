@@ -119,11 +119,22 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   (a plain `executeCommandList` + `waitForIdle` makes every later `open()` create a command pool). Complexity claims
   belong in ordinary unit tests with deterministic counters, which run everywhere. CI's hosted runners skip the label
   `perf` because budgets hold for the reference machine only: run `-L perf` there before merging a change that can
-  affect performance.
+  affect performance. Scale tests build their scenes with `Perf/SceneGenerators.h` (flat roots, a nested tree with ten
+  children per entity, entities running the API test module's trivial script) under
+  `Perf::ScopedApplicationJobSystem` (the job system as applications start it): `Perf.Scene` (transform updates and
+  idle frames up to a million entities), `Perf.Scripting` (100,000 and 300,000 trivial scripts, frames that spawn and
+  destroy entities, scripts destroying 10,000 of 100,000 sibling roots in one frame) and, in `src/Editor/`,
+  `Perf.Editor` (entity commands among 100,000 roots) and `PerfGPU.Editor`, which runs the real `StrataEditor`
+  maximized on generated 100,000- and 1,000,000-entity scenes and checks the median CPU frame time its `editor.wait`
+  steps report. Time calls that take nanoseconds in batches (the clock's resolution is about 0.1 microseconds).
 - Suites whose names start with `EndToEnd` start the built `StrataEditor` and `StrataCLI` (paths in
   `STRATA_TEST_EDITOR_PATH`/`STRATA_TEST_CLI_PATH`, else next to the test executable) and run as the CTest
   `StrataEditor.Automation`, not in `StrataTests.Core`. They need no GPU (`--no-gpu`), use private session
   directories, free ports and timeouts, and terminate the processes they started when they fail.
+- Tests follow the transform contract (see [Architecture rules](#architecture-rules)): a direct write to a
+  `TransformComponent` after the scene was updated is followed by `MarkModified<TransformComponent>()` (or
+  `Scene::MarkTransformChanged` when the test is about listeners not being signaled), otherwise Debug runs assert.
+  `StrataTests/src/Scene/SceneTestUtils.h` has `CheckSceneCaches` (both validators) for scene tests.
 - Use `Strata::Tests::CreateTemporaryDirectory()` for files; never write into the source tree. The test process sets
   `STRATA_RUNTIME_DIR` to a private temporary directory (`TestMain.cpp`), so runtime files such as script module copies
   never go to the user's runtime directory; helper processes inherit it.
@@ -138,7 +149,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   failure, `Completed` marks the end of a scenario, and `Journal()` records events in the scene's "Journal" entity.
   The runners:
   - `StrataTests.FeatureTest` (label `feature`, no GPU) plays the scripted scenario (`PlayFeatureScene`: 200 frames,
-    simulated input, a hot reload of the module halfway, audio on the null device) three times: headless (suite
+    simulated input, a hot reload of the module halfway, audio on the null device; after every frame the scene's caches
+    must match a full recomputation, `Scene::ValidateWorldTransforms`/`ValidateHierarchy`) three times: headless (suite
     `FeatureTest`, `src/FeatureTest/`), through editor commands in-process, and in the exported game in `GameRuntime`
     (suite `Editor.FeatureTest`);
   - `GPU.FeatureTest` (in `StrataTests.GPU`) renders the scene for 4 frames without playing it (no scripts) and checks
@@ -292,6 +304,21 @@ The threading model, frame loop and pipelines these rules protect are described 
   modules a build lacks: they load with one warning per component name into `UnknownComponentsComponent` and are saved
   back unchanged (also through play mode, prefab snapshots, duplication and undo). Details: Docs/Architecture.md,
   "Composition root and registries" and "Scene runtime lifecycle".
+- **Scene caches and the transform contract:** per-frame scene cost follows what changed. `Scene` mirrors the hierarchy
+  as EnTT handle links (`HierarchyComponent`, `Scene/SceneHierarchy.h`), recomputes cached world transforms
+  (`WorldTransformComponent`) only below entities whose transform changed, keeps `ActiveInHierarchy` exact as activity
+  and parents change, and indexes names and tags for `FindEntityByName`/`FindEntitiesByTag`. So **code that writes
+  `TransformComponent` fields directly must signal the change**: `Entity::MarkModified<TransformComponent>()` or
+  `registry.patch` (`ComponentAccess`, `Scene::SetWorldTransform`, the script API and `TransformEdit` do), or
+  `Scene::MarkTransformChanged` where listeners must not hear an `on_update` (physics writing simulated poses back).
+  Writes to `NameComponent::Name` and `TagComponent::Tag` must signal the same way. Entities created since the last
+  `UpdateWorldTransforms` are recomputed anyway. Hierarchy changes go through `Scene` (`SetParent`, `SetSiblingIndex`,
+  `PlaceEntities`, `DestroyEntities`...); never edit `RelationshipComponent` or `HierarchyComponent` directly. Debug
+  builds assert after every `OnUpdateRuntime` and `OnUpdateEditor` that the caches match a full recomputation
+  (`Scene::ValidateWorldTransforms`, `ValidateHierarchy`); a "has inconsistent caches" assertion names the entity
+  whose write was not signaled. Read sibling positions with `Scene::GetSiblingIndex` (cached), never by searching the
+  child list, and remove many entities with one `DestroyEntities` call. A registry holds at most
+  `Scene::c_MaxEntities` (1,048,575) live entities; creating more fails with an error.
 
 ## Asset pipeline
 
@@ -509,7 +536,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
 - Undo works on entity snapshots: a `SceneEditTransaction` captures the entities an edit touches
   (`Track`, `TrackSubtree` before changing or deleting them, `TrackCreated` after creating them) and
   `EditorContext::CommitEdit` records the difference. Edits while playing are not recorded. Continuous edits merge
-  into one step (`EditorAction::MergeWith`); a merged step that ends where it started (`IsNoOp`) is dropped.
+  into one step (`EditorAction::MergeWith`); a merged step that ends where it started (`IsNoOp`) is dropped. Capturing
+  reads cached sibling positions and applying a step removes and places entities in batches (`Scene::DestroyEntities`,
+  `Scene::PlaceEntities`), so edits of many entities in long sibling lists stay linear.
 - `project.export` writes a playable game outside the project: the asset pack (`<Game>.stpak`), the script module, the
   manifest (`<Game>.stgame`, start scene, script module and window settings) and the runtime executable renamed after
   the game. CTest exports a small game (`StrataEditor --no-gpu`) and runs it headless.
@@ -533,7 +562,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   can take frames (e.g. Build Scripts) run commands through the runner; UI actions that finish at once
   call the registry through `RunEditorCommand`, which rejects pending results.
   Poll functions own their data (copy parameters, never capture them by reference). `editor.wait
-  {frames}` returns after that many frames, e.g. to let a playing scene run.
+  {frames}` returns after that many frames, e.g. to let a playing scene run, with `frameTimes` (count, median, mean, 95th
+  percentile and maximum in milliseconds) of the frames that ran entirely while it waited: the CPU time of each frame
+  (`Application::GetLastFrameWorkTime`, recorded by `EditorLayer` through `EditorContext::RecordFrameTime`), without the
+  waits for the GPU and the display, so command scripts can `expect` frame budgets.
 - `StrataEditor --commands script.json` runs a JSON array of `{"command", "parameters", "expect"}` at startup
   (`EditorCommandScript`); a pending command holds the script until it completes. `expect` (optional) maps JSON
   pointers into the command's result to conditions, e.g. `{"/values/Translation/1": {"min": 1.6, "max": 1.7}}` or

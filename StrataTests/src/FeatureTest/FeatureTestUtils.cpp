@@ -283,11 +283,13 @@ namespace Strata::Tests
 			SimulateInput(frame, pressFrame);
 			advanceFrame();
 			REQUIRE_FALSE(engine.IsFaulted());
+			// The scene's caches (world transforms, activity, hierarchy links, lookup indices) match a full recomputation after
+			// every frame, in every runner and configuration.
+			std::string error;
+			REQUIRE_MESSAGE(scene.ValidateWorldTransforms(&error), error);
+			REQUIRE_MESSAGE(scene.ValidateHierarchy(&error), error);
 			if (frame == c_FeatureReloadFrame)
-			{
-				std::string error;
 				REQUIRE_MESSAGE(engine.Reload(&error), error);
-			}
 		}
 	}
 

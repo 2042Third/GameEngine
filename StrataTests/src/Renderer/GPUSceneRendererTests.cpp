@@ -150,6 +150,7 @@ TEST_SUITE("GPU.SceneRenderer")
 		{
 			CAPTURE(scale);
 			cube.GetComponent<TransformComponent>().Scale = scale;
+			cube.MarkModified<TransformComponent>();
 			const ReadbackImage mirrored = RenderToImage(renderer, scene, camera);
 			CHECK(MaxDifference(mirrored, reference) <= 2);
 			CHECK(renderer.GetEntityAt(scene, c_Size / 2, c_Size / 2) == cube);
@@ -157,6 +158,7 @@ TEST_SUITE("GPU.SceneRenderer")
 
 		// Mirrored and regular instances of one mesh are drawn in separate batches with opposite winding.
 		cube.GetComponent<TransformComponent>().Scale = glm::vec3(-1.0f, 1.0f, 1.0f);
+		cube.MarkModified<TransformComponent>();
 		AddMesh(scene, BuiltinAssets::CubeMesh, red, glm::vec3(0.0f, 0.0f, -3.0f), "Regular");
 		Entity mirroredQuad = AddMesh(scene, BuiltinAssets::QuadMesh, red, glm::vec3(0.0f, 0.0f, 1.5f), "MirroredQuad");
 		mirroredQuad.GetComponent<TransformComponent>().Scale = glm::vec3(0.2f, -0.2f, 0.2f); // Still faces +Z
@@ -457,6 +459,7 @@ TEST_SUITE("GPU.SceneRenderer")
 
 		// A NaN material renders black instead of poisoning its surroundings (bloom spreads light over the image).
 		wall.GetComponent<TransformComponent>().Scale = glm::vec3(0.5f);
+		wall.MarkModified<TransformComponent>();
 		wall.GetComponent<MeshRendererComponent>().Material = broken;
 		AddMesh(scene, BuiltinAssets::QuadMesh, assets.AddMaterial(Emitting(0.5f)), glm::vec3(0.0f, 0.0f, -0.5f), "Background")
 			.GetComponent<TransformComponent>().Scale = glm::vec3(20.0f);
@@ -670,6 +673,7 @@ TEST_SUITE("GPU.SceneRenderer")
 		auto shadingNormalSigns = [&](bool mirrored, bool fromBehind)
 		{
 			quad.GetComponent<TransformComponent>().Scale = mirrored ? glm::vec3(-1.0f, 1.0f, 1.0f) : glm::vec3(1.0f);
+			quad.MarkModified<TransformComponent>();
 			const float side = fromBehind ? -1.0f : 1.0f;
 			const SceneCamera camera = LookAt(glm::vec3(0.0f, 0.0f, 2.0f * side), glm::vec3(0.0f));
 			glm::ivec2 brightestSigns(0);
@@ -681,6 +685,7 @@ TEST_SUITE("GPU.SceneRenderer")
 				{
 					const glm::vec3 towardLight = glm::normalize(glm::vec3(0.5f * static_cast<float>(x), 0.5f * static_cast<float>(y), 0.7071f * side));
 					sun.GetComponent<TransformComponent>().Rotation = Math::LookRotation(-towardLight);
+					sun.MarkModified<TransformComponent>();
 					const int value = Red(RenderToImage(renderer, scene, camera), c_Size / 2, c_Size / 2);
 					if (value > brightest)
 					{

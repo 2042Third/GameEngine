@@ -399,6 +399,8 @@ namespace Strata
 				localTransform = glm::inverse(parentWorld) * worldTransform;
 			}
 
+			// Written without on_update (this world listens to it for edits), so the scene is told directly that the cached world
+			// transforms below the entity are stale.
 			TransformComponent& transform = entity.GetComponent<TransformComponent>();
 			const glm::vec3 translation(localTransform[3]);
 			glm::quat rotation;
@@ -406,9 +408,13 @@ namespace Strata
 			{
 				transform.Translation = translation;
 				transform.Rotation = rotation;
+				scene.MarkTransformChanged(entity);
 				return true;
 			}
-			return transform.SetTransform(localTransform);
+			if (!transform.SetTransform(localTransform))
+				return false;
+			scene.MarkTransformChanged(entity);
+			return true;
 		}
 
 		//////////////////////////////////////////////////////////////////////////

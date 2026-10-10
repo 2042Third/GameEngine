@@ -8,7 +8,6 @@
 #include <Strata/Scene/SceneSerializer.h>
 #include <Strata/Scene/UnknownComponents.h>
 
-#include <algorithm>
 #include <unordered_map>
 
 namespace Strata
@@ -71,37 +70,12 @@ namespace Strata
 			}
 		}
 
-		// Positions of entities among their siblings, built once per parent: looking each one up in the sibling list
-		// would be quadratic for wide hierarchies.
-		class SiblingIndices
-		{
-		public:
-			explicit SiblingIndices(const Scene& scene)
-				: m_Scene(scene)
-			{
-			}
+	}
 
-			// Parent of the entity (null for roots) and its position among its siblings.
-			std::pair<UUID, size_t> Get(Entity entity)
-			{
-				const UUID parent = entity.GetComponent<RelationshipComponent>().Parent;
-				auto [it, inserted] = m_Indices.try_emplace(parent);
-				if (inserted)
-				{
-					Entity parentEntity = parent.IsValid() ? m_Scene.GetEntityByUUID(parent) : Entity();
-					const std::vector<UUID>& siblings = parentEntity ? parentEntity.GetComponent<RelationshipComponent>().Children : m_Scene.GetRootEntities();
-					for (size_t index = 0; index < siblings.size(); index++)
-						it->second.emplace(siblings[index], index);
-				}
-				auto position = it->second.find(entity.GetUUID());
-				return { parent, position != it->second.end() ? position->second : 0 };
-			}
-		private:
-			const Scene& m_Scene;
-			std::unordered_map<UUID, std::unordered_map<UUID, size_t>> m_Indices;
-		};
+	namespace SceneEdit
+	{
 
-		EntityState Capture(const Scene& scene, UUID id, SiblingIndices& siblings)
+		EntityState CaptureEntity(const Scene& scene, UUID id)
 		{
 			EntityState state;
 			state.ID = id;
@@ -112,28 +86,18 @@ namespace Strata
 			state.Components = ComponentAccess::SerializeEntityComponents(entity);
 			if (const UnknownComponentsComponent* unknown = entity.TryGetComponent<UnknownComponentsComponent>())
 				unknown->AppendTo(state.Components);
-			std::tie(state.Parent, state.SiblingIndex) = siblings.Get(entity);
+			state.Parent = entity.GetComponent<RelationshipComponent>().Parent;
+			// Cached by the scene: wide sibling lists are not searched per capture.
+			state.SiblingIndex = scene.GetSiblingIndex(entity);
 			return state;
-		}
-
-	}
-
-	namespace SceneEdit
-	{
-
-		EntityState CaptureEntity(const Scene& scene, UUID id)
-		{
-			SiblingIndices siblings(scene);
-			return Capture(scene, id, siblings);
 		}
 
 		std::vector<EntityState> CaptureEntities(const Scene& scene, const std::vector<UUID>& ids)
 		{
-			SiblingIndices siblings(scene);
 			std::vector<EntityState> states;
 			states.reserve(ids.size());
 			for (UUID id : ids)
-				states.push_back(Capture(scene, id, siblings));
+				states.push_back(CaptureEntity(scene, id));
 			return states;
 		}
 
@@ -157,14 +121,17 @@ namespace Strata
 
 		void ApplyEntities(Scene& scene, const std::vector<EntityState>& states)
 		{
-			// Removals first: descendants that must exist are recreated below.
+			// Removals first: descendants that must exist are recreated below. One batch, so that removing many entities from
+			// a long sibling list stays linear.
+			std::vector<Entity> removed;
 			for (const EntityState& state : states)
 			{
 				if (state.Exists)
 					continue;
 				if (Entity entity = scene.GetEntityByUUID(state.ID))
-					scene.DestroyEntity(entity);
+					removed.push_back(entity);
 			}
+			scene.DestroyEntities(removed);
 
 			// Missing entities are recreated in one batch, with their UUIDs, components and the links among them (linear
 			// even for large subtrees). States are captured parents first, so siblings keep their order.
@@ -206,34 +173,23 @@ namespace Strata
 					ApplyComponents(scene, entity, state.Components);
 			}
 
-			// Hierarchy: only entities whose parent or position differs move. They are detached first so no
-			// intermediate parent link can form a cycle, then attached in ascending sibling order so each lands at its
-			// recorded position.
-			std::vector<const EntityState*> moved;
+			// Hierarchy: only entities whose parent or position differs move, in one batch (detached first so that no
+			// intermediate parent link can form a cycle, then each lands at its recorded position), so that restoring many
+			// positions in a long sibling list stays linear.
+			std::vector<Scene::EntityPlacement> placements;
+			for (const EntityState& state : states)
 			{
-				SiblingIndices siblings(scene);
-				for (const EntityState& state : states)
-				{
-					if (!state.Exists)
-						continue;
-					Entity entity = scene.GetEntityByUUID(state.ID);
-					if (!entity)
-						continue;
-					if (siblings.Get(entity) != std::make_pair(state.Parent, state.SiblingIndex))
-						moved.push_back(&state);
-				}
+				if (!state.Exists)
+					continue;
+				Entity entity = scene.GetEntityByUUID(state.ID);
+				if (!entity)
+					continue;
+				if (entity.GetComponent<RelationshipComponent>().Parent == state.Parent && scene.GetSiblingIndex(entity) == state.SiblingIndex)
+					continue;
+				placements.push_back({ state.ID, state.Parent, state.SiblingIndex });
 			}
-			std::stable_sort(moved.begin(), moved.end(), [](const EntityState* a, const EntityState* b) { return a->SiblingIndex < b->SiblingIndex; });
-			for (const EntityState* state : moved)
-				scene.SetParent(scene.GetEntityByUUID(state->ID), Entity(), false);
-			for (const EntityState* state : moved)
-			{
-				Entity entity = scene.GetEntityByUUID(state->ID);
-				Entity parent = state->Parent.IsValid() ? scene.GetEntityByUUID(state->Parent) : Entity();
-				if (!scene.SetParent(entity, parent, false))
-					ST_WARN("Restoring the parent of entity {} failed; it stays at the top level", state->ID.ToString());
-				scene.SetSiblingIndex(entity, state->SiblingIndex);
-			}
+			if (!scene.PlaceEntities(placements))
+				ST_WARN("Restoring the hierarchy: some entities could not be placed under their recorded parent and stay at the top level");
 		}
 
 	}
@@ -292,7 +248,6 @@ namespace Strata
 
 	void SceneEditTransaction::TrackSubtree(UUID id)
 	{
-		// Captured as one batch: the sibling positions are looked up once per parent.
 		std::vector<UUID> untracked;
 		for (UUID entity : SceneEdit::CollectSubtree(m_Scene, id))
 		{

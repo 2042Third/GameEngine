@@ -59,7 +59,7 @@ namespace Strata
 
 	}
 
-	std::vector<Entity> EntityTemplate::Instantiate(Scene& scene, Entity parent) const
+	std::vector<Entity> EntityTemplate::Instantiate(Scene& scene, Entity parent, std::string* outError) const
 	{
 		EntityInstantiationOptions options;
 		options.GenerateNewUUIDs = true;
@@ -69,7 +69,11 @@ namespace Strata
 		std::vector<std::string> warnings;
 		std::vector<Entity> roots = SceneSerializer::DeserializeEntities(scene, m_Snapshot, options, &error, &warnings);
 		if (!error.empty())
+		{
 			ST_CORE_ERROR("Failed to instantiate {}: {}", AssetTypeToString(GetType()), error);
+			if (outError)
+				*outError = error;
+		}
 		for (const std::string& warning : warnings)
 			ST_CORE_WARN("Instantiating {}: {}", AssetTypeToString(GetType()), warning);
 		return roots;

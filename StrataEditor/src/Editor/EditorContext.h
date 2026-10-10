@@ -21,6 +21,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace Strata
@@ -145,11 +146,13 @@ namespace Strata
 		// Selection (entities of the active scene)
 		//////////////////////////////////////////////////////////////////////////
 
+		// In selection order (the last one is the primary selection).
 		const std::vector<UUID>& GetSelection() const { return m_Selection; }
 		void SetSelection(std::vector<UUID> selection);
 		void Select(UUID entity, bool additive = false);
 		void Deselect(UUID entity);
-		void ClearSelection() { m_Selection.clear(); }
+		void ClearSelection();
+		// Constant time, also for large selections.
 		bool IsSelected(UUID entity) const;
 		// The most recently selected entity that still exists.
 		Entity GetPrimarySelection() const;
@@ -213,6 +216,18 @@ namespace Strata
 		void RequestQuit() { m_QuitRequested = true; }
 		bool IsQuitRequested() const { return m_QuitRequested; }
 
+		// The CPU time of the editor's frames (Application::GetLastFrameWorkTime), recorded once per frame for the frame
+		// before by the layer that runs the editor; editor.wait reports statistics of the frames it waited for. Contexts no
+		// application drives (tests) record nothing.
+		void RecordFrameTime(double milliseconds)
+		{
+			m_LastFrameTime = milliseconds;
+			m_RecordedFrameCount++;
+		}
+		uint64_t GetRecordedFrameCount() const { return m_RecordedFrameCount; }
+		// The latest recorded frame's time in milliseconds (0 before the first).
+		double GetLastFrameTime() const { return m_LastFrameTime; }
+
 		// Extra sections of editor.status, reported by the parts of the editor that own the information (e.g.
 		// "automation" by EditorAutomation). Providers run on the main thread whenever editor.status runs. A null provider
 		// removes the section; a section named like one of the built-in ones is not reported.
@@ -257,6 +272,7 @@ namespace Strata
 		SimulatedInput m_SimulatedInput;
 
 		std::vector<UUID> m_Selection;
+		std::unordered_set<UUID> m_SelectionSet; // The same entities, for IsSelected
 		UndoStack m_UndoStack;
 
 		Ref<ScriptEngine> m_ScriptEngine;
@@ -270,6 +286,8 @@ namespace Strata
 		EditorViewport m_Viewport;
 
 		bool m_QuitRequested = false;
+		uint64_t m_RecordedFrameCount = 0;
+		double m_LastFrameTime = 0.0;
 		std::map<std::string, StatusProvider> m_StatusProviders;
 	};
 
