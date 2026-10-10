@@ -252,6 +252,7 @@ namespace Strata
 		m_Resident -= entry.Usage;
 		entry.Usage = {};
 		entry.Loaded = std::move(asset);
+		entry.LoadedRevision = entry.Loaded ? entry.SourceRevision : 0;
 		if (entry.Loaded)
 		{
 			entry.Usage = entry.Loaded->GetMemoryUsage();

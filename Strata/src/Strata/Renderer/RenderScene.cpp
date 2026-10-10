@@ -560,10 +560,11 @@ namespace Strata
 		m_Stats.Materials--;
 	}
 
-	uint32_t RenderScene::SetMeshLayout(uint32_t slot, const Mesh& mesh)
+	uint32_t RenderScene::SetMeshLayout(uint32_t slot, const Mesh& mesh, uint64_t sourceRevision)
 	{
 		ST_PROFILE_FUNCTION();
 		MeshEntry& entry = m_Meshes[slot];
+		entry.LayoutRevision = sourceRevision; // Also when the layout stays: it is now known to be that source's
 		std::vector<AssetHandle> materials;
 		materials.reserve(mesh.GetSubmeshes().size());
 		for (const Submesh& submesh : mesh.GetSubmeshes())
@@ -659,31 +660,53 @@ namespace Strata
 			return;
 		entry.CheckedSync = m_SyncCount;
 		m_Stats.LastSyncMeshChecks++;
-		if (assets.GetAssetState(entry.Handle) == AssetState::Ready)
+		const AssetSourceRevisions revisions = assets.GetSourceRevisions(entry.Handle);
+		if (revisions.Loaded != 0)
 		{
-			// The request stamps the mesh as used, which a mesh that just arrived or changed is anyway.
+			// A loaded object: the mesh's, or its previous version while a reload is under way (renderers draw that one
+			// meanwhile). The request starts no load; it stamps the mesh as used, which a mesh that just arrived or changed is
+			// anyway.
 			const Ref<Asset> asset = assets.GetAsset(entry.Handle, AssetPriority::Low);
-			if (asset && asset->GetType() == AssetType::Mesh && SetMeshLayout(slot, static_cast<const Mesh&>(*asset)) > 0)
+			if (asset && asset->GetType() == AssetType::Mesh && SetMeshLayout(slot, static_cast<const Mesh&>(*asset), revisions.Loaded) > 0)
 			{
 				for (const uint32_t proxy : m_Meshes[slot].Users)
 					MarkUpdated(proxy);
 			}
 			return;
 		}
-		// A known layout stays until the next loaded object shows whether it changed (its arrival is a content change).
-		if (entry.LayoutKnown)
+
+		// Not loaded (evicted, or never loaded). A known layout stays while the source is the one it was learned from, so an
+		// evicted mesh keeps its bounds; a source reloaded meanwhile (a reimport) may have other bounds, which the old ones
+		// would keep out of view, so the layout is forgotten and renderers request the mesh as if in view until it loads.
+		const bool forgotten = entry.LayoutKnown && revisions.Current != entry.LayoutRevision;
+		if (entry.LayoutKnown && !forgotten)
 			return;
-		// Not loaded and never learned: the bounds the asset database recorded stand in, if it has any.
+		if (forgotten)
+			ForgetMeshLayout(slot);
+		// The bounds the asset database recorded stand in, if it has any.
 		std::optional<AABB> recorded = ResolveUnloadedBounds(assets, entry.Handle);
-		if (SameBounds(recorded, entry.RecordedBounds))
+		if (!forgotten && SameBounds(recorded, entry.RecordedBounds))
 			return;
 		entry.RecordedBounds = std::move(recorded);
 		UpdateBoundsMembership(slot);
 		for (const uint32_t proxy : m_Meshes[slot].Users)
 		{
 			UpdateProxyPlacement(proxy);
+			RebuildInstances(proxy); // Released with a forgotten layout
 			MarkUpdated(proxy);
 		}
+	}
+
+	void RenderScene::ForgetMeshLayout(uint32_t slot)
+	{
+		MeshEntry& entry = m_Meshes[slot];
+		for (const uint32_t materialSlot : entry.SubmeshMaterialSlots)
+			ReleaseMaterial(materialSlot);
+		entry.SubmeshMaterials.clear();
+		entry.SubmeshMaterialSlots.clear();
+		entry.Bounds = AABB();
+		entry.LayoutKnown = false;
+		entry.LayoutRevision = 0;
 	}
 
 	void RenderScene::RebuildInstances(uint32_t proxy)

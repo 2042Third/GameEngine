@@ -64,6 +64,15 @@ namespace Strata
 		// The frames in flight of a graphics device created with the default specification.
 		constexpr uint32_t c_DefaultFramesInFlight = 2;
 
+		// Source revisions (AssetSourceRevisions) come from one counter for the process, so that a cache which moves to
+		// another manager never mistakes that manager's revision of an asset for the one its data came from.
+		std::atomic<uint64_t> s_NextSourceRevision = 1;
+
+		uint64_t NextSourceRevision()
+		{
+			return s_NextSourceRevision.fetch_add(1, std::memory_order_relaxed);
+		}
+
 	}
 
 	void AssetLoaderRegistry::BeginRegistration()
@@ -483,10 +492,24 @@ namespace Strata
 			// Keep serving the old object until the new one is ready, so users never see the asset disappear.
 			entry.State = AssetState::Unloaded;
 			entry.Generation = m_NextGeneration++;
+			entry.SourceRevision = NextSourceRevision();
+			// Without a loaded object the change is published now: unless the asset is requested, no arrival will tell caches
+			// that keep data derived from it (evicted meshes' render layouts) that its source changed.
+			if (!entry.Loaded)
+				PublishContentChange(handle);
 		}
 
 		if (wasRequested)
 			RequestLoad(handle, AssetPriority::High);
+	}
+
+	AssetSourceRevisions AssetManagerBase::GetSourceRevisions(AssetHandle handle) const
+	{
+		std::scoped_lock<std::mutex> lock(m_Mutex);
+		auto it = m_Entries.find(handle);
+		if (it == m_Entries.end())
+			return {};
+		return AssetSourceRevisions { it->second.SourceRevision, it->second.LoadedRevision };
 	}
 
 	AssetHandle AssetManagerBase::AddMemoryAsset(const Ref<Asset>& asset, AssetMetadata metadata)
@@ -520,6 +543,7 @@ namespace Strata
 			AbandonLoadLocked(entry);
 		entry.Metadata = metadata;
 		entry.IsMemoryAsset = true; // Before the object is set: memory assets are resident but never evicted
+		entry.SourceRevision = NextSourceRevision(); // A new object is a new source, also for a memory asset added again
 		released = SetLoadedLocked(entry, asset);
 		entry.State = AssetState::Ready;
 		entry.Error.clear();
@@ -541,6 +565,7 @@ namespace Strata
 		{
 			entry.Generation = m_NextGeneration++;
 			entry.Registration = entry.Generation;
+			entry.SourceRevision = NextSourceRevision();
 		}
 		else if (entry.Metadata.Path != metadata.Path && !entry.Metadata.IsSubAsset())
 		{

@@ -371,8 +371,11 @@ The threading model, frame loop and pipelines these rules protect are described 
   request what you use every frame you use it (`GetAsset`): a held `Ref` keeps an asset from being evicted (it would
   free nothing), so it defeats the budget. Pin what gameplay must keep whether or not it is used
   (`AssetManagerBase::Pin`, `AssetPin`; scripts: `Assets::RequestLoad` until `Assets::Release`). Code that keeps an
-  asset's data alive in other objects reports it (`Asset::IsDataShared`). Never block on a load; scene owners trim what
-  the previous scene used after a switch (`AssetManagerBase::ScheduleTrim`).
+  asset's data alive in other objects reports it (`Asset::IsDataShared`). A cache that keeps data derived from an asset
+  while the asset is evicted (the render scene's mesh layouts) checks, on the asset's content changes, whether the
+  source's revision is still the one its data came from (`AssetManagerBase::GetSourceRevisions`): evictions keep it,
+  `ReloadAsset` (a reimport) changes it and announces that even when nothing is loaded. Never block on a load; scene
+  owners trim what the previous scene used after a switch (`AssetManagerBase::ScheduleTrim`).
 - Adding an asset type: an `Asset` subclass with a cooked/serialized form, a loader registered by the
   registration function of the module that owns the type (e.g. `RegisterRendererModule`; it takes the stored bytes over
   with `AssetLoadData::TakeBytes` when the asset keeps them, instead of copying them), an importer if it comes from
@@ -822,10 +825,12 @@ and `AudioSystem`, the built-in "Audio" scene system.
   each asset is looked up once per frame (`AssetResolveCache`), and nothing (no asset, not the asset manager) is held
   once `Render` returns, so what leaves the view becomes evictable, also for a renderer that stops rendering. Mesh
   layouts (bounds, submeshes) follow the asset manager's content changes in `RenderScene::Sync`, whoever renders the
-  scene. A mesh whose bounds are unknown (never loaded, none recorded: `RenderScene::GetMeshesWithoutBounds`) is
-  requested as if in view while any of its entities is active, since its proxies' placeholder bounds say nothing about
-  where it is; recorded bounds come from `RenderScene::ResolveUnloadedBounds`. Never resolve assets per entity in
-  renderer code: go through the proxies and the cache.
+  scene; an evicted mesh keeps its layout until a reimport changes its source revision
+  (`AssetManagerBase::GetSourceRevisions`). A mesh whose bounds are unknown (never loaded, reimported while evicted, none
+  recorded: `RenderScene::GetMeshesWithoutBounds`) is requested as if in view while any of its entities is active,
+  since its proxies' placeholder bounds say nothing about where it is; recorded bounds come from
+  `RenderScene::ResolveUnloadedBounds`. Never resolve assets per entity in renderer code: go through the proxies and the
+  cache.
 - Batching is material-free: instances of a mesh, submesh and level of detail with the same pipeline state share one
   draw whatever their materials (shaders read `u_Materials[instance.MaterialIndex]`); transparent surfaces are drawn
   one by one, back to front. Draws are gathered in parallel chunks merged in chunk order (results do not depend on

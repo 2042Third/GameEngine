@@ -74,8 +74,10 @@ render-scene, streaming-observatory, editor-authoring:
   asset requests that follow visibility (High above 5% of the screen, Low within the prefetch distance, each asset
   looked up once per frame, no asset or asset manager held once a frame is rendered, so what is out of view is
   evictable also for idle renderers); mesh layouts that follow loads and reloads in the render scene itself, whoever
-  renders it; gizmos culled to the view with icons for small lights and cameras and colliders of the selection only;
-  the outline list cached; requests that move an asset in the residency's recency orders without a search.
+  renders it, and that evicted meshes keep until a reimport changes their source revision (`AssetSourceRevisions`,
+  which tell a reimport from an eviction); gizmos culled to the view with icons for small lights and cameras and
+  colliders of the selection only; the outline list cached; requests that move an asset in the residency's recency
+  orders without a search.
   `SceneRenderer::Render` costs about 0.9 ms for 100,000 cubes and 2.9 ms for 300,000; edit frames of grids under one
   root take 1.6 and 4.4 ms (the scaling audit measured 42.9 and 113.6 ms with the cubes as roots, which also pays the
   Hierarchy panel's cost of about 14 ms per 100,000 roots), 10,000 point lights 1.6 ms and 10,000 unique materials

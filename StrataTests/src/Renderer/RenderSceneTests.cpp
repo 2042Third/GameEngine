@@ -463,6 +463,79 @@ TEST_SUITE("Renderer.RenderScene")
 		CheckProxies(renderScene);
 	}
 
+	TEST_CASE("A mesh reimported while it was not loaded loses its layout until it loads again; an eviction or a reload under way keeps it")
+	{
+		const Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		const AssetHandle stored = manager->AddStored(0x5E30, AssetType::Mesh, CreatePartedCube(1.0f, 2)->Serialize());
+		Scene scene("Reimported");
+		Entity entity = AddCube(scene, glm::vec3(100.0f, 0.0f, 0.0f), UUID::Null(), stored);
+		RenderScene& renderScene = RenderScene::Get(scene);
+		REQUIRE(manager->LoadAssetSync(stored));
+		renderScene.Sync(manager);
+		const uint32_t proxy = renderScene.FindProxy(entity.GetHandle());
+		const uint32_t slot = renderScene.GetMeshSlot(proxy);
+		REQUIRE(renderScene.IsMeshLayoutKnown(slot));
+		REQUIRE(renderScene.GetInstanceCount(proxy) == 2);
+		CHECK(renderScene.GetStats().Materials == 2);
+
+		// Evicted: the layout stays, the source being the one it was learned from.
+		manager->Update();
+		REQUIRE(manager->TrimUnused(0) == 1);
+		CHECK(renderScene.Sync(manager) == 0);
+		CHECK(renderScene.GetStats().LastSyncMeshChecks == 1);
+		CHECK(renderScene.IsMeshLayoutKnown(slot));
+		CHECK(renderScene.GetInstanceCount(proxy) == 2);
+
+		// Reimported eight times larger while it is not loaded: the old bounds no longer say where the mesh is, and nothing
+		// would request it where its new bounds are. Its layout is forgotten (bounds, instances, the submeshes' material
+		// slots), so its bounds are unknown and renderers request it as if in view.
+		manager->SetStoredData(stored, CreatePartedCube(8.0f, 1)->Serialize());
+		manager->ReloadAsset(stored);
+		REQUIRE(manager->GetAssetState(stored) == AssetState::Unloaded);
+		CHECK(renderScene.Sync(manager) == 1);
+		CHECK(renderScene.GetStats().LastSyncMeshChecks == 1);
+		CHECK_FALSE(renderScene.IsMeshLayoutKnown(slot));
+		REQUIRE(renderScene.GetMeshesWithoutBounds().size() == 1);
+		CHECK(renderScene.GetMeshesWithoutBounds()[0] == slot);
+		CHECK((renderScene.GetProxyFlags(proxy) & RenderProxyFlags::MeshBounds) == 0);
+		CHECK(renderScene.GetIndexedUserCount(slot) == 1);
+		CHECK(renderScene.GetInstanceCount(proxy) == 0);
+		CHECK(renderScene.GetStats().InstanceSlots == 0);
+		CHECK(renderScene.GetStats().Materials == 0);
+		CheckProxies(renderScene);
+		CHECK(renderScene.Sync(manager) == 0);
+		CHECK(renderScene.GetStats().LastSyncMeshChecks == 0);
+
+		// Loaded again: the new layout.
+		REQUIRE(manager->LoadAssetSync(stored));
+		CHECK(renderScene.Sync(manager) == 1);
+		CHECK(renderScene.IsMeshLayoutKnown(slot));
+		CHECK(renderScene.GetMeshesWithoutBounds().empty());
+		CHECK(renderScene.GetInstanceCount(proxy) == 1);
+		CHECK(renderScene.GetWorldBounds(proxy).Max.x == doctest::Approx(104.0f));
+		CHECK(renderScene.GetStats().Materials == 1);
+		CheckProxies(renderScene);
+
+		// Reloaded while it is loaded: renderers draw the previous version until the new one arrives, so a sync that compares
+		// the mesh meanwhile (here every mesh, after more changes than the manager remembers) keeps that version's layout.
+		manager->SetStoredData(stored, CreatePartedCube(2.0f, 3)->Serialize());
+		manager->ReloadAsset(stored);
+		REQUIRE(manager->GetAssetState(stored) == AssetState::Loading);
+		AssetMetadata other;
+		other.Handle = UUID(0x3A7F);
+		for (size_t change = 0; change <= AssetManagerBase::c_MaxContentChanges; change++)
+			manager->AddMemoryAsset(Material::Create(), other);
+		CHECK(renderScene.Sync(manager) == 0);
+		CHECK(renderScene.GetStats().LastSyncMeshChecks == 1);
+		CHECK(renderScene.GetInstanceCount(proxy) == 1);
+		manager->Update();
+		REQUIRE(manager->GetAssetState(stored) == AssetState::Ready);
+		CHECK(renderScene.Sync(manager) == 1);
+		CHECK(renderScene.GetInstanceCount(proxy) == 3);
+		CHECK(renderScene.GetWorldBounds(proxy).Max.x == doctest::Approx(101.0f));
+		CheckProxies(renderScene);
+	}
+
 	TEST_CASE("Signals queue each entity once, however often they come before the next sync")
 	{
 		Scene scene("Pending");

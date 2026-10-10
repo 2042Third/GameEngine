@@ -520,9 +520,11 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
 
 - **Importing** (`Asset/EditorAssetManager.h`). `Scan` registers every file with a known importer, creates missing
   `.meta` files and imports stale assets in parallel (`JobSystem::ParallelFor`), blocking. Afterwards the file watcher
-  reports changes; `Update` re-registers files and queues re-imports on the I/O pool, and applies finished imports by
-  reloading loaded assets (`ReloadAsset`). The cache record (`<handle>.import`) remembers the source state, settings,
-  importer version and dependencies, so a current import is reused.
+  reports changes; `Update` re-registers files and queues re-imports on the I/O pool, and applies finished imports
+  through `ReloadAsset`: loaded assets load again, and every reloaded asset gets a new source revision
+  (`GetSourceRevisions`), announced as a content change at once when no object of it is loaded. The cache record
+  (`<handle>.import`) remembers the source state, settings, importer version and dependencies, so a current import is
+  reused.
 - **Importers and stored forms** (`Asset/AssetImporters.cpp`; the loaders that read the stored form are registered by
   the module that owns each type, one `Deserialize` per type, `Font::Create` for fonts):
 
@@ -547,7 +549,11 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
 - **Streaming**. Assets load on first use and code handles "not loaded yet" every frame: `SceneRenderer` skips or
   substitutes what is pending and counts it (`SceneRendererStats::PendingAssets`), `AssetMeshProvider` reports meshes
   as unavailable until they load, and audio sources start when their clip is ready. The content version and change
-  list (`GetContentVersion`, `GetContentChanges`) let caches revalidate only what changed.
+  list (`GetContentVersion`, `GetContentChanges`) let caches revalidate only what changed. Source revisions
+  (`GetSourceRevisions`, `AssetSourceRevisions`: the source's, changed by registration and by every `ReloadAsset`, and
+  the loaded object's) tell a cache that keeps data derived from an asset while it is evicted whether that data is still
+  the source's: an eviction leaves the source's revision as it is, a reimport changes it. Revisions are unique in the
+  process, so a cache that moves to another manager sees every asset as another source.
 - **Built-in assets** (`Asset/BuiltinAssets.h`) are memory assets with handles 1 to 255, registered by every
   `AssetManagerBase`. Without a project the editor keeps a manager with only these active.
 - **Packs** (`Asset/AssetPack.h`). `EditorAssetManager::BuildAssetPack` writes every project asset in its stored form
@@ -691,7 +697,11 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   meshes that changed, and the meshes new to the scene, with their loaded objects. A reload with other bounds or
   submeshes therefore applies at the next sync even when the old bounds were out of view, or the scene was not rendered
   when it happened; a sync after which nothing loaded, reloaded or was dropped compares no mesh
-  (`RenderSceneStats::LastSyncMeshChecks`).
+  (`RenderSceneStats::LastSyncMeshChecks`). A mesh that is not loaded keeps its layout while its source revision is the
+  one the layout was learned from (`AssetSourceRevisions`): an eviction keeps it, but a reimport of the evicted mesh,
+  which publishes a content change without loading anything, makes its bounds unknown (below), so it is requested and
+  learned again rather than culled with bounds it may no longer have. While a reload of a loaded mesh is under way the
+  previous version's layout stays, as renderers draw that version meanwhile.
 - **Unknown bounds are visible**. Until a mesh's layout is known, the bounds the asset database recorded for it stand in
   (`RenderScene::ResolveUnloadedBounds`; none yet: `pack-v2`'s `AssetManagerBase::GetBounds` is wired in there). A mesh
   with neither has unknown bounds (`GetMeshesWithoutBounds`): its proxies sit in the spatial index with placeholder

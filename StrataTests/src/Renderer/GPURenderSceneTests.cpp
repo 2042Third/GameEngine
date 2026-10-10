@@ -536,6 +536,50 @@ TEST_SUITE("GPU.RenderScene")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A mesh evicted, then reimported larger, is drawn where only its new bounds are in view")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		const AssetHandle mesh = manager->AddStored(0x6E15, AssetType::Mesh, MeshFactory::CreateCube(0.1f)->Serialize());
+		AssetManager::SetActive(manager);
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		const Entity entity = AddMesh(scene, mesh, UUID::Null(), glm::vec3(0.0f), "Platform");
+		SceneRendererSpecification specification;
+		specification.PrefetchDistance = 0.0f; // Only the view, and the mesh's unknown bounds, load the mesh
+		SceneRenderer renderer(specification);
+		renderer.SetViewportSize(c_Size, c_Size);
+		// Looking past the small mesh, which stays out of view.
+		const SceneCamera camera = ViewFrom(glm::vec3(0.0f, 0.0f, 20.0f), glm::vec3(20.0f, 0.0f, 0.0f), 100.0f);
+		RenderScene& renderScene = RenderScene::Get(scene);
+		for (int frame = 0; frame < 10; frame++)
+			RunFrame(gpu, *manager, renderer, scene, camera);
+		REQUIRE(renderScene.GetMeshesWithoutBounds().empty());
+		REQUIRE(manager->GetAssetState(mesh) == AssetState::Ready);
+
+		// Nothing requests it out of view: it is evicted, and its proxy keeps the layout without loading it again.
+		const uint32_t grace = manager->GetEvictionGraceFrames();
+		for (uint32_t frame = 0; frame <= grace; frame++)
+			RunFrame(gpu, *manager, renderer, scene, camera);
+		CHECK(manager->TrimUnused(grace) == 1);
+		RunFrame(gpu, *manager, renderer, scene, camera);
+		CHECK(renderer.GetStats().MeshesWithoutBounds == 0);
+		CHECK(manager->GetAssetState(mesh) == AssetState::Unloaded);
+
+		// Reimported 300 times larger while it is not loaded: it fills the view now, though its old bounds never entered it.
+		manager->SetStoredData(mesh, MeshFactory::CreateCube(30.0f)->Serialize());
+		manager->ReloadAsset(mesh);
+		for (int frame = 0; frame < 60 && renderer.GetStats().Instances == 0; frame++)
+			RunFrame(gpu, *manager, renderer, scene, camera);
+		CHECK(renderer.GetStats().Instances == 1);
+		CHECK(renderScene.GetWorldBounds(renderScene.FindProxy(entity.GetHandle())).Max.x == doctest::Approx(15.0f));
+		CHECK(renderer.GetEntityAt(scene, c_Size / 2, c_Size / 2) == entity);
+		gpu.GetDevice().WaitForIdle();
+		AssetManager::SetActive(nullptr);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A scene not rendered while its mesh gained a submesh draws both when it is rendered again")
 	{
 		GPUContext gpu;

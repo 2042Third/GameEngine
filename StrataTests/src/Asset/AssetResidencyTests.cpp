@@ -461,6 +461,79 @@ TEST_SUITE("Asset.Residency")
 		CHECK(loader.GetCallCount() == loads + 1);
 	}
 
+	TEST_CASE("Source revisions tell a reimport from an eviction, also while the asset is not loaded")
+	{
+		ScopedFakeLoader loader;
+		constexpr uint64_t c_Unlimited = AssetResidencyBudgets::c_Unlimited;
+		Ref<FakeAssetManager> manager = CreateManager(MakeBudgets(c_Unlimited, c_Unlimited, c_Unlimited));
+		const AssetHandle handle = manager->Add(0x48000, MakeUsage(2 * c_KB));
+		CHECK(manager->GetSourceRevisions(UUID(0x48FFF)).Current == 0); // Unknown assets have none
+		const AssetSourceRevisions registered = manager->GetSourceRevisions(handle);
+		CHECK(registered.Current != 0);
+		CHECK(registered.Loaded == 0);
+
+		// Loads and evictions leave the source's revision as it is; the loaded object carries it while it is resident.
+		LoadAll(*manager, { handle });
+		CHECK(manager->GetSourceRevisions(handle).Current == registered.Current);
+		CHECK(manager->GetSourceRevisions(handle).Loaded == registered.Current);
+		CHECK(manager->TrimUnused(0) == 1);
+		CHECK(manager->GetSourceRevisions(handle).Current == registered.Current);
+		CHECK(manager->GetSourceRevisions(handle).Loaded == 0);
+
+		// Reloaded while it is not loaded (an evicted asset reimported): a new revision, published as a content change
+		// although no object changed, so that caches holding data derived from it learn that the data is stale. Nothing
+		// loads.
+		uint64_t version = manager->GetContentVersion();
+		manager->ReloadAsset(handle);
+		const AssetSourceRevisions reimported = manager->GetSourceRevisions(handle);
+		CHECK(reimported.Current != registered.Current);
+		CHECK(reimported.Loaded == 0);
+		CHECK(manager->GetAssetState(handle) == AssetState::Unloaded);
+		std::vector<AssetHandle> changes;
+		REQUIRE(manager->GetContentChanges(version, changes));
+		CHECK(changes == std::vector<AssetHandle> { handle });
+
+		// Reloaded while it is loaded: the previous object, with its revision, is served until the new one arrives, and the
+		// arrival is the content change.
+		LoadAll(*manager, { handle });
+		CHECK(manager->GetSourceRevisions(handle).Loaded == reimported.Current);
+		version = manager->GetContentVersion();
+		manager->ReloadAsset(handle);
+		const AssetSourceRevisions reloading = manager->GetSourceRevisions(handle);
+		CHECK(reloading.Current != reimported.Current);
+		CHECK(reloading.Loaded == reimported.Current);
+		CHECK(manager->GetContentVersion() == version);
+		manager->Update();
+		REQUIRE(manager->GetAssetState(handle) == AssetState::Ready);
+		CHECK(manager->GetSourceRevisions(handle).Loaded == reloading.Current);
+		CHECK(manager->GetContentVersion() != version);
+
+		// A reload abandoned before its object arrived leaves the previous object, older than the source.
+		manager->ReloadAsset(handle);
+		REQUIRE(manager->CancelLoad(handle));
+		manager->Update(); // The abandoned load's result is discarded
+		CHECK(manager->GetAssetState(handle) == AssetState::Ready);
+		CHECK(manager->GetSourceRevisions(handle).Loaded == reloading.Current);
+		CHECK(manager->GetSourceRevisions(handle).Current != reloading.Current);
+
+		// A memory asset added again is a new source. Revisions are unique in the process: another manager's revision of
+		// the same asset is another one.
+		AssetMetadata metadata;
+		metadata.Name = "Runtime";
+		const AssetHandle memory = manager->AddMemoryAsset(Material::Create(), metadata);
+		const AssetSourceRevisions added = manager->GetSourceRevisions(memory);
+		CHECK(added.Loaded == added.Current);
+		metadata.Handle = memory;
+		manager->AddMemoryAsset(Material::Create(), metadata);
+		CHECK(manager->GetSourceRevisions(memory).Current != added.Current);
+		CHECK(manager->GetSourceRevisions(memory).Loaded == manager->GetSourceRevisions(memory).Current);
+		Ref<FakeAssetManager> other = CreateManager(MakeBudgets(c_Unlimited, c_Unlimited, c_Unlimited));
+		other->Add(0x48000, MakeUsage(2 * c_KB));
+		CHECK(other->GetSourceRevisions(handle).Current != 0);
+		CHECK(other->GetSourceRevisions(handle).Current != manager->GetSourceRevisions(handle).Current);
+		CHECK(other->GetSourceRevisions(BuiltinAssets::CubeMesh).Current != manager->GetSourceRevisions(BuiltinAssets::CubeMesh).Current);
+	}
+
 	TEST_CASE("Built-in and memory assets are never evicted")
 	{
 		ScopedFakeLoader loader;
