@@ -11,6 +11,7 @@
 #include "Strata/Physics/PhysicsRuntime.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
+#include "Strata/Scene/SceneHierarchy.h"
 
 #include <Jolt/Jolt.h>
 #include <Jolt/Core/JobSystem.h>
@@ -413,10 +414,25 @@ namespace Strata
 			return true;
 		}
 
-		// Sets an entity's world transform to a simulated pose. The entity keeps its authored scale (including mirrored axes)
-		// whenever the new local transform can be expressed with it, so that only its translation and rotation change;
-		// otherwise (e.g. below a sheared parent) the local transform is decomposed, which folds mirroring into X. Returns
-		// false, leaving the entity unchanged, if its parent cannot be inverted or the transform is degenerate.
+		// Sets a transform to a simulated local pose. It keeps its authored scale (including mirrored axes) whenever the pose
+		// can be expressed with it, so that only its translation and rotation change; otherwise (e.g. below a sheared parent)
+		// the local transform is decomposed, which folds mirroring into X. Returns false, leaving the transform unchanged, if
+		// the pose is degenerate. Touches nothing else, so it may run on worker threads for distinct entities.
+		bool SetLocalPose(TransformComponent& transform, const glm::mat4& localTransform)
+		{
+			const glm::vec3 translation(localTransform[3]);
+			glm::quat rotation;
+			if (IsFinite(translation) && SolveRotationForScale(localTransform, transform.Scale, rotation))
+			{
+				transform.Translation = translation;
+				transform.Rotation = rotation;
+				return true;
+			}
+			return transform.SetTransform(localTransform);
+		}
+
+		// Sets an entity's world transform to a simulated pose (see SetLocalPose). Returns false, leaving the entity unchanged,
+		// if its parent cannot be inverted or the transform is degenerate.
 		bool WriteWorldTransform(Scene& scene, Entity entity, const glm::mat4& worldTransform)
 		{
 			glm::mat4 localTransform = worldTransform;
@@ -428,20 +444,10 @@ namespace Strata
 				localTransform = glm::inverse(parentWorld) * worldTransform;
 			}
 
+			if (!SetLocalPose(entity.GetComponent<TransformComponent>(), localTransform))
+				return false;
 			// Written without on_update (this world listens to it for edits), so the scene is told directly that the cached world
 			// transforms below the entity are stale.
-			TransformComponent& transform = entity.GetComponent<TransformComponent>();
-			const glm::vec3 translation(localTransform[3]);
-			glm::quat rotation;
-			if (IsFinite(translation) && SolveRotationForScale(localTransform, transform.Scale, rotation))
-			{
-				transform.Translation = translation;
-				transform.Rotation = rotation;
-				scene.MarkTransformChanged(entity);
-				return true;
-			}
-			if (!transform.SetTransform(localTransform))
-				return false;
 			scene.MarkTransformChanged(entity);
 			return true;
 		}
@@ -767,6 +773,23 @@ namespace Strata
 			BodyRecord* Record = nullptr;
 		};
 
+		// A dynamic body whose simulated pose is written to its entity in parallel with the others: one without a dynamic
+		// ancestor written in the same step, so its parent's world transform is known before the writes start (see
+		// WriteBackDynamicBodies). Each item touches only its own record and transform.
+		struct PoseWrite
+		{
+			BodyRecord* Record = nullptr;
+			entt::entity Handle = entt::null;
+			TransformComponent* Transform = nullptr;
+			glm::mat4 ParentWorld = glm::mat4(1.0f); // Identity for a root
+			bool HasParent = false;
+			bool HasChildren = false;
+			// Outcome, handled on the main thread afterwards, in order
+			bool Written = false;
+			bool NonFinite = false;
+			bool ScaleChanged = false;
+		};
+
 		// A cooked mesh shape restored in a world, shared by the colliders using the same data.
 		struct MeshShapeKey
 		{
@@ -950,6 +973,10 @@ namespace Strata
 		uint64_t WriteBackPass = 0;
 		uint64_t SyncPass = 0;
 		float LastStepTime = 0.0f;
+		float LastJoltTime = 0.0f;      // The parts of LastStepTime (see PhysicsStats)
+		float LastSyncTime = 0.0f;
+		float LastWriteBackTime = 0.0f;
+		float LastContactTime = 0.0f;
 		uint32_t LastSyncedBodies = 0;
 		uint32_t LastCheckedPairs = 0;
 		uint32_t LastWrittenBodies = 0;
@@ -970,9 +997,12 @@ namespace Strata
 		std::vector<ContactReport> Reports;
 		std::vector<TouchingPair> EndedPairs;
 		std::vector<TouchingPair> BegunPairs;
-		std::vector<JPH::BodyID> MovedBodies;
 		std::vector<JPH::BodyID> DeactivatedBodies;
-		std::vector<std::pair<uint32_t, entt::entity>> WriteBacks;   // Hierarchy depth and entity of the bodies to write back
+		std::vector<std::pair<uint32_t, entt::entity>> NestedWrites;  // Depth and entity of dynamic bodies below written ones
+		std::vector<PoseWrite> PoseWrites;                            // See WriteBackDynamicBodies
+		std::vector<entt::entity> WrittenEntities;
+		std::vector<uint64_t> MovedBodyBits;                          // Per body index: moved in this step (ordering scratch)
+		std::vector<std::pair<entt::entity, BodyRecord*>> AwakeRecords; // See SyncEntitiesToBodies
 		std::vector<Entity> VisitStack;                               // See VisitSubtree
 		std::vector<entt::entity> ChangeScratch;                      // See ChangeList::TakeInto
 		std::unordered_set<entt::entity> VisitedOwners;
@@ -1035,14 +1065,6 @@ namespace Strata
 			glm::quat rotation;
 			glm::vec3 scale;
 			return Math::DecomposeTransform(scene.GetWorldTransform(entity), translation, rotation, scale) ? scale : fallback;
-		}
-
-		uint32_t GetHierarchyDepth(Entity entity)
-		{
-			uint32_t depth = 0;
-			for (Entity parent = entity.GetParent(); parent.IsValid(); parent = parent.GetParent())
-				depth++;
-			return depth;
 		}
 
 		template<typename Data>
@@ -2706,19 +2728,62 @@ namespace Strata
 		// Brings the bodies in line with their entities before a step. Only awake bodies (whose entities may have been moved
 		// without a signal), the records that need attention (see NeedsPolling) and the bodies below entities that moved
 		// without a signal are visited, so sleeping and static bodies cost nothing otherwise.
+		//
+		// Most awake bodies are where their entities are (physics put them there in the last step): those are found in parallel
+		// chunks, reading only the scene's current cached world transforms (Scene::FindCurrentWorldTransform) and their own
+		// records, and need nothing more. The others are synchronized one by one, in entity order.
 		void SyncEntitiesToBodies(PhysicsWorldData& data, float timestep)
 		{
 			ST_PROFILE_FUNCTION();
 
 			RemovePendingDestroys(data);
 			RefreshMeshBodies(data);
+			data.SyncPass++;
+			data.LastSyncedBodies = 0;
+			data.SyncFollowers.clear();
 
-			std::vector<entt::entity>& candidates = data.SyncCandidates;
-			candidates.clear();
+			std::vector<std::pair<entt::entity, BodyRecord*>>& awake = data.AwakeRecords;
+			awake.clear();
 			for (const JPH::BodyID& bodyID : GetAwakeBodies(data))
 			{
 				entt::entity handle = entt::null;
-				if (FindBodyRecord(data, bodyID, &handle))
+				if (BodyRecord* record = FindBodyRecord(data, bodyID, &handle))
+					awake.emplace_back(handle, record);
+			}
+
+			const Scene& scene = *data.OwnerScene;
+			const uint64_t pass = data.SyncPass;
+			std::atomic<uint32_t> unchanged = 0;
+			const auto skipUnchanged = [&](uint32_t begin, uint32_t end)
+			{
+				uint32_t skipped = 0;
+				for (uint32_t index = begin; index < end; index++)
+				{
+					auto& [handle, record] = awake[index];
+					if (record->TransformDirty || record->KinematicMoving || !record->InSimulation)
+						continue;
+					const glm::mat4* world = scene.FindCurrentWorldTransform(handle);
+					if (!world || *world != record->LastWorldTransform)
+						continue;
+					record->SyncPass = pass;
+					record = nullptr;
+					skipped++;
+				}
+				unchanged.fetch_add(skipped, std::memory_order_relaxed);
+			};
+			constexpr uint32_t c_ParallelSyncThreshold = 1024;
+			const uint32_t awakeCount = static_cast<uint32_t>(awake.size());
+			if (awakeCount >= c_ParallelSyncThreshold && JobSystem::IsInitialized())
+				JobSystem::ParallelFor(awakeCount, std::max<uint32_t>(128, awakeCount / ((JobSystem::GetWorkerThreadCount() + 1) * 4)), skipUnchanged);
+			else
+				skipUnchanged(0, awakeCount);
+			data.LastSyncedBodies = unchanged.load(std::memory_order_relaxed);
+
+			std::vector<entt::entity>& candidates = data.SyncCandidates;
+			candidates.clear();
+			for (const auto& [handle, record] : awake)
+			{
+				if (record)
 					candidates.push_back(handle);
 			}
 
@@ -2744,9 +2809,6 @@ namespace Strata
 			// without a signal, in the order they were found.
 			std::sort(candidates.begin(), candidates.end());
 			candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
-			data.SyncPass++;
-			data.LastSyncedBodies = 0;
-			data.SyncFollowers.clear();
 			for (entt::entity handle : candidates)
 				SyncBody(data, handle, timestep);
 			for (size_t index = 0; index < data.SyncFollowers.size(); index++)
@@ -2935,42 +2997,209 @@ namespace Strata
 			});
 		}
 
-		// Writes the poses of the dynamic bodies that moved (awake, or fell asleep during this step) to their entities, parents
-		// before children so that every child's local transform is computed against its parent's final pose.
+		// A body whose simulated pose could not be written to its entity (its parent cannot be inverted, which the sync before
+		// the step notices only when the transform changed, or the pose is degenerate): the body goes back to its entity's
+		// pose and leaves the simulation until the transform is valid again.
+		void SuspendUnwritableBody(PhysicsWorldData& data, entt::entity handle, BodyRecord& record)
+		{
+			if (ShouldWarn(data, record.EntityID, PhysicsWarning::DegenerateTransform))
+			{
+				ST_CORE_WARN("Physics: the parent of '{}' is scaled to (nearly) zero, so its simulated pose cannot be written back; its body leaves the "
+					"simulation until the parent's transform is valid", Entity(handle, data.OwnerScene).GetName());
+			}
+			glm::vec3 entityPosition;
+			glm::quat entityRotation;
+			glm::vec3 entityScale;
+			if (Math::DecomposeTransform(record.LastWorldTransform, entityPosition, entityRotation, entityScale))
+				data.JoltSystem->GetBodyInterface().SetPositionAndRotation(record.BodyID, ToJoltPosition(entityPosition), ToJolt(entityRotation), JPH::EActivation::DontActivate);
+			RemoveFromSimulation(data, record);
+			record.Suspended = true;
+			UpdatePolling(data, handle, record);
+			data.LeftAfterStep.push_back(record.EntityID);
+		}
+
+		void WarnNonFinitePose(PhysicsWorldData& data, entt::entity handle, const BodyRecord& record)
+		{
+			if (ShouldWarn(data, record.EntityID, PhysicsWarning::NonFiniteState))
+				ST_CORE_ERROR("Physics: the simulation produced a non-finite pose for '{}'; its transform is not updated", Entity(handle, data.OwnerScene).GetName());
+		}
+
+		// Writes one body's simulated pose to its entity, given its parent's world transform. The entity keeps its own scale:
+		// the pose is composed with its world scale as of the last synchronization (the shape's within tolerance), or its
+		// current one if it was edited without a signal while the body slept, in which case the shape is rebuilt before the
+		// next step (ScaleChanged).
+		void WritePose(const JPH::BodyInterface& bodies, PoseWrite& item)
+		{
+			BodyRecord& record = *item.Record;
+			JPH::RVec3 bodyPosition;
+			JPH::Quat bodyRotation;
+			bodies.GetPositionAndRotation(record.BodyID, bodyPosition, bodyRotation);
+			const glm::vec3 position = ToGlm(bodyPosition);
+			const glm::quat rotation = ToGlm(bodyRotation);
+			if (!IsFinite(position) || !IsFinite(rotation))
+			{
+				item.NonFinite = true;
+				return;
+			}
+
+			// The same products as Scene::GetWorldTransform and UpdateWorldTransforms, so that LastWorldTransform equals the
+			// matrix the scene will cache (the next step compares them).
+			const glm::mat4 currentWorld = item.HasParent ? item.ParentWorld * item.Transform->GetTransform() : item.Transform->GetTransform();
+			glm::vec3 worldScale = record.WorldScale;
+			if (currentWorld != record.LastWorldTransform)
+			{
+				glm::vec3 translation;
+				glm::quat currentRotation;
+				glm::vec3 scale;
+				if (Math::DecomposeTransform(currentWorld, translation, currentRotation, scale))
+					worldScale = scale;
+				item.ScaleChanged = HasScaleChanged(worldScale, record.ShapeScale);
+			}
+
+			const glm::mat4 pose = Math::ComposeTransform(position, glm::normalize(rotation), worldScale);
+			if (!SetLocalPose(*item.Transform, item.HasParent ? glm::inverse(item.ParentWorld) * pose : pose))
+				return;
+			record.LastWorldTransform = item.HasParent ? item.ParentWorld * item.Transform->GetTransform() : item.Transform->GetTransform();
+			record.WorldScale = worldScale;
+			item.Written = true;
+		}
+
+		// Writes the poses of the dynamic bodies that moved (awake, or fell asleep during this step) to their entities.
+		//
+		// Bodies without a dynamic ancestor written in this step (nearly all of them: roots, and bodies below static or
+		// kinematic parents) are written in parallel chunks on the job system, with their parents' world transforms read
+		// before the writes start; each touches only its own record and transform, through pointers fetched beforehand, never
+		// the registry. The scene is then told about every written transform in one batch (Scene::MarkTransformsChanged),
+		// and the rare cases (scale edits, non-finite poses, failed writes, descendants to update) are handled in body order
+		// on the main thread. Dynamic bodies below written ones (nested dynamics) follow, one by one, parents before
+		// children, so that every child's local transform is computed against its parent's final pose.
 		void WriteBackDynamicBodies(PhysicsWorldData& data)
 		{
 			ST_PROFILE_FUNCTION();
 
 			Scene& scene = *data.OwnerScene;
+			entt::registry& registry = scene.GetRegistry();
 			const JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterfaceNoLock();
-			std::vector<JPH::BodyID>& movedBodies = data.MovedBodies;
-			const std::span<const JPH::BodyID> awake = GetAwakeBodies(data);
-			movedBodies.assign(awake.begin(), awake.end());
-			data.Activations.SwapDeactivated(data.DeactivatedBodies);
-			movedBodies.insert(movedBodies.end(), data.DeactivatedBodies.begin(), data.DeactivatedBodies.end());
 
-			std::vector<std::pair<uint32_t, entt::entity>>& writeBacks = data.WriteBacks;
-			writeBacks.clear();
-			for (const JPH::BodyID& bodyID : movedBodies)
+			// The bodies that moved, in body index order (a bitmap: Jolt's active list has no fixed order), each once.
+			std::vector<uint64_t>& movedBits = data.MovedBodyBits;
+			movedBits.assign((data.BodySlots.size() + 63) / 64, 0);
+			const auto markMoved = [&](const JPH::BodyID& bodyID)
 			{
-				entt::entity handle = entt::null;
-				const BodyRecord* record = FindBodyRecord(data, bodyID, &handle);
-				if (!record || record->Type != RigidBodyType::Dynamic || !record->InSimulation)
-					continue;
-				writeBacks.emplace_back(GetHierarchyDepth(Entity(handle, &scene)), handle);
-			}
-			// By depth, then by entity: deterministic, parents first.
-			std::sort(writeBacks.begin(), writeBacks.end());
-			writeBacks.erase(std::unique(writeBacks.begin(), writeBacks.end()), writeBacks.end());
-			data.LastWrittenBodies = static_cast<uint32_t>(writeBacks.size());
+				const uint32_t index = bodyID.GetIndex();
+				if (index < data.BodySlots.size())
+					movedBits[index / 64] |= uint64_t(1) << (index % 64);
+			};
+			for (const JPH::BodyID& bodyID : GetAwakeBodies(data))
+				markMoved(bodyID);
+			data.Activations.SwapDeactivated(data.DeactivatedBodies);
+			for (const JPH::BodyID& bodyID : data.DeactivatedBodies)
+				markMoved(bodyID);
 
 			data.WriteBackPass++;
-			for (const auto& [depth, handle] : writeBacks)
-				FindRecord(data, handle)->WriteBackPass = data.WriteBackPass;
-
-			for (const auto& [depth, handle] : writeBacks)
+			std::vector<PoseWrite>& writes = data.PoseWrites;
+			writes.clear();
+			for (size_t word = 0; word < movedBits.size(); word++)
 			{
-				BodyRecord& record = *FindRecord(data, handle); // Filtered above
+				for (uint64_t bits = movedBits[word]; bits != 0; bits &= bits - 1)
+				{
+					const BodySlot& slot = data.BodySlots[word * 64 + static_cast<size_t>(std::countr_zero(bits))];
+					BodyRecord* record = slot.Record;
+					if (!record || record->Type != RigidBodyType::Dynamic || !record->InSimulation)
+						continue;
+					record->WriteBackPass = data.WriteBackPass;
+					writes.push_back(PoseWrite { record, slot.Entity });
+				}
+			}
+			data.LastWrittenBodies = static_cast<uint32_t>(writes.size());
+
+			// Bodies below another body written in this step wait for its pose (nested dynamics, serial); the others get their
+			// transform and their parent's world transform now.
+			std::vector<std::pair<uint32_t, entt::entity>>& nested = data.NestedWrites;
+			nested.clear();
+			const auto isWrittenAbove = [&](Entity entity)
+			{
+				for (Entity ancestor = entity.GetParent(); ancestor.IsValid(); ancestor = ancestor.GetParent())
+				{
+					const BodyRecord* record = FindRecord(data, ancestor.GetHandle());
+					if (record && record->WriteBackPass == data.WriteBackPass)
+						return true;
+				}
+				return false;
+			};
+			size_t kept = 0;
+			for (PoseWrite& write : writes)
+			{
+				const Entity entity(write.Handle, &scene);
+				const HierarchyComponent& node = registry.get<HierarchyComponent>(write.Handle);
+				write.Transform = &registry.get<TransformComponent>(write.Handle);
+				write.HasChildren = node.FirstChild != entt::null;
+				write.HasParent = node.Parent != entt::null;
+				if (write.HasParent)
+				{
+					if (isWrittenAbove(entity))
+					{
+						nested.emplace_back(scene.GetDepth(entity), write.Handle);
+						continue;
+					}
+					write.ParentWorld = scene.GetWorldTransform(Entity(node.Parent, &scene));
+					if (!IsInvertible(write.ParentWorld))
+					{
+						SuspendUnwritableBody(data, write.Handle, *write.Record);
+						continue;
+					}
+				}
+				writes[kept++] = write;
+			}
+			writes.resize(kept);
+
+			// The writes: in parallel chunks when there are many.
+			constexpr size_t c_ParallelWriteThreshold = 512;
+			const uint32_t count = static_cast<uint32_t>(writes.size());
+			if (count >= c_ParallelWriteThreshold && JobSystem::IsInitialized())
+			{
+				const uint32_t batchSize = std::max<uint32_t>(64, count / ((JobSystem::GetWorkerThreadCount() + 1) * 4));
+				JobSystem::ParallelFor(count, batchSize, [&](uint32_t begin, uint32_t end)
+				{
+					for (uint32_t index = begin; index < end; index++)
+						WritePose(bodies, writes[index]);
+				});
+			}
+			else
+			{
+				for (PoseWrite& write : writes)
+					WritePose(bodies, write);
+			}
+
+			// The outcomes, in body order on the main thread.
+			std::vector<entt::entity>& written = data.WrittenEntities;
+			written.clear();
+			for (PoseWrite& write : writes)
+			{
+				if (write.NonFinite)
+				{
+					WarnNonFinitePose(data, write.Handle, *write.Record);
+					continue;
+				}
+				if (write.ScaleChanged)
+					data.OwnerRefreshes.Add(write.Handle);
+				if (write.Written)
+					written.push_back(write.Handle);
+				else
+					SuspendUnwritableBody(data, write.Handle, *write.Record);
+			}
+			scene.MarkTransformsChanged(written);
+			for (const PoseWrite& write : writes)
+			{
+				if (write.Written && write.HasChildren)
+					UpdateDescendantsOfMovedBody(data, Entity(write.Handle, &scene), true);
+			}
+
+			// Nested dynamics: by depth, then by entity (deterministic, parents first), each against its parent's new pose.
+			std::sort(nested.begin(), nested.end());
+			for (const auto& [depth, handle] : nested)
+			{
+				BodyRecord& record = *FindRecord(data, handle); // Listed above
 				const Entity entity(handle, &scene);
 
 				JPH::RVec3 bodyPosition;
@@ -2980,14 +3209,11 @@ namespace Strata
 				const glm::quat rotation = ToGlm(bodyRotation);
 				if (!IsFinite(position) || !IsFinite(rotation))
 				{
-					if (ShouldWarn(data, record.EntityID, PhysicsWarning::NonFiniteState))
-						ST_CORE_ERROR("Physics: the simulation produced a non-finite pose for '{}'; its transform is not updated", entity.GetName());
+					WarnNonFinitePose(data, handle, record);
 					continue;
 				}
 
-				// The entity keeps its own scale: the pose is composed with its world scale as of the last synchronization (the
-				// shape's within tolerance), or its current one if it was edited without a signal while the body slept, in which
-				// case the shape is rebuilt before the next step.
+				// As in WritePose.
 				glm::vec3 worldScale = record.WorldScale;
 				if (scene.GetWorldTransform(entity) != record.LastWorldTransform)
 				{
@@ -2998,19 +3224,7 @@ namespace Strata
 
 				if (!WriteWorldTransform(scene, entity, Math::ComposeTransform(position, glm::normalize(rotation), worldScale)))
 				{
-					// The parent cannot be inverted (the sync before the step notices this only when the transform changed):
-					// the body goes back to its entity's pose and leaves the simulation until the parent is valid again.
-					if (ShouldWarn(data, record.EntityID, PhysicsWarning::DegenerateTransform))
-						ST_CORE_WARN("Physics: the parent of '{}' is scaled to (nearly) zero, so its simulated pose cannot be written back; its body leaves the simulation until the parent's transform is valid", entity.GetName());
-					glm::vec3 entityPosition;
-					glm::quat entityRotation;
-					glm::vec3 entityScale;
-					if (Math::DecomposeTransform(record.LastWorldTransform, entityPosition, entityRotation, entityScale))
-						data.JoltSystem->GetBodyInterface().SetPositionAndRotation(record.BodyID, ToJoltPosition(entityPosition), ToJolt(entityRotation), JPH::EActivation::DontActivate);
-					RemoveFromSimulation(data, record);
-					record.Suspended = true;
-					UpdatePolling(data, handle, record);
-					data.LeftAfterStep.push_back(record.EntityID);
+					SuspendUnwritableBody(data, handle, record);
 					continue;
 				}
 				record.LastWorldTransform = scene.GetWorldTransform(entity);
@@ -3310,13 +3524,15 @@ namespace Strata
 			return;
 
 		PhysicsWorldData& data = *m_Data;
-		const auto startTime = std::chrono::steady_clock::now();
+		using Clock = std::chrono::steady_clock;
+		const auto millisecondsBetween = [](Clock::time_point start, Clock::time_point end) { return std::chrono::duration<float, std::milli>(end - start).count(); };
+		const Clock::time_point startTime = Clock::now();
 		ApplyChanges(data);
 		data.HeldLastStep = HoldForMeshes(data, timestep);
 		if (data.HeldLastStep)
 		{
 			data.HeldStepCount++;
-			data.LastStepTime = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - startTime).count();
+			data.LastStepTime = millisecondsBetween(startTime, Clock::now());
 			return;
 		}
 
@@ -3326,18 +3542,26 @@ namespace Strata
 		CollectCheckedPairs(data);
 		data.Activations.Clear();
 		data.Contacts.BeginStep();
+		const Clock::time_point joltStart = Clock::now();
 		{
 			ST_PROFILE_SCOPE("PhysicsWorld::Simulate - Jolt");
 			const JPH::EPhysicsUpdateError errors = data.JoltSystem->Update(timestep, static_cast<int>(data.Settings.CollisionSteps), data.Allocator.get(), data.Jobs.get());
 			if (errors != JPH::EPhysicsUpdateError::None)
 				ReportUpdateErrors(data, errors);
 		}
+		const Clock::time_point joltEnd = Clock::now();
 
 		data.LeftAfterStep.clear();
 		WriteBackDynamicBodies(data);
+		const Clock::time_point writeBackEnd = Clock::now();
 		ProcessContacts(data);
+		const Clock::time_point endTime = Clock::now();
 
-		data.LastStepTime = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - startTime).count();
+		data.LastSyncTime = millisecondsBetween(startTime, joltStart);
+		data.LastJoltTime = millisecondsBetween(joltStart, joltEnd);
+		data.LastWriteBackTime = millisecondsBetween(joltEnd, writeBackEnd);
+		data.LastContactTime = millisecondsBetween(writeBackEnd, endTime);
+		data.LastStepTime = millisecondsBetween(startTime, endTime);
 	}
 
 	std::vector<CollisionEvent> PhysicsWorld::TakeCollisionEvents()
@@ -3699,6 +3923,10 @@ namespace Strata
 		stats.JobCount = data.JobCounters.Jobs.load(std::memory_order_relaxed);
 		stats.WorkerJobCount = data.JobCounters.WorkerJobs.load(std::memory_order_relaxed);
 		stats.LastStepTime = data.LastStepTime;
+		stats.JoltStepTime = data.LastJoltTime;
+		stats.SyncTime = data.LastSyncTime;
+		stats.WriteBackTime = data.LastWriteBackTime;
+		stats.ContactTime = data.LastContactTime;
 		return stats;
 	}
 

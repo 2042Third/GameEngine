@@ -194,6 +194,61 @@ TEST_SUITE("Physics.Scale")
 		scene.OnRuntimeStop();
 	}
 
+	TEST_CASE("Poses written back in parallel chunks equal those written one by one")
+	{
+		// Root bodies, dynamic bodies below a static parent (written in parallel against the parent's world transform) and
+		// dynamic bodies below dynamic ones (written afterwards, parents first): the same poses with and without workers.
+		const auto simulate = [](uint32_t workers)
+		{
+			Scope<ScopedJobSystem> jobs = workers > 0 ? CreateScope<ScopedJobSystem>(workers) : nullptr;
+			Scene scene;
+			CreateFloor(scene, 1600);
+			for (uint32_t index = 0; index < 1500; index++)
+				CreateDynamicBox(scene, "Box " + std::to_string(index), glm::vec3(1.5f * static_cast<float>(index % 40), 2.0f, 1.5f * static_cast<float>(index / 40)));
+
+			Entity platform = CreateStaticBox(scene, "Platform", glm::vec3(-20.0f, 1.0f, 0.0f), glm::vec3(5.0f, 0.25f, 5.0f));
+			platform.GetTransform().Rotation = glm::angleAxis(glm::radians(10.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+			platform.GetTransform().Scale = glm::vec3(2.0f);
+			for (uint32_t index = 0; index < 20; index++)
+			{
+				Entity child = scene.CreateChildEntity(platform, "Child " + std::to_string(index));
+				child.GetTransform().Translation = glm::vec3(static_cast<float>(index % 5) - 2.0f, 1.0f, static_cast<float>(index / 5) - 2.0f);
+				child.AddComponent<RigidBodyComponent>();
+				child.AddComponent<BoxColliderComponent>().HalfExtents = glm::vec3(0.2f);
+			}
+			for (uint32_t index = 0; index < 10; index++)
+			{
+				Entity parent = CreateDynamicBox(scene, "Carrier " + std::to_string(index), glm::vec3(1.5f * static_cast<float>(index), 6.0f, -10.0f));
+				Entity rider = scene.CreateChildEntity(parent, "Rider " + std::to_string(index));
+				rider.GetTransform().Translation = glm::vec3(0.0f, 1.5f, 0.0f);
+				rider.AddComponent<RigidBodyComponent>();
+				rider.AddComponent<SphereColliderComponent>().Radius = 0.3f;
+			}
+
+			scene.OnRuntimeStart();
+			StepScene(scene, 40); // Landed, still awake
+			CHECK(GetPhysics(scene).GetStats().WrittenBodyCount > 1000);
+			std::string error;
+			CHECK_MESSAGE(scene.ValidateWorldTransforms(&error), error);
+			std::vector<glm::mat4> poses;
+			for (const Entity entity : scene.GetEntitiesInHierarchyOrder())
+				poses.push_back(scene.GetWorldTransform(entity));
+			scene.OnRuntimeStop();
+			return poses;
+		};
+
+		const std::vector<glm::mat4> serial = simulate(0);
+		const std::vector<glm::mat4> parallel = simulate(4);
+		REQUIRE(serial.size() == parallel.size());
+		size_t different = 0;
+		for (size_t index = 0; index < serial.size(); index++)
+		{
+			if (serial[index] != parallel[index])
+				different++;
+		}
+		CHECK(different == 0);
+	}
+
 	TEST_CASE("Contact events do not depend on how many threads report them")
 	{
 		// Reports from Jolt's job threads go into per-thread buffers, merged after the step: the events must come out the

@@ -173,6 +173,10 @@ namespace Strata
 		// The entity's world transform right now: the cached one when neither it nor an ancestor changed since the last
 		// update, otherwise computed from the hierarchy (costs the entity's depth).
 		glm::mat4 GetWorldTransform(Entity entity) const;
+		// The entity's cached world transform if it is current (neither the entity nor an ancestor changed since the last
+		// update), else null; costs the entity's depth. Unlike GetWorldTransform it only reads the scene, so worker threads
+		// may call it for many entities while no thread changes the scene (physics comparing its bodies with their entities).
+		const glm::mat4* FindCurrentWorldTransform(entt::entity handle) const;
 		// Sets the entity's local transform so that its world transform becomes `worldTransform`, and emits the
 		// TransformComponent on_update signal like Entity::MarkModified. Returns false (leaving the entity unchanged, without
 		// a signal) if the transform cannot be represented, e.g. under a parent with zero scale.
@@ -180,6 +184,8 @@ namespace Strata
 		// Records that the entity's TransformComponent was written, without emitting on_update (for writers that must not
 		// notify listeners, e.g. physics writing simulated poses back).
 		void MarkTransformChanged(Entity entity);
+		// MarkTransformChanged for many entities of this scene at once (invalid handles are skipped).
+		void MarkTransformsChanged(std::span<const entt::entity> entities);
 		// Marks every world transform stale: the next UpdateWorldTransforms recomputes the whole scene.
 		void InvalidateAllTransforms();
 		// A parent whose world transform's determinant is not above this (in magnitude) cannot be inverted, so the world

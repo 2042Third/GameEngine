@@ -1093,6 +1093,33 @@ namespace Strata
 			MarkTransformDirty(entity.GetHandle());
 	}
 
+	void Scene::MarkTransformsChanged(std::span<const entt::entity> entities)
+	{
+		for (const entt::entity handle : entities)
+		{
+			if (m_Registry.valid(handle))
+				MarkTransformDirty(handle);
+		}
+	}
+
+	const glm::mat4* Scene::FindCurrentWorldTransform(entt::entity handle) const
+	{
+		const auto* hierarchy = m_Registry.storage<HierarchyComponent>();
+		const auto* worlds = m_Registry.storage<WorldTransformComponent>();
+		if (!hierarchy || !worlds || !worlds->contains(handle))
+			return nullptr;
+		for (entt::entity current = handle; current != entt::null;)
+		{
+			if (!hierarchy->contains(current))
+				return nullptr;
+			const HierarchyComponent& node = hierarchy->get(current);
+			if (node.TransformDirty)
+				return nullptr;
+			current = node.Parent;
+		}
+		return &worlds->get(handle).Matrix;
+	}
+
 	void Scene::InvalidateAllTransforms()
 	{
 		for (entt::entity root = m_FirstRoot; root != entt::null; root = GetHierarchy(root).NextSibling)

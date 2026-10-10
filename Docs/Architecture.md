@@ -186,7 +186,14 @@ the step, and each touching pair knows its position in the pair lists of both it
 in constant time (`PhysicsStats::PairIndexOperations` counts the list writes). Bodies created while changes are applied
 (play start, a prefab spawn, a streamed cell) join the simulation in one batch per activation mode
 (`AddBodiesPrepare`/`AddBodiesFinalize`), and destroyed bodies leave it in one batch, when `ApplyPendingChanges` ends;
-each Jolt body index leads to its entity and record in constant time (`BodySlot`).
+each Jolt body index leads to its entity and record in constant time (`BodySlot`). Around each step the work on awake
+bodies runs on the job system: the synchronization skips, in parallel chunks, the bodies whose entity is where the last
+step put it (`Scene::FindCurrentWorldTransform` reads only current cached matrices), and the write-back writes the poses of
+bodies without a dynamic ancestor in parallel chunks, each touching only its own record and `TransformComponent` through
+pointers fetched beforehand, against parent world transforms read before the writes, then tells the scene about all of them
+at once (`Scene::MarkTransformsChanged`, no `on_update`); bodies below other written dynamic bodies follow one by one,
+parents first, and the rare cases (scale edits, failed writes, descendants to update) are handled on the main thread in body
+order, so the results do not depend on the number of threads.
 
 **Audio** (`Audio/`). `AudioEngine` wraps the miniaudio mixer, output device, listener and one-shots (main-thread
 API; mixing runs on miniaudio's audio thread, or is pulled with `AdvanceNullDevice`/`ReadFrames` without a device).
@@ -462,8 +469,9 @@ A frame of a scene where nothing changed costs (almost) nothing, however many en
 | Hierarchy moves (a bounded log of the entities reparented or reordered, by hierarchy version) | `SetParent`, `SetSiblingIndex`, `PlaceEntities` | `GetHierarchyMoves`: the script update order places only the scripted entities that moved |
 | Name and tag indices (hash buckets with constant-time removal) | `NameComponent`/`TagComponent` signals, after the first lookup built them | `FindEntityByName`, `FindEntitiesByTag` (cost: the entities with that name or tag) |
 
-- **Dirty transforms.** `TransformComponent` `on_construct`/`on_update` (and `MarkTransformChanged`, which physics uses
-  for written-back poses because its own listeners must not hear them) mark the entity. An update drops the marked
+- **Dirty transforms.** `TransformComponent` `on_construct`/`on_update` (and `MarkTransformChanged` or, for many entities,
+  `MarkTransformsChanged`, which physics uses for written-back poses because its own listeners must not hear them) mark the
+  entity. An update drops the marked
   entities with a marked ancestor (memoized, so all checks of one update are linear), then recomputes the remaining
   subtrees level by level; once a level has 1,024 independent subtrees or more they are walked in parallel with
   `JobSystem::ParallelFor`. Writers must signal (the transform contract, AGENTS.md "Architecture rules");

@@ -433,6 +433,41 @@ TEST_SUITE("Scene.Transforms")
 		CHECK(child.GetComponent<WorldTransformComponent>().Matrix[3].x == doctest::Approx(5.0f));
 	}
 
+	TEST_CASE("Current cached world transforms are found without computing, and many writes are told at once")
+	{
+		Scene scene;
+		Entity parent = scene.CreateEntity("Parent");
+		parent.GetTransform().Translation = glm::vec3(1.0f, 0.0f, 0.0f);
+		Entity child = scene.CreateChildEntity(parent, "Child");
+		child.GetTransform().Translation = glm::vec3(0.0f, 2.0f, 0.0f);
+		Entity other = scene.CreateEntity("Other");
+
+		// New entities have no current cache until the scene updates.
+		CHECK(scene.FindCurrentWorldTransform(child.GetHandle()) == nullptr);
+		scene.UpdateWorldTransforms();
+		const glm::mat4* cached = scene.FindCurrentWorldTransform(child.GetHandle());
+		REQUIRE(cached != nullptr);
+		CHECK(*cached == scene.GetWorldTransform(child));
+		CHECK((*cached)[3].x == doctest::Approx(1.0f));
+		CHECK(scene.FindCurrentWorldTransform(entt::null) == nullptr);
+
+		// Writes told without a signal, as physics writes poses back: the entity and what lies below it are stale until the
+		// next update, the others stay current.
+		parent.GetTransform().Translation.x = 4.0f;
+		other.GetTransform().Translation.x = 3.0f;
+		const entt::entity written[] = { parent.GetHandle(), other.GetHandle(), entt::null };
+		scene.MarkTransformsChanged(written);
+		CHECK(scene.FindCurrentWorldTransform(parent.GetHandle()) == nullptr);
+		CHECK(scene.FindCurrentWorldTransform(child.GetHandle()) == nullptr);
+		CHECK(scene.FindCurrentWorldTransform(other.GetHandle()) == nullptr);
+		CHECK(scene.GetWorldTransform(child)[3].x == doctest::Approx(4.0f));
+		scene.UpdateWorldTransforms();
+		REQUIRE(scene.FindCurrentWorldTransform(child.GetHandle()) != nullptr);
+		CHECK((*scene.FindCurrentWorldTransform(child.GetHandle()))[3].x == doctest::Approx(4.0f));
+		CHECK((*scene.FindCurrentWorldTransform(other.GetHandle()))[3].x == doctest::Approx(3.0f));
+		CheckSceneCaches(scene);
+	}
+
 	TEST_CASE("Validation accepts world transforms that overflow and names the element that differs")
 	{
 		// Legal but huge scales: the child's world matrix overflows to infinity, and NaN appears below it (infinity times

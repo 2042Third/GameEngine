@@ -113,6 +113,12 @@ namespace Strata
 		uint64_t JobCount = 0;           // Simulation jobs run since the world was created, on any thread
 		uint64_t WorkerJobCount = 0;     // The part of JobCount run by JobSystem worker threads (depends on thread timing)
 		float LastStepTime = 0.0f;       // Wall time of the last step in milliseconds, including transform synchronization
+		// The parts of LastStepTime, in milliseconds: Jolt's own step, and Strata's work around it (bringing the bodies in line
+		// with their entities, writing simulated poses back, turning contacts into events).
+		float JoltStepTime = 0.0f;
+		float SyncTime = 0.0f;
+		float WriteBackTime = 0.0f;
+		float ContactTime = 0.0f;
 	};
 
 	// Triangle data used to build MeshColliderComponent shapes.
