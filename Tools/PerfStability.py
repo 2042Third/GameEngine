@@ -6,15 +6,18 @@ that can affect performance, on the reference machine (AGENTS.md, "Testing"):
 
     python Tools/PerfStability.py --runs 5                    # ctest --preset windows-release -L perf, five times
     python Tools/PerfStability.py --preset linux-release --runs 3
+    python Tools/PerfStability.py --runs 5 --wait-quiet 20    # each run waits until the machine is less than 20% busy
     python Tools/PerfStability.py --results a.json b.json     # report on results files kept from earlier runs
 
 Each run executes `ctest --preset <preset> -L perf` from the repository and keeps its log and its results file
 (<build>/PerfResults/<config>.json, which CTest clears at the start of every run) in the output directory. The report:
 
-- per run: whether CTest passed, how long it took, the failed tests, every metric that needed more than one attempt of
-  its confirmed check (with the attempts), and the canary (Perf.Harness.Sort200k, a fixed sort) relative to its
-  reference measurement. A failing run whose confirmation attempts were all slow, while the canary was slow too, was
-  slowed down by the machine's other work rather than by the code;
+- per run: whether CTest passed, how long it took, how busy the machine's CPUs were meanwhile (the perf tests included;
+  Windows; elsewhere the load average), the canary (Perf.Harness.Sort200k, a fixed sort) relative to its reference
+  measurement, how many metrics needed confirmation and failed, the failed tests, and every metric that needed more
+  than one attempt of its confirmed check (with the attempts). A run in which many unrelated metrics were over budget
+  in every attempt at once, on a busy machine and with a slow canary, was slowed down by the machine's other work
+  rather than by the code;
 - per metric: its unit, budget and target, in how many runs it was recorded, the minimum, median and maximum of its
   value (the deciding value of a confirmed check), the largest value as a share of the budget, the pass rate, and how
   many runs confirmed it with more than one attempt.
@@ -37,6 +40,9 @@ import time
 REPOSITORY_DIRECTORY = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUDGET_FILE = os.path.join(REPOSITORY_DIRECTORY, "StrataTests", "Perf", "Budgets.json")
 CANARY_METRIC = "Perf.Harness.Sort200k"
+# --wait-quiet: the machine counts as quiet after this many windows of this many seconds in a row below the limit.
+QUIET_WINDOW_SECONDS = 10
+QUIET_WINDOWS = 3
 FAILED_TEST = re.compile(r"^\s*\d+\s*-\s*(\S+)\s*\((Failed|Timeout|Subprocess aborted|SEGFAULT|Exception|Not Run)\)")
 
 
@@ -90,18 +96,74 @@ def resolve_results_file(preset_name):
     return os.path.normpath(os.path.join(binary_directory, "PerfResults", f"{configuration}.json"))
 
 
+def system_cpu_times():
+    """(idle, total) CPU time of the whole machine so far, on Windows; None elsewhere or when it cannot be read."""
+    if os.name != "nt":
+        return None
+    import ctypes
+    from ctypes import wintypes
+    idle, kernel, user = wintypes.FILETIME(), wintypes.FILETIME(), wintypes.FILETIME()
+    if not ctypes.windll.kernel32.GetSystemTimes(ctypes.byref(idle), ctypes.byref(kernel), ctypes.byref(user)):
+        return None
+
+    def ticks(filetime):
+        return (filetime.dwHighDateTime << 32) | filetime.dwLowDateTime
+
+    # Kernel time includes idle time.
+    return ticks(idle), ticks(kernel) + ticks(user)
+
+
+def machine_load(before):
+    """How busy all CPUs of the machine were since `before` (system_cpu_times), in percent, the perf tests included;
+    elsewhere the last minute's load average per CPU. None when unknown."""
+    if os.name != "nt":
+        if not hasattr(os, "getloadavg"):
+            return None
+        return min(100.0, os.getloadavg()[0] / (os.cpu_count() or 1) * 100.0)
+    after = system_cpu_times()
+    if before is None or after is None or after[1] <= before[1]:
+        return None
+    return (1.0 - (after[0] - before[0]) / (after[1] - before[1])) * 100.0
+
+
+def wait_until_quiet(limit, timeout_minutes):
+    """Waits until the machine's CPU load stays below `limit` percent for QUIET_WINDOWS windows of QUIET_WINDOW_SECONDS
+    in a row. Returns the seconds it waited, or None when the machine did not become quiet within the timeout."""
+    start = time.monotonic()
+    quiet_windows = 0
+    while quiet_windows < QUIET_WINDOWS:
+        if time.monotonic() - start > timeout_minutes * 60:
+            return None
+        before = system_cpu_times()
+        time.sleep(QUIET_WINDOW_SECONDS)
+        load = machine_load(before)
+        if load is None:
+            fail("--wait-quiet needs the machine's CPU load, which this platform does not report")
+        quiet_windows = quiet_windows + 1 if load < limit else 0
+    return time.monotonic() - start
+
+
 def run_ctest(arguments, run, output_directory, results_file):
     """Runs the perf tests once; returns the run's record (results file copied next to its log)."""
     command = [arguments.ctest, "--preset", arguments.preset, "-L", arguments.label, "--output-on-failure"]
     log_path = os.path.join(output_directory, f"run{run}.log")
+    if arguments.wait_quiet is not None:
+        waited = wait_until_quiet(arguments.wait_quiet, arguments.wait_timeout)
+        if waited is None:
+            print(f"Run {run}: the machine stayed busier than {arguments.wait_quiet:g}% for {arguments.wait_timeout:g} minutes; "
+                  "running anyway", flush=True)
+        else:
+            print(f"Run {run}: waited {waited:.0f} s for the machine to be less than {arguments.wait_quiet:g}% busy", flush=True)
     print(f"Run {run} of {arguments.runs}: {' '.join(command)}", flush=True)
     start = time.monotonic()
+    cpu_before = system_cpu_times()
     with open(log_path, "w", encoding="utf-8", errors="replace") as log:
         try:
             completed = subprocess.run(command, cwd=REPOSITORY_DIRECTORY, stdout=log, stderr=subprocess.STDOUT, check=False)
         except OSError as error:
             fail(f"cannot run '{arguments.ctest}': {error}")
     seconds = time.monotonic() - start
+    load = machine_load(cpu_before)
 
     failed_tests = []
     with open(log_path, "r", encoding="utf-8", errors="replace") as log:
@@ -116,8 +178,11 @@ def run_ctest(arguments, run, output_directory, results_file):
         shutil.copyfile(results_file, kept)
         results = load_json(kept)
     passed = completed.returncode == 0
-    print(f"Run {run}: {'passed' if passed else 'FAILED'} in {seconds:.0f} s" + (f" ({', '.join(failed_tests)})" if failed_tests else ""), flush=True)
-    return {"name": f"run {run}", "passed": passed, "seconds": seconds, "failed_tests": failed_tests, "results": results or {}, "log": log_path}
+    busy = f", machine {load:.0f}% busy" if load is not None else ""
+    print(f"Run {run}: {'passed' if passed else 'FAILED'} in {seconds:.0f} s{busy}" + (f" ({', '.join(failed_tests)})" if failed_tests else ""),
+          flush=True)
+    return {"name": f"run {run}", "passed": passed, "seconds": seconds, "load": load, "failed_tests": failed_tests, "results": results or {},
+            "log": log_path}
 
 
 def load_result_files(paths):
@@ -127,7 +192,8 @@ def load_result_files(paths):
         if not isinstance(results, dict):
             fail(f"'{path}' is not a results file")
         within = all(entry.get("Value", 0) <= entry.get("Budget", 0) for entry in results.values() if isinstance(entry, dict))
-        runs.append({"name": os.path.basename(path), "passed": within, "seconds": None, "failed_tests": [], "results": results, "log": None})
+        runs.append({"name": os.path.basename(path), "passed": within, "seconds": None, "load": None, "failed_tests": [], "results": results,
+                     "log": None})
     return runs
 
 
@@ -161,11 +227,17 @@ def report(runs, budgets):
         results = run["results"]
         state = "passed" if run["passed"] else "FAILED"
         duration = f" in {run['seconds']:.0f} s" if run["seconds"] is not None else ""
+        busy = f", machine {run['load']:.0f}% busy" if run["load"] is not None else ""
         canary = results.get(CANARY_METRIC, {}).get("Value")
         speed = f"; canary {format_number(canary)} ms" if canary is not None else "; no canary"
         if canary is not None and canary_reference:
             speed += f" ({canary / canary_reference:.2f}x its reference)"
-        print(f"- {run['name']}: {state}{duration}{speed}")
+        entries = [entry for entry in results.values() if isinstance(entry, dict)]
+        confirmed = sum(1 for entry in entries if len(entry.get("Attempts", [])) > 1)
+        over = sum(1 for entry in entries if entry.get("Value", 0) > entry.get("Budget", 0))
+        # Many unrelated metrics over budget at once is the signature of a busy machine, one or two of a regression.
+        tally = f"; {confirmed} of {len(entries)} metrics needed confirmation, {over} failed" if entries else ""
+        print(f"- {run['name']}: {state}{duration}{busy}{speed}{tally}")
         for test in run["failed_tests"]:
             print(f"    failed test: {test}")
         for key in sorted(results):
@@ -213,6 +285,10 @@ def main():
     parser.add_argument("--ctest", default="ctest", help="the ctest executable (default: ctest on PATH)")
     parser.add_argument("--output", help="directory for the logs and results of the runs (default: a new PerfStability-<time> directory "
                         "next to the results file)")
+    parser.add_argument("--wait-quiet", type=float, metavar="PERCENT", help="before each run, wait until the machine's CPU load stays "
+                        f"below this many percent for {QUIET_WINDOWS * QUIET_WINDOW_SECONDS} s (machines shared with other work)")
+    parser.add_argument("--wait-timeout", type=float, default=60.0, metavar="MINUTES", help="how long --wait-quiet waits at most before "
+                        "a run starts anyway (default: 60)")
     parser.add_argument("--results", nargs="+", metavar="FILE", help="report on these results files instead of running the tests")
     arguments = parser.parse_args()
 
@@ -222,6 +298,10 @@ def main():
     else:
         if arguments.runs < 1:
             fail("--runs needs a positive number")
+        if arguments.wait_quiet is not None and not 0 < arguments.wait_quiet <= 100:
+            fail("--wait-quiet needs a percentage above 0 and at most 100")
+        if arguments.wait_timeout <= 0:
+            fail("--wait-timeout needs a positive number of minutes")
         results_file = resolve_results_file(arguments.preset)
         output_directory = arguments.output or os.path.join(os.path.dirname(results_file),
                                                             "PerfStability-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))

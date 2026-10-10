@@ -129,8 +129,10 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   lowers its entry in the same commit, a metric over budget is a regression to fix rather than a budget to raise, and
   commits that add or lower budgets state the measured values. Lower must be better (time per item, not items per
   second). **Stability:** `Tools/PerfStability.py --runs 5` runs `-L perf` five times and reports per metric the
-  minimum, median and maximum, the pass rate and how often it needed confirmation, and per run the attempts of every
-  confirmed metric and the canary `Perf.Harness.Sort200k` against its reference (a slow canary means a busy machine);
+  minimum, median and maximum, the pass rate and how often it needed confirmation, and per run how busy the machine
+  was, the attempts of every confirmed metric and the canary `Perf.Harness.Sort200k` against its reference (many
+  unrelated metrics over budget at once, a slow canary and a busy machine mean load, not a regression);
+  `--wait-quiet <percent>` starts each run only once the machine is that quiet (machines shared with other work), and
   `--results <files>` reports on kept results files. Run it on the reference machine before merging changes to budgets
   or perf tests. GPU perf suites get the shared device
   without validation layers (the CTest sets `STRATA_TEST_GPU_VALIDATION=0`; `PerfGPU.Harness` fails without it)
