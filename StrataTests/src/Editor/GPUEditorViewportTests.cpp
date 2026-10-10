@@ -471,6 +471,41 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("The selection outline follows the selection and the hierarchy")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.AddScene();
+		EditorContext& context = harness.Context;
+		ViewportRenderer* renderer = context.GetViewport().GetRenderer();
+		REQUIRE(renderer);
+		auto outlined = [&]()
+		{
+			const std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Automatic, 1.0f);
+			REQUIRE(view);
+			REQUIRE(renderer->Render(context, glm::uvec2(64, 64), *view, context.GetViewport().GetSettings(), view->EditorOverlays));
+			return renderer->GetStats().OutlinedEntities;
+		};
+		Entity cube = context.GetActiveScene()->FindEntityByName("Cube");
+		REQUIRE(cube);
+		const nlohmann::json parent = UUIDToJson(cube.GetUUID());
+		harness.Run("entity.create", { { "name", "First" }, { "parent", parent } });
+
+		// Selecting the cube outlines its descendants too; the list is kept while nothing changes.
+		context.Select(cube.GetUUID());
+		CHECK(outlined() == 2);
+		CHECK(outlined() == 2);
+		// A child added or deleted later is outlined or not at once.
+		const nlohmann::json created = harness.Run("entity.create", { { "name", "Second" }, { "parent", parent } });
+		CHECK(outlined() == 3);
+		harness.Run("entity.delete", { { "entities", nlohmann::json::array({ created["id"] }) } });
+		CHECK(outlined() == 2);
+		context.ClearSelection();
+		CHECK(outlined() == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Clicks in the viewport pick entities without blocking")
 	{
 		Tests::GPUContext gpu;

@@ -14,6 +14,40 @@ namespace Strata
 
 		constexpr uint32_t c_MinSegments = 3;
 		constexpr uint32_t c_MaxSegments = 256;
+		// Circles of up to this many segments take their points from a table (the common ones: gizmos use 32).
+		constexpr uint32_t c_MaxTableSegments = 128;
+
+		// The points of unit circles (cos, sin) of every segment count up to c_MaxTableSegments, segment count n at
+		// offset n * (n - 1) / 2 (each holds n points, the first at angle 0), computed once.
+		const std::vector<glm::vec2>& GetUnitCircleTables()
+		{
+			static const std::vector<glm::vec2> s_Tables = []()
+			{
+				std::vector<glm::vec2> tables;
+				tables.reserve(static_cast<size_t>(c_MaxTableSegments) * (c_MaxTableSegments + 1) / 2);
+				for (uint32_t segments = 1; segments <= c_MaxTableSegments; segments++)
+				{
+					for (uint32_t point = 0; point < segments; point++)
+					{
+						const float angle = glm::two_pi<float>() * static_cast<float>(point) / static_cast<float>(segments);
+						tables.emplace_back(std::cos(angle), std::sin(angle));
+					}
+				}
+				return tables;
+			}();
+			return s_Tables;
+		}
+
+		// Point `index` of a unit circle divided into `segments` (index may equal segments: the first point again).
+		glm::vec2 UnitCirclePoint(uint32_t segments, uint32_t index)
+		{
+			if (index == segments)
+				index = 0;
+			if (segments <= c_MaxTableSegments)
+				return GetUnitCircleTables()[static_cast<size_t>(segments) * (segments - 1) / 2 + index];
+			const float angle = glm::two_pi<float>() * static_cast<float>(index) / static_cast<float>(segments);
+			return glm::vec2(std::cos(angle), std::sin(angle));
+		}
 
 		bool IsFinite(const glm::vec3& value)
 		{
@@ -61,14 +95,14 @@ namespace Strata
 	}
 
 	void DebugDraw::AddCircle(const glm::vec3& center, const glm::vec3& axisU, const glm::vec3& axisV, float radius, uint32_t color, DebugDrawDepth depth,
-		uint32_t segments, float startAngle, float endAngle)
+		uint32_t segments)
 	{
 		segments = std::clamp(segments, c_MinSegments, c_MaxSegments);
-		glm::vec3 previous = center + (axisU * std::cos(startAngle) + axisV * std::sin(startAngle)) * radius;
+		glm::vec3 previous = center + axisU * radius;
 		for (uint32_t segment = 1; segment <= segments; segment++)
 		{
-			const float angle = startAngle + (endAngle - startAngle) * static_cast<float>(segment) / static_cast<float>(segments);
-			const glm::vec3 point = center + (axisU * std::cos(angle) + axisV * std::sin(angle)) * radius;
+			const glm::vec2 unit = UnitCirclePoint(segments, segment);
+			const glm::vec3 point = center + (axisU * unit.x + axisV * unit.y) * radius;
 			AddLine(previous, point, color, depth);
 			previous = point;
 		}
@@ -77,6 +111,11 @@ namespace Strata
 	void DebugDraw::Line(const glm::vec3& from, const glm::vec3& to, const glm::vec4& color, DebugDrawDepth depth)
 	{
 		AddLine(from, to, PackColor(color), depth);
+	}
+
+	void DebugDraw::Line(const glm::vec3& from, const glm::vec3& to, uint32_t packedColor, DebugDrawDepth depth)
+	{
+		AddLine(from, to, packedColor, depth);
 	}
 
 	void DebugDraw::Box(const AABB& box, const glm::vec4& color, DebugDrawDepth depth)
@@ -171,14 +210,18 @@ namespace Strata
 		segments = std::clamp(segments, c_MinSegments * 2, c_MaxSegments);
 		const uint32_t packed = PackColor(color);
 		auto point = [&](const glm::vec3& local) { return glm::vec3(transform * glm::vec4(local, 1.0f)); };
-		// Polyline through local-space points on a circle or arc.
-		auto arc = [&](const glm::vec3& center, const glm::vec3& axisU, const glm::vec3& axisV, float startAngle, float endAngle, uint32_t arcSegments)
+		// Polyline through local-space points `first` to `first + count` of a circle divided into `circleSegments`.
+		auto arc = [&](const glm::vec3& center, const glm::vec3& axisU, const glm::vec3& axisV, uint32_t circleSegments, uint32_t first, uint32_t count)
 		{
-			glm::vec3 previous = point(center + (axisU * std::cos(startAngle) + axisV * std::sin(startAngle)) * radius);
-			for (uint32_t segment = 1; segment <= arcSegments; segment++)
+			auto circlePoint = [&](uint32_t index)
 			{
-				const float angle = startAngle + (endAngle - startAngle) * static_cast<float>(segment) / static_cast<float>(arcSegments);
-				const glm::vec3 next = point(center + (axisU * std::cos(angle) + axisV * std::sin(angle)) * radius);
+				const glm::vec2 unit = UnitCirclePoint(circleSegments, index % circleSegments);
+				return point(center + (axisU * unit.x + axisV * unit.y) * radius);
+			};
+			glm::vec3 previous = circlePoint(first);
+			for (uint32_t segment = 1; segment <= count; segment++)
+			{
+				const glm::vec3 next = circlePoint(first + segment);
 				AddLine(previous, next, packed, depth);
 				previous = next;
 			}
@@ -189,16 +232,17 @@ namespace Strata
 		const glm::vec3 z(0.0f, 0.0f, 1.0f);
 		const glm::vec3 top(0.0f, halfHeight, 0.0f);
 		const glm::vec3 bottom(0.0f, -halfHeight, 0.0f);
-		const float pi = glm::pi<float>();
-		// Rings where the hemispheres meet the cylinder, the cylinder's sides and the hemisphere arcs in the XY and ZY planes.
-		arc(top, x, z, 0.0f, 2.0f * pi, segments);
-		arc(bottom, x, z, 0.0f, 2.0f * pi, segments);
+		// Rings where the hemispheres meet the cylinder, the cylinder's sides and the hemisphere arcs in the XY and ZY planes
+		// (half circles: the upper half above the top ring, the lower half below the bottom one).
+		const uint32_t half = segments / 2;
+		arc(top, x, z, segments, 0, segments);
+		arc(bottom, x, z, segments, 0, segments);
 		for (const glm::vec3& side : { x, -x, z, -z })
 			AddLine(point(top + side * radius), point(bottom + side * radius), packed, depth);
-		arc(top, x, y, 0.0f, pi, segments / 2);
-		arc(top, z, y, 0.0f, pi, segments / 2);
-		arc(bottom, x, y, pi, 2.0f * pi, segments / 2);
-		arc(bottom, z, y, pi, 2.0f * pi, segments / 2);
+		arc(top, x, y, half * 2, 0, half);
+		arc(top, z, y, half * 2, 0, half);
+		arc(bottom, x, y, half * 2, half, half);
+		arc(bottom, z, y, half * 2, half, half);
 	}
 
 	bool DebugDraw::Frustum(const glm::mat4& viewProjection, const glm::vec4& color, DebugDrawDepth depth)

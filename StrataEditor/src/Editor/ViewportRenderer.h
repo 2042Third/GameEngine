@@ -75,9 +75,17 @@ namespace Strata
 		// (Renderer::ReleaseDeferred).
 		void ReleaseTargets() { m_Renderer->SetViewportSize(0, 0); }
 	private:
+		// The selected entities and their descendants (outlined, and whose colliders are drawn), collected again only when
+		// the selection, the scene or its hierarchy changed.
+		void UpdateSelectionSubtrees(EditorContext& context, const Ref<Scene>& scene);
+	private:
 		Scope<SceneRenderer> m_Renderer;
 		DebugDraw m_DebugDraw;
 		std::vector<Entity> m_Outlined;
+		std::vector<UUID> m_OutlinedSelection;
+		std::weak_ptr<Scene> m_OutlinedScene;
+		uint64_t m_OutlinedHierarchyVersion = 0;
+		bool m_OutlinedValid = false;
 		std::weak_ptr<Scene> m_RenderedScene;
 	};
 

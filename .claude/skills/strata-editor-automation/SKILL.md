@@ -100,7 +100,9 @@ editor started with `--no-gpu` (use `--headless`):
   have: the result says `"previewLighting": true`), and the game's screen-space text (its HUD) is hidden
   (`hiddenScreenSpaceTexts` counts it). To see what a player sees, capture with `{"camera": "scene"}` (or while playing).
   `viewport.getSettings` / `viewport.setSettings {previewLighting?, gameUI?, grid?, selectionOutline?, sceneGizmos?,
-  stats?, gizmo?, space?, ...}` change these view settings (no undo step; saved with the project's editor state).
+  allColliders?, stats?, gizmo?, space?, ...}` change these view settings (no undo step; saved with the project's editor
+  state). Collider shapes show for the selection only unless `allColliders` is on; far away lights and cameras show as
+  small icons.
 - `camera.get`; `camera.set {position?, target?, yaw?, pitch?, distance?, fov?, near?, far?, flySpeed?}`;
   `camera.focus {entities?}` frames the given (or selected) entities. Every scene remembers its own editor camera; a
   scene opened for the first time is framed on what it renders, seen from the direction of its primary camera.

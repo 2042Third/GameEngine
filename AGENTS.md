@@ -692,10 +692,11 @@ and `AudioSystem`, the built-in "Audio" scene system.
   to the running copy and are discarded by `play.stop`. Unknown or missing parameters are errors.
 - **Viewport state** lives in the core: `EditorContext::GetViewport()` (`EditorViewport`) holds the editor camera
   (`EditorCamera`: a target that is also the orbit pivot, distance, yaw/pitch in degrees, FOV, clip planes, fly speed),
-  the `ViewportSettings` (grid, selection outline, light/camera/collider shapes, stats, preview lighting, game UI, gizmo
-  mode and space, snap steps) and two `ViewportRenderer`s (the panel's and the captures'), created on first use and only
-  with a GPU. Settings and the editor camera of every scene asset the project showed (`"Cameras": {"<scene handle>":
-  ...}`) are saved per project in `<project>/.strata/EditorViewport.json` when it closes and restored when it opens;
+  the `ViewportSettings` (grid, selection outline, light/camera/collider shapes and whether colliders show for every
+  entity, stats, preview lighting, game UI, gizmo mode and space, snap steps) and two `ViewportRenderer`s (the panel's
+  and the captures'), created on first use and only with a GPU. Settings and the editor camera of every scene asset
+  the project showed (`"Cameras": {"<scene handle>": ...}`) are saved per project in
+  `<project>/.strata/EditorViewport.json` when it closes and restored when it opens;
   files from before per-scene cameras hold one `"Camera"`, given to the first scene that opens. `EditorContext::OpenScene`
   restores the scene's camera, or frames a scene shown for the first time (`EditorViewport::FrameScene`: along the
   scene's primary camera, `EditorCamera::FitBounds` on what renders, `SceneBounds`), again once meshes that were still
@@ -759,9 +760,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   encodes it on a job thread and returns `{"Image": {"MimeType": "image/png", "Data": <base64>}, "width", "height",
   "camera", "overlays", "pendingAssets", "pendingTextGlyphs", "previewLighting", "screenSpaceTexts",
   "hiddenScreenSpaceTexts", "notice"?, "path"?}`; it defaults to the viewport's size, camera and overlays and fails
-  without a GPU. `viewport.getSettings` and `viewport.setSettings {grid, selectionOutline, sceneGizmos, stats,
-  previewLighting, gameUI, gizmo, space, snap, translateSnap, rotateSnap, scaleSnap}` read and change the view settings
-  (validated as a whole: an invalid value changes nothing).
+  without a GPU. `viewport.getSettings` and `viewport.setSettings {grid, selectionOutline, sceneGizmos, allColliders,
+  stats, previewLighting, gameUI, gizmo, space, snap, translateSnap, rotateSnap, scaleSnap}` read and change the view
+  settings (validated as a whole: an invalid value changes nothing); `allColliders` draws the collider shapes of every
+  entity instead of only the selection's.
 - Materials: `material.create {path, properties}`, `material.set {material, properties}` and `material.get {material}` (its
   values and every material property described like `component.list` describes component properties); an unknown property
   name fails with the list of known ones.
@@ -844,7 +846,11 @@ and `AudioSystem`, the built-in "Audio" scene system.
   colors into the output texture (then copied into an external target): the infinite ground grid, the
   selection outline (from the entity-ID buffer, so alpha-blended surfaces get none) and `DebugDraw` line
   lists, depth-tested against the scene or always on top. Fill a `DebugDraw` each frame (gameplay
-  debugging, or `DrawSceneGizmos` for light, camera and collider shapes) and pass it to `Render`.
+  debugging, or `DrawSceneGizmos` for light, camera and collider shapes) and pass it to `Render`. Give
+  `DrawSceneGizmos` the view (`SceneGizmoSettings::View`): it then leaves out shapes outside it or beyond `MaxDistance`
+  and draws lights and cameras whose shapes would be smaller than `MinShapePixels` on screen as icons of `IconPixels`,
+  so thousands of lights cost what is near and in view; colliders can be limited to a list (the editor: the selection,
+  unless `ViewportSettings::AllColliders`).
 - `TextComponent`s are drawn with the overlays by `TextRenderer`: signed distance field glyphs from a
   per-font `FontAtlas` (stb_truetype, filled on demand), laid out by `LayoutText` (UTF-8, lines,
   alignment). World-space text is depth-tested, screen-space text goes over everything. Text without a

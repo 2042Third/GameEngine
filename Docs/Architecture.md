@@ -709,7 +709,13 @@ UploadSceneData                  changed instances, changed materials, the chang
   `InstanceBytesUploaded`, `MaterialBytesUploaded`). Each frame publishes the materials it drew with their largest size
   on screen and texture tiling (`GetVisibleMaterials`, for mip streaming) and its counts and times (`VisibleProxies`,
   `ProxyUpdates`, `InstanceUploadRanges`, `ExtractMs`, `SortMs`, `RequestsByVisibility`, `PrefetchRequests`,
-  `GetAssetCalls`, `OpaqueDrawCalls`, `ShadowDrawCalls`).
+  `GetAssetCalls`, `OpaqueDrawCalls`, `ShadowDrawCalls`), which the viewport's stats overlay shows.
+- **Overlays that scale**. `DrawSceneGizmos` given the view (`SceneGizmoView`) leaves out shapes outside it or beyond
+  `MaxDistance` and draws lights and cameras whose shapes would be smaller on screen than `MinShapePixels` (too small to
+  read) as icons of `IconPixels`; the editor draws collider shapes of the selection only unless
+  `ViewportSettings::AllColliders`; circles take their points from tables.
+  `ViewportRenderer` keeps the selection's subtrees until the selection or the scene's hierarchy changes, and
+  `SceneRenderer` keeps the sorted outline IDs and their upload while the same entities stay selected.
 
 ## Scripting
 

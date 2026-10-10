@@ -39,6 +39,9 @@ namespace Strata
 		bool ShowGrid = true;
 		bool ShowSelectionOutline = true;
 		bool ShowSceneGizmos = true; // Light, camera and collider shapes
+		// Collider shapes of every entity; off, only those of the selection (and its descendants), so scenes with thousands
+		// of colliders stay readable and cheap.
+		bool AllColliders = false;
 		bool ShowStats = false;      // Frame time, draw calls and loading assets over the image
 		// Editor views (the editor camera while the game is not playing, see ViewportView::EditorView) light scenes that
 		// have no light of their own with a preview sun and sky (SceneRenderOptions::PreviewEnvironment).

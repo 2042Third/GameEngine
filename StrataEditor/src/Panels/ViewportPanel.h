@@ -54,6 +54,8 @@ namespace Strata
 		void UpdateCamera(EditorContext& context, bool hovered);
 		void UpdateGizmo(EditorContext& context, const ViewportView& view);
 		void DrawOverlays(EditorContext& context, const ViewportView& view, float chipRowBottom, const EditorFrameStats& frame);
+		// The renderer's statistics over the image: frame time, draws, the render scene's proxies and uploads, asset requests.
+		static void DrawStatsOverlay(ImDrawList* drawList, const ImVec2& position, const ViewportRenderer& renderer, const ViewportView& view, const EditorFrameStats& frame);
 		void AcceptAssetDrops(EditorContext& context, const EditorCommandRegistry& commands);
 		void EndCameraDrag();
 		void EndGizmoDrag(EditorContext& context);
