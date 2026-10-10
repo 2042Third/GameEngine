@@ -3,7 +3,9 @@
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/HarnessEditor.h"
 #include "Editor/HierarchyView.h"
+#include "EditorLayer.h"
 #include "Perf/PerfUtils.h"
 #include "Perf/SceneGenerators.h"
 #include "Perf/StressProject.h"
@@ -163,6 +165,56 @@ TEST_SUITE("Perf.Editor")
 		});
 		CHECK(view.GetRows().size() == c_Roots + 55);
 		Perf::CheckBudget("Perf.Editor.HierarchyRebuild100kRoots", rebuild.MedianMs);
+	}
+
+	TEST_CASE("The Hierarchy panel's share of an editor frame with 100,000 roots")
+	{
+		// The real editor UI on the harness (no GPU: the viewport draws nothing, so the frames are the UI's own work), with
+		// the launcher dismissed and 100,000 top-level entities in the edited scene.
+		HarnessEditor editor;
+		editor.Layer->DismissLauncher();
+		Perf::CreateFlatRoots(*editor.Context().GetEditScene(), c_Roots);
+		editor.Context().GetEditScene()->UpdateWorldTransforms();
+		editor.Frames(3);
+		EditorPanelRegistry& panels = editor.Layer->GetPanels();
+		REQUIRE(panels.IsOpen(EditorPanels::c_Hierarchy));
+		ImGuiWindow* window = editor.FindPanelWindow(EditorPanels::c_Hierarchy);
+		REQUIRE(window);
+		REQUIRE(window->Active);
+
+		// The same frames with the panel open and closed: the difference of the medians is what the panel costs.
+		constexpr uint32_t c_Warmup = 10;
+		constexpr uint32_t c_Frames = 200;
+		const Perf::Measurement open = Perf::Measure("Perf.Editor.EditorFrame100kRootsHierarchyOpen", c_Warmup, c_Frames, [&] { editor.Frames(1); });
+		panels.SetOpen(EditorPanels::c_Hierarchy, false);
+		editor.Frames(2);
+		REQUIRE_FALSE(window->Active);
+		const Perf::Measurement closed = Perf::Measure("Perf.Editor.EditorFrame100kRootsHierarchyClosed", c_Warmup, c_Frames, [&] { editor.Frames(1); });
+		const double cost = std::max(open.MedianMs - closed.MedianMs, 0.0);
+		MESSAGE("Hierarchy panel: " << cost << " ms of a " << open.MedianMs << " ms frame");
+		// The authoring workstream's acceptance limit (the panel that drew every root cost 12.9 ms here).
+		CHECK(cost <= 0.3);
+		Perf::CheckBudget("Perf.Editor.HierarchyPanelFrame100kRoots", cost * 1000.0);
+	}
+
+	TEST_CASE("What 100,000 selected entities add to an editor frame")
+	{
+		HarnessEditor editor;
+		editor.Layer->DismissLauncher();
+		const std::vector<Entity> roots = Perf::CreateFlatRoots(*editor.Context().GetEditScene(), c_Roots);
+		editor.Context().GetEditScene()->UpdateWorldTransforms();
+		std::vector<UUID> all;
+		for (const Entity root : roots)
+			all.push_back(root.GetUUID());
+		editor.Frames(3);
+		const Perf::Measurement none = Perf::Measure("Perf.Editor.EditorFrameNothingSelected", 5, 50, [&] { editor.Frames(1); });
+		editor.Context().SetSelection(all);
+		editor.Frames(3);
+		const Perf::Measurement selected = Perf::Measure("Perf.Editor.EditorFrame100kSelected", 5, 50, [&] { editor.Frames(1); });
+		// The Inspector compares every selected entity's values each frame (mixed values), the Hierarchy marks the rows in view.
+		const double cost = std::max(selected.MedianMs - none.MedianMs, 0.0);
+		MESSAGE("100,000 entities selected: " << cost << " ms per frame");
+		Perf::CheckBudget("Perf.Editor.SelectionFrame100kSelected", cost);
 	}
 
 	TEST_CASE("Changing the import settings of a 4096x4096 texture never holds a frame")
