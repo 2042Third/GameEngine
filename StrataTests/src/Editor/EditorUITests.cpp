@@ -17,19 +17,28 @@
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/Log.h>
+#include <Strata/Core/Timestep.h>
 #include <Strata/Events/ApplicationEvent.h>
+#include <Strata/Network/EditorSession.h>
+#include <Strata/Network/RpcClient.h>
+#include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Scene/Components.h>
+#include <Strata/Scene/Entity.h>
 
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <ImGuizmo.h>
 #include <nlohmann/json.hpp>
 
 #include <chrono>
 #include <cmath>
 #include <functional>
+#include <future>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 using namespace Strata;
 using namespace Strata::Tests;
@@ -77,6 +86,16 @@ namespace
 				Harness.Frame(*Layer, seconds);
 				Host->FrameCount++;
 			}
+		}
+
+		// A frame that runs `beforeUI` between the layer's update and its UI, as if something happened in the frame then.
+		void FrameWith(const std::function<void()>& beforeUI, float seconds = ImGuiHarness::c_DeltaTime)
+		{
+			Host->Time += seconds;
+			Layer->OnUpdate(Timestep(seconds));
+			beforeUI();
+			Harness.Frame([this]() { Layer->OnImGuiRender(); }, seconds);
+			Host->FrameCount++;
 		}
 
 		bool Click(std::string_view probeKey)
@@ -645,6 +664,64 @@ TEST_SUITE("Editor.UI")
 		}
 	}
 
+	TEST_CASE("Automation requests keep the full frame rate for a second")
+	{
+		const std::filesystem::path sessions = CreateTemporaryDirectory("EditorUIAutomationSessions");
+		ScopedEnvironmentVariable sessionOverride("STRATA_SESSION_DIR", FileSystem::ToUTF8(sessions));
+		HarnessEditor editor({}, {}, {}, true);
+		editor.Frames(2);
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		CHECK(editor.GetPillColor("Status.Automation") == ToColor(colors.TextSecondary)); // Listening, no client yet
+
+		const std::vector<EditorSessionInfo> found = EditorSession::FindSessions(sessions);
+		REQUIRE(found.size() == 1);
+		RpcClient client;
+		REQUIRE_MESSAGE(client.Connect(found[0].Address, found[0].Port, found[0].Token, std::chrono::milliseconds(5000)), client.GetLastError());
+		editor.Frames(1, 1.0f);
+		REQUIRE(editor.Host->MaxFrameRate == EditorLayer::c_IdleFrameRate);
+		CHECK(editor.GetPillColor("Status.Automation") == ToColor(colors.Info)); // A client is connected
+
+		// A tool's request: the editor answers it in its frames, at the full rate, and stays there for a second.
+		std::future<RpcResult> call = std::async(std::launch::async, [&client]() { return client.Call("editor.status", nlohmann::json::object(),
+			std::chrono::milliseconds(10000)); });
+		REQUIRE(editor.FramesUntil([&call]() { return call.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready; }));
+		CHECK(call.get().IsSuccess());
+		CHECK(editor.Host->MaxFrameRate == 0);
+		editor.Frames(1, 0.5f);
+		CHECK(editor.Host->MaxFrameRate == 0);
+		editor.Frames(1, 0.6f);
+		CHECK(editor.Host->MaxFrameRate == EditorLayer::c_IdleFrameRate);
+		client.Close();
+	}
+
+	TEST_CASE("Loading assets keep the full frame rate")
+	{
+		HarnessEditor editor({}, WithFeatureProject("EditorUILoading"));
+		editor.Frames(2);
+		editor.Frames(1, 1.0f);
+		REQUIRE(editor.Host->MaxFrameRate == EditorLayer::c_IdleFrameRate);
+
+		EditorAssetManager* assets = editor.Context().GetAssetManager();
+		REQUIRE(assets);
+		AssetHandle unloaded = UUID::Null();
+		for (const AssetMetadata& metadata : assets->GetAllMetadata())
+		{
+			if (!metadata.IsBuiltin() && assets->GetAssetState(metadata.Handle) == AssetState::Unloaded)
+			{
+				unloaded = metadata.Handle;
+				break;
+			}
+		}
+		REQUIRE(unloaded.IsValid());
+		// Requested after the asset manager's update in the frame: still loading when the frame chooses its rate.
+		editor.FrameWith([&]() { assets->GetAsset(unloaded); }, 1.0f);
+		CHECK(assets->GetAssetState(unloaded) == AssetState::Loading);
+		CHECK(editor.Host->MaxFrameRate == 0);
+		REQUIRE(editor.FramesUntil([&]() { return assets->GetAssetState(unloaded) != AssetState::Loading; }));
+		editor.Frames(1, 1.0f);
+		CHECK(editor.Host->MaxFrameRate == EditorLayer::c_IdleFrameRate);
+	}
+
 	TEST_CASE("The assets pill turns red when an asset fails to load")
 	{
 		EditorOptions options = WithFeatureProject("EditorUIFailedAsset");
@@ -720,6 +797,77 @@ TEST_SUITE("Editor.UI")
 		CHECK(status["editor"]["frameRate"]["frameMilliseconds"].get<double>() == doctest::Approx(4.0));
 	}
 
+	TEST_CASE("The toolbar's tools and the viewport's chips change the viewport's settings")
+	{
+		HarnessEditor editor({}, WithFeatureProject("EditorUIToolbar"));
+		editor.Frames(2);
+		ViewportSettings& settings = editor.Context().GetViewport().GetSettings();
+		// The selection outline carries the theme's accent, like selected rows.
+		const ImVec4& accent = UI::GetThemeColors().Accent;
+		CHECK(settings.SelectionColor == glm::vec4(accent.x, accent.y, accent.z, accent.w));
+
+		REQUIRE(editor.Click("Toolbar.Rotate"));
+		CHECK(settings.Gizmo == GizmoOperation::Rotate);
+		REQUIRE(editor.Click("Toolbar.Scale"));
+		CHECK(settings.Gizmo == GizmoOperation::Scale);
+		REQUIRE(editor.Click("Toolbar.Select"));
+		CHECK(settings.Gizmo == GizmoOperation::None);
+		REQUIRE(editor.Click("Toolbar.Move"));
+		CHECK(settings.Gizmo == GizmoOperation::Translate);
+		const GizmoSpace space = settings.Space;
+		REQUIRE(editor.Click("Toolbar.Space"));
+		CHECK(settings.Space != space);
+		REQUIRE(editor.Click("Toolbar.Space"));
+		CHECK(settings.Space == space);
+		REQUIRE_FALSE(settings.Snap);
+		REQUIRE(editor.Click("Toolbar.Snap"));
+		CHECK(settings.Snap);
+		REQUIRE(editor.Click("Toolbar.Snap"));
+		CHECK_FALSE(settings.Snap);
+
+		const auto toggles = [&](const char* chip, bool& value)
+		{
+			CAPTURE(chip);
+			const bool before = value;
+			REQUIRE(editor.Click(chip));
+			CHECK(value != before);
+			REQUIRE(editor.Click(chip));
+			CHECK(value == before);
+		};
+		toggles("Viewport.Grid", settings.ShowGrid);
+		toggles("Viewport.Outline", settings.ShowSelectionOutline);
+		toggles("Viewport.Gizmos", settings.ShowSceneGizmos);
+		toggles("Viewport.Stats", settings.ShowStats);
+		// The camera chip opens the camera settings.
+		REQUIRE(editor.Click("Viewport.Camera"));
+		CHECK(ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId));
+	}
+
+	TEST_CASE("Simulate, Pause and Step on the toolbar")
+	{
+		ScopedAudioEngine audio;
+		REQUIRE(audio.Initialized);
+		HarnessEditor editor({}, WithFeatureProject("EditorUISimulate"));
+		editor.Frames(2);
+		CHECK_FALSE(editor.Click("Toolbar.Step")); // Only while paused
+
+		REQUIRE(editor.Click("Toolbar.Simulate"));
+		CHECK(editor.Context().GetSceneState() == SceneState::Simulate);
+		editor.Frames(1);
+		CHECK_FALSE(UI::ItemProbe::Find("Toolbar.Simulate")->Enabled);
+		REQUIRE(editor.Click("Toolbar.Pause"));
+		REQUIRE(editor.Context().IsPaused());
+		editor.Frames(1);
+		REQUIRE(editor.Click("Toolbar.Step"));
+		CHECK(editor.Context().GetActiveScene()->GetStepFrames() == 1);
+		editor.Frames(1);
+		CHECK(editor.Context().GetActiveScene()->GetStepFrames() == 0);
+		REQUIRE(editor.Click("Toolbar.Pause"));
+		CHECK_FALSE(editor.Context().IsPaused());
+		REQUIRE(editor.Click("Toolbar.Stop"));
+		CHECK(editor.Context().GetSceneState() == SceneState::Edit);
+	}
+
 	TEST_CASE("The game view keeps the stats toggle while the game does not have the input")
 	{
 		ScopedAudioEngine audio;
@@ -760,6 +908,91 @@ TEST_SUITE("Editor.UI")
 		CHECK_FALSE(editor.Context().IsGameInputActive());
 		CHECK(UI::ItemProbe::Find("Viewport.Stats").has_value());
 		editor.Run("play.stop");
+	}
+
+	TEST_CASE("Gizmo drags snap per the toolbar's snap toggle, inverted while Ctrl is held")
+	{
+		HarnessEditor editor({}, WithFeatureProject("EditorUISnap"));
+		editor.Frames(2);
+		// An entity where the editor camera looks: at the center of the image, under the gizmo's center handle (which
+		// moves it in the view's plane).
+		const glm::vec3 target = editor.Context().GetViewport().GetCamera().GetTarget();
+		const nlohmann::json created = editor.Run("entity.create", { { "name", "SnapTarget" },
+			{ "components", { { "Transform", { { "Translation", { target.x, target.y, target.z } } } } } } });
+		const std::optional<UUID> id = UUIDFromJson(created["id"]);
+		REQUIRE(id);
+		editor.Run("selection.set", { { "entities", { created["id"] } } });
+		editor.Frames(2);
+		const ViewportPanel* viewport = editor.Layer->GetPanels().Get<ViewportPanel>(EditorPanels::c_Viewport);
+		REQUIRE(viewport);
+		const ViewportImageArea& image = viewport->GetImageArea();
+		const ImVec2 center(image.Min.x + image.Size.x * 0.5f, image.Min.y + image.Size.y * 0.5f);
+		const ViewportSettings& settings = editor.Context().GetViewport().GetSettings();
+		REQUIRE(settings.Gizmo == GizmoOperation::Translate);
+		const float step = settings.TranslateSnap;
+
+		// Drags the center handle across a good part of the image (with Ctrl held or not) and returns how far the entity
+		// went; the drag is undone afterwards, so the entity is back under the image's center.
+		const auto drag = [&](bool ctrl)
+		{
+			Entity entity = editor.Context().GetActiveScene()->GetEntityByUUID(*id);
+			REQUIRE(entity);
+			const glm::vec3 before = entity.GetComponent<TransformComponent>().Translation;
+			// Hover first, over a few frames: the viewport hands the mouse to the gizmo once it knows the gizmo is under it,
+			// and ImGui applies a mouse move queued with a key change a frame later.
+			editor.Harness.MoveMouse(center);
+			editor.Frames(1);
+			if (ctrl)
+				editor.Harness.SetKey(ImGuiMod_Ctrl, true);
+			editor.Frames(3);
+			REQUIRE(ImGuizmo::IsOver());
+			editor.Harness.SetMouseButton(ImGuiMouseButton_Left, true);
+			editor.Frames(1);
+			REQUIRE(ImGuizmo::IsUsingAny());
+			editor.Harness.MoveMouse(ImVec2(center.x + image.Size.x * 0.1f, center.y + image.Size.y * 0.05f));
+			editor.Frames(1);
+			editor.Harness.MoveMouse(ImVec2(center.x + image.Size.x * 0.2f, center.y + image.Size.y * 0.1f));
+			editor.Frames(1);
+			editor.Harness.SetMouseButton(ImGuiMouseButton_Left, false);
+			editor.Frames(1);
+			if (ctrl)
+				editor.Harness.SetKey(ImGuiMod_Ctrl, false);
+			editor.Frames(1);
+			const glm::vec3 moved = entity.GetComponent<TransformComponent>().Translation - before;
+			// The drag was one undo step.
+			REQUIRE(editor.Context().Undo());
+			editor.Frames(1);
+			CHECK(entity.GetComponent<TransformComponent>().Translation == before);
+			return moved;
+		};
+		// Whether every axis moved by whole snapping steps.
+		const auto snapped = [step](const glm::vec3& moved)
+		{
+			for (int axis = 0; axis < 3; axis++)
+			{
+				const float steps = moved[axis] / step;
+				if (std::abs(steps - std::round(steps)) > 0.01f)
+					return false;
+			}
+			return true;
+		};
+
+		// Snapping off: free drags; Ctrl snaps.
+		glm::vec3 moved = drag(false);
+		CHECK(glm::length(moved) > step);
+		CHECK_FALSE(snapped(moved));
+		moved = drag(true);
+		CHECK(glm::length(moved) > step);
+		CHECK(snapped(moved));
+		// Snapping on: snapped drags; Ctrl frees them.
+		REQUIRE(editor.Click("Toolbar.Snap"));
+		REQUIRE(settings.Snap);
+		moved = drag(false);
+		CHECK(glm::length(moved) > step);
+		CHECK(snapped(moved));
+		moved = drag(true);
+		CHECK(glm::length(moved) > step);
+		CHECK_FALSE(snapped(moved));
 	}
 
 	TEST_CASE("A selected row keeps the accent under the mouse, other rows hover in a neutral color")
