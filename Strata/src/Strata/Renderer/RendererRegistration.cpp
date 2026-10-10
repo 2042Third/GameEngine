@@ -26,10 +26,14 @@ namespace Strata
 	void RegisterRendererModule()
 	{
 		// Textures and meshes are stored in their cooked binary form, materials and fonts as their source. Textures and
-		// fonts keep their bytes: they take them over instead of copying them.
+		// fonts keep their bytes: they take them over instead of copying them. Block-compressed textures are decoded here,
+		// on the loading worker, for graphics devices that cannot sample them.
 		AssetLoaderRegistry::Register(AssetType::Texture, [](const AssetMetadata&, AssetLoadData& data, std::string* outError) -> Ref<Asset>
 		{
-			return Texture::Deserialize(data.TakeBytes(), outError);
+			Ref<Texture> texture = Texture::Deserialize(data.TakeBytes(), outError);
+			if (texture && IsBlockCompressedFormat(texture->GetSpecification().Format) && !Texture::IsBlockCompressionSupported())
+				return texture->Decompress(outError);
+			return texture;
 		});
 		AssetLoaderRegistry::Register(AssetType::Mesh, [](const AssetMetadata&, std::span<const uint8_t> data, std::string* outError) -> Ref<Asset>
 		{

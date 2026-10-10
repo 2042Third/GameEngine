@@ -13,6 +13,8 @@ other files use integer and string operations and float arithmetic that IEEE 754
 everywhere (+, -, *, /, sqrt, frexp, log2 of powers of two, shortest float repr in JSON). After regenerating, commit
 only files whose content changed on purpose; the .meta files keep the handles either way. The assets:
     Assets/Textures/Checker.png    8x8 RGBA checkerboard (sRGB color texture)
+    Assets/Textures/Bumps_normal.png 16x16 RGB normal map of a grid of bumps (cooks to BC5)
+    Assets/Textures/Roughness.png  16x16 grayscale ramp (one-channel data: cooks to BC4, sampled as gray)
     Assets/Textures/Sky.hdr        16x8 Radiance HDR sky gradient (equirectangular environment map)
     Assets/Audio/Blip.wav          0.1 s mono 16-bit PCM tone
     Assets/Fonts/FeatureBlocks.ttf TrueType font: every printable ASCII character is a solid block
@@ -49,18 +51,36 @@ def png_chunk(kind, payload):
     return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
 
 
-def make_checker_png():
-    size = 8
-    orange = (230, 120, 30, 255)
-    cream = (240, 230, 200, 255)
+def encode_png(width, height, color_type, texel):
+    """A PNG of 8-bit channels; texel(x, y) returns the channels of color_type (0: gray, 2: RGB, 6: RGBA)."""
     rows = bytearray()
-    for y in range(size):
+    for y in range(height):
         rows.append(0)  # Filter type: none
-        for x in range(size):
-            rows.extend(orange if ((x // 2) + (y // 2)) % 2 == 0 else cream)
-    header = struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0)  # 8 bits per channel, RGBA
+        for x in range(width):
+            rows.extend(texel(x, y))
+    header = struct.pack(">IIBBBBB", width, height, 8, color_type, 0, 0, 0)
     return (b"\x89PNG\r\n\x1a\n" + png_chunk(b"IHDR", header) + png_chunk(b"IDAT", zlib.compress(bytes(rows), 9))
             + png_chunk(b"IEND", b""))
+
+
+def make_checker_png():
+    orange = (230, 120, 30, 255)
+    cream = (240, 230, 200, 255)
+    return encode_png(8, 8, 6, lambda x, y: orange if ((x // 2) + (y // 2)) % 2 == 0 else cream)
+
+
+def make_bumps_normal_png():
+    # Every 4x4 cell slopes away from its center: X and Y are exact binary fractions, Z a correctly rounded sqrt.
+    def texel(x, y):
+        slope_x = ((x % 4) - 1.5) / 4.0
+        slope_y = ((y % 4) - 1.5) / 4.0
+        normal = (slope_x, slope_y, math.sqrt(1.0 - slope_x * slope_x - slope_y * slope_y))
+        return tuple(int((component * 0.5 + 0.5) * 255.0 + 0.5) for component in normal)
+    return encode_png(16, 16, 2, texel)
+
+
+def make_roughness_png():
+    return encode_png(16, 16, 0, lambda x, y: (40 + 12 * x + y,))
 
 
 ################################################################################
@@ -349,6 +369,8 @@ def make_platform_gltf():
 
 def main():
     write_bytes("Textures/Checker.png", make_checker_png())
+    write_bytes("Textures/Bumps_normal.png", make_bumps_normal_png())
+    write_bytes("Textures/Roughness.png", make_roughness_png())
     write_bytes("Textures/Sky.hdr", make_sky_hdr())
     write_bytes("Audio/Blip.wav", make_blip_wav())
     write_bytes("Fonts/FeatureBlocks.ttf", make_font())

@@ -1,8 +1,8 @@
 #include "stpch.h"
 #include "Strata/Renderer/Texture.h"
 
-#include "Strata/Core/BinaryStream.h"
 #include "Strata/Renderer/BindlessTextureTable.h"
+#include "Strata/Renderer/BlockCompression.h"
 #include "Strata/Renderer/Renderer.h"
 
 #include <glm/gtc/packing.hpp>
@@ -13,8 +13,9 @@ namespace Strata
 	namespace
 	{
 
-		constexpr uint32_t c_TextureMagic = 0x58545453; // "STTX"
-		constexpr uint32_t c_MaxTextureSize = 16384;
+		// Whether loaded textures may keep block-compressed data (see Texture::IsBlockCompressionSupported). Read by loaders
+		// on worker threads.
+		std::atomic<bool> s_BlockCompressionSupported = true;
 
 		// How fast upload steps copy pixels into staging memory (bytes per millisecond), averaged over the latest steps, to
 		// predict whether the next step still fits before a finalization deadline. Main thread only (finalization).
@@ -28,53 +29,22 @@ namespace Strata
 		// How fast freeing CPU copies goes (bytes per millisecond), averaged over the latest frees. Main thread only.
 		float s_ReleaseBytesPerMs = 3.0e7f;
 
-		struct CookedTextureHeader
+		uint32_t AlignUp(uint32_t value, uint32_t alignment)
 		{
-			uint32_t Magic;
-			uint32_t Version;
-			uint32_t Format;
-			uint32_t Filter;
-			uint32_t Wrap;
-			uint32_t MipCount;
-		};
-
-		struct CookedMipHeader
-		{
-			uint32_t Width;
-			uint32_t Height;
-			uint64_t Size;
-		};
-
-		bool IsValidFormat(uint32_t format)
-		{
-			return format >= static_cast<uint32_t>(TextureFormat::RGBA8) && format <= static_cast<uint32_t>(TextureFormat::RG8);
+			return (value + alignment - 1) / alignment * alignment;
 		}
 
-		// Where a level's pixels are in cooked data.
-		struct CookedLevel
-		{
-			uint32_t Width = 0;
-			uint32_t Height = 0;
-			size_t Offset = 0;
-			size_t Size = 0;
-		};
-
-		struct CookedTextureLayout
-		{
-			TextureSpecification Specification;
-			std::vector<CookedLevel> Levels;
-		};
-
-		// Why a mip chain cannot make a texture of the specification's format (dimensions, level count, pixel byte counts in
-		// `sizes`), or nullopt when it can.
+		// Why a mip chain cannot make a texture of the specification's format (dimensions, level count, byte counts of the
+		// levels in `sizes`), or nullopt when it can.
 		std::optional<std::string> FindMipChainProblem(const TextureSpecification& specification, std::span<const TextureMip> mips, std::span<const size_t> sizes)
 		{
-			const uint32_t bytesPerPixel = GetTextureFormatBytesPerPixel(specification.Format);
-			if (bytesPerPixel == 0)
+			if (!IsValidTextureFormat(static_cast<uint32_t>(specification.Format)))
 				return std::string("Texture has no valid format");
+			if (specification.Grayscale && GetTextureFormatInfo(specification.Format).Channels != 1)
+				return fmt::format("Only one-channel formats can be grayscale, not {}", TextureFormatToString(specification.Format));
 			if (mips.empty())
 				return std::string("Texture has no pixel data");
-			if (mips[0].Width == 0 || mips[0].Height == 0 || mips[0].Width > c_MaxTextureSize || mips[0].Height > c_MaxTextureSize)
+			if (mips[0].Width == 0 || mips[0].Height == 0 || mips[0].Width > c_MaxCookedTextureSize || mips[0].Height > c_MaxCookedTextureSize)
 				return fmt::format("Texture size {}x{} is out of range", mips[0].Width, mips[0].Height);
 			if (mips.size() > TextureUtils::CalculateMipCount(mips[0].Width, mips[0].Height))
 				return std::string("Texture has more mips than its size allows");
@@ -86,59 +56,11 @@ namespace Strata
 				const uint32_t expectedHeight = std::max(1u, mips[0].Height >> level);
 				if (mip.Width != expectedWidth || mip.Height != expectedHeight)
 					return fmt::format("Mip {} is {}x{}, expected {}x{}", level, mip.Width, mip.Height, expectedWidth, expectedHeight);
-				const size_t expectedSize = static_cast<size_t>(mip.Width) * mip.Height * bytesPerPixel;
+				const uint64_t expectedSize = GetMipByteSize(specification.Format, mip.Width, mip.Height);
 				if (sizes[level] != expectedSize)
 					return fmt::format("Mip {} has {} bytes, expected {}", level, sizes[level], expectedSize);
 			}
 			return std::nullopt;
-		}
-
-		// Reads the header and mip table of cooked data (Texture::Serialize) and checks that every level's pixels are there;
-		// the levels' dimensions and sizes are checked by FindMipChainProblem.
-		std::optional<CookedTextureLayout> ParseCookedTexture(std::span<const uint8_t> data, std::string* outError)
-		{
-			auto fail = [outError](const std::string& message) -> std::optional<CookedTextureLayout>
-			{
-				if (outError)
-					*outError = message;
-				return std::nullopt;
-			};
-
-			BinaryReader reader(data);
-			const CookedTextureHeader header = reader.Read<CookedTextureHeader>();
-			if (!reader.IsValid() || header.Magic != c_TextureMagic)
-				return fail("Not a cooked Strata texture");
-			if (header.Version != Texture::c_CookedVersion)
-				return fail(fmt::format("Unsupported cooked texture version {}", header.Version));
-			if (!IsValidFormat(header.Format) || header.Filter > static_cast<uint32_t>(TextureFilter::Nearest)
-				|| header.Wrap > static_cast<uint32_t>(TextureWrap::Mirror) || header.MipCount == 0 || header.MipCount > 15)
-				return fail("Cooked texture header is corrupt");
-
-			CookedTextureLayout layout;
-			layout.Specification.Format = static_cast<TextureFormat>(header.Format);
-			layout.Specification.Filter = static_cast<TextureFilter>(header.Filter);
-			layout.Specification.Wrap = static_cast<TextureWrap>(header.Wrap);
-			layout.Specification.DebugName = reader.ReadString(1024);
-
-			std::vector<CookedMipHeader> mipHeaders(header.MipCount);
-			for (CookedMipHeader& mipHeader : mipHeaders)
-				mipHeader = reader.Read<CookedMipHeader>();
-			if (!reader.IsValid())
-				return fail("Cooked texture is truncated");
-
-			layout.Levels.resize(header.MipCount);
-			for (uint32_t level = 0; level < header.MipCount; level++)
-			{
-				const std::span<const uint8_t> bytes = reader.ReadView(static_cast<size_t>(mipHeaders[level].Size));
-				if (!reader.IsValid())
-					return fail("Cooked texture pixel data is truncated");
-				CookedLevel& cooked = layout.Levels[level];
-				cooked.Width = mipHeaders[level].Width;
-				cooked.Height = mipHeaders[level].Height;
-				cooked.Offset = static_cast<size_t>(bytes.data() - data.data());
-				cooked.Size = bytes.size();
-			}
-			return layout;
 		}
 
 		float SRGBToLinear(float value)
@@ -163,7 +85,7 @@ namespace Strata
 			return s_Table;
 		}
 
-		// Reads/writes RGBA pixels of any supported uncompressed format as linear floats.
+		// Reads/writes RGBA pixels of the formats GenerateMips supports as linear floats.
 		glm::vec4 LoadPixel(const TextureMip& mip, TextureFormat format, uint32_t x, uint32_t y)
 		{
 			const size_t pixelIndex = static_cast<size_t>(y) * mip.Width + x;
@@ -240,56 +162,6 @@ namespace Strata
 
 	}
 
-	const char* TextureFormatToString(TextureFormat format)
-	{
-		switch (format)
-		{
-			case TextureFormat::None:      return "None";
-			case TextureFormat::RGBA8:     return "RGBA8";
-			case TextureFormat::RGBA8SRGB: return "RGBA8SRGB";
-			case TextureFormat::RGBA16F:   return "RGBA16F";
-			case TextureFormat::RGBA32F:   return "RGBA32F";
-			case TextureFormat::R8:        return "R8";
-			case TextureFormat::RG8:       return "RG8";
-		}
-		return "Unknown";
-	}
-
-	uint32_t GetTextureFormatBytesPerPixel(TextureFormat format)
-	{
-		switch (format)
-		{
-			case TextureFormat::RGBA8:
-			case TextureFormat::RGBA8SRGB: return 4;
-			case TextureFormat::RGBA16F:   return 8;
-			case TextureFormat::RGBA32F:   return 16;
-			case TextureFormat::R8:        return 1;
-			case TextureFormat::RG8:       return 2;
-			case TextureFormat::None:      return 0;
-		}
-		return 0;
-	}
-
-	nvrhi::Format ToNvrhiFormat(TextureFormat format)
-	{
-		switch (format)
-		{
-			case TextureFormat::RGBA8:     return nvrhi::Format::RGBA8_UNORM;
-			case TextureFormat::RGBA8SRGB: return nvrhi::Format::SRGBA8_UNORM;
-			case TextureFormat::RGBA16F:   return nvrhi::Format::RGBA16_FLOAT;
-			case TextureFormat::RGBA32F:   return nvrhi::Format::RGBA32_FLOAT;
-			case TextureFormat::R8:        return nvrhi::Format::R8_UNORM;
-			case TextureFormat::RG8:       return nvrhi::Format::RG8_UNORM;
-			case TextureFormat::None:      return nvrhi::Format::UNKNOWN;
-		}
-		return nvrhi::Format::UNKNOWN;
-	}
-
-	bool IsHDRFormat(TextureFormat format)
-	{
-		return format == TextureFormat::RGBA16F || format == TextureFormat::RGBA32F;
-	}
-
 	Ref<Texture> Texture::Create(const TextureSpecification& specification, std::vector<TextureMip> mips, std::string* outError)
 	{
 		std::vector<size_t> sizes;
@@ -309,6 +181,51 @@ namespace Strata
 		texture->m_Height = mips[0].Height;
 		texture->m_MipCount = static_cast<uint32_t>(mips.size());
 		texture->m_Mips = std::move(mips);
+		texture->m_CookedLayout = ComputeCookedTextureLayout(texture->GetCookedDescription());
+		return texture;
+	}
+
+	Ref<Texture> Texture::CreateFromView(const CookedTextureView& view, std::vector<uint8_t>* takeOver, std::string* outError)
+	{
+		TextureSpecification specification;
+		specification.Format = view.Format;
+		specification.Filter = view.Filter;
+		specification.Wrap = view.Wrap;
+		specification.Grayscale = HasFlag(view.Flags, CookedTextureFlags::Grayscale);
+		specification.DebugName = std::string(view.DebugName);
+
+		std::vector<TextureMip> mips(view.Layout.MipCount);
+		std::vector<size_t> sizes(view.Layout.MipCount);
+		for (uint32_t level = 0; level < view.Layout.MipCount; level++)
+		{
+			const CookedTextureLevel& cooked = view.Layout.Levels[level];
+			mips[level].Width = cooked.Width;
+			mips[level].Height = cooked.Height;
+			sizes[level] = static_cast<size_t>(cooked.Size);
+			// Without taking the bytes over, the levels are copied out of the cooked data.
+			if (!takeOver)
+			{
+				const std::span<const uint8_t> pixels = view.GetLevelData(level);
+				mips[level].Data.assign(pixels.begin(), pixels.end());
+			}
+		}
+		if (const std::optional<std::string> problem = FindMipChainProblem(specification, mips, sizes))
+		{
+			if (outError)
+				*outError = *problem;
+			return nullptr;
+		}
+
+		Ref<Texture> texture(new Texture());
+		texture->m_Specification = std::move(specification);
+		texture->m_Width = view.Width;
+		texture->m_Height = view.Height;
+		texture->m_MipCount = view.Layout.MipCount;
+		texture->m_Mips = std::move(mips);
+		texture->m_CookedLayout = view.Layout;
+		// The view refers to the taken-over buffer, which moves along without being copied: its offsets stay valid.
+		if (takeOver)
+			texture->m_Cooked = std::move(*takeOver);
 		return texture;
 	}
 
@@ -318,77 +235,91 @@ namespace Strata
 			Renderer::GetBindlessTextures().Release(m_BindlessSlot);
 	}
 
+	bool Texture::IsBlockCompressionSupported()
+	{
+		return s_BlockCompressionSupported.load(std::memory_order_relaxed);
+	}
+
+	void Texture::SetBlockCompressionSupported(bool supported)
+	{
+		s_BlockCompressionSupported.store(supported, std::memory_order_relaxed);
+	}
+
+	CookedTextureDescription Texture::GetCookedDescription() const
+	{
+		CookedTextureDescription description;
+		description.Format = m_Specification.Format;
+		description.Filter = m_Specification.Filter;
+		description.Wrap = m_Specification.Wrap;
+		description.Flags = m_Specification.Grayscale ? CookedTextureFlags::Grayscale : CookedTextureFlags::None;
+		description.Width = m_Width;
+		description.Height = m_Height;
+		description.MipCount = m_MipCount;
+		description.DebugName = m_Specification.DebugName;
+		return description;
+	}
+
 	std::vector<uint8_t> Texture::Serialize() const
 	{
 		// Uploading releases the CPU copy.
 		if (m_Mips.empty() || m_UploadLevel > 0)
 			return {};
-		// Bytes taken over from cooked data are exactly what serializing would write.
-		if (!m_Cooked.empty())
-			return m_Cooked;
 
-		BinaryWriter writer;
-		writer.Write(CookedTextureHeader { c_TextureMagic, c_CookedVersion, static_cast<uint32_t>(m_Specification.Format),
-			static_cast<uint32_t>(m_Specification.Filter), static_cast<uint32_t>(m_Specification.Wrap), static_cast<uint32_t>(m_Mips.size()) });
-		writer.WriteString(m_Specification.DebugName);
-		for (const TextureMip& mip : m_Mips)
-			writer.Write(CookedMipHeader { mip.Width, mip.Height, mip.Data.size() });
-		for (const TextureMip& mip : m_Mips)
-			writer.WriteBytes(mip.Data.data(), mip.Data.size());
-		return writer.TakeData();
+		std::vector<std::span<const uint8_t>> levels;
+		levels.reserve(m_MipCount);
+		for (uint32_t level = 0; level < m_MipCount; level++)
+			levels.push_back(GetMipData(level));
+		return WriteCookedTexture(GetCookedDescription(), levels);
 	}
 
 	Ref<Texture> Texture::Deserialize(std::span<const uint8_t> data, std::string* outError)
 	{
-		std::optional<CookedTextureLayout> layout = ParseCookedTexture(data, outError);
-		if (!layout)
+		const std::optional<CookedTextureView> view = ParseCookedTexture(data, outError);
+		if (!view)
 			return nullptr;
-
-		std::vector<TextureMip> mips(layout->Levels.size());
-		for (size_t level = 0; level < mips.size(); level++)
-		{
-			const CookedLevel& cooked = layout->Levels[level];
-			mips[level].Width = cooked.Width;
-			mips[level].Height = cooked.Height;
-			mips[level].Data.assign(data.begin() + cooked.Offset, data.begin() + cooked.Offset + cooked.Size);
-		}
-		return Create(layout->Specification, std::move(mips), outError);
+		return CreateFromView(*view, nullptr, outError);
 	}
 
 	Ref<Texture> Texture::Deserialize(std::vector<uint8_t>&& data, std::string* outError)
 	{
-		std::optional<CookedTextureLayout> layout = ParseCookedTexture(data, outError);
-		if (!layout)
+		const std::optional<CookedTextureView> view = ParseCookedTexture(data, outError);
+		if (!view)
 			return nullptr;
-
 		// The texture keeps the cooked bytes and reads its levels' pixels in place: loading never copies them.
-		std::vector<TextureMip> mips(layout->Levels.size());
-		std::vector<size_t> sizes(layout->Levels.size());
-		std::vector<size_t> offsets(layout->Levels.size());
-		for (size_t level = 0; level < mips.size(); level++)
-		{
-			const CookedLevel& cooked = layout->Levels[level];
-			mips[level].Width = cooked.Width;
-			mips[level].Height = cooked.Height;
-			sizes[level] = cooked.Size;
-			offsets[level] = cooked.Offset;
-		}
-		if (const std::optional<std::string> problem = FindMipChainProblem(layout->Specification, mips, sizes))
+		return CreateFromView(*view, &data, outError);
+	}
+
+	Ref<Texture> Texture::Decompress(std::string* outError) const
+	{
+		auto fail = [outError](std::string message) -> Ref<Texture>
 		{
 			if (outError)
-				*outError = *problem;
+				*outError = std::move(message);
 			return nullptr;
-		}
+		};
+		if (!IsBlockCompressedFormat(m_Specification.Format))
+			return fail(fmt::format("Texture '{}' is not block-compressed", m_Specification.DebugName));
+		if (m_Mips.empty() || m_UploadLevel > 0)
+			return fail(fmt::format("Texture '{}' has no CPU copy to decode", m_Specification.DebugName));
 
-		Ref<Texture> texture(new Texture());
-		texture->m_Specification = layout->Specification;
-		texture->m_Width = mips[0].Width;
-		texture->m_Height = mips[0].Height;
-		texture->m_MipCount = static_cast<uint32_t>(mips.size());
-		texture->m_Mips = std::move(mips);
-		texture->m_Cooked = std::move(data);
-		texture->m_CookedOffsets = std::move(offsets);
-		return texture;
+		TextureSpecification specification = m_Specification;
+		specification.Format = GetDecodedFormat(m_Specification.Format);
+		const uint32_t bytesPerTexel = GetTextureFormatInfo(specification.Format).BytesPerBlock;
+		std::vector<TextureMip> mips(m_MipCount);
+		for (uint32_t level = 0; level < m_MipCount; level++)
+		{
+			TextureMip& mip = mips[level];
+			mip.Width = m_Mips[level].Width;
+			mip.Height = m_Mips[level].Height;
+			mip.Data.resize(static_cast<size_t>(mip.Width) * mip.Height * bytesPerTexel);
+			if (!BlockCompression::DecodeLevel(m_Specification.Format, mip.Width, mip.Height, GetMipData(level), mip.Data))
+				return fail(fmt::format("Texture '{}': mip {} could not be decoded", m_Specification.DebugName, level));
+		}
+		Ref<Texture> decoded = Create(specification, std::move(mips), outError);
+		// The levels stay where they are in the cooked data, block-compressed: streaming reads them from there again.
+		if (decoded)
+			decoded->m_CookedLayout = m_CookedLayout;
+		return decoded;
 	}
 
 	std::span<const uint8_t> Texture::GetMipData(uint32_t level) const
@@ -397,9 +328,8 @@ namespace Strata
 			return {};
 		if (m_Cooked.empty())
 			return m_Mips[level].Data;
-		const TextureMip& mip = m_Mips[level];
-		const size_t size = static_cast<size_t>(mip.Width) * mip.Height * GetTextureFormatBytesPerPixel(m_Specification.Format);
-		return std::span<const uint8_t>(m_Cooked.data() + m_CookedOffsets[level], size);
+		const CookedTextureLevel& cooked = m_CookedLayout.Levels[level];
+		return std::span<const uint8_t>(m_Cooked.data() + cooked.Offset, static_cast<size_t>(cooked.Size));
 	}
 
 	AssetFinalizeResult Texture::FinalizeOnMainThread(const AssetFinalizeContext& context)
@@ -410,6 +340,15 @@ namespace Strata
 
 		if (!m_GPUTexture)
 		{
+			// Loaders decode block-compressed data for such devices (IsBlockCompressionSupported); textures created from
+			// blocks in memory cannot be shown on them.
+			if (IsBlockCompressedFormat(m_Specification.Format) && !Renderer::GetGraphicsDevice().GetInfo().SupportsBCCompression)
+			{
+				ST_CORE_ERROR("Texture '{}' is {}, which the graphics device cannot sample", m_Specification.DebugName,
+					TextureFormatToString(m_Specification.Format));
+				return AssetFinalizeResult::Failed;
+			}
+
 			nvrhi::TextureDesc desc;
 			desc.width = m_Width;
 			desc.height = m_Height;
@@ -439,7 +378,7 @@ namespace Strata
 		while (m_UploadLevel < m_MipCount)
 		{
 			const UploadStep step = GetNextUploadStep();
-			if (!(firstStep && framesFirstCall) && !stagingPool.HasRoomFor(step.Bytes, context.StagingBytes))
+			if (!(firstStep && framesFirstCall) && !stagingPool.HasRoomFor(step.StagingBytes, context.StagingBytes))
 				break;
 			// A step that would end after the deadline (at the copy speed seen so far) waits for the next call.
 			const auto now = std::chrono::steady_clock::now();
@@ -447,7 +386,8 @@ namespace Strata
 				std::chrono::duration<float, std::milli>(static_cast<float>(step.Bytes) / s_UploadBytesPerMs));
 			if (!firstStep && (uploaded + step.Bytes > context.UploadBudget || now >= context.Deadline || context.Deadline - now < predicted))
 				break;
-			if (!RecordUploadStep(commandList, step))
+			const bool recorded = IsBlockCompressedFormat(m_Specification.Format) ? RecordBlockUploadStep(commandList, step) : RecordUploadStep(commandList, step);
+			if (!recorded)
 			{
 				ST_CORE_ERROR("Texture '{}': no staging memory for its upload", m_Specification.DebugName);
 				m_GPUTexture = nullptr;
@@ -488,7 +428,6 @@ namespace Strata
 		m_Mips.clear();
 		m_Mips.shrink_to_fit();
 		std::vector<uint8_t>().swap(m_Cooked);
-		m_CookedOffsets.clear();
 		if (cpuCopyBytes >= c_TimedReleaseBytes)
 		{
 			const float releaseMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - releaseStart).count();
@@ -511,22 +450,38 @@ namespace Strata
 		UploadStep step;
 		step.Level = m_UploadLevel;
 		step.Row = m_UploadRow;
+		const TextureFormatInfo info = GetTextureFormatInfo(m_Specification.Format);
 		uint64_t tailBytes = 0;
+		uint64_t tailBlockRows = 0;
 		for (uint32_t level = m_UploadLevel; level < m_MipCount; level++)
-			tailBytes += GetMipData(level).size();
-		if (m_UploadRow == 0 && tailBytes <= c_UploadBandBytes)
+		{
+			tailBytes += GetMipByteSize(m_Specification.Format, m_Mips[level].Width, m_Mips[level].Height);
+			tailBlockRows += (m_Mips[level].Height + info.BlockHeight - 1) / info.BlockHeight;
+		}
+		// The rest of the chain goes in one step once its staging fits in a band. Block-compressed tails are stacked in one
+		// staging texture as wide as their first level (RecordBlockUploadStep), which takes more than their bytes (1.5 times
+		// for a square chain); a level whose tail does not fit goes up in bands first (level 0 of a 2048x2048 BC1 chain in
+		// one), so the tail that follows stacks at half its width.
+		const uint64_t tailStagingBytes = info.IsBlockCompressed ? tailBlockRows * GetBlockRowByteSize(m_Specification.Format, m_Mips[m_UploadLevel].Width)
+			: tailBytes;
+		if (m_UploadRow == 0 && tailStagingBytes <= c_UploadBandBytes)
 		{
 			step.Tail = true;
 			step.Rows = m_Mips[m_UploadLevel].Height;
 			step.Bytes = tailBytes;
+			step.StagingBytes = tailStagingBytes;
 			return step;
 		}
 
+		// Bands of whole rows of blocks (texel rows for uncompressed formats); the level's last band may end inside a block.
 		const TextureMip& mip = m_Mips[m_UploadLevel];
-		const uint64_t rowBytes = static_cast<uint64_t>(mip.Width) * GetTextureFormatBytesPerPixel(m_Specification.Format);
-		const uint64_t bandRows = std::max<uint64_t>(1, c_UploadBandBytes / std::max<uint64_t>(1, rowBytes));
-		step.Rows = static_cast<uint32_t>(std::min<uint64_t>(mip.Height - m_UploadRow, bandRows));
-		step.Bytes = step.Rows * rowBytes;
+		const uint64_t blockRowBytes = GetBlockRowByteSize(m_Specification.Format, mip.Width);
+		const uint64_t bandBlockRows = std::max<uint64_t>(1, c_UploadBandBytes / std::max<uint64_t>(1, blockRowBytes));
+		const uint64_t remainingBlockRows = (mip.Height - m_UploadRow + info.BlockHeight - 1) / info.BlockHeight;
+		const uint64_t blockRows = std::min(remainingBlockRows, bandBlockRows);
+		step.Rows = static_cast<uint32_t>(std::min<uint64_t>(mip.Height - m_UploadRow, blockRows * info.BlockHeight));
+		step.Bytes = blockRows * blockRowBytes;
+		step.StagingBytes = step.Bytes;
 		return step;
 	}
 
@@ -545,7 +500,7 @@ namespace Strata
 		if (!staging)
 			return false;
 
-		const size_t bytesPerPixel = GetTextureFormatBytesPerPixel(m_Specification.Format);
+		const size_t bytesPerTexel = GetTextureFormatInfo(m_Specification.Format).BytesPerBlock;
 		for (uint32_t index = 0; index < levels; index++)
 		{
 			const TextureMip& source = m_Mips[step.Level + index];
@@ -559,7 +514,7 @@ namespace Strata
 				stagingPool.Release(std::move(staging));
 				return false;
 			}
-			const size_t rowBytes = static_cast<size_t>(source.Width) * bytesPerPixel;
+			const size_t rowBytes = static_cast<size_t>(source.Width) * bytesPerTexel;
 			const uint8_t* sourceRows = GetMipData(step.Level + index).data() + static_cast<size_t>(firstRow) * rowBytes;
 			if (rowPitch == rowBytes)
 			{
@@ -575,7 +530,70 @@ namespace Strata
 				staging, nvrhi::TextureSlice().setSize(source.Width, rows, 1).setMipLevel(index));
 		}
 		stagingPool.Release(std::move(staging));
+		CompleteUploadStep(step, levels);
+		return true;
+	}
 
+	bool Texture::RecordBlockUploadStep(nvrhi::ICommandList* commandList, const UploadStep& step)
+	{
+		// Copies between buffers and block-compressed images must cover whole blocks of the buffer: the staging rows are a
+		// whole number of blocks wide and every level starts on a block row. One single-level staging texture holds the
+		// band, or the tail's levels below each other (a staging texture with mips would have levels below 4 texels, whose
+		// rows are not whole blocks).
+		const TextureFormatInfo info = GetTextureFormatInfo(m_Specification.Format);
+		const uint32_t levels = step.Tail ? m_MipCount - step.Level : 1;
+		auto getRows = [&](uint32_t index) { return step.Tail ? m_Mips[step.Level + index].Height : step.Rows; };
+		nvrhi::TextureDesc stagingDesc;
+		stagingDesc.width = AlignUp(m_Mips[step.Level].Width, info.BlockWidth);
+		stagingDesc.height = 0;
+		for (uint32_t index = 0; index < levels; index++)
+			stagingDesc.height += AlignUp(getRows(index), info.BlockHeight);
+		stagingDesc.mipLevels = 1;
+		stagingDesc.format = ToNvrhiFormat(m_Specification.Format);
+		StagingTexturePool& stagingPool = Renderer::GetStagingTextures();
+		nvrhi::StagingTextureHandle staging = stagingPool.Acquire(stagingDesc);
+		if (!staging)
+			return false;
+
+		nvrhi::IDevice* device = Renderer::GetDevice();
+		size_t rowPitch = 0;
+		auto* destination = static_cast<uint8_t*>(device->mapStagingTexture(staging, nvrhi::TextureSlice(), nvrhi::CpuAccessMode::Write, &rowPitch));
+		if (!destination)
+		{
+			stagingPool.Release(std::move(staging));
+			return false;
+		}
+		uint32_t stagingBlockRow = 0;
+		for (uint32_t index = 0; index < levels; index++)
+		{
+			const TextureMip& source = m_Mips[step.Level + index];
+			const uint32_t firstRow = step.Tail ? 0 : step.Row;
+			const uint32_t blockRows = AlignUp(getRows(index), info.BlockHeight) / info.BlockHeight;
+			const size_t blockRowBytes = static_cast<size_t>(GetBlockRowByteSize(m_Specification.Format, source.Width));
+			const uint8_t* sourceRows = GetMipData(step.Level + index).data() + static_cast<size_t>(firstRow / info.BlockHeight) * blockRowBytes;
+			for (uint32_t blockRow = 0; blockRow < blockRows; blockRow++)
+				std::memcpy(destination + static_cast<size_t>(stagingBlockRow + blockRow) * rowPitch, sourceRows + blockRow * blockRowBytes, blockRowBytes);
+			stagingBlockRow += blockRows;
+		}
+		device->unmapStagingTexture(staging);
+
+		uint32_t stagingRow = 0;
+		for (uint32_t index = 0; index < levels; index++)
+		{
+			const TextureMip& source = m_Mips[step.Level + index];
+			const uint32_t firstRow = step.Tail ? 0 : step.Row;
+			const uint32_t rows = getRows(index);
+			commandList->copyTexture(m_GPUTexture, nvrhi::TextureSlice().setOrigin(0, firstRow, 0).setSize(source.Width, rows, 1).setMipLevel(step.Level + index),
+				staging, nvrhi::TextureSlice().setOrigin(0, stagingRow, 0).setSize(source.Width, rows, 1));
+			stagingRow += AlignUp(rows, info.BlockHeight);
+		}
+		stagingPool.Release(std::move(staging));
+		CompleteUploadStep(step, levels);
+		return true;
+	}
+
+	void Texture::CompleteUploadStep(const UploadStep& step, uint32_t levels)
+	{
 		// Uploaded levels are not needed on the CPU any more.
 		const uint32_t endRow = step.Row + step.Rows;
 		const bool levelComplete = step.Tail || endRow == m_Mips[step.Level].Height;
@@ -583,15 +601,13 @@ namespace Strata
 			std::vector<uint8_t>().swap(m_Mips[step.Level + index].Data);
 		m_UploadLevel = levelComplete ? step.Level + levels : step.Level;
 		m_UploadRow = levelComplete ? 0 : endRow;
-		return true;
 	}
 
 	uint64_t Texture::GetChainBytes() const
 	{
 		uint64_t bytes = 0;
-		const uint64_t bytesPerPixel = GetTextureFormatBytesPerPixel(m_Specification.Format);
 		for (uint32_t level = 0; level < m_MipCount; level++)
-			bytes += static_cast<uint64_t>(std::max(1u, m_Width >> level)) * std::max(1u, m_Height >> level) * bytesPerPixel;
+			bytes += GetMipByteSize(m_Specification.Format, std::max(1u, m_Width >> level), std::max(1u, m_Height >> level));
 		return bytes;
 	}
 
@@ -630,11 +646,13 @@ namespace Strata
 
 		bool GenerateMips(std::vector<TextureMip>& mips, TextureFormat format, bool normalMap)
 		{
-			if (mips.empty() || GetTextureFormatBytesPerPixel(format) == 0 || format == TextureFormat::R8 || format == TextureFormat::RG8)
+			const bool supported = format == TextureFormat::RGBA8 || format == TextureFormat::RGBA8SRGB || format == TextureFormat::RGBA16F
+				|| format == TextureFormat::RGBA32F;
+			if (mips.empty() || !supported)
 				return false;
 
 			mips.resize(1);
-			const uint32_t bytesPerPixel = GetTextureFormatBytesPerPixel(format);
+			const uint32_t bytesPerPixel = GetTextureFormatInfo(format).BytesPerBlock;
 			if (mips[0].Width == 0 || mips[0].Height == 0 || mips[0].Data.size() != static_cast<size_t>(mips[0].Width) * mips[0].Height * bytesPerPixel)
 				return false;
 			const uint32_t mipCount = CalculateMipCount(mips[0].Width, mips[0].Height);

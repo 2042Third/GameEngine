@@ -154,8 +154,12 @@ sun with `component.set` (find their IDs with `entity.find {"name": "Main Camera
 **Assets**: `asset.import {"file": "<absolute path>", "directory": "Models"}` copies a file into the project and
 imports it: models `.gltf`/`.glb`, textures `.png`/`.jpg`/`.tga`/`.bmp`/`.psd`/`.gif`/`.hdr`, audio
 `.wav`/`.mp3`/`.flac`/`.ogg`, fonts `.ttf`/`.otf`. `asset.info` reports import errors and warnings;
-`asset.setImportSettings` changes them. Models expose sub-assets (meshes, materials) and are instantiated whole
-with `prefab.instantiate`.
+`asset.setImportSettings` changes them. Textures are block-compressed by default (`"Compression": "Auto"`; the
+format follows `"Usage"`: `Color`, `NormalMap`, `Data` or `HDR`; color and multi-channel data are BC7);
+`"Quality": "Fast"` imports large color textures several times faster (opaque color as BC1, half the bytes, a little
+less exact; normal maps and data are stored the same at either quality); `"Compression": "Uncompressed"` keeps exact
+texels, e.g. for pixel art or textures a test compares texel for texel. Models expose sub-assets (meshes, materials)
+and are instantiated whole with `prefab.instantiate`.
 
 **Hierarchy and prefabs**: `entity.create {"parent": "<id>"}`, `entity.setParent`, `entity.duplicate`,
 `prefab.create {"entities": ["<id>"], "path": "Prefabs/Block.stprefab"}`, then

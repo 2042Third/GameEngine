@@ -31,6 +31,11 @@
 	"Perf.Scripting.SpawnFrame1MOneScript.OrderRebuilds": { "Measured": 0, "Budget": 0, "Unit": "count" },
 	"Perf.Scripting.ScriptedSpawnFrame100k": { "Measured": 2.699, "Budget": 4.048, "Unit": "ms" },
 	"Perf.Scripting.ScriptedDestroy10kOf100kRoots": { "Measured": 21.25, "Budget": 31.87, "Unit": "ms" },
+	"Perf.TextureCook.ColdImport": { "Measured": 7669.6, "Budget": 11504.4, "Unit": "ms" },
+	"Perf.TextureCook.PackSize": { "Measured": 137.16, "Budget": 205.74, "Unit": "MB" },
+	"Perf.TextureCook.StoredTextures": { "Measured": 111.85, "Budget": 167.77, "Unit": "MB" },
+	"Perf.TextureCook.BC7High": { "Measured": 15.33, "Budget": 22.99, "Unit": "us" },
+	"Perf.TextureCook.BC7Fast": { "Measured": 1.154, "Budget": 1.730, "Unit": "us" },
 	"Perf.Editor.EntityCreate100kRoots": { "Measured": 0.004, "Budget": 0.006, "Unit": "ms" },
 	"Perf.Editor.EntityDelete100kRoots": { "Measured": 0.4954, "Budget": 0.7431, "Unit": "ms" },
 	"Perf.Editor.Delete10kOf100kRoots": { "Measured": 42.64, "Budget": 63.96, "Unit": "ms" },
@@ -51,7 +56,8 @@
 	"PerfGPU.Editor.EditFrameNested1M": { "Measured": 0.2196, "Budget": 0.3294, "Unit": "ms" },
 	"PerfGPU.Editor.PlayFrameNested1M": { "Measured": 0.2159, "Budget": 0.3238, "Unit": "ms" },
 	"PerfGPU.Streaming.FramesToSettle": { "Measured": 4, "Budget": 6, "Unit": "count" },
-	"PerfGPU.Streaming.MaxFinalizeTime": { "Measured": 4.8, "Budget": 6.0, "Unit": "ms" },
-	"PerfGPU.Streaming.MaxResidentTextures": { "Measured": 134.2, "Budget": 201.3, "Unit": "MB" },
-	"PerfGPU.Streaming.PeakPrivateMemory": { "Measured": 720.0, "Budget": 974.1, "Unit": "MB", "Target": 750 }
+	"PerfGPU.Streaming.MaxFinalizeTime": { "Measured": 3.63, "Budget": 5.44, "Unit": "ms" },
+	"PerfGPU.Streaming.MaxResidentTextures": { "Measured": 33.55, "Budget": 50.32, "Unit": "MB" },
+	"PerfGPU.Streaming.PeakPrivateMemory": { "Measured": 395.8, "Budget": 593.7, "Unit": "MB" },
+	"PerfGPU.Streaming.PeakPrivateMemoryAllResident": { "Measured": 518.1, "Budget": 777.1, "Unit": "MB" }
 }

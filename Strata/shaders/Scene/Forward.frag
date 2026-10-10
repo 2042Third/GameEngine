@@ -37,8 +37,9 @@ vec3 GetShadingNormal(MaterialData material, vec2 uv)
 
 	tangent /= tangentLength;
 	vec3 bitangent = cross(normal, tangent) * (v_Tangent.w < 0.0 ? -1.0 : 1.0);
-	vec3 sampled = SampleMaterialTexture(material.NormalMap, uv).xyz * 2.0 - 1.0;
-	sampled.xy *= material.NormalScale;
+	// Normal maps store X and Y (BC5 keeps only those); Z is reconstructed from them, so every format shades alike.
+	vec2 sampledXY = SampleMaterialTexture(material.NormalMap, uv).xy * 2.0 - 1.0;
+	vec3 sampled = vec3(sampledXY * material.NormalScale, sqrt(clamp(1.0 - dot(sampledXY, sampledXY), 0.0, 1.0)));
 	vec3 mapped = mat3(tangent, bitangent, normal) * sampled;
 	float mappedLength = length(mapped);
 	return (mappedLength > 1e-5 ? mapped / mappedLength : normal) * side;

@@ -48,8 +48,10 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
   regression, run the suite again on a quiet machine (the canary `Perf.Harness.Sort200k` is single-threaded and usually
   unchanged under load on many cores, so a normal canary does not rule load out); `PerfGPU.Editor` writes a 100,000-
   and a 1,000,000-entity scene to a temporary project and opens a maximized StrataEditor on them for about 20 seconds,
-  again to confirm a failure; `PerfGPU.Streaming` writes and imports a 447 MB stress project and runs its camera sweep
-  in a helper process, about 15 s, and up to two more sweeps to confirm a failure), `StrataEditor.Smoke`
+  again to confirm a failure; `PerfGPU.Streaming` writes and imports the stress project (17 large textures, 111.8 MB
+  once block-compressed) and runs its two camera sweeps in helper processes: the evicting one, about 15 s, and up to
+  two more to confirm a failure, then the one with all textures resident at 1920x1080 three times; `Perf.TextureCook`
+  imports the same project cold three times and times the BC7 encoder per block), `StrataEditor.Smoke`
   (the real editor in a window with `StrataTests/Editor/SmokeCommands.json.in`, configured into the build tree, label
   `gpu`; it creates a project in `build/<preset>/StrataTests/SmokeProject` (emptied first by `StrataEditor.SmokeClean`),
   so the editor rather than the launcher shows, captures the viewport to `SmokeViewport.png`/`SmokeSceneCamera.png` in

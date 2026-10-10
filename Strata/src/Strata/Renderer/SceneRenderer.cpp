@@ -108,9 +108,9 @@ namespace Strata
 			return value <= 0.04045f ? value / 12.92f : std::pow((value + 0.055f) / 1.055f, 2.4f);
 		}
 
-		uint32_t PackTextureSlot(uint32_t slot, uint32_t samplerIndex)
+		uint32_t PackTextureSlot(uint32_t slot, uint32_t samplerIndex, bool grayscale = false)
 		{
-			return (slot & 0xFFFFFFu) | (samplerIndex << 24);
+			return (slot & 0xFFFFFFu) | ((samplerIndex & 0x7Fu) << 24) | (grayscale ? RenderData::c_TextureSlotGrayscale : 0u);
 		}
 
 		uint32_t GetSamplerIndex(const TextureSpecification& specification)
@@ -1565,7 +1565,7 @@ namespace Strata
 			CountPendingAsset(handle);
 			return PackTextureSlot(loadingSlot, 0);
 		}
-		return PackTextureSlot(texture->GetBindlessSlot(), GetSamplerIndex(texture->GetSpecification()));
+		return PackTextureSlot(texture->GetBindlessSlot(), GetSamplerIndex(texture->GetSpecification()), texture->GetSpecification().Grayscale);
 	}
 
 	uint32_t SceneRenderer::GetMaterialIndex(const Ref<Material>& material)

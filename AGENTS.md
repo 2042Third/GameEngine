@@ -151,8 +151,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   destroy entities, scripts destroying 10,000 of 100,000 sibling roots in one frame), `Perf.Physics` (box stacks of
   `CreateBoxStacks`: the first frames of 30,000 boxes with time dilation, 70,000 boxes that all get a body, the busy
   frames of 70,000 and 10,000 boxes with Strata's part of a step below Jolt's, and of 30,000 boxes whose floor contacts
-  are tracked; creating 10,000 bodies in one frame; the memory a world at the largest capacities reserves) and, in
-  `src/Editor/`,
+  are tracked; creating 10,000 bodies in one frame; the memory a world at the largest capacities reserves),
+  `Perf.TextureCook` (cold imports of the stress project, its stored texture and pack sizes, the BC7 encoder's time per
+  block on one thread) and, in `src/Editor/`,
   `Perf.Editor` (entity commands among 100,000 roots) and `PerfGPU.Editor`, which runs the real `StrataEditor`
   maximized on generated 100,000- and 1,000,000-entity scenes and checks the median CPU frame time its `editor.wait`
   steps report (when the editor fails, the test describes the scene files on disk with `Tests::DescribeJsonFile`,
@@ -160,15 +161,17 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   resolution is about 0.1 microseconds).
   A process's peak memory includes everything it did before, so a test that measures peak memory
   runs the measured work in a helper process (`--strata-test-helper=<mode>`, see `TestMain.cpp`): `PerfGPU.Streaming`
-  runs its camera sweep over the stress project (`src/Perf/StressProject.h`, also usable by other suites) that way, one
-  sweep per attempt. Every sweep must stream correctly (no failed load or device error, every camera stop settles, the
-  textures stay within the residency budget give or take the largest); its budgets are maxima of the sweep: peak
-  private memory (the graphics driver keeps commit charge of freed device memory for a while, which counts in private
-  bytes on Windows, so identical sweeps peak up to about 150 MB apart; target 750 MB), resident texture memory, the
-  longest frame finalization (a regression may show in one frame, which a percentile would hide) and the most frames a
-  stop takes to settle. Script dispatch prefetches instances ahead because the hardware prefetchers follow heap blocks
-  only when they recognize the pattern by the reading instruction's address: a perf difference between builds of
-  identical sources points at such a layout effect; compare the builds' profiles before blaming noise.
+  runs its camera sweeps over the stress project (`src/Perf/StressProject.h`, also usable by other suites) that way:
+  one that evicts within a small texture budget, one sweep per attempt, and one at 1920x1080 with every texture
+  resident, three times. Every evicting sweep must stream correctly (no failed load or device error, every camera stop
+  settles, the textures stay within the residency budget give or take the largest); its budgets are maxima of the
+  sweep: peak private memory (the graphics driver keeps commit charge of freed device memory for a while, which counts
+  in private bytes on Windows, so identical sweeps peak up to about 150 MB apart), resident texture memory, the longest
+  frame finalization (a regression may show in one frame, which a percentile would hide) and the most frames a stop
+  takes to settle. Every all-resident run must bring every texture in, evict none and fail no load; its peak private
+  memory is judged by the best run. Script dispatch prefetches instances ahead because the hardware prefetchers follow
+  heap blocks only when they recognize the pattern by the reading instruction's address: a perf difference between
+  builds of identical sources points at such a layout effect; compare the builds' profiles before blaming noise.
 - Suites whose names start with `EndToEnd` start the built `StrataEditor` and `StrataCLI` (paths in
   `STRATA_TEST_EDITOR_PATH`/`STRATA_TEST_CLI_PATH`, else next to the test executable) and run as the CTest
   `StrataEditor.Automation`, not in `StrataTests.Core`. They need no GPU (`--no-gpu`), use private session
@@ -392,6 +395,17 @@ The threading model, frame loop and pipelines these rules protect are described 
   exist in every asset manager.
 - Shipped games read an asset pack (`.stpak`, `AssetPack`) through `RuntimeAssetManager`; the editor
   builds it with `EditorAssetManager::BuildAssetPack`.
+- **Textures** cook to GPU block-compressed formats by default ([Docs/Architecture.md](Docs/Architecture.md), "Texture
+  cooking"): `TextureImporter::ChooseFormat` picks BC7 (color, sRGB, and linear data of several channels; at
+  `"Quality": "Fast"` opaque color is BC1), BC5 (normal maps), BC4 (one-channel data, marked `Grayscale`: sampled as
+  `(r, r, r, 1)`) or RGBA16F (HDR) unless the settings say `"Compression": "Uncompressed"`. BC7 is encoded by Strata's
+  own encoder (`Asset/BC7Encoder`, written from the format's definition in `Renderer/BC7Format.h`, which the decoder
+  shares; its tests compare every block it stores with the decoder), BC1, BC3, BC4 and BC5 by the vendored stb_dxt.
+  Mips are filtered with a Mitchell filter; the cooked `STTX` version 2 stores the levels smallest first
+  so the mip tail is one range after the header. Never compute texture sizes from bytes per pixel: use `GetMipByteSize`
+  (whole 4x4 blocks) and `GetTextureFormatInfo`; read cooked data through `ParseCookedTexture`, which validates it. A
+  change to the cooked output bumps the importers' versions (`TextureImporter` and `GltfImporter`). Devices without BC
+  support get the blocks decoded at load time (`Texture::IsBlockCompressionSupported`, `BlockCompression`).
 - **Residency** ([Docs/Architecture.md](Docs/Architecture.md), "Streaming and residency"): memory is bounded by budgets
   per pool (`AssetResidencyBudgets`: GPU textures 50% and GPU buffers 15% of the device's memory budget, CPU unlimited;
   128 MiB of loads in flight, 64 MiB and 4 ms of finalization per frame, 64 MiB of upload staging), and the least
@@ -862,6 +876,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   textures of `Renderer::GetStagingTextures()` (`StagingTexturePool`, recycled in `Renderer::BeginFrame`), so code
   that streams with a GPU must run device frames for staging to be reused (without them, a frame uploads only its first
   step once the staging budget is used up).
+- Material texture slots (`SampleMaterialTexture` in `Include/Scene.glsl`) pack the bindless slot, the sampler index and a
+  grayscale bit (`RenderData::c_TextureSlotGrayscale`, from `TextureSpecification::Grayscale`). Normal maps are read as X
+  and Y with Z reconstructed (`Forward.frag`), so BC5 and RGBA8 normal maps shade alike; a shader that reads a normal map
+  must do the same.
 - Overlays (`SceneRenderOptions`, all off by default) are drawn after post-processing with exact display
   colors into the output texture (then copied into an external target): the infinite ground grid, the
   selection outline (from the entity-ID buffer, so alpha-blended surfaces get none) and `DebugDraw` line

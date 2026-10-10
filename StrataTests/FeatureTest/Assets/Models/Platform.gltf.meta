@@ -8,7 +8,9 @@
 		"LODCount": 3,
 		"MaxTextureSize": 0,
 		"OptimizeMeshes": true,
-		"Scale": 1.0
+		"Scale": 1.0,
+		"TextureCompression": "Auto",
+		"TextureQuality": "High"
 	},
 	"Strata": {
 		"Format": "AssetMeta",

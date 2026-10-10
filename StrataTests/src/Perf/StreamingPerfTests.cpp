@@ -9,9 +9,12 @@
 #include "Strata/Core/Process.h"
 #include "TestHelpers.h"
 
+#include <spdlog/fmt/fmt.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -22,19 +25,22 @@ using namespace Strata::Tests;
 namespace
 {
 
-	// Megabytes here are decimal, like the streaming audit's numbers (the stress project's textures are 447.4 MB of
-	// RGBA8, the largest 89.5 MB).
+	// Megabytes here are decimal, like the streaming audit's numbers (the stress project's textures cook to 111.8 MB of
+	// BC7, the largest 22.4 MB; they were 447.4 MB and 89.5 MB of RGBA8 before texture cooking v2).
 	constexpr uint64_t c_MB = 1000 * 1000;
 	constexpr double c_MBDouble = 1000.0 * 1000.0;
 
-	// The residency budget the sweep streams within: far less than the stress project's textures.
-	constexpr uint64_t c_TextureBudget = 128 * c_MB;
+	// The residency budget the evicting sweep streams within: far less than the stress project's textures. It holds the
+	// same share of the textures as the residency work's 128 MB held of their RGBA8 form (about 29%, 1.4 times the
+	// largest), so the sweep keeps evicting.
+	constexpr uint64_t c_TextureBudget = 32 * c_MB;
 
-	// The metrics of one sweep, checked against their budgets (with their reasons below):
+	// The metrics of one evicting sweep, checked against their budgets (with their reasons below):
 	// - PeakPrivateMemory: the helper process's peak private bytes, a maximum by nature (what the process needs at once).
 	//   The graphics driver keeps commit charge of freed device memory for a while (it counts in private bytes on Windows),
 	//   by up to about 150 MB from sweep to sweep while the engine does exactly the same, and the confirmation's best
-	//   attempt is the engine's own cost. The residency work's target (750 MB) is recorded with the budget.
+	//   attempt is the engine's own cost. Since textures are block-compressed the budget is below the residency work's
+	//   target (750 MB) and below texture cooking's limit (650 MB, see the all-resident sweep).
 	// - MaxResidentTextures: the most GPU texture bytes resident after a frame's eviction, a maximum by nature (the
 	//   residency budget bounds every frame).
 	// - MaxFinalizeTime: the longest a frame spent finalizing loads. Of the 600 frames about 75 to 110 finalize. Most take
@@ -50,6 +56,18 @@ namespace
 	constexpr const char* c_MaxResidentTextures = "PerfGPU.Streaming.MaxResidentTextures";
 	constexpr const char* c_MaxFinalizeTime = "PerfGPU.Streaming.MaxFinalizeTime";
 	constexpr const char* c_FramesToSettle = "PerfGPU.Streaming.FramesToSettle";
+
+	// The acceptance criterion of texture cooking: the stress game at 1920x1080 over 300 frames with all of its textures
+	// resident (the all-resident sweep; the exported runtime peaked at 1034-1055 MiB with RGBA8 textures). The evicting
+	// sweep, which holds less, stays below it too (its budget is lower).
+	constexpr uint64_t c_MaxPeakPrivateBytes = 650 * c_MB;
+	constexpr float c_MaxFinalizeMs = 8.0f;
+	// The all-resident sweep's texture budget: far more than the 111.8 MB of textures, so nothing is evicted.
+	constexpr uint64_t c_AllResidentTextureBudget = 1000 * c_MB;
+	// The all-resident sweep runs this many times. Every run must meet the criteria. Peak private memory is judged by the
+	// best run: the graphics driver keeps commit charge of freed device memory for a while (see PeakPrivateMemory above),
+	// so the best run is the engine's own cost.
+	constexpr uint32_t c_Runs = 3;
 
 	double ElapsedSeconds(std::chrono::steady_clock::time_point start)
 	{
@@ -80,13 +98,34 @@ namespace
 		return std::move(*result);
 	}
 
+	// What a sweep measured, for the test's log: the finalization of every frame that finalized (median and 95th
+	// percentile next to the maximum the budget judges) and the frames each camera stop took to settle.
+	std::string DescribeSweep(const StreamingSweepResult& result)
+	{
+		std::string settled;
+		for (uint32_t frames : result.FramesToSettle)
+			settled += frames == c_StopNeverSettled ? std::string(" never") : " " + std::to_string(frames);
+		std::vector<double> finalizingFrames;
+		for (const float milliseconds : result.FinalizeMs)
+		{
+			if (milliseconds > 0.0f)
+				finalizingFrames.push_back(milliseconds);
+		}
+		const Perf::Measurement finalize = Perf::Summarize(finalizingFrames);
+		return fmt::format("resident GPU textures at most {} MB (budget {} MB); peak private {} MB, peak working set {} MB; {} frames finalized, median {} ms, "
+			"p95 {} ms, at most {} ms and {} MB per frame; at most {} MB in flight; {} loads, {} evictions; frames until each stop settled:{}",
+			result.MaxResidentTextureBytes / c_MBDouble, result.TextureBudget / c_MBDouble, result.PeakPrivateBytes / c_MBDouble,
+			result.PeakWorkingSetBytes / c_MBDouble, finalize.Iterations, finalize.MedianMs, finalize.P95Ms, result.MaxFinalizeMs,
+			result.MaxUploadedBytes / c_MBDouble, result.MaxInFlightBytes / c_MBDouble, result.LoadsCompleted, result.Evictions, settled);
+	}
+
 }
 
 TEST_SUITE("PerfGPU.Streaming")
 {
-	TEST_CASE("A camera sweep over the stress world streams within its budgets")
+	TEST_CASE("Camera sweeps over the stress world stream within their budgets")
 	{
-		// The project and its pack, built in this process; the sweep runs in a helper process, whose peak memory is the
+		// The project and its pack, built in this process; the sweeps run in helper processes, whose peak memory is the
 		// streaming's alone (importing seventeen large textures in parallel peaks far higher, and a process's peak never
 		// goes down).
 		const std::filesystem::path directory = CreateTemporaryDirectory("StreamingPerf");
@@ -102,9 +141,11 @@ TEST_SUITE("PerfGPU.Streaming")
 			REQUIRE_MESSAGE(BuildStressPack(*project, directory / "Stress.stpak", error), error);
 			MESSAGE("Stress project written in ", writeSeconds, " s, imported and packed in ", ElapsedSeconds(start) - writeSeconds, " s");
 		}
-		CHECK(project->TextureBytes == 447392404);       // 16 x 2048^2 + 1 x 4096^2 RGBA8 with mips: 447.4 MB
-		CHECK(project->LargestTextureBytes == 89478484); // 89.5 MB
+		REQUIRE(GetStressTextureFormat() == TextureFormat::BC7SRGB);
+		CHECK(project->TextureBytes == 111848560);       // 16 x 2048^2 + 1 x 4096^2 BC7 with mips: 111.8 MB
+		CHECK(project->LargestTextureBytes == 22369648); // 22.4 MB
 
+		// The evicting sweep: 600 frames at 1280x720 with a texture budget that holds less than the stops show over time.
 		StreamingSweepSettings settings;
 		settings.Pack = directory / "Stress.stpak";
 		settings.Scene = project->WorldScene;
@@ -126,26 +167,10 @@ TEST_SUITE("PerfGPU.Streaming")
 			const StreamingSweepResult result = RunSweepProcess(settingsFile, directory / ("SweepResult" + std::to_string(sweep) + ".json"));
 			REQUIRE(result.FramesToSettle.size() == settings.Path.Stops);
 			REQUIRE(result.FinalizeMs.size() == result.Frames);
-			std::string settled;
 			uint32_t framesToSettle = 0;
 			for (uint32_t frames : result.FramesToSettle)
-			{
-				settled += frames == c_StopNeverSettled ? std::string(" never") : " " + std::to_string(frames);
 				framesToSettle = std::max(framesToSettle, std::min(frames, settings.Path.HoldFrames));
-			}
-			std::vector<double> finalizingFrames;
-			for (const float milliseconds : result.FinalizeMs)
-			{
-				if (milliseconds > 0.0f)
-					finalizingFrames.push_back(milliseconds);
-			}
-			const Perf::Measurement finalize = Perf::Summarize(finalizingFrames);
-			MESSAGE("Sweep ", sweep, " (", ElapsedSeconds(start), " s): resident GPU textures at most ", result.MaxResidentTextureBytes / c_MBDouble,
-				" MB (budget ", c_TextureBudget / c_MBDouble, " MB); peak private ", result.PeakPrivateBytes / c_MBDouble, " MB, peak working set ",
-				result.PeakWorkingSetBytes / c_MBDouble, " MB; ", finalize.Iterations, " frames finalized, median ", finalize.MedianMs, " ms, p95 ",
-				finalize.P95Ms, " ms, at most ", result.MaxFinalizeMs, " ms and ", result.MaxUploadedBytes / c_MBDouble, " MB per frame; at most ",
-				result.MaxInFlightBytes / c_MBDouble, " MB in flight; ", result.LoadsCompleted, " loads, ", result.Evictions,
-				" evictions; frames until each stop settled:", settled);
+			MESSAGE("Evicting sweep ", sweep, " (", ElapsedSeconds(start), " s): ", DescribeSweep(result));
 
 			// No load fails, the device reports no error, every stop settles, the textures stay within the budget give or take
 			// the largest one (what is in view stays, also beyond the budget), and the sweep needs more than the budget holds,
@@ -163,5 +188,37 @@ TEST_SUITE("PerfGPU.Streaming")
 				{ c_MaxFinalizeTime, result.MaxFinalizeMs },
 				{ c_FramesToSettle, static_cast<double>(framesToSettle) } };
 		});
+
+		// All textures resident: the stress game at 1920x1080 for 300 frames, over twelve stops whose views take in every
+		// district, with a texture budget that holds every texture. Every run: each texture arrives and none leaves, no load
+		// fails, the device reports no error and no frame finalizes for more than 8 ms; the best run's peak private memory
+		// stays below 650 MB (texture cooking's acceptance limit) and is judged by its own budget.
+		StreamingSweepSettings allResident = settings;
+		allResident.TextureBudget = c_AllResidentTextureBudget;
+		allResident.Width = 1920;
+		allResident.Height = 1080;
+		allResident.Path.Stops = 12;
+		allResident.Path.MoveFrames = 10;
+		allResident.Path.HoldFrames = 15;
+		REQUIRE(allResident.Path.GetFrameCount() == 300);
+		const std::filesystem::path allResidentFile = directory / "AllResidentSettings.json";
+		REQUIRE(FileSystem::WriteText(allResidentFile, JsonUtils::Dump(ToJson(allResident))));
+		uint64_t bestAllResidentPeakPrivateBytes = std::numeric_limits<uint64_t>::max();
+		for (uint32_t runIndex = 0; runIndex < c_Runs; runIndex++)
+		{
+			CAPTURE(runIndex);
+			const auto start = std::chrono::steady_clock::now();
+			const StreamingSweepResult result = RunSweepProcess(allResidentFile, directory / ("AllResidentResult" + std::to_string(runIndex) + ".json"));
+			MESSAGE("All resident, run ", runIndex + 1, " (", ElapsedSeconds(start), " s): ", DescribeSweep(result));
+			CHECK(result.NewErrors == 0);
+			CHECK(result.FailedAssets == 0);
+			CHECK(result.Evictions == 0);
+			CHECK(result.MaxResidentTextureBytes == project->TextureBytes);
+			CHECK(result.MaxFinalizeMs <= c_MaxFinalizeMs);
+			REQUIRE(result.PeakPrivateBytes > 0);
+			bestAllResidentPeakPrivateBytes = std::min(bestAllResidentPeakPrivateBytes, result.PeakPrivateBytes);
+		}
+		CHECK(bestAllResidentPeakPrivateBytes <= c_MaxPeakPrivateBytes);
+		Perf::CheckBudget("PerfGPU.Streaming.PeakPrivateMemoryAllResident", static_cast<double>(bestAllResidentPeakPrivateBytes) / c_MBDouble);
 	}
 }

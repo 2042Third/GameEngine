@@ -67,7 +67,8 @@ module-foundation, ran as its own workstream):
 
 - `perf-gates`: perf checks confirm a failure by measuring again (up to three attempts, all printed and recorded in
   the results file) instead of failing on one measurement; every limit lives in `StrataTests/Perf/Budgets.json`, with
-  an optional roadmap `Target` (the streaming sweep's 750 MB) next to the budget that gates; each metric's statistic is
+  an optional roadmap `Target` (the streaming sweep's 750 MB, until `texture-cook-v2`'s block-compressed textures brought
+  its budget below that) next to the budget that gates; each metric's statistic is
   justified in its test; `Tools/PerfStability.py` runs the perf label repeatedly and reports each metric's spread, pass
   rate and confirmations. Script dispatch prefetches instances ahead: the hardware prefetchers had followed the
   instances only in some code layouts, so a frame of 300,000 trivial scripts cost 6.6 or 9.8 ms with identical sources
@@ -86,6 +87,30 @@ module-foundation, ran as its own workstream):
   reference machine (`Perf.Physics`, best of three): 30,000 boxes start and play 30 frames in 274 ms (18.3 s before),
   70,000 boxes all get a body (4,465 errors before) and step in 24 ms frames with Strata's part at 6.6 ms below Jolt's,
   10,000 boxes in 2.3 ms frames (9.4 ms before), and 10,000 bodies are created in one frame in 8.9 ms (24.9 ms before).
+- `texture-cook-v2`: textures cook to GPU block compression - BC7 for color and for data of several channels, encoded
+  by Strata's own encoder (`Asset/BC7Encoder`: all eight modes, partitions ranked by an estimate and the best fitted;
+  the feature test's checker exact, a smooth gradient at 54 dB where BC1 reached 45.6), BC1 for opaque color at `Fast`
+  quality (data keeps the full BC7 search there, which keeps its channels apart), BC4 for one-channel data (sampled as
+  gray), BC5 for normal maps (Z reconstructed when shading) - with mips filtered by a Mitchell filter (sRGB in linear
+  space, alpha-weighted, wrapping like the texture, normal maps renormalized), encoded in parallel, and stored in
+  `STTX` version 2 with the mip tail first, so streaming can read it by byte range. Devices without BC support decode
+  at load time. The stress project's 447.4 MB of RGBA8 textures cook
+  to 111.8 MB (5.6 MB per 2048² texture, 22.4 MB for the 4096² one) in about 7.7 s with 23 workers
+  (`Perf.TextureCook`; BC7 takes about 15 us per block on one thread at `High`, 1.2 us at `Fast`), and its pack
+  shrinks from 472.7 MB to 137.2 MB. `PerfGPU.Streaming`'s all-resident sweep (1920x1080, 300 frames, every texture
+  resident) peaks at 518-531 MB of private memory instead of 970-987 MB with RGBA8 textures (450-461 MB while color was
+  BC1); with BC1 color the exported game peaked at 543-558 MB rendering 1920x1080 pixels (a 1280x720 window on the 150%
+  reference display) and at 658-659 MB in a 1920x1080 window there, which renders 2880x1620 pixels.
+
+  Open:
+  - The editor's `asset.import`, `asset.reimport` and `asset.setImportSettings` still cook on the main thread (encoding
+    on every worker; about 1.5 s for a 4096x4096 BC7 color texture), which `content-and-prefabs` makes asynchronous.
+  - HDR textures stay RGBA16F (8 bytes per texel) until a BC6H encoder exists.
+  - With BC7 color an upload step carries twice the bytes, and `PerfGPU.Streaming.MaxFinalizeTime` (measured before
+    `perf-gates` merged as the median of three sweeps' longest finalization) measured 4.1, 5.3 and 7.2 ms in three runs
+    against its 5.44 ms budget (the last on a loaded machine, where one sweep peaked at 14.7 ms; 3.6-4.4 ms with BC1).
+    It is now a sweep's longest finalization confirmed by up to two more sweeps; if it still fails on a quiet machine
+    it needs a steadier measure or smaller upload steps (`mip-streaming`).
 
 Open items and deferrals later waves own:
 
@@ -98,7 +123,8 @@ Open items and deferrals later waves own:
   scene may ask for still reserves about 940 MiB at play start; dynamic bodies below other dynamic bodies are still
   written back one by one; the Inspector shows the capacities once `editor-authoring`'s scene section merges.
 - A world seen all at once still peaks at about 970 MiB of private memory in the exported runtime: no budget can evict
-  what is in view, so this needs BC textures and mip streaming (`texture-cook-v2`, `mip-streaming`). Mesh uploads still
+  what is in view, so this needs BC textures and mip streaming (`texture-cook-v2`, `mip-streaming`; with BC textures the
+  stress world peaks at about 520 MB, see wave 2). Mesh uploads still
   go through NVRHI's upload manager until the budgeted upload queue (`mip-streaming`); `AssetManagerBase::GetStats`
   and eviction scans are linear in the registered assets (`render-scene`, `world-partition`).
 - Deleting one entity among 100,000 sibling roots renumbers the sibling list (about 0.5 ms), and the Hierarchy panel

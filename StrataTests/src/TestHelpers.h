@@ -86,6 +86,8 @@ namespace Strata::Tests
 
 	// Encodes 8-bit RGBA pixels (tightly packed rows) as a PNG file.
 	std::vector<uint8_t> EncodePNG(uint32_t width, uint32_t height, const std::vector<uint8_t>& rgba);
+	// The same for 1 (gray), 2 (gray and alpha), 3 (RGB) or 4 (RGBA) channels; empty when the pixels do not fit.
+	std::vector<uint8_t> EncodePNG(uint32_t width, uint32_t height, uint32_t channels, const std::vector<uint8_t>& pixels);
 	// A PNG filled with one color.
 	std::vector<uint8_t> CreateSolidPNG(uint32_t width, uint32_t height, uint8_t red, uint8_t green, uint8_t blue, uint8_t alpha = 255);
 	// The pixel sizes (width; 256 for the largest) of the images in an .ico file, from its directory. Nullopt (outError

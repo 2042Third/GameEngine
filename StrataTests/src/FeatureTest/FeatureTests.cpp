@@ -3,8 +3,11 @@
 #include "Audio/AudioTestUtils.h"
 #include "FeatureTest/FeatureTestUtils.h"
 #include "Scripting/ScriptTestUtils.h"
+#include "Strata/Asset/AssetImporter.h"
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Core/JsonUtils.h"
 #include "Strata/Reflection/ComponentRegistry.h"
+#include "Strata/Renderer/Texture.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scripting/ScriptHostAPI.h"
@@ -74,6 +77,21 @@ TEST_SUITE("FeatureTest")
 			const std::optional<std::string> committed = FileSystem::ReadText(GetFeatureProjectSourceDirectory() / "Assets" / metaPath);
 			REQUIRE(committed.has_value());
 			CHECK(FileSystem::ReadText(project.GetProject()->GetAssetDirectory() / metaPath) == committed);
+
+			// They hold every setting the importer writes for a new file: settings added later are written into them on
+			// purpose, with their defaults, so they read like the .meta files the editor writes.
+			const std::optional<nlohmann::json> meta = JsonUtils::Parse(*committed);
+			REQUIRE(meta.has_value());
+			const nlohmann::json* settings = JsonUtils::Find(*meta, "ImportSettings");
+			const std::filesystem::path sourcePath = FileSystem::FromUTF8(metadata.Path);
+			const AssetImporter* importer = AssetImporterRegistry::FindByExtension(FileSystem::ToUTF8(sourcePath.extension()));
+			REQUIRE(importer);
+			const nlohmann::json defaults = importer->GetDefaultSettings(sourcePath);
+			for (const auto& [key, value] : defaults.items())
+			{
+				INFO("Import setting ", key);
+				CHECK((settings && settings->contains(key)));
+			}
 		}
 
 		// The project has an asset of every type (the types are found through their names, so new ones are included).
@@ -88,6 +106,19 @@ TEST_SUITE("FeatureTest")
 		{
 			if (entry.Level >= LogLevel::Warn)
 				FAIL_CHECK("Unexpected ", std::string(LogLevelToString(entry.Level)), " from ", entry.Logger, ": ", entry.Message);
+		}
+
+		// The textures cook to the formats their usage gives with default settings: block-compressed color, normal map and
+		// one-channel (grayscale) data, half-float HDR.
+		const std::pair<std::string, TextureFormat> textures[] = { { "Textures/Checker.png", TextureFormat::BC7SRGB },
+			{ "Textures/Bumps_normal.png", TextureFormat::BC5 }, { "Textures/Roughness.png", TextureFormat::BC4 }, { "Textures/Sky.hdr", TextureFormat::RGBA16F } };
+		for (const auto& [path, format] : textures)
+		{
+			INFO("Texture ", path);
+			const Ref<Texture> texture = std::dynamic_pointer_cast<Texture>(manager->LoadAssetSync(manager->FindAssetByPath(path)));
+			REQUIRE(texture);
+			CHECK(texture->GetSpecification().Format == format);
+			CHECK(texture->GetSpecification().Grayscale == (format == TextureFormat::BC4));
 		}
 	}
 

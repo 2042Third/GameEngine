@@ -1,10 +1,12 @@
 {
 	"Handle": "F7A0000000000006",
 	"ImportSettings": {
+		"Compression": "Auto",
 		"Filter": "Linear",
 		"FlipVertically": false,
 		"GenerateMips": true,
 		"MaxSize": 0,
+		"Quality": "High",
 		"Usage": "HDR",
 		"Wrap": "Clamp"
 	},

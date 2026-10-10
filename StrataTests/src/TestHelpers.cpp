@@ -160,14 +160,20 @@ namespace Strata::Tests
 
 	std::vector<uint8_t> EncodePNG(uint32_t width, uint32_t height, const std::vector<uint8_t>& rgba)
 	{
+		return EncodePNG(width, height, 4, rgba);
+	}
+
+	std::vector<uint8_t> EncodePNG(uint32_t width, uint32_t height, uint32_t channels, const std::vector<uint8_t>& pixels)
+	{
 		std::vector<uint8_t> encoded;
 		auto write = [](void* context, void* data, int size)
 		{
 			auto* output = static_cast<std::vector<uint8_t>*>(context);
 			output->insert(output->end(), static_cast<uint8_t*>(data), static_cast<uint8_t*>(data) + size);
 		};
-		if (rgba.size() < static_cast<size_t>(width) * height * 4
-			|| !stbi_write_png_to_func(write, &encoded, static_cast<int>(width), static_cast<int>(height), 4, rgba.data(), static_cast<int>(width * 4)))
+		if (channels < 1 || channels > 4 || pixels.size() < static_cast<size_t>(width) * height * channels
+			|| !stbi_write_png_to_func(write, &encoded, static_cast<int>(width), static_cast<int>(height), static_cast<int>(channels), pixels.data(),
+				static_cast<int>(width * channels)))
 			return {};
 		return encoded;
 	}

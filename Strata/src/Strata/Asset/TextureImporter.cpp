@@ -1,11 +1,11 @@
 #include "stpch.h"
 #include "Strata/Asset/TextureImporter.h"
 
+#include "Strata/Asset/TextureCooker.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Core/StringUtils.h"
 
-#include <glm/gtc/packing.hpp>
 #include <stb_image.h>
 #include <stb_image_resize2.h>
 
@@ -68,14 +68,40 @@ namespace Strata
 			void operator()(void* pixels) const { stbi_image_free(pixels); }
 		};
 
-		void FlipRows(std::vector<uint8_t>& pixels, size_t rowBytes, uint32_t height)
+		template<typename T>
+		void FlipRows(std::vector<T>& pixels, size_t rowElements, uint32_t height)
 		{
 			for (uint32_t row = 0; row < height / 2; row++)
 			{
-				uint8_t* top = pixels.data() + row * rowBytes;
-				uint8_t* bottom = pixels.data() + (height - 1 - row) * rowBytes;
-				std::swap_ranges(top, top + rowBytes, bottom);
+				T* top = pixels.data() + row * rowElements;
+				T* bottom = pixels.data() + (height - 1 - row) * rowElements;
+				std::swap_ranges(top, top + rowElements, bottom);
 			}
+		}
+
+		// The channels to decode an 8-bit image with `sourceChannels` into for a usage (see TextureImporter::Decode).
+		uint32_t GetDecodedChannels(TextureUsage usage, uint32_t sourceChannels)
+		{
+			const bool alpha = sourceChannels == 2 || sourceChannels == 4;
+			switch (usage)
+			{
+				case TextureUsage::Color:     return alpha ? 4 : 3;
+				case TextureUsage::NormalMap: return 3;
+				case TextureUsage::Data:      return sourceChannels == 1 ? 1 : (alpha ? 4 : 3);
+				case TextureUsage::HDR:       return 4;
+			}
+			return 4;
+		}
+
+		// Whether an RGBA image has a texel that is not fully opaque.
+		bool HasTranslucentTexels(const TextureCooker::Image& image)
+		{
+			for (size_t index = 3; index < image.Pixels.size(); index += 4)
+			{
+				if (image.Pixels[index] != 255)
+					return true;
+			}
+			return false;
 		}
 
 		// Size after applying the size limit, preserving the aspect ratio.
@@ -114,10 +140,40 @@ namespace Strata
 		return std::nullopt;
 	}
 
+	const char* TextureCompressionToString(TextureCompression compression)
+	{
+		return compression == TextureCompression::Uncompressed ? "Uncompressed" : "Auto";
+	}
+
+	std::optional<TextureCompression> TextureCompressionFromString(std::string_view text)
+	{
+		if (text == "Auto")
+			return TextureCompression::Auto;
+		if (text == "Uncompressed")
+			return TextureCompression::Uncompressed;
+		return std::nullopt;
+	}
+
+	const char* TextureQualityToString(TextureQuality quality)
+	{
+		return quality == TextureQuality::Fast ? "Fast" : "High";
+	}
+
+	std::optional<TextureQuality> TextureQualityFromString(std::string_view text)
+	{
+		if (text == "High")
+			return TextureQuality::High;
+		if (text == "Fast")
+			return TextureQuality::Fast;
+		return std::nullopt;
+	}
+
 	nlohmann::json TextureImportSettings::ToJson() const
 	{
 		nlohmann::json json = nlohmann::json::object();
 		json["Usage"] = TextureUsageToString(Usage);
+		json["Compression"] = TextureCompressionToString(Compression);
+		json["Quality"] = TextureQualityToString(Quality);
 		json["GenerateMips"] = GenerateMips;
 		json["Filter"] = TextureFilterToString(Filter);
 		json["Wrap"] = TextureWrapToString(Wrap);
@@ -145,6 +201,22 @@ namespace Strata
 				settings.Usage = *value;
 			else
 				warn("Unknown texture usage; expected Color, NormalMap, Data or HDR");
+		}
+		if (const nlohmann::json* compression = JsonUtils::Find(json, "Compression"))
+		{
+			std::optional<TextureCompression> value = compression->is_string() ? TextureCompressionFromString(compression->get<std::string>()) : std::nullopt;
+			if (value)
+				settings.Compression = *value;
+			else
+				warn("Unknown texture compression; expected Auto or Uncompressed");
+		}
+		if (const nlohmann::json* quality = JsonUtils::Find(json, "Quality"))
+		{
+			std::optional<TextureQuality> value = quality->is_string() ? TextureQualityFromString(quality->get<std::string>()) : std::nullopt;
+			if (value)
+				settings.Quality = *value;
+			else
+				warn("Unknown texture compression quality; expected High or Fast");
 		}
 		if (const nlohmann::json* filter = JsonUtils::Find(json, "Filter"))
 		{
@@ -254,8 +326,8 @@ namespace Strata
 		const int length = static_cast<int>(encoded.size());
 		int width = 0;
 		int height = 0;
-		int channels = 0;
-		if (!stbi_info_from_memory(data, length, &width, &height, &channels))
+		int sourceChannels = 0;
+		if (!stbi_info_from_memory(data, length, &width, &height, &sourceChannels))
 			return fail(fmt::format("unsupported or corrupt image ({})", GetDecodeFailureReason()));
 		if (width <= 0 || height <= 0 || static_cast<uint64_t>(width) * static_cast<uint64_t>(height) > c_MaxDecodedPixels)
 			return fail(fmt::format("image size {}x{} is not supported", width, height));
@@ -264,90 +336,139 @@ namespace Strata
 		const uint32_t sourceHeight = static_cast<uint32_t>(height);
 		const glm::uvec2 targetSize = CalculateTargetSize(sourceWidth, sourceHeight, settings.MaxSize);
 		const bool resize = targetSize.x != sourceWidth || targetSize.y != sourceHeight;
+		const int outputWidth = static_cast<int>(targetSize.x);
+		const int outputHeight = static_cast<int>(targetSize.y);
+		const size_t targetPixels = static_cast<size_t>(targetSize.x) * targetSize.y;
 
 		TextureSpecification specification;
 		specification.Filter = settings.Filter;
 		specification.Wrap = settings.Wrap;
 		specification.DebugName = debugName;
+		std::vector<TextureMip> mips;
+		std::string error;
 
-		std::vector<TextureMip> mips(1);
-		mips[0].Width = targetSize.x;
-		mips[0].Height = targetSize.y;
-		const size_t targetPixels = static_cast<size_t>(targetSize.x) * targetSize.y;
-
-		// Peak memory is the decoded image plus the final level 0: stb's buffer is consumed directly by the resize or
-		// the format conversion, never copied in between.
-		const int outputWidth = static_cast<int>(targetSize.x);
-		const int outputHeight = static_cast<int>(targetSize.y);
+		// Peak memory is the decoded image plus the final level 0 and the levels being cooked: stb's buffer is consumed
+		// directly by the resize, never copied in between.
 		int decodedWidth = 0;
 		int decodedHeight = 0;
+		int ignoredChannels = 0;
 		if (settings.Usage == TextureUsage::HDR)
 		{
 			// LDR sources are converted to linear values with the sRGB-like gamma stb_image applies (2.2).
-			std::unique_ptr<float, StbImageDeleter> decoded(stbi_loadf_from_memory(data, length, &decodedWidth, &decodedHeight, &channels, 4));
+			std::unique_ptr<float, StbImageDeleter> decoded(stbi_loadf_from_memory(data, length, &decodedWidth, &decodedHeight, &ignoredChannels, 4));
 			if (!decoded)
 				return fail(fmt::format("decoding failed ({})", GetDecodeFailureReason()));
 			if (decodedWidth != width || decodedHeight != height)
 				return fail("decoded size differs from the image header");
 
-			std::vector<float> resized;
-			const float* pixels = decoded.get();
+			TextureCooker::FloatImage level0;
+			level0.Width = targetSize.x;
+			level0.Height = targetSize.y;
 			if (resize)
 			{
-				resized.resize(targetPixels * 4);
-				if (!stbir_resize_float_linear(decoded.get(), width, height, 0, resized.data(), outputWidth, outputHeight, 0, STBIR_4CHANNEL))
+				level0.Pixels.resize(targetPixels * 4);
+				if (!stbir_resize_float_linear(decoded.get(), width, height, 0, level0.Pixels.data(), outputWidth, outputHeight, 0, STBIR_4CHANNEL))
 					return fail("resizing failed");
-				decoded.reset();
-				pixels = resized.data();
 			}
+			else
+			{
+				level0.Pixels.assign(decoded.get(), decoded.get() + targetPixels * 4);
+			}
+			decoded.reset();
+			if (settings.FlipVertically)
+				FlipRows(level0.Pixels, static_cast<size_t>(targetSize.x) * 4, targetSize.y);
 
 			specification.Format = TextureFormat::RGBA16F;
-			mips[0].Data.resize(targetPixels * 8);
-			for (size_t index = 0; index < targetPixels * 4; index++)
-			{
-				// Clamp to the half-float range (and drop NaN/negative values some HDR encoders produce).
-				const float value = std::isfinite(pixels[index]) ? std::clamp(pixels[index], 0.0f, 65504.0f) : 0.0f;
-				const uint16_t half = glm::packHalf1x16(value);
-				std::memcpy(mips[0].Data.data() + index * sizeof(half), &half, sizeof(half));
-			}
+			if (!TextureCooker::CookHDRLevels(std::move(level0), settings.GenerateMips, settings.Wrap, mips, &error))
+				return fail(error);
 		}
 		else
 		{
-			std::unique_ptr<stbi_uc, StbImageDeleter> decoded(stbi_load_from_memory(data, length, &decodedWidth, &decodedHeight, &channels, 4));
+			// Only the channels the stored format needs are decoded: color keeps RGB or RGBA (gray becomes RGB, as sRGB
+			// formats are color), normal maps XYZ, data its own channels (gray and alpha become RGBA).
+			const uint32_t channels = GetDecodedChannels(settings.Usage, static_cast<uint32_t>(sourceChannels));
+			std::unique_ptr<stbi_uc, StbImageDeleter> decoded(stbi_load_from_memory(data, length, &decodedWidth, &decodedHeight, &ignoredChannels,
+				static_cast<int>(channels)));
 			if (!decoded)
 				return fail(fmt::format("decoding failed ({})", GetDecodeFailureReason()));
 			if (decodedWidth != width || decodedHeight != height)
 				return fail("decoded size differs from the image header");
 
-			const bool srgb = settings.Usage == TextureUsage::Color;
-			specification.Format = srgb ? TextureFormat::RGBA8SRGB : TextureFormat::RGBA8;
+			const bool color = settings.Usage == TextureUsage::Color;
+			TextureCooker::Image level0;
+			level0.Width = targetSize.x;
+			level0.Height = targetSize.y;
+			level0.Channels = channels;
 			if (resize)
 			{
-				mips[0].Data.resize(targetPixels * 4);
+				level0.Pixels.resize(targetPixels * channels);
 				// Color is filtered in linear space with alpha weighting; data and normals channel by channel.
-				const bool success = srgb
-					? stbir_resize_uint8_srgb(decoded.get(), width, height, 0, mips[0].Data.data(), outputWidth, outputHeight, 0, STBIR_RGBA) != nullptr
-					: stbir_resize_uint8_linear(decoded.get(), width, height, 0, mips[0].Data.data(), outputWidth, outputHeight, 0, STBIR_4CHANNEL) != nullptr;
+				const stbir_pixel_layout layout = channels == 1 ? STBIR_1CHANNEL : channels == 3 ? STBIR_RGB : (color ? STBIR_RGBA : STBIR_4CHANNEL);
+				const bool success = color
+					? stbir_resize_uint8_srgb(decoded.get(), width, height, 0, level0.Pixels.data(), outputWidth, outputHeight, 0, layout) != nullptr
+					: stbir_resize_uint8_linear(decoded.get(), width, height, 0, level0.Pixels.data(), outputWidth, outputHeight, 0, layout) != nullptr;
 				if (!success)
 					return fail("resizing failed");
 			}
 			else
 			{
-				mips[0].Data.assign(decoded.get(), decoded.get() + targetPixels * 4);
+				level0.Pixels.assign(decoded.get(), decoded.get() + targetPixels * channels);
 			}
+			decoded.reset();
+			if (settings.FlipVertically)
+				FlipRows(level0.Pixels, static_cast<size_t>(targetSize.x) * channels, targetSize.y);
+
+			const bool hasAlpha = channels == 4 && HasTranslucentTexels(level0);
+			specification.Format = ChooseFormat(settings, channels, hasAlpha);
+			specification.Grayscale = GetTextureFormatInfo(specification.Format).Channels == 1;
+
+			TextureCooker::CookSettings cook;
+			cook.Format = specification.Format;
+			cook.GenerateMips = settings.GenerateMips;
+			cook.SRGB = color;
+			cook.AlphaWeighted = color && hasAlpha;
+			cook.NormalMap = settings.Usage == TextureUsage::NormalMap;
+			cook.Wrap = settings.Wrap;
+			// Fast's BC7 tries only the single-subset modes (6, and 5 when alpha varies), which keep a block's colors on one
+			// line through RGB space as BC1 does. Color mostly follows such lines; the channels of data vary independently,
+			// and a metallic edge would shift the roughness beside it (see ChooseFormat), so data is searched in full at
+			// either quality.
+			cook.HighQuality = settings.Quality == TextureQuality::High || settings.Usage == TextureUsage::Data;
+			if (!TextureCooker::CookLevels(std::move(level0), cook, mips, &error))
+				return fail(error);
 		}
 
-		if (settings.FlipVertically)
-			FlipRows(mips[0].Data, static_cast<size_t>(targetSize.x) * GetTextureFormatBytesPerPixel(specification.Format), targetSize.y);
-
-		if (settings.GenerateMips && !TextureUtils::GenerateMips(mips, specification.Format, settings.Usage == TextureUsage::NormalMap))
-			return fail("mip generation failed");
-
-		std::string error;
 		Ref<Texture> texture = Texture::Create(specification, std::move(mips), &error);
 		if (!texture)
 			return fail(error);
 		return texture;
+	}
+
+	TextureFormat TextureImporter::ChooseFormat(const TextureImportSettings& settings, uint32_t channels, bool hasAlpha)
+	{
+		const bool compress = settings.Compression == TextureCompression::Auto;
+		switch (settings.Usage)
+		{
+			case TextureUsage::Color:
+				if (!compress)
+					return TextureFormat::RGBA8SRGB;
+				// Fast trades quality for time and size where it can: opaque color as BC1 (half of BC7's bytes, colors on one
+				// line per block). Alpha needs BC7 (BC3's color is BC1's).
+				return settings.Quality == TextureQuality::Fast && !hasAlpha ? TextureFormat::BC1SRGB : TextureFormat::BC7SRGB;
+			case TextureUsage::NormalMap:
+				return compress ? TextureFormat::BC5 : TextureFormat::RGBA8;
+			case TextureUsage::Data:
+				// The channels of data vary independently (occlusion, roughness and metallic in one texture), which BC1 and
+				// BC3 cannot store (the colors of one of their blocks lie on a line through RGB space, so a metallic edge
+				// inside a block would shift the roughness next to it by up to a sixth); BC7 can, with partitions and a
+				// channel stored apart. One channel is BC4.
+				if (channels == 1)
+					return compress ? TextureFormat::BC4 : TextureFormat::R8;
+				return compress ? TextureFormat::BC7 : TextureFormat::RGBA8;
+			case TextureUsage::HDR:
+				return TextureFormat::RGBA16F;
+		}
+		return TextureFormat::RGBA8;
 	}
 
 }
