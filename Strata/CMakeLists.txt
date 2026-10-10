@@ -42,6 +42,7 @@ strata_add_shaders(Strata
 		Scene/ShadowMask.frag
 		Scene/LightClusters.comp
 		IBL/EquirectToCube.comp
+		IBL/ProceduralSky.comp
 		IBL/CubeDownsample.comp
 		IBL/Irradiance.comp
 		IBL/Prefilter.comp

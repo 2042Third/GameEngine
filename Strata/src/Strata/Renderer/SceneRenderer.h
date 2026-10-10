@@ -69,10 +69,22 @@ namespace Strata
 		uint32_t ShadowCascades = 4;   // 1-4
 	};
 
-	// Overlays drawn over the finished image (after tone mapping and anti-aliasing) with exact display colors, mainly for
-	// editors. Everything is off by default.
+	// How a scene is shown, beyond its own data: mainly editor views. With the defaults a scene renders exactly as a game
+	// shows it.
 	struct SceneRenderOptions
 	{
+		// Editor preview lighting: a scene with neither an active directional light nor an active sky light is lit by a
+		// preview sun (a default directional light shining from SceneRenderer::GetPreviewSunDirection) and a procedural
+		// sky with the default SkyLightComponent colors, so unlit content shows its shape. Scenes with any lighting of
+		// their own render unchanged. Never part of the scene (not saved, not in games).
+		bool PreviewEnvironment = false;
+		// Screen-space text (the game's HUD). Editor views turn it off so the HUD does not cover the scene being edited;
+		// world-space text is always drawn.
+		bool DrawScreenSpaceText = true;
+
+		// The overlays below are drawn over the finished image (after tone mapping and anti-aliasing) with exact display
+		// colors; all of them are off by default.
+
 		// Infinite ground grid on the y = 0 plane, hidden behind scene geometry: minor lines every GridSpacing world units,
 		// a major line every GridMajorEvery lines, the X axis in GridAxisXColor and the Z axis in GridAxisZColor. It fades out
 		// between half the fade distance and the fade distance from the camera.
@@ -112,11 +124,17 @@ namespace Strata
 		uint32_t DroppedLights = 0;   // Visible point and spot lights beyond SceneRendererSpecification::MaxLights
 		uint32_t Materials = 0;
 		uint32_t PendingAssets = 0;   // Meshes, materials or textures still loading (drawn with fallbacks or skipped)
-		bool EnvironmentLighting = false; // A sky light's environment map lights the scene
+		bool EnvironmentLighting = false; // A sky light's environment (map or procedural sky) lights the scene
+		// Environment cubes computed this frame (with their irradiance and prefiltered maps): 1 when the environment map
+		// or the procedural sky's parameters (colors, sun size and intensity, the sun's direction and color) changed.
+		uint32_t EnvironmentUpdates = 0;
+		bool PreviewLighting = false;     // SceneRenderOptions::PreviewEnvironment lit the scene (it has no lights of its own)
 		uint32_t ShadowCasters = 0;       // Instances drawn into shadow cascades (summed over cascades)
 		uint32_t DebugLines = 0;          // Lines drawn from SceneRenderOptions::DebugShapes
 		uint32_t OutlinedEntities = 0;    // Selected entities of the rendered scene
 		uint32_t Texts = 0;               // Text components drawn
+		uint32_t ScreenSpaceTexts = 0;    // Of those, screen-space ones (the HUD)
+		uint32_t HiddenScreenSpaceTexts = 0; // Screen-space text left out (SceneRenderOptions::DrawScreenSpaceText is off)
 		uint32_t TextGlyphs = 0;
 		uint32_t PendingTextGlyphs = 0;   // Glyphs waiting for rasterization (budgeted per frame), drawn on a later frame
 		uint32_t RasterizedTextGlyphs = 0; // Glyphs added to font atlases this frame (see TextRenderer::c_FrameRasterBudget)
@@ -124,15 +142,23 @@ namespace Strata
 
 	// Renders a scene: depth/normal/entity-id prepass, ground-truth ambient occlusion, forward physically based
 	// shading into an HDR target (directional light with cascaded soft shadows, clustered point and spot lights,
-	// image-based lighting from a sky light's HDR environment map), the environment background and transparent
-	// surfaces; then post-processing from the scene's PostProcessComponent: automatic exposure, bloom, tone mapping,
-	// color grading and FXAA into a display target. Meshes, materials and textures come from the active asset manager
-	// and render as soon as they are loaded (fallback textures and the default material are used meanwhile).
-	// Editor overlays (grid, selection outline, debug lines) are optional; see SceneRenderOptions.
-	// Main thread only.
+	// image-based lighting from a sky light's HDR environment map or procedural sky), the environment background and
+	// transparent surfaces; then post-processing from the scene's PostProcessComponent: automatic exposure, bloom, tone
+	// mapping, color grading and FXAA into a display target. Meshes, materials and textures come from the active asset
+	// manager and render as soon as they are loaded (fallback textures and the default material are used meanwhile).
+	// Editor views (preview lighting, hidden HUD, grid, selection outline, debug lines) are optional; see
+	// SceneRenderOptions. Main thread only.
 	class SceneRenderer
 	{
 	public:
+		// Unit direction toward the sun of a procedural sky in a scene without a directional light: 45 degrees above the
+		// horizon, between +X and +Z.
+		static glm::vec3 GetDefaultSunDirection();
+		// Unit direction toward the preview sun (SceneRenderOptions::PreviewEnvironment): 55 degrees above the horizon,
+		// between +X and +Z, so the faces of a box seen from the editor camera's default direction (from +X+Z, above) get
+		// clearly different amounts of light.
+		static glm::vec3 GetPreviewSunDirection();
+
 		explicit SceneRenderer(const SceneRendererSpecification& specification = {});
 		~SceneRenderer();
 
@@ -259,15 +285,35 @@ namespace Strata
 			uint32_t Order = 0; // Registry order, which breaks ties between equally relevant lights
 		};
 
+		struct EnvironmentMaps
+		{
+			Ref<Texture> Source; // Equirectangular HDR texture the maps were computed from (null for a procedural sky)
+			std::optional<RenderData::ProceduralSkyParameters> Procedural; // The procedural sky the maps were computed from
+			nvrhi::TextureHandle Cube;        // Radiance cubemap with mips (background, irradiance source)
+			nvrhi::TextureHandle Irradiance;  // Diffuse irradiance
+			nvrhi::TextureHandle Prefiltered; // Specular radiance, one mip per roughness level
+		};
+
 		void CreateResources();
 		void CreateIBLResources();
 		// Recreates the viewport-sized targets; false (targets released, error logged) when they cannot be created.
 		bool CreateRenderTargets();
 		void ReleaseRenderTargets();
 		bool ValidateTarget(nvrhi::IFramebuffer* target);
-		// Finds the scene's sky light; (re)computes the environment maps when its environment texture changed.
-		void UpdateEnvironment(Scene& scene, RenderData::FrameConstants& frame, nvrhi::ICommandList* commandList);
+		// Finds the scene's sky light (or the preview sky); (re)computes the environment maps when its environment texture
+		// or its procedural sky's parameters changed.
+		void UpdateEnvironment(Scene& scene, bool preview, RenderData::FrameConstants& frame, nvrhi::ICommandList* commandList);
+		// New environment textures (radiance cube with mips, irradiance, prefiltered).
+		EnvironmentMaps CreateEnvironmentMaps();
+		// The environment maps of an equirectangular texture (new textures, so maps of the previous source are never
+		// overwritten while it may still be in use).
 		void ProcessEnvironment(nvrhi::ICommandList* commandList, const Ref<Texture>& source);
+		// The environment maps of a procedural sky, computed into the current procedural sky's textures when there are
+		// some (parameter changes, such as a moving sun, then allocate nothing).
+		void GenerateProceduralSky(nvrhi::ICommandList* commandList, const RenderData::ProceduralSkyParameters& parameters);
+		// Mips of the radiance cube from its mip 0, then the irradiance and prefiltered maps from the cube.
+		void FilterEnvironment(nvrhi::ICommandList* commandList, const EnvironmentMaps& maps);
+		RenderData::ProceduralSkyParameters GetProceduralSkyParameters(const SkyLightComponent& sky, const RenderData::FrameConstants& frame) const;
 		void DispatchIBL(nvrhi::ICommandList* commandList, nvrhi::IComputePipeline* pipeline, nvrhi::ITexture* source, const nvrhi::TextureSubresourceSet& sourceSubresources,
 			nvrhi::TextureDimension sourceDimension, nvrhi::ITexture* output, uint32_t outputMip, nvrhi::TextureDimension outputDimension,
 			const RenderData::IBLParameters& parameters, uint32_t layers);
@@ -288,7 +334,8 @@ namespace Strata
 		uint32_t GetMaterialIndex(const Ref<Material>& material);
 		void CountPendingAsset(AssetHandle handle);
 		uint32_t ResolveTexture(AssetHandle handle, uint32_t missingSlot, uint32_t loadingSlot);
-		void CollectLights(Scene& scene, const SceneCamera& camera, RenderData::FrameConstants& frame);
+		// The directional light (the preview sun with `preview`), ambient light and the visible point and spot lights.
+		void CollectLights(Scene& scene, const SceneCamera& camera, bool preview, RenderData::FrameConstants& frame);
 		void CollectDraws(Scene& scene, const SceneCamera& camera);
 		// Computes the cascades and gathers the shadow casters of each; leaves ShadowParams.w at 0 without shadows.
 		void CollectShadowCasters(Scene& scene, const SceneCamera& camera, RenderData::FrameConstants& frame);
@@ -329,17 +376,12 @@ namespace Strata
 		nvrhi::GraphicsPipelineHandle m_SkyboxPipeline;
 
 		// Image-based lighting
-		struct EnvironmentMaps
-		{
-			Ref<Texture> Source;                 // Equirectangular HDR texture the maps were computed from
-			nvrhi::TextureHandle Cube;           // Radiance cubemap with mips (background, irradiance source)
-			nvrhi::TextureHandle Irradiance;     // Diffuse irradiance
-			nvrhi::TextureHandle Prefiltered;    // Specular radiance, one mip per roughness level
-		};
 		EnvironmentMaps m_Environment;
 		nvrhi::ITexture* m_BoundEnvironment = nullptr; // Environment cube referenced by m_SceneBindingSet
 		nvrhi::BindingLayoutHandle m_IBLBindingLayout;
 		nvrhi::ComputePipelineHandle m_EquirectToCubePipeline;
+		nvrhi::BindingLayoutHandle m_ProceduralSkyBindingLayout;
+		nvrhi::ComputePipelineHandle m_ProceduralSkyPipeline;
 		nvrhi::ComputePipelineHandle m_CubeDownsamplePipeline;
 		nvrhi::ComputePipelineHandle m_IrradiancePipeline;
 		nvrhi::ComputePipelineHandle m_PrefilterPipeline;
@@ -347,8 +389,9 @@ namespace Strata
 		nvrhi::SamplerHandle m_LinearClampSampler;
 		nvrhi::SamplerHandle m_EquirectSampler;
 
-		// Directional shadows
+		// Directional light and shadows
 		ShadowLight m_ShadowLight;
+		glm::vec3 m_SunColor = glm::vec3(1.0f); // Color of the directional light the scene is lit by (the procedural sun's tint)
 		nvrhi::TextureHandle m_ShadowMap;      // Depth array, one layer per cascade (created on first use)
 		nvrhi::TextureHandle m_DummyShadowMap; // Bound while no shadows are rendered
 		nvrhi::ITexture* m_BoundShadowMap = nullptr;

@@ -567,6 +567,17 @@ and `AudioSystem`, the built-in "Audio" scene system.
   transparent surfaces (back to front), then post-processing from the scene's `PostProcessComponent`
   (exposure, bloom, tone mapping and grading, FXAA). A target framebuffer must match the viewport size
   and have a non-sRGB UNORM color format; `Render` returns false (and logs once) instead of rescaling.
+- Image-based lighting comes from the first active `SkyLightComponent`: an equirectangular HDR map (`EnvironmentMap`) or,
+  with `Source = Procedural`, `IBL/ProceduralSky.comp` (zenith, horizon and ground colors as linear radiance, and the
+  sun's disk where the directional light the scene is lit by comes from, 45 degrees up without one). Either source only
+  writes mip 0 of the environment cube; the mips, irradiance and prefiltered maps are computed by the same chain
+  (`SceneRenderer::FilterEnvironment`). A procedural cube is computed again only when its parameters
+  (`RenderData::ProceduralSkyParameters`, compared exactly) change, into the same textures, and
+  `SceneRendererStats::EnvironmentUpdates` counts it; `Rotation` applies to maps only.
+- `SceneRenderOptions` also shapes editor views: `PreviewEnvironment` lights a scene with neither an active directional
+  light nor an active sky light with a preview sun (`SceneRenderer::GetPreviewSunDirection`) and the default procedural
+  sky (`SceneRendererStats::PreviewLighting`); `DrawScreenSpaceText = false` leaves the HUD out (`ScreenSpaceTexts`,
+  `HiddenScreenSpaceTexts`). The defaults render a scene exactly as a game shows it.
 - Light units are relative but physically consistent: directional intensity acts like illuminance,
   point and spot intensity like luminous intensity with inverse-square falloff (cut off at `Range`).
   Automatic exposure maps the average luminance of the non-black pixels to middle gray; tests that

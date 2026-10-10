@@ -127,7 +127,11 @@ Scene, Prefab, Model, Mesh, Material, Texture, AudioClip and Font (`AssetTypes.h
 holds the process-wide services: the device, `ShaderLibrary` (SPIR-V compiled from `Strata/shaders` by glslang at
 build time and embedded, `CMake/StrataShaders.cmake`), samplers, fallback textures, `BindlessTextureTable` and the
 blocking `ReadTexture`. `SceneRenderer` draws a scene (light clustering, shadow cascades, depth/normal/entity-ID
-prepass, GTAO, forward PBR, sky, transparents, exposure, bloom, tone mapping, FXAA, then overlays and text). Assets:
+prepass, GTAO, forward PBR, sky, transparents, exposure, bloom, tone mapping, FXAA, then overlays and text). Its
+image-based lighting comes from the sky light's environment map or its procedural sky (`IBL/ProceduralSky.comp` writes
+mip 0 of the environment cube, then the shared filtering chain runs), computed again only when the source or the
+procedural parameters change; editor views can ask for preview lighting and leave out screen-space text
+(`SceneRenderOptions`). Assets:
 `Mesh`, `Material`, `Texture`, `Font`; procedural primitives come from `MeshFactory`. Also `TextRenderer`/`FontAtlas`,
 `DebugDraw`/`SceneGizmos`, `TextureReadback` (non-blocking GPU readback) and `ImageWriter` (PNG). Conventions and
 rules: AGENTS.md, "Architecture rules" and "Rendering".

@@ -21,6 +21,8 @@ namespace Strata
 	struct TextRenderStats
 	{
 		uint32_t Texts = 0;            // Text components drawn
+		uint32_t ScreenSpaceTexts = 0; // Of those, screen-space ones
+		uint32_t HiddenScreenSpaceTexts = 0; // Screen-space text left out (Prepare without drawScreenSpace)
 		uint32_t Glyphs = 0;           // Glyph quads drawn
 		uint32_t PendingFonts = 0;     // Text drawn with the default font while its own font loads
 		uint32_t PendingGlyphs = 0;    // Glyphs left out while they wait for rasterization (drawn on a later frame)
@@ -46,9 +48,10 @@ namespace Strata
 		TextRenderer(const TextRenderer&) = delete;
 		TextRenderer& operator=(const TextRenderer&) = delete;
 
-		// Lays out the scene's active text and uploads glyphs and vertices with the command list. Returns false when
-		// there is nothing to draw (or the upload failed, which is logged).
-		bool Prepare(Scene& scene, const glm::uvec2& viewportSize, nvrhi::ICommandList* commandList, TextRenderStats& outStats);
+		// Lays out the scene's active text and uploads glyphs and vertices with the command list. Without drawScreenSpace
+		// only world-space text is prepared (screen-space text is counted as hidden, and its glyphs are not rasterized).
+		// Returns false when there is nothing to draw (or the upload failed, which is logged).
+		bool Prepare(Scene& scene, const glm::uvec2& viewportSize, bool drawScreenSpace, nvrhi::ICommandList* commandList, TextRenderStats& outStats);
 		// Draws the prepared world-space or screen-space text into a framebuffer whose depth attachment holds the scene
 		// depth (world-space text is hidden behind it).
 		void Draw(nvrhi::ICommandList* commandList, nvrhi::IFramebuffer* framebuffer, bool screenSpace);

@@ -61,6 +61,32 @@ namespace Strata
 		constexpr int c_ShadowDepthBias = -16;
 		constexpr float c_ShadowSlopeDepthBias = -1.5f;
 
+		// Elevation and azimuth (from +X toward +Z), in degrees, of SceneRenderer::GetDefaultSunDirection.
+		constexpr float c_DefaultSunElevation = 45.0f;
+		constexpr float c_DefaultSunAzimuth = 37.0f;
+		// Of SceneRenderer::GetPreviewSunDirection: the top, +X and +Z faces of a box get 0.82, 0.54 and 0.20 of the
+		// sunlight, different enough to tell them apart after tone mapping, which compresses bright values.
+		constexpr float c_PreviewSunElevation = 55.0f;
+		constexpr float c_PreviewSunAzimuth = 20.0f;
+
+		glm::vec3 DirectionFromAngles(float elevationDegrees, float azimuthDegrees)
+		{
+			const float elevation = glm::radians(elevationDegrees);
+			const float azimuth = glm::radians(azimuthDegrees);
+			return glm::vec3(std::cos(elevation) * std::cos(azimuth), std::sin(elevation), std::cos(elevation) * std::sin(azimuth));
+		}
+
+		bool IsFinite(const glm::vec3& value)
+		{
+			return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+		}
+
+		// A color of the procedural sky as the shader may use it: finite, not negative, within half-float range.
+		glm::vec4 SanitizeRadiance(const glm::vec3& color)
+		{
+			return glm::vec4(IsFinite(color) ? glm::clamp(color, glm::vec3(0.0f), glm::vec3(65000.0f)) : glm::vec3(0.0f), 0.0f);
+		}
+
 		uint32_t MipCountFor(uint32_t size)
 		{
 			uint32_t count = 1;
@@ -118,6 +144,17 @@ namespace Strata
 			return glm::vec4(position + direction * (range * cosOuter), range * sinOuter);
 		}
 
+		template<typename Component>
+		bool HasActiveComponent(Scene& scene)
+		{
+			for (auto [entity, component, world] : scene.GetRegistry().view<Component, WorldTransformComponent>().each())
+			{
+				if (world.ActiveInHierarchy)
+					return true;
+			}
+			return false;
+		}
+
 		bool IsFinite(const glm::mat4& matrix)
 		{
 			for (int column = 0; column < 4; column++)
@@ -131,6 +168,16 @@ namespace Strata
 			return true;
 		}
 
+	}
+
+	glm::vec3 SceneRenderer::GetDefaultSunDirection()
+	{
+		return DirectionFromAngles(c_DefaultSunElevation, c_DefaultSunAzimuth);
+	}
+
+	glm::vec3 SceneRenderer::GetPreviewSunDirection()
+	{
+		return DirectionFromAngles(c_PreviewSunElevation, c_PreviewSunAzimuth);
 	}
 
 	SceneCamera SceneCamera::FromEntity(const Scene& scene, Entity entity, float aspectRatio)
@@ -430,6 +477,21 @@ namespace Strata
 		};
 		m_EquirectToCubePipeline = createPipeline("IBL/EquirectToCube.comp");
 		m_CubeDownsamplePipeline = createPipeline("IBL/CubeDownsample.comp");
+
+		// The procedural sky reads nothing: only its output and the sky parameters.
+		nvrhi::BindingLayoutDesc proceduralLayoutDesc;
+		proceduralLayoutDesc.visibility = nvrhi::ShaderType::Compute;
+		proceduralLayoutDesc.bindings = {
+			nvrhi::BindingLayoutItem::Texture_UAV(0),
+			nvrhi::BindingLayoutItem::PushConstants(0, sizeof(RenderData::ProceduralSkyParameters))
+		};
+		m_ProceduralSkyBindingLayout = m_Device->createBindingLayout(proceduralLayoutDesc);
+		nvrhi::ComputePipelineDesc proceduralDesc;
+		proceduralDesc.CS = shaders.Get("IBL/ProceduralSky.comp");
+		ST_CORE_VERIFY(proceduralDesc.CS && m_ProceduralSkyBindingLayout, "SceneRenderer: the procedural sky shader or its layout is missing");
+		proceduralDesc.bindingLayouts = { m_ProceduralSkyBindingLayout };
+		m_ProceduralSkyPipeline = m_Device->createComputePipeline(proceduralDesc);
+		ST_CORE_VERIFY(m_ProceduralSkyPipeline, "SceneRenderer: failed to create the IBL/ProceduralSky.comp pipeline");
 		m_IrradiancePipeline = createPipeline("IBL/Irradiance.comp");
 		m_PrefilterPipeline = createPipeline("IBL/Prefilter.comp");
 		nvrhi::ComputePipelineHandle brdfPipeline = createPipeline("IBL/BRDFLut.comp");
@@ -475,9 +537,8 @@ namespace Strata
 		commandList->dispatch(DispatchGroups(parameters.OutputSize), DispatchGroups(parameters.OutputSize), layers);
 	}
 
-	void SceneRenderer::ProcessEnvironment(nvrhi::ICommandList* commandList, const Ref<Texture>& source)
+	SceneRenderer::EnvironmentMaps SceneRenderer::CreateEnvironmentMaps()
 	{
-		ST_PROFILE_FUNCTION();
 		auto createCube = [&](uint32_t size, uint32_t mips, const char* name)
 		{
 			nvrhi::TextureDesc desc;
@@ -497,16 +558,61 @@ namespace Strata
 		};
 
 		EnvironmentMaps maps;
-		maps.Source = source;
-		const uint32_t cubeMips = MipCountFor(c_EnvironmentCubeSize);
-		maps.Cube = createCube(c_EnvironmentCubeSize, cubeMips, "EnvironmentCube");
+		maps.Cube = createCube(c_EnvironmentCubeSize, MipCountFor(c_EnvironmentCubeSize), "EnvironmentCube");
 		maps.Irradiance = createCube(c_IrradianceSize, 1, "Irradiance");
 		maps.Prefiltered = createCube(c_PrefilteredSize, c_PrefilteredMipCount, "Prefiltered");
+		return maps;
+	}
+
+	void SceneRenderer::ProcessEnvironment(nvrhi::ICommandList* commandList, const Ref<Texture>& source)
+	{
+		ST_PROFILE_FUNCTION();
+		EnvironmentMaps maps = CreateEnvironmentMaps();
+		maps.Source = source;
 
 		commandList->beginMarker("Environment");
 		const uint32_t sourceWidth = source->GetWidth();
 		DispatchIBL(commandList, m_EquirectToCubePipeline, source->GetGPUTexture(), nvrhi::AllSubresources, nvrhi::TextureDimension::Texture2D, maps.Cube, 0,
 			nvrhi::TextureDimension::Texture2DArray, RenderData::IBLParameters { c_EnvironmentCubeSize, sourceWidth, 0.0f, 1 }, 6);
+		FilterEnvironment(commandList, maps);
+		commandList->endMarker();
+		m_Environment = std::move(maps);
+		m_Stats.EnvironmentUpdates++;
+	}
+
+	void SceneRenderer::GenerateProceduralSky(nvrhi::ICommandList* commandList, const RenderData::ProceduralSkyParameters& parameters)
+	{
+		ST_PROFILE_FUNCTION();
+		// The textures of the current procedural sky are rewritten in place: commands that still read them were recorded
+		// earlier on the same queue, and the state tracking orders the writes after them.
+		EnvironmentMaps maps = m_Environment.Procedural ? m_Environment : CreateEnvironmentMaps();
+		maps.Source = nullptr;
+		maps.Procedural = parameters;
+
+		nvrhi::BindingSetDesc setDesc;
+		setDesc.bindings = {
+			nvrhi::BindingSetItem::Texture_UAV(0, maps.Cube, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(0, 1, 0, 6), nvrhi::TextureDimension::Texture2DArray),
+			nvrhi::BindingSetItem::PushConstants(0, sizeof(RenderData::ProceduralSkyParameters))
+		};
+		nvrhi::BindingSetHandle bindingSet = m_Device->createBindingSet(setDesc, m_ProceduralSkyBindingLayout);
+		ST_CORE_VERIFY(bindingSet, "SceneRenderer: failed to create the procedural sky binding set");
+
+		commandList->beginMarker("ProceduralSky");
+		nvrhi::ComputeState state;
+		state.pipeline = m_ProceduralSkyPipeline;
+		state.bindings = { bindingSet };
+		commandList->setComputeState(state);
+		commandList->setPushConstants(&parameters, sizeof(parameters));
+		commandList->dispatch(DispatchGroups(parameters.Size.x), DispatchGroups(parameters.Size.x), 6);
+		FilterEnvironment(commandList, maps);
+		commandList->endMarker();
+		m_Environment = std::move(maps);
+		m_Stats.EnvironmentUpdates++;
+	}
+
+	void SceneRenderer::FilterEnvironment(nvrhi::ICommandList* commandList, const EnvironmentMaps& maps)
+	{
+		const uint32_t cubeMips = MipCountFor(c_EnvironmentCubeSize);
 		for (uint32_t mip = 1; mip < cubeMips; mip++)
 		{
 			const uint32_t size = std::max(1u, c_EnvironmentCubeSize >> mip);
@@ -524,11 +630,27 @@ namespace Strata
 			DispatchIBL(commandList, m_PrefilterPipeline, maps.Cube, wholeCube, nvrhi::TextureDimension::TextureCube, maps.Prefiltered, mip,
 				nvrhi::TextureDimension::Texture2DArray, RenderData::IBLParameters { size, c_EnvironmentCubeSize, roughness, c_PrefilterSamples }, 6);
 		}
-		commandList->endMarker();
-		m_Environment = std::move(maps);
 	}
 
-	void SceneRenderer::UpdateEnvironment(Scene& scene, RenderData::FrameConstants& frame, nvrhi::ICommandList* commandList)
+	RenderData::ProceduralSkyParameters SceneRenderer::GetProceduralSkyParameters(const SkyLightComponent& sky, const RenderData::FrameConstants& frame) const
+	{
+		RenderData::ProceduralSkyParameters parameters = {};
+		parameters.ZenithColor = SanitizeRadiance(sky.ZenithColor);
+		parameters.HorizonColor = SanitizeRadiance(sky.HorizonColor);
+		parameters.GroundColor = SanitizeRadiance(sky.GroundColor);
+		// The sun sits where the scene's light comes from (CollectLights ran before), tinted like it.
+		const bool hasSun = frame.DirectionalLightDirection.w > 0.0f;
+		const glm::vec3 sunDirection = hasSun ? -glm::vec3(frame.DirectionalLightDirection) : GetDefaultSunDirection();
+		const glm::vec3 sunColor = hasSun ? m_SunColor : glm::vec3(1.0f);
+		const float sunSize = std::isfinite(sky.SunSize) ? std::clamp(sky.SunSize, 0.0f, 180.0f) : 0.0f;
+		const float sunIntensity = std::isfinite(sky.SunIntensity) ? std::max(sky.SunIntensity, 0.0f) : 0.0f;
+		parameters.SunDirection = glm::vec4(sunDirection, glm::radians(sunSize) * 0.5f);
+		parameters.SunRadiance = SanitizeRadiance(IsFinite(sunColor) ? glm::max(sunColor, glm::vec3(0.0f)) * sunIntensity : glm::vec3(0.0f));
+		parameters.Size = glm::uvec4(c_EnvironmentCubeSize, 0, 0, 0);
+		return parameters;
+	}
+
+	void SceneRenderer::UpdateEnvironment(Scene& scene, bool preview, RenderData::FrameConstants& frame, nvrhi::ICommandList* commandList)
 	{
 		frame.EnvironmentParams = glm::vec4(0.0f);
 		frame.SkyParams = glm::vec4(0.0f);
@@ -542,22 +664,41 @@ namespace Strata
 				break;
 			}
 		}
-		if (!skyLight || !skyLight->EnvironmentMap.IsValid())
+		// The preview sky of an unlit scene in an editor view: the default procedural sky.
+		SkyLightComponent previewSky;
+		if (!skyLight && preview)
+		{
+			previewSky.Source = SkyLightSource::Procedural;
+			skyLight = &previewSky;
+		}
+		const bool procedural = skyLight && skyLight->Source == SkyLightSource::Procedural;
+		if (!skyLight || (!procedural && !skyLight->EnvironmentMap.IsValid()))
 		{
 			m_Environment = {}; // Release the maps of a removed environment
 			return;
 		}
 
-		Ref<Texture> texture = AssetManager::GetAsset<Texture>(skyLight->EnvironmentMap, AssetPriority::High);
-		if (!texture || !texture->GetGPUTexture())
+		float rotation = 0.0f; // The procedural sky is computed in world space: its sun follows the light
+		if (procedural)
 		{
-			CountPendingAsset(skyLight->EnvironmentMap);
-			return; // Constant ambient until the environment arrives
+			const RenderData::ProceduralSkyParameters parameters = GetProceduralSkyParameters(*skyLight, frame);
+			if (!m_Environment.Procedural || *m_Environment.Procedural != parameters)
+				GenerateProceduralSky(commandList, parameters);
 		}
-		if (texture != m_Environment.Source)
-			ProcessEnvironment(commandList, texture);
+		else
+		{
+			Ref<Texture> texture = AssetManager::GetAsset<Texture>(skyLight->EnvironmentMap, AssetPriority::High);
+			if (!texture || !texture->GetGPUTexture())
+			{
+				CountPendingAsset(skyLight->EnvironmentMap);
+				return; // Constant ambient until the environment arrives
+			}
+			if (texture != m_Environment.Source)
+				ProcessEnvironment(commandList, texture);
+			rotation = glm::radians(skyLight->Rotation);
+		}
 
-		frame.EnvironmentParams = glm::vec4(std::max(skyLight->Intensity, 0.0f), glm::radians(skyLight->Rotation), static_cast<float>(c_PrefilteredMipCount - 1), 1.0f);
+		frame.EnvironmentParams = glm::vec4(std::max(skyLight->Intensity, 0.0f), rotation, static_cast<float>(c_PrefilteredMipCount - 1), 1.0f);
 		const float backgroundMips = static_cast<float>(MipCountFor(c_EnvironmentCubeSize) - 1);
 		frame.SkyParams = glm::vec4(std::clamp(skyLight->BackgroundBlur, 0.0f, 1.0f) * backgroundMips, skyLight->ShowBackground ? 1.0f : 0.0f, 0.0f, 0.0f);
 		m_Stats.EnvironmentLighting = true;
@@ -1442,13 +1583,26 @@ namespace Strata
 		return index;
 	}
 
-	void SceneRenderer::CollectLights(Scene& scene, const SceneCamera& camera, RenderData::FrameConstants& frame)
+	void SceneRenderer::CollectLights(Scene& scene, const SceneCamera& camera, bool preview, RenderData::FrameConstants& frame)
 	{
 		entt::registry& registry = scene.GetRegistry();
 
 		frame.DirectionalLightDirection = glm::vec4(0.0f, -1.0f, 0.0f, 0.0f);
 		frame.DirectionalLightColor = glm::vec4(0.0f);
 		m_ShadowLight = {};
+		m_SunColor = glm::vec3(1.0f);
+		auto useDirectionalLight = [&](const DirectionalLightComponent& light, const glm::vec3& direction)
+		{
+			frame.DirectionalLightDirection = glm::vec4(direction, 1.0f);
+			frame.DirectionalLightColor = glm::vec4(light.Color * light.Intensity, 1.0f);
+			m_SunColor = light.Color;
+			m_ShadowLight.Enabled = light.CastShadows && light.Intensity > 0.0f;
+			m_ShadowLight.Direction = direction;
+			m_ShadowLight.Distance = light.ShadowDistance;
+			m_ShadowLight.Softness = light.ShadowSoftness;
+			m_ShadowLight.Bias = light.ShadowBias;
+			m_ShadowLight.NormalBias = light.ShadowNormalBias;
+		};
 		float brightest = -1.0f;
 		for (auto [entity, light, world] : registry.view<DirectionalLightComponent, WorldTransformComponent>().each())
 		{
@@ -1460,15 +1614,11 @@ namespace Strata
 			if (!(length > 1e-6f))
 				continue;
 			brightest = light.Intensity;
-			frame.DirectionalLightDirection = glm::vec4(direction / length, 1.0f);
-			frame.DirectionalLightColor = glm::vec4(light.Color * light.Intensity, 1.0f);
-			m_ShadowLight.Enabled = light.CastShadows && light.Intensity > 0.0f;
-			m_ShadowLight.Direction = direction / length;
-			m_ShadowLight.Distance = light.ShadowDistance;
-			m_ShadowLight.Softness = light.ShadowSoftness;
-			m_ShadowLight.Bias = light.ShadowBias;
-			m_ShadowLight.NormalBias = light.ShadowNormalBias;
+			useDirectionalLight(light, direction / length);
 		}
+		// The preview sun is a default directional light (with shadows). The preview sky's disk follows it, like any sun.
+		if (preview)
+			useDirectionalLight(DirectionalLightComponent(), -GetPreviewSunDirection());
 
 		frame.AmbientColor = glm::vec4(0.03f, 0.03f, 0.04f, 0.0f);
 		for (auto [entity, sky, world] : registry.view<SkyLightComponent, WorldTransformComponent>().each())
@@ -1756,7 +1906,10 @@ namespace Strata
 		frame.CameraForward = glm::vec4(glm::length(forward) > 1e-6f ? glm::normalize(forward) : glm::vec3(0.0f, 0.0f, -1.0f), camera.Orthographic ? 1.0f : 0.0f);
 		frame.ViewportSize = glm::vec4(glm::vec2(m_ViewportSize), 1.0f / glm::vec2(m_ViewportSize));
 		frame.TimeParams = glm::vec4(static_cast<float>(scene.GetTime()), 0.0f, 0.0f, 0.0f);
-		CollectLights(scene, camera, frame);
+		// Preview lighting only stands in for lighting the scene does not have at all.
+		const bool preview = options.PreviewEnvironment && !HasActiveComponent<DirectionalLightComponent>(scene) && !HasActiveComponent<SkyLightComponent>(scene);
+		m_Stats.PreviewLighting = preview;
+		CollectLights(scene, camera, preview, frame);
 		CollectDraws(scene, camera);
 		CollectShadowCasters(scene, camera, frame);
 		bool degraded = false; // Rendered with a reported limitation: keep the error so it is not logged every frame
@@ -1788,7 +1941,7 @@ namespace Strata
 		nvrhi::ICommandList* commandList = m_CommandList;
 		commandList->open();
 		commandList->beginMarker(m_Specification.DebugName.c_str());
-		UpdateEnvironment(scene, frame, commandList);
+		UpdateEnvironment(scene, preview, frame, commandList);
 		if ((buffersRecreated || m_BoundEnvironment != m_Environment.Cube.Get()) && !CreateSceneBindingSets())
 		{
 			commandList->endMarker();
@@ -1897,8 +2050,10 @@ namespace Strata
 		tonemap.BloomAdditive = postProcess.BloomThreshold > 0.0f ? 1u : 0u;
 
 		TextRenderStats textStats;
-		const bool text = m_TextRenderer->Prepare(scene, m_ViewportSize, commandList, textStats);
+		const bool text = m_TextRenderer->Prepare(scene, m_ViewportSize, options.DrawScreenSpaceText, commandList, textStats);
 		m_Stats.Texts = textStats.Texts;
+		m_Stats.ScreenSpaceTexts = textStats.ScreenSpaceTexts;
+		m_Stats.HiddenScreenSpaceTexts = textStats.HiddenScreenSpaceTexts;
 		m_Stats.TextGlyphs = textStats.Glyphs;
 		m_Stats.PendingTextGlyphs = textStats.PendingGlyphs;
 		m_Stats.RasterizedTextGlyphs = textStats.RasterizedGlyphs;
