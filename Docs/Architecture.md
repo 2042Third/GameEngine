@@ -42,8 +42,9 @@ graph TD
 Each target is defined in the `CMakeLists.txt` of its directory; script modules by `strata_add_script_module()` in
 `StrataScriptCore/CMake/StrataScriptModule.cmake`. The brand assets (the strata mark as PNGs, raw RGBA and `.ico`, in
 `StrataEditor/Resources/Brand/`) are drawn by `Tools/GenerateBrandAssets.py` and committed; `Core/Version.h` (from
-`Version.h.in`) carries the version and the git commit the build was configured from (`c_EngineCommit`; a commit or
-checkout makes the next build configure again).
+`Version.h.in`) carries the version and, through `Core/VersionCommit.h`, the git commit of the build (`c_EngineCommit`),
+which the `StrataVersionCommit` target reads at every build (`CMake/StrataVersionCommit.cmake`; the header changes only
+when the commit does).
 
 | Target | Kind | What it is |
 | --- | --- | --- |

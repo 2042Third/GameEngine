@@ -36,7 +36,7 @@ together (targets, modules, frame loop, threading, asset pipeline, scripting, ed
 | `StrataCLI/` | Command-line client for the editor automation API; also an MCP server (`StrataCLI mcp`). |
 | `StrataTests/` | doctest unit tests, test helpers, and the feature test project. |
 | `Samples/` | Games made through the editor by an AI agent, as projects (`.stproj`, `Assets/` with `.meta` files, `Scripts/`): `Tetris` (played and exported by the CTest `StrataEditor.Tetris`). Open one with `StrataEditor --project Samples/<Game>`. |
-| `CMake/` | CMake modules (configurations, compiler options, shader compilation, manifest). |
+| `CMake/` | CMake modules (configurations, compiler options, shader compilation, manifest, the build's git commit). |
 | `Tools/` | Generators whose outputs are committed (standard-library Python): `GenerateBrandAssets.py` draws the strata mark into `StrataEditor/Resources/Brand/` (PNGs, raw RGBA for the window icon, the `.ico` of the executables). |
 | `Docs/` | Documentation of how the engine works, linked to the code: `README.md` (index), `Architecture.md` (targets and dependencies, modules, frame loop, threading, asset pipeline, scripting, editor, export and runtime). |
 | `.claude/skills/` | Task-specific skills for agents (build/test, adding components, script API, editor automation, making a game end to end: `strata-make-a-game`). |
