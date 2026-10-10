@@ -35,7 +35,9 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
 
 - doctest filters split on commas. A test name containing a comma must be matched with `?`/`*`, e.g.
   `--test-case="Hierarchy?*"`.
-- CTest runs: `StrataTests.Core` (everything but the GPU, EndToEnd, `Package*` and feature test suites),
+- CTest runs: `StrataTests.Core` (everything but the GPU, EndToEnd, `Package*` and feature test suites; it includes
+  `Architecture.Layering`, which fails on an include that crosses the layers of `StrataTests/Architecture/Layers.json`
+  - fix the dependency, see AGENTS.md "Architecture rules"),
   `StrataTests.GPU` (label `gpu`), `StrataEditor.Smoke` (the real editor with
   `StrataTests/Editor/SmokeCommands.json.in`, configured into the build tree, label `gpu`; it captures the viewport to
   `SmokeViewport.png`/`SmokeSceneCamera.png` in `build/<preset>/StrataTests/SmokeCaptures/`, checked by

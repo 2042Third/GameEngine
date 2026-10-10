@@ -34,7 +34,7 @@ together (targets, modules, frame loop, threading, asset pipeline, scripting, ed
 | `StrataRuntime/` | Runtime executable that plays exported games (`GameRuntime`, drawn by `GameRenderer`): it runs the `.stgame` manifest next to it, or `--game <file>`; `--headless` runs without window and GPU at 60 frames per second (servers, CI); `--screenshot out.png` with `--frames N` saves the last frame (and fails the run when it shows the missing-camera message). |
 | `StrataScriptCore/` | Script ABI (C header) and the header-only C++ SDK game scripts are written against. Script modules never link the engine. |
 | `StrataCLI/` | Command-line client for the editor automation API; also an MCP server (`StrataCLI mcp`). |
-| `StrataTests/` | doctest unit tests, test helpers, and the feature test project. |
+| `StrataTests/` | doctest unit tests, test helpers, the feature test project, and the layer table (`Architecture/Layers.json`, `LayeringAllowlist.txt`). |
 | `Samples/` | Games made through the editor by an AI agent, as projects (`.stproj`, `Assets/` with `.meta` files, `Scripts/`): `Tetris` (played and exported by the CTest `StrataEditor.Tetris`). Open one with `StrataEditor --project Samples/<Game>`. |
 | `CMake/` | CMake modules (configurations, compiler options, shader compilation, manifest). |
 | `Docs/` | Documentation of how the engine works, linked to the code: `README.md` (index), `Architecture.md` (targets and dependencies, modules, frame loop, threading, asset pipeline, scripting, editor, export and runtime). |
@@ -90,7 +90,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
 ```
 
 - Unit tests live in `StrataTests/src/<Module>/*Tests.cpp` and use [doctest](https://github.com/doctest/doctest).
-  Name suites after the module (`TEST_SUITE("Scene.Serialization")`).
+  Name suites after the module (`TEST_SUITE("Scene.Serialization")`). `TestMain.cpp` registers the engine's modules
+  (`Engine::RegisterBuiltinModules`) before the suites and the helper modes run; a test that needs its own component
+  registers it in a child process (`--strata-test-helper=custom-component`, `Engine/ModuleRegistrationHelpers.cpp`).
 - Suites whose names start with `GPU` need a Vulkan device and are registered separately under the
   CTest label `gpu`. They share one device per process through `Tests::GPUContext` (never create
   devices in tests) and end with `CHECK(gpu.GetNewErrorCount() == 0)`, so validation errors fail the
@@ -245,6 +247,14 @@ The threading model, frame loop and pipelines these rules protect are described 
   through `CrashGuard`; anything crossing the ABI is plain data (no STL types, no exceptions).
 - **Assets:** referenced by `AssetHandle` (UUID), never by path at runtime. Loading is asynchronous;
   code must handle "not loaded yet" every frame instead of blocking. See [Asset pipeline](#asset-pipeline).
+- **Layers:** every file under `Strata/src` belongs to one layer of `StrataTests/Architecture/Layers.json`, and an
+  include that crosses layers must be allowed there (a layer includes only itself and the lower layers it lists).
+  `Architecture.Layering` (in `StrataTests.Core`) fails on any other include, on files in no layer (new folders and
+  files get a pattern) and on stale lines of `LayeringAllowlist.txt`, the known exceptions, each with the workstream
+  that removes it. Never add a line or widen `MayInclude` to make a sideways or upward include pass: invert the
+  dependency (an interface in the lower layer, like `InputWindow`; a registry the higher module fills) instead. A
+  proven downward dependency may widen `MayInclude`, with the reason in the layer's `Notes`. Removing an exception
+  lowers `MaxAllowlistEntries`. Details: Docs/Architecture.md, "Layers".
 - **Module registration:** modules extend the engine through registries (components, asset loaders and importers,
   built-in asset objects, scene systems), never through lower layers calling functions of higher ones. Each module
   has one registration function in its own folder (`Register<Module>Module` in `<Module>/<Module>Registration.cpp`);

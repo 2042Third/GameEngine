@@ -90,10 +90,11 @@ down until one marks it handled (`EventDispatcher`). An unhandled `WindowCloseEv
 can veto closing (the editor asks about unsaved changes).
 
 **Input** (`Input/`). `Input` is a static polling API: down state, per-frame pressed/released transitions, mouse
-position relative to the input viewport, deltas, scrolling and gamepads. `GLFWWindow` feeds it (`Input::Process*`).
-It also has a virtual device for tools (`SimulateKey` and friends) merged with the real devices, `SetEnabled` (device
-input off, e.g. while the editor's game view has no focus) and `SetSuspended` (input frames follow the game's
-updates). `InputNames` maps key and button names for the `input.*` commands.
+position relative to the input viewport, deltas, scrolling and gamepads. `GLFWWindow` feeds it (`Input::Process*`);
+Input reaches the window only through `InputWindow` (size, cursor mode), which `Window` implements, so the input layer
+stays below the application shell. It also has a virtual device for tools (`SimulateKey` and friends) merged with the
+real devices, `SetEnabled` (device input off, e.g. while the editor's game view has no focus) and `SetSuspended`
+(input frames follow the game's updates). `InputNames` maps key and button names for the `input.*` commands.
 
 **Math** (`Math/`). Engine conventions in `Math.h`: right-handed, +Y up, -Z forward, reversed-Z projections, Euler
 angles in degrees. `AABB`, `Frustum`, `Ray`, and `Random` (thread-local generators).
@@ -174,6 +175,39 @@ enabled and a window and graphics device exist, and calls `Begin`/`End` around t
 
 **Engine** (`Engine/`). `BuiltinModules`, the composition root (below), and nothing else: the only code that knows every
 module.
+
+### Layers
+
+The modules form a stack of layers, defined by path patterns in `StrataTests/Architecture/Layers.json` (the patterns
+stand in for the library split of wave 4, so the rules apply before files move). A file may include files of its own
+layer and of the layers it lists, which are always lower ones:
+
+| Layer | Files (under `Strata/src`) | May include |
+| --- | --- | --- |
+| Core | `Core/**` except the application shell, `Math/**`, `stpch.h`, `Platform/Windows`, `Platform/Posix` (not the sockets) | nothing |
+| Input | `Events/**`, `Input/**` | Core |
+| App | `Core/Application.*`, `Layer.*`, `LayerStack.*`, `Window.h`, `EntryPoint.h`, `Platform/GLFW/**`, `Platform/Vulkan/VulkanLoader.*` | Core, Input |
+| Asset | `Asset/**` except the pipeline files | Core |
+| Reflection | `Reflection/**` | Core, Asset |
+| Scene | `Scene/**` | Core, Asset, Reflection |
+| Renderer | `Renderer/**`, `Platform/Vulkan/**` | Core, Input, App, Asset, Reflection, Scene |
+| Physics, Audio | `Physics/**`, `Audio/**` | Core, Asset, Reflection, Scene |
+| Scripting | `Scripting/**` | Core, Input, Asset, Reflection, Scene |
+| Project | `Project/**` | Core, Asset, Reflection |
+| Runtime | `Runtime/**` | Core, Input, App, Asset, Reflection, Scene, Renderer, Physics, Audio, Scripting, Project |
+| Network | `Network/**`, `Platform/*/*Socket.cpp` | Core |
+| ImGui | `ImGui/**` | Core, Input, App, Renderer |
+| AssetPipeline | `Asset/EditorAssetManager.*`, `AssetImporter.*`, `AssetImporters.cpp`, `GltfImporter.*`, `TextureImporter.*` | Core, Asset, Reflection, Scene, Renderer, Audio |
+| Engine | `Engine/**`, `Strata.h` | everything |
+
+`Architecture.Layering` (`StrataTests/src/Architecture/LayeringTests.cpp`, in `StrataTests.Core`) reads every `.h`/`.cpp`
+under `Strata/src` (`STRATA_SOURCE_DIR`), parses its quoted `#include`s (`LayeringAnalyzer`: comments, literals and
+`#if 0` blocks skipped; includes resolved next to the file first, like the preprocessor), maps both ends to their
+layers and fails on every file that is in no layer or in several, on every forbidden include that is not in
+`StrataTests/Architecture/LayeringAllowlist.txt`, and on every allowlist line that matches nothing. Each allowlist line
+names the include, the roadmap workstream that removes it and the reason; the list holds exactly `MaxAllowlistEntries`
+lines (14: the application shell wiring services, asset uploads on the renderer, physics reading renderer meshes, and
+scripting and audio calling the physics and audio systems), so it can only shrink.
 
 ### Composition root and registries
 
