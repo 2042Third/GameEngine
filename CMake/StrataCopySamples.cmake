@@ -7,6 +7,9 @@
 # out. Only changed files are copied, and files no longer in the source are removed, so builds keep the copy in sync
 # without rewriting it.
 
+# Script mode starts without the project's policies: CMake 3.x would read if(... IN_LIST ...) with the old meaning.
+cmake_minimum_required(VERSION 3.25)
+
 if(NOT SOURCE OR NOT DESTINATION)
 	message(FATAL_ERROR "StrataCopySamples.cmake needs -DSOURCE=<samples> and -DDESTINATION=<directory>")
 endif()
