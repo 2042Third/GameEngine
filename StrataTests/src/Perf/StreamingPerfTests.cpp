@@ -37,11 +37,13 @@ namespace
 	//   attempt is the engine's own cost. The residency work's target (750 MB) is recorded with the budget.
 	// - MaxResidentTextures: the most GPU texture bytes resident after a frame's eviction, a maximum by nature (the
 	//   residency budget bounds every frame).
-	// - MaxFinalizeTime: the longest a frame spent finalizing loads. Of the 600 frames a few hundred finalize, most up to
-	//   the per-frame budget (AssetResidencyBudgets::FinalizeMsPerFrame) plus one upload step. A regression that matters
-	//   may show in a single frame (one large texture finalized at once is the hitch players see), which a percentile
-	//   would hide, so the statistic is the maximum; a frame the machine's other work preempted is not repeated by the
-	//   confirmation's next sweeps.
+	// - MaxFinalizeTime: the longest a frame spent finalizing loads. Of the 600 frames about 75 to 110 finalize. Most take
+	//   about 0.1 ms (the median; materials, meshes, small steps), and the few that upload a large texture's steps run until
+	//   the per-frame budget (AssetResidencyBudgets::FinalizeMsPerFrame, 4 ms) and finish the step that crosses it, so the
+	//   95th percentile is about 4 ms and the maximum 4 to 5.5 ms on a quiet machine. A regression that matters may show in
+	//   a single frame (one large texture finalized at once is the hitch players see), which a percentile would hide, so
+	//   the statistic is the maximum; a frame the machine's other work preempted is not repeated by the confirmation's
+	//   next sweeps.
 	// - FramesToSettle: the most frames a camera stop needed at rest until it drew without pending assets (a stop that
 	//   never did counts as its whole hold), a maximum by nature (every stop must be complete soon).
 	constexpr const char* c_PeakPrivateMemory = "PerfGPU.Streaming.PeakPrivateMemory";
