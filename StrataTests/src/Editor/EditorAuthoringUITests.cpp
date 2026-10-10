@@ -839,6 +839,39 @@ TEST_SUITE("Editor.UI.AssetInspector")
 		CHECK_FALSE(UI::ItemProbe::Find("AssetInspector.Apply")->Enabled);
 	}
 
+	TEST_CASE("Apply sends only the changed settings: a setting the importer does not describe stays in the .meta")
+	{
+		// A .meta written by another engine version, holding a setting this importer does not know.
+		EditorOptions options = WithFeatureProject("EditorAuthoringUnknownSetting");
+		const std::filesystem::path meta = options.ProjectPath.parent_path() / "Assets" / "Textures" / "Checker.png.meta";
+		const std::optional<std::string> text = FileSystem::ReadText(meta);
+		REQUIRE(text);
+		std::optional<nlohmann::json> document = JsonUtils::Parse(*text);
+		REQUIRE(document);
+		(*document)["ImportSettings"]["Compression"] = "Auto";
+		REQUIRE(FileSystem::WriteText(meta, JsonUtils::Dump(*document)));
+
+		AuthoringEditor editor({}, options);
+		EditorAssetManager* assets = editor.Context().GetAssetManager();
+		REQUIRE(assets);
+		const AssetHandle texture = assets->FindAssetByPath("Textures/Checker.png");
+		REQUIRE(texture.IsValid());
+		REQUIRE(assets->GetImportSettings(texture).value("Compression", "") == "Auto");
+		REQUIRE(editor.Context().SetInspectedAsset(texture));
+		editor.Frames(2);
+		const bool mips = assets->GetImportSettings(texture).value("GenerateMips", true);
+
+		REQUIRE(editor.Click("AssetInspector.Import.GenerateMips"));
+		REQUIRE(editor.Click("AssetInspector.Apply"));
+		REQUIRE(editor.FramesUntil([&]() { return !assets->IsImportPending(texture) && editor.Layer->GetCommandRunner().GetPendingCount() == 0; }));
+		editor.Frames(2);
+		// Applied: the changed setting, and the unknown one kept as it was.
+		CHECK(assets->GetImportSettings(texture).value("GenerateMips", true) != mips);
+		CHECK(assets->GetImportSettings(texture).value("Compression", "") == "Auto");
+		CHECK(assets->GetImportInfo(texture).Error.empty());
+		CHECK_FALSE(UI::ItemProbe::Find("AssetInspector.Apply")->Enabled);
+	}
+
 	TEST_CASE("By hand: a cube, a new material with a color and a texture, saved, equals the same commands")
 	{
 		// The UI: the Hierarchy's create menu, the Inspector's New Material and its material section, Ctrl+S.

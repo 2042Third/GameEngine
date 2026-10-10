@@ -300,10 +300,20 @@ namespace Strata
 		ImGui::SameLine();
 		if (UI::DialogButton("AssetInspector.Apply", "Apply", true, edited && !importing))
 		{
+			// Only the settings the draft changed (asset.setImportSettings merges them into the others): a setting the
+			// importer does not describe, e.g. from a .meta of another engine version, stays as it is instead of making the
+			// command refuse every Apply.
+			nlohmann::json changes = nlohmann::json::object();
+			for (const auto& [key, value] : m_Draft.Edited.items())
+			{
+				const auto saved = m_Draft.Saved.find(key);
+				if (saved == m_Draft.Saved.end() || *saved != value)
+					changes[key] = value;
+			}
 			m_Apply->Running = true;
 			m_Apply->Error.clear();
 			panelContext.Runner.Run(context, panelContext.Commands, "asset.setImportSettings",
-				{ { "asset", UUIDToJson(metadata.Handle) }, { "settings", m_Draft.Edited } }, [state = m_Apply](const EditorCommandResult& result)
+				{ { "asset", UUIDToJson(metadata.Handle) }, { "settings", std::move(changes) } }, [state = m_Apply](const EditorCommandResult& result)
 			{
 				state->Running = false;
 				state->Error = result.Success ? std::string() : result.Error;
