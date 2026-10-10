@@ -45,6 +45,11 @@ namespace Strata
 		constexpr const char* c_MixedText = "--";
 		constexpr const char* c_Ellipsis = "\xE2\x80\xA6";
 		constexpr const char* c_AxisNames[] = { "X", "Y", "Z", "W" };
+		constexpr const char* c_ChannelNames[] = { "R", "G", "B", "A" };
+		// A color's channel fields narrower than this many text heights (beside their labels) could not be read: the color
+		// is then shown as a swatch across the field, and its channels are edited in its picker.
+		constexpr float c_MinChannelFieldInFontSizes = 2.6f;
+		constexpr float c_ColorPickerWidthInFontSizes = 15.0f;
 		// The property tables' columns: labels and values, as shares of the width (the user resizes them for every table of
 		// a panel at once).
 		constexpr float c_LabelColumnWeight = 0.42f;
@@ -248,15 +253,16 @@ namespace Strata
 			if (resettable && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
 				ImGui::SetTooltip("Reset %s", name);
 			if (!probeKey.empty())
-				UI::ItemProbe::Record(ProbeKey(probeKey, name), resettable);
+				UI::ItemProbe::Record(ProbeKey(probeKey, name), resettable, UI::ToColorU32(color));
 			return pressed;
 		}
 
 		// One field per component behind its axis label, together `width` wide: X, Y, Z, W for vectors and rotations, R, G,
 		// B, A for colors (`names`). `defaults`: what the labels reset to (null: they do not reset). The probe records the row
-		// under the options' key, the labels under "<key>.<name>" and the fields with their text under "<key>.<name>.Value".
+		// under the options' key (unless `recordRow` is false: a widget the row is part of records itself), the labels with
+		// their color under "<key>.<name>" and the fields with their text under "<key>.<name>.Value".
 		PropertyEditResult DrawAxisFields(float* values, int count, const char* const* names, float width, float speed, float min, float max,
-			const PropertyWidgetOptions& options, const float* defaults)
+			const PropertyWidgetOptions& options, const float* defaults, bool recordRow = true)
 		{
 			PropertyEditResult result;
 			const ImGuiStyle& style = ImGui::GetStyle();
@@ -294,8 +300,138 @@ namespace Strata
 				ImGui::PopID();
 			}
 			ImGui::EndGroup();
+			if (recordRow && !options.ProbeKey.empty())
+				UI::ItemProbe::Record(options.ProbeKey);
+			return result;
+		}
+
+		// The swatch of a color, `width` wide, with the color's channels in its tooltip; when the entities' colors differ, a
+		// neutral surface saying "--" instead. The probe records it with that text under "<key>.Swatch". Returns true when
+		// clicked.
+		bool ColorSwatch(const float* channels, int count, bool mixed, float width, std::string_view probeKey)
+		{
+			const UI::ThemeColors& colors = UI::GetThemeColors();
+			// Three channels are opaque.
+			const float alpha = count == 4 ? channels[3] : 1.0f;
+			const ImVec4 color(channels[0], channels[1], channels[2], alpha);
+			ImGuiColorEditFlags flags = ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoDragDrop | ImGuiColorEditFlags_AlphaPreviewHalf;
+			if (count < 4 || mixed)
+				flags |= ImGuiColorEditFlags_NoAlpha;
+			const bool clicked = ImGui::ColorButton("##Swatch", mixed ? colors.Chrome : color, flags, ImVec2(width, ImGui::GetFrameHeight()));
+			if (mixed)
+			{
+				const ImVec2 min = ImGui::GetItemRectMin();
+				const ImVec2 max = ImGui::GetItemRectMax();
+				const ImVec2 size = ImGui::CalcTextSize(c_MixedText);
+				ImGui::GetWindowDrawList()->AddText(ImVec2((min.x + max.x - size.x) * 0.5f, (min.y + max.y - size.y) * 0.5f), ImGui::GetColorU32(ImGuiCol_Text),
+					c_MixedText);
+			}
+			if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+			{
+				if (mixed)
+				{
+					ImGui::SetTooltip("The selected entities have different colors: click to pick one for all");
+				}
+				else
+				{
+					std::string text;
+					for (int channel = 0; channel < count; channel++)
+						text += fmt::format("{}{} {}", channel > 0 ? "  " : "", c_ChannelNames[channel], FormatNumber(channels[channel]));
+					ImGui::SetTooltip("%s\nClick to pick", text.c_str());
+				}
+			}
+			if (!probeKey.empty())
+				UI::ItemProbe::Record(ProbeKey(probeKey, "Swatch"), true, 0, mixed ? std::string_view(c_MixedText) : std::string_view());
+			return clicked;
+		}
+
+		// The picker a color's swatch opens: saturation and value, a hue bar, an alpha bar for colors with alpha, and the
+		// channels as fields under them (which also take values above 1, for HDR colors). ImGui's picker is several items, so
+		// the widget remembers that a drag of it runs: the drag finishes when the mouse lets go (or the popup closes), and
+		// changes every channel, so several entities get the same color. The probe records the fields under "<key>.Picker".
+		PropertyEditResult DrawColorPicker(float* channels, int count, float speed, const PropertyWidgetOptions& options, const float* defaults)
+		{
+			PropertyEditResult result;
+			ImGuiStorage* storage = ImGui::GetStateStorage();
+			const ImGuiID draggingKey = ImGui::GetID("PickerDragging");
+			if (!ImGui::BeginPopup("ColorPicker"))
+			{
+				if (storage->GetBool(draggingKey))
+				{
+					storage->SetBool(draggingKey, false);
+					result.Finished = true;
+				}
+				return result;
+			}
+			const float width = ImGui::GetFontSize() * c_ColorPickerWidthInFontSizes;
+			float picked[4] = { channels[0], channels[1], channels[2], count == 4 ? channels[3] : 1.0f };
+			ImGuiColorEditFlags flags = ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoSidePreview | ImGuiColorEditFlags_NoLabel
+				| ImGuiColorEditFlags_Float | ImGuiColorEditFlags_PickerHueBar;
+			flags |= count == 4 ? ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf : ImGuiColorEditFlags_NoAlpha;
+			ImGui::SetNextItemWidth(width);
+			const ImVec2 pickerMin = ImGui::GetCursorScreenPos();
+			const bool picking = ImGui::ColorPicker4("##Picker", picked, flags);
+			// The top left of the saturation and value square, where tests drag.
+			if (!options.ProbeKey.empty())
+				UI::ItemProbe::RecordRect(ProbeKey(options.ProbeKey, "PickerArea"), pickerMin, ImVec2(pickerMin.x + width * 0.4f, pickerMin.y + width * 0.4f));
+			if (picking)
+			{
+				for (int channel = 0; channel < count; channel++)
+				{
+					channels[channel] = picked[channel];
+					result.ChangedComponents[static_cast<size_t>(channel)] = true;
+				}
+				result.Changed = true;
+				storage->SetBool(draggingKey, true);
+			}
+			if (storage->GetBool(draggingKey) && !ImGui::IsAnyItemActive())
+			{
+				storage->SetBool(draggingKey, false);
+				result.Finished = true;
+			}
+			ImGui::Spacing();
+			const std::string probe = options.ProbeKey.empty() ? std::string() : ProbeKey(options.ProbeKey, "Picker");
+			PropertyWidgetOptions fieldOptions = options;
+			fieldOptions.ProbeKey = probe;
+			const PropertyEditResult fields = DrawAxisFields(channels, count, c_ChannelNames, width, speed, 0.0f, FLT_MAX, fieldOptions, defaults);
+			result.Changed |= fields.Changed;
+			result.Finished |= fields.Finished;
+			for (size_t channel = 0; channel < result.ChangedComponents.size(); channel++)
+				result.ChangedComponents[channel] = result.ChangedComponents[channel] || fields.ChangedComponents[channel];
+			ImGui::EndPopup();
+			return result;
+		}
+
+		// A color: its channels as fields behind R, G, B, A labels in the axis colors (like a vector's: "--" in each channel
+		// the entities' colors differ in) and its swatch after them, or the swatch alone across the field where the channel
+		// fields would be too narrow to read. The swatch opens the picker.
+		PropertyEditResult DrawColor(const PropertyInfo& property, float* channels, int count, const PropertyWidgetOptions& options, const float* defaults)
+		{
+			const ImGuiStyle& style = ImGui::GetStyle();
+			const float available = std::max(ImGui::GetContentRegionAvail().x, ImGui::GetFrameHeight());
+			const float swatch = ImGui::GetFrameHeight();
+			const float gap = style.ItemInnerSpacing.x;
+			const float fieldsWidth = available - swatch - gap;
+			const float slot = (fieldsWidth - gap * static_cast<float>(count - 1)) / static_cast<float>(count);
+			const bool showFields = slot - GetAxisLabelWidth() >= ImGui::GetFontSize() * c_MinChannelFieldInFontSizes;
+			const float speed = GetSpeed(property, 0.01f);
+			PropertyEditResult result;
+			ImGui::BeginGroup();
+			if (showFields)
+			{
+				result = DrawAxisFields(channels, count, c_ChannelNames, fieldsWidth, speed, 0.0f, FLT_MAX, options, defaults, false);
+				ImGui::SameLine(0.0f, gap);
+			}
+			if (ColorSwatch(channels, count, options.Mixed, showFields ? swatch : available, options.ProbeKey))
+				ImGui::OpenPopup("ColorPicker");
+			ImGui::EndGroup();
 			if (!options.ProbeKey.empty())
 				UI::ItemProbe::Record(options.ProbeKey);
+			const PropertyEditResult picker = DrawColorPicker(channels, count, speed, options, defaults);
+			result.Changed |= picker.Changed;
+			result.Finished |= picker.Finished;
+			for (size_t channel = 0; channel < result.ChangedComponents.size(); channel++)
+				result.ChangedComponents[channel] = result.ChangedComponents[channel] || picker.ChangedComponents[channel];
 			return result;
 		}
 
@@ -721,15 +857,15 @@ namespace Strata
 			case PropertyType::Color3:
 			case PropertyType::Color4:
 			{
-				ImGui::SetNextItemWidth(-FLT_MIN);
-				const ImGuiColorEditFlags flags = ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR | ImGuiColorEditFlags_AlphaPreviewHalf;
-				result.Changed = property.Type == PropertyType::Color3 ? ImGui::ColorEdit3("##Value", &std::get<glm::vec3>(value).x, flags)
-					: ImGui::ColorEdit4("##Value", &std::get<glm::vec4>(value).x, flags);
-				result.Finished = ImGui::IsItemDeactivatedAfterEdit();
-				if (options.Mixed && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
-					ImGui::SetTooltip("The selected entities have different colors: this is the first one's");
-				if (!options.ProbeKey.empty())
-					UI::ItemProbe::Record(options.ProbeKey);
+				const int count = property.Type == PropertyType::Color3 ? 3 : 4;
+				float* channels = property.Type == PropertyType::Color3 ? &std::get<glm::vec3>(value).x : &std::get<glm::vec4>(value).x;
+				const float* defaults = nullptr;
+				if (options.DefaultValue && options.DefaultValue->index() == value.index())
+				{
+					defaults = property.Type == PropertyType::Color3 ? &std::get<glm::vec3>(*options.DefaultValue).x
+						: &std::get<glm::vec4>(*options.DefaultValue).x;
+				}
+				result = DrawColor(property, channels, count, options, defaults);
 				continuous = true;
 				break;
 			}
@@ -739,15 +875,25 @@ namespace Strata
 				// Mixed text starts empty; whatever is typed goes to every entity.
 				std::string shown = options.Mixed ? std::string() : text;
 				ImGui::SetNextItemWidth(-FLT_MIN);
-				if (HasFlag(property.Flags, PropertyFlags::MultiLine))
+				const bool multiLine = HasFlag(property.Flags, PropertyFlags::MultiLine);
+				if (multiLine)
 					result.Changed = ImGui::InputTextMultiline("##Value", &shown, ImVec2(-FLT_MIN, ImGui::GetTextLineHeight() * 4.0f));
 				else
 					result.Changed = ImGui::InputTextWithHint("##Value", options.Mixed ? c_MixedText : "", &shown);
 				if (result.Changed)
-					text = std::move(shown);
+					text = shown;
 				result.Finished = ImGui::IsItemDeactivatedAfterEdit();
+				// A multi-line box has no hint: it says "--" itself while the texts differ and nothing is typed.
+				const bool mixedHint = options.Mixed && shown.empty() && !ImGui::IsItemActive();
+				if (multiLine && mixedHint)
+				{
+					const ImGuiStyle& style = ImGui::GetStyle();
+					const ImVec2 min = ImGui::GetItemRectMin();
+					ImGui::GetWindowDrawList()->AddText(ImVec2(min.x + style.FramePadding.x, min.y + style.FramePadding.y), ImGui::GetColorU32(ImGuiCol_TextDisabled),
+						c_MixedText);
+				}
 				if (!options.ProbeKey.empty())
-					UI::ItemProbe::Record(options.ProbeKey);
+					UI::ItemProbe::Record(options.ProbeKey, true, 0, mixedHint ? std::string_view(c_MixedText) : std::string_view(shown));
 				continuous = true;
 				break;
 			}

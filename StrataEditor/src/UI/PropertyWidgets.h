@@ -49,7 +49,11 @@ namespace Strata
 	// Draws an editor widget for a reflected property and edits `value` in place, filling the width it is given:
 	// - vectors and rotations (as Euler angles in degrees) as one field per component behind an axis label in the theme's
 	//   axis colors (X Cinnabar, Y Malachite, Z Azurite); clicking a label resets that component (PropertyWidgetOptions);
-	// - numbers without a sign on zero (-0 shows as 0);
+	// - colors as fields of their channels behind R, G, B, A labels in the same colors, with a swatch after them (the
+	//   swatch alone across the field where the fields would be too narrow to read); the swatch opens a picker with the
+	//   channels under it. Mixed colors show "--" in each channel that differs and on the swatch;
+	// - numbers as people write them ("0.8", "-4": up to three decimals, without a sign on zero); a value or text that does
+	//   not fit ends in an ellipsis and shows whole in a tooltip; mixed multi-line text shows "--" while it is empty;
 	// - entity references as a button that opens a searchable list of the scene's entities (and accepts entities dragged
 	//   from the hierarchy), asset references as one that opens a searchable, virtualized list of the assets of the
 	//   property's type (and accepts dragged assets).

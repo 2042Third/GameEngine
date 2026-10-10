@@ -12,6 +12,7 @@
 #include "UI/Icons.h"
 #include "UI/ItemProbe.h"
 #include "UI/PropertyWidgets.h"
+#include "UI/Theme.h"
 
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/BuiltinAssets.h>
@@ -681,6 +682,66 @@ TEST_SUITE("Editor.UI.Inspector")
 		CHECK(label->Text == "Continuous Collision");
 	}
 
+	TEST_CASE("Colors show their channels in the axis colors, and colors and texts that differ as mixed")
+	{
+		// Wide enough for the channels as fields.
+		AuthoringEditor editor({ ImVec2(2400.0f, 1350.0f), 1.0f }, WithFeatureProject("EditorAuthoringMixedColors"));
+		const nlohmann::json hud = editor.Run("entity.find", { { "name", "HUD" } })["entities"];
+		const nlohmann::json sign = editor.Run("entity.find", { { "name", "Sign" } })["entities"];
+		REQUIRE(hud.size() == 1);
+		REQUIRE(sign.size() == 1);
+		const auto text = [](std::string_view key)
+		{
+			const std::optional<UI::ItemProbe::Item> item = UI::ItemProbe::Find(key);
+			REQUIRE_MESSAGE(item.has_value(), "No ", std::string(key));
+			return item->Text;
+		};
+
+		// One entity: its channels, behind R, G, B, A labels in the theme's axis colors (not ImGui's own markers).
+		editor.Context().Select(*UUIDFromJson(hud[0]));
+		editor.Frames(3);
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		CHECK(UI::ItemProbe::Find("Inspector.Text.Color.R")->Color == UI::ToColorU32(colors.AxisX));
+		CHECK(UI::ItemProbe::Find("Inspector.Text.Color.G")->Color == UI::ToColorU32(colors.AxisY));
+		CHECK(UI::ItemProbe::Find("Inspector.Text.Color.B")->Color == UI::ToColorU32(colors.AxisZ));
+		CHECK(text("Inspector.Text.Color.R.Value") == "1");
+		CHECK(text("Inspector.Text.Color.G.Value") == "0.9");
+		CHECK(text("Inspector.Text.Color.B.Value") == "0.2");
+		CHECK(text("Inspector.Text.Color.Swatch").empty());
+		CHECK(text("Inspector.Text.Text") == "Strata Feature Test");
+
+		// Both: the channels that differ, the swatch and the multi-line text say so; the alpha they share is shown.
+		editor.Context().SetSelection({ *UUIDFromJson(hud[0]), *UUIDFromJson(sign[0]) });
+		editor.Frames(3);
+		CHECK(text("Inspector.Text.Color.R.Value") == "--");
+		CHECK(text("Inspector.Text.Color.G.Value") == "--");
+		CHECK(text("Inspector.Text.Color.B.Value") == "--");
+		CHECK(text("Inspector.Text.Color.A.Value") == "1");
+		CHECK(text("Inspector.Text.Color.Swatch") == "--");
+		CHECK(text("Inspector.Text.Text") == "--");
+
+		// A color picked in the swatch's picker goes to both, whole, in one undo step.
+		const size_t position = editor.UndoPosition();
+		REQUIRE(editor.Click("Inspector.Text.Color.Swatch"));
+		editor.Frames(2);
+		const UI::ItemProbe::Item green = *UI::ItemProbe::Find("Inspector.Text.Color.Picker.G.Value");
+		editor.ClickWith(green.GetCenter(), ImGuiMod_Ctrl);
+		editor.Harness.SetKey(ImGuiMod_Ctrl, true);
+		editor.Harness.SetKey(ImGuiKey_A, true);
+		editor.Frames(1);
+		editor.Harness.SetKey(ImGuiKey_A, false);
+		editor.Harness.SetKey(ImGuiMod_Ctrl, false);
+		editor.Frames(1);
+		editor.Harness.TypeText("0.5");
+		editor.Frames(1);
+		editor.Press(ImGuiKey_Enter);
+		CHECK(editor.UndoPosition() == position + 1);
+		CHECK(editor.Get(*UUIDFromJson(hud[0])).GetComponent<TextComponent>().Color.g == doctest::Approx(0.5f));
+		CHECK(editor.Get(*UUIDFromJson(sign[0])).GetComponent<TextComponent>().Color.g == doctest::Approx(0.5f));
+		// Each keeps its own red.
+		CHECK(editor.Get(*UUIDFromJson(sign[0])).GetComponent<TextComponent>().Color.r == doctest::Approx(0.2f));
+	}
+
 	TEST_CASE("In a narrow Inspector, labels that do not fit end in an ellipsis")
 	{
 		// The same scale in a window two thirds as wide: the Inspector's columns cannot hold the longest labels.
@@ -1105,6 +1166,32 @@ TEST_SUITE("Editor.UI.AssetInspector")
 		CHECK(AssetManager::GetAsset<Material>(material)->GetProperties().Roughness == roughness);
 	}
 
+	TEST_CASE("A drag in a material color's picker previews and saves once, as one undo step")
+	{
+		AuthoringEditor editor({}, WithFeatureProject("EditorAuthoringColorPicker"));
+		EditorAssetManager* assets = editor.Context().GetAssetManager();
+		REQUIRE(assets);
+		const AssetHandle material = assets->FindAssetByPath("Materials/Feature.stmat");
+		REQUIRE(editor.Context().SetInspectedAsset(material));
+		REQUIRE(AssetManager::LoadAssetSync<Material>(material));
+		editor.Frames(3);
+		const std::filesystem::path file = assets->GetAbsolutePath(material);
+		const std::optional<std::string> before = FileSystem::ReadText(file);
+		REQUIRE(before);
+		const glm::vec4 color = AssetManager::GetAsset<Material>(material)->GetProperties().BaseColor;
+		const size_t position = editor.UndoPosition();
+
+		REQUIRE(editor.Click("AssetInspector.Material.BaseColor.Swatch"));
+		editor.Frames(2); // The picker takes its place over its first frames
+		const ImVec2 start = editor.ProbeCenter("AssetInspector.Material.BaseColor.PickerArea");
+		editor.Drag(start, ImVec2(start.x + ImGui::GetFontSize() * 2.0f, start.y + ImGui::GetFontSize() * 2.0f));
+		CHECK(AssetManager::GetAsset<Material>(material)->GetProperties().BaseColor != color);
+		CHECK(FileSystem::ReadText(file) != before);
+		CHECK(editor.UndoPosition() == position + 1);
+		REQUIRE(editor.Context().Undo());
+		CHECK(FileSystem::ReadText(file) == before);
+	}
+
 	TEST_CASE("Import settings: Apply imports in the background, Revert discards the draft")
 	{
 		AuthoringEditor editor({}, WithFeatureProject("EditorAuthoringImport"));
@@ -1198,10 +1285,12 @@ TEST_SUITE("Editor.UI.AssetInspector")
 			REQUIRE(editor.Click("Inspector.MeshRenderer.EditMaterial"));
 			REQUIRE(editor.FramesUntil([&]() { return UI::ItemProbe::Find("Inspector.Material.BaseColor").has_value(); }));
 
-			// The base color's red channel typed into its field (Ctrl+click turns a drag field into text).
-			const UI::ItemProbe::Item color = *UI::ItemProbe::Find("Inspector.Material.BaseColor");
-			const float channel = (color.Max.x - color.Min.x - ImGui::GetFrameHeight()) / 4.0f;
-			editor.ClickWith(ImVec2(color.Min.x + channel * 0.5f, color.GetCenter().y), ImGuiMod_Ctrl);
+			// The base color's red channel typed into its field in the color's picker (Ctrl+click turns a drag field into
+			// text), which its swatch opens.
+			REQUIRE(editor.Click("Inspector.Material.BaseColor.Swatch"));
+			editor.Frames(2); // The picker takes its place over its first frames
+			const UI::ItemProbe::Item red = *UI::ItemProbe::Find("Inspector.Material.BaseColor.Picker.R.Value");
+			editor.ClickWith(red.GetCenter(), ImGuiMod_Ctrl);
 			editor.Harness.SetKey(ImGuiMod_Ctrl, true);
 			editor.Harness.SetKey(ImGuiKey_A, true);
 			editor.Frames(1);
@@ -1213,6 +1302,7 @@ TEST_SUITE("Editor.UI.AssetInspector")
 			editor.Press(ImGuiKey_Enter);
 			REQUIRE(AssetManager::GetAsset<Material>(handMaterialHandle));
 			CHECK(AssetManager::GetAsset<Material>(handMaterialHandle)->GetProperties().BaseColor.r == doctest::Approx(0.25f));
+			editor.Press(ImGuiKey_Escape); // Closes the picker
 
 			// The texture through the picker: search, Enter.
 			editor.Pause();

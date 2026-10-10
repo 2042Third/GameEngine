@@ -860,7 +860,9 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
     ImGui table per window, so the label column has one width in a panel, resizable by its divider; float fields show
     numbers as people write them ("0.8", "-4", up to three decimals; ImGui's own text is drawn transparent), and values
     and labels that do not fit end in an ellipsis with the whole text in a tooltip, so a laptop-sized window clips
-    nothing. A component's menu copies and pastes its values through the
+    nothing. Colors are channel fields behind R, G, B, A labels in the axis colors and a swatch (the swatch alone where
+    the fields would be unreadable) that opens a picker with the channels under it; mixed channels, colors and texts
+    show "--". A component's menu copies and pastes its values through the
     clipboard as JSON (`EditorActions::CopyComponentValues`) and runs `component.set`/`component.remove {entities}`. With
     nothing selected it shows the scene's settings, applied by one `scene.setSettings` when a drag ends, and the first
     active sky light (the renderer's).

@@ -40,7 +40,8 @@ namespace Strata
 				.Property("UVTiling", &MaterialProperties::UVTiling, PropertyOptions { .Speed = 0.01f })
 				.Property("UVOffset", &MaterialProperties::UVOffset, PropertyOptions { .Speed = 0.01f })
 				.AssetProperty("BaseColorMap", &MaterialProperties::BaseColorMap, AssetType::Texture)
-				.AssetProperty("MetallicRoughnessMap", &MaterialProperties::MetallicRoughnessMap, AssetType::Texture, { .Tooltip = "Green = roughness, blue = metallic" })
+				.AssetProperty("MetallicRoughnessMap", &MaterialProperties::MetallicRoughnessMap, AssetType::Texture,
+					{ .DisplayName = "Metal/Rough Map", .Tooltip = "Metallic-roughness map: green = roughness, blue = metallic" })
 				.AssetProperty("NormalMap", &MaterialProperties::NormalMap, AssetType::Texture)
 				.AssetProperty("OcclusionMap", &MaterialProperties::OcclusionMap, AssetType::Texture)
 				.AssetProperty("EmissiveMap", &MaterialProperties::EmissiveMap, AssetType::Texture);
