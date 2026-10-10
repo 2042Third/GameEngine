@@ -536,8 +536,9 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   `AssetDependencies::ScanDocument` of the scene, so a save parses no document again: a 200,000-entity scene saves in
   the time it took before references were recorded), and a file changed on disk (`asset.reimport`, the file watcher) is
   searched on an I/O job whose result the next update records unless a later search started meanwhile.
-  The manager hands them to `AssetManagerBase::SetAssetReferences`; packs carry them as their dependency table and entry
-  bounds, so `GetDependencies` and `GetBounds` answer the same in the editor and in the game, before anything loads.
+  The manager hands them to `AssetManagerBase::SetAssetReferences`, which keeps each valid handle once and leaves out the
+  asset itself (`NormalizeReferences`); packs carry them as their dependency table and entry bounds, so `GetDependencies`
+  and `GetBounds` answer the same in the editor and in the game, before anything loads.
 - **Importers and stored forms** (`Asset/AssetImporters.cpp`; the loaders that read the stored form are registered by
   the module that owns each type, one `Deserialize` per type, `Font::Create` for fonts):
 
@@ -595,7 +596,9 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   the export writes it on an I/O thread while the editor goes on, reading the files as they are then. So that a pack
   never disagrees with its plan, `WriteAssetPack` scans every document it packs (scenes, prefabs, models, materials) and
   fails, naming it, when one now references what the plan did not record for it (a scene saved meanwhile with a new
-  material would ship without it); other changes ship as they are read.
+  material would ship without it); other changes ship as they are read. The scan is compared as recorded references are
+  made (`AssetManagerBase::NormalizeReferences`: valid handles, without the document itself), so a scene whose script
+  loads it again, or a prefab whose script spawns copies of itself, exports.
 - **Mounts** (`RuntimeAssetManager::Mount`). A game mounts its pack, then the manifest's `PatchPacks` in order: an entry of
   a later pack replaces the one with the same handle, and assets loaded from a replaced entry reload from the new one.
   Nothing is imported at runtime.

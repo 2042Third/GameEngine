@@ -1992,8 +1992,10 @@ namespace Strata
 			std::string scanError;
 			if (!AssetDependencies::Scan(metadata.Type, outData, references, &scanError))
 				return fail(fmt::format("it cannot be read as a document ({}); fix it and export again", scanError));
+			// Compared as recorded references are made: a document that names itself (a scene whose script loads it again)
+			// depends on nothing for that.
 			const std::unordered_set<AssetHandle> recorded(source->second->Dependencies.begin(), source->second->Dependencies.end());
-			for (AssetHandle reference : references)
+			for (AssetHandle reference : NormalizeReferences(metadata.Handle, references))
 			{
 				if (!recorded.contains(reference))
 					return fail(fmt::format("it changed after the export started and now references {}, which the export did not plan for; export again", describe(reference)));

@@ -331,6 +331,10 @@ namespace Strata
 		std::vector<AssetHandle> GetDependencyClosure(AssetHandle handle) const;
 		// The local bounds of a mesh as recorded when it was imported, known before the mesh loads (nullopt for other assets).
 		std::optional<AABB> GetBounds(AssetHandle handle) const;
+		// What recorded dependencies are made of (SetAssetReferences): the valid handles of `references`, each once in the
+		// order given, without `handle` itself (a scene whose script loads it again depends on nothing for that). Code that
+		// compares what a stored form references with what was recorded normalizes it alike.
+		static std::vector<AssetHandle> NormalizeReferences(AssetHandle handle, std::span<const AssetHandle> references);
 
 		// Loads an asset with everything it depends on (GetDependencyClosure): pins every member at `priority`, which
 		// requests the loads in breadth-first order. An invalid request for unknown assets.
@@ -347,9 +351,10 @@ namespace Strata
 	protected:
 		// Reads part of an asset's stored form; any thread. The default reads it all (ReadAssetData) and keeps the range.
 		virtual bool ReadAssetRange(const AssetMetadata& metadata, uint64_t offset, uint64_t size, std::vector<uint8_t>& outData, std::string* outError);
-		// Records what an asset depends on and its bounds (subclasses: from import records, from the pack's tables).
-		// Duplicates, the null handle and the asset itself are left out. Does nothing for unknown assets.
-		void SetAssetReferences(AssetHandle handle, std::vector<AssetHandle> dependencies, std::optional<AABB> bounds);
+		// Records what an asset depends on and its bounds (subclasses: from import records, from the pack's tables), as
+		// NormalizeReferences leaves them: duplicates, the null handle and the asset itself are left out. Does nothing for
+		// unknown assets.
+		void SetAssetReferences(AssetHandle handle, std::span<const AssetHandle> dependencies, std::optional<AABB> bounds);
 	private:
 		// Requests the direct dependencies of an asset whose read completed (see GetDependencies). Any thread.
 		void PrefetchDependencies(AssetHandle handle, AssetPriority priority);

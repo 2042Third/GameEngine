@@ -461,6 +461,69 @@ TEST_SUITE("Asset.Dependencies")
 		REQUIRE_MESSAGE(manager->WriteAssetPack(failedPath, plan, {}, nullptr, &error), error);
 	}
 
+	TEST_CASE("Documents that reference themselves plan, write and load like any other")
+	{
+		// A level whose script loads it again and a prefab whose script spawns copies of itself (a splitting asteroid): the
+		// document naming itself is no dependency, neither recorded nor when the pack is written.
+		NativeProject project("PackSelfReferences");
+		auto addScript = [](Entity entity, const std::string& className, const std::string& field, uint64_t asset)
+		{
+			ScriptEntry script;
+			script.ClassName = className;
+			script.Fields.push_back(ScriptFieldValue { field, PropertyType::Asset, UUID(asset) });
+			entity.AddComponent<ScriptComponent>().Scripts.push_back(std::move(script));
+		};
+		project.WriteMaterial("Materials/Rock.stmat", 0x6201);
+		{
+			Scene prefabScene("Asteroid");
+			Entity asteroid = prefabScene.CreateEntity("Asteroid");
+			asteroid.AddComponent<MeshRendererComponent>().Material = UUID(0x6201);
+			addScript(asteroid, "Splitter", "Fragment", 0x6205);
+			project.Write("Prefabs/Asteroid.stprefab", 0x6205, Prefab::CreateFromEntities(prefabScene, { asteroid })->Serialize());
+		}
+		{
+			Scene level("Level");
+			addScript(level.CreateEntity("Rules"), "Rules", "Restart", 0x6210);
+			addScript(level.CreateEntity("Spawner"), "Spawner", "Asteroid", 0x6205);
+			project.Write("Scenes/Level.stscene", 0x6210, SceneSerializer::Serialize(level));
+		}
+		project.WriteScene("Scenes/Menu.stscene", 0x6211, {});
+		Ref<EditorAssetManager> manager = project.Open();
+		CHECK(manager->GetDependencies(UUID(0x6210)) == Handles({ 0x6205 }));
+		CHECK(manager->GetDependencies(UUID(0x6205)) == Handles({ 0x6201 }));
+
+		AssetPackBuildOptions options;
+		options.StartScene = UUID(0x6210);
+		options.Prune = true;
+		AssetPackBuildPlan plan;
+		std::string error;
+		REQUIRE_MESSAGE(manager->PlanAssetPack(options, plan, &error), error);
+		CHECK(Paths(plan.Assets) == std::vector<std::string> { "Scenes/Level.stscene", "Prefabs/Asteroid.stprefab", "Materials/Rock.stmat",
+			"Scenes/Menu.stscene" });
+
+		// A scene saved after the plan that now names itself references nothing the plan lacks.
+		Scene menu("Menu");
+		addScript(menu.CreateEntity("Rules"), "Rules", "Restart", 0x6211);
+		REQUIRE(manager->SaveNativeAsset(UUID(0x6211), ToBytes(SceneSerializer::Serialize(menu)), false));
+		CHECK(manager->GetDependencies(UUID(0x6211)).empty());
+
+		const std::filesystem::path packPath = project.Root / "Build" / "Game.stpak";
+		REQUIRE_MESSAGE(manager->WriteAssetPack(packPath, plan, {}, nullptr, &error), error);
+		const Ref<RuntimeAssetManager> runtime = RuntimeAssetManager::Create(packPath, &error);
+		REQUIRE_MESSAGE(runtime, error);
+		for (uint64_t handle : { 0x6201, 0x6205, 0x6210, 0x6211 })
+		{
+			CAPTURE(handle);
+			CHECK(runtime->GetDependencies(UUID(handle)) == manager->GetDependencies(UUID(handle)));
+		}
+		CHECK(runtime->GetDependencyClosure(UUID(0x6210)) == Handles({ 0x6210, 0x6205, 0x6201 }));
+		const Ref<Prefab> asteroid = std::static_pointer_cast<Prefab>(runtime->LoadAssetSync(UUID(0x6205)));
+		REQUIRE(asteroid);
+		std::vector<AssetHandle> references;
+		AssetDependencies::ScanEntities(asteroid->GetSnapshot(), references);
+		CHECK(std::find(references.begin(), references.end(), UUID(0x6205)) != references.end()); // It does name itself
+	}
+
 	TEST_CASE("Mounted packs replace the entries of earlier packs and reload what they replace")
 	{
 		const std::filesystem::path directory = CreateTemporaryDirectory("PackMount");

@@ -5,6 +5,7 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/GameExport.h"
+#include "Scripting/ScriptTestUtils.h"
 #include "TestHelpers.h"
 
 #include <Strata/Asset/AssetPack.h>
@@ -15,9 +16,11 @@
 #include <Strata/Project/GameManifest.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Components.h>
+#include <Strata/Scene/Prefab.h>
 #include <Strata/Scene/Scene.h>
 #include <Strata/Scene/SceneSerializer.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <set>
@@ -266,6 +269,60 @@ TEST_SUITE("Editor.Export")
 		const Ref<RuntimeAssetManager> runtime = RuntimeAssetManager::Create(FileSystem::FromUTF8(value["assetPack"].get<std::string>()), &error);
 		REQUIRE_MESSAGE(runtime, error);
 		CHECK(runtime->FindAssetByPath("Materials/Late.stmat").IsValid());
+	}
+
+	TEST_CASE("Scenes and prefabs whose scripts reference themselves export")
+	{
+		// The start scene's rules restart it (a field naming the scene itself), and the enemy prefab spawns copies of itself.
+		ExportHarness harness("EditorExportSelfReference");
+		harness.Run("script.load", { { "path", FileSystem::ToUTF8(GetTestScriptModule(STRATA_TEST_SCRIPTS_API)) } });
+		EditorAssetManager& assets = *harness.Context.GetAssetManager();
+		const AssetHandle scene = assets.FindAssetByPath("Scenes/Main.stscene");
+		const AssetHandle prefab = assets.FindAssetByPath("Prefabs/Enemy.stprefab");
+		REQUIRE(scene.IsValid());
+		REQUIRE(prefab.IsValid());
+		const std::string rules = harness.Run("entity.create", { { "name", "Rules" } })["id"].get<std::string>();
+		harness.Run("script.add", { { "entity", rules }, { "class", "GameFlow" }, { "fields", { { "Level", UUIDToJson(scene) } } } });
+		const std::string spawner = harness.Run("entity.create", { { "name", "Spawner" } })["id"].get<std::string>();
+		harness.Run("script.add", { { "entity", spawner }, { "class", "PendingSpawner" }, { "fields", { { "Prefab", UUIDToJson(prefab) } } } });
+		harness.Run("scene.save");
+
+		// The prefab is saved through the asset manager: no command edits a prefab.
+		{
+			Scene prefabScene("Enemy");
+			Entity enemy = prefabScene.CreateEntity("Enemy");
+			MeshRendererComponent& renderer = enemy.AddComponent<MeshRendererComponent>();
+			renderer.Mesh = UUID(1);
+			renderer.Material = assets.FindAssetByPath("Materials/ForEnemy.stmat");
+			ScriptEntry script;
+			script.ClassName = "PendingSpawner";
+			script.Fields.push_back(ScriptFieldValue { "Prefab", PropertyType::Asset, prefab });
+			enemy.AddComponent<ScriptComponent>().Scripts.push_back(std::move(script));
+			const std::string document = JsonUtils::Dump(Prefab::CreateFromEntities(prefabScene, { enemy })->Serialize());
+			std::string error;
+			REQUIRE_MESSAGE(assets.SaveNativeAsset(prefab, std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(document.data()), document.size()), true,
+				&error), error);
+		}
+
+		// Both ship, and what they reference does not include themselves, in the editor or in the game.
+		for (const bool prune : { false, true })
+		{
+			CAPTURE(prune);
+			const std::filesystem::path output = harness.Directory / (prune ? "Pruned" : "Full");
+			const nlohmann::json value = harness.Run("project.export", { { "directory", FileSystem::ToUTF8(output) }, { "includeRuntime", false }, { "prune", prune } });
+			if (prune)
+				CHECK(ExcludedPaths(value) == std::set<std::string> { "Materials/Unused.stmat" });
+			std::string error;
+			const Ref<RuntimeAssetManager> runtime = RuntimeAssetManager::Create(FileSystem::FromUTF8(value["assetPack"].get<std::string>()), &error);
+			REQUIRE_MESSAGE(runtime, error);
+			for (const AssetHandle handle : { scene, prefab })
+			{
+				const std::vector<AssetHandle> dependencies = runtime->GetDependencies(handle);
+				CHECK(dependencies == assets.GetDependencies(handle));
+				CHECK(std::find(dependencies.begin(), dependencies.end(), handle) == dependencies.end());
+			}
+			CHECK(runtime->FindAssetByPath("Materials/ForEnemy.stmat").IsValid());
+		}
 	}
 
 	TEST_CASE("Pruned exports keep what the scenes use and what Export.AlwaysInclude names")

@@ -141,9 +141,9 @@ namespace Strata::Tests
 		void Remove(AssetHandle handle) { UnregisterAsset(handle); }
 
 		// Records what an asset depends on, as an importer or a pack's table would.
-		void SetDependencies(AssetHandle handle, std::vector<AssetHandle> dependencies, std::optional<AABB> bounds = std::nullopt)
+		void SetDependencies(AssetHandle handle, const std::vector<AssetHandle>& dependencies, std::optional<AABB> bounds = std::nullopt)
 		{
-			SetAssetReferences(handle, std::move(dependencies), bounds);
+			SetAssetReferences(handle, dependencies, bounds);
 		}
 
 		// Reads wait at the gate while it is closed, until AllowReads lets them through.

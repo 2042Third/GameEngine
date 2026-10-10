@@ -992,17 +992,22 @@ namespace Strata
 	// Dependencies, bounds and group loads
 	////////////////////////////////////////////////////////////////////////////////
 
-	void AssetManagerBase::SetAssetReferences(AssetHandle handle, std::vector<AssetHandle> dependencies, std::optional<AABB> bounds)
+	std::vector<AssetHandle> AssetManagerBase::NormalizeReferences(AssetHandle handle, std::span<const AssetHandle> references)
 	{
-		// Once each, in the order given, never the asset itself.
 		std::vector<AssetHandle> unique;
-		unique.reserve(dependencies.size());
+		unique.reserve(references.size());
 		std::unordered_set<AssetHandle> seen;
-		for (AssetHandle dependency : dependencies)
+		for (AssetHandle reference : references)
 		{
-			if (dependency.IsValid() && dependency != handle && seen.insert(dependency).second)
-				unique.push_back(dependency);
+			if (reference.IsValid() && reference != handle && seen.insert(reference).second)
+				unique.push_back(reference);
 		}
+		return unique;
+	}
+
+	void AssetManagerBase::SetAssetReferences(AssetHandle handle, std::span<const AssetHandle> dependencies, std::optional<AABB> bounds)
+	{
+		std::vector<AssetHandle> unique = NormalizeReferences(handle, dependencies);
 		if (bounds && !bounds->IsValid())
 			bounds.reset();
 

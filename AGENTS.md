@@ -372,8 +372,10 @@ The threading model, frame loop and pipelines these rules protect are described 
   script fields of asset type, material texture maps); importers add what their stored form does not show
   (`ImportResult::References`, e.g. a glTF mesh's materials) and mesh bounds (`Bounds`). A new asset property is found
   automatically; a new document type or a stored form with references needs `AssetDependencies::Scan` or the importer to
-  record them. Reads of requested assets other than scenes, prefabs and models prefetch their direct dependencies (only
-  into the budgets' headroom beside what is on its way and a window of loads in flight, never evicting, not chaining);
+  record them (each valid handle once, never the asset itself: `AssetManagerBase::NormalizeReferences`, which code that
+  compares scanned references with recorded ones uses too). Reads of requested assets other than scenes, prefabs and
+  models prefetch their direct dependencies (only into the budgets' headroom beside what is on its way and a window of
+  loads in flight, never evicting, not chaining);
   loading screens pin a whole closure with `RequestLoadWithDependencies` (`AssetGroupRequest`: progress by bytes, cancel).
 - **Residency** ([Docs/Architecture.md](Docs/Architecture.md), "Streaming and residency"): memory is bounded by budgets
   per pool (`AssetResidencyBudgets`: GPU textures 50% and GPU buffers 15% of the device's memory budget, CPU unlimited;

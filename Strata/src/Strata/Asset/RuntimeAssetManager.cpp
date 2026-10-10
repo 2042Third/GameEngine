@@ -91,8 +91,7 @@ namespace Strata
 		for (const auto& [index, metadata] : registered)
 		{
 			RegisterAsset(metadata);
-			const std::span<const AssetHandle> dependencies = added->GetDependencies(entries[index]);
-			SetAssetReferences(metadata.Handle, std::vector<AssetHandle>(dependencies.begin(), dependencies.end()), entries[index].Bounds);
+			SetAssetReferences(metadata.Handle, added->GetDependencies(entries[index]), entries[index].Bounds);
 		}
 		ST_CORE_INFO("Asset pack '{}' (version {}): {} assets{}", FileSystem::ToUTF8(added->GetPath().filename()), added->GetVersion(), registered.size(),
 			replaced.empty() ? std::string() : fmt::format(", {} replacing earlier entries", replaced.size()));
