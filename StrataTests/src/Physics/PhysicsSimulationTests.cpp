@@ -1,6 +1,8 @@
 #include <doctest/doctest.h>
 
 #include "Physics/PhysicsTestUtils.h"
+#include "Strata/Core/Log.h"
+#include "TestHelpers.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 

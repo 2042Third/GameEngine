@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Strata/Core/Log.h"
 #include "Strata/Core/Platform.h"
 
 #include <chrono>
@@ -8,6 +9,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -45,6 +47,18 @@ namespace Strata::Tests
 			std::this_thread::sleep_for(std::chrono::milliseconds(5));
 		}
 		return condition();
+	}
+
+	// Number of log messages containing `text` logged after `afterSequence` (see LogBuffer::GetLatestSequence).
+	inline size_t CountLogMessages(uint64_t afterSequence, std::string_view text)
+	{
+		size_t count = 0;
+		for (const LogEntry& entry : Log::GetBuffer().GetEntries(afterSequence))
+		{
+			if (entry.Message.find(text) != std::string::npos)
+				count++;
+		}
+		return count;
 	}
 
 	// Builds a 16-bit PCM WAV file containing a sine wave (the same signal on every channel), optionally preceded by

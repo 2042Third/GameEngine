@@ -6,6 +6,7 @@
 #include "Strata/Audio/AudioEngine.h"
 #include "Strata/Audio/AudioSource.h"
 #include "Strata/Audio/AudioSystem.h"
+#include "Strata/Core/Log.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Renderer/Material.h"
 #include "Strata/Scene/ComponentAccess.h"

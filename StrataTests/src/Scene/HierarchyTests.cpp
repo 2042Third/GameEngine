@@ -6,12 +6,12 @@
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneSerializer.h"
+#include "TestHelpers.h"
 
 #include <algorithm>
 #include <cstdint>
 #include <random>
 #include <string>
-#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -45,17 +45,6 @@ namespace
 		for (const Entity entity : scene.GetEntitiesInHierarchyOrder())
 			layout[entity.GetUUID()] = Placement { entity.GetComponent<RelationshipComponent>().Parent, scene.GetSiblingIndex(entity) };
 		return layout;
-	}
-
-	size_t CountLogMessages(uint64_t afterSequence, std::string_view text)
-	{
-		size_t count = 0;
-		for (const LogEntry& entry : Log::GetBuffer().GetEntries(afterSequence))
-		{
-			if (entry.Message.find(text) != std::string::npos)
-				count++;
-		}
-		return count;
 	}
 
 	// Records, for every entity announced by OnEntityDestroying, whether the entity named "Watched" still existed.

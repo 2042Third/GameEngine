@@ -2,7 +2,6 @@
 
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Core/JobSystem.h"
-#include "Strata/Core/Log.h"
 #include "Strata/Math/Math.h"
 #include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Physics/PhysicsWorld.h"
@@ -17,7 +16,6 @@
 #include <cmath>
 #include <functional>
 #include <string>
-#include <string_view>
 #include <vector>
 
 namespace Strata::Tests
@@ -132,18 +130,6 @@ namespace Strata::Tests
 		Ref<std::vector<CollisionEvent>> m_Events;
 		CollisionListenerID m_ListenerID = c_InvalidCollisionListener;
 	};
-
-	// Number of log messages containing `text` logged after `afterSequence` (see LogBuffer::GetLatestSequence).
-	inline size_t CountLogMessages(uint64_t afterSequence, std::string_view text)
-	{
-		size_t count = 0;
-		for (const LogEntry& entry : Log::GetBuffer().GetEntries(afterSequence))
-		{
-			if (entry.Message.find(text) != std::string::npos)
-				count++;
-		}
-		return count;
-	}
 
 	// Mesh provider serving meshes from a function; Changed() tells physics that the function's results changed.
 	class FunctionMeshProvider final : public PhysicsMeshProvider

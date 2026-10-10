@@ -1,9 +1,11 @@
 #include <doctest/doctest.h>
 
 #include "Physics/PhysicsTestUtils.h"
+#include "Strata/Core/Log.h"
 #include "Strata/Physics/PhysicsRuntime.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Scene/ComponentAccess.h"
+#include "TestHelpers.h"
 
 #include <limits>
 

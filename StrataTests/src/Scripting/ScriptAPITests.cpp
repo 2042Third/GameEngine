@@ -10,6 +10,7 @@
 #include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/SceneSerializer.h"
 #include "Strata/Scripting/ScriptHostAPI.h"
+#include "TestHelpers.h"
 
 #include "StrataScript/ScriptABI.h"
 
@@ -110,18 +111,6 @@ namespace
 	StrataScriptString ABIString(const char* text)
 	{
 		return StrataScriptString { text, static_cast<uint64_t>(std::strlen(text)) };
-	}
-
-	// Number of log messages containing `text` logged after `afterSequence` (see LogBuffer::GetLatestSequence).
-	size_t CountLogMessages(uint64_t afterSequence, std::string_view text)
-	{
-		size_t count = 0;
-		for (const LogEntry& entry : Log::GetBuffer().GetEntries(afterSequence))
-		{
-			if (entry.Message.find(text) != std::string::npos)
-				count++;
-		}
-		return count;
 	}
 
 	// Fills the scene's registry with plain EnTT entities (they count against its limit like scene entities, and are much

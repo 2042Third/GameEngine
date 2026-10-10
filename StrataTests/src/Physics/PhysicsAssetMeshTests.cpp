@@ -6,6 +6,7 @@
 #include "Strata/Asset/EditorAssetManager.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JsonUtils.h"
+#include "Strata/Core/Log.h"
 #include "Strata/Physics/AssetMeshProvider.h"
 #include "Strata/Physics/PhysicsMeshShapes.h"
 #include "Strata/Renderer/Material.h"
