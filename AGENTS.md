@@ -359,9 +359,10 @@ The threading model, frame loop and pipelines these rules protect are described 
 - Shipped games read an asset pack (`.stpak`, `AssetPack`) through `RuntimeAssetManager`; the editor
   builds it with `EditorAssetManager::BuildAssetPack`.
 - **Textures** cook to GPU block-compressed formats by default ([Docs/Architecture.md](Docs/Architecture.md), "Texture
-  cooking"): `TextureImporter::ChooseFormat` picks BC1/BC3 (color, data), BC5 (normal maps), BC4 (one-channel data,
-  marked `Grayscale`: sampled as `(r, r, r, 1)`) or RGBA16F (HDR) unless the settings say `"Compression":
-  "Uncompressed"`; mips are filtered with a Mitchell filter; the cooked `STTX` version 2 stores the levels smallest first
+  cooking"): `TextureImporter::ChooseFormat` picks BC1/BC3 (color), BC5 (normal maps), BC4 (one-channel data, marked
+  `Grayscale`: sampled as `(r, r, r, 1)`) or RGBA16F (HDR) unless the settings say `"Compression": "Uncompressed"`;
+  data of several channels stays RGBA8 (BC1 and BC3 cannot keep independent channels apart; there is no BC7 encoder
+  yet). Mips are filtered with a Mitchell filter; the cooked `STTX` version 2 stores the levels smallest first
   so the mip tail is one range after the header. Never compute texture sizes from bytes per pixel: use `GetMipByteSize`
   (whole 4x4 blocks) and `GetTextureFormatInfo`; read cooked data through `ParseCookedTexture`, which validates it. A
   change to the cooked output bumps the importers' versions (`TextureImporter` and `GltfImporter`). Devices without BC

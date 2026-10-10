@@ -143,8 +143,9 @@ TEST_SUITE("Asset.TextureImport")
 		CHECK(choose(TextureUsage::NormalMap, TextureCompression::Uncompressed, 3, false) == TextureFormat::RGBA8);
 		CHECK(choose(TextureUsage::Data, TextureCompression::Auto, 1, false) == TextureFormat::BC4);
 		CHECK(choose(TextureUsage::Data, TextureCompression::Uncompressed, 1, false) == TextureFormat::R8);
-		CHECK(choose(TextureUsage::Data, TextureCompression::Auto, 3, false) == TextureFormat::BC1);
-		CHECK(choose(TextureUsage::Data, TextureCompression::Auto, 4, true) == TextureFormat::BC3);
+		// Data with several channels stays uncompressed (see "Data channels stay apart").
+		CHECK(choose(TextureUsage::Data, TextureCompression::Auto, 3, false) == TextureFormat::RGBA8);
+		CHECK(choose(TextureUsage::Data, TextureCompression::Auto, 4, true) == TextureFormat::RGBA8);
 		CHECK(choose(TextureUsage::Data, TextureCompression::Uncompressed, 3, false) == TextureFormat::RGBA8);
 		CHECK(choose(TextureUsage::HDR, TextureCompression::Auto, 4, false) == TextureFormat::RGBA16F);
 
@@ -175,8 +176,8 @@ TEST_SUITE("Asset.TextureImport")
 		CHECK(grayData->GetSpecification().Format == TextureFormat::BC4);
 		CHECK(grayData->GetSpecification().Grayscale);
 		CHECK(DecodeLevel(*grayData, 0)[0] == 200);
-		CHECK(Import(grayAlpha, data)->GetSpecification().Format == TextureFormat::BC3);
-		CHECK(Import(rgb, data)->GetSpecification().Format == TextureFormat::BC1);
+		CHECK(Import(grayAlpha, data)->GetSpecification().Format == TextureFormat::RGBA8);
+		CHECK(Import(rgb, data)->GetSpecification().Format == TextureFormat::RGBA8);
 
 		// Uncompressed one-channel data keeps one byte per texel.
 		data.Compression = TextureCompression::Uncompressed;
@@ -294,7 +295,8 @@ TEST_SUITE("Asset.TextureImport")
 
 	TEST_CASE("Block compression keeps color close to the source")
 	{
-		// The feature test's checker and a smooth gradient, stored as BC1 at both qualities.
+		// The feature test's checker and a smooth gradient, stored as BC1 at both qualities, reach the 40 dB the cooking work
+		// asks of compressed color.
 		const std::optional<std::vector<uint8_t>> checker = FileSystem::ReadBytes(
 			FileSystem::FromUTF8(STRATA_SOURCE_DIR) / "StrataTests" / "FeatureTest" / "Assets" / "Textures" / "Checker.png");
 		REQUIRE(checker);
@@ -314,11 +316,67 @@ TEST_SUITE("Asset.TextureImport")
 			CHECK(high->GetSpecification().Format == TextureFormat::BC1SRGB);
 			settings.Quality = TextureQuality::Fast;
 			const Ref<Texture> fast = Import(image, settings);
+			CHECK(fast->GetSpecification().Format == TextureFormat::BC1SRGB);
 			const double highPSNR = ComputePSNR(source, DecodeLevel(*high, 0), 4);
 			const double fastPSNR = ComputePSNR(source, DecodeLevel(*fast, 0), 4);
 			MESSAGE(name, ": BC1 PSNR ", highPSNR, " dB at High, ", fastPSNR, " dB at Fast");
-			CHECK(highPSNR >= 38.0);
-			CHECK(fastPSNR >= 38.0);
+			CHECK(highPSNR >= 40.0);
+			CHECK(fastPSNR >= 40.0);
+			// High refines endpoints one more time than Fast: never worse, and on the gradient's smooth blocks the blocks
+			// differ (the checker's two-color blocks are exact either way).
+			CHECK(highPSNR >= fastPSNR);
+			if (name == "Gradient")
+				CHECK(high->Serialize() != fast->Serialize());
+		}
+	}
+
+	TEST_CASE("Data channels stay apart")
+	{
+		// An occlusion-roughness-metallic texture: radial occlusion in red, roughness waves in green and metallic tiles of
+		// 7 x 9 texels in blue, whose edges cut through most blocks. BC1 keeps a block's colors on one line through RGB space,
+		// so it would shift the roughness along the metallic edges by up to 32 of 255 (31 dB); data of several channels
+		// keeps every channel.
+		constexpr uint32_t c_Size = 256;
+		std::vector<uint8_t> pixels;
+		for (uint32_t y = 0; y < c_Size; y++)
+		{
+			for (uint32_t x = 0; x < c_Size; x++)
+			{
+				const float u = static_cast<float>(x) / static_cast<float>(c_Size - 1) * 2.0f - 1.0f;
+				const float v = static_cast<float>(y) / static_cast<float>(c_Size - 1) * 2.0f - 1.0f;
+				const float occlusion = std::clamp(1.0f - 0.6f * (u * u + v * v), 0.0f, 1.0f);
+				const float roughness = 0.5f + 0.4f * std::sin(static_cast<float>(x) * 0.15f) * std::cos(static_cast<float>(y) * 0.11f);
+				const bool metallic = (x / 7 + y / 9) % 2 == 0;
+				pixels.push_back(static_cast<uint8_t>(std::lround(occlusion * 255.0f)));
+				pixels.push_back(static_cast<uint8_t>(std::lround(roughness * 255.0f)));
+				pixels.push_back(metallic ? 255 : 0);
+			}
+		}
+		TextureImportSettings settings;
+		settings.Usage = TextureUsage::Data;
+		const Ref<Texture> texture = Import(Tests::EncodePNG(c_Size, c_Size, 3, pixels), settings, "Platform_orm.png");
+		CHECK_FALSE(texture->GetSpecification().Grayscale);
+
+		const std::vector<uint8_t> stored = DecodeLevel(*texture, 0);
+		const uint32_t storedChannels = GetTextureFormatInfo(GetDecodedFormat(texture->GetSpecification().Format)).Channels;
+		REQUIRE(stored.size() == static_cast<size_t>(c_Size) * c_Size * storedChannels);
+		for (uint32_t channel = 0; channel < 3; channel++)
+		{
+			CAPTURE(channel);
+			double squaredError = 0.0;
+			int maxError = 0;
+			for (size_t texel = 0; texel < static_cast<size_t>(c_Size) * c_Size; texel++)
+			{
+				const int error = std::abs(static_cast<int>(stored[texel * storedChannels + channel]) - static_cast<int>(pixels[texel * 3 + channel]));
+				squaredError += static_cast<double>(error) * error;
+				maxError = std::max(maxError, error);
+			}
+			const double meanSquaredError = squaredError / (static_cast<double>(c_Size) * c_Size);
+			const double psnr = meanSquaredError == 0.0 ? 100.0 : 10.0 * std::log10(255.0 * 255.0 / meanSquaredError);
+			MESSAGE("Data channel ", channel, " stored as ", std::string(TextureFormatToString(texture->GetSpecification().Format)), ": PSNR ", psnr,
+				" dB, error at most ", maxError);
+			CHECK(psnr >= 40.0);
+			CHECK(maxError <= 16);
 		}
 	}
 

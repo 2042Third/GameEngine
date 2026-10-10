@@ -562,8 +562,8 @@ Textures are stored the way the GPU samples them: block-compressed, with their m
   | `RGBA8`, `RGBA8SRGB` | 1, 2 | 4 bytes per texel | uncompressed data and color, textures made at runtime |
   | `RGBA16F`, `RGBA32F` | 3, 4 | 8, 16 bytes per texel | HDR (environment maps import as `RGBA16F`) |
   | `R8`, `RG8` | 5, 6 | 1, 2 bytes per texel | uncompressed gray data; what BC4 and BC5 decode to |
-  | `BC1`, `BC1SRGB` | 7, 8 | 8 bytes per 4x4 block | opaque color and data |
-  | `BC3`, `BC3SRGB` | 9, 10 | 16 bytes per block (BC4 alpha + BC1 color) | color and data with alpha |
+  | `BC1`, `BC1SRGB` | 7, 8 | 8 bytes per 4x4 block | opaque color |
+  | `BC3`, `BC3SRGB` | 9, 10 | 16 bytes per block (BC4 alpha + BC1 color) | color with alpha |
   | `BC4` | 11 | 8 bytes per block | one channel (gray data) |
   | `BC5` | 12 | 16 bytes per block | normal maps (X and Y) |
   | `BC7`, `BC7SRGB` | 13, 14 | 16 bytes per block | loaded, uploaded and decoded; the importer has no BC7 encoder yet |
@@ -572,14 +572,19 @@ Textures are stored the way the GPU samples them: block-compressed, with their m
   to whole blocks and is the size every count uses (validation, row pitches, uploads, `Texture::GetMemoryUsage` and so
   residency, staging).
 - **Import** (`Asset/TextureImporter`, cooking in `Asset/TextureCooker`, both pipeline-only). Settings (`.meta`):
-  `Usage`, `Compression` (`Auto`, the default, or `Uncompressed`), `Quality` (`High`, the default, or `Fast`: fewer
-  endpoint refinements), `GenerateMips`, `Filter`, `Wrap`, `MaxSize`, `FlipVertically`; settings files from before keep
-  the defaults for keys they lack. The image decodes with only the channels its format needs (color keeps RGB or RGBA,
-  gray color becomes RGB, normal maps XYZ, data its own channels), and `TextureImporter::ChooseFormat` picks the format:
-  color `BC1SRGB` (`BC3SRGB` when a texel is not opaque), normal maps `BC5`, data `BC4` for one channel (marked
-  grayscale, below), else `BC1`/`BC3`, HDR `RGBA16F`; `Uncompressed` gives `RGBA8SRGB`, `RGBA8` or `R8`. `GltfImporter`
-  cooks a model's textures the same way (base color and emissive as color, the normal texture as a normal map,
-  metallic-roughness and occlusion as data; its `TextureCompression` and `TextureQuality` settings).
+  `Usage`, `Compression` (`Auto`, the default, or `Uncompressed`), `Quality` (`High`, the default, or `Fast`: one
+  endpoint refinement of BC1 and BC3 color blocks instead of two, a slightly larger error in less time),
+  `GenerateMips`, `Filter`, `Wrap`, `MaxSize`, `FlipVertically`. The importer writes every setting into a new `.meta`;
+  files from before keep the defaults for keys they lack (the feature project's `.meta` files hold every key, which its
+  test checks). The image decodes with only the channels its format needs (color keeps RGB or RGBA, gray color becomes
+  RGB, normal maps XYZ, data its own channels), and `TextureImporter::ChooseFormat` picks the format: color `BC1SRGB`
+  (`BC3SRGB` when a texel is not opaque), normal maps `BC5`, data `BC4` for one channel (marked grayscale, below), else
+  `RGBA8`, HDR `RGBA16F`; `Uncompressed` gives `RGBA8SRGB`, `RGBA8` or `R8`. Data of several channels stays
+  uncompressed because its channels vary independently (occlusion, roughness and metallic in one texture), while the
+  colors of a BC1 or BC3 block lie on one line through RGB space: a metallic edge inside a block would shift the
+  roughness beside it by up to a sixth of its range. `GltfImporter` cooks a model's textures the same way (base color
+  and emissive as color, the normal texture as a normal map, metallic-roughness and occlusion as data; its
+  `TextureCompression` and `TextureQuality` settings).
 - **Mips** are filtered from the previous level with stb_image_resize2's Mitchell filter: sRGB color in linear space,
   color with alpha weighted by it (alpha is coverage), edges read the way the texture wraps (repeat, clamp, mirror), and
   normal maps renormalized in every level (level 0 too). HDR mips use a box filter: a sharper one rings around a bright

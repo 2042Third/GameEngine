@@ -17,6 +17,7 @@
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#include <algorithm>
 #include <cstring>
 #include <functional>
 #include <string>
@@ -384,7 +385,7 @@ TEST_SUITE("Asset.Gltf")
 		REQUIRE(color);
 		REQUIRE(data);
 		CHECK(color->GetSpecification().Format == TextureFormat::BC1SRGB);
-		CHECK(data->GetSpecification().Format == TextureFormat::BC1);
+		CHECK(data->GetSpecification().Format == TextureFormat::RGBA8); // Metallic-roughness: channels BC1 cannot keep apart
 		CHECK(color->GetSpecification().Wrap == TextureWrap::Clamp);
 		CHECK(color->GetSpecification().Filter == TextureFilter::Nearest);
 		CHECK(color->GetWidth() == 4);
@@ -466,6 +467,69 @@ TEST_SUITE("Asset.Gltf")
 		const ImportOutput badScale = RunImport(assets, "Sample.gltf", CreateGltf({}), { { "Scale", -2.0 } });
 		REQUIRE(badScale.Success);
 		CHECK_FALSE(badScale.Result.Warnings.empty());
+	}
+
+	TEST_CASE("glTF texture settings reach the model's textures")
+	{
+		// A smooth gradient as base color and metallic-roughness: its color blocks encode differently at High and Fast.
+		const std::filesystem::path assets = Tests::CreateTemporaryDirectory("GltfTextureSettings");
+		constexpr uint32_t c_Size = 64;
+		std::vector<uint8_t> pixels;
+		for (uint32_t y = 0; y < c_Size; y++)
+		{
+			for (uint32_t x = 0; x < c_Size; x++)
+				Tests::AppendPixel(pixels, static_cast<uint8_t>(x * 255 / (c_Size - 1)), static_cast<uint8_t>(y * 255 / (c_Size - 1)),
+					static_cast<uint8_t>((x + y) * 255 / (2 * (c_Size - 1))), 255);
+		}
+		REQUIRE(FileSystem::WriteBytes(assets / "Gradient.png", Tests::EncodePNG(c_Size, c_Size, pixels)));
+		const std::vector<uint8_t> model = CreateGltf({ .ImageUri = "Gradient.png" });
+
+		struct CookedTextures
+		{
+			Ref<Texture> Color;
+			Ref<Texture> Data;
+		};
+		auto cook = [&](const nlohmann::json& settings, ImportOutput& outOutput)
+		{
+			outOutput = RunImport(assets, "Model.gltf", model, settings);
+			REQUIRE_MESSAGE(outOutput.Success, outOutput.Error);
+			const ImportedSubAsset* color = outOutput.Find("Texture/0/Color");
+			const ImportedSubAsset* data = outOutput.Find("Texture/0/Data");
+			REQUIRE(color);
+			REQUIRE(data);
+			CookedTextures textures { Texture::Deserialize(color->Data), Texture::Deserialize(data->Data) };
+			REQUIRE(textures.Color);
+			REQUIRE(textures.Data);
+			return textures;
+		};
+
+		// Defaults: block-compressed color; metallic-roughness keeps its channels apart, uncompressed.
+		ImportOutput defaults;
+		const CookedTextures high = cook({}, defaults);
+		CHECK(high.Color->GetSpecification().Format == TextureFormat::BC1SRGB);
+		CHECK(high.Data->GetSpecification().Format == TextureFormat::RGBA8);
+
+		ImportOutput output;
+		const CookedTextures uncompressed = cook({ { "TextureCompression", "Uncompressed" } }, output);
+		CHECK(output.Result.Warnings.size() == defaults.Result.Warnings.size());
+		CHECK(uncompressed.Color->GetSpecification().Format == TextureFormat::RGBA8SRGB);
+		CHECK(uncompressed.Data->GetSpecification().Format == TextureFormat::RGBA8);
+		CHECK(std::ranges::equal(uncompressed.Color->GetMipData(0), pixels));
+
+		const CookedTextures fast = cook({ { "TextureQuality", "Fast" } }, output);
+		CHECK(output.Result.Warnings.size() == defaults.Result.Warnings.size());
+		CHECK(fast.Color->GetSpecification().Format == TextureFormat::BC1SRGB);
+		CHECK(fast.Color->Serialize() != high.Color->Serialize());
+
+		// Unknown values warn once each and keep the defaults.
+		const CookedTextures unknownCompression = cook({ { "TextureCompression", "Zip" } }, output);
+		CHECK(output.Result.Warnings.size() == defaults.Result.Warnings.size() + 1);
+		CHECK(HasWarningContaining(output.Result, "TextureCompression"));
+		CHECK(unknownCompression.Color->GetSpecification().Format == TextureFormat::BC1SRGB);
+		const CookedTextures unknownQuality = cook({ { "TextureQuality", 3 } }, output);
+		CHECK(output.Result.Warnings.size() == defaults.Result.Warnings.size() + 1);
+		CHECK(HasWarningContaining(output.Result, "TextureQuality"));
+		CHECK(unknownQuality.Color->Serialize() == high.Color->Serialize());
 	}
 
 	TEST_CASE("Referenced files must be inside the asset directory")

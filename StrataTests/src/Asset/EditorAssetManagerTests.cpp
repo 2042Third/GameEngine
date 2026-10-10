@@ -270,7 +270,7 @@ TEST_SUITE("Asset.Editor")
 			Ref<Texture> texture = LoadTexture(*manager, handle);
 			REQUIRE(texture);
 			CHECK(texture->GetWidth() == 2);
-			CHECK(texture->GetSpecification().Format == TextureFormat::BC1); // Opaque data, block-compressed
+			CHECK(texture->GetSpecification().Format == TextureFormat::RGBA8); // Data of several channels stays uncompressed
 
 			CHECK_FALSE(manager->SetImportSettings(handle, nlohmann::json::array(), &error));
 			CHECK_FALSE(manager->SetImportSettings(UUID(0x1234), { { "MaxSize", 2 } }, &error));

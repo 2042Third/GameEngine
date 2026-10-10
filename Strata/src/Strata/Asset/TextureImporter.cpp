@@ -452,11 +452,13 @@ namespace Strata
 			case TextureUsage::NormalMap:
 				return compress ? TextureFormat::BC5 : TextureFormat::RGBA8;
 			case TextureUsage::Data:
+				// The channels of data vary independently (occlusion, roughness and metallic in one texture), which BC1 and
+				// BC3 cannot store: the colors of one of their blocks lie on a line through RGB space, so a metallic edge
+				// inside a block shifts the roughness next to it by up to a sixth. Several channels stay uncompressed until
+				// a BC7 encoder is available; one channel is BC4.
 				if (channels == 1)
 					return compress ? TextureFormat::BC4 : TextureFormat::R8;
-				if (!compress)
-					return TextureFormat::RGBA8;
-				return hasAlpha ? TextureFormat::BC3 : TextureFormat::BC1;
+				return TextureFormat::RGBA8;
 			case TextureUsage::HDR:
 				return TextureFormat::RGBA16F;
 		}

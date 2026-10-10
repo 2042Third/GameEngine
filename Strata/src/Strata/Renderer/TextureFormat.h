@@ -18,7 +18,7 @@ namespace Strata
 		R8 = 5,
 		RG8 = 6,
 		// Block-compressed formats store 4x4 texel blocks; GPUs sample them directly.
-		BC1 = 7,      // RGB with 1-bit alpha, 8 bytes per block (opaque color, data)
+		BC1 = 7,      // RGB with 1-bit alpha, 8 bytes per block (opaque color)
 		BC1SRGB = 8,
 		BC3 = 9,      // RGBA: BC1 color plus a BC4 alpha block, 16 bytes per block
 		BC3SRGB = 10,

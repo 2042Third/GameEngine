@@ -29,7 +29,8 @@ namespace Strata
 		Uncompressed
 	};
 
-	// How hard the block compressor works: High refines block endpoints further (better quality, slower imports).
+	// How hard the block compressor works on color blocks (BC1, BC3): High refines their endpoints twice, Fast once (a
+	// slightly larger error in less time). BC4 and BC5 encode the same either way.
 	enum class TextureQuality : uint8_t
 	{
 		High = 0,
@@ -74,10 +75,10 @@ namespace Strata
 		nlohmann::json GetDefaultSettings(const std::filesystem::path& sourcePath) const override;
 		bool Import(const ImportContext& context, ImportResult& result, std::string* outError) const override;
 
-		// Decodes an encoded image and cooks it into a texture: resized to MaxSize, mips filtered from level 0 (a Mitchell
-		// filter; sRGB color in linear space with alpha weighting, normal maps renormalized per level) and every level
-		// stored in the format ChooseFormat picks (block-compressed on worker threads). Thread-safe; used by model importers
-		// for embedded images too.
+		// Decodes an encoded image and cooks it into a texture: resized to MaxSize, each mip filtered from the previous level
+		// (a Mitchell filter; sRGB color in linear space with alpha weighting, normal maps renormalized per level) and every
+		// level stored in the format ChooseFormat picks (block-compressed on worker threads). Thread-safe; used by model
+		// importers for embedded images too.
 		static Ref<Texture> Decode(std::span<const uint8_t> encoded, const TextureImportSettings& settings, const std::string& debugName,
 			std::string* outError = nullptr);
 
@@ -85,7 +86,8 @@ namespace Strata
 		// somewhere (`hasAlpha`):
 		//   Color      BC1SRGB, BC3SRGB with alpha (uncompressed: RGBA8SRGB)
 		//   NormalMap  BC5 (uncompressed: RGBA8)
-		//   Data       BC4 for one channel (grayscale), else BC1, BC3 with alpha (uncompressed: R8 for one channel, else RGBA8)
+		//   Data       BC4 for one channel (grayscale), else RGBA8: BC1 and BC3 cannot keep independent channels apart
+		//              (uncompressed: R8 for one channel, else RGBA8)
 		//   HDR        RGBA16F
 		static TextureFormat ChooseFormat(const TextureImportSettings& settings, uint32_t channels, bool hasAlpha);
 	};
