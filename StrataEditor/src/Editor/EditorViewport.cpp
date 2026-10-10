@@ -38,6 +38,7 @@ namespace Strata
 			{ "ShowStats", ShowStats },
 			{ "Gizmo", GizmoOperationToString(Gizmo) },
 			{ "Space", GizmoSpaceToString(Space) },
+			{ "Snap", Snap },
 			{ "TranslateSnap", TranslateSnap },
 			{ "RotateSnap", RotateSnap },
 			{ "ScaleSnap", ScaleSnap }
@@ -57,7 +58,7 @@ namespace Strata
 
 		ViewportSettings result = *this;
 		for (const auto& [key, flag] : { std::pair<const char*, bool*> { "ShowGrid", &result.ShowGrid }, { "ShowSelectionOutline", &result.ShowSelectionOutline },
-			{ "ShowSceneGizmos", &result.ShowSceneGizmos }, { "ShowStats", &result.ShowStats } })
+			{ "ShowSceneGizmos", &result.ShowSceneGizmos }, { "ShowStats", &result.ShowStats }, { "Snap", &result.Snap } })
 		{
 			if (const auto it = json.find(key); it != json.end())
 			{
@@ -313,7 +314,10 @@ namespace Strata
 	void EditorViewport::ResetState()
 	{
 		m_Camera.Reset();
+		// The selection color belongs to the editor's theme, not to a project.
+		const glm::vec4 selectionColor = m_Settings.SelectionColor;
 		m_Settings = ViewportSettings();
+		m_Settings.SelectionColor = selectionColor;
 		m_Pick.reset();
 	}
 

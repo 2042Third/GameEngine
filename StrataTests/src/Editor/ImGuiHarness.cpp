@@ -1,6 +1,7 @@
 #include "Editor/ImGuiHarness.h"
 
 #include "UI/EditorFonts.h"
+#include "UI/ItemProbe.h"
 #include "UI/Theme.h"
 
 #include <Strata/Core/Layer.h>
@@ -27,6 +28,7 @@ namespace Strata::Tests
 		io.DisplaySize = specification.DisplaySize;
 		io.DeltaTime = c_DeltaTime;
 
+		UI::ItemProbe::Clear();
 		m_FontsLoaded = UI::EditorFonts::Load();
 		m_ImGuiLayer.SetContentScale(specification.ContentScale);
 		m_ImGuiLayer.SetStyleCallback(UI::ApplyTheme);
@@ -34,6 +36,7 @@ namespace Strata::Tests
 
 	ImGuiHarness::~ImGuiHarness()
 	{
+		UI::ItemProbe::Clear();
 		ImGui::DestroyContext(m_Context);
 	}
 
@@ -72,6 +75,22 @@ namespace Strata::Tests
 	void ImGuiHarness::SetKey(ImGuiKey key, bool down)
 	{
 		ImGui::GetIO().AddKeyEvent(key, down);
+	}
+
+	bool ImGuiHarness::ClickItem(std::string_view probeKey, Layer& layer)
+	{
+		const std::optional<UI::ItemProbe::Item> item = UI::ItemProbe::Find(probeKey);
+		if (!item || item->Duplicate || !item->Enabled)
+			return false;
+		// Hover first (ImGui decides what is hovered from the previous frame), then press and release: buttons act on the
+		// release.
+		MoveMouse(item->GetCenter());
+		Frame(layer);
+		SetMouseButton(ImGuiMouseButton_Left, true);
+		Frame(layer);
+		SetMouseButton(ImGuiMouseButton_Left, false);
+		Frame(layer);
+		return true;
 	}
 
 	int ImGuiHarness::GetHoveredItemIdCount() const

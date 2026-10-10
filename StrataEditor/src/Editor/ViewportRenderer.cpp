@@ -55,6 +55,7 @@ namespace Strata
 		SceneRenderOptions options;
 		m_DebugDraw.Clear();
 		m_Outlined.clear();
+		options.SelectionColor = settings.SelectionColor;
 		if (overlays)
 		{
 			options.ShowGrid = settings.ShowGrid;

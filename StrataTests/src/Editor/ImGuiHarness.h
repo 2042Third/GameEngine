@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <string_view>
 
 namespace Strata
 {
@@ -75,7 +76,8 @@ namespace Strata::Tests
 	//   engine ImGuiLayer, as in the editor;
 	// - frames run NewFrame, the drawing and Render; ImGui's texture requests (the font atlas) are honored without a
 	//   renderer, marking each texture ready with a dummy id;
-	// - mouse and keyboard input is injected through ImGui's input queue and applies at the next frame.
+	// - mouse and keyboard input is injected through ImGui's input queue and applies at the next frame;
+	// - widgets of the kit are found through UI::ItemProbe (ClickItem).
 	// ConfigDebugHighlightIdConflicts is on: GetHoveredItemIdCount tells whether the item hovered in the frame before the
 	// last shares its id with another item. One harness at a time (it owns the current ImGui context).
 	struct ImGuiHarnessSpecification
@@ -111,6 +113,10 @@ namespace Strata::Tests
 		void MoveMouse(const ImVec2& position);
 		void SetMouseButton(ImGuiMouseButton button, bool down);
 		void SetKey(ImGuiKey key, bool down);
+		// Clicks the widget the probe recorded under the key in the last frame: moves the mouse onto it, presses and
+		// releases the left button over three frames of the layer. False (and no input) when the probe has no unique,
+		// enabled widget under that key.
+		bool ClickItem(std::string_view probeKey, Layer& layer);
 
 		// How many items were submitted in the last frame with the id of the item hovered in the frame before (at most 1
 		// without an id conflict).

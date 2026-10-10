@@ -1,5 +1,7 @@
 #pragma once
 
+#include "UI/EditorPanelRegistry.h"
+
 #include <Strata/Core/UUID.h>
 
 #include <nlohmann/json.hpp>
@@ -17,10 +19,10 @@ namespace Strata
 
 	// Tree of the active scene's entities: selection, drag-and-drop reparenting, prefab and model drops, and creation
 	// menus. Every change goes through editor commands, so it is undoable and identical to what automation can do.
-	class SceneHierarchyPanel
+	class SceneHierarchyPanel : public EditorPanel
 	{
 	public:
-		void OnImGuiRender(EditorContext& context, const EditorCommandRegistry& commands);
+		void OnImGuiRender(EditorPanelContext& context) override;
 
 		// Menu items creating entity presets (entity.create) under `parent` (null: top level). With `schedule`, the
 		// chosen action is handed to it instead of running immediately (callers that are iterating the scene).

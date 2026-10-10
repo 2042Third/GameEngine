@@ -48,8 +48,8 @@ Each target is defined in the `CMakeLists.txt` of its directory; script modules 
 | `Strata` | static library | Engine modules, platform code, embedded shaders and default font (`Strata/src/`). |
 | `StrataScriptCore` | interface library | Script C ABI and header-only C++ SDK; links glm only (`StrataScriptCore/`). |
 | `StrataEditorCore` | static library | The editor without UI (`StrataEditor/src/Editor/`). |
-| `StrataEditorUI` | static library | The ImGui interface on the core: `EditorLayer` and the panels; links `nfd` (`StrataEditor/src/UI/`, `Panels/`, `EditorLayer.*`). |
-| `StrataEditor` | executable | Runs the UI: `EditorApplication` (options, `EditorHost`) (`StrataEditor/src/EditorApplication.cpp`). |
+| `StrataEditorUI` | static library | The ImGui interface on the core: `EditorLayer`, panels, widget kit, theme, embedded fonts; links `nfd` (`StrataEditor/src/UI/`, `Panels/`, `EditorLayer.*`). |
+| `StrataEditor` | executable | Runs the UI: `EditorApplication` (options, theme and fonts, `EditorHost`) (`StrataEditor/src/EditorApplication.cpp`). |
 | `StrataRuntime` | executable | Plays exported games (`StrataRuntime/src/RuntimeApplication.cpp`). |
 | `StrataCLILib`, `StrataCLI` | static library, executable | Automation client and MCP server (`StrataCLI/src/`). |
 | `StrataTests` | executable | doctest suites; builds the test script modules as dependencies (`StrataTests/`). |
@@ -205,8 +205,8 @@ Windowed applications are paced by vsync when it is on (`WindowSpecification::VS
 headless ones by the cap alone, which the editor and the runtime set to 60 (`MaxFrameRate`,
 `StrataEditor/src/EditorApplication.cpp`, `RuntimeApplication.cpp`). The cap is the application's `FramePacer`
 (`Core/Timer.h`) and can change while it runs (`Application::SetMaxFrameRate`; setting the current rate keeps the frame
-schedule). An exception escaping a frame (e.g. a lost device inside NVRHI) is logged and
-ends the loop.
+schedule): the editor lowers it while it is idle (see [Editor](#editor)). An exception escaping a frame (e.g. a lost
+device inside NVRHI) is logged and ends the loop.
 
 The editor's layer update (`EditorLayer::OnUpdate`, `StrataEditor/src/EditorLayer.cpp`):
 
@@ -219,8 +219,9 @@ The editor's layer update (`EditorLayer::OnUpdate`, `StrataEditor/src/EditorLaye
    queued requests (`RpcServer::ProcessRequests`) through the runner.
 4. The `--commands` script advances; quit, idle-timeout and last-frame checks run.
 
-In step 7 the editor draws its panels (`EditorLayer::OnImGuiRender`); the viewport panel renders the scene there
-through `ViewportRenderer`.
+In step 7 the editor draws its shell and panels (`EditorLayer::OnImGuiRender`); the viewport panel renders the scene
+there through `ViewportRenderer`. Last, idle throttling picks the frame rate cap for the next frames
+(`EditorLayer::UpdateFrameRate`).
 
 The runtime's layer update (`RuntimeLayer::OnUpdate`, `StrataRuntime/src/RuntimeApplication.cpp`):
 `GameRuntime::Update` (asset finalization, `Scene::OnUpdateRuntime`, script-fault check, scene requests), then the
@@ -413,8 +414,13 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
 ## Editor
 
 ```text
- StrataEditor      EditorApplication -> EditorLayer (owns everything below): panels (Viewport, Hierarchy,
-                   Inspector, ContentBrowser, Console), toolbar, shortcuts, file dialogs (nfd)
+ StrataEditor      EditorApplication      options, Bedrock theme and fonts installed into ImGuiLayer, EditorHost
+ --------------------------------------------------------------------------------------------------------------
+ StrataEditorUI    EditorLayer            owns everything below: menu bar, main toolbar, status pills, default
+                                          layout, shortcuts, idle throttling, file dialogs (nfd)
+                   EditorPanelRegistry    the panels (Viewport, Hierarchy, Inspector, Console, Content Browser):
+                                          windows, View menu, open state in imgui.ini
+                   UI kit                 Theme (palette, ApplyTheme), EditorFonts, Icons, Widgets, ItemProbe
  --------------------------------------------------------------------------------------------------------------
  StrataEditorCore  EditorContext          project, EditorAssetManager, edited and running scene, play mode,
                                           selection, UndoStack, ScriptEngine + ScriptBuilder, EditorViewport,
@@ -424,6 +430,23 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
                    EditorAutomation       RpcServer exposing the commands; session files
 ```
 
+- **UI** (`StrataEditorUI`). `EditorLayer` (`StrataEditor/src/EditorLayer.h`) reaches the application only through
+  `EditorHost` (close, exit code, frame count, time, window title, size and focus, UI scale, frame rate cap,
+  screenshots), which `EditorApplication.cpp` implements on `Application` and the UI tests fake. Each frame it draws the
+  dock space host (menu bar, the main toolbar under it, the dock space) and the status bar, then the panels through
+  `EditorPanelRegistry` (`UI/EditorPanelRegistry.h`), which begins each open panel's window (`###<id>` names, so docking
+  and settings survive title changes), asks the panel for window options, calls `OnImGuiRender` while it is visible
+  and `OnHidden` otherwise, and saves which panels are open with the layout version in imgui.ini (`StrataPanels`); a
+  saved layout of another version is replaced by the default one (`EditorLayer::c_LayoutVersion`). The look comes from
+  `UI/Theme` (the Bedrock palette and its meanings; `ApplyTheme` is the `ImGuiLayer` style callback), `UI/EditorFonts`
+  (Inter, Inter SemiBold and JetBrains Mono embedded with `strata_embed_file`, Lucide's icons merged into the Inter
+  fonts' Private Use Area) and the widget kit (`UI/Widgets`), whose widgets record their rectangles in `UI/ItemProbe`.
+  Rules for UI code: AGENTS.md, "Editor UI rules". **Idle throttling**: after drawing, `EditorLayer::UpdateFrameRate`
+  sets the cap to 0 (full rate) while anything happens and to 30 (10 unfocused) frames per second otherwise; headless,
+  `--frames` and command-script runs are never throttled. **UI tests** (`StrataTests/src/Editor/ImGuiHarness.h`) create
+  an ImGui context with the editor's fonts and theme (styled by an unattached `ImGuiLayer`), honor ImGui's texture
+  requests without a renderer, inject input, and find kit widgets through the probe; the `Editor.UI` suites draw the
+  real `EditorLayer` this way, with a `FakeEditorHost`.
 - **EditorContext** (`StrataEditor/src/Editor/EditorContext.h`) is the state with no UI. Opening a project creates and
   activates its `EditorAssetManager` (scan included), opens a `ScriptEngine` (hot reload on by default,
   `EditorContextSpecification::HotReloadScripts`) and loads the built module, restores the viewport state and opens

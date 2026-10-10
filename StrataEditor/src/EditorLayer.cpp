@@ -1,6 +1,15 @@
 #include "EditorLayer.h"
 
+#include "Panels/ConsolePanel.h"
+#include "Panels/ContentBrowserPanel.h"
+#include "Panels/InspectorPanel.h"
+#include "Panels/SceneHierarchyPanel.h"
+#include "Panels/ViewportPanel.h"
+#include "UI/EditorFonts.h"
 #include "UI/FileDialogs.h"
+#include "UI/Icons.h"
+#include "UI/Theme.h"
+#include "UI/Widgets.h"
 
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/ImageWriter.h>
@@ -8,12 +17,26 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 
+#include <algorithm>
+
 namespace Strata
 {
 
 	namespace
 	{
+
 		constexpr const char* c_EditorStatusSection = "editor";
+		constexpr const char* c_UnsavedChangesModal = "Unsaved Changes";
+		// Between the parts of a pill's text.
+		constexpr const char* c_Separator = " \xC2\xB7 ";
+
+		// The default layout, as fractions of the dock space: the viewport gets over 45% of a 3840 x 2054 window at 150%.
+		constexpr float c_HierarchyWidth = 0.15f;
+		constexpr float c_InspectorWidth = 0.20f;
+		constexpr float c_BottomHeight = 0.22f;
+
+		// Fields of the snap steps popup, in text heights.
+		constexpr float c_SnapFieldWidthInFontSizes = 8.0f;
 
 		EditorContextSpecification MakeContextSpecification(const EditorOptions& options)
 		{
@@ -22,6 +45,17 @@ namespace Strata
 			specification.HotReloadScripts = options.WatchFiles;
 			return specification;
 		}
+
+		glm::vec4 ToVec4(const ImVec4& color)
+		{
+			return glm::vec4(color.x, color.y, color.z, color.w);
+		}
+
+		std::string FormatMegabytes(uint64_t bytes)
+		{
+			return fmt::format("{:.1f} MB", static_cast<double>(bytes) / (1024.0 * 1024.0));
+		}
+
 	}
 
 	EditorLayer::EditorLayer(const EditorOptions& options, Scope<EditorHost> host)
@@ -29,16 +63,49 @@ namespace Strata
 		m_Automation(m_Context, m_Commands, m_CommandRunner), m_ShowImGuiDemo(options.ShowImGuiDemo)
 	{
 		ST_ASSERT(m_Host, "The editor layer needs a host");
+		RegisterBuiltinPanels();
+	}
+
+	void EditorLayer::RegisterBuiltinPanels()
+	{
+		auto add = [this](const char* id, const char* title, const char* icon, std::function<Scope<EditorPanel>()> create)
+		{
+			EditorPanelDescriptor descriptor;
+			descriptor.Id = id;
+			descriptor.Title = title;
+			descriptor.Icon = icon;
+			descriptor.Create = std::move(create);
+			std::string error;
+			if (!m_Panels.Register(std::move(descriptor), &error))
+				ST_ERROR("Could not register the panel '{}': {}", id, error);
+		};
+		// Drawn in this order; the Content Browser comes after the Console, which shares its dock node.
+		add(EditorPanels::c_Viewport, "Viewport", Icons::Box, []() { return CreateScope<ViewportPanel>(); });
+		add(EditorPanels::c_Hierarchy, "Hierarchy", Icons::ListTree, []() { return CreateScope<SceneHierarchyPanel>(); });
+		add(EditorPanels::c_Inspector, "Inspector", Icons::SlidersHorizontal, []() { return CreateScope<InspectorPanel>(); });
+		add(EditorPanels::c_Console, "Console", Icons::Terminal, []() { return CreateScope<ConsolePanel>(); });
+		add(EditorPanels::c_ContentBrowser, "Content Browser", Icons::FolderOpen, []() { return CreateScope<ContentBrowserPanel>(); });
+
+		if (ContentBrowserPanel* contentBrowser = m_Panels.Get<ContentBrowserPanel>(EditorPanels::c_ContentBrowser))
+		{
+			contentBrowser->SetOpenSceneHandler([this](AssetHandle scene)
+			{
+				RequestDiscardChanges([this, scene]() { RunEditorCommand(m_Context, m_Commands, "scene.open", { { "scene", UUIDToJson(scene) } }); });
+			});
+		}
 	}
 
 	void EditorLayer::OnAttach()
 	{
 		if (!m_Options.Headless && m_Host->HasWindow())
 			FileDialogs::Init();
-		m_ContentBrowser.SetOpenSceneHandler([this](AssetHandle scene)
-		{
-			RequestDiscardChanges([this, scene]() { RunEditorCommand(m_Context, m_Commands, "scene.open", { { "scene", UUIDToJson(scene) } }); });
-		});
+		if (ImGui::GetCurrentContext())
+			m_Panels.InstallSettingsHandler();
+		// The selection outline carries the accent, like selected rows.
+		m_Context.GetViewport().GetSettings().SelectionColor = ToVec4(UI::GetThemeColors().Accent);
+		// Startup counts as activity: the layout settles at the full rate.
+		m_LastInputTime = m_Host->GetTime();
+
 		if (!m_Options.ProjectPath.empty())
 		{
 			std::string error;
@@ -48,11 +115,24 @@ namespace Strata
 
 		m_Context.SetStatusProvider(c_EditorStatusSection, [this]()
 		{
+			nlohmann::json window = nullptr;
+			if (m_Host->HasWindow())
+			{
+				const glm::uvec2 size = m_Host->GetWindowSize();
+				window = { { "width", size.x }, { "height", size.y }, { "focused", m_Host->IsWindowFocused() } };
+			}
 			return nlohmann::json {
+				{ "window", window },
 				{ "headless", m_Options.Headless },
 				{ "graphicsDevice", m_Host->HasGraphicsDevice() },
 				{ "frame", m_Host->GetFrameCount() },
-				{ "maxFrames", m_Options.MaxFrames ? nlohmann::json(*m_Options.MaxFrames) : nlohmann::json(nullptr) } };
+				{ "maxFrames", m_Options.MaxFrames ? nlohmann::json(*m_Options.MaxFrames) : nlohmann::json(nullptr) },
+				{ "uiScale", m_Host->GetUIScale() },
+				{ "frameRate", {
+					{ "average", GetAverageFrameRate() },
+					{ "cap", m_Host->GetMaxFrameRate() },
+					{ "idle", m_Idle },
+					{ "throttling", IsThrottlingEnabled() } } } };
 		});
 		if (m_Options.EnableAutomation)
 			StartAutomation();
@@ -122,8 +202,12 @@ namespace Strata
 		// Before the project closes: completions may still look at the editor state. Automation stops afterwards, so the
 		// clients of cancelled commands still get their answers.
 		m_CommandRunner.CancelAll("The editor is closing");
-		if (!m_Options.Headless)
-			m_Viewport.Reset(m_Context);
+		if (m_UIDrawn)
+		{
+			EditorPanelContext panelContext { m_Context, m_Commands, m_CommandRunner };
+			m_Panels.OnDetach(panelContext);
+		}
+		m_Panels.RemoveSettingsHandler();
 		m_Automation.Stop();
 		m_Context.SetStatusProvider(c_EditorStatusSection, nullptr);
 		m_Context.CloseProject();
@@ -137,6 +221,23 @@ namespace Strata
 		m_Automation.Update();
 		UpdateCommandScript();
 		UpdateWindowTitle();
+
+		const double now = m_Host->GetTime();
+		// An automation request was answered or is pending: an agent drives the editor.
+		const uint64_t answered = m_Automation.GetCompletedRequestCount();
+		if (answered != m_LastAutomationRequests || m_Automation.GetPendingRequestCount() > 0)
+		{
+			m_LastAutomationRequests = answered;
+			m_LastAutomationTime = now;
+		}
+		m_FrameTimes.push_back(now);
+		while (!m_FrameTimes.empty() && now - m_FrameTimes.front() > c_FrameRateWindowSeconds)
+			m_FrameTimes.pop_front();
+		if (!m_Options.Headless)
+		{
+			EditorPanelContext panelContext { m_Context, m_Commands, m_CommandRunner };
+			m_Panels.OnUpdate(panelContext);
+		}
 
 		// editor.quit answered already (it checked for unsaved changes); this frame is the last one.
 		if (m_Context.IsQuitRequested() && m_Host->IsRunning())
@@ -199,21 +300,23 @@ namespace Strata
 
 	void EditorLayer::OnImGuiRender()
 	{
+		m_UIDrawn = true;
+		TrackInput();
 		HandleShortcuts();
 		DrawDockspace();
-		DrawToolbar();
-		m_Viewport.OnImGuiRender(m_Context, m_Commands);
-		m_Hierarchy.OnImGuiRender(m_Context, m_Commands);
-		m_Inspector.OnImGuiRender(m_Context, m_Commands);
-		m_ContentBrowser.OnImGuiRender(m_Context, m_Commands);
-		m_Console.OnImGuiRender();
+		EditorPanelContext panelContext { m_Context, m_Commands, m_CommandRunner };
+		m_Panels.OnImGuiRender(panelContext);
 		DrawUnsavedChangesModal();
 		if (m_ShowImGuiDemo)
 			ImGui::ShowDemoWindow(&m_ShowImGuiDemo);
+		UpdateFrameRate();
 	}
 
 	void EditorLayer::OnEvent(Event& event)
 	{
+		// Whatever reaches the editor (window changes, input ImGui did not take) is activity.
+		m_LastInputTime = m_Host->GetTime();
+
 		EventDispatcher dispatcher(event);
 		dispatcher.Dispatch<WindowCloseEvent>([this](WindowCloseEvent&)
 		{
@@ -230,9 +333,71 @@ namespace Strata
 				ST_WARN("Open or create a project before importing files");
 				return true;
 			}
-			m_ContentBrowser.ImportFiles(m_Context, m_Commands, drop.GetPaths());
+			if (ContentBrowserPanel* contentBrowser = m_Panels.Get<ContentBrowserPanel>(EditorPanels::c_ContentBrowser))
+				contentBrowser->ImportFiles(m_Context, m_Commands, drop.GetPaths());
 			return true;
 		});
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
+	// Idle throttling
+	////////////////////////////////////////////////////////////////////////////////
+
+	bool EditorLayer::IsThrottlingEnabled() const
+	{
+		// Scripted and headless runs measure in frames: slowing them down would only make them take longer.
+		return !m_Options.Headless && !m_Options.MaxFrames && m_Options.CommandScript.empty();
+	}
+
+	void EditorLayer::TrackInput()
+	{
+		// ImGui keeps the input events it processed this frame (mouse moves, buttons, wheel, keys, text, focus changes);
+		// held buttons and keys count too, e.g. a camera fly with the mouse at rest.
+		const ImGuiContext& imgui = *ImGui::GetCurrentContext();
+		bool active = imgui.InputEventsTrail.Size > 0 || ImGui::IsAnyMouseDown();
+		for (int key = ImGuiKey_NamedKey_BEGIN; !active && key < ImGuiKey_NamedKey_END; key++)
+			active = ImGui::IsKeyDown(static_cast<ImGuiKey>(key));
+		if (active)
+			m_LastInputTime = m_Host->GetTime();
+	}
+
+	bool EditorLayer::IsBusy(double now) const
+	{
+		if (now - m_LastInputTime < c_InputActivitySeconds || now - m_LastAutomationTime < c_AutomationActivitySeconds)
+			return true;
+		if (m_Panels.IsAnyAnimating())
+			return true;
+		if (m_Context.IsPlaying())
+		{
+			if (!m_Context.IsPaused() || m_Context.GetActiveScene()->GetStepFrames() > 0)
+				return true;
+		}
+		if (const EditorAssetManager* assets = m_Context.GetAssetManager(); assets && assets->GetStats().LoadingAssets > 0)
+			return true;
+		return m_CommandRunner.GetPendingCount() > 0 || m_Automation.GetPendingRequestCount() > 0 || m_Context.GetScriptBuilder().IsRunning()
+			|| m_Context.GetViewport().IsPickPending();
+	}
+
+	void EditorLayer::UpdateFrameRate()
+	{
+		if (!IsThrottlingEnabled())
+		{
+			m_Idle = false;
+			return;
+		}
+		m_Idle = !IsBusy(m_Host->GetTime());
+		if (m_Idle)
+			m_Host->SetMaxFrameRate(m_Host->IsWindowFocused() ? c_IdleFrameRate : c_UnfocusedIdleFrameRate);
+		else
+			m_Host->SetMaxFrameRate(0);
+	}
+
+	double EditorLayer::GetAverageFrameRate() const
+	{
+		if (m_FrameTimes.size() < 2)
+			return 0.0;
+		const double span = m_FrameTimes.back() - m_FrameTimes.front();
+		return span > 0.0 ? static_cast<double>(m_FrameTimes.size() - 1) / span : 0.0;
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -247,12 +412,7 @@ namespace Strata
 		const ImGuiInputFlags global = ImGuiInputFlags_RouteGlobal;
 		// Play mode toggles always: it is also the way out of a game that has the input.
 		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_P, global))
-		{
-			if (m_Context.IsPlaying())
-				m_Context.Stop();
-			else
-				RunEditorCommand(m_Context, m_Commands, "play.start");
-		}
+			RunEditorCommand(m_Context, m_Commands, m_Context.IsPlaying() ? "play.stop" : "play.start");
 		// Keys the running game receives (e.g. Delete, or Ctrl+D with Ctrl to crouch) must not edit the scene.
 		if (!m_Context.AcceptsEditShortcuts())
 			return;
@@ -379,29 +539,31 @@ namespace Strata
 	{
 		ImGui::DockBuilderRemoveNode(dockspaceId);
 		ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
-		ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetMainViewport()->WorkSize);
+		ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetContentRegionAvail());
 
+		// The viewport first: the side panels take a fixed share of the width, the bottom area a share of the height under
+		// the viewport only.
 		ImGuiID center = dockspaceId;
-		const ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.18f, nullptr, &center);
-		const ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.26f, nullptr, &center);
-		const ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.3f, nullptr, &center);
-		const ImGuiID top = ImGui::DockBuilderSplitNode(center, ImGuiDir_Up, 0.05f, nullptr, &center);
-		if (ImGuiDockNode* toolbar = ImGui::DockBuilderGetNode(top))
-			toolbar->LocalFlags |= static_cast<ImGuiDockNodeFlags>(ImGuiDockNodeFlags_NoTabBar) | static_cast<ImGuiDockNodeFlags>(ImGuiDockNodeFlags_NoResize);
+		const ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, c_HierarchyWidth, nullptr, &center);
+		const ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, c_InspectorWidth / (1.0f - c_HierarchyWidth), nullptr, &center);
+		const ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, c_BottomHeight, nullptr, &center);
 
-		ImGui::DockBuilderDockWindow("Hierarchy", left);
-		ImGui::DockBuilderDockWindow("Inspector", right);
-		ImGui::DockBuilderDockWindow("Content Browser", bottom);
-		ImGui::DockBuilderDockWindow("Console", bottom);
-		ImGui::DockBuilderDockWindow("Toolbar", top);
-		ImGui::DockBuilderDockWindow("Viewport", center);
+		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Hierarchy).c_str(), left);
+		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Inspector).c_str(), right);
+		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Console).c_str(), bottom);
+		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_ContentBrowser).c_str(), bottom);
+		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Viewport).c_str(), center);
 		ImGui::DockBuilderFinish(dockspaceId);
+		// The Content Browser is the bottom area's visible tab on first run.
+		m_Panels.SelectTab(EditorPanels::c_ContentBrowser, bottom);
 	}
 
 	void EditorLayer::DrawDockspace()
 	{
 		const ImGuiViewport* viewport = ImGui::GetMainViewport();
-		const float statusBarHeight = ImGui::GetFrameHeight();
+		const ImGuiStyle& style = ImGui::GetStyle();
+		// The status bar uses the caption size.
+		const float statusBarHeight = UI::GetTextSize(UI::TextSize::Caption) * style.FontScaleMain * style.FontScaleDpi + style.FramePadding.y * 2.0f;
 		ImGui::SetNextWindowPos(viewport->WorkPos);
 		ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, viewport->WorkSize.y - statusBarHeight));
 		ImGui::SetNextWindowViewport(viewport->ID);
@@ -413,22 +575,28 @@ namespace Strata
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+		ImGui::PushStyleColor(ImGuiCol_WindowBg, UI::GetThemeColors().Chrome);
 		ImGui::Begin("EditorDockspace", nullptr, windowFlags);
+		ImGui::PopStyleColor();
 		ImGui::PopStyleVar(3);
 
 		DrawMenuBar();
+		DrawToolbar();
 		const ImGuiID dockspaceId = ImGui::GetID("EditorDockspaceID");
-		// Without a saved arrangement (first run) the panels get the default one; checked once, so a user who undocks
-		// every panel keeps that choice.
+		// Without a saved arrangement of the current layout version (first run, or an older editor's) the panels get the
+		// default one; checked once, so a user who undocks every panel keeps that choice.
 		if (!m_LayoutChecked)
 		{
 			const ImGuiDockNode* node = ImGui::DockBuilderGetNode(dockspaceId);
-			m_ResetLayout |= !node || (node->IsLeafNode() && node->Windows.Size == 0);
+			const bool empty = !node || (node->IsLeafNode() && node->Windows.Size == 0);
+			m_ResetLayout |= empty || m_Panels.GetSavedLayoutVersion() != c_LayoutVersion;
 			m_LayoutChecked = true;
 		}
 		if (m_ResetLayout)
 		{
+			m_Panels.ResetOpenStates();
 			BuildDefaultLayout(dockspaceId);
+			m_Panels.SetLayoutVersion(c_LayoutVersion);
 			m_ResetLayout = false;
 		}
 		ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
@@ -439,11 +607,19 @@ namespace Strata
 		ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, statusBarHeight));
 		ImGui::SetNextWindowViewport(viewport->ID);
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(ImGui::GetStyle().FramePadding.x, 0.0f));
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(style.FramePadding.x, 0.0f));
+		ImGui::PushStyleColor(ImGuiCol_WindowBg, UI::GetThemeColors().Chrome);
 		ImGui::Begin("StatusBar", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings
 			| ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoFocusOnAppearing);
-		ImGui::PopStyleVar(2);
+		ImGui::PopStyleColor();
+		ImGui::PopStyleVar(3);
+		// Pills sit closer together than other items.
+		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(style.ItemSpacing.x * 0.5f, style.ItemSpacing.y));
+		UI::PushFont(UI::EditorFont::Regular, UI::TextSize::Caption);
 		DrawStatusBar();
+		ImGui::PopFont();
+		ImGui::PopStyleVar();
 		ImGui::End();
 	}
 
@@ -489,6 +665,15 @@ namespace Strata
 			ImGui::EndMenu();
 		}
 
+		if (ImGui::BeginMenu("View"))
+		{
+			m_Panels.DrawMenuItems();
+			ImGui::Separator();
+			if (ImGui::MenuItem("Reset Layout"))
+				m_ResetLayout = true;
+			ImGui::EndMenu();
+		}
+
 		if (ImGui::BeginMenu("Entity"))
 		{
 			SceneHierarchyPanel::DrawCreateMenu(m_Context, m_Commands, UUID::Null());
@@ -514,14 +699,8 @@ namespace Strata
 			ImGui::EndMenu();
 		}
 
-		if (ImGui::BeginMenu("Window"))
-		{
-			if (ImGui::MenuItem("Reset Layout"))
-				m_ResetLayout = true;
-			ImGui::EndMenu();
-		}
-
-		if (ImGui::BeginMenu("Help"))
+		// ImGui's demo is a reference for UI work, not part of the product: only with --imgui-demo.
+		if (m_Options.ShowImGuiDemo && ImGui::BeginMenu("Help"))
 		{
 			ImGui::MenuItem("ImGui Demo", nullptr, &m_ShowImGuiDemo);
 			ImGui::EndMenu();
@@ -532,125 +711,262 @@ namespace Strata
 
 	void EditorLayer::DrawToolbar()
 	{
-		ImGui::Begin("Toolbar", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-		const SceneState state = m_Context.GetSceneState();
-		const float width = ImGui::GetFrameHeight() * 4.0f;
-		const float lineStart = ImGui::GetCursorPosX();
-		const float lineWidth = ImGui::GetContentRegionAvail().x;
+		const ImGuiStyle& style = ImGui::GetStyle();
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		const float bandPadding = style.FramePadding.y;
+		const float height = ImGui::GetFrameHeight() + bandPadding * 2.0f;
 
-		// Scripts build at the left; play controls in the center.
-		const bool building = m_Context.GetScriptBuilder().IsRunning();
-		ImGui::BeginDisabled(!m_Context.HasProject() || building);
-		if (ImGui::Button(building ? "Building..." : "Build Scripts", ImVec2(width * 1.5f, 0.0f)))
-			BuildScripts();
-		ImGui::EndDisabled();
-		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-			ImGui::SetTooltip("Build the project's scripts and hot-reload them (Ctrl+B)");
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(style.WindowPadding.x, bandPadding));
+		ImGui::PushStyleColor(ImGuiCol_ChildBg, colors.Chrome);
+		ImGui::BeginChild("MainToolbar", ImVec2(0.0f, height), ImGuiChildFlags_AlwaysUseWindowPadding,
+			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+		ImGui::PopStyleColor();
+		ImGui::PopStyleVar();
+
+		// Transform tools at the left, play controls in the center, the script build at the right.
+		DrawGizmoControls();
+		const float buttonSize = ImGui::GetFrameHeight();
+		const float playWidth = buttonSize * 5.0f + style.ItemSpacing.x * 4.0f;
 		ImGui::SameLine();
-		ImGui::SetCursorPosX(std::max(lineStart + (lineWidth - width * 4.0f) * 0.5f, ImGui::GetCursorPosX()));
+		ImGui::SetCursorPosX(std::max((ImGui::GetWindowWidth() - playWidth) * 0.5f, ImGui::GetCursorPosX() + style.ItemSpacing.x * 2.0f));
+		DrawPlayControls();
+		DrawBuildControls();
+		ImGui::EndChild();
 
-		if (state == SceneState::Edit)
+		// A hairline closes the chrome band above the panels.
+		const ImVec2 min = ImGui::GetItemRectMin();
+		const ImVec2 max = ImGui::GetItemRectMax();
+		ImGui::GetWindowDrawList()->AddLine(ImVec2(min.x, max.y - 1.0f), ImVec2(max.x, max.y - 1.0f), ImGui::GetColorU32(colors.Border));
+	}
+
+	void EditorLayer::DrawGizmoControls()
+	{
+		ViewportSettings& settings = m_Context.GetViewport().GetSettings();
+		auto gizmoButton = [&settings](const char* id, const char* icon, GizmoOperation operation, const char* tooltip)
 		{
-			if (ImGui::Button("Play", ImVec2(width, 0.0f)))
-				RunEditorCommand(m_Context, m_Commands, "play.start");
+			UI::ButtonStyle style;
+			style.Active = settings.Gizmo == operation;
+			if (UI::ToolbarButton(id, icon, nullptr, tooltip, style))
+				settings.Gizmo = operation;
 			ImGui::SameLine();
-			if (ImGui::Button("Simulate", ImVec2(width, 0.0f)))
-				RunEditorCommand(m_Context, m_Commands, "play.simulate");
-		}
-		else
+		};
+		gizmoButton("Toolbar.Select", Icons::MousePointer2, GizmoOperation::None, "Select: no transform gizmo (Q)");
+		gizmoButton("Toolbar.Move", Icons::Move3d, GizmoOperation::Translate, "Move the selection (W)");
+		gizmoButton("Toolbar.Rotate", Icons::Rotate3d, GizmoOperation::Rotate, "Rotate the selection (E)");
+		gizmoButton("Toolbar.Scale", Icons::Scale3d, GizmoOperation::Scale, "Scale the selection (R)");
+
+		const ImGuiStyle& style = ImGui::GetStyle();
+		ImGui::SameLine(0.0f, style.ItemSpacing.x * 3.0f);
+		const bool world = settings.Space == GizmoSpace::World;
+		if (UI::ToolbarButton("Toolbar.Space", world ? Icons::Globe : Icons::Box, world ? "World" : "Local",
+			"Gizmo axes: the world's or the entity's own (scaling always uses the entity's)"))
 		{
-			if (ImGui::Button("Stop", ImVec2(width, 0.0f)))
-				m_Context.Stop();
-			ImGui::SameLine();
-			const bool paused = m_Context.IsPaused();
-			if (ImGui::Button(paused ? "Resume" : "Pause", ImVec2(width, 0.0f)))
-				m_Context.SetPaused(!paused);
-			ImGui::SameLine();
-			ImGui::BeginDisabled(!paused);
-			if (ImGui::Button("Step", ImVec2(width, 0.0f)))
-				m_Context.Step();
-			ImGui::EndDisabled();
+			settings.Space = world ? GizmoSpace::Local : GizmoSpace::World;
 		}
-		ImGui::End();
+		ImGui::SameLine();
+		UI::ButtonStyle snapStyle;
+		snapStyle.Active = settings.Snap;
+		if (UI::ToolbarButton("Toolbar.Snap", Icons::Magnet, nullptr, "Snap gizmo drags to steps (holding Ctrl inverts this)", snapStyle))
+			settings.Snap = !settings.Snap;
+		ImGui::SameLine(0.0f, 0.0f);
+		if (UI::ToolbarButton("Toolbar.SnapSteps", Icons::ChevronDown, nullptr, "Snapping steps"))
+			ImGui::OpenPopup("SnapSettings");
+		if (ImGui::BeginPopup("SnapSettings"))
+		{
+			const float fieldWidth = ImGui::GetFontSize() * c_SnapFieldWidthInFontSizes;
+			ImGui::SetNextItemWidth(fieldWidth);
+			ImGui::DragFloat("Move (units)", &settings.TranslateSnap, 0.05f, 0.001f, ViewportSettings::c_MaxTranslateSnap, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::SetNextItemWidth(fieldWidth);
+			ImGui::DragFloat("Rotate (degrees)", &settings.RotateSnap, 0.5f, 0.1f, ViewportSettings::c_MaxRotateSnap, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::SetNextItemWidth(fieldWidth);
+			ImGui::DragFloat("Scale (factor)", &settings.ScaleSnap, 0.01f, 0.001f, ViewportSettings::c_MaxScaleSnap, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::EndPopup();
+		}
+	}
+
+	void EditorLayer::DrawPlayControls()
+	{
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		const SceneState state = m_Context.GetSceneState();
+		const bool playing = m_Context.IsPlaying();
+		const bool paused = m_Context.IsPaused();
+
+		// Play is the primary action while editing; while a mode runs, its button shows it in the mode's color.
+		UI::ButtonStyle play;
+		play.Enabled = !playing;
+		play.Primary = !playing;
+		play.Active = state == SceneState::Play;
+		play.ActiveColor = colors.PlayState.Play;
+		if (UI::ToolbarButton("Toolbar.Play", Icons::Play, nullptr, playing ? "Playing" : "Play: run the scene with scripts, physics and audio (Ctrl+P)", play))
+			RunEditorCommand(m_Context, m_Commands, "play.start");
+		ImGui::SameLine();
+
+		UI::ButtonStyle simulate;
+		simulate.Enabled = !playing;
+		simulate.Active = state == SceneState::Simulate;
+		simulate.ActiveColor = colors.PlayState.Simulate;
+		if (UI::ToolbarButton("Toolbar.Simulate", Icons::Atom, nullptr, "Simulate: run the scene's physics only", simulate))
+			RunEditorCommand(m_Context, m_Commands, "play.simulate");
+		ImGui::SameLine();
+
+		UI::ButtonStyle pause;
+		pause.Enabled = playing;
+		pause.Active = paused;
+		pause.ActiveColor = colors.PlayState.Paused;
+		if (UI::ToolbarButton("Toolbar.Pause", Icons::Pause, nullptr, paused ? "Resume" : "Pause", pause))
+			RunEditorCommand(m_Context, m_Commands, "play.pause", { { "paused", !paused } });
+		ImGui::SameLine();
+
+		UI::ButtonStyle step;
+		step.Enabled = paused;
+		if (UI::ToolbarButton("Toolbar.Step", Icons::StepForward, nullptr, "Step one fixed update while paused", step))
+			RunEditorCommand(m_Context, m_Commands, "play.step");
+		ImGui::SameLine();
+
+		UI::ButtonStyle stop;
+		stop.Enabled = playing;
+		if (UI::ToolbarButton("Toolbar.Stop", Icons::Square, nullptr, "Stop and return to the edited scene (Ctrl+P)", stop))
+			RunEditorCommand(m_Context, m_Commands, "play.stop");
+	}
+
+	void EditorLayer::DrawBuildControls()
+	{
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		const ImGuiStyle& style = ImGui::GetStyle();
+		const ScriptBuilder& builder = m_Context.GetScriptBuilder();
+		const bool building = builder.IsRunning();
+		const bool failed = !building && builder.GetLastResult().ID != 0 && !builder.GetLastResult().Success;
+
+		const std::string label = building ? fmt::format("Building {:.0f} s", builder.GetElapsedSeconds()) : std::string("Build Scripts");
+		const char* icon = building ? Icons::LoaderCircle : (failed ? Icons::CircleAlert : Icons::Hammer);
+		UI::ButtonStyle buildStyle;
+		buildStyle.Enabled = m_Context.HasProject() && !building;
+		buildStyle.Active = building || failed;
+		buildStyle.ActiveColor = building ? colors.Info : colors.Error;
+		const char* tooltip = failed ? "The last build failed (see the Console): build the scripts again (Ctrl+B)"
+			: "Build the project's scripts and hot-reload them (Ctrl+B)";
+
+		// Right-aligned.
+		const float width = style.FramePadding.x * 2.0f + ImGui::CalcTextSize(icon).x + style.ItemInnerSpacing.x + ImGui::CalcTextSize(label.c_str()).x;
+		ImGui::SameLine();
+		ImGui::SetCursorPosX(std::max(ImGui::GetWindowWidth() - style.WindowPadding.x - width, ImGui::GetCursorPosX()));
+		if (UI::ToolbarButton("Toolbar.BuildScripts", icon, label.c_str(), tooltip, buildStyle))
+			BuildScripts();
 	}
 
 	void EditorLayer::DrawStatusBar()
 	{
-		ImGui::AlignTextToFramePadding();
-		ImGui::TextDisabled("%s", SceneStateToString(m_Context.GetSceneState()));
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+
+		// Play state.
+		const SceneState state = m_Context.GetSceneState();
+		const bool paused = m_Context.IsPaused();
+		const char* stateIcon = paused ? Icons::Pause : (state == SceneState::Play ? Icons::Play : (state == SceneState::Simulate ? Icons::Atom : Icons::PencilRuler));
+		const char* stateText = paused ? "Paused" : (state == SceneState::Play ? "Playing" : (state == SceneState::Simulate ? "Simulating" : "Editing"));
+		const ImVec4& stateColor = paused ? colors.PlayState.Paused
+			: (state == SceneState::Play ? colors.PlayState.Play : (state == SceneState::Simulate ? colors.PlayState.Simulate : colors.PlayState.Edit));
+		UI::Pill("Status.PlayState", stateIcon, stateText, stateColor, "The scene's state: changes made while it runs are discarded when it stops");
+
+		// Frame time.
+		const float framerate = ImGui::GetIO().Framerate;
+		const std::string frame = fmt::format("{:.1f} ms{}{:.0f} FPS{}", framerate > 0.0f ? 1000.0f / framerate : 0.0f, c_Separator, framerate,
+			m_Idle ? std::string(c_Separator) + "idle" : std::string());
 		ImGui::SameLine();
-		ImGui::TextDisabled("|  %.1f FPS", ImGui::GetIO().Framerate);
+		UI::Pill("Status.Frame", Icons::Gauge, frame, colors.TextSecondary,
+			"Frame time and rate. While nothing happens the editor redraws less often (idle) and returns to the full rate on input.");
+
+		// Assets.
+		if (const EditorAssetManager* assets = m_Context.GetAssetManager())
+		{
+			const AssetManagerStats stats = assets->GetStats();
+			const std::string text = fmt::format("{} ready{}{} loading{}{}", stats.LoadedAssets, c_Separator, stats.LoadingAssets, c_Separator,
+				FormatMegabytes(stats.LoadedMemory));
+			const std::string tooltip = stats.FailedAssets > 0
+				? fmt::format("{} assets failed to load (see the Console). Loaded assets use {}.", stats.FailedAssets, FormatMegabytes(stats.LoadedMemory))
+				: fmt::format("Loaded assets and the memory they use; {} are registered.", stats.RegisteredAssets);
+			ImGui::SameLine();
+			UI::Pill("Status.Assets", Icons::Package, text, stats.FailedAssets > 0 ? colors.Error : colors.TextSecondary, tooltip.c_str());
+		}
+
+		// Automation.
 		ImGui::SameLine();
 		if (m_Automation.IsRunning())
 		{
 			const uint32_t clients = m_Automation.GetClientCount();
-			ImGui::TextDisabled("|  Automation: port %u, %u %s", static_cast<unsigned>(m_Automation.GetPort()), clients, clients == 1 ? "client" : "clients");
-			if (ImGui::IsItemHovered())
-			{
-				ImGui::SetTooltip("Tools and AI agents control this editor through StrataCLI (or its MCP server, StrataCLI mcp),\n"
-					"which finds it through its session file.\n%zu pending requests, %llu answered",
-					m_Automation.GetPendingRequestCount(), static_cast<unsigned long long>(m_Automation.GetCompletedRequestCount()));
-			}
+			const std::string text = fmt::format("port {}{}{} {}", m_Automation.GetPort(), c_Separator, clients, clients == 1 ? "client" : "clients");
+			const std::string tooltip = fmt::format("Tools and AI agents control this editor through StrataCLI (or its MCP server, StrataCLI mcp), which "
+				"finds it through its session file.\n{} pending requests, {} answered", m_Automation.GetPendingRequestCount(), m_Automation.GetCompletedRequestCount());
+			UI::Pill("Status.Automation", Icons::Bot, text, clients > 0 ? colors.Info : colors.TextSecondary, tooltip.c_str());
 		}
 		else
 		{
-			ImGui::TextDisabled("|  Automation off");
+			UI::Pill("Status.Automation", Icons::Bot, "Automation off", colors.TextDisabled, "Started with --no-automation: tools cannot control this editor");
 		}
+
+		// Scripts.
+		const ScriptBuilder& builder = m_Context.GetScriptBuilder();
+		const Ref<ScriptEngine>& engine = m_Context.GetScriptEngine();
+		ImGui::SameLine();
+		bool showConsole = false;
+		if (builder.IsRunning())
+		{
+			UI::Pill("Status.Scripts", Icons::LoaderCircle, fmt::format("Building {:.0f} s", builder.GetElapsedSeconds()), colors.Info,
+				"The project's scripts are being built (the output goes to the Console)");
+		}
+		else if (engine && engine->IsFaulted())
+		{
+			showConsole = UI::Pill("Status.Scripts", Icons::CircleAlert, "Scripts crashed", colors.Error, "The scripts crashed: rebuild or reload them (see the Console)");
+		}
+		else if (builder.GetLastResult().ID != 0 && !builder.GetLastResult().Success)
+		{
+			showConsole = UI::Pill("Status.Scripts", Icons::CircleAlert, "Build failed", colors.Error, "The last script build failed (see the Console)");
+		}
+		else if (engine && engine->IsModuleLoaded())
+		{
+			const std::string text = fmt::format("{}{}{} classes", engine->GetModuleName(), c_Separator, engine->GetClasses().size());
+			UI::Pill("Status.Scripts", Icons::FileCode, text, colors.TextSecondary, "The loaded script module");
+		}
+		else
+		{
+			UI::Pill("Status.Scripts", Icons::FileCode, "No scripts", colors.TextDisabled, "No script module is loaded (Scripts > Build Scripts)");
+		}
+
 		// Keys a tool holds stay down after it disconnects: show them, with a way out that does not need the tool.
 		if (const SimulatedInput& simulated = m_Context.GetSimulatedInput(); simulated.HasHolds())
 		{
 			ImGui::SameLine();
-			ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "|  Simulated input holds %s", simulated.DescribeHolds().c_str());
-			if (ImGui::IsItemHovered())
+			if (UI::Pill("Status.InputHolds", Icons::Keyboard, "Holds " + simulated.DescribeHolds(), colors.Warning,
+				"Keys and mouse buttons a tool holds down in the running game (input.* commands). They stay down until the tool releases "
+				"them, also after it disconnected, or until play stops. Click to release them all."))
 			{
-				ImGui::SetTooltip("Keys and mouse buttons a tool holds down in the running game (input.* commands).\n"
-					"They stay down until the tool releases them, also after it disconnected, or until play stops.");
-			}
-			ImGui::SameLine();
-			if (ImGui::SmallButton("Release"))
 				RunEditorCommand(m_Context, m_Commands, "input.releaseAll", { { "wait", false } });
+			}
 		}
-		if (EditorAssetManager* assets = m_Context.GetAssetManager())
-		{
-			const AssetManagerStats stats = assets->GetStats();
-			ImGui::SameLine();
-			ImGui::TextDisabled("|  %u assets loaded, %u loading", stats.LoadedAssets, stats.LoadingAssets);
-		}
-		const ScriptBuilder& builder = m_Context.GetScriptBuilder();
-		if (builder.IsRunning())
+
+		// Unread errors.
+		const ConsolePanel* console = m_Panels.Get<ConsolePanel>(EditorPanels::c_Console);
+		if (const uint32_t errors = console ? console->GetUnreadErrors() : 0; errors > 0)
 		{
 			ImGui::SameLine();
-			ImGui::TextDisabled("|  Building scripts (%.0f s)", builder.GetElapsedSeconds());
+			showConsole |= UI::Pill("Status.Errors", Icons::CircleAlert, fmt::format("{} {}", errors, errors == 1 ? "error" : "errors"), colors.Error,
+				"Errors logged since the Console was last viewed: click to open it");
 		}
-		else if (const Ref<ScriptEngine>& engine = m_Context.GetScriptEngine(); engine && engine->IsFaulted())
-		{
-			ImGui::SameLine();
-			ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.35f, 1.0f), "|  Scripts crashed (rebuild or reload them)");
-		}
-		else if (builder.GetLastResult().ID != 0 && !builder.GetLastResult().Success)
-		{
-			ImGui::SameLine();
-			ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.35f, 1.0f), "|  Script build failed (see Console)");
-		}
-		if (const uint32_t errors = m_Console.GetUnreadErrors(); errors > 0)
-		{
-			ImGui::SameLine();
-			ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.35f, 1.0f), "|  %u new errors (see Console)", errors);
-		}
+		if (showConsole)
+			m_Panels.Focus(EditorPanels::c_Console);
 	}
 
 	void EditorLayer::DrawUnsavedChangesModal()
 	{
 		if (m_OpenUnsavedChangesModal)
 		{
-			ImGui::OpenPopup("Unsaved Changes");
+			UI::OpenModal(c_UnsavedChangesModal);
 			m_OpenUnsavedChangesModal = false;
 		}
-		if (!ImGui::BeginPopupModal("Unsaved Changes", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+		if (!UI::BeginModal(c_UnsavedChangesModal, "Unsaved Changes"))
 			return;
 		ImGui::Text("Save changes to '%s'?", m_Context.GetEditScene()->GetName().c_str());
 		ImGui::Spacing();
-		if (ImGui::Button("Save", ImVec2(100.0f, 0.0f)))
+		if (UI::DialogButton("UnsavedChanges.Save", "Save", true))
 		{
 			ImGui::CloseCurrentPopup();
 			if (SaveScene() && m_PendingDiscardAction)
@@ -658,7 +974,7 @@ namespace Strata
 			m_PendingDiscardAction = nullptr;
 		}
 		ImGui::SameLine();
-		if (ImGui::Button("Don't Save", ImVec2(100.0f, 0.0f)))
+		if (UI::DialogButton("UnsavedChanges.DontSave", "Don't Save"))
 		{
 			ImGui::CloseCurrentPopup();
 			if (m_PendingDiscardAction)
@@ -666,12 +982,12 @@ namespace Strata
 			m_PendingDiscardAction = nullptr;
 		}
 		ImGui::SameLine();
-		if (ImGui::Button("Cancel", ImVec2(100.0f, 0.0f)))
+		if (UI::DialogButton("UnsavedChanges.Cancel", "Cancel"))
 		{
 			ImGui::CloseCurrentPopup();
 			m_PendingDiscardAction = nullptr;
 		}
-		ImGui::EndPopup();
+		UI::EndModal();
 	}
 
 }

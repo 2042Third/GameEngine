@@ -161,8 +161,11 @@ namespace Strata
 		// and playing scenes advance about as they would in a 60 Hz game.
 		if (specification.Headless)
 			specification.MaxFrameRate = c_HeadlessFrameRate;
-		// Scripted runs (a fixed number of frames) never overwrite the user's saved panel layout.
-		if (!commandLine.GetIntOption("--frames"))
+		// The panel layout: --layout picks the file; otherwise the user's, except in scripted runs (a fixed number of
+		// frames), which never overwrite it.
+		if (std::optional<std::string> layout = commandLine.GetOption("--layout"))
+			specification.ImGuiLayoutFile = FileSystem::FromUTF8(*layout);
+		else if (!commandLine.GetIntOption("--frames"))
 			specification.ImGuiLayoutFile = userData / "EditorLayout.ini";
 		specification.Window.Title = "Strata Editor";
 		specification.Window.Width = 1600;

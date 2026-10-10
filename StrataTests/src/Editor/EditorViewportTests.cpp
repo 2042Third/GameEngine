@@ -393,6 +393,7 @@ TEST_SUITE("Editor.Viewport")
 		settings.ShowStats = true;
 		settings.Gizmo = GizmoOperation::Rotate;
 		settings.Space = GizmoSpace::Local;
+		settings.Snap = true;
 		settings.TranslateSnap = 0.25f;
 		settings.RotateSnap = 45.0f;
 		settings.ScaleSnap = 0.5f;
@@ -400,9 +401,13 @@ TEST_SUITE("Editor.Viewport")
 		std::string error;
 		REQUIRE_MESSAGE(restored.FromJson(settings.ToJson(), &error), error);
 		CHECK(restored.ToJson() == settings.ToJson());
+		CHECK(restored.Snap);
+		// The selection color is the editor theme's, not saved with the project.
+		CHECK_FALSE(settings.ToJson().contains("SelectionColor"));
 
 		const nlohmann::json before = restored.ToJson();
-		for (const nlohmann::json& invalid : { nlohmann::json("x"), nlohmann::json { { "ShowGrid", 1 } }, nlohmann::json { { "Gizmo", "Move" } },
+		for (const nlohmann::json& invalid : { nlohmann::json("x"), nlohmann::json { { "ShowGrid", 1 } }, nlohmann::json { { "Snap", "yes" } },
+			nlohmann::json { { "Gizmo", "Move" } },
 			nlohmann::json { { "Space", "Global" } }, nlohmann::json { { "RotateSnap", 0 } }, nlohmann::json { { "TranslateSnap", 1e9 } },
 			nlohmann::json { { "ScaleSnap", -1 } }, nlohmann::json { { "ScaleSnap", 1e300 } }, nlohmann::json { { "ShowStats", false }, { "ScaleSnap", "big" } } })
 		{
@@ -424,9 +429,15 @@ TEST_SUITE("Editor.Viewport")
 			savedCamera = harness.Run("camera.set", { { "position", { 3, 4, 5 } }, { "target", { 0, 1, 0 } }, { "fov", 50 } });
 			harness.Context.GetViewport().GetSettings().ShowGrid = false;
 			harness.Context.GetViewport().GetSettings().RotateSnap = 30.0f;
+			harness.Context.GetViewport().GetSettings().Snap = true;
+			const glm::vec4 themeColor(0.25f, 0.5f, 0.75f, 1.0f);
+			harness.Context.GetViewport().GetSettings().SelectionColor = themeColor;
 
-			// Opening another project saves this one's view and starts from that project's (default) view.
+			// Opening another project saves this one's view and starts from that project's (default) view; the selection
+			// color (the editor's theme) stays.
 			harness.Run("project.open", { { "path", FileSystem::ToUTF8(other / "Other") } });
+			CHECK_FALSE(harness.Context.GetViewport().GetSettings().Snap);
+			CHECK(harness.Context.GetViewport().GetSettings().SelectionColor == themeColor);
 			const nlohmann::json camera = harness.Run("camera.get");
 			CHECK(camera["fov"] == 60.0);
 			CHECK(camera["yaw"] == 45.0);
@@ -443,6 +454,7 @@ TEST_SUITE("Editor.Viewport")
 			CHECK(harness.Run("camera.get") == savedCamera);
 			CHECK_FALSE(harness.Context.GetViewport().GetSettings().ShowGrid);
 			CHECK(harness.Context.GetViewport().GetSettings().RotateSnap == 30.0f);
+			CHECK(harness.Context.GetViewport().GetSettings().Snap);
 		}
 
 		// A damaged state file is ignored: the project opens with the default view.
