@@ -663,8 +663,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
 - `editor.status` summarizes the editor (project, scene, play state, selection, undo history); other
   parts of the editor add sections to it through `EditorContext::SetStatusProvider`: `automation`, `assets` (the
   totals of `asset.stats`) and `editor`: the window, UI scale and frame rate, whether the launcher shows (`launcher`),
-  the GPU (`gpu`) and the startup time (`startupSeconds`: from the process's creation to its first frame on screen, `Platform::GetProcessUptime`,
-  also logged as "Started in ... s").
+  the GPU (`gpu`) and the startup time (`startupSeconds`: from the process's creation to its first frame on screen,
+  `Platform::GetProcessUptime`, also logged as "Started in ... s").
 - **Asset streaming commands** (`Editor/EditorStreamingCommands.cpp`): `asset.stats {assets?, limit?, sort?: "bytes" |
   "lastUsed"}` reports the active asset manager's `GetStats` (resident bytes and budget per pool, the load queue, bytes
   in flight, uploads, finalization time and the staging budget, evictions and the assets eviction looked at,

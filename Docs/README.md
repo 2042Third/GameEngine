@@ -35,9 +35,11 @@ Task playbooks for people and AI agents, in `.claude/skills/<name>/SKILL.md`:
 ## Samples
 
 - [Samples/Tetris](../Samples/Tetris/): a complete game an AI agent made through editor commands only (`Tetris.stproj`,
-  `Assets/` with `.meta` files, C++ scripts in `Scripts/`). Open it with `StrataEditor --project Samples/Tetris`, build
-  its scripts (Ctrl+B) and press Play. The CTest `StrataEditor.Tetris` (`StrataTests/Editor/TetrisSample.cmake`) plays
-  a copy with simulated input, checks its HUD, exports it and runs the exported game headless.
+  `Assets/` with `.meta` files, C++ scripts in `Scripts/`). Open a copy of it from the launcher (Open Sample, or
+  `project.openSample`), build its scripts (Ctrl+B) and press Play; `StrataEditor --project Samples/Tetris` opens the
+  sample itself, to change it. `Samples/Samples.json` lists the samples. The CTest `StrataEditor.Tetris`
+  (`StrataTests/Editor/TetrisSample.cmake`) plays a copy with simulated input, checks its HUD, exports it and runs the
+  exported game headless.
 
 ## Keeping the documentation current
 

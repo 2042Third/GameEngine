@@ -750,11 +750,11 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   sets the cap to 0 (full rate) while anything happens and to 30 (10 unfocused) frames per second otherwise; headless,
   `--frames` and command-script runs are never throttled. The frame time shown (status bar, viewport stats,
   `editor.status`) is `Application::GetLastFrameWorkTime` averaged over 60 frames: a frame's CPU time without the waits
-  for the GPU, the display and the pacer, which panels get in `EditorPanelContext::Frame`. **UI tests** (`StrataTests/src/Editor/ImGuiHarness.h`) create
-  an ImGui context with the editor's fonts and theme (styled by an unattached `ImGuiLayer`), honor ImGui's texture
-  requests without a renderer, inject input (clicks, keys, typed text), keep their own clipboard, and find kit widgets
-  through the probe; the `Editor.UI` and `Editor.Launcher` suites draw the real `EditorLayer` this way, with a
-  `FakeEditorHost` (`StrataTests/src/Editor/HarnessEditor.h`).
+  for the GPU, the display and the pacer, which panels get in `EditorPanelContext::Frame`. **UI tests**
+  (`StrataTests/src/Editor/ImGuiHarness.h`) create an ImGui context with the editor's fonts and theme (styled by an
+  unattached `ImGuiLayer`), honor ImGui's texture requests without a renderer, inject input (clicks, keys, typed text),
+  keep their own clipboard, and find kit widgets through the probe; the `Editor.UI` and `Editor.Launcher` suites draw the
+  real `EditorLayer` this way, with a `FakeEditorHost` (`StrataTests/src/Editor/HarnessEditor.h`).
 - **EditorContext** (`StrataEditor/src/Editor/EditorContext.h`) is the state with no UI. Opening a project creates and
   activates its `EditorAssetManager` (scan included), opens a `ScriptEngine` (hot reload on by default,
   `EditorContextSpecification::HotReloadScripts`) and loads the built module, restores the viewport state, opens
