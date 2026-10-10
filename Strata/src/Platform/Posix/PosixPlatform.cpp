@@ -5,10 +5,13 @@
 #include "Strata/Core/Crypto.h"
 #include "Strata/Core/FileSystem.h"
 
+#include <algorithm>
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <charconv>
 #include <csignal>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <fcntl.h>
@@ -45,8 +48,62 @@ namespace Strata
 		// Temporary names are random; a name that already exists (planted by someone else) is skipped.
 		constexpr int c_TemporaryNameAttempts = 8;
 #if !defined(ST_PLATFORM_MACOS)
-		// /proc/<pid>/stat is a few hundred bytes; the limit only guards against something unexpected.
+		// /proc/<pid>/stat is a few hundred bytes and /proc/self/status a few kilobytes; the limit only guards against
+		// something unexpected.
 		constexpr size_t c_MaxProcStatSize = 64 * 1024;
+#endif
+
+		// The largest private memory GetProcessMemory has reported, the peak on systems that do not track one.
+		std::atomic<uint64_t> s_ObservedPeakPrivateBytes = 0;
+
+		// Raises the observed peak to value and returns the new peak.
+		uint64_t UpdateObservedPeakPrivateBytes(uint64_t value)
+		{
+			uint64_t peak = s_ObservedPeakPrivateBytes.load(std::memory_order_relaxed);
+			while (peak < value && !s_ObservedPeakPrivateBytes.compare_exchange_weak(peak, value, std::memory_order_relaxed))
+			{
+			}
+			return std::max(peak, value);
+		}
+
+#if defined(ST_PLATFORM_MACOS)
+		// Whether task_info filled the member that ends at memberEnd: older kernels fill a shorter task_vm_info and say
+		// how much in count (in natural_t units).
+		bool TaskInfoCovers(mach_msg_type_number_t count, size_t memberEnd)
+		{
+			return static_cast<size_t>(count) * sizeof(natural_t) >= memberEnd;
+		}
+#else
+		// The value of a "<name>:   <number> kB" line of /proc/self/status, in bytes; nullopt if it is missing or
+		// malformed.
+		std::optional<uint64_t> FindStatusKilobytes(std::string_view status, std::string_view name)
+		{
+			size_t lineStart = 0;
+			while (lineStart < status.size())
+			{
+				size_t lineEnd = status.find('\n', lineStart);
+				if (lineEnd == std::string_view::npos)
+					lineEnd = status.size();
+				std::string_view line = status.substr(lineStart, lineEnd - lineStart);
+				lineStart = lineEnd + 1;
+				if (line.size() <= name.size() || line.substr(0, name.size()) != name || line[name.size()] != ':')
+					continue;
+
+				line.remove_prefix(name.size() + 1);
+				const size_t valueStart = line.find_first_not_of(" \t");
+				if (valueStart == std::string_view::npos)
+					return std::nullopt;
+				line.remove_prefix(valueStart);
+				uint64_t kilobytes = 0;
+				const auto [valueEnd, parseError] = std::from_chars(line.data(), line.data() + line.size(), kilobytes);
+				if (parseError != std::errc() || std::string_view(valueEnd, static_cast<size_t>(line.data() + line.size() - valueEnd)) != " kB")
+					return std::nullopt;
+				if (kilobytes > std::numeric_limits<uint64_t>::max() / 1024)
+					return std::nullopt;
+				return kilobytes * 1024;
+			}
+			return std::nullopt;
+		}
 #endif
 
 		// Thread-safe, unlike std::strerror.
@@ -393,22 +450,47 @@ namespace Strata
 		return true;
 	}
 
-	uint64_t Platform::GetProcessMemoryUsage()
+	std::optional<ProcessMemoryInfo> Platform::GetProcessMemory()
 	{
+		ProcessMemoryInfo memory;
 #if defined(ST_PLATFORM_MACOS)
-		mach_task_basic_info info = {};
-		mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
-		if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&info), &count) == KERN_SUCCESS)
-			return static_cast<uint64_t>(info.resident_size);
-		return 0;
+		task_vm_info_data_t information = {};
+		mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+		if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&information), &count) != KERN_SUCCESS)
+			return std::nullopt;
+		// The footprint came with revision 1 of the structure, its peak with revision 3.
+		if (!TaskInfoCovers(count, offsetof(task_vm_info_data_t, phys_footprint) + sizeof(information.phys_footprint)))
+			return std::nullopt;
+
+		memory.PrivateBytes = static_cast<uint64_t>(information.phys_footprint);
+		memory.WorkingSet = static_cast<uint64_t>(information.resident_size);
+		memory.PeakWorkingSet = std::max(static_cast<uint64_t>(information.resident_size_peak), memory.WorkingSet);
+		const uint64_t observedPeak = UpdateObservedPeakPrivateBytes(memory.PrivateBytes);
+		const bool hasFootprintPeak = TaskInfoCovers(count,
+			offsetof(task_vm_info_data_t, ledger_phys_footprint_peak) + sizeof(information.ledger_phys_footprint_peak));
+		if (hasFootprintPeak && information.ledger_phys_footprint_peak > 0)
+			memory.PeakPrivateBytes = std::max(static_cast<uint64_t>(information.ledger_phys_footprint_peak), memory.PrivateBytes);
+		else
+			memory.PeakPrivateBytes = observedPeak;
 #else
-		std::ifstream statm("/proc/self/statm");
-		uint64_t totalPages = 0;
-		uint64_t residentPages = 0;
-		if (statm >> totalPages >> residentPages)
-			return residentPages * static_cast<uint64_t>(sysconf(_SC_PAGESIZE));
-		return 0;
+		const std::optional<std::string> status = ReadRegularFile("/proc/self/status", c_MaxProcStatSize);
+		if (!status)
+			return std::nullopt;
+		const std::optional<uint64_t> resident = FindStatusKilobytes(*status, "VmRSS");
+		const std::optional<uint64_t> residentPeak = FindStatusKilobytes(*status, "VmHWM");
+		const std::optional<uint64_t> anonymous = FindStatusKilobytes(*status, "RssAnon");
+		const std::optional<uint64_t> swapped = FindStatusKilobytes(*status, "VmSwap");
+		if (!resident || !residentPeak || !anonymous || !swapped)
+			return std::nullopt;
+
+		// Private memory the process touched: resident anonymous pages and those swapped out. (VmData would count
+		// reserved address space never touched, such as the full stack size of every thread.)
+		memory.PrivateBytes = *anonymous + *swapped;
+		memory.WorkingSet = *resident;
+		memory.PeakWorkingSet = std::max(*residentPeak, memory.WorkingSet);
+		memory.PeakPrivateBytes = UpdateObservedPeakPrivateBytes(memory.PrivateBytes);
 #endif
+		return memory;
 	}
 
 	bool Platform::IsProcessAlive(uint32_t processId)

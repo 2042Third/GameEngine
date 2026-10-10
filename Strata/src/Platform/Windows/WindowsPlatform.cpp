@@ -15,6 +15,7 @@
 #include <shellapi.h>
 #include <shlobj.h>
 
+#include <algorithm>
 #include <climits>
 #include <cstdio>
 
@@ -317,12 +318,22 @@ namespace Strata
 		return reinterpret_cast<INT_PTR>(result) > 32;
 	}
 
-	uint64_t Platform::GetProcessMemoryUsage()
+	std::optional<ProcessMemoryInfo> Platform::GetProcessMemory()
 	{
-		PROCESS_MEMORY_COUNTERS counters = {};
-		if (GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters)))
-			return static_cast<uint64_t>(counters.WorkingSetSize);
-		return 0;
+		// The kernel32 export: the psapi.dll entry point needs an import library and only forwards to it.
+		PROCESS_MEMORY_COUNTERS_EX counters = {};
+		counters.cb = sizeof(counters);
+		if (!K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters)))
+			return std::nullopt;
+
+		// PrivateUsage is the commit charge (also reported as PagefileUsage), whose peak is PeakPagefileUsage. Peaks are
+		// clamped to the current values, so callers can rely on that order whatever the system's bookkeeping does.
+		ProcessMemoryInfo memory;
+		memory.PrivateBytes = static_cast<uint64_t>(counters.PrivateUsage);
+		memory.WorkingSet = static_cast<uint64_t>(counters.WorkingSetSize);
+		memory.PeakPrivateBytes = std::max(static_cast<uint64_t>(counters.PeakPagefileUsage), memory.PrivateBytes);
+		memory.PeakWorkingSet = std::max(static_cast<uint64_t>(counters.PeakWorkingSetSize), memory.WorkingSet);
+		return memory;
 	}
 
 	bool Platform::IsProcessAlive(uint32_t processId)
