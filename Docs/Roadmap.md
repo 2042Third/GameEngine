@@ -82,8 +82,8 @@ Open items and deferrals later waves own:
   lack need a policy once subsystems become optional (`engine-modules`).
 - A world seen all at once still peaks at about 970 MiB of private memory in the exported runtime: no budget can evict
   what is in view, so this needs BC textures and mip streaming (`texture-cook-v2`, `mip-streaming`). Mesh uploads still
-  go through NVRHI's upload manager until the budgeted upload queue (`mip-streaming`); `AssetManagerBase::GetStats`
-  and eviction scans are linear in the registered assets (`render-scene`, `world-partition`).
+  go through NVRHI's upload manager until the budgeted upload queue (`mip-streaming`); eviction scans and
+  `GetResidencySamples` are linear in the registered assets (`render-scene`, `world-partition`).
 - Deleting one entity among 100,000 sibling roots renumbers the sibling list (about 0.5 ms), and the Hierarchy panel
   draws every root each frame (Hierarchy v2 in `editor-authoring`). Starting play copies a 1,000,000-entity scene in
   about 0.7 s (`scene-streaming`).

@@ -111,7 +111,8 @@ namespace Strata
 			auto it = m_Entries.find(handle);
 			if (it == m_Entries.end())
 				return {};
-			it->second.PinCount++;
+			if (it->second.PinCount++ == 0)
+				m_PinnedAssets++;
 			registration = it->second.Registration;
 		}
 		RequestLoad(handle, priority);
@@ -123,8 +124,8 @@ namespace Strata
 		std::scoped_lock<std::mutex> lock(m_Mutex);
 		auto it = m_Entries.find(handle);
 		// A pin of an asset that was unregistered (and maybe registered again since) counts for nothing any more.
-		if (it != m_Entries.end() && it->second.Registration == registration && it->second.PinCount > 0)
-			it->second.PinCount--;
+		if (it != m_Entries.end() && it->second.Registration == registration && it->second.PinCount > 0 && --it->second.PinCount == 0)
+			m_PinnedAssets--;
 	}
 
 	uint32_t AssetManagerBase::GetPinCount(AssetHandle handle) const
@@ -202,6 +203,31 @@ namespace Strata
 			outAssets.push_back(AssetResidencySample { handle, entry.Metadata.Type, entry.State, entry.Usage, entry.LastRequestedFrame, entry.PinCount,
 				entry.IsMemoryAsset });
 		}
+	}
+
+	void AssetManagerBase::SetStateLocked(AssetEntry& entry, AssetState state)
+	{
+		static_assert(static_cast<size_t>(AssetState::Failed) + 1 == std::tuple_size_v<decltype(m_StateCounts)>, "A count per asset state");
+		m_StateCounts[static_cast<size_t>(entry.State)]--;
+		entry.State = state;
+		m_StateCounts[static_cast<size_t>(state)]++;
+	}
+
+	AssetManagerBase::AssetEntry& AssetManagerBase::AddEntryLocked(AssetHandle handle, bool& outInserted)
+	{
+		auto [it, inserted] = m_Entries.try_emplace(handle);
+		outInserted = inserted;
+		if (inserted)
+			m_StateCounts[static_cast<size_t>(it->second.State)]++;
+		return it->second;
+	}
+
+	void AssetManagerBase::RemoveEntryLocked(std::unordered_map<AssetHandle, AssetEntry>::iterator it)
+	{
+		m_StateCounts[static_cast<size_t>(it->second.State)]--;
+		if (it->second.PinCount > 0)
+			m_PinnedAssets--;
+		m_Entries.erase(it);
 	}
 
 	void AssetManagerBase::TouchLocked(AssetEntry& entry)
@@ -297,7 +323,7 @@ namespace Strata
 	void AssetManagerBase::EvictLocked(AssetEntry& entry, std::vector<Ref<Asset>>& released)
 	{
 		released.push_back(SetLoadedLocked(entry, nullptr));
-		entry.State = AssetState::Unloaded;
+		SetStateLocked(entry, AssetState::Unloaded);
 		entry.Error.clear();
 		entry.Generation = m_NextGeneration++;
 		PublishContentChange(entry.Metadata.Handle);

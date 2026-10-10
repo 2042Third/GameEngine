@@ -365,6 +365,12 @@ namespace Strata
 
 		// Residency bookkeeping (AssetResidency.cpp); every function requires m_Mutex.
 		void TouchLocked(AssetEntry& entry);
+		// Every change of an entry's state goes through here, and entries enter and leave with AddEntryLocked and
+		// RemoveEntryLocked, so the counts GetStats reports (m_StateCounts, m_PinnedAssets) stay exact without visiting the
+		// entries.
+		void SetStateLocked(AssetEntry& entry, AssetState state);
+		AssetEntry& AddEntryLocked(AssetHandle handle, bool& outInserted);
+		void RemoveEntryLocked(std::unordered_map<AssetHandle, AssetEntry>::iterator it);
 		// Replaces the loaded object (null drops it), keeping the pool totals and the recency orders. Returns the previous
 		// object, to be released after the lock (destroying assets may be slow).
 		Ref<Asset> SetLoadedLocked(AssetEntry& entry, Ref<Asset> asset);
@@ -418,6 +424,10 @@ namespace Strata
 		std::array<std::map<RecencyKey, AssetHandle>, 3> m_RecencyOrders;
 		uint64_t m_NextRecencySequence = 0;
 		std::optional<ScheduledTrim> m_ScheduledTrim;
+		// The entries per state (indexed by AssetState) and the pinned ones, kept with every change (SetStateLocked,
+		// AddEntryLocked, RemoveEntryLocked, Pin, Unpin), so GetStats costs the same with any number of assets.
+		std::array<uint32_t, 4> m_StateCounts = {};
+		uint32_t m_PinnedAssets = 0;
 		uint64_t m_Evictions = 0;
 		uint64_t m_EvictionChecks = 0;
 		uint64_t m_Cancellations = 0;

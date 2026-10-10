@@ -672,9 +672,11 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
 - **Statistics** (`GetStats`, `GetResidencyInfo`): resident bytes and budget per pool, queued loads per priority, loads
   and bytes in flight with their high-water mark, uploaded bytes and finalization milliseconds (last frame and maximum
   of the last 120) with the staging budget, evictions and eviction checks, cancellations and staging releases; per asset
-  its state, memory, latest request and pins. `GetResidencySamples` gives the per-asset part without names into a
-  vector the caller reuses, and `GetMetadataVersion` changes with every registration and metadata change, so a view of
-  tens of thousands of assets reads names only when they change.
+  its state, memory, latest request and pins. `GetStats` costs the same with any number of assets: the counts of
+  assets per state and of pinned assets change with the entries (`SetStateLocked`, `AddEntryLocked`,
+  `RemoveEntryLocked`, `Pin`, `Unpin`), so the editor reads them every frame. `GetResidencySamples` gives the per-asset
+  part without names into a vector the caller reuses, and `GetMetadataVersion` changes with every registration and
+  metadata change, so a view of tens of thousands of assets reads names only when they change.
   The editor reports them through `asset.stats`, the `assets` section of `editor.status`, the Streaming panel and the
   status bar's assets pill.
 - **Measured** by the perf test `PerfGPU.Streaming` (`StrataTests/src/Perf/StreamingPerfTests.cpp`): it writes the

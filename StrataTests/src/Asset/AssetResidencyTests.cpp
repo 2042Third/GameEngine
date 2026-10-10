@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <optional>
 #include <random>
 #include <set>
 #include <span>
@@ -53,6 +54,25 @@ namespace
 		manager.Update();
 		for (AssetHandle handle : handles)
 			REQUIRE(manager.GetAssetState(handle) == AssetState::Ready);
+	}
+
+	// Whether the statistics' counts of assets per state and of pinned assets are those of the assets themselves, recounted
+	// from GetResidencyInfo (which lists every asset that is not unloaded, and every pinned one).
+	bool StateCountsMatch(const AssetManagerBase& manager)
+	{
+		uint32_t ready = 0;
+		uint32_t loading = 0;
+		uint32_t failed = 0;
+		uint32_t pinned = 0;
+		for (const AssetResidencyInfo& asset : manager.GetResidencyInfo())
+		{
+			ready += asset.State == AssetState::Ready ? 1 : 0;
+			loading += asset.State == AssetState::Loading ? 1 : 0;
+			failed += asset.State == AssetState::Failed ? 1 : 0;
+			pinned += asset.PinCount > 0 ? 1 : 0;
+		}
+		const AssetManagerStats stats = manager.GetStats();
+		return stats.LoadedAssets == ready && stats.LoadingAssets == loading && stats.FailedAssets == failed && stats.PinnedAssets == pinned;
 	}
 
 }
@@ -195,7 +215,7 @@ TEST_SUITE("Asset.Residency")
 			}
 
 			const AssetManagerStats stats = manager->GetStats();
-			if (stats.Resident != resident)
+			if (stats.Resident != resident || !StateCountsMatch(*manager))
 				violations++;
 			for (AssetMemoryPool pool : c_AssetMemoryPools)
 			{
@@ -566,6 +586,67 @@ TEST_SUITE("Asset.Residency")
 		CHECK(stats.Frame == 1);
 		CHECK(stats.LoadedMemory == stats.Resident.GetTotal());
 		CHECK(stats.Cancellations == 1); // The pinned asset was unloaded while its load waited to be finalized
+	}
+
+	TEST_CASE("The statistics count assets per state and pinned assets through every change, without visiting them")
+	{
+		ScopedFakeLoader loader;
+		Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		CHECK(StateCountsMatch(*manager)); // The built-in assets
+		const uint32_t builtin = manager->GetStats().LoadedAssets;
+		const AssetHandle first = manager->Add(0x72000, MakeUsage(1 * c_KB));
+		const AssetHandle second = manager->Add(0x72001, MakeUsage(1 * c_KB));
+		const AssetHandle third = manager->Add(0x72002, MakeUsage(1 * c_KB));
+		const AssetHandle cancelled = manager->Add(0x72003, MakeUsage(1 * c_KB));
+		const AssetHandle broken = manager->AddStored(0x72004, c_FakeAssetType, { 1, 2, 3 }, "Fake/Broken");
+		manager->Add(0x72000, MakeUsage(1 * c_KB)); // Registered again: still one asset
+		CHECK(StateCountsMatch(*manager));
+
+		for (const AssetHandle handle : { first, second, broken, cancelled })
+			manager->RequestLoad(handle);
+		CHECK(manager->GetStats().LoadingAssets == 4);
+		CHECK(manager->CancelLoad(cancelled));
+		CHECK(StateCountsMatch(*manager));
+		manager->Update();
+		CHECK(StateCountsMatch(*manager));
+		CHECK(manager->GetStats().LoadedAssets == builtin + 2);
+		CHECK(manager->GetStats().FailedAssets == 1);
+
+		// Pins count assets, not pins; a pin of an unregistered asset no longer counts.
+		std::optional<AssetPin> firstPin = manager->Pin(first);
+		std::optional<AssetPin> secondFirstPin = manager->Pin(first);
+		std::optional<AssetPin> thirdPin = manager->Pin(third);
+		CHECK(manager->GetStats().PinnedAssets == 2);
+		CHECK(StateCountsMatch(*manager));
+		firstPin.reset();
+		CHECK(manager->GetStats().PinnedAssets == 2);
+		secondFirstPin.reset();
+		CHECK(manager->GetStats().PinnedAssets == 1);
+		manager->Remove(third);
+		CHECK(manager->GetStats().PinnedAssets == 0);
+		thirdPin.reset();
+		CHECK(StateCountsMatch(*manager));
+
+		// Unloading, reloading, evicting, failing, replacing and unregistering.
+		manager->UnloadAsset(second);
+		CHECK(StateCountsMatch(*manager));
+		manager->ReloadAsset(first);
+		CHECK(StateCountsMatch(*manager));
+		manager->Update();
+		CHECK(StateCountsMatch(*manager));
+		for (int frame = 0; frame < 8; frame++)
+			manager->Update();
+		CHECK(manager->TrimUnused(0) > 0);
+		CHECK(StateCountsMatch(*manager));
+		AssetMetadata replacement;
+		replacement.Handle = cancelled;
+		replacement.Name = "Replaced";
+		manager->AddMemoryAsset(Material::Create(), replacement);
+		CHECK(StateCountsMatch(*manager));
+		manager->Remove(broken);
+		manager->Remove(cancelled);
+		CHECK(StateCountsMatch(*manager));
+		CHECK(manager->GetStats().FailedAssets == 0);
 	}
 
 	TEST_CASE("Residency samples list what the residency info lists, and the metadata version follows registrations")
