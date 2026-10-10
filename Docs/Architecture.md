@@ -53,6 +53,11 @@ Each target is defined in the `CMakeLists.txt` of its directory; script modules 
 | `StrataTests` | executable | doctest suites; builds the test script modules as dependencies (`StrataTests/`). |
 | script modules | `MODULE` libraries | Game code: the tests' modules and every game project's `Scripts/`. |
 
+CTest runs the `StrataTests` suites in groups selected by suite name (`StrataTests/CMakeLists.txt`; the groups and
+labels are listed in AGENTS.md, "Testing"). The perf lab is one of them: suites `Perf.*` and `PerfGPU.*`
+(`StrataTests/src/Perf/`) measure metrics against the budgets in `StrataTests/Perf/Budgets.json`, in Release and Dist
+only, and write `<build>/PerfResults/<config>.json`.
+
 What may depend on what:
 
 - `Strata` knows nothing about the editor, the runtime executable, the CLI or the tests. It links `StrataScriptCore`
@@ -79,7 +84,8 @@ Applications built on `Application` (editor, runtime) get `main` from `Core/Entr
 **Core** (`Core/`). `Application` owns the window, the graphics device, the layer stack and the main-thread queue
 and runs the frame loop; `Layer`/`LayerStack` hold the client's behavior; `Window` is implemented by
 `Platform/GLFW/GLFWWindow`. Services: `Log` (spdlog; `LogBuffer` backs the editor console and `log.read`), `Assert`,
-`JobSystem`, `FileSystem` (UTF-8 paths), `FileWatcher`, `FileLock`, `Platform` (OS services, private directories),
+`JobSystem`, `FileSystem` (UTF-8 paths), `FileWatcher`, `FileLock`, `Platform` (OS services, private directories,
+process memory with peaks: `GetProcessMemory`),
 `Process` (child processes), `DynamicLibrary`, `CrashGuard`, `UUID`, `Crypto` (SHA-256, peer authentication), `Base64`,
 `CommandLine`, `Timer`/`FramePacer`, `JsonUtils` (exception-free JSON reads), `SequenceLock` (lock-free hand-off to the
 audio thread) and `Profiling` (Tracy with `STRATA_ENABLE_TRACY`).

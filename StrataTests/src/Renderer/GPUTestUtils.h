@@ -10,8 +10,9 @@ namespace Strata::Tests
 
 	// Access to the headless graphics device and renderer shared by all GPU tests of a run. Like an application, the
 	// test process creates its Vulkan device once: tearing instances down and up again for every test is not a usage
-	// pattern of the engine, and some drivers and overlay layers handle that churn poorly. Validation is always
-	// enabled; tests check GetNewErrorCount() at the end.
+	// pattern of the engine, and some drivers and overlay layers handle that churn poorly. Validation is enabled (tests
+	// check GetNewErrorCount() at the end) unless the environment variable STRATA_TEST_GPU_VALIDATION is "0", which the
+	// perf tests' CTest sets (StrataTests.PerfGPU).
 	class GPUContext
 	{
 	public:
@@ -27,6 +28,12 @@ namespace Strata::Tests
 		nvrhi::IDevice* GetNvrhiDevice() { return m_Device->GetDevice(); }
 		// Validation errors reported since this context was created.
 		uint32_t GetNewErrorCount() const { return m_Device->GetErrorCount() - m_InitialErrorCount; }
+
+		// Executes a closed command list, waits for the GPU and recycles its command buffer the way the engine does after
+		// every frame (nvrhi::IDevice::runGarbageCollection): the buffer releases the resources it referenced and returns
+		// to the queue's pool. Without that, every later open() creates a new command pool and buffer, so tests that
+		// submit repeatedly (perf tests above all) go through this. False if the device was lost.
+		bool ExecuteAndWait(nvrhi::ICommandList* commandList);
 
 		// Destroys the shared device (end of the test run).
 		static void ShutdownShared();
