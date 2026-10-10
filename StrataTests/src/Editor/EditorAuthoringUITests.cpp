@@ -995,6 +995,8 @@ TEST_SUITE("Editor.UI.Inspector")
 		press(ImGuiKey_C, false);
 		press(ImGuiMod_Ctrl, false);
 		CHECK(harness.GetClipboard() == "0.000");
+		// The field stays in the probe while it is typed in.
+		CHECK(UI::ItemProbe::Find("Test.Zero").has_value());
 		// Showing it changed nothing.
 		press(ImGuiKey_Escape, true);
 		press(ImGuiKey_Escape, false);

@@ -159,7 +159,12 @@ namespace Strata
 				value = shown;
 			outFinished = ImGui::IsItemDeactivatedAfterEdit();
 			if (ImGui::TempInputIsActive(itemId))
+			{
+				// ImGui's text field shows what is typed.
+				if (!probeKey.empty())
+					UI::ItemProbe::Record(probeKey);
 				return changed;
+			}
 
 			const ImVec2 itemMin = ImGui::GetItemRectMin();
 			const ImVec2 itemMax = ImGui::GetItemRectMax();

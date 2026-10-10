@@ -847,9 +847,10 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
     A primary selection that changed elsewhere is revealed (`HierarchyView::Reveal`, then the list scrolls to its row).
     Rows are tree nodes with the entity's icon (`UI/EntityIcons`), its name, a prefab badge on an instance's root (a
     click inspects the prefab) and an eye (`entity.setActive`); a drag carries the topmost dragged entities
-    (`DragDrop::c_Entities`) and a drop asks `HierarchyView::GetDropTarget` for `entity.setParent`'s parent and index. The rename field is drawn after the
-    selection's scope and activated by id: a keyboard move out of that scope would make ImGui clear the selection. With
-    100,000 roots the panel costs about 0.012 ms per frame (it drew every root before: 12.9 ms; `Perf.Editor`).
+    (`DragDrop::c_Entities`) and a drop asks `HierarchyView::GetDropTarget` for `entity.setParent`'s parent and index.
+    The rename field is drawn after the selection's scope and activated by id: a keyboard move out of that scope would
+    make ImGui clear the selection. With 100,000 roots the panel costs about 0.012 ms per frame (it drew every root
+    before: 12.9 ms; `Perf.Editor`).
   - The **Inspector** shows the components every selected entity has. `GetSharedProperty` gives each widget its value and
     which components (axes, Euler angles) differ, which `DrawPropertyWidget` shows as mixed; an edit goes through the
     multi-entity `SetPropertyComponentsWithUndo` with the components the widget changed (one step; each entity keeps its
@@ -862,10 +863,10 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
     and labels that do not fit end in an ellipsis with the whole text in a tooltip, so a laptop-sized window clips
     nothing. Colors are channel fields behind R, G, B, A labels in the axis colors and a swatch (the swatch alone where
     the fields would be unreadable) that opens a picker with the channels under it; mixed channels, colors and texts
-    show "--". A component's menu copies and pastes its values through the
-    clipboard as JSON (`EditorActions::CopyComponentValues`) and runs `component.set`/`component.remove {entities}`. With
-    nothing selected it shows the scene's settings, applied by one `scene.setSettings` when a drag ends, and the first
-    active sky light (the renderer's).
+    show "--". Sliders are a track with a handle and the number in a field beside it. A component's menu copies and
+    pastes its settable values through the clipboard as JSON (`EditorActions::CopyComponentValues`) and runs
+    `component.set`/`component.remove {entities}`. With nothing selected it shows the scene's settings, applied by one
+    `scene.setSettings` when a drag ends, and the first active sky light (the renderer's).
   - The **Asset** inspector is tabbed with the Inspector: `EditorLayer` brings the tab of the inspection target forward
     when `GetInspectionVersion` changes (`EditorPanelRegistry::ShowTab`, which leaves the keyboard focus where it is).
     Materials are drawn by `MaterialEditor` (a drag previews, its release saves: one write and one undo step), import
