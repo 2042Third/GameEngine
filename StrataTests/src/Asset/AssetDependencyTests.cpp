@@ -495,39 +495,189 @@ TEST_SUITE("Asset.Groups")
 	{
 		ScopedFakeLoader loader;
 		Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
-		const AssetHandle used = manager->Add(0x100, MakeUsage(60));
-		const AssetHandle parent = manager->Add(0x200, MakeUsage(10));
-		const AssetHandle prefetched = manager->Add(0x201, MakeUsage(60));
+		const AssetHandle used = manager->Add(0x100, MakeUsage(50), 50);
+		const AssetHandle parent = manager->Add(0x200, MakeUsage(10), 10);
+		const AssetHandle prefetched = manager->Add(0x201, MakeUsage(40), 40);
+		const AssetHandle newcomer = manager->Add(0x300, MakeUsage(30), 30);
 		manager->SetDependencies(parent, { prefetched });
-		// Room for 100 bytes of assets beside the built-in ones (memory assets, never evicted).
+		// Room for 100 bytes of assets beside the built-in ones (memory assets, never evicted), and a window of 100 bytes in
+		// flight that prefetches leave free.
 		const uint64_t builtin = manager->GetStats().Resident.Cpu;
 		AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
-		budgets.Cpu = builtin + 100;
+		budgets.Cpu = builtin + 200;
+		budgets.InFlightBytes = 100;
 		manager->SetResidencyBudgets(budgets);
 		// Past the eviction grace window of the first frames, where never requested counts as recently requested.
 		for (int frame = 0; frame < 10; frame++)
 			manager->Update();
 
-		for (int frame = 0; frame < 10; frame++)
+		// The dependency fits beside what is used: it is prefetched and arrives.
+		auto useFor = [&](int frames, std::initializer_list<AssetHandle> handles)
 		{
-			manager->GetAsset(used);
-			manager->GetAsset(parent);
-			manager->Update();
-		}
+			for (int frame = 0; frame < frames; frame++)
+			{
+				for (AssetHandle handle : handles)
+					manager->GetAsset(handle);
+				manager->Update();
+			}
+		};
+		useFor(10, { used, parent });
 		REQUIRE(manager->WaitForPendingLoads());
-		for (int frame = 0; frame < 10; frame++)
-		{
-			manager->GetAsset(used);
-			manager->GetAsset(parent);
-			manager->Update();
-		}
-		// What is in use stays; the dependency nobody asked for went to keep the budget.
+		useFor(10, { used, parent });
+		CHECK(manager->GetStats().DependencyPrefetches == 1);
+		CHECK(manager->GetAssetState(prefetched) == AssetState::Ready);
+		CHECK(manager->GetStats().Resident.Cpu == builtin + 100);
+
+		// Something in use needs room in a smaller budget: the dependency nobody asked for goes first, what is in use stays.
+		budgets.Cpu = builtin + 100;
+		manager->SetResidencyBudgets(budgets);
+		useFor(10, { used, parent, newcomer });
+		REQUIRE(manager->WaitForPendingLoads());
+		useFor(10, { used, parent, newcomer });
 		CHECK(manager->GetAssetState(used) == AssetState::Ready);
 		CHECK(manager->GetAssetState(parent) == AssetState::Ready);
+		CHECK(manager->GetAssetState(newcomer) == AssetState::Ready);
 		CHECK(manager->GetAssetState(prefetched) == AssetState::Unloaded);
 		CHECK(manager->GetStats().Resident.Cpu <= builtin + 100);
-		CHECK(manager->GetStats().DependencyPrefetches >= 1);
-		CHECK(manager->GetStats().Evictions >= 1);
+		CHECK(manager->GetStats().Evictions == 1);
+	}
+
+	TEST_CASE("Dependencies are prefetched only into the budgets' headroom beside what is on its way and a window in flight")
+	{
+		ScopedJobSystem jobs(2, 1); // One I/O thread: reads pass the gate in the order they were dispatched
+		ScopedFakeLoader loader;
+		Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		const AssetHandle used = manager->Add(0x100, MakeUsage(600), 600);
+		const AssetHandle first = manager->Add(0x200, MakeUsage(10), 10);
+		const AssetHandle second = manager->Add(0x201, MakeUsage(10), 10);
+		const AssetHandle requested = manager->Add(0x202, MakeUsage(100), 100);
+		const AssetHandle large = manager->Add(0x300, MakeUsage(300), 300);
+		const AssetHandle medium = manager->Add(0x301, MakeUsage(200), 200);
+		const AssetHandle unknownSize = manager->Add(0x302, MakeUsage(5));
+		const AssetHandle small = manager->Add(0x303, MakeUsage(150), 150);
+		manager->SetDependencies(first, { large, medium, unknownSize });
+		manager->SetDependencies(second, { small });
+		const uint64_t builtin = manager->GetStats().Resident.Cpu;
+		AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
+		budgets.Cpu = builtin + 1400;
+		budgets.InFlightBytes = 400; // Kept free for requests: beside it, 1000 bytes
+		manager->SetResidencyBudgets(budgets);
+		REQUIRE(manager->LoadAssetSync(used));
+
+		// 400 bytes of headroom, of which the loads on their way (the first, and another requested asset) take 110: the 300
+		// bytes do not fit (they would without the in-flight window), the 200 do, and a dependency of unknown size counts a
+		// megabyte.
+		manager->CloseGate();
+		manager->RequestLoad(first, AssetPriority::High);
+		manager->RequestLoad(requested, AssetPriority::Normal);
+		manager->AllowReads(1);
+		REQUIRE(WaitUntil([&]() { return manager->GetAssetState(medium) == AssetState::Loading; }));
+		CHECK(manager->GetAssetState(large) == AssetState::Unloaded);
+		CHECK(manager->GetAssetState(unknownSize) == AssetState::Unloaded);
+		CHECK(manager->GetStats().DependencyPrefetches == 1);
+
+		// A prefetch on its way counts like any load until it is finalized: the second's dependency does not fit beside it
+		// (the reads complete, but nothing is finalized without an update).
+		manager->RequestLoad(second, AssetPriority::High);
+		manager->AllowReads(3);
+		REQUIRE(WaitUntil([&]() { return manager->GetReadCount(second) == 1 && manager->GetStats().OutstandingReads == 0; }));
+		CHECK(manager->GetAssetState(small) == AssetState::Unloaded);
+		CHECK(manager->GetStats().DependencyPrefetches == 1);
+
+		manager->OpenGate();
+		REQUIRE(manager->WaitForPendingLoads());
+		CHECK(manager->GetAssetState(medium) == AssetState::Ready);
+		CHECK(manager->GetStats().Resident.Cpu == builtin + 920);
+		CHECK(manager->GetStats().Evictions == 0);
+	}
+
+	TEST_CASE("Scenes, prefabs and models prefetch nothing: what their entities use loads once it is needed")
+	{
+		ScopedFakeLoader loader;
+		Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		const AssetHandle material = manager->Add(0x200, MakeUsage(10), 10);
+		uint64_t next = 0x300;
+		for (AssetType type : { AssetType::Scene, AssetType::Prefab, AssetType::Model })
+		{
+			CAPTURE(AssetTypeToString(type));
+			const AssetHandle document = manager->Add(next++, MakeUsage(10), 10, type);
+			const AssetHandle used = manager->Add(next++, MakeUsage(10), 10);
+			manager->SetDependencies(document, { used });
+			manager->RequestLoad(document);
+			REQUIRE(manager->WaitForPendingLoads());
+			CHECK(manager->GetReadCount(document) == 1); // Read, then refused by the type's loader (its bytes are a fake asset's)
+			CHECK(manager->GetAssetState(used) == AssetState::Unloaded);
+		}
+		CHECK(manager->GetStats().DependencyPrefetches == 0);
+
+		// Other assets prefetch what they reference.
+		const AssetHandle texture = manager->Add(0x400, MakeUsage(10), 10);
+		manager->SetDependencies(material, { texture });
+		manager->RequestLoad(material);
+		REQUIRE(manager->WaitForPendingLoads());
+		CHECK(manager->GetAssetState(texture) == AssetState::Ready);
+		CHECK(manager->GetStats().DependencyPrefetches == 1);
+	}
+
+	TEST_CASE("Materials request the textures no prefetch is loading")
+	{
+		NativeProject project("MaterialTextureRequests");
+		for (const auto& [path, handle] : { std::pair<std::string, uint64_t> { "Textures/Albedo.png", 0x5200 }, { "Textures/Normal.png", 0x5201 } })
+		{
+			REQUIRE(FileSystem::CreateDirectories((project.Assets / "Textures")));
+			REQUIRE(FileSystem::WriteBytes(project.Assets / FileSystem::FromUTF8(path), CreateSolidPNG(4, 4, 120, 80, 40)));
+			REQUIRE(FileSystem::WriteText(project.Assets / FileSystem::FromUTF8(path + ".meta"), JsonUtils::Dump(nlohmann::json { { "Handle", UUIDToJson(UUID(handle)) } })));
+		}
+		project.WriteMaterial("Materials/Wall.stmat", 0x5100, 0x5200, 0x5201);
+		Ref<EditorAssetManager> manager = project.Open();
+		REQUIRE(manager->GetDependencies(UUID(0x5100)) == Handles({ 0x5200, 0x5201 }));
+
+		// A budget without room for prefetches: the material's read prefetches nothing, and the material requests its textures
+		// itself when it is finalized, as it does where no dependencies are known.
+		AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
+		budgets.GpuTextures = 1; // No renderer: textures stay in the CPU pool, nothing is evicted
+		manager->SetResidencyBudgets(budgets);
+		REQUIRE(manager->LoadAssetSync(UUID(0x5100)));
+		REQUIRE(manager->WaitForPendingLoads());
+		CHECK(manager->GetStats().DependencyPrefetches == 0);
+		CHECK(manager->GetAssetState(UUID(0x5200)) == AssetState::Ready);
+		CHECK(manager->GetAssetState(UUID(0x5201)) == AssetState::Ready);
+	}
+
+	TEST_CASE("A prefetched dependency that no longer fits when it arrives is dropped unfinalized")
+	{
+		ScopedFakeLoader loader;
+		Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		const AssetHandle parent = manager->Add(0x200, MakeUsage(10), 10);
+		// Its stored size fits, what it holds once loaded does not (stored sizes only estimate it).
+		const AssetHandle dependency = manager->Add(0x201, MakeUsage(500), 10);
+		manager->SetDependencies(parent, { dependency });
+		const uint64_t builtin = manager->GetStats().Resident.Cpu;
+		AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
+		budgets.Cpu = builtin + 200;
+		budgets.InFlightBytes = 50;
+		manager->SetResidencyBudgets(budgets);
+		for (int frame = 0; frame < 10; frame++)
+			manager->Update();
+
+		for (int frame = 0; frame < 10; frame++)
+		{
+			manager->GetAsset(parent);
+			manager->Update();
+			CHECK(manager->GetStats().Resident.Cpu <= budgets.Cpu);
+		}
+		REQUIRE(manager->WaitForPendingLoads());
+		CHECK(manager->GetAssetState(parent) == AssetState::Ready);
+		CHECK(manager->GetAssetState(dependency) == AssetState::Unloaded);
+		const AssetManagerStats stats = manager->GetStats();
+		CHECK(stats.DependencyPrefetches == 1);
+		CHECK(stats.DependencyPrefetchesDropped == 1);
+		CHECK(stats.Evictions == 0); // Never published, so never evicted
+		CHECK(stats.Resident.Cpu == builtin + 10);
+
+		// Requested, it loads and makes room like any load.
+		REQUIRE(manager->LoadAssetSync(dependency));
+		CHECK(manager->GetAssetState(dependency) == AssetState::Ready);
 	}
 
 	TEST_CASE("A group of a model, 10 materials and 20 textures progresses by bytes to completion")

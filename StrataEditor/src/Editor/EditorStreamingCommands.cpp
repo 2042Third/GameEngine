@@ -119,7 +119,10 @@ namespace Strata
 				{ "evictions", stats.Evictions },
 				{ "evictionChecks", stats.EvictionChecks },
 				{ "cancellations", stats.Cancellations },
-				{ "stagingReleases", stats.StagingReleases } };
+				{ "stagingReleases", stats.StagingReleases },
+				{ "prefetch", {
+					{ "started", stats.DependencyPrefetches },
+					{ "dropped", stats.DependencyPrefetchesDropped } } } };
 		}
 
 	}
@@ -130,7 +133,8 @@ namespace Strata
 			"Asset memory and streaming: resident bytes and budget per pool (cpu, gpuTextures, gpuBuffers; null budget = unlimited), "
 			"load counts, the streaming queue (queued loads per priority, loads and bytes in flight), finalization (GPU bytes uploaded and "
 			"main-thread milliseconds, last frame and maximum of recent frames, with their budgets and the staging budget), evictions (and how "
-			"many resident assets eviction looked at), cancellations and staging releases. With "
+			"many resident assets eviction looked at), cancellations, staging releases and dependency prefetches (prefetch: loads of what "
+			"assets reference started when their reads completed, and those dropped on arrival for lack of room in the budgets). With "
 			"assets: true it also lists the assets that are resident, loading, failed or pinned, with their memory, state, last use and pins.",
 			ObjectSchema({
 				{ "assets", BoolSchema("Also list the assets (default false)") },

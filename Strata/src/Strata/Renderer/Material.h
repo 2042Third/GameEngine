@@ -59,8 +59,8 @@ namespace Strata
 		static Ref<Material> Deserialize(std::span<const uint8_t> data, std::string* outError = nullptr);
 		nlohmann::json Serialize() const;
 
-		// Requests the referenced textures so they start streaming as soon as the material is in use, unless the manager
-		// knows the material's dependencies (then they load alongside it, see AssetManagerBase::GetDependencies).
+		// Requests the referenced textures so they start streaming as soon as the material is in use, except those already on
+		// their way (prefetched alongside the material, see AssetManagerBase::GetDependencies).
 		AssetFinalizeResult FinalizeOnMainThread(const AssetFinalizeContext& context) override;
 		// Parameters only: the textures are assets of their own.
 		AssetMemoryUsage GetMemoryUsage() const override { return AssetMemoryUsage { sizeof(Material) }; }

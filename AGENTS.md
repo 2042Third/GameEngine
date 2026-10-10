@@ -372,8 +372,9 @@ The threading model, frame loop and pipelines these rules protect are described 
   script fields of asset type, material texture maps); importers add what their stored form does not show
   (`ImportResult::References`, e.g. a glTF mesh's materials) and mesh bounds (`Bounds`). A new asset property is found
   automatically; a new document type or a stored form with references needs `AssetDependencies::Scan` or the importer to
-  record them. Reads of requested assets prefetch their direct dependencies (within the budgets, not chaining); loading
-  screens pin a whole closure with `RequestLoadWithDependencies` (`AssetGroupRequest`: progress by bytes, cancel).
+  record them. Reads of requested assets other than scenes, prefabs and models prefetch their direct dependencies (only
+  into the budgets' headroom beside what is on its way and a window of loads in flight, never evicting, not chaining);
+  loading screens pin a whole closure with `RequestLoadWithDependencies` (`AssetGroupRequest`: progress by bytes, cancel).
 - **Residency** ([Docs/Architecture.md](Docs/Architecture.md), "Streaming and residency"): memory is bounded by budgets
   per pool (`AssetResidencyBudgets`: GPU textures 50% and GPU buffers 15% of the device's memory budget, CPU unlimited;
   128 MiB of loads in flight, 64 MiB and 4 ms of finalization per frame, 64 MiB of upload staging), and the least
@@ -702,9 +703,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
 - **Asset streaming commands** (`Editor/EditorStreamingCommands.cpp`): `asset.stats {assets?, limit?, sort?: "bytes" |
   "lastUsed"}` reports the active asset manager's `GetStats` (resident bytes and budget per pool, the load queue, bytes
   in flight, uploads, finalization time and the staging budget, evictions and the assets eviction looked at,
-  cancellations, staging releases) and, with `assets: true`, the assets that are resident, loading, failed or pinned
-  (`GetResidencyInfo`); `asset.setBudget {gpuTexturesMB?, gpuBuffersMB?, cpuMB?, inFlightMB?, uploadMBPerFrame?,
-  finalizeMsPerFrame?, stagingMB?, reset?}` changes the budgets of the open project's manager until the project closes
+  cancellations, staging releases, dependency prefetches started and dropped) and, with `assets: true`, the assets that
+  are resident, loading, failed or pinned (`GetResidencyInfo`); `asset.setBudget {gpuTexturesMB?, gpuBuffersMB?, cpuMB?,
+  inFlightMB?, uploadMBPerFrame?, finalizeMsPerFrame?, stagingMB?, reset?}` changes the budgets of the open project's manager until the project closes
   (it fails without a project; values greater than 0; MB are 2^20 bytes; no undo, as nothing in the project changes).
   Opening a scene, and a scene switch the game asks for in play mode, schedule the release of what only the previous
   scene used (`EditorContext::OpenScene`, `SwitchRuntimeScene`).

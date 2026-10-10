@@ -674,13 +674,23 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   memory of each command list without a limit: after `c_StagingReleaseFrames` (120) frames without uploads the manager
   drops its upload command list (submissions in flight keep it alive until the GPU is done) and creates a new one with
   the next upload.
-- **Dependency prefetch** (`AssetManagerBase::GetDependencies`). When the read of a requested asset completes, its direct
-  dependencies are queued at its priority with a lower score (`c_DependencyPrefetchScore`, behind direct requests), before
-  its read slot frees: a material's textures load alongside the material, a scene's meshes and materials alongside the
-  scene. Prefetches respect the budgets: they are not requests (no use is recorded, so their arrivals make no room and
-  are evicted first until something requests them), they do not chain (an asset that was only prefetched prefetches
-  nothing until it is requested), none start while a pool is over budget, and the queue bounds them like every load.
-  Materials request their textures themselves only from managers that know no dependencies (version 1 packs).
+- **Dependency prefetch** (`AssetManagerBase::GetDependencies`). When the read of a requested asset completes, its
+  direct dependencies are queued at its priority with a lower score (`c_DependencyPrefetchScore`, behind direct
+  requests), before its read slot frees: a material's textures load alongside the material, a mesh's default materials
+  alongside the mesh. Documents that place entities (scenes, prefabs, models) prefetch nothing: what their entities use
+  is requested by whatever draws or plays it, once it is needed (prefetching a scene's meshes and materials raised the
+  stress sweep's peak private memory by 60 to 100 MB; loading screens take a closure with a group load). Prefetches
+  never evict anything: a dependency is prefetched only while its stored size fits in every pool with a budget beside
+  what is resident, reserved for arrivals, on its way (the stored bytes of every load queued or in flight, prefetches
+  included, until it is finalized) and a window of `InFlightBytes` kept free for the requests to come, so tight budgets
+  prefetch nothing (the stress sweep's 128 MB for 447 MB of textures: prefetching textures into the room beside what was
+  on its way still raised its peak by about 25 MB on average); and an arrival nobody requested meanwhile is dropped
+  unfinalized when what it holds does not fit beside what is resident, reserved and on its way (it would be uploaded
+  only to be evicted). They are not requests either: no use is recorded, so their arrivals make no room and are evicted
+  first until something requests them, and they do not chain (an asset that was only prefetched prefetches nothing until
+  it is requested). The queue bounds them like every load. `asset.stats` reports the prefetches started and dropped.
+  Materials request the textures no prefetch is loading when they are finalized (all of them, from managers that know no
+  dependencies: version 1 packs), as they always did.
 - **Group loads** (`RequestLoadWithDependencies`, `AssetGroupRequest`). A loading screen pins an asset's dependency closure
   (`GetDependencyClosure`, breadth first) at a priority: `Progress` (the share of the members' stored bytes that finished,
   never decreasing), `IsComplete`, `HasFailed` and `Cancel` (releases the pins and abandons the loads that have not
@@ -688,9 +698,8 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   `ReadStoredRange` reads part of an asset's stored form without loading it (packs decode only the blocks it covers).
 - **Statistics** (`GetStats`, `GetResidencyInfo`): resident bytes and budget per pool, queued loads per priority, loads
   and bytes in flight with their high-water mark, uploaded bytes and finalization milliseconds (last frame and maximum
-  of the last 120) with the staging budget, evictions and eviction checks, cancellations, staging releases and dependency
-  prefetches; per asset
-  its state, memory, latest request and pins.
+  of the last 120) with the staging budget, evictions and eviction checks, cancellations, staging releases, and dependency
+  prefetches started and dropped; per asset its state, memory, latest request and pins.
   The editor reports them through `asset.stats` and the `assets` section of `editor.status`.
 - **Measured** by the perf test `PerfGPU.Streaming` (`StrataTests/src/Perf/StreamingPerfTests.cpp`): it writes the
   stress project (`StrataTests/src/Perf/StressProject.h`: 16 textures of 2048² and one of 4096², 447.4 MB of RGBA8, one

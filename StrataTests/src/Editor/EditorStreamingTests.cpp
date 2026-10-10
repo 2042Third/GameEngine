@@ -96,6 +96,8 @@ TEST_SUITE("Editor.Streaming")
 		CHECK(totals["evictionChecks"] == stats.EvictionChecks);
 		CHECK(totals["cancellations"] == stats.Cancellations);
 		CHECK(totals["stagingReleases"] == stats.StagingReleases);
+		CHECK(totals["prefetch"]["started"] == stats.DependencyPrefetches);
+		CHECK(totals["prefetch"]["dropped"] == stats.DependencyPrefetchesDropped);
 
 		// The list: by memory (the default) or by last use, limited.
 		const nlohmann::json listed = harness.Run("asset.stats", { { "assets", true } });

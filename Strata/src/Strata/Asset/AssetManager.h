@@ -61,8 +61,10 @@ namespace Strata
 		uint64_t Cancellations = 0;   // Loads abandoned before they finished (CancelLoad, or unloaded while loading)
 		uint64_t StagingReleases = 0; // Times the idle upload command list was recreated to return its staging memory
 
-		// Loads of dependencies started when the read of an asset that depends on them completed (see GetDependencies).
+		// Loads of dependencies started when the read of an asset that depends on them completed (see GetDependencies), and
+		// those dropped on arrival because what they hold no longer fitted in the budgets.
 		uint64_t DependencyPrefetches = 0;
+		uint64_t DependencyPrefetchesDropped = 0;
 	};
 
 	// The residency of one asset (AssetManagerBase::GetResidencyInfo).
@@ -310,10 +312,19 @@ namespace Strata
 		//
 		// When the read of a requested asset completes, the manager requests its direct dependencies at the same priority,
 		// behind direct requests (c_DependencyPrefetchScore), so that e.g. a material's textures load alongside the material
-		// instead of after it. Such prefetches respect the budgets: they are not requests, so they mark nothing as used (their
-		// arrivals make no room in the budgets and are the first to be evicted until something requests them), they do not
-		// chain (the dependencies of an asset that was only prefetched load once something requests it), and none start
-		// while a pool is over its budget. The streaming queue bounds them like any load (in-flight bytes and reads).
+		// instead of after it. Documents that place entities (scenes, prefabs, models) prefetch nothing: what their entities
+		// use is requested by whatever draws or plays it once it is needed (group loads take a whole closure, see
+		// RequestLoadWithDependencies). Prefetches stay within the budgets without evicting anything:
+		// - a dependency is prefetched only while its stored size fits in every pool with a budget beside what is resident,
+		//   reserved for arrivals, on its way (the stored bytes of every load queued or in flight, prefetches included, until
+		//   it is finalized) and a window of InFlightBytes kept free for the requests to come (stored sizes estimate what an
+		//   asset holds): tight budgets prefetch nothing;
+		// - an arrival nobody requested meanwhile is dropped, unfinalized, when what it holds does not fit beside what is
+		//   resident, reserved and still on its way (it would be uploaded only to be evicted); otherwise it is published
+		//   without making room, and is the first to be evicted until something requests it (a prefetch marks nothing as
+		//   used);
+		// - prefetches do not chain (the dependencies of an asset that was only prefetched load once something requests it);
+		// - the streaming queue bounds them like any load (in-flight bytes and reads).
 		std::vector<AssetHandle> GetDependencies(AssetHandle handle) const;
 		// The asset and everything it depends on, transitively: the asset, then breadth first, each once. Unknown handles are
 		// left out (an empty list for an unknown asset).
@@ -475,6 +486,15 @@ namespace Strata
 		void Unpin(AssetHandle handle, uint64_t registration);
 		// Records the frame's finalization statistics and recreates an idle upload command list (main thread).
 		void EndFrameUploads();
+
+		// Dependency prefetch (see GetDependencies); every function requires m_Mutex.
+		// Whether `bytes` more fit in every pool with a budget beside what is resident, reserved for arrivals, on its way
+		// (`pendingBytes`: the stored bytes of the loads queued or in flight) and a window of InFlightBytes.
+		bool FitsPrefetchLocked(uint64_t bytes, uint64_t pendingBytes) const;
+		// Before an arrival is finalized: drops it when nobody requested it since it was prefetched and what it holds does not
+		// fit in a pool's budget beside what is resident, reserved and still on its way (`pendingBytes`, the other loads queued
+		// or in flight): it is Unloaded again, unfinalized. Returns whether it was dropped.
+		bool DropUnfittingPrefetchLocked(AssetEntry& entry, const AssetMemoryUsage& incoming, uint64_t pendingBytes);
 	private:
 		mutable std::mutex m_Mutex;
 		std::unordered_map<AssetHandle, AssetEntry> m_Entries;
@@ -506,6 +526,7 @@ namespace Strata
 		uint64_t m_Cancellations = 0;
 		uint64_t m_StagingReleases = 0;
 		uint64_t m_DependencyPrefetches = 0;
+		uint64_t m_DependencyPrefetchesDropped = 0;
 		uint64_t m_FrameUploadedBytes = 0; // Since the last Update
 		float m_FrameFinalizeMs = 0.0f;
 		std::array<uint64_t, c_StatsWindowFrames> m_UploadedBytesHistory = {};

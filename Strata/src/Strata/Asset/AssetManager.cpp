@@ -66,6 +66,15 @@ namespace Strata
 		// The frames in flight of a graphics device created with the default specification.
 		constexpr uint32_t c_DefaultFramesInFlight = 2;
 
+		// Whether the read of an asset of this type prefetches what it references. Documents that place entities (scenes,
+		// prefabs, models) do not: what their entities use is requested by whatever draws or plays it, once it is needed.
+		// Prefetching a scene's meshes and materials (all of them, with the scene) raised the peak private memory of the stress
+		// sweep by 60 to 100 MB.
+		bool PrefetchesDependencies(AssetType type)
+		{
+			return type != AssetType::Scene && type != AssetType::Prefab && type != AssetType::Model;
+		}
+
 	}
 
 	void AssetLoaderRegistry::BeginRegistration()
@@ -717,6 +726,28 @@ namespace Strata
 				// Room first. GPU memory of what was evicted for it is released only once no frame in flight can use it; with a
 				// renderer and a budget, an arrival that allocates GPU memory waits for that, so the device never holds both.
 				const AssetMemoryUsage incoming = completion.LoadedAsset->GetFinalizedMemoryUsage();
+				// A prefetch nobody asked for since makes no room, and takes no room the loads still on their way will need: when
+				// it does not fit beside them, it goes unfinalized (it would be uploaded only to be evicted). The load leaves the
+				// flight like a discarded one.
+				if (!completion.RoomMade)
+				{
+					const AssetStreamingQueueStats queue = m_Queue.GetStats();
+					const uint64_t pendingBytes = queue.WaitingBytes + (queue.InFlightBytes - std::min(completion.InFlightBytes, queue.InFlightBytes));
+					bool dropped = false;
+					{
+						std::scoped_lock<std::mutex> lock(m_Mutex);
+						auto it = m_Entries.find(completion.Handle);
+						dropped = it != m_Entries.end() && it->second.Generation == completion.Generation
+							&& DropUnfittingPrefetchLocked(it->second, incoming, pendingBytes);
+					}
+					if (dropped)
+					{
+						processed++;
+						m_Queue.OnLoadFinished(completion.InFlightBytes);
+						completions.pop_front();
+						continue;
+					}
+				}
 				// Arrivals are finalized in order: the ones behind a waiting arrival wait for it. They make room at once, so
 				// that arrivals that need room in the same frame wait their releases out together instead of one after
 				// another, but only for as much GPU memory as a frame uploads (UploadBytesPerFrame): evicting far ahead of what
@@ -945,6 +976,7 @@ namespace Strata
 			stats.Cancellations = m_Cancellations;
 			stats.StagingReleases = m_StagingReleases;
 			stats.DependencyPrefetches = m_DependencyPrefetches;
+			stats.DependencyPrefetchesDropped = m_DependencyPrefetchesDropped;
 		}
 
 		const AssetStreamingQueueStats queue = m_Queue.GetStats();
@@ -1044,17 +1076,14 @@ namespace Strata
 		{
 			std::scoped_lock<std::mutex> lock(m_Mutex);
 			auto it = m_Entries.find(handle);
-			// Prefetches do not chain, and none start while a pool is over its budget: what they load would only evict what is
-			// in use, or be evicted itself before anything asks for it.
-			if (it == m_Entries.end() || it->second.PrefetchOnly)
+			// Prefetches do not chain: what an asset that was only prefetched references loads once something requests it.
+			if (it == m_Entries.end() || it->second.PrefetchOnly || !PrefetchesDependencies(it->second.Metadata.Type))
 				return;
-			for (AssetMemoryPool pool : c_AssetMemoryPools)
-			{
-				AssetMemoryUsage held = m_Resident;
-				held += m_Reserved;
-				if (GetPoolBytes(held, pool) > m_Budgets.GetPoolBudget(pool))
-					return;
-			}
+			// What is on its way already (requested loads, earlier prefetches) arrives first: prefetches take only the headroom
+			// the budgets have beside it, so they never evict anything in use. The queue's lock may be taken inside the
+			// manager's (never the other way round).
+			const AssetStreamingQueueStats queue = m_Queue.GetStats();
+			uint64_t pendingBytes = queue.WaitingBytes + queue.InFlightBytes;
 			for (AssetHandle dependency : it->second.Dependencies)
 			{
 				auto dependencyIt = m_Entries.find(dependency);
@@ -1064,6 +1093,10 @@ namespace Strata
 				// Not touched: a prefetch is no use, so it keeps nothing resident and makes no room (see GetDependencies).
 				if (entry.State == AssetState::Unloaded)
 				{
+					const uint64_t bytes = entry.Metadata.StoredSize > 0 ? entry.Metadata.StoredSize : AssetStreamingQueue::c_UnknownSizeBytes;
+					if (!FitsPrefetchLocked(bytes, pendingBytes))
+						continue;
+					pendingBytes += bytes;
 					entry.State = AssetState::Loading;
 					entry.Error.clear();
 					entry.PrefetchOnly = true;
@@ -1085,6 +1118,49 @@ namespace Strata
 		for (AssetHandle dependency : loading)
 			m_Queue.Raise(dependency, priority, c_DependencyPrefetchScore);
 		m_Queue.Pump();
+	}
+
+	bool AssetManagerBase::FitsPrefetchLocked(uint64_t bytes, uint64_t pendingBytes) const
+	{
+		// Room that requested loads cannot need: beside what is resident, reserved for arrivals and on its way, a whole window
+		// of loads in flight (InFlightBytes) stays free for the requests still to come. Tight budgets prefetch nothing: in the
+		// stress sweep (a 128 MB texture budget), prefetching textures into the room left beside what was on its way still
+		// raised the peak private memory by about 25 MB on average.
+		// The in-flight budget may be set to anything: the sum saturates.
+		const auto add = [](uint64_t a, uint64_t b) { return b > UINT64_MAX - a ? UINT64_MAX : a + b; };
+		for (AssetMemoryPool pool : c_AssetMemoryPools)
+		{
+			const uint64_t budget = m_Budgets.GetPoolBudget(pool);
+			if (budget == AssetResidencyBudgets::c_Unlimited)
+				continue;
+			const uint64_t held = add(add(add(GetPoolBytes(m_Resident, pool), GetPoolBytes(m_Reserved, pool)), pendingBytes), m_Budgets.InFlightBytes);
+			if (held > budget || bytes > budget - held)
+				return false;
+		}
+		return true;
+	}
+
+	bool AssetManagerBase::DropUnfittingPrefetchLocked(AssetEntry& entry, const AssetMemoryUsage& incoming, uint64_t pendingBytes)
+	{
+		if (!entry.PrefetchOnly || entry.State != AssetState::Loading)
+			return false;
+		bool fits = true;
+		for (AssetMemoryPool pool : c_AssetMemoryPools)
+		{
+			const uint64_t budget = m_Budgets.GetPoolBudget(pool);
+			const uint64_t bytes = GetPoolBytes(incoming, pool);
+			if (budget == AssetResidencyBudgets::c_Unlimited || bytes == 0)
+				continue;
+			const uint64_t held = GetPoolBytes(m_Resident, pool) + GetPoolBytes(m_Reserved, pool) + pendingBytes;
+			fits = fits && held <= budget && bytes <= budget - held;
+		}
+		if (fits)
+			return false;
+
+		entry.State = AssetState::Unloaded; // Prefetches start from Unloaded: there is no previous version to keep
+		entry.Generation = m_NextGeneration++;
+		m_DependencyPrefetchesDropped++;
+		return true;
 	}
 
 	AssetGroupRequest AssetManagerBase::RequestLoadWithDependencies(AssetHandle handle, AssetPriority priority)

@@ -17,11 +17,13 @@ namespace Strata
 		m_Waiting.emplace(key, request);
 		m_WaitingKeys.insert_or_assign(request.Handle, key);
 		m_WaitingPerPriority[static_cast<size_t>(request.Priority)]++;
+		m_WaitingBytes += request.Bytes;
 	}
 
 	void AssetStreamingQueue::EraseLocked(std::map<Key, AssetStreamingRequest>::iterator node)
 	{
 		m_WaitingPerPriority[static_cast<size_t>(node->second.Priority)]--;
+		m_WaitingBytes -= node->second.Bytes;
 		m_WaitingKeys.erase(node->second.Handle);
 		m_Waiting.erase(node);
 	}
@@ -185,6 +187,7 @@ namespace Strata
 		m_Waiting.clear();
 		m_WaitingKeys.clear();
 		m_WaitingPerPriority = {};
+		m_WaitingBytes = 0;
 	}
 
 	bool AssetStreamingQueue::HasWork() const
@@ -206,6 +209,7 @@ namespace Strata
 		stats.Queued = m_WaitingPerPriority;
 		stats.InFlightLoads = m_InFlightLoads;
 		stats.OutstandingReads = m_OutstandingReads;
+		stats.WaitingBytes = m_WaitingBytes;
 		stats.InFlightBytes = m_InFlightBytes;
 		stats.InFlightBytesHighWater = m_InFlightBytesHighWater;
 		stats.Dispatched = m_Dispatched;

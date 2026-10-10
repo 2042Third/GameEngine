@@ -120,12 +120,13 @@ namespace Strata::Tests
 			WaitForInFlightLoads();
 		}
 
-		// Registers a fake asset declaring `usage`, whose stored form takes `storedSize` bytes (0: unknown).
-		AssetHandle Add(uint64_t handle, const AssetMemoryUsage& usage, uint64_t storedSize = 0)
+		// Registers a fake asset declaring `usage`, whose stored form takes `storedSize` bytes (0: unknown). Assets registered
+		// with another type than c_FakeAssetType read like fake assets but fail to load (the type's real loader refuses them).
+		AssetHandle Add(uint64_t handle, const AssetMemoryUsage& usage, uint64_t storedSize = 0, AssetType type = c_FakeAssetType)
 		{
 			AssetMetadata metadata;
 			metadata.Handle = UUID(handle);
-			metadata.Type = c_FakeAssetType;
+			metadata.Type = type;
 			metadata.Path = "Fake/" + std::to_string(handle);
 			metadata.Name = metadata.Path;
 			metadata.StoredSize = storedSize;
