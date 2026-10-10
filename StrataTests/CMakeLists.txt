@@ -137,6 +137,10 @@ set(STRATA_PERF_GPU_ENVIRONMENT "STRATA_TEST_GPU_VALIDATION=0")
 if(TARGET StrataEditor)
 	list(APPEND STRATA_PERF_GPU_ENVIRONMENT "STRATA_TEST_EDITOR_PATH=$<TARGET_FILE:StrataEditor>")
 endif()
+# PerfGPU.Streaming runs the exported stress game with --perf-log.
+if(TARGET StrataRuntime)
+	list(APPEND STRATA_PERF_GPU_ENVIRONMENT "STRATA_TEST_RUNTIME_PATH=$<TARGET_FILE:StrataRuntime>")
+endif()
 add_test(NAME StrataTests.PerfGPU
 	COMMAND StrataTests --test-suite=PerfGPU.* --no-intro=true
 	CONFIGURATIONS Release Dist

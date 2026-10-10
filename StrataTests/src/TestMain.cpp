@@ -584,6 +584,22 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		return 0;
 	}
 
+	if (mode == "write-stress-project")
+	{
+		// <directory>: writes the streaming stress project (Perf/StressProject.h: 447 MB of textures, the World scene) into a
+		// new directory, to look at it in the editor (StrataEditor --project <directory>), e.g. with the Streaming panel.
+		if (argc != 3)
+			return 2;
+		std::string error;
+		const std::filesystem::path directory = Strata::FileSystem::FromUTF8(argv[2]);
+		if (!Strata::Tests::WriteStressProject(directory, Strata::Tests::StressProjectSpec(), error))
+		{
+			std::fprintf(stderr, "Cannot write the stress project: %s\n", error.c_str());
+			return 1;
+		}
+		std::printf("Wrote the stress project to '%s'\n", argv[2]);
+		return 0;
+	}
 	if (mode == "check-perf-log")
 	{
 		// <csv> <rows> [--nonzero <column>...]: succeeds if the file is a perf log of StrataRuntime --perf-log with exactly

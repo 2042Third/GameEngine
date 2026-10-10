@@ -685,7 +685,9 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   one, finalize no frame for more than 8 ms, show each camera stop complete within 60 frames at rest and fail no load;
   `StrataTests/Perf/Budgets.json` then judges the peak private bytes of the best run (the graphics driver's commit
   charge varies from run to run), the largest resident texture memory of any run and the finalization time of the
-  median run.
+  median run. Then it exports the stress game (a `.stgame` manifest next to the pack) and runs `StrataRuntime` in a window
+  for 600 frames from the world's overview camera with `--perf-log`: the log must have a row per frame, and no frame's
+  `Assets.Finalize` stage may exceed 8 ms.
   `GPU.Assets.Streaming` runs the same sweep on a small stress project under the validation layers.
 
 ## Scripting

@@ -3,10 +3,12 @@
 #include "Asset/AssetTestUtils.h"
 #include "Perf/PerfUtils.h"
 #include "Perf/StressProject.h"
+#include "Runtime/PerfLogReader.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Core/Platform.h"
 #include "Strata/Core/Process.h"
+#include "Strata/Project/GameManifest.h"
 #include "TestHelpers.h"
 
 #include <algorithm>
@@ -51,6 +53,21 @@ namespace
 	double ElapsedSeconds(std::chrono::steady_clock::time_point start)
 	{
 		return std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+	}
+
+	// Frames the exported stress game runs for its perf log: ten seconds at 60 frames per second, the initial load included.
+	constexpr uint32_t c_RuntimeFrames = 600;
+
+	// The StrataRuntime next to the test executable, or the one STRATA_TEST_RUNTIME_PATH names.
+	std::filesystem::path GetRuntimePath()
+	{
+		if (const std::optional<std::string> path = Platform::GetEnvVar("STRATA_TEST_RUNTIME_PATH"); path && !path->empty())
+			return FileSystem::FromUTF8(*path);
+#if defined(ST_PLATFORM_WINDOWS)
+		return Platform::GetExecutableDirectory() / "StrataRuntime.exe";
+#else
+		return Platform::GetExecutableDirectory() / "StrataRuntime";
+#endif
 	}
 
 	// Runs the sweep in a helper process (see RunStreamingSweepProcess) and returns its result.
@@ -154,6 +171,49 @@ TEST_SUITE("PerfGPU.Streaming")
 
 		// The process stays below 750 MB of private memory.
 		CHECK(bestPeakPrivateBytes <= c_MaxPeakPrivateBytes);
+
+		// The exported game, in a window, with its perf log: the runtime's own frames, from the world's overview camera,
+		// finalize within the same limit in every frame.
+		GameManifest manifest;
+		manifest.Name = "StrataStressWorld";
+		manifest.AssetPack = "Stress.stpak";
+		manifest.StartScene = project->WorldScene;
+		const std::filesystem::path manifestPath = directory / "Stress.stgame";
+		REQUIRE_MESSAGE(manifest.Save(manifestPath, &error), error);
+		const std::filesystem::path perfLog = directory / "RuntimePerfLog.csv";
+		ProcessSpecification runtime;
+		runtime.Executable = GetRuntimePath();
+		runtime.Arguments = { "--game", FileSystem::ToUTF8(manifestPath), "--windowed", "--frames", std::to_string(c_RuntimeFrames), "--asset-budget-mb",
+			std::to_string(c_TextureBudget / (1024 * 1024)), "--perf-log", FileSystem::ToUTF8(perfLog) };
+		const Process::RunResult run = Process::Run(runtime, std::chrono::minutes(5));
+		INFO("Runtime output:\n", run.Output);
+		REQUIRE_MESSAGE(run.Started, run.Error);
+		REQUIRE_FALSE(run.TimedOut);
+		REQUIRE(run.ExitCode == 0);
+		const std::optional<PerfLogTable> table = ReadPerfLog(perfLog, error);
+		REQUIRE_MESSAGE(table, error);
+		REQUIRE_MESSAGE(ValidatePerfLog(*table, c_RuntimeFrames, error), error); // One row per frame
+		const std::optional<size_t> finalizeColumn = table->FindColumn("Assets.Finalize");
+		const std::optional<size_t> uploadedColumn = table->FindColumn("UploadedMB");
+		REQUIRE(finalizeColumn);
+		REQUIRE(uploadedColumn);
+		double maxFinalizeStageMs = 0.0;
+		size_t slowestFrame = 0;
+		double uploadedMB = 0.0;
+		for (size_t row = 0; row < table->Rows.size(); row++)
+		{
+			const double finalizeMs = table->Rows[row][*finalizeColumn];
+			if (finalizeMs > maxFinalizeStageMs)
+			{
+				maxFinalizeStageMs = finalizeMs;
+				slowestFrame = row;
+			}
+			uploadedMB += table->Rows[row][*uploadedColumn];
+		}
+		MESSAGE("Exported stress game: ", table->Rows.size(), " frames logged, Assets.Finalize at most ", maxFinalizeStageMs, " ms (frame ", slowestFrame,
+			"), ", uploadedMB, " MB uploaded");
+		CHECK(uploadedMB > 0.0); // It streamed
+		CHECK(maxFinalizeStageMs <= c_MaxFinalizeMs);
 
 		Perf::CheckBudget("PerfGPU.Streaming.PeakPrivateMemory", static_cast<double>(bestPeakPrivateBytes) / c_MBDouble);
 		Perf::CheckBudget("PerfGPU.Streaming.MaxResidentTextures", static_cast<double>(maxResidentTextureBytes) / c_MBDouble);

@@ -131,11 +131,16 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   steps report. Time calls that take nanoseconds in batches (the clock's resolution is about 0.1 microseconds).
   A process's peak memory includes everything it did before, so a test that measures peak memory
   runs the measured work in a helper process (`--strata-test-helper=<mode>`, see `TestMain.cpp`): `PerfGPU.Streaming`
-  runs its camera sweep over the stress project (`src/Perf/StressProject.h`, also usable by other suites) that way,
+  runs its camera sweep over the stress project (`src/Perf/StressProject.h`, also usable by other suites;
+  `StrataTests --strata-test-helper=write-stress-project <new directory>` writes it to open in the editor) that way,
   three times. Every run must meet the acceptance limits; the budgets then judge peak private memory by the best run,
   because the graphics driver keeps commit charge of freed device memory for a while (on Windows device memory counts
   in private bytes), finalization time by the median run, which a spike from other work on the machine does not move,
-  and resident texture memory by the largest of any run.
+  and resident texture memory by the largest of any run. It then runs the exported stress game in `StrataRuntime`
+  (`STRATA_TEST_RUNTIME_PATH`, else next to the test executable) with `--perf-log` and checks the log: a row per frame and
+  no frame's `Assets.Finalize` stage over 8 ms. `Perf.FrameProfiler` measures the frame profiler's cost per frame and
+  `Perf.EditorPanels` (in `src/Editor/`) the Streaming panel with 10,000 assets and the Performance panel with a full ring
+  of frames, each drawn in the UI harness.
 - Suites whose names start with `EndToEnd` start the built `StrataEditor` and `StrataCLI` (paths in
   `STRATA_TEST_EDITOR_PATH`/`STRATA_TEST_CLI_PATH`, else next to the test executable) and run as the CTest
   `StrataEditor.Automation`, not in `StrataTests.Core`. They need no GPU (`--no-gpu`), use private session

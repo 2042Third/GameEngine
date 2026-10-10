@@ -63,6 +63,17 @@ module-foundation, ran as its own workstream):
   Project, Open Sample, About and "Connect an AI agent", the strata mark as window and executable icon, and the build's
   git commit in its version.
 
+**Wave 2** (workstreams merge as they land):
+
+- `streaming-observatory`: an always-on frame profiler (`FrameProfiler`, `ST_PROFILE_STAGE`: Input, Assets.Update,
+  Assets.Finalize, Scene.Scripts, Scene.Physics, Scene.Audio, Scene.Transforms, Render.Extract, Render.Submit, Editor.UI,
+  Present; self times, a 600-frame ring and job-thread busy percentages, about 0.6 microseconds per frame of 16 stages),
+  `editor.perf`, `StrataRuntime --perf-log` (a CSV row per frame, which `PerfGPU.Streaming` reads from the exported stress
+  game: no frame finalizes for more than 8 ms, at most 4.6 ms measured), the Streaming panel (budget bars by pressure, loads,
+  uploads, a 10,000-asset table at about 0.22 ms per frame) and the Performance panel (a stacked stage timeline, 0.035 ms
+  per frame), status pills that open them, `editor.showPanel`, and the viewport's streaming and LOD debug views
+  (`SceneRenderOptions::EntityTints`, `Overlay/StatusTint.frag`, `LODSelection`; `viewport.capture {debugView}`).
+
 Open items and deferrals later waves own:
 
 - The allowlist's 14 exceptions: the application shell's service wiring (7, `engine-modules`), asset finalization on
