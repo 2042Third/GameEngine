@@ -63,6 +63,26 @@ module-foundation, ran as its own workstream):
   Project, Open Sample, About and "Connect an AI agent", the strata mark as window and executable icon, and the build's
   git commit in its version.
 
+**Wave 2 (in progress).** Workstreams land in the order perf-gates, physics-at-scale, texture-cook-v2, pack-v2,
+render-scene, streaming-observatory, editor-authoring:
+
+- `render-scene`: a persistent render scene per scene (proxies in structure-of-arrays form, updated only where mesh
+  renderers were signaled or transforms changed) in a loose-grid spatial index that the view, the prefetch sphere and
+  the shadow cascades query; draws gathered in parallel chunks with a deterministic merge and a radix sort; instancing
+  without the material in the batch key (10,000 unique materials: 1 opaque draw); 64-byte instances in a buffer that
+  persists, with only changed instances, materials and draw-list ranges uploaded (a still frame uploads nothing);
+  asset requests that follow visibility (High above 5% of the screen, Low within the prefetch distance, each asset
+  looked up once per frame and evictable once out of view); gizmos culled to the view with icons for small lights and
+  cameras and colliders of the selection only; the outline list cached; requests that move an asset in the residency's
+  recency orders without a search. `SceneRenderer::Render` costs about 0.9 ms for 100,000 cubes and 2.9 ms for
+  300,000; edit frames of grids under one root take 1.6 and 4.4 ms (the scaling audit measured 42.9 and 113.6 ms with
+  the cubes as roots, which also pays the Hierarchy panel's cost of about 14 ms per 100,000 roots), 10,000 point
+  lights 1.6 ms and 10,000 unique materials 1.9 ms (19.4 and 7.47 in the audit); `GetVisibleMaterials` publishes what
+  mip streaming needs. Proxies of meshes that never loaded are bounded by a unit box around their entity until
+  `pack-v2`'s recorded bounds are wired into `RenderScene::ResolveUnloadedBounds` (the integrator's step), and editor
+  frames of scenes with 100,000 or more root entities are still dominated by the Hierarchy panel drawing every root
+  (`editor-authoring`).
+
 Open items and deferrals later waves own:
 
 - The allowlist's 14 exceptions: the application shell's service wiring (7, `engine-modules`), asset finalization on

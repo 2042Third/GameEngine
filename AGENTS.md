@@ -122,13 +122,16 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   belong in ordinary unit tests with deterministic counters, which run everywhere. CI's hosted runners skip the label
   `perf` because budgets hold for the reference machine only: run `-L perf` there before merging a change that can
   affect performance. Scale tests build their scenes with `Perf/SceneGenerators.h` (flat roots, a nested tree with ten
-  children per entity, entities running the API test module's trivial script) under
-  `Perf::ScopedApplicationJobSystem` (the job system as applications start it): `Perf.Scene` (transform updates and
+  children per entity, entities running the API test module's trivial script, grids of cubes and of point lights)
+  under `Perf::ScopedApplicationJobSystem` (the job system as applications start it): `Perf.Scene` (transform updates and
   idle frames up to a million entities), `Perf.Scripting` (100,000 and 300,000 trivial scripts, frames that spawn and
-  destroy entities, scripts destroying 10,000 of 100,000 sibling roots in one frame) and, in `src/Editor/`,
-  `Perf.Editor` (entity commands among 100,000 roots) and `PerfGPU.Editor`, which runs the real `StrataEditor`
-  maximized on generated 100,000- and 1,000,000-entity scenes and checks the median CPU frame time its `editor.wait`
-  steps report. Time calls that take nanoseconds in batches (the clock's resolution is about 0.1 microseconds).
+  destroy entities, scripts destroying 10,000 of 100,000 sibling roots in one frame), `PerfGPU.Renderer`
+  (`SceneRenderer::Render` alone on 100,000 and 300,000 cubes and on 10,000 cubes with unique materials) and, in
+  `src/Editor/`, `Perf.Editor` (entity commands among 100,000 roots), `PerfGPU.Editor`, which runs the real
+  `StrataEditor` maximized on generated 100,000- and 1,000,000-entity scenes and checks the median CPU frame time its
+  `editor.wait` steps report, and the editor frames of `PerfGPU.Renderer` (cube grids of 100,000, also with all of them
+  selected, and of 300,000, a narrow view of 50,000, 10,000 point lights, 10,000 unique materials). Time calls that take
+  nanoseconds in batches (the clock's resolution is about 0.1 microseconds).
   A process's peak memory includes everything it did before, so a test that measures peak memory
   runs the measured work in a helper process (`--strata-test-helper=<mode>`, see `TestMain.cpp`): `PerfGPU.Streaming`
   runs its camera sweep over the stress project (`src/Perf/StressProject.h`, also usable by other suites) that way,
