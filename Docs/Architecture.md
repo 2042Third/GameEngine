@@ -199,13 +199,20 @@ One frame (`Application::Run` and `RunFrame`):
     frame counted; MaxFrames (--frames) closes the application; FramePacer::WaitForNextFrame
 ```
 
+`Application::GetLastFrameWorkTime` is the CPU time of the last frame: steps 1 to 7 without the wait inside
+`GraphicsDevice::BeginFrame` (for the GPU's earlier frames and the swapchain image), so it measures what a frame costs
+whatever the display's refresh rate. The editor records it every frame (`EditorContext::RecordFrameTime`) and
+`editor.wait` reports statistics of the frames it waited through (`frameTimes`), which is how command scripts and the
+`PerfGPU.Editor` perf test measure editor frames.
+
 The timestep is the wall time since the previous frame, clamped to `ApplicationSpecification::MaxTimestep` (0.25 s).
 Windowed applications are paced by vsync when it is on (`WindowSpecification::VSync`); headless ones by
 `MaxFrameRate`, which the editor and the runtime set to 60 (`StrataEditor/src/EditorApplication.cpp`,
 `RuntimeApplication.cpp`). An exception escaping a frame (e.g. a lost device inside NVRHI) is logged and ends the
 loop.
 
-The editor's layer update (`EditorLayer::OnUpdate`, `StrataEditor/src/EditorLayer.cpp`):
+The editor's layer update (`EditorLayer::OnUpdate`, `StrataEditor/src/EditorLayer.cpp`), after recording the previous
+frame's work time:
 
 1. `EditorContext::Update`: `ScriptEngine::Update` (hot reload), `ScriptBuilder::Update` (build processes),
    `EditorAssetManager::Update` (file changes, finished imports, load finalization), then either the running scene's

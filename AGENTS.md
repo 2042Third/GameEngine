@@ -528,7 +528,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   can take frames (e.g. Build Scripts) run commands through the runner; UI actions that finish at once
   call the registry through `RunEditorCommand`, which rejects pending results.
   Poll functions own their data (copy parameters, never capture them by reference). `editor.wait
-  {frames}` returns after that many frames, e.g. to let a playing scene run.
+  {frames}` returns after that many frames, e.g. to let a playing scene run, with `frameTimes` (count, median, mean, 95th
+  percentile and maximum in milliseconds) of the frames that ran entirely while it waited: the CPU time of each frame
+  (`Application::GetLastFrameWorkTime`, recorded by `EditorLayer` through `EditorContext::RecordFrameTime`), without the
+  waits for the GPU and the display, so command scripts can `expect` frame budgets.
 - `StrataEditor --commands script.json` runs a JSON array of `{"command", "parameters", "expect"}` at startup
   (`EditorCommandScript`); a pending command holds the script until it completes. `expect` (optional) maps JSON
   pointers into the command's result to conditions, e.g. `{"/values/Translation/1": {"min": 1.6, "max": 1.7}}` or

@@ -75,6 +75,10 @@ namespace Strata
 		// Frames that ran (minimized or skipped frames are not counted).
 		uint64_t GetFrameCount() const { return m_FrameCount; }
 		Timestep GetLastTimestep() const { return m_LastTimestep; }
+		// CPU time of the last frame that ran, in seconds: its layers' updates, the UI and recording and submitting its GPU
+		// work. Waiting for the GPU and the display (GraphicsDevice::BeginFrame and EndFrame), back buffer captures and the
+		// frame-rate cap are not counted, so it measures what a frame costs whatever the display's refresh rate.
+		double GetLastFrameWorkTime() const { return m_LastFrameWorkTime; }
 
 		// Queues a function to run on the main thread at the start of the next frame. Thread-safe.
 		void SubmitToMainThread(std::function<void()> function);
@@ -109,6 +113,7 @@ namespace Strata
 		bool m_Minimized = false;
 		double m_LastFrameTime = 0.0;
 		Timestep m_LastTimestep;
+		double m_LastFrameWorkTime = 0.0;
 		uint64_t m_FrameCount = 0;
 
 		std::mutex m_MainThreadQueueMutex;

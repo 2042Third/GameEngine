@@ -123,13 +123,17 @@ namespace Strata
 
 	void EditorLayer::OnUpdate(Timestep timestep)
 	{
+		Application& application = Application::Get();
+		// The previous frame has ended: its time is known (editor.wait reports the frames it waited for).
+		if (application.GetFrameCount() > 0)
+			m_Context.RecordFrameTime(application.GetLastFrameWorkTime() * 1000.0);
+
 		m_Context.Update(timestep);
 		m_CommandRunner.Update(m_Context);
 		m_Automation.Update();
 		UpdateCommandScript();
 		UpdateWindowTitle();
 
-		Application& application = Application::Get();
 		// editor.quit answered already (it checked for unsaved changes); this frame is the last one.
 		if (m_Context.IsQuitRequested() && application.IsRunning())
 		{

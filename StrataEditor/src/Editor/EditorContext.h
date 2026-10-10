@@ -216,6 +216,18 @@ namespace Strata
 		void RequestQuit() { m_QuitRequested = true; }
 		bool IsQuitRequested() const { return m_QuitRequested; }
 
+		// The CPU time of the editor's frames (Application::GetLastFrameWorkTime), recorded once per frame for the frame
+		// before by the layer that runs the editor; editor.wait reports statistics of the frames it waited for. Contexts no
+		// application drives (tests) record nothing.
+		void RecordFrameTime(double milliseconds)
+		{
+			m_LastFrameTime = milliseconds;
+			m_RecordedFrameCount++;
+		}
+		uint64_t GetRecordedFrameCount() const { return m_RecordedFrameCount; }
+		// The latest recorded frame's time in milliseconds (0 before the first).
+		double GetLastFrameTime() const { return m_LastFrameTime; }
+
 		// Extra sections of editor.status, reported by the parts of the editor that own the information (e.g.
 		// "automation" by EditorAutomation). Providers run on the main thread whenever editor.status runs. A null provider
 		// removes the section; a section named like one of the built-in ones is not reported.
@@ -274,6 +286,8 @@ namespace Strata
 		EditorViewport m_Viewport;
 
 		bool m_QuitRequested = false;
+		uint64_t m_RecordedFrameCount = 0;
+		double m_LastFrameTime = 0.0;
 		std::map<std::string, StatusProvider> m_StatusProviders;
 	};
 

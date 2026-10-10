@@ -208,6 +208,8 @@ namespace Strata
 
 	bool Application::RunFrame(Timestep timestep)
 	{
+		// The frame's work time (GetLastFrameWorkTime) leaves out the graphics device's waits and back buffer captures.
+		const double frameStart = Time::GetTime();
 		ExecuteMainThreadQueue();
 
 		Input::BeginFrame();
@@ -229,16 +231,24 @@ namespace Strata
 			return false;
 		}
 
-		// A device that cannot render this frame (e.g. swapchain mid-resize) skips the whole frame.
-		if (m_GraphicsDevice && !m_GraphicsDevice->BeginFrame())
+		// Waits for the GPU to finish an earlier frame and for the display to hand out an image.
+		double deviceWaitTime = 0.0;
+		if (m_GraphicsDevice)
 		{
-			if (m_GraphicsDevice->IsDeviceLost())
+			const double waitStart = Time::GetTime();
+			const bool began = m_GraphicsDevice->BeginFrame();
+			deviceWaitTime = Time::GetTime() - waitStart;
+			// A device that cannot render this frame (e.g. swapchain mid-resize) skips the whole frame.
+			if (!began)
 			{
-				Close();
+				if (m_GraphicsDevice->IsDeviceLost())
+				{
+					Close();
+					return false;
+				}
+				std::this_thread::sleep_for(std::chrono::milliseconds(16));
 				return false;
 			}
-			std::this_thread::sleep_for(std::chrono::milliseconds(16));
-			return false;
 		}
 		Renderer::BeginFrame();
 
@@ -250,6 +260,7 @@ namespace Strata
 			AudioEngine::AdvanceNullDevice(timestep);
 		AudioEngine::Update();
 		RenderImGui();
+		m_LastFrameWorkTime = Time::GetTime() - frameStart - deviceWaitTime;
 
 		if (m_GraphicsDevice)
 		{

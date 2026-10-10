@@ -143,6 +143,11 @@ with `prefab.instantiate`.
 `component.get` / `log.read` -> `play.stop`. `play.pause {"paused": true}` and `play.step {"frames": n}` advance
 a paused scene by fixed steps. `play.simulate` runs physics only.
 
+**Frame cost**: every `editor.wait` result of a running editor has `frameTimes` (`count`, `medianMs`, `meanMs`, `p95Ms`,
+`maxMs`): the CPU time of the frames that ran entirely during the wait, without the waits for the GPU and vsync (measure
+with a window, not `--no-gpu`, to include rendering). A command script can gate it:
+`{"command": "editor.wait", "parameters": {"frames": 120}, "expect": {"/frameTimes/medianMs": {"max": 5}}}`.
+
 **Play it (simulated input)**: while the game runs (`play.start`), the `input.*` commands press keys and buttons the way a
 player would; scripts see them through `Input::IsKeyDown/IsKeyPressed/IsKeyReleased` (also while the viewport has no focus).
 
