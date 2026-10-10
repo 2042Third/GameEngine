@@ -10,9 +10,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <condition_variable>
 #include <cstddef>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <new>
 #include <numeric>
@@ -35,12 +37,6 @@ namespace Strata
 		// Block sizes a pack may declare.
 		constexpr uint32_t c_MinBlockSize = 4096;
 		constexpr uint32_t c_MaxBlockSize = 16u << 20;
-		// Reads of consecutive blocks are merged up to this many stored bytes (few system calls for many blocks, without
-		// holding the stored form of a large entry in memory at once). A read's blocks decode on the job system's workers,
-		// in parallel once there are c_ParallelDecodeBlocks of them, while the next read runs: one reading I/O thread alone
-		// would decompress far slower than the file is read.
-		constexpr uint64_t c_ReadChunkBytes = 8ull << 20;
-		constexpr uint32_t c_ParallelDecodeBlocks = 4;
 
 		bool IsKnownAssetType(uint16_t value)
 		{
@@ -60,16 +56,99 @@ namespace Strata
 		};
 
 		thread_local DecompressionContext t_Decompression;
-		// The stored bytes of the blocks being read, and a block decoded for a range that covers only part of it.
-		thread_local std::vector<uint8_t> t_StoredScratch[2]; // One being read while the other decodes
-		thread_local bool t_StoredScratchInUse = false; // A read of this thread uses them (reads nest, see ReadBlocks)
-		thread_local std::vector<uint8_t> t_BlockScratch;
 
 		std::string DescribeEntry(const AssetPackEntry& entry)
 		{
 			return entry.Metadata.Path.empty() ? entry.Metadata.Name : entry.Metadata.Path;
 		}
 
+	}
+
+	// The blocks of one read on their way to its destination. The reading thread publishes them chunk by chunk as it reads
+	// them, and it and the worker jobs it asks for help claim them one at a time and decode them. The jobs keep this alive:
+	// one that starts after the read returned finds nothing left to claim, and the read returns only once every block it
+	// published is finished, so the pointers below are never used after it.
+	struct AssetPack::BlockDecoding
+	{
+		const AssetPack* Pack = nullptr;
+		const AssetPackEntry* Entry = nullptr;
+		uint64_t Offset = 0;
+		uint64_t End = 0;
+		uint8_t* Destination = nullptr;      // Holds the entry's bytes from Offset to End
+		uint32_t FirstBlock = 0;             // The entry's block the read starts at
+		std::vector<const uint8_t*> Stored;  // Per block of the read: its stored bytes, once published
+		std::vector<uint32_t> ChunkOf;       // Per block of the read: the chunk it was read with
+		std::unique_ptr<std::atomic<uint32_t>[]> ChunkUnfinished; // Per chunk: blocks not finished yet
+
+		std::atomic<uint32_t> Published = 0; // Blocks of the read (from its first on) whose stored bytes are in memory
+		std::atomic<uint32_t> Next = 0;      // The next block to claim
+		std::atomic<uint32_t> Finished = 0;  // Blocks decoded, or skipped after a failure
+		std::atomic<uint32_t> Helpers = 0;   // Jobs asked for that have not ended
+		std::atomic<bool> Failed = false;
+
+		std::mutex Mutex;
+		std::condition_variable BlockFinished;
+		std::string Error; // The first failure's reason (Mutex); empty when allocating it failed
+
+		// Claims the next published block and decodes it (or skips it after a failure). False when none is left to claim.
+		// Never throws.
+		bool DecodeNext();
+		// Claims and decodes blocks until `done` holds, waiting for the blocks others claimed when none is left.
+		template<typename Predicate>
+		void HelpUntil(const Predicate& done);
+	};
+
+	bool AssetPack::BlockDecoding::DecodeNext()
+	{
+		uint32_t index = Next.load(std::memory_order_relaxed);
+		do
+		{
+			if (index >= Published.load(std::memory_order_acquire))
+				return false;
+		} while (!Next.compare_exchange_weak(index, index + 1, std::memory_order_acq_rel, std::memory_order_relaxed));
+
+		// After a failure the read fails: the rest is only counted.
+		if (!Failed.load(std::memory_order_acquire))
+		{
+			try
+			{
+				const uint32_t block = FirstBlock + index;
+				const AssetPackBlock& stored = Pack->m_Blocks[Entry->FirstBlock + block];
+				std::string error;
+				if (!Pack->DecodeBlock(*Entry, block, std::span<const uint8_t>(Stored[index], stored.StoredSize), Offset, End, Destination, error))
+				{
+					std::scoped_lock<std::mutex> lock(Mutex);
+					if (!Failed.exchange(true))
+						Error = std::move(error);
+				}
+			}
+			catch (const std::exception&)
+			{
+				// Out of memory for an error message: the read reports that.
+				Failed = true;
+			}
+		}
+		ChunkUnfinished[ChunkOf[index]].fetch_sub(1, std::memory_order_acq_rel);
+		Finished.fetch_add(1, std::memory_order_acq_rel);
+		{
+			// Taken so that a waiter between its check and its wait cannot miss the notification.
+			std::scoped_lock<std::mutex> lock(Mutex);
+		}
+		BlockFinished.notify_all();
+		return true;
+	}
+
+	template<typename Predicate>
+	void AssetPack::BlockDecoding::HelpUntil(const Predicate& done)
+	{
+		while (!done())
+		{
+			if (DecodeNext())
+				continue;
+			// Nothing left to claim: what remains is being decoded by the helpers that claimed it.
+			std::unique_lock<std::mutex> lock(Mutex);
+			BlockFinished.wait(lock, done);
+		}
 	}
 
 	std::optional<uint64_t> AssetPackFormat::GetTablesSize(const Header& header)
@@ -125,6 +204,7 @@ namespace Strata
 		};
 
 		Scope<AssetPack> pack(new AssetPack());
+		pack->m_FreeBuffers.reserve(c_MaxFreeReadBuffers);
 		pack->m_Path = path;
 		pack->m_Reader = FileReader::Open(path);
 		if (!pack->m_Reader)
@@ -422,145 +502,151 @@ namespace Strata
 			return false;
 		}
 
-		// The reads: runs of consecutive blocks of up to c_ReadChunkBytes stored bytes (at least one block each).
-		struct Chunk
-		{
-			uint32_t First = 0; // Block index within the entry
-			uint32_t Count = 0;
-			uint64_t Bytes = 0;
-		};
-		const uint64_t end = offset + size;
-		const uint32_t last = static_cast<uint32_t>((end - 1) / m_BlockSize);
-		std::vector<Chunk> chunks;
-		std::mutex errorMutex;
-		std::string firstError; // Of the decoding; the first failure is the one reported
-		auto report = [&](std::string error)
-		{
-			std::scoped_lock<std::mutex> lock(errorMutex);
-			if (firstError.empty())
-				firstError = std::move(error);
-		};
-		auto failed = [&]()
-		{
-			std::scoped_lock<std::mutex> lock(errorMutex);
-			return !firstError.empty();
-		};
-
-		// A chunk's blocks write disjoint parts of the destination: they are decoded in parallel on the workers once there
-		// are enough of them.
-		auto decodeChunk = [&](const Chunk& chunk, const std::vector<uint8_t>& stored)
-		{
-			try
-			{
-				std::vector<uint64_t> starts(chunk.Count);
-				for (uint32_t index = 1; index < chunk.Count; index++)
-					starts[index] = starts[index - 1] + m_Blocks[entry.FirstBlock + chunk.First + index - 1].StoredSize;
-				auto decode = [&](uint32_t index)
-				{
-					const AssetPackBlock& block = m_Blocks[entry.FirstBlock + chunk.First + index];
-					std::string error;
-					if (!DecodeBlock(entry, chunk.First + index, std::span<const uint8_t>(stored.data() + starts[index], block.StoredSize), offset, end,
-						destination, error))
-						report(std::move(error));
-				};
-				if (chunk.Count < c_ParallelDecodeBlocks)
-				{
-					for (uint32_t index = 0; index < chunk.Count; index++)
-						decode(index);
-				}
-				else
-				{
-					JobSystem::ParallelFor(chunk.Count, 1, [&](uint32_t begin, uint32_t endIndex)
-					{
-						for (uint32_t index = begin; index < endIndex; index++)
-							decode(index);
-					});
-				}
-			}
-			catch (const std::bad_alloc&)
-			{
-				report("out of memory");
-			}
-		};
-
-		// A thread that waits for decoding helps run queued jobs, which may read packs too: only the outermost read of a
-		// thread uses its buffers.
-		std::vector<uint8_t> ownBuffers[2];
-		std::vector<uint8_t>* buffers = ownBuffers;
-		struct ClaimBuffers
-		{
-			bool Claimed = false;
-
-			~ClaimBuffers()
-			{
-				if (Claimed)
-					t_StoredScratchInUse = false;
-			}
-		} claimBuffers;
-		if (!t_StoredScratchInUse)
-		{
-			t_StoredScratchInUse = true;
-			claimBuffers.Claimed = true;
-			buffers = t_StoredScratch;
-		}
-
-		// A chunk decodes while the next one is read, in the other buffer. The decoding job uses this function's locals, so
-		// every way out of it waits for the job first.
-		JobHandle decoding;
-		struct WaitForDecoding
-		{
-			JobHandle& Handle;
-			~WaitForDecoding() { Handle.Wait(); }
-		} waitForDecoding { decoding };
+		// Allocating fails only when memory runs out; blocks published by then are finished before the read returns.
 		try
 		{
-			for (uint32_t block = static_cast<uint32_t>(offset / m_BlockSize); block <= last;)
+			// The reads: runs of consecutive blocks of up to c_ReadChunkBytes stored bytes (at least one block each).
+			struct Chunk
+			{
+				uint32_t First = 0; // Block index within the read
+				uint32_t Count = 0;
+				uint64_t Bytes = 0;
+			};
+			const uint64_t end = offset + size;
+			const uint32_t firstBlock = static_cast<uint32_t>(offset / m_BlockSize);
+			const uint32_t blockCount = static_cast<uint32_t>((end - 1) / m_BlockSize) - firstBlock + 1;
+			std::vector<Chunk> chunks;
+			Ref<BlockDecoding> work = CreateRef<BlockDecoding>();
+			work->Pack = this;
+			work->Entry = &entry;
+			work->Offset = offset;
+			work->End = end;
+			work->Destination = destination;
+			work->FirstBlock = firstBlock;
+			work->Stored.resize(blockCount);
+			work->ChunkOf.resize(blockCount);
+			for (uint32_t block = 0; block < blockCount;)
 			{
 				Chunk chunk { block, 0, 0 };
-				while (block <= last && (chunk.Count == 0 || chunk.Bytes + m_Blocks[entry.FirstBlock + block].StoredSize <= c_ReadChunkBytes))
+				while (block < blockCount && (chunk.Count == 0 || chunk.Bytes + m_Blocks[entry.FirstBlock + firstBlock + block].StoredSize <= c_ReadChunkBytes))
 				{
-					chunk.Bytes += m_Blocks[entry.FirstBlock + block].StoredSize;
+					chunk.Bytes += m_Blocks[entry.FirstBlock + firstBlock + block].StoredSize;
+					work->ChunkOf[block] = static_cast<uint32_t>(chunks.size());
 					chunk.Count++;
 					block++;
 				}
 				chunks.push_back(chunk);
 			}
+			work->ChunkUnfinished = std::make_unique<std::atomic<uint32_t>[]>(chunks.size());
+			for (size_t index = 0; index < chunks.size(); index++)
+				work->ChunkUnfinished[index].store(chunks[index].Count, std::memory_order_relaxed);
+
+			// Each chunk is read into a buffer the pack lends (up to c_ReadBuffersPerRead chunks ahead of the decoding). Every way
+			// out finishes the blocks published so far first: their decoders use the buffers and the destination.
+			const size_t bufferCount = std::min(chunks.size(), c_ReadBuffersPerRead);
+			std::vector<std::vector<uint8_t>> buffers;
+			std::vector<size_t> lentCapacities;
+			buffers.reserve(bufferCount);
+			lentCapacities.reserve(bufferCount);
+			struct FinishReading
+			{
+				const AssetPack& Pack;
+				BlockDecoding& Work;
+				std::vector<std::vector<uint8_t>>& Buffers;
+				std::vector<size_t>& LentCapacities;
+
+				~FinishReading()
+				{
+					Work.HelpUntil([this]() { return Work.Finished.load(std::memory_order_acquire) == Work.Published.load(std::memory_order_acquire); });
+					for (size_t index = 0; index < Buffers.size(); index++)
+						Pack.ReturnBuffer(std::move(Buffers[index]), LentCapacities[index]);
+				}
+			} finishReading { *this, *work, buffers, lentCapacities };
+			for (size_t index = 0; index < bufferCount; index++)
+			{
+				buffers.push_back(TakeBuffer());
+				lentCapacities.push_back(buffers.back().capacity());
+			}
+
+			// Blocks decode on the workers while the next chunk is read. The thread that reads never runs other jobs while it
+			// waits (a texture's decoding would stall the reads behind it): it decodes blocks of its own read, or sleeps until
+			// the blocks its helpers claimed are finished.
+			const uint32_t maxHelpers = JobSystem::GetWorkerThreadCount();
+			auto requestHelpers = [&work, maxHelpers]()
+			{
+				const uint32_t published = work->Published.load(std::memory_order_acquire);
+				const uint32_t next = work->Next.load(std::memory_order_acquire);
+				const uint32_t wanted = std::min(published > next ? published - next : 0u, maxHelpers);
+				while (work->Helpers.load(std::memory_order_acquire) < wanted)
+				{
+					work->Helpers.fetch_add(1, std::memory_order_acq_rel);
+					Ref<BlockDecoding> shared = work;
+					try
+					{
+						JobSystem::Submit([shared]()
+						{
+							while (shared->DecodeNext())
+							{
+							}
+							shared->Helpers.fetch_sub(1, std::memory_order_acq_rel);
+						}, JobPriority::High);
+					}
+					catch (const std::exception&)
+					{
+						// No helper (out of memory for the job): the reading thread decodes the blocks itself.
+						work->Helpers.fetch_sub(1, std::memory_order_acq_rel);
+						return;
+					}
+				}
+			};
 
 			for (size_t index = 0; index < chunks.size(); index++)
 			{
 				const Chunk& chunk = chunks[index];
-				std::vector<uint8_t>& stored = buffers[index % 2];
-				stored.resize(static_cast<size_t>(chunk.Bytes));
-				if (!m_Reader->ReadAt(m_Blocks[entry.FirstBlock + chunk.First].Offset, stored))
+				// The buffer's previous chunk must be decoded before it is read over.
+				if (index >= bufferCount)
+				{
+					const size_t previous = index - bufferCount;
+					work->HelpUntil([&work, previous]() { return work->ChunkUnfinished[previous].load(std::memory_order_acquire) == 0; });
+				}
+				if (work->Failed.load(std::memory_order_acquire))
+					break;
+
+				std::vector<uint8_t>& buffer = buffers[index % bufferCount];
+				buffer.resize(static_cast<size_t>(chunk.Bytes));
+				if (!m_Reader->ReadAt(m_Blocks[entry.FirstBlock + firstBlock + chunk.First].Offset, buffer))
 				{
 					outError = "the file could not be read";
+					work->Failed = true;
 					return false;
 				}
 				m_FileBytesRead.fetch_add(chunk.Bytes, std::memory_order_relaxed);
 
-				// The previous chunk is decoded, so its buffer can take the chunk after this one.
-				decoding.Wait();
-				decoding = {};
-				if (failed())
-					break;
-				if (index + 1 == chunks.size())
-					decodeChunk(chunk, stored); // Nothing left to read meanwhile
-				else
-					decoding = JobSystem::Submit([&decodeChunk, &chunk, &stored]() { decodeChunk(chunk, stored); }, JobPriority::High); // The read waits for it
+				uint64_t position = 0;
+				for (uint32_t block = chunk.First; block < chunk.First + chunk.Count; block++)
+				{
+					work->Stored[block] = buffer.data() + position;
+					position += m_Blocks[entry.FirstBlock + firstBlock + block].StoredSize;
+				}
+				work->Published.store(chunk.First + chunk.Count, std::memory_order_release);
+				requestHelpers();
 			}
+
+			// The last chunks: decoded here and by the helpers.
+			work->HelpUntil([&work]() { return work->Finished.load(std::memory_order_acquire) == work->Published.load(std::memory_order_acquire); });
+			if (work->Failed.load(std::memory_order_acquire))
+			{
+				std::scoped_lock<std::mutex> lock(work->Mutex);
+				outError = work->Error.empty() ? std::string("out of memory") : work->Error;
+				return false;
+			}
+			return true;
 		}
-		catch (const std::exception& exception)
+		catch (const std::exception&)
 		{
-			outError = fmt::format("reading failed: {}", exception.what());
+			outError = "out of memory";
 			return false;
 		}
-		decoding.Wait();
-		if (failed())
-		{
-			outError = firstError;
-			return false;
-		}
-		return true;
 	}
 
 	bool AssetPack::DecodeBlock(const AssetPackEntry& entry, uint32_t block, std::span<const uint8_t> stored, uint64_t offset, uint64_t end, uint8_t* destination,
@@ -573,42 +659,43 @@ namespace Strata
 			return false;
 		}
 
-		// The part of the block the range covers: decoded in place when it is the whole block.
+		// The part of the block the range covers: decoded in place when it is the whole block, else through a block of its
+		// own (only the first and the last block of a range can be partial; stored blocks are copied from directly).
 		const uint64_t blockStart = static_cast<uint64_t>(block) * m_BlockSize;
 		const uint64_t copyStart = std::max(blockStart, offset);
 		const uint64_t copyEnd = std::min(blockStart + current.Size, end);
 		const bool whole = copyStart == blockStart && copyEnd == blockStart + current.Size;
-		uint8_t* decoded = nullptr;
-		if (whole)
-		{
-			decoded = destination + (blockStart - offset);
-		}
-		else
-		{
-			try
-			{
-				t_BlockScratch.resize(current.Size);
-			}
-			catch (const std::bad_alloc&)
-			{
-				outError = "out of memory";
-				return false;
-			}
-			decoded = t_BlockScratch.data();
-		}
-
+		std::vector<uint8_t> partial;
+		const uint8_t* decoded = nullptr;
 		if (current.Codec == AssetPackCodec::Stored)
 		{
-			std::memcpy(decoded, stored.data(), current.Size);
+			decoded = stored.data();
+			if (whole)
+				std::memcpy(destination + (blockStart - offset), stored.data(), current.Size);
 		}
 		else
 		{
+			uint8_t* output = destination + (blockStart - offset);
+			if (!whole)
+			{
+				try
+				{
+					partial.resize(current.Size);
+				}
+				catch (const std::bad_alloc&)
+				{
+					outError = "out of memory";
+					return false;
+				}
+				output = partial.data();
+			}
+			decoded = output;
 			if (!t_Decompression.Context)
 			{
 				outError = "out of memory (decompression context)";
 				return false;
 			}
-			const size_t result = ZSTD_decompressDCtx(t_Decompression.Context, decoded, current.Size, stored.data(), stored.size());
+			const size_t result = ZSTD_decompressDCtx(t_Decompression.Context, output, current.Size, stored.data(), stored.size());
 			if (ZSTD_isError(result) || result != current.Size)
 			{
 				outError = fmt::format("block {} is corrupt ({})", entry.FirstBlock + block, ZSTD_isError(result) ? ZSTD_getErrorName(result) : "wrong decompressed size");
@@ -624,6 +711,31 @@ namespace Strata
 		return true;
 	}
 
+	std::vector<uint8_t> AssetPack::TakeBuffer() const
+	{
+		std::scoped_lock<std::mutex> lock(m_BufferMutex);
+		if (m_FreeBuffers.empty())
+			return {};
+		std::vector<uint8_t> buffer = std::move(m_FreeBuffers.back());
+		m_FreeBuffers.pop_back();
+		return buffer;
+	}
+
+	void AssetPack::ReturnBuffer(std::vector<uint8_t> buffer, size_t lentCapacity) const
+	{
+		std::scoped_lock<std::mutex> lock(m_BufferMutex);
+		// Room for c_MaxFreeReadBuffers was reserved when the pack opened, so keeping one never allocates.
+		if (m_FreeBuffers.size() < c_MaxFreeReadBuffers)
+		{
+			m_BufferBytes += buffer.capacity() - lentCapacity;
+			m_FreeBuffers.push_back(std::move(buffer));
+		}
+		else
+		{
+			m_BufferBytes -= lentCapacity; // Freed with `buffer`
+		}
+	}
+
 	AssetPackStats AssetPack::GetStats() const
 	{
 		AssetPackStats stats;
@@ -632,6 +744,8 @@ namespace Strata
 		stats.BlocksDecoded = m_BlocksDecoded.load(std::memory_order_relaxed);
 		stats.BlocksDecompressed = m_BlocksDecompressed.load(std::memory_order_relaxed);
 		stats.BytesDecompressed = m_BytesDecompressed.load(std::memory_order_relaxed);
+		std::scoped_lock<std::mutex> lock(m_BufferMutex);
+		stats.BufferBytes = m_BufferBytes;
 		return stats;
 	}
 

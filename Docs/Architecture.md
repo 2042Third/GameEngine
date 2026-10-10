@@ -460,9 +460,9 @@ rules"). Other threads:
   `ParallelFor` work such as asset decoding, the initial imports of a project scan, Jolt's jobs, mesh shape cooking,
   world transform propagation and PNG encoding of captures.
 - **I/O threads** (`JobSystem::Init`; 2 by default): `JobSystem::SubmitIO` work such as asset reads (dispatched by the
-  streaming queue, at most two per I/O thread at a time; a pack read hands its blocks to the workers to decompress while
-  it reads on), background re-imports, saving captures and game exports (the pack writer compresses blocks with
-  `ParallelFor` on the workers).
+  streaming queue, at most two per I/O thread at a time; a pack read hands its blocks to worker jobs to decompress while
+  it reads on, and never runs other jobs while it waits for them), background re-imports, saving captures and game
+  exports (the pack writer compresses blocks with `ParallelFor` on the workers).
 - **File watchers** (`FileWatcher::Start`): one thread per watcher, for the project's asset directory
   (`EditorAssetManager`) and for the script module's directory (`ScriptEngine`, hot reload). Each rescans its tree when
   the platform reports a change (`FileChangeNotifier`: change notifications on Windows,
@@ -572,12 +572,16 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   claims more bytes than its blocks decode to), and the names they copy, counted per entry, at most
   `AssetPackFormat::GetMaxNameBytes` (16 bytes per byte of the file, plus 1 MiB; the writer refuses more); running out
   of memory fails with an error as well. `ReadRange` reads and checks only the blocks a range covers,
-  through one `FileReader` per pack that every I/O thread shares: consecutive blocks merge into reads of up to 8 MiB,
-  and while one read's blocks are checked and decompressed on the workers (in parallel from four blocks on, one
-  decompression context per thread) the next read runs, so a large entry streams close to the speed of an uncompressed
-  one. A thread that waits for decoding helps run queued jobs, which may read packs too; only the outermost read of a
-  thread uses its reusable buffers. zstd is built with its BMI2 bit readers (MSVC: `/arch:AVX2`, which Jolt requires
-  already). The writer runs on any thread, compresses each batch of 64 blocks in parallel on the workers, reports
+  through one `FileReader` per pack that every I/O thread shares: consecutive blocks merge into chunks of up to 2 MiB
+  (`c_ReadChunkBytes`; 8 MiB chunks streamed the stress world 10% slower), read up to three ahead into buffers the pack
+  lends and keeps for the next reads (at most eight, freed with the pack, `AssetPackStats::BufferBytes`). Each chunk's
+  blocks are published as soon as it is read, and the reading thread and worker jobs it asks for help (high priority,
+  as many as there are blocks waiting, up to the worker count) claim them one at a time and check and decompress them
+  (one decompression context per thread), so a large entry streams close to the speed of an uncompressed one. The
+  reading thread never waits in the job system, which would make it run unrelated queued jobs (a texture's decoding, a
+  mesh cook) while the reads behind it stall: it decodes blocks of its own read, or sleeps until the blocks its helpers
+  claimed are done (`AssetPack::BlockDecoding`). zstd is built with its BMI2 bit readers (MSVC: `/arch:AVX2`, which Jolt
+  requires already). The writer runs on any thread, compresses each batch of 64 blocks in parallel on the workers, reports
   progress and stops when cancelled; zstd's compressor is linked only by it, so shipped games contain the decompressor
   only.
 - **Pack layout** (`EditorAssetManager::PlanAssetPack`, then `WriteAssetPack`; `BuildAssetPack` does both, blocking). Packs

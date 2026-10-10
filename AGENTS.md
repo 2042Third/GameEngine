@@ -129,8 +129,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   `Perf.Editor` (entity commands among 100,000 roots) and `PerfGPU.Editor`, which runs the real `StrataEditor`
   maximized on generated 100,000- and 1,000,000-entity scenes and checks the median CPU frame time its `editor.wait`
   steps report, and exports the stress project (every frame meanwhile at most 50 ms); `PerfGPU.Pack` compares pack
-  versions 2 and 1 of the stress project (size, opening, streaming the world). Time calls that take nanoseconds in
-  batches (the clock's resolution is about 0.1 microseconds).
+  versions 2 and 1 of the stress project (size, opening, streaming the world; the acceptance limit of 110% is the budget
+  of a `ratio` metric, version 2's time to version 1's, so it is checked like any budget). Time calls that take
+  nanoseconds in batches (the clock's resolution is about 0.1 microseconds).
   A process's peak memory includes everything it did before, so a test that measures peak memory
   runs the measured work in a helper process (`--strata-test-helper=<mode>`, see `TestMain.cpp`): `PerfGPU.Streaming`
   runs its camera sweep over the stress project (`src/Perf/StressProject.h`, also usable by other suites) that way,

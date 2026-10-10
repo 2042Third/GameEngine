@@ -184,12 +184,14 @@ TEST_SUITE("Perf.Harness")
 		const char* validFile = R"({
 			"_comment": ["About this file"],
 			"A": { "Measured": 3.21, "Budget": 4.815, "Unit": "ms" },
-			"B": { "Measured": 0, "Budget": 0, "Unit": "count" }
+			"B": { "Measured": 0, "Budget": 0, "Unit": "count" },
+			"C": { "Measured": 1.02, "Budget": 1.1, "Unit": "ratio" }
 		})";
 		std::string error;
 		const std::optional<Tests::Perf::BudgetTable> table = Tests::Perf::ParseBudgets(validFile, error);
 		REQUIRE_MESSAGE(table.has_value(), error);
-		REQUIRE(table->size() == 2);
+		REQUIRE(table->size() == 3);
+		CHECK(table->at("C").Unit == "ratio");
 		CHECK(table->at("A").Measured == 3.21);
 		CHECK(table->at("A").Budget == 4.815);
 		CHECK(table->at("A").Unit == "ms");

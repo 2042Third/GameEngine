@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstring>
 #include <map>
@@ -468,13 +469,17 @@ TEST_SUITE("Asset.Pack")
 		CHECK(failures == 0);
 		CHECK(reads == 8000);
 		CHECK(FileReader::GetOpenCount() - opensBefore == 1); // One handle, opened by Open, for every read
+		// The read buffers belong to the pack, which keeps a few of them (counted) for the next reads; no thread keeps any.
+		const uint64_t bufferBytes = pack->GetStats().BufferBytes;
+		CHECK(bufferBytes > 0);
+		CHECK(bufferBytes <= AssetPack::c_MaxFreeReadBuffers * 2 * AssetPack::c_ReadChunkBytes);
 	}
 
-	TEST_CASE("Reads in jobs return their own bytes when a waiting read runs another one")
+	TEST_CASE("Reads in jobs return their own bytes while other reads run")
 	{
-		// Two workers and more jobs than they run at once, each reading an entry that takes two file reads: a read waiting
-		// for the decoding of its first part helps run queued jobs, so reads of other entries run nested on its thread, and
-		// must not share its buffers.
+		// Two workers and more jobs than they run at once, each reading an entry that takes several file reads: the reads run
+		// on the workers they would ask for help and borrow the pack's buffers at the same time, and each must get its own
+		// bytes.
 		ScopedJobSystem jobs(2, 2);
 		std::vector<PackSource> sources;
 		for (uint32_t index = 0; index < 6; index++)
@@ -514,6 +519,66 @@ TEST_SUITE("Asset.Pack")
 		JobSystem::WaitAll(handles);
 		CHECK_MESSAGE(failures.empty(), failures.size(), " reads failed, the first: ", failures.empty() ? std::string() : failures[0]);
 		CHECK(pack->GetStats().Reads == sources.size() + c_Reads);
+	}
+
+	TEST_CASE("Reads never run other jobs while they wait for their blocks")
+	{
+		// A read hands blocks to worker jobs and waits for them. Waiting in the job system would make the reading thread run
+		// whatever else is queued (a texture's decoding, a mesh cook) while the reads behind it stall: it decodes blocks of
+		// its own read, or sleeps until the blocks its helpers claimed are done.
+		ScopedJobSystem jobs(2, 2);
+		std::vector<PackSource> sources;
+		sources.push_back(MakeSource(0x5100, MakeContent(24u << 20, ContentKind::Mixed, 51)));
+		AssetPackWriteOptions options;
+		options.CompressionLevel = 1; // The level does not matter here; the lowest keeps a Debug run short
+		const std::filesystem::path path = WritePack(CreateTemporaryDirectory("PackForeignJobs") / "Game.stpak", sources, options);
+		std::string error;
+		Scope<AssetPack> pack = AssetPack::Open(path, &error);
+		REQUIRE_MESSAGE(pack, error);
+
+		// Other work keeps the workers' queue full while the reads run; each job notes the thread that ran it.
+		const std::thread::id reader = std::this_thread::get_id();
+		std::atomic<bool> stop = false;
+		std::atomic<uint32_t> submitted = 0;
+		std::atomic<uint32_t> foreignJobs = 0;
+		std::atomic<uint32_t> foreignJobsOnReader = 0;
+		std::thread feeder([&]()
+		{
+			while (!stop)
+			{
+				if (JobSystem::GetPendingJobCount() < 64)
+				{
+					submitted++;
+					JobSystem::Submit([&]()
+					{
+						if (std::this_thread::get_id() == reader)
+							foreignJobsOnReader++;
+						const auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(200);
+						while (std::chrono::steady_clock::now() < until)
+						{
+						}
+						foreignJobs++;
+					});
+				}
+				else
+				{
+					std::this_thread::yield();
+				}
+			}
+		});
+		std::vector<uint8_t> data;
+		for (int read = 0; read < 6; read++)
+		{
+			CHECK_MESSAGE(pack->ReadData(pack->GetEntries()[0], data, &error), error);
+			CHECK(data == sources[0].Data);
+		}
+		stop = true;
+		feeder.join();
+		// The jobs use this test's locals: they all end before it does.
+		while (foreignJobs < submitted)
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		CHECK(foreignJobs > 0);
+		CHECK(foreignJobsOnReader == 0);
 	}
 
 	TEST_CASE("A version 1 pack written by the retained writer reads like version 2")

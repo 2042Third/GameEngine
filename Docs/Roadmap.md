@@ -71,8 +71,9 @@ module-foundation, ran as its own workstream):
   within the budgets and group loads (`RequestLoadWithDependencies`), packs ordered by first use with optional pruning
   (`Export.AlwaysInclude`), patch packs, and an export that runs on an I/O thread behind the Export dialog. On the
   stress project (Release): the pack is 0.74 of version 1 (349.6 MB against 472.7 MB, before textures are
-  block-compressed), opens in 0.06 ms, streams the world in 1.00 to 1.18 times the time of version 1 (measured on a
-  loaded machine; the target is 1.1), and exports in 1.5 s with every editor frame meanwhile under 34 ms. The pack size
+  block-compressed), opens in 0.06 ms, streams the world in 1.02 to 1.06 times the time of version 1 (the budget
+  `PerfGPU.Pack.StreamStressWorldRatio` holds it at 1.1), and exports in 1.5 s with every editor frame meanwhile under
+  34 ms. The pack size
   with block-compressed textures (target 140 MB) is recorded by whichever of `texture-cook-v2` and `pack-v2` merges
   second.
 

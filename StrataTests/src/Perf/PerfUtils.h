@@ -46,7 +46,7 @@ namespace Strata::Tests::Perf
 
 	// The most a budget may exceed the reference measurement.
 	constexpr double c_BudgetHeadroom = 1.5;
-	constexpr std::string_view c_BudgetUnits[] = { "ms", "us", "MB", "count" };
+	constexpr std::string_view c_BudgetUnits[] = { "ms", "us", "MB", "count", "ratio" };
 
 	// Statistics of samples in milliseconds, in any order. The median of an even number of samples is the mean of the
 	// two middle ones. No samples give a measurement of zero iterations.

@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -58,6 +59,7 @@ namespace Strata
 		uint64_t BlocksDecoded = 0;    // Blocks checked and decoded (stored or decompressed)
 		uint64_t BlocksDecompressed = 0;
 		uint64_t BytesDecompressed = 0;
+		uint64_t BufferBytes = 0;      // Read buffers the pack holds for reuse, lent to reads or free (freed with the pack)
 	};
 
 	// Asset pack (".stpak"): every asset of a game in its stored form, in one file the runtime streams from by byte range.
@@ -91,6 +93,13 @@ namespace Strata
 		static constexpr uint32_t c_Version = 2;
 		static constexpr uint32_t c_BlockSize = 256 * 1024;
 		static constexpr uint64_t c_EntryAlignment = 4096;
+		// Reads merge consecutive blocks into chunks of up to this many stored bytes (at least one block): few system calls
+		// for many blocks, yet small enough to still be in the processor's cache when their blocks decode (8 MiB chunks
+		// streamed the stress world 10% slower). A read reads up to c_ReadBuffersPerRead chunks ahead of the decoding, into
+		// buffers the pack lends and keeps for the next reads (at most c_MaxFreeReadBuffers of them; GetStats().BufferBytes).
+		static constexpr uint64_t c_ReadChunkBytes = 2ull << 20;
+		static constexpr size_t c_ReadBuffersPerRead = 3;
+		static constexpr size_t c_MaxFreeReadBuffers = 8;
 
 		// Reads and validates the header and the tables. The file stays open (one handle, shared by every read) until the
 		// pack is destroyed.
@@ -117,13 +126,21 @@ namespace Strata
 	private:
 		AssetPack() = default;
 
+		struct BlockDecoding;
+
 		// Open without the handling of allocation failures.
 		static Scope<AssetPack> Load(const std::filesystem::path& path, std::string* outError);
+		// Reads the blocks that cover the range in chunks of consecutive blocks, which the reading thread and worker jobs it
+		// asks for help decode while it reads on. The reading thread only ever decodes blocks of its own read while it waits.
 		bool ReadBlocks(const AssetPackEntry& entry, uint64_t offset, uint64_t size, uint8_t* destination, std::string& outError) const;
 		// Checks and decodes one block of an entry (its index within the entry) into the part of `destination` (which holds
 		// the entry's bytes from `offset` to `end`) it covers. Any thread.
 		bool DecodeBlock(const AssetPackEntry& entry, uint32_t block, std::span<const uint8_t> stored, uint64_t offset, uint64_t end, uint8_t* destination,
 			std::string& outError) const;
+		// Read buffers: lent to reads and kept for the next ones (a few; GetStats().BufferBytes). ReturnBuffer takes the
+		// capacity the buffer had when it was lent.
+		std::vector<uint8_t> TakeBuffer() const;
+		void ReturnBuffer(std::vector<uint8_t> buffer, size_t lentCapacity) const;
 	private:
 		std::filesystem::path m_Path;
 		Scope<FileReader> m_Reader;
@@ -138,6 +155,10 @@ namespace Strata
 		mutable std::atomic<uint64_t> m_BlocksDecoded = 0;
 		mutable std::atomic<uint64_t> m_BlocksDecompressed = 0;
 		mutable std::atomic<uint64_t> m_BytesDecompressed = 0;
+
+		mutable std::mutex m_BufferMutex;
+		mutable std::vector<std::vector<uint8_t>> m_FreeBuffers;
+		mutable uint64_t m_BufferBytes = 0; // Capacity of the buffers lent and free (m_BufferMutex)
 	};
 
 	// The binary layout of version 2 packs, shared by the reader and AssetPackWriter.

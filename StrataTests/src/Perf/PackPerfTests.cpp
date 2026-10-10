@@ -27,12 +27,12 @@ namespace
 {
 
 	constexpr double c_MiB = 1024.0 * 1024.0;
-	// The acceptance criteria of pack version 2.
+	// The acceptance criteria of pack version 2 (streaming takes at most 110% of version 1's time: the budget of
+	// PerfGPU.Pack.StreamStressWorldRatio).
 	constexpr double c_MaxSizeRatio = 0.8;
 	constexpr double c_MaxOpenMs = 5.0;
-	constexpr double c_MaxStreamingRatio = 1.1;
-	// Streams of each version, alternating, so that the machine's other work hits both alike; the median counts.
-	constexpr uint32_t c_StreamingRuns = 3;
+	// Streams of each version, alternating, so that the machine's other work hits both alike; the medians count.
+	constexpr uint32_t c_StreamingRuns = 5;
 
 	template<typename T>
 	T Median(std::vector<T> values)
@@ -117,14 +117,15 @@ TEST_SUITE("PerfGPU.Pack")
 		CHECK(ratio <= c_MaxSizeRatio);
 		Perf::CheckBudget("PerfGPU.Pack.StressPackSize", static_cast<double>(sizeV2) / c_MiB);
 
-		// Opening reads the header and the tables, nothing of the data.
+		// Opening reads the header and the tables, nothing of the data. It takes tens of microseconds, mostly opening the
+		// file, so a scheduling hiccup of the machine moves even the median: the budget judges the fastest of the opens.
 		const Perf::Measurement open = Perf::Measure("Open the stress pack", 3, 30, [&]()
 		{
 			const Scope<AssetPack> pack = AssetPack::Open(packV2, &error);
 			REQUIRE(pack);
 		});
 		CHECK(open.MedianMs <= c_MaxOpenMs);
-		Perf::CheckBudget("PerfGPU.Pack.OpenStressPack", open.MedianMs);
+		Perf::CheckBudget("PerfGPU.Pack.OpenStressPack", open.MinMs);
 
 		// Streaming the whole world, decompressing and checking every block, against reading raw version 1 entries.
 		std::vector<AssetHandle> world;
@@ -146,7 +147,7 @@ TEST_SUITE("PerfGPU.Pack")
 		const double medianV1 = Median(streamV1);
 		const double medianV2 = Median(streamV2);
 		MESSAGE("Streaming the world: version 1 ", medianV1, " ms, version 2 ", medianV2, " ms (median of ", c_StreamingRuns, ")");
-		CHECK(medianV2 <= medianV1 * c_MaxStreamingRatio);
+		Perf::CheckBudget("PerfGPU.Pack.StreamStressWorldRatio", medianV2 / medianV1);
 		Perf::CheckBudget("PerfGPU.Pack.StreamStressWorld", medianV2);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
