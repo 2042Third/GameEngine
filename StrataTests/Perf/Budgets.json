@@ -1,0 +1,15 @@
+{
+	"_comment": [
+		"Budgets of the perf tests (StrataTests/src/Perf, suites Perf.* and PerfGPU.*; AGENTS.md, 'Testing').",
+		"Every metric a test checks (Perf::CheckBudget) or records (Perf::Record) needs an entry, or the test fails:",
+		"  \"<Suite>.<Metric>\": { \"Measured\": <number>, \"Budget\": <number>, \"Unit\": <unit> }",
+		"with a unit of \"ms\", \"us\", \"MB\" or \"count\". Lower is better: a test fails when it measures more than",
+		"Budget (express rates as cost per item). Measured is the metric on the reference machine (Intel Core i7-13700K,",
+		"NVIDIA GeForce RTX 5090, Windows 11, Release build, ctest --preset windows-release -L perf on a quiet machine);",
+		"Budget is at most 1.5 times Measured (round down).",
+		"Ratchet: budgets only go down. A change that makes a metric cheaper measures it again and lowers Measured and",
+		"Budget in the same commit; a metric over its budget is a regression to fix, never a reason to raise the budget.",
+		"A commit that adds or lowers a budget states the measured values in its message."
+	],
+	"Perf.Harness.Sort200k": { "Measured": 10.0, "Budget": 15.0, "Unit": "ms" }
+}

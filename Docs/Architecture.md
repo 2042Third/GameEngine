@@ -53,6 +53,11 @@ Each target is defined in the `CMakeLists.txt` of its directory; script modules 
 | `StrataTests` | executable | doctest suites; builds the test script modules as dependencies (`StrataTests/`). |
 | script modules | `MODULE` libraries | Game code: the tests' modules and every game project's `Scripts/`. |
 
+CTest runs the `StrataTests` suites in groups selected by suite name (`StrataTests/CMakeLists.txt`; the groups and
+labels are listed in AGENTS.md, "Testing"). The perf lab is one of them: suites `Perf.*` and `PerfGPU.*`
+(`StrataTests/src/Perf/`) measure metrics against the budgets in `StrataTests/Perf/Budgets.json`, in Release and Dist
+only, and write `<build>/PerfResults/<config>.json`.
+
 What may depend on what:
 
 - `Strata` knows nothing about the editor, the runtime executable, the CLI or the tests. It links `StrataScriptCore`

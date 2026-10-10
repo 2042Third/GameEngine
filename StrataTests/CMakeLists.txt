@@ -1,7 +1,8 @@
 # Strata automated tests (doctest).
 #
 # Test suites whose names start with "GPU" need a Vulkan-capable device; they are registered as a
-# separate CTest test labelled "gpu" so machines without a GPU can run `ctest -LE gpu`.
+# separate CTest test labelled "gpu" so machines without a GPU can run `ctest -LE gpu`. Suites named "Perf.*" and
+# "PerfGPU.*" are the perf tests (label "perf", Release and Dist only).
 
 # Small shared library used by the DynamicLibrary tests.
 add_library(StrataTestLibrary SHARED "${CMAKE_CURRENT_SOURCE_DIR}/TestLibrary/TestLibrary.cpp")
@@ -67,6 +68,9 @@ if(NOT TARGET StrataEditorCore)
 	list(REMOVE_ITEM STRATA_TEST_SOURCES ${STRATA_EDITOR_TEST_SOURCES})
 endif()
 
+# The perf tests (src/Perf, see AGENTS.md "Testing") write their results here, one file per configuration.
+set(STRATA_PERF_RESULTS_DIR "${CMAKE_BINARY_DIR}/PerfResults")
+
 add_executable(StrataTests ${STRATA_TEST_SOURCES})
 strata_configure_target(StrataTests)
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${STRATA_TEST_SOURCES})
@@ -84,7 +88,8 @@ target_compile_definitions(StrataTests PRIVATE
 	"STRATA_TEST_LIBRARY_NAME=\"$<TARGET_FILE_NAME:StrataTestLibrary>\""
 	"STRATA_TEST_SCRIPT_DEPENDENCY=\"$<TARGET_FILE:StrataTestScriptDependency>\""
 	"STRATA_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\""
-	"STRATA_FEATURE_TEST_DIR=\"${STRATA_FEATURE_TEST_DIR}\"")
+	"STRATA_FEATURE_TEST_DIR=\"${STRATA_FEATURE_TEST_DIR}\""
+	"STRATA_PERF_RESULTS_FILE=\"${STRATA_PERF_RESULTS_DIR}/$<CONFIG>.json\"")
 foreach(module IN LISTS STRATA_TEST_SCRIPT_MODULES)
 	string(REPLACE "StrataTestScripts" "" moduleKind "${module}")
 	string(TOUPPER "${moduleKind}" moduleKind)
@@ -106,8 +111,33 @@ endif()
 set(STRATA_FEATURE_TEST_SUITES "FeatureTest,Editor.FeatureTest")
 
 add_test(NAME StrataTests.Core
-	COMMAND StrataTests "--test-suite-exclude=GPU*,EndToEnd*,Package*,${STRATA_FEATURE_TEST_SUITES}" --no-intro=true
+	COMMAND StrataTests "--test-suite-exclude=GPU*,EndToEnd*,Package*,Perf.*,PerfGPU.*,${STRATA_FEATURE_TEST_SUITES}" --no-intro=true
 	WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
+
+# Perf tests: suites Perf.* (CPU) and PerfGPU.* (GPU) measure metrics against the budgets in Perf/Budgets.json, so they
+# exist only in optimized configurations. They run serially (other tests running beside them would skew the numbers) and
+# write PerfResults/<config>.json, which the clean step removes first so that a run's file holds that run's results.
+add_test(NAME StrataTests.PerfResults.Clean
+	COMMAND "${CMAKE_COMMAND}" -E rm -f "${STRATA_PERF_RESULTS_DIR}/$<CONFIG>.json"
+	CONFIGURATIONS Release Dist)
+set_tests_properties(StrataTests.PerfResults.Clean PROPERTIES LABELS "perf" FIXTURES_SETUP StrataPerfResults)
+
+add_test(NAME StrataTests.Perf
+	COMMAND StrataTests --test-suite=Perf.* --no-intro=true
+	CONFIGURATIONS Release Dist
+	WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
+set_tests_properties(StrataTests.Perf PROPERTIES LABELS "perf" RUN_SERIAL TRUE FIXTURES_REQUIRED StrataPerfResults)
+
+# The GPU suites measure on a device without validation layers, which would multiply the CPU cost of every GPU call.
+add_test(NAME StrataTests.PerfGPU
+	COMMAND StrataTests --test-suite=PerfGPU.* --no-intro=true
+	CONFIGURATIONS Release Dist
+	WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
+set_tests_properties(StrataTests.PerfGPU PROPERTIES
+	LABELS "perf;gpu"
+	RUN_SERIAL TRUE
+	FIXTURES_REQUIRED StrataPerfResults
+	ENVIRONMENT "STRATA_TEST_GPU_VALIDATION=0")
 
 # Suites whose names start with "Package" build script modules with the real toolchain (CMake and the compiler).
 add_test(NAME StrataTests.Package

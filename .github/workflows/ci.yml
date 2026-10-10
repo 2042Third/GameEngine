@@ -62,7 +62,9 @@ jobs:
           if [ "$RUNNER_OS" != "Windows" ]; then keepGoing=(-- -k 0); fi
           cmake --build --preset ${{ matrix.preset }}-release --parallel "${keepGoing[@]}" 2>&1 | tee build.log
 
-      # Hosted runners have no GPU: suites that need one carry the "gpu" label.
+      # Hosted runners have no GPU: suites that need one carry the "gpu" label. Perf budgets (label "perf") hold for the
+      # reference machine (StrataTests/Perf/Budgets.json); shared runners of other speeds would fail or pass them at
+      # random, so the perf gate runs on the reference machine (AGENTS.md, "Testing").
       - name: Test (Release)
         shell: bash
         env:
@@ -75,7 +77,7 @@ jobs:
             ulimit -v 10000000 # KiB of address space per process
             ulimit -f 2097152  # KiB per file
           fi
-          ctest --preset ${{ matrix.preset }}-release -LE gpu --output-on-failure --timeout 900 2>&1 | tee test.log
+          ctest --preset ${{ matrix.preset }}-release -LE "gpu|perf" --output-on-failure --timeout 900 2>&1 | tee test.log
 
       # Job logs need repository admin rights to download; annotations are public, so failures are readable from the
       # checks API and the pull request UI.

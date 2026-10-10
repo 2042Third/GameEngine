@@ -10,8 +10,9 @@ namespace Strata::Tests
 
 	// Access to the headless graphics device and renderer shared by all GPU tests of a run. Like an application, the
 	// test process creates its Vulkan device once: tearing instances down and up again for every test is not a usage
-	// pattern of the engine, and some drivers and overlay layers handle that churn poorly. Validation is always
-	// enabled; tests check GetNewErrorCount() at the end.
+	// pattern of the engine, and some drivers and overlay layers handle that churn poorly. Validation is enabled (tests
+	// check GetNewErrorCount() at the end) unless the environment variable STRATA_TEST_GPU_VALIDATION is "0", which the
+	// perf tests' CTest sets (StrataTests.PerfGPU).
 	class GPUContext
 	{
 	public:

@@ -29,14 +29,17 @@ cmake --build --preset windows-debug --target StrataTests   # just the tests
 $env:VK_ADD_LAYER_PATH = "<repo>\build\_tools\Vulkan-ValidationLayers\build\layers\Release"   # optional, enables validation
 ctest --preset windows-debug                  # all CTest tests
 ctest --preset windows-debug -LE gpu          # machines without a GPU
+ctest --preset windows-release -L perf        # perf tests against their budgets (Release/Dist only, reference machine)
 build\windows\bin\Debug\StrataTests.exe --test-suite="Asset.*"        # one module (doctest filters)
 build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard test names
 ```
 
 - doctest filters split on commas. A test name containing a comma must be matched with `?`/`*`, e.g.
   `--test-case="Hierarchy?*"`.
-- CTest runs: `StrataTests.Core` (everything but the GPU, EndToEnd, `Package*` and feature test suites),
-  `StrataTests.GPU` (label `gpu`), `StrataEditor.Smoke` (the real editor with
+- CTest runs: `StrataTests.Core` (everything but the GPU, EndToEnd, `Package*`, perf and feature test suites),
+  `StrataTests.GPU` (label `gpu`), the perf tests `StrataTests.Perf` and `StrataTests.PerfGPU` (suites `Perf.*`
+  and `PerfGPU.*`, label `perf`, Release and Dist only, after `StrataTests.PerfResults.Clean`; budgets and the
+  ratchet rule in AGENTS.md, "Testing"), `StrataEditor.Smoke` (the real editor with
   `StrataTests/Editor/SmokeCommands.json.in`, configured into the build tree, label `gpu`; it captures the viewport to
   `SmokeViewport.png`/`SmokeSceneCamera.png` in `build/<preset>/StrataTests/SmokeCaptures/`, checked by
   `StrataEditor.SmokeCaptureCheck`), the editor script checks (`StrataEditor.FailingScript`, `WaitingScript`,

@@ -1,5 +1,10 @@
 #include "Renderer/GPUTestUtils.h"
 
+#include "Strata/Core/Platform.h"
+
+#include <optional>
+#include <string>
+
 namespace Strata::Tests
 {
 
@@ -29,7 +34,10 @@ namespace Strata::Tests
 			GraphicsDeviceSpecification specification;
 			specification.ApplicationName = "StrataTests";
 			specification.Headless = true;
-			specification.EnableValidation = true;
+			// Validation layers multiply the CPU cost of every GPU call, so the perf tests measure without them: their
+			// CTest (StrataTests.PerfGPU) sets STRATA_TEST_GPU_VALIDATION=0. Everything else validates.
+			const std::optional<std::string> validation = Platform::GetEnvVar("STRATA_TEST_GPU_VALIDATION");
+			specification.EnableValidation = !validation || *validation != "0";
 			shared.Device = GraphicsDevice::Create(specification);
 			if (shared.Device && !Renderer::Init(*shared.Device))
 				shared.Device.reset();
