@@ -503,8 +503,17 @@ namespace Strata
 		float right = max.x - button;
 		if (IsPrefabRoot(registry, row.Handle))
 		{
-			const std::string tooltip = "An instance of " + GetAssetName(registry.get<PrefabInstanceComponent>(row.Handle).Prefab);
-			RowButton("##Prefab", Icons::Package, colors.Info, ImVec2(right - button, min.y), button, tooltip.c_str());
+			// The badge leads to the prefab (or model) the entity was made from: the Asset tab shows it.
+			const AssetHandle prefab = registry.get<PrefabInstanceComponent>(row.Handle).Prefab;
+			const std::string tooltip = fmt::format("An instance of {}: click to show it in the Asset tab", GetAssetName(prefab));
+			if (RowButton("##Prefab", Icons::Package, colors.Info, ImVec2(right - button, min.y), button, tooltip.c_str()))
+			{
+				m_Deferred.push_back([&context, prefab]()
+				{
+					if (!context.SetInspectedAsset(prefab))
+						ST_WARN("The prefab this entity was made from ({}) is not an asset of the project", prefab.ToString());
+				});
+			}
 			right -= button;
 		}
 		DrawRowName(scene, row, textX, right - style.ItemInnerSpacing.x);

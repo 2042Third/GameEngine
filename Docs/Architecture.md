@@ -842,9 +842,9 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
     being the primary selection; clicks select on release so any row can be dragged, a box starts in the empty space;
     while filtering, Ctrl+A, ranges and boxes skip the ancestors shown for context).
     A primary selection that changed elsewhere is revealed (`HierarchyView::Reveal`, then the list scrolls to its row).
-    Rows are tree nodes with the entity's icon (`UI/EntityIcons`), its name, a prefab badge on an instance's root and an eye
-    (`entity.setActive`); a drag carries the topmost dragged entities (`DragDrop::c_Entities`) and a drop asks
-    `HierarchyView::GetDropTarget` for `entity.setParent`'s parent and index. The rename field is drawn after the
+    Rows are tree nodes with the entity's icon (`UI/EntityIcons`), its name, a prefab badge on an instance's root (a
+    click inspects the prefab) and an eye (`entity.setActive`); a drag carries the topmost dragged entities
+    (`DragDrop::c_Entities`) and a drop asks `HierarchyView::GetDropTarget` for `entity.setParent`'s parent and index. The rename field is drawn after the
     selection's scope and activated by id: a keyboard move out of that scope would make ImGui clear the selection. With
     100,000 roots the panel costs about 0.012 ms per frame (it drew every root before: 12.9 ms; `Perf.Editor`).
   - The **Inspector** shows the components every selected entity has. `GetSharedProperty` gives each widget its value and

@@ -512,6 +512,28 @@ TEST_SUITE("Editor.UI.Hierarchy")
 		CHECK(cube.IsActive());
 	}
 
+	TEST_CASE("The prefab badge of an instance's row shows the prefab in the Asset tab")
+	{
+		AuthoringEditor editor({}, WithFeatureProject("EditorAuthoringPrefabBadge"));
+		const nlohmann::json found = editor.Run("entity.find", { { "name", "Crate" } })["entities"];
+		REQUIRE(found.size() == 1);
+		const UUID crate = *UUIDFromJson(found[0]);
+		const Entity entity = editor.Get(crate);
+		REQUIRE(entity.HasComponent<PrefabInstanceComponent>());
+		const AssetHandle prefab = entity.GetComponent<PrefabInstanceComponent>().Prefab;
+		// Selected, so its row is revealed; the badge sits left of the eye at the row's right end.
+		editor.Context().Select(crate);
+		editor.Frames(3);
+		const SceneHierarchyPanel::RowRect row = editor.Row(crate);
+		const float button = ImGui::GetFrameHeight();
+		editor.ClickWith(ImVec2(row.Max.x - button * 1.5f, AuthoringEditor::Center(row).y), ImGuiKey_None);
+		editor.Frames(2);
+		CHECK(editor.Context().GetInspectedAsset() == prefab);
+		ImGuiWindow* assetWindow = editor.FindPanelWindow(EditorPanels::c_AssetInspector);
+		REQUIRE(assetWindow);
+		CHECK_FALSE(assetWindow->Hidden);
+	}
+
 	TEST_CASE("The create button and a row's context menu create entities")
 	{
 		AuthoringEditor editor;

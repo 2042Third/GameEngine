@@ -30,8 +30,9 @@ namespace Strata
 	//   mouse (its top quarter), after it (its bottom quarter) or into it (the middle), in one entity.setParent; dropped
 	//   below the rows they go to the end of the top level. Prefabs and models dropped on a row are instantiated under it.
 	// - Rows show the entity's icon, its name (dimmed while inactive in the hierarchy, in the info color for prefab
-	//   instances), a badge on a prefab instance's root and an eye that toggles the entity (entity.setActive). F2 or a
-	//   double click renames in place (Enter commits, Escape cancels, clicking elsewhere commits).
+	//   instances), a badge on a prefab instance's root (a click shows the prefab in the Asset tab) and an eye that toggles
+	//   the entity (entity.setActive). F2 or a double click renames in place (Enter commits, Escape cancels, clicking
+	//   elsewhere commits).
 	// - A '+' button and right clicks create entities; the search box filters by name, "c:<component>" and "t:<tag>"; an
 	//   empty scene shows a hint with Cube, Light and Camera buttons; a banner says when play mode discards changes.
 	// - Delete, Ctrl+D, Ctrl+C, Ctrl+X and Ctrl+V act on the selection while the panel has the keyboard focus
