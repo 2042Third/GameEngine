@@ -59,11 +59,14 @@ namespace Strata
 	{
 
 		// A two-column table of properties (labels left, widgets right) as the inspectors show them. Rows come from
-		// PropertyLabel; call EndPropertyTable only when BeginPropertyTable returned true.
+		// PropertyLabel; call EndPropertyTable only when BeginPropertyTable returned true. All property tables of a window
+		// share one label width, which the user changes by dragging the divider between the columns.
 		bool BeginPropertyTable(const char* id);
 		void EndPropertyTable();
-		// Starts a row: the label (with its tooltip) in the first column, then moves to the second for the widget.
-		void PropertyLabel(std::string_view label, std::string_view tooltip = {});
+		// Starts a row: the label (with its tooltip) in the first column, then moves to the second for the widget. A label
+		// wider than its column ends in an ellipsis and its tooltip names it whole. With a probe key, the probe records the
+		// label and the text it shows under "<probeKey>.Label".
+		void PropertyLabel(std::string_view label, std::string_view tooltip = {}, std::string_view probeKey = {});
 
 		// The type icon of an asset type (UI/Icons.h), as lists and pickers show assets.
 		const char* GetAssetTypeIcon(AssetType type);

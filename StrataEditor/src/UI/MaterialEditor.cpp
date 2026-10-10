@@ -76,8 +76,8 @@ namespace Strata
 			if (property.IsHidden() || property.IsTransient())
 				continue;
 			PropertyValue value = property.GetValue(&loaded->GetProperties());
-			UI::PropertyLabel(property.DisplayName, property.Tooltip);
 			const std::string probe = fmt::format("{}.{}", probeKey, property.Name);
+			UI::PropertyLabel(property.DisplayName, property.Tooltip, probe);
 			PropertyWidgetOptions options;
 			options.ProbeKey = probe;
 			ImGui::BeginDisabled(property.IsReadOnly() || imported);

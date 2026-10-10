@@ -250,8 +250,8 @@ namespace Strata
 				if (property.IsHidden())
 					continue;
 				PropertyValue value = property.GetValue(&m_Draft.Edited);
-				UI::PropertyLabel(property.DisplayName, property.Tooltip);
 				const std::string probe = "AssetInspector.Import." + property.Name;
+				UI::PropertyLabel(property.DisplayName, property.Tooltip, probe);
 				PropertyWidgetOptions options;
 				options.ProbeKey = probe;
 				if (DrawPropertyWidget(property, value, *context.GetActiveScene(), options).Changed)

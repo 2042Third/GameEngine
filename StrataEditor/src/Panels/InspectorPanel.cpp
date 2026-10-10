@@ -94,10 +94,12 @@ namespace Strata
 				ImGui::TextDisabled("No fields");
 				return;
 			}
-			if (!ImGui::BeginTable("Fields", 3, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX))
+			// Laid out like the property tables (UI::BeginPropertyTable), with a column for the reset buttons.
+			if (!ImGui::BeginTable("Fields", 3, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV
+				| ImGuiTableFlags_NoBordersInBodyUntilResize))
 				return;
-			ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 0.38f);
-			ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 0.62f);
+			ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 0.42f);
+			ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 0.58f);
 			ImGui::TableSetupColumn("Reset", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFrameHeight());
 			for (const ScriptFieldInfo& field : info.Fields)
 			{
@@ -473,8 +475,8 @@ namespace Strata
 			if (!shared)
 				continue;
 
-			UI::PropertyLabel(property.DisplayName, property.Tooltip);
 			const std::string probe = fmt::format("Inspector.{}.{}", info.Name, property.Name);
+			UI::PropertyLabel(property.DisplayName, property.Tooltip, probe);
 			PropertyWidgetOptions options;
 			options.Mixed = shared->Mixed;
 			options.MixedComponents = shared->MixedComponents;
@@ -718,10 +720,10 @@ namespace Strata
 			{
 				auto draw = [&](const PropertyInfo& property, PropertyValue value, const PropertyValue& fallback, auto&& apply)
 				{
-					UI::PropertyLabel(property.DisplayName, property.Tooltip);
+					const std::string probe = "Inspector.Scene." + property.Name;
+					UI::PropertyLabel(property.DisplayName, property.Tooltip, probe);
 					PropertyWidgetOptions options;
 					options.DefaultValue = &fallback;
-					const std::string probe = "Inspector.Scene." + property.Name;
 					options.ProbeKey = probe;
 					const PropertyEditResult result = DrawPropertyWidget(property, value, scene, options);
 					if (result.Changed)

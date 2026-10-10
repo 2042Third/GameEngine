@@ -645,6 +645,57 @@ TEST_SUITE("Editor.UI.Inspector")
 		CHECK(yaw(second, 20.0f) == doctest::Approx(yaw(first, 10.0f)).epsilon(0.001));
 	}
 
+	TEST_CASE("At a laptop's window size the Inspector shows values and labels whole")
+	{
+		// A maximized 1920x1080 display at 125%: a 1536x864 window of UI units, drawn at 1.5625 (the reviewers' check).
+		AuthoringEditor editor({ ImVec2(2400.0f, 1350.0f), 1.5625f }, WithFeatureProject("EditorAuthoringLaptop"));
+		const nlohmann::json found = editor.Run("entity.find", { { "name", "Ball" } })["entities"];
+		REQUIRE(found.size() == 1);
+		const Entity ball = editor.Get(*UUIDFromJson(found[0]));
+		editor.Context().Select(ball.GetUUID());
+		editor.Frames(3);
+
+		// Every axis of the transform shows its value whole, inside its field.
+		const TransformComponent& transform = ball.GetComponent<TransformComponent>();
+		const glm::vec3 angles = Math::QuatToEulerDegrees(transform.Rotation);
+		const std::pair<const char*, glm::vec3> vectors[] = { { "Translation", transform.Translation }, { "Rotation", angles }, { "Scale", transform.Scale } };
+		for (const auto& [property, vector] : vectors)
+		{
+			for (int axis = 0; axis < 3; axis++)
+			{
+				const std::string key = fmt::format("Inspector.Transform.{}.{}.Value", property, std::string(1, "XYZ"[axis]));
+				CAPTURE(key);
+				const std::optional<UI::ItemProbe::Item> field = UI::ItemProbe::Find(key);
+				REQUIRE(field);
+				CHECK(field->Text.find("\xE2\x80\xA6") == std::string::npos);
+				CHECK(ImGui::CalcTextSize(field->Text.c_str()).x <= field->Max.x - field->Min.x);
+				float shown = vector[axis];
+				if (std::abs(shown) < 0.0005f)
+					shown = 0.0f;
+				CHECK(std::stof(field->Text) == doctest::Approx(shown).epsilon(0.001));
+			}
+		}
+		// Labels too, among them the longest of the rigid body's.
+		const std::optional<UI::ItemProbe::Item> label = UI::ItemProbe::Find("Inspector.RigidBody.ContinuousCollision.Label");
+		REQUIRE(label);
+		CHECK(label->Text == "Continuous Collision");
+	}
+
+	TEST_CASE("In a narrow Inspector, labels that do not fit end in an ellipsis")
+	{
+		// The same scale in a window two thirds as wide: the Inspector's columns cannot hold the longest labels.
+		AuthoringEditor editor({ ImVec2(1600.0f, 1350.0f), 1.5625f }, WithFeatureProject("EditorAuthoringNarrow"));
+		const nlohmann::json found = editor.Run("entity.find", { { "name", "Ball" } })["entities"];
+		REQUIRE(found.size() == 1);
+		editor.Context().Select(*UUIDFromJson(found[0]));
+		editor.Frames(3);
+		const std::optional<UI::ItemProbe::Item> label = UI::ItemProbe::Find("Inspector.RigidBody.ContinuousCollision.Label");
+		REQUIRE(label);
+		CHECK(label->Text.ends_with("\xE2\x80\xA6"));
+		CHECK(label->Text.starts_with("Contin"));
+		CHECK(ImGui::CalcTextSize(label->Text.c_str()).x <= label->Max.x - label->Min.x + 1.0f);
+	}
+
 	TEST_CASE("Paste Values onto three selected entities is one undo step")
 	{
 		AuthoringEditor editor;

@@ -36,14 +36,19 @@ namespace Strata
 		// The pickers' lists, in text heights (they scale with the UI).
 		constexpr float c_PickerWidthInFontSizes = 26.0f;
 		constexpr float c_PickerHeightInFontSizes = 18.0f;
-		// The axis labels of vector fields, in frame heights.
-		constexpr float c_AxisLabelWidthInFrames = 0.8f;
-		// Numbers show three decimals: a value that rounds to zero shows as 0, never as -0.000.
+		// The axis labels of vector fields, in text heights: as wide as their letter and a little room.
+		constexpr float c_AxisLabelWidthInFontSizes = 0.95f;
+		// Numbers are edited with three decimals; a value that rounds to zero shows as 0, never as -0.000.
 		constexpr const char* c_FloatFormat = "%.3f";
 		constexpr float c_ShownZero = 0.0005f;
 		// What a field shows when the selected entities' values differ.
 		constexpr const char* c_MixedText = "--";
+		constexpr const char* c_Ellipsis = "\xE2\x80\xA6";
 		constexpr const char* c_AxisNames[] = { "X", "Y", "Z", "W" };
+		// The property tables' columns: labels and values, as shares of the width (the user resizes them for every table of
+		// a panel at once).
+		constexpr float c_LabelColumnWeight = 0.42f;
+		constexpr float c_ValueColumnWeight = 0.58f;
 		// Rotations whose quaternions' dot product is this close to 1 are the same (an angle below a tenth of a degree).
 		constexpr float c_SameRotationTolerance = 1.0e-6f;
 		// The smallest size limit a PowerOfTwoLimit property offers, in pixels.
@@ -81,6 +86,79 @@ namespace Strata
 				key += suffix;
 			}
 			return key;
+		}
+
+		// A number as people write it: up to three decimals without trailing zeros ("0.8", "-4", "12.375"), never "-0".
+		std::string FormatNumber(float value)
+		{
+			std::string text = fmt::format("{:.3f}", ToShown(value));
+			if (text.find('.') != std::string::npos)
+			{
+				while (text.back() == '0')
+					text.pop_back();
+				if (text.back() == '.')
+					text.pop_back();
+			}
+			return text == "-0" ? std::string("0") : text;
+		}
+
+		// `text` cut at its end with an ellipsis to fit `width` in the current font (ASCII text: cut by bytes, which are
+		// characters there; other text is cut at character boundaries).
+		std::string FitWidth(std::string_view text, float width)
+		{
+			if (ImGui::CalcTextSize(text.data(), text.data() + text.size()).x <= width)
+				return std::string(text);
+			const float ellipsis = ImGui::CalcTextSize(c_Ellipsis).x;
+			size_t length = text.size();
+			while (length > 0)
+			{
+				length--;
+				while (length > 0 && (static_cast<unsigned char>(text[length]) & 0xC0) == 0x80)
+					length--;
+				if (ImGui::CalcTextSize(text.data(), text.data() + length).x + ellipsis <= width)
+					break;
+			}
+			return std::string(text.substr(0, length)) + c_Ellipsis;
+		}
+
+		// A drag field of a float that shows its value as FormatNumber writes it, centered, or "--" when the selected entities'
+		// values differ; a value too wide for the field is cut with an ellipsis and shown whole in the field's tooltip. Typing
+		// in it (Ctrl+click, double click) shows three decimals. ImGui's own text of the field is drawn transparent (it cannot
+		// be formatted this way) except while typing. The probe records the field and the text it shows. Returns true when
+		// the value changed; `outFinished` tells when an edit ended.
+		bool DragFloatField(const char* id, float& value, float speed, float min, float max, bool mixed, float width, std::string_view probeKey,
+			bool& outFinished)
+		{
+			const ImGuiStyle& style = ImGui::GetStyle();
+			const UI::ThemeColors& colors = UI::GetThemeColors();
+			const ImGuiID itemId = ImGui::GetID(id);
+			const bool typing = ImGui::TempInputIsActive(itemId);
+			ImGui::SetNextItemWidth(width);
+			float shown = ToShown(value);
+			if (!typing)
+				ImGui::PushStyleColor(ImGuiCol_Text, UI::WithAlpha(colors.Text, 0.0f));
+			const bool changed = ImGui::DragScalar(id, ImGuiDataType_Float, &shown, speed, &min, &max, c_FloatFormat);
+			if (!typing)
+				ImGui::PopStyleColor();
+			if (changed)
+				value = shown;
+			outFinished = ImGui::IsItemDeactivatedAfterEdit();
+			if (ImGui::TempInputIsActive(itemId))
+				return changed;
+
+			const ImVec2 itemMin = ImGui::GetItemRectMin();
+			const ImVec2 itemMax = ImGui::GetItemRectMax();
+			const std::string full = mixed && !changed ? std::string(c_MixedText) : FormatNumber(value);
+			const float room = std::max(itemMax.x - itemMin.x - style.FramePadding.x, 1.0f);
+			const std::string text = FitWidth(full, room);
+			const ImVec2 size = ImGui::CalcTextSize(text.c_str());
+			ImGui::GetWindowDrawList()->AddText(ImVec2(itemMin.x + (itemMax.x - itemMin.x - size.x) * 0.5f, itemMin.y + (itemMax.y - itemMin.y - size.y) * 0.5f),
+				ImGui::GetColorU32(ImGuiCol_Text), text.c_str());
+			if (text != full && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip) && !ImGui::IsItemActive())
+				ImGui::SetTooltip("%s", full.c_str());
+			if (!probeKey.empty())
+				UI::ItemProbe::Record(probeKey, true, 0, text);
+			return changed;
 		}
 
 		// A combo for a choice, as wide as its cell, showing `preview`. The probe records it with the preview as its text, with
@@ -142,9 +220,14 @@ namespace Strata
 			return result;
 		}
 
-		// An axis label: a tab in the axis's color before its field. Returns true when clicked (resets the component when
-		// there is a default to reset to).
-		bool AxisLabel(int axis, float width, bool resettable, std::string_view probeKey)
+		float GetAxisLabelWidth()
+		{
+			return std::round(ImGui::GetFontSize() * c_AxisLabelWidthInFontSizes);
+		}
+
+		// An axis label: a tab in the axis's color (GetAxisColor of its index) before its field, holding its name. Returns
+		// true when clicked (resets the component when there is a default to reset to).
+		bool AxisLabel(int axis, const char* name, float width, bool resettable, std::string_view probeKey)
 		{
 			const UI::ThemeColors& colors = UI::GetThemeColors();
 			const float height = ImGui::GetFrameHeight();
@@ -159,7 +242,6 @@ namespace Strata
 			drawList->AddRectFilled(min, max, ImGui::GetColorU32(UI::WithAlpha(color, hovered ? 1.0f : 0.82f)), ImGui::GetStyle().FrameRounding,
 				ImDrawFlags_RoundCornersLeft);
 			UI::PushFont(UI::EditorFont::SemiBold, UI::TextSize::Caption);
-			const char* name = c_AxisNames[axis];
 			const ImVec2 textSize = ImGui::CalcTextSize(name);
 			drawList->AddText(ImVec2(min.x + (width - textSize.x) * 0.5f, min.y + (height - textSize.y) * 0.5f), ImGui::GetColorU32(colors.TextOnAccent), name);
 			ImGui::PopFont();
@@ -170,23 +252,26 @@ namespace Strata
 			return pressed;
 		}
 
-		// One field per component behind its axis label. `defaults`: what the labels reset to (null: they do not reset).
-		PropertyEditResult DrawAxisFields(float* values, int count, float speed, float min, float max, const PropertyWidgetOptions& options,
-			const float* defaults)
+		// One field per component behind its axis label, together `width` wide: X, Y, Z, W for vectors and rotations, R, G,
+		// B, A for colors (`names`). `defaults`: what the labels reset to (null: they do not reset). The probe records the row
+		// under the options' key, the labels under "<key>.<name>" and the fields with their text under "<key>.<name>.Value".
+		PropertyEditResult DrawAxisFields(float* values, int count, const char* const* names, float width, float speed, float min, float max,
+			const PropertyWidgetOptions& options, const float* defaults)
 		{
 			PropertyEditResult result;
 			const ImGuiStyle& style = ImGui::GetStyle();
-			const float total = std::max(ImGui::GetContentRegionAvail().x, ImGui::GetFrameHeight() * static_cast<float>(count));
+			const float total = std::max(width, ImGui::GetFrameHeight() * static_cast<float>(count));
 			const float gap = style.ItemInnerSpacing.x;
 			const float slot = (total - gap * static_cast<float>(count - 1)) / static_cast<float>(count);
-			const float labelWidth = std::min(std::round(ImGui::GetFrameHeight() * c_AxisLabelWidthInFrames), slot * 0.5f);
+			const float labelWidth = std::min(GetAxisLabelWidth(), slot * 0.5f);
+			ImGui::BeginGroup();
 			for (int axis = 0; axis < count; axis++)
 			{
 				if (axis > 0)
 					ImGui::SameLine(0.0f, gap);
 				const bool mixed = options.MixedComponents[static_cast<size_t>(axis)];
 				// Reset: also when the value shown is the default already but other entities' values differ.
-				if (AxisLabel(axis, labelWidth, defaults != nullptr, options.ProbeKey) && (values[axis] != defaults[axis] || mixed))
+				if (AxisLabel(axis, names[axis], labelWidth, defaults != nullptr, options.ProbeKey) && (values[axis] != defaults[axis] || mixed))
 				{
 					values[axis] = defaults[axis];
 					result.Changed = true;
@@ -195,20 +280,20 @@ namespace Strata
 				}
 				ImGui::SameLine(0.0f, 0.0f);
 				ImGui::PushID(axis);
-				ImGui::SetNextItemWidth(std::max(slot - labelWidth, 1.0f));
-				float shown = ToShown(values[axis]);
 				// Square left corners against the label.
 				ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
-				if (ImGui::DragScalar("##Value", ImGuiDataType_Float, &shown, speed, &min, &max, mixed ? c_MixedText : c_FloatFormat))
+				const std::string probe = options.ProbeKey.empty() ? std::string() : ProbeKey(ProbeKey(options.ProbeKey, names[axis]), "Value");
+				bool finished = false;
+				if (DragFloatField("##Value", values[axis], speed, min, max, mixed, std::max(slot - labelWidth, 1.0f), probe, finished))
 				{
-					values[axis] = shown;
 					result.Changed = true;
 					result.ChangedComponents[static_cast<size_t>(axis)] = true;
 				}
 				ImGui::PopStyleVar();
-				result.Finished |= ImGui::IsItemDeactivatedAfterEdit();
+				result.Finished |= finished;
 				ImGui::PopID();
 			}
+			ImGui::EndGroup();
 			if (!options.ProbeKey.empty())
 				UI::ItemProbe::Record(options.ProbeKey);
 			return result;
@@ -219,18 +304,19 @@ namespace Strata
 			PropertyEditResult result;
 			const float min = property.HasRange() ? property.Min : -FLT_MAX;
 			const float max = property.HasRange() ? property.Max : FLT_MAX;
-			const char* format = options.Mixed ? c_MixedText : c_FloatFormat;
-			float shown = ToShown(value);
-			ImGui::SetNextItemWidth(-FLT_MIN);
 			if (HasFlag(property.Flags, PropertyFlags::Slider) && property.HasRange())
-				result.Changed = ImGui::SliderFloat("##Value", &shown, min, max, format);
-			else
-				result.Changed = ImGui::DragScalar("##Value", ImGuiDataType_Float, &shown, GetSpeed(property, 0.05f), &min, &max, format);
-			if (result.Changed)
-				value = shown;
-			result.Finished = ImGui::IsItemDeactivatedAfterEdit();
-			if (!options.ProbeKey.empty())
-				UI::ItemProbe::Record(options.ProbeKey);
+			{
+				float shown = ToShown(value);
+				ImGui::SetNextItemWidth(-FLT_MIN);
+				result.Changed = ImGui::SliderFloat("##Value", &shown, min, max, options.Mixed ? c_MixedText : c_FloatFormat);
+				if (result.Changed)
+					value = shown;
+				result.Finished = ImGui::IsItemDeactivatedAfterEdit();
+				if (!options.ProbeKey.empty())
+					UI::ItemProbe::Record(options.ProbeKey);
+				return result;
+			}
+			result.Changed = DragFloatField("##Value", value, GetSpeed(property, 0.05f), min, max, options.Mixed, -FLT_MIN, options.ProbeKey, result.Finished);
 			return result;
 		}
 
@@ -248,8 +334,8 @@ namespace Strata
 			std::optional<glm::vec3> defaults;
 			if (options.DefaultValue && std::holds_alternative<glm::quat>(*options.DefaultValue))
 				defaults = Math::QuatToEulerDegrees(std::get<glm::quat>(*options.DefaultValue));
-			PropertyEditResult result = DrawAxisFields(&euler.x, 3, GetSpeed(property, 0.5f), -FLT_MAX, FLT_MAX, options,
-				defaults ? &defaults->x : nullptr);
+			PropertyEditResult result = DrawAxisFields(&euler.x, 3, c_AxisNames, ImGui::GetContentRegionAvail().x, GetSpeed(property, 0.5f), -FLT_MAX, FLT_MAX,
+				options, defaults ? &defaults->x : nullptr);
 			result.EulerAngles = euler;
 			if (result.Changed)
 			{
@@ -624,7 +710,7 @@ namespace Strata
 				}
 				const float min = property.HasRange() ? property.Min : -FLT_MAX;
 				const float max = property.HasRange() ? property.Max : FLT_MAX;
-				result = DrawAxisFields(components, count, GetSpeed(property, 0.05f), min, max, options, defaults);
+				result = DrawAxisFields(components, count, c_AxisNames, ImGui::GetContentRegionAvail().x, GetSpeed(property, 0.05f), min, max, options, defaults);
 				continuous = true;
 				break;
 			}
@@ -704,10 +790,16 @@ namespace Strata
 
 		bool BeginPropertyTable(const char* id)
 		{
-			if (!ImGui::BeginTable(id, 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX))
+			// Every property table of a window has one id (whatever the ID stack holds, e.g. the component a section pushed),
+			// which makes them instances of one table to ImGui: they share the label column's share of the width, which
+			// dragging the divider between the columns (shown while it is hovered) changes for all of them, kept in imgui.ini.
+			const ImGuiID tableId = ImHashStr("PropertyTable", 0, ImGui::GetCurrentWindow()->ID);
+			const ImGuiTableFlags flags = ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV
+				| ImGuiTableFlags_NoBordersInBodyUntilResize;
+			if (!ImGui::BeginTableEx(id, tableId, 2, flags))
 				return false;
-			ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 0.38f);
-			ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 0.62f);
+			ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, c_LabelColumnWeight);
+			ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, c_ValueColumnWeight);
 			return true;
 		}
 
@@ -716,16 +808,25 @@ namespace Strata
 			ImGui::EndTable();
 		}
 
-		void PropertyLabel(std::string_view label, std::string_view tooltip)
+		void PropertyLabel(std::string_view label, std::string_view tooltip, std::string_view probeKey)
 		{
 			ImGui::TableNextRow();
 			ImGui::TableSetColumnIndex(0);
 			ImGui::AlignTextToFramePadding();
+			// A label wider than its column (which it may fill up to the cell's padding: the clip rectangle ends there) ends in
+			// an ellipsis; its tooltip names it whole.
+			const std::string shown = FitWidth(label, std::max(ImGui::GetContentRegionAvail().x + ImGui::GetStyle().CellPadding.x, 1.0f));
+			const bool cut = std::string_view(shown) != label;
 			ImGui::PushStyleColor(ImGuiCol_Text, GetThemeColors().TextSecondary);
-			ImGui::TextUnformatted(label.data(), label.data() + label.size());
+			ImGui::TextUnformatted(shown.c_str());
 			ImGui::PopStyleColor();
-			if (!tooltip.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
-				ImGui::SetTooltip("%.*s", static_cast<int>(tooltip.size()), tooltip.data());
+			if ((cut || !tooltip.empty()) && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+			{
+				const std::string text = !cut ? std::string(tooltip) : (tooltip.empty() ? std::string(label) : fmt::format("{}\n{}", label, tooltip));
+				ImGui::SetTooltip("%s", text.c_str());
+			}
+			if (!probeKey.empty())
+				ItemProbe::Record(ProbeKey(probeKey, "Label"), true, 0, shown);
 			ImGui::TableSetColumnIndex(1);
 		}
 
