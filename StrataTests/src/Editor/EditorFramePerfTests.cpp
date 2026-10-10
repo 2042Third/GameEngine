@@ -116,35 +116,42 @@ TEST_SUITE("PerfGPU.Editor")
 		const std::filesystem::path scriptFile = directory / "Commands.json";
 		REQUIRE(FileSystem::WriteText(scriptFile, script.dump(1, '\t') + "\n"));
 
-		// Maximized (the default): the frames draw the editor at the size people use it. --frames keeps the run from saving
-		// its panel layout over the user's; the script ends the run long before.
-		ProcessSpecification specification;
-		specification.Executable = editor;
-		specification.Arguments = { "--no-automation", "--frames", "100000", "--quit-after-commands", "--project",
-			FileSystem::ToUTF8(project->GetProjectFile()), "--commands", FileSystem::ToUTF8(scriptFile) };
-		specification.Output = ProcessOutputMode::Capture;
-		const Process::RunResult run = Process::Run(specification, c_EditorTimeout);
-		INFO("Editor output:\n", run.Output);
-		REQUIRE_MESSAGE(run.Started, run.Error);
-		REQUIRE_FALSE(run.TimedOut);
-		REQUIRE(run.ExitCode == 0);
-
-		const std::vector<nlohmann::json> waits = FindWaitResults(run.Output);
-		REQUIRE(waits.size() == 4);
-		constexpr const char* c_Metrics[] = {
+		// One editor run measures all four metrics (the median CPU time of a wait's frames, which ignores the frames the
+		// machine's other work slowed down); a metric over its budget is confirmed by another run.
+		const std::vector<std::string> metrics = {
 			"PerfGPU.Editor.EditFrameNested100k", "PerfGPU.Editor.PlayFrameNested100k",
 			"PerfGPU.Editor.EditFrameNested1M", "PerfGPU.Editor.PlayFrameNested1M" };
-		for (size_t index = 0; index < waits.size(); index++)
+		Perf::CheckBudgetsConfirmed(metrics, [&]
 		{
-			CAPTURE(c_Metrics[index]);
-			const nlohmann::json* frameTimes = JsonUtils::Find(waits[index], "frameTimes");
-			REQUIRE(frameTimes != nullptr);
-			const nlohmann::json* count = JsonUtils::Find(*frameTimes, "count");
-			const nlohmann::json* median = JsonUtils::Find(*frameTimes, "medianMs");
-			REQUIRE((count && count->is_number_integer() && median && median->is_number()));
-			// Every frame but the first of the wait (which also opened the scene or started playing) is measured.
-			CHECK(count->get<int>() >= c_WaitFrames - 2);
-			Perf::CheckBudget(c_Metrics[index], median->get<double>());
-		}
+			// Maximized (the default): the frames draw the editor at the size people use it. --frames keeps the run from
+			// saving its panel layout over the user's; the script ends the run long before.
+			ProcessSpecification specification;
+			specification.Executable = editor;
+			specification.Arguments = { "--no-automation", "--frames", "100000", "--quit-after-commands", "--project",
+				FileSystem::ToUTF8(project->GetProjectFile()), "--commands", FileSystem::ToUTF8(scriptFile) };
+			specification.Output = ProcessOutputMode::Capture;
+			const Process::RunResult run = Process::Run(specification, c_EditorTimeout);
+			INFO("Editor output:\n", run.Output);
+			REQUIRE_MESSAGE(run.Started, run.Error);
+			REQUIRE_FALSE(run.TimedOut);
+			REQUIRE(run.ExitCode == 0);
+
+			const std::vector<nlohmann::json> waits = FindWaitResults(run.Output);
+			REQUIRE(waits.size() == metrics.size());
+			Perf::MetricValues values;
+			for (size_t index = 0; index < waits.size(); index++)
+			{
+				CAPTURE(metrics[index]);
+				const nlohmann::json* frameTimes = JsonUtils::Find(waits[index], "frameTimes");
+				REQUIRE(frameTimes != nullptr);
+				const nlohmann::json* count = JsonUtils::Find(*frameTimes, "count");
+				const nlohmann::json* median = JsonUtils::Find(*frameTimes, "medianMs");
+				REQUIRE((count && count->is_number_integer() && median && median->is_number()));
+				// Every frame but the first of the wait (which also opened the scene or started playing) is measured.
+				CHECK(count->get<int>() >= c_WaitFrames - 2);
+				values[metrics[index]] = median->get<double>();
+			}
+			return values;
+		});
 	}
 }

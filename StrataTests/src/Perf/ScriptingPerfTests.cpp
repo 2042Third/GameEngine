@@ -12,6 +12,10 @@
 #include <string>
 #include <vector>
 
+// Statistics: frame times are medians of their frames (a frame of a hundred thousand scripts takes milliseconds, so frames
+// are timed one by one; spawning frames of the million-entity scene take microseconds and are timed in batches), the
+// destroying frame the median of three fresh scenes (only a scene's first frame destroys). The counts are exact.
+
 using namespace Strata;
 using namespace Strata::Tests;
 
@@ -30,23 +34,26 @@ namespace
 		ScriptSystem& system = GetScriptSystem(scene);
 		REQUIRE(system.GetInstanceCount() == count);
 
-		constexpr uint32_t c_Warmup = 5;
-		constexpr uint32_t c_Frames = 60;
 		RunFrames(scene, 1);
-		const uint64_t rebuilds = system.GetUpdateOrderRebuildCount();
-		const Perf::Measurement frame = Perf::Measure(metric, c_Warmup, c_Frames, [&]
+		int32_t frames = 1;
+		Perf::CheckBudgetsConfirmed({ metric, metric + ".OrderRebuilds" }, [&]
 		{
-			scene.OnUpdateRuntime(1.0f / 60.0f);
+			constexpr uint32_t c_Warmup = 5;
+			constexpr uint32_t c_Frames = 60;
+			const uint64_t rebuilds = system.GetUpdateOrderRebuildCount();
+			const Perf::Measurement frame = Perf::Measure(metric, c_Warmup, c_Frames, [&]
+			{
+				scene.OnUpdateRuntime(1.0f / 60.0f);
+			});
+			frames += static_cast<int32_t>(c_Warmup + c_Frames);
+			const uint64_t frameRebuilds = system.GetUpdateOrderRebuildCount() - rebuilds;
+			CHECK(frameRebuilds == 0);
+			return Perf::MetricValues { { metric, frame.MedianMs }, { metric + ".OrderRebuilds", static_cast<double>(frameRebuilds) } };
 		});
-		const uint64_t frameRebuilds = system.GetUpdateOrderRebuildCount() - rebuilds;
-		CHECK(frameRebuilds == 0);
 		// Every script ran in every frame.
-		CHECK(GetField<int32_t>(system, entities.front(), Perf::c_TrivialScriptClass, "Updates") == static_cast<int32_t>(1 + c_Warmup + c_Frames));
-		CHECK(GetField<int32_t>(system, entities.back(), Perf::c_TrivialScriptClass, "Updates") == static_cast<int32_t>(1 + c_Warmup + c_Frames));
+		CHECK(GetField<int32_t>(system, entities.front(), Perf::c_TrivialScriptClass, "Updates") == frames);
+		CHECK(GetField<int32_t>(system, entities.back(), Perf::c_TrivialScriptClass, "Updates") == frames);
 		scene.OnRuntimeStop();
-
-		Perf::CheckBudget(metric, frame.MedianMs);
-		Perf::CheckBudget(metric + ".OrderRebuilds", static_cast<double>(frameRebuilds));
 	}
 
 }
@@ -75,33 +82,38 @@ TEST_SUITE("Perf.Scripting")
 		scene.OnRuntimeStart();
 		ScriptSystem& system = GetScriptSystem(scene);
 		RunFrames(scene, 1);
-		const uint64_t rebuilds = system.GetUpdateOrderRebuildCount();
 		const uint64_t orderBuilds = scene.GetHierarchyOrderBuildCount();
 
 		constexpr uint32_t c_FramesPerBatch = 100;
-		constexpr uint32_t c_Warmup = 2;
-		constexpr uint32_t c_Batches = 30;
 		Entity previous;
-		const Perf::Measurement frames = Perf::Measure("Perf.Scripting.SpawnFrame1MOneScript (100 frames)", c_Warmup, c_Batches, [&]
+		int32_t frames = 1;
+		Perf::CheckBudgetsConfirmed({ "Perf.Scripting.SpawnFrame1MOneScript", "Perf.Scripting.SpawnFrame1MOneScript.OrderRebuilds" }, [&]
 		{
-			for (uint32_t frame = 0; frame < c_FramesPerBatch; frame++)
+			constexpr uint32_t c_Warmup = 2;
+			constexpr uint32_t c_Batches = 30;
+			const uint64_t rebuilds = system.GetUpdateOrderRebuildCount();
+			const Perf::Measurement batches = Perf::Measure("Perf.Scripting.SpawnFrame1MOneScript (100 frames)", c_Warmup, c_Batches, [&]
 			{
-				const Entity spawned = scene.CreateChildEntity(hierarchy.Root, "Projectile");
-				if (previous)
-					scene.DestroyEntity(previous);
-				previous = spawned;
-				scene.OnUpdateRuntime(1.0f / 60.0f);
-			}
+				for (uint32_t frame = 0; frame < c_FramesPerBatch; frame++)
+				{
+					const Entity spawned = scene.CreateChildEntity(hierarchy.Root, "Projectile");
+					if (previous)
+						scene.DestroyEntity(previous);
+					previous = spawned;
+					scene.OnUpdateRuntime(1.0f / 60.0f);
+				}
+			});
+			frames += static_cast<int32_t>((c_Warmup + c_Batches) * c_FramesPerBatch);
+			const uint64_t frameRebuilds = system.GetUpdateOrderRebuildCount() - rebuilds;
+			CHECK(frameRebuilds == 0);
+			return Perf::MetricValues {
+				{ "Perf.Scripting.SpawnFrame1MOneScript", batches.MedianMs * 1000.0 / c_FramesPerBatch },
+				{ "Perf.Scripting.SpawnFrame1MOneScript.OrderRebuilds", static_cast<double>(frameRebuilds) } };
 		});
-		const uint64_t frameRebuilds = system.GetUpdateOrderRebuildCount() - rebuilds;
-		CHECK(frameRebuilds == 0);
 		CHECK(scene.GetHierarchyOrderBuildCount() == orderBuilds);
 		CHECK(scene.GetEntityCount() == 1'000'000 + 2);
-		CHECK(GetField<int32_t>(system, scripted.front(), Perf::c_TrivialScriptClass, "Updates") == static_cast<int32_t>(1 + (c_Warmup + c_Batches) * c_FramesPerBatch));
+		CHECK(GetField<int32_t>(system, scripted.front(), Perf::c_TrivialScriptClass, "Updates") == frames);
 		scene.OnRuntimeStop();
-
-		Perf::CheckBudget("Perf.Scripting.SpawnFrame1MOneScript", frames.MedianMs * 1000.0 / c_FramesPerBatch);
-		Perf::CheckBudget("Perf.Scripting.SpawnFrame1MOneScript.OrderRebuilds", static_cast<double>(frameRebuilds));
 	}
 
 	TEST_CASE("Play frames that spawn and destroy a scripted entity among 100,000 scripts")
@@ -118,25 +130,29 @@ TEST_SUITE("Perf.Scripting")
 		const uint64_t fullBuilds = system.GetFullUpdateOrderBuildCount();
 		const uint64_t orderBuilds = scene.GetHierarchyOrderBuildCount();
 
-		constexpr uint32_t c_Warmup = 5;
-		constexpr uint32_t c_Frames = 60;
 		Entity previous;
-		const Perf::Measurement frame = Perf::Measure("Perf.Scripting.ScriptedSpawnFrame100k", c_Warmup, c_Frames, [&]
+		int32_t frames = 1;
+		Perf::CheckBudgetConfirmed("Perf.Scripting.ScriptedSpawnFrame100k", [&]
 		{
-			const Entity spawned = Perf::CreateScriptedEntities(scene, 1).front();
-			if (previous)
-				scene.DestroyEntity(previous);
-			previous = spawned;
-			scene.OnUpdateRuntime(1.0f / 60.0f);
+			constexpr uint32_t c_Warmup = 5;
+			constexpr uint32_t c_Frames = 60;
+			const Perf::Measurement frame = Perf::Measure("Perf.Scripting.ScriptedSpawnFrame100k", c_Warmup, c_Frames, [&]
+			{
+				const Entity spawned = Perf::CreateScriptedEntities(scene, 1).front();
+				if (previous)
+					scene.DestroyEntity(previous);
+				previous = spawned;
+				scene.OnUpdateRuntime(1.0f / 60.0f);
+			});
+			frames += static_cast<int32_t>(c_Warmup + c_Frames);
+			return frame.MedianMs;
 		});
 		CHECK(system.GetFullUpdateOrderBuildCount() == fullBuilds);
 		CHECK(scene.GetHierarchyOrderBuildCount() == orderBuilds);
 		CHECK(system.GetInstanceCount() == 100'000 + 1);
-		CHECK(GetField<int32_t>(system, entities.back(), Perf::c_TrivialScriptClass, "Updates") == static_cast<int32_t>(1 + c_Warmup + c_Frames));
+		CHECK(GetField<int32_t>(system, entities.back(), Perf::c_TrivialScriptClass, "Updates") == frames);
 		CHECK(GetField<int32_t>(system, previous, Perf::c_TrivialScriptClass, "Updates") == 1);
 		scene.OnRuntimeStop();
-
-		Perf::CheckBudget("Perf.Scripting.ScriptedSpawnFrame100k", frame.MedianMs);
 	}
 
 	TEST_CASE("A play frame in which scripts destroy 10,000 of 100,000 sibling roots")
@@ -145,39 +161,42 @@ TEST_SUITE("Perf.Scripting")
 		// the root list once. Each round builds a fresh scene and times its first frame.
 		Perf::ScopedApplicationJobSystem jobs;
 		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
-		constexpr int c_Rounds = 3;
-		std::vector<double> samples;
-		for (int round = 0; round < c_Rounds; round++)
+		Perf::CheckBudgetConfirmed("Perf.Scripting.ScriptedDestroy10kOf100kRoots", [&]
 		{
-			Scene scene;
-			// OnDestroy removes a script from this entity, which has none: nothing happens.
-			scene.CreateEntity("Target");
-			for (size_t index = 0; index < 100'000; index++)
+			constexpr int c_Rounds = 3;
+			std::vector<double> samples;
+			for (int round = 0; round < c_Rounds; round++)
 			{
-				if (index % 10 != 0)
+				Scene scene;
+				// OnDestroy removes a script from this entity, which has none: nothing happens.
+				scene.CreateEntity("Target");
+				for (size_t index = 0; index < 100'000; index++)
 				{
-					scene.CreateEntity("Root");
-					continue;
+					if (index % 10 != 0)
+					{
+						scene.CreateEntity("Root");
+						continue;
+					}
+					Entity scripted = Perf::CreateScriptedEntities(scene, 1, "RemoveOnDestroy").front();
+					ScriptEntry& entry = scripted.GetComponent<ScriptComponent>().Scripts.front();
+					AddFieldOverride(entry, "DestroySelf", PropertyType::Bool, true);
+					AddFieldOverride(entry, "Target", PropertyType::String, std::string("Target"));
+					AddFieldOverride(entry, "ClassName", PropertyType::String, std::string("Missing"));
 				}
-				Entity scripted = Perf::CreateScriptedEntities(scene, 1, "RemoveOnDestroy").front();
-				ScriptEntry& entry = scripted.GetComponent<ScriptComponent>().Scripts.front();
-				AddFieldOverride(entry, "DestroySelf", PropertyType::Bool, true);
-				AddFieldOverride(entry, "Target", PropertyType::String, std::string("Target"));
-				AddFieldOverride(entry, "ClassName", PropertyType::String, std::string("Missing"));
-			}
-			scene.OnRuntimeStart();
-			REQUIRE(GetScriptSystem(scene).GetInstanceCount() == 10'000);
+				scene.OnRuntimeStart();
+				REQUIRE(GetScriptSystem(scene).GetInstanceCount() == 10'000);
 
-			const auto start = std::chrono::steady_clock::now();
-			scene.OnUpdateRuntime(1.0f / 60.0f);
-			samples.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
-			CHECK(scene.GetEntityCount() == 90'001);
-			CHECK(scene.GetRootEntities().size() == 90'001);
-			CHECK(GetScriptSystem(scene).GetInstanceCount() == 0);
-			scene.OnRuntimeStop();
-		}
-		const Perf::Measurement frame = Perf::Summarize(samples);
-		MESSAGE("Perf.Scripting.ScriptedDestroy10kOf100kRoots: median ", frame.MedianMs, " ms");
-		Perf::CheckBudget("Perf.Scripting.ScriptedDestroy10kOf100kRoots", frame.MedianMs);
+				const auto start = std::chrono::steady_clock::now();
+				scene.OnUpdateRuntime(1.0f / 60.0f);
+				samples.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+				CHECK(scene.GetEntityCount() == 90'001);
+				CHECK(scene.GetRootEntities().size() == 90'001);
+				CHECK(GetScriptSystem(scene).GetInstanceCount() == 0);
+				scene.OnRuntimeStop();
+			}
+			const Perf::Measurement frame = Perf::Summarize(samples);
+			MESSAGE("Perf.Scripting.ScriptedDestroy10kOf100kRoots: median ", frame.MedianMs, " ms");
+			return frame.MedianMs;
+		});
 	}
 }
