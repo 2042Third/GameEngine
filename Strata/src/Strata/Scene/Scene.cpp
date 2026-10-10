@@ -6,6 +6,8 @@
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/SceneSerializer.h"
 
+#include <limits>
+
 namespace Strata
 {
 
@@ -23,17 +25,25 @@ namespace Strata
 			return static_cast<uint64_t>(std::hash<std::string_view>()(value));
 		}
 
+		// Equal values (matching infinities included) and two NaNs agree: transforms that overflow compute the same
+		// non-finite elements in the cache and in a recomputation. Other finite values agree within the relative tolerance;
+		// an infinity never agrees with a finite value (its relative tolerance would accept any).
+		bool IsNearlyEqual(float x, float y)
+		{
+			if (x == y || (std::isnan(x) && std::isnan(y)))
+				return true;
+			if (!std::isfinite(x) || !std::isfinite(y))
+				return false;
+			return std::abs(x - y) <= c_TransformValidationTolerance * std::max(1.0f, std::abs(y));
+		}
+
 		bool IsNearlyEqualMatrix(const glm::mat4& a, const glm::mat4& b)
 		{
 			for (int column = 0; column < 4; column++)
 			{
 				for (int row = 0; row < 4; row++)
 				{
-					const float x = a[column][row];
-					const float y = b[column][row];
-					if (std::isnan(x) && std::isnan(y))
-						continue;
-					if (!(std::abs(x - y) <= c_TransformValidationTolerance * std::max(1.0f, std::abs(y))))
+					if (!IsNearlyEqual(a[column][row], b[column][row]))
 						return false;
 				}
 			}
@@ -1330,18 +1340,24 @@ namespace Strata
 			const bool stale = current.ParentStale || node.TransformDirty;
 			if (!stale && !IsNearlyEqualMatrix(world.Matrix, expected))
 			{
+				// The element that differs most among those that disagree (a non-finite one counts as the most).
 				int column = 0;
 				int row = 0;
-				// The element that differs most (NaN counts as the most).
+				float largest = -1.0f;
 				for (int candidateColumn = 0; candidateColumn < 4; candidateColumn++)
 				{
 					for (int candidateRow = 0; candidateRow < 4; candidateRow++)
 					{
-						const float difference = std::abs(world.Matrix[candidateColumn][candidateRow] - expected[candidateColumn][candidateRow]);
-						if (!(difference <= std::abs(world.Matrix[column][row] - expected[column][row])))
+						const float x = world.Matrix[candidateColumn][candidateRow];
+						const float y = expected[candidateColumn][candidateRow];
+						if (IsNearlyEqual(x, y))
+							continue;
+						const float difference = std::isfinite(x) && std::isfinite(y) ? std::abs(x - y) : std::numeric_limits<float>::infinity();
+						if (difference > largest)
 						{
 							column = candidateColumn;
 							row = candidateRow;
+							largest = difference;
 						}
 					}
 				}

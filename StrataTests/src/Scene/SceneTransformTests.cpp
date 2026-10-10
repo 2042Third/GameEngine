@@ -8,6 +8,7 @@
 #include "Strata/Scene/Scene.h"
 
 #include <algorithm>
+#include <cmath>
 #include <random>
 #include <string>
 #include <unordered_set>
@@ -376,6 +377,44 @@ TEST_SUITE("Scene.Transforms")
 		scene.UpdateWorldTransforms();
 		CHECK(scene.ValidateWorldTransforms(&error));
 		CHECK(child.GetComponent<WorldTransformComponent>().Matrix[3].x == doctest::Approx(5.0f));
+	}
+
+	TEST_CASE("Validation accepts world transforms that overflow and names the element that differs")
+	{
+		// Legal but huge scales: the child's world matrix overflows to infinity, and NaN appears below it (infinity times
+		// zero), alike in the cache and in the recomputation.
+		Scene scene;
+		Entity parent = scene.CreateEntity("Huge");
+		parent.GetTransform().Scale = glm::vec3(1.0e20f);
+		Entity child = scene.CreateChildEntity(parent, "Bigger");
+		child.GetTransform().Scale = glm::vec3(1.0e20f);
+		Entity grandchild = scene.CreateChildEntity(child, "Rotated");
+		grandchild.GetTransform().Rotation = glm::angleAxis(0.5f, glm::vec3(0.0f, 1.0f, 0.0f));
+		scene.UpdateWorldTransforms();
+		REQUIRE(std::isinf(child.GetComponent<WorldTransformComponent>().Matrix[0][0]));
+		REQUIRE(std::isnan(grandchild.GetComponent<WorldTransformComponent>().Matrix[0][1]));
+		std::string error;
+		CHECK_MESSAGE(scene.ValidateWorldTransforms(&error), error);
+		// Debug builds validate after every editor update (an assertion would end the test run).
+		scene.OnUpdateEditor(0.016f);
+
+		// An infinity never matches a finite value, cached or recomputed (writes without a signal): the message names the
+		// element that differs.
+		child.GetTransform().Scale = glm::vec3(1.0f);
+		CHECK_FALSE(scene.ValidateWorldTransforms(&error));
+		CHECK(error.find("'Bigger'") != std::string::npos);
+		CHECK(error.find("element [0][0]: inf instead of 1e+20") != std::string::npos);
+		child.MarkModified<TransformComponent>();
+		scene.UpdateWorldTransforms();
+		CheckSceneCaches(scene);
+
+		child.GetTransform().Scale = glm::vec3(1.0e20f);
+		CHECK_FALSE(scene.ValidateWorldTransforms(&error));
+		CHECK(error.find("'Bigger'") != std::string::npos);
+		CHECK(error.find("element [0][0]: 1e+20 instead of inf") != std::string::npos);
+		child.MarkModified<TransformComponent>();
+		scene.UpdateWorldTransforms();
+		CheckSceneCaches(scene);
 	}
 
 	TEST_CASE("Instantiated prefabs and duplicates get their world transforms below moved parents")
