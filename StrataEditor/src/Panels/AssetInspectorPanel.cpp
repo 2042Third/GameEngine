@@ -143,10 +143,11 @@ namespace Strata
 		UI::Heading(metadata.Name.empty() ? metadata.Path : metadata.Name, UI::TextSize::Title);
 		UI::PushFont(UI::EditorFont::Regular, UI::TextSize::Caption);
 		const std::string where = metadata.IsBuiltin() ? std::string("Built-in") : metadata.Path;
-		ImGui::TextColored(colors.TextSecondary, "%s \xC2\xB7 %s", AssetTypeToString(metadata.Type), where.c_str());
+		const std::string subtitle = fmt::format("{} \xC2\xB7 {}", UI::GetAssetTypeDisplayName(metadata.Type), where);
+		ImGui::TextColored(colors.TextSecondary, "%s", subtitle.c_str());
 		ImGui::PopFont();
 		ImGui::EndGroup();
-		UI::ItemProbe::Record("AssetInspector.Header");
+		UI::ItemProbe::Record("AssetInspector.Header", true, 0, subtitle);
 
 		const std::string id = UUIDToJson(metadata.Handle).get<std::string>();
 		UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Caption);

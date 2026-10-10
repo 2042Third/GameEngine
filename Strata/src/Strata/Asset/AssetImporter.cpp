@@ -93,7 +93,8 @@ namespace Strata
 		{
 			if (choice == defaultValue)
 				defaultIndex = static_cast<int32_t>(values.size());
-			values.push_back(EnumValue { choice, static_cast<int32_t>(values.size()) });
+			// Stored by name ("NormalMap"), shown in words ("Normal Map").
+			values.push_back(EnumValue { choice, static_cast<int32_t>(values.size()), Utils::PascalCaseToDisplayName(choice) });
 		}
 		return Add(std::move(name), PropertyType::Enum, PropertyValue(defaultIndex), 0.0f, 0.0f, std::move(values));
 	}
@@ -113,6 +114,14 @@ namespace Strata
 	ImportSettingsBuilder& ImportSettingsBuilder::Speed(float speed)
 	{
 		GetLast().Speed = speed;
+		return *this;
+	}
+
+	ImportSettingsBuilder& ImportSettingsBuilder::PowerOfTwoLimit()
+	{
+		PropertyInfo& property = GetLast();
+		ST_CORE_ASSERT(property.Type == PropertyType::UInt, "Import setting '{}': only unsigned settings are limits", property.Name);
+		property.Flags |= PropertyFlags::PowerOfTwoLimit;
 		return *this;
 	}
 

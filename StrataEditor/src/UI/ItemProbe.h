@@ -31,6 +31,9 @@ namespace Strata::UI
 
 		// Records the last item ImGui submitted (ImGui::GetItemRectMin/Max) under the key.
 		static void Record(std::string_view key, bool enabled = true, ImU32 color = 0, std::string_view text = {});
+		// Records a rectangle under the key: for items that are not the last one when recorded, such as an open combo, whose
+		// popup items follow it.
+		static void RecordRect(std::string_view key, const ImVec2& min, const ImVec2& max, bool enabled = true, ImU32 color = 0, std::string_view text = {});
 		// The item recorded under the key in the latest frame of the current context; nothing when it was not drawn then.
 		static std::optional<Item> Find(std::string_view key);
 		static void Clear();

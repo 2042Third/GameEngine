@@ -67,6 +67,8 @@ namespace Strata
 
 		// The type icon of an asset type (UI/Icons.h), as lists and pickers show assets.
 		const char* GetAssetTypeIcon(AssetType type);
+		// The name of an asset type for people ("Audio Clip"), where AssetTypeToString gives the identifier ("AudioClip").
+		const char* GetAssetTypeDisplayName(AssetType type);
 
 	}
 

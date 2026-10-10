@@ -927,6 +927,37 @@ TEST_SUITE("Editor.UI.AssetInspector")
 		CHECK(assetWindow->Hidden);
 	}
 
+	TEST_CASE("The Asset tab names types and choices for people, and size limits as choices")
+	{
+		AuthoringEditor editor({}, WithFeatureProject("EditorAuthoringAssetNames"));
+		EditorAssetManager* assets = editor.Context().GetAssetManager();
+		REQUIRE(assets);
+		const AssetHandle sound = assets->FindAssetByPath("Audio/Blip.wav");
+		const AssetHandle texture = assets->FindAssetByPath("Textures/Checker.png");
+		REQUIRE(editor.Context().SetInspectedAsset(sound));
+		editor.Frames(2);
+		REQUIRE(UI::ItemProbe::Find("AssetInspector.Header").has_value());
+		CHECK(UI::ItemProbe::Find("AssetInspector.Header")->Text.starts_with("Audio Clip"));
+
+		// A texture's size limit of 0 reads "No limit", and its usage as words.
+		editor.Run("asset.setImportSettings", { { "asset", UUIDToJson(texture) }, { "settings", { { "Usage", "NormalMap" } } }, { "wait", false } });
+		REQUIRE(editor.FramesUntil([&]() { return !assets->IsImportPending(texture); }));
+		REQUIRE(editor.Context().SetInspectedAsset(texture));
+		editor.Frames(2);
+		CHECK(UI::ItemProbe::Find("AssetInspector.Header")->Text.starts_with("Texture"));
+		REQUIRE(UI::ItemProbe::Find("AssetInspector.Import.MaxSize").has_value());
+		CHECK(UI::ItemProbe::Find("AssetInspector.Import.MaxSize")->Text == "No limit");
+		CHECK(UI::ItemProbe::Find("AssetInspector.Import.Usage")->Text == "Normal Map");
+
+		// The limit is chosen among powers of two: 1024 picked from the list is a draft to apply.
+		REQUIRE(editor.Click("AssetInspector.Import.MaxSize"));
+		editor.Frames(2); // The list takes its place and size over its first frames
+		REQUIRE(editor.Click("AssetInspector.Import.MaxSize.1024"));
+		editor.Frames(1);
+		CHECK(UI::ItemProbe::Find("AssetInspector.Import.MaxSize")->Text == "1024");
+		CHECK(UI::ItemProbe::Find("AssetInspector.Apply")->Enabled);
+	}
+
 	TEST_CASE("The Asset tab without an asset centers its hint and promises only what it shows")
 	{
 		AuthoringEditor editor;

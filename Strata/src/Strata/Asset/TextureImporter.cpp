@@ -227,8 +227,8 @@ namespace Strata
 			.Enum("Usage", { "Color", "NormalMap", "Data", "HDR" }, TextureUsageToString(defaults.Usage))
 				.Tooltip("How the pixels are read: Color (sRGB albedo, emissive, UI), NormalMap (linear, mips renormalized), Data (linear roughness, "
 					"metallic, occlusion, masks) or HDR (16-bit float, environment maps)")
-			.UInt("MaxSize", defaults.MaxSize, c_MaxImageDimension).Speed(16.0f)
-				.Tooltip("Longest side in pixels: larger images are scaled down, keeping their aspect ratio. 0: only the engine's limit")
+			.UInt("MaxSize", defaults.MaxSize, c_MaxImageDimension).PowerOfTwoLimit()
+				.Tooltip("Longest side in pixels: larger images are scaled down, keeping their aspect ratio. No limit (0): only the engine's limit")
 			.Enum("Filter", { "Linear", "Nearest" }, TextureFilterToString(defaults.Filter))
 				.Tooltip("Linear blends neighboring texels; Nearest keeps them sharp (pixel art)")
 			.Enum("Wrap", { "Repeat", "Clamp", "Mirror" }, TextureWrapToString(defaults.Wrap))

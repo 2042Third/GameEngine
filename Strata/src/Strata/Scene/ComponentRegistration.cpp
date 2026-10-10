@@ -237,7 +237,7 @@ namespace Strata
 			.DisplayName("Sky Light")
 			.Category("Lighting")
 			.Description("Image-based lighting and sky background from an HDR environment map or a procedural sky")
-			.EnumProperty("Source", &SkyLightComponent::Source, { { "EnvironmentMap", 0 }, { "Procedural", 1 } },
+			.EnumProperty("Source", &SkyLightComponent::Source, { { "EnvironmentMap", 0, "Environment Map" }, { "Procedural", 1 } },
 				{ .Tooltip = "EnvironmentMap: an HDR texture; Procedural: a sky computed from the colors below and the directional light" })
 			.AssetProperty("EnvironmentMap", &SkyLightComponent::EnvironmentMap, AssetType::Texture, { .Tooltip = "Equirectangular HDR texture" })
 			.Property("Intensity", &SkyLightComponent::Intensity, Range(0.0f, c_Unbounded, 0.01f))
@@ -256,7 +256,8 @@ namespace Strata
 			.DisplayName("Post Process")
 			.Category("Rendering")
 			.Description("Tonemapping, exposure, bloom, ambient occlusion and anti-aliasing settings")
-			.EnumProperty("Tonemapper", &PostProcessComponent::Tonemapper, { { "None", 0 }, { "Reinhard", 1 }, { "ACES", 2 }, { "AgX", 3 }, { "KhronosNeutral", 4 } })
+			.EnumProperty("Tonemapper", &PostProcessComponent::Tonemapper, { { "None", 0 }, { "Reinhard", 1 }, { "ACES", 2 }, { "AgX", 3 },
+				{ "KhronosNeutral", 4, "Khronos Neutral" } })
 			.Property("Exposure", &PostProcessComponent::Exposure, WithTooltip(Range(-16.0f, 16.0f, 0.05f), "Exposure compensation in EV"))
 			.Property("AutoExposure", &PostProcessComponent::AutoExposure)
 			.Property("AutoExposureMinEV", &PostProcessComponent::AutoExposureMinEV,

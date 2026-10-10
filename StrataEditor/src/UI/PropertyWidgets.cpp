@@ -46,6 +46,8 @@ namespace Strata
 		constexpr const char* c_AxisNames[] = { "X", "Y", "Z", "W" };
 		// Rotations whose quaternions' dot product is this close to 1 are the same (an angle below a tenth of a degree).
 		constexpr float c_SameRotationTolerance = 1.0e-6f;
+		// The smallest size limit a PowerOfTwoLimit property offers, in pixels.
+		constexpr uint32_t c_SmallestSizeLimit = 32;
 
 		float GetSpeed(const PropertyInfo& property, float fallback)
 		{
@@ -79,6 +81,65 @@ namespace Strata
 				key += suffix;
 			}
 			return key;
+		}
+
+		// A combo for a choice, as wide as its cell, showing `preview`. The probe records it with the preview as its text, with
+		// its own rectangle: while it is open, its list's items come after it. Returns true while the list is open (call
+		// ImGui::EndCombo then).
+		bool BeginChoice(const std::string& preview, std::string_view probeKey)
+		{
+			ImGui::SetNextItemWidth(-FLT_MIN);
+			const ImVec2 min = ImGui::GetCursorScreenPos();
+			const float width = ImGui::CalcItemWidth();
+			const bool open = ImGui::BeginCombo("##Value", preview.c_str());
+			if (!probeKey.empty())
+				UI::ItemProbe::RecordRect(probeKey, min, ImVec2(min.x + width, min.y + ImGui::GetFrameHeight()), true, 0, preview);
+			return open;
+		}
+
+		// An entry of a choice's list (the probe records it under `probeKey` unless that is empty). Returns true when picked.
+		bool Choice(const std::string& label, bool selected, int id, const std::string& probeKey)
+		{
+			ImGui::PushID(id);
+			UI::PushSelectionColors(selected);
+			const bool picked = ImGui::Selectable(label.c_str(), selected);
+			UI::PopSelectionColors();
+			ImGui::PopID();
+			if (!probeKey.empty())
+				UI::ItemProbe::Record(probeKey);
+			return picked;
+		}
+
+		std::string GetLimitLabel(uint32_t limit)
+		{
+			return limit == 0 ? std::string("No limit") : std::to_string(limit);
+		}
+
+		// A size limit (PropertyFlags::PowerOfTwoLimit): "No limit" (0) or a power of two up to the property's maximum. A
+		// value that is no power of two (written by hand) is shown as it is until another is chosen.
+		PropertyEditResult DrawPowerOfTwoLimit(const PropertyInfo& property, uint32_t& value, const PropertyWidgetOptions& options)
+		{
+			PropertyEditResult result;
+			const uint64_t max = property.HasRange() ? static_cast<uint64_t>(property.Max) : std::numeric_limits<uint32_t>::max();
+			const std::string preview = options.Mixed ? std::string(c_MixedText) : GetLimitLabel(value);
+			if (BeginChoice(preview, options.ProbeKey))
+			{
+				std::vector<uint32_t> choices = { 0 };
+				for (uint64_t limit = c_SmallestSizeLimit; limit <= max; limit *= 2)
+					choices.push_back(static_cast<uint32_t>(limit));
+				for (const uint32_t choice : choices)
+				{
+					const std::string label = GetLimitLabel(choice);
+					const std::string probe = options.ProbeKey.empty() ? std::string() : ProbeKey(options.ProbeKey, choice == 0 ? std::string("NoLimit") : label);
+					if (Choice(label, choice == value && !options.Mixed, static_cast<int>(choice), probe))
+					{
+						result.Changed = choice != value || options.Mixed;
+						value = choice;
+					}
+				}
+				ImGui::EndCombo();
+			}
+			return result;
 		}
 
 		// An axis label: a tab in the axis's color before its field. Returns true when clicked (resets the component when
@@ -529,6 +590,11 @@ namespace Strata
 			case PropertyType::UInt:
 			{
 				uint32_t& number = std::get<uint32_t>(value);
+				if (HasFlag(property.Flags, PropertyFlags::PowerOfTwoLimit))
+				{
+					result = DrawPowerOfTwoLimit(property, number, options);
+					break;
+				}
 				const uint32_t min = property.HasRange() ? static_cast<uint32_t>(std::max(property.Min, 0.0f)) : 0u;
 				const uint32_t max = property.HasRange() ? static_cast<uint32_t>(property.Max) : std::numeric_limits<uint32_t>::max();
 				ImGui::SetNextItemWidth(-FLT_MIN);
@@ -603,16 +669,13 @@ namespace Strata
 			{
 				int32_t& selected = std::get<int32_t>(value);
 				const EnumValue* current = property.FindEnumValue(selected);
-				ImGui::SetNextItemWidth(-FLT_MIN);
-				if (ImGui::BeginCombo("##Value", options.Mixed ? c_MixedText : (current ? current->Name.c_str() : "?")))
+				const std::string preview = options.Mixed ? std::string(c_MixedText) : (current ? current->GetDisplayName() : std::string("?"));
+				if (BeginChoice(preview, options.ProbeKey))
 				{
 					for (const EnumValue& option : property.EnumValues)
 					{
-						const bool isSelected = option.Value == selected && !options.Mixed;
-						UI::PushSelectionColors(isSelected);
-						const bool picked = ImGui::Selectable(option.Name.c_str(), isSelected);
-						UI::PopSelectionColors();
-						if (picked)
+						const std::string probe = options.ProbeKey.empty() ? std::string() : ProbeKey(options.ProbeKey, option.Name);
+						if (Choice(option.GetDisplayName(), option.Value == selected && !options.Mixed, option.Value, probe))
 						{
 							result.Changed = option.Value != selected || options.Mixed;
 							selected = option.Value;
@@ -620,8 +683,6 @@ namespace Strata
 					}
 					ImGui::EndCombo();
 				}
-				if (!options.ProbeKey.empty())
-					UI::ItemProbe::Record(options.ProbeKey);
 				break;
 			}
 			case PropertyType::Asset:
@@ -683,6 +744,23 @@ namespace Strata
 				case AssetType::None:      break;
 			}
 			return Icons::File;
+		}
+
+		const char* GetAssetTypeDisplayName(AssetType type)
+		{
+			switch (type)
+			{
+				case AssetType::Scene:     return "Scene";
+				case AssetType::Prefab:    return "Prefab";
+				case AssetType::Model:     return "Model";
+				case AssetType::Mesh:      return "Mesh";
+				case AssetType::Material:  return "Material";
+				case AssetType::Texture:   return "Texture";
+				case AssetType::AudioClip: return "Audio Clip";
+				case AssetType::Font:      return "Font";
+				case AssetType::None:      break;
+			}
+			return "Asset";
 		}
 
 	}

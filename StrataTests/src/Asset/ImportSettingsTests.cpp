@@ -88,6 +88,11 @@ TEST_SUITE("Asset.ImportSettings")
 		CHECK(maxSize.Min == 0.0f);
 		CHECK(maxSize.Max == static_cast<float>(TextureImporter::c_MaxImageDimension));
 		CHECK(maxSize.DisplayName == "Max Size");
+		// Editors offer the limit as a choice: "No limit" (0) or a power of two.
+		CHECK(HasFlag(maxSize.Flags, PropertyFlags::PowerOfTwoLimit));
+		// Options are named for people too: "NormalMap" reads "Normal Map".
+		CHECK(Find(properties, "Usage").EnumValues[1].DisplayName == "Normal Map");
+		CHECK(Find(properties, "Usage").EnumValues[3].DisplayName == "HDR");
 		CHECK(Find(properties, "GenerateMips").Type == PropertyType::Bool);
 
 		// Every kind of default the importer guesses from a file name.
@@ -118,6 +123,7 @@ TEST_SUITE("Asset.ImportSettings")
 		CHECK(Find(modelProperties, "Scale").Type == PropertyType::Float);
 		CHECK(Find(modelProperties, "Scale").Min > 0.0f);
 		CHECK(Find(modelProperties, "LODCount").Max == 8.0f);
+		CHECK(HasFlag(Find(modelProperties, "MaxTextureSize").Flags, PropertyFlags::PowerOfTwoLimit));
 		CHECK(Find(modelProperties, "GenerateLODs").DisplayName == "Generate LODs");
 		CheckDescribesDefaults(models, "Helmet.glb");
 		CheckDescribesDefaults(GetImporter(".gltf"), "Helmet.gltf");

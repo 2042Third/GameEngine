@@ -103,6 +103,8 @@ namespace Strata
 		ImportSettingsBuilder& Tooltip(std::string tooltip);
 		// Drag speed hint for editors.
 		ImportSettingsBuilder& Speed(float speed);
+		// An unsigned setting that is a size limit: editors offer "No limit" (0) and the powers of two up to its maximum.
+		ImportSettingsBuilder& PowerOfTwoLimit();
 	private:
 		ImportSettingsBuilder& Add(std::string name, PropertyType type, PropertyValue defaultValue, float min, float max, std::vector<EnumValue> enumValues = {});
 		PropertyInfo& GetLast();

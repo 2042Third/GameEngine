@@ -352,9 +352,10 @@ The threading model, frame loop and pipelines these rules protect are described 
   or another file the import read change — **bump the version whenever an importer's output format
   changes.** Importers read files other than their source only through `ReadImportDependency`, which
   confines reads to the asset directory and records the file as a dependency. An importer with settings describes every
-  one in `GetSettingsProperties` (one `ImportSettingsBuilder` entry each: type, default, range or choices, tooltip),
-  matching the keys of `GetDefaultSettings`; the asset inspector draws them and `asset.setImportSettings` validates
-  against them (`NormalizeImportSettings`), so a new setting is one entry there. Editors re-import in the background
+  one in `GetSettingsProperties` (one `ImportSettingsBuilder` entry each: type, default, range or choices, tooltip;
+  choices show in words, "NormalMap" as "Normal Map", and `PowerOfTwoLimit` makes a size limit a choice of "No limit" or
+  a power of two), matching the keys of `GetDefaultSettings`; the asset inspector draws them and
+  `asset.setImportSettings` validates against them (`NormalizeImportSettings`), so a new setting is one entry there. Editors re-import in the background
   (`EditorAssetManager::SetImportSettingsInBackground`, `ReimportAssetInBackground`, `IsImportPending`); the blocking
   forms are for tools and tests.
 - Engine-native assets (`.stscene`, `.stprefab`, `.stmat`) are JSON documents with a
