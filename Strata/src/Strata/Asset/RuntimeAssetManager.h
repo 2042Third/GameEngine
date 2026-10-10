@@ -24,8 +24,9 @@ namespace Strata
 		static Ref<RuntimeAssetManager> Create(const std::filesystem::path& packPath, std::string* outError = nullptr);
 		~RuntimeAssetManager() override;
 
-		// Mounts another pack over the mounted ones (see above). Fails, changing nothing, when the pack cannot be opened.
-		// Main thread.
+		// Mounts another pack over the mounted ones (see above). Fails, changing nothing, when the pack cannot be opened (also
+		// when its tables name more than its size allows, see AssetPack::Open); fails having mounted part of it when memory
+		// runs out while its assets are registered. Main thread.
 		bool Mount(const std::filesystem::path& packPath, std::string* outError = nullptr);
 
 		// The game's pack (the first mounted).

@@ -695,11 +695,44 @@ TEST_SUITE("Asset.Pack")
 		rejected([](PackImage& pack) { pack.Blocks[4].Codec = static_cast<uint32_t>(AssetPackCodec::Zstd); }, "invalid size"); // Stored, not compressed
 		rejected([](PackImage& pack) { pack.Blocks[0].Codec = static_cast<uint32_t>(AssetPackCodec::Stored); }, "invalid size");
 		rejected([](PackImage& pack) { pack.Entries[0].Size = uint64_t(5) << 30; }, "blocks for");
+		// Sizes whose block count rounds past 2^64 (they once counted as zero blocks).
+		for (const uint64_t size : { UINT64_MAX, UINT64_MAX - AssetPack::c_BlockSize + 2, UINT64_MAX - 1 })
+		{
+			CAPTURE(size);
+			rejected([size](PackImage& pack)
+			{
+				pack.Entries[2].Size = size;
+				pack.Entries[2].BlockCount = 0;
+			}, "blocks for");
+		}
 		rejected([](PackImage& pack) { pack.Entries[0].Size += 1; }, "wrong size");
 		rejected([](PackImage& pack) { pack.Entries[0].BlockCount = 3; }, "blocks for");
 		rejected([](PackImage& pack) { pack.Entries[0].FirstBlock = 3; }, "names blocks that do not exist");
 		rejected([](PackImage& pack) { pack.Entries[1].FirstBlock = 0; }, "wrong size");
 		rejected([](PackImage& pack) { std::swap(pack.Blocks[1], pack.Blocks[2]); }, "not consecutive");
+		// Entries naming the blocks or the dependencies of others: what opening builds from them would grow with every entry.
+		rejected([](PackImage& pack)
+		{
+			for (uint64_t copy = 1; copy <= 3; copy++)
+			{
+				EntryRecord entry = pack.Entries[0];
+				entry.Handle += copy * 0x100;
+				pack.Entries.push_back(entry);
+			}
+		}, "shares blocks with other entries");
+		rejected([](PackImage& pack)
+		{
+			for (uint64_t copy = 1; copy <= 3; copy++)
+			{
+				EntryRecord entry = pack.Entries[2];
+				entry.Handle += copy * 0x100;
+				entry.Size = 0;
+				entry.BlockCount = 0;
+				entry.FirstDependency = pack.Entries[0].FirstDependency;
+				entry.DependencyCount = pack.Entries[0].DependencyCount;
+				pack.Entries.push_back(entry);
+			}
+		}, "shares dependencies with other entries");
 		rejected([](PackImage& pack) { pack.Entries[0].DependencyCount = 3; }, "dependencies that do not exist");
 		rejected([](PackImage& pack) { pack.Entries[0].FirstDependency = UINT32_MAX; }, "dependencies that do not exist");
 		rejected([](PackImage& pack) { pack.Entries[0].PathString = 99; }, "string that does not exist");
@@ -754,6 +787,69 @@ TEST_SUITE("Asset.Pack")
 			REQUIRE(FileSystem::WriteBytes(corrupt, changed));
 			OpenAndReadEverything(corrupt);
 		}
+	}
+
+	TEST_CASE("Opening never copies more names than the pack's size allows")
+	{
+		// Entries share strings by index: a small pack whose many entries all name one large string would make opening copy
+		// that string into every entry, gigabytes from a megabyte. What entries name is counted with repeats.
+		std::vector<PackSource> sources;
+		sources.push_back(MakeSource(0x7300, MakeContent(1000, ContentKind::Compressible, 7), AssetType::Material));
+		const std::filesystem::path directory = CreateTemporaryDirectory("PackSharedNames");
+		const PackImage image = PackImage::Read(WritePack(directory / "Game.stpak", sources));
+		const std::filesystem::path crafted = directory / "Crafted.stpak";
+
+		constexpr size_t c_LargeName = 600 * 1024;
+		auto withSharedName = [&image](uint32_t entries)
+		{
+			PackImage pack = image;
+			const uint32_t largeString = static_cast<uint32_t>(pack.Strings.size());
+			pack.Strings.push_back(StringRecord { static_cast<uint32_t>(pack.StringBytes.size()), static_cast<uint32_t>(c_LargeName) });
+			pack.StringBytes.resize(pack.StringBytes.size() + c_LargeName, 'x');
+			for (uint32_t index = 0; index < entries; index++)
+			{
+				EntryRecord entry = pack.Entries[0];
+				entry.Handle = 0x8000 + index;
+				entry.Size = 0;
+				entry.BlockCount = 0;
+				entry.DependencyCount = 0;
+				entry.PathString = largeString;
+				pack.Entries.push_back(entry);
+			}
+			return pack.Write();
+		};
+
+		// Ten entries sharing it are within what a pack of this size may name (shared paths are normal: sub-assets)...
+		const std::vector<uint8_t> shared = withSharedName(10);
+		REQUIRE(FileSystem::WriteBytes(crafted, shared));
+		std::string error;
+		{
+			const Scope<AssetPack> pack = AssetPack::Open(crafted, &error);
+			REQUIRE_MESSAGE(pack, error);
+			CHECK(pack->GetEntries().size() == 11);
+			CHECK(pack->GetEntries().back().Metadata.Path.size() == c_LargeName);
+		}
+		// ...two hundred are not: the pack is refused before anything is copied.
+		const std::vector<uint8_t> amplified = withSharedName(200);
+		CHECK(amplified.size() < 1'000'000);
+		CHECK(200 * c_LargeName > AssetPackFormat::GetMaxNameBytes(amplified.size()));
+		CheckRejected(crafted, amplified, "name more than");
+
+		// The writer refuses to write what readers would refuse: empty assets sharing a long path.
+		std::vector<PackSource> longNames;
+		for (uint32_t index = 0; index < 40; index++)
+		{
+			PackSource source = MakeSource(0x7400 + index, {}, AssetType::Material);
+			source.Source.Metadata.Path = std::string(100'000, 'p');
+			longNames.push_back(std::move(source));
+		}
+		std::vector<AssetPackSource> assets;
+		for (const PackSource& source : longNames)
+			assets.push_back(source.Source);
+		CHECK_FALSE(AssetPackWriter::Write(directory / "LongNames.stpak", assets, [](const AssetMetadata&, std::vector<uint8_t>&, std::string*) { return true; },
+			{}, nullptr, &error));
+		CHECK(error.find("paths and names") != std::string::npos);
+		CHECK_FALSE(FileSystem::Exists(directory / "LongNames.stpak"));
 	}
 
 	TEST_CASE("Version 1 packs that are corrupt are still refused")

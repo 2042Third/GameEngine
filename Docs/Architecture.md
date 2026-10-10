@@ -567,7 +567,11 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   entries (handle, type, parent, names, size, a 64-bit content hash, first block, dependency range, bounds of meshes),
   shared strings, blocks (file offset, stored size, size, CRC-32C of the stored bytes, codec) and dependencies. `Open`
   reads the header and the tables in two reads and validates all of them (sizes, ranges, overlapping or non-consecutive
-  blocks, checksums), so a corrupt file fails with an error. `ReadRange` reads and checks only the blocks a range covers,
+  blocks, checksums), so a corrupt file fails with an error. Tables may point at shared targets, so `Open` also bounds
+  what it builds by the file's size: entries may name no more blocks and dependencies than the tables hold (so no entry
+  claims more bytes than its blocks decode to), and the names they copy, counted per entry, at most
+  `AssetPackFormat::GetMaxNameBytes` (16 bytes per byte of the file, plus 1 MiB; the writer refuses more); running out
+  of memory fails with an error as well. `ReadRange` reads and checks only the blocks a range covers,
   through one `FileReader` per pack that every I/O thread shares: consecutive blocks merge into reads of up to 8 MiB,
   and while one read's blocks are checked and decompressed on the workers (in parallel from four blocks on, one
   decompression context per thread) the next read runs, so a large entry streams close to the speed of an uncompressed

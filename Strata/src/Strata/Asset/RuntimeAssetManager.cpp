@@ -4,6 +4,9 @@
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Core/FileSystem.h"
 
+#include <new>
+#include <stdexcept>
+
 namespace Strata
 {
 
@@ -12,9 +15,23 @@ namespace Strata
 		Scope<AssetPack> pack = AssetPack::Open(packPath, outError);
 		if (!pack)
 			return nullptr;
-		Ref<RuntimeAssetManager> manager(new RuntimeAssetManager());
-		manager->AddPack(std::move(pack));
-		return manager;
+		// Registering copies what the pack's entries name, which AssetPack::Open bounds by the file's size; the memory may
+		// still not be there.
+		try
+		{
+			Ref<RuntimeAssetManager> manager(new RuntimeAssetManager());
+			manager->AddPack(std::move(pack));
+			return manager;
+		}
+		catch (const std::bad_alloc&)
+		{
+		}
+		catch (const std::length_error&)
+		{
+		}
+		if (outError)
+			*outError = fmt::format("{}: not enough memory to register the pack's assets", FileSystem::ToUTF8(packPath));
+		return nullptr;
 	}
 
 	RuntimeAssetManager::~RuntimeAssetManager()
@@ -27,10 +44,22 @@ namespace Strata
 		Scope<AssetPack> pack = AssetPack::Open(packPath, outError);
 		if (!pack)
 			return false;
-		// Loaded and loading assets of replaced entries read their new entry: a reload discards loads of the old one.
-		for (AssetHandle replaced : AddPack(std::move(pack)))
-			ReloadAsset(replaced);
-		return true;
+		try
+		{
+			// Loaded and loading assets of replaced entries read their new entry: a reload discards loads of the old one.
+			for (AssetHandle replaced : AddPack(std::move(pack)))
+				ReloadAsset(replaced);
+			return true;
+		}
+		catch (const std::bad_alloc&)
+		{
+		}
+		catch (const std::length_error&)
+		{
+		}
+		if (outError)
+			*outError = fmt::format("{}: not enough memory to register the pack's assets (some of them may be mounted)", FileSystem::ToUTF8(packPath));
+		return false;
 	}
 
 	std::vector<AssetHandle> RuntimeAssetManager::AddPack(Scope<AssetPack> pack)

@@ -79,8 +79,11 @@ namespace Strata
 	//     blocks (24 bytes each): file offset, stored size, decoded size, CRC-32C of the stored bytes, codec
 	//     dependencies: asset handles, 8 bytes each; an entry names its range
 	// Open validates the header and every table completely (sizes, ranges, overlapping blocks, checksums) and reads; reads
-	// check each block's checksum before decoding it, so corrupt files fail with an error, never a crash. Version 1 packs
-	// (header, uncompressed data, an entry table; read whole) still load.
+	// check each block's checksum before decoding it, so corrupt files fail with an error, never a crash. Packs are untrusted
+	// input whose tables may point at shared targets, so Open also bounds what it builds by the file's size: entries may not
+	// name more blocks or dependencies than the tables hold (so no entry claims more bytes than its blocks decode to), and
+	// the strings they name, counted per entry, stay within AssetPackFormat::GetMaxNameBytes; running out of memory fails
+	// with an error too. Version 1 packs (header, uncompressed data, an entry table; read whole) still load.
 	class AssetPack
 	{
 	public:
@@ -114,6 +117,8 @@ namespace Strata
 	private:
 		AssetPack() = default;
 
+		// Open without the handling of allocation failures.
+		static Scope<AssetPack> Load(const std::filesystem::path& path, std::string* outError);
 		bool ReadBlocks(const AssetPackEntry& entry, uint64_t offset, uint64_t size, uint8_t* destination, std::string& outError) const;
 		// Checks and decodes one block of an entry (its index within the entry) into the part of `destination` (which holds
 		// the entry's bytes from `offset` to `end`) it covers. Any thread.
@@ -199,6 +204,13 @@ namespace Strata
 
 		// The size of the tables of a header's counts; nullopt when it overflows.
 		std::optional<uint64_t> GetTablesSize(const Header& header);
+
+		// Entries share strings (sub-assets share their file's path), so what opening a pack copies into its entries' names
+		// could be far more than the string table holds: a pack's entries may name at most this many bytes in all (path,
+		// sub-asset key and name, counted per entry) for its file size. AssetPackWriter refuses to write more.
+		constexpr uint64_t c_NameBytesPerFileByte = 16;
+		constexpr uint64_t c_NameBytesAllowance = 1ull << 20;
+		uint64_t GetMaxNameBytes(uint64_t fileSize);
 
 		// Version 1: a 32-byte header, the data blobs back to back, then the entry table (handle, type, padding, parent,
 		// data offset, data size, path, sub-asset key, name per entry).

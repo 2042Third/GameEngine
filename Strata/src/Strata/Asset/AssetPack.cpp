@@ -14,7 +14,10 @@
 #include <cstring>
 #include <limits>
 #include <mutex>
+#include <new>
 #include <numeric>
+#include <stdexcept>
+#include <string_view>
 #include <unordered_set>
 
 namespace Strata
@@ -79,6 +82,13 @@ namespace Strata
 		return fixed + header.StringBytes;
 	}
 
+	uint64_t AssetPackFormat::GetMaxNameBytes(uint64_t fileSize)
+	{
+		if (fileSize > (UINT64_MAX - c_NameBytesAllowance) / c_NameBytesPerFileByte)
+			return UINT64_MAX;
+		return fileSize * c_NameBytesPerFileByte + c_NameBytesAllowance;
+	}
+
 	uint64_t AssetPack::HashContent(std::span<const uint8_t> data)
 	{
 		uint64_t hash = Hash::FNV1a(std::string_view());
@@ -88,6 +98,24 @@ namespace Strata
 	}
 
 	Scope<AssetPack> AssetPack::Open(const std::filesystem::path& path, std::string* outError)
+	{
+		// What Load allocates is bounded by the file's size (see GetMaxNameBytes), but the memory may still not be there.
+		try
+		{
+			return Load(path, outError);
+		}
+		catch (const std::bad_alloc&)
+		{
+		}
+		catch (const std::length_error&)
+		{
+		}
+		if (outError)
+			*outError = fmt::format("{}: not enough memory to open the asset pack", FileSystem::ToUTF8(path));
+		return nullptr;
+	}
+
+	Scope<AssetPack> AssetPack::Load(const std::filesystem::path& path, std::string* outError)
 	{
 		auto fail = [outError, &path](const std::string& message) -> Scope<AssetPack>
 		{
@@ -202,7 +230,8 @@ namespace Strata
 		std::vector<uint64_t> dependencies(header.DependencyCount);
 		take(dependencies.data(), dependencies.size() * sizeof(uint64_t));
 
-		std::vector<std::string> strings;
+		// Views into the tables: strings are copied only into the entries that name them (within GetMaxNameBytes).
+		std::vector<std::string_view> strings;
 		strings.reserve(stringRecords.size());
 		for (size_t index = 0; index < stringRecords.size(); index++)
 		{
@@ -243,6 +272,13 @@ namespace Strata
 		for (uint64_t dependency : dependencies)
 			pack->m_Dependencies.push_back(UUID(dependency));
 
+		// Tables may share what they point to, so what entries name is counted with repeats: what the writer stores once each
+		// (blocks, dependencies) at most once in all, so that sizes and lists derived from the entries stay within what the
+		// file holds, and names within GetMaxNameBytes.
+		const uint64_t maxNameBytes = GetMaxNameBytes(fileSize);
+		uint64_t nameBytes = 0;
+		uint64_t entryBlocks = 0;
+		uint64_t entryDependencies = 0;
 		std::unordered_set<uint64_t> handles;
 		pack->m_Entries.reserve(entryRecords.size());
 		for (size_t index = 0; index < entryRecords.size(); index++)
@@ -258,9 +294,20 @@ namespace Strata
 				return fail(fmt::format("entry {} names blocks that do not exist", index));
 			if (record.FirstDependency > pack->m_Dependencies.size() || record.DependencyCount > pack->m_Dependencies.size() - record.FirstDependency)
 				return fail(fmt::format("entry {} names dependencies that do not exist", index));
+			// Each string is at most 4 GiB, so the sum of three cannot overflow before it passes the limit.
+			nameBytes += static_cast<uint64_t>(strings[record.PathString].size()) + strings[record.SubAssetKeyString].size() + strings[record.NameString].size();
+			if (nameBytes > maxNameBytes)
+				return fail(fmt::format("the entries name more than {} bytes of strings, too many for a pack of {} bytes", maxNameBytes, fileSize));
+			entryBlocks += record.BlockCount;
+			entryDependencies += record.DependencyCount;
+			if (entryBlocks > pack->m_Blocks.size())
+				return fail(fmt::format("entry {} shares blocks with other entries", index));
+			if (entryDependencies > pack->m_Dependencies.size())
+				return fail(fmt::format("entry {} shares dependencies with other entries", index));
 
-			// The blocks cover the stored form exactly: full blocks, then the rest, consecutive in the file.
-			const uint64_t expectedBlocks = (record.Size + header.BlockSize - 1) / header.BlockSize;
+			// The blocks cover the stored form exactly: full blocks, then the rest, consecutive in the file. (Counted without
+			// rounding up, which would overflow for sizes near 2^64.)
+			const uint64_t expectedBlocks = record.Size / header.BlockSize + (record.Size % header.BlockSize != 0 ? 1 : 0);
 			if (record.BlockCount != expectedBlocks)
 				return fail(fmt::format("entry {} has {} blocks for {} bytes", index, record.BlockCount, record.Size));
 			for (uint32_t block = 0; block < record.BlockCount; block++)
@@ -331,7 +378,7 @@ namespace Strata
 
 		if (offset > entry.Size || size > entry.Size - offset)
 			return fail(fmt::format("the range {}+{} lies outside its {} bytes", offset, size, entry.Size));
-		if (size > std::numeric_limits<size_t>::max())
+		if (size > std::numeric_limits<size_t>::max() || static_cast<size_t>(size) > outData.max_size())
 			return fail("the range is too large");
 		try
 		{
@@ -340,6 +387,10 @@ namespace Strata
 		catch (const std::bad_alloc&)
 		{
 			return fail("out of memory");
+		}
+		catch (const std::length_error&)
+		{
+			return fail("the range is too large");
 		}
 		if (size == 0)
 		{

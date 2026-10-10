@@ -194,6 +194,7 @@ namespace Strata
 
 			std::vector<uint8_t> data;
 			std::vector<EncodedBlock> encoded;
+			uint64_t nameBytes = 0; // What the entries name, counted per entry (see AssetPackFormat::GetMaxNameBytes)
 			for (const AssetPackSource& source : assets)
 			{
 				const AssetMetadata& metadata = source.Metadata;
@@ -234,6 +235,7 @@ namespace Strata
 				entry.PathString = *path;
 				entry.SubAssetKeyString = *key;
 				entry.NameString = *name;
+				nameBytes += metadata.Path.size() + metadata.SubAssetKey.size() + metadata.Name.size();
 				entry.FirstBlock = static_cast<uint32_t>(blocks.size());
 				entry.BlockCount = static_cast<uint32_t>(blockCount);
 
@@ -338,6 +340,14 @@ namespace Strata
 			tables.WriteBytes(stringBytes.data(), stringBytes.size());
 			tables.WriteBytes(blocks.data(), blocks.size() * sizeof(BlockRecord));
 			tables.WriteBytes(dependencies.data(), dependencies.size() * sizeof(uint64_t));
+			// Readers refuse packs whose entries name more than this (a pack of many empty entries with long shared names).
+			const uint64_t fileSize = file.GetPosition() + tables.GetSize();
+			if (nameBytes > GetMaxNameBytes(fileSize))
+			{
+				outError = fmt::format("The assets' paths and names take {} bytes, more than a pack of {} bytes may name ({})", nameBytes, fileSize,
+					GetMaxNameBytes(fileSize));
+				return false;
+			}
 			header.TablesChecksum = Hash::CRC32C(tables.GetData());
 			header.HeaderChecksum = Hash::CRC32C(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&header), offsetof(Header, HeaderChecksum)));
 			file.Write(tables.GetData().data(), tables.GetSize());
