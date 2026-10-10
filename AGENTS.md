@@ -271,7 +271,8 @@ The threading model, frame loop and pipelines these rules protect are described 
   unlimited; 128 MiB of loads in flight, 64 MiB and 4 ms of finalization per frame), and the least recently requested
   assets of a pool over budget are evicted. Hold `AssetHandle`s across frames, not `Ref`s, and request what you use
   every frame you use it (`GetAsset`): a held `Ref` keeps an asset from being evicted (it would free nothing), so it
-  defeats the budget. Pin what gameplay must keep whether or not it is used (`AssetManagerBase::Pin`, `AssetPin`).
+  defeats the budget. Pin what gameplay must keep whether or not it is used (`AssetManagerBase::Pin`, `AssetPin`;
+  scripts: `Assets::RequestLoad` until `Assets::Release`).
   Code that keeps an asset's data alive in other objects reports it (`Asset::IsDataShared`). Never block on a load;
   scene owners trim what the previous scene used after a switch (`AssetManagerBase::ScheduleTrim`).
 - Adding an asset type: an `Asset` subclass with a cooked/serialized form, a loader in
@@ -307,6 +308,9 @@ Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; t
 - Audio: `AudioSource` and `Audio` go through the scene's `AudioSystem`; without it (simulate mode) the calls fail.
 - Game flow: `Game::Quit`, `LoadScene` and `ReloadScene` set `Scene::RequestQuit`/`RequestSceneLoad`, which the scene's owner
   honors after the frame (see [Editor](#editor)).
+- Assets: `Assets::RequestLoad` pins the asset for the playing scene (`ScriptSystem::RequestAsset`; never evicted to meet
+  memory budgets, see [Asset pipeline](#asset-pipeline), "Residency") until `Assets::Release` (host function
+  `ReleaseAsset`, appended to ABI version 1) or the end of play; requests do not add up.
 - `Random`, `Timer` and `KeyRepeat` (`StrataScript/Gameplay.h`) run entirely in the module. The engine has classes named
   `Random` and `Timer` too, so SDK helpers are tested inside a script module, never in an engine translation unit (that
   would violate the one-definition rule).

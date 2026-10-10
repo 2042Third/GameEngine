@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Strata/Asset/AssetResidency.h"
 #include "Strata/Core/Base.h"
 #include "Strata/Core/Timestep.h"
 #include "Strata/Core/UUID.h"
@@ -104,6 +105,12 @@ namespace Strata
 		// Creates the instances of Script components that appeared since the last sync point (e.g. after instantiating a
 		// prefab), so scripts can access them immediately.
 		void CreatePendingInstances();
+		// Asset requests of the scripts (Assets::RequestLoad): the scene keeps a requested asset pinned (AssetPin) until the
+		// scripts release it or play stops. Requests do not add up. RequestAsset fails for assets the manager does not know.
+		bool RequestAsset(AssetManagerBase& manager, AssetHandle asset);
+		// False when the scene holds no request for the asset.
+		bool ReleaseAsset(AssetHandle asset);
+		size_t GetRequestedAssetCount() const { return m_AssetPins.size(); }
 		// Logs a problem with a script's use of the API, naming the calling script; each distinct message is logged once.
 		void ReportProblem(std::string_view function, const std::string& message);
 	private:
@@ -193,6 +200,7 @@ namespace Strata
 		bool m_ReconcileAll = false;
 		std::vector<UUID> m_DeferredDestroys;
 
+		std::unordered_map<AssetHandle, AssetPin> m_AssetPins; // Assets the scripts requested (released when play stops)
 		std::unordered_set<std::string> m_ReportedProblems;
 		CollisionListenerID m_CollisionListener = c_InvalidCollisionListener; // Registered with the scene's PhysicsSystem while running
 		std::vector<entt::scoped_connection> m_Connections;

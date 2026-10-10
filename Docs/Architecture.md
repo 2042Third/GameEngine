@@ -374,7 +374,9 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   which `Update` advances. Whatever draws or uses assets requests them every frame (`SceneRenderer` resolves meshes,
   materials and textures through `GetAsset`), so the stamp is a least-recently-used signal; arriving is no request.
   Resident evictable assets are kept in a list ordered by it. An `AssetPin` (`AssetManagerBase::Pin`) keeps an asset
-  resident while it lives; pins add up and refer to their manager weakly.
+  resident while it lives; pins add up and refer to their manager weakly. The scripts of a playing scene pin what they
+  request (`Assets::RequestLoad`, `ScriptSystem::RequestAsset`) until they release it (`Assets::Release`, the host
+  function `ReleaseAsset`) or play stops.
 - **Eviction** (`Update`, after finalization). For each pool over its budget, the least recently requested assets that
   hold memory of it are evicted until it fits. Never evicted: pinned assets, assets requested within the grace window
   (`GetEvictionGraceFrames`: the device's frames in flight plus two), memory and built-in assets, and assets still in

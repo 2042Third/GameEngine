@@ -73,6 +73,13 @@ public:
 		else if (frame == SpawnFrame + 2)
 		{
 			Expect(!ByPathPlaced.IsValid() && Scene::FindEntitiesByTag("Crate").size() == 4, "spawned entities can be destroyed");
+
+			// The scene's requests keep assets loaded until they are released; the spawned crates use the prefab no more.
+			Expect(Assets::Release(Prefab), "Assets::Release of a requested asset");
+			Expect(!Assets::Release(Prefab), "Assets::Release of an asset released already");
+			Expect(!Assets::Release(AssetHandle()), "Assets::Release of the null handle");
+			Expect(Assets::IsLoaded(Prefab), "a released asset stays loaded until memory is needed");
+			Journal(*this, "SpawnFeatures", "ReleaseAssets");
 			Completed = true;
 		}
 	}

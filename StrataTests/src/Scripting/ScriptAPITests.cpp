@@ -5,6 +5,7 @@
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Input/Input.h"
 #include "Strata/Reflection/ComponentRegistry.h"
+#include "Strata/Renderer/Material.h"
 #include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/SceneSerializer.h"
 #include "Strata/Scripting/ScriptHostAPI.h"
@@ -344,6 +345,84 @@ TEST_SUITE("Scripting.API")
 		scene.OnRuntimeStop();
 	}
 
+	TEST_CASE("Assets scripts request stay loaded under memory budgets until they are released")
+	{
+		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
+		Ref<TestAssetManager> manager = CreateRef<TestAssetManager>();
+		AssetMetadata held;
+		held.Handle = UUID(0x7100);
+		held.Type = AssetType::Material;
+		held.Path = "Materials/Held.stmat";
+		manager->Add(held, ToBytes(Material::Create()->Serialize()));
+		AssetMetadata other = held;
+		other.Handle = UUID(0x7101);
+		other.Path = "Materials/Other.stmat";
+		manager->Add(other, ToBytes(Material::Create()->Serialize()));
+		ScopedAssetManager scopedManager(manager);
+		REQUIRE(manager->LoadAssetSync(other.Handle)); // Loaded, but nothing keeps it
+
+		Scene scene;
+		Entity holder = scene.CreateEntity("Holder");
+		AddFieldOverride(AddScriptEntry(holder, "AssetHolder"), "Asset", PropertyType::Asset, held.Handle);
+		scene.OnRuntimeStart();
+		ScriptSystem& system = GetScriptSystem(scene);
+		REQUIRE(manager->WaitForPendingLoads());
+		CHECK(manager->GetAssetState(held.Handle) == AssetState::Ready);
+		CHECK(manager->GetPinCount(held.Handle) == 1); // Requested twice: requests do not add up
+		CHECK(system.GetRequestedAssetCount() == 1);
+
+		// A memory squeeze: every CPU byte is over budget. What nothing keeps goes once the grace window has passed.
+		AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
+		budgets.Cpu = 0;
+		manager->SetResidencyBudgets(budgets);
+		const uint32_t frames = manager->GetEvictionGraceFrames() + 2;
+		for (uint32_t frame = 0; frame < frames; frame++)
+		{
+			manager->Update();
+			scene.OnUpdateRuntime(1.0f / 60.0f);
+		}
+		CHECK(manager->GetAssetState(other.Handle) == AssetState::Unloaded);
+		CHECK(manager->GetAssetState(held.Handle) == AssetState::Ready);
+
+		// Released by the script: it goes like any other.
+		REQUIRE(system.SetFieldValue(holder, "AssetHolder", "Release", true));
+		scene.OnUpdateRuntime(1.0f / 60.0f);
+		CHECK(GetField<bool>(system, holder, "AssetHolder", "Released"));
+		CHECK(manager->GetPinCount(held.Handle) == 0);
+		CHECK(system.GetRequestedAssetCount() == 0);
+		for (uint32_t frame = 0; frame < frames; frame++)
+			manager->Update();
+		CHECK(manager->GetAssetState(held.Handle) == AssetState::Unloaded);
+		CheckScriptChecks(system, holder, "AssetHolder", 6);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("The assets a scene's scripts requested are released when play stops")
+	{
+		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
+		Ref<TestAssetManager> manager = CreateRef<TestAssetManager>();
+		AssetMetadata held;
+		held.Handle = UUID(0x7200);
+		held.Type = AssetType::Material;
+		held.Path = "Materials/Held.stmat";
+		manager->Add(held, ToBytes(Material::Create()->Serialize()));
+		ScopedAssetManager scopedManager(manager);
+
+		Scene scene;
+		Entity holder = scene.CreateEntity("Holder");
+		AddFieldOverride(AddScriptEntry(holder, "AssetHolder"), "Asset", PropertyType::Asset, held.Handle);
+		scene.OnRuntimeStart();
+		REQUIRE(manager->WaitForPendingLoads());
+		CHECK(manager->GetPinCount(held.Handle) == 1);
+		CheckScriptChecks(GetScriptSystem(scene), holder, "AssetHolder", 4);
+
+		scene.OnRuntimeStop();
+		CHECK(manager->GetPinCount(held.Handle) == 0);
+		manager->Update();
+		CHECK(manager->TrimUnused(0) == 1);
+		CHECK(manager->GetAssetState(held.Handle) == AssetState::Unloaded);
+	}
+
 	TEST_CASE("Scripts call other scripts")
 	{
 		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
@@ -543,7 +622,7 @@ TEST_SUITE("Scripting.API")
 		const size_t firstFunction = offsetof(StrataScriptHostAPI, ABIVersion) + sizeof(host.ABIVersion);
 		REQUIRE(before.size() == (sizeof(StrataScriptHostAPI) - firstFunction) / sizeof(host.Log));
 		CHECK(before.front().Name == "Log");
-		CHECK(before.back().Name == "LoadScene");
+		CHECK(before.back().Name == "ReleaseAsset");
 		std::unordered_set<std::string_view> names;
 		for (const ScriptHostFunctionCalls& entry : before)
 		{

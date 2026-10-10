@@ -913,13 +913,23 @@ namespace Strata
 				if (!manager)
 					return false;
 				const AssetHandle handle(asset);
-				if (!manager->IsHandleValid(handle))
+				// Pinned for the playing scene until ReleaseAsset or the end of play.
+				if (!system->RequestAsset(*manager, handle))
 				{
 					system->ReportProblem("RequestAssetLoad", fmt::format("asset {} does not exist", handle.ToString()));
 					return false;
 				}
-				manager->RequestLoad(handle, AssetPriority::Normal);
 				return true;
+			});
+		}
+
+		bool HostReleaseAsset(StrataScriptContext* context, StrataScriptAssetHandle asset)
+		{
+			return HostCall("ReleaseAsset", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "ReleaseAsset");
+				// Releasing an asset the scene does not hold is no misuse (e.g. a script releasing twice): just false.
+				return system && system->ReleaseAsset(AssetHandle(asset));
 			});
 		}
 
@@ -1644,7 +1654,8 @@ namespace Strata
 	X(AudioSetMasterVolume) \
 	X(AudioGetMasterVolume) \
 	X(QuitGame) \
-	X(LoadScene)
+	X(LoadScene) \
+	X(ReleaseAsset)
 
 		struct HostFunctionEntry
 		{
