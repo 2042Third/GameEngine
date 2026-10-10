@@ -7,6 +7,7 @@
 #include "TestHelpers.h"
 
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/Log.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Project/GameManifest.h>
 #include <Strata/Reflection/PropertyJson.h>
@@ -478,6 +479,36 @@ TEST_SUITE("Editor.Scripts")
 		CHECK(game->GetScriptFault()->ClassName == "Faulty");
 		game->Update(Timestep(1.0f / 60.0f));
 		CHECK(game->GetScene()->IsRunning());
+	}
+
+	TEST_CASE("The game runtime reports how many script classes its module has")
+	{
+		ScriptHarness harness;
+		harness.Run("scene.saveAs", { { "path", "Scenes/Main.stscene" } });
+		harness.Run("project.setStartScene", { { "scene", "Scenes/Main.stscene" } });
+		const std::filesystem::path build = harness.Directory.parent_path() / "Build";
+		// The runtime reports the start at info level, with the module's number of classes.
+		const ScopedLogLevel infoLog(LogLevel::Info);
+		auto exportAndStart = [&harness, &build]() -> uint64_t
+		{
+			const nlohmann::json exported = harness.Run("project.export", { { "directory", FileSystem::ToUTF8(build) }, { "includeRuntime", false } });
+			const uint64_t logStart = Log::GetBuffer().GetLatestSequence();
+			std::string error;
+			const Scope<GameRuntime> game = GameRuntime::Create(FileSystem::FromUTF8(exported["manifest"].get<std::string>()), &error);
+			REQUIRE_MESSAGE(game, error);
+			return logStart;
+		};
+
+		// One class is counted in the singular.
+		harness.LoadModule(STRATA_TEST_SCRIPTS_NEWERSDK);
+		uint64_t logStart = exportAndStart();
+		CHECK(CountLogMessages(logStart, ", 1 script class)") == 1);
+
+		harness.LoadModule(STRATA_TEST_SCRIPTS_FAULTS);
+		const size_t classes = harness.Context.GetScriptEngine()->GetClasses().size();
+		REQUIRE(classes > 1);
+		logStart = exportAndStart();
+		CHECK(CountLogMessages(logStart, fmt::format(", {} script classes)", classes)) == 1);
 	}
 
 	TEST_CASE("Exports ship the module file the editor loaded, not a newer one")

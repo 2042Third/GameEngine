@@ -147,6 +147,14 @@ namespace Strata::Tests
 			REQUIRE_MESSAGE(pill.has_value(), "No ", std::string(probeKey), " in the last frame");
 			return pill->Color;
 		}
+
+		// The text a status pill showed last.
+		std::string GetPillText(std::string_view probeKey)
+		{
+			const std::optional<UI::ItemProbe::Item> pill = UI::ItemProbe::Find(probeKey);
+			REQUIRE_MESSAGE(pill.has_value(), "No ", std::string(probeKey), " in the last frame");
+			return pill->Text;
+		}
 	};
 
 	inline EditorOptions WithFeatureProject(const std::string& directoryName)

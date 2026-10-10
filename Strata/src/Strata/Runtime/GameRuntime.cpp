@@ -57,8 +57,14 @@ namespace Strata
 		if (!runtime->LoadScene(runtime->m_Manifest.StartScene, outError))
 			return nullptr; // The destructor deactivates the asset manager and the script engine
 		runtime->CheckScriptFault();
-		ST_CORE_INFO("Started '{}' ({} assets{})", runtime->m_Manifest.Name, runtime->m_AssetManager->GetAllMetadata().size(),
-			runtime->m_ScriptEngine ? fmt::format(", {} script classes", runtime->m_ScriptEngine->GetClasses().size()) : std::string());
+		std::string scripts;
+		if (runtime->m_ScriptEngine)
+		{
+			const size_t classes = runtime->m_ScriptEngine->GetClasses().size();
+			scripts = fmt::format(", {} script {}", classes, classes == 1 ? "class" : "classes");
+		}
+		const size_t assets = runtime->m_AssetManager->GetAllMetadata().size();
+		ST_CORE_INFO("Started '{}' ({} {}{})", runtime->m_Manifest.Name, assets, assets == 1 ? "asset" : "assets", scripts);
 		return runtime;
 	}
 

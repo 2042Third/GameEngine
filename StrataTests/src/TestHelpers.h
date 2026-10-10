@@ -61,6 +61,18 @@ namespace Strata::Tests
 		return count;
 	}
 
+	// Logs at `level` while it exists, then at the test process's level again (Warn, see TestMain.cpp): for tests that
+	// check messages below it.
+	class ScopedLogLevel
+	{
+	public:
+		explicit ScopedLogLevel(LogLevel level) { Log::SetLevel(level); }
+		~ScopedLogLevel() { Log::SetLevel(LogLevel::Warn); }
+
+		ScopedLogLevel(const ScopedLogLevel&) = delete;
+		ScopedLogLevel& operator=(const ScopedLogLevel&) = delete;
+	};
+
 	// Builds a 16-bit PCM WAV file containing a sine wave (the same signal on every channel), optionally preceded by
 	// silence.
 	std::vector<uint8_t> CreateSineWav(float durationSeconds, uint32_t sampleRate = 48000, uint16_t channels = 1, float frequency = 440.0f,

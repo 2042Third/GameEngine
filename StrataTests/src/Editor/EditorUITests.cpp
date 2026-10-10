@@ -6,6 +6,7 @@
 #include "EditorLayer.h"
 #include "Panels/ConsolePanel.h"
 #include "Panels/ViewportPanel.h"
+#include "Scripting/ScriptTestUtils.h"
 #include "TestHelpers.h"
 #include "UI/EditorFonts.h"
 #include "UI/EditorPanelRegistry.h"
@@ -24,6 +25,7 @@
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Entity.h>
+#include <Strata/Scripting/ScriptEngine.h>
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -675,6 +677,25 @@ TEST_SUITE("Editor.UI")
 		REQUIRE(editor.FramesUntil([&builder]() { return !builder.IsRunning(); }));
 		editor.Frames(1, 1.0f);
 		CHECK(editor.Host->MaxFrameRate == EditorLayer::c_IdleFrameRate);
+	}
+
+	TEST_CASE("The scripts pill names the loaded module and counts its classes")
+	{
+		HarnessEditor editor({}, WithFeatureProject("EditorUIScriptClasses"));
+		editor.Frames(2);
+
+		// A module with one class says so in the singular.
+		editor.Run("script.load", { { "path", FileSystem::ToUTF8(GetTestScriptModule(STRATA_TEST_SCRIPTS_NEWERSDK)) } });
+		editor.Frames(1);
+		CHECK(editor.GetPillText("Status.Scripts") == "NewerSDK \xC2\xB7 1 class");
+
+		// Another module replaces it; more classes are counted in the plural.
+		editor.Run("script.load", { { "path", FileSystem::ToUTF8(GetTestScriptModule(STRATA_TEST_SCRIPTS_FAULTS)) } });
+		editor.Frames(1);
+		const Ref<ScriptEngine>& engine = editor.Context().GetScriptEngine();
+		REQUIRE(engine);
+		REQUIRE(engine->GetClasses().size() > 1);
+		CHECK(editor.GetPillText("Status.Scripts") == fmt::format("{} \xC2\xB7 {} classes", engine->GetModuleName(), engine->GetClasses().size()));
 	}
 
 	TEST_CASE("The frame time is what frames take, not the interval of the idle frame rate")

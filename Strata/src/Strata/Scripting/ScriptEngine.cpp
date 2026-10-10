@@ -116,7 +116,8 @@ namespace Strata
 				system->OnModuleLoaded();
 		}
 
-		ST_CORE_INFO("{} script module '{}' ({} classes)", replacing ? "Reloaded" : "Loaded", m_Module->GetName(), m_Module->GetClasses().size());
+		const size_t classes = m_Module->GetClasses().size();
+		ST_CORE_INFO("{} script module '{}' ({} {})", replacing ? "Reloaded" : "Loaded", m_Module->GetName(), classes, classes == 1 ? "class" : "classes");
 		if (m_HotReloadEnabled && previousDirectory != m_ModulePath.parent_path())
 			StartWatching();
 		return true;

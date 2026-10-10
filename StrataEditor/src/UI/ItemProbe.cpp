@@ -19,7 +19,7 @@ namespace Strata::UI
 
 	}
 
-	void ItemProbe::Record(std::string_view key, bool enabled, ImU32 color)
+	void ItemProbe::Record(std::string_view key, bool enabled, ImU32 color, std::string_view text)
 	{
 		const int frame = ImGui::GetFrameCount();
 		Item& item = s_Items[HashKey(key)];
@@ -29,6 +29,8 @@ namespace Strata::UI
 		item.Frame = frame;
 		item.Enabled = enabled;
 		item.Color = color;
+		// Reuses the item's storage: recording the same widget every frame allocates nothing once its text fits.
+		item.Text.assign(text);
 	}
 
 	std::optional<ItemProbe::Item> ItemProbe::Find(std::string_view key)

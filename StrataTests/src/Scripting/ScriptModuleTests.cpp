@@ -5,6 +5,7 @@
 #include "Strata/Core/DynamicLibrary.h"
 #include "Strata/Core/FileLock.h"
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Core/Log.h"
 #include "Strata/Core/Platform.h"
 #include "Strata/Core/Process.h"
 #include "Strata/Core/StringUtils.h"
@@ -60,7 +61,13 @@ TEST_SUITE("Scripting.Module")
 		CHECK_FALSE(engine.IsFaulted());
 
 		std::string error;
-		REQUIRE_MESSAGE(engine.LoadModule(GetTestScriptModule(STRATA_TEST_SCRIPTS_API), &error), error);
+		{
+			// The load is reported at info level, with the number of classes.
+			const ScopedLogLevel infoLog(LogLevel::Info);
+			const uint64_t logStart = Log::GetBuffer().GetLatestSequence();
+			REQUIRE_MESSAGE(engine.LoadModule(GetTestScriptModule(STRATA_TEST_SCRIPTS_API), &error), error);
+			CHECK(CountLogMessages(logStart, fmt::format("Loaded script module 'StrataTestScriptsAPI' ({} classes)", engine.GetClasses().size())) == 1);
+		}
 		CHECK(engine.IsModuleLoaded());
 		CHECK(engine.GetLoadCount() == 1);
 		CHECK(engine.GetModuleName() == "StrataTestScriptsAPI");
@@ -155,8 +162,12 @@ TEST_SUITE("Scripting.Module")
 	{
 		ScriptEngine engine;
 		std::string error;
+		const ScopedLogLevel infoLog(LogLevel::Info);
+		const uint64_t logStart = Log::GetBuffer().GetLatestSequence();
 		REQUIRE_MESSAGE(engine.LoadModule(GetTestScriptModule(STRATA_TEST_SCRIPTS_NEWERSDK), &error), error);
 		CHECK(engine.GetModuleName() == "NewerSDK");
+		// Its one class is counted in the singular.
+		CHECK(CountLogMessages(logStart, "Loaded script module 'NewerSDK' (1 class)") == 1);
 		const ScriptClassInfo* probe = engine.FindClass("Probe");
 		REQUIRE(probe);
 		REQUIRE(probe->Fields.size() == 1);

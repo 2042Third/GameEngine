@@ -1237,7 +1237,8 @@ namespace Strata
 			return UI::Pill("Status.Scripts", Icons::CircleAlert, "Build failed", colors.Error, "The last script build failed (see the Console)");
 		if (engine && engine->IsModuleLoaded())
 		{
-			const std::string text = fmt::format("{}{}{} classes", engine->GetModuleName(), c_Separator, engine->GetClasses().size());
+			const size_t classes = engine->GetClasses().size();
+			const std::string text = fmt::format("{}{}{} {}", engine->GetModuleName(), c_Separator, classes, classes == 1 ? "class" : "classes");
 			UI::Pill("Status.Scripts", Icons::FileCode, text, colors.TextSecondary, "The loaded script module");
 			return false;
 		}
