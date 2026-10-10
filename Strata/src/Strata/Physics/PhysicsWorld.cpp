@@ -106,6 +106,7 @@ namespace Strata
 		static_assert(PhysicsCapacitySettings::c_MaxBodyPairsLimit <= JPH::PhysicsSystem::cMaxBodyPairsLimit, "Scene capacities exceed Jolt's body pair limit");
 		static_assert(PhysicsCapacitySettings::c_MaxContactConstraintsLimit <= JPH::PhysicsSystem::cMaxContactConstraintsLimit,
 			"Scene capacities exceed Jolt's contact constraint limit");
+		static_assert(2 * Scene::c_MaxEntities <= PhysicsCapacitySettings::c_MaxBodiesLimit, "The automatic body capacity must fit a scene full of bodies");
 
 		uint32_t NextPowerOfTwo(uint64_t value)
 		{

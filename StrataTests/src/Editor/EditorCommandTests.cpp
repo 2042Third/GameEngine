@@ -17,6 +17,9 @@
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/SceneSerializer.h>
 
+#include <cstdint>
+#include <utility>
+
 using namespace Strata;
 
 namespace
@@ -644,6 +647,22 @@ TEST_SUITE("Editor.Commands")
 		CHECK(harness.Run("scene.info")["settings"]["fixedTimestep"].get<double>() == doctest::Approx(1.0 / 60.0));
 		harness.Run("edit.redo");
 		CHECK(harness.Context.GetEditScene()->GetSettings().PhysicsCapacity == PhysicsCapacitySettings { 200000, 0, 50000 });
+
+		// The limits are accepted; one more is not.
+		const PhysicsCapacitySettings limits { PhysicsCapacitySettings::c_MaxBodiesLimit, PhysicsCapacitySettings::c_MaxBodyPairsLimit,
+			PhysicsCapacitySettings::c_MaxContactConstraintsLimit };
+		const std::pair<const char*, uint64_t> beyondLimits[] = { { "maxBodyPairs", uint64_t(limits.MaxBodyPairs) + 1 },
+			{ "maxContactConstraints", uint64_t(limits.MaxContactConstraints) + 1 } };
+		for (const auto& [name, value] : beyondLimits)
+		{
+			INFO(name);
+			CHECK(harness.Commands.Execute(harness.Context, "scene.setSettings", { { "physicsCapacity", { { name, value } } } }).ErrorKind
+				== EditorCommandError::InvalidParameters);
+		}
+		harness.Run("scene.setSettings", { { "physicsCapacity", { { "maxBodies", limits.MaxBodies }, { "maxBodyPairs", limits.MaxBodyPairs },
+			{ "maxContactConstraints", limits.MaxContactConstraints } } } });
+		CHECK(harness.Context.GetEditScene()->GetSettings().PhysicsCapacity == limits);
+		harness.Run("edit.undo");
 	}
 
 	TEST_CASE("Components this build does not register survive play, duplication, prefabs, undo and saving")

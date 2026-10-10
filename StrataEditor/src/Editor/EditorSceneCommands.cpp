@@ -252,11 +252,14 @@ namespace Strata
 			} });
 
 		nlohmann::json capacitySchema = ObjectSchema({
-			{ "maxBodies", IntegerSchema("Most bodies the physics world holds; 0 sizes it from the bodies the scene starts with", 0,
-				PhysicsCapacitySettings::c_MaxBodiesLimit) },
-			{ "maxBodyPairs", IntegerSchema("Most pairs of bodies with overlapping bounds per step; 0: automatic", 0, PhysicsCapacitySettings::c_MaxBodyPairsLimit) },
-			{ "maxContactConstraints", IntegerSchema("Most contacts solved per step; 0: automatic", 0, PhysicsCapacitySettings::c_MaxContactConstraintsLimit) } });
-		capacitySchema["description"] = "Physics world capacities (only the given ones change); raise them for scenes that create many bodies while they play";
+			{ "maxBodies", IntegerSchema("Most bodies the physics world holds (each reserves about 80 bytes); 0 sizes it from the bodies the scene "
+				"starts with", 0, PhysicsCapacitySettings::c_MaxBodiesLimit) },
+			{ "maxBodyPairs", IntegerSchema("Most pairs of bodies with overlapping bounds per step (each reserves about 90 bytes); 0: automatic", 0,
+				PhysicsCapacitySettings::c_MaxBodyPairsLimit) },
+			{ "maxContactConstraints", IntegerSchema("Most contacts solved per step (each reserves about 830 bytes); 0: automatic", 0,
+				PhysicsCapacitySettings::c_MaxContactConstraintsLimit) } });
+		capacitySchema["description"] = "Physics world capacities (only the given ones change), reserved in memory when play starts; raise them for "
+			"scenes that create many bodies while they play";
 		registry.Register({ "scene.setSettings",
 			"Changes physics settings of the edited scene: gravity, the fixed step and the physics world's capacities (undoable, one step; while "
 			"playing it changes the running copy only, and capacities apply from the next play start). Returns the settings.",

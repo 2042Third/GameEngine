@@ -34,10 +34,14 @@ namespace Strata
 		uint32_t MaxBodyPairs = 0;          // Pairs of bodies whose bounds overlap, per step
 		uint32_t MaxContactConstraints = 0; // Contacts solved per step
 
-		// The largest values a scene may ask for (the physics engine supports 2^23 bodies; the others bound memory).
-		static constexpr uint32_t c_MaxBodiesLimit = 1u << 23;
-		static constexpr uint32_t c_MaxBodyPairsLimit = 1u << 26;
-		static constexpr uint32_t c_MaxContactConstraintsLimit = 1u << 22;
+		// The largest values a scene may ask for, whether its file or a command sets them. The physics engine reserves memory
+		// for every capacity when the world is created, and does not survive an allocation that fails, so the limits bound
+		// what one world reserves: about 80 bytes per body, 90 per body pair and 830 per contact constraint, so about 940 MiB
+		// at the limits. A scene holds at most Scene::c_MaxEntities (2^20 - 1) entities, so 2^21 bodies have room for all of
+		// them, with the automatic sizing's headroom.
+		static constexpr uint32_t c_MaxBodiesLimit = 1u << 21;
+		static constexpr uint32_t c_MaxBodyPairsLimit = 1u << 22;
+		static constexpr uint32_t c_MaxContactConstraintsLimit = 1u << 19;
 
 		bool operator==(const PhysicsCapacitySettings& other) const = default;
 	};

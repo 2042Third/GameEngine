@@ -38,6 +38,7 @@
 	"Perf.Physics.Boxes70k.StrataStepTime": { "Measured": 6.624, "Budget": 9.936, "Unit": "ms" },
 	"Perf.Physics.Boxes10k.ActiveFrame": { "Measured": 2.304, "Budget": 3.456, "Unit": "ms" },
 	"Perf.Physics.Boxes10k.StrataStepTime": { "Measured": 0.5234, "Budget": 0.7851, "Unit": "ms" },
+	"Perf.Physics.LargestCapacities.ReservedMemory": { "Measured": 984.2, "Budget": 1033.0, "Unit": "MB" },
 	"Perf.Physics.Create10kBodies": { "Measured": 8.919, "Budget": 13.37, "Unit": "ms" },
 	"PerfGPU.Editor.EditFrameNested100k": { "Measured": 0.2387, "Budget": 0.358, "Unit": "ms" },
 	"PerfGPU.Editor.PlayFrameNested100k": { "Measured": 0.2209, "Budget": 0.3313, "Unit": "ms" },

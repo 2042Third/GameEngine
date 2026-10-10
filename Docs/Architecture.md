@@ -176,9 +176,12 @@ scene does not set (`SceneSettings::PhysicsCapacity`) are sized from the bodies 
 body slot; at least 10,240 contacts, two per body; scratch memory for them), bodies that find the world full wait for a
 slot and are reported in one error, steps that overflow the pair or contact buffers are counted
 (`PhysicsStats::BodyOverflowCount`, `ContactOverflowSteps`), and what a world lacked is remembered per scene name, so the
-scene's next world is sized for it. Other systems use physics through the scene services
-`PhysicsSystem` offers (`ICollisionEventSource`, `IBodyMotionQuery`, `IBodyControl`, `IPhysicsQueries`, with
-`CollisionEvent` and `RaycastHit`, in `Scene/SceneServices.h`); collision events collected during a step are dispatched
+scene's next world is sized for it. Jolt reserves a world's buffers when it is created
+and does not survive a failed allocation, so the capacities a scene may ask for are limited (`PhysicsCapacitySettings`:
+about 80 bytes per body, 90 per body pair and 830 per contact constraint, about 940 MiB at the limits). Other systems
+use physics through the scene services `PhysicsSystem` offers (`ICollisionEventSource`, `IBodyMotionQuery`,
+`IBodyControl`, `IPhysicsQueries`, with `CollisionEvent` and `RaycastHit`, in `Scene/SceneServices.h`); collision events
+collected during a step are dispatched
 afterwards on the main thread to the listeners. Contacts are tracked only for pairs someone wants (every pair while a
 listener of all entities is registered, otherwise pairs with a watched entity, such as one whose script has contact
 callbacks): Jolt's job threads record those into buffers of their own, without a lock, which are merged and sorted after
@@ -438,8 +441,9 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   (`GetDroppedFixedStepCount`, also `PhysicsStats::DroppedSteps`). Otherwise a frame that runs eight expensive steps
   makes the next one owe even more. Tests and tools keep the default, every due step up to `MaxFixedStepsPerFrame`.
 - `SceneSettings` holds gravity, the fixed timestep (1/60 s), `MaxFixedStepsPerFrame` and the physics world's capacities
-  (`PhysicsCapacity`: bodies, body pairs and contact constraints; 0, the default, sizes one automatically). All of it is
-  saved with the scene and changed with `scene.setSettings` (one undo step).
+  (`PhysicsCapacity`: bodies, body pairs and contact constraints; 0, the default, sizes one automatically; each up to a
+  limit that bounds the memory a world reserves). All of it is saved with the scene and changed with `scene.setSettings`
+  (one undo step).
 
 ### Scene services
 

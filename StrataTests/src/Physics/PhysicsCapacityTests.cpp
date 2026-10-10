@@ -79,17 +79,25 @@ TEST_SUITE("Physics.Capacity")
 		CHECK(kept.TempAllocatorSize == c_MiB);
 
 		// What an earlier world needed raises the automatic ones.
-		const PhysicsSettings grown = PhysicsWorld::ResolveCapacities(automatic, 10, { 100'000, 5'000'000, 400'000 });
+		const PhysicsSettings grown = PhysicsWorld::ResolveCapacities(automatic, 10, { 100'000, 3'000'000, 400'000 });
 		CHECK(grown.MaxBodies == 262'144);
-		CHECK(grown.MaxBodyPairs == 5'000'000);
+		CHECK(grown.MaxBodyPairs == 3'000'000);
 		CHECK(grown.MaxContactConstraints == 400'000);
 
-		// Nothing exceeds the limits a scene may ask for.
+		// Nothing exceeds the limits a scene may ask for, which bound the memory a world reserves: also not the pairs sized for
+		// the largest number of bodies, given or automatic.
 		const PhysicsSettings huge = PhysicsWorld::ResolveCapacities(automatic, 20'000'000);
 		CHECK(huge.MaxBodies == PhysicsCapacitySettings::c_MaxBodiesLimit);
-		CHECK(huge.MaxBodyPairs == 4 * PhysicsCapacitySettings::c_MaxBodiesLimit);
+		CHECK(huge.MaxBodyPairs == PhysicsCapacitySettings::c_MaxBodyPairsLimit);
 		CHECK(huge.MaxContactConstraints == PhysicsCapacitySettings::c_MaxContactConstraintsLimit);
 		CHECK(PhysicsWorld::ResolveCapacities(automatic, 10, { 0, UINT32_MAX, 0 }).MaxBodyPairs == PhysicsCapacitySettings::c_MaxBodyPairsLimit);
+		PhysicsSettings mostBodies;
+		mostBodies.MaxBodies = PhysicsCapacitySettings::c_MaxBodiesLimit;
+		CHECK(PhysicsWorld::ResolveCapacities(mostBodies, 10).MaxBodyPairs == PhysicsCapacitySettings::c_MaxBodyPairsLimit);
+		// The automatic sizing has room for a scene full of bodies.
+		const PhysicsSettings full = PhysicsWorld::ResolveCapacities(automatic, static_cast<uint32_t>(Scene::c_MaxEntities));
+		CHECK(full.MaxBodies == PhysicsCapacitySettings::c_MaxBodiesLimit);
+		CHECK(full.MaxBodies >= 2 * Scene::c_MaxEntities);
 	}
 
 	TEST_CASE("A scene's capacities size its world, before the default settings and automatic sizing")

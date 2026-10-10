@@ -4,6 +4,7 @@
 #include "Perf/SceneGenerators.h"
 #include "Physics/PhysicsTestUtils.h"
 #include "Strata/Core/Log.h"
+#include "Strata/Core/Platform.h"
 #include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
@@ -13,6 +14,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -157,6 +159,42 @@ TEST_SUITE("Perf.Physics")
 	TEST_CASE("10,000 falling boxes")
 	{
 		MeasureFallingBoxes(10'000, "Perf.Physics.Boxes10k");
+	}
+
+	TEST_CASE("A world at the largest capacities a scene may ask for reserves less than 1 GiB")
+	{
+		// What playing a scene reserves for its world: the private memory (on Windows, the commit charge: also memory not
+		// touched yet) the process gained from the start of play to its second step.
+		constexpr uint64_t c_GiB = 1024ull * 1024 * 1024;
+		constexpr double c_MB = 1000.0 * 1000.0; // The unit of the perf lab's memory budgets
+		Perf::ScopedApplicationJobSystem jobs;
+		Scene scene;
+		CreateGround(scene);
+		CreateDynamicBox(scene, "Box", glm::vec3(0.0f, 5.0f, 0.0f));
+		const auto measureReserved = [&](const PhysicsCapacitySettings& capacity) -> uint64_t
+		{
+			scene.GetSettings().PhysicsCapacity = capacity;
+			const std::optional<ProcessMemoryInfo> before = Platform::GetProcessMemory();
+			REQUIRE(before);
+			scene.OnRuntimeStart();
+			StepScene(scene, 2);
+			const std::optional<ProcessMemoryInfo> during = Platform::GetProcessMemory();
+			REQUIRE(during);
+			CHECK(GetPhysics(scene).GetStats().MaxBodies == capacity.MaxBodies);
+			scene.OnRuntimeStop();
+			return during->PrivateBytes > before->PrivateBytes ? during->PrivateBytes - before->PrivateBytes : 0;
+		};
+
+		const PhysicsCapacitySettings largest { PhysicsCapacitySettings::c_MaxBodiesLimit, PhysicsCapacitySettings::c_MaxBodyPairsLimit,
+			PhysicsCapacitySettings::c_MaxContactConstraintsLimit };
+		const uint64_t largestReserved = measureReserved(largest);
+		// The most bodies, with the pairs and contacts sized automatically for them.
+		const uint64_t mostBodiesReserved = measureReserved({ PhysicsCapacitySettings::c_MaxBodiesLimit, 0, 0 });
+		MESSAGE("Reserved for the largest capacities: ", static_cast<double>(largestReserved) / c_MB, " MB; for the most bodies: ",
+			static_cast<double>(mostBodiesReserved) / c_MB, " MB");
+		CHECK(largestReserved < c_GiB);
+		CHECK(mostBodiesReserved < c_GiB);
+		Perf::CheckBudget("Perf.Physics.LargestCapacities.ReservedMemory", static_cast<double>(largestReserved) / c_MB);
 	}
 
 	TEST_CASE("Creating 10,000 bodies in one frame")
