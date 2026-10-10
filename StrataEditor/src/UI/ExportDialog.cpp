@@ -4,6 +4,7 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/GameExport.h"
+#include "Panels/SceneHierarchyPanel.h"
 #include "UI/EditorFonts.h"
 #include "UI/FileDialogs.h"
 #include "UI/Icons.h"
@@ -20,6 +21,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string>
 
 namespace Strata
 {
@@ -49,13 +51,13 @@ namespace Strata
 			ImGui::PopFont();
 		}
 
-		// A checkbox recorded in the probe (the kit has none), with an explanation as its tooltip.
+		// A checkbox recorded in the probe (the kit has none) with its state as the text, with an explanation as its tooltip.
 		void Option(const char* id, const char* label, bool* value, const char* tooltip)
 		{
 			ImGui::PushID(id);
 			ImGui::Checkbox(label, value);
 			ImGui::PopID();
-			UI::ItemProbe::Record(id);
+			UI::ItemProbe::Record(id, true, 0, *value ? "Checked" : "Unchecked");
 			if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
 				ImGui::SetTooltip("%s", tooltip);
 		}
@@ -79,6 +81,24 @@ namespace Strata
 			return fmt::format("{:.1f} MB", static_cast<double>(bytes) / c_MiB);
 		}
 
+		// What a successful export wrote.
+		std::string DescribeExport(uint64_t assetCount, uint64_t packBytes, double seconds, const std::filesystem::path& directory, size_t excluded)
+		{
+			return fmt::format("Exported {} assets ({} pack) in {:.1f} s to {}.{}", assetCount, DescribeSize(packBytes), seconds, UI::DisplayPath(directory),
+				excluded > 0 ? fmt::format(" {} unused {} left out.", excluded, excluded == 1 ? "asset was" : "assets were") : std::string());
+		}
+
+	}
+
+	ExportDialog::ExportDialog()
+	{
+		const GameExportOptions defaults;
+		m_Width = static_cast<int>(defaults.WindowWidth);
+		m_Height = static_cast<int>(defaults.WindowHeight);
+		m_Fullscreen = defaults.Fullscreen;
+		m_IncludeRuntime = defaults.IncludeRuntime;
+		m_IncludeScriptSymbols = defaults.IncludeScriptSymbols;
+		m_Prune = defaults.Prune;
 	}
 
 	void ExportDialog::Open(EditorPanelContext& context)
@@ -94,11 +114,62 @@ namespace Strata
 		// A finished export's outcome is shown until the dialog opens again.
 		if (!m_Exporting)
 			m_Finished = false;
+		// The file system may have changed while the dialog was closed.
+		m_CheckedDirectory.reset();
 		m_OpenRequested = true;
+	}
+
+	void ExportDialog::WatchExports(EditorPanelContext& context)
+	{
+		// The dialog's own export reports through its command (StartExport). Another one is shown while the dialog is open or
+		// opening, from whatever it showed (the form, or the outcome of an earlier export).
+		const Ref<GameExport>& current = context.Context.GetGameExport();
+		if (!m_Exporting && (m_Open || m_OpenRequested) && current && !current->IsFinished() && m_Watched.lock() != current)
+		{
+			m_Watched = current;
+			m_Finished = false;
+		}
+
+		const Ref<GameExport> watched = m_Watched.lock();
+		if (!watched)
+		{
+			m_Watched.reset();
+			return;
+		}
+		if (!watched->IsFinished())
+			return;
+		m_Watched.reset();
+		m_Finished = true;
+		m_Succeeded = watched->GetState() == GameExportState::Succeeded;
+		m_ExportedDirectory = watched->GetOptions().Directory;
+		if (!m_Succeeded)
+		{
+			m_Outcome = watched->GetError();
+			return;
+		}
+		const GameExportResult& result = watched->GetResult();
+		m_Outcome = DescribeExport(result.AssetCount, result.Pack.FileSize, result.Seconds, m_ExportedDirectory, result.ExcludedAssets.size());
+	}
+
+	const std::string& ExportDialog::GetDirectoryProblem(EditorPanelContext& context)
+	{
+		const Ref<Project>& project = context.Context.GetProject();
+		const std::filesystem::path projectDirectory = project ? project->GetProjectDirectory() : std::filesystem::path();
+		if (m_CheckedDirectory == m_Directory && m_CheckedProject == projectDirectory)
+			return m_DirectoryProblem;
+		m_CheckedDirectory = m_Directory;
+		m_CheckedProject = projectDirectory;
+		m_DirectoryProblem.clear();
+		if (!project)
+			return m_DirectoryProblem;
+		if (std::optional<std::string> problem = CheckExportDirectory(FileSystem::FromUTF8(m_Directory), projectDirectory))
+			m_DirectoryProblem = std::move(*problem);
+		return m_DirectoryProblem;
 	}
 
 	void ExportDialog::Draw(EditorPanelContext& context)
 	{
+		WatchExports(context);
 		if (m_OpenRequested)
 		{
 			UI::OpenModal(c_Popup);
@@ -109,9 +180,13 @@ namespace Strata
 		if (!m_Open)
 			return;
 		const float width = ImGui::GetFontSize() * c_WidthInFontSizes;
-		if (!context.Context.HasProject() && !m_Exporting)
+		const Ref<GameExport>& current = context.Context.GetGameExport();
+		const bool running = current && !current->IsFinished();
+		// The dialog's own export shows its progress until its command answered (a frame after the export ended).
+		const bool showProgress = m_Exporting || running;
+		if (!context.Context.HasProject() && !showProgress)
 			open = false;
-		else if (m_Exporting)
+		else if (showProgress)
 			DrawProgress(context, width);
 		else if (m_Finished)
 			DrawOutcome(width);
@@ -119,7 +194,17 @@ namespace Strata
 			DrawFields(context, width);
 
 		ImGui::Spacing();
-		if (m_Finished && m_Succeeded)
+		if (showProgress)
+		{
+			// Closing the dialog leaves the export running; Cancel stops it (whoever started it).
+			PlaceButtons(width, { "Cancel Export", "Hide" });
+			if (UI::DialogButton("Export.Cancel", "Cancel Export", false, running))
+				RunEditorCommand(context.Context, context.Commands, "project.cancelExport");
+			ImGui::SameLine();
+			if (UI::DialogButton("Export.Hide", "Hide"))
+				open = false;
+		}
+		else if (m_Finished && m_Succeeded)
 		{
 			PlaceButtons(width, { "Open Folder", "Close" });
 			if (UI::DialogButton("Export.OpenFolder", "Open Folder") && !Platform::OpenWithDefaultApplication(FileSystem::ToUTF8(m_ExportedDirectory)))
@@ -132,29 +217,18 @@ namespace Strata
 		{
 			PlaceButtons(width, { "Back", "Close" });
 			if (UI::DialogButton("Export.Back", "Back"))
+			{
+				// The form again, with the directory checked again: the export may have failed because of it.
 				m_Finished = false;
+				m_CheckedDirectory.reset();
+			}
 			ImGui::SameLine();
 			if (UI::DialogButton("Export.Close", "Close", true))
 				open = false;
 		}
-		else if (m_Exporting)
-		{
-			// Closing the dialog leaves the export running; Cancel stops it.
-			PlaceButtons(width, { "Cancel Export", "Hide" });
-			if (UI::DialogButton("Export.Cancel", "Cancel Export"))
-				context.Commands.Execute(context.Context, "project.cancelExport");
-			ImGui::SameLine();
-			if (UI::DialogButton("Export.Hide", "Hide"))
-				open = false;
-		}
 		else
 		{
-			std::string problem;
-			if (const Ref<Project>& project = context.Context.GetProject())
-			{
-				if (std::optional<std::string> directoryProblem = CheckExportDirectory(FileSystem::FromUTF8(m_Directory), project->GetProjectDirectory()))
-					problem = std::move(*directoryProblem);
-			}
+			const std::string& problem = GetDirectoryProblem(context);
 			const bool editing = ImGui::IsAnyItemActive();
 			PlaceButtons(width, { "Cancel", "Export" });
 			if (UI::DialogButton("Export.Cancel", "Cancel") || (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !editing))
@@ -191,13 +265,13 @@ namespace Strata
 		const float numberWidth = ImGui::GetFontSize() * c_NumberFieldWidthInFontSizes;
 		ImGui::SetNextItemWidth(numberWidth);
 		ImGui::InputInt("##Width", &m_Width, 0, 0);
-		UI::ItemProbe::Record("Export.Width");
+		UI::ItemProbe::Record("Export.Width", true, 0, std::to_string(m_Width));
 		ImGui::SameLine();
 		ImGui::TextUnformatted("x");
 		ImGui::SameLine();
 		ImGui::SetNextItemWidth(numberWidth);
 		ImGui::InputInt("##Height", &m_Height, 0, 0);
-		UI::ItemProbe::Record("Export.Height");
+		UI::ItemProbe::Record("Export.Height", true, 0, std::to_string(m_Height));
 		m_Width = std::clamp(m_Width, 1, c_MaxWindowSize);
 		m_Height = std::clamp(m_Height, 1, c_MaxWindowSize);
 		ImGui::SameLine();
@@ -216,12 +290,7 @@ namespace Strata
 			"(project.setExportSettings)");
 		ImGui::Spacing();
 
-		std::string problem;
-		if (const Ref<Project>& project = context.Context.GetProject())
-		{
-			if (std::optional<std::string> directoryProblem = CheckExportDirectory(FileSystem::FromUTF8(m_Directory), project->GetProjectDirectory()))
-				problem = std::move(*directoryProblem);
-		}
+		const std::string& problem = GetDirectoryProblem(context);
 		if (!m_Outcome.empty() && !m_Succeeded)
 			Caption(m_Outcome, colors.Error, width);
 		else if (!problem.empty())
@@ -238,7 +307,8 @@ namespace Strata
 		const Ref<GameExport>& exporter = context.Context.GetGameExport();
 		const float progress = exporter ? exporter->GetProgress() : 0.0f;
 		const std::string stage = exporter ? exporter->GetStage() : std::string();
-		Caption(fmt::format("Exporting to {}", m_Directory), colors.TextSecondary, width);
+		const std::filesystem::path directory = exporter ? exporter->GetOptions().Directory : m_ExportedDirectory;
+		Caption(fmt::format("Exporting to {}", UI::DisplayPath(directory)), colors.TextSecondary, width);
 		ImGui::Spacing();
 		UI::StrataProgressBar("Export.Progress", progress, fmt::format("{:.0f}%", std::floor(progress * 100.0f)), width);
 		ImGui::Spacing();
@@ -287,9 +357,8 @@ namespace Strata
 			const nlohmann::json& value = result.Value;
 			const nlohmann::json* excludedAssets = JsonUtils::Find(value, "excludedAssets");
 			const size_t excluded = excludedAssets && excludedAssets->is_array() ? excludedAssets->size() : 0;
-			m_Outcome = fmt::format("Exported {} assets ({} pack) in {:.1f} s to {}.{}", JsonUtils::GetUInt(value, "assetCount", 0),
-				DescribeSize(JsonUtils::GetUInt(value, "packBytes", 0)), JsonUtils::GetFloat(value, "seconds", 0.0f), UI::DisplayPath(m_ExportedDirectory),
-				excluded > 0 ? fmt::format(" {} unused {} left out.", excluded, excluded == 1 ? "asset was" : "assets were") : std::string());
+			m_Outcome = DescribeExport(JsonUtils::GetUInt(value, "assetCount", 0), JsonUtils::GetUInt(value, "packBytes", 0),
+				JsonUtils::GetFloat(value, "seconds", 0.0f), m_ExportedDirectory, excluded);
 		});
 	}
 

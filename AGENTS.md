@@ -648,8 +648,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `project.exportStatus` reports its progress and stage, `project.cancelExport` stops it, `project.setExportSettings
   {alwaysInclude}` names the assets and folders scripts load by path (saved in the project file), and closing the
   project cancels a running export. The UI is the Export dialog (`UI/ExportDialog`: File > Export Game..., the toolbar's
-  Export button). CTest exports a small game (`StrataEditor --no-gpu`) and runs it headless; `StrataEditor.Tetris` also
-  exports Tetris pruned and runs it.
+  Export button), which also shows and cancels exports that commands and agents started. CTest exports a small game
+  (`StrataEditor --no-gpu`) and runs it headless; `StrataEditor.Tetris` also exports Tetris pruned and runs it.
 - A running game asks its owner to quit or to switch scenes through `Scene::RequestQuit`/`RequestSceneLoad` (scripts: the
   SDK's `Game`), honored after each update: the editor stops play mode, or replaces the running scene (a paused game stays
   paused, with its pending steps; `play.stop` still returns to the edited scene); `GameRuntime` ends the game

@@ -898,7 +898,10 @@ bytes and stage (`GetProgress`, `GetStage`; `project.exportStatus`); one export 
 editor cancels it and waits for it. The command answers when it finished, with the files, the asset count, the excluded
 assets, the pack's size, the seconds it took and the editor's frame times from the frame that started it. The UI is the
 Export dialog (`UI/ExportDialog`: File > Export Game..., or the main toolbar's Export button, which shows the share done
-while an export runs): the command's fields, then a strata-band progress bar (`UI::StrataProgressBar`) and Open Folder.
+while an export runs): the command's fields with its defaults (no script symbols in Dist editors; the directory is
+checked when its text changes or the dialog opens, since the check asks the file system), then a strata-band progress
+bar (`UI::StrataProgressBar`) and Open Folder. Exports that a command or an agent started show the same way while the
+dialog is open, with Cancel.
 It writes:
 
 | File | Source |
