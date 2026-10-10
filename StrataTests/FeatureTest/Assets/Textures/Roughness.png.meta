@@ -1,0 +1,18 @@
+{
+	"Handle": "F7A000000000000A",
+	"ImportSettings": {
+		"Compression": "Auto",
+		"Filter": "Linear",
+		"FlipVertically": false,
+		"GenerateMips": true,
+		"MaxSize": 0,
+		"Quality": "High",
+		"Usage": "Data",
+		"Wrap": "Repeat"
+	},
+	"Strata": {
+		"Format": "AssetMeta",
+		"Version": 1
+	},
+	"Type": "Texture"
+}

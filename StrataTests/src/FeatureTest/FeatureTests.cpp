@@ -5,6 +5,7 @@
 #include "Scripting/ScriptTestUtils.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Reflection/ComponentRegistry.h"
+#include "Strata/Renderer/Texture.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scripting/ScriptHostAPI.h"
@@ -88,6 +89,19 @@ TEST_SUITE("FeatureTest")
 		{
 			if (entry.Level >= LogLevel::Warn)
 				FAIL_CHECK("Unexpected ", std::string(LogLevelToString(entry.Level)), " from ", entry.Logger, ": ", entry.Message);
+		}
+
+		// The textures cook to the formats their usage gives with default settings: block-compressed color, normal map and
+		// one-channel (grayscale) data, half-float HDR.
+		const std::pair<std::string, TextureFormat> textures[] = { { "Textures/Checker.png", TextureFormat::BC1SRGB },
+			{ "Textures/Bumps_normal.png", TextureFormat::BC5 }, { "Textures/Roughness.png", TextureFormat::BC4 }, { "Textures/Sky.hdr", TextureFormat::RGBA16F } };
+		for (const auto& [path, format] : textures)
+		{
+			INFO("Texture ", path);
+			const Ref<Texture> texture = std::dynamic_pointer_cast<Texture>(manager->LoadAssetSync(manager->FindAssetByPath(path)));
+			REQUIRE(texture);
+			CHECK(texture->GetSpecification().Format == format);
+			CHECK(texture->GetSpecification().Grayscale == (format == TextureFormat::BC4));
 		}
 	}
 
