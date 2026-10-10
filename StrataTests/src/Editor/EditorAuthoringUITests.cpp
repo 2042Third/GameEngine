@@ -1166,6 +1166,35 @@ TEST_SUITE("Editor.UI.AssetInspector")
 		CHECK(AssetManager::GetAsset<Material>(material)->GetProperties().Roughness == roughness);
 	}
 
+	TEST_CASE("A slider is a track with a handle and its number in a field beside it")
+	{
+		AuthoringEditor editor({}, WithFeatureProject("EditorAuthoringSlider"));
+		EditorAssetManager* assets = editor.Context().GetAssetManager();
+		REQUIRE(assets);
+		const AssetHandle material = assets->FindAssetByPath("Materials/Feature.stmat");
+		REQUIRE(editor.Context().SetInspectedAsset(material));
+		REQUIRE(AssetManager::LoadAssetSync<Material>(material));
+		editor.Frames(3);
+		REQUIRE(AssetManager::GetAsset<Material>(material)->GetProperties().AlphaCutoff == 0.5f);
+
+		// The number in its own field, right of the track: the handle never covers it.
+		const std::optional<UI::ItemProbe::Item> track = UI::ItemProbe::Find("AssetInspector.Material.AlphaCutoff.Track");
+		const std::optional<UI::ItemProbe::Item> field = UI::ItemProbe::Find("AssetInspector.Material.AlphaCutoff");
+		REQUIRE(track);
+		REQUIRE(field);
+		CHECK(field->Text == "0.5");
+		CHECK(track->Max.x <= field->Min.x);
+		CHECK(track->Max.x - track->Min.x > field->Max.x - field->Min.x);
+
+		// A click on the track's first quarter sets about a quarter of the range: saved once, one undo step.
+		const size_t position = editor.UndoPosition();
+		editor.ClickAt(ImVec2(track->Min.x + (track->Max.x - track->Min.x) * 0.25f, track->GetCenter().y));
+		editor.Frames(1);
+		const float cutoff = AssetManager::GetAsset<Material>(material)->GetProperties().AlphaCutoff;
+		CHECK(cutoff == doctest::Approx(0.25f).epsilon(0.2));
+		CHECK(editor.UndoPosition() == position + 1);
+	}
+
 	TEST_CASE("A drag in a material color's picker previews and saves once, as one undo step")
 	{
 		AuthoringEditor editor({}, WithFeatureProject("EditorAuthoringColorPicker"));

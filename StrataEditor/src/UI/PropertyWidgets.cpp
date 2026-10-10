@@ -50,6 +50,16 @@ namespace Strata
 		// is then shown as a swatch across the field, and its channels are edited in its picker.
 		constexpr float c_MinChannelFieldInFontSizes = 2.6f;
 		constexpr float c_ColorPickerWidthInFontSizes = 15.0f;
+		// Sliders: the number's field takes this share of the width, within these limits in text heights; a track shorter
+		// than the last is left out. The handle's radius and the track's thickness are shares of a frame's height. A drag of
+		// the number moves it by this share of the range per pixel.
+		constexpr float c_SliderFieldShare = 0.32f;
+		constexpr float c_MinSliderFieldInFontSizes = 3.5f;
+		constexpr float c_MaxSliderFieldInFontSizes = 5.0f;
+		constexpr float c_MinSliderTrackInFontSizes = 3.0f;
+		constexpr float c_SliderHandleRadiusInFrames = 0.26f;
+		constexpr float c_SliderTrackThicknessInFrames = 0.14f;
+		constexpr float c_SliderDragSpeedPerRange = 0.005f;
 		// The property tables' columns: labels and values, as shares of the width (the user resizes them for every table of
 		// a panel at once).
 		constexpr float c_LabelColumnWeight = 0.42f;
@@ -435,23 +445,79 @@ namespace Strata
 			return result;
 		}
 
+		// A value within a range (PropertyFlags::Slider): a thin track with a handle, which a click or a drag anywhere on it
+		// moves, and the number in a field after it, so the handle never covers the number. Where the track would be too short
+		// to aim at, the field alone. Mixed values show no handle and "--" in the field. The probe records the field under
+		// the options' key and the track under "<key>.Track".
+		PropertyEditResult DrawSlider(const PropertyInfo& property, float& value, const PropertyWidgetOptions& options)
+		{
+			PropertyEditResult result;
+			const ImGuiStyle& style = ImGui::GetStyle();
+			const UI::ThemeColors& colors = UI::GetThemeColors();
+			const float available = std::max(ImGui::GetContentRegionAvail().x, ImGui::GetFrameHeight());
+			const float gap = style.ItemInnerSpacing.x;
+			const float fontSize = ImGui::GetFontSize();
+			const float fieldWidth = std::clamp(available * c_SliderFieldShare, fontSize * c_MinSliderFieldInFontSizes, fontSize * c_MaxSliderFieldInFontSizes);
+			const float trackWidth = available - fieldWidth - gap;
+			const bool showTrack = trackWidth >= fontSize * c_MinSliderTrackInFontSizes;
+			const float range = property.Max - property.Min;
+			if (showTrack)
+			{
+				const ImVec2 min = ImGui::GetCursorScreenPos();
+				const float height = ImGui::GetFrameHeight();
+				ImGui::InvisibleButton("##Track", ImVec2(trackWidth, height));
+				const bool hovered = ImGui::IsItemHovered();
+				const bool active = ImGui::IsItemActive();
+				// The handle's center travels between the track's ends inset by its radius, so it never sticks out.
+				const float radius = std::round(height * c_SliderHandleRadiusInFrames);
+				const float left = min.x + radius;
+				const float right = min.x + trackWidth - radius;
+				if (active)
+				{
+					const float fraction = std::clamp((ImGui::GetIO().MousePos.x - left) / std::max(right - left, 1.0f), 0.0f, 1.0f);
+					const float picked = property.Min + fraction * range;
+					if (picked != value || (options.Mixed && ImGui::IsItemActivated()))
+					{
+						value = picked;
+						result.Changed = true;
+						ImGui::MarkItemEdited(ImGui::GetItemID());
+					}
+				}
+				result.Finished = ImGui::IsItemDeactivatedAfterEdit();
+				if (!options.ProbeKey.empty())
+					UI::ItemProbe::Record(ProbeKey(options.ProbeKey, "Track"));
+
+				ImDrawList* drawList = ImGui::GetWindowDrawList();
+				const float centerY = min.y + height * 0.5f;
+				const float thickness = std::max(std::round(height * c_SliderTrackThicknessInFrames), 2.0f);
+				drawList->AddLine(ImVec2(left, centerY), ImVec2(right, centerY), ImGui::GetColorU32(hovered || active ? colors.TextDisabled : colors.Border), thickness);
+				if (!options.Mixed || result.Changed)
+				{
+					const float fraction = range > 0.0f ? std::clamp((value - property.Min) / range, 0.0f, 1.0f) : 0.0f;
+					const float handleX = left + fraction * (right - left);
+					drawList->AddLine(ImVec2(left, centerY), ImVec2(handleX, centerY), ImGui::GetColorU32(colors.Accent), thickness);
+					drawList->AddCircleFilled(ImVec2(handleX, centerY), radius, ImGui::GetColorU32(active ? colors.AccentActive : (hovered ? colors.AccentHover : colors.Accent)));
+				}
+				ImGui::SameLine(0.0f, gap);
+			}
+			bool finished = false;
+			const float speed = GetSpeed(property, range * c_SliderDragSpeedPerRange);
+			if (DragFloatField("##Value", value, speed, property.Min, property.Max, options.Mixed && !result.Changed, showTrack ? fieldWidth : -FLT_MIN,
+				options.ProbeKey, finished))
+			{
+				result.Changed = true;
+			}
+			result.Finished |= finished;
+			return result;
+		}
+
 		PropertyEditResult DrawFloat(const PropertyInfo& property, float& value, const PropertyWidgetOptions& options)
 		{
 			PropertyEditResult result;
+			if (HasFlag(property.Flags, PropertyFlags::Slider) && property.HasRange())
+				return DrawSlider(property, value, options);
 			const float min = property.HasRange() ? property.Min : -FLT_MAX;
 			const float max = property.HasRange() ? property.Max : FLT_MAX;
-			if (HasFlag(property.Flags, PropertyFlags::Slider) && property.HasRange())
-			{
-				float shown = ToShown(value);
-				ImGui::SetNextItemWidth(-FLT_MIN);
-				result.Changed = ImGui::SliderFloat("##Value", &shown, min, max, options.Mixed ? c_MixedText : c_FloatFormat);
-				if (result.Changed)
-					value = shown;
-				result.Finished = ImGui::IsItemDeactivatedAfterEdit();
-				if (!options.ProbeKey.empty())
-					UI::ItemProbe::Record(options.ProbeKey);
-				return result;
-			}
 			result.Changed = DragFloatField("##Value", value, GetSpeed(property, 0.05f), min, max, options.Mixed, -FLT_MIN, options.ProbeKey, result.Finished);
 			return result;
 		}
