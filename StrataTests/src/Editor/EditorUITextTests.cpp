@@ -10,6 +10,8 @@
 
 #include <imgui.h>
 
+#include <cstdint>
+#include <limits>
 #include <string>
 
 using namespace Strata;
@@ -110,6 +112,14 @@ TEST_SUITE("Editor.UI.Text")
 		CHECK(UI::DescribeTimeAgo(now - 4 * 86400, now) == "4 days ago");
 		// 2026-01-01 00:00:00 UTC.
 		CHECK(UI::DescribeTimeAgo(1'767'225'600, 1'767'225'600 + 60 * 86400) == "2026-01-01");
+		// Times beyond the calendar (a list of recent projects is a file anyone can edit) neither overflow nor make dates
+		// that do not exist: they count from 1970 or the year 9999.
+		CHECK(UI::DescribeTimeAgo(std::numeric_limits<int64_t>::min(), now) == "1970-01-01");
+		CHECK(UI::DescribeTimeAgo(-9'000'000'000'000'000'000, now) == "1970-01-01");
+		CHECK(UI::DescribeTimeAgo(std::numeric_limits<int64_t>::max(), now) == "just now");
+		CHECK(UI::DescribeTimeAgo(now - 4 * 86400, std::numeric_limits<int64_t>::max()) == "2027-01-11");
+		CHECK(UI::DescribeTimeAgo(0, std::numeric_limits<int64_t>::max()) == "1970-01-01");
+		CHECK(UI::DescribeTimeAgo(UI::c_LatestTime - 90, std::numeric_limits<int64_t>::max()) == "a minute ago");
 
 		CHECK(UI::GetInitials("Space Game") == "SG");
 		CHECK(UI::GetInitials("FeatureTest") == "FT");

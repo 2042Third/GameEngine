@@ -166,8 +166,16 @@ TEST_SUITE("Editor.RecentProjects")
 		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("RecentCorrupt");
 		const std::filesystem::path file = directory / "RecentProjects.json";
 		const std::filesystem::path project = CreateProjectFile(directory / "Game", "Game");
+		// Besides broken files: times of opening that are no time a project was opened (before 1970, after the year 9999,
+		// beyond what 64 bits hold), which would overflow when the launcher tells how long ago they were.
+		const auto withLastOpened = [&project](const std::string& lastOpened)
+		{
+			return "{ \"Strata\": { \"Format\": \"RecentProjects\", \"Version\": 1 }, \"Projects\": [ { \"name\": \"Game\", \"path\": "
+				+ nlohmann::json(FileSystem::ToUTF8(project)).dump() + ", \"lastOpened\": " + lastOpened + " } ] }";
+		};
 		for (const std::string& corrupt : { std::string("{ not json"), std::string("{ \"Strata\": { \"Format\": \"Scene\", \"Version\": 1 } }"),
-			std::string("{ \"Strata\": { \"Format\": \"RecentProjects\", \"Version\": 1 }, \"Projects\": [ { \"name\": 3 } ] }") })
+			std::string("{ \"Strata\": { \"Format\": \"RecentProjects\", \"Version\": 1 }, \"Projects\": [ { \"name\": 3 } ] }"),
+			withLastOpened("-1"), withLastOpened("-9223372036854775808"), withLastOpened("253402300800"), withLastOpened("18446744073709551615") })
 		{
 			CAPTURE(corrupt);
 			REQUIRE(FileSystem::WriteText(file, corrupt));
@@ -185,6 +193,123 @@ TEST_SUITE("Editor.RecentProjects")
 			CHECK(reloaded.GetProjects()[0].Name == "Game");
 			CHECK(CountWarningsSince(sequence) == 1);
 		}
+	}
+
+	TEST_CASE("Times of opening from the year 1970 to 9999 are valid")
+	{
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("RecentTimes");
+		const std::filesystem::path project = CreateProjectFile(directory / "Game", "Game");
+		for (const int64_t lastOpened : { int64_t(0), RecentProjects::c_MaxLastOpened })
+		{
+			const std::vector<RecentProject> projects = { RecentProject { "Game", project, lastOpened, "1.0" } };
+			const std::optional<std::vector<RecentProject>> parsed = RecentProjects::FromJson(RecentProjects::ToJson(projects));
+			REQUIRE(parsed);
+			CHECK(parsed->front().LastOpened == lastOpened);
+		}
+	}
+
+	TEST_CASE("A read-only list keeps the projects of the session over the file it never writes")
+	{
+		// Scripted runs (--commands, --frames) read the user's list but never write it; what they open is listed all the
+		// same, also after the file was read again.
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("RecentReadOnlySession");
+		const std::filesystem::path file = directory / "RecentProjects.json";
+		const std::filesystem::path saved = CreateProjectFile(directory / "Saved", "Saved");
+		{
+			RecentProjects writable(file);
+			writable.Add("Saved", saved);
+		}
+
+		const std::filesystem::path alpha = CreateProjectFile(directory / "Alpha", "Alpha");
+		const std::filesystem::path beta = CreateProjectFile(directory / "Beta", "Beta");
+		RecentProjects readOnly(file, true);
+		readOnly.Add("Alpha", alpha);
+		readOnly.Add("Beta", beta);
+		const auto names = [](const std::vector<RecentProject>& projects)
+		{
+			std::vector<std::string> result;
+			for (const RecentProject& project : projects)
+				result.push_back(project.Name);
+			return result;
+		};
+		CHECK(names(readOnly.GetProjects()) == std::vector<std::string> { "Beta", "Alpha", "Saved" });
+		readOnly.Reload();
+		CHECK(names(readOnly.GetProjects()) == std::vector<std::string> { "Beta", "Alpha", "Saved" });
+
+		// A project of the session can leave the list again; another editor's additions show up under the session's.
+		CHECK(readOnly.Remove(alpha));
+		const std::filesystem::path gamma = CreateProjectFile(directory / "Gamma", "Gamma");
+		{
+			RecentProjects other(file);
+			other.Add("Gamma", gamma);
+		}
+		readOnly.Reload();
+		CHECK(names(readOnly.GetProjects()) == std::vector<std::string> { "Beta", "Gamma", "Saved" });
+		CHECK_FALSE(readOnly.Remove(alpha));
+
+		// The file only holds what the writable lists wrote.
+		const std::optional<std::vector<RecentProject>> stored = RecentProjects::ReadFile(file).Projects;
+		REQUIRE(stored);
+		CHECK(names(*stored) == std::vector<std::string> { "Gamma", "Saved" });
+	}
+
+	TEST_CASE("Changes are counted, reads are not")
+	{
+		// The launcher reads the file on an I/O thread and drops a read that started before a change (which it may miss).
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("RecentChanges");
+		const std::filesystem::path project = CreateProjectFile(directory / "Game", "Game");
+		RecentProjects recent(directory / "RecentProjects.json");
+		CHECK(recent.GetChangeCount() == 0);
+		recent.Add("Game", project);
+		CHECK(recent.GetChangeCount() == 1);
+		recent.Reload();
+		recent.ApplyFile(RecentProjects::ReadFile(recent.GetFile()));
+		CHECK(recent.GetChangeCount() == 1);
+		CHECK_FALSE(recent.Remove(directory / "Other.stproj"));
+		CHECK(recent.GetChangeCount() == 1);
+		CHECK(recent.Remove(project));
+		CHECK(recent.GetChangeCount() == 2);
+		recent.Forget({ project });
+		CHECK(recent.GetChangeCount() == 2); // Not on the list any more
+	}
+
+	TEST_CASE("Projects a list could not save stay on it until a save succeeds")
+	{
+		// The list's directory would be inside a file: it cannot be created.
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("RecentUnsaved");
+		REQUIRE(FileSystem::WriteText(directory / "Blocker", "a file"));
+		const std::filesystem::path project = CreateProjectFile(directory / "Game", "Game");
+		RecentProjects recent(directory / "Blocker" / "RecentProjects.json");
+		recent.Add("Game", project);
+		recent.Reload();
+		REQUIRE(recent.GetProjects().size() == 1);
+		CHECK(recent.GetProjects()[0].Name == "Game");
+	}
+
+	TEST_CASE("Deleted projects are told apart from projects out of reach")
+	{
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("RecentCheck");
+		const std::filesystem::path present = CreateProjectFile(directory / "Present", "Present");
+		const std::filesystem::path deleted = directory / "Deleted" / "Deleted.stproj";
+		// Its place (the folder that held its folder) is not there either: a drive or share that is not connected.
+		const std::filesystem::path unreachable = directory / "Offline" / "Game" / "Game.stproj";
+		const RecentProjectsCheck check = RecentProjects::CheckProjects({ present, deleted, unreachable });
+		CHECK(check.Missing == std::vector<std::filesystem::path> { deleted, unreachable });
+		CHECK(check.Gone == std::vector<std::filesystem::path> { deleted });
+
+		// Forgetting takes deleted projects off the list file; projects out of reach stay on it.
+		const std::filesystem::path file = directory / "RecentProjects.json";
+		const std::vector<RecentProject> projects = { { "Present", present, 3, "1.0" }, { "Deleted", deleted, 2, "1.0" }, { "Game", unreachable, 1, "1.0" } };
+		REQUIRE(FileSystem::WriteText(file, RecentProjects::ToJson(projects).dump()));
+		RecentProjects recent(file);
+		CHECK(recent.GetAllProjects().size() == 3);
+		CHECK(recent.GetProjects().size() == 1);
+		recent.Forget(check.Gone);
+		const std::optional<std::vector<RecentProject>> stored = RecentProjects::ReadFile(file).Projects;
+		REQUIRE(stored);
+		REQUIRE(stored->size() == 2);
+		CHECK((*stored)[0].Name == "Present");
+		CHECK((*stored)[1].Name == "Game");
 	}
 
 	TEST_CASE("Read-only and in-memory lists never write a file")
@@ -257,6 +382,27 @@ TEST_SUITE("Editor.RecentProjects")
 		EditorContext later(specification);
 		REQUIRE(later.GetRecentProjects().GetProjects().size() == 2);
 		CHECK(later.GetRecentProjects().GetProjects()[0].Name == "Second");
+
+		// Scripted runs read the user's list without writing it, and list the projects of their session over it.
+		EditorContextSpecification scripted = specification;
+		scripted.RecentProjectsReadOnly = true;
+		{
+			const std::optional<std::string> before = FileSystem::ReadText(file);
+			EditorContext context(scripted);
+			REQUIRE(commands.Execute(context, "project.create", { { "directory", FileSystem::ToUTF8(directory / "Third") }, { "name", "Third" } }).Success);
+			REQUIRE(commands.Execute(context, "project.create", { { "directory", FileSystem::ToUTF8(directory / "Fourth") }, { "name", "Fourth" } }).Success);
+			EditorCommandResult listed = commands.Execute(context, "editor.recentProjects", nlohmann::json::object());
+			REQUIRE(listed.Success);
+			REQUIRE(listed.Value["projects"].size() == 4);
+			CHECK(listed.Value["projects"][0]["name"] == "Fourth");
+			CHECK(listed.Value["projects"][1]["name"] == "Third");
+			CHECK(listed.Value["projects"][2]["name"] == "Second");
+			REQUIRE(commands.Execute(context, "editor.removeRecentProject", { { "path", listed.Value["projects"][1]["path"] } }).Success);
+			listed = commands.Execute(context, "editor.recentProjects", nlohmann::json::object());
+			REQUIRE(listed.Value["projects"].size() == 3);
+			CHECK(listed.Value["projects"][1]["name"] == "Second");
+			CHECK(FileSystem::ReadText(file) == before);
+		}
 
 		// Editors that keep the list in memory (tests, by default) still list the session's projects.
 		EditorContext memoryOnly(EditorContextSpecification { false });

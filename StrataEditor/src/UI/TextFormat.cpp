@@ -58,6 +58,11 @@ namespace Strata::UI
 		constexpr int64_t c_Minute = 60;
 		constexpr int64_t c_Hour = 60 * c_Minute;
 		constexpr int64_t c_Day = 24 * c_Hour;
+		// Within the calendar dates are written in, so neither the difference nor the date can overflow.
+		then = std::clamp(then, int64_t(0), c_LatestTime);
+		now = std::clamp(now, int64_t(0), c_LatestTime);
+		if (then >= now)
+			return "just now";
 		const int64_t elapsed = now - then;
 		if (elapsed < c_Minute)
 			return "just now";
