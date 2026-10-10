@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Editor/ImGuiHarness.h"
+#include "UI/ItemProbe.h"
 #include "UI/Markdown.h"
 #include "UI/TextFormat.h"
 #include "UI/Widgets.h"
@@ -12,6 +13,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <string>
 
 using namespace Strata;
@@ -134,6 +136,46 @@ TEST_SUITE("Editor.UI.Text")
 #else
 		CHECK(UI::DisplayPath(FileSystem::FromUTF8("/home/me/Game")) == "/home/me/Game");
 #endif
+	}
+
+	TEST_CASE("Ctrl+A in a text field selects its text, also with macOS key behaviors")
+	{
+		// ImGui swaps Cmd and Ctrl on macOS; the harness's Ctrl must still be ImGui's shortcut modifier there, or typing
+		// after Ctrl+A would append instead of replacing (as the launcher tests found on macOS).
+		for (const bool macBehaviors : { false, true })
+		{
+			CAPTURE(macBehaviors);
+			ImGuiHarness harness;
+			ImGui::GetIO().ConfigMacOSXBehaviors = macBehaviors;
+			std::string value = "My Project";
+			const auto draw = [&value]()
+			{
+				ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+				ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
+				ImGui::Begin("Fields");
+				UI::TextField("Test.Name", "Name", value);
+				ImGui::End();
+			};
+			harness.Frame(draw);
+			const std::optional<UI::ItemProbe::Item> field = UI::ItemProbe::Find("Test.Name");
+			REQUIRE(field);
+			harness.MoveMouse(field->GetCenter());
+			harness.Frame(draw);
+			harness.SetMouseButton(ImGuiMouseButton_Left, true);
+			harness.Frame(draw);
+			harness.SetMouseButton(ImGuiMouseButton_Left, false);
+			harness.Frame(draw);
+
+			harness.SetKey(ImGuiMod_Ctrl, true);
+			harness.SetKey(ImGuiKey_A, true);
+			harness.Frame(draw);
+			harness.SetKey(ImGuiKey_A, false);
+			harness.SetKey(ImGuiMod_Ctrl, false);
+			harness.Frame(draw);
+			harness.TypeText("Launcher Game");
+			harness.Frame(draw);
+			CHECK(value == "Launcher Game");
+		}
 	}
 
 	TEST_CASE("Long paths are shortened at their start")

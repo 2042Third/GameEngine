@@ -84,6 +84,22 @@ namespace Strata::Tests
 
 	void ImGuiHarness::SetKey(ImGuiKey key, bool down)
 	{
+		// With macOS behaviors (ImGui's default on Apple platforms) AddKeyEvent swaps Cmd and Ctrl as a platform backend
+		// reports them, so that Cmd acts as ImGui's Ctrl. Tests name ImGui's keys, so report the key that becomes the one
+		// named: Ctrl+A selects all on every platform.
+		if (ImGui::GetIO().ConfigMacOSXBehaviors)
+		{
+			switch (key)
+			{
+				case ImGuiMod_Ctrl: key = ImGuiMod_Super; break;
+				case ImGuiMod_Super: key = ImGuiMod_Ctrl; break;
+				case ImGuiKey_LeftCtrl: key = ImGuiKey_LeftSuper; break;
+				case ImGuiKey_RightCtrl: key = ImGuiKey_RightSuper; break;
+				case ImGuiKey_LeftSuper: key = ImGuiKey_LeftCtrl; break;
+				case ImGuiKey_RightSuper: key = ImGuiKey_RightCtrl; break;
+				default: break;
+			}
+		}
 		ImGui::GetIO().AddKeyEvent(key, down);
 	}
 

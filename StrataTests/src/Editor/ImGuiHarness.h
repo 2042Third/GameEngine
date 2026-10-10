@@ -120,6 +120,8 @@ namespace Strata::Tests
 		// Input for the next frame.
 		void MoveMouse(const ImVec2& position);
 		void SetMouseButton(ImGuiMouseButton button, bool down);
+		// Keys are ImGui's keys as widgets see them: ImGuiMod_Ctrl is the shortcut modifier, which macOS users press as Cmd
+		// (the harness reports the physical key ImGui's macOS behaviors turn into it).
 		void SetKey(ImGuiKey key, bool down);
 		// Types text into the active text field (as characters, like a keyboard's text input).
 		void TypeText(std::string_view text);
