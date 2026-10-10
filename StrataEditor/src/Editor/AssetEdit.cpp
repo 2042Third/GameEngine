@@ -99,7 +99,7 @@ namespace Strata
 			if (!assets.ReplaceLoadedAsset(handle, asset, &error))
 			{
 				// The file holds the change: the loaded copy follows it through a reload.
-				ST_WARN("'{}' was saved, but could not be updated at once ({}); it is reloaded", assets.GetMetadata(handle)->Name, error);
+				ST_WARN("Asset {} was saved, but could not be updated at once ({}); it is reloaded", handle.ToString(), error);
 				assets.ReloadAsset(handle);
 			}
 			return true;
