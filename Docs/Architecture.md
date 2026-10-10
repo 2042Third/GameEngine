@@ -112,8 +112,8 @@ non-owning handle. Components are plain structs in `Components.h`, registered wi
 DirectionalLight, PointLight, SpotLight, SkyLight, PostProcess, Text, RigidBody, BoxCollider, SphereCollider,
 CapsuleCollider, MeshCollider, AudioSource, AudioListener, Script). `ComponentAccess` reads and writes them with
 validation and change signals, `SceneSerializer` writes versioned JSON, and `Prefab.h` defines the scene-shaped assets
-(`EntityTemplate`, `Prefab`, `Model`, `SceneAsset`). `Scene::UpdateWorldTransforms` runs every frame and splits large
-scenes by root entity over `JobSystem::ParallelFor` (`Scene.cpp`).
+(`EntityTemplate`, `Prefab`, `Model`, `SceneAsset`). See [Scene caches](#scene-caches) for how per-frame cost follows
+what changed.
 
 **Asset** (`Asset/`). `AssetManagerBase` (registry and asynchronous loading), `AssetManager` (the process-wide active
 manager), `EditorAssetManager` (project files, `.meta` sidecars, imports, hot reload, pack building),
@@ -248,10 +248,43 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   goes, every system gets `OnEntityDestroying` (descendants first), so scripts receive `OnDestroy` with the entity
   still valid (`Scene.cpp`).
 - Systems react to edits through EnTT signals; `ComponentAccess` and `Entity::MarkModified` emit `on_update`.
+- Debug builds end every `OnUpdateRuntime` and `OnUpdateEditor` by asserting that the scene's caches match a full
+  recomputation (`Scene::ValidateWorldTransforms`, `ValidateHierarchy`; see [Scene caches](#scene-caches)).
 - Gameplay asks the scene's owner to quit or to switch scenes (`Scene::RequestQuit`, `RequestSceneLoad`); owners honor
   the requests after the update. The owners are the editor's play mode (`EditorContext::StartRuntime` plays a
   `Scene::Copy` of the edited scene; `Stop` discards it) and `GameRuntime`.
 - `SceneSettings` holds gravity, the fixed timestep (1/60 s) and `MaxFixedStepsPerFrame`.
+
+### Scene caches
+
+A frame of a scene where nothing changed costs (almost) nothing, however many entities it holds (`Scene/Scene.h`,
+`Scene.cpp`):
+
+| Cache | Kept by | Read through |
+| --- | --- | --- |
+| Hierarchy links: parent, first and last child, siblings, depth, child count, sibling position (`HierarchyComponent`, `Scene/SceneHierarchy.h`) | every structural operation (`CreateEntity`, `SetParent`, `SetSiblingIndex`, `PlaceEntities`, `DestroyEntities`, `DuplicateEntity`, `Copy`, deserialization), next to `RelationshipComponent`, which stays the serialized form and the authoritative child order | subtree walks, `IsDescendantOf`, `CompareHierarchyOrder`, `Entity::GetParent`/`GetChildren`; sibling positions are recomputed per sibling list when asked after a change (`GetSiblingIndex`) |
+| World matrices (`WorldTransformComponent::Matrix`) | `UpdateWorldTransforms`: only the subtrees of entities marked dirty, each from its parent's cached matrix; returns at once when nothing is dirty | renderer, gizmos, bounds; `GetWorldTransform` returns the cache unless the entity or an ancestor is dirty (then it computes the same matrix top-down) |
+| Activity (`WorldTransformComponent::ActiveInHierarchy`) | at once, for the affected subtree, when `InactiveComponent` is added or removed or an entity is reparented | `IsActiveInHierarchy` (constant time), script dispatch, renderer |
+| Hierarchy order | `GetEntitiesInHierarchyOrder`, once per hierarchy version | serializer, script update order, physics start |
+| Name and tag indices (hash buckets with constant-time removal) | `NameComponent`/`TagComponent` signals, after the first lookup built them | `FindEntityByName`, `FindEntitiesByTag` (cost: the entities with that name or tag) |
+
+- **Dirty transforms.** `TransformComponent` `on_construct`/`on_update` (and `MarkTransformChanged`, which physics uses
+  for written-back poses because its own listeners must not hear them) mark the entity. An update drops the marked
+  entities with a marked ancestor (memoized, so all checks of one update are linear), then recomputes the remaining
+  subtrees level by level; once a level has 1,024 independent subtrees or more they are walked in parallel with
+  `JobSystem::ParallelFor`. Writers must signal (the transform contract, AGENTS.md "Architecture rules");
+  `ValidateWorldTransforms` names the entity whose write was not.
+- **Change reports.** `GetTransformsVersion` changes with every cache change; `GetWorldTransformChanges(since)` lists
+  the entities whose matrix or activity changed since a version, or returns false once more than
+  `c_MaxTransformChanges` changes were dropped, like `AssetManagerBase::GetContentChanges`.
+- **Primary camera.** `GetPrimaryCameraEntity` examines only the entities with a `CameraComponent` (an EnTT view), reads
+  `Primary` and the cached activity, and keeps the first in hierarchy order.
+- **Batches.** `DestroyEntities` tells the systems about every subtree, then compacts each sibling list once;
+  `PlaceEntities` rebuilds each sibling list it touches once.
+- **Capacity.** EnTT identifiers have a 20-bit index: a registry holds at most `Scene::c_MaxEntities` (1,048,575) live
+  entities. `CreateEntity` fails with an error at that limit and deserialization reports it.
+- Diagnostics count the work: `GetTransformUpdateCount`, `GetHierarchyOrderBuildCount`, `GetLookupVisitCount` and
+  `GetLookupIndexBuildCount` (tests use them to prove that lookups and clean updates traverse nothing).
 
 ## Threading model
 

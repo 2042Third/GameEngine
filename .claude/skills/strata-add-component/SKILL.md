@@ -51,7 +51,11 @@ Implement a `SceneSystem` (`Scene/SceneSystem.h`) and add its descriptor in `Cre
 `RunsInSimulateMode` only for systems that belong in the editor's physics-only simulate mode. React to
 edits through EnTT signals (`on_construct`, `on_update`, `on_destroy`). Edits notify through `patch`, which
 `ComponentAccess` and `Entity::MarkModified<T>()` emit, so the system must not poll every component each
-frame.
+frame. Read world transforms from the scene's cache (`WorldTransformComponent`, `Scene::GetWorldTransform`,
+`Scene::IsActiveInHierarchy`) and follow the transform contract (AGENTS.md, "Architecture rules"): a system that writes
+`TransformComponent` fields signals it with `Entity::MarkModified<TransformComponent>()`, or with
+`Scene::MarkTransformChanged` when its own listeners must not hear it (as physics does for written-back poses);
+otherwise the cached world transforms go stale and Debug runs assert.
 
 ## 4. Test it
 

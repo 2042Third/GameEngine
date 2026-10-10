@@ -62,6 +62,10 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
 - To look at rendering changes, read those PNGs, or run `StrataEditor --windowed --frames N --commands <script>
   --screenshot out.png` with a script that builds a scene and uses `camera.set`/`camera.focus`.
 - GPU tests must end with `CHECK(gpu.GetNewErrorCount() == 0)` so validation errors fail them.
+- Debug builds assert after every `Scene::OnUpdateRuntime`/`OnUpdateEditor` that the scene's caches match a full
+  recomputation. A test aborting with "Scene '...' has inconsistent caches: entity '...'" wrote that entity's
+  `TransformComponent` (or name or tag) without `MarkModified` after the scene was updated (AGENTS.md, "Architecture
+  rules"); in Release the same test would render or simulate stale world transforms.
 - Run both Debug and Release before committing: some bugs (uninitialized memory, timing) only show in one.
 
 ## Debugging a crash in a test

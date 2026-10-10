@@ -172,7 +172,9 @@ TEST_SUITE("Physics.Events")
 		CollisionRecorder recorder(physics);
 		for (int frame = 0; frame < 60; frame++)
 		{
+			// The awake kinematic body follows its entity without an on_update signal; the scene is told.
 			mover.GetTransform().Translation.x += 0.1f;
+			scene.MarkTransformChanged(mover);
 			StepScene(scene, 1);
 		}
 
@@ -199,6 +201,7 @@ TEST_SUITE("Physics.Events")
 		for (int frame = 0; frame < 60; frame++)
 		{
 			probe.GetTransform().Translation.x += 0.1f;
+			scene.MarkTransformChanged(probe);
 			StepScene(scene, 1);
 		}
 

@@ -43,9 +43,10 @@ namespace Strata
 	//  - bodies follow transform changes of their entity: kinematic bodies move towards it, dynamic bodies are teleported
 	//    (waking bodies resting on them) and static bodies are repositioned. Changes are noticed when they are signaled
 	//    (TransformComponent on_update, e.g. Entity::MarkModified, ComponentAccess or Scene::SetWorldTransform, on the
-	//    entity or an ancestor) and, for awake bodies, also without a signal; the bodies below an awake body found moved
-	//    that way follow it in the same step. Sleeping and static bodies are never polled otherwise, so direct field
-	//    writes without a signal go unnoticed for them (a kinematic body moved every step stays awake);
+	//    entity or an ancestor) and, for awake bodies, also without an on_update signal (writes that only told the scene,
+	//    through Scene::MarkTransformChanged: every direct write must at least do that, see Scene); the bodies below an
+	//    awake body found moved that way follow it in the same step. Sleeping and static bodies are never polled
+	//    otherwise, so writes without on_update go unnoticed for them (a kinematic body moved every step stays awake);
 	//  - entities that are inactive in the hierarchy or pending destruction (or under such an ancestor) leave the
 	//    simulation; static bodies pending destruction stay until they are destroyed, but queries skip them;
 	//  - dynamic bodies write their simulated pose back to their entity, parents before children, changing only its

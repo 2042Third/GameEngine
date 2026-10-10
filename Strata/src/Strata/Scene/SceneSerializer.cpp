@@ -241,6 +241,9 @@ namespace Strata
 			return fail("Parent entity belongs to a different scene");
 
 		const nlohmann::json& entities = json["Entities"];
+		const size_t existing = std::min(scene.GetRegistryEntityCount(), Scene::c_MaxEntities);
+		if (entities.size() > Scene::c_MaxEntities - existing)
+			return fail(fmt::format("Cannot add {} entities to a scene with {}: a scene holds at most {} entities", entities.size(), existing, Scene::c_MaxEntities));
 
 		// Pass 1: validate ids and build the old -> new UUID mapping.
 		std::unordered_map<UUID, UUID> mapping;
@@ -370,10 +373,14 @@ namespace Strata
 			}
 		}
 
+		// The runtime links (HierarchyComponent) are built now that every entity exists: children may be listed before their
+		// parents. Linking also fills the RelationshipComponents and the root list.
+		for (const entt::entity handle : handles)
+			registry.emplace<HierarchyComponent>(handle);
+		std::vector<entt::entity> rootHandles;
 		for (size_t index = 0; index < entities.size(); index++)
 		{
 			const entt::entity handle = handles[index];
-			const UUID uuid = mapping.at(sourceIds[index]);
 
 			entt::entity parentHandle = entt::null;
 			auto accepted = acceptedParents.find(sourceIds[index]);
@@ -384,22 +391,14 @@ namespace Strata
 			else
 			{
 				roots.emplace_back(handle, &scene);
+				rootHandles.push_back(handle);
 				if (options.Parent.IsValid())
 					parentHandle = options.Parent.GetHandle();
 			}
-
-			RelationshipComponent& relationship = registry.get<RelationshipComponent>(handle);
-			if (parentHandle != entt::null)
-			{
-				relationship.Parent = registry.get<IDComponent>(parentHandle).ID;
-				registry.get<RelationshipComponent>(parentHandle).Children.push_back(uuid);
-			}
-			else
-			{
-				relationship.Parent = UUID::Null();
-				scene.m_RootEntities.push_back(uuid);
-			}
+			scene.LinkLast(handle, parentHandle);
 		}
+		// Depths, activity and the (stale) world transforms of the new subtrees.
+		scene.FinishLinking(rootHandles);
 		scene.m_HierarchyVersion++;
 
 		// Pass 4: entity references between the created entities point at the new UUIDs.

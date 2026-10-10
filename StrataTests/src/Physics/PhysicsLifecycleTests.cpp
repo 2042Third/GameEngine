@@ -265,6 +265,7 @@ TEST_SUITE("Physics.Lifecycle")
 		child.SetActive(false);
 		StepScene(scene, 1);
 		child.GetTransform().Translation = glm::vec3(0.0f, 20.0f, 0.0f);
+		scene.MarkTransformChanged(child); // No on_update: the reactivation alone brings the body to the new place
 		child.SetActive(true);
 		std::optional<RaycastHit> hit = physics.Raycast(glm::vec3(0.0f, 30.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), 20.0f);
 		REQUIRE(hit);
@@ -620,7 +621,9 @@ TEST_SUITE("Physics.Lifecycle")
 		const float speed = physics.GetLinearVelocity(box).y;
 		REQUIRE(speed < -1.0f);
 
+		// Noticed without an on_update signal (the body is awake); only the scene is told.
 		box.GetTransform().Scale = glm::vec3(0.0f);
+		scene.MarkTransformChanged(box);
 		StepScene(scene, 1);
 		CHECK_FALSE(physics.HasBody(box));
 		const glm::vec3 frozen = box.GetComponent<TransformComponent>().Translation;
@@ -652,9 +655,10 @@ TEST_SUITE("Physics.Lifecycle")
 		scene.OnRuntimeStart();
 		PhysicsSystem& physics = GetPhysics(scene);
 		StepScene(scene, 1);
-		// The falling box gets a degenerate transform (noticed without a signal: it is awake), then its parent is
-		// deactivated.
+		// The falling box gets a degenerate transform (noticed without an on_update signal: it is awake; only the scene is
+		// told), then its parent is deactivated.
 		box.GetTransform().Scale = glm::vec3(0.0f);
+		scene.MarkTransformChanged(box);
 		StepScene(scene, 1);
 		REQUIRE_FALSE(physics.HasBody(box));
 		holder.SetActive(false);
@@ -667,6 +671,7 @@ TEST_SUITE("Physics.Lifecycle")
 
 		// A signaled transform change retries the build.
 		flat.GetTransform().Scale = glm::vec3(1.0f);
+		scene.MarkTransformChanged(flat); // The scene knows, physics is not signaled
 		StepScene(scene, 1);
 		CHECK_FALSE(physics.HasBody(flat)); // Not signaled yet
 		flat.MarkModified<TransformComponent>();
@@ -675,6 +680,7 @@ TEST_SUITE("Physics.Lifecycle")
 
 		// Reactivation brings the suspended body back once its transform is valid.
 		box.GetTransform().Scale = glm::vec3(1.0f);
+		scene.MarkTransformChanged(box);
 		holder.SetActive(true);
 		CHECK(physics.HasBody(box));
 		StepScene(scene, 120);

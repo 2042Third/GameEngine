@@ -175,6 +175,7 @@ TEST_SUITE("Scripting.Faults")
 
 		// The crashed scene itself still works.
 		moving.GetComponent<TransformComponent>().Translation = { 1.0f, 2.0f, 3.0f };
+		moving.MarkModified<TransformComponent>();
 		sceneA.OnUpdateRuntime(1.0f / 60.0f);
 		CHECK(moving.GetComponent<WorldTransformComponent>().Matrix[3] == glm::vec4(1.0f, 2.0f, 3.0f, 1.0f));
 

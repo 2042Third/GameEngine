@@ -100,6 +100,10 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   `STRATA_TEST_EDITOR_PATH`/`STRATA_TEST_CLI_PATH`, else next to the test executable) and run as the CTest
   `StrataEditor.Automation`, not in `StrataTests.Core`. They need no GPU (`--no-gpu`), use private session
   directories, free ports and timeouts, and terminate the processes they started when they fail.
+- Tests follow the transform contract (see [Architecture rules](#architecture-rules)): a direct write to a
+  `TransformComponent` after the scene was updated is followed by `MarkModified<TransformComponent>()` (or
+  `Scene::MarkTransformChanged` when the test is about listeners not being signaled), otherwise Debug runs assert.
+  `StrataTests/src/Scene/SceneTestUtils.h` has `CheckSceneCaches` (both validators) for scene tests.
 - Use `Strata::Tests::CreateTemporaryDirectory()` for files; never write into the source tree. The test process sets
   `STRATA_RUNTIME_DIR` to a private temporary directory (`TestMain.cpp`), so runtime files such as script module copies
   never go to the user's runtime directory; helper processes inherit it.
@@ -114,7 +118,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   failure, `Completed` marks the end of a scenario, and `Journal()` records events in the scene's "Journal" entity.
   The runners:
   - `StrataTests.FeatureTest` (label `feature`, no GPU) plays the scripted scenario (`PlayFeatureScene`: 200 frames,
-    simulated input, a hot reload of the module halfway, audio on the null device) three times: headless (suite
+    simulated input, a hot reload of the module halfway, audio on the null device; after every frame the scene's caches
+    must match a full recomputation, `Scene::ValidateWorldTransforms`/`ValidateHierarchy`) three times: headless (suite
     `FeatureTest`, `src/FeatureTest/`), through editor commands in-process, and in the exported game in `GameRuntime`
     (suite `Editor.FeatureTest`);
   - `GPU.FeatureTest` (in `StrataTests.GPU`) renders the scene for 4 frames without playing it (no scripts) and checks
@@ -245,6 +250,21 @@ The threading model, frame loop and pipelines these rules protect are described 
   through `CrashGuard`; anything crossing the ABI is plain data (no STL types, no exceptions).
 - **Assets:** referenced by `AssetHandle` (UUID), never by path at runtime. Loading is asynchronous;
   code must handle "not loaded yet" every frame instead of blocking. See [Asset pipeline](#asset-pipeline).
+- **Scene caches and the transform contract:** per-frame scene cost follows what changed. `Scene` mirrors the hierarchy
+  as EnTT handle links (`HierarchyComponent`, `Scene/SceneHierarchy.h`), recomputes cached world transforms
+  (`WorldTransformComponent`) only below entities whose transform changed, keeps `ActiveInHierarchy` exact as activity
+  and parents change, and indexes names and tags for `FindEntityByName`/`FindEntitiesByTag`. So **code that writes
+  `TransformComponent` fields directly must signal the change**: `Entity::MarkModified<TransformComponent>()` or
+  `registry.patch` (`ComponentAccess`, `Scene::SetWorldTransform`, the script API and `TransformEdit` do), or
+  `Scene::MarkTransformChanged` where listeners must not hear an `on_update` (physics writing simulated poses back).
+  Writes to `NameComponent::Name` and `TagComponent::Tag` must signal the same way. Entities created since the last
+  `UpdateWorldTransforms` are recomputed anyway. Hierarchy changes go through `Scene` (`SetParent`, `SetSiblingIndex`,
+  `PlaceEntities`, `DestroyEntities`...); never edit `RelationshipComponent` or `HierarchyComponent` directly. Debug
+  builds assert after every `OnUpdateRuntime` and `OnUpdateEditor` that the caches match a full recomputation
+  (`Scene::ValidateWorldTransforms`, `ValidateHierarchy`); a "has inconsistent caches" assertion names the entity
+  whose write was not signaled. Read sibling positions with `Scene::GetSiblingIndex` (cached), never by searching the
+  child list, and remove many entities with one `DestroyEntities` call. A registry holds at most
+  `Scene::c_MaxEntities` (1,048,575) live entities; creating more fails with an error.
 
 ## Asset pipeline
 
