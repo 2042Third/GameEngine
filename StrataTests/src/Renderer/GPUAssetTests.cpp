@@ -2,7 +2,7 @@
 
 #include "Renderer/GPUTestUtils.h"
 #include "Renderer/SceneRendererTestUtils.h"
-#include "Strata/Asset/AssetPack.h"
+#include "Strata/Asset/AssetPackWriter.h"
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Asset/RuntimeAssetManager.h"
 #include "Strata/Asset/TextureCooker.h"
@@ -419,7 +419,7 @@ TEST_SUITE("GPU.Assets")
 		mesh.Path = "Cone.mesh";
 
 		const std::filesystem::path path = Tests::CreateTemporaryDirectory("GPUAssetPack") / "Game.stpak";
-		REQUIRE(AssetPack::Write(path, { texture, mesh }, [&data](const AssetMetadata& metadata, std::vector<uint8_t>& outData, std::string*)
+		REQUIRE(AssetPackWriter::Write(path, { texture, mesh }, [&data](const AssetMetadata& metadata, std::vector<uint8_t>& outData, std::string*)
 		{
 			outData = data.at(static_cast<uint64_t>(metadata.Handle));
 			return true;
@@ -519,7 +519,7 @@ TEST_SUITE("GPU.Assets")
 		// The same cooked textures loaded from a pack while the device counts as one without BC support: the loader decodes
 		// them, and they show the same texels.
 		const std::filesystem::path pack = CreateTemporaryDirectory("BlockCompressionFallback") / "Game.stpak";
-		REQUIRE(AssetPack::Write(pack, entries, [&cooked](const AssetMetadata& metadata, std::vector<uint8_t>& outData, std::string*)
+		REQUIRE(AssetPackWriter::Write(pack, entries, [&cooked](const AssetMetadata& metadata, std::vector<uint8_t>& outData, std::string*)
 		{
 			outData = cooked.at(static_cast<uint64_t>(metadata.Handle));
 			return true;

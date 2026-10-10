@@ -111,6 +111,16 @@ module-foundation, ran as its own workstream):
     against its 5.44 ms budget (the last on a loaded machine, where one sweep peaked at 14.7 ms; 3.6-4.4 ms with BC1).
     It is now a sweep's longest finalization confirmed by up to two more sweeps; if it still fails on a quiet machine
     it needs a steadier measure or smaller upload steps (`mip-streaming`).
+- `pack-v2`: asset packs version 2 (zstd-compressed 256 KiB blocks with CRC-32C checksums from 4 KiB-aligned entries,
+  read by byte range through one shared file handle, with dependency and mesh bounds tables; version 1 still loads),
+  dependencies and bounds recorded at import and answered identically by the editor and games, dependency prefetch
+  within the budgets and group loads (`RequestLoadWithDependencies`), packs ordered by first use with optional pruning
+  (`Export.AlwaysInclude`), patch packs, and an export that runs on an I/O thread behind the Export dialog. On the
+  stress project (Release): the pack is 0.74 of version 1 (349.6 MB against 472.7 MB, before textures are
+  block-compressed), opens in 0.06 ms, streams the world in 0.98 to 1.06 times the time of version 1 (the budget
+  `PerfGPU.Pack.StreamStressWorldRatio` holds it at 1.1), and exports in 1.45 s with every editor frame from the one
+  that starts it under 28 ms. The pack size with block-compressed textures (target 140 MB) is recorded by whichever of
+  `texture-cook-v2` and `pack-v2` merges second.
 
 Open items and deferrals later waves own:
 
@@ -136,6 +146,9 @@ Open items and deferrals later waves own:
 - Perf budgets hold for the reference machine only, so CI's hosted runners skip the `perf` label; a self-hosted runner
   on the reference machine would make them an automatic gate. Platform code first compiled by CI on Linux and macOS:
   `GetProcessMemory`, `GetProcessUptime`, `FindHomeDirectory` and `FindFallbackFontFiles`.
+- While `pack-v2` was measured, a Release editor saving a 200,000-entity scene in a loop crashed once (an access
+  violation iterating a JSON object) and once refused a save with "Duplicate entity ID"; neither came back in more than
+  75 saves since, so the cause is open until someone reproduces it.
 
 ## Waves
 

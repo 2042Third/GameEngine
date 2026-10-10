@@ -39,6 +39,7 @@ namespace Strata
 		std::array<uint32_t, 3> Queued = {}; // Waiting requests per priority (High, Normal, Low)
 		uint32_t InFlightLoads = 0;          // Dispatched and not finished
 		uint32_t OutstandingReads = 0;       // Dispatched and still reading
+		uint64_t WaitingBytes = 0;           // Bytes of the waiting requests (AssetStreamingRequest::Bytes)
 		uint64_t InFlightBytes = 0;
 		uint64_t InFlightBytesHighWater = 0; // The most bytes in flight at once since the queue was created
 		uint64_t Dispatched = 0;             // Loads dispatched since the queue was created
@@ -115,6 +116,7 @@ namespace Strata
 		uint64_t m_NextOrder = 0;
 		uint32_t m_InFlightLoads = 0;
 		uint32_t m_OutstandingReads = 0;
+		uint64_t m_WaitingBytes = 0;
 		uint64_t m_InFlightBytes = 0;
 		uint64_t m_InFlightBytesHighWater = 0;
 		uint64_t m_Dispatched = 0;

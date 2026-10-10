@@ -11,9 +11,11 @@
 #include <condition_variable>
 #include <cstring>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace Strata::Tests
@@ -119,24 +121,27 @@ namespace Strata::Tests
 			WaitForInFlightLoads();
 		}
 
-		// Registers a fake asset declaring `usage`, whose stored form takes `storedSize` bytes (0: unknown).
-		AssetHandle Add(uint64_t handle, const AssetMemoryUsage& usage, uint64_t storedSize = 0)
+		// Registers a fake asset declaring `usage`, whose stored form takes `storedSize` bytes (0: unknown). Assets registered
+		// with another type than c_FakeAssetType read like fake assets but fail to load (the type's real loader refuses them).
+		AssetHandle Add(uint64_t handle, const AssetMemoryUsage& usage, uint64_t storedSize = 0, AssetType type = c_FakeAssetType)
 		{
-			AssetMetadata metadata;
-			metadata.Handle = UUID(handle);
-			metadata.Type = c_FakeAssetType;
-			metadata.Path = "Fake/" + std::to_string(handle);
-			metadata.Name = metadata.Path;
-			metadata.StoredSize = storedSize;
-			{
-				std::scoped_lock<std::mutex> lock(m_Mutex);
-				m_Data[metadata.Handle] = EncodeFakeAsset(usage);
-			}
-			RegisterAsset(metadata);
-			return metadata.Handle;
+			return Register(handle, type, EncodeFakeAsset(usage), storedSize);
+		}
+
+		// Registers an asset whose stored form is `data`, decoded by the real loader of `type` (a material document, say).
+		AssetHandle AddStored(uint64_t handle, AssetType type, std::vector<uint8_t> data)
+		{
+			const uint64_t storedSize = data.size();
+			return Register(handle, type, std::move(data), storedSize);
 		}
 
 		void Remove(AssetHandle handle) { UnregisterAsset(handle); }
+
+		// Records what an asset depends on, as an importer or a pack's table would.
+		void SetDependencies(AssetHandle handle, const std::vector<AssetHandle>& dependencies, std::optional<AABB> bounds = std::nullopt)
+		{
+			SetAssetReferences(handle, dependencies, bounds);
+		}
 
 		// Reads wait at the gate while it is closed, until AllowReads lets them through.
 		void CloseGate()
@@ -183,6 +188,14 @@ namespace Strata::Tests
 			std::scoped_lock<std::mutex> lock(m_Mutex);
 			return m_ReadOrder;
 		}
+
+		// The manager's frame (GetFrameIndex) when the asset's latest read passed the gate; nullopt before its first read.
+		std::optional<uint64_t> GetReadFrame(AssetHandle handle) const
+		{
+			std::scoped_lock<std::mutex> lock(m_Mutex);
+			auto it = m_ReadFrames.find(handle);
+			return it != m_ReadFrames.end() ? std::optional<uint64_t>(it->second) : std::nullopt;
+		}
 	protected:
 		bool ReadAssetData(const AssetMetadata& metadata, std::vector<uint8_t>& outData, std::string* outError) override
 		{
@@ -194,6 +207,7 @@ namespace Strata::Tests
 				m_AllowedReads--;
 			m_WaitingReads--;
 			m_ReadOrder.push_back(metadata.Handle);
+			m_ReadFrames[metadata.Handle] = GetFrameIndex();
 
 			auto it = m_Data.find(metadata.Handle);
 			if (it == m_Data.end())
@@ -206,10 +220,27 @@ namespace Strata::Tests
 			return true;
 		}
 	private:
+		AssetHandle Register(uint64_t handle, AssetType type, std::vector<uint8_t> data, uint64_t storedSize)
+		{
+			AssetMetadata metadata;
+			metadata.Handle = UUID(handle);
+			metadata.Type = type;
+			metadata.Path = "Fake/" + std::to_string(handle);
+			metadata.Name = metadata.Path;
+			metadata.StoredSize = storedSize;
+			{
+				std::scoped_lock<std::mutex> lock(m_Mutex);
+				m_Data[metadata.Handle] = std::move(data);
+			}
+			RegisterAsset(metadata);
+			return metadata.Handle;
+		}
+	private:
 		mutable std::mutex m_Mutex;
 		std::condition_variable m_Condition;
 		std::unordered_map<AssetHandle, std::vector<uint8_t>> m_Data;
 		std::vector<AssetHandle> m_ReadOrder;
+		std::unordered_map<AssetHandle, uint64_t> m_ReadFrames;
 		bool m_GateClosed = false;
 		uint32_t m_AllowedReads = 0;
 		uint32_t m_WaitingReads = 0;

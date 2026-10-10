@@ -907,6 +907,14 @@ namespace Strata
 				subAsset.Name = meshName;
 				subAsset.Type = AssetType::Mesh;
 				subAsset.Data = mesh->Serialize();
+				// What the cooked mesh does not show as a document: its submeshes' default materials, and its bounds, so that
+				// packs can prefetch the materials with the mesh and culling can place the mesh before it loads.
+				for (const Submesh& submesh : mesh->GetSubmeshes())
+				{
+					if (submesh.Material.IsValid() && std::find(subAsset.References.begin(), subAsset.References.end(), submesh.Material) == subAsset.References.end())
+						subAsset.References.push_back(submesh.Material);
+				}
+				subAsset.Bounds = mesh->GetBounds();
 				m_Result.SubAssets.push_back(std::move(subAsset));
 				m_MeshHandles[&source] = DeriveSubAssetHandle(m_Context.Handle, key);
 			}

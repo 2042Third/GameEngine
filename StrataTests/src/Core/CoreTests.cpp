@@ -16,6 +16,8 @@
 #include <chrono>
 #include <cstdint>
 #include <set>
+#include <span>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -55,6 +57,45 @@ TEST_SUITE("Core")
 		CHECK(Hash::FNV1a("a") == 0xaf63dc4c8601ec8cull);
 		CHECK(Hash::FNV1a("foobar") == 0x85944171f73967e8ull);
 		CHECK(Hash::Combine(1, 2) != Hash::Combine(2, 1));
+	}
+
+	TEST_CASE("CRC-32C matches the standard check values, chains, and agrees with the portable implementation")
+	{
+		auto bytes = [](std::string_view text) { return std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(text.data()), text.size()); };
+		// The check value of the Castagnoli polynomial, and RFC 3720's test vectors (32 bytes of zeros, of ones).
+		CHECK(Hash::CRC32C(bytes("123456789")) == 0xE3069283u);
+		CHECK(Hash::CRC32C({}) == 0u);
+		const std::vector<uint8_t> zeros(32, 0x00);
+		const std::vector<uint8_t> ones(32, 0xFF);
+		CHECK(Hash::CRC32C(zeros) == 0x8A9136AAu);
+		CHECK(Hash::CRC32C(ones) == 0x62A8AB43u);
+
+		// Every length and alignment the accelerated path splits differently, against the portable one, and chaining.
+		std::vector<uint8_t> data(4096 + 13);
+		uint32_t state = 12345;
+		for (uint8_t& byte : data)
+		{
+			state = state * 1664525u + 1013904223u;
+			byte = static_cast<uint8_t>(state >> 24);
+		}
+		for (size_t offset : { size_t(0), size_t(1), size_t(3), size_t(7) })
+		{
+			for (size_t length : { size_t(0), size_t(1), size_t(7), size_t(8), size_t(9), size_t(63), size_t(64), size_t(1000), size_t(4096) })
+			{
+				CAPTURE(offset);
+				CAPTURE(length);
+				const std::span<const uint8_t> range(data.data() + offset, length);
+				const uint32_t whole = Hash::CRC32C(range);
+				CHECK(whole == Hash::CRC32CPortable(range));
+				const size_t split = length / 3;
+				CHECK(Hash::CRC32C(range.subspan(split), Hash::CRC32C(range.first(split))) == whole);
+				CHECK(Hash::CRC32CPortable(range.subspan(split), Hash::CRC32CPortable(range.first(split))) == whole);
+			}
+		}
+		// A flipped bit changes the checksum.
+		const uint32_t before = Hash::CRC32C(data);
+		data[100] ^= 0x10;
+		CHECK(Hash::CRC32C(data) != before);
 	}
 
 	TEST_CASE("LogBuffer keeps the most recent entries with increasing sequence numbers")

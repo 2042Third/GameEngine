@@ -25,6 +25,7 @@ alongside the executable.
 | [nativefiledialog-extended](https://github.com/btzy/nativefiledialog-extended) | 1.4.1 | zlib | Editor only | Native file dialogs |
 | [doctest](https://github.com/doctest/doctest) | 2.5.3 | MIT | No (tests) | Unit testing |
 | [Tracy](https://github.com/wolfpld/tracy) | 0.14.1 | BSD-3-Clause | Optional | Profiler instrumentation |
+| [Zstandard](https://github.com/facebook/zstd) | 1.5.7 | BSD-3-Clause (dual-licensed with GPL-2.0; used under BSD) | Yes (decompression; compression editor only) | Asset pack compression |
 
 The editor (not exported games) embeds these fonts, committed as release files with their license texts in
 `StrataEditor/Resources/Fonts/`:

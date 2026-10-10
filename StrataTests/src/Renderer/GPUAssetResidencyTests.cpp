@@ -1,6 +1,7 @@
 #include "Renderer/SceneRendererTestUtils.h"
 
 #include "Strata/Asset/AssetManager.h"
+#include "Strata/Asset/AssetPackWriter.h"
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Project/GameManifest.h"
 #include "Strata/Renderer/Material.h"
@@ -655,7 +656,7 @@ TEST_SUITE("GPU.Assets.Residency")
 			data[static_cast<uint64_t>(assetMetadata.Handle)] = std::move(bytes);
 		}
 		std::string error;
-		REQUIRE_MESSAGE(AssetPack::Write(directory / "Switch.stpak", metadata, [&data](const AssetMetadata& asset, std::vector<uint8_t>& outData, std::string*)
+		REQUIRE_MESSAGE(AssetPackWriter::Write(directory / "Switch.stpak", metadata, [&data](const AssetMetadata& asset, std::vector<uint8_t>& outData, std::string*)
 		{
 			outData = data.at(static_cast<uint64_t>(asset.Handle));
 			return true;

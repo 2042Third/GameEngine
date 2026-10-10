@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "FeatureTest/FeatureTestUtils.h"
@@ -185,7 +186,7 @@ TEST_SUITE("Editor.GameFlow")
 		const std::filesystem::path directory = CreateTemporaryDirectory("GameRuntimeFlow");
 		GameFlowProject project(directory / "Flow");
 		project.Run("project.setStartScene", { { "scene", UUIDToJson(project.LevelOne) } });
-		const nlohmann::json exported = project.Run("project.export", { { "directory", FileSystem::ToUTF8(directory / "Build") }, { "includeRuntime", false } });
+		const nlohmann::json exported = Tests::RunCommandToCompletion(project.Context, project.Commands, "project.export", { { "directory", FileSystem::ToUTF8(directory / "Build") }, { "includeRuntime", false } });
 		std::string error;
 		Scope<GameRuntime> game = GameRuntime::Create(FileSystem::FromUTF8(exported["manifest"].get<std::string>()), &error);
 		REQUIRE_MESSAGE(game, error);

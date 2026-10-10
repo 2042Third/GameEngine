@@ -215,8 +215,14 @@ capture again. Editor-camera captures can be lit by preview lighting and leave o
 game's look and its HUD from `"camera": "scene"` captures.
 
 **Export**: `project.export {"directory": "<absolute dir outside the project>"}` writes `<Game>.stpak`,
-`<Game>.stgame` and the runtime renamed `<Game>[.exe]` (`"includeRuntime": false` skips it). Check the result
-headless: `<dir>/<Game> --headless --frames 120` (exit code 0).
+`<Game>.stgame` and the runtime renamed `<Game>[.exe]` (`"includeRuntime": false` skips it). It runs in the background
+and answers when it finished (with `assetCount`, `packBytes`, `seconds`, `excludedAssets` and the editor's `frameTimes`
+from the frame that started it); a large project takes a while, so give the call a long `--timeout`, and watch it with
+`project.exportStatus` (progress 0 to 1 and the stage) from another call; `project.cancelExport` stops it. Mistakes
+(a relative path, a directory inside the project, a file, unsaved changes) fail at once with what to do instead.
+`"prune": true` ships only what the scenes use: assets the scripts load by path must then be named with
+`project.setExportSettings {"alwaysInclude": ["Prefabs", "Sounds/Win.wav"]}` (folders or assets, saved in the project).
+Check the result headless: `<dir>/<Game> --headless --frames 120` (exit code 0).
 
 **Finish**: save (`scene.save`), then `editor.quit`. It refuses while the scene has unsaved changes;
 `{"force": true}` discards them. The editor answers, closes and removes its session file.

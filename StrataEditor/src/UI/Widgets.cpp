@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <string>
 
 namespace Strata::UI
@@ -656,6 +657,52 @@ namespace Strata::UI
 	float DialogButtonWidth(const char* label)
 	{
 		return std::max(ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2.0f, ImGui::GetFontSize() * c_DialogButtonWidthInFontSizes);
+	}
+
+	void StrataProgressBar(const char* id, float fraction, std::string_view label, float width)
+	{
+		const ThemePalette& palette = GetThemePalette();
+		const ThemeColors& colors = GetThemeColors();
+		const float height = ImGui::GetFrameHeight();
+		const float barWidth = width < 0.0f ? ImGui::GetContentRegionAvail().x : width;
+		const ImVec2 min = ImGui::GetCursorScreenPos();
+		const ImVec2 max(min.x + barWidth, min.y + height);
+		ImGui::PushID(id);
+		ImGui::Dummy(ImVec2(barWidth, height));
+		ImGui::PopID();
+
+		ImDrawList* drawList = ImGui::GetWindowDrawList();
+		const float rounding = ImGui::GetStyle().FrameRounding;
+		drawList->AddRectFilled(min, max, ToDrawColor(colors.Chrome), rounding);
+		const float done = std::clamp(std::isfinite(fraction) ? fraction : 0.0f, 0.0f, 1.0f);
+		if (done > 0.0f)
+		{
+			// The bands, clipped to the done share and to the track's rounded shape.
+			const ImVec4 bands[] = { palette.Sandstone, palette.Ochre, palette.Rust, palette.Umber };
+			const float bandHeight = height / static_cast<float>(std::size(bands));
+			const float filled = min.x + barWidth * done;
+			drawList->PushClipRect(min, ImVec2(filled, max.y), true);
+			for (size_t index = 0; index < std::size(bands); index++)
+			{
+				const float top = min.y + bandHeight * static_cast<float>(index);
+				drawList->AddRectFilled(ImVec2(min.x, top), ImVec2(max.x, top + bandHeight), ToDrawColor(bands[index]), rounding,
+					index == 0 ? ImDrawFlags_RoundCornersTop : (index + 1 == std::size(bands) ? ImDrawFlags_RoundCornersBottom : ImDrawFlags_RoundCornersNone));
+			}
+			drawList->PopClipRect();
+		}
+		drawList->AddRect(min, max, ToDrawColor(colors.Border), rounding);
+
+		// The label over the bands, on a translucent plate so that it reads on any of them.
+		if (!label.empty())
+		{
+			const ImVec2 size = ImGui::CalcTextSize(label.data(), label.data() + label.size());
+			const ImVec2 position(std::round(min.x + (barWidth - size.x) * 0.5f), std::round(min.y + (height - size.y) * 0.5f));
+			const ImVec2 padding = ImGui::GetStyle().ItemInnerSpacing;
+			drawList->AddRectFilled(ImVec2(position.x - padding.x, position.y), ImVec2(position.x + size.x + padding.x, position.y + size.y),
+				ToDrawColor(colors.Overlay), rounding);
+			AddText(drawList, position, colors.Text, label);
+		}
+		ItemProbe::Record(id, true, 0, label);
 	}
 
 	bool DialogButton(const char* id, const char* label, bool primary, bool enabled)

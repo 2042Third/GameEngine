@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace Strata
 {
@@ -22,6 +23,14 @@ namespace Strata
 		std::string ModuleName;
 	};
 
+	// How the project exports as a game (project.export).
+	struct ProjectExportSettings
+	{
+		// Assets ("Prefabs/Enemy.stprefab") and folders ("Prefabs") relative to the asset directory, '/' separators, that an
+		// export with pruning keeps with what they use although no scene references them: assets the scripts find by path.
+		std::vector<std::string> AlwaysInclude;
+	};
+
 	struct ProjectConfig
 	{
 		std::string Name = "Untitled";
@@ -29,14 +38,17 @@ namespace Strata
 		std::string AssetDirectory = "Assets";
 		AssetHandle StartScene = UUID::Null(); // Scene the runtime loads first
 		ProjectScriptSettings Scripts;
+		ProjectExportSettings Export;
 	};
 
 	// A game project: a directory holding the project file ("<Name>.stproj"), the asset directory, the script sources
 	// and the intermediate directory ".strata/" (import cache, script build output; never committed).
 	//
 	// Project file: { "Strata": { "Format": "Project", "Version": 2 }, "Project": { "Name": ..., "AssetDirectory": ...,
-	// "StartScene": "<handle>", "Scripts": { "SourceDirectory": "Scripts", "ModuleName": ... } } }
-	// Version 1 files (without "Scripts") load with the default script settings.
+	// "StartScene": "<handle>", "Scripts": { "SourceDirectory": "Scripts", "ModuleName": ... },
+	// "Export": { "AlwaysInclude": [...] } } }
+	// Version 1 files (without "Scripts") load with the default script settings; "Export" is optional (written when it says
+	// something).
 	class Project
 	{
 	public:

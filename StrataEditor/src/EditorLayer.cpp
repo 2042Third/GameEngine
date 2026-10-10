@@ -118,7 +118,11 @@ namespace Strata
 	void EditorLayer::OnAttach()
 	{
 		if (!m_Options.Headless && m_Host->HasWindow())
-			m_ProjectDialogs.SetFolderPickerAvailable(FileDialogs::Init());
+		{
+			const bool folderPicker = FileDialogs::Init();
+			m_ProjectDialogs.SetFolderPickerAvailable(folderPicker);
+			m_ExportDialog.SetFolderPickerAvailable(folderPicker);
+		}
 		if (ImGui::GetCurrentContext())
 		{
 			m_Panels.InstallSettingsHandler();
@@ -370,6 +374,7 @@ namespace Strata
 		}
 		m_ProjectDialogs.Draw(panelContext);
 		m_AboutDialog.Draw(GetEnvironment());
+		m_ExportDialog.Draw(panelContext);
 		DrawUnsavedChangesModal();
 		if (m_ShowImGuiDemo)
 			ImGui::ShowDemoWindow(&m_ShowImGuiDemo);
@@ -858,6 +863,11 @@ namespace Strata
 					SaveSceneAs();
 				if (ImGui::MenuItem("Set as Start Scene", nullptr, false, m_Context.HasProject() && m_Context.GetSceneHandle().IsValid()))
 					RunEditorCommand(m_Context, m_Commands, "project.setStartScene", { { "scene", UUIDToJson(m_Context.GetSceneHandle()) } });
+				ImGui::Separator();
+				const bool canExport = m_Context.HasProject();
+				if (ImGui::MenuItem("Export Game...", nullptr, false, canExport))
+					ShowExportDialog();
+				UI::ItemProbe::Record("Menu.File.ExportGame", canExport);
 			}
 			ImGui::Separator();
 			if (ImGui::MenuItem("Exit"))
@@ -1128,12 +1138,38 @@ namespace Strata
 		const char* tooltip = failed ? "The last build failed (see the Console): build the scripts again (Ctrl+B)"
 			: "Build the project's scripts and hot-reload them (Ctrl+B)";
 
-		// Right-aligned.
-		const float width = style.FramePadding.x * 2.0f + ImGui::CalcTextSize(icon).x + style.ItemInnerSpacing.x + ImGui::CalcTextSize(label.c_str()).x;
+		// Export: the game's progress while it is written.
+		const Ref<GameExport>& exporter = m_Context.GetGameExport();
+		const bool exporting = exporter && !exporter->IsFinished();
+		const std::string exportLabel = exporting ? fmt::format("Exporting {:.0f}%", std::floor(exporter->GetProgress() * 100.0f)) : std::string("Export");
+		const char* exportIcon = exporting ? Icons::LoaderCircle : Icons::PackageOpen;
+		UI::ButtonStyle exportStyle;
+		exportStyle.Enabled = m_Context.HasProject();
+		exportStyle.Active = exporting;
+		exportStyle.ActiveColor = colors.Info;
+
+		// Right-aligned: Export, then Build Scripts.
+		auto buttonWidth = [&style](const char* buttonIcon, const std::string& buttonLabel)
+		{
+			return style.FramePadding.x * 2.0f + ImGui::CalcTextSize(buttonIcon).x + style.ItemInnerSpacing.x + ImGui::CalcTextSize(buttonLabel.c_str()).x;
+		};
+		const float width = buttonWidth(exportIcon, exportLabel) + style.ItemSpacing.x + buttonWidth(icon, label);
 		ImGui::SameLine();
 		ImGui::SetCursorPosX(std::max(ImGui::GetWindowWidth() - style.WindowPadding.x - width, ImGui::GetCursorPosX()));
+		if (UI::ToolbarButton("Toolbar.Export", exportIcon, exportLabel.c_str(), exporting ? "Show the running export" : "Export the project as a playable game",
+			exportStyle))
+		{
+			ShowExportDialog();
+		}
+		ImGui::SameLine();
 		if (UI::ToolbarButton("Toolbar.BuildScripts", icon, label.c_str(), tooltip, buildStyle))
 			BuildScripts();
+	}
+
+	void EditorLayer::ShowExportDialog()
+	{
+		EditorPanelContext panelContext = MakePanelContext();
+		m_ExportDialog.Open(panelContext);
 	}
 
 	void EditorLayer::DrawStatusBar()

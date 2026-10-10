@@ -13,6 +13,7 @@
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Scene.h>
 
+#include <algorithm>
 #include <system_error>
 
 namespace Strata
@@ -156,7 +157,25 @@ namespace Strata
 				{ "name", config.Name },
 				{ "directory", FileSystem::ToUTF8(project->GetProjectDirectory()) },
 				{ "assetDirectory", FileSystem::ToUTF8(project->GetAssetDirectory()) },
-				{ "startScene", config.StartScene.IsValid() ? UUIDToJson(config.StartScene) : nlohmann::json(nullptr) } };
+				{ "startScene", config.StartScene.IsValid() ? UUIDToJson(config.StartScene) : nlohmann::json(nullptr) },
+				{ "export", { { "alwaysInclude", config.Export.AlwaysInclude } } } };
+		}
+
+		nlohmann::json DescribeFrameTimes(std::vector<double> frameTimes)
+		{
+			std::sort(frameTimes.begin(), frameTimes.end());
+			const size_t count = frameTimes.size();
+			const double median = count % 2 == 1 ? frameTimes[count / 2] : (frameTimes[count / 2 - 1] + frameTimes[count / 2]) * 0.5;
+			const size_t percentileRank = (count * 95 + 99) / 100; // ceil(0.95 * count), at least 1
+			double sum = 0.0;
+			for (const double frameTime : frameTimes)
+				sum += frameTime;
+			return {
+				{ "count", count },
+				{ "medianMs", median },
+				{ "meanMs", sum / static_cast<double>(count) },
+				{ "p95Ms", frameTimes[percentileRank - 1] },
+				{ "maxMs", frameTimes.back() } };
 		}
 
 		std::optional<std::filesystem::path> ResolveOutputPath(const EditorContext& context, std::string_view path, std::string_view extension, bool overwrite,

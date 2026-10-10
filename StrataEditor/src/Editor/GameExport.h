@@ -1,7 +1,19 @@
 #pragma once
 
+#include <Strata/Asset/AssetPackWriter.h>
+#include <Strata/Asset/EditorAssetManager.h>
+#include <Strata/Core/Base.h>
+#include <Strata/Core/JobSystem.h>
+#include <Strata/Project/GameManifest.h>
+
+#include <atomic>
+#include <chrono>
+#include <cstdint>
 #include <filesystem>
+#include <mutex>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace Strata
 {
@@ -23,6 +35,9 @@ namespace Strata
 		uint32_t WindowWidth = 1280;
 		uint32_t WindowHeight = 720;
 		bool Fullscreen = false;
+		// Pack only what the scenes use and what the project's Export.AlwaysInclude names, with what that uses
+		// (AssetPackBuildOptions::Prune). Off by default: scripts can find assets by path, which no scene shows.
+		bool Prune = false;
 	};
 
 	struct GameExportResult
@@ -31,15 +46,109 @@ namespace Strata
 		std::filesystem::path Manifest;
 		std::filesystem::path AssetPack;
 		std::filesystem::path ScriptModule; // Empty for games without scripts
-		size_t AssetCount = 0;
+		size_t AssetCount = 0;              // Assets in the pack
+		std::vector<AssetMetadata> ExcludedAssets; // Left out by pruning
+		AssetPackWriteStats Pack;
+		double Seconds = 0.0; // From the start to the end of the export
 	};
 
-	// Exports the open project as a playable game: an asset pack with every project asset, the script module the editor
-	// runs (the loaded module, exactly as it was loaded: see EditorContext::ReadRunningScriptModule), a game manifest
-	// pointing at the project's start scene (or the open scene when none is set) and the module, and the runtime
-	// executable with the third-party notices found next to it. The scene must be saved and not running, and no script
-	// build may run. A project whose scenes or prefabs use scripts cannot be exported without a loaded script module.
-	bool ExportGame(EditorContext& context, const GameExportOptions& options, GameExportResult& outResult, std::string* outError = nullptr);
+	enum class GameExportState : uint8_t
+	{
+		WaitingForImports = 0, // Background imports finish first, so that the pack holds their results
+		Packing,               // Writing the asset pack
+		Copying,               // Writing the script module, the manifest and the runtime
+		Succeeded,
+		Failed,
+		Cancelled
+	};
+
+	const char* GameExportStateToString(GameExportState state);
+
+	// Exports the open project as a playable game without blocking a frame: an asset pack (EditorAssetManager::PlanAssetPack,
+	// ordered by first use from the project's start scene, or the open scene when none is set), the script module the editor
+	// runs (the loaded module, exactly as it was loaded: see EditorContext::ReadRunningScriptModule), a game manifest naming
+	// the start scene and the module, and the runtime executable with the third-party notices found next to it.
+	//
+	// Start checks at once what it can without reading the project's files (a saved scene that is not running, no script
+	// build, the loaded script module unchanged, a usable output directory outside the project, what AlwaysInclude names)
+	// and fails without side effects. The export then waits for background imports, takes a snapshot of what to pack
+	// (main thread), and writes the files on an I/O thread, reporting progress; it fails there when a packed scene or
+	// prefab uses scripts but no script module is loaded. Update advances it once per frame (EditorContext does). Cancel
+	// stops it between blocks. The editor's asset manager stays alive until the export finished.
+	class GameExport
+	{
+	public:
+		static Ref<GameExport> Start(EditorContext& context, const GameExportOptions& options, std::string* outError = nullptr);
+		// Cancels the export and waits for it.
+		~GameExport();
+
+		GameExport(const GameExport&) = delete;
+		GameExport& operator=(const GameExport&) = delete;
+
+		// Main thread, once per frame: plans the pack and starts writing once no background import is pending, and takes
+		// the outcome of a finished write.
+		void Update();
+		// Asks the export to stop: it ends Cancelled (unless it was done already) once its I/O job noticed.
+		void Cancel();
+		// Main thread: blocks until the I/O job (if one runs) has ended and takes its outcome; an export cancelled while it
+		// waited for imports ends at once.
+		void Wait();
+
+		GameExportState GetState() const;
+		bool IsFinished() const;
+		// The share of the work done, in [0, 1]: the pack's stored bytes, then the files copied.
+		float GetProgress() const;
+		// What it is doing ("Packing 12 of 340 assets"), or how it ended.
+		std::string GetStage() const;
+		const GameExportOptions& GetOptions() const { return m_Options; }
+		// Once finished: what was written (Succeeded), or why not (Failed, Cancelled).
+		const GameExportResult& GetResult() const { return m_Result; }
+		const std::string& GetError() const { return m_Error; }
+	private:
+		GameExport() = default;
+
+		// Plans the pack and starts the I/O job (main thread).
+		void Begin();
+		// Takes the outcome of the I/O job once it ended (main thread).
+		void Collect();
+	private:
+		// What the I/O job and the main thread share.
+		struct Shared
+		{
+			std::atomic<bool> Cancel = false;
+			std::atomic<GameExportState> State = GameExportState::WaitingForImports;
+			std::atomic<uint64_t> DoneBytes = 0;
+			std::atomic<uint64_t> TotalBytes = 1;
+			std::atomic<uint32_t> PackedAssets = 0;
+
+			std::mutex Mutex; // Guards the outcome
+			bool Ended = false;
+			GameExportState Outcome = GameExportState::Failed;
+			std::string Error;
+			GameExportResult Result;
+		};
+
+		GameExportOptions m_Options;
+		Ref<EditorAssetManager> m_Assets; // Kept alive while the I/O job reads from it
+		AssetPackBuildOptions m_PackOptions;
+		GameManifest m_Manifest;
+		std::string m_FileName; // Of the pack, manifest and executable, without extension
+		std::filesystem::path m_Runtime;
+		std::filesystem::path m_ScriptModulePath;   // Empty without scripts
+		std::vector<uint8_t> m_ScriptModuleBytes;
+		std::chrono::steady_clock::time_point m_StartTime;
+
+		Ref<Shared> m_Shared;
+		JobHandle m_Job;
+		uint32_t m_AssetCount = 0; // Planned
+		bool m_Collected = false;
+		GameExportResult m_Result;
+		std::string m_Error;
+	};
+
+	// Whether `directory` can receive an export of the project in `projectDirectory`: an absolute, local path outside the
+	// project that is not a file, without reserved device names. The reason when it cannot.
+	std::optional<std::string> CheckExportDirectory(const std::filesystem::path& directory, const std::filesystem::path& projectDirectory);
 
 	// Platform file name of an executable ("Name.exe" on Windows, "Name" elsewhere).
 	std::string GetExecutableFileName(const std::string& name);

@@ -312,7 +312,7 @@ TEST_SUITE("GPU.SceneRenderer.Text")
 		metadata.Handle = UUID(0xF0F0);
 		metadata.Type = AssetType::Font;
 		metadata.Path = "Fonts/Packed.ttf";
-		REQUIRE(AssetPack::Write(path, { metadata }, [&cousineData](const AssetMetadata&, std::vector<uint8_t>& outData, std::string*)
+		REQUIRE(AssetPackWriter::Write(path, { metadata }, [&cousineData](const AssetMetadata&, std::vector<uint8_t>& outData, std::string*)
 		{
 			outData = cousineData;
 			return true;

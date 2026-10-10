@@ -1,7 +1,9 @@
 #include <doctest/doctest.h>
 
+#include "Asset/AssetTestUtils.h"
 #include "Perf/PerfUtils.h"
 #include "Perf/SceneGenerators.h"
+#include "Perf/StressProject.h"
 #include "TestHelpers.h"
 
 #include <Strata/Core/FileSystem.h>
@@ -23,7 +25,8 @@
 
 // Frame times of the real editor (CTest StrataTests.PerfGPU: Release and Dist, with a GPU and a display): StrataEditor opens
 // generated scenes in a maximized window and runs a command script whose editor.wait steps report the CPU time of their
-// frames. Runs the StrataEditor next to the test executable, or the one STRATA_TEST_EDITOR_PATH names.
+// frames, and exports the streaming stress project, whose project.export reports the frames that ran while it exported.
+// Runs the StrataEditor next to the test executable, or the one STRATA_TEST_EDITOR_PATH names.
 
 using namespace Strata;
 using namespace Strata::Tests;
@@ -56,21 +59,21 @@ namespace
 		REQUIRE(FileSystem::WriteText(file, JsonUtils::Dump(SceneSerializer::Serialize(scene)) + "\n"));
 	}
 
-	// The results the command script logged for its editor.wait steps ("editor.wait -> {...}"), in order.
-	std::vector<nlohmann::json> FindWaitResults(const std::string& output)
+	// The results the command script logged for its steps running `command` ("editor.wait -> {...}"), in order.
+	std::vector<nlohmann::json> FindCommandResults(const std::string& output, std::string_view command)
 	{
-		constexpr std::string_view c_Marker = "editor.wait -> ";
+		const std::string marker = std::string(command) + " -> ";
 		std::vector<nlohmann::json> results;
 		size_t position = 0;
-		while ((position = output.find(c_Marker, position)) != std::string::npos)
+		while ((position = output.find(marker, position)) != std::string::npos)
 		{
-			position += c_Marker.size();
+			position += marker.size();
 			const size_t end = output.find('\n', position);
 			std::string line = output.substr(position, end == std::string::npos ? std::string::npos : end - position);
 			while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
 				line.pop_back();
 			const std::optional<nlohmann::json> result = JsonUtils::Parse(line);
-			REQUIRE_MESSAGE(result.has_value(), "Unreadable editor.wait result: ", line);
+			REQUIRE_MESSAGE(result.has_value(), "Unreadable ", std::string(command), " result: ", line);
 			results.push_back(*result);
 		}
 		return results;
@@ -145,7 +148,7 @@ TEST_SUITE("PerfGPU.Editor")
 			}
 			REQUIRE(run.ExitCode == 0);
 
-			const std::vector<nlohmann::json> waits = FindWaitResults(run.Output);
+			const std::vector<nlohmann::json> waits = FindCommandResults(run.Output, "editor.wait");
 			REQUIRE(waits.size() == metrics.size());
 			Perf::MetricValues values;
 			for (size_t index = 0; index < waits.size(); index++)
@@ -162,5 +165,55 @@ TEST_SUITE("PerfGPU.Editor")
 			}
 			return values;
 		});
+	}
+
+	TEST_CASE("Exporting the stress project keeps every editor frame within 50 ms")
+	{
+		const std::filesystem::path editor = GetEditorPath();
+		REQUIRE_MESSAGE(FileSystem::IsRegularFile(editor), "The export measurement needs the built StrataEditor: ", FileSystem::ToUTF8(editor));
+
+		// The stress project, imported here, so that the editor finds its imports current and only exports.
+		const std::filesystem::path directory = CreateTemporaryDirectory("PerfEditorExport");
+		std::string error;
+		std::optional<StressProject> project;
+		{
+			ScopedJobSystem jobs(0, 2);
+			project = WriteStressProject(directory / "Stress", StressProjectSpec(), error);
+			REQUIRE_MESSAGE(project, error);
+			REQUIRE_MESSAGE(BuildStressPack(*project, directory / "Imported.stpak", error), error);
+		}
+
+		// The editor shows the world (and streams its textures) while it exports it; the export answers with the frame times
+		// of the frames that ran while it worked.
+		const nlohmann::json script = nlohmann::json::array({ Wait(),
+			{ { "command", "project.export" }, { "parameters", { { "directory", FileSystem::ToUTF8(directory / "Build") }, { "includeRuntime", false } } } } });
+		const std::filesystem::path scriptFile = directory / "Commands.json";
+		REQUIRE(FileSystem::WriteText(scriptFile, script.dump(1, '\t') + "\n"));
+		ProcessSpecification specification;
+		specification.Executable = editor;
+		specification.Arguments = { "--no-automation", "--frames", "100000", "--quit-after-commands", "--project", FileSystem::ToUTF8(project->Directory),
+			"--commands", FileSystem::ToUTF8(scriptFile) };
+		specification.Output = ProcessOutputMode::Capture;
+		const Process::RunResult run = Process::Run(specification, c_EditorTimeout);
+		INFO("Editor output:\n", run.Output);
+		REQUIRE_MESSAGE(run.Started, run.Error);
+		REQUIRE_FALSE(run.TimedOut);
+		REQUIRE(run.ExitCode == 0);
+
+		const std::vector<nlohmann::json> exports = FindCommandResults(run.Output, "project.export");
+		REQUIRE(exports.size() == 1);
+		const nlohmann::json& result = exports[0];
+		const nlohmann::json* frameTimes = JsonUtils::Find(result, "frameTimes");
+		REQUIRE(frameTimes != nullptr);
+		const double maxMs = JsonUtils::GetFloat(*frameTimes, "maxMs", 1.0e9f);
+		const double medianMs = JsonUtils::GetFloat(*frameTimes, "medianMs", 1.0e9f);
+		const double seconds = JsonUtils::GetFloat(result, "seconds", 0.0f);
+		MESSAGE("Export of the stress project: ", seconds, " s over ", JsonUtils::GetUInt(result, "frames", 0), " frames; frame time median ", medianMs,
+			" ms, at most ", maxMs, " ms; pack ", JsonUtils::GetUInt(result, "packBytes", 0), " bytes");
+		// The editor drew frames the whole time, each in time for an interactive editor.
+		CHECK(JsonUtils::GetUInt(*frameTimes, "count", 0) >= 2);
+		CHECK(maxMs <= 50.0);
+		Perf::CheckBudget("PerfGPU.Editor.ExportFrameStress", medianMs);
+		Perf::CheckBudget("PerfGPU.Editor.ExportStress", seconds * 1000.0);
 	}
 }

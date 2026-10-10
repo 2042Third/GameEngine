@@ -30,6 +30,18 @@ namespace Strata
 		runtime->m_AssetManager = RuntimeAssetManager::Create(packPath, outError);
 		if (!runtime->m_AssetManager)
 			return nullptr;
+		// Patches replace the game's assets before anything loads; one that is missing or broken stops the game, which
+		// would otherwise run with assets the patch was meant to replace.
+		for (const std::string& patch : runtime->m_Manifest.PatchPacks)
+		{
+			std::string error;
+			if (!runtime->m_AssetManager->Mount(manifestPath.parent_path() / FileSystem::FromUTF8(patch), &error))
+			{
+				if (outError)
+					*outError = fmt::format("Mounting the patch pack '{}' failed: {}", patch, error);
+				return nullptr;
+			}
+		}
 		if (options.AssetBudgets)
 			runtime->m_AssetManager->SetResidencyBudgets(*options.AssetBudgets);
 		runtime->m_TimeDilation = options.TimeDilation;

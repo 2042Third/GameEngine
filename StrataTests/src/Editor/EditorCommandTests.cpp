@@ -1,9 +1,11 @@
 #include <doctest/doctest.h>
 
+#include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "TestHelpers.h"
 
+#include <Strata/Asset/AssetDependencies.h>
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/Core/FileSystem.h>
@@ -62,6 +64,33 @@ namespace
 
 TEST_SUITE("Editor.Commands")
 {
+	TEST_CASE("Saving a scene records what it references as its file shows")
+	{
+		CommandHarness harness;
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("EditorSceneReferences");
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory / "Game") }, { "name", "References" } });
+		harness.Run("material.create", { { "path", "Materials/Red.stmat" } });
+		harness.Run("material.create", { { "path", "Materials/Blue.stmat" } });
+		harness.Run("entity.create", { { "name", "Red" }, { "components", { { "MeshRenderer", { { "Mesh", "0000000000000001" }, { "Material", "Materials/Red.stmat" } } } } } });
+		const AssetHandle scene = *UUIDFromJson(harness.Run("scene.saveAs", { { "path", "Scenes/Main.stscene" } })["scene"]);
+		EditorAssetManager& assets = *harness.Context.GetAssetManager();
+		auto fileReferences = [&]()
+		{
+			const std::optional<std::vector<uint8_t>> file = FileSystem::ReadBytes(assets.GetAbsolutePath(scene));
+			REQUIRE(file);
+			std::vector<AssetHandle> references;
+			REQUIRE(AssetDependencies::Scan(AssetType::Scene, *file, references));
+			return references;
+		};
+		CHECK(assets.GetDependencies(scene) == fileReferences());
+		CHECK(assets.GetDependencies(scene).size() == 2); // The built-in cube and the red material
+
+		harness.Run("entity.create", { { "name", "Blue" }, { "components", { { "MeshRenderer", { { "Mesh", "0000000000000002" }, { "Material", "Materials/Blue.stmat" } } } } } });
+		harness.Run("scene.save");
+		CHECK(assets.GetDependencies(scene) == fileReferences());
+		CHECK(assets.GetDependencies(scene).size() == 4);
+	}
+
 	TEST_CASE("Every command documents itself with an object schema")
 	{
 		CommandHarness harness;
@@ -545,12 +574,12 @@ TEST_SUITE("Editor.Commands")
 		CHECK(harness.Error("project.export", { { "directory", FileSystem::ToUTF8(directory / "WithRuntime") }, { "runtime", FileSystem::ToUTF8(directory / "FakeRuntime.bin") } })
 			.find("ThirdPartyNotices") != std::string::npos);
 		REQUIRE(FileSystem::WriteText(directory / "ThirdPartyNotices.md", "notices"));
-		const nlohmann::json withRuntime = harness.Run("project.export", { { "directory", FileSystem::ToUTF8(directory / "WithRuntime") }, { "runtime", FileSystem::ToUTF8(directory / "FakeRuntime.bin") } });
+		const nlohmann::json withRuntime = Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.export", { { "directory", FileSystem::ToUTF8(directory / "WithRuntime") }, { "runtime", FileSystem::ToUTF8(directory / "FakeRuntime.bin") } });
 		CHECK(FileSystem::ReadText(FileSystem::FromUTF8(withRuntime["executable"].get<std::string>())) == "runtime");
 		CHECK(FileSystem::FromUTF8(withRuntime["executable"].get<std::string>()).stem() == "My Game_");
 		CHECK(FileSystem::ReadText(directory / "WithRuntime" / "ThirdPartyNotices.md") == "notices");
 
-		const nlohmann::json exported = harness.Run("project.export", { { "directory", FileSystem::ToUTF8(output) }, { "includeRuntime", false }, { "width", 640 } });
+		const nlohmann::json exported = Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.export", { { "directory", FileSystem::ToUTF8(output) }, { "includeRuntime", false }, { "width", 640 } });
 		CHECK(exported["executable"].is_null());
 		const std::filesystem::path manifest = FileSystem::FromUTF8(exported["manifest"].get<std::string>());
 		CHECK(manifest.filename() == "My Game_.stgame");

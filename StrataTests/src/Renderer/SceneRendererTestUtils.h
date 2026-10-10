@@ -3,7 +3,7 @@
 #include <doctest/doctest.h>
 
 #include "Renderer/GPUTestUtils.h"
-#include "Strata/Asset/AssetPack.h"
+#include "Strata/Asset/AssetPackWriter.h"
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Asset/RuntimeAssetManager.h"
 #include "Strata/Math/Math.h"
@@ -38,7 +38,7 @@ namespace Strata::Tests
 		SceneTestAssets()
 		{
 			const std::filesystem::path pack = CreateTemporaryDirectory("SceneRendererAssets") / "Empty.stpak";
-			REQUIRE(AssetPack::Write(pack, {}, [](const AssetMetadata&, std::vector<uint8_t>&, std::string*) { return true; }));
+			REQUIRE(AssetPackWriter::Write(pack, std::vector<AssetMetadata>(), [](const AssetMetadata&, std::vector<uint8_t>&, std::string*) { return true; }));
 			Manager = RuntimeAssetManager::Create(pack);
 			REQUIRE(Manager);
 			AssetManager::SetActive(Manager);

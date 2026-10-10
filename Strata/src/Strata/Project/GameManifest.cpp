@@ -32,6 +32,7 @@ namespace Strata
 			{ "Game", {
 				{ "Name", Name },
 				{ "AssetPack", AssetPack },
+				{ "PatchPacks", PatchPacks },
 				{ "StartScene", UUIDToJson(StartScene) },
 				{ "ScriptModule", ScriptModule },
 				{ "Window", { { "Width", WindowWidth }, { "Height", WindowHeight }, { "Fullscreen", Fullscreen }, { "VSync", VSync } } } } } };
@@ -61,6 +62,17 @@ namespace Strata
 		manifest.AssetPack = JsonUtils::GetString(*game, "AssetPack");
 		if (!IsPlainFileName(manifest.AssetPack))
 			return fail("\"AssetPack\" must be the file name of the asset pack next to the manifest");
+		if (const nlohmann::json* patches = JsonUtils::Find(*game, "PatchPacks"))
+		{
+			if (!patches->is_array() || patches->size() > c_MaxPatchPacks)
+				return fail(fmt::format("\"PatchPacks\" must be an array of at most {} pack file names", c_MaxPatchPacks));
+			for (const nlohmann::json& patch : *patches)
+			{
+				if (!patch.is_string() || !IsPlainFileName(patch.get<std::string>()))
+					return fail("\"PatchPacks\" must name asset pack files next to the manifest");
+				manifest.PatchPacks.push_back(patch.get<std::string>());
+			}
+		}
 		manifest.ScriptModule = JsonUtils::GetString(*game, "ScriptModule");
 		if (!manifest.ScriptModule.empty() && !IsPlainFileName(manifest.ScriptModule))
 			return fail("\"ScriptModule\" must be the file name of the script module next to the manifest");

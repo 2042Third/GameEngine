@@ -8,6 +8,7 @@
 #include "UI/AboutDialog.h"
 #include "UI/EditorPanelRegistry.h"
 #include "UI/EditorShell.h"
+#include "UI/ExportDialog.h"
 #include "UI/ProjectDialogs.h"
 
 #include <Strata.h>
@@ -122,6 +123,7 @@ namespace Strata
 		bool IsLauncherShown() const;
 		ProjectDialogs& GetProjectDialogs() { return m_ProjectDialogs; }
 		const AboutDialog& GetAboutDialog() const { return m_AboutDialog; }
+		const ExportDialog& GetExportDialog() const { return m_ExportDialog; }
 
 		// EditorShell
 		void RequestDiscardChanges(std::function<void()> action) override;
@@ -179,6 +181,8 @@ namespace Strata
 		void DuplicateSelection();
 		// Builds the project's scripts through the command runner (script.build); the build reports to the log.
 		void BuildScripts();
+		// File > Export Game... and the toolbar's Export button: the Export dialog, showing a running export.
+		void ShowExportDialog();
 	private:
 		EditorOptions m_Options;
 		Scope<EditorHost> m_Host;
@@ -193,6 +197,8 @@ namespace Strata
 		EditorPanelRegistry m_Panels;
 		ProjectDialogs m_ProjectDialogs;
 		AboutDialog m_AboutDialog;
+		// Completions of its exports refer to it: OnDetach cancels the runner's commands while it still exists.
+		ExportDialog m_ExportDialog;
 
 		std::function<void()> m_PendingDiscardAction;
 		bool m_OpenUnsavedChangesModal = false;

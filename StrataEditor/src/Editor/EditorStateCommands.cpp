@@ -29,25 +29,6 @@ namespace Strata
 			return { { "state", SceneStateToString(context.GetSceneState()) }, { "paused", context.IsPaused() } };
 		}
 
-		// Statistics of frame times in milliseconds (at least one): the median (the mean of the two middle ones for an even
-		// count), the mean, the 95th percentile (nearest rank) and the maximum.
-		nlohmann::json DescribeFrameTimes(std::vector<double> frameTimes)
-		{
-			std::sort(frameTimes.begin(), frameTimes.end());
-			const size_t count = frameTimes.size();
-			const double median = count % 2 == 1 ? frameTimes[count / 2] : (frameTimes[count / 2 - 1] + frameTimes[count / 2]) * 0.5;
-			const size_t percentileRank = (count * 95 + 99) / 100; // ceil(0.95 * count), at least 1
-			double sum = 0.0;
-			for (const double frameTime : frameTimes)
-				sum += frameTime;
-			return {
-				{ "count", count },
-				{ "medianMs", median },
-				{ "meanMs", sum / static_cast<double>(count) },
-				{ "p95Ms", frameTimes[percentileRank - 1] },
-				{ "maxMs", frameTimes.back() } };
-		}
-
 		nlohmann::json DescribeHistory(EditorContext& context)
 		{
 			const UndoStack& undo = context.GetUndoStack();

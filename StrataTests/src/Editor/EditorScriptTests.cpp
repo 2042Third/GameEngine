@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Network/NetworkTestHelpers.h"
@@ -426,7 +427,7 @@ TEST_SUITE("Editor.Scripts")
 
 		// The module (and, outside Dist builds, its symbols) goes next to the game, named in the manifest.
 		const std::filesystem::path build = harness.Directory.parent_path() / "Build";
-		const nlohmann::json exported = harness.Run("project.export", { { "directory", FileSystem::ToUTF8(build) }, { "includeRuntime", false } });
+		const nlohmann::json exported = Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.export", { { "directory", FileSystem::ToUTF8(build) }, { "includeRuntime", false } });
 		const std::filesystem::path module = FileSystem::FromUTF8(exported["scriptModule"].get<std::string>());
 		CHECK(module == build / GetTestScriptModule(STRATA_TEST_SCRIPTS_FAULTS).filename());
 		CHECK(FileSystem::IsRegularFile(module));
@@ -441,7 +442,7 @@ TEST_SUITE("Editor.Scripts")
 
 		// Without symbols on request.
 		const std::filesystem::path bare = harness.Directory.parent_path() / "Bare";
-		harness.Run("project.export", { { "directory", FileSystem::ToUTF8(bare) }, { "includeRuntime", false }, { "includeScriptSymbols", false } });
+		Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.export", { { "directory", FileSystem::ToUTF8(bare) }, { "includeRuntime", false }, { "includeScriptSymbols", false } });
 		CHECK(FileSystem::IsRegularFile(bare / module.filename()));
 		CHECK_FALSE(FileSystem::Exists(bare / symbols.filename()));
 
@@ -470,7 +471,7 @@ TEST_SUITE("Editor.Scripts")
 		// A null dereference crashes on every platform (integer division by zero does not trap on ARM64).
 		harness.Run("script.add", { { "entity", crasher }, { "class", "Faulty" }, { "fields", { { "Fault", "NullDereference" }, { "FaultIn", "OnUpdate" } } } });
 		harness.Run("scene.save");
-		const nlohmann::json crashing = harness.Run("project.export", { { "directory", FileSystem::ToUTF8(build) }, { "includeRuntime", false } });
+		const nlohmann::json crashing = Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.export", { { "directory", FileSystem::ToUTF8(build) }, { "includeRuntime", false } });
 		std::string error;
 		Scope<GameRuntime> game = GameRuntime::Create(FileSystem::FromUTF8(crashing["manifest"].get<std::string>()), &error);
 		REQUIRE_MESSAGE(game, error);
@@ -491,7 +492,7 @@ TEST_SUITE("Editor.Scripts")
 		const ScopedLogLevel infoLog(LogLevel::Info);
 		auto exportAndStart = [&harness, &build]() -> uint64_t
 		{
-			const nlohmann::json exported = harness.Run("project.export", { { "directory", FileSystem::ToUTF8(build) }, { "includeRuntime", false } });
+			const nlohmann::json exported = Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.export", { { "directory", FileSystem::ToUTF8(build) }, { "includeRuntime", false } });
 			const uint64_t logStart = Log::GetBuffer().GetLatestSequence();
 			std::string error;
 			const Scope<GameRuntime> game = GameRuntime::Create(FileSystem::FromUTF8(exported["manifest"].get<std::string>()), &error);
@@ -521,8 +522,9 @@ TEST_SUITE("Editor.Scripts")
 		REQUIRE(FileSystem::Copy(GetTestScriptModule(STRATA_TEST_SCRIPTS_FAULTS), module));
 		const std::optional<std::vector<uint8_t>> loadedBytes = FileSystem::ReadBytes(module);
 		REQUIRE(loadedBytes);
-		// As in the editor, hot reload is on: the module runs from a private copy, so its file can change. The test never
-		// updates the context, so the watcher does not reload it.
+		// As in the editor, hot reload is on: the module runs from a private copy, so its file can change. The test updates the
+		// context only while an export runs (without a job system it finishes in its first frame), well within the watcher's
+		// debounce, so the watcher does not reload it.
 		harness.Context.GetScriptEngine()->SetHotReloadEnabled(true);
 		harness.Run("script.load", { { "path", FileSystem::ToUTF8(module) } });
 		harness.Run("script.add", { { "entity", harness.CreateEntity("Healthy Host") }, { "class", "Healthy" } });
@@ -542,13 +544,13 @@ TEST_SUITE("Editor.Scripts")
 
 		// The same bytes as loaded again: exported as they are.
 		REQUIRE(FileSystem::WriteBytes(module, *loadedBytes));
-		const nlohmann::json exported = harness.Run("project.export", parameters);
+		const nlohmann::json exported = Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.export", parameters);
 		CHECK(FileSystem::ReadBytes(FileSystem::FromUTF8(exported["scriptModule"].get<std::string>())) == loadedBytes);
 
 		// Reloading makes the new file the module the editor runs, and the one the game ships.
 		REQUIRE(FileSystem::WriteBytes(module, *otherBytes));
 		harness.Run("script.reload");
-		const nlohmann::json reexported = harness.Run("project.export", parameters);
+		const nlohmann::json reexported = Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.export", parameters);
 		CHECK(FileSystem::ReadBytes(FileSystem::FromUTF8(reexported["scriptModule"].get<std::string>())) == otherBytes);
 	}
 
@@ -560,15 +562,19 @@ TEST_SUITE("Editor.Scripts")
 		harness.Run("scene.saveAs", { { "path", "Scenes/Main.stscene" } });
 		harness.Context.GetScriptEngine()->UnloadModule();
 
+		// Checked on the export's I/O thread, which reads the scenes: the command fails when the export does.
 		const std::filesystem::path build = harness.Directory.parent_path() / "Build";
-		const std::string error = harness.Error("project.export", { { "directory", FileSystem::ToUTF8(build) }, { "includeRuntime", false } });
-		CHECK(error.find("Scenes/Main.stscene") != std::string::npos);
-		CHECK(error.find("script.build") != std::string::npos);
+		const EditorCommandResult refused = Tests::CompleteCommand(harness.Context,
+			harness.Commands.Execute(harness.Context, "project.export", { { "directory", FileSystem::ToUTF8(build) }, { "includeRuntime", false } }));
+		CHECK_FALSE(refused.Success);
+		CHECK(refused.Error.find("Scenes/Main.stscene") != std::string::npos);
+		CHECK(refused.Error.find("script.build") != std::string::npos);
+		CHECK_FALSE(FileSystem::Exists(build / "Script Game.stpak"));
 
 		// Without scripts in its scenes the game needs no module.
 		harness.Run("script.remove", { { "entity", harness.Run("entity.find", { { "name", "Holder" } })["entities"][0] }, { "class", "Idle" } });
 		harness.Run("scene.save");
-		const nlohmann::json exported = harness.Run("project.export", { { "directory", FileSystem::ToUTF8(build) }, { "includeRuntime", false } });
+		const nlohmann::json exported = Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.export", { { "directory", FileSystem::ToUTF8(build) }, { "includeRuntime", false } });
 		CHECK(exported["scriptModule"].is_null());
 		const std::optional<GameManifest> manifest = GameManifest::Load(FileSystem::FromUTF8(exported["manifest"].get<std::string>()));
 		REQUIRE(manifest);

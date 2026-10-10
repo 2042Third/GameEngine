@@ -55,7 +55,7 @@ namespace Strata::Tests::Perf
 
 	// The most a budget may exceed the reference measurement.
 	constexpr double c_BudgetHeadroom = 1.5;
-	constexpr std::string_view c_BudgetUnits[] = { "ms", "us", "MB", "count" };
+	constexpr std::string_view c_BudgetUnits[] = { "ms", "us", "MB", "count", "ratio" };
 	// How often a confirmed check measures a metric at most (the first measurement included): it fails only when the
 	// metric is over its budget in every attempt.
 	constexpr uint32_t c_ConfirmationAttempts = 3;

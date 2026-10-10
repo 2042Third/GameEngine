@@ -120,4 +120,9 @@ namespace Strata::UI
 	// `text` shortened at its start with an ellipsis ("...rojects/Game/Game.stproj") to fit `maxWidth` in the current font.
 	std::string ElideStart(std::string_view text, float maxWidth);
 
+	// A progress bar in the strata motif: the done share fills a recessed track with the mark's four bands (Sandstone,
+	// Ochre, Rust and Umber, top to bottom), with the label centered over it. `fraction` is clamped to [0, 1]; a negative
+	// width fills the available width. Frame-height tall. The probe records the label as its text.
+	void StrataProgressBar(const char* id, float fraction, std::string_view label, float width = -1.0f);
+
 }

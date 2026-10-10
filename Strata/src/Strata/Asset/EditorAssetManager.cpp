@@ -1,8 +1,9 @@
 #include "stpch.h"
 #include "Strata/Asset/EditorAssetManager.h"
 
-#include "Strata/Asset/AssetPack.h"
+#include "Strata/Asset/AssetDependencies.h"
 #include "Strata/Asset/BuiltinAssets.h"
+#include "Strata/Core/FileReader.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Hash.h"
 #include "Strata/Core/JobSystem.h"
@@ -10,7 +11,10 @@
 #include "Strata/Core/StringUtils.h"
 #include "Strata/Reflection/PropertyJson.h"
 
+#include <algorithm>
 #include <cctype>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace Strata
 {
@@ -19,7 +23,8 @@ namespace Strata
 	{
 
 		constexpr uint32_t c_MetaVersion = 1;
-		constexpr uint32_t c_ImportRecordVersion = 1;
+		// 2: records hold what the assets reference and the bounds of meshes (AssetDependencies).
+		constexpr uint32_t c_ImportRecordVersion = 2;
 
 		std::string GetExtension(const std::filesystem::path& path)
 		{
@@ -138,6 +143,125 @@ namespace Strata
 				settings = nlohmann::json::object();
 			for (const auto& [key, value] : overrides.items())
 				settings[key] = value;
+		}
+
+		// Whether a file is in the state a record noted: same size and time, or only the time changed (a checkout, a copy)
+		// but not the contents. A refreshed time is written into the state (outChanged), so contents are compared once.
+		bool IsFileCurrent(const std::filesystem::path& path, nlohmann::json& state, std::string_view sizeKey, std::string_view timeKey, std::string_view hashKey,
+			bool& outChanged)
+		{
+			const std::optional<uint64_t> size = FileSystem::GetFileSize(path);
+			const int64_t time = FileSystem::GetLastWriteTime(path).value_or(0);
+			if (!size || *size != JsonUtils::GetUInt(state, sizeKey, UINT64_MAX))
+				return false;
+			if (time == JsonUtils::GetInt(state, timeKey, 0))
+				return true;
+			const std::optional<uint64_t> hash = HashFile(path);
+			if (!hash || HashToString(*hash) != JsonUtils::GetString(state, hashKey))
+				return false;
+			state[std::string(timeKey)] = time;
+			outChanged = true;
+			return true;
+		}
+
+		nlohmann::json ReferencesToJson(const std::vector<AssetHandle>& references)
+		{
+			nlohmann::json array = nlohmann::json::array();
+			for (AssetHandle handle : references)
+				array.push_back(UUIDToJson(handle));
+			return array;
+		}
+
+		// nullopt when the record's list is missing or invalid (the record is then stale).
+		std::optional<std::vector<AssetHandle>> ReferencesFromJson(const nlohmann::json& record)
+		{
+			const nlohmann::json* array = JsonUtils::Find(record, "References");
+			if (!array || !array->is_array())
+				return std::nullopt;
+			std::vector<AssetHandle> references;
+			for (const nlohmann::json& value : *array)
+			{
+				const std::optional<UUID> handle = UUIDFromJson(value);
+				if (!handle)
+					return std::nullopt;
+				references.push_back(*handle);
+			}
+			return references;
+		}
+
+		nlohmann::json BoundsToJson(const std::optional<AABB>& bounds)
+		{
+			if (!bounds || !bounds->IsValid())
+				return nullptr;
+			return { { "Min", { bounds->Min.x, bounds->Min.y, bounds->Min.z } }, { "Max", { bounds->Max.x, bounds->Max.y, bounds->Max.z } } };
+		}
+
+		// False when the record's bounds are invalid (the record is then stale); no bounds (null or absent) is valid.
+		bool BoundsFromJson(const nlohmann::json& record, std::optional<AABB>& outBounds)
+		{
+			outBounds.reset();
+			const nlohmann::json* bounds = JsonUtils::Find(record, "Bounds");
+			if (!bounds || bounds->is_null())
+				return true;
+			const nlohmann::json* minimum = JsonUtils::Find(*bounds, "Min");
+			const nlohmann::json* maximum = JsonUtils::Find(*bounds, "Max");
+			if (!minimum || !maximum || !minimum->is_array() || !maximum->is_array() || minimum->size() != 3 || maximum->size() != 3)
+				return false;
+			AABB box;
+			for (int axis = 0; axis < 3; axis++)
+			{
+				if (!(*minimum)[axis].is_number() || !(*maximum)[axis].is_number())
+					return false;
+				box.Min[axis] = (*minimum)[axis].get<float>();
+				box.Max[axis] = (*maximum)[axis].get<float>();
+			}
+			if (!box.IsValid())
+				return false;
+			outBounds = box;
+			return true;
+		}
+
+		// Adds what a stored form references to what its importer recorded (AssetDependencies::Scan). Importers write valid
+		// documents, so a scan that fails is reported as an import warning.
+		void ScanReferences(AssetType type, std::span<const uint8_t> data, std::vector<AssetHandle>& references, std::vector<std::string>& warnings,
+			std::string_view name)
+		{
+			std::string error;
+			if (!AssetDependencies::Scan(type, data, references, &error))
+				warnings.push_back(fmt::format("The references of '{}' could not be read: {}", name, error));
+		}
+
+		// "Prefabs\Enemy.stprefab" -> "Prefabs/Enemy.stprefab", "./Prefabs/" -> "Prefabs": AlwaysInclude entries as asset
+		// paths are written.
+		std::string NormalizeIncludePath(std::string path)
+		{
+			std::replace(path.begin(), path.end(), '\\', '/');
+			while (path.rfind("./", 0) == 0)
+				path.erase(0, 2);
+			while (!path.empty() && path.back() == '/')
+				path.pop_back();
+			return path;
+		}
+
+		// Whether a normalized AlwaysInclude entry names the asset: its file, or a folder above it.
+		bool IsIncludedByPath(const std::string& includePath, const AssetMetadata& metadata)
+		{
+			if (metadata.Path == includePath)
+				return true;
+			return !includePath.empty() && metadata.Path.size() > includePath.size() && metadata.Path.compare(0, includePath.size(), includePath) == 0 &&
+				metadata.Path[includePath.size()] == '/';
+		}
+
+		std::string DescribeUnmatchedInclude(const std::string& entry)
+		{
+			return fmt::format("Export.AlwaysInclude names '{}', which is no asset or folder of the project", entry);
+		}
+
+		// The assets a pack can hold: every asset of the project but the built-in ones, by path.
+		std::vector<AssetMetadata> GetPackableAssets(std::vector<AssetMetadata> all)
+		{
+			std::erase_if(all, [](const AssetMetadata& metadata) { return metadata.IsBuiltin() || BuiltinAssets::IsBuiltin(metadata.Handle); });
+			return all;
 		}
 
 	}
@@ -505,6 +629,31 @@ namespace Strata
 			failedCount += outcome.Success ? 0 : 1;
 			ApplyImportOutcome(std::move(outcome), false);
 		}
+
+		// What the engine-native assets reference: from their records where the files did not change, else scanned.
+		struct NativeSource
+		{
+			AssetHandle Handle;
+			AssetType Type = AssetType::None;
+			std::string Path;
+		};
+		std::vector<NativeSource> natives;
+		{
+			std::scoped_lock<std::mutex> lock(m_SourceMutex);
+			for (const auto& [handle, source] : m_Sources)
+			{
+				if (source.Importer->StoresSourceDirectly() && AssetDependencies::CanReference(source.Type))
+					natives.push_back(NativeSource { handle, source.Type, source.Path });
+			}
+		}
+		std::vector<NativeReferences> nativeReferences(natives.size());
+		JobSystem::ParallelFor(static_cast<uint32_t>(natives.size()), 4, [&](uint32_t begin, uint32_t endIndex)
+		{
+			for (uint32_t index = begin; index < endIndex; index++)
+				nativeReferences[index] = FindNativeReferences(natives[index].Handle, natives[index].Type, natives[index].Path);
+		});
+		for (const NativeReferences& references : nativeReferences)
+			ApplyNativeReferences(references);
 		RemoveUnusedCacheFiles();
 
 		if (m_Specification.WatchFiles && !m_Watcher.IsRunning() && !m_Watcher.Start(m_Specification.AssetDirectory))
@@ -598,27 +747,10 @@ namespace Strata
 			|| !JsonUtils::GetBool(*record, "Success", false))
 			return false;
 
-		// A file is current when its size and time match, or when only its time changed (checkout, copy) but not its
-		// contents. Refreshed times are written back so the contents are compared once.
+		// Refreshed times are written back so the contents are compared once (IsFileCurrent).
 		bool recordChanged = false;
-		auto isCurrent = [&recordChanged](const std::filesystem::path& path, nlohmann::json& state, std::string_view sizeKey, std::string_view timeKey, std::string_view hashKey)
-		{
-			const std::optional<uint64_t> size = FileSystem::GetFileSize(path);
-			const int64_t time = FileSystem::GetLastWriteTime(path).value_or(0);
-			if (!size || *size != JsonUtils::GetUInt(state, sizeKey, UINT64_MAX))
-				return false;
-			if (time == JsonUtils::GetInt(state, timeKey, 0))
-				return true;
-			const std::optional<uint64_t> hash = HashFile(path);
-			if (!hash || HashToString(*hash) != JsonUtils::GetString(state, hashKey))
-				return false;
-			state[std::string(timeKey)] = time;
-			recordChanged = true;
-			return true;
-		};
-
 		const std::filesystem::path sourcePath = ToAbsolute(request.Path);
-		if (!isCurrent(sourcePath, *record, "SourceSize", "SourceTime", "SourceHash"))
+		if (!IsFileCurrent(sourcePath, *record, "SourceSize", "SourceTime", "SourceHash", recordChanged))
 			return false;
 
 		ImportOutcome outcome;
@@ -640,7 +772,7 @@ namespace Strata
 					return false;
 				const std::filesystem::path dependencyPath = ToAbsolute(path);
 				const bool exists = FileSystem::IsRegularFile(dependencyPath);
-				if (exists != JsonUtils::GetBool(dependency, "Exists", false) || (exists && !isCurrent(dependencyPath, dependency, "Size", "Time", "Hash")))
+				if (exists != JsonUtils::GetBool(dependency, "Exists", false) || (exists && !IsFileCurrent(dependencyPath, dependency, "Size", "Time", "Hash", recordChanged)))
 					return false;
 				outcome.Dependencies.push_back(path);
 			}
@@ -656,6 +788,10 @@ namespace Strata
 
 		if (!FileSystem::IsRegularFile(GetCachePath(request.Handle)))
 			return false;
+		std::optional<std::vector<AssetHandle>> references = ReferencesFromJson(*record);
+		if (!references || !BoundsFromJson(*record, outcome.Bounds))
+			return false;
+		outcome.References = std::move(*references);
 		if (const nlohmann::json* subAssets = JsonUtils::Find(*record, "SubAssets"); subAssets && subAssets->is_array())
 		{
 			for (const nlohmann::json& subAsset : *subAssets)
@@ -666,6 +802,10 @@ namespace Strata
 				entry.Type = AssetTypeFromString(JsonUtils::GetString(subAsset, "Type")).value_or(AssetType::None);
 				if (entry.Key.empty() || entry.Type == AssetType::None)
 					return false;
+				std::optional<std::vector<AssetHandle>> subReferences = ReferencesFromJson(subAsset);
+				if (!subReferences || !BoundsFromJson(subAsset, entry.Bounds))
+					return false;
+				entry.References = std::move(*subReferences);
 				if (!FileSystem::IsRegularFile(GetCachePath(DeriveSubAssetHandle(request.Handle, entry.Key))))
 					return false;
 				outcome.SubAssets.push_back(std::move(entry));
@@ -722,6 +862,15 @@ namespace Strata
 			result = ImportResult();
 		}
 		largeImportLock = {};
+		if (outcome.Success)
+		{
+			// What the stored forms reference: what the importer recorded, and what their documents show.
+			ScanReferences(request.Importer->GetType(), result.Data, result.References, result.Warnings, request.Path);
+			for (ImportedSubAsset& subAsset : result.SubAssets)
+				ScanReferences(subAsset.Type, subAsset.Data, subAsset.References, result.Warnings, fmt::format("{} ({})", request.Path, subAsset.Key));
+			outcome.References = std::move(result.References);
+			outcome.Bounds = result.Bounds;
+		}
 		outcome.Warnings = std::move(result.Warnings);
 
 		// Dependencies count for failed imports too: creating or fixing a missing file must retry the import.
@@ -786,9 +935,14 @@ namespace Strata
 		record["Success"] = outcome.Success;
 		record["Error"] = outcome.Error;
 		record["Warnings"] = outcome.Warnings;
+		record["References"] = ReferencesToJson(outcome.References);
+		record["Bounds"] = BoundsToJson(outcome.Bounds);
 		nlohmann::json subAssets = nlohmann::json::array();
 		for (const ImportedSubAsset& subAsset : outcome.SubAssets)
-			subAssets.push_back({ { "Key", subAsset.Key }, { "Name", subAsset.Name }, { "Type", AssetTypeToString(subAsset.Type) } });
+		{
+			subAssets.push_back({ { "Key", subAsset.Key }, { "Name", subAsset.Name }, { "Type", AssetTypeToString(subAsset.Type) },
+				{ "References", ReferencesToJson(subAsset.References) }, { "Bounds", BoundsToJson(subAsset.Bounds) } });
+		}
 		record["SubAssets"] = std::move(subAssets);
 		record["Dependencies"] = std::move(dependencies);
 		if (!FileSystem::WriteText(GetImportRecordPath(request.Handle), JsonUtils::Dump(record, 1, '\t')))
@@ -835,6 +989,7 @@ namespace Strata
 		}
 
 		SetStoredSize(outcome.Handle, FileSystem::GetFileSize(GetCachePath(outcome.Handle)).value_or(0));
+		SetAssetReferences(outcome.Handle, outcome.References, outcome.Bounds);
 		for (size_t index = 0; index < outcome.SubAssets.size(); index++)
 		{
 			const ImportedSubAsset& subAsset = outcome.SubAssets[index];
@@ -847,6 +1002,7 @@ namespace Strata
 			metadata.Name = subAsset.Name.empty() ? subAsset.Key : subAsset.Name;
 			metadata.StoredSize = FileSystem::GetFileSize(GetCachePath(metadata.Handle)).value_or(0);
 			RegisterAsset(metadata);
+			SetAssetReferences(metadata.Handle, subAsset.References, subAsset.Bounds);
 		}
 
 		// Sub-assets the new import no longer produces disappear.
@@ -941,9 +1097,24 @@ namespace Strata
 	void EditorAssetManager::ProcessCompletedImports()
 	{
 		std::vector<ImportOutcome> completed;
+		std::vector<NativeReferences> references;
 		{
 			std::scoped_lock<std::mutex> lock(m_ImportMutex);
 			completed.swap(m_CompletedImports);
+			references.swap(m_CompletedReferences);
+		}
+
+		// What engine-native assets reference, unless a later search started meanwhile (its result follows).
+		for (const NativeReferences& found : references)
+		{
+			bool current = false;
+			{
+				std::scoped_lock<std::mutex> lock(m_SourceMutex);
+				auto it = m_Sources.find(found.Handle);
+				current = it != m_Sources.end() && it->second.ReferencesGeneration == found.Generation;
+			}
+			if (current)
+				ApplyNativeReferences(found);
 		}
 
 		for (ImportOutcome& outcome : completed)
@@ -977,7 +1148,7 @@ namespace Strata
 			ProcessCompletedImports();
 
 			std::scoped_lock<std::mutex> lock(m_ImportMutex);
-			if (m_ImportsInFlight == 0 && m_CompletedImports.empty())
+			if (m_ImportsInFlight == 0 && m_CompletedImports.empty() && m_CompletedReferences.empty())
 				return;
 		}
 	}
@@ -985,6 +1156,153 @@ namespace Strata
 	AssetHandle EditorAssetManager::ResolveProjectFile(const std::filesystem::path& absolutePath) const
 	{
 		return FindAssetByAbsolutePath(absolutePath);
+	}
+
+	EditorAssetManager::NativeReferences EditorAssetManager::FindNativeReferences(AssetHandle handle, AssetType type, const std::string& relativePath,
+		std::span<const uint8_t> data, const std::vector<AssetHandle>* references) const
+	{
+		NativeReferences result;
+		result.Handle = handle;
+		if (!AssetDependencies::CanReference(type))
+		{
+			result.Scanned = true;
+			return result;
+		}
+
+		const std::filesystem::path sourcePath = ToAbsolute(relativePath);
+		const std::filesystem::path recordPath = GetImportRecordPath(handle);
+		try
+		{
+			// The record, when the file is what it was when the record was written.
+			if (data.empty())
+			{
+				const std::optional<std::string> text = FileSystem::ReadText(recordPath);
+				std::optional<nlohmann::json> record = text ? JsonUtils::Parse(*text) : std::nullopt;
+				bool recordChanged = false;
+				if (record && record->is_object() && JsonUtils::GetUInt(*record, "Version", 0) == c_ImportRecordVersion && JsonUtils::GetBool(*record, "Native", false)
+					&& IsFileCurrent(sourcePath, *record, "SourceSize", "SourceTime", "SourceHash", recordChanged))
+				{
+					if (std::optional<std::vector<AssetHandle>> recorded = ReferencesFromJson(*record))
+					{
+						if (recordChanged)
+							FileSystem::WriteText(recordPath, JsonUtils::Dump(*record, 1, '\t'));
+						result.References = std::move(*recorded);
+						result.Scanned = true;
+						return result;
+					}
+				}
+			}
+
+			std::optional<std::vector<uint8_t>> file;
+			if (data.empty())
+			{
+				std::shared_lock<std::shared_mutex> fileLock(m_FileMutex);
+				file = FileSystem::ReadBytes(sourcePath);
+				if (!file)
+					return result;
+				data = *file;
+			}
+			std::string error;
+			if (references)
+			{
+				result.References = *references;
+			}
+			else if (!AssetDependencies::Scan(type, data, result.References, &error))
+			{
+				ST_CORE_WARN("The references of '{}' could not be read: {}", relativePath, error);
+				return result;
+			}
+			result.Scanned = true;
+
+			nlohmann::json record = nlohmann::json::object();
+			record["Format"] = "ImportRecord";
+			record["Version"] = c_ImportRecordVersion;
+			record["Native"] = true; // Stored as its source: the record only caches what it references
+			record["Source"] = relativePath;
+			record["SourceSize"] = data.size();
+			record["SourceTime"] = FileSystem::GetLastWriteTime(sourcePath).value_or(0);
+			record["SourceHash"] = HashToString(Hash::FNV1a(data));
+			record["References"] = ReferencesToJson(result.References);
+			if (!FileSystem::WriteText(recordPath, JsonUtils::Dump(record, 1, '\t')))
+				ST_CORE_WARN("Could not write the import record of '{}'", relativePath);
+		}
+		catch (const std::exception& exception)
+		{
+			ST_CORE_ERROR("Finding the references of '{}' failed: {}", relativePath, exception.what());
+			result = NativeReferences { handle, {}, false, 0 };
+		}
+		return result;
+	}
+
+	void EditorAssetManager::ApplyNativeReferences(const NativeReferences& references)
+	{
+		if (references.Scanned)
+			SetAssetReferences(references.Handle, references.References, std::nullopt);
+	}
+
+	void EditorAssetManager::RefreshNativeReferences(AssetHandle handle, std::span<const uint8_t> data, const std::vector<AssetHandle>* references)
+	{
+		AssetType type = AssetType::None;
+		std::string path;
+		{
+			std::scoped_lock<std::mutex> lock(m_SourceMutex);
+			auto it = m_Sources.find(handle);
+			if (it == m_Sources.end() || !it->second.Importer->StoresSourceDirectly())
+				return;
+			type = it->second.Type;
+			path = it->second.Path;
+			it->second.ReferencesGeneration++; // A search queued before finds the previous contents
+		}
+		ApplyNativeReferences(FindNativeReferences(handle, type, path, data, references));
+	}
+
+	void EditorAssetManager::QueueNativeReferences(AssetHandle handle)
+	{
+		AssetType type = AssetType::None;
+		std::string path;
+		uint64_t generation = 0;
+		{
+			std::scoped_lock<std::mutex> lock(m_SourceMutex);
+			auto it = m_Sources.find(handle);
+			if (it == m_Sources.end() || !it->second.Importer->StoresSourceDirectly() || !AssetDependencies::CanReference(it->second.Type))
+				return;
+			type = it->second.Type;
+			path = it->second.Path;
+			generation = ++it->second.ReferencesGeneration;
+		}
+
+		// Counted like an import: WaitForImports, HasPendingImports and the destructor wait for it too.
+		{
+			std::scoped_lock<std::mutex> lock(m_ImportMutex);
+			m_ImportsInFlight++;
+		}
+		auto search = [this, handle, type, path, generation]()
+		{
+			NativeReferences references = FindNativeReferences(handle, type, path); // Catches what it may throw
+			references.Generation = generation;
+			std::scoped_lock<std::mutex> lock(m_ImportMutex);
+			m_ImportsInFlight--;
+			try
+			{
+				m_CompletedReferences.push_back(std::move(references));
+			}
+			catch (...)
+			{
+				ST_CORE_ERROR("Out of memory while recording the references of {}", path);
+			}
+			m_ImportCondition.notify_all();
+		};
+		try
+		{
+			JobSystem::SubmitIO(search, JobPriority::Normal);
+		}
+		catch (const std::exception& exception)
+		{
+			ST_CORE_ERROR("Could not queue the search of what '{}' references: {}", path, exception.what());
+			std::scoped_lock<std::mutex> lock(m_ImportMutex);
+			m_ImportsInFlight--;
+			m_ImportCondition.notify_all();
+		}
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -1099,6 +1417,7 @@ namespace Strata
 				{
 					ST_CORE_INFO("Asset '{}' added", ToRelative(path));
 					QueueImport(handle);
+					QueueNativeReferences(handle);
 				}
 				continue;
 			}
@@ -1124,6 +1443,7 @@ namespace Strata
 			if (direct)
 			{
 				SetStoredSize(handle, size);
+				QueueNativeReferences(handle);
 				ReloadAsset(handle);
 			}
 			else
@@ -1137,7 +1457,7 @@ namespace Strata
 	// Queries and file operations
 	////////////////////////////////////////////////////////////////////////////////
 
-	bool EditorAssetManager::ReadAssetData(const AssetMetadata& metadata, std::vector<uint8_t>& outData, std::string* outError)
+	bool EditorAssetManager::ReadStoredFile(const AssetMetadata& metadata, const std::function<bool(const std::filesystem::path& path)>& read, std::string* outError)
 	{
 		auto fail = [outError](std::string message)
 		{
@@ -1168,20 +1488,56 @@ namespace Strata
 				pathGeneration = it->second.PathGeneration;
 			}
 
-			std::optional<std::vector<uint8_t>> data;
+			bool success = false;
 			{
 				std::shared_lock<std::shared_mutex> fileLock(m_FileMutex);
-				data = FileSystem::ReadBytes(direct ? ToAbsolute(sourcePath) : GetCachePath(metadata.Handle));
+				success = read(direct ? ToAbsolute(sourcePath) : GetCachePath(metadata.Handle));
 			}
-			if (data)
-			{
-				outData = std::move(*data);
+			if (success)
 				return true;
-			}
 			if (attempt == 2)
 				break;
 		}
 		return fail(direct ? fmt::format("Could not read '{}'", sourcePath) : fmt::format("The imported data of '{}' is missing; re-import the asset", sourcePath));
+	}
+
+	bool EditorAssetManager::ReadAssetData(const AssetMetadata& metadata, std::vector<uint8_t>& outData, std::string* outError)
+	{
+		return ReadStoredFile(metadata, [&outData](const std::filesystem::path& path)
+		{
+			std::optional<std::vector<uint8_t>> data = FileSystem::ReadBytes(path);
+			if (!data)
+				return false;
+			outData = std::move(*data);
+			return true;
+		}, outError);
+	}
+
+	bool EditorAssetManager::ReadAssetRange(const AssetMetadata& metadata, uint64_t offset, uint64_t size, std::vector<uint8_t>& outData, std::string* outError)
+	{
+		bool outside = false;
+		uint64_t fileSize = 0;
+		const bool read = ReadStoredFile(metadata, [&](const std::filesystem::path& path)
+		{
+			const Scope<FileReader> reader = FileReader::Open(path);
+			if (!reader)
+				return false;
+			fileSize = reader->GetSize();
+			if (offset > fileSize || size > fileSize - offset)
+			{
+				outside = true;
+				return true; // Read, but the range is wrong: reported below
+			}
+			outData.resize(static_cast<size_t>(size));
+			return reader->ReadAt(offset, outData);
+		}, outError);
+		if (read && outside)
+		{
+			if (outError)
+				*outError = fmt::format("The range {}+{} lies outside the {} bytes of '{}'", offset, size, fileSize, metadata.Path.empty() ? metadata.Name : metadata.Path);
+			return false;
+		}
+		return read;
 	}
 
 	std::filesystem::path EditorAssetManager::GetAbsolutePath(AssetHandle handle) const
@@ -1299,6 +1655,7 @@ namespace Strata
 		if (direct)
 		{
 			SetStoredSize(handle, sourceSize);
+			QueueNativeReferences(handle);
 			ReloadAsset(handle);
 			return true;
 		}
@@ -1345,7 +1702,8 @@ namespace Strata
 		return handle;
 	}
 
-	AssetHandle EditorAssetManager::CreateNativeAsset(const std::string& relativePath, std::span<const uint8_t> data, std::string* outError)
+	AssetHandle EditorAssetManager::CreateNativeAsset(const std::string& relativePath, std::span<const uint8_t> data, std::string* outError,
+		const std::vector<AssetHandle>* references)
 	{
 		auto fail = [outError](std::string message)
 		{
@@ -1376,14 +1734,18 @@ namespace Strata
 		if (!handle.IsValid())
 			return fail(fmt::format("Registering '{}' failed", relativePath));
 
-		std::scoped_lock<std::mutex> lock(m_SourceMutex);
-		auto it = m_Sources.find(handle);
-		if (it != m_Sources.end())
-			it->second.Import.Imported = true;
+		{
+			std::scoped_lock<std::mutex> lock(m_SourceMutex);
+			auto it = m_Sources.find(handle);
+			if (it != m_Sources.end())
+				it->second.Import.Imported = true;
+		}
+		RefreshNativeReferences(handle, data, references);
 		return handle;
 	}
 
-	bool EditorAssetManager::SaveNativeAsset(AssetHandle handle, std::span<const uint8_t> data, bool reload, std::string* outError)
+	bool EditorAssetManager::SaveNativeAsset(AssetHandle handle, std::span<const uint8_t> data, bool reload, std::string* outError,
+		const std::vector<AssetHandle>* references)
 	{
 		auto fail = [outError](std::string message)
 		{
@@ -1427,6 +1789,7 @@ namespace Strata
 			}
 		}
 		SetStoredSize(handle, data.size());
+		RefreshNativeReferences(handle, data, references);
 		if (reload)
 			ReloadAsset(handle);
 		return true;
@@ -1499,22 +1862,161 @@ namespace Strata
 		return true;
 	}
 
-	bool EditorAssetManager::BuildAssetPack(const std::filesystem::path& packPath, std::string* outError)
+	bool EditorAssetManager::HasPendingImports() const
+	{
+		std::scoped_lock<std::mutex> lock(m_ImportMutex);
+		return m_ImportsInFlight > 0 || !m_CompletedImports.empty() || !m_CompletedReferences.empty();
+	}
+
+	bool EditorAssetManager::PlanAssetPack(const AssetPackBuildOptions& options, AssetPackBuildPlan& outPlan, std::string* outError) const
+	{
+		ST_PROFILE_FUNCTION();
+		m_PackPlans.fetch_add(1, std::memory_order_relaxed);
+		const std::vector<AssetMetadata> all = GetPackableAssets(GetAllMetadata());
+		std::unordered_map<AssetHandle, size_t> indices;
+		for (size_t index = 0; index < all.size(); index++)
+			indices.emplace(all[index].Handle, index);
+
+		// First use: each root's dependency closure, breadth first, appended where it is first reached.
+		std::vector<size_t> order;
+		std::vector<bool> included(all.size(), false);
+		auto addClosure = [&](AssetHandle root)
+		{
+			for (AssetHandle member : GetDependencyClosure(root))
+			{
+				auto it = indices.find(member);
+				if (it != indices.end() && !included[it->second])
+				{
+					included[it->second] = true;
+					order.push_back(it->second);
+				}
+			}
+		};
+		if (options.StartScene.IsValid())
+			addClosure(options.StartScene);
+		for (const AssetMetadata& metadata : all)
+		{
+			if (metadata.Type == AssetType::Scene && !metadata.IsSubAsset())
+				addClosure(metadata.Handle);
+		}
+
+		// What AlwaysInclude names: assets by path (with their sub-assets) and folders.
+		for (const std::string& entry : options.AlwaysInclude)
+		{
+			const std::string path = NormalizeIncludePath(entry);
+			bool matched = false;
+			for (const AssetMetadata& metadata : all)
+			{
+				if (IsIncludedByPath(path, metadata))
+				{
+					matched = true;
+					addClosure(metadata.Handle);
+				}
+			}
+			if (!matched && options.Prune)
+			{
+				if (outError)
+					*outError = DescribeUnmatchedInclude(entry);
+				return false;
+			}
+		}
+
+		AssetPackBuildPlan plan;
+		for (size_t index = 0; index < all.size(); index++)
+		{
+			if (included[index])
+				continue;
+			if (options.Prune)
+				plan.Excluded.push_back(all[index]);
+			else
+				order.push_back(index);
+		}
+		plan.Assets.reserve(order.size());
+		for (size_t index : order)
+			plan.Assets.push_back(AssetPackSource { all[index], GetDependencies(all[index].Handle), GetBounds(all[index].Handle) });
+		outPlan = std::move(plan);
+		return true;
+	}
+
+	bool EditorAssetManager::CheckAlwaysInclude(const std::vector<std::string>& alwaysInclude, std::string* outError) const
+	{
+		ST_PROFILE_FUNCTION();
+		if (alwaysInclude.empty())
+			return true;
+		const std::vector<AssetMetadata> all = GetPackableAssets(GetAllMetadata());
+		for (const std::string& entry : alwaysInclude)
+		{
+			const std::string path = NormalizeIncludePath(entry);
+			const bool matched = std::any_of(all.begin(), all.end(), [&path](const AssetMetadata& metadata) { return IsIncludedByPath(path, metadata); });
+			if (!matched)
+			{
+				if (outError)
+					*outError = DescribeUnmatchedInclude(entry);
+				return false;
+			}
+		}
+		return true;
+	}
+
+	bool EditorAssetManager::WriteAssetPack(const std::filesystem::path& packPath, const AssetPackBuildPlan& plan, const AssetPackWriteOptions& options,
+		AssetPackWriteStats* outStats, std::string* outError)
+	{
+		// The plan is a snapshot, the files are not: the editor saves documents and imports files while a pack is written on
+		// another thread. A document whose bytes reference what the plan did not record would ship naming an asset the pack
+		// may lack, with a dependency table that does not match it: the write fails instead, naming the document. (Changes
+		// that keep what a document references, and changes of other stored forms, ship as they are read.)
+		std::unordered_map<AssetHandle, const AssetPackSource*> planned;
+		for (const AssetPackSource& source : plan.Assets)
+			planned.emplace(source.Metadata.Handle, &source);
+		auto describe = [this](AssetHandle handle)
+		{
+			const std::optional<AssetMetadata> metadata = GetMetadata(handle);
+			return metadata && !metadata->Path.empty() ? fmt::format("'{}'", metadata->Path) : fmt::format("asset {}", handle.ToString());
+		};
+		return AssetPackWriter::Write(packPath, plan.Assets, [this, &planned, &describe](const AssetMetadata& metadata, std::vector<uint8_t>& outData,
+			std::string* outReadError)
+		{
+			if (!ReadAssetData(metadata, outData, outReadError))
+				return false;
+			auto fail = [outReadError](std::string message)
+			{
+				if (outReadError)
+					*outReadError = std::move(message);
+				return false;
+			};
+			const auto source = planned.find(metadata.Handle);
+			if (!AssetDependencies::CanReference(metadata.Type) || source == planned.end())
+				return true;
+
+			std::vector<AssetHandle> references;
+			std::string scanError;
+			if (!AssetDependencies::Scan(metadata.Type, outData, references, &scanError))
+				return fail(fmt::format("it cannot be read as a document ({}); fix it and export again", scanError));
+			// Compared as recorded references are made: a document that names itself (a scene whose script loads it again)
+			// depends on nothing for that.
+			const std::unordered_set<AssetHandle> recorded(source->second->Dependencies.begin(), source->second->Dependencies.end());
+			for (AssetHandle reference : NormalizeReferences(metadata.Handle, references))
+			{
+				if (!recorded.contains(reference))
+					return fail(fmt::format("it changed after the export started and now references {}, which the export did not plan for; export again", describe(reference)));
+			}
+			return true;
+		}, options, outStats, outError);
+	}
+
+	bool EditorAssetManager::BuildAssetPack(const std::filesystem::path& packPath, std::string* outError, const AssetPackBuildOptions& options,
+		AssetPackBuildPlan* outPlan, AssetPackWriteStats* outStats)
 	{
 		ST_PROFILE_FUNCTION();
 		WaitForImports();
-
-		std::vector<AssetMetadata> assets;
-		for (AssetMetadata& metadata : GetAllMetadata())
-		{
-			if (!metadata.IsBuiltin() && !BuiltinAssets::IsBuiltin(metadata.Handle))
-				assets.push_back(std::move(metadata));
-		}
-
-		return AssetPack::Write(packPath, assets, [this](const AssetMetadata& metadata, std::vector<uint8_t>& outData, std::string* outReadError)
-		{
-			return ReadAssetData(metadata, outData, outReadError);
-		}, outError);
+		AssetPackBuildPlan plan;
+		if (!PlanAssetPack(options, plan, outError))
+			return false;
+		if (!WriteAssetPack(packPath, plan, {}, outStats, outError))
+			return false;
+		if (outPlan)
+			*outPlan = std::move(plan);
+		return true;
 	}
 
 	bool EditorAssetManager::DeleteAsset(AssetHandle handle, std::string* outError)

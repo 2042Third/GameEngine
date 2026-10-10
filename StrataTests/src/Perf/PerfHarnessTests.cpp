@@ -187,18 +187,21 @@ TEST_SUITE("PerfLab")
 			CHECK(error.find(invalidFile.Reason) != std::string::npos);
 		}
 
-		// Comments are skipped, a budget may be exactly 1.5 times the measurement, a zero count is a budget too, and a
-		// target lies below the budget (even below the measurement, when the reference machine meets it).
+		// Comments are skipped, a budget may be exactly 1.5 times the measurement, a zero count is a budget too, a target
+		// lies below the budget (even below the measurement, when the reference machine meets it), and a ratio of two
+		// measurements is a unit.
 		const char* validFile = R"({
 			"_comment": ["About this file"],
 			"A": { "Measured": 3.21, "Budget": 4.815, "Unit": "ms" },
 			"B": { "Measured": 0, "Budget": 0, "Unit": "count" },
-			"C": { "Measured": 720, "Budget": 974.1, "Unit": "MB", "Target": 750 }
+			"C": { "Measured": 720, "Budget": 974.1, "Unit": "MB", "Target": 750 },
+			"D": { "Measured": 1.02, "Budget": 1.1, "Unit": "ratio" }
 		})";
 		std::string error;
 		const std::optional<Tests::Perf::BudgetTable> table = Tests::Perf::ParseBudgets(validFile, error);
 		REQUIRE_MESSAGE(table.has_value(), error);
-		REQUIRE(table->size() == 3);
+		REQUIRE(table->size() == 4);
+		CHECK(table->at("D").Unit == "ratio");
 		CHECK(table->at("A").Measured == 3.21);
 		CHECK(table->at("A").Budget == 4.815);
 		CHECK(table->at("A").Unit == "ms");
