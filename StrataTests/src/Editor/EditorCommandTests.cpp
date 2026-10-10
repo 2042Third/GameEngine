@@ -557,6 +557,7 @@ TEST_SUITE("Editor.Commands")
 		CHECK(runtime->GetManifest().WindowWidth == 640);
 		CHECK(UUIDToJson(runtime->GetSceneHandle()) == scene);
 		REQUIRE(runtime->GetScene()->IsRunning());
+		CHECK_FALSE(runtime->GetScene()->IsTimeDilated()); // Tools and tests step deterministically by default
 		for (int frame = 0; frame < 5; frame++)
 			runtime->Update(Timestep(1.0f / 60.0f));
 		Entity player = runtime->GetScene()->FindEntityByName("Player");
@@ -567,6 +568,14 @@ TEST_SUITE("Editor.Commands")
 		CHECK(runtime->GetScene()->IsRunning()); // The current scene keeps running
 		runtime.reset();
 		CHECK_FALSE(AssetManager::HasActive());
+
+		// Games on the wall clock play their scenes with time dilation.
+		GameRuntimeOptions wallClock;
+		wallClock.TimeDilation = true;
+		runtime = GameRuntime::Create(manifest, &error, wallClock);
+		REQUIRE_MESSAGE(runtime, error);
+		CHECK(runtime->GetScene()->IsTimeDilated());
+		runtime.reset();
 
 		// A broken pack fails cleanly.
 		REQUIRE(FileSystem::WriteText(FileSystem::FromUTF8(exported["assetPack"].get<std::string>()), "garbage"));
@@ -582,6 +591,22 @@ TEST_SUITE("Editor.Commands")
 		CHECK_FALSE(harness.Error("scene.setSettings", { { "gravity", { 0, "down", 0 } } }).empty());
 		harness.Run("edit.undo");
 		CHECK(harness.Run("scene.info")["settings"]["gravity"][1].get<double>() == doctest::Approx(-9.81));
+	}
+
+	TEST_CASE("Play mode runs on the wall clock when the editor asks for time dilation")
+	{
+		for (const bool timeDilation : { false, true })
+		{
+			EditorContextSpecification specification;
+			specification.WatchAssetFiles = false;
+			specification.TimeDilation = timeDilation;
+			EditorContext context(specification);
+			std::string error;
+			REQUIRE_MESSAGE(context.Play(&error), error);
+			CHECK(context.GetActiveScene()->IsTimeDilated() == timeDilation);
+			context.Stop();
+			CHECK_FALSE(context.GetEditScene()->IsRunning());
+		}
 	}
 
 	TEST_CASE("Physics capacities are validated and changed in one undo step")

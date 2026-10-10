@@ -108,6 +108,7 @@ namespace Strata
 		uint64_t AddBatchCount = 0;      // Batches that added new bodies to the simulation since then (one per activation mode per round of changes)
 		uint64_t MeshCheckCount = 0;     // Mesh collider bodies checked for changed, arrived or cooked mesh data since then
 		uint64_t StepCount = 0;          // Simulation steps since the world was created
+		uint64_t DroppedSteps = 0;       // Fixed steps the scene dropped since it started (Scene::GetDroppedFixedStepCount)
 		bool WaitingForMeshes = false;   // The last step was held: the simulation waits for mesh colliders' meshes to start
 		uint64_t HeldStepCount = 0;      // Steps held at the start while waiting for meshes (not counted in StepCount)
 		uint64_t JobCount = 0;           // Simulation jobs run since the world was created, on any thread

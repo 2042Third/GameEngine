@@ -49,6 +49,8 @@ namespace Strata
 			specification.RecentProjectsReadOnly = options.RecentProjectsReadOnly;
 			specification.WatchAssetFiles = options.WatchFiles;
 			specification.HotReloadScripts = options.WatchFiles;
+			// Play mode runs on the wall clock, except in scripted runs (--frames, --commands), which count frames.
+			specification.TimeDilation = !options.MaxFrames && options.CommandScript.empty();
 			if (options.ScriptBuild)
 				specification.ScriptBuild = *options.ScriptBuild;
 			return specification;

@@ -437,6 +437,7 @@ namespace Strata
 		m_RuntimeSceneAsset = UUID::Null();
 		// Keys a tool held down in an earlier session (input.* commands) must not leak into this one.
 		ResetSimulatedInput();
+		m_RuntimeScene->SetTimeDilation(m_Specification.TimeDilation);
 		m_RuntimeScene->OnRuntimeStart(mode);
 		m_SceneState = mode == SceneRuntimeMode::Play ? SceneState::Play : SceneState::Simulate;
 		UpdateInputSuspension();
@@ -511,6 +512,7 @@ namespace Strata
 		m_RuntimeScene->OnRuntimeStop();
 		m_RuntimeScene = std::move(next);
 		m_RuntimeSceneAsset = target;
+		m_RuntimeScene->SetTimeDilation(m_Specification.TimeDilation);
 		m_RuntimeScene->OnRuntimeStart(mode);
 		if (paused)
 		{

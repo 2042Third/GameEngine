@@ -416,7 +416,8 @@ OnRuntimeStart(mode)   reset time, pause, steps and requests; create the systems
 OnUpdateRuntime(dt)    paused without steps: only world transforms
                        dt = timestep * time scale (one fixed step while stepping)
                        OnUpdate -> OnFixedUpdate x N (accumulator, at most MaxFixedStepsPerFrame = 8, backlog
-                       dropped) -> OnLateUpdate -> flush deferred destruction -> world transforms
+                       dropped; with time dilation catch-up steps stop once the update's steps took longer than
+                       they simulated) -> OnLateUpdate -> flush deferred destruction -> world transforms
 SetPaused(bool)        OnPausedChanged on every system; Step(n) runs n single fixed steps while paused
 OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reverse order, destruction flushed
 ```
@@ -430,6 +431,12 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
 - Gameplay asks the scene's owner to quit or to switch scenes (`Scene::RequestQuit`, `RequestSceneLoad`); owners honor
   the requests after the update. The owners are the editor's play mode (`EditorContext::StartRuntime` plays a
   `Scene::Copy` of the edited scene; `Stop` discards it) and `GameRuntime`.
+- **Time dilation** (`Scene::SetTimeDilation`): owners driven by the wall clock (the editor's play mode outside scripted
+  runs, `EditorContextSpecification::TimeDilation`; exported games outside `--frames` runs,
+  `GameRuntimeOptions::TimeDilation`) let a simulation that cannot keep up with real time slow down: an update stops its
+  catch-up fixed steps once they took longer, in wall time, than the time they simulated, and drops the steps still due
+  (`GetDroppedFixedStepCount`, also `PhysicsStats::DroppedSteps`). Otherwise a frame that runs eight expensive steps
+  makes the next one owe even more. Tests and tools keep the default, every due step up to `MaxFixedStepsPerFrame`.
 - `SceneSettings` holds gravity, the fixed timestep (1/60 s), `MaxFixedStepsPerFrame` and the physics world's capacities
   (`PhysicsCapacity`: bodies, body pairs and contact constraints; 0, the default, sizes one automatically). All of it is
   saved with the scene and changed with `scene.setSettings` (one undo step).

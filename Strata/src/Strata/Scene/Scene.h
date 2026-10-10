@@ -249,6 +249,18 @@ namespace Strata
 		float GetTimeScale() const { return m_TimeScale; }
 		void SetTimeScale(float timeScale) { m_TimeScale = std::max(0.0f, timeScale); }
 
+		// How an update that is behind runs its fixed steps. Without time dilation (the default, so that tests and tools step
+		// deterministically) it runs every step that is due, up to MaxFixedStepsPerFrame, and drops the rest of the backlog.
+		// With it (what owners driven by the wall clock use: the editor's play mode, exported games), an update stops
+		// running catch-up steps once the steps it ran took longer, in wall time, than the time they simulated: a simulation
+		// that cannot keep up with real time slows down instead of spending ever longer frames catching up (a frame running
+		// eight expensive steps makes the next one owe even more). Its first due step always runs.
+		void SetTimeDilation(bool enabled) { m_TimeDilation = enabled; }
+		bool IsTimeDilated() const { return m_TimeDilation; }
+		// Fixed steps whose time was dropped since the scene started running: skipped by time dilation, or beyond
+		// MaxFixedStepsPerFrame.
+		uint64_t GetDroppedFixedStepCount() const { return m_DroppedFixedSteps; }
+
 		// The running system of class T (registered with MakeSceneSystemDescriptor<T>), or null: not running, not created
 		// in this mode, or not registered. Looks the exact class up, not its base classes.
 		template<typename T>
@@ -459,6 +471,8 @@ namespace Strata
 		uint32_t m_StepFrames = 0;
 		float m_FixedTimeAccumulator = 0.0f;
 		float m_TimeScale = 1.0f;
+		bool m_TimeDilation = false;
+		uint64_t m_DroppedFixedSteps = 0;
 		double m_Time = 0.0;
 		uint64_t m_FrameIndex = 0;
 		std::optional<int32_t> m_QuitRequest;

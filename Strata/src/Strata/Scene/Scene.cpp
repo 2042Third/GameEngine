@@ -7,6 +7,8 @@
 #include "Strata/Scene/SceneSerializer.h"
 #include "Strata/Scene/UnknownComponents.h"
 
+#include <chrono>
+#include <cmath>
 #include <limits>
 
 namespace Strata
@@ -1619,6 +1621,7 @@ namespace Strata
 		m_IsPaused = false;
 		m_StepFrames = 0;
 		m_FixedTimeAccumulator = 0.0f;
+		m_DroppedFixedSteps = 0;
 		m_Time = 0.0;
 		m_FrameIndex = 0;
 		m_QuitRequest.reset();
@@ -1732,18 +1735,42 @@ namespace Strata
 		{
 			m_FixedTimeAccumulator += deltaTime;
 			const uint32_t maxSteps = std::max(1u, m_Settings.MaxFixedStepsPerFrame);
+			// The wall time one step stands for: the fixed timestep, stretched by slow motion.
+			const double realTimePerStep = static_cast<double>(fixedTimestep) / static_cast<double>(m_TimeScale > 0.0f ? m_TimeScale : 1.0f);
+			const auto stepsStart = std::chrono::steady_clock::now();
 			uint32_t steps = 0;
+			bool dilated = false;
 			while (m_FixedTimeAccumulator >= fixedTimestep && steps < maxSteps)
 			{
+				if (m_TimeDilation && steps > 0)
+				{
+					const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - stepsStart).count();
+					if (elapsed >= realTimePerStep * steps)
+					{
+						dilated = true;
+						break;
+					}
+				}
 				for (const Scope<SceneSystem>& system : m_Systems)
 					system->OnFixedUpdate(fixedTimestep);
 				m_FixedTimeAccumulator -= fixedTimestep;
 				steps++;
 			}
 
-			// Too far behind (e.g. after a hitch): drop the backlog instead of simulating it all next frame.
-			if (steps == maxSteps)
-				m_FixedTimeAccumulator = std::min(m_FixedTimeAccumulator, fixedTimestep);
+			if (dilated)
+			{
+				// Behind real time: the steps still due are dropped, the simulation runs slower than the clock.
+				const float dropped = std::floor(m_FixedTimeAccumulator / fixedTimestep);
+				m_DroppedFixedSteps += static_cast<uint64_t>(dropped);
+				// Rounding of the quotient must not leave a negative remainder.
+				m_FixedTimeAccumulator = std::max(0.0f, m_FixedTimeAccumulator - dropped * fixedTimestep);
+			}
+			else if (steps == maxSteps && m_FixedTimeAccumulator > fixedTimestep)
+			{
+				// Too far behind (e.g. after a hitch): drop the backlog instead of simulating it all next frame.
+				m_DroppedFixedSteps += static_cast<uint64_t>(std::floor((m_FixedTimeAccumulator - fixedTimestep) / fixedTimestep));
+				m_FixedTimeAccumulator = fixedTimestep;
+			}
 		}
 
 		for (const Scope<SceneSystem>& system : m_Systems)

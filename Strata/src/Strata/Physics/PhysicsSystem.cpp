@@ -235,7 +235,9 @@ namespace Strata
 
 	PhysicsStats PhysicsSystem::GetStats() const
 	{
-		return m_World ? m_World->GetStats() : PhysicsStats();
+		PhysicsStats stats = m_World ? m_World->GetStats() : PhysicsStats();
+		stats.DroppedSteps = m_Scene.GetDroppedFixedStepCount();
+		return stats;
 	}
 
 	bool PhysicsSystem::HasBody(Entity entity)

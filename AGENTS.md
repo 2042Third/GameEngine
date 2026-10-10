@@ -627,6 +627,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
 - `project.export` writes a playable game outside the project: the asset pack (`<Game>.stpak`), the script module, the
   manifest (`<Game>.stgame`, start scene, script module and window settings) and the runtime executable renamed after
   the game. CTest exports a small game (`StrataEditor --no-gpu`) and runs it headless.
+- Play mode runs on the wall clock with time dilation (`Scene::SetTimeDilation`, `EditorContextSpecification::TimeDilation`;
+  exported games too, `GameRuntimeOptions::TimeDilation`): when fixed steps cannot keep up with real time the game slows
+  down instead of running ever more catch-up steps per frame. Scripted runs (`--frames`, `--commands`) and tests keep every
+  due step, so they stay deterministic.
 - A running game asks its owner to quit or to switch scenes through `Scene::RequestQuit`/`RequestSceneLoad` (scripts: the
   SDK's `Game`), honored after each update: the editor stops play mode, or replaces the running scene (a paused game stays
   paused, with its pending steps; `play.stop` still returns to the edited scene); `GameRuntime` ends the game

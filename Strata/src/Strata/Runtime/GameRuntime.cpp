@@ -32,6 +32,7 @@ namespace Strata
 			return nullptr;
 		if (options.AssetBudgets)
 			runtime->m_AssetManager->SetResidencyBudgets(*options.AssetBudgets);
+		runtime->m_TimeDilation = options.TimeDilation;
 		const AssetResidencyBudgets budgets = runtime->m_AssetManager->GetResidencyBudgets();
 		ST_CORE_INFO("Asset budgets: GPU textures {}, GPU buffers {}, CPU {}", DescribeBudget(budgets.GpuTextures), DescribeBudget(budgets.GpuBuffers),
 			DescribeBudget(budgets.Cpu));
@@ -103,6 +104,7 @@ namespace Strata
 			m_Scene->OnRuntimeStop();
 		m_Scene = std::move(loaded);
 		m_SceneHandle = scene;
+		m_Scene->SetTimeDilation(m_TimeDilation);
 		m_Scene->OnRuntimeStart(SceneRuntimeMode::Play);
 		// What the previous scene used and this one does not request in its first frames is released then.
 		m_AssetManager->ScheduleTrim(AssetResidency::c_SceneSwitchTrimFrames, AssetResidency::c_SceneSwitchTrimFrames);

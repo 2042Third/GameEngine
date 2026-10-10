@@ -1,11 +1,14 @@
 #include <doctest/doctest.h>
 
+#include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <chrono>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace Strata;
@@ -39,6 +42,18 @@ namespace
 		}
 		void OnLateUpdate(Timestep) override { LateUpdates++; }
 		void OnPausedChanged(bool paused) override { PauseChanges.push_back(paused); }
+	};
+
+	// A system whose fixed steps take longer than the time they simulate (at 64 steps per second).
+	struct SlowSystem : public SceneSystem
+	{
+		static inline int FixedUpdates = 0;
+
+		void OnFixedUpdate(float) override
+		{
+			FixedUpdates++;
+			std::this_thread::sleep_for(std::chrono::milliseconds(25));
+		}
 	};
 
 	struct DestroyingSystem : public SceneSystem
@@ -471,6 +486,65 @@ TEST_SUITE("Scene")
 		scene.OnRuntimeStop();
 		CHECK(CountingSystem::Stopped == 1);
 		CHECK_FALSE(scene.IsRunning());
+	}
+
+	TEST_CASE("Time dilation drops the fixed steps that cannot keep up with real time")
+	{
+		SlowSystem::FixedUpdates = 0;
+		REQUIRE(SceneSystemRegistry::Register({ "TestSlow", false, [](Scene&) { return CreateScope<SlowSystem>(); } }));
+		{
+			Scene scene;
+			scene.GetSettings().FixedTimestep = 1.0f / 64.0f; // 15.6 ms; binary fractions keep the step counts exact
+
+			// Without time dilation (the default) every step that is due runs.
+			scene.OnRuntimeStart();
+			CHECK_FALSE(scene.IsTimeDilated());
+			scene.OnUpdateRuntime(4.0f / 64.0f);
+			CHECK(SlowSystem::FixedUpdates == 4);
+			CHECK(scene.GetDroppedFixedStepCount() == 0);
+			scene.OnRuntimeStop();
+
+			// With it, the first step took longer than it simulated: the others due are dropped and the fraction of a step
+			// stays, so the simulation runs slower than the clock instead of owing ever more steps.
+			SlowSystem::FixedUpdates = 0;
+			scene.SetTimeDilation(true);
+			scene.OnRuntimeStart();
+			scene.OnUpdateRuntime(4.0f / 64.0f + 1.0f / 256.0f);
+			CHECK(SlowSystem::FixedUpdates == 1);
+			CHECK(scene.GetDroppedFixedStepCount() == 3);
+			PhysicsSystem* physics = scene.GetSystem<PhysicsSystem>();
+			REQUIRE(physics != nullptr);
+			CHECK(physics->GetStats().DroppedSteps == 3);
+			// One step due: it runs, nothing is dropped.
+			scene.OnUpdateRuntime(1.0f / 64.0f);
+			CHECK(SlowSystem::FixedUpdates == 2);
+			CHECK(scene.GetDroppedFixedStepCount() == 3);
+			scene.OnRuntimeStop();
+
+			// Starting again starts the count over.
+			scene.OnRuntimeStart();
+			CHECK(scene.GetDroppedFixedStepCount() == 0);
+			scene.OnRuntimeStop();
+		}
+		CHECK(SceneSystemRegistry::Unregister("TestSlow"));
+	}
+
+	TEST_CASE("Time dilation runs every due step while the steps keep up with real time")
+	{
+		ScopedCountingSystem system;
+		Scene scene;
+		scene.GetSettings().FixedTimestep = 1.0f; // Trivial steps standing for a second each always keep up
+		scene.SetTimeDilation(true);
+		scene.OnRuntimeStart();
+		scene.OnUpdateRuntime(4.0f);
+		CHECK(CountingSystem::FixedUpdates == 4);
+		CHECK(scene.GetDroppedFixedStepCount() == 0);
+
+		// Beyond MaxFixedStepsPerFrame the backlog is dropped as before, and counted.
+		scene.OnUpdateRuntime(20.0f);
+		CHECK(CountingSystem::FixedUpdates == 4 + static_cast<int>(scene.GetSettings().MaxFixedStepsPerFrame));
+		CHECK(scene.GetDroppedFixedStepCount() == 20 - scene.GetSettings().MaxFixedStepsPerFrame - 1);
+		scene.OnRuntimeStop();
 	}
 
 	TEST_CASE("Systems are told when the running scene is paused or resumed")

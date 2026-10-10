@@ -21,6 +21,10 @@ namespace Strata
 		// Budgets for the game's asset manager instead of the defaults (AssetManagerBase::GetDefaultResidencyBudgets), in
 		// effect before the start scene loads.
 		std::optional<AssetResidencyBudgets> AssetBudgets;
+		// Scenes slow down instead of catching up when their fixed steps cannot keep up with real time
+		// (Scene::SetTimeDilation): for games driven by the wall clock. Off by default, so that tools and tests that drive
+		// the runtime with chosen timesteps step deterministically.
+		bool TimeDilation = false;
 	};
 
 	// Runs an exported game: opens its asset pack (the active asset manager while the runtime lives), loads its script
@@ -71,6 +75,7 @@ namespace Strata
 		Ref<RuntimeAssetManager> m_AssetManager;
 		Ref<Scene> m_Scene;
 		AssetHandle m_SceneHandle = UUID::Null();
+		bool m_TimeDilation = false; // GameRuntimeOptions::TimeDilation, for every scene the game plays
 		std::optional<int32_t> m_QuitRequest;
 		Ref<ScriptEngine> m_ScriptEngine;
 		Ref<ScriptEngine> m_PreviousScriptEngine; // Active before this runtime; restored when it ends
