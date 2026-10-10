@@ -1,5 +1,8 @@
 #include "Panels/ConsolePanel.h"
 
+#include "UI/EditorFonts.h"
+#include "UI/Theme.h"
+
 #include <Strata/Core/StringUtils.h>
 
 #include <imgui.h>
@@ -71,6 +74,8 @@ namespace Strata
 			m_EntriesChanged = false;
 		}
 
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Caption);
 		if (ImGui::BeginChild("Messages", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar))
 		{
 			ImGuiListClipper clipper;
@@ -80,13 +85,13 @@ namespace Strata
 				for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; row++)
 				{
 					const LogEntry& entry = m_Entries[m_Visible[static_cast<size_t>(row)]];
-					ImVec4 color = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+					ImVec4 color = colors.Text;
 					if (entry.Level == LogLevel::Trace)
-						color = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+						color = colors.TextSecondary;
 					else if (entry.Level == LogLevel::Warn)
-						color = ImVec4(1.0f, 0.8f, 0.3f, 1.0f);
+						color = colors.Warning;
 					else if (entry.Level >= LogLevel::Error)
-						color = ImVec4(1.0f, 0.4f, 0.35f, 1.0f);
+						color = colors.Error;
 					ImGui::PushStyleColor(ImGuiCol_Text, color);
 					ImGui::TextUnformatted(fmt::format("[{:8.2f}] [{}] {}", entry.Timestamp, entry.Logger, entry.Message).c_str());
 					ImGui::PopStyleColor();
@@ -96,6 +101,7 @@ namespace Strata
 				ImGui::SetScrollHereY(1.0f);
 		}
 		ImGui::EndChild();
+		ImGui::PopFont();
 	}
 
 }

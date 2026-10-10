@@ -26,6 +26,7 @@ namespace Strata
 	{
 
 		constexpr const char* c_EditorStatusSection = "editor";
+		constexpr const char* c_UnsavedChangesModal = "Unsaved Changes";
 		// Between the parts of a pill's text.
 		constexpr const char* c_Separator = " \xC2\xB7 ";
 
@@ -958,14 +959,14 @@ namespace Strata
 	{
 		if (m_OpenUnsavedChangesModal)
 		{
-			ImGui::OpenPopup("Unsaved Changes");
+			UI::OpenModal(c_UnsavedChangesModal);
 			m_OpenUnsavedChangesModal = false;
 		}
-		if (!ImGui::BeginPopupModal("Unsaved Changes", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+		if (!UI::BeginModal(c_UnsavedChangesModal, "Unsaved Changes"))
 			return;
 		ImGui::Text("Save changes to '%s'?", m_Context.GetEditScene()->GetName().c_str());
 		ImGui::Spacing();
-		if (ImGui::Button("Save", ImVec2(100.0f, 0.0f)))
+		if (UI::DialogButton("UnsavedChanges.Save", "Save", true))
 		{
 			ImGui::CloseCurrentPopup();
 			if (SaveScene() && m_PendingDiscardAction)
@@ -973,7 +974,7 @@ namespace Strata
 			m_PendingDiscardAction = nullptr;
 		}
 		ImGui::SameLine();
-		if (ImGui::Button("Don't Save", ImVec2(100.0f, 0.0f)))
+		if (UI::DialogButton("UnsavedChanges.DontSave", "Don't Save"))
 		{
 			ImGui::CloseCurrentPopup();
 			if (m_PendingDiscardAction)
@@ -981,12 +982,12 @@ namespace Strata
 			m_PendingDiscardAction = nullptr;
 		}
 		ImGui::SameLine();
-		if (ImGui::Button("Cancel", ImVec2(100.0f, 0.0f)))
+		if (UI::DialogButton("UnsavedChanges.Cancel", "Cancel"))
 		{
 			ImGui::CloseCurrentPopup();
 			m_PendingDiscardAction = nullptr;
 		}
-		ImGui::EndPopup();
+		UI::EndModal();
 	}
 
 }

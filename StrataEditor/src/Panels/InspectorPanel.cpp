@@ -5,7 +5,11 @@
 #include "Editor/PropertyEdit.h"
 #include "Editor/ScriptEdit.h"
 #include "Panels/SceneHierarchyPanel.h"
+#include "UI/EditorFonts.h"
+#include "UI/Icons.h"
 #include "UI/PropertyWidgets.h"
+#include "UI/Theme.h"
+#include "UI/Widgets.h"
 
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
@@ -31,6 +35,8 @@ namespace Strata
 
 	namespace
 	{
+
+		constexpr float c_AddComponentWidthInFontSizes = 14.0f;
 
 		void DrawComponentProperties(EditorContext& context, Entity entity, const ComponentInfo& info)
 		{
@@ -125,17 +131,13 @@ namespace Strata
 					context.GetUndoStack().BreakMerge();
 
 				ImGui::TableSetColumnIndex(2);
-				ImGui::BeginDisabled(!overridden);
-				if (ImGui::SmallButton("R"))
+				if (UI::IconButton("ResetField", Icons::RotateCcw, overridden ? "Reset to the class default" : "Uses the class default", overridden))
 				{
 					context.GetUndoStack().BreakMerge();
 					if (!ScriptEdit::SetField(context, entity, entry.ClassName, field, std::nullopt, &error))
 						ST_WARN("{}.{}: {}", entry.ClassName, field.Name, error);
 					context.GetUndoStack().BreakMerge();
 				}
-				ImGui::EndDisabled();
-				if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-					ImGui::SetTooltip(overridden ? "Reset to the class default" : "Uses the class default");
 				ImGui::PopID();
 			}
 			ImGui::EndTable();
@@ -169,9 +171,8 @@ namespace Strata
 			const bool open = ImGui::TreeNodeEx("##Script", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap | ImGuiTreeNodeFlags_SpanAvailWidth,
 				"%s", entry.ClassName.c_str());
 			ImGui::SameLine(headerRight - ImGui::GetFrameHeight());
-			const bool remove = ImGui::SmallButton("x");
-			if (ImGui::IsItemHovered())
-				ImGui::SetTooltip("Remove the script %s", entry.ClassName.c_str());
+			const std::string removeTooltip = "Remove the script " + entry.ClassName;
+			const bool remove = UI::IconButton("RemoveScript", Icons::X, removeTooltip.c_str());
 
 			if (open)
 			{
@@ -183,7 +184,7 @@ namespace Strata
 				else
 				{
 					if (moduleLoaded)
-						ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f), "The script module has no class '%s'", entry.ClassName.c_str());
+						ImGui::TextColored(UI::GetThemeColors().Warning, "The script module has no class '%s'", entry.ClassName.c_str());
 					DrawStoredOverrides(entry);
 				}
 				ImGui::TreePop();
@@ -280,7 +281,10 @@ namespace Strata
 		if (ImGui::IsItemHovered())
 			ImGui::SetTooltip("Active");
 		ImGui::SameLine();
+		UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Caption);
+		ImGui::AlignTextToFramePadding();
 		ImGui::TextDisabled("ID %s", entity.GetUUID().ToString().c_str());
+		ImGui::PopFont();
 
 		entt::registry& registry = entity.GetScene()->GetRegistry();
 		for (const ComponentInfo* info : ComponentRegistry::GetAll())
@@ -293,17 +297,15 @@ namespace Strata
 
 			ImGui::PushID(info->Name.c_str());
 			const float headerRight = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
-			const bool open = ImGui::CollapsingHeader(info->DisplayName.c_str(), ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap);
+			const bool open = UI::SectionHeader("Component", info->DisplayName.c_str(), ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap);
 			if (!info->Description.empty() && ImGui::IsItemHovered())
 				ImGui::SetTooltip("%s", info->Description.c_str());
 			bool remove = false;
 			if (info->IsRemovable())
 			{
 				ImGui::SameLine(headerRight - ImGui::GetFrameHeight());
-				if (ImGui::SmallButton("x"))
-					remove = true;
-				if (ImGui::IsItemHovered())
-					ImGui::SetTooltip("Remove %s", info->DisplayName.c_str());
+				const std::string tooltip = "Remove " + info->DisplayName;
+				remove = UI::IconButton("RemoveComponent", Icons::X, tooltip.c_str());
 			}
 
 			if (open && !remove)
@@ -322,7 +324,7 @@ namespace Strata
 		}
 
 		ImGui::Spacing();
-		const float buttonWidth = 200.0f;
+		const float buttonWidth = ImGui::GetFontSize() * c_AddComponentWidthInFontSizes;
 		ImGui::SetCursorPosX(std::max((ImGui::GetContentRegionAvail().x - buttonWidth) * 0.5f, 0.0f) + ImGui::GetCursorPosX());
 		if (ImGui::Button("Add Component", ImVec2(buttonWidth, 0.0f)))
 			ImGui::OpenPopup("AddComponent");

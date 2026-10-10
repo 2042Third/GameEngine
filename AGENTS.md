@@ -91,7 +91,7 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
 
 - Unit tests live in `StrataTests/src/<Module>/*Tests.cpp` and use [doctest](https://github.com/doctest/doctest).
   Name suites after the module (`TEST_SUITE("Scene.Serialization")`). The editor's UI is tested headless with
-  `ImGuiHarness` (suites `Editor.UI`, `Editor.Theme`; see Editor, "Editor UI rules").
+  `ImGuiHarness` (suites `Editor.UI`, `Editor.Theme`, `Editor.UI.Source`; see Editor, "Editor UI rules").
 - Suites whose names start with `GPU` need a Vulkan device and are registered separately under the
   CTest label `gpu`. They share one device per process through `Tests::GPUContext` (never create
   devices in tests) and end with `CHECK(gpu.GetNewErrorCount() == 0)`, so validation errors fail the
@@ -449,7 +449,13 @@ and `AudioSystem`, the built-in "Audio" scene system.
   (`StrataEditor/src/UI/`, `Panels/`, `EditorLayer`) is the ImGui interface on top of it; it reaches the application only
   through `EditorHost` (implemented in `EditorApplication.cpp`), and the `StrataEditor` executable runs it. The panels
   only draw state and call commands; the tests link both libraries.
-- **Editor UI rules** (the 'Bedrock' look):
+- **Editor UI rules** (the 'Bedrock' look; `Editor.UI.Source` scans the UI code for the first three, with an empty
+  allowlist):
+  - Colors come only from the theme's tokens (`UI/Theme.h`: the `ThemePalette` and, preferably, what they mean in
+    `ThemeColors`): no `ImVec4`/`ImColor` literals or `IM_COL32` outside `UI/Theme.cpp`. `UI::ApplyTheme` styles every
+    `ImGuiCol_`; an ImGui upgrade with new colors fails the build until they get a token.
+  - Sizes are relative to the font (multiples of `ImGui::GetFontSize()` or `GetFrameHeight()`), never fixed pixels above
+    16, so the UI follows the UI scale (the window's content scale, or `--ui-scale`).
   - Panels are `EditorPanel`s registered with `EditorPanelRegistry` (`UI/EditorPanelRegistry.h`, built-ins in
     `EditorLayer::RegisterBuiltinPanels`): the registry begins their windows (icon and title, `###<id>`), toggles them in
     the View menu and keeps their open state in imgui.ini (`StrataPanels`); panels never call `ImGui::Begin`.
