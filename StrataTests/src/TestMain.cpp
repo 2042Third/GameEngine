@@ -3,6 +3,7 @@
 
 #include "Engine/ModuleRegistrationHelpers.h"
 #include "Network/FakeEditorProcess.h"
+#include "Perf/StressProject.h"
 #include "Renderer/GPUTestUtils.h"
 #include "Strata/Asset/AssetImporter.h"
 #include "Strata/Core/CrashGuard.h"
@@ -491,6 +492,12 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 			}
 		}
 		return 0;
+	}
+	if (mode == "streaming-sweep")
+	{
+		// <settings file> <result file>: runs a camera sweep over a stress project's pack (Perf/StressProject.h) and writes
+		// what it measured, peak memory included, for the streaming perf test.
+		return Strata::Tests::RunStreamingSweepProcess(argc, argv);
 	}
 	if (mode == "check-image")
 	{

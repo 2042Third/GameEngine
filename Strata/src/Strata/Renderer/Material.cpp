@@ -117,14 +117,14 @@ namespace Strata
 		return material;
 	}
 
-	bool Material::FinalizeOnMainThread(const AssetFinalizeContext& context)
+	AssetFinalizeResult Material::FinalizeOnMainThread(const AssetFinalizeContext& context)
 	{
 		if (context.Manager)
 		{
 			for (AssetHandle texture : GetTextureHandles())
 				context.Manager->RequestLoad(texture, AssetPriority::Normal);
 		}
-		return true;
+		return AssetFinalizeResult::Done;
 	}
 
 	std::vector<AssetHandle> Material::GetTextureHandles() const

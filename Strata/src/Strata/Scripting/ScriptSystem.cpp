@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Scripting/ScriptSystem.h"
 
+#include "Strata/Asset/AssetManager.h"
 #include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneHierarchy.h"
@@ -113,6 +114,8 @@ namespace Strata
 		}
 		m_CreationBlocked = true;
 		DestroyAllInstances(true);
+		// After OnDestroy, which may still request or release assets: what the scripts kept loaded may go now.
+		m_AssetPins.clear();
 		m_Connections.clear();
 		ClearUpdateOrder();
 		m_PendingStart.clear();
@@ -1334,6 +1337,28 @@ namespace Strata
 	{
 		if (m_Running && !m_CreationBlocked)
 			ReconcileDirtyEntities(false);
+	}
+
+	bool ScriptSystem::RequestAsset(AssetManagerBase& manager, AssetHandle asset)
+	{
+		auto it = m_AssetPins.find(asset);
+		if (it != m_AssetPins.end())
+		{
+			// Requested before: the scene holds it already. It may have been unloaded on purpose meanwhile; load it again.
+			manager.RequestLoad(asset, AssetPriority::Normal);
+			return true;
+		}
+		// Scripts request assets ahead of their use (e.g. in OnCreate): not more urgent than what is on screen.
+		AssetPin pin = manager.Pin(asset, AssetPriority::Normal);
+		if (!pin.IsValid())
+			return false;
+		m_AssetPins.emplace(asset, std::move(pin));
+		return true;
+	}
+
+	bool ScriptSystem::ReleaseAsset(AssetHandle asset)
+	{
+		return m_AssetPins.erase(asset) > 0;
 	}
 
 	void ScriptSystem::ReportProblem(std::string_view function, const std::string& message)

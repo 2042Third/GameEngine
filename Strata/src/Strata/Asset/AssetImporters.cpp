@@ -61,7 +61,8 @@ namespace Strata
 				metadata.Type = m_Type;
 				metadata.Path = FileSystem::ToUTF8(FileSystem::GetRelativePath(context.SourcePath, context.AssetDirectory));
 				std::string error;
-				if (!(*loader)(metadata, result.Data, &error))
+				AssetLoadData document { std::span<const uint8_t>(result.Data) }; // Validated, not taken over: it is the stored form
+				if (!(*loader)(metadata, document, &error))
 				{
 					if (outError)
 						*outError = error.empty() ? std::string("Invalid document") : error;

@@ -105,8 +105,11 @@ ST_SCRIPT_CLASS(Turret)
   world `Get/SetWorldPosition`, `Get/SetWorldRotation`, `GetWorldScale`, `GetForward/Right/Up` (-Z is forward).
 - `Scene`: `CreateEntity(name, parent)`, `GetEntity(id)`, `FindEntityByName`, `FindEntitiesByTag`, `GetRootEntities`,
   `GetPrimaryCamera`, `Instantiate(prefabOrModel [, translation, rotation, scale] [, parent])` by handle or asset path.
-- `Assets`: `Find(path)`, `IsLoaded`, `RequestLoad`. `Instantiate` never waits: for an asset that is not loaded yet it
-  starts the load and returns a null entity - request assets early (in `OnCreate`) and spawn once `IsLoaded`.
+- `Assets`: `Find(path)`, `IsLoaded`, `RequestLoad`, `Release`. `Instantiate` never waits: for an asset that is not
+  loaded yet it starts the load and returns a null entity - request assets early (in `OnCreate`) and spawn once
+  `IsLoaded`. A requested asset stays loaded while the scene plays (the engine does not unload it to stay within its
+  memory budgets); `Release(asset)` ends that once it is no longer needed (e.g. a level's assets after leaving it), and
+  stopping play releases everything the scripts requested.
 - `Input`: `IsKeyDown/Pressed/Released(Key::W)`, `IsMouseButtonDown/Pressed/Released(Mouse::ButtonLeft)`,
   `GetMousePosition` (viewport pixels), `GetMouseDelta`, `GetScrollDelta`. In the editor, scripts receive device input only
   while the viewport is the focused game view (playing through the scene's primary camera); positions are relative to

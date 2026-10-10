@@ -68,38 +68,83 @@ namespace Strata
 		// mips[0] is the full-resolution level; every level must match the format's size.
 		static Ref<Texture> Create(const TextureSpecification& specification, std::vector<TextureMip> mips, std::string* outError = nullptr);
 
-		// Cooked format: "STTX" header, specification, mip table, pixel data. Returns an empty vector once the CPU
-		// copy was released after the GPU upload.
+		// Cooked format: "STTX" header, specification, mip table, pixel data. Returns an empty vector once the GPU upload
+		// has started releasing the CPU copy.
 		static constexpr uint32_t c_CookedVersion = 1;
 		std::vector<uint8_t> Serialize() const;
 		static Ref<Texture> Deserialize(std::span<const uint8_t> data, std::string* outError = nullptr);
+		// The same, keeping the cooked bytes and reading the pixels in place instead of copying them (asset loads, where the
+		// bytes are not needed otherwise): GetMips then has the levels' sizes, GetMipData their pixels.
+		static Ref<Texture> Deserialize(std::vector<uint8_t>&& data, std::string* outError = nullptr);
 
 		~Texture() override;
 
-		// Creates the GPU texture and its bindless slot, then releases the CPU copy.
-		bool FinalizeOnMainThread(const AssetFinalizeContext& context) override;
-		uint64_t GetMemoryUsage() const override;
+		// Creates the GPU texture and uploads the mip chain in bands of at most c_UploadBandBytes - rows of one level, or
+		// every remaining level once they fit in one band - as far as the context's upload budget allows (Pending: the next
+		// call continues where this one stopped). Bands go through staging textures of the renderer's pool
+		// (StagingTexturePool), reused once the GPU has copied them; steps wait while the staging in flight is at the
+		// context's StagingBytes, except the frame's first. Once the chain is uploaded, takes a bindless slot and releases
+		// the CPU copy (copied levels go as soon as they are uploaded, cooked bytes at the end). Freeing a large CPU copy is
+		// timed like a step: it waits for the next call (Pending) when it would end after the deadline.
+		AssetFinalizeResult FinalizeOnMainThread(const AssetFinalizeContext& context) override;
+		// The most one upload step copies. Steps are not started when they would end after the context's deadline (at the
+		// speed of the latest steps), except a call's first.
+		static constexpr uint64_t c_UploadBandBytes = c_AssetUploadStepBytes;
+		// The CPU mip chain (until it is uploaded) and the GPU texture.
+		AssetMemoryUsage GetMemoryUsage() const override;
+		// With a renderer, the GPU mip chain (the CPU copy goes); without one, the CPU mip chain.
+		AssetMemoryUsage GetFinalizedMemoryUsage() const override;
 
 		uint32_t GetWidth() const { return m_Mips.empty() ? m_Width : m_Mips[0].Width; }
 		uint32_t GetHeight() const { return m_Mips.empty() ? m_Height : m_Mips[0].Height; }
 		uint32_t GetMipCount() const { return m_MipCount; }
 		const TextureSpecification& GetSpecification() const { return m_Specification; }
+		// The levels until the CPU copy is released: their sizes, and their pixels unless the texture keeps cooked bytes
+		// (GetMipData has the pixels either way).
 		const std::vector<TextureMip>& GetMips() const { return m_Mips; }
+		// A level's pixels while the CPU copy exists (empty after it was released, and for levels out of range).
+		std::span<const uint8_t> GetMipData(uint32_t level) const;
 
 		// GPU state (main thread, after the asset became Ready).
 		nvrhi::ITexture* GetGPUTexture() const { return m_GPUTexture; }
 		uint32_t GetBindlessSlot() const { return m_BindlessSlot; }
 	private:
 		Texture() = default;
+
+		// One step of the upload (see FinalizeOnMainThread): rows [Row, Row + Rows) of Level, or (Tail) every level from
+		// Level on.
+		struct UploadStep
+		{
+			uint32_t Level = 0;
+			uint32_t Row = 0;
+			uint32_t Rows = 0;
+			bool Tail = false;
+			uint64_t Bytes = 0;
+		};
+
+		UploadStep GetNextUploadStep() const;
+		// Bytes of the whole mip chain.
+		uint64_t GetChainBytes() const;
+		// Bytes the CPU copy (cooked bytes and level data) holds allocated.
+		uint64_t GetCPUCopyBytes() const;
+		// Copies the step's pixels into a staging texture of the pool, records its copy into the GPU texture, releases copied
+		// levels that are complete and advances the upload position. False if no staging texture could be created or mapped.
+		bool RecordUploadStep(nvrhi::ICommandList* commandList, const UploadStep& step);
 	private:
 		TextureSpecification m_Specification;
 		std::vector<TextureMip> m_Mips;
+		// Cooked bytes the texture took over (Deserialize from a vector): they hold the pixels, level i at m_CookedOffsets[i].
+		std::vector<uint8_t> m_Cooked;
+		std::vector<size_t> m_CookedOffsets;
 		uint32_t m_Width = 0;
 		uint32_t m_Height = 0;
 		uint32_t m_MipCount = 0;
 
 		nvrhi::TextureHandle m_GPUTexture;
 		uint32_t m_BindlessSlot = UINT32_MAX;
+		// Upload position while the texture is finalized over several calls: the next level and row to upload.
+		uint32_t m_UploadLevel = 0;
+		uint32_t m_UploadRow = 0;
 	};
 
 	namespace TextureUtils

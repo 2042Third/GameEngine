@@ -21,13 +21,14 @@ namespace Strata
 		const std::vector<AssetPackEntry>& entries = m_Pack->GetEntries();
 		for (size_t index = 0; index < entries.size(); index++)
 		{
-			const AssetMetadata& metadata = entries[index].Metadata;
+			AssetMetadata metadata = entries[index].Metadata;
 			// Built-in assets always come from the engine itself; a pack cannot replace them.
 			if (BuiltinAssets::IsBuiltin(metadata.Handle))
 			{
 				ST_CORE_WARN("Asset pack entry '{}' uses a built-in asset handle; ignored", metadata.Path);
 				continue;
 			}
+			metadata.StoredSize = entries[index].Size;
 			m_EntryIndices.emplace(metadata.Handle, index);
 			RegisterAsset(metadata);
 		}

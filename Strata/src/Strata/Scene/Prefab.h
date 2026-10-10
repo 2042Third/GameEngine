@@ -25,8 +25,16 @@ namespace Strata
 
 		const nlohmann::json& GetSnapshot() const { return m_Snapshot; }
 		size_t GetEntityCount() const;
+
+		// The snapshot document (an estimate of what the parsed JSON occupies).
+		AssetMemoryUsage GetMemoryUsage() const override { return AssetMemoryUsage { m_SnapshotBytes }; }
+	protected:
+		// Sets the snapshot and measures it.
+		void SetSnapshot(nlohmann::json snapshot);
 	protected:
 		nlohmann::json m_Snapshot; // {"Entities": [...]}
+	private:
+		uint64_t m_SnapshotBytes = 0;
 	};
 
 	class Prefab : public EntityTemplate
@@ -73,8 +81,12 @@ namespace Strata
 		// does not register) is logged as warnings.
 		Ref<Scene> CreateScene(std::string* outError = nullptr) const;
 		const nlohmann::json& GetDocument() const { return m_Document; }
+
+		// The scene document (an estimate of what the parsed JSON occupies).
+		AssetMemoryUsage GetMemoryUsage() const override { return AssetMemoryUsage { m_DocumentBytes }; }
 	private:
 		nlohmann::json m_Document;
+		uint64_t m_DocumentBytes = 0;
 	};
 
 }

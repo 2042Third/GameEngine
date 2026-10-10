@@ -112,6 +112,42 @@ ST_SCRIPT_CLASS(PendingSpawner)
 	ST_SCRIPT_FIELD(Spawned);
 }
 
+// Requests Asset in OnCreate, which keeps it loaded while the scene plays, and releases it in the first update after
+// Release is set.
+class AssetHolder : public CheckingScript
+{
+public:
+	AssetHandle Asset;
+	bool Release = false;
+	bool Released = false;
+
+	void OnCreate() override
+	{
+		Expect(Assets::RequestLoad(Asset), "Assets::RequestLoad");
+		Expect(Assets::RequestLoad(Asset), "Assets::RequestLoad again (requests do not add up)");
+		Expect(!Assets::Release(AssetHandle(0x999)), "Assets::Release of an asset that was never requested");
+		Expect(!Assets::Release(AssetHandle()), "Assets::Release of the null handle");
+	}
+
+	void OnUpdate(float) override
+	{
+		if (!Release || Released)
+			return;
+		Expect(Assets::Release(Asset), "Assets::Release");
+		Expect(!Assets::Release(Asset), "Assets::Release of an asset released already");
+		Released = true;
+	}
+};
+
+ST_SCRIPT_CLASS(AssetHolder)
+{
+	ST_SCRIPT_FIELD(Checks);
+	ST_SCRIPT_FIELD(Failure);
+	ST_SCRIPT_FIELD(Asset);
+	ST_SCRIPT_FIELD(Release);
+	ST_SCRIPT_FIELD(Released);
+}
+
 // Creates Count entities with a script each in its first update.
 class MassSpawner : public Script
 {

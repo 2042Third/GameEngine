@@ -32,11 +32,21 @@ namespace Strata
 			return host && asset && host->IsAssetLoaded(Detail::GetContext(), asset.ID);
 		}
 
-		// Starts loading the asset in the background. Returns false for unknown assets.
+		// Starts loading the asset in the background and keeps it loaded while the scene plays: the engine does not evict it
+		// to stay within its memory budgets until Release (or the end of play). Returns false for unknown assets.
 		static bool RequestLoad(AssetHandle asset)
 		{
 			const StrataScriptHostAPI* host = Detail::GetHost();
 			return host && asset && host->RequestAssetLoad(Detail::GetContext(), asset.ID);
+		}
+
+		// Ends the scene's request for the asset (requests do not add up): the engine may unload it again when memory is
+		// needed, and loads it again when something uses it. Returns false when the scene holds no request for the asset,
+		// and with engines that predate releasing assets (they keep requested assets loaded).
+		static bool Release(AssetHandle asset)
+		{
+			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(ReleaseAsset);
+			return host && asset && host->ReleaseAsset(Detail::GetContext(), asset.ID);
 		}
 	};
 

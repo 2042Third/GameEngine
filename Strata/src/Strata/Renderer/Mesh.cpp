@@ -36,10 +36,16 @@ namespace Strata
 			glm::vec3 BoundsMax;
 		};
 
-		nvrhi::BufferHandle CreateStaticBuffer(nvrhi::ICommandList* commandList, const void* data, size_t size, const char* name, bool vertex)
+		// Never empty: buffers of empty streams hold 4 bytes.
+		size_t GetStaticBufferSize(size_t dataSize)
+		{
+			return std::max<size_t>(dataSize, 4);
+		}
+
+		nvrhi::BufferHandle CreateStaticBuffer(size_t size, const char* name, bool vertex)
 		{
 			nvrhi::BufferDesc desc;
-			desc.byteSize = std::max<size_t>(size, 4);
+			desc.byteSize = GetStaticBufferSize(size);
 			desc.debugName = name;
 			desc.isVertexBuffer = vertex;
 			desc.isIndexBuffer = !vertex;
@@ -47,12 +53,16 @@ namespace Strata
 			desc.canHaveRawViews = true;
 			desc.initialState = vertex ? nvrhi::ResourceStates::VertexBuffer : nvrhi::ResourceStates::IndexBuffer;
 			desc.keepInitialState = true;
-
-			nvrhi::BufferHandle buffer = Renderer::GetDevice()->createBuffer(desc);
-			if (buffer && size > 0)
-				commandList->writeBuffer(buffer, data, size);
-			return buffer;
+			return Renderer::GetDevice()->createBuffer(desc);
 		}
+
+		// A stream of the geometry and the buffer it uploads into.
+		struct UploadRange
+		{
+			nvrhi::IBuffer* Buffer = nullptr;
+			const uint8_t* Data = nullptr;
+			uint64_t Size = 0;
+		};
 
 	}
 
@@ -170,22 +180,94 @@ namespace Strata
 		return Create(std::move(positions), std::move(attributes), std::move(indices), std::move(submeshes), outError);
 	}
 
-	bool Mesh::FinalizeOnMainThread(const AssetFinalizeContext& context)
+	AssetFinalizeResult Mesh::FinalizeOnMainThread(const AssetFinalizeContext& context)
 	{
 		nvrhi::ICommandList* commandList = context.CommandList;
-		if (!commandList || m_IndexBuffer)
-			return true;
+		if (!commandList || m_Uploaded)
+			return AssetFinalizeResult::Done;
 
-		m_PositionBuffer = CreateStaticBuffer(commandList, m_Positions.data(), m_Positions.size() * sizeof(glm::vec3), "MeshPositions", true);
-		m_AttributeBuffer = CreateStaticBuffer(commandList, m_Attributes.data(), m_Attributes.size() * sizeof(MeshVertexAttributes), "MeshAttributes", true);
-		m_IndexBuffer = CreateStaticBuffer(commandList, m_Indices.data(), m_Indices.size() * sizeof(uint32_t), "MeshIndices", false);
-		return m_PositionBuffer && m_AttributeBuffer && m_IndexBuffer;
+		const size_t positionBytes = m_Positions.size() * sizeof(glm::vec3);
+		const size_t attributeBytes = m_Attributes.size() * sizeof(MeshVertexAttributes);
+		const size_t indexBytes = m_Indices.size() * sizeof(uint32_t);
+		if (!m_IndexBuffer)
+		{
+			m_PositionBuffer = CreateStaticBuffer(positionBytes, "MeshPositions", true);
+			m_AttributeBuffer = CreateStaticBuffer(attributeBytes, "MeshAttributes", true);
+			m_IndexBuffer = CreateStaticBuffer(indexBytes, "MeshIndices", false);
+			if (!m_PositionBuffer || !m_AttributeBuffer || !m_IndexBuffer)
+			{
+				m_PositionBuffer = nullptr;
+				m_AttributeBuffer = nullptr;
+				m_IndexBuffer = nullptr;
+				return AssetFinalizeResult::Failed;
+			}
+			m_UploadOffset = 0;
+		}
+
+		// The streams upload one after the other, as one run of bytes cut into steps; the first step of a call is always taken.
+		const std::array<UploadRange, 3> ranges = { {
+			{ m_PositionBuffer, reinterpret_cast<const uint8_t*>(m_Positions.data()), positionBytes },
+			{ m_AttributeBuffer, reinterpret_cast<const uint8_t*>(m_Attributes.data()), attributeBytes },
+			{ m_IndexBuffer, reinterpret_cast<const uint8_t*>(m_Indices.data()), indexBytes }
+		} };
+		const uint64_t totalBytes = positionBytes + attributeBytes + indexBytes;
+		uint64_t uploaded = 0;
+		bool firstStep = true;
+		while (m_UploadOffset < totalBytes)
+		{
+			const uint64_t stepBytes = std::min(c_AssetUploadStepBytes, totalBytes - m_UploadOffset);
+			if (!firstStep && (uploaded + stepBytes > context.UploadBudget || std::chrono::steady_clock::now() >= context.Deadline))
+				break;
+			// A step may span streams: one write per stream it covers.
+			const uint64_t stepEnd = m_UploadOffset + stepBytes;
+			uint64_t rangeStart = 0;
+			for (const UploadRange& range : ranges)
+			{
+				const uint64_t rangeEnd = rangeStart + range.Size;
+				const uint64_t writeBegin = std::max(m_UploadOffset, rangeStart);
+				const uint64_t writeEnd = std::min(stepEnd, rangeEnd);
+				if (writeBegin < writeEnd)
+				{
+					const uint64_t offsetInRange = writeBegin - rangeStart;
+					commandList->writeBuffer(range.Buffer, range.Data + offsetInRange, static_cast<size_t>(writeEnd - writeBegin), offsetInRange);
+				}
+				rangeStart = rangeEnd;
+			}
+			m_UploadOffset = stepEnd;
+			uploaded += stepBytes;
+			firstStep = false;
+		}
+		if (context.UploadedBytes)
+			*context.UploadedBytes += uploaded;
+		if (m_UploadOffset < totalBytes)
+			return AssetFinalizeResult::Pending;
+		m_Uploaded = true;
+		return AssetFinalizeResult::Done;
 	}
 
-	uint64_t Mesh::GetMemoryUsage() const
+	AssetMemoryUsage Mesh::GetMemoryUsage() const
 	{
-		const uint64_t cpuBytes = m_Positions.size() * sizeof(glm::vec3) + m_Attributes.size() * sizeof(MeshVertexAttributes) + m_Indices.size() * sizeof(uint32_t);
-		return m_IndexBuffer ? cpuBytes * 2 : cpuBytes;
+		AssetMemoryUsage usage;
+		usage.Cpu = m_Positions.size() * sizeof(glm::vec3) + m_Attributes.size() * sizeof(MeshVertexAttributes) + m_Indices.size() * sizeof(uint32_t);
+		for (const Submesh& submesh : m_Submeshes)
+			usage.Cpu += sizeof(Submesh) + submesh.Name.size() + submesh.LODs.size() * sizeof(MeshLOD);
+		for (nvrhi::IBuffer* buffer : { m_PositionBuffer.Get(), m_AttributeBuffer.Get(), m_IndexBuffer.Get() })
+		{
+			if (buffer)
+				usage.GpuBuffers += buffer->getDesc().byteSize;
+		}
+		return usage;
+	}
+
+	AssetMemoryUsage Mesh::GetFinalizedMemoryUsage() const
+	{
+		AssetMemoryUsage usage = GetMemoryUsage();
+		if (Renderer::IsInitialized() && !m_IndexBuffer)
+		{
+			for (size_t bytes : { m_Positions.size() * sizeof(glm::vec3), m_Attributes.size() * sizeof(MeshVertexAttributes), m_Indices.size() * sizeof(uint32_t) })
+				usage.GpuBuffers += GetStaticBufferSize(bytes);
+		}
+		return usage;
 	}
 
 	uint32_t Mesh::GetTriangleCount() const

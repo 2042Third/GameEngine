@@ -60,7 +60,9 @@ namespace Strata
 		nlohmann::json Serialize() const;
 
 		// Requests the referenced textures so they start streaming as soon as the material is in use.
-		bool FinalizeOnMainThread(const AssetFinalizeContext& context) override;
+		AssetFinalizeResult FinalizeOnMainThread(const AssetFinalizeContext& context) override;
+		// Parameters only: the textures are assets of their own.
+		AssetMemoryUsage GetMemoryUsage() const override { return AssetMemoryUsage { sizeof(Material) }; }
 
 		MaterialProperties& GetProperties() { return m_Properties; }
 		const MaterialProperties& GetProperties() const { return m_Properties; }

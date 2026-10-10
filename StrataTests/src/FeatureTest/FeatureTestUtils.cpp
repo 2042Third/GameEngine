@@ -363,7 +363,7 @@ namespace Strata::Tests
 
 		for (const char* expected : { "DoomedProbe.OnDestroy@Doomed", "Helper.OnDestroy@Script Features", "LifecycleFeatures.OnReload@Lifecycle Features",
 				 "ExceptionProbe.OnReload@Exception Probe", "LifecycleFeatures.OnDestroy@Lifecycle Features", "FragileProbe.OnCollisionEnter@Fragile Probe",
-				 "FragileProbe.OnDestroy@Fragile Probe", "GameFeatures.Quit@Game Features" })
+				 "FragileProbe.OnDestroy@Fragile Probe", "GameFeatures.Quit@Game Features", "SpawnFeatures.ReleaseAssets@Spawn Features" })
 		{
 			INFO("Journal entry ", expected);
 			CHECK(std::find(journal.begin(), journal.end(), expected) != journal.end());

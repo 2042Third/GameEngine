@@ -25,10 +25,11 @@ namespace Strata
 
 	void RegisterRendererModule()
 	{
-		// Textures and meshes are stored in their cooked binary form, materials and fonts as their source.
-		AssetLoaderRegistry::Register(AssetType::Texture, [](const AssetMetadata&, std::span<const uint8_t> data, std::string* outError) -> Ref<Asset>
+		// Textures and meshes are stored in their cooked binary form, materials and fonts as their source. Textures and
+		// fonts keep their bytes: they take them over instead of copying them.
+		AssetLoaderRegistry::Register(AssetType::Texture, [](const AssetMetadata&, AssetLoadData& data, std::string* outError) -> Ref<Asset>
 		{
-			return Texture::Deserialize(data, outError);
+			return Texture::Deserialize(data.TakeBytes(), outError);
 		});
 		AssetLoaderRegistry::Register(AssetType::Mesh, [](const AssetMetadata&, std::span<const uint8_t> data, std::string* outError) -> Ref<Asset>
 		{
@@ -38,9 +39,9 @@ namespace Strata
 		{
 			return Material::Deserialize(data, outError);
 		});
-		AssetLoaderRegistry::Register(AssetType::Font, [](const AssetMetadata&, std::span<const uint8_t> data, std::string* outError) -> Ref<Asset>
+		AssetLoaderRegistry::Register(AssetType::Font, [](const AssetMetadata&, AssetLoadData& data, std::string* outError) -> Ref<Asset>
 		{
-			return Font::Create(std::vector<uint8_t>(data.begin(), data.end()), outError);
+			return Font::Create(data.TakeBytes(), outError);
 		});
 
 		// The primitive meshes use the default material.

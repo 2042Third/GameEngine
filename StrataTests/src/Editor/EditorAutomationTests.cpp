@@ -8,6 +8,7 @@
 #include "Network/NetworkTestHelpers.h"
 #include "TestHelpers.h"
 
+#include <Strata/Asset/AssetManager.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/Platform.h>
 #include <Strata/Core/Timestep.h>
@@ -216,6 +217,42 @@ TEST_SUITE("Editor.Automation")
 		CHECK(automation["clients"] == 1);
 		CHECK(automation["sessionPublished"] == false);
 		CHECK(status.GetValue()["scene"]["entityCount"] == 1);
+	}
+
+	TEST_CASE("Asset streaming is observable and adjustable over automation")
+	{
+		AutomationHarness harness;
+		REQUIRE(harness.Start());
+		RpcClient client;
+		harness.Connect(client);
+		const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
+		REQUIRE(manager);
+
+		const RpcResult stats = harness.Call(client, "asset.stats", { { "assets", true } });
+		REQUIRE(stats.IsSuccess());
+		CHECK(stats.GetValue()["registered"] == manager->GetStats().RegisteredAssets);
+		CHECK(stats.GetValue()["pools"]["cpu"]["residentBytes"] == manager->GetStats().Resident.Cpu);
+		CHECK(stats.GetValue()["assets"].size() == manager->GetResidencyInfo().size()); // The built-in assets
+
+		// Budgets belong to a project's asset manager.
+		const RpcResult withoutProject = harness.Call(client, "asset.setBudget", { { "gpuTexturesMB", 128 } });
+		REQUIRE(withoutProject.IsError());
+		CHECK(withoutProject.GetError().Code == JsonRpc::ErrorCode::OperationFailed);
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("AutomationStreaming");
+		REQUIRE(harness.Call(client, "project.create", { { "directory", FileSystem::ToUTF8(directory / "Game") }, { "name", "Game" } }).IsSuccess());
+		REQUIRE(manager.get() == harness.Context.GetAssetManager());
+
+		const RpcResult budget = harness.Call(client, "asset.setBudget", { { "gpuTexturesMB", 128 } });
+		REQUIRE(budget.IsSuccess());
+		CHECK(manager->GetResidencyBudgets().GpuTextures == 128ull << 20);
+		CHECK(budget.GetValue()["budgets"]["gpuTexturesBytes"] == 128ull << 20);
+		const RpcResult rejected = harness.Call(client, "asset.setBudget", { { "gpuTexturesMB", -5 } });
+		REQUIRE(rejected.IsError());
+		CHECK(rejected.GetError().Code == JsonRpc::ErrorCode::InvalidParams);
+
+		const RpcResult status = harness.Call(client, "editor.status");
+		REQUIRE(status.IsSuccess());
+		CHECK(status.GetValue()["assets"]["pools"]["gpuTextures"]["budgetBytes"] == 128ull << 20);
 	}
 
 	TEST_CASE("Failures become JSON-RPC errors by kind")

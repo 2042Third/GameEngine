@@ -1,5 +1,6 @@
 #include "Editor/EditorContext.h"
 
+#include "Editor/CommandUtils.h"
 #include "Editor/ScriptProject.h"
 
 #include <Strata/Asset/AssetManager.h>
@@ -63,6 +64,12 @@ namespace Strata
 		: m_Specification(specification), m_EditScene(CreateRef<Scene>())
 	{
 		ActivateBuiltinAssets();
+		// The asset manager of the open project, or the built-in assets' without one (asset.stats has the details).
+		SetStatusProvider("assets", []()
+		{
+			const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
+			return manager ? CommandUtils::DescribeAssetStats(manager->GetStats()) : nlohmann::json(nullptr);
+		});
 	}
 
 	EditorContext::~EditorContext()
@@ -221,6 +228,8 @@ namespace Strata
 			return fail(fmt::format("The scene is invalid: {}", error));
 
 		ResetScene(scene, handle);
+		// What the previous scene used and the viewport does not request for this one in its first frames is released then.
+		m_AssetManager->ScheduleTrim(AssetResidency::c_SceneSwitchTrimFrames, AssetResidency::c_SceneSwitchTrimFrames);
 		return true;
 	}
 
@@ -396,6 +405,10 @@ namespace Strata
 		}
 		PruneSelection(); // The selection named entities of the previous scene
 		UpdateInputSuspension();
+		// Like the exported game (GameRuntime::LoadScene): what the previous scene used and this one does not request in its
+		// first frames is released then, so playtests show the game's memory behavior.
+		if (m_AssetManager)
+			m_AssetManager->ScheduleTrim(AssetResidency::c_SceneSwitchTrimFrames, AssetResidency::c_SceneSwitchTrimFrames);
 		return true;
 	}
 

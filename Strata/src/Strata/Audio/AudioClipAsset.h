@@ -23,7 +23,9 @@ namespace Strata
 		static std::vector<uint8_t> Cook(std::span<const uint8_t> encodedData, AudioClipLoadMode mode);
 		static Ref<AudioClipAsset> Deserialize(std::span<const uint8_t> data, const std::string& debugName, std::string* outError = nullptr);
 
-		uint64_t GetMemoryUsage() const override { return m_Clip ? m_Clip->GetMemoryUsage() : 0; }
+		AssetMemoryUsage GetMemoryUsage() const override { return AssetMemoryUsage { m_Clip ? m_Clip->GetMemoryUsage() : 0 }; }
+		// Voices playing the clip hold its samples.
+		bool IsDataShared() const override { return m_Clip && m_Clip.use_count() > 1; }
 		const Ref<AudioClip>& GetClip() const { return m_Clip; }
 	private:
 		Ref<AudioClip> m_Clip;

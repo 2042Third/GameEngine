@@ -34,5 +34,8 @@
 	"PerfGPU.Editor.EditFrameNested100k": { "Measured": 0.2387, "Budget": 0.358, "Unit": "ms" },
 	"PerfGPU.Editor.PlayFrameNested100k": { "Measured": 0.2209, "Budget": 0.3313, "Unit": "ms" },
 	"PerfGPU.Editor.EditFrameNested1M": { "Measured": 0.2196, "Budget": 0.3294, "Unit": "ms" },
-	"PerfGPU.Editor.PlayFrameNested1M": { "Measured": 0.2159, "Budget": 0.3238, "Unit": "ms" }
+	"PerfGPU.Editor.PlayFrameNested1M": { "Measured": 0.2159, "Budget": 0.3238, "Unit": "ms" },
+	"PerfGPU.Streaming.MaxFinalizeTime": { "Measured": 4.8, "Budget": 6.0, "Unit": "ms" },
+	"PerfGPU.Streaming.MaxResidentTextures": { "Measured": 134.2, "Budget": 201.3, "Unit": "MB" },
+	"PerfGPU.Streaming.PeakPrivateMemory": { "Measured": 720.0, "Budget": 974.1, "Unit": "MB" }
 }

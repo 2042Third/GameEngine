@@ -8,7 +8,17 @@
 namespace Strata
 {
 
-	Scope<GameRuntime> GameRuntime::Create(const std::filesystem::path& manifestPath, std::string* outError)
+	namespace
+	{
+
+		std::string DescribeBudget(uint64_t bytes)
+		{
+			return bytes == AssetResidencyBudgets::c_Unlimited ? std::string("unlimited") : fmt::format("{} MB", bytes >> 20);
+		}
+
+	}
+
+	Scope<GameRuntime> GameRuntime::Create(const std::filesystem::path& manifestPath, std::string* outError, const GameRuntimeOptions& options)
 	{
 		std::optional<GameManifest> manifest = GameManifest::Load(manifestPath, outError);
 		if (!manifest)
@@ -20,6 +30,11 @@ namespace Strata
 		runtime->m_AssetManager = RuntimeAssetManager::Create(packPath, outError);
 		if (!runtime->m_AssetManager)
 			return nullptr;
+		if (options.AssetBudgets)
+			runtime->m_AssetManager->SetResidencyBudgets(*options.AssetBudgets);
+		const AssetResidencyBudgets budgets = runtime->m_AssetManager->GetResidencyBudgets();
+		ST_CORE_INFO("Asset budgets: GPU textures {}, GPU buffers {}, CPU {}", DescribeBudget(budgets.GpuTextures), DescribeBudget(budgets.GpuBuffers),
+			DescribeBudget(budgets.Cpu));
 		AssetManager::SetActive(runtime->m_AssetManager);
 
 		// Scenes use the script engine that is active when they start; a game without scripts runs none, whatever the
@@ -83,6 +98,8 @@ namespace Strata
 		m_Scene = std::move(loaded);
 		m_SceneHandle = scene;
 		m_Scene->OnRuntimeStart(SceneRuntimeMode::Play);
+		// What the previous scene used and this one does not request in its first frames is released then.
+		m_AssetManager->ScheduleTrim(AssetResidency::c_SceneSwitchTrimFrames, AssetResidency::c_SceneSwitchTrimFrames);
 		return true;
 	}
 

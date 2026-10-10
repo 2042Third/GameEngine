@@ -31,13 +31,13 @@ together (targets, modules, frame loop, threading, asset pipeline, scripting, ed
 | --- | --- |
 | `Strata/` | Engine static library. `src/Strata/<Module>/` holds the engine modules, `src/Platform/<OS or backend>/` the platform implementations, `shaders/` the GLSL sources, `vendor/` the pinned third-party submodules. |
 | `StrataEditor/` | Editor executable (ImGui docking UI, gizmos, undo/redo, automation server). |
-| `StrataRuntime/` | Runtime executable that plays exported games (`GameRuntime`, drawn by `GameRenderer`): it runs the `.stgame` manifest next to it, or `--game <file>`; `--headless` runs without window and GPU at 60 frames per second (servers, CI); `--screenshot out.png` with `--frames N` saves the last frame (and fails the run when it shows the missing-camera message). |
+| `StrataRuntime/` | Runtime executable that plays exported games (`GameRuntime`, drawn by `GameRenderer`): it runs the `.stgame` manifest next to it, or `--game <file>`; `--headless` runs without window and GPU at 60 frames per second (servers, CI); `--screenshot out.png` with `--frames N` saves the last frame (and fails the run when it shows the missing-camera message); `--asset-budget-mb <n>` sets the GPU texture budget of the game's assets. |
 | `StrataScriptCore/` | Script ABI (C header) and the header-only C++ SDK game scripts are written against. Script modules never link the engine. |
 | `StrataCLI/` | Command-line client for the editor automation API; also an MCP server (`StrataCLI mcp`). |
 | `StrataTests/` | doctest unit tests, test helpers, the feature test project, and the layer table (`Architecture/Layers.json`, `LayeringAllowlist.txt`). |
 | `Samples/` | Games made through the editor by an AI agent, as projects (`.stproj`, `Assets/` with `.meta` files, `Scripts/`): `Tetris` (played and exported by the CTest `StrataEditor.Tetris`). Open one with `StrataEditor --project Samples/<Game>`. |
 | `CMake/` | CMake modules (configurations, compiler options, shader compilation, manifest). |
-| `Docs/` | Documentation of how the engine works, linked to the code: `README.md` (index), `Architecture.md` (targets and dependencies, modules, frame loop, threading, asset pipeline, scripting, editor, export and runtime). |
+| `Docs/` | Documentation of how the engine works, linked to the code: `README.md` (index), `Architecture.md` (targets and dependencies, modules, frame loop, threading, asset pipeline, streaming and residency, scripting, editor, export and runtime). |
 | `.claude/skills/` | Task-specific skills for agents (build/test, adding components, script API, editor automation, making a game end to end: `strata-make-a-game`). |
 
 Engine modules (`Strata/src/Strata/`): `Core` (application, logging, jobs, platform services),
@@ -127,6 +127,13 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   `Perf.Editor` (entity commands among 100,000 roots) and `PerfGPU.Editor`, which runs the real `StrataEditor`
   maximized on generated 100,000- and 1,000,000-entity scenes and checks the median CPU frame time its `editor.wait`
   steps report. Time calls that take nanoseconds in batches (the clock's resolution is about 0.1 microseconds).
+  A process's peak memory includes everything it did before, so a test that measures peak memory
+  runs the measured work in a helper process (`--strata-test-helper=<mode>`, see `TestMain.cpp`): `PerfGPU.Streaming`
+  runs its camera sweep over the stress project (`src/Perf/StressProject.h`, also usable by other suites) that way,
+  three times. Every run must meet the acceptance limits; the budgets then judge peak private memory by the best run,
+  because the graphics driver keeps commit charge of freed device memory for a while (on Windows device memory counts
+  in private bytes), finalization time by the median run, which a spike from other work on the machine does not move,
+  and resident texture memory by the largest of any run.
 - Suites whose names start with `EndToEnd` start the built `StrataEditor` and `StrataCLI` (paths in
   `STRATA_TEST_EDITOR_PATH`/`STRATA_TEST_CLI_PATH`, else next to the test executable) and run as the CTest
   `StrataEditor.Automation`, not in `StrataTests.Core`. They need no GPU (`--no-gpu`), use private session
@@ -340,10 +347,23 @@ The threading model, frame loop and pipelines these rules protect are described 
   exist in every asset manager.
 - Shipped games read an asset pack (`.stpak`, `AssetPack`) through `RuntimeAssetManager`; the editor
   builds it with `EditorAssetManager::BuildAssetPack`.
+- **Residency** ([Docs/Architecture.md](Docs/Architecture.md), "Streaming and residency"): memory is bounded by budgets
+  per pool (`AssetResidencyBudgets`: GPU textures 50% and GPU buffers 15% of the device's memory budget, CPU unlimited;
+  128 MiB of loads in flight, 64 MiB and 4 ms of finalization per frame, 64 MiB of upload staging), and the least
+  recently requested assets of a pool over budget are evicted. Hold `AssetHandle`s across frames, not `Ref`s, and
+  request what you use every frame you use it (`GetAsset`): a held `Ref` keeps an asset from being evicted (it would
+  free nothing), so it defeats the budget. Pin what gameplay must keep whether or not it is used
+  (`AssetManagerBase::Pin`, `AssetPin`; scripts: `Assets::RequestLoad` until `Assets::Release`). Code that keeps an
+  asset's data alive in other objects reports it (`Asset::IsDataShared`). Never block on a load; scene owners trim what
+  the previous scene used after a switch (`AssetManagerBase::ScheduleTrim`).
 - Adding an asset type: an `Asset` subclass with a cooked/serialized form, a loader registered by the
-  registration function of the module that owns the type (e.g. `RegisterRendererModule`), an importer if it
-  comes from external files (`RegisterAssetPipeline`), and tests for round trips and corrupt data (every
-  loader must reject truncated or garbage bytes without crashing).
+  registration function of the module that owns the type (e.g. `RegisterRendererModule`; it takes the stored bytes over
+  with `AssetLoadData::TakeBytes` when the asset keeps them, instead of copying them), an importer if it comes from
+  external files (`RegisterAssetPipeline`), `GetMemoryUsage` reporting what it holds in each pool once finalized (and
+  `GetFinalizedMemoryUsage` when finalizing moves data between pools), and tests for round trips and corrupt data
+  (every loader must reject truncated or garbage bytes without crashing). GPU uploads in `FinalizeOnMainThread` go in
+  steps of at most `c_AssetUploadStepBytes` within the context's budget (`AssetFinalizeContext`,
+  `AssetFinalizeResult::Pending`) and report their bytes; never upload an unbounded amount in one call.
 
 ## Scripting
 
@@ -373,6 +393,9 @@ Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; t
 - Audio: `AudioSource` and `Audio` go through the scene's `AudioSystem`; without it (simulate mode) the calls fail.
 - Game flow: `Game::Quit`, `LoadScene` and `ReloadScene` set `Scene::RequestQuit`/`RequestSceneLoad`, which the scene's owner
   honors after the frame (see [Editor](#editor)).
+- Assets: `Assets::RequestLoad` pins the asset for the playing scene (`ScriptSystem::RequestAsset`; never evicted to meet
+  memory budgets, see [Asset pipeline](#asset-pipeline), "Residency") until `Assets::Release` (host function
+  `ReleaseAsset`, appended to ABI version 1) or the end of play; requests do not add up.
 - `Random`, `Timer` and `KeyRepeat` (`StrataScript/Gameplay.h`) run entirely in the module. The engine has classes named
   `Random` and `Timer` too, so SDK helpers are tested inside a script module, never in an engine translation unit (that
   would violate the one-definition rule).
@@ -586,7 +609,17 @@ and `AudioSystem`, the built-in "Audio" scene system.
   the viewport into `build/<preset>/StrataTests/SmokeCaptures/`) and checks that failing and unfinished scripts fail the
   process.
 - `editor.status` summarizes the editor (project, scene, play state, selection, undo history); other
-  parts of the editor add sections to it through `EditorContext::SetStatusProvider`.
+  parts of the editor add sections to it through `EditorContext::SetStatusProvider` (`automation`, and `assets`: the
+  totals of `asset.stats`).
+- **Asset streaming commands** (`Editor/EditorStreamingCommands.cpp`): `asset.stats {assets?, limit?, sort?: "bytes" |
+  "lastUsed"}` reports the active asset manager's `GetStats` (resident bytes and budget per pool, the load queue, bytes
+  in flight, uploads, finalization time and the staging budget, evictions and the assets eviction looked at,
+  cancellations, staging releases) and, with `assets: true`, the assets that are resident, loading, failed or pinned
+  (`GetResidencyInfo`); `asset.setBudget {gpuTexturesMB?, gpuBuffersMB?, cpuMB?, inFlightMB?, uploadMBPerFrame?,
+  finalizeMsPerFrame?, stagingMB?, reset?}` changes the budgets of the open project's manager until the project closes
+  (it fails without a project; values greater than 0; MB are 2^20 bytes; no undo, as nothing in the project changes).
+  Opening a scene, and a scene switch the game asks for in play mode, schedule the release of what only the previous
+  scene used (`EditorContext::OpenScene`, `SwitchRuntimeScene`).
 - Mutating commands report a `warning` in their result while the scene is playing: such changes apply
   to the running copy and are discarded by `play.stop`. Unknown or missing parameters are errors.
 - **Viewport state** lives in the core: `EditorContext::GetViewport()` (`EditorViewport`) holds the editor camera
@@ -662,7 +695,11 @@ and `AudioSystem`, the built-in "Audio" scene system.
   black after tone mapping). Instances with a mirroring transform (negative determinant) use
   pipelines with clockwise front faces and flip their tangent handedness (`c_InstanceMirrored`).
 - Everything streams: meshes, materials and textures that are still loading are skipped or drawn with
-  fallbacks and counted in `SceneRendererStats::PendingAssets`; never block a frame on an asset.
+  fallbacks and counted in `SceneRendererStats::PendingAssets`; never block a frame on an asset. Asset uploads are
+  budgeted per frame and go in steps (Docs/Architecture.md, "Streaming and residency"); texture bands use the staging
+  textures of `Renderer::GetStagingTextures()` (`StagingTexturePool`, recycled in `Renderer::BeginFrame`), so code
+  that streams with a GPU must run device frames for staging to be reused (without them, a frame uploads only its first
+  step once the staging budget is used up).
 - Overlays (`SceneRenderOptions`, all off by default) are drawn after post-processing with exact display
   colors into the output texture (then copied into an external target): the infinite ground grid, the
   selection outline (from the entity-ID buffer, so alpha-blended surfaces get none) and `DebugDraw` line

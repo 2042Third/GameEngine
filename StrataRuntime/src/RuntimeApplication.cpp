@@ -13,12 +13,15 @@ namespace Strata
 	// Frames per second of a headless run (no vsync paces it): game time passes as in a window, and a dedicated server
 	// does not keep a CPU core busy.
 	constexpr uint32_t c_HeadlessFrameRate = 60;
+	// The largest --asset-budget-mb (16 TB): beyond any device, and far from overflowing when converted to bytes.
+	constexpr int64_t c_MaxAssetBudgetMB = 16ll << 20;
 
 	struct RuntimeOptions
 	{
 		std::filesystem::path ManifestPath;
 		std::filesystem::path ScreenshotPath; // Saves the window to this PNG on the last of MaxFrames frames
 		std::optional<uint64_t> MaxFrames;
+		std::optional<uint64_t> TextureBudget; // --asset-budget-mb: the GPU texture budget of the game's assets, in bytes
 	};
 
 	// Runs the game of a manifest and, with a window, renders it every frame. Startup failures end the process with exit
@@ -33,8 +36,15 @@ namespace Strata
 
 		void OnAttach() override
 		{
+			// The other budgets keep their defaults, which depend on the graphics device (initialized by now).
+			GameRuntimeOptions runtimeOptions;
+			if (m_Options.TextureBudget)
+			{
+				runtimeOptions.AssetBudgets = AssetManagerBase::GetDefaultResidencyBudgets();
+				runtimeOptions.AssetBudgets->GpuTextures = *m_Options.TextureBudget;
+			}
 			std::string error;
-			m_Runtime = GameRuntime::Create(m_Options.ManifestPath, &error);
+			m_Runtime = GameRuntime::Create(m_Options.ManifestPath, &error, runtimeOptions);
 			if (!m_Runtime)
 			{
 				ST_CRITICAL("Cannot start the game '{}': {}", FileSystem::ToUTF8(m_Options.ManifestPath), error);
@@ -170,6 +180,17 @@ namespace Strata
 		if (std::optional<int64_t> frames = commandLine.GetIntOption("--frames"); frames && *frames > 0)
 			specification.MaxFrames = static_cast<uint64_t>(*frames);
 		options.MaxFrames = specification.MaxFrames;
+		if (commandLine.GetOption("--asset-budget-mb"))
+		{
+			// Megabytes of GPU texture memory the game's assets may keep resident (1 MB = 1048576 bytes).
+			const std::optional<int64_t> megabytes = commandLine.GetIntOption("--asset-budget-mb");
+			if (!megabytes || *megabytes <= 0 || *megabytes > c_MaxAssetBudgetMB)
+			{
+				ST_CRITICAL("--asset-budget-mb needs a whole number of megabytes from 1 to {}", c_MaxAssetBudgetMB);
+				return nullptr;
+			}
+			options.TextureBudget = static_cast<uint64_t>(*megabytes) << 20;
+		}
 		if (std::optional<std::string> screenshot = commandLine.GetOption("--screenshot"))
 		{
 			// The screenshot is taken on the last frame, so it needs a frame count and a window.

@@ -583,6 +583,9 @@ TEST_SUITE("Asset.Editor")
 		CHECK(FileSystem::IsRegularFile(project.Assets / "Materials" / "Blue.stmat"));
 		CHECK(FileSystem::IsRegularFile(project.Assets / "Materials" / "Blue.stmat.meta"));
 		CHECK(manager->GetAssetType(handle) == AssetType::Material);
+		// Engine-native assets are read as they are: their stored size is the file's.
+		CHECK(manager->GetMetadata(handle)->StoredSize == FileSystem::GetFileSize(project.Assets / "Materials" / "Blue.stmat").value_or(0));
+		CHECK(manager->GetMetadata(handle)->StoredSize == CreateMaterialBytes(0.4f).size());
 
 		Ref<Asset> loaded = manager->LoadAssetSync(handle);
 		REQUIRE(loaded);
@@ -594,6 +597,7 @@ TEST_SUITE("Asset.Editor")
 		REQUIRE(saved);
 		CHECK(saved != loaded);
 		CHECK(std::static_pointer_cast<Material>(saved)->GetProperties().Roughness == doctest::Approx(0.8f));
+		CHECK(manager->GetMetadata(handle)->StoredSize == CreateMaterialBytes(0.8f).size());
 
 		const std::vector<uint8_t> invalid = { 'n', 'o', 'p', 'e' };
 		CHECK_FALSE(manager->SaveNativeAsset(handle, invalid, true, &error));
@@ -623,6 +627,10 @@ TEST_SUITE("Asset.Editor")
 		Ref<Texture> texture = LoadTexture(*manager, first);
 		REQUIRE(texture);
 		CHECK(texture->GetHeight() == 2);
+		// Imported assets are read from the cache: their stored size is the cooked file's.
+		const std::optional<uint64_t> cookedSize = FileSystem::GetFileSize(project.Cache / (first.ToString() + ".bin"));
+		REQUIRE(cookedSize);
+		CHECK(manager->GetMetadata(first)->StoredSize == *cookedSize);
 
 		const AssetHandle second = manager->ImportExternalFile(external, "UI/Icons", &error);
 		REQUIRE(second.IsValid());
@@ -667,6 +675,9 @@ TEST_SUITE("Asset.Editor")
 			CHECK(metadata->SubAssetKey == "Mesh/1");
 			CHECK(metadata->Name == "Part1");
 			CHECK(metadata->Path == "Models/Robot.sttestmodel");
+			CHECK(metadata->StoredSize == FileSystem::GetFileSize(project.Cache / (mesh.ToString() + ".bin")).value_or(0));
+			CHECK(metadata->StoredSize > 0);
+			CHECK(manager->GetMetadata(model)->StoredSize == FileSystem::GetFileSize(project.Cache / (model.ToString() + ".bin")).value_or(0));
 			CHECK(manager->GetAbsolutePath(mesh) == manager->GetAbsolutePath(model));
 
 			Ref<Asset> meshAsset = manager->LoadAssetSync(mesh);
@@ -682,6 +693,9 @@ TEST_SUITE("Asset.Editor")
 			Ref<EditorAssetManager> manager = project.Open();
 			CHECK(TestModelImporter::s_ImportCount == importsBefore);
 			CHECK(manager->IsHandleValid(DeriveSubAssetHandle(model, "Mesh/1")));
+			// Also known for imports taken from the cache.
+			CHECK(manager->GetMetadata(model)->StoredSize == FileSystem::GetFileSize(project.Cache / (model.ToString() + ".bin")).value_or(0));
+			CHECK(manager->GetMetadata(DeriveSubAssetHandle(model, "Mesh/1"))->StoredSize > 0);
 
 			// Fewer meshes: the dropped sub-asset disappears.
 			std::string error;

@@ -11,12 +11,14 @@
 #include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/MeshFactory.h"
+#include "Strata/Renderer/Texture.h"
 #include "TestHelpers.h"
 
 #include <algorithm>
 #include <fstream>
 #include <map>
 #include <set>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -152,6 +154,50 @@ TEST_SUITE("Asset")
 		CHECK(AssetLoaderRegistry::Find(AssetType::None) == nullptr);
 	}
 
+	TEST_CASE("Loaders take the stored bytes over when they are handed over, and copy them otherwise")
+	{
+		std::vector<uint8_t> stored = { 1, 2, 3, 4, 5 };
+		const uint8_t* storage = stored.data();
+		AssetLoadData handedOver(stored);
+		const std::span<const uint8_t> view = handedOver; // Loaders written against spans read them so
+		CHECK(view.size() == 5);
+		CHECK(handedOver.GetBytes().data() == storage);
+		std::vector<uint8_t> taken = handedOver.TakeBytes();
+		CHECK(taken.data() == storage); // Moved, not copied
+		CHECK(taken == std::vector<uint8_t> { 1, 2, 3, 4, 5 });
+		CHECK(stored.empty());
+		CHECK(handedOver.GetBytes().empty());
+		CHECK(handedOver.TakeBytes().empty());
+
+		const std::vector<uint8_t> document = { 9, 8, 7 };
+		AssetLoadData readOnly { std::span<const uint8_t>(document) };
+		const std::vector<uint8_t> copy = readOnly.TakeBytes();
+		CHECK(copy == document);
+		CHECK(copy.data() != document.data());
+		CHECK(readOnly.GetBytes().size() == 3); // A view stays readable
+
+		// Textures loaded through the pipeline take their cooked bytes over: the loaded texture reads its pixels from them.
+		TextureMip level0;
+		level0.Width = 2;
+		level0.Height = 2;
+		level0.Data = { 10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255 };
+		TextureSpecification specification;
+		specification.Format = TextureFormat::RGBA8;
+		const Ref<Texture> source = Texture::Create(specification, { level0 });
+		REQUIRE(source);
+		std::vector<uint8_t> cooked = source->Serialize();
+		const AssetLoadFunction* loader = AssetLoaderRegistry::Find(AssetType::Texture);
+		REQUIRE(loader);
+		AssetLoadData cookedData(cooked);
+		std::string error;
+		const Ref<Asset> loaded = (*loader)(MakeMetadata(0x6000, AssetType::Texture, "Textures/Small.png", "Small"), cookedData, &error);
+		REQUIRE_MESSAGE(loaded, error);
+		CHECK(cooked.empty());
+		const Ref<Texture> texture = std::static_pointer_cast<Texture>(loaded);
+		const std::span<const uint8_t> pixels = texture->GetMipData(0);
+		CHECK(std::vector<uint8_t>(pixels.begin(), pixels.end()) == level0.Data);
+	}
+
 	TEST_CASE("Asset packs round trip metadata and data")
 	{
 		AssetMetadata parent = MakeMetadata(0x1000, AssetType::Model, "Models/Robot.gltf", "Robot");
@@ -261,6 +307,9 @@ TEST_SUITE("Asset")
 		CHECK(manager->GetPack().GetEntries().size() == 4);
 
 		CHECK(manager->FindAssetByPath("Materials/Rough.stmat") == UUID(0x4000));
+		// The stored size of every asset is its entry's size in the pack.
+		CHECK(manager->GetMetadata(UUID(0x4000))->StoredSize == CreateMaterialBytes(0.9f).size());
+		CHECK(manager->GetMetadata(UUID(0x4001))->StoredSize == cube->Serialize().size());
 		CHECK(manager->GetAssetType(UUID(0x4001)) == AssetType::Mesh);
 		CHECK(manager->GetAssetState(UUID(0x4000)) == AssetState::Unloaded);
 

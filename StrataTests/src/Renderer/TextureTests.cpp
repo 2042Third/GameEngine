@@ -7,7 +7,9 @@
 #include <glm/gtc/packing.hpp>
 #include <stb_image_write.h>
 
+#include <algorithm>
 #include <cmath>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -140,14 +142,45 @@ TEST_SUITE("Renderer.Texture")
 		CHECK(loaded->GetSpecification().DebugName == "Checker");
 		for (uint32_t level = 0; level < 3; level++)
 			CHECK(loaded->GetMips()[level].Data == source->GetMips()[level].Data);
-		CHECK(loaded->GetMemoryUsage() > 0);
+		// Without a renderer the mip chain stays on the CPU: every byte of it counts there.
+		CHECK(loaded->GetMemoryUsage().Cpu == 4 * 2 * 4 + 2 * 1 * 4 + 1 * 1 * 4);
+		CHECK(loaded->GetMemoryUsage().GpuTextures == 0);
 
-		CHECK_FALSE(Texture::Deserialize({}, &error));
+		CHECK_FALSE(Texture::Deserialize(std::span<const uint8_t>(), &error));
 		for (size_t length = 0; length < cooked.size(); length += 5)
+		{
 			CHECK_FALSE(Texture::Deserialize(std::span<const uint8_t>(cooked.data(), length)));
+			CHECK_FALSE(Texture::Deserialize(std::vector<uint8_t>(cooked.begin(), cooked.begin() + static_cast<std::ptrdiff_t>(length))));
+		}
 		std::vector<uint8_t> badFormat = cooked;
 		badFormat[8] = 0xEE;
 		CHECK_FALSE(Texture::Deserialize(badFormat));
+		CHECK_FALSE(Texture::Deserialize(std::move(badFormat)));
+
+		// Taking the cooked bytes over gives the same texture, its pixels read in place.
+		Ref<Texture> takenOver = Texture::Deserialize(std::vector<uint8_t>(cooked), &error);
+		REQUIRE_MESSAGE(takenOver, error);
+		CHECK(takenOver->GetSpecification().DebugName == "Checker");
+		REQUIRE(takenOver->GetMips().size() == 3);
+		for (uint32_t level = 0; level < 3; level++)
+		{
+			CAPTURE(level);
+			CHECK(takenOver->GetMips()[level].Width == source->GetMips()[level].Width);
+			CHECK(takenOver->GetMips()[level].Data.empty());
+			const std::span<const uint8_t> pixels = takenOver->GetMipData(level);
+			CHECK(std::vector<uint8_t>(pixels.begin(), pixels.end()) == source->GetMips()[level].Data);
+			CHECK(std::ranges::equal(loaded->GetMipData(level), source->GetMips()[level].Data));
+		}
+		CHECK(takenOver->GetMipData(3).empty());
+		CHECK(takenOver->GetMemoryUsage().Cpu == cooked.size());
+		CHECK(takenOver->Serialize() == cooked);
+		// Sizes that do not match the levels' dimensions are rejected like in copied data.
+		std::vector<uint8_t> wrongSize = cooked;
+		const size_t firstMipSizeOffset = 4 * 6 + 4 + std::string("Checker").size() + 8;
+		REQUIRE(wrongSize.size() > firstMipSizeOffset + 8);
+		wrongSize[firstMipSizeOffset] = static_cast<uint8_t>(wrongSize[firstMipSizeOffset] - 4);
+		CHECK_FALSE(Texture::Deserialize(std::span<const uint8_t>(wrongSize)));
+		CHECK_FALSE(Texture::Deserialize(std::move(wrongSize)));
 	}
 
 	TEST_CASE("Images decode into textures with the requested usage")

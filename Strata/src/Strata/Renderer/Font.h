@@ -22,7 +22,8 @@ namespace Strata
 		// The engine's built-in font (Roboto Medium), used by text without a font of its own. Created on first use.
 		static const Ref<Font>& GetDefault();
 
-		uint64_t GetMemoryUsage() const override { return m_Data.size() + m_GlyphShapes.size() * sizeof(GlyphShapeCost); }
+		// The font file and its glyph table (atlases belong to the text renderer).
+		AssetMemoryUsage GetMemoryUsage() const override { return AssetMemoryUsage { m_Data.size() + m_GlyphShapes.size() * sizeof(GlyphShapeCost) }; }
 		// The font file as stb_truetype reads it: inconsistent format 4 character map search parameters are corrected.
 		const std::vector<uint8_t>& GetData() const { return m_Data; }
 

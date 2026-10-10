@@ -24,7 +24,8 @@ TEST_SUITE("Audio.Clip")
 			CHECK(asset->GetClip()->GetChannels() == 2);
 			CHECK(asset->GetClip()->GetSampleRate() == 22050);
 			CHECK(asset->GetClip()->GetFrameCount() == 11025);
-			CHECK(asset->GetMemoryUsage() > 0);
+			CHECK(asset->GetMemoryUsage().Cpu > 0);
+			CHECK(asset->GetMemoryUsage().GetGpu() == 0);
 		}
 	}
 

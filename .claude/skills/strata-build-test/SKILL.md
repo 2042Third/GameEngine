@@ -42,14 +42,17 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
   `StrataTests.GPU` (label `gpu`), the perf tests `StrataTests.Perf` and `StrataTests.PerfGPU` (suites `Perf.*`
   and `PerfGPU.*`, label `perf`, Release and Dist only, after `StrataTests.PerfResults.Clean`; budgets and the
   ratchet rule in AGENTS.md, "Testing"; `PerfGPU.Editor` writes a 100,000- and a 1,000,000-entity scene to a temporary
-  project and opens a maximized StrataEditor on them for about 20 seconds), `StrataEditor.Smoke` (the real editor with
+  project and opens a maximized StrataEditor on them for about 20 seconds; `PerfGPU.Streaming` writes and imports a
+  447 MB stress project and runs its camera sweep three times in helper processes, about 40 s), `StrataEditor.Smoke`
+  (the real editor with
   `StrataTests/Editor/SmokeCommands.json.in`, configured into the build tree, label `gpu`; it captures the viewport to
   `SmokeViewport.png`/`SmokeSceneCamera.png` in `build/<preset>/StrataTests/SmokeCaptures/`, checked by
   `StrataEditor.SmokeCaptureCheck`), the editor script checks (`StrataEditor.FailingScript`, `WaitingScript`,
   `UnfinishedScript`, `QuitScript`, `QuitBeforeScriptEnds`, `CaptureWithoutGPU`), the export chain `StrataExport.Clean`
   → `StrataEditor.Export` (`--no-gpu`; it exports the smoke game twice, the second time starting in a scene without a
   camera) → `StrataRuntime.Smoke` (the exported game, headless; `StrataRuntime.HeadlessPacing` checks that headless runs
-  keep 60 frames per second) → `StrataRuntime.Render` (windowed, saves
+  keep 60 frames per second, `StrataRuntime.AssetBudget` and `.InvalidAssetBudget` the `--asset-budget-mb` option) →
+  `StrataRuntime.Render` (windowed, saves
   `build/<preset>/StrataTests/ExportSmoke/RuntimeScreenshot.png`, label `gpu`) → `StrataRuntime.RenderCheck`
   (`StrataTests --strata-test-helper=check-image <png> [--dominant red|green|blue <percent>]`: not black, not a single
   color, and here at least 1% of the blue box), plus `StrataRuntime.NoCameraScreenshot` (a screenshot of the

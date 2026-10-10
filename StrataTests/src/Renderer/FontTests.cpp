@@ -265,7 +265,7 @@ TEST_SUITE("Renderer.Font")
 			Ref<Font> font = Font::Create(Tests::ReadSourceFile(path), &error);
 			REQUIRE_MESSAGE(font, error);
 			CHECK(font->GetGlyphCount() > 0);
-			CHECK(font->GetMemoryUsage() >= font->GetData().size());
+			CHECK(font->GetMemoryUsage().Cpu >= font->GetData().size());
 			Scope<FontAtlas> atlas = FontAtlas::Create(font, &error);
 			REQUIRE_MESSAGE(atlas, error);
 			CHECK(atlas->GetGlyph('A').Visible);

@@ -263,7 +263,8 @@ extern "C"
 		StrataScriptEntityID (*Instantiate)(StrataScriptContext* context, StrataScriptAssetHandle asset, StrataScriptEntityID parent,
 			const StrataScriptTransform* transform);
 
-		/* Assets, by path relative to the project's asset directory. */
+		/* Assets, by path relative to the project's asset directory. RequestAssetLoad starts loading an asset and keeps it
+		 * loaded while the scene plays (see ReleaseAsset). */
 		StrataScriptAssetHandle (*FindAsset)(StrataScriptContext* context, StrataScriptString path);
 		bool (*IsAssetLoaded)(StrataScriptContext* context, StrataScriptAssetHandle asset);
 		bool (*RequestAssetLoad)(StrataScriptContext* context, StrataScriptAssetHandle asset);
@@ -359,6 +360,14 @@ extern "C"
 		 */
 		void (*QuitGame)(StrataScriptContext* context, int32_t exitCode);
 		bool (*LoadScene)(StrataScriptContext* context, StrataScriptAssetHandle scene);
+
+		/*
+		 * Asset residency (added after the initial set of ABI version 1: check ST_SCRIPT_HAS_MEMBER before use). An asset the
+		 * playing scene requested with RequestAssetLoad stays loaded (pinned: never evicted to meet memory budgets) until
+		 * ReleaseAsset or the end of play; requests do not add up, one release ends the scene's claim. ReleaseAsset returns
+		 * false when the scene holds no request for the asset (never requested, or released already).
+		 */
+		bool (*ReleaseAsset)(StrataScriptContext* context, StrataScriptAssetHandle asset);
 
 		/* New functions are appended here (see the compatibility rules above). */
 	} StrataScriptHostAPI;

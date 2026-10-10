@@ -14,9 +14,10 @@ means `Strata/src/Strata/Scene/Scene.h`.
 4. [Scene runtime lifecycle](#scene-runtime-lifecycle)
 5. [Threading model](#threading-model)
 6. [Asset pipeline](#asset-pipeline)
-7. [Scripting](#scripting)
-8. [Editor](#editor)
-9. [Export and the runtime](#export-and-the-runtime)
+7. [Streaming and residency](#streaming-and-residency)
+8. [Scripting](#scripting)
+9. [Editor](#editor)
+10. [Export and the runtime](#export-and-the-runtime)
 
 ## Targets and dependencies
 
@@ -127,20 +128,22 @@ validation and change signals, `SceneSerializer` writes versioned JSON (keeping 
 (`EntityTemplate`, `Prefab`, `Model`, `SceneAsset`). See [Scene caches](#scene-caches) for how per-frame cost follows
 what changed.
 
-**Asset** (`Asset/`). `AssetManagerBase` (registry and asynchronous loading), `AssetManager` (the process-wide active
-manager), `EditorAssetManager` (project files, `.meta` sidecars, imports, hot reload, pack building),
-`RuntimeAssetManager` (reads an `AssetPack`), `AssetImporter` with the built-in importers (`AssetImporters.cpp`,
-`GltfImporter`, `TextureImporter`), `AssetLoaderRegistry` (the loaders, registered by the modules that own the types)
-and `BuiltinAssets` (fixed handles; the owning module provides each object through a factory). The asset types are
-Scene, Prefab, Model, Mesh, Material, Texture, AudioClip and Font (`AssetTypes.h`). See
-[Asset pipeline](#asset-pipeline).
+**Asset** (`Asset/`). `AssetManagerBase` (registry, asynchronous loading and residency), `AssetStreamingQueue` (the
+order and admission of loads), `AssetResidency` (memory pools, budgets, `AssetPin`, eviction), `AssetManager` (the
+process-wide active manager), `EditorAssetManager` (project files, `.meta` sidecars, imports, hot reload, pack
+building), `RuntimeAssetManager` (reads an `AssetPack`), `AssetImporter` with the built-in importers
+(`AssetImporters.cpp`, `GltfImporter`, `TextureImporter`), `AssetLoaderRegistry` (the loaders, registered by the
+modules that own the types) and `BuiltinAssets` (fixed handles; the owning module provides each object through a
+factory). The asset types are Scene, Prefab, Model, Mesh, Material, Texture, AudioClip and Font (`AssetTypes.h`). See
+[Asset pipeline](#asset-pipeline) and [Streaming and residency](#streaming-and-residency).
 
 **Renderer** (`Renderer/`). `GraphicsDevice` is the device interface (NVRHI on Vulkan, implemented in
 `Platform/Vulkan/VulkanGraphicsDevice.cpp`; it owns the swapchain and frames in flight, 2 by default). `Renderer`
 holds the process-wide services: the device, `ShaderLibrary` (SPIR-V compiled from `Strata/shaders` by glslang at
-build time and embedded, `CMake/StrataShaders.cmake`), samplers, fallback textures, `BindlessTextureTable` and the
-blocking `ReadTexture`. `SceneRenderer` draws a scene (light clustering, shadow cascades, depth/normal/entity-ID
-prepass, GTAO, forward PBR, sky, transparents, exposure, bloom, tone mapping, FXAA, then overlays and text). Assets:
+build time and embedded, `CMake/StrataShaders.cmake`), samplers, fallback textures, `BindlessTextureTable`,
+`StagingTexturePool` (staging memory for texture uploads, reused) and the blocking `ReadTexture`. `SceneRenderer` draws
+a scene (light clustering, shadow cascades, depth/normal/entity-ID prepass, GTAO, forward PBR, sky, transparents,
+exposure, bloom, tone mapping, FXAA, then overlays and text). Assets:
 `Mesh`, `Material`, `Texture`, `Font`; procedural primitives come from `MeshFactory`. Also `TextRenderer`/`FontAtlas`,
 `DebugDraw`/`SceneGizmos`, `TextureReadback` (non-blocking GPU readback) and `ImageWriter` (PNG). Conventions and
 rules: AGENTS.md, "Architecture rules" and "Rendering".
@@ -310,9 +313,9 @@ The editor's layer update (`EditorLayer::OnUpdate`, `StrataEditor/src/EditorLaye
 frame's work time:
 
 1. `EditorContext::Update`: `ScriptEngine::Update` (hot reload), `ScriptBuilder::Update` (build processes),
-   `EditorAssetManager::Update` (file changes, finished imports, load finalization), then either the running scene's
-   `OnUpdateRuntime` followed by the script-fault check and the game's quit and scene-load requests, or the edited
-   scene's `OnUpdateEditor`; then simulated input holds, input suspension, selection pruning and viewport picks.
+   `EditorAssetManager::Update` (file changes, finished imports, load finalization, eviction), then either the running
+   scene's `OnUpdateRuntime` followed by the script-fault check and the game's quit and scene-load requests, or the
+   edited scene's `OnUpdateEditor`; then simulated input holds, input suspension, selection pruning and viewport picks.
 2. `EditorCommandRunner::Update`: polls deferred commands.
 3. `EditorAutomation::Update`: mirrors new commands as RPC methods, moves the session file with the project, and runs
    queued requests (`RpcServer::ProcessRequests`) through the runner.
@@ -322,8 +325,8 @@ In step 7 the editor draws its panels (`EditorLayer::OnImGuiRender`); the viewpo
 through `ViewportRenderer`.
 
 The runtime's layer update (`RuntimeLayer::OnUpdate`, `StrataRuntime/src/RuntimeApplication.cpp`):
-`GameRuntime::Update` (asset finalization, `Scene::OnUpdateRuntime`, script-fault check, scene requests), then the
-headless script-crash and quit checks, then `GameRenderer::Render` into the back buffer (windowed only) and the
+`GameRuntime::Update` (asset finalization and eviction, `Scene::OnUpdateRuntime`, script-fault check, scene requests),
+then the headless script-crash and quit checks, then `GameRenderer::Render` into the back buffer (windowed only) and the
 `--screenshot` request on the last frame. The runtime has no ImGui.
 
 Shutdown (`Application::~Application`): layers detach and are deleted top-down, the active asset manager and project
@@ -429,8 +432,8 @@ rules"). Other threads:
 - **Job workers** (`JobSystem::Init`, `Core/JobSystem.cpp`; hardware threads - 1 by default): `JobSystem::Submit` and
   `ParallelFor` work such as asset decoding, the initial imports of a project scan, Jolt's jobs, mesh shape cooking,
   world transform propagation and PNG encoding of captures.
-- **I/O threads** (`JobSystem::Init`; 2 by default): `JobSystem::SubmitIO` work such as asset reads, background
-  re-imports and saving captures.
+- **I/O threads** (`JobSystem::Init`; 2 by default): `JobSystem::SubmitIO` work such as asset reads (dispatched by the
+  streaming queue, at most two per I/O thread at a time), background re-imports and saving captures.
 - **File watchers** (`FileWatcher::Start`): one thread per watcher, for the project's asset directory
   (`EditorAssetManager`) and for the script module's directory (`ScriptEngine`, hot reload). Each rescans its tree when
   the platform reports a change (`FileChangeNotifier`: change notifications on Windows,
@@ -480,9 +483,11 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
    |                                                                     |
    +-------------------------- ReadAssetData (I/O thread) ---------------+
                                      v
- AssetManagerBase: I/O read -> worker decode (AssetLoadFunction) -> completion queue
+ AssetManagerBase: streaming queue -> I/O read -> worker decode (AssetLoadFunction) -> completion queue
                                      v
- AssetManagerBase::Update (main thread): FinalizeOnMainThread (GPU uploads) within the upload budget -> Ready
+ AssetManagerBase::Update (main thread): room for the arrival, FinalizeOnMainThread (GPU uploads in steps through
+                                         staging) within the upload and time budgets -> Ready; then eviction of the
+                                         pools over budget
 ```
 
 - **Importing** (`Asset/EditorAssetManager.h`). `Scan` registers every file with a known importer, creates missing
@@ -502,11 +507,15 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   | Font | `.ttf .otf` | `FontImporter` | the source, validated on import |
 
 - **Loading** (`Asset/AssetManager.h`). `GetAsset` never blocks: it returns null until the asset is Ready and requests
-  the load. `RequestLoad` reads on the I/O pool (`ReadAssetData` of the subclass), decodes on the worker pool and
-  queues a completion. `Update` finalizes completions on the main thread: `Asset::FinalizeOnMainThread` creates GPU
-  resources on one upload command list until `GetMemoryUsage` of the finalized assets reaches the upload budget
-  (256 MiB per frame by default, `SetUploadBudget`); the rest waits for the next frame. Generations discard results of
-  loads that were superseded by a reload or unload. `LoadAssetSync` is for tools, tests and scene switches.
+  the load. `RequestLoad` queues the load in the streaming queue, which reads on the I/O pool (`ReadAssetData` of the
+  subclass); decoding runs on the worker pool and queues a completion. The loader (`AssetLoadFunction`) gets the read
+  bytes as an `AssetLoadData`: it reads them as a span, or takes them over (`TakeBytes`) when its asset keeps them
+  (textures keep their cooked bytes and read pixels in place, fonts keep their file), so a load never holds two copies.
+  `Update` finalizes completions on the main thread: `Asset::FinalizeOnMainThread` creates GPU resources on one upload
+  command list, in steps, until the frame's upload or time budget is used up (`AssetFinalizeResult::Pending`: the asset
+  continues next frame, first in line). Generations discard results of loads that were superseded by a reload, unload
+  or cancellation. `LoadAssetSync` is for tools, tests and scene switches (unbudgeted: it finishes at once). Budgets,
+  eviction, uploads and the queue are described in [Streaming and residency](#streaming-and-residency).
 - **Streaming**. Assets load on first use and code handles "not loaded yet" every frame: `SceneRenderer` skips or
   substitutes what is pending and counts it (`SceneRendererStats::PendingAssets`), `AssetMeshProvider` reports meshes
   as unavailable until they load, and audio sources start when their clip is ready. The content version and change
@@ -516,6 +525,103 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
 - **Packs** (`Asset/AssetPack.h`). `EditorAssetManager::BuildAssetPack` writes every project asset in its stored form
   (it fails if an import failed): a header, the data blobs, then the entry table, written atomically.
   `RuntimeAssetManager` registers the entries and reads blobs on the I/O pool; nothing is imported at runtime.
+
+## Streaming and residency
+
+Asset memory is bounded by budgets, not by everything a session ever touched (`Asset/AssetResidency.h`,
+`Asset/AssetStreamingQueue.h`, `AssetManagerBase` in `Asset/AssetManager.h`).
+
+- **Accounting**. Every asset reports what it holds per pool (`Asset::GetMemoryUsage`, an `AssetMemoryUsage` of `Cpu`,
+  `GpuTextures` and `GpuBuffers`): textures their CPU mips until uploaded, then their GPU mip chain; meshes their CPU
+  geometry (kept for physics and picking) and their GPU buffers, each counted once; materials their parameters; fonts
+  and audio clips their data; prefabs, models and scenes an estimate of their parsed JSON. The manager reads it when an
+  asset is published and keeps per-pool totals (`AssetManagerStats::Resident`; `LoadedMemory` is their sum).
+  `AssetMetadata::StoredSize` is the size of what a load reads: the cache file or engine-native source in the editor,
+  the pack entry at runtime.
+- **Budgets** (`AssetResidencyBudgets`). With a graphics device, GPU textures may use 50% and GPU buffers 15% of the
+  device's memory budget (`GraphicsDevice::GetMemoryBudget`, VK_EXT_memory_budget); without one they are unlimited. The
+  CPU pool is unlimited; loads in flight may hold 128 MiB; finalization may upload 64 MiB and take 4 ms per frame, and
+  texture uploads may hold 64 MiB of staging (see Staging). `AssetManagerBase::SetResidencyBudgets` replaces them
+  (`GameRuntimeOptions::AssetBudgets`, StrataRuntime's `--asset-budget-mb`, the editor's `asset.setBudget`).
+- **Requests and pins**. Requests (`GetAsset`, `RequestLoad`, `Pin`) stamp an asset with the manager's frame counter,
+  which `Update` advances. Whatever draws or uses assets requests them every frame (`SceneRenderer` resolves meshes,
+  materials and textures through `GetAsset`), so the stamp is a least-recently-used signal; arriving is no request. Each
+  pool keeps its resident evictable assets that hold memory of it ordered by the stamp (a map keyed by frame and request
+  order: a request moves an asset to the end in constant time, an arrival is placed by its latest request in logarithmic
+  time), so eviction for a pool looks only at assets that free its memory. An `AssetPin` (`AssetManagerBase::Pin`) keeps
+  an asset resident while it lives; pins add up and refer to their manager weakly. The scripts of a playing scene pin
+  what they request (`Assets::RequestLoad`, `ScriptSystem::RequestAsset`) until they release it (`Assets::Release`, the
+  host function `ReleaseAsset`) or play stops.
+- **Eviction** (`Update`, after finalization). For each pool over its budget, the least recently requested assets that
+  hold memory of it are evicted until it fits. Never evicted: pinned assets, assets requested within the grace window
+  (`GetEvictionGraceFrames`: the device's frames in flight plus two), memory and built-in assets, and assets still in
+  use outside the manager (a `Ref` held elsewhere, or `Asset::IsDataShared`, e.g. a voice playing a clip): evicting
+  those would free nothing, and the next request would load a second copy. An evicted asset is Unloaded with a new
+  generation and a published content change (caches revalidate; physics keeps the colliders it built and audio keeps
+  playing clips), and it loads again on its next request. `TrimUnused(frames)` evicts every evictable asset not
+  requested in that many frames, whatever the budgets (assets holding no memory stay: evicting them would free nothing);
+  `ScheduleTrim` runs it a few updates later. `GameRuntime::LoadScene`, `EditorContext::OpenScene` and the editor's
+  scene switches in play mode (`EditorContext::SwitchRuntimeScene`) schedule `TrimUnused(3)` three frames after a scene
+  switch, so what the new scene draws or requests by then stays. `AssetManagerStats::EvictionChecks` counts the assets
+  eviction looked at.
+- **Streaming queue** (`AssetStreamingQueue`). A request marks the asset Loading and queues it keyed by priority, then
+  score (higher first; e.g. how large on screen it is needed), then request order; repeating it raises a queued request,
+  never lowers it. Loads are dispatched to `JobSystem::SubmitIO` while the stored bytes of loads not yet finalized stay
+  below `InFlightBytes` (1 MiB counts for an unknown size; one load always runs when none does) and fewer than two
+  reads per I/O thread are outstanding, so a burst of requests cannot fill memory with data the main thread has not
+  finalized. Requests, `Update`, finished reads and handled completions pump it; a pump requested while one runs is
+  left to that one, so loads that run inline (no job system) never recurse. `CancelLoad` and `UnloadAsset` remove queued
+  requests; dispatched loads check their generation before reading and before decoding.
+- **Room before arrival**. Before an asset is finalized, the manager asks what it will hold (`GetFinalizedMemoryUsage`)
+  and, when the asset is in use (requested within the grace window, so it will stay), evicts what that would put over
+  budget in the pools it needs first (`MakeRoomFor`), beside the memory reserved for earlier arrivals that made room and
+  are not published yet; its own memory stays reserved until it is published. GPU memory of evicted textures is released
+  only when no frame in flight can use it (the bindless table holds them frames in flight + 1 frames), so with a
+  renderer an arrival that allocates GPU memory and evicted some waits that long before it uploads: the device holds the
+  budget, not the budget plus the arrivals. Arrivals that allocate no GPU memory (materials, documents) never wait for
+  that. Arrivals are finalized in order: those behind a waiting one wait for it, but make room at once for up to a
+  frame's upload budget of GPU memory in all, so that arrivals that need room in the same frame wait their releases out
+  together instead of one after another. Making room further ahead, or letting them overtake (they would allocate, and
+  materials would request their textures, while what the waiting arrival replaces and its loaded data are still held),
+  raised the peak private memory of the stress sweep by 20 to 60 MB. An arrival nobody requested lately makes no room;
+  it may be evicted itself.
+- **Bounded uploads**. Assets upload in steps of at most `c_AssetUploadStepBytes` (4 MiB, about a millisecond of
+  memcpy): textures in bands of rows of a level, or the rest of the mip chain once it fits in one band; meshes in ranges
+  of their buffers. Each finalization call gets what is left of the frame's budget (`AssetFinalizeContext`: upload
+  bytes, a deadline and the staging budget) and takes no step beyond the upload bytes or the deadline except its first,
+  so a frame overshoots `UploadBytesPerFrame` or `FinalizeMsPerFrame` by one step at most; textures also skip a step
+  that would end after the deadline at the speed of the latest steps. Texture steps also wait for staging room (see
+  Staging), except the frame's first step: every frame makes progress, also without device frames, while a later call
+  may take no step at all. A texture is published (and gets its bindless slot) once its whole chain is uploaded; its CPU
+  copy goes then. Freeing a large copy takes milliseconds (its pages go back to the system), so it is timed like a step
+  and waits for the next call when it would end after the deadline; it stays on the main thread, because freed on a
+  worker it would still be held while the frame's next arrivals allocate.
+  Uploads report the bytes they copied (`AssetFinalizeContext::UploadedBytes`).
+- **Staging** (`Renderer/StagingTexturePool.h`). Texture bands go through CPU-writable staging textures of the
+  renderer's pool, reused once the frames that copied from them are done (`Renderer::BeginFrame`), so streaming
+  allocates no staging memory once warm. Budgeted uploads wait while the staging still in flight is at the staging
+  budget (`AssetResidencyBudgets::StagingBytes`, 64 MiB): staging written in a frame is reusable frames in flight + 1
+  frames later, so sustained texture uploads reach at most a third of it per frame with two frames in flight, whatever
+  `UploadBytesPerFrame` allows (a loading screen raises both). Idle staging is kept up to 16 MiB and all of it is
+  returned after 120 frames without uploads. Mesh ranges go through NVRHI's upload manager, which pools the staging
+  memory of each command list without a limit: after `c_StagingReleaseFrames` (120) frames without uploads the manager
+  drops its upload command list (submissions in flight keep it alive until the GPU is done) and creates a new one with
+  the next upload.
+- **Statistics** (`GetStats`, `GetResidencyInfo`): resident bytes and budget per pool, queued loads per priority, loads
+  and bytes in flight with their high-water mark, uploaded bytes and finalization milliseconds (last frame and maximum
+  of the last 120) with the staging budget, evictions and eviction checks, cancellations and staging releases; per asset
+  its state, memory, latest request and pins.
+  The editor reports them through `asset.stats` and the `assets` section of `editor.status`.
+- **Measured** by the perf test `PerfGPU.Streaming` (`StrataTests/src/Perf/StreamingPerfTests.cpp`): it writes the
+  stress project (`StrataTests/src/Perf/StressProject.h`: 16 textures of 2048² and one of 4096², 447.4 MB of RGBA8, one
+  material per district of a 2000-unit world, 2,000 objects over a 512² terrain grid), imports it and builds its pack,
+  then runs a 600-frame camera sweep at 60 frames per second with a 128 MB texture budget in a helper process (peak
+  memory belongs to a whole process), three times. Every run must keep the textures within the budget plus the largest
+  one, finalize no frame for more than 8 ms, show each camera stop complete within 60 frames at rest and fail no load;
+  `StrataTests/Perf/Budgets.json` then judges the peak private bytes of the best run (the graphics driver's commit
+  charge varies from run to run), the largest resident texture memory of any run and the finalization time of the
+  median run.
+  `GPU.Assets.Streaming` runs the same sweep on a small stress project under the validation layers.
 
 ## Scripting
 
@@ -598,8 +704,8 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   with an `EditorCommandError` kind, or `Defer(poll)`. The built-in groups are registered by
   `EditorSceneCommands.cpp` (scene, entity, component, prefab), `EditorAssetCommands.cpp` (asset, material, prefab,
   project), `EditorStateCommands.cpp` (edit, editor, log, play, selection), `EditorViewportCommands.cpp` (camera,
-  viewport), `EditorScriptCommands.cpp` (script), `EditorInputCommands.cpp` (input) and `EditorCommands.cpp`
-  (`editor.commands`). Conventions: AGENTS.md, "Editor".
+  viewport), `EditorScriptCommands.cpp` (script), `EditorInputCommands.cpp` (input), `EditorStreamingCommands.cpp`
+  (`asset.stats`, `asset.setBudget`) and `EditorCommands.cpp` (`editor.commands`). Conventions: AGENTS.md, "Editor".
 - **Runner** (`EditorCommandRunner.h`). `Run` executes a command; a deferred one is polled once per frame from the next
   frame on, in issue order, and reports through its completion callback. Automation and command scripts always use the
   runner. UI actions that finish at once call the registry through `RunEditorCommand`
@@ -643,11 +749,13 @@ The module's PDB is copied when it exists, except in Dist builds or with `includ
 `StrataRuntime` (`StrataRuntime/src/RuntimeApplication.cpp`) runs `--game <file>`, or the manifest found next to the
 executable (`GameManifest::FindForExecutable`). It logs to `<user data>/<Game>/Logs/Game.log`. `--headless` disables
 the window and the renderer and paces at 60 frames per second; `--windowed` overrides a fullscreen manifest, and
-`--frames N` with `--screenshot out.png` saves the last frame. `GameRuntime::Create` loads the manifest, makes a
-`RuntimeAssetManager` on the pack active, loads the script module into its own `ScriptEngine` without hot reload and
-makes it active, and starts the start scene in Play mode.
+`--frames N` with `--screenshot out.png` saves the last frame, and `--asset-budget-mb <n>` sets the GPU texture budget
+of the game's assets (the other budgets keep their defaults). `GameRuntime::Create` loads the manifest, makes a
+`RuntimeAssetManager` on the pack active (with `GameRuntimeOptions::AssetBudgets` when given), loads the script module
+into its own `ScriptEngine` without hot reload and makes it active, and starts the start scene in Play mode.
 Each frame it finalizes loads, updates the scene and honors requests: a quit ends the process with the game's exit
-code, a scene load replaces the scene synchronously from the pack. Exit codes: 1 when the game cannot start, 2 when
+code, a scene load replaces the scene synchronously from the pack and schedules the release of what only the previous
+scene used ([Streaming and residency](#streaming-and-residency)). Exit codes: 1 when the game cannot start, 2 when
 the scripts crashed in a headless run (a windowed game keeps running without scripts), otherwise the code the game
 quit with. Exported games are the end-to-end check of the whole pipeline: the CTest export chain
 (`StrataEditor.Export`, `StrataRuntime.Smoke`, ...) is listed in the `strata-build-test` skill, the feature test
