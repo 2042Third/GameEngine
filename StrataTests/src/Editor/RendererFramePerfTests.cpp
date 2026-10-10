@@ -209,32 +209,39 @@ TEST_SUITE("PerfGPU.Renderer")
 		const std::filesystem::path scriptFile = directory / "Commands.json";
 		REQUIRE(FileSystem::WriteText(scriptFile, script.dump(1, '\t') + "\n"));
 
-		// Maximized (the default): the frames draw the editor at the size people use it. --frames keeps the run from saving
-		// its panel layout over the user's; the script ends the run long before.
-		ProcessSpecification specification;
-		specification.Executable = editor;
-		specification.Arguments = { "--no-automation", "--frames", "100000", "--quit-after-commands", "--project",
-			FileSystem::ToUTF8(project->GetProjectFile()), "--commands", FileSystem::ToUTF8(scriptFile) };
-		specification.Output = ProcessOutputMode::Capture;
-		const Process::RunResult run = Process::Run(specification, c_EditorTimeout);
-		INFO("Editor output:\n", run.Output);
-		REQUIRE_MESSAGE(run.Started, run.Error);
-		REQUIRE_FALSE(run.TimedOut);
-		REQUIRE(run.ExitCode == 0);
+		// One editor run measures every metric (the median CPU time of a wait's frames, which ignores the frames the machine's
+		// other work slowed down); a metric over its budget is confirmed by another run.
+		Perf::CheckBudgetsConfirmed({ "PerfGPU.Renderer.EditFrameCubes100k", "PerfGPU.Renderer.EditFrameCubes100kSelected", "PerfGPU.Renderer.EditFrameCubes300k",
+			"PerfGPU.Renderer.EditFrameCubes50kNarrow", "PerfGPU.Renderer.EditFramePointLights10k", "PerfGPU.Renderer.EditFrameMaterials10k" }, [&]
+		{
+			// Maximized (the default): the frames draw the editor at the size people use it. --frames keeps the run from saving
+			// its panel layout over the user's; the script ends the run long before.
+			ProcessSpecification specification;
+			specification.Executable = editor;
+			specification.Arguments = { "--no-automation", "--frames", "100000", "--quit-after-commands", "--project",
+				FileSystem::ToUTF8(project->GetProjectFile()), "--commands", FileSystem::ToUTF8(scriptFile) };
+			specification.Output = ProcessOutputMode::Capture;
+			const Process::RunResult run = Process::Run(specification, c_EditorTimeout);
+			INFO("Editor output:\n", run.Output);
+			REQUIRE_MESSAGE(run.Started, run.Error);
+			REQUIRE_FALSE(run.TimedOut);
+			REQUIRE(run.ExitCode == 0);
 
-		// Every scene's first wait settles it; the second one is measured.
-		const std::vector<nlohmann::json> waits = FindWaitResults(run.Output);
-		REQUIRE(waits.size() == 12);
-		const double unselected = MedianFrameMs(waits[1]);
-		const double selected = MedianFrameMs(waits[3]);
-		// What the selection adds is the difference of two medians, too small to budget on its own (it measures zero or
-		// less in some runs): the budget is on the frame with the selection, the difference is reported.
-		MESSAGE("100,000 cubes: ", unselected, " ms, ", selected, " ms with all of them selected (", selected - unselected, " ms added)");
-		Perf::CheckBudget("PerfGPU.Renderer.EditFrameCubes100k", unselected);
-		Perf::CheckBudget("PerfGPU.Renderer.EditFrameCubes100kSelected", selected);
-		Perf::CheckBudget("PerfGPU.Renderer.EditFrameCubes300k", MedianFrameMs(waits[5]));
-		Perf::CheckBudget("PerfGPU.Renderer.EditFrameCubes50kNarrow", MedianFrameMs(waits[7]));
-		Perf::CheckBudget("PerfGPU.Renderer.EditFramePointLights10k", MedianFrameMs(waits[9]));
-		Perf::CheckBudget("PerfGPU.Renderer.EditFrameMaterials10k", MedianFrameMs(waits[11]));
+			// Every scene's first wait settles it; the second one is measured.
+			const std::vector<nlohmann::json> waits = FindWaitResults(run.Output);
+			REQUIRE(waits.size() == 12);
+			const double unselected = MedianFrameMs(waits[1]);
+			const double selected = MedianFrameMs(waits[3]);
+			// What the selection adds is the difference of two medians, too small to budget on its own (it measures zero or
+			// less in some runs): the budget is on the frame with the selection, the difference is reported.
+			MESSAGE("100,000 cubes: ", unselected, " ms, ", selected, " ms with all of them selected (", selected - unselected, " ms added)");
+			return Perf::MetricValues {
+				{ "PerfGPU.Renderer.EditFrameCubes100k", unselected },
+				{ "PerfGPU.Renderer.EditFrameCubes100kSelected", selected },
+				{ "PerfGPU.Renderer.EditFrameCubes300k", MedianFrameMs(waits[5]) },
+				{ "PerfGPU.Renderer.EditFrameCubes50kNarrow", MedianFrameMs(waits[7]) },
+				{ "PerfGPU.Renderer.EditFramePointLights10k", MedianFrameMs(waits[9]) },
+				{ "PerfGPU.Renderer.EditFrameMaterials10k", MedianFrameMs(waits[11]) } };
+		});
 	}
 }

@@ -16,8 +16,6 @@ namespace
 
 	// Frames are timed in batches: one frame of the profiler takes about a microsecond.
 	constexpr uint32_t c_FramesPerBatch = 1000;
-	// The overhead the frame profiler may add to a frame with 16 stages (the streaming observatory's acceptance limit).
-	constexpr double c_MaxFrameOverheadUs = 20.0;
 
 }
 
@@ -37,24 +35,27 @@ TEST_SUITE("Perf.FrameProfiler")
 		}
 
 		// A frame shaped like the editor's: most stages one after another, a few nested (finalization in the asset update,
-		// extraction in the render, transforms in the scene update).
-		const Perf::Measurement frames = Perf::Measure("Perf.FrameProfiler.Frame16Stages (1000 frames)", 3, 30, [&]
+		// extraction in the render, transforms in the scene update). The median batch's time per frame; the streaming
+		// observatory's acceptance limit of 20 us per frame is far above the budget.
+		Perf::CheckBudgetConfirmed("Perf.FrameProfiler.Frame16Stages", [&]
 		{
-			for (uint32_t frame = 0; frame < c_FramesPerBatch; frame++)
+			const Perf::Measurement frames = Perf::Measure("Perf.FrameProfiler.Frame16Stages (1000 frames)", 3, 30, [&]
 			{
-				profiler.BeginFrame();
-				for (size_t index = 0; index < stages.size(); index += 2)
+				for (uint32_t frame = 0; frame < c_FramesPerBatch; frame++)
 				{
-					const FrameStageScope outer(profiler, stages[index]);
-					const FrameStageScope inner(profiler, stages[index + 1]);
+					profiler.BeginFrame();
+					for (size_t index = 0; index < stages.size(); index += 2)
+					{
+						const FrameStageScope outer(profiler, stages[index]);
+						const FrameStageScope inner(profiler, stages[index + 1]);
+					}
+					profiler.EndFrame(0.001);
 				}
-				profiler.EndFrame(0.001);
-			}
+			});
+			const double overheadUs = frames.MedianMs * 1000.0 / c_FramesPerBatch;
+			MESSAGE("Frame profiler overhead: ", overheadUs, " us per frame of 16 stages");
+			return overheadUs;
 		});
 		REQUIRE(profiler.GetTotalFrameCount() >= c_FramesPerBatch);
-		const double overheadUs = frames.MedianMs * 1000.0 / c_FramesPerBatch;
-		MESSAGE("Frame profiler overhead: ", overheadUs, " us per frame of 16 stages");
-		CHECK(overheadUs <= c_MaxFrameOverheadUs);
-		Perf::CheckBudget("Perf.FrameProfiler.Frame16Stages", overheadUs);
 	}
 }

@@ -167,7 +167,7 @@ TEST_SUITE("PerfGPU.Editor")
 		});
 	}
 
-	TEST_CASE("Exporting the stress project keeps every editor frame within 50 ms")
+	TEST_CASE("Exporting the stress project keeps the editor's frames within their budgets")
 	{
 		const std::filesystem::path editor = GetEditorPath();
 		REQUIRE_MESSAGE(FileSystem::IsRegularFile(editor), "The export measurement needs the built StrataEditor: ", FileSystem::ToUTF8(editor));
@@ -184,36 +184,42 @@ TEST_SUITE("PerfGPU.Editor")
 		}
 
 		// The editor shows the world (and streams its textures) while it exports it; the export answers with the frame times
-		// of the frames that ran while it worked.
-		const nlohmann::json script = nlohmann::json::array({ Wait(),
-			{ { "command", "project.export" }, { "parameters", { { "directory", FileSystem::ToUTF8(directory / "Build") }, { "includeRuntime", false } } } } });
-		const std::filesystem::path scriptFile = directory / "Commands.json";
-		REQUIRE(FileSystem::WriteText(scriptFile, script.dump(1, '\t') + "\n"));
-		ProcessSpecification specification;
-		specification.Executable = editor;
-		specification.Arguments = { "--no-automation", "--frames", "100000", "--quit-after-commands", "--project", FileSystem::ToUTF8(project->Directory),
-			"--commands", FileSystem::ToUTF8(scriptFile) };
-		specification.Output = ProcessOutputMode::Capture;
-		const Process::RunResult run = Process::Run(specification, c_EditorTimeout);
-		INFO("Editor output:\n", run.Output);
-		REQUIRE_MESSAGE(run.Started, run.Error);
-		REQUIRE_FALSE(run.TimedOut);
-		REQUIRE(run.ExitCode == 0);
+		// of the frames that ran while it worked. One editor run measures every metric: the median frame, the longest frame (a
+		// maximum by nature: the export's worst hitch; the pack workstream's acceptance limit of 50 ms is far above the
+		// budget) and the export's time; a metric over its budget is confirmed by another run, which exports anew.
+		uint32_t attempt = 0;
+		Perf::CheckBudgetsConfirmed({ "PerfGPU.Editor.ExportFrameStress", "PerfGPU.Editor.ExportMaxFrameStress", "PerfGPU.Editor.ExportStress" }, [&]
+		{
+			attempt++;
+			const nlohmann::json script = nlohmann::json::array({ Wait(), { { "command", "project.export" }, { "parameters", {
+				{ "directory", FileSystem::ToUTF8(directory / ("Build" + std::to_string(attempt))) }, { "includeRuntime", false } } } } });
+			const std::filesystem::path scriptFile = directory / ("Commands" + std::to_string(attempt) + ".json");
+			REQUIRE(FileSystem::WriteText(scriptFile, script.dump(1, '\t') + "\n"));
+			ProcessSpecification specification;
+			specification.Executable = editor;
+			specification.Arguments = { "--no-automation", "--frames", "100000", "--quit-after-commands", "--project", FileSystem::ToUTF8(project->Directory),
+				"--commands", FileSystem::ToUTF8(scriptFile) };
+			specification.Output = ProcessOutputMode::Capture;
+			const Process::RunResult run = Process::Run(specification, c_EditorTimeout);
+			INFO("Editor output:\n", run.Output);
+			REQUIRE_MESSAGE(run.Started, run.Error);
+			REQUIRE_FALSE(run.TimedOut);
+			REQUIRE(run.ExitCode == 0);
 
-		const std::vector<nlohmann::json> exports = FindCommandResults(run.Output, "project.export");
-		REQUIRE(exports.size() == 1);
-		const nlohmann::json& result = exports[0];
-		const nlohmann::json* frameTimes = JsonUtils::Find(result, "frameTimes");
-		REQUIRE(frameTimes != nullptr);
-		const double maxMs = JsonUtils::GetFloat(*frameTimes, "maxMs", 1.0e9f);
-		const double medianMs = JsonUtils::GetFloat(*frameTimes, "medianMs", 1.0e9f);
-		const double seconds = JsonUtils::GetFloat(result, "seconds", 0.0f);
-		MESSAGE("Export of the stress project: ", seconds, " s over ", JsonUtils::GetUInt(result, "frames", 0), " frames; frame time median ", medianMs,
-			" ms, at most ", maxMs, " ms; pack ", JsonUtils::GetUInt(result, "packBytes", 0), " bytes");
-		// The editor drew frames the whole time, each in time for an interactive editor.
-		CHECK(JsonUtils::GetUInt(*frameTimes, "count", 0) >= 2);
-		CHECK(maxMs <= 50.0);
-		Perf::CheckBudget("PerfGPU.Editor.ExportFrameStress", medianMs);
-		Perf::CheckBudget("PerfGPU.Editor.ExportStress", seconds * 1000.0);
+			const std::vector<nlohmann::json> exports = FindCommandResults(run.Output, "project.export");
+			REQUIRE(exports.size() == 1);
+			const nlohmann::json& result = exports[0];
+			const nlohmann::json* frameTimes = JsonUtils::Find(result, "frameTimes");
+			REQUIRE(frameTimes != nullptr);
+			const double maxMs = JsonUtils::GetFloat(*frameTimes, "maxMs", 1.0e9f);
+			const double medianMs = JsonUtils::GetFloat(*frameTimes, "medianMs", 1.0e9f);
+			const double seconds = JsonUtils::GetFloat(result, "seconds", 0.0f);
+			MESSAGE("Export of the stress project: ", seconds, " s over ", JsonUtils::GetUInt(result, "frames", 0), " frames; frame time median ", medianMs,
+				" ms, at most ", maxMs, " ms; pack ", JsonUtils::GetUInt(result, "packBytes", 0), " bytes");
+			// The editor drew frames the whole time.
+			CHECK(JsonUtils::GetUInt(*frameTimes, "count", 0) >= 2);
+			return Perf::MetricValues { { "PerfGPU.Editor.ExportFrameStress", medianMs }, { "PerfGPU.Editor.ExportMaxFrameStress", maxMs },
+				{ "PerfGPU.Editor.ExportStress", seconds * 1000.0 } };
+		});
 	}
 }

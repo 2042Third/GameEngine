@@ -104,8 +104,6 @@ namespace Strata::Tests::Perf
 		// Records the value of metric `key` in the results file with the unit, budget and target of its entry; fails the
 		// test if it has none or the file cannot be written.
 		void Record(std::string_view key, double value);
-		// Records the value of metric `key`, then fails the test if it exceeds the budget.
-		void Check(std::string_view key, double value);
 
 		// The confirmed check of metrics that one measurement produces together: calls `measure`, which measures every
 		// metric of `keys` afresh (its own warm-up, its counters relative to its own start), until each metric has been
@@ -139,12 +137,9 @@ namespace Strata::Tests::Perf
 	// test if the budget file is unreadable or malformed.
 	BudgetChecker& GetBudgetChecker();
 
-	// Records the value of metric `key` (BudgetChecker::Record of the perf tests' checker).
+	// Records the value of metric `key` without checking it (BudgetChecker::Record of the perf tests' checker).
 	void Record(std::string_view key, double value);
-	// Records the value of metric `key`, then fails the test if it exceeds the budget: one measurement decides, so noise
-	// fails it as readily as a regression. Perf tests check with CheckBudgetConfirmed or CheckBudgetsConfirmed instead.
-	// Budgets only apply to optimized builds, so it fails in other builds without comparing.
-	void CheckBudget(std::string_view key, double value);
+
 
 	// The confirmed check of one metric (BudgetChecker::CheckConfirmed of the perf tests' checker): `measure` measures it
 	// afresh and returns its value. Fails in builds that are not optimized without measuring.

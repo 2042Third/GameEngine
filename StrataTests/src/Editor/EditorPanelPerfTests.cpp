@@ -31,10 +31,6 @@ namespace
 	constexpr uint32_t c_WarmupFrames = 30;
 	constexpr uint32_t c_MeasuredFrames = 240; // Four seconds of harness frames: the Streaming table refreshes up to 16 times
 	constexpr uint32_t c_RegisteredAssets = 10'000;
-	// The streaming observatory's acceptance limits for the panels' cost per frame, in milliseconds: every frame, so the
-	// 95th percentile, and for the Streaming panel the frames that refresh its table too.
-	constexpr double c_MaxStreamingPanelMs = 0.3;
-	constexpr double c_MaxPerformancePanelMs = 0.2;
 	// The Streaming table's first build (every name of 10,000 assets) gets this long to finish on the job threads.
 	constexpr std::chrono::seconds c_FirstBuildTimeout(30);
 
@@ -113,14 +109,22 @@ TEST_SUITE("Perf.EditorPanels")
 		while ((streaming.IsBuildingTable() || streaming.GetTableRowCount() < c_RegisteredAssets) && std::chrono::steady_clock::now() < deadline)
 			MeasurePanel(harness, streaming, panelContext, 1);
 		REQUIRE(streaming.GetTableRowCount() >= c_RegisteredAssets);
-		const PanelFrames streamingFrames = MeasurePanel(harness, streaming, panelContext, c_MeasuredFrames, [&]() { return streaming.GetTableBuildCount(); });
-		const Perf::Measurement streamingStats = Perf::Summarize(streamingFrames.All);
-		// The table is read again four times per second of harness time, unless the previous build is still running.
-		REQUIRE(streamingFrames.Refreshes.size() >= c_MeasuredFrames / 60);
-		const Perf::Measurement refreshStats = Perf::Summarize(streamingFrames.Refreshes);
-		MESSAGE("Streaming panel with ", c_RegisteredAssets, " assets: mean ", Mean(streamingFrames.All), " ms, median ", streamingStats.MedianMs, " ms, p95 ",
-			streamingStats.P95Ms, " ms, max ", streamingStats.MaxMs, " ms per frame; ", streamingFrames.Refreshes.size(), " frames that refreshed the table: median ",
-			refreshStats.MedianMs, " ms, max ", refreshStats.MaxMs, " ms");
+		// Per frame, not on average (the streaming observatory's acceptance limit, 0.3 ms per frame, is far above the
+		// budgets): the 95th percentile frame, and the median of the frames that refresh the table, so that a periodic hitch
+		// cannot hide among the others (the main thread copies the residency; a job names, sorts and filters it).
+		Perf::CheckBudgetsConfirmed({ "Perf.EditorPanels.Streaming10kAssetsP95", "Perf.EditorPanels.Streaming10kAssetsRefreshFrame" }, [&]
+		{
+			const PanelFrames streamingFrames = MeasurePanel(harness, streaming, panelContext, c_MeasuredFrames, [&]() { return streaming.GetTableBuildCount(); });
+			const Perf::Measurement streamingStats = Perf::Summarize(streamingFrames.All);
+			// The table is read again four times per second of harness time, unless the previous build is still running.
+			REQUIRE(streamingFrames.Refreshes.size() >= c_MeasuredFrames / 60);
+			const Perf::Measurement refreshStats = Perf::Summarize(streamingFrames.Refreshes);
+			MESSAGE("Streaming panel with ", c_RegisteredAssets, " assets: mean ", Mean(streamingFrames.All), " ms, median ", streamingStats.MedianMs, " ms, p95 ",
+				streamingStats.P95Ms, " ms, max ", streamingStats.MaxMs, " ms per frame; ", streamingFrames.Refreshes.size(), " frames that refreshed the table: median ",
+				refreshStats.MedianMs, " ms, max ", refreshStats.MaxMs, " ms");
+			return Perf::MetricValues { { "Perf.EditorPanels.Streaming10kAssetsP95", streamingStats.P95Ms },
+				{ "Perf.EditorPanels.Streaming10kAssetsRefreshFrame", refreshStats.MedianMs } };
+		});
 
 		// The Performance panel: a full ring of frames with the editor's stages.
 		FrameProfiler& profiler = FrameProfiler::Get();
@@ -140,18 +144,14 @@ TEST_SUITE("Perf.EditorPanels")
 		}
 		PerformancePanel performance;
 		MeasurePanel(harness, performance, panelContext, c_WarmupFrames);
-		const PanelFrames performanceFrames = MeasurePanel(harness, performance, panelContext, c_MeasuredFrames);
-		const Perf::Measurement performanceStats = Perf::Summarize(performanceFrames.All);
-		MESSAGE("Performance panel with ", profiler.GetRecordedFrameCount(), " frames: mean ", Mean(performanceFrames.All), " ms, median ",
-			performanceStats.MedianMs, " ms, p95 ", performanceStats.P95Ms, " ms, max ", performanceStats.MaxMs, " ms per frame");
-
-		// Per frame, not on average: a frame that refreshes the Streaming table costs what the others do (the main thread
-		// copies the residency; a job names, sorts and filters it).
-		CHECK(streamingStats.P95Ms <= c_MaxStreamingPanelMs);
-		CHECK(refreshStats.MedianMs <= c_MaxStreamingPanelMs);
-		CHECK(performanceStats.P95Ms <= c_MaxPerformancePanelMs);
-		Perf::CheckBudget("Perf.EditorPanels.Streaming10kAssetsP95", streamingStats.P95Ms);
-		Perf::CheckBudget("Perf.EditorPanels.Streaming10kAssetsRefreshFrame", refreshStats.MedianMs);
-		Perf::CheckBudget("Perf.EditorPanels.Performance600FramesP95", performanceStats.P95Ms);
+		// The 95th percentile frame (its acceptance limit, 0.2 ms, is far above the budget).
+		Perf::CheckBudgetConfirmed("Perf.EditorPanels.Performance600FramesP95", [&]
+		{
+			const PanelFrames performanceFrames = MeasurePanel(harness, performance, panelContext, c_MeasuredFrames);
+			const Perf::Measurement performanceStats = Perf::Summarize(performanceFrames.All);
+			MESSAGE("Performance panel with ", profiler.GetRecordedFrameCount(), " frames: mean ", Mean(performanceFrames.All), " ms, median ",
+				performanceStats.MedianMs, " ms, p95 ", performanceStats.P95Ms, " ms, max ", performanceStats.MaxMs, " ms per frame");
+			return performanceStats.P95Ms;
+		});
 	}
 }

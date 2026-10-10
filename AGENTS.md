@@ -117,8 +117,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   only adds to a measurement (the machine's other work, memory the driver keeps). Every attempt is printed, and the check records each metric in
   `build/<preset>/PerfResults/<config>.json`: one entry per metric with its value (the passing attempt's, else the
   smallest), unit, budget, target and the values of all its attempts, and nothing else run-specific, so two runs
-  compare with a diff (CTest clears the file first). `Perf::CheckBudget(key, value)` checks one value without
-  confirmation; it remains for code written against it, and perf tests use the confirmed checks. **Statistics:** check
+  compare with a diff (CTest clears the file first); acceptance limits of workstreams are budgets too (the budget is the
+  limit when it lies below 1.5 times the measurement). **Statistics:** check
   medians of enough samples (a measurement the machine slowed down that much is what confirmation is for), maxima only
   for metrics that are maxima by nature (peak memory, the worst frame of a sweep), and give the reason for each metric's
   statistic in a comment. Budgets live in `StrataTests/Perf/Budgets.json`, whose `_comment` describes the format; a
@@ -151,37 +151,40 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   idle frames up to a million entities), `Perf.Scripting` (100,000 and 300,000 trivial scripts, frames that spawn and
   destroy entities, scripts destroying 10,000 of 100,000 sibling roots in one frame), `Perf.Physics` (box stacks of
   `CreateBoxStacks`: the first frames of 30,000 boxes with time dilation, 70,000 boxes that all get a body, the busy
-  frames of 70,000 and 10,000 boxes with Strata's part of a step below Jolt's, and of 30,000 boxes whose floor contacts
-  are tracked; creating 10,000 bodies in one frame; the memory a world at the largest capacities reserves),
-  `Perf.TextureCook` (cold imports of the stress project, its stored texture and pack sizes, the BC7 encoder's time per
-  block on one thread), `PerfGPU.Renderer` (`SceneRenderer::Render` alone on 100,000 and 300,000 cubes and on 10,000
-  cubes with unique materials) and, in `src/Editor/`, `Perf.Editor` (entity commands among 100,000 roots; the
-  hierarchy's rows of 100,000 roots, idle and rebuilt; the Hierarchy panel's share of an editor frame with 100,000
-  roots, open against closed; what 100,000 selected entities add to a frame; the longest editor frame while a
-  4096x4096 texture re-imports with new settings), `PerfGPU.Editor`, which runs the real `StrataEditor` maximized on
-  generated 100,000- and 1,000,000-entity scenes and checks the median CPU frame time its `editor.wait` steps report
-  (when the editor fails, the test describes the scene files on disk with `Tests::DescribeJsonFile`, which tells a
-  damaged file from a failed read or parse), exports the stress project (every frame meanwhile at most 50 ms) and times
-  the editor's frames on the shared device while that texture re-imports, uploads and is drawn, and the editor frames of
-  `PerfGPU.Renderer` (cube grids of 100,000, also with all of them selected, and of 300,000, a narrow view of 50,000,
-  10,000 point lights, 10,000 unique materials); `PerfGPU.Pack` compares pack versions 2 and 1 of the stress project
-  (size, opening, streaming the world; the acceptance limit of 110% is the budget of a `ratio` metric, version 2's time
-  to version 1's, so it is checked like any budget). Time calls that take nanoseconds in batches (the clock's resolution
-  is about 0.1 microseconds).
+  frames of 70,000 and 10,000 boxes with Strata's part of a step below Jolt's (a `ratio` metric), and of 30,000 boxes
+  whose floor contacts are tracked; creating 10,000 bodies in one frame; the memory a world at the largest capacities and
+  at the most bodies reserves), `Perf.TextureCook` (a cold import of the stress project, the stored sizes of its largest
+  2048x2048 texture, its 4096x4096 texture and all of them, its pack's size, the BC7 encoder's time per block on one
+  thread), `PerfGPU.Renderer` (`SceneRenderer::Render` alone on 100,000 and 300,000 cubes and on 10,000 cubes with unique
+  materials, with the opaque draw calls those take) and, in `src/Editor/`, `Perf.Editor` (entity commands among 100,000
+  roots; the hierarchy's rows of 100,000 roots, idle and rebuilt; the Hierarchy panel's share of an editor frame with
+  100,000 roots, open against closed; what 100,000 selected entities add to a frame; the longest editor frame while a
+  4096x4096 texture re-imports uncompressed and then block-compressed again), `PerfGPU.Editor`, which runs the real
+  `StrataEditor` maximized on generated 100,000- and 1,000,000-entity scenes and checks the median CPU frame time its
+  `editor.wait` steps report (when the editor fails, the test describes the scene files on disk with
+  `Tests::DescribeJsonFile`, which tells a damaged file from a failed read or parse), exports the stress project (the
+  median and the longest frame meanwhile, and
+  the export's time) and times the editor's frames on the shared device while that texture re-imports, uploads and is
+  drawn, and the editor frames of `PerfGPU.Renderer` (cube grids of 100,000, also with all of them selected, and of
+  300,000, a narrow view of 50,000, 10,000 point lights, 10,000 unique materials); `PerfGPU.Pack` compares pack versions
+  2 and 1 of the stress project (the size with its textures uncompressed, opening, streaming the world as it ships; the
+  acceptance limits, 0.8 of version 1's size and 110% of its time, are the budgets of `ratio` metrics, so they are
+  checked like any budget). Time calls that take nanoseconds in batches (the clock's resolution is about 0.1
+  microseconds).
   A process's peak memory includes everything it did before, so a test that measures peak memory
   runs the measured work in a helper process (`--strata-test-helper=<mode>`, see `TestMain.cpp`): `PerfGPU.Streaming`
   runs its camera sweeps over the stress project (`src/Perf/StressProject.h`, also usable by other suites;
   `StrataTests --strata-test-helper=write-stress-project <new directory>` writes it to open in the editor) that way:
-  one that evicts within a small texture budget, one sweep per attempt, and one at 1920x1080 with every texture
-  resident, three times. Every evicting sweep must stream correctly (no failed load or device error, every camera stop
+  one that evicts within a small texture budget and one at 1920x1080 with every texture resident, one sweep per attempt
+  each. Every evicting sweep must stream correctly (no failed load or device error, every camera stop
   settles, the textures stay within the residency budget give or take the largest); its budgets are maxima of the
   sweep: peak private memory (the graphics driver keeps commit charge of freed device memory for a while, which counts
   in private bytes on Windows, so identical sweeps peak up to about 150 MB apart), resident texture memory, the longest
   frame finalization (a regression may show in one frame, which a percentile would hide) and the most frames a stop
-  takes to settle. Every all-resident run must bring every texture in, evict none and fail no load; its peak private
-  memory is judged by the best run. It then runs the exported stress game in `StrataRuntime`
-  (`STRATA_TEST_RUNTIME_PATH`, else next to the test executable) with `--perf-log`, three times as well: every log has a
-  row per frame, and the slowest frame's `Assets.Finalize` stage, judged by the median run, stays within 8 ms.
+  takes to settle. Every all-resident sweep must bring every texture in, evict none and fail no load; its budgets are its
+  peak private memory (650 MB, texture cooking's limit) and its longest frame finalization. It then runs the exported
+  stress game in `StrataRuntime` (`STRATA_TEST_RUNTIME_PATH`, else next to the test executable) with `--perf-log`, one
+  run per attempt: every log has a row per frame, and the budget judges the slowest frame's `Assets.Finalize` stage.
   `Perf.FrameProfiler` measures the frame profiler's cost per frame and `Perf.EditorPanels` (in `src/Editor/`) the
   Streaming panel with 10,000 assets (with the job threads, which build its table) and the Performance panel with a full
   ring of frames, each drawn in the UI harness: the 95th percentile frame, and for the Streaming panel the frames that

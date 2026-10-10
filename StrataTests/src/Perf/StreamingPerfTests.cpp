@@ -16,7 +16,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
-#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -59,25 +58,17 @@ namespace
 	constexpr const char* c_MaxFinalizeTime = "PerfGPU.Streaming.MaxFinalizeTime";
 	constexpr const char* c_FramesToSettle = "PerfGPU.Streaming.FramesToSettle";
 
-	// The acceptance criterion of texture cooking: the stress game at 1920x1080 over 300 frames with all of its textures
-	// resident (the all-resident sweep; the exported runtime peaked at 1034-1055 MiB with RGBA8 textures). The evicting
-	// sweep, which holds less, stays below it too (its budget is lower).
-	constexpr uint64_t c_MaxPeakPrivateBytes = 650 * c_MB;
-	constexpr float c_MaxFinalizeMs = 8.0f;
+	// The metrics of the all-resident sweep (the stress game at 1920x1080 over 300 frames with all of its textures resident),
+	// one sweep per attempt, maxima by nature like the evicting sweep's: its peak private memory, whose budget is texture
+	// cooking's acceptance limit (650 MB; the exported runtime peaked at 1034-1055 MiB with RGBA8 textures), and its longest
+	// frame finalization (below the streaming workstream's limit of 8 ms per frame).
+	constexpr const char* c_PeakPrivateMemoryAllResident = "PerfGPU.Streaming.PeakPrivateMemoryAllResident";
+	constexpr const char* c_MaxFinalizeTimeAllResident = "PerfGPU.Streaming.MaxFinalizeTimeAllResident";
+	// The exported game's slowest frame finalization (the Assets.Finalize stage of its perf log), one run per attempt: a
+	// maximum by nature too (below the same limit of 8 ms).
+	constexpr const char* c_RuntimeMaxFinalizeStage = "PerfGPU.Streaming.RuntimeMaxFinalizeStage";
 	// The all-resident sweep's texture budget: far more than the 111.8 MB of textures, so nothing is evicted.
 	constexpr uint64_t c_AllResidentTextureBudget = 1000 * c_MB;
-	// The all-resident sweep runs this many times, and so does the exported game. Every run must meet the criteria. Peak
-	// private memory is judged by the best run: the graphics driver keeps commit charge of freed device memory for a while
-	// (see PeakPrivateMemory above), so the best run is the engine's own cost. The exported game's slowest frame
-	// finalization is judged by the median run, which a spike from the machine's other work does not move.
-	constexpr uint32_t c_Runs = 3;
-
-	template<typename T>
-	T Median(std::vector<T> values)
-	{
-		std::sort(values.begin(), values.end());
-		return values[values.size() / 2];
-	}
 
 	double ElapsedSeconds(std::chrono::steady_clock::time_point start)
 	{
@@ -261,9 +252,8 @@ TEST_SUITE("PerfGPU.Streaming")
 		});
 
 		// All textures resident: the stress game at 1920x1080 for 300 frames, over twelve stops whose views take in every
-		// district, with a texture budget that holds every texture. Every run: each texture arrives and none leaves, no load
-		// fails, the device reports no error and no frame finalizes for more than 8 ms; the best run's peak private memory
-		// stays below 650 MB (texture cooking's acceptance limit) and is judged by its own budget.
+		// district, with a texture budget that holds every texture. Every sweep that runs: each texture arrives and none
+		// leaves, no load fails and the device reports no error.
 		StreamingSweepSettings allResident = settings;
 		allResident.TextureBudget = c_AllResidentTextureBudget;
 		allResident.Width = 1920;
@@ -274,46 +264,41 @@ TEST_SUITE("PerfGPU.Streaming")
 		REQUIRE(allResident.Path.GetFrameCount() == 300);
 		const std::filesystem::path allResidentFile = directory / "AllResidentSettings.json";
 		REQUIRE(FileSystem::WriteText(allResidentFile, JsonUtils::Dump(ToJson(allResident))));
-		uint64_t bestAllResidentPeakPrivateBytes = std::numeric_limits<uint64_t>::max();
-		for (uint32_t runIndex = 0; runIndex < c_Runs; runIndex++)
+		uint32_t allResidentSweeps = 0;
+		Perf::CheckBudgetsConfirmed({ c_PeakPrivateMemoryAllResident, c_MaxFinalizeTimeAllResident }, [&]
 		{
-			CAPTURE(runIndex);
+			const uint32_t sweep = ++allResidentSweeps;
+			CAPTURE(sweep);
 			const auto start = std::chrono::steady_clock::now();
-			const StreamingSweepResult result = RunSweepProcess(allResidentFile, directory / ("AllResidentResult" + std::to_string(runIndex) + ".json"));
-			MESSAGE("All resident, run ", runIndex + 1, " (", ElapsedSeconds(start), " s): ", DescribeSweep(result));
+			const StreamingSweepResult result = RunSweepProcess(allResidentFile, directory / ("AllResidentResult" + std::to_string(sweep) + ".json"));
+			MESSAGE("All resident, sweep ", sweep, " (", ElapsedSeconds(start), " s): ", DescribeSweep(result));
 			CHECK(result.NewErrors == 0);
 			CHECK(result.FailedAssets == 0);
 			CHECK(result.Evictions == 0);
 			CHECK(result.MaxResidentTextureBytes == project->TextureBytes);
-			CHECK(result.MaxFinalizeMs <= c_MaxFinalizeMs);
 			REQUIRE(result.PeakPrivateBytes > 0);
-			bestAllResidentPeakPrivateBytes = std::min(bestAllResidentPeakPrivateBytes, result.PeakPrivateBytes);
-		}
-		CHECK(bestAllResidentPeakPrivateBytes <= c_MaxPeakPrivateBytes);
-		Perf::CheckBudget("PerfGPU.Streaming.PeakPrivateMemoryAllResident", static_cast<double>(bestAllResidentPeakPrivateBytes) / c_MBDouble);
+			return Perf::MetricValues { { c_PeakPrivateMemoryAllResident, static_cast<double>(result.PeakPrivateBytes) / c_MBDouble },
+				{ c_MaxFinalizeTimeAllResident, result.MaxFinalizeMs } };
+		});
 
-		// The exported game, in a window, with its perf log: the runtime's own frames, from the world's overview camera,
-		// finalize within the same limit. It runs c_Runs times too: every run streams and logs every frame, and the slowest
-		// frame's finalization is judged by the median run (a stage's time is wall-clock time, which a moment of other work
-		// on the machine stretches in any one run).
+		// The exported game, in a window, with its perf log: the runtime's own frames, from the world's overview camera. Every
+		// run streams and logs every frame.
 		GameManifest manifest;
 		manifest.Name = "StrataStressWorld";
 		manifest.AssetPack = "Stress.stpak";
 		manifest.StartScene = project->WorldScene;
 		const std::filesystem::path manifestPath = directory / "Stress.stgame";
 		REQUIRE_MESSAGE(manifest.Save(manifestPath, &error), error);
-		std::vector<double> runtimeMaxFinalizeMs;
-		for (uint32_t runIndex = 0; runIndex < c_Runs; runIndex++)
+		uint32_t runtimeRuns = 0;
+		Perf::CheckBudgetConfirmed(c_RuntimeMaxFinalizeStage, [&]
 		{
-			CAPTURE(runIndex);
-			const RuntimePerfLogResult result = RunExportedGame(manifestPath, directory / ("RuntimePerfLog" + std::to_string(runIndex) + ".csv"));
-			MESSAGE("Exported stress game, run ", runIndex + 1, ": ", result.Frames, " frames logged, Assets.Finalize at most ", result.MaxFinalizeMs,
+			const uint32_t run = ++runtimeRuns;
+			CAPTURE(run);
+			const RuntimePerfLogResult result = RunExportedGame(manifestPath, directory / ("RuntimePerfLog" + std::to_string(run) + ".csv"));
+			MESSAGE("Exported stress game, run ", run, ": ", result.Frames, " frames logged, Assets.Finalize at most ", result.MaxFinalizeMs,
 				" ms (frame ", result.SlowestFrame, "), ", result.UploadedMB, " MB uploaded");
 			CHECK(result.UploadedMB > 0.0); // It streamed
-			runtimeMaxFinalizeMs.push_back(result.MaxFinalizeMs);
-		}
-		const double runtimeFinalizeMs = Median(runtimeMaxFinalizeMs);
-		CHECK(runtimeFinalizeMs <= c_MaxFinalizeMs);
-		Perf::CheckBudget("PerfGPU.Streaming.RuntimeMaxFinalizeStage", runtimeFinalizeMs);
+			return result.MaxFinalizeMs;
+		});
 	}
 }

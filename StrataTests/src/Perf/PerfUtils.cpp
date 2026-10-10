@@ -251,17 +251,6 @@ namespace Strata::Tests::Perf
 		Store(key, std::move(result));
 	}
 
-	void BudgetChecker::Check(std::string_view key, double value)
-	{
-		Record(key, value);
-
-		// Record has failed the test unless the metric has a budget.
-		std::string error;
-		const BudgetEntry& entry = *Find(key, error);
-		Print(fmt::format("{}: {}", key, DescribeValue(value, entry)));
-		CHECK_MESSAGE(value <= entry.Budget, fmt::format("'{}' measured {} {}, over its budget of {} {}", key, value, entry.Unit, entry.Budget,
-			entry.Unit));
-	}
 
 	std::vector<ConfirmedMetric> BudgetChecker::CheckConfirmed(const std::vector<std::string>& keys, const std::function<MetricValues()>& measure,
 		uint32_t attempts)
@@ -384,11 +373,6 @@ namespace Strata::Tests::Perf
 		GetBudgetChecker().Record(key, value);
 	}
 
-	void CheckBudget(std::string_view key, double value)
-	{
-		REQUIRE_MESSAGE(IsOptimizedBuild(), "perf budgets apply to optimized builds (Release, Dist) only");
-		GetBudgetChecker().Check(key, value);
-	}
 
 	ConfirmedMetric CheckBudgetConfirmed(std::string_view key, const std::function<double()>& measure, uint32_t attempts)
 	{

@@ -73,10 +73,14 @@ TEST_SUITE("PerfGPU.Renderer")
 			Perf::CreateCubeGrid(scene, count);
 			SceneRenderer renderer;
 			renderer.SetViewportSize(c_Width, c_Height);
-			const Perf::Measurement measurement = MeasureRender(gpu, renderer, scene, GridView(count), count == 100'000 ? "100k cubes" : "300k cubes");
-			CHECK(renderer.GetStats().Instances == count);
-			CHECK(renderer.GetStats().InstanceBytesUploaded == 0); // A still frame uploads nothing
-			Perf::CheckBudget(count == 100'000 ? "PerfGPU.Renderer.Render100kCubes" : "PerfGPU.Renderer.Render300kCubes", measurement.MedianMs);
+			// The median frame (every attempt renders its own warm-up and measured frames).
+			Perf::CheckBudgetConfirmed(count == 100'000 ? "PerfGPU.Renderer.Render100kCubes" : "PerfGPU.Renderer.Render300kCubes", [&]
+			{
+				const Perf::Measurement measurement = MeasureRender(gpu, renderer, scene, GridView(count), count == 100'000 ? "100k cubes" : "300k cubes");
+				CHECK(renderer.GetStats().Instances == count);
+				CHECK(renderer.GetStats().InstanceBytesUploaded == 0); // A still frame uploads nothing
+				return measurement.MedianMs;
+			});
 		}
 
 		std::vector<AssetHandle> materials;
@@ -91,10 +95,15 @@ TEST_SUITE("PerfGPU.Renderer")
 		Perf::CreateCubeGrid(scene, materials.size(), materials);
 		SceneRenderer renderer;
 		renderer.SetViewportSize(c_Width, c_Height);
-		const Perf::Measurement measurement = MeasureRender(gpu, renderer, scene, GridView(materials.size()), "10k materials");
-		CHECK(renderer.GetStats().Materials == materials.size());
-		CHECK(renderer.GetStats().OpaqueDrawCalls <= 4);
-		Perf::CheckBudget("PerfGPU.Renderer.Render10kMaterials", measurement.MedianMs);
+		// The median frame, and the opaque draw calls of the last one: batching is material-free, so the 10,000 materials
+		// share the draws of the cube's pipeline state (a count, the same in every frame).
+		Perf::CheckBudgetsConfirmed({ "PerfGPU.Renderer.Render10kMaterials", "PerfGPU.Renderer.Render10kMaterials.OpaqueDrawCalls" }, [&]
+		{
+			const Perf::Measurement measurement = MeasureRender(gpu, renderer, scene, GridView(materials.size()), "10k materials");
+			CHECK(renderer.GetStats().Materials == materials.size());
+			return Perf::MetricValues { { "PerfGPU.Renderer.Render10kMaterials", measurement.MedianMs },
+				{ "PerfGPU.Renderer.Render10kMaterials.OpaqueDrawCalls", static_cast<double>(renderer.GetStats().OpaqueDrawCalls) } };
+		});
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

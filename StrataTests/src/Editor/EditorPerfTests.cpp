@@ -33,9 +33,11 @@
 #include <thread>
 #include <vector>
 
-// Perf tests of editor commands on generated scenes (CTest StrataTests.Perf, Release and Dist only; see AGENTS.md "Testing").
-// Statistics: the median time of a command over its calls (200 single-entity commands; three rounds of the 10,000-entity
-// delete and its undo, each of which takes tens of milliseconds), confirmed by measuring again when over its budget.
+// Perf tests of the editor on generated scenes and projects (CTest StrataTests.Perf and, with a GPU, StrataTests.PerfGPU:
+// Release and Dist only; see AGENTS.md "Testing"). Statistics, each confirmed by measuring again when over its budget: the
+// median time of a command over its calls (200 single-entity commands; three rounds of the 10,000-entity delete and its
+// undo, each of which takes tens of milliseconds), the median of batched or repeated calls of the hierarchy's rows, the
+// difference of the median editor frames with and without a panel or a selection, and the longest frame of a re-import.
 
 using namespace Strata;
 using namespace Strata::Tests;
@@ -189,24 +191,34 @@ TEST_SUITE("Perf.Editor")
 		REQUIRE(view.Update(scene));
 		REQUIRE(view.GetRows().size() == c_Roots);
 
-		// Unchanged frames: a few comparisons, whatever the scene's size (timed in batches: each call takes nanoseconds).
+		// Unchanged frames: a few comparisons, whatever the scene's size (timed in batches: each call takes nanoseconds; the
+		// median batch).
 		constexpr int c_Batch = 1000;
-		const Perf::Measurement idle = Perf::Measure("Perf.Editor.HierarchyIdleUpdate100kRoots", 10, 100, [&]
+		Perf::CheckBudgetConfirmed("Perf.Editor.HierarchyIdleUpdate100kRoots", [&]
 		{
-			for (int call = 0; call < c_Batch; call++)
-				view.Update(scene);
+			const Perf::Measurement idle = Perf::Measure("Perf.Editor.HierarchyIdleUpdate100kRoots", 10, 100, [&]
+			{
+				for (int call = 0; call < c_Batch; call++)
+					view.Update(scene);
+			});
+			return idle.MedianMs * 1000.0 / c_Batch;
 		});
 		CHECK(view.GetRebuildCount() == 1);
-		Perf::CheckBudget("Perf.Editor.HierarchyIdleUpdate100kRoots", idle.MedianMs * 1000.0 / c_Batch);
 
-		// An entity created among them: the rows are rebuilt once, in the next frame.
-		const Perf::Measurement rebuild = Perf::Measure("Perf.Editor.HierarchyRebuild100kRoots", 5, 50, [&]
+		// An entity created among them: the rows are rebuilt once, in the next frame (the median rebuild).
+		constexpr size_t c_RebuildCalls = 55;
+		size_t created = 0;
+		Perf::CheckBudgetConfirmed("Perf.Editor.HierarchyRebuild100kRoots", [&]
 		{
-			scene->CreateEntity("Created");
-			REQUIRE(view.Update(scene));
+			const Perf::Measurement rebuild = Perf::Measure("Perf.Editor.HierarchyRebuild100kRoots", 5, c_RebuildCalls - 5, [&]
+			{
+				scene->CreateEntity("Created");
+				REQUIRE(view.Update(scene));
+			});
+			created += c_RebuildCalls;
+			return rebuild.MedianMs;
 		});
-		CHECK(view.GetRows().size() == c_Roots + 55);
-		Perf::CheckBudget("Perf.Editor.HierarchyRebuild100kRoots", rebuild.MedianMs);
+		CHECK(view.GetRows().size() == c_Roots + created);
 	}
 
 	TEST_CASE("The Hierarchy panel's share of an editor frame with 100,000 roots")
@@ -224,19 +236,25 @@ TEST_SUITE("Perf.Editor")
 		REQUIRE(window);
 		REQUIRE(window->Active);
 
-		// The same frames with the panel open and closed: the difference of the medians is what the panel costs.
+		// The same frames with the panel open and closed, both measured afresh by every attempt: the difference of the medians
+		// is what the panel costs. Its budget is far below the authoring workstream's acceptance limit of 0.3 ms (the panel
+		// that drew every root cost 12.9 ms here).
 		constexpr uint32_t c_Warmup = 10;
 		constexpr uint32_t c_Frames = 200;
-		const Perf::Measurement open = Perf::Measure("Perf.Editor.EditorFrame100kRootsHierarchyOpen", c_Warmup, c_Frames, [&] { editor.Frames(1); });
-		panels.SetOpen(EditorPanels::c_Hierarchy, false);
-		editor.Frames(2);
-		REQUIRE_FALSE(window->Active);
-		const Perf::Measurement closed = Perf::Measure("Perf.Editor.EditorFrame100kRootsHierarchyClosed", c_Warmup, c_Frames, [&] { editor.Frames(1); });
-		const double cost = std::max(open.MedianMs - closed.MedianMs, 0.0);
-		MESSAGE("Hierarchy panel: " << cost << " ms of a " << open.MedianMs << " ms frame");
-		// The authoring workstream's acceptance limit (the panel that drew every root cost 12.9 ms here).
-		CHECK(cost <= 0.3);
-		Perf::CheckBudget("Perf.Editor.HierarchyPanelFrame100kRoots", cost * 1000.0);
+		Perf::CheckBudgetConfirmed("Perf.Editor.HierarchyPanelFrame100kRoots", [&]
+		{
+			panels.SetOpen(EditorPanels::c_Hierarchy, true);
+			editor.Frames(2);
+			REQUIRE(window->Active);
+			const Perf::Measurement open = Perf::Measure("Perf.Editor.EditorFrame100kRootsHierarchyOpen", c_Warmup, c_Frames, [&] { editor.Frames(1); });
+			panels.SetOpen(EditorPanels::c_Hierarchy, false);
+			editor.Frames(2);
+			REQUIRE_FALSE(window->Active);
+			const Perf::Measurement closed = Perf::Measure("Perf.Editor.EditorFrame100kRootsHierarchyClosed", c_Warmup, c_Frames, [&] { editor.Frames(1); });
+			const double cost = std::max(open.MedianMs - closed.MedianMs, 0.0);
+			MESSAGE("Hierarchy panel: " << cost << " ms of a " << open.MedianMs << " ms frame");
+			return cost * 1000.0;
+		});
 	}
 
 	TEST_CASE("What 100,000 selected entities add to an editor frame")
@@ -248,15 +266,20 @@ TEST_SUITE("Perf.Editor")
 		std::vector<UUID> all;
 		for (const Entity root : roots)
 			all.push_back(root.GetUUID());
-		editor.Frames(3);
-		const Perf::Measurement none = Perf::Measure("Perf.Editor.EditorFrameNothingSelected", 5, 50, [&] { editor.Frames(1); });
-		editor.Context().SetSelection(all);
-		editor.Frames(3);
-		const Perf::Measurement selected = Perf::Measure("Perf.Editor.EditorFrame100kSelected", 5, 50, [&] { editor.Frames(1); });
-		// The Inspector compares every selected entity's values each frame (mixed values), the Hierarchy marks the rows in view.
-		const double cost = std::max(selected.MedianMs - none.MedianMs, 0.0);
-		MESSAGE("100,000 entities selected: " << cost << " ms per frame");
-		Perf::CheckBudget("Perf.Editor.SelectionFrame100kSelected", cost);
+		// The Inspector compares every selected entity's values each frame (mixed values), the Hierarchy marks the rows in view:
+		// the difference of the median frames with and without the selection, both measured afresh by every attempt.
+		Perf::CheckBudgetConfirmed("Perf.Editor.SelectionFrame100kSelected", [&]
+		{
+			editor.Context().ClearSelection();
+			editor.Frames(3);
+			const Perf::Measurement none = Perf::Measure("Perf.Editor.EditorFrameNothingSelected", 5, 50, [&] { editor.Frames(1); });
+			editor.Context().SetSelection(all);
+			editor.Frames(3);
+			const Perf::Measurement selected = Perf::Measure("Perf.Editor.EditorFrame100kSelected", 5, 50, [&] { editor.Frames(1); });
+			const double cost = std::max(selected.MedianMs - none.MedianMs, 0.0);
+			MESSAGE("100,000 entities selected: " << cost << " ms per frame");
+			return cost;
+		});
 	}
 
 	TEST_CASE("Changing the import settings of a 4096x4096 texture never holds a frame")
@@ -274,15 +297,13 @@ TEST_SUITE("Perf.Editor")
 		REQUIRE_MESSAGE(context.OpenProject(project->Directory, &error), error);
 		REQUIRE(AssetManager::LoadAssetSync<Texture>(texture));
 
-		constexpr int c_Rounds = 3;
-		std::vector<double> maxFrames;
-		for (int round = 0; round < c_Rounds; round++)
+		// One re-import with the given settings, in frames as the editor runs them (the context's update, then the commands',
+		// while the viewport uses the texture); returns the longest frame in milliseconds.
+		const auto reimport = [&](const nlohmann::json& settings)
 		{
-			// Frames as the editor runs them: the context's update, then the commands', while the viewport uses the texture.
 			auto completed = std::make_shared<std::optional<EditorCommandResult>>();
-			const std::string usage = round % 2 == 0 ? "Data" : "Color";
 			auto start = std::chrono::steady_clock::now();
-			runner.Run(context, commands, "asset.setImportSettings", { { "asset", UUIDToJson(texture) }, { "settings", { { "Usage", usage } } } },
+			runner.Run(context, commands, "asset.setImportSettings", { { "asset", UUIDToJson(texture) }, { "settings", settings } },
 				[completed](const EditorCommandResult& result) { *completed = result; });
 			double maxFrame = MillisecondsSince(start);
 			uint32_t frames = 0;
@@ -302,12 +323,22 @@ TEST_SUITE("Perf.Editor")
 			REQUIRE((*completed)->Success);
 			REQUIRE(AssetManager::GetAssetState(texture) == AssetState::Ready);
 			CHECK(frames > 1); // The import outlasted a frame: it really ran beside them
-			// The acceptance limit of the authoring workstream: no editor frame over 33 ms (two frames at 60 Hz).
-			CHECK(maxFrame <= 33.0);
-			maxFrames.push_back(maxFrame);
-		}
+			MESSAGE(settings.dump(), ": ", frames, " frames, the longest ", maxFrame, " ms");
+			return maxFrame;
+		};
+
+		// The longest frame (a maximum by nature: one held frame is the hitch the user sees) while the texture re-imports
+		// uncompressed (decoding, filtering its mips) and then block-compressed again (BC7 on every worker): the authoring
+		// workstream's criterion, whose acceptance limit of 33 ms (two frames at 60 Hz) is far above the budget.
+		Perf::CheckBudgetConfirmed("Perf.Editor.ImportSettings4kMaxFrame", [&]
+		{
+			const double uncompressed = reimport({ { "Compression", "Uncompressed" } });
+			CHECK(AssetManager::GetAsset<Texture>(texture)->GetSpecification().Format == TextureFormat::RGBA8SRGB);
+			const double compressed = reimport({ { "Compression", "Auto" } });
+			CHECK(AssetManager::GetAsset<Texture>(texture)->GetSpecification().Format == GetStressTextureFormat());
+			return std::max(uncompressed, compressed);
+		});
 		CHECK(AssetManager::GetAsset<Texture>(texture)->GetWidth() == 4096u);
-		Perf::CheckBudget("Perf.Editor.ImportSettings4kMaxFrame", Perf::Summarize(maxFrames).MedianMs);
 	}
 }
 
@@ -365,19 +396,16 @@ TEST_SUITE("PerfGPU.Editor")
 			frame();
 		REQUIRE(AssetManager::GetAssetState(texture) == AssetState::Ready);
 
-		constexpr int c_Rounds = 3;
-		std::vector<double> maxFrames;
-		for (int round = 0; round < c_Rounds; round++)
+		// One re-import with the given settings, until the new texture is uploaded and drawn; returns the longest frame.
+		const auto reimport = [&](const nlohmann::json& settings)
 		{
 			auto completed = std::make_shared<std::optional<EditorCommandResult>>();
-			const std::string usage = round % 2 == 0 ? "Data" : "Color";
 			const auto start = std::chrono::steady_clock::now();
-			runner.Run(context, commands, "asset.setImportSettings", { { "asset", UUIDToJson(texture) }, { "settings", { { "Usage", usage } } } },
+			runner.Run(context, commands, "asset.setImportSettings", { { "asset", UUIDToJson(texture) }, { "settings", settings } },
 				[completed](const EditorCommandResult& result) { *completed = result; });
 			double maxFrame = MillisecondsSince(start);
 			uint32_t frames = 0;
 			const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2);
-			// Until the new texture is uploaded and drawn.
 			while ((!*completed || AssetManager::GetAssetState(texture) != AssetState::Ready || renderer.GetStats().PendingAssets > 0)
 				&& std::chrono::steady_clock::now() < deadline)
 			{
@@ -389,14 +417,20 @@ TEST_SUITE("PerfGPU.Editor")
 			REQUIRE((*completed)->Success);
 			REQUIRE(AssetManager::GetAssetState(texture) == AssetState::Ready);
 			CHECK(frames > 1);
-			// The acceptance limit of the authoring workstream: no editor frame over 33 ms (two frames at 60 Hz).
-			CHECK(maxFrame <= 33.0);
-			MESSAGE("Round ", round + 1, ": ", frames, " frames, the longest ", maxFrame, " ms");
-			maxFrames.push_back(maxFrame);
-		}
+			MESSAGE(settings.dump(), ": ", frames, " frames, the longest ", maxFrame, " ms");
+			return maxFrame;
+		};
+
+		// The longest frame of a re-import uncompressed (an 89 MB upload in steps) and of one back to BC7 (every worker
+		// compressing for seconds), as in the test above; the acceptance limit of 33 ms is far above the budget.
+		Perf::CheckBudgetConfirmed("PerfGPU.Editor.ImportSettings4kMaxFrame", [&]
+		{
+			const double uncompressed = reimport({ { "Compression", "Uncompressed" } });
+			const double compressed = reimport({ { "Compression", "Auto" } });
+			return std::max(uncompressed, compressed);
+		});
 		device.WaitForIdle();
 		CHECK(AssetManager::GetAsset<Texture>(texture)->GetWidth() == 4096u);
 		CHECK(gpu.GetNewErrorCount() == 0);
-		Perf::CheckBudget("PerfGPU.Editor.ImportSettings4kMaxFrame", Perf::Summarize(maxFrames).MedianMs);
 	}
 }

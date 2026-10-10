@@ -974,16 +974,16 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
     confirmed by up to two more sweeps (the graphics driver's commit charge varies by about 150 MB from sweep to sweep,
     and a frame the machine's other work preempted finalizes for longer);
   - the all-resident sweep: 300 frames at 1920x1080 over twelve stops whose views take in every district, with a budget
-    that holds every texture, three times. Every run must bring every texture in and evict none, finalize no frame for
-    more than 8 ms and fail no load; the best run must stay below 650 MB of private memory (texture cooking's limit),
-    and `Budgets.json` judges its peak private bytes.
+    that holds every texture, confirmed like the evicting one. Every sweep must bring every texture in, evict none and
+    fail no load; `Budgets.json` judges its peak private bytes (at most 650 MB, texture cooking's limit) and its longest
+    frame finalization (below the 8 ms the streaming work allows any frame).
 
   Then it exports the stress game (a `.stgame` manifest next to the pack) and runs `StrataRuntime` in a window for 600
-  frames from the world's overview camera with `--perf-log` and the evicting sweep's texture budget, three times: every
-  log must have a row per frame, and the slowest frame's `Assets.Finalize` stage, judged by the median run, may not
-  exceed 8 ms. `Perf.TextureCook` (`TextureCookPerfTests.cpp`) imports the same project cold three times and checks the
-  median import time, the stored size of every texture and the pack size, and measures the BC7 encoder's time per block
-  on one thread.
+  frames from the world's overview camera with `--perf-log` and the evicting sweep's texture budget, again confirmed by
+  up to two more runs: every log must have a row per frame, and `Budgets.json` judges the slowest frame's
+  `Assets.Finalize` stage. `Perf.TextureCook` (`TextureCookPerfTests.cpp`) imports the same project cold (once per
+  attempt) and checks the import time, the stored sizes of its largest 2048x2048 texture, of its 4096x4096 texture and of
+  all of them, and the pack size, and measures the BC7 encoder's time per block on one thread.
   `GPU.Assets.Streaming` runs the same sweep on a small stress project under the validation layers.
 
 ## Render scene
