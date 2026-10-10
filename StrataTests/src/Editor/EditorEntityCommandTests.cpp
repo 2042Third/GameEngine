@@ -5,6 +5,7 @@
 #include "Editor/PropertyEdit.h"
 #include "TestHelpers.h"
 
+#include <Strata/Math/Math.h>
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Components.h>
@@ -358,6 +359,60 @@ TEST_SUITE("Editor.Commands")
 		for (int step = 0; step < 5; step++)
 			harness.Run("edit.undo");
 		CHECK(harness.Snapshot() == original);
+	}
+
+	TEST_CASE("Rotation edits of many entities change only the Euler angles the edit changed")
+	{
+		EntityHarness harness;
+		std::vector<Entity> entities;
+		for (int index = 0; index < 3; index++)
+		{
+			const std::string id = harness.Create("Turned", { { "components", { { "Transform", { { "Rotation", { 10.0 * index, 20.0, 30.0 } } } } } } });
+			entities.push_back(harness.Get(id));
+		}
+		const ComponentInfo& transform = *ComponentRegistry::Find("Transform");
+		const PropertyInfo& rotation = *transform.FindProperty("Rotation");
+		const std::optional<SharedPropertyValue> shared = GetSharedProperty(entities, transform, rotation);
+		REQUIRE(shared);
+		CHECK(shared->Mixed);
+		CHECK(shared->MixedComponents == std::array<bool, 4> { true, false, false, false });
+
+		// Yaw (Y) set on all three: each keeps its own pitch (X).
+		const glm::vec3 shown = Math::QuatToEulerDegrees(std::get<glm::quat>(shared->Value));
+		const PropertyValue edited = Math::EulerDegreesToQuat(glm::vec3(shown.x, 45.0f, shown.z));
+		std::string error;
+		REQUIRE_MESSAGE(SetPropertyWithUndo(harness.Context, entities, transform, rotation, shared->Value, edited, &error), error);
+		for (size_t index = 0; index < entities.size(); index++)
+		{
+			const glm::vec3 angles = Math::QuatToEulerDegrees(entities[index].GetComponent<TransformComponent>().Rotation);
+			CHECK(angles.x == doctest::Approx(10.0f * static_cast<float>(index)).epsilon(0.001));
+			CHECK(angles.y == doctest::Approx(45.0f).epsilon(0.001));
+			CHECK(angles.z == doctest::Approx(30.0f).epsilon(0.001));
+		}
+
+		// Components given explicitly: pitch reset to 0 on all, although the first entity's is 0 already (the value shown
+		// equals the new one, so comparing them could not tell what to write). A new step: the edit before has ended.
+		harness.Context.GetUndoStack().BreakMerge();
+		const size_t position = harness.Position();
+		const PropertyValue reset = Math::EulerDegreesToQuat(glm::vec3(0.0f, 45.0f, 30.0f));
+		REQUIRE_MESSAGE(SetPropertyComponentsWithUndo(harness.Context, entities, transform, rotation, reset, { true, false, false, false }, &error), error);
+		CHECK(harness.Position() == position + 1);
+		for (const Entity entity : entities)
+		{
+			const glm::vec3 angles = Math::QuatToEulerDegrees(entity.GetComponent<TransformComponent>().Rotation);
+			CHECK(angles.x == doctest::Approx(0.0f).epsilon(0.001));
+			CHECK(angles.y == doctest::Approx(45.0f).epsilon(0.001));
+		}
+		// And for vectors: only X, each entity keeps its own Y and Z.
+		const PropertyInfo& translation = *transform.FindProperty("Translation");
+		for (size_t index = 0; index < entities.size(); index++)
+		{
+			entities[index].GetComponent<TransformComponent>().Translation = glm::vec3(static_cast<float>(index), 1.0f + static_cast<float>(index), 2.0f);
+			entities[index].MarkModified<TransformComponent>();
+		}
+		REQUIRE(SetPropertyComponentsWithUndo(harness.Context, entities, transform, translation, PropertyValue(glm::vec3(0.0f)), { true, false, false, false }, &error));
+		for (size_t index = 0; index < entities.size(); index++)
+			CHECK(entities[index].GetComponent<TransformComponent>().Translation == glm::vec3(0.0f, 1.0f + static_cast<float>(index), 2.0f));
 	}
 
 	TEST_CASE("Property edits of many entities are one undo step and keep what the edit did not touch")
