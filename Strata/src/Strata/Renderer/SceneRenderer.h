@@ -237,7 +237,8 @@ namespace Strata
 		// empty viewport, or an invalid target or render targets (both logged). Updates the scene's cached world
 		// transforms. With overlays and a target, the image is composed in the output texture and then copied. The
 		// meshes, materials and textures the frame used are let go when it returns, so a renderer that stops rendering
-		// keeps nothing resident.
+		// keeps none of them resident; only the sky light's environment map stays, in the environment cache, until the
+		// environment changes (and the text renderer's glyph atlases keep their fonts).
 		bool Render(Scene& scene, const SceneCamera& camera, nvrhi::IFramebuffer* target = nullptr, const SceneRenderOptions& options = {});
 
 		// RGBA8 UNORM with sRGB-encoded values (display-ready), valid after Render without a target.

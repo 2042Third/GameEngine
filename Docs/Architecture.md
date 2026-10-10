@@ -731,7 +731,10 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   references are held only while the frame is rendered (the command lists keep the GPU resources they use, the bindless
   table its textures), and the manager only during the frame (a weak reference tells the next frame whether it is the
   same one), so what leaves the view becomes evictable after the manager's grace frames, also when the renderer stops
-  rendering (a capture renderer between captures, a hidden view), and a closed project's manager goes with it.
+  rendering (a capture renderer between captures, a hidden view), and a closed project's manager goes with it. Two
+  caches outside the resolve cache keep assets across frames: `SceneRenderer`'s environment cache holds the sky light's
+  environment map (the source of its cube maps) until the environment changes, also while the renderer idles or after
+  its project closed, and `TextRenderer`'s glyph atlases hold their fonts as long as the fonts are loaded.
   Batches name meshes by slot (`SceneDrawBatch::MeshSlot`), so what `GetOpaqueBatches` reports after the frame holds no
   pointers.
 - **Batching**. Draws are gathered in chunks of 2,048 proxies on the job system and merged in chunk order (the same

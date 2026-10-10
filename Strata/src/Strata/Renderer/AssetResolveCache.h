@@ -24,9 +24,10 @@ namespace Strata
 
 	// Resolves asset handles for one renderer, once per handle and frame: the first request of a handle in a frame asks
 	// the asset manager (one GetAsset, which also stamps the asset as used for the residency's least-recently-used order),
-	// later ones in the same frame get the same answer. Nothing outlives the frame: EndFrame lets go of every reference
-	// the frame took and of the manager, so a renderer that stops rendering (a capture renderer between captures, a hidden
-	// view) keeps no asset from being evicted and no asset manager alive. Main thread only.
+	// later ones in the same frame get the same answer. Nothing in the cache outlives the frame: EndFrame lets go of every
+	// reference the frame took and of the manager, so through the cache a renderer that stops rendering (a capture
+	// renderer between captures, a hidden view) keeps no asset from being evicted and no asset manager alive. Main thread
+	// only.
 	class AssetResolveCache
 	{
 	public:

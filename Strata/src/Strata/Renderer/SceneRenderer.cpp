@@ -1501,8 +1501,9 @@ namespace Strata
 	{
 		ST_PROFILE_FUNCTION();
 		const bool rendered = RenderFrame(scene, camera, target, options);
-		// Nothing the frame resolved outlives it, so a renderer that stops rendering (a capture renderer between captures,
-		// a hidden view) keeps no asset resident and no asset manager alive.
+		// The references the frame resolved end with it, so a renderer that stops rendering (a capture renderer between
+		// captures, a hidden view) keeps none of the meshes, materials and textures it drew resident (the environment
+		// cache keeps the sky light's map) and no asset manager alive.
 		ReleaseFrameAssets();
 		return rendered;
 	}
