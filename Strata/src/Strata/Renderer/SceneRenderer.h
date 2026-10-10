@@ -73,10 +73,11 @@ namespace Strata
 	// shows it.
 	struct SceneRenderOptions
 	{
-		// Editor preview lighting: a scene with neither an active directional light nor an active sky light is lit by a
-		// preview sun (a default directional light shining from SceneRenderer::GetPreviewSunDirection) and a procedural
-		// sky with the default SkyLightComponent colors, so unlit content shows its shape. Scenes with any lighting of
-		// their own render unchanged. Never part of the scene (not saved, not in games).
+		// Editor preview lighting: a scene without any active light (directional, point, spot or sky light;
+		// SceneRenderer::NeedsPreviewLighting) is lit by a preview sun (a default directional light shining from
+		// SceneRenderer::GetPreviewSunDirection) and a procedural sky with the default SkyLightComponent colors, so unlit
+		// content shows its shape. Scenes with any lighting of their own, also a dark one lit by a torch, render unchanged.
+		// Never part of the scene (not saved, not in games).
 		bool PreviewEnvironment = false;
 		// Screen-space text (the game's HUD). Editor views turn it off so the HUD does not cover the scene being edited;
 		// world-space text is always drawn.
@@ -128,7 +129,7 @@ namespace Strata
 		// Environment cubes computed this frame (with their irradiance and prefiltered maps): 1 when the environment map
 		// or the procedural sky's parameters (colors, sun size and intensity, the sun's direction and color) changed.
 		uint32_t EnvironmentUpdates = 0;
-		bool PreviewLighting = false;     // SceneRenderOptions::PreviewEnvironment lit the scene (it has no lights of its own)
+		bool PreviewLighting = false;     // SceneRenderOptions::PreviewEnvironment lit the scene (it has no light of its own)
 		uint32_t ShadowCasters = 0;       // Instances drawn into shadow cascades (summed over cascades)
 		uint32_t DebugLines = 0;          // Lines drawn from SceneRenderOptions::DebugShapes
 		uint32_t OutlinedEntities = 0;    // Selected entities of the rendered scene
@@ -158,6 +159,8 @@ namespace Strata
 		// between +X and +Z, so the faces of a box seen from the editor camera's default direction (from +X+Z, above) get
 		// clearly different amounts of light.
 		static glm::vec3 GetPreviewSunDirection();
+		// Whether SceneRenderOptions::PreviewEnvironment lights the scene: it has no active light of any kind.
+		static bool NeedsPreviewLighting(Scene& scene);
 
 		explicit SceneRenderer(const SceneRendererSpecification& specification = {});
 		~SceneRenderer();

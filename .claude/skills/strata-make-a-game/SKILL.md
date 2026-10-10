@@ -89,9 +89,10 @@ start scene), or for a scene of your own `scene.saveAs {"path": "Scenes/Main.sts
 - Light: a `DirectionalLight` (Intensity ~3, pitch -35) plus a `SkyLight`: `"Source": "Procedural"` for a sky (its sun
   follows the directional light; `ZenithColor`, `HorizonColor`, `GroundColor`, `SunSize`, `SunIntensity`), or an
   environment map, or just an `AmbientColor` for fill (`ShowBackground: false` keeps the camera's clear color).
-- Lighting you see in editor-camera captures may not be the game's: a scene without a directional light and without a
-  sky light is shown with *preview lighting* (`"previewLighting": true` in the capture result). The game renders it
-  unlit; judge the look from `{"camera": "scene"}` captures.
+- Lighting you see in editor-camera captures may not be the game's: a scene without any light (directional, point, spot
+  or sky light) is shown with *preview lighting* (`"previewLighting": true` in the capture result). The game renders it
+  unlit; judge the look from `{"camera": "scene"}` captures. A scene with only point or spot lights shows as the game
+  does: as dark as they leave it.
 - Dark scenes: add a `PostProcess` with `AutoExposure: false` (automatic exposure brightens a dark backdrop to gray).
 - Text: `ScreenSpace: true`, `ScreenAnchor` (0..1, top-left origin), `ScreenOffset` (pixels, +Y down), `FontSize` in
   pixels, and `Alignment` - it defaults to `Center`, so a left-hand HUD needs `"Alignment": "Left"`. World text

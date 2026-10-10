@@ -24,6 +24,7 @@
 #include <imgui_internal.h>
 #include <nlohmann/json.hpp>
 
+#include <optional>
 #include <string>
 
 using namespace Strata;
@@ -427,6 +428,35 @@ TEST_SUITE("Editor.Launcher")
 		const nlohmann::json described = editor.Run("viewport.getSettings");
 		CHECK(described["previewLighting"] == false);
 		CHECK(described["gameUI"] == true);
+	}
+
+	TEST_CASE("The preview lighting chip shows whether the scene needs it")
+	{
+		// A new project without a template: an empty scene, nothing lights it.
+		HarnessEditor editor;
+		const std::filesystem::path directory = CreateTemporaryDirectory("LauncherPreviewChip") / "Game";
+		editor.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+		editor.Frames(2);
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		REQUIRE(editor.Context().GetViewport().GetSettings().PreviewLighting);
+		const std::optional<UI::ItemProbe::Item> lit = UI::ItemProbe::Find("Viewport.PreviewLighting");
+		REQUIRE(lit);
+		CHECK(lit->Color == UI::ToColorU32(colors.Accent));
+
+		// A torch is the scene's own light: preview lighting stays on, with nothing to do, and the chip says so.
+		editor.Run("entity.create", { { "name", "Torch" }, { "components", { { "PointLight", nlohmann::json::object() } } } });
+		editor.Frames(1);
+		const std::optional<UI::ItemProbe::Item> waiting = UI::ItemProbe::Find("Viewport.PreviewLighting");
+		REQUIRE(waiting);
+		CHECK(waiting->Color == UI::ToColorU32(colors.Accent, 0.55f));
+		CHECK(editor.Context().GetViewport().GetSettings().PreviewLighting);
+
+		// Off is off, whatever the scene.
+		REQUIRE(editor.Click("Viewport.PreviewLighting"));
+		editor.Frames(1);
+		const std::optional<UI::ItemProbe::Item> off = UI::ItemProbe::Find("Viewport.PreviewLighting");
+		REQUIRE(off);
+		CHECK(off->Color == UI::ToColorU32(colors.TextSecondary));
 	}
 
 	TEST_CASE("The launcher has no id conflicts, at 100% and at 150%")

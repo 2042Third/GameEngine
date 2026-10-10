@@ -111,7 +111,7 @@ namespace Strata::UI
 			return pressed;
 		}
 
-		bool DrawChip(const char* id, const char* icon, const char* label, const char* tooltip, bool on)
+		bool DrawChip(const char* id, const char* icon, const char* label, const char* tooltip, bool on, bool inEffect = true)
 		{
 			const ImGuiStyle& style = ImGui::GetStyle();
 			const ThemeColors& colors = GetThemeColors();
@@ -134,12 +134,19 @@ namespace Strata::UI
 			ImVec4 border = WithAlpha(colors.Border, 0.8f);
 			ImVec4 iconColor = colors.TextSecondary;
 			ImVec4 labelColor = hovered ? colors.Text : colors.TextSecondary;
-			if (on)
+			if (on && inEffect)
 			{
 				background = WithAlpha(colors.AccentMuted, held ? 1.0f : (hovered ? 0.95f : 0.85f));
 				border = WithAlpha(colors.Accent, 0.6f);
 				iconColor = colors.Accent;
 				labelColor = colors.Text;
+			}
+			else if (on)
+			{
+				// On, but waiting for something to do: the surface of an idle chip, the outline and a quiet icon of an on one.
+				background = held ? colors.Control : (hovered ? WithAlpha(colors.Raised, 0.92f) : colors.Overlay);
+				border = WithAlpha(colors.Accent, 0.6f);
+				iconColor = WithAlpha(colors.Accent, 0.55f);
 			}
 			else if (held)
 			{
@@ -162,7 +169,7 @@ namespace Strata::UI
 			ImGui::RenderNavCursor(ImRect(min, max), ImGui::GetItemID());
 
 			ShowTooltip(tooltip);
-			ItemProbe::Record(id);
+			ItemProbe::Record(id, true, ToColorU32(iconColor));
 			return pressed;
 		}
 
@@ -185,9 +192,9 @@ namespace Strata::UI
 		return DrawChip(id, icon, label, tooltip, false);
 	}
 
-	bool ToggleChip(const char* id, const char* icon, const char* label, bool* value, const char* tooltip)
+	bool ToggleChip(const char* id, const char* icon, const char* label, bool* value, const char* tooltip, bool inEffect)
 	{
-		if (!DrawChip(id, icon, label, tooltip, *value))
+		if (!DrawChip(id, icon, label, tooltip, *value, inEffect))
 			return false;
 		*value = !*value;
 		return true;

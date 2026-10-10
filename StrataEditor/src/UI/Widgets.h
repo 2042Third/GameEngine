@@ -38,8 +38,10 @@ namespace Strata::UI
 	// A rounded chip with an icon and a label on a translucent surface (for overlays such as the viewport's) that opens
 	// something: a popup or a menu. Clicking a chip does not focus its window. Returns true when clicked.
 	bool Chip(const char* id, const char* icon, const char* label, const char* tooltip);
-	// A chip that toggles a setting: accent-tinted while on. Flips *value when clicked and returns true then.
-	bool ToggleChip(const char* id, const char* icon, const char* label, bool* value, const char* tooltip);
+	// A chip that toggles a setting: accent-tinted while on. Flips *value when clicked and returns true then. A setting that
+	// is on but has nothing to do now (inEffect false, e.g. preview lighting in a scene with lights of its own) is drawn
+	// muted, only outlined in the accent. The probe records the icon's color.
+	bool ToggleChip(const char* id, const char* icon, const char* label, bool* value, const char* tooltip, bool inEffect = true);
 
 	// A status pill: an icon and text in a color on a tint of that color, sized to its text in the current font. Returns
 	// true when clicked (pills that lead somewhere, e.g. the errors pill opening the Console).

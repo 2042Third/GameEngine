@@ -322,9 +322,31 @@ TEST_SUITE("GPU.ProceduralSky")
 		// A sky light alone (ambient color, no map) counts as lighting too.
 		sun.SetActive(true);
 		scene.DestroyEntity(sun);
-		scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().AmbientColor = glm::vec3(0.2f);
+		Entity sky = scene.CreateEntity("Sky");
+		sky.AddComponent<SkyLightComponent>().AmbientColor = glm::vec3(0.2f);
 		const ReadbackImage ambientOnly = render({});
 		CHECK(MaxDifference(render(preview), ambientOnly) == 0);
+		CHECK_FALSE(renderer.GetStats().PreviewLighting);
+
+		// So does a point light (a dark room lit by a torch shows as the game shows it), and a spot light.
+		scene.DestroyEntity(sky);
+		Entity torch = scene.CreateEntity("Torch");
+		torch.GetComponent<TransformComponent>().Translation = glm::vec3(1.5f, 1.5f, 1.5f);
+		torch.AddComponent<PointLightComponent>().Range = 8.0f;
+		CHECK_FALSE(SceneRenderer::NeedsPreviewLighting(scene));
+		const ReadbackImage torchOnly = render({});
+		CHECK(MaxDifference(render(preview), torchOnly) == 0);
+		CHECK_FALSE(renderer.GetStats().PreviewLighting);
+		CHECK(renderer.GetStats().Lights == 1);
+		scene.DestroyEntity(torch);
+		CHECK(SceneRenderer::NeedsPreviewLighting(scene));
+		Entity spot = scene.CreateEntity("Spot");
+		spot.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 3.0f, 0.0f);
+		spot.GetComponent<TransformComponent>().Rotation = glm::quat(glm::radians(glm::vec3(-90.0f, 0.0f, 0.0f)));
+		spot.AddComponent<SpotLightComponent>().Range = 8.0f;
+		CHECK_FALSE(SceneRenderer::NeedsPreviewLighting(scene));
+		const ReadbackImage spotOnly = render({});
+		CHECK(MaxDifference(render(preview), spotOnly) == 0);
 		CHECK_FALSE(renderer.GetStats().PreviewLighting);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

@@ -180,6 +180,13 @@ namespace Strata
 		return DirectionFromAngles(c_PreviewSunElevation, c_PreviewSunAzimuth);
 	}
 
+	bool SceneRenderer::NeedsPreviewLighting(Scene& scene)
+	{
+		// Any light means the scene is lit the way it is meant to be, a night scene lit by a torch as well as a day.
+		return !HasActiveComponent<DirectionalLightComponent>(scene) && !HasActiveComponent<SkyLightComponent>(scene)
+			&& !HasActiveComponent<PointLightComponent>(scene) && !HasActiveComponent<SpotLightComponent>(scene);
+	}
+
 	SceneCamera SceneCamera::FromEntity(const Scene& scene, Entity entity, float aspectRatio)
 	{
 		SceneCamera camera;
@@ -1907,7 +1914,7 @@ namespace Strata
 		frame.ViewportSize = glm::vec4(glm::vec2(m_ViewportSize), 1.0f / glm::vec2(m_ViewportSize));
 		frame.TimeParams = glm::vec4(static_cast<float>(scene.GetTime()), 0.0f, 0.0f, 0.0f);
 		// Preview lighting only stands in for lighting the scene does not have at all.
-		const bool preview = options.PreviewEnvironment && !HasActiveComponent<DirectionalLightComponent>(scene) && !HasActiveComponent<SkyLightComponent>(scene);
+		const bool preview = options.PreviewEnvironment && NeedsPreviewLighting(scene);
 		m_Stats.PreviewLighting = preview;
 		CollectLights(scene, camera, preview, frame);
 		CollectDraws(scene, camera);

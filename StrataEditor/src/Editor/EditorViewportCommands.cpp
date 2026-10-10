@@ -393,8 +393,8 @@ namespace Strata
 				{ "selectionOutline", BoolSchema("Outline the selected entities") },
 				{ "sceneGizmos", BoolSchema("Draw light, camera and collider shapes") },
 				{ "stats", BoolSchema("Show frame time, draw calls and loading assets over the image") },
-				{ "previewLighting", BoolSchema("Editor views light scenes that have neither a directional light nor a sky light with a preview sun and sky "
-					"(never part of the scene or the game)") },
+				{ "previewLighting", BoolSchema("Editor views light scenes without any light of their own (no directional, point, spot or sky light) "
+					"with a preview sun and sky (never part of the scene or the game)") },
 				{ "gameUI", BoolSchema("Editor views draw the game's screen-space text (its HUD); off by default so the HUD does not cover the scene") },
 				{ "gizmo", { { "type", "string" }, { "enum", { "None", "Translate", "Rotate", "Scale" } }, { "description", "Transform gizmo of the viewport" } } },
 				{ "space", { { "type", "string" }, { "enum", { "Local", "World" } }, { "description", "Space the gizmo works in" } } },

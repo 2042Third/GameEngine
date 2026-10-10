@@ -15,6 +15,7 @@
 #include <Strata/Core/Log.h>
 #include <Strata/Input/Input.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Renderer/SceneRenderer.h>
 #include <Strata/Scene/Scene.h>
 
 #include <imgui.h>
@@ -315,8 +316,14 @@ namespace Strata
 		DrawStatsChip(settings);
 		// View settings of the editor camera outside play mode only: the game always looks the way it will ship.
 		ImGui::SameLine();
-		UI::ToggleChip("Viewport.PreviewLighting", Icons::SunMedium, "Preview lighting", &settings.PreviewLighting,
-			"Light scenes without a light of their own with a preview sun and sky, so their shapes read (editor view only: the game stays unlit)");
+		const Ref<Scene>& scene = context.GetActiveScene();
+		const bool previewNeeded = scene && SceneRenderer::NeedsPreviewLighting(*scene);
+		const char* previewTooltip = !settings.PreviewLighting
+			? "Light scenes without any light of their own with a preview sun and sky, so their shapes read (editor view only: the game stays unlit)"
+			: (previewNeeded ? "This scene has no light of its own: a preview sun and sky light it here so its shapes read. The game will be unlit "
+							   "until it gets lights (the scene camera shows it as the game will)."
+							 : "This scene has lights of its own, so it shows as the game will. Preview lighting lights scenes without any light.");
+		UI::ToggleChip("Viewport.PreviewLighting", Icons::SunMedium, "Preview lighting", &settings.PreviewLighting, previewTooltip, previewNeeded);
 		ImGui::SameLine();
 		UI::ToggleChip("Viewport.GameUI", Icons::Gamepad2, "Game UI", &settings.ShowGameUI,
 			"Show the game's screen-space text (its HUD) in the editor view; the game and the scene camera always show it");

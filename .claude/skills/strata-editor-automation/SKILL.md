@@ -94,8 +94,8 @@ editor started with `--no-gpu` (use `--headless`):
   `{"Image": {"MimeType": "image/png", "Data"}, width, height, camera, overlays, pendingAssets, pendingTextGlyphs,
   previewLighting, screenSpaceTexts, hiddenScreenSpaceTexts, notice?, path?}`. Text is complete in the picture (the
   capture waits a few frames for new glyphs).
-- **Editor views are not the game's view.** With the editor camera outside play mode, a scene that has neither a
-  directional light nor a sky light is lit by *preview lighting* (a sun and a procedural sky that the game will not
+- **Editor views are not the game's view.** With the editor camera outside play mode, a scene without any light (no
+  directional, point, spot or sky light) is lit by *preview lighting* (a sun and a procedural sky that the game will not
   have: the result says `"previewLighting": true`), and the game's screen-space text (its HUD) is hidden
   (`hiddenScreenSpaceTexts` counts it). To see what a player sees, capture with `{"camera": "scene"}` (or while playing).
   `viewport.getSettings` / `viewport.setSettings {previewLighting?, gameUI?, grid?, selectionOutline?, sceneGizmos?,

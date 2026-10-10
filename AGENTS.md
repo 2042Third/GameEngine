@@ -573,9 +573,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   loading arrive unless the camera moved. `ResolveViewportView` picks the camera: the scene's primary camera while
   playing (the editor camera with a notice when there is none), the editor camera when editing or simulating. Views of
   the editor camera outside play mode are *editor views* (`ViewportView::EditorView`): with `PreviewLighting` (on by
-  default) a scene with neither a directional light nor a sky light gets a preview sun and procedural sky, and the game's
-  screen-space text is hidden unless `ShowGameUI` is on (`GetViewportRenderOptions`). Without a project the context keeps
-  an asset manager with only the built-in assets active, so built-in meshes render.
+  default) a scene without any light (directional, point, spot or sky) gets a preview sun and procedural sky, and the
+  game's screen-space text is hidden unless `ShowGameUI` is on (`GetViewportRenderOptions`). Without a project the
+  context keeps an asset manager with only the built-in assets active, so built-in meshes render.
 - **Templates and recent projects:** `project.create {template}` and `scene.new {template}` start from
   `Editor/ProjectTemplates` (`project.templates` lists them): `empty` (the commands' default, what they always did) or
   `basic3d` (a saved, lit start scene `Scenes/Main.stscene`: Main Camera with an audio listener, Sun, procedural Sky,
@@ -662,9 +662,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   (`SceneRenderer::FilterEnvironment`). A procedural cube is computed again only when its parameters
   (`RenderData::ProceduralSkyParameters`, compared exactly) change, into the same textures, and
   `SceneRendererStats::EnvironmentUpdates` counts it; `Rotation` applies to maps only.
-- `SceneRenderOptions` also shapes editor views: `PreviewEnvironment` lights a scene with neither an active directional
-  light nor an active sky light with a preview sun (`SceneRenderer::GetPreviewSunDirection`) and the default procedural
-  sky (`SceneRendererStats::PreviewLighting`); `DrawScreenSpaceText = false` leaves the HUD out (`ScreenSpaceTexts`,
+- `SceneRenderOptions` also shapes editor views: `PreviewEnvironment` lights a scene without any active light
+  (`SceneRenderer::NeedsPreviewLighting`: no directional, point, spot or sky light, so a night scene lit by a torch
+  stays dark) with a preview sun (`SceneRenderer::GetPreviewSunDirection`) and the default procedural sky
+  (`SceneRendererStats::PreviewLighting`); `DrawScreenSpaceText = false` leaves the HUD out (`ScreenSpaceTexts`,
   `HiddenScreenSpaceTexts`). The defaults render a scene exactly as a game shows it.
 - Light units are relative but physically consistent: directional intensity acts like illuminance,
   point and spot intensity like luminous intensity with inverse-square falloff (cut off at `Range`).
