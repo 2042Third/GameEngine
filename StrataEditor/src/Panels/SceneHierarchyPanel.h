@@ -24,6 +24,7 @@ namespace Strata
 	// identical to what automation can do.
 	// - Selection through ImGui's multi-select: click, Ctrl+click toggles, Shift+click and Shift+arrows select ranges,
 	//   Ctrl+A all rows, dragging in the empty space below the rows draws a selection box, Escape or a click there clears.
+	//   While filtering, Ctrl+A, ranges and boxes select only the matches, not the ancestors shown dimmed for context.
 	//   An entity selected elsewhere (the viewport, a tool) is revealed: its ancestors expand and the list scrolls to it.
 	// - Drag and drop: the dragged entities (the selection when a selected row is dragged) go before the row under the
 	//   mouse (its top quarter), after it (its bottom quarter) or into it (the middle), in one entity.setParent; dropped

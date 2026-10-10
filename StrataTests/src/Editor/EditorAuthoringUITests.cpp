@@ -453,6 +453,39 @@ TEST_SUITE("Editor.UI.Hierarchy")
 		CHECK(editor.Hierarchy().FindRowRect(box).has_value());
 	}
 
+	TEST_CASE("While filtering, Ctrl+A and Shift+click ranges select the matches, not the ancestors shown for context")
+	{
+		AuthoringEditor editor;
+		const UUID lamp = editor.Create("Lamp", { { "components", { { "PointLight", nlohmann::json::object() } } } });
+		const UUID group = editor.Create("Group");
+		const UUID inner = editor.Create("Inner", { { "parent", UUIDToJson(group) }, { "components", { { "PointLight", nlohmann::json::object() } } } });
+		const UUID other = editor.Create("Other");
+		editor.Frames(2);
+		REQUIRE(editor.ReplaceText("Hierarchy.Search", "c:PointLight"));
+		editor.Frames(2);
+		// The rows: Lamp, Group (dimmed, for context) and Inner.
+		REQUIRE(editor.Hierarchy().GetView().GetRows().size() == 3);
+		REQUIRE_FALSE(editor.Hierarchy().FindRowRect(other).has_value());
+		EditorContext& context = editor.Context();
+
+		editor.ClickRow(lamp);
+		editor.Press(ImGuiKey_A, ImGuiMod_Ctrl);
+		CHECK(context.GetSelection().size() == 2);
+		CHECK(context.IsSelected(lamp));
+		CHECK(context.IsSelected(inner));
+		CHECK_FALSE(context.IsSelected(group));
+
+		editor.Pause();
+		editor.ClickRow(lamp);
+		editor.ClickRow(inner, ImGuiMod_Shift);
+		CHECK(context.GetSelection().size() == 2);
+		CHECK_FALSE(context.IsSelected(group));
+
+		// A context row clicked on its own is selected: it is shown, after all.
+		editor.ClickRow(group);
+		CHECK(context.GetSelection() == std::vector<UUID> { group });
+	}
+
 	TEST_CASE("The eye toggles an entity, and an empty scene offers Cube, Light and Camera")
 	{
 		AuthoringEditor editor;

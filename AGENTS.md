@@ -688,9 +688,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
 - The hierarchy panel draws the rows of `Editor/HierarchyView` (the visible entities as a flat list; a filter with
   `c:`/`t:` terms shows matches with their ancestors), which are rebuilt only when the hierarchy, the expansion or the
   filter changed: never walk the scene per frame in UI code, and draw long lists through `ImGuiListClipper` (only the
-  rows in view). The rows sit in one `ImGui::BeginMultiSelect` scope whose requests set `EditorContext::SetSelection`;
-  drops map to `entity.setParent {entities, parent, index}` through `HierarchyView::GetDropTarget`; F2 or a double click
-  renames in place.
+  rows in view). The rows sit in one `ImGui::BeginMultiSelect` scope whose requests set `EditorContext::SetSelection`
+  (rows identify themselves by their entity's handle, never by row index, which changes as rows appear; while filtering,
+  Ctrl+A, ranges and boxes take the matches only); drops map to `entity.setParent {entities, parent, index}` through
+  `HierarchyView::GetDropTarget`; F2 or a double click renames in place.
 - The inspectors show the selected entities or one asset (`EditorContext::SetInspectedAsset`, `selection.set {asset}`;
   the entities stay selected). Selecting an entity, deleting the asset or closing the project returns to the entities;
   `GetInspectionVersion` changes with every switch, and the editor brings the matching tab (Inspector or Asset) forward

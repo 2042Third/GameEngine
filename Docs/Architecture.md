@@ -839,7 +839,8 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   - The **Hierarchy** draws `HierarchyView`'s rows through `ImGuiListClipper` inside one `ImGui::BeginMultiSelect` scope
     (the entity's handle as selection data, so a range still starts at the entity clicked first when rows appear above
     it, e.g. a parent opened with its arrow; requests applied to `EditorContext::SetSelection`, the row clicked last
-    being the primary selection; clicks select on release so any row can be dragged, a box starts in the empty space).
+    being the primary selection; clicks select on release so any row can be dragged, a box starts in the empty space;
+    while filtering, Ctrl+A, ranges and boxes skip the ancestors shown for context).
     A primary selection that changed elsewhere is revealed (`HierarchyView::Reveal`, then the list scrolls to its row).
     Rows are tree nodes with the entity's icon (`UI/EntityIcons`), its name, a prefab badge on an instance's root and an eye
     (`entity.setActive`); a drag carries the topmost dragged entities (`DragDrop::c_Entities`) and a drop asks

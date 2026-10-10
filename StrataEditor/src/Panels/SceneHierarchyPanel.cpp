@@ -757,6 +757,11 @@ namespace Strata
 		const std::vector<HierarchyRow>& rows = m_View.GetRows();
 		if (io.Requests.Size == 0 || rows.empty())
 			return;
+		// While filtering, the ancestors shown dimmed for context are not what was searched for: selecting all rows or a range
+		// of rows (Ctrl+A, Shift+click, a box) takes the matches only, so a search by component selects exactly the entities
+		// to edit together (and Delete never takes a context row with all its descendants). A context row clicked on its own
+		// is selected.
+		const bool filtering = m_View.IsFiltering();
 		std::vector<UUID> selection = context.GetSelection();
 		for (const ImGuiSelectionRequest& request : io.Requests)
 		{
@@ -766,7 +771,10 @@ namespace Strata
 				if (request.Selected)
 				{
 					for (const HierarchyRow& row : rows)
-						selection.push_back(row.ID);
+					{
+						if (!filtering || row.IsMatch())
+							selection.push_back(row.ID);
+					}
 				}
 				continue;
 			}
@@ -787,7 +795,10 @@ namespace Strata
 			std::vector<UUID> range;
 			range.reserve(end - begin + 1);
 			for (size_t row = begin; row <= end; row++)
-				range.push_back(rows[row].ID);
+			{
+				if (!filtering || rows[row].IsMatch() || begin == end)
+					range.push_back(rows[row].ID);
+			}
 			// Selected rows move to the end in the order the range was made, so the row clicked last is the primary selection.
 			if (request.RangeDirection < 0)
 				std::reverse(range.begin(), range.end());
