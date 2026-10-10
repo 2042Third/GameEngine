@@ -12,7 +12,7 @@
 		"A commit that adds or lowers a budget states the measured values in its message."
 	],
 	"Perf.Harness.Sort200k": { "Measured": 10.0, "Budget": 15.0, "Unit": "ms" },
-	"PerfGPU.Streaming.MaxFinalizeTime": { "Measured": 4.0, "Budget": 6.0, "Unit": "ms" },
+	"PerfGPU.Streaming.MaxFinalizeTime": { "Measured": 4.8, "Budget": 6.0, "Unit": "ms" },
 	"PerfGPU.Streaming.MaxResidentTextures": { "Measured": 134.2, "Budget": 201.3, "Unit": "MB" },
-	"PerfGPU.Streaming.PeakPrivateMemory": { "Measured": 649.4, "Budget": 974.1, "Unit": "MB" }
+	"PerfGPU.Streaming.PeakPrivateMemory": { "Measured": 720.0, "Budget": 974.1, "Unit": "MB" }
 }

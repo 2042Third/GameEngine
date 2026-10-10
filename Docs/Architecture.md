@@ -454,8 +454,11 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   stress project (`StrataTests/src/Perf/StressProject.h`: 16 textures of 2048² and one of 4096², 447.4 MB of RGBA8, one
   material per district of a 2000-unit world, 2,000 objects over a 512² terrain grid), imports it and builds its pack,
   then runs a 600-frame camera sweep at 60 frames per second with a 128 MB texture budget in a helper process (peak
-  memory belongs to a whole process), three times, and checks the residency, finalization time, settling at the
-  camera's stops and the peak private bytes of the best run against `StrataTests/Perf/Budgets.json`.
+  memory belongs to a whole process), three times. Every run must keep the textures within the budget plus the largest
+  one, finalize no frame for more than 8 ms, show each camera stop complete within 60 frames at rest and fail no load;
+  `StrataTests/Perf/Budgets.json` then judges the peak private bytes of the best run (the graphics driver's commit
+  charge varies from run to run), the largest resident texture memory of any run and the finalization time of the
+  median run.
   `GPU.Assets.Streaming` runs the same sweep on a small stress project under the validation layers.
 
 ## Scripting

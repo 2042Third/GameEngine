@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -101,6 +102,9 @@ namespace Strata::Tests
 		uint32_t FrameRate = 60;
 	};
 
+	// StreamingSweepResult::FramesToSettle of a stop where the camera never drew without pending assets.
+	constexpr uint32_t c_StopNeverSettled = std::numeric_limits<uint32_t>::max();
+
 	// What a sweep measured. Frames run like the application's: the device's frame, the asset manager's Update (finalizing
 	// and evicting), then the scene renders from the sweep's camera, requesting what it shows.
 	struct StreamingSweepResult
@@ -114,8 +118,8 @@ namespace Strata::Tests
 		uint64_t MaxInFlightBytes = 0;        // The streaming queue's high-water mark
 		uint64_t MaxUploadedBytes = 0;        // GPU bytes finalized in one frame, at most
 		float MaxFinalizeMs = 0.0f;           // Finalization time of one frame, at most
-		// Per stop: frames from the first frame at rest until the first frame that drew without pending assets
-		// (the stop's whole hold when that never happened).
+		// Per stop: frames from the first frame at rest until the first frame that drew without pending assets (0 when that
+		// was the first frame at rest), or c_StopNeverSettled when no frame of the stop's hold did.
 		std::vector<uint32_t> FramesToSettle;
 		uint32_t FailedAssets = 0;
 		uint64_t LoadsCompleted = 0;

@@ -180,7 +180,7 @@ TEST_SUITE("Asset.StressProject")
 		result.Frames = 3;
 		result.MaxResidentTextureBytes = 5000000000ull;
 		result.MaxFinalizeMs = 2.5f;
-		result.FramesToSettle = { 0, 7 };
+		result.FramesToSettle = { 0, 7, c_StopNeverSettled };
 		result.PeakPrivateBytes = 700000000;
 		result.PeakWorkingSetBytes = 300000000;
 		result.ResidentTextureBytes = { 1, 2, 3 };

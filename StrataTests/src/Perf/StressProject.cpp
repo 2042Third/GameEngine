@@ -56,8 +56,6 @@ namespace Strata::Tests
 		constexpr float c_TerrainWavelength = 400.0f;
 		constexpr float c_ObjectScale = 4.0f; // Edge of the cubes (diameter of the spheres)
 
-		constexpr uint32_t c_NeverSettled = std::numeric_limits<uint32_t>::max();
-
 		float GetTerrainHeight(float x, float z)
 		{
 			const float frequency = 2.0f * std::numbers::pi_v<float> / c_TerrainWavelength;
@@ -639,7 +637,7 @@ namespace Strata::Tests
 			renderer.SetViewportSize(settings.Width, settings.Height);
 			const float aspectRatio = static_cast<float>(settings.Width) / static_cast<float>(settings.Height);
 			const uint32_t frames = settings.Path.GetFrameCount();
-			result.FramesToSettle.assign(std::max(1u, settings.Path.Stops), c_NeverSettled);
+			result.FramesToSettle.assign(std::max(1u, settings.Path.Stops), c_StopNeverSettled);
 			result.ResidentTextureBytes.reserve(frames);
 			result.PendingAssets.reserve(frames);
 			result.FinalizeMs.reserve(frames);
@@ -676,18 +674,11 @@ namespace Strata::Tests
 				result.MaxResidentTextureBytes = std::max(result.MaxResidentTextureBytes, stats.Resident.GpuTextures);
 				result.MaxUploadedBytes = std::max(result.MaxUploadedBytes, stats.UploadedBytesLastFrame);
 				result.MaxFinalizeMs = std::max(result.MaxFinalizeMs, stats.FinalizeMsLastFrame);
-				if (sweep.Holding && pending == 0 && sweep.Stop < result.FramesToSettle.size() && result.FramesToSettle[sweep.Stop] == c_NeverSettled)
+				if (sweep.Holding && pending == 0 && sweep.Stop < result.FramesToSettle.size() && result.FramesToSettle[sweep.Stop] == c_StopNeverSettled)
 					result.FramesToSettle[sweep.Stop] = sweep.FramesHolding;
 				result.Frames++;
 			}
 			device.WaitForIdle();
-		}
-
-		// Stops that never settled report how long the camera held there.
-		for (size_t stop = 0; stop < result.FramesToSettle.size(); stop++)
-		{
-			if (result.FramesToSettle[stop] == c_NeverSettled)
-				result.FramesToSettle[stop] = stop == 0 ? settings.Path.MoveFrames + settings.Path.HoldFrames : settings.Path.HoldFrames;
 		}
 
 		const AssetManagerStats stats = manager->GetStats();
