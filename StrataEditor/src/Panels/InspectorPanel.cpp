@@ -162,7 +162,24 @@ namespace Strata
 			PropertyInfo Gravity;
 			PropertyInfo FixedTimestep;
 			PropertyInfo MaxFixedSteps;
+			// The physics world's capacities (SceneSettings::PhysicsCapacity): 0 sizes them automatically.
+			PropertyInfo MaxBodies;
+			PropertyInfo MaxBodyPairs;
+			PropertyInfo MaxContactConstraints;
 		};
+
+		PropertyInfo MakeCapacityProperty(const char* name, const char* displayName, const char* tooltip, uint32_t limit)
+		{
+			PropertyInfo property;
+			property.Name = name;
+			property.DisplayName = displayName;
+			property.Tooltip = tooltip;
+			property.Type = PropertyType::UInt;
+			property.Min = 0.0f;
+			property.Max = static_cast<float>(limit); // Powers of two: exact as floats
+			property.Speed = 8.0f;
+			return property;
+		}
 
 		const SceneSettingProperties& GetSceneSettingProperties()
 		{
@@ -187,6 +204,15 @@ namespace Strata
 				properties.MaxFixedSteps.Type = PropertyType::UInt;
 				properties.MaxFixedSteps.Min = 1.0f;
 				properties.MaxFixedSteps.Max = 64.0f;
+				properties.MaxBodies = MakeCapacityProperty("MaxBodies", "Max Bodies",
+					"Bodies the physics world holds, reserved when play starts (about 80 bytes each); 0 sizes it from the bodies the "
+					"scene starts with. Raise it for scenes that create many bodies while they play",
+					PhysicsCapacitySettings::c_MaxBodiesLimit);
+				properties.MaxBodyPairs = MakeCapacityProperty("MaxBodyPairs", "Max Body Pairs",
+					"Pairs of bodies with overlapping bounds per step (about 90 bytes each); 0: automatic",
+					PhysicsCapacitySettings::c_MaxBodyPairsLimit);
+				properties.MaxContactConstraints = MakeCapacityProperty("MaxContactConstraints", "Max Contacts",
+					"Contacts solved per step (about 830 bytes each); 0: automatic", PhysicsCapacitySettings::c_MaxContactConstraintsLimit);
 				return properties;
 			}();
 			return s_Properties;
@@ -749,6 +775,16 @@ namespace Strata
 					[&](const PropertyValue& value) { shown.FixedTimestep = std::get<float>(value); });
 				draw(properties.MaxFixedSteps, shown.MaxFixedStepsPerFrame, PropertyValue(defaults.MaxFixedStepsPerFrame),
 					[&](const PropertyValue& value) { shown.MaxFixedStepsPerFrame = std::get<uint32_t>(value); });
+				// Capacities take effect when a physics world is created (the next play start). A typed value is not clamped by the
+				// field, and scene.setSettings refuses one over the limit: it becomes the limit.
+				PhysicsCapacitySettings& capacity = shown.PhysicsCapacity;
+				draw(properties.MaxBodies, capacity.MaxBodies, PropertyValue(defaults.PhysicsCapacity.MaxBodies), [&](const PropertyValue& value)
+					{ capacity.MaxBodies = std::min(std::get<uint32_t>(value), PhysicsCapacitySettings::c_MaxBodiesLimit); });
+				draw(properties.MaxBodyPairs, capacity.MaxBodyPairs, PropertyValue(defaults.PhysicsCapacity.MaxBodyPairs), [&](const PropertyValue& value)
+					{ capacity.MaxBodyPairs = std::min(std::get<uint32_t>(value), PhysicsCapacitySettings::c_MaxBodyPairsLimit); });
+				draw(properties.MaxContactConstraints, capacity.MaxContactConstraints, PropertyValue(defaults.PhysicsCapacity.MaxContactConstraints),
+					[&](const PropertyValue& value)
+					{ capacity.MaxContactConstraints = std::min(std::get<uint32_t>(value), PhysicsCapacitySettings::c_MaxContactConstraintsLimit); });
 				UI::EndPropertyTable();
 			}
 			// A drag shows its value here and applies it once, when it ends: one scene.setSettings, one undo step.
@@ -758,10 +794,13 @@ namespace Strata
 			{
 				const SceneSettings settings = *m_SettingsDraft;
 				m_SettingsDraft.reset();
+				const PhysicsCapacitySettings& capacity = settings.PhysicsCapacity;
 				RunEditorCommand(context, commands, "scene.setSettings", {
 					{ "gravity", { settings.Gravity.x, settings.Gravity.y, settings.Gravity.z } },
 					{ "fixedTimestep", settings.FixedTimestep },
-					{ "maxFixedStepsPerFrame", settings.MaxFixedStepsPerFrame } });
+					{ "maxFixedStepsPerFrame", settings.MaxFixedStepsPerFrame },
+					{ "physicsCapacity", { { "maxBodies", capacity.MaxBodies }, { "maxBodyPairs", capacity.MaxBodyPairs },
+						{ "maxContactConstraints", capacity.MaxContactConstraints } } } });
 			}
 		}
 		DrawSky(context, commands);

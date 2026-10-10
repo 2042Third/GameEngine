@@ -985,6 +985,38 @@ TEST_SUITE("Editor.UI.Inspector")
 		CHECK(editor.Context().GetPrimarySelection().HasComponent<SkyLightComponent>());
 	}
 
+	TEST_CASE("The scene's settings set the physics world's capacities, one undo step each, within their limits")
+	{
+		AuthoringEditor editor;
+		editor.Context().ClearSelection();
+		editor.Frames(2);
+		const auto capacity = [&]() { return editor.Context().GetActiveScene()->GetSettings().PhysicsCapacity; };
+		REQUIRE(capacity() == PhysicsCapacitySettings());
+		CHECK(editor.ProbeText("Inspector.Scene.MaxBodies.Label") == "Max Bodies");
+		CHECK(editor.ProbeText("Inspector.Scene.MaxBodyPairs.Label") == "Max Body Pairs");
+		CHECK(editor.ProbeText("Inspector.Scene.MaxContactConstraints.Label") == "Max Contacts");
+
+		const size_t position = editor.UndoPosition();
+		editor.TypeNumber("Inspector.Scene.MaxBodies", "50000");
+		CHECK(capacity().MaxBodies == 50'000u);
+		CHECK(capacity().MaxBodyPairs == 0u);
+		CHECK(editor.UndoPosition() == position + 1);
+		editor.TypeNumber("Inspector.Scene.MaxContactConstraints", "4096");
+		CHECK(capacity().MaxContactConstraints == 4096u);
+		CHECK(capacity().MaxBodies == 50'000u);
+		CHECK(editor.UndoPosition() == position + 2);
+		// More than a world may reserve is the limit (scene.setSettings refuses more).
+		editor.TypeNumber("Inspector.Scene.MaxBodyPairs", "999999999");
+		CHECK(capacity().MaxBodyPairs == PhysicsCapacitySettings::c_MaxBodyPairsLimit);
+
+		editor.Run("edit.undo");
+		editor.Run("edit.undo");
+		editor.Frames(1);
+		CHECK(capacity().MaxBodies == 50'000u);
+		CHECK(capacity().MaxContactConstraints == 0u);
+		CHECK(capacity().MaxBodyPairs == 0u);
+	}
+
 	TEST_CASE("The asset picker searches the assets of the property's type and picks with Enter")
 	{
 		AuthoringEditor editor;
