@@ -12,15 +12,22 @@ that can affect performance, on the reference machine (AGENTS.md, "Testing"):
 Each run executes `ctest --preset <preset> -L perf` from the repository and keeps its log and its results file
 (<build>/PerfResults/<config>.json, which CTest clears at the start of every run) in the output directory. The report:
 
-- per run: whether CTest passed, how long it took, how busy the machine's CPUs were meanwhile (the perf tests included;
-  Windows; elsewhere the load average), the canary (Perf.Harness.Sort200k, a fixed sort) relative to its reference
-  measurement, how many metrics needed confirmation and failed, the failed tests, and every metric that needed more
-  than one attempt of its confirmed check (with the attempts). A run in which many unrelated metrics were over budget
-  in every attempt at once, on a busy machine and with a slow canary, was slowed down by the machine's other work
-  rather than by the code;
+- per run: whether CTest passed, how long it took, how busy the machine's CPUs were meanwhile (the perf tests included,
+  which alone keep the reference machine about 20% busy; Windows; elsewhere the load average), the canary
+  (Perf.Harness.Sort200k, a fixed single-threaded sort) relative to its reference measurement, how many metrics needed
+  confirmation and failed, the failed tests, and every metric that needed more than one attempt of its confirmed check
+  (with the attempts);
 - per metric: its unit, budget and target, in how many runs it was recorded, the minimum, median and maximum of its
   value (the deciding value of a confirmed check), the largest value as a share of the budget, the pass rate, and how
-  many runs confirmed it with more than one attempt.
+  many runs confirmed it with more than one attempt;
+- how many runs passed, the longest series of passing runs and the last one.
+
+Load or regression: a confirmed check's attempts follow each other within about a minute, so other work that lasts
+longer (a build) slows all of them, and on a shared machine that has failed single metrics as often as many. A failure
+in a run on a busy machine therefore says nothing about the code, however many metrics failed: run the failing suite
+again on a quiet machine (alone, or this tool with --wait-quiet), where a regression stays over its budget in every
+attempt. The canary only shows whether one thread runs at full speed (a throttled or oversubscribed machine): load on
+many cores leaves a core free for it, so it is usually unchanged in runs that load failed.
 
 Exit code: 0 when every run passed (with --results: every recorded value was within its budget), 1 otherwise, 2 for
 usage errors. Only the standard library is used.
@@ -235,7 +242,8 @@ def report(runs, budgets):
         entries = [entry for entry in results.values() if isinstance(entry, dict)]
         confirmed = sum(1 for entry in entries if len(entry.get("Attempts", [])) > 1)
         over = sum(1 for entry in entries if entry.get("Value", 0) > entry.get("Budget", 0))
-        # Many unrelated metrics over budget at once is the signature of a busy machine, one or two of a regression.
+        # The tally does not tell load from a regression (load has failed single metrics): the run's load and a rerun on a
+        # quiet machine do, see the module's description.
         tally = f"; {confirmed} of {len(entries)} metrics needed confirmation, {over} failed" if entries else ""
         print(f"- {run['name']}: {state}{duration}{busy}{speed}{tally}")
         for test in run["failed_tests"]:
@@ -270,10 +278,11 @@ def report(runs, budgets):
         print("(no results)")
 
     passed_runs = sum(1 for run in runs if run["passed"])
-    streak = 0
+    streak = longest = 0
     for run in runs:
         streak = streak + 1 if run["passed"] else 0
-    print(f"\n{passed_runs} of {len(runs)} runs passed; the last {streak} in a row.")
+        longest = max(longest, streak)
+    print(f"\n{passed_runs} of {len(runs)} runs passed; at most {longest} in a row, the last {streak}.")
     return passed_runs == len(runs)
 
 

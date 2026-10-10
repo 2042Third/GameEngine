@@ -25,8 +25,10 @@ using namespace Strata;
 namespace
 {
 
-	// The harness's own metric: a fixed CPU workload. When it exceeds its budget, the machine itself is slow or busy,
-	// which explains other perf failures of the same run.
+	// The harness's own metric: a fixed single-threaded CPU workload. When it exceeds its budget, the machine itself is
+	// slow (throttled, or busier than it has cores), which explains other perf failures of the same run. The converse does
+	// not hold: load on many cores of a large machine leaves one core free for it while it slows parallel work, so the
+	// canary is usually unchanged in runs that load failed.
 	constexpr std::string_view c_CanaryMetric = "Perf.Harness.Sort200k";
 	constexpr std::string_view c_MissingMetric = "Perf.Harness.MetricWithoutBudget";
 

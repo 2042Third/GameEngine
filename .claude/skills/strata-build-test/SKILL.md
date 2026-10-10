@@ -43,11 +43,13 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
   `StrataTests.GPU` (label `gpu`), the perf tests `StrataTests.Perf` and `StrataTests.PerfGPU` (suites `Perf.*`
   and `PerfGPU.*`, label `perf`, Release and Dist only, after `StrataTests.PerfResults.Clean`; budgets, confirmed
   checks and the ratchet rule in AGENTS.md, "Testing": a metric over its budget is measured again, up to three attempts,
-  and fails only when all are over, so a failing perf test that prints "over the budget in all 3 attempts" next to a
-  slow canary `Perf.Harness.Sort200k` ran on a busy machine; `PerfGPU.Editor` writes a 100,000- and a 1,000,000-entity
-  scene to a temporary project and opens a maximized StrataEditor on them for about 20 seconds, again to confirm a
-  failure; `PerfGPU.Streaming` writes and imports a 447 MB stress project and runs its camera sweep in a helper process,
-  about 15 s, and up to two more sweeps to confirm a failure), `StrataEditor.Smoke`
+  and fails only when all are over; the attempts follow each other within about a minute, so load that lasts longer
+  (another build) can still fail one metric or many: before treating "over the budget in all 3 attempts" as a
+  regression, run the suite again on a quiet machine (the canary `Perf.Harness.Sort200k` is single-threaded and usually
+  unchanged under load on many cores, so a normal canary does not rule load out); `PerfGPU.Editor` writes a 100,000-
+  and a 1,000,000-entity scene to a temporary project and opens a maximized StrataEditor on them for about 20 seconds,
+  again to confirm a failure; `PerfGPU.Streaming` writes and imports a 447 MB stress project and runs its camera sweep
+  in a helper process, about 15 s, and up to two more sweeps to confirm a failure), `StrataEditor.Smoke`
   (the real editor in a window with `StrataTests/Editor/SmokeCommands.json.in`, configured into the build tree, label
   `gpu`; it creates a project in `build/<preset>/StrataTests/SmokeProject` (emptied first by `StrataEditor.SmokeClean`),
   so the editor rather than the launcher shows, captures the viewport to `SmokeViewport.png`/`SmokeSceneCamera.png` in

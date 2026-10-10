@@ -130,9 +130,13 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   commits that add or lower budgets state the measured values. Lower must be better (time per item, not items per
   second). **Stability:** `Tools/PerfStability.py --runs 5` runs `-L perf` five times and reports per metric the
   minimum, median and maximum, the pass rate and how often it needed confirmation, and per run how busy the machine
-  was, the attempts of every confirmed metric and the canary `Perf.Harness.Sort200k` against its reference (many
-  unrelated metrics over budget at once, a slow canary and a busy machine mean load, not a regression);
-  `--wait-quiet <percent>` starts each run only once the machine is that quiet (machines shared with other work), and
+  was, the attempts of every confirmed metric and the canary `Perf.Harness.Sort200k` against its reference. **Load or
+  regression:** a check's attempts follow each other within about a minute, so other work that lasts longer (a build)
+  can fail one metric as well as many, and a failure in a run on a busy machine says nothing about the code: run the
+  failing suite again on a quiet machine, where a regression stays over its budget in every attempt. The canary is a
+  single-threaded workload: it shows a throttled or oversubscribed machine, and load on many cores usually leaves it
+  unchanged. `--wait-quiet <percent>` starts each run only once the machine is that quiet (machines shared with other
+  work; the perf tests alone keep the reference machine about 20% busy), and
   `--results <files>` reports on kept results files. Run it on the reference machine before merging changes to budgets
   or perf tests. GPU perf suites get the shared device
   without validation layers (the CTest sets `STRATA_TEST_GPU_VALIDATION=0`; `PerfGPU.Harness` fails without it)
