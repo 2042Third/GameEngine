@@ -281,6 +281,52 @@ TEST_SUITE("Editor.Commands")
 		harness.CheckCaches();
 	}
 
+	TEST_CASE("entity.duplicate remaps references between copies in different sibling lists")
+	{
+		EntityHarness harness;
+		const std::string outside = harness.Create("Outside");
+		const std::string a = harness.Create("A");
+		const std::string parent = harness.Create("P", { { "components", { { "Transform", { { "Translation", { 10, 0, 0 } } } } } } });
+		const std::string x = harness.Create("X", { { "parent", parent } });
+		const std::string y = harness.Create("Y", { { "parent", parent }, { "components", { { "Transform", { { "Translation", { 0, 2, 0 } } } } } } });
+		// A (top level) refers to Y (a child of P), and Y to A: across the two sibling lists.
+		AddEntityFields(harness.Get(a), harness.Get(y).GetUUID(), harness.Get(outside).GetUUID());
+		AddEntityFields(harness.Get(y), harness.Get(a).GetUUID(), harness.Get(x).GetUUID());
+		const nlohmann::json original = harness.Snapshot();
+		const size_t position = harness.Position();
+
+		const nlohmann::json duplicated = harness.Run("entity.duplicate", { { "entities", { a, y } } });
+		CHECK(harness.Position() == position + 1);
+		REQUIRE(duplicated["entities"].size() == 2);
+		const Entity copyA = harness.Get(duplicated["entities"][0].get<std::string>());
+		const Entity copyY = harness.Get(duplicated["entities"][1].get<std::string>());
+		REQUIRE(copyA);
+		REQUIRE(copyY);
+		// Each copy right after its original, in its original's sibling list.
+		CHECK(harness.Names() == std::vector<std::string> { "Outside", "A", "A", "P" });
+		CHECK(harness.Names(parent) == std::vector<std::string> { "X", "Y", "Y" });
+		CHECK_FALSE(copyA.GetParent());
+		CHECK(copyY.GetParent() == harness.Get(parent));
+		// The copy of Y keeps its place in the world (its local transform, under the same parent).
+		CHECK(copyY.GetComponent<TransformComponent>().Translation == glm::vec3(0.0f, 2.0f, 0.0f));
+		harness.CheckCaches();
+		CHECK(glm::vec3(harness.GetScene().GetWorldTransform(copyY)[3]) == glm::vec3(10.0f, 2.0f, 0.0f));
+		// References between the copies point at the copies, also across the sibling lists; others stay.
+		CHECK(GetField(copyA, "Inner") == copyY.GetUUID());
+		CHECK(GetField(copyA, "Outer") == harness.Get(outside).GetUUID());
+		CHECK(GetField(copyY, "Inner") == copyA.GetUUID());
+		CHECK(GetField(copyY, "Outer") == harness.Get(x).GetUUID());
+
+		// Undo removes both copies; redo brings them back with the same IDs and references.
+		const UUID copyYId = copyY.GetUUID();
+		harness.Run("edit.undo");
+		CHECK(harness.Snapshot() == original);
+		harness.Run("edit.redo");
+		CHECK(GetField(harness.Get(duplicated["entities"][0].get<std::string>()), "Inner") == copyYId);
+		CHECK(harness.Names(parent) == std::vector<std::string> { "X", "Y", "Y" });
+		harness.CheckCaches();
+	}
+
 	TEST_CASE("component.set {entities} sets the same values on every entity in one undo step")
 	{
 		EntityHarness harness;

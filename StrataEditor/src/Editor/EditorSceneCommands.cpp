@@ -390,45 +390,39 @@ namespace Strata
 					return EditorCommandResult::Fail(fmt::format("The scene is full: it holds at most {} entities", Scene::c_MaxEntities));
 
 				// Siblings after an original shift by one; removing the copies (undo) or reinserting them at their recorded
-				// positions (redo) shifts them back, so only the copies are part of the edit. The copies of each sibling list are
-				// made in one batch and placed in one batch, so duplicating many entities of a long list stays linear.
+				// positions (redo) shifts them back, so only the copies are part of the edit. All copies are made in one batch,
+				// so references between any of them point at the copies, also across sibling lists; they are made at the top
+				// level (the copies at the end of the roots, which leaves every original's position as it was) and then placed in
+				// one batch under their originals' parents, keeping the local transforms they had there. Both batches stay linear
+				// when many entities of a long list are duplicated.
 				SceneEditTransaction transaction(scene, originals.size() == 1 ? "Duplicate Entity" : "Duplicate Entities", {});
-				std::vector<Entity> copies(originals.size());
-				std::vector<Scene::EntityPlacement> placements;
-				std::unordered_map<UUID, std::vector<size_t>> groups; // Parent -> originals under it, in the order given
-				std::vector<UUID> parents;                          // The groups in the order their first original was given
+				EntityInstantiationOptions options;
+				options.GenerateNewUUIDs = true;
+				options.ReportUnknownComponents = false; // Entities of this scene: their unknown components are no news
+				std::string error;
+				const std::vector<Entity> copies = SceneSerializer::DeserializeEntities(scene, SceneSerializer::SerializeEntities(scene, originals), options, &error);
+				for (const Entity copy : copies)
+					transaction.TrackCreated(copy.GetUUID());
+				if (!error.empty() || copies.size() != originals.size())
+					return RollBack(transaction, fmt::format("Duplicating failed: {}", error.empty() ? std::string("the copies do not match") : error), EditorCommandError::Failed);
+
+				// Each copy right after its original: the n-th original of a sibling list (in list order) moves n copies further.
+				std::unordered_map<UUID, std::vector<std::pair<size_t, size_t>>> lists; // Parent -> (original's position, index into originals)
+				std::vector<UUID> parents;                                            // The lists in the order their first original was given
 				for (size_t index = 0; index < originals.size(); index++)
 				{
 					const Entity parent = originals[index].GetParent();
 					const UUID parentId = parent ? parent.GetUUID() : UUID::Null();
-					auto [group, added] = groups.try_emplace(parentId);
+					auto [list, added] = lists.try_emplace(parentId);
 					if (added)
 						parents.push_back(parentId);
-					group->second.push_back(index);
+					list->second.emplace_back(scene.GetSiblingIndex(originals[index]), index);
 				}
+				std::vector<Scene::EntityPlacement> placements;
+				placements.reserve(copies.size());
 				for (const UUID parentId : parents)
 				{
-					const std::vector<size_t>& members = groups.at(parentId);
-					std::vector<Entity> roots;
-					for (const size_t index : members)
-						roots.push_back(originals[index]);
-					EntityInstantiationOptions options;
-					options.GenerateNewUUIDs = true;
-					options.Parent = scene.GetEntityByUUID(parentId);
-					options.ReportUnknownComponents = false; // Entities of this scene: their unknown components are no news
-					std::string error;
-					const std::vector<Entity> created = SceneSerializer::DeserializeEntities(scene, SceneSerializer::SerializeEntities(scene, roots), options, &error);
-					for (const Entity copy : created)
-						transaction.TrackCreated(copy.GetUUID());
-					if (!error.empty() || created.size() != members.size())
-						return RollBack(transaction, fmt::format("Duplicating failed: {}", error.empty() ? std::string("the copies do not match") : error), EditorCommandError::Failed);
-					for (size_t member = 0; member < members.size(); member++)
-						copies[members[member]] = created[member];
-
-					// Each copy right after its original: the n-th original of the list (in list order) moves n copies further.
-					std::vector<std::pair<size_t, size_t>> positions; // (original's position, index into originals)
-					for (const size_t index : members)
-						positions.emplace_back(scene.GetSiblingIndex(originals[index]), index);
+					std::vector<std::pair<size_t, size_t>>& positions = lists.at(parentId);
 					std::sort(positions.begin(), positions.end());
 					for (size_t rank = 0; rank < positions.size(); rank++)
 						placements.push_back({ copies[positions[rank].second].GetUUID(), parentId, positions[rank].first + rank + 1 });
