@@ -4,6 +4,7 @@
 #include "Editor/ImGuiHarness.h"
 #include "EditorLayer.h"
 #include "FeatureTest/FeatureTestUtils.h"
+#include "Panels/ConsolePanel.h"
 #include "TestHelpers.h"
 #include "UI/EditorFonts.h"
 #include "UI/EditorPanelRegistry.h"
@@ -12,6 +13,7 @@
 #include "UI/Theme.h"
 #include "UI/Widgets.h"
 
+#include <Strata/Core/Log.h>
 #include <Strata/Events/ApplicationEvent.h>
 
 #include <imgui.h>
@@ -182,7 +184,7 @@ TEST_SUITE("Editor.UI")
 		editor.Frames(3);
 		CHECK(editor.Harness.GetHoveredItemIdCount() <= 1);
 
-		// The panels are up, and the toolbar.
+		// The panels are up, the toolbar and the status bar too.
 		for (const char* panel : { EditorPanels::c_Viewport, EditorPanels::c_Hierarchy, EditorPanels::c_Inspector, EditorPanels::c_ContentBrowser,
 			EditorPanels::c_Console })
 		{
@@ -191,7 +193,7 @@ TEST_SUITE("Editor.UI")
 			REQUIRE(window);
 			CHECK(window->Active);
 		}
-		for (const char* item : { "Toolbar.Play", "Toolbar.Move", "Toolbar.BuildScripts", "Viewport.Grid" })
+		for (const char* item : { "Toolbar.Play", "Toolbar.Move", "Toolbar.BuildScripts", "Status.PlayState", "Status.Assets", "Viewport.Grid" })
 		{
 			CAPTURE(item);
 			CHECK(UI::ItemProbe::Find(item).has_value());
@@ -374,6 +376,26 @@ TEST_SUITE("Editor.UI")
 		registry.SetOpen("Closed", true);
 		harness.Frame([&]() { registry.OnImGuiRender(panelContext); });
 		CHECK(hidden->Draws == 1);
+	}
+
+	TEST_CASE("The status bar counts unread errors and opens the Console")
+	{
+		HarnessEditor editor;
+		editor.Frames(2);
+		CHECK_FALSE(UI::ItemProbe::Find("Status.Errors").has_value());
+		editor.Layer->GetPanels().SetOpen(EditorPanels::c_Console, false);
+		ST_ERROR("EditorUITests: an error for the status bar");
+		editor.Frames(1);
+		const ConsolePanel* console = editor.Layer->GetPanels().Get<ConsolePanel>(EditorPanels::c_Console);
+		REQUIRE(console);
+		CHECK(console->GetUnreadErrors() == 1);
+		REQUIRE(UI::ItemProbe::Find("Status.Errors").has_value());
+
+		REQUIRE(editor.Click("Status.Errors"));
+		editor.Frames(2);
+		CHECK(editor.Layer->GetPanels().IsOpen(EditorPanels::c_Console));
+		CHECK(console->GetUnreadErrors() == 0);
+		CHECK_FALSE(UI::ItemProbe::Find("Status.Errors").has_value());
 	}
 
 	TEST_CASE("The widget kit: buttons, chips, pills, cards and dialogs")

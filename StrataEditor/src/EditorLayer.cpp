@@ -5,6 +5,7 @@
 #include "Panels/InspectorPanel.h"
 #include "Panels/SceneHierarchyPanel.h"
 #include "Panels/ViewportPanel.h"
+#include "UI/EditorFonts.h"
 #include "UI/FileDialogs.h"
 #include "UI/Icons.h"
 #include "UI/Theme.h"
@@ -25,6 +26,8 @@ namespace Strata
 	{
 
 		constexpr const char* c_EditorStatusSection = "editor";
+		// Between the parts of a pill's text.
+		constexpr const char* c_Separator = " \xC2\xB7 ";
 
 		// Fields of the snap steps popup, in text heights.
 		constexpr float c_SnapFieldWidthInFontSizes = 8.0f;
@@ -40,6 +43,11 @@ namespace Strata
 		glm::vec4 ToVec4(const ImVec4& color)
 		{
 			return glm::vec4(color.x, color.y, color.z, color.w);
+		}
+
+		std::string FormatMegabytes(uint64_t bytes)
+		{
+			return fmt::format("{:.1f} MB", static_cast<double>(bytes) / (1024.0 * 1024.0));
 		}
 
 	}
@@ -450,7 +458,9 @@ namespace Strata
 	void EditorLayer::DrawDockspace()
 	{
 		const ImGuiViewport* viewport = ImGui::GetMainViewport();
-		const float statusBarHeight = ImGui::GetFrameHeight();
+		const ImGuiStyle& style = ImGui::GetStyle();
+		// The status bar uses the caption size.
+		const float statusBarHeight = UI::GetTextSize(UI::TextSize::Caption) * style.FontScaleMain * style.FontScaleDpi + style.FramePadding.y * 2.0f;
 		ImGui::SetNextWindowPos(viewport->WorkPos);
 		ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, viewport->WorkSize.y - statusBarHeight));
 		ImGui::SetNextWindowViewport(viewport->ID);
@@ -494,11 +504,19 @@ namespace Strata
 		ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, statusBarHeight));
 		ImGui::SetNextWindowViewport(viewport->ID);
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(ImGui::GetStyle().FramePadding.x, 0.0f));
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(style.FramePadding.x, 0.0f));
+		ImGui::PushStyleColor(ImGuiCol_WindowBg, UI::GetThemeColors().Chrome);
 		ImGui::Begin("StatusBar", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings
 			| ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoFocusOnAppearing);
-		ImGui::PopStyleVar(2);
+		ImGui::PopStyleColor();
+		ImGui::PopStyleVar(3);
+		// Pills sit closer together than other items.
+		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(style.ItemSpacing.x * 0.5f, style.ItemSpacing.y));
+		UI::PushFont(UI::EditorFont::Regular, UI::TextSize::Caption);
 		DrawStatusBar();
+		ImGui::PopFont();
+		ImGui::PopStyleVar();
 		ImGui::End();
 	}
 
@@ -735,68 +753,101 @@ namespace Strata
 
 	void EditorLayer::DrawStatusBar()
 	{
-		ImGui::AlignTextToFramePadding();
-		ImGui::TextDisabled("%s", SceneStateToString(m_Context.GetSceneState()));
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+
+		// Play state.
+		const SceneState state = m_Context.GetSceneState();
+		const bool paused = m_Context.IsPaused();
+		const char* stateIcon = paused ? Icons::Pause : (state == SceneState::Play ? Icons::Play : (state == SceneState::Simulate ? Icons::Atom : Icons::PencilRuler));
+		const char* stateText = paused ? "Paused" : (state == SceneState::Play ? "Playing" : (state == SceneState::Simulate ? "Simulating" : "Editing"));
+		const ImVec4& stateColor = paused ? colors.PlayState.Paused
+			: (state == SceneState::Play ? colors.PlayState.Play : (state == SceneState::Simulate ? colors.PlayState.Simulate : colors.PlayState.Edit));
+		UI::Pill("Status.PlayState", stateIcon, stateText, stateColor, "The scene's state: changes made while it runs are discarded when it stops");
+
+		// Frame time.
+		const float framerate = ImGui::GetIO().Framerate;
+		const std::string frame = fmt::format("{:.1f} ms{}{:.0f} FPS", framerate > 0.0f ? 1000.0f / framerate : 0.0f, c_Separator, framerate);
 		ImGui::SameLine();
-		ImGui::TextDisabled("|  %.1f FPS", ImGui::GetIO().Framerate);
+		UI::Pill("Status.Frame", Icons::Gauge, frame, colors.TextSecondary, "Frame time and rate");
+
+		// Assets.
+		if (const EditorAssetManager* assets = m_Context.GetAssetManager())
+		{
+			const AssetManagerStats stats = assets->GetStats();
+			const std::string text = fmt::format("{} ready{}{} loading{}{}", stats.LoadedAssets, c_Separator, stats.LoadingAssets, c_Separator,
+				FormatMegabytes(stats.LoadedMemory));
+			const std::string tooltip = stats.FailedAssets > 0
+				? fmt::format("{} assets failed to load (see the Console). Loaded assets use {}.", stats.FailedAssets, FormatMegabytes(stats.LoadedMemory))
+				: fmt::format("Loaded assets and the memory they use; {} are registered.", stats.RegisteredAssets);
+			ImGui::SameLine();
+			UI::Pill("Status.Assets", Icons::Package, text, stats.FailedAssets > 0 ? colors.Error : colors.TextSecondary, tooltip.c_str());
+		}
+
+		// Automation.
 		ImGui::SameLine();
 		if (m_Automation.IsRunning())
 		{
 			const uint32_t clients = m_Automation.GetClientCount();
-			ImGui::TextDisabled("|  Automation: port %u, %u %s", static_cast<unsigned>(m_Automation.GetPort()), clients, clients == 1 ? "client" : "clients");
-			if (ImGui::IsItemHovered())
-			{
-				ImGui::SetTooltip("Tools and AI agents control this editor through StrataCLI (or its MCP server, StrataCLI mcp),\n"
-					"which finds it through its session file.\n%zu pending requests, %llu answered",
-					m_Automation.GetPendingRequestCount(), static_cast<unsigned long long>(m_Automation.GetCompletedRequestCount()));
-			}
+			const std::string text = fmt::format("port {}{}{} {}", m_Automation.GetPort(), c_Separator, clients, clients == 1 ? "client" : "clients");
+			const std::string tooltip = fmt::format("Tools and AI agents control this editor through StrataCLI (or its MCP server, StrataCLI mcp), which "
+				"finds it through its session file.\n{} pending requests, {} answered", m_Automation.GetPendingRequestCount(), m_Automation.GetCompletedRequestCount());
+			UI::Pill("Status.Automation", Icons::Bot, text, clients > 0 ? colors.Info : colors.TextSecondary, tooltip.c_str());
 		}
 		else
 		{
-			ImGui::TextDisabled("|  Automation off");
+			UI::Pill("Status.Automation", Icons::Bot, "Automation off", colors.TextDisabled, "Started with --no-automation: tools cannot control this editor");
 		}
+
+		// Scripts.
+		const ScriptBuilder& builder = m_Context.GetScriptBuilder();
+		const Ref<ScriptEngine>& engine = m_Context.GetScriptEngine();
+		ImGui::SameLine();
+		bool showConsole = false;
+		if (builder.IsRunning())
+		{
+			UI::Pill("Status.Scripts", Icons::LoaderCircle, fmt::format("Building {:.0f} s", builder.GetElapsedSeconds()), colors.Info,
+				"The project's scripts are being built (the output goes to the Console)");
+		}
+		else if (engine && engine->IsFaulted())
+		{
+			showConsole = UI::Pill("Status.Scripts", Icons::CircleAlert, "Scripts crashed", colors.Error, "The scripts crashed: rebuild or reload them (see the Console)");
+		}
+		else if (builder.GetLastResult().ID != 0 && !builder.GetLastResult().Success)
+		{
+			showConsole = UI::Pill("Status.Scripts", Icons::CircleAlert, "Build failed", colors.Error, "The last script build failed (see the Console)");
+		}
+		else if (engine && engine->IsModuleLoaded())
+		{
+			const std::string text = fmt::format("{}{}{} classes", engine->GetModuleName(), c_Separator, engine->GetClasses().size());
+			UI::Pill("Status.Scripts", Icons::FileCode, text, colors.TextSecondary, "The loaded script module");
+		}
+		else
+		{
+			UI::Pill("Status.Scripts", Icons::FileCode, "No scripts", colors.TextDisabled, "No script module is loaded (Scripts > Build Scripts)");
+		}
+
 		// Keys a tool holds stay down after it disconnects: show them, with a way out that does not need the tool.
 		if (const SimulatedInput& simulated = m_Context.GetSimulatedInput(); simulated.HasHolds())
 		{
 			ImGui::SameLine();
-			ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "|  Simulated input holds %s", simulated.DescribeHolds().c_str());
-			if (ImGui::IsItemHovered())
+			if (UI::Pill("Status.InputHolds", Icons::Keyboard, "Holds " + simulated.DescribeHolds(), colors.Warning,
+				"Keys and mouse buttons a tool holds down in the running game (input.* commands). They stay down until the tool releases "
+				"them, also after it disconnected, or until play stops. Click to release them all."))
 			{
-				ImGui::SetTooltip("Keys and mouse buttons a tool holds down in the running game (input.* commands).\n"
-					"They stay down until the tool releases them, also after it disconnected, or until play stops.");
-			}
-			ImGui::SameLine();
-			if (ImGui::SmallButton("Release"))
 				RunEditorCommand(m_Context, m_Commands, "input.releaseAll", { { "wait", false } });
+			}
 		}
-		if (EditorAssetManager* assets = m_Context.GetAssetManager())
-		{
-			const AssetManagerStats stats = assets->GetStats();
-			ImGui::SameLine();
-			ImGui::TextDisabled("|  %u assets loaded, %u loading", stats.LoadedAssets, stats.LoadingAssets);
-		}
-		const ScriptBuilder& builder = m_Context.GetScriptBuilder();
-		if (builder.IsRunning())
-		{
-			ImGui::SameLine();
-			ImGui::TextDisabled("|  Building scripts (%.0f s)", builder.GetElapsedSeconds());
-		}
-		else if (const Ref<ScriptEngine>& engine = m_Context.GetScriptEngine(); engine && engine->IsFaulted())
-		{
-			ImGui::SameLine();
-			ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.35f, 1.0f), "|  Scripts crashed (rebuild or reload them)");
-		}
-		else if (builder.GetLastResult().ID != 0 && !builder.GetLastResult().Success)
-		{
-			ImGui::SameLine();
-			ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.35f, 1.0f), "|  Script build failed (see Console)");
-		}
+
+		// Unread errors.
 		const ConsolePanel* console = m_Panels.Get<ConsolePanel>(EditorPanels::c_Console);
 		if (const uint32_t errors = console ? console->GetUnreadErrors() : 0; errors > 0)
 		{
 			ImGui::SameLine();
-			ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.35f, 1.0f), "|  %u new errors (see Console)", errors);
+			showConsole |= UI::Pill("Status.Errors", Icons::CircleAlert, fmt::format("{} {}", errors, errors == 1 ? "error" : "errors"), colors.Error,
+				"Errors logged since the Console was last viewed: click to open it");
 		}
+		if (showConsole)
+			m_Panels.Focus(EditorPanels::c_Console);
 	}
 
 	void EditorLayer::DrawUnsavedChangesModal()

@@ -415,7 +415,7 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
 ```text
  StrataEditor      EditorApplication      options, Bedrock theme and fonts installed into ImGuiLayer, EditorHost
  --------------------------------------------------------------------------------------------------------------
- StrataEditorUI    EditorLayer            owns everything below: menu bar, main toolbar, status bar, default
+ StrataEditorUI    EditorLayer            owns everything below: menu bar, main toolbar, status pills, default
                                           layout, shortcuts, file dialogs (nfd)
                    EditorPanelRegistry    the panels (Viewport, Hierarchy, Inspector, Console, Content Browser):
                                           windows, View menu, open state in imgui.ini

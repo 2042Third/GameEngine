@@ -168,7 +168,7 @@ and read the effect (`component.get`, `log.read`, `viewport.capture`). Notes:
   (`"seen": false`), because waiting would block you from stepping; pass `"wait": true` to wait anyway.
 - Each command ends only its own hold: overlapping taps of a key keep it down until the last ends; `"action": "release"` ends
   every hold of the key and `input.releaseAll` every hold of every button. Holds outlive your connection; the editor's status bar
-  lists them, with a Release button for a person.
+  lists them in a pill that releases them when a person clicks it.
 - A tap of 1 frame is one key press for games that act on `IsKeyPressed` or `KeyRepeat`; use `frames` (or press/release) to
   hold a key for repeats.
 
