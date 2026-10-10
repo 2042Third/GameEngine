@@ -10,8 +10,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
-#include <mutex>
-#include <vector>
+#include <set>
+#include <utility>
 
 namespace Strata::Tests::Perf
 {
@@ -50,25 +50,6 @@ namespace Strata::Tests::Perf
 			return s_Budgets;
 		}
 
-		// The budget entry of key, or the reason there is none.
-		const BudgetEntry* LookUpBudget(std::string_view key, std::string& error)
-		{
-			const LoadedBudgets& budgets = GetLoadedBudgets();
-			if (!budgets.Table)
-			{
-				error = budgets.Error;
-				return nullptr;
-			}
-			const auto entry = budgets.Table->find(key);
-			if (entry == budgets.Table->end())
-			{
-				error = fmt::format("metric '{}' has no budget in '{}': measure it on the reference machine and add it (see the "
-					"file's _comment)", key, FileSystem::ToUTF8(GetBudgetFile()));
-				return nullptr;
-			}
-			return &entry->second;
-		}
-
 		bool IsKnownUnit(std::string_view unit)
 		{
 			return std::find(std::begin(c_BudgetUnits), std::end(c_BudgetUnits), unit) != std::end(c_BudgetUnits);
@@ -92,9 +73,29 @@ namespace Strata::Tests::Perf
 			return number;
 		}
 
-		// The process's records, written whole on every Record so a file never misses one.
-		std::mutex s_ResultsMutex;
-		ResultTable s_Results;
+		// "<value> <unit> (budget <budget> <unit>, <percent>%[; target <target> <unit>])", the way checks print a value.
+		std::string DescribeValue(double value, const BudgetEntry& entry)
+		{
+			std::string text = fmt::format("{:.4f} {} (budget {:.4f} {}, {:.0f}%", value, entry.Unit, entry.Budget, entry.Unit,
+				entry.Budget > 0.0 ? value / entry.Budget * 100.0 : 0.0);
+			if (entry.Target)
+				text += fmt::format("; target {:.4f} {}", *entry.Target, entry.Unit);
+			return text + ")";
+		}
+
+		std::string JoinValues(const std::vector<double>& values, std::string_view unit)
+		{
+			std::string text;
+			for (const double value : values)
+				text += fmt::format("{}{} {}", text.empty() ? "" : ", ", value, unit);
+			return text;
+		}
+
+		void Print(const std::string& line)
+		{
+			std::printf("[perf] %s\n", line.c_str());
+			std::fflush(stdout);
+		}
 
 	}
 
@@ -168,9 +169,9 @@ namespace Strata::Tests::Perf
 			}
 			for (const auto& member : value.items())
 			{
-				if (member.key() != "Measured" && member.key() != "Budget" && member.key() != "Unit")
+				if (member.key() != "Measured" && member.key() != "Budget" && member.key() != "Unit" && member.key() != "Target")
 				{
-					error = fmt::format("'{}' has an unknown member '{}' (Measured, Budget and Unit are known)", key, member.key());
+					error = fmt::format("'{}' has an unknown member '{}' (Measured, Budget, Unit and Target are known)", key, member.key());
 					return std::nullopt;
 				}
 			}
@@ -193,60 +194,214 @@ namespace Strata::Tests::Perf
 				error = fmt::format("the budget of '{}' ({}) exceeds {} times its measured value ({})", key, *budget, c_BudgetHeadroom, *measured);
 				return std::nullopt;
 			}
+			std::optional<double> target;
+			if (value.contains("Target"))
+			{
+				target = ReadBudgetValue(value, "Target", key, error);
+				if (!target)
+					return std::nullopt;
+				// The budget enforces a target it does not exceed: such a target says nothing and is removed with the budget
+				// change that reaches it.
+				if (*target >= *budget)
+				{
+					error = fmt::format("the target of '{}' ({}) is not below its budget ({}), which enforces it: remove the target", key, *target,
+						*budget);
+					return std::nullopt;
+				}
+			}
 
 			BudgetEntry& entry = table[key];
 			entry.Measured = *measured;
 			entry.Budget = *budget;
 			entry.Unit = unit->get<std::string>();
+			entry.Target = target;
 		}
 		return table;
 	}
 
-	std::optional<BudgetEntry> FindBudget(std::string_view key)
+	BudgetChecker::BudgetChecker(BudgetTable budgets, std::string budgetSource, std::filesystem::path resultsFile)
+		: m_Budgets(std::move(budgets)), m_BudgetSource(std::move(budgetSource)), m_ResultsFile(std::move(resultsFile))
+	{
+	}
+
+	const BudgetEntry* BudgetChecker::Find(std::string_view key, std::string& error) const
+	{
+		const auto entry = m_Budgets.find(key);
+		if (entry == m_Budgets.end())
+		{
+			error = fmt::format("metric '{}' has no budget in '{}': measure it on the reference machine and add it (see the file's _comment)", key,
+				m_BudgetSource);
+			return nullptr;
+		}
+		return &entry->second;
+	}
+
+	void BudgetChecker::Record(std::string_view key, double value)
 	{
 		std::string error;
-		const BudgetEntry* entry = LookUpBudget(key, error);
-		if (!entry)
+		const BudgetEntry* entry = Find(key, error);
+		REQUIRE_MESSAGE(entry != nullptr, error);
+		REQUIRE_MESSAGE(std::isfinite(value), fmt::format("'{}' measured a value that is not finite", key));
+
+		Result result;
+		result.Value = value;
+		result.Unit = entry->Unit;
+		result.Budget = entry->Budget;
+		result.Target = entry->Target;
+		Store(key, std::move(result));
+	}
+
+	void BudgetChecker::Check(std::string_view key, double value)
+	{
+		Record(key, value);
+
+		// Record has failed the test unless the metric has a budget.
+		std::string error;
+		const BudgetEntry& entry = *Find(key, error);
+		Print(fmt::format("{}: {}", key, DescribeValue(value, entry)));
+		CHECK_MESSAGE(value <= entry.Budget, fmt::format("'{}' measured {} {}, over its budget of {} {}", key, value, entry.Unit, entry.Budget,
+			entry.Unit));
+	}
+
+	std::vector<ConfirmedMetric> BudgetChecker::CheckConfirmed(const std::vector<std::string>& keys, const std::function<MetricValues()>& measure,
+		uint32_t attempts)
+	{
+		REQUIRE_MESSAGE(attempts > 0, "a confirmed check needs at least one attempt");
+		REQUIRE_MESSAGE(!keys.empty(), "a confirmed check needs at least one metric");
+
+		// Every metric is known before anything is measured: measurements can take minutes.
+		std::vector<ConfirmedMetric> metrics;
+		metrics.reserve(keys.size());
+		std::set<std::string_view> distinctKeys;
+		for (const std::string& key : keys)
+		{
+			REQUIRE_MESSAGE(distinctKeys.insert(key).second, fmt::format("a confirmed check lists the metric '{}' twice", key));
+			std::string error;
+			const BudgetEntry* entry = Find(key, error);
+			REQUIRE_MESSAGE(entry != nullptr, error);
+			ConfirmedMetric& metric = metrics.emplace_back();
+			metric.Key = key;
+			metric.Entry = *entry;
+		}
+
+		// A metric that has been within its budget once is decided: noise only adds to a measurement (time taken by the
+		// machine's other work, memory the graphics driver keeps), so an attempt within the budget shows that the code meets
+		// it. The metrics measured together with an undecided one are measured again with it; their new values do not count.
+		size_t undecided = metrics.size();
+		for (uint32_t attempt = 1; attempt <= attempts && undecided > 0; attempt++)
+		{
+			const MetricValues values = measure();
+			bool reportedKeys = values.size() == keys.size();
+			for (const std::string& key : keys)
+				reportedKeys = reportedKeys && values.contains(key);
+			if (!reportedKeys)
+			{
+				std::string reported;
+				for (const auto& [key, value] : values)
+					reported += fmt::format("{}'{}'", reported.empty() ? "" : ", ", key);
+				std::string listed;
+				for (const std::string& key : keys)
+					listed += fmt::format("{}'{}'", listed.empty() ? "" : ", ", key);
+				FAIL(fmt::format("the measurement reported the metrics {} instead of {}", reported.empty() ? "none" : reported, listed));
+			}
+
+			for (ConfirmedMetric& metric : metrics)
+			{
+				if (metric.Passed)
+					continue;
+				const double value = values.find(metric.Key)->second;
+				REQUIRE_MESSAGE(std::isfinite(value), fmt::format("'{}' measured a value that is not finite", metric.Key));
+				metric.Attempts.push_back(value);
+				metric.Passed = value <= metric.Entry.Budget;
+
+				std::string line = fmt::format("{}: {}", metric.Key, DescribeValue(value, metric.Entry));
+				if (metric.Passed && attempt > 1)
+					line += fmt::format(": within the budget in attempt {} of {}", attempt, attempts);
+				else if (!metric.Passed && attempt < attempts)
+					line += fmt::format(": over the budget in attempt {} of {}, measuring again", attempt, attempts);
+				else if (!metric.Passed)
+					line += fmt::format(": over the budget in all {} attempts", attempts);
+				Print(line);
+				if (metric.Passed)
+					undecided--;
+			}
+		}
+
+		for (ConfirmedMetric& metric : metrics)
+		{
+			metric.Value = metric.Passed ? metric.Attempts.back() : *std::min_element(metric.Attempts.begin(), metric.Attempts.end());
+			Result result;
+			result.Value = metric.Value;
+			result.Unit = metric.Entry.Unit;
+			result.Budget = metric.Entry.Budget;
+			result.Target = metric.Entry.Target;
+			result.Attempts = metric.Attempts;
+			Store(metric.Key, std::move(result));
+			CHECK_MESSAGE(metric.Passed, fmt::format("'{}' measured {} in {} attempts, each over its budget of {} {}", metric.Key,
+				JoinValues(metric.Attempts, metric.Entry.Unit), metric.Attempts.size(), metric.Entry.Budget, metric.Entry.Unit));
+		}
+		return metrics;
+	}
+
+	void BudgetChecker::Store(std::string_view key, Result result)
+	{
+		std::lock_guard lock(m_ResultsMutex);
+		m_Results[std::string(key)] = std::move(result);
+		std::string error;
+		const bool written = MergeResults(m_ResultsFile, m_Results, error);
+		REQUIRE_MESSAGE(written, error);
+	}
+
+	std::optional<BudgetEntry> FindBudget(std::string_view key)
+	{
+		const LoadedBudgets& budgets = GetLoadedBudgets();
+		if (!budgets.Table)
 			return std::nullopt;
-		return *entry;
+		const auto entry = budgets.Table->find(key);
+		if (entry == budgets.Table->end())
+			return std::nullopt;
+		return entry->second;
 	}
 
 	double Budget(std::string_view key)
 	{
 		std::string error;
-		const BudgetEntry* entry = LookUpBudget(key, error);
+		const BudgetEntry* entry = GetBudgetChecker().Find(key, error);
 		REQUIRE_MESSAGE(entry != nullptr, error);
 		return entry->Budget;
 	}
 
+	BudgetChecker& GetBudgetChecker()
+	{
+		const LoadedBudgets& budgets = GetLoadedBudgets();
+		REQUIRE_MESSAGE(budgets.Table.has_value(), budgets.Error);
+		static BudgetChecker s_Checker(*budgets.Table, FileSystem::ToUTF8(GetBudgetFile()), GetResultsFile());
+		return s_Checker;
+	}
+
 	void Record(std::string_view key, double value)
 	{
-		std::string error;
-		const BudgetEntry* entry = LookUpBudget(key, error);
-		REQUIRE_MESSAGE(entry != nullptr, error);
-		REQUIRE_MESSAGE(std::isfinite(value), fmt::format("'{}' measured a value that is not finite", key));
-
-		std::lock_guard lock(s_ResultsMutex);
-		Result& result = s_Results[std::string(key)];
-		result.Value = value;
-		result.Unit = entry->Unit;
-		result.Budget = entry->Budget;
-		const bool written = MergeResults(GetResultsFile(), s_Results, error);
-		REQUIRE_MESSAGE(written, error);
+		GetBudgetChecker().Record(key, value);
 	}
 
 	void CheckBudget(std::string_view key, double value)
 	{
 		REQUIRE_MESSAGE(IsOptimizedBuild(), "perf budgets apply to optimized builds (Release, Dist) only");
-		Record(key, value);
+		GetBudgetChecker().Check(key, value);
+	}
 
-		// Record has failed the test unless the metric has a budget.
-		const BudgetEntry entry = *FindBudget(key);
-		std::printf("[perf] %.*s: %.4f %s (budget %.4f %s, %.0f%%)\n", static_cast<int>(key.size()), key.data(), value, entry.Unit.c_str(),
-			entry.Budget, entry.Unit.c_str(), entry.Budget > 0.0 ? value / entry.Budget * 100.0 : 0.0);
-		std::fflush(stdout);
-		CHECK_MESSAGE(value <= entry.Budget, fmt::format("'{}' measured {} {}, over its budget of {} {}", key, value, entry.Unit, entry.Budget,
-			entry.Unit));
+	ConfirmedMetric CheckBudgetConfirmed(std::string_view key, const std::function<double()>& measure, uint32_t attempts)
+	{
+		REQUIRE_MESSAGE(IsOptimizedBuild(), "perf budgets apply to optimized builds (Release, Dist) only");
+		const std::string metric(key);
+		return GetBudgetChecker().CheckConfirmed({ metric }, [&] { return MetricValues { { metric, measure() } }; }, attempts).front();
+	}
+
+	std::vector<ConfirmedMetric> CheckBudgetsConfirmed(const std::vector<std::string>& keys, const std::function<MetricValues()>& measure,
+		uint32_t attempts)
+	{
+		REQUIRE_MESSAGE(IsOptimizedBuild(), "perf budgets apply to optimized builds (Release, Dist) only");
+		return GetBudgetChecker().CheckConfirmed(keys, measure, attempts);
 	}
 
 	bool MergeResults(const std::filesystem::path& path, const ResultTable& results, std::string& error)
@@ -265,6 +420,10 @@ namespace Strata::Tests::Perf
 			entry["Value"] = result.Value;
 			entry["Unit"] = result.Unit;
 			entry["Budget"] = result.Budget;
+			if (result.Target)
+				entry["Target"] = *result.Target;
+			if (!result.Attempts.empty())
+				entry["Attempts"] = result.Attempts;
 			document[key] = std::move(entry);
 		}
 
