@@ -27,6 +27,9 @@ namespace Strata
 		// Whether the action changes nothing (e.g. a merged drag that returned to its start). The stack drops a merged
 		// step that became a no-op, so dragging a value back and forth leaves no undo step.
 		virtual bool IsNoOp() const { return false; }
+		// Whether the action changes the edited scene, which saving the scene saves. Edits of asset documents (a material)
+		// write their files themselves: they share the history but never make the scene unsaved (UndoStack::IsModified).
+		virtual bool ChangesScene() const { return true; }
 	};
 
 	// Linear undo history with redo, a capacity limit and save-point tracking (for "modified" indicators).
@@ -56,7 +59,8 @@ namespace Strata
 		// The next recorded action starts a new undo step even if it could merge (e.g. the mouse was released).
 		void BreakMerge() { m_MergeBroken = true; }
 
-		// Save point: IsModified reports whether the applied actions differ from those at the last MarkSaved.
+		// Save point: IsModified reports whether the applied actions differ from those at the last MarkSaved by an action
+		// that changes the scene (EditorAction::ChangesScene). Costs the number of actions between the two positions.
 		void MarkSaved();
 		bool IsModified() const;
 

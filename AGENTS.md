@@ -758,9 +758,13 @@ and `AudioSystem`, the built-in "Audio" scene system.
   without a GPU. `viewport.getSettings` and `viewport.setSettings {grid, selectionOutline, sceneGizmos, stats,
   previewLighting, gameUI, gizmo, space, snap, translateSnap, rotateSnap, scaleSnap}` read and change the view settings
   (validated as a whole: an invalid value changes nothing).
-- Materials: `material.create {path, properties}`, `material.set {material, properties}` and `material.get {material}` (its
-  values and every material property described like `component.list` describes component properties); an unknown property
-  name fails with the list of known ones.
+- Materials: `material.create {path, properties}`, `material.set {material, properties, save}` and `material.get {material}`
+  (its values, whether they are saved, and every material property described like `component.list` describes component
+  properties); an unknown property name fails with the list of known ones. Edits of asset documents go through
+  `Editor/AssetEdit` (also the asset inspector's): a saved edit writes the file and publishes the new document as the
+  loaded asset at once (`AssetManagerBase::ReplaceLoadedAsset`), recording an `AssetDocumentAction` (the document's bytes
+  before and after; merged by key for drags); `save: false` only previews the values in the loaded material. Such steps
+  do not change the scene (`EditorAction::ChangesScene`), so they never mark it unsaved.
 - **Simulated input** (`Editor/EditorInputCommands.cpp`) lets tools play a running game (play mode only) as a person
   would: `input.key {key, action: tap|press|release, frames, wait}`, `input.mouseButton {button, action, frames, wait}`,
   `input.mouseMove {position, wait}` (pixels from the game view's top-left corner), `input.scroll {delta, wait}`,

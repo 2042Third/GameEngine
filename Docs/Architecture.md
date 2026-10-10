@@ -537,7 +537,9 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   `Update` finalizes completions on the main thread: `Asset::FinalizeOnMainThread` creates GPU resources on one upload
   command list, in steps, until the frame's upload or time budget is used up (`AssetFinalizeResult::Pending`: the asset
   continues next frame, first in line). Generations discard results of loads that were superseded by a reload, unload
-  or cancellation. `LoadAssetSync` is for tools, tests and scene switches (unbudgeted: it finishes at once). Budgets,
+  or cancellation. `LoadAssetSync` is for tools, tests and scene switches (unbudgeted: it finishes at once);
+  `ReplaceLoadedAsset` publishes an object made in memory for a registered asset at once (editors' document edits).
+  Budgets,
   eviction, uploads and the queue are described in [Streaming and residency](#streaming-and-residency).
 - **Streaming**. Assets load on first use and code handles "not loaded yet" every frame: `SceneRenderer` skips or
   substitutes what is pending and counts it (`SceneRendererStats::PendingAssets`), `AssetMeshProvider` reports meshes
@@ -788,8 +790,18 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   `EntityState` (components as JSON, parent, sibling index from `Scene::GetSiblingIndex`); `Commit` records a
   `SceneEditAction` holding the states before and after, and undo or redo re-applies them with the same UUIDs
   (`SceneEdit::ApplyEntities`: one `DestroyEntities` batch, one recreation batch, one `PlaceEntities` batch). Continuous
-  edits merge by key; the stack keeps 512 steps and a save point for the modified flag. Edits while playing are not
-  recorded. The selection keeps its order in a vector and answers `IsSelected` from a set.
+  edits merge by key; the stack keeps 512 steps and a save point for the modified flag, which only steps that change the
+  scene move (`EditorAction::ChangesScene`). Edits while playing are not recorded. The selection keeps its order in a
+  vector and answers `IsSelected` from a set.
+- **Asset documents** (`AssetEdit.h`). Materials (and any engine-native document) are edited through `AssetEdit`:
+  `ApplyDocument` validates the new document with the type's loader, writes the file (`EditorAssetManager::SaveNativeAsset`)
+  and publishes the loaded object at once (`AssetManagerBase::ReplaceLoadedAsset`, which finalizes it, discards a load in
+  flight and publishes a content change), so the viewport shows an edit in the frame it is made; `PreviewDocument` only
+  publishes (`material.set {save: false}`, a value being dragged). `SetMaterialProperties` (used by `material.set` and
+  the asset inspector) records an `AssetDocumentAction` holding the document's bytes before (the file, previews not
+  included) and after; undo and redo apply them again, and steps with the same merge key
+  (`Material/<handle>/<property>`) merge until `UndoStack::BreakMerge`, so a drag that saves every frame is one step.
+  The action refers to the project's asset manager weakly and does not change the scene, so it never marks it unsaved.
 - **Automation** (`EditorAutomation.h`, `Network/RpcServer.h`). The server's network thread does the socket work;
   each frame `EditorAutomation::Update` registers new or changed commands as methods and runs queued requests through
   the runner, so a deferred command answers when it completes. Clients find the editor through session files

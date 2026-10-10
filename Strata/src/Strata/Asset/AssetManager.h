@@ -185,6 +185,12 @@ namespace Strata
 		void UnloadAsset(AssetHandle handle);
 		// Re-reads the asset if it was loaded (hot reload). In-flight loads of the old version are discarded.
 		void ReloadAsset(AssetHandle handle);
+		// Main thread: makes `asset` the loaded object of a registered asset at once, replacing what is loaded or loading (a
+		// load in flight is discarded), so that a change shows in the same frame: editors publish documents they edit this
+		// way (a material while its value is dragged, or right after saving it). The object is finalized here without a
+		// budget, so this is meant for small assets such as documents. Fails (changing nothing) for unknown and memory
+		// assets, objects of another type, objects that fail to finalize, and from Asset::FinalizeOnMainThread.
+		bool ReplaceLoadedAsset(AssetHandle handle, const Ref<Asset>& asset, std::string* outError = nullptr);
 
 		// Registers an asset that exists only in memory (built-in or created at runtime). Returns its handle.
 		AssetHandle AddMemoryAsset(const Ref<Asset>& asset, AssetMetadata metadata);

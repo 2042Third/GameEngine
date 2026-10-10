@@ -121,7 +121,8 @@ editor started with `--no-gpu` (use `--headless`):
 - **Component values** use the scene file format: `{"Transform": {"Translation": [0, 1, 0], "Rotation": [0, 90, 0],
   "Scale": [1, 1, 1]}}`. Rotations accept Euler degrees `[pitch, yaw, roll]` or a quaternion `[x, y, z, w]` (read
   back as a quaternion). Property names are case-insensitive. `component.get` shows the accepted format of every value.
-- **Undo**: every successful mutating command is one undo step (`edit.undo`, `edit.redo`, `edit.history`).
+- **Undo**: every successful mutating command is one undo step (`edit.undo`, `edit.redo`, `edit.history`). Material
+  edits are steps of the same history, but they save their file themselves, so they never mark the scene unsaved.
 - **Play mode**: `play.start` runs a copy of the scene. Changes made while playing apply to that copy, carry a
   `warning` in the result, and are discarded by `play.stop`. Undo and redo are not available while playing;
   `scene.save` saves the edited scene, never the running copy.
@@ -163,6 +164,12 @@ with `prefab.instantiate`.
 
 **Edit**: `component.add` (adds if missing, then sets values), `component.set` (component must exist),
 `component.remove`, `entity.rename`, `entity.setActive`, `entity.delete`, `scene.setSettings` (gravity, timestep).
+
+**Materials**: `material.set {"material": "Materials/Red.stmat", "properties": {"Roughness": 0.3}}` saves the material
+file and is one undo step (`edit.undo` restores the file and what entities show); entities using it show the change in
+the same frame. `"save": false` only previews the values in the loaded material (no file, no undo step) until a saving
+`material.set` saves them too; `material.get` says `"saved": false` meanwhile. Built-in materials and those imported
+with a model cannot be changed: make one with `material.create` and assign it.
 
 **Play and inspect**: `play.start` -> `editor.wait {"frames": 120}` (about two seconds) -> `entity.get` /
 `component.get` / `log.read` -> `play.stop`. `play.pause {"paused": true}` and `play.step {"frames": n}` advance

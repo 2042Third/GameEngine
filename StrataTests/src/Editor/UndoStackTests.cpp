@@ -55,6 +55,33 @@ namespace
 		std::string m_Name;
 	};
 
+	// An edit outside the scene (like an asset document's), which saves itself.
+	class OutsideAction final : public EditorAction
+	{
+	public:
+		explicit OutsideAction(int& value)
+			: m_Value(value)
+		{
+		}
+
+		const std::string& GetName() const override
+		{
+			static const std::string s_Name = "Outside";
+			return s_Name;
+		}
+
+		bool Execute(std::string*) override
+		{
+			m_Value++;
+			return true;
+		}
+
+		void Undo() override { m_Value--; }
+		bool ChangesScene() const override { return false; }
+	private:
+		int& m_Value;
+	};
+
 }
 
 TEST_SUITE("Editor.Undo")
@@ -163,6 +190,37 @@ TEST_SUITE("Editor.Undo")
 		CHECK(stack.IsModified());
 		stack.Undo();
 		CHECK(stack.IsModified());
+	}
+
+	TEST_CASE("Steps that do not change the scene never make it unsaved")
+	{
+		int value = 0;
+		int outside = 0;
+		UndoStack stack;
+		stack.Execute(CreateScope<OutsideAction>(outside));
+		CHECK_FALSE(stack.IsModified());
+		stack.Execute(CreateScope<AddAction>(value, 1));
+		CHECK(stack.IsModified());
+		stack.Execute(CreateScope<OutsideAction>(outside));
+		stack.MarkSaved();
+		CHECK_FALSE(stack.IsModified());
+
+		// Undoing and redoing outside steps on either side of the save point changes nothing saving the scene would save.
+		stack.Execute(CreateScope<OutsideAction>(outside));
+		CHECK_FALSE(stack.IsModified());
+		stack.Undo();
+		stack.Undo();
+		CHECK(outside == 1);
+		CHECK_FALSE(stack.IsModified());
+		stack.Undo();
+		CHECK(value == 0);
+		CHECK(stack.IsModified());
+		stack.Redo();
+		CHECK_FALSE(stack.IsModified());
+		stack.Redo();
+		stack.Redo();
+		CHECK(outside == 3);
+		CHECK_FALSE(stack.IsModified());
 	}
 
 	TEST_CASE("The capacity drops the oldest steps")

@@ -120,7 +120,17 @@ namespace Strata
 
 	bool UndoStack::IsModified() const
 	{
-		return m_SavedPosition != m_Position;
+		// A save point that was trimmed or discarded can no longer be reached: whatever lies between is unknown.
+		if (m_SavedPosition == c_NoSavePoint)
+			return true;
+		const size_t first = std::min(m_SavedPosition, m_Position);
+		const size_t last = std::max(m_SavedPosition, m_Position);
+		for (size_t index = first; index < last; index++)
+		{
+			if (m_Actions[index]->ChangesScene())
+				return true;
+		}
+		return false;
 	}
 
 	void UndoStack::Clear()

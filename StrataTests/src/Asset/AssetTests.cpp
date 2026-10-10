@@ -455,6 +455,51 @@ TEST_SUITE("Asset")
 		CHECK(other->GetAssetState(UUID(0x6001)) == AssetState::Unloaded);
 	}
 
+	TEST_CASE("Replacing a loaded asset publishes the new object at once")
+	{
+		const std::filesystem::path path = WritePack("Replace", {
+			{ MakeMetadata(0x6050, AssetType::Material, "M.stmat"), CreateMaterialBytes(0.25f) },
+			{ MakeMetadata(0x6051, AssetType::Material, "N.stmat"), CreateMaterialBytes(0.5f) } });
+		Ref<RuntimeAssetManager> manager = RuntimeAssetManager::Create(path);
+		REQUIRE(manager);
+		REQUIRE(manager->LoadAssetSync(UUID(0x6050)));
+		const uint64_t version = manager->GetContentVersion();
+
+		MaterialProperties properties;
+		properties.Roughness = 0.75f;
+		Ref<Material> edited = Material::Create(properties);
+		std::string error;
+		REQUIRE_MESSAGE(manager->ReplaceLoadedAsset(UUID(0x6050), edited, &error), error);
+		CHECK(manager->GetAsset(UUID(0x6050)) == edited);
+		CHECK(edited->Handle == UUID(0x6050));
+		CHECK(manager->GetAssetState(UUID(0x6050)) == AssetState::Ready);
+		std::vector<AssetHandle> changes;
+		CHECK(manager->GetContentChanges(version, changes));
+		CHECK(changes == std::vector<AssetHandle> { UUID(0x6050) });
+
+		// A load in flight is discarded: what was published stays.
+		manager->ReloadAsset(UUID(0x6050));
+		CHECK(manager->GetAssetState(UUID(0x6050)) == AssetState::Loading);
+		Ref<Material> again = Material::Create(properties);
+		REQUIRE(manager->ReplaceLoadedAsset(UUID(0x6050), again, &error));
+		REQUIRE(manager->WaitForPendingLoads());
+		CHECK(manager->GetAsset(UUID(0x6050)) == again);
+
+		// An asset that was never loaded is published as well.
+		REQUIRE(manager->ReplaceLoadedAsset(UUID(0x6051), Material::Create(properties), &error));
+		CHECK(manager->GetAssetState(UUID(0x6051)) == AssetState::Ready);
+
+		// Nothing changes for unknown and memory assets and for objects of another type.
+		CHECK_FALSE(manager->ReplaceLoadedAsset(UUID(0x6052), Material::Create(), &error));
+		CHECK(error.find("Unknown asset") != std::string::npos);
+		CHECK_FALSE(manager->ReplaceLoadedAsset(BuiltinAssets::DefaultMaterial, Material::Create(), &error));
+		CHECK(error.find("only in memory") != std::string::npos);
+		CHECK_FALSE(manager->ReplaceLoadedAsset(UUID(0x6050), MeshFactory::CreateCube(), &error));
+		CHECK(error.find("not a Mesh") != std::string::npos);
+		CHECK_FALSE(manager->ReplaceLoadedAsset(UUID(0x6050), nullptr, &error));
+		CHECK(manager->GetAsset(UUID(0x6050)) == again);
+	}
+
 	TEST_CASE("The content version changes whenever loaded objects change")
 	{
 		const std::filesystem::path path = WritePack("ContentVersion", {
