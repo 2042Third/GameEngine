@@ -31,6 +31,8 @@
 	"Perf.Editor.EntityDelete100kRoots": { "Measured": 0.4954, "Budget": 0.7431, "Unit": "ms" },
 	"Perf.Editor.Delete10kOf100kRoots": { "Measured": 42.64, "Budget": 63.96, "Unit": "ms" },
 	"Perf.Editor.UndoDelete10kOf100kRoots": { "Measured": 41.18, "Budget": 61.77, "Unit": "ms" },
+	"Perf.Editor.HierarchyIdleUpdate100kRoots": { "Measured": 0.0096, "Budget": 0.0144, "Unit": "us" },
+	"Perf.Editor.HierarchyRebuild100kRoots": { "Measured": 0.5926, "Budget": 0.8889, "Unit": "ms" },
 	"Perf.Editor.ImportSettings4kMaxFrame": { "Measured": 2.941, "Budget": 4.411, "Unit": "ms" },
 	"PerfGPU.Editor.EditFrameNested100k": { "Measured": 0.2387, "Budget": 0.358, "Unit": "ms" },
 	"PerfGPU.Editor.PlayFrameNested100k": { "Measured": 0.2209, "Budget": 0.3313, "Unit": "ms" },

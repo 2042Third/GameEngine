@@ -811,6 +811,17 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   edits merge by key; the stack keeps 512 steps and a save point for the modified flag, which only steps that change the
   scene move (`EditorAction::ChangesScene`). Edits while playing are not recorded. The selection keeps its order in a
   vector and answers `IsSelected` from a set.
+- **Hierarchy model** (`HierarchyView.h`). The hierarchy panel's rows without UI: the visible entities of the active
+  scene as a flat depth-first list (`HierarchyRow`: handle, ID, depth, has-children, expanded, match), walked along the
+  scene's sibling links into expanded entities only, or, with a filter (`HierarchyFilter`: name words, `c:` component,
+  `t:` tag, all case-insensitive substrings), the matches with their ancestors. `Update` rebuilds only when the scene
+  (a weak reference, so a new scene at the same address is noticed), its hierarchy version, the expansion or the filter
+  changed, or, while filtering, a name, tag or filtered component did: it connects to those types' signals through
+  `ComponentInfo::Observe` only while a filter is on. An unchanged frame costs about 10 ns and rebuilding 100,000
+  top-level rows about 0.6 ms (`Perf.Editor`). `Reveal` expands an entity's collapsed ancestors and returns its row,
+  `GetDropTarget` maps a drop at a fraction of a row's height (top quarter before, bottom quarter after, the middle
+  inside) to `entity.setParent`'s parent and final index, and `GetTopmostInHierarchyOrder` orders a selection for
+  moving, copying and duplicating.
 - **Asset documents** (`AssetEdit.h`). Materials (and any engine-native document) are edited through `AssetEdit`:
   `ApplyDocument` validates the new document with the type's loader, writes the file (`EditorAssetManager::SaveNativeAsset`)
   and publishes the loaded object at once (`AssetManagerBase::ReplaceLoadedAsset`, which finalizes it, discards a load in

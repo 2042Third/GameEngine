@@ -3,6 +3,7 @@
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/HierarchyView.h"
 #include "Perf/PerfUtils.h"
 #include "Perf/SceneGenerators.h"
 #include "Perf/StressProject.h"
@@ -134,6 +135,34 @@ TEST_SUITE("Perf.Editor")
 		CHECK(scene.GetRootEntities() == rootIds);
 		std::string error;
 		CHECK_MESSAGE(scene.ValidateHierarchy(&error), error);
+	}
+
+	TEST_CASE("The hierarchy's rows of 100,000 roots: idle frames cost nothing, a change rebuilds them")
+	{
+		EditorWithRoots editor(c_Roots);
+		const Ref<Scene>& scene = editor.Context.GetEditScene();
+		HierarchyView view;
+		REQUIRE(view.Update(scene));
+		REQUIRE(view.GetRows().size() == c_Roots);
+
+		// Unchanged frames: a few comparisons, whatever the scene's size (timed in batches: each call takes nanoseconds).
+		constexpr int c_Batch = 1000;
+		const Perf::Measurement idle = Perf::Measure("Perf.Editor.HierarchyIdleUpdate100kRoots", 10, 100, [&]
+		{
+			for (int call = 0; call < c_Batch; call++)
+				view.Update(scene);
+		});
+		CHECK(view.GetRebuildCount() == 1);
+		Perf::CheckBudget("Perf.Editor.HierarchyIdleUpdate100kRoots", idle.MedianMs * 1000.0 / c_Batch);
+
+		// An entity created among them: the rows are rebuilt once, in the next frame.
+		const Perf::Measurement rebuild = Perf::Measure("Perf.Editor.HierarchyRebuild100kRoots", 5, 50, [&]
+		{
+			scene->CreateEntity("Created");
+			REQUIRE(view.Update(scene));
+		});
+		CHECK(view.GetRows().size() == c_Roots + 55);
+		Perf::CheckBudget("Perf.Editor.HierarchyRebuild100kRoots", rebuild.MedianMs);
 	}
 
 	TEST_CASE("Changing the import settings of a 4096x4096 texture never holds a frame")
