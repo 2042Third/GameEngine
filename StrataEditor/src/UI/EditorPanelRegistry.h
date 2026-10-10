@@ -4,6 +4,7 @@
 
 #include <imgui.h>
 
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -119,9 +120,12 @@ namespace Strata
 
 		bool IsOpen(std::string_view id) const;
 		void SetOpen(std::string_view id, bool open);
-		// Opens the panels that are open by default and closes the others (with a layout reset).
+		// Opens the panels that are open by default and closes the others (with a layout reset), except panels waiting to be
+		// brought to the front (Focus).
 		void ResetOpenStates();
-		// Opens the panel if needed and brings its window to the front (selecting its tab) on the next frame.
+		// Opens the panel if needed and brings its window to the front (selecting its tab) on the next frame, again in the
+		// following frames while its docked tab does not show yet (a layout built in that frame). Until then neither a layout
+		// reset nor the saved open states read at the first frame close it.
 		void Focus(std::string_view id);
 		// Selects the panel's tab in its dock node without giving it the keyboard focus (layouts).
 		void SelectTab(std::string_view id, ImGuiID dockNodeId) const;
@@ -164,7 +168,10 @@ namespace Strata
 			std::string WindowName;
 			bool Open = true;
 			bool FocusRequested = false;
+			uint32_t FocusAttempts = 0; // Frames the focus was asked for without the panel's tab showing
 		};
+		// Frames a focus request is repeated while its docked tab does not show (see OnImGuiRender).
+		static constexpr uint32_t c_MaxFocusAttempts = 4;
 
 		Entry* FindEntry(std::string_view id);
 		const Entry* FindEntry(std::string_view id) const;

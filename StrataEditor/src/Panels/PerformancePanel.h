@@ -16,9 +16,10 @@ namespace Strata
 {
 
 	// Where the frames go: a stacked timeline of the frame profiler's last 600 frames (each column a frame, stacked by stage
-	// self time, the rest of the frame on top as untimed work), with a tooltip of the frame under the mouse, markers on spikes
-	// (frames over twice the median and a millisecond), the statistics per stage and of the job threads, and Copy as JSON
-	// (what editor.perf returns for the 600 frames). Reads FrameProfiler::Get(), whose frames the application records.
+	// self time, the rest of the frame on top as untimed work, scaled to the usual frames), with a tooltip of the frame under
+	// the mouse, markers on spikes (frames over twice the median and a 60 FPS frame), the statistics per stage under the
+	// frame's totals and of the job threads, and Copy as JSON (what editor.perf returns for the 600 frames). Reads
+	// FrameProfiler::Get(), whose frames the application records.
 	class PerformancePanel : public EditorPanel
 	{
 	public:
@@ -33,14 +34,21 @@ namespace Strata
 		float GetAverageJobsInFlight() const;
 		// The job system as sampled in this frame's OnUpdate (threads, running and queued jobs).
 		const JobSystemStats& GetJobStats() const { return m_Jobs; }
+		// The statistics the panel shows (computed when it was last drawn, at most c_SummaryRefreshSeconds ago).
+		const std::optional<FrameProfileSummary>& GetSummary() const { return m_Summary; }
 		// The color of a stage in the timeline (a categorical palette of the theme's tokens); the untimed rest has its own.
 		static const ImVec4& GetStageColor(FrameStageID stage);
 		static const ImVec4& GetUntimedColor();
 		// editor.perf's JSON of the latest frames (as Copy as JSON puts it on the clipboard).
 		static std::string DescribeProfile(uint32_t frames);
+		// The timeline's height in milliseconds: a 1-2-5 step (at least 1 ms) with room above the 95th percentile frame, so
+		// one slow frame does not flatten the others; taller frames are cut at the top.
+		static float GetTimelineScale(const FrameProfileSummary& summary);
+		// Frames taking longer are spikes: twice the median frame, and at least a frame at 60 frames per second.
+		static float GetSpikeThreshold(const FrameProfileSummary& summary);
 	private:
 		void DrawSummary();
-		void DrawTimeline();
+		void DrawTimeline(const ImVec2& size);
 		void DrawStageTable();
 	private:
 		JobSystemStats m_Jobs;

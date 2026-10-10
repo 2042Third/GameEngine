@@ -25,6 +25,7 @@
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <optional>
 
 namespace Strata
 {
@@ -102,7 +103,7 @@ namespace Strata
 			"Opens a panel of the editor's window and brings it to the front, e.g. to show the person at the editor what you are looking at: "
 			"Streaming (asset memory per pool against its budget, loads, uploads, the assets), Performance (where the frames go, stage by "
 			"stage), Console, ContentBrowser, Hierarchy, Inspector or Viewport. Changes no scene data and records no undo; fails in an editor "
-			"without a window (--no-gpu or headless).",
+			"without a window (--no-gpu or headless) and while the launcher shows (no project is open).",
 			CommandUtils::ObjectSchema({ { "panel", { { "type", "string" }, { "enum", panels }, { "description", "The panel to show" } } } }, { "panel" }),
 			[this](EditorContext&, const nlohmann::json& parameters) -> EditorCommandResult
 			{
@@ -115,6 +116,8 @@ namespace Strata
 					return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'panel': the editor has no panel '{}'", panel));
 				if (m_Options.Headless)
 					return EditorCommandResult::Fail("This editor runs without a window: it has no panels to show");
+				if (IsLauncherShown())
+					return EditorCommandResult::Fail("No project is open: the editor shows its launcher instead of the panels. Open or create a project first.");
 				m_Panels.Focus(panel);
 				return EditorCommandResult::Ok({ { "panel", panel } });
 			} });
@@ -178,13 +181,13 @@ namespace Strata
 		// The automation client agents connect through (the launcher shows how), when it was built next to the editor.
 		if (const std::filesystem::path cli = Platform::GetExecutableDirectory() / GetExecutableFileName("StrataCLI"); FileSystem::IsRegularFile(cli))
 			m_CLIExecutable = cli;
-		// The selection outline carries the accent, like selected rows; the debug views speak the theme's meanings (loading is a
-		// warning, failing an error) and tell the levels of detail apart from success to error.
+		// The selection outline carries the accent, like selected rows; the streaming view colors loading and failed assets as
+		// the Streaming panel does (GetAssetStateColor), and the LOD view tells the levels of detail apart from success to error.
 		ViewportSettings& viewportSettings = m_Context.GetViewport().GetSettings();
 		const UI::ThemeColors& themeColors = UI::GetThemeColors();
 		viewportSettings.SelectionColor = ToVec4(themeColors.Accent);
-		viewportSettings.DebugColors.Pending = ToVec4(UI::WithAlpha(themeColors.Warning, c_DebugTintAlpha));
-		viewportSettings.DebugColors.Failed = ToVec4(UI::WithAlpha(themeColors.Error, c_DebugTintAlpha));
+		viewportSettings.DebugColors.Pending = ToVec4(UI::WithAlpha(GetAssetStateColor(AssetState::Loading), c_DebugTintAlpha));
+		viewportSettings.DebugColors.Failed = ToVec4(UI::WithAlpha(GetAssetStateColor(AssetState::Failed), c_DebugTintAlpha));
 		const ImVec4* lodColors[] = { &themeColors.Success, &themeColors.Info, &themeColors.Warning, &themeColors.Error };
 		for (size_t level = 0; level < viewportSettings.DebugColors.LOD.size(); level++)
 			viewportSettings.DebugColors.LOD[level] = ToVec4(UI::WithAlpha(*lodColors[level], c_DebugTintAlpha));
@@ -1274,29 +1277,36 @@ namespace Strata
 		if (!m_Context.GetAssetManager() || !streaming || !streaming->GetStats())
 			return;
 		const AssetManagerStats& stats = *streaming->GetStats();
-		// Memory against the budgets of the pools that have one (all of it, without budgets: no device).
-		uint64_t budgeted = 0;
-		uint64_t budget = 0;
-		for (AssetMemoryPool pool : c_AssetMemoryPools)
-		{
-			const uint64_t poolBudget = stats.Budgets.GetPoolBudget(pool);
-			if (poolBudget == AssetResidencyBudgets::c_Unlimited)
-				continue;
-			budgeted += GetPoolBytes(stats.Resident, pool);
-			budget += poolBudget;
-		}
+		// The memory of the pool closest to (or furthest over) its budget, which also gives the pill its color; all loaded
+		// memory when no pool has a budget (no device).
+		const std::optional<AssetMemoryPool> shownPool = GetMostPressuredPool(stats);
 		const BudgetPressure pressure = GetWorstPoolPressure(stats);
-		const std::string memory = pressure == BudgetPressure::Unbudgeted ? FormatMegabytes(stats.LoadedMemory)
-			: fmt::format("{:.0f}/{:.0f} MB", static_cast<double>(budgeted) / c_BytesPerMB, static_cast<double>(budget) / c_BytesPerMB);
+		std::string memory = FormatMegabytes(stats.LoadedMemory);
+		if (shownPool)
+		{
+			memory = fmt::format("{} {:.0f}/{:.0f} MB", GetMemoryPoolShortName(*shownPool), static_cast<double>(GetPoolBytes(stats.Resident, *shownPool)) / c_BytesPerMB,
+				static_cast<double>(stats.Budgets.GetPoolBudget(*shownPool)) / c_BytesPerMB);
+		}
 		const std::string text = fmt::format("{} ready{}{} streaming{}{}", stats.LoadedAssets, c_Separator, stats.LoadingAssets, c_Separator, memory);
 		std::string tooltip = stats.FailedAssets > 0 ? fmt::format("{} assets failed to load (see the Console or the Streaming panel).", stats.FailedAssets)
 			: fmt::format("Assets ready and streaming in; {} are registered.", stats.RegisteredAssets);
-		if (pressure == BudgetPressure::Unbudgeted)
+		if (!shownPool)
+		{
 			tooltip += fmt::format(" Loaded assets use {}; the pools have no budgets (no graphics device).", FormatMegabytes(stats.LoadedMemory));
+		}
 		else
-			tooltip += fmt::format(" The pools with budgets hold {} of {}{}.", FormatMegabytes(budgeted), FormatMegabytes(budget),
-				pressure == BudgetPressure::Over ? ": over budget, what is in use stays resident" : (pressure == BudgetPressure::High ? ": close to the budget" : ""));
-		tooltip += " Click to open the Streaming panel.";
+		{
+			tooltip += fmt::format(" Shown: {}, the pool closest to its budget{}.", GetMemoryPoolName(*shownPool),
+				pressure == BudgetPressure::Over ? " (over it: what is in use stays resident)" : (pressure == BudgetPressure::High ? " (close to it)" : ""));
+			for (AssetMemoryPool pool : c_AssetMemoryPools)
+			{
+				const uint64_t used = GetPoolBytes(stats.Resident, pool);
+				const uint64_t budget = stats.Budgets.GetPoolBudget(pool);
+				tooltip += budget == AssetResidencyBudgets::c_Unlimited ? fmt::format("\n{}: {} (no budget)", GetMemoryPoolName(pool), FormatMegabytes(used))
+					: fmt::format("\n{}: {} of {}", GetMemoryPoolName(pool), FormatMegabytes(used), FormatMegabytes(budget));
+			}
+		}
+		tooltip += "\nClick to open the Streaming panel.";
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		// Failures matter most; then how full the budgets are (a comfortable budget is no news).
 		const ImVec4& color = stats.FailedAssets > 0 ? colors.Error

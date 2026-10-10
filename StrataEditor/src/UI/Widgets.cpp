@@ -23,6 +23,8 @@ namespace Strata::UI
 		constexpr float c_ActionButtonHeightInFrames = 1.6f;
 		// Below this size (in pixels) the brand mark keeps three bands, like its 16 pixel icon.
 		constexpr float c_BrandMarkDetailSize = 24.0f;
+		// The side of a legend's color swatches, in text heights.
+		constexpr float c_LegendSwatchInFontSizes = 0.7f;
 
 		void ShowTooltip(const char* tooltip)
 		{
@@ -169,7 +171,7 @@ namespace Strata::UI
 			ImGui::RenderNavCursor(ImRect(min, max), ImGui::GetItemID());
 
 			ShowTooltip(tooltip);
-			ItemProbe::Record(id, true, ToColorU32(iconColor));
+			ItemProbe::Record(id, true, ToColorU32(iconColor), hasLabel ? std::string_view(label) : std::string_view());
 			return pressed;
 		}
 
@@ -678,6 +680,51 @@ namespace Strata::UI
 		ImGui::EndDisabled();
 		ItemProbe::Record(id, enabled);
 		return pressed;
+	}
+
+	void Legend(const char* id, const ImVec2& bottomLeft, std::span<const LegendLine> lines, std::string_view note)
+	{
+		const ImGuiStyle& style = ImGui::GetStyle();
+		const ThemeColors& colors = GetThemeColors();
+		const float lineHeight = ImGui::GetTextLineHeightWithSpacing();
+		const float swatch = ImGui::GetFontSize() * c_LegendSwatchInFontSizes;
+		float labelWidth = 0.0f;
+		float countWidth = 0.0f;
+		for (const LegendLine& line : lines)
+		{
+			labelWidth = std::max(labelWidth, ImGui::CalcTextSize(line.Label.c_str()).x);
+			countWidth = std::max(countWidth, ImGui::CalcTextSize(line.Count.c_str()).x);
+		}
+		// Two spaces between the widest label and the widest count.
+		const float columnGap = ImGui::CalcTextSize("  ").x;
+		const float noteWidth = ImGui::CalcTextSize(note.data(), note.data() + note.size()).x;
+		const float width = std::max(swatch + style.ItemInnerSpacing.x + labelWidth + columnGap + countWidth, noteWidth);
+		const float lineCount = static_cast<float>(lines.size()) + (note.empty() ? 0.0f : 1.0f);
+		const ImVec2 size(width + style.FramePadding.x * 2.0f, lineHeight * lineCount + style.FramePadding.y * 2.0f);
+		const ImVec2 min(bottomLeft.x, bottomLeft.y - size.y);
+
+		ImDrawList* drawList = ImGui::GetWindowDrawList();
+		drawList->AddRectFilled(min, ImVec2(min.x + size.x, min.y + size.y), ToDrawColor(colors.Overlay), style.FrameRounding);
+		const float swatchX = min.x + style.FramePadding.x;
+		const float labelX = swatchX + swatch + style.ItemInnerSpacing.x;
+		const float countRight = labelX + labelWidth + columnGap + countWidth;
+		float y = min.y + style.FramePadding.y;
+		for (size_t index = 0; index < lines.size(); index++)
+		{
+			const LegendLine& line = lines[index];
+			const float swatchY = y + (ImGui::GetFontSize() - swatch) * 0.5f;
+			drawList->AddRectFilled(ImVec2(swatchX, swatchY), ImVec2(swatchX + swatch, swatchY + swatch), ToDrawColor(line.Color, true));
+			const ImVec2 labelSize = ImGui::CalcTextSize(line.Label.c_str());
+			AddText(drawList, ImVec2(labelX, y), colors.Text, line.Label);
+			const ImVec2 countSize = ImGui::CalcTextSize(line.Count.c_str());
+			const ImVec2 countMin(countRight - countSize.x, y);
+			AddText(drawList, countMin, colors.Text, line.Count);
+			ItemProbe::RecordRect(std::string(id) + ".Label" + std::to_string(index), ImVec2(labelX, y), ImVec2(labelX + labelSize.x, y + labelSize.y), true, 0, line.Label);
+			ItemProbe::RecordRect(std::string(id) + ".Count" + std::to_string(index), countMin, ImVec2(countMin.x + countSize.x, countMin.y + countSize.y), true, 0, line.Count);
+			y += lineHeight;
+		}
+		if (!note.empty())
+			AddText(drawList, ImVec2(swatchX, y), colors.TextSecondary, note);
 	}
 
 }

@@ -806,15 +806,23 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   layouts saved before them). Panels collect what the status bar shows in `OnUpdate`, also while closed: the Streaming
   panel takes the active asset manager's `GetStats` once per frame after the frame's commands ran (so its totals equal
   what `asset.stats` returned in that frame) and keeps 120 frames of uploaded bytes, the Performance panel samples the
-  job system for the frame pill's job count. The Streaming panel draws a budget bar per pool (Ochre, Sulfur from 85% of
-  the budget, Cinnabar beyond it), the loads in flight, the queue per priority, an upload sparkline against the
-  per-frame budget, evictions and cancellations, and beside them (in a wide dock) a sortable, filtered, clipped table of
-  `GetResidencySamples`, read at most four times a second with names cached until `GetMetadataVersion` changes; a click
-  on a row reveals the asset in the Content Browser (`ContentBrowserPanel::RevealAsset`). The Performance panel stacks
-  the frame profiler's stage self times of the last 600 frames (newest at the right, untimed work on top, reference
-  lines at 16.7 and 33.3 ms), marks spikes (frames over twice the median and 1 ms), explains the frame under the mouse,
-  lists per-stage statistics and copies `editor.perf`'s JSON (Copy as JSON); its statistics are computed four times a
-  second. **UI tests**
+  job system for the frame pill's job count. The assets pill shows the pool closest to its budget
+  (`GetMostPressuredPool`), whose pressure also colors it. The Streaming panel draws a budget bar per pool (Ochre,
+  Sulfur from 85% of the budget, Cinnabar beyond it), the loads in flight against their limit (in a neutral color: it
+  throttles reads, it is no memory budget), the queue per priority, an upload sparkline against the per-frame budget
+  (saying so when nothing was uploaded), evictions and cancellations, and beside them (in a wide dock) a sortable,
+  filtered, clipped table of the listed assets: failed ones first, loading ones in Sulfur and failed ones in Cinnabar as
+  in the viewport's streaming view (`GetAssetStateColor`), sub-assets named by their file and key. At most four times a
+  second, and when the sort or the filter changes, the main thread copies `GetResidencySamples` (and `GetAllMetadata` when
+  `GetMetadataVersion` changed) and a job (`StreamingPanel::BuildTable`) names, sorts and filters the rows, which the
+  table shows once the job finished; so no frame sorts or names tens of thousands of rows. A click on a row reveals the
+  asset in the Content Browser (`ContentBrowserPanel::RevealAsset`). The Performance panel stacks the frame profiler's
+  stage self times of the last 600 frames (newest at the right, untimed work on top, reference lines at 16.7 and 33.3
+  ms), scaled to the 95th percentile frame (taller frames are cut at the top), marks spikes (frames over twice the median
+  and a 60 FPS frame), explains the frame under the mouse, lists per-stage statistics under the frame's totals (frozen
+  under the header) and copies `editor.perf`'s JSON (Copy as JSON); its statistics are computed four times a second. The
+  timeline takes at most 40% of the panel's height, or sits beside the table in a short, wide dock, so the table keeps
+  rows in view. Color swatches are drawn as rectangles: the monospaced font has no icons. **UI tests**
   (`StrataTests/src/Editor/ImGuiHarness.h`) create an ImGui context with the editor's fonts and theme (styled by an
   unattached `ImGuiLayer`), honor ImGui's texture requests without a renderer, inject input (clicks, keys, typed text),
   keep their own clipboard, and find kit widgets through the probe; the `Editor.UI` and `Editor.Launcher` suites draw the

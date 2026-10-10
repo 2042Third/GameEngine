@@ -21,13 +21,26 @@ namespace Strata
 	namespace
 	{
 
-		// The timeline's height, in text heights.
-		constexpr float c_TimelineHeightInFontSizes = 9.0f;
-		// A frame is a spike when it takes this many times the median frame, and at least c_MinSpikeMs.
+		// Above the stage table, the timeline takes this share of the height below the summary, at most this many text
+		// heights; the table gets the rest.
+		constexpr float c_TimelineShare = 0.4f;
+		constexpr float c_MaxTimelineHeightInFontSizes = 9.0f;
+		// A panel too short for the full timeline over this many table rows (header, the frame's totals and a stage), but this
+		// many text heights wide, puts the timeline beside the table instead, both at the full height (the bottom dock at
+		// large UI scales); the timeline then takes this share of the width.
+		constexpr float c_StackedTableRows = 4.0f;
+		constexpr float c_SideBySideWidthInFontSizes = 40.0f;
+		constexpr float c_SideBySideTimelineShare = 0.45f;
+		// The timeline's scale leaves this much room above the 95th percentile frame.
+		constexpr float c_ScaleHeadroom = 1.25f;
+		// A frame is a spike when it takes this many times the median frame, and at least a frame at 60 frames per second
+		// (shorter frames do not hitch, however they compare to the median).
 		constexpr float c_SpikeFactor = 2.0f;
-		constexpr float c_MinSpikeMs = 1.0f;
+		constexpr float c_MinSpikeMs = 1000.0f / 60.0f;
 		// Reference lines: the frame times of 60 and 30 frames per second.
 		constexpr float c_ReferenceFrameMs[] = { 1000.0f / 60.0f, 1000.0f / 30.0f };
+		// The side of a color swatch, in text heights.
+		constexpr float c_SwatchInFontSizes = 0.7f;
 
 		// The smallest of 1, 2 and 5 times a power of ten at or above `value` (at least 1 ms): the timeline's scale.
 		float GetNiceScale(float value)
@@ -45,6 +58,26 @@ namespace Strata
 			return scale;
 		}
 
+		// A square of the color, centered on the current text line, as an item (drawn, not a glyph: every font has it).
+		void Swatch(const ImVec4& color)
+		{
+			const float side = ImGui::GetFontSize() * c_SwatchInFontSizes;
+			const ImVec2 position = ImGui::GetCursorScreenPos();
+			ImGui::Dummy(ImVec2(side, ImGui::GetTextLineHeight()));
+			const ImVec2 min(position.x, position.y + (ImGui::GetTextLineHeight() - side) * 0.5f);
+			ImGui::GetWindowDrawList()->AddRectFilled(min, ImVec2(min.x + side, min.y + side), UI::ToColorU32(color));
+		}
+
+	}
+
+	float PerformancePanel::GetTimelineScale(const FrameProfileSummary& summary)
+	{
+		return GetNiceScale(summary.Work.P95 * c_ScaleHeadroom);
+	}
+
+	float PerformancePanel::GetSpikeThreshold(const FrameProfileSummary& summary)
+	{
+		return std::max(c_MinSpikeMs, summary.Work.P50 * c_SpikeFactor);
 	}
 
 	const ImVec4& PerformancePanel::GetStageColor(FrameStageID stage)
@@ -94,9 +127,10 @@ namespace Strata
 	void PerformancePanel::OnImGuiRender(EditorPanelContext&)
 	{
 		const FrameProfiler& profiler = FrameProfiler::Get();
-		// The statistics move slowly over 600 frames: computed a few times per second, not every frame.
+		// The statistics move slowly over 600 frames: computed a few times per second, not every frame (but at once while the
+		// last ones had no frames, e.g. when the panel opened with the editor).
 		const double now = ImGui::GetTime();
-		if (!m_Summary || now - m_LastSummaryTime >= c_SummaryRefreshSeconds || now < m_LastSummaryTime)
+		if (!m_Summary || m_Summary->Frames == 0 || now - m_LastSummaryTime >= c_SummaryRefreshSeconds || now < m_LastSummaryTime)
 		{
 			m_Summary = profiler.Summarize(profiler.GetCapacity());
 			m_LastSummaryTime = now;
@@ -107,7 +141,22 @@ namespace Strata
 			return;
 		}
 		DrawSummary();
-		DrawTimeline();
+
+		// The stage table always keeps rows in view: a short, wide panel puts the timeline beside it, otherwise the timeline
+		// above it takes at most a share of the height. The table fills the rest, so only the table scrolls.
+		const ImVec2 available = ImGui::GetContentRegionAvail();
+		const float fullTimeline = ImGui::GetFontSize() * c_MaxTimelineHeightInFontSizes;
+		const bool sideBySide = available.x >= ImGui::GetFontSize() * c_SideBySideWidthInFontSizes
+			&& available.y < fullTimeline + ImGui::GetFrameHeightWithSpacing() * c_StackedTableRows;
+		if (sideBySide)
+		{
+			DrawTimeline(ImVec2(available.x * c_SideBySideTimelineShare, available.y));
+			ImGui::SameLine();
+		}
+		else
+		{
+			DrawTimeline(ImVec2(available.x, std::clamp(available.y * c_TimelineShare, ImGui::GetFrameHeight(), fullTimeline)));
+		}
 		DrawStageTable();
 	}
 
@@ -139,7 +188,7 @@ namespace Strata
 		}
 	}
 
-	void PerformancePanel::DrawTimeline()
+	void PerformancePanel::DrawTimeline(const ImVec2& requestedSize)
 	{
 		const FrameProfiler& profiler = FrameProfiler::Get();
 		const UI::ThemeColors& colors = UI::GetThemeColors();
@@ -147,13 +196,11 @@ namespace Strata
 		const uint32_t frames = profiler.GetRecordedFrameCount();
 		const uint32_t stageCount = profiler.GetStageCount();
 
-		float peak = 0.0f;
-		for (uint32_t age = 0; age < frames; age++)
-			peak = std::max(peak, profiler.GetFrame(age).WorkMs);
-		const float scale = GetNiceScale(peak);
-
+		// Scaled to the usual frames, not the slowest one (a hitch would flatten the rest for 600 frames): taller frames reach
+		// the top edge, where their spike markers are.
+		const float scale = GetTimelineScale(*m_Summary);
 		const ImVec2 min = ImGui::GetCursorScreenPos();
-		const ImVec2 size(std::max(ImGui::GetContentRegionAvail().x, ImGui::GetFontSize()), ImGui::GetFontSize() * c_TimelineHeightInFontSizes);
+		const ImVec2 size(std::max(requestedSize.x, ImGui::GetFontSize()), std::max(requestedSize.y, ImGui::GetFrameHeight()));
 		ImGui::InvisibleButton("Timeline", size);
 		UI::ItemProbe::Record("Performance.Timeline");
 		const bool hovered = ImGui::IsItemHovered();
@@ -165,7 +212,7 @@ namespace Strata
 		// Newest frame at the right edge, one column per frame of the ring.
 		const float columnWidth = size.x / static_cast<float>(capacity);
 		const float pixelsPerMs = size.y / scale;
-		const float spikeMs = std::max(c_MinSpikeMs, m_Summary->Work.P50 * c_SpikeFactor);
+		const float spikeMs = GetSpikeThreshold(*m_Summary);
 		const float markerSize = std::max(ImGui::GetFontSize() * 0.25f, 2.0f);
 		const ImU32 untimed = UI::ToColorU32(GetUntimedColor());
 		for (uint32_t age = 0; age < frames; age++)
@@ -198,15 +245,19 @@ namespace Strata
 			}
 		}
 
-		// The frame times of 60 and 30 frames per second, where they fit.
+		// The frame times of 60 and 30 frames per second, where they fit; a label only where it does not cover the one below.
+		float labelBottom = max.y + ImGui::GetFontSize();
 		for (const float reference : c_ReferenceFrameMs)
 		{
 			if (reference > scale)
 				continue;
 			const float lineY = max.y - reference * pixelsPerMs;
 			drawList->AddLine(ImVec2(min.x, lineY), ImVec2(max.x, lineY), UI::ToColorU32(colors.TextSecondary, 0.5f));
+			if (labelBottom - lineY < ImGui::GetFontSize())
+				continue;
 			const std::string label = fmt::format("{:.1f} ms", reference);
 			drawList->AddText(ImVec2(min.x + ImGui::GetStyle().FramePadding.x, lineY - ImGui::GetFontSize()), UI::ToColorU32(colors.TextSecondary), label.c_str());
+			labelBottom = lineY;
 		}
 		const std::string top = fmt::format("{:g} ms", scale);
 		drawList->AddText(ImVec2(max.x - ImGui::CalcTextSize(top.c_str()).x - ImGui::GetStyle().FramePadding.x, min.y), UI::ToColorU32(colors.TextSecondary), top.c_str());
@@ -239,11 +290,11 @@ namespace Strata
 			frame.WorkerBusyPercent, frame.IOBusyPercent);
 		for (const auto& [ms, stage] : stages)
 		{
-			ImGui::TextColored(GetStageColor(stage), "%s", Icons::Square);
+			Swatch(GetStageColor(stage));
 			ImGui::SameLine();
 			ImGui::Text("%s  %.3f ms%s", profiler.GetStageName(stage).c_str(), ms, profiler.IsStageInWorkTime(stage) ? "" : " (after the frame)");
 		}
-		ImGui::TextColored(GetUntimedColor(), "%s", Icons::Square);
+		Swatch(GetUntimedColor());
 		ImGui::SameLine();
 		ImGui::Text("Untimed  %.3f ms", std::max(frame.WorkMs - timed, 0.0f));
 		ImGui::EndTooltip();
@@ -255,18 +306,21 @@ namespace Strata
 		const FrameProfileSummary& summary = *m_Summary;
 		const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY
 			| ImGuiTableFlags_NoSavedSettings;
-		if (!ImGui::BeginTable("Stages", 5, flags, ImVec2(0.0f, std::max(ImGui::GetContentRegionAvail().y, ImGui::GetFrameHeight() * 4.0f))))
+		// The rest of the panel's height (the timeline left it room), so the panel itself never scrolls beside the table.
+		if (!ImGui::BeginTable("Stages", 5, flags, ImVec2(0.0f, 0.0f)))
 			return;
-		ImGui::TableSetupScrollFreeze(0, 1);
+		// The totals come first and stay under the header while the stages scroll.
+		ImGui::TableSetupScrollFreeze(0, 3);
 		ImGui::TableSetupColumn("Stage", ImGuiTableColumnFlags_WidthStretch, 3.0f);
 		for (const char* column : { "Avg ms", "p50 ms", "p95 ms", "Max ms" })
 			ImGui::TableSetupColumn(column, ImGuiTableColumnFlags_WidthStretch, 1.0f);
 		ImGui::TableHeadersRow();
+		UI::ItemProbe::Record("Performance.StagesHeader");
 		const auto row = [](const ImVec4& color, const std::string& name, const FrameTimeStats& time, const ImVec4& textColor)
 		{
 			ImGui::TableNextRow();
 			ImGui::TableSetColumnIndex(0);
-			ImGui::TextColored(color, "%s", Icons::Square);
+			Swatch(color);
 			ImGui::SameLine();
 			ImGui::TextColored(textColor, "%s", name.c_str());
 			const float values[] = { time.Average, time.P50, time.P95, time.Max };
@@ -277,14 +331,15 @@ namespace Strata
 			}
 		};
 		UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Caption);
+		row(colors.Text, "Frame", summary.Work, colors.Text);
+		UI::ItemProbe::Record("Performance.FrameRow");
+		row(GetUntimedColor(), "Untimed (rest of the frame)", summary.Untimed, colors.TextSecondary);
 		for (FrameStageID stage = 0; stage < summary.Stages.size(); stage++)
 		{
 			const FrameStageSummary& entry = summary.Stages[stage];
 			const bool ran = entry.Time.Max > 0.0f;
 			row(GetStageColor(stage), entry.InWorkTime ? entry.Name : entry.Name + " (after the frame)", entry.Time, ran ? colors.Text : colors.TextSecondary);
 		}
-		row(GetUntimedColor(), "Untimed (rest of the frame)", summary.Untimed, colors.TextSecondary);
-		row(colors.Text, "Frame", summary.Work, colors.Text);
 		ImGui::PopFont();
 		ImGui::EndTable();
 	}

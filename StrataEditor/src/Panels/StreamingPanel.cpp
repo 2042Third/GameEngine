@@ -11,6 +11,9 @@
 #include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
+#include <initializer_list>
+#include <limits>
+#include <numeric>
 #include <string_view>
 
 namespace Strata
@@ -22,11 +25,14 @@ namespace Strata
 		constexpr double c_BytesPerMB = 1024.0 * 1024.0;
 		// The labels in front of the bars, in text heights.
 		constexpr float c_BarLabelWidthInFontSizes = 7.0f;
-		// The upload sparkline's height, in text heights.
+		// The upload sparkline's height, in text heights, and the room above its highest value (the budget line stays inside).
 		constexpr float c_SparklineHeightInFontSizes = 2.5f;
+		constexpr float c_SparklineHeadroom = 1.1f;
 		// From this width (in text heights) the overview goes beside the asset table, taking this share of the width.
 		constexpr float c_SideBySideWidthInFontSizes = 60.0f;
 		constexpr float c_OverviewShare = 0.42f;
+		// The background of failed rows, as a share of the error color.
+		constexpr float c_FailedRowAlpha = 0.14f;
 		// The table's columns.
 		constexpr int c_ColumnAsset = 0;
 		constexpr int c_ColumnType = 1;
@@ -35,6 +41,9 @@ namespace Strata
 		constexpr int c_ColumnCpu = 4;
 		constexpr int c_ColumnLastUsed = 5;
 		constexpr int c_ColumnPins = 6;
+		constexpr int c_ColumnCount = 7;
+		// Between a sub-asset's file and its key ("›").
+		constexpr std::string_view c_SubAssetSeparator = " \xE2\x80\xBA ";
 
 		double ToMB(uint64_t bytes)
 		{
@@ -80,17 +89,19 @@ namespace Strata
 			return static_cast<float>(static_cast<double>(used) / static_cast<double>(budget));
 		}
 
-		const ImVec4& GetStateColor(AssetState state)
+		// The share of a budget in use, for ordering pools (a zero budget counts as full, and as infinitely over once used).
+		double GetBudgetShare(uint64_t used, uint64_t budget)
 		{
-			const UI::ThemeColors& colors = UI::GetThemeColors();
-			switch (state)
-			{
-				case AssetState::Loading: return colors.Info;
-				case AssetState::Failed:  return colors.Error;
-				case AssetState::Ready:   return colors.Text;
-				case AssetState::Unloaded: break;
-			}
-			return colors.TextSecondary;
+			if (budget == 0)
+				return used > 0 ? std::numeric_limits<double>::infinity() : 1.0;
+			return static_cast<double>(used) / static_cast<double>(budget);
+		}
+
+		// Whether `known` refers to `manager`. Compared by ownership, so a manager created where a destroyed one was is never
+		// taken for it.
+		bool IsSameManager(const std::weak_ptr<AssetManagerBase>& known, const Ref<AssetManagerBase>& manager)
+		{
+			return manager && !known.owner_before(manager) && !manager.owner_before(known);
 		}
 
 	}
@@ -104,12 +115,35 @@ namespace Strata
 		return static_cast<double>(used) >= c_HighBudgetPressure * static_cast<double>(budget) ? BudgetPressure::High : BudgetPressure::Comfortable;
 	}
 
+	std::optional<AssetMemoryPool> GetMostPressuredPool(const AssetManagerStats& stats)
+	{
+		std::optional<AssetMemoryPool> most;
+		BudgetPressure mostPressure = BudgetPressure::Unbudgeted;
+		double mostShare = 0.0;
+		for (AssetMemoryPool pool : { AssetMemoryPool::GpuTextures, AssetMemoryPool::GpuBuffers, AssetMemoryPool::Cpu })
+		{
+			const uint64_t used = GetPoolBytes(stats.Resident, pool);
+			const uint64_t budget = stats.Budgets.GetPoolBudget(pool);
+			const BudgetPressure pressure = GetBudgetPressure(used, budget);
+			if (pressure == BudgetPressure::Unbudgeted)
+				continue;
+			// Among comfortable pools the first one stays (GPU textures), so the figure does not hop between pools that
+			// are all far from their budgets; among pools close to or over theirs, the fullest one leads.
+			const double share = GetBudgetShare(used, budget);
+			if (!most || pressure > mostPressure || (pressure == mostPressure && pressure != BudgetPressure::Comfortable && share > mostShare))
+			{
+				most = pool;
+				mostPressure = pressure;
+				mostShare = share;
+			}
+		}
+		return most;
+	}
+
 	BudgetPressure GetWorstPoolPressure(const AssetManagerStats& stats)
 	{
-		BudgetPressure worst = BudgetPressure::Unbudgeted;
-		for (AssetMemoryPool pool : c_AssetMemoryPools)
-			worst = std::max(worst, GetBudgetPressure(GetPoolBytes(stats.Resident, pool), stats.Budgets.GetPoolBudget(pool)));
-		return worst;
+		const std::optional<AssetMemoryPool> pool = GetMostPressuredPool(stats);
+		return pool ? GetBudgetPressure(GetPoolBytes(stats.Resident, *pool), stats.Budgets.GetPoolBudget(*pool)) : BudgetPressure::Unbudgeted;
 	}
 
 	const ImVec4& GetBudgetPressureColor(BudgetPressure pressure)
@@ -123,6 +157,68 @@ namespace Strata
 			case BudgetPressure::Unbudgeted:  break;
 		}
 		return colors.TextSecondary;
+	}
+
+	const ImVec4& GetAssetStateColor(AssetState state)
+	{
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		switch (state)
+		{
+			case AssetState::Loading:  return colors.Warning;
+			case AssetState::Failed:   return colors.Error;
+			case AssetState::Ready:    return colors.Text;
+			case AssetState::Unloaded: break;
+		}
+		return colors.TextSecondary;
+	}
+
+	const char* GetMemoryPoolName(AssetMemoryPool pool)
+	{
+		switch (pool)
+		{
+			case AssetMemoryPool::GpuTextures: return "GPU textures";
+			case AssetMemoryPool::GpuBuffers:  return "GPU buffers";
+			case AssetMemoryPool::Cpu:         break;
+		}
+		return "CPU";
+	}
+
+	const char* GetMemoryPoolShortName(AssetMemoryPool pool)
+	{
+		switch (pool)
+		{
+			case AssetMemoryPool::GpuTextures: return "textures";
+			case AssetMemoryPool::GpuBuffers:  return "buffers";
+			case AssetMemoryPool::Cpu:         break;
+		}
+		return "CPU";
+	}
+
+	StreamingPanel::StreamingPanel()
+		: m_Table(CreateScope<TableBuild>()), m_NextTable(CreateScope<TableBuild>())
+	{
+	}
+
+	StreamingPanel::~StreamingPanel()
+	{
+		// The job works on m_NextTable.
+		WaitForTableBuild();
+	}
+
+	std::string StreamingPanel::GetAssetLabel(const AssetMetadata& metadata)
+	{
+		if (metadata.Path.empty())
+			return metadata.Name;
+		if (!metadata.IsSubAsset())
+			return metadata.Path;
+		// Sub-assets share their parent's path: the key tells them apart, the name (when it says more) what they are.
+		const std::string& key = metadata.SubAssetKey.empty() ? metadata.Name : metadata.SubAssetKey;
+		std::string label = metadata.Path;
+		label += c_SubAssetSeparator;
+		label += key;
+		if (!metadata.Name.empty() && metadata.Name != key)
+			label += " (" + metadata.Name + ")";
+		return label;
 	}
 
 	void StreamingPanel::OnUpdate(EditorPanelContext&)
@@ -144,6 +240,11 @@ namespace Strata
 		}
 	}
 
+	void StreamingPanel::OnDetach(EditorPanelContext&)
+	{
+		WaitForTableBuild();
+	}
+
 	void StreamingPanel::OnImGuiRender(EditorPanelContext&)
 	{
 		if (!m_Stats)
@@ -162,11 +263,11 @@ namespace Strata
 		ImGui::SameLine();
 		ImGui::TextColored(colors.TextSecondary, "\xC2\xB7");
 		ImGui::SameLine();
-		ImGui::TextColored(stats.LoadingAssets > 0 ? colors.Info : colors.Text, "%u streaming", stats.LoadingAssets);
+		ImGui::TextColored(stats.LoadingAssets > 0 ? GetAssetStateColor(AssetState::Loading) : colors.Text, "%u streaming", stats.LoadingAssets);
 		ImGui::SameLine();
 		ImGui::TextColored(colors.TextSecondary, "\xC2\xB7");
 		ImGui::SameLine();
-		ImGui::TextColored(stats.FailedAssets > 0 ? colors.Error : colors.Text, "%u failed", stats.FailedAssets);
+		ImGui::TextColored(stats.FailedAssets > 0 ? GetAssetStateColor(AssetState::Failed) : colors.Text, "%u failed", stats.FailedAssets);
 		ImGui::SameLine();
 		ImGui::TextColored(colors.TextSecondary, "\xC2\xB7 %u pinned \xC2\xB7 frame %llu", stats.PinnedAssets, static_cast<unsigned long long>(stats.Frame));
 
@@ -203,18 +304,21 @@ namespace Strata
 		{
 			const uint64_t used = GetPoolBytes(stats.Resident, pool);
 			const uint64_t budget = stats.Budgets.GetPoolBudget(pool);
-			const char* label = pool == AssetMemoryPool::GpuTextures ? "GPU textures" : (pool == AssetMemoryPool::GpuBuffers ? "GPU buffers" : "CPU");
 			ImGui::PushID(static_cast<int>(pool));
-			DrawBar(label, GetFraction(used, budget), GetBudgetPressureColor(GetBudgetPressure(used, budget)), DescribePoolBar(used, budget));
+			DrawBar(GetMemoryPoolName(pool), GetFraction(used, budget), GetBudgetPressureColor(GetBudgetPressure(used, budget)), DescribePoolBar(used, budget));
 			ImGui::PopID();
 		}
 	}
 
 	void StreamingPanel::DrawStreaming(const AssetManagerStats& stats)
 	{
-		const uint64_t budget = stats.Budgets.InFlightBytes;
-		DrawBar("In flight", GetFraction(stats.InFlightBytes, budget), GetBudgetPressureColor(GetBudgetPressure(stats.InFlightBytes, budget)),
-			fmt::format("{:.1f} / {:.1f} MB \xC2\xB7 {} loads, {} reads", ToMB(stats.InFlightBytes), ToMB(budget), stats.InFlightLoads, stats.OutstandingReads));
+		// The loads in flight in a neutral color, not by pressure: their limit throttles reads (a full bar while a burst waits
+		// for room is the throttle at work, and a large load may take it past the limit), it is no memory budget to keep.
+		const uint64_t limit = stats.Budgets.InFlightBytes;
+		DrawBar("In flight", GetFraction(stats.InFlightBytes, limit), UI::GetThemeColors().Info,
+			fmt::format("{:.1f} / {:.1f} MB \xC2\xB7 {} loads, {} reads", ToMB(stats.InFlightBytes), ToMB(limit), stats.InFlightLoads, stats.OutstandingReads));
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Bytes of loads being read and decoded against the limit that throttles new reads (asset.setBudget inFlightMB)");
 		ImGui::Text("Queued: %u high \xC2\xB7 %u normal \xC2\xB7 %u low", stats.QueuedLoads[0], stats.QueuedLoads[1], stats.QueuedLoads[2]);
 		ImGui::Text("Evictions %llu (%llu checked) \xC2\xB7 cancellations %llu \xC2\xB7 staging releases %llu", static_cast<unsigned long long>(stats.Evictions),
 			static_cast<unsigned long long>(stats.EvictionChecks), static_cast<unsigned long long>(stats.Cancellations),
@@ -224,142 +328,300 @@ namespace Strata
 	void StreamingPanel::DrawUploads(const AssetManagerStats& stats)
 	{
 		const UI::ThemeColors& colors = UI::GetThemeColors();
+		const ImGuiStyle& style = ImGui::GetStyle();
 		const float budgetMB = static_cast<float>(ToMB(stats.Budgets.UploadBytesPerFrame));
-		float peakMB = budgetMB;
+		float peakMB = 0.0f;
 		for (uint32_t sample = 0; sample < m_UploadSamples; sample++)
 			peakMB = std::max(peakMB, m_UploadHistory[sample]);
+		// The highest of the values and the budget, with room above it, so the budget line never lies on the edge.
+		const float scaleMB = std::max(peakMB, budgetMB) * c_SparklineHeadroom;
 
+		ImGui::TextColored(colors.TextSecondary, "Uploads per frame, last %u frames", c_UploadHistoryFrames);
 		// Uploaded MB per frame, oldest at the left, against the frame's upload budget (the line).
 		const ImVec2 min = ImGui::GetCursorScreenPos();
 		const ImVec2 size(std::max(ImGui::GetContentRegionAvail().x, ImGui::GetFontSize()), ImGui::GetFontSize() * c_SparklineHeightInFontSizes);
 		ImGui::Dummy(size);
+		const bool hovered = ImGui::IsItemHovered();
 		const ImVec2 max(min.x + size.x, min.y + size.y);
 		ImDrawList* drawList = ImGui::GetWindowDrawList();
-		drawList->AddRectFilled(min, max, UI::ToColorU32(colors.Chrome), ImGui::GetStyle().FrameRounding);
+		drawList->AddRectFilled(min, max, UI::ToColorU32(colors.Chrome), style.FrameRounding);
 		const float columnWidth = size.x / static_cast<float>(c_UploadHistoryFrames);
 		const uint32_t first = (m_UploadCursor + c_UploadHistoryFrames - m_UploadSamples) % c_UploadHistoryFrames;
-		for (uint32_t sample = 0; sample < m_UploadSamples; sample++)
+		for (uint32_t sample = 0; sample < m_UploadSamples && scaleMB > 0.0f; sample++)
 		{
 			const float value = m_UploadHistory[(first + sample) % c_UploadHistoryFrames];
-			if (value <= 0.0f || peakMB <= 0.0f)
+			if (value <= 0.0f)
 				continue;
 			const float x = min.x + columnWidth * static_cast<float>(c_UploadHistoryFrames - m_UploadSamples + sample);
-			const float height = size.y * std::min(value / peakMB, 1.0f);
+			const float height = size.y * std::min(value / scaleMB, 1.0f);
 			drawList->AddRectFilled(ImVec2(x, max.y - height), ImVec2(x + std::max(columnWidth - 1.0f, 1.0f), max.y), UI::ToColorU32(colors.Accent, 0.8f));
 		}
-		if (peakMB > 0.0f)
+		if (scaleMB > 0.0f)
 		{
-			const float budgetY = max.y - size.y * std::min(budgetMB / peakMB, 1.0f);
+			// The budget line, labeled at its right end.
+			const float budgetY = max.y - size.y * (budgetMB / scaleMB);
 			drawList->AddLine(ImVec2(min.x, budgetY), ImVec2(max.x, budgetY), UI::ToColorU32(colors.TextSecondary, 0.6f));
+			const std::string budgetLabel = fmt::format("{:.0f} MB budget", budgetMB);
+			const ImVec2 labelSize = ImGui::CalcTextSize(budgetLabel.c_str());
+			drawList->AddText(ImVec2(max.x - labelSize.x - style.FramePadding.x, std::min(budgetY + 1.0f, max.y - labelSize.y)), UI::ToColorU32(colors.TextSecondary),
+				budgetLabel.c_str());
 		}
-		if (ImGui::IsItemHovered())
+		// After a load the line is empty: say so rather than show a box that looks unfinished.
+		const std::string note = peakMB <= 0.0f ? fmt::format("No uploads in the last {} frames", c_UploadHistoryFrames) : std::string();
+		if (!note.empty())
+		{
+			const ImVec2 noteSize = ImGui::CalcTextSize(note.c_str());
+			drawList->AddText(ImVec2(min.x + (size.x - noteSize.x) * 0.5f, max.y - noteSize.y - style.FramePadding.y), UI::ToColorU32(colors.TextSecondary),
+				note.c_str());
+		}
+		UI::ItemProbe::Record("Streaming.Uploads", true, 0, note);
+		if (hovered)
 			ImGui::SetTooltip("GPU megabytes uploaded per frame over the last %u frames; the line is the frame's upload budget", c_UploadHistoryFrames);
 
 		ImGui::Text("Uploads %.2f MB last frame \xC2\xB7 at most %.2f MB of %.0f MB \xC2\xB7 finalize %.2f ms (at most %.2f of %.1f ms)", ToMB(stats.UploadedBytesLastFrame),
 			ToMB(stats.UploadedBytesWindowMax), budgetMB, stats.FinalizeMsLastFrame, stats.FinalizeMsWindowMax, stats.Budgets.FinalizeMsPerFrame);
 	}
 
-	const StreamingPanel::Label& StreamingPanel::GetLabel(const AssetManagerBase& manager, AssetHandle handle)
+	////////////////////////////////////////////////////////////////////////////////
+	// Asset table
+	////////////////////////////////////////////////////////////////////////////////
+
+	size_t StreamingPanel::GetTableRowCount() const
 	{
-		auto [it, inserted] = m_Labels.try_emplace(handle);
-		if (inserted)
-		{
-			// An asset registered since the names were read.
-			if (const std::optional<AssetMetadata> metadata = manager.GetMetadata(handle))
-			{
-				it->second.Text = metadata->Path.empty() ? metadata->Name : metadata->Path;
-				it->second.Revealable = !metadata->Path.empty() && !metadata->IsBuiltin();
-			}
-			it->second.Lower = StringUtils::ToLower(it->second.Text);
-		}
-		return it->second;
+		return m_Table->Built ? m_Table->Samples.size() : 0;
 	}
 
-	void StreamingPanel::RefreshTable(const AssetManagerBase& manager)
+	std::vector<std::string> StreamingPanel::GetShownLabels() const
 	{
-		// The names, again only when the manager or its metadata changed: then all of them in one read.
-		if (&manager != m_LabelManager || manager.GetMetadataVersion() != m_LabelVersion)
-		{
-			m_LabelManager = &manager;
-			m_LabelVersion = manager.GetMetadataVersion();
-			m_Labels.clear();
-			for (const AssetMetadata& metadata : manager.GetAllMetadata())
-			{
-				Label& label = m_Labels[metadata.Handle];
-				label.Text = metadata.Path.empty() ? metadata.Name : metadata.Path;
-				label.Lower = StringUtils::ToLower(label.Text);
-				label.Revealable = !metadata.Path.empty() && !metadata.IsBuiltin();
-			}
-		}
+		std::vector<std::string> labels;
+		if (!m_Table->Built)
+			return labels;
+		labels.reserve(m_Table->Rows.size());
+		for (const uint32_t index : m_Table->Rows)
+			labels.push_back(m_Table->SampleLabels[index]->Text);
+		return labels;
+	}
 
+	bool StreamingPanel::IsTableShown(const Ref<AssetManagerBase>& manager) const
+	{
+		return m_Table->Built && IsSameManager(m_Table->Manager, manager);
+	}
+
+	void StreamingPanel::UpdateTable(const Ref<AssetManagerBase>& manager)
+	{
+		if (m_TableJob.IsValid() && m_TableJob.IsComplete())
+			FinishTableBuild();
+		if (m_TableJob.IsValid())
+			return; // One build at a time: a change waits for the running build, then starts the next
+
+		const double now = ImGui::GetTime();
+		const bool due = m_LastTableRefresh < 0.0 || now - m_LastTableRefresh >= c_TableRefreshSeconds || now < m_LastTableRefresh;
+		const bool changed = !IsTableShown(manager) || m_Table->SortColumn != m_SortColumn || m_Table->SortAscending != m_SortAscending
+			|| m_Table->Filter != m_Filter;
+		if (!due && !changed)
+			return;
+		StartTableBuild(manager);
+		// Without job threads (JobSystem not running) the job ran in Submit: show its rows at once.
+		if (m_TableJob.IsComplete())
+			FinishTableBuild();
+	}
+
+	void StreamingPanel::StartTableBuild(const Ref<AssetManagerBase>& manager)
+	{
+		TableBuild& build = *m_NextTable;
+		build.Manager = manager;
+		build.Built = false;
+		build.SortColumn = m_SortColumn;
+		build.SortAscending = m_SortAscending;
+		build.Filter = m_Filter;
+		// The version before the names: an asset registered meanwhile changes it, so the next build reads them again.
+		const uint64_t version = manager->GetMetadataVersion();
+		if (m_Labels && IsSameManager(m_LabelsManager, manager) && version == m_LabelsVersion)
+		{
+			build.ReusedLabels = m_Labels;
+			build.Metadata.reset();
+		}
+		else
+		{
+			build.ReusedLabels.reset();
+			build.Metadata = manager->GetAllMetadata();
+		}
+		build.MetadataVersion = version;
 		// Last uses count back from the frame the samples were read in, not the frame they are shown in.
-		m_SampleFrame = manager.GetFrameIndex();
-		manager.GetResidencySamples(m_Samples);
-		m_SampleLabels.resize(m_Samples.size());
-		for (size_t index = 0; index < m_Samples.size(); index++)
-			m_SampleLabels[index] = &GetLabel(manager, m_Samples[index].Handle);
-		m_RowsSorted = false;
+		build.Frame = manager->GetFrameIndex();
+		manager->GetResidencySamples(build.Samples);
+
+		m_TableBuilds++;
+		m_LastTableRefresh = ImGui::GetTime();
+		TableBuild* target = &build;
+		m_TableJob = JobSystem::Submit([target]() { BuildTable(*target); });
 	}
 
-	void StreamingPanel::SortRows()
+	void StreamingPanel::FinishTableBuild()
 	{
-		m_Order.resize(m_Samples.size());
-		for (uint32_t index = 0; index < m_Order.size(); index++)
-			m_Order[index] = index;
-		const int column = m_SortColumn;
-		const bool ascending = m_SortAscending;
-		std::sort(m_Order.begin(), m_Order.end(), [this, column, ascending](uint32_t first, uint32_t second)
+		m_TableJob = JobHandle();
+		std::swap(m_Table, m_NextTable);
+		m_Labels = m_Table->Labels;
+		m_LabelsManager = m_Table->Manager;
+		m_LabelsVersion = m_Table->MetadataVersion;
+	}
+
+	void StreamingPanel::WaitForTableBuild()
+	{
+		if (!m_TableJob.IsValid())
+			return;
+		m_TableJob.Wait();
+		m_TableJob = JobHandle();
+	}
+
+	void StreamingPanel::BuildTable(TableBuild& build)
+	{
+		// Names: those of an earlier build, or read again from the metadata (dropping this buffer's previous names here, off
+		// the main thread).
+		if (build.ReusedLabels && !build.Metadata)
 		{
-			const AssetResidencySample& a = m_Samples[first];
-			const AssetResidencySample& b = m_Samples[second];
-			int order = 0;
-			const auto compare = [&order](const auto& x, const auto& y) { order = x < y ? -1 : (y < x ? 1 : 0); };
-			switch (column)
+			build.Labels = std::move(build.ReusedLabels);
+		}
+		else
+		{
+			Ref<LabelMap> labels = CreateRef<LabelMap>();
+			if (build.Metadata)
 			{
-				case c_ColumnAsset:    compare(m_SampleLabels[first]->Lower, m_SampleLabels[second]->Lower); break;
-				case c_ColumnType:     compare(static_cast<int>(a.Type), static_cast<int>(b.Type)); break;
-				case c_ColumnState:    compare(static_cast<int>(a.State), static_cast<int>(b.State)); break;
-				case c_ColumnGpu:      compare(a.Usage.GetGpu(), b.Usage.GetGpu()); break;
-				case c_ColumnCpu:      compare(a.Usage.Cpu, b.Usage.Cpu); break;
-				case c_ColumnLastUsed: compare(a.LastRequestedFrame, b.LastRequestedFrame); break;
-				case c_ColumnPins:     compare(a.PinCount, b.PinCount); break;
-				default: break;
+				labels->reserve(build.Metadata->size());
+				for (const AssetMetadata& metadata : *build.Metadata)
+				{
+					Label& label = (*labels)[metadata.Handle];
+					label.Text = GetAssetLabel(metadata);
+					label.Lower = StringUtils::ToLower(label.Text);
+					label.Revealable = !metadata.Path.empty() && !metadata.IsBuiltin();
+				}
 			}
-			if (order == 0)
+			build.Labels = std::move(labels);
+		}
+		build.Metadata.reset();
+		build.ReusedLabels.reset();
+
+		const std::vector<AssetResidencySample>& samples = build.Samples;
+		build.Unlisted.clear();
+		build.SampleLabels.resize(samples.size());
+		for (size_t index = 0; index < samples.size(); index++)
+		{
+			const AssetHandle handle = samples[index].Handle;
+			if (const auto it = build.Labels->find(handle); it != build.Labels->end())
+			{
+				build.SampleLabels[index] = &it->second;
+				continue;
+			}
+			// Registered after the names were read (references into an unordered_map stay valid as it grows).
+			Label& label = build.Unlisted[handle];
+			label.Text = handle.ToString();
+			label.Lower = StringUtils::ToLower(label.Text);
+			build.SampleLabels[index] = &label;
+		}
+
+		// Failures lead in every order (they are what the assets pill sends people here for), then the column's order, then
+		// the handle, so equal rows keep their places between builds.
+		build.Order.resize(samples.size());
+		std::iota(build.Order.begin(), build.Order.end(), 0u);
+		const bool ascending = build.SortAscending;
+		const auto sortBy = [&](const auto& key)
+		{
+			std::sort(build.Order.begin(), build.Order.end(), [&](uint32_t first, uint32_t second)
+			{
+				const AssetResidencySample& a = samples[first];
+				const AssetResidencySample& b = samples[second];
+				const bool aFailed = a.State == AssetState::Failed;
+				const bool bFailed = b.State == AssetState::Failed;
+				if (aFailed != bFailed)
+					return aFailed;
+				const auto& x = key(first);
+				const auto& y = key(second);
+				if (x < y)
+					return ascending;
+				if (y < x)
+					return !ascending;
 				return a.Handle < b.Handle;
-			return ascending ? order < 0 : order > 0;
-		});
-		m_RowsSorted = true;
-		m_VisibleDirty = true;
+			});
+		};
+		const std::vector<const Label*>& labels = build.SampleLabels;
+		switch (build.SortColumn)
+		{
+			case c_ColumnAsset:    sortBy([&](uint32_t index) -> const std::string& { return labels[index]->Lower; }); break;
+			case c_ColumnType:     sortBy([&](uint32_t index) { return static_cast<int>(samples[index].Type); }); break;
+			case c_ColumnState:    sortBy([&](uint32_t index) { return static_cast<int>(samples[index].State); }); break;
+			case c_ColumnCpu:      sortBy([&](uint32_t index) { return samples[index].Usage.Cpu; }); break;
+			case c_ColumnLastUsed: sortBy([&](uint32_t index) { return samples[index].LastRequestedFrame; }); break;
+			case c_ColumnPins:     sortBy([&](uint32_t index) { return samples[index].PinCount; }); break;
+			case c_ColumnGpu:
+			default:               sortBy([&](uint32_t index) { return samples[index].Usage.GetGpu(); }); break;
+		}
+
+		const std::string filter = StringUtils::ToLower(build.Filter);
+		build.Rows.clear();
+		for (const uint32_t index : build.Order)
+		{
+			if (filter.empty() || labels[index]->Lower.find(filter) != std::string::npos)
+				build.Rows.push_back(index);
+		}
+		build.Built = true;
+	}
+
+	void StreamingPanel::SetupTableColumns()
+	{
+		// The fixed columns hold their header with its sort arrow and their widest usual value; the asset's name takes the
+		// rest. Measured again only when the text size changes (the UI scale).
+		if (ImGui::GetFontSize() != m_ColumnFontSize)
+		{
+			m_ColumnFontSize = ImGui::GetFontSize();
+			const float sortArrow = ImGui::GetFontSize() + ImGui::GetStyle().FramePadding.x;
+			const auto widest = [](std::initializer_list<const char*> texts)
+			{
+				float width = 0.0f;
+				for (const char* text : texts)
+					width = std::max(width, ImGui::CalcTextSize(text).x);
+				return width;
+			};
+			float typeWidth = ImGui::CalcTextSize("Type").x;
+			for (AssetType type : { AssetType::Scene, AssetType::Prefab, AssetType::Model, AssetType::Mesh, AssetType::Material, AssetType::Texture,
+					 AssetType::AudioClip, AssetType::Font })
+			{
+				typeWidth = std::max(typeWidth, ImGui::CalcTextSize(AssetTypeToString(type)).x);
+			}
+			m_ColumnWidths[c_ColumnType] = typeWidth + sortArrow;
+			m_ColumnWidths[c_ColumnState] = widest({ "State", "Unloaded", "Loading", "Ready", "Failed" }) + sortArrow;
+			m_ColumnWidths[c_ColumnGpu] = widest({ "GPU MB", "9999.99" }) + sortArrow;
+			m_ColumnWidths[c_ColumnCpu] = widest({ "CPU MB", "9999.99" }) + sortArrow;
+			m_ColumnWidths[c_ColumnLastUsed] = widest({ "Last used", "99999 frames ago" }) + sortArrow;
+			m_ColumnWidths[c_ColumnPins] = widest({ "Pins", "999" }) + sortArrow;
+		}
+		ImGui::TableSetupColumn("Asset", ImGuiTableColumnFlags_WidthStretch, 1.0f, c_ColumnAsset);
+		ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, m_ColumnWidths[c_ColumnType], c_ColumnType);
+		ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, m_ColumnWidths[c_ColumnState], c_ColumnState);
+		ImGui::TableSetupColumn("GPU MB", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_DefaultSort | ImGuiTableColumnFlags_PreferSortDescending,
+			m_ColumnWidths[c_ColumnGpu], c_ColumnGpu);
+		ImGui::TableSetupColumn("CPU MB", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_PreferSortDescending, m_ColumnWidths[c_ColumnCpu], c_ColumnCpu);
+		ImGui::TableSetupColumn("Last used", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_PreferSortDescending, m_ColumnWidths[c_ColumnLastUsed],
+			c_ColumnLastUsed);
+		ImGui::TableSetupColumn("Pins", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_PreferSortDescending, m_ColumnWidths[c_ColumnPins], c_ColumnPins);
 	}
 
 	void StreamingPanel::DrawTable()
 	{
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
-		if (manager && (m_LastTableRefresh < 0.0 || ImGui::GetTime() - m_LastTableRefresh >= c_TableRefreshSeconds || ImGui::GetTime() < m_LastTableRefresh))
-		{
-			RefreshTable(*manager);
-			m_LastTableRefresh = ImGui::GetTime();
-		}
+		if (manager)
+			UpdateTable(manager);
 
 		UI::TextField("Streaming.Filter", "Filter", m_Filter, "Part of the asset's path or name");
 
 		// The sort is the session's (and the default one each start): restoring a sorted column from imgui.ini moves it to
 		// the front in the vendored ImGui.
 		const ImGuiTableFlags flags = ImGuiTableFlags_Sortable | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable
-			| ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings;
-		if (!ImGui::BeginTable("Assets", 7, flags, ImVec2(0.0f, std::max(ImGui::GetContentRegionAvail().y, ImGui::GetFrameHeight() * 4.0f))))
+			| ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_NoSavedSettings;
+		if (!ImGui::BeginTable("Assets", c_ColumnCount, flags, ImVec2(0.0f, std::max(ImGui::GetContentRegionAvail().y, ImGui::GetFrameHeight() * 4.0f))))
 			return;
 		ImGui::TableSetupScrollFreeze(0, 1);
-		ImGui::TableSetupColumn("Asset", ImGuiTableColumnFlags_WidthStretch, 4.0f, c_ColumnAsset);
-		ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthStretch, 1.2f, c_ColumnType);
-		ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthStretch, 1.2f, c_ColumnState);
-		ImGui::TableSetupColumn("GPU MB", ImGuiTableColumnFlags_WidthStretch | ImGuiTableColumnFlags_DefaultSort | ImGuiTableColumnFlags_PreferSortDescending, 1.0f,
-			c_ColumnGpu);
-		ImGui::TableSetupColumn("CPU MB", ImGuiTableColumnFlags_WidthStretch | ImGuiTableColumnFlags_PreferSortDescending, 1.0f, c_ColumnCpu);
-		ImGui::TableSetupColumn("Last used", ImGuiTableColumnFlags_WidthStretch | ImGuiTableColumnFlags_PreferSortDescending, 1.1f, c_ColumnLastUsed);
-		ImGui::TableSetupColumn("Pins", ImGuiTableColumnFlags_WidthStretch | ImGuiTableColumnFlags_PreferSortDescending, 0.7f, c_ColumnPins);
+		SetupTableColumns();
 		ImGui::TableHeadersRow();
 
 		if (ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs(); specs && specs->SpecsDirty)
@@ -370,36 +632,26 @@ namespace Strata
 				m_SortAscending = specs->Specs[0].SortDirection == ImGuiSortDirection_Ascending;
 			}
 			specs->SpecsDirty = false;
-			m_RowsSorted = false;
-		}
-		if (!m_RowsSorted)
-			SortRows();
-		if (m_VisibleDirty || m_VisibleFilter != m_Filter)
-		{
-			const std::string filter = StringUtils::ToLower(m_Filter);
-			m_Visible.clear();
-			for (const uint32_t index : m_Order)
-			{
-				if (filter.empty() || m_SampleLabels[index]->Lower.find(filter) != std::string::npos)
-					m_Visible.push_back(index);
-			}
-			m_VisibleFilter = m_Filter;
-			m_VisibleDirty = false;
 		}
 
+		// The rows of the latest build of this manager's table (a new sort or filter shows once its build finished).
+		const bool shown = IsTableShown(manager);
+		const TableBuild& table = *m_Table;
 		AssetHandle reveal = UUID::Null();
 		ImGuiListClipper clipper;
-		clipper.Begin(static_cast<int>(m_Visible.size()));
+		clipper.Begin(shown ? static_cast<int>(table.Rows.size()) : 0);
 		while (clipper.Step())
 		{
 			for (int line = clipper.DisplayStart; line < clipper.DisplayEnd; line++)
 			{
-				const uint32_t index = m_Visible[static_cast<size_t>(line)];
-				const AssetResidencySample& sample = m_Samples[index];
-				const Label& label = *m_SampleLabels[index];
+				const uint32_t index = table.Rows[static_cast<size_t>(line)];
+				const AssetResidencySample& sample = table.Samples[index];
+				const Label& label = *table.SampleLabels[index];
 				// Only assets of the project's files can be shown in the Content Browser.
 				const bool revealable = label.Revealable && !sample.IsMemoryAsset;
 				ImGui::TableNextRow();
+				if (sample.State == AssetState::Failed)
+					ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1, UI::ToColorU32(GetAssetStateColor(AssetState::Failed), c_FailedRowAlpha));
 				ImGui::TableSetColumnIndex(c_ColumnAsset);
 				ImGui::PushID(line);
 				if (ImGui::Selectable(label.Text.c_str(), false, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap) && revealable)
@@ -408,14 +660,14 @@ namespace Strata
 					UI::ItemProbe::Record("Streaming.FirstAsset", revealable);
 				if (ImGui::IsItemHovered())
 				{
-					ImGui::SetTooltip("%s\n%s", sample.Handle.ToString().c_str(),
+					ImGui::SetTooltip("%s\n%s\n%s", label.Text.c_str(), sample.Handle.ToString().c_str(),
 						revealable ? "Click to show it in the Content Browser" : "A built-in or memory asset: it has no file in the project");
 				}
 				ImGui::PopID();
 				ImGui::TableSetColumnIndex(c_ColumnType);
 				ImGui::TextUnformatted(AssetTypeToString(sample.Type));
 				ImGui::TableSetColumnIndex(c_ColumnState);
-				ImGui::TextColored(GetStateColor(sample.State), "%s", AssetStateToString(sample.State));
+				ImGui::TextColored(GetAssetStateColor(sample.State), "%s", AssetStateToString(sample.State));
 				ImGui::TableSetColumnIndex(c_ColumnGpu);
 				ImGui::Text("%.2f", ToMB(sample.Usage.GetGpu()));
 				ImGui::TableSetColumnIndex(c_ColumnCpu);
@@ -423,10 +675,10 @@ namespace Strata
 				ImGui::TableSetColumnIndex(c_ColumnLastUsed);
 				if (sample.LastRequestedFrame == 0)
 					ImGui::TextColored(colors.TextSecondary, "never");
-				else if (sample.LastRequestedFrame >= m_SampleFrame)
+				else if (sample.LastRequestedFrame >= table.Frame)
 					ImGui::TextUnformatted("this frame");
 				else
-					ImGui::Text("%llu frames ago", static_cast<unsigned long long>(m_SampleFrame - sample.LastRequestedFrame));
+					ImGui::Text("%llu frames ago", static_cast<unsigned long long>(table.Frame - sample.LastRequestedFrame));
 				ImGui::TableSetColumnIndex(c_ColumnPins);
 				if (sample.PinCount > 0)
 					ImGui::Text("%u", sample.PinCount);

@@ -13,6 +13,8 @@
 #include <string>
 #include <string_view>
 
+struct ImGuiWindow;
+
 namespace Strata
 {
 	class Event;
@@ -134,6 +136,9 @@ namespace Strata::Tests
 		ImGuiID GetPreviouslyHoveredId() const;
 		// Texture creations and updates honored so far.
 		uint32_t GetTextureRequestCount() const { return m_TextureRequests; }
+		// Glyphs the last frame drew in the window and its child windows (tables, child regions) with their font's fallback
+		// glyph (U+FFFD or '?'): characters the font lacks, such as an icon drawn in a font without the icons.
+		static uint32_t CountFallbackGlyphs(ImGuiWindow* window);
 		// The harness's clipboard: ImGui's copy and paste use it instead of the system's, so tests leave the user's alone.
 		const std::string& GetClipboard() const { return m_Clipboard; }
 

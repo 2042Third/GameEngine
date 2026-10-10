@@ -23,14 +23,16 @@ namespace Strata::UI
 			int Frame = -1;           // ImGui::GetFrameCount() when it was recorded
 			bool Duplicate = false;   // Recorded more than once in that frame: the key does not name one widget
 			bool Enabled = true;      // Clickable (not drawn disabled)
-			ImU32 Color = 0;          // The color that carries the widget's meaning (a pill's), packed; 0 for other widgets
-			std::string Text;         // The text that carries the widget's meaning (a pill's); empty for other widgets
+			ImU32 Color = 0;          // The color that carries the widget's meaning (a pill's or a chip's), packed; 0 for others
+			std::string Text;         // The text that carries the widget's meaning (a pill's or a chip's label); empty for others
 
 			ImVec2 GetCenter() const { return ImVec2((Min.x + Max.x) * 0.5f, (Min.y + Max.y) * 0.5f); }
 		};
 
 		// Records the last item ImGui submitted (ImGui::GetItemRectMin/Max) under the key.
 		static void Record(std::string_view key, bool enabled = true, ImU32 color = 0, std::string_view text = {});
+		// Records what was drawn without an item (draw-list graphics, e.g. the lines of a legend) under the key.
+		static void RecordRect(std::string_view key, const ImVec2& min, const ImVec2& max, bool enabled = true, ImU32 color = 0, std::string_view text = {});
 		// The item recorded under the key in the latest frame of the current context; nothing when it was not drawn then.
 		static std::optional<Item> Find(std::string_view key);
 		static void Clear();

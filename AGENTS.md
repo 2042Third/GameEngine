@@ -611,11 +611,15 @@ and `AudioSystem`, the built-in "Audio" scene system.
   - Status pills say what is wrong and lead to it: errors (unread since the Console was last focused, not counting the
     frame its window appears in), a failed automation start (`--no-automation` is shown as off), scripts that are not
     built (click to build) or failed, assets that failed to load or pools close to or over their budget (the assets pill,
-    `N ready · M streaming · X/Y MB`, in Sulfur from 85% of a budget and Cinnabar beyond it or on failures; click to open
-    the Streaming panel). The frame pill (`ms · FPS · J jobs`, jobs running or queued averaged over 60 frames) opens the
-    Performance panel. Panels collect what the status bar shows about them in `OnUpdate`, which runs while they are closed.
-    `editor.showPanel {panel}` (registered by `EditorLayer`, the only command of the window itself) opens a docked panel
-    and brings it to the front, so agents can show the person what they look at.
+    `N ready · M streaming · <pool> X/Y MB` for the pool closest to its budget, `GetMostPressuredPool`, in Sulfur from
+    85% of it and Cinnabar beyond it or on failures; click to open the Streaming panel). The frame pill (`ms · FPS · J
+    jobs`, jobs running or queued averaged over 60 frames) opens the Performance panel. Panels collect what the status bar
+    shows about them in `OnUpdate`, which runs while they are closed. `editor.showPanel {panel}` (registered by
+    `EditorLayer`, the only command of the window itself) opens a docked panel and brings it to the front, so agents can
+    show the person what they look at; it fails while the launcher shows. A panel asked for (`EditorPanelRegistry::Focus`)
+    stays open through a layout reset and the saved open states read at the first frame, and is asked for again until its
+    tab shows. Glyphs a font lacks show as its fallback glyph: draw color swatches as rectangles (the monospaced font has no
+    icons), and check panels with `ImGuiHarness::CountFallbackGlyphs`.
 - **Every change to the scene or project goes through a command** (`EditorCommandRegistry::Execute`) or,
   for continuous UI edits, through `SceneEditTransaction` / `SetPropertyWithUndo`. That keeps the UI,
   automation (AI agents) and tests identical, and makes every edit undoable.
@@ -702,9 +706,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   (it fails without a project; values greater than 0; MB are 2^20 bytes; no undo, as nothing in the project changes).
   Opening a scene, and a scene switch the game asks for in play mode, schedule the release of what only the previous
   scene used (`EditorContext::OpenScene`, `SwitchRuntimeScene`). The Streaming panel (`Panels/StreamingPanel`) shows the
-  same numbers, read once per frame after the frame's commands, and the assets as a sortable, filtered table
-  (`GetResidencySamples`, names cached until `GetMetadataVersion` changes); a row click reveals the asset in the
-  Content Browser.
+  same numbers, read once per frame after the frame's commands, and the assets as a sortable, filtered table, failed
+  assets first, sub-assets named by their file and key: the main thread copies `GetResidencySamples` (and the metadata
+  when `GetMetadataVersion` changed) four times a second and a job names, sorts and filters the rows; a row click reveals
+  the asset in the Content Browser.
 - Mutating commands report a `warning` in their result while the scene is playing: such changes apply
   to the running copy and are discarded by `play.stop`. Unknown or missing parameters are errors.
 - **Viewport state** lives in the core: `EditorContext::GetViewport()` (`EditorViewport`) holds the editor camera
@@ -756,11 +761,12 @@ and `AudioSystem`, the built-in "Audio" scene system.
   down/up, Shift faster, wheel = speed), F frames the selection, Home everything, W/E/R/Q pick the gizmo (as do the main
   toolbar's tool buttons, next to the gizmo space and the snap toggle, `ViewportSettings::Snap`; holding Ctrl inverts
   snapping). Chips over the image's top left hold the camera settings, the overlay toggles (grid, outline, gizmos,
-  stats), the editor-view settings (preview lighting, game UI) and the debug view (lit while one colors the image; a
-  click offers Lit, Streaming and LOD); clicking a chip does not focus the panel. A strip in the play state's color tops
-  the image while the scene runs. In the game view only the stats and debug view chips remain, and only while the game
-  does not have the input: once the view is clicked, every click on the image is the game's. A debug view shows a legend
-  at the image's bottom left (its colors with the number of entities in view per color, and the placeholder boxes). The
+  stats), the editor-view settings (preview lighting, game UI) and the debug view (named after the view, "Lit" without
+  one, and lit while one colors the image; a click offers Lit, Streaming and LOD); clicking a chip does not focus the
+  panel. A strip in the play state's color tops the image while the scene runs. In the game view only the stats and
+  debug view chips remain, and only while the game does not have the input: once the view is clicked, every click on the
+  image is the game's. A debug view shows a legend at the image's bottom left (`UI::Legend`: its colors with the number
+  of entities in view per color, counts aligned in a column, and the placeholder boxes). The
   selection outline is the theme's accent and the debug views use its meanings (`ViewportSettings::SelectionColor` and
   `DebugColors`, set by the UI, not saved).
   Clicks pick without blocking (`EditorViewport::RequestPick` reads one pixel of the entity-ID buffer; Ctrl toggles,
