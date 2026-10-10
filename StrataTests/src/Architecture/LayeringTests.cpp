@@ -11,6 +11,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <vector>
 
 using namespace Strata;
@@ -41,7 +42,8 @@ namespace
 		return text;
 	}
 
-	// The layer table, the allowlist and every engine source file (.h, .hpp, .inl, .cpp under the source root).
+	// The layer table, the allowlist and every engine source file under the source root (IsSourceFile: C, C++ and
+	// Objective-C++, such as the macOS platform code).
 	EngineSources ReadEngineSources()
 	{
 		EngineSources sources;
@@ -67,12 +69,12 @@ namespace
 		std::error_code error;
 		for (std::filesystem::recursive_directory_iterator it(root, error), end; !error && it != end; it.increment(error))
 		{
-			const std::string extension = FileSystem::ToUTF8(it->path().extension());
-			if (!it->is_regular_file() || (extension != ".h" && extension != ".hpp" && extension != ".inl" && extension != ".cpp"))
+			const std::string path = FileSystem::ToUTF8(it->path().lexically_relative(root));
+			if (!it->is_regular_file() || !IsSourceFile(path))
 				continue;
 			const std::optional<std::string> text = FileSystem::ReadText(it->path());
 			REQUIRE(text);
-			sources.Files.emplace(FileSystem::ToUTF8(it->path().lexically_relative(root)), *text);
+			sources.Files.emplace(path, *text);
 		}
 		REQUIRE_FALSE(error);
 		REQUIRE(sources.Files.size() > 200);
@@ -165,25 +167,32 @@ TEST_SUITE("Architecture.Layering")
 
 	TEST_CASE("A forbidden include is reported with its file and line")
 	{
-		EngineSources sources = ReadEngineSources();
+		const EngineSources sources = ReadEngineSources();
 		const std::string file = "Strata/Scripting/ScriptEngine.cpp";
 		REQUIRE(sources.Files.contains(file));
 
-		// Inject the include after the file's last line.
-		std::string& contents = sources.Files[file];
-		if (!contents.empty() && contents.back() != '\n')
-			contents += '\n';
-		const uint32_t line = static_cast<uint32_t>(std::count(contents.begin(), contents.end(), '\n')) + 1;
-		contents += "#include \"Strata/Physics/PhysicsSystem.h\"\n";
+		// Quoted, and with angle brackets: Strata/src is a public include directory, so both forms compile.
+		for (const char* directive : { "#include \"Strata/Physics/PhysicsSystem.h\"", "#include <Strata/Physics/PhysicsSystem.h>" })
+		{
+			CAPTURE(directive);
+			std::map<std::string, std::string> files = sources.Files;
 
-		const LayeringReport report = CheckLayering(sources.Table, sources.Files, sources.Allowlist);
-		REQUIRE(report.Violations.size() == 1);
-		const Violation& violation = report.Violations.front();
-		CHECK(violation.File == file);
-		CHECK(violation.Line == line);
-		CHECK(violation.Header == "Strata/Physics/PhysicsSystem.h");
-		CHECK(Describe(violation) == fmt::format("Strata/Scripting/ScriptEngine.cpp({}): includes Strata/Physics/PhysicsSystem.h, but layer Scripting may not include layer Physics", line));
-		CHECK(report.StaleEntries.empty());
+			// Inject the include after the file's last line.
+			std::string& contents = files[file];
+			if (!contents.empty() && contents.back() != '\n')
+				contents += '\n';
+			const uint32_t line = static_cast<uint32_t>(std::count(contents.begin(), contents.end(), '\n')) + 1;
+			contents += std::string(directive) + "\n";
+
+			const LayeringReport report = CheckLayering(sources.Table, files, sources.Allowlist);
+			REQUIRE(report.Violations.size() == 1);
+			const Violation& violation = report.Violations.front();
+			CHECK(violation.File == file);
+			CHECK(violation.Line == line);
+			CHECK(violation.Header == "Strata/Physics/PhysicsSystem.h");
+			CHECK(Describe(violation) == fmt::format("Strata/Scripting/ScriptEngine.cpp({}): includes Strata/Physics/PhysicsSystem.h, but layer Scripting may not include layer Physics", line));
+			CHECK(report.StaleEntries.empty());
+		}
 	}
 
 	TEST_CASE("A stale allowlist line fails")
@@ -214,7 +223,7 @@ TEST_SUITE("Architecture.Layering")
 		const std::string source =
 			"#include \"a.h\"\n"                                // 1
 			"  #  include   \"b/c.h\"  // trailing comment\n"   // 2
-			"#include <vector>\n"                               // 3: not an engine include
+			"#include <vector>\n"                               // 3: angle brackets
 			"// #include \"commented.h\"\n"                     // 4
 			"/* #include \"block.h\"\n"                         // 5
 			"#include \"still-block.h\" */\n"                   // 6
@@ -237,18 +246,37 @@ TEST_SUITE("Architecture.Layering")
 			"#endif\n"                                          // 23
 			"#ifdef ST_PLATFORM_WINDOWS\n"                      // 24
 			"#include \"conditional.h\"\n"                      // 25
-			"#endif\n";                                         // 26
+			"#endif\n"                                          // 26
+			"\t#include <Strata/Engine/x.h> /* engine */\n"     // 27
+			"// #include <commented-angled.h>\n"                // 28
+			"#include <unterminated.h\n"                        // 29: not a directive the compiler accepts
+			"#include <>\n";                                    // 30: neither
 
 		const std::vector<IncludeDirective> includes = ParseIncludes(source);
-		std::vector<std::pair<std::string, uint32_t>> found;
+		std::vector<std::tuple<std::string, uint32_t, bool>> found;
 		for (const IncludeDirective& include : includes)
-			found.emplace_back(include.Path, include.Line);
-		CHECK(found == std::vector<std::pair<std::string, uint32_t>> {
-			{ "a.h", 1 }, { "b/c.h", 2 }, { "after-string.h", 8 }, { "after-literals.h", 13 }, { "elif-branch.h", 20 }, { "else-branch.h", 22 },
-			{ "conditional.h", 25 } });
+			found.emplace_back(include.Path, include.Line, include.Angled);
+		CHECK(found == std::vector<std::tuple<std::string, uint32_t, bool>> {
+			{ "a.h", 1, false }, { "b/c.h", 2, false }, { "vector", 3, true }, { "after-string.h", 8, false }, { "after-literals.h", 13, false },
+			{ "elif-branch.h", 20, false }, { "else-branch.h", 22, false }, { "conditional.h", 25, false }, { "Strata/Engine/x.h", 27, true } });
 
 		// Windows line endings and an #if 0 at the end of an unterminated file.
 		CHECK(ParseIncludes("#include \"crlf.h\"\r\n#if 0\r\n#include \"x.h\"").size() == 1);
+	}
+
+	TEST_CASE("C, C++ and Objective-C sources and headers are read")
+	{
+		for (const char* path : { "Strata/Core/Log.h", "Strata/Core/Log.cpp", "a/b.hpp", "a/b.inl", "a/b.c", "Platform/MacOS/MacOSWindow.mm",
+			"Platform/MacOS/Bridge.m", "Platform/Windows/Upper.CPP", "stpch.h" })
+		{
+			CAPTURE(path);
+			CHECK(IsSourceFile(path));
+		}
+		for (const char* path : { "Strata/Core/Version.h.in", "Strata/Core/Notes.txt", "a/mm", "a/.h", "a.cpp/README", "" })
+		{
+			CAPTURE(path);
+			CHECK_FALSE(IsSourceFile(path));
+		}
 	}
 
 	TEST_CASE("Globs match within and across path components")
@@ -356,6 +384,29 @@ TEST_SUITE("Architecture.Layering")
 		// A file in two layers.
 		table.Layers[1].Paths.push_back("base/a.h");
 		CHECK(JoinLines(CheckLayering(table, files, {}).Errors).find("base/a.h is in several layers ('Base', 'Top')") != std::string::npos);
+	}
+
+	TEST_CASE("Angle-bracket includes are checked, resolved from the source root only")
+	{
+		const LayerTable table = MakeTwoLayerTable();
+		const std::map<std::string, std::string> files = {
+			{ "base/a.h", "#include <top/t.h>\n#include <vector>\n#include <glm/glm.hpp>\n" },
+			{ "base/b.cpp", "#include <a.h>\n#include <base/a.h>\n#include \"a.h\"\n" },
+			{ "top/t.h", "#include <base/Generated.h>\n" }
+		};
+		const LayeringReport report = CheckLayering(table, files, {});
+		CHECK(report.Errors.empty());
+		// base/a.h -> <top/t.h> is upward. <a.h> names no file at the root (only "a.h" finds base/a.h, next to base/b.cpp);
+		// <vector> and <glm/glm.hpp> are no engine headers; <base/a.h>, "a.h" and the generated base header are allowed.
+		REQUIRE(report.Violations.size() == 1);
+		CHECK(Describe(report.Violations[0]) == "base/a.h(1): includes top/t.h, but layer Base may not include layer Top");
+		CHECK(report.CheckedIncludes == 4);
+
+		// An allowlist entry covers the include whatever its form.
+		const LayeringReport allowlisted = CheckLayering(table, files, { { "base/a.h", "top/t.h", "wave-x", "until the split", 1 } });
+		CHECK(allowlisted.Violations.empty());
+		CHECK(allowlisted.Allowlisted.size() == 1);
+		CHECK(allowlisted.StaleEntries.empty());
 	}
 
 	TEST_CASE("Allowlisted includes pass and unused allowlist lines are reported")

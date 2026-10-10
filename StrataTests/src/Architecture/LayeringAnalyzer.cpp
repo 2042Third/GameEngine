@@ -1,5 +1,7 @@
 #include "Architecture/LayeringAnalyzer.h"
 
+#include "Strata/Core/StringUtils.h"
+
 #include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
@@ -235,14 +237,28 @@ namespace Strata::Tests::Layering
 				if (!conditionals.empty())
 					conditionals.pop_back();
 			}
-			else if (directive == "include" && !skipping() && argument.size() >= 2 && argument.front() == '"')
+			else if (directive == "include" && !skipping() && argument.size() >= 2 && (argument.front() == '"' || argument.front() == '<'))
 			{
-				const size_t close = argument.find('"', 1);
+				const bool angled = argument.front() == '<';
+				const size_t close = argument.find(angled ? '>' : '"', 1);
 				if (close != std::string_view::npos && close > 1)
-					includes.push_back({ std::string(argument.substr(1, close - 1)), lineNumber });
+					includes.push_back({ std::string(argument.substr(1, close - 1)), lineNumber, angled });
 			}
 		}
 		return includes;
+	}
+
+	bool IsSourceFile(std::string_view path)
+	{
+		const size_t slash = path.rfind('/');
+		const std::string_view name = slash == std::string_view::npos ? path : path.substr(slash + 1);
+		const size_t dot = name.rfind('.');
+		if (dot == std::string_view::npos || dot == 0)
+			return false;
+
+		const std::string extension = StringUtils::ToLower(name.substr(dot));
+		return extension == ".h" || extension == ".hpp" || extension == ".inl" || extension == ".c" || extension == ".cpp"
+			|| extension == ".m" || extension == ".mm";
 	}
 
 	bool MatchesGlob(std::string_view pattern, std::string_view path)
@@ -405,8 +421,9 @@ namespace Strata::Tests::Layering
 
 			for (const IncludeDirective& include : ParseIncludes(contents))
 			{
-				// Like the preprocessor: next to the including file first, then from the include root.
-				const std::optional<std::string> nextToFile = NormalizePath(directory + include.Path);
+				// Like the preprocessor: a quoted include next to the including file first, then (like an angle-bracket
+				// include) from the include root.
+				const std::optional<std::string> nextToFile = include.Angled ? std::nullopt : NormalizePath(directory + include.Path);
 				const std::optional<std::string> fromRoot = NormalizePath(include.Path);
 				const Layer* headerLayer = nullptr;
 				std::string header;

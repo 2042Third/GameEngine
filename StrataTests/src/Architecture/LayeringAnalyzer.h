@@ -14,17 +14,23 @@
 namespace Strata::Tests::Layering
 {
 
-	// A quoted #include and its line (1-based).
+	// An #include and its line (1-based).
 	struct IncludeDirective
 	{
 		std::string Path;
 		uint32_t Line = 0;
+		bool Angled = false; // #include <...>: searched in the include directories only, never next to the including file
 	};
 
-	// The quoted #include directives of a C++ source. Comments, string and character literals (raw strings included) and
-	// the lines of #if 0 blocks (up to their #else or #elif) are skipped; includes under other conditions count, whatever
-	// the condition. Angle-bracket includes (standard and third-party headers) are not engine includes and are skipped.
+	// The #include directives of a C++ source, quoted and angle-bracketed: engine headers are reachable both ways
+	// (Strata/src is a public include directory), so both are checked. Comments, string and character literals (raw
+	// strings included) and the lines of #if 0 blocks (up to their #else or #elif) are skipped; includes under other
+	// conditions count, whatever the condition.
 	std::vector<IncludeDirective> ParseIncludes(std::string_view source);
+
+	// Whether `path` is a file whose includes are checked: a C, C++, Objective-C or Objective-C++ source or header (.h, .hpp,
+	// .inl, .c, .cpp, .m, .mm; ignoring case, as Windows file systems and CMake's globs there do).
+	bool IsSourceFile(std::string_view path);
 
 	// Glob over '/'-separated relative paths: '*' matches within one path component, '**' across components ("a/**"
 	// matches everything below a, "a/**/b" also "a/b"), '?' one character other than '/'.
@@ -80,9 +86,10 @@ namespace Strata::Tests::Layering
 		size_t CheckedIncludes = 0;                // Includes of engine files that were checked
 	};
 
-	// Checks every include of `files` (path relative to the source root -> contents). A quoted include resolves like the
-	// preprocessor's: next to the including file first, then from the source root; includes of files outside the set are
-	// still checked when a layer's paths match them (generated headers), and skipped otherwise (other targets' headers).
+	// Checks every include of `files` (path relative to the source root -> contents). Includes resolve like the
+	// preprocessor's: a quoted one next to the including file first, then from the source root; an angle-bracket one from
+	// the source root only. Includes of files outside the set are still checked when a layer's paths match them (generated
+	// headers), and skipped otherwise (other targets', standard and third-party headers).
 	LayeringReport CheckLayering(const LayerTable& table, const std::map<std::string, std::string>& files, const std::vector<AllowlistEntry>& allowlist);
 
 	// "<file>(<line>): includes <header>, but layer <A> may not include layer <B>"

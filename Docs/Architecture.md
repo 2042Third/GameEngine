@@ -200,9 +200,12 @@ layer and of the layers it lists, which are always lower ones:
 | AssetPipeline | `Asset/EditorAssetManager.*`, `AssetImporter.*`, `AssetImporters.cpp`, `GltfImporter.*`, `TextureImporter.*` | Core, Asset, Reflection, Scene, Renderer, Audio |
 | Engine | `Engine/**`, `Strata.h` | everything |
 
-`Architecture.Layering` (`StrataTests/src/Architecture/LayeringTests.cpp`, in `StrataTests.Core`) reads every `.h`/`.cpp`
-under `Strata/src` (`STRATA_SOURCE_DIR`), parses its quoted `#include`s (`LayeringAnalyzer`: comments, literals and
-`#if 0` blocks skipped; includes resolved next to the file first, like the preprocessor), maps both ends to their
+`Architecture.Layering` (`StrataTests/src/Architecture/LayeringTests.cpp`, in `StrataTests.Core`) reads every C, C++ and
+Objective-C(++) source and header under `Strata/src` (`STRATA_SOURCE_DIR`; `.h`, `.hpp`, `.inl`, `.c`, `.cpp`, `.m`, `.mm`,
+so the macOS platform code too), parses its `#include`s, quoted and angle-bracketed (`Strata/src` is a public include
+directory, so `<Strata/...>` reaches engine headers too; `LayeringAnalyzer`: comments, literals and `#if 0` blocks
+skipped; resolved like the preprocessor, quoted includes next to the file first, both forms from `Strata/src`; standard
+and third-party headers match no layer and are skipped), maps both ends to their
 layers and fails on every file that is in no layer or in several, on every forbidden include that is not in
 `StrataTests/Architecture/LayeringAllowlist.txt`, and on every allowlist line that matches nothing. Each allowlist line
 names the include, the roadmap workstream that removes it and the reason; the list holds exactly `MaxAllowlistEntries`
