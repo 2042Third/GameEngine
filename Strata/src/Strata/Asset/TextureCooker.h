@@ -7,7 +7,8 @@
 #include <vector>
 
 // Texture cooking for the asset pipeline: mip chains filtered with stb_image_resize2 and levels encoded into their stored
-// format, block-compressed with stb_dxt on the job system's workers. Only importers use it; games load cooked textures.
+// format on the job system's workers, block-compressed with stb_dxt (BC1, BC3, BC4, BC5) and BC7Encoder (BC7). Only
+// importers use it; games load cooked textures.
 namespace Strata::TextureCooker
 {
 
@@ -37,10 +38,10 @@ namespace Strata::TextureCooker
 		bool AlphaWeighted = false; // Color with alpha: alpha is coverage, so color is weighted by it while filtering
 		bool NormalMap = false;     // RGB holds unit vectors: renormalized in every level
 		TextureWrap Wrap = TextureWrap::Repeat; // How filters read past the edges
-		bool HighQuality = true;    // Spend more time on block endpoints
+		bool HighQuality = true;    // Spend more time on block endpoints (BC7: search every mode, see BC7Encoder)
 	};
 
-	// Whether CookLevels can store levels in `format`: the uncompressed 8-bit formats and BC1, BC3, BC4 and BC5.
+	// Whether CookLevels can store levels in `format`: the uncompressed 8-bit formats and BC1, BC3, BC4, BC5 and BC7.
 	bool CanEncode(TextureFormat format);
 
 	// Cooks `level0` into a mip chain in settings.Format: the level is encoded, then each further level is filtered from

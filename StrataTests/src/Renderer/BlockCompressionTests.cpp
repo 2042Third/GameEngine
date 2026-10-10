@@ -1,9 +1,17 @@
 #include <doctest/doctest.h>
 
+#include "Strata/Asset/BC7Encoder.h"
+#include "Strata/Renderer/BC7Format.h"
 #include "Strata/Renderer/BlockCompression.h"
 
+#include <spdlog/fmt/fmt.h>
+
+#include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstring>
+#include <random>
+#include <string>
 #include <vector>
 
 using namespace Strata;
@@ -12,6 +20,106 @@ namespace
 {
 
 	using Texel = std::array<uint8_t, 4>;
+	using Block = std::array<Texel, 16>;
+
+	// An endpoint of a test block: its expanded RGBA values.
+	using Endpoint = std::array<uint32_t, 4>;
+
+	// The value a mode with `bits` stored bits per endpoint value (and a p-bit) expands `stored` to.
+	uint32_t ExpandStored(uint32_t stored, uint32_t bits, int32_t pBit = -1)
+	{
+		return pBit < 0 ? BC7::ExpandBits(stored, bits) : BC7::ExpandBits((stored << 1) | static_cast<uint32_t>(pBit), bits + 1);
+	}
+
+	Endpoint ExpandEndpoint(std::array<uint32_t, 4> stored, uint32_t colorBits, uint32_t alphaBits, int32_t pBit = -1)
+	{
+		Endpoint endpoint;
+		for (uint32_t channel = 0; channel < 3; channel++)
+			endpoint[channel] = ExpandStored(stored[channel], colorBits, pBit);
+		endpoint[3] = alphaBits == 0 ? 255 : ExpandStored(stored[3], alphaBits, pBit);
+		return endpoint;
+	}
+
+	Texel InterpolateTexel(const Endpoint& first, const Endpoint& second, uint32_t colorWeight, uint32_t alphaWeight)
+	{
+		Texel texel;
+		for (uint32_t channel = 0; channel < 3; channel++)
+			texel[channel] = BC7::Interpolate(first[channel], second[channel], colorWeight);
+		texel[3] = BC7::Interpolate(first[3], second[3], alphaWeight);
+		return texel;
+	}
+
+	// A block of a mode with one index per texel that a partition splits into subsets: subset s interpolates between
+	// endpoints[s][0] and endpoints[s][1], and its n-th texel (in row-major order) takes indexPattern[n % size]. Exactly
+	// representable in that mode.
+	Block CreatePartitionedBlock(uint32_t mode, uint32_t partition, const std::vector<std::array<Endpoint, 2>>& endpoints, const std::vector<uint32_t>& indexPattern)
+	{
+		const BC7::ModeInfo& info = BC7::c_Modes[mode];
+		const uint8_t* weights = BC7::GetWeights(info.IndexBits);
+		Block block {};
+		uint32_t counts[3] = {};
+		for (uint32_t texel = 0; texel < 16; texel++)
+		{
+			const uint32_t subset = BC7::GetSubset(info.Subsets, partition, texel);
+			const uint32_t weight = weights[indexPattern[counts[subset]++ % indexPattern.size()]];
+			block[texel] = InterpolateTexel(endpoints[subset][0], endpoints[subset][1], weight, weight);
+		}
+		return block;
+	}
+
+	struct EncodedBlock
+	{
+		std::array<uint8_t, 16> Bytes {};
+		BC7Encoder::BlockInfo Info;
+		uint32_t Error = 0;
+	};
+
+	EncodedBlock Encode(const Block& block, bool highQuality = true, uint32_t allowedModes = BC7Encoder::c_AllModes)
+	{
+		EncodedBlock encoded;
+		BC7Encoder::EncodeSettings settings;
+		settings.HighQuality = highQuality;
+		settings.AllowedModes = allowedModes;
+		encoded.Error = BC7Encoder::EncodeBlock(block[0].data(), encoded.Bytes.data(), settings, &encoded.Info);
+		return encoded;
+	}
+
+	Block ToBlock(const uint8_t* rgba)
+	{
+		Block block {};
+		std::memcpy(block.data(), rgba, sizeof(block));
+		return block;
+	}
+
+	uint32_t GetSquaredError(const Block& first, const Block& second)
+	{
+		uint32_t error = 0;
+		for (uint32_t texel = 0; texel < 16; texel++)
+		{
+			for (uint32_t channel = 0; channel < 4; channel++)
+			{
+				const int32_t difference = static_cast<int32_t>(first[texel][channel]) - static_cast<int32_t>(second[texel][channel]);
+				error += static_cast<uint32_t>(difference * difference);
+			}
+		}
+		return error;
+	}
+
+	// Checks what an encoded block promises against the decoder: the block decodes to the texels the encoder predicted,
+	// with the error it reported, in the mode it reported. Returns the decoded texels.
+	Block CheckRoundTrip(const Block& source, const EncodedBlock& encoded)
+	{
+		Block decoded {};
+		BlockCompression::DecodeBC7Block(encoded.Bytes.data(), decoded[0].data(), 16);
+		CHECK(decoded == ToBlock(encoded.Info.Decoded));
+		CHECK(encoded.Error == GetSquaredError(source, decoded));
+		CHECK(encoded.Info.Error == encoded.Error);
+		uint32_t mode = 0;
+		while (mode < 8 && ((encoded.Bytes[0] >> mode) & 1u) == 0)
+			mode++;
+		CHECK(mode == encoded.Info.Mode);
+		return decoded;
+	}
 
 	// Writes the fields of a 128-bit BC7 block, least significant bit first, as the format stores them.
 	class BC7BlockWriter
@@ -248,5 +356,217 @@ TEST_SUITE("Renderer.BlockCompression")
 		CHECK_FALSE(BlockCompression::DecodeLevel(TextureFormat::BC1, 5, 3, std::span<const uint8_t>(blocks, 8), texels));
 		CHECK_FALSE(BlockCompression::DecodeLevel(TextureFormat::BC1, 5, 3, blocks, std::span<uint8_t>(texels.data(), 4)));
 		CHECK_FALSE(BlockCompression::DecodeLevel(TextureFormat::RGBA8, 2, 2, blocks, texels));
+	}
+
+	TEST_CASE("The BC7 encoder stores blocks that force each mode in that mode, as it predicted")
+	{
+		// Each block is exactly what one mode decodes from some endpoints and indices, and no other mode can store it
+		// exactly: the encoder must find that mode (and partition), with no error, and the block must decode as it said.
+		auto check = [](const std::string& name, const Block& source, uint32_t expectedMode, uint32_t expectedPartition = 0)
+		{
+			CAPTURE(name);
+			const EncodedBlock encoded = Encode(source);
+			CheckRoundTrip(source, encoded);
+			CHECK(encoded.Info.Mode == expectedMode);
+			CHECK(encoded.Info.Partition == expectedPartition);
+			CHECK(encoded.Error == 0);
+		};
+
+		// Flat color: mode 5 reproduces any color, alpha included.
+		Block flat {};
+		flat.fill(Texel { 17, 128, 255, 99 });
+		check("flat", flat, 5);
+
+		// The feature test's checker: two opaque colors with even values, which opaque mode 6 (odd values only) misses by
+		// one in every channel; mode 3 stores them exactly in the checkerboard partition.
+		Block checker {};
+		for (uint32_t texel = 0; texel < 16; texel++)
+			checker[texel] = (texel % 4 + texel / 4) % 2 == 0 ? Texel { 230, 120, 30, 255 } : Texel { 240, 230, 200, 255 };
+		check("checker", checker, 3, 34);
+
+		// A smooth opaque gradient of sixteen levels: mode 6's four-bit indices (opaque, so its p-bits are 1).
+		{
+			const Endpoint first = ExpandEndpoint({ 10, 100, 38, 127 }, 7, 7, 1);
+			const Endpoint second = ExpandEndpoint({ 116, 7, 90, 127 }, 7, 7, 1);
+			Block gradient {};
+			for (uint32_t texel = 0; texel < 16; texel++)
+				gradient[texel] = InterpolateTexel(first, second, BC7::c_Weights4[texel], BC7::c_Weights4[texel]);
+			check("gradient", gradient, 6);
+		}
+
+		// Color and alpha that vary independently: mode 5 (seven-bit color, eight-bit alpha, four levels each) and mode 4
+		// (five-bit color with eight levels, six-bit alpha with four).
+		{
+			const Endpoint first = ExpandEndpoint({ 3, 120, 61, 13 }, 7, 8);
+			const Endpoint second = ExpandEndpoint({ 101, 9, 77, 230 }, 7, 8);
+			Block independent {};
+			for (uint32_t texel = 0; texel < 16; texel++)
+				independent[texel] = InterpolateTexel(first, second, BC7::c_Weights2[texel % 4], BC7::c_Weights2[texel / 4]);
+			check("independent alpha, mode 5", independent, 5);
+		}
+		{
+			const Endpoint first = ExpandEndpoint({ 2, 29, 11, 5 }, 5, 6);
+			const Endpoint second = ExpandEndpoint({ 27, 4, 19, 58 }, 5, 6);
+			Block independent {};
+			for (uint32_t texel = 0; texel < 16; texel++)
+				independent[texel] = InterpolateTexel(first, second, BC7::c_Weights3[texel % 8], BC7::c_Weights2[texel / 4]);
+			const EncodedBlock encoded = Encode(independent);
+			CheckRoundTrip(independent, encoded);
+			CHECK(encoded.Info.Mode == 4);
+			CHECK(encoded.Info.IndexSelection == 1);
+			CHECK(encoded.Error == 0);
+		}
+
+		// Hard edges between two gradients in every two-subset partition: mode 3 (eight-bit endpoints, four levels) and
+		// mode 1 (seven-bit endpoints, eight levels); with two alpha values, mode 7.
+		for (uint32_t partition = 0; partition < 64; partition++)
+		{
+			const std::vector<std::array<Endpoint, 2>> mode3 = {
+				{ ExpandEndpoint({ 1, 125, 20, 0 }, 7, 0, 1), ExpandEndpoint({ 125, 3, 94, 0 }, 7, 0, 0) },
+				{ ExpandEndpoint({ 27, 49, 125, 0 }, 7, 0, 0), ExpandEndpoint({ 100, 105, 3, 0 }, 7, 0, 1) } };
+			check(fmt::format("mode 3, partition {}", partition), CreatePartitionedBlock(3, partition, mode3, { 0, 3, 1, 2 }), 3, partition);
+
+			const std::vector<std::array<Endpoint, 2>> mode1 = {
+				{ ExpandEndpoint({ 1, 61, 10, 0 }, 6, 0, 1), ExpandEndpoint({ 62, 2, 47, 0 }, 6, 0, 1) },
+				{ ExpandEndpoint({ 13, 24, 62, 0 }, 6, 0, 0), ExpandEndpoint({ 50, 52, 1, 0 }, 6, 0, 0) } };
+			check(fmt::format("mode 1, partition {}", partition), CreatePartitionedBlock(1, partition, mode1, { 0, 7, 3, 5, 1, 6, 2, 4 }), 1, partition);
+
+			const std::vector<std::array<Endpoint, 2>> mode7 = {
+				{ ExpandEndpoint({ 1, 30, 5, 9 }, 5, 5, 0), ExpandEndpoint({ 31, 2, 23, 9 }, 5, 5, 0) },
+				{ ExpandEndpoint({ 7, 12, 30, 25 }, 5, 5, 1), ExpandEndpoint({ 25, 26, 1, 25 }, 5, 5, 1) } };
+			check(fmt::format("mode 7, partition {}", partition), CreatePartitionedBlock(7, partition, mode7, { 0, 3, 1, 2 }), 7, partition);
+		}
+
+		// Three gradients in every three-subset partition: mode 2 (five-bit endpoints, four levels) and, in the first 16,
+		// mode 0 (four-bit endpoints with p-bits, eight levels).
+		for (uint32_t partition = 0; partition < 64; partition++)
+		{
+			const std::vector<std::array<Endpoint, 2>> mode2 = {
+				{ ExpandEndpoint({ 1, 30, 9, 0 }, 5, 0), ExpandEndpoint({ 29, 2, 22, 0 }, 5, 0) },
+				{ ExpandEndpoint({ 6, 13, 30, 0 }, 5, 0), ExpandEndpoint({ 25, 27, 2, 0 }, 5, 0) },
+				{ ExpandEndpoint({ 30, 18, 1, 0 }, 5, 0), ExpandEndpoint({ 3, 8, 26, 0 }, 5, 0) } };
+			check(fmt::format("mode 2, partition {}", partition), CreatePartitionedBlock(2, partition, mode2, { 0, 3, 1, 2 }), 2, partition);
+			if (partition >= 16)
+				continue;
+
+			const std::vector<std::array<Endpoint, 2>> mode0 = {
+				{ ExpandEndpoint({ 0, 15, 4, 0 }, 4, 0, 1), ExpandEndpoint({ 15, 1, 11, 0 }, 4, 0, 0) },
+				{ ExpandEndpoint({ 3, 6, 15, 0 }, 4, 0, 0), ExpandEndpoint({ 12, 13, 0, 0 }, 4, 0, 1) },
+				{ ExpandEndpoint({ 15, 9, 0, 0 }, 4, 0, 1), ExpandEndpoint({ 1, 4, 13, 0 }, 4, 0, 1) } };
+			check(fmt::format("mode 0, partition {}", partition), CreatePartitionedBlock(0, partition, mode0, { 0, 7, 3, 5, 1, 6, 2, 4 }), 0, partition);
+		}
+	}
+
+	TEST_CASE("The BC7 encoder stores flat colors exactly")
+	{
+		std::mt19937 random(7);
+		for (uint32_t value = 0; value < 256; value++)
+		{
+			CAPTURE(value);
+			Block gray {};
+			gray.fill(Texel { static_cast<uint8_t>(value), static_cast<uint8_t>(value), static_cast<uint8_t>(value), 255 });
+			Block color {};
+			color.fill(Texel { static_cast<uint8_t>(random()), static_cast<uint8_t>(value), static_cast<uint8_t>(random()), static_cast<uint8_t>(random()) });
+			for (const Block& source : { gray, color })
+			{
+				for (bool highQuality : { true, false })
+				{
+					const EncodedBlock encoded = Encode(source, highQuality);
+					CheckRoundTrip(source, encoded);
+					CHECK(encoded.Info.Mode == 5);
+					CHECK(encoded.Error == 0);
+				}
+			}
+		}
+	}
+
+	TEST_CASE("The BC7 encoder never picks a worse mode than mode 6 and keeps opaque blocks opaque")
+	{
+		// 10,000 blocks of noise, gradients, edges between regions and mixes of them, opaque or with alpha that is
+		// constant, noisy or follows the regions. At High the search always fits mode 6 in full besides the others, so no
+		// block may decode worse than mode 6 alone gives (encoded with the same settings); every block decodes as the encoder
+		// predicted, opaque blocks decode opaque, and every mode wins somewhere.
+		std::mt19937 random(20261010);
+		auto next = [&random](uint32_t range) { return static_cast<int32_t>(random() % range); };
+		uint32_t modeCounts[8] = {};
+		uint32_t fastModeCounts[8] = {};
+		uint64_t highError = 0;
+		uint64_t mode6Error = 0;
+		uint64_t fastError = 0;
+		uint32_t opaqueBlocks = 0;
+		for (uint32_t blockIndex = 0; blockIndex < 10000; blockIndex++)
+		{
+			CAPTURE(blockIndex);
+			// Up to three regions (a random partition of BC7's), each a gradient between random colors plus noise.
+			const uint32_t regions = static_cast<uint32_t>(next(3)) + 1;
+			const uint32_t partition = static_cast<uint32_t>(next(64));
+			const int32_t noise = std::array<int32_t, 4> { 0, 4, 24, 256 }[blockIndex % 4];
+			const uint32_t alphaKind = static_cast<uint32_t>(next(4)); // Opaque, constant, noisy, per region
+			int32_t colors[3][2][4];
+			for (auto& region : colors)
+			{
+				for (auto& endpoint : region)
+				{
+					for (int32_t& value : endpoint)
+						value = next(256);
+				}
+			}
+			const int32_t constantAlpha = next(256);
+			Block source {};
+			for (uint32_t texel = 0; texel < 16; texel++)
+			{
+				const uint32_t region = regions == 1 ? 0 : BC7::GetSubset(regions, partition, texel);
+				const int32_t position = next(65);
+				for (uint32_t channel = 0; channel < 4; channel++)
+				{
+					const int32_t base = (colors[region][0][channel] * (64 - position) + colors[region][1][channel] * position) / 64;
+					const int32_t jitter = noise == 0 ? 0 : next(static_cast<uint32_t>(noise)) - noise / 2;
+					source[texel][channel] = static_cast<uint8_t>(std::clamp(noise == 256 ? next(256) : base + jitter, 0, 255));
+				}
+				switch (alphaKind)
+				{
+					case 0: source[texel][3] = 255; break;
+					case 1: source[texel][3] = static_cast<uint8_t>(constantAlpha); break;
+					case 2: break;
+					default: source[texel][3] = static_cast<uint8_t>(colors[region][0][3]); break;
+				}
+			}
+
+			const EncodedBlock high = Encode(source);
+			const Block decoded = CheckRoundTrip(source, high);
+			const EncodedBlock mode6 = Encode(source, true, 1u << 6);
+			CheckRoundTrip(source, mode6);
+			CHECK(mode6.Info.Mode == 6);
+			REQUIRE(high.Error <= mode6.Error);
+			const EncodedBlock fast = Encode(source, false);
+			CheckRoundTrip(source, fast);
+			CHECK((fast.Info.Mode == 6 || fast.Info.Mode == 5));
+			modeCounts[high.Info.Mode]++;
+			fastModeCounts[fast.Info.Mode]++;
+			highError += high.Error;
+			mode6Error += mode6.Error;
+			fastError += fast.Error;
+
+			if (alphaKind == 0)
+			{
+				opaqueBlocks++;
+				for (const Block& opaque : { decoded, ToBlock(mode6.Info.Decoded), ToBlock(fast.Info.Decoded) })
+				{
+					for (const Texel& texel : opaque)
+						REQUIRE(texel[3] == 255);
+				}
+			}
+		}
+		MESSAGE(fmt::format("High: modes 0-7 {} {} {} {} {} {} {} {}, total error {} (mode 6 alone {}); Fast: modes 5 and 6 {} {}, total error {}; {} opaque blocks",
+			modeCounts[0], modeCounts[1], modeCounts[2], modeCounts[3], modeCounts[4], modeCounts[5], modeCounts[6], modeCounts[7], highError, mode6Error,
+			fastModeCounts[5], fastModeCounts[6], fastError, opaqueBlocks));
+		// The search reaches every mode.
+		for (uint32_t mode = 0; mode < 8; mode++)
+		{
+			CAPTURE(mode);
+			CHECK(modeCounts[mode] > 0);
+		}
+		CHECK(highError < mode6Error);
+		CHECK(highError <= fastError);
 	}
 }

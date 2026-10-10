@@ -30,6 +30,8 @@
 	"Perf.TextureCook.ColdImport": { "Measured": 1182.0, "Budget": 1773.0, "Unit": "ms" },
 	"Perf.TextureCook.PackSize": { "Measured": 81.24, "Budget": 121.86, "Unit": "MB" },
 	"Perf.TextureCook.StoredTextures": { "Measured": 55.93, "Budget": 83.89, "Unit": "MB" },
+	"Perf.TextureCook.BC7High": { "Measured": 15.33, "Budget": 22.99, "Unit": "us" },
+	"Perf.TextureCook.BC7Fast": { "Measured": 1.154, "Budget": 1.730, "Unit": "us" },
 	"Perf.Editor.EntityCreate100kRoots": { "Measured": 0.004, "Budget": 0.006, "Unit": "ms" },
 	"Perf.Editor.EntityDelete100kRoots": { "Measured": 0.4954, "Budget": 0.7431, "Unit": "ms" },
 	"Perf.Editor.Delete10kOf100kRoots": { "Measured": 42.64, "Budget": 63.96, "Unit": "ms" },

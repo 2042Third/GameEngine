@@ -566,7 +566,7 @@ Textures are stored the way the GPU samples them: block-compressed, with their m
   | `BC3`, `BC3SRGB` | 9, 10 | 16 bytes per block (BC4 alpha + BC1 color) | color with alpha |
   | `BC4` | 11 | 8 bytes per block | one channel (gray data) |
   | `BC5` | 12 | 16 bytes per block | normal maps (X and Y) |
-  | `BC7`, `BC7SRGB` | 13, 14 | 16 bytes per block | loaded, uploaded and decoded; the importer has no BC7 encoder yet |
+  | `BC7`, `BC7SRGB` | 13, 14 | 16 bytes per block | loaded, uploaded, decoded and encoded (`TextureCooker`), not chosen by the importer yet |
 
   `GetTextureFormatInfo` gives block size, bytes per block, channels and color space; `GetMipByteSize` rounds a level up
   to whole blocks and is the size every count uses (validation, row pitches, uploads, `Texture::GetMemoryUsage` and so
@@ -590,13 +590,31 @@ Textures are stored the way the GPU samples them: block-compressed, with their m
   normal maps renormalized in every level (level 0 too). HDR mips use a box filter: a sharper one rings around a bright
   sun into negative light. `TextureUtils::GenerateMips` (a 2x2 box) stays for textures made at runtime. Cooking holds
   two levels' texels at a time: each level is encoded, then the next is filtered from it.
-- **Encoding** (`TextureCooker::EncodeLevel`): stb_dxt (BC1 and BC3 with two endpoint refinements at `High`, BC4, BC5),
-  batches of block rows (`TextureCooker::GetEncodeBatchCount`) in parallel on `JobSystem::ParallelFor`, the same bytes
-  with or without workers. Where imports run: `EditorAssetManager::Scan` imports what needs it in parallel on the worker
-  pool while its caller waits (the editor, when it opens a project); re-imports after file changes run on I/O jobs and
-  are applied between frames; the editor's `asset.import`, `asset.reimport` and `asset.setImportSettings` still import
-  on the main thread inside the command (about half a second for a 4096x4096 texture in Release, less than the RGBA8
-  import before), until `content-and-prefabs` makes them asynchronous (Docs/Roadmap.md).
+- **Encoding** (`TextureCooker::EncodeLevel`): stb_dxt for BC1 and BC3 (two endpoint refinements at `High`, one at
+  `Fast`), BC4 and BC5; Strata's own BC7 encoder (`Asset/BC7Encoder`, written from the format's definition in
+  `Renderer/BC7Format.h`, which the decoder shares) for BC7. Batches of block rows (`TextureCooker::GetEncodeBatchCount`;
+  256 blocks per batch for BC7, 4096 for the others) run in parallel on `JobSystem::ParallelFor`, the same bytes with or
+  without workers.
+- **BC7** (`BC7Encoder::EncodeBlock`; details in its header). Every candidate is fitted alike: per subset the principal
+  axis of its texels gives the endpoints, quantized to the mode's precision with p-bits; each texel takes the nearest
+  interpolated color; least-squares refits of the endpoints to that assignment follow while they lower the error, and
+  anchor indices are fixed up by swapping endpoints. `High` screens every mode - mode 6; modes 4 and 5 in the channel
+  rotation their estimate prefers (mode 4 with both index selections); the 64 partitions of modes 1, 3 and 7 and of
+  modes 2 and 0 ranked by an estimate (the part of each subset's spread off its principal axis, from per-row sums of
+  the block, plus quantization along it) and the best two of each mode (mode 0: one) - then fits the two best and
+  mode 6 in full (three refits, every p-bit combination), so no block ends worse than mode 6 alone. Blocks of one color
+  are mode 5, exact; once a candidate errs by at most one squared step per texel, partitions are not searched; mode 7
+  is skipped in opaque blocks, where mode 3 stores everything it can. `Fast` fits mode 6 (and mode 5 when alpha varies)
+  with one refit. Opaque blocks always decode with alpha 255 (alpha endpoints are pinned to 255). The error is the sum
+  of squared RGBA differences; the encoder reports it and the texels it predicts, which the tests compare with the
+  decoder. Measured (Release, one thread of an i7-13700K, `Perf.TextureCook.BC7High` and `BC7Fast`): about 15 us per
+  block at `High` and 1.2 us at `Fast` on the stress textures' noise (every block searched in full); the feature
+  test's checker is exact and a smooth 256x256 gradient reaches 54 dB at `High` (BC1: 43.6 and 45.6 dB).
+- **Where imports run**: `EditorAssetManager::Scan` imports what needs it in parallel on the worker pool while its
+  caller waits (the editor, when it opens a project); re-imports after file changes run on I/O jobs and are applied
+  between frames; the editor's `asset.import`, `asset.reimport` and `asset.setImportSettings` still import on the main
+  thread inside the command (about half a second for a 4096x4096 texture in Release, less than the RGBA8 import before),
+  until `content-and-prefabs` makes them asynchronous (Docs/Roadmap.md).
 - **Cooked form** (`Renderer/CookedTexture.h`, `STTX` version 2): a 40-byte header (format, size, mip count, flags,
   filter, wrap, name length, data offset), a mip table (width, height, offset, size per level), the debug name, then the
   levels smallest first, each 16-byte aligned. The mip tail - every level up to 128x128 - is therefore one range right
@@ -727,7 +745,8 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   sweep), and `StrataTests/Perf/Budgets.json` judges the peak private bytes of each sweep's best run (the graphics
   driver's commit charge varies from run to run), the largest resident texture memory of any evicting run and the
   finalization time of the median evicting run. `Perf.TextureCook` (`TextureCookPerfTests.cpp`) imports the same
-  project cold three times and checks the median import time, the stored size of every texture and the pack size.
+  project cold three times and checks the median import time, the stored size of every texture and the pack size, and
+  measures the BC7 encoder's time per block on one thread.
   `GPU.Assets.Streaming` runs the same sweep on a small stress project under the validation layers.
 
 ## Scripting

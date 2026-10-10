@@ -286,9 +286,9 @@ TEST_SUITE("Asset.TextureImport")
 		settings.GenerateMips = false;
 		REQUIRE(TextureCooker::CookLevels(CreateImage(4, 4, 4, coverage), settings, mips, &error));
 		CHECK(mips.size() == 1);
-		settings.Format = TextureFormat::BC7;
+		settings.Format = TextureFormat::RGBA16F;
 		CHECK_FALSE(TextureCooker::CookLevels(CreateImage(4, 4, 4, coverage), settings, mips, &error));
-		CHECK(error.find("BC7") != std::string::npos);
+		CHECK(error.find("RGBA16F") != std::string::npos);
 		settings.Format = TextureFormat::RGBA8;
 		CHECK_FALSE(TextureCooker::CookLevels(CreateImage(4, 4, 4, {}), settings, mips, &error));
 	}
@@ -447,6 +447,6 @@ TEST_SUITE("Asset.TextureImport")
 			CHECK(parallel == sequential);
 		}
 		CHECK(TextureCooker::GetEncodeBatchCount(TextureFormat::BC1SRGB, 4, 4) == 1);
-		CHECK(TextureCooker::GetEncodeBatchCount(TextureFormat::BC7, 1024, 1024) == 0);
+		CHECK(TextureCooker::GetEncodeBatchCount(TextureFormat::RGBA16F, 1024, 1024) == 0);
 	}
 }

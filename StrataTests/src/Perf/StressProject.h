@@ -65,6 +65,10 @@ namespace Strata::Tests
 	// Imports the project (ImportStressProject) and builds its asset pack (BuildAssetPack).
 	bool BuildStressPack(const StressProject& project, const std::filesystem::path& packPath, std::string& error);
 
+	// The texels of the stress project's texture `seed` (from 1) of size x size: RGB noise over a gradient. The gradient differs
+	// per texture, the noise keeps the PNG from compressing to nothing and the cooked mips from being trivial.
+	std::vector<uint8_t> CreateStressTexels(uint32_t size, uint32_t seed);
+
 	// The format the stress project's textures (opaque RGB color) cook to, and the GPU bytes of one of `size` with its full
 	// mip chain in it.
 	TextureFormat GetStressTextureFormat();

@@ -73,15 +73,22 @@ namespace
 		return CreateBlockTexture(format, size, CreateRandomBlocks(format, size, size, seed), fmt::format("Random{}", TextureFormatToString(format)));
 	}
 
-	// An image of the kind each format is for, encoded by the importer's block encoder: noisy color gradients (with an
-	// alpha ramp for BC3), a gray ramp (BC4) and a sphere's normals (BC5).
-	Ref<Texture> CreateEncodedTexture(TextureFormat format, uint32_t size)
+	enum class EncodedPattern
+	{
+		Gradient, // What each format is for: noisy color gradients, a gray ramp (BC4), a sphere's normals (BC5)
+		Checker   // Two colors in cells of three texels, so most blocks hold an edge
+	};
+
+	// An image encoded by the importer's block encoders: noisy color gradients (with an alpha ramp for BC3 and BC7), a gray
+	// ramp (BC4), a sphere's normals (BC5), or the checker.
+	Ref<Texture> CreateEncodedTexture(TextureFormat format, uint32_t size, EncodedPattern pattern = EncodedPattern::Gradient, bool highQuality = true)
 	{
 		TextureCooker::Image image;
 		image.Width = size;
 		image.Height = size;
 		const uint32_t channels = GetTextureFormatInfo(format).Channels;
 		image.Channels = format == TextureFormat::BC5 ? 3 : channels;
+		const bool alphaRamp = format == TextureFormat::BC3 || format == TextureFormat::BC3SRGB || format == TextureFormat::BC7 || format == TextureFormat::BC7SRGB;
 		uint32_t random = 0x2545F491u;
 		for (uint32_t y = 0; y < size; y++)
 		{
@@ -91,7 +98,13 @@ namespace
 				random ^= random >> 17;
 				random ^= random << 5;
 				const uint32_t noise = random & 0x0F;
-				if (format == TextureFormat::BC5)
+				if (pattern == EncodedPattern::Checker)
+				{
+					const bool first = (x / 3 + y / 3) % 2 == 0;
+					const uint8_t checker[4] = { static_cast<uint8_t>(first ? 230 : 40), static_cast<uint8_t>(first ? 120 : 200), static_cast<uint8_t>(first ? 30 : 160), 255 };
+					image.Pixels.insert(image.Pixels.end(), checker, checker + image.Channels);
+				}
+				else if (format == TextureFormat::BC5)
 				{
 					const glm::vec2 offset = (glm::vec2(x, y) + 0.5f) / static_cast<float>(size) * 2.0f - 1.0f;
 					const float radiusSquared = std::min(glm::dot(offset, offset), 0.95f);
@@ -108,13 +121,14 @@ namespace
 					image.Pixels.push_back(static_cast<uint8_t>((x * 255 / (size - 1)) ^ noise));
 					image.Pixels.push_back(static_cast<uint8_t>((y * 255 / (size - 1)) ^ (noise << 1)));
 					image.Pixels.push_back(static_cast<uint8_t>((x + y) * 127 / (size - 1)));
-					image.Pixels.push_back(static_cast<uint8_t>(format == TextureFormat::BC3 || format == TextureFormat::BC3SRGB ? x * 255 / (size - 1) : 255));
+					image.Pixels.push_back(static_cast<uint8_t>(alphaRamp ? x * 255 / (size - 1) : 255));
 				}
 			}
 		}
 		std::vector<uint8_t> blocks;
-		REQUIRE(TextureCooker::EncodeLevel(image, format, true, blocks));
-		return CreateBlockTexture(format, size, std::move(blocks), fmt::format("Encoded{}", TextureFormatToString(format)));
+		REQUIRE(TextureCooker::EncodeLevel(image, format, highQuality, blocks));
+		const char* patternName = pattern == EncodedPattern::Checker ? "Checker" : "Gradient";
+		return CreateBlockTexture(format, size, std::move(blocks), fmt::format("Encoded{}{}{}", TextureFormatToString(format), patternName, highQuality ? "" : "Fast"));
 	}
 
 	// How far apart a block's two endpoints are in a channel. GPUs interpolate BC1 to BC5 approximately (the
@@ -455,40 +469,50 @@ TEST_SUITE("GPU.Assets")
 		REQUIRE(gpu.IsValid());
 		REQUIRE(gpu.GetDevice().GetInfo().SupportsBCCompression);
 		constexpr uint32_t c_Size = c_SceneTestSize;
-		const TextureFormat formats[] = { TextureFormat::BC1, TextureFormat::BC1SRGB, TextureFormat::BC3SRGB, TextureFormat::BC4, TextureFormat::BC5,
-			TextureFormat::BC7, TextureFormat::BC7SRGB };
+		struct Encoded
+		{
+			TextureFormat Format;
+			EncodedPattern Pattern;
+			bool HighQuality;
+		};
+		// Every format the importer encodes, as the encoders store them; BC7, whose encoder searches modes, partitions and
+		// rotations, also a checker of edges between two colors and both qualities.
+		const Encoded textures[] = { { TextureFormat::BC1, EncodedPattern::Gradient, true }, { TextureFormat::BC1SRGB, EncodedPattern::Gradient, true },
+			{ TextureFormat::BC3SRGB, EncodedPattern::Gradient, true }, { TextureFormat::BC4, EncodedPattern::Gradient, true },
+			{ TextureFormat::BC5, EncodedPattern::Gradient, true }, { TextureFormat::BC7, EncodedPattern::Gradient, true },
+			{ TextureFormat::BC7, EncodedPattern::Checker, true }, { TextureFormat::BC7, EncodedPattern::Gradient, false },
+			{ TextureFormat::BC7SRGB, EncodedPattern::Gradient, true }, { TextureFormat::BC7SRGB, EncodedPattern::Checker, true },
+			{ TextureFormat::BC7SRGB, EncodedPattern::Checker, false } };
 
-		// Sampled through the bindless table by the scene renderer, block-compressed on the GPU: textures from the importer's
-		// encoder, and BC7 (exactly specified, so any block will do) as random blocks of every mode.
-		std::map<TextureFormat, ReadbackImage> compressedImages;
+		// Sampled through the bindless table by the scene renderer, block-compressed on the GPU.
+		std::map<uint64_t, ReadbackImage> compressedImages;
 		std::map<uint64_t, std::vector<uint8_t>> cooked;
 		std::vector<AssetMetadata> entries;
 		{
 			SceneTestAssets assets;
-			uint32_t seed = 1;
-			for (TextureFormat format : formats)
+			for (uint64_t index = 0; index < std::size(textures); index++)
 			{
-				const std::string formatName = TextureFormatToString(format);
-				CAPTURE(formatName);
-				const bool bc7 = format == TextureFormat::BC7 || format == TextureFormat::BC7SRGB;
-				const Ref<Texture> texture = bc7 ? CreateRandomBlockTexture(format, c_Size, seed++) : CreateEncodedTexture(format, c_Size);
+				const Encoded& encoded = textures[index];
+				const Ref<Texture> texture = CreateEncodedTexture(encoded.Format, c_Size, encoded.Pattern, encoded.HighQuality);
+				const std::string name = texture->GetSpecification().DebugName;
+				CAPTURE(name);
 				const std::vector<uint8_t> blocks(texture->GetMipData(0).begin(), texture->GetMipData(0).end());
 				AssetMetadata metadata;
-				metadata.Handle = UUID(0xBC00 + static_cast<uint64_t>(format));
+				metadata.Handle = UUID(0xBC00 + index);
 				metadata.Type = AssetType::Texture;
-				metadata.Path = texture->GetSpecification().DebugName + ".png";
+				metadata.Path = name + ".png";
 				cooked[static_cast<uint64_t>(metadata.Handle)] = texture->Serialize();
 				entries.push_back(metadata);
 
 				const AssetHandle handle = assets.Add(texture, metadata.Path);
-				CHECK(texture->GetSpecification().Format == format);
-				CHECK(texture->GetMemoryUsage().GpuTextures == GetMipByteSize(format, c_Size, c_Size));
+				CHECK(texture->GetSpecification().Format == encoded.Format);
+				CHECK(texture->GetMemoryUsage().GpuTextures == GetMipByteSize(encoded.Format, c_Size, c_Size));
 				const ReadbackImage image = RenderTexturedQuad(*assets.Manager, handle, c_Size);
 				const SamplingCheck check = CheckSampledImage(image, *texture, blocks);
-				MESSAGE(formatName, " on the GPU: ", check.Outside, " channels sampled more than 1/255 from the CPU decode, at most ",
+				MESSAGE(name, " on the GPU: ", check.Outside, " channels sampled more than 1/255 from the CPU decode, at most ",
 					check.MaxStepsFromExact, " output steps from it");
 				CHECK_MESSAGE(check.Outside == 0, check.FirstOutside);
-				compressedImages[format] = image;
+				compressedImages[index] = image;
 			}
 		}
 
@@ -505,11 +529,12 @@ TEST_SUITE("GPU.Assets")
 		AssetManager::SetActive(manager);
 		{
 			ScopedBlockCompressionFallback fallback;
-			for (TextureFormat format : formats)
+			for (uint64_t index = 0; index < std::size(textures); index++)
 			{
-				const std::string formatName = TextureFormatToString(format);
-				CAPTURE(formatName);
-				const AssetHandle handle = UUID(0xBC00 + static_cast<uint64_t>(format));
+				const TextureFormat format = textures[index].Format;
+				const AssetHandle handle = UUID(0xBC00 + index);
+				const std::string name = entries[index].Path;
+				CAPTURE(name);
 				const Ref<Texture> texture = std::static_pointer_cast<Texture>(manager->LoadAssetSync(handle));
 				REQUIRE(texture);
 				CHECK(texture->GetSpecification().Format == GetDecodedFormat(format));
@@ -527,8 +552,8 @@ TEST_SUITE("GPU.Assets")
 				const SamplingCheck check = CheckSampledImage(image, *reference, reference->GetMipData(0));
 				CHECK(check.Outside == 0);
 				CHECK(check.MaxStepsFromExact <= 1);
-				const int difference = MaxDifference(image, compressedImages[format]);
-				MESSAGE(formatName, " decoded at load time: at most ", check.MaxStepsFromExact, " output steps from the CPU decode, ",
+				const int difference = MaxDifference(image, compressedImages[index]);
+				MESSAGE(name, " decoded at load time: at most ", check.MaxStepsFromExact, " output steps from the CPU decode, ",
 					difference, " from the GPU's decode");
 				// BC7 decodes exactly everywhere; the other formats' interpolation may round differently on the GPU.
 				if (format == TextureFormat::BC7 || format == TextureFormat::BC7SRGB)

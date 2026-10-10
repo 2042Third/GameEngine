@@ -45,7 +45,7 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
   project and opens a maximized StrataEditor on them for about 20 seconds; `PerfGPU.Streaming` writes and imports the
   stress project (17 large textures, 55.9 MB once block-compressed) and runs its two camera sweeps (evicting, and all
   textures resident at 1920x1080) three times each in helper processes, about a minute; `Perf.TextureCook` imports the
-  same project cold three times), `StrataEditor.Smoke`
+  same project cold three times and times the BC7 encoder per block), `StrataEditor.Smoke`
   (the real editor in a window with `StrataTests/Editor/SmokeCommands.json.in`, configured into the build tree, label
   `gpu`; it creates a project in `build/<preset>/StrataTests/SmokeProject` (emptied first by `StrataEditor.SmokeClean`),
   so the editor rather than the launcher shows, captures the viewport to `SmokeViewport.png`/`SmokeSceneCamera.png` in

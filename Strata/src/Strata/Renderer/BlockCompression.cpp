@@ -1,99 +1,13 @@
 #include "stpch.h"
 #include "Strata/Renderer/BlockCompression.h"
 
+#include "Strata/Renderer/BC7Format.h"
+
 namespace Strata::BlockCompression
 {
 
 	namespace
 	{
-
-		// BC7 partitions of two subsets: bit i is the subset of texel i (row-major).
-		constexpr uint16_t c_BC7Partitions2[64] = {
-			0xCCCC, 0x8888, 0xEEEE, 0xECC8, 0xC880, 0xFEEC, 0xFEC8, 0xEC80, 0xC800, 0xFFEC, 0xFE80, 0xE800, 0xFFE8, 0xFF00, 0xFFF0, 0xF000,
-			0xF710, 0x008E, 0x7100, 0x08CE, 0x008C, 0x7310, 0x3100, 0x8CCE, 0x088C, 0x3110, 0x6666, 0x366C, 0x17E8, 0x0FF0, 0x718E, 0x399C,
-			0xAAAA, 0xF0F0, 0x5A5A, 0x33CC, 0x3C3C, 0x55AA, 0x9696, 0xA55A, 0x73CE, 0x13C8, 0x324C, 0x3BDC, 0x6996, 0xC33C, 0x9966, 0x0660,
-			0x0272, 0x04E4, 0x4E40, 0x2720, 0xC936, 0x936C, 0x39C6, 0x639C, 0x9336, 0x9CC6, 0x817E, 0xE718, 0xCCF0, 0x0FCC, 0x7744, 0xEE22 };
-
-		// BC7 partitions of three subsets: the subset of each texel (row-major). Mode 0 uses the first 16.
-		constexpr uint8_t c_BC7Partitions3[64][16] = {
-			{ 0, 0, 1, 1, 0, 0, 1, 1, 0, 2, 2, 1, 2, 2, 2, 2 }, { 0, 0, 0, 1, 0, 0, 1, 1, 2, 2, 1, 1, 2, 2, 2, 1 },
-			{ 0, 0, 0, 0, 2, 0, 0, 1, 2, 2, 1, 1, 2, 2, 1, 1 }, { 0, 2, 2, 2, 0, 0, 2, 2, 0, 0, 1, 1, 0, 1, 1, 1 },
-			{ 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 2, 2, 1, 1, 2, 2 }, { 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 2, 2, 0, 0, 2, 2 },
-			{ 0, 0, 2, 2, 0, 0, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1 }, { 0, 0, 1, 1, 0, 0, 1, 1, 2, 2, 1, 1, 2, 2, 1, 1 },
-			{ 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2 }, { 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2 },
-			{ 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2 }, { 0, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2 },
-			{ 0, 1, 1, 2, 0, 1, 1, 2, 0, 1, 1, 2, 0, 1, 1, 2 }, { 0, 1, 2, 2, 0, 1, 2, 2, 0, 1, 2, 2, 0, 1, 2, 2 },
-			{ 0, 0, 1, 1, 0, 1, 1, 2, 1, 1, 2, 2, 1, 2, 2, 2 }, { 0, 0, 1, 1, 2, 0, 0, 1, 2, 2, 0, 0, 2, 2, 2, 0 },
-			{ 0, 0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 2, 1, 1, 2, 2 }, { 0, 1, 1, 1, 0, 0, 1, 1, 2, 0, 0, 1, 2, 2, 0, 0 },
-			{ 0, 0, 0, 0, 1, 1, 2, 2, 1, 1, 2, 2, 1, 1, 2, 2 }, { 0, 0, 2, 2, 0, 0, 2, 2, 0, 0, 2, 2, 1, 1, 1, 1 },
-			{ 0, 1, 1, 1, 0, 1, 1, 1, 0, 2, 2, 2, 0, 2, 2, 2 }, { 0, 0, 0, 1, 0, 0, 0, 1, 2, 2, 2, 1, 2, 2, 2, 1 },
-			{ 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 2, 2, 0, 1, 2, 2 }, { 0, 0, 0, 0, 1, 1, 0, 0, 2, 2, 1, 0, 2, 2, 1, 0 },
-			{ 0, 1, 2, 2, 0, 1, 2, 2, 0, 0, 1, 1, 0, 0, 0, 0 }, { 0, 0, 1, 2, 0, 0, 1, 2, 1, 1, 2, 2, 2, 2, 2, 2 },
-			{ 0, 1, 1, 0, 1, 2, 2, 1, 1, 2, 2, 1, 0, 1, 1, 0 }, { 0, 0, 0, 0, 0, 1, 1, 0, 1, 2, 2, 1, 1, 2, 2, 1 },
-			{ 0, 0, 2, 2, 1, 1, 0, 2, 1, 1, 0, 2, 0, 0, 2, 2 }, { 0, 1, 1, 0, 0, 1, 1, 0, 2, 0, 0, 2, 2, 2, 2, 2 },
-			{ 0, 0, 1, 1, 0, 1, 2, 2, 0, 1, 2, 2, 0, 0, 1, 1 }, { 0, 0, 0, 0, 2, 0, 0, 0, 2, 2, 1, 1, 2, 2, 2, 1 },
-			{ 0, 0, 0, 0, 0, 0, 0, 2, 1, 1, 2, 2, 1, 2, 2, 2 }, { 0, 2, 2, 2, 0, 0, 2, 2, 0, 0, 1, 2, 0, 0, 1, 1 },
-			{ 0, 0, 1, 1, 0, 0, 1, 2, 0, 0, 2, 2, 0, 2, 2, 2 }, { 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0 },
-			{ 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 0, 0, 0, 0 }, { 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0 },
-			{ 0, 1, 2, 0, 2, 0, 1, 2, 1, 2, 0, 1, 0, 1, 2, 0 }, { 0, 0, 1, 1, 2, 2, 0, 0, 1, 1, 2, 2, 0, 0, 1, 1 },
-			{ 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 0, 0, 0, 0, 1, 1 }, { 0, 1, 0, 1, 0, 1, 0, 1, 2, 2, 2, 2, 2, 2, 2, 2 },
-			{ 0, 0, 0, 0, 0, 0, 0, 0, 2, 1, 2, 1, 2, 1, 2, 1 }, { 0, 0, 2, 2, 1, 1, 2, 2, 0, 0, 2, 2, 1, 1, 2, 2 },
-			{ 0, 0, 2, 2, 0, 0, 1, 1, 0, 0, 2, 2, 0, 0, 1, 1 }, { 0, 2, 2, 0, 1, 2, 2, 1, 0, 2, 2, 0, 1, 2, 2, 1 },
-			{ 0, 1, 0, 1, 2, 2, 2, 2, 2, 2, 2, 2, 0, 1, 0, 1 }, { 0, 0, 0, 0, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1 },
-			{ 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 2, 2, 2, 2 }, { 0, 2, 2, 2, 0, 1, 1, 1, 0, 2, 2, 2, 0, 1, 1, 1 },
-			{ 0, 0, 0, 2, 1, 1, 1, 2, 0, 0, 0, 2, 1, 1, 1, 2 }, { 0, 0, 0, 0, 2, 1, 1, 2, 2, 1, 1, 2, 2, 1, 1, 2 },
-			{ 0, 2, 2, 2, 0, 1, 1, 1, 0, 1, 1, 1, 0, 2, 2, 2 }, { 0, 0, 0, 2, 1, 1, 1, 2, 1, 1, 1, 2, 0, 0, 0, 2 },
-			{ 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 2, 2, 2, 2 }, { 0, 0, 0, 0, 0, 0, 0, 0, 2, 1, 1, 2, 2, 1, 1, 2 },
-			{ 0, 1, 1, 0, 0, 1, 1, 0, 2, 2, 2, 2, 2, 2, 2, 2 }, { 0, 0, 2, 2, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 2, 2 },
-			{ 0, 0, 2, 2, 1, 1, 2, 2, 1, 1, 2, 2, 0, 0, 2, 2 }, { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 1, 1, 2 },
-			{ 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 1 }, { 0, 2, 2, 2, 1, 2, 2, 2, 0, 2, 2, 2, 1, 2, 2, 2 },
-			{ 0, 1, 0, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2 }, { 0, 1, 1, 1, 2, 0, 1, 1, 2, 2, 0, 1, 2, 2, 2, 0 } };
-
-		// The texel of each subset after the first whose index is stored with one bit less (its top bit is zero); subset 0's
-		// is always texel 0.
-		constexpr uint8_t c_BC7Anchors2[64] = {
-			15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-			15, 2, 8, 2, 2, 8, 8, 15, 2, 8, 2, 2, 8, 8, 2, 2,
-			15, 15, 6, 8, 2, 8, 15, 15, 2, 8, 2, 2, 2, 15, 15, 6,
-			6, 2, 6, 8, 15, 15, 2, 2, 15, 15, 15, 15, 15, 2, 2, 15 };
-		constexpr uint8_t c_BC7Anchors3Second[64] = {
-			3, 3, 15, 15, 8, 3, 15, 15, 8, 8, 6, 6, 6, 5, 3, 3,
-			3, 3, 8, 15, 3, 3, 6, 10, 5, 8, 8, 6, 8, 5, 15, 15,
-			8, 15, 3, 5, 6, 10, 8, 15, 15, 3, 15, 5, 15, 15, 15, 15,
-			3, 15, 5, 5, 5, 8, 5, 10, 5, 10, 8, 13, 15, 12, 3, 3 };
-		constexpr uint8_t c_BC7Anchors3Third[64] = {
-			15, 8, 8, 3, 15, 15, 3, 8, 15, 15, 15, 15, 15, 15, 15, 8,
-			15, 8, 15, 3, 15, 8, 15, 8, 3, 15, 6, 10, 15, 15, 10, 8,
-			15, 3, 15, 10, 10, 8, 9, 10, 6, 15, 8, 15, 3, 6, 6, 8,
-			15, 3, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 3, 15, 15, 8 };
-
-		constexpr uint8_t c_BC7Weights2[4] = { 0, 21, 43, 64 };
-		constexpr uint8_t c_BC7Weights3[8] = { 0, 9, 18, 27, 37, 46, 55, 64 };
-		constexpr uint8_t c_BC7Weights4[16] = { 0, 4, 9, 13, 17, 21, 26, 30, 34, 38, 43, 47, 51, 55, 60, 64 };
-
-		struct BC7Mode
-		{
-			uint8_t Subsets;
-			uint8_t PartitionBits;
-			uint8_t RotationBits;
-			uint8_t IndexSelectionBits;
-			uint8_t ColorBits;
-			uint8_t AlphaBits;
-			uint8_t EndpointPBits; // One p-bit per endpoint
-			uint8_t SharedPBits;   // One p-bit per subset, shared by its endpoints
-			uint8_t IndexBits;
-			uint8_t SecondaryIndexBits;
-		};
-
-		constexpr BC7Mode c_BC7Modes[8] = {
-			{ 3, 4, 0, 0, 4, 0, 1, 0, 3, 0 },
-			{ 2, 6, 0, 0, 6, 0, 0, 1, 3, 0 },
-			{ 3, 6, 0, 0, 5, 0, 0, 0, 2, 0 },
-			{ 2, 6, 0, 0, 7, 0, 1, 0, 2, 0 },
-			{ 1, 0, 2, 1, 5, 6, 0, 0, 2, 3 },
-			{ 1, 0, 2, 0, 7, 8, 0, 0, 2, 2 },
-			{ 1, 0, 0, 0, 7, 7, 1, 0, 4, 0 },
-			{ 2, 6, 0, 0, 5, 5, 1, 0, 2, 0 } };
 
 		// Reads the fields of a 128-bit block, least significant bit first.
 		class BlockBitReader
@@ -129,33 +43,12 @@ namespace Strata::BlockCompression
 			uint32_t m_Position = 0;
 		};
 
-		// An n-bit endpoint value (n from 4 to 8) as 8 bits, its top bits replicated into the bottom.
-		uint8_t ExpandBits(uint32_t value, uint32_t bits)
-		{
-			const uint32_t shifted = value << (8 - bits);
-			return static_cast<uint8_t>(shifted | (shifted >> bits));
-		}
-
-		uint8_t InterpolateBC7(uint8_t first, uint8_t second, uint32_t weight)
-		{
-			return static_cast<uint8_t>(((64 - weight) * first + weight * second + 32) >> 6);
-		}
-
-		uint32_t GetBC7Weight(uint32_t index, uint32_t bits)
-		{
-			switch (bits)
-			{
-				case 2:  return c_BC7Weights2[index & 3];
-				case 3:  return c_BC7Weights3[index & 7];
-				default: return c_BC7Weights4[index & 15];
-			}
-		}
-
+		// BC1 expands its 5- and 6-bit endpoint values like BC7 does: their top bits are replicated into the bottom.
 		void Expand565(uint16_t color, uint8_t* rgba)
 		{
-			rgba[0] = ExpandBits((color >> 11) & 0x1F, 5);
-			rgba[1] = ExpandBits((color >> 5) & 0x3F, 6);
-			rgba[2] = ExpandBits(color & 0x1F, 5);
+			rgba[0] = BC7::ExpandBits((color >> 11) & 0x1F, 5);
+			rgba[1] = BC7::ExpandBits((color >> 5) & 0x3F, 6);
+			rgba[2] = BC7::ExpandBits(color & 0x1F, 5);
 			rgba[3] = 255;
 		}
 
@@ -238,7 +131,7 @@ namespace Strata::BlockCompression
 		}
 		bits.Skip(modeIndex + 1);
 
-		const BC7Mode& mode = c_BC7Modes[modeIndex];
+		const BC7::ModeInfo& mode = BC7::c_Modes[modeIndex];
 		const uint32_t partition = bits.Read(mode.PartitionBits);
 		const uint32_t rotation = bits.Read(mode.RotationBits);
 		const uint32_t indexSelection = bits.Read(mode.IndexSelectionBits);
@@ -284,26 +177,17 @@ namespace Strata::BlockCompression
 					value = (value << 1) | pBits[endpoint];
 					valueBits++;
 				}
-				endpoints[endpoint][channel] = ExpandBits(value, valueBits);
+				endpoints[endpoint][channel] = BC7::ExpandBits(value, valueBits);
 			}
 		}
 
-		auto getSubset = [&](uint32_t texel) -> uint32_t
-		{
-			if (mode.Subsets == 2)
-				return (c_BC7Partitions2[partition] >> texel) & 1u;
-			if (mode.Subsets == 3)
-				return c_BC7Partitions3[partition][texel];
-			return 0;
-		};
 		auto isAnchor = [&](uint32_t texel)
 		{
-			if (texel == 0)
-				return true;
-			if (mode.Subsets == 2)
-				return texel == c_BC7Anchors2[partition];
-			if (mode.Subsets == 3)
-				return texel == c_BC7Anchors3Second[partition] || texel == c_BC7Anchors3Third[partition];
+			for (uint32_t subset = 0; subset < mode.Subsets; subset++)
+			{
+				if (texel == BC7::GetAnchorTexel(mode.Subsets, partition, subset))
+					return true;
+			}
 			return false;
 		};
 
@@ -316,16 +200,16 @@ namespace Strata::BlockCompression
 
 		for (uint32_t texel = 0; texel < 16; texel++)
 		{
-			const uint32_t subset = getSubset(texel);
+			const uint32_t subset = BC7::GetSubset(mode.Subsets, partition, texel);
 			const uint8_t* first = endpoints[subset * 2];
 			const uint8_t* second = endpoints[subset * 2 + 1];
 
 			// Modes 4 and 5 have separate color and alpha indices; mode 4's index selection bit swaps their widths.
-			uint32_t colorWeight = GetBC7Weight(indices[texel], mode.IndexBits);
+			uint32_t colorWeight = BC7::GetWeights(mode.IndexBits)[indices[texel]];
 			uint32_t alphaWeight = colorWeight;
 			if (mode.SecondaryIndexBits > 0)
 			{
-				const uint32_t secondaryWeight = GetBC7Weight(secondaryIndices[texel], mode.SecondaryIndexBits);
+				const uint32_t secondaryWeight = BC7::GetWeights(mode.SecondaryIndexBits)[secondaryIndices[texel]];
 				if (indexSelection == 0)
 				{
 					alphaWeight = secondaryWeight;
@@ -339,8 +223,8 @@ namespace Strata::BlockCompression
 
 			uint8_t texelColor[4];
 			for (uint32_t channel = 0; channel < 3; channel++)
-				texelColor[channel] = InterpolateBC7(first[channel], second[channel], colorWeight);
-			texelColor[3] = InterpolateBC7(first[3], second[3], alphaWeight);
+				texelColor[channel] = BC7::Interpolate(first[channel], second[channel], colorWeight);
+			texelColor[3] = BC7::Interpolate(first[3], second[3], alphaWeight);
 			if (rotation > 0)
 				std::swap(texelColor[3], texelColor[rotation - 1]);
 			std::memcpy(rgba + (texel / 4) * rowPitch + (texel % 4) * 4, texelColor, 4);

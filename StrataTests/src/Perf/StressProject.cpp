@@ -131,28 +131,9 @@ namespace Strata::Tests
 			return state;
 		}
 
-		// RGB noise over a gradient: the gradient differs per texture (seed), the noise keeps the PNG from compressing to
-		// nothing and the cooked mips from being trivial.
 		std::vector<uint8_t> EncodeStressPNG(uint32_t size, uint32_t seed)
 		{
-			std::vector<uint8_t> pixels(static_cast<size_t>(size) * size * 3);
-			for (uint32_t y = 0; y < size; y++)
-			{
-				uint32_t random = 0x9E3779B9u ^ (seed * 0x85EBCA6Bu) ^ (y * 0xC2B2AE35u);
-				if (random == 0)
-					random = 1;
-				uint8_t* row = pixels.data() + static_cast<size_t>(y) * size * 3;
-				for (uint32_t x = 0; x < size; x++)
-				{
-					const uint32_t noise = NextRandom(random);
-					const uint32_t gradientX = static_cast<uint32_t>(static_cast<uint64_t>(x) * 256 / size);
-					const uint32_t gradientY = static_cast<uint32_t>(static_cast<uint64_t>(y) * 256 / size);
-					row[x * 3 + 0] = static_cast<uint8_t>(((gradientX + seed * 53) & 0xFF) ^ (noise & 0x1F));
-					row[x * 3 + 1] = static_cast<uint8_t>(((gradientY + seed * 97) & 0xFF) ^ ((noise >> 8) & 0x1F));
-					row[x * 3 + 2] = static_cast<uint8_t>((((gradientX + gradientY) / 2 + seed * 29) & 0xFF) ^ ((noise >> 16) & 0x1F));
-				}
-			}
-
+			const std::vector<uint8_t> pixels = CreateStressTexels(size, seed);
 			std::vector<uint8_t> encoded;
 			auto write = [](void* context, void* data, int bytes)
 			{
@@ -422,6 +403,28 @@ namespace Strata::Tests
 			ScopedActiveAssetManager& operator=(const ScopedActiveAssetManager&) = delete;
 		};
 
+	}
+
+	std::vector<uint8_t> CreateStressTexels(uint32_t size, uint32_t seed)
+	{
+		std::vector<uint8_t> pixels(static_cast<size_t>(size) * size * 3);
+		for (uint32_t y = 0; y < size; y++)
+		{
+			uint32_t random = 0x9E3779B9u ^ (seed * 0x85EBCA6Bu) ^ (y * 0xC2B2AE35u);
+			if (random == 0)
+				random = 1;
+			uint8_t* row = pixels.data() + static_cast<size_t>(y) * size * 3;
+			for (uint32_t x = 0; x < size; x++)
+			{
+				const uint32_t noise = NextRandom(random);
+				const uint32_t gradientX = static_cast<uint32_t>(static_cast<uint64_t>(x) * 256 / size);
+				const uint32_t gradientY = static_cast<uint32_t>(static_cast<uint64_t>(y) * 256 / size);
+				row[x * 3 + 0] = static_cast<uint8_t>(((gradientX + seed * 53) & 0xFF) ^ (noise & 0x1F));
+				row[x * 3 + 1] = static_cast<uint8_t>(((gradientY + seed * 97) & 0xFF) ^ ((noise >> 8) & 0x1F));
+				row[x * 3 + 2] = static_cast<uint8_t>((((gradientX + gradientY) / 2 + seed * 29) & 0xFF) ^ ((noise >> 16) & 0x1F));
+			}
+		}
+		return pixels;
 	}
 
 	TextureFormat GetStressTextureFormat()

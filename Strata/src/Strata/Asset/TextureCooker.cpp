@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Asset/TextureCooker.h"
 
+#include "Strata/Asset/BC7Encoder.h"
 #include "Strata/Core/JobSystem.h"
 
 #include <glm/glm.hpp>
@@ -14,8 +15,10 @@ namespace Strata::TextureCooker
 	namespace
 	{
 
-		// Blocks (or, for uncompressed formats, texels) a job encodes at a time: enough to outweigh scheduling.
+		// Blocks (or, for uncompressed formats, texels) a job encodes at a time: enough to outweigh scheduling. BC7 blocks
+		// take far longer than the others (a search over modes and partitions), so their batches are smaller.
 		constexpr uint32_t c_BlocksPerBatch = 4096;
+		constexpr uint32_t c_BC7BlocksPerBatch = 256;
 		constexpr uint32_t c_TexelsPerBatch = 1u << 16;
 
 		stbir_edge ToEdgeMode(TextureWrap wrap)
@@ -121,13 +124,15 @@ namespace Strata::TextureCooker
 			uint32_t MinBatchSize = 1;
 		};
 
-		EncodeWork GetEncodeWork(const TextureFormatInfo& info, uint32_t width, uint32_t height)
+		EncodeWork GetEncodeWork(TextureFormat format, uint32_t width, uint32_t height)
 		{
+			const TextureFormatInfo info = GetTextureFormatInfo(format);
 			if (!info.IsBlockCompressed)
 				return EncodeWork { width * height, c_TexelsPerBatch };
 			const uint32_t blocksX = (width + info.BlockWidth - 1) / info.BlockWidth;
 			const uint32_t blocksY = (height + info.BlockHeight - 1) / info.BlockHeight;
-			return EncodeWork { blocksY, std::max(1u, c_BlocksPerBatch / blocksX) };
+			const bool bc7 = format == TextureFormat::BC7 || format == TextureFormat::BC7SRGB;
+			return EncodeWork { blocksY, std::max(1u, (bc7 ? c_BC7BlocksPerBatch : c_BlocksPerBatch) / blocksX) };
 		}
 
 	}
@@ -136,7 +141,7 @@ namespace Strata::TextureCooker
 	{
 		if (!CanEncode(format) || width == 0 || height == 0)
 			return 0;
-		const EncodeWork work = GetEncodeWork(GetTextureFormatInfo(format), width, height);
+		const EncodeWork work = GetEncodeWork(format, width, height);
 		return (work.Count + work.MinBatchSize - 1) / work.MinBatchSize;
 	}
 
@@ -154,6 +159,8 @@ namespace Strata::TextureCooker
 			case TextureFormat::BC3SRGB:
 			case TextureFormat::BC4:
 			case TextureFormat::BC5:
+			case TextureFormat::BC7:
+			case TextureFormat::BC7SRGB:
 				return true;
 			default:
 				return false;
@@ -167,7 +174,7 @@ namespace Strata::TextureCooker
 
 		const TextureFormatInfo info = GetTextureFormatInfo(format);
 		outData.resize(static_cast<size_t>(GetMipByteSize(format, image.Width, image.Height)));
-		const EncodeWork work = GetEncodeWork(info, image.Width, image.Height);
+		const EncodeWork work = GetEncodeWork(format, image.Width, image.Height);
 		if (!info.IsBlockCompressed)
 		{
 			// Each texel's RGBA, cut to the channels the format stores.
@@ -185,6 +192,8 @@ namespace Strata::TextureCooker
 
 		const uint32_t blocksX = (image.Width + info.BlockWidth - 1) / info.BlockWidth;
 		const int mode = highQuality ? STB_DXT_HIGHQUAL : STB_DXT_NORMAL;
+		BC7Encoder::EncodeSettings bc7Settings;
+		bc7Settings.HighQuality = highQuality;
 		JobSystem::ParallelFor(work.Count, work.MinBatchSize, [&](uint32_t begin, uint32_t end)
 		{
 			uint8_t rgba[16 * 4];
@@ -221,6 +230,10 @@ namespace Strata::TextureCooker
 								channels[texel * 2 + 1] = rgba[texel * 4 + 1];
 							}
 							stb_compress_bc5_block(destination, channels);
+							break;
+						case TextureFormat::BC7:
+						case TextureFormat::BC7SRGB:
+							BC7Encoder::EncodeBlock(rgba, destination, bc7Settings);
 							break;
 						default:
 							break;

@@ -126,7 +126,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   `Perf::ScopedApplicationJobSystem` (the job system as applications start it): `Perf.Scene` (transform updates and
   idle frames up to a million entities), `Perf.Scripting` (100,000 and 300,000 trivial scripts, frames that spawn and
   destroy entities, scripts destroying 10,000 of 100,000 sibling roots in one frame), `Perf.TextureCook` (cold imports
-  of the stress project, its stored texture and pack sizes) and, in `src/Editor/`,
+  of the stress project, its stored texture and pack sizes, the BC7 encoder's time per block on one thread) and, in
+  `src/Editor/`,
   `Perf.Editor` (entity commands among 100,000 roots) and `PerfGPU.Editor`, which runs the real `StrataEditor`
   maximized on generated 100,000- and 1,000,000-entity scenes and checks the median CPU frame time its `editor.wait`
   steps report. Time calls that take nanoseconds in batches (the clock's resolution is about 0.1 microseconds).

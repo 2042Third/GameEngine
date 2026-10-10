@@ -4,6 +4,7 @@
 #include "Perf/PerfUtils.h"
 #include "Perf/StressProject.h"
 #include "Strata/Asset/EditorAssetManager.h"
+#include "Strata/Asset/TextureCooker.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JobSystem.h"
 #include "TestHelpers.h"
@@ -33,6 +34,10 @@ namespace
 
 	// Cold imports timed; the median is judged.
 	constexpr uint32_t c_Runs = 3;
+
+	// BC7's throughput is measured on the top left corner of this size of the first 2048x2048 stress texture: noise over
+	// a gradient, where every block is searched in full (no flat blocks, no exact fits).
+	constexpr uint32_t c_ThroughputSize = 512;
 
 }
 
@@ -89,5 +94,35 @@ TEST_SUITE("Perf.TextureCook")
 		Perf::CheckBudget("Perf.TextureCook.ColdImport", medianImportMs);
 		Perf::CheckBudget("Perf.TextureCook.StoredTextures", totalMB);
 		Perf::CheckBudget("Perf.TextureCook.PackSize", packMB);
+	}
+
+	TEST_CASE("BC7 encodes the stress textures' blocks at its measured rate per thread")
+	{
+		// Without the job system EncodeLevel runs on the calling thread, so the time per block is one thread's.
+		REQUIRE_FALSE(JobSystem::IsInitialized());
+		TextureCooker::Image image;
+		image.Width = c_ThroughputSize;
+		image.Height = c_ThroughputSize;
+		image.Channels = 3;
+		const StressProjectSpec spec;
+		const std::vector<uint8_t> texture = CreateStressTexels(spec.SmallTextureSize, 1);
+		for (uint32_t row = 0; row < c_ThroughputSize; row++)
+		{
+			const auto rowStart = texture.begin() + static_cast<ptrdiff_t>(row) * spec.SmallTextureSize * 3;
+			image.Pixels.insert(image.Pixels.end(), rowStart, rowStart + c_ThroughputSize * 3);
+		}
+		const double blocks = static_cast<double>(c_ThroughputSize / 4) * static_cast<double>(c_ThroughputSize / 4);
+		for (const bool highQuality : { true, false })
+		{
+			const std::string name = highQuality ? "Perf.TextureCook.BC7High" : "Perf.TextureCook.BC7Fast";
+			std::vector<uint8_t> encoded;
+			const Perf::Measurement measurement = Perf::Measure(name, 2, 7, [&]()
+			{
+				REQUIRE(TextureCooker::EncodeLevel(image, TextureFormat::BC7SRGB, highQuality, encoded));
+			});
+			const double microsecondsPerBlock = measurement.MedianMs * 1000.0 / blocks;
+			MESSAGE(name, ": ", microsecondsPerBlock, " us per block, ", 1.0e6 / microsecondsPerBlock, " blocks per second per thread");
+			Perf::CheckBudget(name, microsecondsPerBlock);
+		}
 	}
 }
