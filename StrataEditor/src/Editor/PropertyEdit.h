@@ -52,6 +52,12 @@ namespace Strata
 	bool SetPropertyComponentsWithUndo(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& component, const PropertyInfo& property,
 		const PropertyValue& value, const PropertyComponentMask& components, std::string* outError = nullptr);
 
+	// Whether component.set (and so the inspector's Reset and Paste Values) can set the property: it is neither read-only
+	// nor transient.
+	bool IsSettableProperty(const PropertyInfo& property);
+	// Whether the component has a settable property (a prefab link, all read-only, has none).
+	bool HasSettableProperties(const ComponentInfo& component);
+
 	// The property values of a new component of this type, in the form component.set takes: what the inspector's Reset
 	// restores.
 	nlohmann::json GetDefaultComponentValues(const ComponentInfo& component);

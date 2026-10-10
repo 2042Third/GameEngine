@@ -28,9 +28,9 @@ namespace Strata
 	// - One section per component that every selected entity has. Property edits are undoable and merge while a value is
 	//   dragged; with several entities one edit changes all of them in one step, values that differ show as mixed, and only
 	//   the components (axes) an edit changes are written. Vectors and rotations have axis labels that reset their axis.
-	//   A section's menu (its ... button or a right click on its header) has Reset, Copy Values, Paste Values (through the
-	//   clipboard, component.set: one step for all entities) and Remove, which components the engine adds (prefab links)
-	//   do not offer.
+	//   A section's menu (its ... button or a right click on its header) has Reset, Copy Values and Paste Values (through
+	//   the clipboard, component.set: one step for all entities) for components with settable properties, and Remove,
+	//   which components the engine adds do not offer; a prefab link, with neither, has no menu.
 	// - The mesh renderer's material: New Material (material.create, then component.set) and the material's properties in
 	//   place (shared by every entity that uses it, see MaterialEditor).
 	// - The Script component has its own drawer: the attached script classes with their fields (from the loaded module).

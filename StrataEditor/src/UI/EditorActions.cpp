@@ -3,6 +3,7 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/HierarchyView.h"
+#include "Editor/PropertyEdit.h"
 
 #include <Strata/Core/Assert.h>
 #include <Strata/Core/JsonUtils.h>
@@ -71,6 +72,22 @@ namespace Strata
 				if (!found || !found->is_string() || found->get<std::string>() != format)
 					return std::nullopt;
 				return document;
+			}
+
+			// The values of properties component.set can set (component.get's also holds read-only ones, such as a prefab
+			// link's, which pasting would only make fail).
+			nlohmann::json GetSettableValues(const ComponentInfo& component, const nlohmann::json& values)
+			{
+				nlohmann::json settable = nlohmann::json::object();
+				if (!values.is_object())
+					return settable;
+				for (const auto& [name, value] : values.items())
+				{
+					const PropertyInfo* property = component.FindProperty(name);
+					if (property && IsSettableProperty(*property))
+						settable[name] = value;
+				}
+				return settable;
 			}
 
 			// Selects the entities a command returned under "entities".
@@ -163,7 +180,7 @@ namespace Strata
 			const nlohmann::json document = {
 				{ "Strata", { { "Format", c_ComponentValuesFormat }, { "Version", 1 } } },
 				{ "Component", component.Name },
-				{ "Values", values } };
+				{ "Values", GetSettableValues(component, values) } };
 			ImGui::SetClipboardText(JsonUtils::Dump(document).c_str());
 		}
 
@@ -176,7 +193,10 @@ namespace Strata
 			const nlohmann::json* values = JsonUtils::Find(*document, "Values");
 			if (!name || !name->is_string() || !values || !values->is_object() || ComponentRegistry::Find(name->get<std::string>()) != &component)
 				return std::nullopt;
-			return *values;
+			nlohmann::json settable = GetSettableValues(component, *values);
+			if (settable.empty())
+				return std::nullopt;
+			return settable;
 		}
 
 		void HandleSelectionShortcuts(EditorContext& context, const EditorCommandRegistry& commands, bool selectAll)

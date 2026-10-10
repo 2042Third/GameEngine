@@ -697,11 +697,12 @@ and `AudioSystem`, the built-in "Audio" scene system.
 - The inspectors show the selected entities or one asset (`EditorContext::SetInspectedAsset`, `selection.set {asset}`;
   the entities stay selected). Selecting an entity, deleting the asset or closing the project returns to the entities;
   `GetInspectionVersion` changes with every switch and every asset inspected (again), and the editor brings the
-  matching tab (Inspector or Asset) forward without taking the keyboard focus. The Inspector edits every selected entity at once (shared components only; values
-  that differ show as mixed; one undo step per edit), offers Reset, Copy Values, Paste Values and Remove per component
-  (not for components the engine adds) and shows the scene's settings and sky with nothing selected; the Asset tab edits
-  materials (`UI/MaterialEditor`: a drag previews, its release is one undo step) and import settings (Apply runs
-  `asset.setImportSettings` through the runner). Property widgets come from `UI/PropertyWidgets.h`
+  matching tab (Inspector or Asset) forward without taking the keyboard focus. The Inspector edits every selected entity
+  at once (shared components only; values that differ show as mixed; one undo step per edit), offers per component
+  Reset, Copy Values and Paste Values (the values component.set can set; not for components without such properties)
+  and Remove (not for components the engine adds), and shows the scene's settings and sky with nothing selected; the
+  Asset tab edits materials (`UI/MaterialEditor`: a drag previews, its release is one undo step) and import settings
+  (Apply runs `asset.setImportSettings` through the runner). Property widgets come from `UI/PropertyWidgets.h`
   (`DrawPropertyWidget` with `PropertyWidgetOptions` for mixed values, axis resets and probe keys).
 - **Shortcuts:** `EditorLayer` handles the global ones (Ctrl+Z, Ctrl+Y, Ctrl+S, Ctrl+Shift+S, Ctrl+P, Ctrl+B).
   Shortcuts that act on the selection (Delete, Ctrl+D, Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+A, F2) are

@@ -48,9 +48,11 @@ namespace Strata
 		// Selects every entity of the active scene, in hierarchy order.
 		void SelectAll(EditorContext& context);
 
-		// Puts a component's values (component.get's form) into the clipboard.
+		// Puts a component's values (component.get's form) into the clipboard: those component.set can set (read-only and
+		// transient ones are left out).
 		void CopyComponentValues(const ComponentInfo& component, const nlohmann::json& values);
-		// The values in the clipboard when they are values of this component (Paste Values).
+		// The settable values in the clipboard when they are values of this component (Paste Values); nothing when there are
+		// none.
 		std::optional<nlohmann::json> ReadComponentValues(const ComponentInfo& component);
 
 		// The selection shortcuts for the current window (call between its Begin and End): Delete, Ctrl+D, Ctrl+C, Ctrl+X,

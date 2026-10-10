@@ -8,6 +8,7 @@
 
 #include <glm/glm.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <type_traits>
 #include <vector>
@@ -221,6 +222,16 @@ namespace Strata
 		return SetPropertyOnEntities(context, entities, component, property, value, components, outError);
 	}
 
+	bool IsSettableProperty(const PropertyInfo& property)
+	{
+		return !property.IsReadOnly() && !property.IsTransient();
+	}
+
+	bool HasSettableProperties(const ComponentInfo& component)
+	{
+		return std::any_of(component.Properties.begin(), component.Properties.end(), [](const PropertyInfo& property) { return IsSettableProperty(property); });
+	}
+
 	nlohmann::json GetDefaultComponentValues(const ComponentInfo& component)
 	{
 		// A component made on a registry of its own: nothing listens to it there.
@@ -230,7 +241,7 @@ namespace Strata
 		nlohmann::json values = nlohmann::json::object();
 		for (const PropertyInfo& property : component.Properties)
 		{
-			if (!property.IsReadOnly() && !property.IsTransient())
+			if (IsSettableProperty(property))
 				values[property.Name] = PropertyValueToJson(property, property.GetValue(instance));
 		}
 		return values;
@@ -245,10 +256,10 @@ namespace Strata
 		values.reserve(component.Properties.size());
 		for (const PropertyInfo& property : component.Properties)
 		{
-			if (property.IsReadOnly() || property.IsTransient())
-				values.emplace_back(std::nullopt);
-			else
+			if (IsSettableProperty(property))
 				values.emplace_back(property.GetValue(instance));
+			else
+				values.emplace_back(std::nullopt);
 		}
 		return values;
 	}

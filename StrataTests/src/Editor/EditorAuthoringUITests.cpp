@@ -18,6 +18,7 @@
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
+#include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/Material.h>
 #include <Strata/Scene/Components.h>
@@ -660,6 +661,35 @@ TEST_SUITE("Editor.UI.Inspector")
 		CHECK(editor.UndoPosition() == position + 3);
 		for (const UUID target : targets)
 			CHECK_FALSE(editor.Get(target).HasComponent<PointLightComponent>());
+	}
+
+	TEST_CASE("Components without settable properties offer no Reset, Copy or Paste")
+	{
+		AuthoringEditor editor({}, WithFeatureProject("EditorAuthoringReadOnlyMenu"));
+		const nlohmann::json found = editor.Run("entity.find", { { "name", "Crate" } })["entities"];
+		REQUIRE(found.size() == 1);
+		REQUIRE(editor.Get(*UUIDFromJson(found[0])).HasComponent<PrefabInstanceComponent>());
+		editor.Context().Select(*UUIDFromJson(found[0]));
+		editor.Frames(2);
+		// The prefab link: shown, but every property is read-only and the engine adds it, so it has no menu at all.
+		REQUIRE(UI::ItemProbe::Find("Inspector.Transform.Menu").has_value());
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.PrefabInstance.Menu").has_value());
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.PrefabInstance.Remove").has_value());
+
+		// Copied values hold only what component.set accepts: the link's read-only values are nothing to paste.
+		const ComponentInfo* prefab = ComponentRegistry::Find<PrefabInstanceComponent>();
+		REQUIRE(prefab);
+		const nlohmann::json values = editor.Run("component.get", { { "entity", found[0] }, { "component", "PrefabInstance" } })["values"];
+		REQUIRE_FALSE(values.empty());
+		EditorActions::CopyComponentValues(*prefab, values);
+		CHECK_FALSE(EditorActions::ReadComponentValues(*prefab).has_value());
+		// Others keep their settable values.
+		const ComponentInfo* transform = ComponentRegistry::Find<TransformComponent>();
+		REQUIRE(transform);
+		EditorActions::CopyComponentValues(*transform, { { "Translation", { 1, 2, 3 } } });
+		const std::optional<nlohmann::json> pasted = EditorActions::ReadComponentValues(*transform);
+		REQUIRE(pasted);
+		CHECK((*pasted)["Translation"] == nlohmann::json { 1, 2, 3 });
 	}
 
 	TEST_CASE("Editing the intensity of 30 selected lights is one undo step")

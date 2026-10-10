@@ -362,19 +362,26 @@ namespace Strata
 		ImGui::PushID(info.Name.c_str());
 		const float headerRight = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
 		const std::string label = fmt::format("{}  {}", UI::GetComponentIcon(info), info.DisplayName);
+		// The menu (Reset, Copy and Paste Values for components with settable properties, Remove for those people may remove:
+		// not those the engine adds, such as prefab links), and Remove as a button. A component with neither, such as a prefab
+		// link, has no menu.
+		const bool removable = info.IsRemovable() && !HasFlag(info.Flags, ComponentFlags::EngineAdded);
+		const bool settable = HasSettableProperties(info);
+		const bool hasMenu = settable || removable;
 		const bool open = UI::SectionHeader("Component", label.c_str(), ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap);
-		if (ImGui::IsItemClicked(ImGuiMouseButton_Right))
+		if (hasMenu && ImGui::IsItemClicked(ImGuiMouseButton_Right))
 			ImGui::OpenPopup("ComponentMenu");
 		if (!info.Description.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
 			ImGui::SetTooltip("%s", info.Description.c_str());
 
-		// The menu, and Remove for components people may remove (not those the engine adds, such as prefab links).
-		const bool removable = info.IsRemovable() && !HasFlag(info.Flags, ComponentFlags::EngineAdded);
-		const float buttons = ImGui::GetFrameHeight() * (removable ? 2.0f : 1.0f) + (removable ? style.ItemInnerSpacing.x : 0.0f);
-		ImGui::SameLine(headerRight - buttons);
-		const std::string menuId = fmt::format("Inspector.{}.Menu", info.Name);
-		if (UI::IconButton(menuId.c_str(), Icons::EllipsisVertical, "Reset, copy, paste or remove"))
-			ImGui::OpenPopup("ComponentMenu");
+		const float buttons = ImGui::GetFrameHeight() * ((hasMenu ? 1.0f : 0.0f) + (removable ? 1.0f : 0.0f)) + (hasMenu && removable ? style.ItemInnerSpacing.x : 0.0f);
+		if (hasMenu)
+		{
+			ImGui::SameLine(headerRight - buttons);
+			const std::string menuId = fmt::format("Inspector.{}.Menu", info.Name);
+			if (UI::IconButton(menuId.c_str(), Icons::EllipsisVertical, settable ? "Reset, copy, paste or remove" : "Remove"))
+				ImGui::OpenPopup("ComponentMenu");
+		}
 		bool remove = false;
 		if (removable)
 		{
@@ -418,26 +425,32 @@ namespace Strata
 			return;
 		const nlohmann::json ids = ToJson(entities);
 		const std::string probe = fmt::format("Inspector.{}.Menu.", info.Name);
-		if (ImGui::MenuItem("Reset", nullptr, false, !info.Properties.empty()))
-			RunEditorCommand(context, commands, "component.set", { { "entities", ids }, { "component", info.Name }, { "values", GetDefaultComponentValues(info) } });
-		UI::ItemProbe::Record(probe + "Reset", !info.Properties.empty());
-		if (ImGui::MenuItem("Copy Values"))
+		// Reset, Copy and Paste work on the properties component.set can set; a component without any has none of them.
+		const bool settable = HasSettableProperties(info);
+		if (settable)
 		{
-			// The primary entity's.
-			const nlohmann::json values = RunEditorCommand(context, commands, "component.get",
-				{ { "entity", UUIDToJson(entities.back().GetUUID()) }, { "component", info.Name } });
-			if (values.is_object() && values.contains("values"))
-				EditorActions::CopyComponentValues(info, values["values"]);
+			if (ImGui::MenuItem("Reset"))
+				RunEditorCommand(context, commands, "component.set", { { "entities", ids }, { "component", info.Name }, { "values", GetDefaultComponentValues(info) } });
+			UI::ItemProbe::Record(probe + "Reset");
+			if (ImGui::MenuItem("Copy Values"))
+			{
+				// The primary entity's.
+				const nlohmann::json values = RunEditorCommand(context, commands, "component.get",
+					{ { "entity", UUIDToJson(entities.back().GetUUID()) }, { "component", info.Name } });
+				if (values.is_object() && values.contains("values"))
+					EditorActions::CopyComponentValues(info, values["values"]);
+			}
+			UI::ItemProbe::Record(probe + "Copy");
+			const std::optional<nlohmann::json> clipboard = EditorActions::ReadComponentValues(info);
+			const std::string pasteLabel = entities.size() == 1 ? std::string("Paste Values") : fmt::format("Paste Values to {} Entities", entities.size());
+			if (ImGui::MenuItem(pasteLabel.c_str(), nullptr, false, clipboard.has_value()))
+				RunEditorCommand(context, commands, "component.set", { { "entities", ids }, { "component", info.Name }, { "values", *clipboard } });
+			UI::ItemProbe::Record(probe + "Paste", clipboard.has_value());
 		}
-		UI::ItemProbe::Record(probe + "Copy");
-		const std::optional<nlohmann::json> clipboard = EditorActions::ReadComponentValues(info);
-		const std::string pasteLabel = entities.size() == 1 ? std::string("Paste Values") : fmt::format("Paste Values to {} Entities", entities.size());
-		if (ImGui::MenuItem(pasteLabel.c_str(), nullptr, false, clipboard.has_value()))
-			RunEditorCommand(context, commands, "component.set", { { "entities", ids }, { "component", info.Name }, { "values", *clipboard } });
-		UI::ItemProbe::Record(probe + "Paste", clipboard.has_value());
 		if (info.IsRemovable() && !HasFlag(info.Flags, ComponentFlags::EngineAdded))
 		{
-			ImGui::Separator();
+			if (settable)
+				ImGui::Separator();
 			if (ImGui::MenuItem("Remove"))
 				RunEditorCommand(context, commands, "component.remove", { { "entities", ids }, { "component", info.Name } });
 			UI::ItemProbe::Record(probe + "Remove");
