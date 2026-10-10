@@ -86,6 +86,7 @@ Useful CMake options: `-DSTRATA_BUILD_EDITOR=OFF`, `-DSTRATA_BUILD_RUNTIME=OFF`,
 ```sh
 ctest --preset windows-debug            # all tests (Windows, Debug)
 ctest --preset linux-debug -LE gpu      # skip tests that need a GPU
+ctest --preset windows-release -L perf  # perf tests against their budgets (Release and Dist only)
 build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset directly (doctest filters)
 ```
 
@@ -96,6 +97,26 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   devices in tests) and end with `CHECK(gpu.GetNewErrorCount() == 0)`, so validation errors fail the
   test. Run them under the Khronos validation layer locally by pointing `VK_ADD_LAYER_PATH` at its
   build. Rendering features are tested on pixels read back with `Renderer::ReadTexture`.
+- **Perf tests** (the perf lab, `StrataTests/src/Perf/PerfUtils.h`): suites named `Perf.*` (CPU) and `PerfGPU.*`
+  run as the CTests `StrataTests.Perf` and `StrataTests.PerfGPU` (label `perf`; PerfGPU also `gpu`) in Release and
+  Dist only, one at a time: `ctest --preset windows-release -L perf`. No other CTest runs them. A perf test measures
+  a metric (`Perf::Measure(name, warmup, iterations, function)` times each call and returns the median, 95th
+  percentile, minimum and maximum in milliseconds; `Platform::GetProcessMemory` reports private bytes and the working
+  set with their peaks) and passes it to `Perf::CheckBudget("<Suite>.<Metric>", value)`. That fails the test when
+  the value exceeds the metric's budget and records it in `build/<preset>/PerfResults/<config>.json`: one entry per
+  metric with value, unit and budget and nothing run-specific, so two runs compare with a diff (CTest clears the file
+  first). Budgets live in `StrataTests/Perf/Budgets.json`, whose `_comment` describes the format; a metric without
+  an entry fails its test. An entry holds the value `Measured` on the reference machine (i7-13700K, RTX 5090,
+  Windows 11, Release, a quiet machine) and a `Budget` of at most 1.5 times that (the parser enforces it).
+  **Budgets only go down:** a change that makes a metric cheaper lowers its entry in the same commit, a metric over
+  budget is a regression to fix rather than a budget to raise, and commits that add or lower budgets state the
+  measured values. Lower must be better (time per item, not items per second). GPU perf suites get the shared device
+  without validation layers (the CTest sets `STRATA_TEST_GPU_VALIDATION=0`; `PerfGPU.Harness` fails without it)
+  and submit through `GPUContext::ExecuteAndWait`, which recycles the command buffer like the engine does every frame
+  (a plain `executeCommandList` + `waitForIdle` makes every later `open()` create a command pool). Complexity claims
+  belong in ordinary unit tests with deterministic counters, which run everywhere. CI's hosted runners skip the label
+  `perf` because budgets hold for the reference machine only: run `-L perf` there before merging a change that can
+  affect performance.
 - Suites whose names start with `EndToEnd` start the built `StrataEditor` and `StrataCLI` (paths in
   `STRATA_TEST_EDITOR_PATH`/`STRATA_TEST_CLI_PATH`, else next to the test executable) and run as the CTest
   `StrataEditor.Automation`, not in `StrataTests.Core`. They need no GPU (`--no-gpu`), use private session
