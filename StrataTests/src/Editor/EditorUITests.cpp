@@ -87,6 +87,17 @@ namespace
 			return clicked;
 		}
 
+		// Moves the mouse to a point, presses and releases the left button over three frames.
+		void ClickAt(const ImVec2& position)
+		{
+			Harness.MoveMouse(position);
+			Frames(1);
+			Harness.SetMouseButton(ImGuiMouseButton_Left, true);
+			Frames(1);
+			Harness.SetMouseButton(ImGuiMouseButton_Left, false);
+			Frames(1);
+		}
+
 		// Runs frames (with a little sleep, for work on other threads) until the condition holds or ten seconds passed.
 		bool FramesUntil(const std::function<bool()>& condition)
 		{
@@ -690,6 +701,48 @@ TEST_SUITE("Editor.UI")
 		CHECK(frame.Idle);
 		const nlohmann::json status = editor.Run("editor.status");
 		CHECK(status["editor"]["frameRate"]["frameMilliseconds"].get<double>() == doctest::Approx(4.0));
+	}
+
+	TEST_CASE("The game view keeps the stats toggle while the game does not have the input")
+	{
+		ScopedAudioEngine audio;
+		REQUIRE(audio.Initialized);
+		HarnessEditor editor({}, WithFeatureProject("EditorUIGameView"));
+		editor.Frames(2);
+		CHECK(UI::ItemProbe::Find("Viewport.Grid").has_value());
+
+		// Playing through the scene's camera: of the chips only the stats toggle remains, and it works while playing.
+		REQUIRE(editor.Click("Toolbar.Play"));
+		editor.Frames(1);
+		REQUIRE(editor.Context().IsPlaying());
+		CHECK_FALSE(UI::ItemProbe::Find("Viewport.Grid").has_value());
+		CHECK_FALSE(UI::ItemProbe::Find("Viewport.Camera").has_value());
+		ViewportSettings& settings = editor.Context().GetViewport().GetSettings();
+		const bool stats = settings.ShowStats;
+		REQUIRE(editor.Click("Viewport.Stats"));
+		CHECK(settings.ShowStats != stats);
+		// The chip does not hand the game the input.
+		CHECK_FALSE(editor.Context().IsGameInputActive());
+
+		// Clicking the game gives it the input, and every click on the image is the game's: no chip.
+		const ViewportPanel* viewport = editor.Layer->GetPanels().Get<ViewportPanel>(EditorPanels::c_Viewport);
+		REQUIRE(viewport);
+		const ViewportImageArea& image = viewport->GetImageArea();
+		editor.ClickAt(ImVec2(image.Min.x + image.Size.x * 0.5f, image.Min.y + image.Size.y * 0.5f));
+		editor.Frames(1);
+		REQUIRE(editor.Context().IsGameInputActive());
+		CHECK_FALSE(UI::ItemProbe::Find("Viewport.Stats").has_value());
+
+		// Shift+F1 takes the input back: the toggle returns.
+		editor.Harness.SetKey(ImGuiMod_Shift, true);
+		editor.Harness.SetKey(ImGuiKey_F1, true);
+		editor.Frames(1);
+		editor.Harness.SetKey(ImGuiKey_F1, false);
+		editor.Harness.SetKey(ImGuiMod_Shift, false);
+		editor.Frames(2);
+		CHECK_FALSE(editor.Context().IsGameInputActive());
+		CHECK(UI::ItemProbe::Find("Viewport.Stats").has_value());
+		editor.Run("play.stop");
 	}
 
 	TEST_CASE("The widget kit: buttons, chips, pills, cards and dialogs")

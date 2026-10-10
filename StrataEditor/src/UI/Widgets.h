@@ -35,7 +35,7 @@ namespace Strata::UI
 	bool ToolbarButton(const char* id, const char* icon, const char* label, const char* tooltip, const ButtonStyle& style = {});
 
 	// A rounded chip with an icon and a label on a translucent surface (for overlays such as the viewport's) that opens
-	// something: a popup or a menu. Returns true when clicked.
+	// something: a popup or a menu. Clicking a chip does not focus its window. Returns true when clicked.
 	bool Chip(const char* id, const char* icon, const char* label, const char* tooltip);
 	// A chip that toggles a setting: accent-tinted while on. Flips *value when clicked and returns true then.
 	bool ToggleChip(const char* id, const char* icon, const char* label, bool* value, const char* tooltip);

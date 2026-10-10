@@ -114,7 +114,9 @@ namespace Strata::UI
 			const ImVec2 labelSize = hasLabel ? ImGui::CalcTextSize(label) : ImVec2(0.0f, 0.0f);
 			const float width = style.FramePadding.x * 2.0f + iconSize.x + (hasLabel ? style.ItemInnerSpacing.x + labelSize.x : 0.0f);
 
-			const bool pressed = ImGui::InvisibleButton(id, ImVec2(width, height));
+			// Chips lie over what their window shows: a click on one leaves the focus where it was, so that a chip over the
+			// game view does not hand the game the input.
+			const bool pressed = ImGui::InvisibleButton(id, ImVec2(width, height), ImGuiButtonFlags_NoFocus | ImGuiButtonFlags_NoNavFocus);
 			const bool hovered = ImGui::IsItemHovered();
 			const bool held = ImGui::IsItemActive();
 			const ImVec2 min = ImGui::GetItemRectMin();

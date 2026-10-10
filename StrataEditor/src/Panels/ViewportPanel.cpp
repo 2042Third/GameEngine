@@ -220,17 +220,18 @@ namespace Strata
 		if (view && !m_GameView)
 			UpdateGizmo(context, *view);
 
-		// The chips go over the image (the game view keeps it clear).
+		// The chips go over the image's top left. The game view keeps only the stats toggle, and only while the game does not
+		// have the input (before the view is clicked, or after Shift+F1): while it has, every click on the image is the game's.
 		const ImGuiStyle& style = ImGui::GetStyle();
-		float chipRowBottom = imageMin.y;
+		const ImVec2 chipsMin(imageMin.x + style.ItemSpacing.x, imageMin.y + style.ItemSpacing.y);
+		ImGui::SetCursorScreenPos(chipsMin);
 		if (!m_GameView)
-		{
-			ImGui::SetCursorScreenPos(ImVec2(imageMin.x + style.ItemSpacing.x, imageMin.y + style.ItemSpacing.y));
 			DrawChips(context);
-			chipRowBottom = ImGui::GetItemRectMax().y;
-		}
+		else if (!m_GameInputEnabled)
+			DrawStatsChip(viewport.GetSettings());
+		// Text boxes go below the chip row, also while it is hidden, so they stay in place when it comes and goes.
 		if (view)
-			DrawOverlays(context, *view, chipRowBottom, panelContext.Frame);
+			DrawOverlays(context, *view, chipsMin.y + ImGui::GetFrameHeight(), panelContext.Frame);
 	}
 
 	void ViewportPanel::OnHidden(EditorPanelContext& context)
@@ -311,6 +312,11 @@ namespace Strata
 		ImGui::SameLine();
 		UI::ToggleChip("Viewport.Gizmos", Icons::Shapes, "Gizmos", &settings.ShowSceneGizmos, "Light, camera and collider shapes");
 		ImGui::SameLine();
+		DrawStatsChip(settings);
+	}
+
+	void ViewportPanel::DrawStatsChip(ViewportSettings& settings)
+	{
 		UI::ToggleChip("Viewport.Stats", Icons::Gauge, "Stats", &settings.ShowStats, "Frame time, draw calls and loading assets");
 	}
 

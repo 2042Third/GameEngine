@@ -557,8 +557,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   down/up, Shift faster, wheel = speed), F frames the selection, Home everything, W/E/R/Q pick the gizmo (as do the main
   toolbar's tool buttons, next to the gizmo space and the snap toggle, `ViewportSettings::Snap`; holding Ctrl inverts
   snapping). Chips over the image's top left hold the camera settings and the overlay toggles (grid, outline, gizmos,
-  stats); a strip in the play state's color tops the image while the scene runs. The selection outline is the theme's
-  accent (`ViewportSettings::SelectionColor`, set by the UI, not saved).
+  stats); clicking a chip does not focus the panel. A strip in the play state's color tops the image while the scene
+  runs. In the game view only the stats chip remains, and only while the game does not have the input: once the view is
+  clicked, every click on the image is the game's. The selection outline is the theme's accent
+  (`ViewportSettings::SelectionColor`, set by the UI, not saved).
   Clicks pick without blocking (`EditorViewport::RequestPick` reads one pixel of the entity-ID buffer; Ctrl toggles,
   Shift adds, empty space clears) and never when they hit the gizmo. Gizmo drags go through `TransformDrag`
   (`Editor/TransformEdit.h`): selected entities without a selected ancestor follow the primary one, local transforms
