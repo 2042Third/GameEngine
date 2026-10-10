@@ -5,13 +5,16 @@
 #include "Strata/Core/Layer.h"
 #include "Strata/Core/LayerStack.h"
 #include "Strata/Core/Log.h"
+#include "Strata/Core/Prefetch.h"
 #include "Strata/Core/Timer.h"
 #include "Strata/Core/UUID.h"
 #include "Strata/Events/ApplicationEvent.h"
 #include "Strata/Events/KeyEvent.h"
 #include "Strata/Events/MouseEvent.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <set>
 #include <thread>
 #include <vector>
@@ -205,5 +208,17 @@ TEST_SUITE("Core")
 		}
 
 		CHECK(log == std::vector<std::string> { "detach overlay", "destroy overlay", "detach b", "destroy b", "detach a", "destroy a" });
+	}
+
+	TEST_CASE("Prefetch is a hint that never faults")
+	{
+		// Script dispatch prefetches objects it may skip, among them module memory it must not read outside a guarded call:
+		// a prefetch must leave everything but the caches alone, whatever the address.
+		std::vector<int> values(1024, 7);
+		for (const int& value : values)
+			Prefetch(&value);
+		Prefetch(nullptr);
+		Prefetch(reinterpret_cast<const void*>(uintptr_t(64))); // In the first page, which is never mapped
+		CHECK(std::count(values.begin(), values.end(), 7) == 1024);
 	}
 }

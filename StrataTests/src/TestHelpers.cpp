@@ -3,11 +3,15 @@
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/UUID.h"
 
+#include <nlohmann/json.hpp>
+#include <spdlog/fmt/fmt.h>
 #include <stb_image_write.h>
 
+#include <algorithm>
 #include <cmath>
 #include <mutex>
 #include <numbers>
+#include <string_view>
 #include <vector>
 
 #if defined(ST_PLATFORM_WINDOWS)
@@ -23,6 +27,38 @@ namespace Strata::Tests
 
 	static std::mutex s_TemporaryDirectoriesMutex;
 	static std::vector<std::filesystem::path> s_TemporaryDirectories;
+
+	namespace
+	{
+
+		// Reads a JSON text without building a document and keeps where the parser stopped when the text is invalid.
+		struct JsonSyntaxCheck final : nlohmann::json_sax<nlohmann::json>
+		{
+			size_t ErrorPosition = 0; // The bytes the parser read, the one it stopped at included
+			std::string Error;
+
+			bool null() override { return true; }
+			bool boolean(bool) override { return true; }
+			bool number_integer(number_integer_t) override { return true; }
+			bool number_unsigned(number_unsigned_t) override { return true; }
+			bool number_float(number_float_t, const string_t&) override { return true; }
+			bool string(string_t&) override { return true; }
+			bool binary(binary_t&) override { return true; }
+			bool start_object(std::size_t) override { return true; }
+			bool key(string_t&) override { return true; }
+			bool end_object() override { return true; }
+			bool start_array(std::size_t) override { return true; }
+			bool end_array() override { return true; }
+
+			bool parse_error(std::size_t position, const std::string&, const nlohmann::detail::exception& exception) override
+			{
+				ErrorPosition = position;
+				Error = exception.what();
+				return false;
+			}
+		};
+
+	}
 
 	std::filesystem::path CreateTemporaryDirectory(const std::string& name)
 	{
@@ -50,6 +86,30 @@ namespace Strata::Tests
 			return {};
 		}
 		return copy;
+	}
+
+	std::string DescribeJsonFile(const std::filesystem::path& file)
+	{
+		const std::string name = FileSystem::ToUTF8(file);
+		const std::optional<std::vector<uint8_t>> bytes = FileSystem::ReadBytes(file);
+		if (!bytes)
+			return fmt::format("'{}' cannot be read", name);
+
+		const std::string_view text(reinterpret_cast<const char*>(bytes->data()), bytes->size());
+		JsonSyntaxCheck check;
+		if (nlohmann::json::sax_parse(text.begin(), text.end(), &check))
+			return fmt::format("'{}' ({} bytes) is valid JSON", name, text.size());
+
+		constexpr size_t c_ContextBytes = 64;
+		const size_t end = std::min(check.ErrorPosition, text.size());
+		const size_t start = end - std::min(end, c_ContextBytes);
+		std::string context;
+		for (const char character : text.substr(start, end - start))
+		{
+			const auto byte = static_cast<unsigned char>(character);
+			context += byte >= 0x20 && byte < 0x7F ? std::string(1, character) : fmt::format("\\x{:02X}", byte);
+		}
+		return fmt::format("'{}' ({} bytes) is not valid JSON: {}; bytes {} to {}: \"{}\"", name, text.size(), check.Error, start, end, context);
 	}
 
 	std::vector<uint8_t> CreateSineWav(float durationSeconds, uint32_t sampleRate, uint16_t channels, float frequency, float silentSeconds, float amplitude)

@@ -23,7 +23,8 @@ TEST_SUITE("PerfGPU.Harness")
 
 		// A round trip of an empty command list: what every blocking GPU step of a perf test costs at least. ExecuteAndWait
 		// recycles the command buffer like the engine does every frame, so the timed calls reuse a pooled command buffer
-		// instead of creating a command pool each.
+		// instead of creating a command pool each. It has no budget: the test checks that GPU steps can be measured, which
+		// a slow machine does not change, so there is nothing to confirm.
 		nvrhi::CommandListHandle commandList = gpu.GetNvrhiDevice()->createCommandList();
 		REQUIRE(commandList);
 		constexpr uint32_t c_Iterations = 50;

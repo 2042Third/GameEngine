@@ -9,6 +9,10 @@
 #include <cstdint>
 #include <string>
 
+// Statistics: every time is the median of its samples (batches of calls where one call is too short to time), which the
+// machine's other work moves only when it slows down most of the measurement; a measurement it slowed down that much is
+// confirmed by measuring again (Perf::CheckBudgetsConfirmed). The counts are exact.
+
 using namespace Strata;
 using namespace Strata::Tests;
 
@@ -40,39 +44,51 @@ TEST_SUITE("Perf.Scene")
 		REQUIRE(scene.GetTransformUpdateCount() == 1'000'000);
 
 		// A clean update (every edit frame does one; play frames do two) only finds that nothing changed.
-		const uint64_t updated = scene.GetTransformUpdateCount();
-		const Perf::Measurement clean = Perf::Measure("Perf.Scene.CleanTransformUpdate1M (100,000 calls)", 2, 50, [&]
+		Perf::CheckBudgetsConfirmed({ "Perf.Scene.CleanTransformUpdate1M", "Perf.Scene.CleanTransformUpdate1M.Recomputed" }, [&]
 		{
-			for (uint32_t call = 0; call < c_CleanUpdatesPerBatch; call++)
-				scene.UpdateWorldTransforms();
+			const uint64_t updated = scene.GetTransformUpdateCount();
+			const Perf::Measurement clean = Perf::Measure("Perf.Scene.CleanTransformUpdate1M (100,000 calls)", 2, 50, [&]
+			{
+				for (uint32_t call = 0; call < c_CleanUpdatesPerBatch; call++)
+					scene.UpdateWorldTransforms();
+			});
+			const uint64_t recomputed = scene.GetTransformUpdateCount() - updated;
+			CHECK(recomputed == 0);
+			return Perf::MetricValues {
+				{ "Perf.Scene.CleanTransformUpdate1M", clean.MedianMs * 1000.0 / c_CleanUpdatesPerBatch },
+				{ "Perf.Scene.CleanTransformUpdate1M.Recomputed", static_cast<double>(recomputed) } };
 		});
-		const uint64_t recomputed = scene.GetTransformUpdateCount() - updated;
-		CHECK(recomputed == 0);
-		Perf::CheckBudget("Perf.Scene.CleanTransformUpdate1M", clean.MedianMs * 1000.0 / c_CleanUpdatesPerBatch);
-		Perf::CheckBudget("Perf.Scene.CleanTransformUpdate1M.Recomputed", static_cast<double>(recomputed));
 
 		// Moving the root recomputes everything, on the job system.
 		uint32_t iteration = 0;
-		const uint64_t beforeMoves = scene.GetTransformUpdateCount();
-		const Perf::Measurement moveRoot = Perf::Measure("Perf.Scene.MoveRoot1M", 2, 10, [&]
+		Perf::CheckBudgetConfirmed("Perf.Scene.MoveRoot1M", [&]
 		{
-			Nudge(hierarchy.Root, iteration++);
-			scene.UpdateWorldTransforms();
+			constexpr uint32_t c_Warmup = 2;
+			constexpr uint32_t c_Moves = 21;
+			const uint64_t beforeMoves = scene.GetTransformUpdateCount();
+			const Perf::Measurement moveRoot = Perf::Measure("Perf.Scene.MoveRoot1M", c_Warmup, c_Moves, [&]
+			{
+				Nudge(hierarchy.Root, iteration++);
+				scene.UpdateWorldTransforms();
+			});
+			CHECK(scene.GetTransformUpdateCount() - beforeMoves == uint64_t(c_Warmup + c_Moves) * 1'000'000);
+			return moveRoot.MedianMs;
 		});
-		CHECK(scene.GetTransformUpdateCount() - beforeMoves == uint64_t(12) * 1'000'000);
-		Perf::CheckBudget("Perf.Scene.MoveRoot1M", moveRoot.MedianMs);
 
 		// A play frame of the idle scene: the built-in systems run, the transforms stay clean.
 		scene.OnRuntimeStart();
-		const uint64_t beforePlay = scene.GetTransformUpdateCount();
-		const Perf::Measurement playFrames = Perf::Measure("Perf.Scene.IdlePlayFrame1M (1000 frames)", 2, 50, [&]
+		Perf::CheckBudgetConfirmed("Perf.Scene.IdlePlayFrame1M", [&]
 		{
-			for (uint32_t frame = 0; frame < c_CallsPerBatch; frame++)
-				scene.OnUpdateRuntime(1.0f / 60.0f);
+			const uint64_t beforePlay = scene.GetTransformUpdateCount();
+			const Perf::Measurement playFrames = Perf::Measure("Perf.Scene.IdlePlayFrame1M (1000 frames)", 2, 50, [&]
+			{
+				for (uint32_t frame = 0; frame < c_CallsPerBatch; frame++)
+					scene.OnUpdateRuntime(1.0f / 60.0f);
+			});
+			CHECK(scene.GetTransformUpdateCount() == beforePlay);
+			return playFrames.MedianMs * 1000.0 / c_CallsPerBatch;
 		});
-		CHECK(scene.GetTransformUpdateCount() == beforePlay);
 		scene.OnRuntimeStop();
-		Perf::CheckBudget("Perf.Scene.IdlePlayFrame1M", playFrames.MedianMs * 1000.0 / c_CallsPerBatch);
 	}
 
 	TEST_CASE("Moving one entity of a 100,000-entity hierarchy recomputes only what it moved")
@@ -86,35 +102,43 @@ TEST_SUITE("Perf.Scene")
 		const Entity leaf = hierarchy.Entities.back();
 		REQUIRE(leaf.GetChildren().empty());
 		REQUIRE(scene.GetDepth(leaf) == 5);
-		constexpr uint32_t c_LeafWarmup = 2;
-		constexpr uint32_t c_LeafBatches = 100;
 		uint32_t iteration = 0;
-		uint64_t before = scene.GetTransformUpdateCount();
-		const Perf::Measurement moveLeaf = Perf::Measure("Perf.Scene.MoveLeaf100k (1000 moves)", c_LeafWarmup, c_LeafBatches, [&]
+		Perf::CheckBudgetsConfirmed({ "Perf.Scene.MoveLeaf100k", "Perf.Scene.MoveLeaf100k.Recomputed" }, [&]
 		{
-			for (uint32_t move = 0; move < c_CallsPerBatch; move++)
+			constexpr uint32_t c_LeafWarmup = 2;
+			constexpr uint32_t c_LeafBatches = 100;
+			const uint64_t before = scene.GetTransformUpdateCount();
+			const Perf::Measurement moveLeaf = Perf::Measure("Perf.Scene.MoveLeaf100k (1000 moves)", c_LeafWarmup, c_LeafBatches, [&]
 			{
-				Nudge(leaf, iteration++);
-				scene.UpdateWorldTransforms();
-			}
+				for (uint32_t move = 0; move < c_CallsPerBatch; move++)
+				{
+					Nudge(leaf, iteration++);
+					scene.UpdateWorldTransforms();
+				}
+			});
+			const uint64_t leafMoves = uint64_t(c_LeafWarmup + c_LeafBatches) * c_CallsPerBatch;
+			const uint64_t leafRecomputed = scene.GetTransformUpdateCount() - before;
+			CHECK(leafRecomputed == leafMoves);
+			return Perf::MetricValues {
+				{ "Perf.Scene.MoveLeaf100k", moveLeaf.MedianMs * 1000.0 / c_CallsPerBatch },
+				{ "Perf.Scene.MoveLeaf100k.Recomputed", static_cast<double>(leafRecomputed) / static_cast<double>(leafMoves) } };
 		});
-		const uint64_t leafMoves = uint64_t(c_LeafWarmup + c_LeafBatches) * c_CallsPerBatch;
-		const uint64_t leafRecomputed = scene.GetTransformUpdateCount() - before;
-		CHECK(leafRecomputed == leafMoves);
-		Perf::CheckBudget("Perf.Scene.MoveLeaf100k", moveLeaf.MedianMs * 1000.0 / c_CallsPerBatch);
-		Perf::CheckBudget("Perf.Scene.MoveLeaf100k.Recomputed", static_cast<double>(leafRecomputed) / static_cast<double>(leafMoves));
 
-		// The root: the whole hierarchy.
-		constexpr uint32_t c_RootWarmup = 5;
-		constexpr uint32_t c_RootMoves = 50;
-		before = scene.GetTransformUpdateCount();
-		const Perf::Measurement moveRoot = Perf::Measure("Perf.Scene.MoveRoot100k", c_RootWarmup, c_RootMoves, [&]
+		// The root: the whole hierarchy. A move takes a third of a millisecond, so many of them span enough time for the
+		// median to ignore what the machine's other work does to a few.
+		Perf::CheckBudgetConfirmed("Perf.Scene.MoveRoot100k", [&]
 		{
-			Nudge(hierarchy.Root, iteration++);
-			scene.UpdateWorldTransforms();
+			constexpr uint32_t c_RootWarmup = 5;
+			constexpr uint32_t c_RootMoves = 101;
+			const uint64_t before = scene.GetTransformUpdateCount();
+			const Perf::Measurement moveRoot = Perf::Measure("Perf.Scene.MoveRoot100k", c_RootWarmup, c_RootMoves, [&]
+			{
+				Nudge(hierarchy.Root, iteration++);
+				scene.UpdateWorldTransforms();
+			});
+			CHECK(scene.GetTransformUpdateCount() - before == uint64_t(c_RootWarmup + c_RootMoves) * 100'000);
+			return moveRoot.MedianMs;
 		});
-		CHECK(scene.GetTransformUpdateCount() - before == uint64_t(c_RootWarmup + c_RootMoves) * 100'000);
-		Perf::CheckBudget("Perf.Scene.MoveRoot100k", moveRoot.MedianMs);
 
 		std::string error;
 		CHECK_MESSAGE(scene.ValidateWorldTransforms(&error), error);

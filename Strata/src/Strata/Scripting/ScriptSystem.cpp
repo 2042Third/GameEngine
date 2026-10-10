@@ -2,6 +2,7 @@
 #include "Strata/Scripting/ScriptSystem.h"
 
 #include "Strata/Asset/AssetManager.h"
+#include "Strata/Core/Prefetch.h"
 #include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneHierarchy.h"
@@ -21,6 +22,10 @@ namespace Strata
 		// Scripts that keep creating work for the current sync point (e.g. a prefab whose script spawns the same prefab
 		// in OnCreate) must not hang the frame: what is left after this many rounds waits for the next sync point.
 		constexpr uint32_t c_MaxSyncRounds = 64;
+		// How many instances ahead callback dispatch prefetches an instance, and the module's object of an instance (once
+		// the instance itself has arrived). A callback of a trivial script takes about 20 ns, memory about 100 ns.
+		constexpr size_t c_InstancePrefetchDistance = 12;
+		constexpr size_t c_ScriptObjectPrefetchDistance = 4;
 		// Distinct API problems reported per playing scene before further ones are dropped.
 		constexpr size_t c_MaxReportedProblems = 1024;
 
@@ -193,6 +198,21 @@ namespace Strata
 		const size_t count = dispatch.size();
 		for (size_t index = 0; index < count; index++)
 		{
+			// Instances live in heap blocks of their own, and so do the module's script objects, so the first read of each
+			// waits for memory unless it was fetched ahead. The hardware prefetchers do that only when they recognize the
+			// allocation pattern, which they track by the address of the reading instruction: with identical sources, a
+			// frame of 300,000 trivial scripts took 6.6 or 9.8 ms depending on where unrelated code moved this loop. The
+			// loop fetches ahead itself, so it is fast in every code layout. Prefetching never faults, so it may name module
+			// memory outside a guarded call (and instances the walk will skip).
+			if (index + c_InstancePrefetchDistance < count)
+			{
+				const Instance* ahead = dispatch[index + c_InstancePrefetchDistance];
+				Prefetch(ahead);
+				Prefetch(&ahead->Removed);
+			}
+			if (index + c_ScriptObjectPrefetchDistance < count)
+				Prefetch(dispatch[index + c_ScriptObjectPrefetchDistance]->Handle);
+
 			Instance& instance = *dispatch[index];
 			if (instance.Removed || instance.Disabled || !instance.Created || !instance.Handle)
 				continue;

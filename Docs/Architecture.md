@@ -63,7 +63,9 @@ when the commit does).
 CTest runs the `StrataTests` suites in groups selected by suite name (`StrataTests/CMakeLists.txt`; the groups and
 labels are listed in AGENTS.md, "Testing"). The perf lab is one of them: suites `Perf.*` and `PerfGPU.*`
 (`StrataTests/src/Perf/`) measure metrics against the budgets in `StrataTests/Perf/Budgets.json`, in Release and Dist
-only, and write `<build>/PerfResults/<config>.json`. `Perf.Scene` and `Perf.Scripting` measure scenes built by
+only, confirm a metric over its budget by measuring it again before failing (`Perf::CheckBudgetsConfirmed`), and write
+`<build>/PerfResults/<config>.json` with every attempt; `Tools/PerfStability.py` runs them repeatedly and reports how
+stable each metric is. `Perf.Scene` and `Perf.Scripting` measure scenes built by
 `Perf/SceneGenerators.h` (flat roots, a nested tree, scripted entities); `Perf.Editor` (editor commands) and
 `PerfGPU.Editor` (the real `StrataEditor`'s frame times on generated 100,000- and 1,000,000-entity scenes, read from
 its `editor.wait` results) live in `src/Editor/`, which only builds with the editor.
@@ -639,11 +641,11 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   stress project (`StrataTests/src/Perf/StressProject.h`: 16 textures of 2048² and one of 4096², 447.4 MB of RGBA8, one
   material per district of a 2000-unit world, 2,000 objects over a 512² terrain grid), imports it and builds its pack,
   then runs a 600-frame camera sweep at 60 frames per second with a 128 MB texture budget in a helper process (peak
-  memory belongs to a whole process), three times. Every run must keep the textures within the budget plus the largest
-  one, finalize no frame for more than 8 ms, show each camera stop complete within 60 frames at rest and fail no load;
-  `StrataTests/Perf/Budgets.json` then judges the peak private bytes of the best run (the graphics driver's commit
-  charge varies from run to run), the largest resident texture memory of any run and the finalization time of the
-  median run.
+  memory belongs to a whole process). Every sweep must keep the textures within the budget plus the largest one, settle
+  every camera stop and fail no load; `StrataTests/Perf/Budgets.json` judges its peak private bytes (target 750 MB),
+  largest resident texture memory, longest frame finalization and the most frames a stop took to settle. A sweep over a
+  budget is confirmed by up to two more sweeps (the graphics driver's commit charge varies by about 150 MB from sweep to
+  sweep, and a frame the machine's other work preempted finalizes for longer).
   `GPU.Assets.Streaming` runs the same sweep on a small stress project under the validation layers.
 
 ## Scripting
@@ -681,7 +683,11 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   and it walks the whole scene only after a module reload or for more changes than are worth placing one by one
   (`GetUpdateOrderRebuildCount`, `GetFullUpdateOrderBuildCount`). Each update callback walks a list of just the
   instances whose class implements it, reading activity from the cached `ActiveInHierarchy` through each instance's
-  entity handle. Contacts come from the `PhysicsSystem` collision listener. Entity destruction requested by scripts
+  entity handle. Instances and the module's script objects are separate heap blocks, so the walk prefetches them a few
+  instances ahead (`Prefetch`, `Core/Prefetch.h`): the hardware prefetchers anticipate such reads only when they
+  recognize the pattern by the address of the reading instruction, which made the cost of a frame depend on how
+  unrelated code moved the loop (6.6 or 9.8 ms for 300,000 trivial scripts with identical sources). Contacts come from
+  the `PhysicsSystem` collision listener. Entity destruction requested by scripts
   waits until the scene can do it safely (`ScriptSystem::DestroyEntity`), and removed instances are destroyed at the
   next sync point.
 - **Host functions** (`ScriptHostAPI.cpp`). Every function runs in `HostCall` (no exception unwinds into the module)

@@ -37,7 +37,7 @@ together (targets, modules, frame loop, threading, asset pipeline, scripting, ed
 | `StrataTests/` | doctest unit tests, test helpers, the feature test project, and the layer table (`Architecture/Layers.json`, `LayeringAllowlist.txt`). |
 | `Samples/` | Games made through the editor by an AI agent, as projects (`.stproj`, `Assets/` with `.meta` files, `Scripts/`): `Tetris` (played and exported by the CTest `StrataEditor.Tetris`). `Samples.json` lists them; the build copies them next to the executables (`StrataSamples`), where the launcher's Open Sample and `project.openSample` offer them as copies. Open one in place only to change the sample: `StrataEditor --project Samples/<Game>`. |
 | `CMake/` | CMake modules (configurations, compiler options, shader compilation, manifest, the build's git commit). |
-| `Tools/` | Generators whose outputs are committed (standard-library Python): `GenerateBrandAssets.py` draws the strata mark into `StrataEditor/Resources/Brand/` (PNGs, raw RGBA for the window icon, the `.ico` of the executables). |
+| `Tools/` | Standard-library Python tools: generators whose outputs are committed (`GenerateBrandAssets.py` draws the strata mark into `StrataEditor/Resources/Brand/`: PNGs, raw RGBA for the window icon, the `.ico` of the executables) and `PerfStability.py` (runs the perf tests repeatedly and reports how stable every metric is, see [Testing](#testing)). |
 | `Docs/` | Documentation of how the engine works, linked to the code: `README.md` (index), `Architecture.md` (targets and dependencies, modules, frame loop, threading, asset pipeline, streaming and residency, scripting, editor, export and runtime), `Roadmap.md` (the pillars, the waves of workstreams and what each landed wave delivered; update its Status when a wave lands). |
 | `.claude/skills/` | Task-specific skills for agents (build/test, adding components, script API, editor automation, making a game end to end: `strata-make-a-game`). |
 
@@ -104,18 +104,41 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   build. Rendering features are tested on pixels read back with `Renderer::ReadTexture`.
 - **Perf tests** (the perf lab, `StrataTests/src/Perf/PerfUtils.h`): suites named `Perf.*` (CPU) and `PerfGPU.*`
   run as the CTests `StrataTests.Perf` and `StrataTests.PerfGPU` (label `perf`; PerfGPU also `gpu`) in Release and
-  Dist only, one at a time: `ctest --preset windows-release -L perf`. No other CTest runs them. A perf test measures
-  a metric (`Perf::Measure(name, warmup, iterations, function)` times each call and returns the median, 95th
-  percentile, minimum and maximum in milliseconds; `Platform::GetProcessMemory` reports private bytes and the working
-  set with their peaks) and passes it to `Perf::CheckBudget("<Suite>.<Metric>", value)`. That fails the test when
-  the value exceeds the metric's budget and records it in `build/<preset>/PerfResults/<config>.json`: one entry per
-  metric with value, unit and budget and nothing run-specific, so two runs compare with a diff (CTest clears the file
-  first). Budgets live in `StrataTests/Perf/Budgets.json`, whose `_comment` describes the format; a metric without
-  an entry fails its test. An entry holds the value `Measured` on the reference machine (i7-13700K, RTX 5090,
-  Windows 11, Release, a quiet machine) and a `Budget` of at most 1.5 times that (the parser enforces it).
-  **Budgets only go down:** a change that makes a metric cheaper lowers its entry in the same commit, a metric over
-  budget is a regression to fix rather than a budget to raise, and commits that add or lower budgets state the
-  measured values. Lower must be better (time per item, not items per second). GPU perf suites get the shared device
+  Dist only, one at a time: `ctest --preset windows-release -L perf`. No other CTest runs them; the lab's own logic is
+  tested by the suite `PerfLab` in `StrataTests.Core`. A perf test measures metrics in a measurement function
+  (`Perf::Measure(name, warmup, iterations, function)` times each call and returns the median, 95th percentile, minimum
+  and maximum in milliseconds; `Platform::GetProcessMemory` reports private bytes and the working set with their peaks)
+  and checks them with `Perf::CheckBudgetConfirmed("<Suite>.<Metric>", measure)`, or with
+  `Perf::CheckBudgetsConfirmed({keys}, measure)` for metrics one measurement produces together (`measure` returns
+  `Perf::MetricValues`). **Failures are confirmed:** a metric over its budget is measured again, by running `measure`
+  afresh (its own warm-up, its counters relative to its own start), up to `Perf::c_ConfirmationAttempts` (3) attempts
+  in all, and fails only when every attempt is over budget; a metric within its budget once is decided, because noise
+  only adds to a measurement (the machine's other work, memory the driver keeps). Every attempt is printed, and the check records each metric in
+  `build/<preset>/PerfResults/<config>.json`: one entry per metric with its value (the passing attempt's, else the
+  smallest), unit, budget, target and the values of all its attempts, and nothing else run-specific, so two runs
+  compare with a diff (CTest clears the file first). `Perf::CheckBudget(key, value)` checks one value without
+  confirmation; it remains for code written against it, and perf tests use the confirmed checks. **Statistics:** check
+  medians of enough samples (a measurement the machine slowed down that much is what confirmation is for), maxima only
+  for metrics that are maxima by nature (peak memory, the worst frame of a sweep), and give the reason for each metric's
+  statistic in a comment. Budgets live in `StrataTests/Perf/Budgets.json`, whose `_comment` describes the format; a
+  metric without an entry fails its test before anything is measured, and **limits live there, never in a test's code**.
+  An entry holds the value `Measured` on the reference machine (i7-13700K, RTX 5090, Windows 11, Release, a quiet
+  machine), a `Budget` of at most 1.5 times that (the parser enforces it) and optionally a `Target`: a roadmap goal
+  below the budget that the metric does not reach on every run, printed with every check (the budget is the gate; the
+  parser rejects a target the budget already enforces). **Budgets only go down:** a change that makes a metric cheaper
+  lowers its entry in the same commit, a metric over budget is a regression to fix rather than a budget to raise, and
+  commits that add or lower budgets state the measured values. Lower must be better (time per item, not items per
+  second). **Stability:** `Tools/PerfStability.py --runs 5` runs `-L perf` five times and reports per metric the
+  minimum, median and maximum, the pass rate and how often it needed confirmation, and per run how busy the machine
+  was, the attempts of every confirmed metric and the canary `Perf.Harness.Sort200k` against its reference. **Load or
+  regression:** a check's attempts follow each other within about a minute, so other work that lasts longer (a build)
+  can fail one metric as well as many, and a failure in a run on a busy machine says nothing about the code: run the
+  failing suite again on a quiet machine, where a regression stays over its budget in every attempt. The canary is a
+  single-threaded workload: it shows a throttled or oversubscribed machine, and load on many cores usually leaves it
+  unchanged. `--wait-quiet <percent>` starts each run only once the machine is that quiet (machines shared with other
+  work; the perf tests alone keep the reference machine about 20% busy), and
+  `--results <files>` reports on kept results files. Run it on the reference machine before merging changes to budgets
+  or perf tests. GPU perf suites get the shared device
   without validation layers (the CTest sets `STRATA_TEST_GPU_VALIDATION=0`; `PerfGPU.Harness` fails without it)
   and submit through `GPUContext::ExecuteAndWait`, which recycles the command buffer like the engine does every frame
   (a plain `executeCommandList` + `waitForIdle` makes every later `open()` create a command pool). Complexity claims
@@ -128,14 +151,20 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   destroy entities, scripts destroying 10,000 of 100,000 sibling roots in one frame) and, in `src/Editor/`,
   `Perf.Editor` (entity commands among 100,000 roots) and `PerfGPU.Editor`, which runs the real `StrataEditor`
   maximized on generated 100,000- and 1,000,000-entity scenes and checks the median CPU frame time its `editor.wait`
-  steps report. Time calls that take nanoseconds in batches (the clock's resolution is about 0.1 microseconds).
+  steps report (when the editor fails, the test describes the scene files on disk with `Tests::DescribeJsonFile`,
+  which tells a damaged file from a failed read or parse). Time calls that take nanoseconds in batches (the clock's
+  resolution is about 0.1 microseconds).
   A process's peak memory includes everything it did before, so a test that measures peak memory
   runs the measured work in a helper process (`--strata-test-helper=<mode>`, see `TestMain.cpp`): `PerfGPU.Streaming`
-  runs its camera sweep over the stress project (`src/Perf/StressProject.h`, also usable by other suites) that way,
-  three times. Every run must meet the acceptance limits; the budgets then judge peak private memory by the best run,
-  because the graphics driver keeps commit charge of freed device memory for a while (on Windows device memory counts
-  in private bytes), finalization time by the median run, which a spike from other work on the machine does not move,
-  and resident texture memory by the largest of any run.
+  runs its camera sweep over the stress project (`src/Perf/StressProject.h`, also usable by other suites) that way, one
+  sweep per attempt. Every sweep must stream correctly (no failed load or device error, every camera stop settles, the
+  textures stay within the residency budget give or take the largest); its budgets are maxima of the sweep: peak
+  private memory (the graphics driver keeps commit charge of freed device memory for a while, which counts in private
+  bytes on Windows, so identical sweeps peak up to about 150 MB apart; target 750 MB), resident texture memory, the
+  longest frame finalization (a regression may show in one frame, which a percentile would hide) and the most frames a
+  stop takes to settle. Script dispatch prefetches instances ahead because the hardware prefetchers follow heap blocks
+  only when they recognize the pattern by the reading instruction's address: a perf difference between builds of
+  identical sources points at such a layout effect; compare the builds' profiles before blaming noise.
 - Suites whose names start with `EndToEnd` start the built `StrataEditor` and `StrataCLI` (paths in
   `STRATA_TEST_EDITOR_PATH`/`STRATA_TEST_CLI_PATH`, else next to the test executable) and run as the CTest
   `StrataEditor.Automation`, not in `StrataTests.Core`. They need no GPU (`--no-gpu`), use private session
