@@ -624,7 +624,13 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `EditorContext::CommitEdit` records the difference. Edits while playing are not recorded. Continuous edits merge
   into one step (`EditorAction::MergeWith`); a merged step that ends where it started (`IsNoOp`) is dropped. Capturing
   reads cached sibling positions and applying a step removes and places entities in batches (`Scene::DestroyEntities`,
-  `Scene::PlaceEntities`), so edits of many entities in long sibling lists stay linear.
+  `Scene::PlaceEntities`), so edits of many entities in long sibling lists stay linear. Commands that act on several
+  entities take `entities` (besides `entity` where one was taken before) and record one step: `entity.setParent {entities,
+  parent, index}` (index: the final position of the first; reorders siblings and top-level entities too),
+  `entity.duplicate {entities}`, `entity.copy {entities}` and `entity.paste {data, parent, index}` (fresh IDs, references
+  among the pasted entities remapped, no prefab links added), `component.set {entities}`. The inspector edits a
+  multi-selection through `PropertyEdit` (`GetSharedProperty`, multi-entity `SetPropertyWithUndo`,
+  `GetDefaultComponentValues` for Reset).
 - `project.export` writes a playable game outside the project: the asset pack (`<Game>.stpak`), the script module, the
   manifest (`<Game>.stgame`, start scene, script module and window settings) and the runtime executable renamed after
   the game. CTest exports a small game (`StrataEditor --no-gpu`) and runs it headless.

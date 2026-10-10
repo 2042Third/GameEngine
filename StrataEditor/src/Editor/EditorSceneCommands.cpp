@@ -4,15 +4,22 @@
 #include "Editor/ProjectTemplates.h"
 
 #include <Strata/Asset/AssetManager.h>
+#include <Strata/Core/JsonUtils.h>
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/ComponentAccess.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Prefab.h>
 #include <Strata/Scene/Scene.h>
+#include <Strata/Scene/SceneSerializer.h>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
 namespace Strata
 {
@@ -95,6 +102,64 @@ namespace Strata
 		{
 			transaction.Rollback();
 			return EditorCommandResult::Fail(std::move(error), kind);
+		}
+
+		// The format of entity.copy's data, which entity.paste takes.
+		constexpr const char* c_EntitiesFormat = "Entities";
+		constexpr uint32_t c_EntitiesFormatVersion = 1;
+
+		// The entities of a command that takes "entity" (one) or "entities" (several): exactly one of the two.
+		std::vector<Entity> GetTargets(CommandArguments& arguments, Scene& scene)
+		{
+			const bool one = arguments.Has("entity");
+			const bool many = arguments.Has("entities");
+			if (one == many)
+			{
+				arguments.SetError(one ? "Pass either 'entity' or 'entities', not both" : "Missing parameter 'entity' (or 'entities')");
+				return {};
+			}
+			if (many)
+				return arguments.GetEntities(scene, "entities");
+			Entity entity = arguments.GetEntity(scene, "entity");
+			return arguments.IsValid() ? std::vector<Entity> { entity } : std::vector<Entity>();
+		}
+
+		// The entities in their order, without repeats and without those below another listed one (they go with it).
+		std::vector<Entity> RemoveNested(const std::vector<Entity>& entities)
+		{
+			std::unordered_set<UUID> listed;
+			for (const Entity entity : entities)
+				listed.insert(entity.GetUUID());
+			std::unordered_set<UUID> seen;
+			std::vector<Entity> result;
+			for (const Entity entity : entities)
+			{
+				if (!seen.insert(entity.GetUUID()).second)
+					continue;
+				bool nested = false;
+				for (Entity ancestor = entity.GetParent(); ancestor && !nested; ancestor = ancestor.GetParent())
+					nested = listed.contains(ancestor.GetUUID());
+				if (!nested)
+					result.push_back(entity);
+			}
+			return result;
+		}
+
+		nlohmann::json ToJson(const std::vector<Entity>& entities)
+		{
+			nlohmann::json ids = nlohmann::json::array();
+			for (const Entity entity : entities)
+				ids.push_back(UUIDToJson(entity.GetUUID()));
+			return ids;
+		}
+
+		std::vector<UUID> GetIds(const std::vector<Entity>& entities)
+		{
+			std::vector<UUID> ids;
+			ids.reserve(entities.size());
+			for (const Entity entity : entities)
+				ids.push_back(entity.GetUUID());
+			return ids;
 		}
 
 	}
@@ -302,24 +367,144 @@ namespace Strata
 				return Finish(context, transaction);
 			} });
 
-		registry.Register({ "entity.duplicate", "Duplicates an entity with its descendants, placed after it (undoable; while playing it changes the running copy only). Returns the copy's ID.",
-			ObjectSchema({ { "entity", EntitySchema("Entity to duplicate") } }, { "entity" }),
+		registry.Register({ "entity.duplicate",
+			"Duplicates entities with their descendants, each copy placed right after its original, in one undo step (while playing it changes the "
+			"running copy only). References between the copied entities point at the copies. Returns the copies' IDs (entities, in the order "
+			"given; id: the first).",
+			ObjectSchema({
+				{ "entity", EntitySchema("Entity to duplicate") },
+				{ "entities", EntityArraySchema("Entities to duplicate (instead of entity); those below another listed one are copied with it") } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				Scene& scene = *context.GetActiveScene();
 				CommandArguments arguments(parameters);
-				Entity entity = arguments.GetEntity(scene, "entity");
+				const std::vector<Entity> originals = RemoveNested(GetTargets(arguments, scene));
 				if (!arguments.IsValid())
 					return arguments.Fail();
+				size_t entityCount = 0;
+				for (const Entity original : originals)
+					entityCount += SceneEdit::CollectSubtree(scene, original.GetUUID()).size();
+				if (scene.GetEntityCount() + entityCount > Scene::c_MaxEntities)
+					return EditorCommandResult::Fail(fmt::format("The scene is full: it holds at most {} entities", Scene::c_MaxEntities));
 
-				// Siblings after the original shift by one; removing the copy (undo) or reinserting it at its recorded
-				// position (redo) shifts them back, so only the copy is part of the edit.
-				SceneEditTransaction transaction(scene, "Duplicate Entity", {});
-				Entity copy = scene.DuplicateEntity(entity);
-				if (!copy)
-					return RollBack(transaction, "Duplicating failed", EditorCommandError::Failed);
-				transaction.TrackCreated(copy.GetUUID());
-				return Finish(context, transaction, { { "id", UUIDToJson(copy.GetUUID()) } });
+				// Siblings after an original shift by one; removing the copies (undo) or reinserting them at their recorded
+				// positions (redo) shifts them back, so only the copies are part of the edit. The copies of each sibling list are
+				// made in one batch and placed in one batch, so duplicating many entities of a long list stays linear.
+				SceneEditTransaction transaction(scene, originals.size() == 1 ? "Duplicate Entity" : "Duplicate Entities", {});
+				std::vector<Entity> copies(originals.size());
+				std::vector<Scene::EntityPlacement> placements;
+				std::unordered_map<UUID, std::vector<size_t>> groups; // Parent -> originals under it, in the order given
+				std::vector<UUID> parents;                          // The groups in the order their first original was given
+				for (size_t index = 0; index < originals.size(); index++)
+				{
+					const Entity parent = originals[index].GetParent();
+					const UUID parentId = parent ? parent.GetUUID() : UUID::Null();
+					auto [group, added] = groups.try_emplace(parentId);
+					if (added)
+						parents.push_back(parentId);
+					group->second.push_back(index);
+				}
+				for (const UUID parentId : parents)
+				{
+					const std::vector<size_t>& members = groups.at(parentId);
+					std::vector<Entity> roots;
+					for (const size_t index : members)
+						roots.push_back(originals[index]);
+					EntityInstantiationOptions options;
+					options.GenerateNewUUIDs = true;
+					options.Parent = scene.GetEntityByUUID(parentId);
+					options.ReportUnknownComponents = false; // Entities of this scene: their unknown components are no news
+					std::string error;
+					const std::vector<Entity> created = SceneSerializer::DeserializeEntities(scene, SceneSerializer::SerializeEntities(scene, roots), options, &error);
+					for (const Entity copy : created)
+						transaction.TrackCreated(copy.GetUUID());
+					if (!error.empty() || created.size() != members.size())
+						return RollBack(transaction, fmt::format("Duplicating failed: {}", error.empty() ? std::string("the copies do not match") : error), EditorCommandError::Failed);
+					for (size_t member = 0; member < members.size(); member++)
+						copies[members[member]] = created[member];
+
+					// Each copy right after its original: the n-th original of the list (in list order) moves n copies further.
+					std::vector<std::pair<size_t, size_t>> positions; // (original's position, index into originals)
+					for (const size_t index : members)
+						positions.emplace_back(scene.GetSiblingIndex(originals[index]), index);
+					std::sort(positions.begin(), positions.end());
+					for (size_t rank = 0; rank < positions.size(); rank++)
+						placements.push_back({ copies[positions[rank].second].GetUUID(), parentId, positions[rank].first + rank + 1 });
+				}
+				if (!scene.PlaceEntities(placements))
+					return RollBack(transaction, "Placing the copies failed", EditorCommandError::Failed);
+				return Finish(context, transaction, { { "id", UUIDToJson(copies.front().GetUUID()) }, { "entities", ToJson(copies) } });
+			} });
+
+		registry.Register({ "entity.copy",
+			"Copies entities with their descendants (as the clipboard holds them): returns data for entity.paste, which makes new entities from it "
+			"in this or another scene. Changes nothing.",
+			ObjectSchema({ { "entities", EntityArraySchema("Entities to copy; those below another listed one are copied with it") } }, { "entities" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				Scene& scene = *context.GetActiveScene();
+				CommandArguments arguments(parameters);
+				const std::vector<Entity> roots = RemoveNested(arguments.GetEntities(scene, "entities"));
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				nlohmann::json data = SceneSerializer::SerializeEntities(scene, roots);
+				const size_t count = data["Entities"].size();
+				data["Strata"] = { { "Format", c_EntitiesFormat }, { "Version", c_EntitiesFormatVersion } };
+				return EditorCommandResult::Ok({ { "data", std::move(data) }, { "roots", ToJson(roots) }, { "count", count } });
+			} });
+
+		registry.Register({ "entity.paste",
+			"Creates entities from entity.copy's data, under a parent (default: the top level) at a position among its children (default: last), "
+			"in one undo step (while playing it changes the running copy only). The new entities get fresh IDs; references between them point at "
+			"each other, references to other entities stay. Returns the IDs of the pasted top-level entities and warnings about data this build "
+			"cannot read.",
+			ObjectSchema({
+				{ "data", AnyObjectSchema("What entity.copy returned in 'data': {\"Strata\": {\"Format\": \"Entities\", ...}, \"Entities\": [...]}") },
+				{ "parent", OptionalEntitySchema("Parent of the pasted entities; null or omitted for the top level") },
+				{ "index", IntegerSchema("Position of the first pasted entity among the parent's children (default: last)", 0, std::numeric_limits<int32_t>::max()) } },
+				{ "data" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				Scene& scene = *context.GetActiveScene();
+				CommandArguments arguments(parameters);
+				const nlohmann::json& data = arguments.GetObject("data");
+				Entity parent = arguments.FindEntity(scene, "parent");
+				const int64_t index = arguments.GetInt("index", -1, 0, std::numeric_limits<int32_t>::max());
+				if (arguments.IsValid())
+				{
+					const nlohmann::json* header = JsonUtils::Find(data, "Strata");
+					const nlohmann::json* format = header ? JsonUtils::Find(*header, "Format") : nullptr;
+					const nlohmann::json* entities = JsonUtils::Find(data, "Entities");
+					if (header && (!format || *format != c_EntitiesFormat))
+						arguments.SetError("Parameter 'data': not entity data (its \"Strata\" header names another format)");
+					else if (!entities || !entities->is_array() || entities->empty())
+						arguments.SetError("Parameter 'data': expected entity.copy's data, with a non-empty \"Entities\" array");
+				}
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				if (scene.GetEntityCount() + data["Entities"].size() > Scene::c_MaxEntities)
+					return EditorCommandResult::Fail(fmt::format("The scene is full: it holds at most {} entities", Scene::c_MaxEntities));
+
+				SceneEditTransaction transaction(scene, "Paste Entities", {});
+				EntityInstantiationOptions options;
+				options.GenerateNewUUIDs = true;
+				options.Parent = parent;
+				std::string error;
+				std::vector<std::string> warnings;
+				const std::vector<Entity> roots = SceneSerializer::DeserializeEntities(scene, data, options, &error, &warnings);
+				for (const Entity root : roots)
+					transaction.TrackCreated(root.GetUUID());
+				if (!error.empty())
+					return RollBack(transaction, fmt::format("Parameter 'data': {}", error), EditorCommandError::InvalidParameters);
+				if (index >= 0)
+				{
+					std::vector<Scene::EntityPlacement> placements;
+					for (size_t position = 0; position < roots.size(); position++)
+						placements.push_back({ roots[position].GetUUID(), parent ? parent.GetUUID() : UUID::Null(), static_cast<size_t>(index) + position });
+					if (!scene.PlaceEntities(placements))
+						return RollBack(transaction, "Placing the pasted entities failed", EditorCommandError::Failed);
+				}
+				return Finish(context, transaction, { { "entities", ToJson(roots) }, { "warnings", warnings } });
 			} });
 
 		registry.Register({ "entity.get", "An entity's name, parent, children and all component values.",
@@ -359,29 +544,58 @@ namespace Strata
 				return EditorCommandResult::Ok({ { "entities", std::move(ids) } });
 			} });
 
-		registry.Register({ "entity.setParent", "Moves an entity under another one, or to the top level (undoable; while playing it changes the running copy only).",
+		registry.Register({ "entity.setParent",
+			"Moves entities under another one, or to the top level, and/or reorders them among their siblings, in one undo step (while playing it "
+			"changes the running copy only). With index, the entities end up at positions index, index + 1, ... among the parent's children, in "
+			"the order given (also to reorder top-level entities or children of their current parent); without it, entities that change parent "
+			"go last and the others stay where they are. Fails when the parent is one of the entities or below one.",
 			ObjectSchema({
 				{ "entity", EntitySchema("Entity to move") },
+				{ "entities", EntityArraySchema("Entities to move (instead of entity), in the order they end up in; those below another listed one move with it") },
 				{ "parent", OptionalEntitySchema("New parent; null or omitted for the top level") },
-				{ "index", IntegerSchema("Position among the new siblings (default: last)", 0, std::numeric_limits<int32_t>::max()) },
-				{ "keepWorldTransform", BoolSchema("Keep the world-space placement (default true)") } }, { "entity" }),
+				{ "index", IntegerSchema("Final position of the first entity among the parent's children (default: last)", 0, std::numeric_limits<int32_t>::max()) },
+				{ "keepWorldTransform", BoolSchema("Keep the world-space placement of entities that change parent (default true)") } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				Scene& scene = *context.GetActiveScene();
 				CommandArguments arguments(parameters);
-				Entity entity = arguments.GetEntity(scene, "entity");
+				const std::vector<Entity> entities = RemoveNested(GetTargets(arguments, scene));
 				Entity parent = arguments.FindEntity(scene, "parent");
 				const bool keepWorld = arguments.GetBool("keepWorldTransform", true);
 				const int64_t index = arguments.GetInt("index", -1, 0, std::numeric_limits<int32_t>::max());
 				if (!arguments.IsValid())
 					return arguments.Fail();
+				for (const Entity entity : entities)
+				{
+					if (parent && (parent == entity || scene.IsDescendantOf(parent, entity)))
+						return EditorCommandResult::InvalidParameters("The new parent is one of the moved entities or one of their descendants");
+				}
 
-				SceneEditTransaction transaction(scene, "Reparent Entity", { entity.GetUUID() });
-				if (!scene.SetParent(entity, parent, keepWorld))
-					return RollBack(transaction, "The new parent is the entity itself or one of its descendants", EditorCommandError::InvalidParameters);
-				if (index >= 0)
-					scene.SetSiblingIndex(entity, static_cast<size_t>(index));
-				return Finish(context, transaction);
+				SceneEditTransaction transaction(scene, entities.size() == 1 ? "Reparent Entity" : "Reparent Entities", GetIds(entities));
+				const UUID parentId = parent ? parent.GetUUID() : UUID::Null();
+				std::vector<Scene::EntityPlacement> placements;
+				std::vector<std::pair<Entity, glm::mat4>> reparented; // With the world transform to keep
+				for (size_t position = 0; position < entities.size(); position++)
+				{
+					const Entity entity = entities[position];
+					const bool changesParent = entity.GetParent() != parent;
+					if (!changesParent && index < 0)
+						continue;
+					if (changesParent)
+						reparented.emplace_back(entity, keepWorld ? scene.GetWorldTransform(entity) : glm::mat4(1.0f));
+					// One batch: each sibling list is rebuilt once; positions past the end land last, in the order given.
+					const size_t target = index >= 0 ? static_cast<size_t>(index) + position : std::numeric_limits<size_t>::max();
+					placements.push_back({ entity.GetUUID(), parentId, target });
+				}
+				if (!scene.PlaceEntities(placements))
+					return RollBack(transaction, "The entities could not be placed under the new parent", EditorCommandError::Failed);
+				// The new parent is not among the moved entities, so its world transform is final: the local transforms follow.
+				if (keepWorld)
+				{
+					for (const auto& [entity, world] : reparented)
+						scene.SetWorldTransform(entity, world);
+				}
+				return Finish(context, transaction, { { "entities", ToJson(entities) } });
 			} });
 
 		registry.Register({ "entity.rename", "Renames an entity (undoable; while playing it changes the running copy only).",
@@ -502,26 +716,40 @@ namespace Strata
 				return EditorCommandResult::Ok({ { "values", ComponentAccess::Serialize(*info, component) } });
 			} });
 
-		registry.Register({ "component.set", "Sets property values of a component the entity has (undoable; while playing it changes the running copy only). Invalid values change nothing.",
-			ObjectSchema({ { "entity", EntitySchema("Entity") }, { "component", StringSchema("Component type") }, { "values", AnyObjectSchema("Property values, e.g. {\"Intensity\": 2}") } },
-				{ "entity", "component", "values" }),
+		registry.Register({ "component.set",
+			"Sets property values of a component that the entity (or every one of the entities) has, in one undo step (while playing it changes "
+			"the running copy only). Invalid values change nothing. Returns the component's values (of the first entity).",
+			ObjectSchema({
+				{ "entity", EntitySchema("Entity") },
+				{ "entities", EntityArraySchema("Entities to set the same values on (instead of entity)") },
+				{ "component", StringSchema("Component type") },
+				{ "values", AnyObjectSchema("Property values, e.g. {\"Intensity\": 2}") } },
+				{ "component", "values" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				Scene& scene = *context.GetActiveScene();
 				CommandArguments arguments(parameters);
-				Entity entity = arguments.GetEntity(scene, "entity");
+				const std::vector<Entity> entities = GetTargets(arguments, scene);
 				const ComponentInfo* info = GetComponentInfo(arguments, "component", true);
 				const nlohmann::json& values = arguments.GetObject("values");
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				if (!info->Has(scene.GetRegistry(), entity.GetHandle()))
-					return EditorCommandResult::Fail(fmt::format("The entity has no {} component (use component.add)", info->Name));
+				for (const Entity entity : entities)
+				{
+					if (!info->Has(scene.GetRegistry(), entity.GetHandle()))
+						return EditorCommandResult::Fail(fmt::format("'{}' has no {} component (use component.add)", entity.GetName(), info->Name));
+				}
 
-				SceneEditTransaction transaction(scene, fmt::format("Edit {}", info->DisplayName), { entity.GetUUID() });
+				SceneEditTransaction transaction(scene, fmt::format("Edit {}", info->DisplayName), GetIds(entities));
 				std::string error;
-				if (!ApplyComponents(entity, { { info->Name, values } }, &error))
-					return RollBack(transaction, error, EditorCommandError::InvalidParameters);
-				return Finish(context, transaction, { { "values", ComponentAccess::Serialize(*info, info->Get(scene.GetRegistry(), entity.GetHandle())) } });
+				for (const Entity entity : entities)
+				{
+					if (!ApplyComponents(entity, { { info->Name, values } }, &error))
+						return RollBack(transaction, error, EditorCommandError::InvalidParameters);
+				}
+				const Entity first = entities.front();
+				return Finish(context, transaction, { { "values", ComponentAccess::Serialize(*info, info->Get(scene.GetRegistry(), first.GetHandle())) },
+					{ "count", entities.size() } });
 			} });
 
 		////////////////////////////////////////////////////////////////////////////////

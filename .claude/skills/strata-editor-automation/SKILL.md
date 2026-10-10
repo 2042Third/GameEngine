@@ -165,12 +165,18 @@ when it failed (`"wait": false` answers at once; `asset.info` says `importing`).
 rejected with what is accepted. Models expose sub-assets (meshes, materials) and are instantiated whole with
 `prefab.instantiate`.
 
-**Hierarchy and prefabs**: `entity.create {"parent": "<id>"}`, `entity.setParent`, `entity.duplicate`,
+**Hierarchy and prefabs**: `entity.create {"parent": "<id>"}`;
+`entity.setParent {"entities": ["<id>", ...], "parent": "<id>" | null, "index": 0}` moves entities (in the order given;
+`index` is the final position of the first one, also to reorder top-level entities or siblings; without it entities that
+change parent go last) in one undo step; `entity.duplicate {"entities": [...]}` puts each copy right after its original;
+`entity.copy {"entities": [...]}` returns `data` that `entity.paste {"data", "parent"?, "index"?}` turns into new
+entities (fresh IDs, references among them remapped, also in another scene);
 `prefab.create {"entities": ["<id>"], "path": "Prefabs/Block.stprefab"}`, then
 `prefab.instantiate {"prefab": "Prefabs/Block.stprefab", "components": {"Transform": {"Translation": [2, 0, 0]}}}`.
 
-**Edit**: `component.add` (adds if missing, then sets values), `component.set` (component must exist),
-`component.remove`, `entity.rename`, `entity.setActive`, `entity.delete`, `scene.setSettings` (gravity, timestep).
+**Edit**: `component.add` (adds if missing, then sets values), `component.set` (component must exist; `"entities": [...]`
+instead of `"entity"` sets the same values on all of them in one step), `component.remove`, `entity.rename`,
+`entity.setActive`, `entity.delete`, `scene.setSettings` (gravity, timestep).
 
 **Materials**: `material.set {"material": "Materials/Red.stmat", "properties": {"Roughness": 0.3}}` saves the material
 file and is one undo step (`edit.undo` restores the file and what entities show); entities using it show the change in

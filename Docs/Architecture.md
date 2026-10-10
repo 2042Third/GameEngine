@@ -802,7 +802,12 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
 - **Undo** (`SceneEdit.h`, `UndoStack.h`). A `SceneEditTransaction` snapshots the entities an edit touches as
   `EntityState` (components as JSON, parent, sibling index from `Scene::GetSiblingIndex`); `Commit` records a
   `SceneEditAction` holding the states before and after, and undo or redo re-applies them with the same UUIDs
-  (`SceneEdit::ApplyEntities`: one `DestroyEntities` batch, one recreation batch, one `PlaceEntities` batch). Continuous
+  (`SceneEdit::ApplyEntities`: one `DestroyEntities` batch, one recreation batch, one `PlaceEntities` batch of every
+  recorded entity of each sibling list in which one differs, since positions can agree by chance while the order does
+  not). Commands that change many entities record one step: `entity.setParent {entities, index}` (one `PlaceEntities`
+  batch), `entity.duplicate {entities}` (one deserialization per sibling list, then one placement batch),
+  `entity.paste`, `component.set {entities}`; `PropertyEdit`'s multi-entity `SetPropertyWithUndo` is the inspector's
+  form (it writes only the vector components an edit changed). Continuous
   edits merge by key; the stack keeps 512 steps and a save point for the modified flag, which only steps that change the
   scene move (`EditorAction::ChangesScene`). Edits while playing are not recorded. The selection keeps its order in a
   vector and answers `IsSelected` from a set.
