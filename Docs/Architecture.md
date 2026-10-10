@@ -280,7 +280,7 @@ A frame of a scene where nothing changed costs (almost) nothing, however many en
 - **Primary camera.** `GetPrimaryCameraEntity` examines only the entities with a `CameraComponent` (an EnTT view), reads
   `Primary` and the cached activity, and keeps the first in hierarchy order.
 - **Batches.** `DestroyEntities` tells the systems about every subtree, then compacts each sibling list once;
-  `PlaceEntities` rebuilds each sibling list it touches once.
+  `PlaceEntities` rebuilds each sibling list it touches once. The editor's undo uses both.
 - **Capacity.** EnTT identifiers have a 20-bit index: a registry holds at most `Scene::c_MaxEntities` (1,048,575) live
   entities. `CreateEntity` fails with an error at that limit and deserialization reports it.
 - Diagnostics count the work: `GetTransformUpdateCount`, `GetHierarchyOrderBuildCount`, `GetLookupVisitCount` and
@@ -466,9 +466,11 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   runner. UI actions that finish at once call the registry through `RunEditorCommand`
   (`Panels/SceneHierarchyPanel.cpp`), which rejects pending results; Build Scripts uses the runner (`EditorLayer.cpp`).
 - **Undo** (`SceneEdit.h`, `UndoStack.h`). A `SceneEditTransaction` snapshots the entities an edit touches as
-  `EntityState` (components as JSON, parent, sibling index); `Commit` records a `SceneEditAction` holding the states
-  before and after, and undo or redo re-applies them with the same UUIDs (`SceneEdit::ApplyEntities`). Continuous edits
-  merge by key; the stack keeps 512 steps and a save point for the modified flag. Edits while playing are not recorded.
+  `EntityState` (components as JSON, parent, sibling index from `Scene::GetSiblingIndex`); `Commit` records a
+  `SceneEditAction` holding the states before and after, and undo or redo re-applies them with the same UUIDs
+  (`SceneEdit::ApplyEntities`: one `DestroyEntities` batch, one recreation batch, one `PlaceEntities` batch). Continuous
+  edits merge by key; the stack keeps 512 steps and a save point for the modified flag. Edits while playing are not
+  recorded. The selection keeps its order in a vector and answers `IsSelected` from a set.
 - **Automation** (`EditorAutomation.h`, `Network/RpcServer.h`). The server's network thread does the socket work;
   each frame `EditorAutomation::Update` registers new or changed commands as methods and runs queued requests through
   the runner, so a deferred command answers when it completes. Clients find the editor through session files

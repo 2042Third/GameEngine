@@ -180,6 +180,108 @@ TEST_SUITE("Editor.Commands")
 		CHECK(harness.SceneSnapshot() == edited);
 	}
 
+	TEST_CASE("Deleting many entities of a long sibling list is one undo step that restores every position")
+	{
+		CommandHarness harness;
+		Scene& scene = *harness.Context.GetEditScene();
+		std::vector<UUID> roots;
+		for (int index = 0; index < 2000; index++)
+		{
+			Entity root = scene.CreateEntity("Root" + std::to_string(index));
+			root.AddComponent<TagComponent>(index % 5 == 0 ? "Doomed" : "Kept");
+			roots.push_back(root.GetUUID());
+		}
+		scene.CreateChildEntity(scene.GetEntityByUUID(roots[5]), "Child");
+		const nlohmann::json original = harness.SceneSnapshot();
+		CHECK(scene.FindEntitiesByTag("Doomed").size() == 400);
+
+		nlohmann::json doomed = nlohmann::json::array();
+		for (size_t index = 0; index < roots.size(); index += 5)
+			doomed.push_back(UUIDToJson(roots[index]));
+		harness.Context.SetSelection({ roots[0], roots[1], roots[5] });
+		const size_t history = harness.Context.GetUndoStack().GetHistory().size();
+		harness.Run("entity.delete", { { "entities", doomed } });
+		CHECK(harness.Context.GetUndoStack().GetHistory().size() == history + 1);
+		CHECK(scene.GetEntityCount() == 1600);
+		CHECK(harness.Context.GetSelection() == std::vector<UUID> { roots[1] });
+		CHECK_FALSE(harness.Context.IsSelected(roots[0]));
+		CHECK(harness.Context.IsSelected(roots[1]));
+		CHECK(scene.FindEntitiesByTag("Doomed").empty());
+		CHECK_FALSE(scene.FindEntityByName("Child").IsValid());
+		std::string error;
+		CHECK_MESSAGE(scene.ValidateHierarchy(&error), error);
+
+		harness.Run("edit.undo");
+		CHECK(harness.SceneSnapshot() == original);
+		CHECK(scene.GetRootEntities().size() == 2000);
+		CHECK(scene.FindEntitiesByTag("Doomed").size() == 400);
+		REQUIRE(scene.GetEntityByUUID(roots[5]));
+		CHECK(scene.FindEntityByName("Child").GetParent() == scene.GetEntityByUUID(roots[5]));
+		CHECK_MESSAGE(scene.ValidateHierarchy(&error), error);
+		scene.UpdateWorldTransforms();
+		CHECK_MESSAGE(scene.ValidateWorldTransforms(&error), error);
+
+		harness.Run("edit.redo");
+		CHECK(scene.GetEntityCount() == 1600);
+		harness.Run("edit.undo");
+		CHECK(harness.SceneSnapshot() == original);
+	}
+
+	TEST_CASE("Name and tag lookups follow renames, tag edits and their undo")
+	{
+		CommandHarness harness;
+		Scene& scene = *harness.Context.GetEditScene();
+		const std::string id = harness.Run("entity.create", { { "name", "Before" }, { "components", { { "Tag", { { "Tag", "Red" } } } } } })["id"].get<std::string>();
+		const Entity entity = scene.FindEntityByName("Before");
+		REQUIRE(entity);
+		CHECK(scene.FindEntitiesByTag("Red") == std::vector<Entity> { entity });
+
+		harness.Run("entity.rename", { { "entity", id }, { "name", "After" } });
+		harness.Run("component.set", { { "entity", id }, { "component", "Tag" }, { "values", { { "Tag", "Blue" } } } });
+		CHECK(scene.FindEntityByName("After") == entity);
+		CHECK_FALSE(scene.FindEntityByName("Before").IsValid());
+		CHECK(scene.FindEntitiesByTag("Red").empty());
+		CHECK(scene.FindEntitiesByTag("Blue") == std::vector<Entity> { entity });
+
+		harness.Run("edit.undo");
+		harness.Run("edit.undo");
+		CHECK(scene.FindEntityByName("Before") == entity);
+		CHECK_FALSE(scene.FindEntityByName("After").IsValid());
+		CHECK(scene.FindEntitiesByTag("Red") == std::vector<Entity> { entity });
+		CHECK(scene.FindEntitiesByTag("Blue").empty());
+
+		harness.Run("component.remove", { { "entity", id }, { "component", "Tag" } });
+		CHECK(scene.FindEntitiesByTag("Red").empty());
+		harness.Run("edit.undo");
+		CHECK(scene.FindEntitiesByTag("Red") == std::vector<Entity> { entity });
+		std::string error;
+		CHECK_MESSAGE(scene.ValidateHierarchy(&error), error);
+	}
+
+	TEST_CASE("The selection keeps its order and answers membership")
+	{
+		CommandHarness harness;
+		Scene& scene = *harness.Context.GetEditScene();
+		const UUID a = scene.CreateEntity("A").GetUUID();
+		const UUID b = scene.CreateEntity("B").GetUUID();
+		const UUID c = scene.CreateEntity("C").GetUUID();
+
+		harness.Context.SetSelection({ c, a, c, UUID(0x1234), b });
+		CHECK(harness.Context.GetSelection() == std::vector<UUID> { c, a, b });
+		harness.Context.Select(a, true);
+		CHECK(harness.Context.GetSelection() == std::vector<UUID> { c, b, a });
+		CHECK(harness.Context.GetPrimarySelection().GetUUID() == a);
+		harness.Context.Deselect(c);
+		CHECK_FALSE(harness.Context.IsSelected(c));
+		CHECK(harness.Context.IsSelected(b));
+		harness.Context.Select(c);
+		CHECK(harness.Context.GetSelection() == std::vector<UUID> { c });
+		CHECK_FALSE(harness.Context.IsSelected(a));
+		harness.Context.ClearSelection();
+		CHECK(harness.Context.GetSelection().empty());
+		CHECK_FALSE(harness.Context.IsSelected(c));
+	}
+
 	TEST_CASE("Invalid edits fail without changing the scene or the history")
 	{
 		CommandHarness harness;

@@ -21,6 +21,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace Strata
@@ -145,11 +146,13 @@ namespace Strata
 		// Selection (entities of the active scene)
 		//////////////////////////////////////////////////////////////////////////
 
+		// In selection order (the last one is the primary selection).
 		const std::vector<UUID>& GetSelection() const { return m_Selection; }
 		void SetSelection(std::vector<UUID> selection);
 		void Select(UUID entity, bool additive = false);
 		void Deselect(UUID entity);
-		void ClearSelection() { m_Selection.clear(); }
+		void ClearSelection();
+		// Constant time, also for large selections.
 		bool IsSelected(UUID entity) const;
 		// The most recently selected entity that still exists.
 		Entity GetPrimarySelection() const;
@@ -257,6 +260,7 @@ namespace Strata
 		SimulatedInput m_SimulatedInput;
 
 		std::vector<UUID> m_Selection;
+		std::unordered_set<UUID> m_SelectionSet; // The same entities, for IsSelected
 		UndoStack m_UndoStack;
 
 		Ref<ScriptEngine> m_ScriptEngine;

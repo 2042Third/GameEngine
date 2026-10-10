@@ -281,18 +281,10 @@ namespace Strata
 					return arguments.Fail();
 
 				SceneEditTransaction transaction(scene, entities.size() == 1 ? "Delete Entity" : "Delete Entities", {});
-				std::vector<UUID> ids;
 				for (Entity entity : entities)
-				{
 					transaction.TrackSubtree(entity.GetUUID());
-					ids.push_back(entity.GetUUID());
-				}
-				for (UUID id : ids)
-				{
-					// An entity may already be gone with an ancestor deleted before it.
-					if (Entity entity = scene.GetEntityByUUID(id))
-						scene.DestroyEntity(entity);
-				}
+				// One batch: each sibling list is compacted once (entities nested in another listed one go with it).
+				scene.DestroyEntities(entities);
 				context.PruneSelection(); // Deleted descendants too
 				return Finish(context, transaction);
 			} });

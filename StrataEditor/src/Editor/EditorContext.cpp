@@ -187,7 +187,7 @@ namespace Strata
 		Stop();
 		m_EditScene = std::move(scene);
 		m_SceneHandle = handle;
-		m_Selection.clear();
+		ClearSelection();
 		m_UndoStack.Clear();
 	}
 
@@ -441,10 +441,10 @@ namespace Strata
 
 	void EditorContext::SetSelection(std::vector<UUID> selection)
 	{
-		m_Selection.clear();
+		ClearSelection();
 		for (UUID entity : selection)
 		{
-			if (GetActiveScene()->GetEntityByUUID(entity) && !IsSelected(entity))
+			if (GetActiveScene()->GetEntityByUUID(entity) && m_SelectionSet.insert(entity).second)
 				m_Selection.push_back(entity);
 		}
 	}
@@ -452,22 +452,30 @@ namespace Strata
 	void EditorContext::Select(UUID entity, bool additive)
 	{
 		if (!additive)
-			m_Selection.clear();
+			ClearSelection();
 		if (!GetActiveScene()->GetEntityByUUID(entity))
 			return;
 		// The latest selection is the primary one: move it to the back.
-		std::erase(m_Selection, entity);
+		if (!m_SelectionSet.insert(entity).second)
+			std::erase(m_Selection, entity);
 		m_Selection.push_back(entity);
 	}
 
 	void EditorContext::Deselect(UUID entity)
 	{
-		std::erase(m_Selection, entity);
+		if (m_SelectionSet.erase(entity) > 0)
+			std::erase(m_Selection, entity);
+	}
+
+	void EditorContext::ClearSelection()
+	{
+		m_Selection.clear();
+		m_SelectionSet.clear();
 	}
 
 	bool EditorContext::IsSelected(UUID entity) const
 	{
-		return std::find(m_Selection.begin(), m_Selection.end(), entity) != m_Selection.end();
+		return m_SelectionSet.contains(entity);
 	}
 
 	Entity EditorContext::GetPrimarySelection() const
@@ -482,7 +490,13 @@ namespace Strata
 
 	void EditorContext::PruneSelection()
 	{
-		std::erase_if(m_Selection, [this](UUID entity) { return !GetActiveScene()->GetEntityByUUID(entity); });
+		std::erase_if(m_Selection, [this](UUID entity)
+		{
+			if (GetActiveScene()->GetEntityByUUID(entity))
+				return false;
+			m_SelectionSet.erase(entity);
+			return true;
+		});
 	}
 
 	////////////////////////////////////////////////////////////////////////////////

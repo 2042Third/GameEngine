@@ -481,7 +481,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
 - Undo works on entity snapshots: a `SceneEditTransaction` captures the entities an edit touches
   (`Track`, `TrackSubtree` before changing or deleting them, `TrackCreated` after creating them) and
   `EditorContext::CommitEdit` records the difference. Edits while playing are not recorded. Continuous edits merge
-  into one step (`EditorAction::MergeWith`); a merged step that ends where it started (`IsNoOp`) is dropped.
+  into one step (`EditorAction::MergeWith`); a merged step that ends where it started (`IsNoOp`) is dropped. Capturing
+  reads cached sibling positions and applying a step removes and places entities in batches (`Scene::DestroyEntities`,
+  `Scene::PlaceEntities`), so edits of many entities in long sibling lists stay linear.
 - `project.export` writes a playable game outside the project: the asset pack (`<Game>.stpak`), the script module, the
   manifest (`<Game>.stgame`, start scene, script module and window settings) and the runtime executable renamed after
   the game. CTest exports a small game (`StrataEditor --no-gpu`) and runs it headless.
