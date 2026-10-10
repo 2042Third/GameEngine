@@ -80,6 +80,7 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | What state do the scripts hold (a score, a timer)? | `script.get` (live field values while playing) |
 | What is in the scene? | `scene.hierarchy`, `entity.find` (`name`, `tag`, `component`), `entity.get` |
 | What happened (errors, script output)? | `log.read` (`after` = the previous `latest` to page; `minLevel`) |
+| How much memory do assets use, what is loaded or streaming? | `asset.stats` (`assets: true` lists them; `sort`, `limit`); `asset.setBudget` changes the budgets (MB) |
 
 Commands added at run time (for example `script.*`, `viewport.*`, `camera.*` when those features are present)
 appear in `editor.commands` and as tools automatically. The viewport commands need rendering: they fail in an

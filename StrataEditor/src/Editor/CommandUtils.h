@@ -21,6 +21,7 @@ namespace Strata
 	class EditorAssetManager;
 	class EditorContext;
 	class Scene;
+	struct AssetManagerStats;
 
 	// Helpers shared by the built-in editor commands.
 	namespace CommandUtils
@@ -61,6 +62,9 @@ namespace Strata
 		// inspector: unknown components or properties, read-only properties, invalid values and references to missing
 		// assets or entities fail (values before the failure may have been applied: roll back).
 		bool ApplyComponents(Entity entity, const nlohmann::json& components, std::string* outError);
+
+		// The totals of AssetManagerBase::GetStats as asset.stats and editor.status report them (EditorStreamingCommands.cpp).
+		nlohmann::json DescribeAssetStats(const AssetManagerStats& stats);
 
 		// A file a command writes for its client (e.g. a capture). Relative paths resolve against the project directory
 		// and fail without a project (the editor's working directory means nothing to a client); absolute paths stay.

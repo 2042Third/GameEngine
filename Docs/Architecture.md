@@ -369,7 +369,7 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   device's memory budget (`GraphicsDevice::GetMemoryBudget`, VK_EXT_memory_budget); without one they are unlimited. The
   CPU pool is unlimited; loads in flight may hold 128 MiB; finalization may upload 64 MiB and take 4 ms per frame.
   `AssetManagerBase::SetResidencyBudgets` replaces them (`GameRuntimeOptions::AssetBudgets`, StrataRuntime's
-  `--asset-budget-mb`).
+  `--asset-budget-mb`, the editor's `asset.setBudget`).
 - **Requests and pins**. Requests (`GetAsset`, `RequestLoad`, `Pin`) stamp an asset with the manager's frame counter,
   which `Update` advances. Whatever draws or uses assets requests them every frame (`SceneRenderer` resolves meshes,
   materials and textures through `GetAsset`), so the stamp is a least-recently-used signal; arriving is no request.
@@ -382,8 +382,9 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   those would free nothing, and the next request would load a second copy. An evicted asset is Unloaded with a new
   generation and a published content change (caches revalidate; physics keeps the colliders it built and audio keeps
   playing clips), and it loads again on its next request. `TrimUnused(frames)` evicts every evictable asset not requested in
-  that many frames, whatever the budgets; `ScheduleTrim` runs it a few updates later. `GameRuntime::LoadScene` schedules
-  `TrimUnused(3)` three frames after a scene switch, so what the new scene draws or requests by then stays.
+  that many frames, whatever the budgets; `ScheduleTrim` runs it a few updates later. `GameRuntime::LoadScene` and
+  `EditorContext::OpenScene` schedule `TrimUnused(3)` three frames after a scene switch, so what the new scene draws or
+  requests by then stays.
 - **Streaming queue** (`AssetStreamingQueue`). A request marks the asset Loading and queues it keyed by priority, then
   score (higher first; e.g. how large on screen it is needed), then request order; repeating it raises a queued request,
   never lowers it. Loads are dispatched to `JobSystem::SubmitIO` while the stored bytes of loads not yet finalized stay
@@ -400,6 +401,7 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
 - **Statistics** (`GetStats`, `GetResidencyInfo`): resident bytes and budget per pool, queued loads per priority, loads
   and bytes in flight with their high-water mark, uploaded bytes and finalization milliseconds (last frame and maximum
   of the last 120), evictions, cancellations and staging releases; per asset its state, memory, latest request and pins.
+  The editor reports them through `asset.stats` and the `assets` section of `editor.status`.
 
 ## Scripting
 
@@ -475,8 +477,8 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   with an `EditorCommandError` kind, or `Defer(poll)`. The built-in groups are registered by
   `EditorSceneCommands.cpp` (scene, entity, component, prefab), `EditorAssetCommands.cpp` (asset, material, prefab,
   project), `EditorStateCommands.cpp` (edit, editor, log, play, selection), `EditorViewportCommands.cpp` (camera,
-  viewport), `EditorScriptCommands.cpp` (script), `EditorInputCommands.cpp` (input) and `EditorCommands.cpp`
-  (`editor.commands`). Conventions: AGENTS.md, "Editor".
+  viewport), `EditorScriptCommands.cpp` (script), `EditorInputCommands.cpp` (input), `EditorStreamingCommands.cpp`
+  (`asset.stats`, `asset.setBudget`) and `EditorCommands.cpp` (`editor.commands`). Conventions: AGENTS.md, "Editor".
 - **Runner** (`EditorCommandRunner.h`). `Run` executes a command; a deferred one is polled once per frame from the next
   frame on, in issue order, and reports through its completion callback. Automation and command scripts always use the
   runner. UI actions that finish at once call the registry through `RunEditorCommand`
