@@ -68,10 +68,13 @@ module-foundation, ran as its own workstream):
 - `streaming-observatory`: an always-on frame profiler (`FrameProfiler`, `ST_PROFILE_STAGE`: Input, Assets.Update,
   Assets.Finalize, Scene.Scripts, Scene.Physics, Scene.Audio, Scene.Transforms, Render.Extract, Render.Submit, Editor.UI,
   Present; self times, a 600-frame ring and job-thread busy percentages, about 0.6 microseconds per frame of 16 stages),
-  `editor.perf`, `StrataRuntime --perf-log` (a CSV row per frame, which `PerfGPU.Streaming` reads from the exported stress
-  game: no frame finalizes for more than 8 ms, at most 4.6 ms measured), the Streaming panel (budget bars by pressure, loads,
-  uploads, a 10,000-asset table at about 0.22 ms per frame) and the Performance panel (a stacked stage timeline, 0.035 ms
-  per frame), status pills that open them, `editor.showPanel`, and the viewport's streaming and LOD debug views
+  `editor.perf`, `StrataRuntime --perf-log` (a CSV row per frame, which `PerfGPU.Streaming` reads from three runs of the
+  exported stress game: the slowest frame's finalization stays within 8 ms by the median run; single runs measured
+  4.4-5.6 ms here, and one spike of 12 ms under heavy load from other work), the Streaming panel (budget bars by
+  pressure, loads, uploads, a 10,000-asset table built on a job thread: every frame within about 0.15 ms at the 95th
+  percentile, the frames that refresh the table included, with `AssetManagerBase::GetStats` no longer visiting every
+  asset) and the Performance panel (a stacked stage timeline, about 0.065 ms per frame at the 95th percentile),
+  status pills that open them, `editor.showPanel`, and the viewport's streaming and LOD debug views
   (`SceneRenderOptions::EntityTints`, `Overlay/StatusTint.frag`, `LODSelection`; `viewport.capture {debugView}`).
 
 Open items and deferrals later waves own:
