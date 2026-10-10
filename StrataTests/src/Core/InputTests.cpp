@@ -3,6 +3,7 @@
 #include "Strata/Core/StringUtils.h"
 #include "Strata/Input/Input.h"
 #include "Strata/Input/InputNames.h"
+#include "Strata/Input/InputWindow.h"
 
 #include <limits>
 #include <optional>
@@ -66,6 +67,42 @@ TEST_SUITE("Core.Input")
 		CHECK(Input::IsMouseButtonDown(Mouse::ButtonLeft));
 		CHECK(Input::IsMouseButtonPressed(Mouse::ButtonLeft));
 		Input::SetViewport({ 0.0f, 0.0f }, { 0.0f, 0.0f });
+	}
+
+	TEST_CASE("Input reaches its window through InputWindow: the cursor mode and the size without a viewport")
+	{
+		// A window as Input sees it; no window system is needed.
+		struct TestWindow final : public InputWindow
+		{
+			uint32_t GetWidth() const override { return 800; }
+			uint32_t GetHeight() const override { return 600; }
+			void SetCursorMode(CursorMode mode) override { Cursor = mode; }
+
+			CursorMode Cursor = CursorMode::Normal;
+		};
+
+		TestWindow window;
+		Input::Reset();
+		Input::SetWindow(&window);
+		CHECK(Input::GetViewportSize() == glm::vec2(800.0f, 600.0f));
+		Input::SetViewport({ 10.0f, 20.0f }, { 320.0f, 240.0f });
+		CHECK(Input::GetViewportSize() == glm::vec2(320.0f, 240.0f));
+		Input::SetViewport({ 0.0f, 0.0f }, { 0.0f, 0.0f });
+
+		Input::SetCursorMode(CursorMode::Locked);
+		CHECK(window.Cursor == CursorMode::Locked);
+		CHECK(Input::GetCursorMode() == CursorMode::Locked);
+
+		// Resetting the input state keeps the window.
+		Input::Reset();
+		Input::SetCursorMode(CursorMode::Hidden);
+		CHECK(window.Cursor == CursorMode::Hidden);
+
+		Input::SetWindow(nullptr);
+		CHECK(Input::GetViewportSize() == glm::vec2(0.0f));
+		Input::SetCursorMode(CursorMode::Normal);
+		CHECK(window.Cursor == CursorMode::Hidden);
+		Input::Reset();
 	}
 
 	TEST_CASE("Disabled input reports nothing but keeps tracking state")
