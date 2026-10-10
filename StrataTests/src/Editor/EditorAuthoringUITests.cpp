@@ -927,6 +927,25 @@ TEST_SUITE("Editor.UI.AssetInspector")
 		CHECK(assetWindow->Hidden);
 	}
 
+	TEST_CASE("The Asset tab without an asset centers its hint and promises only what it shows")
+	{
+		AuthoringEditor editor;
+		editor.FocusPanel(EditorPanels::c_AssetInspector);
+		editor.Frames(1);
+		const std::optional<UI::ItemProbe::Item> hint = UI::ItemProbe::Find("AssetInspector.Empty");
+		REQUIRE(hint);
+		// Fonts have no import settings: the hint does not say the tab shows them.
+		CHECK(hint->Text.find("font") == std::string::npos);
+		CHECK(hint->Text.find("texture") != std::string::npos);
+		// Wrapped into lines that are each centered, like the title above them: as much room on either side.
+		ImGuiWindow* window = editor.FindPanelWindow(EditorPanels::c_AssetInspector);
+		REQUIRE(window);
+		const float left = hint->Min.x - window->WorkRect.Min.x;
+		const float right = window->WorkRect.Max.x - hint->Max.x;
+		CHECK(std::abs(left - right) <= ImGui::GetFontSize() * 0.5f);
+		CHECK(hint->Max.y - hint->Min.y > ImGui::GetTextLineHeight() * 1.5f); // More than one line in a side panel
+	}
+
 	TEST_CASE("Clicking the asset the Asset tab shows brings the tab back after another tab came forward")
 	{
 		AuthoringEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f }, WithFeatureProject("EditorAuthoringInspectAgain"));

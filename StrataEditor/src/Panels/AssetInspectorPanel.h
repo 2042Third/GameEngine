@@ -21,7 +21,7 @@ namespace Strata
 	// - a header with the asset's type, name, path and handle (with a copy button), and its actions (open a scene, add a
 	//   prefab or model to the scene, re-import);
 	// - a material's properties, edited live (MaterialEditor: a drag previews and is one undo step);
-	// - the import settings of an imported asset (texture, model, audio clip, font) as a draft: Apply runs
+	// - the import settings of an imported asset (texture, model, audio clip; fonts have none) as a draft: Apply runs
 	//   asset.setImportSettings through the command runner (the import runs in the background and the panel shows it),
 	//   Revert discards the draft;
 	// - a texture's image, and the asset's state and stored size.

@@ -51,6 +51,10 @@ namespace Strata::UI
 	// notice over the Hierarchy and the Inspector. The probe records its color and text.
 	void Banner(const char* id, const char* icon, std::string_view text, const ImVec4& color);
 
+	// Text wrapped at the available width with every line centered in it, in a color (empty states: a hint under a centered
+	// title). The probe records the block and its text.
+	void CenteredText(const char* id, std::string_view text, const ImVec4& color);
+
 	// A search field: a text field with a search icon as its hint and a clear button while it holds text, at the given
 	// width (negative: the available width), with an optional tooltip (e.g. the search syntax). Returns true when the text
 	// changed this frame (also when cleared). The probe records the field under the id.

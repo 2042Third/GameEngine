@@ -45,6 +45,7 @@ namespace Strata
 			return fmt::format("{} bytes", bytes);
 		}
 
+		// An icon, a title and a hint, all centered (the hint's lines each).
 		void DrawEmptyState(const char* icon, const char* title, const char* text)
 		{
 			const UI::ThemeColors& colors = UI::GetThemeColors();
@@ -59,11 +60,7 @@ namespace Strata
 			ImGui::SetCursorPosX(std::max((ImGui::GetContentRegionAvail().x - titleWidth) * 0.5f, 0.0f) + ImGui::GetCursorPosX());
 			ImGui::TextUnformatted(title);
 			ImGui::PopFont();
-			ImGui::PushStyleColor(ImGuiCol_Text, colors.TextSecondary);
-			ImGui::PushTextWrapPos(0.0f);
-			ImGui::TextUnformatted(text);
-			ImGui::PopTextWrapPos();
-			ImGui::PopStyleColor();
+			UI::CenteredText("AssetInspector.Empty", text, colors.TextSecondary);
 		}
 
 	}
@@ -75,8 +72,8 @@ namespace Strata
 		if (!handle.IsValid())
 		{
 			m_MaterialEditor.CommitPending(context);
-			DrawEmptyState(Icons::FileBox, "No asset inspected", "Click an asset in the Content Browser to see its settings here: a material's properties, "
-				"or how a texture, model, sound or font is imported.");
+			DrawEmptyState(Icons::FileBox, "No asset inspected", "Click an asset in the Content Browser to see it here: a material's properties, how a "
+				"texture, model or sound is imported, a texture's image.");
 			return;
 		}
 		const std::optional<AssetMetadata> metadata = AssetManager::HasActive() ? AssetManager::GetActive()->GetMetadata(handle) : std::nullopt;

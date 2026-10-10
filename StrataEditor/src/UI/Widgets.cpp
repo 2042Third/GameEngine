@@ -252,6 +252,45 @@ namespace Strata::UI
 		ItemProbe::Record(id, true, ToColorU32(color), text);
 	}
 
+	void CenteredText(const char* id, std::string_view text, const ImVec4& color)
+	{
+		const float width = std::max(ImGui::GetContentRegionAvail().x, ImGui::GetFontSize());
+		ImFont* font = ImGui::GetFont();
+		const float size = ImGui::GetFontSize();
+		const char* begin = text.data();
+		const char* const end = text.data() + text.size();
+		ImGui::BeginGroup();
+		ImGui::PushStyleColor(ImGuiCol_Text, color);
+		while (begin < end)
+		{
+			// A line ends where the font wraps it or at a line break.
+			const char* lineEnd = font->CalcWordWrapPosition(size, begin, end, width);
+			if (lineEnd <= begin)
+			{
+				// A word wider than the line: one character (with its UTF-8 continuation bytes) at least.
+				lineEnd = begin + 1;
+				while (lineEnd < end && (static_cast<unsigned char>(*lineEnd) & 0xC0) == 0x80)
+					lineEnd++;
+			}
+			const char* lineBreak = std::find(begin, lineEnd, '\n');
+			const char* next = lineBreak != lineEnd ? lineBreak + 1 : lineEnd;
+			lineEnd = lineBreak;
+			const char* trimmed = lineEnd;
+			while (trimmed > begin && trimmed[-1] == ' ')
+				trimmed--;
+			const float lineWidth = ImGui::CalcTextSize(begin, trimmed).x;
+			ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max((width - lineWidth) * 0.5f, 0.0f));
+			ImGui::TextUnformatted(begin, trimmed);
+			// The spaces the line was wrapped at belong to no line.
+			begin = next;
+			while (begin < end && *begin == ' ')
+				begin++;
+		}
+		ImGui::PopStyleColor();
+		ImGui::EndGroup();
+		ItemProbe::Record(id, true, 0, text);
+	}
+
 	bool SearchField(const char* id, std::string& text, const char* hint, float width, const char* tooltip)
 	{
 		const ImGuiStyle& style = ImGui::GetStyle();
