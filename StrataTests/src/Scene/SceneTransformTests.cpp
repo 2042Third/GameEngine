@@ -11,6 +11,7 @@
 #include <cmath>
 #include <random>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -162,8 +163,15 @@ TEST_SUITE("Scene.Transforms")
 
 	TEST_CASE("Large updates run on the job system with the serial results")
 	{
-		// Wide sets of independent changes, and one changed root whose subtree fans out: computed with and without workers.
-		const auto build = [](Scene& scene)
+		// Computed with and without workers, phase by phase: a wide set of independent changes (3,000 roots with their
+		// children), one changed root whose subtree fans out (a hub moved alone: one entity, then 5,000 spokes), and both at
+		// once (more changes than the scene remembers).
+		struct Phase
+		{
+			bool ChangesKnown = false;
+			std::vector<size_t> Changes; // Positions in hierarchy order (the same in both scenes), sorted
+		};
+		const auto run = [](Scene& scene)
 		{
 			std::vector<Entity> roots;
 			for (int index = 0; index < 3000; index++)
@@ -178,21 +186,61 @@ TEST_SUITE("Scene.Transforms")
 			for (int index = 0; index < 5000; index++)
 				scene.CreateChildEntity(hub, "Spoke").GetTransform().Translation = glm::vec3(0.0f, 0.0f, static_cast<float>(index));
 			scene.UpdateWorldTransforms();
+			std::unordered_map<entt::entity, size_t> positions;
+			for (const Entity entity : scene.GetEntitiesInHierarchyOrder())
+				positions.emplace(entity.GetHandle(), positions.size());
+
+			std::vector<Phase> phases;
+			const auto update = [&]()
+			{
+				const uint64_t version = scene.GetTransformsVersion();
+				scene.UpdateWorldTransforms();
+				std::vector<entt::entity> changed;
+				Phase& phase = phases.emplace_back();
+				phase.ChangesKnown = scene.GetWorldTransformChanges(version, changed);
+				for (const entt::entity handle : changed)
+					phase.Changes.push_back(positions.at(handle));
+				std::sort(phase.Changes.begin(), phase.Changes.end());
+			};
+			for (const Entity root : roots)
+				Move(root, glm::vec3(1.0f, 0.0f, 0.0f));
+			update();
+			Move(hub, glm::vec3(0.0f, 2.0f, 0.0f));
+			update();
 			for (const Entity root : roots)
 				Move(root, glm::vec3(1.0f, 0.0f, 0.0f));
 			Move(hub, glm::vec3(0.0f, 2.0f, 0.0f));
-			scene.UpdateWorldTransforms();
+			update();
+			return phases;
 		};
 
 		Scene serial;
-		build(serial);
+		const std::vector<Phase> serialPhases = run(serial);
 		Scene parallel;
+		std::vector<Phase> parallelPhases;
 		{
 			ScopedJobSystem jobs(4);
-			build(parallel);
+			parallelPhases = run(parallel);
 		}
+		// The first update of each scene recomputes everything; then each phase runs on the job system (the hub's after one
+		// serial level).
+		CHECK(serial.GetParallelTransformUpdateCount() == 0);
+		CHECK(parallel.GetParallelTransformUpdateCount() == 4);
 		CHECK(parallel.GetTransformUpdateCount() == serial.GetTransformUpdateCount());
 		CheckSceneCaches(parallel);
+
+		REQUIRE(serialPhases.size() == 3);
+		REQUIRE(parallelPhases.size() == 3);
+		CHECK(serialPhases[0].Changes.size() == 12000);
+		CHECK(serialPhases[1].Changes.size() == 5001);
+		CHECK_FALSE(serialPhases[2].ChangesKnown);
+		for (size_t phase = 0; phase < serialPhases.size(); phase++)
+		{
+			INFO("Phase ", phase);
+			CHECK(parallelPhases[phase].ChangesKnown == serialPhases[phase].ChangesKnown);
+			CHECK(parallelPhases[phase].Changes == serialPhases[phase].Changes);
+		}
+
 		const std::vector<Entity> serialOrder = serial.GetEntitiesInHierarchyOrder();
 		const std::vector<Entity> parallelOrder = parallel.GetEntitiesInHierarchyOrder();
 		REQUIRE(serialOrder.size() == parallelOrder.size());
@@ -224,7 +272,8 @@ TEST_SUITE("Scene.Transforms")
 
 	TEST_CASE("Random edits keep every cached transform equal to a full recomputation")
 	{
-		// Reparenting, moving, (de)activating and destroying, checked against a full recomputation after every operation.
+		// Reparenting, moving, (de)activating and destroying, checked against a full recomputation of the hierarchy links and
+		// of the transforms after every operation.
 		// Unoptimized Debug builds compute each full recomputation about ten times slower, so they run a shorter sequence
 		// on fewer entities; optimized builds run 10,000 operations on 5,000 entities.
 #ifdef ST_DEBUG
@@ -276,10 +325,15 @@ TEST_SUITE("Scene.Transforms")
 				destroyed++;
 			}
 
-			scene.UpdateWorldTransforms();
+			// The hierarchy links first: the transform validation walks them.
 			std::string error;
-			const bool valid = scene.ValidateWorldTransforms(&error);
-			if (!valid)
+			if (!scene.ValidateHierarchy(&error))
+			{
+				FAIL_CHECK("Operation ", operation, ": ", error);
+				break;
+			}
+			scene.UpdateWorldTransforms();
+			if (!scene.ValidateWorldTransforms(&error))
 			{
 				FAIL_CHECK("Operation ", operation, ": ", error);
 				break;

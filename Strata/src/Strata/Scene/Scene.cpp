@@ -1206,6 +1206,7 @@ namespace Strata
 				});
 				updated += parallelUpdated.load(std::memory_order_relaxed);
 				changeCount = parallelChanges.load(std::memory_order_relaxed);
+				m_ParallelTransformUpdateCount++;
 				break;
 			}
 

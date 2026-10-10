@@ -86,7 +86,8 @@ namespace Strata
 		Entity GetEntityByUUID(UUID uuid) const; // Invalid Entity when not found
 		// The first entity in hierarchy order with this name, and every entity with this tag in hierarchy order. Both use an
 		// index built on the first lookup and kept current through the components' signals afterwards, so a lookup costs the
-		// number of entities with that name or tag, not the size of the scene.
+		// number of entities with that name or tag, not the size of the scene (ordering them may renumber sibling lists that
+		// changed since, see CompareHierarchyOrder).
 		Entity FindEntityByName(std::string_view name) const;
 		std::vector<Entity> FindEntitiesByTag(std::string_view tag) const;
 		size_t GetEntityCount() const { return m_EntityMap.size(); }
@@ -111,8 +112,10 @@ namespace Strata
 		// Moves an entity to position `index` among its siblings (or among the roots). Only the order changes, so no
 		// signal is emitted.
 		bool SetSiblingIndex(Entity entity, size_t index);
-		// Position of the entity among its siblings (or among the roots); 0 for invalid entities. Amortized constant: a change
-		// of a sibling list other than appending invalidates its positions, and the next query recomputes the list once.
+		// Position of the entity among its siblings (or among the roots); 0 for invalid entities. Constant while the sibling
+		// list is unchanged and after appending to it; the first query after any other change of the list (an insertion,
+		// a removal that is not the last entry, a reorder) renumbers the whole list, linear in its length. So queries that
+		// alternate with such changes of one list (deleting entities one at a time) each cost the list's length.
 		size_t GetSiblingIndex(Entity entity) const;
 
 		// Where PlaceEntities puts an entity: under Parent (the null UUID: among the roots) at position SiblingIndex.
@@ -131,7 +134,8 @@ namespace Strata
 		bool PlaceEntities(std::span<const EntityPlacement> placements);
 		bool IsDescendantOf(Entity entity, Entity ancestor) const;
 		// Negative if a comes before b in hierarchy order, positive if after, 0 if they are the same entity. Costs the depth of
-		// the two entities (sibling positions are cached, see GetSiblingIndex). Both must be valid entities of this scene.
+		// the two entities while the sibling list where their ancestors meet has current positions; after a change of that
+		// list it renumbers it once, like GetSiblingIndex. Both must be valid entities of this scene.
 		int CompareHierarchyOrder(Entity a, Entity b) const;
 		// Depth in the hierarchy (roots: 0); 0 for invalid entities.
 		uint32_t GetDepth(Entity entity) const;
@@ -176,10 +180,12 @@ namespace Strata
 		// inconsistency.
 		bool ValidateHierarchy(std::string* outError = nullptr) const;
 
-		// Diagnostics (cumulative since the scene was created): world transforms recomputed by UpdateWorldTransforms, full
-		// hierarchy order computations, entities examined by FindEntityByName, FindEntitiesByTag and GetPrimaryCameraEntity
-		// (excluding index builds), and name or tag index builds.
+		// Diagnostics (cumulative since the scene was created): world transforms recomputed by UpdateWorldTransforms (and the
+		// number of its calls that recomputed some of them on the job system), full hierarchy order computations, entities
+		// examined by FindEntityByName, FindEntitiesByTag and GetPrimaryCameraEntity (excluding index builds), and name or tag
+		// index builds.
 		uint64_t GetTransformUpdateCount() const { return m_TransformUpdateCount; }
+		uint64_t GetParallelTransformUpdateCount() const { return m_ParallelTransformUpdateCount; }
 		uint64_t GetHierarchyOrderBuildCount() const { return m_HierarchyOrderBuildCount; }
 		uint64_t GetLookupVisitCount() const { return m_LookupVisitCount; }
 		uint64_t GetLookupIndexBuildCount() const { return m_LookupIndexBuildCount; }
@@ -355,6 +361,7 @@ namespace Strata
 		uint32_t m_TransformPass = 0;
 		uint64_t m_TransformsVersion = 0;
 		uint64_t m_TransformUpdateCount = 0;
+		uint64_t m_ParallelTransformUpdateCount = 0;
 		std::deque<TransformChange> m_TransformChanges; // The latest changes, oldest first
 		uint64_t m_TransformChangesFloor = 0;            // Changes up to this version may be missing from m_TransformChanges
 		std::vector<entt::entity> m_ChangeScratch;

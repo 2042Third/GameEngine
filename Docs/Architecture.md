@@ -295,14 +295,17 @@ A frame of a scene where nothing changed costs (almost) nothing, however many en
   `c_MaxTransformChanges` changes were dropped, like `AssetManagerBase::GetContentChanges`.
 - **Primary camera.** `GetPrimaryCameraEntity` examines only the entities with a `CameraComponent` (an EnTT view), reads
   `Primary` and the cached activity, and keeps the first in hierarchy order.
+- **Sibling positions.** `GetSiblingIndex` and `CompareHierarchyOrder` read cached positions; the first query after a
+  change of a sibling list other than an append renumbers that list (linear in its length).
 - **Batches.** `DestroyEntities` tells the systems about every subtree, then compacts each sibling list once;
   `PlaceEntities` rebuilds each sibling list it touches once. The editor's undo uses both.
 - **Capacity.** EnTT identifiers have a 20-bit index: a registry holds at most `Scene::c_MaxEntities` (1,048,575) live
   entities. `CreateEntity` fails with an error at that limit and deserialization reports it; so do the callers that
   create entities for people and scripts (`entity.create` and `prefab.instantiate` fail, the scripts' `CreateEntity`
   and `Instantiate` report a problem and return no entity, glTF imports reject files with more nodes).
-- Diagnostics count the work: `GetTransformUpdateCount`, `GetHierarchyOrderBuildCount`, `GetLookupVisitCount` and
-  `GetLookupIndexBuildCount` (tests use them to prove that lookups and clean updates traverse nothing).
+- Diagnostics count the work: `GetTransformUpdateCount`, `GetParallelTransformUpdateCount`,
+  `GetHierarchyOrderBuildCount`, `GetLookupVisitCount` and `GetLookupIndexBuildCount` (tests use them to prove that
+  lookups and clean updates traverse nothing).
 
 ## Threading model
 
