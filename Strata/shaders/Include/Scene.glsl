@@ -59,18 +59,47 @@ layout(set = 0, binding = ST_CBV(0), std140) uniform FrameBuffer
 
 struct InstanceData
 {
-	mat4 World;
-	mat4 NormalMatrix; // Inverse transpose of World (not set for shadow casters)
+	vec4 WorldRows[3]; // The upper three rows of the affine world matrix (the fourth is 0, 0, 0, 1)
 	uint MaterialIndex;
 	uint EntityID;     // Entity identifier + 1 (0 = no entity)
 	uint Flags;        // ST_INSTANCE_*
 	uint Padding;
 };
 
+// Every instance of the render scene; it persists between frames.
 layout(set = 0, binding = ST_SRV(0), std430) readonly buffer InstanceBuffer
 {
 	InstanceData u_Instances[];
 };
+
+// The frame's draw list: the instance of every drawn instance, in batch order (gl_InstanceIndex indexes it).
+layout(set = 0, binding = ST_SRV(14), std430) readonly buffer DrawListBuffer
+{
+	uint u_DrawList[];
+};
+
+vec3 TransformPosition(InstanceData instance, vec3 position)
+{
+	vec4 point = vec4(position, 1.0);
+	return vec3(dot(instance.WorldRows[0], point), dot(instance.WorldRows[1], point), dot(instance.WorldRows[2], point));
+}
+
+vec3 TransformDirection(InstanceData instance, vec3 direction)
+{
+	return vec3(dot(instance.WorldRows[0].xyz, direction), dot(instance.WorldRows[1].xyz, direction), dot(instance.WorldRows[2].xyz, direction));
+}
+
+// A normal transformed by the inverse transpose of the world matrix, up to scale: the cofactor matrix of the upper 3x3
+// (its columns are the cross products of the matrix's columns), negated for mirroring transforms, whose determinant is
+// negative. Callers normalize.
+vec3 TransformNormal(InstanceData instance, vec3 normal)
+{
+	vec3 column0 = vec3(instance.WorldRows[0].x, instance.WorldRows[1].x, instance.WorldRows[2].x);
+	vec3 column1 = vec3(instance.WorldRows[0].y, instance.WorldRows[1].y, instance.WorldRows[2].y);
+	vec3 column2 = vec3(instance.WorldRows[0].z, instance.WorldRows[1].z, instance.WorldRows[2].z);
+	vec3 transformed = cross(column1, column2) * normal.x + cross(column2, column0) * normal.y + cross(column0, column1) * normal.z;
+	return (instance.Flags & ST_INSTANCE_MIRRORED) != 0u ? -transformed : transformed;
+}
 
 struct MaterialData
 {

@@ -33,6 +33,8 @@ namespace Strata
 	{
 	public:
 		void Line(const glm::vec3& from, const glm::vec3& to, const glm::vec4& color, DebugDrawDepth depth = DebugDrawDepth::Tested);
+		// A line in a color packed once with PackColor (many lines of one color).
+		void Line(const glm::vec3& from, const glm::vec3& to, uint32_t packedColor, DebugDrawDepth depth = DebugDrawDepth::Tested);
 		// Axis-aligned box.
 		void Box(const AABB& box, const glm::vec4& color, DebugDrawDepth depth = DebugDrawDepth::Tested);
 		// Box of the given half extents around the origin of `transform` (which may rotate and scale it).
@@ -63,8 +65,9 @@ namespace Strata
 		static uint32_t PackColor(const glm::vec4& color);
 	private:
 		void AddLine(const glm::vec3& from, const glm::vec3& to, uint32_t color, DebugDrawDepth depth);
+		// A full circle; its points come from tables of unit circles (no sine or cosine per segment).
 		void AddCircle(const glm::vec3& center, const glm::vec3& axisU, const glm::vec3& axisV, float radius, uint32_t color, DebugDrawDepth depth,
-			uint32_t segments, float startAngle = 0.0f, float endAngle = 6.28318530718f);
+			uint32_t segments);
 	private:
 		std::array<std::vector<DebugLineVertex>, 2> m_Lines;
 	};

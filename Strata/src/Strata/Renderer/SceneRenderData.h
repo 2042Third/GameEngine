@@ -60,16 +60,44 @@ namespace Strata
 		};
 		static_assert(sizeof(FrameConstants) == 10 * 64 + 20 * 16);
 
+		// The upper three rows of an affine world matrix, whose fourth row is (0, 0, 0, 1). Shaders transform points with
+		// one dot product per row and derive the normal matrix from the rows (no inverse on the CPU).
+		struct AffineTransform
+		{
+			glm::vec4 Rows[3];
+
+			static AffineTransform FromMatrix(const glm::mat4& matrix)
+			{
+				AffineTransform transform;
+				for (int row = 0; row < 3; row++)
+					transform.Rows[row] = glm::vec4(matrix[0][row], matrix[1][row], matrix[2][row], matrix[3][row]);
+				return transform;
+			}
+
+			glm::mat4 ToMatrix() const
+			{
+				glm::mat4 matrix(1.0f);
+				for (int column = 0; column < 4; column++)
+				{
+					for (int row = 0; row < 3; row++)
+						matrix[column][row] = Rows[row][column];
+				}
+				return matrix;
+			}
+		};
+		static_assert(sizeof(AffineTransform) == 48);
+
+		// One drawn submesh of a render proxy (RenderScene). The buffer of instances persists between frames; draws read
+		// it through the frame's draw list, which holds an instance index per drawn instance.
 		struct InstanceData
 		{
-			glm::mat4 World;
-			glm::mat4 NormalMatrix; // Inverse transpose of World (not computed for shadow casters, which have no normals)
-			uint32_t MaterialIndex;
-			uint32_t EntityID; // Entity identifier + 1 (0 = none)
-			uint32_t Flags;    // c_Instance*
+			AffineTransform World;
+			uint32_t MaterialIndex; // Material slot (RenderScene::GetMaterialHandle), index into the material buffer
+			uint32_t EntityID;      // Entity identifier + 1 (0 = none)
+			uint32_t Flags;         // c_Instance*
 			uint32_t Padding;
 		};
-		static_assert(sizeof(InstanceData) == 144);
+		static_assert(sizeof(InstanceData) == 64);
 
 		struct MaterialData
 		{

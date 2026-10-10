@@ -62,6 +62,7 @@ TEST_SUITE("GPU.SceneRenderer.PostProcess")
 		// Different brightness, same image.
 		CHECK(std::abs(renderCenter(true) - c_MiddleGray) <= 4);
 		wall.GetComponent<MeshRendererComponent>().Material = bright;
+		wall.MarkModified<MeshRendererComponent>();
 		const int adapting = renderCenter(false); // Still exposed for the dim wall
 		CHECK(adapting > 200);
 		CHECK(std::abs(renderCenter(true) - c_MiddleGray) <= 4);
@@ -73,6 +74,7 @@ TEST_SUITE("GPU.SceneRenderer.PostProcess")
 
 		// Scenes darker than the allowed range stay dark.
 		wall.GetComponent<MeshRendererComponent>().Material = veryDark;
+		wall.MarkModified<MeshRendererComponent>();
 		CHECK(renderCenter(true) < 60);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
@@ -182,6 +184,7 @@ TEST_SUITE("GPU.SceneRenderer.PostProcess")
 
 		// A light above the threshold glows; the glow only ever adds light.
 		light.GetComponent<MeshRendererComponent>().Material = assets.AddMaterial(Emitting(500.0f));
+		light.MarkModified<MeshRendererComponent>();
 		postProcess.Bloom = false;
 		const ReadbackImage sharp = RenderToImage(renderer, scene, camera);
 		postProcess.Bloom = true;

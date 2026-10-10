@@ -15,9 +15,10 @@ means `Strata/src/Strata/Scene/Scene.h`.
 5. [Threading model](#threading-model)
 6. [Asset pipeline](#asset-pipeline)
 7. [Streaming and residency](#streaming-and-residency)
-8. [Scripting](#scripting)
-9. [Editor](#editor)
-10. [Export and the runtime](#export-and-the-runtime)
+8. [Render scene](#render-scene)
+9. [Scripting](#scripting)
+10. [Editor](#editor)
+11. [Export and the runtime](#export-and-the-runtime)
 
 ## Targets and dependencies
 
@@ -65,11 +66,11 @@ labels are listed in AGENTS.md, "Testing"). The perf lab is one of them: suites 
 (`StrataTests/src/Perf/`) measure metrics against the budgets in `StrataTests/Perf/Budgets.json`, in Release and Dist
 only, confirm a metric over its budget by measuring it again before failing (`Perf::CheckBudgetsConfirmed`), and write
 `<build>/PerfResults/<config>.json` with every attempt; `Tools/PerfStability.py` runs them repeatedly and reports how
-stable each metric is. `Perf.Scene`, `Perf.Scripting` and `Perf.Physics` measure scenes built by
-`Perf/SceneGenerators.h` (flat roots, a nested tree, scripted entities, stacks of falling boxes); `Perf.Editor` (editor
-commands) and
-`PerfGPU.Editor` (the real `StrataEditor`'s frame times on generated 100,000- and 1,000,000-entity scenes, read from
-its `editor.wait` results) live in `src/Editor/`, which only builds with the editor.
+stable each metric is. `Perf.Scene`, `Perf.Scripting`, `Perf.Physics` and `PerfGPU.Renderer` measure scenes built by
+`Perf/SceneGenerators.h` (flat roots, a nested tree, scripted entities, stacks of falling boxes, grids of cubes and
+point lights); `Perf.Editor` (editor commands), `PerfGPU.Editor` (the real `StrataEditor`'s frame times on generated
+100,000- and 1,000,000-entity scenes, read from its `editor.wait` results) and the editor frames of `PerfGPU.Renderer`
+(`RendererFramePerfTests.cpp`) live in `src/Editor/`, which only builds with the editor.
 
 What may depend on what:
 
@@ -162,7 +163,9 @@ build time and embedded, `CMake/StrataShaders.cmake`), samplers, fallback textur
 `StagingTexturePool` (staging memory for texture uploads, reused), `DeferredReleaseQueue` (`ReleaseDeferred`: resources
 dropped while the GPU may still use them, held until an event query set at the release completes and collected every
 frame and at every release, never waiting; NVRHI's Vulkan backend keeps what command lists reference alive, but not the
-textures of clears) and the blocking `ReadTexture`. `SceneRenderer` draws a scene (light clustering, shadow cascades,
+textures of clears) and the blocking `ReadTexture`. `RenderScene` keeps a scene's render proxies in a `SpatialIndex`,
+and `SceneRenderer` extracts each frame's draws from it (`SceneRendererExtraction.cpp`, resolving assets through its
+`AssetResolveCache`; see [Render scene](#render-scene)). `SceneRenderer` draws a scene (light clustering, shadow cascades,
 depth/normal/entity-ID prepass, GTAO, forward PBR, sky, transparents, exposure, bloom, tone mapping, FXAA, then overlays
 and text) into render targets of its viewport size, which it hands to the `DeferredReleaseQueue` when it is resized
 (the viewport panel, the game window) or freed (captures). Its image-based lighting comes from the sky light's
@@ -530,7 +533,8 @@ rules"). Other threads:
 
 - **Job workers** (`JobSystem::Init`, `Core/JobSystem.cpp`; hardware threads - 1 by default): `JobSystem::Submit` and
   `ParallelFor` work such as asset decoding, the initial imports of a project scan, Jolt's jobs, mesh shape cooking,
-  world transform propagation and PNG encoding of captures.
+  world transform propagation, the renderer's extraction of draws (see [Render scene](#render-scene)) and PNG encoding of
+  captures.
 - **I/O threads** (`JobSystem::Init`; 2 by default): `JobSystem::SubmitIO` work such as asset reads (dispatched by the
   streaming queue, at most two per I/O thread at a time; a pack read hands its blocks to worker jobs to decompress while
   it reads on, and never runs other jobs while it waits for them), background re-imports, saving captures and game
@@ -594,9 +598,11 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
 
 - **Importing** (`Asset/EditorAssetManager.h`). `Scan` registers every file with a known importer, creates missing
   `.meta` files and imports stale assets in parallel (`JobSystem::ParallelFor`), blocking. Afterwards the file watcher
-  reports changes; `Update` re-registers files and queues re-imports on the I/O pool, and applies finished imports by
-  reloading loaded assets (`ReloadAsset`). The cache record (`<handle>.import`) remembers the source state, settings,
-  importer version and dependencies, so a current import is reused.
+  reports changes; `Update` re-registers files and queues re-imports on the I/O pool, and applies finished imports
+  through `ReloadAsset`: loaded assets load again, and every reloaded asset gets a new source revision
+  (`GetSourceRevisions`), announced as a content change at once when no object of it is loaded. The cache record
+  (`<handle>.import`) remembers the source state, settings, importer version and dependencies, so a current import is
+  reused.
 - **References and bounds** (`Asset/AssetDependencies.h`). What an asset references is recorded with its import:
   importers add what their stored form does not show as a document (`ImportResult::References`; a glTF mesh's default
   materials) and the local bounds of meshes (`Bounds`), and `AssetDependencies::Scan` reads the documents (scenes,
@@ -635,7 +641,11 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
 - **Streaming**. Assets load on first use and code handles "not loaded yet" every frame: `SceneRenderer` skips or
   substitutes what is pending and counts it (`SceneRendererStats::PendingAssets`), `AssetMeshProvider` reports meshes
   as unavailable until they load, and audio sources start when their clip is ready. The content version and change
-  list (`GetContentVersion`, `GetContentChanges`) let caches revalidate only what changed.
+  list (`GetContentVersion`, `GetContentChanges`) let caches revalidate only what changed. Source revisions
+  (`GetSourceRevisions`, `AssetSourceRevisions`: the source's, changed by registration and by every `ReloadAsset`, and
+  the loaded object's) tell a cache that keeps data derived from an asset while it is evicted whether that data is still
+  the source's: an eviction leaves the source's revision as it is, a reimport changes it. Revisions are unique in the
+  process, so a cache that moves to another manager sees every asset as another source.
 - **Built-in assets** (`Asset/BuiltinAssets.h`) are memory assets with handles 1 to 255, registered by every
   `AssetManagerBase`. Without a project the editor keeps a manager with only these active.
 - **Packs** (`Asset/AssetPack.h`, written by `Asset/AssetPackWriter.h`). Version 2 (version 1 packs still load, and the
@@ -789,8 +799,9 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   texture uploads may hold 64 MiB of staging (see Staging). `AssetManagerBase::SetResidencyBudgets` replaces them
   (`GameRuntimeOptions::AssetBudgets`, StrataRuntime's `--asset-budget-mb`, the editor's `asset.setBudget`).
 - **Requests and pins**. Requests (`GetAsset`, `RequestLoad`, `Pin`) stamp an asset with the manager's frame counter,
-  which `Update` advances. Whatever draws or uses assets requests them every frame (`SceneRenderer` resolves meshes,
-  materials and textures through `GetAsset`), so the stamp is a least-recently-used signal; arriving is no request. Each
+  which `Update` advances. Whatever draws or uses assets requests them every frame (`SceneRenderer` requests the meshes,
+  materials and textures of what is in view, each once per frame, through its `AssetResolveCache`; see
+  [Render scene](#render-scene)), so the stamp is a least-recently-used signal; arriving is no request. Each
   pool keeps its resident evictable assets that hold memory of it ordered by the stamp (a map keyed by frame and request
   order: a request moves an asset to the end in constant time, an arrival is placed by its latest request in logarithmic
   time), so eviction for a pool looks only at assets that free its memory. An `AssetPin` (`AssetManagerBase::Pin`) keeps
@@ -880,9 +891,11 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   `ReadStoredRange` reads part of an asset's stored form without loading it (packs decode only the blocks it covers).
 - **Statistics** (`GetStats`, `GetResidencyInfo`): resident bytes and budget per pool, queued loads per priority, loads
   and bytes in flight with their high-water mark, uploaded bytes and finalization milliseconds (last frame and maximum
-  of the last 120) with the staging budget, evictions and eviction checks, cancellations, staging releases, and dependency
-  prefetches started and dropped; per asset its state, memory, latest request and pins.
-  The editor reports them through `asset.stats` and the `assets` section of `editor.status`.
+  of the last 120) with the staging budget, evictions and eviction checks, cancellations, staging releases, dependency
+  prefetches started and dropped, and the `GetAsset` calls made (tests take differences to count what a frame looks
+  up); per asset its state, memory, latest request and pins.
+  The editor reports them, apart from the `GetAsset` calls, through `asset.stats` and the `assets` section of
+  `editor.status`.
 - **Measured** by the perf test `PerfGPU.Streaming` (`StrataTests/src/Perf/StreamingPerfTests.cpp`): it writes the
   stress project (`StrataTests/src/Perf/StressProject.h`: 16 textures of 2048² and one of 4096², which cook to 111.8 MB
   of BC7 (447.4 MB of RGBA8 before texture cooking v2), one material per district of a 2000-unit world, 2,000 objects
@@ -902,6 +915,103 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   `Perf.TextureCook` (`TextureCookPerfTests.cpp`) imports the same project cold three times and checks the median import
   time, the stored size of every texture and the pack size, and measures the BC7 encoder's time per block on one thread.
   `GPU.Assets.Streaming` runs the same sweep on a small stress project under the validation layers.
+
+## Render scene
+
+The renderer's CPU cost and asset traffic follow what is visible and what changed, not the size of the scene
+(`Renderer/RenderScene.h`, `SpatialIndex.h`, `AssetResolveCache.h`, `SceneRenderer.h` and `SceneRendererExtraction.cpp`).
+A frame of `SceneRenderer::Render`:
+
+```text
+RenderScene::Get(scene).Sync()   world transforms, then the proxies of signaled mesh renderers and changed transforms,
+                                 then the mesh layouts of meshes the asset manager loaded, reloaded or dropped since
+AssetResolveCache::BeginFrame    the frame's asset manager
+CullView                         SpatialIndex::QueryFrustum; screen fractions and request priorities (parallel chunks);
+                                 meshes of unknown bounds as if in view; QuerySphere for the prefetch distance
+FindShadowCasters                cascade boxes; QueryPlanes per cascade, then the exact test in light space
+ResolveAssets                    each mesh and material used once: Resolve, Prefetch or FindResident
+GatherDraws, GatherShadowDraws   draws per chunk on the job system, merged in chunk order; RadixSort; batches
+UploadSceneData                  changed instances, changed materials, the changed range of each draw list
+ReleaseFrameAssets               (when Render returns, however it ends) every reference the frame took, and the manager
+```
+
+- **Proxies** (`RenderScene`). One per entity with a `MeshRendererComponent` (and a world transform), kept in
+  structure-of-arrays form: 3x4 world matrix, local and world bounds, mesh and material override with their slots, flags
+  (active, casts shadows, mirrored, indexed, bounds from the mesh) and the entity ID. A scene's render scene lives in its
+  registry's context, created on first use and shared by every renderer of the scene (the viewport's and the captures').
+  It listens to the component's signals: created and signaled (`on_update`: `ComponentAccess`, `MarkModified`) mesh
+  renderers are read at the next `Sync`, destroyed ones lose their proxy at once; world transforms and activity come
+  from `Scene::GetWorldTransformChanges` (every proxy is compared when the scene no longer knows). Writes to
+  `MeshRendererComponent` fields must therefore signal, like transform writes (AGENTS.md, "Architecture rules"); Debug
+  builds compare the proxies with the scene after every `Sync` (`RenderScene::Validate`). Signaled entities wait for the
+  next `Sync` in a queue that holds each entity once (destroyed ones leave it), so a scene that changes while nothing
+  renders it (a hidden view, an agent capturing now and then) queues no more than its entities.
+- **Mesh layouts**. The bounds, submeshes and submesh materials of a mesh are learned from the loaded mesh
+  (`SetMeshLayout`) and kept when it is evicted. `Sync(assets)` keeps them current with the asset manager whatever the
+  renderers look at: it reads the manager's content changes since its own content version (all of them when the
+  manager changed or forgot that far back, so a scene that was not rendered for a while catches up), and compares the
+  meshes that changed, and the meshes new to the scene, with their loaded objects. A reload with other bounds or
+  submeshes therefore applies at the next sync even when the old bounds were out of view, or the scene was not rendered
+  when it happened; a sync after which nothing loaded, reloaded or was dropped compares no mesh
+  (`RenderSceneStats::LastSyncMeshChecks`). A mesh that is not loaded keeps its layout while its source revision is the
+  one the layout was learned from (`AssetSourceRevisions`): an eviction keeps it, but a reimport of the evicted mesh,
+  which publishes a content change without loading anything, makes its bounds unknown (below), so it is requested and
+  learned again rather than culled with bounds it may no longer have. While a reload of a loaded mesh is under way the
+  previous version's layout stays, as renderers draw that version meanwhile.
+- **Unknown bounds are visible**. Until a mesh's layout is known, the bounds the asset database recorded for it stand in
+  (`RenderScene::ResolveUnloadedBounds`; none yet: `pack-v2`'s `AssetManagerBase::GetBounds` is wired in there). A mesh
+  with neither has unknown bounds (`GetMeshesWithoutBounds`): its proxies sit in the spatial index with placeholder
+  bounds (`GetPlaceholderBounds`, a box of one unit around the entity's origin, scaled with it) that say nothing about
+  the mesh, so every renderer requests such a mesh as if it were in view, at Normal priority (High where a placeholder
+  is large in view), while any of its proxies is active (`GetIndexedUserCount`;
+  `SceneRendererStats::MeshesWithoutBounds`). A terrain or level mesh whose origin is out of view is thus loaded, gets
+  its real bounds and is drawn; meshes that failed to load, or that the manager does not know, are asked for every
+  frame (one lookup each), so that a fixed or newly imported one shows.
+- **Slots and instances**. Meshes and materials get dense slots shared by their users. Every submesh of a proxy whose
+  mesh layout is known has an `InstanceData` (64 bytes: the 3x4 world matrix, the material slot, the entity ID, flags) in
+  one array that persists between frames. Changes are logged by version (`GetInstanceChanges`, the latest 65,536), so
+  each renderer uploads only the instances that changed since its own last upload, in ranges. Shaders find an instance
+  through the frame's draw list (`u_DrawList[gl_InstanceIndex]`) and derive the normal matrix from the 3x4 rows.
+- **Spatial index** (`SpatialIndex`). A loose grid: a proxy lives in the 32-unit cell that holds the center of its
+  bounds, cells keep the union of their proxies' bounds and form blocks of 8x8x8 cells, and proxies longer than four
+  cells are kept in a list of their own. Queries (frustum, convex planes, sphere) skip blocks and cells outside the
+  volume, take those inside whole and test the proxies of straddling cells with the same test a brute-force scan applies,
+  so results are exact. Edits cost constant time; bounds grow at once and shrink at `Refresh` (each `Sync`).
+- **Requests follow visibility** (`AssetResolveCache`). Proxies in the view frustum request their mesh and materials at
+  High priority above `HighPriorityScreenFraction` (5%) of the viewport height and at Normal below; proxies within
+  `PrefetchDistance` (100 units) of the camera request them at Low (also a mesh another lookup of the frame found not
+  loaded); meshes of unknown bounds are requested as if in view (above); shadow casters outside the view and the
+  prefetch distance are drawn only from what is resident. Each distinct mesh, material and texture is looked up once
+  per frame (one `GetAsset`, which also
+  stamps it for the least-recently-used order; `AssetManagerStats::GetAssetCalls` counts them at the manager). The
+  references are held only while the frame is rendered (the command lists keep the GPU resources they use, the bindless
+  table its textures), and the manager only during the frame (a weak reference tells the next frame whether it is the
+  same one), so what leaves the view becomes evictable after the manager's grace frames, also when the renderer stops
+  rendering (a capture renderer between captures, a hidden view), and a closed project's manager goes with it. Two
+  caches outside the resolve cache keep assets across frames: `SceneRenderer`'s environment cache holds the sky light's
+  environment map (the source of its cube maps) until the environment changes, also while the renderer idles or after
+  its project closed, and `TextRenderer`'s glyph atlases hold their fonts as long as the fonts are loaded.
+  Batches name meshes by slot (`SceneDrawBatch::MeshSlot`), so what `GetOpaqueBatches` reports after the frame holds no
+  pointers.
+- **Batching**. Draws are gathered in chunks of 2,048 proxies on the job system and merged in chunk order (the same
+  result on any number of threads), then sorted with a stable radix sort (`Core/RadixSort.h`) of 64-bit keys: cascade,
+  alpha mask, winding, culling, mesh slot, submesh and level of detail. The material is not in the key, so the
+  instances of a mesh share a draw call whatever their materials: shaders read `u_Materials[instance.MaterialIndex]`
+  (`SceneRendererSpecification::BatchAcrossMaterials` off splits batches by material, for comparisons). Transparent
+  surfaces stay one draw each, back to front. Material data (by slot) is built every frame for the materials drawn
+  and uploaded where it changed.
+- **A still frame** updates no proxy and uploads no instance, material or draw list (`SceneRendererStats::ProxyUpdates`,
+  `InstanceBytesUploaded`, `MaterialBytesUploaded`). Each frame publishes the materials it drew with their largest size
+  on screen and texture tiling (`GetVisibleMaterials`, for mip streaming) and its counts and times (`VisibleProxies`,
+  `ProxyUpdates`, `InstanceUploadRanges`, `ExtractMs`, `SortMs`, `RequestsByVisibility`, `PrefetchRequests`,
+  `GetAssetCalls`, `MeshesWithoutBounds`, `OpaqueDrawCalls`, `ShadowDrawCalls`), most of which the viewport's stats
+  overlay shows.
+- **Overlays that scale**. `DrawSceneGizmos` given the view (`SceneGizmoView`) leaves out shapes outside it or beyond
+  `MaxDistance` and draws lights and cameras whose shapes would be smaller on screen than `MinShapePixels` (too small to
+  read) as icons of `IconPixels`; the editor draws collider shapes of the selection only unless
+  `ViewportSettings::AllColliders`; circles take their points from tables.
+  `ViewportRenderer` keeps the selection's subtrees until the selection or the scene's hierarchy changes, and
+  `SceneRenderer` keeps the sorted outline IDs and their upload while the same entities stay selected.
 
 ## Scripting
 

@@ -145,20 +145,22 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   belong in ordinary unit tests with deterministic counters, which run everywhere. CI's hosted runners skip the label
   `perf` because budgets hold for the reference machine only: run `-L perf` there before merging a change that can
   affect performance. Scale tests build their scenes with `Perf/SceneGenerators.h` (flat roots, a nested tree with ten
-  children per entity, entities running the API test module's trivial script) under
-  `Perf::ScopedApplicationJobSystem` (the job system as applications start it): `Perf.Scene` (transform updates and
+  children per entity, entities running the API test module's trivial script, grids of cubes and of point lights)
+  under `Perf::ScopedApplicationJobSystem` (the job system as applications start it): `Perf.Scene` (transform updates and
   idle frames up to a million entities), `Perf.Scripting` (100,000 and 300,000 trivial scripts, frames that spawn and
   destroy entities, scripts destroying 10,000 of 100,000 sibling roots in one frame), `Perf.Physics` (box stacks of
   `CreateBoxStacks`: the first frames of 30,000 boxes with time dilation, 70,000 boxes that all get a body, the busy
   frames of 70,000 and 10,000 boxes with Strata's part of a step below Jolt's, and of 30,000 boxes whose floor contacts
   are tracked; creating 10,000 bodies in one frame; the memory a world at the largest capacities reserves),
   `Perf.TextureCook` (cold imports of the stress project, its stored texture and pack sizes, the BC7 encoder's time per
-  block on one thread) and, in `src/Editor/`,
-  `Perf.Editor` (entity commands among 100,000 roots) and `PerfGPU.Editor`, which runs the real `StrataEditor`
-  maximized on generated 100,000- and 1,000,000-entity scenes and checks the median CPU frame time its `editor.wait`
-  steps report (when the editor fails, the test describes the scene files on disk with `Tests::DescribeJsonFile`,
-  which tells a damaged file from a failed read or parse), and exports the stress project (every frame meanwhile at
-  most 50 ms); `PerfGPU.Pack` compares pack versions 2 and 1 of the stress project (size, opening, streaming the world;
+  block on one thread), `PerfGPU.Renderer` (`SceneRenderer::Render` alone on 100,000 and 300,000 cubes and on 10,000
+  cubes with unique materials) and, in `src/Editor/`, `Perf.Editor` (entity commands among 100,000 roots),
+  `PerfGPU.Editor`, which runs the real `StrataEditor` maximized on generated 100,000- and 1,000,000-entity scenes and
+  checks the median CPU frame time its `editor.wait` steps report (when the editor fails, the test describes the scene
+  files on disk with `Tests::DescribeJsonFile`, which tells a damaged file from a failed read or parse), and exports the
+  stress project (every frame meanwhile at most 50 ms), and the editor frames of `PerfGPU.Renderer` (cube grids of
+  100,000, also with all of them selected, and of 300,000, a narrow view of 50,000, 10,000 point lights, 10,000 unique
+  materials); `PerfGPU.Pack` compares pack versions 2 and 1 of the stress project (size, opening, streaming the world;
   the acceptance limit of 110% is the budget of a `ratio` metric, version 2's time to version 1's, so it is checked like
   any budget). Time calls that take nanoseconds in batches (the clock's resolution is about 0.1 microseconds).
   A process's peak memory includes everything it did before, so a test that measures peak memory
@@ -368,14 +370,18 @@ The threading model, frame loop and pipelines these rules protect are described 
   `TransformComponent` fields directly must signal the change**: `Entity::MarkModified<TransformComponent>()` or
   `registry.patch` (`ComponentAccess`, `Scene::SetWorldTransform`, the script API and `TransformEdit` do), or
   `Scene::MarkTransformChanged` where listeners must not hear an `on_update` (physics writing simulated poses back).
-  Writes to `NameComponent::Name` and `TagComponent::Tag` must signal the same way. Entities created since the last
-  `UpdateWorldTransforms` are recomputed anyway. Hierarchy changes go through `Scene` (`SetParent`, `SetSiblingIndex`,
-  `PlaceEntities`, `DestroyEntities`...); never edit `RelationshipComponent` or `HierarchyComponent` directly. Debug
-  builds assert after every `OnUpdateRuntime` and `OnUpdateEditor` that the caches match a full recomputation
-  (`Scene::ValidateWorldTransforms`, `ValidateHierarchy`); a "has inconsistent caches" assertion names the entity
-  whose write was not signaled. Read sibling positions with `Scene::GetSiblingIndex` (cached), never by searching the
-  child list, and remove many entities with one `DestroyEntities` call. A registry holds at most
-  `Scene::c_MaxEntities` (1,048,575) live entities; creating more fails with an error.
+  Writes to `NameComponent::Name` and `TagComponent::Tag` must signal the same way, and so must writes to
+  `MeshRendererComponent` fields (the renderer's proxies, `RenderScene`, and physics' mesh colliders follow the
+  component's `on_update`). Entities created since the last `UpdateWorldTransforms` (or the last frame rendered) are
+  read anyway, so values written right after `AddComponent` need no signal. Hierarchy changes go through `Scene`
+  (`SetParent`, `SetSiblingIndex`, `PlaceEntities`, `DestroyEntities`...); never edit `RelationshipComponent` or
+  `HierarchyComponent` directly. Debug builds assert after every `OnUpdateRuntime` and `OnUpdateEditor` that the caches
+  match a full recomputation (`Scene::ValidateWorldTransforms`, `ValidateHierarchy`); a "has inconsistent caches"
+  assertion names the entity whose write was not signaled. They also compare the render proxies with the scene after
+  every `RenderScene::Sync` ("The render proxies of scene ... differ"). Read sibling positions with
+  `Scene::GetSiblingIndex` (cached), never by searching the child list, and remove many entities with one
+  `DestroyEntities` call. A registry holds at most `Scene::c_MaxEntities` (1,048,575) live entities; creating more
+  fails with an error.
 
 ## Asset pipeline
 
@@ -433,8 +439,11 @@ The threading model, frame loop and pipelines these rules protect are described 
   request what you use every frame you use it (`GetAsset`): a held `Ref` keeps an asset from being evicted (it would
   free nothing), so it defeats the budget. Pin what gameplay must keep whether or not it is used
   (`AssetManagerBase::Pin`, `AssetPin`; scripts: `Assets::RequestLoad` until `Assets::Release`). Code that keeps an
-  asset's data alive in other objects reports it (`Asset::IsDataShared`). Never block on a load; scene owners trim what
-  the previous scene used after a switch (`AssetManagerBase::ScheduleTrim`).
+  asset's data alive in other objects reports it (`Asset::IsDataShared`). A cache that keeps data derived from an asset
+  while the asset is evicted (the render scene's mesh layouts) checks, on the asset's content changes, whether the
+  source's revision is still the one its data came from (`AssetManagerBase::GetSourceRevisions`): evictions keep it,
+  `ReloadAsset` (a reimport) changes it and announces that even when nothing is loaded. Never block on a load; scene
+  owners trim what the previous scene used after a switch (`AssetManagerBase::ScheduleTrim`).
 - Adding an asset type: an `Asset` subclass with a cooked/serialized form, a loader registered by the
   registration function of the module that owns the type (e.g. `RegisterRendererModule`; it takes the stored bytes over
   with `AssetLoadData::TakeBytes` when the asset keeps them, instead of copying them), an importer if it comes from
@@ -772,10 +781,11 @@ and `AudioSystem`, the built-in "Audio" scene system.
   to the running copy and are discarded by `play.stop`. Unknown or missing parameters are errors.
 - **Viewport state** lives in the core: `EditorContext::GetViewport()` (`EditorViewport`) holds the editor camera
   (`EditorCamera`: a target that is also the orbit pivot, distance, yaw/pitch in degrees, FOV, clip planes, fly speed),
-  the `ViewportSettings` (grid, selection outline, light/camera/collider shapes, stats, preview lighting, game UI, gizmo
-  mode and space, snap steps) and two `ViewportRenderer`s (the panel's and the captures'), created on first use and only
-  with a GPU. Settings and the editor camera of every scene asset the project showed (`"Cameras": {"<scene handle>":
-  ...}`) are saved per project in `<project>/.strata/EditorViewport.json` when it closes and restored when it opens;
+  the `ViewportSettings` (grid, selection outline, light/camera/collider shapes and whether colliders show for every
+  entity, stats, preview lighting, game UI, gizmo mode and space, snap steps) and two `ViewportRenderer`s (the panel's
+  and the captures'), created on first use and only with a GPU. Settings and the editor camera of every scene asset
+  the project showed (`"Cameras": {"<scene handle>": ...}`) are saved per project in
+  `<project>/.strata/EditorViewport.json` when it closes and restored when it opens;
   files from before per-scene cameras hold one `"Camera"`, given to the first scene that opens. `EditorContext::OpenScene`
   restores the scene's camera, or frames a scene shown for the first time (`EditorViewport::FrameScene`: along the
   scene's primary camera, `EditorCamera::FitBounds` on what renders, `SceneBounds`), again once meshes that were still
@@ -839,9 +849,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   encodes it on a job thread and returns `{"Image": {"MimeType": "image/png", "Data": <base64>}, "width", "height",
   "camera", "overlays", "pendingAssets", "pendingTextGlyphs", "previewLighting", "screenSpaceTexts",
   "hiddenScreenSpaceTexts", "notice"?, "path"?}`; it defaults to the viewport's size, camera and overlays and fails
-  without a GPU. `viewport.getSettings` and `viewport.setSettings {grid, selectionOutline, sceneGizmos, stats,
-  previewLighting, gameUI, gizmo, space, snap, translateSnap, rotateSnap, scaleSnap}` read and change the view settings
-  (validated as a whole: an invalid value changes nothing).
+  without a GPU. `viewport.getSettings` and `viewport.setSettings {grid, selectionOutline, sceneGizmos, allColliders,
+  stats, previewLighting, gameUI, gizmo, space, snap, translateSnap, rotateSnap, scaleSnap}` read and change the view
+  settings (validated as a whole: an invalid value changes nothing); `allColliders` draws the collider shapes of every
+  entity instead of only the selection's.
 - Materials: `material.create {path, properties}`, `material.set {material, properties}` and `material.get {material}` (its
   values and every material property described like `component.list` describes component properties); an unknown property
   name fails with the list of known ones.
@@ -889,6 +900,30 @@ and `AudioSystem`, the built-in "Audio" scene system.
   point and spot intensity like luminous intensity with inverse-square falloff (cut off at `Range`).
   Automatic exposure maps the average luminance of the non-black pixels to middle gray; tests that
   compare exact colors disable it (see `AddNeutralPostProcess` in `SceneRendererTestUtils.h`).
+- **Render scene** (Docs/Architecture.md, "Render scene"): what a frame draws comes from the scene's `RenderScene`, one
+  per scene (in its registry's context, shared by every renderer of it): render proxies of the mesh renderers, updated
+  only where components were signaled or transforms changed, in a `SpatialIndex` (loose grid) that the view frustum,
+  the prefetch sphere and the shadow cascades query. Only meshes and materials of proxies in view are requested (High
+  above 5% of the viewport height, Normal below), those within `SceneRendererSpecification::PrefetchDistance` at Low;
+  each asset is looked up once per frame (`AssetResolveCache`), and the cache's references end with the frame (no mesh,
+  material or texture it resolved, and not the asset manager, is held once `Render` returns), so what leaves the view
+  becomes evictable, also for a renderer that stops rendering. Two caches keep assets across frames: `SceneRenderer`'s
+  environment cache holds the sky light's environment map until the environment changes, and `TextRenderer`'s glyph
+  atlases hold their fonts (an atlas lives as long as its font is loaded). Mesh layouts (bounds, submeshes) follow the
+  asset manager's content changes in `RenderScene::Sync`, whoever renders the scene; an evicted mesh keeps its layout
+  until a reimport changes its source revision (`AssetManagerBase::GetSourceRevisions`). A mesh whose bounds are
+  unknown (never loaded, reimported while evicted, none recorded: `RenderScene::GetMeshesWithoutBounds`) is requested
+  as if in view while any of its entities is active, since its proxies' placeholder bounds say nothing about where it
+  is; recorded bounds come from `RenderScene::ResolveUnloadedBounds`. Never resolve assets per entity in renderer code:
+  go through the proxies and the cache.
+- Batching is material-free: instances of a mesh, submesh and level of detail with the same pipeline state share one
+  draw whatever their materials (shaders read `u_Materials[instance.MaterialIndex]`); transparent surfaces are drawn
+  one by one, back to front. Draws are gathered in parallel chunks merged in chunk order (results do not depend on
+  the threads) and sorted with `RadixSort` (`Core/RadixSort.h`). `RenderData::InstanceData` (64 bytes: a 3x4 world
+  matrix, the material slot, the entity ID, flags) persists in a buffer indexed through the frame's draw list
+  (`u_DrawList[gl_InstanceIndex]`); only changed instances, materials and draw list ranges are uploaded, so a still
+  frame uploads nothing (`SceneRendererStats::InstanceBytesUploaded`, `ProxyUpdates`). Shaders derive the normal
+  matrix from the 3x4 rows (`TransformNormal` in `Include/Scene.glsl`).
 - Point and spot lights are frustum culled on the CPU, ranked by relevance (projected size of their
   range) and capped at `MaxLights`; `Scene/LightClusters.comp` then lists the lights reaching each
   cluster of a 16x9x24 froxel grid (exponential depth slices) and `Forward.frag` loops only over its
@@ -913,7 +948,11 @@ and `AudioSystem`, the built-in "Audio" scene system.
   colors into the output texture (then copied into an external target): the infinite ground grid, the
   selection outline (from the entity-ID buffer, so alpha-blended surfaces get none) and `DebugDraw` line
   lists, depth-tested against the scene or always on top. Fill a `DebugDraw` each frame (gameplay
-  debugging, or `DrawSceneGizmos` for light, camera and collider shapes) and pass it to `Render`.
+  debugging, or `DrawSceneGizmos` for light, camera and collider shapes) and pass it to `Render`. Give
+  `DrawSceneGizmos` the view (`SceneGizmoSettings::View`): it then leaves out shapes outside it or beyond `MaxDistance`
+  and draws lights and cameras whose shapes would be smaller than `MinShapePixels` on screen as icons of `IconPixels`,
+  so thousands of lights cost what is near and in view; colliders can be limited to a list (the editor: the selection,
+  unless `ViewportSettings::AllColliders`).
 - `TextComponent`s are drawn with the overlays by `TextRenderer`: signed distance field glyphs from a
   per-font `FontAtlas` (stb_truetype, filled on demand), laid out by `LayoutText` (UTF-8, lines,
   alignment). World-space text is depth-tested, screen-space text goes over everything. Text without a

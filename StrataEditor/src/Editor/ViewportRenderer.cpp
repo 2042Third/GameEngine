@@ -7,6 +7,7 @@
 #include <Strata/Renderer/SceneGizmos.h>
 #include <Strata/Scene/Scene.h>
 
+#include <algorithm>
 #include <unordered_set>
 
 namespace Strata
@@ -54,6 +55,31 @@ namespace Strata
 		m_Renderer = CreateScope<SceneRenderer>(specification);
 	}
 
+	void ViewportRenderer::UpdateSelectionSubtrees(EditorContext& context, const Ref<Scene>& scene)
+	{
+		if (m_OutlinedValid && m_OutlinedScene.lock() == scene && m_OutlinedHierarchyVersion == scene->GetHierarchyVersion()
+			&& m_OutlinedSelection == context.GetSelection())
+			return;
+
+		// Descendants are outlined too: selecting a model's root shows the whole model.
+		m_Outlined.clear();
+		std::unordered_set<UUID> outlined;
+		for (UUID selected : context.GetSelection())
+		{
+			for (UUID id : SceneEdit::CollectSubtree(*scene, selected))
+			{
+				if (outlined.insert(id).second)
+					m_Outlined.push_back(scene->GetEntityByUUID(id));
+			}
+		}
+		// By handle: the scene gizmos look colliders up in the list (SceneGizmoSettings::ColliderEntities).
+		std::sort(m_Outlined.begin(), m_Outlined.end(), [](const Entity& a, const Entity& b) { return a.GetHandle() < b.GetHandle(); });
+		m_OutlinedSelection = context.GetSelection();
+		m_OutlinedScene = scene;
+		m_OutlinedHierarchyVersion = scene->GetHierarchyVersion();
+		m_OutlinedValid = true;
+	}
+
 	bool ViewportRenderer::Render(EditorContext& context, const glm::uvec2& size, const ViewportView& view, const ViewportSettings& settings, bool overlays)
 	{
 		const Ref<Scene>& scene = context.GetActiveScene();
@@ -63,31 +89,34 @@ namespace Strata
 
 		SceneRenderOptions options = GetViewportRenderOptions(view, settings);
 		m_DebugDraw.Clear();
-		m_Outlined.clear();
 		options.SelectionColor = settings.SelectionColor;
 		if (overlays)
 		{
 			options.ShowGrid = settings.ShowGrid;
+			const bool selectionColliders = settings.ShowSceneGizmos && !settings.AllColliders;
+			if (settings.ShowSelectionOutline || selectionColliders)
+				UpdateSelectionSubtrees(context, scene);
 			if (settings.ShowSelectionOutline)
-			{
-				// Descendants are outlined too: selecting a model's root shows the whole model.
-				std::unordered_set<UUID> outlined;
-				for (UUID selected : context.GetSelection())
-				{
-					for (UUID id : SceneEdit::CollectSubtree(*scene, selected))
-					{
-						if (outlined.insert(id).second)
-							m_Outlined.push_back(scene->GetEntityByUUID(id));
-					}
-				}
 				options.SelectedEntities = m_Outlined;
-			}
 			if (settings.ShowSceneGizmos)
 			{
 				// The shapes read the cached world transforms.
 				scene->UpdateWorldTransforms();
 				SceneGizmoSettings gizmos;
 				gizmos.CameraAspectRatio = static_cast<float>(size.x) / static_cast<float>(size.y);
+				gizmos.AllColliders = settings.AllColliders;
+				gizmos.ColliderEntities = m_Outlined;
+				// Shapes out of view or far away are left out; small ones become icons.
+				const glm::mat4 inverseView = glm::inverse(view.Camera.View);
+				SceneGizmoView gizmoView;
+				gizmoView.ViewProjection = view.Camera.Projection * view.Camera.View;
+				gizmoView.Position = view.Camera.Position;
+				gizmoView.Right = glm::vec3(inverseView[0]);
+				gizmoView.Up = glm::vec3(inverseView[1]);
+				gizmoView.VerticalFOV = view.Camera.VerticalFOV;
+				gizmoView.Orthographic = view.Camera.Orthographic;
+				gizmoView.ViewportHeight = static_cast<float>(size.y);
+				gizmos.View = gizmoView;
 				DrawSceneGizmos(m_DebugDraw, *scene, gizmos);
 				options.DebugShapes = &m_DebugDraw;
 			}

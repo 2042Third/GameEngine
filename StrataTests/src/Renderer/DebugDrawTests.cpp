@@ -12,6 +12,7 @@
 
 #include <cmath>
 #include <limits>
+#include <vector>
 
 using namespace Strata;
 
@@ -234,5 +235,81 @@ TEST_SUITE("Renderer.DebugDraw")
 		for (const DebugLineVertex& vertex : shapes.subspan(0, 2 * 12))
 			farthest = std::max(farthest, -vertex.Position.z);
 		CHECK(farthest == doctest::Approx(settings.MaxCameraFrustumLength));
+	}
+
+	TEST_CASE("Circles close exactly on points from the unit circle tables")
+	{
+		DebugDraw debugDraw;
+		for (uint32_t segments : { 3u, 32u, 128u, 200u })
+		{
+			CAPTURE(segments);
+			debugDraw.Clear();
+			debugDraw.Circle(glm::vec3(1.0f, 2.0f, 3.0f), glm::vec3(0.0f, 1.0f, 0.0f), 2.0f, glm::vec4(1.0f), DebugDrawDepth::Tested, segments);
+			const std::span<const DebugLineVertex> lines = debugDraw.GetLines(DebugDrawDepth::Tested);
+			REQUIRE(lines.size() == 2 * segments);
+			CHECK(lines.front().Position == lines.back().Position);
+			CHECK(MaxDistance(lines, glm::vec3(1.0f, 2.0f, 3.0f)) == doctest::Approx(2.0f));
+			CHECK(MinDistance(lines, glm::vec3(1.0f, 2.0f, 3.0f)) == doctest::Approx(2.0f));
+		}
+	}
+
+	TEST_CASE("Gizmos for a view leave out what is out of view or too far, draw small lights and cameras as icons, and colliders of the selection")
+	{
+		Scene scene;
+		auto addLight = [&](const glm::vec3& position, float range)
+		{
+			Entity light = scene.CreateEntity("Light");
+			light.GetComponent<TransformComponent>().Translation = position;
+			light.AddComponent<PointLightComponent>().Range = range;
+			return light;
+		};
+		addLight(glm::vec3(0.0f, 0.0f, -10.0f), 4.0f);   // Near and large: its range sphere
+		addLight(glm::vec3(0.0f, 0.0f, -400.0f), 1.0f);  // Far and small: an icon
+		addLight(glm::vec3(0.0f, 0.0f, 30.0f), 4.0f);    // Behind the view
+		addLight(glm::vec3(0.0f, 0.0f, -1000.0f), 50.0f); // Beyond the distance limit
+		Entity crate = scene.CreateEntity("Crate");
+		crate.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 0.0f, -5.0f);
+		crate.AddComponent<BoxColliderComponent>();
+		Entity ball = scene.CreateEntity("Ball");
+		ball.GetComponent<TransformComponent>().Translation = glm::vec3(1.0f, 0.0f, -5.0f);
+		ball.AddComponent<SphereColliderComponent>();
+		scene.UpdateWorldTransforms();
+
+		SceneGizmoSettings settings;
+		settings.Cameras = false;
+		SceneGizmoView view;
+		view.ViewProjection = Math::PerspectiveReverseZ(glm::radians(60.0f), 16.0f / 9.0f, 0.1f, 5000.0f);
+		view.ViewportHeight = 720.0f;
+		settings.View = view;
+		DebugDraw debugDraw;
+		DrawSceneGizmos(debugDraw, scene, settings);
+		// The near light's sphere (3 x 32), the far light's icon (a diamond and a cross: 6), the box (12) and sphere (96).
+		CHECK(debugDraw.GetLineCount() == 96 + 6 + 12 + 96);
+
+		// The icon is the configured size on screen: 24 of 720 pixels at 400 units.
+		std::vector<DebugLineVertex> icon;
+		for (const DebugLineVertex& vertex : debugDraw.GetLines(DebugDrawDepth::Tested))
+		{
+			if (glm::length(vertex.Position - glm::vec3(0.0f, 0.0f, -400.0f)) < 100.0f)
+				icon.push_back(vertex);
+		}
+		CHECK(icon.size() == 2 * 6);
+		const float expectedSize = 24.0f / 720.0f * 2.0f * 400.0f * std::tan(glm::radians(30.0f));
+		CHECK(MaxDistance(icon, glm::vec3(0.0f, 0.0f, -400.0f)) == doctest::Approx(expectedSize * 0.5f));
+
+		// Colliders of the selection only.
+		const Entity selection[] = { crate };
+		settings.AllColliders = false;
+		settings.ColliderEntities = selection;
+		debugDraw.Clear();
+		DrawSceneGizmos(debugDraw, scene, settings);
+		CHECK(debugDraw.GetLineCount() == 96 + 6 + 12);
+
+		// Without a view everything is drawn in full, as before.
+		settings = SceneGizmoSettings();
+		settings.Cameras = false;
+		debugDraw.Clear();
+		DrawSceneGizmos(debugDraw, scene, settings);
+		CHECK(debugDraw.GetLineCount() == 4 * 96 + 12 + 96);
 	}
 }

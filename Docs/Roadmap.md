@@ -63,7 +63,8 @@ module-foundation, ran as its own workstream):
   Project, Open Sample, About and "Connect an AI agent", the strata mark as window and executable icon, and the build's
   git commit in its version.
 
-**Wave 2 (in progress).** Workstreams as they merge:
+**Wave 2 (in progress).** Workstreams land in the order perf-gates, physics-at-scale, texture-cook-v2, pack-v2,
+render-scene, streaming-observatory, editor-authoring:
 
 - `perf-gates`: perf checks confirm a failure by measuring again (up to three attempts, all printed and recorded in
   the results file) instead of failing on one measurement; every limit lives in `StrataTests/Perf/Budgets.json`, with
@@ -121,6 +122,30 @@ module-foundation, ran as its own workstream):
   `PerfGPU.Pack.StreamStressWorldRatio` holds it at 1.1), and exports in 1.45 s with every editor frame from the one
   that starts it under 28 ms. The pack size with block-compressed textures (target 140 MB) is recorded by whichever of
   `texture-cook-v2` and `pack-v2` merges second.
+- `render-scene`: a persistent render scene per scene (proxies in structure-of-arrays form, updated only where mesh
+  renderers were signaled or transforms changed) in a loose-grid spatial index that the view, the prefetch sphere and
+  the shadow cascades query; draws gathered in parallel chunks with a deterministic merge and a radix sort; instancing
+  without the material in the batch key (10,000 unique materials: 1 opaque draw); 64-byte instances in a buffer that
+  persists, with only changed instances, materials and draw-list ranges uploaded (a still frame uploads nothing);
+  asset requests that follow visibility (High above 5% of the screen, Low within the prefetch distance, each asset
+  looked up once per frame, no mesh, material or texture a frame resolved, and no asset manager, held once the frame
+  is rendered, so what is out of view is evictable also for idle renderers); mesh layouts that follow loads and
+  reloads in the render scene itself, whoever renders it, and that evicted meshes keep until a reimport changes their
+  source revision (`AssetSourceRevisions`, which tell a reimport from an eviction); gizmos culled to the view with
+  icons for small lights and cameras and colliders of the selection only; the outline list cached; requests that move
+  an asset in the residency's recency orders without a search.
+  `SceneRenderer::Render` costs about 0.9 ms for 100,000 cubes and 2.9 ms for 300,000; edit frames of grids under one
+  root take 1.6 and 4.4 ms (the scaling audit measured 42.9 and 113.6 ms with the cubes as roots, which also pays the
+  Hierarchy panel's cost of about 14 ms per 100,000 roots), 10,000 point lights 1.6 ms and 10,000 unique materials
+  1.9 ms (19.4 and 7.47 in the audit); `GetVisibleMaterials` publishes what mip streaming needs. Meshes whose bounds
+  are unknown (never loaded) are requested as if in view, as every mesh was before, so a world's worth of meshes not
+  yet seen loads in a burst at its start, until `pack-v2`'s recorded bounds are wired into
+  `RenderScene::ResolveUnloadedBounds` (the integrator's step, with a test of a recorded mesh culled before it loads).
+  Editor frames of scenes with 100,000 or more root entities are still dominated by the Hierarchy panel drawing every
+  root (`editor-authoring`). Two caches besides the resolve cache still hold assets between frames: `SceneRenderer`'s
+  environment cache the sky light's environment map until the environment changes (`first-light`), and
+  `TextRenderer`'s glyph atlases their fonts while the fonts are loaded, so a font once drawn is not evicted while its
+  renderer lives (the text renderer's atlas cache).
 
 Open items and deferrals later waves own:
 
@@ -136,7 +161,8 @@ Open items and deferrals later waves own:
   what is in view, so this needs BC textures and mip streaming (`texture-cook-v2`, `mip-streaming`; with BC textures the
   stress world peaks at about 520 MB, see wave 2). Mesh uploads still
   go through NVRHI's upload manager until the budgeted upload queue (`mip-streaming`); `AssetManagerBase::GetStats`
-  and eviction scans are linear in the registered assets (`render-scene`, `world-partition`).
+  and `GetResidencyInfo` walk every registered asset (eviction walks only the resident assets of the pools over budget,
+  least recently requested first), which a world of many registered assets will feel (`world-partition`).
 - Deleting one entity among 100,000 sibling roots renumbers the sibling list (about 0.5 ms), and the Hierarchy panel
   draws every root each frame (Hierarchy v2 in `editor-authoring`). Starting play copies a 1,000,000-entity scene in
   about 0.7 s (`scene-streaming`).

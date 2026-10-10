@@ -1,11 +1,13 @@
 #include "Perf/SceneGenerators.h"
 
+#include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Core/JobSystem.h"
 #include "Strata/Scene/Components.h"
 
 #include <doctest/doctest.h>
 #include <glm/gtc/quaternion.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <string>
 
@@ -122,6 +124,56 @@ namespace Strata::Tests::Perf
 		Entity light = Created(scene.CreateEntity("Sun"));
 		light.GetTransform().Rotation = glm::angleAxis(glm::radians(-50.0f), glm::vec3(1.0f, 0.0f, 0.0f));
 		light.AddComponent<DirectionalLightComponent>();
+	}
+
+	namespace
+	{
+
+		// Position of grid cell `index` of a square grid holding `count` cells, c_GridSpacing apart and centered on the
+		// origin in XZ.
+		glm::vec3 GridPosition(size_t index, size_t count, float height)
+		{
+			const size_t side = std::max<size_t>(1, static_cast<size_t>(std::ceil(std::sqrt(static_cast<double>(count)))));
+			const float offset = (static_cast<float>(side) - 1.0f) * c_GridSpacing * 0.5f;
+			const float x = static_cast<float>(index % side) * c_GridSpacing - offset;
+			const float z = static_cast<float>(index / side) * c_GridSpacing - offset;
+			return glm::vec3(x, height, z);
+		}
+
+	}
+
+	std::vector<Entity> CreateCubeGrid(Scene& scene, size_t count, std::span<const AssetHandle> materials, Entity parent)
+	{
+		std::vector<Entity> cubes;
+		cubes.reserve(count);
+		for (size_t index = 0; index < count; index++)
+		{
+			Entity cube = Created(parent ? scene.CreateChildEntity(parent, "Cube") : scene.CreateEntity("Cube"));
+			cube.GetTransform().Translation = GridPosition(index, count, 0.5f);
+			MeshRendererComponent& renderer = cube.AddComponent<MeshRendererComponent>();
+			renderer.Mesh = BuiltinAssets::CubeMesh;
+			if (!materials.empty())
+				renderer.Material = materials[index % materials.size()];
+			cubes.push_back(cube);
+		}
+		return cubes;
+	}
+
+	std::vector<Entity> CreatePointLightGrid(Scene& scene, size_t count, float range, float height, Entity parent)
+	{
+		std::vector<Entity> lights;
+		lights.reserve(count);
+		for (size_t index = 0; index < count; index++)
+		{
+			Entity light = Created(parent ? scene.CreateChildEntity(parent, "Light") : scene.CreateEntity("Light"));
+			light.GetTransform().Translation = GridPosition(index, count, height);
+			PointLightComponent& component = light.AddComponent<PointLightComponent>();
+			component.Range = range;
+			// Neighbors differ in color, so a frame of them shows each light.
+			component.Color = glm::vec3(index % 3 == 0 ? 1.0f : 0.3f, index % 3 == 1 ? 1.0f : 0.3f, index % 3 == 2 ? 1.0f : 0.3f);
+			lights.push_back(light);
+		}
+		return lights;
 	}
 
 	ScopedApplicationJobSystem::ScopedApplicationJobSystem()

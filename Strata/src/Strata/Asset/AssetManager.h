@@ -34,6 +34,7 @@ namespace Strata
 		uint32_t FailedAssets = 0;
 		uint64_t LoadedMemory = 0;     // Resident bytes of every pool (Resident.GetTotal())
 		uint64_t TotalLoadsCompleted = 0;
+		uint64_t GetAssetCalls = 0;    // GetAsset calls since the manager was created (what callers look up, per frame by difference)
 
 		uint64_t Frame = 0;            // The manager's frame counter (advanced by Update)
 		AssetMemoryUsage Resident;     // Per pool: memory of the asset objects the manager holds (memory assets included)
@@ -79,6 +80,19 @@ namespace Strata
 		uint64_t LastRequestedFrame = 0; // The manager's frame of the latest request (GetAsset, RequestLoad, Pin)
 		uint32_t PinCount = 0;
 		bool IsMemoryAsset = false;
+	};
+
+	// Versions of an asset's source (AssetManagerBase::GetSourceRevisions), so that data derived from an asset can be kept
+	// while the asset is not loaded (evicted) and recognized as stale once its source changed (reimported meanwhile).
+	struct AssetSourceRevisions
+	{
+		// Changes when the asset is registered, with every ReloadAsset (a reimport, a changed file) whether or not it is
+		// loaded, and when a memory asset is added again; never with loads, unloads or evictions. Unique in the process:
+		// no other asset, and no other manager, has the same revision. 0 for unknown assets.
+		uint64_t Current = 0;
+		// The revision the loaded object was read from (the previous version's while a reload is under way, so it may be
+		// older than Current); 0 while no object is loaded.
+		uint64_t Loaded = 0;
 	};
 
 	// The stored bytes a loader decodes. Loaders read them as a span (it converts to one, so loaders may take a span);
@@ -235,8 +249,13 @@ namespace Strata
 		// Drops the loaded object (and a queued or running load); it is loaded again on the next request. Memory assets
 		// cannot be unloaded. Unloads pinned assets too: pins only protect from eviction.
 		void UnloadAsset(AssetHandle handle);
-		// Re-reads the asset if it was loaded (hot reload). In-flight loads of the old version are discarded.
+		// Re-reads the asset if it was loaded (hot reload). In-flight loads of the old version are discarded. Either way the
+		// asset's source revision changes (GetSourceRevisions); an asset without a loaded object also publishes a content
+		// change, so that caches keeping data derived from it while it is not loaded (the render layouts of evicted meshes)
+		// learn that the data is stale. A loaded asset publishes one when its new version arrives.
 		void ReloadAsset(AssetHandle handle);
+		// The revisions of the asset's source and of its loaded object (both 0 for unknown assets).
+		AssetSourceRevisions GetSourceRevisions(AssetHandle handle) const;
 
 		// Registers an asset that exists only in memory (built-in or created at runtime). Returns its handle.
 		AssetHandle AddMemoryAsset(const Ref<Asset>& asset, AssetMetadata metadata);
@@ -286,8 +305,9 @@ namespace Strata
 		std::vector<AssetResidencyInfo> GetResidencyInfo() const;
 
 		// Changes whenever an asset object is published, replaced or dropped (a load or reload finished, a memory asset was
-		// added, an asset was unloaded, evicted or unregistered), so that caches of data derived from loaded assets can
-		// check cheaply whether to revalidate.
+		// added, an asset was unloaded, evicted or unregistered) and when an asset without a loaded object is reloaded (its
+		// source changed: see ReloadAsset), so that caches of data derived from assets can check cheaply whether to
+		// revalidate.
 		uint64_t GetContentVersion() const { return m_ContentVersion.load(std::memory_order_acquire); }
 		// Appends the handles of the assets whose objects changed after content version `sinceVersion` (a handle may appear
 		// more than once), so that such caches revalidate only what changed. Returns false, appending nothing, if the
@@ -386,6 +406,7 @@ namespace Strata
 
 			auto operator<=>(const RecencyKey&) const = default;
 		};
+		using RecencyOrder = std::map<RecencyKey, AssetHandle>;
 
 		struct AssetEntry
 		{
@@ -396,6 +417,10 @@ namespace Strata
 			// one manager-wide counter that never repeats, so even a re-registered entry never matches an old load.
 			uint64_t Generation = 0;
 			uint64_t Registration = 0; // The generation the entry was registered with; pins count for one registration
+			// See AssetSourceRevisions. A published load always read the current source: a reload since its dispatch would
+			// have changed the generation and discarded it.
+			uint64_t SourceRevision = 0;
+			uint64_t LoadedRevision = 0; // The SourceRevision Loaded was read from (0 without Loaded; set by SetLoadedLocked)
 			bool IsMemoryAsset = false;
 			std::string Error;
 
@@ -404,8 +429,9 @@ namespace Strata
 			uint64_t LastRequestedFrame = 0;
 			uint32_t PinCount = 0;
 			// While the entry is evictable and resident (loaded, not a memory asset), it is in the recency order of every pool
-			// its Usage holds memory of, with this key (whose Frame is LastRequestedFrame).
-			RecencyKey Recency;
+			// its Usage holds memory of (indexed by AssetMemoryPool; the others are unset), so a request moves it without
+			// searching the order.
+			std::array<RecencyOrder::iterator, 3> RecencyNodes {};
 			bool InRecencyOrders = false;
 
 			// Recorded by the subclass (SetAssetReferences)
@@ -509,6 +535,7 @@ namespace Strata
 		std::unordered_map<AssetHandle, AssetEntry> m_Entries;
 		std::unordered_map<std::string, AssetHandle> m_PathIndex; // Path -> top-level asset handle
 		uint64_t m_TotalLoadsCompleted = 0;
+		uint64_t m_GetAssetCalls = 0; // Guarded by m_Mutex
 		uint64_t m_NextGeneration = 1; // Guarded by m_Mutex
 		Ref<LoadState> m_LoadState;
 		AssetStreamingQueue m_Queue;
@@ -526,8 +553,9 @@ namespace Strata
 		AssetMemoryUsage m_Reserved;
 		// Per pool (indexed by AssetMemoryPool): the evictable resident assets holding memory of the pool, least recently
 		// requested first, so eviction for a pool over budget looks only at assets that free its memory. Requests move an
-		// asset to the end in constant time; an arrival requested long ago is placed in logarithmic time.
-		std::array<std::map<RecencyKey, AssetHandle>, 3> m_RecencyOrders;
+		// asset to the end in constant time (AssetEntry::RecencyNodes); an arrival requested long ago is placed in
+		// logarithmic time.
+		std::array<RecencyOrder, 3> m_RecencyOrders;
 		uint64_t m_NextRecencySequence = 0;
 		std::optional<ScheduledTrim> m_ScheduledTrim;
 		uint64_t m_Evictions = 0;

@@ -3,6 +3,9 @@
 #include "Strata/Asset/AssetTypes.h"
 #include "Strata/Core/Base.h"
 #include "Strata/Core/ErrorThrottle.h"
+#include "Strata/Core/RadixSort.h"
+#include "Strata/Math/Frustum.h"
+#include "Strata/Renderer/AssetResolveCache.h"
 #include "Strata/Renderer/DebugDraw.h"
 #include "Strata/Renderer/SceneRenderData.h"
 #include "Strata/Renderer/TextureReadback.h"
@@ -17,7 +20,7 @@
 #include <optional>
 #include <span>
 #include <string>
-#include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace Strata
@@ -25,6 +28,7 @@ namespace Strata
 
 	class Material;
 	class Mesh;
+	class RenderScene;
 	class Scene;
 	class TextRenderer;
 	class Texture;
@@ -67,6 +71,27 @@ namespace Strata
 		uint32_t MaxLightsPerCluster = 256;
 		uint32_t ShadowMapSize = 2048; // Resolution of each directional shadow cascade
 		uint32_t ShadowCascades = 4;   // 1-4
+
+		// Asset requests follow visibility: mesh renderers in the view request their mesh and materials at High priority
+		// when their projected size (bounding sphere diameter / viewport height) exceeds this fraction, at Normal priority
+		// otherwise; nothing else is requested for drawing.
+		float HighPriorityScreenFraction = 0.05f;
+		// Mesh renderers outside the view within this distance of the camera request their mesh and materials at Low
+		// priority (prefetch), so turning the camera finds them loaded. 0 turns prefetching off. Shadow casters outside
+		// the view and this distance are drawn into the shadow cascades only while their assets are resident.
+		float PrefetchDistance = 100.0f;
+		// Instances of a mesh share draw calls whatever their materials (shaders read the material of each instance):
+		// batches are split only by pipeline state, mesh, submesh and level of detail. Off, batches are also split by
+		// material, as renderers without per-instance materials draw; for comparisons and debugging.
+		bool BatchAcrossMaterials = true;
+	};
+
+	// A material the last frame drew, for streaming its textures at the resolution the screen needs.
+	struct VisibleMaterialUse
+	{
+		AssetHandle Material = UUID::Null();
+		float PixelSize = 0.0f;  // Largest projected size (bounding sphere diameter, in pixels of viewport height) drawn with it
+		float MaxUVScale = 1.0f; // Its largest texture coordinate tiling (MaterialProperties::UVTiling)
 	};
 
 	// How a scene is shown, beyond its own data: mainly editor views. With the defaults a scene renders exactly as a game
@@ -114,7 +139,9 @@ namespace Strata
 		static constexpr size_t c_LODStatCount = 8;
 
 		bool Rendered = false; // False when the last Render call drew nothing (see Render)
-		uint32_t DrawCalls = 0;
+		uint32_t DrawCalls = 0;       // Draw calls of the forward passes (opaque and transparent)
+		uint32_t OpaqueDrawCalls = 0; // Of those, opaque batches: also the draw calls of the depth prepass
+		uint32_t ShadowDrawCalls = 0; // Draw calls into the shadow cascades
 		uint32_t Instances = 0;       // Drawn submesh instances
 		uint32_t CulledInstances = 0; // Mesh renderers outside the view frustum
 		uint64_t Triangles = 0;
@@ -123,8 +150,23 @@ namespace Strata
 		uint32_t Lights = 0;          // Rendered lights: the directional light plus the point and spot lights
 		uint32_t CulledLights = 0;    // Point and spot lights outside the view frustum
 		uint32_t DroppedLights = 0;   // Visible point and spot lights beyond SceneRendererSpecification::MaxLights
-		uint32_t Materials = 0;
-		uint32_t PendingAssets = 0;   // Meshes, materials or textures still loading (drawn with fallbacks or skipped)
+		uint32_t Materials = 0;       // Distinct materials drawn
+		uint32_t PendingAssets = 0;   // Distinct meshes, materials and textures still loading (drawn with fallbacks or skipped)
+
+		// The render scene (RenderScene) and what the frame cost.
+		uint32_t VisibleProxies = 0;         // Mesh renderers whose bounds intersect the view frustum
+		uint32_t ProxyUpdates = 0;           // Render proxies updated for this frame (changed components, transforms, mesh layouts)
+		uint64_t InstanceBytesUploaded = 0;  // Instance data and draw lists uploaded this frame (nothing when nothing changed)
+		uint32_t InstanceUploadRanges = 0;   // Separate ranges of instance data uploaded
+		uint64_t MaterialBytesUploaded = 0;  // Material data uploaded this frame (only materials whose data changed)
+		float ExtractMs = 0.0f;              // CPU time of culling, asset resolution and gathering draws (view and shadows)
+		float SortMs = 0.0f;                 // CPU time of sorting the draws into batches and draw lists
+		uint32_t RequestsByVisibility = 0;   // Distinct meshes, materials and textures requested for drawing
+		uint32_t PrefetchRequests = 0;       // Distinct meshes and materials requested at Low priority within the prefetch distance
+		uint32_t GetAssetCalls = 0;          // Asset manager lookups: at most one per distinct asset
+		// Meshes requested as if in view because their bounds are not known yet (RenderScene::GetMeshesWithoutBounds:
+		// never loaded, none recorded), counted in RequestsByVisibility too.
+		uint32_t MeshesWithoutBounds = 0;
 		bool EnvironmentLighting = false; // A sky light's environment (map or procedural sky) lights the scene
 		// Environment cubes computed this frame (with their irradiance and prefiltered maps): 1 when the environment map
 		// or the procedural sky's parameters (colors, sun size and intensity, the sun's direction and color) changed.
@@ -139,6 +181,22 @@ namespace Strata
 		uint32_t TextGlyphs = 0;
 		uint32_t PendingTextGlyphs = 0;   // Glyphs waiting for rasterization (budgeted per frame), drawn on a later frame
 		uint32_t RasterizedTextGlyphs = 0; // Glyphs added to font atlases this frame (see TextRenderer::c_FrameRasterBudget)
+	};
+
+	// One instanced draw of a frame: instances of a submesh at one level of detail with one pipeline state.
+	struct SceneDrawBatch
+	{
+		uint32_t MeshSlot = 0; // The render scene's mesh slot (RenderScene::GetMeshHandle)
+		uint32_t SubmeshIndex = 0;
+		uint32_t LOD = 0;
+		bool DoubleSided = false;
+		bool Mirrored = false;  // Instances with a mirroring transform: front faces wind clockwise
+		bool AlphaMask = false; // Shadow batches: alpha-tested casters
+		uint32_t Cascade = 0;   // Shadow batches
+		uint32_t FirstInstance = 0; // Into the draw list (SceneRenderer::GetDrawList, GetShadowDrawList)
+		uint32_t InstanceCount = 0;
+
+		bool operator==(const SceneDrawBatch&) const = default;
 	};
 
 	// Renders a scene: depth/normal/entity-id prepass, ground-truth ambient occlusion, forward physically based
@@ -177,7 +235,10 @@ namespace Strata
 		// (the renderer never rescales) and exactly one color attachment, single-sampled non-sRGB UNORM, e.g. the swapchain:
 		// values are written sRGB-encoded. Returns false, with GetStats().Rendered false, when nothing was rendered: an
 		// empty viewport, or an invalid target or render targets (both logged). Updates the scene's cached world
-		// transforms. With overlays and a target, the image is composed in the output texture and then copied.
+		// transforms. With overlays and a target, the image is composed in the output texture and then copied. The
+		// meshes, materials and textures the frame used are let go when it returns, so a renderer that stops rendering
+		// keeps none of them resident; only the sky light's environment map stays, in the environment cache, until the
+		// environment changes (and the text renderer's glyph atlases keep their fonts).
 		bool Render(Scene& scene, const SceneCamera& camera, nvrhi::IFramebuffer* target = nullptr, const SceneRenderOptions& options = {});
 
 		// RGBA8 UNORM with sRGB-encoded values (display-ready), valid after Render without a target.
@@ -212,6 +273,17 @@ namespace Strata
 
 		const SceneRendererSpecification& GetSpecification() const { return m_Specification; }
 		const SceneRendererStats& GetStats() const { return m_Stats; }
+
+		// The materials the last frame drew, with the largest size on screen of what they cover (for mip streaming).
+		std::span<const VisibleMaterialUse> GetVisibleMaterials() const { return m_VisibleMaterials; }
+		// What the last frame drew: its batches and draw lists, which hold the index of every drawn instance
+		// (RenderScene::GetInstances) in batch order: opaque batches, then transparent ones back to front; shadow batches
+		// cascade by cascade.
+		std::span<const SceneDrawBatch> GetOpaqueBatches() const { return m_OpaqueBatches; }
+		std::span<const SceneDrawBatch> GetTransparentBatches() const { return m_TransparentBatches; }
+		std::span<const SceneDrawBatch> GetShadowBatches() const { return m_ShadowBatches; }
+		std::span<const uint32_t> GetDrawList() const { return m_DrawInstances; }
+		std::span<const uint32_t> GetShadowDrawList() const { return m_ShadowDrawInstances; }
 	private:
 		enum class Pass : uint8_t
 		{
@@ -240,44 +312,51 @@ namespace Strata
 			float NormalBias = 1.5f;
 		};
 
-		struct DrawBatch
+		// A transparent submesh instance, drawn on its own, back to front.
+		struct TransparentDraw
 		{
-			const Mesh* MeshAsset = nullptr;
+			float ViewDepth = 0.0f;
+			uint32_t EntityID = 0;     // Breaks ties of equal depth, with the submesh
 			uint32_t SubmeshIndex = 0;
+			uint32_t Instance = 0;
+			uint32_t MeshSlot = 0;
 			uint32_t LOD = 0;
-			uint32_t MaterialIndex = 0;
 			bool DoubleSided = false;
 			bool Mirrored = false;
-			bool AlphaMask = false; // Shadow batches: alpha-tested casters
-			uint32_t Cascade = 0;   // Shadow batches
-			uint32_t FirstInstance = 0;
-			uint32_t InstanceCount = 0;
 		};
 
-		// One submesh instance gathered for drawing, sorted into batches. The instance payload stays in a scratch list
-		// so sorting moves only these small records.
-		struct DrawRecord
+		// A render proxy found by the shadow cascade queries.
+		struct ShadowCaster
 		{
-			const Mesh* MeshAsset = nullptr;
-			uint32_t SubmeshIndex = 0;
-			uint32_t LOD = 0;
-			uint32_t MaterialIndex = 0;
-			uint32_t PayloadIndex = 0;
-			float ViewDepth = 0.0f; // Transparent surfaces are drawn back to front
-			uint32_t Cascade = 0;   // Shadow casters
-			bool DoubleSided = false;
-			bool Mirrored = false;
-			bool Transparent = false;
-			bool AlphaMask = false;
+			uint32_t Proxy = 0;
+			uint32_t CascadeMask = 0; // Cascades whose box it overlaps
+			float LightNearZ = 0.0f;  // Its nearest point toward the light (light view space)
 		};
 
-		// Material properties of one submesh of a shadow caster, resolved once per entity.
-		struct CasterMaterial
+		// A cascade: a box in light view space (looking along the light: -Z points away from it). Its square covers the
+		// bounding sphere of a view frustum slice; its depth range is fitted to the casters.
+		struct CascadeBox
 		{
-			uint32_t MaterialIndex = 0;
-			bool DoubleSided = false;
-			bool AlphaMask = false;
-			bool Casts = false;
+			glm::vec2 Min = glm::vec2(0.0f);
+			glm::vec2 Max = glm::vec2(0.0f);
+			float FarZ = 0.0f;        // Far side of the slice's bounding sphere
+			float SphereNearZ = 0.0f; // Near side (toward the light)
+			float WorldPerTexel = 0.0f;
+			float Radius = 0.0f;
+		};
+
+		// What one chunk of the parallel extraction produced; chunks are merged in order, so the result does not depend on
+		// how they were spread over threads.
+		struct ExtractionChunk
+		{
+			std::vector<SortItem> Draws;
+			std::vector<TransparentDraw> Transparent;
+			std::vector<std::pair<uint32_t, uint32_t>> MeshMarks;      // (mesh slot, usage bits), runs merged
+			std::vector<std::pair<uint32_t, uint32_t>> MaterialMarks;  // (material slot, usage bits), runs merged
+			std::vector<std::pair<uint32_t, float>> MaterialPixelSizes; // (material slot, largest pixel size), runs merged
+			std::array<uint32_t, SceneRendererStats::c_LODStatCount> InstancesPerLOD = {};
+			std::array<float, RenderData::c_MaxCascades> CasterNearZ = {};
+			uint32_t Skipped = 0; // Submeshes beyond what a sort key can address
 		};
 
 		struct LightCandidate
@@ -331,21 +410,46 @@ namespace Strata
 		// Fullscreen-triangle pipeline for a pixel shader and target format, cached per format.
 		nvrhi::IGraphicsPipeline* GetFullscreenPipeline(std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>>& cache, nvrhi::IShader* pixelShader,
 			nvrhi::IBindingLayout* layout, const nvrhi::FramebufferInfo& framebufferInfo);
-		// Grows a structured (or vertex) buffer to hold elementCount elements; false when the allocation failed.
+		// Grows a structured (or vertex) buffer to hold elementCount elements (the replaced buffer is released once the GPU
+		// is done with it); false when the allocation failed.
 		bool EnsureBufferCapacity(nvrhi::BufferHandle& buffer, size_t elementCount, size_t elementSize, const char* name, bool& outRecreated, bool vertexBuffer = false);
 
-		uint32_t GetMaterialIndex(const Ref<Material>& material);
-		void CountPendingAsset(AssetHandle handle);
-		uint32_t ResolveTexture(AssetHandle handle, uint32_t missingSlot, uint32_t loadingSlot);
 		// The directional light (the preview sun with `preview`), ambient light and the visible point and spot lights.
 		void CollectLights(Scene& scene, const SceneCamera& camera, bool preview, RenderData::FrameConstants& frame);
-		void CollectDraws(Scene& scene, const SceneCamera& camera);
-		// Computes the cascades and gathers the shadow casters of each; leaves ShadowParams.w at 0 without shadows.
-		void CollectShadowCasters(Scene& scene, const SceneCamera& camera, RenderData::FrameConstants& frame);
-		// Sorts gathered records into instanced batches (transparent ones back to front, one per record, into
-		// outTransparentBatches); the instance payloads are copied in batch order.
-		static void BuildBatches(std::vector<DrawRecord>& records, const std::vector<RenderData::InstanceData>& payloads, std::vector<DrawBatch>& outBatches,
-			std::vector<DrawBatch>* outTransparentBatches, std::vector<RenderData::InstanceData>& outInstances, bool shadows);
+
+		// Render without letting go of the frame's assets (Render does that, whatever way the frame ends).
+		bool RenderFrame(Scene& scene, const SceneCamera& camera, nvrhi::IFramebuffer* target, const SceneRenderOptions& options);
+
+		// Extraction (SceneRendererExtraction.cpp): what the frame draws, from the scene's RenderScene.
+		// Sizes the per-slot state for the render scene; a render scene other than the last frame's starts it afresh.
+		void PrepareExtraction(RenderScene& renderScene);
+		// Lets go of the meshes, materials and textures the frame resolved.
+		void ReleaseFrameAssets();
+		// The proxies in the view frustum and in the prefetch distance, and the assets they need; meshes whose bounds are
+		// unknown are needed as if in view.
+		void CullView(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum);
+		// Computes the cascades and finds the shadow casters of each; leaves ShadowParams.w at 0 without shadows.
+		void FindShadowCasters(RenderScene& renderScene, const SceneCamera& camera, RenderData::FrameConstants& frame);
+		// Resolves every mesh and material the frame uses, once each, at the priority its use asks for.
+		void ResolveAssets(RenderScene& renderScene);
+		// The view's draws in batches: opaque ones sorted by pipeline state and mesh, transparent ones back to front.
+		void GatherDraws(RenderScene& renderScene, const SceneCamera& camera);
+		// The shadow casters' draws per cascade, and the cascades' projections fitted to the casters.
+		void GatherShadowDraws(RenderScene& renderScene, const SceneCamera& camera, RenderData::FrameConstants& frame);
+		void MarkMesh(uint32_t slot, uint32_t usage);
+		void MarkMaterial(uint32_t slot, uint32_t usage);
+		// Sizes the per-material-slot state for `count` slots.
+		void EnsureMaterialSlots(uint32_t count);
+		// The GPU data of a material, its textures resolved (only those already loaded with residentOnly).
+		RenderData::MaterialData BuildMaterialData(const Material& material, bool residentOnly);
+		uint32_t ResolveTexture(AssetHandle handle, uint32_t missingSlot, uint32_t loadingSlot, bool residentOnly);
+		// Sorted draws into batches and the draw list (instance indices in batch order).
+		void BuildBatches(std::vector<SortItem>& draws, std::vector<SceneDrawBatch>& outBatches, std::vector<uint32_t>& outDrawList);
+		// Uploads what changed of the instance data (since this renderer's last upload), the material data and the draw lists.
+		void UploadSceneData(nvrhi::ICommandList* commandList, const RenderScene& renderScene, bool instancesRecreated, bool materialsRecreated, bool drawListsRecreated);
+		// Uploads the range of a draw list that differs from the list the buffer holds (`uploaded`), which then holds the new one.
+		uint64_t UploadDrawList(nvrhi::ICommandList* commandList, nvrhi::IBuffer* buffer, std::vector<uint32_t>& list, std::vector<uint32_t>& uploaded, bool full);
+
 		bool EnsureShadowMap();
 		uint32_t SelectLOD(const Submesh& submesh, float screenFraction) const;
 		static float GetScreenFraction(const SceneCamera& camera, const glm::vec3& center, float radius);
@@ -399,15 +503,17 @@ namespace Strata
 		nvrhi::TextureHandle m_DummyShadowMap; // Bound while no shadows are rendered
 		nvrhi::ITexture* m_BoundShadowMap = nullptr;
 		std::vector<nvrhi::FramebufferHandle> m_ShadowFramebuffers;
-		nvrhi::BufferHandle m_ShadowInstanceBuffer;
-		nvrhi::BindingSetHandle m_ShadowBindingSet; // Scene bindings with the shadow instances
+		nvrhi::BufferHandle m_ShadowDrawListBuffer; // Instance indices of the shadow draws
+		nvrhi::BindingSetHandle m_ShadowBindingSet; // Scene bindings with the shadow draw list
 		nvrhi::BindingLayoutHandle m_ShadowPushLayout;
 		nvrhi::BindingSetHandle m_ShadowPushBindingSet;
 		nvrhi::SamplerHandle m_ShadowCompareSampler;
 		nvrhi::ShaderHandle m_ShadowVertexShader;
 		nvrhi::ShaderHandle m_ShadowMaskPixelShader;
-		std::vector<RenderData::InstanceData> m_ShadowInstances;
-		std::vector<DrawBatch> m_ShadowBatches;
+		std::vector<SceneDrawBatch> m_ShadowBatches;
+		std::array<CascadeBox, RenderData::c_MaxCascades> m_Cascades = {};
+		glm::mat4 m_LightView = glm::mat4(1.0f);
+		uint32_t m_CascadeCount = 0;
 
 		// Clustered lighting
 		nvrhi::BindingLayoutHandle m_ClusterBindingLayout;
@@ -424,8 +530,9 @@ namespace Strata
 		nvrhi::SamplerHandle m_PointClampSampler;
 
 		nvrhi::BufferHandle m_FrameConstantBuffer;
-		nvrhi::BufferHandle m_InstanceBuffer;
-		nvrhi::BufferHandle m_MaterialBuffer;
+		nvrhi::BufferHandle m_InstanceBuffer; // Persistent: RenderScene::GetInstances, uploaded where it changed
+		nvrhi::BufferHandle m_DrawListBuffer; // Instance indices of the view's draws
+		nvrhi::BufferHandle m_MaterialBuffer; // Persistent: by material slot, uploaded where it changed
 		nvrhi::BufferHandle m_LightBuffer;
 
 		nvrhi::TextureHandle m_DepthTexture;
@@ -482,7 +589,13 @@ namespace Strata
 		nvrhi::BindingSetHandle m_OutlineBindingSet; // Entity IDs and selection; recreated with either
 		nvrhi::GraphicsPipelineHandle m_OutlinePipeline;
 		nvrhi::BufferHandle m_SelectionBuffer;
+		// The selection the buffer holds: kept while the same entities of the same scene stay selected and the scene's
+		// hierarchy does not change (entities created or destroyed).
 		std::vector<uint32_t> m_SelectionIDs;
+		std::vector<Entity> m_SelectionEntities;
+		uint64_t m_SelectionSceneId = 0;
+		uint64_t m_SelectionHierarchyVersion = 0;
+		bool m_SelectionUploaded = false;
 		nvrhi::BindingLayoutHandle m_DebugLineBindingLayout;
 		nvrhi::BindingSetHandle m_DebugLineBindingSet;
 		nvrhi::InputLayoutHandle m_DebugLineInputLayout;
@@ -493,22 +606,49 @@ namespace Strata
 		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_CopyPipelines;
 		Scope<TextRenderer> m_TextRenderer; // TextComponents, drawn with the overlays
 
-		// Per-frame gathered data (kept between frames to reuse the allocations)
-		std::vector<RenderData::InstanceData> m_Instances;
-		std::vector<RenderData::MaterialData> m_Materials;
+		// Lights gathered per frame (kept between frames to reuse the allocations)
 		std::vector<RenderData::LightData> m_Lights;
 		std::vector<RenderData::LightBounds> m_LightBounds;
 		std::vector<LightCandidate> m_LightCandidates;
-		std::vector<DrawRecord> m_DrawRecords;
-		std::vector<DrawRecord> m_ShadowRecords;
-		std::vector<RenderData::InstanceData> m_InstancePayloads;
-		std::vector<RenderData::InstanceData> m_ShadowPayloads;
-		std::vector<CasterMaterial> m_CasterMaterials;
-		std::vector<DrawBatch> m_OpaqueBatches;
-		std::vector<DrawBatch> m_TransparentBatches;
-		std::unordered_map<const Material*, uint32_t> m_MaterialIndices;
-		std::vector<Ref<Material>> m_FrameMaterials; // Keep this frame's assets alive while batches point at them
-		std::vector<Ref<Mesh>> m_FrameMeshes;
+
+		// Extraction (see SceneRendererExtraction.cpp). Slots are those of the render scene the state belongs to.
+		AssetResolveCache m_Assets;     // Holds the frame's meshes, materials and textures while the frame is rendered
+		uint64_t m_RenderSceneId = 0;   // The render scene the per-slot state and the GPU copies below belong to
+		bool m_FullUpload = true;       // The GPU copies hold nothing of that render scene yet
+		uint64_t m_UploadedInstanceVersion = 0;
+		uint32_t m_FrameStamp = 0;
+		std::vector<uint32_t> m_ProxyStamps;        // Per proxy: m_FrameStamp when it is in the view this frame
+		std::vector<uint32_t> m_CasterStamps;       // Per proxy: m_FrameStamp when it is a shadow caster candidate
+		std::vector<uint32_t> m_VisibleProxies;
+		std::vector<float> m_VisibleFractions;      // Screen fraction of each visible proxy
+		std::vector<uint32_t> m_QueryScratch;
+		std::vector<ShadowCaster> m_ShadowCasters;
+		std::vector<uint32_t> m_MeshUsage;          // Per mesh slot: how the frame uses it (usage bits)
+		std::vector<uint32_t> m_UsedMeshSlots;
+		std::vector<const Mesh*> m_FrameMeshes;     // Per mesh slot: the loaded mesh with GPU buffers, while the frame holds it
+		std::vector<uint32_t> m_MaterialUsage;      // Per material slot
+		std::vector<uint32_t> m_UsedMaterialSlots;
+		std::vector<uint32_t> m_MaterialFlags;      // Per material slot: how the frame draws it (material flags)
+		std::vector<RenderData::MaterialData> m_MaterialData; // What the material buffer holds, by slot
+		std::vector<uint8_t> m_MaterialUploaded;    // Per material slot: the buffer holds its m_MaterialData
+		std::vector<uint32_t> m_DirtyMaterialSlots;
+		std::vector<float> m_MaterialPixelSizes;
+		std::vector<float> m_MaterialUVScales;
+		std::vector<VisibleMaterialUse> m_VisibleMaterials;
+		std::optional<RenderData::MaterialData> m_DefaultMaterialData; // The default material, resolved once per frame
+		uint32_t m_DefaultMaterialFlags = 0;
+		std::vector<ExtractionChunk> m_Chunks;
+		std::vector<SortItem> m_Draws;
+		std::vector<SortItem> m_ShadowDraws;
+		std::vector<SortItem> m_SortScratch;
+		std::vector<TransparentDraw> m_Transparent;
+		std::vector<uint32_t> m_InstanceChanges;
+		std::vector<SceneDrawBatch> m_OpaqueBatches;
+		std::vector<SceneDrawBatch> m_TransparentBatches;
+		std::vector<uint32_t> m_DrawInstances;          // The view's draw list (what m_DrawListBuffer holds after the upload)
+		std::vector<uint32_t> m_DrawInstancesBuild;     // The draw list being built
+		std::vector<uint32_t> m_ShadowDrawInstances;
+		std::vector<uint32_t> m_ShadowDrawInstancesBuild;
 	};
 
 }

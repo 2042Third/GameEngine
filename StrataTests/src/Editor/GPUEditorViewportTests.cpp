@@ -7,6 +7,7 @@
 #include "Renderer/GPUTestUtils.h"
 #include "TestHelpers.h"
 
+#include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/Core/Base64.h>
 #include <Strata/Core/FileSystem.h>
@@ -471,6 +472,41 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("The selection outline follows the selection and the hierarchy")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.AddScene();
+		EditorContext& context = harness.Context;
+		ViewportRenderer* renderer = context.GetViewport().GetRenderer();
+		REQUIRE(renderer);
+		auto outlined = [&]()
+		{
+			const std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Automatic, 1.0f);
+			REQUIRE(view);
+			REQUIRE(renderer->Render(context, glm::uvec2(64, 64), *view, context.GetViewport().GetSettings(), view->EditorOverlays));
+			return renderer->GetStats().OutlinedEntities;
+		};
+		Entity cube = context.GetActiveScene()->FindEntityByName("Cube");
+		REQUIRE(cube);
+		const nlohmann::json parent = UUIDToJson(cube.GetUUID());
+		harness.Run("entity.create", { { "name", "First" }, { "parent", parent } });
+
+		// Selecting the cube outlines its descendants too; the list is kept while nothing changes.
+		context.Select(cube.GetUUID());
+		CHECK(outlined() == 2);
+		CHECK(outlined() == 2);
+		// A child added or deleted later is outlined or not at once.
+		const nlohmann::json created = harness.Run("entity.create", { { "name", "Second" }, { "parent", parent } });
+		CHECK(outlined() == 3);
+		harness.Run("entity.delete", { { "entities", nlohmann::json::array({ created["id"] }) } });
+		CHECK(outlined() == 2);
+		context.ClearSelection();
+		CHECK(outlined() == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Clicks in the viewport pick entities without blocking")
 	{
 		Tests::GPUContext gpu;
@@ -688,6 +724,39 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(countPixels(first, cyan) == 0);
 		CHECK(countPixels(second, cyan) > 20);
 		CHECK(countPixels(second, magenta) == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Captures keep nothing resident: what only a capture showed can be evicted, and a closed project's assets go")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("CaptureResidency") / "Game";
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" }, { "template", "basic3d" } });
+		std::weak_ptr<AssetManagerBase> closed = AssetManager::GetActive();
+		{
+			const Ref<AssetManagerBase> manager = closed.lock();
+			REQUIRE(manager);
+			const AssetHandle ground = manager->FindAssetByPath("Materials/Ground.stmat");
+			REQUIRE(ground.IsValid());
+
+			// Only the capture renderer draws here (no viewport panel): its last frame showed the ground's material.
+			harness.CaptureLoaded({ { "width", 64 }, { "height", 64 } });
+			REQUIRE(manager->GetAssetState(ground) == AssetState::Ready);
+			// The editor's frames go on without captures: what the capture used goes like anything else no longer used.
+			const uint32_t grace = manager->GetEvictionGraceFrames();
+			for (uint32_t frame = 0; frame <= grace; frame++)
+				harness.Context.Update(Timestep(1.0f / 60.0f));
+			CHECK(manager->TrimUnused(grace) > 0);
+			CHECK(manager->GetAssetState(ground) == AssetState::Unloaded);
+			harness.CaptureLoaded({ { "width", 64 }, { "height", 64 } });
+			CHECK(manager->GetAssetState(ground) == AssetState::Ready);
+		}
+
+		// The project closes after a capture: its asset manager goes with it, whatever the capture renderer drew last.
+		harness.Run("project.close");
+		CHECK(closed.expired());
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

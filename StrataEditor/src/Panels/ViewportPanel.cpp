@@ -547,23 +547,31 @@ namespace Strata
 		EditorViewport& viewport = context.GetViewport();
 		ViewportRenderer* renderer = viewport.GetRenderer();
 		if (viewport.GetSettings().ShowStats && renderer)
-		{
-			const SceneRendererStats& stats = renderer->GetStats();
-			const glm::uvec2 size = renderer->GetSize();
-			// The frame's own time: while the editor idles, its frame rate is capped, which says nothing about what frames cost.
-			const std::vector<std::string> lines = {
-				fmt::format("{:.2f} ms ({:.0f} FPS{})", frame.WorkMilliseconds, frame.FramesPerSecond, frame.Idle ? ", idle" : ""),
-				fmt::format("{} x {} pixels", size.x, size.y),
-				fmt::format("{} draw calls, {} instances", stats.DrawCalls, stats.Instances),
-				fmt::format("{} triangles, {} lights", stats.Triangles, stats.Lights),
-				fmt::format("{} assets loading", stats.PendingAssets),
-				view.FromScene ? std::string("Scene camera") : std::string("Editor camera")
-			};
-			// Numbers read best in the monospaced font.
-			UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Caption);
-			DrawTextBox(drawList, ImVec2(imageMin.x + margin, top), lines, colors.Text);
-			ImGui::PopFont();
-		}
+			DrawStatsOverlay(drawList, ImVec2(imageMin.x + margin, top), *renderer, view, frame);
+	}
+
+	void ViewportPanel::DrawStatsOverlay(ImDrawList* drawList, const ImVec2& position, const ViewportRenderer& renderer, const ViewportView& view, const EditorFrameStats& frame)
+	{
+		const SceneRendererStats& stats = renderer.GetStats();
+		const glm::uvec2 size = renderer.GetSize();
+		// The frame's own time: while the editor idles, its frame rate is capped, which says nothing about what frames cost.
+		const std::vector<std::string> lines = {
+			fmt::format("{:.2f} ms ({:.0f} FPS{})", frame.WorkMilliseconds, frame.FramesPerSecond, frame.Idle ? ", idle" : ""),
+			fmt::format("{} x {} pixels", size.x, size.y),
+			fmt::format("{} draw calls ({} opaque, {} shadow), {} instances", stats.DrawCalls, stats.OpaqueDrawCalls, stats.ShadowDrawCalls, stats.Instances),
+			fmt::format("{} triangles, {} lights, {} materials", stats.Triangles, stats.Lights, stats.Materials),
+			fmt::format("{} visible of {} proxies, {} updated", stats.VisibleProxies, stats.VisibleProxies + stats.CulledInstances, stats.ProxyUpdates),
+			fmt::format("extract {:.2f} ms, sort {:.2f} ms", stats.ExtractMs, stats.SortMs),
+			fmt::format("{:.1f} KB instances, {:.1f} KB materials uploaded", static_cast<double>(stats.InstanceBytesUploaded) / 1024.0,
+				static_cast<double>(stats.MaterialBytesUploaded) / 1024.0),
+			fmt::format("{} assets requested, {} prefetched, {} loading", stats.RequestsByVisibility, stats.PrefetchRequests, stats.PendingAssets),
+			view.FromScene ? std::string("Scene camera") : std::string("Editor camera")
+		};
+		// Numbers read best in the monospaced font.
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Caption);
+		DrawTextBox(drawList, position, lines, colors.Text);
+		ImGui::PopFont();
 	}
 
 	void ViewportPanel::AcceptAssetDrops(EditorContext& context, const EditorCommandRegistry& commands)

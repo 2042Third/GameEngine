@@ -64,6 +64,7 @@ namespace Strata
 			{ "grid", "ShowGrid" },
 			{ "selectionOutline", "ShowSelectionOutline" },
 			{ "sceneGizmos", "ShowSceneGizmos" },
+			{ "allColliders", "AllColliders" },
 			{ "stats", "ShowStats" },
 			{ "previewLighting", "PreviewLighting" },
 			{ "gameUI", "ShowGameUI" },
@@ -377,7 +378,7 @@ namespace Strata
 
 		registry.Register({ "viewport.getSettings",
 			"The viewport's view settings (saved with the project's editor state): which editor overlays are drawn (grid, selectionOutline, sceneGizmos, "
-			"stats), previewLighting (editor views light scenes without any light of their own with a preview sun and sky), gameUI (editor views draw the "
+			"stats; allColliders: collider shapes of every entity instead of only the selection's), previewLighting (editor views light scenes without any light of their own with a preview sun and sky), gameUI (editor views draw the "
 			"game's screen-space text), the gizmo mode and space, whether gizmo drags snap, and the snap steps.",
 			ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
@@ -391,7 +392,8 @@ namespace Strata
 			ObjectSchema({
 				{ "grid", BoolSchema("Draw the ground grid") },
 				{ "selectionOutline", BoolSchema("Outline the selected entities") },
-				{ "sceneGizmos", BoolSchema("Draw light, camera and collider shapes") },
+				{ "sceneGizmos", BoolSchema("Draw light, camera and collider shapes (far away lights and cameras as small icons)") },
+				{ "allColliders", BoolSchema("Draw the collider shapes of every entity; off (the default), only those of the selection and its descendants") },
 				{ "stats", BoolSchema("Show frame time, draw calls and loading assets over the image") },
 				{ "previewLighting", BoolSchema("Editor views light scenes without any light of their own (no directional, point, spot or sky light) "
 					"with a preview sun and sky (never part of the scene or the game)") },

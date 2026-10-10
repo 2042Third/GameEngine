@@ -7,6 +7,7 @@
 #include "Strata/Math/Math.h"
 #include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/Mesh.h"
+#include "Strata/Renderer/RenderScene.h"
 #include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/TextRenderer.h"
 #include "Strata/Renderer/Texture.h"
@@ -20,7 +21,6 @@
 #include <array>
 #include <cmath>
 #include <limits>
-#include <tuple>
 
 namespace Strata
 {
@@ -53,9 +53,6 @@ namespace Strata
 		// View depth where the last depth slice ends: it also holds everything beyond the camera's far distance.
 		constexpr float c_ClusterDepthEnd = 1.0e30f;
 
-		// Shadow casters further than this toward the light than a cascade's bounding sphere are flattened onto the
-		// cascade's near plane (ShadowMesh.vert) instead of extending its depth range.
-		constexpr float c_MaxShadowCasterDistance = 100000.0f;
 		// Rasterizer depth bias of the shadow pass (reversed-Z: negative values push depth away from the light). The
 		// constant part is in units of the depth format's resolution, the slope part scales the depth slope per texel.
 		constexpr int c_ShadowDepthBias = -16;
@@ -106,16 +103,6 @@ namespace Strata
 		float SRGBToLinear(float value)
 		{
 			return value <= 0.04045f ? value / 12.92f : std::pow((value + 0.055f) / 1.055f, 2.4f);
-		}
-
-		uint32_t PackTextureSlot(uint32_t slot, uint32_t samplerIndex, bool grayscale = false)
-		{
-			return (slot & 0xFFFFFFu) | ((samplerIndex & 0x7Fu) << 24) | (grayscale ? RenderData::c_TextureSlotGrayscale : 0u);
-		}
-
-		uint32_t GetSamplerIndex(const TextureSpecification& specification)
-		{
-			return static_cast<uint32_t>(specification.Filter) * 3 + static_cast<uint32_t>(specification.Wrap);
 		}
 
 		nvrhi::TextureHandle CreateRenderTarget(nvrhi::IDevice* device, uint32_t width, uint32_t height, nvrhi::Format format, const std::string& name, bool depth)
@@ -280,6 +267,7 @@ namespace Strata
 			nvrhi::BindingLayoutItem::Texture_SRV(7),
 			nvrhi::BindingLayoutItem::Texture_SRV(11),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(12),
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(14),
 			nvrhi::BindingLayoutItem::Sampler(0).setSize(RenderData::c_SamplerCount),
 			nvrhi::BindingLayoutItem::Sampler(8),
 			nvrhi::BindingLayoutItem::Sampler(9),
@@ -358,10 +346,11 @@ namespace Strata
 
 		bool recreated = false;
 		const bool buffersCreated = EnsureBufferCapacity(m_InstanceBuffer, 1024, sizeof(RenderData::InstanceData), "Instances", recreated)
+			&& EnsureBufferCapacity(m_DrawListBuffer, 1024, sizeof(uint32_t), "DrawList", recreated)
 			&& EnsureBufferCapacity(m_MaterialBuffer, 256, sizeof(RenderData::MaterialData), "Materials", recreated)
 			&& EnsureBufferCapacity(m_LightBuffer, 64, sizeof(RenderData::LightData), "Lights", recreated)
 			&& EnsureBufferCapacity(m_LightBoundsBuffer, 64, sizeof(RenderData::LightBounds), "LightBounds", recreated)
-			&& EnsureBufferCapacity(m_ShadowInstanceBuffer, 1024, sizeof(RenderData::InstanceData), "ShadowInstances", recreated);
+			&& EnsureBufferCapacity(m_ShadowDrawListBuffer, 1024, sizeof(uint32_t), "ShadowDrawList", recreated);
 		ST_CORE_VERIFY(buffersCreated, "SceneRenderer: failed to create the scene buffers");
 
 		m_ClusterBuffer = m_Device->createBuffer(nvrhi::BufferDesc()
@@ -694,12 +683,9 @@ namespace Strata
 		}
 		else
 		{
-			Ref<Texture> texture = AssetManager::GetAsset<Texture>(skyLight->EnvironmentMap, AssetPriority::High);
+			Ref<Texture> texture = m_Assets.Resolve<Texture>(skyLight->EnvironmentMap, AssetPriority::High);
 			if (!texture || !texture->GetGPUTexture())
-			{
-				CountPendingAsset(skyLight->EnvironmentMap);
-				return; // Constant ambient until the environment arrives
-			}
+				return; // Constant ambient until the environment arrives (counted as pending by the resolve cache)
 			if (texture != m_Environment.Source)
 				ProcessEnvironment(commandList, texture);
 			rotation = glm::radians(skyLight->Rotation);
@@ -717,13 +703,14 @@ namespace Strata
 		const bool hasEnvironment = m_Environment.Cube != nullptr;
 		nvrhi::ITexture* shadowMap = m_ShadowMap ? m_ShadowMap.Get() : m_DummyShadowMap.Get();
 
-		// The shadow pass reads the same resources except for its own instance list (and never the shadow map).
-		auto create = [&](nvrhi::IBuffer* instances, nvrhi::ITexture* boundShadowMap)
+		// The shadow pass reads the same resources except for its own draw list (and never the shadow map).
+		auto create = [&](nvrhi::IBuffer* drawList, nvrhi::ITexture* boundShadowMap)
 		{
 			nvrhi::BindingSetDesc desc;
 			desc.bindings = {
 				nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer),
-				nvrhi::BindingSetItem::StructuredBuffer_SRV(0, instances),
+				nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_InstanceBuffer),
+				nvrhi::BindingSetItem::StructuredBuffer_SRV(14, drawList),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_MaterialBuffer),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_LightBuffer),
 				nvrhi::BindingSetItem::Texture_SRV(3, hasEnvironment ? m_Environment.Irradiance.Get() : blackCube),
@@ -741,8 +728,8 @@ namespace Strata
 				desc.bindings.push_back(nvrhi::BindingSetItem::Sampler(0, m_MaterialSamplers[index]).setArrayElement(index));
 			return m_Device->createBindingSet(desc, m_SceneBindingLayout);
 		};
-		m_SceneBindingSet = create(m_InstanceBuffer, shadowMap);
-		m_ShadowBindingSet = create(m_ShadowInstanceBuffer, m_DummyShadowMap);
+		m_SceneBindingSet = create(m_DrawListBuffer, shadowMap);
+		m_ShadowBindingSet = create(m_ShadowDrawListBuffer, m_DummyShadowMap);
 
 		nvrhi::BindingSetDesc clusterSet;
 		clusterSet.bindings = {
@@ -912,267 +899,16 @@ namespace Strata
 		return radius / (std::max(distance, camera.Near) * halfFOVTangent);
 	}
 
-	void SceneRenderer::BuildBatches(std::vector<DrawRecord>& records, const std::vector<RenderData::InstanceData>& payloads, std::vector<DrawBatch>& outBatches,
-		std::vector<DrawBatch>* outTransparentBatches, std::vector<RenderData::InstanceData>& outInstances, bool shadows)
-	{
-		outBatches.clear();
-		if (outTransparentBatches)
-			outTransparentBatches->clear();
-		outInstances.clear();
-		outInstances.reserve(records.size());
-
-		// Opaque surfaces and shadow casters are grouped into instanced draws (one pipeline, mesh, LOD and material per
-		// batch); transparent surfaces follow, back to front, one draw each. The payload index (registry order) breaks
-		// ties, so the order never depends on the sort algorithm.
-		std::sort(records.begin(), records.end(), [](const DrawRecord& a, const DrawRecord& b)
-		{
-			if (a.Transparent != b.Transparent)
-				return b.Transparent;
-			if (a.Transparent)
-				return a.ViewDepth != b.ViewDepth ? a.ViewDepth > b.ViewDepth : a.PayloadIndex < b.PayloadIndex;
-			return std::make_tuple(a.Cascade, a.AlphaMask, a.Mirrored, a.DoubleSided, reinterpret_cast<uintptr_t>(a.MeshAsset), a.SubmeshIndex, a.LOD, a.MaterialIndex,
-				a.PayloadIndex)
-				< std::make_tuple(b.Cascade, b.AlphaMask, b.Mirrored, b.DoubleSided, reinterpret_cast<uintptr_t>(b.MeshAsset), b.SubmeshIndex, b.LOD, b.MaterialIndex,
-					b.PayloadIndex);
-		});
-
-		for (const DrawRecord& record : records)
-		{
-			ST_CORE_ASSERT(!record.Transparent || outTransparentBatches, "SceneRenderer: transparent records need a batch list");
-			std::vector<DrawBatch>& batches = record.Transparent ? *outTransparentBatches : outBatches;
-			DrawBatch* last = batches.empty() ? nullptr : &batches.back();
-			// Opaque shadow casters batch regardless of material; everything else needs its own material.
-			const bool extendsBatch = last && !record.Transparent && last->Cascade == record.Cascade && last->MeshAsset == record.MeshAsset
-				&& last->SubmeshIndex == record.SubmeshIndex && last->LOD == record.LOD && last->DoubleSided == record.DoubleSided
-				&& last->Mirrored == record.Mirrored && last->AlphaMask == record.AlphaMask
-				&& ((shadows && !record.AlphaMask) || last->MaterialIndex == record.MaterialIndex);
-			if (extendsBatch)
-			{
-				last->InstanceCount++;
-			}
-			else
-			{
-				DrawBatch batch;
-				batch.MeshAsset = record.MeshAsset;
-				batch.SubmeshIndex = record.SubmeshIndex;
-				batch.LOD = record.LOD;
-				batch.MaterialIndex = record.MaterialIndex;
-				batch.DoubleSided = record.DoubleSided;
-				batch.Mirrored = record.Mirrored;
-				batch.AlphaMask = record.AlphaMask;
-				batch.Cascade = record.Cascade;
-				batch.FirstInstance = static_cast<uint32_t>(outInstances.size());
-				batch.InstanceCount = 1;
-				batches.push_back(batch);
-			}
-			outInstances.push_back(payloads[record.PayloadIndex]);
-		}
-	}
-
-	void SceneRenderer::CollectShadowCasters(Scene& scene, const SceneCamera& camera, RenderData::FrameConstants& frame)
-	{
-		m_ShadowInstances.clear();
-		m_ShadowBatches.clear();
-		m_ShadowRecords.clear();
-		m_ShadowPayloads.clear();
-		frame.ShadowParams = glm::vec4(0.0f);
-		if (!m_ShadowLight.Enabled)
-			return;
-
-		const uint32_t cascadeCount = m_Specification.ShadowCascades;
-		const float nearClip = std::max(camera.Near, 0.01f);
-		const float farClip = std::clamp(m_ShadowLight.Distance, nearClip + 0.1f, std::max(camera.Far, nearClip + 0.1f));
-		const float aspect = static_cast<float>(m_ViewportSize.x) / static_cast<float>(m_ViewportSize.y);
-		const float tanHalfFOV = camera.Orthographic ? 0.0f : std::tan(camera.VerticalFOV * 0.5f);
-		const glm::mat4 inverseView = glm::inverse(camera.View);
-		const glm::vec3 lightDirection = m_ShadowLight.Direction;
-		const glm::vec3 up = std::abs(lightDirection.y) > 0.99f ? glm::vec3(0.0f, 0.0f, 1.0f) : glm::vec3(0.0f, 1.0f, 0.0f);
-		const glm::mat4 lightView = glm::lookAt(glm::vec3(0.0f), lightDirection, up);
-		const float mapSize = static_cast<float>(m_Specification.ShadowMapSize);
-
-		// Each cascade is a box in light view space (looking along the light: -Z points away from it). Its square covers
-		// the bounding sphere of a view frustum slice; its depth range is fitted to the casters below.
-		struct CascadeBox
-		{
-			glm::vec2 Min;
-			glm::vec2 Max;
-			float FarZ;        // Far side of the slice's bounding sphere
-			float SphereNearZ; // Near side (toward the light)
-			float CasterNearZ; // Nearest caster toward the light
-			float WorldPerTexel;
-			float Radius;
-		};
-		std::array<CascadeBox, RenderData::c_MaxCascades> cascades = {};
-		float sliceNear = nearClip;
-		for (uint32_t cascade = 0; cascade < cascadeCount; cascade++)
-		{
-			// Practical split scheme: a blend of logarithmic and uniform splits.
-			const float fraction = static_cast<float>(cascade + 1) / static_cast<float>(cascadeCount);
-			const float logarithmic = nearClip * std::pow(farClip / nearClip, fraction);
-			const float uniform = nearClip + (farClip - nearClip) * fraction;
-			const float sliceFar = 0.8f * logarithmic + 0.2f * uniform;
-
-			// Bounding sphere of the view frustum slice: its size does not change when the camera rotates, which keeps
-			// the shadow texel footprint (and thus the edges) stable.
-			std::array<glm::vec3, 8> corners;
-			size_t cornerIndex = 0;
-			for (float distance : { sliceNear, sliceFar })
-			{
-				const float halfHeight = camera.Orthographic ? camera.VerticalFOV * 0.5f : distance * tanHalfFOV;
-				const float halfWidth = halfHeight * aspect;
-				for (float x : { -1.0f, 1.0f })
-				{
-					for (float y : { -1.0f, 1.0f })
-						corners[cornerIndex++] = glm::vec3(inverseView * glm::vec4(x * halfWidth, y * halfHeight, -distance, 1.0f));
-				}
-			}
-			glm::vec3 center(0.0f);
-			for (const glm::vec3& corner : corners)
-				center += corner;
-			center /= 8.0f;
-			float radius = 0.0f;
-			for (const glm::vec3& corner : corners)
-				radius = std::max(radius, glm::length(corner - center));
-			radius = std::ceil(radius * 16.0f) / 16.0f;
-
-			// Snap the cascade origin to whole texels so edges do not shimmer while the camera moves.
-			const float worldPerTexel = 2.0f * radius / mapSize;
-			glm::vec3 lightCenter = glm::vec3(lightView * glm::vec4(center, 1.0f));
-			lightCenter.x = std::floor(lightCenter.x / worldPerTexel) * worldPerTexel;
-			lightCenter.y = std::floor(lightCenter.y / worldPerTexel) * worldPerTexel;
-
-			CascadeBox& box = cascades[cascade];
-			box.Min = glm::vec2(lightCenter) - radius;
-			box.Max = glm::vec2(lightCenter) + radius;
-			box.FarZ = lightCenter.z - radius;
-			box.SphereNearZ = lightCenter.z + radius;
-			box.CasterNearZ = box.SphereNearZ;
-			box.WorldPerTexel = worldPerTexel;
-			box.Radius = radius;
-			frame.CascadeSplits[cascade] = sliceFar;
-			sliceNear = sliceFar;
-		}
-
-		Ref<Material> defaultMaterial = AssetManager::GetAsset<Material>(BuiltinAssets::DefaultMaterial);
-		for (auto [entity, meshRenderer, world] : scene.GetRegistry().view<MeshRendererComponent, WorldTransformComponent>().each())
-		{
-			if (!world.ActiveInHierarchy || !meshRenderer.CastShadows || !meshRenderer.Mesh.IsValid())
-				continue;
-			Ref<Mesh> mesh = AssetManager::GetAsset<Mesh>(meshRenderer.Mesh);
-			if (!mesh || !mesh->GetIndexBuffer())
-				continue;
-			const float determinant = glm::determinant(glm::mat3(world.Matrix));
-			if (!std::isfinite(determinant) || std::abs(determinant) < 1e-12f || !IsFinite(world.Matrix))
-				continue;
-
-			// A caster shadows the cascades whose square it overlaps and whose far side it does not lie beyond. Casters
-			// closer to the light than the cascade's sphere are not culled: the depth range grows to include them.
-			const AABB lightBounds = mesh->GetBounds().Transformed(lightView * world.Matrix);
-			uint32_t cascadeMask = 0;
-			for (uint32_t cascade = 0; cascade < cascadeCount; cascade++)
-			{
-				CascadeBox& box = cascades[cascade];
-				if (lightBounds.Max.x < box.Min.x || lightBounds.Min.x > box.Max.x || lightBounds.Max.y < box.Min.y || lightBounds.Min.y > box.Max.y
-					|| lightBounds.Max.z < box.FarZ)
-					continue;
-				cascadeMask |= 1u << cascade;
-				box.CasterNearZ = std::max(box.CasterNearZ, lightBounds.Max.z);
-			}
-			if (cascadeMask == 0)
-				continue;
-
-			const AABB bounds = mesh->GetBounds().Transformed(world.Matrix);
-			const float screenFraction = GetScreenFraction(camera, bounds.GetCenter(), glm::length(bounds.GetExtents()));
-			const bool mirrored = determinant < 0.0f;
-
-			// Materials are resolved once per submesh, not per cascade.
-			const std::vector<Submesh>& submeshes = mesh->GetSubmeshes();
-			m_CasterMaterials.assign(submeshes.size(), CasterMaterial());
-			for (uint32_t submeshIndex = 0; submeshIndex < submeshes.size(); submeshIndex++)
-			{
-				const Submesh& submesh = submeshes[submeshIndex];
-				const AssetHandle materialHandle = meshRenderer.Material.IsValid() ? meshRenderer.Material
-					: (submesh.Material.IsValid() ? submesh.Material : BuiltinAssets::DefaultMaterial);
-				Ref<Material> material = AssetManager::GetAsset<Material>(materialHandle);
-				if (!material)
-					material = defaultMaterial;
-				if (!material || material->GetProperties().AlphaMode == MaterialAlphaMode::Blend)
-					continue; // Transparent surfaces cast no shadows
-
-				CasterMaterial& casterMaterial = m_CasterMaterials[submeshIndex];
-				casterMaterial.MaterialIndex = GetMaterialIndex(material);
-				casterMaterial.DoubleSided = material->GetProperties().DoubleSided;
-				casterMaterial.AlphaMask = material->GetProperties().AlphaMode == MaterialAlphaMode::Mask;
-				casterMaterial.Casts = true;
-			}
-
-			for (uint32_t submeshIndex = 0; submeshIndex < submeshes.size(); submeshIndex++)
-			{
-				const CasterMaterial& casterMaterial = m_CasterMaterials[submeshIndex];
-				if (!casterMaterial.Casts)
-					continue;
-
-				// Shadow casters need no normal matrix: ShadowMesh.vert transforms positions only.
-				RenderData::InstanceData payload = {};
-				payload.World = world.Matrix;
-				payload.MaterialIndex = casterMaterial.MaterialIndex;
-				payload.EntityID = static_cast<uint32_t>(entity) + 1;
-				payload.Flags = mirrored ? RenderData::c_InstanceMirrored : 0u;
-				const uint32_t payloadIndex = static_cast<uint32_t>(m_ShadowPayloads.size());
-				m_ShadowPayloads.push_back(payload);
-
-				DrawRecord record;
-				record.MeshAsset = mesh.get();
-				record.SubmeshIndex = submeshIndex;
-				record.LOD = SelectLOD(submeshes[submeshIndex], screenFraction);
-				record.MaterialIndex = casterMaterial.MaterialIndex;
-				record.PayloadIndex = payloadIndex;
-				record.DoubleSided = casterMaterial.DoubleSided;
-				record.Mirrored = mirrored;
-				record.AlphaMask = casterMaterial.AlphaMask;
-				for (uint32_t cascade = 0; cascade < cascadeCount; cascade++)
-				{
-					if ((cascadeMask & (1u << cascade)) == 0)
-						continue;
-					record.Cascade = cascade;
-					m_ShadowRecords.push_back(record);
-				}
-			}
-			m_FrameMeshes.push_back(std::move(mesh));
-		}
-
-		for (uint32_t cascade = 0; cascade < cascadeCount; cascade++)
-		{
-			const CascadeBox& box = cascades[cascade];
-			// The depth range reaches from the far side of the slice's sphere to the nearest caster (up to a limit beyond
-			// which ShadowMesh.vert flattens casters onto the near plane).
-			const float nearZ = std::clamp(box.CasterNearZ, box.SphereNearZ, box.SphereNearZ + c_MaxShadowCasterDistance);
-			const float nearPlane = -nearZ;
-			const float farPlane = -box.FarZ;
-			const glm::mat4 projection = Math::OrthographicReverseZ(box.Min.x, box.Max.x, box.Min.y, box.Max.y, nearPlane, farPlane);
-			frame.CascadeViewProjection[cascade] = projection * lightView;
-			// Penumbrae are searched for blockers up to this distance from the receiver (world units).
-			const float searchDistance = 0.2f * box.Radius + 5.0f;
-			frame.CascadeData[cascade] = glm::vec4(box.WorldPerTexel, farPlane - nearPlane, searchDistance, 0.0f);
-		}
-
-		const float halfAngle = glm::radians(std::clamp(m_ShadowLight.Softness, 0.0f, 10.0f)) * 0.5f;
-		frame.ShadowParams = glm::vec4(2.0f * std::tan(halfAngle), 1.0f / mapSize, 0.0f, static_cast<float>(cascadeCount));
-		frame.ShadowBias = glm::vec4(m_ShadowLight.Bias, m_ShadowLight.NormalBias, 0.0f, 0.0f);
-
-		BuildBatches(m_ShadowRecords, m_ShadowPayloads, m_ShadowBatches, nullptr, m_ShadowInstances, true);
-		m_Stats.ShadowCasters = static_cast<uint32_t>(m_ShadowInstances.size());
-	}
-
 	void SceneRenderer::DrawShadows(nvrhi::ICommandList* commandList, uint32_t cascadeCount)
 	{
 		commandList->clearDepthStencilTexture(m_ShadowMap, nvrhi::AllSubresources, true, 0.0f, false, 0);
 		const float mapSize = static_cast<float>(m_Specification.ShadowMapSize);
-		for (const DrawBatch& batch : m_ShadowBatches)
+		for (const SceneDrawBatch& batch : m_ShadowBatches)
 		{
 			if (batch.Cascade >= cascadeCount)
 				continue;
-			const Submesh& submesh = batch.MeshAsset->GetSubmeshes()[batch.SubmeshIndex];
+			const Mesh* mesh = m_FrameMeshes[batch.MeshSlot];
+			const Submesh& submesh = mesh->GetSubmeshes()[batch.SubmeshIndex];
 			const MeshLOD& lod = submesh.LODs[batch.LOD];
 
 			nvrhi::GraphicsState state;
@@ -1181,10 +917,10 @@ namespace Strata
 			state.viewport.addViewportAndScissorRect(nvrhi::Viewport(mapSize, mapSize));
 			state.bindings = { m_ShadowBindingSet, Renderer::GetBindlessTextures().GetTable(), m_ShadowPushBindingSet };
 			state.vertexBuffers = {
-				nvrhi::VertexBufferBinding { batch.MeshAsset->GetPositionBuffer(), 0, 0 },
-				nvrhi::VertexBufferBinding { batch.MeshAsset->GetAttributeBuffer(), 1, 0 }
+				nvrhi::VertexBufferBinding { mesh->GetPositionBuffer(), 0, 0 },
+				nvrhi::VertexBufferBinding { mesh->GetAttributeBuffer(), 1, 0 }
 			};
-			state.indexBuffer = nvrhi::IndexBufferBinding { batch.MeshAsset->GetIndexBuffer(), nvrhi::Format::R32_UINT, 0 };
+			state.indexBuffer = nvrhi::IndexBufferBinding { mesh->GetIndexBuffer(), nvrhi::Format::R32_UINT, 0 };
 			commandList->setGraphicsState(state);
 			const uint32_t cascade = batch.Cascade;
 			commandList->setPushConstants(&cascade, sizeof(cascade));
@@ -1230,6 +966,9 @@ namespace Strata
 			m_Errors.Report(fmt::format("failed to allocate the {} buffer ({} bytes)", name, capacity));
 			return false;
 		}
+		// Frames in flight may still read the replaced buffer.
+		if (buffer)
+			Renderer::ReleaseDeferred({ nvrhi::ResourceHandle(buffer.Get()) });
 		buffer = created;
 		outRecreated = true;
 		return true;
@@ -1546,64 +1285,6 @@ namespace Strata
 		return pipeline;
 	}
 
-	void SceneRenderer::CountPendingAsset(AssetHandle handle)
-	{
-		// Only registered assets that are still on their way count; unknown and failed ones never arrive.
-		const AssetState state = AssetManager::GetAssetState(handle);
-		if (AssetManager::IsHandleValid(handle) && state != AssetState::Failed && state != AssetState::Ready)
-			m_Stats.PendingAssets++;
-	}
-
-	uint32_t SceneRenderer::ResolveTexture(AssetHandle handle, uint32_t missingSlot, uint32_t loadingSlot)
-	{
-		if (!handle.IsValid())
-			return PackTextureSlot(missingSlot, 0);
-
-		Ref<Texture> texture = AssetManager::GetAsset<Texture>(handle);
-		if (!texture || texture->GetBindlessSlot() == BindlessTextureTable::c_InvalidSlot)
-		{
-			CountPendingAsset(handle);
-			return PackTextureSlot(loadingSlot, 0);
-		}
-		return PackTextureSlot(texture->GetBindlessSlot(), GetSamplerIndex(texture->GetSpecification()), texture->GetSpecification().Grayscale);
-	}
-
-	uint32_t SceneRenderer::GetMaterialIndex(const Ref<Material>& material)
-	{
-		auto it = m_MaterialIndices.find(material.get());
-		if (it != m_MaterialIndices.end())
-			return it->second;
-
-		const MaterialProperties& properties = material->GetProperties();
-		RenderData::MaterialData data = {};
-		data.BaseColor = properties.BaseColor;
-		data.Emissive = glm::vec4(properties.EmissiveColor * properties.EmissiveIntensity, 0.0f);
-		data.Metallic = properties.Metallic;
-		data.Roughness = properties.Roughness;
-		data.NormalScale = properties.NormalScale;
-		data.OcclusionStrength = properties.OcclusionStrength;
-		data.AlphaCutoff = properties.AlphaCutoff;
-		data.Flags = (properties.AlphaMode == MaterialAlphaMode::Mask ? RenderData::c_MaterialAlphaMask : 0u)
-			| (properties.AlphaMode == MaterialAlphaMode::Blend ? RenderData::c_MaterialAlphaBlend : 0u)
-			| (properties.Unlit ? RenderData::c_MaterialUnlit : 0u)
-			| (properties.DoubleSided ? RenderData::c_MaterialDoubleSided : 0u);
-		data.UVTransform = glm::vec4(properties.UVTiling, properties.UVOffset);
-
-		// Missing maps use neutral textures; maps still loading use neutral ones too, except emission (black until the
-		// map arrives, so surfaces do not flash at full emissive strength).
-		data.BaseColorMap = ResolveTexture(properties.BaseColorMap, BindlessTextureTable::c_WhiteSlot, BindlessTextureTable::c_WhiteSlot);
-		data.MetallicRoughnessMap = ResolveTexture(properties.MetallicRoughnessMap, BindlessTextureTable::c_WhiteSlot, BindlessTextureTable::c_WhiteSlot);
-		data.NormalMap = ResolveTexture(properties.NormalMap, BindlessTextureTable::c_FlatNormalSlot, BindlessTextureTable::c_FlatNormalSlot);
-		data.OcclusionMap = ResolveTexture(properties.OcclusionMap, BindlessTextureTable::c_WhiteSlot, BindlessTextureTable::c_WhiteSlot);
-		data.EmissiveMap = ResolveTexture(properties.EmissiveMap, BindlessTextureTable::c_WhiteSlot, BindlessTextureTable::c_BlackSlot);
-
-		const uint32_t index = static_cast<uint32_t>(m_Materials.size());
-		m_Materials.push_back(data);
-		m_MaterialIndices.emplace(material.get(), index);
-		m_FrameMaterials.push_back(material);
-		return index;
-	}
-
 	void SceneRenderer::CollectLights(Scene& scene, const SceneCamera& camera, bool preview, RenderData::FrameConstants& frame)
 	{
 		entt::registry& registry = scene.GetRegistry();
@@ -1740,88 +1421,9 @@ namespace Strata
 		frame.ClusterDepth = glm::vec4(scale, -scale * std::log(sliceNear), std::min(camera.Near, 0.0f), c_ClusterDepthEnd);
 	}
 
-	void SceneRenderer::CollectDraws(Scene& scene, const SceneCamera& camera)
-	{
-		const Frustum frustum(camera.Projection * camera.View);
-		m_DrawRecords.clear();
-		m_InstancePayloads.clear();
-
-		Ref<Material> defaultMaterial = AssetManager::GetAsset<Material>(BuiltinAssets::DefaultMaterial);
-		entt::registry& registry = scene.GetRegistry();
-		for (auto [entity, meshRenderer, world] : registry.view<MeshRendererComponent, WorldTransformComponent>().each())
-		{
-			if (!world.ActiveInHierarchy || !meshRenderer.Mesh.IsValid())
-				continue;
-
-			Ref<Mesh> mesh = AssetManager::GetAsset<Mesh>(meshRenderer.Mesh, AssetPriority::High);
-			if (!mesh || !mesh->GetIndexBuffer())
-			{
-				CountPendingAsset(meshRenderer.Mesh);
-				continue;
-			}
-
-			const glm::mat4& transform = world.Matrix;
-			const float determinant = glm::determinant(glm::mat3(transform));
-			if (!std::isfinite(determinant) || std::abs(determinant) < 1e-12f || !IsFinite(world.Matrix))
-				continue; // Zero scale: nothing to see
-			const AABB bounds = mesh->GetBounds().Transformed(transform);
-			if (!frustum.IsAABBVisible(bounds))
-			{
-				m_Stats.CulledInstances++;
-				continue;
-			}
-
-			// Projected size of the bounding sphere as a fraction of the viewport height selects the level of detail.
-			const float screenFraction = GetScreenFraction(camera, bounds.GetCenter(), glm::length(bounds.GetExtents()));
-			const float viewDepth = -(camera.View * glm::vec4(bounds.GetCenter(), 1.0f)).z;
-			const bool mirrored = determinant < 0.0f;
-
-			RenderData::InstanceData payload = {};
-			payload.World = transform;
-			payload.NormalMatrix = glm::transpose(glm::inverse(transform));
-			payload.EntityID = static_cast<uint32_t>(entity) + 1;
-			payload.Flags = mirrored ? RenderData::c_InstanceMirrored : 0u;
-
-			const std::vector<Submesh>& submeshes = mesh->GetSubmeshes();
-			for (uint32_t submeshIndex = 0; submeshIndex < submeshes.size(); submeshIndex++)
-			{
-				const Submesh& submesh = submeshes[submeshIndex];
-				const AssetHandle materialHandle = meshRenderer.Material.IsValid() ? meshRenderer.Material
-					: (submesh.Material.IsValid() ? submesh.Material : BuiltinAssets::DefaultMaterial);
-				Ref<Material> material = AssetManager::GetAsset<Material>(materialHandle, AssetPriority::High);
-				if (!material)
-				{
-					CountPendingAsset(materialHandle);
-					material = defaultMaterial;
-				}
-				if (!material)
-					continue;
-
-				const MaterialProperties& properties = material->GetProperties();
-				payload.MaterialIndex = GetMaterialIndex(material);
-				DrawRecord record;
-				record.MeshAsset = mesh.get();
-				record.SubmeshIndex = submeshIndex;
-				record.LOD = SelectLOD(submesh, screenFraction);
-				record.MaterialIndex = payload.MaterialIndex;
-				record.PayloadIndex = static_cast<uint32_t>(m_InstancePayloads.size());
-				record.ViewDepth = viewDepth;
-				record.DoubleSided = properties.DoubleSided;
-				record.Mirrored = mirrored;
-				record.Transparent = properties.AlphaMode == MaterialAlphaMode::Blend;
-				m_InstancePayloads.push_back(payload);
-				m_DrawRecords.push_back(record);
-				m_Stats.InstancesPerLOD[std::min<size_t>(record.LOD, SceneRendererStats::c_LODStatCount - 1)]++;
-			}
-			m_FrameMeshes.push_back(std::move(mesh));
-		}
-
-		BuildBatches(m_DrawRecords, m_InstancePayloads, m_OpaqueBatches, &m_TransparentBatches, m_Instances, false);
-	}
-
 	void SceneRenderer::DrawBatches(nvrhi::ICommandList* commandList, Pass pass, bool transparent)
 	{
-		const std::vector<DrawBatch>& batches = transparent ? m_TransparentBatches : m_OpaqueBatches;
+		const std::vector<SceneDrawBatch>& batches = transparent ? m_TransparentBatches : m_OpaqueBatches;
 		if (batches.empty())
 			return;
 
@@ -1830,16 +1432,17 @@ namespace Strata
 		state.viewport.addViewportAndScissorRect(nvrhi::Viewport(static_cast<float>(m_ViewportSize.x), static_cast<float>(m_ViewportSize.y)));
 		state.bindings = { m_SceneBindingSet, Renderer::GetBindlessTextures().GetTable() };
 
-		for (const DrawBatch& batch : batches)
+		for (const SceneDrawBatch& batch : batches)
 		{
-			const Submesh& submesh = batch.MeshAsset->GetSubmeshes()[batch.SubmeshIndex];
+			const Mesh* mesh = m_FrameMeshes[batch.MeshSlot];
+			const Submesh& submesh = mesh->GetSubmeshes()[batch.SubmeshIndex];
 			const MeshLOD& lod = submesh.LODs[batch.LOD];
 			state.pipeline = GetScenePipeline(PipelineKey { pass, batch.DoubleSided, batch.Mirrored });
 			state.vertexBuffers = {
-				nvrhi::VertexBufferBinding { batch.MeshAsset->GetPositionBuffer(), 0, 0 },
-				nvrhi::VertexBufferBinding { batch.MeshAsset->GetAttributeBuffer(), 1, 0 }
+				nvrhi::VertexBufferBinding { mesh->GetPositionBuffer(), 0, 0 },
+				nvrhi::VertexBufferBinding { mesh->GetAttributeBuffer(), 1, 0 }
 			};
-			state.indexBuffer = nvrhi::IndexBufferBinding { batch.MeshAsset->GetIndexBuffer(), nvrhi::Format::R32_UINT, 0 };
+			state.indexBuffer = nvrhi::IndexBufferBinding { mesh->GetIndexBuffer(), nvrhi::Format::R32_UINT, 0 };
 			commandList->setGraphicsState(state);
 
 			nvrhi::DrawArguments arguments;
@@ -1897,6 +1500,16 @@ namespace Strata
 	bool SceneRenderer::Render(Scene& scene, const SceneCamera& camera, nvrhi::IFramebuffer* target, const SceneRenderOptions& options)
 	{
 		ST_PROFILE_FUNCTION();
+		const bool rendered = RenderFrame(scene, camera, target, options);
+		// The references the frame resolved end with it, so a renderer that stops rendering (a capture renderer between
+		// captures, a hidden view) keeps none of the meshes, materials and textures it drew resident (the environment
+		// cache keeps the sky light's map) and no asset manager alive.
+		ReleaseFrameAssets();
+		return rendered;
+	}
+
+	bool SceneRenderer::RenderFrame(Scene& scene, const SceneCamera& camera, nvrhi::IFramebuffer* target, const SceneRenderOptions& options)
+	{
 		m_Stats = {};
 		if (m_ViewportSize.x == 0 || m_ViewportSize.y == 0)
 			return false; // Nothing to show (e.g. a minimized window); not an error
@@ -1908,12 +1521,13 @@ namespace Strata
 		if (target && !ValidateTarget(target))
 			return false;
 
-		scene.UpdateWorldTransforms();
-
-		m_Materials.clear();
-		m_MaterialIndices.clear();
-		m_FrameMaterials.clear();
-		m_FrameMeshes.clear();
+		// The scene's render proxies follow what changed since the last frame (world transforms included), and their mesh
+		// layouts what the asset manager loaded.
+		const Ref<AssetManagerBase>& assets = AssetManager::GetActive();
+		RenderScene& renderScene = RenderScene::Get(scene);
+		m_Stats.ProxyUpdates = renderScene.Sync(assets);
+		m_Assets.BeginFrame(assets);
+		PrepareExtraction(renderScene);
 
 		RenderData::FrameConstants frame = {};
 		frame.View = camera.View;
@@ -1931,8 +1545,15 @@ namespace Strata
 		const bool preview = options.PreviewEnvironment && NeedsPreviewLighting(scene);
 		m_Stats.PreviewLighting = preview;
 		CollectLights(scene, camera, preview, frame);
-		CollectDraws(scene, camera);
-		CollectShadowCasters(scene, camera, frame);
+
+		const auto extractionStart = std::chrono::steady_clock::now();
+		const Frustum frustum(frame.ViewProjection);
+		CullView(renderScene, camera, frustum);
+		FindShadowCasters(renderScene, camera, frame);
+		ResolveAssets(renderScene);
+		GatherDraws(renderScene, camera);
+		GatherShadowDraws(renderScene, camera, frame);
+		m_Stats.ExtractMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - extractionStart).count() - m_Stats.SortMs;
 		bool degraded = false; // Rendered with a reported limitation: keep the error so it is not logged every frame
 		if (frame.ShadowParams.w > 0.0f && !EnsureShadowMap())
 		{
@@ -1944,19 +1565,24 @@ namespace Strata
 		frame.AOParams = glm::vec4(postProcess.AmbientOcclusion ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
 
 		bool buffersRecreated = !m_SceneBindingSet || m_BoundShadowMap != (m_ShadowMap ? m_ShadowMap.Get() : m_DummyShadowMap.Get());
-		const bool buffersReady = EnsureBufferCapacity(m_InstanceBuffer, m_Instances.size(), sizeof(RenderData::InstanceData), "Instances", buffersRecreated)
-			&& EnsureBufferCapacity(m_ShadowInstanceBuffer, m_ShadowInstances.size(), sizeof(RenderData::InstanceData), "ShadowInstances", buffersRecreated)
-			&& EnsureBufferCapacity(m_MaterialBuffer, m_Materials.size(), sizeof(RenderData::MaterialData), "Materials", buffersRecreated)
+		bool instancesRecreated = false;
+		bool materialsRecreated = false;
+		bool drawListsRecreated = false;
+		const bool buffersReady = EnsureBufferCapacity(m_InstanceBuffer, renderScene.GetInstances().size(), sizeof(RenderData::InstanceData), "Instances", instancesRecreated)
+			&& EnsureBufferCapacity(m_MaterialBuffer, m_MaterialData.size(), sizeof(RenderData::MaterialData), "Materials", materialsRecreated)
+			&& EnsureBufferCapacity(m_DrawListBuffer, m_DrawInstancesBuild.size(), sizeof(uint32_t), "DrawList", drawListsRecreated)
+			&& EnsureBufferCapacity(m_ShadowDrawListBuffer, m_ShadowDrawInstancesBuild.size(), sizeof(uint32_t), "ShadowDrawList", drawListsRecreated)
 			&& EnsureBufferCapacity(m_LightBuffer, m_Lights.size(), sizeof(RenderData::LightData), "Lights", buffersRecreated)
 			&& EnsureBufferCapacity(m_LightBoundsBuffer, m_LightBounds.size(), sizeof(RenderData::LightBounds), "LightBounds", buffersRecreated);
+		buffersRecreated = buffersRecreated || instancesRecreated || materialsRecreated || drawListsRecreated;
 		if (!buffersReady)
 		{
+			// A replaced buffer holds nothing yet: upload everything to the next one.
+			m_FullUpload = m_FullUpload || instancesRecreated || materialsRecreated || drawListsRecreated;
 			m_Stats = {};
 			return false;
 		}
 
-		m_Stats.Instances = static_cast<uint32_t>(m_Instances.size());
-		m_Stats.Materials = static_cast<uint32_t>(m_Materials.size());
 		m_Stats.Lights = static_cast<uint32_t>(m_Lights.size()) + (frame.DirectionalLightDirection.w > 0.0f ? 1u : 0u);
 
 		nvrhi::ICommandList* commandList = m_CommandList;
@@ -1969,22 +1595,18 @@ namespace Strata
 			commandList->close();
 			m_Device->executeCommandList(commandList); // Keeps the environment processing that was recorded
 			m_Errors.Report("failed to create the scene binding sets");
+			m_FullUpload = m_FullUpload || instancesRecreated || materialsRecreated || drawListsRecreated;
 			m_Stats = {};
 			return false;
 		}
 
 		commandList->writeBuffer(m_FrameConstantBuffer, &frame, sizeof(frame));
-		if (!m_Instances.empty())
-			commandList->writeBuffer(m_InstanceBuffer, m_Instances.data(), m_Instances.size() * sizeof(RenderData::InstanceData));
-		if (!m_Materials.empty())
-			commandList->writeBuffer(m_MaterialBuffer, m_Materials.data(), m_Materials.size() * sizeof(RenderData::MaterialData));
+		UploadSceneData(commandList, renderScene, instancesRecreated, materialsRecreated, drawListsRecreated);
 		if (!m_Lights.empty())
 		{
 			commandList->writeBuffer(m_LightBuffer, m_Lights.data(), m_Lights.size() * sizeof(RenderData::LightData));
 			commandList->writeBuffer(m_LightBoundsBuffer, m_LightBounds.data(), m_LightBounds.size() * sizeof(RenderData::LightBounds));
 		}
-		if (!m_ShadowInstances.empty())
-			commandList->writeBuffer(m_ShadowInstanceBuffer, m_ShadowInstances.data(), m_ShadowInstances.size() * sizeof(RenderData::InstanceData));
 
 		if (!m_Lights.empty())
 		{
@@ -2078,7 +1700,11 @@ namespace Strata
 		m_Stats.TextGlyphs = textStats.Glyphs;
 		m_Stats.PendingTextGlyphs = textStats.PendingGlyphs;
 		m_Stats.RasterizedTextGlyphs = textStats.RasterizedGlyphs;
-		m_Stats.PendingAssets += textStats.PendingFonts;
+		const AssetResolveStats& assetStats = m_Assets.GetStats();
+		m_Stats.PendingAssets = assetStats.Pending + textStats.PendingFonts;
+		m_Stats.RequestsByVisibility = assetStats.Requested;
+		m_Stats.PrefetchRequests = assetStats.Prefetched;
+		m_Stats.GetAssetCalls = assetStats.GetAssetCalls;
 
 		// Overlays (and text) are composed in the output texture, which is then copied into the target.
 		const bool overlays = HasOverlays(options) || text;
@@ -2285,15 +1911,26 @@ namespace Strata
 		if (drawText)
 			m_TextRenderer->Draw(commandList, m_OverlayFramebuffer, false);
 
-		// Selection outline from the entity-ID buffer (ids + 1, sorted for the shader's binary search).
-		m_SelectionIDs.clear();
-		for (const Entity& entity : options.SelectedEntities)
+		// Selection outline from the entity-ID buffer (ids + 1, sorted for the shader's binary search). The sorted list and its
+		// upload are kept while the same entities of the same scene stay selected and no entity was created or destroyed
+		// (which would change which of them are valid).
+		const bool selectionChanged = m_SelectionSceneId != m_RenderSceneId || m_SelectionHierarchyVersion != scene.GetHierarchyVersion()
+			|| !std::equal(options.SelectedEntities.begin(), options.SelectedEntities.end(), m_SelectionEntities.begin(), m_SelectionEntities.end());
+		if (selectionChanged)
 		{
-			if (entity.GetScene() == &scene && entity.IsValid())
-				m_SelectionIDs.push_back(static_cast<uint32_t>(entity.GetHandle()) + 1);
+			m_SelectionSceneId = m_RenderSceneId;
+			m_SelectionHierarchyVersion = scene.GetHierarchyVersion();
+			m_SelectionEntities.assign(options.SelectedEntities.begin(), options.SelectedEntities.end());
+			m_SelectionIDs.clear();
+			for (const Entity& entity : options.SelectedEntities)
+			{
+				if (entity.GetScene() == &scene && entity.IsValid())
+					m_SelectionIDs.push_back(static_cast<uint32_t>(entity.GetHandle()) + 1);
+			}
+			std::sort(m_SelectionIDs.begin(), m_SelectionIDs.end());
+			m_SelectionIDs.erase(std::unique(m_SelectionIDs.begin(), m_SelectionIDs.end()), m_SelectionIDs.end());
+			m_SelectionUploaded = false;
 		}
-		std::sort(m_SelectionIDs.begin(), m_SelectionIDs.end());
-		m_SelectionIDs.erase(std::unique(m_SelectionIDs.begin(), m_SelectionIDs.end()), m_SelectionIDs.end());
 		if (!m_SelectionIDs.empty())
 		{
 			bool recreated = false;
@@ -2314,7 +1951,11 @@ namespace Strata
 					return false;
 				}
 			}
-			commandList->writeBuffer(m_SelectionBuffer, m_SelectionIDs.data(), m_SelectionIDs.size() * sizeof(uint32_t));
+			if (recreated || !m_SelectionUploaded)
+			{
+				commandList->writeBuffer(m_SelectionBuffer, m_SelectionIDs.data(), m_SelectionIDs.size() * sizeof(uint32_t));
+				m_SelectionUploaded = true;
+			}
 
 			RenderData::OutlineParameters parameters = {};
 			parameters.Color = options.SelectionColor;

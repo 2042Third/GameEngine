@@ -352,7 +352,7 @@ TEST_SUITE("Asset")
 		REQUIRE(manager->WaitForPendingLoads());
 		CHECK(manager->GetAssetState(UUID(0x6000)) == AssetState::Ready);
 
-		// Reloading an asset that was never requested does nothing.
+		// Reloading an asset that was never requested loads nothing.
 		const std::filesystem::path otherPath = WritePack("ReloadIdle", { { MakeMetadata(0x6001, AssetType::Material, "N.stmat"), CreateMaterialBytes(0.5f) } });
 		Ref<RuntimeAssetManager> other = RuntimeAssetManager::Create(otherPath);
 		REQUIRE(other);
@@ -396,6 +396,10 @@ TEST_SUITE("Asset")
 		CHECK(changed());
 		manager->UnloadAsset(UUID(0x6100));
 		CHECK_FALSE(changed());
+		// A reload of an asset that is not loaded changes its source, not an object: published all the same.
+		manager->ReloadAsset(UUID(0x6100));
+		CHECK(changed());
+		CHECK(manager->GetAssetState(UUID(0x6100)) == AssetState::Unloaded);
 
 		AssetMetadata metadata;
 		metadata.Name = "Runtime";

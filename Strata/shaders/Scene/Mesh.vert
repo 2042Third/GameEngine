@@ -21,15 +21,16 @@ invariant gl_Position;
 
 void main()
 {
-	InstanceData instance = u_Instances[gl_InstanceIndex];
-	vec4 worldPosition = instance.World * vec4(a_Position, 1.0);
-	v_WorldPosition = worldPosition.xyz;
-	v_Normal = normalize(mat3(instance.NormalMatrix) * a_Normal);
+	uint instanceIndex = u_DrawList[gl_InstanceIndex];
+	InstanceData instance = u_Instances[instanceIndex];
+	vec3 worldPosition = TransformPosition(instance, a_Position);
+	v_WorldPosition = worldPosition;
+	v_Normal = normalize(TransformNormal(instance, a_Normal));
 	// A mirroring transform reverses the handedness of the tangent frame: cross(N, T) then points opposite to the
 	// transformed bitangent, so its sign flips.
 	float handedness = (a_Tangent.w < 0.0 ? -1.0 : 1.0) * ((instance.Flags & ST_INSTANCE_MIRRORED) != 0u ? -1.0 : 1.0);
-	v_Tangent = vec4(normalize(mat3(instance.World) * a_Tangent.xyz), handedness);
+	v_Tangent = vec4(normalize(TransformDirection(instance, a_Tangent.xyz)), handedness);
 	v_TexCoord = a_TexCoord;
-	v_InstanceIndex = gl_InstanceIndex;
-	gl_Position = u_Frame.ViewProjection * worldPosition;
+	v_InstanceIndex = instanceIndex;
+	gl_Position = u_Frame.ViewProjection * vec4(worldPosition, 1.0);
 }

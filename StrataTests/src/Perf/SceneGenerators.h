@@ -1,10 +1,12 @@
 #pragma once
 
+#include "Strata/Asset/AssetTypes.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -51,6 +53,20 @@ namespace Strata::Tests::Perf
 
 	// A primary camera looking toward the origin and a directional light, as a scene opened in the editor has.
 	void AddCameraAndLight(Scene& scene);
+
+	// Spacing of the generated grids (CreateCubeGrid, CreatePointLightGrid): the unit cubes leave a unit of space between
+	// them.
+	constexpr float c_GridSpacing = 2.0f;
+
+	// The scaling measurements of the renderer: `count` unit cubes ("Cube", the built-in cube mesh) on a square grid of
+	// c_GridSpacing in the XZ plane, centered on the origin, resting on y = 0, in row order. `materials` gives cube i the
+	// material materials[i % size] (empty: the default material). With a valid `parent` the cubes are its children (a
+	// group selected as one), otherwise roots.
+	std::vector<Entity> CreateCubeGrid(Scene& scene, size_t count, std::span<const AssetHandle> materials = {}, Entity parent = {});
+
+	// `count` point lights ("Light") of `range` on the same kind of grid, `height` above the ground; children of a valid
+	// `parent`, otherwise roots.
+	std::vector<Entity> CreatePointLightGrid(Scene& scene, size_t count, float range, float height = 2.0f, Entity parent = {});
 
 	// The job system as the editor and games start it (a worker per hardware thread but one), for the lifetime of this
 	// object: large scene updates spread over it, so measurements of generated scenes run with it.

@@ -593,20 +593,22 @@ TEST_SUITE("Editor.Viewport")
 			ViewportHarness harness;
 			harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory / "Game") }, { "name", "Game" } });
 			nlohmann::json settings = harness.Run("viewport.getSettings");
-			for (const char* key : { "grid", "selectionOutline", "sceneGizmos", "stats", "previewLighting", "gameUI", "gizmo", "space", "snap",
-				"translateSnap", "rotateSnap", "scaleSnap" })
+			for (const char* key : { "grid", "selectionOutline", "sceneGizmos", "allColliders", "stats", "previewLighting", "gameUI", "gizmo", "space",
+				"snap", "translateSnap", "rotateSnap", "scaleSnap" })
 			{
 				CAPTURE(key);
 				CHECK(settings.contains(key));
 			}
-			CHECK(settings.size() == 12);
+			CHECK(settings.size() == 13);
+			CHECK(settings["allColliders"] == false);
 			CHECK(settings["previewLighting"] == true);
 			CHECK(settings["gameUI"] == false);
 			CHECK(settings["snap"] == false);
 
 			settings = harness.Run("viewport.setSettings", { { "grid", false }, { "gameUI", true }, { "previewLighting", false }, { "gizmo", "Rotate" },
-				{ "space", "Local" }, { "snap", true }, { "rotateSnap", 45 } });
+				{ "space", "Local" }, { "snap", true }, { "rotateSnap", 45 }, { "allColliders", true } });
 			CHECK(settings["grid"] == false);
+			CHECK(settings["allColliders"] == true);
 			CHECK(settings["gameUI"] == true);
 			CHECK(settings["previewLighting"] == false);
 			CHECK(settings["gizmo"] == "Rotate");
@@ -632,6 +634,7 @@ TEST_SUITE("Editor.Viewport")
 		CHECK_FALSE(harness.Context.GetViewport().GetSettings().PreviewLighting);
 		CHECK(harness.Context.GetViewport().GetSettings().ShowGameUI);
 		CHECK_FALSE(harness.Context.GetViewport().GetSettings().ShowGrid);
+		CHECK(harness.Context.GetViewport().GetSettings().AllColliders);
 	}
 
 	TEST_CASE("Every scene keeps its own editor camera, and a scene seen for the first time is framed")

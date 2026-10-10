@@ -36,6 +36,7 @@ namespace Strata
 			{ "ShowGrid", ShowGrid },
 			{ "ShowSelectionOutline", ShowSelectionOutline },
 			{ "ShowSceneGizmos", ShowSceneGizmos },
+			{ "AllColliders", AllColliders },
 			{ "ShowStats", ShowStats },
 			{ "PreviewLighting", PreviewLighting },
 			{ "ShowGameUI", ShowGameUI },
@@ -61,7 +62,8 @@ namespace Strata
 
 		ViewportSettings result = *this;
 		for (const auto& [key, flag] : { std::pair<const char*, bool*> { "ShowGrid", &result.ShowGrid }, { "ShowSelectionOutline", &result.ShowSelectionOutline },
-			{ "ShowSceneGizmos", &result.ShowSceneGizmos }, { "ShowStats", &result.ShowStats }, { "PreviewLighting", &result.PreviewLighting },
+			{ "ShowSceneGizmos", &result.ShowSceneGizmos }, { "AllColliders", &result.AllColliders }, { "ShowStats", &result.ShowStats },
+			{ "PreviewLighting", &result.PreviewLighting },
 			{ "ShowGameUI", &result.ShowGameUI }, { "Snap", &result.Snap } })
 		{
 			if (const auto it = json.find(key); it != json.end())

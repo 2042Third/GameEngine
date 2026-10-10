@@ -20,10 +20,11 @@ layout(push_constant) uniform ShadowParameters
 
 void main()
 {
-	InstanceData instance = u_Instances[gl_InstanceIndex];
+	uint instanceIndex = u_DrawList[gl_InstanceIndex];
+	InstanceData instance = u_Instances[instanceIndex];
 	v_TexCoord = a_TexCoord;
-	v_InstanceIndex = gl_InstanceIndex;
-	vec4 position = u_Frame.CascadeViewProjection[u_Shadow.Cascade] * (instance.World * vec4(a_Position, 1.0));
+	v_InstanceIndex = instanceIndex;
+	vec4 position = u_Frame.CascadeViewProjection[u_Shadow.Cascade] * vec4(TransformPosition(instance, a_Position), 1.0);
 	// Pancaking: casters between the light and the cascade's near plane are flattened onto it (reversed-Z: the near
 	// plane is depth 1) instead of being clipped, so they still shadow the cascade. The projection is orthographic.
 	position.z = min(position.z, position.w);
