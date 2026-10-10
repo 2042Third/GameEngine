@@ -584,6 +584,43 @@ TEST_SUITE("Editor.Commands")
 		CHECK(harness.Run("scene.info")["settings"]["gravity"][1].get<double>() == doctest::Approx(-9.81));
 	}
 
+	TEST_CASE("Physics capacities are validated and changed in one undo step")
+	{
+		CommandHarness harness;
+		const nlohmann::json automatic = { { "maxBodies", 0 }, { "maxBodyPairs", 0 }, { "maxContactConstraints", 0 } };
+		CHECK(harness.Run("scene.info")["settings"]["physicsCapacity"] == automatic);
+
+		// Invalid values change nothing: they are not counts in range, or not capacities at all.
+		const nlohmann::json invalid[] = {
+			{ { "maxBodies", -1 } },
+			{ { "maxBodies", uint64_t(PhysicsCapacitySettings::c_MaxBodiesLimit) + 1 } },
+			{ { "maxBodyPairs", 2.5 } },
+			{ { "maxContactConstraints", "lots" } },
+			{ { "maxBodies", 64 }, { "gravityScale", 2 } },
+			nlohmann::json::array({ 64 }) };
+		for (const nlohmann::json& capacity : invalid)
+		{
+			INFO(capacity.dump());
+			CHECK(harness.Commands.Execute(harness.Context, "scene.setSettings", { { "physicsCapacity", capacity }, { "fixedTimestep", 0.02 } }).ErrorKind == EditorCommandError::InvalidParameters);
+		}
+		CHECK(harness.Run("scene.info")["settings"]["physicsCapacity"] == automatic);
+		CHECK(harness.Run("scene.info")["settings"]["fixedTimestep"].get<double>() == doctest::Approx(1.0 / 60.0));
+
+		// Only the given capacities change, in one step with the other settings.
+		const size_t steps = harness.Context.GetUndoStack().GetPosition();
+		const nlohmann::json changed = harness.Run("scene.setSettings", { { "physicsCapacity", { { "maxBodies", 200000 }, { "maxContactConstraints", 50000 } } },
+			{ "fixedTimestep", 0.02 } })["settings"];
+		CHECK(changed["physicsCapacity"] == nlohmann::json { { "maxBodies", 200000 }, { "maxBodyPairs", 0 }, { "maxContactConstraints", 50000 } });
+		CHECK(harness.Context.GetEditScene()->GetSettings().PhysicsCapacity == PhysicsCapacitySettings { 200000, 0, 50000 });
+		CHECK(harness.Context.GetUndoStack().GetPosition() == steps + 1);
+
+		harness.Run("edit.undo");
+		CHECK(harness.Run("scene.info")["settings"]["physicsCapacity"] == automatic);
+		CHECK(harness.Run("scene.info")["settings"]["fixedTimestep"].get<double>() == doctest::Approx(1.0 / 60.0));
+		harness.Run("edit.redo");
+		CHECK(harness.Context.GetEditScene()->GetSettings().PhysicsCapacity == PhysicsCapacitySettings { 200000, 0, 50000 });
+	}
+
 	TEST_CASE("Components this build does not register survive play, duplication, prefabs, undo and saving")
 	{
 		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("UnknownComponentsProject") / "Game";

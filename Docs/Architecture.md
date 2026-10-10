@@ -170,7 +170,13 @@ rules: AGENTS.md, "Architecture rules" and "Rendering".
 Jolt world from RigidBody and collider components and steps it; `PhysicsRuntime` reference-counts Jolt's global
 state; `PhysicsJobSystem` runs Jolt's jobs on the engine's worker pool; `PhysicsMeshShapes` cooks mesh collider shapes
 on jobs and caches them process-wide; `AssetMeshProvider` supplies mesh data from the active asset manager.
-`PhysicsTypes.h` has the settings, layers and statistics. Other systems use physics through the scene services
+`PhysicsTypes.h` has the settings, layers and statistics. A world's capacities are fixed when it is created: those the
+scene does not set (`SceneSettings::PhysicsCapacity`) are sized from the bodies the scene starts with
+(`PhysicsWorld::ResolveCapacities`: at least 65,536 bodies, the next power of two of twice the bodies; four body pairs per
+body slot; at least 10,240 contacts, two per body; scratch memory for them), bodies that find the world full wait for a
+slot and are reported in one error, steps that overflow the pair or contact buffers are counted
+(`PhysicsStats::BodyOverflowCount`, `ContactOverflowSteps`), and what a world lacked is remembered per scene name, so the
+scene's next world is sized for it. Other systems use physics through the scene services
 `PhysicsSystem` offers (`ICollisionEventSource`, `IBodyMotionQuery`, `IBodyControl`, `IPhysicsQueries`, with
 `CollisionEvent` and `RaycastHit`, in `Scene/SceneServices.h`); collision events collected during a step are dispatched
 afterwards on the main thread to the listeners.
@@ -410,7 +416,9 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
 - Gameplay asks the scene's owner to quit or to switch scenes (`Scene::RequestQuit`, `RequestSceneLoad`); owners honor
   the requests after the update. The owners are the editor's play mode (`EditorContext::StartRuntime` plays a
   `Scene::Copy` of the edited scene; `Stop` discards it) and `GameRuntime`.
-- `SceneSettings` holds gravity, the fixed timestep (1/60 s) and `MaxFixedStepsPerFrame`.
+- `SceneSettings` holds gravity, the fixed timestep (1/60 s), `MaxFixedStepsPerFrame` and the physics world's capacities
+  (`PhysicsCapacity`: bodies, body pairs and contact constraints; 0, the default, sizes one automatically). All of it is
+  saved with the scene and changed with `scene.setSettings` (one undo step).
 
 ### Scene services
 

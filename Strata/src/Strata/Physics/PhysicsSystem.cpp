@@ -21,6 +21,13 @@ namespace Strata
 			return s_DefaultSettings;
 		}
 
+		// What the worlds of each scene (by name) needed beyond their capacities, in this process.
+		std::unordered_map<std::string, PhysicsCapacityDemand>& GetCapacityDemandStorage()
+		{
+			static std::unordered_map<std::string, PhysicsCapacityDemand> s_Demands;
+			return s_Demands;
+		}
+
 		// Bitwise comparison, so that a non-finite gravity is not re-applied (and re-rejected) every step.
 		bool IsSameVector(const glm::vec3& a, const glm::vec3& b)
 		{
@@ -87,11 +94,35 @@ namespace Strata
 		m_CreationConnections.emplace_back(registry.on_construct<MeshColliderComponent>().connect<&PhysicsSystem::OnPhysicsComponentAdded>(*this));
 	}
 
+	PhysicsCapacityDemand PhysicsSystem::GetRememberedCapacityDemand(const std::string& sceneName)
+	{
+		const auto& demands = GetCapacityDemandStorage();
+		auto it = demands.find(sceneName);
+		return it != demands.end() ? it->second : PhysicsCapacityDemand();
+	}
+
+	void PhysicsSystem::ForgetCapacityDemands()
+	{
+		GetCapacityDemandStorage().clear();
+	}
+
 	void PhysicsSystem::OnRuntimeStop()
 	{
 		m_CreationConnections.clear();
 		m_WorldRequested = false;
 		m_Running = false;
+		if (m_World)
+		{
+			// What this world lacked, the scene's next world gets.
+			const PhysicsCapacityDemand demand = m_World->GetCapacityDemand();
+			if (!demand.IsEmpty())
+			{
+				PhysicsCapacityDemand& remembered = GetCapacityDemandStorage()[m_Scene.GetName()];
+				remembered.Bodies = std::max(remembered.Bodies, demand.Bodies);
+				remembered.BodyPairs = std::max(remembered.BodyPairs, demand.BodyPairs);
+				remembered.ContactConstraints = std::max(remembered.ContactConstraints, demand.ContactConstraints);
+			}
+		}
 		m_World.reset(); // Bodies are destroyed without collision events: the whole world goes away
 	}
 
@@ -346,7 +377,17 @@ namespace Strata
 	{
 		m_CreationConnections.clear();
 		m_WorldRequested = false;
-		m_World = CreateScope<PhysicsWorld>(m_Scene, m_Settings);
+		// The scene's capacities win over the defaults; those left automatic are sized by the world, for at least what an
+		// earlier world of this scene needed.
+		PhysicsSettings settings = m_Settings;
+		const PhysicsCapacitySettings& capacity = m_Scene.GetSettings().PhysicsCapacity;
+		if (capacity.MaxBodies != 0)
+			settings.MaxBodies = capacity.MaxBodies;
+		if (capacity.MaxBodyPairs != 0)
+			settings.MaxBodyPairs = capacity.MaxBodyPairs;
+		if (capacity.MaxContactConstraints != 0)
+			settings.MaxContactConstraints = capacity.MaxContactConstraints;
+		m_World = CreateScope<PhysicsWorld>(m_Scene, settings, GetRememberedCapacityDemand(m_Scene.GetName()));
 		m_AppliedGravity = m_Scene.GetSettings().Gravity;
 	}
 

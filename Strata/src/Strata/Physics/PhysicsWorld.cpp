@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Physics/PhysicsWorld.h"
 
+#include "Strata/Core/ErrorThrottle.h"
 #include "Strata/Core/Hash.h"
 #include "Strata/Math/Math.h"
 #include "Strata/Physics/AssetMeshProvider.h"
@@ -30,6 +31,7 @@
 #include <Jolt/Physics/Collision/Shape/ScaledShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
+#include <Jolt/Physics/Constraints/ContactConstraintManager.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 
 #include <array>
@@ -74,7 +76,6 @@ namespace Strata
 			DegenerateTransform,
 			MissingMesh,
 			NoUsableCollider,
-			BodyLimit,
 			// Kinds below are reported once for the entity's lifetime
 			InvalidLayer,
 			InvalidType,
@@ -85,7 +86,33 @@ namespace Strata
 			Count
 		};
 
-		constexpr PhysicsWarning c_TransientWarnings[] = { PhysicsWarning::MissingCollider, PhysicsWarning::DegenerateTransform, PhysicsWarning::MissingMesh, PhysicsWarning::NoUsableCollider, PhysicsWarning::BodyLimit };
+		constexpr PhysicsWarning c_TransientWarnings[] = { PhysicsWarning::MissingCollider, PhysicsWarning::DegenerateTransform, PhysicsWarning::MissingMesh, PhysicsWarning::NoUsableCollider };
+
+		// Automatic capacities (see PhysicsWorld::ResolveCapacities).
+		constexpr uint32_t c_MinAutomaticBodies = 65536;
+		constexpr uint32_t c_BodyPairsPerBody = 4;
+		constexpr uint32_t c_MinAutomaticContactConstraints = 10240;
+		constexpr uint32_t c_ContactConstraintsPerBody = 2;
+		constexpr uint64_t c_MinTempAllocatorSize = 10ull * 1024 * 1024;
+		// Scratch memory of a step besides the contact constraints: body pairs in flight, islands, the large island splitter.
+		constexpr uint64_t c_TempAllocatorBaseSize = 4ull * 1024 * 1024;
+		constexpr uint64_t c_TempBytesPerBody = 32;
+		// Per contact constraint: the constraint itself, its offset, its island links and their validation.
+		constexpr uint64_t c_TempBytesPerContactConstraint = JPH::ContactConstraintManager::cMaxConstraintSize + 4 * sizeof(uint32_t);
+		static_assert(PhysicsCapacitySettings::c_MaxBodiesLimit <= JPH::PhysicsSystem::cMaxBodiesLimit, "Scene capacities exceed Jolt's body limit");
+		static_assert(PhysicsCapacitySettings::c_MaxBodyPairsLimit <= JPH::PhysicsSystem::cMaxBodyPairsLimit, "Scene capacities exceed Jolt's body pair limit");
+		static_assert(PhysicsCapacitySettings::c_MaxContactConstraintsLimit <= JPH::PhysicsSystem::cMaxContactConstraintsLimit,
+			"Scene capacities exceed Jolt's contact constraint limit");
+
+		uint32_t NextPowerOfTwo(uint64_t value)
+		{
+			return static_cast<uint32_t>(std::min<uint64_t>(std::bit_ceil(std::max<uint64_t>(value, 1)), uint64_t(1) << 31));
+		}
+
+		uint32_t ClampCapacity(uint64_t value, uint32_t limit)
+		{
+			return static_cast<uint32_t>(std::clamp<uint64_t>(value, 1, limit));
+		}
 
 		// Why an entity that needs a body has none.
 		enum class BuildFailure : uint8_t
@@ -708,16 +735,44 @@ namespace Strata
 			return storage.Custom ? *storage.Custom : static_cast<PhysicsMeshProvider&>(storage.Default);
 		}
 
+		// The settings of a world with resolved capacities (see PhysicsWorld::ResolveCapacities), within the engine's limits.
 		PhysicsSettings SanitizeSettings(const PhysicsSettings& settings)
 		{
 			PhysicsSettings result = settings;
-			result.MaxBodies = std::clamp(settings.MaxBodies, 1u, static_cast<uint32_t>(JPH::PhysicsSystem::cMaxBodiesLimit));
-			result.MaxBodyPairs = std::clamp(settings.MaxBodyPairs, 1u, static_cast<uint32_t>(JPH::PhysicsSystem::cMaxBodyPairsLimit));
-			result.MaxContactConstraints = std::clamp(settings.MaxContactConstraints, 1u, static_cast<uint32_t>(JPH::PhysicsSystem::cMaxContactConstraintsLimit));
+			result.MaxBodies = ClampCapacity(settings.MaxBodies, PhysicsCapacitySettings::c_MaxBodiesLimit);
+			result.MaxBodyPairs = ClampCapacity(settings.MaxBodyPairs, PhysicsCapacitySettings::c_MaxBodyPairsLimit);
+			result.MaxContactConstraints = ClampCapacity(settings.MaxContactConstraints, PhysicsCapacitySettings::c_MaxContactConstraintsLimit);
 			result.CollisionSteps = std::clamp(settings.CollisionSteps, 1u, 64u);
 			result.TempAllocatorSize = std::max(settings.TempAllocatorSize, 64u * 1024u);
 			result.MeshWaitTimeout = std::isfinite(settings.MeshWaitTimeout) ? std::max(settings.MeshWaitTimeout, 0.0f) : 0.0f;
 			return result;
+		}
+
+		// The entities that may own a body when the world is created: those with a RigidBody, and collider entities without
+		// one (colliders merged into an ancestor's body count too, so this is an upper bound). Linear, without allocating.
+		uint32_t CountBodyCandidates(const Scene& scene)
+		{
+			const entt::registry& registry = scene.GetRegistry();
+			uint64_t count = 0;
+			if (const auto* rigidBodies = registry.storage<RigidBodyComponent>())
+				count += rigidBodies->size();
+			const auto countColliders = [&]<typename Collider, typename... Earlier>()
+			{
+				const auto* colliders = registry.storage<Collider>();
+				if (!colliders)
+					return;
+				for (const entt::entity handle : static_cast<const entt::sparse_set&>(*colliders))
+				{
+					// Entities with several colliders count once (with the first collider type they have).
+					if (!registry.any_of<RigidBodyComponent, Earlier...>(handle))
+						count++;
+				}
+			};
+			countColliders.template operator()<BoxColliderComponent>();
+			countColliders.template operator()<SphereColliderComponent, BoxColliderComponent>();
+			countColliders.template operator()<CapsuleColliderComponent, BoxColliderComponent, SphereColliderComponent>();
+			countColliders.template operator()<MeshColliderComponent, BoxColliderComponent, SphereColliderComponent, CapsuleColliderComponent>();
+			return static_cast<uint32_t>(std::min<uint64_t>(count, UINT32_MAX));
 		}
 
 	}
@@ -763,6 +818,18 @@ namespace Strata
 		std::vector<UUID> LeftAfterStep;                              // Bodies removed between the step and contact processing
 		std::unordered_set<uint64_t> IssuedWarnings;                  // Hash of (entity, PhysicsWarning)
 		JPH::EPhysicsUpdateError ReportedErrors = JPH::EPhysicsUpdateError::None;
+
+		// Capacities: whether each was sized automatically (the advice of the overflow messages differs), the records waiting
+		// for a free body slot (BuildFailure::BodyLimit), the first of them since the overflow was last reported, and what the
+		// world needed beyond its capacities.
+		bool AutomaticMaxBodies = false;
+		bool AutomaticMaxBodyPairs = false;
+		bool AutomaticMaxContactConstraints = false;
+		uint32_t BodyLimitCount = 0;
+		entt::entity FirstBodyLimitFailure = entt::null;
+		ErrorThrottle BodyLimitErrors { "Physics" };                  // One aggregated error while bodies wait for a slot
+		PhysicsCapacityDemand Demand;
+		uint64_t ContactOverflowSteps = 0;
 		uint64_t StepCount = 0;
 		uint64_t WriteBackPass = 0;
 		uint64_t SyncPass = 0;
@@ -884,6 +951,47 @@ namespace Strata
 		{
 			auto record = FindSimulatedRecord(data, entity);
 			return record && record->Type == RigidBodyType::Dynamic ? record : nullptr;
+		}
+
+		// Sets why a record has no body (BuildFailure::None: it has one), counting the records that wait for a free slot.
+		void SetFailure(PhysicsWorldData& data, entt::entity handle, BodyRecord& record, BuildFailure failure)
+		{
+			if (record.Failure == BuildFailure::BodyLimit)
+				data.BodyLimitCount--;
+			if (failure == BuildFailure::BodyLimit)
+			{
+				data.BodyLimitCount++;
+				if (data.FirstBodyLimitFailure == entt::null)
+					data.FirstBodyLimitFailure = handle;
+			}
+			record.Failure = failure;
+		}
+
+		// One error for the entities that found the world full, instead of one per entity (thousands at once when a scene
+		// outgrows an explicit capacity); logged again only once they all got a body and the world fills up again. Records
+		// what the world would have needed, so that the scene's next world can grow.
+		void ReportBodyLimit(PhysicsWorldData& data)
+		{
+			if (data.BodyLimitCount == 0)
+			{
+				data.BodyLimitErrors.Clear();
+				data.FirstBodyLimitFailure = entt::null;
+				return;
+			}
+
+			const uint64_t needed = static_cast<uint64_t>(data.JoltSystem->GetNumBodies()) + data.BodyLimitCount;
+			data.Demand.Bodies = std::max(data.Demand.Bodies, static_cast<uint32_t>(std::min<uint64_t>(needed, PhysicsCapacitySettings::c_MaxBodiesLimit)));
+			if (!data.BodyLimitErrors.GetLastMessage().empty())
+				return;
+
+			const Entity first(data.FirstBodyLimitFailure, data.OwnerScene);
+			std::string entities = first.IsValid() ? fmt::format("'{}'", first.GetName()) : std::string("an entity");
+			if (data.BodyLimitCount > 1)
+				entities += fmt::format(" and {} more entities", data.BodyLimitCount - 1);
+			const char* advice = data.AutomaticMaxBodies ? "the scene's next play start sizes the world for them"
+				: "raise the scene's PhysicsCapacity.MaxBodies to make room";
+			data.BodyLimitErrors.Report(fmt::format("cannot create a body for {}: the world's limit of {} bodies is reached; they get one when bodies "
+				"are removed ({})", entities, data.Settings.MaxBodies, advice));
 		}
 
 		// Whether a record without a body waits for a body that can be built later (rather than for a component change).
@@ -1137,6 +1245,7 @@ namespace Strata
 				bodies.DestroyBodies(all.data(), static_cast<int>(all.size()));
 
 			data.Bodies.clear();
+			data.BodyLimitCount = 0;
 			data.MergedOwners.clear();
 			data.PolledBodies.clear();
 			data.RecheckedEntities.clear();
@@ -1515,6 +1624,7 @@ namespace Strata
 
 			const UUID entityID = record.EntityID;
 			SetMeshSources(data, handle, record, {});
+			SetFailure(data, handle, record, BuildFailure::None);
 			data.Bodies.erase(it); // A PolledBodies entry is dropped by the next step
 			EndContactsOf(data, entityID);
 		}
@@ -1559,7 +1669,7 @@ namespace Strata
 				record.SavedAngularVelocity = glm::vec3(0.0f);
 			}
 			DestroyJoltBody(data, record);
-			record.Failure = failure;
+			SetFailure(data, handle, record, failure);
 			record.LastWorldTransform = worldTransform;
 			record.ShapeMembers.clear();
 			EndContactsOf(data, record.EntityID);
@@ -1666,8 +1776,7 @@ namespace Strata
 			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
 			if (!record.HasBody() && data.JoltSystem->GetNumBodies() >= data.Settings.MaxBodies)
 			{
-				if (ShouldWarn(data, record.EntityID, PhysicsWarning::BodyLimit))
-					ST_CORE_ERROR("Physics: cannot create a body for '{}': the world's limit of {} bodies is reached", entity.GetName(), data.Settings.MaxBodies);
+				// Reported for all such entities at once (ReportBodyLimit).
 				SetBuildFailure(data, handle, record, BuildFailure::BodyLimit, worldTransform);
 				return;
 			}
@@ -1704,8 +1813,6 @@ namespace Strata
 			}
 			if (!body)
 			{
-				if (ShouldWarn(data, record.EntityID, PhysicsWarning::BodyLimit))
-					ST_CORE_ERROR("Physics: cannot create a body for '{}': the world's limit of {} bodies is reached", entity.GetName(), data.Settings.MaxBodies);
 				record.SavedLinearVelocity = linearVelocity;
 				record.SavedAngularVelocity = angularVelocity;
 				SetBuildFailure(data, handle, record, BuildFailure::BodyLimit, worldTransform);
@@ -1715,7 +1822,7 @@ namespace Strata
 			// Contacts are tracked per entity pair and carry over to the new body; the next step confirms or ends them.
 			DestroyJoltBody(data, record);
 			record.BodyID = body->GetID();
-			record.Failure = BuildFailure::None;
+			SetFailure(data, handle, record, BuildFailure::None);
 			record.ShapeScale = scale;
 			record.WorldScale = scale;
 			record.LastWorldTransform = worldTransform;
@@ -1960,6 +2067,7 @@ namespace Strata
 				data.TransformChanges.Clear();
 				data.OwnerRefreshes.Clear();
 			}
+			ReportBodyLimit(data);
 		}
 
 		//////////////////////////////////////////////////////////////////////////
@@ -2680,19 +2788,35 @@ namespace Strata
 			}
 		}
 
+		// Steps that overflow the body pair or contact buffers drop contacts: counted, warned about once per world, and recorded
+		// as twice the capacity that overflowed, so that the scene's next world grows.
 		void ReportUpdateErrors(PhysicsWorldData& data, JPH::EPhysicsUpdateError errors)
 		{
-			const auto reportOnce = [&](JPH::EPhysicsUpdateError error, const char* message)
+			const JPH::EPhysicsUpdateError contactErrors = JPH::EPhysicsUpdateError::ManifoldCacheFull | JPH::EPhysicsUpdateError::ContactConstraintsFull;
+			if ((errors & (contactErrors | JPH::EPhysicsUpdateError::BodyPairCacheFull)) != JPH::EPhysicsUpdateError::None)
+				data.ContactOverflowSteps++;
+			const auto grow = [](uint32_t& demand, uint32_t capacity, uint32_t limit)
+			{
+				demand = std::max(demand, static_cast<uint32_t>(std::min<uint64_t>(uint64_t(capacity) * 2, limit)));
+			};
+			if ((errors & JPH::EPhysicsUpdateError::BodyPairCacheFull) != JPH::EPhysicsUpdateError::None)
+				grow(data.Demand.BodyPairs, data.Settings.MaxBodyPairs, PhysicsCapacitySettings::c_MaxBodyPairsLimit);
+			if ((errors & contactErrors) != JPH::EPhysicsUpdateError::None)
+				grow(data.Demand.ContactConstraints, data.Settings.MaxContactConstraints, PhysicsCapacitySettings::c_MaxContactConstraintsLimit);
+
+			const auto reportOnce = [&](JPH::EPhysicsUpdateError error, const char* message, bool automatic, const char* capacity)
 			{
 				if ((errors & error) == JPH::EPhysicsUpdateError::None || (data.ReportedErrors & error) != JPH::EPhysicsUpdateError::None)
 					return;
 				data.ReportedErrors = data.ReportedErrors | error;
-				ST_CORE_WARN("Physics: {}; contacts were dropped (reported once per world)", message);
+				ST_CORE_WARN("Physics: scene '{}': {}; contacts were dropped (reported once per world; {})", data.OwnerScene->GetName(), message,
+					automatic ? "the scene's next play start grows the automatic capacity" : fmt::format("raise the scene's PhysicsCapacity.{}", capacity));
 			};
 
-			reportOnce(JPH::EPhysicsUpdateError::ManifoldCacheFull, "the contact manifold cache is full, raise PhysicsSettings::MaxContactConstraints");
-			reportOnce(JPH::EPhysicsUpdateError::BodyPairCacheFull, "the body pair cache is full, raise PhysicsSettings::MaxBodyPairs");
-			reportOnce(JPH::EPhysicsUpdateError::ContactConstraintsFull, "the contact constraint buffer is full, raise PhysicsSettings::MaxContactConstraints");
+			reportOnce(JPH::EPhysicsUpdateError::ManifoldCacheFull, "the contact manifold cache is full", data.AutomaticMaxContactConstraints, "MaxContactConstraints");
+			reportOnce(JPH::EPhysicsUpdateError::BodyPairCacheFull, "the body pair cache is full", data.AutomaticMaxBodyPairs, "MaxBodyPairs");
+			reportOnce(JPH::EPhysicsUpdateError::ContactConstraintsFull, "the contact constraint buffer is full", data.AutomaticMaxContactConstraints,
+				"MaxContactConstraints");
 		}
 
 		//////////////////////////////////////////////////////////////////////////
@@ -2812,12 +2936,15 @@ namespace Strata
 	// PhysicsWorld
 	////////////////////////////////////////////////////////////////////////////////
 
-	PhysicsWorld::PhysicsWorld(Scene& scene, const PhysicsSettings& settings)
-		: m_Data(CreateScope<PhysicsWorldData>(scene, SanitizeSettings(settings)))
+	PhysicsWorld::PhysicsWorld(Scene& scene, const PhysicsSettings& settings, const PhysicsCapacityDemand& demand)
+		: m_Data(CreateScope<PhysicsWorldData>(scene, SanitizeSettings(ResolveCapacities(settings, CountBodyCandidates(scene), demand))))
 	{
 		ST_PROFILE_FUNCTION();
 
 		PhysicsWorldData& data = *m_Data;
+		data.AutomaticMaxBodies = settings.MaxBodies == 0;
+		data.AutomaticMaxBodyPairs = settings.MaxBodyPairs == 0;
+		data.AutomaticMaxContactConstraints = settings.MaxContactConstraints == 0;
 		data.Allocator = CreateScope<JPH::TempAllocatorImplWithMallocFallback>(data.Settings.TempAllocatorSize);
 		data.Jobs = CreatePhysicsJobSystem(&data.JobCounters);
 		data.JoltSystem = CreateScope<JPH::PhysicsSystem>();
@@ -2849,6 +2976,30 @@ namespace Strata
 		data.JoltSystem->OptimizeBroadPhase();
 	}
 
+	PhysicsSettings PhysicsWorld::ResolveCapacities(const PhysicsSettings& settings, uint32_t bodyCount, const PhysicsCapacityDemand& demand)
+	{
+		PhysicsSettings resolved = settings;
+		const uint64_t bodies = std::max(bodyCount, demand.Bodies);
+		if (resolved.MaxBodies == 0)
+			resolved.MaxBodies = ClampCapacity(std::max<uint64_t>(c_MinAutomaticBodies, NextPowerOfTwo(2 * bodies)), PhysicsCapacitySettings::c_MaxBodiesLimit);
+		if (resolved.MaxBodyPairs == 0)
+		{
+			resolved.MaxBodyPairs = ClampCapacity(std::max<uint64_t>(uint64_t(c_BodyPairsPerBody) * resolved.MaxBodies, demand.BodyPairs),
+				PhysicsCapacitySettings::c_MaxBodyPairsLimit);
+		}
+		if (resolved.MaxContactConstraints == 0)
+		{
+			resolved.MaxContactConstraints = ClampCapacity(std::max({ uint64_t(c_MinAutomaticContactConstraints), c_ContactConstraintsPerBody * bodies,
+				uint64_t(demand.ContactConstraints) }), PhysicsCapacitySettings::c_MaxContactConstraintsLimit);
+		}
+		if (resolved.TempAllocatorSize == 0)
+		{
+			const uint64_t scratch = c_TempAllocatorBaseSize + c_TempBytesPerBody * resolved.MaxBodies + c_TempBytesPerContactConstraint * resolved.MaxContactConstraints;
+			resolved.TempAllocatorSize = static_cast<uint32_t>(std::min<uint64_t>(std::max(scratch, c_MinTempAllocatorSize), UINT32_MAX));
+		}
+		return resolved;
+	}
+
 	PhysicsWorld::~PhysicsWorld()
 	{
 		m_Data->Connections.clear();
@@ -2875,6 +3026,11 @@ namespace Strata
 	const PhysicsSettings& PhysicsWorld::GetSettings() const
 	{
 		return m_Data->Settings;
+	}
+
+	PhysicsCapacityDemand PhysicsWorld::GetCapacityDemand() const
+	{
+		return m_Data->Demand;
 	}
 
 	void PhysicsWorld::ApplyPendingChanges()
@@ -3269,6 +3425,12 @@ namespace Strata
 		}
 		stats.ActiveBodyCount = data.JoltSystem->GetNumActiveBodies(JPH::EBodyType::RigidBody);
 		stats.ContactPairCount = static_cast<uint32_t>(data.TouchingPairs.size());
+		stats.MaxBodies = data.Settings.MaxBodies;
+		stats.MaxBodyPairs = data.Settings.MaxBodyPairs;
+		stats.MaxContactConstraints = data.Settings.MaxContactConstraints;
+		stats.BodyOverflowCount = data.BodyLimitCount;
+		stats.ContactOverflowSteps = data.ContactOverflowSteps;
+		stats.Demand = data.Demand;
 		stats.SyncedBodyCount = data.LastSyncedBodies;
 		stats.CheckedPairCount = data.LastCheckedPairs;
 		stats.WrittenBodyCount = data.LastWrittenBodies;

@@ -51,9 +51,15 @@ namespace Strata
 		PhysicsSystem(const PhysicsSystem&) = delete;
 		PhysicsSystem& operator=(const PhysicsSystem&) = delete;
 
-		// Project-wide settings (capacities, layer matrix) copied by physics systems created afterwards.
+		// Process-wide settings (capacities, layer matrix) copied by physics systems created afterwards (tests and tools; games
+		// set capacities per scene, SceneSettings::PhysicsCapacity, which win over these).
 		static void SetDefaultSettings(const PhysicsSettings& settings);
 		static const PhysicsSettings& GetDefaultSettings();
+
+		// What the worlds of the scene named `sceneName` needed beyond their capacities in this process (remembered when
+		// they stop): a world created for the scene later sizes its automatic capacities for at least that much.
+		static PhysicsCapacityDemand GetRememberedCapacityDemand(const std::string& sceneName);
+		static void ForgetCapacityDemands();
 
 		void OnRuntimeStart() override;
 		void OnRuntimeStop() override;

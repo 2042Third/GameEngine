@@ -17,15 +17,16 @@ namespace Strata
 	// Query layer mask that accepts every layer.
 	constexpr uint32_t c_AllPhysicsLayers = 0xFFFFFFFFu;
 
-	// Configuration of a physics world. Capacities are fixed when the world is created; the layer matrix can also be
-	// changed at runtime through PhysicsWorld::SetLayersCollide.
+	// Configuration of a physics world. Capacities are fixed when the world is created; 0 sizes one automatically from the
+	// bodies the scene has then (see PhysicsWorld::ResolveCapacities), and a scene's SceneSettings::PhysicsCapacity overrides
+	// these. The layer matrix can also be changed at runtime through PhysicsWorld::SetLayersCollide.
 	struct PhysicsSettings
 	{
-		uint32_t MaxBodies = 65536;
-		uint32_t MaxBodyPairs = 65536;           // Broad phase pairs that can be processed per step
-		uint32_t MaxContactConstraints = 10240;  // Contacts that can be solved per step
+		uint32_t MaxBodies = 0;
+		uint32_t MaxBodyPairs = 0;               // Broad phase pairs that can be processed per step
+		uint32_t MaxContactConstraints = 0;      // Contacts that can be solved per step
 		uint32_t CollisionSteps = 1;             // Collision sub-steps per fixed update (raise for very fast bodies)
-		uint32_t TempAllocatorSize = 10u * 1024u * 1024u; // Per-step scratch memory in bytes (falls back to the heap when exceeded)
+		uint32_t TempAllocatorSize = 0;          // Per-step scratch memory in bytes, 0: sized for the capacities (falls back to the heap when exceeded)
 		// Longest wait, in seconds of simulation time, at the start for the meshes of mesh colliders (still loading or being
 		// cooked) before the first step; 0 does not wait. See PhysicsWorld.
 		float MeshWaitTimeout = 10.0f;
@@ -69,6 +70,19 @@ namespace Strata
 	// CollisionEvent, the collision listener types and RaycastHit are defined with the scene services that hand them to other
 	// systems (Scene/SceneServices.h).
 
+	// What a world needed beyond the capacities it was created with: entities that found it full, steps whose body pair or
+	// contact buffers were full. PhysicsSystem remembers it per scene name, and the next world it creates for that scene sizes
+	// its automatic capacities for at least this much ("the next play start grows the capacity").
+	struct PhysicsCapacityDemand
+	{
+		uint32_t Bodies = 0;
+		uint32_t BodyPairs = 0;
+		uint32_t ContactConstraints = 0;
+
+		bool IsEmpty() const { return Bodies == 0 && BodyPairs == 0 && ContactConstraints == 0; }
+		bool operator==(const PhysicsCapacityDemand& other) const = default;
+	};
+
 	struct PhysicsStats
 	{
 		uint32_t BodyCount = 0;          // Bodies in the simulation (inactive entities' bodies are excluded)
@@ -78,6 +92,13 @@ namespace Strata
 		uint32_t ActiveBodyCount = 0;    // Awake bodies (sleeping and static bodies are not simulated)
 		uint32_t PendingBodyCount = 0;   // Entities waiting for a body that cannot be built yet (degenerate transform, mesh not loaded, world full)
 		uint32_t ContactPairCount = 0;   // Pairs of entities currently touching (including triggers)
+		// Capacities of the world (as resolved when it was created) and what overflowed them.
+		uint32_t MaxBodies = 0;
+		uint32_t MaxBodyPairs = 0;
+		uint32_t MaxContactConstraints = 0;
+		uint32_t BodyOverflowCount = 0;  // Entities waiting for a body because the world is full (part of PendingBodyCount)
+		uint64_t ContactOverflowSteps = 0; // Steps that dropped contacts or body pairs because their buffers were full
+		PhysicsCapacityDemand Demand;    // What the world needed beyond its capacities so far (empty while they suffice)
 		// Work of the last step, which grows with the awake bodies and the signaled changes, not with sleeping bodies:
 		uint32_t SyncedBodyCount = 0;    // Bodies compared with their entity before the step (awake ones and those with changes)
 		uint32_t CheckedPairCount = 0;   // Touching pairs that could end during the step (those of awake or rebuilt bodies)

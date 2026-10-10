@@ -25,11 +25,29 @@ namespace Strata
 
 	class Entity;
 
+	// Capacities of a scene's physics world, fixed when its simulation is created. 0 sizes a capacity automatically from the
+	// bodies the scene has when it starts playing (see PhysicsWorld): set them for scenes that create many bodies while they
+	// play (spawners, streamed cells), which the automatic sizes cannot foresee.
+	struct PhysicsCapacitySettings
+	{
+		uint32_t MaxBodies = 0;
+		uint32_t MaxBodyPairs = 0;          // Pairs of bodies whose bounds overlap, per step
+		uint32_t MaxContactConstraints = 0; // Contacts solved per step
+
+		// The largest values a scene may ask for (the physics engine supports 2^23 bodies; the others bound memory).
+		static constexpr uint32_t c_MaxBodiesLimit = 1u << 23;
+		static constexpr uint32_t c_MaxBodyPairsLimit = 1u << 26;
+		static constexpr uint32_t c_MaxContactConstraintsLimit = 1u << 22;
+
+		bool operator==(const PhysicsCapacitySettings& other) const = default;
+	};
+
 	struct SceneSettings
 	{
 		glm::vec3 Gravity = { 0.0f, -9.81f, 0.0f };
 		float FixedTimestep = 1.0f / 60.0f;
 		uint32_t MaxFixedStepsPerFrame = 8; // Prevents a spiral of death after long frames
+		PhysicsCapacitySettings PhysicsCapacity;
 	};
 
 	// A world of entities. Owns the EnTT registry, the hierarchy, and (while playing) the runtime systems.
