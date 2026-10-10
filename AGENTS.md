@@ -452,13 +452,16 @@ and `AudioSystem`, the built-in "Audio" scene system.
 - **Editor UI rules** (the 'Bedrock' look; `Editor.UI.Source` scans the UI code for the first three, with an empty
   allowlist):
   - Colors come only from the theme's tokens (`UI/Theme.h`: the `ThemePalette` and, preferably, what they mean in
-    `ThemeColors`): no `ImVec4`/`ImColor` literals or `IM_COL32` outside `UI/Theme.cpp`. `UI::ApplyTheme` styles every
-    `ImGuiCol_`; an ImGui upgrade with new colors fails the build until they get a token. Rows of lists with a
-    selection draw through `UI::PushSelectionColors`, so hovering stays neutral and a selected row keeps the accent
-    under the mouse.
-  - Sizes are relative to the font (multiples of `ImGui::GetFontSize()` or `GetFrameHeight()`), never fixed pixels above
-    16, so the UI follows the UI scale (the window's content scale, or `--ui-scale`). `UI::ApplyTheme` sets every size
-    ImGui scales to an even base (hairlines stay one pixel), so 150% and 200% give exact multiples.
+    `ThemeColors`): no colors spelled in numbers outside `UI/Theme.cpp`, however they are written (`ImVec4`, `ImColor` or
+    `glm::vec4` built or declared from numbers, `IM_COL32`, packed hex colors, braced numbers passed to color
+    functions). `UI::ApplyTheme` styles every `ImGuiCol_`; an ImGui upgrade with new colors fails the build until they
+    get a token. Rows of lists with a selection draw through `UI::PushSelectionColors`, so hovering stays neutral and a
+    selected row keeps the accent under the mouse.
+  - Sizes are relative to the font (multiples of `ImGui::GetFontSize()` or `GetFrameHeight()`, or the style's sizes),
+    never fixed pixels above 16, so the UI follows the UI scale (the window's content scale, or `--ui-scale`). The scan
+    judges every value passed to size-taking calls by the product it is part of, and follows names that hold sizes
+    (`const float width = 200.0f` used later is found too). `UI::ApplyTheme` sets every size ImGui scales to an even
+    base (hairlines stay one pixel), so 150% and 200% give exact multiples.
   - Panels are `EditorPanel`s registered with `EditorPanelRegistry` (`UI/EditorPanelRegistry.h`, built-ins in
     `EditorLayer::RegisterBuiltinPanels`): the registry begins their windows (icon and title, `###<id>`), toggles them in
     the View menu and keeps their open state in imgui.ini (`StrataPanels`); panels never call `ImGui::Begin`.
