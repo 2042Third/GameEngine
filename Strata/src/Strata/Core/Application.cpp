@@ -4,6 +4,8 @@
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Audio/AudioEngine.h"
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Core/FrameProfiler.h"
+#include "Strata/Core/Profiling.h"
 #include "Strata/Core/Timer.h"
 #include "Strata/Engine/BuiltinModules.h"
 #include "Strata/ImGui/ImGuiLayer.h"
@@ -212,17 +214,23 @@ namespace Strata
 
 	bool Application::RunFrame(Timestep timestep)
 	{
-		// The frame's work time (GetLastFrameWorkTime) leaves out the graphics device's waits and back buffer captures.
+		// The frame's work time (GetLastFrameWorkTime) leaves out the graphics device's waits and back buffer captures. The
+		// frame profiler's frame is the same: it is ended with that work time, and a skipped frame is never ended.
 		const double frameStart = Time::GetTime();
+		FrameProfiler& profiler = FrameProfiler::Get();
+		profiler.BeginFrame();
 		ExecuteMainThreadQueue();
 
-		Input::BeginFrame();
-		if (m_Window)
 		{
-			m_Window->ProcessEvents();
-			m_Minimized = m_Window->IsMinimized();
-			if (m_GraphicsDevice && m_Window->IsVSync() != m_GraphicsDevice->IsVSync())
-				m_GraphicsDevice->SetVSync(m_Window->IsVSync());
+			ST_PROFILE_STAGE("Input");
+			Input::BeginFrame();
+			if (m_Window)
+			{
+				m_Window->ProcessEvents();
+				m_Minimized = m_Window->IsMinimized();
+				if (m_GraphicsDevice && m_Window->IsVSync() != m_GraphicsDevice->IsVSync())
+					m_GraphicsDevice->SetVSync(m_Window->IsVSync());
+			}
 		}
 
 		if (!m_GraphicsDevice)
@@ -269,8 +277,10 @@ namespace Strata
 		if (m_GraphicsDevice)
 		{
 			ProcessBackBufferCaptures(true);
+			ST_PROFILE_STAGE("Present");
 			m_GraphicsDevice->EndFrame();
 		}
+		profiler.EndFrame(m_LastFrameWorkTime);
 		return true;
 	}
 
@@ -306,6 +316,7 @@ namespace Strata
 		if (!m_ImGuiLayer)
 			return;
 
+		ST_PROFILE_STAGE("Editor.UI");
 		m_ImGuiLayer->Begin();
 		for (Layer* layer : m_LayerStack)
 			layer->OnImGuiRender();

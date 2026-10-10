@@ -607,6 +607,7 @@ namespace Strata
 	void AssetManagerBase::Update()
 	{
 		ST_PROFILE_FUNCTION();
+		ST_PROFILE_STAGE("Assets.Update");
 
 		{
 			std::scoped_lock<std::mutex> lock(m_Mutex);
@@ -634,6 +635,7 @@ namespace Strata
 
 	size_t AssetManagerBase::ProcessCompletions(bool applyBudget)
 	{
+		ST_PROFILE_STAGE("Assets.Finalize");
 		if (m_ProcessingCompletions)
 			return 0; // Re-entered from a finalizer; the outer call processes everything
 

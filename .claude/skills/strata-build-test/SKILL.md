@@ -55,9 +55,12 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
   `UnfinishedScript`, `QuitScript`, `QuitBeforeScriptEnds`, `CaptureWithoutGPU`), the export chain `StrataExport.Clean`
   → `StrataEditor.Export` (`--no-gpu`; it exports the smoke game twice, the second time starting in a scene without a
   camera) → `StrataRuntime.Smoke` (the exported game, headless; `StrataRuntime.HeadlessPacing` checks that headless runs
-  keep 60 frames per second, `StrataRuntime.AssetBudget` and `.InvalidAssetBudget` the `--asset-budget-mb` option) →
+  keep 60 frames per second, `StrataRuntime.AssetBudget` and `.InvalidAssetBudget` the `--asset-budget-mb` option,
+  `StrataRuntime.PerfLog` → `.PerfLogCheck` and `.InvalidPerfLog` the `--perf-log` CSV, read back by
+  `StrataTests --strata-test-helper=check-perf-log <csv> <rows> [--nonzero <column>...]`) →
   `StrataRuntime.Render` (windowed, saves
-  `build/<preset>/StrataTests/ExportSmoke/RuntimeScreenshot.png`, label `gpu`) → `StrataRuntime.RenderCheck`
+  `build/<preset>/StrataTests/ExportSmoke/RuntimeScreenshot.png`, label `gpu`; `StrataRuntime.PerfLogWindowed` →
+  `.PerfLogWindowedCheck` check that windowed perf logs time rendering and presenting) → `StrataRuntime.RenderCheck`
   (`StrataTests --strata-test-helper=check-image <png> [--dominant red|green|blue <percent>]`: not black, not a single
   color, and here at least 1% of the blue box), plus `StrataRuntime.NoCameraScreenshot` (a screenshot of the
   missing-camera message fails the run), `StrataEditor.Automation` (the `EndToEnd*` suites: the real editor, headless

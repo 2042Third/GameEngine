@@ -21,6 +21,7 @@ namespace Strata
 		// this frame. Like scripts, it does not run in simulate mode.
 		SceneSystemDescriptor descriptor = MakeSceneSystemDescriptor<AudioSystem>("Audio", false, [](Scene& scene) { return CreateScope<AudioSystem>(scene); });
 		descriptor.After = { "Physics" };
+		descriptor.ProfileStage = "Scene.Audio";
 		const bool registered = SceneSystemRegistry::Register(std::move(descriptor));
 		ST_CORE_VERIFY(registered, "The audio module could not register its scene system");
 	}

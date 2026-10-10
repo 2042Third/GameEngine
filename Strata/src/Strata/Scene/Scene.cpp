@@ -51,6 +51,26 @@ namespace Strata
 			return true;
 		}
 
+		// Calls `callback` on every running system in update order, each in its FrameProfiler stage while the profiler times
+		// this thread's frame (asked once: scenes also run without frames, e.g. in tests, where systems cost nanoseconds).
+		template<typename Callback>
+		void ForEachSystem(const std::vector<Scope<SceneSystem>>& systems, const std::vector<FrameStageID>& stages, Callback&& callback)
+		{
+			FrameProfiler& profiler = FrameProfiler::Get();
+			if (!profiler.IsTimingThisThread())
+			{
+				for (const Scope<SceneSystem>& system : systems)
+					callback(*system);
+				return;
+			}
+			for (size_t index = 0; index < systems.size(); index++)
+			{
+				const FrameStageScope stage(profiler, stages[index]);
+				ST_PROFILE_STAGE_ID_ZONE(stages[index]);
+				callback(*systems[index]);
+			}
+		}
+
 	}
 
 	static std::atomic<uint32_t> s_RunningSceneCount = 0;
@@ -1167,6 +1187,8 @@ namespace Strata
 
 		if (m_DirtyTransforms.empty())
 			return;
+		// After the check: a clean update takes nanoseconds, less than timing it would.
+		ST_PROFILE_STAGE("Scene.Transforms");
 
 		// The memo of HasDirtyAncestor is keyed by the update; when the key wraps around, old marks could match again.
 		if (++m_TransformPass == 0)
@@ -1604,16 +1626,15 @@ namespace Strata
 			if (mode != SceneRuntimeMode::Play && !descriptor.RunsInSimulateMode)
 				continue;
 			Scope<SceneSystem>& system = m_Systems.emplace_back(descriptor.Create(*this));
+			m_SystemStages.push_back(descriptor.ProfileStage.empty() ? c_InvalidFrameStage : FrameProfiler::Get().RegisterStage(descriptor.ProfileStage));
 			if (descriptor.Type != 0)
 				m_SystemsByType[descriptor.Type] = system.get();
 		}
 
 		// Systems may create or destroy entities while starting (e.g. scripts in OnCreate).
 		m_IsUpdating = true;
-		for (const Scope<SceneSystem>& system : m_Systems)
-			system->OnRuntimeStart();
-		for (const Scope<SceneSystem>& system : m_Systems)
-			system->OnRuntimeStarted();
+		ForEachSystem(m_Systems, m_SystemStages, [](SceneSystem& system) { system.OnRuntimeStart(); });
+		ForEachSystem(m_Systems, m_SystemStages, [](SceneSystem& system) { system.OnRuntimeStarted(); });
 		m_IsUpdating = false;
 		FlushPendingDestroys();
 		UpdateWorldTransforms();
@@ -1634,6 +1655,7 @@ namespace Strata
 		{
 			std::erase_if(m_SystemsByType, [&](const auto& entry) { return entry.second == m_Systems.back().get(); });
 			m_Systems.pop_back();
+			m_SystemStages.pop_back();
 		}
 
 		FlushPendingDestroys();
@@ -1675,13 +1697,11 @@ namespace Strata
 		m_IsUpdating = true;
 		UpdateWorldTransforms();
 
-		for (const Scope<SceneSystem>& system : m_Systems)
-			system->OnUpdate(Timestep(deltaTime));
+		ForEachSystem(m_Systems, m_SystemStages, [deltaTime](SceneSystem& system) { system.OnUpdate(Timestep(deltaTime)); });
 
 		if (stepping)
 		{
-			for (const Scope<SceneSystem>& system : m_Systems)
-				system->OnFixedUpdate(fixedTimestep);
+			ForEachSystem(m_Systems, m_SystemStages, [fixedTimestep](SceneSystem& system) { system.OnFixedUpdate(fixedTimestep); });
 			m_StepFrames--;
 		}
 		else
@@ -1691,8 +1711,7 @@ namespace Strata
 			uint32_t steps = 0;
 			while (m_FixedTimeAccumulator >= fixedTimestep && steps < maxSteps)
 			{
-				for (const Scope<SceneSystem>& system : m_Systems)
-					system->OnFixedUpdate(fixedTimestep);
+				ForEachSystem(m_Systems, m_SystemStages, [fixedTimestep](SceneSystem& system) { system.OnFixedUpdate(fixedTimestep); });
 				m_FixedTimeAccumulator -= fixedTimestep;
 				steps++;
 			}
@@ -1702,8 +1721,7 @@ namespace Strata
 				m_FixedTimeAccumulator = std::min(m_FixedTimeAccumulator, fixedTimestep);
 		}
 
-		for (const Scope<SceneSystem>& system : m_Systems)
-			system->OnLateUpdate(Timestep(deltaTime));
+		ForEachSystem(m_Systems, m_SystemStages, [deltaTime](SceneSystem& system) { system.OnLateUpdate(Timestep(deltaTime)); });
 
 		m_Time += deltaTime;
 		m_FrameIndex++;

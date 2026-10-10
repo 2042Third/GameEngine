@@ -22,6 +22,8 @@ namespace Strata
 	class EditorContext;
 	class Scene;
 	struct AssetManagerStats;
+	struct FrameProfileSummary;
+	struct JobSystemStats;
 
 	// Helpers shared by the built-in editor commands.
 	namespace CommandUtils
@@ -65,6 +67,11 @@ namespace Strata
 
 		// The totals of AssetManagerBase::GetStats as asset.stats and editor.status report them (EditorStreamingCommands.cpp).
 		nlohmann::json DescribeAssetStats(const AssetManagerStats& stats);
+
+		// A frame profile as editor.perf reports it (EditorStateCommands.cpp): {"frames", "frame", "framesPerSecond",
+		// "stageSum", "jobs", "stages": {"<name>": {"avgMs", "p50Ms", "p95Ms", "maxMs", "inFrameTime"}}}, statistics in
+		// milliseconds; `jobs` adds the job system's current running and queued jobs.
+		nlohmann::json DescribeFrameProfile(const FrameProfileSummary& summary, const JobSystemStats& jobs);
 
 		// A file a command writes for its client (e.g. a capture). Relative paths resolve against the project directory
 		// and fail without a project (the editor's working directory means nothing to a client); absolute paths stay.

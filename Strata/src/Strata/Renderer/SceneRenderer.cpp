@@ -971,6 +971,7 @@ namespace Strata
 
 	void SceneRenderer::CollectShadowCasters(Scene& scene, const SceneCamera& camera, RenderData::FrameConstants& frame)
 	{
+		ST_PROFILE_STAGE("Render.Extract");
 		m_ShadowInstances.clear();
 		m_ShadowBatches.clear();
 		m_ShadowRecords.clear();
@@ -1606,6 +1607,7 @@ namespace Strata
 
 	void SceneRenderer::CollectLights(Scene& scene, const SceneCamera& camera, bool preview, RenderData::FrameConstants& frame)
 	{
+		ST_PROFILE_STAGE("Render.Extract");
 		entt::registry& registry = scene.GetRegistry();
 
 		frame.DirectionalLightDirection = glm::vec4(0.0f, -1.0f, 0.0f, 0.0f);
@@ -1742,6 +1744,7 @@ namespace Strata
 
 	void SceneRenderer::CollectDraws(Scene& scene, const SceneCamera& camera)
 	{
+		ST_PROFILE_STAGE("Render.Extract");
 		const Frustum frustum(camera.Projection * camera.View);
 		m_DrawRecords.clear();
 		m_InstancePayloads.clear();
@@ -1897,6 +1900,7 @@ namespace Strata
 	bool SceneRenderer::Render(Scene& scene, const SceneCamera& camera, nvrhi::IFramebuffer* target, const SceneRenderOptions& options)
 	{
 		ST_PROFILE_FUNCTION();
+		ST_PROFILE_STAGE("Render.Submit"); // Extraction (Render.Extract) nests in it
 		m_Stats = {};
 		if (m_ViewportSize.x == 0 || m_ViewportSize.y == 0)
 			return false; // Nothing to show (e.g. a minimized window); not an error

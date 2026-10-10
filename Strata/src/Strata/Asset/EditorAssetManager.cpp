@@ -994,6 +994,7 @@ namespace Strata
 	void EditorAssetManager::Update()
 	{
 		ST_PROFILE_FUNCTION();
+		ST_PROFILE_STAGE("Assets.Update");
 		ProcessFileChanges();
 		ProcessCompletedImports();
 		SaveAssetIndex();

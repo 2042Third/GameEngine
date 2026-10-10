@@ -314,6 +314,19 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DEXPECTED_OUTPUT=asset-budget-mb needs a whole number of megabytes"
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
 	set_tests_properties(StrataRuntime.InvalidAssetBudget PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
+	# --perf-log writes a CSV row per frame (FramePerfLog), also headless; the check reads it back (Runtime/PerfLogReader.h).
+	add_test(NAME StrataRuntime.PerfLog
+		COMMAND "${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}" --headless --frames 30 --perf-log "${STRATA_EXPORT_TEST_DIR}/PerfLog.csv")
+	set_tests_properties(StrataRuntime.PerfLog PROPERTIES FIXTURES_REQUIRED StrataExportedGame FIXTURES_SETUP StrataRuntimePerfLog)
+	add_test(NAME StrataRuntime.PerfLogCheck
+		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_EXPORT_TEST_DIR}/PerfLog.csv" 30 --nonzero Assets.Update)
+	set_tests_properties(StrataRuntime.PerfLogCheck PROPERTIES FIXTURES_REQUIRED StrataRuntimePerfLog)
+	add_test(NAME StrataRuntime.InvalidPerfLog
+		COMMAND "${CMAKE_COMMAND}"
+			"-DCOMMAND=${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX};--headless;--frames;5;--perf-log"
+			"-DEXPECTED_OUTPUT=--perf-log needs the path of the CSV file to write"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
+	set_tests_properties(StrataRuntime.InvalidPerfLog PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
 
 	# The exported game in a window renders a few frames from its camera and saves the last one, which must show the scene:
 	# not black, not one color, and the blue box covering at least 1% of it.
@@ -323,6 +336,14 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	set_tests_properties(StrataRuntime.Render PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataExportedGame FIXTURES_SETUP StrataRuntimeScreenshot)
 	add_test(NAME StrataRuntime.RenderCheck COMMAND StrataTests --strata-test-helper=check-image "${STRATA_RUNTIME_SCREENSHOT}" --dominant blue 1)
 	set_tests_properties(StrataRuntime.RenderCheck PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataRuntimeScreenshot)
+	# In a window the perf log also times rendering and presenting.
+	add_test(NAME StrataRuntime.PerfLogWindowed
+		COMMAND "${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}" --windowed --frames 10 --perf-log "${STRATA_EXPORT_TEST_DIR}/PerfLogWindowed.csv")
+	set_tests_properties(StrataRuntime.PerfLogWindowed PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataExportedGame FIXTURES_SETUP StrataRuntimePerfLogWindowed)
+	add_test(NAME StrataRuntime.PerfLogWindowedCheck
+		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_EXPORT_TEST_DIR}/PerfLogWindowed.csv" 10 --nonzero Render.Extract --nonzero Render.Submit
+			--nonzero Present --nonzero Input)
+	set_tests_properties(StrataRuntime.PerfLogWindowedCheck PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataRuntimePerfLogWindowed)
 
 	# A game whose start scene has no camera shows a message frame: a screenshot of it fails the run.
 	add_test(NAME StrataRuntime.NoCameraScreenshot

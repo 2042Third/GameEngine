@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Strata/Core/Base.h"
+#include "Strata/Core/FrameProfiler.h"
 #include "Strata/Core/Timestep.h"
 #include "Strata/Core/UUID.h"
 #include "Strata/Scene/SceneHierarchy.h"
@@ -395,6 +396,7 @@ namespace Strata
 		mutable uint64_t m_LookupIndexBuildCount = 0;
 
 		std::vector<Scope<SceneSystem>> m_Systems;
+		std::vector<FrameStageID> m_SystemStages; // Per system: its FrameProfiler stage (SceneSystemDescriptor::ProfileStage)
 		std::unordered_map<entt::id_type, SceneSystem*> m_SystemsByType; // SceneSystemDescriptor::Type -> running system
 		std::vector<UUID> m_PendingDestroy;
 		std::unordered_set<UUID> m_PendingDestroySet;

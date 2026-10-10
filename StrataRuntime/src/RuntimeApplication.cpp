@@ -1,7 +1,9 @@
 #include <Strata.h>
 #include <Strata/Core/EntryPoint.h>
 #include <Strata/Project/GameManifest.h>
+#include <Strata/Core/FrameProfiler.h>
 #include <Strata/Renderer/ImageWriter.h>
+#include <Strata/Runtime/FramePerfLog.h>
 #include <Strata/Runtime/GameRenderer.h>
 #include <Strata/Runtime/GameRuntime.h>
 
@@ -22,6 +24,7 @@ namespace Strata
 		std::filesystem::path ScreenshotPath; // Saves the window to this PNG on the last of MaxFrames frames
 		std::optional<uint64_t> MaxFrames;
 		std::optional<uint64_t> TextureBudget; // --asset-budget-mb: the GPU texture budget of the game's assets, in bytes
+		std::filesystem::path PerfLogPath;     // --perf-log: a CSV row per frame (FramePerfLog)
 	};
 
 	// Runs the game of a manifest and, with a window, renders it every frame. Startup failures end the process with exit
@@ -55,10 +58,13 @@ namespace Strata
 			// Headless runs (servers, CI) have no window to render to.
 			if (Application::Get().GetWindow() && Renderer::IsInitialized())
 				m_Renderer = CreateScope<GameRenderer>();
+			if (!m_Options.PerfLogPath.empty())
+				StartPerfLog();
 		}
 
 		void OnDetach() override
 		{
+			StopPerfLog();
 			m_Renderer.reset();
 			m_Runtime.reset();
 		}
@@ -95,6 +101,46 @@ namespace Strata
 			RequestScreenshot();
 		}
 	private:
+		// Every frame from the first one on gets a row, written when the frame profiler records it (after the frame's work
+		// time is measured, so writing it costs the frame nothing).
+		void StartPerfLog()
+		{
+			std::string error;
+			m_PerfLog = FramePerfLog::Create(m_Options.PerfLogPath, FrameProfiler::Get(), &error);
+			if (!m_PerfLog)
+			{
+				ST_CRITICAL("Cannot write the perf log: {}", error);
+				Application::Get().SetExitCode(1);
+				Application::Get().Close();
+				return;
+			}
+			m_PerfLogListener = FrameProfiler::Get().AddFrameListener([this](const FrameSample& frame)
+			{
+				const std::optional<AssetManagerStats> assets = m_Runtime ? std::optional<AssetManagerStats>(m_Runtime->GetAssetManager()->GetStats()) : std::nullopt;
+				if (!m_PerfLog->WriteFrame(frame, assets ? &*assets : nullptr))
+					Application::Get().SetExitCode(1); // A requested log that is incomplete fails the run, so CI notices
+			});
+			ST_INFO("Writing a perf log of every frame to {}", FileSystem::ToUTF8(m_Options.PerfLogPath));
+		}
+
+		void StopPerfLog()
+		{
+			if (!m_PerfLog)
+				return;
+			FrameProfiler::Get().RemoveFrameListener(m_PerfLogListener);
+			std::string error;
+			if (m_PerfLog->Close(&error))
+			{
+				ST_INFO("Wrote the perf log of {} frames to {}", m_PerfLog->GetRowCount(), FileSystem::ToUTF8(m_PerfLog->GetPath()));
+			}
+			else
+			{
+				ST_ERROR("The perf log is incomplete: {}", error);
+				Application::Get().SetExitCode(1);
+			}
+			m_PerfLog.reset();
+		}
+
 		void RequestScreenshot()
 		{
 			Application& application = Application::Get();
@@ -125,6 +171,8 @@ namespace Strata
 		RuntimeOptions m_Options;
 		Scope<GameRuntime> m_Runtime;
 		Scope<GameRenderer> m_Renderer;
+		Scope<FramePerfLog> m_PerfLog;
+		uint32_t m_PerfLogListener = 0;
 	};
 
 	class RuntimeApplication : public Application
@@ -200,6 +248,16 @@ namespace Strata
 				return nullptr;
 			}
 			options.ScreenshotPath = FileSystem::FromUTF8(*screenshot);
+		}
+		if (commandLine.HasFlag("--perf-log") || commandLine.GetOption("--perf-log"))
+		{
+			const std::optional<std::string> perfLog = commandLine.GetOption("--perf-log");
+			if (!perfLog || perfLog->empty())
+			{
+				ST_CRITICAL("--perf-log needs the path of the CSV file to write");
+				return nullptr;
+			}
+			options.PerfLogPath = FileSystem::FromUTF8(*perfLog);
 		}
 		return new RuntimeApplication(specification, std::move(options));
 	}

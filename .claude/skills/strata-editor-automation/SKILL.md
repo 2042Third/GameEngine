@@ -86,6 +86,7 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | What is in the scene? | `scene.hierarchy`, `entity.find` (`name`, `tag`, `component`), `entity.get` |
 | What happened (errors, script output)? | `log.read` (`after` = the previous `latest` to page; `minLevel`) |
 | How much memory do assets use, what is loaded or streaming? | `asset.stats` (`assets: true` lists them; `sort`, `limit`); `asset.setBudget` changes the open project's budgets (MB) |
+| Where does the frame time go (scripts, physics, uploads, rendering, UI)? | `editor.perf {frames?}` (per stage `avgMs`/`p50Ms`/`p95Ms`/`maxMs`, the frame, FPS, job threads' busy %) |
 
 Commands added at run time (for example `script.*`, `viewport.*`, `camera.*` when those features are present)
 appear in `editor.commands` and as tools automatically. The viewport commands need rendering: they fail in an
@@ -172,6 +173,11 @@ a paused scene by fixed steps. `play.simulate` runs physics only.
 `maxMs`): the CPU time of the frames that ran entirely during the wait, without the waits for the GPU and vsync (measure
 with a window, not `--no-gpu`, to include rendering). A command script can gate it:
 `{"command": "editor.wait", "parameters": {"frames": 120}, "expect": {"/frameTimes/medianMs": {"max": 5}}}`.
+`editor.perf {"frames": 120}` then says where the time went, per stage of the main thread (self times in ms:
+`Input`, `Assets.Update`, `Assets.Finalize` (GPU uploads of arriving assets), `Scene.Scripts`, `Scene.Physics`,
+`Scene.Audio`, `Scene.Transforms`, `Render.Extract`, `Render.Submit`, `Editor.UI`, and `Present` outside the frame
+time), with `stageSum` (at most the frame; the rest is untimed editor work) and `jobs` (`workerBusyPercent`,
+`ioBusyPercent`, `running`, `queued`): `{"expect": {"/stages/Scene.Scripts/p95Ms": {"max": 2}}}` gates one stage.
 
 **Play it (simulated input)**: while the game runs (`play.start`), the `input.*` commands press keys and buttons the way a
 player would; scripts see them through `Input::IsKeyDown/IsKeyPressed/IsKeyReleased` (also while the viewport has no focus).

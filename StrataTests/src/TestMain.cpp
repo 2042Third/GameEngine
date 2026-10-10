@@ -5,6 +5,7 @@
 #include "Network/FakeEditorProcess.h"
 #include "Perf/StressProject.h"
 #include "Renderer/GPUTestUtils.h"
+#include "Runtime/PerfLogReader.h"
 #include "Strata/Asset/AssetImporter.h"
 #include "Strata/Core/CrashGuard.h"
 #include "Strata/Core/FileLock.h"
@@ -23,6 +24,7 @@
 #include <stb_image.h>
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -579,6 +581,43 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 				return 1;
 			}
 		}
+		return 0;
+	}
+
+	if (mode == "check-perf-log")
+	{
+		// <csv> <rows> [--nonzero <column>...]: succeeds if the file is a perf log of StrataRuntime --perf-log with exactly
+		// <rows> rows of consecutive frames and every built-in stage among its columns (Runtime/PerfLogReader.h), and each
+		// --nonzero column is above 0 in at least one row (e.g. a stage that must have run).
+		if (argc < 4)
+			return 2;
+		const std::string_view rowsText(argv[3]);
+		uint64_t rows = 0;
+		const auto [rowsEnd, rowsError] = std::from_chars(rowsText.data(), rowsText.data() + rowsText.size(), rows);
+		if (rowsError != std::errc() || rowsEnd != rowsText.data() + rowsText.size())
+			return 2;
+		std::string error;
+		const std::optional<Strata::Tests::PerfLogTable> table = Strata::Tests::ReadPerfLog(Strata::FileSystem::FromUTF8(argv[2]), error);
+		if (!table || !Strata::Tests::ValidatePerfLog(*table, rows, error))
+		{
+			std::fprintf(stderr, "'%s' is not the expected perf log: %s\n", argv[2], error.c_str());
+			return 1;
+		}
+		for (int index = 4; index < argc; index++)
+		{
+			if (std::string_view(argv[index]) != "--nonzero" || index + 1 >= argc)
+				return 2;
+			const char* columnName = argv[++index];
+			const std::optional<size_t> column = table->FindColumn(columnName);
+			const bool nonzero = column && std::any_of(table->Rows.begin(), table->Rows.end(), [&](const std::vector<double>& row) { return row[*column] > 0.0; });
+			if (!nonzero)
+			{
+				std::fprintf(stderr, "'%s': %s\n", argv[2], column ? fmt::format("'{}' is 0 in every row", columnName).c_str()
+					: fmt::format("no column '{}'", columnName).c_str());
+				return 1;
+			}
+		}
+		std::printf("'%s': %zu frames, %zu columns\n", argv[2], table->Rows.size(), table->Columns.size());
 		return 0;
 	}
 

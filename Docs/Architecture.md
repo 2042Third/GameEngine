@@ -100,7 +100,8 @@ their own and ignore it). Services: `Log` (spdlog; `LogBuffer` backs the editor 
 process memory with peaks: `GetProcessMemory`, process uptime: `GetProcessUptime`),
 `Process` (child processes), `DynamicLibrary`, `CrashGuard`, `UUID`, `Crypto` (SHA-256, peer authentication), `Base64`,
 `CommandLine`, `Timer`/`FramePacer`, `JsonUtils` (exception-free JSON reads), `SequenceLock` (lock-free hand-off to the
-audio thread) and `Profiling` (Tracy with `STRATA_ENABLE_TRACY`).
+audio thread), `FrameProfiler` (the always-on timer of the main thread's frame stages, see
+[Frame profiler](#frame-profiler)) and `Profiling` (`ST_PROFILE_STAGE`; Tracy with `STRATA_ENABLE_TRACY`).
 
 **Events** (`Events/`). Window, key and mouse events (`ApplicationEvent.h`, `KeyEvent.h`, `MouseEvent.h`, including
 `WindowFileDropEvent` and `WindowContentScaleEvent`, raised when the window moves to a display with another DPI setting
@@ -356,6 +357,37 @@ Shutdown (`Application::~Application`): layers detach and are deleted top-down, 
 are released, the main-thread queue drains, `JobSystem::Shutdown` runs the queued jobs and joins the threads, then
 audio, the renderer, the device and the window go.
 
+### Frame profiler
+
+`FrameProfiler` (`Core/FrameProfiler.h`) times the stages of every frame, always (not only with Tracy), and keeps the last
+600 frames in a ring. `Application::RunFrame` begins the profiler's frame at its start and ends it with the frame's work
+time after presenting, so its frame time is `GetLastFrameWorkTime`; a frame the application skips is never ended and is
+discarded. Code marks a stage with `ST_PROFILE_STAGE("Name")` (`Core/Profiling.h`, also a Tracy zone) for the rest of a
+scope; scopes on other threads than the one that drives the frames, and outside frames, do nothing. Stages nest and record
+their self time (the stages inside them excluded), so a frame's stages never add up to more than the frame, and a stage
+entered several times in a frame adds up. Its cost is about 0.6 microseconds per frame of 16 stages
+(`Perf.FrameProfiler`). The built-in stages, registered first in this order (`c_BuiltinFrameStages`):
+
+| Stage | Where |
+| --- | --- |
+| `Input` | `Input::BeginFrame` and the window's events (`Application::RunFrame`) |
+| `Assets.Update` | `AssetManagerBase::Update` and `EditorAssetManager::Update` (file changes, imports, eviction) |
+| `Assets.Finalize` | `AssetManagerBase::ProcessCompletions`: finalizing arrivals, GPU uploads |
+| `Scene.Scripts`, `Scene.Physics`, `Scene.Audio` | the scene systems' start and update callbacks (`SceneSystemDescriptor::ProfileStage`) |
+| `Scene.Transforms` | `Scene::UpdateWorldTransforms` when something is dirty |
+| `Render.Extract` | `SceneRenderer::CollectLights`, `CollectDraws`, `CollectShadowCasters` |
+| `Render.Submit` | the rest of `SceneRenderer::Render`: recording and submitting the command list, text |
+| `Editor.UI` | `Application::RenderImGui`: the layers' `OnImGuiRender` and ImGui's drawing (the viewport's render nests in it) |
+| `Present` | `GraphicsDevice::EndFrame`, after the work time is measured (outside the frame time) |
+
+Modules and games register more (`RegisterStage`, up to 64); a scene system names its stage in its descriptor. Each frame
+also records how busy the job system's worker and I/O threads were since the previous frame (`JobSystem::GetStats`:
+per-thread busy time and completed jobs, written by each pool thread under a sequence lock and read without stopping it).
+`Summarize` gives mean, nearest-rank 50th and 95th percentiles and maximum per stage; frame listeners
+(`AddFrameListener`) receive every recorded frame. The editor reports it through `editor.perf`;
+`StrataRuntime --perf-log` writes it as CSV (`Runtime/FramePerfLog`, see
+[Export and the runtime](#export-and-the-runtime)).
+
 ## Scene runtime lifecycle
 
 A `Scene` that plays owns scene systems (`Scene/SceneSystem.h`), created from `SceneSystemRegistry` in update order.
@@ -382,6 +414,9 @@ are, in update order:
 - **Lookup.** `MakeSceneSystemDescriptor<T>` records the class (`SceneSystemDescriptor::Type`); `OnRuntimeStart` maps
   it to the created system, so `Scene::GetSystem<T>` is a hash lookup of the exact class (null for a class that is not
   registered, not created in the current mode, or a base class).
+- **Profiling.** A system's start and update callbacks run in the frame profiler stage its descriptor names
+  (`SceneSystemDescriptor::ProfileStage`: `Scene.Scripts`, `Scene.Physics`, `Scene.Audio`; empty: not timed on its own),
+  resolved when the scene starts; scenes updated outside a profiled frame (tests) skip the stages altogether.
 
 ```text
 OnRuntimeStart(mode)   reset time, pause, steps and requests; create the systems the mode runs;
@@ -776,8 +811,8 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   with an `EditorCommandError` kind, or `Defer(poll)`. The built-in groups are registered by
   `EditorSceneCommands.cpp` (scene, entity, component, prefab), `EditorAssetCommands.cpp` (asset, material, prefab,
   project, including `project.templates`, `project.samples`, `project.openSample` and `project.close`),
-  `EditorStateCommands.cpp` (edit, editor including `editor.recentProjects` and `editor.removeRecentProject`, log, play,
-  selection), `EditorViewportCommands.cpp` (camera, viewport), `EditorScriptCommands.cpp` (script),
+  `EditorStateCommands.cpp` (edit, editor including `editor.recentProjects`, `editor.removeRecentProject` and `editor.perf`,
+  log, play, selection), `EditorViewportCommands.cpp` (camera, viewport), `EditorScriptCommands.cpp` (script),
   `EditorInputCommands.cpp` (input), `EditorStreamingCommands.cpp` (`asset.stats`, `asset.setBudget`) and
   `EditorCommands.cpp` (`editor.commands`). Conventions: AGENTS.md, "Editor".
 - **Runner** (`EditorCommandRunner.h`). `Run` executes a command; a deferred one is polled once per frame from the next
@@ -828,8 +863,13 @@ The module's PDB is copied when it exists, except in Dist builds or with `includ
 `StrataRuntime` (`StrataRuntime/src/RuntimeApplication.cpp`) runs `--game <file>`, or the manifest found next to the
 executable (`GameManifest::FindForExecutable`). It logs to `<user data>/<Game>/Logs/Game.log`. `--headless` disables
 the window and the renderer and paces at 60 frames per second; `--windowed` overrides a fullscreen manifest, and
-`--frames N` with `--screenshot out.png` saves the last frame, and `--asset-budget-mb <n>` sets the GPU texture budget
-of the game's assets (the other budgets keep their defaults). `GameRuntime::Create` loads the manifest, makes a
+`--frames N` with `--screenshot out.png` saves the last frame, `--asset-budget-mb <n>` sets the GPU texture budget
+of the game's assets (the other budgets keep their defaults), and `--perf-log <csv>` writes a row for every frame, also
+headless (`Runtime/FramePerfLog`, a frame profiler listener, so writing costs the measured frame nothing): the frame's
+work time and interval, each stage's milliseconds, the job threads' busy percentages and the asset manager's streaming
+numbers after the frame (loading, queued and in-flight loads, uploaded MB, finalization ms, resident MB per pool,
+evictions). A log that cannot be written fails the run (exit code 1).
+`GameRuntime::Create` loads the manifest, makes a
 `RuntimeAssetManager` on the pack active (with `GameRuntimeOptions::AssetBudgets` when given), loads the script module
 into its own `ScriptEngine` without hot reload and makes it active, and starts the start scene in Play mode.
 Each frame it finalizes loads, updates the scene and honors requests: a quit ends the process with the game's exit

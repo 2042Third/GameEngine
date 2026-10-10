@@ -27,6 +27,7 @@
 	"Perf.Scripting.SpawnFrame1MOneScript.OrderRebuilds": { "Measured": 0, "Budget": 0, "Unit": "count" },
 	"Perf.Scripting.ScriptedSpawnFrame100k": { "Measured": 2.699, "Budget": 4.048, "Unit": "ms" },
 	"Perf.Scripting.ScriptedDestroy10kOf100kRoots": { "Measured": 21.25, "Budget": 31.87, "Unit": "ms" },
+	"Perf.FrameProfiler.Frame16Stages": { "Measured": 0.631, "Budget": 0.946, "Unit": "us" },
 	"Perf.Editor.EntityCreate100kRoots": { "Measured": 0.004, "Budget": 0.006, "Unit": "ms" },
 	"Perf.Editor.EntityDelete100kRoots": { "Measured": 0.4954, "Budget": 0.7431, "Unit": "ms" },
 	"Perf.Editor.Delete10kOf100kRoots": { "Measured": 42.64, "Budget": 63.96, "Unit": "ms" },
