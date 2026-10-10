@@ -2,9 +2,11 @@
 
 #include "Strata/Core/Base.h"
 #include "Strata/Core/Timestep.h"
+#include "Strata/Core/UUID.h"
 #include "Strata/Physics/PhysicsTypes.h"
 #include "Strata/Physics/PhysicsWorld.h"
 #include "Strata/Scene/Entity.h"
+#include "Strata/Scene/SceneServices.h"
 #include "Strata/Scene/SceneSystem.h"
 
 #include <entt/entt.hpp>
@@ -12,6 +14,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <optional>
+#include <unordered_map>
 #include <vector>
 
 namespace Strata
@@ -31,12 +34,14 @@ namespace Strata
 	// bodies where they were after the last step (Teleport moves a body immediately). Signal transform edits too (sleeping
 	// and static bodies only follow signaled changes, see PhysicsWorld).
 	//
-	// Collision events are collected during each step and dispatched afterwards on the main thread to the registered
-	// listeners. Listeners may use the whole scene and physics API, including destroying entities; End events caused by
-	// changes made outside a step are dispatched after the next update.
+	// Other systems reach it through the scene services it registers while it exists (Scene/SceneServices.h):
+	// ICollisionEventSource, IBodyMotionQuery, IBodyControl and IPhysicsQueries. Collision events are collected during each
+	// step and dispatched afterwards on the main thread to the registered listeners (see ICollisionEventSource, which also
+	// says which contacts are tracked). Listeners may use the whole scene and physics API, including destroying entities;
+	// End events caused by changes made outside a step are dispatched after the next update.
 	//
 	// Main thread only. Functions return false / zero / empty results while there is no simulation.
-	class PhysicsSystem : public SceneSystem
+	class PhysicsSystem : public SceneSystem, public ICollisionEventSource, public IBodyMotionQuery, public IBodyControl, public IPhysicsQueries
 	{
 	public:
 		explicit PhysicsSystem(Scene& scene);
@@ -45,9 +50,16 @@ namespace Strata
 		PhysicsSystem(const PhysicsSystem&) = delete;
 		PhysicsSystem& operator=(const PhysicsSystem&) = delete;
 
-		// Project-wide settings (capacities, layer matrix) copied by physics systems created afterwards.
+		// Process-wide settings (capacities, layer matrix) copied by physics systems created afterwards (tests and tools; games
+		// set capacities per scene, SceneSettings::PhysicsCapacity, which win over these).
 		static void SetDefaultSettings(const PhysicsSettings& settings);
 		static const PhysicsSettings& GetDefaultSettings();
+
+		// What the worlds of a scene (Scene::GetLineageID: its scene asset, or the scene and its copies) needed beyond their
+		// capacities in this process (remembered when they stop): a world created for the scene later sizes its automatic
+		// capacities for at least that much. Scenes that only share a name share nothing.
+		static PhysicsCapacityDemand GetRememberedCapacityDemand(UUID sceneLineage);
+		static void ForgetCapacityDemands();
 
 		void OnRuntimeStart() override;
 		void OnRuntimeStop() override;
@@ -60,13 +72,14 @@ namespace Strata
 		const PhysicsWorld* GetWorld() const { return m_World.get(); }
 
 		//////////////////////////////////////////////////////////////////////////
-		// Collision events
+		// Collision events (ICollisionEventSource)
 		//////////////////////////////////////////////////////////////////////////
 
-		// Listeners are called in registration order. A listener added while events are being dispatched receives events
-		// from the next dispatch on; a removed listener is not called again, even for the rest of the current dispatch.
-		CollisionListenerID AddCollisionListener(CollisionCallback callback);
-		bool RemoveCollisionListener(CollisionListenerID id);
+		CollisionListenerID AddCollisionListener(CollisionCallback callback, CollisionListenerScope scope = CollisionListenerScope::AllEntities) override;
+		bool RemoveCollisionListener(CollisionListenerID id) override;
+		void WatchCollisions(UUID entity) override;
+		void UnwatchCollisions(UUID entity) override;
+		bool IsWatchingCollisions(UUID entity) const;
 
 		//////////////////////////////////////////////////////////////////////////
 		// World
@@ -81,39 +94,44 @@ namespace Strata
 		PhysicsStats GetStats() const;
 
 		//////////////////////////////////////////////////////////////////////////
-		// Body API (see PhysicsWorld)
+		// Body API (IBodyMotionQuery, IBodyControl; see PhysicsWorld)
 		//////////////////////////////////////////////////////////////////////////
 
-		bool HasBody(Entity entity);
+		bool HasBody(Entity entity) override;
 		Entity GetBodyEntity(Entity entity);
-		glm::vec3 GetLinearVelocity(Entity entity);
-		bool SetLinearVelocity(Entity entity, const glm::vec3& velocity);
-		glm::vec3 GetAngularVelocity(Entity entity);
-		bool SetAngularVelocity(Entity entity, const glm::vec3& velocity);
-		bool AddForce(Entity entity, const glm::vec3& force);
-		bool AddForceAtPosition(Entity entity, const glm::vec3& force, const glm::vec3& worldPosition);
-		bool AddImpulse(Entity entity, const glm::vec3& impulse);
-		bool AddImpulseAtPosition(Entity entity, const glm::vec3& impulse, const glm::vec3& worldPosition);
-		bool AddTorque(Entity entity, const glm::vec3& torque);
-		bool AddAngularImpulse(Entity entity, const glm::vec3& impulse);
-		bool SetGravityScale(Entity entity, float gravityScale);
-		bool IsSleeping(Entity entity);
-		bool WakeUp(Entity entity);
-		bool Teleport(Entity entity, const glm::vec3& position, const glm::quat& rotation);
+		glm::vec3 GetLinearVelocity(Entity entity) override;
+		bool SetLinearVelocity(Entity entity, const glm::vec3& velocity) override;
+		glm::vec3 GetAngularVelocity(Entity entity) override;
+		bool SetAngularVelocity(Entity entity, const glm::vec3& velocity) override;
+		std::optional<glm::vec3> GetPointVelocity(Entity entity, const glm::vec3& worldPoint) override;
+		bool AddForce(Entity entity, const glm::vec3& force) override;
+		bool AddForceAtPosition(Entity entity, const glm::vec3& force, const glm::vec3& worldPosition) override;
+		bool AddImpulse(Entity entity, const glm::vec3& impulse) override;
+		bool AddImpulseAtPosition(Entity entity, const glm::vec3& impulse, const glm::vec3& worldPosition) override;
+		bool AddTorque(Entity entity, const glm::vec3& torque) override;
+		bool AddAngularImpulse(Entity entity, const glm::vec3& impulse) override;
+		bool SetGravityScale(Entity entity, float gravityScale) override;
+		bool IsSleeping(Entity entity) override;
+		bool WakeUp(Entity entity) override;
+		bool Teleport(Entity entity, const glm::vec3& position, const glm::quat& rotation) override;
 
 		//////////////////////////////////////////////////////////////////////////
-		// Queries (see PhysicsWorld)
+		// Queries (IPhysicsQueries; see PhysicsWorld)
 		//////////////////////////////////////////////////////////////////////////
 
-		std::optional<RaycastHit> Raycast(const glm::vec3& origin, const glm::vec3& direction, float maxDistance, uint32_t layerMask = c_AllPhysicsLayers, Entity ignoreEntity = {}, bool includeTriggers = false);
-		std::vector<RaycastHit> RaycastAll(const glm::vec3& origin, const glm::vec3& direction, float maxDistance, uint32_t layerMask = c_AllPhysicsLayers, Entity ignoreEntity = {}, bool includeTriggers = false);
-		std::vector<Entity> OverlapSphere(const glm::vec3& center, float radius, uint32_t layerMask = c_AllPhysicsLayers, bool includeTriggers = false);
-		std::vector<Entity> OverlapBox(const glm::vec3& center, const glm::vec3& halfExtents, const glm::quat& rotation, uint32_t layerMask = c_AllPhysicsLayers, bool includeTriggers = false);
+		std::optional<RaycastHit> Raycast(const glm::vec3& origin, const glm::vec3& direction, float maxDistance, uint32_t layerMask = c_AllPhysicsLayers,
+			Entity ignoreEntity = {}, bool includeTriggers = false) override;
+		std::vector<RaycastHit> RaycastAll(const glm::vec3& origin, const glm::vec3& direction, float maxDistance, uint32_t layerMask = c_AllPhysicsLayers,
+			Entity ignoreEntity = {}, bool includeTriggers = false) override;
+		std::vector<Entity> OverlapSphere(const glm::vec3& center, float radius, uint32_t layerMask = c_AllPhysicsLayers, bool includeTriggers = false) override;
+		std::vector<Entity> OverlapBox(const glm::vec3& center, const glm::vec3& halfExtents, const glm::quat& rotation, uint32_t layerMask = c_AllPhysicsLayers,
+			bool includeTriggers = false) override;
 	private:
 		struct CollisionListener
 		{
 			CollisionListenerID ID = c_InvalidCollisionListener;
 			CollisionCallback Callback;
+			CollisionListenerScope Scope = CollisionListenerScope::AllEntities;
 			bool Removed = false;
 		};
 
@@ -124,6 +142,8 @@ namespace Strata
 		void ApplyPendingChanges();
 		void SyncGravity();
 		void DispatchCollisionEvents();
+		// Tells the world which contacts to track: all of them while a listener of every entity is registered.
+		void UpdateContactTracking();
 	private:
 		Scene& m_Scene;
 		PhysicsSettings m_Settings;
@@ -134,6 +154,7 @@ namespace Strata
 
 		std::vector<Ref<CollisionListener>> m_CollisionListeners;
 		CollisionListenerID m_NextListenerID = 1;
+		std::unordered_map<UUID, uint32_t> m_CollisionWatches; // Watched entities and their watch counts (see WatchCollisions)
 		glm::vec3 m_AppliedGravity = glm::vec3(0.0f); // Scene gravity last applied to the world
 	};
 

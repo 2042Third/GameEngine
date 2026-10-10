@@ -21,10 +21,3 @@ Strata/Asset/AssetManager.cpp:Strata/Renderer/Renderer.h | mip-streaming | Asset
 # Physics takes collision geometry from the renderer's mesh asset; a renderer-independent MeshGeometry asset replaces it
 # (Mesh v2, on the roadmap's deferred list).
 Strata/Physics/AssetMeshProvider.cpp:Strata/Renderer/Mesh.h | mesh-v2 | Mesh collider shapes read the vertices and indices of the renderer's Mesh.
-
-# Systems of one scene reach each other directly; scene services give them interfaces in the Scene layer.
-Strata/Audio/AudioSystem.cpp:Strata/Physics/PhysicsSystem.h | physics-at-scale | Doppler reads the rigid body velocities of sources and the listener.
-Strata/Scripting/ScriptHostAPI.cpp:Strata/Audio/AudioSystem.h | physics-at-scale | The script host functions for audio sources and one-shots call the scene's audio system.
-Strata/Scripting/ScriptHostAPI.cpp:Strata/Physics/PhysicsSystem.h | physics-at-scale | The script host functions for rigid bodies, raycasts and overlaps call the scene's physics system.
-Strata/Scripting/ScriptSystem.cpp:Strata/Physics/PhysicsSystem.h | physics-at-scale | Scripts receive collision and trigger callbacks through a physics collision listener.
-Strata/Scripting/ScriptSystem.h:Strata/Physics/PhysicsTypes.h | physics-at-scale | ScriptSystem's collision dispatch takes physics collision events.

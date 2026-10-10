@@ -77,8 +77,8 @@ namespace Strata
 		AssetType GetType() const override { return GetStaticType(); }
 
 		static Ref<SceneAsset> Deserialize(std::span<const uint8_t> data, std::string* outError = nullptr);
-		// Builds a new scene from the document. What it could not read as written (unknown properties, components this build
-		// does not register) is logged as warnings.
+		// Builds a new scene from the document, whose source asset (Scene::GetSourceAsset) is this asset. What it could not read
+		// as written (unknown properties, components this build does not register) is logged as warnings.
 		Ref<Scene> CreateScene(std::string* outError = nullptr) const;
 		const nlohmann::json& GetDocument() const { return m_Document; }
 

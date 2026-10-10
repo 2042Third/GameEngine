@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Strata/Core/Base.h"
+#include "Strata/Core/UUID.h"
 #include "Strata/Physics/PhysicsTypes.h"
 #include "Strata/Scene/Entity.h"
 
@@ -54,7 +55,8 @@ namespace Strata
 	//    impossible). Dynamic descendants of a moving dynamic body keep their own world pose; kinematic and static
 	//    descendants follow it.
 	// The work of a step grows with the awake bodies, their contacts and the signaled changes, not with sleeping or static
-	// bodies (see PhysicsStats::SyncedBodyCount, CheckedPairCount and WrittenBodyCount).
+	// bodies or the world's capacity (see PhysicsStats::SyncedBodyCount, CheckedPairCount, WrittenBodyCount and
+	// OrderedSlotCount).
 	//
 	// The simulation waits for mesh colliders at the start: while a mesh collider that exists before the first step waits for
 	// mesh data the provider is loading or for its shape to be cooked, Simulate holds the step (nothing moves and no
@@ -63,13 +65,29 @@ namespace Strata
 	// most PhysicsSettings::MeshWaitTimeout seconds of simulation time, with a warning naming the colliders that are still
 	// missing; mesh colliders added later, unknown meshes and meshes that failed to load are not waited for.
 	//
+	// Capacities: Jolt allocates the world for fixed numbers of bodies, body pairs and contact constraints. Capacities that are
+	// 0 in the settings are sized when the world is created from the bodies the scene has then (ResolveCapacities), so a scene
+	// gets the room it needs without settings; a body that finds the world full waits for a free slot (one aggregated error
+	// names the entities), and steps that overflow the pair or contact buffers drop contacts (a warning once per world). Both
+	// are recorded (PhysicsStats::BodyOverflowCount, ContactOverflowSteps, Demand), so the next world of the scene can grow.
+	//
 	// Main thread only. Jolt runs the step on Strata's JobSystem workers when it is initialized.
 	class PhysicsWorld
 	{
 	public:
-		// Creates the bodies of every entity in the scene and starts listening to its changes.
-		explicit PhysicsWorld(Scene& scene, const PhysicsSettings& settings = PhysicsSettings());
+		// Creates the bodies of every entity in the scene and starts listening to its changes. `demand` is what an earlier
+		// world of the scene needed beyond its capacities: automatic capacities are sized for at least that much.
+		explicit PhysicsWorld(Scene& scene, const PhysicsSettings& settings = PhysicsSettings(), const PhysicsCapacityDemand& demand = {});
 		~PhysicsWorld(); // Destroys every body without emitting collision events
+
+		// The settings a world is created with for `bodyCount` bodies: capacities given in `settings` stay (clamped to the
+		// engine's limits), automatic ones (0) become
+		//  - MaxBodies: the next power of two of at least twice the bodies, at least 65,536;
+		//  - MaxBodyPairs: four times MaxBodies;
+		//  - MaxContactConstraints: twice the bodies, at least 10,240;
+		// each at least what `demand` asks for, and an automatic TempAllocatorSize holds a step's scratch data for those
+		// capacities (at least 10 MiB).
+		static PhysicsSettings ResolveCapacities(const PhysicsSettings& settings, uint32_t bodyCount, const PhysicsCapacityDemand& demand = {});
 
 		PhysicsWorld(const PhysicsWorld&) = delete;
 		PhysicsWorld& operator=(const PhysicsWorld&) = delete;
@@ -82,7 +100,10 @@ namespace Strata
 		static PhysicsMeshProvider& GetMeshProvider();
 
 		Scene& GetScene() const;
+		// The settings in effect, capacities resolved (see ResolveCapacities).
 		const PhysicsSettings& GetSettings() const;
+		// What the world needed beyond its capacities so far (see PhysicsCapacityDemand); empty while they suffice.
+		PhysicsCapacityDemand GetCapacityDemand() const;
 
 		//////////////////////////////////////////////////////////////////////////
 		// Bodies
@@ -105,6 +126,14 @@ namespace Strata
 		// Collision events queued since the last call, in the order they occurred. Entity handles are resolved now. Events
 		// accumulate until taken (PhysicsSystem takes them after every update).
 		std::vector<CollisionEvent> TakeCollisionEvents();
+
+		// Which contacts become events (see ICollisionEventSource): while tracking all contacts (the default) every touching
+		// pair, otherwise only pairs with an entity of interest (one owning a body). Contacts of pairs nobody wants are not
+		// recorded during the step, so they cost nothing beyond Jolt's own work. A pair is tracked from the first step that
+		// reports it while it is wanted; one that stops being wanted ends at the next step that checks it.
+		void SetTrackAllContacts(bool trackAll);
+		bool IsTrackingAllContacts() const;
+		void SetContactInterest(UUID entity, bool interested);
 
 		//////////////////////////////////////////////////////////////////////////
 		// World settings

@@ -11,8 +11,11 @@
 #include <Strata/Scene/Prefab.h>
 #include <Strata/Scene/Scene.h>
 
+#include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <limits>
+#include <string>
 
 namespace Strata
 {
@@ -58,8 +61,40 @@ namespace Strata
 			return {
 				{ "gravity", { settings.Gravity.x, settings.Gravity.y, settings.Gravity.z } },
 				{ "fixedTimestep", settings.FixedTimestep },
-				{ "maxFixedStepsPerFrame", settings.MaxFixedStepsPerFrame }
+				{ "maxFixedStepsPerFrame", settings.MaxFixedStepsPerFrame },
+				{ "physicsCapacity", {
+					{ "maxBodies", settings.PhysicsCapacity.MaxBodies },
+					{ "maxBodyPairs", settings.PhysicsCapacity.MaxBodyPairs },
+					{ "maxContactConstraints", settings.PhysicsCapacity.MaxContactConstraints } } }
 			};
+		}
+
+		// Reads scene.setSettings' "physicsCapacity" object into `capacity` (only the fields it names change). Returns an error
+		// message for an invalid object, empty on success.
+		std::string ReadPhysicsCapacity(const nlohmann::json& value, PhysicsCapacitySettings& capacity)
+		{
+			if (!value.is_object())
+				return "Parameter 'physicsCapacity' must be an object";
+			const struct
+			{
+				const char* Name;
+				uint32_t PhysicsCapacitySettings::*Field;
+				uint32_t Limit;
+			} fields[] = {
+				{ "maxBodies", &PhysicsCapacitySettings::MaxBodies, PhysicsCapacitySettings::c_MaxBodiesLimit },
+				{ "maxBodyPairs", &PhysicsCapacitySettings::MaxBodyPairs, PhysicsCapacitySettings::c_MaxBodyPairsLimit },
+				{ "maxContactConstraints", &PhysicsCapacitySettings::MaxContactConstraints, PhysicsCapacitySettings::c_MaxContactConstraintsLimit } };
+			for (const auto& [key, entry] : value.items())
+			{
+				const auto field = std::find_if(std::begin(fields), std::end(fields), [&](const auto& candidate) { return key == candidate.Name; });
+				if (field == std::end(fields))
+					return fmt::format("Unknown parameter 'physicsCapacity.{}' (known: maxBodies, maxBodyPairs, maxContactConstraints)", key);
+				const bool isCount = entry.is_number_unsigned() || (entry.is_number_integer() && entry.get<int64_t>() >= 0);
+				if (!isCount || entry.get<uint64_t>() > field->Limit)
+					return fmt::format("Parameter 'physicsCapacity.{}' must be an integer from 0 (automatic) to {}", key, field->Limit);
+				capacity.*(field->Field) = static_cast<uint32_t>(entry.get<uint64_t>());
+			}
+			return {};
 		}
 
 		const ComponentInfo* GetComponentInfo(CommandArguments& arguments, std::string_view name, bool forEditing)
@@ -76,6 +111,13 @@ namespace Strata
 			return info;
 		}
 
+		// What mutating commands report while the scene is running.
+		std::string GetRunningCopyWarning(const EditorContext& context)
+		{
+			return fmt::format("The scene is running ({}): this change applies to the running copy and is discarded by play.stop",
+				SceneStateToString(context.GetSceneState()));
+		}
+
 		// Ends a mutating command: records the undo step (edit mode) and reports the result. While playing, edits change
 		// the running copy only; the result says so, because play.stop discards them.
 		EditorCommandResult Finish(EditorContext& context, SceneEditTransaction& transaction, nlohmann::json value = nullptr)
@@ -85,8 +127,7 @@ namespace Strata
 			{
 				if (!value.is_object())
 					value = nlohmann::json::object();
-				value["warning"] = fmt::format("The scene is running ({}): this change applies to the running copy and is discarded by play.stop",
-					SceneStateToString(context.GetSceneState()));
+				value["warning"] = GetRunningCopyWarning(context);
 			}
 			return EditorCommandResult::Ok(std::move(value));
 		}
@@ -216,11 +257,24 @@ namespace Strata
 				return EditorCommandResult::Ok({ { "scene", UUIDToJson(context.GetSceneHandle()) } });
 			} });
 
-		registry.Register({ "scene.setSettings", "Changes physics settings of the edited scene (undoable; while playing it changes the running copy only).",
+		nlohmann::json capacitySchema = ObjectSchema({
+			{ "maxBodies", IntegerSchema("Most bodies the physics world holds (each reserves about 80 bytes); 0 sizes it from the bodies the scene "
+				"starts with", 0, PhysicsCapacitySettings::c_MaxBodiesLimit) },
+			{ "maxBodyPairs", IntegerSchema("Most pairs of bodies with overlapping bounds per step (each reserves about 90 bytes); 0: automatic", 0,
+				PhysicsCapacitySettings::c_MaxBodyPairsLimit) },
+			{ "maxContactConstraints", IntegerSchema("Most contacts solved per step (each reserves about 830 bytes); 0: automatic", 0,
+				PhysicsCapacitySettings::c_MaxContactConstraintsLimit) } });
+		capacitySchema["description"] = "Physics world capacities (only the given ones change), reserved in memory when play starts; raise them for "
+			"scenes that create many bodies while they play";
+		registry.Register({ "scene.setSettings",
+			"Changes physics settings of the edited scene: gravity, the fixed step and the physics world's capacities (undoable, one step). "
+			"Capacities take effect when a physics world is created, at the next play start, so set them in edit mode: while playing, changes go "
+			"to the running copy only and play.stop discards them (the result then has a warning). Returns the settings.",
 			ObjectSchema({
 				{ "gravity", Vec3Schema("Gravity in m/s^2") },
 				{ "fixedTimestep", NumberSchema("Fixed simulation step in seconds (1/1000 to 1/10)") },
-				{ "maxFixedStepsPerFrame", IntegerSchema("Upper bound of fixed steps per frame", 1, 64) } }),
+				{ "maxFixedStepsPerFrame", IntegerSchema("Upper bound of fixed steps per frame", 1, 64) },
+				{ "physicsCapacity", std::move(capacitySchema) } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				Scene& scene = *context.GetActiveScene();
@@ -240,17 +294,31 @@ namespace Strata
 						return EditorCommandResult::InvalidParameters("Parameter 'fixedTimestep' must be between 0.001 and 0.1");
 					after.FixedTimestep = step->get<float>();
 				}
+				if (auto capacity = parameters.find("physicsCapacity"); capacity != parameters.end())
+				{
+					if (std::string error = ReadPhysicsCapacity(*capacity, after.PhysicsCapacity); !error.empty())
+						return EditorCommandResult::InvalidParameters(error);
+				}
 				CommandArguments arguments(parameters);
 				after.MaxFixedStepsPerFrame = static_cast<uint32_t>(arguments.GetInt("maxFixedStepsPerFrame", before.MaxFixedStepsPerFrame, 1, 64));
 				if (!arguments.IsValid())
 					return arguments.Fail();
 
 				const bool changed = after.Gravity != before.Gravity || after.FixedTimestep != before.FixedTimestep
-					|| after.MaxFixedStepsPerFrame != before.MaxFixedStepsPerFrame;
+					|| after.MaxFixedStepsPerFrame != before.MaxFixedStepsPerFrame || after.PhysicsCapacity != before.PhysicsCapacity;
 				scene.GetSettings() = after;
 				if (changed && !context.IsPlaying())
 					context.GetUndoStack().Record(CreateScope<SceneSettingsAction>(scene, before, after));
-				return EditorCommandResult::Ok({ { "settings", DescribeSettings(after) } });
+				nlohmann::json result = { { "settings", DescribeSettings(after) } };
+				if (context.IsPlaying())
+				{
+					// Like the other mutating commands; capacities do not even reach the running copy's world, which exists already.
+					std::string warning = GetRunningCopyWarning(context);
+					if (after.PhysicsCapacity != before.PhysicsCapacity)
+						warning += "; physics capacities apply to worlds created later, not to the running one, so set them in edit mode";
+					result["warning"] = std::move(warning);
+				}
+				return EditorCommandResult::Ok(std::move(result));
 			} });
 
 		////////////////////////////////////////////////////////////////////////////////

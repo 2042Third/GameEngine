@@ -65,8 +65,9 @@ labels are listed in AGENTS.md, "Testing"). The perf lab is one of them: suites 
 (`StrataTests/src/Perf/`) measure metrics against the budgets in `StrataTests/Perf/Budgets.json`, in Release and Dist
 only, confirm a metric over its budget by measuring it again before failing (`Perf::CheckBudgetsConfirmed`), and write
 `<build>/PerfResults/<config>.json` with every attempt; `Tools/PerfStability.py` runs them repeatedly and reports how
-stable each metric is. `Perf.Scene` and `Perf.Scripting` measure scenes built by
-`Perf/SceneGenerators.h` (flat roots, a nested tree, scripted entities); `Perf.Editor` (editor commands) and
+stable each metric is. `Perf.Scene`, `Perf.Scripting` and `Perf.Physics` measure scenes built by
+`Perf/SceneGenerators.h` (flat roots, a nested tree, scripted entities, stacks of falling boxes); `Perf.Editor` (editor
+commands) and
 `PerfGPU.Editor` (the real `StrataEditor`'s frame times on generated 100,000- and 1,000,000-entity scenes, read from
 its `editor.wait` results) live in `src/Editor/`, which only builds with the editor.
 
@@ -102,7 +103,8 @@ their own and ignore it). Services: `Log` (spdlog; `LogBuffer` backs the editor 
 process memory with peaks: `GetProcessMemory`, process uptime: `GetProcessUptime`),
 `Process` (child processes), `DynamicLibrary`, `CrashGuard`, `UUID`, `Crypto` (SHA-256, peer authentication), `Base64`,
 `CommandLine`, `Timer`/`FramePacer`, `JsonUtils` (exception-free JSON reads), `SequenceLock` (lock-free hand-off to the
-audio thread) and `Profiling` (Tracy with `STRATA_ENABLE_TRACY`).
+audio thread), `EngineServices` (process-wide interfaces a module offers the modules that may not include it, such as the
+audio output's master volume, `IAudioOutput`) and `Profiling` (Tracy with `STRATA_ENABLE_TRACY`).
 
 **Events** (`Events/`). Window, key and mouse events (`ApplicationEvent.h`, `KeyEvent.h`, `MouseEvent.h`, including
 `WindowFileDropEvent` and `WindowContentScaleEvent`, raised when the window moves to a display with another DPI setting
@@ -136,8 +138,9 @@ DirectionalLight, PointLight, SpotLight, SkyLight, PostProcess, Text, RigidBody,
 CapsuleCollider, MeshCollider, AudioSource, AudioListener, Script). `ComponentAccess` reads and writes them with
 validation and change signals, `SceneSerializer` writes versioned JSON (keeping components it cannot read, see
 [Composition root and registries](#composition-root-and-registries)), and `Prefab.h` defines the scene-shaped assets
-(`EntityTemplate`, `Prefab`, `Model`, `SceneAsset`). See [Scene caches](#scene-caches) for how per-frame cost follows
-what changed.
+(`EntityTemplate`, `Prefab`, `Model`, `SceneAsset`). `SceneServices.h` defines the interfaces through which the systems
+of a playing scene use each other (see [Scene services](#scene-services)). See [Scene caches](#scene-caches) for how
+per-frame cost follows what changed.
 
 **Asset** (`Asset/`). `AssetManagerBase` (registry, asynchronous loading and residency), `AssetStreamingQueue` (the
 order and admission of loads), `AssetResidency` (memory pools, budgets, `AssetPin`, eviction), `AssetManager` (the
@@ -170,13 +173,41 @@ rules: AGENTS.md, "Architecture rules" and "Rendering".
 Jolt world from RigidBody and collider components and steps it; `PhysicsRuntime` reference-counts Jolt's global
 state; `PhysicsJobSystem` runs Jolt's jobs on the engine's worker pool; `PhysicsMeshShapes` cooks mesh collider shapes
 on jobs and caches them process-wide; `AssetMeshProvider` supplies mesh data from the active asset manager.
-`PhysicsTypes.h` has the settings, layers, `CollisionEvent` and `RaycastHit`. Collision events collected during a step
-are dispatched afterwards on the main thread to listeners (`PhysicsSystem::AddCollisionListener`).
+`PhysicsTypes.h` has the settings, layers and statistics. A world's capacities are fixed when it is created: those the
+scene does not set (`SceneSettings::PhysicsCapacity`) are sized from the bodies the scene starts with
+(`PhysicsWorld::ResolveCapacities`: at least 65,536 bodies, the next power of two of twice the bodies; four body pairs per
+body slot; at least 10,240 contacts, two per body; scratch memory for them), bodies that find the world full wait for a
+slot and are reported in one error, steps that overflow the pair or contact buffers are counted
+(`PhysicsStats::BodyOverflowCount`, `ContactOverflowSteps`), and what a world lacked is remembered per scene
+(`Scene::GetLineageID`: the scene asset it was loaded from or saved as, else the scene and its copies; never another
+scene of the same name), so the scene's next world is sized for it. Jolt reserves a world's buffers when it is created
+and does not survive a failed allocation, so the capacities a scene may ask for are limited (`PhysicsCapacitySettings`:
+about 80 bytes per body, 90 per body pair and 830 per contact constraint, about 940 MiB at the limits). Other systems
+use physics through the scene services `PhysicsSystem` offers (`ICollisionEventSource`, `IBodyMotionQuery`,
+`IBodyControl`, `IPhysicsQueries`, with `CollisionEvent` and `RaycastHit`, in `Scene/SceneServices.h`); collision events
+collected during a step are dispatched
+afterwards on the main thread to the listeners. Contacts are tracked only for pairs someone wants (every pair while a
+listener of all entities is registered, otherwise pairs with a watched entity, such as one whose script has contact
+callbacks): Jolt's job threads record those into buffers of their own, without a lock, which are merged and sorted after
+the step, and each touching pair knows its position in the pair lists of both its entities, so it is added and removed
+in constant time (`PhysicsStats::PairIndexOperations` counts the list writes). Bodies created while changes are applied
+(play start, a prefab spawn, a streamed cell) join the simulation in one batch per activation mode
+(`AddBodiesPrepare`/`AddBodiesFinalize`), and destroyed bodies leave it in one batch, when `ApplyPendingChanges` ends;
+each Jolt body index leads to its entity and record in constant time (`BodySlot`). Around each step the work on awake
+bodies runs on the job system: the synchronization skips, in parallel chunks, the bodies whose entity is where the last
+step put it (`Scene::FindCurrentWorldTransform` reads only current cached matrices), and the write-back writes the poses of
+bodies without a dynamic ancestor in parallel chunks, each touching only its own record and `TransformComponent` through
+pointers fetched beforehand, against parent world transforms read before the writes, then tells the scene about all of them
+at once (`Scene::MarkTransformsChanged`, no `on_update`); bodies below other written dynamic bodies follow one by one,
+parents first, and the rare cases (scale edits, failed writes, descendants to update) are handled on the main thread in body
+order, so the results do not depend on the number of threads. Body order comes from a bitmap over the body indices of
+which only the words that got bits are sorted, read and cleared, so a step costs what moved, not the world's capacity.
 
 **Audio** (`Audio/`). `AudioEngine` wraps the miniaudio mixer, output device, listener and one-shots (main-thread
 API; mixing runs on miniaudio's audio thread, or is pulled with `AdvanceNullDevice`/`ReadFrames` without a device).
 `AudioClip` is immutable sound data, decompressed or streamed; `AudioClipAsset` is its asset, `AudioSource` a voice
-with settings, and `AudioSystem` the "Audio" scene system (Play only). Details: AGENTS.md, "Audio".
+with settings, and `AudioSystem` the "Audio" scene system (Play only), which offers the scene service `IAudioPlayback`;
+the module registers the engine service `IAudioOutput` (master volume). Details: AGENTS.md, "Audio".
 
 **Scripting** (`Scripting/`). `ScriptEngine` (the loaded module, hot reload, faults, optional watchdog),
 `ScriptModule` (loading, validation and guarded calls), `ScriptSystem` (the "Scripting" scene system: instances and
@@ -242,8 +273,9 @@ and third-party headers match no layer and are skipped), maps both ends to their
 layers and fails on every file that is in no layer or in several, on every forbidden include that is not in
 `StrataTests/Architecture/LayeringAllowlist.txt`, and on every allowlist line that matches nothing. Each allowlist line
 names the include, the roadmap workstream that removes it and the reason; the list holds exactly `MaxAllowlistEntries`
-lines (14: the application shell wiring services, asset uploads on the renderer, physics reading renderer meshes, and
-scripting and audio calling the physics and audio systems), so it can only shrink.
+lines (9: the application shell wiring services, asset uploads on the renderer and physics reading renderer meshes), so
+it can only shrink. Scripting and Audio, which used to include the physics and audio systems, reach them through scene
+services (see [Scene services](#scene-services)).
 
 ### Composition root and registries
 
@@ -383,7 +415,8 @@ are, in update order:
   running scenes created their systems from the registry.
 - **Lookup.** `MakeSceneSystemDescriptor<T>` records the class (`SceneSystemDescriptor::Type`); `OnRuntimeStart` maps
   it to the created system, so `Scene::GetSystem<T>` is a hash lookup of the exact class (null for a class that is not
-  registered, not created in the current mode, or a base class).
+  registered, not created in the current mode, or a base class). Systems of other modules use each other through scene
+  services instead (below), never through `GetSystem` of a class they would have to include.
 
 ```text
 OnRuntimeStart(mode)   reset time, pause, steps and requests; create the systems the mode runs;
@@ -391,7 +424,8 @@ OnRuntimeStart(mode)   reset time, pause, steps and requests; create the systems
 OnUpdateRuntime(dt)    paused without steps: only world transforms
                        dt = timestep * time scale (one fixed step while stepping)
                        OnUpdate -> OnFixedUpdate x N (accumulator, at most MaxFixedStepsPerFrame = 8, backlog
-                       dropped) -> OnLateUpdate -> flush deferred destruction -> world transforms
+                       dropped; with time dilation catch-up steps stop once the update's steps took longer than
+                       they simulated) -> OnLateUpdate -> flush deferred destruction -> world transforms
 SetPaused(bool)        OnPausedChanged on every system; Step(n) runs n single fixed steps while paused
 OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reverse order, destruction flushed
 ```
@@ -405,7 +439,40 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
 - Gameplay asks the scene's owner to quit or to switch scenes (`Scene::RequestQuit`, `RequestSceneLoad`); owners honor
   the requests after the update. The owners are the editor's play mode (`EditorContext::StartRuntime` plays a
   `Scene::Copy` of the edited scene; `Stop` discards it) and `GameRuntime`.
-- `SceneSettings` holds gravity, the fixed timestep (1/60 s) and `MaxFixedStepsPerFrame`.
+- **Time dilation** (`Scene::SetTimeDilation`): owners driven by the wall clock (the editor's play mode outside scripted
+  runs, `EditorContextSpecification::TimeDilation`; exported games outside `--frames` runs,
+  `GameRuntimeOptions::TimeDilation`) let a simulation that cannot keep up with real time slow down: an update stops its
+  catch-up fixed steps once they took longer, in wall time, than the time they simulated, and drops the steps still due
+  (`GetDroppedFixedStepCount`, also `PhysicsStats::DroppedSteps`). Otherwise a frame that runs eight expensive steps
+  makes the next one owe even more. Tests and tools keep the default, every due step up to `MaxFixedStepsPerFrame`.
+- `SceneSettings` holds gravity, the fixed timestep (1/60 s), `MaxFixedStepsPerFrame` and the physics world's capacities
+  (`PhysicsCapacity`: bodies, body pairs and contact constraints; 0, the default, sizes one automatically; each up to a
+  limit that bounds the memory a world reserves). All of it is saved with the scene and changed with `scene.setSettings`
+  (one undo step); capacities apply when a world is created, at play start.
+- A scene knows the scene asset it was loaded from or saved as (`Scene::GetSourceAsset`, set by
+  `SceneAsset::CreateScene` and by the editor's save-as) and keeps an ID across its copies (`GetLineageID`: the source
+  asset, else an ID of its own), by which systems recognize it from one play session to the next.
+
+### Scene services
+
+Systems of different modules use each other through interfaces in the Scene layer (`Scene/SceneServices.h`), so that
+Scripting and Audio never include Physics or Audio headers (the layers above). A system registers each interface it offers
+with its scene for as long as it exists (`Scene::RegisterService<T>` in its constructor, `UnregisterService` in its
+destructor; one provider per interface, a second one is refused with an error), so a service is available from the first
+`OnRuntimeStart` of any system to the last `OnRuntimeStop`; consumers look it up (`Scene::GetService<T>`) and handle null,
+which means the module is not in the build or its system does not run in this mode.
+
+| Service | Provider | Consumers |
+| --- | --- | --- |
+| `ICollisionEventSource`: collision listeners (all entities, or only watched ones) and watched entities | `PhysicsSystem` | `ScriptSystem` (contact callbacks), tools and tests |
+| `IBodyMotionQuery`: bodies, velocities, the velocity of a point moving with a body | `PhysicsSystem` | script host (`RigidBody`), `AudioSystem` (Doppler) |
+| `IBodyControl`: velocities, forces, impulses, gravity scale, wake-up, teleport | `PhysicsSystem` | script host (`RigidBody`) |
+| `IPhysicsQueries`: raycasts and overlaps | `PhysicsSystem` | script host (`Physics`) |
+| `IAudioPlayback`: sources and one-shots | `AudioSystem` (an adapter object) | script host (`AudioSource`, `Audio`) |
+
+What outlives scenes is an engine service (`Core/EngineServices.h`): a module registers it in its registration function
+while the composition root runs, e.g. the Audio module's `IAudioOutput` (the master volume, which scripts change in any
+scene, also one that plays without audio).
 
 ### Scene caches
 
@@ -421,8 +488,9 @@ A frame of a scene where nothing changed costs (almost) nothing, however many en
 | Hierarchy moves (a bounded log of the entities reparented or reordered, by hierarchy version) | `SetParent`, `SetSiblingIndex`, `PlaceEntities` | `GetHierarchyMoves`: the script update order places only the scripted entities that moved |
 | Name and tag indices (hash buckets with constant-time removal) | `NameComponent`/`TagComponent` signals, after the first lookup built them | `FindEntityByName`, `FindEntitiesByTag` (cost: the entities with that name or tag) |
 
-- **Dirty transforms.** `TransformComponent` `on_construct`/`on_update` (and `MarkTransformChanged`, which physics uses
-  for written-back poses because its own listeners must not hear them) mark the entity. An update drops the marked
+- **Dirty transforms.** `TransformComponent` `on_construct`/`on_update` (and `MarkTransformChanged` or, for many entities,
+  `MarkTransformsChanged`, which physics uses for written-back poses because its own listeners must not hear them) mark the
+  entity. An update drops the marked
   entities with a marked ancestor (memoized, so all checks of one update are linear), then recomputes the remaining
   subtrees level by level; once a level has 1,024 independent subtrees or more they are walked in parallel with
   `JobSystem::ParallelFor`. Writers must signal (the transform contract, AGENTS.md "Architecture rules");
@@ -687,9 +755,9 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   instances ahead (`Prefetch`, `Core/Prefetch.h`): the hardware prefetchers anticipate such reads only when they
   recognize the pattern by the address of the reading instruction, which made the cost of a frame depend on how
   unrelated code moved the loop (6.6 or 9.8 ms for 300,000 trivial scripts with identical sources). Contacts come from
-  the `PhysicsSystem` collision listener. Entity destruction requested by scripts
-  waits until the scene can do it safely (`ScriptSystem::DestroyEntity`), and removed instances are destroyed at the
-  next sync point.
+  the scene's `ICollisionEventSource` (the `PhysicsSystem`), whose listener only hears watched entities: each instance
+  whose class has a contact callback watches its entity. Entity destruction requested by scripts waits until the scene
+  can do it safely (`ScriptSystem::DestroyEntity`), and removed instances are destroyed at the next sync point.
 - **Host functions** (`ScriptHostAPI.cpp`). Every function runs in `HostCall` (no exception unwinds into the module)
   and starts with `ResolveContext`, which rejects calls from other threads, outside callbacks or from a crashed module.
   The table is built from `ST_SCRIPT_HOST_FUNCTIONS`, which counts calls for the feature test.

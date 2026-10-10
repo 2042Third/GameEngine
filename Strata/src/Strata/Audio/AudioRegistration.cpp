@@ -3,14 +3,33 @@
 
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Audio/AudioClipAsset.h"
+#include "Strata/Audio/AudioEngine.h"
 #include "Strata/Audio/AudioSystem.h"
+#include "Strata/Core/EngineServices.h"
+#include "Strata/Scene/SceneServices.h"
 #include "Strata/Scene/SceneSystem.h"
 
 namespace Strata
 {
 
+	namespace
+	{
+
+		// The engine service IAudioOutput: the AudioEngine's master volume, for modules that may not include Audio (scripts).
+		class AudioOutputService final : public IAudioOutput
+		{
+		public:
+			void SetMasterVolume(float volume) override { AudioEngine::SetMasterVolume(volume); }
+			float GetMasterVolume() override { return AudioEngine::GetMasterVolume(); }
+		};
+
+	}
+
 	void RegisterAudioModule()
 	{
+		static AudioOutputService s_AudioOutput;
+		EngineServices::Register<IAudioOutput>(s_AudioOutput);
+
 		// Audio clips are stored as a header followed by the encoded file.
 		AssetLoaderRegistry::Register(AssetType::AudioClip, [](const AssetMetadata& metadata, std::span<const uint8_t> data, std::string* outError) -> Ref<Asset>
 		{

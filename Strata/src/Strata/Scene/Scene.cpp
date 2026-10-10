@@ -7,7 +7,10 @@
 #include "Strata/Scene/SceneSerializer.h"
 #include "Strata/Scene/UnknownComponents.h"
 
+#include <chrono>
+#include <cmath>
 #include <limits>
+#include <optional>
 
 namespace Strata
 {
@@ -80,6 +83,8 @@ namespace Strata
 	{
 		Ref<Scene> destination = CreateRef<Scene>(source->m_Name);
 		destination->m_Settings = source->m_Settings;
+		destination->m_SourceAsset = source->m_SourceAsset;
+		destination->m_LocalLineageID = source->m_LocalLineageID;
 
 		// The hierarchy is rebuilt from the links instead of being copied with the components: entities are copied parents
 		// first, so appending each one to its parent reproduces every sibling order.
@@ -1093,6 +1098,33 @@ namespace Strata
 			MarkTransformDirty(entity.GetHandle());
 	}
 
+	void Scene::MarkTransformsChanged(std::span<const entt::entity> entities)
+	{
+		for (const entt::entity handle : entities)
+		{
+			if (m_Registry.valid(handle))
+				MarkTransformDirty(handle);
+		}
+	}
+
+	const glm::mat4* Scene::FindCurrentWorldTransform(entt::entity handle) const
+	{
+		const auto* hierarchy = m_Registry.storage<HierarchyComponent>();
+		const auto* worlds = m_Registry.storage<WorldTransformComponent>();
+		if (!hierarchy || !worlds || !worlds->contains(handle))
+			return nullptr;
+		for (entt::entity current = handle; current != entt::null;)
+		{
+			if (!hierarchy->contains(current))
+				return nullptr;
+			const HierarchyComponent& node = hierarchy->get(current);
+			if (node.TransformDirty)
+				return nullptr;
+			current = node.Parent;
+		}
+		return &worlds->get(handle).Matrix;
+	}
+
 	void Scene::InvalidateAllTransforms()
 	{
 		for (entt::entity root = m_FirstRoot; root != entt::null; root = GetHierarchy(root).NextSibling)
@@ -1592,6 +1624,7 @@ namespace Strata
 		m_IsPaused = false;
 		m_StepFrames = 0;
 		m_FixedTimeAccumulator = 0.0f;
+		m_DroppedFixedSteps = 0;
 		m_Time = 0.0;
 		m_FrameIndex = 0;
 		m_QuitRequest.reset();
@@ -1646,6 +1679,23 @@ namespace Strata
 		return s_RunningSceneCount.load();
 	}
 
+	bool Scene::RegisterServiceProvider(entt::id_type type, std::string_view typeName, void* provider)
+	{
+		ST_CORE_ASSERT(provider, "Scene::RegisterService: no provider");
+		auto [it, inserted] = m_Services.try_emplace(type, provider);
+		if (inserted || it->second == provider)
+			return true;
+		ST_CORE_ERROR("Scene '{}': the service {} is already provided by another system; the second provider is ignored", m_Name, typeName);
+		return false;
+	}
+
+	void Scene::UnregisterServiceProvider(entt::id_type type, const void* provider)
+	{
+		auto it = m_Services.find(type);
+		if (it != m_Services.end() && it->second == provider)
+			m_Services.erase(it);
+	}
+
 	void Scene::OnUpdateRuntime(Timestep timestep)
 	{
 		ST_PROFILE_FUNCTION();
@@ -1688,18 +1738,47 @@ namespace Strata
 		{
 			m_FixedTimeAccumulator += deltaTime;
 			const uint32_t maxSteps = std::max(1u, m_Settings.MaxFixedStepsPerFrame);
+			// The wall time one step stands for: the fixed timestep, stretched by slow motion.
+			const double realTimePerStep = static_cast<double>(fixedTimestep) / static_cast<double>(m_TimeScale > 0.0f ? m_TimeScale : 1.0f);
+			// The steps are timed only when time dilation could stop one: it is on and a second step is due (the first always
+			// runs). Other frames do not read the clock. (While the accumulator holds less than two steps, subtracting one
+			// step is exact and leaves less than a step, so no second step can run.)
+			std::optional<std::chrono::steady_clock::time_point> stepsStart;
+			if (m_TimeDilation && maxSteps > 1 && m_FixedTimeAccumulator >= 2.0f * fixedTimestep)
+				stepsStart = std::chrono::steady_clock::now();
 			uint32_t steps = 0;
+			bool dilated = false;
 			while (m_FixedTimeAccumulator >= fixedTimestep && steps < maxSteps)
 			{
+				if (stepsStart && steps > 0)
+				{
+					const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - *stepsStart).count();
+					if (elapsed >= realTimePerStep * steps)
+					{
+						dilated = true;
+						break;
+					}
+				}
 				for (const Scope<SceneSystem>& system : m_Systems)
 					system->OnFixedUpdate(fixedTimestep);
 				m_FixedTimeAccumulator -= fixedTimestep;
 				steps++;
 			}
 
-			// Too far behind (e.g. after a hitch): drop the backlog instead of simulating it all next frame.
-			if (steps == maxSteps)
-				m_FixedTimeAccumulator = std::min(m_FixedTimeAccumulator, fixedTimestep);
+			if (dilated)
+			{
+				// Behind real time: the steps still due are dropped, the simulation runs slower than the clock.
+				const float dropped = std::floor(m_FixedTimeAccumulator / fixedTimestep);
+				m_DroppedFixedSteps += static_cast<uint64_t>(dropped);
+				// Rounding of the quotient must not leave a negative remainder.
+				m_FixedTimeAccumulator = std::max(0.0f, m_FixedTimeAccumulator - dropped * fixedTimestep);
+			}
+			else if (steps == maxSteps && m_FixedTimeAccumulator > fixedTimestep)
+			{
+				// Too far behind (e.g. after a hitch): drop the backlog instead of simulating it all next frame.
+				m_DroppedFixedSteps += static_cast<uint64_t>(std::floor((m_FixedTimeAccumulator - fixedTimestep) / fixedTimestep));
+				m_FixedTimeAccumulator = fixedTimestep;
+			}
 		}
 
 		for (const Scope<SceneSystem>& system : m_Systems)

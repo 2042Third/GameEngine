@@ -3,6 +3,7 @@
 #include "Scripting/ScriptTestUtils.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Input/Input.h"
+#include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Prefab.h"
@@ -317,6 +318,21 @@ namespace Strata::Tests
 			bodies++;
 		}
 		CHECK(bodies == 3);
+
+		// The scene's physics capacities (a scene setting: non-default in every field, so they prove that they serialize) sized
+		// its world, and sufficed.
+		const PhysicsCapacitySettings& capacity = scene.GetSettings().PhysicsCapacity;
+		CHECK(capacity.MaxBodies != PhysicsCapacitySettings().MaxBodies);
+		CHECK(capacity.MaxBodyPairs != PhysicsCapacitySettings().MaxBodyPairs);
+		CHECK(capacity.MaxContactConstraints != PhysicsCapacitySettings().MaxContactConstraints);
+		const PhysicsSystem* physics = scene.GetSystem<PhysicsSystem>();
+		REQUIRE(physics != nullptr);
+		const PhysicsStats physicsStats = physics->GetStats();
+		CHECK(physicsStats.MaxBodies == capacity.MaxBodies);
+		CHECK(physicsStats.MaxBodyPairs == capacity.MaxBodyPairs);
+		CHECK(physicsStats.MaxContactConstraints == capacity.MaxContactConstraints);
+		CHECK(physicsStats.BodyOverflowCount == 0);
+		CHECK(physicsStats.ContactOverflowSteps == 0);
 
 		// The fragile probe destroyed itself when it landed (inside its OnCollisionEnter).
 		CHECK_FALSE(scene.FindEntityByName("Fragile Probe").IsValid());

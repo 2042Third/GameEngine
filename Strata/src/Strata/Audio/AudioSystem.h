@@ -5,6 +5,7 @@
 #include "Strata/Core/Timestep.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
+#include "Strata/Scene/SceneServices.h"
 #include "Strata/Scene/SceneSystem.h"
 
 #include <entt/entt.hpp>
@@ -21,7 +22,6 @@ namespace Strata
 	class AssetManagerBase;
 	class AudioClip;
 	class AudioSource;
-	class PhysicsSystem;
 	class Scene;
 
 	struct AudioSystemStats
@@ -202,7 +202,9 @@ namespace Strata
 		bool TryStartOneShot(OneShot& oneShot);
 	private:
 		Scene& m_Scene;
-		PhysicsSystem* m_Physics = nullptr; // The scene's physics while it runs
+		class PlaybackService;
+		Scope<PlaybackService> m_PlaybackService; // The scene service IAudioPlayback, registered while this system exists
+		IBodyMotionQuery* m_Motion = nullptr;     // The scene's physics while it runs (Doppler), if it has any
 		bool m_Stopped = false;
 		bool m_Paused = false;
 		uint64_t m_UpdateIndex = 0;

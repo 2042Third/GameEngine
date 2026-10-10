@@ -63,26 +63,6 @@ module-foundation, ran as its own workstream):
   Project, Open Sample, About and "Connect an AI agent", the strata mark as window and executable icon, and the build's
   git commit in its version.
 
-Open items and deferrals later waves own:
-
-- The allowlist's 14 exceptions: the application shell's service wiring (7, `engine-modules`), asset finalization on
-  the renderer's command list (`mip-streaming`), physics reading the renderer's `Mesh` (Mesh v2, later) and scene
-  systems that call each other directly (5, `physics-at-scale`). Ordering constraints that name systems a build may
-  lack need a policy once subsystems become optional (`engine-modules`).
-- A world seen all at once still peaks at about 970 MiB of private memory in the exported runtime: no budget can evict
-  what is in view, so this needs BC textures and mip streaming (`texture-cook-v2`, `mip-streaming`). Mesh uploads still
-  go through NVRHI's upload manager until the budgeted upload queue (`mip-streaming`); `AssetManagerBase::GetStats`
-  and eviction scans are linear in the registered assets (`render-scene`, `world-partition`).
-- Deleting one entity among 100,000 sibling roots renumbers the sibling list (about 0.5 ms), and the Hierarchy panel
-  draws every root each frame (Hierarchy v2 in `editor-authoring`). Starting play copies a 1,000,000-entity scene in
-  about 0.7 s (`scene-streaming`).
-- The editor starts in 0.7-1.0 s (Release, to its first frame on screen), not the 0.4 s the pillar names. An idle
-  editor answers input and automation requests on its next throttled frame (up to 33 ms, 100 ms unfocused) until it
-  waits on events instead. Project thumbnails and search in the recent projects move to `content-and-prefabs`.
-- Perf budgets hold for the reference machine only, so CI's hosted runners skip the `perf` label; a self-hosted runner
-  on the reference machine would make them an automatic gate. Platform code first compiled by CI on Linux and macOS:
-  `GetProcessMemory`, `GetProcessUptime`, `FindHomeDirectory` and `FindFallbackFontFiles`.
-
 **Wave 2 (in progress).** Workstreams as they merge:
 
 - `perf-gates`: perf checks confirm a failure by measuring again (up to three attempts, all printed and recorded in
@@ -96,6 +76,40 @@ Open items and deferrals later waves own:
   runs during the other workstreams' builds failed single metrics as well as many. Open: once in about 45 runs, under
   load, the editor failed to open `PerfGPU.Editor`'s generated million-entity scene ("Invalid JSON", cause unknown); the
   test now describes the scene files on disk when the editor fails (`Tests::DescribeJsonFile`).
+- `physics-at-scale`: scene services (`Scene/SceneServices.h`, `Scene::RegisterService`/`GetService`) through which
+  scripts and audio reach physics and audio, and engine services (`Core/EngineServices.h`) for what outlives scenes,
+  which took the five scene-system exceptions off the allowlist (14 to 9); physics capacities sized from the scene
+  (`SceneSettings::PhysicsCapacity`, automatic by default, `scene.setSettings`, limited to what a world can reserve),
+  with overflow counted, reported once and remembered so the scene's next world grows; contacts recorded in per-thread
+  buffers and tracked only for listeners, with constant-time pair bookkeeping; bodies added and removed in batches;
+  poses written back and bodies synchronized in parallel; time dilation instead of catch-up spirals. On the loaded
+  reference machine (`Perf.Physics`, best of three): 30,000 boxes start and play 30 frames in 274 ms (18.3 s before),
+  70,000 boxes all get a body (4,465 errors before) and step in 24 ms frames with Strata's part at 6.6 ms below Jolt's,
+  10,000 boxes in 2.3 ms frames (9.4 ms before), and 10,000 bodies are created in one frame in 8.9 ms (24.9 ms before).
+
+Open items and deferrals later waves own:
+
+- The allowlist's 9 exceptions: the application shell's service wiring (7, `engine-modules`), asset finalization on
+  the renderer's command list (`mip-streaming`) and physics reading the renderer's `Mesh` (Mesh v2, later). Ordering
+  constraints that name systems a build may lack need a policy once subsystems become optional (`engine-modules`).
+- Physics: what an overflowing world needed is remembered per scene (its asset, or the scene and its copies) for the
+  process (an editor or game session), not saved with the scene; automatic capacities reserve Jolt's buffers for the
+  bodies a scene starts with (70,000 bodies reserve about a million body pairs), and a world at the largest capacities a
+  scene may ask for still reserves about 940 MiB at play start; dynamic bodies below other dynamic bodies are still
+  written back one by one; the Inspector shows the capacities once `editor-authoring`'s scene section merges.
+- A world seen all at once still peaks at about 970 MiB of private memory in the exported runtime: no budget can evict
+  what is in view, so this needs BC textures and mip streaming (`texture-cook-v2`, `mip-streaming`). Mesh uploads still
+  go through NVRHI's upload manager until the budgeted upload queue (`mip-streaming`); `AssetManagerBase::GetStats`
+  and eviction scans are linear in the registered assets (`render-scene`, `world-partition`).
+- Deleting one entity among 100,000 sibling roots renumbers the sibling list (about 0.5 ms), and the Hierarchy panel
+  draws every root each frame (Hierarchy v2 in `editor-authoring`). Starting play copies a 1,000,000-entity scene in
+  about 0.7 s (`scene-streaming`).
+- The editor starts in 0.7-1.0 s (Release, to its first frame on screen), not the 0.4 s the pillar names. An idle
+  editor answers input and automation requests on its next throttled frame (up to 33 ms, 100 ms unfocused) until it
+  waits on events instead. Project thumbnails and search in the recent projects move to `content-and-prefabs`.
+- Perf budgets hold for the reference machine only, so CI's hosted runners skip the `perf` label; a self-hosted runner
+  on the reference machine would make them an automatic gate. Platform code first compiled by CI on Linux and macOS:
+  `GetProcessMemory`, `GetProcessUptime`, `FindHomeDirectory` and `FindFallbackFontFiles`.
 
 ## Waves
 

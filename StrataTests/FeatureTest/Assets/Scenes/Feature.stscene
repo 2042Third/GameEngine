@@ -2286,7 +2286,12 @@
 				-9.81,
 				0
 			],
-			"MaxFixedStepsPerFrame": 4
+			"MaxFixedStepsPerFrame": 4,
+			"PhysicsCapacity": {
+				"MaxBodies": 1024,
+				"MaxBodyPairs": 4096,
+				"MaxContactConstraints": 2048
+			}
 		}
 	},
 	"Strata": {

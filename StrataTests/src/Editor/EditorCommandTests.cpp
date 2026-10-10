@@ -10,12 +10,16 @@
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Core/Version.h>
+#include <Strata/Physics/PhysicsSystem.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/Material.h>
 #include <Strata/Renderer/Mesh.h>
 #include <Strata/Runtime/GameRuntime.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/SceneSerializer.h>
+
+#include <cstdint>
+#include <utility>
 
 using namespace Strata;
 
@@ -467,15 +471,18 @@ TEST_SUITE("Editor.Commands")
 
 		// Save, change, reopen: the saved state comes back.
 		CHECK_FALSE(harness.Error("scene.save").empty()); // Never saved: needs a path
+		CHECK_FALSE(harness.Context.GetEditScene()->GetSourceAsset().IsValid());
 		const std::string scene = harness.Run("scene.saveAs", { { "path", "Scenes/Main.stscene" } })["scene"].get<std::string>();
 		CHECK(harness.Run("scene.info")["modified"] == false);
 		CHECK(harness.Run("scene.info")["name"] == "Main"); // Named after its file
+		CHECK(UUIDToJson(harness.Context.GetEditScene()->GetSourceAsset()) == scene); // From now on it is that asset's scene
 		const nlohmann::json saved = harness.SceneSnapshot();
 		harness.Run("entity.delete", { { "entities", { cube } } });
 		CHECK(harness.Run("scene.info")["modified"] == true);
 		harness.Run("scene.open", { { "scene", "Scenes/Main.stscene" } });
 		CHECK(harness.SceneSnapshot() == saved);
 		CHECK(harness.Run("scene.info")["scene"] == scene);
+		CHECK(UUIDToJson(harness.Context.GetEditScene()->GetSourceAsset()) == scene);
 		CHECK_FALSE(harness.Context.GetUndoStack().CanUndo());
 
 		harness.Run("project.setStartScene", { { "scene", scene } });
@@ -556,7 +563,9 @@ TEST_SUITE("Editor.Commands")
 		CHECK(runtime->GetManifest().Name == "My Game!");
 		CHECK(runtime->GetManifest().WindowWidth == 640);
 		CHECK(UUIDToJson(runtime->GetSceneHandle()) == scene);
+		CHECK(UUIDToJson(runtime->GetScene()->GetSourceAsset()) == scene);
 		REQUIRE(runtime->GetScene()->IsRunning());
+		CHECK_FALSE(runtime->GetScene()->IsTimeDilated()); // Tools and tests step deterministically by default
 		for (int frame = 0; frame < 5; frame++)
 			runtime->Update(Timestep(1.0f / 60.0f));
 		Entity player = runtime->GetScene()->FindEntityByName("Player");
@@ -567,6 +576,14 @@ TEST_SUITE("Editor.Commands")
 		CHECK(runtime->GetScene()->IsRunning()); // The current scene keeps running
 		runtime.reset();
 		CHECK_FALSE(AssetManager::HasActive());
+
+		// Games on the wall clock play their scenes with time dilation.
+		GameRuntimeOptions wallClock;
+		wallClock.TimeDilation = true;
+		runtime = GameRuntime::Create(manifest, &error, wallClock);
+		REQUIRE_MESSAGE(runtime, error);
+		CHECK(runtime->GetScene()->IsTimeDilated());
+		runtime.reset();
 
 		// A broken pack fails cleanly.
 		REQUIRE(FileSystem::WriteText(FileSystem::FromUTF8(exported["assetPack"].get<std::string>()), "garbage"));
@@ -582,6 +599,97 @@ TEST_SUITE("Editor.Commands")
 		CHECK_FALSE(harness.Error("scene.setSettings", { { "gravity", { 0, "down", 0 } } }).empty());
 		harness.Run("edit.undo");
 		CHECK(harness.Run("scene.info")["settings"]["gravity"][1].get<double>() == doctest::Approx(-9.81));
+	}
+
+	TEST_CASE("Play mode runs on the wall clock when the editor asks for time dilation")
+	{
+		for (const bool timeDilation : { false, true })
+		{
+			EditorContextSpecification specification;
+			specification.WatchAssetFiles = false;
+			specification.TimeDilation = timeDilation;
+			EditorContext context(specification);
+			std::string error;
+			REQUIRE_MESSAGE(context.Play(&error), error);
+			CHECK(context.GetActiveScene()->IsTimeDilated() == timeDilation);
+			context.Stop();
+			CHECK_FALSE(context.GetEditScene()->IsRunning());
+		}
+	}
+
+	TEST_CASE("Physics capacities are validated and changed in one undo step")
+	{
+		CommandHarness harness;
+		const nlohmann::json automatic = { { "maxBodies", 0 }, { "maxBodyPairs", 0 }, { "maxContactConstraints", 0 } };
+		CHECK(harness.Run("scene.info")["settings"]["physicsCapacity"] == automatic);
+
+		// Invalid values change nothing: they are not counts in range, or not capacities at all.
+		const nlohmann::json invalid[] = {
+			{ { "maxBodies", -1 } },
+			{ { "maxBodies", uint64_t(PhysicsCapacitySettings::c_MaxBodiesLimit) + 1 } },
+			{ { "maxBodyPairs", 2.5 } },
+			{ { "maxContactConstraints", "lots" } },
+			{ { "maxBodies", 64 }, { "gravityScale", 2 } },
+			nlohmann::json::array({ 64 }) };
+		for (const nlohmann::json& capacity : invalid)
+		{
+			INFO(capacity.dump());
+			CHECK(harness.Commands.Execute(harness.Context, "scene.setSettings", { { "physicsCapacity", capacity }, { "fixedTimestep", 0.02 } }).ErrorKind == EditorCommandError::InvalidParameters);
+		}
+		CHECK(harness.Run("scene.info")["settings"]["physicsCapacity"] == automatic);
+		CHECK(harness.Run("scene.info")["settings"]["fixedTimestep"].get<double>() == doctest::Approx(1.0 / 60.0));
+
+		// Only the given capacities change, in one step with the other settings.
+		const size_t steps = harness.Context.GetUndoStack().GetPosition();
+		const nlohmann::json changed = harness.Run("scene.setSettings", { { "physicsCapacity", { { "maxBodies", 200000 }, { "maxContactConstraints", 50000 } } },
+			{ "fixedTimestep", 0.02 } })["settings"];
+		CHECK(changed["physicsCapacity"] == nlohmann::json { { "maxBodies", 200000 }, { "maxBodyPairs", 0 }, { "maxContactConstraints", 50000 } });
+		CHECK(harness.Context.GetEditScene()->GetSettings().PhysicsCapacity == PhysicsCapacitySettings { 200000, 0, 50000 });
+		CHECK(harness.Context.GetUndoStack().GetPosition() == steps + 1);
+
+		harness.Run("edit.undo");
+		CHECK(harness.Run("scene.info")["settings"]["physicsCapacity"] == automatic);
+		CHECK(harness.Run("scene.info")["settings"]["fixedTimestep"].get<double>() == doctest::Approx(1.0 / 60.0));
+		harness.Run("edit.redo");
+		CHECK(harness.Context.GetEditScene()->GetSettings().PhysicsCapacity == PhysicsCapacitySettings { 200000, 0, 50000 });
+
+		// The limits are accepted; one more is not.
+		const PhysicsCapacitySettings limits { PhysicsCapacitySettings::c_MaxBodiesLimit, PhysicsCapacitySettings::c_MaxBodyPairsLimit,
+			PhysicsCapacitySettings::c_MaxContactConstraintsLimit };
+		const std::pair<const char*, uint64_t> beyondLimits[] = { { "maxBodyPairs", uint64_t(limits.MaxBodyPairs) + 1 },
+			{ "maxContactConstraints", uint64_t(limits.MaxContactConstraints) + 1 } };
+		for (const auto& [name, value] : beyondLimits)
+		{
+			INFO(name);
+			CHECK(harness.Commands.Execute(harness.Context, "scene.setSettings", { { "physicsCapacity", { { name, value } } } }).ErrorKind
+				== EditorCommandError::InvalidParameters);
+		}
+		harness.Run("scene.setSettings", { { "physicsCapacity", { { "maxBodies", limits.MaxBodies }, { "maxBodyPairs", limits.MaxBodyPairs },
+			{ "maxContactConstraints", limits.MaxContactConstraints } } } });
+		CHECK(harness.Context.GetEditScene()->GetSettings().PhysicsCapacity == limits);
+		harness.Run("edit.undo");
+
+		// While playing, a change reaches the running copy only, which play.stop discards, and capacities do not reach the
+		// running world: the result warns about both.
+		harness.Run("entity.create", { { "name", "Crate" }, { "components", { { "RigidBody", nlohmann::json::object() }, { "BoxCollider", nlohmann::json::object() } } } });
+		harness.Run("play.start");
+		const PhysicsSystem* physics = harness.Context.GetActiveScene()->GetSystem<PhysicsSystem>();
+		REQUIRE(physics != nullptr);
+		CHECK(physics->GetStats().MaxBodies == 200000);
+		const size_t playSteps = harness.Context.GetUndoStack().GetPosition();
+		const nlohmann::json playing = harness.Run("scene.setSettings", { { "physicsCapacity", { { "maxBodies", 1000 } } } });
+		REQUIRE(playing.contains("warning"));
+		CHECK(playing["warning"].get<std::string>().find("discarded by play.stop") != std::string::npos);
+		CHECK(playing["warning"].get<std::string>().find("physics capacities apply to worlds created later") != std::string::npos);
+		CHECK(harness.Context.GetActiveScene()->GetSettings().PhysicsCapacity.MaxBodies == 1000);
+		CHECK(physics->GetStats().MaxBodies == 200000);
+		const nlohmann::json gravityOnly = harness.Run("scene.setSettings", { { "gravity", { 0, -5, 0 } } });
+		REQUIRE(gravityOnly.contains("warning"));
+		CHECK(gravityOnly["warning"].get<std::string>().find("capacities") == std::string::npos);
+		CHECK(harness.Context.GetUndoStack().GetPosition() == playSteps);
+		harness.Run("play.stop");
+		CHECK(harness.Context.GetEditScene()->GetSettings().PhysicsCapacity == PhysicsCapacitySettings { 200000, 0, 50000 });
+		CHECK_FALSE(harness.Run("scene.setSettings", { { "physicsCapacity", { { "maxBodies", 300000 } } } }).contains("warning"));
 	}
 
 	TEST_CASE("Components this build does not register survive play, duplication, prefabs, undo and saving")

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Strata/Asset/AssetTypes.h"
 #include "Strata/Core/Base.h"
 #include "Strata/Core/Timestep.h"
 #include "Strata/Core/UUID.h"
@@ -25,11 +26,33 @@ namespace Strata
 
 	class Entity;
 
+	// Capacities of a scene's physics world, fixed when its simulation is created. 0 sizes a capacity automatically from the
+	// bodies the scene has when it starts playing (see PhysicsWorld): set them for scenes that create many bodies while they
+	// play (spawners, streamed cells), which the automatic sizes cannot foresee.
+	struct PhysicsCapacitySettings
+	{
+		uint32_t MaxBodies = 0;
+		uint32_t MaxBodyPairs = 0;          // Pairs of bodies whose bounds overlap, per step
+		uint32_t MaxContactConstraints = 0; // Contacts solved per step
+
+		// The largest values a scene may ask for, whether its file or a command sets them. The physics engine reserves memory
+		// for every capacity when the world is created, and does not survive an allocation that fails, so the limits bound
+		// what one world reserves: about 80 bytes per body, 90 per body pair and 830 per contact constraint, so about 940 MiB
+		// at the limits. A scene holds at most Scene::c_MaxEntities (2^20 - 1) entities, so 2^21 bodies have room for all of
+		// them, with the automatic sizing's headroom.
+		static constexpr uint32_t c_MaxBodiesLimit = 1u << 21;
+		static constexpr uint32_t c_MaxBodyPairsLimit = 1u << 22;
+		static constexpr uint32_t c_MaxContactConstraintsLimit = 1u << 19;
+
+		bool operator==(const PhysicsCapacitySettings& other) const = default;
+	};
+
 	struct SceneSettings
 	{
 		glm::vec3 Gravity = { 0.0f, -9.81f, 0.0f };
 		float FixedTimestep = 1.0f / 60.0f;
 		uint32_t MaxFixedStepsPerFrame = 8; // Prevents a spiral of death after long frames
+		PhysicsCapacitySettings PhysicsCapacity;
 	};
 
 	// A world of entities. Owns the EnTT registry, the hierarchy, and (while playing) the runtime systems.
@@ -155,6 +178,10 @@ namespace Strata
 		// The entity's world transform right now: the cached one when neither it nor an ancestor changed since the last
 		// update, otherwise computed from the hierarchy (costs the entity's depth).
 		glm::mat4 GetWorldTransform(Entity entity) const;
+		// The entity's cached world transform if it is current (neither the entity nor an ancestor changed since the last
+		// update), else null; costs the entity's depth. Unlike GetWorldTransform it only reads the scene, so worker threads
+		// may call it for many entities while no thread changes the scene (physics comparing its bodies with their entities).
+		const glm::mat4* FindCurrentWorldTransform(entt::entity handle) const;
 		// Sets the entity's local transform so that its world transform becomes `worldTransform`, and emits the
 		// TransformComponent on_update signal like Entity::MarkModified. Returns false (leaving the entity unchanged, without
 		// a signal) if the transform cannot be represented, e.g. under a parent with zero scale.
@@ -162,6 +189,8 @@ namespace Strata
 		// Records that the entity's TransformComponent was written, without emitting on_update (for writers that must not
 		// notify listeners, e.g. physics writing simulated poses back).
 		void MarkTransformChanged(Entity entity);
+		// MarkTransformChanged for many entities of this scene at once (invalid handles are skipped).
+		void MarkTransformsChanged(std::span<const entt::entity> entities);
 		// Marks every world transform stale: the next UpdateWorldTransforms recomputes the whole scene.
 		void InvalidateAllTransforms();
 		// A parent whose world transform's determinant is not above this (in magnitude) cannot be inverted, so the world
@@ -225,6 +254,18 @@ namespace Strata
 		float GetTimeScale() const { return m_TimeScale; }
 		void SetTimeScale(float timeScale) { m_TimeScale = std::max(0.0f, timeScale); }
 
+		// How an update that is behind runs its fixed steps. Without time dilation (the default, so that tests and tools step
+		// deterministically) it runs every step that is due, up to MaxFixedStepsPerFrame, and drops the rest of the backlog.
+		// With it (what owners driven by the wall clock use: the editor's play mode, exported games), an update stops
+		// running catch-up steps once the steps it ran took longer, in wall time, than the time they simulated: a simulation
+		// that cannot keep up with real time slows down instead of spending ever longer frames catching up (a frame running
+		// eight expensive steps makes the next one owe even more). Its first due step always runs.
+		void SetTimeDilation(bool enabled) { m_TimeDilation = enabled; }
+		bool IsTimeDilated() const { return m_TimeDilation; }
+		// Fixed steps whose time was dropped since the scene started running: skipped by time dilation, or beyond
+		// MaxFixedStepsPerFrame.
+		uint64_t GetDroppedFixedStepCount() const { return m_DroppedFixedSteps; }
+
 		// The running system of class T (registered with MakeSceneSystemDescriptor<T>), or null: not running, not created
 		// in this mode, or not registered. Looks the exact class up, not its base classes.
 		template<typename T>
@@ -236,6 +277,32 @@ namespace Strata
 
 		// Scenes between OnRuntimeStart and OnRuntimeStop in this process (the scene system registry refuses changes then).
 		static uint32_t GetRunningSceneCount();
+
+		//////////////////////////////////////////////////////////////////////////
+		// Services
+		//////////////////////////////////////////////////////////////////////////
+
+		// Scene services (Scene/SceneServices.h): interfaces of the running systems that other systems use, so that they never
+		// include each other's modules. A system registers each interface T it offers while it exists (in its constructor,
+		// removing it in its destructor); a scene has at most one provider per interface. Registering a second one logs an
+		// error and returns false; unregistering an object that does not provide T changes nothing.
+		template<typename T>
+		bool RegisterService(T& service)
+		{
+			return RegisterServiceProvider(entt::type_id<T>().hash(), entt::type_id<T>().name(), &service);
+		}
+		template<typename T>
+		void UnregisterService(T& service)
+		{
+			UnregisterServiceProvider(entt::type_id<T>().hash(), &service);
+		}
+		// The provider of interface T, or null when no system of the scene offers it.
+		template<typename T>
+		T* GetService() const
+		{
+			auto it = m_Services.find(entt::type_id<T>().hash());
+			return it != m_Services.end() ? static_cast<T*>(it->second) : nullptr;
+		}
 
 		//////////////////////////////////////////////////////////////////////////
 		// Requests to the scene's owner
@@ -258,6 +325,15 @@ namespace Strata
 
 		const std::string& GetName() const { return m_Name; }
 		void SetName(const std::string& name) { m_Name = name; }
+		// The scene asset this scene was loaded from or saved as; null for scenes made otherwise (in code, or new ones not
+		// saved yet). SceneAsset::CreateScene sets it, and so do owners that save a scene as a new asset. Copies keep it.
+		AssetHandle GetSourceAsset() const { return m_SourceAsset; }
+		void SetSourceAsset(AssetHandle asset) { m_SourceAsset = asset; }
+		// Recognizes the scene from one play session to the next, for what systems remember about it in between (PhysicsSystem:
+		// what its physics worlds lacked): its source asset, else an ID the scene got when it was constructed. Copies keep it,
+		// so the copy an owner plays has the ID of the scene it was made from; other scenes never share it, whatever their
+		// names.
+		UUID GetLineageID() const { return m_SourceAsset.IsValid() ? m_SourceAsset : m_LocalLineageID; }
 		SceneSettings& GetSettings() { return m_Settings; }
 		const SceneSettings& GetSettings() const { return m_Settings; }
 
@@ -295,6 +371,9 @@ namespace Strata
 
 		// Live entities of the registry: the scene's, and any created directly through GetRegistry().
 		size_t GetRegistryEntityCount() const;
+		// Service registry: `provider` points to the interface (already cast to it), keyed by the interface's type hash.
+		bool RegisterServiceProvider(entt::id_type type, std::string_view typeName, void* provider);
+		void UnregisterServiceProvider(entt::id_type type, const void* provider);
 		// Drops the entities that lie below another listed one (they go with it) and repeated ones, keeping the order.
 		void RemoveNestedRoots(std::vector<entt::entity>& roots) const;
 		// Destroys the subtrees (already announced to the systems) and compacts the sibling lists they leave.
@@ -358,6 +437,8 @@ namespace Strata
 		void OnTagRemoved(entt::registry& registry, entt::entity handle);
 	private:
 		std::string m_Name;
+		AssetHandle m_SourceAsset = UUID::Null();
+		UUID m_LocalLineageID;                     // Random; see GetLineageID
 		entt::registry m_Registry;
 		std::unordered_map<UUID, entt::entity> m_EntityMap;
 		std::vector<UUID> m_RootEntities;
@@ -396,6 +477,7 @@ namespace Strata
 
 		std::vector<Scope<SceneSystem>> m_Systems;
 		std::unordered_map<entt::id_type, SceneSystem*> m_SystemsByType; // SceneSystemDescriptor::Type -> running system
+		std::unordered_map<entt::id_type, void*> m_Services;              // Interface type -> provider (see RegisterService)
 		std::vector<UUID> m_PendingDestroy;
 		std::unordered_set<UUID> m_PendingDestroySet;
 		SceneRuntimeMode m_RuntimeMode = SceneRuntimeMode::Play;
@@ -405,6 +487,8 @@ namespace Strata
 		uint32_t m_StepFrames = 0;
 		float m_FixedTimeAccumulator = 0.0f;
 		float m_TimeScale = 1.0f;
+		bool m_TimeDilation = false;
+		uint64_t m_DroppedFixedSteps = 0;
 		double m_Time = 0.0;
 		uint64_t m_FrameIndex = 0;
 		std::optional<int32_t> m_QuitRequest;

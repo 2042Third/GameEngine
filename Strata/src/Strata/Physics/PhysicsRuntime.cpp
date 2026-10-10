@@ -9,6 +9,7 @@
 
 #include <cstdarg>
 #include <cstdio>
+#include <string_view>
 
 namespace Strata
 {
@@ -32,9 +33,19 @@ namespace Strata
 		}
 
 #ifdef JPH_ENABLE_ASSERTS
+		// Jolt asserts at the end of a step that the step had no errors, but those errors (full body pair and contact buffers)
+		// are returned to the caller too, which handles them: PhysicsWorld counts them, warns once and sizes the scene's next
+		// world for them. Escalating the assertion would turn a recoverable overflow into an abort in builds with asserts.
+		bool IsHandledUpdateErrorAssertion(const char* expression, const char* file)
+		{
+			return expression && file && std::string_view(expression) == "errors == EPhysicsUpdateError::None" && std::string_view(file).ends_with("PhysicsSystem.cpp");
+		}
+
 		// Routes Jolt's internal asserts through the engine's assert handling (logging, debugger break, test handlers).
 		bool JoltAssertFailed(const char* expression, const char* message, const char* file, JPH::uint line)
 		{
+			if (IsHandledUpdateErrorAssertion(expression, file))
+				return false;
 			const AssertAction action = Detail::HandleAssertFailure(true, false, expression, file, static_cast<int>(line), message ? std::string(message) : std::string());
 			return action == AssertAction::Break;
 		}

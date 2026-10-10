@@ -55,6 +55,10 @@ namespace Strata
 		// Where project.samples and project.openSample find the samples (ProjectSamples); empty: next to the executable
 		// (ProjectSamples::GetDefaultDirectory).
 		std::filesystem::path SamplesDirectory;
+		// Running scenes slow down instead of catching up when their fixed steps cannot keep up with real time
+		// (Scene::SetTimeDilation). The editor turns it on for interactive and automation sessions; off by default, so that
+		// tests and scripted runs step deterministically.
+		bool TimeDilation = false;
 	};
 
 	// What became of the module of the last finished script build.

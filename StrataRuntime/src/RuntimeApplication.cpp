@@ -38,6 +38,8 @@ namespace Strata
 		{
 			// The other budgets keep their defaults, which depend on the graphics device (initialized by now).
 			GameRuntimeOptions runtimeOptions;
+			// A game runs on the wall clock; runs of a fixed number of frames (--frames: checks, screenshots) keep every step.
+			runtimeOptions.TimeDilation = !m_Options.MaxFrames;
 			if (m_Options.TextureBudget)
 			{
 				runtimeOptions.AssetBudgets = AssetManagerBase::GetDefaultResidencyBudgets();

@@ -49,6 +49,7 @@ TEST_SUITE("Physics.Hierarchy")
 
 		scene.OnRuntimeStart();
 		PhysicsSystem& physics = GetPhysics(scene);
+		CollisionRecorder recorder(physics); // Contacts are tracked for listeners (ContactPairCount)
 		CHECK(physics.HasBody(car.Chassis));
 		CHECK_FALSE(physics.HasBody(car.Cabin));
 		CHECK_FALSE(physics.HasBody(car.Antenna));

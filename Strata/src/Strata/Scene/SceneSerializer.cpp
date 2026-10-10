@@ -89,6 +89,47 @@ namespace Strata
 
 	}
 
+	namespace
+	{
+
+		// Reads one capacity: an integer from 0 (automatic) to `limit`; anything else is reported and leaves the capacity
+		// automatic, a larger value is reported and clamped.
+		uint32_t ReadCapacity(const nlohmann::json& capacity, std::string_view key, uint32_t limit, std::vector<std::string>* outWarnings)
+		{
+			const nlohmann::json* value = JsonUtils::Find(capacity, key);
+			if (!value)
+				return 0;
+			if (!value->is_number_integer() || (!value->is_number_unsigned() && value->get<int64_t>() < 0))
+			{
+				if (outWarnings)
+					outWarnings->push_back(fmt::format("Scene settings: invalid 'PhysicsCapacity.{}' ignored (automatic)", key));
+				return 0;
+			}
+			const uint64_t requested = value->get<uint64_t>();
+			if (requested > limit)
+			{
+				if (outWarnings)
+					outWarnings->push_back(fmt::format("Scene settings: 'PhysicsCapacity.{}' of {} is limited to {}", key, requested, limit));
+				return limit;
+			}
+			return static_cast<uint32_t>(requested);
+		}
+
+		void ReadPhysicsCapacity(const nlohmann::json& capacity, PhysicsCapacitySettings& outCapacity, std::vector<std::string>* outWarnings)
+		{
+			if (!capacity.is_object())
+			{
+				if (outWarnings)
+					outWarnings->push_back("Scene settings: invalid 'PhysicsCapacity' ignored (automatic)");
+				return;
+			}
+			outCapacity.MaxBodies = ReadCapacity(capacity, "MaxBodies", PhysicsCapacitySettings::c_MaxBodiesLimit, outWarnings);
+			outCapacity.MaxBodyPairs = ReadCapacity(capacity, "MaxBodyPairs", PhysicsCapacitySettings::c_MaxBodyPairsLimit, outWarnings);
+			outCapacity.MaxContactConstraints = ReadCapacity(capacity, "MaxContactConstraints", PhysicsCapacitySettings::c_MaxContactConstraintsLimit, outWarnings);
+		}
+
+	}
+
 	nlohmann::json SceneSerializer::Serialize(const Scene& scene)
 	{
 		nlohmann::json settings;
@@ -96,6 +137,11 @@ namespace Strata
 		settings["Gravity"] = nlohmann::json::array({ FloatToJson(gravity.x), FloatToJson(gravity.y), FloatToJson(gravity.z) });
 		settings["FixedTimestep"] = FloatToJson(scene.GetSettings().FixedTimestep);
 		settings["MaxFixedStepsPerFrame"] = scene.GetSettings().MaxFixedStepsPerFrame;
+		const PhysicsCapacitySettings& capacity = scene.GetSettings().PhysicsCapacity;
+		settings["PhysicsCapacity"] = {
+			{ "MaxBodies", capacity.MaxBodies },
+			{ "MaxBodyPairs", capacity.MaxBodyPairs },
+			{ "MaxContactConstraints", capacity.MaxContactConstraints } };
 
 		nlohmann::json entities = nlohmann::json::array();
 		for (const Entity entity : scene.GetEntitiesInHierarchyOrder())
@@ -150,6 +196,9 @@ namespace Strata
 			if (fixedTimestep > 0.0f && fixedTimestep <= 1.0f)
 				sceneSettings.FixedTimestep = fixedTimestep;
 			sceneSettings.MaxFixedStepsPerFrame = static_cast<uint32_t>(std::clamp<uint64_t>(JsonUtils::GetUInt(*settings, "MaxFixedStepsPerFrame", sceneSettings.MaxFixedStepsPerFrame), 1, 64));
+			// Scenes saved before capacities existed have none: every capacity is automatic.
+			if (const nlohmann::json* capacity = JsonUtils::Find(*settings, "PhysicsCapacity"))
+				ReadPhysicsCapacity(*capacity, sceneSettings.PhysicsCapacity, outWarnings);
 		}
 
 		// A scene without an entity list is simply empty.

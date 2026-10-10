@@ -4,9 +4,9 @@
 #include "Strata/Core/Base.h"
 #include "Strata/Core/Timestep.h"
 #include "Strata/Core/UUID.h"
-#include "Strata/Physics/PhysicsTypes.h"
 #include "Strata/Reflection/Property.h"
 #include "Strata/Scene/Entity.h"
+#include "Strata/Scene/SceneServices.h"
 #include "Strata/Scene/SceneSystem.h"
 #include "Strata/Scripting/ScriptTypes.h"
 
@@ -54,9 +54,11 @@ namespace Strata
 	// and OnDestroy run regardless); entities destroyed during a frame keep updating until it ends. An instance whose
 	// callback throws is disabled; a crash faults the whole module (see ScriptEngine).
 	//
-	// Contacts: the scene's PhysicsSystem reports contact changes after each step; the scripts on both entities (those owning
-	// the bodies) receive OnCollisionEnter/Exit, or OnTriggerEnter/Exit when either body is a trigger, with the other entity
-	// and the contact normal pointing towards it. Contacts begin only for the scripts of active entities; each instance that got
+	// Contacts: the scene's collision event source (the scene service ICollisionEventSource, which the PhysicsSystem offers)
+	// reports contact changes after each step; the scripts on both entities (those owning the bodies) receive
+	// OnCollisionEnter/Exit, or OnTriggerEnter/Exit when either body is a trigger, with the other entity and the contact
+	// normal pointing towards it. Only entities with an instance whose class has a contact callback are watched, so physics
+	// keeps track of their contacts and of no others. Contacts begin only for the scripts of active entities; each instance that got
 	// an Enter gets the matching Exit, also when its entity was deactivated meanwhile (but not once the script was removed or
 	// disabled, or its entity destroyed). The callbacks run while the scene updates, so the entities they destroy stay valid
 	// until the frame ends; the other side of an Exit caused by destruction may already be gone.
@@ -144,6 +146,9 @@ namespace Strata
 			// Entities whose contacts with this one began for this instance and have not ended yet: the Exit goes to exactly the
 			// instances that got the Enter (kept across hot reloads).
 			std::unordered_set<UUID> Contacts;
+			// The instance watches its entity's contacts (ICollisionEventSource::WatchCollisions): it exists and its class has
+			// a contact callback.
+			bool WatchesContacts = false;
 		};
 
 		friend class ScriptEngine;
@@ -216,6 +221,8 @@ namespace Strata
 		void HandleCallResult(Instance& instance, ScriptCallback callback, ScriptCallResult result);
 
 		void OnCollision(const CollisionEvent& event);
+		// Watches or stops watching the instance's entity's contacts as its state requires (see Instance::WatchesContacts).
+		void UpdateContactWatch(Instance& instance);
 		// Calls a contact callback on the scripts of an entity, for its contact with "other" (the normal points towards it).
 		void DeliverContact(UUID entityID, UUID otherID, bool begin, ScriptCallback callback, const glm::vec3& point, const glm::vec3& normal);
 	private:
@@ -260,7 +267,7 @@ namespace Strata
 
 		std::unordered_map<AssetHandle, AssetPin> m_AssetPins; // Assets the scripts requested (released when play stops)
 		std::unordered_set<std::string> m_ReportedProblems;
-		CollisionListenerID m_CollisionListener = c_InvalidCollisionListener; // Registered with the scene's PhysicsSystem while running
+		CollisionListenerID m_CollisionListener = c_InvalidCollisionListener; // Registered with the scene's ICollisionEventSource while running
 		std::vector<entt::scoped_connection> m_Connections;
 		float m_DeltaTime = 0.0f;
 		bool m_Running = false;

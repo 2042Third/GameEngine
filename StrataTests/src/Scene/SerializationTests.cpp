@@ -21,6 +21,7 @@ namespace
 		Ref<Scene> scene = CreateRef<Scene>("Full");
 		scene->GetSettings().Gravity = { 0.0f, -20.0f, 1.0f };
 		scene->GetSettings().FixedTimestep = 1.0f / 120.0f;
+		scene->GetSettings().PhysicsCapacity = { 4096, 16384, 0 };
 
 		Entity root = scene->CreateEntity("Root");
 		root.GetTransform().Translation = { 1.5f, -2.0f, 3.25f };
@@ -137,6 +138,7 @@ TEST_SUITE("Scene.Serialization")
 
 		CHECK(loaded.GetName() == "Full");
 		CHECK(loaded.GetSettings().Gravity == glm::vec3(0.0f, -20.0f, 1.0f));
+		CHECK(loaded.GetSettings().PhysicsCapacity == PhysicsCapacitySettings { 4096, 16384, 0 });
 		CHECK(loaded.GetEntityCount() == original->GetEntityCount());
 
 		Entity root = loaded.FindEntityByName("Root");
@@ -157,6 +159,37 @@ TEST_SUITE("Scene.Serialization")
 		CHECK(std::get<int32_t>(script->FindField("Points")->Value) == 42);
 		CHECK(std::get<UUID>(script->FindField("Target")->Value) == root.GetUUID());
 		CHECK(ui.GetComponent<PrefabInstanceComponent>().PrefabEntityID == UUID(8));
+	}
+
+	TEST_CASE("Scenes saved before physics capacities load with automatic ones, and invalid capacities are reported")
+	{
+		const auto load = [](const nlohmann::json& settings, std::vector<std::string>& warnings)
+		{
+			const nlohmann::json document = {
+				{ "Strata", { { "Format", "Scene" }, { "Version", 1 } } },
+				{ "Scene", { { "Name", "Old" }, { "Settings", settings } } } };
+			Scene scene;
+			std::string error;
+			REQUIRE_MESSAGE(SceneSerializer::Deserialize(scene, document, &error, &warnings), error);
+			return scene.GetSettings().PhysicsCapacity;
+		};
+
+		std::vector<std::string> warnings;
+		CHECK(load({ { "FixedTimestep", 0.02 }, { "MaxFixedStepsPerFrame", 4 } }, warnings) == PhysicsCapacitySettings());
+		CHECK(warnings.empty());
+
+		// Fields that are missing stay automatic.
+		CHECK(load({ { "PhysicsCapacity", { { "MaxBodies", 300 } } } }, warnings) == PhysicsCapacitySettings { 300, 0, 0 });
+		CHECK(warnings.empty());
+
+		// Too large values are limited, others ignored; each with a warning.
+		const PhysicsCapacitySettings invalid = load({ { "PhysicsCapacity", {
+			{ "MaxBodies", uint64_t(1) << 40 }, { "MaxBodyPairs", -5 }, { "MaxContactConstraints", "many" } } } }, warnings);
+		CHECK(invalid == PhysicsCapacitySettings { PhysicsCapacitySettings::c_MaxBodiesLimit, 0, 0 });
+		CHECK(warnings.size() == 3);
+		warnings.clear();
+		CHECK(load({ { "PhysicsCapacity", 12 } }, warnings) == PhysicsCapacitySettings());
+		CHECK(warnings.size() == 1);
 	}
 
 	TEST_CASE("Scene files round trip on disk")

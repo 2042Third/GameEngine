@@ -35,6 +35,20 @@ namespace Strata::Tests::Perf
 	// module. The script instances are created when the scene starts playing.
 	std::vector<Entity> CreateScriptedEntities(Scene& scene, size_t count, std::string_view className = c_TrivialScriptClass);
 
+	// Height of the generated box stacks (boxes per column).
+	constexpr uint32_t c_BoxStackHeight = 10;
+
+	struct BoxStacks
+	{
+		Entity Floor;
+		std::vector<Entity> Boxes; // Column by column, each from the bottom up
+	};
+	// `count` dynamic 1 m boxes ("Box", root entities with a RigidBody and a BoxCollider) in a square grid of columns of
+	// `height` boxes, 0.2 m apart in every direction, over a static floor ("Floor", a BoxCollider whose top is the plane
+	// y = 0). Playing it, the boxes fall 0.2 m, land on each other column by column and come to rest: a burst of contacts
+	// in the first second, then every box asleep in its stack.
+	BoxStacks CreateBoxStacks(Scene& scene, size_t count, uint32_t height = c_BoxStackHeight);
+
 	// A primary camera looking toward the origin and a directional light, as a scene opened in the editor has.
 	void AddCameraAndLight(Scene& scene);
 

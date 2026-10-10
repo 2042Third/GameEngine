@@ -2,13 +2,11 @@
 
 #include "Strata/Asset/AssetTypes.h"
 #include "Strata/Core/Base.h"
-#include "Strata/Core/UUID.h"
-#include "Strata/Scene/Entity.h"
+#include "Strata/Scene/SceneServices.h"
 
 #include <glm/glm.hpp>
 
 #include <array>
-#include <functional>
 #include <vector>
 
 namespace Strata
@@ -19,15 +17,16 @@ namespace Strata
 	// Query layer mask that accepts every layer.
 	constexpr uint32_t c_AllPhysicsLayers = 0xFFFFFFFFu;
 
-	// Configuration of a physics world. Capacities are fixed when the world is created; the layer matrix can also be
-	// changed at runtime through PhysicsWorld::SetLayersCollide.
+	// Configuration of a physics world. Capacities are fixed when the world is created; 0 sizes one automatically from the
+	// bodies the scene has then (see PhysicsWorld::ResolveCapacities), and a scene's SceneSettings::PhysicsCapacity overrides
+	// these. The layer matrix can also be changed at runtime through PhysicsWorld::SetLayersCollide.
 	struct PhysicsSettings
 	{
-		uint32_t MaxBodies = 65536;
-		uint32_t MaxBodyPairs = 65536;           // Broad phase pairs that can be processed per step
-		uint32_t MaxContactConstraints = 10240;  // Contacts that can be solved per step
+		uint32_t MaxBodies = 0;
+		uint32_t MaxBodyPairs = 0;               // Broad phase pairs that can be processed per step
+		uint32_t MaxContactConstraints = 0;      // Contacts that can be solved per step
 		uint32_t CollisionSteps = 1;             // Collision sub-steps per fixed update (raise for very fast bodies)
-		uint32_t TempAllocatorSize = 10u * 1024u * 1024u; // Per-step scratch memory in bytes (falls back to the heap when exceeded)
+		uint32_t TempAllocatorSize = 0;          // Per-step scratch memory in bytes, 0: sized for the capacities (falls back to the heap when exceeded)
 		// Longest wait, in seconds of simulation time, at the start for the meshes of mesh colliders (still loading or being
 		// cooked) before the first step; 0 does not wait. See PhysicsWorld.
 		float MeshWaitTimeout = 10.0f;
@@ -68,45 +67,20 @@ namespace Strata
 		}
 	};
 
-	enum class CollisionEventType : uint8_t
+	// CollisionEvent, the collision listener types and RaycastHit are defined with the scene services that hand them to other
+	// systems (Scene/SceneServices.h).
+
+	// What a world needed beyond the capacities it was created with: entities that found it full, steps whose body pair or
+	// contact buffers were full. PhysicsSystem remembers it per scene (Scene::GetLineageID), and the next world it creates for
+	// that scene sizes its automatic capacities for at least this much ("the next play start grows the capacity").
+	struct PhysicsCapacityDemand
 	{
-		Begin = 0, // Two bodies started touching (or a body entered a trigger)
-		End        // They stopped touching, or one of them was removed from the simulation while touching
-	};
+		uint32_t Bodies = 0;
+		uint32_t BodyPairs = 0;
+		uint32_t ContactConstraints = 0;
 
-	// A change in the contact state of two entities. Every Begin is eventually followed by exactly one End for the same
-	// pair, except when the scene stops running (the world is torn down without events).
-	struct CollisionEvent
-	{
-		CollisionEventType Type = CollisionEventType::Begin;
-		bool IsTrigger = false; // At least one of the bodies is a trigger (no collision response)
-
-		// The entities involved. A handle is invalid when its entity was destroyed before the event was dispatched
-		// (typical for End events caused by destruction); AID and BID always identify the entities.
-		Entity A;
-		Entity B;
-		UUID AID = UUID::Null();
-		UUID BID = UUID::Null();
-
-		glm::vec3 Point = glm::vec3(0.0f);  // World space contact point (the last known one for End events)
-		glm::vec3 Normal = glm::vec3(0.0f); // World space contact normal pointing from A towards B
-
-		bool Involves(UUID id) const { return AID == id || BID == id; }
-		// The entity on the other side of the contact from `id` (null if `id` is not involved).
-		UUID GetOther(UUID id) const { return AID == id ? BID : (BID == id ? AID : UUID::Null()); }
-	};
-
-	using CollisionCallback = std::function<void(const CollisionEvent&)>;
-	using CollisionListenerID = uint64_t;
-	constexpr CollisionListenerID c_InvalidCollisionListener = 0;
-
-	struct RaycastHit
-	{
-		Entity HitEntity;
-		UUID EntityID = UUID::Null();
-		glm::vec3 Point = glm::vec3(0.0f);  // World space hit position
-		glm::vec3 Normal = glm::vec3(0.0f); // World space surface normal at the hit
-		float Distance = 0.0f;              // Distance from the ray origin along the ray direction
+		bool IsEmpty() const { return Bodies == 0 && BodyPairs == 0 && ContactConstraints == 0; }
+		bool operator==(const PhysicsCapacityDemand& other) const = default;
 	};
 
 	struct PhysicsStats
@@ -117,19 +91,39 @@ namespace Strata
 		uint32_t KinematicBodyCount = 0;
 		uint32_t ActiveBodyCount = 0;    // Awake bodies (sleeping and static bodies are not simulated)
 		uint32_t PendingBodyCount = 0;   // Entities waiting for a body that cannot be built yet (degenerate transform, mesh not loaded, world full)
-		uint32_t ContactPairCount = 0;   // Pairs of entities currently touching (including triggers)
-		// Work of the last step, which grows with the awake bodies and the signaled changes, not with sleeping bodies:
+		uint32_t ContactPairCount = 0;   // Touching pairs of entities that are tracked (those someone listens to, see ICollisionEventSource)
+		uint64_t PairIndexOperations = 0; // Entries of the per-entity touching pair lists written since the world was created
+		// Capacities of the world (as resolved when it was created) and what overflowed them.
+		uint32_t MaxBodies = 0;
+		uint32_t MaxBodyPairs = 0;
+		uint32_t MaxContactConstraints = 0;
+		uint32_t BodyOverflowCount = 0;  // Entities waiting for a body because the world is full (part of PendingBodyCount)
+		uint64_t ContactOverflowSteps = 0; // Steps that dropped contacts or body pairs because their buffers were full
+		PhysicsCapacityDemand Demand;    // What the world needed beyond its capacities so far (empty while they suffice)
+		// Work of the last step, which grows with the awake bodies and the signaled changes, not with sleeping bodies or the
+		// world's capacity:
 		uint32_t SyncedBodyCount = 0;    // Bodies compared with their entity before the step (awake ones and those with changes)
 		uint32_t CheckedPairCount = 0;   // Touching pairs that could end during the step (those of awake or rebuilt bodies)
 		uint32_t WrittenBodyCount = 0;   // Dynamic bodies whose pose was written back to their entity
+		// Body slots read to put the moved bodies in body order for the write-back: the groups of 64 that hold a moved body.
+		uint32_t OrderedSlotCount = 0;
 		uint64_t BuildCount = 0;         // Bodies built or rebuilt since the world was created (attempts that failed included)
+		uint64_t AddBatchCount = 0;      // Batches that added new bodies to the simulation since then (one per activation mode per round of changes)
+		uint32_t SharedShapeCount = 0;   // Box and sphere shapes the world built, each shared by the bodies of its size
 		uint64_t MeshCheckCount = 0;     // Mesh collider bodies checked for changed, arrived or cooked mesh data since then
 		uint64_t StepCount = 0;          // Simulation steps since the world was created
+		uint64_t DroppedSteps = 0;       // Fixed steps the scene dropped since it started (Scene::GetDroppedFixedStepCount)
 		bool WaitingForMeshes = false;   // The last step was held: the simulation waits for mesh colliders' meshes to start
 		uint64_t HeldStepCount = 0;      // Steps held at the start while waiting for meshes (not counted in StepCount)
 		uint64_t JobCount = 0;           // Simulation jobs run since the world was created, on any thread
 		uint64_t WorkerJobCount = 0;     // The part of JobCount run by JobSystem worker threads (depends on thread timing)
 		float LastStepTime = 0.0f;       // Wall time of the last step in milliseconds, including transform synchronization
+		// The parts of LastStepTime, in milliseconds: Jolt's own step, and Strata's work around it (bringing the bodies in line
+		// with their entities, writing simulated poses back, turning contacts into events).
+		float JoltStepTime = 0.0f;
+		float SyncTime = 0.0f;
+		float WriteBackTime = 0.0f;
+		float ContactTime = 0.0f;
 	};
 
 	// Triangle data used to build MeshColliderComponent shapes.

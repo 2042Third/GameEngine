@@ -221,6 +221,7 @@ namespace Strata
 			return nullptr;
 		for (const std::string& warning : warnings)
 			ST_CORE_WARN("Scene '{}': {}", scene->GetName(), warning);
+		scene->SetSourceAsset(Handle);
 		return scene;
 	}
 

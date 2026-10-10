@@ -4,6 +4,10 @@
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
 
+#include <algorithm>
+#include <cstring>
+#include <unordered_map>
+
 namespace Strata
 {
 
@@ -14,6 +18,13 @@ namespace Strata
 		{
 			static PhysicsSettings s_DefaultSettings;
 			return s_DefaultSettings;
+		}
+
+		// What the worlds of each scene (by Scene::GetLineageID) needed beyond their capacities, in this process.
+		std::unordered_map<UUID, PhysicsCapacityDemand>& GetCapacityDemandStorage()
+		{
+			static std::unordered_map<UUID, PhysicsCapacityDemand> s_Demands;
+			return s_Demands;
 		}
 
 		// Bitwise comparison, so that a non-finite gravity is not re-applied (and re-rejected) every step.
@@ -34,11 +45,19 @@ namespace Strata
 	PhysicsSystem::PhysicsSystem(Scene& scene)
 		: m_Scene(scene), m_Settings(GetDefaultSettings())
 	{
+		m_Scene.RegisterService<ICollisionEventSource>(*this);
+		m_Scene.RegisterService<IBodyMotionQuery>(*this);
+		m_Scene.RegisterService<IBodyControl>(*this);
+		m_Scene.RegisterService<IPhysicsQueries>(*this);
 	}
 
 	PhysicsSystem::~PhysicsSystem()
 	{
 		OnRuntimeStop();
+		m_Scene.UnregisterService<IPhysicsQueries>(*this);
+		m_Scene.UnregisterService<IBodyControl>(*this);
+		m_Scene.UnregisterService<IBodyMotionQuery>(*this);
+		m_Scene.UnregisterService<ICollisionEventSource>(*this);
 	}
 
 	void PhysicsSystem::SetDefaultSettings(const PhysicsSettings& settings)
@@ -74,11 +93,35 @@ namespace Strata
 		m_CreationConnections.emplace_back(registry.on_construct<MeshColliderComponent>().connect<&PhysicsSystem::OnPhysicsComponentAdded>(*this));
 	}
 
+	PhysicsCapacityDemand PhysicsSystem::GetRememberedCapacityDemand(UUID sceneLineage)
+	{
+		const auto& demands = GetCapacityDemandStorage();
+		auto it = demands.find(sceneLineage);
+		return it != demands.end() ? it->second : PhysicsCapacityDemand();
+	}
+
+	void PhysicsSystem::ForgetCapacityDemands()
+	{
+		GetCapacityDemandStorage().clear();
+	}
+
 	void PhysicsSystem::OnRuntimeStop()
 	{
 		m_CreationConnections.clear();
 		m_WorldRequested = false;
 		m_Running = false;
+		if (m_World)
+		{
+			// What this world lacked, the scene's next world gets.
+			const PhysicsCapacityDemand demand = m_World->GetCapacityDemand();
+			if (!demand.IsEmpty())
+			{
+				PhysicsCapacityDemand& remembered = GetCapacityDemandStorage()[m_Scene.GetLineageID()];
+				remembered.Bodies = std::max(remembered.Bodies, demand.Bodies);
+				remembered.BodyPairs = std::max(remembered.BodyPairs, demand.BodyPairs);
+				remembered.ContactConstraints = std::max(remembered.ContactConstraints, demand.ContactConstraints);
+			}
+		}
 		m_World.reset(); // Bodies are destroyed without collision events: the whole world goes away
 	}
 
@@ -101,7 +144,7 @@ namespace Strata
 		DispatchCollisionEvents();
 	}
 
-	CollisionListenerID PhysicsSystem::AddCollisionListener(CollisionCallback callback)
+	CollisionListenerID PhysicsSystem::AddCollisionListener(CollisionCallback callback, CollisionListenerScope scope)
 	{
 		if (!callback)
 			return c_InvalidCollisionListener;
@@ -109,8 +152,42 @@ namespace Strata
 		Ref<CollisionListener> listener = CreateRef<CollisionListener>();
 		listener->ID = m_NextListenerID++;
 		listener->Callback = std::move(callback);
+		listener->Scope = scope;
 		m_CollisionListeners.push_back(listener);
+		UpdateContactTracking();
 		return listener->ID;
+	}
+
+	void PhysicsSystem::WatchCollisions(UUID entity)
+	{
+		if (m_CollisionWatches[entity]++ == 0 && m_World)
+			m_World->SetContactInterest(entity, true);
+	}
+
+	void PhysicsSystem::UnwatchCollisions(UUID entity)
+	{
+		auto it = m_CollisionWatches.find(entity);
+		if (it == m_CollisionWatches.end())
+			return;
+		if (--it->second > 0)
+			return;
+		m_CollisionWatches.erase(it);
+		if (m_World)
+			m_World->SetContactInterest(entity, false);
+	}
+
+	void PhysicsSystem::UpdateContactTracking()
+	{
+		if (!m_World)
+			return;
+		const bool trackAll = std::any_of(m_CollisionListeners.begin(), m_CollisionListeners.end(),
+			[](const Ref<CollisionListener>& listener) { return listener->Scope == CollisionListenerScope::AllEntities; });
+		m_World->SetTrackAllContacts(trackAll);
+	}
+
+	bool PhysicsSystem::IsWatchingCollisions(UUID entity) const
+	{
+		return m_CollisionWatches.find(entity) != m_CollisionWatches.end();
 	}
 
 	bool PhysicsSystem::RemoveCollisionListener(CollisionListenerID id)
@@ -122,6 +199,7 @@ namespace Strata
 		// A dispatch in progress holds its own references; the flag stops it from calling this listener again.
 		(*it)->Removed = true;
 		m_CollisionListeners.erase(it);
+		UpdateContactTracking();
 		return true;
 	}
 
@@ -156,7 +234,9 @@ namespace Strata
 
 	PhysicsStats PhysicsSystem::GetStats() const
 	{
-		return m_World ? m_World->GetStats() : PhysicsStats();
+		PhysicsStats stats = m_World ? m_World->GetStats() : PhysicsStats();
+		stats.DroppedSteps = m_Scene.GetDroppedFixedStepCount();
+		return stats;
 	}
 
 	bool PhysicsSystem::HasBody(Entity entity)
@@ -193,6 +273,15 @@ namespace Strata
 	{
 		ApplyPendingChanges();
 		return m_World && m_World->SetAngularVelocity(entity, velocity);
+	}
+
+	std::optional<glm::vec3> PhysicsSystem::GetPointVelocity(Entity entity, const glm::vec3& worldPoint)
+	{
+		ApplyPendingChanges();
+		if (!m_World || !m_World->HasBody(entity))
+			return std::nullopt;
+		const glm::vec3 origin = glm::vec3(m_Scene.GetWorldTransform(entity)[3]);
+		return m_World->GetLinearVelocity(entity) + glm::cross(m_World->GetAngularVelocity(entity), worldPoint - origin);
 	}
 
 	bool PhysicsSystem::AddForce(Entity entity, const glm::vec3& force)
@@ -304,8 +393,22 @@ namespace Strata
 	{
 		m_CreationConnections.clear();
 		m_WorldRequested = false;
-		m_World = CreateScope<PhysicsWorld>(m_Scene, m_Settings);
+		// The scene's capacities win over the defaults; those left automatic are sized by the world, for at least what an
+		// earlier world of this scene needed.
+		PhysicsSettings settings = m_Settings;
+		const PhysicsCapacitySettings& capacity = m_Scene.GetSettings().PhysicsCapacity;
+		if (capacity.MaxBodies != 0)
+			settings.MaxBodies = capacity.MaxBodies;
+		if (capacity.MaxBodyPairs != 0)
+			settings.MaxBodyPairs = capacity.MaxBodyPairs;
+		if (capacity.MaxContactConstraints != 0)
+			settings.MaxContactConstraints = capacity.MaxContactConstraints;
+		m_World = CreateScope<PhysicsWorld>(m_Scene, settings, GetRememberedCapacityDemand(m_Scene.GetLineageID()));
 		m_AppliedGravity = m_Scene.GetSettings().Gravity;
+		// Contacts are tracked for the listeners and watches registered so far.
+		UpdateContactTracking();
+		for (const auto& [entity, count] : m_CollisionWatches)
+			m_World->SetContactInterest(entity, true);
 	}
 
 	void PhysicsSystem::ApplyPendingChanges()
@@ -349,10 +452,13 @@ namespace Strata
 		const std::vector<Ref<CollisionListener>> listeners = m_CollisionListeners;
 		for (const CollisionEvent& event : events)
 		{
+			// Watches may change during the dispatch too; each event is judged when its turn comes.
+			const bool watched = IsWatchingCollisions(event.AID) || IsWatchingCollisions(event.BID);
 			for (const Ref<CollisionListener>& listener : listeners)
 			{
-				if (!listener->Removed)
-					listener->Callback(event);
+				if (listener->Removed || (listener->Scope == CollisionListenerScope::WatchedEntities && !watched))
+					continue;
+				listener->Callback(event);
 			}
 		}
 	}

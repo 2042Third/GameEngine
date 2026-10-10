@@ -148,7 +148,11 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   children per entity, entities running the API test module's trivial script) under
   `Perf::ScopedApplicationJobSystem` (the job system as applications start it): `Perf.Scene` (transform updates and
   idle frames up to a million entities), `Perf.Scripting` (100,000 and 300,000 trivial scripts, frames that spawn and
-  destroy entities, scripts destroying 10,000 of 100,000 sibling roots in one frame) and, in `src/Editor/`,
+  destroy entities, scripts destroying 10,000 of 100,000 sibling roots in one frame), `Perf.Physics` (box stacks of
+  `CreateBoxStacks`: the first frames of 30,000 boxes with time dilation, 70,000 boxes that all get a body, the busy
+  frames of 70,000 and 10,000 boxes with Strata's part of a step below Jolt's, and of 30,000 boxes whose floor contacts
+  are tracked; creating 10,000 bodies in one frame; the memory a world at the largest capacities reserves) and, in
+  `src/Editor/`,
   `Perf.Editor` (entity commands among 100,000 roots) and `PerfGPU.Editor`, which runs the real `StrataEditor`
   maximized on generated 100,000- and 1,000,000-entity scenes and checks the median CPU frame time its `editor.wait`
   steps report (when the editor fails, the test describes the scene files on disk with `Tests::DescribeJsonFile`,
@@ -332,7 +336,9 @@ The threading model, frame loop and pipelines these rules protect are described 
   `Architecture.Layering` (in `StrataTests.Core`) fails on any other include, on files in no layer (new folders and
   files get a pattern) and on stale lines of `LayeringAllowlist.txt`, the known exceptions, each with the workstream
   that removes it. Never add a line or widen `MayInclude` to make a sideways or upward include pass: invert the
-  dependency (an interface in the lower layer, like `InputWindow`; a registry the higher module fills) instead. A
+  dependency (an interface in the lower layer, like `InputWindow`; a registry the higher module fills; a scene service,
+  `Scene/SceneServices.h`, through which the systems of a playing scene use each other, or an engine service,
+  `Core/EngineServices.h`, for what outlives scenes) instead. A
   proven downward dependency may widen `MayInclude`, with the reason in the layer's `Notes`. Removing an exception
   lowers `MaxAllowlistEntries`. Details: Docs/Architecture.md, "Layers".
 - **Module registration:** modules extend the engine through registries (components, asset loaders and importers,
@@ -423,13 +429,15 @@ Writing scripts is described in `.claude/skills/strata-scripting/SKILL.md`.
 
 Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; the skill has an overview with recipes):
 
-- Physics: `RigidBody` (velocities, forces, impulses, `Teleport`) and `Physics` (raycasts, overlaps) go through the scene's
-  `PhysicsSystem`, also in `OnCreate`: scenes start every system before the scripts (`SceneSystem::OnRuntimeStarted`).
-  Contacts reach scripts as `OnCollisionEnter/Exit` and `OnTriggerEnter/Exit` (class descriptor callbacks taking a
-  `StrataScriptCollision`): `ScriptSystem` listens to the `PhysicsSystem` while it runs and calls the scripts of both
-  entities, skipping removed, disabled and not yet started instances; contacts begin only for active entities, and each
-  instance that got an Enter gets its Exit, also after its entity was deactivated.
-- Audio: `AudioSource` and `Audio` go through the scene's `AudioSystem`; without it (simulate mode) the calls fail.
+- Physics: `RigidBody` (velocities, forces, impulses, `Teleport`) and `Physics` (raycasts, overlaps) go through the scene
+  services the scene's `PhysicsSystem` offers (`IBodyMotionQuery`, `IBodyControl`, `IPhysicsQueries`), also in `OnCreate`:
+  scenes start every system before the scripts (`SceneSystem::OnRuntimeStarted`). Contacts reach scripts as
+  `OnCollisionEnter/Exit` and `OnTriggerEnter/Exit` (class descriptor callbacks taking a `StrataScriptCollision`):
+  `ScriptSystem` listens to the scene's `ICollisionEventSource` while it runs and calls the scripts of both entities,
+  skipping removed, disabled and not yet started instances; contacts begin only for active entities, and each instance
+  that got an Enter gets its Exit, also after its entity was deactivated.
+- Audio: `AudioSource` and `Audio` go through the scene's `IAudioPlayback` (the `AudioSystem`); without it (simulate mode)
+  the calls fail. The master volume belongs to the engine (the engine service `IAudioOutput`), so it works in any scene.
 - Game flow: `Game::Quit`, `LoadScene` and `ReloadScene` set `Scene::RequestQuit`/`RequestSceneLoad`, which the scene's owner
   honors after the frame (see [Editor](#editor)).
 - Assets: `Assets::RequestLoad` pins the asset for the playing scene (`ScriptSystem::RequestAsset`; never evicted to meet
@@ -652,6 +660,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
 - `project.export` writes a playable game outside the project: the asset pack (`<Game>.stpak`), the script module, the
   manifest (`<Game>.stgame`, start scene, script module and window settings) and the runtime executable renamed after
   the game. CTest exports a small game (`StrataEditor --no-gpu`) and runs it headless.
+- Play mode runs on the wall clock with time dilation (`Scene::SetTimeDilation`, `EditorContextSpecification::TimeDilation`;
+  exported games too, `GameRuntimeOptions::TimeDilation`): when fixed steps cannot keep up with real time the game slows
+  down instead of running ever more catch-up steps per frame. Scripted runs (`--frames`, `--commands`) and tests keep every
+  due step, so they stay deterministic.
 - A running game asks its owner to quit or to switch scenes through `Scene::RequestQuit`/`RequestSceneLoad` (scripts: the
   SDK's `Game`), honored after each update: the editor stops play mode, or replaces the running scene (a paused game stays
   paused, with its pending steps; `play.stop` still returns to the edited scene); `GameRuntime` ends the game
