@@ -551,9 +551,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `--no-automation` turns it off and `--automation-port <port>` picks the port (default 0: a free one).
   A headless editor without `--frames` whose automation cannot start exits with code 1. CTest runs of
   command scripts pass `--no-automation`.
-  CTest runs `StrataTests/Editor/SmokeCommands.json.in` (configured into the build tree; it builds a scene and captures
-  the viewport into `build/<preset>/StrataTests/SmokeCaptures/`) and checks that failing and unfinished scripts fail the
-  process.
+  CTest runs `StrataTests/Editor/SmokeCommands.json.in` (configured into the build tree; it creates a project in the
+  build tree, builds a scene and captures the viewport into `build/<preset>/StrataTests/SmokeCaptures/`), checks that a
+  windowed editor without a project opens into the launcher (`Editor/LauncherCommands.json`) and that failing and
+  unfinished scripts fail the process.
 - `editor.status` summarizes the editor (project, scene, play state, selection, undo history); other
   parts of the editor add sections to it through `EditorContext::SetStatusProvider`. Its `editor` section says whether the
   launcher shows (`launcher`), the GPU (`gpu`) and the startup time (`startupSeconds`: from the process's creation to

@@ -1,0 +1,8 @@
+[
+	{ "command": "editor.status", "expect": { "/editor/launcher": { "equals": true }, "/project/open": { "equals": false } } },
+	{ "command": "project.templates" },
+	{ "command": "project.samples" },
+	{ "command": "editor.recentProjects" },
+	{ "command": "editor.wait", "parameters": { "frames": 10 } },
+	{ "command": "editor.status", "expect": { "/editor/launcher": { "equals": true } } }
+]

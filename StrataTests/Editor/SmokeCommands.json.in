@@ -1,4 +1,6 @@
 [
+	{ "command": "project.create", "parameters": { "directory": "@STRATA_SMOKE_PROJECT_DIR@", "name": "Smoke" } },
+	{ "command": "editor.status", "expect": { "/editor/launcher": { "equals": false } } },
 	{ "command": "editor.commands" },
 	{ "command": "entity.create", "parameters": { "name": "Floor", "components": { "MeshRenderer": { "Mesh": "0000000000000003" }, "Transform": { "Scale": [10, 1, 10] } } } },
 	{ "command": "entity.create", "parameters": { "name": "Sun", "components": { "DirectionalLight": { "Intensity": 3 } } } },

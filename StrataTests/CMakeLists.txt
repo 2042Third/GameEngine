@@ -163,18 +163,28 @@ add_test(NAME StrataScriptCore.PackageDist
 		-P "${CMAKE_CURRENT_SOURCE_DIR}/PackageProject/BuildPackageProject.cmake")
 set_tests_properties(StrataScriptCore.PackageDist PROPERTIES LABELS "package")
 
-# The real editor, driven by a command script for a few frames: catches startup, UI and shutdown failures.
+# The real editor in a window, driven by a command script: catches startup, UI and shutdown failures.
 if(TARGET StrataEditor)
-	# The script saves viewport captures into the build tree (absolute paths: it runs without a project).
+	# The script creates a project in the build tree first, so the editor (not the launcher) draws its panels and viewport,
+	# and saves viewport captures into the build tree (absolute paths, outside the project). It ends once the script is
+	# done; the frame limit only stops a script that hangs, so the run does not depend on how fast frames are.
+	set(STRATA_SMOKE_PROJECT_DIR "${CMAKE_CURRENT_BINARY_DIR}/SmokeProject")
 	set(STRATA_SMOKE_CAPTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/SmokeCaptures")
 	configure_file("${CMAKE_CURRENT_SOURCE_DIR}/Editor/SmokeCommands.json.in" "${CMAKE_CURRENT_BINARY_DIR}/SmokeCommands.json" @ONLY)
+	add_test(NAME StrataEditor.SmokeClean COMMAND "${CMAKE_COMMAND}" -E rm -rf "${STRATA_SMOKE_PROJECT_DIR}")
+	set_tests_properties(StrataEditor.SmokeClean PROPERTIES FIXTURES_SETUP StrataEditorSmokeClean)
 	add_test(NAME StrataEditor.Smoke
-		COMMAND StrataEditor --no-automation --frames 120 --windowed --commands "${CMAKE_CURRENT_BINARY_DIR}/SmokeCommands.json"
+		COMMAND StrataEditor --no-automation --quit-after-commands --frames 3600 --windowed --commands "${CMAKE_CURRENT_BINARY_DIR}/SmokeCommands.json"
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
-	set_tests_properties(StrataEditor.Smoke PROPERTIES LABELS "gpu" FIXTURES_SETUP StrataEditorSmokeCaptures)
+	set_tests_properties(StrataEditor.Smoke PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataEditorSmokeClean FIXTURES_SETUP StrataEditorSmokeCaptures)
 	# The smoke script's capture shows the scene (grid, floor, crate), not a black or empty image.
 	add_test(NAME StrataEditor.SmokeCaptureCheck COMMAND StrataTests --strata-test-helper=check-image "${STRATA_SMOKE_CAPTURE_DIR}/SmokeViewport.png")
 	set_tests_properties(StrataEditor.SmokeCaptureCheck PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataEditorSmokeCaptures)
+	# Without a project a windowed editor opens into the launcher (and closes cleanly from it).
+	add_test(NAME StrataEditor.LauncherSmoke
+		COMMAND StrataEditor --no-automation --frames 30 --windowed --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/LauncherCommands.json"
+		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
+	set_tests_properties(StrataEditor.LauncherSmoke PROPERTIES LABELS "gpu")
 
 	# The editor executable carries the strata mark as its icon (StrataEditor.rc.in).
 	if(WIN32)
