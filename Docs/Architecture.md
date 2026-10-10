@@ -591,8 +591,12 @@ Textures are stored the way the GPU samples them: block-compressed, with their m
   sun into negative light. `TextureUtils::GenerateMips` (a 2x2 box) stays for textures made at runtime. Cooking holds
   two levels' texels at a time: each level is encoded, then the next is filtered from it.
 - **Encoding** (`TextureCooker::EncodeLevel`): stb_dxt (BC1 and BC3 with two endpoint refinements at `High`, BC4, BC5),
-  rows of blocks in parallel on `JobSystem::ParallelFor`, the same bytes with or without workers. Imports run on the
-  worker pool (`Scan`) or on I/O jobs (re-imports), never on a frame.
+  batches of block rows (`TextureCooker::GetEncodeBatchCount`) in parallel on `JobSystem::ParallelFor`, the same bytes
+  with or without workers. Where imports run: `EditorAssetManager::Scan` imports what needs it in parallel on the worker
+  pool while its caller waits (the editor, when it opens a project); re-imports after file changes run on I/O jobs and
+  are applied between frames; the editor's `asset.import`, `asset.reimport` and `asset.setImportSettings` still import
+  on the main thread inside the command (about half a second for a 4096x4096 texture in Release, less than the RGBA8
+  import before), until `content-and-prefabs` makes them asynchronous (Docs/Roadmap.md).
 - **Cooked form** (`Renderer/CookedTexture.h`, `STTX` version 2): a 40-byte header (format, size, mip count, flags,
   filter, wrap, name length, data offset), a mip table (width, height, offset, size per level), the debug name, then the
   levels smallest first, each 16-byte aligned. The mip tail - every level up to 128x128 - is therefore one range right

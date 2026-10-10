@@ -421,14 +421,32 @@ TEST_SUITE("Asset.TextureImport")
 
 	TEST_CASE("Cooking gives the same bytes with and without worker threads")
 	{
-		const std::vector<uint8_t> image = Tests::EncodePNG(130, 70, CreateGradient(130));
-		TextureImportSettings settings;
-		const std::vector<uint8_t> sequential = Import(image, settings)->Serialize();
-		std::vector<uint8_t> parallel;
+		// Large enough that the first levels split into several batches (rows of blocks, texels uncompressed), so workers
+		// encode parts of them; the sizes are not multiples of four, so edge blocks are among them.
+		constexpr uint32_t c_Width = 1030;
+		constexpr uint32_t c_Height = 262;
+		std::vector<uint8_t> pixels = CreateGradient(c_Width);
+		pixels.resize(static_cast<size_t>(c_Width) * c_Height * 4);
+		const std::vector<uint8_t> image = Tests::EncodePNG(c_Width, c_Height, pixels);
+		REQUIRE(TextureCooker::GetEncodeBatchCount(TextureFormat::BC1SRGB, c_Width, c_Height) > 1);
+		REQUIRE(TextureCooker::GetEncodeBatchCount(TextureFormat::BC1SRGB, c_Width / 2, c_Height / 2) > 1);
+		REQUIRE(TextureCooker::GetEncodeBatchCount(TextureFormat::RGBA8SRGB, c_Width, c_Height) > 1);
+
+		TextureImportSettings compressed;
+		TextureImportSettings uncompressed;
+		uncompressed.Compression = TextureCompression::Uncompressed;
+		for (const TextureImportSettings& settings : { compressed, uncompressed })
 		{
-			Tests::ScopedJobSystem jobs(4, 1);
-			parallel = Import(image, settings)->Serialize();
+			INFO("Compression ", std::string(TextureCompressionToString(settings.Compression)));
+			const std::vector<uint8_t> sequential = Import(image, settings)->Serialize();
+			std::vector<uint8_t> parallel;
+			{
+				Tests::ScopedJobSystem jobs(4, 1);
+				parallel = Import(image, settings)->Serialize();
+			}
+			CHECK(parallel == sequential);
 		}
-		CHECK(parallel == sequential);
+		CHECK(TextureCooker::GetEncodeBatchCount(TextureFormat::BC1SRGB, 4, 4) == 1);
+		CHECK(TextureCooker::GetEncodeBatchCount(TextureFormat::BC7, 1024, 1024) == 0);
 	}
 }

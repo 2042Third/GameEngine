@@ -114,6 +114,30 @@ namespace Strata::TextureCooker
 			return false;
 		}
 
+		// How EncodeLevel hands a level to JobSystem::ParallelFor: rows of blocks, or texels for uncompressed formats.
+		struct EncodeWork
+		{
+			uint32_t Count = 0;
+			uint32_t MinBatchSize = 1;
+		};
+
+		EncodeWork GetEncodeWork(const TextureFormatInfo& info, uint32_t width, uint32_t height)
+		{
+			if (!info.IsBlockCompressed)
+				return EncodeWork { width * height, c_TexelsPerBatch };
+			const uint32_t blocksX = (width + info.BlockWidth - 1) / info.BlockWidth;
+			const uint32_t blocksY = (height + info.BlockHeight - 1) / info.BlockHeight;
+			return EncodeWork { blocksY, std::max(1u, c_BlocksPerBatch / blocksX) };
+		}
+
+	}
+
+	uint32_t GetEncodeBatchCount(TextureFormat format, uint32_t width, uint32_t height)
+	{
+		if (!CanEncode(format) || width == 0 || height == 0)
+			return 0;
+		const EncodeWork work = GetEncodeWork(GetTextureFormatInfo(format), width, height);
+		return (work.Count + work.MinBatchSize - 1) / work.MinBatchSize;
 	}
 
 	bool CanEncode(TextureFormat format)
@@ -143,11 +167,11 @@ namespace Strata::TextureCooker
 
 		const TextureFormatInfo info = GetTextureFormatInfo(format);
 		outData.resize(static_cast<size_t>(GetMipByteSize(format, image.Width, image.Height)));
+		const EncodeWork work = GetEncodeWork(info, image.Width, image.Height);
 		if (!info.IsBlockCompressed)
 		{
 			// Each texel's RGBA, cut to the channels the format stores.
-			const uint32_t texelCount = image.Width * image.Height;
-			JobSystem::ParallelFor(texelCount, c_TexelsPerBatch, [&](uint32_t begin, uint32_t end)
+			JobSystem::ParallelFor(work.Count, work.MinBatchSize, [&](uint32_t begin, uint32_t end)
 			{
 				uint8_t rgba[4];
 				for (uint32_t texel = begin; texel < end; texel++)
@@ -159,10 +183,9 @@ namespace Strata::TextureCooker
 			return true;
 		}
 
-		const uint32_t blocksX = (image.Width + 3) / 4;
-		const uint32_t blocksY = (image.Height + 3) / 4;
+		const uint32_t blocksX = (image.Width + info.BlockWidth - 1) / info.BlockWidth;
 		const int mode = highQuality ? STB_DXT_HIGHQUAL : STB_DXT_NORMAL;
-		JobSystem::ParallelFor(blocksY, std::max(1u, c_BlocksPerBatch / blocksX), [&](uint32_t begin, uint32_t end)
+		JobSystem::ParallelFor(work.Count, work.MinBatchSize, [&](uint32_t begin, uint32_t end)
 		{
 			uint8_t rgba[16 * 4];
 			uint8_t channels[16 * 2];

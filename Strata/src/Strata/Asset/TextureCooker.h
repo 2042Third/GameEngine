@@ -54,6 +54,10 @@ namespace Strata::TextureCooker
 	// Encodes one level into `format` (CanEncode); block rows are encoded in parallel on the job system. Edge blocks
 	// repeat the level's last row and column.
 	bool EncodeLevel(const Image& image, TextureFormat format, bool highQuality, std::vector<uint8_t>& outData);
+	// The batches EncodeLevel splits a level of width x height texels into (rows of blocks, or texels for uncompressed
+	// formats): a level of more than one is encoded on several threads while the job system runs. 0 for formats CookLevels
+	// cannot encode and empty sizes.
+	uint32_t GetEncodeBatchCount(TextureFormat format, uint32_t width, uint32_t height);
 
 	// Makes the RGB texels of a normal map unit vectors again (filtering shortens them; mapped from [0, 255] to [-1, 1]).
 	void NormalizeNormalMap(Image& image);
