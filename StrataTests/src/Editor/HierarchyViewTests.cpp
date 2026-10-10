@@ -226,6 +226,31 @@ TEST_SUITE("Editor.HierarchyView")
 		CHECK(HierarchyFilter::Parse("Red c:Mesh t:Enemy box").Words == std::vector<std::string> { "red", "box" });
 	}
 
+	TEST_CASE("A filtering view outlives the scenes it showed, and scenes outlive the views")
+	{
+		HierarchyView view;
+		view.SetFilter("box");
+		{
+			// Play mode's copy, a closed scene: gone while the view listens to its registry.
+			FilterScene first;
+			view.Update(first.SceneData);
+			CHECK(view.GetRows().size() == 2);
+		}
+		FilterScene second;
+		CHECK(view.Update(second.SceneData));
+		CHECK(RowNames(view, *second.SceneData) == std::vector<std::string> { "Root1", "Box" });
+		{
+			HierarchyView temporary;
+			temporary.SetFilter("box");
+			temporary.Update(second.SceneData);
+		}
+		// Neither the destroyed view nor the destroyed scene hears of this; the living view does.
+		second.Crate.GetComponent<NameComponent>().Name = "Boxes";
+		second.Crate.MarkModified<NameComponent>();
+		CHECK(view.Update(second.SceneData));
+		CHECK(RowNames(view, *second.SceneData) == std::vector<std::string> { "Root1", "Box", "Root2", "Boxes" });
+	}
+
 	TEST_CASE("Revealing an entity 50 levels deep expands its ancestors and returns its row")
 	{
 		Ref<Scene> scene = CreateRef<Scene>("Deep");

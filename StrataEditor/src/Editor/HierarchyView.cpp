@@ -110,18 +110,34 @@ namespace Strata
 		return true;
 	}
 
+	HierarchyView::~HierarchyView()
+	{
+		Disconnect();
+	}
+
 	void HierarchyView::Bind(const Ref<Scene>& scene)
 	{
-		m_Connections.clear();
+		Disconnect();
 		m_Scene = scene;
 		m_Dirty = true;
 		if (scene && IsFiltering())
 			ConnectFilterSignals();
 	}
 
+	void HierarchyView::Disconnect()
+	{
+		// The scene owns the registry whose signals the connections belong to (m_Scene is what they were made with).
+		if (!m_Scene.expired())
+		{
+			for (entt::connection& connection : m_Connections)
+				connection.release();
+		}
+		m_Connections.clear();
+	}
+
 	void HierarchyView::ConnectFilterSignals()
 	{
-		m_Connections.clear();
+		Disconnect();
 		const Ref<Scene> scene = m_Scene.lock();
 		if (!scene)
 			return;
@@ -130,8 +146,8 @@ namespace Strata
 		{
 			if (!info)
 				return;
-			for (entt::scoped_connection& connection : info->Observe(registry, *this, updates))
-				m_Connections.push_back(std::move(connection));
+			for (const entt::connection& connection : info->Observe(registry, *this, updates))
+				m_Connections.push_back(connection);
 		};
 		// Names and tags change by value; for "c:" only which entities have the component counts.
 		if (!m_Filter.Words.empty())
@@ -395,7 +411,7 @@ namespace Strata
 			if (!known)
 				m_UnknownComponents.push_back(m_Filter.Components[term]);
 		}
-		m_Connections.clear();
+		Disconnect();
 		if (IsFiltering())
 			ConnectFilterSignals();
 		m_Dirty = true;

@@ -83,7 +83,7 @@ namespace Strata
 	{
 	public:
 		HierarchyView() = default;
-		~HierarchyView() override = default;
+		~HierarchyView() override;
 
 		HierarchyView(const HierarchyView&) = delete;
 		HierarchyView& operator=(const HierarchyView&) = delete;
@@ -141,6 +141,8 @@ namespace Strata
 		void Bind(const Ref<Scene>& scene);
 		// Connects to the components the filter reads (only while filtering, so unfiltered frames pay nothing for edits).
 		void ConnectFilterSignals();
+		// Releases the connections while their scene lives; a scene that is gone took its signals with it.
+		void Disconnect();
 		void Rebuild(const Scene& scene);
 		void BuildTree(const Scene& scene);
 		void BuildFiltered(const Scene& scene);
@@ -162,7 +164,7 @@ namespace Strata
 		std::vector<const ComponentInfo*> m_FilterComponents; // Per term of Components: the components it names, and the
 		std::vector<size_t> m_FilterComponentTerms;           // index of the term each belongs to
 		std::vector<std::string> m_UnknownComponents;
-		std::vector<entt::scoped_connection> m_Connections;
+		std::vector<entt::connection> m_Connections; // To m_Scene's registry
 		std::vector<uint8_t> m_Marks; // Scratch of BuildFiltered, by entity index
 	};
 
