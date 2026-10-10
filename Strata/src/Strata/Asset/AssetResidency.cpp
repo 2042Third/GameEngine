@@ -198,32 +198,34 @@ namespace Strata
 		if (!entry.InRecencyOrders)
 			return;
 
-		// The latest request goes last, which is where inserting with the end as hint takes constant time.
+		// The latest request goes last: its key is the largest. Extracting the entry's own node and inserting it with the end
+		// as hint both take constant time, where searching the order for the key would take a walk down a tree of every
+		// resident asset (a renderer requests thousands of assets each frame).
 		const RecencyKey key { m_FrameIndex, m_NextRecencySequence++ };
 		for (AssetMemoryPool pool : c_AssetMemoryPools)
 		{
 			if (GetPoolBytes(entry.Usage, pool) == 0)
 				continue;
-			std::map<RecencyKey, AssetHandle>& order = m_RecencyOrders[static_cast<size_t>(pool)];
-			auto node = order.extract(entry.Recency);
-			ST_CORE_ASSERT(!node.empty(), "Asset {} is missing from a recency order", entry.Metadata.Handle.ToString());
-			if (node.empty())
-				continue;
+			const size_t index = static_cast<size_t>(pool);
+			RecencyOrder& order = m_RecencyOrders[index];
+			ST_CORE_ASSERT(entry.RecencyNodes[index]->second == entry.Metadata.Handle, "Asset {} is missing from a recency order",
+				entry.Metadata.Handle.ToString());
+			auto node = order.extract(entry.RecencyNodes[index]);
 			node.key() = key;
-			order.insert(order.end(), std::move(node));
+			entry.RecencyNodes[index] = order.insert(order.end(), std::move(node));
 		}
-		entry.Recency = key;
 	}
 
 	void AssetManagerBase::LinkRecencyLocked(AssetEntry& entry)
 	{
 		// Arriving is no request: the entry goes where its latest request puts it, so an asset whose load outlasted every
 		// request for it may go at once.
-		entry.Recency = RecencyKey { entry.LastRequestedFrame, m_NextRecencySequence++ };
+		const RecencyKey key { entry.LastRequestedFrame, m_NextRecencySequence++ };
 		for (AssetMemoryPool pool : c_AssetMemoryPools)
 		{
+			const size_t index = static_cast<size_t>(pool);
 			if (GetPoolBytes(entry.Usage, pool) > 0)
-				m_RecencyOrders[static_cast<size_t>(pool)].emplace(entry.Recency, entry.Metadata.Handle);
+				entry.RecencyNodes[index] = m_RecencyOrders[index].emplace(key, entry.Metadata.Handle).first;
 		}
 		entry.InRecencyOrders = true;
 	}
@@ -234,8 +236,10 @@ namespace Strata
 			return;
 		for (AssetMemoryPool pool : c_AssetMemoryPools)
 		{
+			const size_t index = static_cast<size_t>(pool);
 			if (GetPoolBytes(entry.Usage, pool) > 0)
-				m_RecencyOrders[static_cast<size_t>(pool)].erase(entry.Recency);
+				m_RecencyOrders[index].erase(entry.RecencyNodes[index]);
+			entry.RecencyNodes[index] = {};
 		}
 		entry.InRecencyOrders = false;
 	}
@@ -294,7 +298,7 @@ namespace Strata
 	{
 		// Every evictable resident asset that holds memory is in the order of each pool it uses.
 		uint32_t evicted = 0;
-		for (std::map<RecencyKey, AssetHandle>& order : m_RecencyOrders)
+		for (RecencyOrder& order : m_RecencyOrders)
 		{
 			for (auto it = order.begin(); it != order.end();)
 			{
@@ -331,7 +335,7 @@ namespace Strata
 
 		// Least recently requested first. The order holds only assets with memory of this pool, so a pool that stays over
 		// budget (what is in use exceeds it) costs a look at its own stale assets, not at every stale asset.
-		std::map<RecencyKey, AssetHandle>& order = m_RecencyOrders[static_cast<size_t>(pool)];
+		RecencyOrder& order = m_RecencyOrders[static_cast<size_t>(pool)];
 		for (auto it = order.begin(); it != order.end() && isOverBudget();)
 		{
 			AssetEntry& entry = m_Entries.at(it->second);

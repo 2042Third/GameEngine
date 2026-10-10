@@ -272,6 +272,7 @@ namespace Strata
 
 			auto operator<=>(const RecencyKey&) const = default;
 		};
+		using RecencyOrder = std::map<RecencyKey, AssetHandle>;
 
 		struct AssetEntry
 		{
@@ -290,8 +291,9 @@ namespace Strata
 			uint64_t LastRequestedFrame = 0;
 			uint32_t PinCount = 0;
 			// While the entry is evictable and resident (loaded, not a memory asset), it is in the recency order of every pool
-			// its Usage holds memory of, with this key (whose Frame is LastRequestedFrame).
-			RecencyKey Recency;
+			// its Usage holds memory of (indexed by AssetMemoryPool; the others are unset), so a request moves it without
+			// searching the order.
+			std::array<RecencyOrder::iterator, 3> RecencyNodes {};
 			bool InRecencyOrders = false;
 		};
 
@@ -395,8 +397,9 @@ namespace Strata
 		AssetMemoryUsage m_Reserved;
 		// Per pool (indexed by AssetMemoryPool): the evictable resident assets holding memory of the pool, least recently
 		// requested first, so eviction for a pool over budget looks only at assets that free its memory. Requests move an
-		// asset to the end in constant time; an arrival requested long ago is placed in logarithmic time.
-		std::array<std::map<RecencyKey, AssetHandle>, 3> m_RecencyOrders;
+		// asset to the end in constant time (AssetEntry::RecencyNodes); an arrival requested long ago is placed in
+		// logarithmic time.
+		std::array<RecencyOrder, 3> m_RecencyOrders;
 		uint64_t m_NextRecencySequence = 0;
 		std::optional<ScheduledTrim> m_ScheduledTrim;
 		uint64_t m_Evictions = 0;
