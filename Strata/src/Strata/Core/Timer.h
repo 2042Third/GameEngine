@@ -60,8 +60,12 @@ namespace Strata
 			SetMaxFrameRate(maxFrameRate);
 		}
 
+		// Another rate starts a new schedule at the next wait; setting the current rate again changes nothing, so a loop
+		// may set its rate every frame.
 		void SetMaxFrameRate(uint32_t maxFrameRate)
 		{
+			if (maxFrameRate == m_MaxFrameRate)
+				return;
 			m_MaxFrameRate = maxFrameRate;
 			m_Period = maxFrameRate > 0 ? std::chrono::nanoseconds(1'000'000'000 / maxFrameRate) : std::chrono::nanoseconds(0);
 			m_Scheduled = false;

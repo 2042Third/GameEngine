@@ -190,14 +190,16 @@ One frame (`Application::Run` and `RunFrame`):
     AudioEngine::Update              reclaims finished one-shots
  7  RenderImGui                      ImGuiLayer::Begin, every Layer::OnImGuiRender, ImGuiLayer::End
  8  back-buffer captures, GraphicsDevice::EndFrame (present)
-    frame counted; MaxFrames (--frames) closes the application; FramePacer::WaitForNextFrame
+    frame counted; MaxFrames (--frames) closes the application; the frame pacer waits (frame rate cap)
 ```
 
 The timestep is the wall time since the previous frame, clamped to `ApplicationSpecification::MaxTimestep` (0.25 s).
-Windowed applications are paced by vsync when it is on (`WindowSpecification::VSync`); headless ones by
-`MaxFrameRate`, which the editor and the runtime set to 60 (`StrataEditor/src/EditorApplication.cpp`,
-`RuntimeApplication.cpp`). An exception escaping a frame (e.g. a lost device inside NVRHI) is logged and ends the
-loop.
+Windowed applications are paced by vsync when it is on (`WindowSpecification::VSync`) and by their frame rate cap;
+headless ones by the cap alone, which the editor and the runtime set to 60 (`MaxFrameRate`,
+`StrataEditor/src/EditorApplication.cpp`, `RuntimeApplication.cpp`). The cap is the application's `FramePacer`
+(`Core/Timer.h`) and can change while it runs (`Application::SetMaxFrameRate`; setting the current rate keeps the frame
+schedule). An exception escaping a frame (e.g. a lost device inside NVRHI) is logged and
+ends the loop.
 
 The editor's layer update (`EditorLayer::OnUpdate`, `StrataEditor/src/EditorLayer.cpp`):
 

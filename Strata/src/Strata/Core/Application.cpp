@@ -17,7 +17,7 @@ namespace Strata
 	Application* Application::s_Instance = nullptr;
 
 	Application::Application(const ApplicationSpecification& specification)
-		: m_Specification(specification)
+		: m_Specification(specification), m_FramePacer(specification.MaxFrameRate)
 	{
 		ST_CORE_VERIFY(!s_Instance, "Only one Application may exist at a time");
 		s_Instance = this;
@@ -167,7 +167,6 @@ namespace Strata
 
 		OnInit();
 
-		FramePacer pacer(m_Specification.MaxFrameRate);
 		m_LastFrameTime = Time::GetTime();
 		while (m_Running)
 		{
@@ -197,7 +196,7 @@ namespace Strata
 					m_Running = false;
 			}
 			if (m_Running)
-				pacer.WaitForNextFrame();
+				m_FramePacer.WaitForNextFrame();
 		}
 		ProcessBackBufferCaptures(false);
 
