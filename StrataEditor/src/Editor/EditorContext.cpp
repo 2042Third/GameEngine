@@ -242,13 +242,42 @@ namespace Strata
 
 	bool EditorContext::NewScene(const std::string& name, std::string_view templateId)
 	{
+		if (!ProjectTemplates::Find(templateId))
+			return false;
 		Ref<Scene> scene = CreateRef<Scene>(name);
-		if (!ProjectTemplates::Populate(templateId, *scene))
+		if (!ProjectTemplates::Populate(templateId, *scene, GetTemplateAssets(templateId)))
 			return false;
 		ResetScene(std::move(scene), UUID::Null());
 		if (const std::optional<TemplateView> view = ProjectTemplates::GetEditorView(templateId))
 			m_Viewport.GetCamera().LookAt(view->Position, view->Target);
 		return true;
+	}
+
+	TemplateAssets EditorContext::GetTemplateAssets(std::string_view templateId)
+	{
+		TemplateAssets assets;
+		if (!ProjectTemplates::UsesGroundMaterial(templateId) || !m_AssetManager)
+			return assets;
+		// The project's ground material, whatever it was changed to; made when it has none.
+		const std::string path(ProjectTemplates::c_GroundMaterialPath);
+		if (const AssetHandle existing = m_AssetManager->FindAssetByAbsolutePath(m_AssetManager->GetAssetDirectory() / FileSystem::FromUTF8(path));
+			existing.IsValid())
+		{
+			if (m_AssetManager->GetAssetType(existing) == AssetType::Material)
+				assets.GroundMaterial = existing;
+			else
+				ST_WARN("The ground of the new scene has the default material: '{}' is not a material", path);
+			return assets;
+		}
+		const std::string document = ProjectTemplates::GetGroundMaterialDocument();
+		std::string error;
+		const std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(document.data()), document.size());
+		const AssetHandle created = m_AssetManager->CreateNativeAsset(path, bytes, &error);
+		if (created.IsValid())
+			assets.GroundMaterial = created;
+		else
+			ST_WARN("The ground of the new scene has the default material: '{}' could not be created: {}", path, error);
+		return assets;
 	}
 
 	bool EditorContext::OpenScene(AssetHandle handle, std::string* outError)

@@ -109,8 +109,10 @@ namespace Strata
 		//////////////////////////////////////////////////////////////////////////
 
 		// Replaces the edited scene with a new one (stops play mode, clears selection and history): empty, or with a
-		// template's content (ProjectTemplates; the editor camera then takes the template's view). False (nothing changed)
-		// for an unknown template.
+		// template's content (ProjectTemplates; the editor camera then takes the template's view). A template that uses
+		// assets of the project finds them, or makes them when the project lacks them (basic3d's ground material,
+		// ProjectTemplates::c_GroundMaterialPath); without a project it uses built-in ones. False (nothing changed) for an
+		// unknown template.
 		bool NewScene(const std::string& name = "Untitled", std::string_view templateId = ProjectTemplates::c_Empty);
 		// Opens a scene asset for editing. The editor camera returns to where it was when the scene was last shown; a scene
 		// shown for the first time is framed (EditorViewport::FrameScene), and framed again once meshes that were still
@@ -260,6 +262,8 @@ namespace Strata
 		void ResetScene(Ref<Scene> scene, AssetHandle handle);
 		// Gives a template's new scene its start scene file and the template's editor view (CreateProject).
 		bool SaveTemplateStartScene(std::string_view templateId, std::string* outError);
+		// The assets a template's scene uses in this project (NewScene).
+		TemplateAssets GetTemplateAssets(std::string_view templateId);
 		// Frames the scene again once the meshes that were loading when it was first framed have loaded (OpenScene).
 		void UpdatePendingFrame();
 		void OpenScriptEngine(bool created);

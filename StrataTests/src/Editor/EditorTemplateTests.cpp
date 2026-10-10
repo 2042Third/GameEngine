@@ -6,14 +6,19 @@
 #include "Editor/ProjectTemplates.h"
 #include "TestHelpers.h"
 
+#include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/BuiltinAssets.h>
+#include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Math/Math.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Renderer/Material.h>
+#include <Strata/Renderer/SceneRenderer.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Scene.h>
 
 #include <algorithm>
+#include <cmath>
 #include <set>
 
 using namespace Strata;
@@ -52,8 +57,16 @@ namespace
 		return names;
 	}
 
+	// The project's ground material that basic3d made (null when there is none).
+	AssetHandle FindGroundMaterial(EditorContext& context)
+	{
+		const EditorAssetManager* assets = context.GetAssetManager();
+		REQUIRE(assets);
+		return assets->FindAssetByAbsolutePath(assets->GetAssetDirectory() / FileSystem::FromUTF8(std::string(ProjectTemplates::c_GroundMaterialPath)));
+	}
+
 	// The basic3d template's scene: exactly the five entities with their components and values.
-	void CheckBasic3DScene(Scene& scene)
+	void CheckBasic3DScene(Scene& scene, AssetHandle groundMaterial)
 	{
 		CHECK(scene.GetEntityCount() == 5);
 		CHECK(GetEntityNames(scene) == std::set<std::string> { "Main Camera", "Sun", "Sky", "Ground", "Post Process" });
@@ -75,7 +88,11 @@ namespace
 		REQUIRE(sun.HasComponent<DirectionalLightComponent>());
 		CHECK(sun.GetComponent<DirectionalLightComponent>().Intensity == doctest::Approx(3.0f));
 		CHECK(sun.GetComponent<DirectionalLightComponent>().CastShadows);
-		CHECK(Math::IsNearlyEqual(Math::QuatToEulerDegrees(sun.GetComponent<TransformComponent>().Rotation), glm::vec3(-45.0f, 30.0f, 0.0f), 1e-3f));
+		// It shines from the preview sun's direction, 55 degrees up from the +X+Z side.
+		const glm::vec3 shining = sun.GetComponent<TransformComponent>().Rotation * glm::vec3(0.0f, 0.0f, -1.0f);
+		CHECK(Math::IsNearlyEqual(shining, -ProjectTemplates::GetBasic3DSunDirection(), 1e-4f));
+		CHECK(Math::IsNearlyEqual(ProjectTemplates::GetBasic3DSunDirection(), SceneRenderer::GetPreviewSunDirection(), 1e-6f));
+		CHECK(std::asin(ProjectTemplates::GetBasic3DSunDirection().y) == doctest::Approx(glm::radians(55.0f)));
 
 		Entity sky = scene.FindEntityByName("Sky");
 		REQUIRE(sky);
@@ -86,7 +103,7 @@ namespace
 		REQUIRE(ground);
 		REQUIRE(ground.HasComponent<MeshRendererComponent>());
 		CHECK(ground.GetComponent<MeshRendererComponent>().Mesh == BuiltinAssets::PlaneMesh);
-		CHECK(ground.GetComponent<MeshRendererComponent>().Material == BuiltinAssets::DefaultMaterial);
+		CHECK(ground.GetComponent<MeshRendererComponent>().Material == groundMaterial);
 		CHECK(Math::IsNearlyEqual(ground.GetComponent<TransformComponent>().Scale, glm::vec3(20.0f, 1.0f, 20.0f), 1e-6f));
 
 		Entity postProcess = scene.FindEntityByName("Post Process");
@@ -155,7 +172,16 @@ TEST_SUITE("Editor.Templates")
 			CHECK(harness.Context.GetSceneHandle() == *UUIDFromJson(startScene));
 			CHECK_FALSE(harness.Context.IsSceneModified());
 			CHECK(harness.Context.GetEditScene()->GetName() == "Main");
-			CheckBasic3DScene(*harness.Context.GetEditScene());
+			// The ground has a material of its own in the project: darker and rougher than the default material, so the
+			// tops of white boxes stand out against it.
+			const AssetHandle ground = FindGroundMaterial(harness.Context);
+			REQUIRE(ground.IsValid());
+			CHECK(FileSystem::IsRegularFile(directory / "Assets" / "Materials" / "Ground.stmat.meta"));
+			const Ref<Material> material = AssetManager::LoadAssetSync<Material>(ground);
+			REQUIRE(material);
+			CHECK(material->GetProperties().BaseColor.r < 0.3f);
+			CHECK(material->GetProperties().Roughness > 0.8f);
+			CheckBasic3DScene(*harness.Context.GetEditScene(), ground);
 			// Nothing to undo: the project starts like this.
 			CHECK(harness.Context.GetUndoStack().GetHistory().empty());
 
@@ -177,7 +203,8 @@ TEST_SUITE("Editor.Templates")
 		TemplateHarness harness;
 		harness.Run("project.open", { { "path", FileSystem::ToUTF8(directory) } });
 		CHECK(harness.Context.GetSceneHandle() == *UUIDFromJson(startScene));
-		CheckBasic3DScene(*harness.Context.GetEditScene());
+		CheckBasic3DScene(*harness.Context.GetEditScene(), FindGroundMaterial(harness.Context));
+		CHECK(FindGroundMaterial(harness.Context).IsValid());
 		CHECK(Math::IsNearlyEqual(harness.Context.GetViewport().GetCamera().GetPosition(), glm::vec3(0.0f, 2.0f, 6.0f), 1e-4f));
 	}
 
@@ -201,16 +228,23 @@ TEST_SUITE("Editor.Templates")
 		CHECK(harness.Context.GetEditScene()->GetEntityCount() == 0);
 		CHECK(harness.Run("camera.get") == camera); // An empty scene keeps the view
 
-		// scene.new with a template fills the new, unsaved scene.
+		// scene.new with a template fills the new, unsaved scene, and gives the project the ground material it lacks.
+		CHECK_FALSE(FindGroundMaterial(harness.Context).IsValid());
 		harness.Run("scene.new", { { "name", "Level" }, { "template", "basic3d" } });
 		CHECK(harness.Context.GetEditScene()->GetName() == "Level");
 		CHECK_FALSE(harness.Context.GetSceneHandle().IsValid());
-		CheckBasic3DScene(*harness.Context.GetEditScene());
+		const AssetHandle ground = FindGroundMaterial(harness.Context);
+		REQUIRE(ground.IsValid());
+		CheckBasic3DScene(*harness.Context.GetEditScene(), ground);
 		CHECK(Math::IsNearlyEqual(harness.Context.GetViewport().GetCamera().GetPosition(), glm::vec3(0.0f, 2.0f, 6.0f), 1e-4f));
+		// The next one uses the same material (the project's, whatever it was changed to), and makes no other.
+		harness.Run("scene.new", { { "name", "Level 2" }, { "template", "basic3d" } });
+		CheckBasic3DScene(*harness.Context.GetEditScene(), ground);
+		CHECK_FALSE(FileSystem::Exists(directory / "Assets" / "Materials" / "Ground (1).stmat"));
 		// It also works without a project: the template uses only built-in assets.
 		harness.Context.CloseProject();
 		harness.Run("scene.new", { { "template", "basic3d" } });
-		CheckBasic3DScene(*harness.Context.GetEditScene());
+		CheckBasic3DScene(*harness.Context.GetEditScene(), BuiltinAssets::DefaultMaterial);
 	}
 
 	TEST_CASE("Unknown templates are rejected before anything is created")

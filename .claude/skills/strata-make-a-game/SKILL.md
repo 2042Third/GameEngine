@@ -35,8 +35,9 @@ StrataCLI list                       # the commands this build has; check that i
 `.gitignore` for the `.strata/` cache, and `Scripts/` with its `CMakeLists.txt` and an example `Spinner.cpp` (delete it if
 unused). With the `basic3d` template (`project.templates` lists them) it also saves a lit start scene,
 `Scenes/Main.stscene`, already set as the start scene: "Main Camera" (primary, audio listener), "Sun" (directional light,
-shadows), "Sky" (procedural sky light), "Ground" (a 20 x 20 plane) and "Post Process". Keep what fits your game and change
-or delete the rest (`entity.find {"name": "Ground"}` gives the IDs). Without a template the project has no scene.
+shadows), "Sky" (procedural sky light), "Ground" (a 20 x 20 plane with the dark `Materials/Ground.stmat`, which you can
+restyle with `material.set`) and "Post Process". Keep what fits your game and change or delete the rest
+(`entity.find {"name": "Ground"}` gives the IDs). Without a template the project has no scene.
 
 Design the code for verification before writing it:
 

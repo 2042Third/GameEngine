@@ -11,6 +11,7 @@
 #include <Strata/Core/Base64.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JobSystem.h>
+#include <Strata/Core/Timestep.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/SceneRenderer.h>
 
@@ -176,6 +177,24 @@ namespace
 			CHECK(result.Value["width"] == decoded.Width);
 			CHECK(result.Value["height"] == decoded.Height);
 			return decoded;
+		}
+
+		// Captures until no asset is loading any more: assets start loading when a render first needs them and finish in the
+		// context's update, as in the editor's frames (a project's materials, e.g. a template's ground).
+		DecodedImage CaptureLoaded(const nlohmann::json& parameters, nlohmann::json* outResult = nullptr)
+		{
+			nlohmann::json result;
+			DecodedImage image = Capture(parameters, &result);
+			for (int attempt = 0; attempt < 100 && result["pendingAssets"] != 0; attempt++)
+			{
+				Context.Update(Timestep(1.0f / 60.0f));
+				std::this_thread::sleep_for(std::chrono::milliseconds(5));
+				image = Capture(parameters, &result);
+			}
+			CHECK(result["pendingAssets"] == 0);
+			if (outResult)
+				*outResult = result;
+			return image;
 		}
 
 		void AddScene()
@@ -490,9 +509,8 @@ TEST_SUITE("GPU.Editor.Viewport")
 
 		// The default capture: the viewport's size (1280x720 while it is hidden), the editor camera and its overlays.
 		nlohmann::json result;
-		const DecodedImage image = harness.Capture(nlohmann::json::object(), &result);
+		const DecodedImage image = harness.CaptureLoaded(nlohmann::json::object(), &result);
 		CHECK(result["previewLighting"] == false); // The template's own sun and sky light it
-		CHECK(result["pendingAssets"] == 0);
 		const LumaStats luma = MeasureLuma(image);
 		MESSAGE("basic3d capture: mean luma ", luma.Mean, ", standard deviation ", luma.StandardDeviation);
 		CHECK(luma.Mean >= 60.0);
@@ -500,6 +518,37 @@ TEST_SUITE("GPU.Editor.Viewport")
 		// The game's view, through the template's camera, is lit the same way.
 		const DecodedImage game = harness.Capture({ { "camera", "scene" } }, &result);
 		CHECK(MeasureLuma(game).Mean >= 60.0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The first cube in a basic3d project shows its shape from the default view")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("CubeTemplate") / "Cube";
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Cube" }, { "template", "basic3d" } });
+		// A unit cube resting on the ground, with the default (white) material.
+		harness.Run("entity.create", { { "name", "Cube" }, { "components", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } },
+			{ "Transform", { { "Translation", { 0, 0.5, 0 } } } } } } });
+
+		// The view the project opens with (the game's camera at (0, 2, 6)): the top and the front of the cube show.
+		const int width = 1280;
+		const int height = 720;
+		nlohmann::json result;
+		const DecodedImage image = harness.CaptureLoaded({ { "width", width }, { "height", height }, { "overlays", false } }, &result);
+		CHECK(result["previewLighting"] == false);
+		const SceneCamera camera = harness.Context.GetViewport().GetCamera().GetSceneCamera(static_cast<float>(width) / static_cast<float>(height));
+		const double top = MeanLumaAround(image, camera, glm::vec3(0.0f, 1.0f, 0.0f));
+		const double front = MeanLumaAround(image, camera, glm::vec3(0.0f, 0.5f, 0.5f));
+		// The ground seen just above the cube's top edge (from this camera, far behind the cube), and beside it.
+		const double groundBehind = MeanLumaAround(image, camera, glm::vec3(0.0f, 0.0f, -9.0f));
+		const double groundBeside = MeanLumaAround(image, camera, glm::vec3(1.5f, 0.0f, 0.5f));
+		MESSAGE("basic3d cube luma: top ", top, ", front ", front, ", ground behind ", groundBehind, ", ground beside ", groundBeside);
+		CHECK(std::abs(top - front) >= 10.0);
+		// The silhouette reads: against the ground behind its top and beside its front.
+		CHECK(std::abs(top - groundBehind) >= 10.0);
+		CHECK(std::abs(front - groundBeside) >= 10.0);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

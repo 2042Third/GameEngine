@@ -133,8 +133,9 @@ editor started with `--no-gpu` (use `--headless`):
 
 **New game from scratch**: start from the `basic3d` template. It saves a lit start scene `Scenes/Main.stscene` (set as
 the start scene) with "Main Camera" (primary, with an audio listener, at (0, 2, 6) looking at the origin), "Sun" (a
-directional light with shadows), "Sky" (a procedural sky light), "Ground" (a 20 x 20 plane) and "Post Process"; the
-result names it in `startScene`. Without `template` the project is `empty` (no scene; build and save one yourself).
+directional light with shadows), "Sky" (a procedural sky light), "Ground" (a 20 x 20 plane with the dark stone material
+`Materials/Ground.stmat`, which the template adds to the project) and "Post Process"; the result names it in
+`startScene`. Without `template` the project is `empty` (no scene; build and save one yourself).
 
 ```text
 project.create      {"directory": "<absolute dir>", "name": "Tetris", "template": "basic3d"}

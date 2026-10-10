@@ -159,8 +159,8 @@ namespace Strata
 
 		registry.Register({ "scene.new",
 			"Replaces the edited scene with a new, unsaved one (unsaved changes are discarded): empty by default, or with a template's content, e.g. "
-			"\"basic3d\" (a lit start: camera, sun, procedural sky, ground, post-processing; the editor camera then looks through the scene's camera). "
-			"Save it with scene.saveAs.",
+			"\"basic3d\" (a lit start: camera, sun, procedural sky, ground, post-processing; the editor camera then looks through the scene's camera; "
+			"the ground's material Materials/Ground.stmat is added to a project that lacks it). Save it with scene.saveAs.",
 			ObjectSchema({
 				{ "name", StringSchema("Scene name") },
 				{ "template", { { "type", "string" }, { "enum", { ProjectTemplates::c_Empty, ProjectTemplates::c_Basic3D } },
