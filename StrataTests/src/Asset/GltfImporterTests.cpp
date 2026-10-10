@@ -384,8 +384,8 @@ TEST_SUITE("Asset.Gltf")
 		Ref<Texture> data = Texture::Deserialize(dataTexture->Data);
 		REQUIRE(color);
 		REQUIRE(data);
-		CHECK(color->GetSpecification().Format == TextureFormat::BC1SRGB);
-		CHECK(data->GetSpecification().Format == TextureFormat::RGBA8); // Metallic-roughness: channels BC1 cannot keep apart
+		CHECK(color->GetSpecification().Format == TextureFormat::BC7SRGB);
+		CHECK(data->GetSpecification().Format == TextureFormat::BC7); // Metallic-roughness: linear, channels kept apart
 		CHECK(color->GetSpecification().Wrap == TextureWrap::Clamp);
 		CHECK(color->GetSpecification().Filter == TextureFilter::Nearest);
 		CHECK(color->GetWidth() == 4);
@@ -471,7 +471,7 @@ TEST_SUITE("Asset.Gltf")
 
 	TEST_CASE("glTF texture settings reach the model's textures")
 	{
-		// A smooth gradient as base color and metallic-roughness: its color blocks encode differently at High and Fast.
+		// A smooth gradient as base color and metallic-roughness: its color is stored in other formats at High and Fast.
 		const std::filesystem::path assets = Tests::CreateTemporaryDirectory("GltfTextureSettings");
 		constexpr uint32_t c_Size = 64;
 		std::vector<uint8_t> pixels;
@@ -503,11 +503,11 @@ TEST_SUITE("Asset.Gltf")
 			return textures;
 		};
 
-		// Defaults: block-compressed color; metallic-roughness keeps its channels apart, uncompressed.
+		// Defaults: color and metallic-roughness as BC7.
 		ImportOutput defaults;
 		const CookedTextures high = cook({}, defaults);
-		CHECK(high.Color->GetSpecification().Format == TextureFormat::BC1SRGB);
-		CHECK(high.Data->GetSpecification().Format == TextureFormat::RGBA8);
+		CHECK(high.Color->GetSpecification().Format == TextureFormat::BC7SRGB);
+		CHECK(high.Data->GetSpecification().Format == TextureFormat::BC7);
 
 		ImportOutput output;
 		const CookedTextures uncompressed = cook({ { "TextureCompression", "Uncompressed" } }, output);
@@ -519,13 +519,14 @@ TEST_SUITE("Asset.Gltf")
 		const CookedTextures fast = cook({ { "TextureQuality", "Fast" } }, output);
 		CHECK(output.Result.Warnings.size() == defaults.Result.Warnings.size());
 		CHECK(fast.Color->GetSpecification().Format == TextureFormat::BC1SRGB);
-		CHECK(fast.Color->Serialize() != high.Color->Serialize());
+		CHECK(fast.Data->GetSpecification().Format == TextureFormat::BC7);
+		CHECK(fast.Data->Serialize() != high.Data->Serialize());
 
 		// Unknown values warn once each and keep the defaults.
 		const CookedTextures unknownCompression = cook({ { "TextureCompression", "Zip" } }, output);
 		CHECK(output.Result.Warnings.size() == defaults.Result.Warnings.size() + 1);
 		CHECK(HasWarningContaining(output.Result, "TextureCompression"));
-		CHECK(unknownCompression.Color->GetSpecification().Format == TextureFormat::BC1SRGB);
+		CHECK(unknownCompression.Color->GetSpecification().Format == TextureFormat::BC7SRGB);
 		const CookedTextures unknownQuality = cook({ { "TextureQuality", 3 } }, output);
 		CHECK(output.Result.Warnings.size() == defaults.Result.Warnings.size() + 1);
 		CHECK(HasWarningContaining(output.Result, "TextureQuality"));

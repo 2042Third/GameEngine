@@ -25,21 +25,21 @@ using namespace Strata::Tests;
 namespace
 {
 
-	// Megabytes here are decimal, like the streaming audit's numbers (the stress project's textures cook to 55.9 MB of
-	// BC1, the largest 11.2 MB; they were 447.4 MB and 89.5 MB of RGBA8 before texture cooking v2).
+	// Megabytes here are decimal, like the streaming audit's numbers (the stress project's textures cook to 111.8 MB of
+	// BC7, the largest 22.4 MB; they were 447.4 MB and 89.5 MB of RGBA8 before texture cooking v2).
 	constexpr uint64_t c_MB = 1000 * 1000;
 	constexpr double c_MBDouble = 1000.0 * 1000.0;
 
 	// The acceptance criteria of the residency work, for the full-size stress project. The evicting sweep's texture budget
 	// holds the same share of the textures as the residency work's 128 MB held of their RGBA8 form (about 29%, 1.4 times
 	// the largest), so the sweep keeps evicting.
-	constexpr uint64_t c_TextureBudget = 16 * c_MB;
+	constexpr uint64_t c_TextureBudget = 32 * c_MB;
 	constexpr float c_MaxFinalizeMs = 8.0f;
 	// The acceptance criterion of texture cooking: the stress game at 1920x1080 over 300 frames with all of its textures
 	// resident (the all-resident sweep; the exported runtime peaked at 1034-1055 MiB with RGBA8 textures). The evicting
 	// sweep, which holds less, must stay below it too.
 	constexpr uint64_t c_MaxPeakPrivateBytes = 650 * c_MB;
-	// The all-resident sweep's texture budget: far more than the 55.9 MB of textures, so nothing is evicted.
+	// The all-resident sweep's texture budget: far more than the 111.8 MB of textures, so nothing is evicted.
 	constexpr uint64_t c_AllResidentTextureBudget = 1000 * c_MB;
 	// What a camera stop shows has arrived within this many frames at rest (FramesHolding below it).
 	constexpr uint32_t c_MaxFramesToSettle = 60;
@@ -120,9 +120,9 @@ TEST_SUITE("PerfGPU.Streaming")
 			REQUIRE_MESSAGE(BuildStressPack(*project, directory / "Stress.stpak", error), error);
 			MESSAGE("Stress project written in ", writeSeconds, " s, imported and packed in ", ElapsedSeconds(start) - writeSeconds, " s");
 		}
-		REQUIRE(GetStressTextureFormat() == TextureFormat::BC1SRGB);
-		CHECK(project->TextureBytes == 55924280);        // 16 x 2048^2 + 1 x 4096^2 BC1 with mips: 55.9 MB
-		CHECK(project->LargestTextureBytes == 11184824); // 11.2 MB
+		REQUIRE(GetStressTextureFormat() == TextureFormat::BC7SRGB);
+		CHECK(project->TextureBytes == 111848560);       // 16 x 2048^2 + 1 x 4096^2 BC7 with mips: 111.8 MB
+		CHECK(project->LargestTextureBytes == 22369648); // 22.4 MB
 
 		// The evicting sweep: 600 frames at 1280x720 with a texture budget that holds less than the stops show over time.
 		StreamingSweepSettings settings;

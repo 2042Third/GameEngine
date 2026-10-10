@@ -52,9 +52,9 @@ TEST_SUITE("Asset.StressProject")
 		CHECK(project->Materials.size() == 5);
 		CHECK(project->TextureBytes == 2 * GetStressTextureBytes(16) + GetStressTextureBytes(32));
 		CHECK(project->LargestTextureBytes == GetStressTextureBytes(32));
-		// Opaque color cooks to BC1: half a byte per texel, 2048^2 with its mips in 2,796,216 bytes (22,369,620 in RGBA8).
-		CHECK(GetStressTextureFormat() == TextureFormat::BC1SRGB);
-		CHECK(GetStressTextureBytes(2048) == 2796216);
+		// Color cooks to BC7: a byte per texel, 2048^2 with its mips in 5,592,432 bytes (22,369,620 in RGBA8).
+		CHECK(GetStressTextureFormat() == TextureFormat::BC7SRGB);
+		CHECK(GetStressTextureBytes(2048) == 5592432);
 		CHECK(FileSystem::IsRegularFile(directory / "Stress" / "Stress.stproj"));
 
 		// Writing into a directory that already holds a project fails.

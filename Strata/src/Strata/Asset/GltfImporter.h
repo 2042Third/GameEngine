@@ -25,7 +25,7 @@ namespace Strata
 	public:
 		AssetType GetType() const override { return AssetType::Model; }
 		std::vector<std::string> GetExtensions() const override { return { ".gltf", ".glb" }; }
-		uint32_t GetVersion() const override { return 2; }
+		uint32_t GetVersion() const override { return 3; }
 		nlohmann::json GetDefaultSettings(const std::filesystem::path& sourcePath) const override;
 		bool Import(const ImportContext& context, ImportResult& result, std::string* outError) const override;
 	};

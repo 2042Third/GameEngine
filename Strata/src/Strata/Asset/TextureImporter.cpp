@@ -448,17 +448,19 @@ namespace Strata
 			case TextureUsage::Color:
 				if (!compress)
 					return TextureFormat::RGBA8SRGB;
-				return hasAlpha ? TextureFormat::BC3SRGB : TextureFormat::BC1SRGB;
+				// Fast trades quality for time and size where it can: opaque color as BC1 (half of BC7's bytes, colors on one
+				// line per block). Alpha needs BC7 (BC3's color is BC1's).
+				return settings.Quality == TextureQuality::Fast && !hasAlpha ? TextureFormat::BC1SRGB : TextureFormat::BC7SRGB;
 			case TextureUsage::NormalMap:
 				return compress ? TextureFormat::BC5 : TextureFormat::RGBA8;
 			case TextureUsage::Data:
 				// The channels of data vary independently (occlusion, roughness and metallic in one texture), which BC1 and
-				// BC3 cannot store: the colors of one of their blocks lie on a line through RGB space, so a metallic edge
-				// inside a block shifts the roughness next to it by up to a sixth. Several channels stay uncompressed until
-				// a BC7 encoder is available; one channel is BC4.
+				// BC3 cannot store (the colors of one of their blocks lie on a line through RGB space, so a metallic edge
+				// inside a block would shift the roughness next to it by up to a sixth); BC7 can, with partitions and a
+				// channel stored apart. One channel is BC4.
 				if (channels == 1)
 					return compress ? TextureFormat::BC4 : TextureFormat::R8;
-				return TextureFormat::RGBA8;
+				return compress ? TextureFormat::BC7 : TextureFormat::RGBA8;
 			case TextureUsage::HDR:
 				return TextureFormat::RGBA16F;
 		}

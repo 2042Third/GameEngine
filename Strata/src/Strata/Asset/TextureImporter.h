@@ -29,8 +29,8 @@ namespace Strata
 		Uncompressed
 	};
 
-	// How hard the block compressor works on color blocks (BC1, BC3): High refines their endpoints twice, Fast once (a
-	// slightly larger error in less time). BC4 and BC5 encode the same either way.
+	// How hard the block compressor works. High: color is BC7 searched over all of its modes (BC7Encoder). Fast: opaque
+	// color is BC1, and BC7 tries modes 6 and 5 only. BC4 and BC5 encode the same either way.
 	enum class TextureQuality : uint8_t
 	{
 		High = 0,
@@ -71,7 +71,7 @@ namespace Strata
 
 		AssetType GetType() const override { return AssetType::Texture; }
 		std::vector<std::string> GetExtensions() const override;
-		uint32_t GetVersion() const override { return 2; }
+		uint32_t GetVersion() const override { return 3; }
 		nlohmann::json GetDefaultSettings(const std::filesystem::path& sourcePath) const override;
 		bool Import(const ImportContext& context, ImportResult& result, std::string* outError) const override;
 
@@ -84,10 +84,9 @@ namespace Strata
 
 		// The stored format of an image with `channels` channels (1 to 4; 2 is gray and alpha) whose alpha is below 255
 		// somewhere (`hasAlpha`):
-		//   Color      BC1SRGB, BC3SRGB with alpha (uncompressed: RGBA8SRGB)
+		//   Color      BC7SRGB; at Fast quality BC1SRGB when opaque (uncompressed: RGBA8SRGB)
 		//   NormalMap  BC5 (uncompressed: RGBA8)
-		//   Data       BC4 for one channel (grayscale), else RGBA8: BC1 and BC3 cannot keep independent channels apart
-		//              (uncompressed: R8 for one channel, else RGBA8)
+		//   Data       BC4 for one channel (grayscale), else BC7 (uncompressed: R8 for one channel, else RGBA8)
 		//   HDR        RGBA16F
 		static TextureFormat ChooseFormat(const TextureImportSettings& settings, uint32_t channels, bool hasAlpha);
 	};

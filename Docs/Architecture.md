@@ -562,29 +562,30 @@ Textures are stored the way the GPU samples them: block-compressed, with their m
   | `RGBA8`, `RGBA8SRGB` | 1, 2 | 4 bytes per texel | uncompressed data and color, textures made at runtime |
   | `RGBA16F`, `RGBA32F` | 3, 4 | 8, 16 bytes per texel | HDR (environment maps import as `RGBA16F`) |
   | `R8`, `RG8` | 5, 6 | 1, 2 bytes per texel | uncompressed gray data; what BC4 and BC5 decode to |
-  | `BC1`, `BC1SRGB` | 7, 8 | 8 bytes per 4x4 block | opaque color |
-  | `BC3`, `BC3SRGB` | 9, 10 | 16 bytes per block (BC4 alpha + BC1 color) | color with alpha |
+  | `BC1`, `BC1SRGB` | 7, 8 | 8 bytes per 4x4 block | opaque color at `Fast` quality |
+  | `BC3`, `BC3SRGB` | 9, 10 | 16 bytes per block (BC4 alpha + BC1 color) | loaded and encoded, not chosen by the importer (BC7 stores alpha better) |
   | `BC4` | 11 | 8 bytes per block | one channel (gray data) |
   | `BC5` | 12 | 16 bytes per block | normal maps (X and Y) |
-  | `BC7`, `BC7SRGB` | 13, 14 | 16 bytes per block | loaded, uploaded, decoded and encoded (`TextureCooker`), not chosen by the importer yet |
+  | `BC7`, `BC7SRGB` | 13, 14 | 16 bytes per block | color (sRGB) and data of several channels (linear), with or without alpha |
 
   `GetTextureFormatInfo` gives block size, bytes per block, channels and color space; `GetMipByteSize` rounds a level up
   to whole blocks and is the size every count uses (validation, row pitches, uploads, `Texture::GetMemoryUsage` and so
   residency, staging).
 - **Import** (`Asset/TextureImporter`, cooking in `Asset/TextureCooker`, both pipeline-only). Settings (`.meta`):
-  `Usage`, `Compression` (`Auto`, the default, or `Uncompressed`), `Quality` (`High`, the default, or `Fast`: one
-  endpoint refinement of BC1 and BC3 color blocks instead of two, a slightly larger error in less time),
-  `GenerateMips`, `Filter`, `Wrap`, `MaxSize`, `FlipVertically`. The importer writes every setting into a new `.meta`;
-  files from before keep the defaults for keys they lack (the feature project's `.meta` files hold every key, which its
-  test checks). The image decodes with only the channels its format needs (color keeps RGB or RGBA, gray color becomes
-  RGB, normal maps XYZ, data its own channels), and `TextureImporter::ChooseFormat` picks the format: color `BC1SRGB`
-  (`BC3SRGB` when a texel is not opaque), normal maps `BC5`, data `BC4` for one channel (marked grayscale, below), else
-  `RGBA8`, HDR `RGBA16F`; `Uncompressed` gives `RGBA8SRGB`, `RGBA8` or `R8`. Data of several channels stays
-  uncompressed because its channels vary independently (occlusion, roughness and metallic in one texture), while the
-  colors of a BC1 or BC3 block lie on one line through RGB space: a metallic edge inside a block would shift the
-  roughness beside it by up to a sixth of its range. `GltfImporter` cooks a model's textures the same way (base color
-  and emissive as color, the normal texture as a normal map, metallic-roughness and occlusion as data; its
-  `TextureCompression` and `TextureQuality` settings).
+  `Usage`, `Compression` (`Auto`, the default, or `Uncompressed`), `Quality` (`High`, the default, or `Fast`: opaque
+  color as BC1, half of BC7's bytes, and BC7 searched over modes 6 and 5 only), `GenerateMips`, `Filter`, `Wrap`,
+  `MaxSize`, `FlipVertically`. The importer writes every setting into a new `.meta`; files from before keep the
+  defaults for keys they lack (the feature project's `.meta` files hold every key, which its test checks). The image
+  decodes with only the channels its format needs (color keeps RGB or RGBA, gray color becomes RGB, normal maps XYZ,
+  data its own channels), and `TextureImporter::ChooseFormat` picks the format: color `BC7SRGB` (at `Fast`, `BC1SRGB`
+  when every texel is opaque), normal maps `BC5`, data `BC4` for one channel (marked grayscale, below), else `BC7`, HDR
+  `RGBA16F`; `Uncompressed` gives `RGBA8SRGB`, `RGBA8` or `R8`. The channels of data vary independently (occlusion,
+  roughness and metallic in one texture): the colors of a BC1 or BC3 block lie on one line through RGB space, so a
+  metallic edge inside a block would shift the roughness beside it by up to a sixth of its range, while BC7 splits such
+  a block into subsets or stores one channel apart (the 256x256 test texture of `Asset.TextureImport` keeps every
+  channel at 45.9 dB or more). `GltfImporter` cooks a model's textures the same way (base color and emissive as color, the
+  normal texture as a normal map, metallic-roughness and occlusion as data; its `TextureCompression` and
+  `TextureQuality` settings).
 - **Mips** are filtered from the previous level with stb_image_resize2's Mitchell filter: sRGB color in linear space,
   color with alpha weighted by it (alpha is coverage), edges read the way the texture wraps (repeat, clamp, mirror), and
   normal maps renormalized in every level (level 0 too). HDR mips use a box filter: a sharper one rings around a bright
@@ -613,8 +614,8 @@ Textures are stored the way the GPU samples them: block-compressed, with their m
 - **Where imports run**: `EditorAssetManager::Scan` imports what needs it in parallel on the worker pool while its
   caller waits (the editor, when it opens a project); re-imports after file changes run on I/O jobs and are applied
   between frames; the editor's `asset.import`, `asset.reimport` and `asset.setImportSettings` still import on the main
-  thread inside the command (about half a second for a 4096x4096 texture in Release, less than the RGBA8 import before),
-  until `content-and-prefabs` makes them asynchronous (Docs/Roadmap.md).
+  thread inside the command (encoding on all workers: about a fifth of the stress project's cold import, 1.5 s, for a
+  4096x4096 color texture in Release), until `content-and-prefabs` makes them asynchronous (Docs/Roadmap.md).
 - **Cooked form** (`Renderer/CookedTexture.h`, `STTX` version 2): a 40-byte header (format, size, mip count, flags,
   filter, wrap, name length, data offset), a mip table (width, height, offset, size per level), the debug name, then the
   levels smallest first, each 16-byte aligned. The mip tail - every level up to 128x128 - is therefore one range right
@@ -730,11 +731,11 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   its state, memory, latest request and pins.
   The editor reports them through `asset.stats` and the `assets` section of `editor.status`.
 - **Measured** by the perf test `PerfGPU.Streaming` (`StrataTests/src/Perf/StreamingPerfTests.cpp`): it writes the
-  stress project (`StrataTests/src/Perf/StressProject.h`: 16 textures of 2048² and one of 4096², which cook to 55.9 MB
-  of BC1 (447.4 MB of RGBA8 before texture cooking v2), one material per district of a 2000-unit world, 2,000 objects
+  stress project (`StrataTests/src/Perf/StressProject.h`: 16 textures of 2048² and one of 4096², which cook to 111.8 MB
+  of BC7 (447.4 MB of RGBA8 before texture cooking v2), one material per district of a 2000-unit world, 2,000 objects
   over a 512² terrain grid), imports it and builds its pack, then runs two camera sweeps at 60 frames per second in
   helper processes (peak memory belongs to a whole process), each three times:
-  - the evicting sweep: 600 frames at 1280x720 with a 16 MB texture budget (the share of the textures the 128 MB budget
+  - the evicting sweep: 600 frames at 1280x720 with a 32 MB texture budget (the share of the textures the 128 MB budget
     held of their RGBA8 form). Every run must keep the textures within the budget plus the largest one, evict, finalize
     no frame for more than 8 ms, show each camera stop complete within 60 frames at rest and fail no load;
   - the all-resident sweep: 300 frames at 1920x1080 over twelve stops whose views take in every district, with a budget

@@ -130,24 +130,33 @@ TEST_SUITE("Asset.TextureImport")
 	TEST_CASE("The stored format follows usage, channels and alpha")
 	{
 		TextureImportSettings settings;
-		auto choose = [&](TextureUsage usage, TextureCompression compression, uint32_t channels, bool hasAlpha)
+		auto choose = [&](TextureUsage usage, TextureCompression compression, uint32_t channels, bool hasAlpha, TextureQuality quality = TextureQuality::High)
 		{
 			settings.Usage = usage;
 			settings.Compression = compression;
+			settings.Quality = quality;
 			return TextureImporter::ChooseFormat(settings, channels, hasAlpha);
 		};
-		CHECK(choose(TextureUsage::Color, TextureCompression::Auto, 3, false) == TextureFormat::BC1SRGB);
-		CHECK(choose(TextureUsage::Color, TextureCompression::Auto, 4, true) == TextureFormat::BC3SRGB);
+		CHECK(choose(TextureUsage::Color, TextureCompression::Auto, 3, false) == TextureFormat::BC7SRGB);
+		CHECK(choose(TextureUsage::Color, TextureCompression::Auto, 4, true) == TextureFormat::BC7SRGB);
+		// Fast stores opaque color in BC1, half of BC7's bytes.
+		CHECK(choose(TextureUsage::Color, TextureCompression::Auto, 3, false, TextureQuality::Fast) == TextureFormat::BC1SRGB);
+		CHECK(choose(TextureUsage::Color, TextureCompression::Auto, 4, false, TextureQuality::Fast) == TextureFormat::BC1SRGB);
+		CHECK(choose(TextureUsage::Color, TextureCompression::Auto, 4, true, TextureQuality::Fast) == TextureFormat::BC7SRGB);
 		CHECK(choose(TextureUsage::Color, TextureCompression::Uncompressed, 4, true) == TextureFormat::RGBA8SRGB);
+		CHECK(choose(TextureUsage::Color, TextureCompression::Uncompressed, 3, false, TextureQuality::Fast) == TextureFormat::RGBA8SRGB);
 		CHECK(choose(TextureUsage::NormalMap, TextureCompression::Auto, 3, false) == TextureFormat::BC5);
+		CHECK(choose(TextureUsage::NormalMap, TextureCompression::Auto, 3, false, TextureQuality::Fast) == TextureFormat::BC5);
 		CHECK(choose(TextureUsage::NormalMap, TextureCompression::Uncompressed, 3, false) == TextureFormat::RGBA8);
 		CHECK(choose(TextureUsage::Data, TextureCompression::Auto, 1, false) == TextureFormat::BC4);
 		CHECK(choose(TextureUsage::Data, TextureCompression::Uncompressed, 1, false) == TextureFormat::R8);
-		// Data with several channels stays uncompressed (see "Data channels stay apart").
-		CHECK(choose(TextureUsage::Data, TextureCompression::Auto, 3, false) == TextureFormat::RGBA8);
-		CHECK(choose(TextureUsage::Data, TextureCompression::Auto, 4, true) == TextureFormat::RGBA8);
+		// Data with several channels is BC7, which keeps them apart (see "Data channels stay apart").
+		CHECK(choose(TextureUsage::Data, TextureCompression::Auto, 3, false) == TextureFormat::BC7);
+		CHECK(choose(TextureUsage::Data, TextureCompression::Auto, 4, true) == TextureFormat::BC7);
+		CHECK(choose(TextureUsage::Data, TextureCompression::Auto, 3, false, TextureQuality::Fast) == TextureFormat::BC7);
 		CHECK(choose(TextureUsage::Data, TextureCompression::Uncompressed, 3, false) == TextureFormat::RGBA8);
 		CHECK(choose(TextureUsage::HDR, TextureCompression::Auto, 4, false) == TextureFormat::RGBA16F);
+		CHECK(choose(TextureUsage::HDR, TextureCompression::Uncompressed, 4, false) == TextureFormat::RGBA16F);
 
 		// Images decode with the channels the format needs.
 		const std::vector<uint8_t> rgb = Tests::EncodePNG(8, 8, 3, std::vector<uint8_t>(8 * 8 * 3, 90));
@@ -161,14 +170,18 @@ TEST_SUITE("Asset.TextureImport")
 		const std::vector<uint8_t> opaque = Tests::CreateSolidPNG(8, 8, 10, 20, 30, 255);
 
 		TextureImportSettings color;
-		CHECK(Import(rgb, color)->GetSpecification().Format == TextureFormat::BC1SRGB);
-		CHECK(Import(opaque, color)->GetSpecification().Format == TextureFormat::BC1SRGB);
-		CHECK(Import(translucent, color)->GetSpecification().Format == TextureFormat::BC3SRGB);
-		// Gray color stays color (sRGB): it is stored as RGB.
+		CHECK(Import(rgb, color)->GetSpecification().Format == TextureFormat::BC7SRGB);
+		CHECK(Import(opaque, color)->GetSpecification().Format == TextureFormat::BC7SRGB);
+		CHECK(Import(translucent, color)->GetSpecification().Format == TextureFormat::BC7SRGB);
+		// Gray color stays color (sRGB): it is stored as RGB (flat, so exactly).
 		const Ref<Texture> grayColor = Import(gray, color);
-		CHECK(grayColor->GetSpecification().Format == TextureFormat::BC1SRGB);
+		CHECK(grayColor->GetSpecification().Format == TextureFormat::BC7SRGB);
 		CHECK_FALSE(grayColor->GetSpecification().Grayscale);
-		CHECK(std::abs(static_cast<int>(DecodeLevel(*grayColor, 0)[1]) - 200) <= 4);
+		CHECK(DecodeLevel(*grayColor, 0)[1] == 200);
+		TextureImportSettings fastColor;
+		fastColor.Quality = TextureQuality::Fast;
+		CHECK(Import(opaque, fastColor)->GetSpecification().Format == TextureFormat::BC1SRGB);
+		CHECK(Import(translucent, fastColor)->GetSpecification().Format == TextureFormat::BC7SRGB);
 
 		TextureImportSettings data;
 		data.Usage = TextureUsage::Data;
@@ -176,8 +189,8 @@ TEST_SUITE("Asset.TextureImport")
 		CHECK(grayData->GetSpecification().Format == TextureFormat::BC4);
 		CHECK(grayData->GetSpecification().Grayscale);
 		CHECK(DecodeLevel(*grayData, 0)[0] == 200);
-		CHECK(Import(grayAlpha, data)->GetSpecification().Format == TextureFormat::RGBA8);
-		CHECK(Import(rgb, data)->GetSpecification().Format == TextureFormat::RGBA8);
+		CHECK(Import(grayAlpha, data)->GetSpecification().Format == TextureFormat::BC7);
+		CHECK(Import(rgb, data)->GetSpecification().Format == TextureFormat::BC7);
 
 		// Uncompressed one-channel data keeps one byte per texel.
 		data.Compression = TextureCompression::Uncompressed;
@@ -295,8 +308,10 @@ TEST_SUITE("Asset.TextureImport")
 
 	TEST_CASE("Block compression keeps color close to the source")
 	{
-		// The feature test's checker and a smooth gradient, stored as BC1 at both qualities, reach the 40 dB the cooking work
-		// asks of compressed color.
+		// The feature test's checker and a smooth gradient: imported with the default settings they are BC7, which reaches
+		// the 40 dB the cooking work asks of compressed color and is never worse than BC1 at High (what color was before
+		// BC7 could be encoded). BC7 at Fast (what translucent color and data get at Fast) reaches 36 dB; opaque color at
+		// Fast is BC1.
 		const std::optional<std::vector<uint8_t>> checker = FileSystem::ReadBytes(
 			FileSystem::FromUTF8(STRATA_SOURCE_DIR) / "StrataTests" / "FeatureTest" / "Assets" / "Textures" / "Checker.png");
 		REQUIRE(checker);
@@ -309,24 +324,41 @@ TEST_SUITE("Asset.TextureImport")
 		for (const auto& [name, image] : { std::pair { std::string("Checker"), *checker }, std::pair { std::string("Gradient"), gradient } })
 		{
 			CAPTURE(name);
-			const std::vector<uint8_t> source = DecodeLevel(*Import(image, reference), 0);
+			const Ref<Texture> uncompressed = Import(image, reference);
+			const std::vector<uint8_t> source = DecodeLevel(*uncompressed, 0);
 			TextureImportSettings settings;
 			settings.GenerateMips = false;
 			const Ref<Texture> high = Import(image, settings);
-			CHECK(high->GetSpecification().Format == TextureFormat::BC1SRGB);
+			CHECK(high->GetSpecification().Format == TextureFormat::BC7SRGB);
 			settings.Quality = TextureQuality::Fast;
 			const Ref<Texture> fast = Import(image, settings);
 			CHECK(fast->GetSpecification().Format == TextureFormat::BC1SRGB);
+
+			// The same level encoded by BC7 at Fast, and by BC1 at High.
+			auto encode = [&](TextureFormat format, bool highQuality)
+			{
+				TextureCooker::CookSettings cook;
+				cook.Format = format;
+				cook.GenerateMips = false;
+				cook.SRGB = true;
+				cook.HighQuality = highQuality;
+				std::vector<TextureMip> mips;
+				std::string error;
+				REQUIRE_MESSAGE(TextureCooker::CookLevels(CreateImage(uncompressed->GetWidth(), uncompressed->GetHeight(), 4, source), cook, mips, &error), error);
+				std::vector<uint8_t> decoded(source.size());
+				REQUIRE(BlockCompression::DecodeLevel(format, uncompressed->GetWidth(), uncompressed->GetHeight(), mips[0].Data, decoded));
+				return decoded;
+			};
 			const double highPSNR = ComputePSNR(source, DecodeLevel(*high, 0), 4);
+			const double fastBC7PSNR = ComputePSNR(source, encode(TextureFormat::BC7SRGB, false), 4);
+			const double bc1PSNR = ComputePSNR(source, encode(TextureFormat::BC1SRGB, true), 4);
 			const double fastPSNR = ComputePSNR(source, DecodeLevel(*fast, 0), 4);
-			MESSAGE(name, ": BC1 PSNR ", highPSNR, " dB at High, ", fastPSNR, " dB at Fast");
+			MESSAGE(name, ": PSNR ", highPSNR, " dB as BC7 at High, ", fastBC7PSNR, " dB as BC7 at Fast, ", bc1PSNR, " dB as BC1 at High, ", fastPSNR,
+				" dB as BC1 at Fast");
 			CHECK(highPSNR >= 40.0);
-			CHECK(fastPSNR >= 40.0);
-			// High refines endpoints one more time than Fast: never worse, and on the gradient's smooth blocks the blocks
-			// differ (the checker's two-color blocks are exact either way).
-			CHECK(highPSNR >= fastPSNR);
-			if (name == "Gradient")
-				CHECK(high->Serialize() != fast->Serialize());
+			CHECK(highPSNR >= bc1PSNR);
+			CHECK(fastBC7PSNR >= 36.0);
+			CHECK(fastPSNR >= 36.0);
 		}
 	}
 
@@ -334,8 +366,8 @@ TEST_SUITE("Asset.TextureImport")
 	{
 		// An occlusion-roughness-metallic texture: radial occlusion in red, roughness waves in green and metallic tiles of
 		// 7 x 9 texels in blue, whose edges cut through most blocks. BC1 keeps a block's colors on one line through RGB space,
-		// so it would shift the roughness along the metallic edges by up to 32 of 255 (31 dB); data of several channels
-		// keeps every channel.
+		// so it would shift the roughness along the metallic edges by up to 32 of 255 (31 dB); BC7 keeps every channel, with
+		// partitions along the edges or the metallic channel stored apart.
 		constexpr uint32_t c_Size = 256;
 		std::vector<uint8_t> pixels;
 		for (uint32_t y = 0; y < c_Size; y++)
@@ -355,6 +387,7 @@ TEST_SUITE("Asset.TextureImport")
 		TextureImportSettings settings;
 		settings.Usage = TextureUsage::Data;
 		const Ref<Texture> texture = Import(Tests::EncodePNG(c_Size, c_Size, 3, pixels), settings, "Platform_orm.png");
+		CHECK(texture->GetSpecification().Format == TextureFormat::BC7);
 		CHECK_FALSE(texture->GetSpecification().Grayscale);
 
 		const std::vector<uint8_t> stored = DecodeLevel(*texture, 0);
@@ -419,26 +452,46 @@ TEST_SUITE("Asset.TextureImport")
 		}
 	}
 
-	TEST_CASE("Cooking gives the same bytes with and without worker threads")
+	TEST_CASE("Cooking gives the same bytes on every run and with and without worker threads")
 	{
 		// Large enough that the first levels split into several batches (rows of blocks, texels uncompressed), so workers
-		// encode parts of them; the sizes are not multiples of four, so edge blocks are among them.
+		// encode parts of them; the sizes are not multiples of four, so edge blocks are among them. Noise over the gradient
+		// gives the BC7 search blocks where many modes compete; the alpha ramp gives it alpha.
 		constexpr uint32_t c_Width = 1030;
 		constexpr uint32_t c_Height = 262;
 		std::vector<uint8_t> pixels = CreateGradient(c_Width);
 		pixels.resize(static_cast<size_t>(c_Width) * c_Height * 4);
+		uint32_t random = 0x12345678u;
+		for (size_t texel = 0; texel < static_cast<size_t>(c_Width) * c_Height; texel++)
+		{
+			random ^= random << 13;
+			random ^= random >> 17;
+			random ^= random << 5;
+			pixels[texel * 4] = static_cast<uint8_t>(pixels[texel * 4] ^ (random & 0x0F));
+			pixels[texel * 4 + 3] = static_cast<uint8_t>(texel % c_Width * 255 / (c_Width - 1));
+		}
 		const std::vector<uint8_t> image = Tests::EncodePNG(c_Width, c_Height, pixels);
-		REQUIRE(TextureCooker::GetEncodeBatchCount(TextureFormat::BC1SRGB, c_Width, c_Height) > 1);
-		REQUIRE(TextureCooker::GetEncodeBatchCount(TextureFormat::BC1SRGB, c_Width / 2, c_Height / 2) > 1);
+		for (TextureFormat format : { TextureFormat::BC1SRGB, TextureFormat::BC7SRGB })
+		{
+			CAPTURE(std::string(TextureFormatToString(format)));
+			REQUIRE(TextureCooker::GetEncodeBatchCount(format, c_Width, c_Height) > 1);
+			REQUIRE(TextureCooker::GetEncodeBatchCount(format, c_Width / 2, c_Height / 2) > 1);
+		}
 		REQUIRE(TextureCooker::GetEncodeBatchCount(TextureFormat::RGBA8SRGB, c_Width, c_Height) > 1);
 
-		TextureImportSettings compressed;
+		TextureImportSettings high;
+		TextureImportSettings fast;
+		fast.Quality = TextureQuality::Fast;
 		TextureImportSettings uncompressed;
 		uncompressed.Compression = TextureCompression::Uncompressed;
-		for (const TextureImportSettings& settings : { compressed, uncompressed })
+		for (const TextureImportSettings& settings : { high, fast, uncompressed })
 		{
-			INFO("Compression ", std::string(TextureCompressionToString(settings.Compression)));
-			const std::vector<uint8_t> sequential = Import(image, settings)->Serialize();
+			INFO("Compression ", std::string(TextureCompressionToString(settings.Compression)), ", quality ", std::string(TextureQualityToString(settings.Quality)));
+			const Ref<Texture> first = Import(image, settings);
+			const bool compressed = settings.Compression == TextureCompression::Auto;
+			CHECK(first->GetSpecification().Format == (compressed ? TextureFormat::BC7SRGB : TextureFormat::RGBA8SRGB));
+			const std::vector<uint8_t> sequential = first->Serialize();
+			CHECK(Import(image, settings)->Serialize() == sequential);
 			std::vector<uint8_t> parallel;
 			{
 				Tests::ScopedJobSystem jobs(4, 1);

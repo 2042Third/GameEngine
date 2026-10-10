@@ -302,7 +302,7 @@ TEST_SUITE("Renderer.Texture")
 		CHECK(texture->GetWidth() == 4);
 		CHECK(texture->GetHeight() == 2);
 		CHECK(texture->GetMipCount() == 3);
-		CHECK(texture->GetSpecification().Format == TextureFormat::BC1SRGB); // Opaque color
+		CHECK(texture->GetSpecification().Format == TextureFormat::BC7SRGB); // Color
 		Ref<Texture> decoded = texture->Decompress(&error);
 		REQUIRE_MESSAGE(decoded, error);
 		const std::span<const uint8_t> top = decoded->GetMipData(0);

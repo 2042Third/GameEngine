@@ -43,7 +43,7 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
   and `PerfGPU.*`, label `perf`, Release and Dist only, after `StrataTests.PerfResults.Clean`; budgets and the
   ratchet rule in AGENTS.md, "Testing"; `PerfGPU.Editor` writes a 100,000- and a 1,000,000-entity scene to a temporary
   project and opens a maximized StrataEditor on them for about 20 seconds; `PerfGPU.Streaming` writes and imports the
-  stress project (17 large textures, 55.9 MB once block-compressed) and runs its two camera sweeps (evicting, and all
+  stress project (17 large textures, 111.8 MB once block-compressed) and runs its two camera sweeps (evicting, and all
   textures resident at 1920x1080) three times each in helper processes, about a minute; `Perf.TextureCook` imports the
   same project cold three times and times the BC7 encoder per block), `StrataEditor.Smoke`
   (the real editor in a window with `StrataTests/Editor/SmokeCommands.json.in`, configured into the build tree, label

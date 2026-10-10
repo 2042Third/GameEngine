@@ -110,7 +110,7 @@ TEST_SUITE("FeatureTest")
 
 		// The textures cook to the formats their usage gives with default settings: block-compressed color, normal map and
 		// one-channel (grayscale) data, half-float HDR.
-		const std::pair<std::string, TextureFormat> textures[] = { { "Textures/Checker.png", TextureFormat::BC1SRGB },
+		const std::pair<std::string, TextureFormat> textures[] = { { "Textures/Checker.png", TextureFormat::BC7SRGB },
 			{ "Textures/Bumps_normal.png", TextureFormat::BC5 }, { "Textures/Roughness.png", TextureFormat::BC4 }, { "Textures/Sky.hdr", TextureFormat::RGBA16F } };
 		for (const auto& [path, format] : textures)
 		{
