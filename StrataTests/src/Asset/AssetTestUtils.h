@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <cstring>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -138,6 +139,12 @@ namespace Strata::Tests
 
 		void Remove(AssetHandle handle) { UnregisterAsset(handle); }
 
+		// Records what an asset depends on, as an importer or a pack's table would.
+		void SetDependencies(AssetHandle handle, std::vector<AssetHandle> dependencies, std::optional<AABB> bounds = std::nullopt)
+		{
+			SetAssetReferences(handle, std::move(dependencies), bounds);
+		}
+
 		// Reads wait at the gate while it is closed, until AllowReads lets them through.
 		void CloseGate()
 		{
@@ -183,6 +190,14 @@ namespace Strata::Tests
 			std::scoped_lock<std::mutex> lock(m_Mutex);
 			return m_ReadOrder;
 		}
+
+		// The manager's frame (GetFrameIndex) when the asset's latest read passed the gate; nullopt before its first read.
+		std::optional<uint64_t> GetReadFrame(AssetHandle handle) const
+		{
+			std::scoped_lock<std::mutex> lock(m_Mutex);
+			auto it = m_ReadFrames.find(handle);
+			return it != m_ReadFrames.end() ? std::optional<uint64_t>(it->second) : std::nullopt;
+		}
 	protected:
 		bool ReadAssetData(const AssetMetadata& metadata, std::vector<uint8_t>& outData, std::string* outError) override
 		{
@@ -194,6 +209,7 @@ namespace Strata::Tests
 				m_AllowedReads--;
 			m_WaitingReads--;
 			m_ReadOrder.push_back(metadata.Handle);
+			m_ReadFrames[metadata.Handle] = GetFrameIndex();
 
 			auto it = m_Data.find(metadata.Handle);
 			if (it == m_Data.end())
@@ -210,6 +226,7 @@ namespace Strata::Tests
 		std::condition_variable m_Condition;
 		std::unordered_map<AssetHandle, std::vector<uint8_t>> m_Data;
 		std::vector<AssetHandle> m_ReadOrder;
+		std::unordered_map<AssetHandle, uint64_t> m_ReadFrames;
 		bool m_GateClosed = false;
 		uint32_t m_AllowedReads = 0;
 		uint32_t m_WaitingReads = 0;

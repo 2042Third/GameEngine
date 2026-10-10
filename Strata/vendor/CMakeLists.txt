@@ -187,6 +187,13 @@ add_library(zstd_compress STATIC
 	"${ZSTD_DIR}/compress/zstd_opt.c"
 	"${ZSTD_DIR}/compress/zstd_preSplit.c")
 target_link_libraries(zstd_compress PUBLIC zstd_decompress)
+# MSVC x86 builds require AVX2 already: Jolt compiles itself and its users with /arch:AVX2 (or AVX512; same condition).
+# It lets zstd use its BMI2 bit readers (STATIC_BMI2), about 10% faster at decompressing; GCC and Clang builds pick
+# them at run time (DYNAMIC_BMI2).
+if(MSVC AND (USE_AVX2 OR USE_AVX512) AND CMAKE_VS_PLATFORM_NAME MATCHES "^(x86|x64)$")
+	target_compile_options(zstd_decompress PRIVATE /arch:AVX2)
+	target_compile_options(zstd_compress PRIVATE /arch:AVX2)
+endif()
 
 # --- glslang (glslang-standalone: build-time GLSL -> SPIR-V compiler) ------------------------------
 strata_vendor_option(BUILD_EXTERNAL OFF)

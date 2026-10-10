@@ -2,11 +2,14 @@
 
 #include "Strata/Asset/AssetImporter.h"
 #include "Strata/Asset/AssetManager.h"
+#include "Strata/Asset/AssetPackWriter.h"
 #include "Strata/Core/FileWatcher.h"
 
 #include <condition_variable>
 #include <filesystem>
+#include <functional>
 #include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <span>
 #include <string>
@@ -22,6 +25,27 @@ namespace Strata
 		std::filesystem::path AssetDirectory; // Project asset root (absolute)
 		std::filesystem::path CacheDirectory; // Imported data; derived, safe to delete (absolute)
 		bool WatchFiles = true;               // Re-import and hot reload files changed on disk
+	};
+
+	// What an asset pack built from the project holds, and in which order (EditorAssetManager::PlanAssetPack).
+	struct AssetPackBuildOptions
+	{
+		// Packs are ordered by first use, so that loading a scene reads the file front to back: this scene's dependency
+		// closure breadth first (AssetManagerBase::GetDependencyClosure), then the closure of every other scene by path,
+		// then the remaining assets by path. Null: scenes by path.
+		AssetHandle StartScene = UUID::Null();
+		// Only what the scenes use (their closures) and what AlwaysInclude names, with what that uses. Scripts can find
+		// assets by path, so a game that does must name them in AlwaysInclude (the project's Export.AlwaysInclude).
+		bool Prune = false;
+		// Assets ("Prefabs/Enemy.stprefab": the file's asset and its sub-assets) and folders ("Prefabs" or "Prefabs/": every
+		// asset below) relative to the asset directory, with '/' separators. With Prune, an entry that names nothing fails.
+		std::vector<std::string> AlwaysInclude;
+	};
+
+	struct AssetPackBuildPlan
+	{
+		std::vector<AssetPackSource> Assets;  // In pack order, with their dependencies and bounds
+		std::vector<AssetMetadata> Excluded;  // Left out by Prune, by path
 	};
 
 	// Import state of a source asset (a file in the asset directory).
@@ -83,15 +107,30 @@ namespace Strata
 		// Deletes the source file, its .meta and cached data, and unregisters the asset and its sub-assets.
 		bool DeleteAsset(AssetHandle handle, std::string* outError = nullptr);
 
-		// Writes every project asset (not the built-in ones) in its stored form into an asset pack for the runtime.
-		// Fails if any asset failed to import.
-		bool BuildAssetPack(const std::filesystem::path& packPath, std::string* outError = nullptr);
+		// Whether background imports (hot reload) are queued, running, or finished and not applied yet (Update applies them).
+		bool HasPendingImports() const;
+
+		// The assets a pack built now would hold (every project asset, not the built-in ones, or with Prune what the scenes
+		// and AlwaysInclude need), in pack order, with their dependencies and bounds: a snapshot, which WriteAssetPack can
+		// write on another thread. Main thread; finish imports first (WaitForImports, or until HasPendingImports is false).
+		// Fails for AlwaysInclude entries that name no asset of the project (with Prune).
+		bool PlanAssetPack(const AssetPackBuildOptions& options, AssetPackBuildPlan& outPlan, std::string* outError = nullptr) const;
+		// Writes a planned pack, reading each asset's stored form like loads do. Fails if an asset failed to import. Any
+		// thread; the manager must outlive the call.
+		bool WriteAssetPack(const std::filesystem::path& packPath, const AssetPackBuildPlan& plan, const AssetPackWriteOptions& options = {},
+			AssetPackWriteStats* outStats = nullptr, std::string* outError = nullptr);
+		// Waits for imports, plans and writes, blocking (tools and tests; the editor's export plans and writes on an I/O
+		// thread).
+		bool BuildAssetPack(const std::filesystem::path& packPath, std::string* outError = nullptr, const AssetPackBuildOptions& options = {},
+			AssetPackBuildPlan* outPlan = nullptr, AssetPackWriteStats* outStats = nullptr);
 
 		static constexpr std::string_view c_MetaExtension = ".meta";
 		// Imports of sources larger than this run one at a time, bounding peak memory (decoded images are large).
 		static constexpr uint64_t c_LargeImportSize = 64ull * 1024 * 1024;
 	protected:
 		bool ReadAssetData(const AssetMetadata& metadata, std::vector<uint8_t>& outData, std::string* outError) override;
+		// Reads the range from the cache file or the source file, without reading the rest.
+		bool ReadAssetRange(const AssetMetadata& metadata, uint64_t offset, uint64_t size, std::vector<uint8_t>& outData, std::string* outError) override;
 	private:
 		struct SourceAsset
 		{
@@ -124,11 +163,21 @@ namespace Strata
 			bool Success = false;
 			std::string Error;
 			std::vector<std::string> Warnings;
-			std::vector<ImportedSubAsset> SubAssets; // Data already written to the cache (Data is empty)
+			std::vector<ImportedSubAsset> SubAssets; // Data already written to the cache (Data is empty); with references and bounds
 			std::vector<std::string> Dependencies;   // Relative paths
+			std::vector<AssetHandle> References;     // What the asset itself references (see AssetDependencies)
+			std::optional<AABB> Bounds;
 			uint64_t SourceSize = 0;
 			int64_t SourceTime = 0;
 			bool FromCache = false; // The cached import was current: loaded assets already hold this data
+		};
+
+		// What an engine-native asset (stored as its source, never imported) references, from its cached record or a scan.
+		struct NativeReferences
+		{
+			AssetHandle Handle = UUID::Null();
+			std::vector<AssetHandle> References;
+			bool Scanned = false; // Found (from the record or a scan)
 		};
 
 		std::filesystem::path ToAbsolute(std::string_view relativePath) const;
@@ -159,6 +208,19 @@ namespace Strata
 		void SaveAssetIndex();
 		// Deletes cached data of assets that no longer exist and leftovers of interrupted writes (during Scan).
 		void RemoveUnusedCacheFiles();
+
+		// References of engine-native assets (AssetDependencies::Scan of the source), cached per content in the asset's
+		// import record. Any thread: reads the record, or scans the file (`data` when given, else read) and writes the record.
+		NativeReferences FindNativeReferences(AssetHandle handle, AssetType type, const std::string& relativePath, std::span<const uint8_t> data = {}) const;
+		// Records them with the base (main thread).
+		void ApplyNativeReferences(const NativeReferences& references);
+		// Finds and records the references of a source asset stored as-is, after it was added or changed (`data`: its new
+		// contents, when the caller has them). Does nothing for imported assets. Main thread.
+		void RefreshNativeReferences(AssetHandle handle, std::span<const uint8_t> data = {});
+		// The stored form's file of an asset (the cache file, or the source of assets stored as-is): calls `read` with it under
+		// the shared file lock, again at its new place when it moved meanwhile. False when the asset is unknown, its import
+		// failed or `read` fails (outError says which).
+		bool ReadStoredFile(const AssetMetadata& metadata, const std::function<bool(const std::filesystem::path& path)>& read, std::string* outError);
 	private:
 		EditorAssetManagerSpecification m_Specification;
 		FileWatcher m_Watcher;
@@ -175,7 +237,7 @@ namespace Strata
 		mutable std::shared_mutex m_FileMutex;
 
 		// Background imports (hot reload)
-		std::mutex m_ImportMutex;
+		mutable std::mutex m_ImportMutex;
 		std::condition_variable m_ImportCondition;
 		uint32_t m_ImportsInFlight = 0;
 		std::vector<ImportOutcome> m_CompletedImports;

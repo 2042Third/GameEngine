@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Strata/Asset/Asset.h"
+#include "Strata/Math/AABB.h"
 
 #include <nlohmann/json.hpp>
 
@@ -21,6 +22,10 @@ namespace Strata
 		std::string Name; // Display name
 		AssetType Type = AssetType::None;
 		std::vector<uint8_t> Data; // Stored (cooked) bytes
+		// Assets the sub-asset references that its stored form does not show as a document (a mesh's default materials;
+		// see AssetDependencies), and the local bounds of meshes: recorded with the import, known before the asset loads.
+		std::vector<AssetHandle> References;
+		std::optional<AABB> Bounds;
 	};
 
 	// A file an import read besides its source, with its state before reading. A change to the file, or its creation
@@ -40,6 +45,9 @@ namespace Strata
 	{
 		std::vector<uint8_t> Data; // Stored (cooked) bytes of the asset itself
 		std::vector<ImportedSubAsset> SubAssets;
+		// Like ImportedSubAsset::References and Bounds, for the asset itself.
+		std::vector<AssetHandle> References;
+		std::optional<AABB> Bounds;
 		std::vector<std::string> Warnings;
 		std::vector<ImportDependency> Dependencies; // Filled by ReadImportDependency
 	};

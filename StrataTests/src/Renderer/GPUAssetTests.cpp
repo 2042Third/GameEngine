@@ -1,7 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Renderer/GPUTestUtils.h"
-#include "Strata/Asset/AssetPack.h"
+#include "Strata/Asset/AssetPackWriter.h"
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Asset/RuntimeAssetManager.h"
 #include "Strata/Renderer/Mesh.h"
@@ -165,7 +165,7 @@ TEST_SUITE("GPU.Assets")
 		mesh.Path = "Cone.mesh";
 
 		const std::filesystem::path path = Tests::CreateTemporaryDirectory("GPUAssetPack") / "Game.stpak";
-		REQUIRE(AssetPack::Write(path, { texture, mesh }, [&data](const AssetMetadata& metadata, std::vector<uint8_t>& outData, std::string*)
+		REQUIRE(AssetPackWriter::Write(path, { texture, mesh }, [&data](const AssetMetadata& metadata, std::vector<uint8_t>& outData, std::string*)
 		{
 			outData = data.at(static_cast<uint64_t>(metadata.Handle));
 			return true;

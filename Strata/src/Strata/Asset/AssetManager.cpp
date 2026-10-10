@@ -5,7 +5,9 @@
 #include "Strata/Core/JobSystem.h"
 #include "Strata/Renderer/Renderer.h"
 
+#include <algorithm>
 #include <condition_variable>
+#include <unordered_set>
 
 namespace Strata
 {
@@ -255,6 +257,7 @@ namespace Strata
 				return;
 			AssetEntry& entry = it->second;
 			TouchLocked(entry);
+			entry.PrefetchOnly = false; // Requested now: its own dependencies are prefetched when it is read
 			if (entry.State == AssetState::Unloaded)
 			{
 				entry.State = AssetState::Loading;
@@ -353,6 +356,11 @@ namespace Strata
 			auto data = CreateRef<std::vector<uint8_t>>();
 			std::string error;
 			const bool read = ReadAssetData(metadata, *data, &error);
+			// The asset will arrive: what it references starts loading now, alongside its decoding and finalization. Queued
+			// before the read leaves its slot, so the pump that follows weighs the dependencies against what waits already.
+			const bool current = read && IsLoadCurrent(metadata.Handle, request.Generation);
+			if (current)
+				PrefetchDependencies(metadata.Handle, request.Priority);
 			finishRead();
 			if (!read)
 			{
@@ -360,7 +368,7 @@ namespace Strata
 				PushCompletion(loadState, std::move(completion));
 				return;
 			}
-			if (!IsLoadCurrent(metadata.Handle, request.Generation))
+			if (!current)
 			{
 				PushCompletion(loadState, std::move(completion));
 				return;
@@ -936,6 +944,7 @@ namespace Strata
 			stats.EvictionChecks = m_EvictionChecks;
 			stats.Cancellations = m_Cancellations;
 			stats.StagingReleases = m_StagingReleases;
+			stats.DependencyPrefetches = m_DependencyPrefetches;
 		}
 
 		const AssetStreamingQueueStats queue = m_Queue.GetStats();
@@ -945,6 +954,257 @@ namespace Strata
 		stats.InFlightBytes = queue.InFlightBytes;
 		stats.InFlightBytesHighWater = queue.InFlightBytesHighWater;
 		return stats;
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
+	// Dependencies, bounds and group loads
+	////////////////////////////////////////////////////////////////////////////////
+
+	void AssetManagerBase::SetAssetReferences(AssetHandle handle, std::vector<AssetHandle> dependencies, std::optional<AABB> bounds)
+	{
+		// Once each, in the order given, never the asset itself.
+		std::vector<AssetHandle> unique;
+		unique.reserve(dependencies.size());
+		std::unordered_set<AssetHandle> seen;
+		for (AssetHandle dependency : dependencies)
+		{
+			if (dependency.IsValid() && dependency != handle && seen.insert(dependency).second)
+				unique.push_back(dependency);
+		}
+		if (bounds && !bounds->IsValid())
+			bounds.reset();
+
+		std::scoped_lock<std::mutex> lock(m_Mutex);
+		auto it = m_Entries.find(handle);
+		if (it == m_Entries.end())
+			return;
+		it->second.Dependencies = std::move(unique);
+		it->second.Bounds = bounds;
+	}
+
+	std::vector<AssetHandle> AssetManagerBase::GetDependencies(AssetHandle handle) const
+	{
+		std::scoped_lock<std::mutex> lock(m_Mutex);
+		auto it = m_Entries.find(handle);
+		return it != m_Entries.end() ? it->second.Dependencies : std::vector<AssetHandle>();
+	}
+
+	std::vector<AssetHandle> AssetManagerBase::GetDependencyClosureLocked(AssetHandle handle) const
+	{
+		std::vector<AssetHandle> closure;
+		if (m_Entries.find(handle) == m_Entries.end())
+			return closure;
+		std::unordered_set<AssetHandle> visited { handle };
+		closure.push_back(handle);
+		// Breadth first: the list itself is the queue.
+		for (size_t index = 0; index < closure.size(); index++)
+		{
+			const AssetEntry& entry = m_Entries.at(closure[index]);
+			for (AssetHandle dependency : entry.Dependencies)
+			{
+				if (m_Entries.find(dependency) != m_Entries.end() && visited.insert(dependency).second)
+					closure.push_back(dependency);
+			}
+		}
+		return closure;
+	}
+
+	std::vector<AssetHandle> AssetManagerBase::GetDependencyClosure(AssetHandle handle) const
+	{
+		std::scoped_lock<std::mutex> lock(m_Mutex);
+		return GetDependencyClosureLocked(handle);
+	}
+
+	std::optional<AABB> AssetManagerBase::GetBounds(AssetHandle handle) const
+	{
+		std::scoped_lock<std::mutex> lock(m_Mutex);
+		auto it = m_Entries.find(handle);
+		return it != m_Entries.end() ? it->second.Bounds : std::nullopt;
+	}
+
+	bool AssetManagerBase::IsLoadedWithDependencies(AssetHandle handle) const
+	{
+		std::scoped_lock<std::mutex> lock(m_Mutex);
+		const std::vector<AssetHandle> closure = GetDependencyClosureLocked(handle);
+		if (closure.empty())
+			return false;
+		return std::all_of(closure.begin(), closure.end(), [this](AssetHandle member) { return m_Entries.at(member).State == AssetState::Ready; });
+	}
+
+	void AssetManagerBase::PrefetchDependencies(AssetHandle handle, AssetPriority priority)
+	{
+		struct Request
+		{
+			AssetHandle Handle;
+			uint64_t Generation = 0;
+			uint64_t StoredSize = 0;
+		};
+		std::vector<Request> started;
+		std::vector<AssetHandle> loading;
+		{
+			std::scoped_lock<std::mutex> lock(m_Mutex);
+			auto it = m_Entries.find(handle);
+			// Prefetches do not chain, and none start while a pool is over its budget: what they load would only evict what is
+			// in use, or be evicted itself before anything asks for it.
+			if (it == m_Entries.end() || it->second.PrefetchOnly)
+				return;
+			for (AssetMemoryPool pool : c_AssetMemoryPools)
+			{
+				AssetMemoryUsage held = m_Resident;
+				held += m_Reserved;
+				if (GetPoolBytes(held, pool) > m_Budgets.GetPoolBudget(pool))
+					return;
+			}
+			for (AssetHandle dependency : it->second.Dependencies)
+			{
+				auto dependencyIt = m_Entries.find(dependency);
+				if (dependencyIt == m_Entries.end() || dependencyIt->second.IsMemoryAsset)
+					continue;
+				AssetEntry& entry = dependencyIt->second;
+				// Not touched: a prefetch is no use, so it keeps nothing resident and makes no room (see GetDependencies).
+				if (entry.State == AssetState::Unloaded)
+				{
+					entry.State = AssetState::Loading;
+					entry.Error.clear();
+					entry.PrefetchOnly = true;
+					started.push_back(Request { dependency, entry.Generation, entry.Metadata.StoredSize });
+				}
+				else if (entry.State == AssetState::Loading)
+				{
+					loading.push_back(dependency);
+				}
+			}
+			m_DependencyPrefetches += started.size();
+		}
+		if (started.empty() && loading.empty())
+			return;
+
+		// The queue's lock is taken without the manager's (see RequestLoad).
+		for (const Request& request : started)
+			m_Queue.Enqueue(request.Handle, priority, c_DependencyPrefetchScore, request.StoredSize, request.Generation);
+		for (AssetHandle dependency : loading)
+			m_Queue.Raise(dependency, priority, c_DependencyPrefetchScore);
+		m_Queue.Pump();
+	}
+
+	AssetGroupRequest AssetManagerBase::RequestLoadWithDependencies(AssetHandle handle, AssetPriority priority)
+	{
+		AssetGroupRequest group;
+		{
+			std::scoped_lock<std::mutex> lock(m_Mutex);
+			group.m_Assets = GetDependencyClosureLocked(handle);
+			for (AssetHandle member : group.m_Assets)
+			{
+				const uint64_t weight = std::max<uint64_t>(m_Entries.at(member).Metadata.StoredSize, 1);
+				group.m_Weights.push_back(weight);
+				group.m_TotalWeight += weight;
+			}
+		}
+		if (group.m_Assets.empty())
+			return group;
+
+		group.m_Manager = weak_from_this();
+		group.m_Finished.assign(group.m_Assets.size(), false);
+		// Pinning requests the loads, in breadth-first order: the root first.
+		group.m_Pins.reserve(group.m_Assets.size());
+		for (AssetHandle member : group.m_Assets)
+			group.m_Pins.push_back(Pin(member, priority));
+		return group;
+	}
+
+	bool AssetManagerBase::ReadStoredRange(AssetHandle handle, uint64_t offset, uint64_t size, std::vector<uint8_t>& outData, std::string* outError)
+	{
+		std::optional<AssetMetadata> metadata = GetMetadata(handle);
+		if (!metadata || IsBuiltinAssetHandle(handle))
+		{
+			if (outError)
+				*outError = fmt::format("Asset {} has no stored form here", handle.ToString());
+			return false;
+		}
+		try
+		{
+			return ReadAssetRange(*metadata, offset, size, outData, outError);
+		}
+		catch (const std::exception& exception)
+		{
+			if (outError)
+				*outError = fmt::format("Reading failed: {}", exception.what());
+			return false;
+		}
+	}
+
+	bool AssetManagerBase::ReadAssetRange(const AssetMetadata& metadata, uint64_t offset, uint64_t size, std::vector<uint8_t>& outData, std::string* outError)
+	{
+		std::vector<uint8_t> data;
+		if (!ReadAssetData(metadata, data, outError))
+			return false;
+		if (offset > data.size() || size > data.size() - offset)
+		{
+			if (outError)
+				*outError = fmt::format("The range {}+{} lies outside the {} bytes of '{}'", offset, size, data.size(), metadata.Path.empty() ? metadata.Name : metadata.Path);
+			return false;
+		}
+		outData.assign(data.begin() + static_cast<std::ptrdiff_t>(offset), data.begin() + static_cast<std::ptrdiff_t>(offset + size));
+		return true;
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
+	// AssetGroupRequest
+	////////////////////////////////////////////////////////////////////////////////
+
+	void AssetGroupRequest::Refresh() const
+	{
+		if (m_FinishedCount == m_Assets.size())
+			return;
+		Ref<AssetManagerBase> manager = m_Manager.lock();
+		if (!manager)
+			return;
+		for (size_t index = 0; index < m_Assets.size(); index++)
+		{
+			if (m_Finished[index])
+				continue;
+			const AssetState state = manager->GetAssetState(m_Assets[index]);
+			if (state != AssetState::Ready && state != AssetState::Failed)
+				continue;
+			m_Finished[index] = true;
+			m_FinishedWeight += m_Weights[index];
+			m_FinishedCount++;
+			m_Failed = m_Failed || state == AssetState::Failed;
+		}
+	}
+
+	float AssetGroupRequest::Progress() const
+	{
+		if (m_Assets.empty())
+			return 1.0f;
+		Refresh();
+		return m_FinishedCount == m_Assets.size() ? 1.0f : static_cast<float>(static_cast<double>(m_FinishedWeight) / static_cast<double>(m_TotalWeight));
+	}
+
+	bool AssetGroupRequest::IsComplete() const
+	{
+		Refresh();
+		return m_FinishedCount == m_Assets.size();
+	}
+
+	bool AssetGroupRequest::HasFailed() const
+	{
+		Refresh();
+		return m_Failed;
+	}
+
+	void AssetGroupRequest::Cancel()
+	{
+		m_Pins.clear(); // CancelLoad refuses pinned assets
+		Ref<AssetManagerBase> manager = m_Manager.lock();
+		if (!manager)
+			return;
+		Refresh();
+		for (size_t index = 0; index < m_Assets.size(); index++)
+		{
+			if (!m_Finished[index])
+				manager->CancelLoad(m_Assets[index]);
+		}
 	}
 
 	////////////////////////////////////////////////////////////////////////////////

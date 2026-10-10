@@ -1,5 +1,6 @@
 #include "Renderer/SceneRendererTestUtils.h"
 
+#include "Strata/Asset/AssetPackWriter.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/MeshFactory.h"
 
@@ -370,7 +371,7 @@ TEST_SUITE("GPU.SceneRenderer")
 			metadata[index].Path = entries[index].second;
 		}
 		const std::filesystem::path path = CreateTemporaryDirectory("StreamingScene") / "Game.stpak";
-		REQUIRE(AssetPack::Write(path, metadata, [&data](const AssetMetadata& asset, std::vector<uint8_t>& outData, std::string*)
+		REQUIRE(AssetPackWriter::Write(path, metadata, [&data](const AssetMetadata& asset, std::vector<uint8_t>& outData, std::string*)
 		{
 			outData = data.at(static_cast<uint64_t>(asset.Handle));
 			return true;

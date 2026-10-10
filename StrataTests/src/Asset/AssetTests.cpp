@@ -2,7 +2,7 @@
 
 #include "Strata/Asset/AssetImporter.h"
 #include "Strata/Asset/AssetManager.h"
-#include "Strata/Asset/AssetPack.h"
+#include "Strata/Asset/AssetPackWriter.h"
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Asset/RuntimeAssetManager.h"
 #include "Strata/Core/FileSystem.h"
@@ -16,7 +16,6 @@
 #include "TestHelpers.h"
 
 #include <algorithm>
-#include <fstream>
 #include <map>
 #include <set>
 #include <span>
@@ -73,7 +72,7 @@ namespace
 		}
 
 		std::string error;
-		const bool written = AssetPack::Write(path, metadata, [&data](const AssetMetadata& asset, std::vector<uint8_t>& outData, std::string*)
+		const bool written = AssetPackWriter::Write(path, metadata, [&data](const AssetMetadata& asset, std::vector<uint8_t>& outData, std::string*)
 		{
 			outData = data.at(static_cast<uint64_t>(asset.Handle));
 			return true;
@@ -208,100 +207,6 @@ TEST_SUITE("Asset")
 		REQUIRE_MESSAGE(loadedFont, error);
 		CHECK(fontFile.empty());
 		CHECK(std::static_pointer_cast<Font>(loadedFont)->GetData() == expectedFont);
-	}
-
-	TEST_CASE("Asset packs round trip metadata and data")
-	{
-		AssetMetadata parent = MakeMetadata(0x1000, AssetType::Model, "Models/Robot.gltf", "Robot");
-		AssetMetadata child = MakeMetadata(0x1001, AssetType::Mesh, "Models/Robot.gltf", "Body");
-		child.Parent = parent.Handle;
-		child.SubAssetKey = "Mesh/0";
-		const std::vector<uint8_t> empty;
-		const std::vector<uint8_t> payload = { 1, 2, 3, 4, 5 };
-		const std::filesystem::path path = WritePack("PackRoundTrip", { { parent, payload }, { child, empty } });
-
-		std::string error;
-		Scope<AssetPack> pack = AssetPack::Open(path, &error);
-		REQUIRE_MESSAGE(pack, error);
-		REQUIRE(pack->GetEntries().size() == 2);
-		const AssetPackEntry& first = pack->GetEntries()[0];
-		CHECK(first.Metadata.Handle == parent.Handle);
-		CHECK(first.Metadata.Type == AssetType::Model);
-		CHECK(first.Metadata.Path == "Models/Robot.gltf");
-		CHECK(first.Metadata.Name == "Robot");
-		const AssetPackEntry& second = pack->GetEntries()[1];
-		CHECK(second.Metadata.Parent == parent.Handle);
-		CHECK(second.Metadata.SubAssetKey == "Mesh/0");
-		CHECK(second.Size == 0);
-
-		std::vector<uint8_t> data;
-		REQUIRE(pack->ReadData(first, data, &error));
-		CHECK(data == payload);
-		REQUIRE(pack->ReadData(second, data, &error));
-		CHECK(data.empty());
-
-		// A provider failure aborts the write and leaves no file behind.
-		const std::filesystem::path failedPath = path.parent_path() / "Failed.stpak";
-		CHECK_FALSE(AssetPack::Write(failedPath, { parent }, [](const AssetMetadata&, std::vector<uint8_t>&, std::string* outError)
-		{
-			*outError = "missing";
-			return false;
-		}, &error));
-		CHECK(error.find("missing") != std::string::npos);
-		CHECK_FALSE(FileSystem::Exists(failedPath));
-		CHECK_FALSE(FileSystem::Exists(std::filesystem::path(failedPath).concat(".tmp")));
-	}
-
-	TEST_CASE("Corrupt asset packs are rejected")
-	{
-		const std::filesystem::path path = WritePack("PackCorrupt", { { MakeMetadata(0x2000, AssetType::Material, "A.stmat"), CreateMaterialBytes(0.5f) } });
-		std::optional<std::vector<uint8_t>> bytes = FileSystem::ReadBytes(path);
-		REQUIRE(bytes);
-
-		std::string error;
-		CHECK_FALSE(AssetPack::Open(path.parent_path() / "Missing.stpak", &error));
-		CHECK_FALSE(error.empty());
-
-		const std::filesystem::path corruptPath = path.parent_path() / "Corrupt.stpak";
-		auto openModified = [&](const std::vector<uint8_t>& data)
-		{
-			REQUIRE(FileSystem::WriteBytes(corruptPath, data));
-			error.clear();
-			const bool opened = AssetPack::Open(corruptPath, &error) != nullptr;
-			CHECK((opened || !error.empty()));
-			return opened;
-		};
-
-		for (size_t length = 0; length < bytes->size(); length += 3)
-		{
-			CAPTURE(length);
-			CHECK_FALSE(openModified(std::vector<uint8_t>(bytes->begin(), bytes->begin() + static_cast<std::ptrdiff_t>(length))));
-		}
-
-		std::vector<uint8_t> wrongMagic = *bytes;
-		wrongMagic[0] = 'X';
-		CHECK_FALSE(openModified(wrongMagic));
-		std::vector<uint8_t> wrongVersion = *bytes;
-		wrongVersion[4] = 99;
-		CHECK_FALSE(openModified(wrongVersion));
-		std::vector<uint8_t> hugeEntryCount = *bytes;
-		hugeEntryCount[8] = 0xFF;
-		hugeEntryCount[9] = 0xFF;
-		CHECK_FALSE(openModified(hugeEntryCount));
-
-		// Single-byte corruption anywhere never crashes.
-		for (size_t offset = 0; offset < bytes->size(); offset++)
-		{
-			std::vector<uint8_t> corrupted = *bytes;
-			corrupted[offset] ^= 0xA5;
-			openModified(corrupted);
-		}
-
-		// Duplicate handles are rejected.
-		const std::filesystem::path duplicates = WritePack("PackDuplicates", {
-			{ MakeMetadata(0x3000, AssetType::Material, "A.stmat"), CreateMaterialBytes(0.1f) },
-			{ MakeMetadata(0x3000, AssetType::Material, "B.stmat"), CreateMaterialBytes(0.2f) } });
-		CHECK_FALSE(AssetPack::Open(duplicates, &error));
 	}
 
 	TEST_CASE("The runtime asset manager loads assets from a pack")

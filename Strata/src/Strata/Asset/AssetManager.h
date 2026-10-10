@@ -3,6 +3,7 @@
 #include "Strata/Asset/Asset.h"
 #include "Strata/Asset/AssetResidency.h"
 #include "Strata/Asset/AssetStreamingQueue.h"
+#include "Strata/Math/AABB.h"
 
 #include <nvrhi/nvrhi.h>
 
@@ -59,6 +60,9 @@ namespace Strata
 		uint64_t EvictionChecks = 0;
 		uint64_t Cancellations = 0;   // Loads abandoned before they finished (CancelLoad, or unloaded while loading)
 		uint64_t StagingReleases = 0; // Times the idle upload command list was recreated to return its staging memory
+
+		// Loads of dependencies started when the read of an asset that depends on them completed (see GetDependencies).
+		uint64_t DependencyPrefetches = 0;
 	};
 
 	// The residency of one asset (AssetManagerBase::GetResidencyInfo).
@@ -126,6 +130,52 @@ namespace Strata
 		static void BeginRegistration();
 		static void Register(AssetType type, AssetLoadFunction loader);
 		static const AssetLoadFunction* Find(AssetType type);
+	};
+
+	// The load of an asset together with everything it depends on (AssetManagerBase::RequestLoadWithDependencies): a
+	// loading screen's or a prefetch's handle on a group of loads. It pins every member while it lives, so nothing of the
+	// group is evicted, until it is destroyed or cancelled. Movable, not copyable; a request that outlives its manager
+	// reports what it saw last. Thread-safe like the manager (one request is used by one thread at a time).
+	class AssetGroupRequest
+	{
+	public:
+		AssetGroupRequest() = default;
+		AssetGroupRequest(AssetGroupRequest&&) noexcept = default;
+		AssetGroupRequest& operator=(AssetGroupRequest&&) noexcept = default;
+		AssetGroupRequest(const AssetGroupRequest&) = delete;
+		AssetGroupRequest& operator=(const AssetGroupRequest&) = delete;
+
+		// Whether the request names any asset (false for unknown assets and default-constructed requests).
+		bool IsValid() const { return !m_Assets.empty(); }
+		AssetHandle GetRoot() const { return m_Assets.empty() ? UUID::Null() : m_Assets.front(); }
+		// The members: the root, then its dependencies breadth first.
+		const std::vector<AssetHandle>& GetAssets() const { return m_Assets; }
+
+		// The share of the members' stored bytes that finished loading (Ready or Failed), in [0, 1]. Never decreases: a
+		// member that finished stays counted (also while a hot reload replaces it). 1 for an invalid request.
+		float Progress() const;
+		// Every member finished loading (Ready or Failed).
+		bool IsComplete() const;
+		// A member failed to load.
+		bool HasFailed() const;
+		// Releases the pins and abandons the loads of the members that have not finished (AssetManagerBase::CancelLoad):
+		// queued reads never start. Members someone else pins keep loading, and so do members requested again later.
+		void Cancel();
+	private:
+		friend class AssetManagerBase;
+
+		// Records the members that finished since the last call.
+		void Refresh() const;
+	private:
+		std::weak_ptr<AssetManagerBase> m_Manager;
+		std::vector<AssetHandle> m_Assets;
+		std::vector<uint64_t> m_Weights; // Per member: its stored size (at least 1)
+		std::vector<AssetPin> m_Pins;
+		uint64_t m_TotalWeight = 0;
+		mutable std::vector<bool> m_Finished;
+		mutable uint64_t m_FinishedWeight = 0;
+		mutable size_t m_FinishedCount = 0;
+		mutable bool m_Failed = false;
 	};
 
 	// Asset registry plus asynchronous loading and residency. Subclasses provide where the bytes come from (the editor
@@ -248,6 +298,52 @@ namespace Strata
 		static constexpr uint32_t c_StagingReleaseFrames = 120;
 		// Frames the window maximums of AssetManagerStats cover.
 		static constexpr uint32_t c_StatsWindowFrames = 120;
+
+		//////////////////////////////////////////////////////////////////////////
+		// Dependencies, bounds and group loads
+		//////////////////////////////////////////////////////////////////////////
+
+		// The assets an asset references directly, as the asset pipeline recorded them (AssetDependencies): a material's
+		// textures; the meshes, materials, textures, prefabs, models, audio clips and fonts the entities of a scene, prefab or
+		// model use (their components' asset properties and script fields); a mesh's default materials. The editor answers from
+		// its import records, games from their pack's dependency table. Empty for unknown assets and assets without any.
+		//
+		// When the read of a requested asset completes, the manager requests its direct dependencies at the same priority,
+		// behind direct requests (c_DependencyPrefetchScore), so that e.g. a material's textures load alongside the material
+		// instead of after it. Such prefetches respect the budgets: they are not requests, so they mark nothing as used (their
+		// arrivals make no room in the budgets and are the first to be evicted until something requests them), they do not
+		// chain (the dependencies of an asset that was only prefetched load once something requests it), and none start
+		// while a pool is over its budget. The streaming queue bounds them like any load (in-flight bytes and reads).
+		std::vector<AssetHandle> GetDependencies(AssetHandle handle) const;
+		// The asset and everything it depends on, transitively: the asset, then breadth first, each once. Unknown handles are
+		// left out (an empty list for an unknown asset).
+		std::vector<AssetHandle> GetDependencyClosure(AssetHandle handle) const;
+		// The local bounds of a mesh as recorded when it was imported, known before the mesh loads (nullopt for other assets).
+		std::optional<AABB> GetBounds(AssetHandle handle) const;
+
+		// Loads an asset with everything it depends on (GetDependencyClosure): pins every member at `priority`, which
+		// requests the loads in breadth-first order. An invalid request for unknown assets.
+		AssetGroupRequest RequestLoadWithDependencies(AssetHandle handle, AssetPriority priority = AssetPriority::Normal);
+		// Whether the asset and everything it depends on are Ready.
+		bool IsLoadedWithDependencies(AssetHandle handle) const;
+
+		// Reads `size` bytes of an asset's stored form from `offset` without loading the asset (e.g. one level of a texture's
+		// mip chain): packs decode only the blocks the range covers. Thread-safe; blocks the calling thread (use an I/O job).
+		bool ReadStoredRange(AssetHandle handle, uint64_t offset, uint64_t size, std::vector<uint8_t>& outData, std::string* outError = nullptr);
+
+		// The queue score of dependency prefetches: below the default score of direct requests of the same priority.
+		static constexpr float c_DependencyPrefetchScore = -1.0f;
+	protected:
+		// Reads part of an asset's stored form; any thread. The default reads it all (ReadAssetData) and keeps the range.
+		virtual bool ReadAssetRange(const AssetMetadata& metadata, uint64_t offset, uint64_t size, std::vector<uint8_t>& outData, std::string* outError);
+		// Records what an asset depends on and its bounds (subclasses: from import records, from the pack's tables).
+		// Duplicates, the null handle and the asset itself are left out. Does nothing for unknown assets.
+		void SetAssetReferences(AssetHandle handle, std::vector<AssetHandle> dependencies, std::optional<AABB> bounds);
+	private:
+		// Requests the direct dependencies of an asset whose read completed (see GetDependencies). Any thread.
+		void PrefetchDependencies(AssetHandle handle, AssetPriority priority);
+		// The closure of GetDependencyClosure. Requires m_Mutex.
+		std::vector<AssetHandle> GetDependencyClosureLocked(AssetHandle handle) const;
 	protected:
 		// Reads the stored bytes of an asset. Called on I/O threads; must be thread-safe.
 		virtual bool ReadAssetData(const AssetMetadata& metadata, std::vector<uint8_t>& outData, std::string* outError) = 0;
@@ -293,6 +389,12 @@ namespace Strata
 			// its Usage holds memory of, with this key (whose Frame is LastRequestedFrame).
 			RecencyKey Recency;
 			bool InRecencyOrders = false;
+
+			// Recorded by the subclass (SetAssetReferences)
+			std::vector<AssetHandle> Dependencies;
+			std::optional<AABB> Bounds;
+			// Loading because an asset that depends on it was read, and requested by nobody since (see GetDependencies).
+			bool PrefetchOnly = false;
 		};
 
 		struct Completion
@@ -403,6 +505,7 @@ namespace Strata
 		uint64_t m_EvictionChecks = 0;
 		uint64_t m_Cancellations = 0;
 		uint64_t m_StagingReleases = 0;
+		uint64_t m_DependencyPrefetches = 0;
 		uint64_t m_FrameUploadedBytes = 0; // Since the last Update
 		float m_FrameFinalizeMs = 0.0f;
 		std::array<uint64_t, c_StatsWindowFrames> m_UploadedBytesHistory = {};

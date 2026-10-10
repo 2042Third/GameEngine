@@ -206,6 +206,22 @@ namespace Strata
 		std::string scriptError;
 		if (!ValidateScriptSettings(projectConfig.Scripts, &scriptError))
 			return fail(scriptError);
+
+		if (const nlohmann::json* exportSettings = JsonUtils::Find(*config, "Export"))
+		{
+			const nlohmann::json* alwaysInclude = exportSettings->is_object() ? JsonUtils::Find(*exportSettings, "AlwaysInclude") : nullptr;
+			if (!exportSettings->is_object() || (alwaysInclude && !alwaysInclude->is_array()))
+				return fail("\"Export\" must be an object whose \"AlwaysInclude\" is an array of asset paths");
+			if (alwaysInclude)
+			{
+				for (const nlohmann::json& entry : *alwaysInclude)
+				{
+					if (!entry.is_string() || !IsValidProjectSubdirectory(entry.get<std::string>()))
+						return fail("\"Export.AlwaysInclude\" must list asset paths relative to the asset directory");
+					projectConfig.Export.AlwaysInclude.push_back(entry.get<std::string>());
+				}
+			}
+		}
 		return project;
 	}
 
@@ -250,6 +266,15 @@ namespace Strata
 
 		if (!ValidateScriptSettings(m_Config.Scripts, outError))
 			return false;
+		for (const std::string& entry : m_Config.Export.AlwaysInclude)
+		{
+			if (!IsValidProjectSubdirectory(entry))
+			{
+				if (outError)
+					*outError = fmt::format("'{}' in Export.AlwaysInclude is not a path relative to the asset directory", entry);
+				return false;
+			}
+		}
 
 		nlohmann::json document = nlohmann::json::object();
 		document["Strata"] = { { "Format", "Project" }, { "Version", c_FormatVersion } };
@@ -259,6 +284,8 @@ namespace Strata
 		config["StartScene"] = UUIDToJson(m_Config.StartScene);
 		// The module name is stored even when derived, so that renaming the project keeps the module's name.
 		config["Scripts"] = { { "SourceDirectory", m_Config.Scripts.SourceDirectory }, { "ModuleName", GetScriptModuleName() } };
+		if (!m_Config.Export.AlwaysInclude.empty())
+			config["Export"] = { { "AlwaysInclude", m_Config.Export.AlwaysInclude } };
 		document["Project"] = std::move(config);
 
 		if (!FileSystem::WriteText(m_ProjectFile, JsonUtils::Dump(document, 1, '\t') + "\n"))

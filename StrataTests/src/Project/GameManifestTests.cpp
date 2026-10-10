@@ -1,8 +1,16 @@
 #include <doctest/doctest.h>
 
+#include "Strata/Asset/AssetPackWriter.h"
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Core/JsonUtils.h"
 #include "Strata/Project/GameManifest.h"
+#include "Strata/Renderer/Material.h"
+#include "Strata/Runtime/GameRuntime.h"
+#include "Strata/Scene/Components.h"
+#include "Strata/Scene/SceneSerializer.h"
 #include "TestHelpers.h"
+
+#include <map>
 
 using namespace Strata;
 
@@ -108,5 +116,95 @@ TEST_SUITE("Project.GameManifest")
 		std::string error;
 		CHECK(GameManifest::Load(directory / "Game.stgame", &error).has_value());
 		CHECK_FALSE(GameManifest::Load(directory / "Missing.stgame", &error).has_value());
+	}
+
+	TEST_CASE("Game manifests list patch packs next to them, and version 2 manifests load without")
+	{
+		GameManifest manifest;
+		manifest.AssetPack = "Game.stpak";
+		manifest.StartScene = UUID(0x42);
+		manifest.PatchPacks = { "Patch1.stpak", "Patch2.stpak" };
+		std::string error;
+		std::optional<GameManifest> loaded = GameManifest::FromJson(manifest.ToJson(), &error);
+		REQUIRE_MESSAGE(loaded, error);
+		CHECK(loaded->PatchPacks == manifest.PatchPacks);
+
+		nlohmann::json version2 = manifest.ToJson();
+		version2["Strata"]["Version"] = 2;
+		version2["Game"].erase("PatchPacks");
+		loaded = GameManifest::FromJson(version2, &error);
+		REQUIRE_MESSAGE(loaded, error);
+		CHECK(loaded->PatchPacks.empty());
+
+		for (const nlohmann::json& patches : { nlohmann::json("Patch.stpak"), nlohmann::json::array({ "../Patch.stpak" }), nlohmann::json::array({ 3 }),
+			nlohmann::json::array({ "Sub/Patch.stpak" }), nlohmann::json::array({ "" }) })
+		{
+			INFO("patches: ", patches.dump());
+			nlohmann::json json = manifest.ToJson();
+			json["Game"]["PatchPacks"] = patches;
+			CHECK_FALSE(GameManifest::FromJson(json, &error).has_value());
+			CHECK(error.find("PatchPacks") != std::string::npos);
+		}
+	}
+
+	TEST_CASE("Games mount the patch packs their manifest lists over their pack")
+	{
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("GameManifestPatches");
+		const AssetHandle sceneHandle = UUID(0x9100);
+		const AssetHandle materialHandle = UUID(0x9101);
+		Scene scene("Patched");
+		scene.CreateEntity("Box").AddComponent<MeshRendererComponent>().Material = materialHandle;
+		const std::string sceneText = JsonUtils::Dump(SceneSerializer::Serialize(scene));
+		auto materialBytes = [](float roughness)
+		{
+			MaterialProperties properties;
+			properties.Roughness = roughness;
+			const std::string text = JsonUtils::Dump(Material::Create(properties)->Serialize());
+			return std::vector<uint8_t>(text.begin(), text.end());
+		};
+		auto writePack = [](const std::filesystem::path& path, const std::map<uint64_t, std::pair<AssetType, std::vector<uint8_t>>>& assets)
+		{
+			std::vector<AssetMetadata> metadata;
+			for (const auto& [handle, asset] : assets)
+			{
+				AssetMetadata entry;
+				entry.Handle = UUID(handle);
+				entry.Type = asset.first;
+				entry.Path = std::to_string(handle);
+				entry.Name = entry.Path;
+				metadata.push_back(entry);
+			}
+			std::string writeError;
+			REQUIRE_MESSAGE(AssetPackWriter::Write(path, metadata, [&assets](const AssetMetadata& asset, std::vector<uint8_t>& outData, std::string*)
+			{
+				outData = assets.at(static_cast<uint64_t>(asset.Handle)).second;
+				return true;
+			}, &writeError), writeError);
+		};
+		writePack(directory / "Game.stpak", { { 0x9100, { AssetType::Scene, std::vector<uint8_t>(sceneText.begin(), sceneText.end()) } },
+			{ 0x9101, { AssetType::Material, materialBytes(0.1f) } } });
+		writePack(directory / "Patch.stpak", { { 0x9101, { AssetType::Material, materialBytes(0.7f) } } });
+
+		GameManifest manifest;
+		manifest.Name = "Patched";
+		manifest.AssetPack = "Game.stpak";
+		manifest.StartScene = sceneHandle;
+		manifest.PatchPacks = { "Patch.stpak" };
+		REQUIRE(manifest.Save(directory / "Patched.stgame"));
+		std::string error;
+		{
+			Scope<GameRuntime> game = GameRuntime::Create(directory / "Patched.stgame", &error);
+			REQUIRE_MESSAGE(game, error);
+			CHECK(game->GetAssetManager()->GetPacks().size() == 2);
+			const Ref<Material> material = std::static_pointer_cast<Material>(game->GetAssetManager()->LoadAssetSync(materialHandle));
+			REQUIRE(material);
+			CHECK(material->GetProperties().Roughness == doctest::Approx(0.7f));
+		}
+
+		// A patch the manifest names must exist: the game would otherwise run with what it was meant to replace.
+		manifest.PatchPacks = { "Missing.stpak" };
+		REQUIRE(manifest.Save(directory / "Broken.stgame"));
+		CHECK_FALSE(GameRuntime::Create(directory / "Broken.stgame", &error));
+		CHECK(error.find("Missing.stpak") != std::string::npos);
 	}
 }

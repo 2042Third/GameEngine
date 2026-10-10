@@ -59,16 +59,16 @@ namespace Strata
 		while (done < destination.size())
 		{
 			const size_t chunk = std::min(destination.size() - done, c_MaxReadChunk);
-			const ssize_t read = pread(m_Descriptor, destination.data() + done, chunk, static_cast<off_t>(offset + done));
-			if (read < 0)
+			const ssize_t bytesRead = pread(m_Descriptor, destination.data() + done, chunk, static_cast<off_t>(offset + done));
+			if (bytesRead < 0)
 			{
 				if (errno == EINTR)
 					continue;
 				return false;
 			}
-			if (read == 0)
+			if (bytesRead == 0)
 				return false; // The file shrank below its size at opening
-			done += static_cast<size_t>(read);
+			done += static_cast<size_t>(bytesRead);
 		}
 		return true;
 	}

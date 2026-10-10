@@ -96,9 +96,11 @@ Applications built on `Application` (editor, runtime) get `main` from `Core/Entr
 and runs the frame loop; `Layer`/`LayerStack` hold the client's behavior; `Window` is implemented by
 `Platform/GLFW/GLFWWindow` (`SetIcon` takes RGBA images of several sizes; macOS and Wayland windows have no icon of
 their own and ignore it). Services: `Log` (spdlog; `LogBuffer` backs the editor console and `log.read`), `Assert`,
-`JobSystem`, `FileSystem` (UTF-8 paths), `FileWatcher`, `FileLock`, `Platform` (OS services, private directories,
+`JobSystem`, `FileSystem` (UTF-8 paths), `FileReader` (one open file read at explicit offsets by any number of threads:
+overlapped `ReadFile` on Windows, `pread` on POSIX), `FileWatcher`, `FileLock`, `Platform` (OS services, private directories,
 process memory with peaks: `GetProcessMemory`, process uptime: `GetProcessUptime`),
-`Process` (child processes), `DynamicLibrary`, `CrashGuard`, `UUID`, `Crypto` (SHA-256, peer authentication), `Base64`,
+`Process` (child processes), `DynamicLibrary`, `CrashGuard`, `UUID`, `Hash` (FNV-1a, and CRC-32C with the processor's CRC
+instructions where it has them), `Crypto` (SHA-256, peer authentication), `Base64`,
 `CommandLine`, `Timer`/`FramePacer`, `JsonUtils` (exception-free JSON reads), `SequenceLock` (lock-free hand-off to the
 audio thread) and `Profiling` (Tracy with `STRATA_ENABLE_TRACY`).
 
@@ -137,10 +139,12 @@ validation and change signals, `SceneSerializer` writes versioned JSON (keeping 
 (`EntityTemplate`, `Prefab`, `Model`, `SceneAsset`). See [Scene caches](#scene-caches) for how per-frame cost follows
 what changed.
 
-**Asset** (`Asset/`). `AssetManagerBase` (registry, asynchronous loading and residency), `AssetStreamingQueue` (the
-order and admission of loads), `AssetResidency` (memory pools, budgets, `AssetPin`, eviction), `AssetManager` (the
-process-wide active manager), `EditorAssetManager` (project files, `.meta` sidecars, imports, hot reload, pack
-building), `RuntimeAssetManager` (reads an `AssetPack`), `AssetImporter` with the built-in importers
+**Asset** (`Asset/`). `AssetManagerBase` (registry, asynchronous loading and residency, dependencies, bounds and group
+loads), `AssetStreamingQueue` (the order and admission of loads), `AssetResidency` (memory pools, budgets, `AssetPin`,
+eviction), `AssetManager` (the process-wide active manager), `AssetPack` (reads packs by byte range), `EditorAssetManager`
+(project files, `.meta` sidecars, imports, dependency records, hot reload, pack planning), `RuntimeAssetManager` (reads
+mounted `AssetPack`s), `AssetPackWriter` and `AssetDependencies` (tooling: writing packs, finding what documents
+reference), `AssetImporter` with the built-in importers
 (`AssetImporters.cpp`, `GltfImporter`, `TextureImporter`), `AssetLoaderRegistry` (the loaders, registered by the
 modules that own the types) and `BuiltinAssets` (fixed handles; the owning module provides each object through a
 factory). The asset types are Scene, Prefab, Model, Mesh, Material, Texture, AudioClip and Font (`AssetTypes.h`). See
@@ -181,10 +185,10 @@ with settings, and `AudioSystem` the "Audio" scene system (Play only). Details: 
 callbacks), `ScriptHostAPI` (the host function table), `ScriptValue` (ABI value conversions), `ScriptTypes`
 (class, field and fault descriptions) and `ScriptWatchdog`. See [Scripting](#scripting).
 
-**Project** (`Project/`). `Project` is a game project: the `.stproj` file, the asset directory, the script sources and
-the intermediate directory `.strata/` (`Cache/`, `Scripts/Build/`, `Scripts/Bin/`), plus the process-wide active
-project. `GameManifest` is the `.stgame` file of an exported game (name, asset pack, start scene, script module,
-window settings).
+**Project** (`Project/`). `Project` is a game project: the `.stproj` file (with the export settings,
+`Export.AlwaysInclude`), the asset directory, the script sources and the intermediate directory `.strata/` (`Cache/`,
+`Scripts/Build/`, `Scripts/Bin/`), plus the process-wide active project. `GameManifest` is the `.stgame` file of an exported game
+(name, asset pack and patch packs, start scene, script module, window settings).
 
 **Runtime** (`Runtime/`). `GameRuntime` runs an exported game without depending on windowing or rendering: it opens
 the pack, loads the script module, starts scenes and honors their requests. `GameRenderer` draws the running scene
@@ -228,7 +232,7 @@ layer and of the layers it lists, which are always lower ones:
 | Runtime | `Runtime/**` | Core, Input, App, Asset, Reflection, Scene, Renderer, Physics, Audio, Scripting, Project |
 | Network | `Network/**`, `Platform/*/*Socket.cpp` | Core |
 | ImGui | `ImGui/**` | Core, Input, App, Renderer |
-| AssetPipeline | `Asset/EditorAssetManager.*`, `AssetImporter.*`, `AssetImporters.cpp`, `GltfImporter.*`, `TextureImporter.*` | Core, Asset, Reflection, Scene, Renderer, Audio |
+| AssetPipeline | `Asset/EditorAssetManager.*`, `AssetImporter.*`, `AssetImporters.cpp`, `GltfImporter.*`, `TextureImporter.*`, `AssetPackWriter.*`, `AssetDependencies.*` | Core, Asset, Reflection, Scene, Renderer, Audio |
 | Engine | `Engine/**`, `Strata.h` | everything but AssetPipeline (shipped games link the composition root too; see below) |
 
 `Architecture.Layering` (`StrataTests/src/Architecture/LayeringTests.cpp`, in `StrataTests.Core`) reads every C, C++ and
@@ -501,8 +505,8 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
  AssetImporter (by extension) -- ReadImportDependency --> other files under Assets/
    | stored bytes; sub-assets with DeriveSubAssetHandle
    v
- .strata/Cache/<handle>.bin + <handle>.import  -- BuildAssetPack -->  <Game>.stpak
- (JSON assets and fonts: the source file itself)                         | RuntimeAssetManager
+ .strata/Cache/<handle>.bin + <handle>.import  -- PlanAssetPack + WriteAssetPack -->  <Game>.stpak (+ patch packs)
+ (JSON assets and fonts: the source file itself)                         | RuntimeAssetManager (mounted packs)
    |                                                                     |
    +-------------------------- ReadAssetData (I/O thread) ---------------+
                                      v
@@ -518,6 +522,15 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   reports changes; `Update` re-registers files and queues re-imports on the I/O pool, and applies finished imports by
   reloading loaded assets (`ReloadAsset`). The cache record (`<handle>.import`) remembers the source state, settings,
   importer version and dependencies, so a current import is reused.
+- **References and bounds** (`Asset/AssetDependencies.h`). What an asset references is recorded with its import:
+  importers add what their stored form does not show as a document (`ImportResult::References`; a glTF mesh's default
+  materials) and the local bounds of meshes (`Bounds`), and `AssetDependencies::Scan` reads the documents (scenes,
+  prefabs and models: every asset property of every registered component, found through `ComponentRegistry`, and every
+  script field of asset type; materials: their texture maps). Import records (version 2) keep both per asset and
+  sub-asset. Engine-native assets, which are never imported, get a record of their own (`"Native": true`, cached per
+  content like imports: size and time, else the content hash) written when they are scanned, saved or changed on disk.
+  The manager hands them to `AssetManagerBase::SetAssetReferences`; packs carry them as their dependency table and entry
+  bounds, so `GetDependencies` and `GetBounds` answer the same in the editor and in the game, before anything loads.
 - **Importers and stored forms** (`Asset/AssetImporters.cpp`; the loaders that read the stored form are registered by
   the module that owns each type, one `Deserialize` per type, `Font::Create` for fonts):
 
@@ -545,9 +558,29 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   list (`GetContentVersion`, `GetContentChanges`) let caches revalidate only what changed.
 - **Built-in assets** (`Asset/BuiltinAssets.h`) are memory assets with handles 1 to 255, registered by every
   `AssetManagerBase`. Without a project the editor keeps a manager with only these active.
-- **Packs** (`Asset/AssetPack.h`). `EditorAssetManager::BuildAssetPack` writes every project asset in its stored form
-  (it fails if an import failed): a header, the data blobs, then the entry table, written atomically.
-  `RuntimeAssetManager` registers the entries and reads blobs on the I/O pool; nothing is imported at runtime.
+- **Packs** (`Asset/AssetPack.h`, written by `Asset/AssetPackWriter.h`). Version 2 (version 1 packs still load, and the
+  writer can still write them): a 64-byte header with checksums, the entries' stored forms from 4 KiB boundaries, each
+  cut into 256 KiB blocks compressed with zstd (stored as they are when that saves less than 5%), then the tables:
+  entries (handle, type, parent, names, size, a 64-bit content hash, first block, dependency range, bounds of meshes),
+  shared strings, blocks (file offset, stored size, size, CRC-32C of the stored bytes, codec) and dependencies. `Open`
+  reads the header and the tables in two reads and validates all of them (sizes, ranges, overlapping or non-consecutive
+  blocks, checksums), so a corrupt file fails with an error. `ReadRange` reads and checks only the blocks a range covers,
+  through one `FileReader` per pack that every I/O thread shares: consecutive blocks merge into reads of up to 8 MiB,
+  and while one read's blocks are checked and decompressed on the workers (in parallel from four blocks on, one
+  decompression context per thread) the next read runs, so a large entry streams close to the speed of an uncompressed
+  one. A thread that waits for decoding helps run queued jobs, which may read packs too; only the outermost read of a
+  thread uses its reusable buffers. zstd is built with its BMI2 bit readers (MSVC: `/arch:AVX2`, which Jolt requires
+  already). The writer runs on any thread, compresses each batch of 64 blocks in parallel on the workers, reports
+  progress and stops when cancelled; zstd's compressor is linked only by it, so shipped games contain the decompressor
+  only.
+- **Pack layout** (`EditorAssetManager::PlanAssetPack`, then `WriteAssetPack`; `BuildAssetPack` does both, blocking). Packs
+  are ordered by first use: the start scene's dependency closure breadth first, then each other scene's closure (by
+  path), then the rest by path. With `Prune`, only the scenes' closures and what `AlwaysInclude` names (assets or folders,
+  the project's `Export.AlwaysInclude`) with their closures ship; the plan lists what it left out. A plan is a snapshot:
+  the export writes it on an I/O thread while the editor goes on.
+- **Mounts** (`RuntimeAssetManager::Mount`). A game mounts its pack, then the manifest's `PatchPacks` in order: an entry of
+  a later pack replaces the one with the same handle, and assets loaded from a replaced entry reload from the new one.
+  Nothing is imported at runtime.
 
 ## Streaming and residency
 
@@ -630,9 +663,22 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   memory of each command list without a limit: after `c_StagingReleaseFrames` (120) frames without uploads the manager
   drops its upload command list (submissions in flight keep it alive until the GPU is done) and creates a new one with
   the next upload.
+- **Dependency prefetch** (`AssetManagerBase::GetDependencies`). When the read of a requested asset completes, its direct
+  dependencies are queued at its priority with a lower score (`c_DependencyPrefetchScore`, behind direct requests), before
+  its read slot frees: a material's textures load alongside the material, a scene's meshes and materials alongside the
+  scene. Prefetches respect the budgets: they are not requests (no use is recorded, so their arrivals make no room and
+  are evicted first until something requests them), they do not chain (an asset that was only prefetched prefetches
+  nothing until it is requested), none start while a pool is over budget, and the queue bounds them like every load.
+  Materials request their textures themselves only from managers that know no dependencies (version 1 packs).
+- **Group loads** (`RequestLoadWithDependencies`, `AssetGroupRequest`). A loading screen pins an asset's dependency closure
+  (`GetDependencyClosure`, breadth first) at a priority: `Progress` (the share of the members' stored bytes that finished,
+  never decreasing), `IsComplete`, `HasFailed` and `Cancel` (releases the pins and abandons the loads that have not
+  finished: queued reads never start). `IsLoadedWithDependencies` tells whether a closure is Ready, and
+  `ReadStoredRange` reads part of an asset's stored form without loading it (packs decode only the blocks it covers).
 - **Statistics** (`GetStats`, `GetResidencyInfo`): resident bytes and budget per pool, queued loads per priority, loads
   and bytes in flight with their high-water mark, uploaded bytes and finalization milliseconds (last frame and maximum
-  of the last 120) with the staging budget, evictions and eviction checks, cancellations and staging releases; per asset
+  of the last 120) with the staging budget, evictions and eviction checks, cancellations, staging releases and dependency
+  prefetches; per asset
   its state, memory, latest request and pins.
   The editor reports them through `asset.stats` and the `assets` section of `editor.status`.
 - **Measured** by the perf test `PerfGPU.Streaming` (`StrataTests/src/Perf/StreamingPerfTests.cpp`): it writes the
@@ -830,7 +876,8 @@ executable (`GameManifest::FindForExecutable`). It logs to `<user data>/<Game>/L
 the window and the renderer and paces at 60 frames per second; `--windowed` overrides a fullscreen manifest, and
 `--frames N` with `--screenshot out.png` saves the last frame, and `--asset-budget-mb <n>` sets the GPU texture budget
 of the game's assets (the other budgets keep their defaults). `GameRuntime::Create` loads the manifest, makes a
-`RuntimeAssetManager` on the pack active (with `GameRuntimeOptions::AssetBudgets` when given), loads the script module
+`RuntimeAssetManager` on the pack active (with `GameRuntimeOptions::AssetBudgets` when given; the manifest's optional
+`PatchPacks` are mounted over it in order, and a missing one stops the game), loads the script module
 into its own `ScriptEngine` without hot reload and makes it active, and starts the start scene in Play mode.
 Each frame it finalizes loads, updates the scene and honors requests: a quit ends the process with the game's exit
 code, a scene load replaces the scene synchronously from the pack and schedules the release of what only the previous

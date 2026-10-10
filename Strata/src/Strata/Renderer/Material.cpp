@@ -119,7 +119,9 @@ namespace Strata
 
 	AssetFinalizeResult Material::FinalizeOnMainThread(const AssetFinalizeContext& context)
 	{
-		if (context.Manager)
+		// Managers that know what the material depends on load its textures alongside it when something requests it
+		// (AssetManagerBase::GetDependencies); without that knowledge (version 1 packs) the material requests them itself.
+		if (context.Manager && context.Manager->GetDependencies(Handle).empty())
 		{
 			for (AssetHandle texture : GetTextureHandles())
 				context.Manager->RequestLoad(texture, AssetPriority::Normal);
