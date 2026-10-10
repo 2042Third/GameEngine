@@ -49,7 +49,8 @@ namespace Strata::Engine
 		BuiltinAssets::BeginRegistration();
 		SceneSystemRegistry::BeginRegistration();
 
-		// Lower layers first. Scripting registers before Physics and Physics before Audio: that is their update order.
+		// Lower layers first. A scene system can only name registered systems in its update order: Physics runs after
+		// Scripting and Audio after Physics, so Scripting registers before Physics and Physics before Audio.
 		RegisterSceneModule();
 		RegisterRendererModule();
 		RegisterScriptingModule();

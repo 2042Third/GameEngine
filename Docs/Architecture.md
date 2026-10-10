@@ -266,15 +266,26 @@ audio, the renderer, the device and the window go.
 
 ## Scene runtime lifecycle
 
-A `Scene` that plays owns scene systems (`Scene/SceneSystem.h`), created from `SceneSystemRegistry` in registration
-order. The built-ins (registered by their modules, see [Composition root and registries](#composition-root-and-registries))
+A `Scene` that plays owns scene systems (`Scene/SceneSystem.h`), created from `SceneSystemRegistry` in update order.
+The built-ins (registered by their modules, see [Composition root and registries](#composition-root-and-registries))
 are, in update order:
 
-| System | Class | Modes | Role |
-| --- | --- | --- | --- |
-| Scripting | `ScriptSystem` | Play | Script instances of the active `ScriptEngine` (null engine: no scripts). |
-| Physics | `PhysicsSystem` | Play, Simulate | Jolt world; steps in `OnFixedUpdate`, then dispatches contacts. |
-| Audio | `AudioSystem` | Play | Sources and listener, in `OnLateUpdate` after scripts and physics. |
+| System | Class | Modes | Order | Role |
+| --- | --- | --- | --- | --- |
+| Scripting | `ScriptSystem` | Play | | Script instances of the active `ScriptEngine` (null engine: no scripts). |
+| Physics | `PhysicsSystem` | Play, Simulate | After Scripting | Jolt world; steps in `OnFixedUpdate`, then dispatches contacts. |
+| Audio | `AudioSystem` | Play | After Physics | Sources and listener, in `OnLateUpdate` after scripts and physics. |
+
+- **Update order.** A `SceneSystemDescriptor` names the systems it runs `After` and `Before`. The registry keeps a
+  stable topological order of these constraints, in which registration order decides between systems that are not
+  constrained against each other, and recomputes it on every `Register` and `Unregister` (`Scene/SceneSystem.cpp`).
+  A constraint that names an unregistered system or the system itself, or that closes a cycle, makes `Register` return
+  false with an error naming the systems (e.g. `TestA -> TestB -> TestA`) and leaves the registry unchanged; so does
+  unregistering a system others name. Changes are refused while any scene runs (`Scene::GetRunningSceneCount`): the
+  running scenes created their systems from the registry.
+- **Lookup.** `MakeSceneSystemDescriptor<T>` records the class (`SceneSystemDescriptor::Type`); `OnRuntimeStart` maps
+  it to the created system, so `Scene::GetSystem<T>` is a hash lookup of the exact class (null for a class that is not
+  registered, not created in the current mode, or a base class).
 
 ```text
 OnRuntimeStart(mode)   reset time, pause, steps and requests; create the systems the mode runs;

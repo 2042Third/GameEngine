@@ -251,8 +251,10 @@ The threading model, frame loop and pipelines these rules protect are described 
   only `Engine::RegisterBuiltinModules` (`Engine/BuiltinModules.cpp`, the composition root) calls them, once per
   process, before anything reads a registry (the `Application` constructor; `StrataTests`' `main`). A new module adds
   its function there, in dependency order. Components can only be registered while it runs (the registry freezes at
-  its end): games and tests pass theirs in `ModuleRegistrationOptions::Extra`. Details: Docs/Architecture.md,
-  "Composition root and registries".
+  its end): games and tests pass theirs in `ModuleRegistrationOptions::Extra`. Scene systems declare their update
+  order (`SceneSystemDescriptor::After`/`Before`) instead of relying on registration order, and are made with
+  `MakeSceneSystemDescriptor<T>` so that `Scene::GetSystem<T>` finds them. Details: Docs/Architecture.md,
+  "Composition root and registries" and "Scene runtime lifecycle".
 
 ## Asset pipeline
 

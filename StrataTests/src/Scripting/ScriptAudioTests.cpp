@@ -58,12 +58,12 @@ namespace
 			REQUIRE_FALSE(descriptors.empty());
 			REQUIRE(descriptors.back().Name == "Audio");
 			m_Descriptor = descriptors.back();
-			SceneSystemRegistry::Unregister("Audio");
+			REQUIRE(SceneSystemRegistry::Unregister("Audio"));
 		}
 
 		~ScopedWithoutAudioSystem()
 		{
-			SceneSystemRegistry::Register(m_Descriptor);
+			CHECK(SceneSystemRegistry::Register(m_Descriptor));
 		}
 
 		ScopedWithoutAudioSystem(const ScopedWithoutAudioSystem&) = delete;

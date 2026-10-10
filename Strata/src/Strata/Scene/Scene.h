@@ -129,16 +129,17 @@ namespace Strata
 		float GetTimeScale() const { return m_TimeScale; }
 		void SetTimeScale(float timeScale) { m_TimeScale = std::max(0.0f, timeScale); }
 
+		// The running system of class T (registered with MakeSceneSystemDescriptor<T>), or null: not running, not created
+		// in this mode, or not registered. Looks the exact class up, not its base classes.
 		template<typename T>
 		T* GetSystem() const
 		{
-			for (const Scope<SceneSystem>& system : m_Systems)
-			{
-				if (T* typed = dynamic_cast<T*>(system.get()))
-					return typed;
-			}
-			return nullptr;
+			auto it = m_SystemsByType.find(entt::type_id<T>().hash());
+			return it != m_SystemsByType.end() ? static_cast<T*>(it->second) : nullptr;
 		}
+
+		// Scenes between OnRuntimeStart and OnRuntimeStop in this process (the scene system registry refuses changes then).
+		static uint32_t GetRunningSceneCount();
 
 		//////////////////////////////////////////////////////////////////////////
 		// Requests to the scene's owner
@@ -193,6 +194,7 @@ namespace Strata
 		SceneSettings m_Settings;
 
 		std::vector<Scope<SceneSystem>> m_Systems;
+		std::unordered_map<entt::id_type, SceneSystem*> m_SystemsByType; // SceneSystemDescriptor::Type -> running system
 		std::vector<UUID> m_PendingDestroy;
 		std::unordered_set<UUID> m_PendingDestroySet;
 		SceneRuntimeMode m_RuntimeMode = SceneRuntimeMode::Play;

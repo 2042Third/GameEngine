@@ -9,8 +9,11 @@ namespace Strata
 
 	void RegisterPhysicsModule()
 	{
-		// Physics also runs in the editor's simulate mode.
-		SceneSystemRegistry::Register({ "Physics", true, [](Scene& scene) -> Scope<SceneSystem> { return CreateScope<PhysicsSystem>(scene); } });
+		// Physics simulates what the scripts moved this frame. It also runs in the editor's simulate mode.
+		SceneSystemDescriptor descriptor = MakeSceneSystemDescriptor<PhysicsSystem>("Physics", true, [](Scene& scene) { return CreateScope<PhysicsSystem>(scene); });
+		descriptor.After = { "Scripting" };
+		const bool registered = SceneSystemRegistry::Register(std::move(descriptor));
+		ST_CORE_VERIFY(registered, "The physics module could not register its scene system");
 	}
 
 }

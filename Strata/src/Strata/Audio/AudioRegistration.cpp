@@ -19,7 +19,10 @@ namespace Strata
 
 		// Audio updates last (in OnLateUpdate), so sources and the listener follow the transforms scripts and physics produced
 		// this frame. Like scripts, it does not run in simulate mode.
-		SceneSystemRegistry::Register({ "Audio", false, [](Scene& scene) -> Scope<SceneSystem> { return CreateScope<AudioSystem>(scene); } });
+		SceneSystemDescriptor descriptor = MakeSceneSystemDescriptor<AudioSystem>("Audio", false, [](Scene& scene) { return CreateScope<AudioSystem>(scene); });
+		descriptor.After = { "Physics" };
+		const bool registered = SceneSystemRegistry::Register(std::move(descriptor));
+		ST_CORE_VERIFY(registered, "The audio module could not register its scene system");
 	}
 
 }

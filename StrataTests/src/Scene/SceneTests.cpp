@@ -90,12 +90,12 @@ namespace
 		ScopedCountingSystem(bool simulate = false)
 		{
 			CountingSystem::Reset();
-			SceneSystemRegistry::Register({ "TestCounting", simulate, [](Scene&) { return CreateScope<CountingSystem>(); } });
+			REQUIRE(SceneSystemRegistry::Register({ "TestCounting", simulate, [](Scene&) { return CreateScope<CountingSystem>(); } }));
 		}
 
 		~ScopedCountingSystem()
 		{
-			SceneSystemRegistry::Unregister("TestCounting");
+			CHECK(SceneSystemRegistry::Unregister("TestCounting"));
 		}
 	};
 }
@@ -507,7 +507,7 @@ TEST_SUITE("Scene")
 
 	TEST_CASE("Destruction during an update is deferred to the end of the frame")
 	{
-		SceneSystemRegistry::Register({ "TestDestroying", false, [](Scene& scene) { return CreateScope<DestroyingSystem>(scene); } });
+		REQUIRE(SceneSystemRegistry::Register({ "TestDestroying", false, [](Scene& scene) { return CreateScope<DestroyingSystem>(scene); } }));
 		{
 			Scene scene;
 			Entity doomed = scene.CreateEntity("Doomed");
@@ -517,14 +517,14 @@ TEST_SUITE("Scene")
 			CHECK_FALSE(doomed.IsValid());
 			scene.OnRuntimeStop();
 		}
-		SceneSystemRegistry::Unregister("TestDestroying");
+		CHECK(SceneSystemRegistry::Unregister("TestDestroying"));
 	}
 
 	TEST_CASE("Systems see entities before they are destroyed")
 	{
 		DestroyWatcherSystem::Announced.clear();
 		DestroyWatcherSystem::AllValid = true;
-		SceneSystemRegistry::Register({ "TestDestroyWatcher", false, [](Scene& scene) { return CreateScope<DestroyWatcherSystem>(scene); } });
+		REQUIRE(SceneSystemRegistry::Register({ "TestDestroyWatcher", false, [](Scene& scene) { return CreateScope<DestroyWatcherSystem>(scene); } }));
 		{
 			Scene scene;
 			Entity root = scene.CreateEntity("Root");
@@ -551,7 +551,7 @@ TEST_SUITE("Scene")
 
 		// Destruction requested during an update (by DestroyingSystem) is announced at the end of the frame.
 		DestroyWatcherSystem::Announced.clear();
-		SceneSystemRegistry::Register({ "TestDestroying", false, [](Scene& scene) { return CreateScope<DestroyingSystem>(scene); } });
+		REQUIRE(SceneSystemRegistry::Register({ "TestDestroying", false, [](Scene& scene) { return CreateScope<DestroyingSystem>(scene); } }));
 		{
 			Scene scene;
 			Entity doomed = scene.CreateEntity("Doomed");
@@ -562,8 +562,8 @@ TEST_SUITE("Scene")
 			CHECK(DestroyWatcherSystem::Announced == std::vector<std::string> { "Doomed" });
 			scene.OnRuntimeStop();
 		}
-		SceneSystemRegistry::Unregister("TestDestroying");
-		SceneSystemRegistry::Unregister("TestDestroyWatcher");
+		CHECK(SceneSystemRegistry::Unregister("TestDestroying"));
+		CHECK(SceneSystemRegistry::Unregister("TestDestroyWatcher"));
 	}
 
 	TEST_CASE("Primary camera lookup")

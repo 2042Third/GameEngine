@@ -12,6 +12,8 @@ namespace Strata
 	// Root count above which world transform propagation runs on the job system.
 	static constexpr size_t c_ParallelTransformRootThreshold = 256;
 
+	static std::atomic<uint32_t> s_RunningSceneCount = 0;
+
 	Scene::Scene(std::string name)
 		: m_Name(std::move(name))
 	{
@@ -481,6 +483,7 @@ namespace Strata
 			return;
 
 		m_IsRunning = true;
+		s_RunningSceneCount++;
 		m_RuntimeMode = mode;
 		m_IsPaused = false;
 		m_StepFrames = 0;
@@ -491,10 +494,14 @@ namespace Strata
 		m_SceneLoadRequest.reset();
 		UpdateWorldTransforms();
 
+		// In update order. Systems may look up the ones created before them (GetSystem) while they are constructed.
 		for (const SceneSystemDescriptor& descriptor : SceneSystemRegistry::GetAll())
 		{
-			if (mode == SceneRuntimeMode::Play || descriptor.RunsInSimulateMode)
-				m_Systems.push_back(descriptor.Create(*this));
+			if (mode != SceneRuntimeMode::Play && !descriptor.RunsInSimulateMode)
+				continue;
+			Scope<SceneSystem>& system = m_Systems.emplace_back(descriptor.Create(*this));
+			if (descriptor.Type != 0)
+				m_SystemsByType[descriptor.Type] = system.get();
 		}
 
 		// Systems may create or destroy entities while starting (e.g. scripts in OnCreate).
@@ -518,11 +525,21 @@ namespace Strata
 			(*it)->OnRuntimeStop();
 		m_IsUpdating = false;
 
+		// A system being destroyed still finds the systems created before it.
 		while (!m_Systems.empty())
+		{
+			std::erase_if(m_SystemsByType, [&](const auto& entry) { return entry.second == m_Systems.back().get(); });
 			m_Systems.pop_back();
+		}
 
 		FlushPendingDestroys();
 		m_IsRunning = false;
+		s_RunningSceneCount--;
+	}
+
+	uint32_t Scene::GetRunningSceneCount()
+	{
+		return s_RunningSceneCount.load();
 	}
 
 	void Scene::OnUpdateRuntime(Timestep timestep)
