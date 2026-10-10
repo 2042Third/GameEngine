@@ -3,9 +3,13 @@
 
 #include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Scene/Scene.h"
+#include "Strata/Scene/SceneHierarchy.h"
 #include "Strata/Scripting/ScriptEngine.h"
 #include "Strata/Scripting/ScriptHostAPI.h"
 #include "Strata/Scripting/ScriptModule.h"
+
+#include <cmath>
+#include <iterator>
 
 namespace Strata
 {
@@ -622,6 +626,8 @@ namespace Strata
 			return;
 		instance.Removed = true;
 		m_InstanceSetVersion++;
+		// Gone once this returns; it stays in the update order (skipped) until the order is compacted.
+		m_RemovalsSinceCompaction++;
 		if (!instance.Handle)
 			return;
 
@@ -662,7 +668,10 @@ namespace Strata
 	std::vector<Ref<ScriptSystem::Instance>> ScriptSystem::CollectInstances()
 	{
 		RebuildUpdateOrder();
-		std::vector<Ref<Instance>> instances = m_UpdateOrder;
+		// Destroyed instances that are still listed are left out.
+		std::vector<Ref<Instance>> instances;
+		instances.reserve(m_UpdateOrder.size());
+		std::copy_if(m_UpdateOrder.begin(), m_UpdateOrder.end(), std::back_inserter(instances), [](const Ref<Instance>& instance) { return !IsDestroyed(instance); });
 
 		std::vector<UUID> orphaned;
 		for (const auto& [entityID, entityInstances] : m_Instances)
@@ -717,14 +726,235 @@ namespace Strata
 			m_Instances.erase(it);
 	}
 
+	template<typename Element>
+	void ScriptSystem::MergeIntoOrder(std::vector<Element>& list, size_t count, const std::vector<entt::entity>& entities, std::vector<std::vector<Element>>& groups) const
+	{
+		std::vector<size_t> positions(entities.size());
+		size_t total = count;
+		size_t from = 0;
+		for (size_t index = 0; index < entities.size(); index++)
+		{
+			from = FindOrderPosition(list, from, count, Entity(entities[index], &m_Scene));
+			positions[index] = from;
+			total += groups[index].size();
+		}
+
+		// From the back, within the list (entries after `count` are dropped).
+		list.resize(std::max(total, list.size()));
+		size_t write = total;
+		size_t read = count;
+		for (size_t index = entities.size(); index-- > 0;)
+		{
+			while (read > positions[index])
+				list[--write] = std::move(list[--read]);
+			for (auto element = groups[index].rbegin(); element != groups[index].rend(); ++element)
+				list[--write] = std::move(*element);
+		}
+		list.resize(total);
+	}
+
+	template<typename Element>
+	size_t ScriptSystem::FindOrderPosition(const std::vector<Element>& list, size_t first, size_t last, Entity entity) const
+	{
+		const entt::registry& registry = m_Scene.GetRegistry();
+		while (first < last)
+		{
+			const size_t middle = first + (last - first) / 2;
+			// A destroyed instance (or one whose entity went without notice) cannot be compared: the probe moves on to the
+			// next entry that can. Positions among such entries are all equally right.
+			size_t probe = middle;
+			while (probe < last && ((list[probe]->Removed && !list[probe]->Handle) || !registry.valid(list[probe]->EntityHandle)))
+				probe++;
+			if (probe == last)
+				last = middle;
+			else if (m_Scene.CompareHierarchyOrder(Entity(list[probe]->EntityHandle, &m_Scene), entity) < 0)
+				first = probe + 1;
+			else
+				last = middle;
+		}
+		return first;
+	}
+
 	void ScriptSystem::RebuildUpdateOrder()
 	{
 		const uint64_t hierarchyVersion = m_Scene.GetHierarchyVersion();
 		if (m_OrderInstanceSetVersion == m_InstanceSetVersion && m_OrderHierarchyVersion == hierarchyVersion)
 			return;
+		ST_CORE_ASSERT(!m_Dispatching, "The script update order changed while callbacks were dispatched from it");
+		if (m_OrderNeedsFullBuild)
+		{
+			BuildUpdateOrderFromScene();
+			return;
+		}
 
-		ClearUpdateOrder();
+		// The entities whose instances are placed (again): scripted entities of the subtrees that moved since the order was
+		// computed, and entities with new instances. Every other pair of entities keeps its relative order, since creating
+		// and destroying entities never reorders the others (see Scene::GetHierarchyMoves).
+		const entt::registry& registry = m_Scene.GetRegistry();
+		std::vector<entt::entity> placing;
+		std::unordered_set<entt::entity> placingSet;
+		const auto place = [&](entt::entity handle)
+		{
+			if (placingSet.insert(handle).second)
+				placing.push_back(handle);
+		};
+		if (m_PlacedCount > 0 && m_OrderHierarchyVersion != hierarchyVersion)
+		{
+			std::vector<entt::entity> moved;
+			if (!m_Scene.GetHierarchyMoves(m_OrderHierarchyVersion, moved))
+			{
+				BuildUpdateOrderFromScene();
+				return;
+			}
+			// Each entity is examined once, also when moved subtrees nest or an entity moved several times.
+			std::unordered_set<entt::entity> visited;
+			std::vector<entt::entity> stack;
+			for (const entt::entity root : moved)
+			{
+				if (!registry.valid(root) || !visited.insert(root).second)
+					continue;
+				stack.push_back(root);
+				while (!stack.empty())
+				{
+					const entt::entity current = stack.back();
+					stack.pop_back();
+					if (m_Instances.contains(registry.get<IDComponent>(current).ID))
+						place(current);
+					for (entt::entity child = registry.get<HierarchyComponent>(current).FirstChild; child != entt::null; child = registry.get<HierarchyComponent>(child).NextSibling)
+					{
+						if (visited.insert(child).second)
+							stack.push_back(child);
+					}
+				}
+			}
+		}
+		for (size_t index = m_PlacedCount; index < m_UpdateOrder.size(); index++)
+		{
+			const Instance& instance = *m_UpdateOrder[index];
+			if (IsListed(instance))
+				place(instance.EntityHandle);
+		}
+
+		// Destroyed instances stay listed (the dispatch skips them) until they could make up an eighth of the order:
+		// dropping them takes a pass over the whole order, so a few destructions per frame cost nothing here.
+		const bool compact = m_RemovalsSinceCompaction > m_PlacedCount / 8;
+		if (placing.empty() && !compact && m_PlacedCount == m_UpdateOrder.size())
+		{
+			// Only entities without scripts were created, destroyed or moved, or a few instances were destroyed.
+			m_OrderInstanceSetVersion = m_InstanceSetVersion;
+			m_OrderHierarchyVersion = hierarchyVersion;
+			return;
+		}
+
+		// Placing an entity takes a few comparisons of hierarchy positions (sorting the placed entities, then a binary search
+		// among the listed ones), each costing about as much as a step of the walk over the scene's whole hierarchy: many
+		// placements in a small scene take the walk instead.
+		const double placements = static_cast<double>(placing.size());
+		const double comparisons = placements * (std::log2(placements + 1.0) + std::log2(static_cast<double>(m_PlacedCount) + 1.0));
+		if (comparisons > static_cast<double>(m_Scene.GetEntityCount()))
+		{
+			BuildUpdateOrderFromScene();
+			return;
+		}
+
 		m_UpdateOrderRebuildCount++;
+		std::sort(placing.begin(), placing.end(), [this](entt::entity a, entt::entity b)
+		{
+			return m_Scene.CompareHierarchyOrder(Entity(a, &m_Scene), Entity(b, &m_Scene)) < 0;
+		});
+		// Each placed entity's instances form a group in entry order. Placed instances among them (their entity moved, or got
+		// another script) must leave their old places, which takes the pass over the whole order too.
+		std::vector<std::vector<Ref<Instance>>> groups(placing.size());
+		bool replacing = false;
+		for (size_t index = 0; index < placing.size(); index++)
+		{
+			const UUID entityID = registry.get<IDComponent>(placing[index]).ID;
+			RemoveDestroyedInstances(entityID);
+			auto it = m_Instances.find(entityID);
+			if (it == m_Instances.end())
+				continue;
+			for (const Ref<Instance>& instance : it->second)
+			{
+				replacing = replacing || instance->Placed;
+				instance->EntityHandle = placing[index];
+				instance->Placing = true;
+				groups[index].push_back(instance);
+			}
+		}
+
+		if (compact || replacing)
+		{
+			// The placed instances that stay keep their order, compacted in place (the unplaced ones are all in groups, or
+			// gone). Instances of destroyed entities were destroyed with them; the handle check keeps an instance whose
+			// entity went without notice out of the comparisons.
+			size_t kept = 0;
+			for (size_t index = 0; index < m_PlacedCount; index++)
+			{
+				Ref<Instance>& instance = m_UpdateOrder[index];
+				if (instance->Placing || IsDestroyed(instance) || !registry.valid(instance->EntityHandle))
+					continue;
+				if (kept != index)
+					m_UpdateOrder[kept] = std::move(instance);
+				kept++;
+			}
+			m_RemovalsSinceCompaction = 0;
+			for (const std::vector<Ref<Instance>>& group : groups)
+			{
+				for (const Ref<Instance>& instance : group)
+				{
+					instance->Placing = false;
+					instance->Placed = true;
+				}
+			}
+			MergeIntoOrder(m_UpdateOrder, kept, placing, groups);
+			RebuildDispatchLists();
+		}
+		else
+		{
+			// Only new instances: each list drops the tail they were appended to and takes them in at their places, without
+			// looking at the other instances.
+			const auto dropTail = [](std::vector<Instance*>& list)
+			{
+				while (!list.empty() && !list.back()->Placed)
+					list.pop_back();
+			};
+			dropTail(m_UpdateDispatch);
+			dropTail(m_FixedUpdateDispatch);
+			dropTail(m_LateUpdateDispatch);
+			for (const ScriptCallback callback : { ScriptCallback::OnUpdate, ScriptCallback::OnFixedUpdate, ScriptCallback::OnLateUpdate })
+			{
+				std::vector<std::vector<Instance*>> dispatchGroups(placing.size());
+				for (size_t index = 0; index < placing.size(); index++)
+				{
+					for (const Ref<Instance>& instance : groups[index])
+					{
+						if (instance->Class && instance->Class->Implements(callback))
+							dispatchGroups[index].push_back(instance.get());
+					}
+				}
+				std::vector<Instance*>& list = GetDispatchList(callback);
+				MergeIntoOrder(list, list.size(), placing, dispatchGroups);
+			}
+			for (const std::vector<Ref<Instance>>& group : groups)
+			{
+				for (const Ref<Instance>& instance : group)
+				{
+					instance->Placing = false;
+					instance->Placed = true;
+				}
+			}
+			MergeIntoOrder(m_UpdateOrder, m_PlacedCount, placing, groups);
+		}
+		m_PlacedCount = m_UpdateOrder.size();
+		m_OrderInstanceSetVersion = m_InstanceSetVersion;
+		m_OrderHierarchyVersion = hierarchyVersion;
+	}
+
+	void ScriptSystem::BuildUpdateOrderFromScene()
+	{
+		m_UpdateOrderRebuildCount++;
+		m_FullUpdateOrderBuildCount++;
+		m_UpdateOrder.clear();
 		for (auto it = m_Instances.begin(); it != m_Instances.end();)
 		{
 			std::vector<Ref<Instance>>& instances = it->second;
@@ -742,35 +972,70 @@ namespace Strata
 				for (const Ref<Instance>& instance : it->second)
 				{
 					instance->EntityHandle = entity.GetHandle();
-					AppendToUpdateOrder(instance);
+					instance->Placed = true;
+					m_UpdateOrder.push_back(instance);
 				}
 			}
 		}
+		m_PlacedCount = m_UpdateOrder.size();
+		m_RemovalsSinceCompaction = 0;
+		m_OrderNeedsFullBuild = false;
+		RebuildDispatchLists();
 		m_OrderInstanceSetVersion = m_InstanceSetVersion;
-		m_OrderHierarchyVersion = hierarchyVersion;
+		m_OrderHierarchyVersion = m_Scene.GetHierarchyVersion();
+	}
+
+	bool ScriptSystem::IsListed(const Instance& instance) const
+	{
+		if (instance.Removed && !instance.Handle)
+			return false;
+		const entt::registry& registry = m_Scene.GetRegistry();
+		if (!registry.valid(instance.EntityHandle))
+			return false;
+		const IDComponent* id = registry.try_get<IDComponent>(instance.EntityHandle);
+		return id && id->ID == instance.Entity;
 	}
 
 	void ScriptSystem::ClearUpdateOrder()
 	{
 		ST_CORE_ASSERT(!m_Dispatching, "The script update order changed while callbacks were dispatched from it");
 		m_UpdateOrder.clear();
+		m_PlacedCount = 0;
 		m_UpdateDispatch.clear();
 		m_FixedUpdateDispatch.clear();
 		m_LateUpdateDispatch.clear();
+		m_RemovalsSinceCompaction = 0;
+		// Instances that stay (a module reload recreates them in place, without appending them) are found again by walking
+		// the scene.
+		m_OrderNeedsFullBuild = !m_Instances.empty();
 		m_InstanceSetVersion++;
 	}
 
 	void ScriptSystem::AppendToUpdateOrder(const Ref<Instance>& instance)
 	{
 		m_UpdateOrder.push_back(instance);
-		if (!instance->Class)
+		AddToDispatchLists(*instance);
+	}
+
+	void ScriptSystem::AddToDispatchLists(Instance& instance)
+	{
+		if (!instance.Class)
 			return;
-		if (instance->Class->Implements(ScriptCallback::OnUpdate))
-			m_UpdateDispatch.push_back(instance.get());
-		if (instance->Class->Implements(ScriptCallback::OnFixedUpdate))
-			m_FixedUpdateDispatch.push_back(instance.get());
-		if (instance->Class->Implements(ScriptCallback::OnLateUpdate))
-			m_LateUpdateDispatch.push_back(instance.get());
+		if (instance.Class->Implements(ScriptCallback::OnUpdate))
+			m_UpdateDispatch.push_back(&instance);
+		if (instance.Class->Implements(ScriptCallback::OnFixedUpdate))
+			m_FixedUpdateDispatch.push_back(&instance);
+		if (instance.Class->Implements(ScriptCallback::OnLateUpdate))
+			m_LateUpdateDispatch.push_back(&instance);
+	}
+
+	void ScriptSystem::RebuildDispatchLists()
+	{
+		m_UpdateDispatch.clear();
+		m_FixedUpdateDispatch.clear();
+		m_LateUpdateDispatch.clear();
+		for (const Ref<Instance>& instance : m_UpdateOrder)
+			AddToDispatchLists(*instance);
 	}
 
 	std::vector<ScriptSystem::Instance*>& ScriptSystem::GetDispatchList(ScriptCallback callback)

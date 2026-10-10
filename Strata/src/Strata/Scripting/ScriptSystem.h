@@ -42,11 +42,16 @@ namespace Strata
 	// descendants before ancestors.
 	//
 	// Order: instances update in entity hierarchy order (parents first), then in entry order on each entity. The order is
-	// recomputed at the start of a frame when the hierarchy or the set of instances changed since it was last computed;
-	// instances created during a frame join the following phases of that frame. Each update callback is dispatched only to
-	// the instances whose class implements it. Inactive entities receive no update callbacks (OnCreate and OnDestroy run
-	// regardless); entities destroyed during a frame keep updating until it ends. An instance whose callback throws is
-	// disabled; a crash faults the whole module (see ScriptEngine).
+	// brought up to date at the start of a frame: instances created since are inserted at their entity's position (found by
+	// binary search), those of scripted entities that moved in the hierarchy (Scene::GetHierarchyMoves) are placed again,
+	// and destroyed ones stay listed but skipped until they could make up an eighth of the order. So spawning and destroying
+	// scripted entities costs a few hierarchy comparisons and a move of the lists' entries, moving scripted entities (and
+	// the occasional compaction) a pass over the instances, and frames that only create, destroy or move entities without
+	// scripts nothing; the whole scene's hierarchy is walked only after a module reload or for changes too many to place
+	// one by one. Instances created during a frame join the following phases of that frame. Each update callback is
+	// dispatched only to the instances whose class implements it. Inactive entities receive no update callbacks (OnCreate
+	// and OnDestroy run regardless); entities destroyed during a frame keep updating until it ends. An instance whose
+	// callback throws is disabled; a crash faults the whole module (see ScriptEngine).
 	//
 	// Contacts: the scene's PhysicsSystem reports contact changes after each step; the scripts on both entities (those owning
 	// the bodies) receive OnCollisionEnter/Exit, or OnTriggerEnter/Exit when either body is a trigger, with the other entity
@@ -87,9 +92,11 @@ namespace Strata
 		// How often an entity's instances were matched against its Script component since the system was created
 		// (diagnostics: the work grows with the number of changed entities, not with their square).
 		uint64_t GetReconcileCount() const { return m_ReconcileCount; }
-		// How often the update order was recomputed since the system was created (diagnostics: only frames after a change of
-		// the hierarchy or of the set of instances recompute it).
+		// How often the update order changed since the system was created (diagnostics: only frames after instances were
+		// created, after scripted entities moved in the hierarchy, or once destroyed instances add up, change it), and how
+		// many of those changes walked the whole scene's hierarchy instead of placing the instances concerned.
 		uint64_t GetUpdateOrderRebuildCount() const { return m_UpdateOrderRebuildCount; }
+		uint64_t GetFullUpdateOrderBuildCount() const { return m_FullUpdateOrderBuildCount; }
 
 		//////////////////////////////////////////////////////////////////////////
 		// Script host API support
@@ -124,6 +131,8 @@ namespace Strata
 			bool Disabled = false;                  // A callback threw; no further callbacks
 			bool Removed = false;                   // Destroyed or about to be; no further callbacks
 			bool Restore = false;                   // Reload: ReloadFields hold a snapshot to restore
+			bool Placed = false;                    // In the update order at its entity's position (not just appended)
+			bool Placing = false;                   // Scratch of RebuildUpdateOrder: being moved to its entity's new position
 			std::vector<ScriptFieldValue> ReloadFields;
 			// Entities whose contacts with this one began for this instance and have not ended yet: the Exit goes to exactly the
 			// instances that got the Enter (kept across hot reloads).
@@ -167,14 +176,31 @@ namespace Strata
 		// stay until they are destroyed: dropping them would leak them without OnDestroy.
 		void RemoveDestroyedInstances(UUID entity);
 		static bool IsDestroyed(const Ref<Instance>& instance) { return instance->Removed && !instance->Handle; }
-		// Recomputes the update order and the dispatch lists unless neither the hierarchy nor the set of instances changed.
+		// Brings the update order and the dispatch lists up to date unless neither the hierarchy nor the set of instances
+		// changed: places new instances and those of moved scripted entities, drops the destroyed ones once they are many.
 		void RebuildUpdateOrder();
+		// Computes the update order from scratch by walking the scene's hierarchy order.
+		void BuildUpdateOrderFromScene();
+		// Merges groups of instances (or their dispatch entries), one per entity of `entities` (in hierarchy order), into
+		// list[0, count), a list in hierarchy order: each goes before the first entry whose entity comes after its entity.
+		template<typename Element>
+		void MergeIntoOrder(std::vector<Element>& list, size_t count, const std::vector<entt::entity>& entities, std::vector<std::vector<Element>>& groups) const;
+		// The first position in list[first, last) whose entity comes after `entity`, skipping the destroyed instances that stay
+		// listed until the list is compacted.
+		template<typename Element>
+		size_t FindOrderPosition(const std::vector<Element>& list, size_t first, size_t last, Entity entity) const;
+		// The instance's object exists and its entity is the one it was created for (destroyed entities' handles are reused).
+		bool IsListed(const Instance& instance) const;
 		// Drops the update order (and the dispatch lists, which point into it); the next RebuildUpdateOrder recomputes it.
 		void ClearUpdateOrder();
-		// Appends an instance to the update order and to the dispatch lists of the callbacks its class implements.
+		// Appends an instance to the update order (unplaced until the next RebuildUpdateOrder) and to the dispatch lists of
+		// the callbacks its class implements.
 		void AppendToUpdateOrder(const Ref<Instance>& instance);
+		void AddToDispatchLists(Instance& instance);
+		void RebuildDispatchLists();
 		std::vector<Instance*>& GetDispatchList(ScriptCallback callback);
-		// Every instance in update order, followed by those of entities that left the scene without notice.
+		// Every instance in update order (but the destroyed ones), followed by those of entities that left the scene without
+		// notice.
 		std::vector<Ref<Instance>> CollectInstances();
 
 		void RunCallbacks(ScriptCallback callback, float argument);
@@ -191,7 +217,11 @@ namespace Strata
 		StrataScriptContext* m_Context = nullptr;
 
 		std::unordered_map<UUID, std::vector<Ref<Instance>>> m_Instances; // Per entity, in entry order
-		std::vector<Ref<Instance>> m_UpdateOrder; // Owns what the dispatch lists point to
+		// Owns what the dispatch lists point to. The first m_PlacedCount instances are in hierarchy order as of
+		// m_OrderHierarchyVersion; instances created since follow in creation order. Destroyed instances stay listed (the
+		// dispatch skips them) until compacting the lists pays off.
+		std::vector<Ref<Instance>> m_UpdateOrder;
+		size_t m_PlacedCount = 0;
 		// The instances of m_UpdateOrder (in that order) whose class implements OnUpdate, OnFixedUpdate or OnLateUpdate.
 		std::vector<Instance*> m_UpdateDispatch;
 		std::vector<Instance*> m_FixedUpdateDispatch;
@@ -201,7 +231,11 @@ namespace Strata
 		uint64_t m_InstanceSetVersion = 1;
 		uint64_t m_OrderInstanceSetVersion = 0;
 		uint64_t m_OrderHierarchyVersion = 0;
+		// Instances destroyed since the lists were last compacted: at most that many destroyed instances are listed.
+		size_t m_RemovalsSinceCompaction = 0;
+		bool m_OrderNeedsFullBuild = false; // Instances exist that the order does not list (a module reload recreated them)
 		uint64_t m_UpdateOrderRebuildCount = 0;
+		uint64_t m_FullUpdateOrderBuildCount = 0;
 		bool m_Dispatching = false; // While a dispatch list is walked, the order must not be rebuilt
 		std::vector<Ref<Instance>> m_PendingStart;   // Constructed, waiting for OnCreate (creation order)
 		std::vector<Ref<Instance>> m_PendingReloads; // Recreated by a reload, waiting for OnReload

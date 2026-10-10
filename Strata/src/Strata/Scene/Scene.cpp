@@ -549,6 +549,34 @@ namespace Strata
 		return m_HierarchyOrder;
 	}
 
+	void Scene::RecordHierarchyMoves(std::span<const entt::entity> entities)
+	{
+		if (entities.size() > c_MaxHierarchyMoves)
+		{
+			m_HierarchyMoves.clear();
+			m_HierarchyMovesFloor = m_HierarchyVersion;
+			return;
+		}
+		for (const entt::entity entity : entities)
+			m_HierarchyMoves.push_back(EntityChange { m_HierarchyVersion, entity });
+		while (m_HierarchyMoves.size() > c_MaxHierarchyMoves)
+		{
+			m_HierarchyMovesFloor = std::max(m_HierarchyMovesFloor, m_HierarchyMoves.front().Version);
+			m_HierarchyMoves.pop_front();
+		}
+	}
+
+	bool Scene::GetHierarchyMoves(uint64_t sinceVersion, std::vector<entt::entity>& outEntities) const
+	{
+		if (sinceVersion >= m_HierarchyVersion)
+			return true;
+		if (sinceVersion < m_HierarchyMovesFloor)
+			return false;
+		for (auto it = m_HierarchyMoves.rbegin(); it != m_HierarchyMoves.rend() && it->Version > sinceVersion; ++it)
+			outEntities.push_back(it->Entity);
+		return true;
+	}
+
 	////////////////////////////////////////////////////////////////////////////////
 	// Hierarchy links
 	////////////////////////////////////////////////////////////////////////////////
@@ -853,6 +881,7 @@ namespace Strata
 		Unlink(childHandle);
 		LinkLast(childHandle, parentHandle);
 		m_HierarchyVersion++;
+		RecordHierarchyMoves(std::span<const entt::entity>(&childHandle, 1));
 		RefreshSubtreeDepth(childHandle, true);
 		RefreshSubtreeActivity(childHandle, true);
 		// The new parent's world transform applies from now on.
@@ -877,6 +906,7 @@ namespace Strata
 		Unlink(handle);
 		LinkAt(handle, parent, index);
 		m_HierarchyVersion++;
+		RecordHierarchyMoves(std::span<const entt::entity>(&handle, 1));
 		return true;
 	}
 
@@ -975,6 +1005,11 @@ namespace Strata
 		}
 
 		m_HierarchyVersion++;
+		std::vector<entt::entity> moved;
+		moved.reserve(moves.size());
+		for (const Move& move : moves)
+			moved.push_back(move.Target);
+		RecordHierarchyMoves(moved);
 		for (const Move& move : moves)
 		{
 			RefreshSubtreeDepth(move.Target, true);
@@ -1101,7 +1136,7 @@ namespace Strata
 			return;
 		}
 		for (const entt::entity entity : entities)
-			m_TransformChanges.push_back(TransformChange { version, entity });
+			m_TransformChanges.push_back(EntityChange { version, entity });
 		while (m_TransformChanges.size() > c_MaxTransformChanges)
 		{
 			m_TransformChangesFloor = std::max(m_TransformChangesFloor, m_TransformChanges.front().Version);

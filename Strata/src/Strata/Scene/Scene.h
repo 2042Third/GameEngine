@@ -97,6 +97,14 @@ namespace Strata
 		// Changes whenever the hierarchy order may have changed (entities created or destroyed, reparented or reordered among
 		// their siblings), so that results depending on it can be cached.
 		uint64_t GetHierarchyVersion() const { return m_HierarchyVersion; }
+		// Appends the entities that moved in the hierarchy after hierarchy version `sinceVersion`: reparented (SetParent,
+		// PlaceEntities, CreateChildEntity) or moved among their siblings (SetSiblingIndex, PlaceEntities). Creating and
+		// destroying entities never changes the order of the other entities relative to each other, so a cache of the
+		// hierarchy order of some entities stays valid for every entity outside the subtrees of these. An entity may appear
+		// more than once; some may have been destroyed since. Returns false, appending nothing, if the scene no longer
+		// remembers that far back (it keeps the latest c_MaxHierarchyMoves moves): then any entity may have moved.
+		bool GetHierarchyMoves(uint64_t sinceVersion, std::vector<entt::entity>& outEntities) const;
+		static constexpr size_t c_MaxHierarchyMoves = 4096;
 		// Every entity in depth-first hierarchy order (parents before children). Computed once per hierarchy version.
 		std::vector<Entity> GetEntitiesInHierarchyOrder() const;
 
@@ -277,9 +285,10 @@ namespace Strata
 			std::unordered_map<uint64_t, std::vector<entt::entity>> Buckets;
 			std::vector<LookupSlot> Slots;
 		};
-		struct TransformChange
+		// An entry of the bounded change logs (world transforms, hierarchy moves).
+		struct EntityChange
 		{
-			uint64_t Version = 0; // Transforms version the change produced
+			uint64_t Version = 0; // Transforms or hierarchy version the change produced
 			entt::entity Entity = entt::null;
 		};
 
@@ -323,6 +332,8 @@ namespace Strata
 		void RefreshSubtreeActivity(entt::entity root, bool prune, bool rootLosesInactive = false);
 		// Depth, activity and stale transforms after linking a batch of new subtrees (deserialization).
 		void FinishLinking(std::span<const entt::entity> roots);
+		// Logs entities that moved in the hierarchy at the current hierarchy version (see GetHierarchyMoves).
+		void RecordHierarchyMoves(std::span<const entt::entity> entities);
 
 		// World transforms
 		void MarkTransformDirty(entt::entity handle);
@@ -350,6 +361,8 @@ namespace Strata
 		std::unordered_map<UUID, entt::entity> m_EntityMap;
 		std::vector<UUID> m_RootEntities;
 		uint64_t m_HierarchyVersion = 0;
+		std::deque<EntityChange> m_HierarchyMoves; // The latest moves, oldest first
+		uint64_t m_HierarchyMovesFloor = 0;        // Moves up to this version may be missing from m_HierarchyMoves
 		SceneSettings m_Settings;
 
 		// Hierarchy links of the root list (the roots' HierarchyComponents link the rest).
@@ -365,8 +378,8 @@ namespace Strata
 		uint64_t m_TransformsVersion = 0;
 		uint64_t m_TransformUpdateCount = 0;
 		uint64_t m_ParallelTransformUpdateCount = 0;
-		std::deque<TransformChange> m_TransformChanges; // The latest changes, oldest first
-		uint64_t m_TransformChangesFloor = 0;            // Changes up to this version may be missing from m_TransformChanges
+		std::deque<EntityChange> m_TransformChanges; // The latest changes, oldest first
+		uint64_t m_TransformChangesFloor = 0;        // Changes up to this version may be missing from m_TransformChanges
 		std::vector<entt::entity> m_ChangeScratch;
 		mutable std::vector<entt::entity> m_PathScratch;
 

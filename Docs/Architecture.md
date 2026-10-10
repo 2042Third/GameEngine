@@ -281,7 +281,8 @@ A frame of a scene where nothing changed costs (almost) nothing, however many en
 | Hierarchy links: parent, first and last child, siblings, depth, child count, sibling position (`HierarchyComponent`, `Scene/SceneHierarchy.h`) | every structural operation (`CreateEntity`, `SetParent`, `SetSiblingIndex`, `PlaceEntities`, `DestroyEntities`, `DuplicateEntity`, `Copy`, deserialization), next to `RelationshipComponent`, which stays the serialized form and the authoritative child order | subtree walks, `IsDescendantOf`, `CompareHierarchyOrder`, `Entity::GetParent`/`GetChildren`; sibling positions are recomputed per sibling list when asked after a change (`GetSiblingIndex`) |
 | World matrices (`WorldTransformComponent::Matrix`) | `UpdateWorldTransforms`: only the subtrees of entities marked dirty, each from its parent's cached matrix; returns at once when nothing is dirty | renderer, gizmos, bounds; `GetWorldTransform` returns the cache unless the entity or an ancestor is dirty (then it computes the same matrix top-down) |
 | Activity (`WorldTransformComponent::ActiveInHierarchy`) | at once, for the affected subtree, when `InactiveComponent` is added or removed or an entity is reparented | `IsActiveInHierarchy` (constant time), script dispatch, renderer |
-| Hierarchy order | `GetEntitiesInHierarchyOrder`, once per hierarchy version | serializer, script update order, physics start |
+| Hierarchy order | `GetEntitiesInHierarchyOrder`, once per hierarchy version | serializer, physics start, script update order after a module reload |
+| Hierarchy moves (a bounded log of the entities reparented or reordered, by hierarchy version) | `SetParent`, `SetSiblingIndex`, `PlaceEntities` | `GetHierarchyMoves`: the script update order places only the scripted entities that moved |
 | Name and tag indices (hash buckets with constant-time removal) | `NameComponent`/`TagComponent` signals, after the first lookup built them | `FindEntityByName`, `FindEntitiesByTag` (cost: the entities with that name or tag) |
 
 - **Dirty transforms.** `TransformComponent` `on_construct`/`on_update` (and `MarkTransformChanged`, which physics uses
@@ -295,6 +296,10 @@ A frame of a scene where nothing changed costs (almost) nothing, however many en
   `c_MaxTransformChanges` changes were dropped, like `AssetManagerBase::GetContentChanges`.
 - **Primary camera.** `GetPrimaryCameraEntity` examines only the entities with a `CameraComponent` (an EnTT view), reads
   `Primary` and the cached activity, and keeps the first in hierarchy order.
+- **Hierarchy moves.** Creating and destroying entities never changes the order of the other entities relative to
+  each other; only moves do. `GetHierarchyMoves(since)` lists the entities moved since a hierarchy version, or returns
+  false once more than `c_MaxHierarchyMoves` moves were dropped, so a cache of the hierarchy order of some entities
+  updates only the subtrees of those.
 - **Sibling positions.** `GetSiblingIndex` and `CompareHierarchyOrder` read cached positions; the first query after a
   change of a sibling list other than an append renumbers that list (linear in its length).
 - **Batches.** `DestroyEntities` tells the systems about every subtree, then compacts each sibling list once;
@@ -432,10 +437,14 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   the game's.
 - **Instances** (`ScriptSystem`). One instance per Script component entry, constructed with its field overrides;
   `OnCreate` runs at the next sync point (in `OnRuntimeStarted` for the initial set). Updates follow hierarchy order,
-  then entry order; the order is recomputed only when the scene's hierarchy version or the set of instances changed
-  (`GetUpdateOrderRebuildCount`), and each update callback walks a list of just the instances whose class implements
-  it, reading activity from the cached `ActiveInHierarchy` through each instance's entity handle. Contacts come from
-  the `PhysicsSystem` collision listener. Entity destruction requested by scripts
+  then entry order. At the start of a frame new instances are inserted at their entity's position (a binary search
+  comparing hierarchy positions), instances of scripted entities that moved (`Scene::GetHierarchyMoves`) are placed
+  again in a pass over the instances, and destroyed ones stay listed but skipped until they could make up an eighth of
+  the order, which is then compacted; frames that only create, destroy or move entities without scripts leave it alone,
+  and it walks the whole scene only after a module reload or for more changes than are worth placing one by one
+  (`GetUpdateOrderRebuildCount`, `GetFullUpdateOrderBuildCount`). Each update callback walks a list of just the
+  instances whose class implements it, reading activity from the cached `ActiveInHierarchy` through each instance's
+  entity handle. Contacts come from the `PhysicsSystem` collision listener. Entity destruction requested by scripts
   waits until the scene can do it safely (`ScriptSystem::DestroyEntity`), and removed instances are destroyed at the
   next sync point.
 - **Host functions** (`ScriptHostAPI.cpp`). Every function runs in `HostCall` (no exception unwinds into the module)

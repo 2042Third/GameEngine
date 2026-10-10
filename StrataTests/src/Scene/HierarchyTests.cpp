@@ -108,6 +108,24 @@ namespace
 		static inline size_t Announced = 0;
 	};
 
+	std::vector<entt::entity> GetMoves(const Scene& scene, uint64_t sinceVersion)
+	{
+		std::vector<entt::entity> moves;
+		REQUIRE(scene.GetHierarchyMoves(sinceVersion, moves));
+		std::sort(moves.begin(), moves.end());
+		moves.erase(std::unique(moves.begin(), moves.end()), moves.end());
+		return moves;
+	}
+
+	std::vector<entt::entity> Handles(std::vector<Entity> entities)
+	{
+		std::vector<entt::entity> handles;
+		for (const Entity entity : entities)
+			handles.push_back(entity.GetHandle());
+		std::sort(handles.begin(), handles.end());
+		return handles;
+	}
+
 }
 
 TEST_SUITE("Scene.Hierarchy")
@@ -435,6 +453,52 @@ TEST_SUITE("Scene.Hierarchy")
 		REQUIRE(scene.SetSiblingIndex(c, 0));
 		CHECK(scene.GetEntitiesInHierarchyOrder() == std::vector<Entity> { c, a, b });
 		CHECK(scene.GetHierarchyOrderBuildCount() == builds + 2);
+	}
+
+	TEST_CASE("Moves in the hierarchy are reported since a version")
+	{
+		Scene scene;
+		Entity a = scene.CreateEntity("A");
+		Entity b = scene.CreateEntity("B");
+		Entity c = scene.CreateEntity("C");
+		uint64_t version = scene.GetHierarchyVersion();
+		std::vector<entt::entity> moves;
+		CHECK(scene.GetHierarchyMoves(version, moves));
+		CHECK(moves.empty());
+
+		// Creating and destroying entities moves nothing; reparenting, reordering and placing do (a child created under a
+		// parent is reparented).
+		scene.DestroyEntity(scene.CreateEntity("Temporary"));
+		CHECK(GetMoves(scene, version).empty());
+		Entity child = scene.CreateChildEntity(a, "Child");
+		REQUIRE(scene.SetParent(b, c));
+		REQUIRE(scene.SetSiblingIndex(c, 0));
+		CHECK(GetMoves(scene, version) == Handles({ child, b, c }));
+		version = scene.GetHierarchyVersion();
+		REQUIRE(scene.PlaceEntities(std::vector<Scene::EntityPlacement> { { a.GetUUID(), c.GetUUID(), 0 }, { b.GetUUID(), UUID::Null(), 1 } }));
+		CHECK(GetMoves(scene, version) == Handles({ a, b }));
+		// Setting the parent an entity already has moves nothing.
+		version = scene.GetHierarchyVersion();
+		REQUIRE(scene.SetParent(child, a));
+		CHECK(GetMoves(scene, version).empty());
+
+		// More moves than the scene remembers: anything may have moved since an older version.
+		const uint64_t beforeMany = scene.GetHierarchyVersion();
+		for (size_t move = 0; move <= Scene::c_MaxHierarchyMoves; move++)
+			REQUIRE(scene.SetSiblingIndex(child, 0));
+		moves.clear();
+		CHECK_FALSE(scene.GetHierarchyMoves(beforeMany, moves));
+		CHECK(moves.empty());
+		CHECK(GetMoves(scene, scene.GetHierarchyVersion() - 1) == Handles({ child }));
+		// One placement of more entities than the scene remembers.
+		std::vector<Scene::EntityPlacement> placements;
+		for (size_t index = 0; index <= Scene::c_MaxHierarchyMoves; index++)
+			placements.push_back({ scene.CreateEntity("Placed").GetUUID(), UUID::Null(), 0 });
+		version = scene.GetHierarchyVersion();
+		REQUIRE(scene.PlaceEntities(placements));
+		CHECK_FALSE(scene.GetHierarchyMoves(version, moves));
+		CHECK(GetMoves(scene, scene.GetHierarchyVersion()).empty());
+		CheckSceneCaches(scene);
 	}
 
 	TEST_CASE("Destruction requested during a frame is flushed in one batch")
