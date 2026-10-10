@@ -30,6 +30,7 @@ $env:VK_ADD_LAYER_PATH = "<repo>\build\_tools\Vulkan-ValidationLayers\build\laye
 ctest --preset windows-debug                  # all CTest tests
 ctest --preset windows-debug -LE gpu          # machines without a GPU
 ctest --preset windows-release -L perf        # perf tests against their budgets (Release/Dist only, reference machine)
+python Tools/PerfStability.py --runs 5        # the perf tests five times: per-metric spread, pass rate, confirmations
 build\windows\bin\Debug\StrataTests.exe --test-suite="Asset.*"        # one module (doctest filters)
 build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard test names
 ```
@@ -40,10 +41,13 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
   includes `Architecture.Layering`, which fails on an include that crosses the layers of
   `StrataTests/Architecture/Layers.json` - fix the dependency, see AGENTS.md "Architecture rules"),
   `StrataTests.GPU` (label `gpu`), the perf tests `StrataTests.Perf` and `StrataTests.PerfGPU` (suites `Perf.*`
-  and `PerfGPU.*`, label `perf`, Release and Dist only, after `StrataTests.PerfResults.Clean`; budgets and the
-  ratchet rule in AGENTS.md, "Testing"; `PerfGPU.Editor` writes a 100,000- and a 1,000,000-entity scene to a temporary
-  project and opens a maximized StrataEditor on them for about 20 seconds; `PerfGPU.Streaming` writes and imports a
-  447 MB stress project and runs its camera sweep three times in helper processes, about 40 s), `StrataEditor.Smoke`
+  and `PerfGPU.*`, label `perf`, Release and Dist only, after `StrataTests.PerfResults.Clean`; budgets, confirmed
+  checks and the ratchet rule in AGENTS.md, "Testing": a metric over its budget is measured again, up to three attempts,
+  and fails only when all are over, so a failing perf test that prints "over the budget in all 3 attempts" next to a
+  slow canary `Perf.Harness.Sort200k` ran on a busy machine; `PerfGPU.Editor` writes a 100,000- and a 1,000,000-entity
+  scene to a temporary project and opens a maximized StrataEditor on them for about 20 seconds, again to confirm a
+  failure; `PerfGPU.Streaming` writes and imports a 447 MB stress project and runs its camera sweep in a helper process,
+  about 15 s, and up to two more sweeps to confirm a failure), `StrataEditor.Smoke`
   (the real editor in a window with `StrataTests/Editor/SmokeCommands.json.in`, configured into the build tree, label
   `gpu`; it creates a project in `build/<preset>/StrataTests/SmokeProject` (emptied first by `StrataEditor.SmokeClean`),
   so the editor rather than the launcher shows, captures the viewport to `SmokeViewport.png`/`SmokeSceneCamera.png` in

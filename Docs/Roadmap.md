@@ -80,11 +80,18 @@ Open items and deferrals later waves own:
   editor answers input and automation requests on its next throttled frame (up to 33 ms, 100 ms unfocused) until it
   waits on events instead. Project thumbnails and search in the recent projects move to `content-and-prefabs`.
 - Perf budgets hold for the reference machine only, so CI's hosted runners skip the `perf` label; a self-hosted runner
-  on the reference machine would make them an automatic gate. Even there, `PerfGPU.Streaming` passes only some runs: its
-  750 MB limit on the best of three sweeps' peak private memory and its 6 ms finalization budget sit inside the
-  run-to-run spread of the graphics driver's memory and of a maximum over 600 frames, so they need steadier measures.
-  Platform code first compiled by CI on Linux and macOS: `GetProcessMemory`, `GetProcessUptime`, `FindHomeDirectory`
-  and `FindFallbackFontFiles`.
+  on the reference machine would make them an automatic gate. Platform code first compiled by CI on Linux and macOS:
+  `GetProcessMemory`, `GetProcessUptime`, `FindHomeDirectory` and `FindFallbackFontFiles`.
+
+**Wave 2 (in progress).** Workstreams as they merge:
+
+- `perf-gates`: perf checks confirm a failure by measuring again (up to three attempts, all printed and recorded in
+  the results file) instead of failing on one measurement; every limit lives in `StrataTests/Perf/Budgets.json`, with
+  an optional roadmap `Target` (the streaming sweep's 750 MB) next to the budget that gates; each metric's statistic is
+  justified in its test; `Tools/PerfStability.py` runs the perf label repeatedly and reports each metric's spread, pass
+  rate and confirmations. Script dispatch prefetches instances ahead: the hardware prefetchers had followed the
+  instances only in some code layouts, so a frame of 300,000 trivial scripts cost 6.6 or 9.8 ms with identical sources
+  (now about 6.2 ms in both).
 
 ## Waves
 
