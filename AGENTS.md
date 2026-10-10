@@ -116,7 +116,11 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   (a plain `executeCommandList` + `waitForIdle` makes every later `open()` create a command pool). Complexity claims
   belong in ordinary unit tests with deterministic counters, which run everywhere. CI's hosted runners skip the label
   `perf` because budgets hold for the reference machine only: run `-L perf` there before merging a change that can
-  affect performance.
+  affect performance. A process's peak memory includes everything it did before, so a test that measures peak memory
+  runs the measured work in a helper process (`--strata-test-helper=<mode>`, see `TestMain.cpp`): `PerfGPU.Streaming`
+  runs its camera sweep over the stress project (`src/Perf/StressProject.h`, also usable by other suites) that way,
+  three times, and judges the best run, because other work on the machine and the graphics driver (which keeps commit
+  charge of freed device memory for a while; on Windows device memory counts in private bytes) add noise.
 - Suites whose names start with `EndToEnd` start the built `StrataEditor` and `StrataCLI` (paths in
   `STRATA_TEST_EDITOR_PATH`/`STRATA_TEST_CLI_PATH`, else next to the test executable) and run as the CTest
   `StrataEditor.Automation`, not in `StrataTests.Core`. They need no GPU (`--no-gpu`), use private session
