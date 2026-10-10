@@ -51,7 +51,7 @@ namespace Strata
 		void HandleShortcuts(EditorContext& context);
 		void UpdateCamera(EditorContext& context, bool hovered);
 		void UpdateGizmo(EditorContext& context, const ViewportView& view);
-		void DrawOverlays(EditorContext& context, const ViewportView& view, float chipRowBottom);
+		void DrawOverlays(EditorContext& context, const ViewportView& view, float chipRowBottom, const EditorFrameStats& frame);
 		void AcceptAssetDrops(EditorContext& context, const EditorCommandRegistry& commands);
 		void EndCameraDrag();
 		void EndGizmoDrag(EditorContext& context);

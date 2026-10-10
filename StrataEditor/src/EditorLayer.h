@@ -9,6 +9,7 @@
 
 #include <Strata.h>
 
+#include <array>
 #include <chrono>
 #include <deque>
 #include <filesystem>
@@ -93,6 +94,10 @@ namespace Strata
 		// Frames per second over the last c_FrameRateWindowSeconds (or since startup).
 		double GetAverageFrameRate() const;
 		static constexpr double c_FrameRateWindowSeconds = 5.0;
+		// The frame timing the status bar and the panels show this frame; the work time is averaged over the last
+		// c_FrameWorkSamples frames.
+		const EditorFrameStats& GetFrameStats() const { return m_FrameStats; }
+		static constexpr size_t c_FrameWorkSamples = 60;
 	private:
 		void StartAutomation();
 		void RegisterBuiltinPanels();
@@ -115,6 +120,8 @@ namespace Strata
 		// Chooses the frame rate for the next frames (idle throttling) and records frame times.
 		void UpdateFrameRate();
 		bool IsBusy(double now) const;
+		// Fills m_FrameStats for this frame's status bar and panels.
+		void UpdateFrameStats();
 
 		// Runs an action that replaces the edited scene, asking first whether unsaved changes should be saved.
 		void RequestDiscardChanges(std::function<void()> action);
@@ -153,6 +160,12 @@ namespace Strata
 		uint64_t m_LastAutomationRequests = 0;
 		bool m_Idle = false;
 		std::deque<double> m_FrameTimes; // Within the last c_FrameRateWindowSeconds
+
+		// Frame timing.
+		std::array<double, c_FrameWorkSamples> m_FrameWorkTimes = {}; // Seconds, a ring of the last frames' work times
+		size_t m_FrameWorkCount = 0;
+		size_t m_NextFrameWork = 0;
+		EditorFrameStats m_FrameStats;
 	};
 
 }

@@ -523,6 +523,21 @@ TEST_SUITE("Editor.UI")
 		CHECK_FALSE(UI::ItemProbe::Find("Status.Errors").has_value());
 	}
 
+	TEST_CASE("The frame time is what frames take, not the interval of the idle frame rate")
+	{
+		HarnessEditor editor;
+		// Idle at 30 frames per second: a frame every 33 ms, each taking 4 ms.
+		editor.Host->FrameWorkTime = 0.004;
+		editor.Frames(90, 1.0f / 30.0f);
+		REQUIRE(editor.Layer->IsIdle());
+		const EditorFrameStats& frame = editor.Layer->GetFrameStats();
+		CHECK(frame.WorkMilliseconds == doctest::Approx(4.0f));
+		CHECK(frame.FramesPerSecond == doctest::Approx(30.0f).epsilon(0.02));
+		CHECK(frame.Idle);
+		const nlohmann::json status = editor.Run("editor.status");
+		CHECK(status["editor"]["frameRate"]["frameMilliseconds"].get<double>() == doctest::Approx(4.0));
+	}
+
 	TEST_CASE("The widget kit: buttons, chips, pills, cards and dialogs")
 	{
 		ImGuiHarness harness;

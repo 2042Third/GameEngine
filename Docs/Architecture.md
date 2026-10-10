@@ -205,8 +205,9 @@ Windowed applications are paced by vsync when it is on (`WindowSpecification::VS
 headless ones by the cap alone, which the editor and the runtime set to 60 (`MaxFrameRate`,
 `StrataEditor/src/EditorApplication.cpp`, `RuntimeApplication.cpp`). The cap is the application's `FramePacer`
 (`Core/Timer.h`) and can change while it runs (`Application::SetMaxFrameRate`; setting the current rate keeps the frame
-schedule): the editor lowers it while it is idle (see [Editor](#editor)). An exception escaping a frame (e.g. a lost
-device inside NVRHI) is logged and ends the loop.
+schedule): the editor lowers it while it is idle (see [Editor](#editor)). The time a frame took up to the pacer's wait
+is `Application::GetLastFrameWorkTime`: what the frame cost, whatever the cap. An exception escaping a frame (e.g. a
+lost device inside NVRHI) is logged and ends the loop.
 
 The editor's layer update (`EditorLayer::OnUpdate`, `StrataEditor/src/EditorLayer.cpp`):
 
@@ -431,22 +432,24 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
 ```
 
 - **UI** (`StrataEditorUI`). `EditorLayer` (`StrataEditor/src/EditorLayer.h`) reaches the application only through
-  `EditorHost` (close, exit code, frame count, time, window title, size and focus, UI scale, frame rate cap,
-  screenshots), which `EditorApplication.cpp` implements on `Application` and the UI tests fake. Each frame it draws the
-  dock space host (menu bar, the main toolbar under it, the dock space) and the status bar, then the panels through
-  `EditorPanelRegistry` (`UI/EditorPanelRegistry.h`), which begins each open panel's window (`###<id>` names, so docking
-  and settings survive title changes), asks the panel for window options, calls `OnImGuiRender` while it is visible
-  and `OnHidden` otherwise, and saves which panels are open with the layout version in imgui.ini (`StrataPanels`); a
-  saved layout of another version is replaced by the default one (`EditorLayer::c_LayoutVersion`). The look comes from
-  `UI/Theme` (the Bedrock palette and its meanings; `ApplyTheme` is the `ImGuiLayer` style callback), `UI/EditorFonts`
-  (Inter, Inter SemiBold and JetBrains Mono embedded with `strata_embed_file`, Lucide's icons merged into the Inter
-  fonts' Private Use Area) and the widget kit (`UI/Widgets`), whose widgets record their rectangles in `UI/ItemProbe`.
-  Rules for UI code: AGENTS.md, "Editor UI rules". **Idle throttling**: after drawing, `EditorLayer::UpdateFrameRate`
-  sets the cap to 0 (full rate) while anything happens and to 30 (10 unfocused) frames per second otherwise; headless,
-  `--frames` and command-script runs are never throttled. **UI tests** (`StrataTests/src/Editor/ImGuiHarness.h`) create
-  an ImGui context with the editor's fonts and theme (styled by an unattached `ImGuiLayer`), honor ImGui's texture
-  requests without a renderer, inject input, and find kit widgets through the probe; the `Editor.UI` suites draw the
-  real `EditorLayer` this way, with a `FakeEditorHost`.
+  `EditorHost` (close, exit code, frame count, time, window title, size and focus, UI scale, frame rate cap, the last
+  frame's work time, screenshots), which `EditorApplication.cpp` implements on `Application` and the UI tests fake. Each
+  frame it draws the dock space host (menu bar, the main toolbar under it, the dock space) and the status bar, then the
+  panels through `EditorPanelRegistry` (`UI/EditorPanelRegistry.h`), which begins each open panel's window (`###<id>`
+  names, so docking and settings survive title changes), asks the panel for window options, calls `OnImGuiRender` while
+  it is visible and `OnHidden` otherwise, and saves which panels are open with the layout version in imgui.ini
+  (`StrataPanels`); a saved layout of another version is replaced by the default one (`EditorLayer::c_LayoutVersion`).
+  The look comes from `UI/Theme` (the Bedrock palette and its meanings; `ApplyTheme` is the `ImGuiLayer` style
+  callback), `UI/EditorFonts` (Inter, Inter SemiBold and JetBrains Mono embedded with `strata_embed_file`, Lucide's
+  icons merged into the Inter fonts' Private Use Area) and the widget kit (`UI/Widgets`), whose widgets record their
+  rectangles in `UI/ItemProbe`. Rules for UI code: AGENTS.md, "Editor UI rules". **Idle throttling**: after drawing,
+  `EditorLayer::UpdateFrameRate` sets the cap to 0 (full rate) while anything happens and to 30 (10 unfocused) frames
+  per second otherwise; headless, `--frames` and command-script runs are never throttled. The frame time shown (status
+  bar, viewport stats, `editor.status`) is `Application::GetLastFrameWorkTime` averaged over 60 frames: a frame's run
+  time without the pacer's wait, which panels get in `EditorPanelContext::Frame`. **UI tests**
+  (`StrataTests/src/Editor/ImGuiHarness.h`) create an ImGui context with the editor's fonts and theme (styled by an
+  unattached `ImGuiLayer`), honor ImGui's texture requests without a renderer, inject input, and find kit widgets
+  through the probe; the `Editor.UI` suites draw the real `EditorLayer` this way, with a `FakeEditorHost`.
 - **EditorContext** (`StrataEditor/src/Editor/EditorContext.h`) is the state with no UI. Opening a project creates and
   activates its `EditorAssetManager` (scan included), opens a `ScriptEngine` (hot reload on by default,
   `EditorContextSpecification::HotReloadScripts`) and loads the built module, restores the viewport state and opens

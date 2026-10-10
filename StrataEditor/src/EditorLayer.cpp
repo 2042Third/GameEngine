@@ -130,6 +130,7 @@ namespace Strata
 				{ "uiScale", m_Host->GetUIScale() },
 				{ "frameRate", {
 					{ "average", GetAverageFrameRate() },
+					{ "frameMilliseconds", m_FrameStats.WorkMilliseconds },
 					{ "cap", m_Host->GetMaxFrameRate() },
 					{ "idle", m_Idle },
 					{ "throttling", IsThrottlingEnabled() } } } };
@@ -233,6 +234,7 @@ namespace Strata
 		m_FrameTimes.push_back(now);
 		while (!m_FrameTimes.empty() && now - m_FrameTimes.front() > c_FrameRateWindowSeconds)
 			m_FrameTimes.pop_front();
+		UpdateFrameStats();
 		if (!m_Options.Headless)
 		{
 			EditorPanelContext panelContext { m_Context, m_Commands, m_CommandRunner };
@@ -304,7 +306,7 @@ namespace Strata
 		TrackInput();
 		HandleShortcuts();
 		DrawDockspace();
-		EditorPanelContext panelContext { m_Context, m_Commands, m_CommandRunner };
+		EditorPanelContext panelContext { m_Context, m_Commands, m_CommandRunner, m_FrameStats };
 		m_Panels.OnImGuiRender(panelContext);
 		DrawUnsavedChangesModal();
 		if (m_ShowImGuiDemo)
@@ -398,6 +400,24 @@ namespace Strata
 			return 0.0;
 		const double span = m_FrameTimes.back() - m_FrameTimes.front();
 		return span > 0.0 ? static_cast<double>(m_FrameTimes.size() - 1) / span : 0.0;
+	}
+
+	void EditorLayer::UpdateFrameStats()
+	{
+		// The host measures a frame once it ran: this is the previous frame's work time (none before the first frame).
+		if (const double work = m_Host->GetLastFrameWorkTime(); work > 0.0)
+		{
+			m_FrameWorkTimes[m_NextFrameWork] = work;
+			m_NextFrameWork = (m_NextFrameWork + 1) % c_FrameWorkSamples;
+			m_FrameWorkCount = std::min(m_FrameWorkCount + 1, c_FrameWorkSamples);
+		}
+		double total = 0.0;
+		for (size_t index = 0; index < m_FrameWorkCount; index++)
+			total += m_FrameWorkTimes[index];
+		// The frame rate shows the throttling; the work time what a frame costs (a capped frame rate says nothing about it).
+		m_FrameStats.WorkMilliseconds = m_FrameWorkCount > 0 ? static_cast<float>(total / static_cast<double>(m_FrameWorkCount) * 1000.0) : 0.0f;
+		m_FrameStats.FramesPerSecond = ImGui::GetCurrentContext() ? ImGui::GetIO().Framerate : static_cast<float>(GetAverageFrameRate());
+		m_FrameStats.Idle = m_Idle;
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -867,13 +887,13 @@ namespace Strata
 			: (state == SceneState::Play ? colors.PlayState.Play : (state == SceneState::Simulate ? colors.PlayState.Simulate : colors.PlayState.Edit));
 		UI::Pill("Status.PlayState", stateIcon, stateText, stateColor, "The scene's state: changes made while it runs are discarded when it stops");
 
-		// Frame time.
-		const float framerate = ImGui::GetIO().Framerate;
-		const std::string frame = fmt::format("{:.1f} ms{}{:.0f} FPS{}", framerate > 0.0f ? 1000.0f / framerate : 0.0f, c_Separator, framerate,
-			m_Idle ? std::string(c_Separator) + "idle" : std::string());
+		// Frame time: what a frame takes to run, not the interval the idle frame rate cap stretches it to.
+		const std::string frame = fmt::format("{:.1f} ms{}{:.0f} FPS{}", m_FrameStats.WorkMilliseconds, c_Separator, m_FrameStats.FramesPerSecond,
+			m_FrameStats.Idle ? std::string(c_Separator) + "idle" : std::string());
 		ImGui::SameLine();
 		UI::Pill("Status.Frame", Icons::Gauge, frame, colors.TextSecondary,
-			"Frame time and rate. While nothing happens the editor redraws less often (idle) and returns to the full rate on input.");
+			"Frame time (what a frame takes to run, without waiting for the next one) and frame rate. While nothing happens the editor "
+			"redraws less often (idle) and returns to the full rate on input.");
 
 		// Assets.
 		if (const EditorAssetManager* assets = m_Context.GetAssetManager())

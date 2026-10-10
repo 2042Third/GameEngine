@@ -230,7 +230,7 @@ namespace Strata
 			chipRowBottom = ImGui::GetItemRectMax().y;
 		}
 		if (view)
-			DrawOverlays(context, *view, chipRowBottom);
+			DrawOverlays(context, *view, chipRowBottom, panelContext.Frame);
 	}
 
 	void ViewportPanel::OnHidden(EditorPanelContext& context)
@@ -510,7 +510,7 @@ namespace Strata
 	// Overlays and drops
 	////////////////////////////////////////////////////////////////////////////////
 
-	void ViewportPanel::DrawOverlays(EditorContext& context, const ViewportView& view, float chipRowBottom)
+	void ViewportPanel::DrawOverlays(EditorContext& context, const ViewportView& view, float chipRowBottom, const EditorFrameStats& frame)
 	{
 		ImDrawList* drawList = ImGui::GetWindowDrawList();
 		const ImVec2 imageMin(m_Image.Min.x, m_Image.Min.y);
@@ -530,10 +530,10 @@ namespace Strata
 		if (viewport.GetSettings().ShowStats && renderer)
 		{
 			const SceneRendererStats& stats = renderer->GetStats();
-			const ImGuiIO& io = ImGui::GetIO();
 			const glm::uvec2 size = renderer->GetSize();
+			// The frame's own time: while the editor idles, its frame rate is capped, which says nothing about what frames cost.
 			const std::vector<std::string> lines = {
-				fmt::format("{:.2f} ms ({:.0f} FPS)", io.Framerate > 0.0f ? 1000.0f / io.Framerate : 0.0f, io.Framerate),
+				fmt::format("{:.2f} ms ({:.0f} FPS{})", frame.WorkMilliseconds, frame.FramesPerSecond, frame.Idle ? ", idle" : ""),
 				fmt::format("{} x {} pixels", size.x, size.y),
 				fmt::format("{} draw calls, {} instances", stats.DrawCalls, stats.Instances),
 				fmt::format("{} triangles, {} lights", stats.Triangles, stats.Lights),

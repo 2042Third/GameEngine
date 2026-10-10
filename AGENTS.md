@@ -471,8 +471,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
     unpaused scene or pending steps, loading assets, pending commands, an automation request in the last second, a
     script build, a panel's `IsAnimating`) and otherwise at 30 frames per second (10 without the focus), through
     `EditorHost::SetMaxFrameRate`. Headless editors, `--frames` runs and command scripts are never throttled; a panel that
-    animates without input reports it through `EditorPanel::IsAnimating`. `editor.status` reports the measured rate
-    (`editor.frameRate`).
+    animates without input reports it through `EditorPanel::IsAnimating`. The frame time the status bar, the viewport's
+    stats and `editor.status` (`editor.frameRate.frameMilliseconds`, with the measured rate) show is what frames take to
+    run (`Application::GetLastFrameWorkTime`, without the wait of the frame rate cap; `EditorPanelContext::Frame` for
+    panels), so an idle editor does not read as a slow one.
 - **Every change to the scene or project goes through a command** (`EditorCommandRegistry::Execute`) or,
   for continuous UI edits, through `SceneEditTransaction` / `SetPropertyWithUndo`. That keeps the UI,
   automation (AI agents) and tests identical, and makes every edit undoable.
