@@ -5,7 +5,9 @@
 #include "Strata/Asset/AssetPackWriter.h"
 #include "Strata/Core/FileWatcher.h"
 
+#include <atomic>
 #include <condition_variable>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <mutex>
@@ -121,6 +123,13 @@ namespace Strata
 		// write on another thread. Main thread; finish imports first (WaitForImports, or until HasPendingImports is false).
 		// Fails for AlwaysInclude entries that name no asset of the project (with Prune).
 		bool PlanAssetPack(const AssetPackBuildOptions& options, AssetPackBuildPlan& outPlan, std::string* outError = nullptr) const;
+		// Whether every entry of an AlwaysInclude list (AssetPackBuildOptions::AlwaysInclude) names an asset or a folder of
+		// assets of the project, as a pruned PlanAssetPack checks them, without planning (which follows every scene's
+		// dependencies). The error names the first entry that names nothing.
+		bool CheckAlwaysInclude(const std::vector<std::string>& alwaysInclude, std::string* outError = nullptr) const;
+		// How many plans PlanAssetPack made: planning walks the dependencies of every scene and asset, so code that plans on
+		// the main thread does it once (tests count it).
+		uint64_t GetPackPlanCount() const { return m_PackPlans.load(std::memory_order_relaxed); }
 		// Writes a planned pack, reading each asset's stored form like loads do. Fails if an asset failed to import, and when
 		// a document (scene, prefab, model, material) changed since the plan to reference what the plan did not record for
 		// it (naming the document), so that a pack never disagrees with its plan. Any thread; the manager must outlive the
@@ -260,6 +269,8 @@ namespace Strata
 		uint32_t m_ImportsInFlight = 0;
 		std::vector<ImportOutcome> m_CompletedImports;
 		std::vector<NativeReferences> m_CompletedReferences; // Of QueueNativeReferences (counted in m_ImportsInFlight)
+
+		mutable std::atomic<uint64_t> m_PackPlans = 0; // PlanAssetPack calls (GetPackPlanCount)
 	};
 
 }

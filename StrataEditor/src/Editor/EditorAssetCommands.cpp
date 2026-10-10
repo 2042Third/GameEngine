@@ -248,7 +248,7 @@ namespace Strata
 			"for: export again). The pack is ordered by first use from the start scene; with prune it holds only what the scenes use and what the "
 			"project's Export.AlwaysInclude names (project.setExportSettings), and excludedAssets lists what it left out. The game runs the script module "
 			"the editor has loaded (build it first with script.build). Returns the files, assetCount, the pack's size, seconds and frameTimes (the editor's "
-			"frames while it exported, like editor.wait's).",
+			"frames from the one that started the export to its end, like editor.wait's).",
 			ObjectSchema({
 				{ "directory", StringSchema("Absolute output directory outside the project (created when missing)") },
 				{ "includeRuntime", BoolSchema("Copy the runtime executable (default true)") },
@@ -277,9 +277,10 @@ namespace Strata
 				if (!context.StartGameExport(options, &error))
 					return EditorCommandResult::Fail(error);
 
-				// Frames are measured like editor.wait's: from the frame after the one that started the export.
+				// Frames are measured from the one that started the export (its checks, reading the script module), which the
+				// editor records at the start of the next frame.
 				const Ref<GameExport> exporter = context.GetGameExport();
-				const uint64_t firstMeasured = context.GetRecordedFrameCount() + 2;
+				const uint64_t firstMeasured = context.GetRecordedFrameCount() + 1;
 				return EditorCommandResult::Defer([exporter, firstMeasured, frames = uint64_t(0), lastRecorded = uint64_t(0), frameTimes = std::vector<double>()](
 					EditorContext& context) mutable -> std::optional<EditorCommandResult>
 				{
@@ -368,12 +369,8 @@ namespace Strata
 						return EditorCommandResult::InvalidParameters("'alwaysInclude' must be an array of asset paths");
 					alwaysInclude.push_back(entry.get<std::string>());
 				}
-				// Every entry must name something: the plan of a pruned pack checks them.
-				AssetPackBuildOptions check;
-				check.Prune = true;
-				check.AlwaysInclude = alwaysInclude;
-				AssetPackBuildPlan plan;
-				if (!assets->PlanAssetPack(check, plan, &error))
+				// Every entry must name something, as a pruned pack's plan requires.
+				if (!assets->CheckAlwaysInclude(alwaysInclude, &error))
 					return EditorCommandResult::InvalidParameters(error);
 
 				Project& project = *context.GetProject();

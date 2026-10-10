@@ -192,11 +192,11 @@ namespace Strata
 		packOptions.AlwaysInclude = project.GetConfig().Export.AlwaysInclude;
 		if (options.Prune)
 		{
-			// What AlwaysInclude names is checked now; the plan that is packed is made once imports are done.
-			AssetPackBuildPlan plan;
-			std::string planError;
-			if (!assets->PlanAssetPack(packOptions, plan, &planError))
-				return fail(planError);
+			// What AlwaysInclude names is checked now, without planning: the plan that is packed is made once, when imports
+			// are done.
+			std::string includeError;
+			if (!assets->CheckAlwaysInclude(packOptions.AlwaysInclude, &includeError))
+				return fail(includeError);
 		}
 
 		if (!FileSystem::CreateDirectories(options.Directory))

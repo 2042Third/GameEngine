@@ -379,6 +379,18 @@ TEST_SUITE("Asset.Dependencies")
 		CHECK(error.find("Prefabs/Missing.stprefab") != std::string::npos);
 		options.AlwaysInclude = { "Pref" }; // Not a folder: names have to match whole
 		CHECK_FALSE(manager->PlanAssetPack(options, plan, &error));
+		CHECK(manager->GetPackPlanCount() == 6);
+
+		// Lists are checked as a pruned plan checks them, without planning.
+		CHECK(manager->CheckAlwaysInclude({}, &error));
+		CHECK(manager->CheckAlwaysInclude({ "Prefabs/", "Materials\\Unused.stmat", "./Prefabs/Enemy.stprefab", "Prefabs", "Scenes/Menu.stscene" }, &error));
+		error.clear();
+		CHECK_FALSE(manager->CheckAlwaysInclude({ "Prefabs", "Prefabs/Missing.stprefab", "Pref" }, &error));
+		CHECK(error == "Export.AlwaysInclude names 'Prefabs/Missing.stprefab', which is no asset or folder of the project");
+		CHECK_FALSE(manager->CheckAlwaysInclude({ "Pref" }, &error));
+		CHECK_FALSE(manager->CheckAlwaysInclude({ "" }, &error));
+		CHECK_FALSE(manager->CheckAlwaysInclude({ "Materials/A.stmat/More" }, &error)); // Below a file
+		CHECK(manager->GetPackPlanCount() == 6);
 
 		// The pruned pack holds the plan, in its order.
 		options.AlwaysInclude = { "Prefabs" };

@@ -888,14 +888,15 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
 `project.export` (`StrataEditor/src/Editor/GameExport.cpp`) exports without blocking a frame. `GameExport::Start` checks
 at once what it can and fails without side effects: a saved, stopped scene, a start scene (or the open scene), no
 running script build, a loaded script module that is still the file that was loaded (scenes or prefabs that use scripts
-need one), what `Export.AlwaysInclude` names (with `prune`), and a usable output directory (`CheckExportDirectory`:
-absolute, local, outside the project, not a file, no reserved device names; each refusal says what to do instead). It
-then waits for background imports, plans the pack on the main thread (`EditorAssetManager::PlanAssetPack`) and writes
-everything on an I/O thread (failing, with the document named, when a document saved meanwhile references what the plan
-does not hold), reporting its progress in bytes and stage (`GetProgress`, `GetStage`; `project.exportStatus`); one
-export runs at a time (`EditorContext::StartGameExport`), `project.cancelExport` stops it between blocks, and closing
-the project or the editor cancels it and waits for it. The command answers when it finished, with the files, the asset
-count, the excluded assets, the pack's size, the seconds it took and the editor's frame times meanwhile. The UI is the
+need one), what `Export.AlwaysInclude` names (with `prune`; `EditorAssetManager::CheckAlwaysInclude` matches the entries
+without planning), and a usable output directory (`CheckExportDirectory`: absolute, local, outside the project, not a
+file, no reserved device names; each refusal says what to do instead). It then waits for background imports, plans the
+pack once on the main thread (`EditorAssetManager::PlanAssetPack`) and writes everything on an I/O thread (failing, with
+the document named, when a document saved meanwhile references what the plan does not hold), reporting its progress in
+bytes and stage (`GetProgress`, `GetStage`; `project.exportStatus`); one export runs at a time
+(`EditorContext::StartGameExport`), `project.cancelExport` stops it between blocks, and closing the project or the
+editor cancels it and waits for it. The command answers when it finished, with the files, the asset count, the excluded
+assets, the pack's size, the seconds it took and the editor's frame times from the frame that started it. The UI is the
 Export dialog (`UI/ExportDialog`: File > Export Game..., or the main toolbar's Export button, which shows the share done
 while an export runs): the command's fields, then a strata-band progress bar (`UI::StrataProgressBar`) and Open Folder.
 It writes:

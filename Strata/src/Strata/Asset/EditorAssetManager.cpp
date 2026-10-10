@@ -11,6 +11,7 @@
 #include "Strata/Core/StringUtils.h"
 #include "Strata/Reflection/PropertyJson.h"
 
+#include <algorithm>
 #include <cctype>
 #include <unordered_map>
 #include <unordered_set>
@@ -240,6 +241,27 @@ namespace Strata
 			while (!path.empty() && path.back() == '/')
 				path.pop_back();
 			return path;
+		}
+
+		// Whether a normalized AlwaysInclude entry names the asset: its file, or a folder above it.
+		bool IsIncludedByPath(const std::string& includePath, const AssetMetadata& metadata)
+		{
+			if (metadata.Path == includePath)
+				return true;
+			return !includePath.empty() && metadata.Path.size() > includePath.size() && metadata.Path.compare(0, includePath.size(), includePath) == 0 &&
+				metadata.Path[includePath.size()] == '/';
+		}
+
+		std::string DescribeUnmatchedInclude(const std::string& entry)
+		{
+			return fmt::format("Export.AlwaysInclude names '{}', which is no asset or folder of the project", entry);
+		}
+
+		// The assets a pack can hold: every asset of the project but the built-in ones, by path.
+		std::vector<AssetMetadata> GetPackableAssets(std::vector<AssetMetadata> all)
+		{
+			std::erase_if(all, [](const AssetMetadata& metadata) { return metadata.IsBuiltin() || BuiltinAssets::IsBuiltin(metadata.Handle); });
+			return all;
 		}
 
 	}
@@ -1849,12 +1871,8 @@ namespace Strata
 	bool EditorAssetManager::PlanAssetPack(const AssetPackBuildOptions& options, AssetPackBuildPlan& outPlan, std::string* outError) const
 	{
 		ST_PROFILE_FUNCTION();
-		std::vector<AssetMetadata> all;
-		for (AssetMetadata& metadata : GetAllMetadata())
-		{
-			if (!metadata.IsBuiltin() && !BuiltinAssets::IsBuiltin(metadata.Handle))
-				all.push_back(std::move(metadata));
-		}
+		m_PackPlans.fetch_add(1, std::memory_order_relaxed);
+		const std::vector<AssetMetadata> all = GetPackableAssets(GetAllMetadata());
 		std::unordered_map<AssetHandle, size_t> indices;
 		for (size_t index = 0; index < all.size(); index++)
 			indices.emplace(all[index].Handle, index);
@@ -1889,8 +1907,7 @@ namespace Strata
 			bool matched = false;
 			for (const AssetMetadata& metadata : all)
 			{
-				const bool inFolder = !path.empty() && metadata.Path.size() > path.size() && metadata.Path.compare(0, path.size(), path) == 0 && metadata.Path[path.size()] == '/';
-				if (metadata.Path == path || inFolder)
+				if (IsIncludedByPath(path, metadata))
 				{
 					matched = true;
 					addClosure(metadata.Handle);
@@ -1899,7 +1916,7 @@ namespace Strata
 			if (!matched && options.Prune)
 			{
 				if (outError)
-					*outError = fmt::format("Export.AlwaysInclude names '{}', which is no asset or folder of the project", entry);
+					*outError = DescribeUnmatchedInclude(entry);
 				return false;
 			}
 		}
@@ -1918,6 +1935,26 @@ namespace Strata
 		for (size_t index : order)
 			plan.Assets.push_back(AssetPackSource { all[index], GetDependencies(all[index].Handle), GetBounds(all[index].Handle) });
 		outPlan = std::move(plan);
+		return true;
+	}
+
+	bool EditorAssetManager::CheckAlwaysInclude(const std::vector<std::string>& alwaysInclude, std::string* outError) const
+	{
+		ST_PROFILE_FUNCTION();
+		if (alwaysInclude.empty())
+			return true;
+		const std::vector<AssetMetadata> all = GetPackableAssets(GetAllMetadata());
+		for (const std::string& entry : alwaysInclude)
+		{
+			const std::string path = NormalizeIncludePath(entry);
+			const bool matched = std::any_of(all.begin(), all.end(), [&path](const AssetMetadata& metadata) { return IsIncludedByPath(path, metadata); });
+			if (!matched)
+			{
+				if (outError)
+					*outError = DescribeUnmatchedInclude(entry);
+				return false;
+			}
+		}
 		return true;
 	}
 

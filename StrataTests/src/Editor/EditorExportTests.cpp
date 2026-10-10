@@ -277,18 +277,24 @@ TEST_SUITE("Editor.Export")
 		const nlohmann::json full = harness.Run("project.export", { { "directory", FileSystem::ToUTF8(harness.Directory / "Full") }, { "includeRuntime", false } });
 		CHECK(full["excludedAssets"].empty());
 
-		// Pruned: the unused material, the prefab and its material stay home.
+		// Pruned: the unused material, the prefab and its material stay home. The pack is planned once, when the export
+		// begins to pack (planning follows every scene's dependencies: starting the export checks AlwaysInclude without it).
+		const EditorAssetManager& assets = *harness.Context.GetAssetManager();
+		const uint64_t plans = assets.GetPackPlanCount();
 		const nlohmann::json pruned = harness.Run("project.export", { { "directory", FileSystem::ToUTF8(output) }, { "includeRuntime", false }, { "prune", true } });
+		CHECK(assets.GetPackPlanCount() == plans + 1);
 		CHECK(ExcludedPaths(pruned) == std::set<std::string> { "Materials/ForEnemy.stmat", "Materials/Unused.stmat", "Prefabs/Enemy.stprefab" });
 		CHECK(pruned["assetCount"].get<size_t>() + 3 == full["assetCount"].get<size_t>());
 		CHECK(pruned["packBytes"].get<uint64_t>() < full["packBytes"].get<uint64_t>());
 
 		// A prefab scripts spawn by path is kept with what it uses once AlwaysInclude names it (saved in the project file).
+		// Entries are checked without planning.
 		CHECK(harness.Commands.Execute(harness.Context, "project.setExportSettings", { { "alwaysInclude", { "Prefabs/Missing.stprefab" } } }).ErrorKind
 			== EditorCommandError::InvalidParameters);
 		CHECK(harness.Commands.Execute(harness.Context, "project.setExportSettings", { { "alwaysInclude", "Prefabs" } }).ErrorKind
 			== EditorCommandError::InvalidParameters);
 		const nlohmann::json settings = harness.Run("project.setExportSettings", { { "alwaysInclude", { "Prefabs" } } });
+		CHECK(assets.GetPackPlanCount() == plans + 1);
 		CHECK(settings["alwaysInclude"] == nlohmann::json { "Prefabs" });
 		CHECK(harness.Run("project.info")["export"]["alwaysInclude"] == nlohmann::json { "Prefabs" });
 		const std::optional<std::string> projectFile = FileSystem::ReadText(harness.Context.GetProject()->GetProjectFile());
@@ -296,6 +302,7 @@ TEST_SUITE("Editor.Export")
 		CHECK(projectFile->find("\"AlwaysInclude\"") != std::string::npos);
 
 		const nlohmann::json kept = harness.Run("project.export", { { "directory", FileSystem::ToUTF8(output) }, { "includeRuntime", false }, { "prune", true } });
+		CHECK(assets.GetPackPlanCount() == plans + 2);
 		CHECK(ExcludedPaths(kept) == std::set<std::string> { "Materials/Unused.stmat" });
 		std::string error;
 		const Ref<RuntimeAssetManager> runtime = RuntimeAssetManager::Create(FileSystem::FromUTF8(kept["assetPack"].get<std::string>()), &error);
@@ -305,9 +312,45 @@ TEST_SUITE("Editor.Export")
 		CHECK_FALSE(runtime->FindAssetByPath("Materials/Unused.stmat").IsValid());
 		CHECK(GameManifest::Load(FileSystem::FromUTF8(kept["manifest"].get<std::string>())).has_value());
 
+		// A list that names what is gone (the project file was edited, or the prefab deleted) fails a pruned export at once,
+		// naming the entry, before anything is planned or written.
+		harness.Context.GetProject()->GetConfig().Export.AlwaysInclude = { "Prefabs", "Prefabs/Boss.stprefab" };
+		const std::filesystem::path stale = harness.Directory / "Stale";
+		CHECK(harness.Error("project.export", { { "directory", FileSystem::ToUTF8(stale) }, { "includeRuntime", false }, { "prune", true } })
+			== "Export.AlwaysInclude names 'Prefabs/Boss.stprefab', which is no asset or folder of the project");
+		CHECK_FALSE(FileSystem::Exists(stale));
+		CHECK(assets.GetPackPlanCount() == plans + 2);
+
 		// Clearing the list again.
 		harness.Run("project.setExportSettings", { { "alwaysInclude", nlohmann::json::array() } });
 		CHECK(harness.Run("project.info")["export"]["alwaysInclude"].empty());
+	}
+
+	TEST_CASE("An export's frame times start with the frame that started it")
+	{
+		ScopedJobSystem jobs(8, 2);
+		ExportHarness harness("EditorExportFrameTimes", 8);
+		// Frames as the editor layer runs them: the time of the frame before, then the commands. The frame that starts the
+		// export does its checks and reads the script module (40 ms here); the export answers for it.
+		harness.Context.RecordFrameTime(1.0);
+		EditorCommandResult result = harness.Start({ { "directory", FileSystem::ToUTF8(harness.Directory / "Build") }, { "includeRuntime", false } });
+		REQUIRE(result.IsPending());
+		double frameTime = 40.0;
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2);
+		while (result.IsPending() && std::chrono::steady_clock::now() < deadline)
+		{
+			harness.Context.RecordFrameTime(frameTime);
+			frameTime = 2.0;
+			harness.Context.Update(Timestep(1.0f / 60.0f));
+			PollCommandResult(result, harness.Context);
+			std::this_thread::sleep_for(std::chrono::milliseconds(2));
+		}
+		REQUIRE_FALSE(result.IsPending());
+		INFO(result.Error);
+		REQUIRE(result.Success);
+		const nlohmann::json& frameTimes = result.Value["frameTimes"];
+		CHECK(frameTimes["count"] == result.Value["frames"]);
+		CHECK(frameTimes["maxMs"] == 40.0);
 	}
 
 	TEST_CASE("Export directories are checked before anything is written, with what to do instead")
