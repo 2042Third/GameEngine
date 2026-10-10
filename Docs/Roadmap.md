@@ -63,12 +63,28 @@ module-foundation, ran as its own workstream):
   Project, Open Sample, About and "Connect an AI agent", the strata mark as window and executable icon, and the build's
   git commit in its version.
 
+**Wave 2 (in progress).**
+
+- `physics-at-scale`: scene services (`Scene/SceneServices.h`, `Scene::RegisterService`/`GetService`) through which
+  scripts and audio reach physics and audio, and engine services (`Core/EngineServices.h`) for what outlives scenes,
+  which took the five scene-system exceptions off the allowlist (14 to 9); physics capacities sized from the scene
+  (`SceneSettings::PhysicsCapacity`, automatic by default, `scene.setSettings`), with overflow counted, reported once and
+  remembered so the scene's next world grows; contacts recorded in per-thread buffers and tracked only for listeners,
+  with constant-time pair bookkeeping; bodies added and removed in batches; poses written back and bodies synchronized in
+  parallel; time dilation instead of catch-up spirals. On the loaded reference machine (`Perf.Physics`, best of three):
+  30,000 boxes start and play 30 frames in 274 ms (18.3 s before), 70,000 boxes all get a body (4,465 errors before) and
+  step in 24 ms frames with Strata's part at 6.6 ms below Jolt's, 10,000 boxes in 2.3 ms frames (9.4 ms before), and
+  10,000 bodies are created in one frame in 8.9 ms (24.9 ms before).
+
 Open items and deferrals later waves own:
 
-- The allowlist's 14 exceptions: the application shell's service wiring (7, `engine-modules`), asset finalization on
-  the renderer's command list (`mip-streaming`), physics reading the renderer's `Mesh` (Mesh v2, later) and scene
-  systems that call each other directly (5, `physics-at-scale`). Ordering constraints that name systems a build may
-  lack need a policy once subsystems become optional (`engine-modules`).
+- The allowlist's 9 exceptions: the application shell's service wiring (7, `engine-modules`), asset finalization on
+  the renderer's command list (`mip-streaming`) and physics reading the renderer's `Mesh` (Mesh v2, later). Ordering
+  constraints that name systems a build may lack need a policy once subsystems become optional (`engine-modules`).
+- Physics: what an overflowing world needed is remembered per scene name for the process (an editor or game session),
+  not saved with the scene; automatic capacities reserve Jolt's buffers for the bodies a scene starts with (70,000 bodies
+  reserve about a million body pairs); dynamic bodies below other dynamic bodies are still written back one by one; the
+  Inspector shows the capacities once `editor-authoring`'s scene section merges.
 - A world seen all at once still peaks at about 970 MiB of private memory in the exported runtime: no budget can evict
   what is in view, so this needs BC textures and mip streaming (`texture-cook-v2`, `mip-streaming`). Mesh uploads still
   go through NVRHI's upload manager until the budgeted upload queue (`mip-streaming`); `AssetManagerBase::GetStats`
