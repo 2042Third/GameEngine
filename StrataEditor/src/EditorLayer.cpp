@@ -14,16 +14,26 @@ namespace Strata
 	namespace
 	{
 		constexpr const char* c_EditorStatusSection = "editor";
+
+		EditorContextSpecification MakeContextSpecification(const EditorOptions& options)
+		{
+			EditorContextSpecification specification;
+			specification.WatchAssetFiles = options.WatchFiles;
+			specification.HotReloadScripts = options.WatchFiles;
+			return specification;
+		}
 	}
 
-	EditorLayer::EditorLayer(const EditorOptions& options)
-		: Layer("EditorLayer"), m_Options(options), m_Automation(m_Context, m_Commands, m_CommandRunner), m_ShowImGuiDemo(options.ShowImGuiDemo)
+	EditorLayer::EditorLayer(const EditorOptions& options, Scope<EditorHost> host)
+		: Layer("EditorLayer"), m_Options(options), m_Host(std::move(host)), m_Context(MakeContextSpecification(options)),
+		m_Automation(m_Context, m_Commands, m_CommandRunner), m_ShowImGuiDemo(options.ShowImGuiDemo)
 	{
+		ST_ASSERT(m_Host, "The editor layer needs a host");
 	}
 
 	void EditorLayer::OnAttach()
 	{
-		if (!m_Options.Headless)
+		if (!m_Options.Headless && m_Host->HasWindow())
 			FileDialogs::Init();
 		m_ContentBrowser.SetOpenSceneHandler([this](AssetHandle scene)
 		{
@@ -38,11 +48,10 @@ namespace Strata
 
 		m_Context.SetStatusProvider(c_EditorStatusSection, [this]()
 		{
-			const Application& application = Application::Get();
 			return nlohmann::json {
 				{ "headless", m_Options.Headless },
-				{ "graphicsDevice", application.GetGraphicsDevice() != nullptr },
-				{ "frame", application.GetFrameCount() },
+				{ "graphicsDevice", m_Host->HasGraphicsDevice() },
+				{ "frame", m_Host->GetFrameCount() },
 				{ "maxFrames", m_Options.MaxFrames ? nlohmann::json(*m_Options.MaxFrames) : nlohmann::json(nullptr) } };
 		});
 		if (m_Options.EnableAutomation)
@@ -62,9 +71,9 @@ namespace Strata
 			else
 			{
 				ST_ERROR("Command script: {}", error);
-				Application::Get().SetExitCode(1);
+				m_Host->SetExitCode(1);
 				if (m_Options.QuitAfterCommands)
-					Application::Get().Close();
+					m_Host->Close();
 			}
 		}
 	}
@@ -84,8 +93,8 @@ namespace Strata
 		if (m_Options.Headless && !m_Options.MaxFrames)
 		{
 			ST_ERROR("A headless editor without --frames needs automation; exiting");
-			Application::Get().SetExitCode(1);
-			Application::Get().Close();
+			m_Host->SetExitCode(1);
+			m_Host->Close();
 		}
 	}
 
@@ -97,7 +106,7 @@ namespace Strata
 		if (m_CommandScript->HasFailed())
 		{
 			ST_ERROR("Command script finished with errors");
-			Application::Get().SetExitCode(1);
+			m_Host->SetExitCode(1);
 		}
 		else
 		{
@@ -105,7 +114,7 @@ namespace Strata
 		}
 		m_CommandScript.reset();
 		if (m_Options.QuitAfterCommands)
-			Application::Get().Close();
+			m_Host->Close();
 	}
 
 	void EditorLayer::OnDetach()
@@ -129,9 +138,8 @@ namespace Strata
 		UpdateCommandScript();
 		UpdateWindowTitle();
 
-		Application& application = Application::Get();
 		// editor.quit answered already (it checked for unsaved changes); this frame is the last one.
-		if (m_Context.IsQuitRequested() && application.IsRunning())
+		if (m_Context.IsQuitRequested() && m_Host->IsRunning())
 		{
 			ST_INFO("Closing the editor (editor.quit)");
 			// The rest of the command script will not run: a scripted run (CI, automation) must not look successful.
@@ -139,27 +147,27 @@ namespace Strata
 			{
 				ST_ERROR("The command script did not finish before editor.quit ({} of {} commands done)", m_CommandScript->GetCompletedCount(),
 					m_CommandScript->GetStepCount());
-				application.SetExitCode(1);
+				m_Host->SetExitCode(1);
 			}
-			application.Close();
+			m_Host->Close();
 		}
 		// Started for a tool that has gone away (--idle-timeout): nobody is left to quit it.
-		if (m_Automation.HasIdledOut() && application.IsRunning())
+		if (m_Automation.HasIdledOut() && m_Host->IsRunning())
 		{
 			ST_WARN("No automation client for {} s (--idle-timeout): closing the editor{}", m_Options.IdleTimeout.count(),
 				m_Context.IsSceneModified() ? " and discarding unsaved scene changes" : "");
-			application.Close();
+			m_Host->Close();
 		}
-		const bool lastFrame = m_Options.MaxFrames && application.GetFrameCount() + 1 == *m_Options.MaxFrames;
+		const bool lastFrame = m_Options.MaxFrames && m_Host->GetFrameCount() + 1 == *m_Options.MaxFrames;
 		if (lastFrame && m_CommandScript)
 		{
 			ST_ERROR("The command script did not finish within {} frames ({} of {} commands done)", *m_Options.MaxFrames,
 				m_CommandScript->GetCompletedCount(), m_CommandScript->GetStepCount());
-			application.SetExitCode(1);
+			m_Host->SetExitCode(1);
 		}
 		if (lastFrame && !m_Options.ScreenshotPath.empty())
 		{
-			application.RequestBackBufferCapture([path = m_Options.ScreenshotPath](const ReadbackImage& image)
+			m_Host->RequestScreenshot([path = m_Options.ScreenshotPath](const ReadbackImage& image)
 			{
 				std::string error;
 				if (ImageWriter::SavePNG(image, path, true, &error))
@@ -172,8 +180,7 @@ namespace Strata
 
 	void EditorLayer::UpdateWindowTitle()
 	{
-		Window* window = Application::Get().GetWindow();
-		if (!window)
+		if (!m_Host->HasWindow())
 			return;
 		std::string title = "Strata Editor";
 		if (m_Context.HasProject())
@@ -185,7 +192,7 @@ namespace Strata
 			title += fmt::format(" [{}]", SceneStateToString(m_Context.GetSceneState()));
 		if (title != m_WindowTitle)
 		{
-			window->SetTitle(title);
+			m_Host->SetWindowTitle(title);
 			m_WindowTitle = std::move(title);
 		}
 	}
@@ -213,7 +220,7 @@ namespace Strata
 			if (!m_Context.IsSceneModified())
 				return false;
 			// Keep running and ask first; closing happens from the dialog.
-			RequestDiscardChanges([]() { Application::Get().Close(); });
+			RequestDiscardChanges([this]() { m_Host->Close(); });
 			return true;
 		});
 		dispatcher.Dispatch<WindowFileDropEvent>([this](WindowFileDropEvent& drop)
@@ -462,7 +469,7 @@ namespace Strata
 				RunEditorCommand(m_Context, m_Commands, "project.setStartScene", { { "scene", UUIDToJson(m_Context.GetSceneHandle()) } });
 			ImGui::Separator();
 			if (ImGui::MenuItem("Exit"))
-				RequestDiscardChanges([]() { Application::Get().Close(); });
+				RequestDiscardChanges([this]() { m_Host->Close(); });
 			ImGui::EndMenu();
 		}
 

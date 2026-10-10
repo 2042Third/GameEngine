@@ -25,13 +25,14 @@ The root `CMakeLists.txt` adds `Strata/vendor`, `StrataScriptCore` and `Strata`,
 
 ```mermaid
 graph TD
-  Editor[StrataEditor exe] --> EditorCore[StrataEditorCore static]
+  Editor[StrataEditor exe] --> EditorUI[StrataEditorUI static]
+  EditorUI --> EditorCore[StrataEditorCore static]
   EditorCore --> Strata[Strata static]
   Runtime[StrataRuntime exe] --> Strata
   CLI[StrataCLI exe] --> CLILib[StrataCLILib static]
   CLILib --> Strata
   Tests[StrataTests exe] --> Strata
-  Tests --> EditorCore
+  Tests --> EditorUI
   Tests --> CLILib
   Tests --> ScriptCore
   Strata -.->|ScriptABI.h only| ScriptCore[StrataScriptCore interface]
@@ -47,7 +48,8 @@ Each target is defined in the `CMakeLists.txt` of its directory; script modules 
 | `Strata` | static library | Engine modules, platform code, embedded shaders and default font (`Strata/src/`). |
 | `StrataScriptCore` | interface library | Script C ABI and header-only C++ SDK; links glm only (`StrataScriptCore/`). |
 | `StrataEditorCore` | static library | The editor without UI (`StrataEditor/src/Editor/`). |
-| `StrataEditor` | executable | ImGui panels and `EditorLayer` on top of the core; links `nfd` (`StrataEditor/src/`). |
+| `StrataEditorUI` | static library | The ImGui interface on the core: `EditorLayer` and the panels; links `nfd` (`StrataEditor/src/UI/`, `Panels/`, `EditorLayer.*`). |
+| `StrataEditor` | executable | Runs the UI: `EditorApplication` (options, `EditorHost`) (`StrataEditor/src/EditorApplication.cpp`). |
 | `StrataRuntime` | executable | Plays exported games (`StrataRuntime/src/RuntimeApplication.cpp`). |
 | `StrataCLILib`, `StrataCLI` | static library, executable | Automation client and MCP server (`StrataCLI/src/`). |
 | `StrataTests` | executable | doctest suites; builds the test script modules as dependencies (`StrataTests/`). |
@@ -62,8 +64,9 @@ What may depend on what:
   see their headers.
 - Script modules link `StrataScriptCore` only and never the engine; only two entry points are exported
   (`StrataScriptModule.cmake`). See [Scripting](#scripting).
-- `StrataEditorCore` holds everything testable about the editor; `StrataEditor/src/Panels/` and `UI/` only draw its
-  state and call its commands. Tests link the core, never the panels.
+- `StrataEditorCore` holds the editor's state and commands; `StrataEditorUI` only draws that state and calls the
+  commands, and reaches the application only through `EditorHost` (`StrataEditor/src/EditorHost.h`), so tests link both
+  and draw the UI without a window or GPU (`StrataTests/src/Editor/ImGuiHarness.h`).
 - StrataCLI's logic lives in `StrataCLILib` so that `StrataTests` can link it (`STRATA_TESTS_HAVE_CLI`). Editor and
   CLI tests compile only when those targets exist (`StrataTests/CMakeLists.txt`).
 - Platform code is in `Strata/src/Platform/` (`Windows`, `Posix`, `GLFW`, `Vulkan`), filtered per OS by

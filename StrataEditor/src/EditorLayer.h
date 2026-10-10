@@ -4,6 +4,7 @@
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "EditorHost.h"
 #include "Panels/ConsolePanel.h"
 #include "Panels/ContentBrowserPanel.h"
 #include "Panels/InspectorPanel.h"
@@ -38,14 +39,17 @@ namespace Strata
 		// Close the editor after this long without a connected automation client (0: never), e.g. a headless editor
 		// started for an MCP server that went away.
 		std::chrono::seconds IdleTimeout = std::chrono::seconds(0);
+		// Watch the project's assets and script module for changes made outside the editor (hot reload). UI tests turn it off:
+		// they need no watcher threads.
+		bool WatchFiles = true;
 	};
 
 	// The editor application layer: owns the editor state (EditorContext), the command registry shared with automation,
-	// and the ImGui interface (menus, toolbar, panels).
+	// and the ImGui interface (menus, toolbar, panels). It reaches the application only through its EditorHost.
 	class EditorLayer : public Layer
 	{
 	public:
-		explicit EditorLayer(const EditorOptions& options);
+		EditorLayer(const EditorOptions& options, Scope<EditorHost> host);
 		~EditorLayer() override = default;
 
 		void OnAttach() override;
@@ -57,6 +61,7 @@ namespace Strata
 		EditorContext& GetContext() { return m_Context; }
 		const EditorCommandRegistry& GetCommands() const { return m_Commands; }
 		EditorCommandRunner& GetCommandRunner() { return m_CommandRunner; }
+		EditorHost& GetHost() { return *m_Host; }
 	private:
 		void StartAutomation();
 		void DrawDockspace();
@@ -83,6 +88,7 @@ namespace Strata
 		void BuildScripts();
 	private:
 		EditorOptions m_Options;
+		Scope<EditorHost> m_Host;
 		EditorContext m_Context;
 		EditorCommandRegistry m_Commands;
 		// Declared before the runner: cancelling pending commands when the runner is destroyed calls the script's

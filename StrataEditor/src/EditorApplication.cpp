@@ -1,6 +1,8 @@
 #include <Strata.h>
 #include <Strata/Core/EntryPoint.h>
+#include <Strata/ImGui/ImGuiLayer.h>
 
+#include "EditorHost.h"
 #include "EditorLayer.h"
 
 namespace Strata
@@ -9,14 +11,68 @@ namespace Strata
 	constexpr uint32_t c_HeadlessFrameRate = 60;
 	constexpr int64_t c_MaxIdleTimeoutSeconds = 7 * 24 * 60 * 60; // A week
 
+	// The editor layer's view of the application.
+	class ApplicationEditorHost final : public EditorHost
+	{
+	public:
+		explicit ApplicationEditorHost(Application& application)
+			: m_Application(application)
+		{
+		}
+
+		bool IsRunning() const override { return m_Application.IsRunning(); }
+		void Close() override { m_Application.Close(); }
+		void SetExitCode(int exitCode) override { m_Application.SetExitCode(exitCode); }
+		uint64_t GetFrameCount() const override { return m_Application.GetFrameCount(); }
+		double GetTime() const override { return Time::GetTime(); }
+		bool HasGraphicsDevice() const override { return m_Application.GetGraphicsDevice() != nullptr; }
+
+		bool HasWindow() const override { return m_Application.GetWindow() != nullptr; }
+
+		void SetWindowTitle(const std::string& title) override
+		{
+			if (Window* window = m_Application.GetWindow())
+				window->SetTitle(title);
+		}
+
+		glm::uvec2 GetWindowSize() const override
+		{
+			const Window* window = m_Application.GetWindow();
+			return window ? glm::uvec2(window->GetWidth(), window->GetHeight()) : glm::uvec2(0);
+		}
+
+		bool IsWindowFocused() const override
+		{
+			const Window* window = m_Application.GetWindow();
+			return window && window->IsFocused();
+		}
+
+		float GetUIScale() const override
+		{
+			const ImGuiLayer* imgui = m_Application.GetImGuiLayer();
+			return imgui ? imgui->GetUIScale() : 1.0f;
+		}
+
+		void SetMaxFrameRate(uint32_t framesPerSecond) override { m_Application.SetMaxFrameRate(framesPerSecond); }
+		uint32_t GetMaxFrameRate() const override { return m_Application.GetMaxFrameRate(); }
+
+		void RequestScreenshot(std::function<void(const ReadbackImage&)> callback) override
+		{
+			m_Application.RequestBackBufferCapture(std::move(callback));
+		}
+	private:
+		Application& m_Application;
+	};
+
 	class EditorApplication : public Application
 	{
 	public:
 		EditorApplication(const ApplicationSpecification& specification, const EditorOptions& options)
 			: Application(specification)
 		{
+			// The layer owns its host; the application outlives its layers.
 			if (IsRunning())
-				PushLayer(new EditorLayer(options));
+				PushLayer(new EditorLayer(options, CreateScope<ApplicationEditorHost>(*this)));
 		}
 	};
 

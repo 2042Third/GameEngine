@@ -1,7 +1,7 @@
 # StrataEditor: the Strata scene editor (ImGui docking UI, gizmos, undo/redo, automation server).
 #
 # StrataEditorCore holds the UI-independent editor (project and scene state, commands, undo/redo) so the
-# tests can drive it headless; the executable adds the ImGui interface on top.
+# tests can drive it headless; StrataEditorUI adds the ImGui interface on top, and the executable runs it.
 
 file(GLOB_RECURSE STRATA_EDITOR_CORE_SOURCES CONFIGURE_DEPENDS
 	"${CMAKE_CURRENT_SOURCE_DIR}/src/Editor/*.h"
@@ -31,16 +31,28 @@ configure_file("${CMAKE_CURRENT_SOURCE_DIR}/src/Editor/ScriptBuildConfig.h.in" "
 target_include_directories(StrataEditorCore PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/Generated")
 target_compile_definitions(StrataEditorCore PRIVATE "ST_SCRIPT_BUILD_CONFIGURATION=\"$<CONFIG>\"")
 
-file(GLOB_RECURSE STRATA_EDITOR_SOURCES CONFIGURE_DEPENDS
-	"${CMAKE_CURRENT_SOURCE_DIR}/src/*.h"
-	"${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
-list(REMOVE_ITEM STRATA_EDITOR_SOURCES ${STRATA_EDITOR_CORE_SOURCES})
+# StrataEditorUI is the ImGui interface on top of the core: EditorLayer and the panels. It is a library so the tests can
+# draw it without a window or a GPU (StrataTests' ImGuiHarness).
+file(GLOB_RECURSE STRATA_EDITOR_UI_SOURCES CONFIGURE_DEPENDS
+	"${CMAKE_CURRENT_SOURCE_DIR}/src/UI/*.h"
+	"${CMAKE_CURRENT_SOURCE_DIR}/src/UI/*.cpp"
+	"${CMAKE_CURRENT_SOURCE_DIR}/src/Panels/*.h"
+	"${CMAKE_CURRENT_SOURCE_DIR}/src/Panels/*.cpp")
+list(APPEND STRATA_EDITOR_UI_SOURCES
+	"${CMAKE_CURRENT_SOURCE_DIR}/src/EditorHost.h"
+	"${CMAKE_CURRENT_SOURCE_DIR}/src/EditorLayer.h"
+	"${CMAKE_CURRENT_SOURCE_DIR}/src/EditorLayer.cpp")
 
+add_library(StrataEditorUI STATIC ${STRATA_EDITOR_UI_SOURCES})
+strata_configure_target(StrataEditorUI)
+source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${STRATA_EDITOR_UI_SOURCES})
+target_link_libraries(StrataEditorUI PUBLIC StrataEditorCore PRIVATE nfd)
+
+set(STRATA_EDITOR_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/EditorApplication.cpp")
 add_executable(StrataEditor ${STRATA_EDITOR_SOURCES})
 strata_configure_target(StrataEditor)
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${STRATA_EDITOR_SOURCES})
-target_include_directories(StrataEditor PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_link_libraries(StrataEditor PRIVATE StrataEditorCore nfd)
+target_link_libraries(StrataEditor PRIVATE StrataEditorUI)
 
 if(WIN32)
 	target_sources(StrataEditor PRIVATE "${PROJECT_SOURCE_DIR}/CMake/Strata.manifest")
