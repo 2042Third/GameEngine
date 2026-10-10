@@ -238,6 +238,35 @@ TEST_SUITE("Editor.Undo")
 		CHECK(stack.IsModified()); // The saved state (0) was trimmed away
 	}
 
+	TEST_CASE("Trimming steps that do not change the scene keeps the save point")
+	{
+		int value = 0;
+		int outside = 0;
+		UndoStack stack(3);
+		stack.MarkSaved();
+		// Many material edits after a save: the oldest are dropped, the scene is still as saved.
+		for (int step = 0; step < 5; step++)
+			stack.Execute(CreateScope<OutsideAction>(outside));
+		CHECK(stack.GetHistory().size() == 3);
+		CHECK_FALSE(stack.IsModified());
+		// A scene edit after them makes it modified, and undoing it returns to the saved scene.
+		stack.Execute(CreateScope<AddAction>(value, 1));
+		CHECK(stack.IsModified());
+		REQUIRE(stack.Undo());
+		CHECK_FALSE(stack.IsModified());
+		// Once a scene edit right after the save point is dropped, the saved state cannot be reached any more.
+		stack.Clear();
+		stack.MarkSaved();
+		stack.Execute(CreateScope<AddAction>(value, 1));
+		for (int step = 0; step < 3; step++)
+			stack.Execute(CreateScope<OutsideAction>(outside));
+		CHECK(stack.IsModified());
+		while (stack.Undo())
+		{
+		}
+		CHECK(stack.IsModified());
+	}
+
 	TEST_CASE("A redo that fails drops the redo history and the save point in it")
 	{
 		int value = 0;
