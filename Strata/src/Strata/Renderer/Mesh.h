@@ -61,6 +61,8 @@ namespace Strata
 		AssetFinalizeResult FinalizeOnMainThread(const AssetFinalizeContext& context) override;
 		// The CPU geometry and, once uploaded, the GPU buffers (each counted once, in its own pool).
 		AssetMemoryUsage GetMemoryUsage() const override;
+		// The CPU geometry and, with a renderer, the GPU buffers it will create.
+		AssetMemoryUsage GetFinalizedMemoryUsage() const override;
 
 		const std::vector<glm::vec3>& GetPositions() const { return m_Positions; }
 		const std::vector<MeshVertexAttributes>& GetAttributes() const { return m_Attributes; }

@@ -280,6 +280,9 @@ namespace Strata
 			Ref<Asset> LoadedAsset;
 			std::string Error;
 			uint64_t InFlightBytes = 0; // Counted in flight by the streaming queue until this completion is handled
+			bool RoomMade = false;        // MakeRoomFor ran for it
+			uint64_t FinalizeFrame = 0;   // Not finalized (with a budget) before this frame: memory evicted for it is released then
+			bool FinalizeStarted = false; // Its finalization is under way (it continues over several frames)
 		};
 
 		struct LoadState;
@@ -325,7 +328,13 @@ namespace Strata
 		// by the caller's generation change. Returns whether the entry was loading.
 		bool AbandonLoadLocked(AssetEntry& entry);
 		uint32_t EvictUnusedLocked(uint32_t unusedFrames, std::vector<Ref<Asset>>& released);
+		// Evicts the least recently requested assets of the pools that `incoming` more bytes would put over budget.
+		void EvictToFitLocked(const AssetMemoryUsage& incoming, std::vector<Ref<Asset>>& released);
 		void EvictToBudgets();
+		// Before an asset is finalized: when it is in use (requested within the grace window, so it will stay), evicts what
+		// its memory would put over budget. Returns the GPU bytes evicted: the arrival waits until they are released (see
+		// ProcessCompletions), so that the device holds the budget at most, not the budget plus the arrivals.
+		uint64_t MakeRoomFor(AssetHandle handle, const AssetMemoryUsage& incoming);
 		void Unpin(AssetHandle handle, uint64_t registration);
 		// Records the frame's finalization statistics and recreates an idle upload command list (main thread).
 		void EndFrameUploads();
@@ -341,6 +350,9 @@ namespace Strata
 		// Residency (guarded by m_Mutex)
 		AssetResidencyBudgets m_Budgets;
 		uint32_t m_EvictionGraceFrames = 4;
+		// Frames until the GPU memory of a dropped asset is released: the frames in flight plus one (the bindless table keeps
+		// textures that long).
+		uint32_t m_GpuReleaseFrames = 3;
 		uint64_t m_FrameIndex = 0;
 		AssetMemoryUsage m_Resident;
 		std::list<AssetHandle> m_RecencyOrder; // Evictable resident assets, least recently requested first

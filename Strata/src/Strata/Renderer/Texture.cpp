@@ -557,6 +557,13 @@ namespace Strata
 		return bytes;
 	}
 
+	AssetMemoryUsage Texture::GetFinalizedMemoryUsage() const
+	{
+		if (!Renderer::IsInitialized())
+			return GetMemoryUsage();
+		return AssetMemoryUsage { 0, GetChainBytes(), 0 };
+	}
+
 	AssetMemoryUsage Texture::GetMemoryUsage() const
 	{
 		AssetMemoryUsage usage;

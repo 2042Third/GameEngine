@@ -202,6 +202,7 @@ TEST_SUITE("GPU.Assets.Uploads")
 		// Through the asset pipeline's path: the texture takes the cooked bytes over.
 		Ref<Texture> texture = Texture::Deserialize(source->Serialize());
 		REQUIRE(texture);
+		CHECK(texture->GetFinalizedMemoryUsage() == AssetMemoryUsage { 0, chainBytes, 0 });
 
 		uint64_t uploaded = 0;
 		CHECK(FinalizeOnce(gpu, *texture, 1, uploaded) == AssetFinalizeResult::Pending);
@@ -276,6 +277,7 @@ TEST_SUITE("GPU.Assets.Uploads")
 		const uint64_t positionBytes = c_Vertices * sizeof(glm::vec3);
 		const uint64_t attributeBytes = c_Vertices * sizeof(MeshVertexAttributes);
 		const uint64_t indexBytes = c_Vertices * sizeof(uint32_t);
+		CHECK(mesh->GetFinalizedMemoryUsage().GpuBuffers == positionBytes + attributeBytes + indexBytes);
 
 		uint64_t uploaded = 0;
 		uint64_t total = 0;

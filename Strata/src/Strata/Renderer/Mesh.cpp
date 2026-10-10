@@ -259,6 +259,17 @@ namespace Strata
 		return usage;
 	}
 
+	AssetMemoryUsage Mesh::GetFinalizedMemoryUsage() const
+	{
+		AssetMemoryUsage usage = GetMemoryUsage();
+		if (Renderer::IsInitialized() && !m_IndexBuffer)
+		{
+			for (size_t bytes : { m_Positions.size() * sizeof(glm::vec3), m_Attributes.size() * sizeof(MeshVertexAttributes), m_Indices.size() * sizeof(uint32_t) })
+				usage.GpuBuffers += GetStaticBufferSize(bytes);
+		}
+		return usage;
+	}
+
 	uint32_t Mesh::GetTriangleCount() const
 	{
 		uint32_t triangles = 0;

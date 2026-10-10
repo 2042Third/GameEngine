@@ -118,6 +118,10 @@ namespace Strata
 		// Approximate memory held by the asset, per pool. Asset managers read it once the asset is finalized (for
 		// residency budgets, upload budgets and statistics), so it must describe the asset's state from then on.
 		virtual AssetMemoryUsage GetMemoryUsage() const { return {}; }
+		// What GetMemoryUsage will report once the asset is finalized, asked before finalizing: managers make room for it in
+		// their budgets first, so its memory is allocated after what it replaces was freed. Assets whose finalization moves
+		// data between pools (CPU pixels to a GPU texture) override it.
+		virtual AssetMemoryUsage GetFinalizedMemoryUsage() const { return GetMemoryUsage(); }
 
 		// Whether objects outside the asset share its data, so that dropping the asset would free nothing (a playing
 		// voice holds an audio clip's samples). Residency management keeps such assets resident.

@@ -164,7 +164,8 @@ namespace
 						manager->GetAsset(textures[(frame + offset) % c_TextureCount], AssetPriority::High);
 				});
 			}
-			// Everything requested last arrives: finalization takes 4 ms per frame and uploads textures in steps.
+			// Everything requested last arrives: finalization takes 4 ms per frame, and an arrival that made room waits for
+			// the frames in flight first.
 			uint32_t settleFrames = 0;
 			for (; settleFrames < 120 && manager->HasPendingLoads(); settleFrames++)
 				RunDeviceFrame(gpu, [&]() { manager->Update(); });
@@ -323,6 +324,53 @@ TEST_SUITE("GPU.Assets.Residency")
 		REQUIRE(Renderer::ReadTexture(reloaded->GetGPUTexture(), image, 9));
 		CHECK(GetPixelRGBA8(image, 1, 1) == glm::u8vec4(10, 200, 30, 255));
 		reloaded.reset();
+		manager.reset();
+		SettleDevice(gpu);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A texture that needs room waits until what was evicted for it is released")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const Ref<const std::vector<uint8_t>> cooked = CreateRef<const std::vector<uint8_t>>(CookSolidTexture(1024, glm::u8vec4(90, 90, 200, 255)));
+		const uint64_t textureBytes = GetTextureBytes(1024);
+		Ref<TextureManager> manager = CreateRef<TextureManager>();
+		const AssetHandle old = manager->Add(0x40000, cooked);
+		const AssetHandle arrival = manager->Add(0x40001, cooked);
+		AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
+		budgets.GpuTextures = textureBytes + textureBytes / 2; // One of them fits
+		manager->SetResidencyBudgets(budgets);
+
+		// The old texture is used for a while, then not any more.
+		for (uint32_t frame = 0; frame < 10 && manager->GetAssetState(old) != AssetState::Ready; frame++)
+			RunDeviceFrame(gpu, [&]() { manager->Update(); manager->GetAsset(old); });
+		REQUIRE(manager->GetAssetState(old) == AssetState::Ready);
+		for (uint32_t frame = 0; frame <= manager->GetEvictionGraceFrames() + 1; frame++)
+			RunDeviceFrame(gpu, [&]() { manager->Update(); });
+		REQUIRE(manager->GetAssetState(old) == AssetState::Ready); // Within the budget, unused or not
+
+		// The new one is used every frame from now on: the old one goes to make room for it, and the new one is uploaded
+		// once the frames that might have used the old one are done, so the device never holds both.
+		uint64_t evictedFrame = 0;
+		uint64_t readyFrame = 0;
+		for (uint32_t frame = 0; frame < 20 && readyFrame == 0; frame++)
+		{
+			RunDeviceFrame(gpu, [&]()
+			{
+				manager->Update();
+				if (evictedFrame == 0 && manager->GetAssetState(old) == AssetState::Unloaded)
+					evictedFrame = manager->GetFrameIndex();
+				if (readyFrame == 0 && manager->GetAssetState(arrival) == AssetState::Ready)
+					readyFrame = manager->GetFrameIndex();
+				manager->GetAsset(arrival);
+			});
+		}
+		REQUIRE(evictedFrame > 0);
+		REQUIRE(readyFrame > 0);
+		CHECK(readyFrame - evictedFrame == gpu.GetDevice().GetMaxFramesInFlight() + 1);
+		CHECK(manager->GetStats().Resident.GpuTextures == textureBytes);
+
 		manager.reset();
 		SettleDevice(gpu);
 		CHECK(gpu.GetNewErrorCount() == 0);

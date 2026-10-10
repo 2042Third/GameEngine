@@ -467,5 +467,97 @@ TEST_SUITE("Asset.Residency")
 		CHECK(stats.LoadedMemory == stats.Resident.GetTotal());
 		CHECK(stats.Cancellations == 1); // The pinned asset was unloaded while its load waited to be finalized
 	}
+
+	TEST_CASE("An arrival in use makes room before it is finalized; one nobody requests lately does not")
+	{
+		// Fake assets that note how much the manager held when they were finalized.
+		std::vector<uint64_t> residentAtFinalize;
+		class ProbeAsset final : public Asset
+		{
+		public:
+			ProbeAsset(const AssetMemoryUsage& usage, std::vector<uint64_t>& residentAtFinalize)
+				: m_Usage(usage), m_ResidentAtFinalize(residentAtFinalize)
+			{
+			}
+
+			AssetType GetType() const override { return c_FakeAssetType; }
+			AssetMemoryUsage GetMemoryUsage() const override { return m_Usage; }
+			AssetFinalizeResult FinalizeOnMainThread(const AssetFinalizeContext& context) override
+			{
+				m_ResidentAtFinalize.push_back(context.Manager->GetStats().Resident.Cpu);
+				return AssetFinalizeResult::Done;
+			}
+		private:
+			AssetMemoryUsage m_Usage;
+			std::vector<uint64_t>& m_ResidentAtFinalize;
+		};
+		const AssetLoadFunction* previous = AssetLoaderRegistry::Find(c_FakeAssetType);
+		REQUIRE(previous);
+		const AssetLoadFunction restore = *previous;
+		AssetLoaderRegistry::Register(c_FakeAssetType, [&residentAtFinalize](const AssetMetadata&, std::span<const uint8_t> data, std::string*) -> Ref<Asset>
+		{
+			AssetMemoryUsage usage;
+			std::memcpy(&usage, data.data(), std::min(data.size(), sizeof(usage)));
+			return CreateRef<ProbeAsset>(usage, residentAtFinalize);
+		});
+		struct RestoreLoader
+		{
+			const AssetLoadFunction& Previous;
+			~RestoreLoader() { AssetLoaderRegistry::Register(c_FakeAssetType, Previous); }
+		} restoreLoader { restore };
+
+		{
+			// 100 KB of CPU memory beside the built-in assets: one 60 KB asset fits. The old one goes before the new one in use
+			// is finalized.
+			Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+			const uint64_t builtins = manager->GetStats().Resident.Cpu;
+			const AssetHandle old = manager->Add(0x80000, MakeUsage(60 * c_KB));
+			const AssetHandle arrival = manager->Add(0x80001, MakeUsage(60 * c_KB));
+			manager->SetResidencyBudgets(MakeBudgets(builtins + 100 * c_KB, AssetResidencyBudgets::c_Unlimited, AssetResidencyBudgets::c_Unlimited));
+			LoadAll(*manager, { old });
+			for (uint32_t frame = 0; frame <= manager->GetEvictionGraceFrames(); frame++)
+				manager->Update();
+			REQUIRE(manager->GetAssetState(old) == AssetState::Ready);
+
+			residentAtFinalize.clear();
+			manager->GetAsset(arrival);
+			manager->Update();
+			CHECK(manager->GetAssetState(arrival) == AssetState::Ready);
+			CHECK(manager->GetAssetState(old) == AssetState::Unloaded);
+			REQUIRE(residentAtFinalize.size() == 1);
+			CHECK(residentAtFinalize[0] == builtins); // The old asset was gone already
+			CHECK(manager->GetStats().Evictions == 1);
+		}
+		{
+			// An arrival whose requests stopped before it arrived is no reason to evict what is in use: it goes itself.
+			ScopedJobSystem jobs(2, 1);
+			Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+			const uint64_t builtins = manager->GetStats().Resident.Cpu;
+			manager->SetResidencyBudgets(MakeBudgets(builtins + 100 * c_KB, AssetResidencyBudgets::c_Unlimited, AssetResidencyBudgets::c_Unlimited));
+			const AssetHandle inUse = manager->Add(0x80002, MakeUsage(60 * c_KB));
+			const AssetHandle late = manager->Add(0x80003, MakeUsage(60 * c_KB));
+			manager->GetAsset(inUse);
+			REQUIRE(manager->WaitForPendingLoads());
+			REQUIRE(manager->GetAssetState(inUse) == AssetState::Ready);
+
+			manager->CloseGate();
+			manager->RequestLoad(late);
+			REQUIRE(manager->WaitForWaitingReads(1));
+			for (uint32_t frame = 0; frame <= manager->GetEvictionGraceFrames() + 1; frame++)
+			{
+				manager->GetAsset(inUse);
+				manager->Update();
+			}
+			residentAtFinalize.clear();
+			manager->OpenGate();
+			REQUIRE(manager->WaitForPendingLoads()); // Finalized without a budget: still no room made for it
+			manager->GetAsset(inUse);
+			manager->Update();
+			REQUIRE(residentAtFinalize.size() == 1);
+			CHECK(residentAtFinalize[0] == builtins + 60 * c_KB); // In use, so it stayed
+			CHECK(manager->GetAssetState(inUse) == AssetState::Ready);
+			CHECK(manager->GetAssetState(late) == AssetState::Unloaded);
+		}
+	}
 }
 

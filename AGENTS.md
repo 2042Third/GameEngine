@@ -299,10 +299,11 @@ The threading model, frame loop and pipelines these rules protect are described 
 - Adding an asset type: an `Asset` subclass with a cooked/serialized form, a loader in
   `Asset/AssetRegistration.cpp` (it takes the stored bytes over with `AssetLoadData::TakeBytes` when the asset keeps
   them, instead of copying them), an importer if it comes from external files, `GetMemoryUsage` reporting what it holds
-  in each pool once finalized, and tests for round trips and corrupt data (every loader must reject truncated or
-  garbage bytes without crashing). GPU uploads in `FinalizeOnMainThread` go in steps of at most
-  `c_AssetUploadStepBytes` within the context's budget (`AssetFinalizeContext`, `AssetFinalizeResult::Pending`) and
-  report their bytes; never upload an unbounded amount in one call.
+  in each pool once finalized (and `GetFinalizedMemoryUsage` when finalizing moves data between pools), and tests for
+  round trips and corrupt data (every loader must reject truncated or garbage bytes without crashing). GPU uploads in
+  `FinalizeOnMainThread` go in steps of at most `c_AssetUploadStepBytes` within the context's budget
+  (`AssetFinalizeContext`, `AssetFinalizeResult::Pending`) and report their bytes; never upload an unbounded amount in
+  one call.
 
 ## Scripting
 

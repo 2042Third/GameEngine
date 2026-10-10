@@ -91,6 +91,8 @@ namespace Strata
 		static constexpr uint64_t c_UploadBandBytes = c_AssetUploadStepBytes;
 		// The CPU mip chain (until it is uploaded) and the GPU texture.
 		AssetMemoryUsage GetMemoryUsage() const override;
+		// With a renderer, the GPU mip chain (the CPU copy goes); without one, the CPU mip chain.
+		AssetMemoryUsage GetFinalizedMemoryUsage() const override;
 
 		uint32_t GetWidth() const { return m_Mips.empty() ? m_Width : m_Mips[0].Width; }
 		uint32_t GetHeight() const { return m_Mips.empty() ? m_Height : m_Mips[0].Height; }

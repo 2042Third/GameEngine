@@ -114,6 +114,7 @@ namespace Strata
 		// Frames the GPU may still be working on, plus two: an asset drawn that recently is still in use.
 		const uint32_t framesInFlight = Renderer::IsInitialized() ? Renderer::GetGraphicsDevice().GetMaxFramesInFlight() : c_DefaultFramesInFlight;
 		m_EvictionGraceFrames = framesInFlight + 2;
+		m_GpuReleaseFrames = framesInFlight + 1;
 		UpdateStreamingLimits();
 		BuiltinAssets::Register(*this);
 	}
@@ -706,6 +707,21 @@ namespace Strata
 			// the budget, it gets what is left of the frame's: a large upload continues in the next frame (Pending).
 			if (completion.LoadedAsset)
 			{
+				if (!completion.FinalizeStarted)
+				{
+					// Room first. GPU memory of what was evicted for it is released only once no frame in flight can use it;
+					// with a renderer and a budget the arrival waits for that (and what queues behind it), so the device
+					// never holds both.
+					if (!completion.RoomMade)
+					{
+						completion.RoomMade = true;
+						if (MakeRoomFor(completion.Handle, completion.LoadedAsset->GetFinalizedMemoryUsage()) > 0 && commandList)
+							completion.FinalizeFrame = GetFrameIndex() + m_GpuReleaseFrames;
+					}
+					if (applyBudget && GetFrameIndex() < completion.FinalizeFrame)
+						break; // Stays first in line
+					completion.FinalizeStarted = true;
+				}
 				AssetFinalizeContext context { commandList, this };
 				if (applyBudget)
 				{

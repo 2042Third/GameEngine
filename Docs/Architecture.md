@@ -323,8 +323,9 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
                                      v
  AssetManagerBase: streaming queue -> I/O read -> worker decode (AssetLoadFunction) -> completion queue
                                      v
- AssetManagerBase::Update (main thread): FinalizeOnMainThread (GPU uploads in steps through staging) within the
-                                         upload and time budgets -> Ready; then eviction of the pools over budget
+ AssetManagerBase::Update (main thread): room for the arrival, FinalizeOnMainThread (GPU uploads in steps through
+                                         staging) within the upload and time budgets -> Ready; then eviction of the
+                                         pools over budget
 ```
 
 - **Importing** (`Asset/EditorAssetManager.h`). `Scan` registers every file with a known importer, creates missing
@@ -405,6 +406,12 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   finalized. Requests, `Update`, finished reads and handled completions pump it; a pump requested while one runs is
   left to that one, so loads that run inline (no job system) never recurse. `CancelLoad` and `UnloadAsset` remove queued
   requests; dispatched loads check their generation before reading and before decoding.
+- **Room before arrival**. Before an asset is finalized, the manager asks what it will hold (`GetFinalizedMemoryUsage`)
+  and, when the asset is in use (requested within the grace window, so it will stay), evicts what that would put over
+  budget first (`MakeRoomFor`). GPU memory of evicted textures is released only when no frame in flight can use it (the
+  bindless table holds them frames in flight + 1 frames), so with a renderer the arrival waits that long before it
+  uploads: the device holds the budget, not the budget plus the arrivals. An arrival nobody requested lately makes no
+  room; it may be evicted itself.
 - **Bounded uploads**. Assets upload in steps of at most `c_AssetUploadStepBytes` (4 MiB, about a millisecond of
   memcpy): textures in bands of rows of a level, or the rest of the mip chain once it fits in one band; meshes in ranges
   of their buffers. Each finalization call gets what is left of the frame's budget (`AssetFinalizeContext`: upload bytes
