@@ -211,6 +211,7 @@ namespace Strata
 				ST_WARN("The viewport state was not saved: {}", error);
 		}
 		ResetScene(CreateRef<Scene>(), UUID::Null());
+		InspectEntities(); // The project's assets go with it
 		// After the scene went: the next project starts from the default view, with none of this project's scene cameras.
 		if (hadProject)
 			m_Viewport.ResetState();
@@ -574,6 +575,8 @@ namespace Strata
 			if (GetActiveScene()->GetEntityByUUID(entity) && m_SelectionSet.insert(entity).second)
 				m_Selection.push_back(entity);
 		}
+		if (!m_Selection.empty())
+			InspectEntities();
 	}
 
 	void EditorContext::Select(UUID entity, bool additive)
@@ -586,6 +589,7 @@ namespace Strata
 		if (!m_SelectionSet.insert(entity).second)
 			std::erase(m_Selection, entity);
 		m_Selection.push_back(entity);
+		InspectEntities();
 	}
 
 	void EditorContext::Deselect(UUID entity)
@@ -624,6 +628,35 @@ namespace Strata
 			m_SelectionSet.erase(entity);
 			return true;
 		});
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
+	// Inspection
+	////////////////////////////////////////////////////////////////////////////////
+
+	bool EditorContext::SetInspectedAsset(AssetHandle handle)
+	{
+		if (!handle.IsValid())
+		{
+			InspectEntities();
+			return true;
+		}
+		if (!AssetManager::IsHandleValid(handle))
+			return false;
+		if (m_InspectedAsset != handle)
+		{
+			m_InspectedAsset = handle;
+			m_InspectionVersion++;
+		}
+		return true;
+	}
+
+	void EditorContext::InspectEntities()
+	{
+		if (!m_InspectedAsset.IsValid())
+			return;
+		m_InspectedAsset = UUID::Null();
+		m_InspectionVersion++;
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -868,6 +901,9 @@ namespace Strata
 
 		if (m_AssetManager)
 			m_AssetManager->Update();
+		// An inspected asset that was deleted (also outside the editor) is no longer shown.
+		if (m_InspectedAsset.IsValid() && !AssetManager::IsHandleValid(m_InspectedAsset))
+			InspectEntities();
 		if (m_RuntimeScene)
 		{
 			m_RuntimeScene->OnUpdateRuntime(timestep);

@@ -289,6 +289,55 @@ TEST_SUITE("Editor.Commands")
 		CHECK_FALSE(harness.Context.IsSelected(c));
 	}
 
+	TEST_CASE("The inspector shows an asset until an entity is selected")
+	{
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("EditorInspection");
+		CommandHarness harness;
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory / "Game") }, { "name", "Game" } });
+		const std::string material = harness.Run("material.create", { { "path", "Materials/Red.stmat" } })["asset"].get<std::string>();
+		const std::string entity = harness.Run("entity.create", { { "name", "Cube" } })["id"].get<std::string>();
+		EditorContext& context = harness.Context;
+		CHECK(context.GetInspectionTarget() == InspectionTarget::Entities);
+		CHECK(harness.Run("selection.get")["inspectedAsset"].is_null());
+
+		harness.Run("selection.set", { { "entities", { entity } } });
+		uint64_t version = context.GetInspectionVersion();
+		harness.Run("selection.set", { { "asset", "Materials/Red.stmat" } });
+		CHECK(context.GetInspectionTarget() == InspectionTarget::Asset);
+		CHECK(UUIDToJson(context.GetInspectedAsset()) == material);
+		CHECK(context.GetInspectionVersion() != version);
+		// The entities stay selected (their outline and gizmo stay) while the asset is inspected.
+		nlohmann::json selection = harness.Run("selection.get");
+		CHECK(selection["entities"] == nlohmann::json::array({ entity }));
+		CHECK(selection["inspectedAsset"] == material);
+		CHECK(harness.Run("editor.status")["selection"]["inspectedAsset"] == material);
+
+		// Selecting an entity inspects the entities again; clearing the selection does not.
+		version = context.GetInspectionVersion();
+		context.ClearSelection();
+		CHECK(context.GetInspectionTarget() == InspectionTarget::Asset);
+		context.Select(*UUIDFromJson(nlohmann::json(entity)));
+		CHECK(context.GetInspectionTarget() == InspectionTarget::Entities);
+		CHECK(context.GetInspectionVersion() != version);
+		CHECK(context.SetInspectedAsset(*UUIDFromJson(nlohmann::json(material))));
+		harness.Run("selection.set", { { "entities", nlohmann::json::array() } });
+		CHECK(context.GetInspectionTarget() == InspectionTarget::Asset);
+		harness.Run("selection.set", { { "asset", nullptr } });
+		CHECK(context.GetInspectionTarget() == InspectionTarget::Entities);
+
+		// Unknown assets are refused; a deleted asset is no longer inspected; neither is anything after the project closed.
+		CHECK_FALSE(context.SetInspectedAsset(UUID(0x1234)));
+		CHECK(harness.Commands.Execute(context, "selection.set", { { "asset", "Materials/Missing.stmat" } }).ErrorKind == EditorCommandError::InvalidParameters);
+		CHECK(harness.Commands.Execute(context, "selection.set", nlohmann::json::object()).ErrorKind == EditorCommandError::InvalidParameters);
+		harness.Run("selection.set", { { "asset", material } });
+		harness.Run("asset.delete", { { "asset", material } });
+		context.Update(Timestep(1.0f / 60.0f));
+		CHECK(context.GetInspectionTarget() == InspectionTarget::Entities);
+		CHECK(context.SetInspectedAsset(BuiltinAssets::DefaultMaterial));
+		context.CloseProject();
+		CHECK(context.GetInspectionTarget() == InspectionTarget::Entities);
+	}
+
 	TEST_CASE("Invalid edits fail without changing the scene or the history")
 	{
 		CommandHarness harness;

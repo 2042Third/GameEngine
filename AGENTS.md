@@ -675,6 +675,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   build tree, builds a scene and captures the viewport into `build/<preset>/StrataTests/SmokeCaptures/`), checks that a
   windowed editor without a project opens into the launcher (`Editor/LauncherCommands.json`) and that failing and
   unfinished scripts fail the process.
+- The inspectors show the selected entities or one asset (`EditorContext::SetInspectedAsset`, `selection.set {asset}`;
+  the entities stay selected). Selecting an entity, deleting the asset or closing the project returns to the entities;
+  `GetInspectionVersion` changes with every switch.
 - `editor.status` summarizes the editor (project, scene, play state, selection, undo history); other
   parts of the editor add sections to it through `EditorContext::SetStatusProvider`: `automation`, `assets` (the
   totals of `asset.stats`) and `editor`: the window, UI scale and frame rate, whether the launcher shows (`launcher`),
