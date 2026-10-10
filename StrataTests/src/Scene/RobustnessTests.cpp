@@ -205,7 +205,7 @@ TEST_SUITE("Scene.Robustness")
 	TEST_CASE("A zero step limit still advances the simulation")
 	{
 		FixedCounter::Count = 0;
-		SceneSystemRegistry::Register({ "TestFixedCounter", false, [](Scene&) { return CreateScope<FixedCounter>(); } });
+		REQUIRE(SceneSystemRegistry::Register({ "TestFixedCounter", false, [](Scene&) { return CreateScope<FixedCounter>(); } }));
 
 		Scene scene;
 		scene.GetSettings().MaxFixedStepsPerFrame = 0;
@@ -214,7 +214,7 @@ TEST_SUITE("Scene.Robustness")
 		scene.OnUpdateRuntime(0.05f);
 		CHECK(FixedCounter::Count == 1);
 		scene.OnRuntimeStop();
-		SceneSystemRegistry::Unregister("TestFixedCounter");
+		CHECK(SceneSystemRegistry::Unregister("TestFixedCounter"));
 	}
 
 	TEST_CASE("Very deep hierarchies never exhaust the stack")

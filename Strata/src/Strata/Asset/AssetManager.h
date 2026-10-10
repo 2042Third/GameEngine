@@ -33,11 +33,13 @@ namespace Strata
 	// worker threads and must not touch engine state.
 	using AssetLoadFunction = std::function<Ref<Asset>(const AssetMetadata& metadata, std::span<const uint8_t> data, std::string* outError)>;
 
-	// Loaders for every asset type. The built-in types are registered automatically; registering a type again replaces
-	// its loader (at startup only, before any asset loads).
+	// Loaders for every asset type, registered by the module that owns the type (Engine::RegisterBuiltinModules opens the
+	// registry and registers the engine's modules). Registering a type again replaces its loader (at startup only, before
+	// any asset loads). Using the registry before BeginRegistration fails ST_CORE_VERIFY.
 	class AssetLoaderRegistry
 	{
 	public:
+		static void BeginRegistration();
 		static void Register(AssetType type, AssetLoadFunction loader);
 		static const AssetLoadFunction* Find(AssetType type);
 	};

@@ -21,7 +21,7 @@ namespace Strata
 	{
 		UUID ID = UUID::Null();
 		bool Exists = false;
-		nlohmann::json Components; // ComponentAccess::SerializeEntityComponents
+		nlohmann::json Components; // ComponentAccess::SerializeEntityComponents plus the UnknownComponentsComponent's entries
 		UUID Parent = UUID::Null();
 		size_t SiblingIndex = 0;
 

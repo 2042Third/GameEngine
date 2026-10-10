@@ -10,9 +10,6 @@
 namespace Strata
 {
 
-	// Defined in Asset/AssetRegistration.cpp: creates loaders for every built-in asset type.
-	void CreateBuiltinAssetLoaders(std::unordered_map<AssetType, AssetLoadFunction>& loaders);
-
 	const char* AssetStateToString(AssetState state)
 	{
 		switch (state)
@@ -35,28 +32,22 @@ namespace Strata
 		struct LoaderStorage
 		{
 			std::mutex Mutex;
+			std::atomic<bool> Open = false;
 			std::unordered_map<AssetType, AssetLoadFunction> Loaders;
 		};
 
-		LoaderStorage& GetLoaderStorage()
+		LoaderStorage& GetLoaderStorageUnchecked()
 		{
 			static LoaderStorage s_Storage;
 			return s_Storage;
 		}
 
-		// Built-ins are registered before any other registration, so later registrations replace them.
-		void EnsureBuiltinLoaders()
+		LoaderStorage& GetLoaderStorage()
 		{
-			static std::once_flag s_Once;
-			std::call_once(s_Once, []()
-			{
-				std::unordered_map<AssetType, AssetLoadFunction> builtins;
-				CreateBuiltinAssetLoaders(builtins);
-				LoaderStorage& storage = GetLoaderStorage();
-				std::scoped_lock<std::mutex> lock(storage.Mutex);
-				for (auto& [type, loader] : builtins)
-					storage.Loaders.emplace(type, std::move(loader));
-			});
+			LoaderStorage& storage = GetLoaderStorageUnchecked();
+			ST_CORE_VERIFY(storage.Open.load(std::memory_order_acquire),
+				"The asset loader registry is used before Engine::RegisterBuiltinModules() registered the engine's modules");
+			return storage;
 		}
 
 		JobPriority ToJobPriority(AssetPriority priority)
@@ -72,9 +63,13 @@ namespace Strata
 
 	}
 
+	void AssetLoaderRegistry::BeginRegistration()
+	{
+		GetLoaderStorageUnchecked().Open.store(true, std::memory_order_release);
+	}
+
 	void AssetLoaderRegistry::Register(AssetType type, AssetLoadFunction loader)
 	{
-		EnsureBuiltinLoaders();
 		LoaderStorage& storage = GetLoaderStorage();
 		std::scoped_lock<std::mutex> lock(storage.Mutex);
 		storage.Loaders[type] = std::move(loader);
@@ -82,7 +77,6 @@ namespace Strata
 
 	const AssetLoadFunction* AssetLoaderRegistry::Find(AssetType type)
 	{
-		EnsureBuiltinLoaders();
 		LoaderStorage& storage = GetLoaderStorage();
 		std::scoped_lock<std::mutex> lock(storage.Mutex);
 		auto it = storage.Loaders.find(type);

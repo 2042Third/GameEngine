@@ -1,7 +1,7 @@
 #include "stpch.h"
 #include "Strata/Input/Input.h"
 
-#include "Strata/Core/Window.h"
+#include "Strata/Input/InputWindow.h"
 
 #include <algorithm>
 #include <bitset>
@@ -93,7 +93,7 @@ namespace Strata
 			glm::vec2 ViewportOrigin = { 0.0f, 0.0f };
 			glm::vec2 ViewportSize = { 0.0f, 0.0f };
 			CursorMode Cursor = CursorMode::Normal;
-			Window* TargetWindow = nullptr;
+			InputWindow* TargetWindow = nullptr;
 		};
 
 		InputState s_State;
@@ -288,7 +288,7 @@ namespace Strata
 
 	void Input::Reset()
 	{
-		Window* window = s_State.TargetWindow;
+		InputWindow* window = s_State.TargetWindow;
 		s_State = InputState();
 		s_State.TargetWindow = window;
 	}
@@ -318,7 +318,7 @@ namespace Strata
 		return s_State.Enabled;
 	}
 
-	void Input::SetWindow(Window* window)
+	void Input::SetWindow(InputWindow* window)
 	{
 		s_State.TargetWindow = window;
 	}

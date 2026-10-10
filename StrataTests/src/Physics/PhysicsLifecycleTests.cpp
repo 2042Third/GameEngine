@@ -775,7 +775,7 @@ TEST_SUITE("Physics.Lifecycle")
 	TEST_CASE("Entities pending destruction leave the simulation and queries right away")
 	{
 		DeferredDestroySystem::Reset();
-		SceneSystemRegistry::Register({ "TestDeferredDestroy", false, [](Scene& scene) { return CreateScope<DeferredDestroySystem>(scene); } });
+		REQUIRE(SceneSystemRegistry::Register({ "TestDeferredDestroy", false, [](Scene& scene) { return CreateScope<DeferredDestroySystem>(scene); } }));
 		{
 			Scene scene;
 			Entity doomed = CreateDynamicBox(scene, "Doomed", glm::vec3(0.0f, 5.0f, 0.0f));
@@ -804,7 +804,7 @@ TEST_SUITE("Physics.Lifecycle")
 			StepScene(scene, 1);
 			CHECK(physics.GetStats().BodyCount == 0);
 		}
-		SceneSystemRegistry::Unregister("TestDeferredDestroy");
+		CHECK(SceneSystemRegistry::Unregister("TestDeferredDestroy"));
 	}
 }
 

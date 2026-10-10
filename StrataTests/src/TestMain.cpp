@@ -1,14 +1,17 @@
 #define DOCTEST_CONFIG_IMPLEMENT
 #include <doctest/doctest.h>
 
+#include "Engine/ModuleRegistrationHelpers.h"
 #include "Network/FakeEditorProcess.h"
 #include "Renderer/GPUTestUtils.h"
+#include "Strata/Asset/AssetImporter.h"
 #include "Strata/Core/CrashGuard.h"
 #include "Strata/Core/FileLock.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Log.h"
 #include "Strata/Core/Platform.h"
 #include "Strata/Core/Process.h"
+#include "Strata/Engine/BuiltinModules.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
@@ -609,8 +612,21 @@ static std::optional<int> RunAsFakeCMake(int argc, char** argv)
 int main(int argc, char** argv)
 {
 	constexpr std::string_view helperPrefix = "--strata-test-helper=";
-	if (argc > 1 && std::string_view(argv[1]).substr(0, helperPrefix.size()) == helperPrefix)
-		return RunHelperMode(std::string_view(argv[1]).substr(helperPrefix.size()), argc, argv);
+	const bool isHelper = argc > 1 && std::string_view(argv[1]).substr(0, helperPrefix.size()) == helperPrefix;
+	const std::string_view helperMode = isHelper ? std::string_view(argv[1]).substr(helperPrefix.size()) : std::string_view();
+	if (isHelper)
+	{
+		if (const std::optional<int> result = Strata::Tests::RunModuleRegistrationHelper(helperMode, argc, argv))
+			return *result;
+	}
+
+	// Like every program that uses the engine, before anything touches a registry; with the asset pipeline, like the editor.
+	Strata::Engine::ModuleRegistrationOptions modules;
+	modules.AssetPipeline = Strata::RegisterAssetPipeline;
+	Strata::Engine::RegisterBuiltinModules(modules);
+
+	if (isHelper)
+		return RunHelperMode(helperMode, argc, argv);
 	if (const std::optional<int> fakeCMake = RunAsFakeCMake(argc, argv))
 		return *fakeCMake;
 

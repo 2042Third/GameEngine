@@ -6,6 +6,7 @@
 #include <Strata/Scene/ComponentAccess.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/SceneSerializer.h>
+#include <Strata/Scene/UnknownComponents.h>
 
 #include <algorithm>
 #include <unordered_map>
@@ -46,6 +47,27 @@ namespace Strata
 				if (!ComponentAccess::Deserialize(*info, component, *target, false, &error, &warnings))
 					ST_WARN("Restoring component {} of entity {}: {}", info->Name, entity.GetUUID().ToString(), error);
 				info->MarkModified(registry, handle);
+			}
+
+			// The snapshot's components that this build does not register are what the entity keeps unchanged.
+			nlohmann::json unknown = nlohmann::json::object();
+			if (components.is_object())
+			{
+				for (const auto& [name, component] : components.items())
+				{
+					if (!ComponentRegistry::Find(name))
+						unknown[name] = component;
+				}
+			}
+			const UnknownComponentsComponent* kept = registry.try_get<UnknownComponentsComponent>(handle);
+			if (unknown.empty())
+			{
+				if (kept)
+					registry.remove<UnknownComponentsComponent>(handle);
+			}
+			else if (!kept || kept->Components != unknown)
+			{
+				registry.emplace_or_replace<UnknownComponentsComponent>(handle, UnknownComponentsComponent { std::move(unknown) });
 			}
 		}
 
@@ -88,6 +110,8 @@ namespace Strata
 				return state;
 			state.Exists = true;
 			state.Components = ComponentAccess::SerializeEntityComponents(entity);
+			if (const UnknownComponentsComponent* unknown = entity.TryGetComponent<UnknownComponentsComponent>())
+				unknown->AppendTo(state.Components);
 			std::tie(state.Parent, state.SiblingIndex) = siblings.Get(entity);
 			return state;
 		}
@@ -164,6 +188,7 @@ namespace Strata
 				}
 				EntityInstantiationOptions options;
 				options.GenerateNewUUIDs = false;
+				options.ReportUnknownComponents = false; // Snapshots of this scene: its unknown components are no news
 				std::string error;
 				std::vector<std::string> warnings;
 				SceneSerializer::DeserializeEntities(scene, { { "Entities", std::move(entities) } }, options, &error, &warnings);

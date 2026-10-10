@@ -52,12 +52,12 @@ namespace
 		explicit ScopedSceneSystemRegistration(SceneSystemDescriptor descriptor)
 			: Name(descriptor.Name)
 		{
-			SceneSystemRegistry::Register(std::move(descriptor));
+			REQUIRE(SceneSystemRegistry::Register(std::move(descriptor)));
 		}
 
 		~ScopedSceneSystemRegistration()
 		{
-			SceneSystemRegistry::Unregister(Name);
+			CHECK(SceneSystemRegistry::Unregister(Name));
 		}
 
 		ScopedSceneSystemRegistration(const ScopedSceneSystemRegistration&) = delete;

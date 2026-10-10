@@ -36,7 +36,9 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
 
 - doctest filters split on commas. A test name containing a comma must be matched with `?`/`*`, e.g.
   `--test-case="Hierarchy?*"`.
-- CTest runs: `StrataTests.Core` (everything but the GPU, EndToEnd, `Package*`, perf and feature test suites),
+- CTest runs: `StrataTests.Core` (everything but the GPU, EndToEnd, `Package*`, perf and feature test suites; it
+  includes `Architecture.Layering`, which fails on an include that crosses the layers of
+  `StrataTests/Architecture/Layers.json` - fix the dependency, see AGENTS.md "Architecture rules"),
   `StrataTests.GPU` (label `gpu`), the perf tests `StrataTests.Perf` and `StrataTests.PerfGPU` (suites `Perf.*`
   and `PerfGPU.*`, label `perf`, Release and Dist only, after `StrataTests.PerfResults.Clean`; budgets and the
   ratchet rule in AGENTS.md, "Testing"), `StrataEditor.Smoke` (the real editor with

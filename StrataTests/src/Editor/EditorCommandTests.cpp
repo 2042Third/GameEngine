@@ -7,6 +7,8 @@
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/JsonUtils.h>
+#include <Strata/Core/Log.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/Material.h>
 #include <Strata/Renderer/Mesh.h>
@@ -442,5 +444,79 @@ TEST_SUITE("Editor.Commands")
 		CHECK_FALSE(harness.Error("scene.setSettings", { { "gravity", { 0, "down", 0 } } }).empty());
 		harness.Run("edit.undo");
 		CHECK(harness.Run("scene.info")["settings"]["gravity"][1].get<double>() == doctest::Approx(-9.81));
+	}
+
+	TEST_CASE("Components this build does not register survive play, duplication, prefabs, undo and saving")
+	{
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("UnknownComponentsProject") / "Game";
+		{
+			CommandHarness creator;
+			creator.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+		}
+
+		// A scene saved by a build with a vehicle module, which this one lacks.
+		const nlohmann::json vehicle = { { "Wheels", 4 }, { "Engine", { { "Power", 310.5 }, { "Kind", "V8" } } }, { "Gears", { 1, 2, 3 } }, { "Owner", nullptr } };
+		const std::string truck = "00000000000000AB";
+		const nlohmann::json document = {
+			{ "Strata", { { "Format", "Scene" }, { "Version", 1 } } },
+			{ "Scene", { { "Name", "Garage" }, { "Entities", {
+				{ { "ID", truck }, { "Components", { { "Name", { { "Name", "Truck" } } }, { "Vehicle", vehicle } } } }
+			} } } }
+		};
+		REQUIRE(FileSystem::CreateDirectories(directory / "Assets" / "Scenes"));
+		REQUIRE(FileSystem::WriteText(directory / "Assets" / "Scenes" / "Garage.stscene", JsonUtils::Dump(document, 1, '\t') + "\n"));
+
+		// The vehicle component of the entity with `id` in a scene document's entity list (null when there is none).
+		auto vehicleOf = [](const nlohmann::json& entities, const std::string& id) -> nlohmann::json
+		{
+			for (const nlohmann::json& entity : entities)
+			{
+				if (entity["ID"] == id)
+					return entity["Components"].contains("Vehicle") ? entity["Components"]["Vehicle"] : nlohmann::json();
+			}
+			return nlohmann::json();
+		};
+
+		CommandHarness harness;
+		harness.Run("project.open", { { "path", FileSystem::ToUTF8(directory) } });
+		const uint64_t beforeOpen = Log::GetBuffer().GetLatestSequence();
+		harness.Run("scene.open", { { "scene", "Scenes/Garage.stscene" } });
+		size_t warnings = 0;
+		for (const LogEntry& entry : Log::GetBuffer().GetEntries(beforeOpen))
+			warnings += entry.Level == LogLevel::Warn && entry.Message.find("Unknown component 'Vehicle'") != std::string::npos ? 1 : 0;
+		CHECK(warnings == 1);
+		const nlohmann::json edited = harness.SceneSnapshot();
+		CHECK(vehicleOf(edited, truck) == vehicle);
+
+		// Play runs a copy that has it; stopping returns to the edited scene, which still has it.
+		harness.Run("play.start");
+		const Ref<Scene> running = harness.Context.GetActiveScene();
+		REQUIRE(running != harness.Context.GetEditScene());
+		CHECK(vehicleOf(SceneSerializer::Serialize(*running)["Scene"]["Entities"], truck) == vehicle);
+		harness.Run("play.stop");
+		CHECK(harness.SceneSnapshot() == edited);
+
+		const std::string copy = harness.Run("entity.duplicate", { { "entity", truck } })["id"].get<std::string>();
+		CHECK(vehicleOf(harness.SceneSnapshot(), copy) == vehicle);
+
+		harness.Run("prefab.create", { { "entities", { truck } }, { "path", "Prefabs/Truck.stprefab" } });
+		const nlohmann::json instance = harness.Run("prefab.instantiate", { { "prefab", "Prefabs/Truck.stprefab" } })["entities"];
+		REQUIRE(instance.size() == 1);
+		CHECK(vehicleOf(harness.SceneSnapshot(), instance[0].get<std::string>()) == vehicle);
+
+		const nlohmann::json beforeDelete = harness.SceneSnapshot();
+		harness.Run("entity.delete", { { "entities", { truck } } });
+		CHECK(vehicleOf(harness.SceneSnapshot(), truck).is_null());
+		harness.Run("edit.undo");
+		CHECK(harness.SceneSnapshot() == beforeDelete);
+		CHECK(vehicleOf(harness.SceneSnapshot(), truck) == vehicle);
+
+		harness.Run("scene.saveAs", { { "path", "Scenes/Saved.stscene" } });
+		const std::optional<std::string> text = FileSystem::ReadText(directory / "Assets" / "Scenes" / "Saved.stscene");
+		REQUIRE(text);
+		const std::optional<nlohmann::json> saved = JsonUtils::Parse(*text);
+		REQUIRE(saved);
+		CHECK(vehicleOf((*saved)["Scene"]["Entities"], truck) == vehicle);
+		CHECK(vehicleOf((*saved)["Scene"]["Entities"], copy) == vehicle);
 	}
 }

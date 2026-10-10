@@ -29,6 +29,8 @@
 #include "Strata/Audio/AudioSource.h"
 #include "Strata/Audio/AudioSystem.h"
 
+#include "Strata/Engine/BuiltinModules.h"
+
 #include "Strata/Input/Input.h"
 #include "Strata/Input/KeyCodes.h"
 #include "Strata/Input/MouseCodes.h"

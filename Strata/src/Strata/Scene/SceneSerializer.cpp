@@ -5,6 +5,7 @@
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Reflection/PropertyJson.h"
 #include "Strata/Scene/ComponentAccess.h"
+#include "Strata/Scene/UnknownComponents.h"
 
 #include <unordered_set>
 
@@ -21,7 +22,11 @@ namespace Strata
 			const UUID parent = entity.GetComponent<RelationshipComponent>().Parent;
 			if (includeParent && parent.IsValid())
 				json["Parent"] = UUIDToJson(parent);
-			json["Components"] = ComponentAccess::SerializeEntityComponents(entity);
+			nlohmann::json components = ComponentAccess::SerializeEntityComponents(entity);
+			// Components this build does not register are written back as they were read.
+			if (const UnknownComponentsComponent* unknown = entity.TryGetComponent<UnknownComponentsComponent>())
+				unknown->AppendTo(components);
+			json["Components"] = std::move(components);
 			return json;
 		}
 
@@ -266,9 +271,13 @@ namespace Strata
 
 		// Pass 2: create entities and components. Entities are created directly (not through CreateEntity) so
 		// building large hierarchies stays linear: nothing is appended to the root list and then removed again.
+		// Components whose names this build does not register are kept verbatim (UnknownComponentsComponent) and reported
+		// once per name.
 		entt::registry& registry = scene.m_Registry;
 		std::vector<entt::entity> handles;
 		handles.reserve(entities.size());
+		std::vector<std::string> unknownNames; // In the order they were first seen
+		std::unordered_map<std::string, size_t> unknownCounts;
 		for (size_t index = 0; index < entities.size(); index++)
 		{
 			const nlohmann::json& entityJson = entities[index];
@@ -293,13 +302,23 @@ namespace Strata
 					continue;
 				}
 
+				nlohmann::json unknown = nlohmann::json::object();
 				for (const auto& [componentName, componentJson] : components.items())
 				{
 					const ComponentInfo* info = ComponentRegistry::Find(componentName);
-					if (!info || HasFlag(info->Flags, ComponentFlags::NoSerialize))
+					if (!info)
+					{
+						unknown[componentName] = componentJson;
+						auto [count, firstSeen] = unknownCounts.try_emplace(componentName, 0);
+						if (firstSeen)
+							unknownNames.push_back(componentName);
+						count->second++;
+						continue;
+					}
+					if (HasFlag(info->Flags, ComponentFlags::NoSerialize))
 					{
 						if (outWarnings)
-							outWarnings->push_back(fmt::format("Entity {}: unknown component '{}' skipped", sourceIds[index].ToString(), componentName));
+							outWarnings->push_back(fmt::format("Entity {}: component '{}' is not read from entity data; skipped", sourceIds[index].ToString(), componentName));
 						continue;
 					}
 
@@ -308,6 +327,18 @@ namespace Strata
 					if (!ComponentAccess::Deserialize(*info, component, componentJson, false, &error, outWarnings) && outWarnings)
 						outWarnings->push_back(fmt::format("Entity {}: {}", sourceIds[index].ToString(), error));
 				}
+				if (!unknown.empty())
+					registry.emplace<UnknownComponentsComponent>(handle, UnknownComponentsComponent { std::move(unknown) });
+			}
+		}
+
+		if (outWarnings && options.ReportUnknownComponents)
+		{
+			for (const std::string& name : unknownNames)
+			{
+				const size_t count = unknownCounts.at(name);
+				outWarnings->push_back(fmt::format("Unknown component '{}' ({} {}) kept unchanged: no module of this build registers it", name, count,
+					count == 1 ? "entity" : "entities"));
 			}
 		}
 

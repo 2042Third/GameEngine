@@ -5,12 +5,15 @@
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/SceneSerializer.h"
+#include "Strata/Scene/UnknownComponents.h"
 
 namespace Strata
 {
 
 	// Root count above which world transform propagation runs on the job system.
 	static constexpr size_t c_ParallelTransformRootThreshold = 256;
+
+	static std::atomic<uint32_t> s_RunningSceneCount = 0;
 
 	Scene::Scene(std::string name)
 		: m_Name(std::move(name))
@@ -39,6 +42,9 @@ namespace Strata
 
 			const WorldTransformComponent* worldTransform = source->m_Registry.try_get<WorldTransformComponent>(sourceEntity.GetHandle());
 			destination->m_Registry.emplace<WorldTransformComponent>(handle, worldTransform ? *worldTransform : WorldTransformComponent());
+			// Not registered (so not copied above), but part of the entity's data.
+			if (const UnknownComponentsComponent* unknown = source->m_Registry.try_get<UnknownComponentsComponent>(sourceEntity.GetHandle()))
+				destination->m_Registry.emplace<UnknownComponentsComponent>(handle, *unknown);
 			destination->m_EntityMap.emplace(sourceEntity.GetUUID(), handle);
 		}
 
@@ -481,6 +487,7 @@ namespace Strata
 			return;
 
 		m_IsRunning = true;
+		s_RunningSceneCount++;
 		m_RuntimeMode = mode;
 		m_IsPaused = false;
 		m_StepFrames = 0;
@@ -491,10 +498,14 @@ namespace Strata
 		m_SceneLoadRequest.reset();
 		UpdateWorldTransforms();
 
+		// In update order. Systems may look up the ones created before them (GetSystem) while they are constructed.
 		for (const SceneSystemDescriptor& descriptor : SceneSystemRegistry::GetAll())
 		{
-			if (mode == SceneRuntimeMode::Play || descriptor.RunsInSimulateMode)
-				m_Systems.push_back(descriptor.Create(*this));
+			if (mode != SceneRuntimeMode::Play && !descriptor.RunsInSimulateMode)
+				continue;
+			Scope<SceneSystem>& system = m_Systems.emplace_back(descriptor.Create(*this));
+			if (descriptor.Type != 0)
+				m_SystemsByType[descriptor.Type] = system.get();
 		}
 
 		// Systems may create or destroy entities while starting (e.g. scripts in OnCreate).
@@ -518,11 +529,21 @@ namespace Strata
 			(*it)->OnRuntimeStop();
 		m_IsUpdating = false;
 
+		// A system being destroyed still finds the systems created before it.
 		while (!m_Systems.empty())
+		{
+			std::erase_if(m_SystemsByType, [&](const auto& entry) { return entry.second == m_Systems.back().get(); });
 			m_Systems.pop_back();
+		}
 
 		FlushPendingDestroys();
 		m_IsRunning = false;
+		s_RunningSceneCount--;
+	}
+
+	uint32_t Scene::GetRunningSceneCount()
+	{
+		return s_RunningSceneCount.load();
 	}
 
 	void Scene::OnUpdateRuntime(Timestep timestep)
@@ -656,40 +677,6 @@ namespace Strata
 			RemoveComponent<InactiveComponent>();
 		else if (!active && !HasComponent<InactiveComponent>())
 			AddComponent<InactiveComponent>();
-	}
-
-	////////////////////////////////////////////////////////////////////////////////
-	// SceneSystemRegistry
-	////////////////////////////////////////////////////////////////////////////////
-
-	// Defined in SceneSystemRegistration.cpp.
-	void CreateBuiltinSceneSystems(std::vector<SceneSystemDescriptor>& descriptors);
-
-	// The built-in systems are added directly to the storage (never through Register, which would re-enter the
-	// call_once), before any other registration.
-	static std::vector<SceneSystemDescriptor>& GetSceneSystemDescriptors()
-	{
-		static std::vector<SceneSystemDescriptor> s_Descriptors;
-		static std::once_flag s_BuiltinsRegistered;
-		std::call_once(s_BuiltinsRegistered, []() { CreateBuiltinSceneSystems(s_Descriptors); });
-		return s_Descriptors;
-	}
-
-	void SceneSystemRegistry::Register(SceneSystemDescriptor descriptor)
-	{
-		Unregister(descriptor.Name);
-		GetSceneSystemDescriptors().push_back(std::move(descriptor));
-	}
-
-	void SceneSystemRegistry::Unregister(const std::string& name)
-	{
-		std::vector<SceneSystemDescriptor>& descriptors = GetSceneSystemDescriptors();
-		descriptors.erase(std::remove_if(descriptors.begin(), descriptors.end(), [&](const SceneSystemDescriptor& descriptor) { return descriptor.Name == name; }), descriptors.end());
-	}
-
-	const std::vector<SceneSystemDescriptor>& SceneSystemRegistry::GetAll()
-	{
-		return GetSceneSystemDescriptors();
 	}
 
 }

@@ -21,6 +21,9 @@ namespace Strata
 		Entity Parent;
 		// When set, every created entity gets a PrefabInstanceComponent linking it to this prefab.
 		AssetHandle SourcePrefab = UUID::Null();
+		// Warn (once per name) about components this build does not register. Off for data the scene wrote itself, such as
+		// the editor's undo snapshots, where they are no news.
+		bool ReportUnknownComponents = true;
 	};
 
 	// Scene and entity serialization to versioned JSON.
@@ -30,7 +33,9 @@ namespace Strata
 	//     "Scene": { "Name": "...", "Settings": {...},
 	//                "Entities": [ { "ID": "<uuid>", "Parent": "<uuid>", "Components": { "Transform": {...}, ... } } ] } }
 	// Entities are listed in depth-first hierarchy order (parents before children), so sibling order survives a
-	// round trip. Unknown components or properties are skipped with warnings, so newer files still load.
+	// round trip. Unknown properties are skipped with warnings, so newer files still load. Components whose names this
+	// build does not register (a module it lacks, a newer engine) are kept verbatim in an UnknownComponentsComponent and
+	// written back unchanged, with one warning per name per load.
 	class SceneSerializer
 	{
 	public:

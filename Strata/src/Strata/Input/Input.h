@@ -12,7 +12,7 @@
 namespace Strata
 {
 
-	class Window;
+	class InputWindow;
 
 	// Polling-style input state, updated from window events once per frame. Main thread only.
 	//
@@ -65,7 +65,7 @@ namespace Strata
 
 		static void SetEnabled(bool enabled);
 		static bool IsEnabled();
-		static void SetWindow(Window* window);
+		static void SetWindow(InputWindow* window);
 		// Region of the window that receives game input, in window pixels.
 		static void SetViewport(const glm::vec2& origin, const glm::vec2& size);
 

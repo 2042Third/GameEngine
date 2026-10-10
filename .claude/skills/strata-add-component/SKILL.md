@@ -23,8 +23,10 @@ Add the struct to `Strata/src/Strata/Scene/Components.h` in the right section. R
 
 ## 2. Register it
 
-In `Strata/src/Strata/Scene/ComponentRegistration.cpp`, register the type with a stable name. The name is
-written to files and used by tools; never rename it later.
+In `Strata/src/Strata/Scene/ComponentRegistration.cpp` (`RegisterSceneComponents`, part of the scene module's
+registration), register the type with a stable name. The name is written to files and used by tools; never rename
+it later. Components register only while `Engine::RegisterBuiltinModules` runs (the registry freezes at its end);
+a game or test registers its own components through `ModuleRegistrationOptions::Extra`.
 
 ```cpp
 ComponentRegistry::Register<WindZoneComponent>("WindZone")
@@ -46,8 +48,13 @@ ComponentRegistry::Register<WindZoneComponent>("WindZone")
 
 ## 3. Add behaviour (if the component does something at runtime)
 
-Implement a `SceneSystem` (`Scene/SceneSystem.h`) and add its descriptor in `CreateBuiltinSceneSystems`
-(`Scene/SceneSystemRegistration.cpp`). The registration order is the update order; set
+Implement a `SceneSystem` (`Scene/SceneSystem.h`) and register its descriptor in the registration function of
+the module it belongs to (e.g. `RegisterPhysicsModule` in `Physics/PhysicsRegistration.cpp`), which
+`Engine::RegisterBuiltinModules` calls. Build the descriptor with `MakeSceneSystemDescriptor<T>` (so
+`Scene::GetSystem<T>` finds the running system), declare its update order with `After`/`Before` (names of systems
+registered before it, e.g. `After = { "Physics" }`; registration order decides the rest as far as the constraints
+allow, so a system without constraints runs after the ones registered before it), and check the result of
+`SceneSystemRegistry::Register`: a cycle or an unknown name is refused. Set
 `RunsInSimulateMode` only for systems that belong in the editor's physics-only simulate mode. React to
 edits through EnTT signals (`on_construct`, `on_update`, `on_destroy`). Edits notify through `patch`, which
 `ComponentAccess` and `Entity::MarkModified<T>()` emit, so the system must not poll every component each
@@ -58,7 +65,8 @@ frame.
 - `StrataTests/src/Scene/ReflectionTests.cpp`: the properties exist with their ranges, and invalid values
   are rejected.
 - `StrataTests/src/Scene/SerializationTests.cpp`: a scene round trip keeps every value; unknown or
-  out-of-range values in files load with warnings instead of failing.
+  out-of-range values in files load with warnings instead of failing. (Builds without your component keep it
+  verbatim in `UnknownComponentsComponent` and save it back unchanged; nothing to do for that.)
 - The system's behaviour, with a real `Scene` stepping `OnUpdateRuntime`.
 - Editor: `component.add` with values and `component.set` through `EditorCommandRegistry` (see
   `StrataTests/src/Editor/EditorCommandTests.cpp`); undo restores the previous state.

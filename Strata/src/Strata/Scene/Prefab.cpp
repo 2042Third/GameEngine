@@ -157,6 +157,8 @@ namespace Strata
 		std::vector<std::string> warnings;
 		if (!SceneSerializer::Deserialize(*scene, m_Document, outError, &warnings))
 			return nullptr;
+		for (const std::string& warning : warnings)
+			ST_CORE_WARN("Scene '{}': {}", scene->GetName(), warning);
 		return scene;
 	}
 

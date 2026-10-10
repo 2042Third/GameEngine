@@ -1,0 +1,98 @@
+{
+	"Description": "The engine's layers, bottom up. Every file under SourceRoot belongs to exactly one layer (Paths minus Exclude, globs relative to SourceRoot) and may include only files of its own layer and of the layers in MayInclude, which must be listed below it. Architecture.Layering (StrataTests/src/Architecture/LayeringTests.cpp) enforces it; LayeringAllowlist.txt lists the known exceptions, each with the workstream that removes it, and holds exactly MaxAllowlistEntries lines (lower it when you remove one). Widen a MayInclude only for a proven downward dependency, with the reason in the layer's Notes; never to legalize a sideways or upward include. The paths stand in for the planned moves of files between libraries (wave 4, engine-modules).",
+	"SourceRoot": "Strata/src",
+	"MaxAllowlistEntries": 14,
+	"Layers": [
+		{
+			"Name": "Core",
+			"Notes": "Platform services, logging, jobs, files, processes and math. The OS implementations of Core interfaces live in Platform/<OS>; the socket implementations belong to Network.",
+			"Paths": [ "stpch.h", "Strata/Core/**", "Strata/Math/**", "Platform/Windows/**", "Platform/Posix/**", "Platform/MacOS/**" ],
+			"Exclude": [ "Strata/Core/Application.*", "Strata/Core/Layer.*", "Strata/Core/LayerStack.*", "Strata/Core/Window.h", "Strata/Core/EntryPoint.h", "Platform/*/*Socket.cpp" ],
+			"MayInclude": []
+		},
+		{
+			"Name": "Input",
+			"Notes": "Events and the input state; Input reaches the window through InputWindow, which Window implements.",
+			"Paths": [ "Strata/Events/**", "Strata/Input/**" ],
+			"MayInclude": [ "Core" ]
+		},
+		{
+			"Name": "App",
+			"Notes": "The application shell: Application, layers, the window and its GLFW implementation. VulkanLoader belongs here, not to Renderer: it loads the system's Vulkan loader for the window system (GLFW must create surfaces through the same loader as the graphics device) and depends only on Core.",
+			"Paths": [ "Strata/Core/Application.*", "Strata/Core/Layer.*", "Strata/Core/LayerStack.*", "Strata/Core/Window.h", "Strata/Core/EntryPoint.h", "Platform/GLFW/**", "Platform/Vulkan/VulkanLoader.*" ],
+			"MayInclude": [ "Core", "Input" ]
+		},
+		{
+			"Name": "Asset",
+			"Notes": "Asset registry, loading, packs and built-in asset handles, without the importers (AssetPipeline).",
+			"Paths": [ "Strata/Asset/**" ],
+			"Exclude": [ "Strata/Asset/EditorAssetManager.*", "Strata/Asset/AssetImporter.*", "Strata/Asset/AssetImporters.cpp", "Strata/Asset/GltfImporter.*", "Strata/Asset/TextureImporter.*" ],
+			"MayInclude": [ "Core" ]
+		},
+		{
+			"Name": "Reflection",
+			"Paths": [ "Strata/Reflection/**" ],
+			"MayInclude": [ "Core", "Asset" ]
+		},
+		{
+			"Name": "Scene",
+			"Paths": [ "Strata/Scene/**" ],
+			"MayInclude": [ "Core", "Asset", "Reflection" ]
+		},
+		{
+			"Name": "Renderer",
+			"Paths": [ "Strata/Renderer/**", "Platform/Vulkan/**" ],
+			"Exclude": [ "Platform/Vulkan/VulkanLoader.*" ],
+			"MayInclude": [ "Core", "Input", "App", "Asset", "Reflection", "Scene" ]
+		},
+		{
+			"Name": "Physics",
+			"Paths": [ "Strata/Physics/**" ],
+			"MayInclude": [ "Core", "Asset", "Reflection", "Scene" ]
+		},
+		{
+			"Name": "Audio",
+			"Paths": [ "Strata/Audio/**" ],
+			"MayInclude": [ "Core", "Asset", "Reflection", "Scene" ]
+		},
+		{
+			"Name": "Scripting",
+			"Paths": [ "Strata/Scripting/**" ],
+			"MayInclude": [ "Core", "Input", "Asset", "Reflection", "Scene" ]
+		},
+		{
+			"Name": "Project",
+			"Paths": [ "Strata/Project/**" ],
+			"MayInclude": [ "Core", "Asset", "Reflection" ]
+		},
+		{
+			"Name": "Runtime",
+			"Notes": "Runs exported games: may include every layer a shipped game contains.",
+			"Paths": [ "Strata/Runtime/**" ],
+			"MayInclude": [ "Core", "Input", "App", "Asset", "Reflection", "Scene", "Renderer", "Physics", "Audio", "Scripting", "Project" ]
+		},
+		{
+			"Name": "Network",
+			"Notes": "Sockets, JSON-RPC and editor sessions (tooling); includes the OS socket implementations.",
+			"Paths": [ "Strata/Network/**", "Platform/*/*Socket.cpp" ],
+			"MayInclude": [ "Core" ]
+		},
+		{
+			"Name": "ImGui",
+			"Paths": [ "Strata/ImGui/**" ],
+			"MayInclude": [ "Core", "Input", "App", "Renderer" ]
+		},
+		{
+			"Name": "AssetPipeline",
+			"Notes": "Importers and the editor's asset database (tooling, never in shipped games).",
+			"Paths": [ "Strata/Asset/EditorAssetManager.*", "Strata/Asset/AssetImporter.*", "Strata/Asset/AssetImporters.cpp", "Strata/Asset/GltfImporter.*", "Strata/Asset/TextureImporter.*" ],
+			"MayInclude": [ "Core", "Asset", "Reflection", "Scene", "Renderer", "Audio" ]
+		},
+		{
+			"Name": "Engine",
+			"Notes": "The composition root (Engine/BuiltinModules) and the umbrella header applications include. Both are part of every program, shipped games included, so they never name the asset pipeline: tools hand its registration in (ModuleRegistrationOptions::AssetPipeline), and the importers stay out of games.",
+			"Paths": [ "Strata/Engine/**", "Strata.h" ],
+			"MayInclude": [ "Core", "Input", "App", "Asset", "Reflection", "Scene", "Renderer", "Physics", "Audio", "Scripting", "Project", "Runtime", "Network", "ImGui" ]
+		}
+	]
+}
