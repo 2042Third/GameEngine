@@ -69,7 +69,8 @@ module-foundation, ran as its own workstream):
   asset); material edits that show in the same frame, preview while dragged and undo as one step
   (`AssetDocumentAction`, `AssetManagerBase::ReplaceLoadedAsset`); every importer's settings described as properties and
   validated, and re-imports in the background (`asset.setImportSettings`, `asset.reimport` answer deferred; the longest
-  editor frame while a 4096x4096 texture re-imports is about 3 ms, it was the whole import); `HierarchyView`, the
+  editor frame while a 4096x4096 texture re-imports is about 3 ms, 4 ms with its upload and drawing on a GPU, it was the
+  whole import); `HierarchyView`, the
   hierarchy's rows without UI (an unchanged frame costs about 10 ns at 100,000 roots, a rebuild 0.6 ms), with
   `c:`/`t:` filters, reveal and drop zones; one-step commands for many entities (`entity.setParent {entities, index}`,
   `entity.copy`, `entity.paste`, `entity.duplicate {entities}`, `entity.setActive {entities}`, `component.add` and

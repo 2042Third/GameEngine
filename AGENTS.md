@@ -131,7 +131,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   Hierarchy panel's share of an editor frame with 100,000 roots, open against closed; what 100,000 selected entities
   add to a frame; the longest editor frame while a 4096x4096 texture re-imports with new settings) and `PerfGPU.Editor`,
   which runs the real `StrataEditor` maximized on generated 100,000- and 1,000,000-entity scenes and checks the median
-  CPU frame time its `editor.wait` steps report. Time calls that take nanoseconds in batches (the clock's resolution is
+  CPU frame time its `editor.wait` steps report, and times the editor's frames on the shared device while that texture
+  re-imports, uploads and is drawn. Time calls that take nanoseconds in batches (the clock's resolution is
   about 0.1 microseconds).
   A process's peak memory includes everything it did before, so a test that measures peak memory
   runs the measured work in a helper process (`--strata-test-helper=<mode>`, see `TestMain.cpp`): `PerfGPU.Streaming`

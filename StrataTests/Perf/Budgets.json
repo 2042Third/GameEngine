@@ -36,6 +36,7 @@
 	"Perf.Editor.HierarchyPanelFrame100kRoots": { "Measured": 12.3, "Budget": 18.4, "Unit": "us" },
 	"Perf.Editor.SelectionFrame100kSelected": { "Measured": 7.81, "Budget": 11.71, "Unit": "ms" },
 	"Perf.Editor.ImportSettings4kMaxFrame": { "Measured": 2.941, "Budget": 4.411, "Unit": "ms" },
+	"PerfGPU.Editor.ImportSettings4kMaxFrame": { "Measured": 3.945, "Budget": 5.917, "Unit": "ms" },
 	"PerfGPU.Editor.EditFrameNested100k": { "Measured": 0.2387, "Budget": 0.358, "Unit": "ms" },
 	"PerfGPU.Editor.PlayFrameNested100k": { "Measured": 0.2209, "Budget": 0.3313, "Unit": "ms" },
 	"PerfGPU.Editor.EditFrameNested1M": { "Measured": 0.2196, "Budget": 0.3294, "Unit": "ms" },

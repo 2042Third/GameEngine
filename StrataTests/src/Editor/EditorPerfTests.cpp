@@ -9,12 +9,17 @@
 #include "Perf/PerfUtils.h"
 #include "Perf/SceneGenerators.h"
 #include "Perf/StressProject.h"
+#include "Renderer/GPUTestUtils.h"
 #include "TestHelpers.h"
 
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Renderer/GraphicsDevice.h>
+#include <Strata/Renderer/Renderer.h>
+#include <Strata/Renderer/SceneRenderer.h>
 #include <Strata/Renderer/Texture.h>
+#include <Strata/Scene/Prefab.h>
 #include <Strata/Scene/Scene.h>
 
 #include <nlohmann/json.hpp>
@@ -37,6 +42,23 @@ namespace
 {
 
 	constexpr size_t c_Roots = 100'000;
+
+	// A stress project with one 4096x4096 texture, the material that uses it and an entity drawing it.
+	StressProjectSpec GetLargeTextureSpec()
+	{
+		StressProjectSpec spec;
+		spec.Textures2k = 0;
+		spec.Textures4k = 1;
+		spec.Materials = 1;
+		spec.Entities = 1;
+		spec.GridResolution = 2;
+		return spec;
+	}
+
+	std::optional<StressProject> WriteLargeTextureProject(const std::string& name, std::string& error)
+	{
+		return WriteStressProject(CreateTemporaryDirectory(name) / "Project", GetLargeTextureSpec(), error);
+	}
 
 	// An editor without a UI, whose edited scene holds `roots` empty root entities.
 	struct EditorWithRoots
@@ -221,15 +243,8 @@ TEST_SUITE("Perf.Editor")
 	{
 		// The editor's job system: the import and the reload run on its I/O and worker threads.
 		Perf::ScopedApplicationJobSystem jobs;
-		const std::filesystem::path directory = CreateTemporaryDirectory("PerfImportSettings") / "Project";
-		StressProjectSpec spec;
-		spec.Textures2k = 0;
-		spec.Textures4k = 1;
-		spec.Materials = 1;
-		spec.Entities = 1;
-		spec.GridResolution = 2;
 		std::string error;
-		const std::optional<StressProject> project = WriteStressProject(directory, spec, error);
+		const std::optional<StressProject> project = WriteLargeTextureProject("PerfImportSettings", error);
 		REQUIRE_MESSAGE(project, error);
 		const AssetHandle texture = project->Textures.front();
 
@@ -273,5 +288,95 @@ TEST_SUITE("Perf.Editor")
 		}
 		CHECK(AssetManager::GetAsset<Texture>(texture)->GetWidth() == 4096u);
 		Perf::CheckBudget("Perf.Editor.ImportSettings4kMaxFrame", Perf::Summarize(maxFrames).MedianMs);
+	}
+}
+
+TEST_SUITE("PerfGPU.Editor")
+{
+	TEST_CASE("Changing the import settings of a 4096x4096 texture never holds a frame that uploads and draws it")
+	{
+		// The test above without a GPU leaves out the part of a re-import that runs on the main thread: the reloaded texture's
+		// upload (Texture::FinalizeOnMainThread, in steps within the frame's upload budget). Here the editor's frames run on
+		// the shared device, as the editor runs them (device frame, renderer frame, the context's update with the assets'
+		// finalization, the commands', then the scene drawn with the texture), and each frame's work between the device's
+		// begin and end is timed (what the editor's frame time shows: without the waits for the GPU).
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		GraphicsDevice& device = gpu.GetDevice();
+		Perf::ScopedApplicationJobSystem jobs;
+		std::string error;
+		const std::optional<StressProject> project = WriteLargeTextureProject("PerfGPUImportSettings", error);
+		REQUIRE_MESSAGE(project, error);
+		const AssetHandle texture = project->Textures.front();
+
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		EditorCommandRunner runner;
+		REQUIRE_MESSAGE(context.OpenProject(project->Directory, &error), error);
+		Ref<Scene> scene;
+		{
+			Ref<SceneAsset> sceneAsset = AssetManager::LoadAssetSync<SceneAsset>(project->WorldScene);
+			REQUIRE(sceneAsset);
+			scene = sceneAsset->CreateScene(&error);
+			REQUIRE_MESSAGE(scene, error);
+		}
+		constexpr uint32_t c_Width = 1280;
+		constexpr uint32_t c_Height = 720;
+		const SceneCamera camera = GetStressSweepFrame(GetLargeTextureSpec(), StressSweepPath(), 0, static_cast<float>(c_Width) / static_cast<float>(c_Height)).Camera;
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Width, c_Height);
+		// One frame; returns its work in milliseconds.
+		const auto frame = [&]()
+		{
+			REQUIRE(device.BeginFrame());
+			const auto start = std::chrono::steady_clock::now();
+			Renderer::BeginFrame();
+			AssetManager::GetAsset<Texture>(texture);
+			context.Update(Timestep(1.0f / 60.0f));
+			runner.Update(context);
+			CHECK(renderer.Render(*scene, camera));
+			const double milliseconds = MillisecondsSince(start);
+			device.EndFrame();
+			return milliseconds;
+		};
+		// The texture uploaded and drawn before the measured re-imports.
+		const auto loaded = std::chrono::steady_clock::now() + std::chrono::minutes(2);
+		while (!(AssetManager::GetAssetState(texture) == AssetState::Ready && renderer.GetStats().PendingAssets == 0) && std::chrono::steady_clock::now() < loaded)
+			frame();
+		REQUIRE(AssetManager::GetAssetState(texture) == AssetState::Ready);
+
+		constexpr int c_Rounds = 3;
+		std::vector<double> maxFrames;
+		for (int round = 0; round < c_Rounds; round++)
+		{
+			auto completed = std::make_shared<std::optional<EditorCommandResult>>();
+			const std::string usage = round % 2 == 0 ? "Data" : "Color";
+			const auto start = std::chrono::steady_clock::now();
+			runner.Run(context, commands, "asset.setImportSettings", { { "asset", UUIDToJson(texture) }, { "settings", { { "Usage", usage } } } },
+				[completed](const EditorCommandResult& result) { *completed = result; });
+			double maxFrame = MillisecondsSince(start);
+			uint32_t frames = 0;
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2);
+			// Until the new texture is uploaded and drawn.
+			while ((!*completed || AssetManager::GetAssetState(texture) != AssetState::Ready || renderer.GetStats().PendingAssets > 0)
+				&& std::chrono::steady_clock::now() < deadline)
+			{
+				maxFrame = std::max(maxFrame, frame());
+				frames++;
+			}
+			REQUIRE(*completed);
+			INFO((*completed)->Error);
+			REQUIRE((*completed)->Success);
+			REQUIRE(AssetManager::GetAssetState(texture) == AssetState::Ready);
+			CHECK(frames > 1);
+			// The acceptance limit of the authoring workstream: no editor frame over 33 ms (two frames at 60 Hz).
+			CHECK(maxFrame <= 33.0);
+			MESSAGE("Round ", round + 1, ": ", frames, " frames, the longest ", maxFrame, " ms");
+			maxFrames.push_back(maxFrame);
+		}
+		device.WaitForIdle();
+		CHECK(AssetManager::GetAsset<Texture>(texture)->GetWidth() == 4096u);
+		CHECK(gpu.GetNewErrorCount() == 0);
+		Perf::CheckBudget("PerfGPU.Editor.ImportSettings4kMaxFrame", Perf::Summarize(maxFrames).MedianMs);
 	}
 }
