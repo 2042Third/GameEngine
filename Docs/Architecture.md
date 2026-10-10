@@ -681,7 +681,9 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   renderers are read at the next `Sync`, destroyed ones lose their proxy at once; world transforms and activity come
   from `Scene::GetWorldTransformChanges` (every proxy is compared when the scene no longer knows). Writes to
   `MeshRendererComponent` fields must therefore signal, like transform writes (AGENTS.md, "Architecture rules"); Debug
-  builds compare the proxies with the scene after every `Sync` (`RenderScene::Validate`).
+  builds compare the proxies with the scene after every `Sync` (`RenderScene::Validate`). Signaled entities wait for the
+  next `Sync` in a queue that holds each entity once (destroyed ones leave it), so a scene that changes while nothing
+  renders it (a hidden view, an agent capturing now and then) queues no more than its entities.
 - **Mesh layouts**. The bounds, submeshes and submesh materials of a mesh are learned from the loaded mesh
   (`SetMeshLayout`) and kept when it is evicted. `Sync(assets)` keeps them current with the asset manager whatever the
   renderers look at: it reads the manager's content changes since its own content version (all of them when the

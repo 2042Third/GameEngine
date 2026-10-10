@@ -97,6 +97,9 @@ namespace Strata
 		// from `assets` (the active asset manager; null: layouts change only through SetMeshLayout). Returns the number of
 		// proxies updated.
 		uint32_t Sync(const Ref<AssetManagerBase>& assets);
+		// Entities whose MeshRendererComponent was created or signaled since the last sync: each at most once, however
+		// often it was signaled, so a scene that is changed but not rendered queues no more than its entities.
+		uint32_t GetPendingCount() const { return static_cast<uint32_t>(m_Pending.size()); }
 
 		// Compares every proxy, the spatial index and the instance data with what a rebuild from the scene would produce.
 		// Returns false with the first difference.
@@ -197,6 +200,9 @@ namespace Strata
 
 		void OnMeshRendererChanged(entt::registry& registry, entt::entity entity);
 		void OnMeshRendererDestroyed(entt::registry& registry, entt::entity entity);
+		// Queues the entity for the next sync, once; a destroyed one leaves the queue.
+		void QueuePending(entt::entity entity);
+		void DropPending(entt::entity entity);
 
 		// Creates or rebuilds the proxy from the entity's components; returns whether anything changed.
 		bool UpdateProxyFromEntity(entt::entity entity);
@@ -233,6 +239,7 @@ namespace Strata
 		Scene* m_Scene = nullptr;
 		uint64_t m_TransformsVersion = 0;
 		std::vector<entt::entity> m_Pending; // Entities whose MeshRendererComponent was created or signaled since the last sync
+		std::vector<uint32_t> m_PendingPositions; // By entt::to_entity: the entity's place in m_Pending
 
 		// Proxies (structure of arrays)
 		std::vector<entt::entity> m_Entities;

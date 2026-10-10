@@ -463,6 +463,38 @@ TEST_SUITE("Renderer.RenderScene")
 		CheckProxies(renderScene);
 	}
 
+	TEST_CASE("Signals queue each entity once, however often they come before the next sync")
+	{
+		Scene scene("Pending");
+		std::vector<Entity> cubes;
+		for (int index = 0; index < 10; index++)
+			cubes.push_back(AddCube(scene, glm::vec3(static_cast<float>(index), 0.0f, 0.0f)));
+		RenderScene& renderScene = RenderScene::Get(scene);
+		CHECK(renderScene.GetPendingCount() == 10);
+		renderScene.Sync(nullptr);
+		CHECK(renderScene.GetPendingCount() == 0);
+
+		// A scene that changes while nothing renders it (a hidden view, an agent capturing now and then).
+		for (int round = 0; round < 1000; round++)
+		{
+			for (Entity cube : cubes)
+				cube.MarkModified<MeshRendererComponent>();
+			// Created and destroyed between syncs: gone from the queue with its component.
+			scene.DestroyEntity(AddCube(scene, glm::vec3(0.0f)));
+		}
+		CHECK(renderScene.GetPendingCount() == 10);
+		cubes[3].RemoveComponent<MeshRendererComponent>();
+		CHECK(renderScene.GetPendingCount() == 9);
+
+		Entity added = AddCube(scene, glm::vec3(20.0f));
+		CHECK(renderScene.GetPendingCount() == 10);
+		CHECK(renderScene.Sync(nullptr) == 1); // The new proxy; the others did not change
+		CHECK(renderScene.GetPendingCount() == 0);
+		CHECK(renderScene.GetStats().Proxies == 10);
+		CHECK(renderScene.FindProxy(added.GetHandle()) != RenderScene::c_InvalidIndex);
+		CheckProxies(renderScene);
+	}
+
 	TEST_CASE("Mesh and material slots are shared by their users and released with the last one")
 	{
 		Scene scene("Slots");

@@ -101,7 +101,7 @@ namespace Strata
 		registry.on_destroy<MeshRendererComponent>().connect<&RenderScene::OnMeshRendererDestroyed>(*this);
 		// Every mesh renderer the scene already has gets its proxy at the first sync.
 		for (const entt::entity entity : registry.view<MeshRendererComponent>())
-			m_Pending.push_back(entity);
+			QueuePending(entity);
 	}
 
 	RenderScene::~RenderScene() = default;
@@ -109,14 +109,44 @@ namespace Strata
 	void RenderScene::OnMeshRendererChanged(entt::registry&, entt::entity entity)
 	{
 		// Read at the next sync, so values written right after AddComponent (in the same frame) are seen.
-		m_Pending.push_back(entity);
+		QueuePending(entity);
 	}
 
 	void RenderScene::OnMeshRendererDestroyed(entt::registry&, entt::entity entity)
 	{
+		DropPending(entity);
 		const uint32_t proxy = FindProxy(entity);
 		if (proxy != c_InvalidIndex)
 			DestroyProxy(proxy);
+	}
+
+	void RenderScene::QueuePending(entt::entity entity)
+	{
+		const size_t index = static_cast<size_t>(entt::to_entity(entity));
+		if (index >= m_PendingPositions.size())
+			m_PendingPositions.resize(index + 1, c_InvalidIndex);
+		const uint32_t position = m_PendingPositions[index];
+		if (position != c_InvalidIndex)
+		{
+			// Queued already. An entity's index is queued for one entity at a time: the one that holds it now.
+			m_Pending[position] = entity;
+			return;
+		}
+		m_PendingPositions[index] = static_cast<uint32_t>(m_Pending.size());
+		m_Pending.push_back(entity);
+	}
+
+	void RenderScene::DropPending(entt::entity entity)
+	{
+		const size_t index = static_cast<size_t>(entt::to_entity(entity));
+		if (index >= m_PendingPositions.size() || m_PendingPositions[index] == c_InvalidIndex)
+			return;
+		const uint32_t position = m_PendingPositions[index];
+		const entt::entity moved = m_Pending.back();
+		m_Pending[position] = moved;
+		m_PendingPositions[static_cast<size_t>(entt::to_entity(moved))] = position;
+		m_Pending.pop_back();
+		m_PendingPositions[index] = c_InvalidIndex;
 	}
 
 	uint32_t RenderScene::FindProxy(entt::entity entity) const
@@ -154,6 +184,8 @@ namespace Strata
 
 		m_PendingScratch.clear();
 		m_PendingScratch.swap(m_Pending);
+		for (const entt::entity entity : m_PendingScratch)
+			m_PendingPositions[static_cast<size_t>(entt::to_entity(entity))] = c_InvalidIndex;
 		for (const entt::entity entity : m_PendingScratch)
 			UpdateProxyFromEntity(entity);
 
