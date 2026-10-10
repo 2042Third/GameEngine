@@ -246,9 +246,9 @@ namespace Strata
 		void RequestQuit() { m_QuitRequested = true; }
 		bool IsQuitRequested() const { return m_QuitRequested; }
 
-		// The CPU time of the editor's frames (Application::GetLastFrameWorkTime), recorded once per frame for the frame
-		// before by the layer that runs the editor; editor.wait reports statistics of the frames it waited for. Contexts no
-		// application drives (tests) record nothing.
+		// The CPU time of the editor's frames (EditorHost::GetLastFrameWorkTime: the application's, or a UI test's fake
+		// host), recorded once per frame for the frame before by the EditorLayer; editor.wait reports statistics of the
+		// frames it waited for. Contexts no EditorLayer drives (e.g. command tests) record nothing.
 		void RecordFrameTime(double milliseconds)
 		{
 			m_LastFrameTime = milliseconds;

@@ -222,7 +222,7 @@ namespace Strata
 
 		registry.Register({ "editor.wait",
 			"Returns after the given number of frames. Use it to let a playing scene run, assets load or the viewport render before the next "
-			"command. Returns {frames} and, when the editor measures its frames (not in tests that drive it without a window loop), "
+			"command. Returns {frames} and, when the editor measures its frames (not when a test drives it without its EditorLayer), "
 			"frameTimes: the CPU time of the frames that ran entirely while waiting (all but the first), in milliseconds {count, medianMs, "
 			"meanMs, p95Ms, maxMs}, without waiting for the GPU and the display, so command scripts can check frame budgets with expect.",
 			ObjectSchema({ { "frames", IntegerSchema("Frames to wait (default 1)", 1, c_MaxWaitFrames) } }),
