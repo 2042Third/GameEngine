@@ -144,6 +144,56 @@ TEST_SUITE("Physics.Scale")
 		scene.OnRuntimeStop();
 	}
 
+	TEST_CASE("Bodies created in one frame join the simulation in one batch per activation mode")
+	{
+		Scene scene;
+		CreateFloor(scene, 100);
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		StepScene(scene, 1);
+		const uint64_t batches = physics.GetStats().AddBatchCount;
+
+		// A spawn of 100 dynamic boxes and 10 static props: two batches (the static ones are not activated).
+		std::vector<Entity> boxes;
+		for (uint32_t index = 0; index < 100; index++)
+			boxes.push_back(CreateDynamicBox(scene, "Spawned", glm::vec3(1.5f * static_cast<float>(index % 10), 3.0f, 1.5f * static_cast<float>(index / 10))));
+		for (uint32_t index = 0; index < 10; index++)
+			CreateStaticBox(scene, "Prop", glm::vec3(1.5f * static_cast<float>(index), 0.5f, -5.0f), glm::vec3(0.5f));
+		CHECK(physics.HasBody(boxes.front()));
+		PhysicsStats stats = physics.GetStats();
+		CHECK(stats.AddBatchCount == batches + 2);
+		CHECK(stats.DynamicBodyCount == 100);
+		CHECK(stats.StaticBodyCount == 11);
+		CHECK(stats.ActiveBodyCount == 100);
+
+		// They simulate like any other body: the boxes land on the floor.
+		StepScene(scene, 120);
+		for (Entity box : boxes)
+			CHECK(std::abs(GetWorldPosition(scene, box).y - 0.5f) < 0.05f);
+
+		// Destroying bodies and creating others in one frame reuses the slots in a full world, without an error.
+		Scene full("Full");
+		full.GetSettings().PhysicsCapacity.MaxBodies = 4;
+		full.GetSettings().Gravity = glm::vec3(0.0f);
+		std::vector<Entity> first;
+		for (uint32_t index = 0; index < 4; index++)
+			first.push_back(CreateDynamicBox(full, "First", glm::vec3(2.0f * static_cast<float>(index), 0.0f, 0.0f)));
+		full.OnRuntimeStart();
+		PhysicsSystem& fullPhysics = GetPhysics(full);
+		REQUIRE(fullPhysics.GetStats().BodyCount == 4);
+		const uint64_t logStart = Log::GetBuffer().GetLatestSequence();
+		full.DestroyEntities(std::vector<Entity>(first.begin(), first.begin() + 2));
+		Entity replacement = CreateDynamicBox(full, "Replacement", glm::vec3(0.0f, 5.0f, 0.0f));
+		Entity other = CreateDynamicBox(full, "Other", glm::vec3(0.0f, 10.0f, 0.0f));
+		CHECK(fullPhysics.HasBody(replacement));
+		CHECK(fullPhysics.HasBody(other));
+		CHECK(fullPhysics.GetStats().BodyCount == 4);
+		CHECK(fullPhysics.GetStats().BodyOverflowCount == 0);
+		CHECK(CountLogMessages(logStart, "cannot create a body") == 0);
+		full.OnRuntimeStop();
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("Contact events do not depend on how many threads report them")
 	{
 		// Reports from Jolt's job threads go into per-thread buffers, merged after the step: the events must come out the

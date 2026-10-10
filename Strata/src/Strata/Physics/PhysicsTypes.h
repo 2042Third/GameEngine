@@ -105,6 +105,7 @@ namespace Strata
 		uint32_t CheckedPairCount = 0;   // Touching pairs that could end during the step (those of awake or rebuilt bodies)
 		uint32_t WrittenBodyCount = 0;   // Dynamic bodies whose pose was written back to their entity
 		uint64_t BuildCount = 0;         // Bodies built or rebuilt since the world was created (attempts that failed included)
+		uint64_t AddBatchCount = 0;      // Batches that added new bodies to the simulation since then (one per activation mode per round of changes)
 		uint64_t MeshCheckCount = 0;     // Mesh collider bodies checked for changed, arrived or cooked mesh data since then
 		uint64_t StepCount = 0;          // Simulation steps since the world was created
 		bool WaitingForMeshes = false;   // The last step was held: the simulation waits for mesh colliders' meshes to start

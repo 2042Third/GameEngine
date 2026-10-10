@@ -732,6 +732,9 @@ namespace Strata
 			RigidBodyType Type = RigidBodyType::Static;
 			BuildFailure Failure = BuildFailure::None;
 			bool InSimulation = false;
+			// Created and counted as part of the simulation, but waiting for the batch that adds the bodies of this round of
+			// changes to Jolt (see FlushBodyBatches); only ApplyChanges sees such records.
+			bool AddPending = false;
 			bool Suspended = false;                         // Out of the simulation because the world transform is degenerate
 			bool WaitsForParent = false;                    // Not built because the parent cannot be inverted (dynamic bodies)
 			bool KinematicMoving = false;                   // MoveKinematic gave the body a velocity during the last step
@@ -752,6 +755,16 @@ namespace Strata
 			std::vector<MeshSource> MeshSources;      // Meshes of the colliders considered by the last build
 
 			bool HasBody() const { return !BodyID.IsInvalid(); }
+		};
+
+		// What a Jolt body slot (a body index) leads to: the body occupying it (index and sequence number, to recognize a reused
+		// slot), the entity owning it and that entity's record. Records live in a std::map, whose elements stay in place until
+		// they are removed, which empties the slot first.
+		struct BodySlot
+		{
+			JPH::uint32 Body = JPH::BodyID::cInvalidBodyID;
+			entt::entity Entity = entt::null;
+			BodyRecord* Record = nullptr;
 		};
 
 		// A cooked mesh shape restored in a world, shared by the colliders using the same data.
@@ -896,7 +909,15 @@ namespace Strata
 		// Records that need attention at the next step besides the awake bodies (see NeedsPolling). Entries are dropped
 		// lazily, so the list may hold records that no longer need it (or no longer exist).
 		std::vector<entt::entity> PolledBodies;
-		std::unordered_map<JPH::uint32, entt::entity> BodyEntities;   // Body ID (index and sequence number) -> entity
+		std::vector<BodySlot> BodySlots;                              // Per Jolt body index (MaxBodies of them), see FindBodyRecord
+		// Bodies created while changes are applied join the simulation in one batch per activation mode (static bodies are
+		// not activated), and bodies destroyed meanwhile leave it and go in one batch each: Jolt inserts a batch into its
+		// broad phase trees at once (AddBodiesPrepare/Finalize) instead of body by body. FlushBodyBatches ends ApplyChanges.
+		std::vector<JPH::BodyID> PendingAdds;
+		std::vector<JPH::BodyID> PendingActivatedAdds;
+		std::vector<JPH::BodyID> PendingRemovals;
+		std::vector<JPH::BodyID> PendingDestructions;
+		uint64_t AddBatchCount = 0;                                   // Batches of new bodies added since the world was created
 		std::unordered_map<PairKey, TouchingPair, PairKeyHash> TouchingPairs;
 		std::unordered_map<UUID, std::vector<PairKey>> EntityPairs;   // Touching pairs of each entity (see AddTouchingPair)
 		uint64_t PairIndexOperations = 0;                             // Entries of EntityPairs written since the world was created
@@ -1046,6 +1067,21 @@ namespace Strata
 		{
 			auto record = FindSimulatedRecord(data, entity);
 			return record && record->Type == RigidBodyType::Dynamic ? record : nullptr;
+		}
+
+		// The record (and in outEntity the entity) owning a body, or nullptr for a body the world does not know (any more).
+		// Constant time: a body's index leads to its slot.
+		BodyRecord* FindBodyRecord(const PhysicsWorldData& data, const JPH::BodyID& bodyID, entt::entity* outEntity = nullptr)
+		{
+			const uint32_t index = bodyID.GetIndex();
+			if (index >= data.BodySlots.size())
+				return nullptr;
+			const BodySlot& slot = data.BodySlots[index];
+			if (slot.Body != bodyID.GetIndexAndSequenceNumber())
+				return nullptr;
+			if (outEntity)
+				*outEntity = slot.Entity;
+			return slot.Record;
 		}
 
 		// Sets why a record has no body (BuildFailure::None: it has one), counting the records that wait for a free slot.
@@ -1266,9 +1302,16 @@ namespace Strata
 				return;
 
 			SaveVelocities(data, record);
-			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
-			WakeBodiesAround(data, record.BodyID);
-			bodies.RemoveBody(record.BodyID);
+			if (record.AddPending)
+			{
+				// Never added to Jolt: it only leaves the batch (FlushBodyBatches skips it).
+				record.AddPending = false;
+			}
+			else
+			{
+				WakeBodiesAround(data, record.BodyID);
+				data.JoltSystem->GetBodyInterface().RemoveBody(record.BodyID);
+			}
 			record.InSimulation = false;
 			record.KinematicMoving = false;
 			EndContactsOf(data, record.EntityID);
@@ -1329,29 +1372,73 @@ namespace Strata
 			return PlacementResult::Added;
 		}
 
-		// Destroys the Jolt body of a record (the record itself stays). Contacts are left alone.
+		// Destroys the Jolt body of a record (the record itself stays): the body leaves the simulation and is destroyed with
+		// the batch of FlushBodyBatches, so it keeps its slot until then. Contacts are left alone.
 		void DestroyJoltBody(PhysicsWorldData& data, BodyRecord& record)
 		{
 			if (!record.HasBody())
 				return;
 
-			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
-			if (record.InSimulation)
+			if (record.InSimulation && !record.AddPending)
 			{
+				// The bodies resting on it must notice, while it can still be found where it is.
 				WakeBodiesAround(data, record.BodyID);
-				bodies.RemoveBody(record.BodyID);
-				record.InSimulation = false;
+				data.PendingRemovals.push_back(record.BodyID);
 			}
-			bodies.DestroyBody(record.BodyID);
-			data.BodyEntities.erase(record.BodyID.GetIndexAndSequenceNumber());
+			data.PendingDestructions.push_back(record.BodyID);
+			data.BodySlots[record.BodyID.GetIndex()] = BodySlot();
 			data.Contacts.SetBodyInterest(record.BodyID, false);
 			record.BodyID = JPH::BodyID();
+			record.InSimulation = false;
+			record.AddPending = false;
 			record.Suspended = false;
 			record.KinematicMoving = false;
 		}
 
+		// Removes and destroys the bodies DestroyJoltBody queued, in one batch each (their slots become free).
+		void FlushBodyDestructions(PhysicsWorldData& data)
+		{
+			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
+			if (!data.PendingRemovals.empty())
+				bodies.RemoveBodies(data.PendingRemovals.data(), static_cast<int>(data.PendingRemovals.size()));
+			if (!data.PendingDestructions.empty())
+				bodies.DestroyBodies(data.PendingDestructions.data(), static_cast<int>(data.PendingDestructions.size()));
+			data.PendingRemovals.clear();
+			data.PendingDestructions.clear();
+		}
+
+		// Adds the bodies created since the last flush to the simulation, in one batch per activation mode, after the queued
+		// removals and destructions. Bodies destroyed or taken out of the simulation since they were queued are skipped.
+		void FlushBodyBatches(PhysicsWorldData& data)
+		{
+			FlushBodyDestructions(data);
+
+			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
+			const auto addBatch = [&](std::vector<JPH::BodyID>& batch, JPH::EActivation activation)
+			{
+				std::erase_if(batch, [&](const JPH::BodyID& bodyID)
+				{
+					BodyRecord* record = FindBodyRecord(data, bodyID);
+					if (!record || !record->AddPending)
+						return true;
+					record->AddPending = false;
+					return false;
+				});
+				if (batch.empty())
+					return;
+				// AddBodiesPrepare may reorder the batch; Finalize takes it as it left it.
+				const JPH::BodyInterface::AddState state = bodies.AddBodiesPrepare(batch.data(), static_cast<int>(batch.size()));
+				bodies.AddBodiesFinalize(batch.data(), static_cast<int>(batch.size()), state, activation);
+				data.AddBatchCount++;
+				batch.clear();
+			};
+			addBatch(data.PendingAdds, JPH::EActivation::DontActivate);
+			addBatch(data.PendingActivatedAdds, JPH::EActivation::Activate);
+		}
+
 		void DestroyAllBodies(PhysicsWorldData& data)
 		{
+			FlushBodyBatches(data);
 			std::vector<JPH::BodyID> added;
 			std::vector<JPH::BodyID> all;
 			for (const auto& [handle, record] : data.Bodies)
@@ -1377,7 +1464,7 @@ namespace Strata
 			data.MeshBodies.clear();
 			data.WaitingMeshBodies.clear();
 			data.MeshUsers.clear();
-			data.BodyEntities.clear();
+			std::fill(data.BodySlots.begin(), data.BodySlots.end(), BodySlot());
 			data.TouchingPairs.clear();
 			data.EntityPairs.clear();
 			data.PendingEvents.clear();
@@ -1899,7 +1986,8 @@ namespace Strata
 			}
 
 			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
-			if (!record.HasBody() && data.JoltSystem->GetNumBodies() >= data.Settings.MaxBodies)
+			// Bodies destroyed in this round of changes keep their slots until the batch: they do not count.
+			if (!record.HasBody() && data.JoltSystem->GetNumBodies() - data.PendingDestructions.size() >= data.Settings.MaxBodies)
 			{
 				// Reported for all such entities at once (ReportBodyLimit).
 				SetBuildFailure(data, handle, record, BuildFailure::BodyLimit, worldTransform);
@@ -1927,13 +2015,18 @@ namespace Strata
 				}
 			}
 
-			const JPH::BodyCreationSettings settings = MakeBodySettings(data, entity, rigidBody, type, shape.GetPtr(), position, rotation);
+			JPH::BodyCreationSettings settings = MakeBodySettings(data, entity, rigidBody, type, shape.GetPtr(), position, rotation);
+			// A body that joins the simulation now starts with that motion (one that does not gets it when it is added).
+			settings.mLinearVelocity = ToJolt(linearVelocity);
+			settings.mAngularVelocity = ToJolt(angularVelocity);
 			JPH::Body* body = bodies.CreateBody(settings);
-			if (!body && record.HasBody())
+			if (!body && (record.HasBody() || !data.PendingDestructions.empty()))
 			{
 				// The world is full: free the old body's slot for its replacement instead of losing the body (its motion
-				// was read above, and its contacts carry over like in any rebuild).
+				// was read above, and its contacts carry over like in any rebuild), and the slots of the bodies destroyed in
+				// this round of changes.
 				DestroyJoltBody(data, record);
+				FlushBodyDestructions(data);
 				body = bodies.CreateBody(settings);
 			}
 			if (!body)
@@ -1953,17 +2046,30 @@ namespace Strata
 			record.LastWorldTransform = worldTransform;
 			record.KinematicTargetPosition = position;
 			record.KinematicTargetRotation = rotation;
-			record.SavedLinearVelocity = type == RigidBodyType::Dynamic ? linearVelocity : glm::vec3(0.0f); // Applied when added
-			record.SavedAngularVelocity = type == RigidBodyType::Dynamic ? angularVelocity : glm::vec3(0.0f);
 			record.ShapeMembers = std::move(build.ShapeMembers);
-			data.BodyEntities[record.BodyID.GetIndexAndSequenceNumber()] = handle;
+			data.BodySlots[record.BodyID.GetIndex()] = BodySlot { record.BodyID.GetIndexAndSequenceNumber(), handle, &record };
 			data.Contacts.SetBodyInterest(record.BodyID, data.ContactInterest.contains(record.EntityID));
 			ClearWarnings(data, record.EntityID, c_TransientWarnings);
 
-			if (!IsSimulated(scene, entity) || AddToSimulation(data, record, entity) != PlacementResult::Added)
+			if (!IsSimulated(scene, entity))
+			{
+				// Its motion applies when it joins the simulation (AddToSimulation).
+				record.SavedLinearVelocity = type == RigidBodyType::Dynamic ? linearVelocity : glm::vec3(0.0f);
+				record.SavedAngularVelocity = type == RigidBodyType::Dynamic ? angularVelocity : glm::vec3(0.0f);
 				EndContactsOf(data, record.EntityID);
-			else if (data.EntityPairs.find(record.EntityID) != data.EntityPairs.end())
-				data.RecheckedEntities.push_back(record.EntityID); // Its contacts carried over: the next step confirms or ends them
+			}
+			else
+			{
+				// Joins the simulation with the batch of this round (created where its entity is, with its motion).
+				(type == RigidBodyType::Static ? data.PendingAdds : data.PendingActivatedAdds).push_back(record.BodyID);
+				record.AddPending = true;
+				record.InSimulation = true;
+				record.TransformDirty = false;
+				record.SavedLinearVelocity = glm::vec3(0.0f);
+				record.SavedAngularVelocity = glm::vec3(0.0f);
+				if (data.EntityPairs.find(record.EntityID) != data.EntityPairs.end())
+					data.RecheckedEntities.push_back(record.EntityID); // Its contacts carried over: the next step confirms or ends them
+			}
 			UpdatePolling(data, handle, record);
 		}
 
@@ -2193,6 +2299,7 @@ namespace Strata
 				data.TransformChanges.Clear();
 				data.OwnerRefreshes.Clear();
 			}
+			FlushBodyBatches(data);
 			ReportBodyLimit(data);
 		}
 
@@ -2610,9 +2717,9 @@ namespace Strata
 			candidates.clear();
 			for (const JPH::BodyID& bodyID : GetAwakeBodies(data))
 			{
-				auto it = data.BodyEntities.find(bodyID.GetIndexAndSequenceNumber());
-				if (it != data.BodyEntities.end())
-					candidates.push_back(it->second);
+				entt::entity handle = entt::null;
+				if (FindBodyRecord(data, bodyID, &handle))
+					candidates.push_back(handle);
 			}
 
 			// The polled records that still need attention; the others, and stale or duplicate entries, are dropped.
@@ -2846,13 +2953,11 @@ namespace Strata
 			writeBacks.clear();
 			for (const JPH::BodyID& bodyID : movedBodies)
 			{
-				auto entityIt = data.BodyEntities.find(bodyID.GetIndexAndSequenceNumber());
-				if (entityIt == data.BodyEntities.end())
-					continue;
-				const BodyRecord* record = FindRecord(data, entityIt->second);
+				entt::entity handle = entt::null;
+				const BodyRecord* record = FindBodyRecord(data, bodyID, &handle);
 				if (!record || record->Type != RigidBodyType::Dynamic || !record->InSimulation)
 					continue;
-				writeBacks.emplace_back(GetHierarchyDepth(Entity(entityIt->second, &scene)), entityIt->second);
+				writeBacks.emplace_back(GetHierarchyDepth(Entity(handle, &scene)), handle);
 			}
 			// By depth, then by entity: deterministic, parents first.
 			std::sort(writeBacks.begin(), writeBacks.end());
@@ -3075,6 +3180,7 @@ namespace Strata
 		data.Jobs = CreatePhysicsJobSystem(&data.JobCounters);
 		data.JoltSystem = CreateScope<JPH::PhysicsSystem>();
 		data.JoltSystem->Init(data.Settings.MaxBodies, 0, data.Settings.MaxBodyPairs, data.Settings.MaxContactConstraints, data.BroadPhaseLayers, data.ObjectVsBroadPhase, data.LayerPairFilter);
+		data.BodySlots.resize(data.Settings.MaxBodies);
 		data.Contacts.Initialize(data.Settings.MaxBodies);
 		data.JoltSystem->SetContactListener(&data.Contacts);
 		data.JoltSystem->SetBodyActivationListener(&data.Activations);
@@ -3585,6 +3691,7 @@ namespace Strata
 		stats.CheckedPairCount = data.LastCheckedPairs;
 		stats.WrittenBodyCount = data.LastWrittenBodies;
 		stats.BuildCount = data.BuildCount;
+		stats.AddBatchCount = data.AddBatchCount;
 		stats.MeshCheckCount = data.MeshCheckCount;
 		stats.WaitingForMeshes = data.HeldLastStep;
 		stats.HeldStepCount = data.HeldStepCount;

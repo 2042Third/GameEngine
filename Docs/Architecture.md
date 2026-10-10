@@ -183,7 +183,10 @@ afterwards on the main thread to the listeners. Contacts are tracked only for pa
 listener of all entities is registered, otherwise pairs with a watched entity, such as one whose script has contact
 callbacks): Jolt's job threads record those into buffers of their own, without a lock, which are merged and sorted after
 the step, and each touching pair knows its position in the pair lists of both its entities, so it is added and removed
-in constant time (`PhysicsStats::PairIndexOperations` counts the list writes).
+in constant time (`PhysicsStats::PairIndexOperations` counts the list writes). Bodies created while changes are applied
+(play start, a prefab spawn, a streamed cell) join the simulation in one batch per activation mode
+(`AddBodiesPrepare`/`AddBodiesFinalize`), and destroyed bodies leave it in one batch, when `ApplyPendingChanges` ends;
+each Jolt body index leads to its entity and record in constant time (`BodySlot`).
 
 **Audio** (`Audio/`). `AudioEngine` wraps the miniaudio mixer, output device, listener and one-shots (main-thread
 API; mixing runs on miniaudio's audio thread, or is pulled with `AdvanceNullDevice`/`ReadFrames` without a device).
