@@ -322,9 +322,13 @@ are, in update order:
 | Physics | `PhysicsSystem` | Play, Simulate | After Scripting | Jolt world; steps in `OnFixedUpdate`, then dispatches contacts. |
 | Audio | `AudioSystem` | Play | After Physics | Sources and listener, in `OnLateUpdate` after scripts and physics. |
 
-- **Update order.** A `SceneSystemDescriptor` names the systems it runs `After` and `Before`. The registry keeps a
-  stable topological order of these constraints, in which registration order decides between systems that are not
-  constrained against each other, and recomputes it on every `Register` and `Unregister` (`Scene/SceneSystem.cpp`).
+- **Update order.** A `SceneSystemDescriptor` names the systems it runs `After` and `Before`. The registry keeps the
+  order of these constraints that follows registration order as far as they allow: the first registered system runs as
+  early as the constraints allow, then the second, and so on (built from the back, placing the latest registered system
+  whose successors are placed). A system thus moves ahead of earlier registered ones only when it has to run before a
+  system that runs ahead of them, and a system no constraint involves runs after every system registered before it: a
+  later "Wind" that runs `Before` Physics does not pull an unconstrained "CameraFollow" registered between them ahead of
+  Physics. The order is recomputed on every `Register` and `Unregister` (`Scene/SceneSystem.cpp`).
   A constraint that names an unregistered system or the system itself, or that closes a cycle, makes `Register` return
   false with an error naming the systems (e.g. `TestA -> TestB -> TestA`) and leaves the registry unchanged; so does
   unregistering a system others name. Changes are refused while any scene runs (`Scene::GetRunningSceneCount`): the

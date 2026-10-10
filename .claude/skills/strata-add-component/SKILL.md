@@ -52,7 +52,8 @@ Implement a `SceneSystem` (`Scene/SceneSystem.h`) and register its descriptor in
 the module it belongs to (e.g. `RegisterPhysicsModule` in `Physics/PhysicsRegistration.cpp`), which
 `Engine::RegisterBuiltinModules` calls. Build the descriptor with `MakeSceneSystemDescriptor<T>` (so
 `Scene::GetSystem<T>` finds the running system), declare its update order with `After`/`Before` (names of systems
-registered before it, e.g. `After = { "Physics" }`; registration order decides the rest), and check the result of
+registered before it, e.g. `After = { "Physics" }`; registration order decides the rest as far as the constraints
+allow, so a system without constraints runs after the ones registered before it), and check the result of
 `SceneSystemRegistry::Register`: a cycle or an unknown name is refused. Set
 `RunsInSimulateMode` only for systems that belong in the editor's physics-only simulate mode. React to
 edits through EnTT signals (`on_construct`, `on_update`, `on_destroy`). Edits notify through `patch`, which

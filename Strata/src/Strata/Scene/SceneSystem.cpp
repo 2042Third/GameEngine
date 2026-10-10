@@ -31,13 +31,14 @@ namespace Strata
 			return data;
 		}
 
-		// Names a cycle among the systems Kahn's algorithm could not order: each of them still has a predecessor among
-		// them, so walking predecessors from any of them must come back to a system it passed.
-		std::string DescribeCycle(const std::vector<SceneSystemDescriptor>& registered, const std::vector<std::vector<size_t>>& predecessors,
-			const std::vector<uint32_t>& remainingPredecessors)
+		// Names a cycle among the systems the ordering could not place: each of them still has a successor among them, so
+		// walking successors from any of them must come back to a system it passed. Successors run later, so the walk reads
+		// in update order.
+		std::string DescribeCycle(const std::vector<SceneSystemDescriptor>& registered, const std::vector<std::vector<size_t>>& successors,
+			const std::vector<uint32_t>& remainingSuccessors)
 		{
 			size_t current = 0;
-			while (remainingPredecessors[current] == 0)
+			while (remainingSuccessors[current] == 0)
 				current++;
 
 			std::vector<size_t> path;
@@ -46,26 +47,34 @@ namespace Strata
 			{
 				positionInPath[current] = path.size();
 				path.push_back(current);
-				for (size_t predecessor : predecessors[current])
+				for (size_t successor : successors[current])
 				{
-					if (remainingPredecessors[predecessor] > 0)
+					if (remainingSuccessors[successor] > 0)
 					{
-						current = predecessor;
+						current = successor;
 						break;
 					}
 				}
 			}
 
-			// The path walked backwards in time; the cycle is its tail from the repeated system, read in update order.
-			std::string cycle = registered[current].Name;
-			for (size_t index = path.size(); index-- > positionInPath[current];)
-				cycle += " -> " + registered[path[index]].Name;
-			return cycle;
+			// The cycle is the path's tail from the repeated system.
+			std::string cycle;
+			for (size_t index = positionInPath[current]; index < path.size(); index++)
+				cycle += registered[path[index]].Name + " -> ";
+			return cycle + registered[current].Name;
 		}
 
-		// The update order of `registered`: a topological order of the After/Before constraints in which the earlier
-		// registered system goes first whenever there is a choice. Returns false with the reason for constraints that
-		// name an unknown system or the system itself, and for cycles.
+		// The update order of `registered`: a topological order of the After/Before constraints that follows registration
+		// order as far as they allow. The first registered system runs as early as the constraints allow, then the second,
+		// and so on: a system moves ahead of an earlier registered one only when it has to run before a system that runs
+		// ahead of that one. Returns false with the reason for constraints that name an unknown system or the system
+		// itself, and for cycles.
+		//
+		// The order is built from the back: each step puts the latest registered system whose successors are all placed in
+		// front of the placed ones. (Taking the earliest registered ready system from the front instead lets an
+		// unconstrained system overtake earlier registered ones that wait for a constraint: with Physics waiting for a
+		// later "Wind" that runs before it, an unconstrained "CameraFollow" registered between them would run before
+		// Physics.)
 		bool ComputeUpdateOrder(const std::vector<SceneSystemDescriptor>& registered, std::vector<SceneSystemDescriptor>& outOrdered, std::string& outError)
 		{
 			std::unordered_map<std::string, size_t> indices;
@@ -105,34 +114,39 @@ namespace Strata
 					return false;
 			}
 
-			std::vector<uint32_t> remainingPredecessors(registered.size());
-			std::priority_queue<size_t, std::vector<size_t>, std::greater<size_t>> ready;
+			// Systems whose successors are all placed, the latest registered on top.
+			std::vector<uint32_t> remainingSuccessors(registered.size());
+			std::priority_queue<size_t> ready;
 			for (size_t index = 0; index < registered.size(); index++)
 			{
-				remainingPredecessors[index] = static_cast<uint32_t>(predecessors[index].size());
-				if (remainingPredecessors[index] == 0)
+				remainingSuccessors[index] = static_cast<uint32_t>(successors[index].size());
+				if (remainingSuccessors[index] == 0)
 					ready.push(index);
 			}
 
-			std::vector<SceneSystemDescriptor> ordered;
-			ordered.reserve(registered.size());
+			std::vector<size_t> placedFromBack;
+			placedFromBack.reserve(registered.size());
 			while (!ready.empty())
 			{
 				const size_t index = ready.top();
 				ready.pop();
-				ordered.push_back(registered[index]);
-				for (size_t successor : successors[index])
+				placedFromBack.push_back(index);
+				for (size_t predecessor : predecessors[index])
 				{
-					if (--remainingPredecessors[successor] == 0)
-						ready.push(successor);
+					if (--remainingSuccessors[predecessor] == 0)
+						ready.push(predecessor);
 				}
 			}
 
-			if (ordered.size() != registered.size())
+			if (placedFromBack.size() != registered.size())
 			{
-				outError = fmt::format("the update order of the scene systems has a cycle: {}", DescribeCycle(registered, predecessors, remainingPredecessors));
+				outError = fmt::format("the update order of the scene systems has a cycle: {}", DescribeCycle(registered, successors, remainingSuccessors));
 				return false;
 			}
+			std::vector<SceneSystemDescriptor> ordered;
+			ordered.reserve(registered.size());
+			for (auto it = placedFromBack.rbegin(); it != placedFromBack.rend(); ++it)
+				ordered.push_back(registered[*it]);
 			outOrdered = std::move(ordered);
 			return true;
 		}

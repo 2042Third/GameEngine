@@ -128,9 +128,33 @@ TEST_SUITE("Scene.Systems")
 		}
 		CHECK(RecordingSystem::Updates == std::vector<std::string> { "TestB", "TestA", "TestC", "TestD" });
 
-		// A system registered again with the same name replaces the old one and counts as registered last.
+		// A system registered again with the same name replaces the old one and counts as registered last: TestA stays,
+		// held between TestB and TestC; TestB, without its constraint now, follows every other system.
 		REQUIRE(SceneSystemRegistry::Register(MakeRecording("TestA")));
-		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Physics", "TestB", "TestD", "TestA", "TestC", "Audio" });
+		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Physics", "TestB", "TestA", "TestC", "Audio", "TestD" });
+		REQUIRE(SceneSystemRegistry::Register(MakeRecording("TestB")));
+		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Physics", "TestA", "TestC", "Audio", "TestD", "TestB" });
+	}
+
+	TEST_CASE("A system moves ahead of earlier registered ones only as far as its constraints require")
+	{
+		RecordingSystem::Updates.clear();
+		ScopedSystems systems;
+		// A camera that follows a rigid body has no constraint: it runs after every system registered before it, also when
+		// a system registered after it has to run before one of them.
+		REQUIRE(systems.Register(MakeRecording("CameraFollow")));
+		REQUIRE(systems.Register(MakeRecording("Wind", {}, { "Physics" })));
+		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Wind", "Physics", "Audio", "CameraFollow" });
+		REQUIRE(systems.Register(MakeRecording("EarlyInput", {}, { "Scripting" })));
+		CHECK(GetSystemNames() == std::vector<std::string> { "EarlyInput", "Scripting", "Wind", "Physics", "Audio", "CameraFollow" });
+
+		{
+			Scene scene;
+			scene.OnRuntimeStart();
+			scene.OnUpdateRuntime(0.016f);
+			scene.OnRuntimeStop();
+		}
+		CHECK(RecordingSystem::Updates == std::vector<std::string> { "EarlyInput", "Wind", "CameraFollow" });
 	}
 
 	TEST_CASE("A cycle or an unknown name is refused with the systems named, and the registry stays unchanged")

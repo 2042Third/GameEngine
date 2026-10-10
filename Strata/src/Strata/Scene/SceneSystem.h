@@ -60,7 +60,8 @@ namespace Strata
 		bool RunsInSimulateMode = false;
 		std::function<Scope<SceneSystem>(Scene&)> Create;
 		// Update order: the system runs after the systems named in After and before those named in Before (names of
-		// registered systems). Systems without a constraint between them keep their registration order.
+		// registered systems). Registration order decides the rest as far as the constraints allow (see
+		// SceneSystemRegistry::GetAll): a system that no constraint involves runs after every system registered before it.
 		std::vector<std::string> After;
 		std::vector<std::string> Before;
 		// entt::type_id of the class Create makes (set by MakeSceneSystemDescriptor), by which Scene::GetSystem finds the
@@ -97,8 +98,9 @@ namespace Strata
 		// Refused (false) for a name that is not registered, while other systems name it in a constraint (with an error naming
 		// them) and while any scene runs.
 		[[nodiscard]] static bool Unregister(const std::string& name);
-		// Every system in update order: a stable topological order of the constraints in which registration order decides
-		// between systems that are not constrained against each other.
+		// Every system in update order: the order of the constraints that follows registration order as far as they allow.
+		// The first registered system runs as early as the constraints allow, then the second, and so on, so a system moves
+		// ahead of an earlier registered one only when it has to run before a system that runs ahead of that one.
 		static const std::vector<SceneSystemDescriptor>& GetAll();
 	};
 
