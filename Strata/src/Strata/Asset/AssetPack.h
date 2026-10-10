@@ -37,7 +37,7 @@ namespace Strata
 	// How a block of a version 2 pack is stored.
 	enum class AssetPackCodec : uint32_t
 	{
-		Stored = 0, // As it is (compression saved less than 5%)
+		Stored = 0, // As it is (compression saved less than an eighth: AssetPack::c_MinCompressionSaving)
 		Zstd = 1
 	};
 
@@ -59,6 +59,7 @@ namespace Strata
 		uint64_t BlocksDecoded = 0;    // Blocks checked and decoded (stored or decompressed)
 		uint64_t BlocksDecompressed = 0;
 		uint64_t BytesDecompressed = 0;
+		uint64_t BlocksReadInPlace = 0; // Stored blocks read straight into the destination: checked, never copied
 		uint64_t BufferBytes = 0;      // Read buffers the pack holds for reuse, lent to reads or free (freed with the pack)
 	};
 
@@ -71,8 +72,8 @@ namespace Strata
 	//     start, a CRC-32C of the tables and one of the header
 	//   entry data: every entry starts at a 4 KiB boundary and is a run of consecutive blocks: its stored form cut into
 	//     pieces of BlockSize (256 KiB; the last one shorter), each compressed with zstd, or stored as it is when compression
-	//     saves less than 5%. Entries are ordered by first use (see EditorAssetManager::BuildAssetPack), so loading a scene
-	//     reads the file front to back.
+	//     saves less than an eighth (c_MinCompressionSaving). Entries are ordered by first use (see
+	//     EditorAssetManager::BuildAssetPack), so loading a scene reads the file front to back.
 	//   tables (they end the file, so a pack is written in one pass, and are read with one read):
 	//     entries (88 bytes each): handle, parent, stored size, content hash, type, flags (bit 0: has bounds), the string
 	//       indices of path, sub-asset key and name, first block and block count, first dependency and dependency count,
@@ -100,6 +101,13 @@ namespace Strata
 		static constexpr uint64_t c_ReadChunkBytes = 2ull << 20;
 		static constexpr size_t c_ReadBuffersPerRead = 3;
 		static constexpr size_t c_MaxFreeReadBuffers = 6;
+		// Writers compress a block only when that saves at least 1/c_MinCompressionSaving of it. A stored block costs a read
+		// only: reads put whole stored blocks straight where the data goes (no buffer, no copy) and check them in place, while
+		// a compressed one is read into a buffer and decompressed. Block-compressed textures shrink by a few percent at most
+		// (zstd saved about 7% of BC7), which does not pay for that: with a twentieth as the threshold most of the stress
+		// world's BC7 blocks were compressed and it streamed about 10% slower from version 2 than from version 1, with an
+		// eighth (and those blocks read in place) about as fast (PerfGPU.Pack).
+		static constexpr uint32_t c_MinCompressionSaving = 8;
 
 		// Reads and validates the header and the tables. The file stays open (one handle, shared by every read) until the
 		// pack is destroyed.
@@ -155,6 +163,7 @@ namespace Strata
 		mutable std::atomic<uint64_t> m_BlocksDecoded = 0;
 		mutable std::atomic<uint64_t> m_BlocksDecompressed = 0;
 		mutable std::atomic<uint64_t> m_BytesDecompressed = 0;
+		mutable std::atomic<uint64_t> m_BlocksReadInPlace = 0;
 
 		mutable std::mutex m_BufferMutex;
 		mutable std::vector<std::vector<uint8_t>> m_FreeBuffers;

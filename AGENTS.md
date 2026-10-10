@@ -426,7 +426,8 @@ The threading model, frame loop and pipelines these rules protect are described 
 - Built-in assets (primitive meshes, default material) have fixed handles 1–255 (`BuiltinAssets`) and
   exist in every asset manager.
 - Shipped games read asset packs (`.stpak`, `AssetPack`, version 2: entries 4 KiB-aligned, cut into 256 KiB
-  zstd-compressed blocks with CRC-32C checksums, read by byte range through one shared `FileReader`, with dependency and
+  zstd-compressed blocks with CRC-32C checksums (stored as they are when compression saves less than an eighth, and then
+  read straight into place), read by byte range through one shared `FileReader`, with dependency and
   mesh bounds tables; version 1 packs still load) through `RuntimeAssetManager`, which mounts the game's pack and then
   the manifest's `PatchPacks` (later entries replace earlier ones by handle). The editor plans them
   (`EditorAssetManager::PlanAssetPack`: ordered by first use from the start scene; with pruning only what the scenes and

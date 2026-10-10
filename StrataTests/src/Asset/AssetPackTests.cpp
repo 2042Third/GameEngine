@@ -18,6 +18,7 @@
 #include <cstring>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <thread>
@@ -41,13 +42,14 @@ namespace
 		return metadata;
 	}
 
-	// Deterministic content of the kinds packs hold: text-like data that compresses well, noise that does not, and
-	// both mixed.
+	// Deterministic content of the kinds packs hold: text-like data that compresses well, noise that does not, both mixed,
+	// and noise that compression shrinks by less than an eighth but more than a twentieth (like block-compressed textures).
 	enum class ContentKind : uint8_t
 	{
 		Compressible,
 		Incompressible,
-		Mixed
+		Mixed,
+		BarelyCompressible
 	};
 
 	std::vector<uint8_t> MakeContent(size_t size, ContentKind kind, uint32_t seed)
@@ -64,6 +66,12 @@ namespace
 		static constexpr char c_Words[] = "\"Translation\": [0.0, 1.5, -2.25], \"Material\": \"00000000DEADBEEF\", \"Visible\": true, ";
 		for (size_t index = 0; index < size; index++)
 		{
+			if (kind == ContentKind::BarelyCompressible)
+			{
+				// Every 256 bytes start with the same 24 (a match for zstd), then noise.
+				data[index] = index % 256 < 24 ? static_cast<uint8_t>(c_Words[index % 256]) : static_cast<uint8_t>(next() >> 24);
+				continue;
+			}
 			const bool noise = kind == ContentKind::Incompressible || (kind == ContentKind::Mixed && (index / 4096) % 2 == 1);
 			data[index] = noise ? static_cast<uint8_t>(next() >> 24) : static_cast<uint8_t>(c_Words[(index + seed) % (sizeof(c_Words) - 1)] + (index / 65536) % 3);
 		}
@@ -386,6 +394,78 @@ TEST_SUITE("Asset.Pack")
 		CHECK(pack->GetStats().BlocksDecoded - decodedBefore == 2);
 		REQUIRE(pack->ReadRange(entry, 2 * c_Block + 10, 20, range, &error));
 		CHECK(pack->GetStats().BlocksDecoded - decodedBefore == 3);
+	}
+
+	TEST_CASE("Blocks that compress by less than an eighth are stored, and stored blocks are read straight into the destination")
+	{
+		ScopedJobSystem jobs(8, 2);
+		constexpr uint64_t c_Block = AssetPack::c_BlockSize;
+		std::vector<PackSource> sources;
+		sources.push_back(MakeSource(0x2100, MakeContent(5 * c_Block + 1234, ContentKind::Incompressible, 5)));
+		sources.push_back(MakeSource(0x2101, MakeContent(3 * c_Block, ContentKind::BarelyCompressible, 6)));
+		sources.push_back(MakeSource(0x2102, MakeContent(2 * c_Block, ContentKind::Mixed, 7)));
+		AssetPackWriteStats stats;
+		std::filesystem::path path = WritePack(CreateTemporaryDirectory("PackInPlace") / "Game.stpak", sources, {}, &stats);
+		CHECK(stats.CompressedBlocks == 2); // Only the mixed entry's blocks shrink by an eighth or more
+		std::string error;
+		Scope<AssetPack> pack = AssetPack::Open(path, &error);
+		REQUIRE_MESSAGE(pack, error);
+		REQUIRE(pack->GetEntries().size() == 3);
+		for (size_t index = 0; index < 2; index++)
+		{
+			const AssetPackEntry& entry = pack->GetEntries()[index];
+			for (uint32_t block = 0; block < entry.BlockCount; block++)
+				CHECK(pack->GetBlocks()[entry.FirstBlock + block].Codec == AssetPackCodec::Stored);
+		}
+
+		// Whole entries: every stored block lands in place and is only checked there; compressed ones are decompressed.
+		std::vector<uint8_t> data;
+		for (size_t index = 0; index < sources.size(); index++)
+		{
+			CAPTURE(index);
+			const AssetPackStats before = pack->GetStats();
+			REQUIRE(pack->ReadData(pack->GetEntries()[index], data, &error));
+			CHECK(data == sources[index].Data);
+			const uint64_t inPlace = pack->GetStats().BlocksReadInPlace - before.BlocksReadInPlace;
+			CHECK(inPlace == (index < 2 ? pack->GetEntries()[index].BlockCount : 0u));
+		}
+
+		// Ranges: their whole blocks in place, the partial ends copied out of the read's buffers.
+		const AssetPackEntry& entry = pack->GetEntries()[0];
+		struct RangeCase
+		{
+			uint64_t Offset = 0;
+			uint64_t Size = 0;
+			uint64_t InPlace = 0;
+		};
+		const RangeCase ranges[] = { { c_Block - 100, 2 * c_Block + 200, 2 }, { c_Block, c_Block, 1 }, { 10, 20, 0 }, { 0, entry.Size, 6 },
+			{ 4 * c_Block, c_Block + 1234, 2 }, { 4 * c_Block + 1, c_Block + 1233, 1 }, { c_Block - 1, 2, 0 } };
+		for (const RangeCase& range : ranges)
+		{
+			CAPTURE(range.Offset);
+			CAPTURE(range.Size);
+			const AssetPackStats before = pack->GetStats();
+			REQUIRE(pack->ReadRange(entry, range.Offset, range.Size, data, &error));
+			CHECK(std::equal(data.begin(), data.end(), sources[0].Data.begin() + static_cast<std::ptrdiff_t>(range.Offset),
+				sources[0].Data.begin() + static_cast<std::ptrdiff_t>(range.Offset + range.Size)));
+			CHECK(pack->GetStats().BlocksReadInPlace - before.BlocksReadInPlace == range.InPlace);
+		}
+
+		// A damaged byte in a block read in place fails the read with the block's checksum; the other blocks still read.
+		const uint64_t damaged = pack->GetBlocks()[entry.FirstBlock + 2].Offset + 17;
+		pack.reset();
+		std::optional<std::vector<uint8_t>> bytes = FileSystem::ReadBytes(path);
+		REQUIRE(bytes);
+		(*bytes)[damaged] ^= 0x40;
+		path = path.parent_path() / "Damaged.stpak";
+		REQUIRE(FileSystem::WriteBytes(path, *bytes));
+		pack = AssetPack::Open(path, &error);
+		REQUIRE_MESSAGE(pack, error);
+		error.clear();
+		CHECK_FALSE(pack->ReadData(pack->GetEntries()[0], data, &error));
+		CHECK(error.find("checksum") != std::string::npos);
+		CHECK(pack->ReadRange(pack->GetEntries()[0], 0, 2 * c_Block, data, &error));
+		CHECK(std::equal(data.begin(), data.end(), sources[0].Data.begin()));
 	}
 
 	TEST_CASE("A 64 KiB range of a 90 MB entry decompresses at most two blocks")

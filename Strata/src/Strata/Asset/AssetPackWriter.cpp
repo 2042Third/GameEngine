@@ -141,9 +141,10 @@ namespace Strata
 					block.Compressed.clear();
 					block.ContentHash = Hash::FNV1a(raw);
 
-					// Compressed only when that saves at least 5%: zstd stops once the output would not fit in 95%.
-					// Without memory for the output the block is stored as it is: a valid pack, only larger.
-					const size_t capacity = raw.size() - raw.size() / 20 - 1;
+					// Compressed only when that saves at least an eighth (c_MinCompressionSaving): zstd stops once the output
+					// would not fit in seven eighths. Without memory for the output the block is stored as it is: a valid pack,
+					// only larger.
+					const size_t capacity = raw.size() - raw.size() / AssetPack::c_MinCompressionSaving - 1;
 					if (t_Compression.Context && capacity > 0)
 					{
 						try

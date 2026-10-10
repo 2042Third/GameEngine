@@ -505,16 +505,25 @@ namespace Strata
 		// Allocating fails only when memory runs out; blocks published by then are finished before the read returns.
 		try
 		{
-			// The reads: runs of consecutive blocks of up to c_ReadChunkBytes stored bytes (at least one block each).
+			// The reads: runs of consecutive blocks of up to c_ReadChunkBytes stored bytes (at least one block each). Blocks stored
+			// as they are and wholly inside the range are read straight into the destination, where they only need checking: they
+			// form chunks of their own (Direct), which need no buffer and no copy.
 			struct Chunk
 			{
 				uint32_t First = 0; // Block index within the read
 				uint32_t Count = 0;
 				uint64_t Bytes = 0;
+				bool Direct = false;
 			};
 			const uint64_t end = offset + size;
 			const uint32_t firstBlock = static_cast<uint32_t>(offset / m_BlockSize);
 			const uint32_t blockCount = static_cast<uint32_t>((end - 1) / m_BlockSize) - firstBlock + 1;
+			const auto isDirect = [&](uint32_t block)
+			{
+				const AssetPackBlock& stored = m_Blocks[entry.FirstBlock + firstBlock + block];
+				const uint64_t blockStart = static_cast<uint64_t>(firstBlock + block) * m_BlockSize;
+				return stored.Codec == AssetPackCodec::Stored && blockStart >= offset && blockStart + stored.Size <= end;
+			};
 			std::vector<Chunk> chunks;
 			Ref<BlockDecoding> work = CreateRef<BlockDecoding>();
 			work->Pack = this;
@@ -525,25 +534,28 @@ namespace Strata
 			work->FirstBlock = firstBlock;
 			work->Stored.resize(blockCount);
 			work->ChunkOf.resize(blockCount);
+			size_t bufferedChunks = 0;
 			for (uint32_t block = 0; block < blockCount;)
 			{
-				Chunk chunk { block, 0, 0 };
-				while (block < blockCount && (chunk.Count == 0 || chunk.Bytes + m_Blocks[entry.FirstBlock + firstBlock + block].StoredSize <= c_ReadChunkBytes))
+				Chunk chunk { block, 0, 0, isDirect(block) };
+				while (block < blockCount && isDirect(block) == chunk.Direct
+					&& (chunk.Count == 0 || chunk.Bytes + m_Blocks[entry.FirstBlock + firstBlock + block].StoredSize <= c_ReadChunkBytes))
 				{
 					chunk.Bytes += m_Blocks[entry.FirstBlock + firstBlock + block].StoredSize;
 					work->ChunkOf[block] = static_cast<uint32_t>(chunks.size());
 					chunk.Count++;
 					block++;
 				}
+				bufferedChunks += chunk.Direct ? 0 : 1;
 				chunks.push_back(chunk);
 			}
 			work->ChunkUnfinished = std::make_unique<std::atomic<uint32_t>[]>(chunks.size());
 			for (size_t index = 0; index < chunks.size(); index++)
 				work->ChunkUnfinished[index].store(chunks[index].Count, std::memory_order_relaxed);
 
-			// Each chunk is read into a buffer the pack lends (up to c_ReadBuffersPerRead chunks ahead of the decoding). Every way
-			// out finishes the blocks published so far first: their decoders use the buffers and the destination.
-			const size_t bufferCount = std::min(chunks.size(), c_ReadBuffersPerRead);
+			// Every other chunk is read into a buffer the pack lends (up to c_ReadBuffersPerRead chunks ahead of the decoding).
+			// Every way out finishes the blocks published so far first: their decoders use the buffers and the destination.
+			const size_t bufferCount = std::min(bufferedChunks, c_ReadBuffersPerRead);
 			std::vector<std::vector<uint8_t>> buffers;
 			std::vector<size_t> lentCapacities;
 			buffers.reserve(bufferCount);
@@ -600,24 +612,38 @@ namespace Strata
 				}
 			};
 
+			// The chunk that used each buffer last (c_NoChunk: none yet).
+			constexpr size_t c_NoChunk = ~size_t(0);
+			std::vector<size_t> bufferChunks(bufferCount, c_NoChunk);
+			size_t bufferedIndex = 0;
 			for (size_t index = 0; index < chunks.size(); index++)
 			{
 				const Chunk& chunk = chunks[index];
-				// The buffer's previous chunk must be decoded before it is read over.
-				if (index >= bufferCount)
+				uint8_t* target = nullptr;
+				if (chunk.Direct)
 				{
-					const size_t previous = index - bufferCount;
-					work->HelpUntil([&work, previous]() { return work->ChunkUnfinished[previous].load(std::memory_order_acquire) == 0; });
+					// The blocks' bytes are the destination's: a stored block is its data, and the blocks of an entry are
+					// consecutive in the file and in the data.
+					target = destination + (static_cast<uint64_t>(firstBlock + chunk.First) * m_BlockSize - offset);
+				}
+				else
+				{
+					// The buffer's previous chunk must be decoded before it is read over.
+					const size_t slot = bufferedIndex++ % bufferCount;
+					if (const size_t previous = bufferChunks[slot]; previous != c_NoChunk)
+						work->HelpUntil([&work, previous]() { return work->ChunkUnfinished[previous].load(std::memory_order_acquire) == 0; });
+					bufferChunks[slot] = index;
+					std::vector<uint8_t>& buffer = buffers[slot];
+					// Sized for any chunk at once, rather than grown by half again (buffers are kept for the next reads).
+					if (buffer.capacity() < chunk.Bytes)
+						buffer.reserve(static_cast<size_t>(std::max(chunk.Bytes, c_ReadChunkBytes)));
+					buffer.resize(static_cast<size_t>(chunk.Bytes));
+					target = buffer.data();
 				}
 				if (work->Failed.load(std::memory_order_acquire))
 					break;
 
-				std::vector<uint8_t>& buffer = buffers[index % bufferCount];
-				// Sized for any chunk at once, rather than grown by half again (buffers are kept for the next reads).
-				if (buffer.capacity() < chunk.Bytes)
-					buffer.reserve(static_cast<size_t>(std::max(chunk.Bytes, c_ReadChunkBytes)));
-				buffer.resize(static_cast<size_t>(chunk.Bytes));
-				if (!m_Reader->ReadAt(m_Blocks[entry.FirstBlock + firstBlock + chunk.First].Offset, buffer))
+				if (!m_Reader->ReadAt(m_Blocks[entry.FirstBlock + firstBlock + chunk.First].Offset, std::span<uint8_t>(target, static_cast<size_t>(chunk.Bytes))))
 				{
 					outError = "the file could not be read";
 					work->Failed = true;
@@ -628,7 +654,7 @@ namespace Strata
 				uint64_t position = 0;
 				for (uint32_t block = chunk.First; block < chunk.First + chunk.Count; block++)
 				{
-					work->Stored[block] = buffer.data() + position;
+					work->Stored[block] = target + position;
 					position += m_Blocks[entry.FirstBlock + firstBlock + block].StoredSize;
 				}
 				work->Published.store(chunk.First + chunk.Count, std::memory_order_release);
@@ -672,8 +698,11 @@ namespace Strata
 		const uint8_t* decoded = nullptr;
 		if (current.Codec == AssetPackCodec::Stored)
 		{
+			// A block ReadBlocks read straight into the destination is there already.
 			decoded = stored.data();
-			if (whole)
+			if (whole && stored.data() == destination + (blockStart - offset))
+				m_BlocksReadInPlace.fetch_add(1, std::memory_order_relaxed);
+			else if (whole)
 				std::memcpy(destination + (blockStart - offset), stored.data(), current.Size);
 		}
 		else
@@ -747,6 +776,7 @@ namespace Strata
 		stats.BlocksDecoded = m_BlocksDecoded.load(std::memory_order_relaxed);
 		stats.BlocksDecompressed = m_BlocksDecompressed.load(std::memory_order_relaxed);
 		stats.BytesDecompressed = m_BytesDecompressed.load(std::memory_order_relaxed);
+		stats.BlocksReadInPlace = m_BlocksReadInPlace.load(std::memory_order_relaxed);
 		std::scoped_lock<std::mutex> lock(m_BufferMutex);
 		stats.BufferBytes = m_BufferBytes;
 		return stats;
