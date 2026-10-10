@@ -142,6 +142,8 @@ namespace Strata
 		// Docks the panels into the default arrangement (first run, a saved layout of another version, View > Reset Layout).
 		void BuildDefaultLayout(unsigned int dockspaceId);
 		void DrawMenuBar();
+		// File > Open Recent: the recent projects (RecentProjects) the launcher lists.
+		void DrawRecentMenu();
 		void DrawSampleMenu();
 		void DrawToolbar();
 		void DrawGizmoControls();
@@ -169,6 +171,8 @@ namespace Strata
 
 		bool SaveScene();
 		bool SaveSceneAs();
+		// Opens a project file (project.open) once unsaved changes are dealt with; failures go to ReportError.
+		void OpenProjectFile(const std::filesystem::path& projectFile);
 		// Logs an error of a UI action, and shows it on the launcher while that is what the user sees.
 		void ReportError(const std::string& message);
 		void DeleteSelection();

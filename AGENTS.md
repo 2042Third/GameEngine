@@ -578,12 +578,18 @@ and `AudioSystem`, the built-in "Audio" scene system.
   context keeps an asset manager with only the built-in assets active, so built-in meshes render.
 - **Templates and recent projects:** `project.create {template}` and `scene.new {template}` start from
   `Editor/ProjectTemplates` (`project.templates` lists them): `empty` (the commands' default, what they always did) or
-  `basic3d` (a saved, lit start scene `Scenes/Main.stscene`: Main Camera with an audio listener, Sun, procedural Sky,
-  Ground, Post Process; the editor UI and the skills use it). Every opened or created project goes to the front of
-  `RecentProjects` (`Editor/RecentProjects`, at most 12, missing projects left out, `editor.recentProjects`), a JSON file
-  in the user data directory shared by the user's editors (`RecentProjects::GetDefaultFile`; `STRATA_RECENT_PROJECTS`
-  overrides it); `editor.removeRecentProject {path}` takes one off. Scripted runs (`--frames`, `--commands`) only read
-  it; `EditorContextSpecification` keeps it in memory by default (tests). `project.samples` lists the samples next to
+  `basic3d` (a saved, lit start scene `Scenes/Main.stscene`: Main Camera with an audio listener, Sun shining from the
+  preview sun's direction, procedural Sky, Ground, Post Process; the editor UI and the skills use it). Its Ground has a
+  dark stone material of the project, `Materials/Ground.stmat` (made by `EditorContext::NewScene` when the project has
+  none, the built-in default material without a project), so white boxes stand out against it. Every opened or created
+  project goes to the front of `RecentProjects` (`Editor/RecentProjects`, at most 12, missing projects left out,
+  `editor.recentProjects`), a JSON file in the user data directory shared by the user's editors
+  (`RecentProjects::GetDefaultFile`; `STRATA_RECENT_PROJECTS` overrides it); `editor.removeRecentProject {path}` takes
+  one off. Scripted runs (`--frames`, `--commands`) only read it, and keep their own changes in memory over every read,
+  as a list does whose save failed; `EditorContextSpecification` keeps it in memory by default (tests). Changes look on
+  disk only at the project being added: the launcher reads the file and checks the projects on an I/O thread
+  (`RecentProjects::ReadFile`, `CheckProjects`), takes deleted projects off the list (`Forget`) and hides those out of
+  reach (a disconnected drive or share). `project.samples` lists the samples next to
   the executable (`Editor/ProjectSamples`, `EditorContextSpecification::SamplesDirectory` in tests) and
   `project.openSample {sample, directory}` copies one (without `.strata`) into a new or empty directory and opens the
   copy; `project.close` closes the project.
@@ -593,9 +599,12 @@ and `AudioSystem`, the built-in "Audio" scene system.
   remembered in imgui.ini, first `<home>/StrataProjects`, which keeps script build paths short), Open Project, Open
   Sample, the recent projects as cards (context menu: show in folder, copy path, remove from list), template and sample
   cards, "Connect an AI agent" (the exact `claude mcp add strata -- "<bin>/StrataCLI" mcp` line with a copy button, and
-  the automation state) and a footer with version, commit, GPU and startup time. Its actions report failures on it;
-  dropping a `.stproj` on the window opens that project. Help > About Strata (`UI/AboutDialog`) shows the build, GPU,
-  driver, Vulkan version, startup time and the compiled-in `ThirdPartyNotices.md`.
+  the automation state, also why it failed to start) and a footer with version, commit, GPU and startup time. Its
+  sections share one grid in a content column centered in the main area, so they end at one right edge. Its actions
+  report failures on it; dropping a `.stproj` on the window opens that project. File > Open Recent lists the recent
+  projects in the editor too, and File > Show Launcher returns to the launcher from Continue without a project. Help >
+  About Strata (`UI/AboutDialog`) shows the build, GPU, driver, Vulkan version, startup time and the compiled-in
+  `ThirdPartyNotices.md`.
 - **Viewport panel** (`Panels/ViewportPanel`): renders into a texture of the panel's pixel size and takes input only
   while hovered or focused: Alt + left drag orbits, middle drag pans, the wheel dollies, right drag flies (WASD, Q/E
   down/up, Shift faster, wheel = speed), F frames the selection, Home everything, W/E/R/Q pick the gizmo (as do the main

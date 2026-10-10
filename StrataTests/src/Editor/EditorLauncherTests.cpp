@@ -14,6 +14,7 @@
 #include "UI/Theme.h"
 
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/JobSystem.h>
 #include <Strata/Core/Platform.h>
 #include <Strata/Core/Version.h>
 #include <Strata/Events/ApplicationEvent.h>
@@ -23,9 +24,14 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <nlohmann/json.hpp>
+#include <spdlog/fmt/fmt.h>
 
+#include <algorithm>
+#include <cmath>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
 using namespace Strata;
 using namespace Strata::Tests;
@@ -273,6 +279,57 @@ TEST_SUITE("Editor.Launcher")
 		CHECK_FALSE(IsDrawn("Welcome.Recent.0"));
 	}
 
+	TEST_CASE("The launcher reads the recent projects on an I/O thread and keeps those out of reach on the list")
+	{
+		// Real I/O threads (the harness otherwise runs jobs inline): the frames never wait for the read.
+		struct ScopedJobs
+		{
+			ScopedJobs()
+			{
+				JobSystemSpecification specification;
+				specification.WorkerThreadCount = 1;
+				specification.IOThreadCount = 1;
+				JobSystem::Init(specification);
+			}
+			~ScopedJobs() { JobSystem::Shutdown(); }
+		} jobs;
+
+		const std::filesystem::path root = CreateTemporaryDirectory("LauncherRecentRead");
+		const std::filesystem::path present = root / "Present" / "Present.stproj";
+		REQUIRE(FileSystem::CreateDirectories(present.parent_path()));
+		REQUIRE(FileSystem::WriteText(present, "{}"));
+		// Deleted: its folder is gone, the folder that held it is there.
+		const std::filesystem::path deleted = root / "Deleted" / "Deleted.stproj";
+		// Out of reach: the folder that held its folder is not there either (a share or a drive that is not connected).
+		const std::filesystem::path offline = root / "Offline" / "Game" / "Game.stproj";
+		const std::filesystem::path file = root / "RecentProjects.json";
+		REQUIRE(FileSystem::WriteText(file, RecentProjects::ToJson({ { "Present", present, 3, "1.0" }, { "Deleted", deleted, 2, "1.0" },
+			{ "Game", offline, 1, "1.0" } }).dump()));
+
+		EditorOptions options;
+		options.RecentProjectsFile = file;
+		HarnessEditor editor({}, options);
+		editor.Frames(1);
+		const WelcomePanel* welcome = editor.Layer->GetPanels().Get<WelcomePanel>(EditorPanels::c_Welcome);
+		REQUIRE(welcome);
+		REQUIRE(editor.FramesUntil([welcome]() { return !welcome->IsRefreshing() && welcome->GetRecentProjects().size() == 1; }));
+		CHECK(welcome->GetRecentProjects()[0].Name == "Present");
+		CHECK(IsDrawn("Welcome.Recent.0"));
+		CHECK_FALSE(IsDrawn("Welcome.Recent.1"));
+
+		// The deleted project left the file; the one out of reach stays, hidden until it is back.
+		const std::optional<std::vector<RecentProject>> stored = RecentProjects::ReadFile(file).Projects;
+		REQUIRE(stored);
+		REQUIRE(stored->size() == 2);
+		CHECK((*stored)[0].Name == "Present");
+		CHECK((*stored)[1].Name == "Game");
+		REQUIRE(FileSystem::CreateDirectories(offline.parent_path()));
+		REQUIRE(FileSystem::WriteText(offline, "{}"));
+		editor.Frames(static_cast<int>(WelcomePanel::c_RefreshSeconds / ImGuiHarness::c_DeltaTime) + 2);
+		REQUIRE(editor.FramesUntil([welcome]() { return !welcome->IsRefreshing() && welcome->GetRecentProjects().size() == 2; }));
+		CHECK(welcome->GetRecentProjects()[1].Name == "Game");
+	}
+
 	TEST_CASE("A project that cannot be opened is reported on the launcher")
 	{
 		EditorOptions options;
@@ -326,6 +383,53 @@ TEST_SUITE("Editor.Launcher")
 		editor.Run("project.close");
 		editor.Frames(1);
 		CHECK(editor.Layer->IsLauncherShown());
+	}
+
+	TEST_CASE("File > Show Launcher and File > Open Recent lead back from Continue without a project")
+	{
+		const std::filesystem::path root = CreateTemporaryDirectory("LauncherMenu");
+		HarnessEditor editor;
+		editor.Run("project.create", { { "directory", FileSystem::ToUTF8(root / "First") }, { "name", "First" } });
+		editor.Run("project.create", { { "directory", FileSystem::ToUTF8(root / "Second") }, { "name", "Second" } });
+		editor.Run("project.close");
+		editor.Frames(2);
+		REQUIRE(editor.Click("Welcome.ContinueWithoutProject"));
+		editor.Frames(1);
+		REQUIRE_FALSE(editor.Layer->IsLauncherShown());
+
+		// Without a project the launcher is one menu item away.
+		REQUIRE(editor.Click("Menu.File"));
+		editor.Frames(1);
+		REQUIRE(editor.Click("Menu.File.ShowLauncher"));
+		editor.Frames(1);
+		CHECK(editor.Layer->IsLauncherShown());
+		CHECK(IsDrawn("Welcome.Recent.0"));
+
+		// The recent projects are in the File menu, most recent first.
+		REQUIRE(editor.Click("Welcome.ContinueWithoutProject"));
+		editor.Frames(1);
+		REQUIRE(editor.Click("Menu.File"));
+		editor.Frames(1);
+		REQUIRE(editor.Click("Menu.File.OpenRecent"));
+		editor.Frames(1);
+		REQUIRE(IsDrawn("Menu.File.Recent.0"));
+		REQUIRE(IsDrawn("Menu.File.Recent.1"));
+		CHECK_FALSE(IsDrawn("Menu.File.Recent.2"));
+		REQUIRE(editor.Click("Menu.File.Recent.1"));
+		editor.Frames(1);
+		REQUIRE(editor.Context().HasProject());
+		CHECK(editor.Context().GetProject()->GetConfig().Name == "First");
+
+		// With a project open, Close Project leads to the launcher; the open project is not offered again.
+		REQUIRE(editor.Click("Menu.File"));
+		editor.Frames(1);
+		const std::optional<UI::ItemProbe::Item> showLauncher = UI::ItemProbe::Find("Menu.File.ShowLauncher");
+		REQUIRE(showLauncher);
+		CHECK_FALSE(showLauncher->Enabled);
+		REQUIRE(editor.Click("Menu.File.OpenRecent"));
+		editor.Frames(1);
+		REQUIRE(IsDrawn("Menu.File.Recent.0"));
+		CHECK_FALSE(IsDrawn("Menu.File.Recent.1"));
 	}
 
 	TEST_CASE("The agent card copies the exact command line that connects Claude Code")
@@ -457,6 +561,78 @@ TEST_SUITE("Editor.Launcher")
 		const std::optional<UI::ItemProbe::Item> off = UI::ItemProbe::Find("Viewport.PreviewLighting");
 		REQUIRE(off);
 		CHECK(off->Color == UI::ToColorU32(colors.TextSecondary));
+	}
+
+	TEST_CASE("The launcher's sections share one grid and one right edge, centered in the main area")
+	{
+		const std::filesystem::path root = CreateTemporaryDirectory("LauncherGrid");
+		struct Display
+		{
+			ImVec2 Size;
+			float Scale;
+		};
+		for (const Display display : { Display { ImVec2(1280.0f, 720.0f), 1.0f }, Display { ImVec2(1600.0f, 900.0f), 1.0f },
+			Display { ImVec2(2400.0f, 1300.0f), 1.5f }, Display { ImVec2(3840.0f, 2054.0f), 1.5f } })
+		{
+			for (const size_t recentCount : { size_t(0), size_t(3), size_t(4), size_t(12) })
+			{
+				CAPTURE(display.Size.x);
+				CAPTURE(display.Scale);
+				CAPTURE(recentCount);
+				HarnessEditor editor({ display.Size, display.Scale });
+				for (size_t index = 0; index < recentCount; index++)
+				{
+					const std::string name = fmt::format("Project {}", index);
+					const std::filesystem::path file = root / name / (name + ".stproj");
+					REQUIRE(FileSystem::CreateDirectories(file.parent_path()));
+					REQUIRE(FileSystem::WriteText(file, "{}"));
+					editor.Context().GetRecentProjects().Add(name, file);
+				}
+				editor.Frames(4);
+				REQUIRE(editor.Layer->IsLauncherShown());
+
+				// The right edge of every section: the recent cards (or the note in their place), the starter cards, the agent card.
+				const auto rightmost = [](const std::vector<std::string>& keys)
+				{
+					float right = 0.0f;
+					for (const std::string& key : keys)
+					{
+						if (const std::optional<UI::ItemProbe::Item> item = UI::ItemProbe::Find(key))
+							right = std::max(right, item->Max.x);
+					}
+					return right;
+				};
+				std::vector<std::string> recentKeys = { "Welcome.EmptyState" };
+				for (size_t index = 0; index < recentCount; index++)
+					recentKeys.push_back(fmt::format("Welcome.Recent.{}", index));
+				const std::optional<UI::ItemProbe::Item> agent = UI::ItemProbe::Find("Welcome.AgentCard");
+				REQUIRE(agent);
+				const float recentRight = rightmost(recentKeys);
+				const float startersRight = rightmost({ "Welcome.Template.basic3d", "Welcome.Template.empty", "Welcome.Sample.Tetris" });
+				CHECK(std::abs(recentRight - agent->Max.x) <= 1.0f);
+				CHECK(std::abs(startersRight - agent->Max.x) <= 1.0f);
+				const std::optional<UI::ItemProbe::Item> firstStarter = UI::ItemProbe::Find("Welcome.Template.basic3d");
+				REQUIRE(firstStarter);
+				CHECK(std::abs(firstStarter->Min.x - agent->Min.x) <= 1.0f);
+
+				// The content column sits in the middle of the main area (next to the sidebar).
+				ImGuiWindow* main = nullptr;
+				for (ImGuiWindow* window : GImGui->Windows)
+				{
+					// Child windows are named after their parents: the main area's own name ends with "/Main_<id>".
+					const std::string_view name(window->Name);
+					const size_t slash = name.rfind('/');
+					if (window->Active && slash != std::string_view::npos && name.substr(slash + 1).starts_with("Main_"))
+						main = window;
+				}
+				REQUIRE(main);
+				const float leftMargin = agent->Min.x - main->Pos.x;
+				const float rightMargin = main->Pos.x + main->Size.x - agent->Max.x;
+				CHECK(leftMargin > 0.0f);
+				// A short window scrolls the content: its scrollbar takes from the right margin.
+				CHECK(std::abs(leftMargin - rightMargin) <= ImGui::GetStyle().ScrollbarSize + 2.0f);
+			}
+		}
 	}
 
 	TEST_CASE("The launcher has no id conflicts, at 100% and at 150%")

@@ -6,11 +6,13 @@
 #include "UI/EditorFonts.h"
 #include "UI/EditorShell.h"
 #include "UI/Icons.h"
+#include "UI/ItemProbe.h"
 #include "UI/TextFormat.h"
 #include "UI/Theme.h"
 #include "UI/Widgets.h"
 
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/JobSystem.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Core/Platform.h>
 #include <Strata/Core/Version.h>
@@ -34,9 +36,8 @@ namespace Strata
 		constexpr float c_MainPaddingInFontSizes = 2.2f;
 		constexpr float c_MarkSizeInFontSizes = 2.6f;
 		constexpr float c_SectionGapInFontSizes = 1.6f;
-		// The content's grid: columns at least this wide; wide blocks span up to three.
+		// The content's grid: columns at least this wide.
 		constexpr float c_ColumnMinWidthInFontSizes = 18.0f;
-		constexpr int c_WideColumns = 3;
 		constexpr float c_RecentCardHeightInFontSizes = 4.6f;
 		constexpr float c_EmptyStateWidthInFontSizes = 40.0f;
 		constexpr float c_ContentMaxWidthInFontSizes = 96.0f;
@@ -98,10 +99,12 @@ namespace Strata
 		return options;
 	}
 
-	void WelcomePanel::OnHidden(EditorPanelContext&)
+	void WelcomePanel::OnHidden(EditorPanelContext& context)
 	{
 		m_Visible = false;
 		m_Error.clear();
+		// A read under way still lands: the list is current when the launcher shows again.
+		PollRefresh(context);
 	}
 
 	void WelcomePanel::ShowError(std::string message)
@@ -111,12 +114,77 @@ namespace Strata
 
 	void WelcomePanel::Refresh(EditorPanelContext& context)
 	{
-		// Other editors of the user may have changed the list; projects whose files are gone drop out.
-		RecentProjects& recent = context.Context.GetRecentProjects();
-		recent.Reload();
-		m_RecentProjects = recent.GetProjects();
 		m_RefreshedAt = ImGui::GetTime();
+		ReadStarters(context);
 
+		// Other editors of the user may have changed the list, and projects may have been deleted or gone out of reach (a
+		// network share, a drive): the file and the projects are looked at on an I/O thread, since a path out of reach can
+		// take seconds to answer. One read at a time; until it lands, the cards show what is known.
+		if (m_RefreshJob.IsValid() && !m_RefreshJob.IsComplete())
+			return;
+		const RecentProjects& recent = context.Context.GetRecentProjects();
+		std::vector<std::filesystem::path> known;
+		for (const RecentProject& project : recent.GetAllProjects())
+			known.push_back(project.Path);
+		Ref<RefreshResult> result = CreateRef<RefreshResult>();
+		result->ChangeCount = recent.GetChangeCount();
+		m_RefreshResult = result;
+		m_RefreshJob = JobSystem::SubmitIO([result, file = recent.GetFile(), known = std::move(known)]() mutable
+		{
+			result->File = RecentProjects::ReadFile(file);
+			if (result->File.Projects)
+			{
+				for (const RecentProject& project : *result->File.Projects)
+				{
+					if (std::find(known.begin(), known.end(), project.Path) == known.end())
+						known.push_back(project.Path);
+				}
+			}
+			result->Check = RecentProjects::CheckProjects(known);
+		}, JobPriority::Low);
+	}
+
+	void WelcomePanel::PollRefresh(EditorPanelContext& context)
+	{
+		if (!m_RefreshResult || !m_RefreshJob.IsComplete())
+			return;
+		const Ref<RefreshResult> result = std::move(m_RefreshResult);
+		m_RefreshResult = nullptr;
+		m_RefreshJob = JobHandle();
+
+		RecentProjects& recent = context.Context.GetRecentProjects();
+		m_MissingProjects = std::move(result->Check.Missing);
+		if (result->ChangeCount == recent.GetChangeCount())
+		{
+			recent.ApplyFile(result->File);
+			// Deleted projects leave the list for good; those out of reach stay on it, hidden until they are back.
+			recent.Forget(result->Check.Gone);
+		}
+		else
+		{
+			// The list changed while the file was read (a project opened): the read may predate that, so read again.
+			m_RefreshedAt = 0.0;
+		}
+		UpdateRecentProjects(recent);
+	}
+
+	bool WelcomePanel::IsKnownMissing(const std::filesystem::path& projectFile) const
+	{
+		return std::find(m_MissingProjects.begin(), m_MissingProjects.end(), projectFile) != m_MissingProjects.end();
+	}
+
+	void WelcomePanel::UpdateRecentProjects(const RecentProjects& recent)
+	{
+		m_RecentProjects.clear();
+		for (const RecentProject& project : recent.GetAllProjects())
+		{
+			if (std::find(m_MissingProjects.begin(), m_MissingProjects.end(), project.Path) == m_MissingProjects.end())
+				m_RecentProjects.push_back(project);
+		}
+	}
+
+	void WelcomePanel::ReadStarters(EditorPanelContext& context)
+	{
 		// What new projects can start from: read once, they do not change while the editor runs.
 		if (!m_StartersRead)
 		{
@@ -145,8 +213,12 @@ namespace Strata
 
 	void WelcomePanel::OnImGuiRender(EditorPanelContext& context)
 	{
+		// Shown again: the list as known at once (the projects of this session included), then read anew.
+		if (!m_Visible)
+			UpdateRecentProjects(context.Context.GetRecentProjects());
 		if (!m_Visible || ImGui::GetTime() - m_RefreshedAt > c_RefreshSeconds)
 			Refresh(context);
+		PollRefresh(context);
 		m_Visible = true;
 
 		const UI::ThemeColors& colors = UI::GetThemeColors();
@@ -242,18 +314,38 @@ namespace Strata
 		}
 	}
 
+	WelcomePanel::Grid WelcomePanel::GetGrid(float width, size_t recentCount, size_t starterCount)
+	{
+		const float gap = ImGui::GetStyle().ItemSpacing.x;
+		const float minColumnWidth = ImGui::GetFontSize() * c_ColumnMinWidthInFontSizes;
+		const size_t fitting = std::max<size_t>(1, static_cast<size_t>((width + gap) / (minColumnWidth + gap)));
+		// As many columns as the longest row of cards needs, up to what fits: the recent projects fill their rows, and the
+		// starters stretch over the same width, so the sections end at one right edge.
+		Grid grid;
+		grid.Columns = static_cast<int>(std::clamp<size_t>(std::max(recentCount, starterCount), 1, fitting));
+		const float columns = static_cast<float>(grid.Columns);
+		grid.ColumnWidth = std::max(std::floor((width - gap * (columns - 1.0f)) / columns), 1.0f);
+		grid.Width = grid.ColumnWidth * columns + gap * (columns - 1.0f);
+		return grid;
+	}
+
 	void WelcomePanel::DrawMain(EditorPanelContext& context)
 	{
 		const ImGuiStyle& style = ImGui::GetStyle();
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		const float fontSize = ImGui::GetFontSize();
-		DrawHero(ImGui::GetContentRegionAvail().x);
-
-		// Below the hero, a column of bounded width that scrolls when the window is short.
+		// One column of content, at most c_ContentMaxWidthInFontSizes wide and centered in the main area: the hero's greeting
+		// and strata and every section below line up on its edges, also on wide displays.
 		const float padding = std::round(fontSize * c_MainPaddingInFontSizes);
-		if (BeginRegion("Content", ImVec2(0.0f, 0.0f), UI::WithAlpha(colors.Panel, 0.0f), ImVec2(padding, padding)))
+		const float mainWidth = ImGui::GetContentRegionAvail().x;
+		const float contentWidth = std::max(std::min(mainWidth - padding * 2.0f, std::round(fontSize * c_ContentMaxWidthInFontSizes)), 1.0f);
+		const float contentLeft = std::max(std::floor((mainWidth - contentWidth) * 0.5f), 0.0f);
+		DrawHero(mainWidth, contentLeft, contentWidth);
+
+		// Below the hero, the content scrolls when the window is short.
+		if (BeginRegion("Content", ImVec2(0.0f, 0.0f), UI::WithAlpha(colors.Panel, 0.0f), ImVec2(contentLeft, padding)))
 		{
-			const float width = std::min(ImGui::GetContentRegionAvail().x, fontSize * c_ContentMaxWidthInFontSizes);
+			const float width = std::max(ImGui::GetContentRegionAvail().x, 1.0f);
 			if (!m_Error.empty())
 				DrawErrorBanner(width);
 
@@ -270,26 +362,23 @@ namespace Strata
 				ImGui::PopFont();
 			}
 			ImGui::Spacing();
-			// One grid for every section, so their cards line up.
-			const int columns = std::max(1, static_cast<int>((width + style.ItemSpacing.x) / (fontSize * c_ColumnMinWidthInFontSizes + style.ItemSpacing.x)));
-			const float columnWidth = std::floor((width - style.ItemSpacing.x * static_cast<float>(columns - 1)) / static_cast<float>(columns));
-			// Wide blocks (the agent card, the note without recent projects) span up to three columns.
-			const int wideColumns = std::min(columns, c_WideColumns);
-			const float wideWidth = columnWidth * static_cast<float>(wideColumns) + style.ItemSpacing.x * static_cast<float>(wideColumns - 1);
+			// One grid for every section, so their cards line up; wide blocks (the note without recent projects, the agent
+			// card) span all of its columns.
+			const Grid grid = GetGrid(width, m_RecentProjects.size(), m_Templates.size() + m_Samples.size());
 			if (m_RecentProjects.empty())
-				DrawEmptyState(wideWidth);
+				DrawEmptyState(grid.Width);
 			else
-				DrawRecentProjects(context, columns, columnWidth);
+				DrawRecentProjects(context, grid);
 
 			ImGui::Dummy(ImVec2(0.0f, fontSize * c_SectionGapInFontSizes));
-			DrawStarters(context, columns, columnWidth);
+			DrawStarters(context, grid);
 			ImGui::Dummy(ImVec2(0.0f, fontSize * c_SectionGapInFontSizes));
-			DrawAgentCard(context, wideWidth);
+			DrawAgentCard(context, grid.Width);
 		}
 		ImGui::EndChild();
 	}
 
-	void WelcomePanel::DrawHero(float width)
+	void WelcomePanel::DrawHero(float width, float contentLeft, float contentWidth)
 	{
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		const UI::ThemePalette& palette = UI::GetThemePalette();
@@ -301,7 +390,7 @@ namespace Strata
 		ImDrawList* drawList = ImGui::GetWindowDrawList();
 
 		// A band of the chrome's color that fades into the page, and on its right the strata: the mark's bands, drawn
-		// large and staggered, emerging from the page toward the edge.
+		// large and staggered, emerging from the page toward the content's right edge.
 		const ImU32 chrome = ImGui::GetColorU32(colors.Chrome);
 		const ImU32 page = ImGui::GetColorU32(colors.Panel);
 		drawList->AddRectFilledMultiColor(min, max, chrome, chrome, page, page);
@@ -309,12 +398,13 @@ namespace Strata
 		const ImVec4 bandColors[] = { palette.Sandstone, palette.Ochre, palette.Rust, palette.Umber };
 		const float thickness = std::round(height * 0.12f);
 		const float gap = std::round(height * 0.07f);
-		const float length = std::clamp(width * 0.38f, height * 2.5f, height * 6.0f);
+		const float length = std::clamp(contentWidth * 0.38f, height * 2.5f, height * 6.0f);
 		const float stagger = height * 0.32f;
 		const float top = min.y + std::round((height - (thickness * 4.0f + gap * 3.0f)) * 0.5f);
+		const float contentRight = min.x + contentLeft + contentWidth;
 		for (int index = 0; index < 4; index++)
 		{
-			const float right = max.x - height * 0.3f - stagger * static_cast<float>(index);
+			const float right = contentRight - stagger * static_cast<float>(index);
 			const float y = top + static_cast<float>(index) * (thickness + gap);
 			const float radius = thickness * 0.5f;
 			// Opaque, mixed with the chrome as if translucent: the rounded end overlaps the fade without a seam.
@@ -331,17 +421,17 @@ namespace Strata
 		drawList->AddLine(ImVec2(min.x, max.y - 0.5f), ImVec2(max.x, max.y - 0.5f), ImGui::GetColorU32(colors.Border));
 
 		// The greeting, at the content's left edge.
-		const float padding = std::round(fontSize * c_MainPaddingInFontSizes);
-		const float textWidth = std::max(std::min(width * 0.5f, fontSize * c_HeroTextWidthInFontSizes), fontSize * 10.0f);
+		const float textLeft = min.x + contentLeft;
+		const float textWidth = std::max(std::min(contentWidth * 0.5f, fontSize * c_HeroTextWidthInFontSizes), fontSize * 10.0f);
 		UI::PushFont(UI::EditorFont::SemiBold, UI::TextSize::Display);
 		const float titleHeight = ImGui::GetTextLineHeight();
 		ImGui::PopFont();
 		const char* subtitle = "Create a project from a template, pick up where you left off, or let an AI agent build alongside you.";
 		const float subtitleHeight = ImGui::CalcTextSize(subtitle, nullptr, false, textWidth).y;
 		const float textTop = min.y + std::round((height - titleHeight - ImGui::GetStyle().ItemSpacing.y - subtitleHeight) * 0.5f);
-		ImGui::SetCursorScreenPos(ImVec2(min.x + padding, textTop));
+		ImGui::SetCursorScreenPos(ImVec2(textLeft, textTop));
 		UI::Heading("Welcome to Strata", UI::TextSize::Display);
-		ImGui::SetCursorScreenPos(ImVec2(min.x + padding, ImGui::GetCursorScreenPos().y));
+		ImGui::SetCursorScreenPos(ImVec2(textLeft, ImGui::GetCursorScreenPos().y));
 		WrappedText(subtitle, colors.TextSecondary, textWidth);
 		ImGui::SetCursorScreenPos(ImVec2(min.x, max.y));
 	}
@@ -369,9 +459,9 @@ namespace Strata
 		ImGui::Dummy(ImVec2(0.0f, ImGui::GetFontSize() * c_SectionGapInFontSizes * 0.5f));
 	}
 
-	void WelcomePanel::DrawRecentProjects(EditorPanelContext& context, int columns, float columnWidth)
+	void WelcomePanel::DrawRecentProjects(EditorPanelContext& context, const Grid& grid)
 	{
-		const ImVec2 cardSize(columnWidth, std::round(ImGui::GetFontSize() * c_RecentCardHeightInFontSizes));
+		const ImVec2 cardSize(grid.ColumnWidth, std::round(ImGui::GetFontSize() * c_RecentCardHeightInFontSizes));
 		const int64_t now = GetUnixTime();
 
 		// Actions run after the loop: they change the list it walks.
@@ -380,7 +470,7 @@ namespace Strata
 		for (size_t index = 0; index < m_RecentProjects.size(); index++)
 		{
 			const RecentProject& project = m_RecentProjects[index];
-			if (index % static_cast<size_t>(columns) != 0)
+			if (index % static_cast<size_t>(grid.Columns) != 0)
 				ImGui::SameLine();
 			const std::string id = fmt::format("Welcome.Recent.{}", index);
 			const std::string initials = UI::GetInitials(project.Name);
@@ -418,7 +508,7 @@ namespace Strata
 			OpenRecentProject(context, open);
 	}
 
-	void WelcomePanel::DrawStarters(EditorPanelContext& context, int columns, float columnWidth)
+	void WelcomePanel::DrawStarters(EditorPanelContext& context, const Grid& grid)
 	{
 		// The templates (into the New Project dialog) and the samples (opened as copies), as cards in rows.
 		struct StarterCard
@@ -442,14 +532,27 @@ namespace Strata
 
 		UI::Heading("Start something new", UI::TextSize::Title);
 		ImGui::Spacing();
-		ImVec2 size(columnWidth, 0.0f);
-		for (const StarterCard& card : cards)
-			size.y = std::max(size.y, UI::GetCardHeight(size.x, true, card.Title, card.Source->Description));
+		// Rows of at most the grid's columns, each stretched over the grid's width; one height for all.
+		const float gap = ImGui::GetStyle().ItemSpacing.x;
+		const size_t columns = static_cast<size_t>(grid.Columns);
+		const auto getCardWidth = [&](size_t index)
+		{
+			const size_t rowStart = index - index % columns;
+			const float count = static_cast<float>(std::min(columns, cards.size() - rowStart));
+			const float cardWidth = std::floor((grid.Width - gap * (count - 1.0f)) / count);
+			// The last card of the row takes what rounding left, so the row ends exactly at the grid's right edge.
+			const bool last = index + 1 == cards.size() || (index + 1) % columns == 0;
+			return last ? grid.Width - (cardWidth + gap) * (count - 1.0f) : cardWidth;
+		};
+		float height = 0.0f;
+		for (size_t index = 0; index < cards.size(); index++)
+			height = std::max(height, UI::GetCardHeight(getCardWidth(index), true, cards[index].Title, cards[index].Source->Description));
 		for (size_t index = 0; index < cards.size(); index++)
 		{
 			const StarterCard& card = cards[index];
-			if (index % static_cast<size_t>(columns) != 0)
+			if (index % columns != 0)
 				ImGui::SameLine();
+			const ImVec2 size(getCardWidth(index), height);
 			if (UI::Card(card.ProbeKey.c_str(), card.Icon, card.Title, card.Source->Description, size) && context.Shell)
 			{
 				if (card.Sample)
@@ -472,6 +575,7 @@ namespace Strata
 		const ImVec2 min = ImGui::GetCursorScreenPos();
 		const ImVec2 max(min.x + width, min.y + height);
 		ImGui::Dummy(ImVec2(width, height));
+		UI::ItemProbe::Record("Welcome.EmptyState");
 		ImDrawList* drawList = ImGui::GetWindowDrawList();
 		const float rounding = style.FrameRounding * 2.0f;
 		drawList->AddRectFilled(min, max, ImGui::GetColorU32(UI::WithAlpha(colors.Chrome, 0.5f)), rounding);
@@ -565,6 +669,7 @@ namespace Strata
 				WrappedText("StrataCLI is not next to this editor: build the StrataCLI target to connect agents.", colors.Warning);
 		}
 		ImGui::EndChild();
+		UI::ItemProbe::Record("Welcome.AgentCard");
 	}
 
 	void WelcomePanel::DrawFooter(EditorPanelContext& context)
@@ -624,7 +729,7 @@ namespace Strata
 		const EditorCommandResult result = context.Commands.Execute(context.Context, "editor.removeRecentProject", { { "path", FileSystem::ToUTF8(projectFile) } });
 		if (!result.Success)
 			ShowError(result.Error);
-		Refresh(context);
+		UpdateRecentProjects(context.Context.GetRecentProjects());
 	}
 
 }

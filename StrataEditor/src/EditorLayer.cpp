@@ -10,6 +10,8 @@
 #include "UI/EditorFonts.h"
 #include "UI/FileDialogs.h"
 #include "UI/Icons.h"
+#include "UI/ItemProbe.h"
+#include "UI/TextFormat.h"
 #include "UI/Theme.h"
 #include "UI/Widgets.h"
 
@@ -581,11 +583,16 @@ namespace Strata
 		std::optional<std::filesystem::path> file = FileDialogs::OpenFile({ { "Strata Project", "stproj" } }, m_ProjectDialogs.GetLocation());
 		if (!file)
 			return;
-		RequestDiscardChanges([this, file = *file]()
+		OpenProjectFile(*file);
+	}
+
+	void EditorLayer::OpenProjectFile(const std::filesystem::path& projectFile)
+	{
+		RequestDiscardChanges([this, projectFile]()
 		{
-			const EditorCommandResult result = m_Commands.Execute(m_Context, "project.open", { { "path", FileSystem::ToUTF8(file) } });
+			const EditorCommandResult result = m_Commands.Execute(m_Context, "project.open", { { "path", FileSystem::ToUTF8(projectFile) } });
 			if (!result.Success)
-				ReportError(fmt::format("Could not open {}: {}", FileSystem::ToUTF8(file), result.Error));
+				ReportError(fmt::format("Could not open {}: {}", UI::DisplayPath(projectFile), result.Error));
 		});
 	}
 
@@ -805,12 +812,21 @@ namespace Strata
 
 		// The launcher offers only what makes sense before a project is open.
 		const bool launcher = IsLauncherShown();
-		if (ImGui::BeginMenu("File"))
+		const bool fileMenu = ImGui::BeginMenu("File");
+		UI::ItemProbe::Record("Menu.File");
+		if (fileMenu)
 		{
 			if (ImGui::MenuItem("New Project..."))
 				ShowNewProjectDialog({});
 			if (ImGui::MenuItem("Open Project..."))
 				ShowOpenProjectDialog();
+			const bool recentMenu = ImGui::BeginMenu("Open Recent");
+			UI::ItemProbe::Record("Menu.File.OpenRecent");
+			if (recentMenu)
+			{
+				DrawRecentMenu();
+				ImGui::EndMenu();
+			}
 			if (ImGui::BeginMenu("Open Sample"))
 			{
 				DrawSampleMenu();
@@ -820,6 +836,10 @@ namespace Strata
 			{
 				if (ImGui::MenuItem("Close Project", nullptr, false, m_Context.HasProject()))
 					RequestDiscardChanges([this]() { RunEditorCommand(m_Context, m_Commands, "project.close"); });
+				// Back from Continue without a project (with a project open, Close Project leads there).
+				if (ImGui::MenuItem("Show Launcher", nullptr, false, !m_Context.HasProject()))
+					m_LauncherDismissed = false;
+				UI::ItemProbe::Record("Menu.File.ShowLauncher", !m_Context.HasProject());
 				ImGui::Separator();
 				if (ImGui::MenuItem("New Scene", nullptr, false, !m_Context.IsPlaying()))
 					RequestDiscardChanges([this]() { RunEditorCommand(m_Context, m_Commands, "scene.new"); });
@@ -911,6 +931,34 @@ namespace Strata
 		}
 
 		ImGui::EndMenuBar();
+	}
+
+	void EditorLayer::DrawRecentMenu()
+	{
+		// The projects the launcher shows: without the open one, and without those its last look found missing (looking at
+		// the files here would hold up the frame for a drive that is out of reach).
+		const WelcomePanel* welcome = m_Panels.Get<WelcomePanel>(EditorPanels::c_Welcome);
+		const Ref<Project>& open = m_Context.GetProject();
+		std::filesystem::path chosen;
+		size_t shown = 0;
+		for (const RecentProject& project : m_Context.GetRecentProjects().GetAllProjects())
+		{
+			if (open && project.Path.lexically_normal() == open->GetProjectFile().lexically_normal())
+				continue;
+			if (welcome && welcome->IsKnownMissing(project.Path))
+				continue;
+			const std::string label = fmt::format("{}###Recent{}", project.Name, shown);
+			if (ImGui::MenuItem(label.c_str()))
+				chosen = project.Path;
+			UI::ItemProbe::Record(fmt::format("Menu.File.Recent.{}", shown));
+			if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+				ImGui::SetTooltip("%s", UI::DisplayPath(project.Path).c_str());
+			shown++;
+		}
+		if (shown == 0)
+			ImGui::MenuItem("No recent projects", nullptr, false, false);
+		if (!chosen.empty())
+			OpenProjectFile(chosen);
 	}
 
 	void EditorLayer::DrawSampleMenu()
