@@ -241,6 +241,19 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}" "-DARGUMENTS=--headless|--frames|180"
 			-DMIN_SECONDS=2 -P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
 	set_tests_properties(StrataRuntime.HeadlessPacing PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
+	# --asset-budget-mb sets the GPU texture budget of the game's assets (logged at startup); anything but a positive whole
+	# number of megabytes is refused.
+	add_test(NAME StrataRuntime.AssetBudget
+		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}"
+			"-DARGUMENTS=--headless|--frames|5|--asset-budget-mb|64" "-DEXPECT=Asset budgets: GPU textures 64 MB"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
+	set_tests_properties(StrataRuntime.AssetBudget PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
+	add_test(NAME StrataRuntime.InvalidAssetBudget
+		COMMAND "${CMAKE_COMMAND}"
+			"-DCOMMAND=${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX};--headless;--frames;5;--asset-budget-mb;0"
+			"-DEXPECTED_OUTPUT=asset-budget-mb needs a whole number of megabytes"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
+	set_tests_properties(StrataRuntime.InvalidAssetBudget PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
 
 	# The exported game in a window renders a few frames from its camera and saves the last one, which must show the scene:
 	# not black, not one color, and the blue box covering at least 1% of it.

@@ -333,6 +333,14 @@ namespace Strata
 		return data ? data->Workers.GetThreadCount() : 0;
 	}
 
+	uint32_t JobSystem::GetIOThreadCount()
+	{
+		JobSystemData* data = s_Data.load();
+		if (!data)
+			return 0;
+		return data->HasIOPool ? data->IO.GetThreadCount() : data->Workers.GetThreadCount();
+	}
+
 	bool JobSystem::IsWorkerThread()
 	{
 		return t_IsWorkerThread;

@@ -140,7 +140,9 @@ TEST_SUITE("Renderer.Texture")
 		CHECK(loaded->GetSpecification().DebugName == "Checker");
 		for (uint32_t level = 0; level < 3; level++)
 			CHECK(loaded->GetMips()[level].Data == source->GetMips()[level].Data);
-		CHECK(loaded->GetMemoryUsage() > 0);
+		// Without a renderer the mip chain stays on the CPU: every byte of it counts there.
+		CHECK(loaded->GetMemoryUsage().Cpu == 4 * 2 * 4 + 2 * 1 * 4 + 1 * 1 * 4);
+		CHECK(loaded->GetMemoryUsage().GpuTextures == 0);
 
 		CHECK_FALSE(Texture::Deserialize({}, &error));
 		for (size_t length = 0; length < cooked.size(); length += 5)

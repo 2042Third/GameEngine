@@ -3,6 +3,7 @@
 #include "Strata/Asset/AssetTypes.h"
 #include "Strata/Core/Base.h"
 
+#include <cstdint>
 #include <filesystem>
 #include <string>
 
@@ -47,6 +48,36 @@ namespace Strata
 		AssetManagerBase* Manager = nullptr;        // Manager publishing the asset (null for standalone assets)
 	};
 
+	// Memory an asset holds, per residency pool (see AssetResidencyBudgets): each pool has its own budget, because
+	// running out of video memory and running out of system memory are different problems.
+	struct AssetMemoryUsage
+	{
+		uint64_t Cpu = 0;         // System memory: decoded data kept on the CPU (geometry for physics, samples, documents)
+		uint64_t GpuTextures = 0; // Video memory of textures
+		uint64_t GpuBuffers = 0;  // Video memory of buffers (vertices, indices)
+
+		uint64_t GetTotal() const { return Cpu + GpuTextures + GpuBuffers; }
+		uint64_t GetGpu() const { return GpuTextures + GpuBuffers; }
+
+		AssetMemoryUsage& operator+=(const AssetMemoryUsage& other)
+		{
+			Cpu += other.Cpu;
+			GpuTextures += other.GpuTextures;
+			GpuBuffers += other.GpuBuffers;
+			return *this;
+		}
+
+		AssetMemoryUsage& operator-=(const AssetMemoryUsage& other)
+		{
+			Cpu -= other.Cpu;
+			GpuTextures -= other.GpuTextures;
+			GpuBuffers -= other.GpuBuffers;
+			return *this;
+		}
+
+		bool operator==(const AssetMemoryUsage& other) const = default;
+	};
+
 	// Base class of every asset. Assets are shared (Ref<Asset>) and identified by their handle; code holds handles
 	// and asks the asset manager for the current object, which allows hot reload and streaming to replace objects.
 	class Asset
@@ -61,8 +92,13 @@ namespace Strata
 		// on other loads (no LoadAssetSync). Return false on failure.
 		virtual bool FinalizeOnMainThread(const AssetFinalizeContext&) { return true; }
 
-		// Approximate memory held by the asset (CPU + GPU), used for streaming budgets and statistics.
-		virtual uint64_t GetMemoryUsage() const { return 0; }
+		// Approximate memory held by the asset, per pool. Asset managers read it once the asset is finalized (for
+		// residency budgets, upload budgets and statistics), so it must describe the asset's state from then on.
+		virtual AssetMemoryUsage GetMemoryUsage() const { return {}; }
+
+		// Whether objects outside the asset share its data, so that dropping the asset would free nothing (a playing
+		// voice holds an audio clip's samples). Residency management keeps such assets resident.
+		virtual bool IsDataShared() const { return false; }
 
 		AssetHandle Handle = UUID::Null();
 	};
@@ -77,6 +113,9 @@ namespace Strata
 		AssetHandle Parent = UUID::Null(); // Owning asset for sub-assets (e.g. meshes inside a model)
 		std::string SubAssetKey;           // Identifies a sub-asset within its parent ("Mesh/0")
 		std::string Name;                  // Display name
+		// Bytes of the stored form a load reads (the cooked data, or the source file for assets stored as-is); 0 when
+		// unknown. The streaming queue bounds the bytes of loads in flight with it.
+		uint64_t StoredSize = 0;
 
 		bool IsSubAsset() const { return Parent.IsValid(); }
 		bool IsBuiltin() const { return IsBuiltinAssetHandle(Handle); }

@@ -4,7 +4,8 @@ Documentation of how Strata works. Rules for changing it live in [AGENTS.md](../
 design and links to the code that implements it.
 
 - [Architecture.md](Architecture.md): the targets and their dependencies, the engine modules, the frame loop and the
-  scene runtime lifecycle, the threading model, the asset pipeline, scripting, the editor, export and the runtime.
+  scene runtime lifecycle, the threading model, the asset pipeline, streaming and residency (memory budgets, eviction,
+  the load queue), scripting, the editor, export and the runtime.
 
 ## Elsewhere in the repository
 

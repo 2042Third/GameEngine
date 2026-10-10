@@ -72,7 +72,9 @@ TEST_SUITE("GPU.Assets")
 			CHECK(bindless.GetAllocatedCount() == allocatedBefore + 1);
 			CHECK(texture->GetMips().empty()); // CPU copy released after upload
 			CHECK(texture->GetWidth() == 4);
-			CHECK(texture->GetMemoryUsage() > 0);
+			// The mip chain (4x2, 2x1, 1x1) on the GPU, nothing left on the CPU.
+			CHECK(texture->GetMemoryUsage().GpuTextures == (4 * 2 + 2 * 1 + 1 * 1) * 4);
+			CHECK(texture->GetMemoryUsage().Cpu == 0);
 			CHECK(texture->Serialize().empty()); // CPU copy released
 
 			// Finalizing twice is harmless.
@@ -121,7 +123,8 @@ TEST_SUITE("GPU.Assets")
 		REQUIRE(gpu.IsValid());
 		Ref<Mesh> mesh = MeshFactory::CreateTorus();
 		REQUIRE(mesh);
-		const uint64_t cpuMemory = mesh->GetMemoryUsage();
+		const AssetMemoryUsage cpuOnly = mesh->GetMemoryUsage();
+		CHECK(cpuOnly.GetGpu() == 0);
 		REQUIRE(Upload(gpu.GetDevice(), *mesh));
 
 		REQUIRE(mesh->GetPositionBuffer());
@@ -131,7 +134,12 @@ TEST_SUITE("GPU.Assets")
 		CHECK(mesh->GetAttributeBuffer()->getDesc().byteSize == mesh->GetAttributes().size() * sizeof(MeshVertexAttributes));
 		CHECK(mesh->GetIndexBuffer()->getDesc().byteSize == mesh->GetIndices().size() * sizeof(uint32_t));
 		CHECK(mesh->GetIndexBuffer()->getDesc().isIndexBuffer);
-		CHECK(mesh->GetMemoryUsage() > cpuMemory);
+		// Each copy counts once, in its own pool: the CPU geometry stays as it was, the buffers are added on the GPU.
+		const AssetMemoryUsage uploaded = mesh->GetMemoryUsage();
+		CHECK(uploaded.Cpu == cpuOnly.Cpu);
+		CHECK(uploaded.GpuBuffers == mesh->GetPositionBuffer()->getDesc().byteSize + mesh->GetAttributeBuffer()->getDesc().byteSize
+			+ mesh->GetIndexBuffer()->getDesc().byteSize);
+		CHECK(uploaded.GpuTextures == 0);
 		CHECK_FALSE(mesh->GetPositions().empty()); // CPU geometry stays for physics and picking
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
@@ -186,7 +194,9 @@ TEST_SUITE("GPU.Assets")
 		// A tiny upload budget spreads finalization over several updates.
 		manager->UnloadAsset(UUID(0x9000));
 		manager->UnloadAsset(UUID(0x9001));
-		manager->SetUploadBudget(1);
+		AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
+		budgets.UploadBytesPerFrame = 1;
+		manager->SetResidencyBudgets(budgets);
 		manager->RequestLoad(UUID(0x9000));
 		manager->RequestLoad(UUID(0x9001));
 		manager->Update();

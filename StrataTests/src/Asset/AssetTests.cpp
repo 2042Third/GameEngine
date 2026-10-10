@@ -261,6 +261,9 @@ TEST_SUITE("Asset")
 		CHECK(manager->GetPack().GetEntries().size() == 4);
 
 		CHECK(manager->FindAssetByPath("Materials/Rough.stmat") == UUID(0x4000));
+		// The stored size of every asset is its entry's size in the pack.
+		CHECK(manager->GetMetadata(UUID(0x4000))->StoredSize == CreateMaterialBytes(0.9f).size());
+		CHECK(manager->GetMetadata(UUID(0x4001))->StoredSize == cube->Serialize().size());
 		CHECK(manager->GetAssetType(UUID(0x4001)) == AssetType::Mesh);
 		CHECK(manager->GetAssetState(UUID(0x4000)) == AssetState::Unloaded);
 

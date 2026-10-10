@@ -43,7 +43,8 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
   `UnfinishedScript`, `QuitScript`, `QuitBeforeScriptEnds`, `CaptureWithoutGPU`), the export chain `StrataExport.Clean`
   → `StrataEditor.Export` (`--no-gpu`; it exports the smoke game twice, the second time starting in a scene without a
   camera) → `StrataRuntime.Smoke` (the exported game, headless; `StrataRuntime.HeadlessPacing` checks that headless runs
-  keep 60 frames per second) → `StrataRuntime.Render` (windowed, saves
+  keep 60 frames per second, `StrataRuntime.AssetBudget` and `.InvalidAssetBudget` the `--asset-budget-mb` option) →
+  `StrataRuntime.Render` (windowed, saves
   `build/<preset>/StrataTests/ExportSmoke/RuntimeScreenshot.png`, label `gpu`) → `StrataRuntime.RenderCheck`
   (`StrataTests --strata-test-helper=check-image <png> [--dominant red|green|blue <percent>]`: not black, not a single
   color, and here at least 1% of the blue box), plus `StrataRuntime.NoCameraScreenshot` (a screenshot of the

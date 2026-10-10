@@ -43,6 +43,57 @@ namespace Strata
 			return JsonUtils::Parse(std::string_view(reinterpret_cast<const char*>(data.data()), data.size()), outError);
 		}
 
+		// Heap memory of a string beyond the string object (short strings live inside it).
+		uint64_t GetStringHeapBytes(const std::string& text)
+		{
+			return text.capacity() > sizeof(std::string) - 1 ? text.capacity() + 1 : 0;
+		}
+
+		// About what a parsed document occupies: every value, plus the containers' storage (std::map nodes for objects,
+		// vector storage for arrays) and string storage. Walks with an explicit stack: documents can nest deeper than the
+		// thread's stack would allow recursion to.
+		uint64_t EstimateJsonBytes(const nlohmann::json& document)
+		{
+			// A red-black tree node: three links and a color, before the key and the value.
+			constexpr uint64_t c_MapNodeOverhead = 4 * sizeof(void*);
+
+			uint64_t bytes = sizeof(nlohmann::json);
+			std::vector<const nlohmann::json*> pending = { &document };
+			while (!pending.empty())
+			{
+				const nlohmann::json& value = *pending.back();
+				pending.pop_back();
+				switch (value.type())
+				{
+					case nlohmann::json::value_t::object:
+						bytes += sizeof(nlohmann::json::object_t);
+						for (const auto& [key, member] : value.get_ref<const nlohmann::json::object_t&>())
+						{
+							bytes += c_MapNodeOverhead + sizeof(std::string) + GetStringHeapBytes(key) + sizeof(nlohmann::json);
+							pending.push_back(&member);
+						}
+						break;
+					case nlohmann::json::value_t::array:
+					{
+						const nlohmann::json::array_t& array = value.get_ref<const nlohmann::json::array_t&>();
+						bytes += sizeof(nlohmann::json::array_t) + array.capacity() * sizeof(nlohmann::json);
+						for (const nlohmann::json& element : array)
+							pending.push_back(&element);
+						break;
+					}
+					case nlohmann::json::value_t::string:
+						bytes += sizeof(std::string) + GetStringHeapBytes(value.get_ref<const std::string&>());
+						break;
+					case nlohmann::json::value_t::binary:
+						bytes += sizeof(nlohmann::json::binary_t) + value.get_binary().capacity();
+						break;
+					default:
+						break; // Numbers, booleans and null live inside the value
+				}
+			}
+			return bytes;
+		}
+
 		// Instantiates the snapshot into a scratch scene, so broken entity data fails at load time rather than when
 		// the prefab or model is first used.
 		bool ValidateSnapshot(const nlohmann::json& snapshot, std::string_view format, std::string* outError)
@@ -81,6 +132,12 @@ namespace Strata
 		return entities && entities->is_array() ? entities->size() : 0;
 	}
 
+	void EntityTemplate::SetSnapshot(nlohmann::json snapshot)
+	{
+		m_Snapshot = std::move(snapshot);
+		m_SnapshotBytes = EstimateJsonBytes(m_Snapshot);
+	}
+
 	Ref<Prefab> Prefab::CreateFromEntities(const Scene& scene, const std::vector<Entity>& roots)
 	{
 		return CreateFromSnapshot(SceneSerializer::SerializeEntities(scene, roots));
@@ -89,7 +146,7 @@ namespace Strata
 	Ref<Prefab> Prefab::CreateFromSnapshot(nlohmann::json snapshot)
 	{
 		Ref<Prefab> prefab = CreateRef<Prefab>();
-		prefab->m_Snapshot = std::move(snapshot);
+		prefab->SetSnapshot(std::move(snapshot));
 		return prefab;
 	}
 
@@ -115,7 +172,7 @@ namespace Strata
 	Ref<Model> Model::CreateFromSnapshot(nlohmann::json snapshot)
 	{
 		Ref<Model> model = CreateRef<Model>();
-		model->m_Snapshot = std::move(snapshot);
+		model->SetSnapshot(std::move(snapshot));
 		return model;
 	}
 
@@ -148,6 +205,7 @@ namespace Strata
 
 		Ref<SceneAsset> asset = CreateRef<SceneAsset>();
 		asset->m_Document = std::move(*json);
+		asset->m_DocumentBytes = EstimateJsonBytes(asset->m_Document);
 		return asset;
 	}
 

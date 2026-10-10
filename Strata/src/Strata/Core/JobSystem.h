@@ -76,6 +76,8 @@ namespace Strata
 		static void ParallelFor(uint32_t count, uint32_t minBatchSize, const std::function<void(uint32_t begin, uint32_t end)>& function);
 
 		static uint32_t GetWorkerThreadCount();
+		// Threads that run I/O jobs: the I/O pool's, or the worker pool's when there is no I/O pool (0 before Init).
+		static uint32_t GetIOThreadCount();
 		static bool IsWorkerThread();
 		static uint64_t GetPendingJobCount();
 	};

@@ -16,6 +16,13 @@
 namespace Strata
 {
 
+	struct GameRuntimeOptions
+	{
+		// Budgets for the game's asset manager instead of the defaults (AssetManagerBase::GetDefaultResidencyBudgets), in
+		// effect before the start scene loads.
+		std::optional<AssetResidencyBudgets> AssetBudgets;
+	};
+
 	// Runs an exported game: opens its asset pack (the active asset manager while the runtime lives), loads its script
 	// module (the active script engine while the runtime lives; no hot reload), loads scenes from the pack and
 	// simulates the current one. Independent of windowing and rendering, so it also runs headless. Main thread only.
@@ -27,7 +34,7 @@ namespace Strata
 	public:
 		// Loads the manifest, opens the asset pack and the script module next to it and starts the start scene. Null
 		// (with an error) when any of that fails.
-		static Scope<GameRuntime> Create(const std::filesystem::path& manifestPath, std::string* outError = nullptr);
+		static Scope<GameRuntime> Create(const std::filesystem::path& manifestPath, std::string* outError = nullptr, const GameRuntimeOptions& options = {});
 		~GameRuntime();
 
 		GameRuntime(const GameRuntime&) = delete;
@@ -42,7 +49,8 @@ namespace Strata
 		// The crash that disabled the scripts, if they crashed.
 		const std::optional<ScriptFault>& GetScriptFault() const { return m_ScriptFault; }
 
-		// Stops the current scene and starts another scene of the pack. The current scene keeps running on failure.
+		// Stops the current scene and starts another scene of the pack. The current scene keeps running on failure. The
+		// assets the new scene does not use are released a few frames later (AssetManagerBase::ScheduleTrim).
 		bool LoadScene(AssetHandle scene, std::string* outError = nullptr);
 
 		// Once per frame: finishes asset loads, advances the scene, then honors its requests (Scene::RequestQuit,

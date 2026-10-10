@@ -308,6 +308,8 @@ namespace Strata
 		metadata.Type = source.Type;
 		metadata.Path = relativePath;
 		metadata.Name = FileSystem::ToUTF8(path.stem());
+		// Imported assets are read from the cache (known once imported, see ApplyImportOutcome).
+		metadata.StoredSize = source.Importer->StoresSourceDirectly() ? source.SourceSize : FileSystem::GetFileSize(GetCachePath(handle)).value_or(0);
 		RegisterAsset(metadata);
 
 		std::scoped_lock<std::mutex> lock(m_SourceMutex);
@@ -832,6 +834,7 @@ namespace Strata
 			return;
 		}
 
+		SetStoredSize(outcome.Handle, FileSystem::GetFileSize(GetCachePath(outcome.Handle)).value_or(0));
 		for (size_t index = 0; index < outcome.SubAssets.size(); index++)
 		{
 			const ImportedSubAsset& subAsset = outcome.SubAssets[index];
@@ -842,6 +845,7 @@ namespace Strata
 			metadata.Parent = outcome.Handle;
 			metadata.SubAssetKey = subAsset.Key;
 			metadata.Name = subAsset.Name.empty() ? subAsset.Key : subAsset.Name;
+			metadata.StoredSize = FileSystem::GetFileSize(GetCachePath(metadata.Handle)).value_or(0);
 			RegisterAsset(metadata);
 		}
 
@@ -1118,9 +1122,14 @@ namespace Strata
 
 			ST_CORE_INFO("Asset '{}' changed; reloading", ToRelative(path));
 			if (direct)
+			{
+				SetStoredSize(handle, size);
 				ReloadAsset(handle);
+			}
 			else
+			{
 				QueueImport(handle);
+			}
 		}
 	}
 
@@ -1261,6 +1270,7 @@ namespace Strata
 
 		ImportRequest request;
 		bool direct = false;
+		uint64_t sourceSize = 0;
 		{
 			std::scoped_lock<std::mutex> lock(m_SourceMutex);
 			auto it = m_Sources.find(handle);
@@ -1278,6 +1288,7 @@ namespace Strata
 				it->second.SourceTime = FileSystem::GetLastWriteTime(path).value_or(0);
 				it->second.Import.Imported = true;
 				it->second.Import.Error.clear();
+				sourceSize = it->second.SourceSize;
 			}
 			else
 			{
@@ -1287,6 +1298,7 @@ namespace Strata
 
 		if (direct)
 		{
+			SetStoredSize(handle, sourceSize);
 			ReloadAsset(handle);
 			return true;
 		}
@@ -1412,6 +1424,7 @@ namespace Strata
 				it->second.Import.Error.clear();
 			}
 		}
+		SetStoredSize(handle, data.size());
 		if (reload)
 			ReloadAsset(handle);
 		return true;

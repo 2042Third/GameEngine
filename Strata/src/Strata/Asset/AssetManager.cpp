@@ -70,6 +70,9 @@ namespace Strata
 			return JobPriority::Normal;
 		}
 
+		// The frames in flight of a graphics device created with the default specification.
+		constexpr uint32_t c_DefaultFramesInFlight = 2;
+
 	}
 
 	void AssetLoaderRegistry::Register(AssetType type, AssetLoadFunction loader)
@@ -101,12 +104,17 @@ namespace Strata
 		std::mutex Mutex;
 		std::condition_variable Condition;
 		std::deque<Completion> Completions;
-		uint32_t InFlight = 0;
+		uint32_t InFlight = 0; // Load jobs running (each ends in exactly one PushCompletion)
 	};
 
 	AssetManagerBase::AssetManagerBase()
-		: m_LoadState(CreateRef<LoadState>())
+		: m_LoadState(CreateRef<LoadState>()), m_Queue([this](const AssetStreamingRequest& request) { return DispatchLoad(request); }),
+		m_Budgets(GetDefaultResidencyBudgets())
 	{
+		// Frames the GPU may still be working on, plus two: an asset drawn that recently is still in use.
+		const uint32_t framesInFlight = Renderer::IsInitialized() ? Renderer::GetGraphicsDevice().GetMaxFramesInFlight() : c_DefaultFramesInFlight;
+		m_EvictionGraceFrames = framesInFlight + 2;
+		UpdateStreamingLimits();
 		BuiltinAssets::Register(*this);
 	}
 
@@ -115,8 +123,17 @@ namespace Strata
 		WaitForInFlightLoads();
 	}
 
+	AssetResidencyBudgets AssetManagerBase::GetDefaultResidencyBudgets()
+	{
+		if (!Renderer::IsInitialized())
+			return AssetResidencyBudgets::FromDeviceBudget(0);
+		return AssetResidencyBudgets::FromDeviceBudget(Renderer::GetGraphicsDevice().GetMemoryBudget().Budget);
+	}
+
 	void AssetManagerBase::WaitForInFlightLoads()
 	{
+		// Nothing new starts: a job finishing its read would otherwise dispatch the next queued load to this manager.
+		m_Queue.Close();
 		std::unique_lock<std::mutex> lock(m_LoadState->Mutex);
 		m_LoadState->Condition.wait(lock, [this]() { return m_LoadState->InFlight == 0; });
 	}
@@ -176,8 +193,10 @@ namespace Strata
 			auto it = m_Entries.find(handle);
 			if (it == m_Entries.end())
 				return nullptr;
+			TouchLocked(it->second);
 			current = it->second.Loaded; // Also the previous version while a reload is in progress
-			requestLoad = it->second.State == AssetState::Unloaded;
+			// A load that is still queued is raised to this priority.
+			requestLoad = it->second.State == AssetState::Unloaded || it->second.State == AssetState::Loading;
 		}
 		if (requestLoad)
 			RequestLoad(handle, priority);
@@ -229,20 +248,53 @@ namespace Strata
 		return it != m_Entries.end() ? it->second.Error : std::string("Unknown asset");
 	}
 
-	void AssetManagerBase::RequestLoad(AssetHandle handle, AssetPriority priority)
+	void AssetManagerBase::RequestLoad(AssetHandle handle, AssetPriority priority, float score)
 	{
-		AssetMetadata metadata;
+		bool newRequest = false;
 		uint64_t generation = 0;
+		uint64_t storedSize = 0;
 		{
 			std::scoped_lock<std::mutex> lock(m_Mutex);
 			auto it = m_Entries.find(handle);
-			if (it == m_Entries.end() || it->second.State != AssetState::Unloaded || it->second.IsMemoryAsset)
+			if (it == m_Entries.end() || it->second.IsMemoryAsset)
 				return;
+			AssetEntry& entry = it->second;
+			TouchLocked(entry);
+			if (entry.State == AssetState::Unloaded)
+			{
+				entry.State = AssetState::Loading;
+				entry.Error.clear();
+				newRequest = true;
+			}
+			else if (entry.State != AssetState::Loading)
+			{
+				return; // Ready or failed
+			}
+			generation = entry.Generation;
+			storedSize = entry.Metadata.StoredSize;
+		}
 
-			it->second.State = AssetState::Loading;
-			it->second.Error.clear();
+		// The queue's lock is taken without the manager's: pumping dispatches, which takes the manager's lock.
+		if (newRequest)
+		{
+			m_Queue.Enqueue(handle, priority, score, storedSize, generation);
+			m_Queue.Pump();
+		}
+		else if (m_Queue.Raise(handle, priority, score))
+		{
+			m_Queue.Pump();
+		}
+	}
+
+	bool AssetManagerBase::DispatchLoad(const AssetStreamingRequest& request)
+	{
+		AssetMetadata metadata;
+		{
+			std::scoped_lock<std::mutex> lock(m_Mutex);
+			auto it = m_Entries.find(request.Handle);
+			if (it == m_Entries.end() || it->second.Generation != request.Generation || it->second.State != AssetState::Loading)
+				return false; // Unloaded, cancelled or reloaded since it was queued
 			metadata = it->second.Metadata;
-			generation = it->second.Generation;
 		}
 
 		{
@@ -250,76 +302,119 @@ namespace Strata
 			m_LoadState->InFlight++;
 		}
 
-		// Every path through the jobs ends in exactly one PushCompletion, also when code inside throws (bad_alloc on
-		// huge assets, third-party code), so in-flight counts always drain. Jobs are submitted outside the locks:
-		// without an initialized job system they run inline right here.
-		Ref<LoadState> loadState = m_LoadState;
-		const JobPriority jobPriority = ToJobPriority(priority);
-		auto decode = [loadState, metadata, generation](const Ref<std::vector<uint8_t>>& data)
+		// Jobs are submitted outside the locks: without an initialized job system they run inline right here.
+		std::string error;
+		try
 		{
-			Completion completion { metadata.Handle, generation, nullptr, {} };
-			try
-			{
-				const AssetLoadFunction* loader = AssetLoaderRegistry::Find(metadata.Type);
-				if (!loader)
-				{
-					completion.Error = fmt::format("No loader for asset type {}", AssetTypeToString(metadata.Type));
-				}
-				else
-				{
-					completion.LoadedAsset = (*loader)(metadata, *data, &completion.Error);
-					if (completion.LoadedAsset)
-						completion.LoadedAsset->Handle = metadata.Handle;
-					else if (completion.Error.empty())
-						completion.Error = "Loader returned no asset";
-				}
-			}
-			catch (const std::exception& exception)
-			{
-				completion.LoadedAsset = nullptr;
-				completion.Error = fmt::format("Loading failed: {}", exception.what());
-			}
-			catch (...)
-			{
-				completion.LoadedAsset = nullptr;
-				completion.Error = "Loading failed with an unknown exception";
-			}
-			PushCompletion(loadState, std::move(completion));
-		};
+			JobSystem::SubmitIO([this, metadata, request]() { RunLoad(metadata, request); }, ToJobPriority(request.Priority));
+			return true;
+		}
+		catch (const std::exception& exception)
+		{
+			error = fmt::format("Could not queue the load: {}", exception.what());
+		}
+		catch (...)
+		{
+			error = "Could not queue the load";
+		}
+		// The job never runs: the load ends here, as a failure the next update publishes.
+		m_Queue.OnReadFinished();
+		PushCompletion(m_LoadState, Completion { request.Handle, request.Generation, nullptr, std::move(error), request.Bytes });
+		return true;
+	}
 
-		auto read = [this, loadState, metadata, generation, jobPriority, decode]()
+	bool AssetManagerBase::IsLoadCurrent(AssetHandle handle, uint64_t generation) const
+	{
+		std::scoped_lock<std::mutex> lock(m_Mutex);
+		auto it = m_Entries.find(handle);
+		return it != m_Entries.end() && it->second.Generation == generation && it->second.State == AssetState::Loading;
+	}
+
+	void AssetManagerBase::RunLoad(const AssetMetadata& metadata, const AssetStreamingRequest& request)
+	{
+		// Every path ends in exactly one PushCompletion, also when code inside throws (bad_alloc on huge assets, third-party
+		// code), so in-flight counts always drain; the queue hears of the read's end exactly once before that.
+		Ref<LoadState> loadState = m_LoadState;
+		Completion completion { metadata.Handle, request.Generation, nullptr, {}, request.Bytes };
+		bool readReported = false;
+		auto finishRead = [this, &readReported]()
 		{
-			std::string error;
-			try
-			{
-				auto data = CreateRef<std::vector<uint8_t>>();
-				if (!ReadAssetData(metadata, *data, &error))
-				{
-					PushCompletion(loadState, Completion { metadata.Handle, generation, nullptr, error.empty() ? std::string("Failed to read asset data") : error });
-					return;
-				}
-				JobSystem::Submit([decode, data]() { decode(data); }, jobPriority);
-				return;
-			}
-			catch (const std::exception& exception)
-			{
-				error = fmt::format("Reading failed: {}", exception.what());
-			}
-			catch (...)
-			{
-				error = "Reading failed with an unknown exception";
-			}
-			PushCompletion(loadState, Completion { metadata.Handle, generation, nullptr, error });
+			if (!readReported)
+				m_Queue.OnReadFinished();
+			readReported = true;
 		};
 
 		try
 		{
-			JobSystem::SubmitIO(read, jobPriority);
+			// A load cancelled after it was dispatched never reads, and one cancelled while it read is never decoded: its
+			// completion is discarded when it is handled (its generation is stale).
+			if (!IsLoadCurrent(metadata.Handle, request.Generation))
+			{
+				finishRead();
+				PushCompletion(loadState, std::move(completion));
+				return;
+			}
+
+			auto data = CreateRef<std::vector<uint8_t>>();
+			std::string error;
+			const bool read = ReadAssetData(metadata, *data, &error);
+			finishRead();
+			if (!read)
+			{
+				completion.Error = error.empty() ? std::string("Failed to read asset data") : error;
+				PushCompletion(loadState, std::move(completion));
+				return;
+			}
+			if (!IsLoadCurrent(metadata.Handle, request.Generation))
+			{
+				PushCompletion(loadState, std::move(completion));
+				return;
+			}
+
+			JobSystem::Submit([loadState, metadata, data, completion]() mutable
+			{
+				try
+				{
+					const AssetLoadFunction* loader = AssetLoaderRegistry::Find(metadata.Type);
+					if (!loader)
+					{
+						completion.Error = fmt::format("No loader for asset type {}", AssetTypeToString(metadata.Type));
+					}
+					else
+					{
+						completion.LoadedAsset = (*loader)(metadata, *data, &completion.Error);
+						if (completion.LoadedAsset)
+							completion.LoadedAsset->Handle = metadata.Handle;
+						else if (completion.Error.empty())
+							completion.Error = "Loader returned no asset";
+					}
+				}
+				catch (const std::exception& exception)
+				{
+					completion.LoadedAsset = nullptr;
+					completion.Error = fmt::format("Loading failed: {}", exception.what());
+				}
+				catch (...)
+				{
+					completion.LoadedAsset = nullptr;
+					completion.Error = "Loading failed with an unknown exception";
+				}
+				data.reset(); // The stored bytes are not needed any more; finalization may wait for frames
+				PushCompletion(loadState, std::move(completion));
+			}, ToJobPriority(request.Priority));
+			return;
 		}
 		catch (const std::exception& exception)
 		{
-			PushCompletion(loadState, Completion { metadata.Handle, generation, nullptr, fmt::format("Could not queue the load: {}", exception.what()) });
+			completion.Error = fmt::format("Reading failed: {}", exception.what());
 		}
+		catch (...)
+		{
+			completion.Error = "Reading failed with an unknown exception";
+		}
+		finishRead();
+		completion.LoadedAsset = nullptr;
+		PushCompletion(loadState, std::move(completion));
 	}
 
 	void AssetManagerBase::PushCompletion(const Ref<LoadState>& loadState, Completion completion) noexcept
@@ -338,19 +433,41 @@ namespace Strata
 		loadState->Condition.notify_all();
 	}
 
-	void AssetManagerBase::UnloadAsset(AssetHandle handle)
+	bool AssetManagerBase::CancelLoad(AssetHandle handle)
 	{
 		std::scoped_lock<std::mutex> lock(m_Mutex);
 		auto it = m_Entries.find(handle);
-		if (it == m_Entries.end() || it->second.IsMemoryAsset)
-			return;
+		if (it == m_Entries.end() || it->second.State != AssetState::Loading || it->second.PinCount > 0)
+			return false;
 
-		if (it->second.Loaded)
-			PublishContentChange(handle);
-		it->second.Loaded = nullptr;
-		it->second.State = AssetState::Unloaded;
-		it->second.Error.clear();
-		it->second.Generation = m_NextGeneration++;
+		AssetEntry& entry = it->second;
+		AbandonLoadLocked(entry);
+		// A reload that is abandoned leaves the previous version in place.
+		entry.State = entry.Loaded ? AssetState::Ready : AssetState::Unloaded;
+		entry.Generation = m_NextGeneration++;
+		m_Cancellations++;
+		return true;
+	}
+
+	void AssetManagerBase::UnloadAsset(AssetHandle handle)
+	{
+		Ref<Asset> released;
+		{
+			std::scoped_lock<std::mutex> lock(m_Mutex);
+			auto it = m_Entries.find(handle);
+			if (it == m_Entries.end() || it->second.IsMemoryAsset)
+				return;
+
+			AssetEntry& entry = it->second;
+			if (entry.Loaded)
+				PublishContentChange(handle);
+			released = SetLoadedLocked(entry, nullptr);
+			if (AbandonLoadLocked(entry))
+				m_Cancellations++;
+			entry.State = AssetState::Unloaded;
+			entry.Error.clear();
+			entry.Generation = m_NextGeneration++;
+		}
 	}
 
 	void AssetManagerBase::ReloadAsset(AssetHandle handle)
@@ -362,10 +479,12 @@ namespace Strata
 			if (it == m_Entries.end() || it->second.IsMemoryAsset)
 				return;
 
-			wasRequested = it->second.State != AssetState::Unloaded;
+			AssetEntry& entry = it->second;
+			wasRequested = entry.State != AssetState::Unloaded;
+			AbandonLoadLocked(entry); // A queued load of the old version is replaced by the new request
 			// Keep serving the old object until the new one is ready, so users never see the asset disappear.
-			it->second.State = AssetState::Unloaded;
-			it->second.Generation = m_NextGeneration++;
+			entry.State = AssetState::Unloaded;
+			entry.Generation = m_NextGeneration++;
 		}
 
 		if (wasRequested)
@@ -394,13 +513,20 @@ namespace Strata
 			Renderer::GetDevice()->executeCommandList(commandList);
 		}
 
+		Ref<Asset> released;
 		std::scoped_lock<std::mutex> lock(m_Mutex);
-		AssetEntry& entry = m_Entries[metadata.Handle];
+		auto [it, inserted] = m_Entries.try_emplace(metadata.Handle);
+		AssetEntry& entry = it->second;
+		if (!inserted)
+			AbandonLoadLocked(entry);
 		entry.Metadata = metadata;
-		entry.Loaded = asset;
+		entry.IsMemoryAsset = true; // Before the object is set: memory assets are resident but never evicted
+		released = SetLoadedLocked(entry, asset);
 		entry.State = AssetState::Ready;
-		entry.IsMemoryAsset = true;
+		entry.Error.clear();
 		entry.Generation = m_NextGeneration++;
+		if (inserted)
+			entry.Registration = entry.Generation;
 		if (!metadata.Path.empty() && !metadata.IsSubAsset())
 			m_PathIndex[metadata.Path] = metadata.Handle;
 		PublishContentChange(metadata.Handle);
@@ -413,9 +539,14 @@ namespace Strata
 		auto [it, inserted] = m_Entries.try_emplace(metadata.Handle);
 		AssetEntry& entry = it->second;
 		if (inserted)
+		{
 			entry.Generation = m_NextGeneration++;
+			entry.Registration = entry.Generation;
+		}
 		else if (entry.Metadata.Path != metadata.Path && !entry.Metadata.IsSubAsset())
+		{
 			m_PathIndex.erase(entry.Metadata.Path);
+		}
 		entry.Metadata = metadata;
 		if (!metadata.Path.empty() && !metadata.IsSubAsset())
 			m_PathIndex[metadata.Path] = metadata.Handle;
@@ -423,16 +554,20 @@ namespace Strata
 
 	void AssetManagerBase::UnregisterAsset(AssetHandle handle)
 	{
+		Ref<Asset> released;
 		std::scoped_lock<std::mutex> lock(m_Mutex);
 		auto it = m_Entries.find(handle);
 		if (it == m_Entries.end())
 			return;
 
-		auto pathIt = m_PathIndex.find(it->second.Metadata.Path);
+		AssetEntry& entry = it->second;
+		auto pathIt = m_PathIndex.find(entry.Metadata.Path);
 		if (pathIt != m_PathIndex.end() && pathIt->second == handle)
 			m_PathIndex.erase(pathIt);
-		if (it->second.Loaded)
+		if (entry.Loaded)
 			PublishContentChange(handle);
+		released = SetLoadedLocked(entry, nullptr);
+		AbandonLoadLocked(entry);
 		m_Entries.erase(it);
 	}
 
@@ -451,10 +586,52 @@ namespace Strata
 			m_PathIndex[metadata.Path] = metadata.Handle;
 	}
 
+	void AssetManagerBase::SetStoredSize(AssetHandle handle, uint64_t storedSize)
+	{
+		std::scoped_lock<std::mutex> lock(m_Mutex);
+		auto it = m_Entries.find(handle);
+		if (it != m_Entries.end())
+			it->second.Metadata.StoredSize = storedSize;
+	}
+
+	void AssetManagerBase::UpdateStreamingLimits()
+	{
+		AssetStreamingLimits limits;
+		{
+			std::scoped_lock<std::mutex> lock(m_Mutex);
+			limits.MaxInFlightBytes = m_Budgets.InFlightBytes;
+		}
+		// Two reads per I/O thread: one reading, one waiting to start as soon as it is done.
+		limits.MaxOutstandingReads = std::max(1u, 2 * JobSystem::GetIOThreadCount());
+		m_Queue.SetLimits(limits);
+	}
+
 	void AssetManagerBase::Update()
 	{
 		ST_PROFILE_FUNCTION();
+
+		{
+			std::scoped_lock<std::mutex> lock(m_Mutex);
+			m_FrameIndex++;
+		}
+		// The job system may have been started after this manager was created.
+		UpdateStreamingLimits();
+		m_Queue.Pump();
 		ProcessCompletions(true);
+
+		std::vector<Ref<Asset>> released;
+		{
+			std::scoped_lock<std::mutex> lock(m_Mutex);
+			if (m_ScheduledTrim && m_FrameIndex >= m_ScheduledTrim->Frame)
+			{
+				const uint32_t unusedFrames = m_ScheduledTrim->UnusedFrames;
+				m_ScheduledTrim.reset();
+				EvictUnusedLocked(unusedFrames, released);
+			}
+		}
+		released.clear(); // Destroyed outside the lock
+		EvictToBudgets();
+		EndFrameUploads();
 	}
 
 	size_t AssetManagerBase::ProcessCompletions(bool applyBudget)
@@ -475,7 +652,14 @@ namespace Strata
 			bool& Flag;
 			~ProcessingScope() { Flag = false; }
 		} processingScope { m_ProcessingCompletions };
-		const uint64_t uploadBudget = m_UploadBudget.load();
+
+		const auto start = std::chrono::steady_clock::now();
+		const auto elapsedMs = [start]() { return std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - start).count(); };
+		AssetResidencyBudgets budgets;
+		{
+			std::scoped_lock<std::mutex> lock(m_Mutex);
+			budgets = m_Budgets;
+		}
 
 		nvrhi::ICommandList* commandList = nullptr;
 		if (Renderer::IsInitialized())
@@ -488,20 +672,24 @@ namespace Strata
 
 		size_t processed = 0;
 		uint64_t uploadedBytes = 0;
+		std::vector<Ref<Asset>> released;
 		while (!completions.empty())
 		{
-			if (applyBudget && uploadedBytes >= uploadBudget)
+			// The first completion always proceeds, so an asset larger than the budget still loads.
+			if (applyBudget && processed > 0 && (uploadedBytes >= budgets.UploadBytesPerFrame || elapsedMs() >= budgets.FinalizeMsPerFrame))
 				break;
 
 			Completion completion = std::move(completions.front());
 			completions.pop_front();
 			processed++;
+			// The load leaves the flight once it is handled, whatever becomes of it; the queue may dispatch the next one.
+			m_Queue.OnLoadFinished(completion.InFlightBytes);
 
 			{
 				std::scoped_lock<std::mutex> lock(m_Mutex);
 				auto it = m_Entries.find(completion.Handle);
 				if (it == m_Entries.end() || it->second.Generation != completion.Generation)
-					continue; // Unregistered, unloaded or reloaded since the request: discard
+					continue; // Unregistered, unloaded, cancelled or reloaded since the request: discard
 			}
 
 			// Finalization runs without holding the lock: it may request dependent assets (e.g. a material's textures).
@@ -510,8 +698,9 @@ namespace Strata
 				completion.Error = "Failed to create GPU resources";
 				completion.LoadedAsset = nullptr;
 			}
+			// Finalizing creates and fills the asset's GPU resources: what it holds on the GPU is what it uploaded.
 			if (completion.LoadedAsset)
-				uploadedBytes += completion.LoadedAsset->GetMemoryUsage();
+				uploadedBytes += completion.LoadedAsset->GetMemoryUsage().GetGpu();
 
 			std::scoped_lock<std::mutex> lock(m_Mutex);
 			auto it = m_Entries.find(completion.Handle);
@@ -521,7 +710,7 @@ namespace Strata
 			AssetEntry& entry = it->second;
 			if (completion.LoadedAsset)
 			{
-				entry.Loaded = completion.LoadedAsset;
+				released.push_back(SetLoadedLocked(entry, completion.LoadedAsset));
 				entry.State = AssetState::Ready;
 				entry.Error.clear();
 				PublishContentChange(completion.Handle);
@@ -552,13 +741,57 @@ namespace Strata
 				completions.pop_back();
 			}
 		}
+
+		{
+			std::scoped_lock<std::mutex> lock(m_Mutex);
+			m_FrameUploadedBytes += uploadedBytes;
+			m_FrameFinalizeMs += elapsedMs();
+		}
 		return processed;
+	}
+
+	void AssetManagerBase::EndFrameUploads()
+	{
+		uint64_t uploadedBytes = 0;
+		{
+			std::scoped_lock<std::mutex> lock(m_Mutex);
+			uploadedBytes = m_FrameUploadedBytes;
+			m_LastFrameUploadedBytes = m_FrameUploadedBytes;
+			m_LastFrameFinalizeMs = m_FrameFinalizeMs;
+			m_UploadedBytesHistory[m_HistoryCursor] = m_FrameUploadedBytes;
+			m_FinalizeMsHistory[m_HistoryCursor] = m_FrameFinalizeMs;
+			m_HistoryCursor = (m_HistoryCursor + 1) % c_StatsWindowFrames;
+			m_FrameUploadedBytes = 0;
+			m_FrameFinalizeMs = 0.0f;
+		}
+
+		if (uploadedBytes > 0 || !m_UploadCommandList)
+		{
+			m_FramesWithoutUploads = 0;
+			return;
+		}
+		if (++m_FramesWithoutUploads < c_StagingReleaseFrames)
+			return;
+
+		// NVRHI's UploadManager pools the staging chunks of each command list with no memory limit (the Vulkan command list
+		// creates it with a limit of 0, Strata/vendor/NVRHI src/vulkan/vulkan-commandlist.cpp), so after a burst of uploads
+		// the staging memory stays at its high-water mark for as long as the command list lives. Recreating the command
+		// list is the supported way to return it: submissions still in flight keep the old one (and its chunks) alive
+		// until the GPU has finished them.
+		m_UploadCommandList = nullptr;
+		m_FramesWithoutUploads = 0;
+		std::scoped_lock<std::mutex> lock(m_Mutex);
+		m_StagingReleases++;
 	}
 
 	bool AssetManagerBase::HasPendingLoads() const
 	{
-		std::scoped_lock<std::mutex> lock(m_LoadState->Mutex);
-		return m_LoadState->InFlight > 0 || !m_LoadState->Completions.empty();
+		{
+			std::scoped_lock<std::mutex> lock(m_LoadState->Mutex);
+			if (m_LoadState->InFlight > 0 || !m_LoadState->Completions.empty())
+				return true;
+		}
+		return m_Queue.HasWork();
 	}
 
 	bool AssetManagerBase::WaitForPendingLoads(std::chrono::milliseconds timeout)
@@ -601,22 +834,44 @@ namespace Strata
 	AssetManagerStats AssetManagerBase::GetStats() const
 	{
 		AssetManagerStats stats;
-		std::scoped_lock<std::mutex> lock(m_Mutex);
-		stats.RegisteredAssets = static_cast<uint32_t>(m_Entries.size());
-		for (const auto& [handle, entry] : m_Entries)
 		{
-			switch (entry.State)
+			std::scoped_lock<std::mutex> lock(m_Mutex);
+			stats.RegisteredAssets = static_cast<uint32_t>(m_Entries.size());
+			for (const auto& [handle, entry] : m_Entries)
 			{
-				case AssetState::Ready:
-					stats.LoadedAssets++;
-					stats.LoadedMemory += entry.Loaded ? entry.Loaded->GetMemoryUsage() : 0;
-					break;
-				case AssetState::Loading: stats.LoadingAssets++; break;
-				case AssetState::Failed:  stats.FailedAssets++; break;
-				default: break;
+				switch (entry.State)
+				{
+					case AssetState::Ready:   stats.LoadedAssets++; break;
+					case AssetState::Loading: stats.LoadingAssets++; break;
+					case AssetState::Failed:  stats.FailedAssets++; break;
+					default: break;
+				}
+				if (entry.PinCount > 0)
+					stats.PinnedAssets++;
 			}
+			stats.TotalLoadsCompleted = m_TotalLoadsCompleted;
+			stats.Frame = m_FrameIndex;
+			stats.Resident = m_Resident;
+			stats.LoadedMemory = m_Resident.GetTotal();
+			stats.Budgets = m_Budgets;
+			stats.UploadedBytesLastFrame = m_LastFrameUploadedBytes;
+			stats.FinalizeMsLastFrame = m_LastFrameFinalizeMs;
+			for (size_t index = 0; index < c_StatsWindowFrames; index++)
+			{
+				stats.UploadedBytesWindowMax = std::max(stats.UploadedBytesWindowMax, m_UploadedBytesHistory[index]);
+				stats.FinalizeMsWindowMax = std::max(stats.FinalizeMsWindowMax, m_FinalizeMsHistory[index]);
+			}
+			stats.Evictions = m_Evictions;
+			stats.Cancellations = m_Cancellations;
+			stats.StagingReleases = m_StagingReleases;
 		}
-		stats.TotalLoadsCompleted = m_TotalLoadsCompleted;
+
+		const AssetStreamingQueueStats queue = m_Queue.GetStats();
+		stats.QueuedLoads = queue.Queued;
+		stats.InFlightLoads = queue.InFlightLoads;
+		stats.OutstandingReads = queue.OutstandingReads;
+		stats.InFlightBytes = queue.InFlightBytes;
+		stats.InFlightBytesHighWater = queue.InFlightBytesHighWater;
 		return stats;
 	}
 

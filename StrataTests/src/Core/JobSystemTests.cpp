@@ -67,7 +67,14 @@ TEST_SUITE("Core.JobSystem")
 
 	TEST_CASE("I/O jobs run off the worker pool")
 	{
+		CHECK(JobSystem::GetIOThreadCount() == 0);
+		{
+			// Without an I/O pool, the workers run I/O jobs.
+			ScopedJobSystem withoutIOPool(3, 0);
+			CHECK(JobSystem::GetIOThreadCount() == 3);
+		}
 		ScopedJobSystem jobSystem;
+		CHECK(JobSystem::GetIOThreadCount() == 2);
 		std::atomic<bool> onWorker = true;
 		JobHandle handle = JobSystem::SubmitIO([&]() { onWorker = JobSystem::IsWorkerThread(); });
 		handle.Wait();

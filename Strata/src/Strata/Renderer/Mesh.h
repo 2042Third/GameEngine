@@ -57,7 +57,8 @@ namespace Strata
 
 		// Creates the GPU vertex and index buffers (the CPU geometry stays for physics and picking).
 		bool FinalizeOnMainThread(const AssetFinalizeContext& context) override;
-		uint64_t GetMemoryUsage() const override;
+		// The CPU geometry and, once uploaded, the GPU buffers (each counted once, in its own pool).
+		AssetMemoryUsage GetMemoryUsage() const override;
 
 		const std::vector<glm::vec3>& GetPositions() const { return m_Positions; }
 		const std::vector<MeshVertexAttributes>& GetAttributes() const { return m_Attributes; }

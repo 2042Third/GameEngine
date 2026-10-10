@@ -31,13 +31,13 @@ together (targets, modules, frame loop, threading, asset pipeline, scripting, ed
 | --- | --- |
 | `Strata/` | Engine static library. `src/Strata/<Module>/` holds the engine modules, `src/Platform/<OS or backend>/` the platform implementations, `shaders/` the GLSL sources, `vendor/` the pinned third-party submodules. |
 | `StrataEditor/` | Editor executable (ImGui docking UI, gizmos, undo/redo, automation server). |
-| `StrataRuntime/` | Runtime executable that plays exported games (`GameRuntime`, drawn by `GameRenderer`): it runs the `.stgame` manifest next to it, or `--game <file>`; `--headless` runs without window and GPU at 60 frames per second (servers, CI); `--screenshot out.png` with `--frames N` saves the last frame (and fails the run when it shows the missing-camera message). |
+| `StrataRuntime/` | Runtime executable that plays exported games (`GameRuntime`, drawn by `GameRenderer`): it runs the `.stgame` manifest next to it, or `--game <file>`; `--headless` runs without window and GPU at 60 frames per second (servers, CI); `--screenshot out.png` with `--frames N` saves the last frame (and fails the run when it shows the missing-camera message); `--asset-budget-mb <n>` sets the GPU texture budget of the game's assets. |
 | `StrataScriptCore/` | Script ABI (C header) and the header-only C++ SDK game scripts are written against. Script modules never link the engine. |
 | `StrataCLI/` | Command-line client for the editor automation API; also an MCP server (`StrataCLI mcp`). |
 | `StrataTests/` | doctest unit tests, test helpers, and the feature test project. |
 | `Samples/` | Games made through the editor by an AI agent, as projects (`.stproj`, `Assets/` with `.meta` files, `Scripts/`): `Tetris` (played and exported by the CTest `StrataEditor.Tetris`). Open one with `StrataEditor --project Samples/<Game>`. |
 | `CMake/` | CMake modules (configurations, compiler options, shader compilation, manifest). |
-| `Docs/` | Documentation of how the engine works, linked to the code: `README.md` (index), `Architecture.md` (targets and dependencies, modules, frame loop, threading, asset pipeline, scripting, editor, export and runtime). |
+| `Docs/` | Documentation of how the engine works, linked to the code: `README.md` (index), `Architecture.md` (targets and dependencies, modules, frame loop, threading, asset pipeline, streaming and residency, scripting, editor, export and runtime). |
 | `.claude/skills/` | Task-specific skills for agents (build/test, adding components, script API, editor automation, making a game end to end: `strata-make-a-game`). |
 
 Engine modules (`Strata/src/Strata/`): `Core` (application, logging, jobs, platform services),
@@ -266,9 +266,18 @@ The threading model, frame loop and pipelines these rules protect are described 
   exist in every asset manager.
 - Shipped games read an asset pack (`.stpak`, `AssetPack`) through `RuntimeAssetManager`; the editor
   builds it with `EditorAssetManager::BuildAssetPack`.
+- **Residency** ([Docs/Architecture.md](Docs/Architecture.md), "Streaming and residency"): memory is bounded by
+  budgets per pool (`AssetResidencyBudgets`: GPU textures 50% and GPU buffers 15% of the device's memory budget, CPU
+  unlimited; 128 MiB of loads in flight, 64 MiB and 4 ms of finalization per frame), and the least recently requested
+  assets of a pool over budget are evicted. Hold `AssetHandle`s across frames, not `Ref`s, and request what you use
+  every frame you use it (`GetAsset`): a held `Ref` keeps an asset from being evicted (it would free nothing), so it
+  defeats the budget. Pin what gameplay must keep whether or not it is used (`AssetManagerBase::Pin`, `AssetPin`).
+  Code that keeps an asset's data alive in other objects reports it (`Asset::IsDataShared`). Never block on a load;
+  scene owners trim what the previous scene used after a switch (`AssetManagerBase::ScheduleTrim`).
 - Adding an asset type: an `Asset` subclass with a cooked/serialized form, a loader in
-  `Asset/AssetRegistration.cpp`, an importer if it comes from external files, and tests for round trips
-  and corrupt data (every loader must reject truncated or garbage bytes without crashing).
+  `Asset/AssetRegistration.cpp`, an importer if it comes from external files, `GetMemoryUsage` reporting what it holds
+  in each pool once finalized, and tests for round trips and corrupt data (every loader must reject truncated or
+  garbage bytes without crashing).
 
 ## Scripting
 

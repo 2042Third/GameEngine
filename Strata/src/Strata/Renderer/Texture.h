@@ -78,7 +78,8 @@ namespace Strata
 
 		// Creates the GPU texture and its bindless slot, then releases the CPU copy.
 		bool FinalizeOnMainThread(const AssetFinalizeContext& context) override;
-		uint64_t GetMemoryUsage() const override;
+		// The CPU mip chain (until it is uploaded) and the GPU texture.
+		AssetMemoryUsage GetMemoryUsage() const override;
 
 		uint32_t GetWidth() const { return m_Mips.empty() ? m_Width : m_Mips[0].Width; }
 		uint32_t GetHeight() const { return m_Mips.empty() ? m_Height : m_Mips[0].Height; }

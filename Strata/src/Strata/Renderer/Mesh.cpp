@@ -182,10 +182,18 @@ namespace Strata
 		return m_PositionBuffer && m_AttributeBuffer && m_IndexBuffer;
 	}
 
-	uint64_t Mesh::GetMemoryUsage() const
+	AssetMemoryUsage Mesh::GetMemoryUsage() const
 	{
-		const uint64_t cpuBytes = m_Positions.size() * sizeof(glm::vec3) + m_Attributes.size() * sizeof(MeshVertexAttributes) + m_Indices.size() * sizeof(uint32_t);
-		return m_IndexBuffer ? cpuBytes * 2 : cpuBytes;
+		AssetMemoryUsage usage;
+		usage.Cpu = m_Positions.size() * sizeof(glm::vec3) + m_Attributes.size() * sizeof(MeshVertexAttributes) + m_Indices.size() * sizeof(uint32_t);
+		for (const Submesh& submesh : m_Submeshes)
+			usage.Cpu += sizeof(Submesh) + submesh.Name.size() + submesh.LODs.size() * sizeof(MeshLOD);
+		for (nvrhi::IBuffer* buffer : { m_PositionBuffer.Get(), m_AttributeBuffer.Get(), m_IndexBuffer.Get() })
+		{
+			if (buffer)
+				usage.GpuBuffers += buffer->getDesc().byteSize;
+		}
+		return usage;
 	}
 
 	uint32_t Mesh::GetTriangleCount() const

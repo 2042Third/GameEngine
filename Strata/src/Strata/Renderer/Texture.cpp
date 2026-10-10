@@ -329,19 +329,19 @@ namespace Strata
 		return true;
 	}
 
-	uint64_t Texture::GetMemoryUsage() const
+	AssetMemoryUsage Texture::GetMemoryUsage() const
 	{
-		uint64_t bytes = 0;
+		AssetMemoryUsage usage;
 		for (const TextureMip& mip : m_Mips)
-			bytes += mip.Data.size();
+			usage.Cpu += mip.Data.size();
 
 		if (m_GPUTexture)
 		{
 			const uint64_t bytesPerPixel = GetTextureFormatBytesPerPixel(m_Specification.Format);
 			for (uint32_t level = 0; level < m_MipCount; level++)
-				bytes += static_cast<uint64_t>(std::max(1u, m_Width >> level)) * std::max(1u, m_Height >> level) * bytesPerPixel;
+				usage.GpuTextures += static_cast<uint64_t>(std::max(1u, m_Width >> level)) * std::max(1u, m_Height >> level) * bytesPerPixel;
 		}
-		return bytes;
+		return usage;
 	}
 
 	namespace TextureUtils
