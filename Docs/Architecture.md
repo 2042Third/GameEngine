@@ -344,11 +344,13 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
 
 - **Loading** (`Asset/AssetManager.h`). `GetAsset` never blocks: it returns null until the asset is Ready and requests
   the load. `RequestLoad` queues the load in the streaming queue, which reads on the I/O pool (`ReadAssetData` of the
-  subclass); decoding runs on the worker pool and queues a completion. `Update` finalizes completions on the main
-  thread: `Asset::FinalizeOnMainThread` creates GPU resources on one upload command list until the frame's upload or
-  time budget is used up; the rest waits for the next frame. Generations discard results of loads that were superseded
-  by a reload, unload or cancellation. `LoadAssetSync` is for tools, tests and scene switches. Budgets, eviction and the
-  queue are described in [Streaming and residency](#streaming-and-residency).
+  subclass); decoding runs on the worker pool and queues a completion. The loader (`AssetLoadFunction`) gets the read
+  bytes as an `AssetLoadData`: it reads them as a span, or takes them over (`TakeBytes`) when its asset keeps them
+  (textures keep their cooked bytes and read pixels in place, fonts keep their file), so a load never holds two copies.
+  `Update` finalizes completions on the main thread: `Asset::FinalizeOnMainThread` creates GPU resources on one upload
+  command list until the frame's upload or time budget is used up; the rest waits for the next frame. Generations
+  discard results of loads that were superseded by a reload, unload or cancellation. `LoadAssetSync` is for tools, tests
+  and scene switches. Budgets, eviction and the queue are described in [Streaming and residency](#streaming-and-residency).
 - **Streaming**. Assets load on first use and code handles "not loaded yet" every frame: `SceneRenderer` skips or
   substitutes what is pending and counts it (`SceneRendererStats::PendingAssets`), `AssetMeshProvider` reports meshes
   as unavailable until they load, and audio sources start when their clip is ready. The content version and change

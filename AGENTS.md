@@ -297,7 +297,8 @@ The threading model, frame loop and pipelines these rules protect are described 
   Code that keeps an asset's data alive in other objects reports it (`Asset::IsDataShared`). Never block on a load;
   scene owners trim what the previous scene used after a switch (`AssetManagerBase::ScheduleTrim`).
 - Adding an asset type: an `Asset` subclass with a cooked/serialized form, a loader in
-  `Asset/AssetRegistration.cpp`, an importer if it comes from external files, `GetMemoryUsage` reporting what it holds
+  `Asset/AssetRegistration.cpp` (it takes the stored bytes over with `AssetLoadData::TakeBytes` when the asset keeps
+  them, instead of copying them), an importer if it comes from external files, `GetMemoryUsage` reporting what it holds
   in each pool once finalized, and tests for round trips and corrupt data (every loader must reject truncated or
   garbage bytes without crashing).
 

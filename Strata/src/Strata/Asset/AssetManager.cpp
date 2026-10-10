@@ -382,7 +382,9 @@ namespace Strata
 					}
 					else
 					{
-						completion.LoadedAsset = (*loader)(metadata, *data, &completion.Error);
+						// The bytes are not needed after decoding: the loader may take them over.
+						AssetLoadData loadData(*data);
+						completion.LoadedAsset = (*loader)(metadata, loadData, &completion.Error);
 						if (completion.LoadedAsset)
 							completion.LoadedAsset->Handle = metadata.Handle;
 						else if (completion.Error.empty())

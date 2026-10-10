@@ -15,9 +15,10 @@ namespace Strata
 	// clips are stored in cooked binary/JSON form; materials, prefabs, scenes and fonts are stored as their source.
 	void CreateBuiltinAssetLoaders(std::unordered_map<AssetType, AssetLoadFunction>& loaders)
 	{
-		loaders.emplace(AssetType::Texture, [](const AssetMetadata&, std::span<const uint8_t> data, std::string* outError) -> Ref<Asset>
+		// Textures and fonts keep their bytes: they take them over instead of copying them.
+		loaders.emplace(AssetType::Texture, [](const AssetMetadata&, AssetLoadData& data, std::string* outError) -> Ref<Asset>
 		{
-			return Texture::Deserialize(data, outError);
+			return Texture::Deserialize(data.TakeBytes(), outError);
 		});
 		loaders.emplace(AssetType::Mesh, [](const AssetMetadata&, std::span<const uint8_t> data, std::string* outError) -> Ref<Asset>
 		{
@@ -43,9 +44,9 @@ namespace Strata
 		{
 			return AudioClipAsset::Deserialize(data, metadata.Path.empty() ? metadata.Name : metadata.Path, outError);
 		});
-		loaders.emplace(AssetType::Font, [](const AssetMetadata&, std::span<const uint8_t> data, std::string* outError) -> Ref<Asset>
+		loaders.emplace(AssetType::Font, [](const AssetMetadata&, AssetLoadData& data, std::string* outError) -> Ref<Asset>
 		{
-			return Font::Create(std::vector<uint8_t>(data.begin(), data.end()), outError);
+			return Font::Create(data.TakeBytes(), outError);
 		});
 	}
 

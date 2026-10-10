@@ -71,9 +71,47 @@ namespace Strata
 		bool IsMemoryAsset = false;
 	};
 
+	// The stored bytes a loader decodes. Loaders read them as a span (it converts to one, so loaders may take a span);
+	// a loader whose asset keeps the bytes, or most of them, takes them over with TakeBytes instead of copying them,
+	// which spares a second copy of large assets while they load.
+	class AssetLoadData
+	{
+	public:
+		// Bytes the loader may take over (TakeBytes moves them out of `bytes`).
+		explicit AssetLoadData(std::vector<uint8_t>& bytes)
+			: m_Bytes(bytes), m_Owner(&bytes)
+		{
+		}
+
+		// Bytes the loader may only read (TakeBytes copies them), e.g. to validate a document.
+		explicit AssetLoadData(std::span<const uint8_t> bytes)
+			: m_Bytes(bytes)
+		{
+		}
+
+		std::span<const uint8_t> GetBytes() const { return m_Bytes; }
+		operator std::span<const uint8_t>() const { return m_Bytes; }
+
+		// The bytes as a vector of the caller's own: moved out when they were handed over (GetBytes is empty afterwards),
+		// copied otherwise.
+		std::vector<uint8_t> TakeBytes()
+		{
+			if (!m_Owner)
+				return std::vector<uint8_t>(m_Bytes.begin(), m_Bytes.end());
+			std::vector<uint8_t> bytes = std::move(*m_Owner);
+			m_Owner->clear();
+			m_Owner = nullptr;
+			m_Bytes = {};
+			return bytes;
+		}
+	private:
+		std::span<const uint8_t> m_Bytes;
+		std::vector<uint8_t>* m_Owner = nullptr;
+	};
+
 	// Converts an asset's stored bytes (cooked or source, depending on the type) into an Asset object. Runs on
 	// worker threads and must not touch engine state.
-	using AssetLoadFunction = std::function<Ref<Asset>(const AssetMetadata& metadata, std::span<const uint8_t> data, std::string* outError)>;
+	using AssetLoadFunction = std::function<Ref<Asset>(const AssetMetadata& metadata, AssetLoadData& data, std::string* outError)>;
 
 	// Loaders for every asset type. The built-in types are registered automatically; registering a type again replaces
 	// its loader (at startup only, before any asset loads).

@@ -73,6 +73,9 @@ namespace Strata
 		static constexpr uint32_t c_CookedVersion = 1;
 		std::vector<uint8_t> Serialize() const;
 		static Ref<Texture> Deserialize(std::span<const uint8_t> data, std::string* outError = nullptr);
+		// The same, keeping the cooked bytes and reading the pixels in place instead of copying them (asset loads, where the
+		// bytes are not needed otherwise): GetMips then has the levels' sizes, GetMipData their pixels.
+		static Ref<Texture> Deserialize(std::vector<uint8_t>&& data, std::string* outError = nullptr);
 
 		~Texture() override;
 
@@ -85,7 +88,11 @@ namespace Strata
 		uint32_t GetHeight() const { return m_Mips.empty() ? m_Height : m_Mips[0].Height; }
 		uint32_t GetMipCount() const { return m_MipCount; }
 		const TextureSpecification& GetSpecification() const { return m_Specification; }
+		// The levels until the CPU copy is released: their sizes, and their pixels unless the texture keeps cooked bytes
+		// (GetMipData has the pixels either way).
 		const std::vector<TextureMip>& GetMips() const { return m_Mips; }
+		// A level's pixels while the CPU copy exists (empty after it was released, and for levels out of range).
+		std::span<const uint8_t> GetMipData(uint32_t level) const;
 
 		// GPU state (main thread, after the asset became Ready).
 		nvrhi::ITexture* GetGPUTexture() const { return m_GPUTexture; }
@@ -95,6 +102,9 @@ namespace Strata
 	private:
 		TextureSpecification m_Specification;
 		std::vector<TextureMip> m_Mips;
+		// Cooked bytes the texture took over (Deserialize from a vector): they hold the pixels, level i at m_CookedOffsets[i].
+		std::vector<uint8_t> m_Cooked;
+		std::vector<size_t> m_CookedOffsets;
 		uint32_t m_Width = 0;
 		uint32_t m_Height = 0;
 		uint32_t m_MipCount = 0;

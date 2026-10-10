@@ -1365,7 +1365,8 @@ namespace Strata
 
 		const AssetLoadFunction* loader = AssetLoaderRegistry::Find(importer->GetType());
 		std::string error;
-		if (!loader || !(*loader)(AssetMetadata { UUID::Null(), importer->GetType(), relativePath }, data, &error))
+		AssetLoadData document(data);
+		if (!loader || !(*loader)(AssetMetadata { UUID::Null(), importer->GetType(), relativePath }, document, &error))
 			return fail(fmt::format("Invalid {} data: {}", AssetTypeToString(importer->GetType()), error));
 
 		if (!FileSystem::WriteBytes(path, data))
@@ -1404,7 +1405,8 @@ namespace Strata
 
 		const AssetLoadFunction* loader = AssetLoaderRegistry::Find(type);
 		std::string error;
-		if (!loader || !(*loader)(AssetMetadata { handle, type, ToRelative(path) }, data, &error))
+		AssetLoadData document(data);
+		if (!loader || !(*loader)(AssetMetadata { handle, type, ToRelative(path) }, document, &error))
 			return fail(fmt::format("Invalid {} data: {}", AssetTypeToString(type), error));
 		bool written = false;
 		{
