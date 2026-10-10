@@ -9,6 +9,9 @@
 #include <Strata/Core/Timestep.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/Material.h>
+#include <Strata/Scene/Scene.h>
+
+#include <memory>
 
 using namespace Strata;
 
@@ -87,8 +90,10 @@ TEST_SUITE("Editor.Streaming")
 		CHECK(totals["streaming"]["inFlightBytes"] == stats.InFlightBytes);
 		CHECK(totals["streaming"]["inFlightBudgetBytes"] == stats.Budgets.InFlightBytes);
 		CHECK(totals["finalization"]["uploadBudgetBytesPerFrame"] == stats.Budgets.UploadBytesPerFrame);
+		CHECK(totals["finalization"]["stagingBudgetBytes"] == stats.Budgets.StagingBytes);
 		CHECK(totals["finalization"]["windowFrames"] == AssetManagerBase::c_StatsWindowFrames);
 		CHECK(totals["evictions"] == stats.Evictions);
+		CHECK(totals["evictionChecks"] == stats.EvictionChecks);
 		CHECK(totals["cancellations"] == stats.Cancellations);
 		CHECK(totals["stagingReleases"] == stats.StagingReleases);
 
@@ -136,12 +141,21 @@ TEST_SUITE("Editor.Streaming")
 	TEST_CASE("asset.setBudget changes the budgets, rejects values that are not positive, and resets them")
 	{
 		StreamingHarness harness;
-		const Ref<AssetManagerBase>& manager = AssetManager::GetActive(); // Without a project: the built-in assets' manager
-		REQUIRE(manager);
+		// Budgets belong to the open project's asset manager: without a project there is nothing to change.
+		const AssetResidencyBudgets builtinBudgets = AssetManager::GetActive()->GetResidencyBudgets();
+		const EditorCommandResult withoutProject = harness.Execute("asset.setBudget", { { "gpuTexturesMB", 64 } });
+		CHECK_FALSE(withoutProject.Success);
+		CHECK(withoutProject.ErrorKind == EditorCommandError::Failed);
+		CHECK(AssetManager::GetActive()->GetResidencyBudgets().GpuTextures == builtinBudgets.GpuTextures);
+
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("EditorStreamingBudget");
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory / "Game") }, { "name", "Game" } });
+		const Ref<AssetManagerBase> manager = AssetManager::GetActive();
+		REQUIRE(manager.get() == harness.Context.GetAssetManager());
 		const AssetResidencyBudgets defaults = AssetManagerBase::GetDefaultResidencyBudgets();
 
 		const nlohmann::json set = harness.Run("asset.setBudget", { { "gpuTexturesMB", 64 }, { "gpuBuffersMB", 16 }, { "cpuMB", 0.5 }, { "inFlightMB", 32 },
-			{ "uploadMBPerFrame", 8 }, { "finalizeMsPerFrame", 2.5 } });
+			{ "uploadMBPerFrame", 8 }, { "finalizeMsPerFrame", 2.5 }, { "stagingMB", 24 } });
 		AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
 		CHECK(budgets.GpuTextures == 64 * c_MiB);
 		CHECK(budgets.GpuBuffers == 16 * c_MiB);
@@ -149,15 +163,18 @@ TEST_SUITE("Editor.Streaming")
 		CHECK(budgets.InFlightBytes == 32 * c_MiB);
 		CHECK(budgets.UploadBytesPerFrame == 8 * c_MiB);
 		CHECK(budgets.FinalizeMsPerFrame == doctest::Approx(2.5f));
+		CHECK(budgets.StagingBytes == 24 * c_MiB);
 		CHECK(set["budgets"]["gpuTexturesBytes"] == 64 * c_MiB);
 		CHECK(set["budgets"]["cpuBytes"] == c_MiB / 2);
 		CHECK(set["budgets"]["finalizeMsPerFrame"].get<double>() == doctest::Approx(2.5));
+		CHECK(set["budgets"]["stagingBytes"] == 24 * c_MiB);
 		CHECK(harness.Run("asset.stats")["pools"]["gpuTextures"]["budgetBytes"] == 64 * c_MiB);
+		CHECK(harness.Run("asset.stats")["finalization"]["stagingBudgetBytes"] == 24 * c_MiB);
 
 		// Values that are not positive numbers change nothing.
 		for (const nlohmann::json& parameters : { nlohmann::json { { "gpuTexturesMB", 0 } }, nlohmann::json { { "cpuMB", -1 } },
 				 nlohmann::json { { "finalizeMsPerFrame", 0.0 } }, nlohmann::json { { "inFlightMB", "lots" } }, nlohmann::json { { "uploadMBPerFrame", 1e300 } },
-				 nlohmann::json { { "gpuTexturesMB", 128 }, { "gpuBuffersMB", 0 } } })
+				 nlohmann::json { { "stagingMB", -2 } }, nlohmann::json { { "gpuTexturesMB", 128 }, { "gpuBuffersMB", 0 } } })
 		{
 			CAPTURE(parameters.dump());
 			CHECK(harness.Execute("asset.setBudget", parameters).ErrorKind == EditorCommandError::InvalidParameters);
@@ -173,7 +190,12 @@ TEST_SUITE("Editor.Streaming")
 		CHECK(budgets.GpuTextures == defaults.GpuTextures);
 		CHECK(budgets.Cpu == defaults.Cpu);
 		CHECK(budgets.UploadBytesPerFrame == 4 * c_MiB);
+		CHECK(budgets.StagingBytes == defaults.StagingBytes);
 		CHECK(reset["budgets"]["cpuBytes"] == Budget(defaults.Cpu));
+
+		// They last as long as the project: the built-in assets' manager, active again once it closes, kept its own.
+		harness.Context.CloseProject();
+		CHECK(AssetManager::GetActive()->GetResidencyBudgets().UploadBytesPerFrame == builtinBudgets.UploadBytesPerFrame);
 	}
 
 	TEST_CASE("Opening another scene releases the assets only the previous scene used")
@@ -200,13 +222,66 @@ TEST_SUITE("Editor.Streaming")
 			frame({ first, shared });
 		REQUIRE(AssetManager::GetAssetState(first) == AssetState::Ready);
 		REQUIRE(AssetManager::GetAssetState(shared) == AssetState::Ready);
+		// The shared material's object must survive the switch, not be evicted and loaded again.
+		const std::weak_ptr<Asset> sharedObject = AssetManager::GetActive()->GetAsset(shared);
+		REQUIRE_FALSE(sharedObject.expired());
+		const uint64_t evictionsBefore = AssetManager::GetActive()->GetStats().Evictions;
 
 		harness.Run("scene.open", { { "scene", "Scenes/Second.stscene" } });
 		for (uint32_t switched = 0; switched < AssetResidency::c_SceneSwitchTrimFrames + 1; switched++)
+		{
 			frame({ shared, second });
+			CAPTURE(switched);
+			CHECK(AssetManager::GetAssetState(shared) == AssetState::Ready);
+			CHECK_FALSE(sharedObject.expired());
+		}
 		CHECK(AssetManager::GetAssetState(first) == AssetState::Unloaded);
-		CHECK(AssetManager::GetAssetState(shared) == AssetState::Ready);
 		CHECK(AssetManager::GetAssetState(second) == AssetState::Ready);
-		CHECK(harness.Run("asset.stats")["evictions"].get<uint64_t>() >= 1);
+		CHECK(AssetManager::GetActive()->GetAsset(shared) == sharedObject.lock());
+		CHECK(harness.Run("asset.stats")["evictions"].get<uint64_t>() > evictionsBefore);
+	}
+
+	TEST_CASE("A scene switch while playing releases the assets only the previous scene used, like the exported game")
+	{
+		StreamingHarness harness;
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("EditorStreamingPlaySwitch");
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory / "Game") }, { "name", "Game" } });
+		const AssetHandle first = *UUIDFromJson(harness.Run("material.create", { { "path", "Materials/First.stmat" } })["asset"]);
+		const AssetHandle shared = *UUIDFromJson(harness.Run("material.create", { { "path", "Materials/Shared.stmat" } })["asset"]);
+		const AssetHandle second = *UUIDFromJson(harness.Run("material.create", { { "path", "Materials/Second.stmat" } })["asset"]);
+		const AssetHandle secondScene = *UUIDFromJson(harness.Run("scene.saveAs", { { "path", "Scenes/Second.stscene" } })["scene"]);
+		harness.Run("scene.new");
+		harness.Run("scene.saveAs", { { "path", "Scenes/First.stscene" } });
+		harness.Run("play.start");
+
+		const auto frame = [&harness](std::initializer_list<AssetHandle> used)
+		{
+			for (AssetHandle handle : used)
+				AssetManager::GetActive()->GetAsset(handle);
+			harness.Frame();
+		};
+		for (int warmup = 0; warmup < 3; warmup++)
+			frame({ first, shared });
+		REQUIRE(AssetManager::GetAssetState(first) == AssetState::Ready);
+		REQUIRE(AssetManager::GetAssetState(shared) == AssetState::Ready);
+		const std::weak_ptr<Asset> sharedObject = AssetManager::GetActive()->GetAsset(shared);
+		REQUIRE_FALSE(sharedObject.expired());
+
+		// The game asks for the other scene (scripts: Game::LoadScene); the editor switches after the frame's update.
+		const Ref<Scene> previous = harness.Context.GetActiveScene();
+		previous->RequestSceneLoad(secondScene);
+		frame({ first, shared });
+		REQUIRE(harness.Context.IsPlaying());
+		REQUIRE(harness.Context.GetActiveScene() != previous);
+		for (uint32_t switched = 0; switched < AssetResidency::c_SceneSwitchTrimFrames + 1; switched++)
+		{
+			frame({ shared, second });
+			CAPTURE(switched);
+			CHECK(AssetManager::GetAssetState(shared) == AssetState::Ready);
+		}
+		CHECK(AssetManager::GetAssetState(first) == AssetState::Unloaded);
+		CHECK(AssetManager::GetAssetState(second) == AssetState::Ready);
+		CHECK(AssetManager::GetActive()->GetAsset(shared) == sharedObject.lock());
+		harness.Run("play.stop");
 	}
 }

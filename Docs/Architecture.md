@@ -398,9 +398,10 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   generation and a published content change (caches revalidate; physics keeps the colliders it built and audio keeps
   playing clips), and it loads again on its next request. `TrimUnused(frames)` evicts every evictable asset not
   requested in that many frames, whatever the budgets (assets holding no memory stay: evicting them would free nothing);
-  `ScheduleTrim` runs it a few updates later. `GameRuntime::LoadScene` and `EditorContext::OpenScene` schedule
-  `TrimUnused(3)` three frames after a scene switch, so what the new scene draws or requests by then stays.
-  `AssetManagerStats::EvictionChecks` counts the assets eviction looked at.
+  `ScheduleTrim` runs it a few updates later. `GameRuntime::LoadScene`, `EditorContext::OpenScene` and the editor's
+  scene switches in play mode (`EditorContext::SwitchRuntimeScene`) schedule `TrimUnused(3)` three frames after a scene
+  switch, so what the new scene draws or requests by then stays. `AssetManagerStats::EvictionChecks` counts the assets
+  eviction looked at.
 - **Streaming queue** (`AssetStreamingQueue`). A request marks the asset Loading and queues it keyed by priority, then
   score (higher first; e.g. how large on screen it is needed), then request order; repeating it raises a queued request,
   never lowers it. Loads are dispatched to `JobSystem::SubmitIO` while the stored bytes of loads not yet finalized stay

@@ -234,6 +234,14 @@ TEST_SUITE("Editor.Automation")
 		CHECK(stats.GetValue()["pools"]["cpu"]["residentBytes"] == manager->GetStats().Resident.Cpu);
 		CHECK(stats.GetValue()["assets"].size() == manager->GetResidencyInfo().size()); // The built-in assets
 
+		// Budgets belong to a project's asset manager.
+		const RpcResult withoutProject = harness.Call(client, "asset.setBudget", { { "gpuTexturesMB", 128 } });
+		REQUIRE(withoutProject.IsError());
+		CHECK(withoutProject.GetError().Code == JsonRpc::ErrorCode::OperationFailed);
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("AutomationStreaming");
+		REQUIRE(harness.Call(client, "project.create", { { "directory", FileSystem::ToUTF8(directory / "Game") }, { "name", "Game" } }).IsSuccess());
+		REQUIRE(manager.get() == harness.Context.GetAssetManager());
+
 		const RpcResult budget = harness.Call(client, "asset.setBudget", { { "gpuTexturesMB", 128 } });
 		REQUIRE(budget.IsSuccess());
 		CHECK(manager->GetResidencyBudgets().GpuTextures == 128ull << 20);

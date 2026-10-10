@@ -405,6 +405,10 @@ namespace Strata
 		}
 		PruneSelection(); // The selection named entities of the previous scene
 		UpdateInputSuspension();
+		// Like the exported game (GameRuntime::LoadScene): what the previous scene used and this one does not request in its
+		// first frames is released then, so playtests show the game's memory behavior.
+		if (m_AssetManager)
+			m_AssetManager->ScheduleTrim(AssetResidency::c_SceneSwitchTrimFrames, AssetResidency::c_SceneSwitchTrimFrames);
 		return true;
 	}
 

@@ -37,7 +37,8 @@ namespace Strata
 				{ "cpuBytes", DescribeBudget(budgets.Cpu) },
 				{ "inFlightBytes", budgets.InFlightBytes },
 				{ "uploadBytesPerFrame", budgets.UploadBytesPerFrame },
-				{ "finalizeMsPerFrame", budgets.FinalizeMsPerFrame } };
+				{ "finalizeMsPerFrame", budgets.FinalizeMsPerFrame },
+				{ "stagingBytes", budgets.StagingBytes } };
 		}
 
 		nlohmann::json DescribeResidency(const AssetResidencyInfo& asset)
@@ -113,8 +114,10 @@ namespace Strata
 					{ "finalizeMsLastFrame", stats.FinalizeMsLastFrame },
 					{ "finalizeMsWindowMax", stats.FinalizeMsWindowMax },
 					{ "finalizeBudgetMsPerFrame", stats.Budgets.FinalizeMsPerFrame },
+					{ "stagingBudgetBytes", stats.Budgets.StagingBytes },
 					{ "windowFrames", AssetManagerBase::c_StatsWindowFrames } } },
 				{ "evictions", stats.Evictions },
+				{ "evictionChecks", stats.EvictionChecks },
 				{ "cancellations", stats.Cancellations },
 				{ "stagingReleases", stats.StagingReleases } };
 		}
@@ -126,7 +129,8 @@ namespace Strata
 		registry.Register({ "asset.stats",
 			"Asset memory and streaming: resident bytes and budget per pool (cpu, gpuTextures, gpuBuffers; null budget = unlimited), "
 			"load counts, the streaming queue (queued loads per priority, loads and bytes in flight), finalization (GPU bytes uploaded and "
-			"main-thread milliseconds, last frame and maximum of recent frames), evictions, cancellations and staging releases. With "
+			"main-thread milliseconds, last frame and maximum of recent frames, with their budgets and the staging budget), evictions (and how "
+			"many resident assets eviction looked at), cancellations and staging releases. With "
 			"assets: true it also lists the assets that are resident, loading, failed or pinned, with their memory, state, last use and pins.",
 			ObjectSchema({
 				{ "assets", BoolSchema("Also list the assets (default false)") },
@@ -167,10 +171,12 @@ namespace Strata
 			} });
 
 		registry.Register({ "asset.setBudget",
-			"Sets the asset streaming budgets of the open project's asset manager (until it closes; not undoable): resident memory per pool in "
-			"megabytes (1 MB = 1048576 bytes; assets over budget are evicted, least recently used first), the megabytes of loads in flight, the "
-			"GPU megabytes uploaded per frame and the main-thread milliseconds finalization may take per frame. Values must be greater than 0; "
-			"reset: true starts from the defaults (derived from the GPU). Returns the budgets in effect (bytes, null = unlimited).",
+			"Sets the asset streaming budgets of the open project's asset manager (until the project closes; not undoable; fails without a "
+			"project): resident memory per pool in megabytes (1 MB = 1048576 bytes; assets over budget are evicted, least recently used first), "
+			"the megabytes of loads in flight, the GPU megabytes uploaded per frame, the main-thread milliseconds finalization may take per frame "
+			"and the staging megabytes texture uploads may hold (sustained texture uploads reach at most staging / (frames in flight + 1) per "
+			"frame, so raise both for a loading screen). Values must be greater than 0; reset: true starts from the defaults (derived from the "
+			"GPU). Returns the budgets in effect (bytes, null = unlimited).",
 			ObjectSchema({
 				{ "gpuTexturesMB", { { "type", "number" }, { "exclusiveMinimum", 0 }, { "description", "Resident GPU texture memory, in MB" } } },
 				{ "gpuBuffersMB", { { "type", "number" }, { "exclusiveMinimum", 0 }, { "description", "Resident GPU buffer (mesh) memory, in MB" } } },
@@ -180,8 +186,10 @@ namespace Strata
 				{ "uploadMBPerFrame", { { "type", "number" }, { "exclusiveMinimum", 0 }, { "description", "GPU bytes finalization uploads per frame, in MB" } } },
 				{ "finalizeMsPerFrame", { { "type", "number" }, { "exclusiveMinimum", 0 },
 					{ "description", "Main-thread milliseconds finalization may take per frame" } } },
+				{ "stagingMB", { { "type", "number" }, { "exclusiveMinimum", 0 },
+					{ "description", "Staging memory texture uploads may hold while the GPU copies from it, in MB" } } },
 				{ "reset", BoolSchema("Start from the default budgets before applying the given values (default false)") } }),
-			[](EditorContext&, const nlohmann::json& parameters)
+			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				// Megabytes whose byte count still fits (with room to spare) in 64 bits, and up to a minute per frame.
@@ -194,12 +202,15 @@ namespace Strata
 				const std::optional<double> inFlight = ReadPositive(parameters, "inFlightMB", c_MaxMB, arguments);
 				const std::optional<double> upload = ReadPositive(parameters, "uploadMBPerFrame", c_MaxMB, arguments);
 				const std::optional<double> finalizeMs = ReadPositive(parameters, "finalizeMsPerFrame", c_MaxMs, arguments);
+				const std::optional<double> staging = ReadPositive(parameters, "stagingMB", c_MaxMB, arguments);
 				if (!arguments.IsValid())
 					return arguments.Fail();
 
-				const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
+				// Budgets belong to the project's manager: the built-in assets' manager, active without a project, holds memory
+				// assets only, which are never evicted.
+				EditorAssetManager* manager = context.GetAssetManager();
 				if (!manager)
-					return EditorCommandResult::Fail("No asset manager is active");
+					return EditorCommandResult::Fail("No project is open: asset budgets apply to the open project's asset manager");
 
 				const auto toBytes = [](double megabytes) { return static_cast<uint64_t>(std::llround(megabytes * c_BytesPerMB)); };
 				AssetResidencyBudgets budgets = reset ? AssetManagerBase::GetDefaultResidencyBudgets() : manager->GetResidencyBudgets();
@@ -215,6 +226,8 @@ namespace Strata
 					budgets.UploadBytesPerFrame = toBytes(*upload);
 				if (finalizeMs)
 					budgets.FinalizeMsPerFrame = static_cast<float>(*finalizeMs);
+				if (staging)
+					budgets.StagingBytes = toBytes(*staging);
 				manager->SetResidencyBudgets(budgets);
 				return EditorCommandResult::Ok({ { "budgets", DescribeBudgets(manager->GetResidencyBudgets()) } });
 			} });

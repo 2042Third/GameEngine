@@ -552,11 +552,13 @@ and `AudioSystem`, the built-in "Audio" scene system.
   totals of `asset.stats`).
 - **Asset streaming commands** (`Editor/EditorStreamingCommands.cpp`): `asset.stats {assets?, limit?, sort?: "bytes" |
   "lastUsed"}` reports the active asset manager's `GetStats` (resident bytes and budget per pool, the load queue, bytes
-  in flight, uploads and finalization time, evictions, cancellations, staging releases) and, with `assets: true`, the
-  assets that are resident, loading, failed or pinned (`GetResidencyInfo`); `asset.setBudget {gpuTexturesMB?,
-  gpuBuffersMB?, cpuMB?, inFlightMB?, uploadMBPerFrame?, finalizeMsPerFrame?, reset?}` changes the budgets of the open
-  project's manager (values greater than 0; MB are 2^20 bytes; no undo, as nothing in the project changes). Opening a
-  scene schedules the release of what only the previous scene used (`EditorContext::OpenScene`).
+  in flight, uploads, finalization time and the staging budget, evictions and the assets eviction looked at,
+  cancellations, staging releases) and, with `assets: true`, the assets that are resident, loading, failed or pinned
+  (`GetResidencyInfo`); `asset.setBudget {gpuTexturesMB?, gpuBuffersMB?, cpuMB?, inFlightMB?, uploadMBPerFrame?,
+  finalizeMsPerFrame?, stagingMB?, reset?}` changes the budgets of the open project's manager until the project closes
+  (it fails without a project; values greater than 0; MB are 2^20 bytes; no undo, as nothing in the project changes).
+  Opening a scene, and a scene switch the game asks for in play mode, schedule the release of what only the previous
+  scene used (`EditorContext::OpenScene`, `SwitchRuntimeScene`).
 - Mutating commands report a `warning` in their result while the scene is playing: such changes apply
   to the running copy and are discarded by `play.stop`. Unknown or missing parameters are errors.
 - **Viewport state** lives in the core: `EditorContext::GetViewport()` (`EditorViewport`) holds the editor camera
