@@ -126,9 +126,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   `Perf::ScopedApplicationJobSystem` (the job system as applications start it): `Perf.Scene` (transform updates and
   idle frames up to a million entities), `Perf.Scripting` (100,000 and 300,000 trivial scripts, frames that spawn and
   destroy entities, scripts destroying 10,000 of 100,000 sibling roots in one frame) and, in `src/Editor/`,
-  `Perf.Editor` (entity commands among 100,000 roots) and `PerfGPU.Editor`, which runs the real `StrataEditor`
-  maximized on generated 100,000- and 1,000,000-entity scenes and checks the median CPU frame time its `editor.wait`
-  steps report. Time calls that take nanoseconds in batches (the clock's resolution is about 0.1 microseconds).
+  `Perf.Editor` (entity commands among 100,000 roots; the longest editor frame while a 4096x4096 texture re-imports
+  with new settings) and `PerfGPU.Editor`, which runs the real `StrataEditor` maximized on generated 100,000- and
+  1,000,000-entity scenes and checks the median CPU frame time its `editor.wait` steps report. Time calls that take nanoseconds in batches (the clock's resolution is about 0.1 microseconds).
   A process's peak memory includes everything it did before, so a test that measures peak memory
   runs the measured work in a helper process (`--strata-test-helper=<mode>`, see `TestMain.cpp`): `PerfGPU.Streaming`
   runs its camera sweep over the stress project (`src/Perf/StressProject.h`, also usable by other suites) that way,
@@ -347,7 +347,12 @@ The threading model, frame loop and pipelines these rules protect are described 
   cached import is redone when the source content, the import settings, the importer's `GetVersion()`
   or another file the import read change — **bump the version whenever an importer's output format
   changes.** Importers read files other than their source only through `ReadImportDependency`, which
-  confines reads to the asset directory and records the file as a dependency.
+  confines reads to the asset directory and records the file as a dependency. An importer with settings describes every
+  one in `GetSettingsProperties` (one `ImportSettingsBuilder` entry each: type, default, range or choices, tooltip),
+  matching the keys of `GetDefaultSettings`; the asset inspector draws them and `asset.setImportSettings` validates
+  against them (`NormalizeImportSettings`), so a new setting is one entry there. Editors re-import in the background
+  (`EditorAssetManager::SetImportSettingsInBackground`, `ReimportAssetInBackground`, `IsImportPending`); the blocking
+  forms are for tools and tests.
 - Engine-native assets (`.stscene`, `.stprefab`, `.stmat`) are JSON documents with a
   `{ "Strata": { "Format": ..., "Version": ... } }` header, stored as-is. Their loaders validate fully;
   JSON entry points are named `FromJson`, byte entry points `Deserialize`.
@@ -637,7 +642,7 @@ and `AudioSystem`, the built-in "Audio" scene system.
   fields need a loaded module, which validates class and field names and types; removing works without one. Script edits
   are undoable (`ScriptEdit`, shared with the inspector's Script drawer) and reach the live instances while playing. The
   UI builds with Scripts > Build Scripts (Ctrl+B) or the toolbar.
-- Commands never block a frame. One that has to wait (frames, a build, a GPU readback) returns
+- Commands never block a frame. One that has to wait (frames, a build, an import, a GPU readback) returns
   `EditorCommandResult::Defer(poll)`; `EditorCommandRunner` polls it once per frame, starting with the
   next frame, and reports through a completion callback. Command scripts, automation and UI actions that
   can take frames (e.g. Build Scripts) run commands through the runner; UI actions that finish at once

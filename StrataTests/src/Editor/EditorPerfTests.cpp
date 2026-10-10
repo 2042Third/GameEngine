@@ -1,18 +1,28 @@
 #include <doctest/doctest.h>
 
+#include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Perf/PerfUtils.h"
 #include "Perf/SceneGenerators.h"
+#include "Perf/StressProject.h"
+#include "TestHelpers.h"
 
+#include <Strata/Asset/AssetManager.h>
+#include <Strata/Core/Timestep.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Renderer/Texture.h>
 #include <Strata/Scene/Scene.h>
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <chrono>
+#include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 // Perf tests of editor commands on generated scenes (CTest StrataTests.Perf, Release and Dist only; see AGENTS.md "Testing").
@@ -124,5 +134,63 @@ TEST_SUITE("Perf.Editor")
 		CHECK(scene.GetRootEntities() == rootIds);
 		std::string error;
 		CHECK_MESSAGE(scene.ValidateHierarchy(&error), error);
+	}
+
+	TEST_CASE("Changing the import settings of a 4096x4096 texture never holds a frame")
+	{
+		// The editor's job system: the import and the reload run on its I/O and worker threads.
+		Perf::ScopedApplicationJobSystem jobs;
+		const std::filesystem::path directory = CreateTemporaryDirectory("PerfImportSettings") / "Project";
+		StressProjectSpec spec;
+		spec.Textures2k = 0;
+		spec.Textures4k = 1;
+		spec.Materials = 1;
+		spec.Entities = 1;
+		spec.GridResolution = 2;
+		std::string error;
+		const std::optional<StressProject> project = WriteStressProject(directory, spec, error);
+		REQUIRE_MESSAGE(project, error);
+		const AssetHandle texture = project->Textures.front();
+
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		EditorCommandRunner runner;
+		REQUIRE_MESSAGE(context.OpenProject(project->Directory, &error), error);
+		REQUIRE(AssetManager::LoadAssetSync<Texture>(texture));
+
+		constexpr int c_Rounds = 3;
+		std::vector<double> maxFrames;
+		for (int round = 0; round < c_Rounds; round++)
+		{
+			// Frames as the editor runs them: the context's update, then the commands', while the viewport uses the texture.
+			auto completed = std::make_shared<std::optional<EditorCommandResult>>();
+			const std::string usage = round % 2 == 0 ? "Data" : "Color";
+			auto start = std::chrono::steady_clock::now();
+			runner.Run(context, commands, "asset.setImportSettings", { { "asset", UUIDToJson(texture) }, { "settings", { { "Usage", usage } } } },
+				[completed](const EditorCommandResult& result) { *completed = result; });
+			double maxFrame = MillisecondsSince(start);
+			uint32_t frames = 0;
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2);
+			while ((!*completed || AssetManager::GetAssetState(texture) != AssetState::Ready) && std::chrono::steady_clock::now() < deadline)
+			{
+				start = std::chrono::steady_clock::now();
+				AssetManager::GetAsset<Texture>(texture);
+				context.Update(Timestep(1.0f / 60.0f));
+				runner.Update(context);
+				maxFrame = std::max(maxFrame, MillisecondsSince(start));
+				frames++;
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			REQUIRE(*completed);
+			INFO((*completed)->Error);
+			REQUIRE((*completed)->Success);
+			REQUIRE(AssetManager::GetAssetState(texture) == AssetState::Ready);
+			CHECK(frames > 1); // The import outlasted a frame: it really ran beside them
+			// The acceptance limit of the authoring workstream: no editor frame over 33 ms (two frames at 60 Hz).
+			CHECK(maxFrame <= 33.0);
+			maxFrames.push_back(maxFrame);
+		}
+		CHECK(AssetManager::GetAsset<Texture>(texture)->GetWidth() == 4096u);
+		Perf::CheckBudget("Perf.Editor.ImportSettings4kMaxFrame", Perf::Summarize(maxFrames).MedianMs);
 	}
 }

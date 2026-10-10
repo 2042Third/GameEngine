@@ -517,7 +517,16 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   `.meta` files and imports stale assets in parallel (`JobSystem::ParallelFor`), blocking. Afterwards the file watcher
   reports changes; `Update` re-registers files and queues re-imports on the I/O pool, and applies finished imports by
   reloading loaded assets (`ReloadAsset`). The cache record (`<handle>.import`) remembers the source state, settings,
-  importer version and dependencies, so a current import is reused.
+  importer version and dependencies, so a current import is reused. Editor commands take the same background path:
+  `SetImportSettingsInBackground` saves the `.meta` and queues the import, `ReimportAssetInBackground` queues one even
+  when the cached import is current (`ImportRequest::Force`), and `IsImportPending` tells a deferred command
+  (`asset.setImportSettings`, `asset.reimport`) when `Update` applied it; `SetImportSettings` and `ReimportAsset` import
+  on the calling thread (tools, tests, `asset.import`).
+- **Import settings** are a JSON object per asset (the importer's `GetDefaultSettings`, merged with the `.meta`'s
+  `ImportSettings`). `AssetImporter::GetSettingsProperties` describes them as reflected properties of that object (built
+  with `ImportSettingsBuilder`: getters read a setting or its default, setters write its canonical JSON), so the asset
+  inspector draws them with the property widgets, `asset.info` lists them (`importSettingsProperties`) and
+  `NormalizeImportSettings` checks and canonicalizes what `asset.setImportSettings` is given.
 - **Importers and stored forms** (`Asset/AssetImporters.cpp`; the loaders that read the stored form are registered by
   the module that owns each type, one `Deserialize` per type, `Font::Create` for fonts):
 

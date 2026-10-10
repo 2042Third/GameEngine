@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Strata/Asset/Asset.h"
+#include "Strata/Reflection/Property.h"
 
 #include <nlohmann/json.hpp>
 
@@ -67,11 +68,52 @@ namespace Strata
 		// Increment whenever the output format changes; stale cached imports are then redone automatically.
 		virtual uint32_t GetVersion() const = 0;
 		virtual nlohmann::json GetDefaultSettings(const std::filesystem::path& sourcePath) const;
+		// The import settings the importer understands, in the order editors show them, as reflected properties of the
+		// settings object (the JSON object of a .meta's "ImportSettings"): a property's getter reads its setting from a
+		// `const nlohmann::json*` (the default when it is missing or invalid) and its setter writes it, so
+		// PropertyInfo::SetValue validates, clamps and stores a value. Built with ImportSettingsBuilder; every key of
+		// GetDefaultSettings has a property. Empty: the importer has no settings.
+		virtual std::vector<PropertyInfo> GetSettingsProperties() const { return {}; }
 		// True when the stored form is the source file itself (JSON assets): nothing is cached.
 		virtual bool StoresSourceDirectly() const { return false; }
 
 		virtual bool Import(const ImportContext& context, ImportResult& result, std::string* outError) const = 0;
 	};
+
+	// Builds the properties of AssetImporter::GetSettingsProperties: one entry per setting (its type, the value it takes
+	// when the settings object lacks it, and its range or choices), followed by modifiers of that entry:
+	//   ImportSettingsBuilder(properties)
+	//       .UInt("MaxSize", 0, 16384).Tooltip("Longest side in pixels")
+	//       .Enum("Filter", { "Linear", "Nearest" }, "Linear").Tooltip("...");
+	// Values are stored in the JSON form of PropertyValueToJson (enums by option name).
+	class ImportSettingsBuilder
+	{
+	public:
+		explicit ImportSettingsBuilder(std::vector<PropertyInfo>& properties);
+
+		ImportSettingsBuilder& Bool(std::string name, bool defaultValue);
+		// From 0 to `max`.
+		ImportSettingsBuilder& UInt(std::string name, uint32_t defaultValue, uint32_t max);
+		ImportSettingsBuilder& Float(std::string name, float defaultValue, float min, float max);
+		// A choice among named options, stored by name.
+		ImportSettingsBuilder& Enum(std::string name, const std::vector<std::string>& choices, std::string_view defaultValue);
+
+		// Modifiers of the setting added last.
+		ImportSettingsBuilder& DisplayName(std::string displayName);
+		ImportSettingsBuilder& Tooltip(std::string tooltip);
+		// Drag speed hint for editors.
+		ImportSettingsBuilder& Speed(float speed);
+	private:
+		ImportSettingsBuilder& Add(std::string name, PropertyType type, PropertyValue defaultValue, float min, float max, std::vector<EnumValue> enumValues = {});
+		PropertyInfo& GetLast();
+	private:
+		std::vector<PropertyInfo>& m_Properties;
+	};
+
+	// Checks settings an editor or tool wants to change against the importer's GetSettingsProperties and writes them in
+	// canonical form into outSettings (the setting's exact name, enum option names, numbers clamped to their range). Fails,
+	// naming the importer's settings, for unknown settings and invalid values; an importer without settings accepts none.
+	bool NormalizeImportSettings(const AssetImporter& importer, const nlohmann::json& settings, nlohmann::json& outSettings, std::string* outError = nullptr);
 
 	// Importers by source file extension, part of the asset pipeline (tooling): RegisterAssetPipeline opens the registry and
 	// registers the built-in importers when a program hands it to Engine::RegisterBuiltinModules; later registrations

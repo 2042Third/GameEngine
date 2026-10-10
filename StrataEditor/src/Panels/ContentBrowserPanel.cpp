@@ -1,5 +1,6 @@
 #include "Panels/ContentBrowserPanel.h"
 
+#include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Panels/SceneHierarchyPanel.h"
@@ -269,8 +270,15 @@ namespace Strata
 						openScene = metadata.Handle;
 					if (ImGui::MenuItem("Rename"))
 						openRename = true;
+					// Imports run in the background: the command answers frames later.
 					if (ImGui::MenuItem("Reimport"))
-						RunEditorCommand(context, commands, "asset.reimport", { { "asset", UUIDToJson(metadata.Handle) } });
+					{
+						panelContext.Runner.Run(context, commands, "asset.reimport", { { "asset", UUIDToJson(metadata.Handle) } }, [](const EditorCommandResult& result)
+						{
+							if (!result.Success)
+								ST_ERROR("Reimport: {}", result.Error);
+						});
+					}
 					ImGui::Separator();
 					if (ImGui::MenuItem("Delete"))
 					{

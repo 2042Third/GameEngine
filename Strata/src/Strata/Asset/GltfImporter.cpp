@@ -44,6 +44,11 @@ namespace Strata
 		constexpr uint64_t c_MaxGeometryBudget = 1ull << 28;
 		constexpr uint32_t c_MaxHierarchyDepth = 1024;
 
+		// The range editors offer for the Scale setting (any positive scale imports).
+		constexpr float c_MinImportScale = 0.0001f;
+		constexpr float c_MaxImportScale = 10000.0f;
+		constexpr uint32_t c_MaxLODCount = 8;
+
 		struct ImportSettings
 		{
 			float Scale = 1.0f;
@@ -65,7 +70,7 @@ namespace Strata
 			else
 				warnings.push_back("Scale must be a positive number; using 1");
 			settings.GenerateLODs = JsonUtils::GetBool(json, "GenerateLODs", settings.GenerateLODs);
-			settings.LODCount = static_cast<uint32_t>(std::min<uint64_t>(JsonUtils::GetUInt(json, "LODCount", settings.LODCount), 8));
+			settings.LODCount = static_cast<uint32_t>(std::min<uint64_t>(JsonUtils::GetUInt(json, "LODCount", settings.LODCount), c_MaxLODCount));
 			settings.OptimizeMeshes = JsonUtils::GetBool(json, "OptimizeMeshes", settings.OptimizeMeshes);
 			settings.ImportMaterials = JsonUtils::GetBool(json, "ImportMaterials", settings.ImportMaterials);
 			settings.ImportCameras = JsonUtils::GetBool(json, "ImportCameras", settings.ImportCameras);
@@ -1118,6 +1123,30 @@ namespace Strata
 			{ "ImportLights", true },
 			{ "MaxTextureSize", 0 }
 		};
+	}
+
+	std::vector<PropertyInfo> GltfImporter::GetSettingsProperties() const
+	{
+		const ImportSettings defaults;
+		std::vector<PropertyInfo> properties;
+		ImportSettingsBuilder(properties)
+			.Float("Scale", defaults.Scale, c_MinImportScale, c_MaxImportScale).Speed(0.01f)
+				.Tooltip("Uniform scale of the model's root (glTF uses meters, like Strata); also scales imported cameras' and lights' ranges")
+			.Bool("GenerateLODs", defaults.GenerateLODs).DisplayName("Generate LODs")
+				.Tooltip("Generate simplified versions of every mesh, drawn when it covers less of the screen")
+			.UInt("LODCount", defaults.LODCount, c_MaxLODCount).DisplayName("LOD Count")
+				.Tooltip("Simplified versions per mesh besides the original")
+			.UInt("MaxTextureSize", defaults.MaxTextureSize, TextureImporter::c_MaxImageDimension).Speed(16.0f)
+				.Tooltip("Longest side of the model's textures in pixels: larger images are scaled down. 0: only the engine's limit")
+			.Bool("OptimizeMeshes", defaults.OptimizeMeshes)
+				.Tooltip("Reorder vertices and triangles for the GPU's caches")
+			.Bool("ImportMaterials", defaults.ImportMaterials)
+				.Tooltip("Import the model's materials and textures; without them, meshes use the default material")
+			.Bool("ImportCameras", defaults.ImportCameras)
+				.Tooltip("Import the model's cameras as camera components")
+			.Bool("ImportLights", defaults.ImportLights)
+				.Tooltip("Import the model's punctual lights (KHR_lights_punctual) as light components");
+		return properties;
 	}
 
 	bool GltfImporter::Import(const ImportContext& context, ImportResult& result, std::string* outError) const

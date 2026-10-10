@@ -4,6 +4,8 @@
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Hash.h"
 #include "Strata/Core/StringUtils.h"
+#include "Strata/Reflection/PropertyBuilder.h"
+#include "Strata/Reflection/PropertyJson.h"
 
 namespace Strata
 {
@@ -38,6 +40,139 @@ namespace Strata
 	nlohmann::json AssetImporter::GetDefaultSettings(const std::filesystem::path&) const
 	{
 		return nlohmann::json::object();
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
+	// Import settings
+	////////////////////////////////////////////////////////////////////////////////
+
+	ImportSettingsBuilder::ImportSettingsBuilder(std::vector<PropertyInfo>& properties)
+		: m_Properties(properties)
+	{
+	}
+
+	ImportSettingsBuilder& ImportSettingsBuilder::Bool(std::string name, bool defaultValue)
+	{
+		return Add(std::move(name), PropertyType::Bool, PropertyValue(defaultValue), 0.0f, 0.0f);
+	}
+
+	ImportSettingsBuilder& ImportSettingsBuilder::UInt(std::string name, uint32_t defaultValue, uint32_t max)
+	{
+		return Add(std::move(name), PropertyType::UInt, PropertyValue(defaultValue), 0.0f, static_cast<float>(max));
+	}
+
+	ImportSettingsBuilder& ImportSettingsBuilder::Float(std::string name, float defaultValue, float min, float max)
+	{
+		return Add(std::move(name), PropertyType::Float, PropertyValue(defaultValue), min, max);
+	}
+
+	ImportSettingsBuilder& ImportSettingsBuilder::Enum(std::string name, const std::vector<std::string>& choices, std::string_view defaultValue)
+	{
+		ST_CORE_ASSERT(std::find(choices.begin(), choices.end(), defaultValue) != choices.end(), "Import setting '{}': the default '{}' is no choice", name,
+			defaultValue);
+		std::vector<EnumValue> values;
+		int32_t defaultIndex = 0;
+		for (const std::string& choice : choices)
+		{
+			if (choice == defaultValue)
+				defaultIndex = static_cast<int32_t>(values.size());
+			values.push_back(EnumValue { choice, static_cast<int32_t>(values.size()) });
+		}
+		return Add(std::move(name), PropertyType::Enum, PropertyValue(defaultIndex), 0.0f, 0.0f, std::move(values));
+	}
+
+	ImportSettingsBuilder& ImportSettingsBuilder::DisplayName(std::string displayName)
+	{
+		GetLast().DisplayName = std::move(displayName);
+		return *this;
+	}
+
+	ImportSettingsBuilder& ImportSettingsBuilder::Tooltip(std::string tooltip)
+	{
+		GetLast().Tooltip = std::move(tooltip);
+		return *this;
+	}
+
+	ImportSettingsBuilder& ImportSettingsBuilder::Speed(float speed)
+	{
+		GetLast().Speed = speed;
+		return *this;
+	}
+
+	PropertyInfo& ImportSettingsBuilder::GetLast()
+	{
+		ST_CORE_ASSERT(!m_Properties.empty(), "ImportSettingsBuilder: a modifier needs a setting before it");
+		return m_Properties.back();
+	}
+
+	ImportSettingsBuilder& ImportSettingsBuilder::Add(std::string name, PropertyType type, PropertyValue defaultValue, float min, float max,
+		std::vector<EnumValue> enumValues)
+	{
+		PropertyInfo& property = m_Properties.emplace_back();
+		PropertyOptions options;
+		options.Min = min;
+		options.Max = max;
+		Detail::ApplyPropertyOptions(property, name, type, options);
+		property.EnumValues = std::move(enumValues);
+		// What the accessors convert with: the property without its accessors (a copy of itself would hold them).
+		PropertyInfo shape = property;
+		property.Getter = [shape, defaultValue](const void* object) -> PropertyValue
+		{
+			const nlohmann::json& settings = *static_cast<const nlohmann::json*>(object);
+			if (!settings.is_object())
+				return defaultValue;
+			const auto it = settings.find(shape.Name);
+			if (it == settings.end())
+				return defaultValue;
+			std::optional<PropertyValue> value = PropertyValueFromJson(shape, *it);
+			// An enum must name one of its options; any other value reads as the default, as the importer reads it.
+			if (!value || (shape.Type == PropertyType::Enum && !shape.FindEnumValue(std::get<int32_t>(*value))))
+				return defaultValue;
+			return *value;
+		};
+		property.Setter = [shape](void* object, const PropertyValue& value)
+		{
+			nlohmann::json& settings = *static_cast<nlohmann::json*>(object);
+			if (!settings.is_object())
+				settings = nlohmann::json::object();
+			settings[shape.Name] = PropertyValueToJson(shape, value);
+		};
+		return *this;
+	}
+
+	bool NormalizeImportSettings(const AssetImporter& importer, const nlohmann::json& settings, nlohmann::json& outSettings, std::string* outError)
+	{
+		auto fail = [outError](std::string message)
+		{
+			if (outError)
+				*outError = std::move(message);
+			return false;
+		};
+
+		if (!settings.is_object())
+			return fail("Import settings must be an object of the form {\"Setting\": value}");
+		const std::vector<PropertyInfo> properties = importer.GetSettingsProperties();
+		std::string names;
+		for (const PropertyInfo& property : properties)
+			names += (names.empty() ? "" : ", ") + property.Name;
+
+		nlohmann::json normalized = nlohmann::json::object();
+		for (const auto& [key, value] : settings.items())
+		{
+			const PropertyInfo* property = FindProperty(properties, key);
+			if (!property)
+			{
+				if (properties.empty())
+					return fail(fmt::format("{} assets have no import settings ('{}' is none)", AssetTypeToString(importer.GetType()), key));
+				return fail(fmt::format("Unknown import setting '{}' of {} assets (settings: {})", key, AssetTypeToString(importer.GetType()), names));
+			}
+			std::string error;
+			const std::optional<PropertyValue> parsed = PropertyValueFromJson(*property, value, &error);
+			if (!parsed || !property->SetValue(&normalized, *parsed, &error))
+				return fail(fmt::format("Import setting '{}': {}", property->Name, error.empty() ? std::string("invalid value") : error));
+		}
+		outSettings = std::move(normalized);
+		return true;
 	}
 
 	void AssetImporterRegistry::BeginRegistration()

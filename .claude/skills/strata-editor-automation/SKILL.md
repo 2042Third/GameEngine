@@ -154,9 +154,15 @@ sun with `component.set` (find their IDs with `entity.find {"name": "Main Camera
 
 **Assets**: `asset.import {"file": "<absolute path>", "directory": "Models"}` copies a file into the project and
 imports it: models `.gltf`/`.glb`, textures `.png`/`.jpg`/`.tga`/`.bmp`/`.psd`/`.gif`/`.hdr`, audio
-`.wav`/`.mp3`/`.flac`/`.ogg`, fonts `.ttf`/`.otf`. `asset.info` reports import errors and warnings;
-`asset.setImportSettings` changes them. Models expose sub-assets (meshes, materials) and are instantiated whole
-with `prefab.instantiate`.
+`.wav`/`.mp3`/`.flac`/`.ogg`, fonts `.ttf`/`.otf`. `asset.info` reports import errors and warnings, the import
+settings and what each accepts (`importSettingsProperties`: textures `Usage`, `MaxSize`, `Filter`, `Wrap`,
+`GenerateMips`, `FlipVertically`; models `Scale`, `GenerateLODs`, `LODCount`, `MaxTextureSize`, `OptimizeMeshes`,
+`Import*`; audio `LoadMode`; fonts and the engine's own files have none). `asset.setImportSettings {"asset", "settings":
+{"MaxSize": 1024}}` changes them and `asset.reimport` imports again; both import in the background (the editor keeps
+running, the asset keeps its previous version until the new one is loaded) and answer when the import is done, failing
+when it failed (`"wait": false` answers at once; `asset.info` says `importing`). Unknown settings and invalid values are
+rejected with what is accepted. Models expose sub-assets (meshes, materials) and are instantiated whole with
+`prefab.instantiate`.
 
 **Hierarchy and prefabs**: `entity.create {"parent": "<id>"}`, `entity.setParent`, `entity.duplicate`,
 `prefab.create {"entities": ["<id>"], "path": "Prefabs/Block.stprefab"}`, then
