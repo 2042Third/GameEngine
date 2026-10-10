@@ -64,7 +64,8 @@ frame.
 - `StrataTests/src/Scene/ReflectionTests.cpp`: the properties exist with their ranges, and invalid values
   are rejected.
 - `StrataTests/src/Scene/SerializationTests.cpp`: a scene round trip keeps every value; unknown or
-  out-of-range values in files load with warnings instead of failing.
+  out-of-range values in files load with warnings instead of failing. (Builds without your component keep it
+  verbatim in `UnknownComponentsComponent` and save it back unchanged; nothing to do for that.)
 - The system's behaviour, with a real `Scene` stepping `OnUpdateRuntime`.
 - Editor: `component.add` with values and `component.set` through `EditorCommandRegistry` (see
   `StrataTests/src/Editor/EditorCommandTests.cpp`); undo restores the previous state.

@@ -112,7 +112,8 @@ non-owning handle. Components are plain structs in `Components.h`, registered wi
 `ComponentRegistration.cpp` (ID, Name, Transform, Relationship, Tag, Inactive, PrefabInstance, Camera, MeshRenderer,
 DirectionalLight, PointLight, SpotLight, SkyLight, PostProcess, Text, RigidBody, BoxCollider, SphereCollider,
 CapsuleCollider, MeshCollider, AudioSource, AudioListener, Script). `ComponentAccess` reads and writes them with
-validation and change signals, `SceneSerializer` writes versioned JSON, and `Prefab.h` defines the scene-shaped assets
+validation and change signals, `SceneSerializer` writes versioned JSON (keeping components it cannot read, see
+[Composition root and registries](#composition-root-and-registries)), and `Prefab.h` defines the scene-shaped assets
 (`EntityTemplate`, `Prefab`, `Model`, `SceneAsset`). `Scene::UpdateWorldTransforms` runs every frame and splits large
 scenes by root entity over `JobSystem::ParallelFor` (`Scene.cpp`).
 
@@ -209,6 +210,14 @@ ComponentRegistry::Freeze
   `ModuleRegistrationOptions::Extra`.
 - The loader, importer, built-in asset and scene system registries stay open: tools and tests register more later
   (a later loader or importer replaces or overrides the built-in one).
+- **Components of modules a build lacks survive.** A scene, prefab or snapshot can name components this build does
+  not register (a game module that is not loaded, a newer engine). `SceneSerializer::DeserializeEntities` keeps them
+  verbatim in the runtime-only `UnknownComponentsComponent` (`Scene/UnknownComponents.h`; not registered, so the
+  editor, reflection and the feature test never see it) and warns once per component name per load
+  (`SceneAsset::CreateScene` logs its warnings); the writer puts them back next to the registered components, so a save
+  writes them unchanged. `Scene::Copy` (play mode), prefab snapshots (`SerializeEntities`), `Scene::DuplicateEntity`
+  and the editor's undo snapshots (`EntityState`, `Editor/SceneEdit.cpp`) carry them; restoring undo snapshots does not
+  warn again (`EntityInstantiationOptions::ReportUnknownComponents`).
 
 ## Application and frame loop
 

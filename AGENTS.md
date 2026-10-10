@@ -253,7 +253,9 @@ The threading model, frame loop and pipelines these rules protect are described 
   its function there, in dependency order. Components can only be registered while it runs (the registry freezes at
   its end): games and tests pass theirs in `ModuleRegistrationOptions::Extra`. Scene systems declare their update
   order (`SceneSystemDescriptor::After`/`Before`) instead of relying on registration order, and are made with
-  `MakeSceneSystemDescriptor<T>` so that `Scene::GetSystem<T>` finds them. Details: Docs/Architecture.md,
+  `MakeSceneSystemDescriptor<T>` so that `Scene::GetSystem<T>` finds them. Scenes keep the components of modules a
+  build lacks: they load with one warning per component name into `UnknownComponentsComponent` and are saved back
+  unchanged (also through play mode, prefab snapshots, duplication and undo). Details: Docs/Architecture.md,
   "Composition root and registries" and "Scene runtime lifecycle".
 
 ## Asset pipeline

@@ -1,10 +1,15 @@
 #include <doctest/doctest.h>
 
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Core/JsonUtils.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Scene/ComponentAccess.h"
+#include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/SceneSerializer.h"
+#include "Strata/Scene/UnknownComponents.h"
 #include "TestHelpers.h"
+
+#include <algorithm>
 
 using namespace Strata;
 
@@ -64,6 +69,53 @@ namespace
 		script.Fields.push_back({ "Target", PropertyType::Entity, root.GetUUID() });
 		script.Fields.push_back({ "Tint", PropertyType::Color4, glm::vec4(1.0f, 0.0f, 0.0f, 1.0f) });
 		return scene;
+	}
+
+	// Components of a module this build lacks: nested objects, arrays, numbers, strings and null must survive verbatim.
+	const nlohmann::json c_Vehicle = { { "Wheels", 4 }, { "Engine", { { "Power", 310.5 }, { "Kind", "V8" } } }, { "Gears", { 1, 2, 3 } }, { "Owner", nullptr } };
+	const nlohmann::json c_Trailer = { { "Wheels", 2 }, { "Hitch", { { "Height", 0.45 } } } };
+	const nlohmann::json c_Turret = { { "Yaw", -12.5 }, { "Ammo", { "Shell", "Flare" } } };
+	const nlohmann::json c_Tire = { { "Pressure", 2.2 } };
+
+	// Truck (Vehicle, Turret) with a child Wheel (Tire), Car (Vehicle) and Plain (only registered components).
+	nlohmann::json CreateGarageDocument()
+	{
+		return {
+			{ "Strata", { { "Format", "Scene" }, { "Version", 1 } } },
+			{ "Scene", {
+				{ "Name", "Garage" },
+				{ "Entities", {
+					{ { "ID", "00000000000000AB" }, { "Components", {
+						{ "Name", { { "Name", "Truck" } } },
+						{ "Transform", { { "Translation", { 1, 2, 3 } } } },
+						{ "Vehicle", c_Vehicle },
+						{ "Turret", c_Turret }
+					} } },
+					{ { "ID", "00000000000000AC" }, { "Parent", "00000000000000AB" }, { "Components", {
+						{ "Name", { { "Name", "Wheel" } } },
+						{ "Tire", c_Tire }
+					} } },
+					{ { "ID", "00000000000000AD" }, { "Components", { { "Name", { { "Name", "Car" } } }, { "Vehicle", c_Trailer } } } },
+					{ { "ID", "00000000000000AE" }, { "Components", { { "Name", { { "Name", "Plain" } } } } } }
+				} }
+			} }
+		};
+	}
+
+	// The serialized components of the entity named `name` in a scene or snapshot document's entity list.
+	nlohmann::json FindComponents(const nlohmann::json& entities, std::string_view name)
+	{
+		for (const nlohmann::json& entity : entities)
+		{
+			if (entity["Components"].contains("Name") && entity["Components"]["Name"]["Name"] == name)
+				return entity["Components"];
+		}
+		return nullptr;
+	}
+
+	size_t CountWarnings(const std::vector<std::string>& warnings, std::string_view text)
+	{
+		return static_cast<size_t>(std::count_if(warnings.begin(), warnings.end(), [&](const std::string& warning) { return warning.find(text) != std::string::npos; }));
 	}
 }
 
@@ -250,5 +302,104 @@ TEST_SUITE("Scene.Serialization")
 		CHECK(components.contains("Name"));
 		CHECK_FALSE(components.contains("ID"));
 		CHECK_FALSE(components.contains("Relationship"));
+	}
+
+	TEST_CASE("Components no module of this build registers load with one warning each and save unchanged")
+	{
+		REQUIRE(ComponentRegistry::Find("Vehicle") == nullptr);
+		const nlohmann::json document = CreateGarageDocument();
+
+		Scene scene;
+		std::string error;
+		std::vector<std::string> warnings;
+		REQUIRE(SceneSerializer::Deserialize(scene, document, &error, &warnings));
+		// Once per name and load, however many entities have it.
+		CHECK(warnings.size() == 3);
+		CHECK(CountWarnings(warnings, "Unknown component 'Vehicle' (2 entities) kept unchanged") == 1);
+		CHECK(CountWarnings(warnings, "Unknown component 'Turret' (1 entity) kept unchanged") == 1);
+		CHECK(CountWarnings(warnings, "Unknown component 'Tire' (1 entity) kept unchanged") == 1);
+
+		// Registered components load as usual; the others are kept in the runtime-only blob.
+		Entity truck = scene.GetEntityByUUID(UUID(0xAB));
+		REQUIRE(truck);
+		CHECK(truck.GetTransform().Translation == glm::vec3(1.0f, 2.0f, 3.0f));
+		REQUIRE(truck.HasComponent<UnknownComponentsComponent>());
+		CHECK(truck.GetComponent<UnknownComponentsComponent>().Components == nlohmann::json { { "Vehicle", c_Vehicle }, { "Turret", c_Turret } });
+		CHECK_FALSE(scene.GetEntityByUUID(UUID(0xAE)).HasComponent<UnknownComponentsComponent>());
+		CHECK(ComponentRegistry::Find<UnknownComponentsComponent>() == nullptr);
+
+		// Saving writes them back unchanged, next to the registered components.
+		const nlohmann::json entities = SceneSerializer::Serialize(scene)["Scene"]["Entities"];
+		const nlohmann::json truckComponents = FindComponents(entities, "Truck");
+		CHECK(truckComponents["Vehicle"] == c_Vehicle);
+		CHECK(truckComponents["Turret"] == c_Turret);
+		CHECK(truckComponents.contains("Transform"));
+		CHECK(FindComponents(entities, "Wheel")["Tire"] == c_Tire);
+		CHECK(FindComponents(entities, "Car")["Vehicle"] == c_Trailer);
+		CHECK_FALSE(FindComponents(entities, "Plain").contains("Vehicle"));
+
+		// Through a file, and loaded again: the same document, and the same warnings (once per load).
+		const std::filesystem::path path = Tests::CreateTemporaryDirectory("UnknownComponents") / "Garage.stscene";
+		REQUIRE(SceneSerializer::SaveToFile(scene, path, &error));
+		const std::optional<std::string> text = FileSystem::ReadText(path);
+		REQUIRE(text);
+		const std::optional<nlohmann::json> saved = JsonUtils::Parse(*text);
+		REQUIRE(saved);
+		CHECK((*saved)["Scene"]["Entities"] == entities);
+		Scene reloaded;
+		warnings.clear();
+		REQUIRE(SceneSerializer::Deserialize(reloaded, *saved, &error, &warnings));
+		CHECK(warnings.size() == 3);
+		CHECK(SceneSerializer::Serialize(reloaded)["Scene"]["Entities"] == entities);
+	}
+
+	TEST_CASE("Kept components travel with scene copies, prefab snapshots and duplicates")
+	{
+		Scene scene;
+		REQUIRE(SceneSerializer::Deserialize(scene, CreateGarageDocument()));
+		Entity truck = scene.GetEntityByUUID(UUID(0xAB));
+		REQUIRE(truck);
+
+		// Scene::Copy (play mode).
+		Ref<Scene> source = CreateRef<Scene>();
+		REQUIRE(SceneSerializer::Deserialize(*source, CreateGarageDocument()));
+		const Ref<Scene> copy = Scene::Copy(source);
+		const nlohmann::json copied = SceneSerializer::Serialize(*copy)["Scene"]["Entities"];
+		CHECK(FindComponents(copied, "Truck")["Vehicle"] == c_Vehicle);
+		CHECK(FindComponents(copied, "Wheel")["Tire"] == c_Tire);
+		CHECK(copied == SceneSerializer::Serialize(*source)["Scene"]["Entities"]);
+
+		// A prefab of the truck, through its document, instantiated into another scene.
+		const Ref<Prefab> prefab = Prefab::CreateFromEntities(scene, { truck });
+		const nlohmann::json prefabDocument = prefab->Serialize();
+		CHECK(FindComponents(prefabDocument["Prefab"]["Entities"], "Truck")["Vehicle"] == c_Vehicle);
+		std::string error;
+		const Ref<Prefab> reloadedPrefab = Prefab::FromJson(prefabDocument, &error);
+		REQUIRE(reloadedPrefab);
+		Scene target;
+		const std::vector<Entity> instances = reloadedPrefab->Instantiate(target);
+		REQUIRE(instances.size() == 1);
+		REQUIRE(instances[0].HasComponent<UnknownComponentsComponent>());
+		CHECK(instances[0].GetComponent<UnknownComponentsComponent>().Components["Vehicle"] == c_Vehicle);
+		REQUIRE(instances[0].GetChildren().size() == 1);
+		CHECK(instances[0].GetChildren()[0].GetComponent<UnknownComponentsComponent>().Components["Tire"] == c_Tire);
+
+		// DuplicateEntity.
+		const Entity duplicate = scene.DuplicateEntity(truck);
+		REQUIRE(duplicate);
+		CHECK(duplicate.GetUUID() != truck.GetUUID());
+		REQUIRE(duplicate.HasComponent<UnknownComponentsComponent>());
+		CHECK(duplicate.GetComponent<UnknownComponentsComponent>().Components == truck.GetComponent<UnknownComponentsComponent>().Components);
+		REQUIRE(duplicate.GetChildren().size() == 1);
+		CHECK(duplicate.GetChildren()[0].GetComponent<UnknownComponentsComponent>().Components["Tire"] == c_Tire);
+
+		// Data the scene wrote itself can be restored without reporting what it keeps.
+		Scene restored;
+		EntityInstantiationOptions options;
+		options.ReportUnknownComponents = false;
+		std::vector<std::string> warnings;
+		SceneSerializer::DeserializeEntities(restored, SceneSerializer::SerializeEntities(scene, { truck }), options, &error, &warnings);
+		CHECK(warnings.empty());
+		CHECK(restored.GetEntityCount() == 2);
 	}
 }

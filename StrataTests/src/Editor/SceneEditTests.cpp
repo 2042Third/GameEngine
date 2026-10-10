@@ -6,6 +6,7 @@
 #include <Strata/Scene/Entity.h>
 #include <Strata/Scene/Scene.h>
 #include <Strata/Scene/SceneSerializer.h>
+#include <Strata/Scene/UnknownComponents.h>
 
 using namespace Strata;
 
@@ -166,5 +167,44 @@ TEST_SUITE("Editor.SceneEdit")
 		transaction.TrackCreated(created.GetUUID());
 		transaction.Rollback();
 		CHECK(Snapshot(scene) == original);
+	}
+
+	TEST_CASE("Undo snapshots carry the components this build does not register")
+	{
+		TestHierarchy hierarchy;
+		Scene& scene = hierarchy.SceneData;
+		const nlohmann::json vehicle = { { "Wheels", 6 }, { "Engine", { { "Power", 420.0 } } } };
+		hierarchy.Middle.AddComponent<UnknownComponentsComponent>(UnknownComponentsComponent { { { "Vehicle", vehicle } } });
+		hierarchy.Grandchild.AddComponent<UnknownComponentsComponent>(UnknownComponentsComponent { { { "Tire", { { "Pressure", 2.2 } } } } });
+		const nlohmann::json original = Snapshot(scene);
+
+		// Captured with the entity's other components.
+		const EntityState state = SceneEdit::CaptureEntity(scene, hierarchy.Middle.GetUUID());
+		CHECK(state.Components["Vehicle"] == vehicle);
+		CHECK(state.Components.contains("Transform"));
+
+		// Deleting the subtree and undoing it recreates the kept components.
+		UndoStack undo;
+		SceneEditTransaction deletion(scene, "Delete", {});
+		deletion.TrackSubtree(hierarchy.Middle.GetUUID());
+		scene.DestroyEntity(hierarchy.Middle);
+		REQUIRE(deletion.Commit(undo));
+		CHECK(undo.Undo());
+		CHECK(Snapshot(scene) == original);
+		Entity restored = scene.GetEntityByUUID(state.ID);
+		REQUIRE(restored);
+		CHECK(restored.GetComponent<UnknownComponentsComponent>().Components["Vehicle"] == vehicle);
+
+		// Restoring an existing entity puts back what it kept, and takes away what the state does not have.
+		SceneEditTransaction edit(scene, "Edit", { state.ID, hierarchy.First.GetUUID() });
+		restored.RemoveComponent<UnknownComponentsComponent>();
+		hierarchy.First.AddComponent<UnknownComponentsComponent>(UnknownComponentsComponent { { { "Stray", 1 } } });
+		REQUIRE(edit.Commit(undo));
+		CHECK_FALSE(restored.HasComponent<UnknownComponentsComponent>());
+		CHECK(undo.Undo());
+		CHECK(Snapshot(scene) == original);
+		REQUIRE(restored.HasComponent<UnknownComponentsComponent>());
+		CHECK(restored.GetComponent<UnknownComponentsComponent>().Components["Vehicle"] == vehicle);
+		CHECK_FALSE(hierarchy.First.HasComponent<UnknownComponentsComponent>());
 	}
 }

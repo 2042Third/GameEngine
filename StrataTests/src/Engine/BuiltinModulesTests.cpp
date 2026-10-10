@@ -9,7 +9,10 @@
 #include "Strata/Core/Process.h"
 #include "Strata/Engine/BuiltinModules.h"
 #include "Strata/Reflection/ComponentRegistry.h"
+#include "Strata/Scene/Entity.h"
+#include "Strata/Scene/SceneSerializer.h"
 #include "Strata/Scene/SceneSystem.h"
+#include "Strata/Scene/UnknownComponents.h"
 #include "TestHelpers.h"
 
 #include <algorithm>
@@ -119,7 +122,22 @@ TEST_SUITE("Engine.Modules")
 		CHECK(result.Output.find("registered: TestVehicle") != std::string::npos);
 		CHECK(result.Output.find("reloaded: Speed 12.50, Label Rover One") != std::string::npos);
 		CHECK(result.Output.find("late registration refused: Component 'Late' is not registered: the component registry is frozen") != std::string::npos);
-		CHECK(FileSystem::Exists(directory / "Garage.stscene"));
+
+		// This process lacks the game's component: its scene still loads, keeps the component and saves it unchanged.
+		REQUIRE(ComponentRegistry::Find("TestVehicle") == nullptr);
+		std::string error;
+		const Ref<Scene> scene = SceneSerializer::LoadFromFile(directory / "Garage.stscene", &error);
+		REQUIRE(scene);
+		Entity rover = scene->FindEntityByName("Rover");
+		REQUIRE(rover);
+		REQUIRE(rover.HasComponent<UnknownComponentsComponent>());
+		const nlohmann::json vehicle = rover.GetComponent<UnknownComponentsComponent>().Components.value("TestVehicle", nlohmann::json());
+		REQUIRE(vehicle.is_object());
+		CHECK(vehicle["Speed"] == 12.5);
+		CHECK(vehicle["Label"] == "Rover One");
+		const nlohmann::json saved = SceneSerializer::Serialize(*scene)["Scene"]["Entities"];
+		REQUIRE(saved.size() == 1);
+		CHECK(saved[0]["Components"]["TestVehicle"] == vehicle);
 	}
 
 	TEST_CASE("Using a registry before the modules are registered fails a verify naming Engine::RegisterBuiltinModules")

@@ -5,6 +5,7 @@
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/SceneSerializer.h"
+#include "Strata/Scene/UnknownComponents.h"
 
 namespace Strata
 {
@@ -41,6 +42,9 @@ namespace Strata
 
 			const WorldTransformComponent* worldTransform = source->m_Registry.try_get<WorldTransformComponent>(sourceEntity.GetHandle());
 			destination->m_Registry.emplace<WorldTransformComponent>(handle, worldTransform ? *worldTransform : WorldTransformComponent());
+			// Not registered (so not copied above), but part of the entity's data.
+			if (const UnknownComponentsComponent* unknown = source->m_Registry.try_get<UnknownComponentsComponent>(sourceEntity.GetHandle()))
+				destination->m_Registry.emplace<UnknownComponentsComponent>(handle, *unknown);
 			destination->m_EntityMap.emplace(sourceEntity.GetUUID(), handle);
 		}
 
