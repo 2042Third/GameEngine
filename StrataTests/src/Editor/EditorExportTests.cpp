@@ -10,10 +10,18 @@
 #include <Strata/Asset/AssetPack.h>
 #include <Strata/Asset/RuntimeAssetManager.h>
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/JobSystem.h>
+#include <Strata/Core/JsonUtils.h>
 #include <Strata/Project/GameManifest.h>
+#include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Scene/Components.h>
+#include <Strata/Scene/Scene.h>
+#include <Strata/Scene/SceneSerializer.h>
 
+#include <atomic>
 #include <chrono>
 #include <set>
+#include <span>
 #include <string>
 #include <thread>
 #include <vector>
@@ -196,6 +204,68 @@ TEST_SUITE("Editor.Export")
 		result = CompleteCommand(harness.Context, std::move(result));
 		CHECK_FALSE(result.Success);
 		CHECK(result.ErrorKind == EditorCommandError::Cancelled);
+	}
+
+	TEST_CASE("An export fails and names the scene when a scene saved meanwhile uses what the export did not plan for")
+	{
+		// One I/O thread, held busy: the export plans its pack at once, and writes it only once the thread is free, after the
+		// edits below.
+		ScopedJobSystem jobs(2, 1);
+		ExportHarness harness("EditorExportEdited");
+		harness.Run("scene.new");
+		harness.Run("entity.create", { { "name", "Box" }, { "components", { { "MeshRenderer", { { "Mesh", "0000000000000001" }, { "Material", "Materials/Used.stmat" } } } } } });
+		harness.Run("scene.saveAs", { { "path", "Scenes/Level2.stscene" } });
+		harness.Run("scene.open", { { "scene", "Scenes/Main.stscene" } });
+
+		std::atomic<bool> release = false;
+		std::atomic<bool> holding = false;
+		const JobHandle blocker = JobSystem::SubmitIO([&]()
+		{
+			holding = true;
+			while (!release)
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		});
+		while (!holding)
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		EditorCommandResult result = harness.Start({ { "directory", FileSystem::ToUTF8(harness.Directory / "Build") }, { "includeRuntime", false } });
+		REQUIRE(result.IsPending());
+		harness.Context.Update(Timestep(1.0f / 60.0f));
+		REQUIRE(harness.Context.GetGameExport()->GetState() == GameExportState::Packing); // Planned; its writing waits
+
+		// Meanwhile a new material, used by the other scene, which is saved. (Saved through the asset manager: opening the
+		// scene would load it through the I/O thread held busy.)
+		const std::string late = harness.Run("material.create", { { "path", "Materials/Late.stmat" } })["asset"].get<std::string>();
+		EditorAssetManager& assets = *harness.Context.GetAssetManager();
+		Scene level2("Level2");
+		for (const AssetHandle material : { assets.FindAssetByPath("Materials/Used.stmat"), *UUIDFromJson(late) })
+		{
+			MeshRendererComponent& renderer = level2.CreateEntity("Drawn").AddComponent<MeshRendererComponent>();
+			renderer.Mesh = UUID(1);
+			renderer.Material = material;
+		}
+		const std::string document = JsonUtils::Dump(SceneSerializer::Serialize(level2));
+		std::string error;
+		REQUIRE_MESSAGE(assets.SaveNativeAsset(assets.FindAssetByPath("Scenes/Level2.stscene"),
+			std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(document.data()), document.size()), false, &error), error);
+		release = true;
+		result = CompleteCommand(harness.Context, std::move(result));
+		blocker.Wait();
+
+		// The pack would hold the scene without the material: the export fails and says why, and leaves no game behind.
+		CHECK_FALSE(result.Success);
+		INFO(result.Error);
+		CHECK(result.Error.find("Scenes/Level2.stscene") != std::string::npos);
+		CHECK(result.Error.find("Materials/Late.stmat") != std::string::npos);
+		CHECK(result.Error.find("export again") != std::string::npos);
+		CHECK(harness.Context.GetGameExport()->GetState() == GameExportState::Failed);
+		CHECK_FALSE(FileSystem::Exists(harness.Directory / "Build" / "Export Game.stpak"));
+		CHECK_FALSE(FileSystem::Exists(harness.Directory / "Build" / "Export Game.stgame"));
+
+		// Exported again, the game ships the scene with what it uses.
+		const nlohmann::json value = harness.Run("project.export", { { "directory", FileSystem::ToUTF8(harness.Directory / "Build") }, { "includeRuntime", false } });
+		const Ref<RuntimeAssetManager> runtime = RuntimeAssetManager::Create(FileSystem::FromUTF8(value["assetPack"].get<std::string>()), &error);
+		REQUIRE_MESSAGE(runtime, error);
+		CHECK(runtime->FindAssetByPath("Materials/Late.stmat").IsValid());
 	}
 
 	TEST_CASE("Pruned exports keep what the scenes use and what Export.AlwaysInclude names")

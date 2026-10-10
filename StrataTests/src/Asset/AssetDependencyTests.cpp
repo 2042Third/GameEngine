@@ -374,6 +374,54 @@ TEST_SUITE("Asset.Dependencies")
 		CHECK(runtime->IsHandleValid(UUID(0x6004)));
 	}
 
+	TEST_CASE("A pack is never written from documents that changed what they reference since its plan")
+	{
+		NativeProject project("PackPlanChanged");
+		project.WriteMaterial("Materials/Used.stmat", 0x6101);
+		project.WriteMaterial("Materials/Late.stmat", 0x6102);
+		project.WriteScene("Scenes/Main.stscene", 0x6110, { { 0x0, 0x6101 } });
+		project.WriteScene("Scenes/Level2.stscene", 0x6111, { { 0x0, 0x6101 } });
+		Ref<EditorAssetManager> manager = project.Open();
+		AssetPackBuildOptions options;
+		options.StartScene = UUID(0x6110);
+		options.Prune = true; // Late.stmat is used by no scene: not planned
+		AssetPackBuildPlan plan;
+		std::string error;
+		REQUIRE_MESSAGE(manager->PlanAssetPack(options, plan, &error), error);
+		REQUIRE(plan.Excluded.size() == 1);
+
+		// Saved after the plan without new references (another material on the same asset): written as it is now.
+		const std::filesystem::path packPath = project.Root / "Build" / "Game.stpak";
+		MaterialProperties properties;
+		properties.Roughness = 0.25f;
+		REQUIRE(manager->SaveNativeAsset(UUID(0x6101), ToBytes(Material::Create(properties)->Serialize()), true));
+		REQUIRE_MESSAGE(manager->WriteAssetPack(packPath, plan, {}, nullptr, &error), error);
+		const Ref<RuntimeAssetManager> runtime = RuntimeAssetManager::Create(packPath, &error);
+		REQUIRE_MESSAGE(runtime, error);
+		const Ref<Material> written = std::static_pointer_cast<Material>(runtime->LoadAssetSync(UUID(0x6101)));
+		REQUIRE(written);
+		CHECK(written->GetProperties().Roughness == 0.25f);
+
+		// A scene saved after the plan with a reference the plan did not record would ship naming an asset the pack lacks:
+		// the write fails, naming the scene and what it references now, and leaves no pack behind.
+		Scene changed("Level2");
+		for (uint64_t material : { 0x6101, 0x6102 })
+			changed.CreateEntity("Drawn").AddComponent<MeshRendererComponent>().Material = UUID(material);
+		REQUIRE(manager->SaveNativeAsset(UUID(0x6111), ToBytes(SceneSerializer::Serialize(changed)), false));
+		const std::filesystem::path failedPath = project.Root / "Build" / "Failed.stpak";
+		CHECK_FALSE(manager->WriteAssetPack(failedPath, plan, {}, nullptr, &error));
+		INFO(error);
+		CHECK(error.find("Scenes/Level2.stscene") != std::string::npos);
+		CHECK(error.find("changed after the export started") != std::string::npos);
+		CHECK(error.find("Materials/Late.stmat") != std::string::npos);
+		CHECK_FALSE(FileSystem::Exists(failedPath));
+
+		// Planned again, it ships with what it uses.
+		REQUIRE_MESSAGE(manager->PlanAssetPack(options, plan, &error), error);
+		CHECK(plan.Excluded.empty());
+		REQUIRE_MESSAGE(manager->WriteAssetPack(failedPath, plan, {}, nullptr, &error), error);
+	}
+
 	TEST_CASE("Mounted packs replace the entries of earlier packs and reload what they replace")
 	{
 		const std::filesystem::path directory = CreateTemporaryDirectory("PackMount");

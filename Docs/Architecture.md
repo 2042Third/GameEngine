@@ -588,7 +588,10 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   are ordered by first use: the start scene's dependency closure breadth first, then each other scene's closure (by
   path), then the rest by path. With `Prune`, only the scenes' closures and what `AlwaysInclude` names (assets or folders,
   the project's `Export.AlwaysInclude`) with their closures ship; the plan lists what it left out. A plan is a snapshot:
-  the export writes it on an I/O thread while the editor goes on.
+  the export writes it on an I/O thread while the editor goes on, reading the files as they are then. So that a pack
+  never disagrees with its plan, `WriteAssetPack` scans every document it packs (scenes, prefabs, models, materials) and
+  fails, naming it, when one now references what the plan did not record for it (a scene saved meanwhile with a new
+  material would ship without it); other changes ship as they are read.
 - **Mounts** (`RuntimeAssetManager::Mount`). A game mounts its pack, then the manifest's `PatchPacks` in order: an entry of
   a later pack replaces the one with the same handle, and assets loaded from a replaced entry reload from the new one.
   Nothing is imported at runtime.
@@ -878,19 +881,20 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
 
 ## Export and the runtime
 
-`project.export` (`StrataEditor/src/Editor/GameExport.cpp`) exports without blocking a frame. `GameExport::Start` checks at
-once what it can and fails without side effects: a saved, stopped scene, a start scene (or the open scene), no running
-script build, a loaded script module that is still the file that was loaded (scenes or prefabs that use scripts need
-one), what `Export.AlwaysInclude` names (with `prune`), and a usable output directory (`CheckExportDirectory`: absolute,
-local, outside the project, not a file, no reserved device names; each refusal says what to do instead). It then waits
-for background imports, plans the pack on the main thread (`EditorAssetManager::PlanAssetPack`) and writes everything on
-an I/O thread, reporting its progress in bytes and stage (`GetProgress`, `GetStage`; `project.exportStatus`); one export
-runs at a time (`EditorContext::StartGameExport`), `project.cancelExport` stops it between blocks, and closing the
-project or the editor cancels it and waits for it. The command answers when it finished, with the files, the asset count,
-the excluded assets, the pack's size, the seconds it took and the editor's frame times meanwhile. The UI is the Export
-dialog (`UI/ExportDialog`: File > Export Game..., or the main toolbar's Export button, which shows the share done while
-an export runs): the command's fields, then a strata-band progress bar (`UI::StrataProgressBar`) and Open Folder. It
-writes:
+`project.export` (`StrataEditor/src/Editor/GameExport.cpp`) exports without blocking a frame. `GameExport::Start` checks
+at once what it can and fails without side effects: a saved, stopped scene, a start scene (or the open scene), no
+running script build, a loaded script module that is still the file that was loaded (scenes or prefabs that use scripts
+need one), what `Export.AlwaysInclude` names (with `prune`), and a usable output directory (`CheckExportDirectory`:
+absolute, local, outside the project, not a file, no reserved device names; each refusal says what to do instead). It
+then waits for background imports, plans the pack on the main thread (`EditorAssetManager::PlanAssetPack`) and writes
+everything on an I/O thread (failing, with the document named, when a document saved meanwhile references what the plan
+does not hold), reporting its progress in bytes and stage (`GetProgress`, `GetStage`; `project.exportStatus`); one
+export runs at a time (`EditorContext::StartGameExport`), `project.cancelExport` stops it between blocks, and closing
+the project or the editor cancels it and waits for it. The command answers when it finished, with the files, the asset
+count, the excluded assets, the pack's size, the seconds it took and the editor's frame times meanwhile. The UI is the
+Export dialog (`UI/ExportDialog`: File > Export Game..., or the main toolbar's Export button, which shows the share done
+while an export runs): the command's fields, then a strata-band progress bar (`UI::StrataProgressBar`) and Open Folder.
+It writes:
 
 | File | Source |
 | --- | --- |

@@ -643,11 +643,13 @@ and `AudioSystem`, the built-in "Audio" scene system.
   ordered by first use; `prune` leaves out what neither the scenes nor `Export.AlwaysInclude` use and lists it in
   `excludedAssets`), the script module, the manifest (`<Game>.stgame`, start scene, script module and window settings)
   and the runtime executable renamed after the game. It checks what it can before it starts (a usable directory outside
-  the project, among others) and fails at once otherwise. `project.exportStatus` reports its progress and stage,
-  `project.cancelExport` stops it, `project.setExportSettings {alwaysInclude}` names the assets and folders scripts load
-  by path (saved in the project file), and closing the project cancels a running export. The UI is the Export dialog
-  (`UI/ExportDialog`: File > Export Game..., the toolbar's Export button). CTest exports a small game
-  (`StrataEditor --no-gpu`) and runs it headless; `StrataEditor.Tetris` also exports Tetris pruned and runs it.
+  the project, among others) and fails at once otherwise; the editor stays editable meanwhile, and a document saved
+  during the export that references what its plan did not hold fails it, naming the document (export again).
+  `project.exportStatus` reports its progress and stage, `project.cancelExport` stops it, `project.setExportSettings
+  {alwaysInclude}` names the assets and folders scripts load by path (saved in the project file), and closing the
+  project cancels a running export. The UI is the Export dialog (`UI/ExportDialog`: File > Export Game..., the toolbar's
+  Export button). CTest exports a small game (`StrataEditor --no-gpu`) and runs it headless; `StrataEditor.Tetris` also
+  exports Tetris pruned and runs it.
 - A running game asks its owner to quit or to switch scenes through `Scene::RequestQuit`/`RequestSceneLoad` (scripts: the
   SDK's `Game`), honored after each update: the editor stops play mode, or replaces the running scene (a paused game stays
   paused, with its pending steps; `play.stop` still returns to the edited scene); `GameRuntime` ends the game

@@ -244,7 +244,8 @@ namespace Strata
 
 		registry.Register({ "project.export", "Exports the project as a playable game (runtime executable, asset pack, script module, manifest) into a "
 			"directory outside the project, in the background: the editor keeps running, and the command answers when the export finished (it fails at once "
-			"when it cannot start). The pack is ordered by first use from the start scene; with prune it holds only what the scenes use and what the "
+			"when it cannot start, and fails naming the document when a scene, prefab or material saved meanwhile references what the export did not plan "
+			"for: export again). The pack is ordered by first use from the start scene; with prune it holds only what the scenes use and what the "
 			"project's Export.AlwaysInclude names (project.setExportSettings), and excludedAssets lists what it left out. The game runs the script module "
 			"the editor has loaded (build it first with script.build). Returns the files, assetCount, the pack's size, seconds and frameTimes (the editor's "
 			"frames while it exported, like editor.wait's).",

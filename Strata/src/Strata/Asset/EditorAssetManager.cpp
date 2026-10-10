@@ -12,6 +12,8 @@
 #include "Strata/Reflection/PropertyJson.h"
 
 #include <cctype>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace Strata
 {
@@ -1851,9 +1853,44 @@ namespace Strata
 	bool EditorAssetManager::WriteAssetPack(const std::filesystem::path& packPath, const AssetPackBuildPlan& plan, const AssetPackWriteOptions& options,
 		AssetPackWriteStats* outStats, std::string* outError)
 	{
-		return AssetPackWriter::Write(packPath, plan.Assets, [this](const AssetMetadata& metadata, std::vector<uint8_t>& outData, std::string* outReadError)
+		// The plan is a snapshot, the files are not: the editor saves documents and imports files while a pack is written on
+		// another thread. A document whose bytes reference what the plan did not record would ship naming an asset the pack
+		// may lack, with a dependency table that does not match it: the write fails instead, naming the document. (Changes
+		// that keep what a document references, and changes of other stored forms, ship as they are read.)
+		std::unordered_map<AssetHandle, const AssetPackSource*> planned;
+		for (const AssetPackSource& source : plan.Assets)
+			planned.emplace(source.Metadata.Handle, &source);
+		auto describe = [this](AssetHandle handle)
 		{
-			return ReadAssetData(metadata, outData, outReadError);
+			const std::optional<AssetMetadata> metadata = GetMetadata(handle);
+			return metadata && !metadata->Path.empty() ? fmt::format("'{}'", metadata->Path) : fmt::format("asset {}", handle.ToString());
+		};
+		return AssetPackWriter::Write(packPath, plan.Assets, [this, &planned, &describe](const AssetMetadata& metadata, std::vector<uint8_t>& outData,
+			std::string* outReadError)
+		{
+			if (!ReadAssetData(metadata, outData, outReadError))
+				return false;
+			auto fail = [outReadError](std::string message)
+			{
+				if (outReadError)
+					*outReadError = std::move(message);
+				return false;
+			};
+			const auto source = planned.find(metadata.Handle);
+			if (!AssetDependencies::CanReference(metadata.Type) || source == planned.end())
+				return true;
+
+			std::vector<AssetHandle> references;
+			std::string scanError;
+			if (!AssetDependencies::Scan(metadata.Type, outData, references, &scanError))
+				return fail(fmt::format("it changed after the export started and cannot be read ({}); fix it and export again", scanError));
+			const std::unordered_set<AssetHandle> recorded(source->second->Dependencies.begin(), source->second->Dependencies.end());
+			for (AssetHandle reference : references)
+			{
+				if (!recorded.contains(reference))
+					return fail(fmt::format("it changed after the export started and now references {}, which the export did not plan for; export again", describe(reference)));
+			}
+			return true;
 		}, options, outStats, outError);
 	}
 

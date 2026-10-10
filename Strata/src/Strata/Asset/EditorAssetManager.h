@@ -115,8 +115,10 @@ namespace Strata
 		// write on another thread. Main thread; finish imports first (WaitForImports, or until HasPendingImports is false).
 		// Fails for AlwaysInclude entries that name no asset of the project (with Prune).
 		bool PlanAssetPack(const AssetPackBuildOptions& options, AssetPackBuildPlan& outPlan, std::string* outError = nullptr) const;
-		// Writes a planned pack, reading each asset's stored form like loads do. Fails if an asset failed to import. Any
-		// thread; the manager must outlive the call.
+		// Writes a planned pack, reading each asset's stored form like loads do. Fails if an asset failed to import, and when
+		// a document (scene, prefab, model, material) changed since the plan to reference what the plan did not record for
+		// it (naming the document), so that a pack never disagrees with its plan. Any thread; the manager must outlive the
+		// call.
 		bool WriteAssetPack(const std::filesystem::path& packPath, const AssetPackBuildPlan& plan, const AssetPackWriteOptions& options = {},
 			AssetPackWriteStats* outStats = nullptr, std::string* outError = nullptr);
 		// Waits for imports, plans and writes, blocking (tools and tests; the editor's export plans and writes on an I/O
