@@ -100,7 +100,7 @@ add_library(ImGuizmo STATIC "${CMAKE_CURRENT_SOURCE_DIR}/ImGuizmo/src/ImGuizmo.c
 target_include_directories(ImGuizmo SYSTEM PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/ImGuizmo/src")
 target_link_libraries(ImGuizmo PUBLIC imgui)
 
-# --- stb (image, image_write, image_resize2, truetype, rect_pack) ----------------------------------
+# --- stb (image, image_write, image_resize2, dxt, truetype, rect_pack) -----------------------------
 add_library(stb STATIC "${STRATA_VENDOR_IMPLEMENTATIONS}/StbImplementation.c")
 target_include_directories(stb SYSTEM PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/stb")
 

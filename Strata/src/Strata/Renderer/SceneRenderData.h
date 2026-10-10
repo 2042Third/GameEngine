@@ -25,6 +25,10 @@ namespace Strata
 
 		constexpr uint32_t c_SamplerCount = 6; // TextureFilter (2) x TextureWrap (3)
 
+		// Material texture slots (MaterialData's maps): the bindless slot in bits 0-23, the sampler index in bits 24-30 and
+		// this bit for one-channel textures that stand for gray (TextureSpecification::Grayscale), sampled as (r, r, r, 1).
+		constexpr uint32_t c_TextureSlotGrayscale = 1u << 31;
+
 		constexpr uint32_t c_MaxCascades = 4;
 
 		struct FrameConstants

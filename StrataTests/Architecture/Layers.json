@@ -26,7 +26,7 @@
 			"Name": "Asset",
 			"Notes": "Asset registry, loading, packs and built-in asset handles, without the importers (AssetPipeline).",
 			"Paths": [ "Strata/Asset/**" ],
-			"Exclude": [ "Strata/Asset/EditorAssetManager.*", "Strata/Asset/AssetImporter.*", "Strata/Asset/AssetImporters.cpp", "Strata/Asset/GltfImporter.*", "Strata/Asset/TextureImporter.*" ],
+			"Exclude": [ "Strata/Asset/EditorAssetManager.*", "Strata/Asset/AssetImporter.*", "Strata/Asset/AssetImporters.cpp", "Strata/Asset/GltfImporter.*", "Strata/Asset/TextureImporter.*", "Strata/Asset/TextureCooker.*" ],
 			"MayInclude": [ "Core" ]
 		},
 		{
@@ -85,7 +85,7 @@
 		{
 			"Name": "AssetPipeline",
 			"Notes": "Importers and the editor's asset database (tooling, never in shipped games).",
-			"Paths": [ "Strata/Asset/EditorAssetManager.*", "Strata/Asset/AssetImporter.*", "Strata/Asset/AssetImporters.cpp", "Strata/Asset/GltfImporter.*", "Strata/Asset/TextureImporter.*" ],
+			"Paths": [ "Strata/Asset/EditorAssetManager.*", "Strata/Asset/AssetImporter.*", "Strata/Asset/AssetImporters.cpp", "Strata/Asset/GltfImporter.*", "Strata/Asset/TextureImporter.*", "Strata/Asset/TextureCooker.*" ],
 			"MayInclude": [ "Core", "Asset", "Reflection", "Scene", "Renderer", "Audio" ]
 		},
 		{

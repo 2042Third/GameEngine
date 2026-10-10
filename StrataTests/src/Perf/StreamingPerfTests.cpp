@@ -23,14 +23,16 @@ using namespace Strata::Tests;
 namespace
 {
 
-	// Megabytes here are decimal, like the streaming audit's numbers (the stress project's textures are 447.4 MB of
-	// RGBA8, the largest 89.5 MB).
+	// Megabytes here are decimal, like the streaming audit's numbers (the stress project's textures cook to 55.9 MB of
+	// BC1, the largest 11.2 MB; they were 447.4 MB and 89.5 MB of RGBA8 before texture cooking v2).
 	constexpr uint64_t c_MB = 1000 * 1000;
 	constexpr double c_MBDouble = 1000.0 * 1000.0;
 
-	// The acceptance criteria of the residency work, for the full-size stress project.
-	constexpr uint64_t c_TextureBudget = 128 * c_MB;
-	constexpr uint64_t c_MaxPeakPrivateBytes = 750 * c_MB; // The exported runtime peaked at 1034-1055 MiB before
+	// The acceptance criteria of the residency and texture cooking work, for the full-size stress project. The texture
+	// budget holds the same share of the textures as the residency work's 128 MB held of their RGBA8 form (about 29%, 1.4
+	// times the largest), so the sweep keeps evicting.
+	constexpr uint64_t c_TextureBudget = 16 * c_MB;
+	constexpr uint64_t c_MaxPeakPrivateBytes = 650 * c_MB; // The exported runtime peaked at 1034-1055 MiB with RGBA8 textures
 	constexpr float c_MaxFinalizeMs = 8.0f;
 	// What a camera stop shows has arrived within this many frames at rest (FramesHolding below it).
 	constexpr uint32_t c_MaxFramesToSettle = 60;
@@ -99,8 +101,9 @@ TEST_SUITE("PerfGPU.Streaming")
 			REQUIRE_MESSAGE(BuildStressPack(*project, directory / "Stress.stpak", error), error);
 			MESSAGE("Stress project written in ", writeSeconds, " s, imported and packed in ", ElapsedSeconds(start) - writeSeconds, " s");
 		}
-		CHECK(project->TextureBytes == 447392404);       // 16 x 2048^2 + 1 x 4096^2 RGBA8 with mips: 447.4 MB
-		CHECK(project->LargestTextureBytes == 89478484); // 89.5 MB
+		REQUIRE(GetStressTextureFormat() == TextureFormat::BC1SRGB);
+		CHECK(project->TextureBytes == 55924280);        // 16 x 2048^2 + 1 x 4096^2 BC1 with mips: 55.9 MB
+		CHECK(project->LargestTextureBytes == 11184824); // 11.2 MB
 
 		StreamingSweepSettings settings;
 		settings.Pack = directory / "Stress.stpak";
@@ -152,7 +155,7 @@ TEST_SUITE("PerfGPU.Streaming")
 			maxFinalizeMs.push_back(result.MaxFinalizeMs);
 		}
 
-		// The process stays below 750 MB of private memory.
+		// The process stays below 650 MB of private memory.
 		CHECK(bestPeakPrivateBytes <= c_MaxPeakPrivateBytes);
 
 		Perf::CheckBudget("PerfGPU.Streaming.PeakPrivateMemory", static_cast<double>(bestPeakPrivateBytes) / c_MBDouble);

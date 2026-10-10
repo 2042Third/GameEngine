@@ -42,8 +42,9 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
   `StrataTests.GPU` (label `gpu`), the perf tests `StrataTests.Perf` and `StrataTests.PerfGPU` (suites `Perf.*`
   and `PerfGPU.*`, label `perf`, Release and Dist only, after `StrataTests.PerfResults.Clean`; budgets and the
   ratchet rule in AGENTS.md, "Testing"; `PerfGPU.Editor` writes a 100,000- and a 1,000,000-entity scene to a temporary
-  project and opens a maximized StrataEditor on them for about 20 seconds; `PerfGPU.Streaming` writes and imports a
-  447 MB stress project and runs its camera sweep three times in helper processes, about 40 s), `StrataEditor.Smoke`
+  project and opens a maximized StrataEditor on them for about 20 seconds; `PerfGPU.Streaming` writes and imports the
+  stress project (17 large textures, 55.9 MB once block-compressed) and runs its camera sweep three times in helper
+  processes, about 40 s), `StrataEditor.Smoke`
   (the real editor in a window with `StrataTests/Editor/SmokeCommands.json.in`, configured into the build tree, label
   `gpu`; it creates a project in `build/<preset>/StrataTests/SmokeProject` (emptied first by `StrataEditor.SmokeClean`),
   so the editor rather than the launcher shows, captures the viewport to `SmokeViewport.png`/`SmokeSceneCamera.png` in

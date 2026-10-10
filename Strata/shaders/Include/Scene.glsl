@@ -20,6 +20,10 @@
 
 #define ST_SAMPLER_COUNT 6
 
+// Material texture slots: bindless slot in bits 0-23, sampler index in bits 24-30, and this bit for one-channel textures
+// that stand for gray (sampled as (r, r, r, 1)).
+#define ST_TEXTURE_SLOT_GRAYSCALE 0x80000000u
+
 struct FrameConstants
 {
 	mat4 View;
@@ -141,8 +145,9 @@ layout(set = 1, binding = 0) uniform texture2D u_Textures[];
 vec4 SampleMaterialTexture(uint packedSlot, vec2 uv)
 {
 	uint slot = packedSlot & 0xFFFFFFu;
-	uint samplerIndex = min(packedSlot >> 24, uint(ST_SAMPLER_COUNT - 1));
-	return texture(sampler2D(u_Textures[nonuniformEXT(slot)], u_Samplers[nonuniformEXT(samplerIndex)]), uv);
+	uint samplerIndex = min((packedSlot >> 24) & 0x7Fu, uint(ST_SAMPLER_COUNT - 1));
+	vec4 value = texture(sampler2D(u_Textures[nonuniformEXT(slot)], u_Samplers[nonuniformEXT(samplerIndex)]), uv);
+	return (packedSlot & ST_TEXTURE_SLOT_GRAYSCALE) != 0u ? vec4(value.rrr, 1.0) : value;
 }
 
 vec2 TransformUV(MaterialData material, vec2 uv)

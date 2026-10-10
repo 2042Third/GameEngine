@@ -76,6 +76,39 @@ namespace
 		gpu.GetNvrhiDevice()->runGarbageCollection();
 	}
 
+	// The blocks of a level of a block-compressed GPU texture, copied through a staging texture whose rows are whole blocks.
+	std::vector<uint8_t> ReadBlocks(GPUContext& gpu, nvrhi::ITexture* texture, uint32_t level)
+	{
+		const nvrhi::TextureDesc& textureDesc = texture->getDesc();
+		const nvrhi::FormatInfo& format = nvrhi::getFormatInfo(textureDesc.format);
+		const uint32_t width = std::max(1u, textureDesc.width >> level);
+		const uint32_t height = std::max(1u, textureDesc.height >> level);
+		const uint32_t blocksX = (width + format.blockSize - 1) / format.blockSize;
+		const uint32_t blocksY = (height + format.blockSize - 1) / format.blockSize;
+		nvrhi::TextureDesc stagingDesc;
+		stagingDesc.width = blocksX * format.blockSize;
+		stagingDesc.height = blocksY * format.blockSize;
+		stagingDesc.format = textureDesc.format;
+		stagingDesc.debugName = "BlockReadback";
+		nvrhi::StagingTextureHandle staging = gpu.GetNvrhiDevice()->createStagingTexture(stagingDesc, nvrhi::CpuAccessMode::Read);
+		REQUIRE(staging);
+		nvrhi::CommandListHandle commandList = gpu.GetNvrhiDevice()->createCommandList();
+		commandList->open();
+		commandList->copyTexture(staging, nvrhi::TextureSlice().setSize(width, height, 1), texture, nvrhi::TextureSlice().setMipLevel(level).setSize(width, height, 1));
+		commandList->close();
+		REQUIRE(gpu.ExecuteAndWait(commandList));
+
+		size_t rowPitch = 0;
+		const auto* mapped = static_cast<const uint8_t*>(gpu.GetNvrhiDevice()->mapStagingTexture(staging, nvrhi::TextureSlice(), nvrhi::CpuAccessMode::Read, &rowPitch));
+		REQUIRE(mapped);
+		const size_t blockRowBytes = static_cast<size_t>(blocksX) * format.bytesPerBlock;
+		std::vector<uint8_t> blocks(blockRowBytes * blocksY);
+		for (uint32_t blockRow = 0; blockRow < blocksY; blockRow++)
+			std::memcpy(blocks.data() + blockRow * blockRowBytes, mapped + blockRow * rowPitch, blockRowBytes);
+		gpu.GetNvrhiDevice()->unmapStagingTexture(staging);
+		return blocks;
+	}
+
 	// Copies a GPU buffer into CPU memory.
 	std::vector<uint8_t> ReadBuffer(GPUContext& gpu, nvrhi::IBuffer* buffer, size_t size)
 	{
@@ -248,6 +281,73 @@ TEST_SUITE("GPU.Assets.Uploads")
 		ReadbackImage unbudgetedLevel0;
 		REQUIRE(Renderer::ReadTexture(unbudgeted->GetGPUTexture(), unbudgetedLevel0, 0));
 		CHECK(GetPixelRGBA8(unbudgetedLevel0, 2047, 1023) == GetPatternTexel(2047, 1023, 0));
+
+		texture.reset();
+		unbudgeted.reset();
+		SettleDevice(gpu);
+		CHECK(bindless.GetAllocatedCount() == slotsBefore);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Block-compressed textures upload in bands of whole block rows")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SettleDevice(gpu);
+		BindlessTextureTable& bindless = Renderer::GetBindlessTextures();
+		const uint32_t slotsBefore = bindless.GetAllocatedCount();
+
+		// 2050 x 2050 BC7: level 0 is 513 x 513 blocks (4.2 MB), one band of 511 block rows and one of the last two, which end
+		// inside their blocks; the rest of the chain (1.4 MB, sizes like 1025 and 3 that are not whole blocks) is one more
+		// step through one staging texture.
+		std::vector<TextureMip> mips;
+		for (uint32_t level = 0; level < TextureUtils::CalculateMipCount(2050, 2050); level++)
+		{
+			TextureMip mip;
+			mip.Width = std::max(1u, 2050u >> level);
+			mip.Height = mip.Width;
+			mip.Data.resize(static_cast<size_t>(GetMipByteSize(TextureFormat::BC7, mip.Width, mip.Height)));
+			for (size_t index = 0; index < mip.Data.size(); index++)
+				mip.Data[index] = static_cast<uint8_t>(index * 13 + index / 4096 + level * 29);
+			mips.push_back(std::move(mip));
+		}
+		TextureSpecification specification;
+		specification.Format = TextureFormat::BC7SRGB;
+		specification.DebugName = "BandedBlocks";
+		const Ref<Texture> source = Texture::Create(specification, mips);
+		REQUIRE(source);
+		const uint64_t chainBytes = source->GetMemoryUsage().Cpu;
+		const uint64_t level0Bytes = GetMipByteSize(TextureFormat::BC7, 2050, 2050);
+		const uint64_t firstBandBytes = 511ull * 513 * 16;
+		Ref<Texture> texture = Texture::Deserialize(source->Serialize());
+		REQUIRE(texture);
+		// Residency counts the block-compressed chain.
+		CHECK(texture->GetFinalizedMemoryUsage() == AssetMemoryUsage { 0, chainBytes, 0 });
+
+		uint64_t uploaded = 0;
+		CHECK(FinalizeOnce(gpu, *texture, 1, uploaded) == AssetFinalizeResult::Pending);
+		CHECK(uploaded == firstBandBytes);
+		CHECK(FinalizeOnce(gpu, *texture, 1, uploaded) == AssetFinalizeResult::Pending);
+		CHECK(uploaded == level0Bytes - firstBandBytes);
+		CHECK(FinalizeOnce(gpu, *texture, 1, uploaded) == AssetFinalizeResult::Done);
+		CHECK(uploaded == chainBytes - level0Bytes);
+		CHECK(texture->GetBindlessSlot() != BindlessTextureTable::c_InvalidSlot);
+		CHECK(texture->GetMemoryUsage() == AssetMemoryUsage { 0, chainBytes, 0 });
+
+		// Every block arrived where it belongs, in every level.
+		for (uint32_t level = 0; level < source->GetMipCount(); level++)
+		{
+			CAPTURE(level);
+			CHECK(ReadBlocks(gpu, texture->GetGPUTexture(), level) == mips[level].Data);
+		}
+
+		// Without a budget the whole chain goes in one call.
+		Ref<Texture> unbudgeted = Texture::Create(specification, mips);
+		REQUIRE(unbudgeted);
+		CHECK(FinalizeOnce(gpu, *unbudgeted, std::numeric_limits<uint64_t>::max(), uploaded) == AssetFinalizeResult::Done);
+		CHECK(uploaded == chainBytes);
+		CHECK(ReadBlocks(gpu, unbudgeted->GetGPUTexture(), 0) == mips[0].Data);
+		CHECK(ReadBlocks(gpu, unbudgeted->GetGPUTexture(), 10) == mips[10].Data);
 
 		texture.reset();
 		unbudgeted.reset();

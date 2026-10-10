@@ -54,6 +54,8 @@ namespace Strata
 			bool ImportCameras = true;
 			bool ImportLights = true;
 			uint32_t MaxTextureSize = 0;
+			TextureCompression Compression = TextureCompression::Auto; // Of the model's textures
+			TextureQuality Quality = TextureQuality::High;
 		};
 
 		ImportSettings ReadSettings(const nlohmann::json& json, std::vector<std::string>& warnings)
@@ -71,6 +73,22 @@ namespace Strata
 			settings.ImportCameras = JsonUtils::GetBool(json, "ImportCameras", settings.ImportCameras);
 			settings.ImportLights = JsonUtils::GetBool(json, "ImportLights", settings.ImportLights);
 			settings.MaxTextureSize = static_cast<uint32_t>(std::min<uint64_t>(JsonUtils::GetUInt(json, "MaxTextureSize", 0), TextureImporter::c_MaxImageDimension));
+			if (const nlohmann::json* compression = JsonUtils::Find(json, "TextureCompression"))
+			{
+				const std::optional<TextureCompression> value = compression->is_string() ? TextureCompressionFromString(compression->get<std::string>()) : std::nullopt;
+				if (value)
+					settings.Compression = *value;
+				else
+					warnings.push_back("TextureCompression must be Auto or Uncompressed; using Auto");
+			}
+			if (const nlohmann::json* quality = JsonUtils::Find(json, "TextureQuality"))
+			{
+				const std::optional<TextureQuality> value = quality->is_string() ? TextureQualityFromString(quality->get<std::string>()) : std::nullopt;
+				if (value)
+					settings.Quality = *value;
+				else
+					warnings.push_back("TextureQuality must be High or Fast; using High");
+			}
 			return settings;
 		}
 
@@ -524,6 +542,8 @@ namespace Strata
 				TextureImportSettings settings;
 				settings.Usage = usage;
 				settings.MaxSize = m_Settings.MaxTextureSize;
+				settings.Compression = m_Settings.Compression;
+				settings.Quality = m_Settings.Quality;
 				if (texture.sampler)
 				{
 					settings.Wrap = ToTextureWrap(texture.sampler->wrap_s);
@@ -1116,7 +1136,9 @@ namespace Strata
 			{ "ImportMaterials", true },
 			{ "ImportCameras", true },
 			{ "ImportLights", true },
-			{ "MaxTextureSize", 0 }
+			{ "MaxTextureSize", 0 },
+			{ "TextureCompression", TextureCompressionToString(TextureCompression::Auto) },
+			{ "TextureQuality", TextureQualityToString(TextureQuality::High) }
 		};
 	}
 

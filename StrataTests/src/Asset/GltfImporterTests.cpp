@@ -383,8 +383,8 @@ TEST_SUITE("Asset.Gltf")
 		Ref<Texture> data = Texture::Deserialize(dataTexture->Data);
 		REQUIRE(color);
 		REQUIRE(data);
-		CHECK(color->GetSpecification().Format == TextureFormat::RGBA8SRGB);
-		CHECK(data->GetSpecification().Format == TextureFormat::RGBA8);
+		CHECK(color->GetSpecification().Format == TextureFormat::BC1SRGB);
+		CHECK(data->GetSpecification().Format == TextureFormat::BC1);
 		CHECK(color->GetSpecification().Wrap == TextureWrap::Clamp);
 		CHECK(color->GetSpecification().Filter == TextureFilter::Nearest);
 		CHECK(color->GetWidth() == 4);

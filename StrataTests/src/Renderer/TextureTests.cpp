@@ -79,6 +79,82 @@ TEST_SUITE("Renderer.Texture")
 		TextureSpecification noFormat;
 		noFormat.Format = TextureFormat::None;
 		CHECK_FALSE(Texture::Create(noFormat, { CreateMip(1, 1, 4) }, &error));
+
+		// Block-compressed levels hold whole 4x4 blocks: a 5x5 BC1 level is 2x2 blocks of 8 bytes, its 2x2 mip one block.
+		TextureSpecification bc1;
+		bc1.Format = TextureFormat::BC1;
+		CHECK(Texture::Create(bc1, { CreateMip(5, 5, 0), CreateMip(2, 2, 0) }, &error) == nullptr);
+		TextureMip blocks5x5 = CreateMip(5, 5, 0);
+		blocks5x5.Data.resize(32);
+		TextureMip block2x2 = CreateMip(2, 2, 0);
+		block2x2.Data.resize(8);
+		TextureMip block1x1 = CreateMip(1, 1, 0);
+		block1x1.Data.resize(8);
+		const Ref<Texture> compressed = Texture::Create(bc1, { blocks5x5, block2x2, block1x1 }, &error);
+		REQUIRE_MESSAGE(compressed, error);
+		CHECK(compressed->GetMemoryUsage().Cpu == 48);
+		blocks5x5.Data.resize(25 * 4);
+		CHECK_FALSE(Texture::Create(bc1, { blocks5x5 }, &error));
+
+		// Only one-channel formats can stand for gray.
+		TextureSpecification grayscale;
+		grayscale.Format = TextureFormat::R8;
+		grayscale.Grayscale = true;
+		CHECK(Texture::Create(grayscale, { CreateMip(2, 2, 1) }, &error));
+		grayscale.Format = TextureFormat::RGBA8;
+		CHECK_FALSE(Texture::Create(grayscale, { CreateMip(2, 2, 4) }, &error));
+	}
+
+	TEST_CASE("Block-compressed textures decompress for devices without block compression")
+	{
+		// One BC1 block (red, blue and their thirds per row) and a BC4 block of one value.
+		TextureSpecification specification;
+		specification.Format = TextureFormat::BC1SRGB;
+		specification.Filter = TextureFilter::Nearest;
+		specification.DebugName = "Compressed";
+		TextureMip level0;
+		level0.Width = 4;
+		level0.Height = 2;
+		level0.Data = { 0x00, 0xF8, 0x1F, 0x00, 0xE4, 0xE4, 0xE4, 0xE4 };
+		TextureMip level1;
+		level1.Width = 2;
+		level1.Height = 1;
+		level1.Data = { 0x00, 0xF8, 0x1F, 0x00, 0x00, 0x00, 0x00, 0x00 };
+		TextureMip level2 = level1;
+		level2.Width = 1;
+		const Ref<Texture> texture = Texture::Create(specification, { level0, level1, level2 });
+		REQUIRE(texture);
+
+		std::string error;
+		const Ref<Texture> decoded = texture->Decompress(&error);
+		REQUIRE_MESSAGE(decoded, error);
+		CHECK(decoded->GetSpecification().Format == TextureFormat::RGBA8SRGB);
+		CHECK(decoded->GetSpecification().Filter == TextureFilter::Nearest);
+		CHECK(decoded->GetSpecification().DebugName == "Compressed");
+		CHECK(decoded->GetMipCount() == 3);
+		// The decoded size is what the texture holds now.
+		CHECK(decoded->GetMemoryUsage().Cpu == (4 * 2 + 2 * 1 + 1) * 4);
+		const std::span<const uint8_t> pixels = decoded->GetMipData(0);
+		CHECK(std::vector<uint8_t>(pixels.begin(), pixels.begin() + 16) == std::vector<uint8_t> { 255, 0, 0, 255, 0, 0, 255, 255, 170, 0, 85, 255, 85, 0, 170, 255 });
+		CHECK(decoded->GetMipData(2)[0] == 255);
+
+		// BC4 decodes to one channel and stays grayscale.
+		TextureSpecification gray;
+		gray.Format = TextureFormat::BC4;
+		gray.Grayscale = true;
+		TextureMip grayLevel;
+		grayLevel.Width = 1;
+		grayLevel.Height = 1;
+		grayLevel.Data = { 77, 77, 0, 0, 0, 0, 0, 0 };
+		const Ref<Texture> grayDecoded = Texture::Create(gray, { grayLevel })->Decompress(&error);
+		REQUIRE_MESSAGE(grayDecoded, error);
+		CHECK(grayDecoded->GetSpecification().Format == TextureFormat::R8);
+		CHECK(grayDecoded->GetSpecification().Grayscale);
+		CHECK(grayDecoded->GetMipData(0)[0] == 77);
+
+		// Only block-compressed textures decompress.
+		CHECK_FALSE(decoded->Decompress(&error));
+		CHECK(error.find("not block-compressed") != std::string::npos);
 	}
 
 	TEST_CASE("Mip generation filters in the right color space")
@@ -176,7 +252,7 @@ TEST_SUITE("Renderer.Texture")
 		CHECK(takenOver->Serialize() == cooked);
 		// Sizes that do not match the levels' dimensions are rejected like in copied data.
 		std::vector<uint8_t> wrongSize = cooked;
-		const size_t firstMipSizeOffset = 4 * 6 + 4 + std::string("Checker").size() + 8;
+		const size_t firstMipSizeOffset = 40 + 16; // The header, then level 0's width, height and offset
 		REQUIRE(wrongSize.size() > firstMipSizeOffset + 8);
 		wrongSize[firstMipSizeOffset] = static_cast<uint8_t>(wrongSize[firstMipSizeOffset] - 4);
 		CHECK_FALSE(Texture::Deserialize(std::span<const uint8_t>(wrongSize)));
@@ -195,16 +271,26 @@ TEST_SUITE("Renderer.Texture")
 		CHECK(texture->GetWidth() == 4);
 		CHECK(texture->GetHeight() == 2);
 		CHECK(texture->GetMipCount() == 3);
-		CHECK(texture->GetSpecification().Format == TextureFormat::RGBA8SRGB);
-		const std::vector<uint8_t>& top = texture->GetMips()[0].Data;
+		CHECK(texture->GetSpecification().Format == TextureFormat::BC1SRGB); // Opaque color
+		Ref<Texture> decoded = texture->Decompress(&error);
+		REQUIRE_MESSAGE(decoded, error);
+		const std::span<const uint8_t> top = decoded->GetMipData(0);
 		CHECK(top[0] == 255);
 		CHECK(top[2] == 0);
 		CHECK(top[4 * 4 + 2] == 255); // First texel of the bottom row is blue
+
+		TextureImportSettings uncompressed;
+		uncompressed.Compression = TextureCompression::Uncompressed;
+		Ref<Texture> exact = TextureImporter::Decode(png, uncompressed, "TwoRows.png", &error);
+		REQUIRE_MESSAGE(exact, error);
+		CHECK(exact->GetSpecification().Format == TextureFormat::RGBA8SRGB);
+		CHECK(exact->GetMips()[0].Data == CreateTwoRowImage());
 
 		TextureImportSettings flipped;
 		flipped.FlipVertically = true;
 		flipped.GenerateMips = false;
 		flipped.Usage = TextureUsage::Data;
+		flipped.Compression = TextureCompression::Uncompressed;
 		Ref<Texture> flippedTexture = TextureImporter::Decode(png, flipped, "TwoRows.png");
 		REQUIRE(flippedTexture);
 		CHECK(flippedTexture->GetMipCount() == 1);
@@ -249,6 +335,8 @@ TEST_SUITE("Renderer.Texture")
 	{
 		TextureImportSettings settings;
 		settings.Usage = TextureUsage::NormalMap;
+		settings.Compression = TextureCompression::Uncompressed;
+		settings.Quality = TextureQuality::Fast;
 		settings.GenerateMips = false;
 		settings.Filter = TextureFilter::Nearest;
 		settings.Wrap = TextureWrap::Clamp;
@@ -259,19 +347,35 @@ TEST_SUITE("Renderer.Texture")
 		const TextureImportSettings loaded = TextureImportSettings::FromJson(settings.ToJson(), &warnings);
 		CHECK(warnings.empty());
 		CHECK(loaded.Usage == TextureUsage::NormalMap);
+		CHECK(loaded.Compression == TextureCompression::Uncompressed);
+		CHECK(loaded.Quality == TextureQuality::Fast);
 		CHECK_FALSE(loaded.GenerateMips);
 		CHECK(loaded.Filter == TextureFilter::Nearest);
 		CHECK(loaded.Wrap == TextureWrap::Clamp);
 		CHECK(loaded.MaxSize == 512);
 		CHECK(loaded.FlipVertically);
 
-		const nlohmann::json invalid = { { "Usage", "Sparkly" }, { "Filter", 3 }, { "Wrap", "Tile" }, { "MaxSize", 99999 } };
+		// Settings written before compression existed keep the defaults: block compression at high quality.
+		const TextureImportSettings older = TextureImportSettings::FromJson({ { "Usage", "Data" }, { "GenerateMips", true } }, &warnings);
+		CHECK(warnings.empty());
+		CHECK(older.Compression == TextureCompression::Auto);
+		CHECK(older.Quality == TextureQuality::High);
+
+		const nlohmann::json invalid = { { "Usage", "Sparkly" }, { "Filter", 3 }, { "Wrap", "Tile" }, { "MaxSize", 99999 }, { "Compression", "Zip" },
+			{ "Quality", 2 } };
 		const TextureImportSettings fallback = TextureImportSettings::FromJson(invalid, &warnings);
-		CHECK(warnings.size() == 4);
+		CHECK(warnings.size() == 6);
 		CHECK(fallback.Usage == TextureUsage::Color);
+		CHECK(fallback.Compression == TextureCompression::Auto);
+		CHECK(fallback.Quality == TextureQuality::High);
 		CHECK(fallback.Filter == TextureFilter::Linear);
 		CHECK(fallback.Wrap == TextureWrap::Repeat);
 		CHECK(fallback.MaxSize == TextureImporter::c_MaxImageDimension);
+
+		for (TextureCompression compression : { TextureCompression::Auto, TextureCompression::Uncompressed })
+			CHECK(TextureCompressionFromString(TextureCompressionToString(compression)) == compression);
+		for (TextureQuality quality : { TextureQuality::High, TextureQuality::Fast })
+			CHECK(TextureQualityFromString(TextureQualityToString(quality)) == quality);
 	}
 
 	TEST_CASE("Texture usage is guessed from file names")

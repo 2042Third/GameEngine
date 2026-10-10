@@ -357,6 +357,14 @@ The threading model, frame loop and pipelines these rules protect are described 
   exist in every asset manager.
 - Shipped games read an asset pack (`.stpak`, `AssetPack`) through `RuntimeAssetManager`; the editor
   builds it with `EditorAssetManager::BuildAssetPack`.
+- **Textures** cook to GPU block-compressed formats by default ([Docs/Architecture.md](Docs/Architecture.md), "Texture
+  cooking"): `TextureImporter::ChooseFormat` picks BC1/BC3 (color, data), BC5 (normal maps), BC4 (one-channel data,
+  marked `Grayscale`: sampled as `(r, r, r, 1)`) or RGBA16F (HDR) unless the settings say `"Compression":
+  "Uncompressed"`; mips are filtered with a Mitchell filter; the cooked `STTX` version 2 stores the levels smallest first
+  so the mip tail is one range after the header. Never compute texture sizes from bytes per pixel: use `GetMipByteSize`
+  (whole 4x4 blocks) and `GetTextureFormatInfo`; read cooked data through `ParseCookedTexture`, which validates it. A
+  change to the cooked output bumps the importers' versions (`TextureImporter` and `GltfImporter`). Devices without BC
+  support get the blocks decoded at load time (`Texture::IsBlockCompressionSupported`, `BlockCompression`).
 - **Residency** ([Docs/Architecture.md](Docs/Architecture.md), "Streaming and residency"): memory is bounded by budgets
   per pool (`AssetResidencyBudgets`: GPU textures 50% and GPU buffers 15% of the device's memory budget, CPU unlimited;
   128 MiB of loads in flight, 64 MiB and 4 ms of finalization per frame, 64 MiB of upload staging), and the least
@@ -821,6 +829,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   textures of `Renderer::GetStagingTextures()` (`StagingTexturePool`, recycled in `Renderer::BeginFrame`), so code
   that streams with a GPU must run device frames for staging to be reused (without them, a frame uploads only its first
   step once the staging budget is used up).
+- Material texture slots (`SampleMaterialTexture` in `Include/Scene.glsl`) pack the bindless slot, the sampler index and a
+  grayscale bit (`RenderData::c_TextureSlotGrayscale`, from `TextureSpecification::Grayscale`). Normal maps are read as X
+  and Y with Z reconstructed (`Forward.frag`), so BC5 and RGBA8 normal maps shade alike; a shader that reads a normal map
+  must do the same.
 - Overlays (`SceneRenderOptions`, all off by default) are drawn after post-processing with exact display
   colors into the output texture (then copied into an external target): the infinite ground grid, the
   selection outline (from the entity-ID buffer, so alpha-blended surfaces get none) and `DebugDraw` line

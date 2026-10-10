@@ -6,6 +6,7 @@
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Asset/EditorAssetManager.h"
 #include "Strata/Asset/RuntimeAssetManager.h"
+#include "Strata/Asset/TextureImporter.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JobSystem.h"
 #include "Strata/Core/JsonUtils.h"
@@ -423,11 +424,17 @@ namespace Strata::Tests
 
 	}
 
+	TextureFormat GetStressTextureFormat()
+	{
+		// Opaque RGB color with the default import settings.
+		return TextureImporter::ChooseFormat(TextureImportSettings {}, 3, false);
+	}
+
 	uint64_t GetStressTextureBytes(uint32_t size)
 	{
 		uint64_t bytes = 0;
 		for (uint32_t level = size; level > 0; level /= 2)
-			bytes += static_cast<uint64_t>(level) * level * 4;
+			bytes += GetMipByteSize(GetStressTextureFormat(), level, level);
 		return bytes;
 	}
 
@@ -517,7 +524,7 @@ namespace Strata::Tests
 		return project;
 	}
 
-	bool BuildStressPack(const StressProject& project, const std::filesystem::path& packPath, std::string& error)
+	Ref<EditorAssetManager> ImportStressProject(const StressProject& project, std::string& error)
 	{
 		EditorAssetManagerSpecification specification;
 		specification.AssetDirectory = project.Directory / "Assets";
@@ -538,15 +545,21 @@ namespace Strata::Tests
 				const std::optional<AssetMetadata> metadata = manager->GetMetadata(source);
 				error = fmt::format("'{}' did not import cleanly: {}", metadata ? metadata->Path : source.ToString(),
 					!import.Error.empty() ? import.Error : (import.Warnings.empty() ? std::string("not imported") : import.Warnings.front()));
-				return false;
+				return nullptr;
 			}
 		}
 		if (!manager->IsHandleValid(project.GridMesh))
 		{
 			error = "The terrain grid has no mesh";
-			return false;
+			return nullptr;
 		}
-		return manager->BuildAssetPack(packPath, &error);
+		return manager;
+	}
+
+	bool BuildStressPack(const StressProject& project, const std::filesystem::path& packPath, std::string& error)
+	{
+		const Ref<EditorAssetManager> manager = ImportStressProject(project, error);
+		return manager && manager->BuildAssetPack(packPath, &error);
 	}
 
 	StressSweepFrame GetStressSweepFrame(const StressProjectSpec& spec, const StressSweepPath& path, uint32_t frame, float aspectRatio)

@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Renderer/Renderer.h"
 
+#include "Strata/Renderer/Texture.h"
 #include "Strata/Renderer/TextureReadback.h"
 
 namespace Strata
@@ -98,6 +99,8 @@ namespace Strata
 		s_Data->BindlessTextures->SetReservedTexture(BindlessTextureTable::c_FlatNormalSlot, s_Data->FlatNormalTexture);
 		s_Data->StagingTextures = CreateScope<StagingTexturePool>(nvrhiDevice, device.GetMaxFramesInFlight());
 		s_Data->DeferredReleases = CreateScope<DeferredReleaseQueue>(nvrhiDevice);
+		// Texture loaders decode block-compressed data on their workers for devices that cannot sample it.
+		Texture::SetBlockCompressionSupported(device.GetInfo().SupportsBCCompression);
 		return true;
 	}
 
@@ -108,6 +111,7 @@ namespace Strata
 
 		s_Data->Device->WaitForIdle();
 		s_Data.reset();
+		Texture::SetBlockCompressionSupported(true);
 	}
 
 	bool Renderer::IsInitialized()

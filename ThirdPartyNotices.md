@@ -17,7 +17,7 @@ alongside the executable.
 | [nlohmann/json](https://github.com/nlohmann/json) | 3.12.0 | MIT | Yes | JSON serialization |
 | [Dear ImGui](https://github.com/ocornut/imgui) (docking) | 1.92.9 | MIT | Yes | Immediate-mode UI |
 | [ImGuizmo](https://github.com/CedricGuillemet/ImGuizmo) | 18cef5e | MIT | Editor only | Transform gizmos |
-| [stb](https://github.com/nothings/stb) | 2c980bb | MIT or public domain | Yes | Image decoding/encoding, font rasterization |
+| [stb](https://github.com/nothings/stb) | 2c980bb | MIT or public domain | Yes | Image decoding/encoding, mip filtering, block compression (editor), font rasterization |
 | [cgltf](https://github.com/jkuhlmann/cgltf) | 1.15 | MIT | Editor only | glTF import |
 | [meshoptimizer](https://github.com/zeux/meshoptimizer) | 1.3 | MIT | Editor only | Mesh optimization and LOD generation |
 | [MikkTSpace](https://github.com/mmikk/MikkTSpace) | 3e895b4 | zlib | Editor only | Tangent generation |

@@ -3,6 +3,7 @@
 #include "Strata/Asset/Asset.h"
 #include "Strata/Renderer/GraphicsDevice.h"
 #include "Strata/Renderer/SceneRenderer.h"
+#include "Strata/Renderer/TextureFormat.h"
 
 #include <nlohmann/json.hpp>
 
@@ -18,6 +19,11 @@
 // split into districts, one material per district, with the entities spread evenly over it and a terrain grid under
 // them; a camera flying low over the districts sees a few of them at a time, so what it needs changes as it moves.
 // Used by PerfGPU.Streaming (the full size, in a helper process) and GPU.Assets.Streaming (a small one, validated).
+namespace Strata
+{
+	class EditorAssetManager;
+}
+
 namespace Strata::Tests
 {
 
@@ -43,7 +49,7 @@ namespace Strata::Tests
 		AssetHandle GridMesh = UUID::Null(); // The model's mesh (sub-asset), drawn as the terrain
 		std::vector<AssetHandle> Textures;   // The small textures, then the large ones
 		std::vector<AssetHandle> Materials;  // Material i belongs to district i
-		uint64_t TextureBytes = 0;           // Every texture with its mip chain in RGBA8, as the GPU holds it
+		uint64_t TextureBytes = 0;           // Every texture with its mip chain in its cooked format, as the GPU holds it
 		uint64_t LargestTextureBytes = 0;
 	};
 
@@ -53,11 +59,15 @@ namespace Strata::Tests
 	// error on failure.
 	std::optional<StressProject> WriteStressProject(const std::filesystem::path& directory, const StressProjectSpec& spec, std::string& error);
 
-	// Imports the project like the editor does (EditorAssetManager::Scan, in parallel when the job system runs) and builds
-	// its asset pack (BuildAssetPack). Fails when an asset does not import cleanly: an error, or a warning.
+	// Imports the project like the editor does (EditorAssetManager::Scan, in parallel when the job system runs) and returns
+	// its asset manager; null when an asset does not import cleanly (an error, or a warning), with the reason in error.
+	Ref<EditorAssetManager> ImportStressProject(const StressProject& project, std::string& error);
+	// Imports the project (ImportStressProject) and builds its asset pack (BuildAssetPack).
 	bool BuildStressPack(const StressProject& project, const std::filesystem::path& packPath, std::string& error);
 
-	// GPU bytes of a square RGBA8 texture of `size` with its full mip chain.
+	// The format the stress project's textures (opaque RGB color) cook to, and the GPU bytes of one of `size` with its full
+	// mip chain in it.
+	TextureFormat GetStressTextureFormat();
 	uint64_t GetStressTextureBytes(uint32_t size);
 
 	// The camera sweep: the camera holds above the first stop, then repeatedly moves to the next stop (MoveFrames,

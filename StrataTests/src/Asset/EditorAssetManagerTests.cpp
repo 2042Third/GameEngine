@@ -203,7 +203,7 @@ TEST_SUITE("Asset.Editor")
 			Ref<Texture> texture = LoadTexture(*manager, brick);
 			REQUIRE(texture);
 			CHECK(texture->GetWidth() == 4);
-			CHECK(texture->GetSpecification().Format == TextureFormat::RGBA8SRGB);
+			CHECK(texture->GetSpecification().Format == TextureFormat::BC1SRGB); // Opaque color, block-compressed
 
 			Ref<Asset> sound = manager->LoadAssetSync(beep);
 			REQUIRE(sound);
@@ -270,7 +270,7 @@ TEST_SUITE("Asset.Editor")
 			Ref<Texture> texture = LoadTexture(*manager, handle);
 			REQUIRE(texture);
 			CHECK(texture->GetWidth() == 2);
-			CHECK(texture->GetSpecification().Format == TextureFormat::RGBA8);
+			CHECK(texture->GetSpecification().Format == TextureFormat::BC1); // Opaque data, block-compressed
 
 			CHECK_FALSE(manager->SetImportSettings(handle, nlohmann::json::array(), &error));
 			CHECK_FALSE(manager->SetImportSettings(UUID(0x1234), { { "MaxSize", 2 } }, &error));
