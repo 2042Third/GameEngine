@@ -8,6 +8,7 @@
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JobSystem.h"
 #include "Strata/Core/JsonUtils.h"
+#include "Strata/Renderer/Font.h"
 #include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/MeshFactory.h"
@@ -196,6 +197,17 @@ TEST_SUITE("Asset")
 		const Ref<Texture> texture = std::static_pointer_cast<Texture>(loaded);
 		const std::span<const uint8_t> pixels = texture->GetMipData(0);
 		CHECK(std::vector<uint8_t>(pixels.begin(), pixels.end()) == level0.Data);
+
+		// So do fonts: the loaded font keeps the file it was given.
+		std::vector<uint8_t> fontFile = Font::GetDefault()->GetData();
+		const std::vector<uint8_t> expectedFont = fontFile;
+		const AssetLoadFunction* fontLoader = AssetLoaderRegistry::Find(AssetType::Font);
+		REQUIRE(fontLoader);
+		AssetLoadData fontData(fontFile);
+		const Ref<Asset> loadedFont = (*fontLoader)(MakeMetadata(0x6001, AssetType::Font, "Fonts/Roboto.ttf", "Roboto"), fontData, &error);
+		REQUIRE_MESSAGE(loadedFont, error);
+		CHECK(fontFile.empty());
+		CHECK(std::static_pointer_cast<Font>(loadedFont)->GetData() == expectedFont);
 	}
 
 	TEST_CASE("Asset packs round trip metadata and data")
