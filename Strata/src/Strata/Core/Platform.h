@@ -7,6 +7,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace Strata
 {
@@ -32,6 +33,13 @@ namespace Strata
 		// The user's home directory (Windows: the profile folder, e.g. C:\Users\<name>; POSIX: $HOME), e.g. as the root of
 		// suggested project locations. nullopt when there is none (an empty or relative $HOME). Not created.
 		static std::optional<std::filesystem::path> FindHomeDirectory();
+		// Font files of the system for text in scripts that fonts made for Latin text lack: Chinese, Japanese and Korean.
+		// At most one file per group of scripts (Han characters and kana first, then Hangul where those lack it), the
+		// most complete the system has; only files that exist. Empty when the usual places hold none.
+		//   Windows: Microsoft YaHei, JhengHei, Yu Gothic, Meiryo or SimSun, then Malgun Gothic or Gulim
+		//   Linux:   Noto Sans CJK, WenQuanYi Micro Hei or Droid Sans Fallback (all with Hangul)
+		//   macOS:   PingFang, Hiragino Sans GB or STHeiti, then Apple SD Gothic Neo
+		static std::vector<std::filesystem::path> FindFallbackFontFiles();
 
 		// Private directories hold files that nobody but the current user may add, replace or rename: editor session
 		// files (tokens), the copies of script modules the engine loads. EnsurePrivateDirectory, CreatePrivateDirectory and

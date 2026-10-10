@@ -255,6 +255,9 @@ namespace Strata
 				ST_INFO("Started in {:.2f} s", *m_StartupSeconds);
 		}
 		m_Context.Update(timestep);
+		// Between frames: the system's fonts for Chinese, Japanese and Korean text join the editor's once read.
+		if (!m_Options.Headless)
+			UI::EditorFonts::UpdateFallback();
 		// The launcher returns when the next project closes.
 		if (m_Context.HasProject())
 			m_LauncherDismissed = false;

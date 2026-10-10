@@ -6,6 +6,7 @@
 #include "Panels/WelcomePanel.h"
 #include "TestHelpers.h"
 #include "UI/AboutDialog.h"
+#include "UI/EditorFonts.h"
 #include "UI/EditorPanelRegistry.h"
 #include "UI/Icons.h"
 #include "UI/ItemProbe.h"
@@ -633,6 +634,68 @@ TEST_SUITE("Editor.Launcher")
 				CHECK(std::abs(leftMargin - rightMargin) <= ImGui::GetStyle().ScrollbarSize + 2.0f);
 			}
 		}
+	}
+
+	TEST_CASE("Project names in Chinese, Japanese and Korean show on the cards in the system's fonts")
+	{
+		// "Jeu été 游戏" and the Korean "게임": Inter has the accents, not the Han characters or Hangul.
+		const std::string name = "Jeu \xC3\xA9t\xC3\xA9 \xE6\xB8\xB8\xE6\x88\x8F \xEA\xB2\x8C\xEC\x9E\x84";
+		const std::filesystem::path file = CreateTemporaryDirectory("LauncherScripts") / FileSystem::FromUTF8(name) / FileSystem::FromUTF8(name + ".stproj");
+		REQUIRE(FileSystem::CreateDirectories(file.parent_path()));
+		REQUIRE(FileSystem::WriteText(file, "{}"));
+		HarnessEditor editor;
+		editor.Context().GetRecentProjects().Add(name, file);
+		editor.Frames(2);
+		REQUIRE(IsDrawn("Welcome.Recent.0"));
+		ImFont* regular = UI::EditorFonts::Get(UI::EditorFont::Regular);
+		REQUIRE(regular);
+		CHECK(regular->IsGlyphInFont(0x00E9));
+		CHECK_FALSE(regular->IsGlyphInFont(0x6E38));
+		CHECK_FALSE(UI::EditorFonts::HasFallback());
+		const auto measureLatin = [&editor]()
+		{
+			float width = 0.0f;
+			editor.Harness.Frame([&width]() { width = ImGui::CalcTextSize("Strata 0.1").x; });
+			return width;
+		};
+		const float latinWidth = measureLatin();
+
+		// The editor asks for the fallback fonts once its own are loaded; they merge between frames once read.
+		UI::EditorFonts::BeginLoadingFallback();
+		REQUIRE(editor.FramesUntil([]() { return !UI::EditorFonts::IsLoadingFallback(); }));
+		editor.Frames(2);
+		const std::vector<std::filesystem::path> files = Platform::FindFallbackFontFiles();
+		if (files.empty())
+		{
+			// Nothing to merge on this system: such text keeps ImGui's fallback character, and nothing else changes.
+			CHECK_FALSE(UI::EditorFonts::HasFallback());
+			MESSAGE("This system has no fonts for Chinese, Japanese and Korean text");
+			return;
+		}
+		REQUIRE(UI::EditorFonts::HasFallback());
+		// Every character of the card's title comes from a font, in each of the editor's fonts (Hangul when the system has
+		// a font of its own for it: the second one).
+		const bool hangul = files.size() > 1;
+		for (const UI::EditorFont font : { UI::EditorFont::Regular, UI::EditorFont::SemiBold, UI::EditorFont::Mono })
+		{
+			ImFont* merged = UI::EditorFonts::Get(font);
+			REQUIRE(merged);
+			const char* text = name.c_str();
+			const char* end = text + name.size();
+			while (text < end)
+			{
+				unsigned int codepoint = 0;
+				text += ImTextCharFromUtf8(&codepoint, text, end);
+				CAPTURE(codepoint);
+				if (codepoint >= 0xAC00 && codepoint <= 0xD7A3 && !hangul)
+					continue;
+				CHECK(merged->IsGlyphInFont(static_cast<ImWchar>(codepoint)));
+			}
+		}
+		// Latin text still comes from the editor's own fonts.
+		CHECK(measureLatin() == doctest::Approx(latinWidth));
+		editor.Frames(1);
+		CHECK(IsDrawn("Welcome.Recent.0"));
 	}
 
 	TEST_CASE("The launcher has no id conflicts, at 100% and at 150%")

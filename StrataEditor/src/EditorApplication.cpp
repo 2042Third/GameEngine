@@ -95,7 +95,9 @@ namespace Strata
 				if (options.UIScale)
 					imgui->SetContentScaleOverride(*options.UIScale);
 				imgui->SetStyleCallback(UI::ApplyTheme);
-				if (!UI::EditorFonts::Load())
+				if (UI::EditorFonts::Load())
+					UI::EditorFonts::BeginLoadingFallback();
+				else
 					ST_ERROR("The editor's fonts are unavailable; the UI uses ImGui's default font");
 			}
 			// The layer owns its host; the application outlives its layers.

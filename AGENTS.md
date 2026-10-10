@@ -474,7 +474,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   - Text uses the editor's fonts (`UI/EditorFonts.h`, embedded from `StrataEditor/Resources/Fonts`): Inter for the UI
     with the Lucide icons merged in, Inter SemiBold for headers, JetBrains Mono for logs, IDs and numbers, at the type
     scale's sizes (`UI::PushFont(EditorFont, TextSize)`: 12, 14, 17, 24). Icons are text (`UI/Icons.h`, generated from the
-    font by `StrataEditor/Tools/GenerateIconHeader.py`). ImGui's built-in font is never added.
+    font by `StrataEditor/Tools/GenerateIconHeader.py`). ImGui's built-in font is never added. Chinese, Japanese and
+    Korean text comes from the system's fonts (`Platform::FindFallbackFontFiles`), read on an I/O thread at startup and
+    merged behind the editor's own glyphs between frames (`EditorFonts::BeginLoadingFallback`, `UpdateFallback`).
   - Controls come from the widget kit (`UI/Widgets.h`: toolbar, icon and action buttons, links, chips, status pills,
     section headers, headings, cards and entry cards, text fields, copyable code, the brand mark, modal dialogs); every kit
     widget records its rectangle in `UI::ItemProbe` under its id.

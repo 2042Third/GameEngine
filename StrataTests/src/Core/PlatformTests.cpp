@@ -198,6 +198,21 @@ TEST_SUITE("Core.Platform")
 		CHECK(FileSystem::IsDirectory(*home));
 	}
 
+	TEST_CASE("Fallback fonts are font files of the system, at most one per group of scripts")
+	{
+		const std::vector<std::filesystem::path> files = Platform::FindFallbackFontFiles();
+		// Han characters and kana, then Hangul where the first lacks it.
+		CHECK(files.size() <= 2);
+		for (const std::filesystem::path& file : files)
+		{
+			CAPTURE(FileSystem::ToUTF8(file));
+			CHECK(file.is_absolute());
+			CHECK(FileSystem::IsRegularFile(file));
+			const std::string extension = FileSystem::ToUTF8(file.extension());
+			CHECK((extension == ".ttc" || extension == ".ttf"));
+		}
+	}
+
 	TEST_CASE("User data directory is created")
 	{
 		const std::filesystem::path directory = Platform::GetUserDataDirectory("StrataTests");

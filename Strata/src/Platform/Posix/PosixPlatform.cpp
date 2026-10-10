@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fcntl.h>
+#include <initializer_list>
 #include <fstream>
 #include <limits>
 #include <pthread.h>
@@ -285,6 +286,34 @@ namespace Strata
 		if (!directory.is_absolute())
 			return std::nullopt;
 		return directory;
+	}
+
+	std::vector<std::filesystem::path> Platform::FindFallbackFontFiles()
+	{
+		std::vector<std::filesystem::path> files;
+		// The first of the candidates that exists.
+		const auto addFirst = [&files](std::initializer_list<const char*> candidates)
+		{
+			for (const char* file : candidates)
+			{
+				if (FileSystem::IsRegularFile(file))
+				{
+					files.emplace_back(file);
+					return;
+				}
+			}
+		};
+#if defined(ST_PLATFORM_MACOS)
+		// Han characters and kana, then Hangul, which those fonts lack.
+		addFirst({ "/System/Library/Fonts/PingFang.ttc", "/System/Library/Fonts/Hiragino Sans GB.ttc", "/System/Library/Fonts/STHeiti Medium.ttc" });
+		addFirst({ "/System/Library/Fonts/AppleSDGothicNeo.ttc" });
+#else
+		// Where distributions install them (Debian and Ubuntu, Arch, Fedora); each covers Hangul too.
+		addFirst({ "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+			"/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc", "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+			"/usr/share/fonts/wenquanyi/wqy-microhei/wqy-microhei.ttc", "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf" });
+#endif
+		return files;
 	}
 
 	std::filesystem::path Platform::GetUserRuntimeDirectory(std::string_view applicationName)

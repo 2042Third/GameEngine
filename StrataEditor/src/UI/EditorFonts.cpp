@@ -1,13 +1,22 @@
 #include "UI/EditorFonts.h"
 
+#include <Strata/Core/Base.h>
+#include <Strata/Core/FileSystem.h>
+#include <Strata/Core/JobSystem.h>
 #include <Strata/Core/Log.h>
+#include <Strata/Core/Platform.h>
 
 #include <imgui.h>
 
 #include <array>
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
+#include <optional>
 #include <span>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace Strata::EmbeddedFiles
 {
@@ -37,6 +46,23 @@ namespace Strata::UI
 		constexpr float c_IconOffsetY = 2.0f;
 
 		std::array<ImFont*, 3> s_Fonts = {};
+
+		// The system's fonts for scripts the embedded fonts lack, as read from their files.
+		struct FallbackFonts
+		{
+			// The files' bytes. ImGui reads them for as long as an atlas uses them (it does not own them), so they stay
+			// until the process ends and are never changed once read.
+			std::vector<std::vector<uint8_t>> Data;
+			std::vector<std::string> Names;
+		};
+
+		JobHandle s_FallbackJob;
+		Ref<FallbackFonts> s_FallbackRead; // Shared with the read under way
+		std::optional<FallbackFonts> s_Fallback;
+		// The atlas that asked for the fallback fonts, and the one they are merged into. Load resets both, so an atlas
+		// created where a destroyed one was is never taken for it.
+		ImFontAtlas* s_FallbackRequestedAtlas = nullptr;
+		ImFontAtlas* s_FallbackAtlas = nullptr;
 
 		ImFont* AddFont(ImFontAtlas& atlas, std::span<const uint8_t> data, const char* name, ImFontConfig config, float size)
 		{
@@ -94,7 +120,86 @@ namespace Strata::UI
 		}
 		io.FontDefault = regular;
 		s_Fonts = { regular, semiBold, mono };
+		s_FallbackRequestedAtlas = nullptr;
+		s_FallbackAtlas = nullptr;
 		return true;
+	}
+
+	void EditorFonts::BeginLoadingFallback()
+	{
+		if (!ImGui::GetCurrentContext() || !Get(EditorFont::Regular))
+			return;
+		s_FallbackRequestedAtlas = ImGui::GetIO().Fonts;
+		// Read once per process: later atlases (UI tests) merge the same bytes.
+		if (s_Fallback || s_FallbackRead)
+			return;
+		Ref<FallbackFonts> read = CreateRef<FallbackFonts>();
+		s_FallbackRead = read;
+		s_FallbackJob = JobSystem::SubmitIO([read]()
+		{
+			for (const std::filesystem::path& file : Platform::FindFallbackFontFiles())
+			{
+				std::optional<std::vector<uint8_t>> bytes = FileSystem::ReadBytes(file);
+				if (!bytes || bytes->empty())
+					continue;
+				read->Data.push_back(std::move(*bytes));
+				read->Names.push_back(FileSystem::ToUTF8(file.filename()));
+			}
+		}, JobPriority::Low);
+	}
+
+	bool EditorFonts::UpdateFallback()
+	{
+		if (s_FallbackRead && s_FallbackJob.IsComplete())
+		{
+			s_Fallback = std::move(*s_FallbackRead);
+			s_FallbackRead = nullptr;
+			s_FallbackJob = JobHandle();
+			if (s_Fallback->Data.empty())
+				ST_WARN("No system font for Chinese, Japanese and Korean text was found: such text shows as '?'");
+		}
+		if (!s_Fallback || s_Fallback->Data.empty() || !ImGui::GetCurrentContext())
+			return false;
+		ImFontAtlas& atlas = *ImGui::GetIO().Fonts;
+		if (&atlas != s_FallbackRequestedAtlas || &atlas == s_FallbackAtlas)
+			return false;
+
+		// Behind the font's own glyphs and its icons: only what they lack comes from these, never the icons' range.
+		bool merged = false;
+		for (const EditorFont font : { EditorFont::Regular, EditorFont::SemiBold, EditorFont::Mono })
+		{
+			ImFont* destination = Get(font);
+			if (!destination)
+				continue;
+			for (size_t index = 0; index < s_Fallback->Data.size(); index++)
+			{
+				ImFontConfig config;
+				config.MergeMode = true;
+				config.DstFont = destination;
+				config.GlyphExcludeRanges = c_IconRanges;
+				std::vector<uint8_t>& data = s_Fallback->Data[index];
+				if (AddFont(atlas, data, s_Fallback->Names[index].c_str(), config, GetTextSize(TextSize::Body)))
+					merged = true;
+				else
+					ST_WARN("The system font '{}' could not be used for text in other scripts", s_Fallback->Names[index]);
+			}
+		}
+		// Asked once per atlas, whether or not a font could be used.
+		s_FallbackRequestedAtlas = nullptr;
+		if (!merged)
+			return false;
+		s_FallbackAtlas = &atlas;
+		return true;
+	}
+
+	bool EditorFonts::IsLoadingFallback()
+	{
+		return s_FallbackRead != nullptr;
+	}
+
+	bool EditorFonts::HasFallback()
+	{
+		return ImGui::GetCurrentContext() && s_FallbackAtlas == ImGui::GetIO().Fonts;
 	}
 
 	ImFont* EditorFonts::Get(EditorFont font)

@@ -464,7 +464,8 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   A `.stproj` file dropped on the window opens its project. The look comes from
   `UI/Theme` (the Bedrock palette and its meanings; `ApplyTheme` is the `ImGuiLayer` style callback), `UI/EditorFonts`
   (Inter, Inter SemiBold and JetBrains Mono embedded with `strata_embed_file`, Lucide's icons merged into the Inter
-  fonts' Private Use Area) and the widget kit (`UI/Widgets`), whose widgets record their rectangles in `UI/ItemProbe`.
+  fonts' Private Use Area, and behind them the system's fonts for Chinese, Japanese and Korean, read on an I/O thread)
+  and the widget kit (`UI/Widgets`), whose widgets record their rectangles in `UI/ItemProbe`.
   Rules for UI code: AGENTS.md, "Editor UI rules". **Idle throttling**: after drawing, `EditorLayer::UpdateFrameRate`
   sets the cap to 0 (full rate) while anything happens and to 30 (10 unfocused) frames per second otherwise; headless,
   `--frames` and command-script runs are never throttled. The frame time shown (status bar, viewport stats,

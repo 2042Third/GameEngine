@@ -17,6 +17,7 @@
 
 #include <climits>
 #include <cstdio>
+#include <initializer_list>
 
 namespace Strata
 {
@@ -240,6 +241,34 @@ namespace Strata
 		if (profile.empty() || !profile.is_absolute())
 			return std::nullopt;
 		return profile;
+	}
+
+	std::vector<std::filesystem::path> Platform::FindFallbackFontFiles()
+	{
+		// The path must be freed even when the call fails.
+		PWSTR knownFolder = nullptr;
+		const HRESULT result = SHGetKnownFolderPath(FOLDERID_Fonts, 0, nullptr, &knownFolder);
+		const std::filesystem::path fonts = SUCCEEDED(result) && knownFolder ? std::filesystem::path(knownFolder) : std::filesystem::path();
+		CoTaskMemFree(knownFolder);
+		std::vector<std::filesystem::path> files;
+		if (fonts.empty())
+			return files;
+		// The first of the candidates that exists.
+		const auto addFirst = [&files, &fonts](std::initializer_list<const wchar_t*> candidates)
+		{
+			for (const wchar_t* name : candidates)
+			{
+				if (FileSystem::IsRegularFile(fonts / name))
+				{
+					files.push_back(fonts / name);
+					return;
+				}
+			}
+		};
+		// Han characters and kana (Simplified Chinese first, which covers the most), then Hangul, which those fonts lack.
+		addFirst({ L"msyh.ttc", L"msjh.ttc", L"YuGothM.ttc", L"meiryo.ttc", L"simsun.ttc" });
+		addFirst({ L"malgun.ttf", L"gulim.ttc" });
+		return files;
 	}
 
 	std::filesystem::path Platform::GetUserRuntimeDirectory(std::string_view applicationName)
