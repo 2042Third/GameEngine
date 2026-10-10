@@ -1,7 +1,9 @@
 #pragma once
 
+#include "Editor/PropertyEdit.h"
 #include "UI/EditorPanelRegistry.h"
 #include "UI/MaterialEditor.h"
+#include "UI/PropertyWidgets.h"
 
 #include <Strata/Core/UUID.h>
 #include <Strata/Reflection/Property.h>
@@ -18,8 +20,6 @@ namespace Strata
 
 	class EditorCommandRegistry;
 	class EditorContext;
-	class Entity;
-	struct ComponentInfo;
 
 	// The selected entities, drawn from component reflection: every registered component is editable without inspector code
 	// of its own.
@@ -46,6 +46,10 @@ namespace Strata
 		void DrawComponent(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info);
 		void DrawComponentMenu(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info);
 		void DrawProperties(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info);
+		// An edit of a rotation shared by several entities: continues the edit in progress, or begins one from the angles the
+		// widget showed (RotationAnglesEdit keeps each entity's own angles through a drag).
+		bool UpdateRotationEdit(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info, const PropertyInfo& property,
+			const PropertyEditResult& result, std::string* outError);
 		void DrawMaterialSection(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities);
 		void DrawAddComponentPopup(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities);
 		// The scripts of the entity: fields edited through the same undoable path as script.setField, scripts added and
@@ -64,6 +68,8 @@ namespace Strata
 		std::optional<SceneSettings> m_SettingsDraft;
 		std::unordered_map<const ComponentInfo*, std::vector<std::optional<PropertyValue>>> m_Defaults;
 		MaterialEditor m_MaterialEditor;
+		// The rotation of several entities being edited, until the widget reports the edit finished.
+		std::optional<RotationAnglesEdit> m_RotationEdit;
 	};
 
 }

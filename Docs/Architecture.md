@@ -854,19 +854,25 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   - The **Inspector** shows the components every selected entity has. `GetSharedProperty` gives each widget its value and
     which components (axes, Euler angles) differ, which `DrawPropertyWidget` shows as mixed; an edit goes through the
     multi-entity `SetPropertyComponentsWithUndo` with the components the widget changed (one step; each entity keeps its
-    other components), or `SetPropertyWithUndo` for other types. Rotations go through `SetRotationAnglesWithUndo` with
-    the Euler angles the widget edited: each entity's own angles are read in the form closest to them (a rotation has two
-    sets, and reading one back from the quaternion folds a yaw past 90 degrees). Axis labels reset their axis to the
-    value of a new component (`GetDefaultPropertyValues`). Property tables (`UI::BeginPropertyTable`) are instances of one
-    ImGui table per window, so the label column has one width in a panel, resizable by its divider; float fields show
-    numbers as people write them ("0.8", "-4", up to three decimals; ImGui's own text is drawn transparent), and values
-    and labels that do not fit end in an ellipsis with the whole text in a tooltip, so a laptop-sized window clips
-    nothing. Colors are channel fields behind R, G, B, A labels in the axis colors and a swatch (the swatch alone where
-    the fields would be unreadable) that opens a picker with the channels under it; mixed channels, colors and texts
-    show "--". Sliders are a track with a handle and the number in a field beside it. A component's menu copies and
-    pastes its settable values through the clipboard as JSON (`EditorActions::CopyComponentValues`) and runs
-    `component.set`/`component.remove {entities}`. With nothing selected it shows the scene's settings, applied by one
-    `scene.setSettings` when a drag ends, and the first active sky light (the renderer's).
+    other components), or `SetPropertyWithUndo` for other types. Rotations of several entities go through a
+    `RotationAnglesEdit` with the Euler angles the widget edited, kept by the Inspector until the widget reports the edit
+    finished: each entity's own angles are read once, when the edit begins, in the form closest to the angles shown (a
+    rotation has two sets, and reading one back from the quaternion folds a yaw past 90 degrees; at a yaw of exactly
+    90 degrees only the difference of pitch and roll survives), and every frame of a drag replaces the edited angles in
+    them. The edit continues only while the entities keep the rotations it gave them (`Continues`), and the first entity
+    gets exactly the widget's angles: the rotation widget keeps the angles it edits only while the rotation is exactly
+    the one they made, so any other change (an undo) shows the angles of the rotation the entity has. Axis labels reset
+    their axis to the value of a new component (`GetDefaultPropertyValues`). Property tables (`UI::BeginPropertyTable`)
+    are instances of one ImGui table per window, so the label column has one width in a panel, resizable by its
+    divider; float fields show numbers as people write them ("0.8", "-4", up to three decimals; ImGui's own text is
+    drawn transparent), and values and labels that do not fit end in an ellipsis with the whole text in a tooltip, so a
+    laptop-sized window clips nothing. Colors are channel fields behind R, G, B, A labels in the axis colors and a
+    swatch (the swatch alone where the fields would be unreadable) that opens a picker with the channels under it; mixed
+    channels, colors and texts show "--". Sliders are a track with a handle and the number in a field beside it. A
+    component's menu copies and pastes its settable values through the clipboard as JSON
+    (`EditorActions::CopyComponentValues`) and runs `component.set`/`component.remove {entities}`. With nothing selected
+    it shows the scene's settings, applied by one `scene.setSettings` when a drag ends, and the first active sky light
+    (the renderer's).
   - The **Asset** inspector is tabbed with the Inspector: `EditorLayer` brings the tab of the inspection target forward
     when `GetInspectionVersion` changes (`EditorPanelRegistry::ShowTab`, which leaves the keyboard focus where it is).
     Materials are drawn by `MaterialEditor` (a drag previews, its release saves: one write and one undo step), import

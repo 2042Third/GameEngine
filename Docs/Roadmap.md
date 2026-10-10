@@ -88,8 +88,9 @@ module-foundation, ran as its own workstream):
   label column, numbers without trailing zeros, ellipses with tooltips where nothing else fits), colors as channels in
   the axis colors with a picker, mixed colors and texts as mixed, sliders as a track beside the number; Hierarchy ranges
   anchored on entities and, while filtering, taking only the matches; Apply sending only changed import settings and
-  out-of-range settings refused; duplicates of several sibling lists remapped together; multi-entity yaw edits past 90
-  degrees; the Asset tab naming types and choices in words, with size limits as choices.
+  out-of-range settings refused; duplicates of several sibling lists remapped together; multi-entity yaw edits past and
+  through 90 degrees that keep each entity's pitch and roll (its angles read once per edit), and rotation fields that
+  follow an undo; the Asset tab naming types and choices in words, with size limits as choices.
 
 Open items and deferrals later waves own:
 

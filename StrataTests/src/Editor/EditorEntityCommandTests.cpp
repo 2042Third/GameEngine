@@ -16,6 +16,7 @@
 #include <array>
 #include <cmath>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -407,36 +408,120 @@ TEST_SUITE("Editor.Commands")
 		CHECK(harness.Snapshot() == original);
 	}
 
-	TEST_CASE("A yaw dragged past 90 degrees on entities whose pitch differs turns them past 90 degrees")
+	TEST_CASE("A yaw dragged through 90 degrees on several entities keeps each one's pitch and roll")
+	{
+		// Rolls of 0 (where reading the angles back recovers them exactly) and others; the yaw passes 90 degrees exactly, where
+		// a rotation keeps only the difference of pitch and roll, and goes past it, where reading folds it back (yaw 100 reads
+		// as pitch + 180, yaw 80, roll + 180).
+		const std::vector<std::array<glm::vec3, 2>> cases = {
+			{ glm::vec3(10.0f, 80.0f, 0.0f), glm::vec3(20.0f, 80.0f, 0.0f) },
+			{ glm::vec3(10.0f, 80.0f, 30.0f), glm::vec3(20.0f, 80.0f, 40.0f) },
+		};
+		for (const std::array<glm::vec3, 2>& starts : cases)
+		{
+			CAPTURE(starts[1]);
+			EntityHarness harness;
+			std::vector<Entity> entities;
+			for (const glm::vec3& start : starts)
+				entities.push_back(harness.Get(harness.Create("Turned", { { "components", { { "Transform", { { "Rotation", { start.x, start.y, start.z } } } } } } })));
+			const ComponentInfo& transform = *ComponentRegistry::Find("Transform");
+			const PropertyInfo& rotation = *transform.FindProperty("Rotation");
+			const nlohmann::json original = harness.Snapshot();
+			const size_t position = harness.Position();
+
+			// The inspector's drag of the yaw field: the angles it shows (the first entity's) with the yaw raised 2 degrees a
+			// frame.
+			std::string error;
+			std::optional<RotationAnglesEdit> edit = RotationAnglesEdit::Begin(entities, transform, rotation, starts[0], &error);
+			REQUIRE_MESSAGE(edit, error);
+			for (float yaw = 82.0f; yaw <= 120.0f; yaw += 2.0f)
+			{
+				REQUIRE(edit->Continues(entities, transform, rotation));
+				REQUIRE_MESSAGE(edit->Update(harness.Context, entities, transform, rotation, glm::vec3(starts[0].x, yaw, starts[0].z), { false, true, false, false },
+					&error), error);
+				// The first entity's rotation is exactly the one the field's angles make, so the widget keeps showing them.
+				CHECK(entities[0].GetComponent<TransformComponent>().Rotation == Math::EulerDegreesToQuat(glm::vec3(starts[0].x, yaw, starts[0].z)));
+			}
+			CHECK(harness.Position() == position + 1);
+			// Each turned to a yaw of 120 degrees, keeping its own pitch and roll.
+			for (size_t index = 0; index < entities.size(); index++)
+			{
+				const glm::quat expected = Math::EulerDegreesToQuat(glm::vec3(starts[index].x, 120.0f, starts[index].z));
+				CHECK(std::abs(glm::dot(expected, entities[index].GetComponent<TransformComponent>().Rotation)) == doctest::Approx(1.0f).epsilon(0.0001));
+			}
+			// And shown as differing in pitch and roll (roll only where it differs).
+			const std::optional<SharedPropertyValue> shared = GetSharedProperty(entities, transform, rotation);
+			REQUIRE(shared);
+			CHECK(shared->MixedComponents == std::array<bool, 4> { true, false, starts[0].z != starts[1].z, false });
+
+			// One step, which undo reverts whole.
+			REQUIRE(harness.Context.Undo());
+			CHECK(harness.Snapshot() == original);
+		}
+	}
+
+	TEST_CASE("A rotation edit of several entities continues only while they keep the rotations it gave them")
 	{
 		EntityHarness harness;
 		std::vector<Entity> entities;
-		const float pitches[] = { 10.0f, 20.0f };
-		for (const float pitch : pitches)
-			entities.push_back(harness.Get(harness.Create("Turned", { { "components", { { "Transform", { { "Rotation", { pitch, 80.0, 0.0 } } } } } } })));
+		const glm::vec3 starts[] = { glm::vec3(10.0f, 20.0f, 30.0f), glm::vec3(40.0f, 50.0f, 60.0f) };
+		for (const glm::vec3& start : starts)
+			entities.push_back(harness.Get(harness.Create("Turned", { { "components", { { "Transform", { { "Rotation", { start.x, start.y, start.z } } } } } } })));
 		const ComponentInfo& transform = *ComponentRegistry::Find("Transform");
 		const PropertyInfo& rotation = *transform.FindProperty("Rotation");
-		const size_t position = harness.Position();
+		const PropertyInfo& translation = *transform.FindProperty("Translation");
+		const PropertyComponentMask yaw = { false, true, false, false };
 
-		// The inspector's drag of the yaw field: the angles it shows (the first entity's) with the yaw raised 2 degrees a
-		// frame, past 90, where Euler angles read back from a rotation fold (yaw 100 reads as pitch 190, yaw 80, roll 180).
 		std::string error;
-		for (float yaw = 82.0f; yaw <= 120.0f; yaw += 2.0f)
-		{
-			REQUIRE_MESSAGE(SetRotationAnglesWithUndo(harness.Context, entities, transform, rotation, glm::vec3(pitches[0], yaw, 0.0f), { false, true, false, false },
-				&error), error);
-		}
-		CHECK(harness.Position() == position + 1);
-		// Each turned to a yaw of 120 degrees, keeping its own pitch.
-		for (size_t index = 0; index < entities.size(); index++)
-		{
-			const glm::quat expected = Math::EulerDegreesToQuat(glm::vec3(pitches[index], 120.0f, 0.0f));
-			CHECK(std::abs(glm::dot(expected, entities[index].GetComponent<TransformComponent>().Rotation)) == doctest::Approx(1.0f).epsilon(0.0001));
-		}
-		// And shown as differing in pitch only.
+		std::optional<RotationAnglesEdit> edit = RotationAnglesEdit::Begin(entities, transform, rotation, starts[0], &error);
+		REQUIRE_MESSAGE(edit, error);
+		REQUIRE_MESSAGE(edit->Update(harness.Context, entities, transform, rotation, glm::vec3(10.0f, 25.0f, 30.0f), yaw, &error), error);
+		CHECK(edit->Continues(entities, transform, rotation));
+		// Other entities, another order, another property: not this edit.
+		const std::vector<Entity> reversed = { entities[1], entities[0] };
+		CHECK_FALSE(edit->Continues(reversed, transform, rotation));
+		CHECK_FALSE(edit->Continues(std::span<const Entity>(entities).first(1), transform, rotation));
+		CHECK_FALSE(edit->Continues(entities, transform, translation));
+
+		// Undone (or changed by anything else): the edit's angles no longer describe the entities, and it refuses to write them.
+		harness.Context.GetUndoStack().BreakMerge();
+		REQUIRE(harness.Context.Undo());
+		CHECK_FALSE(edit->Continues(entities, transform, rotation));
+		const nlohmann::json undone = harness.Snapshot();
+		CHECK_FALSE(edit->Update(harness.Context, entities, transform, rotation, glm::vec3(10.0f, 30.0f, 30.0f), yaw, &error));
+		CHECK_FALSE(error.empty());
+		CHECK(harness.Snapshot() == undone);
+
+		// Invalid edits begin nothing: not a rotation, no entities, an entity that does not exist.
+		CHECK_FALSE(RotationAnglesEdit::Begin(entities, transform, translation, starts[0], &error));
+		CHECK_FALSE(RotationAnglesEdit::Begin({}, transform, rotation, starts[0], &error));
+		const std::vector<Entity> withMissing = { entities[0], Entity() };
+		CHECK_FALSE(RotationAnglesEdit::Begin(withMissing, transform, rotation, starts[0], &error));
+	}
+
+	TEST_CASE("A rotation edit gives entities with the rotation shown the angles shown")
+	{
+		// Two entities with the same rotation at a yaw of 90 degrees (a duplicate), where reading the angles back gives another
+		// split of pitch and roll (any with the same difference is the same rotation): the inspector shows no angle as
+		// differing, so an edit of the pitch gives both the angles shown, and they stay the same rotation.
+		EntityHarness harness;
+		const glm::vec3 shown(10.0f, 90.0f, 30.0f);
+		std::vector<Entity> entities;
+		for (int index = 0; index < 2; index++)
+			entities.push_back(harness.Get(harness.Create("Turned", { { "components", { { "Transform", { { "Rotation", { shown.x, shown.y, shown.z } } } } } } })));
+		const ComponentInfo& transform = *ComponentRegistry::Find("Transform");
+		const PropertyInfo& rotation = *transform.FindProperty("Rotation");
 		const std::optional<SharedPropertyValue> shared = GetSharedProperty(entities, transform, rotation);
 		REQUIRE(shared);
-		CHECK(shared->MixedComponents == std::array<bool, 4> { true, false, false, false });
+		REQUIRE_FALSE(shared->Mixed);
+
+		std::string error;
+		std::optional<RotationAnglesEdit> edit = RotationAnglesEdit::Begin(entities, transform, rotation, shown, &error);
+		REQUIRE_MESSAGE(edit, error);
+		const glm::vec3 edited(15.0f, 90.0f, 30.0f);
+		REQUIRE_MESSAGE(edit->Update(harness.Context, entities, transform, rotation, edited, { true, false, false, false }, &error), error);
+		for (const Entity entity : entities)
+			CHECK(entity.GetComponent<TransformComponent>().Rotation == Math::EulerDegreesToQuat(edited));
 	}
 
 	TEST_CASE("Rotation edits of many entities change only the Euler angles the edit changed")

@@ -637,8 +637,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   among the pasted entities remapped, no prefab links added), `entity.setActive {entities}`, `component.add {entities}`
   (where the component is missing), `component.remove {entities}` (every listed entity must have the component, or
   nothing is removed) and `component.set {entities}`. The inspector edits a
-  multi-selection through `PropertyEdit` (`GetSharedProperty`, multi-entity `SetPropertyWithUndo`,
-  `GetDefaultComponentValues` for Reset).
+  multi-selection through `PropertyEdit` (`GetSharedProperty`, multi-entity `SetPropertyWithUndo`, `RotationAnglesEdit`
+  for rotations edited as Euler angles, `GetDefaultComponentValues` for Reset).
 - `project.export` writes a playable game outside the project: the asset pack (`<Game>.stpak`), the script module, the
   manifest (`<Game>.stgame`, start scene, script module and window settings) and the runtime executable renamed after
   the game. CTest exports a small game (`StrataEditor --no-gpu`) and runs it headless.

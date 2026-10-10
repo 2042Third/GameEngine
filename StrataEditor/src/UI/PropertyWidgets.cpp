@@ -64,8 +64,6 @@ namespace Strata
 		// a panel at once).
 		constexpr float c_LabelColumnWeight = 0.42f;
 		constexpr float c_ValueColumnWeight = 0.58f;
-		// Rotations whose quaternions' dot product is this close to 1 are the same (an angle below a tenth of a degree).
-		constexpr float c_SameRotationTolerance = 1.0e-6f;
 		// The smallest size limit a PowerOfTwoLimit property offers, in pixels.
 		constexpr uint32_t c_SmallestSizeLimit = 32;
 
@@ -528,21 +526,23 @@ namespace Strata
 		}
 
 		// Euler angles are not unique: converting the quaternion back every frame would make a drag past 90 degrees jump. The
-		// angles being edited are kept while the rotation is the one they produced, up to the rounding of entities that keep
-		// their own other angles (several selected entities, PropertyEdit's SetRotationAnglesWithUndo).
+		// angles being edited are kept while the rotation is exactly the one they produced (the inspector writes it as it is,
+		// also as the first of several entities, PropertyEdit's RotationAnglesEdit), so any other change, however small (an
+		// undo), shows the angles of the rotation the entity has.
 		PropertyEditResult DrawRotation(const PropertyInfo& property, glm::quat& rotation, const PropertyWidgetOptions& options)
 		{
 			static ImGuiID s_EulerId = 0;
 			static glm::quat s_EulerRotation;
 			static glm::vec3 s_Euler;
 			const ImGuiID id = ImGui::GetID("##Euler");
-			const bool same = s_EulerId == id && std::abs(glm::dot(s_EulerRotation, rotation)) >= 1.0f - c_SameRotationTolerance;
-			glm::vec3 euler = same ? s_Euler : Math::QuatToEulerDegrees(rotation);
+			glm::vec3 euler = s_EulerId == id && s_EulerRotation == rotation ? s_Euler : Math::QuatToEulerDegrees(rotation);
+			const glm::vec3 before = euler;
 			std::optional<glm::vec3> defaults;
 			if (options.DefaultValue && std::holds_alternative<glm::quat>(*options.DefaultValue))
 				defaults = Math::QuatToEulerDegrees(std::get<glm::quat>(*options.DefaultValue));
 			PropertyEditResult result = DrawAxisFields(&euler.x, 3, c_AxisNames, ImGui::GetContentRegionAvail().x, GetSpeed(property, 0.5f), -FLT_MAX, FLT_MAX,
 				options, defaults ? &defaults->x : nullptr);
+			result.EulerAnglesBefore = before;
 			result.EulerAngles = euler;
 			if (result.Changed)
 			{

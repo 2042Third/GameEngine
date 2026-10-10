@@ -50,6 +50,64 @@ namespace Strata
 			return distance(first) <= distance(second) ? first : second;
 		}
 
+		// The Euler angles (as the inspector shows them) in which `other` differs from `first`. Compared in the form closest to
+		// the first's angles: equal rotations read back in the other form would differ in every angle.
+		PropertyComponentMask GetDifferingAngles(const glm::quat& first, const glm::quat& other)
+		{
+			const glm::vec3 firstAngles = Math::QuatToEulerDegrees(first);
+			const glm::vec3 otherAngles = GetEulerDegreesNear(other, firstAngles);
+			PropertyComponentMask differing = {};
+			for (glm::length_t axis = 0; axis < 3; axis++)
+				differing[static_cast<size_t>(axis)] = std::abs(otherAngles[axis] - firstAngles[axis]) > c_AngleEpsilon;
+			return differing;
+		}
+
+		// The UUIDs of the entities an edit of several entities changes, or nullopt (outError says why) when there are none or
+		// they are not all entities of one scene.
+		std::optional<std::vector<UUID>> GetEditedEntityIds(std::span<const Entity> entities, std::string* outError)
+		{
+			auto fail = [outError](const char* message) -> std::optional<std::vector<UUID>>
+			{
+				if (outError)
+					*outError = message;
+				return std::nullopt;
+			};
+
+			if (entities.empty())
+				return fail("No entities to edit");
+			std::vector<UUID> ids;
+			ids.reserve(entities.size());
+			for (const Entity entity : entities)
+			{
+				if (!entity || entity.GetScene() != entities.front().GetScene())
+					return fail("The entities do not exist in the scene");
+				ids.push_back(entity.GetUUID());
+			}
+			return ids;
+		}
+
+		// Sets the property of every entity to its value in `values` (in the same order) as one undoable edit. Edits of the
+		// same property of the same entities in the same order merge (SceneEditAction compares the entities; the key names
+		// the edit) until the undo stack's merge is broken. Fails, changing nothing, when a value is invalid.
+		bool WriteOnEntities(EditorContext& context, std::span<const Entity> entities, const std::vector<UUID>& ids, const ComponentInfo& component,
+			const PropertyInfo& property, std::span<const PropertyValue> values, std::string* outError)
+		{
+			const std::string mergeKey = fmt::format("Property/{}+{}/{}/{}", ids.front().ToString(), ids.size(), component.Name, property.Name);
+			const std::string name = entities.size() == 1 ? fmt::format("Edit {} {}", component.DisplayName, property.DisplayName)
+				: fmt::format("Edit {} {} of {} Entities", component.DisplayName, property.DisplayName, entities.size());
+			SceneEditTransaction transaction(*entities.front().GetScene(), name, ids, mergeKey);
+			for (size_t index = 0; index < entities.size(); index++)
+			{
+				if (!ComponentAccess::SetProperty(entities[index], component, property, values[index], outError))
+				{
+					transaction.Rollback();
+					return false;
+				}
+			}
+			context.CommitEdit(transaction);
+			return true;
+		}
+
 		// Calls `function` with the vector a value holds (glm::vec2/3/4) and returns true, or returns false for other values.
 		template<typename Function>
 		bool VisitVector(PropertyValue& value, Function&& function)
@@ -116,15 +174,9 @@ namespace Strata
 			});
 			if (std::holds_alternative<glm::quat>(*other))
 			{
-				// Compared in the form closest to the first entity's: equal rotations read back in the other form would
-				// differ in every angle.
-				const glm::vec3 firstAngles = Math::QuatToEulerDegrees(std::get<glm::quat>(shared.Value));
-				const glm::vec3 ownAngles = GetEulerDegreesNear(std::get<glm::quat>(*other), firstAngles);
-				for (glm::length_t axis = 0; axis < 3; axis++)
-				{
-					shared.MixedComponents[static_cast<size_t>(axis)] = shared.MixedComponents[static_cast<size_t>(axis)]
-						|| std::abs(ownAngles[axis] - firstAngles[axis]) > c_AngleEpsilon;
-				}
+				const PropertyComponentMask differing = GetDifferingAngles(std::get<glm::quat>(shared.Value), std::get<glm::quat>(*other));
+				for (size_t axis = 0; axis < 3; axis++)
+					shared.MixedComponents[axis] = shared.MixedComponents[axis] || differing[axis];
 			}
 		}
 		return shared;
@@ -146,32 +198,20 @@ namespace Strata
 				return false;
 			};
 
-			if (entities.empty())
-				return fail("No entities to edit");
-			std::vector<UUID> ids;
-			for (const Entity entity : entities)
-			{
-				if (!entity || entity.GetScene() != entities.front().GetScene())
-					return fail("The entities do not exist in the scene");
-				ids.push_back(entity.GetUUID());
-			}
+			const std::optional<std::vector<UUID>> ids = GetEditedEntityIds(entities, outError);
+			if (!ids)
+				return false;
 
-			// The same entities in the same order merge (SceneEditAction compares them); the key names the edit.
-			const std::string mergeKey = fmt::format("Property/{}+{}/{}/{}", ids.front().ToString(), ids.size(), component.Name, property.Name);
-			const std::string name = entities.size() == 1 ? fmt::format("Edit {} {}", component.DisplayName, property.DisplayName)
-				: fmt::format("Edit {} {} of {} Entities", component.DisplayName, property.DisplayName, entities.size());
-			SceneEditTransaction transaction(*entities.front().GetScene(), name, ids, mergeKey);
+			std::vector<PropertyValue> values;
+			values.reserve(entities.size());
 			for (const Entity entity : entities)
 			{
-				PropertyValue target = value;
+				PropertyValue& target = values.emplace_back(value);
 				if (components)
 				{
 					const std::optional<PropertyValue> current = ComponentAccess::GetProperty(entity, component, property);
 					if (!current || current->index() != value.index())
-					{
-						transaction.Rollback();
 						return fail(fmt::format("'{}' has no {} component", entity.GetName(), component.Name));
-					}
 					// Vectors and colors: the components the edit did not touch keep each entity's own value.
 					VisitVector(target, [&](auto& vector)
 					{
@@ -197,15 +237,8 @@ namespace Strata
 						target = Math::EulerDegreesToQuat(own);
 					}
 				}
-				std::string error;
-				if (!ComponentAccess::SetProperty(entity, component, property, target, &error))
-				{
-					transaction.Rollback();
-					return fail(error);
-				}
 			}
-			context.CommitEdit(transaction);
-			return true;
+			return WriteOnEntities(context, entities, *ids, component, property, values, outError);
 		}
 
 	}
@@ -255,16 +288,108 @@ namespace Strata
 		return SetPropertyOnEntities(context, entities, component, property, value, components, nullptr, outError);
 	}
 
-	bool SetRotationAnglesWithUndo(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& component, const PropertyInfo& property,
-		const glm::vec3& angles, const PropertyComponentMask& components, std::string* outError)
+	std::optional<RotationAnglesEdit> RotationAnglesEdit::Begin(std::span<const Entity> entities, const ComponentInfo& component, const PropertyInfo& property,
+		const glm::vec3& shown, std::string* outError)
 	{
-		if (property.Type != PropertyType::Quat)
+		auto fail = [outError](std::string message) -> std::optional<RotationAnglesEdit>
 		{
 			if (outError)
-				*outError = fmt::format("Property '{}' is not a rotation", property.Name);
+				*outError = std::move(message);
+			return std::nullopt;
+		};
+
+		if (property.Type != PropertyType::Quat)
+			return fail(fmt::format("Property '{}' is not a rotation", property.Name));
+		std::optional<std::vector<UUID>> ids = GetEditedEntityIds(entities, outError);
+		if (!ids)
+			return std::nullopt;
+
+		RotationAnglesEdit edit;
+		edit.m_Component = component.Name;
+		edit.m_Property = property.Name;
+		edit.m_Entities = std::move(*ids);
+		edit.m_Angles.reserve(entities.size());
+		edit.m_Rotations.reserve(entities.size());
+		for (size_t index = 0; index < entities.size(); index++)
+		{
+			const std::optional<PropertyValue> current = ComponentAccess::GetProperty(entities[index], component, property);
+			if (!current || !std::holds_alternative<glm::quat>(*current))
+				return fail(fmt::format("'{}' has no {} component", entities[index].GetName(), component.Name));
+			const glm::quat& rotation = std::get<glm::quat>(*current);
+			// The first entity's angles are the ones shown, and so are those of an entity with the same rotation (the widget
+			// shows none of its angles as differing): read from the rotation, they could be others (at a yaw of 90 degrees,
+			// every split of pitch and roll with the same difference is the same rotation).
+			bool sameAsFirst = index == 0;
+			if (!sameAsFirst)
+			{
+				const PropertyComponentMask differing = GetDifferingAngles(edit.m_Rotations.front(), rotation);
+				sameAsFirst = std::none_of(differing.begin(), differing.end(), [](bool differs) { return differs; });
+			}
+			edit.m_Angles.push_back(sameAsFirst ? shown : GetEulerDegreesNear(rotation, shown));
+			edit.m_Rotations.push_back(rotation);
+		}
+		return edit;
+	}
+
+	bool RotationAnglesEdit::Continues(std::span<const Entity> entities, const ComponentInfo& component, const PropertyInfo& property) const
+	{
+		if (component.Name != m_Component || property.Name != m_Property || entities.size() != m_Entities.size())
+			return false;
+		for (size_t index = 0; index < entities.size(); index++)
+		{
+			if (!entities[index] || entities[index].GetUUID() != m_Entities[index])
+				return false;
+			// Exactly the rotation the edit wrote: any other change since makes the edit's angles stale.
+			const std::optional<PropertyValue> current = ComponentAccess::GetProperty(entities[index], component, property);
+			if (!current || !std::holds_alternative<glm::quat>(*current) || std::get<glm::quat>(*current) != m_Rotations[index])
+				return false;
+		}
+		return true;
+	}
+
+	bool RotationAnglesEdit::Update(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& component, const PropertyInfo& property,
+		const glm::vec3& angles, const PropertyComponentMask& components, std::string* outError)
+	{
+		if (!Continues(entities, component, property))
+		{
+			if (outError)
+				*outError = fmt::format("The {} of the entities changed since the edit began", property.DisplayName);
 			return false;
 		}
-		return SetPropertyOnEntities(context, entities, component, property, PropertyValue(Math::EulerDegreesToQuat(angles)), components, &angles, outError);
+		const std::optional<std::vector<UUID>> ids = GetEditedEntityIds(entities, outError);
+		if (!ids)
+			return false;
+
+		std::vector<glm::vec3> updated = m_Angles;
+		std::vector<PropertyValue> values;
+		values.reserve(entities.size());
+		for (size_t index = 0; index < entities.size(); index++)
+		{
+			if (index == 0)
+			{
+				updated[index] = angles;
+			}
+			else
+			{
+				for (glm::length_t axis = 0; axis < 3; axis++)
+				{
+					if (components[static_cast<size_t>(axis)])
+						updated[index][axis] = angles[axis];
+				}
+			}
+			values.emplace_back(Math::EulerDegreesToQuat(updated[index]));
+		}
+		if (!WriteOnEntities(context, entities, *ids, component, property, values, outError))
+			return false;
+
+		// What the entities hold now (the property may have adjusted a value), which the next update must find.
+		m_Angles = std::move(updated);
+		for (size_t index = 0; index < entities.size(); index++)
+		{
+			const std::optional<PropertyValue> written = ComponentAccess::GetProperty(entities[index], component, property);
+			m_Rotations[index] = written && std::holds_alternative<glm::quat>(*written) ? std::get<glm::quat>(*written) : std::get<glm::quat>(values[index]);
+		}
+		return true;
 	}
 
 	bool IsSettableProperty(const PropertyInfo& property)

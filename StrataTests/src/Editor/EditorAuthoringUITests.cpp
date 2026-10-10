@@ -33,6 +33,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <optional>
 #include <string>
 #include <vector>
@@ -155,6 +156,28 @@ namespace
 			const std::optional<UI::ItemProbe::Item> item = UI::ItemProbe::Find(key);
 			REQUIRE_MESSAGE(item.has_value(), "No ", std::string(key), " in the last frame");
 			return item->GetCenter();
+		}
+
+		std::string ProbeText(std::string_view key)
+		{
+			const std::optional<UI::ItemProbe::Item> item = UI::ItemProbe::Find(key);
+			REQUIRE_MESSAGE(item.has_value(), "No ", std::string(key), " in the last frame");
+			return item->Text;
+		}
+
+		// Types a number into a drag field (Ctrl+click turns it into text) in place of its value and presses Enter.
+		void TypeNumber(std::string_view probeKey, std::string_view text)
+		{
+			ClickWith(ProbeCenter(probeKey), ImGuiMod_Ctrl);
+			Harness.SetKey(ImGuiMod_Ctrl, true);
+			Harness.SetKey(ImGuiKey_A, true);
+			Frames(1);
+			Harness.SetKey(ImGuiKey_A, false);
+			Harness.SetKey(ImGuiMod_Ctrl, false);
+			Frames(1);
+			Harness.TypeText(text);
+			Frames(1);
+			Press(ImGuiKey_Enter);
 		}
 
 		std::vector<std::string> RootNames()
@@ -644,6 +667,75 @@ TEST_SUITE("Editor.UI.Inspector")
 		};
 		CHECK(yaw(first, 10.0f) > 100.0f);
 		CHECK(yaw(second, 20.0f) == doctest::Approx(yaw(first, 10.0f)).epsilon(0.001));
+	}
+
+	TEST_CASE("Dragging the yaw of several entities through exactly 90 degrees keeps each one's pitch and roll")
+	{
+		AuthoringEditor editor;
+		const glm::vec3 starts[] = { glm::vec3(10.0f, 80.0f, 30.0f), glm::vec3(20.0f, 80.0f, 40.0f) };
+		std::vector<UUID> ids;
+		for (const glm::vec3& start : starts)
+			ids.push_back(editor.Create("Turned", { { "components", { { "Transform", { { "Rotation", { start.x, start.y, start.z } } } } } } }));
+		editor.Context().SetSelection(ids);
+		editor.Frames(2);
+		const size_t position = editor.UndoPosition();
+
+		// The yaw field right of its axis label, dragged to the right a pixel a frame: 0.5 degrees per pixel, so the yaw takes
+		// every half degree on its way, among them exactly 90, where a rotation keeps only the difference of pitch and roll.
+		const UI::ItemProbe::Item label = *UI::ItemProbe::Find("Inspector.Transform.Rotation.Y");
+		ImVec2 mouse(label.Max.x + ImGui::GetFontSize() * 0.5f, label.GetCenter().y);
+		editor.Harness.MoveMouse(mouse);
+		editor.Frames(1);
+		editor.Harness.SetMouseButton(ImGuiMouseButton_Left, true);
+		editor.Frames(1);
+		bool passedNinety = false;
+		for (int step = 0; step < 90; step++)
+		{
+			mouse.x += 1.0f;
+			editor.Harness.MoveMouse(mouse);
+			editor.Frames(1);
+			passedNinety = passedNinety || editor.ProbeText("Inspector.Transform.Rotation.Y.Value") == "90";
+		}
+		editor.Harness.SetMouseButton(ImGuiMouseButton_Left, false);
+		editor.Frames(2);
+		REQUIRE(passedNinety);
+		const float yaw = std::strtof(editor.ProbeText("Inspector.Transform.Rotation.Y.Value").c_str(), nullptr);
+		CHECK(yaw > 120.0f);
+		CHECK(editor.UndoPosition() == position + 1);
+
+		// Each turned to the yaw shown, with its own pitch and roll; the fields show the first one's yaw and the others as
+		// differing.
+		for (size_t index = 0; index < ids.size(); index++)
+		{
+			const glm::quat expected = Math::EulerDegreesToQuat(glm::vec3(starts[index].x, yaw, starts[index].z));
+			CHECK(std::abs(glm::dot(expected, editor.Get(ids[index]).GetComponent<TransformComponent>().Rotation)) == doctest::Approx(1.0f).epsilon(0.0001));
+		}
+		CHECK(editor.ProbeText("Inspector.Transform.Rotation.X.Value") == "--");
+		CHECK(editor.ProbeText("Inspector.Transform.Rotation.Z.Value") == "--");
+	}
+
+	TEST_CASE("After an undo the rotation fields show the angles restored, and the next edit keeps them")
+	{
+		AuthoringEditor editor;
+		const UUID id = editor.Create("Turned");
+		editor.Context().Select(id);
+		editor.Frames(2);
+		editor.TypeNumber("Inspector.Transform.Rotation.Y.Value", "45");
+		editor.TypeNumber("Inspector.Transform.Rotation.Y.Value", "45.1");
+		editor.Frames(1);
+		CHECK(editor.ProbeText("Inspector.Transform.Rotation.Y.Value") == "45.1");
+
+		// Undone: the rotation is a tenth of a degree from the one the field's angles made, and the field follows it.
+		REQUIRE(editor.Context().Undo());
+		editor.Frames(2);
+		CHECK(editor.ProbeText("Inspector.Transform.Rotation.Y.Value") == "45");
+
+		// The next edit starts from the angles shown, so it does not write the undone yaw back.
+		editor.TypeNumber("Inspector.Transform.Rotation.X.Value", "5");
+		const glm::vec3 angles = Math::QuatToEulerDegrees(editor.Get(id).GetComponent<TransformComponent>().Rotation);
+		CHECK(angles.x == doctest::Approx(5.0f).epsilon(0.0001));
+		CHECK(angles.y == doctest::Approx(45.0f).epsilon(0.0001));
+		CHECK(angles.z == doctest::Approx(0.0f).epsilon(0.0001));
 	}
 
 	TEST_CASE("At a laptop's window size the Inspector shows values and labels whole")

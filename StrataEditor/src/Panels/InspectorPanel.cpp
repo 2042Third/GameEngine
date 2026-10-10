@@ -253,6 +253,7 @@ namespace Strata
 	{
 		m_MaterialEditor.CommitPending(context.Context);
 		m_SettingsDraft.reset();
+		m_RotationEdit.reset();
 	}
 
 	const std::vector<std::optional<PropertyValue>>& InspectorPanel::GetDefaults(const ComponentInfo& info)
@@ -495,7 +496,7 @@ namespace Strata
 				if (entities.size() == 1)
 					set = SetPropertyWithUndo(context, entities.front(), info, property, value, &error);
 				else if (partial && property.Type == PropertyType::Quat)
-					set = SetRotationAnglesWithUndo(context, entities, info, property, result.EulerAngles, result.ChangedComponents, &error);
+					set = UpdateRotationEdit(context, entities, info, property, result, &error);
 				else if (partial)
 					set = SetPropertyComponentsWithUndo(context, entities, info, property, value, result.ChangedComponents, &error);
 				else
@@ -504,9 +505,21 @@ namespace Strata
 					ST_WARN("{}.{}: {}", info.Name, property.Name, error);
 			}
 			if (result.Finished)
+			{
 				context.GetUndoStack().BreakMerge();
+				// The next edit reads the entities' angles again, as the fields show them then.
+				m_RotationEdit.reset();
+			}
 		}
 		UI::EndPropertyTable();
+	}
+
+	bool InspectorPanel::UpdateRotationEdit(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info, const PropertyInfo& property,
+		const PropertyEditResult& result, std::string* outError)
+	{
+		if (!m_RotationEdit || !m_RotationEdit->Continues(entities, info, property))
+			m_RotationEdit = RotationAnglesEdit::Begin(entities, info, property, result.EulerAnglesBefore, outError);
+		return m_RotationEdit && m_RotationEdit->Update(context, entities, info, property, result.EulerAngles, result.ChangedComponents, outError);
 	}
 
 	void InspectorPanel::DrawMaterialSection(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities)
