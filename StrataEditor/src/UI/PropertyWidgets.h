@@ -46,6 +46,9 @@ namespace Strata
 		// The ItemProbe key prefix of the widget (e.g. "Inspector.Transform.Translation"): the field is recorded under it and
 		// the axis labels under "<prefix>.X" and so on, so tests can find them. Empty: nothing is recorded.
 		std::string_view ProbeKey;
+		// Unsigned whole numbers: what the field says while the value is 0, where 0 stands for a choice rather than none
+		// ("Auto" for capacities the engine sizes). Dragging or typing a number sets one as usual.
+		std::string_view ZeroLabel;
 	};
 
 	// Draws an editor widget for a reflected property and edits `value` in place, filling the width it is given:

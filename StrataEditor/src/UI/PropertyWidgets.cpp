@@ -890,11 +890,22 @@ namespace Strata
 				}
 				const uint32_t min = property.HasRange() ? static_cast<uint32_t>(std::max(property.Min, 0.0f)) : 0u;
 				const uint32_t max = property.HasRange() ? static_cast<uint32_t>(property.Max) : std::numeric_limits<uint32_t>::max();
+				// A format without a conversion shows as it is; ImGui types and parses the number with its own format then.
+				std::string zeroLabel;
+				if (number == 0 && !options.Mixed)
+				{
+					for (const char character : options.ZeroLabel)
+						zeroLabel += character == '%' ? std::string("%%") : std::string(1, character);
+				}
 				ImGui::SetNextItemWidth(-FLT_MIN);
-				result.Changed = ImGui::DragScalar("##Value", ImGuiDataType_U32, &number, GetSpeed(property, 0.2f), &min, &max, options.Mixed ? c_MixedText : "%u");
+				result.Changed = ImGui::DragScalar("##Value", ImGuiDataType_U32, &number, GetSpeed(property, 0.2f), &min, &max,
+					options.Mixed ? c_MixedText : (zeroLabel.empty() ? "%u" : zeroLabel.c_str()));
 				result.Finished = ImGui::IsItemDeactivatedAfterEdit();
 				if (!options.ProbeKey.empty())
-					UI::ItemProbe::Record(options.ProbeKey);
+				{
+					const std::string shown = options.Mixed ? std::string(c_MixedText) : (zeroLabel.empty() ? std::to_string(number) : std::string(options.ZeroLabel));
+					UI::ItemProbe::Record(options.ProbeKey, true, 0, shown);
+				}
 				continuous = true;
 				break;
 			}

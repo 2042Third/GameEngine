@@ -1343,9 +1343,9 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
     channels, colors and texts show "--". Sliders are a track with a handle and the number in a field beside it. A
     component's menu copies and pastes its settable values through the clipboard as JSON
     (`EditorActions::CopyComponentValues`) and runs `component.set`/`component.remove {entities}`. With nothing selected
-    it shows the scene's settings (gravity, the fixed step, and the physics world's capacities, 0 for automatic sizing),
-    applied by one `scene.setSettings` when a drag ends, and the first active sky light
-    (the renderer's).
+    it shows the scene's settings (gravity, the fixed step, and the physics world's capacities: 0, automatic sizing,
+    reads "Auto", `PropertyWidgetOptions::ZeroLabel`), applied by one `scene.setSettings` when a drag ends, and the first
+    active sky light (the renderer's).
   - The **Asset** inspector is tabbed with the Inspector: `EditorLayer` brings the tab of the inspection target forward
     when `GetInspectionVersion` changes (`EditorPanelRegistry::ShowTab`, which leaves the keyboard focus where it is).
     Materials are drawn by `MaterialEditor` (a drag previews, its release saves: one write and one undo step), import

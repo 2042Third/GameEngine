@@ -35,6 +35,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Strata
@@ -168,6 +169,9 @@ namespace Strata
 			PropertyInfo MaxContactConstraints;
 		};
 
+		// What a capacity of 0 (sized automatically when play starts) reads as.
+		constexpr std::string_view c_AutomaticCapacity = "Auto";
+
 		PropertyInfo MakeCapacityProperty(const char* name, const char* displayName, const char* tooltip, uint32_t limit)
 		{
 			PropertyInfo property;
@@ -205,14 +209,14 @@ namespace Strata
 				properties.MaxFixedSteps.Min = 1.0f;
 				properties.MaxFixedSteps.Max = 64.0f;
 				properties.MaxBodies = MakeCapacityProperty("MaxBodies", "Max Bodies",
-					"Bodies the physics world holds, reserved when play starts (about 80 bytes each); 0 sizes it from the bodies the "
+					"Bodies the physics world holds, reserved when play starts (about 80 bytes each); Auto (0) sizes it from the bodies the "
 					"scene starts with. Raise it for scenes that create many bodies while they play",
 					PhysicsCapacitySettings::c_MaxBodiesLimit);
 				properties.MaxBodyPairs = MakeCapacityProperty("MaxBodyPairs", "Max Body Pairs",
-					"Pairs of bodies with overlapping bounds per step (about 90 bytes each); 0: automatic",
+					"Pairs of bodies with overlapping bounds per step (about 90 bytes each); Auto (0): sized from the bodies",
 					PhysicsCapacitySettings::c_MaxBodyPairsLimit);
 				properties.MaxContactConstraints = MakeCapacityProperty("MaxContactConstraints", "Max Contacts",
-					"Contacts solved per step (about 830 bytes each); 0: automatic", PhysicsCapacitySettings::c_MaxContactConstraintsLimit);
+					"Contacts solved per step (about 830 bytes each); Auto (0): sized from the bodies", PhysicsCapacitySettings::c_MaxContactConstraintsLimit);
 				return properties;
 			}();
 			return s_Properties;
@@ -759,32 +763,34 @@ namespace Strata
 			const SceneSettings defaults;
 			if (UI::BeginPropertyTable("Settings"))
 			{
-				auto draw = [&](const PropertyInfo& property, PropertyValue value, const PropertyValue& fallback, auto&& apply)
+				auto draw = [&](const PropertyInfo& property, PropertyValue value, const PropertyValue& fallback, std::string_view zeroLabel, auto&& apply)
 				{
 					const std::string probe = "Inspector.Scene." + property.Name;
 					UI::PropertyLabel(property.DisplayName, property.Tooltip, probe);
 					PropertyWidgetOptions options;
 					options.DefaultValue = &fallback;
 					options.ProbeKey = probe;
+					options.ZeroLabel = zeroLabel;
 					const PropertyEditResult result = DrawPropertyWidget(property, value, scene, options);
 					if (result.Changed)
 						apply(value);
 					changed |= result.Changed;
 					finished |= result.Finished;
 				};
-				draw(properties.Gravity, shown.Gravity, PropertyValue(defaults.Gravity), [&](const PropertyValue& value) { shown.Gravity = std::get<glm::vec3>(value); });
-				draw(properties.FixedTimestep, shown.FixedTimestep, PropertyValue(defaults.FixedTimestep),
+				draw(properties.Gravity, shown.Gravity, PropertyValue(defaults.Gravity), {}, [&](const PropertyValue& value) { shown.Gravity = std::get<glm::vec3>(value); });
+				draw(properties.FixedTimestep, shown.FixedTimestep, PropertyValue(defaults.FixedTimestep), {},
 					[&](const PropertyValue& value) { shown.FixedTimestep = std::get<float>(value); });
-				draw(properties.MaxFixedSteps, shown.MaxFixedStepsPerFrame, PropertyValue(defaults.MaxFixedStepsPerFrame),
+				draw(properties.MaxFixedSteps, shown.MaxFixedStepsPerFrame, PropertyValue(defaults.MaxFixedStepsPerFrame), {},
 					[&](const PropertyValue& value) { shown.MaxFixedStepsPerFrame = std::get<uint32_t>(value); });
-				// Capacities take effect when a physics world is created (the next play start). A typed value is not clamped by the
-				// field, and scene.setSettings refuses one over the limit: it becomes the limit.
+				// Capacities take effect when a physics world is created (the next play start); 0, the default, sizes them from the
+				// scene (shown as "Auto"). A typed value is not clamped by the field, and scene.setSettings refuses one over the
+				// limit: it becomes the limit.
 				PhysicsCapacitySettings& capacity = shown.PhysicsCapacity;
-				draw(properties.MaxBodies, capacity.MaxBodies, PropertyValue(defaults.PhysicsCapacity.MaxBodies), [&](const PropertyValue& value)
+				draw(properties.MaxBodies, capacity.MaxBodies, PropertyValue(defaults.PhysicsCapacity.MaxBodies), c_AutomaticCapacity, [&](const PropertyValue& value)
 					{ capacity.MaxBodies = std::min(std::get<uint32_t>(value), PhysicsCapacitySettings::c_MaxBodiesLimit); });
-				draw(properties.MaxBodyPairs, capacity.MaxBodyPairs, PropertyValue(defaults.PhysicsCapacity.MaxBodyPairs), [&](const PropertyValue& value)
+				draw(properties.MaxBodyPairs, capacity.MaxBodyPairs, PropertyValue(defaults.PhysicsCapacity.MaxBodyPairs), c_AutomaticCapacity, [&](const PropertyValue& value)
 					{ capacity.MaxBodyPairs = std::min(std::get<uint32_t>(value), PhysicsCapacitySettings::c_MaxBodyPairsLimit); });
-				draw(properties.MaxContactConstraints, capacity.MaxContactConstraints, PropertyValue(defaults.PhysicsCapacity.MaxContactConstraints),
+				draw(properties.MaxContactConstraints, capacity.MaxContactConstraints, PropertyValue(defaults.PhysicsCapacity.MaxContactConstraints), c_AutomaticCapacity,
 					[&](const PropertyValue& value)
 					{ capacity.MaxContactConstraints = std::min(std::get<uint32_t>(value), PhysicsCapacitySettings::c_MaxContactConstraintsLimit); });
 				UI::EndPropertyTable();

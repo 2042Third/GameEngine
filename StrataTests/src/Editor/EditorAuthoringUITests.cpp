@@ -1009,10 +1009,18 @@ TEST_SUITE("Editor.UI.Inspector")
 		CHECK(editor.ProbeText("Inspector.Scene.MaxBodies.Label") == "Max Bodies");
 		CHECK(editor.ProbeText("Inspector.Scene.MaxBodyPairs.Label") == "Max Body Pairs");
 		CHECK(editor.ProbeText("Inspector.Scene.MaxContactConstraints.Label") == "Max Contacts");
+		// 0, sized automatically when play starts, reads as such rather than as no room at all.
+		CHECK(editor.ProbeText("Inspector.Scene.MaxBodies") == "Auto");
+		CHECK(editor.ProbeText("Inspector.Scene.MaxBodyPairs") == "Auto");
+		CHECK(editor.ProbeText("Inspector.Scene.MaxContactConstraints") == "Auto");
+		CHECK(editor.ProbeText("Inspector.Scene.MaxFixedStepsPerFrame") == std::to_string(SceneSettings().MaxFixedStepsPerFrame));
 
+		// A number typed over "Auto" is set.
 		const size_t position = editor.UndoPosition();
 		editor.TypeNumber("Inspector.Scene.MaxBodies", "50000");
 		CHECK(capacity().MaxBodies == 50'000u);
+		editor.Frames(1);
+		CHECK(editor.ProbeText("Inspector.Scene.MaxBodies") == "50000");
 		CHECK(capacity().MaxBodyPairs == 0u);
 		CHECK(editor.UndoPosition() == position + 1);
 		editor.TypeNumber("Inspector.Scene.MaxContactConstraints", "4096");
@@ -1029,6 +1037,8 @@ TEST_SUITE("Editor.UI.Inspector")
 		CHECK(capacity().MaxBodies == 50'000u);
 		CHECK(capacity().MaxContactConstraints == 0u);
 		CHECK(capacity().MaxBodyPairs == 0u);
+		editor.Frames(1);
+		CHECK(editor.ProbeText("Inspector.Scene.MaxContactConstraints") == "Auto");
 	}
 
 	TEST_CASE("The asset picker searches the assets of the property's type and picks with Enter")
