@@ -355,8 +355,9 @@ extern "C"
 		 * honored once the current frame's update is done (scripts keep running until then); quitting wins over loading and
 		 * later requests replace earlier ones. QuitGame ends the game with an exit code: an exported game exits with it, the
 		 * editor stops play mode. LoadScene replaces the running scene with a scene asset (every entity of the current scene
-		 * goes away), or restarts the running scene for the null handle; it fails for assets that are not scenes. The switch
-		 * loads the scene asset synchronously (the frame waits for it unless it was loaded before, see RequestAssetLoad).
+		 * goes away), or restarts the running scene for the null handle; it fails for assets that are not scenes. The scene
+		 * and everything it uses load in the background while the running scene goes on (GetSceneLoadProgress); it replaces
+		 * the running scene once all of it is in.
 		 */
 		void (*QuitGame)(StrataScriptContext* context, int32_t exitCode);
 		bool (*LoadScene)(StrataScriptContext* context, StrataScriptAssetHandle scene);
@@ -368,6 +369,32 @@ extern "C"
 		 * false when the scene holds no request for the asset (never requested, or released already).
 		 */
 		bool (*ReleaseAsset)(StrataScriptContext* context, StrataScriptAssetHandle asset);
+
+		/*
+		 * Scene streaming (added after the initial set of ABI version 1: check ST_SCRIPT_HAS_MEMBER before use).
+		 * LoadSceneAdditive loads a scene asset into the playing scene next to what it holds (a sub-scene) and returns the
+		 * sub-scene's ID (0 when it cannot start: not a scene asset). The asset and everything it uses load in the background;
+		 * then its entities are created over the following frames (a bounded number per frame), keeping the IDs they have in
+		 * the asset (a sub-scene whose IDs the scene has already fails: loading one twice). UnloadSubScene removes a sub-scene:
+		 * it cancels its load or destroys its entities with their descendants (at the end of the frame, like DestroyEntity);
+		 * false for an unknown ID. IsSubSceneLoaded is true once every entity of the sub-scene exists.
+		 */
+		uint64_t (*LoadSceneAdditive)(StrataScriptContext* context, StrataScriptAssetHandle scene);
+		bool (*UnloadSubScene)(StrataScriptContext* context, uint64_t subScene);
+		bool (*IsSubSceneLoaded)(StrataScriptContext* context, uint64_t subScene);
+		/* How far the scene LoadScene asked for has loaded, in [0, 1] (a loading bar), or -1 while no switch is under way. */
+		float (*GetSceneLoadProgress)(StrataScriptContext* context);
+		/* The share of the stored bytes of the asset and everything it uses (its dependency closure) that has loaded, in
+		 * [0, 1]: at 1 an instance of a prefab draws complete in its first frame. The first call loads the closure and keeps it
+		 * loaded while the scene plays, like RequestAssetLoad (ReleaseAsset ends it). -1 for an asset that does not exist. */
+		float (*GetAssetLoadProgress)(StrataScriptContext* context, StrataScriptAssetHandle asset);
+		/* Instantiates a prefab or model `count` times, each root placed by a local transform (16 floats per instance, a
+		 * column-major 4x4 matrix of a translation, rotation and scale, relative to `parent`, or the world for 0). Writes the
+		 * root entities to outEntities (room for `count`) and returns how many it created: `count`, or 0 when it created none
+		 * (a degenerate transform, an asset that is not loaded yet - its load starts, as for Instantiate - or a scene too
+		 * full). */
+		uint32_t (*InstantiateMany)(StrataScriptContext* context, StrataScriptAssetHandle asset, uint32_t count, const float* transforms,
+			StrataScriptEntityID parent, StrataScriptEntityID* outEntities);
 
 		/* New functions are appended here (see the compatibility rules above). */
 	} StrataScriptHostAPI;

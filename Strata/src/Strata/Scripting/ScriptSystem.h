@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Strata/Asset/AssetManager.h"
 #include "Strata/Asset/AssetResidency.h"
 #include "Strata/Core/Base.h"
 #include "Strata/Core/Timestep.h"
@@ -121,9 +122,14 @@ namespace Strata
 		// Asset requests of the scripts (Assets::RequestLoad): the scene keeps a requested asset pinned (AssetPin) until the
 		// scripts release it or play stops. Requests do not add up. RequestAsset fails for assets the manager does not know.
 		bool RequestAsset(AssetManagerBase& manager, AssetHandle asset);
-		// False when the scene holds no request for the asset.
+		// False when the scene holds no request for the asset (neither RequestAsset's nor GetAssetLoadProgress's).
 		bool ReleaseAsset(AssetHandle asset);
 		size_t GetRequestedAssetCount() const { return m_AssetPins.size(); }
+		// The share of the stored bytes of the asset and its dependency closure that has loaded, in [0, 1]
+		// (AssetGroupRequest::Progress). The first call for an asset requests the closure, which the scene then keeps loaded
+		// (pinned at Normal priority) until ReleaseAsset or the end of play, as RequestAsset keeps the asset. Negative for an
+		// asset the manager does not know.
+		float GetAssetLoadProgress(AssetManagerBase& manager, AssetHandle asset);
 		// Logs a problem with a script's use of the API, naming the calling script; each distinct message is logged once.
 		void ReportProblem(std::string_view function, const std::string& message);
 	private:
@@ -266,6 +272,8 @@ namespace Strata
 		std::vector<UUID> m_DeferredDestroys;
 
 		std::unordered_map<AssetHandle, AssetPin> m_AssetPins; // Assets the scripts requested (released when play stops)
+		// Closures the scripts asked the progress of (GetAssetLoadProgress), pinned like m_AssetPins.
+		std::unordered_map<AssetHandle, AssetGroupRequest> m_AssetGroups;
 		std::unordered_set<std::string> m_ReportedProblems;
 		CollisionListenerID m_CollisionListener = c_InvalidCollisionListener; // Registered with the scene's ICollisionEventSource while running
 		std::vector<entt::scoped_connection> m_Connections;

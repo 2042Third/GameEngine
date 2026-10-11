@@ -148,6 +148,7 @@ namespace Strata
 		DestroyAllInstances(true);
 		// After OnDestroy, which may still request or release assets: what the scripts kept loaded may go now.
 		m_AssetPins.clear();
+		m_AssetGroups.clear();
 		m_Connections.clear();
 		ClearUpdateOrder();
 		m_PendingStart.clear();
@@ -1424,7 +1425,22 @@ namespace Strata
 
 	bool ScriptSystem::ReleaseAsset(AssetHandle asset)
 	{
-		return m_AssetPins.erase(asset) > 0;
+		const bool pinned = m_AssetPins.erase(asset) > 0;
+		const bool grouped = m_AssetGroups.erase(asset) > 0;
+		return pinned || grouped;
+	}
+
+	float ScriptSystem::GetAssetLoadProgress(AssetManagerBase& manager, AssetHandle asset)
+	{
+		auto it = m_AssetGroups.find(asset);
+		if (it == m_AssetGroups.end())
+		{
+			AssetGroupRequest group = manager.RequestLoadWithDependencies(asset, AssetPriority::Normal);
+			if (!group.IsValid())
+				return -1.0f;
+			it = m_AssetGroups.emplace(asset, std::move(group)).first;
+		}
+		return it->second.Progress();
 	}
 
 	void ScriptSystem::ReportProblem(std::string_view function, const std::string& message)

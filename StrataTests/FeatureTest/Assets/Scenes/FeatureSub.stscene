@@ -1,0 +1,90 @@
+{
+	"Scene": {
+		"Entities": [
+			{
+				"Components": {
+					"MeshRenderer": {
+						"CastShadows": true,
+						"Material": "F7A0000000000003",
+						"Mesh": "0000000000000001"
+					},
+					"Name": {
+						"Name": "Sub Floor"
+					},
+					"Tag": {
+						"Tag": "Streamed"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							4,
+							0.2,
+							4
+						],
+						"Translation": [
+							30,
+							0,
+							-30
+						]
+					}
+				},
+				"ID": "F7E5000000000001"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Sub Marker"
+					},
+					"Tag": {
+						"Tag": "Streamed"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							2,
+							0
+						]
+					}
+				},
+				"ID": "F7E5000000000002",
+				"Parent": "F7E5000000000001"
+			}
+		],
+		"Name": "FeatureSub",
+		"Settings": {
+			"FixedTimestep": 0.016666668,
+			"Gravity": [
+				0,
+				-9.81,
+				0
+			],
+			"MaxEntitiesInstantiatedPerFrame": 5000,
+			"MaxFixedStepsPerFrame": 8,
+			"PhysicsCapacity": {
+				"MaxBodies": 0,
+				"MaxBodyPairs": 0,
+				"MaxContactConstraints": 0
+			}
+		}
+	},
+	"Strata": {
+		"Format": "Scene",
+		"Version": 1
+	}
+}

@@ -23,9 +23,9 @@ namespace Strata
 		}
 
 		// Replaces the running scene with a scene asset of the project: every entity of the current scene goes away (its
-		// scripts receive OnDestroy) and the new scene starts. Returns false for assets that are not scenes. The switch loads
-		// the scene synchronously, so the frame waits for a scene that is not loaded yet: request it early
-		// (Assets::RequestLoad, e.g. while the level runs) to switch without a hitch.
+		// scripts receive OnDestroy) and the new scene starts. Returns false for assets that are not scenes. The scene and
+		// everything it uses load in the background while the current scene goes on (show GetSceneLoadProgress); the switch
+		// happens once all of it is in.
 		static bool LoadScene(AssetHandle scene)
 		{
 			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(LoadScene);
@@ -40,6 +40,14 @@ namespace Strata
 		{
 			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(LoadScene);
 			return host && host->LoadScene(Detail::GetContext(), 0);
+		}
+
+		// How far the scene LoadScene asked for has loaded, in [0, 1] (a loading bar while the current scene goes on), or a
+		// negative value while no switch is under way (and with engines that predate it).
+		static float GetSceneLoadProgress()
+		{
+			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(GetSceneLoadProgress);
+			return host ? host->GetSceneLoadProgress(Detail::GetContext()) : -1.0f;
 		}
 	};
 

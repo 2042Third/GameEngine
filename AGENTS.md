@@ -519,7 +519,7 @@ Writing scripts is described in `.claude/skills/strata-scripting/SKILL.md`.
 | Where | What |
 | --- | --- |
 | `StrataScriptCore/Include/StrataScript/ScriptABI.h` | The versioned C ABI: host API table, module/class/field descriptors, values. |
-| `StrataScriptCore/Include/StrataScript/*.h` | Header-only C++ SDK (`StrataScript.h` includes all): `Script`, `Entity`, `Scene`, `Assets`, `Input`, `Time`, `Log`, `RigidBody` and `Physics` (bodies and queries; `Collision` for the contact callbacks of `Script`), `AudioSource` and `Audio`, `Game` (quit, scene loads), `ST_SCRIPT_CLASS`/`ST_SCRIPT_FIELD`. |
+| `StrataScriptCore/Include/StrataScript/*.h` | Header-only C++ SDK (`StrataScript.h` includes all): `Script`, `Entity`, `Scene`, `Assets`, `Input`, `Time`, `Log`, `RigidBody` and `Physics` (bodies and queries; `Collision` for the contact callbacks of `Script`), `AudioSource` and `Audio`, `Game` (quit, scene loads and their progress), `SubScene` (additive scenes), `ST_SCRIPT_CLASS`/`ST_SCRIPT_FIELD`. |
 | `StrataScriptCore/Source/ScriptModuleEntry.cpp` | The module entry points, compiled into every module by `strata_add_script_module()`. |
 | `StrataScriptCore/CMake/` | `strata_add_script_module()` and the package game projects use (`StrataScriptCoreConfig.cmake`). |
 | `Strata/src/Strata/Scripting/` | `ScriptEngine` (module, hot reload, faults, watchdog), `ScriptModule` (loading, validation, guarded calls), `ScriptSystem` (instances and lifecycle), `ScriptHostAPI` (the host table), `ScriptValue` (value conversion). |
@@ -538,7 +538,15 @@ Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; t
 - Audio: `AudioSource` and `Audio` go through the scene's `IAudioPlayback` (the `AudioSystem`); without it (simulate mode)
   the calls fail. The master volume belongs to the engine (the engine service `IAudioOutput`), so it works in any scene.
 - Game flow: `Game::Quit`, `LoadScene` and `ReloadScene` set `Scene::RequestQuit`/`RequestSceneLoad`, which the scene's owner
-  honors after the frame (see [Editor](#editor)).
+  honors after the frame (see [Editor](#editor)); while the next scene loads, `Game::GetSceneLoadProgress` reads the
+  progress the owner sets (`Scene::GetSceneLoadProgress`, negative without a switch).
+- Scene streaming (host functions `LoadSceneAdditive`, `UnloadSubScene`, `IsSubSceneLoaded`, `GetSceneLoadProgress`,
+  `GetAssetLoadProgress` and `InstantiateMany`, appended to ABI version 1 in that order): `Scene::LoadAdditive` loads a
+  scene asset into the playing scene (`Scene::LoadSubScene`) and returns a `SubScene` (`IsLoaded`, `Unload`);
+  `Assets::GetLoadProgress` requests an asset's dependency closure and returns the share of its bytes in
+  (`ScriptSystem::GetAssetLoadProgress`: pinned like `RequestLoad` until `Assets::Release`; at 1 a prefab's instance draws
+  complete in its first frame); `Scene::InstantiateMany` makes one instance of a prefab or model per transform in one call
+  (`EntityTemplate::InstantiateMany`, 16 floats per transform across the ABI).
 - Assets: `Assets::RequestLoad` pins the asset for the playing scene (`ScriptSystem::RequestAsset`; never evicted to meet
   memory budgets, see [Asset pipeline](#asset-pipeline), "Residency") until `Assets::Release` (host function
   `ReleaseAsset`, appended to ABI version 1) or the end of play; requests do not add up.

@@ -590,7 +590,10 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   them with `DestroyEntities` (systems hear `OnEntityDestroying`; deferred while the scene updates). `GetSubSceneStatus`
   reports the state (`Loading`, `Instantiating`, `Loaded`, `Failed` with the error), the progress (half the closure's
   bytes, half the entities), the entities created and the slices; failed sub-scenes stay until unloaded. A sub-scene's own
-  settings (gravity...) are not applied.
+  settings (gravity...) are not applied. Scripts load sub-scenes with `Scene::LoadAdditive` (the SDK's `SubScene`), read
+  an asset closure's progress with `Assets::GetLoadProgress` (`ScriptSystem::GetAssetLoadProgress`, an
+  `AssetGroupRequest` the scene pins until `Assets::Release`) and make many prefab instances with
+  `Scene::InstantiateMany`.
 - A scene knows the scene asset it was loaded from or saved as (`Scene::GetSourceAsset`, set when a scene asset's
   scene is taken or copied and by the editor's save-as) and keeps an ID across its copies (`GetLineageID`: the source
   asset, else an ID of its own), by which systems recognize it from one play session to the next.
