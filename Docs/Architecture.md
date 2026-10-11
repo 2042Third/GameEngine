@@ -616,7 +616,7 @@ Results come back to the main thread by polling, never through callbacks into en
 | Producer | Hand-off | Consumed by (main thread) |
 | --- | --- | --- |
 | Asset load jobs | completion queue (`AssetManagerBase::PushCompletion`) | `AssetManagerBase::Update` |
-| Background imports | `m_CompletedImports` | `EditorAssetManager::Update` |
+| Background imports | `BackgroundWork::CompletedImports` (only the results of imports still wanted) | `EditorAssetManager::Update` |
 | File watchers | change queue | `FileWatcher::PollChanges` in `EditorAssetManager::Update`, `ScriptEngine::Update` |
 | RPC network thread | request queue | `RpcServer::ProcessRequests` from `EditorAutomation::Update` |
 | Job-based commands | `JobHandle` | deferred command polls, e.g. `viewport.capture` (`EditorViewportCommands.cpp`) |
@@ -668,6 +668,27 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   assets stored as-is reload at once and their references are searched again), and `IsImportPending` tells a deferred
   command (`asset.setImportSettings`, `asset.reimport`) when `Update` applied it; `SetImportSettings` and
   `ReimportAsset` import on the calling thread (tools, tests, `asset.import`).
+- **Cancelling imports.** Nothing in the editor waits for a background import. Each is a `BackgroundJob` with a
+  cancellation flag, the importer's `ImportContext::Cancel`: importers check it as they go (the texture cooker per block
+  of a compressed level and between mip levels, the texture importer around decoding, the glTF importer between a
+  model's images, primitives and levels of detail) and stop, and a cancelled import reads no more project files
+  (`ImportContext::ReadFile` returns nothing). An import is cancelled when its result would be out of date or is no longer
+  wanted: `QueueImport` replaces a queued or running import of the same asset (new settings, a changed file, a
+  re-import) at once instead of running after it, `MoveAsset` cancels the asset's import before the file moves and queues
+  it again at the new place, `DeleteAsset` and a file removed on disk cancel it before its cache goes, `ReimportAsset`
+  cancels it before importing on the calling thread, and `Close` (project close, opening another project or a sample,
+  quitting) cancels everything. Other assets' imports go on. A queued job that is cancelled never starts; a running one
+  stops at its next check on its own. It stores nothing: an import writes its cache files under numbered temporary
+  names, then publishes them and its record together under the exclusive file lock, and only while it is still wanted;
+  whoever cancels sets the flag before changing files under that lock, so a cancelled import never publishes after a
+  move or delete changed what it read. Results are handed over only by jobs still wanted (`BackgroundWork::Finish`, under
+  the lock that cancels), and `Update` applies a result only while it comes from the source's current job. An import that
+  replaced one which may have published unapplied reloads the asset even when it finds the cache current
+  (`ImportRequest::Replaced`). Jobs use only `BackgroundWork` (the directories, the file lock, the job set and the
+  results; `ImportContext::ResolveAsset` reaches the manager through a pointer `Close` clears), which they keep alive, so
+  `Close` and the destructor return without waiting for any import; a job that outlives its manager finishes alone.
+  `WaitForImports` and `BuildAssetPack` still wait for every wanted import: tools and tests. The editor's export polls
+  `HasPendingImports` between frames instead (`GameExport`, "Waiting for asset imports to finish").
 - **References and bounds** (`Asset/AssetDependencies.h`). What an asset references is recorded with its import:
   importers add what their stored form does not show as a document (`ImportResult::References`; a glTF mesh's default
   materials) and the local bounds of meshes (`Bounds`), and `AssetDependencies::Scan` reads the documents (scenes,
@@ -1412,8 +1433,8 @@ at once what it can and fails without side effects: a saved, stopped scene, a st
 running script build, a loaded script module that is still the file that was loaded (scenes or prefabs that use scripts
 need one), what `Export.AlwaysInclude` names (with `prune`; `EditorAssetManager::CheckAlwaysInclude` matches the entries
 without planning), and a usable output directory (`CheckExportDirectory`: absolute, local, outside the project, not a
-file, no reserved device names; each refusal says what to do instead). It then waits for background imports, plans the
-pack once on the main thread (`EditorAssetManager::PlanAssetPack`) and writes everything on an I/O thread (failing, with
+file, no reserved device names; each refusal says what to do instead). It then waits for background imports (polling
+`HasPendingImports` once per frame, `WaitingForImports`; the frames go on), plans the pack once on the main thread (`EditorAssetManager::PlanAssetPack`) and writes everything on an I/O thread (failing, with
 the document named, when a document saved meanwhile references what the plan does not hold), reporting its progress in
 bytes and stage (`GetProgress`, `GetStage`; `project.exportStatus`); one export runs at a time
 (`EditorContext::StartGameExport`), `project.cancelExport` stops it between blocks, and closing the project or the

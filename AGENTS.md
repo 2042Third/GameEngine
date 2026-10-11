@@ -432,6 +432,14 @@ The threading model, frame loop and pipelines these rules protect are described 
   background (`Scan(ScanImports::InBackground)`, `EditorContextSpecification::ImportInBackground`; tests and scripted runs
   scan blocking, so every asset is imported when the project is open): a load of an asset whose first import is still
   running waits for it instead of failing (`AssetManagerBase::IsAwaitingImport`, `ResumeLoadsAwaitingImport`).
+  **Nothing in the editor waits for a background import** (only `WaitForImports` and `BuildAssetPack`, for tools and
+  tests): imports are cancelled instead. Closing the project, opening another and quitting cancel them all
+  (`EditorAssetManager::Close`); moving, deleting or re-importing an asset, new settings and file changes cancel only that
+  asset's import (replaced at once where it is still wanted). A cancelled import stores nothing, and its job uses only
+  what it shares with the manager (`BackgroundWork`), so nothing waits for it to stop. Importers check
+  `ImportContext::IsCancelled` between pieces of work that take milliseconds (a new importer with long loops must too;
+  the texture cooker checks per block) and read project files through `ReadImportSource`/`ReadImportDependency` (under the
+  manager's file lock, nothing once cancelled). Docs/Architecture.md, "Cancelling imports".
 - Engine-native assets (`.stscene`, `.stprefab`, `.stmat`) are JSON documents with a
   `{ "Strata": { "Format": ..., "Version": ... } }` header, stored as-is. Their loaders validate fully;
   JSON entry points are named `FromJson`, byte entry points `Deserialize`.
