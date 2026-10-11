@@ -49,11 +49,13 @@ namespace Strata
 		m_Scene.RegisterService<IBodyMotionQuery>(*this);
 		m_Scene.RegisterService<IBodyControl>(*this);
 		m_Scene.RegisterService<IPhysicsQueries>(*this);
+		m_Scene.RegisterService<ICharacterControl>(*this);
 	}
 
 	PhysicsSystem::~PhysicsSystem()
 	{
 		OnRuntimeStop();
+		m_Scene.UnregisterService<ICharacterControl>(*this);
 		m_Scene.UnregisterService<IPhysicsQueries>(*this);
 		m_Scene.UnregisterService<IBodyControl>(*this);
 		m_Scene.UnregisterService<IBodyMotionQuery>(*this);
@@ -91,6 +93,7 @@ namespace Strata
 		m_CreationConnections.emplace_back(registry.on_construct<SphereColliderComponent>().connect<&PhysicsSystem::OnPhysicsComponentAdded>(*this));
 		m_CreationConnections.emplace_back(registry.on_construct<CapsuleColliderComponent>().connect<&PhysicsSystem::OnPhysicsComponentAdded>(*this));
 		m_CreationConnections.emplace_back(registry.on_construct<MeshColliderComponent>().connect<&PhysicsSystem::OnPhysicsComponentAdded>(*this));
+		m_CreationConnections.emplace_back(registry.on_construct<CharacterControllerComponent>().connect<&PhysicsSystem::OnPhysicsComponentAdded>(*this));
 	}
 
 	PhysicsCapacityDemand PhysicsSystem::GetRememberedCapacityDemand(UUID sceneLineage)
@@ -376,11 +379,47 @@ namespace Strata
 		return m_World->OverlapBox(center, halfExtents, rotation, layerMask, includeTriggers);
 	}
 
+	bool PhysicsSystem::HasCharacterController(Entity entity)
+	{
+		ApplyPendingChanges();
+		return m_World && m_World->HasCharacterController(entity);
+	}
+
+	bool PhysicsSystem::MoveCharacter(Entity entity, const glm::vec3& velocity)
+	{
+		ApplyPendingChanges();
+		return m_World && m_World->MoveCharacter(entity, velocity);
+	}
+
+	bool PhysicsSystem::JumpCharacter(Entity entity, float speed)
+	{
+		ApplyPendingChanges();
+		return m_World && m_World->JumpCharacter(entity, speed);
+	}
+
+	bool PhysicsSystem::TeleportCharacter(Entity entity, const glm::vec3& position)
+	{
+		ApplyPendingChanges();
+		return m_World && m_World->TeleportCharacter(entity, position);
+	}
+
+	bool PhysicsSystem::AddCharacterMotion(Entity entity, const glm::vec3& displacement)
+	{
+		ApplyPendingChanges();
+		return m_World && m_World->AddCharacterMotion(entity, displacement);
+	}
+
+	std::optional<CharacterState> PhysicsSystem::GetCharacterState(Entity entity)
+	{
+		ApplyPendingChanges();
+		return m_World ? m_World->GetCharacterState(entity) : std::nullopt;
+	}
+
 	bool PhysicsSystem::SceneHasPhysicsComponents() const
 	{
 		const entt::registry& registry = m_Scene.GetRegistry();
 		return HasAny<RigidBodyComponent>(registry) || HasAny<BoxColliderComponent>(registry) || HasAny<SphereColliderComponent>(registry)
-			|| HasAny<CapsuleColliderComponent>(registry) || HasAny<MeshColliderComponent>(registry);
+			|| HasAny<CapsuleColliderComponent>(registry) || HasAny<MeshColliderComponent>(registry) || HasAny<CharacterControllerComponent>(registry);
 	}
 
 	void PhysicsSystem::OnPhysicsComponentAdded(entt::registry&, entt::entity)

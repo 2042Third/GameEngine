@@ -21,9 +21,9 @@
 // (Simulate has no audio). So the Scripting and Audio modules use physics and audio through the Scene layer and never
 // include each other's headers (the layers of StrataTests/Architecture/Layers.json).
 //
-// The built-in providers: PhysicsSystem offers ICollisionEventSource, IBodyMotionQuery, IBodyControl and IPhysicsQueries;
-// AudioSystem offers IAudioPlayback. All services are main thread only, like the scene. IAudioOutput, defined here too, is
-// an engine service (Core/EngineServices.h): it belongs to the process, not to a scene.
+// The built-in providers: PhysicsSystem offers ICollisionEventSource, IBodyMotionQuery, IBodyControl, IPhysicsQueries and
+// ICharacterControl; AudioSystem offers IAudioPlayback. All services are main thread only, like the scene. IAudioOutput,
+// defined here too, is an engine service (Core/EngineServices.h): it belongs to the process, not to a scene.
 namespace Strata
 {
 
@@ -174,6 +174,51 @@ namespace Strata
 		virtual std::vector<Entity> OverlapSphere(const glm::vec3& center, float radius, uint32_t layerMask, bool includeTriggers) = 0;
 		virtual std::vector<Entity> OverlapBox(const glm::vec3& center, const glm::vec3& halfExtents, const glm::quat& rotation, uint32_t layerMask,
 			bool includeTriggers) = 0;
+	};
+
+	//////////////////////////////////////////////////////////////////////////
+	// Character controllers
+	//////////////////////////////////////////////////////////////////////////
+
+	// Where a character controller stands, as of its last fixed step.
+	enum class CharacterGroundState : uint8_t
+	{
+		OnGround = 0,  // On walkable ground (not steeper than its MaxSlopeDegrees)
+		OnSteepGround, // Touching ground too steep to walk on: it slides down
+		NotSupported,  // Touching something, but nothing below holds it (e.g. pressed against a wall)
+		InAir          // Touching nothing
+	};
+
+	struct CharacterState
+	{
+		CharacterGroundState Ground = CharacterGroundState::InAir;
+		glm::vec3 GroundNormal = glm::vec3(0.0f);   // The surface normal of what it stands on (zero in the air)
+		glm::vec3 GroundVelocity = glm::vec3(0.0f); // The velocity of what it stands on (a moving platform)
+		glm::vec3 Velocity = glm::vec3(0.0f);       // How fast it moved in its last fixed step, after collisions
+		Entity GroundEntity;                        // The entity owning what it stands on (invalid in the air)
+	};
+
+	// The character controllers of the running simulation (PhysicsSystem): entities with an active, enabled
+	// CharacterControllerComponent and no RigidBodyComponent. Functions fail (false, nothing) for other entities and for
+	// non-finite values. What they set takes effect at the next fixed step.
+	class ICharacterControl
+	{
+	public:
+		virtual ~ICharacterControl() = default;
+
+		virtual bool HasCharacterController(Entity entity) = 0;
+		// The velocity (meters per second, world space) the character walks with from now on, until the next call: the
+		// horizontal part moves it along the ground; the vertical part is used only while its GravityScale is 0 (flying,
+		// swimming), otherwise gravity, jumps and the ground decide how it moves up and down.
+		virtual bool MoveCharacter(Entity entity, const glm::vec3& velocity) = 0;
+		// Makes it move up at `speed` (meters per second) at its next fixed step, on the ground or not.
+		virtual bool JumpCharacter(Entity entity, float speed) = 0;
+		// Moves it (and its entity) to a world position at once, keeping how it walks and dropping its vertical velocity.
+		virtual bool TeleportCharacter(Entity entity, const glm::vec3& position) = 0;
+		// A displacement (world space) added to its next fixed step's movement, colliding like walking: how animation root
+		// motion moves a character. Displacements add up until that step.
+		virtual bool AddCharacterMotion(Entity entity, const glm::vec3& displacement) = 0;
+		virtual std::optional<CharacterState> GetCharacterState(Entity entity) = 0;
 	};
 
 	//////////////////////////////////////////////////////////////////////////

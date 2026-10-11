@@ -150,6 +150,18 @@ namespace Strata
 				debugDraw.Capsule(rigid, radius, halfHeight, settings.ColliderColor, settings.Depth);
 		}
 
+		// A character controller's capsule stands upright on the entity's origin, whatever the entity's rotation and scale.
+		void DrawCollider(DebugDraw& debugDraw, const CharacterControllerComponent& controller, const glm::mat4& world, const SceneGizmoSettings& settings, const GizmoView& view)
+		{
+			const float height = std::abs(controller.Height);
+			const float radius = std::min(std::abs(controller.Radius), height * 0.5f);
+			if (!std::isfinite(height) || !std::isfinite(radius))
+				return;
+			const glm::vec3 center = glm::vec3(world[3]) + glm::vec3(0.0f, height * 0.5f, 0.0f);
+			if (view.IsVisible(center, height * 0.5f))
+				debugDraw.Capsule(glm::translate(glm::mat4(1.0f), center), radius, height * 0.5f - radius, settings.ColliderColor, settings.Depth);
+		}
+
 		void DrawMeshCollider(DebugDraw& debugDraw, const entt::registry& registry, entt::entity entity, const MeshColliderComponent& collider, const glm::mat4& world,
 			const SceneGizmoSettings& settings, const GizmoView& view)
 		{
@@ -183,6 +195,8 @@ namespace Strata
 				DrawCollider(debugDraw, *collider, world->Matrix, settings, view);
 			if (const MeshColliderComponent* collider = registry.try_get<MeshColliderComponent>(entity))
 				DrawMeshCollider(debugDraw, registry, entity, *collider, world->Matrix, settings, view);
+			if (const CharacterControllerComponent* controller = registry.try_get<CharacterControllerComponent>(entity))
+				DrawCollider(debugDraw, *controller, world->Matrix, settings, view);
 		}
 
 		template<typename Component>
@@ -347,6 +361,7 @@ namespace Strata
 			DrawAllColliders<SphereColliderComponent>(debugDraw, registry, settings, view, include);
 			DrawAllColliders<CapsuleColliderComponent>(debugDraw, registry, settings, view, include);
 			DrawAllColliders<MeshColliderComponent>(debugDraw, registry, settings, view, include);
+			DrawAllColliders<CharacterControllerComponent>(debugDraw, registry, settings, view, include);
 		};
 		if (settings.AllColliders)
 		{
@@ -360,7 +375,8 @@ namespace Strata
 		ST_CORE_ASSERT(std::is_sorted(listed.begin(), listed.end(), [](const Entity& a, const Entity& b) { return a.GetHandle() < b.GetHandle(); }),
 			"SceneGizmoSettings::ColliderEntities must be sorted by entity handle");
 		const size_t colliders = CountComponents<BoxColliderComponent>(registry) + CountComponents<SphereColliderComponent>(registry)
-			+ CountComponents<CapsuleColliderComponent>(registry) + CountComponents<MeshColliderComponent>(registry);
+			+ CountComponents<CapsuleColliderComponent>(registry) + CountComponents<MeshColliderComponent>(registry)
+			+ CountComponents<CharacterControllerComponent>(registry);
 		if (colliders < listed.size())
 		{
 			drawColliders([&](entt::entity entity)

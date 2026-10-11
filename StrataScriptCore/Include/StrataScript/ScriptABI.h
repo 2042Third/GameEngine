@@ -191,6 +191,34 @@ extern "C"
 		&& offsetof(StrataScriptCollision, Other) == 8 && offsetof(StrataScriptCollision, Point) == 16
 		&& offsetof(StrataScriptCollision, Normal) == 28, "StrataScriptCollision's layout is part of the ABI");
 
+	/* Where a character controller stands (StrataScriptCharacterState::GroundState). */
+	typedef enum StrataScriptGroundState
+	{
+		StrataScriptGroundState_OnGround = 0,      /* On walkable ground (not steeper than its MaxSlopeDegrees) */
+		StrataScriptGroundState_OnSteepGround = 1, /* On ground too steep to walk on: it slides down */
+		StrataScriptGroundState_NotSupported = 2,  /* Touching something that does not hold it up (pressed against a wall) */
+		StrataScriptGroundState_InAir = 3          /* Touching nothing */
+	} StrataScriptGroundState;
+
+	/* A character controller after its last fixed step (CharacterGetState). Its layout is frozen for the ABI version: modules
+	 * pass it for the engine to fill without a size, so a member appended later would overrun the structs of older modules.
+	 * More data needs a new struct and function. */
+	typedef struct StrataScriptCharacterState
+	{
+		uint32_t GroundState;              /* StrataScriptGroundState */
+		uint32_t Padding;
+		StrataScriptEntityID GroundEntity; /* The entity owning what it stands on (0 in the air) */
+		float GroundNormal[3];             /* The surface normal of what it stands on (zero in the air) */
+		float GroundVelocity[3];           /* The velocity of what it stands on (a moving platform) */
+		float Velocity[3];                 /* How fast it moved in its last fixed step, after collisions */
+		uint32_t Padding2;
+	} StrataScriptCharacterState;
+
+	ST_SCRIPT_DETAIL_STATIC_ASSERT(sizeof(StrataScriptCharacterState) == 56 && offsetof(StrataScriptCharacterState, GroundEntity) == 8
+		&& offsetof(StrataScriptCharacterState, GroundNormal) == 16 && offsetof(StrataScriptCharacterState, GroundVelocity) == 28
+		&& offsetof(StrataScriptCharacterState, Velocity) == 40 && offsetof(StrataScriptCharacterState, Padding2) == 52,
+		"StrataScriptCharacterState's layout is part of the ABI");
+
 	/*
 	 * Engine services for scripts. Unless noted otherwise, functions taking a context only work while the engine is
 	 * calling into the module for that context, on the engine's main thread; otherwise they fail (returning false, 0
@@ -368,6 +396,21 @@ extern "C"
 		 * false when the scene holds no request for the asset (never requested, or released already).
 		 */
 		bool (*ReleaseAsset)(StrataScriptContext* context, StrataScriptAssetHandle asset);
+
+		/*
+		 * Character controllers (added after the initial set of ABI version 1: check ST_SCRIPT_HAS_MEMBER before use). A
+		 * controller is an active entity with an enabled CharacterController component and no RigidBody; the functions fail
+		 * for other entities, for non-finite values and while the scene plays without physics. What they set takes effect at
+		 * the next fixed step. CharacterMove sets the velocity (meters per second, world space) the character walks with
+		 * until the next call: the horizontal part moves it along the ground, the vertical part counts only while its
+		 * GravityScale is 0. CharacterJump makes it move up at `speed` meters per second at its next fixed step, on the ground
+		 * or not. CharacterTeleport moves it and its entity to a world position at once (its feet: the entity's origin),
+		 * keeping its walk velocity and dropping its vertical velocity. CharacterGetState reads it after its last fixed step.
+		 */
+		bool (*CharacterMove)(StrataScriptContext* context, StrataScriptEntityID entity, const float velocity[3]);
+		bool (*CharacterJump)(StrataScriptContext* context, StrataScriptEntityID entity, float speed);
+		bool (*CharacterTeleport)(StrataScriptContext* context, StrataScriptEntityID entity, const float position[3]);
+		bool (*CharacterGetState)(StrataScriptContext* context, StrataScriptEntityID entity, StrataScriptCharacterState* outState);
 
 		/* New functions are appended here (see the compatibility rules above). */
 	} StrataScriptHostAPI;

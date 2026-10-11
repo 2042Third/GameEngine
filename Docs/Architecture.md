@@ -139,7 +139,7 @@ and while it runs its scene systems (see [Scene runtime lifecycle](#scene-runtim
 non-owning handle. Components are plain structs in `Components.h`, registered with stable names in
 `ComponentRegistration.cpp` (ID, Name, Transform, Relationship, Tag, Inactive, PrefabInstance, Camera, MeshRenderer,
 DirectionalLight, PointLight, SpotLight, SkyLight, PostProcess, Text, RigidBody, BoxCollider, SphereCollider,
-CapsuleCollider, MeshCollider, AudioSource, AudioListener, Script). `ComponentAccess` reads and writes them with
+CapsuleCollider, MeshCollider, CharacterController, AudioSource, AudioListener, Script). `ComponentAccess` reads and writes them with
 validation and change signals, `SceneSerializer` writes versioned JSON (keeping components it cannot read, see
 [Composition root and registries](#composition-root-and-registries)), and `Prefab.h` defines the scene-shaped assets
 (`EntityTemplate`, `Prefab`, `Model`, `SceneAsset`). `SceneServices.h` defines the interfaces through which the systems
@@ -199,7 +199,8 @@ scene of the same name), so the scene's next world is sized for it. Jolt reserve
 and does not survive a failed allocation, so the capacities a scene may ask for are limited (`PhysicsCapacitySettings`:
 about 80 bytes per body, 90 per body pair and 830 per contact constraint, about 940 MiB at the limits). Other systems
 use physics through the scene services `PhysicsSystem` offers (`ICollisionEventSource`, `IBodyMotionQuery`,
-`IBodyControl`, `IPhysicsQueries`, with `CollisionEvent` and `RaycastHit`, in `Scene/SceneServices.h`); collision events
+`IBodyControl`, `IPhysicsQueries`, `ICharacterControl`, with `CollisionEvent`, `RaycastHit` and `CharacterState`, in
+`Scene/SceneServices.h`); collision events
 collected during a step are dispatched
 afterwards on the main thread to the listeners. Contacts are tracked only for pairs someone wants (every pair while a
 listener of all entities is registered, otherwise pairs with a watched entity, such as one whose script has contact
@@ -217,6 +218,30 @@ at once (`Scene::MarkTransformsChanged`, no `on_update`); bodies below other wri
 parents first, and the rare cases (scale edits, failed writes, descendants to update) are handled on the main thread in body
 order, so the results do not depend on the number of threads. Body order comes from a bitmap over the body indices of
 which only the words that got bits are sorted, read and cleared, so a step costs what moved, not the world's capacity.
+
+**Character controllers** (`Physics/CharacterControllers`, `CharacterControllerComponent`). An entity with an active,
+enabled controller and no rigid body (an entity with both is the rigid body, with a warning) is a Jolt `CharacterVirtual`:
+an upright capsule standing on the entity's origin (its rotation and scale do not change it) that moves by collision
+queries, plus a kinematic presence body (90% of its radius, its top at the capsule's, carrying the entity's UUID) through
+which dynamic bodies land on it, triggers detect it and queries hit it. Each fixed step, after the bodies are synchronized
+and before Jolt's step, `CharacterControllerSet::Step` moves every controller: its velocity is the walk velocity its
+script set (`ICharacterControl::MoveCharacter`, kept until the next call; the vertical part only without gravity), a
+pending jump, accumulated root motion (`AddCharacterMotion`, the animation stream's hook) and gravity times its
+`GravityScale`; standing on walkable ground it takes on the ground's velocity (moving platforms), in the air its vertical
+velocity goes on (a ceiling stops a rise). Jolt's `ExtendedUpdate` then slides it along walls, walks it up steps up to
+`StepHeight` and keeps it on the ground walking down, against the layers its layer collides with (the world's live
+matrix) and never its own entity's bodies. The moves run in parallel batches on the job system (bounded scratch memory
+per batch), each reading only the world before the step and writing only its own controller: Jolt would push dynamic
+bodies from many threads in any order, so the set disables that and pushes afterwards, on the main thread in entity order
+(Jolt's formula, limited to `PushStrength` newtons, and the character's 70 kg pressing down a dynamic body it stands on),
+moves the presence bodies and writes each entity's translation (`Scene::MarkTransformsChanged`; its rotation and scale
+stay). So the results do not depend on the number of threads (`Physics.Character`), and 1,000 walking controllers take
+about 0.8 ms per step (`Perf.Physics.Characters1000Step`). An entity moved from outside (a script writing its transform,
+the editor) teleports its controller at the next step. The controllers' contacts (`GetActiveContacts`, one per touched
+body) join the step's contact reports, so `CollisionEvent`s and the scripts' `OnCollisionEnter/Exit` report them like any
+body's; triggers and bodies landing on a controller reach it through its presence body (`OnTriggerEnter/Exit`). The ground
+state (on ground, on steep ground, not supported, in air), ground normal, velocity and entity are `CharacterState`
+(`ICharacterControl::GetCharacterState`).
 
 **Audio** (`Audio/`). `AudioEngine` wraps the miniaudio mixer, output device, listener and one-shots (main-thread
 API; mixing runs on miniaudio's audio thread, or is pulled with `AdvanceNullDevice`/`ReadFrames` without a device).
@@ -538,6 +563,7 @@ which means the module is not in the build or its system does not run in this mo
 | `IBodyMotionQuery`: bodies, velocities, the velocity of a point moving with a body | `PhysicsSystem` | script host (`RigidBody`), `AudioSystem` (Doppler) |
 | `IBodyControl`: velocities, forces, impulses, gravity scale, wake-up, teleport | `PhysicsSystem` | script host (`RigidBody`) |
 | `IPhysicsQueries`: raycasts and overlaps | `PhysicsSystem` | script host (`Physics`) |
+| `ICharacterControl`: character controllers' walk velocity, jumps, teleports, root motion and state | `PhysicsSystem` | script host (`CharacterController`), animation's root motion |
 | `IAudioPlayback`: sources and one-shots | `AudioSystem` (an adapter object) | script host (`AudioSource`, `Audio`) |
 
 What outlives scenes is an engine service (`Core/EngineServices.h`): a module registers it in its registration function

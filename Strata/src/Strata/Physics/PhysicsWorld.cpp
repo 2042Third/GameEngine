@@ -6,7 +6,9 @@
 #include "Strata/Core/JobSystem.h"
 #include "Strata/Math/Math.h"
 #include "Strata/Physics/AssetMeshProvider.h"
+#include "Strata/Physics/CharacterControllers.h"
 #include "Strata/Physics/PhysicsJobSystem.h"
+#include "Strata/Physics/PhysicsLayers.h"
 #include "Strata/Physics/PhysicsMeshShapes.h"
 #include "Strata/Physics/PhysicsRuntime.h"
 #include "Strata/Scene/Components.h"
@@ -182,24 +184,12 @@ namespace Strata
 		}
 
 		//////////////////////////////////////////////////////////////////////////
-		// Layers
+		// Layers (encoded as in PhysicsLayers.h)
 		//////////////////////////////////////////////////////////////////////////
 
-		// Object layers encode the user layer (0-31) and whether the body can move: objectLayer = userLayer * 2 + moving.
-		JPH::ObjectLayer MakeObjectLayer(uint32_t userLayer, bool moving)
-		{
-			return static_cast<JPH::ObjectLayer>(userLayer * 2u + (moving ? 1u : 0u));
-		}
-
-		uint32_t GetUserLayer(JPH::ObjectLayer layer)
-		{
-			return static_cast<uint32_t>(layer) >> 1u;
-		}
-
-		bool IsMovingLayer(JPH::ObjectLayer layer)
-		{
-			return (static_cast<uint32_t>(layer) & 1u) != 0;
-		}
+		using PhysicsLayers::GetUserLayer;
+		using PhysicsLayers::IsMovingLayer;
+		using PhysicsLayers::MakeObjectLayer;
 
 		class BroadPhaseLayerMapping final : public JPH::BroadPhaseLayerInterface
 		{
@@ -512,7 +502,8 @@ namespace Strata
 			UUID EntityA = UUID::Null();
 			UUID EntityB = UUID::Null();
 			uint64_t SortKey = 0;        // Both body IDs; orders events independently of thread timing
-			uint64_t SubShapeKey = 0;    // Both sub shape IDs; picks a deterministic manifold among several per pair
+			// Both sub shape IDs; picks a deterministic manifold among several per pair (0: a character controller's report).
+			uint64_t SubShapeKey = 0;
 			glm::vec3 Point = glm::vec3(0.0f);
 			glm::vec3 Normal = glm::vec3(0.0f);
 			bool IsTrigger = false;
@@ -931,6 +922,8 @@ namespace Strata
 			countColliders.template operator()<SphereColliderComponent, BoxColliderComponent>();
 			countColliders.template operator()<CapsuleColliderComponent, BoxColliderComponent, SphereColliderComponent>();
 			countColliders.template operator()<MeshColliderComponent, BoxColliderComponent, SphereColliderComponent, CapsuleColliderComponent>();
+			// Character controllers have presence bodies.
+			count += CharacterControllerSet::CountCandidates(scene);
 			return static_cast<uint32_t>(std::min<uint64_t>(count, UINT32_MAX));
 		}
 
@@ -957,6 +950,10 @@ namespace Strata
 		std::unordered_map<MeshShapeKey, RestoredMeshShape, MeshShapeKeyHash> MeshShapes; // See PhysicsMeshShapes
 		std::unordered_map<PrimitiveShapeKey, JPH::RefConst<JPH::Shape>, PrimitiveShapeKeyHash> PrimitiveShapes; // See GetPrimitiveShape
 		Scope<JPH::PhysicsSystem> JoltSystem; // Destroyed before the listeners, filters and allocators it references
+		Scope<CharacterControllerSet> Characters; // Destroyed (with its presence bodies) before the Jolt system it uses
+		std::vector<CharacterBodyChange> CharacterChanges;            // Scratch of ApplyCharacterChanges
+		CharacterStepOutput CharacterStep;                            // Scratch of StepCharacters
+		std::vector<ContactReport> CharacterReports;                  // The step's contacts of character controllers (see StepCharacters)
 
 		std::map<entt::entity, BodyRecord> Bodies;                    // Ordered: per-step processing is deterministic
 		std::unordered_map<entt::entity, entt::entity> MergedOwners;  // Collider entity -> rigid body entity owning its body
@@ -2276,6 +2273,29 @@ namespace Strata
 			});
 		}
 
+		// Applies the changes of the character controllers (see CharacterControllerSet::ApplyChanges): contacts are wanted
+		// through presence bodies like through bodies, and end when a controller leaves the simulation; a rebuilt controller
+		// keeps its contacts, which the next step confirms or ends.
+		void ApplyCharacterChanges(PhysicsWorldData& data)
+		{
+			if (!data.Characters)
+				return; // The world is being destroyed
+			std::vector<CharacterBodyChange>& changes = data.CharacterChanges;
+			changes.clear();
+			data.Characters->ApplyChanges(changes);
+			for (const CharacterBodyChange& change : changes)
+			{
+				if (change.OldBody != c_NoCharacterBody)
+					data.Contacts.SetBodyInterest(JPH::BodyID(change.OldBody), false);
+				if (change.NewBody != c_NoCharacterBody)
+					data.Contacts.SetBodyInterest(JPH::BodyID(change.NewBody), data.ContactInterest.contains(change.Entity));
+				if (change.Removed)
+					EndContactsOf(data, change.Entity);
+				else if (data.EntityPairs.find(change.Entity) != data.EntityPairs.end())
+					data.RecheckedEntities.push_back(change.Entity);
+			}
+		}
+
 		void ApplyChanges(PhysicsWorldData& data)
 		{
 			ST_PROFILE_FUNCTION();
@@ -2383,6 +2403,7 @@ namespace Strata
 			}
 			FlushBodyBatches(data);
 			ReportBodyLimit(data);
+			ApplyCharacterChanges(data);
 		}
 
 		//////////////////////////////////////////////////////////////////////////
@@ -2955,6 +2976,7 @@ namespace Strata
 			const uint64_t step = data.StepCount;
 			std::vector<ContactReport>& reports = data.Reports;
 			data.Contacts.TakeReports(reports);
+			reports.insert(reports.end(), data.CharacterReports.begin(), data.CharacterReports.end());
 			// Several sub shape pairs of an entity pair may touch (and several collision steps report them again); the first
 			// report of each pair in this order, which does not depend on thread timing, describes the contact.
 			std::sort(reports.begin(), reports.end(), IsReportOrderedBefore);
@@ -3055,6 +3077,50 @@ namespace Strata
 				UpdatePolling(data, entity.GetHandle(), *record);
 				return true;
 			});
+		}
+
+		// Moves the character controllers by one step, before Jolt's (see CharacterControllerSet::Step): what they touched joins
+		// this step's contact reports; bodies of their entities and of the entities below them follow at the next step, as after
+		// a teleport (the write-back emits no on_update).
+		void StepCharacters(PhysicsWorldData& data, float timestep)
+		{
+			data.CharacterReports.clear();
+			CharacterStepOutput& output = data.CharacterStep;
+			const bool collectContacts = data.Contacts.IsTrackingAll() || !data.ContactInterest.empty();
+			data.Characters->Step(timestep, ToGlm(data.JoltSystem->GetGravity()), collectContacts, output);
+
+			Scene& scene = *data.OwnerScene;
+			for (entt::entity handle : output.Moved)
+			{
+				if (BodyRecord* record = FindRecord(data, handle))
+				{
+					record->TransformDirty = true;
+					UpdatePolling(data, handle, *record);
+				}
+				UpdateDescendantsOfMovedBody(data, Entity(handle, &scene), false);
+			}
+
+			for (const CharacterContactReport& contact : output.Contacts)
+			{
+				// Wanted like any contact: every one while tracking all, else those of an entity of interest.
+				if (!data.Contacts.IsTrackingAll() && !data.ContactInterest.contains(contact.Controller) && !data.ContactInterest.contains(contact.Other))
+					continue;
+				ContactReport report;
+				report.EntityA = contact.Controller;
+				report.EntityB = contact.Other;
+				report.Pair = MakePairKey(contact.Controller, contact.Other);
+				report.SortKey = (static_cast<uint64_t>(contact.ControllerBody) << 32) | contact.OtherBody;
+				report.Point = contact.Point;
+				report.Normal = contact.Normal;
+				data.CharacterReports.push_back(report);
+			}
+
+			// The contacts of controllers without a presence body (a full world) are not checked through an awake body.
+			for (UUID entityID : output.WithoutPresenceBody)
+			{
+				if (data.EntityPairs.find(entityID) != data.EntityPairs.end())
+					data.RecheckedEntities.push_back(entityID);
+			}
 		}
 
 		// A body whose simulated pose could not be written to its entity (its parent cannot be inverted, which the sync before
@@ -3481,6 +3547,7 @@ namespace Strata
 			data.JoltSystem->SetGravity(ToJolt(SceneSettings().Gravity));
 		}
 
+		data.Characters = CreateScope<CharacterControllerSet>(scene, *data.JoltSystem, data.Settings);
 		ConnectSignals(data);
 		RememberMeshState(data); // Before the bodies read mesh data: later changes are noticed against it
 		for (const Entity entity : scene.GetEntitiesInHierarchyOrder())
@@ -3521,6 +3588,7 @@ namespace Strata
 	PhysicsWorld::~PhysicsWorld()
 	{
 		m_Data->Connections.clear();
+		m_Data->Characters.reset();
 		DestroyAllBodies(*m_Data);
 	}
 
@@ -3570,6 +3638,10 @@ namespace Strata
 		const BodyRecord* record = entity.IsValid() ? FindRecord(data, entity.GetHandle()) : nullptr;
 		if (record && record->HasBody())
 			data.Contacts.SetBodyInterest(record->BodyID, interested);
+		// A character controller's triggers and the bodies landing on it reach it through its presence body.
+		const uint32_t presenceBody = data.Characters->GetPresenceBody(entityID);
+		if (presenceBody != c_NoCharacterBody)
+			data.Contacts.SetBodyInterest(JPH::BodyID(presenceBody), interested);
 	}
 
 	void PhysicsWorld::ApplyPendingChanges()
@@ -3609,6 +3681,7 @@ namespace Strata
 
 		data.StepCount++; // Identifies this step in the contact pairs' check and report marks
 		SyncEntitiesToBodies(data, timestep);
+		StepCharacters(data, timestep);
 
 		CollectCheckedPairs(data);
 		data.Activations.Clear();
@@ -3865,6 +3938,46 @@ namespace Strata
 		return true;
 	}
 
+	bool PhysicsWorld::HasCharacterController(Entity entity) const
+	{
+		return m_Data->Characters->Has(entity);
+	}
+
+	bool PhysicsWorld::MoveCharacter(Entity entity, const glm::vec3& velocity)
+	{
+		return m_Data->Characters->Move(entity, velocity);
+	}
+
+	bool PhysicsWorld::JumpCharacter(Entity entity, float speed)
+	{
+		return m_Data->Characters->Jump(entity, speed);
+	}
+
+	bool PhysicsWorld::TeleportCharacter(Entity entity, const glm::vec3& position)
+	{
+		PhysicsWorldData& data = *m_Data;
+		if (!data.Characters->Teleport(entity, position))
+			return false;
+		// Bodies of the entity (colliders on it) and below it follow, as they follow a teleported body.
+		if (BodyRecord* record = FindRecord(data, entity.GetHandle()))
+		{
+			record->TransformDirty = true;
+			UpdatePolling(data, entity.GetHandle(), *record);
+		}
+		UpdateDescendantsOfMovedBody(data, entity, false);
+		return true;
+	}
+
+	bool PhysicsWorld::AddCharacterMotion(Entity entity, const glm::vec3& displacement)
+	{
+		return m_Data->Characters->AddMotion(entity, displacement);
+	}
+
+	std::optional<CharacterState> PhysicsWorld::GetCharacterState(Entity entity) const
+	{
+		return m_Data->Characters->GetState(entity);
+	}
+
 	std::optional<RaycastHit> PhysicsWorld::Raycast(const glm::vec3& origin, const glm::vec3& direction, float maxDistance, uint32_t layerMask, Entity ignoreEntity, bool includeTriggers) const
 	{
 		ST_PROFILE_FUNCTION();
@@ -3973,6 +4086,8 @@ namespace Strata
 				case RigidBodyType::Kinematic: stats.KinematicBodyCount++; break;
 			}
 		}
+		stats.CharacterControllerCount = data.Characters->GetCount();
+		stats.CharacterTime = data.Characters->GetLastStepTime();
 		stats.ActiveBodyCount = data.JoltSystem->GetNumActiveBodies(JPH::EBodyType::RigidBody);
 		stats.ContactPairCount = static_cast<uint32_t>(data.TouchingPairs.size());
 		stats.PairIndexOperations = data.PairIndexOperations;

@@ -118,6 +118,7 @@ ST_SCRIPT_CLASS(Turret)
 - `Time`: `GetDeltaTime`, `GetFixedDeltaTime`, `GetElapsedTime`, `GetFrameIndex`, `Get/SetTimeScale`.
 - `Log::Info/Warn/Error/Trace(args...)` - arguments are concatenated (`Log::Info("Health ", health)`).
 - `RigidBody` (`GetEntity().GetRigidBody()`), `Physics` (raycasts, overlaps), `Collision` (contact callbacks),
+  `CharacterController` (`GetEntity().GetCharacterController()`: walk, jump, ground state),
   `AudioSource` (`GetEntity().GetAudioSource()`), `Audio` (one-shots, master volume), `Game` (quit, load scenes),
   `Random`, `Timer`, `KeyRepeat`: see [Gameplay API](#gameplay-api).
 
@@ -154,9 +155,33 @@ std::vector<Entity> nearby = Physics::OverlapSphere(center, 3.0f);
   next fixed step; `Teleport` is immediate. Results always name the entity that owns the body (the RigidBody entity,
   also for colliders on its children).
 
+### Character controllers
+
+A player or NPC that walks rather than tumbles: an entity with a `CharacterController` component (an upright capsule
+whose bottom is the entity's origin: `Height`, `Radius`, `StepHeight`, `MaxSlopeDegrees`, `Layer`, `GravityScale`,
+`PushStrength`, `Enabled`) and no `RigidBody`. Physics moves it every fixed step: it falls, slides along walls, walks up
+steps and walkable slopes, follows the ground down and pushes dynamic bodies, and writes the entity's position (never its
+rotation: turn the entity yourself).
+
+```cpp
+CharacterController controller = GetEntity().GetCharacterController();
+controller.Move(direction * Speed);   // Walk velocity (m/s, world space), kept until the next Move; Move(glm::vec3(0)) stops
+if (controller.IsGrounded() && Input::IsKeyPressed(Key::Space))
+	controller.Jump(5.0f);            // Upward speed at the next fixed step (also in the air: check IsGrounded)
+controller.Teleport(spawnPoint);      // Feet at that point, at once (respawns)
+controller.GetGroundState();          // GroundState::OnGround, OnSteepGround (sliding), NotSupported, InAir
+controller.GetGroundNormal(); controller.GetGroundEntity(); controller.GetGroundVelocity(); // What it stands on
+controller.GetVelocity();             // How it actually moved in the last step (zero against a wall)
+```
+
+Move from `OnUpdate` (input) or `OnFixedUpdate`; the vertical part of the walk velocity counts only with `GravityScale` 0
+(flying, swimming). What it walks on and into reaches its script as `OnCollisionEnter/Exit` (the ground too: the normal
+points down to it), triggers it walks through as `OnTriggerEnter/Exit`; raycasts and overlaps find it, and dynamic
+bodies land on it. An entity with both a `RigidBody` and a `CharacterController` is the rigid body (with a warning).
+
 ### Contacts
 
-Override the contact callbacks on the script of an entity that owns a body:
+Override the contact callbacks on the script of an entity that owns a body (or a character controller):
 
 ```cpp
 void OnCollisionEnter(const Collision& collision) override  // Solid contacts begin

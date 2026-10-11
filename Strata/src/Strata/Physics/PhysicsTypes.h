@@ -89,8 +89,9 @@ namespace Strata
 		uint32_t StaticBodyCount = 0;
 		uint32_t DynamicBodyCount = 0;
 		uint32_t KinematicBodyCount = 0;
-		uint32_t ActiveBodyCount = 0;    // Awake bodies (sleeping and static bodies are not simulated)
+		uint32_t ActiveBodyCount = 0;    // Awake bodies (sleeping and static bodies are not simulated), character controllers' presence bodies included
 		uint32_t PendingBodyCount = 0;   // Entities waiting for a body that cannot be built yet (degenerate transform, mesh not loaded, world full)
+		uint32_t CharacterControllerCount = 0; // Character controllers in the simulation (their presence bodies are not in BodyCount)
 		uint32_t ContactPairCount = 0;   // Touching pairs of entities that are tracked (those someone listens to, see ICollisionEventSource)
 		uint64_t PairIndexOperations = 0; // Entries of the per-entity touching pair lists written since the world was created
 		// Capacities of the world (as resolved when it was created) and what overflowed them.
@@ -121,9 +122,10 @@ namespace Strata
 		// The parts of LastStepTime, in milliseconds: Jolt's own step, and Strata's work around it (bringing the bodies in line
 		// with their entities, writing simulated poses back, turning contacts into events).
 		float JoltStepTime = 0.0f;
-		float SyncTime = 0.0f;
+		float SyncTime = 0.0f;           // Includes CharacterTime
 		float WriteBackTime = 0.0f;
 		float ContactTime = 0.0f;
+		float CharacterTime = 0.0f;      // Moving the character controllers (see CharacterControllerSet)
 	};
 
 	// Triangle data used to build MeshColliderComponent shapes.

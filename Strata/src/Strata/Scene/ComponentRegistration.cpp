@@ -335,6 +335,24 @@ namespace Strata
 			.AssetProperty("Mesh", &MeshColliderComponent::Mesh, AssetType::Mesh, { .Tooltip = "Uses the Mesh Renderer's mesh when unset" })
 			.Property("Convex", &MeshColliderComponent::Convex, WithTooltip({}, "Non-convex meshes are only supported on static bodies"));
 
+		ComponentRegistry::Register<CharacterControllerComponent>("CharacterController")
+			.DisplayName("Character Controller")
+			.Category("Physics")
+			.Description("An upright capsule that scripts walk, jump and teleport: it slides along walls, walks up steps and walkable slopes and "
+				"pushes dynamic bodies; its bottom is the entity's origin")
+			.Property("Height", &CharacterControllerComponent::Height,
+				WithTooltip(Range(0.01f, 1000.0f, 0.01f), "Total height of the capsule in world units; its bottom is the entity's origin"))
+			.Property("Radius", &CharacterControllerComponent::Radius, WithTooltip(Range(0.005f, 500.0f, 0.01f), "World units"))
+			.Property("StepHeight", &CharacterControllerComponent::StepHeight,
+				WithTooltip(Range(0.0f, 100.0f, 0.01f), "Highest step it walks up, and how far it follows the ground down (world units)"))
+			.Property("MaxSlopeDegrees", &CharacterControllerComponent::MaxSlopeDegrees,
+				WithTooltip(Range(0.0f, 89.0f, 0.5f), "Steepest slope it walks up, in degrees from the horizontal"))
+			.Property("Layer", &CharacterControllerComponent::Layer, WithTooltip(Range(0.0f, 31.0f), "Collision layer (0-31)"))
+			.Property("GravityScale", &CharacterControllerComponent::GravityScale, WithTooltip(Range(-100.0f, 100.0f, 0.05f), "Times the scene's gravity"))
+			.Property("PushStrength", &CharacterControllerComponent::PushStrength,
+				WithTooltip(Range(0.0f, c_Unbounded, 1.0f), "Largest force with which it pushes dynamic bodies, in newtons"))
+			.Property("Enabled", &CharacterControllerComponent::Enabled, WithTooltip({}, "A disabled controller neither moves nor collides"));
+
 		////////////////////////////////////////////////////////////////////////////////
 		// Audio
 		////////////////////////////////////////////////////////////////////////////////

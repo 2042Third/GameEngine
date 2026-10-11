@@ -58,6 +58,10 @@ namespace Strata
 	// bodies or the world's capacity (see PhysicsStats::SyncedBodyCount, CheckedPairCount, WrittenBodyCount and
 	// OrderedSlotCount).
 	//
+	// Character controllers (CharacterControllerComponent, see CharacterControllerSet) move in each step before Jolt's: they
+	// walk, fall and push dynamic bodies, write their entities' translations, and their contacts join the bodies' (the
+	// entity pairs above), so contact events and the scripts' callbacks report them like bodies' contacts.
+	//
 	// The simulation waits for mesh colliders at the start: while a mesh collider that exists before the first step waits for
 	// mesh data the provider is loading or for its shape to be cooked, Simulate holds the step (nothing moves and no
 	// collision events occur, but changes are still applied and queries work), so that bodies do not fall through mesh
@@ -172,6 +176,19 @@ namespace Strata
 		// Moves the body and its entity instantly (keeping velocities and the entity's world scale) and wakes the bodies
 		// around its old and new place.
 		bool Teleport(Entity entity, const glm::vec3& position, const glm::quat& rotation);
+
+		//////////////////////////////////////////////////////////////////////////
+		// Character controllers (see CharacterControllerSet and ICharacterControl; entities without a controller in the
+		// simulation get false or nothing)
+		//////////////////////////////////////////////////////////////////////////
+
+		bool HasCharacterController(Entity entity) const;
+		bool MoveCharacter(Entity entity, const glm::vec3& velocity);
+		bool JumpCharacter(Entity entity, float speed);
+		// Moves the controller and its entity at once (bodies of the entity and below it follow at the next step).
+		bool TeleportCharacter(Entity entity, const glm::vec3& position);
+		bool AddCharacterMotion(Entity entity, const glm::vec3& displacement);
+		std::optional<CharacterState> GetCharacterState(Entity entity) const;
 
 		//////////////////////////////////////////////////////////////////////////
 		// Queries (bodies of the simulation as of the last step or change; triggers are skipped unless includeTriggers is

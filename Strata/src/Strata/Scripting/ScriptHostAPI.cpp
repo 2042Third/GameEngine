@@ -1379,6 +1379,113 @@ namespace Strata
 		}
 
 		////////////////////////////////////////////////////////////////////////////////
+		// Character controllers (with the physics functions: they move together when physics is left out of a build)
+		////////////////////////////////////////////////////////////////////////////////
+
+		// The scene's character controllers (ICharacterControl) and the entity a character function acts on, reporting why
+		// there is none: the entity does not exist, the scene plays without physics, or the entity is no controller.
+		Entity RequireCharacter(ScriptSystem& system, StrataScriptEntityID id, const char* function, ICharacterControl*& outCharacters)
+		{
+			const Entity entity = RequireEntity(system, id, function);
+			if (!entity)
+				return {};
+			outCharacters = system.GetScene().GetService<ICharacterControl>();
+			if (!outCharacters)
+			{
+				system.ReportProblem(function, "the scene plays without physics");
+				return {};
+			}
+			if (!outCharacters->HasCharacterController(entity))
+			{
+				system.ReportProblem(function, fmt::format("'{}' is no character controller (character controllers are active entities with an enabled "
+					"CharacterController component and no RigidBody)", entity.GetName()));
+				return {};
+			}
+			return entity;
+		}
+
+		bool HostCharacterMove(StrataScriptContext* context, StrataScriptEntityID entity, const float velocity[3])
+		{
+			return HostCall("CharacterMove", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "CharacterMove");
+				ICharacterControl* characters = nullptr;
+				const Entity character = system ? RequireCharacter(*system, entity, "CharacterMove", characters) : Entity();
+				const std::optional<glm::vec3> value = character ? ReadVector3(*system, velocity, "velocity", "CharacterMove") : std::nullopt;
+				return value && characters->MoveCharacter(character, *value);
+			});
+		}
+
+		bool HostCharacterJump(StrataScriptContext* context, StrataScriptEntityID entity, float speed)
+		{
+			return HostCall("CharacterJump", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "CharacterJump");
+				ICharacterControl* characters = nullptr;
+				const Entity character = system ? RequireCharacter(*system, entity, "CharacterJump", characters) : Entity();
+				if (!character)
+					return false;
+				if (!std::isfinite(speed))
+				{
+					system->ReportProblem("CharacterJump", "the speed must be finite");
+					return false;
+				}
+				return characters->JumpCharacter(character, speed);
+			});
+		}
+
+		bool HostCharacterTeleport(StrataScriptContext* context, StrataScriptEntityID entity, const float position[3])
+		{
+			return HostCall("CharacterTeleport", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "CharacterTeleport");
+				ICharacterControl* characters = nullptr;
+				const Entity character = system ? RequireCharacter(*system, entity, "CharacterTeleport", characters) : Entity();
+				const std::optional<glm::vec3> value = character ? ReadVector3(*system, position, "position", "CharacterTeleport") : std::nullopt;
+				if (!value)
+					return false;
+				if (!characters->TeleportCharacter(character, *value))
+				{
+					system->ReportProblem("CharacterTeleport", fmt::format("'{}' cannot be placed there (its parent is scaled to zero)", character.GetName()));
+					return false;
+				}
+				return true;
+			});
+		}
+
+		bool HostCharacterGetState(StrataScriptContext* context, StrataScriptEntityID entity, StrataScriptCharacterState* outState)
+		{
+			return HostCall("CharacterGetState", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "CharacterGetState");
+				if (!system)
+					return false;
+				if (!outState)
+				{
+					system->ReportProblem("CharacterGetState", "the output pointer is null");
+					return false;
+				}
+				ICharacterControl* characters = nullptr;
+				const Entity character = RequireCharacter(*system, entity, "CharacterGetState", characters);
+				const std::optional<CharacterState> state = character ? characters->GetCharacterState(character) : std::nullopt;
+				if (!state)
+					return false;
+				*outState = {};
+				outState->GroundState = static_cast<uint32_t>(state->Ground);
+				outState->GroundEntity = state->GroundEntity ? static_cast<uint64_t>(state->GroundEntity.GetUUID()) : 0;
+				WriteVector3(state->GroundNormal, outState->GroundNormal);
+				WriteVector3(state->GroundVelocity, outState->GroundVelocity);
+				WriteVector3(state->Velocity, outState->Velocity);
+				return true;
+			});
+		}
+
+		static_assert(static_cast<uint32_t>(CharacterGroundState::OnGround) == StrataScriptGroundState_OnGround
+			&& static_cast<uint32_t>(CharacterGroundState::OnSteepGround) == StrataScriptGroundState_OnSteepGround
+			&& static_cast<uint32_t>(CharacterGroundState::NotSupported) == StrataScriptGroundState_NotSupported
+			&& static_cast<uint32_t>(CharacterGroundState::InAir) == StrataScriptGroundState_InAir, "The ground states are the ABI's");
+
+		////////////////////////////////////////////////////////////////////////////////
 		// Audio
 		////////////////////////////////////////////////////////////////////////////////
 
@@ -1692,7 +1799,11 @@ namespace Strata
 	X(AudioGetMasterVolume) \
 	X(QuitGame) \
 	X(LoadScene) \
-	X(ReleaseAsset)
+	X(ReleaseAsset) \
+	X(CharacterMove) \
+	X(CharacterJump) \
+	X(CharacterTeleport) \
+	X(CharacterGetState)
 
 		struct HostFunctionEntry
 		{

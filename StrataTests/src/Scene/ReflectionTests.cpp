@@ -27,7 +27,8 @@ TEST_SUITE("Reflection")
 		const char* expected[] = {
 			"ID", "Name", "Transform", "Relationship", "Tag", "Inactive", "PrefabInstance", "Camera", "MeshRenderer",
 			"DirectionalLight", "PointLight", "SpotLight", "SkyLight", "PostProcess", "Text", "RigidBody",
-			"BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "AudioSource", "AudioListener", "Script"
+			"BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "CharacterController", "AudioSource", "AudioListener",
+			"Script"
 		};
 		for (const char* name : expected)
 			CHECK_MESSAGE(ComponentRegistry::Find(name) != nullptr, name);

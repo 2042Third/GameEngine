@@ -519,7 +519,7 @@ Writing scripts is described in `.claude/skills/strata-scripting/SKILL.md`.
 | Where | What |
 | --- | --- |
 | `StrataScriptCore/Include/StrataScript/ScriptABI.h` | The versioned C ABI: host API table, module/class/field descriptors, values. |
-| `StrataScriptCore/Include/StrataScript/*.h` | Header-only C++ SDK (`StrataScript.h` includes all): `Script`, `Entity`, `Scene`, `Assets`, `Input`, `Time`, `Log`, `RigidBody` and `Physics` (bodies and queries; `Collision` for the contact callbacks of `Script`), `AudioSource` and `Audio`, `Game` (quit, scene loads), `ST_SCRIPT_CLASS`/`ST_SCRIPT_FIELD`. |
+| `StrataScriptCore/Include/StrataScript/*.h` | Header-only C++ SDK (`StrataScript.h` includes all): `Script`, `Entity`, `Scene`, `Assets`, `Input`, `Time`, `Log`, `RigidBody` and `Physics` (bodies and queries; `Collision` for the contact callbacks of `Script`), `CharacterController` (walking, jumping, ground state), `AudioSource` and `Audio`, `Game` (quit, scene loads), `ST_SCRIPT_CLASS`/`ST_SCRIPT_FIELD`. |
 | `StrataScriptCore/Source/ScriptModuleEntry.cpp` | The module entry points, compiled into every module by `strata_add_script_module()`. |
 | `StrataScriptCore/CMake/` | `strata_add_script_module()` and the package game projects use (`StrataScriptCoreConfig.cmake`). |
 | `Strata/src/Strata/Scripting/` | `ScriptEngine` (module, hot reload, faults, watchdog), `ScriptModule` (loading, validation, guarded calls), `ScriptSystem` (instances and lifecycle), `ScriptHostAPI` (the host table), `ScriptValue` (value conversion). |
@@ -535,6 +535,9 @@ Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; t
   `ScriptSystem` listens to the scene's `ICollisionEventSource` while it runs and calls the scripts of both entities,
   skipping removed, disabled and not yet started instances; contacts begin only for active entities, and each instance
   that got an Enter gets its Exit, also after its entity was deactivated.
+- Character controllers: `CharacterController` (`Move`, `Jump`, `Teleport`, the ground state) goes through the scene's
+  `ICharacterControl` (the `PhysicsSystem`, see Docs/Architecture.md, "Engine modules", Physics). A controller is an entity
+  with an enabled `CharacterControllerComponent` and no `RigidBodyComponent`; its contacts reach the scripts like a body's.
 - Audio: `AudioSource` and `Audio` go through the scene's `IAudioPlayback` (the `AudioSystem`); without it (simulate mode)
   the calls fail. The master volume belongs to the engine (the engine service `IAudioOutput`), so it works in any scene.
 - Game flow: `Game::Quit`, `LoadScene` and `ReloadScene` set `Scene::RequestQuit`/`RequestSceneLoad`, which the scene's owner

@@ -35,13 +35,14 @@ namespace Strata
 	// and static bodies only follow signaled changes, see PhysicsWorld).
 	//
 	// Other systems reach it through the scene services it registers while it exists (Scene/SceneServices.h):
-	// ICollisionEventSource, IBodyMotionQuery, IBodyControl and IPhysicsQueries. Collision events are collected during each
+	// ICollisionEventSource, IBodyMotionQuery, IBodyControl, IPhysicsQueries and ICharacterControl. Collision events are collected during each
 	// step and dispatched afterwards on the main thread to the registered listeners (see ICollisionEventSource, which also
 	// says which contacts are tracked). Listeners may use the whole scene and physics API, including destroying entities;
 	// End events caused by changes made outside a step are dispatched after the next update.
 	//
 	// Main thread only. Functions return false / zero / empty results while there is no simulation.
-	class PhysicsSystem : public SceneSystem, public ICollisionEventSource, public IBodyMotionQuery, public IBodyControl, public IPhysicsQueries
+	class PhysicsSystem : public SceneSystem, public ICollisionEventSource, public IBodyMotionQuery, public IBodyControl, public IPhysicsQueries,
+		public ICharacterControl
 	{
 	public:
 		explicit PhysicsSystem(Scene& scene);
@@ -126,6 +127,17 @@ namespace Strata
 		std::vector<Entity> OverlapSphere(const glm::vec3& center, float radius, uint32_t layerMask = c_AllPhysicsLayers, bool includeTriggers = false) override;
 		std::vector<Entity> OverlapBox(const glm::vec3& center, const glm::vec3& halfExtents, const glm::quat& rotation, uint32_t layerMask = c_AllPhysicsLayers,
 			bool includeTriggers = false) override;
+
+		//////////////////////////////////////////////////////////////////////////
+		// Character controllers (ICharacterControl; see PhysicsWorld)
+		//////////////////////////////////////////////////////////////////////////
+
+		bool HasCharacterController(Entity entity) override;
+		bool MoveCharacter(Entity entity, const glm::vec3& velocity) override;
+		bool JumpCharacter(Entity entity, float speed) override;
+		bool TeleportCharacter(Entity entity, const glm::vec3& position) override;
+		bool AddCharacterMotion(Entity entity, const glm::vec3& displacement) override;
+		std::optional<CharacterState> GetCharacterState(Entity entity) override;
 	private:
 		struct CollisionListener
 		{

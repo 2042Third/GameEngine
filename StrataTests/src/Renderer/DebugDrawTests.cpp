@@ -237,6 +237,52 @@ TEST_SUITE("Renderer.DebugDraw")
 		CHECK(farthest == doctest::Approx(settings.MaxCameraFrustumLength));
 	}
 
+	TEST_CASE("Character controllers show an upright capsule standing on their origin")
+	{
+		Scene scene;
+		Entity character = scene.CreateEntity("Character");
+		TransformComponent& transform = character.GetComponent<TransformComponent>();
+		transform.Translation = glm::vec3(5.0f, 1.0f, 0.0f);
+		// Neither rotation nor scale changes a controller's shape.
+		transform.Rotation = glm::angleAxis(glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+		transform.Scale = glm::vec3(3.0f);
+		CharacterControllerComponent& controller = character.AddComponent<CharacterControllerComponent>();
+		controller.Height = 2.0f;
+		controller.Radius = 0.5f;
+		scene.UpdateWorldTransforms();
+
+		DebugDraw debugDraw;
+		SceneGizmoSettings settings;
+		settings.Lights = false;
+		settings.Cameras = false;
+		DrawSceneGizmos(debugDraw, scene, settings);
+		const std::span<const DebugLineVertex> lines = debugDraw.GetLines(DebugDrawDepth::Tested);
+		REQUIRE_FALSE(lines.empty());
+		glm::vec3 low(1.0e9f);
+		glm::vec3 high(-1.0e9f);
+		for (const DebugLineVertex& vertex : lines)
+		{
+			low = glm::min(low, vertex.Position);
+			high = glm::max(high, vertex.Position);
+		}
+		CHECK(low.y == doctest::Approx(1.0f));
+		CHECK(high.y == doctest::Approx(3.0f));
+		CHECK(low.x == doctest::Approx(4.5f));
+		CHECK(high.x == doctest::Approx(5.5f));
+		CHECK(high.z == doctest::Approx(0.5f));
+		const size_t lineCount = debugDraw.GetLineCount();
+
+		// Only the selection's, when the settings list entities.
+		debugDraw.Clear();
+		settings.AllColliders = false;
+		DrawSceneGizmos(debugDraw, scene, settings);
+		CHECK(debugDraw.IsEmpty());
+		const std::vector<Entity> selection = { character };
+		settings.ColliderEntities = selection;
+		DrawSceneGizmos(debugDraw, scene, settings);
+		CHECK(debugDraw.GetLineCount() == lineCount);
+	}
+
 	TEST_CASE("Circles close exactly on points from the unit circle tables")
 	{
 		DebugDraw debugDraw;

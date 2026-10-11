@@ -67,6 +67,7 @@
 	"Perf.Physics.Boxes30kTracked.StrataStepTime": { "Measured": 2.544, "Budget": 3.816, "Unit": "ms" },
 	"Perf.Physics.LargestCapacities.ReservedMemory": { "Measured": 984.2, "Budget": 1033.0, "Unit": "MB" },
 	"Perf.Physics.Create10kBodies": { "Measured": 7.995, "Budget": 11.99, "Unit": "ms" },
+	"Perf.Physics.Characters1000Step": { "Measured": 0.8, "Budget": 1.2, "Unit": "ms" },
 	"PerfGPU.Editor.ImportSettings4kMaxFrame": { "Measured": 3.866, "Budget": 5.799, "Unit": "ms" },
 	"PerfGPU.Editor.ImportSettings4kMaxFrame10kCubes": { "Measured": 3.213, "Budget": 4.819, "Unit": "ms" },
 	"PerfGPU.Editor.EditFrameNested100k": { "Measured": 0.1872, "Budget": 0.2808, "Unit": "ms" },
