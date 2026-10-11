@@ -1271,7 +1271,8 @@ system, not to entities: a character's joints add no entities and no transform c
   stepped on the job system in turn. So the serial part of a frame does not grow with animators that only advance
   (10,000 unseen animators cost a fraction of a millisecond). Then, on the main thread and animator by animator in
   creation order, the update publishes the poses (new versions for `ISkinningPoses`), applies root motion, places
-  attachments and dispatches the events to the listeners of `IAnimationEventSource`.
+  attachments and dispatches the events to the listeners of `IAnimationEventSource`. Without animators an update ends
+  right after resetting its stats, so scenes that do not animate pay only for the system's calls.
 - **Root motion.** With `ApplyRootMotion` the root motion joint's horizontal travel and turn about +Y during the update
   are taken out of the pose and move the entity: measured per pass through the clip (loops included), weighted by the
   blend, in the frame the root faced when the clip started; the pose holds the root's subtree where (and facing how)
