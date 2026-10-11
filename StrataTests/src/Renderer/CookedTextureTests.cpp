@@ -212,6 +212,47 @@ TEST_SUITE("Renderer.CookedTexture")
 		CHECK(texture->GetMipTailByteRange().LevelCount == 8);
 	}
 
+	TEST_CASE("The header and mip tail parse without the larger levels")
+	{
+		const Ref<Texture> texture = CreateChain(TextureFormat::BC7SRGB, 1024, 512, "Prefix");
+		const std::vector<uint8_t> cooked = texture->Serialize();
+		const CookedTextureByteRange tail = texture->GetMipTailByteRange(128);
+		REQUIRE(tail.LevelCount > 0);
+		const std::span<const uint8_t> prefix(cooked.data(), static_cast<size_t>(tail.Offset + tail.Size));
+
+		std::string error;
+		const std::optional<CookedTextureView> view = ParseCookedTexturePrefix(prefix, cooked.size(), &error);
+		REQUIRE_MESSAGE(view, error);
+		CHECK(view->Width == 1024);
+		CHECK(view->Format == TextureFormat::BC7SRGB);
+		CHECK(view->Data.size() == prefix.size());
+		// The levels in the prefix have their bytes; the larger ones none.
+		for (uint32_t level = 0; level < view->Layout.MipCount; level++)
+		{
+			CAPTURE(level);
+			if (level >= tail.FirstLevel)
+				CHECK(std::ranges::equal(view->GetLevelData(level), texture->GetMips()[level].Data));
+			else
+				CHECK(view->GetLevelData(level).empty());
+		}
+		// The whole data parses the same way.
+		REQUIRE(ParseCookedTexturePrefix(cooked, cooked.size()));
+		CHECK(ParseCookedTexturePrefix(cooked, cooked.size())->GetLevelData(0).size() == texture->GetMips()[0].Data.size());
+
+		// Offsets are checked against the whole size: a prefix claimed to be the whole texture, or a shorter total, fails.
+		CHECK_FALSE(ParseCookedTexturePrefix(prefix, prefix.size()));
+		CHECK_FALSE(ParseCookedTexturePrefix(prefix, cooked.size() - 1));
+		// A prefix longer than the total, or one that ends inside the header.
+		CHECK_FALSE(ParseCookedTexturePrefix(cooked, cooked.size() - 16));
+		CHECK_FALSE(ParseCookedTexturePrefix(std::span<const uint8_t>(cooked.data(), 20), cooked.size()));
+		// Version 1 data stores its small levels last: only accepted whole.
+		const Ref<Texture> old = CreateChain(TextureFormat::RGBA8, 16, 16, "Old");
+		const std::vector<uint8_t> version1 = WriteVersion1(*old);
+		CHECK_FALSE(ParseCookedTexturePrefix(std::span<const uint8_t>(version1.data(), version1.size() / 2), version1.size(), &error));
+		CHECK(error.find("whole") != std::string::npos);
+		CHECK(ParseCookedTexturePrefix(version1, version1.size()));
+	}
+
 	TEST_CASE("Version 1 data still loads")
 	{
 		const Ref<Texture> source = CreateChain(TextureFormat::RGBA8SRGB, 8, 4, "Old");

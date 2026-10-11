@@ -1,0 +1,231 @@
+#include <doctest/doctest.h>
+
+#include "Editor/EditorCommands.h"
+#include "Editor/EditorContext.h"
+#include "Editor/ThumbnailCache.h"
+#include "FeatureTest/FeatureTestUtils.h"
+#include "Renderer/GPUTestUtils.h"
+#include "TestHelpers.h"
+
+#include <Strata/Asset/EditorAssetManager.h>
+#include <Strata/Core/FileSystem.h>
+#include <Strata/Core/JsonUtils.h>
+#include <Strata/Core/Timestep.h>
+#include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Renderer/Renderer.h>
+
+#include <chrono>
+#include <filesystem>
+#include <string>
+#include <thread>
+#include <vector>
+
+using namespace Strata;
+
+namespace
+{
+
+	struct ThumbnailHarness
+	{
+		Tests::GPUContext& GPU;
+		EditorContext Context { EditorContextSpecification { false } };
+		EditorCommandRegistry Commands;
+		std::filesystem::path Project;
+
+		ThumbnailHarness(Tests::GPUContext& gpu, const std::filesystem::path& project)
+			: GPU(gpu), Project(project)
+		{
+			Run("project.open", { { "path", FileSystem::ToUTF8(Project) } });
+			REQUIRE(Context.GetThumbnails());
+		}
+
+		nlohmann::json Run(std::string_view name, const nlohmann::json& parameters = nlohmann::json::object())
+		{
+			EditorCommandResult result = Commands.Execute(Context, name, parameters);
+			INFO(name, ": ", result.Error);
+			REQUIRE(result.Success);
+			REQUIRE_FALSE(result.IsPending());
+			return result.Value;
+		}
+
+		AssetHandle Find(const std::string& path)
+		{
+			const AssetHandle handle = Context.GetAssetManager()->FindAssetByPath(path);
+			REQUIRE_MESSAGE(handle.IsValid(), path);
+			return handle;
+		}
+
+		ThumbnailCache& Thumbnails() { return *Context.GetThumbnails(); }
+
+		// One editor frame on the device, as the application runs it.
+		void Frame()
+		{
+			REQUIRE(GPU.GetDevice().BeginFrame());
+			Renderer::BeginFrame();
+			Context.Update(Timestep(1.0f / 60.0f));
+			GPU.GetDevice().EndFrame();
+		}
+
+		// Asks for the thumbnails every frame (as the Content Browser does while they are on screen) until their work ended.
+		void RequestUntilIdle(const std::vector<AssetHandle>& handles)
+		{
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2);
+			do
+			{
+				for (AssetHandle handle : handles)
+					Thumbnails().Request(handle);
+				Frame();
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			while (Thumbnails().IsBusy() && std::chrono::steady_clock::now() < deadline);
+			REQUIRE_FALSE(Thumbnails().IsBusy());
+			for (AssetHandle handle : handles)
+				Thumbnails().Request(handle);
+		}
+
+		// Frames until the index of the thumbnail files is written.
+		void WaitForIndex()
+		{
+			const std::filesystem::path index = Project / ".strata" / "Thumbnails" / "Index.json";
+			for (int frame = 0; frame < 2000; frame++)
+			{
+				Frame();
+				if (const std::optional<std::string> text = FileSystem::ReadText(index); text && text->find("Keys") != std::string::npos)
+					return;
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			FAIL("The thumbnail index was not written");
+		}
+	};
+
+	// The center and a corner pixel of a thumbnail's texture.
+	std::pair<glm::u8vec4, glm::u8vec4> ReadCenterAndCorner(nvrhi::ITexture* texture)
+	{
+		ReadbackImage image;
+		REQUIRE(Renderer::ReadTexture(texture, image));
+		return { Tests::GetPixelRGBA8(image, image.Width / 2, image.Height / 2), Tests::GetPixelRGBA8(image, 1, 1) };
+	}
+
+}
+
+TEST_SUITE("GPU.Editor.Thumbnails")
+{
+	TEST_CASE("Thumbnails render from mip tails and small scenes, are kept on disk, and the next session reads them back")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const std::filesystem::path project = Tests::CopyFeatureProject(Tests::CreateTemporaryDirectory("GPUThumbnails") / "Project").parent_path();
+		// A texture whose mip chain is far larger than the levels a thumbnail reads.
+		REQUIRE(FileSystem::WriteBytes(project / "Assets" / "Textures" / "Large.png", Tests::CreateSolidPNG(1024, 1024, 40, 90, 200)));
+		std::vector<AssetHandle> all;
+		{
+			ThumbnailHarness harness(gpu, project);
+			EditorAssetManager& assets = *harness.Context.GetAssetManager();
+			const AssetHandle checker = harness.Find("Textures/Checker.png");
+			const AssetHandle sky = harness.Find("Textures/Sky.hdr");
+			const AssetHandle large = harness.Find("Textures/Large.png");
+			const AssetHandle material = harness.Find("Materials/Feature.stmat");
+			const AssetHandle model = harness.Find("Models/Platform.gltf");
+			const AssetHandle prefab = harness.Find("Prefabs/Crate.stprefab");
+			AssetHandle mesh = UUID::Null();
+			for (AssetHandle subAsset : assets.GetImportInfo(model).SubAssets)
+			{
+				if (!mesh.IsValid() && assets.GetAssetType(subAsset) == AssetType::Mesh)
+					mesh = subAsset;
+			}
+			REQUIRE(mesh.IsValid());
+
+			// Textures: from the mip tail, never loading the texture.
+			harness.RequestUntilIdle({ checker, sky, large });
+			for (AssetHandle texture : { checker, sky, large })
+			{
+				CHECK(harness.Thumbnails().GetState(texture) == ThumbnailState::Ready);
+				nvrhi::ITexture* thumbnail = harness.Thumbnails().Request(texture);
+				REQUIRE(thumbnail);
+				CHECK(thumbnail->getDesc().width <= ThumbnailCache::c_Size);
+				CHECK(thumbnail->getDesc().height <= ThumbnailCache::c_Size);
+				CHECK(assets.GetAssetState(texture) == AssetState::Unloaded);
+			}
+			const ThumbnailCacheStats textures = harness.Thumbnails().GetStats();
+			CHECK(textures.TexturesDecoded == 3);
+			// The large texture's header and levels up to 128x128 (a sixteenth of the chain and less), the small ones whole.
+			CHECK(textures.StoredBytesRead < assets.GetMetadata(large)->StoredSize / 10);
+
+			// Rendered: a material on a sphere, a mesh, a model and a prefab.
+			harness.RequestUntilIdle({ material, mesh, model, prefab });
+			for (AssetHandle rendered : { material, mesh, model, prefab })
+			{
+				CAPTURE(rendered.ToString());
+				CHECK(harness.Thumbnails().GetState(rendered) == ThumbnailState::Ready);
+				nvrhi::ITexture* thumbnail = harness.Thumbnails().Request(rendered);
+				REQUIRE(thumbnail);
+				CHECK(thumbnail->getDesc().width == ThumbnailCache::c_Size);
+				// Something stands in front of the sky.
+				const auto [center, corner] = ReadCenterAndCorner(thumbnail);
+				CHECK(center.a == 255);
+				CHECK(center != corner);
+			}
+			CHECK(harness.Thumbnails().GetStats().ScenesRendered == 4);
+			CHECK(harness.Thumbnails().GetStats().Failed == 0);
+
+			// Kept on disk with their keys.
+			harness.WaitForIndex();
+			all = { checker, sky, large, material, mesh, model, prefab };
+			for (AssetHandle handle : all)
+				CHECK(FileSystem::IsRegularFile(project / ".strata" / "Thumbnails" / (UUIDToJson(handle).get<std::string>() + ".png")));
+			CHECK(harness.Thumbnails().GetStats().FilesWritten == all.size());
+		}
+		{
+			// The next session reads them instead of making them again.
+			ThumbnailHarness harness(gpu, project);
+			harness.RequestUntilIdle(all);
+			const ThumbnailCacheStats stats = harness.Thumbnails().GetStats();
+			CHECK(stats.LoadedFromDisk == all.size());
+			CHECK(stats.ScenesRendered == 0);
+			CHECK(stats.TexturesDecoded == 0);
+			for (AssetHandle handle : all)
+				CHECK(harness.Thumbnails().Request(handle) != nullptr);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A saved change of a material renders its thumbnail again; a failed import shows the icon")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const std::filesystem::path project = Tests::CopyFeatureProject(Tests::CreateTemporaryDirectory("GPUThumbnailChanges") / "Project").parent_path();
+		REQUIRE(FileSystem::WriteBytes(project / "Assets" / "Textures" / "Broken.png", std::vector<uint8_t> { 1, 2, 3, 4, 5 }));
+		ThumbnailHarness harness(gpu, project);
+		const AssetHandle material = harness.Find("Materials/Feature.stmat");
+		const AssetHandle broken = harness.Find("Textures/Broken.png");
+
+		harness.RequestUntilIdle({ material, broken });
+		CHECK(harness.Thumbnails().GetState(broken) == ThumbnailState::Unavailable);
+		CHECK(harness.Thumbnails().Request(broken) == nullptr);
+		REQUIRE(harness.Thumbnails().Request(material));
+		const glm::u8vec4 before = ReadCenterAndCorner(harness.Thumbnails().Request(material)).first;
+		const uint64_t rendered = harness.Thumbnails().GetStats().ScenesRendered;
+
+		// Loads of what a thumbnail shows change nothing; a saved edit makes it again, once it settled.
+		harness.Run("material.set", { { "material", UUIDToJson(material) }, { "properties", { { "BaseColor", { 0.0, 1.0, 0.0, 1.0 } } } } });
+		for (int frame = 0; frame < 200 && harness.Thumbnails().GetStats().ScenesRendered == rendered; frame++)
+		{
+			harness.Thumbnails().Request(material);
+			harness.Frame();
+		}
+		harness.RequestUntilIdle({ material });
+		CHECK(harness.Thumbnails().GetStats().ScenesRendered == rendered + 1);
+		const glm::u8vec4 after = ReadCenterAndCorner(harness.Thumbnails().Request(material)).first;
+		CHECK(after != before);
+		CHECK(after.g > after.r);
+		// Nothing changed since: no further render.
+		harness.RequestUntilIdle({ material });
+		for (int frame = 0; frame < 60; frame++)
+		{
+			harness.Thumbnails().Request(material);
+			harness.Frame();
+		}
+		CHECK(harness.Thumbnails().GetStats().ScenesRendered == rendered + 1);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+}

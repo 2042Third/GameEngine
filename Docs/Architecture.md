@@ -911,7 +911,8 @@ Textures are stored the way the GPU samples them: block-compressed, with their m
   filter, wrap, name length, data offset), a mip table (width, height, offset, size per level), the debug name, then the
   levels smallest first, each 16-byte aligned. The mip tail - every level up to 128x128 - is therefore one range right
   after the header (`CookedTextureLayout::GetMipTailByteRange`, `Texture::GetMipTailByteRange`), which streaming can
-  read on its own. `ParseCookedTexture` validates everything (format, sizes per level in whole blocks, offsets inside the
+  read on its own (`ParseCookedTexturePrefix` parses such a start of the data - the header and tail - validated against
+  the whole size, as the editor's thumbnails read it). `ParseCookedTexture` validates everything (format, sizes per level in whole blocks, offsets inside the
   data and aligned, levels that do not overlap and are stored smallest first, known flags) and returns a
   `CookedTextureView` that refers to the data without copying; `Texture::Deserialize` builds on it and keeps the levels'
   `CookedTextureLayout` (offsets, sizes and their format) after the CPU copy is gone. Version 1 (the
@@ -1420,7 +1421,7 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   panels never write files themselves (`Editor.UI.Source` scans `Panels/` for file-system writes).
 - **Content Browser** (`Panels/ContentBrowserPanel`, rows in `Editor/AssetBrowserView`). Two panes in a resizable table: a
   folder tree (the asset directory and its folders as far as they are expanded) and the current folder's items as a grid
-  of tiles (the type's icon on a square, the name cut to the tile; a size slider) or a list, both drawn through
+  of tiles (the asset's thumbnail, or the type's icon, on a square, the name cut to the tile; a size slider) or a list, both drawn through
   `ImGuiListClipper` (only what is in view). Above them: breadcrumbs (each a drop target), a search (every word in a name,
   below the current folder), type chips (`UI::ToggleChip`), the view mode, New (folder, material) and Import (files, a
   folder). `AssetBrowserView` (no UI, tested alone) holds the rows: folders first, then assets by name, an expanded model's
@@ -1437,6 +1438,30 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   expands and scrolls to it, a sub-asset's model expands, and the grid scrolls to the item. Another root of the tree (the
   project's scripts, which live outside the asset directory) would add rows of its own to `DrawFolderTree` with its items
   and menu.
+- **Thumbnails** (`Editor/ThumbnailCache`, owned by `EditorContext` while a project is open and a GPU runs; updated at the
+  end of `EditorContext::Update`). The Content Browser's tiles and the Asset tab ask for an asset's thumbnail every frame
+  it is on screen (`Request`: its texture once ready, else null and the tile draws the type's icon). Textures: an I/O job
+  reads the cooked texture's header and then everything up to the end of the largest level of at most 128 texels a side
+  (the levels are stored smallest first, so that is the mip tail; a texture without such a level has its smallest level
+  read, up to 64 MiB) by byte range (`ReadStoredRange`) and decodes it (`MakeTextureThumbnail`: block-compressed levels
+  through `BlockCompression`, one channel as gray, normal maps with their Z, HDR tone mapped), so a thumbnail never loads
+  a texture. Materials (on a sphere), meshes, models and prefabs (instantiated) are rendered in a scene of their own under
+  the preview lighting by one offscreen `SceneRenderer` (128x128, no entity IDs, one shadow cascade), one asset at a time:
+  their dependency closure loads at Low priority (`RequestLoadWithDependencies`, pinned until the render is read back),
+  the camera frames what renders (`SceneBounds`, `EditorCamera::FitBounds`; a material's sphere fills the view), the
+  scene renders until nothing is pending for two frames, and a `TextureReadback` takes the image without stalling.
+  Images become RGBA8 textures of display colors (a few uploads per frame) that ImGui draws as they are. Every image is
+  kept as a PNG in `<project>/.strata/Thumbnails/<handle>.png` (encoded and written on an I/O job) with its key in
+  `Index.json`: a hash of the content stamps of the asset and everything it depends on
+  (`EditorAssetManager::GetContentStamp`: the source file's size and time, the settings, the importer's version, the
+  last import's success), which lasts across sessions, so an unchanged project reads its thumbnails back
+  (`ImageReader::DecodeRGBA8`) instead of making them. Content changes of a thumbnail's sources (a reimport, a saved edit,
+  also every load, which leaves the key as it was) make the cache compute its key again; a changed key makes it again once
+  the sources stayed unchanged for a few frames, the old one showing meanwhile. Work waits while one of its sources is
+  still importing; a failed import or render leaves the type's icon (`ThumbnailState::Unavailable`). Thumbnails nobody
+  asked for in ten seconds are forgotten beyond 512 textures, and files of assets the project no longer has are removed.
+  Reads use the asset manager, so the cache waits for them when it goes (before the manager). `PerfGPU.Editor` measures
+  the longest frame while the thumbnails of a stress project render (`ThumbnailsMaxFrame`).
 - **Asset documents** (`AssetEdit.h`). Materials (and any engine-native document) are edited through `AssetEdit`:
   `ApplyDocument` validates the new document with the type's loader, writes the file (`EditorAssetManager::SaveNativeAsset`)
   and publishes the loaded object at once (`AssetManagerBase::ReplaceLoadedAsset`, which finalizes it, discards a load in
@@ -1519,7 +1544,11 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
     uncompressed, data or HDR) is shown disabled, its label's tooltip saying why. A texture's preview shows its content as
     materials read it (`UI::TextureImage`: sRGB colors encoded again for the display, grayscale BC4/R8 as gray,
     two-channel normal maps with their Z), and its caption names the stored format Compression and Quality chose and what
-    the texture takes on the GPU.
+    the texture takes on the GPU. Materials, meshes, models and prefabs show their thumbnail large; a model adds a summary
+    of its sub-assets (meshes, their triangles and levels of detail once loaded, materials, textures). An audio clip shows
+    its length, rate and channels, a waveform (`Editor/AudioPreview`: per column the lowest and highest sample, computed on
+    a job; streamed clips are decoded whole for it, up to ten minutes) and Play and Stop on a preview voice: an
+    `AudioSource` of the `AudioEngine` that belongs to no scene, stopped when another asset is inspected or the tab hides.
   - **Shortcuts**: `EditorLayer` keeps the global ones (Ctrl+Z, Ctrl+Y, Ctrl+S, Ctrl+P, Ctrl+B); Delete, Ctrl+D, Ctrl+C,
     Ctrl+X, Ctrl+V, Ctrl+A and F2 are `ImGuiInputFlags_RouteFocused` shortcuts of the Hierarchy and the Viewport
     (`EditorActions::HandleSelectionShortcuts`), so they act only where the keyboard focus is; the clipboard holds

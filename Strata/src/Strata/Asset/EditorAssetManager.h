@@ -201,6 +201,11 @@ namespace Strata
 		AssetHandle FindAssetByAbsolutePath(const std::filesystem::path& path) const;
 		// Import state of a source asset (sub-assets report their parent's).
 		AssetImportInfo GetImportInfo(AssetHandle handle) const;
+		// A fingerprint of an asset's stored form that lasts across sessions (unlike AssetSourceRevisions): its source file's
+		// size and time, its import settings, its importer's version and whether its last import succeeded (sub-assets: their
+		// file's). It changes whenever a re-import can change what is stored, so caches of derived data on disk (the editor's
+		// thumbnails) know when theirs is stale. 0 for unknown and built-in assets. Thread-safe.
+		uint64_t GetContentStamp(AssetHandle handle) const;
 		nlohmann::json GetImportSettings(AssetHandle handle) const;
 		// The importer of a source asset (sub-assets: their parent's); null for unknown and built-in assets. Thread-safe.
 		const AssetImporter* GetImporter(AssetHandle handle) const;

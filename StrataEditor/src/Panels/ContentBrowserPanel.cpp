@@ -1,9 +1,10 @@
 #include "Panels/ContentBrowserPanel.h"
 
-#include "Editor/EditorCommandRunner.h"
 #include "Editor/CommandUtils.h"
+#include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/ThumbnailCache.h"
 #include "UI/EditorActions.h"
 #include "UI/EditorFonts.h"
 #include "UI/EditorShell.h"
@@ -660,6 +661,7 @@ namespace Strata
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		const ImGuiStyle& style = ImGui::GetStyle();
 		const std::vector<AssetBrowserItem>& items = m_View.GetItems();
+		ThumbnailCache* thumbnails = panelContext.Context.GetThumbnails();
 		const float tile = std::round(ImGui::GetFontSize() * std::clamp(m_TileScale, c_MinTileScale, c_MaxTileScale));
 		const float titleHeight = ImGui::GetTextLineHeight();
 		const ImVec2 tileSize(tile, tile + titleHeight + style.ItemInnerSpacing.y * 2.0f);
@@ -709,13 +711,28 @@ namespace Strata
 					const ImVec2 squareMax(max.x - style.ItemInnerSpacing.x, max.y - titleHeight - style.ItemInnerSpacing.y * 2.0f);
 					drawList->AddRectFilled(squareMin, squareMax, UI::ToColorU32(item.Kind == AssetBrowserItemKind::SubAsset ? colors.AccentMuted : colors.Raised,
 						item.Kind == AssetBrowserItemKind::SubAsset ? 0.55f : 1.0f), style.FrameRounding);
-					const ImVec4 iconColor = !item.ImportError.empty() ? colors.Error : item.Kind == AssetBrowserItemKind::Folder ? colors.Accent : colors.TextSecondary;
-					UI::PushFont(UI::EditorFont::Regular, UI::TextSize::Display);
-					const char* icon = m_Labels[index].Icon.c_str();
-					const ImVec2 iconSize = ImGui::CalcTextSize(icon);
-					drawList->AddText(ImVec2((squareMin.x + squareMax.x - iconSize.x) * 0.5f, (squareMin.y + squareMax.y - iconSize.y) * 0.5f),
-						UI::ToColorU32(iconColor, item.Importing ? 0.45f : 1.0f), icon);
-					ImGui::PopFont();
+					// The asset's thumbnail once it is ready (asked for while the tile is on screen), else its type's icon.
+					nvrhi::ITexture* thumbnail = item.Kind != AssetBrowserItemKind::Folder && thumbnails ? thumbnails->Request(item.Handle) : nullptr;
+					if (thumbnail)
+					{
+						const nvrhi::TextureDesc& desc = thumbnail->getDesc();
+						const float side = std::min(squareMax.x - squareMin.x, squareMax.y - squareMin.y);
+						const float scale = side / static_cast<float>(std::max(desc.width, desc.height));
+						const ImVec2 size(std::round(static_cast<float>(desc.width) * scale), std::round(static_cast<float>(desc.height) * scale));
+						const ImVec2 imageMin(std::round((squareMin.x + squareMax.x - size.x) * 0.5f), std::round((squareMin.y + squareMax.y - size.y) * 0.5f));
+						// Display colors, drawn as they are (ImGuiTextureDisplay::Direct).
+						drawList->AddImage(static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(thumbnail)), imageMin, ImVec2(imageMin.x + size.x, imageMin.y + size.y));
+					}
+					else
+					{
+						const ImVec4 iconColor = !item.ImportError.empty() ? colors.Error : item.Kind == AssetBrowserItemKind::Folder ? colors.Accent : colors.TextSecondary;
+						UI::PushFont(UI::EditorFont::Regular, UI::TextSize::Display);
+						const char* icon = m_Labels[index].Icon.c_str();
+						const ImVec2 iconSize = ImGui::CalcTextSize(icon);
+						drawList->AddText(ImVec2((squareMin.x + squareMax.x - iconSize.x) * 0.5f, (squareMin.y + squareMax.y - iconSize.y) * 0.5f),
+							UI::ToColorU32(iconColor, item.Importing ? 0.45f : 1.0f), icon);
+						ImGui::PopFont();
+					}
 
 					// Badges: importing, a failed import, warnings; the model's expander.
 					const float badge = ImGui::GetFontSize();

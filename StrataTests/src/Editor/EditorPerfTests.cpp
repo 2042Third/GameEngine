@@ -5,6 +5,7 @@
 #include "Editor/EditorContext.h"
 #include "Editor/HarnessEditor.h"
 #include "Editor/HierarchyView.h"
+#include "Editor/ThumbnailCache.h"
 #include "EditorLayer.h"
 #include "Perf/PerfUtils.h"
 #include "Perf/SceneGenerators.h"
@@ -537,6 +538,88 @@ TEST_SUITE("PerfGPU.Editor")
 			MESSAGE("asset.import of a 4096x4096 texture: ", frames, " frames, the longest ", maxFrame, " ms");
 			return maxFrame;
 		});
+		device.WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Rendering the thumbnails of a project never holds a frame")
+	{
+		// The Content Browser showing every asset of a stress project for the first time: the thumbnails of its textures
+		// (mip tails decoded on I/O jobs), materials, model and mesh (rendered one at a time, read back without stalling),
+		// encoded and written as PNG files on I/O jobs. Frames as in the tests above, on the shared device.
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		GraphicsDevice& device = gpu.GetDevice();
+		Perf::ScopedApplicationJobSystem jobs;
+		StressProjectSpec spec;
+		spec.Textures2k = 8;
+		spec.Textures4k = 1;
+		spec.Materials = 9;
+		spec.Entities = 100;
+		spec.GridResolution = 128;
+		std::string error;
+		const std::optional<StressProject> project = WriteStressProject(CreateTemporaryDirectory("PerfGPUThumbnails") / "Project", spec, error);
+		REQUIRE_MESSAGE(project, error);
+		EditorContext context { EditorContextSpecification { false } };
+		REQUIRE_MESSAGE(context.OpenProject(project->Directory, &error), error);
+		ThumbnailCache* thumbnails = context.GetThumbnails();
+		REQUIRE(thumbnails);
+		std::vector<AssetHandle> assets = project->Textures;
+		assets.insert(assets.end(), project->Materials.begin(), project->Materials.end());
+		assets.push_back(project->GridModel);
+		assets.push_back(project->GridMesh);
+
+		const auto frame = [&]()
+		{
+			REQUIRE(device.BeginFrame());
+			const auto start = std::chrono::steady_clock::now();
+			Renderer::BeginFrame();
+			for (AssetHandle asset : assets)
+				thumbnails->Request(asset);
+			context.Update(Timestep(1.0f / 60.0f));
+			const double milliseconds = MillisecondsSince(start);
+			device.EndFrame();
+			// Frames at the editor's pace rather than as fast as the loop spins.
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			return milliseconds;
+		};
+		const auto renderAll = [&]()
+		{
+			double maxFrame = 0.0;
+			uint32_t frames = 0;
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(3);
+			do
+			{
+				maxFrame = std::max(maxFrame, frame());
+				frames++;
+			}
+			while (thumbnails->IsBusy() && std::chrono::steady_clock::now() < deadline);
+			REQUIRE_FALSE(thumbnails->IsBusy());
+			for (AssetHandle asset : assets)
+				CHECK(thumbnails->GetState(asset) == ThumbnailState::Ready);
+			CHECK(thumbnails->GetStats().Failed == 0);
+			MESSAGE(assets.size(), " thumbnails: ", frames, " frames, the longest ", maxFrame, " ms");
+			return maxFrame;
+		};
+		// The thumbnail renderer's first frame creates its targets and pipelines, once per session: done before the
+		// measurement, as every thumbnail render after it measures the steady state.
+		const std::vector<AssetHandle> everything = assets;
+		assets = { project->Materials.front() };
+		renderAll();
+		assets = everything;
+
+		// The longest frame (a maximum by nature: one held frame is the hitch the user sees) until every thumbnail is ready;
+		// each attempt starts without them.
+		uint64_t rendered = 0;
+		Perf::CheckBudgetConfirmed("PerfGPU.Editor.ThumbnailsMaxFrame", [&]
+		{
+			thumbnails->Clear();
+			const uint64_t before = thumbnails->GetStats().ScenesRendered;
+			const double maxFrame = renderAll();
+			rendered = thumbnails->GetStats().ScenesRendered - before;
+			return maxFrame;
+		});
+		CHECK(rendered == spec.Materials + 2);
 		device.WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

@@ -171,8 +171,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   `Tests::DescribeJsonFile`, which tells a damaged file from a failed read or parse), exports the stress project (the
   median and the longest frame meanwhile, and
   the export's time) and times the editor's frames on the shared device while that texture re-imports, uploads and is
-  drawn (and, with 10,000 cubes drawn too, whose draws are extracted in parallel, while it is compressed), and the
-  editor frames of `PerfGPU.Renderer` (cube grids of 100,000, also in the streaming view and with all of them selected,
+  drawn (and, with 10,000 cubes drawn too, whose draws are extracted in parallel, while it is compressed) and while the
+  thumbnails of a stress project's textures, materials, model and mesh are made, and the editor frames of `PerfGPU.Renderer` (cube grids of 100,000, also in the streaming view and with all of them selected,
   and of 300,000, a narrow view of 50,000, 10,000 point lights, 10,000 unique materials); `PerfGPU.Pack` compares pack
   versions 2 and 1 of the stress project (the size with its textures uncompressed, opening, streaming the world as it
   ships; the acceptance limits, 0.8 of version 1's size and 110% of its time, are the budgets of `ratio` metrics, so
@@ -876,6 +876,13 @@ and `AudioSystem`, the built-in "Audio" scene system.
 - The Content Browser (`Panels/ContentBrowserPanel`) draws `Editor/AssetBrowserView`'s rows (folder tree, grid or list,
   clipped), rebuilt only when `EditorAssetManager::GetChangeVersion` changed: never list the asset directory per frame.
   Its drops, renames, folders and deletes run `asset.*` commands; inspecting an asset elsewhere reveals it there.
+- **Thumbnails** (`Editor/ThumbnailCache`, `EditorContext::GetThumbnails`, null without a GPU): ask for an asset's
+  thumbnail every frame it is on screen (`Request`) and draw the type's icon until it is ready. Textures come from their
+  mip tail by byte range (never a load), materials, meshes, models and prefabs are rendered one at a time offscreen and
+  read back without stalling; PNG files in `<project>/.strata/Thumbnails`, keyed by the content stamps of the asset and
+  its dependencies (`EditorAssetManager::GetContentStamp`), carry them across sessions. Bump `ThumbnailCache::c_Version`
+  when thumbnails would look different. The Asset tab shows them large, a model's summary and an audio clip's waveform
+  with Play and Stop on a preview voice that belongs to no scene (`Editor/AudioPreview`).
 - The inspectors show the selected entities or one asset (`EditorContext::SetInspectedAsset`, `selection.set {asset}`;
   the entities stay selected). Selecting an entity, deleting the asset or closing the project returns to the entities;
   `GetInspectionVersion` changes with every switch and every asset inspected (again), and the editor brings the

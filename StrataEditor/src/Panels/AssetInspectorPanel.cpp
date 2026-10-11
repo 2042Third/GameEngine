@@ -3,6 +3,7 @@
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/ThumbnailCache.h"
 #include "UI/EditorActions.h"
 #include "UI/EditorFonts.h"
 #include "UI/EditorShell.h"
@@ -15,9 +16,13 @@
 #include <Strata/Asset/AssetImporter.h>
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/EditorAssetManager.h>
+#include <Strata/Audio/AudioClip.h>
+#include <Strata/Audio/AudioClipAsset.h>
+#include <Strata/Audio/AudioEngine.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Renderer/Mesh.h>
 #include <Strata/Renderer/Texture.h>
 
 #include <imgui.h>
@@ -36,6 +41,19 @@ namespace Strata
 
 		// The texture preview is at most this many text heights tall.
 		constexpr float c_PreviewMaxHeightInFontSizes = 22.0f;
+		// The thumbnail of a material, mesh, model or prefab is at most this many text heights on a side.
+		constexpr float c_ThumbnailMaxSizeInFontSizes = 16.0f;
+		// The waveform: this many text heights tall, with this many columns.
+		constexpr float c_WaveformHeightInFontSizes = 4.0f;
+		constexpr uint32_t c_WaveformColumns = 256;
+
+		// "1:05.3" for 65.3 seconds.
+		std::string FormatDuration(float seconds)
+		{
+			const float clamped = std::max(seconds, 0.0f);
+			const int minutes = static_cast<int>(clamped / 60.0f);
+			return fmt::format("{}:{:04.1f}", minutes, clamped - static_cast<float>(minutes) * 60.0f);
+		}
 
 		std::string FormatBytes(uint64_t bytes)
 		{
@@ -93,6 +111,12 @@ namespace Strata
 	{
 		EditorContext& context = panelContext.Context;
 		const AssetHandle handle = context.GetInspectedAsset();
+		// What the preview voice plays stops with the asset it belongs to.
+		if (handle != m_Shown)
+		{
+			m_AudioPreview.Stop();
+			m_Shown = handle;
+		}
 		if (!handle.IsValid())
 		{
 			m_MaterialEditor.CommitPending(context);
@@ -135,6 +159,12 @@ namespace Strata
 		}
 		if (metadata->Type == AssetType::Texture)
 			DrawTexturePreview(handle);
+		else if (ThumbnailCache::HasThumbnail(metadata->Type))
+			DrawThumbnail(context, handle);
+		if (metadata->Type == AssetType::Model && assets)
+			DrawModelSummary(*assets, *metadata);
+		if (metadata->Type == AssetType::AudioClip)
+			DrawAudioPreview(handle);
 		if (assets)
 			DrawDetails(*assets, *metadata);
 	}
@@ -142,6 +172,7 @@ namespace Strata
 	void AssetInspectorPanel::OnHidden(EditorPanelContext& context)
 	{
 		m_MaterialEditor.CommitPending(context.Context);
+		m_AudioPreview.Stop();
 	}
 
 	void AssetInspectorPanel::DrawHeader(const AssetMetadata& metadata)
@@ -383,6 +414,171 @@ namespace Strata
 		ImGui::TextColored(colors.TextSecondary, "%s", caption.c_str());
 		UI::ItemProbe::Record("AssetInspector.Preview.Caption", true, 0, caption);
 		ImGui::PopFont();
+	}
+
+	void AssetInspectorPanel::DrawThumbnail(EditorContext& context, AssetHandle handle)
+	{
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		if (!UI::SectionHeader("AssetInspector.Preview", (std::string(Icons::Image) + "  Preview").c_str()))
+			return;
+		ThumbnailCache* thumbnails = context.GetThumbnails();
+		nvrhi::ITexture* thumbnail = thumbnails ? thumbnails->Request(handle) : nullptr;
+		const float width = std::max(ImGui::GetContentRegionAvail().x, ImGui::GetFrameHeight());
+		const float side = std::min(width, ImGui::GetFontSize() * c_ThumbnailMaxSizeInFontSizes);
+		const ImVec2 min(std::round(ImGui::GetCursorScreenPos().x + (width - side) * 0.5f), ImGui::GetCursorScreenPos().y);
+		ImGui::Dummy(ImVec2(width, side));
+		const ImVec2 max(min.x + side, min.y + side);
+		ImDrawList* drawList = ImGui::GetWindowDrawList();
+		drawList->AddRectFilled(min, max, ImGui::GetColorU32(colors.Chrome));
+		if (thumbnail)
+		{
+			// Display colors, drawn as they are (ImGuiTextureDisplay::Direct).
+			drawList->AddImage(static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(thumbnail)), min, max);
+		}
+		else
+		{
+			const char* text = !thumbnails ? "No preview without a GPU"
+				: thumbnails->GetState(handle) == ThumbnailState::Unavailable ? "No preview: it could not be rendered" : "Rendering the preview...";
+			const ImVec2 size = ImGui::CalcTextSize(text);
+			drawList->AddText(ImVec2(std::round((min.x + max.x - size.x) * 0.5f), std::round((min.y + max.y - size.y) * 0.5f)), ImGui::GetColorU32(colors.TextSecondary), text);
+		}
+		drawList->AddRect(min, max, ImGui::GetColorU32(colors.Border));
+		UI::ItemProbe::RecordRect("AssetInspector.Thumbnail", min, max, thumbnail != nullptr);
+	}
+
+	void AssetInspectorPanel::DrawModelSummary(EditorAssetManager& assets, const AssetMetadata& metadata)
+	{
+		if (!UI::SectionHeader("AssetInspector.Model", (std::string(Icons::Boxes) + "  Model").c_str()))
+			return;
+		// The import's sub-assets by type; the meshes' triangles and levels of detail once they are loaded (requested while
+		// the summary shows, like everything that draws assets).
+		const AssetImportInfo import = assets.GetImportInfo(metadata.Handle);
+		uint32_t meshes = 0;
+		uint32_t materials = 0;
+		uint32_t textures = 0;
+		uint32_t others = 0;
+		uint64_t triangles = 0;
+		size_t levels = 0;
+		uint32_t loading = 0;
+		for (AssetHandle subAsset : import.SubAssets)
+		{
+			switch (assets.GetAssetType(subAsset))
+			{
+				case AssetType::Mesh:
+				{
+					meshes++;
+					const Ref<Mesh> mesh = std::static_pointer_cast<Mesh>(assets.GetAsset(subAsset, AssetPriority::Low));
+					if (!mesh)
+					{
+						loading += assets.GetAssetState(subAsset) == AssetState::Failed ? 0 : 1;
+						break;
+					}
+					triangles += mesh->GetTriangleCount();
+					for (const Submesh& submesh : mesh->GetSubmeshes())
+						levels = std::max(levels, submesh.LODs.size());
+					break;
+				}
+				case AssetType::Material:
+					materials++;
+					break;
+				case AssetType::Texture:
+					textures++;
+					break;
+				default:
+					others++;
+					break;
+			}
+		}
+		if (!UI::BeginPropertyTable("Model"))
+			return;
+		auto row = [](const char* label, const char* tooltip, const std::string& value, const char* probe)
+		{
+			UI::PropertyLabel(label, tooltip);
+			ImGui::TextUnformatted(value.c_str());
+			UI::ItemProbe::Record(probe, true, 0, value);
+		};
+		row("Meshes", "Meshes the import made (one per mesh of the file)", std::to_string(meshes), "AssetInspector.Model.Meshes");
+		const std::string triangleText = loading > 0 ? fmt::format("{} ({} meshes loading)", triangles, loading) : std::to_string(triangles);
+		row("Triangles", "Of every mesh at full detail", triangleText, "AssetInspector.Model.Triangles");
+		row("Levels of Detail", "The most levels a mesh has, full detail included", std::to_string(std::max<size_t>(levels, meshes > 0 ? 1 : 0)),
+			"AssetInspector.Model.Levels");
+		row("Materials", "Materials the import made", std::to_string(materials), "AssetInspector.Model.Materials");
+		row("Textures", "Images the file embeds or names", std::to_string(textures), "AssetInspector.Model.Textures");
+		if (others > 0)
+			row("Other", "Further sub-assets", std::to_string(others), "AssetInspector.Model.Other");
+		UI::EndPropertyTable();
+	}
+
+	void AssetInspectorPanel::DrawAudioPreview(AssetHandle handle)
+	{
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		if (!UI::SectionHeader("AssetInspector.Audio", (std::string(Icons::AudioLines) + "  Preview").c_str()))
+			return;
+		// Requested every frame it is shown (it may be evicted otherwise).
+		const Ref<AudioClipAsset> asset = AssetManager::GetAsset<AudioClipAsset>(handle);
+		const Ref<AudioClip> clip = asset ? asset->GetClip() : nullptr;
+		if (!clip)
+		{
+			ImGui::TextColored(colors.TextSecondary, "%s", AssetManager::GetAssetState(handle) == AssetState::Failed ? "The clip could not be loaded" : "Loading...");
+			return;
+		}
+
+		const bool playing = m_AudioPreview.IsPlaying(handle);
+		if (playing)
+		{
+			if (UI::ToolbarButton("AssetInspector.Audio.Stop", Icons::Square, "Stop", "Stop the preview"))
+				m_AudioPreview.Stop();
+		}
+		else
+		{
+			UI::ButtonStyle style;
+			style.Enabled = AudioEngine::IsInitialized();
+			if (UI::ToolbarButton("AssetInspector.Audio.Play", Icons::Play, "Play", style.Enabled ? "Listen to the clip (not part of the scene)" : "No audio output", style))
+				m_AudioPreview.Play(handle, clip);
+		}
+		ImGui::SameLine();
+		UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Caption);
+		ImGui::AlignTextToFramePadding();
+		const std::string channels = clip->GetChannels() == 1 ? std::string("mono") : clip->GetChannels() == 2 ? std::string("stereo")
+			: fmt::format("{} channels", clip->GetChannels());
+		const std::string time = playing ? fmt::format("{} / {}", FormatDuration(m_AudioPreview.GetPosition()), FormatDuration(clip->GetLength()))
+			: fmt::format("{} \xC2\xB7 {} Hz \xC2\xB7 {}", FormatDuration(clip->GetLength()), clip->GetSampleRate(), channels);
+		ImGui::TextColored(colors.TextSecondary, "%s", time.c_str());
+		UI::ItemProbe::Record("AssetInspector.Audio.Time", true, 0, time);
+		ImGui::PopFont();
+
+		// The waveform, with the voice's position over it while it plays.
+		const float width = std::max(ImGui::GetContentRegionAvail().x, ImGui::GetFrameHeight());
+		const float height = std::round(ImGui::GetFontSize() * c_WaveformHeightInFontSizes);
+		const ImVec2 min = ImGui::GetCursorScreenPos();
+		ImGui::Dummy(ImVec2(width, height));
+		const ImVec2 max(min.x + width, min.y + height);
+		ImDrawList* drawList = ImGui::GetWindowDrawList();
+		drawList->AddRectFilled(min, max, ImGui::GetColorU32(colors.Chrome));
+		const float middle = std::round((min.y + max.y) * 0.5f);
+		if (const AudioWaveform* waveform = m_AudioPreview.RequestWaveform(handle, clip, c_WaveformColumns))
+		{
+			const float columnWidth = width / static_cast<float>(waveform->Min.size());
+			const float halfHeight = height * 0.5f - 1.0f;
+			const ImU32 color = ImGui::GetColorU32(colors.Accent);
+			for (size_t column = 0; column < waveform->Min.size(); column++)
+			{
+				const float x = min.x + (static_cast<float>(column) + 0.5f) * columnWidth;
+				drawList->AddLine(ImVec2(x, middle - waveform->Max[column] * halfHeight), ImVec2(x, middle - waveform->Min[column] * halfHeight + 1.0f), color,
+					std::max(1.0f, columnWidth * 0.75f));
+			}
+			UI::ItemProbe::RecordRect("AssetInspector.Audio.Waveform", min, max, true, 0, std::to_string(waveform->Min.size()));
+		}
+		else
+		{
+			drawList->AddLine(ImVec2(min.x, middle), ImVec2(max.x, middle), ImGui::GetColorU32(colors.Border));
+		}
+		if (playing && clip->GetLength() > 0.0f)
+		{
+			const float x = std::round(min.x + width * std::clamp(m_AudioPreview.GetPosition() / clip->GetLength(), 0.0f, 1.0f));
+			drawList->AddLine(ImVec2(x, min.y), ImVec2(x, max.y), ImGui::GetColorU32(colors.Text));
+		}
+		drawList->AddRect(min, max, ImGui::GetColorU32(colors.Border));
 	}
 
 	void AssetInspectorPanel::DrawDetails(EditorAssetManager& assets, const AssetMetadata& metadata)

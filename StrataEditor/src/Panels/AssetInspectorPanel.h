@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Editor/AudioPreview.h"
 #include "UI/EditorPanelRegistry.h"
 #include "UI/MaterialEditor.h"
 
@@ -15,6 +16,7 @@ namespace Strata
 
 	class AssetImporter;
 	class EditorAssetManager;
+	class EditorContext;
 
 	// The asset the editor inspects (EditorContext::GetInspectedAsset: clicked in the Content Browser, or selection.set
 	// {asset}), in a panel tabbed with the Inspector that comes to the front when an asset is inspected:
@@ -24,7 +26,9 @@ namespace Strata
 	// - the import settings of an imported asset (texture, model, audio clip; fonts have none) as a draft: Apply runs
 	//   asset.setImportSettings through the command runner (the import runs in the background and the panel shows it),
 	//   Revert discards the draft;
-	// - a texture's image, and the asset's state and stored size.
+	// - a texture's image; the thumbnail of a material, mesh, model or prefab, large; a model's summary (meshes, triangles,
+	//   materials, levels of detail, sub-assets); an audio clip's duration and waveform, with Play and Stop on a preview voice;
+	// - the asset's state and stored size.
 	class AssetInspectorPanel : public EditorPanel
 	{
 	public:
@@ -35,9 +39,14 @@ namespace Strata
 		void DrawActions(EditorPanelContext& context, const AssetMetadata& metadata, const AssetImporter* importer);
 		void DrawImportSettings(EditorPanelContext& context, EditorAssetManager& assets, const AssetMetadata& metadata, const AssetImporter& importer);
 		void DrawTexturePreview(AssetHandle handle);
+		void DrawThumbnail(EditorContext& context, AssetHandle handle);
+		void DrawModelSummary(EditorAssetManager& assets, const AssetMetadata& metadata);
+		void DrawAudioPreview(AssetHandle handle);
 		void DrawDetails(EditorAssetManager& assets, const AssetMetadata& metadata);
 	private:
 		MaterialEditor m_MaterialEditor;
+		AudioPreview m_AudioPreview;
+		AssetHandle m_Shown = UUID::Null(); // The asset drawn last: the preview voice stops when another one is inspected
 
 		// The import settings being edited: as the asset has them (Saved) and as edited (Edited).
 		struct ImportDraft

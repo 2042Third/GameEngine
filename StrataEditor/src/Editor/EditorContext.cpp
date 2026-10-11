@@ -12,6 +12,7 @@
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Input/Input.h>
+#include <Strata/Renderer/Renderer.h>
 #include <Strata/Scene/Prefab.h>
 #include <Strata/Scene/SceneSerializer.h>
 
@@ -37,6 +38,7 @@ namespace Strata
 		constexpr const char* c_ViewportStateFile = "EditorViewport.json";
 		// Deleted assets (asset.delete) wait in "<project>/.strata/Trash" this long, then go when the project is opened.
 		constexpr const char* c_TrashDirectory = "Trash";
+		constexpr const char* c_ThumbnailDirectory = "Thumbnails";
 		constexpr std::chrono::hours c_TrashKeepTime { 30 * 24 };
 		// A scene's first view is framed again when its meshes load within this time (EditorContext::OpenScene).
 		constexpr std::chrono::seconds c_PendingFrameTimeout { 30 };
@@ -190,6 +192,7 @@ namespace Strata
 		AssetManager::SetActive(m_AssetManager);
 		m_AssetManager->Scan(m_Specification.ImportInBackground ? ScanImports::InBackground : ScanImports::Wait);
 		m_AssetManager->PurgeTrash(c_TrashKeepTime);
+		OpenThumbnails();
 		ST_INFO("Opened project '{}' ({})", m_Project->GetConfig().Name, FileSystem::ToUTF8(m_Project->GetProjectDirectory()));
 		OpenScriptEngine(created);
 
@@ -200,6 +203,17 @@ namespace Strata
 			ST_WARN("Could not open the start scene: {}", sceneError);
 		m_RecentProjects.Add(m_Project->GetConfig().Name, m_Project->GetProjectFile());
 		return true;
+	}
+
+	void EditorContext::OpenThumbnails()
+	{
+		m_Thumbnails.reset();
+		// Without a GPU nothing could show them.
+		if (!Renderer::IsInitialized() || !m_AssetManager || !m_Project)
+			return;
+		ThumbnailCacheSpecification specification;
+		specification.Directory = m_Project->GetIntermediateDirectory() / c_ThumbnailDirectory;
+		m_Thumbnails = CreateScope<ThumbnailCache>(m_AssetManager, specification);
 	}
 
 	void EditorContext::CloseProject()
@@ -233,6 +247,8 @@ namespace Strata
 		if (hadProject)
 			m_Viewport.ResetState();
 		CloseScriptEngine();
+		// Before the asset manager: its reads use the manager.
+		m_Thumbnails.reset();
 		if (m_AssetManager)
 		{
 			// Cancels the project's imports without waiting for them (also while something else still holds the manager).
@@ -954,6 +970,8 @@ namespace Strata
 		PruneSelection();
 		m_Viewport.UpdatePicking(*this);
 		UpdatePendingFrame();
+		if (m_Thumbnails)
+			m_Thumbnails->Update();
 	}
 
 	////////////////////////////////////////////////////////////////////////////////

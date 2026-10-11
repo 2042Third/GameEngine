@@ -18,6 +18,7 @@
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/Asset/EditorAssetManager.h>
+#include <Strata/Audio/AudioEngine.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/ImGui/ImGuiRenderer.h>
@@ -25,6 +26,7 @@
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/Material.h>
+#include <Strata/Renderer/Renderer.h>
 #include <Strata/Renderer/Texture.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Entity.h>
@@ -1650,5 +1652,59 @@ TEST_SUITE("Editor.UI.AssetInspector")
 		CHECK(normalize(handScene, UUIDToJson(handCube).get<std::string>(), UUIDToJson(handMaterialHandle).get<std::string>())
 			== normalize(*commandScene, cube.get<std::string>(), material.get<std::string>()));
 		context.CloseProject();
+	}
+
+	TEST_CASE("A model's Asset tab sums up its meshes, triangles, levels of detail, materials and textures")
+	{
+		AuthoringEditor editor({ ImVec2(1600.0f, 1200.0f), 1.0f }, WithFeatureProject("EditorAuthoringModelSummary"));
+		EditorAssetManager* assets = editor.Context().GetAssetManager();
+		REQUIRE(assets);
+		const AssetHandle model = assets->FindAssetByPath("Models/Platform.gltf");
+		REQUIRE(model.IsValid());
+		uint32_t meshes = 0;
+		uint32_t materials = 0;
+		uint32_t textures = 0;
+		for (AssetHandle subAsset : assets->GetImportInfo(model).SubAssets)
+		{
+			const AssetType type = assets->GetAssetType(subAsset);
+			meshes += type == AssetType::Mesh ? 1 : 0;
+			materials += type == AssetType::Material ? 1 : 0;
+			textures += type == AssetType::Texture ? 1 : 0;
+		}
+		REQUIRE(meshes > 0);
+		editor.Run("selection.set", { { "asset", UUIDToJson(model) } });
+		// Triangles once the meshes loaded.
+		CHECK(editor.FramesUntil([]()
+		{
+			const std::optional<UI::ItemProbe::Item> triangles = UI::ItemProbe::Find("AssetInspector.Model.Triangles");
+			return triangles && triangles->Text.find("loading") == std::string::npos;
+		}));
+		CHECK(UI::ItemProbe::Find("AssetInspector.Model.Meshes")->Text == std::to_string(meshes));
+		CHECK(UI::ItemProbe::Find("AssetInspector.Model.Materials")->Text == std::to_string(materials));
+		CHECK(UI::ItemProbe::Find("AssetInspector.Model.Textures")->Text == std::to_string(textures));
+		CHECK(std::stoi(UI::ItemProbe::Find("AssetInspector.Model.Triangles")->Text) > 0);
+		CHECK(std::stoi(UI::ItemProbe::Find("AssetInspector.Model.Levels")->Text) >= 1);
+		// Without a GPU the preview says why it is missing.
+		REQUIRE(UI::ItemProbe::Find("AssetInspector.Thumbnail"));
+		if (!Renderer::IsInitialized())
+			CHECK_FALSE(UI::ItemProbe::Find("AssetInspector.Thumbnail")->Enabled);
+	}
+
+	TEST_CASE("An audio clip's Asset tab shows its length and waveform, and Play needs audio output")
+	{
+		AuthoringEditor editor({ ImVec2(1600.0f, 1200.0f), 1.0f }, WithFeatureProject("EditorAuthoringAudioPreview"));
+		EditorAssetManager* assets = editor.Context().GetAssetManager();
+		REQUIRE(assets);
+		const AssetHandle clip = assets->FindAssetByPath("Audio/Blip.wav");
+		REQUIRE(clip.IsValid());
+		editor.Run("selection.set", { { "asset", UUIDToJson(clip) } });
+		CHECK(editor.FramesUntil([]() { return UI::ItemProbe::Find("AssetInspector.Audio.Waveform").has_value(); }));
+		const std::optional<UI::ItemProbe::Item> time = UI::ItemProbe::Find("AssetInspector.Audio.Time");
+		REQUIRE(time);
+		CHECK(time->Text.find("0:0") == 0);
+		CHECK(time->Text.find("Hz") != std::string::npos);
+		const std::optional<UI::ItemProbe::Item> play = UI::ItemProbe::Find("AssetInspector.Audio.Play");
+		REQUIRE(play);
+		CHECK(play->Enabled == AudioEngine::IsInitialized());
 	}
 }

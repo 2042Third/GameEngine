@@ -2210,6 +2210,21 @@ namespace Strata
 		return it != m_Sources.end() ? it->second.Import : AssetImportInfo();
 	}
 
+	uint64_t EditorAssetManager::GetContentStamp(AssetHandle handle) const
+	{
+		if (std::optional<AssetMetadata> metadata = GetMetadata(handle); metadata && metadata->IsSubAsset())
+			handle = metadata->Parent;
+		std::scoped_lock<std::mutex> lock(m_SourceMutex);
+		auto it = m_Sources.find(handle);
+		if (it == m_Sources.end())
+			return 0;
+		const SourceAsset& source = it->second;
+		const std::string state = fmt::format("{}|{}|{}|{}|{}|{}", source.SourceSize, source.SourceTime, source.Importer ? source.Importer->GetVersion() : 0u,
+			source.Import.Imported, source.Import.Error.empty(), JsonUtils::Dump(source.Settings));
+		const uint64_t stamp = Hash::FNV1a(state);
+		return stamp != 0 ? stamp : 1;
+	}
+
 	nlohmann::json EditorAssetManager::GetImportSettings(AssetHandle handle) const
 	{
 		std::scoped_lock<std::mutex> lock(m_SourceMutex);

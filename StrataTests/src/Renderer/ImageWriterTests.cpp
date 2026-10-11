@@ -2,6 +2,7 @@
 
 #include "TestHelpers.h"
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Renderer/ImageReader.h"
 #include "Strata/Renderer/ImageWriter.h"
 
 #include <stb_image.h>
@@ -93,5 +94,33 @@ TEST_SUITE("Renderer")
 		int width = 0;
 		int height = 0;
 		CHECK(DecodeRGBA(*bytes, width, height) == std::vector<uint8_t> { 10, 20, 30, 255, 50, 60, 70, 255 });
+	}
+
+	TEST_CASE("ImageReader decodes what ImageWriter encodes, and refuses what is no image or too large")
+	{
+		const ReadbackImage image = CreateTwoPixelImage(nvrhi::Format::RGBA8_UNORM);
+		const std::optional<std::vector<uint8_t>> png = ImageWriter::EncodePNG(image, false);
+		REQUIRE(png.has_value());
+		std::string error;
+		const std::optional<ReadbackImage> decoded = ImageReader::DecodeRGBA8(*png, &error);
+		REQUIRE_MESSAGE(decoded.has_value(), error);
+		CHECK(decoded->Width == 2);
+		CHECK(decoded->Height == 1);
+		CHECK(decoded->Format == nvrhi::Format::RGBA8_UNORM);
+		CHECK(decoded->BytesPerPixel == 4);
+		CHECK(decoded->Pixels == image.Pixels);
+
+		CHECK_FALSE(ImageReader::DecodeRGBA8({}, &error).has_value());
+		const std::vector<uint8_t> garbage = { 1, 2, 3, 4, 5, 6, 7, 8 };
+		error.clear();
+		CHECK_FALSE(ImageReader::DecodeRGBA8(garbage, &error).has_value());
+		CHECK_FALSE(error.empty());
+		// A truncated PNG.
+		CHECK_FALSE(ImageReader::DecodeRGBA8(std::span<const uint8_t>(png->data(), png->size() / 2)).has_value());
+		// Larger than any image the engine writes: refused before it is decoded.
+		const std::vector<uint8_t> huge = Tests::CreateSolidPNG(ImageReader::c_MaxDimension + 1, 1, 1, 2, 3);
+		error.clear();
+		CHECK_FALSE(ImageReader::DecodeRGBA8(huge, &error).has_value());
+		CHECK(error.find("at most") != std::string::npos);
 	}
 }

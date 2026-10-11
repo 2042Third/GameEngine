@@ -91,8 +91,9 @@ namespace Strata
 		uint32_t Height = 0;
 		std::string_view DebugName;
 		CookedTextureLayout Layout;
-		std::span<const uint8_t> Data; // The whole cooked texture
+		std::span<const uint8_t> Data; // The whole cooked texture (ParseCookedTexturePrefix: its start)
 
+		// A level's pixels; empty for levels out of range and for levels beyond the data the view was parsed from.
 		std::span<const uint8_t> GetLevelData(uint32_t level) const;
 	};
 
@@ -100,6 +101,11 @@ namespace Strata
 	// offsets inside the data, levels that do not overlap and, in version 2, that are stored smallest first after the
 	// header. nullopt with the reason in outError for anything else.
 	std::optional<CookedTextureView> ParseCookedTexture(std::span<const uint8_t> data, std::string* outError = nullptr);
+	// The same for the start of cooked data of `totalSize` bytes, e.g. its header and mip tail read by byte range
+	// (CookedTextureLayout::GetMipTailByteRange): everything is validated against the whole size, and GetLevelData gives the
+	// levels the prefix holds. A prefix that ends inside the header fails. Version 1 data stores its small levels last, so
+	// only all of it is accepted.
+	std::optional<CookedTextureView> ParseCookedTexturePrefix(std::span<const uint8_t> prefix, uint64_t totalSize, std::string* outError = nullptr);
 
 	struct CookedTextureDescription
 	{
