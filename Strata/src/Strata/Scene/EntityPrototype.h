@@ -3,6 +3,7 @@
 #include "Strata/Asset/AssetTypes.h"
 #include "Strata/Core/Base.h"
 #include "Strata/Core/UUID.h"
+#include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Scene/Entity.h"
 
 #include <entt/entt.hpp>
@@ -19,14 +20,13 @@ namespace Strata
 {
 
 	class Scene;
-	struct ComponentInfo;
 
-	// Entity hierarchies compiled for copying into scenes: real components in a private scene, listed in hierarchy order
-	// (parents before their children) with what instantiation needs worked out once - each entity's parent in that order,
-	// the registered components it has, and the entity references between its entities that a copy with fresh IDs points
-	// at the copies. EntityTemplate (prefabs, models) compiles its snapshot into one on the loading worker; additive scene
-	// loads compile the prepared scene they merge. Instances are made with Scene::BeginInstantiation (see there), which
-	// copies components through ComponentInfo::Copy rather than reading JSON.
+	// Entity hierarchies compiled for copying into scenes: their entities in hierarchy order (parents before their children)
+	// with what instantiation needs worked out once - each entity's parent in that order, its components (real objects of
+	// their types, kept in one compact array per type, ComponentValueArray) and the entity references between its entities
+	// that a copy with fresh IDs points at the copies. EntityTemplate (prefabs, models) compiles its snapshot into one on the
+	// loading worker; additive scene loads compile the prepared scene they merge. Instances are made with
+	// Scene::BeginInstantiation (see there), which copies the components (ComponentInfo::EmplaceCopy) rather than reading JSON.
 	//
 	// Immutable once compiled, so the loading worker that compiles it and the main thread that instantiates it share it
 	// without locks.
@@ -36,19 +36,21 @@ namespace Strata
 		static constexpr uint32_t c_NoParent = std::numeric_limits<uint32_t>::max();
 		static constexpr size_t c_NotFound = std::numeric_limits<size_t>::max();
 
-		// Compiles the entities of `scene`, which the prototype takes over (nothing else may use it afterwards). Any thread.
-		static Ref<EntityPrototype> Compile(Ref<Scene> scene);
-		// Reads a snapshot ({"Entities": [...]}, SceneSerializer::SerializeEntities) into a private scene and compiles it.
-		// Null, with the error, when the entity data is invalid; what it could not read as written goes to outWarnings.
+		EntityPrototype() = default;
+		~EntityPrototype();
+
+		EntityPrototype(const EntityPrototype&) = delete;
+		EntityPrototype& operator=(const EntityPrototype&) = delete;
+
+		// Compiles the entities of a scene (a copy: the scene can go afterwards). Any thread, while nothing changes the scene.
+		static Ref<EntityPrototype> Compile(const Scene& scene);
+		// Reads a snapshot ({"Entities": [...]}, SceneSerializer::SerializeEntities) and compiles it. Null, with the error,
+		// when the entity data is invalid; what it could not read as written goes to outWarnings.
 		static Ref<EntityPrototype> FromSnapshot(const nlohmann::json& snapshot, std::string* outError = nullptr,
 			std::vector<std::string>* outWarnings = nullptr);
 
-		size_t GetEntityCount() const { return m_Entities.size(); }
-		// The private scene holding the components (read only: instances are copied from it).
-		const Scene& GetScene() const { return *m_Scene; }
-		// The entities of the private scene in hierarchy order, and for each the index of its parent in that order
-		// (c_NoParent for the top-level ones).
-		std::span<const entt::entity> GetEntities() const { return m_Entities; }
+		size_t GetEntityCount() const { return m_IDs.size(); }
+		// The index of each entity's parent in hierarchy order (c_NoParent for the top-level entities).
 		std::span<const uint32_t> GetParentIndices() const { return m_Parents; }
 		// The indices of the top-level entities, in order.
 		std::span<const uint32_t> GetTopLevelIndices() const { return m_TopLevel; }
@@ -58,12 +60,19 @@ namespace Strata
 		// The index of the entity with that prototype ID, or c_NotFound.
 		size_t FindEntity(UUID id) const;
 		// The registered components entity `index` has (registration order), apart from ID and Relationship, which every
-		// entity has and instantiation makes anew.
+		// entity has and instantiation makes anew; and their values (objects of the components' types).
 		std::span<const ComponentInfo* const> GetComponents(size_t index) const;
+		std::span<const void* const> GetComponentValues(size_t index) const;
+		// The value of one component of an entity, or null when the entity lacks it.
+		const void* FindComponent(size_t index, const ComponentInfo& info) const;
+		template<typename T>
+		const T* FindComponent(size_t index) const;
+		// The components of entity `index` this build does not register, kept verbatim (UnknownComponentsComponent), or null.
+		const nlohmann::json* GetUnknownComponents(size_t index) const;
 
-		// The entities as a snapshot ({"Entities": [...]}, SceneSerializer::SerializeEntities of the top-level entities).
+		// The entities as a snapshot ({"Entities": [...]}, as SceneSerializer::SerializeEntities writes them).
 		nlohmann::json Serialize() const;
-		// About the system memory the prototype occupies (its scene, Scene::EstimateMemoryUsage, and its tables).
+		// About the system memory the prototype occupies (its value arrays and tables; not what components own on the heap).
 		uint64_t GetMemoryUsage() const { return m_MemoryUsage; }
 	private:
 		friend class Scene;
@@ -78,20 +87,30 @@ namespace Strata
 			uint32_t Field = 0;                      // Script fields: field index in the script's overrides
 			uint32_t Target = 0;                     // Index of the entity referenced
 		};
+		static constexpr uint32_t c_NoUnknownComponents = std::numeric_limits<uint32_t>::max();
 	private:
-		Ref<Scene> m_Scene;
-		std::vector<entt::entity> m_Entities;
 		std::vector<uint32_t> m_Parents;
 		std::vector<uint32_t> m_TopLevel;
 		std::vector<UUID> m_IDs;
 		std::unordered_map<UUID, uint32_t> m_IndexByID;
-		// Per entity: its components in m_Components, from m_ComponentOffsets[index] to m_ComponentOffsets[index + 1].
+		// Per entity: its components and their values, from m_ComponentOffsets[index] to m_ComponentOffsets[index + 1].
 		std::vector<uint32_t> m_ComponentOffsets;
 		std::vector<const ComponentInfo*> m_Components;
-		std::vector<uint8_t> m_HasUnknownComponents; // Per entity: carries an UnknownComponentsComponent
-		std::vector<EntityReference> m_References;     // By entity, in order
+		std::vector<const void*> m_Values;
+		std::vector<Scope<ComponentValueArray>> m_Arrays; // Own the values
+		// Per entity: the index of its unknown components in m_UnknownComponents, or c_NoUnknownComponents.
+		std::vector<uint32_t> m_UnknownIndex;
+		std::vector<nlohmann::json> m_UnknownComponents;
+		std::vector<EntityReference> m_References; // By entity, in order
 		uint64_t m_MemoryUsage = 0;
 	};
+
+	template<typename T>
+	const T* EntityPrototype::FindComponent(size_t index) const
+	{
+		const ComponentInfo* info = ComponentRegistry::Find<T>();
+		return info ? static_cast<const T*>(FindComponent(index, *info)) : nullptr;
+	}
 
 	// What Scene::BeginInstantiation copies a prototype as.
 	struct InstantiationOptions

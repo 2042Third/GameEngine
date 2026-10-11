@@ -136,6 +136,26 @@ TEST_SUITE("Perf.Scene")
 		scene.OnRuntimeStop();
 	}
 
+	TEST_CASE("A million-entity scene is copied for play storage by storage")
+	{
+		Perf::ScopedApplicationJobSystem jobs;
+		Ref<Scene> scene = CreateRef<Scene>("Edited");
+		Perf::CreateNestedHierarchy(*scene, 1'000'000);
+		scene->UpdateWorldTransforms();
+
+		// What starting play mode copies (EditorContext::StartRuntime): each copy timed, its destruction not.
+		Ref<Scene> copy;
+		Perf::CheckBudgetConfirmed("Perf.Scene.Copy1M", [&]
+		{
+			return MeasureCreation("Perf.Scene.Copy1M", 1, 7, [&] { copy = Scene::Copy(scene); }, [&] { copy.reset(); });
+		});
+		copy = Scene::Copy(scene);
+		CHECK(copy->GetEntityCount() == scene->GetEntityCount());
+		CHECK(copy->GetTransformUpdateCount() == 0);
+		copy->UpdateWorldTransforms();
+		CHECK(copy->GetTransformUpdateCount() == 0);
+	}
+
 	TEST_CASE("Moving one entity of a 100,000-entity hierarchy recomputes only what it moved")
 	{
 		Perf::ScopedApplicationJobSystem jobs;

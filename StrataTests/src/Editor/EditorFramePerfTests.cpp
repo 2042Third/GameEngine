@@ -89,16 +89,30 @@ namespace
 		return { { "command", command } };
 	}
 
-	nlohmann::json Wait()
+	nlohmann::json Wait(int frames = c_WaitFrames)
 	{
-		return { { "command", "editor.wait" }, { "parameters", { { "frames", c_WaitFrames } } } };
+		return { { "command", "editor.wait" }, { "parameters", { { "frames", frames } } } };
+	}
+
+	nlohmann::json Command(std::string_view command, const nlohmann::json& parameters)
+	{
+		return { { "command", command }, { "parameters", parameters } };
+	}
+
+	// A number in a command's result (JSON pointer), REQUIREd to be there.
+	double GetNumber(const nlohmann::json& result, const std::string& pointer)
+	{
+		const nlohmann::json::json_pointer path(pointer);
+		REQUIRE_MESSAGE(result.contains(path), "No ", pointer, " in ", result.dump());
+		REQUIRE(result.at(path).is_number());
+		return result.at(path).get<double>();
 	}
 
 }
 
 TEST_SUITE("PerfGPU.Editor")
 {
-	TEST_CASE("Editor frames of 100,000 and 1,000,000 nested entities, edited and played")
+	TEST_CASE("Editor frames of 100,000 and 1,000,000 nested entities, opened, edited and played")
 	{
 		const std::filesystem::path editor = GetEditorPath();
 		REQUIRE_MESSAGE(FileSystem::IsRegularFile(editor), "The editor frame measurements need the built StrataEditor: ", FileSystem::ToUTF8(editor));
@@ -113,18 +127,29 @@ TEST_SUITE("PerfGPU.Editor")
 		WriteNestedScene(sceneFiles[0], 100'000);
 		WriteNestedScene(sceneFiles[1], 1'000'000);
 
-		// Each scene is edited for 120 frames, then played for 120 frames.
-		const nlohmann::json script = nlohmann::json::array({
+		// Once the editor's first frames are drawn (they create its renderers), each scene is opened (scene.open reports the
+		// frames that ran while it loaded), edited for 120 frames, then played for 120 frames. After the million entities are
+		// in, editor.status reports the editor's memory; the frame that starts playing them (copying the scene) is the longest
+		// of the latest few frames editor.perf summarizes.
+		constexpr int c_PlayStartFrames = 8;
+		const nlohmann::json script = nlohmann::json::array({ Wait(),
 			OpenScene("Scenes/Nested100k.stscene"), Wait(), Command("play.start"), Wait(), Command("play.stop"),
-			OpenScene("Scenes/Nested1M.stscene"), Wait(), Command("play.start"), Wait(), Command("play.stop") });
+			OpenScene("Scenes/Nested1M.stscene"), Wait(), Command("editor.status"), Command("play.start"), Wait(c_PlayStartFrames / 2),
+			Command("editor.perf", { { "frames", c_PlayStartFrames } }), Wait(), Command("play.stop") });
 		const std::filesystem::path scriptFile = directory / "Commands.json";
 		REQUIRE(FileSystem::WriteText(scriptFile, script.dump(1, '\t') + "\n"));
 
-		// One editor run measures all four metrics (the median CPU time of a wait's frames, which ignores the frames the
-		// machine's other work slowed down); a metric over its budget is confirmed by another run.
-		const std::vector<std::string> metrics = {
+		// One editor run measures every metric; a metric over its budget is confirmed by another run. The frames of editing and
+		// playing are medians of a wait's frames (which ignore the frames the machine's other work slowed down). Opening a
+		// scene and starting to play are maxima by nature: the longest frame while the scene loads (the frame that swaps it in
+		// included) and the frame that starts playing, the hitches these loads must not cause. The working set is the
+		// editor's memory once the million entities are open, a level that stays.
+		const std::vector<std::string> frameMetrics = {
 			"PerfGPU.Editor.EditFrameNested100k", "PerfGPU.Editor.PlayFrameNested100k",
 			"PerfGPU.Editor.EditFrameNested1M", "PerfGPU.Editor.PlayFrameNested1M" };
+		std::vector<std::string> metrics = frameMetrics;
+		metrics.insert(metrics.end(), { "PerfGPU.Editor.SceneOpen100kMaxFrame", "PerfGPU.Editor.SceneOpen1MMaxFrame", "PerfGPU.Editor.SceneOpen1MWorkingSet",
+			"PerfGPU.Editor.PlayStart1MMaxFrame" });
 		Perf::CheckBudgetsConfirmed(metrics, [&]
 		{
 			// Maximized (the default): the frames draw the editor at the size people use it. --frames keeps the run from
@@ -148,12 +173,16 @@ TEST_SUITE("PerfGPU.Editor")
 			}
 			REQUIRE(run.ExitCode == 0);
 
-			const std::vector<nlohmann::json> waits = FindCommandResults(run.Output, "editor.wait");
-			REQUIRE(waits.size() == metrics.size());
+			// The waits of editing and playing each scene (the first one, while the editor starts, and the short one after
+			// starting to play the million entities aside).
+			std::vector<nlohmann::json> waits = FindCommandResults(run.Output, "editor.wait");
+			REQUIRE(waits.size() == frameMetrics.size() + 2);
+			waits.erase(waits.begin() + 4);
+			waits.erase(waits.begin());
 			Perf::MetricValues values;
 			for (size_t index = 0; index < waits.size(); index++)
 			{
-				CAPTURE(metrics[index]);
+				CAPTURE(frameMetrics[index]);
 				const nlohmann::json* frameTimes = JsonUtils::Find(waits[index], "frameTimes");
 				REQUIRE(frameTimes != nullptr);
 				const nlohmann::json* count = JsonUtils::Find(*frameTimes, "count");
@@ -161,8 +190,25 @@ TEST_SUITE("PerfGPU.Editor")
 				REQUIRE((count && count->is_number_integer() && median && median->is_number()));
 				// Every frame but the first of the wait (which also opened the scene or started playing) is measured.
 				CHECK(count->get<int>() >= c_WaitFrames - 2);
-				values[metrics[index]] = median->get<double>();
+				values[frameMetrics[index]] = median->get<double>();
 			}
+
+			// scene.open answers once the scene is in, with the frames that ran meanwhile.
+			const std::vector<nlohmann::json> opens = FindCommandResults(run.Output, "scene.open");
+			REQUIRE(opens.size() == 2);
+			CHECK(GetNumber(opens[0], "/entities") == 100'000 + 2);
+			CHECK(GetNumber(opens[1], "/entities") == 1'000'000 + 2);
+			MESSAGE("Opening 100,000 entities: ", GetNumber(opens[0], "/seconds"), " s over ", GetNumber(opens[0], "/frames"), " frames; 1,000,000: ",
+				GetNumber(opens[1], "/seconds"), " s over ", GetNumber(opens[1], "/frames"), " frames");
+			values["PerfGPU.Editor.SceneOpen100kMaxFrame"] = GetNumber(opens[0], "/frameTimes/maxMs");
+			values["PerfGPU.Editor.SceneOpen1MMaxFrame"] = GetNumber(opens[1], "/frameTimes/maxMs");
+			const std::vector<nlohmann::json> statuses = FindCommandResults(run.Output, "editor.status");
+			REQUIRE(statuses.size() == 1);
+			values["PerfGPU.Editor.SceneOpen1MWorkingSet"] = GetNumber(statuses[0], "/memory/workingSetMB");
+			const std::vector<nlohmann::json> profiles = FindCommandResults(run.Output, "editor.perf");
+			REQUIRE(profiles.size() == 1);
+			CHECK(GetNumber(profiles[0], "/frames") == c_PlayStartFrames);
+			values["PerfGPU.Editor.PlayStart1MMaxFrame"] = GetNumber(profiles[0], "/frame/maxMs");
 			return values;
 		});
 	}

@@ -249,8 +249,7 @@ Open items and deferrals later waves own:
 - Editor (later editor work, not planned in a wave yet): the Inspector reads every selected entity's values each frame,
   so 100,000 selected entities add about 8 ms to a frame (`Perf.Editor.SelectionFrame100kSelected`) until a cache
   follows component signals; the color picker clamps HDR colors while dragged (the channel fields keep them); deleting
-  one entity among 100,000 sibling roots renumbers the sibling list (about 0.5 ms); starting play copies a
-  1,000,000-entity scene in about 0.7 s (`scene-streaming`).
+  one entity among 100,000 sibling roots renumbers the sibling list (about 0.5 ms).
 - The editor starts in 0.7-1.0 s (Release, to its first frame on screen), not the 0.4 s the pillar names. An idle
   editor answers input and automation requests on its next throttled frame (up to 33 ms, 100 ms unfocused) until it
   waits on events instead (later editor work). Project thumbnails and search in the recent projects move to

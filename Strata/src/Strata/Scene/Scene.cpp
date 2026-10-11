@@ -7,10 +7,13 @@
 #include "Strata/Scene/SceneSerializer.h"
 #include "Strata/Scene/UnknownComponents.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <optional>
+#include <type_traits>
 
 namespace Strata
 {
@@ -79,7 +82,24 @@ namespace Strata
 	static std::atomic<uint32_t> s_RunningSceneCount = 0;
 
 	Scene::Scene(std::string name)
+		: Scene(std::move(name), true)
+	{
+	}
+
+	Scene::Scene(std::string name, bool connectSignals)
 		: m_Name(std::move(name))
+	{
+		if (connectSignals)
+			ConnectSignals();
+	}
+
+	Scene::~Scene()
+	{
+		OnRuntimeStop();
+		m_Connections.clear();
+	}
+
+	void Scene::ConnectSignals()
 	{
 		m_Connections.emplace_back(m_Registry.on_construct<TransformComponent>().connect<&Scene::OnTransformChanged>(*this));
 		m_Connections.emplace_back(m_Registry.on_update<TransformComponent>().connect<&Scene::OnTransformChanged>(*this));
@@ -93,60 +113,97 @@ namespace Strata
 		m_Connections.emplace_back(m_Registry.on_destroy<TagComponent>().connect<&Scene::OnTagRemoved>(*this));
 	}
 
-	Scene::~Scene()
-	{
-		OnRuntimeStop();
-		m_Connections.clear();
-	}
-
 	Ref<Scene> Scene::Copy(const Ref<Scene>& source)
 	{
-		Ref<Scene> destination = CreateRef<Scene>(source->m_Name);
+		ST_PROFILE_FUNCTION();
+		// Filled before its signal handlers are connected: the caches they keep are copied with the scene, and nothing else
+		// listens to a new registry, so the storages can be filled in parallel.
+		Ref<Scene> destination(new Scene(source->m_Name, false));
 		destination->m_Settings = source->m_Settings;
 		destination->m_SourceAsset = source->m_SourceAsset;
 		destination->m_LocalLineageID = source->m_LocalLineageID;
 
-		// The hierarchy is rebuilt from the links instead of being copied with the components: entities are copied parents
-		// first, so appending each one to its parent reproduces every sibling order.
-		const entt::id_type relationshipType = entt::type_id<RelationshipComponent>().hash();
-		const std::vector<const ComponentInfo*>& components = ComponentRegistry::GetAll();
-		std::vector<entt::entity> order;
-		source->CollectHierarchyOrder(order);
-		for (const entt::entity sourceHandle : order)
+		// Every storage exists before the copies start: they only read the registry's table of storages, each copy filling its
+		// own storage (the entity storage is the registry's own, outside that table). The largest go first, so that the copies
+		// finish together. Copying is mostly the system providing fresh memory (page faults), which is why the storages are
+		// copied on as many threads as there are, and room for them is made by the copies themselves.
+		const entt::registry& from = source->m_Registry;
+		entt::registry& to = destination->m_Registry;
+		struct StorageCopy
 		{
-			const entt::entity handle = destination->m_Registry.create();
-			for (const ComponentInfo* info : components)
-			{
-				if (info->IsCopyable() && info->TypeId != relationshipType)
-					info->Copy(destination->m_Registry, handle, source->m_Registry, sourceHandle);
-			}
-			destination->m_Registry.emplace<RelationshipComponent>(handle);
-			destination->m_Registry.emplace<HierarchyComponent>(handle);
-			// The cached world transforms and activity are exact wherever the source's are (the same local transforms and
-			// hierarchy); what is stale there is stale here.
-			const WorldTransformComponent* worldTransform = source->m_Registry.try_get<WorldTransformComponent>(sourceHandle);
-			destination->m_Registry.emplace<WorldTransformComponent>(handle, worldTransform ? *worldTransform : WorldTransformComponent());
-			// Not registered (so not copied above), but part of the entity's data.
-			if (const UnknownComponentsComponent* unknown = source->m_Registry.try_get<UnknownComponentsComponent>(sourceHandle))
-				destination->m_Registry.emplace<UnknownComponentsComponent>(handle, *unknown);
-			const UUID id = source->m_Registry.get<IDComponent>(sourceHandle).ID;
-			destination->m_EntityMap.emplace(id, handle);
+			size_t Size = 0;
+			std::function<void()> Run;
+		};
+		std::vector<StorageCopy> copies;
+		const auto addCopy = [&copies](size_t size, std::function<void()> run) { copies.push_back(StorageCopy { size, std::move(run) }); };
 
-			const HierarchyComponent& sourceNode = source->GetHierarchy(sourceHandle);
-			entt::entity parent = entt::null;
-			if (sourceNode.Parent != entt::null)
+		// The scene's entities (those with a hierarchy node; entities made directly through GetRegistry are not the scene's)
+		// get the identifiers they have in the source; new ones then take the lowest identifiers the copy left free first, as
+		// the source's registry would.
+		const auto* hierarchy = from.storage<HierarchyComponent>();
+		const size_t count = hierarchy ? hierarchy->size() : 0;
+		addCopy(count, [hierarchy, &to]()
+		{
+			std::vector<uint8_t> used;
+			if (hierarchy)
 			{
-				auto parentIt = destination->m_EntityMap.find(source->m_Registry.get<IDComponent>(sourceNode.Parent).ID);
-				ST_CORE_ASSERT(parentIt != destination->m_EntityMap.end(), "Scene::Copy: a parent was not copied before its child");
-				if (parentIt != destination->m_EntityMap.end())
-					parent = parentIt->second;
+				for (const entt::entity handle : static_cast<const entt::sparse_set&>(*hierarchy))
+				{
+					[[maybe_unused]] const entt::entity created = to.create(handle);
+					ST_CORE_ASSERT(created == handle, "Scene::Copy: the copy's registry did not take the source's identifier");
+					const size_t index = static_cast<size_t>(entt::to_entity(handle));
+					if (index >= used.size())
+						used.resize(index + 1, 0);
+					used[index] = 1;
+				}
 			}
-			destination->LinkLast(handle, parent);
-			destination->GetHierarchy(handle).Depth = parent == entt::null ? 0 : destination->GetHierarchy(parent).Depth + 1;
-			if (sourceNode.TransformDirty || !worldTransform)
-				destination->MarkTransformDirty(handle);
+			const size_t firstFree = static_cast<size_t>(std::find(used.begin(), used.end(), uint8_t(0)) - used.begin());
+			to.storage<entt::entity>().start_from(entt::entity(static_cast<entt::id_type>(firstFree)));
+		});
+		for (const ComponentInfo* info : ComponentRegistry::GetAll())
+		{
+			const entt::sparse_set* storage = info->IsCopyable() ? from.storage(info->TypeId) : nullptr;
+			if (!storage || storage->empty())
+				continue;
+			info->AssureStorage(to);
+			addCopy(storage->size(), [info, &to, &from]() { info->CopyStorage(to, from); });
 		}
+		// The scene's own components (not registered): the hierarchy nodes, the cached world transforms, unknown components.
+		const auto addInternalCopy = [&]<typename T>(std::type_identity<T>)
+		{
+			const auto* storage = from.storage<T>();
+			if (!storage || storage->empty())
+				return;
+			auto& target = to.storage<T>();
+			addCopy(storage->size(), [storage, &target]()
+			{
+				target.reserve(storage->size());
+				for (const auto [handle, component] : storage->each())
+					target.emplace(handle, component);
+			});
+		};
+		addInternalCopy(std::type_identity<HierarchyComponent>());
+		addInternalCopy(std::type_identity<WorldTransformComponent>());
+		addInternalCopy(std::type_identity<UnknownComponentsComponent>());
+		addCopy(count, [&destination, &source]() { destination->m_EntityMap = source->m_EntityMap; });
+		std::stable_sort(copies.begin(), copies.end(), [](const StorageCopy& a, const StorageCopy& b) { return a.Size > b.Size; });
+		JobSystem::ParallelFor(static_cast<uint32_t>(copies.size()), 1, [&copies](uint32_t begin, uint32_t end)
+		{
+			for (uint32_t index = begin; index < end; index++)
+				copies[index].Run();
+		});
+
+		// The hierarchy links and caches hold as they are: the same identifiers.
+		destination->m_RootEntities = source->m_RootEntities;
+		destination->m_FirstRoot = source->m_FirstRoot;
+		destination->m_LastRoot = source->m_LastRoot;
+		destination->m_RootIndicesValid = source->m_RootIndicesValid;
+		// What is stale in the source is stale in the copy (the nodes' dirty flags came with them), and the nodes' memo of the
+		// transform pass is the source's, so the copy's passes continue its numbering.
+		destination->m_DirtyTransforms = source->m_DirtyTransforms;
+		destination->m_TransformPass = source->m_TransformPass;
 		destination->m_HierarchyVersion++;
+		destination->ConnectSignals();
 		return destination;
 	}
 
@@ -467,8 +524,8 @@ namespace Strata
 			bytes += storage.capacity() * (sizeof(entt::entity) + elementSize) + storage.extent() * sizeof(entt::entity);
 		}
 
-		// Hash nodes (the value and a link pair) and the bucket array (a pair of links each).
-		bytes += m_EntityMap.size() * (sizeof(std::pair<const UUID, entt::entity>) + 2 * sizeof(void*)) + m_EntityMap.bucket_count() * 2 * sizeof(void*);
+		// The map's packed nodes (a value and the index of the next node) and its bucket array.
+		bytes += m_EntityMap.size() * (sizeof(std::pair<UUID, entt::entity>) + sizeof(size_t)) + m_EntityMap.bucket_count() * sizeof(size_t);
 		bytes += m_RootEntities.capacity() * sizeof(UUID);
 		if (const auto* relationships = m_Registry.storage<RelationshipComponent>())
 		{

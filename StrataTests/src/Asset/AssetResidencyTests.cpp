@@ -100,7 +100,7 @@ TEST_SUITE("Asset.Residency")
 		CHECK(mesh->GetMemoryUsage().GetGpu() == 0);
 
 		// Prefabs and models count the entities they compiled their snapshots into, which grow with what they hold: at least
-		// the components every entity has.
+		// the components every entity of the prototype keeps (ID and relationship are made anew by every instantiation).
 		const auto makeSnapshot = [](int entities)
 		{
 			Scene scene;
@@ -109,8 +109,7 @@ TEST_SUITE("Asset.Residency")
 				roots.push_back(scene.CreateEntity("Entity " + std::to_string(index)));
 			return SceneSerializer::SerializeEntities(scene, roots);
 		};
-		const uint64_t perEntity = sizeof(IDComponent) + sizeof(NameComponent) + sizeof(TransformComponent) + sizeof(RelationshipComponent)
-			+ sizeof(WorldTransformComponent);
+		const uint64_t perEntity = sizeof(UUID) + sizeof(NameComponent) + sizeof(TransformComponent);
 		const Ref<Prefab> smallPrefab = Prefab::CreateFromSnapshot(makeSnapshot(1));
 		const Ref<Prefab> largePrefab = Prefab::CreateFromSnapshot(makeSnapshot(100));
 		REQUIRE(smallPrefab);

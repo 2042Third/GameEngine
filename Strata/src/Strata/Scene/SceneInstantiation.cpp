@@ -127,8 +127,6 @@ namespace Strata
 		}
 
 		const CoreComponentInfos& core = GetCoreComponentInfos();
-		const entt::registry& source = prototype.GetScene().GetRegistry();
-		const auto* unknownComponents = source.storage<UnknownComponentsComponent>();
 		const entt::entity parentHandle = options.Parent ? options.Parent.GetHandle() : entt::null;
 		const size_t firstRoot = prototype.GetTopLevelIndices().empty() ? EntityPrototype::c_NotFound : prototype.GetTopLevelIndices().front();
 
@@ -143,20 +141,22 @@ namespace Strata
 				id = UUID();
 			instantiation.m_IDs[index] = id;
 
-			const entt::entity sourceHandle = prototype.GetEntities()[index];
 			const entt::entity handle = m_Registry.create();
 			m_Registry.emplace<IDComponent>(handle, id);
 			m_Registry.emplace<RelationshipComponent>(handle);
 			m_Registry.emplace<WorldTransformComponent>(handle);
-			for (const ComponentInfo* info : prototype.GetComponents(index))
+			const std::span<const ComponentInfo* const> components = prototype.GetComponents(index);
+			const std::span<const void* const> values = prototype.GetComponentValues(index);
+			for (size_t slot = 0; slot < components.size(); slot++)
 			{
+				const ComponentInfo* info = components[slot];
 				if (rootTransform && info == core.Transform && index == firstRoot)
 					m_Registry.emplace_or_replace<TransformComponent>(handle, *rootTransform);
 				else
-					info->Copy(m_Registry, handle, source, sourceHandle);
+					info->EmplaceCopy(m_Registry, handle, values[slot]);
 			}
-			if (prototype.m_HasUnknownComponents[index])
-				m_Registry.emplace<UnknownComponentsComponent>(handle, unknownComponents->get(sourceHandle));
+			if (const nlohmann::json* unknown = prototype.GetUnknownComponents(index))
+				m_Registry.emplace<UnknownComponentsComponent>(handle, UnknownComponentsComponent { *unknown });
 			m_EntityMap.emplace(id, handle);
 			instantiation.m_Handles[index] = handle;
 		}

@@ -37,6 +37,62 @@ namespace Strata
 		virtual void OnComponentChanged(entt::registry& registry, entt::entity entity) = 0;
 	};
 
+	// Values of one component type kept outside any registry, in one array of that type (EntityPrototype keeps a prefab's
+	// components this way: an EnTT storage allocates its elements a page of 1,024 at a time, too much for small prefabs).
+	// Exact copies, read by address and copied into registries with ComponentInfo::EmplaceCopy.
+	class ComponentValueArray
+	{
+	public:
+		virtual ~ComponentValueArray() = default;
+		// Room for `count` values in all: the addresses of values appended within it never change.
+		virtual void Reserve(size_t count) = 0;
+		// Appends a copy of a component of the type (as ComponentInfo::Get returns it; tag components may pass null) and
+		// returns the copy's address (a shared instance for tag components, which carry no data).
+		virtual const void* Append(const void* component) = 0;
+		// The bytes the values occupy (not what they own on the heap).
+		virtual uint64_t GetMemoryUsage() const = 0;
+	};
+
+	namespace Detail
+	{
+
+		template<typename T>
+		class TypedComponentValueArray final : public ComponentValueArray
+		{
+		public:
+			void Reserve(size_t count) override
+			{
+				if constexpr (!std::is_empty_v<T>)
+					m_Values.reserve(count);
+			}
+
+			const void* Append([[maybe_unused]] const void* component) override
+			{
+				if constexpr (std::is_empty_v<T>)
+				{
+					static T s_Instance;
+					return &s_Instance;
+				}
+				else
+				{
+					return &m_Values.emplace_back(*static_cast<const T*>(component));
+				}
+			}
+
+			uint64_t GetMemoryUsage() const override
+			{
+				if constexpr (std::is_empty_v<T>)
+					return 0;
+				else
+					return m_Values.capacity() * sizeof(T);
+			}
+		private:
+			// Unused for tag components.
+			std::vector<std::conditional_t<std::is_empty_v<T>, char, T>> m_Values;
+		};
+
+	}
+
 	// Reflection metadata and type-erased ECS operations for one component type.
 	struct ComponentInfo
 	{
@@ -55,6 +111,16 @@ namespace Strata
 		std::function<void(entt::registry&, entt::entity)> Remove;
 		std::function<void(entt::registry&, entt::entity)> MarkModified;  // Emits the registry's on_update signal
 		std::function<void(entt::registry& destination, entt::entity destinationEntity, const entt::registry& source, entt::entity sourceEntity)> Copy;
+		// Whole storages, for copies of a registry whose entities have the same identifiers in both (Scene::Copy). AssureStorage
+		// creates the type's storage; CopyStorage then copies every component of the type `source` has to the same entities of
+		// `destination`, which lack it there (they need not exist yet: storages do not check). CopyStorage touches only this
+		// type's storages, so copies of different types may run on different threads at once once every storage exists.
+		std::function<void(entt::registry& registry)> AssureStorage;
+		std::function<void(entt::registry& destination, const entt::registry& source)> CopyStorage;
+		// Components kept outside registries (ComponentValueArray): a new array of this type, and a copy of one of its values
+		// added to an entity (replacing a component it has; tag components need no value).
+		std::function<Scope<ComponentValueArray>()> CreateValueArray;
+		std::function<void(entt::registry& registry, entt::entity entity, const void* component)> EmplaceCopy;
 		// Connects the observer to the registry's signals of this type: additions and removals, and with `updates` the
 		// on_update signal too (value changes that are signaled, see Entity::MarkModified). Release the returned connections
 		// (entt::connection::release) while the registry exists, at the latest when the observer goes; a registry that is
@@ -236,6 +302,33 @@ namespace Strata
 				if (const T* component = source.try_get<T>(sourceEntity))
 					destination.emplace_or_replace<T>(destinationEntity, *component);
 			}
+		};
+		info.AssureStorage = [](entt::registry& registry) { registry.storage<T>(); };
+		info.CopyStorage = [](entt::registry& destination, const entt::registry& source)
+		{
+			const auto* from = source.storage<T>();
+			if (!from || from->empty())
+				return;
+			auto& to = destination.storage<T>();
+			to.reserve(to.size() + from->size());
+			if constexpr (std::is_empty_v<T>)
+			{
+				for (const entt::entity entity : static_cast<const entt::sparse_set&>(*from))
+					to.emplace(entity);
+			}
+			else
+			{
+				for (const auto [entity, component] : from->each())
+					to.emplace(entity, component);
+			}
+		};
+		info.CreateValueArray = []() -> Scope<ComponentValueArray> { return CreateScope<Detail::TypedComponentValueArray<T>>(); };
+		info.EmplaceCopy = [](entt::registry& registry, entt::entity entity, [[maybe_unused]] const void* component)
+		{
+			if constexpr (std::is_empty_v<T>)
+				registry.emplace_or_replace<T>(entity);
+			else
+				registry.emplace_or_replace<T>(entity, *static_cast<const T*>(component));
 		};
 		info.Observe = [](entt::registry& registry, ComponentObserver& observer, bool updates)
 		{

@@ -510,6 +510,19 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
 - Gameplay asks the scene's owner to quit or to switch scenes (`Scene::RequestQuit`, `RequestSceneLoad`); owners honor
   the requests after the update. The owners are the editor's play mode (`EditorContext::StartRuntime` plays a
   `Scene::Copy` of the edited scene; `Stop` discards it) and `GameRuntime`.
+- **`Scene::Copy`** makes an independent scene with the same entities, components and caches. Its entities keep the
+  source's EnTT identifiers (made with the source's handles, the free indices after them as the source would reuse
+  them), so every storage is copied whole: the copyable registered components, the hierarchy links, the cached world
+  transforms and the unknown components, each type's storage by itself and the types on the job threads at once
+  (`ComponentInfo::AssureStorage` creates every storage first, then `CopyStorage` touches only its own type's), largest
+  first, the entities themselves (`registry.create(hint)`) as one more such copy; the UUID map (an `entt::dense_map`, two
+  arrays) and the root list are copied as they are, and the dirty list and the transform pass carry over, so the copy
+  needs no recomputation. The copy's signals are connected only afterwards: copying emits none, as a deserialized scene's
+  construction emits none before its systems start. Copying is mostly the system handing out fresh memory (page faults),
+  which the threads share: a 1,000,000-entity scene copies in about 43 ms (`Perf.Scene.Copy1M`; about 0.7 s entity by
+  entity before), and the editor's frame that starts playing it takes about 47 ms (`PerfGPU.Editor.PlayStart1MMaxFrame`).
+  Systems starting must not walk the hierarchy either: `ScriptSystem` sorts the scripted entities into hierarchy order
+  when they are few (`c_SortedScriptStartRatio`) instead of walking a million entities for them.
 - **Time dilation** (`Scene::SetTimeDilation`): owners driven by the wall clock (the editor's play mode outside scripted
   runs, `EditorContextSpecification::TimeDilation`; exported games outside `--frames` runs,
   `GameRuntimeOptions::TimeDilation`) let a simulation that cannot keep up with real time slow down: an update stops its
@@ -528,12 +541,14 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   it. `SceneSerializer::GetDeserializeCount` counts the documents read, so tests check that a load reads its scene
   once.
 - **Compiled prefabs.** A prefab or model (`EntityTemplate`) compiles its snapshot once, when it is created or loaded (on
-  the loading worker), into an `EntityPrototype` (`Scene/EntityPrototype.h`): the entities in a private scene with real
-  components, in hierarchy order, with each entity's parent index, the registered components each one has and the entity
-  references among them (entity properties and script fields). The JSON is not kept (`GetSnapshot` and `Serialize`
+  the loading worker), into an `EntityPrototype` (`Scene/EntityPrototype.h`): the entities in hierarchy order, with
+  each entity's ID and parent index, its registered components (real objects of their types, kept in one compact array
+  per type, `ComponentValueArray`: an EnTT storage allocates a page of 1,024 elements at a time, which made a small
+  prefab's private registry cost about 400 KiB) and the entity references among them (entity properties and script
+  fields). The JSON is not kept (`GetSnapshot` and `Serialize`
   write it from the prototype). Instantiating copies the prototype (`Scene::BeginInstantiation`,
   `ContinueInstantiation`, `Instantiate`; `Scene/SceneInstantiation.cpp`): the scene's capacity is checked first, the
-  components are copied with `ComponentInfo::Copy` (on_construct), the entities are linked parents first, references
+  components are copied with `ComponentInfo::EmplaceCopy` (on_construct), the entities are linked parents first, references
   among the copies are remapped to their fresh IDs, every entity is linked to the asset (`PrefabInstanceComponent`) and
   every component then emits on_update, the signals that deserializing the snapshot emitted. A 1,000-entity prefab
   instantiates in about 0.3 ms (it took about 17 ms when every instance read the JSON). `EntityTemplate::InstantiateMany`

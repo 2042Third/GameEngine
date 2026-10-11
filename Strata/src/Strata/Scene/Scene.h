@@ -80,7 +80,10 @@ namespace Strata
 		Scene(const Scene&) = delete;
 		Scene& operator=(const Scene&) = delete;
 
-		// Deep copy preserving entity UUIDs; used to enter play mode without touching the edited scene.
+		// Deep copy preserving entity UUIDs; used to enter play mode without touching the edited scene. The copy's entities have
+		// the source's EnTT identifiers too, so the hierarchy, the UUID map and the cached world transforms are copied as they
+		// are, and every component storage is copied whole (ComponentInfo::CopyStorage), the storages in parallel on the job
+		// system. Copies keep the source asset and the lineage (GetSourceAsset, GetLineageID).
 		static Ref<Scene> Copy(const Ref<Scene>& source);
 
 		//////////////////////////////////////////////////////////////////////////
@@ -464,6 +467,11 @@ namespace Strata
 		void RemoveLookupValue(LookupIndex& index, entt::entity handle) const;
 
 		// Signal handlers
+		// A scene whose signal handlers are not connected yet (Copy fills it first, then connects them).
+		Scene(std::string name, bool connectSignals);
+		// Connects the handlers of the components whose signals keep the scene's caches (dirty transforms, activity, lookups).
+		void ConnectSignals();
+
 		void OnTransformChanged(entt::registry& registry, entt::entity handle);
 		void OnInactiveAdded(entt::registry& registry, entt::entity handle);
 		void OnInactiveRemoved(entt::registry& registry, entt::entity handle);
@@ -476,7 +484,8 @@ namespace Strata
 		AssetHandle m_SourceAsset = UUID::Null();
 		UUID m_LocalLineageID;                     // Random; see GetLineageID
 		entt::registry m_Registry;
-		std::unordered_map<UUID, entt::entity> m_EntityMap;
+		// UUID -> entity. A dense map: lookups probe one packed array, and copying it (Copy) copies two arrays.
+		entt::dense_map<UUID, entt::entity, std::hash<UUID>> m_EntityMap;
 		std::vector<UUID> m_RootEntities;
 		uint64_t m_HierarchyVersion = 0;
 		std::deque<EntityChange> m_HierarchyMoves; // The latest moves, oldest first

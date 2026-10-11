@@ -130,7 +130,7 @@ namespace Strata
 				m_Prototype->GetEntityCount(), existing, Scene::c_MaxEntities));
 		}
 		const size_t firstRoot = m_Prototype->GetTopLevelIndices().front();
-		const TransformComponent* prototypeTransform = m_Prototype->GetScene().GetRegistry().try_get<TransformComponent>(m_Prototype->GetEntities()[firstRoot]);
+		const TransformComponent* prototypeTransform = m_Prototype->FindComponent<TransformComponent>(firstRoot);
 		std::vector<TransformComponent> rootTransforms(transforms.size(), prototypeTransform ? *prototypeTransform : TransformComponent());
 		for (size_t index = 0; index < transforms.size(); index++)
 		{
@@ -189,7 +189,6 @@ namespace Strata
 		}
 
 		const entt::registry& instanceRegistry = scene.GetRegistry();
-		const entt::registry& prototypeRegistry = m_Prototype->GetScene().GetRegistry();
 		const entt::id_type scriptType = entt::type_id<ScriptComponent>().hash();
 		const entt::id_type linkType = entt::type_id<PrefabInstanceComponent>().hash();
 		for (PrefabInstanceEntity& instance : entities)
@@ -197,20 +196,19 @@ namespace Strata
 			if (instance.PrototypeIndex == EntityPrototype::c_NotFound)
 				continue;
 			const entt::entity instanceHandle = instance.Instance.GetHandle();
-			const entt::entity prototypeHandle = m_Prototype->GetEntities()[instance.PrototypeIndex];
 			for (const ComponentInfo* info : ComponentRegistry::GetAll())
 			{
 				if (HasFlag(info->Flags, ComponentFlags::NoSerialize) || info->TypeId == linkType)
 					continue;
 				const bool inInstance = info->Has(instanceRegistry, instanceHandle);
-				const bool inPrototype = info->Has(prototypeRegistry, prototypeHandle);
+				const void* b = m_Prototype->FindComponent(instance.PrototypeIndex, *info);
+				const bool inPrototype = b != nullptr;
 				if (!inInstance && !inPrototype)
 					continue;
 				bool differs = inInstance != inPrototype;
 				if (!differs && info->Size > 0)
 				{
 					const void* a = instanceRegistry.storage(info->TypeId)->value(instanceHandle);
-					const void* b = prototypeRegistry.storage(info->TypeId)->value(prototypeHandle);
 					for (const PropertyInfo& property : info->Properties)
 					{
 						if (!property.IsTransient() && ToPrototypeValue(property.Type, property.GetValue(a), instanceToPrototype) != property.GetValue(b))
