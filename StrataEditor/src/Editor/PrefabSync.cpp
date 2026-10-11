@@ -57,14 +57,24 @@ namespace Strata
 		m_BaselineVersion++;
 	}
 
+	bool PrefabSync::AreEditsContinuing(uint64_t changes) const
+	{
+		// A change Update has not seen yet (made in this frame) continues a run when the last change it saw was recent.
+		if (changes != m_SeenChanges)
+			return m_LastChangeFrame != 0 && m_Frame - m_LastChangeFrame < c_SettleFrames;
+		return m_PreviousChangeFrame != 0 && m_LastChangeFrame - m_PreviousChangeFrame < c_SettleFrames && m_Frame - m_LastChangeFrame < c_SettleFrames;
+	}
+
 	void PrefabSync::Watch(EditorContext& context)
 	{
 		Scene& scene = *context.GetEditScene();
 		const auto* links = std::as_const(scene.GetRegistry()).storage<PrefabInstanceComponent>();
 		const size_t linkCount = links ? links->size() : 0;
 		const uint64_t changes = context.GetUndoStack().GetChangeCount();
-		if (changes == m_WatchedChanges && linkCount == m_WatchedLinks)
+		// Links that come or go are found at once; edits that may have replaced links once they pause.
+		if (linkCount == m_WatchedLinks && (changes == m_WatchedChanges || AreEditsContinuing(changes)))
 			return;
+		m_WatchScanCount++;
 		m_WatchedChanges = changes;
 		m_WatchedLinks = linkCount;
 		std::set<AssetHandle> prefabs;
@@ -78,6 +88,19 @@ namespace Strata
 
 	void PrefabSync::Update(EditorContext& context)
 	{
+		// The frames of the history's changes, for AreEditsContinuing (the first count seen is no change).
+		m_Frame++;
+		const uint64_t changes = context.GetUndoStack().GetChangeCount();
+		if (changes != m_SeenChanges)
+		{
+			if (m_SeenChanges != UINT64_MAX)
+			{
+				m_PreviousChangeFrame = m_LastChangeFrame;
+				m_LastChangeFrame = m_Frame;
+			}
+			m_SeenChanges = changes;
+		}
+
 		EditorAssetManager* assets = context.GetAssetManager();
 		const Ref<Scene>& scene = context.GetEditScene();
 		if (!assets || !scene)
@@ -190,23 +213,22 @@ namespace Strata
 		m_BaselineVersion++;
 	}
 
-	uint64_t PrefabSync::GetStamp(EditorContext& context) const
-	{
-		// Edits and baselines both change what an instance is compared with: either changing renews the marks.
-		return (context.GetUndoStack().GetChangeCount() << 24) ^ m_BaselineVersion;
-	}
-
 	bool PrefabSync::IsModified(EditorContext& context, Entity root)
 	{
 		if (!root || !PrefabInstances::IsInstanceRoot(root))
 			return false;
-		const uint64_t stamp = GetStamp(context);
-		ModifiedMark& mark = m_Marks[root.GetUUID()];
-		if (mark.Stamp == stamp && stamp != 0)
+		// Edits and baselines both change what an instance is compared with. A new baseline renews the mark at once; edits do
+		// once they pause (a mark worked out before a run of edits stays during it).
+		const uint64_t changes = context.GetUndoStack().GetChangeCount();
+		auto [it, added] = m_Marks.try_emplace(root.GetUUID());
+		ModifiedMark& mark = it->second;
+		if (!added && mark.BaselineVersion == m_BaselineVersion && (mark.Changes == changes || AreEditsContinuing(changes)))
 			return mark.Modified;
+		m_CompareCount++;
 		const nlohmann::json* baseline = GetBaseline(context, PrefabInstances::GetPrefab(root));
 		mark.Modified = baseline && !PrefabInstances::Compare(*root.GetScene(), root, *baseline).IsEmpty();
-		mark.Stamp = stamp;
+		mark.Changes = changes;
+		mark.BaselineVersion = m_BaselineVersion;
 		return mark.Modified;
 	}
 

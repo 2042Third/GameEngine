@@ -462,4 +462,44 @@ TEST_SUITE("Editor.Prefab")
 		// Not instance roots: never marked.
 		CHECK_FALSE(sync.IsModified(harness.Context, scene.GetEntityByUUID(*UUIDFromJson(harness.ChildOf(setup.First)))));
 	}
+
+	TEST_CASE("A run of edits, one per frame, compares instances and walks the links once it pauses, not every frame")
+	{
+		PrefabHarness harness("PrefabEditRun");
+		LampSetup setup(harness);
+		harness.Frames(static_cast<int>(PrefabSync::c_SettleFrames) + 2);
+		PrefabSync& sync = harness.Context.GetPrefabSync();
+		Scene& scene = *harness.Context.GetEditScene();
+		const Entity first = scene.GetEntityByUUID(*UUIDFromJson(setup.First));
+		const Entity second = scene.GetEntityByUUID(*UUIDFromJson(setup.Second));
+		CHECK_FALSE(sync.IsModified(harness.Context, first));
+		CHECK_FALSE(sync.IsModified(harness.Context, second));
+		const uint64_t compares = sync.GetCompareCount();
+		const uint64_t scans = sync.GetWatchScanCount();
+
+		// A drag: an edit in every frame, with the Hierarchy asking for both marks.
+		const std::string bulb = harness.ChildOf(setup.First);
+		for (int frame = 0; frame < 30; frame++)
+		{
+			harness.SetIntensity(bulb, 4.0f + static_cast<float>(frame));
+			harness.Frames(1);
+			sync.IsModified(harness.Context, first);
+			sync.IsModified(harness.Context, second);
+		}
+		// The first edit after the pause is looked at at once (each instance compared, the links walked); the rest of the run
+		// is not.
+		CHECK(sync.GetCompareCount() - compares == 2);
+		CHECK(sync.GetWatchScanCount() - scans == 1);
+
+		// Once the edits pause, the marks follow them.
+		harness.Frames(static_cast<int>(PrefabSync::c_SettleFrames));
+		CHECK(sync.IsModified(harness.Context, first));
+		CHECK_FALSE(sync.IsModified(harness.Context, second));
+		CHECK(sync.GetCompareCount() - compares == 4);
+		CHECK(sync.GetWatchScanCount() - scans == 2);
+		// Links that come or go are found at once, also during a run.
+		harness.Run("prefab.unpack", { { "entity", setup.Second } });
+		harness.Frames(1);
+		CHECK(sync.GetWatchScanCount() - scans == 3);
+	}
 }

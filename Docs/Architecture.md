@@ -1499,7 +1499,10 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   instances that equalled the baseline take the new values in one undo step ("Update Instances of ..."), modified ones
   keep theirs. The editor's own writes set the baseline first (`SetBaseline`, also when `prefab.apply` is undone or
   redone), so they are never propagated twice. It also caches per instance root whether it is modified, renewed when the
-  undo history or a baseline changes, for the Hierarchy's mark.
+  undo history or a baseline changes, for the Hierarchy's mark. Comparing serializes the instance and finding the prefabs
+  walks every link, so a run of edits that records a step every frame (a gizmo drag) does neither per frame: an edit
+  after a pause is looked at at once, and during a run (edits less than `PrefabSync::c_SettleFrames` frames apart) the
+  marks and the watched prefabs stay until it pauses; links that come or go are found at once.
 - **Authoring panels** (`Panels/SceneHierarchyPanel`, `InspectorPanel`, `AssetInspectorPanel`, `UI/PropertyWidgets`,
   `UI/MaterialEditor`, `UI/EditorActions`). They draw state and run commands, and their cost follows what is on screen:
   - The **Hierarchy** draws `HierarchyView`'s rows through `ImGuiListClipper` inside one `ImGui::BeginMultiSelect` scope
