@@ -1060,7 +1060,7 @@ namespace Strata::BC7Encoder
 					alphaSpreads[rotation] = MeasureSpread(m_Total, { alphaChannel }).Total;
 				}
 
-				for (const auto [modeIndex, indexSelection] : { std::pair { 5u, 0u }, std::pair { 4u, 0u }, std::pair { 4u, 1u } })
+				for (const auto& [modeIndex, indexSelection] : { std::pair { 5u, 0u }, std::pair { 4u, 0u }, std::pair { 4u, 1u } })
 				{
 					if (!IsAllowed(modeIndex))
 						continue;

@@ -34,7 +34,7 @@ namespace Strata
 	void AssetResolveCache::EndFrame()
 	{
 		for (Entry* entry : m_Used)
-			entry->Asset = nullptr;
+			entry->Resolved = nullptr;
 		m_Used.clear();
 		m_Manager = nullptr;
 	}
@@ -45,7 +45,7 @@ namespace Strata
 		if (entry.Frame != m_Frame)
 		{
 			entry.Frame = m_Frame;
-			entry.Asset = nullptr;
+			entry.Resolved = nullptr;
 			entry.Lookups = 0;
 		}
 		return entry;
@@ -58,8 +58,8 @@ namespace Strata
 		Entry& entry = GetEntry(handle);
 		// Answered this frame: a request answers everything; a resident lookup answers other resident lookups, and requests
 		// when it found the asset loaded.
-		if ((entry.Lookups & c_Requested) != 0 || ((entry.Lookups & c_LookedUp) != 0 && (residentOnly || entry.Asset)))
-			return entry.Asset;
+		if ((entry.Lookups & c_Requested) != 0 || ((entry.Lookups & c_LookedUp) != 0 && (residentOnly || entry.Resolved)))
+			return entry.Resolved;
 
 		if (residentOnly)
 		{
@@ -67,19 +67,19 @@ namespace Strata
 			m_Stats.ResidentLookups++;
 			if (m_Manager->GetAssetState(handle) == AssetState::Ready)
 			{
-				entry.Asset = m_Manager->GetAsset(handle, priority);
+				entry.Resolved = m_Manager->GetAsset(handle, priority);
 				m_Stats.GetAssetCalls++;
-				if (entry.Asset)
+				if (entry.Resolved)
 					m_Used.push_back(&entry);
 			}
-			return entry.Asset;
+			return entry.Resolved;
 		}
 
 		entry.Lookups |= c_Requested;
-		entry.Asset = m_Manager->GetAsset(handle, priority);
+		entry.Resolved = m_Manager->GetAsset(handle, priority);
 		m_Stats.GetAssetCalls++;
 		m_Stats.Requested++;
-		if (entry.Asset)
+		if (entry.Resolved)
 		{
 			m_Used.push_back(&entry);
 		}
@@ -88,7 +88,7 @@ namespace Strata
 			// Unknown handles stay Unloaded and failed ones Failed: only assets on their way are pending.
 			m_Stats.Pending++;
 		}
-		return entry.Asset;
+		return entry.Resolved;
 	}
 
 	void AssetResolveCache::Prefetch(AssetHandle handle)
@@ -98,7 +98,7 @@ namespace Strata
 		Entry& entry = GetEntry(handle);
 		// Requested already, or found loaded by a resident lookup (which stamped it as used); a resident lookup that found
 		// nothing requested nothing, so the prefetch still has to.
-		if ((entry.Lookups & (c_Requested | c_Prefetched)) != 0 || entry.Asset)
+		if ((entry.Lookups & (c_Requested | c_Prefetched)) != 0 || entry.Resolved)
 			return;
 		entry.Lookups |= c_Prefetched;
 		m_Manager->RequestLoad(handle, AssetPriority::Low);

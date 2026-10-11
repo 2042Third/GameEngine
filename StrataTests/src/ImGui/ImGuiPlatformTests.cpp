@@ -177,7 +177,7 @@ TEST_SUITE("ImGui.Platform")
 		imgui.Release(Key::World1);
 		imgui.Frame();
 		CHECK(ImGuiPlatform::ToImGuiKey(Key::World1) == ImGuiKey_None);
-		for (const auto [key, expected] : { std::pair(Key::A, ImGuiKey_A), std::pair(Key::D7, ImGuiKey_7), std::pair(Key::F12, ImGuiKey_F12),
+		for (const auto& [key, expected] : { std::pair(Key::A, ImGuiKey_A), std::pair(Key::D7, ImGuiKey_7), std::pair(Key::F12, ImGuiKey_F12),
 			std::pair(Key::KP3, ImGuiKey_Keypad3), std::pair(Key::Enter, ImGuiKey_Enter), std::pair(Key::Left, ImGuiKey_LeftArrow),
 			std::pair(Key::GraveAccent, ImGuiKey_GraveAccent), std::pair(Key::World2, ImGuiKey_Oem102), std::pair(Key::RightSuper, ImGuiKey_RightSuper) })
 		{

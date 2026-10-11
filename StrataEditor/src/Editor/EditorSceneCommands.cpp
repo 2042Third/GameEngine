@@ -92,7 +92,9 @@ namespace Strata
 				{ "maxContactConstraints", &PhysicsCapacitySettings::MaxContactConstraints, PhysicsCapacitySettings::c_MaxContactConstraintsLimit } };
 			for (const auto& [key, entry] : value.items())
 			{
-				const auto field = std::find_if(std::begin(fields), std::end(fields), [&](const auto& candidate) { return key == candidate.Name; });
+				// Captured through a name of its own: Apple Clang 15 cannot capture structured bindings.
+				const std::string& name = key;
+				const auto field = std::find_if(std::begin(fields), std::end(fields), [&name](const auto& candidate) { return name == candidate.Name; });
 				if (field == std::end(fields))
 					return fmt::format("Unknown parameter 'physicsCapacity.{}' (known: maxBodies, maxBodyPairs, maxContactConstraints)", key);
 				const bool isCount = entry.is_number_unsigned() || (entry.is_number_integer() && entry.get<int64_t>() >= 0);

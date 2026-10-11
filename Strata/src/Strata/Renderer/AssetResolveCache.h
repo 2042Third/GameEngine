@@ -67,7 +67,7 @@ namespace Strata
 		struct Entry
 		{
 			uint64_t Frame = 0;
-			Ref<Asset> Asset; // Held until EndFrame
+			Ref<Asset> Resolved; // Held until EndFrame
 			uint8_t Lookups = 0;
 		};
 
