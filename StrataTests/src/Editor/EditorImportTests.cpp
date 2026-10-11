@@ -11,6 +11,8 @@
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
+#include <Strata/Core/Log.h>
+#include <Strata/Core/StringUtils.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/Font.h>
@@ -137,6 +139,91 @@ namespace
 		}
 	};
 
+	// A glTF model of a textured quad: its buffer as `bufferUri` (written beside the model, or embedded as a data URI when
+	// empty) and its base color image as `imageUri` (written relative to the model when given), as an exporter writes
+	// them: the audit's fixture is Quad.gltf with Quad.bin and QuadColor.png beside it.
+	void WriteQuadModel(const std::filesystem::path& model, const std::string& bufferUri, const std::string& imageUri)
+	{
+		std::vector<uint8_t> buffer;
+		auto append = [&buffer](const auto& values)
+		{
+			const auto* bytes = reinterpret_cast<const uint8_t*>(values.data());
+			buffer.insert(buffer.end(), bytes, bytes + values.size() * sizeof(values[0]));
+		};
+		append(std::vector<float> { 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0 });
+		append(std::vector<float> { 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1 });
+		append(std::vector<float> { 0, 1, 1, 1, 1, 0, 0, 0 });
+		append(std::vector<uint16_t> { 0, 1, 2, 0, 2, 3 });
+		nlohmann::json document = {
+			{ "asset", { { "version", "2.0" } } },
+			{ "scenes", nlohmann::json::array({ { { "nodes", { 0 } } } }) },
+			{ "nodes", nlohmann::json::array({ { { "name", "Quad" }, { "mesh", 0 } } }) },
+			{ "meshes", nlohmann::json::array({ { { "primitives", nlohmann::json::array({ { { "attributes", { { "POSITION", 0 }, { "NORMAL", 1 }, { "TEXCOORD_0", 2 } } },
+				{ "indices", 3 }, { "material", 0 } } }) } } }) },
+			{ "materials", nlohmann::json::array({ { { "name", "Painted" }, { "pbrMetallicRoughness", { { "baseColorTexture", { { "index", 0 } } } } } } }) },
+			{ "textures", nlohmann::json::array({ { { "source", 0 } } }) },
+			{ "images", nlohmann::json::array({ { { "uri", imageUri } } }) },
+			{ "buffers", nlohmann::json::array({ { { "byteLength", buffer.size() } } }) },
+			{ "bufferViews", nlohmann::json::array({
+				{ { "buffer", 0 }, { "byteOffset", 0 }, { "byteLength", 48 } }, { { "buffer", 0 }, { "byteOffset", 48 }, { "byteLength", 48 } },
+				{ { "buffer", 0 }, { "byteOffset", 96 }, { "byteLength", 32 } }, { { "buffer", 0 }, { "byteOffset", 128 }, { "byteLength", 12 } } }) },
+			{ "accessors", nlohmann::json::array({
+				{ { "bufferView", 0 }, { "componentType", 5126 }, { "count", 4 }, { "type", "VEC3" }, { "min", { 0, 0, 0 } }, { "max", { 1, 1, 0 } } },
+				{ { "bufferView", 1 }, { "componentType", 5126 }, { "count", 4 }, { "type", "VEC3" } },
+				{ { "bufferView", 2 }, { "componentType", 5126 }, { "count", 4 }, { "type", "VEC2" } },
+				{ { "bufferView", 3 }, { "componentType", 5123 }, { "count", 6 }, { "type", "SCALAR" } } }) } };
+		if (bufferUri.empty())
+		{
+			std::string base64 = "data:application/octet-stream;base64,";
+			static constexpr char c_Alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+			for (size_t index = 0; index < buffer.size(); index += 3)
+			{
+				const uint32_t chunk = (static_cast<uint32_t>(buffer[index]) << 16) | (index + 1 < buffer.size() ? buffer[index + 1] << 8 : 0)
+					| (index + 2 < buffer.size() ? buffer[index + 2] : 0);
+				base64 += c_Alphabet[(chunk >> 18) & 63];
+				base64 += c_Alphabet[(chunk >> 12) & 63];
+				base64 += index + 1 < buffer.size() ? c_Alphabet[(chunk >> 6) & 63] : '=';
+				base64 += index + 2 < buffer.size() ? c_Alphabet[chunk & 63] : '=';
+			}
+			document["buffers"][0]["uri"] = base64;
+		}
+		else
+		{
+			document["buffers"][0]["uri"] = bufferUri;
+			REQUIRE(FileSystem::WriteBytes(model.parent_path() / FileSystem::FromUTF8(bufferUri), buffer));
+		}
+		REQUIRE(FileSystem::WriteText(model, JsonUtils::Dump(document, 1, '\t')));
+		REQUIRE(FileSystem::WriteBytes((model.parent_path() / FileSystem::FromUTF8(imageUri)).lexically_normal(), Tests::CreateSolidPNG(8, 8, 200, 60, 30)));
+	}
+
+	// A PNG that stb_image refuses with a message quoting the bytes of a chunk type that are no text (as the audit's
+	// "END\xEF\xBF\xBD PNG chunk not known").
+	std::vector<uint8_t> CreatePNGWithUnknownChunk()
+	{
+		std::vector<uint8_t> png = { 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A };
+		const uint8_t header[] = { 0, 0, 0, 13, 'I', 'H', 'D', 'R', 0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0, 0, 0, 0, 0 };
+		png.insert(png.end(), std::begin(header), std::end(header));
+		// Image data first: reading the header (stbi_info) stops there, so only decoding meets the chunk after it.
+		const uint8_t data[] = { 0, 0, 0, 1, 'I', 'D', 'A', 'T', 0, 0, 0, 0, 0 };
+		png.insert(png.end(), std::begin(data), std::end(data));
+		// A critical chunk (bit 5 of its first byte clear) whose type is no ASCII.
+		const uint8_t unknown[] = { 0, 0, 0, 0, 0x8F, 'E', 'N', 'D', 0, 0, 0, 0 };
+		png.insert(png.end(), std::begin(unknown), std::end(unknown));
+		return png;
+	}
+
+	// How many log entries after `sequence` contain the text.
+	size_t CountLogEntries(uint64_t sequence, std::string_view text)
+	{
+		size_t count = 0;
+		for (const LogEntry& entry : Log::GetBuffer().GetEntries(sequence))
+		{
+			if (entry.Message.find(text) != std::string::npos)
+				count++;
+		}
+		return count;
+	}
+
 	double SecondsOf(const std::function<void()>& function)
 	{
 		const auto start = std::chrono::steady_clock::now();
@@ -180,7 +267,10 @@ namespace
 			REQUIRE(FileSystem::CreateDirectories(external.parent_path()));
 			REQUIRE(FileSystem::WriteBytes(external, bytes));
 			const std::string directory = FileSystem::ToUTF8(FileSystem::FromUTF8(relativePath).parent_path());
-			return Run("asset.import", { { "file", FileSystem::ToUTF8(external) }, { "directory", directory } })["asset"].get<std::string>();
+			const EditorCommandResult imported = Finish(Start("asset.import", { { "file", FileSystem::ToUTF8(external) }, { "directory", directory } }));
+			INFO(imported.Error);
+			REQUIRE(imported.Success);
+			return imported.Value["asset"].get<std::string>();
 		}
 
 		// Starts a command through the runner; the returned slot holds its result once it completed.
@@ -382,7 +472,7 @@ TEST_SUITE("Editor.ImportSettings")
 		REQUIRE(FileSystem::WriteBytes(external, std::vector<uint8_t> { 's' }));
 		GatedImporter::SetGate(true);
 		const std::optional<UUID> asset = UUID::FromString(
-			editor.Run("asset.import", { { "file", FileSystem::ToUTF8(external) }, { "directory", "Data" } })["asset"].get<std::string>());
+			editor.RunToCompletion("asset.import", { { "file", FileSystem::ToUTF8(external) }, { "directory", "Data" } })["asset"].get<std::string>());
 		REQUIRE(asset);
 		editor.Frames(2);
 		CHECK(editor.GetPillText("Status.Assets").find("importing") == std::string::npos);
@@ -625,5 +715,211 @@ TEST_SUITE("Editor.ImportSettings")
 		CHECK(properties[2]["Options"] == nlohmann::json { "High", "Fast" });
 		CHECK(properties[3]["Name"] == "MaxSize");
 		CHECK(harness.Run("asset.info", { { "asset", material } })["importSettingsProperties"].empty());
+	}
+}
+
+TEST_SUITE("Editor.Import")
+{
+	TEST_CASE("A glTF model with its buffer and image beside it imports textured, its files copied with it")
+	{
+		Tests::ScopedJobSystem jobs(2, 2);
+		ImportHarness harness("EditorImportGltfExternal");
+		const std::filesystem::path external = harness.Assets.parent_path() / "Downloads";
+		WriteQuadModel(external / "Quad.gltf", "Quad.bin", "QuadColor.png");
+
+		const EditorCommandResult result = harness.Finish(harness.Start("asset.import", { { "file", FileSystem::ToUTF8(external / "Quad.gltf") }, { "directory", "Models" } }));
+		INFO(result.Error);
+		REQUIRE(result.Success);
+		CHECK(result.Value["path"] == "Models/Quad/Quad.gltf");
+		REQUIRE(result.Value["items"].size() == 1);
+		const nlohmann::json& item = result.Value["items"][0];
+		CHECK(item["path"] == "Models/Quad/Quad.gltf");
+		CHECK_FALSE(item.contains("error"));
+		CHECK(FileSystem::IsRegularFile(harness.Assets / "Models" / "Quad" / "Quad.bin"));
+		CHECK(FileSystem::IsRegularFile(harness.Assets / "Models" / "Quad" / "QuadColor.png"));
+		// The model first, then its image, which is an asset of its own.
+		REQUIRE(item["assets"].size() == 2);
+		CHECK(item["assets"][0]["type"] == "Model");
+		CHECK(item["assets"][1]["path"] == "Models/Quad/QuadColor.png");
+
+		const nlohmann::json info = harness.Run("asset.info", { { "asset", "Models/Quad/Quad.gltf" } });
+		CHECK(info["importError"] == "");
+		for (const nlohmann::json& warning : info["importWarnings"])
+			CHECK(warning.get<std::string>().find("skipped") == std::string::npos);
+		const nlohmann::json& subAssets = info["subAssets"];
+		CHECK(std::any_of(subAssets.begin(), subAssets.end(), [](const nlohmann::json& subAsset) { return subAsset["type"] == "Texture"; }));
+
+		// Again: a folder of its own.
+		const EditorCommandResult again = harness.Finish(harness.Start("asset.import", { { "file", FileSystem::ToUTF8(external / "Quad.gltf") }, { "directory", "Models" } }));
+		REQUIRE(again.Success);
+		CHECK(again.Value["path"] == "Models/Quad (1)/Quad.gltf");
+	}
+
+	TEST_CASE("A model whose image lies in ../Textures imports textured, keeping that layout")
+	{
+		Tests::ScopedJobSystem jobs(2, 2);
+		ImportHarness harness("EditorImportGltfParent");
+		const std::filesystem::path external = harness.Assets.parent_path() / "Kit";
+		WriteQuadModel(external / "Models" / "Crate.gltf", "", "../Textures/Wood.png");
+
+		const EditorCommandResult result = harness.Finish(harness.Start("asset.import", { { "file", FileSystem::ToUTF8(external / "Models" / "Crate.gltf") },
+			{ "directory", "Props" } }));
+		INFO(result.Error);
+		REQUIRE(result.Success);
+		CHECK(result.Value["path"] == "Props/Crate/Models/Crate.gltf");
+		CHECK(FileSystem::IsRegularFile(harness.Assets / "Props" / "Crate" / "Textures" / "Wood.png"));
+		const nlohmann::json info = harness.Run("asset.info", { { "asset", "Props/Crate/Models/Crate.gltf" } });
+		CHECK(info["importError"] == "");
+		for (const nlohmann::json& warning : info["importWarnings"])
+			CHECK(warning.get<std::string>().find("skipped") == std::string::npos);
+		const nlohmann::json& subAssets = info["subAssets"];
+		CHECK(std::any_of(subAssets.begin(), subAssets.end(), [](const nlohmann::json& subAsset) { return subAsset["type"] == "Texture"; }));
+
+		// A file three folders up is too far; a URL is no file.
+		WriteQuadModel(external / "Deep" / "A" / "B" / "Far.gltf", "", "../../../Textures/Far.png");
+		const EditorCommandResult far = harness.Finish(harness.Start("asset.import", { { "file", FileSystem::ToUTF8(external / "Deep" / "A" / "B" / "Far.gltf") } }));
+		CHECK_FALSE(far.Success);
+		CHECK(far.Error.find("more than 2 folders above") != std::string::npos);
+		CHECK_FALSE(FileSystem::Exists(harness.Assets / "Far"));
+	}
+
+	TEST_CASE("A folder imports with its tree, its .meta files and what its models read")
+	{
+		Tests::ScopedJobSystem jobs(2, 2);
+		ImportHarness harness("EditorImportFolder");
+		const std::filesystem::path pack = harness.Assets.parent_path() / "Pack";
+		REQUIRE(FileSystem::WriteBytes(pack / "Textures" / "Stone.png", Tests::CreateSolidPNG(4, 4, 90, 90, 90)));
+		REQUIRE(FileSystem::WriteText(pack / "Textures" / "Stone.png.meta", "{ \"Handle\": \"5A5A5A5A5A5A5A5A\", \"ImportSettings\": { \"MaxSize\": 2 } }"));
+		REQUIRE(FileSystem::WriteBytes(pack / "Sounds" / "Beep.wav", Tests::CreateSineWav(0.1f)));
+		WriteQuadModel(pack / "Models" / "Quad.gltf", "Quad.bin", "QuadColor.png");
+		REQUIRE(FileSystem::WriteText(pack / "Notes.txt", "Not an asset"));
+		REQUIRE(FileSystem::WriteText(pack / ".git" / "config", "Hidden"));
+
+		const EditorCommandResult result = harness.Finish(harness.Start("asset.import", { { "directories", { FileSystem::ToUTF8(pack) } }, { "directory", "Imported" } }));
+		INFO(result.Error);
+		REQUIRE(result.Success);
+		const nlohmann::json& item = result.Value["items"][0];
+		CHECK(item["folder"] == true);
+		CHECK(item["path"] == "Imported/Pack");
+		CHECK(item["assets"].size() == 4); // The model, its image, the texture and the sound
+		CHECK(FileSystem::IsRegularFile(harness.Assets / "Imported" / "Pack" / "Models" / "Quad.bin"));
+		CHECK(FileSystem::IsRegularFile(harness.Assets / "Imported" / "Pack" / "Sounds" / "Beep.wav"));
+		CHECK_FALSE(FileSystem::Exists(harness.Assets / "Imported" / "Pack" / "Notes.txt"));
+		CHECK_FALSE(FileSystem::Exists(harness.Assets / "Imported" / "Pack" / ".git"));
+		// The .meta came along: its handle and settings.
+		const nlohmann::json stone = harness.Run("asset.info", { { "asset", "Imported/Pack/Textures/Stone.png" } });
+		CHECK(stone["asset"] == "5A5A5A5A5A5A5A5A");
+		CHECK(stone["importSettings"]["MaxSize"] == 2);
+		CHECK(harness.Context.GetAssetManager()->HasFolder("Imported/Pack/Sounds"));
+		CHECK(harness.Run("asset.info", { { "asset", "Imported/Pack/Models/Quad.gltf" } })["importError"] == "");
+	}
+
+	TEST_CASE("A failed import is a failure that leaves no file behind and is logged once")
+	{
+		Tests::ScopedJobSystem jobs(2, 2);
+		ImportHarness harness("EditorImportFailure");
+		const std::filesystem::path broken = harness.Assets.parent_path() / "Downloads" / "Broken.png";
+		REQUIRE(FileSystem::WriteBytes(broken, std::vector<uint8_t> { 'n', 'o', 't', ' ', 'a', 'n', ' ', 'i', 'm', 'a', 'g', 'e' }));
+
+		const uint64_t sequence = Log::GetBuffer().GetLatestSequence();
+		const EditorCommandResult failed = harness.Finish(harness.Start("asset.import", { { "file", FileSystem::ToUTF8(broken) }, { "directory", "Textures" } }));
+		CHECK_FALSE(failed.Success);
+		CHECK(failed.ErrorKind == EditorCommandError::Failed);
+		CHECK(failed.Error.find("Broken.png") != std::string::npos);
+		REQUIRE(failed.ErrorData.is_object());
+		CHECK(failed.ErrorData["items"][0]["rolledBack"] == true);
+		CHECK_FALSE(FileSystem::Exists(harness.Assets / "Textures" / "Broken.png"));
+		CHECK_FALSE(FileSystem::Exists(harness.Assets / "Textures" / "Broken.png.meta"));
+		CHECK_FALSE(FileSystem::Exists(harness.Assets / "Textures")); // The folder it made goes too
+		CHECK(harness.Run("asset.list", { { "includeBuiltin", false } })["assets"].empty());
+		CHECK(CountLogEntries(sequence, "Broken.png") == 1);
+
+		// Kept on request, with its error.
+		const EditorCommandResult kept = harness.Finish(harness.Start("asset.import", { { "file", FileSystem::ToUTF8(broken) }, { "keepOnFailure", true } }));
+		CHECK_FALSE(kept.Success);
+		CHECK(kept.ErrorData["items"][0]["rolledBack"] == false);
+		CHECK(FileSystem::IsRegularFile(harness.Assets / "Broken.png"));
+		CHECK(harness.Run("asset.info", { { "asset", "Broken.png" } })["importError"].get<std::string>().find("Broken.png") != std::string::npos);
+
+		// Nothing to import is refused at once.
+		CHECK(harness.Commands.Execute(harness.Context, "asset.import", { { "file", FileSystem::ToUTF8(broken.parent_path() / "Missing.png") } }).ErrorKind
+			== EditorCommandError::InvalidParameters);
+		CHECK(harness.Commands.Execute(harness.Context, "asset.import", { { "file", FileSystem::ToUTF8(harness.Assets.parent_path() / "Game.stproj") } }).ErrorKind
+			== EditorCommandError::InvalidParameters);
+		CHECK(harness.Commands.Execute(harness.Context, "asset.import", nlohmann::json::object()).ErrorKind == EditorCommandError::InvalidParameters);
+	}
+
+	TEST_CASE("Decoder messages that quote bytes of a file reach errors and logs as valid UTF-8")
+	{
+		Tests::ScopedJobSystem jobs(2, 2);
+		ImportHarness harness("EditorImportUTF8");
+		const std::filesystem::path png = harness.Assets.parent_path() / "Downloads" / "Dropped.png";
+		REQUIRE(FileSystem::WriteBytes(png, CreatePNGWithUnknownChunk()));
+		const uint64_t sequence = Log::GetBuffer().GetLatestSequence();
+		const EditorCommandResult failed = harness.Finish(harness.Start("asset.import", { { "file", FileSystem::ToUTF8(png) }, { "keepOnFailure", true } }));
+		CHECK_FALSE(failed.Success);
+		CHECK(failed.Error.find("PNG chunk not known") != std::string::npos);
+		CHECK(failed.Error.find("\xEF\xBF\xBD" "END") != std::string::npos);
+		CHECK(StringUtils::MakeValidUTF8(failed.Error) == failed.Error);
+		const std::string importError = harness.Run("asset.info", { { "asset", "Dropped.png" } })["importError"].get<std::string>();
+		CHECK(StringUtils::MakeValidUTF8(importError) == importError);
+		bool logged = false;
+		for (const LogEntry& entry : Log::GetBuffer().GetEntries(sequence))
+		{
+			if (entry.Message.find("Dropped.png") == std::string::npos)
+				continue;
+			logged = true;
+			CHECK(StringUtils::MakeValidUTF8(entry.Message) == entry.Message);
+		}
+		CHECK(logged);
+	}
+
+	TEST_CASE("asset.import copies and imports while the editor's frames go on")
+	{
+		RegisterGatedImporter();
+		Tests::ScopedJobSystem jobs(2, 2);
+		OpenGateAtEnd gate;
+		ImportHarness harness("EditorImportAsync");
+		const std::filesystem::path external = harness.Assets.parent_path() / "External" / "Held.stgated";
+		REQUIRE(FileSystem::CreateDirectories(external.parent_path()));
+		REQUIRE(FileSystem::WriteBytes(external, std::vector<uint8_t> { 'h' }));
+
+		GatedImporter::SetGate(false);
+		auto completed = harness.Start("asset.import", { { "file", FileSystem::ToUTF8(external) }, { "directory", "Data" } });
+		REQUIRE(Tests::WaitUntil([&]()
+		{
+			harness.Frame();
+			return GatedImporter::IsWaiting();
+		}, std::chrono::seconds(20)));
+		// Frames go on while the import waits; the asset is registered and says it is importing.
+		for (int frame = 0; frame < 30; frame++)
+		{
+			const double seconds = SecondsOf([&]() { harness.Frame(); });
+			CHECK_MESSAGE(seconds < c_AtOnceSeconds, "A frame took ", seconds, " s");
+		}
+		CHECK_FALSE(completed->has_value());
+		CHECK(harness.Run("asset.info", { { "asset", "Data/Held.stgated" } })["importing"] == true);
+		CHECK(harness.Context.GetAssetManager()->GetExternalImportCount() == 1);
+
+		GatedImporter::SetGate(true);
+		const EditorCommandResult result = harness.Finish(completed);
+		INFO(result.Error);
+		REQUIRE(result.Success);
+		CHECK(result.Value["path"] == "Data/Held.stgated");
+		CHECK(harness.Context.GetAssetManager()->GetExternalImportCount() == 0);
+
+		// Closing the project ends an import that waits: the command fails, the editor never waits.
+		GatedImporter::SetGate(false);
+		auto pending = harness.Start("asset.import", { { "file", FileSystem::ToUTF8(external) }, { "directory", "Data" } });
+		REQUIRE(Tests::WaitUntil([&]()
+		{
+			harness.Frame();
+			return GatedImporter::IsWaiting();
+		}, std::chrono::seconds(20)));
+		const double seconds = SecondsOf([&]() { harness.Context.CloseProject(); });
+		CHECK_MESSAGE(seconds < c_AtOnceSeconds, "Closing the project took ", seconds, " s");
+		const EditorCommandResult closed = harness.Finish(pending);
+		CHECK_FALSE(closed.Success);
+		CHECK(closed.Error.find("closed") != std::string::npos);
 	}
 }

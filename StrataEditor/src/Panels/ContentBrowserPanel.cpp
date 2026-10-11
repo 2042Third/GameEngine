@@ -70,17 +70,19 @@ namespace Strata
 
 	}
 
-	void ContentBrowserPanel::ImportFiles(EditorContext& context, const EditorCommandRegistry& commands, const std::vector<std::filesystem::path>& files)
+	void ContentBrowserPanel::ImportFiles(EditorContext& context, const EditorCommandRegistry& commands, EditorCommandRunner& runner,
+		const std::vector<std::filesystem::path>& paths)
 	{
-		for (const std::filesystem::path& file : files)
-		{
-			if (FileSystem::IsDirectory(file))
-			{
-				ST_WARN("Importing folders is not supported; drop the files instead ({})", FileSystem::ToUTF8(file));
-				continue;
-			}
-			RunEditorCommand(context, commands, "asset.import", { { "file", FileSystem::ToUTF8(file) }, { "directory", m_CurrentDirectory } });
-		}
+		// One asset.import for files and folders alike: it copies on an I/O job and imports in the background, and the assets
+		// show as importing meanwhile. Failures are logged by the import itself, once.
+		nlohmann::json files = nlohmann::json::array();
+		nlohmann::json directories = nlohmann::json::array();
+		for (const std::filesystem::path& path : paths)
+			(FileSystem::IsDirectory(path) ? directories : files).push_back(FileSystem::ToUTF8(path));
+		if (files.empty() && directories.empty())
+			return;
+		runner.Run(context, commands, "asset.import", { { "files", std::move(files) }, { "directories", std::move(directories) }, { "directory", m_CurrentDirectory } },
+			[](const EditorCommandResult&) {});
 		m_RefreshRequested = true;
 	}
 
@@ -167,7 +169,7 @@ namespace Strata
 		m_RefreshRequested = false;
 	}
 
-	void ContentBrowserPanel::DrawToolbar(EditorContext& context, const EditorCommandRegistry& commands)
+	void ContentBrowserPanel::DrawToolbar(EditorContext& context, const EditorCommandRegistry& commands, EditorCommandRunner& runner)
 	{
 		ImGui::BeginDisabled(m_CurrentDirectory.empty());
 		if (ImGui::Button("Up"))
@@ -182,8 +184,15 @@ namespace Strata
 		ImGui::SameLine();
 		if (ImGui::Button("Import..."))
 		{
-			if (std::optional<std::filesystem::path> file = FileDialogs::OpenFile({}))
-				ImportFiles(context, commands, { *file });
+			const std::vector<std::filesystem::path> files = FileDialogs::OpenFiles({});
+			if (!files.empty())
+				ImportFiles(context, commands, runner, files);
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("Import Folder..."))
+		{
+			if (const std::optional<std::filesystem::path> folder = FileDialogs::PickFolder())
+				ImportFiles(context, commands, runner, { *folder });
 		}
 		ImGui::SameLine();
 		if (ImGui::Button("New..."))
@@ -245,7 +254,7 @@ namespace Strata
 			return;
 		}
 
-		DrawToolbar(context, commands);
+		DrawToolbar(context, commands, panelContext.Runner);
 		if (m_RefreshRequested || ImGui::GetTime() - m_LastRefreshTime > c_RefreshInterval)
 			Refresh(context);
 		ImGui::Separator();

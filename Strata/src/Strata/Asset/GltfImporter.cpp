@@ -16,10 +16,13 @@
 
 #include <cgltf.h>
 #include <glm/gtc/type_ptr.hpp>
+#include <meshoptimizer.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <limits>
 #include <map>
+#include <memory>
 #include <set>
 #include <unordered_set>
 
@@ -29,10 +32,16 @@ namespace Strata
 	namespace
 	{
 
-		// Extensions that only change how existing data is interpreted; a model using them imports fine without them.
+		// Extensions the importer reads. EXT_meshopt_compression's buffer views are decoded with meshoptimizer's decoders before
+		// anything reads them (GltfImport::DecodeCompressedViews); KHR_mesh_quantization's normalized and integer accessors
+		// are read by cgltf's unpacking.
 		constexpr const char* c_SupportedExtensions[] = {
-			"KHR_lights_punctual", "KHR_materials_emissive_strength", "KHR_materials_unlit", "KHR_texture_transform", "KHR_mesh_quantization"
+			"KHR_lights_punctual", "KHR_materials_emissive_strength", "KHR_materials_unlit", "KHR_texture_transform", "KHR_mesh_quantization",
+			"EXT_meshopt_compression"
 		};
+
+		// What a model's compressed buffer views may decode to, in all: hostile files must not exhaust memory.
+		constexpr uint64_t c_MaxDecodedBytes = 1ull << 30;
 
 		// Limits that keep hostile or broken files from exhausting memory, time or the stack. The geometry an import
 		// expands (vertices plus triangle corners over all primitives) is limited relative to the loaded buffers:
@@ -276,9 +285,10 @@ namespace Strata
 					return Fail(outError, fmt::format("loading buffers failed ({}); referenced files must be inside the asset directory", ResultToString(result)));
 
 				// cgltf_validate trusts declared sizes in its own (unchecked) arithmetic and walks every node's parent
-				// chain: check the layout and bound the hierarchy first.
+				// chain: check the layout and bound the hierarchy first. Compressed views are decoded before anything reads them.
 				std::string structureError;
-				if (!ValidateLayout(structureError) || !ValidateGeometryBudget(structureError) || !ValidateHierarchy(structureError))
+				if (!DecodeCompressedViews(structureError) || !ValidateLayout(structureError) || !ValidateGeometryBudget(structureError)
+					|| !ValidateHierarchy(structureError))
 					return Fail(outError, structureError);
 
 				result = cgltf_validate(m_Data.get());
@@ -293,13 +303,112 @@ namespace Strata
 				return true;
 			}
 
+			// EXT_meshopt_compression: a view's data is stored compressed in another buffer (the view's own buffer is then only
+			// a fallback, often without data). Each is checked against what the extension allows (meshoptimizer's decoders
+			// assert on anything else) and decoded with meshoptimizer's decoders and filters into data of the view's own
+			// (cgltf_buffer_view::data, which cgltf frees with the document and its accessors read instead of the buffer's).
+			bool DecodeCompressedViews(std::string& outError)
+			{
+				uint64_t decodedBytes = 0;
+				for (cgltf_size index = 0; index < m_Data->buffer_views_count; index++)
+				{
+					cgltf_buffer_view& view = m_Data->buffer_views[index];
+					if (!view.has_meshopt_compression)
+						continue;
+					const cgltf_meshopt_compression& compression = view.meshopt_compression;
+					uint64_t end = 0;
+					if (!compression.buffer || !compression.buffer->data || !CheckedMultiplyAdd(compression.offset, 1, compression.size, end)
+						|| end > compression.buffer->size)
+					{
+						outError = fmt::format("buffer view {} is compressed into data outside its buffer", index);
+						return false;
+					}
+					uint64_t size = 0;
+					if (!CheckedMultiplyAdd(compression.count, compression.stride, 0, size) || size != view.size || size == 0)
+					{
+						outError = fmt::format("buffer view {}: its compressed elements ({} of {} bytes) do not fill its {} bytes", index, compression.count,
+							compression.stride, view.size);
+						return false;
+					}
+					const bool indices = compression.mode == cgltf_meshopt_compression_mode_triangles || compression.mode == cgltf_meshopt_compression_mode_indices;
+					bool valid = compression.mode == cgltf_meshopt_compression_mode_attributes || indices;
+					if (compression.mode == cgltf_meshopt_compression_mode_attributes)
+						valid = compression.stride % 4 == 0 && compression.stride <= 256;
+					if (indices)
+						valid = (compression.stride == 2 || compression.stride == 4) && compression.filter == cgltf_meshopt_compression_filter_none;
+					if (compression.mode == cgltf_meshopt_compression_mode_triangles)
+						valid = valid && compression.count % 3 == 0;
+					if (compression.filter == cgltf_meshopt_compression_filter_octahedral)
+						valid = valid && (compression.stride == 4 || compression.stride == 8);
+					else if (compression.filter == cgltf_meshopt_compression_filter_quaternion)
+						valid = valid && compression.stride == 8;
+					else if (compression.filter == cgltf_meshopt_compression_filter_exponential)
+						valid = valid && compression.stride % 4 == 0;
+					else if (compression.filter != cgltf_meshopt_compression_filter_none)
+						valid = false;
+					if (!valid)
+					{
+						outError = fmt::format("buffer view {} is compressed with a mode, filter or element size EXT_meshopt_compression does not allow", index);
+						return false;
+					}
+					decodedBytes += size;
+					if (decodedBytes > c_MaxDecodedBytes)
+					{
+						outError = fmt::format("the compressed buffer views decode to more than {} MiB", c_MaxDecodedBytes >> 20);
+						return false;
+					}
+
+					void* decoded = std::malloc(static_cast<size_t>(size));
+					if (!decoded)
+					{
+						outError = fmt::format("out of memory decoding buffer view {}", index);
+						return false;
+					}
+					view.data = decoded; // Freed by cgltf_free with the document (its default free function)
+					const auto* source = static_cast<const unsigned char*>(compression.buffer->data) + compression.offset;
+					const size_t count = static_cast<size_t>(compression.count);
+					const size_t stride = static_cast<size_t>(compression.stride);
+					const size_t sourceSize = static_cast<size_t>(compression.size);
+					int status = -1;
+					switch (compression.mode)
+					{
+						case cgltf_meshopt_compression_mode_attributes: status = meshopt_decodeVertexBuffer(decoded, count, stride, source, sourceSize); break;
+						case cgltf_meshopt_compression_mode_triangles:  status = meshopt_decodeIndexBuffer(decoded, count, stride, source, sourceSize); break;
+						case cgltf_meshopt_compression_mode_indices:    status = meshopt_decodeIndexSequence(decoded, count, stride, source, sourceSize); break;
+						default: break;
+					}
+					if (status != 0)
+					{
+						outError = fmt::format("buffer view {} could not be decoded (EXT_meshopt_compression data is corrupt or of an unknown version)", index);
+						return false;
+					}
+					switch (compression.filter)
+					{
+						case cgltf_meshopt_compression_filter_octahedral:  meshopt_decodeFilterOct(decoded, count, stride); break;
+						case cgltf_meshopt_compression_filter_quaternion:  meshopt_decodeFilterQuat(decoded, count, stride); break;
+						case cgltf_meshopt_compression_filter_exponential: meshopt_decodeFilterExp(decoded, count, stride); break;
+						default: break;
+					}
+				}
+				return true;
+			}
+
 			// Overflow-safe bounds checks of every buffer view and accessor against the loaded data.
 			bool ValidateLayout(std::string& outError) const
 			{
+				// A buffer without data is only a compressed view's fallback (EXT_meshopt_compression) when every view on it was
+				// decoded into data of its own.
+				std::vector<bool> readFromBuffer(m_Data->buffers_count, false);
+				for (cgltf_size index = 0; index < m_Data->buffer_views_count; index++)
+				{
+					const cgltf_buffer_view& view = m_Data->buffer_views[index];
+					if (view.buffer && !view.data)
+						readFromBuffer[cgltf_buffer_index(m_Data.get(), view.buffer)] = true;
+				}
 				for (cgltf_size index = 0; index < m_Data->buffers_count; index++)
 				{
 					const cgltf_buffer& buffer = m_Data->buffers[index];
-					if (buffer.size > 0 && !buffer.data)
+					if (buffer.size > 0 && !buffer.data && readFromBuffer[index])
 					{
 						outError = fmt::format("buffer {} has no data", index);
 						return false;
@@ -476,7 +585,12 @@ namespace Strata
 				if (image.buffer_view)
 				{
 					const cgltf_buffer_view& view = *image.buffer_view;
-					const uint8_t* begin = static_cast<const uint8_t*>(view.buffer->data) + view.offset; // Range validated in ValidateLayout
+					const uint8_t* begin = cgltf_buffer_view_data(&view); // Range validated in ValidateLayout
+					if (!begin)
+					{
+						outError = "image's buffer view has no data";
+						return false;
+					}
 					outData.assign(begin, begin + view.size);
 				}
 				else if (!image.uri)
@@ -1223,6 +1337,55 @@ namespace Strata
 	{
 		GltfImport import(context, result);
 		return import.Run(outError);
+	}
+
+	bool GltfImporter::FindExternalFiles(std::span<const uint8_t> data, std::vector<std::string>& outRelativePaths, std::string* outError) const
+	{
+		auto fail = [outError](std::string message)
+		{
+			if (outError)
+				*outError = std::move(message);
+			return false;
+		};
+
+		// Parsing reads no other file (cgltf_load_buffers would): the document only names them.
+		cgltf_options options = {};
+		cgltf_data* parsed = nullptr;
+		const cgltf_result result = cgltf_parse(&options, data.data(), data.size(), &parsed);
+		const std::unique_ptr<cgltf_data, CgltfDataDeleter> document(parsed);
+		if (result != cgltf_result_success)
+			return fail(fmt::format("parsing failed ({})", ResultToString(result)));
+
+		std::set<std::string> listed;
+		auto add = [&](const char* uri, std::string_view kind) -> bool
+		{
+			if (!uri)
+				return true;
+			const std::string_view text = uri;
+			if (text.rfind("data:", 0) == 0)
+				return true; // Inside the file
+			if (text.find("://") != std::string_view::npos)
+				return fail(fmt::format("the {} '{}' is a URL, not a file beside the model", kind, text));
+			std::string decoded(text);
+			decoded.resize(cgltf_decode_uri(decoded.data()));
+			std::replace(decoded.begin(), decoded.end(), '\\', '/');
+			if (decoded.empty() || decoded.front() == '/' || decoded.find(':') != std::string::npos)
+				return fail(fmt::format("the {} '{}' is no relative file path", kind, text));
+			if (listed.insert(decoded).second)
+				outRelativePaths.push_back(std::move(decoded));
+			return true;
+		};
+		for (cgltf_size index = 0; index < document->buffers_count; index++)
+		{
+			if (!add(document->buffers[index].uri, "buffer"))
+				return false;
+		}
+		for (cgltf_size index = 0; index < document->images_count; index++)
+		{
+			if (!add(document->images[index].uri, "image"))
+				return false;
+		}
+		return true;
 	}
 
 }

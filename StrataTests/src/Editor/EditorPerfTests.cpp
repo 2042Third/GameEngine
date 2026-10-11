@@ -14,6 +14,7 @@
 #include "TestHelpers.h"
 
 #include <Strata/Asset/AssetManager.h>
+#include <Strata/Core/FileSystem.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/GraphicsDevice.h>
@@ -465,6 +466,78 @@ TEST_SUITE("PerfGPU.Editor")
 		});
 		device.WaitForIdle();
 		CHECK(AssetManager::GetAsset<Texture>(texture)->GetWidth() == 4096u);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Importing a 4096x4096 texture never holds a frame")
+	{
+		// asset.import as the editor runs it: the copy on an I/O job, the import (decoding, mips, BC7 on the background
+		// threads) beside the frames, then the new texture's upload in steps once a frame requests it. Frames as in the test
+		// above, on the shared device.
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		GraphicsDevice& device = gpu.GetDevice();
+		Perf::ScopedApplicationJobSystem jobs;
+		std::string error;
+		const std::optional<StressProject> project = WriteLargeTextureProject("PerfGPUImportTexture", error);
+		REQUIRE_MESSAGE(project, error);
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		EditorCommandRunner runner;
+		REQUIRE_MESSAGE(context.OpenProject(project->Directory, &error), error);
+		// The stress texture's source, as a file from outside the project.
+		const std::filesystem::path source = context.GetAssetManager()->GetAbsolutePath(project->Textures.front());
+		const std::filesystem::path external = project->Directory.parent_path() / "Downloads" / "Large.png";
+		REQUIRE(FileSystem::CreateDirectories(external.parent_path()));
+		REQUIRE(FileSystem::Copy(source, external));
+
+		uint32_t imports = 0;
+		const auto frame = [&](AssetHandle requested)
+		{
+			REQUIRE(device.BeginFrame());
+			const auto start = std::chrono::steady_clock::now();
+			Renderer::BeginFrame();
+			if (requested.IsValid())
+				AssetManager::GetAsset<Texture>(requested);
+			context.Update(Timestep(1.0f / 60.0f));
+			runner.Update(context);
+			const double milliseconds = MillisecondsSince(start);
+			device.EndFrame();
+			// Frames at the editor's pace rather than as fast as the loop spins (millions of empty frames would measure the
+			// machine's rarest hiccup rather than the import).
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			return milliseconds;
+		};
+		// The longest frame (a maximum by nature: one held frame is the hitch the user sees) from the command until the
+		// imported texture is uploaded; the acceptance limit is 33 ms (two frames at 60 Hz).
+		Perf::CheckBudgetConfirmed("PerfGPU.Editor.ImportTexture4kMaxFrame", [&]
+		{
+			auto completed = std::make_shared<std::optional<EditorCommandResult>>();
+			const auto start = std::chrono::steady_clock::now();
+			runner.Run(context, commands, "asset.import", { { "file", FileSystem::ToUTF8(external) }, { "directory", fmt::format("Imported{}", imports++) } },
+				[completed](const EditorCommandResult& result) { *completed = result; });
+			double maxFrame = MillisecondsSince(start);
+			uint32_t frames = 0;
+			AssetHandle imported = UUID::Null();
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(3);
+			while ((!*completed || AssetManager::GetAssetState(imported) != AssetState::Ready) && std::chrono::steady_clock::now() < deadline)
+			{
+				maxFrame = std::max(maxFrame, frame(imported));
+				frames++;
+				if (*completed && !imported.IsValid())
+				{
+					INFO((*completed)->Error);
+					REQUIRE((*completed)->Success);
+					imported = *UUIDFromJson((*completed)->Value["asset"]);
+				}
+			}
+			REQUIRE(AssetManager::GetAssetState(imported) == AssetState::Ready);
+			CHECK(frames > 1); // The import outlasted a frame: it ran beside them
+			CHECK(AssetManager::GetAsset<Texture>(imported)->GetWidth() == 4096u);
+			MESSAGE("asset.import of a 4096x4096 texture: ", frames, " frames, the longest ", maxFrame, " ms");
+			return maxFrame;
+		});
+		device.WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

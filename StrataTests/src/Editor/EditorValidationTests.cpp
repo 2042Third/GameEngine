@@ -371,7 +371,7 @@ TEST_SUITE("Editor.Validation")
 		CHECK_FALSE(harness.Error("asset.import", { { "file", FileSystem::ToUTF8(directory / "Brick.png") } }).empty()); // No project
 		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory / "Game") }, { "name", "Game" } });
 
-		const nlohmann::json imported = harness.Run("asset.import", { { "file", FileSystem::ToUTF8(directory / "Brick.png") }, { "directory", "Textures" } });
+		const nlohmann::json imported = harness.Finish("asset.import", { { "file", FileSystem::ToUTF8(directory / "Brick.png") }, { "directory", "Textures" } });
 		CHECK(imported["path"] == "Textures/Brick.png");
 		CHECK(imported["importError"] == "");
 		CHECK_FALSE(harness.Error("asset.import", { { "file", FileSystem::ToUTF8(directory / "Missing.png") } }).empty());

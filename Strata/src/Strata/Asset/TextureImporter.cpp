@@ -57,10 +57,11 @@ namespace Strata
 			return std::nullopt;
 		}
 
-		const char* GetDecodeFailureReason()
+		// stb_image's reason, as valid UTF-8: some quote bytes of the file (a PNG chunk's type), which are no text.
+		std::string GetDecodeFailureReason()
 		{
 			const char* reason = stbi_failure_reason();
-			return reason ? reason : "unknown error";
+			return reason ? StringUtils::MakeValidUTF8(reason) : std::string("unknown error");
 		}
 
 		struct StbImageDeleter

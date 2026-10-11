@@ -17,6 +17,7 @@ namespace Strata
 {
 
 	class EditorCommandRegistry;
+	class EditorCommandRunner;
 	class EditorContext;
 
 	// Folders and assets of the project's asset directory. Assets are drag sources for the inspector (asset fields)
@@ -30,8 +31,9 @@ namespace Strata
 		// Opening a scene replaces the edited one: the editor decides how (e.g. after asking about unsaved changes).
 		void SetOpenSceneHandler(std::function<void(AssetHandle)> handler) { m_OpenScene = std::move(handler); }
 
-		// Imports external files into the current folder.
-		void ImportFiles(EditorContext& context, const EditorCommandRegistry& commands, const std::vector<std::filesystem::path>& files);
+		// Imports external files and folders into the current folder (asset.import through the runner: copied and imported in
+		// the background).
+		void ImportFiles(EditorContext& context, const EditorCommandRegistry& commands, EditorCommandRunner& runner, const std::vector<std::filesystem::path>& paths);
 		const std::string& GetCurrentDirectory() const { return m_CurrentDirectory; }
 
 		// Shows an asset of the project: opens its folder, highlights it (a sub-asset: the file it comes from) and scrolls to it.
@@ -61,7 +63,7 @@ namespace Strata
 		};
 
 		void Refresh(EditorContext& context);
-		void DrawToolbar(EditorContext& context, const EditorCommandRegistry& commands);
+		void DrawToolbar(EditorContext& context, const EditorCommandRegistry& commands, EditorCommandRunner& runner);
 		void DrawRenamePopup(EditorContext& context, const EditorCommandRegistry& commands);
 		void OpenScene(EditorContext& context, const EditorCommandRegistry& commands, AssetHandle scene);
 	private:

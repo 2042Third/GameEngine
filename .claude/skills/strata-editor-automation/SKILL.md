@@ -171,8 +171,14 @@ sun with `component.set` (find their IDs with `entity.find {"name": "Main Camera
 `SunIntensity`; its sun follows the scene's directional light.
 
 **Assets**: `asset.import {"file": "<absolute path>", "directory": "Models"}` copies a file into the project and
-imports it: models `.gltf`/`.glb`, textures `.png`/`.jpg`/`.tga`/`.bmp`/`.psd`/`.gif`/`.hdr`, audio
-`.wav`/`.mp3`/`.flac`/`.ogg`, fonts `.ttf`/`.otf`. `asset.info` reports import errors and warnings, the import
+imports it: models `.gltf`/`.glb` (also meshopt-compressed), textures `.png`/`.jpg`/`.tga`/`.bmp`/`.psd`/`.gif`/`.hdr`,
+audio `.wav`/`.mp3`/`.flac`/`.ogg`, fonts `.ttf`/`.otf`. It runs in the background (copy on an I/O thread, import like
+re-imports) and answers when the imports are done; take several with `"files": [...]` and whole folders (their tree,
+`.meta` files and model files kept) with `"directories": [...]`. A `.gltf` that names separate `.bin` and image files
+brings them along into a folder named after the model (`Models/Quad/Quad.gltf`, `Models/Quad/Quad.bin`, ...; files up
+to two folders above it, such as `../Textures`, keep their layout), so it imports textured. A failed import **fails the
+command** (the message names the file; the error's data has `items` with each `error`) and its copied files are removed
+again, unless `"keepOnFailure": true`; the result lists `items` with their `assets`. `asset.info` reports import errors and warnings, the import
 settings and what each accepts (`importSettingsProperties`: textures `Usage`, `Compression`, `Quality`, `MaxSize`,
 `Filter`, `Wrap`, `GenerateMips`, `FlipVertically`; models `Scale`, `GenerateLODs`, `LODCount`, `MaxTextureSize`,
 `TextureCompression`, `TextureQuality`, `OptimizeMeshes`, `Import*`; audio `LoadMode`; fonts and the engine's own files

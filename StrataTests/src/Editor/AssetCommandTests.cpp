@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "TestHelpers.h"
@@ -286,7 +287,7 @@ TEST_SUITE("Editor.AssetOperations")
 		AssetHarness harness("AssetOpsTrashImported");
 		const std::filesystem::path external = harness.Directory.parent_path() / "Brick.png";
 		REQUIRE(FileSystem::WriteBytes(external, Tests::CreateSolidPNG(16, 16, 200, 100, 50)));
-		const AssetHandle texture = ToHandle(harness.Run("asset.import", { { "file", FileSystem::ToUTF8(external) }, { "directory", "Textures" } })["asset"]);
+		const AssetHandle texture = ToHandle(Tests::RunCommandToCompletion(harness.Context, harness.Commands, "asset.import", { { "file", FileSystem::ToUTF8(external) }, { "directory", "Textures" } })["asset"]);
 		const std::filesystem::path cache = harness.Directory / ".strata" / "Cache" / (texture.ToString() + ".bin");
 		REQUIRE(FileSystem::IsRegularFile(cache));
 

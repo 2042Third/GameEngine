@@ -76,6 +76,8 @@ strata_configure_target(StrataTests)
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${STRATA_TEST_SOURCES})
 # StrataScriptCore: the scripting tests call the script C ABI directly.
 target_link_libraries(StrataTests PRIVATE Strata StrataScriptCore doctest stb)
+# The glTF tests compress models with meshoptimizer's encoders (EXT_meshopt_compression), which the engine only decodes.
+target_link_libraries(StrataTests PRIVATE meshoptimizer)
 # The editor's UI library brings the editor core; the UI tests draw it headless (src/Editor/ImGuiHarness.h).
 if(TARGET StrataEditorUI)
 	target_link_libraries(StrataTests PRIVATE StrataEditorUI)

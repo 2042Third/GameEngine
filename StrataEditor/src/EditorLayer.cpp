@@ -497,7 +497,7 @@ namespace Strata
 				return true;
 			}
 			if (ContentBrowserPanel* contentBrowser = m_Panels.Get<ContentBrowserPanel>(EditorPanels::c_ContentBrowser))
-				contentBrowser->ImportFiles(m_Context, m_Commands, drop.GetPaths());
+				contentBrowser->ImportFiles(m_Context, m_Commands, m_CommandRunner, drop.GetPaths());
 			return true;
 		});
 	}

@@ -209,8 +209,7 @@ Open items and deferrals later waves own:
   at the largest capacities still reserves about 940 MiB at play start; dynamic bodies below other dynamic bodies are
   still written back one by one; a collider built from a mesh that is reimported while evicted keeps the old data until
   the mesh loads again (the source revisions render-scene uses would tell).
-- Textures: `asset.import` still cooks on the main thread (about 1.5 s for a 4096x4096 BC7 color texture; asynchronous
-  import is `content-and-prefabs`'); HDR textures stay RGBA16F until a BC6H encoder exists; a BC7 upload step carries
+- Textures: HDR textures stay RGBA16F until a BC6H encoder exists; a BC7 upload step carries
   twice BC1's bytes, and the frame's first step goes whatever the deadline says (later finalizations of a frame past
   its deadline wait for the next frame), so a frame that finalizes a large texture still takes 4.0-5.1 ms in the
   evicting sweep (budget 5.44 ms; right after heavy work on the machine single frames reached 5.6-8.1 ms, in all three

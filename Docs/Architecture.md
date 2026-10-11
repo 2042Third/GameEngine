@@ -684,7 +684,23 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   the import, `ReimportAssetInBackground` queues one even when the cached import is current (`ImportRequest::Force`;
   assets stored as-is reload at once and their references are searched again), and `IsImportPending` tells a deferred
   command (`asset.setImportSettings`, `asset.reimport`) when `Update` applied it; `SetImportSettings` and
-  `ReimportAsset` import on the calling thread (tools, tests, `asset.import`).
+  `ReimportAsset` import on the calling thread (tools, tests).
+- **Importing external files** (`EditorAssetManager::ImportExternal`, `asset.import`). Nothing of it runs in a frame: an
+  I/O job copies the files (`ExternalCopy`, which uses no manager state) and `Update` registers what it copied
+  (`RegisterAddedFile`, with the copied `.meta` files' handles where they are free) and queues their imports as
+  background jobs like re-imports; the import is `Finished` once every asset it brought is imported, and the command,
+  deferred, answers then. A file goes into the target folder (" (n)" added when its name is taken); the files its
+  importer reads besides it (`AssetImporter::FindExternalFiles`: a glTF model's buffer and image URIs, parsed by cgltf
+  without loading) come with it, keeping their layout below their nearest common folder (at most two folders above the
+  file), in a new folder named after it, so `ReadImportDependency` finds them inside the asset directory. URLs and
+  absolute paths are refused. A folder goes there with its tree: its asset files, their `.meta` files and the files its
+  models read inside it (hidden folders, links and other files stay out). An item whose import fails is removed again
+  (`RollBackExternalFiles`: its files, `.meta` files and the folders the copy made; for a folder, only the assets that
+  failed) unless `KeepOnFailure`; the failure is logged once (by `ApplyImportOutcome`) and the command fails with the
+  items in its error's data. Importers' messages, which third-party decoders may fill with bytes of the file, are made
+  valid UTF-8 (`StringUtils::MakeValidUTF8`) before they reach records, logs and results. Closing the project ends an
+  import: a copy that has not finished removes what it copied. `ImportExternalFile` copies the same way and imports on
+  the calling thread (tools, tests).
 - **Cancelling imports.** Nothing in the editor waits for a background import. Each is a `BackgroundJob` with a
   cancellation flag, the importer's `ImportContext::Cancel`: importers check it as they go (the texture cooker per block
   of a compressed level and between mip levels, the texture importer around decoding, the glTF importer between a
@@ -753,7 +769,7 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   | --- | --- | --- | --- |
   | Scene, Prefab, Material | `.stscene .stprefab .stmat` | `NativeAssetImporter` | the JSON source |
   | Texture | `.png .jpg .jpeg .tga .bmp .psd .gif .hdr` | `TextureImporter` | cooked `STTX` texture (see [Texture cooking](#texture-cooking)) |
-  | Model | `.gltf .glb` | `GltfImporter` | entity template; Mesh, Material, Texture sub-assets |
+  | Model | `.gltf .glb` (also `EXT_meshopt_compression`, decoded with meshoptimizer) | `GltfImporter` | entity template; Mesh, Material, Texture sub-assets |
   | AudioClip | `.wav .mp3 .flac .ogg` | `AudioClipImporter` | `STAU` header + the encoded file |
   | Font | `.ttf .otf` | `FontImporter` | the source, validated on import |
 
@@ -889,10 +905,8 @@ Textures are stored the way the GPU samples them: block-compressed, with their m
   background jobs when the editor opens a project, or in parallel while its caller waits (tools, tests, scripted runs);
   re-imports after file changes run as background jobs and are applied between frames, and so do `asset.reimport` and
   `asset.setImportSettings` (see
-  [Importing](#asset-pipeline): their commands answer once the import is applied); the editor's `asset.import` still
-  imports inside the command, the main thread taking part in the encoding (about a fifth of the stress project's cold
-  import, 1.5 s, for a 4096x4096 color texture in Release), until `content-and-prefabs` makes it asynchronous
-  (Docs/Roadmap.md).
+  [Importing](#asset-pipeline): their commands answer once the import is applied), as does `asset.import`, which copies
+  on an I/O job and imports in the background (`ImportExternal`), so no frame cooks.
 - **Cooked form** (`Renderer/CookedTexture.h`, `STTX` version 2): a 40-byte header (format, size, mip count, flags,
   filter, wrap, name length, data offset), a mip table (width, height, offset, size per level), the debug name, then the
   levels smallest first, each 16-byte aligned. The mip tail - every level up to 128x128 - is therefore one range right

@@ -57,7 +57,9 @@ Design the code for verification before writing it:
   alpha below 1 for see-through), `AlphaCutoff`, `DoubleSided`, `Unlit`, texture maps by asset (`BaseColorMap`, ...),
   `UVTiling`, `UVOffset`. `material.get {"material": "Builtin/DefaultMaterial"}` describes them all.
 - Sounds: write a small 16-bit PCM WAV with a script of your own (outside the project), then
-  `asset.import {"file": "<absolute>", "directory": "Sounds"}`. Models, textures and fonts import the same way.
+  `asset.import {"file": "<absolute>", "directory": "Sounds"}` (it answers once the import is done, and fails, removing
+  the copy, when the file cannot be imported). Models, textures and fonts import the same way; a `.gltf` brings the
+  `.bin` and images it names.
 - Built-in meshes: `Builtin/Cube`, `Sphere`, `Plane`, `Quad`, `Cylinder`, `Capsule`, `Cone`, `Torus` (also reachable
   from scripts: `Assets::Find("Builtin/Cube")`).
 

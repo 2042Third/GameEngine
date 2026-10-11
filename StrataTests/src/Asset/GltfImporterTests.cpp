@@ -16,6 +16,7 @@
 
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <meshoptimizer.h>
 
 #include <algorithm>
 #include <atomic>
@@ -169,6 +170,87 @@ namespace
 		nlohmann::json document = CreateDocument(options, binary.size(), {}, imageView);
 		if (imageView)
 			document["bufferViews"].push_back(extraView);
+		std::string json = JsonUtils::Dump(document);
+		while (json.size() % 4 != 0)
+			json.push_back(' ');
+
+		std::vector<uint8_t> glb;
+		auto writeU32 = [&glb](uint32_t value) { Append(glb, std::vector<uint32_t> { value }); };
+		writeU32(0x46546C67); // "glTF"
+		writeU32(2);
+		writeU32(static_cast<uint32_t>(12 + 8 + json.size() + 8 + binary.size()));
+		writeU32(static_cast<uint32_t>(json.size()));
+		writeU32(0x4E4F534A); // "JSON"
+		glb.insert(glb.end(), json.begin(), json.end());
+		writeU32(static_cast<uint32_t>(binary.size()));
+		writeU32(0x004E4942); // "BIN"
+		glb.insert(glb.end(), binary.begin(), binary.end());
+		return glb;
+	}
+
+	// A .glb of one node with the test quad (positions, normals, texture coordinates and list indices, as CreateGlb's first
+	// mesh) whose buffer views are compressed with EXT_meshopt_compression by meshoptimizer's encoders into the binary chunk;
+	// the views' own buffer is the extension's fallback, without data. `corrupt` damages the compressed positions' header,
+	// and an `indexStride` other than 2 or 4 makes the index view one the extension does not allow.
+	std::vector<uint8_t> CreateMeshoptGlb(bool corrupt, uint32_t indexStride = 2)
+	{
+		const std::vector<float> positions { 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0 };
+		const std::vector<float> normals { 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1 };
+		const std::vector<float> texCoords { 0, 1, 1, 1, 1, 0, 0, 0 };
+		const std::vector<uint32_t> indices { 0, 1, 2, 0, 2, 3 };
+
+		std::vector<uint8_t> binary;
+		nlohmann::json views = nlohmann::json::array();
+		size_t uncompressedOffset = 0;
+		auto addView = [&](const std::vector<uint8_t>& encoded, size_t uncompressedSize, size_t stride, size_t count, const char* mode, bool vertices)
+		{
+			nlohmann::json view = { { "buffer", 1 }, { "byteOffset", uncompressedOffset }, { "byteLength", uncompressedSize },
+				{ "target", vertices ? 34962 : 34963 },
+				{ "extensions", { { "EXT_meshopt_compression", { { "buffer", 0 }, { "byteOffset", binary.size() }, { "byteLength", encoded.size() },
+					{ "byteStride", stride }, { "mode", mode }, { "count", count } } } } } };
+			if (vertices)
+				view["byteStride"] = stride;
+			views.push_back(std::move(view));
+			binary.insert(binary.end(), encoded.begin(), encoded.end());
+			while (binary.size() % 4 != 0)
+				binary.push_back(0);
+			uncompressedOffset += (uncompressedSize + 3) / 4 * 4;
+		};
+		auto encodeVertices = [](const std::vector<float>& values, size_t stride)
+		{
+			const size_t count = values.size() * sizeof(float) / stride;
+			std::vector<uint8_t> encoded(meshopt_encodeVertexBufferBound(count, stride));
+			encoded.resize(meshopt_encodeVertexBuffer(encoded.data(), encoded.size(), values.data(), count, stride));
+			return encoded;
+		};
+
+		std::vector<uint8_t> encodedPositions = encodeVertices(positions, 12);
+		if (corrupt)
+			encodedPositions[0] = 0; // No codec version: the decoder refuses it
+		addView(encodedPositions, 48, 12, 4, "ATTRIBUTES", true);
+		addView(encodeVertices(normals, 12), 48, 12, 4, "ATTRIBUTES", true);
+		addView(encodeVertices(texCoords, 8), 32, 8, 4, "ATTRIBUTES", true);
+		std::vector<uint8_t> encodedIndices(meshopt_encodeIndexBufferBound(indices.size(), 4));
+		encodedIndices.resize(meshopt_encodeIndexBuffer(encodedIndices.data(), encodedIndices.size(), indices.data(), indices.size()));
+		addView(encodedIndices, 12, indexStride, 12 / indexStride, "TRIANGLES", false);
+
+		const nlohmann::json document = {
+			{ "asset", { { "version", "2.0" } } },
+			{ "extensionsUsed", { "EXT_meshopt_compression" } },
+			{ "extensionsRequired", { "EXT_meshopt_compression" } },
+			{ "scenes", nlohmann::json::array({ { { "nodes", { 0 } } } }) },
+			{ "nodes", nlohmann::json::array({ { { "name", "Body" }, { "mesh", 0 } } }) },
+			{ "meshes", nlohmann::json::array({ { { "name", "Quad" }, { "primitives", nlohmann::json::array({ {
+				{ "attributes", { { "POSITION", 0 }, { "NORMAL", 1 }, { "TEXCOORD_0", 2 } } }, { "indices", 3 } } }) } } }) },
+			{ "buffers", nlohmann::json::array({ { { "byteLength", binary.size() } },
+				{ { "byteLength", uncompressedOffset }, { "extensions", { { "EXT_meshopt_compression", { { "fallback", true } } } } } } }) },
+			{ "bufferViews", views },
+			{ "accessors", nlohmann::json::array({
+				{ { "bufferView", 0 }, { "componentType", 5126 }, { "count", 4 }, { "type", "VEC3" }, { "min", { 0, 0, 0 } }, { "max", { 1, 1, 0 } } },
+				{ { "bufferView", 1 }, { "componentType", 5126 }, { "count", 4 }, { "type", "VEC3" } },
+				{ { "bufferView", 2 }, { "componentType", 5126 }, { "count", 4 }, { "type", "VEC2" } },
+				{ { "bufferView", 3 }, { "componentType", 5123 }, { "count", 6 }, { "type", "SCALAR" } } }) }
+		};
 		std::string json = JsonUtils::Dump(document);
 		while (json.size() % 4 != 0)
 			json.push_back(' ');
@@ -931,6 +1013,58 @@ TEST_SUITE("Asset.Gltf")
 		REQUIRE_MESSAGE(compressedOnly.Success, compressedOnly.Error);
 		CHECK(HasWarningContaining(compressedOnly.Result, "Draco"));
 		CHECK(compressedOnly.Find("Mesh/1")); // The other mesh is unaffected
+	}
+
+	TEST_CASE("Models compressed with EXT_meshopt_compression import like uncompressed ones")
+	{
+		const std::filesystem::path assets = Tests::CreateTemporaryDirectory("GltfMeshopt");
+		const ImportOutput plain = RunImport(assets, "Plain.glb", CreateGlb({}));
+		REQUIRE_MESSAGE(plain.Success, plain.Error);
+		const ImportOutput compressed = RunImport(assets, "Compressed.glb", CreateMeshoptGlb(false));
+		REQUIRE_MESSAGE(compressed.Success, compressed.Error);
+		CHECK_FALSE(HasWarningContaining(compressed.Result, "EXT_meshopt_compression"));
+
+		// The same geometry as the uncompressed model.
+		const ImportedSubAsset* plainMesh = plain.Find("Mesh/0");
+		const ImportedSubAsset* compressedMesh = compressed.Find("Mesh/0");
+		REQUIRE(plainMesh);
+		REQUIRE(compressedMesh);
+		std::string error;
+		const Ref<Mesh> expected = Mesh::Deserialize(plainMesh->Data, &error);
+		const Ref<Mesh> decoded = Mesh::Deserialize(compressedMesh->Data, &error);
+		REQUIRE_MESSAGE(expected, error);
+		REQUIRE_MESSAGE(decoded, error);
+		CHECK(decoded->GetPositions() == expected->GetPositions());
+		CHECK(decoded->GetIndices() == expected->GetIndices());
+		CHECK(GltfImporter().GetVersion() >= 5);
+
+		// Corrupt compressed data and views the extension does not allow fail with an error, never a crash.
+		std::vector<uint8_t> corrupt = CreateMeshoptGlb(true);
+		const ImportOutput broken = RunImport(assets, "Corrupt.glb", corrupt);
+		CHECK_FALSE(broken.Success);
+		CHECK(broken.Error.find("could not be decoded") != std::string::npos);
+		const ImportOutput badStride = RunImport(assets, "BadStride.glb", CreateMeshoptGlb(false, 6));
+		CHECK_FALSE(badStride.Success);
+		CHECK(badStride.Error.find("does not allow") != std::string::npos);
+	}
+
+	TEST_CASE("Models name the files they read besides themselves")
+	{
+		GltfImporter importer;
+		std::vector<std::string> files;
+		std::string error;
+		REQUIRE(importer.FindExternalFiles(CreateGltf({ .ImageUri = "../Textures/My%20Albedo.png", .BufferUri = "Quad.bin" }), files, &error));
+		CHECK(files == std::vector<std::string> { "Quad.bin", "../Textures/My Albedo.png" });
+		files.clear();
+		REQUIRE(importer.FindExternalFiles(CreateGlb({ .ImageUri = "embedded" }), files, &error));
+		CHECK(files.empty());
+		REQUIRE(importer.FindExternalFiles(CreateGltf({ .ImageUri = "embedded" }), files, &error));
+		CHECK(files.empty());
+		CHECK_FALSE(importer.FindExternalFiles(CreateGltf({ .BufferUri = "https://example.com/Quad.bin" }), files, &error));
+		CHECK(error.find("URL") != std::string::npos);
+		CHECK_FALSE(importer.FindExternalFiles(CreateGltf({ .BufferUri = "C:/Quad.bin" }), files, &error));
+		CHECK_FALSE(importer.FindExternalFiles(CreateGltf({ .BufferUri = "/tmp/Quad.bin" }), files, &error));
+		CHECK_FALSE(importer.FindExternalFiles(std::vector<uint8_t> { 'n', 'o' }, files, &error));
 	}
 
 	TEST_CASE("A cancelled import stops at its next check and fails")

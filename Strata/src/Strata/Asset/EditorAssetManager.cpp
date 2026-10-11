@@ -326,7 +326,233 @@ namespace Strata
 		constexpr const char* c_TrashCacheFolder = "Cache";
 		constexpr const char* c_TrashManifest = "Trashed.json";
 
+		// How many folders above a file the files it reads (a model's "../Textures") may lie when it is copied into a project.
+		constexpr int c_MaxExternalFileClimb = 2;
+
+		// Copies files from outside the project into the asset directory (EditorAssetManager::ImportExternal, on an I/O job,
+		// and ImportExternalFile): records every file it writes in the item and every folder it creates, so that a failure or
+		// a cancellation can take them back. Uses no manager state.
+		class ExternalCopy
+		{
+		public:
+			ExternalCopy(const std::filesystem::path& assetDirectory, const std::atomic<bool>* cancel, std::vector<std::string>& createdFolders)
+				: m_AssetDirectory(assetDirectory), m_Cancel(cancel), m_CreatedFolders(createdFolders)
+			{
+			}
+
+			bool IsCancelled() const { return Strata::IsCancelled(m_Cancel); }
+
+			// A file and the files its importer reads beside it.
+			ExternalImportItem CopyFile(const std::filesystem::path& file, const std::filesystem::path& targetDirectory)
+			{
+				ExternalImportItem item;
+				item.Source = file;
+				const AssetImporter* importer = AssetImporterRegistry::FindByExtension(GetExtension(file));
+				if (!FileSystem::IsRegularFile(file))
+				{
+					item.Error = fmt::format("'{}' is not a file", FileSystem::ToUTF8(file));
+					return item;
+				}
+				if (!importer)
+				{
+					item.Error = fmt::format("No importer handles '{}' files", FileSystem::ToUTF8(file.extension()));
+					return item;
+				}
+
+				// The files it reads, and the folder their layout is kept below (the nearest one holding all of them).
+				std::vector<std::filesystem::path> companions;
+				std::filesystem::path root = file.parent_path();
+				if (importer->ReadsExternalFiles())
+				{
+					const std::optional<std::vector<uint8_t>> data = FileSystem::ReadBytes(file);
+					std::vector<std::string> names;
+					std::string error;
+					if (!data)
+						error = fmt::format("Could not read '{}'", FileSystem::ToUTF8(file));
+					else if (!importer->FindExternalFiles(*data, names, &error))
+						error = fmt::format("{}: {}", FileSystem::ToUTF8(file.filename()), error);
+					if (!error.empty())
+					{
+						item.Error = std::move(error);
+						return item;
+					}
+					for (const std::string& name : names)
+					{
+						const std::filesystem::path companion = (file.parent_path() / FileSystem::FromUTF8(name)).lexically_normal();
+						int climbed = 0;
+						while (FileSystem::GetRelativePath(companion, root).empty() && climbed <= c_MaxExternalFileClimb)
+						{
+							root = root.parent_path();
+							climbed++;
+						}
+						if (climbed > c_MaxExternalFileClimb)
+						{
+							item.Error = fmt::format("{}: '{}' lies more than {} folders above it; copy them together into one folder first",
+								FileSystem::ToUTF8(file.filename()), name, c_MaxExternalFileClimb);
+							return item;
+						}
+						// Missing files are left to the import, which says what it lacks.
+						if (FileSystem::IsRegularFile(companion))
+							companions.push_back(companion);
+					}
+				}
+
+				std::filesystem::path destination;
+				if (companions.empty())
+				{
+					destination = FileSystem::GetUniquePath(targetDirectory / file.filename());
+				}
+				else
+				{
+					// A new folder named after it, with everything below the root at the same relative place.
+					const std::filesystem::path folder = FileSystem::GetUniquePath(targetDirectory / file.stem());
+					destination = folder / FileSystem::GetRelativePath(file, root);
+					for (const std::filesystem::path& companion : companions)
+					{
+						if (!Copy(companion, folder / FileSystem::GetRelativePath(companion, root), item))
+							return item;
+					}
+				}
+				if (!Copy(file, destination, item))
+					return item;
+				// The file itself first: ImportExternal registers it before the files it reads.
+				std::rotate(item.Files.begin(), item.Files.end() - 1, item.Files.end());
+				item.Path = Relative(destination);
+				return item;
+			}
+
+			// A folder with its asset files, their .meta files and the files models in it read inside it.
+			ExternalImportItem CopyFolder(const std::filesystem::path& directory, const std::filesystem::path& targetDirectory)
+			{
+				ExternalImportItem item;
+				item.Source = directory;
+				item.Folder = true;
+				if (!FileSystem::IsDirectory(directory))
+				{
+					item.Error = fmt::format("'{}' is not a folder", FileSystem::ToUTF8(directory));
+					return item;
+				}
+				const std::filesystem::path source = FileSystem::RemoveTrailingSeparators(directory);
+				const std::filesystem::path folder = FileSystem::GetUniquePath(targetDirectory / source.filename());
+
+				std::vector<std::filesystem::path> files;
+				std::error_code error;
+				std::filesystem::recursive_directory_iterator iterator(source, std::filesystem::directory_options::skip_permission_denied, error);
+				const std::filesystem::recursive_directory_iterator end;
+				while (!error && iterator != end)
+				{
+					const std::filesystem::directory_entry& entry = *iterator;
+					std::error_code typeError;
+					if (IsHiddenName(entry.path().filename()) || entry.is_symlink(typeError))
+					{
+						if (entry.is_directory(typeError))
+							iterator.disable_recursion_pending();
+					}
+					else if (entry.is_regular_file(typeError) && AssetImporterRegistry::FindByExtension(GetExtension(entry.path())))
+					{
+						files.push_back(entry.path());
+					}
+					iterator.increment(error);
+				}
+				if (error)
+				{
+					item.Error = fmt::format("Could not read the folder '{}': {}", FileSystem::ToUTF8(source), error.message());
+					return item;
+				}
+				std::sort(files.begin(), files.end());
+
+				std::unordered_set<std::string> copied;
+				auto copyBelow = [&](const std::filesystem::path& file)
+				{
+					const std::filesystem::path relative = FileSystem::GetRelativePath(file, source);
+					if (relative.empty() || !copied.insert(FileSystem::ToUTF8(relative)).second)
+						return true;
+					return Copy(file, folder / relative, item);
+				};
+				for (const std::filesystem::path& file : files)
+				{
+					if (IsCancelled())
+						return item;
+					if (!copyBelow(file) || (FileSystem::IsRegularFile(GetMetaPath(file)) && !copyBelow(GetMetaPath(file))))
+						return item;
+					const AssetImporter* importer = AssetImporterRegistry::FindByExtension(GetExtension(file));
+					if (!importer->ReadsExternalFiles())
+						continue;
+					// What a model reads inside the folder comes along; what lies outside it does not (its import says so).
+					const std::optional<std::vector<uint8_t>> data = FileSystem::ReadBytes(file);
+					std::vector<std::string> names;
+					if (!data || !importer->FindExternalFiles(*data, names, nullptr))
+						continue;
+					for (const std::string& name : names)
+					{
+						const std::filesystem::path companion = (file.parent_path() / FileSystem::FromUTF8(name)).lexically_normal();
+						if (FileSystem::IsRegularFile(companion) && !FileSystem::GetRelativePath(companion, source).empty() && !copyBelow(companion))
+							return item;
+					}
+				}
+				item.Path = Relative(folder);
+				if (!FileSystem::IsDirectory(folder) && !MakeFolder(folder))
+					item.Error = fmt::format("Could not create the folder '{}'", item.Path);
+				return item;
+			}
+		private:
+			std::string Relative(const std::filesystem::path& absolute) const
+			{
+				return FileSystem::ToUTF8(FileSystem::GetRelativePath(absolute, m_AssetDirectory));
+			}
+
+			// Creates a folder and the parents it lacks, recording those it made (parents first).
+			bool MakeFolder(const std::filesystem::path& absolute)
+			{
+				std::vector<std::filesystem::path> missing;
+				for (std::filesystem::path path = absolute.lexically_normal(); !FileSystem::Exists(path) && path != m_AssetDirectory && path.has_relative_path();
+					path = path.parent_path())
+					missing.push_back(path);
+				for (auto it = missing.rbegin(); it != missing.rend(); ++it)
+				{
+					if (!FileSystem::CreateDirectories(*it))
+						return false;
+					m_CreatedFolders.push_back(Relative(*it));
+				}
+				return true;
+			}
+
+			bool Copy(const std::filesystem::path& from, const std::filesystem::path& to, ExternalImportItem& item)
+			{
+				if (IsCancelled())
+				{
+					item.Error = "The import was cancelled";
+					return false;
+				}
+				if (!MakeFolder(to.parent_path()) || !FileSystem::Copy(from, to, false))
+				{
+					item.Error = fmt::format("Could not copy '{}' into the project", FileSystem::ToUTF8(from));
+					return false;
+				}
+				item.Files.push_back(Relative(to));
+				return true;
+			}
+		private:
+			std::filesystem::path m_AssetDirectory;
+			const std::atomic<bool>* m_Cancel;
+			std::vector<std::string>& m_CreatedFolders;
+		};
+
 	}
+
+	bool ExternalImport::HasFailures() const
+	{
+		return std::any_of(m_Items.begin(), m_Items.end(), [](const ExternalImportItem& item) { return !item.Error.empty(); });
+	}
+
+	struct ExternalImport::CopyTask
+	{
+		std::atomic<bool> Cancel = false;
+		std::mutex Mutex;
+		bool Done = false; // Guarded by Mutex, like what follows
+		std::vector<ExternalImportItem> Items;
+		std::vector<std::string> CreatedFolders;
+	};
 
 	// What the manager's background jobs use. A job keeps it alive (a Ref in its closure) and touches nothing else, so the
 	// manager closes, and may be destroyed, while a cancelled job still runs to its next cancellation check. Everything here
@@ -505,6 +731,16 @@ namespace Strata
 			return;
 		m_Closed = true;
 		m_Watcher.Stop();
+
+		// Imports of external files end here: a copy still running takes back what it copied, and imports of what was copied
+		// run again when the project next opens (the files are its assets now).
+		for (const Ref<ExternalImport>& import : m_ExternalImports)
+		{
+			import->m_Task->Cancel.store(true);
+			import->m_Error = "The project was closed before the import finished";
+			import->m_State = ExternalImportState::Finished;
+		}
+		m_ExternalImports.clear();
 
 		uint32_t running = 0;
 		uint32_t queued = 0;
@@ -1208,7 +1444,11 @@ namespace Strata
 			outcome.References = std::move(result.References);
 			outcome.Bounds = result.Bounds;
 		}
+		// Messages of third-party decoders can quote bytes of the file: logs, records and results get valid UTF-8.
 		outcome.Warnings = std::move(result.Warnings);
+		for (std::string& warning : outcome.Warnings)
+			warning = StringUtils::MakeValidUTF8(warning);
+		error = StringUtils::MakeValidUTF8(error);
 
 		// Dependencies count for failed imports too: creating or fixing a missing file must retry the import.
 		nlohmann::json dependencies = nlohmann::json::array();
@@ -1710,6 +1950,8 @@ namespace Strata
 		ST_PROFILE_STAGE("Assets.Update");
 		ProcessFileChanges();
 		ProcessCompletedImports();
+		if (!m_ExternalImports.empty())
+			UpdateExternalImports();
 		SaveAssetIndex();
 		AssetManagerBase::Update();
 	}
@@ -2154,29 +2396,255 @@ namespace Strata
 			return UUID::Null();
 		};
 
-		if (!FileSystem::IsRegularFile(sourceFile))
-			return fail(fmt::format("'{}' is not a file", FileSystem::ToUTF8(sourceFile)));
-		if (!AssetImporterRegistry::FindByExtension(GetExtension(sourceFile)))
-			return fail(fmt::format("No importer handles '{}' files", FileSystem::ToUTF8(sourceFile.extension())));
-
 		std::filesystem::path directory = ToAbsolute(targetDirectory);
 		if (!directory.has_filename())
 			directory = directory.parent_path(); // Trailing separator ("UI/") or the asset root ("")
 		if (directory != m_Specification.AssetDirectory && ToRelative(directory).empty())
 			return fail(fmt::format("'{}' is outside the asset directory", targetDirectory));
 
-		const std::filesystem::path destination = FileSystem::GetUniquePath(directory / sourceFile.filename());
-		if (!FileSystem::CreateDirectories(directory) || !FileSystem::Copy(sourceFile, destination, false))
-			return fail(fmt::format("Could not copy '{}' into the project", FileSystem::ToUTF8(sourceFile)));
+		std::vector<std::string> createdFolders;
+		ExternalCopy copy(m_Specification.AssetDirectory, nullptr, createdFolders);
+		const ExternalImportItem item = copy.CopyFile(sourceFile, directory);
+		if (!item.Error.empty())
+		{
+			RollBackExternalFiles(item.Files, {});
+			return fail(item.Error);
+		}
 
-		const AssetHandle handle = RegisterSourceFile(destination);
+		// The file first, then the files it reads that are assets themselves (its import reads them as they are, so they are
+		// imported for their own use only).
+		AssetHandle handle = UUID::Null();
+		for (const std::string& file : item.Files)
+		{
+			const AssetHandle registered = RegisterSourceFile(ToAbsolute(file));
+			if (!registered.IsValid())
+				continue;
+			if (!handle.IsValid())
+				handle = registered;
+			// A failed import is logged by ApplyImportOutcome and kept in the asset's import state.
+			ReimportAsset(registered);
+		}
 		if (!handle.IsValid())
 			return fail("Registering the copied file failed");
-
-		std::string error;
-		if (!ReimportAsset(handle, &error))
-			ST_CORE_ERROR("Import of '{}' failed: {}", ToRelative(destination), error);
 		return handle;
+	}
+
+	Ref<ExternalImport> EditorAssetManager::ImportExternal(const ExternalImportRequest& request, std::string* outError)
+	{
+		auto fail = [outError](std::string message) -> Ref<ExternalImport>
+		{
+			if (outError)
+				*outError = std::move(message);
+			return nullptr;
+		};
+
+		if (m_Closed)
+			return fail("The project's assets are closed: nothing is imported any more");
+		const std::string target = NormalizeIncludePath(request.TargetDirectory);
+		const std::filesystem::path directory = target.empty() ? m_Specification.AssetDirectory : ToAbsolute(target);
+		const std::string relative = ToRelative(directory);
+		if (!target.empty() && (relative.empty() || relative == "."))
+			return fail(fmt::format("'{}' is outside the asset directory", request.TargetDirectory));
+		if (!target.empty() && IsHiddenRelativePath(FileSystem::FromUTF8(relative)))
+			return fail(fmt::format("'{}' is hidden (a name starts with '.'), so it could hold no assets", relative));
+		if (FileSystem::Exists(directory) && !FileSystem::IsDirectory(directory))
+			return fail(fmt::format("'{}' is a file, not a folder", relative));
+		if (request.Files.empty() && request.Directories.empty())
+			return fail("Nothing to import");
+
+		Ref<ExternalImport> import = CreateRef<ExternalImport>();
+		import->m_Request = request;
+		import->m_Task = CreateRef<ExternalImport::CopyTask>();
+		// The job uses only what it shares with the import: the manager may close while it copies.
+		auto copy = [task = import->m_Task, request, assetDirectory = m_Specification.AssetDirectory, directory]()
+		{
+			std::vector<ExternalImportItem> items;
+			std::vector<std::string> createdFolders;
+			ExternalCopy copier(assetDirectory, &task->Cancel, createdFolders);
+			for (const std::filesystem::path& file : request.Files)
+				items.push_back(copier.CopyFile(file, directory));
+			for (const std::filesystem::path& folder : request.Directories)
+				items.push_back(copier.CopyFolder(folder, directory));
+			if (copier.IsCancelled())
+			{
+				// Nobody registers what was copied: it goes again, so the next scan finds no half import.
+				for (const ExternalImportItem& item : items)
+				{
+					for (const std::string& file : item.Files)
+						FileSystem::Remove(assetDirectory / FileSystem::FromUTF8(file));
+				}
+				for (auto it = createdFolders.rbegin(); it != createdFolders.rend(); ++it)
+				{
+					std::error_code error;
+					std::filesystem::remove(assetDirectory / FileSystem::FromUTF8(*it), error); // Only while empty
+				}
+			}
+			std::scoped_lock<std::mutex> lock(task->Mutex);
+			task->Items = std::move(items);
+			task->CreatedFolders = std::move(createdFolders);
+			task->Done = true;
+		};
+		try
+		{
+			JobSystem::SubmitIO(std::move(copy), JobPriority::Normal);
+		}
+		catch (const std::exception& exception)
+		{
+			return fail(fmt::format("Could not start copying: {}", exception.what()));
+		}
+		m_ExternalImports.push_back(import);
+		MarkChanged();
+		return import;
+	}
+
+	void EditorAssetManager::UpdateExternalImports()
+	{
+		for (size_t index = 0; index < m_ExternalImports.size();)
+		{
+			ExternalImport& import = *m_ExternalImports[index];
+			if (import.m_State == ExternalImportState::Copying)
+			{
+				std::scoped_lock<std::mutex> lock(import.m_Task->Mutex);
+				if (!import.m_Task->Done)
+				{
+					index++;
+					continue;
+				}
+				import.m_Items = std::move(import.m_Task->Items);
+				import.m_CreatedFolders = std::move(import.m_Task->CreatedFolders);
+				import.m_State = ExternalImportState::Importing;
+
+				// What was copied becomes assets (with their .meta files and handles), imported in the background.
+				{
+					std::scoped_lock<std::mutex> sourceLock(m_SourceMutex);
+					for (const std::string& folder : import.m_CreatedFolders)
+						AddFolderLocked(folder);
+				}
+				for (ExternalImportItem& item : import.m_Items)
+				{
+					if (!item.Error.empty())
+						continue;
+					for (const std::string& file : item.Files)
+					{
+						if (GetExtension(FileSystem::FromUTF8(file)) == c_MetaExtension)
+							continue;
+						const AssetHandle handle = RegisterAddedFile(ToAbsolute(file), true);
+						if (handle.IsValid() && std::find(item.Assets.begin(), item.Assets.end(), handle) == item.Assets.end())
+							item.Assets.push_back(handle);
+					}
+					if (!item.Folder && item.Assets.empty())
+						item.Error = fmt::format("'{}' could not be registered as an asset", item.Path);
+				}
+				MarkChanged();
+			}
+
+			// Done once every asset it brought is imported (or failed).
+			const bool importing = std::any_of(import.m_Items.begin(), import.m_Items.end(), [this](const ExternalImportItem& item)
+			{
+				return std::any_of(item.Assets.begin(), item.Assets.end(), [this](AssetHandle handle) { return IsImportPending(handle); });
+			});
+			if (importing)
+			{
+				index++;
+				continue;
+			}
+			FinishExternalImport(import);
+			m_ExternalImports.erase(m_ExternalImports.begin() + static_cast<std::ptrdiff_t>(index));
+			MarkChanged();
+		}
+	}
+
+	void EditorAssetManager::FinishExternalImport(ExternalImport& import)
+	{
+		for (ExternalImportItem& item : import.m_Items)
+		{
+			// A copy that failed takes back what it copied.
+			if (!item.Error.empty())
+			{
+				if (!item.Files.empty())
+				{
+					RollBackExternalFiles(item.Files, item.Assets);
+					item.Assets.clear();
+					item.RolledBack = true;
+				}
+				continue;
+			}
+
+			// The assets whose import failed: for a file its own (the files it reads may fail alone: a model then lacks a texture
+			// and says so in its warnings), for a folder each.
+			std::vector<AssetHandle> failed;
+			std::string firstError;
+			for (size_t index = 0; index < item.Assets.size(); index++)
+			{
+				const AssetImportInfo info = GetImportInfo(item.Assets[index]);
+				const bool removed = !IsHandleValid(item.Assets[index]);
+				if (info.Error.empty() && !removed)
+					continue;
+				if (!item.Folder && index > 0)
+					continue;
+				failed.push_back(item.Assets[index]);
+				if (firstError.empty())
+					firstError = removed ? std::string("the asset was removed while it imported") : info.Error;
+			}
+			if (failed.empty())
+				continue;
+			item.Error = item.Folder ? fmt::format("{} of {} assets failed to import; the first: {}", failed.size(), item.Assets.size(), firstError) : firstError;
+			if (import.m_Request.KeepOnFailure)
+				continue;
+
+			if (item.Folder)
+			{
+				// Only the assets that failed go (with their .meta files): the rest of the folder imported.
+				std::vector<std::string> files;
+				for (AssetHandle handle : failed)
+				{
+					if (const std::optional<AssetMetadata> metadata = GetMetadata(handle))
+					{
+						files.push_back(metadata->Path);
+						files.push_back(metadata->Path + std::string(c_MetaExtension));
+					}
+				}
+				RollBackExternalFiles(files, failed);
+				std::erase_if(item.Assets, [&failed](AssetHandle handle) { return std::find(failed.begin(), failed.end(), handle) != failed.end(); });
+			}
+			else
+			{
+				RollBackExternalFiles(item.Files, item.Assets);
+				item.Assets.clear();
+			}
+			item.RolledBack = true;
+		}
+
+		// Folders the copy made that nothing stayed in.
+		for (auto it = import.m_CreatedFolders.rbegin(); it != import.m_CreatedFolders.rend(); ++it)
+		{
+			const std::filesystem::path folder = ToAbsolute(*it);
+			std::error_code error;
+			if (FileSystem::IsDirectory(folder) && std::filesystem::directory_iterator(folder, error) == std::filesystem::directory_iterator() && !error
+				&& std::filesystem::remove(folder, error))
+			{
+				std::scoped_lock<std::mutex> lock(m_SourceMutex);
+				m_Folders.erase(*it);
+			}
+		}
+		import.m_State = ExternalImportState::Finished;
+	}
+
+	void EditorAssetManager::RollBackExternalFiles(const std::vector<std::string>& files, const std::vector<AssetHandle>& assets)
+	{
+		for (AssetHandle handle : assets)
+		{
+			std::string error;
+			if (IsHandleValid(handle) && !DeleteAsset(handle, &error))
+				ST_CORE_WARN("Could not remove an asset whose import failed: {}", error);
+		}
+		std::unique_lock<std::shared_mutex> fileLock(m_Work->FileMutex);
+		for (const std::string& file : files)
+		{
+			const std::filesystem::path path = ToAbsolute(file);
+			if (FileSystem::Exists(path) && !FileSystem::Remove(path))
+				ST_CORE_WARN("Could not remove '{}' after its import failed", file);
+		}
 	}
 
 	AssetHandle EditorAssetManager::CreateNativeAsset(const std::string& relativePath, std::span<const uint8_t> data, std::string* outError,

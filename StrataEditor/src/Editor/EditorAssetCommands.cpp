@@ -8,9 +8,11 @@
 #include "Editor/ProjectSamples.h"
 #include "Editor/ProjectTemplates.h"
 
+#include <Strata/Asset/AssetImporter.h>
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
+#include <Strata/Core/StringUtils.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/Material.h>
 #include <Strata/Scene/Prefab.h>
@@ -89,6 +91,48 @@ namespace Strata
 				{ "imported", info.Imported },
 				{ "importError", info.Error },
 				{ "importWarnings", info.Warnings } };
+		}
+
+		// asset.import's answer once its imports finished: the items, and a failure (with them in its data) when one failed.
+		EditorCommandResult DescribeExternalImport(const EditorAssetManager& assets, const ExternalImport& import)
+		{
+			nlohmann::json items = nlohmann::json::array();
+			std::vector<std::string> errors;
+			for (const ExternalImportItem& item : import.GetItems())
+			{
+				nlohmann::json described = { { "source", FileSystem::ToUTF8(item.Source) }, { "path", item.Path }, { "folder", item.Folder } };
+				nlohmann::json list = nlohmann::json::array();
+				for (AssetHandle handle : item.Assets)
+				{
+					if (const std::optional<AssetMetadata> metadata = assets.GetMetadata(handle))
+						list.push_back({ { "asset", UUIDToJson(handle) }, { "path", metadata->Path }, { "type", AssetTypeToString(metadata->Type) } });
+				}
+				described["assets"] = std::move(list);
+				if (!item.Error.empty())
+				{
+					described["error"] = item.Error;
+					described["rolledBack"] = item.RolledBack;
+					errors.push_back(item.Error);
+				}
+				items.push_back(std::move(described));
+			}
+			const std::vector<ExternalImportItem>& all = import.GetItems();
+			if (!errors.empty())
+			{
+				const std::string message = all.size() == 1 ? fmt::format("Import failed: {}", errors.front())
+					: fmt::format("{} of {} imports failed; the first: {}", errors.size(), all.size(), errors.front());
+				return EditorCommandResult::Fail(message, { { "items", std::move(items) } });
+			}
+			// The first file's own asset, as asset.import answered for one file.
+			nlohmann::json result = nlohmann::json::object();
+			if (!all.empty() && !all.front().Assets.empty())
+			{
+				if (const std::optional<AssetMetadata> metadata = assets.GetMetadata(all.front().Assets.front()))
+					result = DescribeAsset(*metadata);
+			}
+			result["importError"] = "";
+			result["items"] = std::move(items);
+			return EditorCommandResult::Ok(std::move(result));
 		}
 
 		// Answers a re-import once the background import of `handle` is applied (the editor's frames call
@@ -500,9 +544,21 @@ namespace Strata
 				return EditorCommandResult::Ok(std::move(result));
 			} });
 
-		registry.Register({ "asset.import", "Copies an external file into the project and imports it. Returns the new asset.",
-			ObjectSchema({ { "file", StringSchema("Absolute path of the file to import") }, { "directory", StringSchema("Target directory relative to the asset directory (default: the root)") } },
-				{ "file" }),
+		registry.Register({ "asset.import",
+			"Copies external files and folders into the project and imports them in the background: the editor keeps running, and the command answers "
+			"when every import is done. A file goes into `directory` (\" (n)\" added when its name is taken) with the files it reads (a glTF model's "
+			"buffers and images, in a new folder named after it, keeping their layout); a folder goes there with its tree (asset files, their .meta files, "
+			"what its models read). Returns {asset, path, name, type (of the first file's asset), items: [{source, path, folder, assets: [{asset, path, "
+			"type}], error?, rolledBack?}]}. Fails (Failed) when an import failed, with the items in the error's data; the failed files are removed "
+			"again unless keepOnFailure. wait: false answers at once ({importing: true}); asset.info tells when an asset is imported.",
+			ObjectSchema({
+				{ "file", StringSchema("Absolute path of a file to import") },
+				{ "files", { { "type", "array" }, { "items", { { "type", "string" } } }, { "description", "Absolute paths of files to import" } } },
+				{ "directories", { { "type", "array" }, { "items", { { "type", "string" } } },
+					{ "description", "Absolute paths of folders to import with their trees" } } },
+				{ "directory", StringSchema("Target folder relative to the asset directory (default: the root)") },
+				{ "keepOnFailure", BoolSchema("Keep the files of failed imports in the project, with their errors (default false: they are removed)") },
+				{ "wait", BoolSchema("Answer when the imports are done (default true)") } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				std::string error;
@@ -510,16 +566,72 @@ namespace Strata
 				if (!assets)
 					return EditorCommandResult::Fail(error);
 				CommandArguments arguments(parameters);
-				const std::string file = arguments.GetString("file");
-				const std::string directory = arguments.GetString("directory", "");
+				ExternalImportRequest request;
+				if (arguments.Has("file"))
+					request.Files.push_back(FileSystem::FromUTF8(arguments.GetString("file")));
+				auto readPaths = [&](const char* name, std::vector<std::filesystem::path>& outPaths)
+				{
+					const nlohmann::json* list = JsonUtils::Find(parameters, name);
+					if (!list)
+						return;
+					if (!list->is_array())
+					{
+						arguments.SetError(fmt::format("Parameter '{}' must be an array of absolute paths", name));
+						return;
+					}
+					for (const nlohmann::json& entry : *list)
+					{
+						if (!entry.is_string())
+						{
+							arguments.SetError(fmt::format("Parameter '{}' must be an array of absolute paths", name));
+							return;
+						}
+						outPaths.push_back(FileSystem::FromUTF8(entry.get<std::string>()));
+					}
+				};
+				readPaths("files", request.Files);
+				readPaths("directories", request.Directories);
+				request.TargetDirectory = arguments.GetString("directory", "");
+				request.KeepOnFailure = arguments.GetBool("keepOnFailure", false);
+				const bool wait = arguments.GetBool("wait", true);
+				if (arguments.IsValid() && request.Files.empty() && request.Directories.empty())
+					arguments.SetError("Pass the files to import ('file' or 'files') or folders ('directories')");
+				// What names nothing importable is refused at once, before anything is copied.
+				for (const std::filesystem::path& file : request.Files)
+				{
+					if (!arguments.IsValid())
+						break;
+					if (!FileSystem::IsRegularFile(file))
+						arguments.SetError(fmt::format("'{}' is not a file", FileSystem::ToUTF8(file)));
+					else if (!AssetImporterRegistry::FindByExtension(StringUtils::ToLower(FileSystem::ToUTF8(file.extension()))))
+						arguments.SetError(fmt::format("No importer handles '{}' files ('{}')", FileSystem::ToUTF8(file.extension()), FileSystem::ToUTF8(file)));
+				}
+				for (const std::filesystem::path& directory : request.Directories)
+				{
+					if (arguments.IsValid() && !FileSystem::IsDirectory(directory))
+						arguments.SetError(fmt::format("'{}' is not a folder", FileSystem::ToUTF8(directory)));
+				}
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				const AssetHandle handle = assets->ImportExternalFile(FileSystem::FromUTF8(file), directory, &error);
-				if (!handle.IsValid())
+				const Ref<ExternalImport> import = assets->ImportExternal(request, &error);
+				if (!import)
 					return EditorCommandResult::Fail(error);
-				nlohmann::json result = DescribeAsset(*assets->GetMetadata(handle));
-				result["importError"] = assets->GetImportInfo(handle).Error;
-				return EditorCommandResult::Ok(std::move(result));
+				if (!wait)
+					return EditorCommandResult::Ok({ { "importing", true } });
+
+				const std::weak_ptr<AssetManagerBase> started = assets->weak_from_this();
+				return EditorCommandResult::Defer([import, started](EditorContext& context) -> std::optional<EditorCommandResult>
+				{
+					const Ref<AssetManagerBase> manager = started.lock();
+					EditorAssetManager* current = context.GetAssetManager();
+					if (!manager || manager.get() != current)
+						return EditorCommandResult::Fail("The project was closed before the import finished");
+					if (!import->IsFinished())
+						return std::nullopt;
+					if (!import->GetError().empty())
+						return EditorCommandResult::Fail(import->GetError());
+					return DescribeExternalImport(*current, *import);
+				});
 			} });
 
 		registry.Register({ "asset.move",

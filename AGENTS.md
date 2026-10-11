@@ -451,7 +451,11 @@ The threading model, frame loop and pipelines these rules protect are described 
   what it shares with the manager (`BackgroundWork`), so nothing waits for it to stop. Importers check
   `ImportContext::IsCancelled` between pieces of work that take milliseconds (a new importer with long loops must too;
   the texture cooker checks per block) and read project files through `ReadImportSource`/`ReadImportDependency` (under the
-  manager's file lock, nothing once cancelled). Docs/Architecture.md, "Cancelling imports".
+  manager's file lock, nothing once cancelled). Docs/Architecture.md, "Cancelling imports". `asset.import` never imports
+  in a frame either (`EditorAssetManager::ImportExternal`: copies on an I/O job, imports in the background, rolls back
+  failed items, logs a failure once); an importer whose files name others (a glTF's buffers and images) lists them in
+  `FindExternalFiles` (with `ReadsExternalFiles`), so the copy brings them along, and messages that can quote file bytes
+  are made valid UTF-8 (`StringUtils::MakeValidUTF8`).
 - Engine-native assets (`.stscene`, `.stprefab`, `.stmat`) are JSON documents with a
   `{ "Strata": { "Format": ..., "Version": ... } }` header, stored as-is. Their loaders validate fully;
   JSON entry points are named `FromJson`, byte entry points `Deserialize`.
