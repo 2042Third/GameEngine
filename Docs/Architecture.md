@@ -1423,6 +1423,11 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   batch), `entity.duplicate {entities}` (one deserialization of all of them, so references between copies in different
   sibling lists are remapped too, then one placement batch), `entity.paste`, `entity.setActive {entities}`,
   `component.add {entities}`, `component.remove {entities}` (all or nothing) and `component.set {entities}`;
+  Steps of commands name what they changed ("Create 'Wall'", "Delete 3 entities", "Set Color and Intensity of 'Lamp'",
+  "Move 'Lamp' under 'Crate'"; one entity by its quoted name, more by their number), and copies, pastes and prefab
+  instances get unique names among their siblings (`SceneEdit::MakeNameUnique`: "Crate (1)", the smallest free number
+  after the name without its own; `Scene::HasChildNamed` asks the name index, so the cost follows the entities with that
+  name, not the size of the sibling list).
   `PropertyEdit`'s multi-entity `SetPropertyWithUndo` is the inspector's
   form (it writes only the vector components an edit changed). Continuous
   edits merge by key; the stack keeps 512 steps and a save point for the modified flag, which only steps that change the

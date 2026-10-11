@@ -114,6 +114,10 @@ namespace Strata
 		// changed since, see CompareHierarchyOrder).
 		Entity FindEntityByName(std::string_view name) const;
 		std::vector<Entity> FindEntitiesByTag(std::string_view tag) const;
+		// Whether a child of `parent` (a top-level entity for an invalid parent) other than `except` (none when invalid) is
+		// named `name`. Uses the name index, so it costs the number of entities with that name (editors making names unique
+		// among siblings).
+		bool HasChildNamed(Entity parent, std::string_view name, Entity except) const;
 		size_t GetEntityCount() const { return m_EntityMap.size(); }
 
 		// Root entities in hierarchy order.
@@ -220,7 +224,7 @@ namespace Strata
 
 		// Diagnostics (cumulative since the scene was created): world transforms recomputed by UpdateWorldTransforms (and the
 		// number of its calls that recomputed some of them on the job system), full hierarchy order computations, entities
-		// examined by FindEntityByName, FindEntitiesByTag and GetPrimaryCameraEntity (excluding index builds), and name or tag
+		// examined by FindEntityByName, FindEntitiesByTag, HasChildNamed and GetPrimaryCameraEntity (excluding index builds), and name or tag
 		// index builds.
 		uint64_t GetTransformUpdateCount() const { return m_TransformUpdateCount; }
 		uint64_t GetParallelTransformUpdateCount() const { return m_ParallelTransformUpdateCount; }

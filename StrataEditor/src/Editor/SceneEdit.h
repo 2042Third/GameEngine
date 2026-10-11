@@ -8,7 +8,10 @@
 
 #include <nlohmann/json.hpp>
 
+#include <span>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -35,6 +38,20 @@ namespace Strata
 		std::vector<EntityState> CaptureEntities(const Scene& scene, const std::vector<UUID>& ids);
 		// The entity followed by all its descendants, in hierarchy order.
 		std::vector<UUID> CollectSubtree(const Scene& scene, UUID id);
+		// How undo steps name what they changed: one entity by its name in quotes ("'Wall'", cut to c_MaxNameInStep
+		// characters), several by their number ("3 entities").
+		constexpr size_t c_MaxNameInStep = 40;
+		std::string QuoteName(std::string_view name);
+		std::string DescribeEntities(std::span<const Entity> entities);
+		// The name without a copy number: "Crate (2)" -> "Crate" (names that only look like one stay whole: "(1)", "A (x)").
+		std::string GetBaseName(std::string_view name);
+		// Makes the entity's name unique among its siblings (the other children of its parent, or the other top-level
+		// entities): when one of them has its name, it becomes "<base> (n)" with the smallest n from 1 that none has
+		// ("Crate" -> "Crate (1)", a copy of "Crate (1)" -> "Crate (2)"). Renames through the name's update signal; returns
+		// whether it renamed. Commands naming many entities pass the same `numbers` for all of them: the next number to try
+		// per parent and name, so that a thousand copies of one name cost a thousand checks, not half a million.
+		using NameNumbers = std::unordered_map<std::string, uint64_t>;
+		bool MakeNameUnique(Scene& scene, Entity entity, NameNumbers* numbers = nullptr);
 
 		// Makes the scene match the states: removes entities that must not exist, recreates missing ones (with their
 		// UUIDs), replaces the components that differ and restores parents and sibling order. States must be
@@ -100,6 +117,8 @@ namespace Strata
 		// Adds an entity (and its descendants) the edit created; call after creating it.
 		void TrackCreated(UUID id);
 
+		// Names the step after all, once what it made is known (e.g. the names of pasted entities).
+		void SetName(std::string name) { m_Name = std::move(name); }
 		// Records the edit on the stack. Returns false when nothing changed.
 		bool Commit(UndoStack& undoStack);
 		// Restores the tracked entities to their state before the edit (a failed edit) and ends the transaction.

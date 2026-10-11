@@ -140,7 +140,7 @@ TEST_SUITE("Editor.Commands")
 		CHECK(status["selection"]["primary"] == entity);
 		CHECK(status["undo"]["position"] == 1);
 		CHECK(status["undo"]["count"] == 1);
-		CHECK(status["undo"]["undo"] == "Create Entity");
+		CHECK(status["undo"]["undo"] == "Create 'Player'");
 		CHECK(status["automation"]["port"] == 1234);
 
 		harness.Run("play.start");

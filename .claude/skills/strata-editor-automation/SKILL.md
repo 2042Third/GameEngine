@@ -149,7 +149,9 @@ editor started with `--no-gpu` (use `--headless`):
   back as a quaternion). Property names are case-insensitive. `component.get` shows the accepted format of every value.
   Values outside a property's range (`component.list`, `material.get` describe the ranges) are refused with `-32602`
   naming the range (`Text.FontSize must be between 1 and 1024, not 0.5`); nothing is clamped or changed.
-- **Undo**: every successful mutating command is one undo step (`edit.undo`, `edit.redo`, `edit.history`). Material
+- **Undo**: every successful mutating command is one undo step (`edit.undo`, `edit.redo`, `edit.history`, whose steps say
+  what they changed: "Create 'Wall'", "Set Intensity of 3 entities"). Copies, pastes and prefab instances are named
+  uniquely among their siblings ("Crate (1)"): read the names back from the results' IDs rather than assuming them. Material
   edits are steps of the same history, but they save their file themselves, so they never mark the scene unsaved.
 - **Unsaved changes are never discarded silently**: `scene.open`, `scene.new`, `project.open`, `project.create`,
   `project.close`, `project.openSample` and `editor.quit` fail (`-32005`, naming the scene) while the edited scene has

@@ -800,7 +800,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `entity.duplicate {entities}`, `entity.copy {entities}` and `entity.paste {data, parent, index}` (fresh IDs, references
   among the pasted entities remapped, no prefab links added), `entity.setActive {entities}`, `component.add {entities}`
   (where the component is missing), `component.remove {entities}` (every listed entity must have the component, or
-  nothing is removed) and `component.set {entities}`. The inspector edits a
+  nothing is removed) and `component.set {entities}`. Copies, pastes and prefab instances get names unique among their
+  siblings ("Crate (1)", `SceneEdit::MakeNameUnique`, through `Scene::HasChildNamed`'s name index), and the steps of commands
+  say what they changed ("Create 'Wall'", "Delete 3 entities", "Set Mesh of 'Ground'": `SceneEdit::QuoteName`,
+  `DescribeEntities`), which `edit.history` and the Activity panel show. The inspector edits a
   multi-selection through `PropertyEdit` (`GetSharedProperty`, multi-entity `SetPropertyWithUndo`, `RotationAnglesEdit`
   for rotations edited as Euler angles, `GetDefaultComponentValues` for Reset).
 - `project.export` writes a playable game outside the project in the background (`GameExport`; the command answers when

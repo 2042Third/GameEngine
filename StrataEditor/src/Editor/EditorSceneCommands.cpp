@@ -2,6 +2,7 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/ProjectTemplates.h"
+#include "Editor/SceneEdit.h"
 
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Core/JsonUtils.h>
@@ -17,9 +18,11 @@
 #include <cmath>
 #include <iterator>
 #include <limits>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 #include <utility>
 #include <vector>
 
@@ -84,6 +87,22 @@ namespace Strata
 				return nullptr;
 			}
 			return info;
+		}
+
+		// The undo step of component.set: the properties it sets by their display names, of the entities ("Set Material of
+		// 'Ground'", "Set Intensity and Color of 3 entities"), or the component for more than two ("Edit Point Light of 'Lamp'").
+		std::string DescribeSetValues(const ComponentInfo& info, const nlohmann::json& values, std::span<const Entity> entities)
+		{
+			std::vector<std::string> names;
+			for (const auto& [key, value] : values.items())
+			{
+				const PropertyInfo* property = info.FindProperty(key);
+				names.push_back(property ? property->DisplayName : key);
+			}
+			const std::string target = SceneEdit::DescribeEntities(entities);
+			if (names.empty() || names.size() > 2)
+				return fmt::format("Edit {} of {}", info.DisplayName, target);
+			return fmt::format("Set {} of {}", names.size() == 1 ? names[0] : fmt::format("{} and {}", names[0], names[1]), target);
 		}
 
 		// What mutating commands report while the scene is running.
@@ -387,7 +406,7 @@ namespace Strata
 				if (!arguments.IsValid())
 					return arguments.Fail();
 
-				SceneEditTransaction transaction(scene, "Create Entity", {});
+				SceneEditTransaction transaction(scene, fmt::format("Create {}", SceneEdit::QuoteName(name)), {});
 				Entity entity = parent ? scene.CreateChildEntity(parent, name) : scene.CreateEntity(name);
 				if (!entity)
 					return RollBack(transaction, fmt::format("The scene is full: it holds at most {} entities", Scene::c_MaxEntities), EditorCommandError::Failed);
@@ -408,7 +427,7 @@ namespace Strata
 				if (!arguments.IsValid())
 					return arguments.Fail();
 
-				SceneEditTransaction transaction(scene, entities.size() == 1 ? "Delete Entity" : "Delete Entities", {});
+				SceneEditTransaction transaction(scene, fmt::format("Delete {}", SceneEdit::DescribeEntities(entities)), {});
 				for (Entity entity : entities)
 					transaction.TrackSubtree(entity.GetUUID());
 				// One batch: each sibling list is compacted once (entities nested in another listed one go with it).
@@ -443,7 +462,7 @@ namespace Strata
 				// level (the copies at the end of the roots, which leaves every original's position as it was) and then placed in
 				// one batch under their originals' parents, keeping the local transforms they had there. Both batches stay linear
 				// when many entities of a long list are duplicated.
-				SceneEditTransaction transaction(scene, originals.size() == 1 ? "Duplicate Entity" : "Duplicate Entities", {});
+				SceneEditTransaction transaction(scene, fmt::format("Duplicate {}", SceneEdit::DescribeEntities(originals)), {});
 				EntityInstantiationOptions options;
 				options.GenerateNewUUIDs = true;
 				options.ReportUnknownComponents = false; // Entities of this scene: their unknown components are no news
@@ -477,6 +496,10 @@ namespace Strata
 				}
 				if (!scene.PlaceEntities(placements))
 					return RollBack(transaction, "Placing the copies failed", EditorCommandError::Failed);
+				// "Crate" -> "Crate (1)": a copy is told apart from its original among their siblings.
+				SceneEdit::NameNumbers numbers;
+				for (const Entity copy : copies)
+					SceneEdit::MakeNameUnique(scene, copy, &numbers);
 				return Finish(context, transaction, { { "id", UUIDToJson(copies.front().GetUUID()) }, { "entities", ToJson(copies) } });
 			} });
 
@@ -548,6 +571,10 @@ namespace Strata
 					if (!scene.PlaceEntities(placements))
 						return RollBack(transaction, "Placing the pasted entities failed", EditorCommandError::Failed);
 				}
+				SceneEdit::NameNumbers numbers;
+				for (const Entity root : roots)
+					SceneEdit::MakeNameUnique(scene, root, &numbers);
+				transaction.SetName(fmt::format("Paste {}", SceneEdit::DescribeEntities(roots)));
 				return Finish(context, transaction, { { "entities", ToJson(roots) }, { "warnings", warnings } });
 			} });
 
@@ -615,7 +642,8 @@ namespace Strata
 						return EditorCommandResult::InvalidParameters("The new parent is one of the moved entities or one of their descendants");
 				}
 
-				SceneEditTransaction transaction(scene, entities.size() == 1 ? "Reparent Entity" : "Reparent Entities", GetIds(entities));
+				SceneEditTransaction transaction(scene, parent ? fmt::format("Move {} under {}", SceneEdit::DescribeEntities(entities), SceneEdit::QuoteName(parent.GetName()))
+					: fmt::format("Move {} to the top level", SceneEdit::DescribeEntities(entities)), GetIds(entities));
 				const UUID parentId = parent ? parent.GetUUID() : UUID::Null();
 				std::vector<Scene::EntityPlacement> placements;
 				std::vector<std::pair<Entity, glm::mat4>> reparented; // With the world transform to keep
@@ -652,7 +680,7 @@ namespace Strata
 				const std::string name = arguments.GetString("name");
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				SceneEditTransaction transaction(scene, "Rename Entity", { entity.GetUUID() });
+				SceneEditTransaction transaction(scene, fmt::format("Rename {} to {}", SceneEdit::QuoteName(entity.GetName()), SceneEdit::QuoteName(name)), { entity.GetUUID() });
 				entity.GetComponent<NameComponent>().Name = name;
 				entity.MarkModified<NameComponent>();
 				return Finish(context, transaction);
@@ -676,9 +704,7 @@ namespace Strata
 				const bool active = arguments.GetBool("active", true);
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				const std::string name = entities.size() == 1 ? (active ? "Activate Entity" : "Deactivate Entity")
-					: (active ? "Activate Entities" : "Deactivate Entities");
-				SceneEditTransaction transaction(scene, name, GetIds(entities));
+				SceneEditTransaction transaction(scene, fmt::format("{} {}", active ? "Activate" : "Deactivate", SceneEdit::DescribeEntities(entities)), GetIds(entities));
 				for (Entity entity : entities)
 					entity.SetActive(active);
 				return Finish(context, transaction);
@@ -733,7 +759,7 @@ namespace Strata
 				if (!arguments.IsValid())
 					return arguments.Fail();
 
-				SceneEditTransaction transaction(scene, fmt::format("Add {}", info->DisplayName), GetIds(entities));
+				SceneEditTransaction transaction(scene, fmt::format("Add {} to {}", info->DisplayName, SceneEdit::DescribeEntities(entities)), GetIds(entities));
 				std::string error;
 				for (Entity entity : entities)
 				{
@@ -765,7 +791,7 @@ namespace Strata
 						return EditorCommandResult::Fail(fmt::format("'{}' has no {} component", entity.GetName(), info->Name));
 				}
 
-				SceneEditTransaction transaction(scene, fmt::format("Remove {}", info->DisplayName), GetIds(entities));
+				SceneEditTransaction transaction(scene, fmt::format("Remove {} from {}", info->DisplayName, SceneEdit::DescribeEntities(entities)), GetIds(entities));
 				std::string error;
 				for (Entity entity : entities)
 				{
@@ -815,7 +841,7 @@ namespace Strata
 						return EditorCommandResult::Fail(fmt::format("'{}' has no {} component (use component.add)", entity.GetName(), info->Name));
 				}
 
-				SceneEditTransaction transaction(scene, fmt::format("Edit {}", info->DisplayName), GetIds(entities));
+				SceneEditTransaction transaction(scene, DescribeSetValues(*info, values, entities), GetIds(entities));
 				std::string error;
 				for (const Entity entity : entities)
 				{
@@ -868,6 +894,11 @@ namespace Strata
 				std::string error;
 				if (components && !roots.empty() && !ApplyComponents(roots.front(), *components, &error))
 					return RollBack(transaction, error, EditorCommandError::InvalidParameters);
+				// A second instance among the same siblings: "Crate (1)".
+				SceneEdit::NameNumbers numbers;
+				for (const Entity root : roots)
+					SceneEdit::MakeNameUnique(scene, root, &numbers);
+				transaction.SetName(fmt::format("Instantiate {}", SceneEdit::DescribeEntities(roots)));
 				return Finish(context, transaction, { { "entities", std::move(ids) } });
 			} });
 	}

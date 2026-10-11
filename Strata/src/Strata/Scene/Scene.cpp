@@ -527,6 +527,28 @@ namespace Strata
 		return first;
 	}
 
+	bool Scene::HasChildNamed(Entity parent, std::string_view name, Entity except) const
+	{
+		if (!m_NameIndex.Built)
+			BuildLookupIndex(m_NameIndex, true);
+
+		const auto bucket = m_NameIndex.Buckets.find(HashLookupValue(name));
+		if (bucket == m_NameIndex.Buckets.end())
+			return false;
+		const UUID parentId = parent ? parent.GetUUID() : UUID::Null();
+		const entt::entity skipped = except ? except.GetHandle() : entt::entity(entt::null);
+		for (const entt::entity handle : bucket->second)
+		{
+			m_LookupVisitCount++;
+			if (handle == skipped || m_Registry.get<NameComponent>(handle).Name != name)
+				continue;
+			const RelationshipComponent* relationship = m_Registry.try_get<RelationshipComponent>(handle);
+			if ((relationship ? relationship->Parent : UUID::Null()) == parentId)
+				return true;
+		}
+		return false;
+	}
+
 	std::vector<Entity> Scene::FindEntitiesByTag(std::string_view tag) const
 	{
 		if (!m_TagIndex.Built)
