@@ -101,11 +101,15 @@ namespace Strata
 	// offsets inside the data, levels that do not overlap and, in version 2, that are stored smallest first after the
 	// header. nullopt with the reason in outError for anything else.
 	std::optional<CookedTextureView> ParseCookedTexture(std::span<const uint8_t> data, std::string* outError = nullptr);
-	// The same for the start of cooked data of `totalSize` bytes, e.g. its header and mip tail read by byte range
-	// (CookedTextureLayout::GetMipTailByteRange): everything is validated against the whole size, and GetLevelData gives the
-	// levels the prefix holds. A prefix that ends inside the header fails. Version 1 data stores its small levels last, so
-	// only all of it is accepted.
-	std::optional<CookedTextureView> ParseCookedTexturePrefix(std::span<const uint8_t> prefix, uint64_t totalSize, std::string* outError = nullptr);
+	// Parses the first bytes of a version 2 cooked texture of storedSize bytes (e.g. its header and mip tail, read by byte
+	// range), validated like the whole (every level's offset and size against storedSize): GetLevelData gives the levels
+	// the prefix holds, from the smallest up. nullopt with the reason for version 1 data (its small levels come last) and
+	// for prefixes that hold no level.
+	std::optional<CookedTextureView> ParseCookedTexturePrefix(std::span<const uint8_t> data, uint64_t storedSize, std::string* outError = nullptr);
+	// How many first bytes of a version 2 cooked texture of storedSize bytes hold its header and the levels of at most
+	// tailDimension texels a side (GetMipTailByteRange), found from its first bytes (`head`, which must hold the header and
+	// mip table). nullopt for version 1 data, data that does not parse, and textures without such a level.
+	std::optional<uint64_t> GetCookedTexturePrefixSize(std::span<const uint8_t> head, uint64_t storedSize, uint32_t tailDimension);
 
 	struct CookedTextureDescription
 	{

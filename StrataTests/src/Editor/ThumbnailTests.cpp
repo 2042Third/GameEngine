@@ -129,11 +129,12 @@ TEST_SUITE("Editor.Thumbnails")
 		CHECK(image.Height == 64);
 		CHECK(PixelAt(image, 127, 63) == glm::ivec4(10, 20, 30, 255));
 
-		// A view of the header alone has no level to show.
+		// A view of data that holds none of its levels (the header alone) has nothing to show.
 		const Ref<Texture> chain = CreateUniformTexture(TextureFormat::RGBA8, 256, 256, color);
 		const std::vector<uint8_t> cooked = chain->Serialize();
-		const std::optional<CookedTextureView> header = ParseCookedTexturePrefix(std::span<const uint8_t>(cooked.data(), static_cast<size_t>(chain->GetCookedLayout().HeaderSize)), cooked.size());
+		std::optional<CookedTextureView> header = ParseCookedTexture(cooked);
 		REQUIRE(header);
+		header->Data = std::span<const uint8_t>(cooked.data(), static_cast<size_t>(chain->GetCookedLayout().HeaderSize));
 		error.clear();
 		CHECK_FALSE(ThumbnailCache::MakeTextureThumbnail(*header, &error));
 		CHECK_FALSE(error.empty());

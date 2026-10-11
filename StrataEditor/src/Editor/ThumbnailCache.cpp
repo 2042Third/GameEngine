@@ -618,43 +618,37 @@ namespace Strata
 				return assets->ReadStoredRange(handle, offset, size, data, &result.Error);
 			};
 
-			// The header first; then everything up to the end of the largest level that fits (stored smallest first, right after
-			// the header), or of the smallest level when none fits.
+			// The header first, which tells how many first bytes hold the levels that fit c_Size (stored smallest first, right
+			// after the header) or, for a texture without such a level, the smallest levels; then those bytes, unless the first
+			// read held them. Version 1 data (levels largest first) and a header longer than the first read are read whole.
 			std::vector<uint8_t> data;
 			std::optional<CookedTextureView> view;
 			if (storedSize == 0)
+			{
 				result.Error = "The texture's stored size is unknown";
+			}
 			else if (read(0, std::min(storedSize, c_TextureHeaderBytes), data))
 			{
-				std::string error;
-				view = ParseCookedTexturePrefix(data, storedSize, &error);
-				if (!view && storedSize <= c_MaxTextureReadBytes && data.size() < storedSize)
+				std::optional<uint64_t> end;
+				for (uint32_t dimension = c_Size; !end && dimension <= c_MaxCookedTextureSize; dimension *= 2)
+					end = GetCookedTexturePrefixSize(data, storedSize, dimension);
+				if (end && *end > c_MaxTextureReadBytes)
 				{
-					// Version 1 data (levels largest first) is read whole.
-					view.reset();
+					result.Error = "The texture has no level small enough to read for a thumbnail";
+				}
+				else if (end)
+				{
+					if (*end <= data.size() || read(0, *end, data))
+						view = ParseCookedTexturePrefix(std::span<const uint8_t>(data).first(static_cast<size_t>(*end)), storedSize, &result.Error);
+				}
+				else if (storedSize <= c_MaxTextureReadBytes)
+				{
 					if (read(0, storedSize, data))
 						view = ParseCookedTexture(data, &result.Error);
 				}
-				else if (view)
-				{
-					const CookedTextureByteRange tail = view->Layout.GetMipTailByteRange(c_Size);
-					const CookedTextureLevel& smallest = view->Layout.Levels[view->Layout.MipCount - 1];
-					const uint64_t end = tail.LevelCount > 0 ? tail.Offset + tail.Size : smallest.Offset + smallest.Size;
-					if (end > c_MaxTextureReadBytes)
-					{
-						view.reset();
-						result.Error = "The texture has no level small enough to read for a thumbnail";
-					}
-					else if (end > data.size())
-					{
-						view.reset();
-						if (read(0, end, data))
-							view = ParseCookedTexturePrefix(data, storedSize, &result.Error);
-					}
-				}
 				else
 				{
-					result.Error = error;
+					result.Error = "The texture cannot be read in parts (an old cooked form) and is too large to read whole";
 				}
 			}
 			if (view)

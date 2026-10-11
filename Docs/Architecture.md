@@ -911,8 +911,9 @@ Textures are stored the way the GPU samples them: block-compressed, with their m
   filter, wrap, name length, data offset), a mip table (width, height, offset, size per level), the debug name, then the
   levels smallest first, each 16-byte aligned. The mip tail - every level up to 128x128 - is therefore one range right
   after the header (`CookedTextureLayout::GetMipTailByteRange`, `Texture::GetMipTailByteRange`), which streaming can
-  read on its own (`ParseCookedTexturePrefix` parses such a start of the data - the header and tail - validated against
-  the whole size, as the editor's thumbnails read it). `ParseCookedTexture` validates everything (format, sizes per level in whole blocks, offsets inside the
+  read on its own (`GetCookedTexturePrefixSize` finds from the header how many first bytes hold the levels up to a size,
+  and `ParseCookedTexturePrefix` parses such a start of version 2 data - the header and the levels it holds - validated
+  against the whole size, as the editor's thumbnails read it). `ParseCookedTexture` validates everything (format, sizes per level in whole blocks, offsets inside the
   data and aligned, levels that do not overlap and are stored smallest first, known flags) and returns a
   `CookedTextureView` that refers to the data without copying; `Texture::Deserialize` builds on it and keeps the levels'
   `CookedTextureLayout` (offsets, sizes and their format) after the CPU copy is gone. Version 1 (the
@@ -1445,9 +1446,10 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   it is on screen (`Request`: its texture once ready, else null and the tile draws the type's icon). Textures: an I/O job
   reads the cooked texture's header and then everything up to the end of the largest level of at most 128 texels a side
   (the levels are stored smallest first, so that is the mip tail; a texture without such a level has its smallest level
-  read, up to 64 MiB) by byte range (`ReadStoredRange`) and decodes it (`MakeTextureThumbnail`: block-compressed levels
-  through `BlockCompression`, one channel as gray, normal maps with their Z, HDR tone mapped), so a thumbnail never loads
-  a texture. Materials (on a sphere), meshes, models and prefabs (instantiated) are rendered in a scene of their own under
+  read, up to 64 MiB) by byte range (`ReadStoredRange`; `GetCookedTexturePrefixSize` tells from the header how far to
+  read and `ParseCookedTexturePrefix` validates what was read against the whole size) and decodes it
+  (`MakeTextureThumbnail`: block-compressed levels through `BlockCompression`, one channel as gray, normal maps with their
+  Z, HDR tone mapped), so a thumbnail never loads a texture. Materials (on a sphere), meshes, models and prefabs (instantiated) are rendered in a scene of their own under
   the preview lighting by one offscreen `SceneRenderer` (128x128, no entity IDs, one shadow cascade), one asset at a time:
   their dependency closure loads at Low priority (`RequestLoadWithDependencies`, pinned until the render is read back),
   the camera frames what renders (`SceneBounds`, `EditorCamera::FitBounds`; a material's sphere fills the view), the

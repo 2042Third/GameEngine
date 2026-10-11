@@ -121,6 +121,9 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		const std::filesystem::path project = Tests::CopyFeatureProject(Tests::CreateTemporaryDirectory("GPUThumbnails") / "Project").parent_path();
 		// A texture whose mip chain is far larger than the levels a thumbnail reads.
 		REQUIRE(FileSystem::WriteBytes(project / "Assets" / "Textures" / "Large.png", Tests::CreateSolidPNG(1024, 1024, 40, 90, 200)));
+		// And one without mips.
+		REQUIRE(FileSystem::WriteBytes(project / "Assets" / "Textures" / "Wide.png", Tests::CreateSolidPNG(512, 256, 200, 90, 40)));
+		REQUIRE(FileSystem::WriteText(project / "Assets" / "Textures" / "Wide.png.meta", "{ \"Handle\": \"57AD57AD57AD57AD\", \"ImportSettings\": { \"GenerateMips\": false } }"));
 		std::vector<AssetHandle> all;
 		{
 			ThumbnailHarness harness(gpu, project);
@@ -155,6 +158,16 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 			// The large texture's header and levels up to 128x128 (a sixteenth of the chain and less), the small ones whole.
 			CHECK(textures.StoredBytesRead < assets.GetMetadata(large)->StoredSize / 10);
 
+			// A texture without mips has no level that small: its one level is read (after the header) and made smaller.
+			const AssetHandle wide = harness.Find("Textures/Wide.png");
+			harness.RequestUntilIdle({ wide });
+			CHECK(harness.Thumbnails().GetState(wide) == ThumbnailState::Ready);
+			REQUIRE(harness.Thumbnails().Request(wide));
+			CHECK(harness.Thumbnails().Request(wide)->getDesc().width == ThumbnailCache::c_Size);
+			CHECK(harness.Thumbnails().Request(wide)->getDesc().height == ThumbnailCache::c_Size / 2);
+			CHECK(assets.GetAssetState(wide) == AssetState::Unloaded);
+			CHECK(harness.Thumbnails().GetStats().StoredBytesRead - textures.StoredBytesRead <= assets.GetMetadata(wide)->StoredSize + 4096);
+
 			// Rendered: a material on a sphere, a mesh, a model and a prefab.
 			harness.RequestUntilIdle({ material, mesh, model, prefab });
 			for (AssetHandle rendered : { material, mesh, model, prefab })
@@ -174,7 +187,7 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 
 			// Kept on disk with their keys.
 			harness.WaitForIndex();
-			all = { checker, sky, large, material, mesh, model, prefab };
+			all = { checker, sky, large, wide, material, mesh, model, prefab };
 			for (AssetHandle handle : all)
 				CHECK(FileSystem::IsRegularFile(project / ".strata" / "Thumbnails" / (UUIDToJson(handle).get<std::string>() + ".png")));
 			CHECK(harness.Thumbnails().GetStats().FilesWritten == all.size());

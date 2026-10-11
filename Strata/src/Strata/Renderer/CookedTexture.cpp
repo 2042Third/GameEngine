@@ -271,25 +271,42 @@ namespace Strata
 		return Fail(outError, fmt::format("Unsupported cooked texture version {}", version));
 	}
 
-	std::optional<CookedTextureView> ParseCookedTexturePrefix(std::span<const uint8_t> prefix, uint64_t totalSize, std::string* outError)
+	std::optional<CookedTextureView> ParseCookedTexturePrefix(std::span<const uint8_t> data, uint64_t storedSize, std::string* outError)
 	{
-		BinaryReader reader(prefix);
+		BinaryReader reader(data);
 		const uint32_t magic = reader.Read<uint32_t>();
 		const uint32_t version = reader.Read<uint32_t>();
 		if (!reader.IsValid() || magic != c_CookedTextureMagic)
 			return Fail(outError, "Not a cooked Strata texture");
-		if (prefix.size() > totalSize)
-			return Fail(outError, "The start of the cooked texture is longer than the texture");
-		if (version == 1)
-		{
-			// Its levels are stored largest first: only the whole data has the small ones.
-			if (prefix.size() != totalSize)
-				return Fail(outError, "Version 1 cooked textures can only be read whole");
-			return ParseVersion1(prefix, outError);
-		}
-		if (version == 2)
-			return ParseVersion2(prefix, totalSize, outError);
-		return Fail(outError, fmt::format("Unsupported cooked texture version {}", version));
+		// Version 1 stores its levels largest first: none of its prefixes holds a level.
+		if (version != 2)
+			return Fail(outError, fmt::format("Cooked texture version {} cannot be read in parts", version));
+		if (storedSize < data.size())
+			return Fail(outError, "The cooked texture is larger than its stored size");
+		std::optional<CookedTextureView> view = ParseVersion2(data, storedSize, outError);
+		if (!view)
+			return std::nullopt;
+		// Stored smallest first: a prefix that holds any level holds the smallest.
+		const CookedTextureLevel& smallest = view->Layout.Levels[view->Layout.MipCount - 1];
+		if (smallest.Offset + smallest.Size > data.size())
+			return Fail(outError, "The cooked texture's prefix holds no level");
+		return view;
+	}
+
+	std::optional<uint64_t> GetCookedTexturePrefixSize(std::span<const uint8_t> head, uint64_t storedSize, uint32_t tailDimension)
+	{
+		BinaryReader reader(head);
+		const uint32_t magic = reader.Read<uint32_t>();
+		const uint32_t version = reader.Read<uint32_t>();
+		if (!reader.IsValid() || magic != c_CookedTextureMagic || version != 2 || storedSize < head.size())
+			return std::nullopt;
+		const std::optional<CookedTextureView> view = ParseVersion2(head, storedSize, nullptr);
+		if (!view)
+			return std::nullopt;
+		const CookedTextureByteRange tail = view->Layout.GetMipTailByteRange(tailDimension);
+		if (tail.LevelCount == 0)
+			return std::nullopt;
+		return tail.Offset + tail.Size;
 	}
 
 	CookedTextureLayout ComputeCookedTextureLayout(const CookedTextureDescription& description)
