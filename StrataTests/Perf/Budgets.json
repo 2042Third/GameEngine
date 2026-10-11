@@ -92,11 +92,11 @@
 	"PerfGPU.Renderer.Render10kMaterials.OpaqueDrawCalls": { "Measured": 1, "Budget": 1, "Unit": "count" },
 	"PerfGPU.Renderer.Render300kCubes": { "Measured": 2.865, "Budget": 4.297, "Unit": "ms" },
 	"PerfGPU.Streaming.FramesToSettle": { "Measured": 4, "Budget": 6, "Unit": "count" },
-	"PerfGPU.Streaming.MaxFinalizeTime": { "Measured": 4.156, "Budget": 5.44, "Unit": "ms" },
+	"PerfGPU.Streaming.MaxFinalizeTime": { "Measured": 4.997, "Budget": 5.44, "Unit": "ms" },
 	"PerfGPU.Streaming.MaxResidentTextures": { "Measured": 33.55, "Budget": 50.32, "Unit": "MB" },
 	"PerfGPU.Streaming.PeakPrivateMemory": { "Measured": 395.8, "Budget": 593.7, "Unit": "MB" },
 	"PerfGPU.Streaming.PeakPrivateMemoryAllResident": { "Measured": 518.1, "Budget": 650.0, "Unit": "MB" },
-	"PerfGPU.Streaming.MaxFinalizeTimeAllResident": { "Measured": 4.265, "Budget": 6.397, "Unit": "ms" },
+	"PerfGPU.Streaming.MaxFinalizeTimeAllResident": { "Measured": 3.468, "Budget": 5.202, "Unit": "ms" },
 	"PerfGPU.Streaming.RuntimeMaxFinalizeStage": { "Measured": 4.587, "Budget": 6.88, "Unit": "ms" },
-	"PerfGPU.Streaming.RuntimePeakPrivateMemory": { "Measured": 642.5, "Budget": 650.0, "Unit": "MB" }
+	"PerfGPU.Streaming.RuntimePeakPrivateMemory": { "Measured": 636.8, "Budget": 650.0, "Unit": "MB" }
 }

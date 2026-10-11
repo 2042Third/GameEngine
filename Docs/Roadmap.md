@@ -122,12 +122,15 @@ machine, quiet:
   texture is compressed to BC7 on every core (10-30 ms before), and a frame never picks up an import's compression
   while it waits for its own work; the editor opens projects at once and imports in the background (a fresh copy of the
   stress project: the scan takes 38 ms instead of 7.6-7.9 s, the editor is on screen after 1.1 s and the 18 textures
-  arrive within about 8 s, loads of them waiting for their imports); pack blocks that compress by less than an eighth are stored and read straight into
-  place, which brought streaming from version 2 back from 1.08-1.14 to 1.02-1.07 times version 1's time with BC textures;
-  every perf check of the wave is confirmed, with the workstreams' acceptance limits as budgets. `PerfStability.py
-  --runs 5 --wait-quiet 20` on the merged tree: 5 of 5 runs passed with the final budgets, at most two confirmations
-  per run (two earlier campaigns of five, before budgets were rebased on the rebuilt panels and on BC7 uploads, passed
-  2 and 4).
+  arrive within about 8 s, loads of them waiting for their imports); pack blocks that compress by less than an eighth
+  are stored and read straight into place, which brought streaming from version 2 back from 1.08-1.14 to 1.02-1.07
+  times version 1's time with BC textures; every perf check of the wave is confirmed, with the workstreams' acceptance
+  limits as budgets. `PerfStability.py --runs 5 --wait-quiet 20` on the merged tree after the review round, with
+  main's idle-frame budgets back and finalization at 5.44 ms: 4 of 5 runs passed, at most three confirmations per run,
+  all of them editor idle frames; the failed run's `PerfGPU.Editor.PlayFrameNested100k` stayed over its budget in all
+  three attempts (0.36-0.39 ms against 0.3313; see the open regression below). Tight but passing in every run:
+  `PerfGPU.Streaming.MaxFinalizeTime` (4.19-5.31 ms against 5.44) and `RuntimePeakPrivateMemory` (632-646 MB against
+  650).
 
 Open items and deferrals later waves own:
 
@@ -142,7 +145,7 @@ Open items and deferrals later waves own:
 - Textures: `asset.import` still cooks on the main thread (about 1.5 s for a 4096x4096 BC7 color texture; asynchronous
   import is `content-and-prefabs`'); HDR textures stay RGBA16F until a BC6H encoder exists; a BC7 upload step carries
   twice BC1's bytes, and the frame's first step goes whatever the deadline says (later finalizations of a frame past
-  its deadline wait for the next frame), so a frame that finalizes a large texture still takes up to about 4.2 ms in the
+  its deadline wait for the next frame), so a frame that finalizes a large texture still takes 4.2-5.3 ms in the
   evicting sweep (budget 5.44 ms) until smaller upload steps (`mip-streaming`).
 - A world seen all at once still keeps every texture in view resident: no budget evicts what is in view, so the stress
   world peaks at about 540 MB with BC textures until mip streaming (`mip-streaming`). Mesh uploads still go through
@@ -163,15 +166,19 @@ Open items and deferrals later waves own:
   1,000,000-entity scene in about 0.7 s (`scene-streaming`).
 - Open regression, the owner's decision: idle editor frames of `PerfGPU.Editor`'s generated 100,000- and
   1,000,000-entity scenes cost 0.27-0.31 ms, 0.04-0.06 ms more than before the wave (0.22-0.25 ms), and run against
-  main's budgets (0.358, 0.3313, 0.3294 and 0.3238 ms; raising them broke the ratchet and was undone), which the
-  1,000,000-entity play frame meets with little room (0.27-0.39 ms per attempt; confirmation passes it). `editor.perf`
-  with temporary stages puts most of the increase in the Inspector's scene settings shown with nothing selected (about
-  0.025 ms, the Gravity row's axis fields 0.008 ms of it, where main drew a one-line hint); the rest is spread thinly
-  (the richer frame and assets pills 0.003 and 0.004 ms, the hidden Asset tab 0.001 ms, closed panels' `OnUpdate`
-  0.0014 ms in all). Drawing cheaper widgets would recover part; a larger lever lies outside the wave: ImGui's GLFW
-  backend (`ImGui_ImplGlfw_NewFrame`) takes about 0.05 ms of every editor frame in Win32 calls for monitors and
-  multi-viewport support that it makes every frame. Rebasing the budgets on the new cost needs the owner's approval,
-  recorded here with the measurements.
+  main's budgets (0.358, 0.3313, 0.3294 and 0.3238 ms; raising them broke the ratchet and was undone), which they meet
+  with little room: the first attempt of a run often measures 0.35-0.40 ms, so most runs need a confirmation, and one
+  run in five failed (above). `editor.perf` with temporary stages, and a sampling profile of both editors on the
+  100,000-entity scene (median work 0.2315 ms on main, 0.2837 ms merged), put the increase in the Inspector's scene
+  settings shown with nothing selected (0.025-0.033 ms, where main drew a one-line hint; the Gravity row's axis fields
+  0.008 ms of it), the viewport's `SceneRenderer::Render` (about 0.02 ms more, in bloom dispatches and NVRHI state
+  changes, not attributed further) and, spread thinly, the Hierarchy, the richer frame and assets pills (0.003 and
+  0.004 ms) and ImGui's draw data (0.009 ms); closed panels' `OnUpdate` costs 0.0014 ms in all. Drawing cheaper
+  widgets would recover part. The largest single cost of an idle frame lies outside the wave: ImGui's GLFW backend sets
+  the window's mouse passthrough every frame (`glfwSetWindowAttrib(GLFW_MOUSE_PASSTHROUGH)`, a `SetWindowLongW` that
+  costs about 0.04 ms on Windows) and enumerates the monitors (`EnumDisplaySettings`), for multi-viewport support the
+  editor does not use; skipping that would need a change to the vendored backend or a platform layer of Strata's own.
+  Rebasing the budgets on the new cost needs the owner's approval, recorded here with the measurements.
 - The editor starts in 0.7-1.0 s (Release, to its first frame on screen), not the 0.4 s the pillar names. An idle
   editor answers input and automation requests on its next throttled frame (up to 33 ms, 100 ms unfocused) until it
   waits on events instead. Project thumbnails and search in the recent projects move to `content-and-prefabs`.
