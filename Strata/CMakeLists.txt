@@ -77,6 +77,8 @@ strata_add_shaders(Strata
 	VARIANTS
 		"Scene/Forward.frag|Scene/ForwardTransparent.frag|ST_FORWARD_TRANSPARENT"
 		"Scene/DepthPrepass.frag|Scene/DepthPrepassNoEntityIDs.frag|ST_NO_ENTITY_IDS"
+		"Scene/Mesh.vert|Scene/MeshSkinned.vert|ST_SKINNED"
+		"Scene/ShadowMesh.vert|Scene/ShadowMeshSkinned.vert|ST_SKINNED"
 		"Effects/GTAO.comp|Effects/GTAOHalf.comp|ST_AO_HALF"
 		"Effects/AOBlur.comp|Effects/AOBlurHalf.comp|ST_AO_HALF")
 

@@ -315,6 +315,19 @@ namespace Strata
 	};
 
 	////////////////////////////////////////////////////////////////////////////////
+	// Animation
+	////////////////////////////////////////////////////////////////////////////////
+
+	// Makes the entity's MeshRendererComponent a skinned mesh posed by an animator: the mesh's joints follow the pose of
+	// the entity named by Animator (an entity with an AnimatorComponent, whose skeleton the mesh was bound to). The pose
+	// places the skinned vertices relative to the animator's entity, so the mesh follows the animator wherever this entity
+	// is. Without a pose (no animator, nothing playing, edit mode) the mesh shows its bind pose.
+	struct SkinComponent
+	{
+		UUID Animator = UUID::Null();
+	};
+
+	////////////////////////////////////////////////////////////////////////////////
 	// Scripting
 	////////////////////////////////////////////////////////////////////////////////
 

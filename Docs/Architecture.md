@@ -139,7 +139,7 @@ and while it runs its scene systems (see [Scene runtime lifecycle](#scene-runtim
 non-owning handle. Components are plain structs in `Components.h`, registered with stable names in
 `ComponentRegistration.cpp` (ID, Name, Transform, Relationship, Tag, Inactive, PrefabInstance, Camera, MeshRenderer,
 DirectionalLight, PointLight, SpotLight, SkyLight, PostProcess, Text, RigidBody, BoxCollider, SphereCollider,
-CapsuleCollider, MeshCollider, AudioSource, AudioListener, Script). `ComponentAccess` reads and writes them with
+CapsuleCollider, MeshCollider, AudioSource, AudioListener, Skin, Script). `ComponentAccess` reads and writes them with
 validation and change signals, `SceneSerializer` writes versioned JSON (keeping components it cannot read, see
 [Composition root and registries](#composition-root-and-registries)), and `Prefab.h` defines the scene-shaped assets
 (`EntityTemplate`, `Prefab`, `Model`, `SceneAsset`). `SceneServices.h` defines the interfaces through which the systems
@@ -550,6 +550,7 @@ which means the module is not in the build or its system does not run in this mo
 | `IBodyControl`: velocities, forces, impulses, gravity scale, wake-up, teleport | `PhysicsSystem` | script host (`RigidBody`) |
 | `IPhysicsQueries`: raycasts and overlaps | `PhysicsSystem` | script host (`Physics`) |
 | `IAudioPlayback`: sources and one-shots | `AudioSystem` (an adapter object) | script host (`AudioSource`, `Audio`) |
+| `ISkinningPoses`: each animator's pose (model-space joint matrices with a version), and which animators renderers drew | the Animation module's system; the editor's pose preview for edited scenes | `RenderScene` (palettes of skinned meshes), `SceneRenderer` (reports the animators of what it drew) |
 
 What outlives scenes is an engine service (`Core/EngineServices.h`): a module registers it in its registration function
 while the composition root runs, e.g. the Audio module's `IAudioOutput` (the master volume, which scripts change in any
@@ -1141,6 +1142,28 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   `SceneRendererStats::MeshesWithoutBounds`). A terrain or level mesh whose origin is out of view is thus loaded, gets
   its real bounds and is drawn; meshes that failed to load, or that the manager does not know, are asked for every
   frame (one lookup each), so that a fixed or newly imported one shows.
+- **Skinned proxies**. A proxy whose entity has a `SkinComponent` (`RenderProxyFlags::Skin`) and whose mesh layout has a
+  skin binding (`MeshSkinBinding`, kept with the layout like the bounds) is posed while the scene's `ISkinningPoses` has a
+  pose for the animator the component names (`RenderProxyFlags::Skinned`; `EvaluatePose`). `Sync` then computes its
+  palette, per joint of the mesh's skin `inverse(proxy world) * animator world * joint model transform * inverse bind
+  matrix` (3x4 rows, `RenderData::AffineTransform`), into a palette range of its own in one array (`GetPalette`), and its
+  posed bounds: every joint's bind-pose extent (`MeshSkinBinding::JointBounds`) transformed by its palette entry, unioned
+  (each skinned vertex is a weighted average of points inside those boxes), which replace the mesh's bounds for culling,
+  the spatial index and the shadow casters, so a limb swung outside the bind pose is neither culled nor loses its shadow.
+  Palettes are computed only when the pose's version or the transform from the animator to the proxy changed, in batches
+  of 16 proxies on the job system (each writes its own range and bounds), and logged by version like the instances
+  (`GetPaletteChanges`), so renderers upload only changed joints into their joint buffer (`ST_SRV(15)`); a still frame
+  skips the pass entirely (poses, transforms, hierarchy and layouts unchanged). Instances of posed proxies carry
+  `c_InstanceSkinned` and the palette's first joint (`InstanceData::SkinPalette`, where the padding was: still 64 bytes),
+  and their draws a sort key bit of their own: they batch per mesh, submesh, level of detail and pipeline state like
+  every draw, and draw with the skinned variants of the mesh and shadow vertex shaders (`Scene/MeshSkinned.vert`,
+  `ShadowMeshSkinned.vert`: `ST_SKINNED`), which blend the palette entries of a vertex's four influences (the mesh's skin
+  stream, vertex buffer 2) before the instance's world transform, in the prepass (entity IDs and normals), the forward
+  passes and the shadow cascades. Without a pose (no animator, nothing playing) a Skin proxy shows its bind pose through
+  the ordinary pipelines. Renderers report the animators of the Skin proxies in their view and their shadow casters
+  (`ISkinningPoses::ReportVisible`), which animators that animate only while seen read. Unskinned scenes do none of this
+  (`HasSkinProxies`). For GPU-driven rendering: a posed instance needs its palette range (`SkinPalette` and the mesh's joint
+  count) and its posed world bounds, both current after `Sync`.
 - **Slots and instances**. Meshes and materials get dense slots shared by their users. Every submesh of a proxy whose
   mesh layout is known has an `InstanceData` (64 bytes: the 3x4 world matrix, the material slot, the entity ID, flags) in
   one array that persists between frames. Changes are logged by version (`GetInstanceChanges`, the latest 65,536), so

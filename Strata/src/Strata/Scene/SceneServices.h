@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <span>
 #include <vector>
 
 // Scene services: the interfaces through which the systems of a running scene use each other.
@@ -22,8 +23,9 @@
 // include each other's headers (the layers of StrataTests/Architecture/Layers.json).
 //
 // The built-in providers: PhysicsSystem offers ICollisionEventSource, IBodyMotionQuery, IBodyControl and IPhysicsQueries;
-// AudioSystem offers IAudioPlayback. All services are main thread only, like the scene. IAudioOutput, defined here too, is
-// an engine service (Core/EngineServices.h): it belongs to the process, not to a scene.
+// AudioSystem offers IAudioPlayback; ISkinningPoses comes from what poses skeletons (the Animation module). All
+// services are main thread only, like the scene. IAudioOutput, defined here too, is an engine service
+// (Core/EngineServices.h): it belongs to the process, not to a scene.
 namespace Strata
 {
 
@@ -199,6 +201,35 @@ namespace Strata
 		// unusable clip, invalid parameters (volume >= 0 and pitch > 0, finite) or without audio output.
 		virtual bool PlayOneShot(AssetHandle clip, float volume, float pitch) = 0;
 		virtual bool PlayOneShotAt(AssetHandle clip, const glm::vec3& position, float volume, float pitch) = 0;
+	};
+
+	//////////////////////////////////////////////////////////////////////////
+	// Animation
+	//////////////////////////////////////////////////////////////////////////
+
+	// The pose of an animator's skeleton: per joint its transform relative to the animator's entity (model space).
+	struct SkeletonPose
+	{
+		std::span<const glm::mat4> Joints; // Valid until the provider changes the pose (the next animation update)
+		uint64_t Version = 0;              // Changes whenever the joints change
+	};
+
+	// The poses animators publish (the Animation module's system in Play mode; the editor's pose preview), which renderers
+	// skin meshes with (SkinComponent): the renderer never includes the Animation module. Renderers read them in
+	// RenderScene::Sync and report which animators' meshes they drew, so animators that only animate while seen
+	// (AnimatorComponent::CullingMode WhenVisible) know.
+	class ISkinningPoses
+	{
+	public:
+		virtual ~ISkinningPoses() = default;
+
+		// The current pose of the animator on `animator` (an entity with an AnimatorComponent); false while it has none (no
+		// skeleton loaded yet, not evaluated yet, inactive).
+		virtual bool GetPose(entt::entity animator, SkeletonPose& outPose) const = 0;
+		// Changes whenever any pose changes: a renderer that saw this version has seen every pose.
+		virtual uint64_t GetPosesVersion() const = 0;
+		// A renderer drew (in its view or its shadows) a mesh this animator poses, or would have, had it been posed.
+		virtual void ReportVisible(entt::entity animator) = 0;
 	};
 
 	// The engine's audio output (AudioEngine), which outlives every scene: an engine service (Core/EngineServices.h) the

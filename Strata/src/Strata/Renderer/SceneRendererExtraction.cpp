@@ -9,6 +9,8 @@
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Renderer/Texture.h"
+#include "Strata/Scene/Scene.h"
+#include "Strata/Scene/SceneServices.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -54,28 +56,38 @@ namespace Strata
 		// Changed instances this close together are uploaded in one range: fewer copies for a little more data.
 		constexpr uint32_t c_UploadRangeGap = 16;
 
-		// The sort key of a draw: pipeline state first (cascade, alpha mask, winding, culling), then mesh, submesh and level
-		// of detail, which together make a batch; the material in the lowest bits only when batches are split by material.
+		// The sort key of a draw: pipeline state first (cascade, alpha mask, winding, culling, skinning), then mesh, submesh
+		// and level of detail, which together make a batch; the material in the lowest bits only when batches are split by
+		// material.
 		constexpr uint32_t c_KeyCascadeShift = 62;
 		constexpr uint32_t c_KeyAlphaMaskShift = 61;
 		constexpr uint32_t c_KeyMirroredShift = 60;
 		constexpr uint32_t c_KeyDoubleSidedShift = 59;
-		constexpr uint32_t c_KeyMeshShift = 39;
-		constexpr uint32_t c_KeySubmeshShift = 23;
-		constexpr uint32_t c_KeyLODShift = 18;
+		constexpr uint32_t c_KeySkinnedShift = 58;
+		constexpr uint32_t c_KeyMeshShift = 38;
+		constexpr uint32_t c_KeySubmeshShift = 22;
+		constexpr uint32_t c_KeyLODShift = 17;
 		constexpr uint32_t c_KeyMeshBits = 20;     // Mesh slots: at most one per entity (Scene::c_MaxEntities)
 		constexpr uint32_t c_KeySubmeshBits = 16;
 		constexpr uint32_t c_KeyLODBits = 5;
-		constexpr uint32_t c_KeyMaterialBits = 18; // Material slots beyond this share keys: their batches merge, which is still correct
+		constexpr uint32_t c_KeyMaterialBits = 17; // Material slots beyond this share keys: their batches merge, which is still correct
 		constexpr uint32_t c_MaxKeySubmeshes = 1u << c_KeySubmeshBits;
 		constexpr uint32_t c_MaxKeyLODs = 1u << c_KeyLODBits;
 
-		uint64_t MakeDrawKey(uint32_t cascade, bool alphaMask, bool mirrored, bool doubleSided, uint32_t meshSlot, uint32_t submesh, uint32_t lod, uint32_t material)
+		uint64_t MakeDrawKey(uint32_t cascade, bool alphaMask, bool mirrored, bool doubleSided, bool skinned, uint32_t meshSlot, uint32_t submesh, uint32_t lod,
+			uint32_t material)
 		{
 			return (static_cast<uint64_t>(cascade) << c_KeyCascadeShift) | (static_cast<uint64_t>(alphaMask) << c_KeyAlphaMaskShift)
 				| (static_cast<uint64_t>(mirrored) << c_KeyMirroredShift) | (static_cast<uint64_t>(doubleSided) << c_KeyDoubleSidedShift)
-				| (static_cast<uint64_t>(meshSlot) << c_KeyMeshShift) | (static_cast<uint64_t>(submesh) << c_KeySubmeshShift)
-				| (static_cast<uint64_t>(lod) << c_KeyLODShift) | static_cast<uint64_t>(material & ((1u << c_KeyMaterialBits) - 1));
+				| (static_cast<uint64_t>(skinned) << c_KeySkinnedShift) | (static_cast<uint64_t>(meshSlot) << c_KeyMeshShift)
+				| (static_cast<uint64_t>(submesh) << c_KeySubmeshShift) | (static_cast<uint64_t>(lod) << c_KeyLODShift)
+				| static_cast<uint64_t>(material & ((1u << c_KeyMaterialBits) - 1));
+		}
+
+		// Whether a proxy's instances are drawn skinned: posed, with a mesh that has its skin stream on the GPU.
+		bool IsDrawnSkinned(const RenderScene& renderScene, uint32_t proxy, const Mesh& mesh)
+		{
+			return (renderScene.GetProxyFlags(proxy) & RenderProxyFlags::Skinned) != 0 && mesh.GetSkinBuffer() != nullptr;
 		}
 
 		uint32_t PackTextureSlot(uint32_t slot, uint32_t samplerIndex, bool grayscale = false)
@@ -236,16 +248,22 @@ namespace Strata
 		if (m_Chunks.size() < chunks)
 			m_Chunks.resize(chunks);
 		const float highFraction = m_Specification.HighPriorityScreenFraction;
+		const bool skins = renderScene.HasSkinProxies();
+		m_VisibleAnimators.clear();
 		ForEachChunk(chunks, [&](uint32_t chunk)
 		{
 			ExtractionChunk& output = m_Chunks[chunk];
 			output.MeshMarks.clear();
 			output.MaterialMarks.clear();
+			output.Animators.clear();
 			const uint32_t end = std::min(visible, (chunk + 1) * c_ExtractionChunkSize);
 			for (uint32_t item = chunk * c_ExtractionChunkSize; item < end; item++)
 			{
 				const uint32_t proxy = m_VisibleProxies[item];
 				m_ProxyStamps[proxy] = m_FrameStamp;
+				// Animators that only animate while seen learn that their meshes are (ReportVisibleAnimators).
+				if (skins && renderScene.GetSkinAnimator(proxy) != entt::null)
+					output.Animators.push_back(renderScene.GetSkinAnimator(proxy));
 				const AABB& bounds = renderScene.GetWorldBounds(proxy);
 				const float fraction = GetScreenFraction(camera, bounds.GetCenter(), glm::length(bounds.GetExtents()));
 				m_VisibleFractions[item] = fraction;
@@ -262,6 +280,7 @@ namespace Strata
 				MarkMesh(slot, usage);
 			for (const auto& [slot, usage] : m_Chunks[chunk].MaterialMarks)
 				MarkMaterial(slot, usage);
+			m_VisibleAnimators.insert(m_VisibleAnimators.end(), m_Chunks[chunk].Animators.begin(), m_Chunks[chunk].Animators.end());
 		}
 
 		// A mesh whose bounds are unknown (never loaded, none recorded) may be anywhere, in view too, whatever the
@@ -415,8 +434,12 @@ namespace Strata
 		}
 		m_ShadowCasters.resize(kept);
 
+		const bool skins = renderScene.HasSkinProxies();
 		for (const ShadowCaster& caster : m_ShadowCasters)
 		{
+			// Shadows of a skinned mesh move with its animator, also when the mesh itself is out of view.
+			if (skins && renderScene.GetSkinAnimator(caster.Proxy) != entt::null)
+				m_VisibleAnimators.push_back(renderScene.GetSkinAnimator(caster.Proxy));
 			const uint32_t overrideSlot = renderScene.GetOverrideMaterialSlot(caster.Proxy);
 			MarkMesh(renderScene.GetMeshSlot(caster.Proxy), c_UseShadow | (overrideSlot == RenderScene::c_InvalidIndex ? c_UseShadow << c_SubmeshMaterialsShift : 0u));
 			if (overrideSlot != RenderScene::c_InvalidIndex)
@@ -565,6 +588,7 @@ namespace Strata
 				batch.LOD = static_cast<uint32_t>((draw.Key >> c_KeyLODShift) & (c_MaxKeyLODs - 1));
 				batch.DoubleSided = ((draw.Key >> c_KeyDoubleSidedShift) & 1) != 0;
 				batch.Mirrored = ((draw.Key >> c_KeyMirroredShift) & 1) != 0;
+				batch.Skinned = ((draw.Key >> c_KeySkinnedShift) & 1) != 0;
 				batch.AlphaMask = ((draw.Key >> c_KeyAlphaMaskShift) & 1) != 0;
 				batch.Cascade = static_cast<uint32_t>(draw.Key >> c_KeyCascadeShift);
 				batch.FirstInstance = static_cast<uint32_t>(outDrawList.size());
@@ -592,6 +616,7 @@ namespace Strata
 			output.MaterialPixelSizes.clear();
 			output.InstancesPerLOD = {};
 			output.Skipped = 0;
+			output.SkinnedInstances = 0;
 			const uint32_t end = std::min(visible, (chunk + 1) * c_ExtractionChunkSize);
 			for (uint32_t item = chunk * c_ExtractionChunkSize; item < end; item++)
 			{
@@ -606,6 +631,7 @@ namespace Strata
 				const float fraction = m_VisibleFractions[item];
 				const float viewDepth = -(camera.View * glm::vec4(bounds.GetCenter(), 1.0f)).z;
 				const bool mirrored = (renderScene.GetProxyFlags(proxy) & RenderProxyFlags::Mirrored) != 0;
+				const bool skinned = IsDrawnSkinned(renderScene, proxy, *mesh);
 				const uint32_t first = renderScene.GetFirstInstance(proxy);
 				const std::vector<Submesh>& submeshes = mesh->GetSubmeshes();
 				for (uint32_t submeshIndex = 0; submeshIndex < count; submeshIndex++)
@@ -624,12 +650,14 @@ namespace Strata
 					output.InstancesPerLOD[std::min<size_t>(lod, SceneRendererStats::c_LODStatCount - 1)]++;
 					AppendPixelSize(output.MaterialPixelSizes, materialSlot, fraction * viewportHeight);
 					const bool doubleSided = (materialFlags & c_MaterialDoubleSided) != 0;
+					output.SkinnedInstances += skinned ? 1u : 0u;
 					if ((materialFlags & c_MaterialTransparent) != 0)
 					{
-						output.Transparent.push_back(TransparentDraw { viewDepth, renderScene.GetEntityID(proxy), submeshIndex, instance, meshSlot, lod, doubleSided, mirrored });
+						output.Transparent.push_back(TransparentDraw { viewDepth, renderScene.GetEntityID(proxy), submeshIndex, instance, meshSlot, lod, doubleSided, mirrored, skinned });
 						continue;
 					}
-					output.Draws.push_back(SortItem { MakeDrawKey(0, false, mirrored, doubleSided, meshSlot, submeshIndex, lod, batchAcrossMaterials ? 0u : materialSlot), instance, 0 });
+					output.Draws.push_back(SortItem { MakeDrawKey(0, false, mirrored, doubleSided, skinned, meshSlot, submeshIndex, lod, batchAcrossMaterials ? 0u : materialSlot),
+						instance, 0 });
 				}
 			}
 		});
@@ -647,6 +675,7 @@ namespace Strata
 			for (const auto& [slot, size] : output.MaterialPixelSizes)
 				m_MaterialPixelSizes[slot] = std::max(m_MaterialPixelSizes[slot], size);
 			skipped += output.Skipped;
+			m_Stats.SkinnedInstances += output.SkinnedInstances;
 		}
 		if (skipped > 0)
 			m_Errors.Report(fmt::format("{} submesh instances were not drawn: more than {} submeshes or {} levels of detail in a mesh", skipped, c_MaxKeySubmeshes, c_MaxKeyLODs));
@@ -671,6 +700,7 @@ namespace Strata
 			batch.LOD = draw.LOD;
 			batch.DoubleSided = draw.DoubleSided;
 			batch.Mirrored = draw.Mirrored;
+			batch.Skinned = draw.Skinned;
 			batch.FirstInstance = static_cast<uint32_t>(m_DrawInstancesBuild.size());
 			batch.InstanceCount = 1;
 			m_TransparentBatches.push_back(batch);
@@ -730,6 +760,7 @@ namespace Strata
 				const AABB& bounds = renderScene.GetWorldBounds(caster.Proxy);
 				const float fraction = GetScreenFraction(camera, bounds.GetCenter(), glm::length(bounds.GetExtents()));
 				const bool mirrored = (renderScene.GetProxyFlags(caster.Proxy) & RenderProxyFlags::Mirrored) != 0;
+				const bool skinned = IsDrawnSkinned(renderScene, caster.Proxy, *mesh);
 				const uint32_t first = renderScene.GetFirstInstance(caster.Proxy);
 				const std::vector<Submesh>& submeshes = mesh->GetSubmeshes();
 				for (uint32_t submeshIndex = 0; submeshIndex < count; submeshIndex++)
@@ -752,7 +783,7 @@ namespace Strata
 					{
 						if ((caster.CascadeMask & (1u << cascade)) != 0)
 						{
-							output.Draws.push_back(SortItem { MakeDrawKey(cascade, alphaMask, mirrored, doubleSided, meshSlot, submeshIndex, lod,
+							output.Draws.push_back(SortItem { MakeDrawKey(cascade, alphaMask, mirrored, doubleSided, skinned, meshSlot, submeshIndex, lod,
 								batchAcrossMaterials ? 0u : materialSlot), instance, 0 });
 						}
 					}
@@ -835,10 +866,61 @@ namespace Strata
 		return bytes;
 	}
 
+	void SceneRenderer::ReportVisibleAnimators(Scene& scene)
+	{
+		if (m_VisibleAnimators.empty())
+			return;
+		ISkinningPoses* poses = scene.GetService<ISkinningPoses>();
+		if (!poses)
+			return;
+		// A character's meshes and shadows name its animator several times: report each once, in a fixed order.
+		std::sort(m_VisibleAnimators.begin(), m_VisibleAnimators.end());
+		m_VisibleAnimators.erase(std::unique(m_VisibleAnimators.begin(), m_VisibleAnimators.end()), m_VisibleAnimators.end());
+		for (const entt::entity animator : m_VisibleAnimators)
+			poses->ReportVisible(animator);
+	}
+
 	void SceneRenderer::UploadSceneData(nvrhi::ICommandList* commandList, const RenderScene& renderScene, bool instancesRecreated, bool materialsRecreated,
-		bool drawListsRecreated)
+		bool drawListsRecreated, bool jointsRecreated)
 	{
 		ST_PROFILE_FUNCTION();
+		// Palettes of posed skinned meshes: the joint ranges that changed since this renderer's last upload.
+		const std::span<const RenderData::AffineTransform> palette = renderScene.GetPalette();
+		if (!palette.empty() && (jointsRecreated || m_FullUpload || renderScene.GetPaletteVersion() != m_UploadedPaletteVersion))
+		{
+			m_PaletteChanges.clear();
+			if (jointsRecreated || m_FullUpload || !renderScene.GetPaletteChanges(m_UploadedPaletteVersion, m_PaletteChanges))
+			{
+				commandList->writeBuffer(m_JointBuffer, palette.data(), palette.size_bytes());
+				m_Stats.PaletteBytesUploaded += palette.size_bytes();
+			}
+			else
+			{
+				// Ranges are logged newest first and may repeat: upload each joint once, in merged runs.
+				std::sort(m_PaletteChanges.begin(), m_PaletteChanges.end());
+				uint32_t runStart = 0;
+				uint32_t runEnd = 0;
+				auto flush = [&]()
+				{
+					if (runEnd <= runStart)
+						return;
+					const size_t bytes = (runEnd - runStart) * sizeof(RenderData::AffineTransform);
+					commandList->writeBuffer(m_JointBuffer, palette.data() + runStart, bytes, runStart * sizeof(RenderData::AffineTransform));
+					m_Stats.PaletteBytesUploaded += bytes;
+				};
+				for (const auto& [first, count] : m_PaletteChanges)
+				{
+					if (first > runEnd)
+					{
+						flush();
+						runStart = first;
+					}
+					runEnd = std::max(runEnd, first + count);
+				}
+				flush();
+			}
+		}
+		m_UploadedPaletteVersion = renderScene.GetPaletteVersion();
 		const std::span<const RenderData::InstanceData> instances = renderScene.GetInstances();
 		if (!instances.empty())
 		{

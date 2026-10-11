@@ -19,6 +19,7 @@ namespace Strata
 
 		// InstanceData::Flags
 		constexpr uint32_t c_InstanceMirrored = 1u; // Negative determinant: winding and tangent handedness are flipped
+		constexpr uint32_t c_InstanceSkinned = 2u;  // Posed: the skinned pipelines blend its palette (InstanceData::SkinPalette)
 
 		constexpr uint32_t c_LightPoint = 0u;
 		constexpr uint32_t c_LightSpot = 1u;
@@ -95,7 +96,9 @@ namespace Strata
 			uint32_t MaterialIndex; // Material slot (RenderScene::GetMaterialHandle), index into the material buffer
 			uint32_t EntityID;      // Entity identifier + 1 (0 = none)
 			uint32_t Flags;         // c_Instance*
-			uint32_t Padding;
+			// Posed instances (c_InstanceSkinned): the first joint matrix of the proxy's palette in the joint buffer
+			// (RenderScene::GetPalette, uploaded where it changed), one per joint of the mesh's skin; 0 otherwise.
+			uint32_t SkinPalette;
 		};
 		static_assert(sizeof(InstanceData) == 64);
 

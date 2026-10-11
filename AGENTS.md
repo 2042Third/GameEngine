@@ -1050,6 +1050,14 @@ and `AudioSystem`, the built-in "Audio" scene system.
   (`u_DrawList[gl_InstanceIndex]`); only changed instances, materials and draw list ranges are uploaded, so a still
   frame uploads nothing (`SceneRendererStats::InstanceBytesUploaded`, `ProxyUpdates`). Shaders derive the normal
   matrix from the 3x4 rows (`TransformNormal` in `Include/Scene.glsl`).
+- **Skinned meshes** (Docs/Architecture.md, "Render scene"): a mesh renderer with a `SkinComponent` is posed by the
+  animator it names through the scene service `ISkinningPoses` (`Scene/SceneServices.h`; the renderer never includes the
+  Animation module). `RenderScene::Sync` computes posed proxies' palettes (per skin joint, 3x4) and posed bounds only when
+  a pose or a placement changed; renderers upload only the changed joints, and posed instances (`c_InstanceSkinned`,
+  `InstanceData::SkinPalette`) draw with the `ST_SKINNED` variants of `Mesh.vert` and `ShadowMesh.vert`, which every pass
+  of a skinned mesh uses (the prepass and the forward pass must agree to the bit). Unskinned meshes keep their pipelines,
+  data and uploads: anything that adds skinning work must cost unskinned scenes nothing (`RenderScene::HasSkinProxies`).
+  Physics' mesh colliders use the bind pose; the entity-ID buffer (picking, outlines) shows the pose.
 - Point and spot lights are frustum culled on the CPU, ranked by relevance (projected size of their
   range) and capped at `MaxLights`; `Scene/LightClusters.comp` then lists the lights reaching each
   cluster of a 16x9x24 froxel grid (exponential depth slices) and `Forward.frag` loops only over its

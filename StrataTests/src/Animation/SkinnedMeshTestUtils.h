@@ -26,6 +26,8 @@ namespace Strata::Tests
 		float JointLength = 1.0f;
 		float Radius = 0.1f;
 		AssetHandle Material = UUID::Null();
+		// Off: every ring follows only the joint below it (weight 1), so skinning is exact for exact poses.
+		bool BlendWeights = true;
 	};
 
 	inline uint16_t QuantizeWeight(float weight)
@@ -44,7 +46,7 @@ namespace Strata::Tests
 		{
 			const float height = static_cast<float>(ring) / static_cast<float>(specification.RingsPerJoint); // In joints
 			const uint32_t joint = std::min(static_cast<uint32_t>(height), specification.Joints - 1);
-			const float fraction = joint + 1 < specification.Joints ? height - static_cast<float>(joint) : 0.0f;
+			const float fraction = joint + 1 < specification.Joints && specification.BlendWeights ? height - static_cast<float>(joint) : 0.0f;
 			for (uint32_t side = 0; side < specification.Sides; side++)
 			{
 				const float angle = glm::two_pi<float>() * static_cast<float>(side) / static_cast<float>(specification.Sides);
