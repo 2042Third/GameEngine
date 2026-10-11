@@ -975,27 +975,38 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   `FinalizeMsPerFrame` by its first step at most; textures also skip a step
   that would end after the deadline at the speed of the latest steps. Texture and mesh steps also wait for staging room
   (see Staging), except the frame's first step: every frame makes progress, also without device frames, while a later
-  call may take no step at all. A texture is published (and gets its bindless slot) once its whole chain is uploaded; its CPU
-  copy goes then. Freeing a large copy takes milliseconds (its pages go back to the system), so it is timed like a step
-  and waits for the next call when it would end after the deadline; it stays on the main thread, because freed on a
-  worker it would still be held while the frame's next arrivals allocate.
+  call may take no step at all; the others leave a step of the staging budget for it
+  (`AssetFinalizeContext::GetStagingRoom`), so it never takes staging beyond the budget. A texture is published (and
+  gets its bindless slot) once its whole chain is uploaded; its CPU copy goes then. Freeing a large copy takes
+  milliseconds (its pages go back to the system), so it is timed like a step and waits for the next call when it would
+  end after the deadline; it stays on the main thread, because freed on a worker it would still be held while the
+  frame's next arrivals allocate.
   Uploads report the bytes they copied (`AssetFinalizeContext::UploadedBytes`).
 - **Staging** (`Renderer/StagingPool.h`). Texture bands go through CPU-writable staging textures of the renderer's
   pool, mesh ranges through its CPU-writable staging buffers (powers of two from 64 KiB, copied from with
-  `copyBuffer`), reused once the GPU has copied from them, so streaming allocates no staging memory once warm: each
-  `Renderer::BeginFrame` sets an event query after what was released since the previous frame (its copies were
-  executed by then) and polls the earlier ones, never waiting, so staging is reused two frames after its release when
-  the GPU keeps up. Budgeted uploads wait while the staging still in flight leaves no room within the staging budget
-  (`AssetResidencyBudgets::StagingBytes`, 32 MiB), and staging created for them first releases idle staging of other
+  `copyBuffer`), reused once the GPU has copied from them, so streaming allocates no staging memory once warm. An
+  event query set after the command lists with the copies were executed tells when: the asset managers set it as soon
+  as they executed a frame's uploads (`Renderer::ExecuteUploads`, `StagingPool::FenceReleased`), and
+  `Renderer::BeginFrame` sets one for whatever else was released. The queries are polled, never waited for: at
+  `BeginFrame`, before staging is acquired and when a budgeted step finds no room. The GPU runs a frame's uploads ahead
+  of its rendering, so the staging of a frame's uploads is reusable in the next frame once the GPU has run them (fenced
+  only at the next `BeginFrame`, it waited for the frame's rendering too and was polled a frame later: reused two frames
+  after its release, half the budget per frame). Budgeted uploads wait while the staging still in flight leaves no room
+  within the staging budget (`AssetResidencyBudgets::StagingBytes`, 32 MiB) less the step kept for the next frame's
+  first, and staging created for them first releases idle staging of other
   shapes until the pool as a whole (idle, in flight and new) fits the budget: the graphics driver keeps freed staging
   memory committed for a while, so a process pays for the most staging it ever held, and idle staging must not come on
   top of the budget (before, idle staging and NVRHI's upload chunks of mesh ranges came on top of 64 MiB in flight: the
   exported stress game held about 86 MiB of host-visible memory more while it loaded, and kept it). Sustained uploads
-  reach at most half of the budget per frame (16 MiB), whatever `UploadBytesPerFrame` allows (a loading screen raises
-  both). Idle staging is kept up to 16 MiB and all of it is returned after 120 frames without uploads. What else records
-  `writeBuffer` on the upload command list goes through NVRHI's upload manager, which pools the staging memory of each
-  command list without a limit: after `c_StagingReleaseFrames` (120) frames without uploads the manager drops its upload
-  command list (submissions in flight keep it alive until the GPU is done) and creates a new one with the next upload.
+  reach the budget less a step per frame (28 MiB) when the GPU has run a frame's uploads by the next frame's
+  finalization, which it does when frames take longer than the copies (a frame that finalizes for milliseconds); when
+  frames follow each other faster, frames that find the previous one's staging still in flight take only their first
+  step, about half the budget per frame on average. `UploadBytesPerFrame` and `FinalizeMsPerFrame` bound them too (a
+  loading screen raises all three). Idle staging is kept up to 16 MiB and all of it is returned after 120 frames
+  without uploads. What else records `writeBuffer` on the upload command list goes through NVRHI's upload manager,
+  which pools the staging memory of each command list without a limit: after `c_StagingReleaseFrames` (120) frames
+  without uploads the manager drops its upload command list (submissions in flight keep it alive until the GPU is done)
+  and creates a new one with the next upload.
 - **Dependency prefetch** (`AssetManagerBase::GetDependencies`). When the read of a requested asset completes, its
   direct dependencies are queued at its priority with a lower score (`c_DependencyPrefetchScore`, behind direct
   requests), before its read slot frees: a material's textures load alongside the material, a mesh's default materials

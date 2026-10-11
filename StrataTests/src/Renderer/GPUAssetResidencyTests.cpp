@@ -342,8 +342,8 @@ TEST_SUITE("GPU.Assets.Residency")
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
-		// The updates below run no device frames, so the staging they use is never recycled: start with none in flight
-		// (earlier tests' staging becomes reusable here), so that only the upload budget spreads them over frames.
+		// The updates below run no device frames: start with no staging in flight (earlier tests' staging becomes reusable
+		// here), so that only the upload budget spreads them over frames.
 		SettleDevice(gpu);
 		const Ref<const std::vector<uint8_t>> cooked = CreateRef<const std::vector<uint8_t>>(CookSolidTexture(1024, glm::u8vec4(10, 200, 30, 255)));
 		const uint64_t textureBytes = GetTextureBytes(1024);
@@ -552,29 +552,96 @@ TEST_SUITE("GPU.Assets.Residency")
 		const AssetHandle first = manager->Add(0x48000, cooked);
 		const AssetHandle second = manager->Add(0x48001, cooked);
 
-		// Staging released and never recycled (no device frames run here) fills the staging budget.
+		// Before each update, staging released and not covered by a query yet (no device frame runs here, and only the
+		// manager's own uploads are fenced when it executes them) fills the staging budget.
 		StagingPool& pool = Renderer::GetStagingPool();
 		nvrhi::TextureDesc band;
 		band.width = 512;
 		band.height = 512;
 		band.format = nvrhi::Format::RGBA8_UNORM;
-		pool.Release(pool.AcquireTexture(band));
-		AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
-		budgets.StagingBytes = pool.GetPendingBytes();
-		manager->SetResidencyBudgets(budgets);
+		const auto fillStaging = [&]()
+		{
+			pool.Release(pool.AcquireTexture(band));
+			AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
+			budgets.StagingBytes = pool.GetPendingBytes();
+			manager->SetResidencyBudgets(budgets);
+		};
 
 		// Each update's first step goes: one texture per update, never none.
 		manager->RequestLoad(first);
 		manager->RequestLoad(second);
+		fillStaging();
 		manager->Update();
 		const auto ready = [&manager](AssetHandle handle) { return manager->GetAssetState(handle) == AssetState::Ready ? 1u : 0u; };
 		CHECK(ready(first) + ready(second) == 1);
+		fillStaging();
 		manager->Update();
 		CHECK(ready(first) + ready(second) == 2);
 
 		manager.reset();
 		SettleDevice(gpu);
 		CHECK(pool.GetPendingBytes() == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("With the GPU keeping up, every frame's uploads may use the whole staging room")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SettleDevice(gpu);
+		const Ref<const std::vector<uint8_t>> cooked = CreateRef<const std::vector<uint8_t>>(CookSolidTexture(1024, glm::u8vec4(60, 120, 180, 255)));
+		const uint64_t textureBytes = GetTextureBytes(1024);
+		Ref<TextureManager> manager = CreateRef<TextureManager>();
+		std::vector<AssetHandle> textures;
+		for (uint64_t index = 0; index < 8; index++)
+			textures.push_back(manager->Add(0x49000 + index, cooked));
+
+		// Only the staging budget limits these frames: a 1024x1024 texture goes up in two steps (level 0, one 4 MiB band, and
+		// the smaller levels), so the staging of three textures fits in the room of 20 MiB (16 MiB: one step is left for the
+		// next frame's first) and a fourth's first step does not.
+		AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
+		budgets.StagingBytes = 20ull << 20;
+		budgets.UploadBytesPerFrame = 1ull << 30;
+		budgets.FinalizeMsPerFrame = 1000.0f;
+		manager->SetResidencyBudgets(budgets);
+		const uint64_t room = budgets.StagingBytes - c_AssetUploadStepBytes;
+		REQUIRE(3 * textureBytes <= room);
+		REQUIRE(3 * textureBytes + c_AssetUploadStepBytes > room);
+
+		// Device frames whose uploads the GPU has run by the next frame (a GPU that keeps up). The manager fences its uploads
+		// when it executes them, so the staging they used is free once the GPU has run them, whatever the frame submits
+		// later (its rendering), and every frame uploads three textures. Fenced only when the next frame began, the staging
+		// would be free once the GPU had finished that whole frame, and polled only then, a frame later: every other frame
+		// would upload little more than the first step of a texture.
+		for (AssetHandle texture : textures)
+			manager->RequestLoad(texture);
+		StagingPool& pool = Renderer::GetStagingPool();
+		const auto readyCount = [&]()
+		{
+			size_t ready = 0;
+			for (AssetHandle texture : textures)
+				ready += manager->GetAssetState(texture) == AssetState::Ready ? 1 : 0;
+			return ready;
+		};
+		std::vector<uint64_t> uploads;
+		for (uint32_t frame = 0; frame < 10 && readyCount() < textures.size(); frame++)
+		{
+			RunDeviceFrame(gpu, [&]()
+			{
+				manager->Update();
+				uploads.push_back(manager->GetStats().UploadedBytesLastFrame);
+				// Staging as a whole stays within its budget.
+				CHECK(pool.GetIdleBytes() + pool.GetPendingBytes() <= budgets.StagingBytes);
+				// Once the GPU has run them, in the same frame: the next upload finds the whole budget free.
+				gpu.GetDevice().WaitForIdle();
+				CHECK(pool.HasRoomFor(budgets.StagingBytes, budgets.StagingBytes));
+			});
+		}
+		CHECK(readyCount() == textures.size());
+		CHECK(uploads == std::vector<uint64_t> { 3 * textureBytes, 3 * textureBytes, 2 * textureBytes });
+
+		manager.reset();
+		SettleDevice(gpu);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

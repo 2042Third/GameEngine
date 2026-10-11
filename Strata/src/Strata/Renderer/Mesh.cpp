@@ -214,8 +214,9 @@ namespace Strata
 
 		// The streams upload one after the other, as one run of bytes cut into steps; the first step of a call is taken whatever
 		// the upload budget says, the first step of the frame's first call whatever the deadline says too. Steps go through
-		// staging buffers of the renderer's pool, within the staging budget like texture bands (the frame's first step also
-		// when the staging in flight leaves no room), so a mesh's upload never holds more staging than the budget allows.
+		// staging buffers of the renderer's pool, within the staging room like texture bands (the frame's first step also when
+		// the staging in flight leaves none: the room leaves a step for it), so a mesh's upload never holds more staging than
+		// the budget allows.
 		const std::array<UploadRange, 3> ranges = { {
 			{ m_PositionBuffer, reinterpret_cast<const uint8_t*>(m_Positions.data()), positionBytes },
 			{ m_AttributeBuffer, reinterpret_cast<const uint8_t*>(m_Attributes.data()), attributeBytes },
@@ -230,7 +231,7 @@ namespace Strata
 		while (m_UploadOffset < totalBytes)
 		{
 			const uint64_t stepBytes = std::min(c_AssetUploadStepBytes, totalBytes - m_UploadOffset);
-			if (!(firstStep && framesFirstCall) && !stagingPool.HasRoomFor(StagingPool::GetBufferByteSize(stepBytes), context.StagingBytes))
+			if (!(firstStep && framesFirstCall) && !stagingPool.HasRoomFor(StagingPool::GetBufferByteSize(stepBytes), context.GetStagingRoom()))
 				break;
 			const bool overBudget = !firstStep && uploaded + stepBytes > context.UploadBudget;
 			const bool overTime = !(firstStep && context.FirstOfFrame) && std::chrono::steady_clock::now() >= context.Deadline;

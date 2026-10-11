@@ -1064,9 +1064,11 @@ and `AudioSystem`, the built-in "Audio" scene system.
 - Everything streams: meshes, materials and textures that are still loading are skipped or drawn with
   fallbacks and counted in `SceneRendererStats::PendingAssets`; never block a frame on an asset. Asset uploads are
   budgeted per frame and go in steps (Docs/Architecture.md, "Streaming and residency"); texture bands and mesh ranges go
-  through the staging of `Renderer::GetStagingPool()` (`StagingPool`, recycled in `Renderer::BeginFrame`, all of it
-  within the staging budget), so code that streams with a GPU must run device frames for staging to be reused (without
-  them, a frame uploads only its first step once the staging budget is used up).
+  through the staging of `Renderer::GetStagingPool()` (`StagingPool`, all of it within the staging budget), reusable once
+  the GPU has run the copies: the asset managers fence their uploads when they execute them (`Renderer::ExecuteUploads`;
+  every command list with copies from staging released before must have been executed by then) and
+  `Renderer::BeginFrame` fences what else was released, so staging other code releases is reused only with device
+  frames (without them, such staging stays in flight).
 - Material texture slots (`SampleMaterialTexture` in `Include/Scene.glsl`) pack the bindless slot, the sampler index and a
   grayscale bit (`RenderData::c_TextureSlotGrayscale`, from `TextureSpecification::Grayscale`). Normal maps are read as X
   and Y with Z reconstructed (`Forward.frag`), so BC5 and RGBA8 normal maps shade alike; a shader that reads a normal map

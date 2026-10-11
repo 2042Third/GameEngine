@@ -64,11 +64,12 @@ namespace Strata
 	// buffers) take no further step once the next one would exceed UploadBudget or end after Deadline; a call's first step
 	// is exempt from these two, so a frame's uploads overshoot them by one step at most and an asset larger than any budget
 	// still arrives. Steps through staging memory (texture bands, mesh ranges) also wait while the staging in flight leaves
-	// no room within StagingBytes: staging becomes reusable once the GPU has finished the frame that copied from it (polled
-	// in Renderer::BeginFrame), so budgeted uploads need device frames to go on at full speed. Only the frame's first step
-	// (nothing uploaded yet, *UploadedBytes == 0) is exempt from that wait: every frame makes progress, but a later call may
-	// take no step at all (Pending without uploading). The manager itself may also hold an arrival back until memory
-	// evicted for it is released (see AssetManagerBase::Update).
+	// no room within GetStagingRoom (StagingBytes less one step): staging becomes reusable once the GPU has run the copies
+	// that read it (the manager fences its uploads when it executes them, Renderer::ExecuteUploads, and the pool polls the
+	// fences), so budgeted uploads need the GPU to make progress to go on at full speed. Only the frame's first step (nothing
+	// uploaded yet, *UploadedBytes == 0) is exempt from that wait, and the step of room the others leave is for it: every
+	// frame makes progress within StagingBytes, but a later call may take no step at all (Pending without uploading). The
+	// manager itself may also hold an arrival back until memory evicted for it is released (see AssetManagerBase::Update).
 	struct AssetFinalizeContext
 	{
 		nvrhi::ICommandList* CommandList = nullptr; // Upload command list; null when no renderer is running
@@ -89,6 +90,11 @@ namespace Strata
 		// the deadline but for the frame's first step. (Every call's first step may go past the upload budget: the manager
 		// starts no call once it is used up, so a frame uploads its budget and one step at most.)
 		bool FirstOfFrame = true;
+
+		// The staging the steps after the frame's first may leave in flight: StagingBytes less one step, the room the next
+		// frame's first step takes whatever is still in flight, so that staging stays within StagingBytes also when the GPU
+		// has not run a frame's uploads by the next frame. A budget below one step allows the frame's first step only.
+		uint64_t GetStagingRoom() const { return StagingBytes > c_AssetUploadStepBytes ? StagingBytes - c_AssetUploadStepBytes : 0; }
 	};
 
 	// Memory an asset holds, per residency pool (see AssetResidencyBudgets): each pool has its own budget, because

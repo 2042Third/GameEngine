@@ -149,6 +149,13 @@ namespace Strata
 		return *s_Data->Staging;
 	}
 
+	void Renderer::ExecuteUploads(nvrhi::ICommandList* commandList)
+	{
+		ST_CORE_ASSERT(s_Data, "Renderer is not initialized");
+		s_Data->Device->GetDevice()->executeCommandList(commandList);
+		s_Data->Staging->FenceReleased();
+	}
+
 	DeferredReleaseQueue& Renderer::GetDeferredReleases()
 	{
 		ST_CORE_ASSERT(s_Data, "Renderer is not initialized");

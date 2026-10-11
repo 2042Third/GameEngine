@@ -372,19 +372,18 @@ namespace Strata
 
 		// Steps until the chain is uploaded or the budget is used up; the first step of a call is taken whatever the upload
 		// budget says, and the first step of the frame's first call whatever the deadline says too, so a texture larger than any
-		// frame's budget still arrives (AssetFinalizeContext::FirstOfFrame). Steps also wait for
-		// staging memory (it frees up as frames complete) beyond the context's StagingBytes, so a burst of arrivals cannot
-		// pile up staging, except the frame's first step (nothing uploaded yet): every frame makes progress, also where no
-		// device frames recycle staging (tools, tests). Unbudgeted calls (LoadAssetSync, memory assets) have no staging
-		// limit and finish.
-		const StagingPool& stagingPool = Renderer::GetStagingPool();
+		// frame's budget still arrives (AssetFinalizeContext::FirstOfFrame). Steps also wait for staging memory (it frees up as
+		// the GPU runs earlier uploads) beyond the context's staging room (GetStagingRoom), so a burst of arrivals cannot pile
+		// up staging, except the frame's first step (nothing uploaded yet), which the room leaves a step for: every frame makes
+		// progress within the staging budget. Unbudgeted calls (LoadAssetSync, memory assets) have no staging limit and finish.
+		StagingPool& stagingPool = Renderer::GetStagingPool();
 		const bool framesFirstCall = !context.UploadedBytes || *context.UploadedBytes == 0;
 		uint64_t uploaded = 0;
 		bool firstStep = true;
 		while (m_UploadLevel < m_MipCount)
 		{
 			const UploadStep step = GetNextUploadStep();
-			if (!(firstStep && framesFirstCall) && !stagingPool.HasRoomFor(step.StagingBytes, context.StagingBytes))
+			if (!(firstStep && framesFirstCall) && !stagingPool.HasRoomFor(step.StagingBytes, context.GetStagingRoom()))
 				break;
 			// A step that would end after the deadline (at the copy speed seen so far) waits for the next call.
 			const auto now = std::chrono::steady_clock::now();

@@ -49,11 +49,13 @@ namespace Strata
 		// Main-thread time finalization may take per frame, in milliseconds; the first finalization of a frame always runs.
 		float FinalizeMsPerFrame = 4.0f;
 		// Staging memory texture and mesh uploads may hold at once: what the frame writes plus what the GPU may still copy
-		// from, and the idle staging the pool keeps for reuse (StagingPool). Staging written in a frame is reusable two frames
-		// later at the earliest (once the GPU has finished that frame), so sustained uploads reach at most half of it per
-		// frame (16 MiB with the default, 960 MiB per second at 60 frames per second), however much UploadBytesPerFrame
-		// allows: raise both for a loading screen. The driver keeps freed staging memory committed for a while, so a process
-		// pays for the most staging it ever held: this bounds that high-water mark.
+		// from, and the idle staging the pool keeps for reuse (StagingPool). Staging is reusable once the GPU has run the
+		// copies that read it, which it does ahead of the frame's rendering: when it has run a frame's uploads by the next
+		// frame's finalization, sustained uploads reach the budget less one step per frame (28 MiB with the default, the
+		// step being kept for the next frame's first, see AssetFinalizeContext::GetStagingRoom), and about half of it when
+		// frames come faster than the copies, unless UploadBytesPerFrame or FinalizeMsPerFrame stop them first: raise all
+		// three for a loading screen. The driver keeps freed staging memory committed for a while, so a process pays for the
+		// most staging it ever held: this bounds that high-water mark.
 		uint64_t StagingBytes = 32ull << 20;
 
 		// The defaults for a graphics device whose memory budget is deviceBudgetBytes: GPU textures may use 50% and GPU

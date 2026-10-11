@@ -138,7 +138,7 @@ namespace
 
 TEST_SUITE("GPU.Assets.Uploads")
 {
-	TEST_CASE("Staging is reused once the GPU has finished the work submitted before the next frame, and released when uploads stop")
+	TEST_CASE("Staging is reused once the GPU has run the copies fenced with it, and released when uploads stop")
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
@@ -165,24 +165,42 @@ TEST_SUITE("GPU.Assets.Uploads")
 			CHECK_FALSE(pool.HasRoomFor(1, bandBytes - 1)); // A limit below what is in flight already
 			CHECK(pool.HasRoomFor(std::numeric_limits<uint64_t>::max() - bandBytes, std::numeric_limits<uint64_t>::max()));
 
-			// The next frame sets the query that tells when the GPU is done with what was released before it: until then the
-			// GPU may still copy from it, so a new one is created.
-			pool.BeginFrame(++frame);
-			CHECK(pool.GetPendingBytes() == bandBytes);
+			// Until a query covers released staging (FenceReleased once the command lists with its copies were executed, else
+			// the next BeginFrame), those copies may not even have been submitted: whatever the GPU has done, a new one is
+			// created, and the released one keeps its room.
+			gpu.GetDevice().WaitForIdle();
 			nvrhi::StagingTextureHandle second = pool.AcquireTexture(band);
 			REQUIRE(second);
-			CHECK(second.Get() != firstObject);
+			nvrhi::IStagingTexture* secondObject = second.Get();
+			CHECK(secondObject != firstObject);
 			CHECK(pool.GetCreatedCount() == 2);
-			pool.Release(std::move(second));
+			CHECK_FALSE(pool.HasRoomFor(1, bandBytes));
 
-			// Once the GPU is done, the following frame hands it out again (the second one is in flight now); another shape gets
-			// its own.
-			gpu.GetDevice().WaitForIdle();
-			pool.BeginFrame(++frame);
-			CHECK(pool.GetIdleBytes() == bandBytes);
-			CHECK(pool.GetPendingBytes() == bandBytes);
+			// The second one's copy, executed, then fenced: once the GPU has run what was submitted before the query, both are
+			// reusable in the same frame (a budgeted upload that finds no room, or an acquisition, polls the query).
+			nvrhi::TextureDesc destinationDesc = band;
+			destinationDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+			destinationDesc.keepInitialState = true;
+			destinationDesc.debugName = "StagingDestination";
+			nvrhi::TextureHandle destination = gpu.GetNvrhiDevice()->createTexture(destinationDesc);
+			REQUIRE(destination);
+			nvrhi::CommandListHandle commandList = gpu.GetNvrhiDevice()->createCommandList();
+			commandList->open();
+			commandList->copyTexture(destination, nvrhi::TextureSlice(), second, nvrhi::TextureSlice());
+			commandList->close();
+			pool.Release(std::move(second));
+			REQUIRE(gpu.ExecuteAndWait(commandList));
+			pool.FenceReleased();
+			CHECK(pool.GetPendingBytes() == 2 * bandBytes);
+			CHECK(pool.HasRoomFor(2 * bandBytes, 2 * bandBytes));
+			CHECK(pool.GetPendingBytes() == 0);
+			CHECK(pool.GetIdleBytes() == 2 * bandBytes);
+			pool.FenceReleased(); // Nothing released since: no query
+			CHECK(pool.GetIdleBytes() == 2 * bandBytes);
+
+			// The most recently released one comes back first; another shape gets its own.
 			nvrhi::StagingTextureHandle reused = pool.AcquireTexture(band);
-			CHECK(reused.Get() == firstObject);
+			CHECK(reused.Get() == secondObject);
 			CHECK(pool.GetCreatedCount() == 2);
 			nvrhi::TextureDesc other = band;
 			other.height = 128;
@@ -214,7 +232,8 @@ TEST_SUITE("GPU.Assets.Uploads")
 			pool.BeginFrame(frame + StagingPool::c_IdleReleaseFrames);
 			CHECK(pool.GetIdleBytes() == 0);
 
-			// Without frames nothing becomes reusable: beyond the pending limit, staging is left to the GPU to free.
+			// Without queries (no FenceReleased, no frames) nothing becomes reusable: beyond the pending limit, staging is left
+			// to the GPU to free.
 			nvrhi::TextureDesc huge = band;
 			huge.width = 2048;
 			huge.height = 4096; // 32 MiB
@@ -248,28 +267,28 @@ TEST_SUITE("GPU.Assets.Uploads")
 			pool.Release(std::move(first));
 			CHECK(pool.GetPendingBytes() == 4ull << 20);
 
-			// In flight: another one. Once the GPU is done, a request of the same rounded size gets it back, and staging
-			// textures never come from buffers (nor the other way round).
-			pool.BeginFrame(++frame);
+			// Not covered by a query yet: another one. Once the GPU has run what was submitted before the next frame's query, a
+			// request of the same rounded size gets one back, and staging textures never come from buffers (nor the other way
+			// round).
 			nvrhi::BufferHandle second = pool.AcquireBuffer(4ull << 20);
 			REQUIRE(second);
-			CHECK(second.Get() != firstObject);
+			nvrhi::IBuffer* secondObject = second.Get();
+			CHECK(secondObject != firstObject);
 			pool.Release(std::move(second));
-			gpu.GetDevice().WaitForIdle();
 			pool.BeginFrame(++frame);
-			CHECK(pool.GetIdleBytes() == 4ull << 20);
+			gpu.GetDevice().WaitForIdle();
 			nvrhi::TextureDesc band;
 			band.width = 1024;
 			band.height = 1024;
 			band.format = nvrhi::Format::RGBA8_UNORM; // 4 MiB as well
 			nvrhi::StagingTextureHandle texture = pool.AcquireTexture(band);
 			REQUIRE(texture);
-			CHECK(pool.GetIdleBytes() == 4ull << 20);
+			CHECK(pool.GetIdleBytes() == 8ull << 20);
 			const uint64_t created = pool.GetCreatedCount();
 			nvrhi::BufferHandle reused = pool.AcquireBuffer((3ull << 20) + 1);
-			CHECK(reused.Get() == firstObject);
+			CHECK(reused.Get() == secondObject);
 			CHECK(pool.GetCreatedCount() == created);
-			CHECK(pool.GetIdleBytes() == 0);
+			CHECK(pool.GetIdleBytes() == 4ull << 20);
 			pool.Release(std::move(reused));
 			pool.Release(std::move(texture));
 		}
@@ -533,7 +552,7 @@ TEST_SUITE("GPU.Assets.Uploads")
 		const std::vector<uint8_t> cooked = source->Serialize();
 		const uint64_t chainBytes = source->GetMemoryUsage().Cpu;
 
-		// Staging of this frame that no device frame has recycled yet (as in tools and tests, which run none): the
+		// Staging released in this frame and not covered by a query yet (its copies' command list is not executed): the
 		// budget leaves no room beside it.
 		StagingPool& pool = Renderer::GetStagingPool();
 		nvrhi::TextureDesc band;
@@ -577,6 +596,60 @@ TEST_SUITE("GPU.Assets.Uploads")
 
 		first.reset();
 		second.reset();
+		SettleDevice(gpu);
+		CHECK(pool.GetPendingBytes() == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A frame's later texture bands leave a step of the staging budget to the next frame's first")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SettleDevice(gpu);
+		TextureSpecification specification;
+		specification.Format = TextureFormat::RGBA8;
+		specification.DebugName = "StagingRoomTexture";
+		const Ref<Texture> source = Texture::Create(specification, CreatePatternChain(2048, 1024));
+		REQUIRE(source);
+		const uint64_t chainBytes = source->GetMemoryUsage().Cpu;
+		Ref<Texture> texture = Texture::Deserialize(source->Serialize());
+		REQUIRE(texture);
+
+		// Level 0 is two bands of 4 MiB, the smaller levels one step of 2.7 MiB. Within 12 MiB of staging the steps after the
+		// frame's first leave 4 MiB: both bands of level 0 go (8 MiB), the rest does not.
+		StagingPool& pool = Renderer::GetStagingPool();
+		constexpr uint64_t c_StagingBudget = 12ull << 20;
+		nvrhi::CommandListHandle commandList = gpu.GetNvrhiDevice()->createCommandList();
+		commandList->open();
+		uint64_t frameUploaded = 0;
+		AssetFinalizeContext context { commandList, nullptr };
+		context.UploadBudget = 64ull << 20;
+		context.StagingBytes = c_StagingBudget;
+		context.UploadedBytes = &frameUploaded;
+		CHECK(context.GetStagingRoom() == c_StagingBudget - c_AssetUploadStepBytes);
+		CHECK(texture->FinalizeOnMainThread(context) == AssetFinalizeResult::Pending);
+		CHECK(frameUploaded == 2 * Texture::c_UploadBandBytes);
+		CHECK(pool.GetPendingBytes() == 2 * Texture::c_UploadBandBytes);
+
+		// The next frame's first step goes whatever is still in flight (here: nothing has run), and fits in the step left.
+		uint64_t nextFrameUploaded = 0;
+		context.UploadedBytes = &nextFrameUploaded;
+		CHECK(texture->FinalizeOnMainThread(context) == AssetFinalizeResult::Done);
+		CHECK(nextFrameUploaded == chainBytes - 2 * Texture::c_UploadBandBytes);
+		CHECK(pool.GetPendingBytes() == chainBytes);
+		CHECK(pool.GetPendingBytes() <= c_StagingBudget);
+		commandList->close();
+		REQUIRE(gpu.ExecuteAndWait(commandList));
+
+		// Every band is in place.
+		ReadbackImage level0;
+		REQUIRE(Renderer::ReadTexture(texture->GetGPUTexture(), level0, 0));
+		CHECK(GetPixelRGBA8(level0, 2047, 1023) == GetPatternTexel(2047, 1023, 0));
+		ReadbackImage level1;
+		REQUIRE(Renderer::ReadTexture(texture->GetGPUTexture(), level1, 1));
+		CHECK(GetPixelRGBA8(level1, 1023, 511) == GetPatternTexel(1023, 511, 1));
+
+		texture.reset();
 		SettleDevice(gpu);
 		CHECK(pool.GetPendingBytes() == 0);
 		CHECK(gpu.GetNewErrorCount() == 0);
@@ -817,7 +890,7 @@ TEST_SUITE("GPU.Assets.Uploads")
 		const uint64_t attributeBytes = c_Vertices * sizeof(MeshVertexAttributes);
 		const uint64_t indexBytes = c_Vertices * sizeof(uint32_t);
 
-		// Staging of this frame that no device frame has recycled yet fills the staging budget, as in the texture test.
+		// Staging released in this frame and not covered by a query yet fills the staging budget, as in the texture test.
 		StagingPool& pool = Renderer::GetStagingPool();
 		pool.Release(pool.AcquireBuffer(c_AssetUploadStepBytes));
 		const uint64_t stagingBudget = pool.GetPendingBytes();

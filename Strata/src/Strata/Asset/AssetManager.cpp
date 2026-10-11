@@ -1011,8 +1011,10 @@ namespace Strata
 
 		if (commandList)
 		{
+			// The staging these uploads copy from becomes reusable as soon as the GPU has run them, usually by the next frame's
+			// finalization: the GPU runs them ahead of the frame's rendering.
 			m_UploadCommandList->close();
-			Renderer::GetDevice()->executeCommandList(m_UploadCommandList);
+			Renderer::ExecuteUploads(m_UploadCommandList);
 		}
 
 		// What is left over (waiting for released memory, or the budget ran out) is finalized in a later frame, in its place

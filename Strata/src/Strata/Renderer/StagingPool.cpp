@@ -47,6 +47,8 @@ namespace Strata
 	nvrhi::StagingTextureHandle StagingPool::AcquireTexture(const nvrhi::TextureDesc& desc, uint64_t limit)
 	{
 		m_LastAcquireFrame = m_CurrentFrame;
+		// What the GPU has finished copying from since the latest poll is reused rather than made anew.
+		CollectCompleted();
 		// The most recently released one of that shape: its memory is the likeliest to be in the caches.
 		for (auto it = m_Idle.rbegin(); it != m_Idle.rend(); ++it)
 		{
@@ -75,6 +77,7 @@ namespace Strata
 	nvrhi::BufferHandle StagingPool::AcquireBuffer(uint64_t bytes, uint64_t limit)
 	{
 		m_LastAcquireFrame = m_CurrentFrame;
+		CollectCompleted();
 		const uint64_t size = GetBufferByteSize(bytes);
 		for (auto it = m_Idle.rbegin(); it != m_Idle.rend(); ++it)
 		{
@@ -153,9 +156,21 @@ namespace Strata
 		entries.clear();
 	}
 
-	void StagingPool::BeginFrame(uint64_t frameIndex)
+	bool StagingPool::HasRoomFor(uint64_t bytes, uint64_t limit)
 	{
-		m_CurrentFrame = frameIndex;
+		const auto fits = [&]()
+		{
+			return m_PendingBytes <= limit && bytes <= limit - m_PendingBytes;
+		};
+		if (fits())
+			return true;
+		// The GPU may have run copies since the latest poll: what it is done with no longer takes room.
+		CollectCompleted();
+		return fits();
+	}
+
+	void StagingPool::CollectCompleted()
+	{
 		// Queries complete in submission order, so the first fenced batch decides whether any later one can be done.
 		while (!m_Fenced.empty() && m_Device->pollEventQuery(m_Fenced.front().Completion))
 		{
@@ -164,39 +179,49 @@ namespace Strata
 			MakeIdle(batch.Entries);
 			m_IdleQueries.push_back(std::move(batch.Completion));
 		}
+	}
 
-		// The copies of what was released since the previous frame were executed by now: a query set now completes after
-		// them.
-		if (!m_Released.empty())
+	void StagingPool::FenceReleased()
+	{
+		if (m_Released.empty())
+			return;
+
+		// The command lists that copy from what was released were executed: a query set now completes after them.
+		nvrhi::EventQueryHandle completion;
+		if (!m_IdleQueries.empty())
 		{
-			nvrhi::EventQueryHandle completion;
-			if (!m_IdleQueries.empty())
-			{
-				completion = std::move(m_IdleQueries.back());
-				m_IdleQueries.pop_back();
-			}
-			else
-			{
-				completion = m_Device->createEventQuery();
-			}
-			if (completion)
-			{
-				m_Device->resetEventQuery(completion);
-				m_Device->setEventQuery(completion, nvrhi::CommandQueue::Graphics);
-				m_Fenced.push_back(Batch { std::move(m_Released), std::move(completion) });
-				m_Released.clear();
-			}
-			else
-			{
-				// Completion cannot be observed without a query: wait for the GPU instead.
-				ST_CORE_ERROR("StagingPool: failed to create an event query; waiting for the GPU to reuse staging");
-				m_Device->waitForIdle();
-				for (Batch& batch : m_Fenced)
-					MakeIdle(batch.Entries);
-				m_Fenced.clear();
-				MakeIdle(m_Released);
-			}
+			completion = std::move(m_IdleQueries.back());
+			m_IdleQueries.pop_back();
 		}
+		else
+		{
+			completion = m_Device->createEventQuery();
+		}
+		if (completion)
+		{
+			m_Device->resetEventQuery(completion);
+			m_Device->setEventQuery(completion, nvrhi::CommandQueue::Graphics);
+			m_Fenced.push_back(Batch { std::move(m_Released), std::move(completion) });
+			m_Released.clear();
+			return;
+		}
+
+		// Completion cannot be observed without a query: wait for the GPU instead.
+		ST_CORE_ERROR("StagingPool: failed to create an event query; waiting for the GPU to reuse staging");
+		m_Device->waitForIdle();
+		for (Batch& batch : m_Fenced)
+			MakeIdle(batch.Entries);
+		m_Fenced.clear();
+		MakeIdle(m_Released);
+	}
+
+	void StagingPool::BeginFrame(uint64_t frameIndex)
+	{
+		m_CurrentFrame = frameIndex;
+		CollectCompleted();
+		// The copies of what was released since the latest query were executed by now (staging is released once its copies
+		// are recorded, and their command lists are executed within the frame).
+		FenceReleased();
 
 		// Uploads stopped a while ago: return everything. Otherwise keep the most recently released up to the limit.
 		const bool quiet = frameIndex >= m_LastAcquireFrame + c_IdleReleaseFrames;
