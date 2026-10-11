@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Asset/AssetTestUtils.h"
 #include "Editor/AssetBrowserView.h"
 #include "Editor/HarnessEditor.h"
 #include "Panels/ContentBrowserPanel.h"
@@ -10,6 +11,8 @@
 
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/Log.h>
+#include <Strata/Events/ApplicationEvent.h>
 #include <Strata/Reflection/PropertyJson.h>
 
 #include <imgui.h>
@@ -344,5 +347,33 @@ TEST_SUITE("Editor.UI.ContentBrowser")
 		editor.Run("edit.undo");
 		CHECK_FALSE(editor.Assets().FindAssetByPath("Materials/Lamp.stprefab").IsValid());
 		CHECK(editor.Run("prefab.status", { { "entity", lamp } })["linked"] == false);
+	}
+
+	TEST_CASE("Files and folders dropped on the editor import into the open folder; files of no asset type are named and left out")
+	{
+		ScopedJobSystem jobs(2, 2);
+		BrowserEditor editor("ContentBrowserFileDrop");
+		editor.Browser().SetCurrentDirectory("Textures");
+		editor.Frames(2);
+		const std::filesystem::path dropped = CreateTemporaryDirectory("ContentBrowserFileDropFiles");
+		REQUIRE(FileSystem::WriteText(dropped / "Notes.txt", "Not an asset"));
+		REQUIRE(FileSystem::WriteBytes(dropped / "Dropped.png", CreateSolidPNG(4, 4, 10, 200, 30)));
+		REQUIRE(FileSystem::WriteBytes(dropped / "Pack" / "Inner.png", CreateSolidPNG(4, 4, 200, 10, 30)));
+
+		// A file no importer reads would make asset.import refuse the whole drop: it is left out, and the log says so.
+		const uint64_t sequence = Log::GetBuffer().GetLatestSequence();
+		WindowFileDropEvent drop({ dropped / "Notes.txt", dropped / "Dropped.png", dropped / "Pack" });
+		editor.Harness.DispatchEvent(drop, *editor.Layer);
+		REQUIRE(editor.FramesUntil([&]()
+		{
+			return editor.Assets().FindAssetByPath("Textures/Dropped.png").IsValid() && editor.Assets().FindAssetByPath("Textures/Pack/Inner.png").IsValid()
+				&& editor.Assets().GetExternalImportCount() == 0;
+		}));
+		CHECK(editor.Assets().GetImportInfo(editor.Assets().FindAssetByPath("Textures/Dropped.png")).Error.empty());
+		CHECK_FALSE(FileSystem::Exists(editor.Assets().GetAssetDirectory() / "Textures" / "Notes.txt"));
+		bool named = false;
+		for (const LogEntry& entry : Log::GetBuffer().GetEntries(sequence))
+			named = named || (entry.Message.find("Not imported") != std::string::npos && entry.Message.find("Notes.txt") != std::string::npos);
+		CHECK(named);
 	}
 }

@@ -2675,9 +2675,10 @@ namespace Strata
 	{
 		for (ExternalImportItem& item : import.m_Items)
 		{
-			// A copy that failed takes back what it copied.
+			// A copy that failed takes back what it copied. Logged here, once, as failed imports are when they are applied.
 			if (!item.Error.empty())
 			{
+				ST_CORE_ERROR("Import of '{}' failed: {}", FileSystem::ToUTF8(item.Source), item.Error);
 				if (!item.Files.empty())
 				{
 					RollBackExternalFiles(item.Files, item.Assets);

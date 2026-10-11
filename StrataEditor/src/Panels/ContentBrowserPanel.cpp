@@ -15,9 +15,11 @@
 #include "UI/Theme.h"
 #include "UI/Widgets.h"
 
+#include <Strata/Asset/AssetImporter.h>
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/Log.h>
+#include <Strata/Core/StringUtils.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Entity.h>
 #include <Strata/Scene/Scene.h>
@@ -218,15 +220,32 @@ namespace Strata
 		const std::vector<std::filesystem::path>& paths)
 	{
 		// One asset.import for files and folders alike: it copies on an I/O job and imports in the background, and the assets
-		// show as importing meanwhile. Failures are logged by the import itself, once.
+		// show as importing meanwhile. Files no importer reads are left out (asset.import would refuse the whole request), and
+		// said so.
 		nlohmann::json files = nlohmann::json::array();
 		nlohmann::json directories = nlohmann::json::array();
+		std::string skipped;
 		for (const std::filesystem::path& path : paths)
-			(FileSystem::IsDirectory(path) ? directories : files).push_back(FileSystem::ToUTF8(path));
+		{
+			if (FileSystem::IsDirectory(path))
+				directories.push_back(FileSystem::ToUTF8(path));
+			else if (FileSystem::IsRegularFile(path) && AssetImporterRegistry::FindByExtension(StringUtils::ToLower(FileSystem::ToUTF8(path.extension()))))
+				files.push_back(FileSystem::ToUTF8(path));
+			else
+				skipped += (skipped.empty() ? "" : ", ") + FileSystem::ToUTF8(path.filename());
+		}
+		if (!skipped.empty())
+			ST_WARN("Not imported (no asset type Strata imports): {}", skipped);
 		if (files.empty() && directories.empty())
 			return;
 		runner.Run(context, commands, "asset.import", { { "files", std::move(files) }, { "directories", std::move(directories) }, { "directory", m_View.GetFolder() } },
-			[](const EditorCommandResult&) {});
+			[](const EditorCommandResult& result)
+			{
+				// Failures of the items are logged by the import, once each (their list is in the error's data); the others
+				// (the project closed, the target folder is gone) here.
+				if (!result.Success && !(result.ErrorData.is_object() && result.ErrorData.contains("items")))
+					ST_ERROR("Import failed: {}", result.Error);
+			});
 	}
 
 	void ContentBrowserPanel::Select(EditorContext& context, const AssetBrowserItem& item)

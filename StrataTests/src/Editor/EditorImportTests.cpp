@@ -850,10 +850,13 @@ TEST_SUITE("Editor.Import")
 
 		// A file three folders up is too far; a URL is no file.
 		WriteQuadModel(external / "Deep" / "A" / "B" / "Far.gltf", "", "../../../Textures/Far.png");
+		const uint64_t sequence = Log::GetBuffer().GetLatestSequence();
 		EditorCommandResult far = harness.Finish(harness.Start("asset.import", { { "file", FileSystem::ToUTF8(external / "Deep" / "A" / "B" / "Far.gltf") } }));
 		CHECK_FALSE(far.Success);
 		CHECK(far.Error.find("more than 2 folders above") != std::string::npos);
 		CHECK_FALSE(FileSystem::Exists(harness.Assets / "Far"));
+		// Logged once, like failed imports: the editor's UI runs the command without reading its answer.
+		CHECK(CountLogEntries(sequence, "more than 2 folders above") == 1);
 	}
 
 	TEST_CASE("A folder imports with its tree, its .meta files and what its models read")

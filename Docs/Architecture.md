@@ -701,11 +701,13 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   folder goes there with its tree: its asset files, their `.meta` files and the files its models read inside it (hidden
   folders, links and other files stay out). An item whose import fails is removed again (`RollBackExternalFiles`: its
   files, `.meta` files and the folders the copy made; for a folder, only the assets that failed) unless
-  `KeepOnFailure`; the failure is logged once (by `ApplyImportOutcome`) and the command fails with the items in its
-  error's data. Importers' messages, which third-party decoders may fill with bytes of the file, are made valid UTF-8
-  (`StringUtils::MakeValidUTF8`) before they reach records, logs and results. Closing the project ends an import: a copy
-  that has not finished removes what it copied. `ImportExternalFile` copies the same way and imports on the calling
-  thread (tools, tests).
+  `KeepOnFailure`; the failure is logged once (by `ApplyImportOutcome`, or by `FinishExternalImport` for a copy that
+  failed) and the command fails with the items in its error's data. Files dropped on the editor import into the Content
+  Browser's folder (`ContentBrowserPanel::ImportFiles`), leaving out, with a warning, files no importer reads (the command
+  refuses a request that names one). Importers' messages, which third-party decoders may fill with bytes of the file, are
+  made valid UTF-8 (`StringUtils::MakeValidUTF8`) before they reach records, logs and results. Closing the project ends
+  an import: a copy that has not finished removes what it copied. `ImportExternalFile` copies the same way and imports
+  on the calling thread (tools, tests).
 - **Cancelling imports.** Nothing in the editor waits for a background import. Each is a `BackgroundJob` with a
   cancellation flag, the importer's `ImportContext::Cancel`: importers check it as they go (the texture cooker per block
   of a compressed level and between mip levels, the texture importer around decoding, the glTF importer between a
