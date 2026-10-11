@@ -850,7 +850,9 @@ namespace Strata
 		// Prefabs
 		////////////////////////////////////////////////////////////////////////////////
 
-		registry.Register({ "prefab.instantiate", "Instantiates a prefab or imported model, optionally under a parent and with component values on its root (undoable; while playing it changes the running copy only).",
+		registry.Register({ "prefab.instantiate", "Instantiates a prefab or imported model, optionally under a parent and with component values on its root (undoable; "
+			"while playing it changes the running copy only). Returns {id (the first root), entities (every root)}; the instance stays linked to the prefab "
+			"(prefab.status, prefab.apply, prefab.revert).",
 			ObjectSchema({
 				{ "prefab", AssetSchema("Prefab or model") },
 				{ "parent", OptionalEntitySchema("Parent; null or omitted for the top level") },
@@ -887,8 +889,12 @@ namespace Strata
 				std::string error;
 				if (components && !roots.empty() && !ApplyComponents(roots.front(), *components, &error))
 					return RollBack(transaction, error, EditorCommandError::InvalidParameters);
-				return Finish(context, transaction, { { "entities", std::move(ids) } });
+				nlohmann::json result = { { "entities", std::move(ids) } };
+				result["id"] = roots.empty() ? nlohmann::json(nullptr) : UUIDToJson(roots.front().GetUUID());
+				return Finish(context, transaction, std::move(result));
 			} });
+
+		RegisterPrefabWorkflowCommands(registry);
 	}
 
 }

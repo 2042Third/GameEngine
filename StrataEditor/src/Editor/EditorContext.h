@@ -2,6 +2,7 @@
 
 #include "Editor/EditorViewport.h"
 #include "Editor/GameExport.h"
+#include "Editor/PrefabSync.h"
 #include "Editor/ProjectTemplates.h"
 #include "Editor/RecentProjects.h"
 #include "Editor/SceneEdit.h"
@@ -218,6 +219,8 @@ namespace Strata
 		//////////////////////////////////////////////////////////////////////////
 
 		UndoStack& GetUndoStack() { return m_UndoStack; }
+		// The prefab instances of the edited scene and their prefabs (updates after prefab changes, modified marks).
+		PrefabSync& GetPrefabSync() { return m_PrefabSync; }
 		// Records an edit of the active scene. Edits of the running copy during play are not recorded: they are
 		// discarded with it. Returns true when an undo step was recorded.
 		bool CommitEdit(SceneEditTransaction& transaction);
@@ -357,6 +360,7 @@ namespace Strata
 		AssetHandle m_InspectedAsset = UUID::Null();
 		uint64_t m_InspectionVersion = 0;
 		UndoStack m_UndoStack;
+		PrefabSync m_PrefabSync;
 
 		Ref<ScriptEngine> m_ScriptEngine;
 		ScriptBuilder m_ScriptBuilder;

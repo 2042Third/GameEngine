@@ -943,6 +943,8 @@ namespace Strata
 		}
 		else
 		{
+			// Instances of prefabs that changed take their new values.
+			m_PrefabSync.Update(*this);
 			m_EditScene->OnUpdateEditor(timestep);
 		}
 		// After the game's update and before the next input frame: taps whose frames passed let go, and input frames stop

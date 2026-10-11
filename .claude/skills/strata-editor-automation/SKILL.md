@@ -211,8 +211,16 @@ the open scene cannot be deleted.
 change parent go last) in one undo step; `entity.duplicate {"entities": [...]}` puts each copy right after its original;
 `entity.copy {"entities": [...]}` returns `data` that `entity.paste {"data", "parent"?, "index"?}` turns into new
 entities (fresh IDs, references among them remapped, also in another scene);
-`prefab.create {"entities": ["<id>"], "path": "Prefabs/Block.stprefab"}`, then
-`prefab.instantiate {"prefab": "Prefabs/Block.stprefab", "components": {"Transform": {"Translation": [2, 0, 0]}}}`.
+`prefab.create {"entities": ["<id>"], "path": "Prefabs/Block.stprefab"}` (the entities become an instance of it; `"link":
+false` leaves them alone), then
+`prefab.instantiate {"prefab": "Prefabs/Block.stprefab", "components": {"Transform": {"Translation": [2, 0, 0]}}}`
+(returns `id`, the instance's root). Instances stay linked: change one instance (any of its entities) and
+`prefab.apply {"entity": "<id>"}` writes it into the prefab, and every instance that still had the prefab's values takes
+the new ones (one undo step for the file and the scene); `prefab.status {"entity"}` says whether an instance differs
+(`modified`, `changed`, `added`, `removed`), `prefab.revert {"entity"}` gives it the prefab's values again (IDs kept),
+`prefab.unpack {"entity"}` makes its entities plain ones, `prefab.select {"entity", "asset"?}` selects the root or shows
+the prefab. The root's transform and name always stay the instance's own. Imported models are instantiated the same way
+but cannot be applied to (unpack them, or make a prefab of the instance).
 
 **Edit**: `component.add` (adds if missing, then sets values), `component.set` (component must exist),
 `component.remove`, `entity.setActive`: each takes `"entities": [...]` instead of `"entity"` to change all of them in one

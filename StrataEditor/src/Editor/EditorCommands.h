@@ -146,6 +146,7 @@ namespace Strata
 
 	// Built-in command groups (EditorCommands*.cpp).
 	void RegisterSceneCommands(EditorCommandRegistry& registry);
+	void RegisterPrefabWorkflowCommands(EditorCommandRegistry& registry); // prefab.apply, revert, unpack, select, status (EditorPrefabCommands.cpp)
 	void RegisterAssetCommands(EditorCommandRegistry& registry);
 	void RegisterEditorStateCommands(EditorCommandRegistry& registry);
 	void RegisterViewportCommands(EditorCommandRegistry& registry);

@@ -768,6 +768,14 @@ and `AudioSystem`, the built-in "Audio" scene system.
   (`EditorAssetManager::MoveToTrash`, kept 30 days) and is one undo step that restores the handle.
   `asset.findReferences`, `asset.move`, `asset.createFolder` and `asset.moveFolder` (handles kept) complete the set; each
   mutating one is one undo step that never marks the scene unsaved.
+- **Prefab instances stay linked** (`Scene/PrefabInstances`, `Editor/PrefabSync`, `Editor/EditorPrefabCommands.cpp`):
+  `prefab.instantiate` and `prefab.create` (unless `link: false`) link entities to their prefab (`PrefabInstanceComponent`);
+  `prefab.status`, `prefab.apply` (the instance into the prefab, unmodified instances follow; one step for the file and the
+  scene; not for models, not while playing), `prefab.revert` (UUIDs kept), `prefab.unpack` and `prefab.select` work on
+  the instance an entity belongs to. An instance root's transform and name are the instance's own and never count as a
+  change. When a prefab's file changes, `PrefabSync` gives unmodified instances of the edited scene its new values (one
+  undo step); code that writes a prefab for the editor sets its baseline (`PrefabSync::SetBaseline`) so the change is not
+  propagated twice. Several actions that form one step go into an `EditorActionGroup`.
 - Commands are named `<group>.<action>`, take a JSON object and return a JSON value or an error. Each
   has a one-line description and a JSON Schema of its parameters (`CommandUtils::ObjectSchema` etc.);
   automation exposes them as tools, so descriptions must tell an agent what the command does. Use

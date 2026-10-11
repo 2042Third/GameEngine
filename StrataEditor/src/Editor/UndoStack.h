@@ -3,6 +3,7 @@
 #include <Strata/Core/Base.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <string>
 #include <vector>
@@ -32,6 +33,25 @@ namespace Strata
 		virtual bool ChangesScene() const { return true; }
 	};
 
+	// Several actions as one undo step (e.g. prefab.apply: the prefab's file and the instances it updates): Execute runs them in
+	// order (undoing those that ran when one fails), Undo in reverse order.
+	class EditorActionGroup final : public EditorAction
+	{
+	public:
+		explicit EditorActionGroup(std::string name);
+
+		// Null actions are left out.
+		void Add(Scope<EditorAction> action);
+
+		const std::string& GetName() const override { return m_Name; }
+		bool Execute(std::string* outError) override;
+		void Undo() override;
+		bool ChangesScene() const override;
+	private:
+		std::string m_Name;
+		std::vector<Scope<EditorAction>> m_Actions;
+	};
+
 	// Linear undo history with redo, a capacity limit and save-point tracking (for "modified" indicators).
 	// Main thread only.
 	class UndoStack
@@ -58,6 +78,9 @@ namespace Strata
 
 		// The next recorded action starts a new undo step even if it could merge (e.g. the mouse was released).
 		void BreakMerge() { m_MergeBroken = true; }
+		// Changes with every recorded, merged, undone or redone action and every Clear, so caches of what the edits made (a
+		// prefab instance's "modified" mark) can tell when to look again.
+		uint64_t GetChangeCount() const { return m_ChangeCount; }
 
 		// Save point: IsModified reports whether the applied actions differ from those at the last MarkSaved by an action
 		// that changes the scene (EditorAction::ChangesScene). Costs the number of actions between the two positions.
@@ -75,6 +98,7 @@ namespace Strata
 		// Position of the save point; c_NoSavePoint when it was trimmed or discarded with the redo history.
 		size_t m_SavedPosition = 0;
 		static constexpr size_t c_NoSavePoint = static_cast<size_t>(-1);
+		uint64_t m_ChangeCount = 0;
 	};
 
 }

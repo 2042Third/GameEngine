@@ -3,6 +3,7 @@
 #include "Editor/AssetBrowserView.h"
 #include "Editor/HarnessEditor.h"
 #include "Panels/ContentBrowserPanel.h"
+#include "Panels/SceneHierarchyPanel.h"
 #include "TestHelpers.h"
 #include "UI/DeleteAssetDialog.h"
 #include "UI/ItemProbe.h"
@@ -316,5 +317,32 @@ TEST_SUITE("Editor.UI.ContentBrowser")
 		const std::vector<AssetHandle> subAssets = editor.Assets().GetImportInfo(model).SubAssets;
 		REQUIRE_FALSE(subAssets.empty());
 		CHECK(std::any_of(subAssets.begin(), subAssets.end(), [&](AssetHandle subAsset) { return browser.FindItemRect(subAsset).has_value(); }));
+	}
+
+	TEST_CASE("Dragging entities from the Hierarchy onto a folder makes them a prefab there, linked to it")
+	{
+		BrowserEditor editor("ContentBrowserPrefabDrop");
+		const std::string lamp = editor.Run("entity.create", { { "name", "Lamp" } })["id"].get<std::string>();
+		editor.Run("entity.create", { { "name", "Bulb" }, { "parent", lamp } });
+		// Selected elsewhere, the lamp is scrolled into the Hierarchy's view.
+		editor.Run("selection.set", { { "entities", { lamp } } });
+		editor.Frames(3);
+		SceneHierarchyPanel* hierarchy = editor.Layer->GetPanels().Get<SceneHierarchyPanel>(EditorPanels::c_Hierarchy);
+		REQUIRE(hierarchy);
+		const std::optional<SceneHierarchyPanel::RowRect> row = hierarchy->FindRowRect(*UUIDFromJson(lamp));
+		REQUIRE_MESSAGE(row.has_value(), "The Hierarchy shows beside the Content Browser in the default layout");
+		const size_t historyBefore = editor.Run("edit.history")["history"].size();
+
+		editor.DragTo(ImVec2((row->Min.x + row->Max.x) * 0.5f, (row->Min.y + row->Max.y) * 0.5f), editor.FolderCenter("Materials"));
+		editor.Frames(2);
+		const AssetHandle prefab = editor.Assets().FindAssetByPath("Materials/Lamp.stprefab");
+		REQUIRE(prefab.IsValid());
+		const nlohmann::json status = editor.Run("prefab.status", { { "entity", lamp } });
+		CHECK(status["linked"] == true);
+		CHECK(status["prefab"] == UUIDToJson(prefab));
+		CHECK(editor.Run("edit.history")["history"].size() == historyBefore + 1);
+		editor.Run("edit.undo");
+		CHECK_FALSE(editor.Assets().FindAssetByPath("Materials/Lamp.stprefab").IsValid());
+		CHECK(editor.Run("prefab.status", { { "entity", lamp } })["linked"] == false);
 	}
 }

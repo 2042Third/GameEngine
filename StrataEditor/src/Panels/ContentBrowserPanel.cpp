@@ -1,6 +1,7 @@
 #include "Panels/ContentBrowserPanel.h"
 
 #include "Editor/EditorCommandRunner.h"
+#include "Editor/CommandUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "UI/EditorActions.h"
@@ -17,6 +18,8 @@
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Scene/Entity.h>
+#include <Strata/Scene/Scene.h>
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -328,6 +331,28 @@ namespace Strata
 			if (moved != folder && AssetBrowserView::GetParentFolder(moved) != folder)
 				RunEditorCommand(context, commands, "asset.moveFolder", { { "path", moved }, { "to", destination } });
 		}
+		// Entities dragged from the Hierarchy become a prefab in the folder, named after the first, which they are an instance of.
+		if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(DragDrop::c_Entities); payload && assets && !context.IsPlaying())
+		{
+			std::vector<UUID> dropped(static_cast<size_t>(payload->DataSize) / sizeof(UUID));
+			if (!dropped.empty())
+				std::memcpy(dropped.data(), payload->Data, dropped.size() * sizeof(UUID));
+			const Ref<Scene> scene = context.GetActiveScene();
+			const Entity first = dropped.empty() || !scene ? Entity() : scene->GetEntityByUUID(dropped.front());
+			if (first)
+			{
+				nlohmann::json entities = nlohmann::json::array();
+				for (UUID id : dropped)
+					entities.push_back(UUIDToJson(id));
+				const std::string path = CommandUtils::MakeUniqueAssetPath(*assets, folder, first.GetName(), ".stprefab", "Prefab");
+				const nlohmann::json created = RunEditorCommand(context, commands, "prefab.create", { { "entities", std::move(entities) }, { "path", path } });
+				if (created.is_object())
+				{
+					if (const std::optional<UUID> prefab = UUIDFromJson(created.value("asset", nlohmann::json())))
+						m_Selected = *prefab;
+				}
+			}
+		}
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -406,9 +431,8 @@ namespace Strata
 				CreateFolder(panelContext);
 			if (ImGui::MenuItem((std::string(Icons::Palette) + "  Material").c_str()))
 			{
-				const std::filesystem::path path = FileSystem::GetUniquePath(assets.GetAssetDirectory() / FileSystem::FromUTF8(JoinPath(m_View.GetFolder(), "Material.stmat")));
 				RunEditorCommand(context, panelContext.Commands, "material.create",
-					{ { "path", JoinPath(m_View.GetFolder(), FileSystem::ToUTF8(path.filename())) } });
+					{ { "path", CommandUtils::MakeUniqueAssetPath(assets, m_View.GetFolder(), "Material", ".stmat", "Material") } });
 			}
 			ImGui::EndPopup();
 		}
@@ -910,8 +934,8 @@ namespace Strata
 		{
 			if (EditorAssetManager* assets = context.GetAssetManager())
 			{
-				const std::filesystem::path path = FileSystem::GetUniquePath(assets->GetAssetDirectory() / FileSystem::FromUTF8(JoinPath(m_View.GetFolder(), "Material.stmat")));
-				RunEditorCommand(context, panelContext.Commands, "material.create", { { "path", JoinPath(m_View.GetFolder(), FileSystem::ToUTF8(path.filename())) } });
+				RunEditorCommand(context, panelContext.Commands, "material.create",
+					{ { "path", CommandUtils::MakeUniqueAssetPath(*assets, m_View.GetFolder(), "Material", ".stmat", "Material") } });
 			}
 		}
 		ImGui::Separator();

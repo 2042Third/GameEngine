@@ -80,6 +80,41 @@ namespace Strata
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
+	// AssetCreateAction
+	////////////////////////////////////////////////////////////////////////////////
+
+	AssetCreateAction::AssetCreateAction(EditorAssetManager& assets, std::string name, std::string path)
+		: AssetFileAction(assets, std::move(name)), m_Path(std::move(path))
+	{
+	}
+
+	bool AssetCreateAction::Execute(std::string* outError)
+	{
+		EditorAssetManager* assets = GetAssets(outError);
+		if (!assets)
+			return false;
+		if (!m_Trashed)
+			return true; // Recorded once the asset was made
+		if (!assets->RestoreFromTrash(*m_Trashed, outError))
+			return false;
+		m_Trashed.reset();
+		return true;
+	}
+
+	void AssetCreateAction::Undo()
+	{
+		std::string error;
+		EditorAssetManager* assets = GetAssets(&error);
+		TrashedAssets trashed;
+		if (!assets || !assets->MoveToTrash(m_Path, trashed, &error))
+		{
+			ST_ERROR("Undo of '{}' failed: {}", GetName(), error);
+			return;
+		}
+		m_Trashed = std::move(trashed);
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
 	// AssetFolderCreateAction
 	////////////////////////////////////////////////////////////////////////////////
 

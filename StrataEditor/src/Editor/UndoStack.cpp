@@ -30,6 +30,7 @@ namespace Strata
 
 	void UndoStack::Push(Scope<EditorAction> action)
 	{
+		m_ChangeCount++;
 		// Recording after undoing discards the undone actions; a save point among them becomes unreachable.
 		if (m_Position < m_Actions.size())
 		{
@@ -74,6 +75,7 @@ namespace Strata
 		if (!CanUndo())
 			return false;
 		m_Position--;
+		m_ChangeCount++;
 		m_Actions[m_Position]->Undo();
 		m_MergeBroken = true;
 		return true;
@@ -84,6 +86,7 @@ namespace Strata
 		if (!CanRedo())
 			return false;
 		std::string error;
+		m_ChangeCount++;
 		if (!m_Actions[m_Position]->Execute(&error))
 		{
 			// The world changed in a way the action cannot be reapplied to: drop it and everything after it.
@@ -140,10 +143,57 @@ namespace Strata
 
 	void UndoStack::Clear()
 	{
+		m_ChangeCount++;
 		m_Actions.clear();
 		m_Position = 0;
 		m_SavedPosition = 0;
 		m_MergeBroken = true;
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
+	// EditorActionGroup
+	////////////////////////////////////////////////////////////////////////////////
+
+	EditorActionGroup::EditorActionGroup(std::string name)
+		: m_Name(std::move(name))
+	{
+	}
+
+	void EditorActionGroup::Add(Scope<EditorAction> action)
+	{
+		if (action)
+			m_Actions.push_back(std::move(action));
+	}
+
+	bool EditorActionGroup::Execute(std::string* outError)
+	{
+		for (size_t index = 0; index < m_Actions.size(); index++)
+		{
+			if (!m_Actions[index]->Execute(outError))
+			{
+				// The group happens as a whole or not at all.
+				for (size_t undone = index; undone > 0; undone--)
+					m_Actions[undone - 1]->Undo();
+				return false;
+			}
+		}
+		return true;
+	}
+
+	void EditorActionGroup::Undo()
+	{
+		for (auto it = m_Actions.rbegin(); it != m_Actions.rend(); ++it)
+			(*it)->Undo();
+	}
+
+	bool EditorActionGroup::ChangesScene() const
+	{
+		for (const Scope<EditorAction>& action : m_Actions)
+		{
+			if (action->ChangesScene())
+				return true;
+		}
+		return false;
 	}
 
 }

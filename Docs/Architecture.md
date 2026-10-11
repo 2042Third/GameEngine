@@ -1368,7 +1368,8 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   the one shown already), so the panels bring the matching inspector to the front.
 - **Commands** (`EditorCommands.h`). Handlers take a JSON object and return an `EditorCommandResult`: a value, an error
   with an `EditorCommandError` kind, or `Defer(poll)`. The built-in groups are registered by
-  `EditorSceneCommands.cpp` (scene, entity, component, prefab), `EditorAssetCommands.cpp` (asset, including
+  `EditorSceneCommands.cpp` (scene, entity, component, `prefab.instantiate`), `EditorPrefabCommands.cpp` (`prefab.status`,
+  `prefab.apply`, `prefab.revert`, `prefab.unpack`, `prefab.select`), `EditorAssetCommands.cpp` (asset, including
   `asset.findReferences`, `asset.createFolder`, `asset.moveFolder` and `asset.deleteFolder`, material, prefab,
   project, including `project.templates`, `project.samples`, `project.openSample`, `project.close`, `project.export`,
   `project.exportStatus`, `project.cancelExport` and `project.setExportSettings`),
@@ -1445,6 +1446,27 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   included) and after; undo and redo apply them again, and steps with the same merge key
   (`Material/<handle>/<property>`) merge until `UndoStack::BreakMerge`, so a drag that saves every frame is one step.
   The action refers to the project's asset manager weakly and does not change the scene, so it never marks it unsaved.
+- **Prefab instances** (`Scene/PrefabInstances.h`, `Editor/PrefabSync.h`, `EditorPrefabCommands.cpp`). Instantiating a
+  prefab or model links every entity it makes (`PrefabInstanceComponent`: the prefab and the entity's id in it); an
+  *instance root* is a linked entity whose parent is not linked to the same prefab, and the instance is its subtree (a
+  prefab with several top-level entities gives one root per part). The root's transform and name are the instance's own:
+  `PrefabInstances::Compare` leaves them out, `Replace` keeps them (with the root's parent and place), and `MakeTemplate`
+  writes the prefab's own in their place. `Compare` turns the instance into the prefab's form (`MakeTemplate`: links
+  removed, entity references remapped to the prefab's ids) and compares it entity by entity with the part of the prefab's
+  snapshot below the root's id, giving the changed, added and removed entities (`prefab.status`). `prefab.create` links
+  the entities it captured (`Link`, their UUIDs as the prefab's ids; the stored prefab holds no links) in one step with the
+  new file (`EditorActionGroup` of an `AssetCreateAction`, whose undo moves the file to the trash, and the scene's
+  change). `prefab.apply` writes `MakeTemplate`'s part into the prefab (`ReplaceTemplate`, in the part's place), links
+  what was added to the instance, and updates the other instances that equalled the prefab before, one step for the file
+  and the scene (`AssetDocumentAction` and the scene's action in a group); models are imported and refuse it.
+  `prefab.revert` rebuilds the instance from the prefab (`Replace`: entities keep their UUIDs by prefab id, entities the
+  prefab lacks go, missing ones are made; nothing changes when the prefab's part is missing or broken), `prefab.unpack`
+  removes the links. `PrefabSync`, updated by `EditorContext` once per frame in edit mode, keeps a baseline snapshot per
+  prefab the edited scene uses and watches their source revisions: when a prefab's file changes (on disk, a reimport),
+  instances that equalled the baseline take the new values in one undo step ("Update Instances of ..."), modified ones
+  keep theirs. The editor's own writes set the baseline first (`SetBaseline`, also when `prefab.apply` is undone or
+  redone), so they are never propagated twice. It also caches per instance root whether it is modified, renewed when the
+  undo history or a baseline changes, for the Hierarchy's mark.
 - **Authoring panels** (`Panels/SceneHierarchyPanel`, `InspectorPanel`, `AssetInspectorPanel`, `UI/PropertyWidgets`,
   `UI/MaterialEditor`, `UI/EditorActions`). They draw state and run commands, and their cost follows what is on screen:
   - The **Hierarchy** draws `HierarchyView`'s rows through `ImGuiListClipper` inside one `ImGui::BeginMultiSelect` scope
@@ -1454,8 +1476,12 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
     while filtering, Ctrl+A, ranges and boxes skip the ancestors shown for context).
     A primary selection that changed elsewhere is revealed (`HierarchyView::Reveal`, then the list scrolls to its row).
     Rows are tree nodes with the entity's icon (`UI/EntityIcons`), its name, a prefab badge on an instance's root (a
-    click inspects the prefab) and an eye (`entity.setActive`); a drag carries the topmost dragged entities
+    click inspects the prefab; in the warning color while the instance differs from its prefab, `PrefabSync::IsModified`)
+    and an eye (`entity.setActive`); a drag carries the topmost dragged entities
     (`DragDrop::c_Entities`) and a drop asks `HierarchyView::GetDropTarget` for `entity.setParent`'s parent and index.
+    Dropped on a Content Browser folder they become a prefab there (`prefab.create`). A row's menu creates a prefab from
+    the selection (in `Prefabs/`) and, on entities of an instance, applies, reverts, unpacks, selects the instance's
+    root or shows its prefab (the `prefab.*` commands).
     The rename field is drawn after the selection's scope and activated by id: a keyboard move out of that scope would
     make ImGui clear the selection. With 100,000 roots the panel costs about 0.012 ms per frame (it drew every root
     before: 12.9 ms; `Perf.Editor`).

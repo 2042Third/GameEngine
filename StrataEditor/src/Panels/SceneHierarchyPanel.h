@@ -67,6 +67,8 @@ namespace Strata
 		void DrawRow(EditorContext& context, const EditorCommandRegistry& commands, Scene& scene, size_t row);
 		void DrawRowName(Scene& scene, const HierarchyRow& row, float textX, float right);
 		void DrawRowContextMenu(EditorContext& context, const EditorCommandRegistry& commands, Scene& scene, const HierarchyRow& row);
+		// Create Prefab, and for entities of prefab instances Apply, Revert, Unpack, Select Prefab Root and Show Prefab Asset.
+		void DrawPrefabMenuItems(EditorContext& context, const EditorCommandRegistry& commands, Scene& scene, const HierarchyRow& row);
 		void AcceptRowDrops(EditorContext& context, const EditorCommandRegistry& commands, Scene& scene, size_t row, const ImVec2& min, const ImVec2& max);
 		void AcceptBackgroundDrops(EditorContext& context, const EditorCommandRegistry& commands, Scene& scene);
 		void ApplySelectionRequests(EditorContext& context, const Scene& scene, const ImGuiMultiSelectIO& io);

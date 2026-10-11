@@ -299,4 +299,42 @@ TEST_SUITE("Editor.Undo")
 		CHECK_FALSE(stack.CanRedo());
 		CHECK_FALSE(stack.IsModified());
 	}
+
+	TEST_CASE("A group is one step: it runs as a whole or not at all, and undoes in reverse order")
+	{
+		int value = 0;
+		int outside = 0;
+		UndoStack stack;
+		Scope<EditorActionGroup> group = CreateScope<EditorActionGroup>("Both");
+		group->Add(CreateScope<OutsideAction>(outside));
+		group->Add(nullptr); // Left out
+		group->Add(CreateScope<AddAction>(value, 2));
+		CHECK(group->ChangesScene()); // One of its actions does
+		const uint64_t changes = stack.GetChangeCount();
+		CHECK(stack.Execute(std::move(group)));
+		CHECK(stack.GetChangeCount() > changes);
+		CHECK(value == 2);
+		CHECK(outside == 1);
+		CHECK(stack.GetHistory() == std::vector<std::string> { "Both" });
+		CHECK(stack.Undo());
+		CHECK(value == 0);
+		CHECK(outside == 0);
+		CHECK(stack.Redo());
+		CHECK(value == 2);
+
+		// A failing member undoes those that ran before it.
+		Scope<EditorActionGroup> failing = CreateScope<EditorActionGroup>("Refused");
+		failing->Add(CreateScope<AddAction>(value, 5));
+		failing->Add(CreateScope<AddAction>(value, 7, false, true));
+		std::string error;
+		CHECK_FALSE(stack.Execute(std::move(failing), &error));
+		CHECK(error == "Refused");
+		CHECK(value == 2);
+		CHECK(stack.GetHistory().size() == 1);
+
+		// Only actions outside the scene: the group does not change it either.
+		EditorActionGroup files("Files");
+		files.Add(CreateScope<OutsideAction>(outside));
+		CHECK_FALSE(files.ChangesScene());
+	}
 }

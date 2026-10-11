@@ -5,6 +5,7 @@
 #include <Strata/Asset/EditorAssetManager.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace Strata
@@ -57,6 +58,19 @@ namespace Strata
 		AssetHandle m_Asset;
 		std::string m_From;
 		std::string m_To;
+	};
+
+	// An asset the editor created (a prefab from entities): undo moves it to the trash, redo brings it back with its handle.
+	class AssetCreateAction final : public AssetFileAction
+	{
+	public:
+		AssetCreateAction(EditorAssetManager& assets, std::string name, std::string path);
+
+		bool Execute(std::string* outError) override;
+		void Undo() override;
+	private:
+		std::string m_Path;
+		std::optional<TrashedAssets> m_Trashed; // While undone
 	};
 
 	// A folder created: undo removes it while it is empty.

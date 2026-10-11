@@ -16,6 +16,7 @@
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/Material.h>
 #include <Strata/Scene/Prefab.h>
+#include <Strata/Scene/PrefabInstances.h>
 
 #include <algorithm>
 
@@ -946,28 +947,51 @@ namespace Strata
 				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) }, { "values", material->Serialize()["Material"] }, { "saved", save } });
 			} });
 
-		registry.Register({ "prefab.create", "Saves entities and their descendants as a new prefab asset (.stprefab).",
-			ObjectSchema({ { "entities", EntityArraySchema("Root entities of the prefab") }, { "path", StringSchema("Path relative to the asset directory") } },
-				{ "entities", "path" }),
+		registry.Register({ "prefab.create",
+			"Saves entities and their descendants as a new prefab asset (.stprefab). With link (the default) they become an instance of it, linked as "
+			"prefab.instantiate's instances are (prefab.apply, prefab.revert, prefab.status); one undo step for the file and the link (edit.undo moves "
+			"the file to the trash and unlinks them). Links of another prefab they had are replaced. Returns {asset, path, linked}.",
+			ObjectSchema({ { "entities", EntityArraySchema("Root entities of the prefab") }, { "path", StringSchema("Path relative to the asset directory") },
+				{ "link", BoolSchema("Make the entities an instance of the new prefab (default true; not while playing)") } }, { "entities", "path" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				std::string error;
 				EditorAssetManager* assets = RequireAssets(context, &error);
 				if (!assets)
 					return EditorCommandResult::Fail(error);
+				Scene& scene = *context.GetActiveScene();
 				CommandArguments arguments(parameters);
-				const std::vector<Entity> entities = arguments.GetEntities(*context.GetActiveScene(), "entities");
+				const std::vector<Entity> entities = arguments.GetEntities(scene, "entities");
 				const std::string path = arguments.GetString("path");
+				const bool link = arguments.GetBool("link", true) && !context.IsPlaying();
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				Ref<Prefab> prefab = Prefab::CreateFromEntities(*context.GetActiveScene(), entities);
+				Ref<Prefab> prefab = Prefab::CreateFromEntities(scene, entities);
 				if (!prefab)
 					return EditorCommandResult::Fail("Capturing the entities failed");
-				const std::string document = JsonUtils::Dump(prefab->Serialize(), 1, '\t') + "\n";
-				const AssetHandle handle = assets->CreateNativeAsset(path, AsBytes(document), &error);
+				// A prefab stores no links: they belong to the instances in scenes.
+				nlohmann::json document = prefab->Serialize();
+				PrefabInstances::StripLinks(document["Prefab"]);
+				const std::string text = JsonUtils::Dump(document, 1, '\t') + "\n";
+				const AssetHandle handle = assets->CreateNativeAsset(path, AsBytes(text), &error);
 				if (!handle.IsValid())
 					return EditorCommandResult::Fail(error);
-				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) } });
+				const std::string created = assets->GetMetadata(handle)->Path;
+
+				// One step: the file (undo moves it to the trash) and the link.
+				Scope<EditorActionGroup> step = CreateScope<EditorActionGroup>(fmt::format("Create Prefab {}", created));
+				step->Add(CreateScope<AssetCreateAction>(*assets, fmt::format("Create Prefab {}", created), created));
+				if (link)
+				{
+					SceneEditTransaction transaction(scene, "Link Prefab", {});
+					for (const Entity entity : entities)
+						transaction.TrackSubtree(entity.GetUUID());
+					PrefabInstances::Link(scene, entities, handle);
+					step->Add(transaction.TakeAction());
+				}
+				if (!context.IsPlaying())
+					context.GetUndoStack().Record(std::move(step));
+				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) }, { "path", created }, { "linked", link } });
 			} });
 	}
 
