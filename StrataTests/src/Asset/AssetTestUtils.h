@@ -39,8 +39,18 @@ namespace Strata::Tests
 		// Changes what it holds, as a partly resident asset does when it raises or drops levels (the manager hears of it
 		// through AssetManagerBase::UpdateMemoryUsage).
 		void SetUsage(const AssetMemoryUsage& usage) { m_Usage = usage; }
+		// Levels of detail it reports (Asset::GetDetailLevels), as a texture streaming its mip levels does; none by default.
+		void SetDetailLevels(const std::optional<AssetDetailLevels>& levels) { m_DetailLevels = levels; }
+		bool GetDetailLevels(AssetDetailLevels& outLevels) const override
+		{
+			if (!m_DetailLevels)
+				return false;
+			outLevels = *m_DetailLevels;
+			return true;
+		}
 	private:
 		AssetMemoryUsage m_Usage;
+		std::optional<AssetDetailLevels> m_DetailLevels;
 	};
 
 	// The stored form of a fake asset: its declared usage.

@@ -318,22 +318,64 @@ TEST_SUITE("Editor.UI")
 		CHECK(labels[2] == manager->GetMetadata(small)->Path);
 	}
 
+	TEST_CASE("The Streaming table shows the mip levels of assets that stream them")
+	{
+		ScopedJobSystem jobs(2, 1);
+		ScopedFakeLoader loader;
+		ImGuiHarness harness({ ImVec2(1600.0f, 900.0f), 1.0f });
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		EditorCommandRunner runner;
+		EditorPanelContext panelContext { context, commands, runner };
+		Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		const AssetHandle streaming = manager->Add(0x76001, MakeUsage(0, 3 << 20));
+		manager->RequestLoad(streaming);
+		REQUIRE(manager->WaitForPendingLoads());
+		manager->Update();
+		const Ref<FakeSizedAsset> streamed = std::dynamic_pointer_cast<FakeSizedAsset>(manager->PeekLoadedAsset(streaming));
+		REQUIRE(streamed);
+		streamed->SetDetailLevels(AssetDetailLevels { 4, 2, 12, 3 << 20 });
+		const ScopedActiveAssetManager active(manager);
+
+		// "Resident / wanted", 0 the full resolution.
+		CHECK(StreamingPanel::FormatMipLevels(AssetDetailLevels { 4, 2, 12, 3 << 20 }) == "4 / 2");
+		CHECK(StreamingPanel::FormatMipLevels(AssetDetailLevels { 0, 0, 1, 64 }) == "0 / 0");
+
+		StreamingPanel panel;
+		const ImVec2 size(1600.0f, 600.0f);
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+		do
+		{
+			DrawPanel(harness, panel, panelContext, size);
+		} while ((panel.IsBuildingTable() || panel.GetTableRowCount() < manager->GetResidencyInfo().size()) && std::chrono::steady_clock::now() < deadline);
+		DrawPanel(harness, panel, panelContext, size);
+		ImGuiTable* table = FindTable(ImGui::FindWindowByName("Panel"), 8);
+		REQUIRE(table);
+		bool mipShown = false;
+		for (int column = 0; column < table->ColumnsCount; column++)
+			mipShown = mipShown || (std::string(ImGui::TableGetColumnName(table, column)) == "Mip" && table->Columns[column].IsEnabled);
+		CHECK(mipShown);
+		CHECK(ImGuiHarness::CountFallbackGlyphs(ImGui::FindWindowByName("Panel")) == 0);
+	}
+
 	TEST_CASE("The Streaming table's fixed columns hold their headers at 150%")
 	{
-		ImGuiHarness harness({ ImVec2(900.0f, 1600.0f), 1.5f });
+		// Wide enough for every column, not for the overview beside the table (60 text heights).
+		ImGuiHarness harness({ ImVec2(1250.0f, 1600.0f), 1.5f });
 		EditorContext context { EditorContextSpecification { false } };
 		EditorCommandRegistry commands;
 		EditorCommandRunner runner;
 		EditorPanelContext panelContext { context, commands, runner };
 		SceneTestAssets assets;
 		StreamingPanel panel;
-		DrawPanel(harness, panel, panelContext, ImVec2(900.0f, 1600.0f), 3);
-		ImGuiTable* table = FindTable(ImGui::FindWindowByName("Panel"), 7);
+		DrawPanel(harness, panel, panelContext, ImVec2(1250.0f, 1600.0f), 3);
+		ImGuiTable* table = FindTable(ImGui::FindWindowByName("Panel"), 8);
 		REQUIRE(table);
 		for (int column = 0; column < table->ColumnsCount; column++)
 		{
 			const ImGuiTableColumn& entry = table->Columns[column];
-			CAPTURE(ImGui::TableGetColumnName(table, column));
+			CAPTURE(std::string(ImGui::TableGetColumnName(table, column)));
+			CHECK(entry.IsEnabled);
 			// The header's text and sort arrow end within the column.
 			CHECK(entry.ContentMaxXHeadersIdeal <= entry.WorkMaxX + 0.5f);
 		}
@@ -357,7 +399,7 @@ TEST_SUITE("Editor.UI")
 		const auto draw = [&](float width)
 		{
 			DrawPanel(harness, panel, panelContext, ImVec2(width, 400.0f), 4);
-			ImGuiTable* table = FindTable(ImGui::FindWindowByName("Panel"), 7);
+			ImGuiTable* table = FindTable(ImGui::FindWindowByName("Panel"), 8);
 			REQUIRE(table);
 			Shown shown;
 			shown.AssetWidth = table->Columns[0].WidthGiven;
@@ -369,15 +411,15 @@ TEST_SUITE("Editor.UI")
 
 		// Wide: every column, the name beside them.
 		const Shown wide = draw(3000.0f);
-		CHECK(wide.Columns == 7);
+		CHECK(wide.Columns == 8);
 		CHECK(wide.AssetWidth >= minAsset);
 		// The bottom dock of the laptop's window: some columns go, the name keeps its width.
 		const Shown laptop = draw(1300.0f);
-		CHECK(laptop.Columns < 7);
+		CHECK(laptop.Columns < 8);
 		CHECK(laptop.Columns >= 4);
 		CHECK(laptop.AssetWidth >= minAsset);
 		// Wide again: the columns come back.
-		CHECK(draw(3000.0f).Columns == 7);
+		CHECK(draw(3000.0f).Columns == 8);
 	}
 
 	TEST_CASE("Instruments opened in a layout saved before they existed join the Console")

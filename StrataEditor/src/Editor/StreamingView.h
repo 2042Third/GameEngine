@@ -8,6 +8,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -25,21 +26,28 @@ namespace Strata
 	{
 		None = 0,
 		Streaming, // Entities whose mesh, material or textures are still loading, or failed to
-		LOD        // Entities by the level of detail their mesh is drawn at
+		LOD,       // Entities by the level of detail their mesh is drawn at
+		Mip        // Entities by how far their textures' resident mip levels are from those their view needs
 	};
 
-	// "none", "streaming", "lod" (the names commands and the saved viewport state use).
+	// "none", "streaming", "lod", "mip" (the names commands and the saved viewport state use).
 	const char* ViewportDebugViewToString(ViewportDebugView view);
 	std::optional<ViewportDebugView> ViewportDebugViewFromString(std::string_view name);
 
 	// Display colors (sRGB; alpha is the tint's opacity) of the debug views. Not saved: the editor's UI sets them from its
-	// theme (Sulfur and Cinnabar; Malachite, Azurite, Sulfur and Cinnabar for the levels of detail).
+	// theme (Sulfur and Cinnabar; Malachite, Azurite, Sulfur and Cinnabar for the levels of detail and the mip levels).
 	struct ViewportDebugColors
 	{
 		glm::vec4 Pending = { 0.91f, 0.76f, 0.30f, 0.65f };
 		glm::vec4 Failed = { 0.90f, 0.33f, 0.29f, 0.65f };
 		// Levels of detail 0, 1, 2 and 3 or higher.
 		std::array<glm::vec4, 4> LOD = { {
+			{ 0.24f, 0.75f, 0.55f, 0.55f },
+			{ 0.30f, 0.56f, 0.88f, 0.55f },
+			{ 0.91f, 0.76f, 0.30f, 0.55f },
+			{ 0.90f, 0.33f, 0.29f, 0.55f } } };
+		// Textures at the mip level their view needs, 1, 2, and 3 or more levels coarser (or still loading).
+		std::array<glm::vec4, 4> Mip = { {
 			{ 0.24f, 0.75f, 0.55f, 0.55f },
 			{ 0.30f, 0.56f, 0.88f, 0.55f },
 			{ 0.91f, 0.76f, 0.30f, 0.55f },
@@ -56,6 +64,9 @@ namespace Strata
 		uint32_t PlaceholderBoxes = 0;
 		// LOD view: entities by the level of detail of their mesh (the last entry counts level 3 and higher).
 		std::array<uint32_t, 4> EntitiesPerLOD = {};
+		// Mip view: entities with textures, by the mip levels their worst texture lacks: none (resident at the level the views
+		// need), 1, 2, and 3 or more (or a texture still loading).
+		std::array<uint32_t, 4> EntitiesPerMipShortfall = {};
 	};
 
 	// Builds what a debug view draws over the viewport image for one frame: SceneRenderOptions::EntityTints (the drawn
@@ -92,7 +103,17 @@ namespace Strata
 		AssetStatus GetMaterialStatus(const RenderScene& renderScene, uint32_t materialSlot);
 		void BuildStreaming(Scene& scene, const RenderScene& renderScene, const ViewportDebugColors& colors, DebugDraw& placeholders);
 		void BuildLOD(Scene& scene, const RenderScene& renderScene, const SceneCamera& camera, float lodThreshold, const ViewportDebugColors& colors);
+		// The mip levels a material's worst texture lacks (Asset::GetDetailLevels: the finest level resident beyond the finest
+		// one wanted): c_Loading while the material or a texture is still loading (or failed to), c_NoTextures for a material
+		// without registered textures (nothing of it streams).
+		uint32_t GetMaterialMipShortfall(const RenderScene& renderScene, uint32_t materialSlot);
+		uint32_t GetTextureMipShortfall(AssetHandle texture);
+		void BuildMip(Scene& scene, const RenderScene& renderScene, const ViewportDebugColors& colors);
 	private:
+		static constexpr uint32_t c_Loading = std::numeric_limits<uint32_t>::max();
+		static constexpr uint32_t c_NoTextures = std::numeric_limits<uint32_t>::max() - 1;
+		static constexpr uint32_t c_ShortfallNotLookedUp = std::numeric_limits<uint32_t>::max() - 2;
+
 		std::vector<SceneEntityTint> m_Tints;
 		StreamingViewStats m_Stats;
 		// Per Build: the proxies in view, and each mesh's and material's status (a material's with its textures), looked up
@@ -101,6 +122,9 @@ namespace Strata
 		std::vector<AssetStatus> m_MeshStatuses;
 		std::vector<AssetStatus> m_MaterialStatuses;
 		std::unordered_map<AssetHandle, AssetStatus> m_TextureStatuses;
+		// Mip view: each material's shortfall and each texture's, looked up once per Build.
+		std::vector<uint32_t> m_MaterialShortfalls;
+		std::unordered_map<AssetHandle, uint32_t> m_TextureShortfalls;
 	};
 
 }

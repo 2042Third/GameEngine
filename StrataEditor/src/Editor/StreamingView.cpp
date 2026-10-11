@@ -35,6 +35,7 @@ namespace Strata
 		{
 			case ViewportDebugView::Streaming: return "streaming";
 			case ViewportDebugView::LOD:       return "lod";
+			case ViewportDebugView::Mip:       return "mip";
 			case ViewportDebugView::None:      break;
 		}
 		return "none";
@@ -42,7 +43,7 @@ namespace Strata
 
 	std::optional<ViewportDebugView> ViewportDebugViewFromString(std::string_view name)
 	{
-		for (ViewportDebugView view : { ViewportDebugView::None, ViewportDebugView::Streaming, ViewportDebugView::LOD })
+		for (ViewportDebugView view : { ViewportDebugView::None, ViewportDebugView::Streaming, ViewportDebugView::LOD, ViewportDebugView::Mip })
 		{
 			if (name == ViewportDebugViewToString(view))
 				return view;
@@ -68,10 +69,20 @@ namespace Strata
 		m_MeshStatuses.assign(renderScene.GetMeshSlotCapacity(), AssetStatus::NotLookedUp);
 		m_MaterialStatuses.assign(renderScene.GetMaterialSlotCapacity(), AssetStatus::NotLookedUp);
 		if (view == ViewportDebugView::Streaming)
+		{
 			BuildStreaming(scene, renderScene, colors, placeholders);
-		else
+		}
+		else if (view == ViewportDebugView::LOD)
+		{
 			BuildLOD(scene, renderScene, camera, lodThreshold, colors);
+		}
+		else
+		{
+			m_MaterialShortfalls.assign(renderScene.GetMaterialSlotCapacity(), c_ShortfallNotLookedUp);
+			BuildMip(scene, renderScene, colors);
+		}
 		m_TextureStatuses.clear();
+		m_TextureShortfalls.clear();
 	}
 
 	StreamingView::AssetStatus StreamingView::GetStatus(AssetHandle handle)
@@ -194,6 +205,92 @@ namespace Strata
 			const size_t level = std::min<size_t>(lod, colors.LOD.size() - 1);
 			m_Stats.EntitiesPerLOD[level]++;
 			m_Tints.push_back(SceneEntityTint { Entity(renderScene.GetEntity(proxy), &scene), colors.LOD[level] });
+		}
+	}
+
+	uint32_t StreamingView::GetTextureMipShortfall(AssetHandle texture)
+	{
+		auto [cached, inserted] = m_TextureShortfalls.try_emplace(texture, c_NoTextures);
+		if (!inserted)
+			return cached->second;
+
+		const AssetStatus status = GetStatus(texture);
+		if (status == AssetStatus::Pending || status == AssetStatus::Failed)
+		{
+			cached->second = c_Loading;
+		}
+		else if (status == AssetStatus::Ready)
+		{
+			// Peeked at, not requested: the view changes neither the texture's use nor the levels the streamer wants.
+			AssetDetailLevels levels;
+			const Ref<Asset> loaded = AssetManager::GetActive()->PeekLoadedAsset(texture);
+			cached->second = loaded && loaded->GetDetailLevels(levels) && levels.Resident > levels.Wanted ? levels.Resident - levels.Wanted : 0;
+		}
+		return cached->second;
+	}
+
+	uint32_t StreamingView::GetMaterialMipShortfall(const RenderScene& renderScene, uint32_t materialSlot)
+	{
+		uint32_t& cached = m_MaterialShortfalls[materialSlot];
+		if (cached != c_ShortfallNotLookedUp)
+			return cached;
+
+		const AssetHandle material = renderScene.GetMaterialHandle(materialSlot);
+		const AssetStatus status = GetStatus(material);
+		uint32_t shortfall = c_NoTextures; // An unknown material is drawn as the default material, which has no textures
+		if (status == AssetStatus::Pending || status == AssetStatus::Failed)
+		{
+			shortfall = c_Loading;
+		}
+		else if (status == AssetStatus::Ready)
+		{
+			if (const Ref<Material> loaded = AssetManager::PeekLoadedAsset<Material>(material))
+			{
+				for (AssetHandle texture : loaded->GetTextureHandles())
+				{
+					const uint32_t textureShortfall = GetTextureMipShortfall(texture);
+					if (textureShortfall != c_NoTextures)
+						shortfall = shortfall == c_NoTextures ? textureShortfall : std::max(shortfall, textureShortfall);
+				}
+			}
+		}
+		cached = shortfall;
+		return shortfall;
+	}
+
+	void StreamingView::BuildMip(Scene& scene, const RenderScene& renderScene, const ViewportDebugColors& colors)
+	{
+		for (const uint32_t proxy : m_Visible)
+		{
+			const uint32_t meshSlot = renderScene.GetMeshSlot(proxy);
+			AssetStatus& meshStatus = m_MeshStatuses[meshSlot];
+			if (meshStatus == AssetStatus::NotLookedUp)
+				meshStatus = GetStatus(renderScene.GetMeshHandle(meshSlot));
+			if (meshStatus != AssetStatus::Ready)
+				continue; // Nothing drawn to tint (the streaming view shows those)
+
+			// The materials the renderer draws the mesh with, as in the streaming view; the entity shows its worst texture.
+			uint32_t shortfall = c_NoTextures;
+			const auto add = [&shortfall](uint32_t materialShortfall)
+			{
+				if (materialShortfall != c_NoTextures)
+					shortfall = shortfall == c_NoTextures ? materialShortfall : std::max(shortfall, materialShortfall);
+			};
+			const uint32_t overrideSlot = renderScene.GetOverrideMaterialSlot(proxy);
+			if (overrideSlot != RenderScene::c_InvalidIndex)
+			{
+				add(GetMaterialMipShortfall(renderScene, overrideSlot));
+			}
+			else if (renderScene.IsMeshLayoutKnown(meshSlot))
+			{
+				for (const uint32_t materialSlot : renderScene.GetSubmeshMaterialSlots(meshSlot))
+					add(GetMaterialMipShortfall(renderScene, materialSlot));
+			}
+			if (shortfall == c_NoTextures)
+				continue;
+			const size_t bucket = std::min<size_t>(shortfall, colors.Mip.size() - 1);
+			m_Stats.EntitiesPerMipShortfall[bucket]++;
+			m_Tints.push_back(SceneEntityTint { Entity(renderScene.GetEntity(proxy), &scene), colors.Mip[bucket] });
 		}
 	}
 

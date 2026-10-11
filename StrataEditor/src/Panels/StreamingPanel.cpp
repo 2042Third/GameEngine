@@ -16,6 +16,7 @@
 #include <limits>
 #include <numeric>
 #include <string_view>
+#include <utility>
 
 namespace Strata
 {
@@ -39,13 +40,14 @@ namespace Strata
 		constexpr int c_ColumnType = 1;
 		constexpr int c_ColumnState = 2;
 		constexpr int c_ColumnGpu = 3;
-		constexpr int c_ColumnCpu = 4;
-		constexpr int c_ColumnLastUsed = 5;
-		constexpr int c_ColumnPins = 6;
-		constexpr int c_ColumnCount = 7;
+		constexpr int c_ColumnMip = 4;
+		constexpr int c_ColumnCpu = 5;
+		constexpr int c_ColumnLastUsed = 6;
+		constexpr int c_ColumnPins = 7;
+		constexpr int c_ColumnCount = 8;
 		// Where the table is narrow these columns go first, in this order (the least telling first), so the asset's name keeps
 		// at least c_MinAssetColumnInFontSizes text heights.
-		constexpr std::array<int, 3> c_OptionalColumns = { c_ColumnPins, c_ColumnCpu, c_ColumnLastUsed };
+		constexpr std::array<int, 4> c_OptionalColumns = { c_ColumnPins, c_ColumnCpu, c_ColumnLastUsed, c_ColumnMip };
 		constexpr float c_MinAssetColumnInFontSizes = 14.0f;
 		// Between a sub-asset's file and its key ("›").
 		constexpr std::string_view c_SubAssetSeparator = " \xE2\x80\xBA ";
@@ -561,6 +563,17 @@ namespace Strata
 			case c_ColumnCpu:      sortBy([&](uint32_t index) { return samples[index].Usage.Cpu; }); break;
 			case c_ColumnLastUsed: sortBy([&](uint32_t index) { return samples[index].LastRequestedFrame; }); break;
 			case c_ColumnPins:     sortBy([&](uint32_t index) { return samples[index].PinCount; }); break;
+			case c_ColumnMip:
+				// The levels a texture lacks, then its resident level; assets that do not stream come last either way up.
+				sortBy([&](uint32_t index)
+				{
+					const std::optional<AssetDetailLevels>& detail = samples[index].Detail;
+					if (!detail)
+						return std::pair<int64_t, int64_t>(build.SortAscending ? std::numeric_limits<int64_t>::max() : -1, 0);
+					return std::pair<int64_t, int64_t>(static_cast<int64_t>(detail->Resident) - static_cast<int64_t>(std::min(detail->Wanted, detail->Resident)),
+						detail->Resident);
+				});
+				break;
 			case c_ColumnGpu:
 			default:               sortBy([&](uint32_t index) { return samples[index].Usage.GetGpu(); }); break;
 		}
@@ -599,10 +612,16 @@ namespace Strata
 			m_ColumnWidths[c_ColumnType] = typeWidth + sortArrow;
 			m_ColumnWidths[c_ColumnState] = widest({ "State", "Unloaded", "Loading", "Ready", "Failed" }) + sortArrow;
 			m_ColumnWidths[c_ColumnGpu] = widest({ "GPU MB", "9999.99" }) + sortArrow;
+			m_ColumnWidths[c_ColumnMip] = widest({ "Mip", FormatMipLevels(AssetDetailLevels { 12, 10, 13, 0 }).c_str() }) + sortArrow;
 			m_ColumnWidths[c_ColumnCpu] = widest({ "CPU MB", "9999.99" }) + sortArrow;
 			m_ColumnWidths[c_ColumnLastUsed] = widest({ "Last used", "99999 frames ago" }) + sortArrow;
 			m_ColumnWidths[c_ColumnPins] = widest({ "Pins", "999" }) + sortArrow;
 		}
+	}
+
+	std::string StreamingPanel::FormatMipLevels(const AssetDetailLevels& levels)
+	{
+		return fmt::format("{} / {}", levels.Resident, levels.Wanted);
 	}
 
 	float StreamingPanel::GetTableWidth(int optionalColumns) const
@@ -625,6 +644,7 @@ namespace Strata
 		ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, m_ColumnWidths[c_ColumnState], c_ColumnState);
 		ImGui::TableSetupColumn("GPU MB", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_DefaultSort | ImGuiTableColumnFlags_PreferSortDescending,
 			m_ColumnWidths[c_ColumnGpu], c_ColumnGpu);
+		ImGui::TableSetupColumn("Mip", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_PreferSortDescending, m_ColumnWidths[c_ColumnMip], c_ColumnMip);
 		ImGui::TableSetupColumn("CPU MB", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_PreferSortDescending, m_ColumnWidths[c_ColumnCpu], c_ColumnCpu);
 		ImGui::TableSetupColumn("Last used", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_PreferSortDescending, m_ColumnWidths[c_ColumnLastUsed],
 			c_ColumnLastUsed);
@@ -708,6 +728,21 @@ namespace Strata
 				ImGui::TextColored(GetAssetStateColor(sample.State), "%s", AssetStateToString(sample.State));
 				ImGui::TableSetColumnIndex(c_ColumnGpu);
 				ImGui::Text("%.2f", ToMB(sample.Usage.GetGpu()));
+				ImGui::TableSetColumnIndex(c_ColumnMip);
+				if (sample.Detail)
+				{
+					// Resident level / wanted level: coarser than wanted in the warning color while its levels stream in.
+					const std::string levels = FormatMipLevels(*sample.Detail);
+					if (sample.Detail->Resident > sample.Detail->Wanted)
+						ImGui::TextColored(colors.Warning, "%s", levels.c_str());
+					else
+						ImGui::TextUnformatted(levels.c_str());
+					if (UI::IsTooltipDue())
+					{
+						ImGui::SetTooltip("Mip level %u resident of %u (0 is the full resolution), %u wanted by its views; %.2f MB resident",
+							sample.Detail->Resident, sample.Detail->Count, sample.Detail->Wanted, ToMB(sample.Detail->ResidentBytes));
+					}
+				}
 				ImGui::TableSetColumnIndex(c_ColumnCpu);
 				ImGui::Text("%.2f", ToMB(sample.Usage.Cpu));
 				ImGui::TableSetColumnIndex(c_ColumnLastUsed);

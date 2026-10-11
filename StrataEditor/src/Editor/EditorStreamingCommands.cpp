@@ -44,7 +44,7 @@ namespace Strata
 
 		nlohmann::json DescribeResidency(const AssetResidencyInfo& asset)
 		{
-			return {
+			nlohmann::json row = {
 				{ "handle", UUIDToJson(asset.Handle) },
 				{ "path", asset.Path },
 				{ "name", asset.Name },
@@ -55,6 +55,16 @@ namespace Strata
 				{ "lastUsedFrame", asset.LastRequestedFrame },
 				{ "pins", asset.PinCount },
 				{ "memoryAsset", asset.IsMemoryAsset } };
+			// Assets kept partly resident (textures streaming their mip levels): the finest level resident and the finest one
+			// something needs (0 the finest), the levels there are and what the resident ones hold.
+			if (asset.Detail)
+			{
+				row["residentMip"] = asset.Detail->Resident;
+				row["wantedMip"] = asset.Detail->Wanted;
+				row["mipCount"] = asset.Detail->Count;
+				row["residentBytes"] = asset.Detail->ResidentBytes;
+			}
+			return row;
 		}
 
 		// A budget parameter (megabytes or milliseconds); nullopt when absent. Values that are not numbers greater than 0, or
@@ -126,7 +136,18 @@ namespace Strata
 				{ "stagingReleases", stats.StagingReleases },
 				{ "prefetch", {
 					{ "started", stats.DependencyPrefetches },
-					{ "dropped", stats.DependencyPrefetchesDropped } } } };
+					{ "dropped", stats.DependencyPrefetchesDropped } } },
+				{ "mipStreaming", {
+					{ "partialLoads", stats.PartialLoads },
+					{ "rangeReads", stats.RangeReads },
+					{ "rangeReadsCompleted", stats.RangeReadsCompleted },
+					{ "levelsRaised", stats.Detail.LevelsRaised },
+					{ "levelsDropped", stats.Detail.LevelsDropped },
+					{ "bytesStreamed", stats.Detail.BytesStreamed },
+					{ "bytesStreamedLastFrame", stats.Detail.BytesStreamedLastFrame },
+					{ "assetsBelowWanted", stats.Detail.AssetsBelowWanted },
+					{ "levelReads", stats.Detail.Reads },
+					{ "levelChanges", stats.Detail.Changes } } } };
 		}
 
 	}
@@ -138,8 +159,12 @@ namespace Strata
 			"load counts, the streaming queue (queued loads per priority, loads and bytes in flight), finalization (GPU bytes uploaded and "
 			"main-thread milliseconds, and of those the milliseconds of the upload steps, last frame and maximum of recent frames, with their budgets and the staging budget), evictions (and how "
 			"many resident assets eviction looked at), cancellations, staging releases and dependency prefetches (prefetch: loads of what "
-			"assets reference started when their reads completed, and those dropped on arrival for lack of room in the budgets). With "
-			"assets: true it also lists the assets that are resident, loading, failed or pinned, with their memory, state, last use and pins.",
+			"assets reference started when their reads completed, and those dropped on arrival for lack of room in the budgets) and mip "
+			"streaming (mipStreaming: loads of only a texture's header and smallest levels, reads of further levels queued and completed, "
+			"levels raised and dropped, bytes read for them in all and in the last frame, textures below the level their views need, and "
+			"textures reading or changing levels now). With assets: true it also lists the assets that are resident, loading, failed or "
+			"pinned, with their memory, state, last use and pins; streaming textures add residentMip (the finest mip level resident, 0 "
+			"the full resolution), wantedMip (the finest level their views need), mipCount and residentBytes (what the resident levels hold).",
 			ObjectSchema({
 				{ "assets", BoolSchema("Also list the assets (default false)") },
 				{ "limit", IntegerSchema("At most this many assets in the list (default 100)", 1, c_MaxAssetRows) },

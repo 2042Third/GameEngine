@@ -405,6 +405,10 @@ TEST_SUITE("Editor.Viewport")
 		CHECK(restored.Snap);
 		CHECK(restored.DebugView == ViewportDebugView::LOD);
 		CHECK(settings.ToJson()["DebugView"] == "lod");
+		settings.DebugView = ViewportDebugView::Mip;
+		REQUIRE_MESSAGE(restored.FromJson(settings.ToJson(), &error), error);
+		CHECK(restored.DebugView == ViewportDebugView::Mip);
+		CHECK(settings.ToJson()["DebugView"] == "mip");
 		// The selection and debug view colors are the editor theme's, not saved with the project.
 		CHECK_FALSE(settings.ToJson().contains("SelectionColor"));
 		CHECK_FALSE(settings.ToJson().contains("DebugColors"));

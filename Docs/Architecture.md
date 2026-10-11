@@ -1152,15 +1152,19 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
 - **Statistics** (`GetStats`, `GetResidencyInfo`): resident bytes and budget per pool, queued loads per priority, loads
   and bytes in flight with their high-water mark, uploaded bytes and finalization milliseconds (last frame and maximum
   of the last 120) with the staging budget, evictions and eviction checks, cancellations, staging releases, dependency
-  prefetches started and dropped, and the `GetAsset` calls made (tests take differences to count what a frame looks
-  up); per asset its state, memory, latest request and pins. `GetStats` costs the same with any number of assets: the
+  prefetches started and dropped, partial loads and range reads, what the extensions keeping assets partly resident did
+  (`Detail`: mip levels raised and dropped, bytes read for them, textures below their wanted level, level reads and
+  changes under way), and the `GetAsset` calls made (tests take differences to count what a frame looks up); per asset
+  its state, memory, latest request and pins, and for assets kept partly resident their levels (`Detail`: resident,
+  wanted, count, resident bytes). `GetStats` costs the same with any number of assets: the
   counts of assets per state and of pinned assets change with the entries (`SetStateLocked`, `AddEntryLocked`,
   `RemoveEntryLocked`, `Pin`, `Unpin`; every change of an entry's state goes through them), so the editor reads them
   every frame. `GetResidencySamples` gives the per-asset part without names into a vector the caller reuses, and
   `GetMetadataVersion` changes with every registration and metadata change, so a view of tens of thousands of assets
   reads names only when they change.
-  The editor reports them, apart from the `GetAsset` calls, through `asset.stats`, the `assets` section of
-  `editor.status`, the Streaming panel and the status bar's assets pill.
+  The editor reports them, apart from the `GetAsset` calls, through `asset.stats` (`mipStreaming`; the rows of streaming
+  textures with `residentMip`, `wantedMip`, `mipCount` and `residentBytes`), the `assets` section of `editor.status`, the
+  Streaming panel (its Mip column: resident / wanted level) and the status bar's assets pill.
 - **Measured** by the perf test `PerfGPU.Streaming` (`StrataTests/src/Perf/StreamingPerfTests.cpp`): it writes the
   stress project (`StrataTests/src/Perf/StressProject.h`: 16 textures of 2048² and one of 4096², which cook to 111.8 MB
   of BC7 (447.4 MB of RGBA8 before texture cooking v2), one material per district of a 2000-unit world, 2,000 objects
@@ -1565,7 +1569,7 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   `OnImGuiRender`; `ResolveViewportView` picks the scene's primary camera while playing and the editor camera otherwise,
   and `GetViewportRenderOptions` gives editor views (the editor camera outside play mode) preview lighting and a hidden
   HUD as the settings say (`viewport.getSettings`, `viewport.setSettings`). The settings' debug view
-  (`ViewportDebugView`: `none`, `streaming`, `lod`) colors every view of the viewport, the game view too: before each
+  (`ViewportDebugView`: `none`, `streaming`, `lod`, `mip`) colors every view of the viewport, the game view too: before each
   render `StreamingView` (`Editor/StreamingView.h`) takes the render proxies the scene's `RenderScene` finds in the view
   (its spatial index, culled with the bounds the renderer culls with: a mesh's own, else those the asset pipeline
   recorded) and lists tints for the renderer (`SceneRenderOptions::EntityTints`). It observes streaming without changing
@@ -1575,8 +1579,12 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   still loading are tinted in the pending color, failed ones in the failed color, and entities whose mesh is not there
   (nothing is drawn, so nothing can be tinted) get a placeholder box of the mesh's recorded bounds, or a unit box without
   them (at most `c_MaxPlaceholderBoxes`). The LOD view tints each entity by the most simplified level its submeshes are
-  drawn at (`LODSelection`, with the viewport renderer's threshold). The colors are `ViewportSettings::DebugColors`,
-  which the UI sets from the theme (not saved).
+  drawn at (`LODSelection`, with the viewport renderer's threshold). The mip view tints each entity drawn with textures by
+  the mip levels its worst texture lacks: the finest level resident against the finest one its views want
+  (`Asset::GetDetailLevels`, which the texture streamer sets from what the renderers reported), none (Malachite), 1
+  (Azurite), 2 (Sulfur), 3 or more or a material or texture still loading (Cinnabar); entities without textures stay
+  untinted (`StreamingViewStats::EntitiesPerMipShortfall`). The colors are `ViewportSettings::DebugColors`, which the UI
+  sets from the theme (not saved).
   Picking reads one pixel of the entity-ID buffer asynchronously and completes in `EditorContext::Update`.
   `viewport.capture` renders on the next frame (with its own `debugView` if given), polls a `TextureReadback`, encodes
   the PNG on a worker and saves on an I/O thread (`EditorViewportCommands.cpp`).
@@ -1630,8 +1638,12 @@ of the game's assets (the other budgets keep their defaults), and `--perf-log <c
 headless (`Runtime/FramePerfLog`, a frame profiler listener, so writing costs the measured frame nothing): the frame's
 work time and interval, each stage's milliseconds, the job threads' busy percentages and the asset manager's streaming
 numbers after the frame (loading, queued and in-flight loads, uploaded MB, finalization ms and its upload steps' ms,
-resident MB per pool, evictions), the frame's steps through the upload queue (`UploadQueueMB`, `UploadQueueMs`,
-`UploadQueueSteps`) and the process's private memory with its peak so far (`PrivateMB`, `PeakPrivateMB`). A log that cannot be written fails the run (exit code 1).
+resident MB per pool, evictions), the texture streamer's (`StreamedMB`: bytes read for raised mip levels in the frame,
+`MipLevelsRaised` and `MipLevelsDropped` so far, `MipsBelowWanted`: textures below the level their views need, from
+`AssetManagerStats::Detail`), the frame's steps through the upload queue (`UploadQueueMB`, `UploadQueueMs`,
+`UploadQueueSteps`), the graphics device's memory in use and the upload staging of it (`DeviceMB`, `StagingMB`: with
+the resident pools they tell what render targets and the swapchain take) and the process's private memory with its peak
+so far (`PrivateMB`, `PeakPrivateMB`). A log that cannot be written fails the run (exit code 1).
 `GameRuntime::Create` loads the manifest, makes a
 `RuntimeAssetManager` on the pack active (with `GameRuntimeOptions::AssetBudgets` when given; the manifest's optional
 `PatchPacks` are mounted over it in order, and a missing one stops the game), loads the script module

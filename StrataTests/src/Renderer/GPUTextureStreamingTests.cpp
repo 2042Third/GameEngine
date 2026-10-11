@@ -2,27 +2,18 @@
 
 #include "Renderer/GPUTestUtils.h"
 #include "Renderer/SceneRendererTestUtils.h"
+#include "Renderer/TextureStreamingTestUtils.h"
 #include "Renderer/UploadQueueTestUtils.h"
-#include "Strata/Asset/AssetPackWriter.h"
-#include "Strata/Asset/BC7Encoder.h"
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Asset/RuntimeAssetManager.h"
-#include "Strata/Core/JsonUtils.h"
-#include "Strata/Renderer/CookedTexture.h"
-#include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/SceneRenderer.h"
 #include "Strata/Renderer/Texture.h"
 #include "Strata/Renderer/TextureStreamer.h"
 #include "Strata/Scene/Scene.h"
 #include "TestHelpers.h"
 
-#include <array>
-#include <cstring>
-#include <map>
 #include <optional>
 #include <string>
-#include <unordered_map>
-#include <vector>
 
 using namespace Strata;
 using namespace Strata::Tests;
@@ -32,11 +23,10 @@ using namespace Strata::Tests;
 namespace
 {
 
-	constexpr uint32_t c_TextureSize = 2048;
-	constexpr uint32_t c_TextureMips = 12;
+	constexpr uint32_t c_TextureMips = c_GradientTextureMips;
 	constexpr uint32_t c_ViewSize = 256;
-	constexpr AssetHandle c_TextureHandle = AssetHandle(0xA1000);
-	constexpr AssetHandle c_MaterialHandle = AssetHandle(0xA1001);
+	constexpr AssetHandle c_TextureHandle = c_GradientTextureHandle;
+	constexpr AssetHandle c_MaterialHandle = c_GradientMaterialHandle;
 
 	// Device frames without work, until releases deferred for frames in flight have happened.
 	void SettleDevice(GPUContext& gpu)
@@ -49,87 +39,6 @@ namespace
 		}
 		gpu.GetDevice().WaitForIdle();
 		gpu.GetNvrhiDevice()->runGarbageCollection();
-	}
-
-	// A smooth gradient: the color of a texel at (u, v) in [0, 1], the same function at every level, so each level is the
-	// texture seen from further away and the levels next to each other differ little.
-	std::array<uint8_t, 4> GetGradient(float u, float v)
-	{
-		return { static_cast<uint8_t>(40.0f + 150.0f * u), static_cast<uint8_t>(40.0f + 150.0f * v), static_cast<uint8_t>(60.0f + 60.0f * (u + v)), 255 };
-	}
-
-	// The texture's cooked form: every level of the gradient, one color per 4x4 block, in BC7 (solid blocks are exact).
-	std::vector<uint8_t> CookGradientTexture()
-	{
-		std::map<uint32_t, std::array<uint8_t, 16>> encoded; // Per color
-		std::vector<std::vector<uint8_t>> levels(c_TextureMips);
-		std::vector<std::span<const uint8_t>> spans;
-		for (uint32_t level = 0; level < c_TextureMips; level++)
-		{
-			const uint32_t size = std::max(1u, c_TextureSize >> level);
-			const uint32_t blocks = (size + 3) / 4;
-			std::vector<uint8_t>& data = levels[level];
-			data.resize(static_cast<size_t>(blocks) * blocks * 16);
-			for (uint32_t y = 0; y < blocks; y++)
-			{
-				for (uint32_t x = 0; x < blocks; x++)
-				{
-					const std::array<uint8_t, 4> color = GetGradient((static_cast<float>(x) + 0.5f) / static_cast<float>(blocks), (static_cast<float>(y) + 0.5f) / static_cast<float>(blocks));
-					const uint32_t key = static_cast<uint32_t>(color[0]) | (static_cast<uint32_t>(color[1]) << 8) | (static_cast<uint32_t>(color[2]) << 16);
-					auto it = encoded.find(key);
-					if (it == encoded.end())
-					{
-						std::array<uint8_t, 64> texels {};
-						for (uint32_t texel = 0; texel < 16; texel++)
-							std::memcpy(texels.data() + texel * 4, color.data(), 4);
-						std::array<uint8_t, 16> block {};
-						BC7Encoder::EncodeBlock(texels.data(), block.data());
-						it = encoded.emplace(key, block).first;
-					}
-					std::memcpy(data.data() + (static_cast<size_t>(y) * blocks + x) * 16, it->second.data(), 16);
-				}
-			}
-			spans.push_back(data);
-		}
-		CookedTextureDescription description;
-		description.Format = TextureFormat::BC7SRGB;
-		description.Width = c_TextureSize;
-		description.Height = c_TextureSize;
-		description.MipCount = c_TextureMips;
-		description.DebugName = "StreamedGradient";
-		std::vector<uint8_t> cooked = WriteCookedTexture(description, spans);
-		REQUIRE_FALSE(cooked.empty());
-		return cooked;
-	}
-
-	// A pack with the texture and an unlit material showing it.
-	std::filesystem::path WriteStreamingPack()
-	{
-		MaterialProperties properties = UnlitColor(glm::vec4(1.0f));
-		properties.BaseColorMap = c_TextureHandle;
-		const std::string material = JsonUtils::Dump(Material::Create(properties)->Serialize());
-
-		std::unordered_map<AssetHandle, std::vector<uint8_t>> data;
-		data[c_TextureHandle] = CookGradientTexture();
-		data[c_MaterialHandle] = std::vector<uint8_t>(material.begin(), material.end());
-		std::vector<AssetMetadata> metadata(2);
-		metadata[0].Handle = c_TextureHandle;
-		metadata[0].Type = AssetType::Texture;
-		metadata[0].Path = "Textures/Gradient.png";
-		metadata[0].Name = "Gradient";
-		metadata[1].Handle = c_MaterialHandle;
-		metadata[1].Type = AssetType::Material;
-		metadata[1].Path = "Materials/Gradient.stmat";
-		metadata[1].Name = "GradientMaterial";
-
-		const std::filesystem::path pack = CreateTemporaryDirectory("TextureStreaming") / "Streaming.stpak";
-		std::string error;
-		REQUIRE_MESSAGE(AssetPackWriter::Write(pack, metadata, [&data](const AssetMetadata& asset, std::vector<uint8_t>& outData, std::string*)
-		{
-			outData = data.at(asset.Handle);
-			return true;
-		}, &error), error);
-		return pack;
 	}
 
 	// A scene with the quad (1x1, facing +Z, at the origin) and neutral post-processing.
@@ -189,7 +98,7 @@ TEST_SUITE("GPU.TextureStreaming")
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
-		const std::filesystem::path pack = WriteStreamingPack();
+		const std::filesystem::path pack = WriteGradientStreamingPack();
 		const float c_SmallDistance = 5.6f; // 56 pixels: level 5 (64x64) is what a 2048x2048 texture needs there
 		const float c_FillDistance = 0.15f; // Beyond the view's 256 pixels: 2.2 times the texture's 2048 texels
 

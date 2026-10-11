@@ -760,7 +760,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("viewport.capture shows the LOD and streaming debug views")
+	TEST_CASE("viewport.capture shows the LOD, streaming and mip debug views")
 	{
 		Tests::GPUContext gpu;
 		REQUIRE(gpu.IsValid());
@@ -798,6 +798,13 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(result["debugView"]["pendingEntities"] == 0);
 		CHECK(result["debugView"]["placeholderBoxes"] == 0);
 		CHECK(harness.CountDifferences(streaming, plain) == 0);
+
+		// The cube's default material has no textures, so no mip levels are missing: the mip view tints nothing.
+		const DecodedImage mip = harness.Capture(withView("mip"), &result);
+		CHECK(result["debugView"]["view"] == "mip");
+		CHECK(result["debugView"]["tintedEntities"] == 0);
+		CHECK(result["debugView"]["entitiesPerMipShortfall"] == nlohmann::json::array({ 0, 0, 0, 0 }));
+		CHECK(harness.CountDifferences(mip, plain) == 0);
 
 		// Captures default to the viewport's debug view; unknown views are refused.
 		harness.Run("viewport.setSettings", { { "debugView", "lod" } });

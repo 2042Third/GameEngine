@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Asset/AssetTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "TestHelpers.h"
@@ -14,6 +15,7 @@
 #include <memory>
 
 using namespace Strata;
+using namespace Strata::Tests;
 
 namespace
 {
@@ -48,6 +50,27 @@ namespace
 	{
 		return bytes == AssetResidencyBudgets::c_Unlimited ? nlohmann::json(nullptr) : nlohmann::json(bytes);
 	}
+
+	// Makes an asset manager the active one while it lives, and the previous one again afterwards.
+	class ScopedActiveManager
+	{
+	public:
+		explicit ScopedActiveManager(const Ref<AssetManagerBase>& manager)
+			: m_Previous(AssetManager::GetActive())
+		{
+			AssetManager::SetActive(manager);
+		}
+
+		~ScopedActiveManager()
+		{
+			AssetManager::SetActive(m_Previous);
+		}
+
+		ScopedActiveManager(const ScopedActiveManager&) = delete;
+		ScopedActiveManager& operator=(const ScopedActiveManager&) = delete;
+	private:
+		Ref<AssetManagerBase> m_Previous;
+	};
 
 }
 
@@ -100,6 +123,16 @@ TEST_SUITE("Editor.Streaming")
 		CHECK(totals["stagingReleases"] == stats.StagingReleases);
 		CHECK(totals["prefetch"]["started"] == stats.DependencyPrefetches);
 		CHECK(totals["prefetch"]["dropped"] == stats.DependencyPrefetchesDropped);
+		CHECK(totals["mipStreaming"]["partialLoads"] == stats.PartialLoads);
+		CHECK(totals["mipStreaming"]["rangeReads"] == stats.RangeReads);
+		CHECK(totals["mipStreaming"]["rangeReadsCompleted"] == stats.RangeReadsCompleted);
+		CHECK(totals["mipStreaming"]["levelsRaised"] == stats.Detail.LevelsRaised);
+		CHECK(totals["mipStreaming"]["levelsDropped"] == stats.Detail.LevelsDropped);
+		CHECK(totals["mipStreaming"]["bytesStreamed"] == stats.Detail.BytesStreamed);
+		CHECK(totals["mipStreaming"]["bytesStreamedLastFrame"] == stats.Detail.BytesStreamedLastFrame);
+		CHECK(totals["mipStreaming"]["assetsBelowWanted"] == stats.Detail.AssetsBelowWanted);
+		CHECK(totals["mipStreaming"]["levelReads"] == stats.Detail.Reads);
+		CHECK(totals["mipStreaming"]["levelChanges"] == stats.Detail.Changes);
 
 		// The list: by memory (the default) or by last use, limited.
 		const nlohmann::json listed = harness.Run("asset.stats", { { "assets", true } });
@@ -140,6 +173,49 @@ TEST_SUITE("Editor.Streaming")
 		REQUIRE(status.contains("assets"));
 		CHECK(status["assets"]["registered"] == stats.RegisteredAssets);
 		CHECK(status["assets"]["pools"]["cpu"]["residentBytes"] == AssetManager::GetActive()->GetStats().Resident.Cpu);
+	}
+
+	TEST_CASE("asset.stats lists the mip levels of assets kept partly resident")
+	{
+		StreamingHarness harness;
+		ScopedFakeLoader loader;
+		Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		const AssetHandle streaming = manager->Add(0x75001, MakeUsage(0, 3 << 20));
+		const AssetHandle whole = manager->Add(0x75002, MakeUsage(0, 1 << 20));
+		manager->RequestLoad(streaming);
+		manager->RequestLoad(whole);
+		REQUIRE(manager->WaitForPendingLoads());
+		manager->Update();
+		const Ref<FakeSizedAsset> streamed = std::dynamic_pointer_cast<FakeSizedAsset>(manager->PeekLoadedAsset(streaming));
+		REQUIRE(streamed);
+		// Level 4 of 12 resident (holding 3 MiB), level 2 wanted: two levels short.
+		streamed->SetDetailLevels(AssetDetailLevels { 4, 2, 12, 3 << 20 });
+		const ScopedActiveManager active(manager);
+
+		const nlohmann::json listed = harness.Run("asset.stats", { { "assets", true } });
+		bool foundStreaming = false;
+		bool foundWhole = false;
+		for (const nlohmann::json& asset : listed["assets"])
+		{
+			if (asset["handle"] == UUIDToJson(streaming))
+			{
+				foundStreaming = true;
+				CHECK(asset["residentMip"] == 4);
+				CHECK(asset["wantedMip"] == 2);
+				CHECK(asset["mipCount"] == 12);
+				CHECK(asset["residentBytes"] == 3 << 20);
+			}
+			else if (asset["handle"] == UUIDToJson(whole))
+			{
+				// Assets that do not report levels have no mip fields.
+				foundWhole = true;
+				CHECK_FALSE(asset.contains("residentMip"));
+				CHECK_FALSE(asset.contains("wantedMip"));
+				CHECK_FALSE(asset.contains("residentBytes"));
+			}
+		}
+		CHECK(foundStreaming);
+		CHECK(foundWhole);
 	}
 
 	TEST_CASE("asset.setBudget changes the budgets, rejects values that are not positive, and resets them")

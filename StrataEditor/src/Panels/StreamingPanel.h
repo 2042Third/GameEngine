@@ -90,6 +90,9 @@ namespace Strata
 		// How the table names an asset: its path; a sub-asset adds its key to its parent's path (and its name when that
 		// differs), so the meshes and materials of one model can be told apart; assets without a file go by their name.
 		static std::string GetAssetLabel(const AssetMetadata& metadata);
+		// What the Mip column shows for an asset kept partly resident (a texture streaming its mip levels): its finest
+		// resident level and the finest one its views want, "resident / wanted" (0 is the full resolution).
+		static std::string FormatMipLevels(const AssetDetailLevels& levels);
 	private:
 		struct Label
 		{
@@ -130,7 +133,7 @@ namespace Strata
 		void UpdateColumnWidths();
 		void SetupTableColumns();
 		// The narrowest table that shows the asset's name at its least width with the fixed columns of the first
-		// `optionalColumns` of c_OptionalColumns' drop order kept (3: all).
+		// `optionalColumns` of c_OptionalColumns' drop order kept (4: all).
 		float GetTableWidth(int optionalColumns) const;
 		// Takes a finished build and starts the next one when the table is due for a refresh or its sort or filter changed.
 		void UpdateTable(const Ref<AssetManagerBase>& manager);
@@ -162,7 +165,7 @@ namespace Strata
 		bool m_SortAscending = false;
 		std::string m_Filter;
 		// Widths of the fixed columns at m_ColumnFontSize (they hold their headers, sort arrows and values).
-		std::array<float, 7> m_ColumnWidths = {};
+		std::array<float, 8> m_ColumnWidths = {};
 		float m_ColumnFontSize = 0.0f;
 		// How many of the optional columns the table showed when it last chose (-1 before it did): they are hidden only
 		// when the width calls for it, so columns the user hides through the header's menu stay hidden meanwhile.

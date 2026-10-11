@@ -44,14 +44,21 @@ TEST_SUITE("Runtime.PerfLog")
 		assets.UploadMsLastFrame = 1.25f;
 		assets.Resident = AssetMemoryUsage { 5 * 1024 * 1024, 64 * 1024 * 1024, 0 };
 		assets.Evictions = 7;
+		assets.Detail.BytesStreamedLastFrame = 2 * 1024 * 1024;
+		assets.Detail.LevelsRaised = 9;
+		assets.Detail.LevelsDropped = 4;
+		assets.Detail.AssetsBelowWanted = 3;
 		GPUUploadQueueStats uploads;
 		uploads.FrameBytes = 3 * 1024 * 1024;
 		uploads.FrameMs = 0.75f;
 		uploads.FrameSteps = 5;
+		FramePerfDeviceMemory device;
+		device.DeviceBytes = 300 * 1024 * 1024;
+		device.StagingBytes = 16 * 1024 * 1024;
 		bool withAssets = false;
 		const uint32_t listener = profiler.AddFrameListener([&](const FrameSample& frame)
 		{
-			CHECK(log->WriteFrame(frame, withAssets ? &assets : nullptr, withAssets ? &uploads : nullptr));
+			CHECK(log->WriteFrame(frame, withAssets ? &assets : nullptr, withAssets ? &uploads : nullptr, withAssets ? &device : nullptr));
 		});
 		for (int frame = 0; frame < 6; frame++)
 		{
@@ -87,9 +94,15 @@ TEST_SUITE("Runtime.PerfLog")
 		const std::optional<size_t> uploadedColumn = table->FindColumn("UploadedMB");
 		const std::optional<size_t> queuedColumn = table->FindColumn("QueuedLoads");
 		const std::optional<size_t> uploadMsColumn = table->FindColumn("UploadMs");
+		const std::optional<size_t> streamedColumn = table->FindColumn("StreamedMB");
+		const std::optional<size_t> raisedColumn = table->FindColumn("MipLevelsRaised");
+		const std::optional<size_t> droppedColumn = table->FindColumn("MipLevelsDropped");
+		const std::optional<size_t> belowColumn = table->FindColumn("MipsBelowWanted");
 		const std::optional<size_t> queueBytesColumn = table->FindColumn("UploadQueueMB");
 		const std::optional<size_t> queueMsColumn = table->FindColumn("UploadQueueMs");
 		const std::optional<size_t> queueStepsColumn = table->FindColumn("UploadQueueSteps");
+		const std::optional<size_t> deviceColumn = table->FindColumn("DeviceMB");
+		const std::optional<size_t> stagingColumn = table->FindColumn("StagingMB");
 		const std::optional<size_t> texturesColumn = table->FindColumn("ResidentGpuTexturesMB");
 		const std::optional<size_t> evictionsColumn = table->FindColumn("Evictions");
 		const std::optional<size_t> privateColumn = table->FindColumn("PrivateMB");
@@ -97,6 +110,8 @@ TEST_SUITE("Runtime.PerfLog")
 		REQUIRE((customColumn && finalizeColumn && workColumn && intervalColumn && uploadedColumn && queuedColumn && texturesColumn && evictionsColumn));
 		REQUIRE((privateColumn && peakPrivateColumn));
 		REQUIRE((uploadMsColumn && queueBytesColumn && queueMsColumn && queueStepsColumn));
+		REQUIRE((streamedColumn && raisedColumn && droppedColumn && belowColumn));
+		REQUIRE((deviceColumn && stagingColumn));
 		for (size_t row = 0; row < table->Rows.size(); row++)
 		{
 			CAPTURE(row);
@@ -115,6 +130,8 @@ TEST_SUITE("Runtime.PerfLog")
 			{
 				CHECK(std::isnan(values[*uploadedColumn])); // No asset manager: empty
 				CHECK(std::isnan(values[*queueBytesColumn])); // No renderer: empty
+				CHECK(std::isnan(values[*deviceColumn]));
+				CHECK(std::isnan(values[*stagingColumn]));
 			}
 			else
 			{
@@ -123,6 +140,12 @@ TEST_SUITE("Runtime.PerfLog")
 				CHECK(values[*texturesColumn] == doctest::Approx(64.0));
 				CHECK(values[*evictionsColumn] == 7.0);
 				CHECK(values[*uploadMsColumn] == doctest::Approx(1.25));
+				CHECK(values[*streamedColumn] == doctest::Approx(2.0));
+				CHECK(values[*raisedColumn] == 9.0);
+				CHECK(values[*droppedColumn] == 4.0);
+				CHECK(values[*belowColumn] == 3.0);
+				CHECK(values[*deviceColumn] == doctest::Approx(300.0));
+				CHECK(values[*stagingColumn] == doctest::Approx(16.0));
 				CHECK(values[*queueBytesColumn] == doctest::Approx(3.0));
 				CHECK(values[*queueMsColumn] == doctest::Approx(0.75));
 				CHECK(values[*queueStepsColumn] == 5.0);

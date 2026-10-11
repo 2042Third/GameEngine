@@ -4,6 +4,7 @@
 #include <Strata/Core/FrameProfiler.h>
 #include <Strata/Renderer/GPUUploadQueue.h>
 #include <Strata/Renderer/ImageWriter.h>
+#include <Strata/Renderer/StagingPool.h>
 #include <Strata/Runtime/FramePerfLog.h>
 #include <Strata/Runtime/GameRenderer.h>
 #include <Strata/Runtime/GameRuntime.h>
@@ -123,7 +124,13 @@ namespace Strata
 			{
 				const std::optional<AssetManagerStats> assets = m_Runtime ? std::optional<AssetManagerStats>(m_Runtime->GetAssetManager()->GetStats()) : std::nullopt;
 				const GPUUploadQueueStats* uploads = Renderer::IsInitialized() ? &Renderer::GetUploadQueue().GetStats() : nullptr;
-				if (!m_PerfLog->WriteFrame(frame, assets ? &*assets : nullptr, uploads))
+				std::optional<FramePerfDeviceMemory> device;
+				if (Renderer::IsInitialized())
+				{
+					const StagingPool& staging = Renderer::GetStagingPool();
+					device = FramePerfDeviceMemory { Renderer::GetGraphicsDevice().GetMemoryBudget().Usage, staging.GetIdleBytes() + staging.GetPendingBytes() };
+				}
+				if (!m_PerfLog->WriteFrame(frame, assets ? &*assets : nullptr, uploads, device ? &*device : nullptr))
 					Application::Get().SetExitCode(1); // A requested log that is incomplete fails the run, so CI notices
 			});
 			ST_INFO("Writing a perf log of every frame to {}", FileSystem::ToUTF8(m_Options.PerfLogPath));

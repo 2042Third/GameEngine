@@ -79,7 +79,7 @@ namespace Strata
 
 		nlohmann::json DebugViewSchema(std::string description)
 		{
-			return { { "type", "string" }, { "enum", { "none", "streaming", "lod" } }, { "description", std::move(description) } };
+			return { { "type", "string" }, { "enum", { "none", "streaming", "lod", "mip" } }, { "description", std::move(description) } };
 		}
 
 		// What the debug view of a render found.
@@ -91,7 +91,8 @@ namespace Strata
 				{ "pendingEntities", stats.PendingEntities },
 				{ "failedEntities", stats.FailedEntities },
 				{ "placeholderBoxes", stats.PlaceholderBoxes },
-				{ "entitiesPerLOD", stats.EntitiesPerLOD } };
+				{ "entitiesPerLOD", stats.EntitiesPerLOD },
+				{ "entitiesPerMipShortfall", stats.EntitiesPerMipShortfall } };
 		}
 
 		nlohmann::json DescribeViewportSettings(const ViewportSettings& settings)
@@ -409,7 +410,7 @@ namespace Strata
 			"The viewport's view settings (saved with the project's editor state): which editor overlays are drawn (grid, selectionOutline, sceneGizmos, "
 			"stats; allColliders: collider shapes of every entity instead of only the selection's), previewLighting (editor views light scenes without any light of their own with a preview sun and sky), gameUI (editor views draw the "
 			"game's screen-space text), the gizmo mode and space, whether gizmo drags snap, the snap steps, and debugView (\"none\", or \"streaming\" / "
-			"\"lod\": the image colored by streaming state or level of detail).",
+			"\"lod\" / \"mip\": the image colored by streaming state, level of detail or the mip levels textures lack).",
 			ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
@@ -436,7 +437,8 @@ namespace Strata
 				{ "scaleSnap", RangeSchema("Scale snapping step", 0.0, ViewportSettings::c_MaxScaleSnap) },
 				{ "debugView", DebugViewSchema("Color every view of the viewport: \"streaming\" tints entities whose mesh, material or textures are still "
 					"loading (Sulfur; failed ones Cinnabar; entities whose mesh is not there are drawn as boxes), \"lod\" tints entities by the level of "
-					"detail they are drawn at (0 to 3+), \"none\" shows the image as rendered") } }),
+					"detail they are drawn at (0 to 3+), \"mip\" tints entities with textures by the mip levels their worst texture lacks against what "
+					"their view needs (none Malachite, 1 Azurite, 2 Sulfur, 3 or more or still loading Cinnabar), \"none\" shows the image as rendered") } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				nlohmann::json changes = nlohmann::json::object();
@@ -475,8 +477,9 @@ namespace Strata
 			"(hiddenScreenSpaceTexts counts it): see viewport.setSettings, or use camera \"scene\" to see what the game shows. Text whose glyphs are still being "
 			"prepared delays the picture by a few frames, so it is complete. Also reports how many assets were still loading (pendingAssets: call editor.wait "
 			"and capture again to see them) and glyphs that could not be prepared in time (pendingTextGlyphs). debugView colors the picture by streaming "
-			"state or level of detail (default: the viewport's, viewport.setSettings) and the result's debugView says what it found: {view, "
-			"tintedEntities, pendingEntities, failedEntities, placeholderBoxes, entitiesPerLOD: [LOD0, LOD1, LOD2, LOD3+]} among the entities in view. "
+			"state, level of detail or mip levels (default: the viewport's, viewport.setSettings) and the result's debugView says what it found: {view, "
+			"tintedEntities, pendingEntities, failedEntities, placeholderBoxes, entitiesPerLOD: [LOD0, LOD1, LOD2, LOD3+], entitiesPerMipShortfall: "
+			"[at the wanted level, 1 level coarser, 2, 3+ or loading]} among the entities in view. "
 			"Needs a GPU (fails in editors started with --no-gpu).",
 			ObjectSchema({
 				{ "width", IntegerSchema("Image width in pixels; without height the viewport's aspect ratio is kept", c_MinCaptureSize, c_MaxCaptureSize) },
@@ -485,7 +488,7 @@ namespace Strata
 					{ "description", "\"editor\": the editor camera; \"scene\": the scene's primary camera (fails without one)" } } },
 				{ "overlays", BoolSchema("Draw the editor overlays enabled in the viewport (default: on for the editor camera, off for the scene camera)") },
 				{ "debugView", DebugViewSchema("\"streaming\" tints entities by streaming state (pending Sulfur, failed Cinnabar, missing meshes as boxes), "
-					"\"lod\" by level of detail, \"none\" not at all (default: the viewport's debug view)") },
+					"\"lod\" by level of detail, \"mip\" by the mip levels their textures lack, \"none\" not at all (default: the viewport's debug view)") },
 				{ "path", StringSchema("Also save the PNG to this .png file: relative to the project directory (needs an open project) or absolute; folders are "
 					"created, network and device paths are refused") },
 				{ "overwrite", BoolSchema("Replace an existing file at path (default false: an existing file is an error)") } }),
@@ -508,7 +511,7 @@ namespace Strata
 				{
 					request.DebugView = ViewportDebugViewFromString(arguments.GetString("debugView"));
 					if (!request.DebugView && arguments.IsValid())
-						arguments.SetError("Parameter 'debugView' must be \"none\", \"streaming\" or \"lod\"");
+						arguments.SetError("Parameter 'debugView' must be \"none\", \"streaming\", \"lod\" or \"mip\"");
 				}
 				request.Overwrite = arguments.GetBool("overwrite", false);
 				if (arguments.Has("path"))

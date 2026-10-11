@@ -1,14 +1,21 @@
 #include <doctest/doctest.h>
 
 #include "Asset/AssetTestUtils.h"
+#include "Editor/EditorCommands.h"
+#include "Editor/EditorContext.h"
 #include "Editor/StreamingView.h"
 #include "Renderer/SceneRendererTestUtils.h"
+#include "Renderer/TextureStreamingTestUtils.h"
 
+#include <Strata/Asset/RuntimeAssetManager.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Math/Frustum.h>
 #include <Strata/Renderer/Mesh.h>
 #include <Strata/Renderer/MeshFactory.h>
+#include <Strata/Renderer/Texture.h>
+#include <Strata/Reflection/PropertyJson.h>
 
+#include <array>
 #include <chrono>
 #include <cstring>
 #include <limits>
@@ -401,6 +408,102 @@ TEST_SUITE("GPU.Editor.StreamingView")
 		CHECK(nearCheck.Tinted == nearCheck.Pixels);
 		CHECK(farCheck.Pixels > 20);
 		CHECK(farCheck.Tinted == farCheck.Pixels);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The mip view tints entities by the mip levels their textures lack, which asset.stats lists")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		// asset.stats reads the active manager; the context made its own active, which the streaming manager replaces.
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		std::string error;
+		const Ref<RuntimeAssetManager> manager = RuntimeAssetManager::Create(WriteGradientStreamingPack(), &error);
+		REQUIRE_MESSAGE(manager, error);
+		ScopedActiveManager active(manager);
+
+		// A quad with the 2048x2048 gradient at 56 pixels, where it needs mip level 5 (its first load holds level 6 and the
+		// smaller ones), and a cube with the default material, which has no texture to stream: the mip view leaves it alone.
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		const Entity textured = AddMesh(scene, BuiltinAssets::QuadMesh, c_GradientMaterialHandle, glm::vec3(0.0f), "Textured");
+		AddMesh(scene, BuiltinAssets::CubeMesh, BuiltinAssets::DefaultMaterial, glm::vec3(1.2f, 0.0f, -1.0f), "Plain");
+		SceneRenderer renderer;
+		renderer.SetViewportSize(256, 256); // The view the 56 pixels are of
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 0.0f, 5.6f), glm::vec3(0.0f));
+		ViewportDebugColors colors;
+		StreamingView view;
+		DebugDraw placeholders;
+
+		// Frames as the editor runs them: the device's frame, the manager's update (its streamer), the view, the render.
+		std::array<bool, 4> seen = {};
+		bool settled = false;
+		for (int frame = 0; frame < 300 && !settled; frame++)
+		{
+			REQUIRE(gpu.GetDevice().BeginFrame());
+			Renderer::BeginFrame();
+			manager->Update();
+			placeholders.Clear();
+			view.Build(scene, ViewportDebugView::Mip, camera, renderer.GetSpecification().LODThreshold, colors, placeholders);
+			SceneRenderOptions options;
+			options.EntityTints = view.GetTints();
+			REQUIRE(renderer.Render(scene, camera, nullptr, options));
+			gpu.GetDevice().EndFrame();
+
+			// Only the textured entity is ever tinted, in the color of its count.
+			const std::array<uint32_t, 4>& counts = view.GetStats().EntitiesPerMipShortfall;
+			REQUIRE(view.GetTints().size() <= 1);
+			CHECK(counts[0] + counts[1] + counts[2] + counts[3] == view.GetTints().size());
+			for (size_t bucket = 0; bucket < counts.size(); bucket++)
+			{
+				if (counts[bucket] == 0)
+					continue;
+				seen[bucket] = true;
+				CHECK(view.GetTints()[0].Target == textured);
+				CHECK(view.GetTints()[0].Color == colors.Mip[bucket]);
+			}
+			const Ref<Texture> texture = std::dynamic_pointer_cast<Texture>(manager->PeekLoadedAsset(c_GradientTextureHandle));
+			const AssetManagerStats stats = manager->GetStats();
+			settled = frame > 10 && texture && texture->GetResidentLevel() == 5 && stats.Detail.Reads == 0 && stats.Detail.Changes == 0;
+		}
+		REQUIRE(settled);
+		// Loading first (the material, then the texture), then one level short while level 5 streams in, then as needed.
+		CHECK(seen[3]);
+		CHECK(seen[1]);
+		CHECK(view.GetStats().EntitiesPerMipShortfall == std::array<uint32_t, 4> { 1, 0, 0, 0 });
+		CHECK(renderer.GetStats().TintedEntities == 1);
+
+		// asset.stats: the texture's row has its levels, and the totals what the streamer did.
+		const EditorCommandResult result = commands.Execute(context, "asset.stats", { { "assets", true } });
+		REQUIRE_MESSAGE(result.Success, result.Error);
+		const nlohmann::json& totals = result.Value["mipStreaming"];
+		const AssetManagerStats stats = manager->GetStats();
+		CHECK(totals["partialLoads"] == 1);
+		CHECK(totals["levelsRaised"] == stats.Detail.LevelsRaised);
+		CHECK(totals["levelsRaised"].get<uint64_t>() >= 1);
+		CHECK(totals["levelsDropped"] == stats.Detail.LevelsDropped);
+		CHECK(totals["bytesStreamed"] == stats.Detail.BytesStreamed);
+		CHECK(totals["bytesStreamed"].get<uint64_t>() > 0);
+		CHECK(totals["assetsBelowWanted"] == 0);
+		CHECK(totals["rangeReadsCompleted"] == stats.RangeReadsCompleted);
+		const Ref<Texture> texture = std::dynamic_pointer_cast<Texture>(manager->PeekLoadedAsset(c_GradientTextureHandle));
+		REQUIRE(texture);
+		bool listed = false;
+		for (const nlohmann::json& row : result.Value["assets"])
+		{
+			if (row["handle"] == UUIDToJson(c_GradientMaterialHandle))
+				CHECK_FALSE(row.contains("residentMip")); // Materials do not stream levels
+			if (row["handle"] != UUIDToJson(c_GradientTextureHandle))
+				continue;
+			listed = true;
+			CHECK(row["residentMip"] == 5);
+			CHECK(row["wantedMip"] == 5);
+			CHECK(row["mipCount"] == c_GradientTextureMips);
+			CHECK(row["residentBytes"] == texture->GetLevelBytes(5, c_GradientTextureMips));
+		}
+		CHECK(listed);
+
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }
