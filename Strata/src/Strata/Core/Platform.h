@@ -16,9 +16,9 @@ namespace Strata
 	//   Normal:      what new threads get (Windows THREAD_PRIORITY_NORMAL, Linux nice 0, macOS the default scheduling
 	//                priority of the time-sharing policy).
 	//   BelowNormal: ranked below Normal threads, which take the processor first when there are not enough for all: the job
-	//                system's workers, so that long jobs (an import's block compression on every core) never take it from
-	//                the main thread or the graphics driver's threads (Windows THREAD_PRIORITY_BELOW_NORMAL, Linux nice 5,
-	//                macOS four steps below the default scheduling priority).
+	//                system's background threads, so that long jobs (an import's block compression on every core) never
+	//                take it from the main thread, the workers' frame work or the graphics driver's threads (Windows
+	//                THREAD_PRIORITY_BELOW_NORMAL, Linux nice 5, macOS four steps below the default scheduling priority).
 	enum class ThreadPriority : uint8_t
 	{
 		Normal = 0,

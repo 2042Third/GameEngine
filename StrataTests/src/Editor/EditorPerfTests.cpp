@@ -10,6 +10,7 @@
 #include "Perf/SceneGenerators.h"
 #include "Perf/StressProject.h"
 #include "Renderer/GPUTestUtils.h"
+#include "Renderer/SceneRendererTestUtils.h"
 #include "TestHelpers.h"
 
 #include <Strata/Asset/AssetManager.h>
@@ -26,6 +27,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <memory>
 #include <optional>
 #include <string>
@@ -376,6 +378,21 @@ TEST_SUITE("PerfGPU.Editor")
 		const SceneCamera camera = GetStressSweepFrame(GetLargeTextureSpec(), StressSweepPath(), 0, static_cast<float>(c_Width) / static_cast<float>(c_Height)).Camera;
 		SceneRenderer renderer;
 		renderer.SetViewportSize(c_Width, c_Height);
+		// A second view of 10,000 cubes, drawn in the frames of the last measurement: its draws are extracted in parallel
+		// chunks (more than one chunk's proxies in view), so the frame waits for work of its own on the workers while the
+		// import compresses. Such a frame must neither run the compression itself nor wait behind it.
+		constexpr size_t c_Cubes = 10'000;
+		Scene cubes("Cubes");
+		Perf::AddCameraAndLight(cubes);
+		Perf::CreateCubeGrid(cubes, c_Cubes);
+		const float gridHalf = static_cast<float>(std::ceil(std::sqrt(static_cast<double>(c_Cubes)))) * Perf::c_GridSpacing * 0.5f;
+		const float aspect = static_cast<float>(c_Width) / static_cast<float>(c_Height);
+		SceneCamera cubesCamera = LookAt(glm::vec3(0.0f, gridHalf * 1.6f, gridHalf * 1.3f), glm::vec3(0.0f), aspect);
+		cubesCamera.Projection = Math::PerspectiveReverseZ(glm::radians(60.0f), aspect, 0.1f, gridHalf * 10.0f);
+		cubesCamera.Far = gridHalf * 10.0f;
+		SceneRenderer cubesRenderer;
+		cubesRenderer.SetViewportSize(c_Width, c_Height);
+		bool drawCubes = false;
 		// One frame; returns its work in milliseconds.
 		const auto frame = [&]()
 		{
@@ -386,6 +403,8 @@ TEST_SUITE("PerfGPU.Editor")
 			context.Update(Timestep(1.0f / 60.0f));
 			runner.Update(context);
 			CHECK(renderer.Render(*scene, camera));
+			if (drawCubes)
+				CHECK(cubesRenderer.Render(cubes, cubesCamera));
 			const double milliseconds = MillisecondsSince(start);
 			device.EndFrame();
 			return milliseconds;
@@ -396,8 +415,9 @@ TEST_SUITE("PerfGPU.Editor")
 			frame();
 		REQUIRE(AssetManager::GetAssetState(texture) == AssetState::Ready);
 
-		// One re-import with the given settings, until the new texture is uploaded and drawn; returns the longest frame.
-		const auto reimport = [&](const nlohmann::json& settings)
+		// One re-import with the given settings, until the new texture is uploaded and drawn; returns the longest frame, or
+		// with importOnly the longest frame while the import runs (until the command answers, before the new texture loads).
+		const auto reimport = [&](const nlohmann::json& settings, bool importOnly = false)
 		{
 			auto completed = std::make_shared<std::optional<EditorCommandResult>>();
 			const auto start = std::chrono::steady_clock::now();
@@ -409,7 +429,10 @@ TEST_SUITE("PerfGPU.Editor")
 			while ((!*completed || AssetManager::GetAssetState(texture) != AssetState::Ready || renderer.GetStats().PendingAssets > 0)
 				&& std::chrono::steady_clock::now() < deadline)
 			{
-				maxFrame = std::max(maxFrame, frame());
+				const bool importing = !*completed;
+				const double milliseconds = frame();
+				if (importing || !importOnly)
+					maxFrame = std::max(maxFrame, milliseconds);
 				frames++;
 			}
 			REQUIRE(*completed);
@@ -428,6 +451,17 @@ TEST_SUITE("PerfGPU.Editor")
 			const double uncompressed = reimport({ { "Compression", "Uncompressed" } });
 			const double compressed = reimport({ { "Compression", "Auto" } });
 			return std::max(uncompressed, compressed);
+		});
+		// With the 10,000 cubes drawn too, the longest frame while the texture is compressed to BC7 again on the background
+		// threads: frames whose parallel work must neither run the compression nor wait behind it (the frames that upload
+		// the new texture afterwards are the metric above's).
+		drawCubes = true;
+		frame();
+		CHECK(cubesRenderer.GetStats().Instances == c_Cubes);
+		Perf::CheckBudgetConfirmed("PerfGPU.Editor.ImportSettings4kMaxFrame10kCubes", [&]
+		{
+			reimport({ { "Compression", "Uncompressed" } });
+			return reimport({ { "Compression", "Auto" } }, true);
 		});
 		device.WaitForIdle();
 		CHECK(AssetManager::GetAsset<Texture>(texture)->GetWidth() == 4096u);

@@ -98,9 +98,9 @@ namespace Strata
 		bool SetImportSettings(AssetHandle handle, const nlohmann::json& settings, std::string* outError = nullptr);
 		// Re-imports a source asset (blocking) and hot reloads it.
 		bool ReimportAsset(AssetHandle handle, std::string* outError = nullptr);
-		// Like SetImportSettings, but the import runs on the I/O pool like a hot reload: returns once the .meta is saved and
-		// the import is queued. Update applies the result and reloads what was loaded; IsImportPending tells when. Settings
-		// that equal those of the cached import find it current, so nothing is imported again.
+		// Like SetImportSettings, but the import runs as a background job like a hot reload: returns once the .meta is saved
+		// and the import is queued. Update applies the result and reloads what was loaded; IsImportPending tells when.
+		// Settings that equal those of the cached import find it current, so nothing is imported again.
 		bool SetImportSettingsInBackground(AssetHandle handle, const nlohmann::json& settings, std::string* outError = nullptr);
 		// Like ReimportAsset, in the background (see SetImportSettingsInBackground). The import runs even when the cached one
 		// is current. Engine documents (stored as their source) are reloaded at once instead.
@@ -233,7 +233,8 @@ namespace Strata
 		bool LoadCurrentImport(const ImportRequest& request, ImportOutcome& outOutcome) const;
 		ImportOutcome RunImport(const ImportRequest& request) const; // Any thread
 		void ApplyImportOutcome(ImportOutcome outcome, bool reload);
-		// Queues an import on the I/O pool (hot reload); with force, also when the cached import is current.
+		// Queues an import as a background job (JobPriority::Background; hot reload); with force, also when the cached import is
+		// current.
 		void QueueImport(AssetHandle handle, bool force = false);
 		// Merges settings into the asset's and saves its .meta (an invalid .meta is never overwritten).
 		bool WriteImportSettings(AssetHandle handle, const nlohmann::json& settings, std::string* outError);

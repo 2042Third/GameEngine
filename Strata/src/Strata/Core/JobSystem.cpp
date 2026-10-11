@@ -15,16 +15,25 @@ namespace Strata
 	namespace
 	{
 
-		struct Job
+		using JobRef = Ref<Detail::JobState>;
+
+		enum class PoolKind : uint8_t
 		{
-			std::function<void()> Function;
-			Ref<Detail::JobState> State;
+			Workers = 0,
+			IO,
+			Background
 		};
 
-		thread_local bool t_IsWorkerThread = false;
+		// The pool of the thread, for IsWorkerThread, IsBackgroundThread and the work background threads start.
+		thread_local PoolKind t_ThreadPool = PoolKind::IO;
+		thread_local bool t_IsPoolThread = false;
+		// Background jobs another thread runs while it waits for them (JobSystem::Wait): what they start stays background.
+		thread_local uint32_t t_BackgroundJobDepth = 0;
 
-		void ExecuteJob(Job& job)
+		void ExecuteJob(Detail::JobState& job)
 		{
+			if (job.Background)
+				t_BackgroundJobDepth++;
 			try
 			{
 				job.Function();
@@ -37,12 +46,38 @@ namespace Strata
 			{
 				ST_CORE_ERROR("JobSystem: job threw an unknown exception");
 			}
+			if (job.Background)
+				t_BackgroundJobDepth--;
+			// What the job captured is released before anyone hears that it completed.
+			job.Function = nullptr;
 
 			{
-				std::scoped_lock<std::mutex> lock(job.State->Mutex);
-				job.State->Completed.store(true, std::memory_order_release);
+				std::scoped_lock<std::mutex> lock(job.Mutex);
+				job.Completed.store(true, std::memory_order_release);
 			}
-			job.State->Condition.notify_all();
+			job.Condition.notify_all();
+		}
+
+		// Runs the job unless another thread claimed it first. Returns whether it ran here.
+		bool TryRunJob(Detail::JobState& job)
+		{
+			if (job.Claimed.exchange(true, std::memory_order_acq_rel))
+				return false;
+			ExecuteJob(job);
+			return true;
+		}
+
+		// Completes a job that will never run (a ParallelFor helper that is no longer needed), unless a thread claimed it.
+		void DropJob(Detail::JobState& job)
+		{
+			if (job.Claimed.exchange(true, std::memory_order_acq_rel))
+				return;
+			job.Function = nullptr;
+			{
+				std::scoped_lock<std::mutex> lock(job.Mutex);
+				job.Completed.store(true, std::memory_order_release);
+			}
+			job.Condition.notify_all();
 		}
 
 		int64_t GetClockNanoseconds(std::chrono::steady_clock::time_point time)
@@ -130,7 +165,7 @@ namespace Strata
 		class JobPool
 		{
 		public:
-			void Start(uint32_t threadCount, const std::string& namePrefix, bool workerThreads, bool lowerPriority)
+			void Start(uint32_t threadCount, const std::string& namePrefix, PoolKind kind)
 			{
 				m_Stopping = false;
 				// Before the threads start: they write their activity from their first job on.
@@ -139,14 +174,15 @@ namespace Strata
 				for (uint32_t index = 0; index < threadCount; index++)
 				{
 					std::string name = fmt::format("{} {}", namePrefix, index);
-					m_Threads.emplace_back([this, name = std::move(name), workerThreads, lowerPriority, index]()
+					m_Threads.emplace_back([this, name = std::move(name), kind, index]()
 					{
 						Platform::SetCurrentThreadName(name);
-						// A thread the system keeps at its priority still runs every job: only the frame's share of the processors
-						// suffers, so this is not an error.
-						if (lowerPriority && !Platform::SetCurrentThreadPriority(ThreadPriority::BelowNormal))
+						// A background thread the system keeps at the normal priority still runs every job: only the frame's share of
+						// the processors suffers while it does, so this is not an error.
+						if (kind == PoolKind::Background && !Platform::SetCurrentThreadPriority(ThreadPriority::BelowNormal))
 							ST_CORE_WARN("{} keeps the normal thread priority: the system refused to lower it", name);
-						t_IsWorkerThread = workerThreads;
+						t_ThreadPool = kind;
+						t_IsPoolThread = true;
 						ThreadMain(m_Activity[index]);
 					});
 				}
@@ -167,33 +203,27 @@ namespace Strata
 				m_Stopped = true;
 			}
 
-			void Push(Job job, JobPriority priority)
+			void Push(const JobRef& job, JobPriority priority)
 			{
 				{
 					std::scoped_lock<std::mutex> lock(m_Mutex);
 					if (!m_Stopped)
 					{
-						m_Queues[static_cast<size_t>(priority)].push_back(std::move(job));
+						m_Queues[GetQueueIndex(priority)].push_back(job);
 						m_Condition.notify_one();
 						return;
 					}
 				}
 
 				// The pool's threads are gone (late submission during shutdown): run the job right here.
-				ExecuteJob(job);
-			}
-
-			bool TryPop(Job& outJob)
-			{
-				std::scoped_lock<std::mutex> lock(m_Mutex);
-				return PopLocked(outJob);
+				TryRunJob(*job);
 			}
 
 			uint64_t GetPendingCount()
 			{
 				std::scoped_lock<std::mutex> lock(m_Mutex);
 				uint64_t count = 0;
-				for (const std::deque<Job>& queue : m_Queues)
+				for (const std::deque<JobRef>& queue : m_Queues)
 					count += queue.size();
 				return count;
 			}
@@ -221,9 +251,15 @@ namespace Strata
 				return stats;
 			}
 		private:
-			bool PopLocked(Job& outJob)
+			// The queues run in priority order; Background is the last (only I/O pools see it as a priority).
+			static size_t GetQueueIndex(JobPriority priority)
 			{
-				for (std::deque<Job>& queue : m_Queues)
+				return std::min<size_t>(static_cast<size_t>(priority), static_cast<size_t>(JobPriority::Low));
+			}
+
+			bool PopLocked(JobRef& outJob)
+			{
+				for (std::deque<JobRef>& queue : m_Queues)
 				{
 					if (!queue.empty())
 					{
@@ -239,14 +275,14 @@ namespace Strata
 			{
 				while (true)
 				{
-					Job job;
+					JobRef job;
 					{
 						std::unique_lock<std::mutex> lock(m_Mutex);
 						m_Condition.wait(lock, [this]()
 						{
 							if (m_Stopping)
 								return true;
-							for (const std::deque<Job>& queue : m_Queues)
+							for (const std::deque<JobRef>& queue : m_Queues)
 							{
 								if (!queue.empty())
 									return true;
@@ -258,15 +294,18 @@ namespace Strata
 						if (!PopLocked(job))
 							return;
 					}
+					// A job that a waiting thread ran, or a dropped helper, is only taken off the queue.
+					if (job->Claimed.exchange(true, std::memory_order_acq_rel))
+						continue;
 					activity.BeginJob(GetClockNanoseconds(std::chrono::steady_clock::now()));
-					ExecuteJob(job);
+					ExecuteJob(*job);
 					activity.EndJob(GetClockNanoseconds(std::chrono::steady_clock::now()));
 				}
 			}
 		private:
 			std::mutex m_Mutex;
 			std::condition_variable m_Condition;
-			std::deque<Job> m_Queues[3];
+			std::deque<JobRef> m_Queues[3];
 			std::vector<std::thread> m_Threads;
 			std::unique_ptr<ThreadActivity[]> m_Activity; // One per thread, indexed like m_Threads
 			bool m_Stopping = false;
@@ -277,6 +316,7 @@ namespace Strata
 		{
 			JobPool Workers;
 			JobPool IO;
+			JobPool Background;
 			bool HasIOPool = false;
 		};
 
@@ -284,11 +324,71 @@ namespace Strata
 		std::mutex s_LifetimeMutex;
 		std::atomic<JobSystemData*> s_Data = nullptr;
 
+		JobRef MakeJob(std::function<void()> function, bool background = false)
+		{
+			auto job = CreateRef<Detail::JobState>();
+			job->Function = std::move(function);
+			job->Background = background;
+			return job;
+		}
+
+		// Whether the calling thread does background work: on a background thread, or running a background job it waited for.
+		bool IsInBackgroundWork()
+		{
+			return (t_IsPoolThread && t_ThreadPool == PoolKind::Background) || t_BackgroundJobDepth > 0;
+		}
+
 		JobHandle RunInline(std::function<void()>& function)
 		{
-			Job job { std::move(function), CreateRef<Detail::JobState>() };
-			ExecuteJob(job);
+			const JobRef job = MakeJob(std::move(function));
+			TryRunJob(*job);
 			return {};
+		}
+
+		// The batches of one ParallelFor, shared by the calling thread and its helpers. Helpers keep it alive, so one that
+		// starts after the call returned finds no batch left and ends without touching the function.
+		struct ParallelForState
+		{
+			const std::function<void(uint32_t, uint32_t)>* Function = nullptr;
+			uint32_t Count = 0;
+			uint32_t BatchSize = 0;
+			uint32_t BatchCount = 0;
+			std::atomic<uint32_t> NextBatch = 0;
+			std::atomic<uint32_t> FinishedBatches = 0;
+			std::mutex Mutex;
+			std::condition_variable Condition;
+		};
+
+		void RunBatches(ParallelForState& state)
+		{
+			while (true)
+			{
+				const uint32_t batch = state.NextBatch.fetch_add(1, std::memory_order_relaxed);
+				if (batch >= state.BatchCount)
+					return;
+
+				const uint32_t begin = batch * state.BatchSize;
+				const uint32_t end = std::min(begin + state.BatchSize, state.Count);
+				try
+				{
+					(*state.Function)(begin, end);
+				}
+				catch (const std::exception& exception)
+				{
+					ST_CORE_ERROR("JobSystem: a ParallelFor batch threw an exception: {}", exception.what());
+				}
+				catch (...)
+				{
+					ST_CORE_ERROR("JobSystem: a ParallelFor batch threw an unknown exception");
+				}
+
+				// The function is not touched after the last batch is counted: the call may return from then on.
+				if (state.FinishedBatches.fetch_add(1, std::memory_order_acq_rel) + 1 == state.BatchCount)
+				{
+					std::scoped_lock<std::mutex> lock(state.Mutex);
+					state.Condition.notify_all();
+				}
+			}
 		}
 
 	}
@@ -313,17 +413,19 @@ namespace Strata
 			const uint32_t hardwareThreads = std::thread::hardware_concurrency();
 			workerCount = hardwareThreads > 1 ? hardwareThreads - 1 : 1;
 		}
+		const uint32_t backgroundCount = specification.BackgroundThreadCount > 0 ? specification.BackgroundThreadCount : workerCount;
 
 		auto* data = new JobSystemData();
-		data->Workers.Start(workerCount, "Strata Worker", true, specification.LowerWorkerPriority);
+		data->Workers.Start(workerCount, "Strata Worker", PoolKind::Workers);
 		if (specification.IOThreadCount > 0)
 		{
-			data->IO.Start(specification.IOThreadCount, "Strata IO", false, false);
+			data->IO.Start(specification.IOThreadCount, "Strata IO", PoolKind::IO);
 			data->HasIOPool = true;
 		}
+		data->Background.Start(backgroundCount, "Strata Background", PoolKind::Background);
 		s_Data.store(data);
 
-		ST_CORE_INFO("JobSystem: {} worker threads, {} I/O threads", workerCount, specification.IOThreadCount);
+		ST_CORE_INFO("JobSystem: {} worker threads, {} I/O threads, {} background threads", workerCount, specification.IOThreadCount, backgroundCount);
 	}
 
 	void JobSystem::Shutdown()
@@ -333,9 +435,10 @@ namespace Strata
 		if (!data)
 			return;
 
-		// I/O jobs commonly hand work to the CPU pool, so drain I/O first.
+		// I/O jobs commonly hand work to the other pools, and background work to the workers, so drain in that order.
 		if (data->HasIOPool)
 			data->IO.Stop();
+		data->Background.Stop();
 		data->Workers.Stop();
 		s_Data.store(nullptr);
 		delete data;
@@ -352,8 +455,12 @@ namespace Strata
 		if (!data)
 			return RunInline(job);
 
-		auto state = CreateRef<Detail::JobState>();
-		data->Workers.Push(Job { std::move(job), state }, priority);
+		const bool background = priority == JobPriority::Background || IsInBackgroundWork();
+		JobRef state = MakeJob(std::move(job), background);
+		if (background)
+			data->Background.Push(state, priority == JobPriority::Background ? JobPriority::Normal : priority);
+		else
+			data->Workers.Push(state, priority);
 		return JobHandle(std::move(state));
 	}
 
@@ -363,9 +470,9 @@ namespace Strata
 		if (!data)
 			return RunInline(job);
 
-		auto state = CreateRef<Detail::JobState>();
+		JobRef state = MakeJob(std::move(job));
 		JobPool& pool = data->HasIOPool ? data->IO : data->Workers;
-		pool.Push(Job { std::move(job), state }, priority);
+		pool.Push(state, priority);
 		return JobHandle(std::move(state));
 	}
 
@@ -374,27 +481,13 @@ namespace Strata
 		if (handle.IsComplete())
 			return;
 
-		const Ref<Detail::JobState>& state = handle.m_State;
-		while (!state->Completed.load(std::memory_order_acquire))
-		{
-			// Help with queued CPU work instead of idling; this also prevents deadlocks when a job waits
-			// on another job while every worker is busy.
-			if (JobSystemData* data = s_Data.load())
-			{
-				Job job;
-				if (data->Workers.TryPop(job))
-				{
-					ExecuteJob(job);
-					continue;
-				}
-			}
+		// Nobody started it yet: run it here, which also keeps a job that waits for another from deadlocking the pool.
+		Detail::JobState& state = *handle.m_State;
+		if (TryRunJob(state))
+			return;
 
-			std::unique_lock<std::mutex> lock(state->Mutex);
-			state->Condition.wait_for(lock, std::chrono::microseconds(500), [&state]()
-			{
-				return state->Completed.load(std::memory_order_acquire);
-			});
-		}
+		std::unique_lock<std::mutex> lock(state.Mutex);
+		state.Condition.wait(lock, [&state]() { return state.Completed.load(std::memory_order_acquire); });
 	}
 
 	void JobSystem::WaitAll(std::span<const JobHandle> handles)
@@ -403,7 +496,8 @@ namespace Strata
 			Wait(handle);
 	}
 
-	void JobSystem::ParallelFor(uint32_t count, uint32_t minBatchSize, const std::function<void(uint32_t begin, uint32_t end)>& function)
+	void JobSystem::ParallelFor(uint32_t count, uint32_t minBatchSize, const std::function<void(uint32_t begin, uint32_t end)>& function,
+		JobPriority helperPriority)
 	{
 		if (count == 0)
 			return;
@@ -417,29 +511,35 @@ namespace Strata
 			return;
 		}
 
-		std::atomic<uint32_t> nextBatch = 0;
-		auto runBatches = [&]()
-		{
-			while (true)
-			{
-				const uint32_t batch = nextBatch.fetch_add(1, std::memory_order_relaxed);
-				if (batch >= batchCount)
-					return;
+		const bool background = helperPriority == JobPriority::Background || IsInBackgroundWork();
+		JobPool& pool = background ? data->Background : data->Workers;
+		// Helpers of work in progress go before work that has not started.
+		const JobPriority queuePriority = background ? JobPriority::High : helperPriority;
 
-				const uint32_t begin = batch * batchSize;
-				const uint32_t end = std::min(begin + batchSize, count);
-				function(begin, end);
-			}
-		};
+		auto state = CreateRef<ParallelForState>();
+		state->Function = &function;
+		state->Count = count;
+		state->BatchSize = batchSize;
+		state->BatchCount = batchCount;
 
-		const uint32_t helperCount = std::min(data->Workers.GetThreadCount(), batchCount - 1);
-		std::vector<JobHandle> helpers;
+		const uint32_t helperCount = std::min(pool.GetThreadCount(), batchCount - 1);
+		std::vector<JobRef> helpers;
 		helpers.reserve(helperCount);
 		for (uint32_t index = 0; index < helperCount; index++)
-			helpers.push_back(Submit(runBatches, JobPriority::High));
+		{
+			JobRef helper = MakeJob([state]() { RunBatches(*state); }, background);
+			pool.Push(helper, queuePriority);
+			helpers.push_back(std::move(helper));
+		}
 
-		runBatches();
-		WaitAll(helpers);
+		RunBatches(*state);
+
+		// Every batch is taken: helpers that have not started would find nothing to do.
+		for (const JobRef& helper : helpers)
+			DropJob(*helper);
+
+		std::unique_lock<std::mutex> lock(state->Mutex);
+		state->Condition.wait(lock, [&state]() { return state->FinishedBatches.load(std::memory_order_acquire) == state->BatchCount; });
 	}
 
 	uint32_t JobSystem::GetWorkerThreadCount()
@@ -456,9 +556,20 @@ namespace Strata
 		return data->HasIOPool ? data->IO.GetThreadCount() : data->Workers.GetThreadCount();
 	}
 
+	uint32_t JobSystem::GetBackgroundThreadCount()
+	{
+		JobSystemData* data = s_Data.load();
+		return data ? data->Background.GetThreadCount() : 0;
+	}
+
 	bool JobSystem::IsWorkerThread()
 	{
-		return t_IsWorkerThread;
+		return t_IsPoolThread && t_ThreadPool == PoolKind::Workers;
+	}
+
+	bool JobSystem::IsBackgroundThread()
+	{
+		return t_IsPoolThread && t_ThreadPool == PoolKind::Background;
 	}
 
 	uint64_t JobSystem::GetPendingJobCount()
@@ -466,7 +577,7 @@ namespace Strata
 		JobSystemData* data = s_Data.load();
 		if (!data)
 			return 0;
-		return data->Workers.GetPendingCount() + (data->HasIOPool ? data->IO.GetPendingCount() : 0);
+		return data->Workers.GetPendingCount() + (data->HasIOPool ? data->IO.GetPendingCount() : 0) + data->Background.GetPendingCount();
 	}
 
 	JobSystemStats JobSystem::GetStats()
@@ -480,6 +591,7 @@ namespace Strata
 		stats.Workers = data->Workers.GetStats(now);
 		if (data->HasIOPool)
 			stats.IO = data->IO.GetStats(now);
+		stats.Background = data->Background.GetStats(now);
 		return stats;
 	}
 

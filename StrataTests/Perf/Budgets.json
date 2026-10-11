@@ -68,6 +68,7 @@
 	"Perf.Physics.LargestCapacities.ReservedMemory": { "Measured": 984.2, "Budget": 1033.0, "Unit": "MB" },
 	"Perf.Physics.Create10kBodies": { "Measured": 7.995, "Budget": 11.99, "Unit": "ms" },
 	"PerfGPU.Editor.ImportSettings4kMaxFrame": { "Measured": 3.866, "Budget": 5.799, "Unit": "ms" },
+	"PerfGPU.Editor.ImportSettings4kMaxFrame10kCubes": { "Measured": 3.213, "Budget": 4.819, "Unit": "ms" },
 	"PerfGPU.Editor.EditFrameNested100k": { "Measured": 0.2746, "Budget": 0.4119, "Unit": "ms" },
 	"PerfGPU.Editor.PlayFrameNested100k": { "Measured": 0.264, "Budget": 0.396, "Unit": "ms" },
 	"PerfGPU.Editor.EditFrameNested1M": { "Measured": 0.2648, "Budget": 0.3972, "Unit": "ms" },

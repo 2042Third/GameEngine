@@ -108,7 +108,8 @@ namespace Strata
 	void PerformancePanel::OnUpdate(EditorPanelContext&)
 	{
 		m_Jobs = JobSystem::GetStats();
-		const uint64_t inFlight = m_Jobs.Workers.RunningJobs + m_Jobs.IO.RunningJobs + m_Jobs.Workers.QueuedJobs + m_Jobs.IO.QueuedJobs;
+		const uint64_t inFlight = m_Jobs.Workers.RunningJobs + m_Jobs.IO.RunningJobs + m_Jobs.Background.RunningJobs + m_Jobs.Workers.QueuedJobs
+			+ m_Jobs.IO.QueuedJobs + m_Jobs.Background.QueuedJobs;
 		m_JobSamples[m_JobCursor] = static_cast<float>(inFlight);
 		m_JobCursor = (m_JobCursor + 1) % c_JobSamples;
 		m_JobSampleCount = std::min(m_JobSampleCount + 1, c_JobSamples);
@@ -168,8 +169,10 @@ namespace Strata
 		ImGui::AlignTextToFramePadding();
 		ImGui::Text("Frame %.2f ms \xC2\xB7 p95 %.2f \xC2\xB7 max %.2f \xC2\xB7 %.0f FPS", summary.Work.Average, summary.Work.P95, summary.Work.Max, summary.FramesPerSecond);
 		ImGui::SameLine();
-		ImGui::TextColored(colors.TextSecondary, "\xC2\xB7 workers %.0f%% \xC2\xB7 I/O %.0f%% busy \xC2\xB7 %u jobs running, %llu queued", summary.WorkerBusyPercent,
-			summary.IOBusyPercent, m_Jobs.Workers.RunningJobs + m_Jobs.IO.RunningJobs, static_cast<unsigned long long>(m_Jobs.Workers.QueuedJobs + m_Jobs.IO.QueuedJobs));
+		ImGui::TextColored(colors.TextSecondary, "\xC2\xB7 workers %.0f%% \xC2\xB7 I/O %.0f%% \xC2\xB7 background %.0f%% busy \xC2\xB7 %u jobs running, %llu queued",
+			summary.WorkerBusyPercent, summary.IOBusyPercent, summary.BackgroundBusyPercent,
+			m_Jobs.Workers.RunningJobs + m_Jobs.IO.RunningJobs + m_Jobs.Background.RunningJobs,
+			static_cast<unsigned long long>(m_Jobs.Workers.QueuedJobs + m_Jobs.IO.QueuedJobs + m_Jobs.Background.QueuedJobs));
 		ImGui::PopFont();
 
 		// Copy as JSON at the line's end.
@@ -286,8 +289,8 @@ namespace Strata
 		std::sort(stages.begin(), stages.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
 		ImGui::BeginTooltip();
 		ImGui::Text("Frame %llu: %.3f ms%s", static_cast<unsigned long long>(frame.Index), frame.WorkMs, frame.WorkMs > spikeMs ? " (spike)" : "");
-		ImGui::TextColored(colors.TextSecondary, "%.2f ms after the previous frame \xC2\xB7 workers %.0f%% \xC2\xB7 I/O %.0f%% busy", frame.IntervalMs,
-			frame.WorkerBusyPercent, frame.IOBusyPercent);
+		ImGui::TextColored(colors.TextSecondary, "%.2f ms after the previous frame \xC2\xB7 workers %.0f%% \xC2\xB7 I/O %.0f%% \xC2\xB7 background %.0f%% busy",
+			frame.IntervalMs, frame.WorkerBusyPercent, frame.IOBusyPercent, frame.BackgroundBusyPercent);
 		for (const auto& [ms, stage] : stages)
 		{
 			Swatch(GetStageColor(stage));

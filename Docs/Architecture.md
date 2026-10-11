@@ -427,8 +427,9 @@ entered several times in a frame adds up. Its cost is about 0.6 microseconds per
 | `Present` | `GraphicsDevice::EndFrame`, after the work time is measured (outside the frame time) |
 
 Modules and games register more (`RegisterStage`, up to 64); a scene system names its stage in its descriptor. Each frame
-also records how busy the job system's worker and I/O threads were since the previous frame (`JobSystem::GetStats`:
-per-thread busy time and completed jobs, written by each pool thread under a sequence lock and read without stopping it).
+also records how busy the job system's worker, I/O and background threads were since the previous frame
+(`JobSystem::GetStats`: per-thread busy time and completed jobs, written by each pool thread under a sequence lock and
+read without stopping it).
 `Summarize` gives mean, nearest-rank 50th and 95th percentiles and maximum per stage; frame listeners
 (`AddFrameListener`) receive every recorded frame. The editor reports it through `editor.perf`, the Performance panel and
 the status bar's frame pill (see [Editor](#editor));
@@ -570,19 +571,23 @@ A frame of a scene where nothing changed costs (almost) nothing, however many en
 The main thread owns the scene, input, scripts, editor state and rendering submission (AGENTS.md, "Architecture
 rules"). Other threads:
 
-- **Job workers** (`JobSystem::Init`, `Core/JobSystem.cpp`; hardware threads - 1 by default): `JobSystem::Submit` and
-  `ParallelFor` work such as asset decoding, the initial imports of a project scan, Jolt's jobs, mesh shape cooking,
-  world transform propagation, the renderer's extraction of draws (see [Render scene](#render-scene)), texture
-  compression of imports and PNG encoding of captures. They run below the normal thread priority
-  (`JobSystemSpecification::LowerWorkerPriority`, `Platform::SetCurrentThreadPriority`): a pool as large as the processors
-  busy with long jobs (an import compressing a 4096x4096 texture keeps every worker busy for seconds) would otherwise
-  share them evenly with the main thread and the graphics driver's threads, and the editor's frames, which take about
-  3 ms, would stretch to 10-30 ms by whole scheduling quanta. Frame work loses nothing: a thread that waits for jobs runs
-  queued ones itself.
+- **Job workers** (`JobSystem::Init`, `Core/JobSystem.cpp`; hardware threads - 1 by default, at the normal thread
+  priority): `JobSystem::Submit` and `ParallelFor` work such as asset decoding, Jolt's jobs, mesh shape cooking, world
+  transform propagation, the renderer's extraction of draws (see [Render scene](#render-scene)) and PNG encoding of
+  captures. Much of it is frame work: a frame that waits for a batch or a Jolt job a worker has started goes on only once
+  that worker has the processor again, so workers keep the main thread's priority (below it, a machine whose processors
+  other programs keep busy, a build for one, would starve them and stall frames for seconds).
+- **Background threads** (`JobSystem::Init`; as many as workers by default): long work no frame waits for, submitted with
+  `JobPriority::Background` - imports (the project scan's and the background re-imports, with their texture
+  compression) and the block compression of game exports. They run below the normal thread priority
+  (`Platform::SetCurrentThreadPriority`): a pool as large as the processors busy with long jobs (an import compressing a
+  4096x4096 texture keeps every thread busy for seconds) would otherwise share them evenly with the main thread, the
+  workers and the graphics driver's threads, and the editor's frames, which take about 3 ms, would stretch to 10-30 ms by
+  whole scheduling quanta. What background work starts (`Submit`, `ParallelFor`) stays on the background threads.
 - **I/O threads** (`JobSystem::Init`; 2 by default): `JobSystem::SubmitIO` work such as asset reads (dispatched by the
   streaming queue, at most two per I/O thread at a time; a pack read hands its blocks to worker jobs to decompress while
-  it reads on, and never runs other jobs while it waits for them), background re-imports, saving captures and game
-  exports (the pack writer compresses blocks with `ParallelFor` on the workers).
+  it reads on, and never runs other jobs while it waits for them), searches of what documents reference, saving
+  captures and game exports (the pack writer compresses blocks with `ParallelFor` on the background threads).
 - **File watchers** (`FileWatcher::Start`): one thread per watcher, for the project's asset directory
   (`EditorAssetManager`) and for the script module's directory (`ScriptEngine`, hot reload). Each rescans its tree when
   the platform reports a change (`FileChangeNotifier`: change notifications on Windows,
@@ -594,10 +599,13 @@ rules"). Other threads:
 - **Process output readers** (`Core/Process.h`): read a child's output pipes (script builds).
 - **MCP input** (`StrataCLI/src/CLI/McpServer.cpp`, in the StrataCLI process): reads stdin lines into a queue.
 
-Jobs submitted before `JobSystem::Init` or after `Shutdown` run inline; waiting threads help run queued CPU jobs, so
-waiting inside a job cannot deadlock (`Core/JobSystem.h`). Jolt's step is called on the main thread and its jobs run on
-the worker pool, with the stepping thread running them itself when the workers are busy
-(`Physics/PhysicsJobSystem.cpp`).
+Jobs submitted before `JobSystem::Init` or after `Shutdown` run inline. A thread that waits for a job runs it itself when
+no thread has started it yet (whoever claims a job first runs it), so waiting inside a job cannot deadlock; it never runs
+other queued jobs, which could hold it far longer than what it waits for (a frame waiting for its own work would
+otherwise pick up an import's compression). `ParallelFor`'s calling thread runs batches until none is left and then waits
+only for the batches its helpers are running; helpers that had not started are dropped (`Core/JobSystem.h`). Jolt's step
+is called on the main thread and its jobs run on the worker pool, with the stepping thread running them itself when the
+workers are busy (`Physics/PhysicsJobSystem.cpp`).
 
 Results come back to the main thread by polling, never through callbacks into engine state from other threads:
 
@@ -642,7 +650,7 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
 
 - **Importing** (`Asset/EditorAssetManager.h`). `Scan` registers every file with a known importer, creates missing
   `.meta` files and imports stale assets in parallel (`JobSystem::ParallelFor`), blocking. Afterwards the file watcher
-  reports changes; `Update` re-registers files and queues re-imports on the I/O pool, and applies finished imports
+  reports changes; `Update` re-registers files and queues re-imports as background jobs, and applies finished imports
   through `ReloadAsset`: loaded assets load again, and every reloaded asset gets a new source revision
   (`GetSourceRevisions`), announced as a content change at once when no object of it is loaded. The cache record
   (`<handle>.import`) remembers the source state, settings, importer version and dependencies, so a current import is
@@ -729,8 +737,8 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   run unrelated queued jobs (a texture's decoding, a mesh cook) while the reads behind it stall: it decodes blocks of its
   own read, or sleeps until the blocks its helpers claimed are done (`AssetPack::BlockDecoding`). zstd is built with
   its BMI2 bit readers (MSVC: `/arch:AVX2`, which Jolt requires already). The writer runs on any thread, compresses each
-  batch of 64 blocks in parallel on the workers, reports progress and stops when cancelled; zstd's compressor is linked
-  only by it, so shipped games contain the decompressor only.
+  batch of 64 blocks in parallel on the background threads, reports progress and stops when cancelled; zstd's
+  compressor is linked only by it, so shipped games contain the decompressor only.
 - **Pack layout** (`EditorAssetManager::PlanAssetPack`, then `WriteAssetPack`; `BuildAssetPack` does both, blocking). Packs
   are ordered by first use: the start scene's dependency closure breadth first, then each other scene's closure (by
   path), then the rest by path. With `Prune`, only the scenes' closures and what `AlwaysInclude` names (assets or folders,
@@ -809,12 +817,14 @@ Textures are stored the way the GPU samples them: block-compressed, with their m
   decoder. Measured (Release, one thread of an i7-13700K, `Perf.TextureCook.BC7High` and `BC7Fast`): about 15 us per
   block at `High` and 1.2 us at `Fast` on the stress textures' noise (every block searched in full); the feature
   test's checker is exact and a smooth 256x256 gradient reaches 54 dB at `High` (BC1: 43.6 and 45.6 dB).
-- **Where imports run**: `EditorAssetManager::Scan` imports what needs it in parallel on the worker pool while its
-  caller waits (the editor, when it opens a project); re-imports after file changes run on I/O jobs and are applied
-  between frames, and so do `asset.reimport` and `asset.setImportSettings` (see [Importing](#asset-pipeline): their
-  commands answer once the import is applied); the editor's `asset.import` still imports on the main thread inside the
-  command (encoding on all workers: about a fifth of the stress project's cold import, 1.5 s, for a 4096x4096 color
-  texture in Release), until `content-and-prefabs` makes it asynchronous (Docs/Roadmap.md).
+- **Where imports run**: on the background threads (`JobPriority::Background`, below the frame's priority), and so does
+  their encoding (`ParallelFor` from background work stays there). `EditorAssetManager::Scan` imports what needs it in
+  parallel while its caller waits (the editor, when it opens a project); re-imports after file changes run as background
+  jobs and are applied between frames, and so do `asset.reimport` and `asset.setImportSettings` (see
+  [Importing](#asset-pipeline): their commands answer once the import is applied); the editor's `asset.import` still
+  imports inside the command, the main thread taking part in the encoding (about a fifth of the stress project's cold
+  import, 1.5 s, for a 4096x4096 color texture in Release), until `content-and-prefabs` makes it asynchronous
+  (Docs/Roadmap.md).
 - **Cooked form** (`Renderer/CookedTexture.h`, `STTX` version 2): a 40-byte header (format, size, mip count, flags,
   filter, wrap, name length, data offset), a mip table (width, height, offset, size per level), the debug name, then the
   levels smallest first, each 16-byte aligned. The mip tail - every level up to 128x128 - is therefore one range right

@@ -621,7 +621,7 @@ namespace Strata
 					outcomes[requestIndex].Error = fmt::format("Import failed: {}", exception.what());
 				}
 			}
-		});
+		}, JobPriority::Background);
 
 		uint32_t failedCount = 0;
 		for (ImportOutcome& outcome : outcomes)
@@ -1077,7 +1077,9 @@ namespace Strata
 		};
 		try
 		{
-			JobSystem::SubmitIO(import, JobPriority::Normal);
+			// On the background threads: imports decode and compress for seconds, which must neither take the processors from
+			// the frame nor hold the I/O threads that stream assets.
+			JobSystem::Submit(import, JobPriority::Background);
 		}
 		catch (const std::exception& exception)
 		{

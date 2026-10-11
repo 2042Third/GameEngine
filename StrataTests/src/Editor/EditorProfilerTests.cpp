@@ -54,7 +54,8 @@ namespace
 		CHECK(GetKeys(profile["frame"]) == c_TimeKeys);
 		CHECK(GetKeys(profile["stageSum"]) == c_TimeKeys);
 		CHECK(GetKeys(profile["untimed"]) == c_TimeKeys);
-		CHECK(GetKeys(profile["jobs"]) == std::set<std::string> { "workerThreads", "ioThreads", "workerBusyPercent", "ioBusyPercent", "running", "queued" });
+		CHECK(GetKeys(profile["jobs"]) == std::set<std::string> { "workerThreads", "ioThreads", "backgroundThreads", "workerBusyPercent", "ioBusyPercent",
+			"backgroundBusyPercent", "running", "queued" });
 		// Every built-in stage, whether or not it ran, with the same keys.
 		const nlohmann::json& stages = profile["stages"];
 		REQUIRE(stages.is_object());

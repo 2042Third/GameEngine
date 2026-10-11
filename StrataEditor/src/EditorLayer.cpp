@@ -1302,7 +1302,7 @@ namespace Strata
 	void EditorLayer::DrawFramePill()
 	{
 		// Frame time: what a frame takes to run, not the interval the idle frame rate cap stretches it to; then the jobs the
-		// worker and I/O threads have in hand (averaged over the last second, so the count does not flicker).
+		// worker, I/O and background threads have in hand (averaged over the last second, so the count does not flicker).
 		const PerformancePanel* performance = m_Panels.Get<PerformancePanel>(EditorPanels::c_Performance);
 		std::string text = fmt::format("{:.1f} ms{}{:.0f} FPS", m_FrameStats.WorkMilliseconds, c_Separator, m_FrameStats.FramesPerSecond);
 		std::string tooltip = "Frame time (what a frame takes to run, without waiting for the next one) and frame rate. While nothing happens the editor "
@@ -1312,9 +1312,10 @@ namespace Strata
 			const long jobs = std::lround(performance->GetAverageJobsInFlight());
 			text += fmt::format("{}{} {}", c_Separator, jobs, jobs == 1 ? "job" : "jobs");
 			const JobSystemStats& stats = performance->GetJobStats();
-			tooltip += fmt::format("\nJobs running or queued on the {} worker and {} I/O threads, averaged over the last {} frames (now {} running, {} queued). "
-				"Click to see where the frames go (Performance).", stats.Workers.Threads, stats.IO.Threads, PerformancePanel::c_JobSamples,
-				stats.Workers.RunningJobs + stats.IO.RunningJobs, stats.Workers.QueuedJobs + stats.IO.QueuedJobs);
+			tooltip += fmt::format("\nJobs running or queued on the {} worker, {} I/O and {} background threads, averaged over the last {} frames (now {} "
+				"running, {} queued). Click to see where the frames go (Performance).", stats.Workers.Threads, stats.IO.Threads, stats.Background.Threads,
+				PerformancePanel::c_JobSamples, stats.Workers.RunningJobs + stats.IO.RunningJobs + stats.Background.RunningJobs,
+				stats.Workers.QueuedJobs + stats.IO.QueuedJobs + stats.Background.QueuedJobs);
 		}
 		if (m_FrameStats.Idle)
 			text += std::string(c_Separator) + "idle";

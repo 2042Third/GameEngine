@@ -5,7 +5,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <numeric>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -84,45 +86,69 @@ TEST_SUITE("Core.JobSystem")
 		CHECK_FALSE(onWorker.load());
 	}
 
-	TEST_CASE("Workers run below the normal thread priority; I/O threads and the threads that wait for jobs keep it")
+	TEST_CASE("Workers and I/O threads run at the normal priority, background threads below it")
 	{
 		REQUIRE(Platform::GetCurrentThreadPriority() == ThreadPriority::Normal);
-		// Which kind of thread ran a job, at what priority. Polled rather than waited for: a waiting thread runs queued jobs
-		// itself.
-		const auto runAndRead = [](bool io)
+		ScopedJobSystem jobSystem(3, 2);
+		CHECK(JobSystem::GetBackgroundThreadCount() == 3);
+		CHECK_FALSE(JobSystem::IsBackgroundThread());
+		// Which kind of thread ran a job, at what priority. Polled rather than waited for: a waiting thread would run the
+		// job itself.
+		struct Ran
 		{
-			std::atomic<bool> onWorker = false;
-			std::atomic<ThreadPriority> priority = ThreadPriority::Normal;
-			const auto job = [&]()
+			bool Worker = false;
+			bool Background = false;
+			ThreadPriority Priority = ThreadPriority::Normal;
+		};
+		const auto runAndRead = [](auto submit)
+		{
+			Ran ran;
+			std::atomic<bool> done = false;
+			const JobHandle handle = submit([&]()
 			{
-				onWorker = JobSystem::IsWorkerThread();
-				priority = Platform::GetCurrentThreadPriority();
-			};
-			const JobHandle handle = io ? JobSystem::SubmitIO(job) : JobSystem::Submit(job);
+				ran.Worker = JobSystem::IsWorkerThread();
+				ran.Background = JobSystem::IsBackgroundThread();
+				ran.Priority = Platform::GetCurrentThreadPriority();
+				done = true;
+			});
 			while (!handle.IsComplete())
 				std::this_thread::sleep_for(std::chrono::milliseconds(1));
-			return std::pair(onWorker.load(), priority.load());
+			CHECK(done.load());
+			return ran;
 		};
+
+		const Ran worker = runAndRead([](std::function<void()> job) { return JobSystem::Submit(std::move(job)); });
+		CHECK(worker.Worker);
+		CHECK_FALSE(worker.Background);
+		CHECK(worker.Priority == ThreadPriority::Normal);
+		const Ran io = runAndRead([](std::function<void()> job) { return JobSystem::SubmitIO(std::move(job)); });
+		CHECK_FALSE(io.Worker);
+		CHECK_FALSE(io.Background);
+		CHECK(io.Priority == ThreadPriority::Normal);
+		const Ran background = runAndRead([](std::function<void()> job) { return JobSystem::Submit(std::move(job), JobPriority::Background); });
+		CHECK_FALSE(background.Worker);
+		CHECK(background.Background);
+		CHECK(background.Priority == ThreadPriority::BelowNormal);
+
+		// What background work starts stays on the background threads, whatever priority it asks for.
+		std::atomic<bool> innerBackground = false;
+		std::atomic<ThreadPriority> innerPriority = ThreadPriority::Normal;
+		const JobHandle outer = JobSystem::Submit([&]()
 		{
-			ScopedJobSystem jobSystem;
-			const auto [workerRan, workerPriority] = runAndRead(false);
-			CHECK(workerRan);
-			CHECK(workerPriority == ThreadPriority::BelowNormal);
-			const auto [ioOnWorker, ioPriority] = runAndRead(true);
-			CHECK_FALSE(ioOnWorker);
-			CHECK(ioPriority == ThreadPriority::Normal);
-			CHECK(Platform::GetCurrentThreadPriority() == ThreadPriority::Normal);
-		}
-		{
-			JobSystemSpecification specification;
-			specification.WorkerThreadCount = 2;
-			specification.LowerWorkerPriority = false;
-			JobSystem::Init(specification);
-			const auto [workerRan, workerPriority] = runAndRead(false);
-			JobSystem::Shutdown();
-			CHECK(workerRan);
-			CHECK(workerPriority == ThreadPriority::Normal);
-		}
+			const JobHandle inner = JobSystem::Submit([&]()
+			{
+				innerBackground = JobSystem::IsBackgroundThread();
+				innerPriority = Platform::GetCurrentThreadPriority();
+			}, JobPriority::High);
+			while (!inner.IsComplete())
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}, JobPriority::Background);
+		while (!outer.IsComplete())
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		CHECK(innerBackground.load());
+		CHECK(innerPriority.load() == ThreadPriority::BelowNormal);
+		CHECK(Platform::GetCurrentThreadPriority() == ThreadPriority::Normal);
+
 		// The priority is the calling thread's own.
 		std::thread([]()
 		{
@@ -146,6 +172,193 @@ TEST_SUITE("Core.JobSystem")
 		});
 		outer.Wait();
 		CHECK(result.load() == 11);
+	}
+
+	TEST_CASE("A thread that waits for a job runs that job, never other queued ones")
+	{
+		const std::thread::id caller = std::this_thread::get_id();
+		std::atomic<int> awaitedRuns = 0;
+		std::atomic<bool> awaitedRanHere = false;
+		std::atomic<bool> longRanHere = false;
+		{
+			// The only worker is held, so everything queued stays queued until the test lets it go.
+			ScopedJobSystem jobSystem(1, 0);
+			std::atomic<bool> release = false;
+			std::atomic<bool> holding = false;
+			JobSystem::Submit([&]()
+			{
+				holding = true;
+				while (!release.load())
+					std::this_thread::sleep_for(std::chrono::microseconds(100));
+			});
+			while (!holding.load())
+				std::this_thread::sleep_for(std::chrono::microseconds(100));
+
+			// Queued first: a long job the waiting thread must leave to the workers.
+			const JobHandle longJob = JobSystem::Submit([&]() { longRanHere = std::this_thread::get_id() == caller; }, JobPriority::High);
+			const JobHandle awaited = JobSystem::Submit([&]()
+			{
+				awaitedRuns++;
+				awaitedRanHere = std::this_thread::get_id() == caller;
+			}, JobPriority::Low);
+			awaited.Wait();
+			CHECK(awaitedRanHere.load());
+			CHECK_FALSE(longJob.IsComplete());
+
+			release = true;
+			while (!longJob.IsComplete())
+				std::this_thread::sleep_for(std::chrono::microseconds(100));
+			// Shutdown runs what is still queued: the worker only drops the job this thread ran.
+		}
+		CHECK_FALSE(longRanHere.load());
+		CHECK(awaitedRuns.load() == 1);
+	}
+
+	TEST_CASE("ParallelFor runs no other queued job on the calling thread")
+	{
+		for (const JobPriority helpers : { JobPriority::High, JobPriority::Background })
+		{
+			CAPTURE(static_cast<int>(helpers));
+			ScopedJobSystem jobSystem(1, 0);
+			// Hold the pool the helpers go to, then queue a long job in front of them there.
+			std::atomic<bool> release = false;
+			std::atomic<bool> holding = false;
+			const bool background = helpers == JobPriority::Background;
+			const JobHandle hold = JobSystem::Submit([&]()
+			{
+				holding = true;
+				while (!release.load())
+					std::this_thread::sleep_for(std::chrono::microseconds(100));
+			}, background ? JobPriority::Background : JobPriority::Normal);
+			while (!holding.load())
+				std::this_thread::sleep_for(std::chrono::microseconds(100));
+			const std::thread::id caller = std::this_thread::get_id();
+			std::atomic<bool> longRanHere = false;
+			const JobHandle longJob = JobSystem::Submit([&]() { longRanHere = std::this_thread::get_id() == caller; },
+				background ? JobPriority::Background : JobPriority::High);
+
+			// The helper cannot start while the pool is held: the calling thread takes every batch and returns.
+			std::atomic<uint32_t> batchesHere = 0;
+			std::atomic<uint32_t> batchesElsewhere = 0;
+			JobSystem::ParallelFor(64, 1, [&](uint32_t, uint32_t)
+			{
+				(std::this_thread::get_id() == caller ? batchesHere : batchesElsewhere)++;
+			}, helpers);
+			CHECK(batchesHere.load() == 64);
+			CHECK(batchesElsewhere.load() == 0);
+			CHECK_FALSE(longJob.IsComplete());
+
+			release = true;
+			while (!longJob.IsComplete() || !hold.IsComplete())
+				std::this_thread::sleep_for(std::chrono::microseconds(100));
+			CHECK_FALSE(longRanHere.load());
+		}
+	}
+
+	TEST_CASE("ParallelFor waits for the batches its helpers run, also on the background threads")
+	{
+		ScopedJobSystem jobSystem(4, 1);
+		for (const JobPriority helpers : { JobPriority::High, JobPriority::Background })
+		{
+			// Slow batches, so helpers are still running when the calling thread has taken the last one.
+			constexpr uint32_t count = 64;
+			std::vector<std::atomic<int>> visits(count);
+			std::atomic<uint32_t> backgroundBatches = 0;
+			std::atomic<uint32_t> belowNormalBatches = 0;
+			JobSystem::ParallelFor(count, 1, [&](uint32_t begin, uint32_t end)
+			{
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+				if (JobSystem::IsBackgroundThread())
+					backgroundBatches++;
+				if (Platform::GetCurrentThreadPriority() == ThreadPriority::BelowNormal)
+					belowNormalBatches++;
+				for (uint32_t index = begin; index < end; index++)
+					visits[index].fetch_add(1);
+			}, helpers);
+			bool allOnce = true;
+			for (const std::atomic<int>& visit : visits)
+				allOnce &= visit.load() == 1;
+			CHECK(allOnce);
+			// Frame work (the default helpers) never runs below the normal priority.
+			if (helpers != JobPriority::Background)
+			{
+				CHECK(backgroundBatches.load() == 0);
+				CHECK(belowNormalBatches.load() == 0);
+			}
+		}
+
+		// A ParallelFor of background work uses the background threads, whatever it asks for, also when the thread that waits
+		// for the background job runs it itself.
+		std::atomic<uint32_t> workerBatches = 0;
+		JobSystem::Submit([&]()
+		{
+			JobSystem::ParallelFor(64, 1, [&](uint32_t, uint32_t)
+			{
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+				if (JobSystem::IsWorkerThread())
+					workerBatches++;
+			});
+		}, JobPriority::Background).Wait();
+		CHECK(workerBatches.load() == 0);
+	}
+
+	TEST_CASE("A background job that a waiting thread runs keeps what it starts on the background threads")
+	{
+		ScopedJobSystem jobSystem(1, 0);
+		// Both pools held: whatever the job queues stays queued where it went.
+		std::atomic<bool> release = false;
+		std::atomic<uint32_t> holding = 0;
+		const auto hold = [&]()
+		{
+			holding++;
+			while (!release.load())
+				std::this_thread::sleep_for(std::chrono::microseconds(100));
+		};
+		const JobHandle holdWorker = JobSystem::Submit(hold);
+		const JobHandle holdBackground = JobSystem::Submit(hold, JobPriority::Background);
+		while (holding.load() < 2)
+			std::this_thread::sleep_for(std::chrono::microseconds(100));
+
+		uint64_t workerQueued = 0;
+		uint64_t backgroundQueued = 0;
+		const JobHandle job = JobSystem::Submit([&]()
+		{
+			JobSystem::ParallelFor(2, 1, [&](uint32_t begin, uint32_t)
+			{
+				// The first batch is the calling thread's, while the helper for the second is queued.
+				if (begin == 0)
+				{
+					const JobSystemStats stats = JobSystem::GetStats();
+					workerQueued = stats.Workers.QueuedJobs;
+					backgroundQueued = stats.Background.QueuedJobs;
+				}
+			});
+			const JobHandle started = JobSystem::Submit([]() {});
+			CHECK(JobSystem::GetStats().Background.QueuedJobs >= 1);
+			CHECK(JobSystem::GetStats().Workers.QueuedJobs == 0);
+			started.Wait();
+		}, JobPriority::Background);
+		job.Wait(); // The background thread is held: this thread runs it
+		CHECK(job.IsComplete());
+		CHECK(workerQueued == 0);
+		CHECK(backgroundQueued >= 1);
+
+		release = true;
+		holdWorker.Wait();
+		holdBackground.Wait();
+	}
+
+	TEST_CASE("A throwing ParallelFor batch is contained and the others still run")
+	{
+		ScopedJobSystem jobSystem;
+		std::atomic<uint32_t> batches = 0;
+		JobSystem::ParallelFor(32, 1, [&](uint32_t begin, uint32_t)
+		{
+			batches++;
+			if (begin == 7)
+				throw std::runtime_error("batch failure");
+		});
+		CHECK(batches.load() == 32);
 	}
 
 	TEST_CASE("ParallelFor covers every index exactly once")

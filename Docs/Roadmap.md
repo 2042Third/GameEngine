@@ -116,10 +116,12 @@ machine, quiet:
   (`AssetManagerBase::GetBounds` through `RenderScene::ResolveUnloadedBounds`; a change of them is a content change), so
   a world's meshes not yet seen are culled before they load; texture compression and quality are import settings of the
   Asset tab and `asset.setImportSettings`; the Inspector's scene settings show physics capacities; the default layout
-  (version 3) has the Asset tab behind the Inspector and the instruments in the bottom area; job workers run below the
-  main thread's priority, so the editor's frames stay at 3-4 ms while a 4096x4096 texture is compressed to BC7 on every
-  worker (10-30 ms before); pack blocks that compress by less than an eighth are stored and read straight into place,
-  which brought streaming from version 2 back from 1.08-1.14 to 1.02-1.07 times version 1's time with BC textures;
+  (version 3) has the Asset tab behind the Inspector and the instruments in the bottom area; imports and exports
+  compress on background threads below the main thread's priority, frame work keeps workers at the normal priority, and
+  a thread that waits for jobs runs only the job it waits for, so the editor's frames stay at 3-4 ms while a 4096x4096
+  texture is compressed to BC7 on every core (10-30 ms before), and a frame never picks up an import's compression
+  while it waits for its own work; pack blocks that compress by less than an eighth are stored and read straight into
+  place, which brought streaming from version 2 back from 1.08-1.14 to 1.02-1.07 times version 1's time with BC textures;
   every perf check of the wave is confirmed, with the workstreams' acceptance limits as budgets. `PerfStability.py
   --runs 5 --wait-quiet 20` on the merged tree: 5 of 5 runs passed with the final budgets, at most two confirmations
   per run (two earlier campaigns of five, before budgets were rebased on the rebuilt panels and on BC7 uploads, passed

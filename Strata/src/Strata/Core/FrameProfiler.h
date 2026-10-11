@@ -62,6 +62,7 @@ namespace Strata
 		float IntervalMs = 0.0f;         // From the previous frame's BeginFrame to this one's (0 for the first)
 		float WorkerBusyPercent = 0.0f;  // How busy the job system's worker threads were since the previous frame ended
 		float IOBusyPercent = 0.0f;      // Its I/O threads, likewise (0 without I/O threads)
+		float BackgroundBusyPercent = 0.0f; // Its background threads, likewise
 		std::span<const float> StageMs;  // Self time per stage id (nested stages excluded), one entry per registered stage
 	};
 
@@ -82,8 +83,10 @@ namespace Strata
 		float FramesPerSecond = 0.0f; // Frames per second of the intervals between them (0 with fewer than two frames)
 		float WorkerBusyPercent = 0.0f;
 		float IOBusyPercent = 0.0f;
+		float BackgroundBusyPercent = 0.0f;
 		uint32_t WorkerThreads = 0; // The job system's threads when summarized
 		uint32_t IOThreads = 0;
+		uint32_t BackgroundThreads = 0;
 		std::vector<FrameStageSummary> Stages; // Every registered stage, in id order
 	};
 
@@ -178,6 +181,7 @@ namespace Strata
 			float IntervalMs = 0.0f;
 			float WorkerBusyPercent = 0.0f;
 			float IOBusyPercent = 0.0f;
+			float BackgroundBusyPercent = 0.0f;
 			std::array<float, c_MaxStages> StageMs = {};
 		};
 
@@ -187,8 +191,10 @@ namespace Strata
 			int64_t Time = 0;
 			int64_t WorkerBusy = 0;
 			int64_t IOBusy = 0;
+			int64_t BackgroundBusy = 0;
 			uint32_t WorkerThreads = 0;
 			uint32_t IOThreads = 0;
+			uint32_t BackgroundThreads = 0;
 		};
 
 		int64_t Now() const;

@@ -127,7 +127,8 @@ namespace Strata
 			return std::max<uint64_t>(metadata.StoredSize, 1);
 		}
 
-		// Compresses the blocks [first, first + count) of `data` in parallel.
+		// Compresses the blocks [first, first + count) of `data` in parallel, on the background threads: an export takes
+		// seconds, and its helpers must never take the processors from the frame (JobPriority::Background).
 		void EncodeBlocks(std::span<const uint8_t> data, uint32_t first, uint32_t count, int level, std::vector<EncodedBlock>& outBlocks)
 		{
 			outBlocks.resize(count);
@@ -163,7 +164,7 @@ namespace Strata
 					}
 					block.Checksum = Hash::CRC32C(block.Compressed.empty() ? raw : std::span<const uint8_t>(block.Compressed));
 				}
-			});
+			}, JobPriority::Background);
 		}
 
 		bool WriteVersion2(PackFile& file, std::span<const AssetPackSource> assets, const AssetPackWriter::DataProvider& provider, const AssetPackWriteOptions& options,

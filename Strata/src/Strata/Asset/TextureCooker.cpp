@@ -177,7 +177,8 @@ namespace Strata::TextureCooker
 		const EncodeWork work = GetEncodeWork(format, image.Width, image.Height);
 		if (!info.IsBlockCompressed)
 		{
-			// Each texel's RGBA, cut to the channels the format stores.
+			// Each texel's RGBA, cut to the channels the format stores. Imports are background work (JobPriority::Background):
+			// their helpers never take the processors from the frame.
 			JobSystem::ParallelFor(work.Count, work.MinBatchSize, [&](uint32_t begin, uint32_t end)
 			{
 				uint8_t rgba[4];
@@ -186,7 +187,7 @@ namespace Strata::TextureCooker
 					LoadRGBA(image, texel % image.Width, texel / image.Width, rgba);
 					std::memcpy(outData.data() + static_cast<size_t>(texel) * info.BytesPerBlock, rgba, info.BytesPerBlock);
 				}
-			});
+			}, JobPriority::Background);
 			return true;
 		}
 
@@ -240,7 +241,7 @@ namespace Strata::TextureCooker
 					}
 				}
 			}
-		});
+		}, JobPriority::Background);
 		return true;
 	}
 

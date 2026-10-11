@@ -109,8 +109,10 @@ namespace Strata
 		sample.Time = std::chrono::duration_cast<std::chrono::nanoseconds>(stats.SampleTime.time_since_epoch()).count();
 		sample.WorkerBusy = stats.Workers.BusyTime.count();
 		sample.IOBusy = stats.IO.BusyTime.count();
+		sample.BackgroundBusy = stats.Background.BusyTime.count();
 		sample.WorkerThreads = stats.Workers.Threads;
 		sample.IOThreads = stats.IO.Threads;
+		sample.BackgroundThreads = stats.Background.Threads;
 		return sample;
 	}
 
@@ -154,6 +156,7 @@ namespace Strata
 		record.IntervalMs = m_HasPreviousFrame ? ToMilliseconds(m_FrameStart - m_PreviousFrameStart) : 0.0f;
 		record.WorkerBusyPercent = 0.0f;
 		record.IOBusyPercent = 0.0f;
+		record.BackgroundBusyPercent = 0.0f;
 		const uint32_t stageCount = GetStageCount();
 		for (uint32_t stage = 0; stage < c_MaxStages; stage++)
 			record.StageMs[stage] = stage < stageCount ? ToMilliseconds(m_Accumulated[stage]) : 0.0f;
@@ -165,6 +168,7 @@ namespace Strata
 				const int64_t elapsed = sample.Time - m_LastJobSample.Time;
 				record.WorkerBusyPercent = ToBusyPercent(sample.WorkerBusy - m_LastJobSample.WorkerBusy, elapsed, sample.WorkerThreads);
 				record.IOBusyPercent = ToBusyPercent(sample.IOBusy - m_LastJobSample.IOBusy, elapsed, sample.IOThreads);
+				record.BackgroundBusyPercent = ToBusyPercent(sample.BackgroundBusy - m_LastJobSample.BackgroundBusy, elapsed, sample.BackgroundThreads);
 			}
 			m_LastJobSample = sample;
 		}
@@ -219,6 +223,7 @@ namespace Strata
 		sample.IntervalMs = record.IntervalMs;
 		sample.WorkerBusyPercent = record.WorkerBusyPercent;
 		sample.IOBusyPercent = record.IOBusyPercent;
+		sample.BackgroundBusyPercent = record.BackgroundBusyPercent;
 		sample.StageMs = std::span<const float>(record.StageMs.data(), GetStageCount());
 		return sample;
 	}
@@ -262,6 +267,7 @@ namespace Strata
 		const JobSystemStats jobs = JobSystem::GetStats();
 		summary.WorkerThreads = jobs.Workers.Threads;
 		summary.IOThreads = jobs.IO.Threads;
+		summary.BackgroundThreads = jobs.Background.Threads;
 
 		const uint32_t stageCount = GetStageCount();
 		std::vector<std::vector<float>> stageSamples(stageCount);
@@ -275,6 +281,7 @@ namespace Strata
 		uint32_t intervalCount = 0;
 		double workerBusy = 0.0;
 		double ioBusy = 0.0;
+		double backgroundBusy = 0.0;
 		for (uint32_t age = 0; age < count; age++)
 		{
 			const FrameSample frame = GetFrame(age);
@@ -295,6 +302,7 @@ namespace Strata
 			}
 			workerBusy += frame.WorkerBusyPercent;
 			ioBusy += frame.IOBusyPercent;
+			backgroundBusy += frame.BackgroundBusyPercent;
 		}
 
 		summary.Work = ComputeStats(work);
@@ -305,6 +313,7 @@ namespace Strata
 		{
 			summary.WorkerBusyPercent = static_cast<float>(workerBusy / static_cast<double>(count));
 			summary.IOBusyPercent = static_cast<float>(ioBusy / static_cast<double>(count));
+			summary.BackgroundBusyPercent = static_cast<float>(backgroundBusy / static_cast<double>(count));
 		}
 		summary.Stages.reserve(stageCount);
 		for (uint32_t stage = 0; stage < stageCount; stage++)

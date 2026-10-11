@@ -71,10 +71,12 @@ namespace Strata
 				{ "jobs", {
 					{ "workerThreads", summary.WorkerThreads },
 					{ "ioThreads", summary.IOThreads },
+					{ "backgroundThreads", summary.BackgroundThreads },
 					{ "workerBusyPercent", summary.WorkerBusyPercent },
 					{ "ioBusyPercent", summary.IOBusyPercent },
-					{ "running", jobs.Workers.RunningJobs + jobs.IO.RunningJobs },
-					{ "queued", jobs.Workers.QueuedJobs + jobs.IO.QueuedJobs } } },
+					{ "backgroundBusyPercent", summary.BackgroundBusyPercent },
+					{ "running", jobs.Workers.RunningJobs + jobs.IO.RunningJobs + jobs.Background.RunningJobs },
+					{ "queued", jobs.Workers.QueuedJobs + jobs.IO.QueuedJobs + jobs.Background.QueuedJobs } } },
 				{ "stages", std::move(stages) } };
 		}
 
@@ -309,8 +311,8 @@ namespace Strata
 			"framesPerSecond, stages (per stage of the main thread: Input, Assets.Update, Assets.Finalize, Scene.Scripts, Scene.Physics, "
 			"Scene.Audio, Scene.Transforms, Render.Extract, Render.Submit, Editor.UI and Present, plus stages modules registered; each its self "
 			"time, nested stages excluded, with inFrameTime false for Present, which comes after the frame time is measured), stageSum (the "
-			"stages inside the frame time added up per frame), untimed (the rest of each frame, work no stage accounts for) and jobs (worker "
-			"and I/O threads, how busy they were in percent, running and queued jobs now). Times are milliseconds as avgMs, p50Ms and p95Ms "
+			"stages inside the frame time added up per frame), untimed (the rest of each frame, work no stage accounts for) and jobs (worker, "
+			"I/O and background threads (imports, exports), how busy they were in percent, running and queued jobs now). Times are milliseconds as avgMs, p50Ms and p95Ms "
 			"(nearest rank) and maxMs.",
 			ObjectSchema({ { "frames", IntegerSchema("How many of the latest frames to summarize (default 120)", 1, FrameProfiler::c_DefaultCapacity) } }),
 			[](EditorContext&, const nlohmann::json& parameters)

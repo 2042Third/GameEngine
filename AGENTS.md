@@ -165,7 +165,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   `Tests::DescribeJsonFile`, which tells a damaged file from a failed read or parse), exports the stress project (the
   median and the longest frame meanwhile, and
   the export's time) and times the editor's frames on the shared device while that texture re-imports, uploads and is
-  drawn, and the editor frames of `PerfGPU.Renderer` (cube grids of 100,000, also with all of them selected, and of
+  drawn (and, with 10,000 cubes drawn too, whose draws are extracted in parallel, while it is compressed), and the
+  editor frames of `PerfGPU.Renderer` (cube grids of 100,000, also with all of them selected, and of
   300,000, a narrow view of 50,000, 10,000 point lights, 10,000 unique materials); `PerfGPU.Pack` compares pack versions
   2 and 1 of the stress project (the size with its textures uncompressed, opening, streaming the world as it ships; the
   acceptance limits, 0.8 of version 1's size and 110% of its time, are the budgets of `ratio` metrics, so they are
@@ -331,8 +332,11 @@ The threading model, frame loop and pipelines these rules protect are described 
 [Docs/Architecture.md](Docs/Architecture.md).
 
 - **Threading:** the main thread owns the scene, input, scripts and rendering submission. Background
-  work goes through `JobSystem` (`Submit` for CPU work, `SubmitIO` for blocking I/O), whose workers run below the normal
-  thread priority so that long jobs never take the processors from the frame. Results return to
+  work goes through `JobSystem` (`Submit` for CPU work, `SubmitIO` for blocking I/O, `JobPriority::Background` for long
+  work no frame waits for, such as an import's texture compression or an export's pack compression: it runs on background
+  threads below the normal thread priority, so it never takes the processors from the frame, whose own work runs on the
+  normal-priority workers). A thread that waits for a job runs that job itself if it has not started, and never other
+  jobs. Results return to
   the main thread through `Application::SubmitToMainThread` or polled queues — never callbacks that
   touch engine state from worker threads.
 - **Renderer conventions:** NVRHI flips the Vulkan viewport to D3D conventions: framebuffer origin is
