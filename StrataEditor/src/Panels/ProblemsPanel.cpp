@@ -29,6 +29,8 @@ namespace Strata
 		constexpr float c_FileColumnWeight = 0.4f;
 		// Rows recorded in the item probe (for tests).
 		constexpr size_t c_ProbedRows = 8;
+		// Functions of the script SDK's internals start with it.
+		constexpr std::string_view c_SDKInternalNamespace = "Strata::Detail::";
 
 		// The file a compiler or the symbolizer named, found on disk: as given when absolute, else in the project, its
 		// script directory or the build tree (compilers name files relative to where they ran).
@@ -133,14 +135,15 @@ namespace Strata
 			}
 			m_Rows.push_back(std::move(crash));
 			// The stack's frames with a source: where the crash came from. Calls inlined at one address share it, so the
-			// location's own frame is the one at its address with its line.
+			// location's own frame is the one at its address with its line. The SDK's internals (Strata::Detail: the thunks
+			// the engine calls scripts through) are no code a person acts on; script.status keeps them.
 			const auto isLocation = [&](const ScriptCodeLocation& frame)
 			{
 				return fault->Location && frame.Address == fault->Location->Address && frame.File == fault->Location->File && frame.Line == fault->Location->Line;
 			};
 			for (const ScriptCodeLocation& frame : fault->Stack)
 			{
-				if (frame.File.empty() || isLocation(frame))
+				if (frame.File.empty() || isLocation(frame) || frame.Function.starts_with(c_SDKInternalNamespace))
 					continue;
 				Row row;
 				row.Kind = RowKind::Frame;

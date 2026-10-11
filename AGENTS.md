@@ -858,7 +858,7 @@ and `AudioSystem`, the built-in "Audio" scene system.
   instances while playing. The UI builds with Scripts > Build Scripts (Ctrl+B) or the toolbar, and has Scripts > New
   Script... (`UI/ScriptDialogs`), Open Scripts Folder, External Editor... and Show Problems. The **Problems panel**
   (`Panels/ProblemsPanel`, docked with the Console) lists the last build's diagnostics and the crash with its stack
-  frames; a double click opens one (`EditorContext::OpenScriptSource`); the status bar's "Build failed" and "Scripts
+  frames (without the SDK's internal `Strata::Detail` thunks, which `script.status` keeps); a double click opens one (`EditorContext::OpenScriptSource`); the status bar's "Build failed" and "Scripts
   crashed" pills open it, the "Building to play" pill cancels the build (`EditorContext::CancelScriptBuild`), and a
   project whose scenes use no script shows "Scripts unused" instead of asking for a build. The Console opens the
   source of messages that name one (`FindSourceReference`). People's guide: Docs/Manual/Scripting.md.

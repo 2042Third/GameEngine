@@ -13,6 +13,7 @@
 
 #include <imgui.h>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <string>
@@ -160,6 +161,19 @@ TEST_SUITE("Editor.UI.Scripts")
 		const std::string shown = UI::ItemProbe::Find("Problems.File.0")->Text;
 		CHECK(shown.ends_with("FaultScripts.cpp"));
 		CHECK((shown == rows[0].File || shown.starts_with("\xE2\x80\xA6")));
+
+		// The stack runs through the SDK's thunks, which script.status reports and the panel leaves out: the frames shown are
+		// the other frames with a source (the script's own callers, as far as the optimizer kept them).
+		const ScriptFault& fault = *editor.Context().GetLastScriptFault();
+		REQUIRE(fault.Location);
+		CHECK(std::any_of(fault.Stack.begin(), fault.Stack.end(), [](const ScriptCodeLocation& frame) { return frame.Function.starts_with("Strata::Detail::"); }));
+		CHECK(std::none_of(rows.begin(), rows.end(), [](const ProblemsPanel::Row& row) { return row.Text.starts_with("Strata::Detail::"); }));
+		const auto shownFrames = std::count_if(fault.Stack.begin(), fault.Stack.end(), [&fault](const ScriptCodeLocation& frame)
+		{
+			const bool isLocation = frame.Address == fault.Location->Address && frame.Line == fault.Location->Line && frame.File == fault.Location->File;
+			return !frame.File.empty() && !isLocation && !frame.Function.starts_with("Strata::Detail::");
+		});
+		CHECK(std::count_if(rows.begin(), rows.end(), [](const ProblemsPanel::Row& row) { return row.Kind == ProblemsPanel::RowKind::Frame; }) == shownFrames);
 #endif
 	}
 
