@@ -882,8 +882,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   mip tail by byte range (never a load), materials, meshes, models and prefabs are rendered one at a time offscreen and
   read back without stalling; PNG files in `<project>/.strata/Thumbnails`, keyed by the content stamps of the asset and
   its dependencies (`EditorAssetManager::GetContentStamp`), carry them across sessions. Bump `ThumbnailCache::c_Version`
-  when thumbnails would look different. The Asset tab shows them large, a model's summary and an audio clip's waveform
-  with Play and Stop on a preview voice that belongs to no scene (`Editor/AudioPreview`).
+  when thumbnails would look different. The Asset tab shows a preview rendered at the pixels it covers
+  (`RequestPreview`; the thumbnail stands in until it is ready), a model's summary and an audio clip's waveform with Play and Stop on a
+  preview voice that belongs to no scene (`Editor/AudioPreview`).
 - The inspectors show the selected entities or one asset (`EditorContext::SetInspectedAsset`, `selection.set {asset}`;
   the entities stay selected). Selecting an entity, deleting the asset or closing the project returns to the entities;
   `GetInspectionVersion` changes with every switch and every asset inspected (again), and the editor brings the

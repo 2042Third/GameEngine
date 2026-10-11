@@ -45,6 +45,7 @@ namespace Strata
 	{
 		uint64_t TexturesDecoded = 0; // Made from a texture's mip tail
 		uint64_t ScenesRendered = 0;  // Made by rendering a material, mesh, model or prefab
+		uint64_t PreviewsRendered = 0; // Large previews (RequestPreview) rendered
 		uint64_t LoadedFromDisk = 0;  // Read from the cache directory
 		uint64_t FilesWritten = 0;
 		uint64_t Failed = 0;          // Could not be made: their assets show the type's icon
@@ -77,7 +78,8 @@ namespace Strata
 	// models and prefabs framed, rendered under the preview lighting by an offscreen SceneRenderer one at a time and read back
 	// without stalling (TextureReadback). They are kept as PNG files in the cache directory, keyed by the content stamps of the
 	// asset and everything it depends on (EditorAssetManager::GetContentStamp), so a reimport or a saved edit makes them again
-	// and an unchanged project reads them back. Assets of other types, and editors without a GPU, get none.
+	// and an unchanged project reads them back. Assets of other types, and editors without a GPU, get none. The Asset tab's
+	// large preview of the asset it shows (RequestPreview) is rendered the same way at its own size, in memory only.
 	//
 	// Main thread. Reads, decodes and encodes run as jobs; the destructor waits for the reads, which use the asset manager
 	// (they are small: a header and a mip tail), so the cache must go before the manager does.
@@ -85,6 +87,10 @@ namespace Strata
 	{
 	public:
 		static constexpr uint32_t c_Size = 128;
+		// Large previews (RequestPreview) are rendered at the size asked for, rounded up to a multiple of c_PreviewStep (a panel
+		// that is resized a little keeps its preview) and at most c_MaxPreviewSize on a side.
+		static constexpr uint32_t c_PreviewStep = 32;
+		static constexpr uint32_t c_MaxPreviewSize = 512;
 		// Part of the cache files' key: bump it when thumbnails would look different (rendering or decoding changed), so that
 		// cached ones are made again.
 		static constexpr uint32_t c_Version = 1;
@@ -106,6 +112,11 @@ namespace Strata
 		// null until it is ready and for assets that get none. Asks for it: call it every frame it is shown, for what is on
 		// screen only.
 		nvrhi::ITexture* Request(AssetHandle handle);
+		// A large preview of a material, mesh, model or prefab, rendered at `size` pixels on a side (rounded, see
+		// c_PreviewStep) for the Asset tab: one asset at a time, kept in memory only, and rendered before the thumbnails that
+		// wait. Until it is ready (and for other assets, or when it fails) it is the asset's thumbnail (Request). Call it every
+		// frame it is shown; it is rendered again after its sources changed, like thumbnails.
+		nvrhi::ITexture* RequestPreview(AssetHandle handle, uint32_t size);
 		ThumbnailState GetState(AssetHandle handle) const;
 		// Forgets every thumbnail, with its file: each is made again when it is next asked for (tools, and perf runs that
 		// measure making them). Work under way finishes unused.
@@ -136,12 +147,30 @@ namespace Strata
 		// The job results the main thread takes in Update (shared with the jobs, which never touch the cache).
 		struct SharedState;
 
+		// The large preview (RequestPreview): one asset at a time.
+		struct Preview
+		{
+			AssetHandle Handle = UUID::Null();
+			AssetType Type = AssetType::None;
+			uint32_t Size = 0;                // Asked for (rounded)
+			uint64_t Key = 0;                 // Of the sources the texture (or the render under way) was made from
+			std::vector<AssetHandle> Sources;
+			uint64_t LastRequest = 0;
+			uint64_t DirtySince = 0;          // Frame a source changed since it was made (0: none)
+			bool Wanted = false;              // To be rendered (another asset or size, or changed sources)
+			bool Working = false;
+			Ref<ThumbnailImage> Image;        // Until it is uploaded
+			nvrhi::TextureHandle Texture;
+		};
+
 		// What a scene thumbnail being rendered needs across frames.
 		struct SceneJob
 		{
 			AssetHandle Handle = UUID::Null();
 			AssetType Type = AssetType::None;
 			uint64_t Key = 0;
+			uint32_t Size = c_Size;  // Of the image
+			bool IsPreview = false;  // The large preview, not a thumbnail
 			AssetGroupRequest Loads;
 			Ref<Scene> World; // The asset, alone under the preview lighting
 			bool Built = false;
@@ -151,6 +180,9 @@ namespace Strata
 		};
 
 		void ApplyResults();
+		void StartPreview();
+		void ResetPreview();
+		bool IsSceneJobCurrent(const SceneJob& job) const;
 		void StartQueued();
 		bool Start(AssetHandle handle, Entry& entry);
 		void StartTextureJob(AssetHandle handle, uint64_t key);
@@ -176,6 +208,7 @@ namespace Strata
 		std::deque<AssetHandle> m_Queue;
 		std::deque<AssetHandle> m_Uploads;
 		std::optional<SceneJob> m_SceneJob;
+		Preview m_Preview;
 		Scope<SceneRenderer> m_Renderer;
 		nvrhi::CommandListHandle m_UploadCommands;
 		// The disk index: the key of each thumbnail file (read once, written after changes).

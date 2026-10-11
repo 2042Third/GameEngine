@@ -422,9 +422,10 @@ namespace Strata
 		if (!UI::SectionHeader("AssetInspector.Preview", (std::string(Icons::Image) + "  Preview").c_str()))
 			return;
 		ThumbnailCache* thumbnails = context.GetThumbnails();
-		nvrhi::ITexture* thumbnail = thumbnails ? thumbnails->Request(handle) : nullptr;
 		const float width = std::max(ImGui::GetContentRegionAvail().x, ImGui::GetFrameHeight());
-		const float side = std::min(width, ImGui::GetFontSize() * c_ThumbnailMaxSizeInFontSizes);
+		const float side = std::round(std::min(width, ImGui::GetFontSize() * c_ThumbnailMaxSizeInFontSizes));
+		// Rendered at the pixels it covers (the thumbnail shows until then).
+		nvrhi::ITexture* thumbnail = thumbnails ? thumbnails->RequestPreview(handle, static_cast<uint32_t>(side)) : nullptr;
 		const ImVec2 min(std::round(ImGui::GetCursorScreenPos().x + (width - side) * 0.5f), ImGui::GetCursorScreenPos().y);
 		ImGui::Dummy(ImVec2(width, side));
 		const ImVec2 max(min.x + side, min.y + side);
@@ -443,7 +444,7 @@ namespace Strata
 			drawList->AddText(ImVec2(std::round((min.x + max.x - size.x) * 0.5f), std::round((min.y + max.y - size.y) * 0.5f)), ImGui::GetColorU32(colors.TextSecondary), text);
 		}
 		drawList->AddRect(min, max, ImGui::GetColorU32(colors.Border));
-		UI::ItemProbe::RecordRect("AssetInspector.Thumbnail", min, max, thumbnail != nullptr);
+		UI::ItemProbe::RecordRect("AssetInspector.Thumbnail", min, max, thumbnail != nullptr, 0, thumbnail ? std::to_string(thumbnail->getDesc().width) : std::string());
 	}
 
 	void AssetInspectorPanel::DrawModelSummary(EditorAssetManager& assets, const AssetMetadata& metadata)

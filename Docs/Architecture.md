@@ -1462,8 +1462,12 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   the sources stayed unchanged for a few frames, the old one showing meanwhile. Work waits while one of its sources is
   still importing; a failed import or render leaves the type's icon (`ThumbnailState::Unavailable`). Thumbnails nobody
   asked for in ten seconds are forgotten beyond 512 textures, and files of assets the project no longer has are removed.
-  Reads use the asset manager, so the cache waits for them when it goes (before the manager). `PerfGPU.Editor` measures
-  the longest frame while the thumbnails of a stress project render (`ThumbnailsMaxFrame`).
+  The Asset tab's large preview of a material, mesh, model or prefab (`RequestPreview`) is rendered the same way at the
+  pixels it covers (rounded up to 32, 128 to 512 a side; the renderer's targets follow the image's size), before the
+  thumbnails that wait, for one asset at a time and in memory only; the thumbnail shows until it is ready, and a change of
+  its sources renders it again. Reads use the asset manager, so the cache waits for them when it goes (before the
+  manager). `PerfGPU.Editor` measures the longest frame while the thumbnails of a stress project render
+  (`ThumbnailsMaxFrame`).
 - **Asset documents** (`AssetEdit.h`). Materials (and any engine-native document) are edited through `AssetEdit`:
   `ApplyDocument` validates the new document with the type's loader, writes the file (`EditorAssetManager::SaveNativeAsset`)
   and publishes the loaded object at once (`AssetManagerBase::ReplaceLoadedAsset`, which finalizes it, discards a load in

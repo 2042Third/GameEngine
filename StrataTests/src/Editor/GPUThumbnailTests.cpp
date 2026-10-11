@@ -233,6 +233,98 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("The Asset tab's preview renders at the size it covers, before the thumbnails that wait, and again after a change")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const std::filesystem::path project = Tests::CopyFeatureProject(Tests::CreateTemporaryDirectory("GPUThumbnailPreview") / "Project").parent_path();
+		ThumbnailHarness harness(gpu, project);
+		EditorAssetManager& assets = *harness.Context.GetAssetManager();
+		const AssetHandle material = harness.Find("Materials/Feature.stmat");
+		const AssetHandle model = harness.Find("Models/Platform.gltf");
+		const AssetHandle prefab = harness.Find("Prefabs/Crate.stprefab");
+		const AssetHandle checker = harness.Find("Textures/Checker.png");
+		AssetHandle mesh = UUID::Null();
+		for (AssetHandle subAsset : assets.GetImportInfo(model).SubAssets)
+		{
+			if (!mesh.IsValid() && assets.GetAssetType(subAsset) == AssetType::Mesh)
+				mesh = subAsset;
+		}
+		REQUIRE(mesh.IsValid());
+		ThumbnailCache& thumbnails = harness.Thumbnails();
+
+		// Asked for with thumbnails that all need rendering, the preview is rendered first; the thumbnail stands in meanwhile.
+		auto requestAll = [&](AssetHandle previewed, uint32_t size)
+		{
+			for (AssetHandle handle : { model, prefab, mesh })
+				thumbnails.Request(handle);
+			return thumbnails.RequestPreview(previewed, size);
+		};
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2);
+		while (thumbnails.GetStats().PreviewsRendered == 0 && std::chrono::steady_clock::now() < deadline)
+		{
+			requestAll(material, 300);
+			harness.Frame();
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		REQUIRE(thumbnails.GetStats().PreviewsRendered == 1);
+		CHECK(thumbnails.GetStats().ScenesRendered == 0);
+		auto settle = [&](AssetHandle previewed, uint32_t size)
+		{
+			const auto limit = std::chrono::steady_clock::now() + std::chrono::minutes(2);
+			do
+			{
+				requestAll(previewed, size);
+				harness.Frame();
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			while (thumbnails.IsBusy() && std::chrono::steady_clock::now() < limit);
+			REQUIRE_FALSE(thumbnails.IsBusy());
+			return requestAll(previewed, size);
+		};
+
+		// The preview is drawn at the size asked for (rounded up to the step), the thumbnail stays small.
+		nvrhi::ITexture* preview = settle(material, 300);
+		REQUIRE(preview);
+		CHECK(preview->getDesc().width == 320);
+		CHECK(preview->getDesc().height == 320);
+		CHECK(thumbnails.Request(material)->getDesc().width == ThumbnailCache::c_Size);
+		const auto [center, corner] = ReadCenterAndCorner(preview);
+		CHECK(center.a == 255);
+		CHECK(center != corner);
+		CHECK(thumbnails.GetStats().ScenesRendered == 4); // Thumbnails of the material, the model, the prefab and the mesh
+		CHECK(thumbnails.GetStats().PreviewsRendered == 1);
+
+		// A size within the same step keeps it; another one renders it again. Sizes are limited.
+		CHECK(settle(material, 310) == preview);
+		CHECK(thumbnails.GetStats().PreviewsRendered == 1);
+		CHECK(settle(material, 2000)->getDesc().width == ThumbnailCache::c_MaxPreviewSize);
+		CHECK(settle(material, 10)->getDesc().width == ThumbnailCache::c_Size);
+		CHECK(thumbnails.GetStats().PreviewsRendered == 3);
+
+		// A saved change of the material renders it again once it settled.
+		const glm::u8vec4 before = ReadCenterAndCorner(settle(material, 224)).first;
+		harness.Run("material.set", { { "material", UUIDToJson(material) }, { "properties", { { "BaseColor", { 0.0, 1.0, 0.0, 1.0 } } } } });
+		const uint64_t rendered = thumbnails.GetStats().PreviewsRendered;
+		for (int frame = 0; frame < 200 && thumbnails.GetStats().PreviewsRendered == rendered; frame++)
+		{
+			requestAll(material, 224);
+			harness.Frame();
+		}
+		const glm::u8vec4 after = ReadCenterAndCorner(settle(material, 224)).first;
+		CHECK(thumbnails.GetStats().PreviewsRendered == rendered + 1);
+		CHECK(after != before);
+		CHECK(after.g > after.r);
+
+		// Another asset gets its own; textures show their thumbnail (the Asset tab draws the texture itself).
+		nvrhi::ITexture* modelPreview = settle(model, 224);
+		REQUIRE(modelPreview);
+		CHECK(modelPreview->getDesc().width == 224);
+		CHECK(settle(checker, 224) == thumbnails.Request(checker));
+		CHECK(thumbnails.GetStats().Failed == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A scene save writes the project's picture for the launcher, which its card shows")
 	{
 		Tests::GPUContext gpu;

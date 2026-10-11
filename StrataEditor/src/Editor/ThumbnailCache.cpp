@@ -200,6 +200,8 @@ namespace Strata
 			if (entry.Texture)
 				textures.push_back(entry.Texture);
 		}
+		if (m_Preview.Texture)
+			textures.push_back(m_Preview.Texture);
 		if (!textures.empty())
 			Renderer::ReleaseDeferred(std::move(textures));
 	}
@@ -235,6 +237,39 @@ namespace Strata
 		return entry.Texture.Get();
 	}
 
+	nvrhi::ITexture* ThumbnailCache::RequestPreview(AssetHandle handle, uint32_t size)
+	{
+		// The thumbnail is asked for too: it shows until the preview is ready, and it says whether the asset gets one at all.
+		nvrhi::ITexture* thumbnail = Request(handle);
+		const Entry& entry = m_Entries.at(handle);
+		if (entry.State == ThumbnailState::Unavailable || entry.Type == AssetType::Texture)
+			return thumbnail;
+		const uint32_t rounded = (std::max(size, 1u) + c_PreviewStep - 1) / c_PreviewStep * c_PreviewStep;
+		const uint32_t edge = std::clamp(rounded, c_Size, c_MaxPreviewSize);
+		if (handle != m_Preview.Handle)
+		{
+			ResetPreview();
+			m_Preview.Handle = handle;
+			m_Preview.Type = entry.Type;
+		}
+		if (edge != m_Preview.Size)
+		{
+			// Another size: rendered again (the preview at the old size shows meanwhile).
+			m_Preview.Size = edge;
+			m_Preview.Wanted = true;
+		}
+		m_Preview.LastRequest = m_Frame;
+		return m_Preview.Texture ? m_Preview.Texture.Get() : thumbnail;
+	}
+
+	void ThumbnailCache::ResetPreview()
+	{
+		if (m_Preview.Texture)
+			Renderer::ReleaseDeferred({ nvrhi::ResourceHandle(m_Preview.Texture) });
+		// A render under way for it ends unused (UpdateSceneJob no longer finds it current).
+		m_Preview = Preview();
+	}
+
 	ThumbnailState ThumbnailCache::GetState(AssetHandle handle) const
 	{
 		auto it = m_Entries.find(handle);
@@ -248,6 +283,7 @@ namespace Strata
 			m_SceneJob->Loads.Cancel();
 			m_SceneJob.reset();
 		}
+		ResetPreview();
 		std::vector<nvrhi::ResourceHandle> textures;
 		for (auto& [handle, entry] : m_Entries)
 		{
@@ -276,7 +312,9 @@ namespace Strata
 
 	bool ThumbnailCache::IsBusy() const
 	{
-		return !m_Queue.empty() || !m_Uploads.empty() || m_SceneJob.has_value() || m_JobsRunning > 0 || !m_IndexLoaded;
+		const bool previewPending = m_Preview.Handle.IsValid() && (m_Preview.Working || m_Preview.Image
+			|| (m_Preview.Wanted && m_Frame - m_Preview.LastRequest <= m_Specification.RequestFrames));
+		return !m_Queue.empty() || !m_Uploads.empty() || m_SceneJob.has_value() || m_JobsRunning > 0 || !m_IndexLoaded || previewPending;
 	}
 
 	ThumbnailCacheStats ThumbnailCache::GetStats() const
@@ -304,6 +342,8 @@ namespace Strata
 		ApplyResults();
 		WatchSources();
 		UpdateSceneJob();
+		// The preview the Asset tab shows goes before the thumbnails that wait.
+		StartPreview();
 		StartQueued();
 		Upload();
 		if (m_Frame % 60 == 0)
@@ -398,6 +438,64 @@ namespace Strata
 			if (ComputeKey(handle, sources) != it->second.Key)
 				it->second.DirtySince = m_Frame;
 		}
+
+		// The preview the same way: made again once its changed sources settled.
+		if (m_Preview.Handle.IsValid() && m_Preview.Key != 0 && m_Preview.DirtySince == 0)
+		{
+			const bool touched = !known || std::any_of(changed.begin(), changed.end(), [this](AssetHandle source)
+			{
+				return std::find(m_Preview.Sources.begin(), m_Preview.Sources.end(), source) != m_Preview.Sources.end();
+			});
+			std::vector<AssetHandle> sources;
+			if (touched && ComputeKey(m_Preview.Handle, sources) != m_Preview.Key)
+				m_Preview.DirtySince = m_Frame;
+		}
+	}
+
+	void ThumbnailCache::StartPreview()
+	{
+		Preview& preview = m_Preview;
+		// Not shown: rendered when it is asked for again.
+		if (!preview.Handle.IsValid() || m_Frame - preview.LastRequest > m_Specification.RequestFrames)
+			return;
+		if (preview.DirtySince != 0 && m_Frame - preview.DirtySince >= m_Specification.SettleFrames)
+		{
+			preview.DirtySince = 0;
+			preview.Wanted = true;
+		}
+		if (!preview.Wanted || preview.Working || m_SceneJob || !m_Assets->GetMetadata(preview.Handle))
+			return;
+		std::vector<AssetHandle> sources;
+		const uint64_t key = ComputeKey(preview.Handle, sources);
+		// What an import is still making would make the preview stale at once: wait for it.
+		for (AssetHandle source : sources)
+		{
+			if (m_Assets->IsImportPending(source))
+				return;
+		}
+		preview.Wanted = false;
+		preview.Key = key;
+		preview.Sources = std::move(sources);
+		// An asset whose import failed has its type's icon for a thumbnail, which stands in for the preview too.
+		if (!m_Assets->GetImportInfo(preview.Handle).Error.empty())
+			return;
+		preview.Working = true;
+		SceneJob job;
+		job.Handle = preview.Handle;
+		job.Type = preview.Type;
+		job.Key = key;
+		job.Size = preview.Size;
+		job.IsPreview = true;
+		job.Loads = m_Assets->RequestLoadWithDependencies(preview.Handle, AssetPriority::Normal);
+		m_SceneJob = std::move(job);
+	}
+
+	bool ThumbnailCache::IsSceneJobCurrent(const SceneJob& job) const
+	{
+		if (job.IsPreview)
+			return m_Preview.Handle == job.Handle && m_Preview.Working && m_Preview.Key == job.Key && m_Preview.Size == job.Size;
+		auto it = m_Entries.find(job.Handle);
+		return it != m_Entries.end() && it->second.Key == job.Key;
 	}
 
 	void ThumbnailCache::StartQueued()
@@ -651,10 +749,15 @@ namespace Strata
 		if (!m_SceneJob)
 			return;
 		SceneJob& job = *m_SceneJob;
-		auto it = m_Entries.find(job.Handle);
-		if (it == m_Entries.end() || it->second.Key != job.Key)
+		if (!IsSceneJobCurrent(job))
 		{
-			// Forgotten, or wanted for newer sources: started again from the queue.
+			// Forgotten, or wanted for newer sources or (a preview) at another size: started again from the queue, or by
+			// StartPreview.
+			if (job.IsPreview && m_Preview.Handle == job.Handle && m_Preview.Working)
+			{
+				m_Preview.Working = false;
+				m_Preview.Wanted = true;
+			}
 			job.Loads.Cancel();
 			m_SceneJob.reset();
 			return;
@@ -736,8 +839,10 @@ namespace Strata
 			specification.ShadowCascades = 1;
 			specification.PrefetchDistance = 0.0f;
 			m_Renderer = CreateScope<SceneRenderer>(specification);
-			m_Renderer->SetViewportSize(c_Size, c_Size);
 		}
+		// Thumbnails and the preview share the renderer: its targets follow the image's size (they change only when a preview
+		// starts or ends).
+		m_Renderer->SetViewportSize(job.Size, job.Size);
 		SceneRenderOptions options;
 		options.PreviewEnvironment = true;
 		options.DrawScreenSpaceText = false;
@@ -811,8 +916,24 @@ namespace Strata
 	{
 		const AssetHandle handle = m_SceneJob->Handle;
 		const uint64_t key = m_SceneJob->Key;
+		const bool preview = m_SceneJob->IsPreview;
 		m_SceneJob->Loads.Cancel();
 		m_SceneJob.reset();
+		if (preview)
+		{
+			// Only current jobs finish (UpdateSceneJob); one that failed leaves the thumbnail in its place until a source changes.
+			m_Preview.Working = false;
+			if (success)
+			{
+				m_Preview.Image = std::move(image);
+				m_Stats.PreviewsRendered++;
+			}
+			else
+			{
+				m_Stats.Failed++;
+			}
+			return;
+		}
 		auto it = m_Entries.find(handle);
 		if (it == m_Entries.end() || it->second.Key != key)
 			return;
@@ -829,13 +950,33 @@ namespace Strata
 
 	void ThumbnailCache::Upload()
 	{
-		if (m_Uploads.empty() || !Renderer::IsInitialized())
+		if ((m_Uploads.empty() && !m_Preview.Image) || !Renderer::IsInitialized())
 			return;
 		nvrhi::IDevice* device = Renderer::GetDevice();
 		if (!m_UploadCommands)
 			m_UploadCommands = device->createCommandList();
 		std::vector<nvrhi::ResourceHandle> replaced;
 		bool open = false;
+		auto begin = [this, &open]()
+		{
+			if (!open)
+			{
+				m_UploadCommands->open();
+				open = true;
+			}
+		};
+		if (const Ref<ThumbnailImage> image = std::move(m_Preview.Image))
+		{
+			begin();
+			// A preview that cannot be uploaded leaves the thumbnail in its place.
+			if (nvrhi::TextureHandle texture = DisplayImage::Upload(m_UploadCommands, image->Width, image->Height, image->Pixels, "Preview"))
+			{
+				if (m_Preview.Texture)
+					replaced.push_back(m_Preview.Texture);
+				m_Preview.Texture = texture;
+				m_Stats.Uploads++;
+			}
+		}
 		for (uint32_t count = 0; count < m_Specification.MaxUploadsPerFrame && !m_Uploads.empty(); count++)
 		{
 			const AssetHandle handle = m_Uploads.front();
@@ -845,11 +986,7 @@ namespace Strata
 				continue;
 			Entry& entry = it->second;
 			const Ref<ThumbnailImage> image = std::move(entry.Image);
-			if (!open)
-			{
-				m_UploadCommands->open();
-				open = true;
-			}
+			begin();
 			nvrhi::TextureHandle texture = DisplayImage::Upload(m_UploadCommands, image->Width, image->Height, image->Pixels, "Thumbnail");
 			if (!texture)
 			{
@@ -898,6 +1035,9 @@ namespace Strata
 		}
 		if (!released.empty())
 			Renderer::ReleaseDeferred(std::move(released));
+		// The preview goes when it has not been shown for a while.
+		if (m_Preview.Handle.IsValid() && !m_Preview.Working && m_Frame - m_Preview.LastRequest > c_ForgetFrames)
+			ResetPreview();
 		// Files of assets the project no longer has go too, once no import can still bring their assets.
 		if (m_IndexLoaded && !m_Assets->HasPendingImports())
 		{
