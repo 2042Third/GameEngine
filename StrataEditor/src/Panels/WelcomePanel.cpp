@@ -437,7 +437,7 @@ namespace Strata
 				ImGui::PopFont();
 				// The search at the right end of the heading's line.
 				const float searchWidth = std::round(fontSize * c_SearchWidthInFontSizes);
-				ImGui::SameLine(std::max(width - searchWidth, ImGui::GetCursorPosX()));
+				ImGui::SameLine(std::max(ImGui::GetCursorStartPos().x + width - searchWidth, ImGui::GetCursorPosX()));
 				UI::SearchField("Welcome.Search", m_Search, "Search projects", searchWidth, "Projects whose name or path contains every word");
 			}
 			ImGui::Spacing();
