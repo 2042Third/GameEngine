@@ -84,6 +84,8 @@ and `script.status` (classes, fields, defaults). Patterns that worked:
 
 Build it with `entity.create` (with `components`), `component.set`, `script.add`; then `scene.save` (the template's
 start scene), or for a scene of your own `scene.saveAs {"path": "Scenes/Main.stscene"}` and `project.setStartScene`.
+Save before switching to another scene or project: `scene.open`, `scene.new` and the `project.*` commands refuse while
+the scene has unsaved changes (pass `"force": true` only to throw away edits you made yourself).
 
 - Camera: `{"Camera": {"Primary": true, "PerspectiveFOV": 45}}`; cameras and lights look along their -Z, so a camera at
   `+Z` looking at the origin needs no rotation. Rotations are Euler degrees `[pitch, yaw, roll]`.

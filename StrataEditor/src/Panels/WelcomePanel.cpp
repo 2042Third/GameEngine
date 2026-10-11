@@ -711,16 +711,18 @@ namespace Strata
 		// The action may run in a later frame (after the question about unsaved changes): it keeps what outlives the frame.
 		EditorContext* editor = &context.Context;
 		const EditorCommandRegistry* commands = &context.Commands;
-		auto open = [this, editor, commands, projectFile]()
+		// With a shell, the person has answered the question about unsaved changes by the time the project opens; without one,
+		// unsaved changes make the command fail.
+		auto open = [this, editor, commands, projectFile](bool force)
 		{
-			const EditorCommandResult result = commands->Execute(*editor, "project.open", { { "path", FileSystem::ToUTF8(projectFile) } });
+			const EditorCommandResult result = commands->Execute(*editor, "project.open", { { "path", FileSystem::ToUTF8(projectFile) }, { "force", force } });
 			if (!result.Success)
 				ShowError(fmt::format("Could not open {}: {}", UI::DisplayPath(projectFile), result.Error));
 		};
 		if (context.Shell)
-			context.Shell->RequestDiscardChanges(std::move(open));
+			context.Shell->RequestDiscardChanges([open]() { open(true); });
 		else
-			open();
+			open(false);
 		m_RefreshedAt = 0.0;
 	}
 

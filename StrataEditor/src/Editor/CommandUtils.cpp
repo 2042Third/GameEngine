@@ -178,6 +178,26 @@ namespace Strata
 				{ "maxMs", frameTimes.back() } };
 		}
 
+		nlohmann::json ForceSchema()
+		{
+			return BoolSchema("Go on although the edited scene has unsaved changes, discarding them (default false: the command fails instead)");
+		}
+
+		std::optional<EditorCommandResult> CheckUnsavedChanges(const EditorContext& context, bool force, std::string_view action)
+		{
+			if (force || !context.IsSceneModified())
+				return std::nullopt;
+			const std::string& scene = context.GetEditScene()->GetName();
+			if (!context.HasProject())
+			{
+				return EditorCommandResult::Fail(fmt::format("The scene '{}' has unsaved changes, which {} would discard; without a project they cannot be "
+					"saved: pass force: true to discard them", scene, action));
+			}
+			const char* save = context.GetSceneHandle().IsValid() ? "scene.save" : "scene.saveAs, as the scene was never saved";
+			return EditorCommandResult::Fail(fmt::format("The scene '{}' has unsaved changes, which {} would discard: save them first ({}) or pass "
+				"force: true to discard them", scene, action, save));
+		}
+
 		std::optional<std::filesystem::path> ResolveOutputPath(const EditorContext& context, std::string_view path, std::string_view extension, bool overwrite,
 			std::string* outError)
 		{

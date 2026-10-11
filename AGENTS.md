@@ -761,6 +761,12 @@ and `AudioSystem`, the built-in "Audio" scene system.
   mistyped parameter, a reference to nothing) is `InvalidParameters` (`CommandArguments::Fail`,
   `EditorCommandResult::InvalidParameters`); a valid request that cannot be carried out in the current
   state is `Failed` (`EditorCommandResult::Fail`). Automation reports them with different error codes.
+- **No silent data loss:** every command that replaces the edited scene (`scene.open`, `scene.new`, `project.open`,
+  `project.create`, `project.close`, `project.openSample`, `editor.quit`) starts with the shared guard
+  `CommandUtils::CheckUnsavedChanges`: while the edited scene has unsaved changes (also while a copy of it plays) it fails
+  (`Failed`, naming the scene and how to proceed) and changes nothing, unless `force: true`; results report
+  `discardedChanges`. A new command that replaces the scene uses the same guard. The UI keeps asking (the unsaved-changes
+  dialog, `EditorShell::RequestDiscardChanges`) and passes `force` once the person has answered.
 - Undo works on entity snapshots: a `SceneEditTransaction` captures the entities an edit touches
   (`Track`, `TrackSubtree` before changing or deleting them, `TrackCreated` after creating them) and
   `EditorContext::CommitEdit` records the difference. Edits while playing are not recorded. Continuous edits merge
@@ -832,8 +838,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   instead of the display's (e.g. 1 to check it at 100% on a 150% display), `--layout <file>` keeps the panel layout in
   that file instead of the user's (`<user data>/Strata/EditorLayout.ini`), and `--imgui-demo` offers ImGui's demo window
   (Help menu) for UI work.
-  Without `--frames`, a headless editor runs until `editor.quit` (which refuses to discard unsaved
-  scene changes unless `force` is true) or a signal; headless editors run at most 60 frames per second.
+  Without `--frames`, a headless editor runs until `editor.quit` (which, like the other commands that replace the scene,
+  refuses to discard unsaved scene changes unless `force` is true) or a signal; headless editors run at most 60 frames
+  per second.
   The editor serves automation by default (`EditorAutomation`, see [Automation](#automation-editor-rpc--mcp));
   `--no-automation` turns it off and `--automation-port <port>` picks the port (default 0: a free one).
   A headless editor without `--frames` whose automation cannot start exits with code 1. CTest runs of

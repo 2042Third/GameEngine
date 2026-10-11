@@ -142,22 +142,29 @@ namespace Strata
 
 		registry.Register({ "project.create",
 			"Creates a project in a directory and opens it. With template \"basic3d\" it starts with a saved, lit start scene (Scenes/Main.stscene: Main "
-			"Camera, Sun, Sky, Ground, Post Process); the default \"empty\" has no scene (see project.templates).",
+			"Camera, Sun, Sky, Ground, Post Process); the default \"empty\" has no scene (see project.templates). Fails while the edited scene has "
+			"unsaved changes unless force is true (save first), before anything is created. Returns projectFile, template, startScene and "
+			"discardedChanges (whether unsaved changes were discarded).",
 			ObjectSchema({
 				{ "directory", StringSchema("Absolute directory for the project") },
 				{ "name", StringSchema("Project name") },
 				{ "template", { { "type", "string" }, { "enum", { ProjectTemplates::c_Empty, ProjectTemplates::c_Basic3D } },
-					{ "description", "What the project starts with (default \"empty\"; see project.templates)" } } } }, { "directory", "name" }),
+					{ "description", "What the project starts with (default \"empty\"; see project.templates)" } } },
+				{ "force", ForceSchema() } }, { "directory", "name" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const std::string directory = arguments.GetString("directory");
 				const std::string name = arguments.GetString("name");
 				const std::string templateId = arguments.GetString("template", std::string(ProjectTemplates::c_Empty));
+				const bool force = arguments.GetBool("force", false);
 				if (arguments.IsValid() && !ProjectTemplates::Find(templateId))
 					arguments.SetError(fmt::format("Unknown template '{}' (templates: {})", templateId, ProjectTemplates::ListIds()));
 				if (!arguments.IsValid())
 					return arguments.Fail();
+				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, fmt::format("creating the project '{}'", name)))
+					return std::move(*refused);
+				const bool discarded = context.IsSceneModified();
 				std::string error;
 				if (!context.CreateProject(FileSystem::FromUTF8(directory), name, templateId, &error))
 					return EditorCommandResult::Fail(error);
@@ -165,31 +172,49 @@ namespace Strata
 				return EditorCommandResult::Ok({
 					{ "projectFile", FileSystem::ToUTF8(context.GetProject()->GetProjectFile()) },
 					{ "template", templateId },
-					{ "startScene", startScene.IsValid() ? UUIDToJson(startScene) : nlohmann::json(nullptr) } });
+					{ "startScene", startScene.IsValid() ? UUIDToJson(startScene) : nlohmann::json(nullptr) },
+					{ "discardedChanges", discarded } });
 			} });
 
-		registry.Register({ "project.open", "Opens a project file or the project in a directory (unsaved scene changes are discarded).",
-			ObjectSchema({ { "path", StringSchema("Project file (.stproj) or project directory") } }, { "path" }),
+		registry.Register({ "project.open",
+			"Opens a project file or the project in a directory. Fails while the edited scene has unsaved changes unless force is true (save first). "
+			"Returns discardedChanges (whether unsaved changes were discarded).",
+			ObjectSchema({ { "path", StringSchema("Project file (.stproj) or project directory") }, { "force", ForceSchema() } }, { "path" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const std::string path = arguments.GetString("path");
+				const bool force = arguments.GetBool("force", false);
 				if (!arguments.IsValid())
 					return arguments.Fail();
+				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, fmt::format("opening the project '{}'", path)))
+					return std::move(*refused);
+				// A project that cannot be loaded changes nothing (OpenProject reads it before closing the open one).
+				const bool modified = context.IsSceneModified();
 				std::string error;
 				if (!context.OpenProject(FileSystem::FromUTF8(path), &error))
 					return EditorCommandResult::Fail(error);
-				return EditorCommandResult::Ok();
+				return EditorCommandResult::Ok({ { "discardedChanges", modified } });
 			} });
 
 		registry.Register({ "project.close",
-			"Closes the open project (unsaved scene changes are discarded); the editor shows its launcher. Without a project it does nothing.",
-			ObjectSchema({}),
-			[](EditorContext& context, const nlohmann::json&)
+			"Closes the open project; the editor shows its launcher. Without a project it does nothing. Fails while the edited scene has unsaved "
+			"changes unless force is true (save first). Returns closed and discardedChanges (whether unsaved changes were discarded).",
+			ObjectSchema({ { "force", ForceSchema() } }),
+			[](EditorContext& context, const nlohmann::json& parameters)
 			{
+				CommandArguments arguments(parameters);
+				const bool force = arguments.GetBool("force", false);
+				if (!arguments.IsValid())
+					return arguments.Fail();
 				const bool hadProject = context.HasProject();
+				if (!hadProject)
+					return EditorCommandResult::Ok({ { "closed", false }, { "discardedChanges", false } });
+				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, "closing the project"))
+					return std::move(*refused);
+				const bool discarded = context.IsSceneModified();
 				context.CloseProject();
-				return EditorCommandResult::Ok({ { "closed", hadProject } });
+				return EditorCommandResult::Ok({ { "closed", true }, { "discardedChanges", discarded } });
 			} });
 
 		registry.Register({ "project.samples",
@@ -209,17 +234,20 @@ namespace Strata
 			} });
 
 		registry.Register({ "project.openSample",
-			"Copies a sample project (project.samples) into a new directory and opens the copy, like project.open (unsaved scene changes are "
-			"discarded); the sample itself stays unchanged. The copy leaves out local editor data (.strata): build its scripts with script.build "
-			"before playing.",
+			"Copies a sample project (project.samples) into a new directory and opens the copy, like project.open; the sample itself stays unchanged. "
+			"The copy leaves out local editor data (.strata): build its scripts with script.build before playing. Fails while the edited scene has "
+			"unsaved changes unless force is true (save first), before anything is copied. Returns sample, projectFile and discardedChanges (whether "
+			"unsaved changes were discarded).",
 			ObjectSchema({
 				{ "sample", StringSchema("The sample's id from project.samples, e.g. \"Tetris\"") },
-				{ "directory", StringSchema("Absolute directory for the copy: created, or an existing empty directory") } }, { "sample", "directory" }),
+				{ "directory", StringSchema("Absolute directory for the copy: created, or an existing empty directory") },
+				{ "force", ForceSchema() } }, { "sample", "directory" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const std::string id = arguments.GetString("sample");
 				const std::string directory = arguments.GetString("directory");
+				const bool force = arguments.GetBool("force", false);
 				if (!arguments.IsValid())
 					return arguments.Fail();
 				std::string error;
@@ -234,12 +262,15 @@ namespace Strata
 						known += (known.empty() ? "" : ", ") + candidate.Id;
 					return EditorCommandResult::InvalidParameters(fmt::format("There is no sample '{}' (samples: {})", id, known.empty() ? "none" : known));
 				}
+				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, fmt::format("opening the sample '{}'", sample->Id)))
+					return std::move(*refused);
+				const bool discarded = context.IsSceneModified();
 				const std::filesystem::path projectFile = ProjectSamples::Copy(*sample, FileSystem::FromUTF8(directory), &error);
 				if (projectFile.empty())
 					return EditorCommandResult::Fail(error);
 				if (!context.OpenProject(projectFile, &error))
 					return EditorCommandResult::Fail(fmt::format("The sample was copied to '{}' but could not be opened: {}", directory, error));
-				return EditorCommandResult::Ok({ { "sample", sample->Id }, { "projectFile", FileSystem::ToUTF8(projectFile) } });
+				return EditorCommandResult::Ok({ { "sample", sample->Id }, { "projectFile", FileSystem::ToUTF8(projectFile) }, { "discardedChanges", discarded } });
 			} });
 
 		registry.Register({ "project.setStartScene", "Sets the scene a built game starts with and saves the project file.",

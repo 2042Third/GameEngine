@@ -44,7 +44,9 @@ namespace Strata
 		virtual ~EditorShell() = default;
 
 		// Runs an action that replaces the edited scene (opening or creating a project or scene) once unsaved changes are
-		// saved or discarded: at once when there are none, later (or never, when cancelled) after asking.
+		// saved or discarded: at once when there are none, later (or never, when cancelled) after asking. The person has
+		// decided by the time the action runs, so its command passes force: true (the commands refuse to discard unsaved
+		// changes otherwise, see CommandUtils::CheckUnsavedChanges).
 		virtual void RequestDiscardChanges(std::function<void()> action) = 0;
 		// The New Project dialog: template, name and location, then project.create. An empty template id chooses the
 		// default one (basic3d).

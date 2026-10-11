@@ -163,7 +163,7 @@ namespace Strata
 		{
 			contentBrowser->SetOpenSceneHandler([this](AssetHandle scene)
 			{
-				RequestDiscardChanges([this, scene]() { RunEditorCommand(m_Context, m_Commands, "scene.open", { { "scene", UUIDToJson(scene) } }); });
+				RequestDiscardChanges([this, scene]() { RunEditorCommand(m_Context, m_Commands, "scene.open", { { "scene", UUIDToJson(scene) }, { "force", true } }); });
 			});
 		}
 		if (StreamingPanel* streaming = m_Panels.Get<StreamingPanel>(EditorPanels::c_Streaming))
@@ -485,7 +485,7 @@ namespace Strata
 			{
 				RequestDiscardChanges([this, file = *project]()
 				{
-					const EditorCommandResult result = m_Commands.Execute(m_Context, "project.open", { { "path", FileSystem::ToUTF8(file) } });
+					const EditorCommandResult result = m_Commands.Execute(m_Context, "project.open", { { "path", FileSystem::ToUTF8(file) }, { "force", true } });
 					if (!result.Success)
 						ReportError(fmt::format("Could not open {}: {}", FileSystem::ToUTF8(file), result.Error));
 				});
@@ -680,7 +680,7 @@ namespace Strata
 	{
 		RequestDiscardChanges([this, projectFile]()
 		{
-			const EditorCommandResult result = m_Commands.Execute(m_Context, "project.open", { { "path", FileSystem::ToUTF8(projectFile) } });
+			const EditorCommandResult result = m_Commands.Execute(m_Context, "project.open", { { "path", FileSystem::ToUTF8(projectFile) }, { "force", true } });
 			if (!result.Success)
 				ReportError(fmt::format("Could not open {}: {}", UI::DisplayPath(projectFile), result.Error));
 		});
@@ -919,14 +919,15 @@ namespace Strata
 			if (!launcher)
 			{
 				if (ImGui::MenuItem("Close Project", nullptr, false, m_Context.HasProject()))
-					RequestDiscardChanges([this]() { RunEditorCommand(m_Context, m_Commands, "project.close"); });
+					RequestDiscardChanges([this]() { RunEditorCommand(m_Context, m_Commands, "project.close", { { "force", true } }); });
 				// Back from Continue without a project (with a project open, Close Project leads there).
 				if (ImGui::MenuItem("Show Launcher", nullptr, false, !m_Context.HasProject()))
 					m_LauncherDismissed = false;
 				UI::ItemProbe::Record("Menu.File.ShowLauncher", !m_Context.HasProject());
 				ImGui::Separator();
 				if (ImGui::MenuItem("New Scene", nullptr, false, !m_Context.IsPlaying()))
-					RequestDiscardChanges([this]() { RunEditorCommand(m_Context, m_Commands, "scene.new"); });
+					RequestDiscardChanges([this]() { RunEditorCommand(m_Context, m_Commands, "scene.new", { { "force", true } }); });
+				UI::ItemProbe::Record("Menu.File.NewScene", !m_Context.IsPlaying());
 				if (ImGui::MenuItem("Save Scene", "Ctrl+S", false, !m_Context.IsPlaying()))
 					SaveScene();
 				if (ImGui::MenuItem("Save Scene As...", "Ctrl+Shift+S", false, m_Context.HasProject() && !m_Context.IsPlaying()))

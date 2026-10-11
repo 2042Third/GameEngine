@@ -223,7 +223,7 @@ TEST_SUITE("Editor.Templates")
 		CHECK(camera["yaw"] == 45.0); // The default view
 
 		harness.Run("entity.create", { { "name", "Old" } });
-		harness.Run("scene.new", { { "name", "Fresh" } });
+		harness.Run("scene.new", { { "name", "Fresh" }, { "force", true } });
 		CHECK(harness.Context.GetEditScene()->GetName() == "Fresh");
 		CHECK(harness.Context.GetEditScene()->GetEntityCount() == 0);
 		CHECK(harness.Run("camera.get") == camera); // An empty scene keeps the view

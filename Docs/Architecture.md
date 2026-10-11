@@ -1283,6 +1283,11 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   used is kept in imgui.ini, `StrataLauncher`, first `<home>/StrataProjects`), About Strata (`UI/AboutDialog`: build,
   GPU, startup time, and `ThirdPartyNotices.md` compiled in and shown through `UI/Markdown`) and the unsaved-changes
   question. Panels reach them through `EditorPanelContext::Shell` (`UI/EditorShell.h`, implemented by `EditorLayer`).
+  The question is the UI's half of a rule the commands enforce themselves: every command that replaces the edited scene
+  (`scene.open`, `scene.new`, `project.open`, `project.create`, `project.close`, `project.openSample`, `editor.quit`)
+  fails while it has unsaved changes unless `force: true` (`CommandUtils::CheckUnsavedChanges`) and reports
+  `discardedChanges`, so neither an agent nor a script can throw away a person's work by accident; the UI asks first and
+  then passes `force`.
   A `.stproj` file dropped on the window opens its project. The look comes from
   `UI/Theme` (the Bedrock palette and its meanings; `ApplyTheme` is the `ImGuiLayer` style callback), `UI/EditorFonts`
   (Inter, Inter SemiBold and JetBrains Mono embedded with `strata_embed_file`, Lucide's icons merged into the Inter

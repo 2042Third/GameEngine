@@ -265,39 +265,51 @@ namespace Strata
 			} });
 
 		registry.Register({ "scene.new",
-			"Replaces the edited scene with a new, unsaved one (unsaved changes are discarded): empty by default, or with a template's content, e.g. "
-			"\"basic3d\" (a lit start: camera, sun, procedural sky, ground, post-processing; the editor camera then looks through the scene's camera; "
-			"the ground's material Materials/Ground.stmat is added to a project that lacks it). Save it with scene.saveAs.",
+			"Replaces the edited scene with a new, unsaved one: empty by default, or with a template's content, e.g. \"basic3d\" (a lit start: camera, "
+			"sun, procedural sky, ground, post-processing; the editor camera then looks through the scene's camera; the ground's material "
+			"Materials/Ground.stmat is added to a project that lacks it). Fails while the edited scene has unsaved changes unless force is true (save "
+			"first). Save the new scene with scene.saveAs. Returns discardedChanges (whether unsaved changes were discarded).",
 			ObjectSchema({
 				{ "name", StringSchema("Scene name") },
 				{ "template", { { "type", "string" }, { "enum", { ProjectTemplates::c_Empty, ProjectTemplates::c_Basic3D } },
-					{ "description", "What the scene starts with (default \"empty\"; see project.templates)" } } } }),
+					{ "description", "What the scene starts with (default \"empty\"; see project.templates)" } } },
+				{ "force", ForceSchema() } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const std::string name = arguments.GetString("name", "Untitled");
 				const std::string templateId = arguments.GetString("template", std::string(ProjectTemplates::c_Empty));
+				const bool force = arguments.GetBool("force", false);
 				if (arguments.IsValid() && !ProjectTemplates::Find(templateId))
 					arguments.SetError(fmt::format("Unknown template '{}' (templates: {})", templateId, ProjectTemplates::ListIds()));
 				if (!arguments.IsValid())
 					return arguments.Fail();
+				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, "starting a new scene"))
+					return std::move(*refused);
+				const bool discarded = context.IsSceneModified();
 				if (!context.NewScene(name, templateId))
 					return EditorCommandResult::Fail(fmt::format("The template '{}' could not be applied", templateId));
-				return EditorCommandResult::Ok();
+				return EditorCommandResult::Ok({ { "discardedChanges", discarded } });
 			} });
 
-		registry.Register({ "scene.open", "Opens a scene asset for editing (unsaved changes are discarded).",
-			ObjectSchema({ { "scene", AssetSchema("Scene to open") } }, { "scene" }),
+		registry.Register({ "scene.open",
+			"Opens a scene asset for editing. Fails while the edited scene has unsaved changes unless force is true (save first). Returns "
+			"discardedChanges (whether unsaved changes were discarded).",
+			ObjectSchema({ { "scene", AssetSchema("Scene to open") }, { "force", ForceSchema() } }, { "scene" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const AssetHandle handle = ResolveAsset(context, arguments, "scene", AssetType::Scene);
+				const bool force = arguments.GetBool("force", false);
 				if (!arguments.IsValid())
 					return arguments.Fail();
+				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, fmt::format("opening the scene {}", parameters["scene"].dump())))
+					return std::move(*refused);
+				const bool discarded = context.IsSceneModified();
 				std::string error;
 				if (!context.OpenScene(handle, &error))
 					return EditorCommandResult::Fail(error);
-				return EditorCommandResult::Ok();
+				return EditorCommandResult::Ok({ { "discardedChanges", discarded } });
 			} });
 
 		registry.Register({ "scene.save", "Saves the edited scene to its asset. New scenes need scene.saveAs first.", ObjectSchema({}),

@@ -140,6 +140,11 @@ editor started with `--no-gpu` (use `--headless`):
   back as a quaternion). Property names are case-insensitive. `component.get` shows the accepted format of every value.
 - **Undo**: every successful mutating command is one undo step (`edit.undo`, `edit.redo`, `edit.history`). Material
   edits are steps of the same history, but they save their file themselves, so they never mark the scene unsaved.
+- **Unsaved changes are never discarded silently**: `scene.open`, `scene.new`, `project.open`, `project.create`,
+  `project.close`, `project.openSample` and `editor.quit` fail (`-32005`, naming the scene) while the edited scene has
+  unsaved changes (`editor.status` `scene.modified`), also while a copy of it plays. Save first (`scene.save`, or
+  `scene.saveAs` for a scene never saved), or pass `"force": true` when discarding them is what you want; their results
+  report `discardedChanges`. A person may be editing beside you: never force away work you did not make.
 - **Play mode**: `play.start` runs a copy of the scene. Changes made while playing apply to that copy, carry a
   `warning` in the result, and are discarded by `play.stop`. Undo and redo are not available while playing;
   `scene.save` saves the edited scene, never the running copy.
@@ -271,8 +276,8 @@ from the frame that started it); a large project takes a while, so give the call
 `project.setExportSettings {"alwaysInclude": ["Prefabs", "Sounds/Win.wav"]}` (folders or assets, saved in the project).
 Check the result headless: `<dir>/<Game> --headless --frames 120` (exit code 0).
 
-**Finish**: save (`scene.save`), then `editor.quit`. It refuses while the scene has unsaved changes;
-`{"force": true}` discards them. The editor answers, closes and removes its session file.
+**Finish**: save (`scene.save`), then `editor.quit`. Like every command that would replace the scene, it refuses while
+the scene has unsaved changes; `{"force": true}` discards them. The editor answers, closes and removes its session file.
 
 ## 6. Troubleshooting
 
@@ -283,7 +288,7 @@ Check the result headless: `<dir>/<Game> --headless --frames 120` (exit code 0).
 | `-32602 Unknown parameter 'x'` | Misspelled or unsupported parameter; read `data.parameters` or `editor.commands`. |
 | A call times out (exit 4) | The command takes many frames (or the editor is busy): raise `--timeout`. The command still finishes in the editor; do not launch another one. |
 | Changes vanished after `play.stop` | They were made while playing; make them in edit mode. |
-| `editor.quit` fails with unsaved changes | `scene.save` / `scene.saveAs` first, or `{"force": true}`. |
+| `scene.open`, `scene.new`, `project.*` or `editor.quit` fail with unsaved changes | `scene.save` / `scene.saveAs` first, or `{"force": true}` to discard them. |
 | Headless editor exits at once with code 1 | Its automation could not start (session directory not private, port in use); read its output or `<user data>/Logs/StrataEditor.log`. |
 | The editor went away on its own | It was started with `--idle-timeout` (MCP: 10 minutes) and no client stayed connected; start it again. |
 | `viewport.*` / `camera.*` fail or are missing | The editor runs with `--no-gpu` (restart it with `--headless`), or this build has no viewport commands (check `editor.commands`). |

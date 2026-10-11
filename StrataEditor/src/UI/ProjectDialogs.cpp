@@ -276,7 +276,8 @@ namespace Strata
 		submit |= UI::DialogButton("NewProject.Create", "Create", true, problem.empty());
 		if (submit && problem.empty() && open)
 		{
-			nlohmann::json parameters = { { "directory", FileSystem::ToUTF8(target) }, { "name", m_Name } };
+			// The dialog opens once the person has answered the question about unsaved changes (EditorShell::ShowNewProjectDialog).
+			nlohmann::json parameters = { { "directory", FileSystem::ToUTF8(target) }, { "name", m_Name }, { "force", true } };
 			if (!m_TemplateId.empty())
 				parameters["template"] = m_TemplateId;
 			std::string error;
@@ -355,7 +356,8 @@ namespace Strata
 		if (submit && problem.empty() && open)
 		{
 			std::string error;
-			if (RunNow(context, "project.openSample", { { "sample", m_SampleId }, { "directory", FileSystem::ToUTF8(target) } }, nullptr, error))
+			// Like New Project: the dialog opens once the question about unsaved changes was answered.
+			if (RunNow(context, "project.openSample", { { "sample", m_SampleId }, { "directory", FileSystem::ToUTF8(target) }, { "force", true } }, nullptr, error))
 			{
 				SetLocation(target.parent_path());
 				open = false;

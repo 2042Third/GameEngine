@@ -249,20 +249,16 @@ namespace Strata
 		registry.Register({ "editor.quit",
 			"Closes the editor after answering (pending commands are cancelled). Fails while the scene has unsaved changes unless force is "
 			"true; save first with scene.save or scene.saveAs.",
-			ObjectSchema({ { "force", BoolSchema("Quit even if the scene has unsaved changes, discarding them (default false)") } }),
+			ObjectSchema({ { "force", ForceSchema() } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const bool force = arguments.GetBool("force", false);
 				if (!arguments.IsValid())
 					return arguments.Fail();
-
+				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, "quitting"))
+					return std::move(*refused);
 				const bool modified = context.IsSceneModified();
-				if (modified && !force)
-				{
-					return EditorCommandResult::Fail(fmt::format("The scene '{}' has unsaved changes: save them (scene.save, or scene.saveAs for a new "
-						"scene) or quit with force: true to discard them", context.GetEditScene()->GetName()));
-				}
 				context.RequestQuit();
 				return EditorCommandResult::Ok({ { "quitting", true }, { "discardedChanges", modified } });
 			} });

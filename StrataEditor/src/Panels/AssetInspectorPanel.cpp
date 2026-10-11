@@ -203,11 +203,16 @@ namespace Strata
 			const char* tooltip = style.Enabled ? "Open this scene for editing" : "The scene is open (or the editor is playing)";
 			if (UI::ToolbarButton("AssetInspector.OpenScene", Icons::FolderOpen, "Open", tooltip, style))
 			{
-				auto open = [&context, &commands, asset]() { RunEditorCommand(context, commands, "scene.open", { { "scene", asset } }); };
+				// With a shell, the person has answered the question about unsaved changes by the time the scene opens; without one,
+				// unsaved changes make the command fail.
+				auto open = [&context, &commands, asset](bool force)
+				{
+					RunEditorCommand(context, commands, "scene.open", { { "scene", asset }, { "force", force } });
+				};
 				if (panelContext.Shell)
-					panelContext.Shell->RequestDiscardChanges(open);
+					panelContext.Shell->RequestDiscardChanges([open]() { open(true); });
 				else
-					open();
+					open(false);
 			}
 		}
 		if (metadata.Type == AssetType::Prefab || metadata.Type == AssetType::Model)

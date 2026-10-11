@@ -231,7 +231,7 @@ TEST_SUITE("Editor.Commands")
 		CHECK(harness.Snapshot() == unchanged);
 
 		// Into another scene: what the clipboard is for.
-		harness.Run("scene.new");
+		harness.Run("scene.new", { { "force", true } });
 		const nlohmann::json other = harness.Run("entity.paste", { { "data", copied["data"] } });
 		CHECK(harness.GetScene().GetEntityCount() == 2);
 		CHECK(GetField(harness.Get(other["entities"][0].get<std::string>()), "Outer") == *UUIDFromJson(nlohmann::json(outside))); // Missing in this scene
