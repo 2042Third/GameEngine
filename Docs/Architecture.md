@@ -154,7 +154,8 @@ mounted `AssetPack`s), `AssetPackWriter` and `AssetDependencies` (tooling: writi
 reference), `AssetImporter` with the built-in importers
 (`AssetImporters.cpp`, `GltfImporter`, `TextureImporter`), `AssetLoaderRegistry` (the loaders, registered by the
 modules that own the types) and `BuiltinAssets` (fixed handles; the owning module provides each object through a
-factory). The asset types are Scene, Prefab, Model, Mesh, Material, Texture, AudioClip and Font (`AssetTypes.h`). See
+factory). The asset types are Scene, Prefab, Model, Mesh, Material, Texture, AudioClip, Font, Skeleton, AnimationClip and
+AnimationController (`AssetTypes.h`; the animation types belong to the Animation module). See
 [Asset pipeline](#asset-pipeline) and [Streaming and residency](#streaming-and-residency).
 
 **Renderer** (`Renderer/`). `GraphicsDevice` is the device interface (NVRHI on Vulkan, implemented in
@@ -224,6 +225,12 @@ API; mixing runs on miniaudio's audio thread, or is pulled with `AdvanceNullDevi
 with settings, and `AudioSystem` the "Audio" scene system (Play only), which offers the scene service `IAudioPlayback`;
 the module registers the engine service `IAudioOutput` (master volume). Details: AGENTS.md, "Audio".
 
+**Animation** (`Animation/`). Skeletal animation's assets: `Skeleton` (joint names, parents in topological order, rest
+pose; the cooked `STSK` form), `AnimationClip` (per-joint translation, rotation and scale channels with step, linear and
+cubic spline interpolation, bound to skeletons by joint name; the cooked `STAC` form; `ReduceKeys` is the importer's
+keyframe reduction) and `AnimationController` (the `.stanimator` document: parameters, states, transitions, events),
+whose loaders `RegisterAnimationModule` registers. `AnimationTypes.h` has the joint pose and its math.
+
 **Scripting** (`Scripting/`). `ScriptEngine` (the loaded module, hot reload, faults, optional watchdog),
 `ScriptModule` (loading, validation and guarded calls), `ScriptSystem` (the "Scripting" scene system: instances and
 callbacks), `ScriptHostAPI` (the host function table), `ScriptValue` (ABI value conversions), `ScriptTypes`
@@ -286,12 +293,13 @@ layer and of the layers it lists, which are always lower ones:
 | Scene | `Scene/**` | Core, Asset, Reflection |
 | Renderer | `Renderer/**`, `Platform/Vulkan/**` | Core, Input, App, Asset, Reflection, Scene |
 | Physics, Audio | `Physics/**`, `Audio/**` | Core, Asset, Reflection, Scene |
+| Animation | `Animation/**` | Core, Asset, Reflection, Scene |
 | Scripting | `Scripting/**` | Core, Input, Asset, Reflection, Scene |
 | Project | `Project/**` | Core, Asset, Reflection |
 | Runtime | `Runtime/**` | Core, Input, App, Asset, Reflection, Scene, Renderer, Physics, Audio, Scripting, Project |
 | Network | `Network/**`, `Platform/*/*Socket.cpp` | Core |
 | ImGui | `ImGui/**` | Core, Input, App, Renderer |
-| AssetPipeline | `Asset/EditorAssetManager.*`, `AssetImporter.*`, `AssetImporters.cpp`, `GltfImporter.*`, `TextureImporter.*`, `TextureCooker.*`, `BC7Encoder.*`, `AssetPackWriter.*`, `AssetDependencies.*` | Core, Asset, Reflection, Scene, Renderer, Audio |
+| AssetPipeline | `Asset/EditorAssetManager.*`, `AssetImporter.*`, `AssetImporters.cpp`, `GltfImporter.*`, `TextureImporter.*`, `TextureCooker.*`, `BC7Encoder.*`, `AssetPackWriter.*`, `AssetDependencies.*` | Core, Asset, Reflection, Scene, Renderer, Audio, Animation (the glTF importer writes skeletons and clips) |
 | Engine | `Engine/**`, `Strata.h` | everything but AssetPipeline (shipped games link the composition root too; see below) |
 
 `Architecture.Layering` (`StrataTests/src/Architecture/LayeringTests.cpp`, in `StrataTests.Core`) reads every C, C++ and
@@ -322,6 +330,7 @@ RegisterRendererModule     Renderer/RendererRegistration.cpp   Texture, Mesh, Ma
 RegisterScriptingModule    Scripting/ScriptingRegistration.cpp "Scripting" system
 RegisterPhysicsModule      Physics/PhysicsRegistration.cpp     "Physics" system
 RegisterAudioModule        Audio/AudioRegistration.cpp         AudioClip loader, "Audio" system
+RegisterAnimationModule    Animation/AnimationRegistration.cpp Skeleton, AnimationClip, AnimationController loaders
 options.AssetPipeline      RegisterAssetPipeline, Asset/AssetImporters.cpp: opens the importer registry, importers
 options.Extra              registrations of games, tools and tests
 ComponentRegistry::Freeze
@@ -735,7 +744,7 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
 
   | Type | Sources | Importer | Stored form |
   | --- | --- | --- | --- |
-  | Scene, Prefab, Material | `.stscene .stprefab .stmat` | `NativeAssetImporter` | the JSON source |
+  | Scene, Prefab, Material, AnimationController | `.stscene .stprefab .stmat .stanimator` | `NativeAssetImporter` | the JSON source |
   | Texture | `.png .jpg .jpeg .tga .bmp .psd .gif .hdr` | `TextureImporter` | cooked `STTX` texture (see [Texture cooking](#texture-cooking)) |
   | Model | `.gltf .glb` | `GltfImporter` | entity template; Mesh, Material, Texture sub-assets |
   | AudioClip | `.wav .mp3 .flac .ogg` | `AudioClipImporter` | `STAU` header + the encoded file |

@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Engine/BuiltinModules.h"
 
+#include "Strata/Animation/AnimationRegistration.h"
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Audio/AudioRegistration.h"
@@ -51,12 +52,14 @@ namespace Strata::Engine
 		SceneSystemRegistry::BeginRegistration();
 
 		// Lower layers first. A scene system can only name registered systems in its update order: Physics runs after
-		// Scripting and Audio after Physics, so Scripting registers before Physics and Physics before Audio.
+		// Scripting and Audio after Physics, so Scripting registers before Physics and Physics before Audio; Animation runs
+		// between Scripting and Physics, so it registers after both.
 		RegisterSceneModule();
 		RegisterRendererModule();
 		RegisterScriptingModule();
 		RegisterPhysicsModule();
 		RegisterAudioModule();
+		RegisterAnimationModule();
 		// Tooling, handed in by the program (see ModuleRegistrationOptions::AssetPipeline).
 		if (options.AssetPipeline)
 			options.AssetPipeline();

@@ -56,6 +56,12 @@
 			"MayInclude": [ "Core", "Asset", "Reflection", "Scene" ]
 		},
 		{
+			"Name": "Animation",
+			"Notes": "Skeletons, clips, animation controllers and the Animation scene system. The renderer never includes it: poses reach it through the scene service ISkinningPoses (Scene/SceneServices.h), and scripts reach animators through IAnimatorControl.",
+			"Paths": [ "Strata/Animation/**" ],
+			"MayInclude": [ "Core", "Asset", "Reflection", "Scene" ]
+		},
+		{
 			"Name": "Scripting",
 			"Paths": [ "Strata/Scripting/**" ],
 			"MayInclude": [ "Core", "Input", "Asset", "Reflection", "Scene" ]
@@ -84,15 +90,15 @@
 		},
 		{
 			"Name": "AssetPipeline",
-			"Notes": "Importers, the texture cooker and its BC7 encoder, the editor's asset database, the dependency scanner and the pack writer (tooling, never in shipped games: games only read packs, so they link no compressor).",
+			"Notes": "Importers, the texture cooker and its BC7 encoder, the editor's asset database, the dependency scanner and the pack writer (tooling, never in shipped games: games only read packs, so they link no compressor). Animation is a proven downward dependency: the glTF importer writes the stored forms of skeletons and clips, and the dependency scanner reads the clips an animation controller plays.",
 			"Paths": [ "Strata/Asset/EditorAssetManager.*", "Strata/Asset/AssetImporter.*", "Strata/Asset/AssetImporters.cpp", "Strata/Asset/GltfImporter.*", "Strata/Asset/TextureImporter.*", "Strata/Asset/TextureCooker.*", "Strata/Asset/BC7Encoder.*", "Strata/Asset/AssetPackWriter.*", "Strata/Asset/AssetDependencies.*" ],
-			"MayInclude": [ "Core", "Asset", "Reflection", "Scene", "Renderer", "Audio" ]
+			"MayInclude": [ "Core", "Asset", "Reflection", "Scene", "Renderer", "Audio", "Animation" ]
 		},
 		{
 			"Name": "Engine",
 			"Notes": "The composition root (Engine/BuiltinModules) and the umbrella header applications include. Both are part of every program, shipped games included, so they never name the asset pipeline: tools hand its registration in (ModuleRegistrationOptions::AssetPipeline), and the importers stay out of games.",
 			"Paths": [ "Strata/Engine/**", "Strata.h" ],
-			"MayInclude": [ "Core", "Input", "App", "Asset", "Reflection", "Scene", "Renderer", "Physics", "Audio", "Scripting", "Project", "Runtime", "Network", "ImGui" ]
+			"MayInclude": [ "Core", "Input", "App", "Asset", "Reflection", "Scene", "Renderer", "Physics", "Audio", "Animation", "Scripting", "Project", "Runtime", "Network", "ImGui" ]
 		}
 	]
 }

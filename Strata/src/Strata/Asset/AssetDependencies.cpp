@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Asset/AssetDependencies.h"
 
+#include "Strata/Animation/AnimationController.h"
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Reflection/PropertyJson.h"
@@ -56,11 +57,12 @@ namespace Strata
 		{
 			switch (type)
 			{
-				case AssetType::Scene:    return "Scene";
-				case AssetType::Prefab:   return "Prefab";
-				case AssetType::Model:    return "Model";
-				case AssetType::Material: return "Material";
-				default:                  return {};
+				case AssetType::Scene:               return "Scene";
+				case AssetType::Prefab:              return "Prefab";
+				case AssetType::Model:               return "Model";
+				case AssetType::Material:            return "Material";
+				case AssetType::AnimationController: return "AnimationController";
+				default:                             return {};
 			}
 		}
 
@@ -147,9 +149,22 @@ namespace Strata
 
 		ReferenceList references(outReferences);
 		if (type == AssetType::Material)
+		{
 			ScanProperties(Material::GetPropertyInfos(), *content, references);
+		}
+		else if (type == AssetType::AnimationController)
+		{
+			// The clips of its states.
+			const std::optional<AnimationControllerData> controller = AnimationController::DataFromJson(*content, outError);
+			if (!controller)
+				return false;
+			for (const AnimationState& state : controller->States)
+				references.Add(state.Clip);
+		}
 		else
+		{
 			ScanEntitiesInto(*content, references);
+		}
 		return true;
 	}
 

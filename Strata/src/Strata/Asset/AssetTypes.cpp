@@ -8,15 +8,18 @@ namespace Strata
 	{
 		switch (type)
 		{
-			case AssetType::None:      return "None";
-			case AssetType::Scene:     return "Scene";
-			case AssetType::Prefab:    return "Prefab";
-			case AssetType::Model:     return "Model";
-			case AssetType::Mesh:      return "Mesh";
-			case AssetType::Material:  return "Material";
-			case AssetType::Texture:   return "Texture";
-			case AssetType::AudioClip: return "AudioClip";
-			case AssetType::Font:      return "Font";
+			case AssetType::None:                return "None";
+			case AssetType::Scene:               return "Scene";
+			case AssetType::Prefab:              return "Prefab";
+			case AssetType::Model:               return "Model";
+			case AssetType::Mesh:                return "Mesh";
+			case AssetType::Material:            return "Material";
+			case AssetType::Texture:             return "Texture";
+			case AssetType::AudioClip:           return "AudioClip";
+			case AssetType::Font:                return "Font";
+			case AssetType::Skeleton:            return "Skeleton";
+			case AssetType::AnimationClip:       return "AnimationClip";
+			case AssetType::AnimationController: return "AnimationController";
 		}
 		return "None";
 	}
@@ -25,7 +28,8 @@ namespace Strata
 	{
 		constexpr AssetType types[] = {
 			AssetType::None, AssetType::Scene, AssetType::Prefab, AssetType::Model, AssetType::Mesh,
-			AssetType::Material, AssetType::Texture, AssetType::AudioClip, AssetType::Font
+			AssetType::Material, AssetType::Texture, AssetType::AudioClip, AssetType::Font,
+			AssetType::Skeleton, AssetType::AnimationClip, AssetType::AnimationController
 		};
 		for (AssetType type : types)
 		{
@@ -39,10 +43,11 @@ namespace Strata
 	{
 		switch (type)
 		{
-			case AssetType::Scene:    return ".stscene";
-			case AssetType::Prefab:   return ".stprefab";
-			case AssetType::Material: return ".stmat";
-			default:                  return {};
+			case AssetType::Scene:               return ".stscene";
+			case AssetType::Prefab:              return ".stprefab";
+			case AssetType::Material:            return ".stmat";
+			case AssetType::AnimationController: return ".stanimator";
+			default:                             return {};
 		}
 	}
 

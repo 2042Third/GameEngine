@@ -44,8 +44,9 @@ together (targets, modules, frame loop, threading, asset pipeline, scripting, ed
 Engine modules (`Strata/src/Strata/`): `Core` (application, logging, jobs, platform services),
 `Events`, `Input`, `Math`, `Reflection`, `Scene` (ECS, components, serialization, prefabs),
 `Asset` (asset database, importers, cooking, streaming, packs), `Renderer`, `Physics`, `Audio`,
-`Scripting`, `Project` (projects, game manifests), `Runtime` (running exported games), `Network` (sockets,
-JSON-RPC, editor automation sessions), `ImGui`, `Engine` (the composition root that registers every module).
+`Animation` (skeletons, clips, animation controllers), `Scripting`, `Project` (projects, game manifests), `Runtime`
+(running exported games), `Network` (sockets, JSON-RPC, editor automation sessions), `ImGui`, `Engine` (the composition
+root that registers every module).
 
 ## Building
 
@@ -449,7 +450,7 @@ The threading model, frame loop and pipelines these rules protect are described 
   `ImportContext::IsCancelled` between pieces of work that take milliseconds (a new importer with long loops must too;
   the texture cooker checks per block) and read project files through `ReadImportSource`/`ReadImportDependency` (under the
   manager's file lock, nothing once cancelled). Docs/Architecture.md, "Cancelling imports".
-- Engine-native assets (`.stscene`, `.stprefab`, `.stmat`) are JSON documents with a
+- Engine-native assets (`.stscene`, `.stprefab`, `.stmat`, `.stanimator`) are JSON documents with a
   `{ "Strata": { "Format": ..., "Version": ... } }` header, stored as-is. Their loaders validate fully;
   JSON entry points are named `FromJson`, byte entry points `Deserialize`.
 - Importers may produce sub-assets (e.g. meshes of a model); their handles are derived from the parent
