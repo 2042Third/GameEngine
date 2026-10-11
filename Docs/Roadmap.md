@@ -66,8 +66,9 @@ module-foundation, ran as its own workstream):
 **Wave 2 landed (2026-10-11).** Seven workstreams merged into one integration branch on 2026-10-10, in the order
 perf-gates, physics-at-scale, texture-cook-v2, pack-v2, render-scene, streaming-observatory, editor-authoring; the
 integration then did the wiring the workstreams left to whichever of them merged second, a review round fixed what its
-reviewers found, and three branches fixed what the review's verification still found. Numbers are Release builds on
-the reference machine, quiet:
+reviewers found, and three branches fixed what the review's verification still found; the merged tree's verification
+then corrected two outcomes recorded here and brought the stress world's loading speed back in code. Numbers are
+Release builds on the reference machine, quiet:
 
 - `perf-gates`: perf checks that confirm a failure by measuring again (up to three attempts, each printed and recorded)
   and every limit in `StrataTests/Perf/Budgets.json` (an optional roadmap `Target` next to the gating budget), each
@@ -129,8 +130,14 @@ the reference machine, quiet:
 - The review's verification left three problems, each fixed on a branch of its own and merged on 2026-10-11:
   - `idle-frames`: the merged editor's idle frame cost 0.04-0.06 ms more than wave 1's (0.29-0.32 ms against 0.23-0.26
     ms, `PerfGPU.Editor`'s command script on the generated nested scenes), and main's budgets, restored, failed about
-    one perf run in five. The editor's idle frames are now cheaper than wave 1's: 0.18-0.23 ms (medians of 8
-    interleaved rounds). ImGui's platform layer is the engine's own (`ImGuiPlatform`, fed by the window's events): the
+    one perf run in five. That gap is gone. Measured against wave 1's editor in interleaved rounds of the same test
+    (medians of 16 rounds at the verification and of 7 later, wave 1 against now), editing 100,000 entities is 0.06 ms
+    cheaper (0.252 against 0.192 ms, 0.274 against 0.208), and the other three idle frames cost what wave 1's do within
+    the spread between processes: editing 1,000,000 entities 0.220 against 0.216 and 0.252 against 0.206 ms, playing
+    100,000 0.237 against 0.244 and 0.244 against 0.246, playing 1,000,000 0.255 against 0.272 and 0.264 against 0.261.
+    The playing frames spread most, wave 1's as well (0.18-0.32 ms between processes, and up to 0.1 ms between
+    consecutive waits of one process, in later waits as in the first after `play.start`, so an unmeasured warm-up wait
+    would not narrow it). ImGui's platform layer is the engine's own (`ImGuiPlatform`, fed by the window's events): the
     vendored GLFW backend spent 0.05-0.06 ms of every frame on multi-viewport support the editor does not use (the
     window's mouse passthrough, the monitors, a hook of the window procedure). The Inspector's scene settings start
     closed, with summaries (open, their rows cost 0.026 ms of a frame), the UI's vertices go straight into mapped
@@ -159,7 +166,9 @@ the reference machine, quiet:
     through loading went from 136 to 82 MiB), the output texture exists only when a frame composes overlays or text
     (-8 MB), games write no entity-ID buffer (`SceneRendererSpecification::EntityIDs`, -8 MB), meshes release their
     vertex attributes once uploaded (physics keeps positions and indices, -9.5 MB), and ambient occlusion is half
-    precision where the device stores r16f images (-8 MB). The stress world loads by frame 10-11 either way.
+    precision where the device stores r16f images (-8 MB). Halving the staging budget made the world with every
+    texture in view load later, though: resident by frame 10-11 instead of 6-7, because staging was reused two frames
+    after its release (about 13 instead of 22 MB uploaded per frame).
 - The three merged cleanly (one conflict, in this file). The draw sort then got cheaper: `RadixSort` reads the keys once
   and builds histograms and passes only for the bytes that differ (the 100,000 cubes of a grid share one key), which
   took `SceneRenderer::Render` of 100,000 cubes from 0.91 to 0.64 ms and of 300,000 from 2.92 to 2.44 ms (medians of 8
@@ -177,6 +186,18 @@ the reference machine, quiet:
   stress pack's world streams in 1.07 times version 1's time (1.03-1.09, the acceptance limit is 1.1). Budgets went
   down with the round's measurements (1.5 times the median of quiet runs): the six the sort made cheaper and four
   editor frames the UI work made cheaper.
+- The verification of the merged tree found two of these outcomes misstated (the idle frames against wave 1's and the
+  stress world's loading, corrected above). The loading came back in code: staging is reused once the GPU has run the
+  copies that read it (the asset managers fence their uploads when they execute them, `Renderer::ExecuteUploads`, and
+  the pool polls its fences when a step finds no room), and the steps after a frame's first leave one step of the
+  budget to the next frame's first, so staging stays within its 32 MiB. With every texture
+  in view the world is resident from frame 9 (6-10) instead of 10 (10-15), 33 instead of 80 ms after the first frame
+  (medians of 10 interleaved runs each), at the same peak memory (606 against 603 MB); frames that come faster than
+  the GPU runs the copies still upload about half the budget each. `PerfStability.py --runs 3 --wait-quiet 20`
+  afterwards: 3 of 3 runs passed, 84 metrics each, none needed a confirmation (the canary at 0.95-0.96 of its
+  reference); medians: the exported game with every texture resident 595 MB (590-603), the exported game's longest
+  finalization 4.14 ms and the evicting sweep's 3.81 ms (3.73-4.22), the stress pack's world 1.045 times version 1's
+  time.
 
 Open items and deferrals later waves own:
 
@@ -264,7 +285,12 @@ Open items and deferrals later waves own:
   memory stress test passes (or XMP is off), one-off crashes and corrupt data on this machine are suspect; the save
   path's validation before writing, which turned the corruption into a refused save, stays. The integration's last round
   on the updated machine (2026-10-11: Debug and Release builds, 402 GCC translation units, full test runs in both
-  configurations, 20 perf runs) saw no crash.
+  configurations, 20 perf runs) saw no crash; the round after it did. The compiler crashed again (`c2.dll`, an access
+  violation, in a file that compiled on the retry), and within four minutes three processes failed around
+  `PerfGPU.Editor`'s million-entity scene: wave 1's Release editor opening it (an access violation), the test runner
+  writing it (an access violation) and the merged editor opening it (no progress for 10 minutes, the test's timeout).
+  The 55 runs of the same steps that followed (40 driving the editor directly, 15 through the test, some under a full
+  Debug test run) all passed, and Windows logged no hardware error.
 
 ## Waves
 
