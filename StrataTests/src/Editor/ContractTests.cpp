@@ -6,6 +6,8 @@
 #include "Editor/HarnessEditor.h"
 #include "Editor/PropertyEdit.h"
 #include "TestHelpers.h"
+#include "UI/ItemProbe.h"
+#include "UI/RecoveryDialog.h"
 
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Reflection/ComponentRegistry.h>
@@ -113,6 +115,9 @@ TEST_SUITE("Editor.UI.Dialogs")
 			== EditorCommandError::InvalidParameters);
 		CHECK(editor.Layer->GetCommands().Execute(editor.Context(), "editor.showDialog", { { "dialog", "newProject" }, { "template", "nope" } }).ErrorKind
 			== EditorCommandError::InvalidParameters);
+		// Recovery data belongs to a project.
+		CHECK(editor.Layer->GetCommands().Execute(editor.Context(), "editor.showDialog", { { "dialog", "recovery" } }).ErrorKind
+			== EditorCommandError::Failed);
 
 		editor.Run("editor.showDialog", { { "dialog", "about" } });
 		editor.Frames(2);
@@ -127,6 +132,19 @@ TEST_SUITE("Editor.UI.Dialogs")
 		editor.Run("editor.showDialog", { { "dialog", "export" } });
 		editor.Frames(2);
 		CHECK(editor.Layer->GetExportDialog().IsOpen());
+	}
+
+	TEST_CASE("editor.showDialog shows the person what can be recovered")
+	{
+		HarnessEditor editor({}, WithFeatureProject("ShowRecovery"));
+		editor.Frames(2);
+		REQUIRE(editor.Context().HasProject());
+		// An agent that discarded the person's changes shows them where they are.
+		editor.Run("entity.create", { { "name", "Kept" } });
+		editor.Run("scene.new", { { "force", true } });
+		editor.Run("editor.showDialog", { { "dialog", "recovery" } });
+		CHECK(editor.FramesUntil([&]() { return UI::ItemProbe::Find("Recovery.Recover.0").has_value(); }));
+		CHECK(editor.Layer->GetRecoveryDialog().IsOpen());
 	}
 
 	TEST_CASE("editor.showDialog opens New Project with its template")

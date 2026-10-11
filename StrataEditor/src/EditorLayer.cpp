@@ -136,10 +136,12 @@ namespace Strata
 		m_Commands.Register({ "editor.showDialog",
 			"Opens a dialog of the editor's window for the person at it, e.g. to show what you are about to do or for a screenshot: export (the "
 			"Export Game dialog; needs a project), newProject (New Project, with template preselected), openSample (Open Sample: where to copy "
-			"the sample, the first one by default; see project.samples) or about (About Strata). The project dialogs ask about unsaved scene "
-			"changes first. Changes no scene data and records no undo; fails in an editor without a window (--no-gpu or headless).",
+			"the sample, the first one by default; see project.samples), recovery (Recover Unsaved Changes: the project's recovery data that "
+			"scene.recoveryStatus lists, for the person to recover or discard; needs a project, and closes by itself when nothing applies) or "
+			"about (About Strata). The project dialogs ask about unsaved scene changes first. Changes no scene data and records no undo; fails in "
+			"an editor without a window (--no-gpu or headless).",
 			CommandUtils::ObjectSchema({
-				{ "dialog", { { "type", "string" }, { "enum", { "export", "newProject", "openSample", "about" } }, { "description", "The dialog to open" } } },
+				{ "dialog", { { "type", "string" }, { "enum", { "export", "newProject", "openSample", "recovery", "about" } }, { "description", "The dialog to open" } } },
 				{ "template", CommandUtils::StringSchema("newProject: the template to preselect (project.templates; default basic3d)") },
 				{ "sample", CommandUtils::StringSchema("openSample: the sample to copy (project.samples; default: the first one)") } }, { "dialog" }),
 			[this](EditorContext& context, const nlohmann::json& parameters) -> EditorCommandResult
@@ -150,8 +152,11 @@ namespace Strata
 				std::string sample = arguments.GetString("sample", "");
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				if (dialog != "export" && dialog != "newProject" && dialog != "openSample" && dialog != "about")
-					return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'dialog': the editor has no dialog '{}' (export, newProject, openSample, about)", dialog));
+				if (dialog != "export" && dialog != "newProject" && dialog != "openSample" && dialog != "recovery" && dialog != "about")
+				{
+					return EditorCommandResult::InvalidParameters(
+						fmt::format("Parameter 'dialog': the editor has no dialog '{}' (export, newProject, openSample, recovery, about)", dialog));
+				}
 				if (!templateId.empty() && !ProjectTemplates::Find(templateId))
 					return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'template': unknown template '{}' (templates: {})", templateId, ProjectTemplates::ListIds()));
 				if (m_Options.Headless)
@@ -178,6 +183,14 @@ namespace Strata
 					else if (std::none_of(samples->begin(), samples->end(), [&sample](const ProjectSample& offered) { return offered.Id == sample; }))
 						return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'sample': no sample '{}' (see project.samples)", sample));
 					ShowOpenSampleDialog(sample);
+				}
+				else if (dialog == "recovery")
+				{
+					if (!context.HasProject())
+						return EditorCommandResult::Fail("No project is open: recovery data belongs to a project (project.open first)");
+					// Read again, for what another editor left since: the dialog waits for the scan.
+					context.GetRecovery().Scan();
+					ShowRecoveryDialog();
 				}
 				else
 				{

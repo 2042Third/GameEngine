@@ -164,7 +164,8 @@ editor started with `--no-gpu` (use `--headless`):
   there and listed at once (the newest 8 discards stay on offer, older ones move to `Recovery/Discarded`; what a crash
   left always stays). When a project opens with changes an editor left behind, `scene.recoveryStatus` lists them;
   `scene.recover {"scene": "<id>", "action": "apply"}` reopens the scene with them as one undo step (the scene stays unsaved: save
-  it), `"discard"` drops them. Ask the person before recovering or discarding their changes.
+  it), `"discard"` drops them. Ask the person before recovering or discarding their changes, or show them the choice:
+  `editor.showDialog {"dialog": "recovery"}`.
 - **Play mode**: `play.start` runs a copy of the scene. Changes made while playing apply to that copy, carry a
   `warning` in the result, and are discarded by `play.stop`. Undo and redo are not available while playing;
   `scene.save` saves the edited scene, never the running copy.
@@ -250,7 +251,8 @@ person at the editor sees the same in the Performance panel (click the frame pil
 `asset.stats` in the Streaming panel (click the assets pill); `editor.showPanel {"panel": "Streaming"}` (or
 `"Performance"`, `"Console"`, `"Activity"`, ...) brings one to the front for them, also as the first command of a script
 (it fails while no project is open: the editor then shows its launcher instead of panels). `editor.showDialog {"dialog":
-"export" | "newProject" | "openSample" | "about"}` opens a dialog of the window the same way.
+"export" | "newProject" | "openSample" | "recovery" | "about"}` opens a dialog of the window the same way ("recovery" lets the
+person choose what to recover or discard, instead of you choosing for them).
 
 **Play it (simulated input)**: while the game runs (`play.start`), the `input.*` commands press keys and buttons the way a
 player would; scripts see them through `Input::IsKeyDown/IsKeyPressed/IsKeyReleased` (also while the viewport has no focus).

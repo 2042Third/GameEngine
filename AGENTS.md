@@ -756,7 +756,7 @@ and `AudioSystem`, the built-in "Audio" scene system.
     jobs`, jobs running or queued averaged over 60 frames) opens the Performance panel. Panels collect what the status bar
     shows about them in `OnUpdate`, which runs while they are closed. Widgets drawn every frame write tooltips that take
     work (formatted statistics) only while they show (`UI::IsTooltipDue`). `editor.showPanel {panel}` (registered by
-    `EditorLayer`, like `editor.showDialog {dialog: "export" | "newProject" | "openSample" | "about"}`, the commands of the
+    `EditorLayer`, like `editor.showDialog {dialog: "export" | "newProject" | "openSample" | "recovery" | "about"}`, the commands of the
     window itself) opens a docked panel and brings it to the front, so agents can show the person what they look at; it
     fails while the launcher shows. A panel asked for (`EditorPanelRegistry::Focus`)
     stays open through a layout reset and the saved open states read at the first frame, and is asked for again until its
