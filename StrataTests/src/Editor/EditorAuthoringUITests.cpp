@@ -619,6 +619,15 @@ TEST_SUITE("Editor.UI.Hierarchy")
 		CHECK(UI::ItemProbe::Find("Hierarchy.PlayBanner").has_value());
 		CHECK(UI::ItemProbe::Find("Inspector.PlayBanner").has_value());
 		CHECK(UI::ItemProbe::Find("Inspector.PlayBanner")->Text == "Playing: changes are discarded when play stops");
+		// Paused, the banners say so (in the paused color, with the pause icon).
+		editor.Run("play.pause", { { "paused", true } });
+		editor.Frames(2);
+		CHECK(UI::ItemProbe::Find("Inspector.PlayBanner")->Text == "Paused: changes are discarded when play stops");
+		CHECK(UI::ItemProbe::Find("Hierarchy.PlayBanner")->Text == "Paused: changes are discarded when play stops");
+		CHECK(UI::ItemProbe::Find("Inspector.PlayBanner")->Color == UI::ToColorU32(UI::GetThemeColors().PlayState.Paused));
+		editor.Run("play.pause", { { "paused", false } });
+		editor.Frames(2);
+		CHECK(UI::ItemProbe::Find("Hierarchy.PlayBanner")->Text == "Playing: changes are discarded when play stops");
 		editor.Run("play.stop");
 		editor.Frames(2);
 		CHECK_FALSE(UI::ItemProbe::Find("Hierarchy.PlayBanner").has_value());

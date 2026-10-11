@@ -204,7 +204,9 @@ namespace Strata
 
 		if (context.IsPlaying())
 		{
-			UI::Banner("Hierarchy.PlayBanner", Icons::Play, "Playing: changes are discarded when play stops", GetPlayStateColor(context));
+			const bool paused = context.IsPaused();
+			UI::Banner("Hierarchy.PlayBanner", paused ? Icons::Pause : Icons::Play,
+				paused ? "Paused: changes are discarded when play stops" : "Playing: changes are discarded when play stops", GetPlayStateColor(context));
 			ImGui::Spacing();
 		}
 		DrawHeader(context, commands);

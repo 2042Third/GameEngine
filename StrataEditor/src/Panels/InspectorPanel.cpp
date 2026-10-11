@@ -230,7 +230,9 @@ namespace Strata
 		const EditorCommandRegistry& commands = panelContext.Commands;
 		if (context.IsPlaying())
 		{
-			UI::Banner("Inspector.PlayBanner", Icons::Play, "Playing: changes are discarded when play stops", GetPlayStateColor(context));
+			const bool paused = context.IsPaused();
+			UI::Banner("Inspector.PlayBanner", paused ? Icons::Pause : Icons::Play,
+				paused ? "Paused: changes are discarded when play stops" : "Playing: changes are discarded when play stops", GetPlayStateColor(context));
 			ImGui::Spacing();
 		}
 
