@@ -56,8 +56,9 @@ namespace Strata
 		static Ref<Mesh> Deserialize(std::span<const uint8_t> data, std::string* outError = nullptr);
 
 		// Creates the GPU vertex and index buffers and uploads the geometry into them in steps of at most
-		// c_AssetUploadStepBytes, as far as the context's budget allows (Pending: the next call continues). The CPU geometry
-		// stays for physics and picking.
+		// c_AssetUploadStepBytes, as far as the context's budget allows (Pending: the next call continues). Steps go through
+		// staging buffers of the renderer's pool (StagingPool) and wait for staging room within the context's StagingBytes
+		// like texture bands, except the frame's first. The CPU geometry stays for physics and picking.
 		AssetFinalizeResult FinalizeOnMainThread(const AssetFinalizeContext& context) override;
 		// The CPU geometry and, once uploaded, the GPU buffers (each counted once, in its own pool).
 		AssetMemoryUsage GetMemoryUsage() const override;

@@ -63,12 +63,12 @@ namespace Strata
 	// Assets that upload in steps of at most c_AssetUploadStepBytes (textures: bands of rows; meshes: ranges of their
 	// buffers) take no further step once the next one would exceed UploadBudget or end after Deadline; a call's first step
 	// is exempt from these two, so a frame's uploads overshoot them by one step at most and an asset larger than any budget
-	// still arrives. Steps through staging memory (texture bands) also wait while StagingBytes of staging are in flight:
-	// staging becomes reusable once the frames that copy from it are done (Renderer::BeginFrame), so budgeted texture
-	// uploads need device frames to go on at full speed. Only the frame's first step (nothing uploaded yet, *UploadedBytes
-	// == 0) is exempt from that wait: every frame makes progress, but a later call may take no step at all (Pending without
-	// uploading). The manager itself may also hold an arrival back until memory evicted for it is released (see
-	// AssetManagerBase::Update).
+	// still arrives. Steps through staging memory (texture bands, mesh ranges) also wait while the staging in flight leaves
+	// no room within StagingBytes: staging becomes reusable once the GPU has finished the frame that copied from it (polled
+	// in Renderer::BeginFrame), so budgeted uploads need device frames to go on at full speed. Only the frame's first step
+	// (nothing uploaded yet, *UploadedBytes == 0) is exempt from that wait: every frame makes progress, but a later call may
+	// take no step at all (Pending without uploading). The manager itself may also hold an arrival back until memory
+	// evicted for it is released (see AssetManagerBase::Update).
 	struct AssetFinalizeContext
 	{
 		nvrhi::ICommandList* CommandList = nullptr; // Upload command list; null when no renderer is running

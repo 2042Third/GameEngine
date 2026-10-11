@@ -377,7 +377,7 @@ namespace Strata
 		// pile up staging, except the frame's first step (nothing uploaded yet): every frame makes progress, also where no
 		// device frames recycle staging (tools, tests). Unbudgeted calls (LoadAssetSync, memory assets) have no staging
 		// limit and finish.
-		const StagingTexturePool& stagingPool = Renderer::GetStagingTextures();
+		const StagingPool& stagingPool = Renderer::GetStagingPool();
 		const bool framesFirstCall = !context.UploadedBytes || *context.UploadedBytes == 0;
 		uint64_t uploaded = 0;
 		bool firstStep = true;
@@ -394,7 +394,8 @@ namespace Strata
 			const bool overTime = !(firstStep && context.FirstOfFrame) && (now >= context.Deadline || context.Deadline - now < predicted);
 			if (overBudget || overTime)
 				break;
-			const bool recorded = IsBlockCompressedFormat(m_Specification.Format) ? RecordBlockUploadStep(commandList, step) : RecordUploadStep(commandList, step);
+			const bool recorded = IsBlockCompressedFormat(m_Specification.Format) ? RecordBlockUploadStep(commandList, step, context.StagingBytes)
+				: RecordUploadStep(commandList, step, context.StagingBytes);
 			if (!recorded)
 			{
 				ST_CORE_ERROR("Texture '{}': no staging memory for its upload", m_Specification.DebugName);
@@ -494,7 +495,7 @@ namespace Strata
 		return step;
 	}
 
-	bool Texture::RecordUploadStep(nvrhi::ICommandList* commandList, const UploadStep& step)
+	bool Texture::RecordUploadStep(nvrhi::ICommandList* commandList, const UploadStep& step, uint64_t stagingLimit)
 	{
 		nvrhi::IDevice* device = Renderer::GetDevice();
 		const uint32_t levels = step.Tail ? m_MipCount - step.Level : 1;
@@ -503,9 +504,9 @@ namespace Strata
 		stagingDesc.height = step.Rows;
 		stagingDesc.mipLevels = levels;
 		stagingDesc.format = ToNvrhiFormat(m_Specification.Format);
-		// The pool hands it out again once the frames that may copy from it are done.
-		StagingTexturePool& stagingPool = Renderer::GetStagingTextures();
-		nvrhi::StagingTextureHandle staging = stagingPool.Acquire(stagingDesc);
+		// The pool hands it out again once the GPU has copied from it.
+		StagingPool& stagingPool = Renderer::GetStagingPool();
+		nvrhi::StagingTextureHandle staging = stagingPool.AcquireTexture(stagingDesc, stagingLimit);
 		if (!staging)
 			return false;
 
@@ -543,7 +544,7 @@ namespace Strata
 		return true;
 	}
 
-	bool Texture::RecordBlockUploadStep(nvrhi::ICommandList* commandList, const UploadStep& step)
+	bool Texture::RecordBlockUploadStep(nvrhi::ICommandList* commandList, const UploadStep& step, uint64_t stagingLimit)
 	{
 		// Copies between buffers and block-compressed images must cover whole blocks of the buffer: the staging rows are a
 		// whole number of blocks wide and every level starts on a block row. One single-level staging texture holds the
@@ -559,8 +560,8 @@ namespace Strata
 			stagingDesc.height += AlignUp(getRows(index), info.BlockHeight);
 		stagingDesc.mipLevels = 1;
 		stagingDesc.format = ToNvrhiFormat(m_Specification.Format);
-		StagingTexturePool& stagingPool = Renderer::GetStagingTextures();
-		nvrhi::StagingTextureHandle staging = stagingPool.Acquire(stagingDesc);
+		StagingPool& stagingPool = Renderer::GetStagingPool();
+		nvrhi::StagingTextureHandle staging = stagingPool.AcquireTexture(stagingDesc, stagingLimit);
 		if (!staging)
 			return false;
 

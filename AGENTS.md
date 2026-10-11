@@ -473,7 +473,7 @@ The threading model, frame loop and pipelines these rules protect are described 
   support get the blocks decoded at load time (`Texture::IsBlockCompressionSupported`, `BlockCompression`).
 - **Residency** ([Docs/Architecture.md](Docs/Architecture.md), "Streaming and residency"): memory is bounded by budgets
   per pool (`AssetResidencyBudgets`: GPU textures 50% and GPU buffers 15% of the device's memory budget, CPU unlimited;
-  128 MiB of loads in flight, 64 MiB and 4 ms of finalization per frame, 64 MiB of upload staging), and the least
+  128 MiB of loads in flight, 64 MiB and 4 ms of finalization per frame, 32 MiB of upload staging), and the least
   recently requested assets of a pool over budget are evicted. Hold `AssetHandle`s across frames, not `Ref`s, and
   request what you use every frame you use it (`GetAsset`): a held `Ref` keeps an asset from being evicted (it would
   free nothing), so it defeats the budget. Pin what gameplay must keep whether or not it is used
@@ -1040,10 +1040,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   pipelines with clockwise front faces and flip their tangent handedness (`c_InstanceMirrored`).
 - Everything streams: meshes, materials and textures that are still loading are skipped or drawn with
   fallbacks and counted in `SceneRendererStats::PendingAssets`; never block a frame on an asset. Asset uploads are
-  budgeted per frame and go in steps (Docs/Architecture.md, "Streaming and residency"); texture bands use the staging
-  textures of `Renderer::GetStagingTextures()` (`StagingTexturePool`, recycled in `Renderer::BeginFrame`), so code
-  that streams with a GPU must run device frames for staging to be reused (without them, a frame uploads only its first
-  step once the staging budget is used up).
+  budgeted per frame and go in steps (Docs/Architecture.md, "Streaming and residency"); texture bands and mesh ranges go
+  through the staging of `Renderer::GetStagingPool()` (`StagingPool`, recycled in `Renderer::BeginFrame`, all of it
+  within the staging budget), so code that streams with a GPU must run device frames for staging to be reused (without
+  them, a frame uploads only its first step once the staging budget is used up).
 - Material texture slots (`SampleMaterialTexture` in `Include/Scene.glsl`) pack the bindless slot, the sampler index and a
   grayscale bit (`RenderData::c_TextureSlotGrayscale`, from `TextureSpecification::Grayscale`). Normal maps are read as X
   and Y with Z reconstructed (`Forward.frag`), so BC5 and RGBA8 normal maps shade alike; a shader that reads a normal map

@@ -70,8 +70,9 @@ namespace Strata
 		// of 4x4 blocks for block-compressed formats), or every remaining level once they fit in one band, staging included
 		// (a block-compressed tail's staging is larger than its bytes, see RecordBlockUploadStep) - as far as the
 		// context's upload budget allows (Pending: the next call continues where this one stopped). Bands go through staging
-		// textures of the renderer's pool (StagingTexturePool), reused once the GPU has copied them; steps wait while the
-		// staging in flight is at the context's StagingBytes, except the frame's first. Once the chain is uploaded, takes a
+		// textures of the renderer's pool (StagingPool), reused once the GPU has copied them; steps wait while the staging in
+		// flight leaves no room within the context's StagingBytes, except the frame's first, and the pool keeps all of its
+		// staging within StagingBytes when it creates more (see StagingPool). Once the chain is uploaded, takes a
 		// bindless slot and releases the CPU copy (copied levels go as soon as they are uploaded, cooked bytes at the end).
 		// Freeing a large CPU copy is timed like a step: it waits for the next call (Pending) when it would end after the
 		// deadline. Fails for block-compressed formats the device cannot sample.
@@ -128,12 +129,13 @@ namespace Strata
 		uint64_t GetChainBytes() const;
 		// Bytes the CPU copy (cooked bytes and level data) holds allocated.
 		uint64_t GetCPUCopyBytes() const;
-		// Copies the step's pixels into a staging texture of the pool, records its copy into the GPU texture, releases copied
-		// levels that are complete and advances the upload position. False if no staging texture could be created or mapped.
-		bool RecordUploadStep(nvrhi::ICommandList* commandList, const UploadStep& step);
+		// Copies the step's pixels into a staging texture of the pool (which holds at most stagingLimit bytes of staging with
+		// it, StagingPool::AcquireTexture), records its copy into the GPU texture, releases copied levels that are complete and
+		// advances the upload position. False if no staging texture could be created or mapped.
+		bool RecordUploadStep(nvrhi::ICommandList* commandList, const UploadStep& step, uint64_t stagingLimit);
 		// The same for block-compressed formats, whose copies must cover whole blocks of the staging memory: a band of block
 		// rows, or the tail's levels stacked in one staging texture.
-		bool RecordBlockUploadStep(nvrhi::ICommandList* commandList, const UploadStep& step);
+		bool RecordBlockUploadStep(nvrhi::ICommandList* commandList, const UploadStep& step, uint64_t stagingLimit);
 		void CompleteUploadStep(const UploadStep& step, uint32_t levels);
 	private:
 		TextureSpecification m_Specification;

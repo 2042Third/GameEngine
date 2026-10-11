@@ -178,8 +178,8 @@ namespace Strata
 			"Sets the asset streaming budgets of the open project's asset manager (until the project closes; not undoable; fails without a "
 			"project): resident memory per pool in megabytes (1 MB = 1048576 bytes; assets over budget are evicted, least recently used first), "
 			"the megabytes of loads in flight, the GPU megabytes uploaded per frame, the main-thread milliseconds finalization may take per frame "
-			"and the staging megabytes texture uploads may hold (sustained texture uploads reach at most staging / (frames in flight + 1) per "
-			"frame, so raise both for a loading screen). Values must be greater than 0; reset: true starts from the defaults (derived from the "
+			"and the staging megabytes texture and mesh uploads may hold (sustained uploads reach at most half of the staging per frame, so "
+			"raise both for a loading screen). Values must be greater than 0; reset: true starts from the defaults (derived from the "
 			"GPU). Returns the budgets in effect (bytes, null = unlimited).",
 			ObjectSchema({
 				{ "gpuTexturesMB", { { "type", "number" }, { "exclusiveMinimum", 0 }, { "description", "Resident GPU texture memory, in MB" } } },
@@ -191,7 +191,7 @@ namespace Strata
 				{ "finalizeMsPerFrame", { { "type", "number" }, { "exclusiveMinimum", 0 },
 					{ "description", "Main-thread milliseconds finalization may take per frame" } } },
 				{ "stagingMB", { { "type", "number" }, { "exclusiveMinimum", 0 },
-					{ "description", "Staging memory texture uploads may hold while the GPU copies from it, in MB" } } },
+					{ "description", "Staging memory texture and mesh uploads may hold, in flight and idle, in MB" } } },
 				{ "reset", BoolSchema("Start from the default budgets before applying the given values (default false)") } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
