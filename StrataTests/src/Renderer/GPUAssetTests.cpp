@@ -9,6 +9,7 @@
 #include "Strata/Renderer/BlockCompression.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/MeshFactory.h"
+#include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/SceneRenderer.h"
 #include "Strata/Renderer/Texture.h"
 #include "TestHelpers.h"
@@ -291,13 +292,13 @@ namespace
 		return Texture::Create(specification, std::move(mips));
 	}
 
-	bool Upload(GraphicsDevice& device, Asset& asset)
+	// Finalizes the asset without a budget in a batch of the renderer's upload context, as a manager does.
+	bool Upload(Asset& asset)
 	{
-		nvrhi::CommandListHandle commandList = device.GetDevice()->createCommandList();
-		commandList->open();
-		const bool finalized = asset.FinalizeOnMainThread(AssetFinalizeContext { commandList, nullptr }) == AssetFinalizeResult::Done;
-		commandList->close();
-		device.GetDevice()->executeCommandList(commandList);
+		RendererUploadContext& upload = Renderer::GetUploadContext();
+		upload.Begin();
+		const bool finalized = asset.FinalizeOnMainThread(AssetFinalizeContext { &upload, nullptr }) == AssetFinalizeResult::Done;
+		upload.Submit();
 		return finalized;
 	}
 
@@ -317,7 +318,7 @@ TEST_SUITE("GPU.Assets")
 			std::vector<uint8_t> level0;
 			Ref<Texture> texture = CreatePatternTexture(format, level0);
 			REQUIRE(texture);
-			REQUIRE(Upload(gpu.GetDevice(), *texture));
+			REQUIRE(Upload(*texture));
 
 			REQUIRE(texture->GetGPUTexture());
 			CHECK(texture->GetGPUTexture()->getDesc().mipLevels == 3);
@@ -332,7 +333,7 @@ TEST_SUITE("GPU.Assets")
 			CHECK(texture->Serialize().empty()); // CPU copy released
 
 			// Finalizing twice is harmless.
-			CHECK(Upload(gpu.GetDevice(), *texture));
+			CHECK(Upload(*texture));
 			CHECK(bindless.GetAllocatedCount() == allocatedBefore + 1);
 
 			ReadbackImage image;
@@ -363,7 +364,7 @@ TEST_SUITE("GPU.Assets")
 		specification.Format = TextureFormat::RGBA16F;
 		Ref<Texture> texture = Texture::Create(specification, { level0 });
 		REQUIRE(texture);
-		REQUIRE(Upload(gpu.GetDevice(), *texture));
+		REQUIRE(Upload(*texture));
 		ReadbackImage image;
 		REQUIRE(Renderer::ReadTexture(texture->GetGPUTexture(), image));
 		CHECK(image.Format == nvrhi::Format::RGBA16_FLOAT);
@@ -379,7 +380,7 @@ TEST_SUITE("GPU.Assets")
 		REQUIRE(mesh);
 		const AssetMemoryUsage cpuOnly = mesh->GetMemoryUsage();
 		CHECK(cpuOnly.GetGpu() == 0);
-		REQUIRE(Upload(gpu.GetDevice(), *mesh));
+		REQUIRE(Upload(*mesh));
 
 		REQUIRE(mesh->GetPositionBuffer());
 		REQUIRE(mesh->GetAttributeBuffer());

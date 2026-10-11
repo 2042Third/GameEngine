@@ -334,7 +334,8 @@ namespace Strata
 
 	AssetFinalizeResult Texture::FinalizeOnMainThread(const AssetFinalizeContext& context)
 	{
-		nvrhi::ICommandList* commandList = context.CommandList;
+		const RendererUploadContext* upload = RendererUploadContext::From(context.Upload);
+		nvrhi::ICommandList* commandList = upload ? upload->GetCommandList() : nullptr;
 		if (!commandList || m_BindlessSlot != BindlessTextureTable::c_InvalidSlot)
 			return AssetFinalizeResult::Done; // No renderer (tools, tests): CPU data only; or finalized before
 

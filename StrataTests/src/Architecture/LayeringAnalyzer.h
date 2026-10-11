@@ -42,6 +42,9 @@ namespace Strata::Tests::Layering
 		std::vector<std::string> Paths;      // Globs of the files the layer holds, relative to the source root
 		std::vector<std::string> Exclude;    // Globs of files the paths match that belong to another layer
 		std::vector<std::string> MayInclude; // Lower layers this one may include (it may always include itself)
+		// Prefixes of third-party headers the layer may not include ("nvrhi/"): what a lower layer must not depend on even
+		// though no engine layer holds it (the asset layer knows no graphics API).
+		std::vector<std::string> MayNotIncludeExternal;
 	};
 
 	struct LayerTable
@@ -67,7 +70,8 @@ namespace Strata::Tests::Layering
 	// '#' and blank lines are skipped. Returns false (with the problems) for malformed and duplicate lines.
 	bool ParseAllowlist(std::string_view text, std::vector<AllowlistEntry>& outEntries, std::vector<std::string>& outErrors);
 
-	// An include of a file from a layer the including file's layer may not include.
+	// An include of a file from a layer the including file's layer may not include, or of a third-party header it may not
+	// include (External: HeaderLayer is then the forbidden prefix).
 	struct Violation
 	{
 		std::string File;
@@ -75,6 +79,7 @@ namespace Strata::Tests::Layering
 		std::string Header;
 		std::string FileLayer;
 		std::string HeaderLayer;
+		bool External = false;
 	};
 
 	struct LayeringReport
@@ -89,10 +94,12 @@ namespace Strata::Tests::Layering
 	// Checks every include of `files` (path relative to the source root -> contents). Includes resolve like the
 	// preprocessor's: a quoted one next to the including file first, then from the source root; an angle-bracket one from
 	// the source root only. Includes of files outside the set are still checked when a layer's paths match them (generated
-	// headers), and skipped otherwise (other targets', standard and third-party headers).
+	// headers); other targets', standard and third-party headers are checked only against the including layer's
+	// MayNotIncludeExternal prefixes.
 	LayeringReport CheckLayering(const LayerTable& table, const std::map<std::string, std::string>& files, const std::vector<AllowlistEntry>& allowlist);
 
-	// "<file>(<line>): includes <header>, but layer <A> may not include layer <B>"
+	// "<file>(<line>): includes <header>, but layer <A> may not include layer <B>", or for a third-party header "..., but layer
+	// <A> may not include third-party headers <prefix>*"
 	std::string Describe(const Violation& violation);
 
 }

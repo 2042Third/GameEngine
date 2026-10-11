@@ -52,15 +52,15 @@ namespace
 	// One finalization call on its own command list, executed and waited for.
 	AssetFinalizeResult FinalizeOnce(GPUContext& gpu, Asset& asset, uint64_t uploadBudget, uint64_t& outUploaded)
 	{
-		nvrhi::CommandListHandle commandList = gpu.GetNvrhiDevice()->createCommandList();
-		commandList->open();
-		AssetFinalizeContext context { commandList, nullptr };
+		RendererUploadContext& upload = Renderer::GetUploadContext();
+		upload.Begin();
+		AssetFinalizeContext context { &upload, nullptr };
 		context.UploadBudget = uploadBudget;
 		outUploaded = 0;
 		context.UploadedBytes = &outUploaded;
 		const AssetFinalizeResult result = asset.FinalizeOnMainThread(context);
-		commandList->close();
-		REQUIRE(gpu.ExecuteAndWait(commandList));
+		upload.Submit();
+		gpu.GetDevice().WaitForIdle();
 		return result;
 	}
 
@@ -514,15 +514,15 @@ TEST_SUITE("GPU.Assets.Uploads")
 		REQUIRE(chainBytes == 2796216);
 		REQUIRE(chainBytes <= Texture::c_UploadBandBytes);
 
-		const uint64_t pendingBefore = pool.GetPendingBytes();
+		const uint64_t acquiredBefore = pool.GetAcquiredBytes();
 		uint64_t uploaded = 0;
 		CHECK(FinalizeOnce(gpu, *texture, 1, uploaded) == AssetFinalizeResult::Pending);
 		CHECK(uploaded == level0Bytes);
-		const uint64_t level0Staging = pool.GetPendingBytes() - pendingBefore;
+		const uint64_t level0Staging = pool.GetAcquiredBytes() - acquiredBefore;
 		CHECK(level0Staging == level0Bytes);
 		CHECK(FinalizeOnce(gpu, *texture, 1, uploaded) == AssetFinalizeResult::Done);
 		CHECK(uploaded == chainBytes - level0Bytes);
-		const uint64_t tailStaging = pool.GetPendingBytes() - pendingBefore - level0Staging;
+		const uint64_t tailStaging = pool.GetAcquiredBytes() - acquiredBefore - level0Staging;
 		CHECK(tailStaging == 513ull * 2048);
 		// No step stages more than a band, and the chain as a whole about an eighth more than its blocks.
 		CHECK(level0Staging <= Texture::c_UploadBandBytes);
@@ -568,10 +568,10 @@ TEST_SUITE("GPU.Assets.Uploads")
 		Ref<Texture> second = Texture::Deserialize(std::vector<uint8_t>(cooked));
 		REQUIRE(first);
 		REQUIRE(second);
-		nvrhi::CommandListHandle commandList = gpu.GetNvrhiDevice()->createCommandList();
-		commandList->open();
+		RendererUploadContext& upload = Renderer::GetUploadContext();
+		upload.Begin();
 		uint64_t frameUploaded = 0;
-		AssetFinalizeContext context { commandList, nullptr };
+		AssetFinalizeContext context { &upload, nullptr };
 		context.UploadBudget = 64ull << 20;
 		context.StagingBytes = stagingBudget;
 		context.UploadedBytes = &frameUploaded;
@@ -581,8 +581,8 @@ TEST_SUITE("GPU.Assets.Uploads")
 		// A later call of the same frame takes no step at all.
 		CHECK(second->FinalizeOnMainThread(context) == AssetFinalizeResult::Pending);
 		CHECK(frameUploaded == Texture::c_UploadBandBytes);
-		commandList->close();
-		REQUIRE(gpu.ExecuteAndWait(commandList));
+		upload.Submit();
+		gpu.GetDevice().WaitForIdle();
 
 		// With room in a larger staging budget, both go on to the end.
 		uint64_t uploaded = 0;
@@ -619,10 +619,10 @@ TEST_SUITE("GPU.Assets.Uploads")
 		// frame's first leave 4 MiB: both bands of level 0 go (8 MiB), the rest does not.
 		StagingPool& pool = Renderer::GetStagingPool();
 		constexpr uint64_t c_StagingBudget = 12ull << 20;
-		nvrhi::CommandListHandle commandList = gpu.GetNvrhiDevice()->createCommandList();
-		commandList->open();
+		RendererUploadContext& upload = Renderer::GetUploadContext();
+		upload.Begin();
 		uint64_t frameUploaded = 0;
-		AssetFinalizeContext context { commandList, nullptr };
+		AssetFinalizeContext context { &upload, nullptr };
 		context.UploadBudget = 64ull << 20;
 		context.StagingBytes = c_StagingBudget;
 		context.UploadedBytes = &frameUploaded;
@@ -638,8 +638,8 @@ TEST_SUITE("GPU.Assets.Uploads")
 		CHECK(nextFrameUploaded == chainBytes - 2 * Texture::c_UploadBandBytes);
 		CHECK(pool.GetPendingBytes() == chainBytes);
 		CHECK(pool.GetPendingBytes() <= c_StagingBudget);
-		commandList->close();
-		REQUIRE(gpu.ExecuteAndWait(commandList));
+		upload.Submit();
+		gpu.GetDevice().WaitForIdle();
 
 		// Every band is in place.
 		ReadbackImage level0;
@@ -672,10 +672,10 @@ TEST_SUITE("GPU.Assets.Uploads")
 		REQUIRE(texture);
 		REQUIRE(texture->GetMemoryUsage().Cpu >= 1ull << 20);
 
-		nvrhi::CommandListHandle commandList = gpu.GetNvrhiDevice()->createCommandList();
-		commandList->open();
+		RendererUploadContext& upload = Renderer::GetUploadContext();
+		upload.Begin();
 		uint64_t uploaded = 0;
-		AssetFinalizeContext context { commandList, nullptr };
+		AssetFinalizeContext context { &upload, nullptr };
 		context.UploadBudget = 64ull << 20;
 		context.Deadline = std::chrono::steady_clock::now(); // Passed: only each call's first piece of work goes
 		context.UploadedBytes = &uploaded;
@@ -696,8 +696,8 @@ TEST_SUITE("GPU.Assets.Uploads")
 		REQUIRE(smallTexture);
 		CHECK(smallTexture->FinalizeOnMainThread(context) == AssetFinalizeResult::Done);
 		CHECK(smallTexture->GetMemoryUsage().Cpu == 0);
-		commandList->close();
-		REQUIRE(gpu.ExecuteAndWait(commandList));
+		upload.Submit();
+		gpu.GetDevice().WaitForIdle();
 
 		ReadbackImage level0;
 		REQUIRE(Renderer::ReadTexture(texture->GetGPUTexture(), level0, 0));
@@ -724,10 +724,10 @@ TEST_SUITE("GPU.Assets.Uploads")
 		Ref<Mesh> mesh = Mesh::Deserialize(sourceMesh->Serialize());
 		REQUIRE(mesh);
 
-		nvrhi::CommandListHandle commandList = gpu.GetNvrhiDevice()->createCommandList();
-		commandList->open();
+		RendererUploadContext& upload = Renderer::GetUploadContext();
+		upload.Begin();
 		uint64_t uploaded = 0;
-		AssetFinalizeContext context { commandList, nullptr };
+		AssetFinalizeContext context { &upload, nullptr };
 		context.UploadBudget = 64ull << 20;
 		context.Deadline = std::chrono::steady_clock::now(); // Passed
 		context.UploadedBytes = &uploaded;
@@ -745,8 +745,8 @@ TEST_SUITE("GPU.Assets.Uploads")
 		CHECK(uploaded == Texture::c_UploadBandBytes);
 		CHECK(mesh->FinalizeOnMainThread(context) == AssetFinalizeResult::Done);
 		CHECK(mesh->GetIndexBuffer() != nullptr);
-		commandList->close();
-		REQUIRE(gpu.ExecuteAndWait(commandList));
+		upload.Submit();
+		gpu.GetDevice().WaitForIdle();
 
 		texture.reset();
 		mesh.reset();
@@ -834,10 +834,10 @@ TEST_SUITE("GPU.Assets.Uploads")
 
 		// The step that uploads everything ends past the deadline: the vertex attributes are freed by the next call, which
 		// uploads nothing more.
-		nvrhi::CommandListHandle commandList = gpu.GetNvrhiDevice()->createCommandList();
-		commandList->open();
+		RendererUploadContext& upload = Renderer::GetUploadContext();
+		upload.Begin();
 		uint64_t uploaded = 0;
-		AssetFinalizeContext context { commandList, nullptr };
+		AssetFinalizeContext context { &upload, nullptr };
 		context.Deadline = std::chrono::steady_clock::now(); // Passed: only each call's first piece of work goes
 		context.UploadedBytes = &uploaded;
 		CHECK(mesh->FinalizeOnMainThread(context) == AssetFinalizeResult::Pending);
@@ -846,8 +846,8 @@ TEST_SUITE("GPU.Assets.Uploads")
 		uploaded = 0;
 		CHECK(mesh->FinalizeOnMainThread(context) == AssetFinalizeResult::Done);
 		CHECK(uploaded == 0);
-		commandList->close();
-		REQUIRE(gpu.ExecuteAndWait(commandList));
+		upload.Submit();
+		gpu.GetDevice().WaitForIdle();
 
 		// The GPU has the attributes; the CPU keeps positions and indices, and reports what it said it would.
 		CHECK(mesh->GetAttributes().empty());
@@ -897,10 +897,10 @@ TEST_SUITE("GPU.Assets.Uploads")
 		REQUIRE(stagingBudget >= c_AssetUploadStepBytes);
 		CHECK_FALSE(pool.HasRoomFor(1, stagingBudget));
 
-		nvrhi::CommandListHandle commandList = gpu.GetNvrhiDevice()->createCommandList();
-		commandList->open();
+		RendererUploadContext& upload = Renderer::GetUploadContext();
+		upload.Begin();
 		uint64_t frameUploaded = 0;
-		AssetFinalizeContext context { commandList, nullptr };
+		AssetFinalizeContext context { &upload, nullptr };
 		context.UploadBudget = 64ull << 20;
 		context.StagingBytes = stagingBudget;
 		context.UploadedBytes = &frameUploaded;
@@ -911,8 +911,8 @@ TEST_SUITE("GPU.Assets.Uploads")
 		CHECK(pool.GetPendingBytes() == stagingBudget + c_AssetUploadStepBytes);
 		CHECK(second->FinalizeOnMainThread(context) == AssetFinalizeResult::Pending);
 		CHECK(frameUploaded == c_AssetUploadStepBytes);
-		commandList->close();
-		REQUIRE(gpu.ExecuteAndWait(commandList));
+		upload.Submit();
+		gpu.GetDevice().WaitForIdle();
 
 		// Without a staging budget both finish, and every byte arrived where it belongs.
 		uint64_t uploaded = 0;

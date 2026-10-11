@@ -64,10 +64,14 @@ namespace Strata
 		// finished becomes idle, what was released since the latest query gets one (FenceReleased), and idle staging beyond
 		// the limits is released.
 		void BeginFrame(uint64_t frameIndex);
+		// Releases all idle staging, after making what the GPU is done with idle (polled). Returns the bytes released. For
+		// owners that know uploads stopped without device frames (RendererUploadContext::EndFrame).
+		uint64_t ReleaseIdle();
 
 		uint64_t GetIdleBytes() const { return m_IdleBytes; }
 		uint64_t GetPendingBytes() const { return m_PendingBytes; } // Released, but the GPU may still copy from it
 		uint64_t GetCreatedCount() const { return m_CreatedCount; }  // Staging textures and buffers created so far
+		uint64_t GetAcquiredBytes() const { return m_AcquiredBytes; } // Bytes of the staging handed out so far (reused or new)
 
 		// Whether `bytes` more staging fit beside what the GPU may still copy from, within `limit` bytes; when they would not,
 		// staging whose copies the GPU has run since the latest poll is reclaimed first. Budgeted uploads wait for room
@@ -121,6 +125,7 @@ namespace Strata
 		uint64_t m_PendingBytes = 0;   // Released and not idle yet (m_Released and m_Fenced)
 		uint64_t m_IdleBytes = 0;
 		uint64_t m_CreatedCount = 0;
+		uint64_t m_AcquiredBytes = 0;
 	};
 
 }

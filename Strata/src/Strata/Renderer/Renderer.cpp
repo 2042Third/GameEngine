@@ -16,6 +16,7 @@ namespace Strata
 			Scope<ShaderLibrary> Shaders;
 			Scope<BindlessTextureTable> BindlessTextures;
 			Scope<StagingPool> Staging;
+			Scope<RendererUploadContext> UploadContext; // Records into the staging pool: destroyed before it
 			Scope<DeferredReleaseQueue> DeferredReleases;
 
 			nvrhi::SamplerHandle LinearClamp;
@@ -98,6 +99,7 @@ namespace Strata
 		s_Data->BindlessTextures->SetReservedTexture(BindlessTextureTable::c_BlackSlot, s_Data->BlackTexture);
 		s_Data->BindlessTextures->SetReservedTexture(BindlessTextureTable::c_FlatNormalSlot, s_Data->FlatNormalTexture);
 		s_Data->Staging = CreateScope<StagingPool>(nvrhiDevice);
+		s_Data->UploadContext = CreateScope<RendererUploadContext>(nvrhiDevice, *s_Data->Staging);
 		s_Data->DeferredReleases = CreateScope<DeferredReleaseQueue>(nvrhiDevice);
 		// Texture loaders decode block-compressed data on their workers for devices that cannot sample it.
 		Texture::SetBlockCompressionSupported(device.GetInfo().SupportsBCCompression);
@@ -149,11 +151,10 @@ namespace Strata
 		return *s_Data->Staging;
 	}
 
-	void Renderer::ExecuteUploads(nvrhi::ICommandList* commandList)
+	RendererUploadContext& Renderer::GetUploadContext()
 	{
 		ST_CORE_ASSERT(s_Data, "Renderer is not initialized");
-		s_Data->Device->GetDevice()->executeCommandList(commandList);
-		s_Data->Staging->FenceReleased();
+		return *s_Data->UploadContext;
 	}
 
 	DeferredReleaseQueue& Renderer::GetDeferredReleases()

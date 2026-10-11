@@ -3,9 +3,8 @@
 #include "Strata/Asset/Asset.h"
 #include "Strata/Asset/AssetResidency.h"
 #include "Strata/Asset/AssetStreamingQueue.h"
+#include "Strata/Asset/AssetUploadContext.h"
 #include "Strata/Math/AABB.h"
-
-#include <nvrhi/nvrhi.h>
 
 #include <array>
 #include <atomic>
@@ -60,7 +59,7 @@ namespace Strata
 		// the budgets. Eviction for a pool looks only at assets holding memory of that pool.
 		uint64_t EvictionChecks = 0;
 		uint64_t Cancellations = 0;   // Loads abandoned before they finished (CancelLoad, or unloaded while loading)
-		uint64_t StagingReleases = 0; // Times the idle upload command list was recreated to return its staging memory
+		uint64_t StagingReleases = 0; // Times the upload context returned the staging memory that went idle after uploads stopped
 
 		// Loads of dependencies started when the read of an asset that depends on them completed (see GetDependencies), and
 		// those dropped on arrival because what they hold no longer fitted in the budgets.
@@ -294,6 +293,10 @@ namespace Strata
 		bool WaitForPendingLoads(std::chrono::milliseconds timeout = std::chrono::milliseconds(30000));
 		// Loads are queued, in flight or waiting to be finalized.
 		bool HasPendingLoads() const;
+		// Makes the manager's finalizations record their GPU uploads into `context` instead of the running renderer's (the
+		// IAssetGraphics engine service); null goes back to the renderer's. For tools and tests that drive finalization
+		// themselves. Main thread, not while finalizing.
+		void SetUploadContext(Ref<AssetUploadContext> context);
 
 		//////////////////////////////////////////////////////////////////////////
 		// Residency
@@ -346,8 +349,6 @@ namespace Strata
 		bool GetContentChanges(uint64_t sinceVersion, std::vector<AssetHandle>& outHandles) const;
 		static constexpr size_t c_MaxContentChanges = 4096;
 
-		// Frames without uploads after which the upload command list is recreated (see Update).
-		static constexpr uint32_t c_StagingReleaseFrames = 120;
 		// Frames the window maximums of AssetManagerStats cover.
 		static constexpr uint32_t c_StatsWindowFrames = 120;
 
@@ -570,8 +571,11 @@ namespace Strata
 		// evicted for them is released, so that the device holds the budget at most, not the budget plus the arrivals.
 		RoomResult MakeRoomFor(AssetHandle handle, const AssetMemoryUsage& incoming);
 		void Unpin(AssetHandle handle, uint64_t registration);
-		// Records the frame's finalization statistics and recreates an idle upload command list (main thread).
+		// Records the frame's finalization statistics and lets the upload context return idle staging (main thread).
 		void EndFrameUploads();
+		// Where finalizations record their uploads: the context SetUploadContext gave, else the running renderer's (the
+		// IAssetGraphics engine service), else none. Main thread.
+		AssetUploadContext* GetUploadContext() const;
 
 		// Dependency prefetch (see GetDependencies); every function requires m_Mutex.
 		// Whether `bytes` more fit in every pool with a budget beside what is resident, reserved for arrivals, on its way
@@ -627,8 +631,7 @@ namespace Strata
 		uint64_t m_LastFrameUploadedBytes = 0;
 		float m_LastFrameFinalizeMs = 0.0f;
 
-		nvrhi::CommandListHandle m_UploadCommandList;
-		uint32_t m_FramesWithoutUploads = 0; // Main thread only
+		Ref<AssetUploadContext> m_UploadContext; // SetUploadContext's (main thread only)
 		std::atomic<uint64_t> m_ContentVersion = 0; // See GetContentVersion; changed with m_Mutex held
 		std::atomic<uint64_t> m_MetadataVersion = 0; // See GetMetadataVersion; changed with m_Mutex held
 		std::deque<ContentChange> m_ContentChanges; // The latest changes, oldest first (guarded by m_Mutex)

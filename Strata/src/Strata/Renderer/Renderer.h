@@ -4,6 +4,7 @@
 #include "Strata/Renderer/BindlessTextureTable.h"
 #include "Strata/Renderer/DeferredReleaseQueue.h"
 #include "Strata/Renderer/GraphicsDevice.h"
+#include "Strata/Renderer/RendererUploadContext.h"
 #include "Strata/Renderer/ShaderLibrary.h"
 #include "Strata/Renderer/StagingPool.h"
 
@@ -38,10 +39,8 @@ namespace Strata
 		static BindlessTextureTable& GetBindlessTextures();
 		// Staging memory for uploads (textures and meshes upload through it).
 		static StagingPool& GetStagingPool();
-		// Executes a closed command list of asset uploads and fences the staging released so far (StagingPool::FenceReleased),
-		// so that it becomes reusable as soon as the GPU has run those copies rather than once it finished the frame. Every
-		// other command list that copies from staging released before must have been executed already.
-		static void ExecuteUploads(nvrhi::ICommandList* commandList);
+		// Where the asset managers' finalizations record their uploads (the IAssetGraphics engine service hands it to them).
+		static RendererUploadContext& GetUploadContext();
 		// Resources dropped while the GPU may still use them (see ReleaseDeferred).
 		static DeferredReleaseQueue& GetDeferredReleases();
 		// Drops the references once the GPU has finished every command list executed so far, without waiting for it. Use

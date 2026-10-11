@@ -186,7 +186,8 @@ namespace Strata
 
 	AssetFinalizeResult Mesh::FinalizeOnMainThread(const AssetFinalizeContext& context)
 	{
-		nvrhi::ICommandList* commandList = context.CommandList;
+		const RendererUploadContext* upload = RendererUploadContext::From(context.Upload);
+		nvrhi::ICommandList* commandList = upload ? upload->GetCommandList() : nullptr;
 		if (!commandList || m_Uploaded)
 			return AssetFinalizeResult::Done;
 

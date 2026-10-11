@@ -15,9 +15,6 @@ Strata/Core/Application.cpp:Strata/Project/Project.h | engine-modules | Applicat
 Strata/Core/Application.cpp:Strata/Renderer/GraphicsDevice.h | engine-modules | Application creates the graphics device and the swapchain.
 Strata/Core/Application.cpp:Strata/Renderer/Renderer.h | engine-modules | Application initializes the renderer and drives its frames.
 
-# Asset finalization records GPU uploads itself; the budgeted upload seam takes NVRHI out of the asset layer.
-Strata/Asset/AssetManager.cpp:Strata/Renderer/Renderer.h | mip-streaming | AssetManagerBase finalizes loads on the renderer's upload command list.
-
 # Physics takes collision geometry from the renderer's mesh asset; a renderer-independent MeshGeometry asset replaces it
 # (Mesh v2, on the roadmap's deferred list).
 Strata/Physics/AssetMeshProvider.cpp:Strata/Renderer/Mesh.h | mesh-v2 | Mesh collider shapes read the vertices and indices of the renderer's Mesh.

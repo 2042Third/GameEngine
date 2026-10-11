@@ -455,4 +455,65 @@ TEST_SUITE("Architecture.Layering")
 		REQUIRE(report.StaleEntries.size() == 1);
 		CHECK(report.StaleEntries[0].Header == "top/gone.h");
 	}
+
+	TEST_CASE("A layer's forbidden third-party headers are reported, in either include form")
+	{
+		LayerTable table = MakeTwoLayerTable();
+		table.Layers[0].MayNotIncludeExternal = { "nvrhi/" };
+		const std::map<std::string, std::string> files = {
+			{ "base/a.h", "#include <nvrhi/nvrhi.h>\n#include <glm/glm.hpp>\n#include \"nvrhi/utils.h\"\n#include <nvrhix.h>\n" },
+			{ "top/t.h", "#include <nvrhi/nvrhi.h>\n" }
+		};
+		const LayeringReport report = CheckLayering(table, files, {});
+		CHECK(report.Errors.empty());
+		// Only Base forbids them; glm and a header that merely starts like the prefix pass.
+		REQUIRE(report.Violations.size() == 2);
+		CHECK(report.Violations[0].External);
+		CHECK(Describe(report.Violations[0]) == "base/a.h(1): includes nvrhi/nvrhi.h, but layer Base may not include third-party headers nvrhi/*");
+		CHECK(Describe(report.Violations[1]) == "base/a.h(3): includes nvrhi/utils.h, but layer Base may not include third-party headers nvrhi/*");
+
+		// The table names the prefixes; an empty one is refused.
+		const nlohmann::json json = { { "MaxAllowlistEntries", 0 }, { "Layers", {
+			{ { "Name", "Base" }, { "Paths", { "base/**" } }, { "MayNotIncludeExternal", { "nvrhi/" } } } } } };
+		LayerTable parsed;
+		std::vector<std::string> errors;
+		REQUIRE(ParseLayerTable(json, parsed, errors));
+		CHECK(parsed.Layers[0].MayNotIncludeExternal == std::vector<std::string> { "nvrhi/" });
+		const nlohmann::json empty = { { "MaxAllowlistEntries", 0 }, { "Layers", {
+			{ { "Name", "Base" }, { "Paths", { "base/**" } }, { "MayNotIncludeExternal", { "" } } } } } };
+		CHECK_FALSE(ParseLayerTable(empty, parsed, errors));
+	}
+
+	TEST_CASE("The asset layer knows no graphics API")
+	{
+		const EngineSources sources = ReadEngineSources();
+		const auto asset = std::find_if(sources.Table.Layers.begin(), sources.Table.Layers.end(), [](const Layer& layer) { return layer.Name == "Asset"; });
+		REQUIRE(asset != sources.Table.Layers.end());
+		CHECK(std::find(asset->MayNotIncludeExternal.begin(), asset->MayNotIncludeExternal.end(), "nvrhi/") != asset->MayNotIncludeExternal.end());
+		CHECK(std::find(asset->MayInclude.begin(), asset->MayInclude.end(), "Renderer") == asset->MayInclude.end());
+
+		// Whatever the table says: no file of the asset layer includes NVRHI or the renderer, and no allowlist line excuses it.
+		size_t assetFiles = 0;
+		for (const auto& [path, contents] : sources.Files)
+		{
+			const bool inLayer = std::any_of(asset->Paths.begin(), asset->Paths.end(), [&path](const std::string& glob) { return MatchesGlob(glob, path); })
+				&& std::none_of(asset->Exclude.begin(), asset->Exclude.end(), [&path](const std::string& glob) { return MatchesGlob(glob, path); });
+			if (!inLayer)
+				continue;
+			assetFiles++;
+			for (const IncludeDirective& include : ParseIncludes(contents))
+			{
+				CAPTURE(path);
+				CAPTURE(include.Path);
+				CHECK_FALSE(include.Path.starts_with("nvrhi/"));
+				CHECK_FALSE(include.Path.starts_with("Strata/Renderer/"));
+			}
+		}
+		CHECK(assetFiles > 10);
+		for (const AllowlistEntry& entry : sources.Allowlist)
+		{
+			CAPTURE(entry.File);
+			CHECK_FALSE(entry.File.starts_with("Strata/Asset/AssetManager"));
+		}
+	}
 }

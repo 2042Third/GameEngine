@@ -9,15 +9,11 @@
 #include <limits>
 #include <string>
 
-namespace nvrhi
-{
-	class ICommandList;
-}
-
 namespace Strata
 {
 
 	class AssetManagerBase;
+	class AssetUploadContext;
 
 	enum class AssetState : uint8_t
 	{
@@ -65,15 +61,18 @@ namespace Strata
 	// is exempt from these two, so a frame's uploads overshoot them by one step at most and an asset larger than any budget
 	// still arrives. Steps through staging memory (texture bands, mesh ranges) also wait while the staging in flight leaves
 	// no room within GetStagingRoom (StagingBytes less one step): staging becomes reusable once the GPU has run the copies
-	// that read it (the manager fences its uploads when it executes them, Renderer::ExecuteUploads, and the pool polls the
-	// fences), so budgeted uploads need the GPU to make progress to go on at full speed. Only the frame's first step (nothing
+	// that read it (the upload context fences the uploads when it submits a batch, and the pool polls the fences), so
+	// budgeted uploads need the GPU to make progress to go on at full speed. Only the frame's first step (nothing
 	// uploaded yet, *UploadedBytes == 0) is exempt from that wait, and the step of room the others leave is for it: every
 	// frame makes progress within StagingBytes, but a later call may take no step at all (Pending without uploading). The
 	// manager itself may also hold an arrival back until memory evicted for it is released (see AssetManagerBase::Update).
 	struct AssetFinalizeContext
 	{
-		nvrhi::ICommandList* CommandList = nullptr; // Upload command list; null when no renderer is running
-		AssetManagerBase* Manager = nullptr;        // Manager publishing the asset (null for standalone assets)
+		// Where GPU uploads are recorded (Asset/AssetUploadContext.h); null without a graphics device: GPU assets then keep
+		// their data on the CPU. The renderer's assets record only into the renderer's context, and finalize as without a
+		// device when given another (a test's).
+		AssetUploadContext* Upload = nullptr;
+		AssetManagerBase* Manager = nullptr; // Manager publishing the asset (null for standalone assets)
 		uint64_t UploadBudget = std::numeric_limits<uint64_t>::max(); // The call's share of the frame's upload bytes
 		std::chrono::steady_clock::time_point Deadline = std::chrono::steady_clock::time_point::max();
 		uint64_t StagingBytes = std::numeric_limits<uint64_t>::max(); // Staging memory uploads may keep in flight

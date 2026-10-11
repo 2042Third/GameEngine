@@ -201,8 +201,8 @@ Release builds on the reference machine, quiet:
 
 Open items and deferrals later waves own:
 
-- The allowlist's 9 exceptions: the application shell's service wiring (7, `engine-modules`), asset finalization on
-  the renderer's command list (`mip-streaming`) and physics reading the renderer's `Mesh` (Mesh v2, later). Ordering
+- The allowlist's 8 exceptions: the application shell's service wiring (7, `engine-modules`) and physics reading the
+  renderer's `Mesh` (Mesh v2, later). Ordering
   constraints that name systems a build may lack need a policy once subsystems become optional (`engine-modules`).
 - Physics: what an overflowing world needed is remembered per scene for the process, not saved with the scene;
   automatic capacities reserve Jolt's buffers generously (70,000 bodies reserve about a million body pairs), and a world

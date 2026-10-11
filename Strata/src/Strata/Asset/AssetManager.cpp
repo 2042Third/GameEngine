@@ -2,8 +2,8 @@
 #include "Strata/Asset/AssetManager.h"
 
 #include "Strata/Asset/BuiltinAssets.h"
+#include "Strata/Core/EngineServices.h"
 #include "Strata/Core/JobSystem.h"
-#include "Strata/Renderer/Renderer.h"
 
 #include <algorithm>
 #include <cmath>
@@ -128,7 +128,9 @@ namespace Strata
 		m_Budgets(GetDefaultResidencyBudgets())
 	{
 		// Frames the GPU may still be working on, plus two: an asset drawn that recently is still in use.
-		const uint32_t framesInFlight = Renderer::IsInitialized() ? Renderer::GetGraphicsDevice().GetMaxFramesInFlight() : c_DefaultFramesInFlight;
+		const IAssetGraphics* graphics = EngineServices::Get<IAssetGraphics>();
+		const uint32_t deviceFrames = graphics ? graphics->GetFramesInFlight() : 0;
+		const uint32_t framesInFlight = deviceFrames > 0 ? deviceFrames : c_DefaultFramesInFlight;
 		m_EvictionGraceFrames = framesInFlight + 2;
 		m_GpuReleaseFrames = framesInFlight + 1;
 		UpdateStreamingLimits();
@@ -142,9 +144,22 @@ namespace Strata
 
 	AssetResidencyBudgets AssetManagerBase::GetDefaultResidencyBudgets()
 	{
-		if (!Renderer::IsInitialized())
-			return AssetResidencyBudgets::FromDeviceBudget(0);
-		return AssetResidencyBudgets::FromDeviceBudget(Renderer::GetGraphicsDevice().GetMemoryBudget().Budget);
+		const IAssetGraphics* graphics = EngineServices::Get<IAssetGraphics>();
+		return AssetResidencyBudgets::FromDeviceBudget(graphics ? graphics->GetMemoryBudget() : 0);
+	}
+
+	AssetUploadContext* AssetManagerBase::GetUploadContext() const
+	{
+		if (m_UploadContext)
+			return m_UploadContext.get();
+		IAssetGraphics* graphics = EngineServices::Get<IAssetGraphics>();
+		return graphics ? graphics->GetUploadContext() : nullptr;
+	}
+
+	void AssetManagerBase::SetUploadContext(Ref<AssetUploadContext> context)
+	{
+		ST_CORE_ASSERT(!m_ProcessingCompletions, "The upload context cannot change while assets are finalized");
+		m_UploadContext = std::move(context);
 	}
 
 	void AssetManagerBase::WaitForInFlightLoads()
@@ -628,26 +643,18 @@ namespace Strata
 			}
 		}
 
-		// Finalized like an arrival without a budget, on the upload command list (main thread only, and not open here: the
+		// Finalized like an arrival without a budget, in a batch of its own (main thread only, and no other batch is open: the
 		// finalization of completions is not running).
 		asset->Handle = handle;
-		nvrhi::ICommandList* commandList = nullptr;
-		if (Renderer::IsInitialized())
-		{
-			if (!m_UploadCommandList)
-				m_UploadCommandList = Renderer::GetDevice()->createCommandList();
-			m_UploadCommandList->open();
-			commandList = m_UploadCommandList;
-		}
+		AssetUploadContext* upload = GetUploadContext();
+		if (upload)
+			upload->Begin();
 		uint64_t uploadedBytes = 0;
-		AssetFinalizeContext context { commandList, this };
+		AssetFinalizeContext context { upload, this };
 		context.UploadedBytes = &uploadedBytes;
 		const AssetFinalizeResult result = asset->FinalizeOnMainThread(context);
-		if (commandList)
-		{
-			m_UploadCommandList->close();
-			Renderer::GetDevice()->executeCommandList(m_UploadCommandList);
-		}
+		if (upload)
+			upload->Submit();
 		if (result != AssetFinalizeResult::Done)
 			return fail("The asset could not be finalized");
 
@@ -676,21 +683,15 @@ namespace Strata
 		metadata.Type = asset->GetType();
 		asset->Handle = metadata.Handle;
 
-		// Memory assets are finalized immediately (main thread), creating GPU resources when a renderer runs.
-		nvrhi::CommandListHandle commandList;
-		if (Renderer::IsInitialized())
-		{
-			commandList = Renderer::GetDevice()->createCommandList();
-			commandList->open();
-		}
-		// Without an upload budget the asset finishes in this call.
-		if (asset->FinalizeOnMainThread(AssetFinalizeContext { commandList, this }) != AssetFinalizeResult::Done)
+		// Memory assets are finalized immediately (main thread), creating GPU resources when a renderer runs. Without an upload
+		// budget the asset finishes in this call.
+		AssetUploadContext* upload = GetUploadContext();
+		if (upload)
+			upload->Begin();
+		if (asset->FinalizeOnMainThread(AssetFinalizeContext { upload, this }) != AssetFinalizeResult::Done)
 			ST_CORE_WARN("Memory asset '{}' could not be finalized", metadata.Name);
-		if (commandList)
-		{
-			commandList->close();
-			Renderer::GetDevice()->executeCommandList(commandList);
-		}
+		if (upload)
+			upload->Submit();
 
 		Ref<Asset> released;
 		std::scoped_lock<std::mutex> lock(m_Mutex);
@@ -851,14 +852,9 @@ namespace Strata
 		const float finalizeMs = std::min(budgets.FinalizeMsPerFrame, 3600.0f * 1000.0f);
 		const auto deadline = start + std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<float, std::milli>(finalizeMs));
 
-		nvrhi::ICommandList* commandList = nullptr;
-		if (Renderer::IsInitialized())
-		{
-			if (!m_UploadCommandList)
-				m_UploadCommandList = Renderer::GetDevice()->createCommandList();
-			m_UploadCommandList->open();
-			commandList = m_UploadCommandList;
-		}
+		AssetUploadContext* upload = GetUploadContext();
+		if (upload)
+			upload->Begin();
 
 		size_t processed = 0;
 		size_t finalizations = 0; // FinalizeOnMainThread calls of this frame
@@ -937,7 +933,7 @@ namespace Strata
 					completion.Reserved = room.Reserved;
 					// An arrival that allocates no GPU memory (a material that made room in the CPU pool) has nothing to wait
 					// for.
-					if (room.EvictedGpuBytes > 0 && incoming.GetGpu() > 0 && commandList)
+					if (room.EvictedGpuBytes > 0 && incoming.GetGpu() > 0 && upload)
 						completion.FinalizeFrame = GetFrameIndex() + m_GpuReleaseFrames;
 				}
 				const bool waits = arrivalWaiting || GetFrameIndex() < completion.FinalizeFrame;
@@ -957,7 +953,7 @@ namespace Strata
 			processed++;
 			if (completion.LoadedAsset)
 			{
-				AssetFinalizeContext context { commandList, this };
+				AssetFinalizeContext context { upload, this };
 				context.Prefetched = prefetched;
 				if (applyBudget)
 				{
@@ -1009,13 +1005,9 @@ namespace Strata
 			m_TotalLoadsCompleted++;
 		}
 
-		if (commandList)
-		{
-			// The staging these uploads copy from becomes reusable as soon as the GPU has run them, usually by the next frame's
-			// finalization: the GPU runs them ahead of the frame's rendering.
-			m_UploadCommandList->close();
-			Renderer::ExecuteUploads(m_UploadCommandList);
-		}
+		// What the batch recorded reaches the GPU now, ahead of the frame's rendering.
+		if (upload)
+			upload->Submit();
 
 		// What is left over (waiting for released memory, or the budget ran out) is finalized in a later frame, in its place
 		// in line: ahead of newer completions.
@@ -1055,21 +1047,11 @@ namespace Strata
 			m_FrameFinalizeMs = 0.0f;
 		}
 
-		if (uploadedBytes > 0 || !m_UploadCommandList)
-		{
-			m_FramesWithoutUploads = 0;
+		// Staging that went idle once uploads stopped is returned by the context (also without device frames, which tools and
+		// tests may not run).
+		AssetUploadContext* upload = GetUploadContext();
+		if (!upload || !upload->EndFrame(uploadedBytes))
 			return;
-		}
-		if (++m_FramesWithoutUploads < c_StagingReleaseFrames)
-			return;
-
-		// NVRHI's UploadManager pools the staging chunks of each command list with no memory limit (the Vulkan command list
-		// creates it with a limit of 0, Strata/vendor/NVRHI src/vulkan/vulkan-commandlist.cpp), so after a burst of uploads
-		// the staging memory stays at its high-water mark for as long as the command list lives. Recreating the command
-		// list is the supported way to return it: submissions still in flight keep the old one (and its chunks) alive
-		// until the GPU has finished them.
-		m_UploadCommandList = nullptr;
-		m_FramesWithoutUploads = 0;
 		std::scoped_lock<std::mutex> lock(m_Mutex);
 		m_StagingReleases++;
 	}

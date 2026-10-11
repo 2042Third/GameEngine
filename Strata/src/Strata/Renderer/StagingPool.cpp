@@ -56,6 +56,7 @@ namespace Strata
 			{
 				nvrhi::StagingTextureHandle staging = std::move(it->Texture);
 				m_IdleBytes -= it->Bytes;
+				m_AcquiredBytes += it->Bytes;
 				m_Idle.erase(std::next(it).base());
 				return staging;
 			}
@@ -67,10 +68,14 @@ namespace Strata
 		stagingDesc.mipLevels = desc.mipLevels;
 		stagingDesc.format = desc.format;
 		stagingDesc.debugName = "UploadStaging";
-		MakeRoom(GetByteSize(stagingDesc), limit);
+		const uint64_t bytes = GetByteSize(stagingDesc);
+		MakeRoom(bytes, limit);
 		nvrhi::StagingTextureHandle staging = m_Device->createStagingTexture(stagingDesc, nvrhi::CpuAccessMode::Write);
 		if (staging)
+		{
 			m_CreatedCount++;
+			m_AcquiredBytes += bytes;
+		}
 		return staging;
 	}
 
@@ -85,6 +90,7 @@ namespace Strata
 			{
 				nvrhi::BufferHandle staging = std::move(it->Buffer);
 				m_IdleBytes -= it->Bytes;
+				m_AcquiredBytes += it->Bytes;
 				m_Idle.erase(std::next(it).base());
 				return staging;
 			}
@@ -100,7 +106,10 @@ namespace Strata
 		MakeRoom(size, limit);
 		nvrhi::BufferHandle staging = m_Device->createBuffer(desc);
 		if (staging)
+		{
 			m_CreatedCount++;
+			m_AcquiredBytes += size;
+		}
 		return staging;
 	}
 
@@ -213,6 +222,15 @@ namespace Strata
 			MakeIdle(batch.Entries);
 		m_Fenced.clear();
 		MakeIdle(m_Released);
+	}
+
+	uint64_t StagingPool::ReleaseIdle()
+	{
+		CollectCompleted();
+		const uint64_t released = m_IdleBytes;
+		m_Idle.clear();
+		m_IdleBytes = 0;
+		return released;
 	}
 
 	void StagingPool::BeginFrame(uint64_t frameIndex)

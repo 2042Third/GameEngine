@@ -281,7 +281,7 @@ layer and of the layers it lists, which are always lower ones:
 | Core | `Core/**` except the application shell, `Math/**`, `stpch.h`, `Platform/Windows`, `Platform/Posix` (not the sockets) | nothing |
 | Input | `Events/**`, `Input/**` | Core |
 | App | `Core/Application.*`, `Layer.*`, `LayerStack.*`, `Window.h`, `EntryPoint.h`, `Platform/GLFW/**`, `Platform/Vulkan/VulkanLoader.*` | Core, Input |
-| Asset | `Asset/**` except the pipeline files | Core |
+| Asset | `Asset/**` except the pipeline files | Core (and no NVRHI or Vulkan header) |
 | Reflection | `Reflection/**` | Core, Asset |
 | Scene | `Scene/**` | Core, Asset, Reflection |
 | Renderer | `Renderer/**`, `Platform/Vulkan/**` | Core, Input, App, Asset, Reflection, Scene |
@@ -299,13 +299,16 @@ Objective-C(++) source and header under `Strata/src` (`STRATA_SOURCE_DIR`; `.h`,
 so the macOS platform code too), parses its `#include`s, quoted and angle-bracketed (`Strata/src` is a public include
 directory, so `<Strata/...>` reaches engine headers too; `LayeringAnalyzer`: comments, literals and `#if 0` blocks
 skipped; resolved like the preprocessor, quoted includes next to the file first, both forms from `Strata/src`; standard
-and third-party headers match no layer and are skipped), maps both ends to their
+and third-party headers match no layer and are checked only against the prefixes a layer may not include, its
+`MayNotIncludeExternal`: the asset layer's `nvrhi/`, `vulkan/` and `vk_`), maps both ends to their
 layers and fails on every file that is in no layer or in several, on every forbidden include that is not in
 `StrataTests/Architecture/LayeringAllowlist.txt`, and on every allowlist line that matches nothing. Each allowlist line
 names the include, the roadmap workstream that removes it and the reason; the list holds exactly `MaxAllowlistEntries`
-lines (9: the application shell wiring services, asset uploads on the renderer and physics reading renderer meshes), so
-it can only shrink. Scripting and Audio, which used to include the physics and audio systems, reach them through scene
-services (see [Scene services](#scene-services)).
+lines (8: the application shell wiring services and physics reading renderer meshes), so it can only shrink. Scripting
+and Audio, which used to include the physics and audio systems, reach them through scene services (see
+[Scene services](#scene-services)); the asset layer, which used to record uploads on the renderer's command list, records
+them into the `AssetUploadContext` the renderer provides through the engine service `IAssetGraphics`
+(`Asset/AssetUploadContext.h`, see [Streaming and residency](#streaming-and-residency)).
 
 ### Composition root and registries
 
@@ -746,8 +749,8 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   subclass); decoding runs on the worker pool and queues a completion. The loader (`AssetLoadFunction`) gets the read
   bytes as an `AssetLoadData`: it reads them as a span, or takes them over (`TakeBytes`) when its asset keeps them
   (textures keep their cooked bytes and read pixels in place, fonts keep their file), so a load never holds two copies.
-  `Update` finalizes completions on the main thread: `Asset::FinalizeOnMainThread` creates GPU resources on one upload
-  command list, in steps, until the frame's upload or time budget is used up (`AssetFinalizeResult::Pending`: the asset
+  `Update` finalizes completions on the main thread: `Asset::FinalizeOnMainThread` creates GPU resources in one batch of
+  the upload context (see the upload seam below), in steps, until the frame's upload or time budget is used up (`AssetFinalizeResult::Pending`: the asset
   continues next frame, first in line). Generations discard results of loads that were superseded by a reload, unload
   or cancellation. `LoadAssetSync` is for tools, tests and scene switches (unbudgeted: it finishes at once);
   `ReplaceLoadedAsset` publishes an object made in memory for a registered asset at once (editors' document edits).
@@ -985,8 +988,8 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
 - **Staging** (`Renderer/StagingPool.h`). Texture bands go through CPU-writable staging textures of the renderer's
   pool, mesh ranges through its CPU-writable staging buffers (powers of two from 64 KiB, copied from with
   `copyBuffer`), reused once the GPU has copied from them, so streaming allocates no staging memory once warm. An
-  event query set after the command lists with the copies were executed tells when: the asset managers set it as soon
-  as they executed a frame's uploads (`Renderer::ExecuteUploads`, `StagingPool::FenceReleased`), and
+  event query set after the command lists with the copies were executed tells when: the renderer's upload context sets it
+  as soon as it submitted a batch of uploads (`RendererUploadContext::Submit`, `StagingPool::FenceReleased`), and
   `Renderer::BeginFrame` sets one for whatever else was released. The queries are polled, never waited for: at
   `BeginFrame`, before staging is acquired and when a budgeted step finds no room. The GPU runs a frame's uploads ahead
   of its rendering, so the staging of a frame's uploads is reusable in the next frame once the GPU has run them (fenced
@@ -1003,10 +1006,19 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   frames follow each other faster, frames that find the previous one's staging still in flight take only their first
   step, about half the budget per frame on average. `UploadBytesPerFrame` and `FinalizeMsPerFrame` bound them too (a
   loading screen raises all three). Idle staging is kept up to 16 MiB and all of it is returned after 120 frames
-  without uploads. What else records `writeBuffer` on the upload command list goes through NVRHI's upload manager,
-  which pools the staging memory of each command list without a limit: after `c_StagingReleaseFrames` (120) frames
-  without uploads the manager drops its upload command list (submissions in flight keep it alive until the GPU is done)
-  and creates a new one with the next upload.
+  without uploads (device frames, `StagingPool::BeginFrame`, or manager updates, `RendererUploadContext::EndFrame`, which
+  `AssetManagerStats::StagingReleases` counts). Nothing records `writeBuffer` into the upload batches, so NVRHI's upload
+  manager (which pools the staging chunks of each command list without a limit) holds nothing for them.
+- **The upload seam** (`Asset/AssetUploadContext.h`). The asset layer knows no graphics API: finalizations record their
+  uploads into the `AssetUploadContext` of `AssetFinalizeContext::Upload`. The renderer implements it
+  (`Renderer/RendererUploadContext`, which its textures and meshes downcast to; another implementation, such as a test's,
+  makes them finalize as without a device) and hands it to every manager through the engine service `IAssetGraphics`
+  (registered by `RegisterRendererModule`), which also gives the managers the device's frames in flight (their eviction
+  grace) and memory budget (their default budgets). A manager opens a batch (`Begin`) before the finalizations of an
+  update, of `LoadAssetSync`, `ReplaceLoadedAsset` and `AddMemoryAsset` and submits it after them (`Submit`), so what a
+  batch recorded reaches the GPU before anything renders with what it finalized; `EndFrame` follows each update.
+  `AssetManagerBase::SetUploadContext` replaces the renderer's context for one manager (tools and tests;
+  `Asset.Finalize` drives the finalize contract with a fake one, without a GPU).
 - **Dependency prefetch** (`AssetManagerBase::GetDependencies`). When the read of a requested asset completes, its
   direct dependencies are queued at its priority with a lower score (`c_DependencyPrefetchScore`, behind direct
   requests), before its read slot frees: a material's textures load alongside the material, a mesh's default materials

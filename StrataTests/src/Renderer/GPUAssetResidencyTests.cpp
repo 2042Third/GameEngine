@@ -387,18 +387,19 @@ TEST_SUITE("GPU.Assets.Residency")
 		CHECK(stats.FinalizeMsWindowMax > 0.0f);
 		CHECK(stats.StagingReleases == 0);
 
-		// 120 frames after the last upload, the upload command list (and the staging memory it pools) goes.
-		for (uint32_t frame = 1; frame < AssetManagerBase::c_StagingReleaseFrames; frame++)
+		// 120 updates after the last upload, the upload context returns the staging that went idle (there are no device frames
+		// here, which would return it as well).
+		for (uint32_t frame = 1; frame < StagingPool::c_IdleReleaseFrames; frame++)
 			manager->Update();
 		CHECK(manager->GetStats().StagingReleases == 0);
 		CHECK(manager->GetStats().UploadedBytesLastFrame == 0);
 		manager->Update();
 		CHECK(manager->GetStats().StagingReleases == 1);
-		for (uint32_t frame = 0; frame < 2 * AssetManagerBase::c_StagingReleaseFrames; frame++)
+		for (uint32_t frame = 0; frame < 2 * StagingPool::c_IdleReleaseFrames; frame++)
 			manager->Update();
 		CHECK(manager->GetStats().StagingReleases == 1); // Released once; nothing to release until the next upload
 
-		// The next upload uses a new command list, and the texture is right.
+		// The next upload creates staging again, and the texture is right.
 		manager->UnloadAsset(textures[0]);
 		Ref<Texture> reloaded = std::static_pointer_cast<Texture>(manager->LoadAssetSync(textures[0]));
 		REQUIRE(reloaded);
