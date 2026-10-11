@@ -441,6 +441,48 @@ namespace Strata
 		return Entity(it->second, const_cast<Scene*>(this));
 	}
 
+	uint64_t Scene::EstimateMemoryUsage() const
+	{
+		// Heap memory of a string beyond the string object (short strings live inside it).
+		const auto stringHeapBytes = [](const std::string& text) -> uint64_t
+		{
+			return text.capacity() > sizeof(std::string) - 1 ? text.capacity() + 1 : 0;
+		};
+
+		// The scene's own components, which the component registry does not know.
+		static const std::unordered_map<entt::id_type, size_t> internalSizes = {
+			{ entt::type_id<HierarchyComponent>().hash(), sizeof(HierarchyComponent) },
+			{ entt::type_id<WorldTransformComponent>().hash(), sizeof(WorldTransformComponent) },
+			{ entt::type_id<UnknownComponentsComponent>().hash(), sizeof(UnknownComponentsComponent) } };
+
+		uint64_t bytes = sizeof(Scene);
+		for (const auto [type, storage] : m_Registry.storage())
+		{
+			size_t elementSize = 0;
+			if (const ComponentInfo* info = ComponentRegistry::FindByTypeId(type))
+				elementSize = info->Size;
+			else if (auto internal = internalSizes.find(type); internal != internalSizes.end())
+				elementSize = internal->second;
+			// Packed entities and elements, and the sparse array of positions.
+			bytes += storage.capacity() * (sizeof(entt::entity) + elementSize) + storage.extent() * sizeof(entt::entity);
+		}
+
+		// Hash nodes (the value and a link pair) and the bucket array (a pair of links each).
+		bytes += m_EntityMap.size() * (sizeof(std::pair<const UUID, entt::entity>) + 2 * sizeof(void*)) + m_EntityMap.bucket_count() * 2 * sizeof(void*);
+		bytes += m_RootEntities.capacity() * sizeof(UUID);
+		if (const auto* relationships = m_Registry.storage<RelationshipComponent>())
+		{
+			for (const RelationshipComponent& relationship : *relationships)
+				bytes += relationship.Children.capacity() * sizeof(UUID);
+		}
+		if (const auto* names = m_Registry.storage<NameComponent>())
+		{
+			for (const NameComponent& name : *names)
+				bytes += stringHeapBytes(name.Name);
+		}
+		return bytes;
+	}
+
 	////////////////////////////////////////////////////////////////////////////////
 	// Lookups
 	////////////////////////////////////////////////////////////////////////////////

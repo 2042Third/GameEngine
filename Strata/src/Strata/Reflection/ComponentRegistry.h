@@ -46,6 +46,7 @@ namespace Strata
 		std::string Description;
 		ComponentFlags Flags = ComponentFlags::None;
 		entt::id_type TypeId = 0;
+		size_t Size = 0;         // sizeof the component; 0 for tag components, which have no storage per entity
 		std::vector<PropertyInfo> Properties;
 
 		std::function<bool(const entt::registry&, entt::entity)> Has;
@@ -188,6 +189,7 @@ namespace Strata
 			return ComponentInfoBuilder<T>(nullptr);
 
 		ComponentInfo& info = *registered;
+		info.Size = std::is_empty_v<T> ? 0 : sizeof(T);
 		info.Has = [](const entt::registry& registry, entt::entity entity) { return registry.all_of<T>(entity); };
 		if constexpr (std::is_empty_v<T>)
 		{

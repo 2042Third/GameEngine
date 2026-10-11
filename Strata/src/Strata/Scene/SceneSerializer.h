@@ -44,6 +44,9 @@ namespace Strata
 		static nlohmann::json Serialize(const Scene& scene);
 		// Loads into an empty scene. Returns false (with an error) for structurally invalid documents.
 		static bool Deserialize(Scene& scene, const nlohmann::json& json, std::string* outError = nullptr, std::vector<std::string>* outWarnings = nullptr);
+		// How many scene documents Deserialize has read in this process (any thread): loading a scene asset reads its document
+		// once, whoever takes the scene (SceneAsset::TakePreparedScene), and tests check it with the difference of two calls.
+		static uint64_t GetDeserializeCount();
 
 		static bool SaveToFile(const Scene& scene, const std::filesystem::path& path, std::string* outError = nullptr);
 		static Ref<Scene> LoadFromFile(const std::filesystem::path& path, std::string* outError = nullptr);

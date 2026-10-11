@@ -26,6 +26,10 @@ namespace Strata
 {
 
 	class Entity;
+	class EntityPrototype;
+	class PrototypeInstantiation;
+	struct InstantiationOptions;
+	struct TransformComponent;
 
 	// Capacities of a scene's physics world, fixed when its simulation is created. 0 sizes a capacity automatically from the
 	// bodies the scene has when it starts playing (see PhysicsWorld): set them for scenes that create many bodies while they
@@ -107,6 +111,29 @@ namespace Strata
 		// References between entities inside the copied hierarchy are remapped to the copies.
 		Entity DuplicateEntity(Entity entity);
 
+		//////////////////////////////////////////////////////////////////////////
+		// Instantiation of compiled prototypes (Scene/SceneInstantiation.cpp)
+		//////////////////////////////////////////////////////////////////////////
+
+		// Starts copying a prototype (EntityPrototype: prefabs, models, additive scene loads) into the scene: checks what can
+		// be checked before anything exists (the parent; with InstantiationOptions::KeepIDs every prototype ID against the
+		// scene's) and gives every entity its ID. Fails, creating nothing, with an error. ContinueInstantiation then creates
+		// the entities; `outInstantiation` must outlive the calls (and its prototype, which it shares).
+		bool BeginInstantiation(const Ref<EntityPrototype>& prototype, const InstantiationOptions& options, PrototypeInstantiation& outInstantiation,
+			std::string* outError = nullptr);
+		// Creates the next entities of the instantiation, at most `maxEntities`, in the prototype's hierarchy order, as
+		// SceneSerializer::DeserializeEntities would: their components are copied from the prototype (on_construct), the
+		// entities are linked under their parents (created before, in this call or an earlier one) or under the options'
+		// parent, references among the prototype's entities point at the copies, prefab links are added, and then every
+		// component of every created entity emits on_update, so systems see each entity complete. With `rootTransform`, the
+		// prototype's first top-level entity gets that local transform instead of its own. Returns how many it created: 0,
+		// creating nothing, with an error when the scene cannot hold them (c_MaxEntities), an ID it keeps collides or the
+		// parent went away (and 0 without an error once every entity exists).
+		size_t ContinueInstantiation(PrototypeInstantiation& instantiation, size_t maxEntities, std::string* outError = nullptr,
+			const TransformComponent* rootTransform = nullptr);
+		// Both in one call: the created top-level entities in order, or none, creating nothing, with the error.
+		std::vector<Entity> Instantiate(const Ref<EntityPrototype>& prototype, const InstantiationOptions& options, std::string* outError = nullptr);
+
 		Entity GetEntityByUUID(UUID uuid) const; // Invalid Entity when not found
 		// The first entity in hierarchy order with this name, and every entity with this tag in hierarchy order. Both use an
 		// index built on the first lookup and kept current through the components' signals afterwards, so a lookup costs the
@@ -115,6 +142,12 @@ namespace Strata
 		Entity FindEntityByName(std::string_view name) const;
 		std::vector<Entity> FindEntitiesByTag(std::string_view tag) const;
 		size_t GetEntityCount() const { return m_EntityMap.size(); }
+		// Live entities of the registry: the scene's, and any created directly through GetRegistry(). At most c_MaxEntities.
+		size_t GetRegistryEntityCount() const;
+		// About the system memory the scene's entities occupy: every component storage (its elements, packed entities and
+		// sparse pages), the UUID map, and the heap memory of names and child lists. Costs a pass over those two components;
+		// for asset accounting (a prepared scene, a prefab's prototype), not for every frame.
+		uint64_t EstimateMemoryUsage() const;
 
 		// Root entities in hierarchy order.
 		const std::vector<UUID>& GetRootEntities() const { return m_RootEntities; }
@@ -370,8 +403,6 @@ namespace Strata
 			entt::entity Entity = entt::null;
 		};
 
-		// Live entities of the registry: the scene's, and any created directly through GetRegistry().
-		size_t GetRegistryEntityCount() const;
 		// Service registry: `provider` points to the interface (already cast to it), keyed by the interface's type hash.
 		bool RegisterServiceProvider(entt::id_type type, std::string_view typeName, void* provider);
 		void UnregisterServiceProvider(entt::id_type type, const void* provider);

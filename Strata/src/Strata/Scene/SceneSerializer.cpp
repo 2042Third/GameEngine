@@ -7,6 +7,7 @@
 #include "Strata/Scene/ComponentAccess.h"
 #include "Strata/Scene/UnknownComponents.h"
 
+#include <atomic>
 #include <unordered_set>
 
 namespace Strata
@@ -92,6 +93,8 @@ namespace Strata
 	namespace
 	{
 
+		std::atomic<uint64_t> s_DeserializeCount = 0;
+
 		// Reads one capacity: an integer from 0 (automatic) to `limit`; anything else is reported and leaves the capacity
 		// automatic, a larger value is reported and clamped.
 		uint32_t ReadCapacity(const nlohmann::json& capacity, std::string_view key, uint32_t limit, std::vector<std::string>* outWarnings)
@@ -153,8 +156,14 @@ namespace Strata
 		return json;
 	}
 
+	uint64_t SceneSerializer::GetDeserializeCount()
+	{
+		return s_DeserializeCount.load(std::memory_order_relaxed);
+	}
+
 	bool SceneSerializer::Deserialize(Scene& scene, const nlohmann::json& json, std::string* outError, std::vector<std::string>* outWarnings)
 	{
+		s_DeserializeCount.fetch_add(1, std::memory_order_relaxed);
 		auto fail = [outError](const std::string& message)
 		{
 			if (outError)

@@ -105,10 +105,17 @@ namespace Strata
 		if (m_AssetManager->GetAssetType(scene) != AssetType::Scene)
 			return fail(fmt::format("{} is not a scene of the game", scene.ToString()));
 		Ref<SceneAsset> asset = AssetManager::LoadAssetSync<SceneAsset>(scene);
+		if (asset && asset->IsTaken())
+		{
+			m_AssetManager->UnloadAsset(scene);
+			asset = AssetManager::LoadAssetSync<SceneAsset>(scene);
+		}
 		if (!asset)
 			return fail(fmt::format("Loading scene {} failed: {}", scene.ToString(), m_AssetManager->GetAssetError(scene)));
 		std::string error;
-		Ref<Scene> loaded = asset->CreateScene(&error);
+		Ref<Scene> loaded = asset->TakePreparedScene(&error);
+		// The asset is spent: a restart reads the scene from the pack again.
+		m_AssetManager->UnloadAsset(scene);
 		if (!loaded)
 			return fail(fmt::format("Scene {} is invalid: {}", scene.ToString(), error));
 

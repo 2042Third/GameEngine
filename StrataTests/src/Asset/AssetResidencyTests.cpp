@@ -99,7 +99,8 @@ TEST_SUITE("Asset.Residency")
 		CHECK(mesh->GetMemoryUsage().Cpu < geometry + 1024);
 		CHECK(mesh->GetMemoryUsage().GetGpu() == 0);
 
-		// Documents count what the parsed JSON occupies, which grows with what they hold.
+		// Prefabs and models count the entities they compiled their snapshots into, which grow with what they hold: at least
+		// the components every entity has.
 		const auto makeSnapshot = [](int entities)
 		{
 			Scene scene;
@@ -108,14 +109,18 @@ TEST_SUITE("Asset.Residency")
 				roots.push_back(scene.CreateEntity("Entity " + std::to_string(index)));
 			return SceneSerializer::SerializeEntities(scene, roots);
 		};
+		const uint64_t perEntity = sizeof(IDComponent) + sizeof(NameComponent) + sizeof(TransformComponent) + sizeof(RelationshipComponent)
+			+ sizeof(WorldTransformComponent);
 		const Ref<Prefab> smallPrefab = Prefab::CreateFromSnapshot(makeSnapshot(1));
 		const Ref<Prefab> largePrefab = Prefab::CreateFromSnapshot(makeSnapshot(100));
-		CHECK(smallPrefab->GetMemoryUsage().Cpu > 0);
-		CHECK(largePrefab->GetMemoryUsage().Cpu > 50 * smallPrefab->GetMemoryUsage().Cpu);
-		CHECK(largePrefab->GetMemoryUsage().Cpu > JsonUtils::Dump(largePrefab->GetSnapshot()).size()); // Parsed JSON takes more than its text
+		REQUIRE(smallPrefab);
+		REQUIRE(largePrefab);
+		CHECK(smallPrefab->GetMemoryUsage().Cpu > perEntity);
+		CHECK(largePrefab->GetMemoryUsage().Cpu > smallPrefab->GetMemoryUsage().Cpu + 99 * perEntity);
 		CHECK(largePrefab->GetMemoryUsage().GetGpu() == 0);
 		const Ref<Model> model = Model::CreateFromSnapshot(makeSnapshot(10));
-		CHECK(model->GetMemoryUsage().Cpu > smallPrefab->GetMemoryUsage().Cpu);
+		REQUIRE(model);
+		CHECK(model->GetMemoryUsage().Cpu > smallPrefab->GetMemoryUsage().Cpu + 9 * perEntity);
 
 		Scene scene("Document");
 		for (int index = 0; index < 20; index++)

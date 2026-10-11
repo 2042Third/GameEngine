@@ -322,7 +322,9 @@ namespace Strata
 		if (!asset)
 			return fail(fmt::format("Loading the scene failed: {}", m_AssetManager->GetAssetError(handle)));
 		std::string error;
-		Ref<Scene> scene = asset->CreateScene(&error);
+		Ref<Scene> scene = asset->TakePreparedScene(&error);
+		// The asset is spent: the next load of the scene reads its file again.
+		m_AssetManager->UnloadAsset(handle);
 		if (!scene)
 			return fail(fmt::format("The scene is invalid: {}", error));
 
@@ -520,10 +522,16 @@ namespace Strata
 			if (!m_AssetManager || m_AssetManager->GetAssetType(target) != AssetType::Scene)
 				return fail(fmt::format("{} is not a scene asset of the project", target.ToString()));
 			Ref<SceneAsset> asset = AssetManager::LoadAssetSync<SceneAsset>(target);
+			if (asset && asset->IsTaken())
+			{
+				m_AssetManager->UnloadAsset(target);
+				asset = AssetManager::LoadAssetSync<SceneAsset>(target);
+			}
 			if (!asset)
 				return fail(fmt::format("loading scene {} failed: {}", target.ToString(), m_AssetManager->GetAssetError(target)));
 			std::string error;
-			next = asset->CreateScene(&error);
+			next = asset->TakePreparedScene(&error);
+			m_AssetManager->UnloadAsset(target);
 			if (!next)
 				return fail(fmt::format("scene {} is invalid: {}", target.ToString(), error));
 		}

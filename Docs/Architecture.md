@@ -142,7 +142,8 @@ DirectionalLight, PointLight, SpotLight, SkyLight, PostProcess, Text, RigidBody,
 CapsuleCollider, MeshCollider, AudioSource, AudioListener, Script). `ComponentAccess` reads and writes them with
 validation and change signals, `SceneSerializer` writes versioned JSON (keeping components it cannot read, see
 [Composition root and registries](#composition-root-and-registries)), and `Prefab.h` defines the scene-shaped assets
-(`EntityTemplate`, `Prefab`, `Model`, `SceneAsset`). `SceneServices.h` defines the interfaces through which the systems
+(`EntityTemplate`, `Prefab`, `Model`, `SceneAsset`), whose entities are copied into scenes from compiled prototypes
+(`EntityPrototype`, see [Scene runtime lifecycle](#scene-runtime-lifecycle)). `SceneServices.h` defines the interfaces through which the systems
 of a playing scene use each other (see [Scene services](#scene-services)). See [Scene caches](#scene-caches) for how
 per-frame cost follows what changed.
 
@@ -350,7 +351,7 @@ ComponentRegistry::Freeze
   not register (a game module that is not loaded, a newer engine). `SceneSerializer::DeserializeEntities` keeps them
   verbatim in the runtime-only `UnknownComponentsComponent` (`Scene/UnknownComponents.h`; not registered, so the
   editor, reflection and the feature test never see it) and warns once per component name per load
-  (`SceneAsset::CreateScene` logs its warnings); the writer puts them back next to the registered components, so a save
+  (a scene asset logs its warnings once, when its scene is taken, `SceneAsset::TakePreparedScene`); the writer puts them back next to the registered components, so a save
   writes them unchanged. `Scene::Copy` (play mode), prefab snapshots (`SerializeEntities`), `Scene::DuplicateEntity`
   and the editor's undo snapshots (`EntityState`, `Editor/SceneEdit.cpp`) carry them; restoring undo snapshots does not
   warn again (`EntityInstantiationOptions::ReportUnknownComponents`).
@@ -519,8 +520,29 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   (`PhysicsCapacity`: bodies, body pairs and contact constraints; 0, the default, sizes one automatically; each up to a
   limit that bounds the memory a world reserves). All of it is saved with the scene and changed with `scene.setSettings`
   (one undo step); capacities apply when a world is created, at play start.
-- A scene knows the scene asset it was loaded from or saved as (`Scene::GetSourceAsset`, set by
-  `SceneAsset::CreateScene` and by the editor's save-as) and keeps an ID across its copies (`GetLineageID`: the source
+- **Scene assets are read once.** The scene loader (`SceneAsset::Deserialize`, on the loading worker) reads the
+  document into a scene, which validates it, and keeps that *prepared scene* instead of the parsed JSON, which is dropped
+  at once. `SceneAsset::TakePreparedScene` hands it over without a copy (the first call; the asset is spent afterwards,
+  reports no memory and is unloaded by whoever took it, so the next load reads the file again) and logs the warnings
+  the read collected once; `CreateScene` makes copies (`Scene::Copy`) for tools and tests while the asset still holds
+  it. `SceneSerializer::GetDeserializeCount` counts the documents read, so tests check that a load reads its scene
+  once.
+- **Compiled prefabs.** A prefab or model (`EntityTemplate`) compiles its snapshot once, when it is created or loaded (on
+  the loading worker), into an `EntityPrototype` (`Scene/EntityPrototype.h`): the entities in a private scene with real
+  components, in hierarchy order, with each entity's parent index, the registered components each one has and the entity
+  references among them (entity properties and script fields). The JSON is not kept (`GetSnapshot` and `Serialize`
+  write it from the prototype). Instantiating copies the prototype (`Scene::BeginInstantiation`,
+  `ContinueInstantiation`, `Instantiate`; `Scene/SceneInstantiation.cpp`): the scene's capacity is checked first, the
+  components are copied with `ComponentInfo::Copy` (on_construct), the entities are linked parents first, references
+  among the copies are remapped to their fresh IDs, every entity is linked to the asset (`PrefabInstanceComponent`) and
+  every component then emits on_update, the signals that deserializing the snapshot emitted. A 1,000-entity prefab
+  instantiates in about 0.3 ms (it took about 17 ms when every instance read the JSON). `EntityTemplate::InstantiateMany`
+  makes many instances in one call, each placed by a transform; `CompareInstance` lists an instance's entities with their
+  prototype entities and the components that differ (what applying and reverting instances work from). Instantiation can
+  also run in slices (`ContinueInstantiation` with a limit), each slice's entities complete when it returns, and keep the
+  prototype's own IDs (`InstantiationOptions::KeepIDs`; an ID the scene has already fails before anything is created).
+- A scene knows the scene asset it was loaded from or saved as (`Scene::GetSourceAsset`, set when a scene asset's
+  scene is taken or copied and by the editor's save-as) and keeps an ID across its copies (`GetLineageID`: the source
   asset, else an ID of its own), by which systems recognize it from one play session to the next.
 
 ### Scene services
@@ -913,7 +935,8 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   `GpuTextures` and `GpuBuffers`): textures their CPU mips until uploaded, then their GPU mip chain; meshes their CPU
   geometry and their GPU buffers, each counted once (once uploaded, the CPU keeps only the positions and indices physics
   reads; the vertex attributes live on the GPU alone); materials their parameters; fonts
-  and audio clips their data; prefabs, models and scenes an estimate of their parsed JSON. The manager reads it when an
+  and audio clips their data; prefabs and models their compiled prototype (`EntityPrototype::GetMemoryUsage`); scenes the scene they prepared
+  (`Scene::EstimateMemoryUsage`, nothing once it was taken). The manager reads it when an
   asset is published and keeps per-pool totals (`AssetManagerStats::Resident`; `LoadedMemory` is their sum).
   `AssetMetadata::StoredSize` is the size of what a load reads: the cache file or engine-native source in the editor,
   the pack entry at runtime.

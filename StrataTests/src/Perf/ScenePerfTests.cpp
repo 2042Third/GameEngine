@@ -2,12 +2,18 @@
 
 #include "Perf/PerfUtils.h"
 #include "Perf/SceneGenerators.h"
+#include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
+#include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/Scene.h"
 
+#include <glm/gtc/matrix_transform.hpp>
+
+#include <chrono>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 // Statistics: every time is the median of its samples (batches of calls where one call is too short to time), which the
 // machine's other work moves only when it slows down most of the measurement; a measurement it slowed down that much is
@@ -23,6 +29,45 @@ namespace
 	// batch spans hundreds of clock ticks or more.
 	constexpr uint32_t c_CallsPerBatch = 1000;
 	constexpr uint32_t c_CleanUpdatesPerBatch = 100'000;
+
+	// A prefab of `count` entities nested ten to a parent (Perf::CreateNestedHierarchy), each drawing the built-in cube with
+	// a tag, as props and enemies do.
+	Ref<Prefab> CreateMeshPrefab(size_t count)
+	{
+		Scene authoring("Authoring");
+		const Perf::NestedHierarchy hierarchy = Perf::CreateNestedHierarchy(authoring, count);
+		for (Entity entity : hierarchy.Entities)
+		{
+			entity.AddComponent<MeshRendererComponent>().Mesh = BuiltinAssets::CubeMesh;
+			entity.AddComponent<TagComponent>().Tag = "Prop";
+		}
+		Ref<Prefab> prefab = Prefab::CreateFromEntities(authoring, { hierarchy.Root });
+		REQUIRE(prefab);
+		REQUIRE(prefab->GetEntityCount() == count);
+		prefab->Handle = UUID();
+		return prefab;
+	}
+
+	// The median time of `samples` calls of `create` (after `warmup` untimed ones), each followed by `destroy`, untimed, so that
+	// every call instantiates into a scene of the same size.
+	template<typename Create, typename Destroy>
+	double MeasureCreation(std::string_view name, uint32_t warmup, uint32_t samples, Create&& create, Destroy&& destroy)
+	{
+		std::vector<double> times;
+		times.reserve(samples);
+		for (uint32_t call = 0; call < warmup + samples; call++)
+		{
+			const auto start = std::chrono::steady_clock::now();
+			create();
+			const double milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+			destroy();
+			if (call >= warmup)
+				times.push_back(milliseconds);
+		}
+		const Perf::Measurement measurement = Perf::Summarize(times);
+		MESSAGE(name, ": median ", measurement.MedianMs, " ms, p95 ", measurement.P95Ms, " ms, max ", measurement.MaxMs, " ms");
+		return measurement.MedianMs;
+	}
 
 	// Moves an entity back and forth along x (so repeated moves stay near the start) and signals the write.
 	void Nudge(Entity entity, uint32_t iteration)
@@ -142,5 +187,53 @@ TEST_SUITE("Perf.Scene")
 
 		std::string error;
 		CHECK_MESSAGE(scene.ValidateWorldTransforms(&error), error);
+	}
+
+	TEST_CASE("Prefab instances are copied from the prefab's compiled entities")
+	{
+		Perf::ScopedApplicationJobSystem jobs;
+		// A scene that already holds entities, as a running level does.
+		Scene scene("Level");
+		Perf::CreateNestedHierarchy(scene, 10'000);
+		scene.UpdateWorldTransforms();
+
+		// One instance of a small and of a large prefab: the median call of many.
+		const Ref<Prefab> small = CreateMeshPrefab(10);
+		const Ref<Prefab> large = CreateMeshPrefab(1000);
+		std::vector<Entity> roots;
+		const auto destroyRoots = [&]
+		{
+			scene.DestroyEntities(roots);
+			roots.clear();
+		};
+		Perf::CheckBudgetConfirmed("Perf.Scene.InstantiatePrefab10", [&]
+		{
+			// Microseconds: batches of 100 instances (destroyed together afterwards), the time per instance.
+			constexpr uint32_t c_Batch = 100;
+			const double batchMs = MeasureCreation("Perf.Scene.InstantiatePrefab10 (100 instances)", 5, 101, [&]
+			{
+				for (uint32_t index = 0; index < c_Batch; index++)
+					roots.push_back(small->Instantiate(scene).front());
+			}, destroyRoots);
+			return batchMs * 1000.0 / c_Batch;
+		});
+		Perf::CheckBudgetConfirmed("Perf.Scene.InstantiatePrefab1k", [&]
+		{
+			return MeasureCreation("Perf.Scene.InstantiatePrefab1k", 5, 101, [&] { roots = large->Instantiate(scene); }, destroyRoots);
+		});
+
+		// A thousand instances of the small prefab in one call, each placed by its transform.
+		std::vector<glm::mat4> transforms;
+		for (uint32_t index = 0; index < 1000; index++)
+			transforms.push_back(glm::translate(glm::mat4(1.0f), glm::vec3(static_cast<float>(index % 32) * 3.0f, 0.0f, static_cast<float>(index / 32) * 3.0f)));
+		Perf::CheckBudgetConfirmed("Perf.Scene.InstantiateMany1000x10", [&]
+		{
+			return MeasureCreation("Perf.Scene.InstantiateMany1000x10", 3, 41, [&]
+			{
+				roots = small->InstantiateMany(scene, transforms);
+				REQUIRE(roots.size() == 1000);
+			}, destroyRoots);
+		});
+		CHECK(scene.GetEntityCount() == 10'000);
 	}
 }
