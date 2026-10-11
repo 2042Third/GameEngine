@@ -1016,7 +1016,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   poses of the edited scene's animators through the `EditorContext`'s `AnimationPreview` (the edited scene's
   `ISkinningPoses` while it does not play), which change no scene data and are dropped with the scene. The Asset tab
   draws skeletons, clips and controllers (`UI/AnimationAssetViews`: controllers as editable tables, one undo step per
-  edit); the Inspector shows a playing animator's state and parameters.
+  edit, whose fields never get narrower than their content needs: a narrow tab scrolls the table sideways); the
+  Inspector shows a playing animator's state and parameters.
 - **Simulated input** (`Editor/EditorInputCommands.cpp`) lets tools play a running game (play mode only) as a person
   would: `input.key {key, action: tap|press|release, frames, wait}`, `input.mouseButton {button, action, frames, wait}`,
   `input.mouseMove {position, wait}` (pixels from the game view's top-left corner), `input.scroll {delta, wait}`,

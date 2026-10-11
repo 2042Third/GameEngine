@@ -20,6 +20,7 @@
 #include <cfloat>
 #include <charconv>
 #include <cmath>
+#include <span>
 
 namespace Strata
 {
@@ -100,6 +101,51 @@ namespace Strata
 			const float rowHeight = ImGui::GetFrameHeightWithSpacing();
 			const float height = rowHeight * std::min(static_cast<float>(rows) + 1.0f, c_MaxListRows);
 			ImGui::BeginChild(id, ImVec2(0.0f, height), ImGuiChildFlags_Borders);
+		}
+
+		// A column of an editable table: a field whose least width (in font sizes) keeps its content legible and is also its
+		// share of a wider table, or a checkbox or icon button (a square of the frame's height).
+		struct EditColumn
+		{
+			const char* Name = "";
+			float Width = 0.0f;
+			bool Square = false;
+		};
+
+		// Begins an editable table (and draws its header) whose fields never get narrower than their least widths: in a
+		// narrower panel the table scrolls sideways rather than squeezing names and numbers into ellipses.
+		bool BeginEditTable(const char* id, std::span<const EditColumn> columns, size_t rows)
+		{
+			const ImGuiStyle& style = ImGui::GetStyle();
+			const float fontSize = ImGui::GetFontSize();
+			const float square = ImGui::GetFrameHeight();
+			float leastWidth = 0.0f;
+			for (const EditColumn& column : columns)
+				leastWidth += (column.Square ? square : column.Width * fontSize) + style.CellPadding.x * 2.0f;
+			ImGuiTableFlags flags = ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg;
+			ImVec2 outerSize(0.0f, 0.0f);
+			float innerWidth = 0.0f;
+			if (ImGui::GetContentRegionAvail().x < leastWidth)
+			{
+				// A table that scrolls is a window of its own, as tall as its header, its rows of fields and its scrollbar.
+				flags |= ImGuiTableFlags_ScrollX;
+				const float header = ImGui::GetTextLineHeight() + style.CellPadding.y * 2.0f;
+				const float row = square + style.CellPadding.y * 2.0f;
+				outerSize.y = header + row * static_cast<float>(rows) + style.ScrollbarSize + style.ItemSpacing.y;
+				innerWidth = leastWidth;
+			}
+			if (!ImGui::BeginTable(id, static_cast<int>(columns.size()), flags, outerSize, innerWidth))
+				return false;
+			// Stretch weights are the least widths: a table at its least width gives every field exactly its own.
+			for (const EditColumn& column : columns)
+			{
+				if (column.Square)
+					ImGui::TableSetupColumn(column.Name, ImGuiTableColumnFlags_WidthFixed, square);
+				else
+					ImGui::TableSetupColumn(column.Name, ImGuiTableColumnFlags_WidthStretch, column.Width);
+			}
+			ImGui::TableHeadersRow();
+			return true;
 		}
 
 	}
@@ -396,13 +442,9 @@ namespace Strata
 		static const PropertyInfo c_BoolDefault = MakeProperty("DefaultBool", PropertyType::Bool, "The value the animator starts with");
 
 		std::optional<size_t> removed;
-		if (!data.Parameters.empty() && ImGui::BeginTable("Parameters", 4, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
+		static constexpr EditColumn c_Columns[] = { { "Name", 6.0f }, { "Type", 5.75f }, { "Default", 3.75f }, { "##Remove", 0.0f, true } };
+		if (!data.Parameters.empty() && BeginEditTable("Parameters", c_Columns, data.Parameters.size()))
 		{
-			ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 3.0f);
-			ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthStretch, 2.0f);
-			ImGui::TableSetupColumn("Default", ImGuiTableColumnFlags_WidthStretch, 2.0f);
-			ImGui::TableSetupColumn("##Remove", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFrameHeight());
-			ImGui::TableHeadersRow();
 			for (size_t index = 0; index < data.Parameters.size(); index++)
 			{
 				const AnimationParameter& parameter = data.Parameters[index];
@@ -510,16 +552,10 @@ namespace Strata
 		static const PropertyInfo c_Events = MakeProperty("Events", PropertyType::String, "Events scripts receive (OnAnimationEvent): Name@seconds, ...");
 
 		std::optional<size_t> removed;
-		if (ImGui::BeginTable("States", 7, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
+		static constexpr EditColumn c_Columns[] = { { "##Default", 0.0f, true }, { "Name", 6.0f }, { "Clip", 7.5f }, { "Speed", 4.0f }, { "Loop", 0.0f, true },
+			{ "Events", 7.0f }, { "##Remove", 0.0f, true } };
+		if (BeginEditTable("States", c_Columns, data.States.size()))
 		{
-			ImGui::TableSetupColumn("##Default", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFrameHeight());
-			ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 2.0f);
-			ImGui::TableSetupColumn("Clip", ImGuiTableColumnFlags_WidthStretch, 3.0f);
-			ImGui::TableSetupColumn("Speed", ImGuiTableColumnFlags_WidthStretch, 1.2f);
-			ImGui::TableSetupColumn("Loop", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFrameHeight());
-			ImGui::TableSetupColumn("Events", ImGuiTableColumnFlags_WidthStretch, 2.5f);
-			ImGui::TableSetupColumn("##Remove", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFrameHeight());
-			ImGui::TableHeadersRow();
 			for (size_t index = 0; index < data.States.size(); index++)
 			{
 				const AnimationState& state = data.States[index];
@@ -654,16 +690,10 @@ namespace Strata
 		}();
 
 		std::optional<size_t> removed;
-		if (!data.Transitions.empty() && ImGui::BeginTable("Transitions", 7, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
+		static constexpr EditColumn c_Columns[] = { { "From", 6.5f }, { "To", 5.5f }, { "Conditions", 7.5f }, { "##HasExit", 0.0f, true }, { "Exit", 3.0f },
+			{ "Fade", 3.0f }, { "##Remove", 0.0f, true } };
+		if (!data.Transitions.empty() && BeginEditTable("Transitions", c_Columns, data.Transitions.size()))
 		{
-			ImGui::TableSetupColumn("From", ImGuiTableColumnFlags_WidthStretch, 2.0f);
-			ImGui::TableSetupColumn("To", ImGuiTableColumnFlags_WidthStretch, 2.0f);
-			ImGui::TableSetupColumn("Conditions", ImGuiTableColumnFlags_WidthStretch, 3.0f);
-			ImGui::TableSetupColumn("##HasExit", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFrameHeight());
-			ImGui::TableSetupColumn("Exit", ImGuiTableColumnFlags_WidthStretch, 1.2f);
-			ImGui::TableSetupColumn("Fade", ImGuiTableColumnFlags_WidthStretch, 1.2f);
-			ImGui::TableSetupColumn("##Remove", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFrameHeight());
-			ImGui::TableHeadersRow();
 			for (size_t index = 0; index < data.Transitions.size(); index++)
 			{
 				const AnimationTransition& transition = data.Transitions[index];

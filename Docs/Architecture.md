@@ -1305,8 +1305,9 @@ system, not to entities: a character's joints add no entities and no transform c
   scene changes. The editor keeps one for its edited scene (`EditorContext::GetAnimationPreview`, `animation.preview`).
 - **Editor.** `animation.createController`, `animation.setController`, `animation.info` and `animation.preview` give
   agents the whole workflow without hand-written JSON (AGENTS.md, "Editor"); the Asset tab edits controllers as tables
-  (`UI/AnimationAssetViews`) and shows skeletons and clips, and the Inspector shows a playing animator's state and
-  parameters.
+  (`UI/AnimationAssetViews`; each field has a least width in font sizes, which is also its share of a wider table, and
+  a tab narrower than a table's least width scrolls it sideways instead of squeezing names and numbers into ellipses)
+  and shows skeletons and clips, and the Inspector shows a playing animator's state and parameters.
 
 ## Scripting
 

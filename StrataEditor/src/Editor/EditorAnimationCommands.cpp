@@ -25,7 +25,6 @@ namespace Strata
 	namespace
 	{
 
-
 		nlohmann::json ControllerSchemaProperties()
 		{
 			return {
