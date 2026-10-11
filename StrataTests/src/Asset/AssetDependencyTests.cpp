@@ -7,6 +7,7 @@
 #include "Strata/Asset/EditorAssetManager.h"
 #include "Strata/Asset/RuntimeAssetManager.h"
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Core/JobSystem.h"
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Reflection/PropertyJson.h"
@@ -20,6 +21,7 @@
 #include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <limits>
 #include <map>
@@ -330,6 +332,54 @@ TEST_SUITE("Asset.Dependencies")
 		CHECK_FALSE(manager->ReadStoredRange(UUID(0x5001), file->size() - 2, 3, range, &error));
 		CHECK(error.find("outside") != std::string::npos);
 		CHECK_FALSE(manager->ReadStoredRange(UUID(0x9999), 0, 1, range, &error));
+		// And whole (as the export's script check reads documents, under the manager's file lock).
+		std::vector<uint8_t> whole;
+		REQUIRE(manager->ReadStoredData(UUID(0x5001), whole, &error));
+		CHECK(whole == *file);
+		CHECK_FALSE(manager->ReadStoredData(UUID(0x9999), whole, &error));
+	}
+
+	TEST_CASE("A search of what a document references that a save overtook writes no record")
+	{
+		ScopedJobSystem jobs(1, 1);
+		NativeProject project("NativeReferencesOvertaken");
+		project.WriteMaterial("Materials/Brick.stmat", 0x5011, 0x9011);
+		Ref<EditorAssetManager> manager = project.Open();
+		const std::filesystem::path record = project.Cache / (UUID(0x5011).ToString() + ".import");
+		REQUIRE(FileSystem::IsRegularFile(record));
+
+		// The I/O thread is held: the search a re-import queues waits until after the save.
+		std::atomic<bool> release = false;
+		std::atomic<bool> holding = false;
+		const JobHandle hold = JobSystem::SubmitIO([&]()
+		{
+			holding = true;
+			while (!release.load())
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		});
+		while (!holding.load())
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		REQUIRE(manager->ReimportAsset(UUID(0x5011)));
+		MaterialProperties properties;
+		properties.EmissiveMap = UUID(0x9012);
+		REQUIRE(manager->SaveNativeAsset(UUID(0x5011), ToBytes(Material::Create(properties)->Serialize()), true));
+		CHECK(manager->GetDependencies(UUID(0x5011)) == Handles({ 0x9012 }));
+
+		// The save wrote the record of what it saved. Without it, a record after the search could only be the search's: a
+		// search the save overtook is applied by nobody, and so writes nothing (it could describe the file before the save).
+		REQUIRE(FileSystem::Remove(record));
+		release = true;
+		while (!hold.IsComplete())
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		manager->WaitForImports();
+		CHECK_FALSE(FileSystem::Exists(record));
+		CHECK(manager->GetDependencies(UUID(0x5011)) == Handles({ 0x9012 }));
+		manager.reset();
+
+		// Missing, the record is made again from the file when the project opens.
+		manager = project.Open();
+		CHECK(manager->GetDependencies(UUID(0x5011)) == Handles({ 0x9012 }));
+		CHECK(FileSystem::IsRegularFile(record));
 	}
 
 	TEST_CASE("Packs are ordered by first use, and pruning keeps what scenes and AlwaysInclude use")

@@ -673,7 +673,11 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   saving records what the caller found in the JSON it serialized (`EditorContext::SaveScene` passes
   `AssetDependencies::ScanDocument` of the scene, so a save parses no document again: a 200,000-entity scene saves in
   the time it took before references were recorded), and a file changed on disk (`asset.reimport`, the file watcher) is
-  searched on an I/O job whose result the next update records unless a later search started meanwhile.
+  searched on an I/O job whose result, record included, the next update applies unless a later search or a save started
+  meanwhile (a search that a save overtook may have read the file before the save; its record would pair the old
+  references with the new file's time). Searches read the file, its size and its time together under the shared file
+  lock, and so does whatever else reads documents beside saves (`ReadStoredData`, e.g. the export's check for scripts):
+  a save replaces a file under the exclusive lock, which an open reader would make fail on Windows.
   The manager hands them to `AssetManagerBase::SetAssetReferences`, which keeps each valid handle once and leaves out the
   asset itself (`NormalizeReferences`); packs carry them as their dependency table and entry bounds, so `GetDependencies`
   and `GetBounds` answer the same in the editor and in the game, before anything loads.

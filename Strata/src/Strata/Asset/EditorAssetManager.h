@@ -213,6 +213,9 @@ namespace Strata
 			std::vector<AssetHandle> References;
 			bool Scanned = false; // Found (from the record or a scan)
 			uint64_t Generation = 0; // The source's ReferencesGeneration when the search started
+			// Of a background search: the record to write once Update applies the result (only while it is the latest search,
+			// so a search that a save overtook never overwrites the save's record).
+			std::optional<nlohmann::json> Record;
 		};
 
 		std::filesystem::path ToAbsolute(std::string_view relativePath) const;
@@ -254,10 +257,11 @@ namespace Strata
 		void RemoveUnusedCacheFiles();
 
 		// References of engine-native assets (AssetDependencies::Scan of the source), cached per content in the asset's
-		// import record. Any thread: reads the record, or scans the file (`data` when given, else read; `references` when the
-		// caller knows them) and writes the record.
+		// import record. Any thread: reads the record, or scans the file (`data` when given, else read under the shared file
+		// lock, with its size and time; `references` when the caller knows them) and writes the record, or with deferRecord
+		// hands it to the caller in NativeReferences::Record.
 		NativeReferences FindNativeReferences(AssetHandle handle, AssetType type, const std::string& relativePath, std::span<const uint8_t> data = {},
-			const std::vector<AssetHandle>* references = nullptr) const;
+			const std::vector<AssetHandle>* references = nullptr, bool deferRecord = false) const;
 		// Records them with the base (main thread).
 		void ApplyNativeReferences(const NativeReferences& references);
 		// Records the references of a source asset stored as-is that the editor has just written: `references` when the

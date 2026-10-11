@@ -1319,6 +1319,27 @@ namespace Strata
 		return group;
 	}
 
+	bool AssetManagerBase::ReadStoredData(AssetHandle handle, std::vector<uint8_t>& outData, std::string* outError)
+	{
+		std::optional<AssetMetadata> metadata = GetMetadata(handle);
+		if (!metadata || IsBuiltinAssetHandle(handle))
+		{
+			if (outError)
+				*outError = fmt::format("Asset {} has no stored form here", handle.ToString());
+			return false;
+		}
+		try
+		{
+			return ReadAssetData(*metadata, outData, outError);
+		}
+		catch (const std::exception& exception)
+		{
+			if (outError)
+				*outError = fmt::format("Reading asset {} failed: {}", handle.ToString(), exception.what());
+			return false;
+		}
+	}
+
 	bool AssetManagerBase::ReadStoredRange(AssetHandle handle, uint64_t offset, uint64_t size, std::vector<uint8_t>& outData, std::string* outError)
 	{
 		std::optional<AssetMetadata> metadata = GetMetadata(handle);

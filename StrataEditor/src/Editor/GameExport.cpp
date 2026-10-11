@@ -51,16 +51,20 @@ namespace Strata
 		}
 
 		// The first scene or prefab the pack holds that attaches scripts (empty when none does). The saved files are read, as
-		// the export packs them; loaded copies may be older. Any thread.
+		// the export packs them (loaded copies may be older), through the manager: under its file lock, so a save of the same
+		// document meanwhile still replaces its file. Any thread.
 		std::string FindAssetUsingScripts(EditorAssetManager& assets, const AssetPackBuildPlan& plan)
 		{
+			std::vector<uint8_t> bytes;
 			for (const AssetPackSource& source : plan.Assets)
 			{
 				const AssetMetadata& metadata = source.Metadata;
 				const char* documentKey = metadata.Type == AssetType::Scene ? "Scene" : metadata.Type == AssetType::Prefab ? "Prefab" : nullptr;
 				if (!documentKey || metadata.IsSubAsset())
 					continue;
-				const std::optional<std::string> text = FileSystem::ReadText(assets.GetAbsolutePath(metadata.Handle));
+				bytes.clear();
+				const std::optional<std::string> text = assets.ReadStoredData(metadata.Handle, bytes) ? std::optional<std::string>(std::string(bytes.begin(), bytes.end()))
+					: std::nullopt;
 				const std::optional<nlohmann::json> document = text ? JsonUtils::Parse(*text) : std::nullopt;
 				const nlohmann::json* content = document ? JsonUtils::Find(*document, documentKey) : nullptr;
 				if (content && UsesScripts(*content))

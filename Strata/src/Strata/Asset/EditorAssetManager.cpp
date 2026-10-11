@@ -1110,7 +1110,8 @@ namespace Strata
 			references.swap(m_CompletedReferences);
 		}
 
-		// What engine-native assets reference, unless a later search started meanwhile (its result follows).
+		// What engine-native assets reference, unless a later search or a save started meanwhile (its result follows): the
+		// record is written here, on the main thread like a save's, so a search that a save overtook never replaces the save's.
 		for (const NativeReferences& found : references)
 		{
 			bool current = false;
@@ -1119,8 +1120,11 @@ namespace Strata
 				auto it = m_Sources.find(found.Handle);
 				current = it != m_Sources.end() && it->second.ReferencesGeneration == found.Generation;
 			}
-			if (current)
-				ApplyNativeReferences(found);
+			if (!current)
+				continue;
+			ApplyNativeReferences(found);
+			if (found.Record && !FileSystem::WriteText(GetImportRecordPath(found.Handle), JsonUtils::Dump(*found.Record, 1, '\t')))
+				ST_CORE_WARN("Could not write the import record of '{}'", JsonUtils::GetString(*found.Record, "Source", ""));
 		}
 
 		for (ImportOutcome& outcome : completed)
@@ -1168,7 +1172,7 @@ namespace Strata
 	}
 
 	EditorAssetManager::NativeReferences EditorAssetManager::FindNativeReferences(AssetHandle handle, AssetType type, const std::string& relativePath,
-		std::span<const uint8_t> data, const std::vector<AssetHandle>* references) const
+		std::span<const uint8_t> data, const std::vector<AssetHandle>* references, bool deferRecord) const
 	{
 		NativeReferences result;
 		result.Handle = handle;
@@ -1182,18 +1186,26 @@ namespace Strata
 		const std::filesystem::path recordPath = GetImportRecordPath(handle);
 		try
 		{
-			// The record, when the file is what it was when the record was written.
+			// The record, when the file is what it was when the record was written. The file is hashed under the shared file lock:
+			// a save replaces it under the exclusive one, which an open reader would make fail on Windows.
 			if (data.empty())
 			{
 				const std::optional<std::string> text = FileSystem::ReadText(recordPath);
 				std::optional<nlohmann::json> record = text ? JsonUtils::Parse(*text) : std::nullopt;
 				bool recordChanged = false;
-				if (record && record->is_object() && JsonUtils::GetUInt(*record, "Version", 0) == c_ImportRecordVersion && JsonUtils::GetBool(*record, "Native", false)
-					&& IsFileCurrent(sourcePath, *record, "SourceSize", "SourceTime", "SourceHash", recordChanged))
+				bool current = false;
+				if (record && record->is_object() && JsonUtils::GetUInt(*record, "Version", 0) == c_ImportRecordVersion && JsonUtils::GetBool(*record, "Native", false))
+				{
+					std::shared_lock<std::shared_mutex> fileLock(m_FileMutex);
+					current = IsFileCurrent(sourcePath, *record, "SourceSize", "SourceTime", "SourceHash", recordChanged);
+				}
+				if (current)
 				{
 					if (std::optional<std::vector<AssetHandle>> recorded = ReferencesFromJson(*record))
 					{
-						if (recordChanged)
+						if (recordChanged && deferRecord)
+							result.Record = std::move(*record);
+						else if (recordChanged)
 							FileSystem::WriteText(recordPath, JsonUtils::Dump(*record, 1, '\t'));
 						result.References = std::move(*recorded);
 						result.Scanned = true;
@@ -1202,14 +1214,21 @@ namespace Strata
 				}
 			}
 
+			// The time the record keeps is the one of the bytes scanned: read with them, under the lock that keeps saves out.
 			std::optional<std::vector<uint8_t>> file;
+			int64_t sourceTime = 0;
 			if (data.empty())
 			{
 				std::shared_lock<std::shared_mutex> fileLock(m_FileMutex);
 				file = FileSystem::ReadBytes(sourcePath);
 				if (!file)
 					return result;
+				sourceTime = FileSystem::GetLastWriteTime(sourcePath).value_or(0);
 				data = *file;
+			}
+			else
+			{
+				sourceTime = FileSystem::GetLastWriteTime(sourcePath).value_or(0);
 			}
 			std::string error;
 			if (references)
@@ -1229,10 +1248,12 @@ namespace Strata
 			record["Native"] = true; // Stored as its source: the record only caches what it references
 			record["Source"] = relativePath;
 			record["SourceSize"] = data.size();
-			record["SourceTime"] = FileSystem::GetLastWriteTime(sourcePath).value_or(0);
+			record["SourceTime"] = sourceTime;
 			record["SourceHash"] = HashToString(Hash::FNV1a(data));
 			record["References"] = ReferencesToJson(result.References);
-			if (!FileSystem::WriteText(recordPath, JsonUtils::Dump(record, 1, '\t')))
+			if (deferRecord)
+				result.Record = std::move(record);
+			else if (!FileSystem::WriteText(recordPath, JsonUtils::Dump(record, 1, '\t')))
 				ST_CORE_WARN("Could not write the import record of '{}'", relativePath);
 		}
 		catch (const std::exception& exception)
@@ -1287,7 +1308,9 @@ namespace Strata
 		}
 		auto search = [this, handle, type, path, generation]()
 		{
-			NativeReferences references = FindNativeReferences(handle, type, path); // Catches what it may throw
+			// Its record is written by Update, and only while this is the latest search (FindNativeReferences catches what it
+			// may throw).
+			NativeReferences references = FindNativeReferences(handle, type, path, {}, nullptr, true);
 			references.Generation = generation;
 			std::scoped_lock<std::mutex> lock(m_ImportMutex);
 			m_ImportsInFlight--;

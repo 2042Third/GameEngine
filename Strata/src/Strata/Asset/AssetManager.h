@@ -399,6 +399,9 @@ namespace Strata
 		// Reads `size` bytes of an asset's stored form from `offset` without loading the asset (e.g. one level of a texture's
 		// mip chain): packs decode only the blocks the range covers. Thread-safe; blocks the calling thread (use an I/O job).
 		bool ReadStoredRange(AssetHandle handle, uint64_t offset, uint64_t size, std::vector<uint8_t>& outData, std::string* outError = nullptr);
+		// Reads an asset's whole stored form without loading the asset (the file of a document stored as it is, which the
+		// editor reads under its file lock, so that it never keeps a save from replacing the file). Thread-safe; blocks.
+		bool ReadStoredData(AssetHandle handle, std::vector<uint8_t>& outData, std::string* outError = nullptr);
 
 		// The queue score of dependency prefetches: below the default score of direct requests of the same priority.
 		static constexpr float c_DependencyPrefetchScore = -1.0f;
