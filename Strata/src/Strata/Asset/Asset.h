@@ -83,6 +83,12 @@ namespace Strata
 		// request what it references, because prefetches do not chain. The manager prefetches its dependencies once
 		// something requests it, and whatever uses them requests them.
 		bool Prefetched = false;
+		// The frame's first finalization (and calls without a budget): its first step goes whatever the deadline says, so every
+		// frame makes progress and an asset larger than a frame's budget still arrives. A later call of the frame takes no
+		// step, and allocates nothing, once the deadline has passed or the step would end after it, so finalization ends by
+		// the deadline but for the frame's first step. (Every call's first step may go past the upload budget: the manager
+		// starts no call once it is used up, so a frame uploads its budget and one step at most.)
+		bool FirstOfFrame = true;
 	};
 
 	// Memory an asset holds, per residency pool (see AssetResidencyBudgets): each pool has its own budget, because

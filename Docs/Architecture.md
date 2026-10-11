@@ -924,8 +924,10 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   memcpy): textures in bands of rows of a level (rows of 4x4 blocks for block-compressed formats), or the rest of the
   mip chain once it fits in one band; meshes in ranges
   of their buffers. Each finalization call gets what is left of the frame's budget (`AssetFinalizeContext`: upload
-  bytes, a deadline and the staging budget) and takes no step beyond the upload bytes or the deadline except its first,
-  so a frame overshoots `UploadBytesPerFrame` or `FinalizeMsPerFrame` by one step at most; textures also skip a step
+  bytes, a deadline and the staging budget) and takes no step beyond the upload bytes except its first, and none beyond
+  the deadline except the first step of the frame's first call (`AssetFinalizeContext::FirstOfFrame`; a later call past
+  the deadline does not even create its GPU resource), so a frame overshoots `UploadBytesPerFrame` by one step and
+  `FinalizeMsPerFrame` by its first step at most; textures also skip a step
   that would end after the deadline at the speed of the latest steps. Texture steps also wait for staging room (see
   Staging), except the frame's first step: every frame makes progress, also without device frames, while a later call
   may take no step at all. A texture is published (and gets its bindless slot) once its whole chain is uploaded; its CPU

@@ -3,6 +3,7 @@
 #include "Renderer/GPUTestUtils.h"
 #include "Strata/Renderer/BindlessTextureTable.h"
 #include "Strata/Renderer/Mesh.h"
+#include "Strata/Renderer/MeshFactory.h"
 #include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/StagingTexturePool.h"
 #include "Strata/Renderer/Texture.h"
@@ -523,6 +524,52 @@ TEST_SUITE("GPU.Assets.Uploads")
 		CHECK(GetPixelRGBA8(level0, 511, 511) == GetPatternTexel(511, 511, 0));
 		texture.reset();
 		smallTexture.reset();
+		SettleDevice(gpu);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Past the deadline only the frame's first finalization works: later calls neither allocate nor upload")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SettleDevice(gpu);
+		TextureSpecification specification;
+		specification.Format = TextureFormat::RGBA8;
+		specification.DebugName = "LateTexture";
+		const Ref<Texture> source = Texture::Create(specification, CreatePatternChain(1024, 1024));
+		REQUIRE(source);
+		Ref<Texture> texture = Texture::Deserialize(source->Serialize());
+		REQUIRE(texture);
+		const Ref<Mesh> sourceMesh = MeshFactory::CreateCube();
+		Ref<Mesh> mesh = Mesh::Deserialize(sourceMesh->Serialize());
+		REQUIRE(mesh);
+
+		nvrhi::CommandListHandle commandList = gpu.GetNvrhiDevice()->createCommandList();
+		commandList->open();
+		uint64_t uploaded = 0;
+		AssetFinalizeContext context { commandList, nullptr };
+		context.UploadBudget = 64ull << 20;
+		context.Deadline = std::chrono::steady_clock::now(); // Passed
+		context.UploadedBytes = &uploaded;
+		// Not the frame's first finalization: nothing happens, not even the GPU texture's or buffers' creation.
+		context.FirstOfFrame = false;
+		CHECK(texture->FinalizeOnMainThread(context) == AssetFinalizeResult::Pending);
+		CHECK(texture->GetGPUTexture() == nullptr);
+		CHECK(mesh->FinalizeOnMainThread(context) == AssetFinalizeResult::Pending);
+		CHECK(mesh->GetIndexBuffer() == nullptr);
+		CHECK(uploaded == 0);
+		// The frame's first finalization takes its first step whatever the time.
+		context.FirstOfFrame = true;
+		CHECK(texture->FinalizeOnMainThread(context) == AssetFinalizeResult::Pending);
+		CHECK(texture->GetGPUTexture() != nullptr);
+		CHECK(uploaded == Texture::c_UploadBandBytes);
+		CHECK(mesh->FinalizeOnMainThread(context) == AssetFinalizeResult::Done);
+		CHECK(mesh->GetIndexBuffer() != nullptr);
+		commandList->close();
+		REQUIRE(gpu.ExecuteAndWait(commandList));
+
+		texture.reset();
+		mesh.reset();
 		SettleDevice(gpu);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

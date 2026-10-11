@@ -139,8 +139,9 @@ Open items and deferrals later waves own:
   the mesh loads again (the source revisions render-scene uses would tell).
 - Textures: `asset.import` still cooks on the main thread (about 1.5 s for a 4096x4096 BC7 color texture; asynchronous
   import is `content-and-prefabs`'); HDR textures stay RGBA16F until a BC6H encoder exists; a BC7 upload step carries
-  twice BC1's bytes, so a frame that finalizes a large texture takes 4.1-6.2 ms in the evicting sweep (budget 6.75 ms)
-  until smaller upload steps (`mip-streaming`).
+  twice BC1's bytes, and the frame's first step goes whatever the deadline says (later finalizations of a frame past
+  its deadline wait for the next frame), so a frame that finalizes a large texture still takes up to about 4.2 ms in the
+  evicting sweep (budget 5.44 ms) until smaller upload steps (`mip-streaming`).
 - A world seen all at once still keeps every texture in view resident: no budget evicts what is in view, so the stress
   world peaks at about 540 MB with BC textures until mip streaming (`mip-streaming`). Mesh uploads still go through
   NVRHI's upload manager until the budgeted upload queue (`mip-streaming`). `GetResidencyInfo` and `GetResidencySamples`

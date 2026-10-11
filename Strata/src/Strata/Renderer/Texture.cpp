@@ -338,6 +338,11 @@ namespace Strata
 		if (!commandList || m_BindlessSlot != BindlessTextureTable::c_InvalidSlot)
 			return AssetFinalizeResult::Done; // No renderer (tools, tests): CPU data only; or finalized before
 
+		// Past the deadline only the frame's first finalization works (AssetFinalizeContext::FirstOfFrame); creating the GPU
+		// texture is work too.
+		if (!context.FirstOfFrame && std::chrono::steady_clock::now() >= context.Deadline)
+			return AssetFinalizeResult::Pending;
+
 		if (!m_GPUTexture)
 		{
 			// Loaders decode block-compressed data for such devices (IsBlockCompressionSupported); textures created from
@@ -365,8 +370,9 @@ namespace Strata
 			m_UploadRow = 0;
 		}
 
-		// Steps until the chain is uploaded or the budget is used up; the first step of a call is always taken as far as the
-		// upload budget and the deadline go, so a texture larger than any frame's budget still arrives. Steps also wait for
+		// Steps until the chain is uploaded or the budget is used up; the first step of a call is taken whatever the upload
+		// budget says, and the first step of the frame's first call whatever the deadline says too, so a texture larger than any
+		// frame's budget still arrives (AssetFinalizeContext::FirstOfFrame). Steps also wait for
 		// staging memory (it frees up as frames complete) beyond the context's StagingBytes, so a burst of arrivals cannot
 		// pile up staging, except the frame's first step (nothing uploaded yet): every frame makes progress, also where no
 		// device frames recycle staging (tools, tests). Unbudgeted calls (LoadAssetSync, memory assets) have no staging
@@ -384,7 +390,9 @@ namespace Strata
 			const auto now = std::chrono::steady_clock::now();
 			const auto predicted = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
 				std::chrono::duration<float, std::milli>(static_cast<float>(step.Bytes) / s_UploadBytesPerMs));
-			if (!firstStep && (uploaded + step.Bytes > context.UploadBudget || now >= context.Deadline || context.Deadline - now < predicted))
+			const bool overBudget = !firstStep && uploaded + step.Bytes > context.UploadBudget;
+			const bool overTime = !(firstStep && context.FirstOfFrame) && (now >= context.Deadline || context.Deadline - now < predicted);
+			if (overBudget || overTime)
 				break;
 			const bool recorded = IsBlockCompressedFormat(m_Specification.Format) ? RecordBlockUploadStep(commandList, step) : RecordUploadStep(commandList, step);
 			if (!recorded)
@@ -405,9 +413,10 @@ namespace Strata
 			return AssetFinalizeResult::Pending;
 
 		// The chain is uploaded; the CPU copy goes before the texture is published. Freeing a large one takes time like a
-		// step: when it would end after the deadline it is the next call's work (a call that took no step does it anyway).
+		// step: when it would end after the deadline it is the next call's work (the frame's first call that took no step does
+		// it anyway).
 		const uint64_t cpuCopyBytes = GetCPUCopyBytes();
-		if (!firstStep && cpuCopyBytes >= c_TimedReleaseBytes)
+		if (!(firstStep && context.FirstOfFrame) && cpuCopyBytes >= c_TimedReleaseBytes)
 		{
 			const auto now = std::chrono::steady_clock::now();
 			const auto predicted = std::chrono::duration_cast<std::chrono::steady_clock::duration>(

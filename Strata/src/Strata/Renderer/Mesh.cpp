@@ -186,6 +186,10 @@ namespace Strata
 		if (!commandList || m_Uploaded)
 			return AssetFinalizeResult::Done;
 
+		// Past the deadline only the frame's first finalization works (AssetFinalizeContext::FirstOfFrame), allocating too.
+		if (!context.FirstOfFrame && std::chrono::steady_clock::now() >= context.Deadline)
+			return AssetFinalizeResult::Pending;
+
 		const size_t positionBytes = m_Positions.size() * sizeof(glm::vec3);
 		const size_t attributeBytes = m_Attributes.size() * sizeof(MeshVertexAttributes);
 		const size_t indexBytes = m_Indices.size() * sizeof(uint32_t);
@@ -204,7 +208,8 @@ namespace Strata
 			m_UploadOffset = 0;
 		}
 
-		// The streams upload one after the other, as one run of bytes cut into steps; the first step of a call is always taken.
+		// The streams upload one after the other, as one run of bytes cut into steps; the first step of a call is taken whatever
+		// the upload budget says, the first step of the frame's first call whatever the deadline says too.
 		const std::array<UploadRange, 3> ranges = { {
 			{ m_PositionBuffer, reinterpret_cast<const uint8_t*>(m_Positions.data()), positionBytes },
 			{ m_AttributeBuffer, reinterpret_cast<const uint8_t*>(m_Attributes.data()), attributeBytes },
@@ -216,7 +221,9 @@ namespace Strata
 		while (m_UploadOffset < totalBytes)
 		{
 			const uint64_t stepBytes = std::min(c_AssetUploadStepBytes, totalBytes - m_UploadOffset);
-			if (!firstStep && (uploaded + stepBytes > context.UploadBudget || std::chrono::steady_clock::now() >= context.Deadline))
+			const bool overBudget = !firstStep && uploaded + stepBytes > context.UploadBudget;
+			const bool overTime = !(firstStep && context.FirstOfFrame) && std::chrono::steady_clock::now() >= context.Deadline;
+			if (overBudget || overTime)
 				break;
 			// A step may span streams: one write per stream it covers.
 			const uint64_t stepEnd = m_UploadOffset + stepBytes;

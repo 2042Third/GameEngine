@@ -804,6 +804,7 @@ namespace Strata
 		}
 
 		size_t processed = 0;
+		size_t finalizations = 0; // FinalizeOnMainThread calls of this frame
 		uint64_t uploadedBytes = 0;
 		std::vector<Ref<Asset>> released;
 		// Arrivals waiting until the GPU memory evicted for them is released, and those behind them (see below).
@@ -908,6 +909,8 @@ namespace Strata
 					context.StagingBytes = budgets.StagingBytes;
 				}
 				context.UploadedBytes = &uploadedBytes;
+				context.FirstOfFrame = finalizations == 0;
+				finalizations++;
 				const AssetFinalizeResult result = completion.LoadedAsset->FinalizeOnMainThread(context);
 				if (result == AssetFinalizeResult::Pending && applyBudget)
 					break; // Stays in line
