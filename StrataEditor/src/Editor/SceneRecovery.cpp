@@ -1,6 +1,7 @@
 #include "Editor/SceneRecovery.h"
 
 #include <Strata/Core/Crypto.h>
+#include <Strata/Core/FileReader.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
@@ -11,6 +12,7 @@
 #include <algorithm>
 #include <exception>
 #include <fstream>
+#include <span>
 #include <system_error>
 #include <unordered_set>
 
@@ -24,6 +26,8 @@ namespace Strata
 		constexpr uint64_t c_FormatVersion = 1;
 		// The header is the file's first line: anything longer is not one.
 		constexpr size_t c_MaxHeaderBytes = 64 * 1024;
+		// What HashFile reads at a time.
+		constexpr uint64_t c_HashChunkBytes = 1024 * 1024;
 
 		int64_t GetUnixMilliseconds()
 		{
@@ -35,12 +39,23 @@ namespace Strata
 			return Crypto::ToHex(Sha256::Hash(bytes));
 		}
 
+		// Hashed a piece at a time: a scene file can be hundreds of megabytes (17 MB per 100,000 entities), which the hash never
+		// needs at once, and every scene the editor opens is hashed (on an I/O thread, while frames go on).
 		std::optional<std::string> HashFile(const std::filesystem::path& path)
 		{
-			const std::optional<std::vector<uint8_t>> bytes = FileSystem::ReadBytes(path);
-			if (!bytes)
+			const Scope<FileReader> reader = FileReader::Open(path);
+			if (!reader)
 				return std::nullopt;
-			return HashBytes(*bytes);
+			Sha256 hash;
+			std::vector<uint8_t> chunk(static_cast<size_t>(std::min<uint64_t>(reader->GetSize(), c_HashChunkBytes)));
+			for (uint64_t offset = 0; offset < reader->GetSize(); offset += chunk.size())
+			{
+				const std::span<uint8_t> piece = std::span<uint8_t>(chunk).first(static_cast<size_t>(std::min<uint64_t>(chunk.size(), reader->GetSize() - offset)));
+				if (!reader->ReadAt(offset, piece))
+					return std::nullopt;
+				hash.Update(std::span<const uint8_t>(piece));
+			}
+			return Crypto::ToHex(hash.Finalize());
 		}
 
 		double SecondsBetween(std::chrono::steady_clock::time_point from, std::chrono::steady_clock::time_point to)

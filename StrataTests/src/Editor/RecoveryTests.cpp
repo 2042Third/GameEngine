@@ -6,6 +6,7 @@
 #include "Editor/EditorNotifications.h"
 #include "Editor/HarnessEditor.h"
 #include "Editor/SceneRecovery.h"
+#include "Perf/SceneGenerators.h"
 #include "TestHelpers.h"
 #include "UI/ItemProbe.h"
 
@@ -469,6 +470,28 @@ TEST_SUITE("Editor.Recovery")
 		const std::optional<UI::ItemProbe::Item> item = UI::ItemProbe::Find("Menu.File.Recover");
 		REQUIRE(item.has_value());
 		CHECK_FALSE(item->Enabled);
+	}
+
+	TEST_CASE("Recovery data of a scene file hashed in several pieces still applies to it")
+	{
+		// The journal records the hash of the saved document; the scan hashes the file a piece at a time. Both must agree for
+		// files larger than a piece.
+		const std::filesystem::path project = Tests::CreateTemporaryDirectory("RecoveryLargeScene") / "Game";
+		{
+			RecoveryHarness harness(project);
+			Tests::Perf::CreateFlatRoots(*harness.Context.GetEditScene(), 20'000);
+			harness.Run("scene.save");
+			REQUIRE(FileSystem::GetFileSize(project / "Assets" / "Scenes" / "Main.stscene").value_or(0) > 2 * 1024 * 1024);
+			harness.Run("entity.create", { { "name", "Recovered" } });
+			harness.Run("project.close", { { "force", true } });
+		}
+		RecoveryHarness harness(project, false);
+		const nlohmann::json entries = harness.Run("scene.recoveryStatus")["entries"];
+		REQUIRE(entries.size() == 1);
+		INFO(entries.dump());
+		CHECK(entries[0]["applicable"] == true);
+		harness.Run("scene.recover", { { "scene", entries[0]["id"] }, { "action", "apply" } });
+		CHECK(harness.Context.GetEditScene()->FindEntityByName("Recovered"));
 	}
 
 	TEST_CASE("Recover asks about the edited scene's own unsaved changes over the dialog, which stays open")
