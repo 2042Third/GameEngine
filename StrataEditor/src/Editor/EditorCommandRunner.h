@@ -19,7 +19,7 @@ namespace Strata
 	class EditorContext;
 
 	// Polls a result once if it is pending; exceptions from third-party code inside the poll become an error result.
-	// Returns true when the result is final.
+	// Returns true when the result is final, and then completes its entry in the activity journal (CommandJournal).
 	bool PollCommandResult(EditorCommandResult& result, EditorContext& context);
 
 	// Runs editor commands for the UI, command scripts and automation. A command that finishes over several frames
@@ -37,14 +37,15 @@ namespace Strata
 		EditorCommandRunner(const EditorCommandRunner&) = delete;
 		EditorCommandRunner& operator=(const EditorCommandRunner&) = delete;
 
-		// Runs a command. If it finishes immediately, `onComplete` is called before Run returns; otherwise it is called
-		// from a later Update. Returns true when the command is pending.
+		// Runs a command for `origin` (recorded in the activity journal). If it finishes immediately, `onComplete` is called
+		// before Run returns; otherwise it is called from a later Update. Returns true when the command is pending.
 		bool Run(EditorContext& context, const EditorCommandRegistry& commands, std::string_view name, const nlohmann::json& parameters,
-			Completion onComplete);
+			Completion onComplete, const CommandOrigin& origin = {});
 		// Once per frame: polls the pending commands in the order they were issued. Commands issued by completions are
 		// polled from the next frame on.
 		void Update(EditorContext& context);
-		// Completes every pending command with a Cancelled error carrying `reason` (e.g. the editor is closing).
+		// Completes every pending command with a Cancelled error carrying `reason` (e.g. the editor is closing), also in the
+		// activity journal.
 		void CancelAll(const std::string& reason);
 
 		size_t GetPendingCount() const;
@@ -54,6 +55,8 @@ namespace Strata
 			std::string Name;
 			EditorCommandResult Result;
 			Completion OnComplete;
+			// The journal of the command's entry: cancelling completes it there, also after the context is gone.
+			Ref<CommandJournal> Journal;
 			bool Done = false; // Completed or cancelled; erased at the end of the update
 		};
 
@@ -67,7 +70,7 @@ namespace Strata
 	// A list of commands run one after another, e.g. `StrataEditor --commands script.json`: a JSON array of
 	// {"command": name, "parameters": {...}, "expect": {...}} ("parameters" and "expect" are optional). A pending command
 	// holds the script until it completes. A failed command is logged and marks the script as failed; the following
-	// commands still run. "expect" checks the result of a successful command: it maps JSON pointers into the result
+	// commands still run. Its commands are recorded in the activity journal as CommandSource::CommandScript. "expect" checks the result of a successful command: it maps JSON pointers into the result
 	// ("" is the whole result, "/values/Translation/1" an element) to conditions {"equals": value, "min": number,
 	// "max": number} (any of them); a result that does not meet them fails the step like a failed command.
 	class EditorCommandScript

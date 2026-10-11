@@ -52,8 +52,10 @@ namespace Strata
 			// changes nothing is dropped, and the next edit starts a step of its own. Either way the scene holds what the
 			// latest step describes now (a dropped one: what it started from).
 			NotifyApplied(*m_Entries.back().Action, false);
+			m_LastRecordedSerial = m_Entries.back().Serial;
 			if (m_Entries.back().Action->IsNoOp())
 			{
+				m_LastRecordedSerial = 0;
 				m_Entries.pop_back();
 				m_Position--;
 				m_MergeBroken = true;
@@ -61,6 +63,7 @@ namespace Strata
 			return;
 		}
 
+		m_LastRecordedSerial = m_NextSerial;
 		m_Entries.push_back({ std::move(action), m_NextSerial++ });
 		m_Position = m_Entries.size();
 		m_MergeBroken = false;

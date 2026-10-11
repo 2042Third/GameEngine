@@ -189,7 +189,7 @@ namespace Strata
 		if (!m_StartersRead)
 		{
 			m_StartersRead = true;
-			const EditorCommandResult templates = context.Commands.Execute(context.Context, "project.templates", nlohmann::json::object());
+			const EditorCommandResult templates = context.Commands.Execute(context.Context, "project.templates", nlohmann::json::object(), CommandOrigin { CommandSource::UI });
 			if (templates.Success && templates.Value.contains("templates"))
 			{
 				for (const nlohmann::json& entry : templates.Value["templates"])
@@ -197,7 +197,7 @@ namespace Strata
 				// The lit template first, as in the New Project dialog.
 				std::stable_partition(m_Templates.begin(), m_Templates.end(), [](const Starter& starter) { return starter.Id == ProjectTemplates::c_Basic3D; });
 			}
-			const EditorCommandResult samples = context.Commands.Execute(context.Context, "project.samples", nlohmann::json::object());
+			const EditorCommandResult samples = context.Commands.Execute(context.Context, "project.samples", nlohmann::json::object(), CommandOrigin { CommandSource::UI });
 			if (samples.Success && samples.Value.contains("samples"))
 			{
 				for (const nlohmann::json& entry : samples.Value["samples"])
@@ -715,7 +715,7 @@ namespace Strata
 		// unsaved changes make the command fail.
 		auto open = [this, editor, commands, projectFile](bool force)
 		{
-			const EditorCommandResult result = commands->Execute(*editor, "project.open", { { "path", FileSystem::ToUTF8(projectFile) }, { "force", force } });
+			const EditorCommandResult result = commands->Execute(*editor, "project.open", { { "path", FileSystem::ToUTF8(projectFile) }, { "force", force } }, CommandOrigin { CommandSource::UI });
 			if (!result.Success)
 				ShowError(fmt::format("Could not open {}: {}", UI::DisplayPath(projectFile), result.Error));
 		};
@@ -728,7 +728,7 @@ namespace Strata
 
 	void WelcomePanel::RemoveRecentProject(EditorPanelContext& context, const std::filesystem::path& projectFile)
 	{
-		const EditorCommandResult result = context.Commands.Execute(context.Context, "editor.removeRecentProject", { { "path", FileSystem::ToUTF8(projectFile) } });
+		const EditorCommandResult result = context.Commands.Execute(context.Context, "editor.removeRecentProject", { { "path", FileSystem::ToUTF8(projectFile) } }, CommandOrigin { CommandSource::UI });
 		if (!result.Success)
 			ShowError(result.Error);
 		UpdateRecentProjects(context.Context.GetRecentProjects());

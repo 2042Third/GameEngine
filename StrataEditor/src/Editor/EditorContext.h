@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Editor/CommandJournal.h"
 #include "Editor/EditorViewport.h"
 #include "Editor/GameExport.h"
 #include "Editor/ProjectTemplates.h"
@@ -226,6 +227,17 @@ namespace Strata
 		bool Redo();
 
 		//////////////////////////////////////////////////////////////////////////
+		// Activity
+		//////////////////////////////////////////////////////////////////////////
+
+		// The activity journal: every command run in this editor (EditorCommandRegistry::Execute records them), by the
+		// person, agents, scripts or the editor itself (editor.activity, the Activity panel).
+		CommandJournal& GetJournal() { return *m_Journal; }
+		const CommandJournal& GetJournal() const { return *m_Journal; }
+		// Shared with pending commands, which complete their entries even when they are cancelled after the context went.
+		const Ref<CommandJournal>& GetJournalRef() const { return m_Journal; }
+
+		//////////////////////////////////////////////////////////////////////////
 		// Recovery
 		//////////////////////////////////////////////////////////////////////////
 
@@ -376,6 +388,7 @@ namespace Strata
 		std::unordered_set<UUID> m_SelectionSet; // The same entities, for IsSelected
 		AssetHandle m_InspectedAsset = UUID::Null();
 		uint64_t m_InspectionVersion = 0;
+		Ref<CommandJournal> m_Journal = CreateRef<CommandJournal>();
 		// Declared before the undo stack it observes, so the stack never outlives it.
 		SceneRecovery m_Recovery;
 		UndoStack m_UndoStack;

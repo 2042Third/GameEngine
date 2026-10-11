@@ -31,6 +31,9 @@ namespace Strata::CLI
 		// Directory of per-process session files; empty uses EditorSession::GetSessionDirectory().
 		std::filesystem::path SessionDirectory;
 		std::chrono::milliseconds ConnectTimeout = std::chrono::milliseconds(2000);
+		// The name the client gives the editor in its handshake (the editor shows who is connected and journals which
+		// client ran each command); empty sends none.
+		std::string ClientName;
 	};
 
 	// A connection candidate found by discovery.
@@ -76,6 +79,9 @@ namespace Strata::CLI
 		bool IsConnected() const;
 		// Connects to a known session (e.g. one that was just launched) and pins the connection to it.
 		bool ConnectToSession(const EditorSessionInfo& session);
+		// Changes the name given in the handshake; a live connection reconnects (to the same editor) so the editor learns
+		// it.
+		void SetClientName(std::string name);
 		void Disconnect();
 
 		// Calls an editor method, connecting first if needed. Fails with ConnectionClosed if no editor is reachable.

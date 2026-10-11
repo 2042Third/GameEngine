@@ -161,7 +161,7 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   at the most bodies reserves), `Perf.TextureCook` (a cold import of the stress project, the stored sizes of its largest
   2048x2048 texture, its 4096x4096 texture and all of them, its pack's size, the BC7 encoder's time per block on one
   thread), `PerfGPU.Renderer` (`SceneRenderer::Render` alone on 100,000 and 300,000 cubes and on 10,000 cubes with unique
-  materials, with the opaque draw calls those take) and, in `src/Editor/`, `Perf.Editor` (entity commands among 100,000
+  materials, with the opaque draw calls those take) and, in `src/Editor/`, `Perf.Editor` (entity commands among 100,000 roots, and what the activity journal adds to a command among 100,000
   roots; the hierarchy's rows of 100,000 roots, idle and rebuilt; the Hierarchy panel's share of an editor frame with
   100,000 roots, open against closed; what 100,000 selected entities add to a frame; the longest editor frame while a
   4096x4096 texture re-imports uncompressed and then block-compressed again; the frames while the recovery journal of
@@ -754,7 +754,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   for continuous UI edits, through `SceneEditTransaction` / `SetPropertyWithUndo`. That keeps the UI,
   automation (AI agents) and tests identical, and makes every edit undoable.
 - Commands are named `<group>.<action>`, take a JSON object and return a JSON value or an error. Each
-  has a one-line description and a JSON Schema of its parameters (`CommandUtils::ObjectSchema` etc.);
+  has a one-line description, a JSON Schema of its parameters (`CommandUtils::ObjectSchema` etc.) and a kind
+  (`EditorCommandKind`: Edit, the default, for commands that change the scene, its assets or the project; Query for those
+  that change nothing; Session for the editor's own state: open project, play mode, view, selection, input). Mark every
+  new command that is not an edit, or replays (editor.activity.export) will repeat it;
   automation exposes them as tools, so descriptions must tell an agent what the command does. Use
   `CommandArguments` to read parameters (no exceptions), reject invalid input without side effects
   (roll back the transaction) and record exactly one undo step per successful mutating command.
@@ -1155,6 +1158,13 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
   update) through the `EditorCommandRunner`: deferred commands answer when they complete; a client that
   disconnects meanwhile only loses the answer. Requests are logged at trace level (`Automation: #<n> <method>
   <params> -> <outcome> (<time>)`).
+- **Activity journal** (`Editor/CommandJournal`): every command `EditorCommandRegistry::Execute` runs is recorded once
+  with its origin (`CommandOrigin`), parameters, outcome, duration and undo step; a deferred one when its result becomes
+  final. Pass `CommandOrigin { CommandSource::UI }` when UI code runs a command (`RunEditorCommand` and the panels do);
+  automation passes the client's name, command scripts their source, and code that passes nothing counts as the editor
+  itself (Internal). `editor.activity` reads it. Clients name themselves in `rpc.handshake` (`clientName`, optional, at
+  most 64 characters, sanitized, never trusted): `RpcClient::Connect`'s `clientName`, "StrataCLI", and the MCP client's
+  `clientInfo.name` through `StrataCLI mcp`; `editor.status` lists them (`automation.connectedClients`).
 - **Errors** map from `EditorCommandError`: unknown command -32601 (`MethodNotFound`), `InvalidParameters`
   -32602 (`data`: `{"command", "parameters": <schema>}`), `Failed` -32005 (`OperationFailed`), `Cancelled`
   -32006, `Internal` -32603. Transport errors are -32001 to -32004 (`JsonRpc::ErrorCode`).

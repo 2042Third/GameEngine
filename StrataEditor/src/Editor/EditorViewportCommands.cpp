@@ -318,7 +318,7 @@ namespace Strata
 			[](EditorContext& context, const nlohmann::json&)
 			{
 				return EditorCommandResult::Ok(DescribeCamera(context.GetViewport().GetCamera()));
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "camera.set",
 			"Moves or configures the editor camera (a view change: no undo step, the scene is unchanged). position + target looks from one point at the other; "
@@ -383,7 +383,7 @@ namespace Strata
 				}
 				context.GetViewport().GetCamera() = camera;
 				return EditorCommandResult::Ok(DescribeCamera(camera));
-			} });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "camera.focus",
 			"Points the editor camera at entities (with their descendants) and backs it off until their bounds fit the view, keeping its orientation; without entities it frames the whole scene. No undo step. Returns the camera like camera.get.",
@@ -399,7 +399,7 @@ namespace Strata
 				if (!context.GetViewport().Focus(context, entities))
 					return EditorCommandResult::Fail("Nothing to frame: the scene has no active entities");
 				return EditorCommandResult::Ok(DescribeCamera(context.GetViewport().GetCamera()));
-			} });
+			}, EditorCommandKind::Session });
 
 		////////////////////////////////////////////////////////////////////////////////
 		// Settings
@@ -414,7 +414,7 @@ namespace Strata
 			[](EditorContext& context, const nlohmann::json&)
 			{
 				return EditorCommandResult::Ok(DescribeViewportSettings(context.GetViewport().GetSettings()));
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "viewport.setSettings",
 			"Changes view settings of the viewport (a view change: no undo step, the scene is unchanged) and returns all of them like viewport.getSettings. "
@@ -461,7 +461,7 @@ namespace Strata
 				}
 				context.GetViewport().GetSettings() = settings;
 				return EditorCommandResult::Ok(DescribeViewportSettings(settings));
-			} });
+			}, EditorCommandKind::Session });
 
 		////////////////////////////////////////////////////////////////////////////////
 		// Capture
@@ -566,7 +566,7 @@ namespace Strata
 						return StartCapture(context, request, *progress);
 					return ContinueCapture(request, *progress);
 				});
-			} });
+			}, EditorCommandKind::Query });
 	}
 
 }

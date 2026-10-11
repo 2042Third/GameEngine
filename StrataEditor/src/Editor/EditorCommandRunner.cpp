@@ -1,5 +1,7 @@
 #include "Editor/EditorCommandRunner.h"
 
+#include "Editor/EditorContext.h"
+
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
@@ -155,6 +157,9 @@ namespace Strata
 		if (!result.IsPending())
 			return true;
 
+		const uint64_t journalId = result.JournalId;
+		CommandJournal& journal = context.GetJournal();
+		const uint64_t records = context.GetUndoStack().GetRecordCount();
 		std::optional<EditorCommandResult> finished;
 		try
 		{
@@ -165,11 +170,17 @@ namespace Strata
 			// Engine code does not throw; this guards third-party code (JSON access) used by poll functions.
 			finished = EditorCommandResult::Fail(fmt::format("Command failed: {}", exception.what()), EditorCommandError::Internal);
 		}
+		journal.NotePoll(journalId);
+		journal.NoteUndo(journalId, context.GetUndoStack(), records);
 		if (!finished)
 			return false;
 		// The poll function has returned, so replacing it does not destroy a running function.
 		result = std::move(*finished);
-		return !result.IsPending();
+		result.JournalId = journalId;
+		if (result.IsPending())
+			return false;
+		journal.Complete(journalId, result);
+		return true;
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -182,16 +193,16 @@ namespace Strata
 	}
 
 	bool EditorCommandRunner::Run(EditorContext& context, const EditorCommandRegistry& commands, std::string_view name,
-		const nlohmann::json& parameters, Completion onComplete)
+		const nlohmann::json& parameters, Completion onComplete, const CommandOrigin& origin)
 	{
-		EditorCommandResult result = commands.Execute(context, name, parameters);
+		EditorCommandResult result = commands.Execute(context, name, parameters, origin);
 		if (!result.IsPending())
 		{
 			if (onComplete)
 				onComplete(result);
 			return false;
 		}
-		m_Pending.push_back({ std::string(name), std::move(result), std::move(onComplete), false });
+		m_Pending.push_back({ std::string(name), std::move(result), std::move(onComplete), context.GetJournalRef(), false });
 		return true;
 	}
 
@@ -211,7 +222,12 @@ namespace Strata
 			m_Pending[index].Result = {};
 			const bool finished = PollCommandResult(result, context);
 			if (m_Pending[index].Done)
-				continue; // Cancelled while it was polled
+			{
+				// Cancelled while it was polled (its result was out of the list then): its journal entry ends cancelled too.
+				if (!finished && m_Pending[index].Journal)
+					m_Pending[index].Journal->Complete(result.JournalId, EditorCommandResult::Fail("Cancelled while it ran", EditorCommandError::Cancelled));
+				continue;
+			}
 			if (finished)
 				Finish(index, result);
 			else
@@ -226,8 +242,12 @@ namespace Strata
 		// Also cancels commands issued by the completions of cancelled commands.
 		for (size_t index = 0; index < m_Pending.size(); index++)
 		{
-			if (!m_Pending[index].Done)
-				Finish(index, EditorCommandResult::Fail(reason, EditorCommandError::Cancelled));
+			if (m_Pending[index].Done)
+				continue;
+			const EditorCommandResult cancelled = EditorCommandResult::Fail(reason, EditorCommandError::Cancelled);
+			if (m_Pending[index].Journal)
+				m_Pending[index].Journal->Complete(m_Pending[index].Result.JournalId, cancelled);
+			Finish(index, cancelled);
 		}
 		// During an update, the entries are erased when it ends.
 		if (!m_Updating)
@@ -346,7 +366,7 @@ namespace Strata
 					m_Failed = true;
 				}
 				m_Waiting = false;
-			});
+			}, CommandOrigin { CommandSource::CommandScript });
 		}
 		return IsFinished();
 	}

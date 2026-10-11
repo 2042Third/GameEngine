@@ -120,7 +120,7 @@ namespace Strata
 			[](EditorContext& context, const nlohmann::json&)
 			{
 				return EditorCommandResult::Ok(DescribeProject(context));
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "project.templates",
 			"The templates project.create and scene.new accept: id, name and what a project made from it contains. \"basic3d\" starts lit (camera, sun, "
@@ -138,7 +138,7 @@ namespace Strata
 						{ "startScene", ProjectTemplates::HasStartScene(projectTemplate.Id) ? nlohmann::json(ProjectTemplates::c_StartScenePath) : nlohmann::json(nullptr) } });
 				}
 				return EditorCommandResult::Ok({ { "templates", std::move(templates) }, { "default", ProjectTemplates::c_Empty } });
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "project.create",
 			"Creates a project in a directory and opens it. With template \"basic3d\" it starts with a saved, lit start scene (Scenes/Main.stscene: Main "
@@ -174,7 +174,7 @@ namespace Strata
 					{ "template", templateId },
 					{ "startScene", startScene.IsValid() ? UUIDToJson(startScene) : nlohmann::json(nullptr) },
 					{ "discardedChanges", discarded } });
-			} });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "project.open",
 			"Opens a project file or the project in a directory. Fails while the edited scene has unsaved changes unless force is true (save first). "
@@ -195,7 +195,7 @@ namespace Strata
 				if (!context.OpenProject(FileSystem::FromUTF8(path), &error))
 					return EditorCommandResult::Fail(error);
 				return EditorCommandResult::Ok({ { "discardedChanges", modified } });
-			} });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "project.close",
 			"Closes the open project; the editor shows its launcher. Without a project it does nothing. Fails while the edited scene has unsaved "
@@ -215,7 +215,7 @@ namespace Strata
 				const bool discarded = context.IsSceneModified();
 				context.CloseProject();
 				return EditorCommandResult::Ok({ { "closed", true }, { "discardedChanges", discarded } });
-			} });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "project.samples",
 			"The sample projects that come with the editor (finished games to learn from, e.g. Tetris): id, name, description. Open one with "
@@ -231,7 +231,7 @@ namespace Strata
 				for (const ProjectSample& sample : *samples)
 					list.push_back({ { "id", sample.Id }, { "name", sample.Name }, { "description", sample.Description } });
 				return EditorCommandResult::Ok({ { "samples", std::move(list) } });
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "project.openSample",
 			"Copies a sample project (project.samples) into a new directory and opens the copy, like project.open; the sample itself stays unchanged. "
@@ -271,7 +271,7 @@ namespace Strata
 				if (!context.OpenProject(projectFile, &error))
 					return EditorCommandResult::Fail(fmt::format("The sample was copied to '{}' but could not be opened: {}", directory, error));
 				return EditorCommandResult::Ok({ { "sample", sample->Id }, { "projectFile", FileSystem::ToUTF8(projectFile) }, { "discardedChanges", discarded } });
-			} });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "project.setStartScene", "Sets the scene a built game starts with and saves the project file.",
 			ObjectSchema({ { "scene", AssetSchema("Start scene") } }, { "scene" }),
@@ -370,7 +370,7 @@ namespace Strata
 						value["frameTimes"] = DescribeFrameTimes(std::move(frameTimes));
 					return EditorCommandResult::Ok(std::move(value));
 				});
-			} });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "project.exportStatus", "The running export (project.export) or the last one: {running, state (WaitingForImports, Packing, Copying, "
 			"Succeeded, Failed, Cancelled), progress (0 to 1), stage (what it does, or how it ended), directory}; {running: false, state: null} before the "
@@ -387,7 +387,7 @@ namespace Strata
 					{ "progress", exporter->GetProgress() },
 					{ "stage", exporter->GetStage() },
 					{ "directory", FileSystem::ToUTF8(exporter->GetOptions().Directory) } });
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "project.cancelExport", "Cancels the running export (project.export, which then fails as cancelled); files it wrote already stay. "
 			"Fails when no export runs.",
@@ -399,7 +399,7 @@ namespace Strata
 					return EditorCommandResult::Fail("No export is running");
 				exporter->Cancel();
 				return EditorCommandResult::Ok({ { "cancelling", true } });
-			} });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "project.setExportSettings", "Sets how the project exports and saves the project file. alwaysInclude: assets (\"Prefabs/Enemy.stprefab\") "
 			"and folders (\"Prefabs\") relative to the asset directory that an export with prune keeps, with what they use, although no scene uses them "
@@ -474,7 +474,7 @@ namespace Strata
 					assets.push_back(DescribeAsset(metadata));
 				}
 				return EditorCommandResult::Ok({ { "assets", std::move(assets) } });
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "asset.info",
 			"An asset's metadata, load state, import errors and warnings, sub-assets, import settings with the description of every setting "
@@ -516,7 +516,7 @@ namespace Strata
 					result["importing"] = assets->IsImportPending(handle);
 				}
 				return EditorCommandResult::Ok(std::move(result));
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "asset.import", "Copies an external file into the project and imports it. Returns the new asset.",
 			ObjectSchema({ { "file", StringSchema("Absolute path of the file to import") }, { "directory", StringSchema("Target directory relative to the asset directory (default: the root)") } },
@@ -656,7 +656,7 @@ namespace Strata
 				nlohmann::json values = material->Serialize()["Material"];
 				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) }, { "values", std::move(values) }, { "properties", std::move(properties) },
 					{ "saved", !assets || AssetEdit::IsMaterialSaved(*assets, handle) } });
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "material.create", "Creates a material asset (.stmat) from the default material with the given property values.",
 			ObjectSchema({

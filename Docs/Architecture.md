@@ -1350,7 +1350,19 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   log, play, selection), `EditorViewportCommands.cpp` (camera, viewport), `EditorScriptCommands.cpp` (script),
   `EditorInputCommands.cpp` (input), `EditorStreamingCommands.cpp` (`asset.stats`, `asset.setBudget`) and
   `EditorCommands.cpp` (`editor.commands`); the UI's `EditorLayer` adds `editor.showPanel`, the one command about its
-  window. Conventions: AGENTS.md, "Editor".
+  window. Conventions: AGENTS.md, "Editor". Every command has a kind (`EditorCommandKind`: Edit, the default, Query or
+  Session), which `editor.commands` lists and replays use.
+- **Activity journal** (`CommandJournal.h`). `EditorCommandRegistry::Execute` records every command it runs in the
+  context's journal: its origin (`CommandOrigin`: UI from `RunEditorCommand` and the panels, Automation with the client's
+  name from `EditorAutomation`, CommandScript from `EditorCommandScript`, Internal for code and for commands that commands
+  run, which are recorded as children of theirs), the parameters (whole up to 256 KB, a shortened copy beyond, flagged),
+  whether the scene was playing, then the outcome: a summary of the result (scalars, containers by their size) with
+  every ID it holds by JSON pointer, or the error and its kind, the duration, and the undo step it recorded with the
+  entities it touched (the undo stack's record counter and `GetLastRecordedSerial` attribute steps to the command whose
+  handler or poll recorded them). A deferred command's entry stays pending until `PollCommandResult` sees its final
+  result, or the runner cancels it, so each command is recorded once with its real end. The ring keeps at most 2,000
+  entries and 8 MB; recording costs about 2.6 us per command (`Perf.Editor.JournalPerCommand`, entity.get with the
+  journal against without). `editor.activity {since, limit, source, command}` reads it.
 - **Runner** (`EditorCommandRunner.h`). `Run` executes a command; a deferred one is polled once per frame from the next
   frame on, in issue order, and reports through its completion callback. Automation and command scripts always use the
   runner. UI actions that finish at once call the registry through `RunEditorCommand`
@@ -1486,7 +1498,12 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   each frame `EditorAutomation::Update` registers new or changed commands as methods and runs queued requests through
   the runner, so a deferred command answers when it completes. Clients find the editor through session files
   (`Network/EditorSession.h`). StrataCLI (`StrataCLI/src/CLI/`) connects with `RpcClient` (`EditorConnection`),
-  starts editors (`EditorLauncher`) and serves MCP (`McpServer`, one tool per command).
+  starts editors (`EditorLauncher`) and serves MCP (`McpServer`, one tool per command). Clients may name themselves in
+  `rpc.handshake` (`clientName`: at most 64 characters, control and text-direction characters removed by
+  `SanitizeRpcClientName`, informational only and never used for trust): `RpcServer::GetClients` lists them, responders
+  carry them (`RpcResponder::GetClient`) into the activity journal, and `editor.status` lists them under
+  `automation.connectedClients`. StrataCLI names itself "StrataCLI"; its MCP server forwards the MCP client's
+  `clientInfo.name` from `initialize` (reconnecting to the same editor when the name changes).
 - **Viewport** (`EditorViewport.h`, `ViewportRenderer.h`). `EditorViewport` holds the editor camera (and the cameras of
   the project's other scenes), the settings and two `ViewportRenderer`s (panel and captures). The panel renders during
   `OnImGuiRender`; `ResolveViewportView` picks the scene's primary camera while playing and the editor camera otherwise,

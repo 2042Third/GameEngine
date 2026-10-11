@@ -168,6 +168,19 @@ namespace Strata::CLI
 		return false;
 	}
 
+	void EditorConnection::SetClientName(std::string name)
+	{
+		if (name == m_Options.ClientName)
+			return;
+		m_Options.ClientName = std::move(name);
+		// The name travels in the handshake only: the next call reconnects, staying with the pinned editor.
+		if (m_Client.IsConnected())
+		{
+			m_Client.Close();
+			m_Endpoint.reset();
+		}
+	}
+
 	void EditorConnection::Disconnect()
 	{
 		m_Client.Close();
@@ -224,7 +237,7 @@ namespace Strata::CLI
 
 	bool EditorConnection::TryEndpoint(const EditorEndpoint& endpoint)
 	{
-		if (!m_Client.Connect(endpoint.Host, endpoint.Port, endpoint.Token, m_Options.ConnectTimeout))
+		if (!m_Client.Connect(endpoint.Host, endpoint.Port, endpoint.Token, m_Options.ConnectTimeout, m_Options.ClientName))
 		{
 			ST_TRACE("Editor endpoint {}:{} ({}) is not reachable: {}", endpoint.Host, endpoint.Port, endpoint.Source, m_Client.GetLastError());
 			return false;

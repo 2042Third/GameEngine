@@ -14,6 +14,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace Strata
 {
@@ -75,6 +76,8 @@ namespace Strata
 
 		uint16_t GetPort() const;
 		uint32_t GetClientCount() const;
+		// The connected clients with the names they gave in their handshakes (informational, never trusted).
+		std::vector<RpcClientInfo> GetClients() const;
 		// Requests whose command has not finished yet.
 		size_t GetPendingRequestCount() const;
 		// Requests answered since Start.

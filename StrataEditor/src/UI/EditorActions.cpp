@@ -24,7 +24,7 @@ namespace Strata
 
 	nlohmann::json RunEditorCommand(EditorContext& context, const EditorCommandRegistry& commands, std::string_view name, const nlohmann::json& parameters)
 	{
-		EditorCommandResult result = commands.Execute(context, name, parameters);
+		EditorCommandResult result = commands.Execute(context, name, parameters, CommandOrigin { CommandSource::UI });
 		if (result.IsPending())
 		{
 			// UI actions run commands that finish at once; commands that take frames go through EditorCommandRunner.

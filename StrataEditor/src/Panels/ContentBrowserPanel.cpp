@@ -325,7 +325,7 @@ namespace Strata
 						{
 							if (!result.Success)
 								ST_ERROR("Reimport: {}", result.Error);
-						});
+						}, CommandOrigin { CommandSource::UI });
 					}
 					ImGui::Separator();
 					if (ImGui::MenuItem("Delete"))

@@ -321,6 +321,8 @@ namespace Strata::CLI
 
 			McpServerSpecification specification;
 			specification.Connection = std::move(*options);
+			// Until the MCP client names itself (initialize's clientInfo).
+			specification.Connection.ClientName = "StrataCLI mcp";
 			specification.EditorPath = arguments.Editor;
 			if (arguments.TimeoutMilliseconds)
 				specification.CallTimeout = std::chrono::milliseconds(*arguments.TimeoutMilliseconds);
@@ -508,6 +510,8 @@ namespace Strata::CLI
 
 		if (arguments.Project)
 			options.ProjectDirectory = ToAbsolutePath(*arguments.Project);
+		// The editor shows who is connected and journals which client ran each command.
+		options.ClientName = "StrataCLI";
 		return options;
 	}
 

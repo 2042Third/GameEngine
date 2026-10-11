@@ -193,7 +193,7 @@ namespace Strata
 					{ "paused", context.IsPaused() },
 					{ "entityCount", scene->GetEntityCount() },
 					{ "settings", DescribeSettings(scene->GetSettings()) } });
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "scene.hierarchy", "Every entity of the active scene in hierarchy order, with parent, depth and component names.", ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
@@ -231,7 +231,7 @@ namespace Strata
 						stack.emplace_back(*it, depth + 1);
 				}
 				return EditorCommandResult::Ok({ { "entities", std::move(entities) } });
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "scene.new",
 			"Replaces the edited scene with a new, unsaved one: empty by default, or with a template's content, e.g. \"basic3d\" (a lit start: camera, "
@@ -495,7 +495,7 @@ namespace Strata
 				const size_t count = data["Entities"].size();
 				data["Strata"] = { { "Format", c_EntityDataFormat }, { "Version", c_EntityDataFormatVersion } };
 				return EditorCommandResult::Ok({ { "data", std::move(data) }, { "roots", ToJson(roots) }, { "count", count } });
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "entity.paste",
 			"Creates entities from entity.copy's data, under a parent (default: the top level) at a position among its children (default: last), "
@@ -560,7 +560,7 @@ namespace Strata
 				if (!arguments.IsValid())
 					return arguments.Fail();
 				return EditorCommandResult::Ok(DescribeEntity(entity));
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "entity.find", "IDs of the entities matching all given filters: exact name, tag, component type.",
 			ObjectSchema({ { "name", StringSchema("Exact entity name") }, { "tag", StringSchema("Tag") }, { "component", StringSchema("Component type, e.g. \"PointLight\"") } }),
@@ -586,7 +586,7 @@ namespace Strata
 					ids.push_back(UUIDToJson(entity.GetUUID()));
 				}
 				return EditorCommandResult::Ok({ { "entities", std::move(ids) } });
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "entity.setParent",
 			"Moves entities under another one, or to the top level, and/or reorders them among their siblings, in one undo step (while playing it "
@@ -712,7 +712,7 @@ namespace Strata
 						{ "properties", std::move(properties) } });
 				}
 				return EditorCommandResult::Ok({ { "components", std::move(components) } });
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "component.add",
 			"Adds a component to an entity (or to every one of the entities) where it is missing and sets the given property values, in one undo "
@@ -789,7 +789,7 @@ namespace Strata
 				if (!component)
 					return EditorCommandResult::Fail(fmt::format("The entity has no {} component", info->Name));
 				return EditorCommandResult::Ok({ { "values", ComponentAccess::Serialize(*info, component) } });
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "component.set",
 			"Sets property values of a component that the entity (or every one of the entities) has, in one undo step (while playing it changes "

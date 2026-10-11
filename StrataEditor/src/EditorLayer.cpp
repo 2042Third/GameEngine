@@ -127,7 +127,7 @@ namespace Strata
 					return EditorCommandResult::Fail("No project is open: the editor shows its launcher instead of the panels. Open or create a project first.");
 				m_Panels.Focus(panel);
 				return EditorCommandResult::Ok({ { "panel", panel } });
-			} });
+			}, EditorCommandKind::Session });
 	}
 
 	void EditorLayer::RegisterBuiltinPanels()
@@ -486,7 +486,7 @@ namespace Strata
 			{
 				RequestDiscardChanges([this, file = *project]()
 				{
-					const EditorCommandResult result = m_Commands.Execute(m_Context, "project.open", { { "path", FileSystem::ToUTF8(file) }, { "force", true } });
+					const EditorCommandResult result = m_Commands.Execute(m_Context, "project.open", { { "path", FileSystem::ToUTF8(file) }, { "force", true } }, CommandOrigin { CommandSource::UI });
 					if (!result.Success)
 						ReportError(fmt::format("Could not open {}: {}", FileSystem::ToUTF8(file), result.Error));
 				});
@@ -681,7 +681,7 @@ namespace Strata
 	{
 		RequestDiscardChanges([this, projectFile]()
 		{
-			const EditorCommandResult result = m_Commands.Execute(m_Context, "project.open", { { "path", FileSystem::ToUTF8(projectFile) }, { "force", true } });
+			const EditorCommandResult result = m_Commands.Execute(m_Context, "project.open", { { "path", FileSystem::ToUTF8(projectFile) }, { "force", true } }, CommandOrigin { CommandSource::UI });
 			if (!result.Success)
 				ReportError(fmt::format("Could not open {}: {}", UI::DisplayPath(projectFile), result.Error));
 		});
@@ -769,7 +769,7 @@ namespace Strata
 		{
 			if (!result.Success && m_Context.GetScriptBuilder().GetLastResult().ID == previousBuild)
 				ST_ERROR("Build Scripts: {}", result.Error);
-		});
+		}, CommandOrigin { CommandSource::UI });
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -1075,7 +1075,7 @@ namespace Strata
 		if (!m_SampleMenuRead)
 		{
 			m_SampleMenuRead = true;
-			const EditorCommandResult result = m_Commands.Execute(m_Context, "project.samples", nlohmann::json::object());
+			const EditorCommandResult result = m_Commands.Execute(m_Context, "project.samples", nlohmann::json::object(), CommandOrigin { CommandSource::UI });
 			if (result.Success && result.Value.contains("samples"))
 			{
 				for (const nlohmann::json& sample : result.Value["samples"])

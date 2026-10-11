@@ -246,7 +246,7 @@ namespace Strata
 				if (*action == ButtonAction::Tap)
 					result["frames"] = frames;
 				return RunButtonAction(context, SimulatedButtonType::Key, *key, *action, frames, wait, std::move(result), "key");
-			} });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "input.mouseButton",
 			"Presses a mouse button for the running game (play mode), like input.key: scripts see it through Input::IsMouseButtonDown/Pressed/"
@@ -277,7 +277,7 @@ namespace Strata
 				if (*action == ButtonAction::Tap)
 					result["frames"] = frames;
 				return RunButtonAction(context, SimulatedButtonType::MouseButton, *button, *action, frames, wait, std::move(result), "mouse button");
-			} });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "input.mouseMove",
 			"Moves the simulated mouse pointer of the running game (play mode) to a position in the game view, in pixels from its top-left "
@@ -295,7 +295,7 @@ namespace Strata
 					return NoGameError();
 				Input::SimulateMouseMove(*position);
 				return AnswerWhenSeen(context, wait, Input::GetFrameIndex() + 1, { { "position", { position->x, position->y } } }, "pointer move");
-			} });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "input.scroll",
 			"Turns the simulated scroll wheel of the running game (play mode) for one game frame: scripts read it with Input::GetScrollDelta "
@@ -312,7 +312,7 @@ namespace Strata
 					return NoGameError();
 				Input::SimulateScroll(*delta);
 				return AnswerWhenSeen(context, wait, Input::GetFrameIndex() + 1, { { "delta", { delta->x, delta->y } } }, "scroll");
-			} });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "input.releaseAll",
 			"Ends every hold of simulated input in the running game (play mode): held keys and mouse buttons go up in the game's next frame, "
@@ -333,7 +333,7 @@ namespace Strata
 					{ "mouseButtons", DescribeButtons(input, SimulatedButtonType::MouseButton) } };
 				input.ReleaseAll();
 				return AnswerWhenSeen(context, wait, Input::GetFrameIndex() + 1, { { "released", std::move(released) } }, "releases");
-			} });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "input.state",
 			"Simulated input in the running game: the keys and mouse buttons the input.* commands hold, the pointer position the game sees "
@@ -347,7 +347,7 @@ namespace Strata
 				state["paused"] = Input::IsSuspended();
 				state["queued"] = Input::HasQueuedSimulatedInput();
 				return EditorCommandResult::Ok(std::move(state));
-			} });
+			}, EditorCommandKind::Query });
 	}
 
 }

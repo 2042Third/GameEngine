@@ -350,6 +350,15 @@ namespace Strata::CLI
 		const bool supported = std::find(std::begin(c_McpProtocolVersions), std::end(c_McpProtocolVersions), requested) != std::end(c_McpProtocolVersions);
 		m_ProtocolVersion = supported ? requested : std::string(c_McpLatestProtocolVersion);
 
+		// The agent's own name (e.g. "claude-code") is what the editor shows as connected and journals with its commands.
+		const nlohmann::json* clientInfo = params.is_object() && params.contains("clientInfo") ? &params["clientInfo"] : nullptr;
+		const nlohmann::json* name = clientInfo && clientInfo->is_object() && clientInfo->contains("name") ? &(*clientInfo)["name"] : nullptr;
+		if (name && name->is_string() && !name->get_ref<const std::string&>().empty())
+		{
+			m_Specification.Connection.ClientName = name->get<std::string>();
+			m_Connection.SetClientName(m_Specification.Connection.ClientName);
+		}
+
 		nlohmann::json result = nlohmann::json::object();
 		result["protocolVersion"] = m_ProtocolVersion;
 		result["capabilities"] = nlohmann::json { { "tools", { { "listChanged", true } } } };

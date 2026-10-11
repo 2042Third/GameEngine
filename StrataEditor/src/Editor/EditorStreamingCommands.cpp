@@ -172,7 +172,7 @@ namespace Strata
 				result["assetCount"] = assets.size();
 				result["assets"] = std::move(rows);
 				return EditorCommandResult::Ok(std::move(result));
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "asset.setBudget",
 			"Sets the asset streaming budgets of the open project's asset manager (until the project closes; not undoable; fails without a "
@@ -234,7 +234,7 @@ namespace Strata
 					budgets.StagingBytes = toBytes(*staging);
 				manager->SetResidencyBudgets(budgets);
 				return EditorCommandResult::Ok({ { "budgets", DescribeBudgets(manager->GetResidencyBudgets()) } });
-			} });
+			}, EditorCommandKind::Session });
 	}
 
 }

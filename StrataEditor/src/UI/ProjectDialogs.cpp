@@ -97,7 +97,7 @@ namespace Strata
 		// Runs a command that finishes at once; the error of a failure goes to outError.
 		bool RunNow(EditorPanelContext& context, std::string_view name, const nlohmann::json& parameters, nlohmann::json* outValue, std::string& outError)
 		{
-			EditorCommandResult result = context.Commands.Execute(context.Context, name, parameters);
+			EditorCommandResult result = context.Commands.Execute(context.Context, name, parameters, CommandOrigin { CommandSource::UI });
 			if (result.IsPending())
 			{
 				ST_ASSERT(false, "{} finishes over several frames: run it through the EditorCommandRunner", name);

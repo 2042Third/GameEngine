@@ -32,6 +32,22 @@ namespace Strata
 		nlohmann::json Data; // Null when absent
 	};
 
+	// A client of the server, as it named itself in the handshake ("clientName", optional). The name is informational only
+	// (who is connected, which agent ran a command): it is never used to decide anything about trust.
+	struct RpcClientInfo
+	{
+		uint64_t Id = 0;         // The connection, unique while the server runs
+		std::string Name;        // Empty when the client gave none
+		int64_t ConnectedAt = 0; // When it authenticated: milliseconds since 1970-01-01 UTC
+	};
+
+	// Client names are at most this many characters (Unicode code points).
+	constexpr size_t c_MaxRpcClientNameLength = 64;
+
+	// A client name as the server keeps it: control characters removed, at most c_MaxRpcClientNameLength characters
+	// (cut between characters), invalid UTF-8 replaced.
+	std::string SanitizeRpcClientName(std::string_view name);
+
 	// Outcome of an RPC method: a JSON result value or an error.
 	class RpcResult
 	{
@@ -63,7 +79,7 @@ namespace Strata
 	public:
 		using DeliveryFunction = std::function<void(RpcResult result)>;
 
-		RpcResponder(std::string method, DeliveryFunction deliver);
+		RpcResponder(std::string method, DeliveryFunction deliver, RpcClientInfo client = {});
 		~RpcResponder();
 
 		RpcResponder(const RpcResponder&) = delete;
@@ -74,9 +90,12 @@ namespace Strata
 		bool TryRespond(RpcResult result);
 		bool HasResponded() const { return m_Responded.load(); }
 		const std::string& GetMethod() const { return m_Method; }
+		// The client that sent the request.
+		const RpcClientInfo& GetClient() const { return m_Client; }
 	private:
 		std::string m_Method;
 		DeliveryFunction m_Deliver;
+		RpcClientInfo m_Client;
 		std::atomic<bool> m_Responded = false;
 	};
 
@@ -91,7 +110,8 @@ namespace Strata
 
 	// Every connection starts with a challenge-response handshake in which both sides prove that they know the
 	// session token, and the token itself never crosses the wire:
-	//   1. rpc.handshake {"clientNonce"} -> {"serverNonce", "serverProof"}
+	//   1. rpc.handshake {"clientNonce", "clientName"?} -> {"serverNonce", "serverProof"}
+	//      clientName (optional) names the client for people and the activity journal (RpcClientInfo); it proves nothing.
 	//      serverProof = HMAC-SHA256(token, "strata-server" + clientNonce + serverNonce). The client verifies it
 	//      before it sends anything else, so it never talks to (or proves anything to) a process that merely took
 	//      over a dead editor's port.
@@ -153,7 +173,7 @@ namespace Strata
 	// rather than echoed, and method names quoted in error messages are shortened.
 	//
 	// Built-in methods (answered without waiting for ProcessRequests):
-	//   rpc.handshake {"clientNonce"}   -> {"serverNonce", "serverProof"} (see RpcAuthentication)
+	//   rpc.handshake {"clientNonce", "clientName"?} -> {"serverNonce", "serverProof"} (see RpcAuthentication)
 	//   rpc.authenticate {"clientProof"} -> {"authenticated": true}
 	//   rpc.ping                         -> {"pong": true}
 	//   rpc.listMethods                  -> {"methods": [{"name", "description", "paramsSchema"}, ...]}
@@ -182,6 +202,8 @@ namespace Strata
 		const std::string& GetLastError() const;
 		uint16_t GetPort() const;
 		uint32_t GetClientCount() const;
+		// The authenticated clients, in the order they connected. Thread-safe.
+		std::vector<RpcClientInfo> GetClients() const;
 
 		// Registers a method (names starting with "rpc." are reserved). Returns false for an invalid or
 		// duplicate name. A missing or non-object ParamsSchema is replaced by an empty object schema.

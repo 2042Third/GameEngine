@@ -189,7 +189,7 @@ namespace Strata
 			[](EditorContext& context, const nlohmann::json&)
 			{
 				return EditorCommandResult::Ok(DescribeScripts(context));
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "script.get",
 			"The field values of the scripts attached to an entity. While the game plays they are the live instances' values (game state kept "
@@ -220,7 +220,7 @@ namespace Strata
 					}
 				}
 				return EditorCommandResult::Ok({ { "entity", UUIDToJson(entity.GetUUID()) }, { "scripts", std::move(scripts) } });
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "script.build",
 			"Builds the project's scripts (the CMakeLists.txt in its Scripts directory) with the engine's compiler and configuration, then loads "

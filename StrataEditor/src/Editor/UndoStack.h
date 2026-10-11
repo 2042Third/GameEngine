@@ -99,8 +99,11 @@ namespace Strata
 		// The latest applied action and its serial (null and 0 when nothing is applied).
 		const EditorAction* GetLatestAction() const { return m_Position > 0 ? m_Entries[m_Position - 1].Action.get() : nullptr; }
 		uint64_t GetLatestSerial() const { return m_Position > 0 ? m_Entries[m_Position - 1].Serial : 0; }
-		// Counts recorded actions, merges included: a command that changed it recorded (or extended) the latest step.
+		// Counts recorded actions, merges included: a command that changed it recorded (or extended) a step.
 		uint64_t GetRecordCount() const { return m_RecordCount; }
+		// The serial of the step the latest Execute or Record created or merged into; 0 when that step changed nothing in
+		// the end and was dropped (a merged drag back to its start).
+		uint64_t GetLastRecordedSerial() const { return m_LastRecordedSerial; }
 		// Undoes or redoes until `position` actions are applied. False when the position does not exist or a redo failed
 		// on the way (the stack then stays where it stopped).
 		bool GoTo(size_t position);
@@ -136,6 +139,7 @@ namespace Strata
 		static constexpr size_t c_NoSavePoint = static_cast<size_t>(-1);
 		uint64_t m_NextSerial = 1;
 		uint64_t m_RecordCount = 0;
+		uint64_t m_LastRecordedSerial = 0;
 		UndoStackObserver* m_Observer = nullptr;
 	};
 

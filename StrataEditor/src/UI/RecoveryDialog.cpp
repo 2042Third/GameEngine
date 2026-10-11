@@ -50,7 +50,7 @@ namespace Strata
 				m_Running--;
 				if (!result.Success)
 					m_Error = result.Error;
-			});
+			}, CommandOrigin { CommandSource::UI });
 	}
 
 	void RecoveryDialog::Draw(EditorPanelContext& context)

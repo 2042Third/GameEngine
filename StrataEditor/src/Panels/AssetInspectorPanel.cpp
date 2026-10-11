@@ -243,7 +243,7 @@ namespace Strata
 					state->Error = result.Success ? std::string() : result.Error;
 					if (!result.Success)
 						ST_ERROR("Reimport: {}", result.Error);
-				});
+				}, CommandOrigin { CommandSource::UI });
 			}
 		}
 		if (any)
@@ -352,7 +352,7 @@ namespace Strata
 				state->Error = result.Success ? std::string() : result.Error;
 				if (!result.Success)
 					ST_ERROR("Import settings: {}", result.Error);
-			});
+			}, CommandOrigin { CommandSource::UI });
 		}
 		ImGui::Spacing();
 	}

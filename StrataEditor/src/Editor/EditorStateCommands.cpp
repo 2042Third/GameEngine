@@ -100,7 +100,7 @@ namespace Strata
 				const AssetHandle inspected = context.GetInspectedAsset();
 				return EditorCommandResult::Ok({ { "entities", std::move(ids) },
 					{ "inspectedAsset", inspected.IsValid() ? UUIDToJson(inspected) : nlohmann::json(nullptr) } });
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "selection.set",
 			"Replaces the selection of entities (an empty array clears it; selecting entities shows them in the inspector) and/or shows an asset in "
@@ -142,7 +142,7 @@ namespace Strata
 				if (asset != parameters.end() && !context.SetInspectedAsset(inspected))
 					return EditorCommandResult::Fail("The asset is not available to inspect");
 				return EditorCommandResult::Ok();
-			} });
+			}, EditorCommandKind::Session });
 
 		////////////////////////////////////////////////////////////////////////////////
 		// Undo
@@ -172,7 +172,69 @@ namespace Strata
 			[](EditorContext& context, const nlohmann::json&)
 			{
 				return EditorCommandResult::Ok(DescribeHistory(context));
-			} });
+			}, EditorCommandKind::Query });
+
+		////////////////////////////////////////////////////////////////////////////////
+		// Activity
+		////////////////////////////////////////////////////////////////////////////////
+
+		registry.Register({ "editor.activity",
+			"What people, agents and scripts did in this editor: the activity journal of every command run (the latest 2,000, within 8 MB), oldest "
+			"first after since. Each entry: {id, parent (the command that ran it), time (milliseconds since 1970-01-01 UTC), source (UI, "
+			"Automation, CommandScript or Internal), client (an automation client's name), command, mutating, playing (ran on the running copy), "
+			"parameters (parametersTruncated when too large to keep), status (Pending, Succeeded, Failed), result (a summary) or error {kind, "
+			"message}, warning, durationMs, frames (of a command that took several), entities (that its undo step touched, at most 256) and "
+			"entityCount, undoStep}. Page with since = the returned latest while more is true; editor.activity.export turns entries into a "
+			"command script.",
+			ObjectSchema({
+				{ "since", IntegerSchema("Return entries with an id above this (default 0: from the oldest kept)", 0, std::numeric_limits<int64_t>::max()) },
+				{ "limit", IntegerSchema("Most entries to return (default 100)", 1, static_cast<int64_t>(CommandJournal::c_MaxEntries)) },
+				{ "source", { { "type", "string" }, { "enum", { "UI", "Automation", "CommandScript", "Internal" } },
+					{ "description", "Only entries of this source" } } },
+				{ "command", StringSchema("Only entries of this command, or of a group with a prefix ending in '.' (\"entity.\")") } }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				CommandArguments arguments(parameters);
+				const int64_t since = arguments.GetInt("since", 0, 0, std::numeric_limits<int64_t>::max());
+				const int64_t limit = arguments.GetInt("limit", 100, 1, static_cast<int64_t>(CommandJournal::c_MaxEntries));
+				const std::string sourceName = arguments.GetString("source", "");
+				const std::string command = arguments.GetString("command", "");
+				std::optional<CommandSource> source;
+				if (arguments.IsValid() && !sourceName.empty())
+				{
+					source = CommandSourceFromString(sourceName);
+					if (!source)
+						arguments.SetError(fmt::format("Parameter 'source' must be UI, Automation, CommandScript or Internal, not '{}'", sourceName));
+				}
+				if (!arguments.IsValid())
+					return arguments.Fail();
+
+				const CommandJournal& journal = context.GetJournal();
+				// This call's own entry is still running: it is not part of the answer.
+				const uint64_t self = journal.GetRunningId();
+				const bool group = !command.empty() && command.back() == '.';
+				nlohmann::json entries = nlohmann::json::array();
+				uint64_t latest = static_cast<uint64_t>(since);
+				bool more = false;
+				for (const CommandJournalEntry& entry : journal.GetEntries())
+				{
+					if (entry.Id <= static_cast<uint64_t>(since) || entry.Id == self)
+						continue;
+					if (source && entry.Source != *source)
+						continue;
+					if (!command.empty() && (group ? !entry.Command.starts_with(command) : entry.Command != command))
+						continue;
+					if (entries.size() == static_cast<size_t>(limit))
+					{
+						more = true;
+						break;
+					}
+					latest = entry.Id;
+					entries.push_back(CommandJournal::Describe(entry));
+				}
+				return EditorCommandResult::Ok({ { "entries", std::move(entries) }, { "latest", latest }, { "more", more },
+					{ "journal", { { "entries", journal.GetEntries().size() }, { "bytes", journal.GetBytes() }, { "latest", journal.GetLatestId() } } } });
+			}, EditorCommandKind::Query });
 
 		////////////////////////////////////////////////////////////////////////////////
 		// Recovery
@@ -204,7 +266,7 @@ namespace Strata
 					result["entries"] = std::move(entries);
 					return EditorCommandResult::Ok(std::move(result));
 				});
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "scene.recover",
 			"Applies or discards recovery data (scene.recoveryStatus). apply: opens the scene the changes were made to (a scene never saved: a "
@@ -299,7 +361,7 @@ namespace Strata
 					progress->Load = recovery.Read(entry->Id, context.GetSceneFile(entry->Scene).first);
 					return std::nullopt;
 				});
-			} });
+			}, EditorCommandKind::Session });
 
 		////////////////////////////////////////////////////////////////////////////////
 		// Editor
@@ -338,7 +400,7 @@ namespace Strata
 				for (const auto& [section, provider] : context.GetStatusProviders())
 					status.emplace(section, provider());
 				return EditorCommandResult::Ok(std::move(status));
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "editor.recentProjects",
 			"The projects opened most recently, most recent first (at most 12, projects that no longer exist left out): name, path of the project "
@@ -357,7 +419,7 @@ namespace Strata
 						{ "engineVersion", project.EngineVersion } });
 				}
 				return EditorCommandResult::Ok({ { "projects", std::move(projects) } });
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "editor.removeRecentProject",
 			"Takes a project off the recent projects (editor.recentProjects); its files stay where they are.",
@@ -371,7 +433,7 @@ namespace Strata
 				if (!context.GetRecentProjects().Remove(FileSystem::FromUTF8(path)))
 					return EditorCommandResult::InvalidParameters(fmt::format("'{}' is not a recent project (editor.recentProjects lists them)", path));
 				return EditorCommandResult::Ok();
-			} });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "editor.quit",
 			"Closes the editor after answering (pending commands are cancelled). Fails while the scene has unsaved changes unless force is "
@@ -388,7 +450,7 @@ namespace Strata
 				const bool modified = context.IsSceneModified();
 				context.RequestQuit();
 				return EditorCommandResult::Ok({ { "quitting", true }, { "discardedChanges", modified } });
-			} });
+			}, EditorCommandKind::Session });
 
 		////////////////////////////////////////////////////////////////////////////////
 		// Frames
@@ -426,7 +488,7 @@ namespace Strata
 						result["frameTimes"] = DescribeFrameTimes(std::move(frameTimes));
 					return EditorCommandResult::Ok(std::move(result));
 				});
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "editor.perf",
 			"Where the editor's frames go: statistics of the latest frames the frame profiler recorded (at most 600). Returns frames (how many "
@@ -446,7 +508,7 @@ namespace Strata
 					return arguments.Fail();
 				const FrameProfileSummary summary = FrameProfiler::Get().Summarize(static_cast<uint32_t>(frames));
 				return EditorCommandResult::Ok(DescribeFrameProfile(summary, JobSystem::GetStats()));
-			} });
+			}, EditorCommandKind::Query });
 
 		////////////////////////////////////////////////////////////////////////////////
 		// Play mode
@@ -460,7 +522,7 @@ namespace Strata
 				if (!context.Play(&error))
 					return EditorCommandResult::Fail(error);
 				return EditorCommandResult::Ok(DescribePlayState(context));
-			} });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "play.simulate", "Runs a copy of the scene with physics only (no scripts or audio).", ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
@@ -469,14 +531,14 @@ namespace Strata
 				if (!context.Simulate(&error))
 					return EditorCommandResult::Fail(error);
 				return EditorCommandResult::Ok(DescribePlayState(context));
-			} });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "play.stop", "Stops play or simulate mode and returns to the edited scene.", ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
 				context.Stop();
 				return EditorCommandResult::Ok(DescribePlayState(context));
-			} });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "play.pause", "Pauses or resumes the running scene.",
 			ObjectSchema({ { "paused", BoolSchema("Whether the simulation is paused") } }, { "paused" }),
@@ -492,7 +554,7 @@ namespace Strata
 					return EditorCommandResult::Fail("The scene is not running");
 				context.SetPaused(paused);
 				return EditorCommandResult::Ok(DescribePlayState(context));
-			} });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "play.step", "While paused, advances the simulation by a number of fixed steps over the next frames.",
 			ObjectSchema({ { "frames", IntegerSchema("Fixed steps (default 1)", 1, 10000) } }),
@@ -506,13 +568,13 @@ namespace Strata
 					return EditorCommandResult::Fail("Stepping needs a paused running scene (play.pause)");
 				context.Step(static_cast<uint32_t>(frames));
 				return EditorCommandResult::Ok(DescribePlayState(context));
-			} });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "play.state", "Whether the scene is being edited, played or simulated, and whether it is paused.", ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
 				return EditorCommandResult::Ok(DescribePlayState(context));
-			} });
+			}, EditorCommandKind::Query });
 
 		////////////////////////////////////////////////////////////////////////////////
 		// Log
@@ -569,7 +631,7 @@ namespace Strata
 						{ "time", entry.Timestamp } });
 				}
 				return EditorCommandResult::Ok({ { "messages", std::move(messages) }, { "latest", latest }, { "more", more } });
-			} });
+			}, EditorCommandKind::Query });
 	}
 
 }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Editor/CommandJournal.h"
+
 #include <Strata/Core/UUID.h>
 #include <Strata/Scene/Entity.h>
 
@@ -49,6 +51,9 @@ namespace Strata
 		// blocking the frame. Success, Value and Error are meaningless while it is set. Run commands that may defer through
 		// EditorCommandRunner, which polls them.
 		EditorCommandPoll Pending;
+		// The activity journal's entry of a pending result (CommandJournal): PollCommandResult completes it when the result
+		// becomes final. Set by EditorCommandRegistry::Execute; 0 otherwise.
+		uint64_t JournalId = 0;
 
 		bool IsPending() const { return static_cast<bool>(Pending); }
 
@@ -62,6 +67,18 @@ namespace Strata
 
 	using EditorCommandHandler = std::function<EditorCommandResult(EditorContext& context, const nlohmann::json& parameters)>;
 
+	// What a command does, for the activity journal (its "changes" filter) and replays (editor.activity.export repeats Edit
+	// commands only).
+	enum class EditorCommandKind : uint8_t
+	{
+		Edit = 0, // Changes the edited scene, its assets or the project's files: what replaying a session repeats
+		Query,    // Reads, waits or renders: changes nothing (captures included)
+		Session   // Changes the editor's session, not the project: which project is open, play mode, simulated input,
+		          // the selection, the view, the editor's own files
+	};
+
+	const char* EditorCommandKindToString(EditorCommandKind kind);
+
 	// A named editor operation taking a JSON object of parameters. Commands are the single way to change the editor
 	// state from outside the UI: the automation server exposes every registered command to tools and AI agents, and
 	// tests drive the editor through them. Mutating commands record undo steps like the equivalent UI actions.
@@ -71,6 +88,9 @@ namespace Strata
 		std::string Description;   // One or two sentences for tool listings
 		nlohmann::json Parameters; // JSON Schema of the parameter object
 		EditorCommandHandler Handler;
+		// Commands that do not change the project say so: an unmarked command counts as an edit, so a replay never misses
+		// one.
+		EditorCommandKind Kind = EditorCommandKind::Edit;
 	};
 
 	class EditorCommandRegistry
@@ -92,9 +112,14 @@ namespace Strata
 
 		// Runs a command. Unknown commands, parameters that are not an object and failures inside the handler
 		// (including exceptions from third-party code) become error results. The result may be pending (see
-		// EditorCommandResult::Pending); EditorCommandRunner handles that.
-		EditorCommandResult Execute(EditorContext& context, std::string_view name, const nlohmann::json& parameters = nlohmann::json::object()) const;
+		// EditorCommandResult::Pending); EditorCommandRunner handles that. Every call is recorded in the context's activity
+		// journal (CommandJournal) with its origin, once: when the command finishes, or for a pending one when its result
+		// becomes final (PollCommandResult). Code that runs a command for the person passes CommandSource::UI; commands that
+		// run commands are recorded as their children.
+		EditorCommandResult Execute(EditorContext& context, std::string_view name, const nlohmann::json& parameters = nlohmann::json::object(),
+			const CommandOrigin& origin = {}) const;
 	private:
+		EditorCommandResult Run(EditorContext& context, const EditorCommand* command, std::string_view name, const nlohmann::json& parameters) const;
 		std::map<std::string, EditorCommand, std::less<>> m_Commands;
 		uint64_t m_Revision = 0;
 	};

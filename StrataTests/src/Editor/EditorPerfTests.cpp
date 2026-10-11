@@ -344,6 +344,42 @@ TEST_SUITE("Perf.Editor")
 		CHECK(AssetManager::GetAsset<Texture>(texture)->GetWidth() == 4096u);
 	}
 
+	TEST_CASE("Recording a command in the activity journal costs a few microseconds")
+	{
+		EditorWithRoots editor(c_Roots);
+		CommandJournal& journal = editor.Context.GetJournal();
+		const nlohmann::json parameters = { { "entity", UUIDToJson(editor.Roots[c_Roots / 2].GetUUID()) } };
+		// 100,000 entity.get calls in batches of 10,000, alternately with the journal recording and without: the metric is the
+		// median batch's time per call with it minus the median without it, in microseconds.
+		constexpr int c_Batches = 10;
+		constexpr int c_CallsPerBatch = 10'000;
+		auto timeBatch = [&](bool recording)
+		{
+			journal.SetEnabled(recording);
+			const auto start = std::chrono::steady_clock::now();
+			for (int call = 0; call < c_CallsPerBatch; call++)
+				editor.Commands.Execute(editor.Context, "entity.get", parameters);
+			return MillisecondsSince(start) * 1000.0 / c_CallsPerBatch;
+		};
+		Perf::CheckBudgetConfirmed("Perf.Editor.JournalPerCommand", [&]
+		{
+			std::vector<double> on;
+			std::vector<double> off;
+			timeBatch(true); // Warm-up: the ring fills to its limits once
+			for (int batch = 0; batch < c_Batches / 2; batch++)
+			{
+				on.push_back(timeBatch(true));
+				off.push_back(timeBatch(false));
+			}
+			journal.SetEnabled(true);
+			const double withJournal = Perf::Summarize(on).MedianMs;
+			const double without = Perf::Summarize(off).MedianMs;
+			MESSAGE("entity.get: ", withJournal, " us per call with the journal, ", without, " us without");
+			return std::max(withJournal - without, 0.0);
+		});
+		CHECK(journal.GetEntries().size() == CommandJournal::c_MaxEntries);
+	}
+
 	TEST_CASE("The recovery journal of a 100,000-entity scene is written without holding up frames")
 	{
 		// The I/O threads the journal's writes run on, as in the editor.

@@ -1762,3 +1762,81 @@ TEST_SUITE("Network.RpcServer")
 		CHECK(result.GetValue()["value"].get_ref<const std::string&>() == payload);
 	}
 }
+
+TEST_SUITE("Network.RpcPresence")
+{
+	TEST_CASE("Clients may name themselves in the handshake; the server lists them and tells handlers")
+	{
+		Tests::PumpedRpcServer server;
+		std::string seenName;
+		std::mutex seenMutex;
+		server.GetServer().RegisterMethod(RpcMethodInfo { "test.who", "Who called", nlohmann::json::object() },
+			RpcHandler([&](const nlohmann::json&, const Ref<RpcResponder>& responder)
+			{
+				{
+					std::scoped_lock<std::mutex> lock(seenMutex);
+					seenName = responder->GetClient().Name;
+				}
+				responder->Respond(RpcResult::Success(nlohmann::json { { "id", responder->GetClient().Id } }));
+			}));
+		REQUIRE(server.Start());
+
+		// A client from before names existed sends none and works as it did.
+		RpcClient anonymous;
+		ConnectClient(anonymous, server.GetPort());
+		REQUIRE(anonymous.Call("test.who", nlohmann::json::object(), c_CallTimeout).IsSuccess());
+		{
+			std::scoped_lock<std::mutex> lock(seenMutex);
+			CHECK(seenName.empty());
+		}
+
+		RpcClient named;
+		REQUIRE_MESSAGE(named.Connect("127.0.0.1", server.GetPort(), Tests::c_TestServerToken, std::chrono::milliseconds(5000), "claude-code"),
+			named.GetLastError());
+		const RpcResult who = named.Call("test.who", nlohmann::json::object(), c_CallTimeout);
+		REQUIRE(who.IsSuccess());
+		{
+			std::scoped_lock<std::mutex> lock(seenMutex);
+			CHECK(seenName == "claude-code");
+		}
+		REQUIRE(Tests::WaitUntil([&]() { return server.GetServer().GetClients().size() == 2; }));
+		const std::vector<RpcClientInfo> clients = server.GetServer().GetClients();
+		CHECK(clients[0].Name.empty());
+		CHECK(clients[1].Name == "claude-code");
+		CHECK(clients[1].Id == who.GetValue()["id"].get<uint64_t>());
+		CHECK(clients[1].ConnectedAt > 0);
+
+		named.Close();
+		CHECK(Tests::WaitUntil([&]() { return server.GetServer().GetClients().size() == 1; }));
+	}
+
+	TEST_CASE("Client names are bounded and stripped of control characters, and must be strings")
+	{
+		CHECK(SanitizeRpcClientName("  agent  ") == "agent");
+		CHECK(SanitizeRpcClientName("bad\nname\t\x07") == "badname");
+		CHECK(SanitizeRpcClientName("right\xE2\x80\xAEleft") == "rightleft"); // U+202E (right-to-left override)
+		CHECK(SanitizeRpcClientName("\xFF\xFEx") == "\xEF\xBF\xBD\xEF\xBF\xBDx");
+		CHECK(SanitizeRpcClientName(std::string(100, 'a')) == std::string(c_MaxRpcClientNameLength, 'a'));
+		// Characters, not bytes: 70 two-byte characters keep 64 whole ones.
+		std::string accents;
+		for (int index = 0; index < 70; index++)
+			accents += "\xC3\xA9";
+		CHECK(SanitizeRpcClientName(accents).size() == c_MaxRpcClientNameLength * 2);
+
+		Tests::PumpedRpcServer server;
+		REQUIRE(server.Start());
+		RpcClient client;
+		REQUIRE(client.Connect("127.0.0.1", server.GetPort(), Tests::c_TestServerToken, std::chrono::milliseconds(5000), std::string(200, 'z') + "\r\n"));
+		REQUIRE(Tests::WaitUntil([&]() { return server.GetServer().GetClients().size() == 1; }));
+		CHECK(server.GetServer().GetClients()[0].Name == std::string(c_MaxRpcClientNameLength, 'z'));
+
+		// A name of another type is a malformed handshake.
+		Tests::RawRpcConnection raw;
+		REQUIRE(raw.Connect(server.GetPort()));
+		REQUIRE(raw.SendLine(JsonRpc::Serialize(JsonRpc::MakeRequest("handshake", c_RpcHandshakeMethod,
+			nlohmann::json { { "clientNonce", RpcAuthentication::GenerateNonce() }, { "clientName", 42 } }))));
+		const std::optional<nlohmann::json> refused = raw.ReadMessage();
+		REQUIRE(refused.has_value());
+		CHECK((*refused)["error"]["code"] == JsonRpc::ErrorCode::InvalidParams);
+	}
+}
