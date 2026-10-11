@@ -21,7 +21,7 @@ namespace Strata
 	public:
 		static constexpr const char* c_Popup = "Recover Unsaved Changes";
 
-		// Opens the dialog at the next Draw.
+		// Opens the dialog at the next Draw, or once the recovery scan running then has finished.
 		void Open() { m_OpenRequested = true; }
 		// Every frame, inside the ImGui frame.
 		void Draw(EditorPanelContext& context);

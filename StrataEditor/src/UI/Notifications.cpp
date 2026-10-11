@@ -107,23 +107,37 @@ namespace Strata::UI
 			ImGui::SetCursorScreenPos(ImVec2(start.x + style.FramePadding.x, start.y + style.FramePadding.y));
 			ImGui::BeginGroup();
 			const float innerWidth = width - style.FramePadding.x * 2.0f;
+			const float closeLeft = start.x + style.FramePadding.x + innerWidth - ImGui::GetFrameHeight();
 			ImGui::TextColored(levelColor, "%s", GetLevelIcon(notification.Level));
 			ImGui::SameLine();
+			// The title and its count stay clear of the close button: a title too long for the line wraps there, and its count
+			// then leads the message.
+			const std::string count = notification.Count > 1 ? fmt::format("x{}", notification.Count) : std::string();
 			PushFont(EditorFont::SemiBold);
+			const float titleRoom = closeLeft - style.ItemSpacing.x - ImGui::GetCursorScreenPos().x;
+			const float countWidth = count.empty() ? 0.0f : ImGui::CalcTextSize(count.c_str()).x + style.ItemSpacing.x;
+			const bool countOnTitleLine = ImGui::CalcTextSize(notification.Title.c_str()).x + countWidth <= titleRoom;
+			ImGui::PushTextWrapPos(closeLeft - style.ItemSpacing.x - ImGui::GetWindowPos().x);
 			ImGui::TextUnformatted(notification.Title.c_str());
+			ItemProbe::Record(key + ".Title", true, 0, notification.Title);
+			ImGui::PopTextWrapPos();
 			ImGui::PopFont();
-			if (notification.Count > 1)
+			if (!count.empty() && countOnTitleLine)
 			{
 				ImGui::SameLine();
-				ImGui::TextColored(colors.TextSecondary, "x%u", notification.Count);
+				ImGui::TextColored(colors.TextSecondary, "%s", count.c_str());
+				ItemProbe::Record(key + ".Count", true, 0, count);
 			}
 			ImGui::SameLine(innerWidth - ImGui::GetFrameHeight());
 			const bool close = IconButton((key + ".Close").c_str(), Icons::X, "Dismiss");
 
-			if (!notification.Message.empty())
+			const std::string message = !count.empty() && !countOnTitleLine
+				? (notification.Message.empty() ? count : fmt::format("{} \xC2\xB7 {}", count, notification.Message))
+				: notification.Message;
+			if (!message.empty())
 			{
 				ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + innerWidth);
-				ImGui::TextColored(colors.TextSecondary, "%s", Shorten(notification.Message, c_MaxMessageBytes).c_str());
+				ImGui::TextColored(colors.TextSecondary, "%s", Shorten(message, c_MaxMessageBytes).c_str());
 				ImGui::PopTextWrapPos();
 			}
 			bool first = true;

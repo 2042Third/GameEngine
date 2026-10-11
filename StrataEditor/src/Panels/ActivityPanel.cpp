@@ -96,6 +96,10 @@ namespace Strata
 			}
 			if (!entry.Warning.empty())
 				return { entry.Warning, colors.Warning };
+			// A command that replaced the edited scene with force stands out: it threw away unsaved changes (kept as recovery
+			// data). The summary is compact JSON written by the journal, so the member reads exactly so.
+			if (entry.ResultSummary.find("\"discardedChanges\":true") != std::string::npos)
+				return { "discarded changes", colors.Warning };
 			if (!entry.UndoStep.empty())
 				return { entry.UndoStep, colors.Text };
 			return { "done", colors.TextSecondary };
@@ -255,6 +259,7 @@ namespace Strata
 				ImGui::TableSetColumnIndex(3);
 				const auto [outcome, color] = DescribeOutcome(*entry, colors);
 				ImGui::TextColored(color, "%s", outcome.c_str());
+				UI::ItemProbe::Record(fmt::format("Activity.Result.{}", entry->Id), true, UI::ToColorU32(color), outcome);
 				ImGui::TableSetColumnIndex(4);
 				if (entry->Status != CommandStatus::Pending)
 					ImGui::Text("%.1f", entry->DurationMs);

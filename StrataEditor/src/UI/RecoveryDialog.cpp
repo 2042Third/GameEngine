@@ -70,7 +70,9 @@ namespace Strata
 			if (HasOffer(context.Context))
 				m_OpenRequested = true;
 		}
-		if (m_OpenRequested)
+		// Opened once a scan running (e.g. after a discard just now) has read the directory: the dialog appears with its entries,
+		// centered for its full size, instead of growing from "nothing yet" past where it was placed.
+		if (m_OpenRequested && !recovery.IsScanning())
 		{
 			m_OpenRequested = false;
 			m_Error.clear();

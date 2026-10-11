@@ -9,6 +9,7 @@
 #include "Panels/ViewportPanel.h"
 #include "TestHelpers.h"
 #include "UI/ItemProbe.h"
+#include "UI/Theme.h"
 
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Network/EditorSession.h>
@@ -18,6 +19,7 @@
 
 #include <chrono>
 #include <future>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -192,6 +194,17 @@ TEST_SUITE("Editor.UI.Activity")
 		CHECK(rerun.Source == CommandSource::UI);
 		CHECK(rerun.Status == CommandStatus::Succeeded);
 		CHECK(rerun.Parameters["force"] == true);
+
+		// The list says which run threw changes away (in the warning color); the first discarded nothing.
+		panel->Select(rerunId);
+		editor.Frames(2);
+		const std::optional<UI::ItemProbe::Item> discarded = UI::ItemProbe::Find(fmt::format("Activity.Result.{}", rerunId));
+		REQUIRE(discarded.has_value());
+		CHECK(discarded->Text == "discarded changes");
+		CHECK(discarded->Color == UI::ToColorU32(UI::GetThemeColors().Warning));
+		const std::optional<UI::ItemProbe::Item> kept = UI::ItemProbe::Find(fmt::format("Activity.Result.{}", entry));
+		REQUIRE(kept.has_value());
+		CHECK(kept->Text == "done");
 	}
 
 	TEST_CASE("The Activity panel asked for before the first frame joins the bottom area")

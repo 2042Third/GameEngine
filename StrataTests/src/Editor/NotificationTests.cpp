@@ -266,4 +266,52 @@ TEST_SUITE("Editor.UI.Notifications")
 		REQUIRE(header.has_value());
 		CHECK(reason->Min.y > header->Max.y);
 	}
+
+	TEST_CASE("A toast's title and count stay clear of its close button")
+	{
+		// At 150%, where a long title fills the line.
+		ImGuiHarness::Specification specification;
+		specification.ContentScale = 1.5f;
+		HarnessEditor editor(specification);
+		editor.Layer->DismissLauncher();
+		editor.Frames(2);
+		auto post = [&editor](std::string title, std::string message)
+		{
+			EditorNotification notification;
+			notification.Level = NotificationLevel::Warning;
+			notification.Title = std::move(title);
+			notification.Message = std::move(message);
+			editor.Context().GetNotifications().Post(notification);
+		};
+		auto checkClear = [](const std::string& key)
+		{
+			const std::optional<UI::ItemProbe::Item> close = UI::ItemProbe::Find(key + ".Close");
+			const std::optional<UI::ItemProbe::Item> title = UI::ItemProbe::Find(key + ".Title");
+			REQUIRE(close.has_value());
+			REQUIRE(title.has_value());
+			CHECK(title->Max.x <= close->Min.x);
+			if (const std::optional<UI::ItemProbe::Item> count = UI::ItemProbe::Find(key + ".Count"))
+				CHECK(count->Max.x <= close->Min.x);
+		};
+
+		// A short title keeps its count beside it.
+		post("Export failed", "The directory is not writable.");
+		post("Export failed", "The directory is not writable.");
+		editor.Frames(2);
+		checkClear("Toast.0");
+		REQUIRE(UI::ItemProbe::Find("Toast.0.Count").has_value());
+		CHECK(UI::ItemProbe::Find("Toast.0.Count")->Text == "x2");
+
+		// A long one wraps before the close button, and its count leads the message.
+		editor.Context().GetNotifications().Clear();
+		const std::string longTitle = "A command script discarded unsaved changes of a scene with a long name";
+		for (int index = 0; index < 5; index++)
+			post(longTitle, "scene.open replaced the scene 'Main'. Its changes are kept as recovery data.");
+		editor.Frames(2);
+		checkClear("Toast.0");
+		CHECK_FALSE(UI::ItemProbe::Find("Toast.0.Count").has_value());
+		const std::optional<UI::ItemProbe::Item> toast = UI::ItemProbe::Find("Toast.0");
+		REQUIRE(toast.has_value());
+		CHECK(toast->Max.y - toast->Min.y > 0.0f);
+	}
 }

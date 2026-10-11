@@ -1383,8 +1383,9 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   the command script, information when the person answered Don't Save; Recover while the project stays open, where they
   are kept when it closes, and nothing when the person discarded what could not be kept) and `EditorLayer` when the
   recovery dialog closes with changes still on offer. `UI::DrawNotifications` draws them as toasts in one window at the
-  bottom right of the work area, above the status bar, kept in front without being focused (`BringWindowToDisplayFront`, `NoFocusOnAppearing`); it
-  returns at once while there are none. Their actions go through the `EditorShell`: Show in Activity, Show Asset
+  bottom right of the work area, above the status bar, kept in front without being focused (`BringWindowToDisplayFront`,
+  `NoFocusOnAppearing`); it returns at once while there are none. A title too long for its line wraps before the close
+  button, and its count then leads the message. Their actions go through the `EditorShell`: Show in Activity, Show Asset
   (`ShowAsset`: the Asset tab inspects it and the Content Browser reveals it), Show in Console and Recover.
 - **Import failures** (`EditorAssetManager::TakeImportFailures`). An import that fails while a caller waits for its
   outcome (`ReimportAsset`, `SetImportSettingsInBackground`, `ReimportAssetInBackground`: the source's `ImportAwaited`)
@@ -1490,8 +1491,10 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   discards scene after scene must not bury the person in offers: a scan offers the newest `c_MaxOfferedDiscards` (8)
   changes discarded on purpose, those that still apply first, and moves the others to `Recovery/Discarded`; what a crash
   left is never moved. The dialog lists more than four entries in a scrolling list of a fixed height (an auto-sized one
-  would measure itself only after the dialog was centered for its first size), and `UI::BeginModal` moves an open dialog
-  that grew past the window back inside it. File operations (writes, removals,
+  would measure itself only after the dialog was centered for its first size); asked for while a scan runs, it opens once
+  the scan has finished, so it appears centered at its full size; and `UI::BeginModal` moves an open dialog that grew past
+  the window back inside it (it never re-centers one, which would move a dialog under the person's pointer as an error
+  line comes and goes). File operations (writes, removals,
   scans, reads) run one at a time on I/O jobs in the order they were asked for, so a removal after a save is never
   overtaken by an earlier write; the editor waits for them only when it closes. Opening a project scans the directory:
   a file whose owner process still runs (its id with the start time recorded, since ids are reused, also this process's)

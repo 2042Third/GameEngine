@@ -716,14 +716,16 @@ TEST_SUITE("Editor.Recovery")
 		editor.Frames(2);
 		CHECK_FALSE(editor.Layer->GetRecoveryDialog().IsOpen());
 
-		// Opened right after a discard, the dialog waits for the scan that finds it instead of closing as if nothing were left.
+		// Asked for right after a discard, the dialog opens once the scan that finds it has finished, with the entry, instead of
+		// closing as if nothing were left.
 		editor.Run("entity.create", { { "name", "Again" } });
 		editor.Run("scene.open", { { "scene", "Scenes/Main.stscene" }, { "force", true } });
 		editor.Layer->ShowRecoveryDialog();
 		editor.Frames(1);
 		REQUIRE(editor.Context().GetRecovery().IsScanning());
-		CHECK(editor.Layer->GetRecoveryDialog().IsOpen());
+		CHECK_FALSE(editor.Layer->GetRecoveryDialog().IsOpen());
 		CHECK(editor.FramesUntil([&]() { return UI::ItemProbe::Find("Recovery.Recover.0").has_value(); }));
+		CHECK(editor.Layer->GetRecoveryDialog().IsOpen());
 
 		// Many offers scroll in a list: the dialog's buttons stay inside the window, and Discard All empties it.
 		for (size_t index = 0; index + 1 < SceneRecovery::c_MaxOfferedDiscards; index++)
@@ -736,7 +738,7 @@ TEST_SUITE("Editor.Recovery")
 		{
 			return !editor.Context().GetRecovery().IsScanning() && editor.Context().GetRecovery().GetEntries().size() == SceneRecovery::c_MaxOfferedDiscards;
 		}));
-		// The dialog stayed open while the offers came: centered for one entry, it grew, and stays inside the window.
+		// The dialog stayed open while the offers came: placed for one entry, it grew, and stays inside the window.
 		editor.Frames(3);
 		REQUIRE(editor.Layer->GetRecoveryDialog().IsOpen());
 		const ImGuiWindow* dialog = ImGui::FindWindowByName(RecoveryDialog::c_Popup);
