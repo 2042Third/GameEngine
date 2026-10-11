@@ -114,11 +114,11 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   `Perf::MetricValues`). **Failures are confirmed:** a metric over its budget is measured again, by running `measure`
   afresh (its own warm-up, its counters relative to its own start), up to `Perf::c_ConfirmationAttempts` (3) attempts
   in all, and fails only when every attempt is over budget; a metric within its budget once is decided, because noise
-  only adds to a measurement (the machine's other work, memory the driver keeps). Every attempt is printed, and the check records each metric in
-  `build/<preset>/PerfResults/<config>.json`: one entry per metric with its value (the passing attempt's, else the
-  smallest), unit, budget, target and the values of all its attempts, and nothing else run-specific, so two runs
-  compare with a diff (CTest clears the file first); acceptance limits of workstreams are budgets too (the budget is the
-  limit when it lies below 1.5 times the measurement). **Statistics:** check
+  only adds to a measurement (the machine's other work, memory the driver keeps). Every attempt is printed, and the
+  check records each metric in `build/<preset>/PerfResults/<config>.json`: one entry per metric with its value (the
+  passing attempt's, else the smallest), unit, budget, target and the values of all its attempts, and nothing else
+  run-specific, so two runs compare with a diff (CTest clears the file first); acceptance limits of workstreams are
+  budgets too (the budget is the limit when it lies below 1.5 times the measurement). **Statistics:** check
   medians of enough samples (a measurement the machine slowed down that much is what confirmation is for), maxima only
   for metrics that are maxima by nature (peak memory, the worst frame of a sweep), and give the reason for each metric's
   statistic in a comment. Budgets live in `StrataTests/Perf/Budgets.json`, whose `_comment` describes the format; a
@@ -418,9 +418,9 @@ The threading model, frame loop and pipelines these rules protect are described 
   one in `GetSettingsProperties` (one `ImportSettingsBuilder` entry each: type, default, range or choices, tooltip;
   choices show in words, "NormalMap" as "Normal Map", and `PowerOfTwoLimit` makes a size limit a choice of "No limit" or
   a power of two), matching the keys of `GetDefaultSettings`; the asset inspector draws them and
-  `asset.setImportSettings` validates against them (`NormalizeImportSettings`), so a new setting is one entry there. Editors re-import in the background
-  (`EditorAssetManager::SetImportSettingsInBackground`, `ReimportAssetInBackground`, `IsImportPending`); the blocking
-  forms are for tools and tests.
+  `asset.setImportSettings` validates against them (`NormalizeImportSettings`), so a new setting is one entry there.
+  Editors re-import in the background (`EditorAssetManager::SetImportSettingsInBackground`, `ReimportAssetInBackground`,
+  `IsImportPending`); the blocking forms are for tools and tests.
 - Engine-native assets (`.stscene`, `.stprefab`, `.stmat`) are JSON documents with a
   `{ "Strata": { "Format": ..., "Version": ... } }` header, stored as-is. Their loaders validate fully;
   JSON entry points are named `FromJson`, byte entry points `Deserialize`.
@@ -844,8 +844,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   in flight, uploads, finalization time and the staging budget, evictions and the assets eviction looked at,
   cancellations, staging releases, dependency prefetches started and dropped) and, with `assets: true`, the assets that
   are resident, loading, failed or pinned (`GetResidencyInfo`); `asset.setBudget {gpuTexturesMB?, gpuBuffersMB?, cpuMB?,
-  inFlightMB?, uploadMBPerFrame?, finalizeMsPerFrame?, stagingMB?, reset?}` changes the budgets of the open project's manager until the project closes
-  (it fails without a project; values greater than 0; MB are 2^20 bytes; no undo, as nothing in the project changes).
+  inFlightMB?, uploadMBPerFrame?, finalizeMsPerFrame?, stagingMB?, reset?}` changes the budgets of the open project's
+  manager until the project closes (it fails without a project; values greater than 0; MB are 2^20 bytes; no undo, as
+  nothing in the project changes).
   Opening a scene, and a scene switch the game asks for in play mode, schedule the release of what only the previous
   scene used (`EditorContext::OpenScene`, `SwitchRuntimeScene`). The Streaming panel (`Panels/StreamingPanel`) shows the
   same numbers, read once per frame after the frame's commands, and the assets as a sortable, filtered table, failed

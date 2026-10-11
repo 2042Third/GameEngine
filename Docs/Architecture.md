@@ -727,10 +727,10 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   close to the speed of an uncompressed one (the stress world, with block-compressed textures, streams from version 2
   about as fast as from version 1: PerfGPU.Pack). The reading thread never waits in the job system, which would make it
   run unrelated queued jobs (a texture's decoding, a mesh cook) while the reads behind it stall: it decodes blocks of its
-  own read, or sleeps until the blocks its helpers claimed are done (`AssetPack::BlockDecoding`). zstd is built with its BMI2 bit readers (MSVC:
-  `/arch:AVX2`, which Jolt requires already). The writer runs on any thread, compresses each batch of 64 blocks in
-  parallel on the workers, reports progress and stops when cancelled; zstd's compressor is linked only by it, so shipped
-  games contain the decompressor only.
+  own read, or sleeps until the blocks its helpers claimed are done (`AssetPack::BlockDecoding`). zstd is built with
+  its BMI2 bit readers (MSVC: `/arch:AVX2`, which Jolt requires already). The writer runs on any thread, compresses each
+  batch of 64 blocks in parallel on the workers, reports progress and stops when cancelled; zstd's compressor is linked
+  only by it, so shipped games contain the decompressor only.
 - **Pack layout** (`EditorAssetManager::PlanAssetPack`, then `WriteAssetPack`; `BuildAssetPack` does both, blocking). Packs
   are ordered by first use: the start scene's dependency closure breadth first, then each other scene's closure (by
   path), then the rest by path. With `Prune`, only the scenes' closures and what `AlwaysInclude` names (assets or folders,
