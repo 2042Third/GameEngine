@@ -18,6 +18,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <functional>
 #include <string>
@@ -930,5 +931,62 @@ TEST_SUITE("Asset.Gltf")
 		REQUIRE_MESSAGE(compressedOnly.Success, compressedOnly.Error);
 		CHECK(HasWarningContaining(compressedOnly.Result, "Draco"));
 		CHECK(compressedOnly.Find("Mesh/1")); // The other mesh is unaffected
+	}
+
+	TEST_CASE("A cancelled import stops at its next check and fails")
+	{
+		const std::filesystem::path assets = Tests::CreateTemporaryDirectory("GltfCancel") / "Assets";
+		REQUIRE(FileSystem::WriteBytes(assets / "Models" / "Textures" / "Albedo.png", Tests::CreateSolidPNG(64, 64, 10, 20, 30)));
+		REQUIRE(FileSystem::WriteBytes(assets / "Models" / "Geometry.bin", CreateGeometryBuffer()));
+		const std::filesystem::path path = assets / "Models" / "External.gltf";
+		REQUIRE(FileSystem::WriteBytes(path, CreateGltf({ .ImageUri = "Textures/Albedo.png", .BufferUri = "Geometry.bin" })));
+
+		GltfImporter importer;
+		std::atomic<bool> cancel = false;
+		ImportContext context;
+		context.Handle = UUID(0x6A1F);
+		context.SourcePath = path;
+		context.AssetDirectory = assets;
+		context.Settings = importer.GetDefaultSettings(path);
+		context.Cancel = &cancel;
+		std::vector<std::filesystem::path> reads;
+		context.ReadFile = [&](const std::filesystem::path& file)
+		{
+			reads.push_back(file);
+			return FileSystem::ReadBytes(file);
+		};
+
+		// Uncancelled, it imports, reading its files through the context.
+		ImportResult imported;
+		std::string error;
+		REQUIRE_MESSAGE(importer.Import(context, imported, &error), error);
+		CHECK(std::find(reads.begin(), reads.end(), path) != reads.end());
+		CHECK(std::find(reads.begin(), reads.end(), assets / "Models" / "Textures" / "Albedo.png") != reads.end());
+
+		// Cancelled before it starts, it fails before it imports anything.
+		cancel = true;
+		ImportResult cancelled;
+		CHECK_FALSE(importer.Import(context, cancelled, &error));
+		CHECK(error == "External.gltf: cancelled");
+		CHECK(cancelled.SubAssets.empty());
+		CHECK(cancelled.Data.empty());
+
+		// Cancelled while it reads its image (between its materials' textures and its meshes): the texture is not cooked and
+		// the import fails instead of going on with its meshes.
+		cancel = false;
+		context.ReadFile = [&](const std::filesystem::path& file)
+		{
+			if (file.filename() == "Albedo.png")
+				cancel = true;
+			return FileSystem::ReadBytes(file);
+		};
+		ImportResult stopped;
+		CHECK_FALSE(importer.Import(context, stopped, &error));
+		CHECK(error == "External.gltf: cancelled");
+		CHECK(std::none_of(stopped.SubAssets.begin(), stopped.SubAssets.end(), [](const ImportedSubAsset& subAsset)
+		{
+			return subAsset.Type == AssetType::Texture || subAsset.Type == AssetType::Mesh;
+		}));
+		CHECK(stopped.Data.empty());
 	}
 }

@@ -17,7 +17,7 @@ namespace Strata
 
 		bool ReadSource(const ImportContext& context, std::vector<uint8_t>& outData, std::string* outError)
 		{
-			std::optional<std::vector<uint8_t>> data = FileSystem::ReadBytes(context.SourcePath);
+			std::optional<std::vector<uint8_t>> data = ReadImportSource(context);
 			if (!data)
 			{
 				if (outError)
