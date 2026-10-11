@@ -8,10 +8,14 @@
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Audio/AudioEngine.h>
 #include <Strata/Core/Crypto.h>
+#include <Strata/Core/FileReader.h>
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/JobSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
+#include <Strata/Core/StringUtils.h>
 #include <Strata/Input/Input.h>
+#include <Strata/Scene/Components.h>
 #include <Strata/Scene/Prefab.h>
 #include <Strata/Scene/SceneSerializer.h>
 
@@ -62,10 +66,79 @@ namespace Strata
 			return bytes ? std::optional<Sha256Digest>(Sha256::Hash(*bytes)) : std::nullopt;
 		}
 
+		// Whether a scene or prefab document attaches a script: its JSON names the Script component (the key "Script" followed
+		// by a colon; a name or text "Script" is a value, and quotes inside strings are escaped). Read in chunks, so the
+		// largest scenes cost no memory; stops early when cancelled. Any thread.
+		bool DocumentAttachesScripts(const std::filesystem::path& path, const std::atomic<bool>& cancelled)
+		{
+			constexpr std::string_view c_Key = "\"Script\"";
+			constexpr size_t c_ChunkSize = 1 << 20;
+			const Scope<FileReader> reader = FileReader::Open(path);
+			if (!reader)
+				return false;
+			std::vector<uint8_t> chunk;
+			std::string window; // The end of the previous chunk, so that a key across chunks is found
+			for (uint64_t offset = 0; offset < reader->GetSize() && !cancelled; offset += chunk.size())
+			{
+				chunk.resize(static_cast<size_t>(std::min<uint64_t>(c_ChunkSize, reader->GetSize() - offset)));
+				if (!reader->ReadAt(offset, chunk))
+					return false;
+				window.append(chunk.begin(), chunk.end());
+				for (size_t found = window.find(c_Key); found != std::string::npos; found = window.find(c_Key, found + 1))
+				{
+					size_t next = found + c_Key.size();
+					while (next < window.size() && (window[next] == ' ' || window[next] == '\t' || window[next] == '\r' || window[next] == '\n'))
+						next++;
+					if (next < window.size() && window[next] == ':')
+						return true;
+				}
+				// Keep enough of the end for a key and the blanks before its colon to straddle the next chunk.
+				constexpr size_t c_Keep = 64;
+				if (window.size() > c_Keep)
+					window.erase(0, window.size() - c_Keep);
+			}
+			return false;
+		}
+
+		// The newest code or CMake file of a script directory (hidden folders, such as an IDE's, are skipped).
+		struct ScriptSourceTime
+		{
+			std::filesystem::path Path;
+			int64_t Time = 0;
+		};
+
+		std::optional<ScriptSourceTime> FindNewestScriptSource(const std::filesystem::path& directory)
+		{
+			constexpr std::string_view c_Extensions[] = { ".cpp", ".cc", ".cxx", ".c", ".h", ".hpp", ".hh", ".hxx", ".inl", ".ipp", ".cmake" };
+			std::optional<ScriptSourceTime> newest;
+			std::error_code error;
+			std::filesystem::recursive_directory_iterator it(directory, std::filesystem::directory_options::skip_permission_denied, error);
+			for (; !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error))
+			{
+				const std::filesystem::path& path = it->path();
+				const std::string name = FileSystem::ToUTF8(path.filename());
+				std::error_code typeError;
+				if (it->is_directory(typeError))
+				{
+					if (!name.empty() && name.front() == '.')
+						it.disable_recursion_pending();
+					continue;
+				}
+				const std::string extension = FileSystem::ToUTF8(path.extension());
+				const bool source = name == "CMakeLists.txt" || std::find(std::begin(c_Extensions), std::end(c_Extensions), extension) != std::end(c_Extensions);
+				if (!source || !it->is_regular_file(typeError))
+					continue;
+				const std::optional<int64_t> time = FileSystem::GetLastWriteTime(path);
+				if (time && (!newest || *time > newest->Time))
+					newest = ScriptSourceTime { path, *time };
+			}
+			return newest;
+		}
+
 	}
 
 	EditorContext::EditorContext(const EditorContextSpecification& specification)
-		: m_Specification(specification), m_EditScene(CreateRef<Scene>()),
+		: m_Specification(specification), m_EditScene(CreateRef<Scene>()), m_ExternalEditor(specification.EditorSettingsFile),
 		  m_RecentProjects(specification.RecentProjectsFile, specification.RecentProjectsReadOnly)
 	{
 		ActivateBuiltinAssets();
@@ -128,7 +201,7 @@ namespace Strata
 		if (!project)
 			return false;
 		// New projects come with their script build and an example script.
-		if (!CreateScriptProjectFiles(*project, true, nullptr, outError))
+		if (!CreateScriptProjectFiles(*project, true, nullptr, outError, &m_Specification.ScriptBuild))
 			return false;
 		if (!OpenProjectInternal(project->GetProjectFile(), true, outError))
 			return false;
@@ -198,6 +271,7 @@ namespace Strata
 		m_AssetManager->Scan(m_Specification.ImportInBackground ? ScanImports::InBackground : ScanImports::Wait);
 		ST_INFO("Opened project '{}' ({})", m_Project->GetConfig().Name, FileSystem::ToUTF8(m_Project->GetProjectDirectory()));
 		OpenScriptEngine(created);
+		StartScriptUsageScan();
 
 		// Continue with the start scene when the project has one.
 		const AssetHandle startScene = m_Project->GetConfig().StartScene;
@@ -753,20 +827,176 @@ namespace Strata
 
 		const std::filesystem::path module = m_Project->GetScriptModulePath();
 		std::string error;
-		if (FileSystem::IsRegularFile(module))
+		if (FileSystem::IsRegularFile(module) && !LoadScriptModule(module, &error))
+			ST_WARN("The project's script module '{}' could not be loaded: {}", FileSystem::ToUTF8(module), error);
+		// Scripts that are not built only matter once a scene uses them: a new project's example is no reason to nag. The
+		// scan says so (UpdateScriptUsageScan); a project just created has nothing to scan.
+		m_ScriptUsageReported = created;
+	}
+
+	void EditorContext::StartScriptUsageScan()
+	{
+		if (m_ScriptUsageScan)
+			m_ScriptUsageScan->Cancelled = true;
+		m_ScriptUsageScan.reset();
+		m_SavedScenesUseScripts = false;
+		if (!m_AssetManager)
+			return;
+
+		std::vector<std::filesystem::path> files;
+		for (const AssetType type : { AssetType::Scene, AssetType::Prefab })
 		{
-			if (!LoadScriptModule(module, &error))
-				ST_WARN("The project's script module '{}' could not be loaded: {}", FileSystem::ToUTF8(module), error);
+			for (const AssetMetadata& metadata : m_AssetManager->GetAllMetadata(type))
+			{
+				if (!metadata.IsSubAsset())
+					files.push_back(m_AssetManager->GetAbsolutePath(metadata.Handle));
+			}
 		}
-		else if (!created && HasScriptBuild())
+		Ref<ScriptUsageScan> scan = CreateRef<ScriptUsageScan>();
+		m_ScriptUsageScan = scan;
+		// Read in chunks: a scene of a million entities is hundreds of megabytes, none of which needs to be in memory at once.
+		JobSystem::SubmitIO([scan, files = std::move(files)]()
 		{
-			ST_WARN("The scripts of '{}' are not built yet; build them with script.build (Scripts > Build Scripts)", m_Project->GetConfig().Name);
+			for (const std::filesystem::path& file : files)
+			{
+				if (scan->Cancelled)
+					break;
+				if (DocumentAttachesScripts(file, scan->Cancelled))
+				{
+					scan->UsesScripts = true;
+					scan->File = FileSystem::ToUTF8(file);
+					break;
+				}
+			}
+			scan->Done.store(true, std::memory_order_release);
+		});
+		UpdateScriptUsageScan();
+	}
+
+	void EditorContext::UpdateScriptUsageScan()
+	{
+		if (!m_ScriptUsageScan || !m_ScriptUsageScan->Done.load(std::memory_order_acquire))
+			return;
+		m_SavedScenesUseScripts = m_ScriptUsageScan->UsesScripts;
+		const std::string file = m_ScriptUsageScan->File;
+		m_ScriptUsageScan.reset();
+		if (m_ScriptUsageReported || !m_SavedScenesUseScripts || !m_Project || !m_ScriptEngine || m_ScriptEngine->IsModuleLoaded() || !HasScriptBuild())
+			return;
+		m_ScriptUsageReported = true;
+		if (!FileSystem::IsRegularFile(m_Project->GetScriptModulePath()))
+		{
+			ST_WARN("The scripts of '{}' are not built yet, and '{}' uses them; build them with script.build (Scripts > Build Scripts), or press "
+				"Play, which builds them first", m_Project->GetConfig().Name, file);
 		}
+	}
+
+	bool EditorContext::DoScenesUseScripts() const
+	{
+		if (m_SavedScenesUseScripts)
+			return true;
+		if (!m_EditScene)
+			return false;
+		// The const registry looks the storage up without creating it.
+		const entt::registry& registry = m_EditScene->GetRegistry();
+		const auto* scripts = registry.storage<ScriptComponent>();
+		return scripts && !scripts->empty();
+	}
+
+	std::optional<std::string> EditorContext::GetPlayBuildReason() const
+	{
+		if (!m_Project || !m_ScriptEngine || !HasScriptBuild())
+			return std::nullopt;
+		const std::filesystem::path module = m_Project->GetScriptModulePath();
+		std::error_code error;
+		const std::filesystem::path projectModule = std::filesystem::absolute(module, error).lexically_normal();
+		if (m_ScriptEngine->IsModuleLoaded())
+		{
+			// A module loaded from elsewhere (script.load) is the one to run.
+			if (m_ScriptEngine->GetModulePath() != projectModule)
+				return std::nullopt;
+			const std::optional<int64_t> built = FileSystem::GetLastWriteTime(module);
+			const std::optional<ScriptSourceTime> newest = FindNewestScriptSource(m_Project->GetScriptSourceDirectory());
+			if (built && newest && newest->Time > *built)
+			{
+				return fmt::format("'{}' changed after the scripts were built",
+					FileSystem::ToUTF8(newest->Path.lexically_relative(m_Project->GetProjectDirectory())));
+			}
+			return std::nullopt;
+		}
+		if (!DoScenesUseScripts())
+			return std::nullopt;
+		return FileSystem::IsRegularFile(module) ? std::string("the project's script module is not loaded (see the Console)")
+			: std::string("the project's scripts are not built yet");
+	}
+
+	bool EditorContext::StartPlayBuild(std::string* outError)
+	{
+		if (!BuildScripts(outError))
+			return false;
+		m_PlayBuildID = m_ScriptBuilder.GetCurrentID();
+		return true;
+	}
+
+	void EditorContext::CancelScriptBuild()
+	{
+		if (!m_ScriptBuilder.IsRunning())
+			return;
+		m_ScriptBuilder.Cancel();
+		OnScriptBuildFinished();
+	}
+
+	bool EditorContext::OpenScriptSource(const std::filesystem::path& file, uint32_t line, uint32_t column, std::string* outHow, std::string* outError)
+	{
+		auto fail = [outError](std::string message)
+		{
+			if (outError)
+				*outError = std::move(message);
+			return false;
+		};
+		if (!m_Project)
+			return fail("No project is open (project.open or project.create)");
+		const std::filesystem::path scripts = m_Project->GetScriptSourceDirectory();
+		if (file.empty())
+		{
+			if (!FileSystem::IsDirectory(scripts))
+				return fail(fmt::format("The project has no script directory '{}' yet (script.init or script.create makes it)", FileSystem::ToUTF8(scripts)));
+			return m_ExternalEditor.Open(scripts, 0, 0, scripts, outHow, outError);
+		}
+
+		// Only files of the project and the engine, and only code, CMake and text: the default application of other types
+		// may run them.
+		std::error_code error;
+		const std::filesystem::path absolute = std::filesystem::weakly_canonical(file.is_relative() ? m_Project->GetProjectDirectory() / file : file, error);
+		if (error || !FileSystem::IsRegularFile(absolute))
+			return fail(fmt::format("There is no file '{}'", FileSystem::ToUTF8(file)));
+		const auto inside = [&absolute](const std::filesystem::path& directory)
+		{
+			std::error_code canonicalError;
+			const std::filesystem::path root = std::filesystem::weakly_canonical(directory, canonicalError);
+			if (canonicalError || root.empty())
+				return false;
+			const std::filesystem::path relative = absolute.lexically_relative(root);
+			return !relative.empty() && *relative.begin() != "..";
+		};
+		if (!inside(m_Project->GetProjectDirectory()) && !inside(m_Specification.ScriptBuild.EngineDirectory))
+			return fail(fmt::format("'{}' is neither in the project nor in the engine", FileSystem::ToUTF8(absolute)));
+		static constexpr std::string_view c_Extensions[] = { ".cpp", ".cc", ".cxx", ".c", ".h", ".hpp", ".hh", ".hxx", ".inl", ".ipp", ".cmake",
+			".txt", ".json", ".md" };
+		const std::string extension = StringUtils::ToLower(FileSystem::ToUTF8(absolute.extension()));
+		if (std::find(std::begin(c_Extensions), std::end(c_Extensions), extension) == std::end(c_Extensions))
+			return fail(fmt::format("'{}' is not a source file: only code, CMake and text files open in the external editor", FileSystem::ToUTF8(absolute)));
+		return m_ExternalEditor.Open(absolute, line, column, scripts, outHow, outError);
 	}
 
 	void EditorContext::CloseScriptEngine()
 	{
 		m_ScriptBuilder.Cancel();
+		m_PlayBuildID = 0;
+		if (m_ScriptUsageScan)
+			m_ScriptUsageScan->Cancelled = true;
+		m_ScriptUsageScan.reset();
+		m_SavedScenesUseScripts = false;
+		m_ScriptUsageReported = false;
 		if (!m_ScriptEngine)
 			return;
 		m_ScriptEngine->UnloadModule();
@@ -928,11 +1158,39 @@ namespace Strata
 
 		const std::string where = fault->ClassName.empty() ? fmt::format("module '{}' ({})", fault->ModuleName, fault->Method)
 			: fmt::format("{}::{} on entity '{}' ({})", fault->ClassName, fault->Method, fault->EntityName, fault->Entity.ToString());
-		ST_ERROR("Script crash in {}: {}. Play mode stopped; fix the script and rebuild (script.build) or reload it (script.reload)", where,
+		const std::string location = fault->Symbolized && fault->Location ? " at " + DescribeScriptCodeLocation(*fault->Location) : std::string();
+		ST_ERROR("Script crash in {}{}: {}. Play mode stopped; fix the script and rebuild (script.build) or reload it (script.reload)", where, location,
 			fault->Description);
+		// Symbolization runs on a job: its location is reported when it arrives (UpdateScriptFaultLocation).
+		m_ScriptFaultLocationPending = !fault->Symbolized;
 		m_LastScriptFault = std::move(fault);
 		Stop();
 		return true;
+	}
+
+	void EditorContext::UpdateScriptFaultLocation()
+	{
+		if (!m_ScriptFaultLocationPending || !m_LastScriptFault)
+			return;
+		const std::optional<ScriptFault> current = m_ScriptEngine ? m_ScriptEngine->GetFault() : std::nullopt;
+		// The module was reloaded or unloaded meanwhile: its crash is gone, and so is the symbolization.
+		if (!current || current->Method != m_LastScriptFault->Method || current->Entity != m_LastScriptFault->Entity
+			|| current->Description != m_LastScriptFault->Description)
+		{
+			m_ScriptFaultLocationPending = false;
+			return;
+		}
+		if (!current->Symbolized)
+			return;
+		m_ScriptFaultLocationPending = false;
+		m_LastScriptFault->Location = current->Location;
+		m_LastScriptFault->Stack = current->Stack;
+		m_LastScriptFault->Symbolized = true;
+		if (current->Location)
+		{
+			ST_ERROR("The script crash in {}::{} happened at {} (click to open it)", current->ClassName.empty() ? current->ModuleName : current->ClassName,
+				current->Method, DescribeScriptCodeLocation(*current->Location));
+		}
 	}
 
 	void EditorContext::Update(Timestep timestep)
@@ -947,6 +1205,8 @@ namespace Strata
 		}
 		if (m_ScriptBuilder.Update())
 			OnScriptBuildFinished();
+		UpdateScriptUsageScan();
+		UpdateScriptFaultLocation();
 
 		if (m_AssetManager)
 			m_AssetManager->Update();

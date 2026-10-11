@@ -393,8 +393,12 @@ every step below is a command, and source files are written with your own file t
    `Scripts/Spinner.cpp`; with `"template": "basic3d"` it also saves a lit start scene (camera, sun, sky, ground). Older projects get the same with `script.init {"example": true}`. `script.status` shows the
    script directory (`sourceDirectory`), the module file the build produces (`projectModule`, and `projectModuleBuilt`)
    and, once a module is loaded, its name (`moduleName`, empty before) and file (`module`).
-2. **Write scripts.** Put `.cpp`/`.h` files anywhere under `Scripts/` (one `ST_SCRIPT_CLASS` per class, see above). New
-   files are picked up by the next build.
+2. **Write scripts.** `script.create {"class": "Player", "fields": {"Speed": "float", "Target": "entity"}}` writes
+   `Scripts/Player.cpp` with the class, `OnCreate`/`OnUpdate` and the fields (`"template": "empty"` for the bare class;
+   `"path": "Gameplay/Player.cpp"` for another place; it refuses names the project or the SDK declare); or put
+   `.cpp`/`.h` files anywhere under `Scripts/` yourself (one `ST_SCRIPT_CLASS` per class, see above). New files are
+   picked up by the next build. `script.open {"file": "Scripts/Player.cpp", "line": 12}` shows a file to the person at
+   the editor in their code editor.
 3. **Build.** `script.build` (waits by default) configures CMake on the first run (a few seconds) and builds with the
    engine's compiler and configuration into `.strata/Scripts/Bin`, then loads the module. On failure the command fails
    with the first errors (`File(Line,Column): error C2065: ...`, undefined references or symbols of the linker, CMake
@@ -402,10 +406,13 @@ every step below is a command, and source files are written with your own file t
    `script.status` -> `build.last` lists every diagnostic (`file`, `line`, `column`, `severity`, `code`, `message`)
    and the end of the build log (`log`). Fix and build again. One build runs at a time (a second request fails while
    one runs; `script.build {"wait": false}` returns at once and `script.status` -> `build.running` tells when it is
-   done). The build output also streams into the editor log (`log.read`). On Windows (Visual Studio generator) a build
-   fails at once with "The project's path is too long" when the project's folder path has more than 133 characters
-   (fewer with module names over about 40 characters), which MSBuild cannot build in: create or copy the project into
-   a shorter folder such as `<home>/StrataProjects`.
+   done). The build output also streams into the editor log (`log.read`). On Windows (Visual Studio generator) a project
+   whose folder path is too long for MSBuild (more than about 133 characters) builds in a per-user folder instead
+   (`script.status` -> `build.last.buildDirectory`); only when even that is too deep does the build fail with "The
+   project's path is too long". **Play builds first:** `play.start` builds the scripts when their sources changed since
+   the last build (or the module is not loaded while scenes use scripts) and answers once the game plays (with
+   `built: {build, seconds, reason}`), or fails with the build's errors; `script.status` -> `playBuildsFirst` says
+   whether it will. `play.start {"build": false}` plays what is loaded.
 4. **Inspect.** `script.status` -> `classes` lists every class with its fields (`name`, `type`, `default`) and
    implemented callbacks. `script.get {"entity": "<id>"}` shows the field values of an entity's scripts: what the scene
    stores, or while playing what the live instances hold now.
@@ -424,7 +431,8 @@ every step below is a command, and source files are written with your own file t
    in place, every instance keeps its field values (same name and type) and gets `OnReload` instead of `OnCreate`.
    A build that fails keeps the running module. `script.reload` reloads the module file without building.
 8. **Crashes.** A crash (null pointer, division by zero, stack overflow) stops play mode; the log and `script.status` ->
-   `fault`/`lastFault` name the module, class, callback, entity and the crash. `play.start` fails until the module is
+   `fault`/`lastFault` name the module, class, callback, entity and the crash, and, once `symbolized` is true (a moment
+   later), `location` (`file` and `line` on Windows from the module's PDB, the `function` elsewhere) and the `stack`. `play.start` fails until the module is
    rebuilt (`script.build`; after a crash a successful build loads the module again even when nothing had to be
    compiled, e.g. when you fixed a field value with `script.setField`) or reloaded (`script.reload`). An exception
    thrown by a script only disables that instance (the message is logged).
@@ -436,8 +444,10 @@ every step below is a command, and source files are written with your own file t
    `script.reload`), and when scenes use scripts but no module is loaded. A pruned export (`"prune": true`) ships only
    the assets scenes reference: assets scripts load by path need `project.setExportSettings {"alwaysInclude": [...]}`.
 
-The UI does the same with Scripts > Build Scripts (Ctrl+B), the toolbar's Build Scripts button and the inspector's
-Script section (add a class from the module, edit fields with their default shown and a reset button).
+The UI does the same with Scripts > New Script..., Scripts > Build Scripts (Ctrl+B), the toolbar's Play (which builds
+first) and Build Scripts buttons, the Problems panel (build errors and crashes; a double click opens the line in the
+external editor, Scripts > External Editor...) and the inspector's Script section (add a class from the module, edit
+fields with their default shown and a reset button). People's guide: `Docs/Manual/Scripting.md`.
 
 ## Building outside the editor
 

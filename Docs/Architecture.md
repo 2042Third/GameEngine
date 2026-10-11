@@ -1276,6 +1276,18 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   whole module: it is never called again, its instances are abandoned, and `ScriptEngine::IsFaulted`/`GetFault` report
   it. The editor stops play mode and refuses `play.start` until the module is rebuilt or reloaded; `GameRuntime`
   disables the scripts for the session.
+- **Where a crash happened** (`Core/Symbolizer.h`). The crash guard keeps the faulting instruction and, on Windows x64,
+  the return addresses of its callers, unwound from the exception's context with the functions' unwind data
+  (`CrashInfo::Stack`). `ScriptModule::RecordFault` names every frame's module while the module is still loaded
+  (`Symbolizer::Describe`) and resolves the module's own frames on an I/O job (`Symbolizer::Resolve`): on Windows DbgHelp
+  reads the module's PDB (calls serialized, a session of its own, the module read from its file as built at the base and
+  size it was loaded with, so hot-reload copies resolve too, `Platform/Windows/WindowsSymbolizer.cpp`); on Linux the
+  function comes from the ELF symbol table of the module's file and on macOS from dladdr, never a file or line
+  (`Platform/Posix/PosixSymbolizer.cpp`). `ScriptFault::Location` is the first of the module's frames with a source that
+  is neither C runtime nor the SDK's entry code (the abort handler), `Stack` all frames; `ScriptModule::GetFault` merges
+  the job's result once it is done (`Symbolized`). The editor reports the location when it arrives
+  (`EditorContext::UpdateScriptFaultLocation`), as `GameRuntime` does. Script modules write a PDB in every configuration
+  (`strata_add_script_module`).
 - **Hot reload** (`ScriptEngine::Update`). With hot reload enabled the engine watches the module's directory (300 ms
   debounce, so the linker has finished) and reloads between frames, never while script code is on the stack; failed
   reloads of a file that is still busy are retried. Running systems snapshot fields (`BeginModuleReload`), the new
@@ -1291,9 +1303,9 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
  --------------------------------------------------------------------------------------------------------------
  StrataEditorUI    EditorLayer            owns everything below: menu bar, main toolbar, status pills, default
                                           layout, shortcuts, idle throttling, file dialogs (nfd)
-                   EditorPanelRegistry    the panels (Viewport, Hierarchy, Inspector, Asset, Console, Content
-                                          Browser, Streaming, Performance): windows, View menu, open state in
-                                          imgui.ini
+                   EditorPanelRegistry    the panels (Viewport, Hierarchy, Inspector, Asset, Console, Problems,
+                                          Content Browser, Streaming, Performance): windows, View menu, open
+                                          state in imgui.ini
                    EditorActions          selection actions (delete, duplicate, cut, copy, paste, select all)
                                           for the Edit menu and the focus-scoped shortcuts
                    UI kit                 Theme (palette, ApplyTheme), EditorFonts, Icons, Widgets, ItemProbe
@@ -1512,7 +1524,22 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   into diagnostics. When a build finishes, `EditorContext` loads or hot reloads the module. With a Visual Studio
   generator it first checks the build tree's depth (`CheckScriptBuildPathLength`): MSBuild's file tracker cannot create
   logs at paths over 259 characters, even where Windows allows long paths, and the build would fail without naming the
-  cause, so a project in too deep a folder is refused with a message that says how much shorter its path must be.
+  cause, so a project in too deep a folder builds in a per-user directory instead (`ResolveScriptBuildLocation`:
+  `<user data>/Strata/Builds/<hash>`, said in the build's log), and only one too deep even for that is refused, naming a
+  shorter folder. Every build brings `Scripts/CMakePresets.json` up to date for IDEs (`UpdateScriptCMakePresets`: the
+  same toolchain and `STRATA_ENGINE_DIR`, an IDE build tree of its own, the module's output where the editor loads it).
+- **The scripting workflow**. `script.create` writes a class from a template (`Editor/ScriptProject.cpp`). Play builds
+  first: `play.start` asks `EditorContext::GetPlayBuildReason` (the project's module older than a source of the script
+  directory, or not loaded while a scene or prefab uses scripts: `DoScenesUseScripts`, the edited scene's Script
+  components and a scan of the project's scene and prefab files on an I/O thread when the project opens), starts the
+  build (`StartPlayBuild`) and defers until it finished; a failure fails the command and raises
+  `GetProblemsPanelRequests`, which `EditorLayer` turns into showing the Problems panel (`Panels/ProblemsPanel`: the
+  last build's diagnostics and the crash with its stack, rebuilt only when the build or the crash changed). Sources
+  open in the person's code editor (`Editor/ExternalEditor`: `ExternalEditorLauncher` starts the command template's
+  program directly, without a shell, from the user's settings or `STRATA_EXTERNAL_EDITOR`, else the default
+  application); the Problems panel's double click, the Console's click on a message naming a source line
+  (`FindSourceReference`) and `script.open` go through `EditorContext::OpenScriptSource`, which opens only code, CMake
+  and text files of the project or the engine. People's guide: [Manual/Scripting.md](Manual/Scripting.md).
 
 ## Export and the runtime
 

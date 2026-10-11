@@ -291,6 +291,68 @@ TEST_SUITE("Package.ScriptBuild")
 		CHECK(GetField<int32_t>(GetScriptSystem(*game->GetScene()), gameHost, "Counter", "Count") == 2 * 200);
 	}
 
+	TEST_CASE("A class script.create writes builds and runs, and Play builds changed sources before it plays")
+	{
+		BuildHarness harness;
+		const nlohmann::json created = harness.Run("script.create", { { "class", "Mover" }, { "fields", { { "Speed", "float" }, { "Target", "entity" } } } });
+		const std::filesystem::path file = FileSystem::FromUTF8(created["file"].get<std::string>());
+		const nlohmann::json built = harness.Run("script.build");
+		CHECK(built["success"] == true);
+		const Ref<ScriptEngine> engine = harness.Context.GetScriptEngine();
+		const ScriptClassInfo* mover = engine->FindClass("Mover");
+		REQUIRE(mover);
+		CHECK(mover->FindField("Speed"));
+		CHECK(mover->FindField("Target"));
+		CHECK(mover->Implements(ScriptCallback::OnCreate));
+		CHECK(mover->Implements(ScriptCallback::OnUpdate));
+
+		// It runs: attached and played, without a build (nothing changed since).
+		const std::string id = harness.Run("entity.create", { { "name", "Mover Host" } })["id"].get<std::string>();
+		harness.Run("script.add", { { "entity", id }, { "class", "Mover" } });
+		CHECK_FALSE(harness.Context.GetPlayBuildReason());
+		const nlohmann::json played = harness.Run("play.start");
+		CHECK_FALSE(played.contains("built"));
+		harness.Frames(2);
+		const nlohmann::json live = harness.Run("script.get", { { "entity", id }, { "class", "Mover" } });
+		CHECK(live["scripts"][0]["live"] == true);
+		CHECK(live["scripts"][0]["fields"]["Speed"].get<double>() == doctest::Approx(1.0));
+		CHECK_FALSE(engine->IsFaulted());
+		harness.Run("play.stop");
+
+		// The person edits the script; Play builds it first and plays the new code.
+		REQUIRE(FileSystem::WriteText(file, R"(#include "StrataScript/StrataScript.h"
+
+using namespace Strata;
+
+class Mover : public Script
+{
+public:
+	float Speed = 1.0f;
+	Entity Target;
+	int32_t Ticks = 0;
+
+	void OnUpdate(float) override { Ticks++; }
+};
+
+ST_SCRIPT_CLASS(Mover)
+{
+	ST_SCRIPT_FIELD(Speed);
+	ST_SCRIPT_FIELD(Target);
+	ST_SCRIPT_FIELD(Ticks);
+}
+)"));
+		REQUIRE(harness.Context.GetPlayBuildReason());
+		const uint64_t buildsBefore = harness.Context.GetScriptBuilder().GetLastResult().ID;
+		const nlohmann::json rebuilt = harness.Run("play.start");
+		REQUIRE(rebuilt.contains("built"));
+		CHECK(harness.Context.GetScriptBuilder().GetLastResult().ID == buildsBefore + 1);
+		REQUIRE(harness.Context.IsPlaying());
+		harness.Frames(3);
+		Ref<Scene> running = harness.Context.GetActiveScene();
+		const Entity host = running->GetEntityByUUID(*UUIDFromJson(id));
+		CHECK(GetField<int32_t>(GetScriptSystem(*running), host, "Mover", "Ticks") >= 3);
+	}
+
 	TEST_CASE("Scripts build in the Dist configuration")
 	{
 		// A Dist editor builds its scripts in Dist, a configuration CMake does not define. Modules talk to the engine

@@ -163,6 +163,21 @@ static std::string CheckOwnModuleCopy(const Strata::ScriptEngine& engine, const 
 
 static int RunHelperMode(std::string_view mode, int argc, char** argv)
 {
+	if (mode == "record-arguments" && argc > 2)
+	{
+		// Stands in for a program the editor starts (an external code editor): writes its other arguments, one per line, to
+		// the file named first, whole (written beside it, then renamed), so a test can wait for the file and read it.
+		const std::filesystem::path file = Strata::FileSystem::FromUTF8(argv[2]);
+		std::string text;
+		for (int index = 3; index < argc; index++)
+			text += std::string(argv[index]) + "\n";
+		const std::filesystem::path partial = file.parent_path() / (file.filename().native() + Strata::FileSystem::FromUTF8(".partial").native());
+		if (!Strata::FileSystem::WriteText(partial, text))
+			return 1;
+		std::error_code error;
+		std::filesystem::rename(partial, file, error);
+		return error ? 1 : 0;
+	}
 	if (mode == "echo")
 	{
 		for (int index = 2; index < argc; index++)
@@ -741,11 +756,28 @@ static std::optional<int> RunAsFakeCMake(int argc, char** argv)
 	const std::optional<std::string> mode = Strata::Platform::GetEnvVar("STRATA_TEST_FAKE_CMAKE");
 	if (!mode || argc < 2 || (std::string_view(argv[1]) != "-S" && std::string_view(argv[1]) != "--build"))
 		return std::nullopt;
-	if (*mode != "succeed")
-		return std::nullopt;
-	std::printf("-- Fake CMake: %s\n", argv[1]);
-	std::fflush(stdout);
-	return 0;
+	if (*mode == "succeed")
+	{
+		std::printf("-- Fake CMake: %s\n", argv[1]);
+		std::fflush(stdout);
+		return 0;
+	}
+	// "fail": configuring succeeds, building reports a compiler error in the project's Scripts/Broken.cpp (relative to the
+	// project, as the Problems panel resolves it) and fails.
+	if (*mode == "fail")
+	{
+		if (std::string_view(argv[1]) == "-S")
+		{
+			std::printf("-- Fake CMake: configured\n");
+			std::fflush(stdout);
+			return 0;
+		}
+		std::printf("Scripts/Broken.cpp(7,5): error C2065: 'Undeclared': undeclared identifier\n");
+		std::printf("Scripts/Broken.cpp(9,1): warning C4101: 'unused': unreferenced local variable\n");
+		std::fflush(stdout);
+		return 1;
+	}
+	return std::nullopt;
 }
 
 int main(int argc, char** argv)
@@ -789,6 +821,8 @@ int main(int argc, char** argv)
 	Strata::Platform::SetEnvVar("STRATA_RUNTIME_DIR", Strata::FileSystem::ToUTF8(runtimeDirectory));
 	// Editors the tests start keep their recent projects in the test's directory, never in the user's list.
 	Strata::Platform::SetEnvVar("STRATA_RECENT_PROJECTS", Strata::FileSystem::ToUTF8(runtimeDirectory / "RecentProjects.json"));
+	// Script builds of projects too deep for MSBuild go to the test's directory, never to the user's build directory.
+	Strata::Platform::SetEnvVar("STRATA_SCRIPT_BUILDS_DIR", Strata::FileSystem::ToUTF8(runtimeDirectory / "ScriptBuilds"));
 
 	doctest::Context context(argc, argv);
 	const int result = context.run();

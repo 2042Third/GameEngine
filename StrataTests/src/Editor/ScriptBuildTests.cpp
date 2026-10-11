@@ -5,12 +5,18 @@
 #include "TestHelpers.h"
 
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/JsonUtils.h>
+#include <Strata/Core/Platform.h>
 #include <Strata/Project/Project.h>
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
+#include <chrono>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 using namespace Strata;
@@ -54,6 +60,25 @@ namespace
 		settings.Configuration = "Debug";
 		settings.EngineDirectory = "/home/me/Strata";
 		return settings;
+	}
+
+	// A project (with its script build) whose build tree in the project would be one character too deep for MSBuild's file
+	// tracker with these settings, and short enough to create without long path support.
+	Ref<Project> MakeDeepProject(const std::string& name, const ScriptBuildSettings& settings)
+	{
+		const std::filesystem::path base = Tests::CreateTemporaryDirectory(name);
+		const size_t baseLength = base.native().size();
+		const size_t tooDeep = c_MSBuildMaxTrackedPathLength - GetScriptBuildTrackedPathDepth(settings, "DeepScripts") -
+			std::string_view("/.strata/Scripts/Build").size() + 1;
+		const size_t folderLength = tooDeep > baseLength + 1 ? tooDeep - baseLength - 1 : 1;
+		const std::filesystem::path directory = base / FileSystem::FromUTF8(std::string(folderLength, 'd'));
+		std::string error;
+		Ref<Project> project = Project::Create(directory, "Deep", &error);
+		REQUIRE_MESSAGE(project, error);
+		REQUIRE(project->GetScriptModuleName() == "DeepScripts");
+		REQUIRE_MESSAGE(CreateScriptProjectFiles(*project, true, nullptr, &error), error);
+		REQUIRE(CheckScriptBuildPathLength(settings, project->GetScriptBuildDirectory(), "DeepScripts").has_value());
+		return project;
 	}
 
 }
@@ -464,6 +489,7 @@ TEST_SUITE("Editor.ScriptBuild")
 		CHECK(tooDeep->find("paths of 260 characters") != std::string::npos);
 		CHECK(tooDeep->find("at least 1 character shorter") != std::string::npos);
 		CHECK(tooDeep->find("shorter name") == std::string::npos);
+		CHECK(tooDeep->find("<home>") == std::string::npos);
 
 		// A long module name lowers the limit, and shortening it is offered too.
 		const size_t fitsLongName = c_MSBuildMaxTrackedPathLength - longNameDepth;
@@ -477,28 +503,129 @@ TEST_SUITE("Editor.ScriptBuild")
 		CHECK_FALSE(CheckScriptBuildPathLength(MakeNinjaSettings(), buildDirectory(250), longName).has_value());
 	}
 
-	TEST_CASE("A script build in a folder too deep for MSBuild is refused before anything is written")
+	TEST_CASE("A script build in a folder too deep for MSBuild builds in the per-user build directory")
 	{
-		// Deep enough for the configure step's tracking logs to pass the limit (with "/.strata/Scripts/Build"), and short
-		// enough to create without long path support.
-		const std::filesystem::path base = Tests::CreateTemporaryDirectory("ScriptBuildDeep");
-		const size_t baseLength = base.native().size();
-		const size_t tooDeep = c_MSBuildMaxTrackedPathLength - GetScriptBuildTrackedPathDepth(MakeVisualStudioSettings(), "DeepScripts") -
-			std::string_view("/.strata/Scripts/Build").size() + 1;
-		const size_t folderLength = tooDeep > baseLength + 1 ? tooDeep - baseLength - 1 : 1;
-		const std::filesystem::path directory = base / FileSystem::FromUTF8(std::string(folderLength, 'd'));
-		std::string error;
-		Ref<Project> project = Project::Create(directory, "Deep", &error);
-		REQUIRE_MESSAGE(project, error);
-		REQUIRE(project->GetScriptModuleName() == "DeepScripts");
-		REQUIRE_MESSAGE(CreateScriptProjectFiles(*project, true, nullptr, &error), error);
+		// The test executable stands in for CMake (see TestMain.cpp), with the Visual Studio generator's path limits.
+		Tests::ScopedEnvironmentVariable fakeCMake("STRATA_TEST_FAKE_CMAKE", "succeed");
+		ScriptBuildSettings settings = MakeVisualStudioSettings();
+		settings.CMake = Tests::GetTestExecutablePath();
+		// The per-user builds go to the test's own directory (TestMain.cpp sets STRATA_SCRIPT_BUILDS_DIR).
+		REQUIRE(Platform::GetEnvVar("STRATA_SCRIPT_BUILDS_DIR").has_value());
 
+		Ref<Project> project = MakeDeepProject("ScriptBuildDeep", settings);
+		const std::filesystem::path module = project->GetScriptModulePath();
+		REQUIRE(FileSystem::CreateDirectories(module.parent_path()));
+		REQUIRE(FileSystem::WriteText(module, "not a real module")); // The fake CMake builds nothing
+
+		std::string error;
+		const std::optional<ScriptBuildLocation> location = ResolveScriptBuildLocation(*project, settings, &error);
+		REQUIRE_MESSAGE(location, error);
+		const std::filesystem::path perUser = GetPerUserScriptBuildDirectory(*project);
+		CHECK(perUser.parent_path() == GetScriptBuildsRoot());
+		CHECK(perUser.filename().string().size() == 16);
+		CHECK(location->BuildDirectory == perUser / "Build");
+		CHECK(location->IDEBuildDirectory == perUser / "IDE");
+		CHECK(location->MovedReason.find("too long") != std::string::npos);
+		CHECK_FALSE(CheckScriptBuildPathLength(settings, location->BuildDirectory, project->GetScriptModuleName()));
+
+		ScriptBuilder builder;
+		REQUIRE_MESSAGE(builder.Start(*project, settings, &error), error);
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+		while (builder.IsRunning() && std::chrono::steady_clock::now() < deadline)
+		{
+			builder.Update();
+			std::this_thread::sleep_for(std::chrono::milliseconds(5));
+		}
+		REQUIRE_FALSE(builder.IsRunning());
+		const ScriptBuildResult& result = builder.GetLastResult();
+		REQUIRE_MESSAGE(result.Success, result.Error);
+		CHECK(result.Configured);
+		CHECK(result.BuildDirectory == perUser / "Build");
+		CHECK(FileSystem::IsRegularFile(perUser / "Build" / "StrataScriptBuild.json"));
+		CHECK(result.LogTail.find("per-user directory") != std::string::npos);
+		// Nothing was built in the project's own tree; the module still goes to the project.
+		CHECK_FALSE(FileSystem::Exists(project->GetScriptBuildDirectory()));
+		CHECK(result.Module == module);
+
+		// The IDE preset builds in the per-user directory too.
+		const std::optional<nlohmann::json> presets = JsonUtils::Parse(FileSystem::ReadText(project->GetScriptSourceDirectory() / "CMakePresets.json").value_or(""));
+		REQUIRE(presets);
+		CHECK((*presets)["configurePresets"][0]["binaryDir"] == FileSystem::ToUTF8(perUser / "IDE"));
+	}
+
+	TEST_CASE("A project too deep even for the per-user build directory is refused with the real path to move it to")
+	{
+		Ref<Project> project = MakeDeepProject("ScriptBuildRefused", MakeVisualStudioSettings());
+		// A per-user build directory as deep as the project's own tree.
+		Tests::ScopedEnvironmentVariable buildsRoot("STRATA_SCRIPT_BUILDS_DIR", FileSystem::ToUTF8(project->GetIntermediateDirectory()));
+		std::string error;
+		CHECK_FALSE(ResolveScriptBuildLocation(*project, MakeVisualStudioSettings(), &error));
 		ScriptBuilder builder;
 		CHECK_FALSE(builder.Start(*project, MakeVisualStudioSettings(), &error));
 		CHECK(error.find("too long") != std::string::npos);
 		CHECK(error.find(FileSystem::ToUTF8(project->GetScriptBuildDirectory())) != std::string::npos);
+		// The suggestion names a real folder, not a placeholder.
+		CHECK(error.find("<home>") == std::string::npos);
+		if (const std::optional<std::filesystem::path> home = Platform::FindHomeDirectory())
+			CHECK(error.find(FileSystem::ToUTF8((*home / "StrataProjects").make_preferred())) != std::string::npos);
 		CHECK_FALSE(builder.IsRunning());
 		CHECK(builder.GetLastResult().ID == 0);
 		CHECK_FALSE(FileSystem::Exists(project->GetIntermediateDirectory() / "Scripts"));
+	}
+
+	TEST_CASE("Script projects carry CMake presets with the engine's toolchain for IDEs")
+	{
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("ScriptPresets") / "Arena";
+		std::string error;
+		Ref<Project> project = Project::Create(directory, "Arena", &error);
+		REQUIRE_MESSAGE(project, error);
+		const ScriptBuildSettings visualStudio = MakeVisualStudioSettings();
+		std::vector<std::filesystem::path> created;
+		REQUIRE_MESSAGE(CreateScriptProjectFiles(*project, false, &created, &error, &visualStudio), error);
+		const std::filesystem::path presetsFile = project->GetScriptSourceDirectory() / "CMakePresets.json";
+		CHECK(std::find(created.begin(), created.end(), presetsFile) != created.end());
+		CHECK(FileSystem::ReadText(project->GetScriptSourceDirectory() / ".gitignore").value_or("").find("/CMakePresets.json") != std::string::npos);
+
+		// Valid JSON (CMake's presets version 3) with the toolchain's values.
+		const std::optional<nlohmann::json> presets = JsonUtils::Parse(FileSystem::ReadText(presetsFile).value_or(""));
+		REQUIRE(presets);
+		CHECK((*presets)["version"] == 3);
+		const nlohmann::json& configure = (*presets)["configurePresets"][0];
+		CHECK(configure["name"] == "strata");
+		CHECK(configure["generator"] == "Visual Studio 18 2026");
+		CHECK(configure["architecture"]["value"] == "x64");
+		CHECK(configure["toolset"]["value"] == "host=x64");
+		CHECK(configure["binaryDir"] == FileSystem::ToUTF8(project->GetIntermediateDirectory() / "Scripts" / "IDE"));
+		const nlohmann::json& cache = configure["cacheVariables"];
+		CHECK(cache["STRATA_ENGINE_DIR"] == "C:/Engine");
+		CHECK(cache["CMAKE_CONFIGURATION_TYPES"] == "Release");
+		CHECK(cache["CMAKE_EXPORT_COMPILE_COMMANDS"] == "ON");
+		CHECK(cache["CMAKE_LIBRARY_OUTPUT_DIRECTORY"] == FileSystem::ToUTF8(project->GetScriptBinaryDirectory()));
+		CHECK((*presets)["buildPresets"][0]["configuration"] == "Release");
+		CHECK((*presets)["vendor"].contains("strata.dev/editor"));
+
+		// Single-configuration generators name the compiler and build type, and write compile_commands.json for the editor's
+		// builds too.
+		const ScriptBuildSettings ninja = MakeNinjaSettings();
+		const nlohmann::json ninjaPresets = JsonUtils::Parse(MakeScriptCMakePresets(*project, ninja)).value_or(nlohmann::json());
+		const nlohmann::json& ninjaCache = ninjaPresets["configurePresets"][0]["cacheVariables"];
+		CHECK(ninjaCache["CMAKE_CXX_COMPILER"] == "/usr/bin/clang++");
+		CHECK(ninjaCache["CMAKE_BUILD_TYPE"] == "Debug");
+		CHECK_FALSE(ninjaPresets["configurePresets"][0].contains("architecture"));
+		CHECK(Contains(MakeScriptConfigureArguments(ninja, "Scripts", "Build", "Bin"), "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"));
+		CHECK_FALSE(Contains(MakeScriptConfigureArguments(visualStudio, "Scripts", "Build", "Bin"), "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"));
+
+		// Strata's presets follow the toolchain; presets of the project's own are kept.
+		bool written = false;
+		REQUIRE_MESSAGE(UpdateScriptCMakePresets(*project, visualStudio, &written, &error), error);
+		CHECK_FALSE(written); // Up to date
+		REQUIRE_MESSAGE(UpdateScriptCMakePresets(*project, ninja, &written, &error), error);
+		CHECK(written);
+		CHECK(FileSystem::ReadText(presetsFile) == MakeScriptCMakePresets(*project, ninja));
+		const std::string own = "{ \"version\": 3, \"configurePresets\": [] }\n";
+		REQUIRE(FileSystem::WriteText(presetsFile, own));
+		REQUIRE_MESSAGE(UpdateScriptCMakePresets(*project, visualStudio, &written, &error), error);
+		CHECK_FALSE(written);
+		CHECK(FileSystem::ReadText(presetsFile) == own);
 	}
 }

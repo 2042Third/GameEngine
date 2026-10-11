@@ -12,7 +12,8 @@ namespace Strata
 
 		constexpr DWORD c_CppExceptionCode = 0xE06D7363; // MSVC C++ exception ('msc')
 
-		// Plain data only: filled inside the exception filter, which may run on a nearly exhausted stack.
+		// Plain data only: filled inside the exception filter, which may run on a nearly exhausted stack. It lives in
+		// Invoke's frame, so the filter needs no stack for the unwinding context.
 		struct FaultRecord
 		{
 			DWORD Code = 0;
@@ -20,7 +21,45 @@ namespace Strata
 			ULONG_PTR AccessType = 0;
 			ULONG_PTR AccessAddress = 0;
 			bool HasAccessInfo = false;
+			uint64_t Frames[c_MaxCrashStackFrames]; // The first FrameCount are filled (not cleared: Invoke guards every script call)
+			uint32_t FrameCount = 0;
+			CONTEXT Unwind; // The context being unwound
 		};
+
+#if defined(_M_X64)
+		// The faulting instruction and its callers' return addresses, unwound from the fault's context with the functions'
+		// unwind data. A corrupted stack may fault while it is read: that ends the walk (a nested exception in the filter
+		// would otherwise be dispatched on top of the one being handled).
+		void CaptureStack(const CONTEXT* faulting, FaultRecord* record)
+		{
+			__try
+			{
+				CONTEXT& context = record->Unwind;
+				context = *faulting;
+				while (record->FrameCount < c_MaxCrashStackFrames && context.Rip != 0)
+				{
+					record->Frames[record->FrameCount++] = context.Rip;
+					DWORD64 imageBase = 0;
+					PRUNTIME_FUNCTION function = RtlLookupFunctionEntry(context.Rip, &imageBase, nullptr);
+					if (function)
+					{
+						PVOID handlerData = nullptr;
+						DWORD64 establisherFrame = 0;
+						RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, context.Rip, function, &context, &handlerData, &establisherFrame, nullptr);
+					}
+					else
+					{
+						// A leaf function, which has no unwind data: its return address is on top of the stack.
+						context.Rip = *reinterpret_cast<const DWORD64*>(context.Rsp);
+						context.Rsp += sizeof(DWORD64);
+					}
+				}
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+			}
+		}
+#endif
 
 		int FilterException(EXCEPTION_POINTERS* pointers, FaultRecord* record)
 		{
@@ -59,6 +98,13 @@ namespace Strata
 				record->AccessType = exception->ExceptionInformation[0];
 				record->AccessAddress = exception->ExceptionInformation[1];
 			}
+			// After a stack overflow the filter runs on what the guard page left: no stack walk there.
+#if defined(_M_X64)
+			if (exception->ExceptionCode != EXCEPTION_STACK_OVERFLOW && pointers->ContextRecord)
+				CaptureStack(pointers->ContextRecord, record);
+#endif
+			if (record->FrameCount == 0)
+				record->Frames[record->FrameCount++] = record->Address;
 			return EXCEPTION_EXECUTE_HANDLER;
 		}
 
@@ -124,6 +170,7 @@ namespace Strata
 			outInfo->Description = fmt::format("{} at 0x{:016X}", DescribeFault(record), record.Address);
 			outInfo->Code = record.Code;
 			outInfo->Address = record.Address;
+			outInfo->Stack.assign(record.Frames, record.Frames + record.FrameCount);
 		}
 		return false;
 	}

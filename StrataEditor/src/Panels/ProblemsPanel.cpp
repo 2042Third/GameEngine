@@ -1,0 +1,246 @@
+#include "Panels/ProblemsPanel.h"
+
+#include "Editor/EditorCommandRunner.h"
+#include "Editor/EditorCommands.h"
+#include "Editor/EditorContext.h"
+#include "UI/EditorFonts.h"
+#include "UI/Icons.h"
+#include "UI/ItemProbe.h"
+#include "UI/Theme.h"
+#include "UI/Widgets.h"
+
+#include <Strata/Core/FileSystem.h>
+#include <Strata/Core/Log.h>
+
+#include <imgui.h>
+
+#include <string_view>
+
+namespace Strata
+{
+
+	namespace
+	{
+
+		// The Line column, in text heights.
+		constexpr float c_LineColumnInFontSizes = 4.0f;
+		// The File column's share of the table's width.
+		constexpr float c_FileColumnWeight = 0.4f;
+		// Rows recorded in the item probe (for tests).
+		constexpr size_t c_ProbedRows = 8;
+
+		// The file a compiler or the symbolizer named, found on disk: as given when absolute, else in the project, its
+		// script directory or the build tree (compilers name files relative to where they ran).
+		std::filesystem::path ResolveSource(const EditorContext& context, const std::string& file, const std::filesystem::path& buildDirectory)
+		{
+			if (file.empty() || !context.GetProject())
+				return {};
+			const std::filesystem::path path = FileSystem::FromUTF8(file);
+			if (path.is_absolute())
+				return FileSystem::IsRegularFile(path) ? path : std::filesystem::path();
+			const Project& project = *context.GetProject();
+			for (const std::filesystem::path& base : { project.GetProjectDirectory(), project.GetScriptSourceDirectory(), buildDirectory })
+			{
+				if (base.empty())
+					continue;
+				const std::filesystem::path candidate = (base / path).lexically_normal();
+				if (FileSystem::IsRegularFile(candidate))
+					return candidate;
+			}
+			return {};
+		}
+
+		std::string MakeFaultKey(const std::optional<ScriptFault>& fault)
+		{
+			if (!fault)
+				return {};
+			return fmt::format("{}|{}|{}|{}|{}", fault->ModuleName, fault->Method, fault->Entity.ToString(), fault->Description, fault->Symbolized);
+		}
+
+		const char* GetIcon(ProblemsPanel::RowKind kind)
+		{
+			switch (kind)
+			{
+				case ProblemsPanel::RowKind::Error:   return Icons::CircleX;
+				case ProblemsPanel::RowKind::Warning: return Icons::TriangleAlert;
+				case ProblemsPanel::RowKind::Crash:   return Icons::Bug;
+				case ProblemsPanel::RowKind::Frame:   return Icons::CornerDownRight;
+			}
+			return Icons::CircleAlert;
+		}
+
+	}
+
+	void ProblemsPanel::OnUpdate(EditorPanelContext& context)
+	{
+		// Idle: one number and an empty string compared (a string of a few fields while a crash is shown).
+		const uint64_t buildID = context.Context.GetScriptBuilder().GetLastResult().ID;
+		const std::optional<ScriptFault>& fault = context.Context.GetLastScriptFault();
+		if (m_Built && buildID == m_BuildID && (fault.has_value() == !m_FaultKey.empty()) && (!fault || MakeFaultKey(fault) == m_FaultKey))
+			return;
+		Rebuild(context);
+	}
+
+	void ProblemsPanel::Rebuild(EditorPanelContext& context)
+	{
+		const EditorContext& editor = context.Context;
+		const ScriptBuildResult& build = editor.GetScriptBuilder().GetLastResult();
+		const std::optional<ScriptFault>& fault = editor.GetLastScriptFault();
+		m_Built = true;
+		m_BuildID = build.ID;
+		m_FaultKey = MakeFaultKey(fault);
+		m_Rows.clear();
+		m_ErrorCount = 0;
+		m_WarningCount = 0;
+
+		if (fault)
+		{
+			Row crash;
+			crash.Kind = RowKind::Crash;
+			const std::string where = fault->ClassName.empty() ? fault->Method : fault->ClassName + "::" + fault->Method;
+			crash.Text = fault->EntityName.empty() ? fmt::format("Crash in {}: {}", where, fault->Description)
+				: fmt::format("Crash in {} on '{}': {}", where, fault->EntityName, fault->Description);
+			if (fault->Location)
+			{
+				crash.File = fault->Location->File;
+				crash.Line = fault->Location->Line;
+				crash.Source = ResolveSource(editor, crash.File, {});
+			}
+			m_Rows.push_back(std::move(crash));
+			// The stack's frames with a source: where the crash came from.
+			for (const ScriptCodeLocation& frame : fault->Stack)
+			{
+				if (frame.File.empty() || (fault->Location && frame.Address == fault->Location->Address))
+					continue;
+				Row row;
+				row.Kind = RowKind::Frame;
+				row.Text = frame.Function.empty() ? fmt::format("{}+0x{:X}", frame.Module, frame.ModuleOffset) : frame.Function;
+				row.File = frame.File;
+				row.Line = frame.Line;
+				row.Source = ResolveSource(editor, row.File, {});
+				m_Rows.push_back(std::move(row));
+			}
+		}
+
+		for (const ScriptDiagnostic& diagnostic : build.Diagnostics)
+		{
+			Row row;
+			row.Kind = diagnostic.Severity == "warning" ? RowKind::Warning : RowKind::Error;
+			row.Text = diagnostic.Code.empty() ? diagnostic.Message : diagnostic.Code + ": " + diagnostic.Message;
+			row.File = diagnostic.File;
+			row.Line = diagnostic.Line;
+			row.Column = diagnostic.Column;
+			row.Source = ResolveSource(editor, row.File, build.BuildDirectory);
+			(row.Kind == RowKind::Warning ? m_WarningCount : m_ErrorCount)++;
+			m_Rows.push_back(std::move(row));
+		}
+
+		if (build.ID == 0)
+			m_Summary = "No script build in this session yet.";
+		else if (build.Success)
+			m_Summary = fmt::format("Build {} succeeded{}.", build.ID, m_WarningCount > 0 ? fmt::format(" with {} warning{}", m_WarningCount, m_WarningCount == 1 ? "" : "s")
+				: std::string());
+		else
+			m_Summary = fmt::format("Build {} failed: {} error{}, {} warning{}.", build.ID, m_ErrorCount, m_ErrorCount == 1 ? "" : "s", m_WarningCount,
+				m_WarningCount == 1 ? "" : "s");
+		if (fault)
+			m_Summary += fault->Symbolized || !fault->Location ? " The scripts crashed." : " The scripts crashed (finding where).";
+	}
+
+	bool ProblemsPanel::OpenRow(EditorPanelContext& context, size_t index)
+	{
+		m_LastOpenError.clear();
+		if (index >= m_Rows.size())
+			return false;
+		const Row& row = m_Rows[index];
+		if (row.Source.empty())
+		{
+			m_LastOpenError = row.File.empty() ? std::string("This entry names no source file") : fmt::format("There is no file '{}'", row.File);
+			return false;
+		}
+		std::string how;
+		if (!context.Context.OpenScriptSource(row.Source, row.Line, row.Column, &how, &m_LastOpenError))
+		{
+			ST_ERROR("Problems: {}", m_LastOpenError);
+			return false;
+		}
+		return true;
+	}
+
+	void ProblemsPanel::OnImGuiRender(EditorPanelContext& context)
+	{
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		const bool building = context.Context.GetScriptBuilder().IsRunning();
+		if (UI::ToolbarButton("Problems.Build", Icons::Hammer, "Build Scripts", "Build the project's scripts (Ctrl+B)", UI::ButtonStyle { .Enabled =
+			context.Context.HasProject() && !building }))
+		{
+			context.Runner.Run(context.Context, context.Commands, "script.build", { { "wait", true } }, [](const EditorCommandResult&) {});
+		}
+		ImGui::SameLine();
+		ImGui::AlignTextToFramePadding();
+		ImGui::PushStyleColor(ImGuiCol_Text, m_ErrorCount > 0 ? colors.Error : colors.TextSecondary);
+		ImGui::TextUnformatted(building ? "Building..." : m_Summary.c_str());
+		ImGui::PopStyleColor();
+		UI::ItemProbe::Record("Problems.Summary", true, 0, m_Summary);
+		if (!m_LastOpenError.empty())
+		{
+			ImGui::SameLine();
+			ImGui::TextColored(colors.Warning, "%s", m_LastOpenError.c_str());
+		}
+
+		const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV
+			| ImGuiTableFlags_NoSavedSettings;
+		if (!ImGui::BeginTable("Problems", 3, flags, ImVec2(0.0f, std::max(ImGui::GetContentRegionAvail().y, ImGui::GetFrameHeight() * 3.0f))))
+			return;
+		ImGui::TableSetupScrollFreeze(0, 1);
+		ImGui::TableSetupColumn("Problem", ImGuiTableColumnFlags_WidthStretch, 1.0f - c_FileColumnWeight);
+		ImGui::TableSetupColumn("File", ImGuiTableColumnFlags_WidthStretch, c_FileColumnWeight);
+		ImGui::TableSetupColumn("Line", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * c_LineColumnInFontSizes);
+		ImGui::TableHeadersRow();
+
+		ImGuiListClipper clipper;
+		clipper.Begin(static_cast<int>(m_Rows.size()));
+		std::optional<size_t> open;
+		while (clipper.Step())
+		{
+			for (int line = clipper.DisplayStart; line < clipper.DisplayEnd; line++)
+			{
+				const size_t index = static_cast<size_t>(line);
+				const Row& row = m_Rows[index];
+				ImGui::TableNextRow();
+				ImGui::TableSetColumnIndex(0);
+				ImGui::PushID(line);
+				const ImVec4& color = row.Kind == RowKind::Warning ? colors.Warning : (row.Kind == RowKind::Frame ? colors.TextSecondary : colors.Error);
+				ImGui::PushStyleColor(ImGuiCol_Text, color);
+				ImGui::TextUnformatted(GetIcon(row.Kind));
+				ImGui::PopStyleColor();
+				ImGui::SameLine();
+				if (row.Kind == RowKind::Frame)
+					ImGui::Indent(ImGui::GetFontSize());
+				ImGui::Selectable(row.Text.c_str(), false, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick);
+				if (row.Kind == RowKind::Frame)
+					ImGui::Unindent(ImGui::GetFontSize());
+				// The first rows only: the probe keeps a fixed set of keys.
+				if (index < c_ProbedRows)
+					UI::ItemProbe::Record(fmt::format("Problems.Row.{}", index), !row.Source.empty(), 0, row.Text);
+				if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+					open = index;
+				if (UI::IsTooltipDue())
+				{
+					ImGui::SetTooltip("%s\n%s", row.Text.c_str(), row.Source.empty() ? (row.File.empty() ? "No source file" : "The file is not on this machine")
+						: "Double-click to open it in the external editor");
+				}
+				ImGui::PopID();
+				ImGui::TableSetColumnIndex(1);
+				ImGui::TextUnformatted(row.File.c_str());
+				ImGui::TableSetColumnIndex(2);
+				if (row.Line > 0)
+					ImGui::Text("%u", row.Line);
+			}
+		}
+		ImGui::EndTable();
+		if (open)
+			OpenRow(context, *open);
+	}
+
+}

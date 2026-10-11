@@ -1,5 +1,7 @@
 [
-	{ "command": "script.build", "expect": { "/success": { "equals": true } } },
+	{ "command": "play.start", "expect": { "/state": { "equals": "Play" }, "/built/build": { "min": 1 } } },
+	{ "command": "script.get", "parameters": { "entity": "72E590A9EEB83AFC", "class": "TetrisBoard" }, "expect": { "/scripts/0/live": { "equals": true } } },
+	{ "command": "play.stop", "expect": { "/state": { "equals": "Edit" } } },
 	{ "command": "script.setField", "parameters": { "entity": "72E590A9EEB83AFC", "class": "TetrisBoard", "field": "LinesPerLevel", "value": 1 } },
 	{ "command": "script.setField", "parameters": { "entity": "72E590A9EEB83AFC", "class": "TetrisBoard", "field": "StartInterval", "value": 100 } },
 	{ "command": "play.start", "expect": { "/state": { "equals": "Play" } } },

@@ -64,8 +64,9 @@ Design the code for verification before writing it:
 
 ## 4. Scripts
 
-Write the sources, then `script.build` (configures CMake the first time; answers with compiler diagnostics on failure)
-and `script.status` (classes, fields, defaults). Patterns that worked:
+Write the sources (`script.create {"class": "Player"}` starts a class), then `script.build` (configures CMake the first
+time; answers with compiler diagnostics on failure) and `script.status` (classes, fields, defaults); `play.start` also
+builds changed sources first. Patterns that worked:
 
 - Many visuals: create the entities once in `OnCreate` (`Scene::CreateEntity(name, GetEntity())`,
   `AddComponent("MeshRenderer")`, `SetProperty("MeshRenderer", "Mesh", mesh)`, `GetTransform().SetTranslation(...)`), then

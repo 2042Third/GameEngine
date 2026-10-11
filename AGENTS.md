@@ -613,30 +613,45 @@ Building and loading scripts:
 - **Project scripts.** A project's scripts live in its script directory (`ProjectScriptSettings::SourceDirectory`,
   "Scripts"), whose `CMakeLists.txt` builds every `.cpp`/`.h` below it into the module `ModuleName` (stored in the
   `.stproj`, version 2: `"Scripts": {"SourceDirectory", "ModuleName"}`; version 1 files derive the name from the project
-  name, `Project::MakeScriptModuleName`). `project.create` writes that `CMakeLists.txt` and an example script
-  (`Editor/ScriptProject.cpp`; `script.init` adds them to older projects); project text only goes into its comments,
-  and projects reject names and directories with control characters on load and save. The editor builds the scripts with
+  name, `Project::MakeScriptModuleName`). `project.create` writes that `CMakeLists.txt`, an example script and
+  `CMakePresets.json` for IDEs (`Editor/ScriptProject.cpp`; `script.init` adds them to older projects; the presets carry
+  the toolchain below and `STRATA_ENGINE_DIR`, are rewritten when Strata wrote them and the toolchain changed, and a
+  `.gitignore` beside them keeps them out of version control: `UpdateScriptCMakePresets`); project text only goes into
+  comments, and projects reject names and directories with control characters on load and save. `script.create` writes a
+  new class (`MakeScriptSource`: only the validated class and field names go into the code, `ValidateNewScriptClass`
+  refuses names the project's scripts or the SDK declare). The editor builds the scripts with
   `script.build` (`ScriptBuilder`, `Editor/ScriptBuild.cpp`): CMake configures `<project>/.strata/Scripts/Build` with the
   toolchain the engine was configured with (generator, platform, toolset, compiler, configuration and this checkout as
   `STRATA_ENGINE_DIR`, baked into `Editor/ScriptBuildConfig.h` at configure time; CMake is the engine's, else `cmake` on
   PATH) and builds the module into `<project>/.strata/Scripts/Bin`, in child processes polled once per frame (never
-  blocking). The configure step only runs when the build tree is new or the toolchain changed. With a Visual Studio
-  generator a project whose build tree is too deep is refused before anything runs (`CheckScriptBuildPathLength`):
-  MSBuild's file tracker cannot create its logs at paths over 259 characters, which lie up to 104 characters below the
-  build tree (more for module names over about 40 characters), and fails with errors that do not name the cause.
+  blocking). The configure step only runs when the build tree is new or the toolchain changed, and generators that can
+  (Ninja, Makefiles) write `compile_commands.json`. With a Visual Studio generator a project whose build tree would be too
+  deep builds in the per-user build directory instead (`ResolveScriptBuildLocation`: `<user data>/Strata/Builds/<hash of
+  the project directory>`, created private; `STRATA_SCRIPT_BUILDS_DIR` overrides the root, tests set it), and the build's
+  log says why: MSBuild's file tracker cannot create its logs at paths over 259 characters, which lie up to 104
+  characters below the build tree (more for module names over about 40 characters), and fails with errors that do not
+  name the cause (`CheckScriptBuildPathLength`). Only a project too deep for both is refused before anything runs, naming
+  a shorter folder by its real path.
   Output is streamed to the log; errors are parsed into file/line/message diagnostics (MSVC, GCC, Clang, the GNU, Apple
   and MSVC linkers, CMake; failures with only summary lines report the end of the log). One build runs at a time: a
   second request fails until the running one finished. Cancelling a build (also by closing the project or the editor)
   ends every process it started (`ProcessSpecification::TerminateTree`: a job object on Windows, a process group on
   POSIX).
 - **The editor's script engine:** `EditorContext` owns a `ScriptEngine` per open project (active while it is open and
-  set active again when play starts), loads the project's built module when the project opens (warning when the
-  scripts exist but are not built), keeps hot reload on for modules rebuilt outside the editor, and calls `Update()`
-  once per frame before the scene. A successful `script.build` loads the module, or reloads it when it changed (hot
-  reload while playing; the file watcher is paused during editor builds so the module reloads once). A crash while
-  playing stops play mode and logs the class, callback and entity; `play.start` then fails until the module is rebuilt
-  (a successful build loads a crashed module again even when it did not change) or reloaded. `script.load {path}` runs
-  another module file (tests use in-tree modules this way).
+  set active again when play starts), loads the project's built module when the project opens (warning, once the scan of
+  the project's scene and prefab files on an I/O thread found one that attaches a script, when the scripts are not built:
+  `DoScenesUseScripts`; a new project's unused example is no reason to warn), keeps hot reload on for modules rebuilt
+  outside the editor, and calls `Update()` once per frame before the scene. A successful `script.build` loads the module,
+  or reloads it when it changed (hot reload while playing; the file watcher is paused during editor builds so the module
+  reloads once). **Play builds first:** `play.start` (and the toolbar's Play, through the runner) builds the scripts when
+  the project's module is older than a source of the script directory, or not loaded while scenes use scripts
+  (`GetPlayBuildReason`; never for a module loaded with `script.load`), waits for a build that runs, and plays once the
+  build succeeded; a failed build fails `play.start` with its first diagnostics and asks the UI for the Problems panel
+  (`RequestProblemsPanel`); `play.start {build: false}` plays what is loaded. A crash while playing stops play mode and
+  logs the class, callback and entity, and where it happened once symbolization (a job) finished (see Scripting,
+  "Contained"); `play.start` then fails until the module is rebuilt (a successful build loads a crashed module again even
+  when it did not change) or reloaded. `script.load {path}` runs another module file (tests use in-tree modules this
+  way).
 - **Exported games:** `project.export` writes the module the editor runs next to the game (the loaded module's file,
   verified against the digest taken when it was loaded, `EditorContext::ReadRunningScriptModule`; plus its PDB except
   in Dist builds or with `includeScriptSymbols: false`) and names it in the `.stgame` manifest (version 2,
@@ -661,6 +676,15 @@ Building and loading scripts:
 - Hot reload during play snapshots every instance's fields, deletes the instances (no `OnDestroy`), loads the new
   module, recreates the instances, restores fields that still exist with the same name and type and calls `OnReload`
   (not `OnCreate`). Classes that disappeared lose their instances; new classes start normally.
+- **Crash locations:** `CrashGuard` records the faulting instruction and, on Windows x64, its callers' return addresses
+  (unwound from the exception's context, `CrashInfo::Stack`; no walk after a stack overflow). `ScriptModule` names each
+  frame's module at once (`Symbolizer::Describe`) and resolves the module's own frames on a job (`Symbolizer::Resolve`:
+  DbgHelp reads the PDB beside the module as it was built, also for hot-reload copies, serialized; on Linux the ELF
+  symbol table and on macOS dladdr give the function, never file or line). `ScriptFault::Location` is the first frame of
+  the module with a source that is not C runtime or SDK entry code, `Stack` the frames; `Symbolized` says the job
+  finished (`ScriptModule::GetFault` merges its result). `script.status`, the Console (a click opens the line), the
+  Problems panel and the play-stop log show them. Script modules write a PDB in every configuration
+  (`strata_add_script_module`).
 - Contained: access violations, division by zero, stack overflow, C++ exceptions escaping module code and, on Windows,
   `abort()` (also from a failed `assert()` and from `std::terminate`: modules turn it into
   `ST_SCRIPT_ABORT_EXCEPTION_CODE` through a SIGABRT handler `ScriptModuleEntry.cpp` installs in their static C
@@ -750,8 +774,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
     (`Application::GetLastFrameWorkTime`: CPU time without the waits for the GPU, the display and the frame rate cap;
     `EditorPanelContext::Frame` for panels), so an idle editor does not read as a slow one.
   - Status pills say what is wrong and lead to it: errors (unread since the Console was last focused, not counting the
-    frame its window appears in), a failed automation start (`--no-automation` is shown as off), scripts that are not
-    built (click to build) or failed, assets that failed to load or pools close to or over their budget (the assets pill,
+    frame its window appears in), a failed automation start (`--no-automation` is shown as off), scripts that scenes use
+    but are not built (click to build), failed or crashed (click to see the Problems panel), assets that failed to load or
+    pools close to or over their budget (the assets pill,
     `N ready · M streaming · <pool> X/Y MB` for the pool closest to its budget, `GetMostPressuredPool`, after
     `K importing` while imports run (`editor.status` has the count as `assets.importing`), in Sulfur from
     85% of it and Cinnabar beyond it or on failures; click to open the Streaming panel). The frame pill (`ms · FPS · J
@@ -811,14 +836,28 @@ and `AudioSystem`, the built-in "Audio" scene system.
   (`GetQuitRequest`; StrataRuntime exits with the code) or loads the scene from the pack. A null handle restarts the running
   scene.
 - **Scripts through commands** (see Scripting, "Project scripts"): `script.status` (loaded module, classes with fields
-  and callbacks, faults, the running and last build with diagnostics), `script.build {wait}` (deferred; fails with the
-  first compiler errors), `script.reload`, `script.load {path}`, `script.init {example}`, `script.add {entity, class,
-  fields}`, `script.remove {entity, class}`, `script.setField {entity, class, field, value}` (null resets to the
-  default) and `script.get {entity, class?}` (the field values: the live instances' while playing, which is how tools
-  read game state kept in fields; the stored overrides over the class defaults otherwise). Adding scripts and setting
-  fields need a loaded module, which validates class and field names and types; removing works without one. Script edits
-  are undoable (`ScriptEdit`, shared with the inspector's Script drawer) and reach the live instances while playing. The
-  UI builds with Scripts > Build Scripts (Ctrl+B) or the toolbar.
+  and callbacks, faults with their location and stack, the running and last build with diagnostics and its build
+  directory, whether scenes use scripts, why Play would build first, the external editor), `script.build {wait}`
+  (deferred; fails with the first compiler errors), `script.reload`, `script.load {path}`, `script.init {example}`,
+  `script.create {class, path?, template?: behaviour | empty, fields?, open?}` (a new class in the script directory),
+  `script.open {file?, line?, column?}` (the external editor at a line: code, CMake and text files of the project or
+  the engine only; without file the script directory), `script.setExternalEditor {command}` (`Editor/ExternalEditor`:
+  a template such as `code -g {file}:{line}:{column}`, split into a program and arguments and started without a shell;
+  batch files are refused; the user's setting in `<user data>/Strata/EditorSettings.json`, written private and read
+  only when trusted, `EditorContextSpecification::EditorSettingsFile`; `STRATA_EXTERNAL_EDITOR` overrides it; projects
+  cannot name one, as a shared project must not choose what runs; without one, the default application), `script.add
+  {entity, class, fields}`, `script.remove {entity, class}`, `script.setField {entity, class, field, value}` (null
+  resets to the default) and `script.get {entity, class?}` (the field values: the live instances' while playing, which
+  is how tools read game state kept in fields; the stored overrides over the class defaults otherwise). Adding scripts
+  and setting fields need a loaded module, which validates class and field names and types; removing works without
+  one. Script edits are undoable (`ScriptEdit`, shared with the inspector's Script drawer) and reach the live
+  instances while playing. The UI builds with Scripts > Build Scripts (Ctrl+B) or the toolbar, and has Scripts > New
+  Script... (`UI/ScriptDialogs`), Open Scripts Folder, External Editor... and Show Problems. The **Problems panel**
+  (`Panels/ProblemsPanel`, docked with the Console) lists the last build's diagnostics and the crash with its stack
+  frames; a double click opens one (`EditorContext::OpenScriptSource`); the status bar's "Build failed" and "Scripts
+  crashed" pills open it, the "Building to play" pill cancels the build (`EditorContext::CancelScriptBuild`), and a
+  project whose scenes use no script shows "Scripts unused" instead of asking for a build. The Console opens the
+  source of messages that name one (`FindSourceReference`). People's guide: Docs/Manual/Scripting.md.
 - Commands never block a frame. One that has to wait (frames, a build, an import, a GPU readback) returns
   `EditorCommandResult::Defer(poll)`; `EditorCommandRunner` polls it once per frame, starting with the
   next frame, and reports through a completion callback. Command scripts, automation and UI actions that

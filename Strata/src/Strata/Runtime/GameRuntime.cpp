@@ -138,11 +138,25 @@ namespace Strata
 
 	void GameRuntime::CheckScriptFault()
 	{
-		if (m_ScriptFault || !m_ScriptEngine)
+		if (!m_ScriptEngine)
 			return;
-		m_ScriptFault = m_ScriptEngine->GetFault();
-		if (m_ScriptFault)
-			ST_CORE_ERROR("The scripts of '{}' crashed and stay disabled for the rest of the session: {}", m_Manifest.Name, m_ScriptFault->Description);
+		if (!m_ScriptFault)
+		{
+			m_ScriptFault = m_ScriptEngine->GetFault();
+			if (m_ScriptFault)
+				ST_CORE_ERROR("The scripts of '{}' crashed and stay disabled for the rest of the session: {}", m_Manifest.Name, m_ScriptFault->Description);
+		}
+		// The crash's location comes from symbolization on a job, a moment later (the module ships with its PDB outside Dist).
+		if (m_ScriptFault && !m_ScriptFault->Symbolized)
+		{
+			std::optional<ScriptFault> current = m_ScriptEngine->GetFault();
+			if (current && current->Symbolized)
+			{
+				m_ScriptFault = std::move(current);
+				if (m_ScriptFault->Location)
+					ST_CORE_ERROR("The script crash happened at {}", DescribeScriptCodeLocation(*m_ScriptFault->Location));
+			}
+		}
 	}
 
 	void GameRuntime::HandleSceneRequests()

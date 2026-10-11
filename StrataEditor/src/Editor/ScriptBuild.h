@@ -52,9 +52,40 @@ namespace Strata
 	size_t GetScriptBuildTrackedPathDepth(const ScriptBuildSettings& settings, std::string_view targetName);
 	// Why the module `targetName` cannot be built in `buildDirectory` with these settings, or nothing when it can: with a
 	// Visual Studio generator, its tracking logs would exceed c_MSBuildMaxTrackedPathLength. Paths count as given, which is
-	// how the tools receive them.
+	// how the tools receive them. The message suggests a shorter place by its real path (the user's home directory's
+	// StrataProjects folder, Platform::FindHomeDirectory).
 	std::optional<std::string> CheckScriptBuildPathLength(const ScriptBuildSettings& settings, const std::filesystem::path& buildDirectory,
 		std::string_view targetName);
+
+	// Where the scripts of projects too deep for their toolchain build: <user data>/Strata/Builds (STRATA_SCRIPT_BUILDS_DIR
+	// overrides it, e.g. for tests), one directory per project named by a hash of its directory.
+	std::filesystem::path GetScriptBuildsRoot();
+	std::filesystem::path GetPerUserScriptBuildDirectory(const Project& project);
+
+	// The build trees of a project's scripts: in the project (.strata/Scripts/Build for the editor's builds, .strata/Scripts/IDE
+	// for the CMakePresets.json preset's) or, when a Visual Studio generator's tracking logs would be too deep there
+	// (CheckScriptBuildPathLength), in the project's per-user build directory (GetPerUserScriptBuildDirectory: Build and IDE).
+	struct ScriptBuildLocation
+	{
+		std::filesystem::path BuildDirectory;
+		std::filesystem::path IDEBuildDirectory;
+		std::string MovedReason; // Why the trees are not in the project (empty when they are)
+	};
+
+	// Nothing (with the reason) when neither place fits: then only a project in a shorter folder, or a shorter module name,
+	// can build.
+	std::optional<ScriptBuildLocation> ResolveScriptBuildLocation(const Project& project, const ScriptBuildSettings& settings, std::string* outError = nullptr);
+
+	// Scripts/CMakePresets.json, for IDEs (Visual Studio's Open Folder, VS Code's CMake Tools, CLion): a configure preset
+	// "strata" with the engine's toolchain and STRATA_ENGINE_DIR (as script builds use them), the module's output in the
+	// project's binary directory (an IDE build is hot reloaded like the editor's), compile_commands.json for generators that
+	// write it, and a build preset for the engine's configuration. Its vendor field names Strata. Empty when the project
+	// cannot build (ResolveScriptBuildLocation).
+	std::string MakeScriptCMakePresets(const Project& project, const ScriptBuildSettings& settings);
+	// Writes Scripts/CMakePresets.json when it is missing, or when Strata wrote it and it differs (the engine moved, its
+	// toolchain changed); a file the project wrote itself is kept. Its directory's .gitignore (written when missing) keeps it
+	// out of version control: it holds this machine's paths. Sets outWritten when the file was written.
+	bool UpdateScriptCMakePresets(const Project& project, const ScriptBuildSettings& settings, bool* outWritten = nullptr, std::string* outError = nullptr);
 
 	// A compiler, linker or CMake message found in a build log.
 	struct ScriptDiagnostic
@@ -82,6 +113,10 @@ namespace Strata
 	std::string DescribeScriptBuildFailure(const std::string& reason, const std::vector<ScriptDiagnostic>& diagnostics, std::string_view log);
 	// The last `lineCount` lines of a log.
 	std::string GetLogTail(std::string_view log, size_t lineCount);
+	// The source file and line a log message points to, for messages the Console lets people open: a compiler diagnostic
+	// ("<file>(<line>,<column>): error ...", "<file>:<line>:<column>: error ...", also after the build's "[Scripts] " prefix)
+	// or a crash report ("... at <file>(<line>) in <function>"). Only code and CMake files count. Nothing otherwise.
+	std::optional<ScriptDiagnostic> FindSourceReference(std::string_view message);
 
 	// Splits streamed process output into lines (without "\n" or "\r\n"). Every byte is scanned once, and a line is cut
 	// after `maxLineSize` bytes, so output that never ends its line cannot grow without bound.
@@ -110,6 +145,7 @@ namespace Strata
 		std::vector<ScriptDiagnostic> Diagnostics;
 		std::string LogTail;  // The end of the CMake output
 		bool Configured = false; // The CMake configure step ran (first build, or the toolchain changed)
+		std::filesystem::path BuildDirectory; // The build tree (see ResolveScriptBuildLocation)
 		double Seconds = 0.0;
 		std::filesystem::path Module; // The built module file
 		bool ModuleChanged = false;   // The build wrote a new module file (false when it was up to date)
@@ -137,9 +173,10 @@ namespace Strata
 		ScriptBuilder(const ScriptBuilder&) = delete;
 		ScriptBuilder& operator=(const ScriptBuilder&) = delete;
 
-		// Starts building the project's scripts. Fails (returning false with a reason) while a build runs, when the
-		// project has no CMakeLists.txt in its script directory, or when its path is too long for the build's tools
-		// (CheckScriptBuildPathLength).
+		// Starts building the project's scripts, in the build tree ResolveScriptBuildLocation picks (the log says why when it
+		// is not the project's). Fails (returning false with a reason) while a build runs, when the project has no
+		// CMakeLists.txt in its script directory, or when its path is too long for the build's tools even in the per-user
+		// build directory. Also brings Scripts/CMakePresets.json up to date (UpdateScriptCMakePresets).
 		bool Start(const Project& project, const ScriptBuildSettings& settings, std::string* outError = nullptr);
 		// Advances a running build. Returns true in the call in which the build finished (see GetLastResult).
 		bool Update();

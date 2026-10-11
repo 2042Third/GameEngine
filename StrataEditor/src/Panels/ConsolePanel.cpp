@@ -1,12 +1,17 @@
 #include "Panels/ConsolePanel.h"
 
+#include "Editor/EditorContext.h"
 #include "UI/EditorFonts.h"
 #include "UI/Theme.h"
+#include "UI/Widgets.h"
 
+#include <Strata/Core/FileSystem.h>
 #include <Strata/Core/StringUtils.h>
 
 #include <imgui.h>
 #include <imgui_stdlib.h>
+
+#include <optional>
 
 namespace Strata
 {
@@ -19,11 +24,42 @@ namespace Strata
 			m_LastSequence = entry.Sequence;
 			if (entry.Level >= LogLevel::Error)
 				m_UnreadErrors++;
+			std::optional<ScriptDiagnostic> reference = FindSourceReference(entry.Message);
+			m_References.push_back(reference ? std::make_shared<const ScriptDiagnostic>(std::move(*reference)) : nullptr);
 			m_Entries.push_back(std::move(entry));
 			m_EntriesChanged = true;
 		}
 		while (m_Entries.size() > buffer.GetCapacity())
+		{
 			m_Entries.pop_front();
+			m_References.pop_front();
+		}
+	}
+
+	const ScriptDiagnostic* ConsolePanel::FindLatestReference() const
+	{
+		for (auto it = m_References.rbegin(); it != m_References.rend(); ++it)
+		{
+			if (*it)
+				return it->get();
+		}
+		return nullptr;
+	}
+
+	bool ConsolePanel::OpenReference(EditorPanelContext& context, size_t visibleIndex)
+	{
+		if (visibleIndex >= m_Visible.size())
+			return false;
+		const std::shared_ptr<const ScriptDiagnostic>& reference = m_References[m_Visible[visibleIndex]];
+		if (!reference)
+			return false;
+		std::string error;
+		if (!context.Context.OpenScriptSource(FileSystem::FromUTF8(reference->File), reference->Line, reference->Column, nullptr, &error))
+		{
+			ST_WARN("Console: {}", error);
+			return false;
+		}
+		return true;
 	}
 
 	bool ConsolePanel::IsVisible(const LogEntry& entry, const std::string& lowerFilter) const
@@ -33,7 +69,7 @@ namespace Strata
 		return levelShown && (lowerFilter.empty() || StringUtils::ToLower(entry.Message).find(lowerFilter) != std::string::npos);
 	}
 
-	void ConsolePanel::OnImGuiRender(EditorPanelContext&)
+	void ConsolePanel::OnImGuiRender(EditorPanelContext& context)
 	{
 		// Errors count as read once the Console has the focus, but not on the frame its window appears: a new window takes
 		// the focus then (at startup too, before its dock node shows another tab), when nobody has seen it.
@@ -43,6 +79,7 @@ namespace Strata
 		if (ImGui::Button("Clear"))
 		{
 			m_Entries.clear();
+			m_References.clear();
 			m_UnreadErrors = 0;
 			m_EntriesChanged = true;
 		}
@@ -78,6 +115,7 @@ namespace Strata
 
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Caption);
+		std::optional<size_t> open;
 		if (ImGui::BeginChild("Messages", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar))
 		{
 			ImGuiListClipper clipper;
@@ -97,6 +135,15 @@ namespace Strata
 					ImGui::PushStyleColor(ImGuiCol_Text, color);
 					ImGui::TextUnformatted(fmt::format("[{:8.2f}] [{}] {}", entry.Timestamp, entry.Logger, entry.Message).c_str());
 					ImGui::PopStyleColor();
+					// A message that points to a source opens it when clicked.
+					if (const ScriptDiagnostic* reference = m_References[m_Visible[static_cast<size_t>(row)]].get(); reference && ImGui::IsItemHovered())
+					{
+						ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+						if (UI::IsTooltipDue())
+							ImGui::SetTooltip("Click to open %s at line %u", reference->File.c_str(), reference->Line);
+						if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+							open = static_cast<size_t>(row);
+					}
 				}
 			}
 			if (m_AutoScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
@@ -104,6 +151,8 @@ namespace Strata
 		}
 		ImGui::EndChild();
 		ImGui::PopFont();
+		if (open)
+			OpenReference(context, *open);
 	}
 
 }

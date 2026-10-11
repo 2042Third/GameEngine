@@ -9,6 +9,7 @@
 #include "UI/EditorPanelRegistry.h"
 #include "UI/EditorShell.h"
 #include "UI/ExportDialog.h"
+#include "UI/ScriptDialogs.h"
 #include "UI/ProjectDialogs.h"
 
 #include <Strata.h>
@@ -49,6 +50,9 @@ namespace Strata
 		// read-only for scripted runs (--frames, --commands), which are not the user's sessions.
 		std::filesystem::path RecentProjectsFile;
 		bool RecentProjectsReadOnly = false;
+		// The user's editor settings, such as the external code editor (EditorContextSpecification::EditorSettingsFile):
+		// empty keeps them in memory.
+		std::filesystem::path EditorSettingsFile;
 		// Watch the project's assets and script module for changes made outside the editor (hot reload). UI tests turn it off:
 		// they need no watcher threads.
 		bool WatchFiles = true;
@@ -71,6 +75,7 @@ namespace Strata
 		constexpr const char* c_Console = "Console";
 		constexpr const char* c_Streaming = "Streaming";     // StreamingPanel, opened from the status bar's assets pill
 		constexpr const char* c_Performance = "Performance"; // PerformancePanel, opened from the status bar's frame pill
+		constexpr const char* c_Problems = "Problems";       // ProblemsPanel: script build diagnostics and crashes
 		constexpr const char* c_Welcome = "Welcome"; // The launcher (WelcomePanel)
 	}
 
@@ -130,6 +135,8 @@ namespace Strata
 		ProjectDialogs& GetProjectDialogs() { return m_ProjectDialogs; }
 		const AboutDialog& GetAboutDialog() const { return m_AboutDialog; }
 		const ExportDialog& GetExportDialog() const { return m_ExportDialog; }
+		NewScriptDialog& GetNewScriptDialog() { return m_NewScriptDialog; }
+		ExternalEditorDialog& GetExternalEditorDialog() { return m_ExternalEditorDialog; }
 
 		// EditorShell
 		void RequestDiscardChanges(std::function<void()> action) override;
@@ -193,6 +200,8 @@ namespace Strata
 		void ReportError(const std::string& message);
 		// Builds the project's scripts through the command runner (script.build); the build reports to the log.
 		void BuildScripts();
+		// Play (the toolbar, Ctrl+P): play.start through the command runner, which builds the scripts first when they need it.
+		void StartPlay();
 		// File > Export Game... and the toolbar's Export button: the Export dialog, showing a running export.
 		void ShowExportDialog();
 	private:
@@ -211,6 +220,10 @@ namespace Strata
 		AboutDialog m_AboutDialog;
 		// Completions of its exports refer to it: OnDetach cancels the runner's commands while it still exists.
 		ExportDialog m_ExportDialog;
+		NewScriptDialog m_NewScriptDialog;
+		ExternalEditorDialog m_ExternalEditorDialog;
+		// The context's requests for the Problems panel this layer has shown (EditorContext::GetProblemsPanelRequests).
+		uint64_t m_ShownProblemsRequests = 0;
 
 		std::function<void()> m_PendingDiscardAction;
 		bool m_OpenUnsavedChangesModal = false;

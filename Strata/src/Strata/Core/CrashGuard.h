@@ -2,7 +2,9 @@
 
 #include "Strata/Core/Base.h"
 
+#include <cstdint>
 #include <string>
+#include <vector>
 
 namespace Strata
 {
@@ -12,7 +14,13 @@ namespace Strata
 		std::string Description; // Human-readable fault description
 		uint64_t Code = 0;       // Windows exception code or POSIX signal number (0 for a C++ exception on POSIX)
 		uint64_t Address = 0;    // Faulting instruction address, if known
+		// The faulting instruction and the return addresses of its callers, innermost first (Symbolizer names them):
+		// Windows x64 unwinds from the fault's context (up to c_MaxCrashStackFrames; not after a stack overflow), other
+		// platforms report the faulting instruction only. Empty when unknown (a C++ exception on POSIX).
+		std::vector<uint64_t> Stack;
 	};
+
+	constexpr uint32_t c_MaxCrashStackFrames = 32;
 
 	// Windows: the structured exception code with which guarded code reports that it called abort() (a failed assert(),
 	// std::abort()). A C runtime would end the process instead; script modules built with the SDK install a SIGABRT

@@ -76,7 +76,7 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | What is open, is it playing, unsaved changes? | `editor.status` |
 | Which projects did the user (or an agent) open lately? | `editor.recentProjects` (name, project file path for `project.open`, `lastOpened`; editors run with `--commands` or `--frames` list what they opened without saving it); `editor.removeRecentProject {path}` takes one off |
 | What can a new project or scene start from? | `project.templates` (`empty`, `basic3d`) |
-| Is there a finished game to learn from? | `project.samples` (e.g. `Tetris`); `project.openSample {sample, directory}` opens a copy in a new directory (the sample stays as shipped; build its scripts with `script.build` before playing) |
+| Is there a finished game to learn from? | `project.samples` (e.g. `Tetris`); `project.openSample {sample, directory}` opens a copy in a new directory (the sample stays as shipped; `play.start` builds its scripts first) |
 | Does the person at the editor see the launcher or the editor? | `editor.status` (`editor.launcher`; also `editor.gpu` and `editor.startupSeconds`) |
 | Did the game ask for fullscreen or a resolution, lock the cursor, where do its saves go? | `editor.status` (`game`: `windowRequests`, recorded but not applied in play mode; `cursor`; `saveDirectory`, the project's `.strata/Saves`) |
 | Which commands and parameters exist? | `editor.commands` (or `list --json`) |
@@ -126,9 +126,11 @@ editor started with `--no-gpu` (use `--headless`):
   many are still importing (`assets.importing`), `asset.info` per asset (`importing`); wait for 0 (e.g. `editor.wait`
   between checks) before relying on sub-assets or exporting, which waits for them itself. Editors run with `--commands`
   or `--frames` import before the project opens.
-- Game logic: write C++ scripts into the project's `Scripts/` folder and use `script.build`, `script.status`,
-  `script.add`, `script.setField`, `script.reload` (see `.claude/skills/strata-scripting/SKILL.md`, "The workflow in a
-  game project"). Builds need CMake and the engine's compiler on the machine; they work with `--no-gpu`.
+- Game logic: write C++ scripts into the project's `Scripts/` folder (`script.create {"class", "fields"}` starts one) and
+  use `script.build`, `script.status`, `script.add`, `script.setField`, `script.reload` (see
+  `.claude/skills/strata-scripting/SKILL.md`, "The workflow in a game project"). Builds need CMake and the engine's
+  compiler on the machine; they work with `--no-gpu`. `script.open {"file", "line"}` shows a source line to the person
+  in their code editor (`script.setExternalEditor` sets which).
 
 ## 4. Conventions
 
@@ -141,7 +143,9 @@ editor started with `--no-gpu` (use `--headless`):
   back as a quaternion). Property names are case-insensitive. `component.get` shows the accepted format of every value.
 - **Undo**: every successful mutating command is one undo step (`edit.undo`, `edit.redo`, `edit.history`). Material
   edits are steps of the same history, but they save their file themselves, so they never mark the scene unsaved.
-- **Play mode**: `play.start` runs a copy of the scene. Changes made while playing apply to that copy, carry a
+- **Play mode**: `play.start` runs a copy of the scene, after building the scripts when their sources changed or they
+  are not built while scenes use them (it answers once the game plays, with `built`; a failed build fails it with the
+  errors; `{"build": false}` plays what is loaded). Changes made while playing apply to that copy, carry a
   `warning` in the result, and are discarded by `play.stop`. Undo and redo are not available while playing;
   `scene.save` saves the edited scene, never the running copy.
 - **Errors** (JSON-RPC codes): `-32602` invalid parameters (the error's `data.parameters` is the command's schema:

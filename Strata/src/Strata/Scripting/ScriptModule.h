@@ -86,7 +86,9 @@ namespace Strata
 		const ScriptClassInfo* FindClass(std::string_view name) const;
 
 		bool IsFaulted() const { return m_Fault.has_value(); }
-		const std::optional<ScriptFault>& GetFault() const { return m_Fault; }
+		// The crash, with its location and stack once symbolization (a job started at the fault) finished: until then
+		// Location may hold only the module and its offset, and Symbolized is false.
+		std::optional<ScriptFault> GetFault() const;
 		// Message of the most recent call that returned ScriptCallResult::Exception.
 		const std::string& GetLastExceptionMessage() const { return m_LastException; }
 
@@ -153,6 +155,9 @@ namespace Strata
 		std::vector<ScriptClassInfo> m_Classes;
 		std::vector<ClassFunctions> m_Functions; // Per class index
 		std::optional<ScriptFault> m_Fault;
+		// The symbolization of m_Fault's stack, shared with its job (see GetFault).
+		struct FaultSymbols;
+		Ref<FaultSymbols> m_FaultSymbols;
 		std::string m_LastException;
 		ScriptWatchdog* m_Watchdog = nullptr;
 	};

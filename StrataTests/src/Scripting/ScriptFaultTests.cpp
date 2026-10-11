@@ -7,7 +7,9 @@
 
 #include <chrono>
 #include <csignal>
+#include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace Strata;
@@ -44,6 +46,58 @@ namespace
 
 TEST_SUITE("Scripting.Faults")
 {
+	TEST_CASE("A crash names where it happened: the source file and line on Windows, the function elsewhere")
+	{
+		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_FAULTS));
+		Scene scene;
+		CreateFaultyEntity(scene, "NullDereference", "OnUpdate");
+		scene.OnRuntimeStart();
+		RunFrames(scene, 1);
+		REQUIRE(engine->IsFaulted());
+
+		// Symbolization runs on a job (inline without a job system); the fault has its stack at once.
+		std::optional<ScriptFault> fault = engine->GetFault();
+		REQUIRE(fault);
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+		while (!fault->Symbolized && std::chrono::steady_clock::now() < deadline)
+		{
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+			fault = engine->GetFault();
+		}
+		REQUIRE(fault->Symbolized);
+		REQUIRE_FALSE(fault->Stack.empty());
+		REQUIRE(fault->Location);
+		const ScriptCodeLocation& location = *fault->Location;
+		INFO("Location: ", DescribeScriptCodeLocation(location));
+		CHECK(location.Module == FileSystem::ToUTF8(GetTestScriptModule(STRATA_TEST_SCRIPTS_FAULTS).filename()));
+		CHECK(location.ModuleOffset != 0);
+#if defined(ST_PLATFORM_WINDOWS)
+		// The null write itself, from the module's PDB.
+		CHECK(FileSystem::FromUTF8(location.File).filename() == "FaultScripts.cpp");
+		const std::optional<std::string> source = FileSystem::ReadText(FileSystem::FromUTF8(location.File));
+		REQUIRE(source);
+		std::vector<std::string> lines;
+		size_t start = 0;
+		for (size_t end = source->find('\n'); end != std::string::npos; end = source->find('\n', start))
+		{
+			lines.push_back(source->substr(start, end - start));
+			start = end + 1;
+		}
+		REQUIRE(location.Line >= 1);
+		REQUIRE(location.Line <= lines.size());
+		CHECK(lines[location.Line - 1].find("*pointer = 42;") != std::string::npos);
+		CHECK_FALSE(location.Function.empty());
+		CHECK(DescribeScriptCodeLocation(location).find("FaultScripts.cpp(" + std::to_string(location.Line) + ")") != std::string::npos);
+#else
+		// No DWARF reader: the function, from the module's symbol table.
+		CHECK(location.File.empty());
+		// The function that wrote, or the one it was inlined into (optimized builds).
+		const std::string& function = location.Function;
+		CHECK((function.find("Crash") != std::string::npos || function.find("Faulty") != std::string::npos));
+#endif
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("Crashes in scripts are contained")
 	{
 		const char* callbacks[] = { "OnCreate", "OnUpdate", "OnFixedUpdate", "OnLateUpdate", "OnDestroy" };

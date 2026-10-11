@@ -3,6 +3,7 @@
 #include <Strata/Core/EntryPoint.h>
 #include <Strata/ImGui/ImGuiLayer.h>
 
+#include "Editor/ExternalEditor.h"
 #include "EditorHost.h"
 #include "EditorIcon.h"
 #include "EditorLayer.h"
@@ -134,6 +135,8 @@ namespace Strata
 		// The projects a person or an agent opens go to the user's recent projects; scripted runs only read them.
 		options.RecentProjectsFile = RecentProjects::GetDefaultFile().value_or(std::filesystem::path());
 		options.RecentProjectsReadOnly = !options.CommandScript.empty() || commandLine.GetIntOption("--frames").has_value();
+		// The person's code editor for script sources (script.setExternalEditor).
+		options.EditorSettingsFile = ExternalEditor::GetDefaultSettingsFile().value_or(std::filesystem::path());
 
 		// Automation (StrataCLI, MCP): on by default, on a free loopback port unless --automation-port picks one.
 		options.EnableAutomation = !commandLine.HasFlag("--no-automation");

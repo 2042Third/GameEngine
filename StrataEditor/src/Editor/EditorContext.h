@@ -2,6 +2,7 @@
 
 #include "Editor/EditorGameWindow.h"
 #include "Editor/EditorViewport.h"
+#include "Editor/ExternalEditor.h"
 #include "Editor/GameExport.h"
 #include "Editor/ProjectTemplates.h"
 #include "Editor/RecentProjects.h"
@@ -21,6 +22,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <functional>
@@ -62,6 +64,9 @@ namespace Strata
 		// RecentProjects::GetDefaultFile). Empty: in memory only, as tests need. Read-only: read but never written.
 		std::filesystem::path RecentProjectsFile;
 		bool RecentProjectsReadOnly = false;
+		// Where the user's editor settings are kept, such as the external code editor (ExternalEditorLauncher; the editor
+		// application passes ExternalEditor::GetDefaultSettingsFile). Empty: in memory only, as tests need.
+		std::filesystem::path EditorSettingsFile;
 		// Where project.samples and project.openSample find the samples (ProjectSamples); empty: next to the executable
 		// (ProjectSamples::GetDefaultDirectory).
 		std::filesystem::path SamplesDirectory;
@@ -250,8 +255,36 @@ namespace Strata
 		// Whether the open project has a script build, a CMakeLists.txt in its script directory, that BuildScripts can run
 		// (false without a project). Looks at the file system.
 		bool HasScriptBuild() const;
+		// The toolchain script builds use (EditorContextSpecification::ScriptBuild).
+		const ScriptBuildSettings& GetScriptBuildSettings() const { return m_Specification.ScriptBuild; }
 		const ScriptBuilder& GetScriptBuilder() const { return m_ScriptBuilder; }
+		// Ends a running script build (it finishes as failed, "cancelled"); a play waiting for it then fails.
+		void CancelScriptBuild();
 		const ScriptBuildLoad& GetLastScriptBuildLoad() const { return m_LastScriptBuildLoad; }
+		// Whether a scene or prefab of the project attaches a script: the edited scene, or one of the project's saved scenes
+		// and prefabs (their files are scanned on an I/O thread when the project opens; until the scan finished, only the
+		// edited scene counts). Projects whose scenes use no script are not asked to build theirs.
+		bool DoScenesUseScripts() const;
+		// Why play mode has to build the scripts first, or nothing when it does not: the project's module is not loaded
+		// although scenes use scripts (never built, or built by another engine), or its sources (code and CMake files in the
+		// script directory) are newer than its module file. Never for a module loaded from elsewhere (script.load) or a
+		// project without a script build. Reads file times.
+		std::optional<std::string> GetPlayBuildReason() const;
+		// Starts the build play mode waits for (BuildScripts); GetPlayBuildID names it until ClearPlayBuild.
+		bool StartPlayBuild(std::string* outError = nullptr);
+		uint64_t GetPlayBuildID() const { return m_PlayBuildID; }
+		void ClearPlayBuild() { m_PlayBuildID = 0; }
+		// The person's code editor (script.open, script.setExternalEditor).
+		ExternalEditorLauncher& GetExternalEditor() { return m_ExternalEditor; }
+		const ExternalEditorLauncher& GetExternalEditor() const { return m_ExternalEditor; }
+		// Opens a source file at a line and column (0: unknown) in the external editor: a path relative to the project
+		// directory, or absolute inside the project or the engine (whose SDK headers diagnostics name). Only code, CMake and
+		// text files; an empty path opens the project's script directory. Fails (with the reason) for anything else or a
+		// file that does not exist. On success outHow says what opened it.
+		bool OpenScriptSource(const std::filesystem::path& file, uint32_t line, uint32_t column, std::string* outHow = nullptr, std::string* outError = nullptr);
+		// Asks the UI to show the Problems panel (a play's build failed): the version changes with every request.
+		void RequestProblemsPanel() { m_ProblemsPanelRequests++; }
+		uint64_t GetProblemsPanelRequests() const { return m_ProblemsPanelRequests; }
 		// The script crash that stopped play mode last; cleared when a module loads.
 		const std::optional<ScriptFault>& GetLastScriptFault() const { return m_LastScriptFault; }
 		// Reads the loaded module's file and checks that it is still the file that was loaded, so that exports ship the
@@ -341,6 +374,12 @@ namespace Strata
 		// a file that changed while it was being loaded leaves the running version unknown.
 		void RecordScriptModuleFile(const std::optional<Sha256Digest>& expected);
 		void OnScriptBuildFinished();
+		// Takes the location of the last script crash once its symbolization finished, and reports it.
+		void UpdateScriptFaultLocation();
+		// Scans the project's saved scenes and prefabs for scripts on an I/O thread (see DoScenesUseScripts).
+		void StartScriptUsageScan();
+		// Takes the finished scan's answer: a project whose scenes use scripts that are not built is told so once.
+		void UpdateScriptUsageScan();
 		// Stops play mode (and reports the fault) when the script module crashed. Returns true if it did.
 		bool StopOnScriptFault();
 		// Saves the viewport state and closes the project; with activateBuiltinAssets the built-in asset manager becomes active.
@@ -391,6 +430,21 @@ namespace Strata
 		Ref<GameExport> m_GameExport;
 		ScriptBuildLoad m_LastScriptBuildLoad;
 		std::optional<ScriptFault> m_LastScriptFault;
+		uint64_t m_PlayBuildID = 0;
+		uint64_t m_ProblemsPanelRequests = 0;
+		bool m_ScriptFaultLocationPending = false; // m_LastScriptFault waits for its symbolization
+		ExternalEditorLauncher m_ExternalEditor;
+		// The scan of the project's scene and prefab files for scripts (see DoScenesUseScripts), shared with its I/O job.
+		struct ScriptUsageScan
+		{
+			std::atomic<bool> Cancelled = false;
+			std::atomic<bool> Done = false;
+			bool UsesScripts = false; // Written by the job before Done
+			std::string File;         // The first file found to attach scripts
+		};
+		Ref<ScriptUsageScan> m_ScriptUsageScan;
+		bool m_SavedScenesUseScripts = false; // The finished scan's answer
+		bool m_ScriptUsageReported = false;
 		// The loaded module's file as it was loaded (see ReadRunningScriptModule), and the load it belongs to.
 		std::optional<Sha256Digest> m_ScriptModuleDigest;
 		uint64_t m_ScriptModuleLoadCount = 0;
