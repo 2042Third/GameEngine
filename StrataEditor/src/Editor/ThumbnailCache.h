@@ -81,8 +81,9 @@ namespace Strata
 	// and an unchanged project reads them back. Assets of other types, and editors without a GPU, get none. The Asset tab's
 	// large preview of the asset it shows (RequestPreview) is rendered the same way at its own size, in memory only.
 	//
-	// Main thread. Reads, decodes and encodes run as jobs; the destructor waits for the reads, which use the asset manager
-	// (they are small: a header and a mip tail), so the cache must go before the manager does.
+	// Main thread. Reads, decodes and encodes run as jobs; the destructor waits for the reads under way, which use the asset
+	// manager (they are small: a header and a mip tail; reads that have not started never do), so the cache must go before
+	// the manager does.
 	class ThumbnailCache
 	{
 	public:

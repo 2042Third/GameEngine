@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Asset/AssetTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/ProjectThumbnail.h"
@@ -11,15 +12,18 @@
 
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/JobSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/ImageReader.h>
 #include <Strata/Renderer/Renderer.h>
 
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -398,6 +402,40 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		CHECK(picture->getDesc().width == ProjectThumbnail::c_Width);
 		// A project without a picture has none.
 		CHECK(welcome.GetCardImage(directory.parent_path() / "Missing" / "Missing.stproj") == nullptr);
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Closing the project never waits for texture thumbnails whose reads have not started")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		// One I/O thread, which the test keeps busy (as long reads of other work would): the thumbnail's read stays queued.
+		Tests::ScopedJobSystem jobs(2, 1);
+		const std::filesystem::path project = Tests::CopyFeatureProject(Tests::CreateTemporaryDirectory("GPUThumbnailClose") / "Project").parent_path();
+		ThumbnailHarness harness(gpu, project);
+		const AssetHandle checker = harness.Find("Textures/Checker.png");
+		harness.RequestUntilIdle({}); // The index of the cached thumbnails is read (on the I/O thread) before any work starts
+		auto started = std::make_shared<std::atomic<bool>>(false);
+		auto release = std::make_shared<std::atomic<bool>>(false);
+		JobSystem::SubmitIO([started, release]()
+		{
+			started->store(true);
+			// Lets go after a while on its own, so a close that waits for the read ends too (and fails the check below).
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+			while (!release->load() && std::chrono::steady_clock::now() < deadline)
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		});
+		REQUIRE(Tests::WaitUntil([&]() { return started->load(); }, std::chrono::seconds(10)));
+		harness.Thumbnails().Request(checker);
+		harness.Frame();
+		REQUIRE(harness.Thumbnails().IsBusy());
+
+		const auto start = std::chrono::steady_clock::now();
+		harness.Context.CloseProject();
+		const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+		release->store(true);
+		CHECK_MESSAGE(seconds < 2.0, "Closing the project took ", seconds, " s");
 		gpu.GetDevice().WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

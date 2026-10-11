@@ -148,7 +148,10 @@ namespace Strata
 		std::vector<Result> Results;
 		std::vector<Written> Writes;
 		std::optional<std::unordered_map<AssetHandle, uint64_t>> LoadedIndex;
-		uint32_t ReadsRunning = 0; // Jobs that read through the asset manager: the destructor waits for them
+		// Jobs reading through the asset manager now: the destructor waits for them. A job counts itself once it starts, and
+		// only while the cache exists (Closed), so the destructor never waits for jobs still queued behind other I/O.
+		uint32_t ReadsRunning = 0;
+		bool Closed = false;
 	};
 
 	ThumbnailCache::ThumbnailCache(const Ref<EditorAssetManager>& assets, ThumbnailCacheSpecification specification)
@@ -187,9 +190,11 @@ namespace Strata
 
 	ThumbnailCache::~ThumbnailCache()
 	{
-		// Reads use the asset manager: they are short (a texture's header and mip tail), and the manager must outlive them.
+		// Reads use the asset manager, which must outlive them: the ones under way are short (a texture's header and mip tail),
+		// and the ones that have not started never read.
 		{
 			std::unique_lock<std::mutex> lock(m_Shared->Mutex);
+			m_Shared->Closed = true;
 			m_Shared->Condition.wait(lock, [this]() { return m_Shared->ReadsRunning == 0; });
 		}
 		if (m_IndexDirty)
@@ -603,12 +608,14 @@ namespace Strata
 		const std::optional<AssetMetadata> metadata = m_Assets->GetMetadata(handle);
 		const uint64_t storedSize = metadata ? metadata->StoredSize : 0;
 		m_JobsRunning++;
-		{
-			std::scoped_lock<std::mutex> lock(m_Shared->Mutex);
-			m_Shared->ReadsRunning++;
-		}
 		JobSystem::SubmitIO([shared = m_Shared, assets = m_Assets.get(), handle, key, storedSize]()
 		{
+			{
+				std::scoped_lock<std::mutex> lock(shared->Mutex);
+				if (shared->Closed)
+					return; // The cache went with its project; the asset manager may be gone too
+				shared->ReadsRunning++;
+			}
 			SharedState::Result result;
 			result.Handle = handle;
 			result.Key = key;
