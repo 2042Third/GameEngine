@@ -155,7 +155,7 @@ namespace
 
 TEST_SUITE("PerfGPU.Renderer")
 {
-	TEST_CASE("Edit frames of the renderer's scaling scenes: cubes, a large selection, a narrow view, point lights, unique materials")
+	TEST_CASE("Edit frames of the renderer's scaling scenes: cubes, the streaming view, a large selection, a narrow view, point lights, unique materials")
 	{
 		const std::filesystem::path editor = GetEditorPath();
 		REQUIRE_MESSAGE(FileSystem::IsRegularFile(editor), "The editor frame measurements need the built StrataEditor: ", FileSystem::ToUTF8(editor));
@@ -200,6 +200,9 @@ TEST_SUITE("PerfGPU.Renderer")
 		const nlohmann::json narrowCamera = { { "position", { 0.0, 30.0, 0.01 } }, { "target", { 0.0, 0.0, 0.0 } }, { "fov", 20.0 } };
 		const nlohmann::json script = nlohmann::json::array({
 			Command("scene.open", { { "scene", "Scenes/Cubes100k.stscene" } }), Wait(c_SettleFrames), Wait(c_WaitFrames),
+			// The streaming debug view over all 100,000 cubes in view (it looks at what the renderer culls, every frame).
+			Command("viewport.setSettings", { { "debugView", "streaming" } }), Wait(c_SettleFrames), Wait(c_WaitFrames),
+			Command("viewport.setSettings", { { "debugView", "none" } }),
 			// Selecting the grid's root outlines all 100,000 cubes.
 			Command("selection.set", { { "entities", nlohmann::json::array({ UUIDToJson(grid100k) }) } }), Wait(c_SettleFrames), Wait(c_WaitFrames),
 			Command("scene.open", { { "scene", "Scenes/Cubes300k.stscene" } }), Wait(c_SettleFrames), Wait(c_WaitFrames),
@@ -211,8 +214,9 @@ TEST_SUITE("PerfGPU.Renderer")
 
 		// One editor run measures every metric (the median CPU time of a wait's frames, which ignores the frames the machine's
 		// other work slowed down); a metric over its budget is confirmed by another run.
-		Perf::CheckBudgetsConfirmed({ "PerfGPU.Renderer.EditFrameCubes100k", "PerfGPU.Renderer.EditFrameCubes100kSelected", "PerfGPU.Renderer.EditFrameCubes300k",
-			"PerfGPU.Renderer.EditFrameCubes50kNarrow", "PerfGPU.Renderer.EditFramePointLights10k", "PerfGPU.Renderer.EditFrameMaterials10k" }, [&]
+		Perf::CheckBudgetsConfirmed({ "PerfGPU.Renderer.EditFrameCubes100k", "PerfGPU.Renderer.EditFrameCubes100kStreamingView",
+			"PerfGPU.Renderer.EditFrameCubes100kSelected", "PerfGPU.Renderer.EditFrameCubes300k", "PerfGPU.Renderer.EditFrameCubes50kNarrow",
+			"PerfGPU.Renderer.EditFramePointLights10k", "PerfGPU.Renderer.EditFrameMaterials10k" }, [&]
 		{
 			// Maximized (the default): the frames draw the editor at the size people use it. --frames keeps the run from saving
 			// its panel layout over the user's; the script ends the run long before.
@@ -229,19 +233,22 @@ TEST_SUITE("PerfGPU.Renderer")
 
 			// Every scene's first wait settles it; the second one is measured.
 			const std::vector<nlohmann::json> waits = FindWaitResults(run.Output);
-			REQUIRE(waits.size() == 12);
+			REQUIRE(waits.size() == 14);
 			const double unselected = MedianFrameMs(waits[1]);
-			const double selected = MedianFrameMs(waits[3]);
+			const double streamingView = MedianFrameMs(waits[3]);
+			const double selected = MedianFrameMs(waits[5]);
 			// What the selection adds is the difference of two medians, too small to budget on its own (it measures zero or
 			// less in some runs): the budget is on the frame with the selection, the difference is reported.
-			MESSAGE("100,000 cubes: ", unselected, " ms, ", selected, " ms with all of them selected (", selected - unselected, " ms added)");
+			MESSAGE("100,000 cubes: ", unselected, " ms, ", streamingView, " ms in the streaming view, ", selected, " ms with all of them selected (",
+				selected - unselected, " ms added)");
 			return Perf::MetricValues {
 				{ "PerfGPU.Renderer.EditFrameCubes100k", unselected },
+				{ "PerfGPU.Renderer.EditFrameCubes100kStreamingView", streamingView },
 				{ "PerfGPU.Renderer.EditFrameCubes100kSelected", selected },
-				{ "PerfGPU.Renderer.EditFrameCubes300k", MedianFrameMs(waits[5]) },
-				{ "PerfGPU.Renderer.EditFrameCubes50kNarrow", MedianFrameMs(waits[7]) },
-				{ "PerfGPU.Renderer.EditFramePointLights10k", MedianFrameMs(waits[9]) },
-				{ "PerfGPU.Renderer.EditFrameMaterials10k", MedianFrameMs(waits[11]) } };
+				{ "PerfGPU.Renderer.EditFrameCubes300k", MedianFrameMs(waits[7]) },
+				{ "PerfGPU.Renderer.EditFrameCubes50kNarrow", MedianFrameMs(waits[9]) },
+				{ "PerfGPU.Renderer.EditFramePointLights10k", MedianFrameMs(waits[11]) },
+				{ "PerfGPU.Renderer.EditFrameMaterials10k", MedianFrameMs(waits[13]) } };
 		});
 	}
 }

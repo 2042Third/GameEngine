@@ -81,6 +81,7 @@
 	"PerfGPU.Pack.StreamStressWorldRatio": { "Measured": 1.015, "Budget": 1.1, "Unit": "ratio" },
 	"PerfGPU.Pack.UncompressedSizeRatio": { "Measured": 0.7213, "Budget": 0.8, "Unit": "ratio" },
 	"PerfGPU.Renderer.EditFrameCubes100k": { "Measured": 1.139, "Budget": 1.708, "Unit": "ms" },
+	"PerfGPU.Renderer.EditFrameCubes100kStreamingView": { "Measured": 1.542, "Budget": 2.313, "Unit": "ms" },
 	"PerfGPU.Renderer.EditFrameCubes100kSelected": { "Measured": 1.298, "Budget": 1.947, "Unit": "ms" },
 	"PerfGPU.Renderer.EditFrameCubes300k": { "Measured": 3.182, "Budget": 4.773, "Unit": "ms" },
 	"PerfGPU.Renderer.EditFrameCubes50kNarrow": { "Measured": 0.484, "Budget": 0.726, "Unit": "ms" },

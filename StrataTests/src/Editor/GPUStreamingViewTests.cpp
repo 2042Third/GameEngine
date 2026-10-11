@@ -5,11 +5,13 @@
 #include "Renderer/SceneRendererTestUtils.h"
 
 #include <Strata/Core/JsonUtils.h>
+#include <Strata/Math/Frustum.h>
 #include <Strata/Renderer/Mesh.h>
 #include <Strata/Renderer/MeshFactory.h>
 
 #include <chrono>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <thread>
 #include <vector>
@@ -224,6 +226,110 @@ TEST_SUITE("GPU.Editor.StreamingView")
 		REQUIRE(view.GetTints().size() == 1);
 		CHECK(view.GetTints()[0].Target == ready);
 		CHECK(view.GetTints()[0].Color == colors.Failed);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The streaming view culls and boxes meshes that have not loaded with the bounds the asset pipeline recorded")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ScopedJobSystem jobs(1, 1);
+		Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		ScopedActiveManager active(manager);
+		// Two long meshes that never arrive (the gate stays closed), with recorded bounds 20 units long along x.
+		const AABB recorded(glm::vec3(-10.0f, -0.5f, -0.5f), glm::vec3(10.0f, 0.5f, 0.5f));
+		const AssetHandle reaching = manager->AddStored(0x5E0011, AssetType::Mesh, MeshFactory::CreateCube()->Serialize(), "Meshes/Reaching.mesh");
+		const AssetHandle away = manager->AddStored(0x5E0012, AssetType::Mesh, MeshFactory::CreateCube()->Serialize(), "Meshes/Away.mesh");
+		manager->SetDependencies(reaching, {}, recorded);
+		manager->SetDependencies(away, {}, recorded);
+		manager->CloseGate();
+
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		// Looking down -z from the origin: the first entity's origin is 9 units to the right, outside the view, but its mesh
+		// reaches across it; the second lies wholly behind the camera.
+		AddMesh(scene, reaching, BuiltinAssets::DefaultMaterial, glm::vec3(9.0f, 0.0f, -6.0f), "Reaching");
+		AddMesh(scene, away, BuiltinAssets::DefaultMaterial, glm::vec3(0.0f, 0.0f, 30.0f), "Away");
+		const SceneCamera camera = LookAt(glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, -1.0f));
+		REQUIRE_FALSE(Frustum(camera.Projection * camera.View).IsAABBVisible(AABB(glm::vec3(8.5f, -0.5f, -6.5f), glm::vec3(9.5f, 0.5f, -5.5f))));
+
+		ViewportDebugColors colors;
+		StreamingView view;
+		DebugDraw placeholders;
+		view.Build(scene, ViewportDebugView::Streaming, camera, 1.0f, colors, placeholders);
+		CHECK(view.GetStats().PendingEntities == 1);
+		CHECK(view.GetStats().PlaceholderBoxes == 1);
+		// The box is the recorded one: its 12 edges span 20 units along x around the entity's origin.
+		REQUIRE(placeholders.GetLineCount() == 12);
+		float minX = std::numeric_limits<float>::max();
+		float maxX = std::numeric_limits<float>::lowest();
+		for (const DebugLineVertex& vertex : placeholders.GetLines(DebugDrawDepth::Tested))
+		{
+			minX = std::min(minX, vertex.Position.x);
+			maxX = std::max(maxX, vertex.Position.x);
+		}
+		CHECK(minX == doctest::Approx(-1.0f));
+		CHECK(maxX == doctest::Approx(19.0f));
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The debug views look at assets without requesting them, so what only they see can be evicted")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		const Ref<Mesh> cube = MeshFactory::CreateCube();
+		const AssetHandle mesh = assets.Add(cube, "Cube");
+		const AssetHandle material = assets.AddMaterial(MaterialProperties());
+
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		Entity inView = AddMesh(scene, mesh, material, glm::vec3(0.0f, 0.0f, -3.0f), "In View");
+		AddMesh(scene, mesh, material, glm::vec3(0.0f, 0.0f, 30.0f), "Behind");
+		const SceneCamera camera = LookAt(glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, -1.0f));
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Size, c_Size);
+		RenderToImage(renderer, scene, camera);
+		REQUIRE(AssetManager::GetAssetState(mesh) == AssetState::Ready);
+		REQUIRE(AssetManager::GetAssetState(material) == AssetState::Ready);
+
+		const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
+		const auto lastRequested = [&manager](AssetHandle handle)
+		{
+			for (const AssetResidencyInfo& info : manager->GetResidencyInfo())
+			{
+				if (info.Handle == handle)
+					return info.LastRequestedFrame;
+			}
+			return uint64_t(0);
+		};
+		manager->Update();
+		manager->Update();
+		const uint64_t meshRequested = lastRequested(mesh);
+		const uint64_t materialRequested = lastRequested(material);
+		const uint64_t calls = manager->GetStats().GetAssetCalls;
+		REQUIRE(manager->GetStats().Frame > meshRequested);
+
+		ViewportDebugColors colors;
+		StreamingView view;
+		DebugDraw placeholders;
+		for (const ViewportDebugView debugView : { ViewportDebugView::Streaming, ViewportDebugView::LOD })
+		{
+			view.Build(scene, debugView, camera, renderer.GetSpecification().LODThreshold, colors, placeholders);
+			manager->Update();
+		}
+		CHECK(view.GetStats().EntitiesPerLOD[0] == 1); // The LOD view saw the loaded mesh in view, and only that entity
+		CHECK(manager->GetStats().GetAssetCalls == calls);
+		CHECK(lastRequested(mesh) == meshRequested);
+		CHECK(lastRequested(material) == materialRequested);
+
+		// The view brings the render proxies up to date before the frame renders: the renderer still reports what changed
+		// since its previous frame.
+		inView.GetComponent<TransformComponent>().Translation.x = 0.5f;
+		inView.MarkModified<TransformComponent>();
+		view.Build(scene, ViewportDebugView::Streaming, camera, renderer.GetSpecification().LODThreshold, colors, placeholders);
+		RenderToImage(renderer, scene, camera);
+		CHECK(renderer.GetStats().ProxyUpdates == 1);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

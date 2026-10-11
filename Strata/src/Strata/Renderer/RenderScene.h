@@ -44,6 +44,7 @@ namespace Strata
 		uint32_t Meshes = 0;           // Distinct mesh handles in use
 		uint32_t Materials = 0;        // Distinct material handles in use
 		uint32_t LastSyncUpdates = 0;  // Proxies the latest Sync updated
+		uint64_t TotalUpdates = 0;     // Proxies every Sync updated, added up (what changed between two of a renderer's frames)
 		uint64_t FullRefreshes = 0;    // Syncs that compared every proxy (the scene no longer knew which transforms changed)
 		// Meshes the latest Sync compared with the asset manager: those whose objects, sources or recorded bounds changed, new
 		// ones, or all of them after the manager changed (or forgot the changes); none in a sync after which nothing loaded,

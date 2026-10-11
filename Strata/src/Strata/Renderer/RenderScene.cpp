@@ -209,6 +209,7 @@ namespace Strata
 		UpdateMeshLayouts(assets);
 		m_Index.Refresh();
 		m_Stats.LastSyncUpdates = m_SyncUpdates;
+		m_Stats.TotalUpdates += m_SyncUpdates;
 
 #ifdef ST_DEBUG
 		std::string error;

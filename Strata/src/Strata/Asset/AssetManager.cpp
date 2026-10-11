@@ -222,6 +222,13 @@ namespace Strata
 		return current;
 	}
 
+	Ref<Asset> AssetManagerBase::PeekLoadedAsset(AssetHandle handle) const
+	{
+		std::scoped_lock<std::mutex> lock(m_Mutex);
+		auto it = m_Entries.find(handle);
+		return it != m_Entries.end() ? it->second.Loaded : nullptr;
+	}
+
 	Ref<Asset> AssetManagerBase::LoadAssetSync(AssetHandle handle)
 	{
 		if (m_ProcessingCompletions)

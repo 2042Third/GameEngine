@@ -1361,13 +1361,17 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   and `GetViewportRenderOptions` gives editor views (the editor camera outside play mode) preview lighting and a hidden
   HUD as the settings say (`viewport.getSettings`, `viewport.setSettings`). The settings' debug view
   (`ViewportDebugView`: `none`, `streaming`, `lod`) colors every view of the viewport, the game view too: before each
-  render `StreamingView` (`Editor/StreamingView.h`) walks the active mesh renderers in view and lists tints for the
-  renderer (`SceneRenderOptions::EntityTints`). The streaming view reads the active asset manager's states without
-  requesting anything, with the renderer's choice of mesh, material and textures: entities with a mesh, material or
-  texture still loading are tinted in the pending color, failed ones in the failed color, and entities whose mesh is
-  not there (nothing is drawn, so nothing can be tinted) get a placeholder box (at most `c_MaxPlaceholderBoxes`). The
-  LOD view tints each entity by the most simplified level its submeshes are drawn at (`LODSelection`, with the viewport
-  renderer's threshold). The colors are `ViewportSettings::DebugColors`, which the UI sets from the theme (not saved).
+  render `StreamingView` (`Editor/StreamingView.h`) takes the render proxies the scene's `RenderScene` finds in the view
+  (its spatial index, culled with the bounds the renderer culls with: a mesh's own, else those the asset pipeline
+  recorded) and lists tints for the renderer (`SceneRenderOptions::EntityTints`). It observes streaming without changing
+  it: it reads the active asset manager's states and peeks at loaded objects (`AssetManagerBase::PeekLoadedAsset`), so
+  it requests nothing and marks nothing as used, and what only the view looks at is evicted like anything else. The
+  streaming view follows the renderer's choice of mesh, material and textures: entities with a mesh, material or texture
+  still loading are tinted in the pending color, failed ones in the failed color, and entities whose mesh is not there
+  (nothing is drawn, so nothing can be tinted) get a placeholder box of the mesh's recorded bounds, or a unit box without
+  them (at most `c_MaxPlaceholderBoxes`). The LOD view tints each entity by the most simplified level its submeshes are
+  drawn at (`LODSelection`, with the viewport renderer's threshold). The colors are `ViewportSettings::DebugColors`,
+  which the UI sets from the theme (not saved).
   Picking reads one pixel of the entity-ID buffer asynchronously and completes in `EditorContext::Update`.
   `viewport.capture` renders on the next frame (with its own `debugView` if given), polls a `TextureReadback`, encodes
   the PNG on a worker and saves on an I/O thread (`EditorViewportCommands.cpp`).

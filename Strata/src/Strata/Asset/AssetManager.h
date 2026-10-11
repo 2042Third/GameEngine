@@ -245,6 +245,11 @@ namespace Strata
 		// the queued request to this priority). During a hot reload the previous version is returned until the new one is
 		// ready.
 		Ref<Asset> GetAsset(AssetHandle handle, AssetPriority priority = AssetPriority::Normal);
+		// The loaded object (the previous version during a reload), or null, without requesting anything: no load starts and
+		// the asset does not count as used (residency's recency order and GetAssetCalls stay as they are). For tools that
+		// observe streaming without changing it, such as the editor's debug views; code that draws or plays an asset requests
+		// it (GetAsset). Do not keep the result across frames.
+		Ref<Asset> PeekLoadedAsset(AssetHandle handle) const;
 		// Loads synchronously. Main thread only (finalization runs here); meant for tools, tests and loading screens,
 		// not for per-frame game code. Returns null if the asset fails to load. Must not be called from
 		// Asset::FinalizeOnMainThread.
@@ -632,6 +637,19 @@ namespace Strata
 			if (!manager || !handle.IsValid())
 				return nullptr;
 			Ref<Asset> asset = manager->GetAsset(handle, priority);
+			if (!asset || asset->GetType() != T::GetStaticType())
+				return nullptr;
+			return std::static_pointer_cast<T>(asset);
+		}
+
+		// AssetManagerBase::PeekLoadedAsset of the active manager, of type T.
+		template<typename T>
+		static Ref<T> PeekLoadedAsset(AssetHandle handle)
+		{
+			const Ref<AssetManagerBase>& manager = GetActive();
+			if (!manager || !handle.IsValid())
+				return nullptr;
+			Ref<Asset> asset = manager->PeekLoadedAsset(handle);
 			if (!asset || asset->GetType() != T::GetStaticType())
 				return nullptr;
 			return std::static_pointer_cast<T>(asset);

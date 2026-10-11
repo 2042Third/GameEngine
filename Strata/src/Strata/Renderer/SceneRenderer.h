@@ -169,7 +169,7 @@ namespace Strata
 
 		// The render scene (RenderScene) and what the frame cost.
 		uint32_t VisibleProxies = 0;         // Mesh renderers whose bounds intersect the view frustum
-		uint32_t ProxyUpdates = 0;           // Render proxies updated for this frame (changed components, transforms, mesh layouts)
+		uint32_t ProxyUpdates = 0;           // Render proxies updated since this renderer's previous frame (changed components, transforms, mesh layouts)
 		uint64_t InstanceBytesUploaded = 0;  // Instance data and draw lists uploaded this frame (nothing when nothing changed)
 		uint32_t InstanceUploadRanges = 0;   // Separate ranges of instance data uploaded
 		uint64_t MaterialBytesUploaded = 0;  // Material data uploaded this frame (only materials whose data changed)
@@ -637,6 +637,8 @@ namespace Strata
 		// Extraction (see SceneRendererExtraction.cpp). Slots are those of the render scene the state belongs to.
 		AssetResolveCache m_Assets;     // Holds the frame's meshes, materials and textures while the frame is rendered
 		uint64_t m_RenderSceneId = 0;   // The render scene the per-slot state and the GPU copies below belong to
+		uint64_t m_ProxyUpdatesScene = 0; // The render scene whose RenderSceneStats::TotalUpdates this renderer saw last
+		uint64_t m_ProxyUpdatesSeen = 0;
 		bool m_FullUpload = true;       // The GPU copies hold nothing of that render scene yet
 		uint64_t m_UploadedInstanceVersion = 0;
 		uint32_t m_FrameStamp = 0;

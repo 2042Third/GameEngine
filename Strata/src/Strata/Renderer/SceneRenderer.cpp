@@ -1524,7 +1524,13 @@ namespace Strata
 		{
 			// Following the scene's changes is the first part of extraction, like the culling and gathering below.
 			ST_PROFILE_STAGE("Render.Extract");
-			m_Stats.ProxyUpdates = renderScene.Sync(assets);
+			// Another user of the render scene (a second renderer, the editor's debug views) may have synced it already: the
+			// stat counts the updates since this renderer's previous frame.
+			renderScene.Sync(assets);
+			const uint64_t totalUpdates = renderScene.GetStats().TotalUpdates;
+			m_Stats.ProxyUpdates = static_cast<uint32_t>(totalUpdates - (m_ProxyUpdatesScene == renderScene.GetId() ? m_ProxyUpdatesSeen : 0));
+			m_ProxyUpdatesScene = renderScene.GetId();
+			m_ProxyUpdatesSeen = totalUpdates;
 			m_Assets.BeginFrame(assets);
 			PrepareExtraction(renderScene);
 		}

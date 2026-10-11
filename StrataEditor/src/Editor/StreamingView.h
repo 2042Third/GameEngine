@@ -17,6 +17,7 @@
 namespace Strata
 {
 
+	class RenderScene;
 	class Scene;
 
 	// What the viewport shows: the scene as rendered, or colored by what the streaming pillars do to it.
@@ -58,10 +59,12 @@ namespace Strata
 	};
 
 	// Builds what a debug view draws over the viewport image for one frame: SceneRenderOptions::EntityTints (the drawn
-	// entities' colors) and, in the streaming view, placeholder boxes for entities whose mesh is not there to draw. Reads
-	// the active asset manager's states without requesting loads (asset objects are only read once they are Ready), with
-	// the same choice of mesh, material and textures as SceneRenderer, and the level of detail it draws
-	// (LODSelection::SelectLOD). Main thread only.
+	// entities' colors) and, in the streaming view, placeholder boxes for entities whose mesh is not there to draw. Works on
+	// the scene's render proxies (RenderScene): the entities the renderer finds in the view, culled with the bounds it culls
+	// with (a mesh's own, else those the asset pipeline recorded for it), with the same choice of mesh, material and
+	// textures, and the level of detail it draws (LODSelection::SelectLOD). It observes streaming without changing it: asset
+	// states are read and loaded objects peeked at (AssetManagerBase::PeekLoadedAsset), so no load starts and nothing counts
+	// as used, and an asset only the view looks at is evicted like any other. Main thread only.
 	class StreamingView
 	{
 	public:
@@ -80,20 +83,24 @@ namespace Strata
 			Ready = 0,
 			Pending,
 			Failed,
-			Unknown // Not registered: the renderer ignores it (fallbacks), it never arrives
+			Unknown, // Not registered: the renderer ignores it (fallbacks), it never arrives
+			NotLookedUp
 		};
 
 		AssetStatus GetStatus(AssetHandle handle);
 		// The worst status of a material and the textures it uses.
-		AssetStatus GetMaterialStatus(AssetHandle material);
-		void BuildStreaming(Scene& scene, const SceneCamera& camera, const ViewportDebugColors& colors, DebugDraw& placeholders);
-		void BuildLOD(Scene& scene, const SceneCamera& camera, float lodThreshold, const ViewportDebugColors& colors);
+		AssetStatus GetMaterialStatus(const RenderScene& renderScene, uint32_t materialSlot);
+		void BuildStreaming(Scene& scene, const RenderScene& renderScene, const ViewportDebugColors& colors, DebugDraw& placeholders);
+		void BuildLOD(Scene& scene, const RenderScene& renderScene, const SceneCamera& camera, float lodThreshold, const ViewportDebugColors& colors);
 	private:
 		std::vector<SceneEntityTint> m_Tints;
 		StreamingViewStats m_Stats;
-		// Per Build: each asset's status and each material's (with its textures), looked up once.
-		std::unordered_map<AssetHandle, AssetStatus> m_Statuses;
-		std::unordered_map<AssetHandle, AssetStatus> m_MaterialStatuses;
+		// Per Build: the proxies in view, and each mesh's and material's status (a material's with its textures), looked up
+		// once per slot of the render scene.
+		std::vector<uint32_t> m_Visible;
+		std::vector<AssetStatus> m_MeshStatuses;
+		std::vector<AssetStatus> m_MaterialStatuses;
+		std::unordered_map<AssetHandle, AssetStatus> m_TextureStatuses;
 	};
 
 }
