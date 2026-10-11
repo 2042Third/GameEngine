@@ -1147,11 +1147,12 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   pointers.
 - **Batching**. Draws are gathered in chunks of 2,048 proxies on the job system and merged in chunk order (the same
   result on any number of threads), then sorted with a stable radix sort (`Core/RadixSort.h`) of 64-bit keys: cascade,
-  alpha mask, winding, culling, mesh slot, submesh and level of detail. The material is not in the key, so the
-  instances of a mesh share a draw call whatever their materials: shaders read `u_Materials[instance.MaterialIndex]`
-  (`SceneRendererSpecification::BatchAcrossMaterials` off splits batches by material, for comparisons). Transparent
-  surfaces stay one draw each, back to front. Material data (by slot) is built every frame for the materials drawn
-  and uploaded where it changed.
+  alpha mask, winding, culling, mesh slot, submesh and level of detail. The sort reads the keys once to find the bytes
+  that differ and spends passes and histograms on those only (draws of one mesh share a key: nothing to sort). The
+  material is not in the key, so the instances of a mesh share a draw call whatever their materials: shaders read
+  `u_Materials[instance.MaterialIndex]` (`SceneRendererSpecification::BatchAcrossMaterials` off splits batches by
+  material, for comparisons). Transparent surfaces stay one draw each, back to front. Material data (by slot) is built
+  every frame for the materials drawn and uploaded where it changed.
 - **A still frame** updates no proxy and uploads no instance, material or draw list (`SceneRendererStats::ProxyUpdates`,
   `InstanceBytesUploaded`, `MaterialBytesUploaded`). Each frame publishes the materials it drew with their largest size
   on screen and texture tiling (`GetVisibleMaterials`, for mip streaming) and its counts and times (`VisibleProxies`,

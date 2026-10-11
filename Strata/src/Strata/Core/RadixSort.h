@@ -16,8 +16,9 @@ namespace Strata
 	static_assert(sizeof(SortItem) == 16);
 
 	// Sorts items by key, keeping the order of items with equal keys (stable): least significant digit first, a byte per
-	// pass. Bytes that are equal in every key are skipped, so keys that differ in a few bytes cost a few passes. `scratch`
-	// keeps its capacity for later calls.
+	// pass. Bytes that are equal in every key get neither a pass nor a histogram, so keys that differ in a few bytes cost a
+	// few passes, and keys that are all equal one read of the items (they stay in place). `scratch` keeps its capacity for
+	// later calls.
 	void RadixSort(std::vector<SortItem>& items, std::vector<SortItem>& scratch);
 
 }

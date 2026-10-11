@@ -42,6 +42,22 @@ TEST_SUITE("Core.RadixSort")
 		}
 	}
 
+	TEST_CASE("Items whose keys are all equal are left in place without a pass")
+	{
+		// Draws of one mesh and material share their key: their order is already the sorted one, and the sort neither moves
+		// nor copies them (the scratch list is not even sized).
+		std::vector<SortItem> items(10'000);
+		for (uint32_t index = 0; index < items.size(); index++)
+			items[index] = SortItem { 0x0123456789ABCDEFull, index, 0 };
+		const SortItem* data = items.data();
+		std::vector<SortItem> scratch;
+		RadixSort(items, scratch);
+		CHECK(items.data() == data);
+		CHECK(scratch.empty());
+		for (uint32_t index = 0; index < items.size(); index++)
+			REQUIRE(items[index].Value == index);
+	}
+
 	TEST_CASE("Empty and single-item lists are left alone")
 	{
 		std::vector<SortItem> scratch;

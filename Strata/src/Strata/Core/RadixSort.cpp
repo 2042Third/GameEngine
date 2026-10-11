@@ -17,24 +17,38 @@ namespace Strata
 			return;
 		ST_CORE_ASSERT(count <= std::numeric_limits<uint32_t>::max(), "RadixSort: {} items are more than its 32-bit counters hold", count);
 
-		// The histograms of every byte in one pass over the keys.
-		std::array<std::array<uint32_t, 256>, 8> histograms = {};
+		// The bits in which some key differs from the first: a byte without any needs no pass, and no histogram either.
+		// Draw keys differ in a byte or two (the cascade, the mesh), or not at all.
+		const uint64_t first = items[0].Key;
+		uint64_t differing = 0;
+		for (const SortItem& item : items)
+			differing |= item.Key ^ first;
+		if (differing == 0)
+			return;
+		std::array<uint32_t, 8> shifts = {};
+		uint32_t passes = 0;
+		for (uint32_t byte = 0; byte < 8; byte++)
+		{
+			if (((differing >> (byte * 8)) & 0xFF) != 0)
+				shifts[passes++] = byte * 8;
+		}
+
+		// The histograms of the bytes that differ, in one pass over the keys.
+		std::array<std::array<uint32_t, 256>, 8> histograms;
+		for (uint32_t pass = 0; pass < passes; pass++)
+			histograms[pass].fill(0);
 		for (const SortItem& item : items)
 		{
-			for (uint32_t byte = 0; byte < 8; byte++)
-				histograms[byte][(item.Key >> (byte * 8)) & 0xFF]++;
+			for (uint32_t pass = 0; pass < passes; pass++)
+				histograms[pass][(item.Key >> shifts[pass]) & 0xFF]++;
 		}
 
 		scratch.resize(count);
 		std::vector<SortItem>* source = &items;
 		std::vector<SortItem>* destination = &scratch;
-		for (uint32_t byte = 0; byte < 8; byte++)
+		for (uint32_t pass = 0; pass < passes; pass++)
 		{
-			std::array<uint32_t, 256>& histogram = histograms[byte];
-			// Every key has the same value in this byte: the pass would not move anything.
-			if (histogram[((*source)[0].Key >> (byte * 8)) & 0xFF] == count)
-				continue;
-
+			std::array<uint32_t, 256>& histogram = histograms[pass];
 			uint32_t offset = 0;
 			for (uint32_t& bucket : histogram)
 			{
@@ -42,8 +56,9 @@ namespace Strata
 				bucket = offset;
 				offset += size;
 			}
+			const uint32_t shift = shifts[pass];
 			for (const SortItem& item : *source)
-				(*destination)[histogram[(item.Key >> (byte * 8)) & 0xFF]++] = item;
+				(*destination)[histogram[(item.Key >> shift) & 0xFF]++] = item;
 			std::swap(source, destination);
 		}
 		if (source != &items)
