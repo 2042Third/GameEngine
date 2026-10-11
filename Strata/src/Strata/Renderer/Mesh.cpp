@@ -16,6 +16,9 @@ namespace Strata
 		constexpr uint32_t c_MeshMagic = 0x484D5453; // "STMH"
 		constexpr uint64_t c_MaxVertices = 1ull << 28;
 		constexpr uint64_t c_MaxIndices = 1ull << 30;
+		// Vertex attributes from this size on are freed within the finalization deadline (freeing tens of megabytes takes
+		// milliseconds), like textures' CPU copies.
+		constexpr uint64_t c_TimedReleaseBytes = 1ull << 20;
 
 		struct CookedMeshHeader
 		{
@@ -125,6 +128,7 @@ namespace Strata
 
 	std::vector<uint8_t> Mesh::Serialize() const
 	{
+		ST_CORE_ASSERT(m_Attributes.size() == m_Positions.size(), "Mesh::Serialize after the upload released the vertex attributes");
 		BinaryWriter writer;
 		writer.Write(CookedMeshHeader { c_MeshMagic, c_CookedVersion, static_cast<uint32_t>(m_Submeshes.size()), 0 });
 		writer.WriteArray(std::span<const glm::vec3>(m_Positions));
@@ -209,23 +213,42 @@ namespace Strata
 		}
 
 		// The streams upload one after the other, as one run of bytes cut into steps; the first step of a call is taken whatever
-		// the upload budget says, the first step of the frame's first call whatever the deadline says too.
+		// the upload budget says, the first step of the frame's first call whatever the deadline says too. Steps go through
+		// staging buffers of the renderer's pool, within the staging budget like texture bands (the frame's first step also
+		// when the staging in flight leaves no room), so a mesh's upload never holds more staging than the budget allows.
 		const std::array<UploadRange, 3> ranges = { {
 			{ m_PositionBuffer, reinterpret_cast<const uint8_t*>(m_Positions.data()), positionBytes },
 			{ m_AttributeBuffer, reinterpret_cast<const uint8_t*>(m_Attributes.data()), attributeBytes },
 			{ m_IndexBuffer, reinterpret_cast<const uint8_t*>(m_Indices.data()), indexBytes }
 		} };
+		nvrhi::IDevice* device = Renderer::GetDevice();
+		StagingPool& stagingPool = Renderer::GetStagingPool();
+		const bool framesFirstCall = !context.UploadedBytes || *context.UploadedBytes == 0;
 		const uint64_t totalBytes = positionBytes + attributeBytes + indexBytes;
 		uint64_t uploaded = 0;
 		bool firstStep = true;
 		while (m_UploadOffset < totalBytes)
 		{
 			const uint64_t stepBytes = std::min(c_AssetUploadStepBytes, totalBytes - m_UploadOffset);
+			if (!(firstStep && framesFirstCall) && !stagingPool.HasRoomFor(StagingPool::GetBufferByteSize(stepBytes), context.StagingBytes))
+				break;
 			const bool overBudget = !firstStep && uploaded + stepBytes > context.UploadBudget;
 			const bool overTime = !(firstStep && context.FirstOfFrame) && std::chrono::steady_clock::now() >= context.Deadline;
 			if (overBudget || overTime)
 				break;
-			// A step may span streams: one write per stream it covers.
+
+			nvrhi::BufferHandle staging = stagingPool.AcquireBuffer(stepBytes, context.StagingBytes);
+			auto* destination = staging ? static_cast<uint8_t*>(device->mapBuffer(staging, nvrhi::CpuAccessMode::Write)) : nullptr;
+			if (!destination)
+			{
+				ST_CORE_ERROR("Mesh: no staging memory for its upload");
+				stagingPool.Release(std::move(staging));
+				m_PositionBuffer = nullptr;
+				m_AttributeBuffer = nullptr;
+				m_IndexBuffer = nullptr;
+				return AssetFinalizeResult::Failed;
+			}
+			// A step may span streams: one copy per stream it covers, from consecutive bytes of the staging buffer.
 			const uint64_t stepEnd = m_UploadOffset + stepBytes;
 			uint64_t rangeStart = 0;
 			for (const UploadRange& range : ranges)
@@ -234,12 +257,21 @@ namespace Strata
 				const uint64_t writeBegin = std::max(m_UploadOffset, rangeStart);
 				const uint64_t writeEnd = std::min(stepEnd, rangeEnd);
 				if (writeBegin < writeEnd)
-				{
-					const uint64_t offsetInRange = writeBegin - rangeStart;
-					commandList->writeBuffer(range.Buffer, range.Data + offsetInRange, static_cast<size_t>(writeEnd - writeBegin), offsetInRange);
-				}
+					std::memcpy(destination + (writeBegin - m_UploadOffset), range.Data + (writeBegin - rangeStart), static_cast<size_t>(writeEnd - writeBegin));
 				rangeStart = rangeEnd;
 			}
+			device->unmapBuffer(staging);
+			rangeStart = 0;
+			for (const UploadRange& range : ranges)
+			{
+				const uint64_t rangeEnd = rangeStart + range.Size;
+				const uint64_t writeBegin = std::max(m_UploadOffset, rangeStart);
+				const uint64_t writeEnd = std::min(stepEnd, rangeEnd);
+				if (writeBegin < writeEnd)
+					commandList->copyBuffer(range.Buffer, writeBegin - rangeStart, staging, writeBegin - m_UploadOffset, writeEnd - writeBegin);
+				rangeStart = rangeEnd;
+			}
+			stagingPool.Release(std::move(staging));
 			m_UploadOffset = stepEnd;
 			uploaded += stepBytes;
 			firstStep = false;
@@ -248,6 +280,13 @@ namespace Strata
 			*context.UploadedBytes += uploaded;
 		if (m_UploadOffset < totalBytes)
 			return AssetFinalizeResult::Pending;
+
+		// Only shading reads the vertex attributes, from the GPU: their CPU copy goes (the terrain of the stress world held
+		// 9.4 MB of them). Physics keeps reading positions and indices (AssetMeshProvider). Freeing a large copy hands its
+		// pages back to the system, which takes a while: when the steps above ran past the deadline, it is the next call's.
+		if (!firstStep && attributeBytes >= c_TimedReleaseBytes && std::chrono::steady_clock::now() >= context.Deadline)
+			return AssetFinalizeResult::Pending;
+		std::vector<MeshVertexAttributes>().swap(m_Attributes);
 		m_Uploaded = true;
 		return AssetFinalizeResult::Done;
 	}
@@ -269,10 +308,14 @@ namespace Strata
 	AssetMemoryUsage Mesh::GetFinalizedMemoryUsage() const
 	{
 		AssetMemoryUsage usage = GetMemoryUsage();
-		if (Renderer::IsInitialized() && !m_IndexBuffer)
+		if (Renderer::IsInitialized())
 		{
-			for (size_t bytes : { m_Positions.size() * sizeof(glm::vec3), m_Attributes.size() * sizeof(MeshVertexAttributes), m_Indices.size() * sizeof(uint32_t) })
-				usage.GpuBuffers += GetStaticBufferSize(bytes);
+			if (!m_IndexBuffer)
+			{
+				for (size_t bytes : { m_Positions.size() * sizeof(glm::vec3), m_Attributes.size() * sizeof(MeshVertexAttributes), m_Indices.size() * sizeof(uint32_t) })
+					usage.GpuBuffers += GetStaticBufferSize(bytes);
+			}
+			usage.Cpu -= m_Attributes.size() * sizeof(MeshVertexAttributes); // The upload releases them
 		}
 		return usage;
 	}

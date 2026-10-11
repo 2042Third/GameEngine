@@ -35,7 +35,10 @@ namespace Strata
 		constexpr nvrhi::Format c_HDRFormat = nvrhi::Format::RGBA16_FLOAT;
 		constexpr nvrhi::Format c_OutputFormat = nvrhi::Format::RGBA8_UNORM;
 		constexpr nvrhi::Format c_EnvironmentFormat = nvrhi::Format::RGBA16_FLOAT;
-		constexpr nvrhi::Format c_AOFormat = nvrhi::Format::R32_FLOAT; // r32f storage needs no optional device feature
+		// Ambient occlusion lies in [0, 1]: half precision holds it, where the device can store r16f images (an optional
+		// feature); r32f storage needs none.
+		constexpr nvrhi::Format c_AOFormat = nvrhi::Format::R16_FLOAT;
+		constexpr nvrhi::Format c_AOFallbackFormat = nvrhi::Format::R32_FLOAT;
 
 		constexpr uint32_t c_EnvironmentCubeSize = 512;
 		constexpr uint32_t c_IrradianceSize = 32;
@@ -216,7 +219,7 @@ namespace Strata
 	{
 		ShaderLibrary& shaders = Renderer::GetShaderLibrary();
 		m_MeshVertexShader = shaders.Get("Scene/Mesh.vert");
-		m_PrepassPixelShader = shaders.Get("Scene/DepthPrepass.frag");
+		m_PrepassPixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/DepthPrepass.frag" : "Scene/DepthPrepassNoEntityIDs.frag");
 		m_ForwardPixelShader = shaders.Get("Scene/Forward.frag");
 		m_ForwardTransparentPixelShader = shaders.Get("Scene/ForwardTransparent.frag");
 		m_FullscreenVertexShader = shaders.Get("PostProcess/Fullscreen.vert");
@@ -391,8 +394,10 @@ namespace Strata
 			ST_CORE_VERIFY(desc.CS, "SceneRenderer: shader {} is missing", name);
 			return m_Device->createComputePipeline(desc);
 		};
-		m_GTAOPipeline = createComputePipeline("Effects/GTAO.comp", m_AOBindingLayout);
-		m_AOBlurPipeline = createComputePipeline("Effects/AOBlur.comp", m_AOBindingLayout);
+		const bool halfAO = Renderer::GetGraphicsDevice().GetInfo().SupportsExtendedStorageFormats;
+		m_AOFormat = halfAO ? c_AOFormat : c_AOFallbackFormat;
+		m_GTAOPipeline = createComputePipeline(halfAO ? "Effects/GTAOHalf.comp" : "Effects/GTAO.comp", m_AOBindingLayout);
+		m_AOBlurPipeline = createComputePipeline(halfAO ? "Effects/AOBlurHalf.comp" : "Effects/AOBlur.comp", m_AOBindingLayout);
 		m_ClusterPipeline = createComputePipeline("Scene/LightClusters.comp", m_ClusterBindingLayout);
 
 		nvrhi::BindingLayoutDesc exposureLayout;
@@ -1051,9 +1056,9 @@ namespace Strata
 
 		m_DepthTexture = CreateRenderTarget(m_Device, width, height, c_DepthFormat, name + ".Depth", true);
 		m_NormalTexture = CreateRenderTarget(m_Device, width, height, c_NormalFormat, name + ".Normals", false);
-		m_EntityIDTexture = CreateRenderTarget(m_Device, width, height, c_EntityIDFormat, name + ".EntityIDs", false);
+		if (m_Specification.EntityIDs)
+			m_EntityIDTexture = CreateRenderTarget(m_Device, width, height, c_EntityIDFormat, name + ".EntityIDs", false);
 		m_HDRTexture = CreateRenderTarget(m_Device, width, height, c_HDRFormat, name + ".HDR", false);
-		m_OutputTexture = CreateRenderTarget(m_Device, width, height, c_OutputFormat, name + ".Output", false);
 		// Tone mapping writes here when FXAA follows.
 		m_LDRTexture = CreateRenderTarget(m_Device, width, height, c_OutputFormat, name + ".LDR", false);
 		auto createStorage = [&](const std::string& debugName)
@@ -1061,7 +1066,7 @@ namespace Strata
 			nvrhi::TextureDesc desc;
 			desc.width = width;
 			desc.height = height;
-			desc.format = c_AOFormat;
+			desc.format = m_AOFormat;
 			desc.isUAV = true;
 			desc.debugName = debugName;
 			desc.initialState = nvrhi::ResourceStates::ShaderResource;
@@ -1070,7 +1075,8 @@ namespace Strata
 		};
 		m_AORawTexture = createStorage(name + ".AORaw");
 		m_AOTexture = createStorage(name + ".AO");
-		if (!m_DepthTexture || !m_NormalTexture || !m_EntityIDTexture || !m_HDRTexture || !m_OutputTexture || !m_LDRTexture || !m_AORawTexture || !m_AOTexture)
+		if (!m_DepthTexture || !m_NormalTexture || (m_Specification.EntityIDs && !m_EntityIDTexture) || !m_HDRTexture || !m_LDRTexture || !m_AORawTexture
+			|| !m_AOTexture)
 			return fail("render targets");
 
 		auto createAOSet = [&](nvrhi::ITexture* input, nvrhi::ITexture* output)
@@ -1090,16 +1096,17 @@ namespace Strata
 		m_GTAOBindingSet = createAOSet(m_AOTexture, m_AORawTexture);
 		m_AOBlurBindingSet = createAOSet(m_AORawTexture, m_AOTexture);
 
-		m_PrepassFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc()
-			.addColorAttachment(m_NormalTexture)
-			.addColorAttachment(m_EntityIDTexture)
-			.setDepthAttachment(m_DepthTexture));
+		nvrhi::FramebufferDesc prepassDesc;
+		prepassDesc.addColorAttachment(m_NormalTexture);
+		if (m_EntityIDTexture)
+			prepassDesc.addColorAttachment(m_EntityIDTexture);
+		prepassDesc.setDepthAttachment(m_DepthTexture);
+		m_PrepassFramebuffer = m_Device->createFramebuffer(prepassDesc);
 		m_ForwardFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc()
 			.addColorAttachment(m_HDRTexture)
 			.setDepthAttachment(m_DepthTexture));
-		m_OutputFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(m_OutputTexture));
 		m_LDRFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(m_LDRTexture));
-		if (!m_GTAOBindingSet || !m_AOBlurBindingSet || !m_PrepassFramebuffer || !m_ForwardFramebuffer || !m_OutputFramebuffer || !m_LDRFramebuffer)
+		if (!m_GTAOBindingSet || !m_AOBlurBindingSet || !m_PrepassFramebuffer || !m_ForwardFramebuffer || !m_LDRFramebuffer)
 			return fail("framebuffers");
 
 		// Automatic exposure meters the HDR image.
@@ -1173,16 +1180,39 @@ namespace Strata
 		m_FXAABindingSet = m_Device->createBindingSet(fxaaSet, m_FXAABindingLayout);
 		if (!m_TonemapBindingSet || !m_FXAABindingSet)
 			return fail("post-processing bindings");
+		return true;
+	}
 
+	bool SceneRenderer::EnsureOutputTarget()
+	{
+		if (m_OutputTexture)
+			return true;
+
+		const uint32_t width = m_ViewportSize.x;
+		const uint32_t height = m_ViewportSize.y;
+		nvrhi::TextureHandle output = CreateRenderTarget(m_Device, width, height, c_OutputFormat, m_Specification.DebugName + ".Output", false);
+		nvrhi::FramebufferHandle outputFramebuffer = output ? m_Device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(output)) : nullptr;
 		// Overlays are drawn into the output texture, tested against the scene depth (which they never change).
-		m_OverlayFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc()
-			.addColorAttachment(m_OutputTexture)
-			.setDepthAttachment(nvrhi::FramebufferAttachment().setTexture(m_DepthTexture).setReadOnly(true)));
-		nvrhi::BindingSetDesc copySet;
-		copySet.bindings = { nvrhi::BindingSetItem::Texture_SRV(0, m_OutputTexture), nvrhi::BindingSetItem::Sampler(0, m_PointClampSampler) };
-		m_CopyBindingSet = m_Device->createBindingSet(copySet, m_FXAABindingLayout);
-		if (!m_OverlayFramebuffer || !m_CopyBindingSet)
-			return fail("overlay targets");
+		nvrhi::FramebufferHandle overlayFramebuffer = output ? m_Device->createFramebuffer(nvrhi::FramebufferDesc()
+			.addColorAttachment(output)
+			.setDepthAttachment(nvrhi::FramebufferAttachment().setTexture(m_DepthTexture).setReadOnly(true))) : nullptr;
+		nvrhi::BindingSetHandle copyBindingSet;
+		if (output)
+		{
+			nvrhi::BindingSetDesc copySet;
+			copySet.bindings = { nvrhi::BindingSetItem::Texture_SRV(0, output), nvrhi::BindingSetItem::Sampler(0, m_PointClampSampler) };
+			copyBindingSet = m_Device->createBindingSet(copySet, m_FXAABindingLayout);
+		}
+		if (!output || !outputFramebuffer || !overlayFramebuffer || !copyBindingSet)
+		{
+			// Nothing used them yet: they go with their handles.
+			m_Errors.Report(fmt::format("failed to create the output texture for a {}x{} viewport", width, height));
+			return false;
+		}
+		m_OutputTexture = std::move(output);
+		m_OutputFramebuffer = std::move(outputFramebuffer);
+		m_OverlayFramebuffer = std::move(overlayFramebuffer);
+		m_CopyBindingSet = std::move(copyBindingSet);
 		return true;
 	}
 
@@ -1631,7 +1661,8 @@ namespace Strata
 		const glm::vec4 clear = camera.ClearColor;
 		commandList->clearDepthStencilTexture(m_DepthTexture, nvrhi::AllSubresources, true, 0.0f, false, 0);
 		commandList->clearTextureFloat(m_NormalTexture, nvrhi::AllSubresources, nvrhi::Color(0.0f));
-		commandList->clearTextureUInt(m_EntityIDTexture, nvrhi::AllSubresources, 0);
+		if (m_EntityIDTexture)
+			commandList->clearTextureUInt(m_EntityIDTexture, nvrhi::AllSubresources, 0);
 		commandList->clearTextureFloat(m_HDRTexture, nvrhi::AllSubresources, nvrhi::Color(SRGBToLinear(clear.r), SRGBToLinear(clear.g), SRGBToLinear(clear.b), 1.0f));
 
 		commandList->beginMarker("Prepass");
@@ -1712,8 +1743,18 @@ namespace Strata
 		m_Stats.PrefetchRequests = assetStats.Prefetched;
 		m_Stats.GetAssetCalls = assetStats.GetAssetCalls;
 
-		// Overlays (and text) are composed in the output texture, which is then copied into the target.
+		// Overlays (and text) are composed in the output texture, which is then copied into the target. Without a target or
+		// anything to compose, the frame needs no output texture: renderers that only render into targets (games without
+		// text) never allocate one.
 		const bool overlays = HasOverlays(options) || text;
+		if ((!target || overlays) && !EnsureOutputTarget())
+		{
+			commandList->endMarker();
+			commandList->close();
+			m_Device->executeCommandList(commandList); // Keeps the uploads that were recorded
+			m_Stats = {};
+			return false;
+		}
 		nvrhi::IFramebuffer* output = target && !overlays ? target : m_OutputFramebuffer.Get();
 		auto drawFullscreen = [&](nvrhi::IGraphicsPipeline* pipeline, nvrhi::IFramebuffer* framebuffer, nvrhi::IBindingSet* bindingSet, const void* pushConstants,
 			size_t pushConstantSize)
@@ -1940,8 +1981,18 @@ namespace Strata
 		}
 		const nvrhi::Viewport viewport(static_cast<float>(m_ViewportSize.x), static_cast<float>(m_ViewportSize.y));
 
+		// Tints and the selection outline read the entity-ID buffer: without one (SceneRendererSpecification::EntityIDs) they
+		// are left out, and the other overlays drawn.
+		const bool entityIDs = m_EntityIDTexture != nullptr;
+		bool complete = true;
+		if (!entityIDs && (!options.EntityTints.empty() || !options.SelectedEntities.empty()))
+		{
+			m_Errors.Report("selection outlines and entity tints need the entity-ID buffer, which this renderer does not write");
+			complete = false;
+		}
+
 		// Tints color the scene itself: the other overlays go over them.
-		if (!options.EntityTints.empty() && !DrawEntityTints(commandList, scene, options.EntityTints, viewport))
+		if (entityIDs && !options.EntityTints.empty() && !DrawEntityTints(commandList, scene, options.EntityTints, viewport))
 			return false;
 
 		if (options.ShowGrid)
@@ -2007,7 +2058,7 @@ namespace Strata
 			m_SelectionIDs.erase(std::unique(m_SelectionIDs.begin(), m_SelectionIDs.end()), m_SelectionIDs.end());
 			m_SelectionUploaded = false;
 		}
-		if (!m_SelectionIDs.empty())
+		if (entityIDs && !m_SelectionIDs.empty())
 		{
 			bool recreated = false;
 			if (!EnsureBufferCapacity(m_SelectionBuffer, m_SelectionIDs.size(), sizeof(uint32_t), "Selection", recreated))
@@ -2052,7 +2103,7 @@ namespace Strata
 			DrawDebugLines(commandList, DebugDrawDepth::OnTop, testedVertices, onTopVertices);
 		if (drawText)
 			m_TextRenderer->Draw(commandList, m_OverlayFramebuffer, true); // The HUD goes over everything
-		return true;
+		return complete;
 	}
 
 	Entity SceneRenderer::GetEntityAt(Scene& scene, uint32_t x, uint32_t y)

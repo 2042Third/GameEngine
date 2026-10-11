@@ -548,6 +548,7 @@ namespace Strata
 			m_Info.IsDiscreteGPU = properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
 			m_Info.SupportsBCCompression = features.features.textureCompressionBC == VK_TRUE;
 			m_Info.SupportsWireframe = features.features.fillModeNonSolid == VK_TRUE;
+			m_Info.SupportsExtendedStorageFormats = features.features.shaderStorageImageExtendedFormats == VK_TRUE;
 			m_Info.MaxTextureDimension2D = properties.limits.maxImageDimension2D;
 			m_ApiVersion = deviceApiVersion;
 
@@ -623,6 +624,7 @@ namespace Strata
 		enabled.features.fragmentStoresAndAtomics = core.fragmentStoresAndAtomics;
 		enabled.features.shaderStorageImageReadWithoutFormat = core.shaderStorageImageReadWithoutFormat;
 		enabled.features.shaderStorageImageWriteWithoutFormat = core.shaderStorageImageWriteWithoutFormat;
+		enabled.features.shaderStorageImageExtendedFormats = core.shaderStorageImageExtendedFormats;
 		enabled.features.shaderInt16 = core.shaderInt16;
 
 		VkPhysicalDeviceVulkan12Features enabled12 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };

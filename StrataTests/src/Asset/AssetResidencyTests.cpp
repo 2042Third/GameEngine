@@ -68,7 +68,7 @@ TEST_SUITE("Asset.Residency")
 		CHECK(unlimited.InFlightBytes == 128 * c_MB);
 		CHECK(unlimited.UploadBytesPerFrame == 64 * c_MB);
 		CHECK(unlimited.FinalizeMsPerFrame == doctest::Approx(4.0f));
-		CHECK(unlimited.StagingBytes == 64 * c_MB);
+		CHECK(unlimited.StagingBytes == 32 * c_MB);
 
 		const AssetResidencyBudgets device = AssetResidencyBudgets::FromDeviceBudget(8000 * c_MB);
 		CHECK(device.GpuTextures == 4000 * c_MB);

@@ -45,6 +45,7 @@ namespace Strata::Tests
 	{
 		std::filesystem::path Directory;   // Holds Stress.stproj and Assets/
 		AssetHandle WorldScene = UUID::Null();
+		AssetHandle TopDownScene = UUID::Null(); // Only once WriteStressTopDownScene wrote it
 		AssetHandle GridModel = UUID::Null();
 		AssetHandle GridMesh = UUID::Null(); // The model's mesh (sub-asset), drawn as the terrain
 		std::vector<AssetHandle> Textures;   // The small textures, then the large ones
@@ -58,6 +59,11 @@ namespace Strata::Tests
 	// (start scene) and the project file, every asset with its .meta. Nothing is imported. nullopt with the reason in
 	// error on failure.
 	std::optional<StressProject> WriteStressProject(const std::filesystem::path& directory, const StressProjectSpec& spec, std::string& error);
+	// Adds the scene 'TopDown' to a project WriteStressProject wrote, before it is imported: the world scene with its camera
+	// high above the center looking straight down, so the whole world is in view and the material of every district,
+	// hence every texture, is requested (the world scene's overview camera shows about two thirds of the textures). Sets
+	// project.TopDownScene; false with the reason in error on failure.
+	bool WriteStressTopDownScene(StressProject& project, const StressProjectSpec& spec, std::string& error);
 
 	// Imports the project like the editor does (EditorAssetManager::Scan, in parallel when the job system runs) and returns
 	// its asset manager; null when an asset does not import cleanly (an error, or a warning), with the reason in error.

@@ -40,7 +40,8 @@ namespace Strata
 	};
 
 	// Indexed triangle mesh asset with one or more submeshes (one per material) and optional LOD levels. Front faces
-	// are counter-clockwise. CPU geometry stays available after upload (physics colliders, picking).
+	// are counter-clockwise. Positions and indices stay on the CPU after upload (physics colliders read them); the vertex
+	// attributes, which only shading reads, live on the GPU alone once uploaded.
 	class Mesh : public Asset
 	{
 	public:
@@ -50,21 +51,26 @@ namespace Strata
 		static Ref<Mesh> Create(std::vector<glm::vec3> positions, std::vector<MeshVertexAttributes> attributes, std::vector<uint32_t> indices,
 			std::vector<Submesh> submeshes, std::string* outError = nullptr);
 
-		// Cooked format: "STMH" header, vertex streams, indices, submesh table.
+		// Cooked format: "STMH" header, vertex streams, indices, submesh table. Serialize only meshes that were not
+		// uploaded (importers' and tools' meshes): the upload releases the vertex attributes.
 		static constexpr uint32_t c_CookedVersion = 1;
 		std::vector<uint8_t> Serialize() const;
 		static Ref<Mesh> Deserialize(std::span<const uint8_t> data, std::string* outError = nullptr);
 
 		// Creates the GPU vertex and index buffers and uploads the geometry into them in steps of at most
-		// c_AssetUploadStepBytes, as far as the context's budget allows (Pending: the next call continues). The CPU geometry
-		// stays for physics and picking.
+		// c_AssetUploadStepBytes, as far as the context's budget allows (Pending: the next call continues). Steps go through
+		// staging buffers of the renderer's pool (StagingPool) and wait for staging room within the context's StagingBytes
+		// like texture bands, except the frame's first. Once uploaded, the CPU copy of the vertex attributes is released;
+		// positions and indices stay for physics.
 		AssetFinalizeResult FinalizeOnMainThread(const AssetFinalizeContext& context) override;
 		// The CPU geometry and, once uploaded, the GPU buffers (each counted once, in its own pool).
 		AssetMemoryUsage GetMemoryUsage() const override;
-		// The CPU geometry and, with a renderer, the GPU buffers it will create.
+		// The CPU geometry and, with a renderer, the GPU buffers it will create, without the vertex attributes the upload
+		// releases.
 		AssetMemoryUsage GetFinalizedMemoryUsage() const override;
 
 		const std::vector<glm::vec3>& GetPositions() const { return m_Positions; }
+		// Empty once the mesh is uploaded: from then on only the GPU holds the vertex attributes.
 		const std::vector<MeshVertexAttributes>& GetAttributes() const { return m_Attributes; }
 		const std::vector<uint32_t>& GetIndices() const { return m_Indices; }
 		const std::vector<Submesh>& GetSubmeshes() const { return m_Submeshes; }

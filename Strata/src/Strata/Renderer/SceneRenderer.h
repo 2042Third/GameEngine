@@ -71,6 +71,10 @@ namespace Strata
 		uint32_t MaxLightsPerCluster = 256;
 		uint32_t ShadowMapSize = 2048; // Resolution of each directional shadow cascade
 		uint32_t ShadowCascades = 4;   // 1-4
+		// The depth prepass writes the entity-ID buffer (a 32-bit render target of the viewport's size): picking (GetEntityAt,
+		// ReadEntityIDAsync), the selection outline and entity tints read it. Renderers that do none of these (games) turn it
+		// off; outlines and tints asked of them are then left out, with an error.
+		bool EntityIDs = true;
 
 		// Asset requests follow visibility: mesh renderers in the view request their mesh and materials at High priority
 		// when their projected size (bounding sphere diameter / viewport height) exceeds this fraction, at Normal priority
@@ -250,18 +254,20 @@ namespace Strata
 		// (the renderer never rescales) and exactly one color attachment, single-sampled non-sRGB UNORM, e.g. the swapchain:
 		// values are written sRGB-encoded. Returns false, with GetStats().Rendered false, when nothing was rendered: an
 		// empty viewport, or an invalid target or render targets (both logged). Updates the scene's cached world
-		// transforms. With overlays and a target, the image is composed in the output texture and then copied. The
+		// transforms. With overlays or text and a target, the image is composed in the output texture and then copied;
+		// without them, a renderer that only renders into targets (a game) never allocates the output texture. The
 		// meshes, materials and textures the frame used are let go when it returns, so a renderer that stops rendering
 		// keeps none of them resident; only the sky light's environment map stays, in the environment cache, until the
 		// environment changes (and the text renderer's glyph atlases keep their fonts).
 		bool Render(Scene& scene, const SceneCamera& camera, nvrhi::IFramebuffer* target = nullptr, const SceneRenderOptions& options = {});
 
-		// RGBA8 UNORM with sRGB-encoded values (display-ready), valid after Render without a target.
+		// RGBA8 UNORM with sRGB-encoded values (display-ready), valid after Render without a target (null until a frame
+		// needed it, see Render).
 		nvrhi::ITexture* GetOutputTexture() const { return m_OutputTexture; }
 		nvrhi::ITexture* GetHDRTexture() const { return m_HDRTexture; }
 		nvrhi::ITexture* GetDepthTexture() const { return m_DepthTexture; }
 		nvrhi::ITexture* GetNormalTexture() const { return m_NormalTexture; }
-		nvrhi::ITexture* GetEntityIDTexture() const { return m_EntityIDTexture; }
+		nvrhi::ITexture* GetEntityIDTexture() const { return m_EntityIDTexture; } // Null without one (SceneRendererSpecification::EntityIDs)
 		nvrhi::ITexture* GetAmbientOcclusionTexture() const { return m_AOTexture; } // 1 = unoccluded
 		// Image-based lighting data of the current environment (null without one); the BRDF lookup table always exists.
 		nvrhi::ITexture* GetEnvironmentCube() const { return m_Environment.Cube; }
@@ -271,11 +277,13 @@ namespace Strata
 
 		nvrhi::ITexture* GetBloomTexture() const { return m_BloomTexture; } // Level 0 of the bloom chain (half resolution)
 
-		// Entity visible at a pixel of the last rendered frame (invalid when none, or when no frame was rendered since
-		// the last resize). Blocks until the GPU is done; meant for tests and tools (editors use ReadEntityIDAsync).
+		// Entity visible at a pixel of the last rendered frame (invalid when none, when no frame was rendered since the last
+		// resize, or without an entity-ID buffer). Blocks until the GPU is done; meant for tests and tools (editors use
+		// ReadEntityIDAsync).
 		Entity GetEntityAt(Scene& scene, uint32_t x, uint32_t y);
 		// Starts reading the entity ID at a pixel of the last rendered frame without waiting for the GPU. Null when no
-		// frame was rendered since the last resize, the pixel is outside the viewport or the copy cannot be made. Once
+		// frame was rendered since the last resize, the renderer writes no entity IDs, the pixel is outside the viewport or
+		// the copy cannot be made. Once
 		// the readback is ready, its single R32_UINT pixel resolves with GetEntityFromID (against the scene that was
 		// rendered: entities destroyed meanwhile resolve to an invalid entity).
 		Scope<TextureReadback> ReadEntityIDAsync(uint32_t x, uint32_t y);
@@ -393,9 +401,14 @@ namespace Strata
 
 		void CreateResources();
 		void CreateIBLResources();
-		// Recreates the viewport-sized targets; false (targets released, error logged) when they cannot be created.
+		// Recreates the viewport-sized targets; false (targets released, error logged) when they cannot be created. The
+		// output texture is not among them: EnsureOutputTarget creates it once a frame needs it.
 		bool CreateRenderTargets();
 		void ReleaseRenderTargets();
+		// The output texture, with its framebuffers and its copy binding: created at the viewport size by the first frame
+		// rendered without a target or composing overlays or text, and kept until the targets are recreated or released.
+		// False (error logged) when it cannot be created.
+		bool EnsureOutputTarget();
 		bool ValidateTarget(nvrhi::IFramebuffer* target);
 		// Finds the scene's sky light (or the preview sky); (re)computes the environment maps when its environment texture
 		// or its procedural sky's parameters changed.
@@ -559,6 +572,7 @@ namespace Strata
 		nvrhi::TextureHandle m_OutputTexture;
 		nvrhi::TextureHandle m_AORawTexture; // Noisy GTAO output
 		nvrhi::TextureHandle m_AOTexture;    // Blurred
+		nvrhi::Format m_AOFormat = nvrhi::Format::R32_FLOAT; // Of both: R16_FLOAT where the device stores it (CreateResources)
 		nvrhi::BindingLayoutHandle m_AOBindingLayout;
 		nvrhi::BindingSetHandle m_GTAOBindingSet;
 		nvrhi::BindingSetHandle m_AOBlurBindingSet;

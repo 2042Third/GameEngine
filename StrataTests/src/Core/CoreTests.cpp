@@ -201,6 +201,20 @@ TEST_SUITE("Core")
 		CHECK_FALSE(commandLine.GetOption("--missing").has_value());
 	}
 
+	TEST_CASE("CommandLine parses sizes written width x height")
+	{
+		CommandLine commandLine(std::vector<std::string> { "app", "--resolution", "1920x1080", "--small=1x65535" });
+		CHECK(commandLine.GetSizeOption("--resolution") == std::pair { 1920u, 1080u });
+		CHECK(commandLine.GetSizeOption("--small") == std::pair { 1u, CommandLine::c_MaxSizeOption });
+		CHECK_FALSE(commandLine.GetSizeOption("--missing").has_value());
+		for (const char* malformed : { "1920", "1920x", "x1080", "0x1080", "1920x0", "-1x2", "1920 x1080", "1920x1080x2", "1920X1080", "65536x1",
+			"1920x1080 ", "+1x2", "axb" })
+		{
+			CAPTURE(malformed);
+			CHECK_FALSE(CommandLine(std::vector<std::string> { "app", "--size", malformed }).GetSizeOption("--size").has_value());
+		}
+	}
+
 	TEST_CASE("EventDispatcher routes by type and records handling")
 	{
 		KeyPressedEvent keyEvent(65, false);

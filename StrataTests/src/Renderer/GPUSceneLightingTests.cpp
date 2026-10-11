@@ -277,7 +277,7 @@ TEST_SUITE("GPU.SceneRenderer.Lighting")
 		for (uint32_t y = 0; y < c_Size; y++)
 		{
 			for (uint32_t x = 0; x < c_Size; x++)
-				darkest = std::min(darkest, ReadFloatTexel(occlusion, glm::uvec2(x, y)));
+				darkest = std::min(darkest, ReadOcclusionTexel(occlusion, glm::uvec2(x, y)));
 		}
 		CHECK(darkest > 0.95f);
 		CHECK(gpu.GetNewErrorCount() == 0);

@@ -342,6 +342,21 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	set_tests_properties(StrataRuntime.Render PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataExportedGame FIXTURES_SETUP StrataRuntimeScreenshot)
 	add_test(NAME StrataRuntime.RenderCheck COMMAND StrataTests --strata-test-helper=check-image "${STRATA_RUNTIME_SCREENSHOT}" --dominant blue 1)
 	set_tests_properties(StrataRuntime.RenderCheck PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataRuntimeScreenshot)
+	# --resolution renders in a window of exactly that many pixels, whatever the display's scale; anything but
+	# <width>x<height> of whole positive numbers is refused.
+	set(STRATA_RUNTIME_RESOLUTION_SCREENSHOT "${STRATA_EXPORT_TEST_DIR}/ResolutionScreenshot.png")
+	add_test(NAME StrataRuntime.Resolution
+		COMMAND "${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}" --resolution 400x250 --frames 10 --screenshot "${STRATA_RUNTIME_RESOLUTION_SCREENSHOT}")
+	set_tests_properties(StrataRuntime.Resolution PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataExportedGame FIXTURES_SETUP StrataRuntimeResolution)
+	add_test(NAME StrataRuntime.ResolutionCheck
+		COMMAND StrataTests --strata-test-helper=check-image "${STRATA_RUNTIME_RESOLUTION_SCREENSHOT}" --dominant blue 1 --size 400x250)
+	set_tests_properties(StrataRuntime.ResolutionCheck PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataRuntimeResolution)
+	add_test(NAME StrataRuntime.InvalidResolution
+		COMMAND "${CMAKE_COMMAND}"
+			"-DCOMMAND=${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX};--frames;5;--resolution;400x0"
+			"-DEXPECTED_OUTPUT=--resolution needs the pixels of the window"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
+	set_tests_properties(StrataRuntime.InvalidResolution PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
 	# In a window the perf log also times rendering and presenting.
 	add_test(NAME StrataRuntime.PerfLogWindowed
 		COMMAND "${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}" --windowed --frames 10 --perf-log "${STRATA_EXPORT_TEST_DIR}/PerfLogWindowed.csv")

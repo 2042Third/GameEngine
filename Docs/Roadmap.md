@@ -134,7 +134,7 @@ machine, quiet:
   main's idle-frame budgets back and finalization at 5.44 ms: 4 of 5 runs passed, at most three confirmations per run,
   all of them editor idle frames; the failed run's `PerfGPU.Editor.PlayFrameNested100k` stayed over its budget in all
   three attempts (0.36-0.39 ms against 0.3313). Tight but passing in every run: `PerfGPU.Streaming.MaxFinalizeTime`
-  (4.19-5.31 ms against 5.44) and `RuntimePeakPrivateMemory` (632-646 MB against 650). The editor's idle frames were
+  (4.19-5.31 ms against 5.44). The editor's idle frames were
   then made cheaper than wave 1's: `PerfGPU.Editor`'s command script on the generated nested scenes, interleaved runs,
   medians of 8 rounds, takes 0.18-0.23 ms per frame against 0.23-0.26 ms for wave 1's editor (0.29-0.32 ms merged
   before). ImGui's platform layer is the engine's own (`ImGuiPlatform`, fed by the window's events): the vendored GLFW
@@ -148,6 +148,24 @@ machine, quiet:
   0.6349 ms (0.7674), all at 1.5 times the median of four runs on a machine 38-68% busy with other work; then
   `PerfStability.py --runs 3 --wait-quiet 20` passed 3 of 3 runs, every idle frame on its first attempt (0.171-0.284
   ms). The editor frames of `PerfGPU.Renderer`, which got cheaper by the same 0.05 ms, wait for a quiet campaign.
+- Runtime memory, after the review: texture cooking's acceptance criterion ("the exported stress game at 1920x1080 over
+  300 frames, with all textures resident, peaks at 650 MB private or less") is now gated as it reads.
+  `PerfGPU.Streaming.RuntimePeakPrivateMemoryAllResident` runs the exported stress game in `StrataRuntime` from the
+  stress project's `TopDown` scene (the world with its camera looking down on all of it), rendering 1920x1080 pixels
+  (`--resolution`, whatever the display's scale; the run checks its swapchain) for 300 frames with the game's own
+  budgets; every texture of the pack (111.8 MB) must be resident at the end, none evicted and none loading; budget
+  650 MB. The criterion's earlier reading, the overview camera (about two thirds of the textures resident), stays as
+  `RuntimePeakPrivateMemory`. With every texture resident the game peaked at 683-690 MB at the review (682-686 MB in its
+  verification), over the limit; the game now keeps what it needs: upload staging is bounded as a whole within 32 MiB,
+  mesh uploads included, and reused once an event query says the GPU is done (`StagingPool`; about -50 MB: the host
+  memory of staging held through loading went from 136 to 82 MiB), the output texture exists only when a frame composes
+  overlays or text (-8 MB), games write no entity-ID buffer (`SceneRendererSpecification::EntityIDs`, -8 MB), meshes
+  release their vertex attributes once uploaded (physics keeps positions and indices, -9.5 MB), and ambient occlusion
+  is half precision where the device stores r16f images (-8 MB). Measured at 1920x1080 pixels on the reference machine
+  (busy with other work; interleaved runs): every texture resident 589-612 MB (602 MB at the median of the gate's
+  runs), the overview camera 560-568 MB, the all-resident sweep 501-514 MB, the evicting sweep 399-410 MB (434-455 MB
+  for the review's build in the same conditions); the stress world loads by frame 10-11 either way, `FramesToSettle`
+  stays 4.
 
 Open items and deferrals later waves own:
 
@@ -165,17 +183,28 @@ Open items and deferrals later waves own:
   its deadline wait for the next frame), so a frame that finalizes a large texture still takes 4.2-5.3 ms in the
   evicting sweep (budget 5.44 ms) until smaller upload steps (`mip-streaming`).
 - A world seen all at once still keeps every texture in view resident: no budget evicts what is in view, so the stress
-  world peaks at about 540 MB with BC textures until mip streaming (`mip-streaming`). Mesh uploads still go through
-  NVRHI's upload manager until the budgeted upload queue (`mip-streaming`). `GetResidencyInfo` and `GetResidencySamples`
-  walk every registered asset (`GetStats` keeps counts instead), which a world of many registered assets will feel
-  (`world-partition`). Two caches keep assets between frames: `SceneRenderer`'s environment cache (the sky's map) and
-  `TextRenderer`'s glyph atlases (their fonts).
-- Texture cooking's 650 MB limit for the exported stress game "at 1920x1080": with BC1 color `texture-cook-v2` measured
-  543-558 MB rendering 1920x1080 pixels and 658-659 MB in a 1920x1080 window on the 150% reference display (2880x1620
-  pixels); with BC7 color the review measured 623-631 MB and 729-751 MB. `PerfGPU.Streaming.RuntimePeakPrivateMemory`
-  now gates the game itself at 1920x1080 pixels (its 1280x720 window at 150%, its own budgets, about 73 MB of textures
-  resident from the overview camera): 642 MB against 650 MB, little room. Read as a 1920x1080 window at 150%, the
-  criterion fails by about 80-100 MB; which reading applies is still to be decided.
+  world peaks at about 510 MB in the all-resident sweep until mip streaming (`mip-streaming`). Texture and mesh uploads
+  share the budgeted staging pool; smaller upload steps and an upload queue are `mip-streaming`'s. `GetResidencyInfo`
+  and `GetResidencySamples` walk every registered asset (`GetStats` keeps counts instead), which a world of many
+  registered assets will feel (`world-partition`). Two caches keep assets between frames: `SceneRenderer`'s environment
+  cache (the sky's map) and `TextRenderer`'s glyph atlases (their fonts).
+- Where the exported stress game's memory goes with every texture resident (MiB of private bytes at 1920x1080 pixels,
+  from temporary stage logging): the process, its job threads and window 10; the NVIDIA driver's Vulkan device 59 and
+  its first swapchain 93 (whatever its size: the driver presents through a layered DXGI swapchain, with a D3D12 device
+  of its own); the renderer's shared resources 3; audio, the pack's index and the scene 14; the scene renderer's compute
+  pipelines and resources 34 (mostly the driver's first shader compilation); render targets 58 (HDR 16, LDR, normals
+  and depth 8 each, ambient occlusion 8, bloom 5); the shadow cascades 66 (4 x 2048x2048, 32-bit depth); the first
+  frame's draw pipelines 12 on the GPU; then the textures 106.7 and the terrain's buffers 23.5 on the GPU and the
+  assets' CPU data 17 (the terrain's positions and indices for physics, the scene); the rest, about 60, is what the
+  driver keeps of loading's transient memory once freed (staging's host memory peaked 35 above its start) and of the
+  first frames' pipeline compilation. In all about 556 MiB after loading, 563 MiB (590 MB) at the peak. An empty scene
+  at 1920x1080 takes 282 MiB (295 MB), with the sun's shadow cascades 349 MiB (366 MB), the stress scene without
+  textures 442 MiB (464 MB). What is left to win belongs to later work: mip streaming keeps only the mips the screen
+  needs of the 106.7 MiB of textures and uploads in smaller steps (`mip-streaming`), and shadow cascades sized to what a
+  view needs (fewer cascades or 16-bit depth for far ones, with the depth bias retuned) would halve the 66 MiB
+  (renderer, later). Overlays that hook every windowed Vulkan process count too: RivaTuner Statistics Server, when it
+  runs, adds about 55 MiB to every game and editor (its hook library allocates it as the window opens), which takes the
+  stress game to about the 650 MB limit; the gates' measurements must be taken without it.
 - Editor: the Inspector reads every selected entity's values each frame, so 100,000 selected entities add about 8 ms to
   a frame (`Perf.Editor.SelectionFrame100kSelected`) until a cache follows component signals; the color picker clamps
   HDR colors while dragged (the channel fields keep them);

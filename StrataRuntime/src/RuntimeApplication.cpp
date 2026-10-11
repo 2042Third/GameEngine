@@ -227,6 +227,21 @@ namespace Strata
 		specification.Window.Height = manifest->WindowHeight;
 		specification.Window.Fullscreen = manifest->Fullscreen && !commandLine.HasFlag("--windowed");
 		specification.Window.VSync = manifest->VSync;
+		if (commandLine.HasFlag("--resolution") || commandLine.GetOption("--resolution"))
+		{
+			// A window of exactly that many pixels, whatever the display's scale: perf logs and screenshots that compare
+			// across machines and displays.
+			const std::optional<std::pair<uint32_t, uint32_t>> resolution = commandLine.GetSizeOption("--resolution");
+			if (!resolution)
+			{
+				ST_CRITICAL("--resolution needs the pixels of the window as <width>x<height>, each from 1 to {}", CommandLine::c_MaxSizeOption);
+				return nullptr;
+			}
+			specification.Window.Width = resolution->first;
+			specification.Window.Height = resolution->second;
+			specification.Window.SizeInPixels = true;
+			specification.Window.Fullscreen = false;
+		}
 		if (std::optional<int64_t> frames = commandLine.GetIntOption("--frames"); frames && *frames > 0)
 			specification.MaxFrames = static_cast<uint64_t>(*frames);
 		options.MaxFrames = specification.MaxFrames;

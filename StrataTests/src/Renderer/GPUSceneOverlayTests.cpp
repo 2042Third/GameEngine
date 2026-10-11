@@ -235,6 +235,48 @@ TEST_SUITE("GPU.SceneRenderer.Overlays")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A renderer without the entity-ID buffer draws the same image, picks nothing and leaves out outlines and tints")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		Entity left = AddMesh(scene, BuiltinAssets::CubeMesh, assets.AddMaterial(UnlitColor({ 1.0f, 0.0f, 0.0f, 1.0f })), glm::vec3(-1.0f, 0.0f, 0.0f), "Left");
+		AddMesh(scene, BuiltinAssets::CubeMesh, assets.AddMaterial(UnlitColor({ 0.0f, 1.0f, 0.0f, 1.0f })), glm::vec3(1.0f, 0.0f, 0.0f), "Right");
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 0.0f, 4.0f), glm::vec3(0.0f));
+
+		SceneRenderer withIDs;
+		withIDs.SetViewportSize(c_Size, c_Size);
+		const ReadbackImage expected = RenderToImage(withIDs, scene, camera);
+		REQUIRE(withIDs.GetEntityIDTexture() != nullptr);
+
+		SceneRendererSpecification specification;
+		specification.EntityIDs = false;
+		SceneRenderer withoutIDs(specification);
+		withoutIDs.SetViewportSize(c_Size, c_Size);
+		const ReadbackImage image = RenderToImage(withoutIDs, scene, camera);
+		CHECK(withoutIDs.GetEntityIDTexture() == nullptr);
+		CHECK(MaxDifference(image, expected) == 0);
+		CHECK_FALSE(withoutIDs.GetEntityAt(scene, c_Size / 4, c_Size / 2));
+		CHECK(withoutIDs.ReadEntityIDAsync(c_Size / 4, c_Size / 2) == nullptr);
+		CHECK(withIDs.GetEntityAt(scene, ProjectToPixel(camera, glm::vec3(-1.0f, 0.0f, 0.0f), c_Size).x, c_Size / 2) == left);
+
+		// A selection and tints are left out; the frame is rendered all the same.
+		const Entity selection[] = { left };
+		const SceneEntityTint tints[] = { SceneEntityTint { left, glm::vec4(0.0f, 0.0f, 1.0f, 1.0f) } };
+		SceneRenderOptions options;
+		options.SelectedEntities = selection;
+		options.EntityTints = tints;
+		REQUIRE(withoutIDs.Render(scene, camera, nullptr, options));
+		CHECK(withoutIDs.GetStats().OutlinedEntities == 0);
+		CHECK(withoutIDs.GetStats().TintedEntities == 0);
+		ReadbackImage untouched;
+		REQUIRE(Renderer::ReadTexture(withoutIDs.GetOutputTexture(), untouched));
+		CHECK(MaxDifference(untouched, expected) == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Entity tints change exactly the pixels of the listed entities")
 	{
 		GPUContext gpu;

@@ -5,7 +5,7 @@
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Project/GameManifest.h"
 #include "Strata/Renderer/Material.h"
-#include "Strata/Renderer/StagingTexturePool.h"
+#include "Strata/Renderer/StagingPool.h"
 #include "Strata/Runtime/GameRenderer.h"
 #include "Strata/Runtime/GameRuntime.h"
 #include "Strata/Scene/SceneSerializer.h"
@@ -553,12 +553,12 @@ TEST_SUITE("GPU.Assets.Residency")
 		const AssetHandle second = manager->Add(0x48001, cooked);
 
 		// Staging released and never recycled (no device frames run here) fills the staging budget.
-		StagingTexturePool& pool = Renderer::GetStagingTextures();
+		StagingPool& pool = Renderer::GetStagingPool();
 		nvrhi::TextureDesc band;
 		band.width = 512;
 		band.height = 512;
 		band.format = nvrhi::Format::RGBA8_UNORM;
-		pool.Release(pool.Acquire(band));
+		pool.Release(pool.AcquireTexture(band));
 		AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
 		budgets.StagingBytes = pool.GetPendingBytes();
 		manager->SetResidencyBudgets(budgets);
