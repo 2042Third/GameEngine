@@ -1417,6 +1417,25 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   users fails with them in the error's data (`EditorCommandResult::ErrorData`, which automation sends as the JSON-RPC
   error's `data`) unless forced. The Content Browser asks the same through `UI/DeleteAssetDialog` and runs the commands;
   panels never write files themselves (`Editor.UI.Source` scans `Panels/` for file-system writes).
+- **Content Browser** (`Panels/ContentBrowserPanel`, rows in `Editor/AssetBrowserView`). Two panes in a resizable table: a
+  folder tree (the asset directory and its folders as far as they are expanded) and the current folder's items as a grid
+  of tiles (the type's icon on a square, the name cut to the tile; a size slider) or a list, both drawn through
+  `ImGuiListClipper` (only what is in view). Above them: breadcrumbs (each a drop target), a search (every word in a name,
+  below the current folder), type chips (`UI::ToggleChip`), the view mode, New (folder, material) and Import (files, a
+  folder). `AssetBrowserView` (no UI, tested alone) holds the rows: folders first, then assets by name, an expanded model's
+  sub-assets (meshes, materials, textures) right after it as drag sources of their own. It rebuilds only when
+  `EditorAssetManager::GetChangeVersion` (or the folder, search, filter or an expansion) changed, from one look at the
+  manager's index (`ListAssets`), and counts its rebuilds: an idle editor rebuilds nothing (the browser used to copy
+  every asset's metadata twice a second). Labels are made at rebuild time; tiles cut their names once per tile width. Every
+  change runs a command: assets and folders dragged onto folders (tree rows, tiles, breadcrumbs, or the empty space of the
+  current folder) move (`asset.move`, `asset.moveFolder`), New Folder creates one and renames it in place, Rename (F2)
+  moves, Delete asks (`UI/DeleteAssetDialog`). Double-click opens a folder, a scene (`scene.open` after the unsaved-changes
+  question) or shows any other asset in the Asset tab. A tile shows an hourglass while its asset imports and a mark for
+  failed imports and warnings; tooltips say which. Inspecting an asset from elsewhere (`selection.set {asset}`, the
+  Streaming panel) reveals it (`RevealAsset`, from `OnUpdate` on a new inspection version): its folder opens, the tree
+  expands and scrolls to it, a sub-asset's model expands, and the grid scrolls to the item. Another root of the tree (the
+  project's scripts, which live outside the asset directory) would add rows of its own to `DrawFolderTree` with its items
+  and menu.
 - **Asset documents** (`AssetEdit.h`). Materials (and any engine-native document) are edited through `AssetEdit`:
   `ApplyDocument` validates the new document with the type's loader, writes the file (`EditorAssetManager::SaveNativeAsset`)
   and publishes the loaded object at once (`AssetManagerBase::ReplaceLoadedAsset`, which finalizes it, discards a load in

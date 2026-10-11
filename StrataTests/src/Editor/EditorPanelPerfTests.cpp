@@ -4,13 +4,17 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/ImGuiHarness.h"
+#include "Panels/ContentBrowserPanel.h"
 #include "Panels/PerformancePanel.h"
 #include "Panels/StreamingPanel.h"
 #include "Perf/PerfUtils.h"
 #include "Perf/SceneGenerators.h"
 #include "Renderer/SceneRendererTestUtils.h"
+#include "TestHelpers.h"
 
+#include <Strata/Core/FileSystem.h>
 #include <Strata/Core/FrameProfiler.h>
+#include <Strata/Core/JsonUtils.h>
 #include <Strata/Renderer/Material.h>
 
 #include <imgui.h>
@@ -31,6 +35,7 @@ namespace
 	constexpr uint32_t c_WarmupFrames = 30;
 	constexpr uint32_t c_MeasuredFrames = 240; // Four seconds of harness frames: the Streaming table refreshes up to 16 times
 	constexpr uint32_t c_RegisteredAssets = 10'000;
+	constexpr uint32_t c_BrowserAssets = 10'001;
 	// The Streaming table's first build (every name of 10,000 assets) gets this long to finish on the job threads.
 	constexpr std::chrono::seconds c_FirstBuildTimeout(30);
 
@@ -125,6 +130,36 @@ TEST_SUITE("Perf.EditorPanels")
 			return Perf::MetricValues { { "Perf.EditorPanels.Streaming10kAssetsP95", streamingStats.P95Ms },
 				{ "Perf.EditorPanels.Streaming10kAssetsRefreshFrame", refreshStats.MedianMs } };
 		});
+
+		// The Content Browser: 10,001 assets in one folder, shown as a grid.
+		{
+			EditorContext projectContext { EditorContextSpecification { false } };
+			EditorPanelContext browserContext { projectContext, commands, runner };
+			const std::filesystem::path project = CreateTemporaryDirectory("PerfContentBrowser") / "Game";
+			const EditorCommandResult created = commands.Execute(projectContext, "project.create", { { "directory", FileSystem::ToUTF8(project) }, { "name", "Game" } });
+			REQUIRE_MESSAGE(created.Success, created.Error);
+			const std::string document = JsonUtils::Dump(Material::Create()->Serialize(), 1, '\t');
+			for (uint32_t index = 0; index < c_BrowserAssets; index++)
+				REQUIRE(FileSystem::WriteText(project / "Assets" / "Materials" / fmt::format("Perf{}.stmat", index), document));
+			std::string error;
+			REQUIRE_MESSAGE(projectContext.OpenProject(project, &error), error);
+			ContentBrowserPanel browser;
+			browser.SetCurrentDirectory("Materials");
+			MeasurePanel(harness, browser, browserContext, c_WarmupFrames);
+			REQUIRE(browser.GetView().GetItems().size() == c_BrowserAssets);
+			const uint64_t rebuilds = browser.GetView().GetRebuildCount();
+			// The 95th percentile frame (the acceptance limit, 0.5 ms, is the budget's ceiling). The rows are made when the
+			// project's assets change, never periodically: an idle browser copies nothing.
+			Perf::CheckBudgetConfirmed("Perf.EditorPanels.ContentBrowser10kAssetsP95", [&]
+			{
+				const PanelFrames browserFrames = MeasurePanel(harness, browser, browserContext, c_MeasuredFrames);
+				const Perf::Measurement browserStats = Perf::Summarize(browserFrames.All);
+				MESSAGE("Content Browser with ", c_BrowserAssets, " assets in a folder: mean ", Mean(browserFrames.All), " ms, median ", browserStats.MedianMs,
+					" ms, p95 ", browserStats.P95Ms, " ms, max ", browserStats.MaxMs, " ms per frame");
+				return browserStats.P95Ms;
+			});
+			CHECK(browser.GetView().GetRebuildCount() == rebuilds);
+		}
 
 		// The Performance panel: a full ring of frames with the editor's stages.
 		FrameProfiler& profiler = FrameProfiler::Get();

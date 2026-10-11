@@ -3179,6 +3179,39 @@ namespace Strata
 		return handles;
 	}
 
+	std::vector<AssetListing> EditorAssetManager::ListAssets(std::string_view relativePath, bool recursive) const
+	{
+		std::vector<AssetListing> listings;
+		{
+			std::scoped_lock<std::mutex> lock(m_SourceMutex);
+			auto add = [&](const std::unordered_set<AssetHandle>& handles)
+			{
+				for (AssetHandle handle : handles)
+				{
+					const SourceAsset& source = m_Sources.at(handle);
+					listings.push_back({ handle, source.Type, source.Path, source.Import.Error, source.Import.Warnings.size(), source.Import.SubAssets,
+						source.ImportJob != nullptr });
+				}
+			};
+			if (!recursive)
+			{
+				auto it = m_SourcesByFolder.find(std::string(relativePath));
+				if (it != m_SourcesByFolder.end())
+					add(it->second);
+			}
+			else
+			{
+				for (const auto& [folder, handles] : m_SourcesByFolder)
+				{
+					if (IsInFolder(folder, relativePath))
+						add(handles);
+				}
+			}
+		}
+		std::sort(listings.begin(), listings.end(), [](const AssetListing& a, const AssetListing& b) { return a.Path < b.Path; });
+		return listings;
+	}
+
 	void EditorAssetManager::RescanFolders()
 	{
 		std::scoped_lock<std::mutex> lock(m_SourceMutex);

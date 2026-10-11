@@ -64,6 +64,18 @@ namespace Strata
 		bool RolledBack = false;        // Its failed files were removed again (no KeepOnFailure)
 	};
 
+	// A source asset as views of the asset directory list it (EditorAssetManager::ListAssets).
+	struct AssetListing
+	{
+		AssetHandle Handle = UUID::Null();
+		AssetType Type = AssetType::None;
+		std::string Path;                  // Relative to the asset directory, '/' separators
+		std::string Error;                 // Of its last import (empty when it succeeded or has not run)
+		size_t WarningCount = 0;
+		std::vector<AssetHandle> SubAssets;
+		bool Importing = false;            // Its import is queued, running, or finished and not applied yet
+	};
+
 	// Where an import of external files is (EditorAssetManager::ImportExternal).
 	enum class ExternalImportState : uint8_t
 	{
@@ -287,6 +299,9 @@ namespace Strata
 		std::vector<AssetHandle> GetAssetsInFolder(std::string_view relativePath) const;
 		// The source assets in a folder and every folder below it, sorted by path.
 		std::vector<AssetHandle> GetAssetsBelowFolder(std::string_view relativePath) const;
+		// The source assets directly in a folder (or, with `recursive`, also below it) with what a view shows of them, in one
+		// look at the index, sorted by path: what the Content Browser lists when GetChangeVersion changed.
+		std::vector<AssetListing> ListAssets(std::string_view relativePath, bool recursive) const;
 		// Walks the asset directory's folders again (folders created or removed outside the editor). Blocking.
 		void RescanFolders();
 

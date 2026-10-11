@@ -96,7 +96,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   with the asset pipeline (`Engine::RegisterBuiltinModules`) before the suites and the helper modes run; a test that
   needs its own component registers it in a child process (`--strata-test-helper=custom-component`,
   `Engine/ModuleRegistrationHelpers.cpp`). The editor's UI is tested headless with `ImGuiHarness` (suites `Editor.UI`,
-  `Editor.UI.Hierarchy`, `Editor.UI.Inspector`, `Editor.UI.AssetInspector`, `Editor.Theme`, `Editor.UI.Source`; see
+  `Editor.UI.Hierarchy`, `Editor.UI.Inspector`, `Editor.UI.AssetInspector`, `Editor.UI.ContentBrowser`, `Editor.Theme`,
+  `Editor.UI.Source`; see
   Editor, "Editor UI rules").
 - Suites whose names start with `GPU` need a Vulkan device and are registered separately under the
   CTest label `gpu`. They share one device per process through `Tests::GPUContext` (never create
@@ -864,6 +865,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   (rows identify themselves by their entity's handle, never by row index, which changes as rows appear; while filtering,
   Ctrl+A, ranges and boxes take the matches only); drops map to `entity.setParent {entities, parent, index}` through
   `HierarchyView::GetDropTarget`; F2 or a double click renames in place.
+- The Content Browser (`Panels/ContentBrowserPanel`) draws `Editor/AssetBrowserView`'s rows (folder tree, grid or list,
+  clipped), rebuilt only when `EditorAssetManager::GetChangeVersion` changed: never list the asset directory per frame.
+  Its drops, renames, folders and deletes run `asset.*` commands; inspecting an asset elsewhere reveals it there.
 - The inspectors show the selected entities or one asset (`EditorContext::SetInspectedAsset`, `selection.set {asset}`;
   the entities stay selected). Selecting an entity, deleting the asset or closing the project returns to the entities;
   `GetInspectionVersion` changes with every switch and every asset inspected (again), and the editor brings the
