@@ -3,13 +3,13 @@
 #include "Editor/EditorViewport.h"
 #include "Editor/GameExport.h"
 #include "Editor/PrefabSync.h"
-#include "Editor/ProjectThumbnail.h"
 #include "Editor/ProjectTemplates.h"
+#include "Editor/ProjectThumbnail.h"
 #include "Editor/RecentProjects.h"
 #include "Editor/SceneEdit.h"
-#include "Editor/ThumbnailCache.h"
 #include "Editor/ScriptBuild.h"
 #include "Editor/SimulatedInput.h"
+#include "Editor/ThumbnailCache.h"
 #include "Editor/UndoStack.h"
 
 #include <Strata/Asset/EditorAssetManager.h>
