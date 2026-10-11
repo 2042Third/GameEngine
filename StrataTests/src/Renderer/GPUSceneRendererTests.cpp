@@ -576,6 +576,66 @@ TEST_SUITE("GPU.SceneRenderer")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Rendering into a target allocates the output texture only to compose overlays or text")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		const AssetHandle red = assets.AddMaterial(UnlitColor({ 1.0f, 0.0f, 0.0f, 1.0f }));
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		AddMesh(scene, BuiltinAssets::QuadMesh, red, glm::vec3(0.0f), "Quad");
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 0.0f, 2.0f), glm::vec3(0.0f));
+		auto createTarget = [&](uint32_t size)
+		{
+			nvrhi::TextureDesc desc;
+			desc.width = size;
+			desc.height = size;
+			desc.format = nvrhi::Format::BGRA8_UNORM;
+			desc.isRenderTarget = true;
+			desc.initialState = nvrhi::ResourceStates::RenderTarget;
+			desc.keepInitialState = true;
+			nvrhi::TextureHandle texture = gpu.GetNvrhiDevice()->createTexture(desc);
+			REQUIRE(texture);
+			return std::pair { texture, gpu.GetNvrhiDevice()->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(texture)) };
+		};
+
+		// A game's frames: the image goes straight into the target, and the renderer holds no output texture.
+		SceneRenderer renderer;
+		renderer.SetViewportSize(32, 32);
+		auto [texture, framebuffer] = createTarget(32);
+		for (int frame = 0; frame < 3; frame++)
+			CHECK(renderer.Render(scene, camera, framebuffer));
+		CHECK(renderer.GetOutputTexture() == nullptr);
+		ReadbackImage image;
+		REQUIRE(Renderer::ReadTexture(texture, image));
+		CHECK(GetPixelRGBA8(image, 16, 16) == glm::u8vec4(0, 0, 255, 255)); // BGRA: red in the third byte
+
+		// Text is composed in the output texture, which the renderer then keeps at the viewport's size.
+		Entity hud = scene.CreateEntity("HUD");
+		TextComponent& text = hud.AddComponent<TextComponent>();
+		text.Text = "HUD";
+		text.ScreenSpace = true;
+		text.FontSize = 12.0f;
+		CHECK(renderer.Render(scene, camera, framebuffer));
+		REQUIRE(renderer.GetOutputTexture() != nullptr);
+		CHECK(renderer.GetOutputTexture()->getDesc().width == 32);
+		CHECK(renderer.GetStats().ScreenSpaceTexts == 1);
+
+		// A resize releases it with the other targets; frames into a target without text do not create it again, a frame
+		// without a target does.
+		renderer.SetViewportSize(48, 48);
+		CHECK(renderer.GetOutputTexture() == nullptr);
+		hud.RemoveComponent<TextComponent>();
+		auto [largerTexture, largerFramebuffer] = createTarget(48);
+		CHECK(renderer.Render(scene, camera, largerFramebuffer));
+		CHECK(renderer.GetOutputTexture() == nullptr);
+		CHECK(renderer.Render(scene, camera));
+		REQUIRE(renderer.GetOutputTexture() != nullptr);
+		CHECK(renderer.GetOutputTexture()->getDesc().width == 48);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Viewports beyond the device limit fail gracefully and picking needs a rendered frame")
 	{
 		GPUContext gpu;

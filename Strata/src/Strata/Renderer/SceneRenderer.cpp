@@ -1053,7 +1053,6 @@ namespace Strata
 		m_NormalTexture = CreateRenderTarget(m_Device, width, height, c_NormalFormat, name + ".Normals", false);
 		m_EntityIDTexture = CreateRenderTarget(m_Device, width, height, c_EntityIDFormat, name + ".EntityIDs", false);
 		m_HDRTexture = CreateRenderTarget(m_Device, width, height, c_HDRFormat, name + ".HDR", false);
-		m_OutputTexture = CreateRenderTarget(m_Device, width, height, c_OutputFormat, name + ".Output", false);
 		// Tone mapping writes here when FXAA follows.
 		m_LDRTexture = CreateRenderTarget(m_Device, width, height, c_OutputFormat, name + ".LDR", false);
 		auto createStorage = [&](const std::string& debugName)
@@ -1070,7 +1069,7 @@ namespace Strata
 		};
 		m_AORawTexture = createStorage(name + ".AORaw");
 		m_AOTexture = createStorage(name + ".AO");
-		if (!m_DepthTexture || !m_NormalTexture || !m_EntityIDTexture || !m_HDRTexture || !m_OutputTexture || !m_LDRTexture || !m_AORawTexture || !m_AOTexture)
+		if (!m_DepthTexture || !m_NormalTexture || !m_EntityIDTexture || !m_HDRTexture || !m_LDRTexture || !m_AORawTexture || !m_AOTexture)
 			return fail("render targets");
 
 		auto createAOSet = [&](nvrhi::ITexture* input, nvrhi::ITexture* output)
@@ -1097,9 +1096,8 @@ namespace Strata
 		m_ForwardFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc()
 			.addColorAttachment(m_HDRTexture)
 			.setDepthAttachment(m_DepthTexture));
-		m_OutputFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(m_OutputTexture));
 		m_LDRFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(m_LDRTexture));
-		if (!m_GTAOBindingSet || !m_AOBlurBindingSet || !m_PrepassFramebuffer || !m_ForwardFramebuffer || !m_OutputFramebuffer || !m_LDRFramebuffer)
+		if (!m_GTAOBindingSet || !m_AOBlurBindingSet || !m_PrepassFramebuffer || !m_ForwardFramebuffer || !m_LDRFramebuffer)
 			return fail("framebuffers");
 
 		// Automatic exposure meters the HDR image.
@@ -1173,16 +1171,39 @@ namespace Strata
 		m_FXAABindingSet = m_Device->createBindingSet(fxaaSet, m_FXAABindingLayout);
 		if (!m_TonemapBindingSet || !m_FXAABindingSet)
 			return fail("post-processing bindings");
+		return true;
+	}
 
+	bool SceneRenderer::EnsureOutputTarget()
+	{
+		if (m_OutputTexture)
+			return true;
+
+		const uint32_t width = m_ViewportSize.x;
+		const uint32_t height = m_ViewportSize.y;
+		nvrhi::TextureHandle output = CreateRenderTarget(m_Device, width, height, c_OutputFormat, m_Specification.DebugName + ".Output", false);
+		nvrhi::FramebufferHandle outputFramebuffer = output ? m_Device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(output)) : nullptr;
 		// Overlays are drawn into the output texture, tested against the scene depth (which they never change).
-		m_OverlayFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc()
-			.addColorAttachment(m_OutputTexture)
-			.setDepthAttachment(nvrhi::FramebufferAttachment().setTexture(m_DepthTexture).setReadOnly(true)));
-		nvrhi::BindingSetDesc copySet;
-		copySet.bindings = { nvrhi::BindingSetItem::Texture_SRV(0, m_OutputTexture), nvrhi::BindingSetItem::Sampler(0, m_PointClampSampler) };
-		m_CopyBindingSet = m_Device->createBindingSet(copySet, m_FXAABindingLayout);
-		if (!m_OverlayFramebuffer || !m_CopyBindingSet)
-			return fail("overlay targets");
+		nvrhi::FramebufferHandle overlayFramebuffer = output ? m_Device->createFramebuffer(nvrhi::FramebufferDesc()
+			.addColorAttachment(output)
+			.setDepthAttachment(nvrhi::FramebufferAttachment().setTexture(m_DepthTexture).setReadOnly(true))) : nullptr;
+		nvrhi::BindingSetHandle copyBindingSet;
+		if (output)
+		{
+			nvrhi::BindingSetDesc copySet;
+			copySet.bindings = { nvrhi::BindingSetItem::Texture_SRV(0, output), nvrhi::BindingSetItem::Sampler(0, m_PointClampSampler) };
+			copyBindingSet = m_Device->createBindingSet(copySet, m_FXAABindingLayout);
+		}
+		if (!output || !outputFramebuffer || !overlayFramebuffer || !copyBindingSet)
+		{
+			// Nothing used them yet: they go with their handles.
+			m_Errors.Report(fmt::format("failed to create the output texture for a {}x{} viewport", width, height));
+			return false;
+		}
+		m_OutputTexture = std::move(output);
+		m_OutputFramebuffer = std::move(outputFramebuffer);
+		m_OverlayFramebuffer = std::move(overlayFramebuffer);
+		m_CopyBindingSet = std::move(copyBindingSet);
 		return true;
 	}
 
@@ -1712,8 +1733,18 @@ namespace Strata
 		m_Stats.PrefetchRequests = assetStats.Prefetched;
 		m_Stats.GetAssetCalls = assetStats.GetAssetCalls;
 
-		// Overlays (and text) are composed in the output texture, which is then copied into the target.
+		// Overlays (and text) are composed in the output texture, which is then copied into the target. Without a target or
+		// anything to compose, the frame needs no output texture: renderers that only render into targets (games without
+		// text) never allocate one.
 		const bool overlays = HasOverlays(options) || text;
+		if ((!target || overlays) && !EnsureOutputTarget())
+		{
+			commandList->endMarker();
+			commandList->close();
+			m_Device->executeCommandList(commandList); // Keeps the uploads that were recorded
+			m_Stats = {};
+			return false;
+		}
 		nvrhi::IFramebuffer* output = target && !overlays ? target : m_OutputFramebuffer.Get();
 		auto drawFullscreen = [&](nvrhi::IGraphicsPipeline* pipeline, nvrhi::IFramebuffer* framebuffer, nvrhi::IBindingSet* bindingSet, const void* pushConstants,
 			size_t pushConstantSize)

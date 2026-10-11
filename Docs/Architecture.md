@@ -169,7 +169,9 @@ and `SceneRenderer` extracts each frame's draws from it (`SceneRendererExtractio
 `AssetResolveCache`; see [Render scene](#render-scene)). `SceneRenderer` draws a scene (light clustering, shadow cascades,
 depth/normal/entity-ID prepass, GTAO, forward PBR, sky, transparents, exposure, bloom, tone mapping, FXAA, then overlays
 and text) into render targets of its viewport size, which it hands to the `DeferredReleaseQueue` when it is resized
-(the viewport panel, the game window) or freed (captures). Its image-based lighting comes from the sky light's
+(the viewport panel, the game window) or freed (captures); its output texture exists only once a frame needed it (one
+without a target, or composing overlays or text before copying into the target), so a game without text renders
+straight into the back buffer and never allocates one. Its image-based lighting comes from the sky light's
 environment map or its procedural sky (`IBL/ProceduralSky.comp` writes mip 0 of the environment cube, then the shared
 filtering chain runs), computed again only when the source or the procedural parameters change; editor views can ask
 for preview lighting, leave out screen-space text and tint entities (`SceneRenderOptions::EntityTints`: the first

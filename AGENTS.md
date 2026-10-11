@@ -985,7 +985,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   occlusion, forward PBR (opaque surfaces with an EQUAL depth test and forced early depth testing), sky,
   transparent surfaces (back to front), then post-processing from the scene's `PostProcessComponent`
   (exposure, bloom, tone mapping and grading, FXAA). A target framebuffer must match the viewport size
-  and have a non-sRGB UNORM color format; `Render` returns false (and logs once) instead of rescaling.
+  and have a non-sRGB UNORM color format; `Render` returns false (and logs once) instead of rescaling. The output
+  texture is created by the first frame that needs it (no target, or overlays or text to compose), so renderers that
+  draw into targets without overlays (games without text) never hold one.
 - Image-based lighting comes from the first active `SkyLightComponent`: an equirectangular HDR map (`EnvironmentMap`) or,
   with `Source = Procedural`, `IBL/ProceduralSky.comp` (zenith, horizon and ground colors as linear radiance, and the
   sun's disk where the directional light the scene is lit by comes from, 45 degrees up without one). Either source only
