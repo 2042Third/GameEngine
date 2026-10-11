@@ -207,6 +207,17 @@ TEST_SUITE("Animation.System")
 		CHECK(scene.System()->GetStats().Animators == 1);
 		CHECK(poses->GetPose(animator.GetHandle(), pose));
 		CheckSceneCaches(*scene.SceneRef);
+
+		// Without animators an update has nothing to do: the stats of the update before do not linger.
+		CHECK(scene.System()->GetStats().Advanced == 1);
+		scene.SceneRef->DestroyEntity(animator);
+		scene.Update(0.1f);
+		const AnimationSystemStats idle = scene.System()->GetStats();
+		CHECK(idle.Animators == 0);
+		CHECK(idle.ActiveAnimators == 0);
+		CHECK(idle.Advanced == 0);
+		CHECK(idle.Evaluated == 0);
+		CHECK(scene.System()->FindInstance(animator) == nullptr);
 	}
 
 	TEST_CASE("Animators wait for their assets and report assets that do not load once")

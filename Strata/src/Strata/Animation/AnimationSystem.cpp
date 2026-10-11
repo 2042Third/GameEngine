@@ -507,6 +507,10 @@ namespace Strata
 		stats.Culled = 0;
 		stats.Waiting = 0;
 		stats.Attachments = 0;
+		// Without animators there is nothing to resolve, step, place or dispatch (records go with their components, events
+		// with the update that fired them), so scenes that do not animate pay next to nothing per frame.
+		if (m_Records.empty())
+			return;
 
 		const entt::registry& registry = m_Scene.GetRegistry();
 		m_Iterating = true;

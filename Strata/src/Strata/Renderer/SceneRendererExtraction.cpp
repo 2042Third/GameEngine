@@ -608,6 +608,7 @@ namespace Strata
 		const std::span<const RenderData::InstanceData> instances = renderScene.GetInstances();
 		const float viewportHeight = static_cast<float>(m_ViewportSize.y);
 		const bool batchAcrossMaterials = m_Specification.BatchAcrossMaterials;
+		const bool skins = renderScene.HasSkinProxies(); // Scenes without skinned meshes skip the per-proxy checks
 		ForEachChunk(chunks, [&](uint32_t chunk)
 		{
 			ExtractionChunk& output = m_Chunks[chunk];
@@ -631,7 +632,7 @@ namespace Strata
 				const float fraction = m_VisibleFractions[item];
 				const float viewDepth = -(camera.View * glm::vec4(bounds.GetCenter(), 1.0f)).z;
 				const bool mirrored = (renderScene.GetProxyFlags(proxy) & RenderProxyFlags::Mirrored) != 0;
-				const bool skinned = IsDrawnSkinned(renderScene, proxy, *mesh);
+				const bool skinned = skins && IsDrawnSkinned(renderScene, proxy, *mesh);
 				const uint32_t first = renderScene.GetFirstInstance(proxy);
 				const std::vector<Submesh>& submeshes = mesh->GetSubmeshes();
 				for (uint32_t submeshIndex = 0; submeshIndex < count; submeshIndex++)
@@ -734,6 +735,7 @@ namespace Strata
 			m_Chunks.resize(chunks);
 		const std::span<const RenderData::InstanceData> instances = renderScene.GetInstances();
 		const bool batchAcrossMaterials = m_Specification.BatchAcrossMaterials;
+		const bool skins = renderScene.HasSkinProxies(); // Scenes without skinned meshes skip the per-proxy checks
 		ForEachChunk(chunks, [&](uint32_t chunk)
 		{
 			ExtractionChunk& output = m_Chunks[chunk];
@@ -760,7 +762,7 @@ namespace Strata
 				const AABB& bounds = renderScene.GetWorldBounds(caster.Proxy);
 				const float fraction = GetScreenFraction(camera, bounds.GetCenter(), glm::length(bounds.GetExtents()));
 				const bool mirrored = (renderScene.GetProxyFlags(caster.Proxy) & RenderProxyFlags::Mirrored) != 0;
-				const bool skinned = IsDrawnSkinned(renderScene, caster.Proxy, *mesh);
+				const bool skinned = skins && IsDrawnSkinned(renderScene, caster.Proxy, *mesh);
 				const uint32_t first = renderScene.GetFirstInstance(caster.Proxy);
 				const std::vector<Submesh>& submeshes = mesh->GetSubmeshes();
 				for (uint32_t submeshIndex = 0; submeshIndex < count; submeshIndex++)
