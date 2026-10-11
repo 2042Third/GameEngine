@@ -197,7 +197,12 @@ texture format and the block decoders are `TextureFormat`, `CookedTexture` and `
 Jolt world from RigidBody and collider components and steps it; `PhysicsRuntime` reference-counts Jolt's global
 state; `PhysicsJobSystem` runs Jolt's jobs on the engine's worker pool; `PhysicsMeshShapes` cooks mesh collider shapes
 on jobs and caches them process-wide; `AssetMeshProvider` supplies mesh data from the active asset manager.
-`PhysicsTypes.h` has the settings, layers and statistics. A world's capacities are fixed when it is created: those the
+`PhysicsTypes.h` has the settings and statistics. Collision layers are the scene's (`SceneSettings::PhysicsLayers`,
+`Scene/PhysicsLayerSettings.h`: names for up to 32 layers and a symmetric matrix of which collide, everything by
+default); `PhysicsSystem` gives its world that matrix, restricted by the default settings' (`GetDefaultSettings`), when
+it creates the world and before every step after it changed (`scene.setSettings`, undo, the inspector, scripts'
+`Physics::SetLayersCollide`, `PhysicsSystem::SetLayersCollide`; `PhysicsWorld::SetLayerCollisionMasks` wakes the bodies,
+and character controllers read the world's live matrix). A world's capacities are fixed when it is created: those the
 scene does not set (`SceneSettings::PhysicsCapacity`) are sized from the bodies the scene starts with
 (`PhysicsWorld::ResolveCapacities`: at least 65,536 bodies, the next power of two of twice the bodies; four body pairs per
 body slot; at least 10,240 contacts, two per body; scratch memory for them), bodies that find the world full wait for a
@@ -552,10 +557,13 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   catch-up fixed steps once they took longer, in wall time, than the time they simulated, and drops the steps still due
   (`GetDroppedFixedStepCount`, also `PhysicsStats::DroppedSteps`). Otherwise a frame that runs eight expensive steps
   makes the next one owe even more. Tests and tools keep the default, every due step up to `MaxFixedStepsPerFrame`.
-- `SceneSettings` holds gravity, the fixed timestep (1/60 s), `MaxFixedStepsPerFrame` and the physics world's capacities
+- `SceneSettings` holds gravity, the fixed timestep (1/60 s), `MaxFixedStepsPerFrame`, the physics world's capacities
   (`PhysicsCapacity`: bodies, body pairs and contact constraints; 0, the default, sizes one automatically; each up to a
-  limit that bounds the memory a world reserves). All of it is saved with the scene and changed with `scene.setSettings`
-  (one undo step); capacities apply when a world is created, at play start.
+  limit that bounds the memory a world reserves) and the collision layers (`PhysicsLayers`: names, unique ignoring case,
+  and the pairs that do not collide; saved as `"PhysicsLayers": {"Names": {"<index>": name}, "NoCollisions": [[a, b]]}`,
+  which scenes from before load as all colliding, without a format change). All of it is saved with the scene and
+  changed with `scene.setSettings` (one undo step); capacities apply when a world is created, at play start, the layer
+  matrix at the next step.
 - A scene knows the scene asset it was loaded from or saved as (`Scene::GetSourceAsset`, set by
   `SceneAsset::CreateScene` and by the editor's save-as) and keeps an ID across its copies (`GetLineageID`: the source
   asset, else an ID of its own), by which systems recognize it from one play session to the next.
@@ -1476,9 +1484,12 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
     component's menu copies and pastes its settable values through the clipboard as JSON
     (`EditorActions::CopyComponentValues`) and runs `component.set`/`component.remove {entities}`. With nothing selected
     it shows the scene's settings (gravity, the fixed step, and the physics world's capacities: 0, automatic sizing,
-    reads "Auto", `PropertyWidgetOptions::ZeroLabel`), applied by one `scene.setSettings` when a drag ends, and the first
-    active sky light (the renderer's), in sections that start closed: their headers sum them up ("Gravity 9.81 m/s² ·
-    60 steps/s", the sky's source; the physics summary is formatted again only when its values change), and their rows,
+    reads "Auto", `PropertyWidgetOptions::ZeroLabel`), applied by one `scene.setSettings` when a drag ends, the
+    collision layers (the named ones edited in place, "Name a Layer" for the next one without a name, and a matrix of
+    check boxes, one per pair of the layers shown: layer 0, the named ones and those with a pair that does not collide;
+    every edit is one `scene.setSettings`) and the first active sky light (the renderer's), in sections that start
+    closed: their headers sum them up ("Gravity 9.81 m/s² · 60 steps/s", "2 named · 1 pair passes through", the sky's
+    source; the summaries are formatted again only when their values change), and their rows,
     live widgets that cost frame time while they are drawn, show once a section is opened (it stays open while the
     editor runs).
   - The **Asset** inspector is tabbed with the Inspector: `EditorLayer` brings the tab of the inspection target forward

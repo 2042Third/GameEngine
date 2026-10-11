@@ -2,6 +2,7 @@
 
 #include "Strata/Asset/AssetTypes.h"
 #include "Strata/Core/Base.h"
+#include "Strata/Scene/PhysicsLayerSettings.h"
 #include "Strata/Scene/SceneServices.h"
 
 #include <glm/glm.hpp>
@@ -12,14 +13,14 @@
 namespace Strata
 {
 
-	// Number of user collision layers; RigidBodyComponent::Layer ranges from 0 to c_PhysicsLayerCount - 1.
-	constexpr uint32_t c_PhysicsLayerCount = 32;
+	// c_PhysicsLayerCount (the user collision layers) comes with the scene's layer settings (Scene/PhysicsLayerSettings.h).
 	// Query layer mask that accepts every layer.
 	constexpr uint32_t c_AllPhysicsLayers = 0xFFFFFFFFu;
 
 	// Configuration of a physics world. Capacities are fixed when the world is created; 0 sizes one automatically from the
 	// bodies the scene has then (see PhysicsWorld::ResolveCapacities), and a scene's SceneSettings::PhysicsCapacity overrides
-	// these. The layer matrix can also be changed at runtime through PhysicsWorld::SetLayersCollide.
+	// these. The layer matrix is the scene's (SceneSettings::PhysicsLayers, which PhysicsSystem applies when it creates the
+	// world and when it changes); PhysicsWorld::SetLayerCollisionMasks changes it at runtime.
 	struct PhysicsSettings
 	{
 		uint32_t MaxBodies = 0;

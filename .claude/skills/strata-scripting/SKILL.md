@@ -153,6 +153,12 @@ std::vector<Entity> nearby = Physics::OverlapSphere(center, 3.0f);
   `AddImpulse`, `AddImpulseAtPosition`, `AddTorque`, `AddAngularImpulse`, `Teleport(position [, rotation])`.
 - `Physics`: `Raycast` (closest hit), `RaycastAll` (sorted by distance), `OverlapSphere`, `OverlapBox`; triggers are
   skipped unless `includeTriggers` is set, `ignore` skips one entity (usually the caster).
+- Collision layers: every body and character controller is on one layer (0-31, `Layer`), and two of them collide only
+  when the scene's layer matrix lets their layers (everything collides by default). Name layers and set the matrix in
+  the editor (Inspector with nothing selected, Collision Layers; or `scene.setSettings {layerNames, layerCollisions}`),
+  then use names in code: `Physics::GetLayerIndex("Debris")` (-1 for a name the scene lacks), `1u << layer` as a query
+  mask, `Physics::SetLayersCollide(a, b, false)` to let two layers pass through each other while the scene plays (e.g.
+  a ghost power-up), `Physics::GetLayersCollide(a, b)`.
 - Moving a body by writing its transform works too (kinematic platforms, editor-like placement) but takes effect at the
   next fixed step; `Teleport` is immediate. Results always name the entity that owns the body (the RigidBody entity,
   also for colliders on its children).

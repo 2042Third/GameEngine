@@ -143,6 +143,7 @@ namespace Strata
 			return;
 
 		SyncGravity();
+		SyncLayers();
 		m_World->Simulate(timestep);
 		DispatchCollisionEvents();
 	}
@@ -225,14 +226,37 @@ namespace Strata
 
 	void PhysicsSystem::SetLayersCollide(uint32_t layerA, uint32_t layerB, bool collide)
 	{
+		if (layerA >= c_PhysicsLayerCount || layerB >= c_PhysicsLayerCount)
+		{
+			ST_CORE_WARN("Physics: cannot change the collision of layers {} and {}: layers range from 0 to {}", layerA, layerB, c_PhysicsLayerCount - 1);
+			return;
+		}
+		m_Scene.GetSettings().PhysicsLayers.SetCollide(layerA, layerB, collide);
 		if (m_World)
-			m_World->SetLayersCollide(layerA, layerB, collide); // Validates and warns
-		m_Settings.SetLayersCollide(layerA, layerB, collide);
+			SyncLayers();
 	}
 
 	bool PhysicsSystem::DoLayersCollide(uint32_t layerA, uint32_t layerB) const
 	{
-		return m_Settings.DoLayersCollide(layerA, layerB);
+		return m_Settings.DoLayersCollide(layerA, layerB) && m_Scene.GetSettings().PhysicsLayers.DoCollide(layerA, layerB);
+	}
+
+	std::array<uint32_t, c_PhysicsLayerCount> PhysicsSystem::GetEffectiveLayerMasks() const
+	{
+		std::array<uint32_t, c_PhysicsLayerCount> masks;
+		const PhysicsLayerSettings& layers = m_Scene.GetSettings().PhysicsLayers;
+		for (uint32_t layer = 0; layer < c_PhysicsLayerCount; layer++)
+			masks[layer] = m_Settings.LayerCollisionMasks[layer] & layers.CollisionMasks[layer];
+		return masks;
+	}
+
+	void PhysicsSystem::SyncLayers()
+	{
+		const std::array<uint32_t, c_PhysicsLayerCount> masks = GetEffectiveLayerMasks();
+		if (masks == m_AppliedLayerMasks)
+			return;
+		m_AppliedLayerMasks = masks;
+		m_World->SetLayerCollisionMasks(masks);
 	}
 
 	PhysicsStats PhysicsSystem::GetStats() const
@@ -442,8 +466,11 @@ namespace Strata
 			settings.MaxBodyPairs = capacity.MaxBodyPairs;
 		if (capacity.MaxContactConstraints != 0)
 			settings.MaxContactConstraints = capacity.MaxContactConstraints;
+		// The scene's layer matrix, as the scene's settings say when the world starts.
+		settings.LayerCollisionMasks = GetEffectiveLayerMasks();
 		m_World = CreateScope<PhysicsWorld>(m_Scene, settings, GetRememberedCapacityDemand(m_Scene.GetLineageID()));
 		m_AppliedGravity = m_Scene.GetSettings().Gravity;
+		m_AppliedLayerMasks = settings.LayerCollisionMasks;
 		// Contacts are tracked for the listeners and watches registered so far.
 		UpdateContactTracking();
 		for (const auto& [entity, count] : m_CollisionWatches)

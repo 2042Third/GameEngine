@@ -663,7 +663,7 @@ TEST_SUITE("Scripting.API")
 		const size_t firstFunction = offsetof(StrataScriptHostAPI, ABIVersion) + sizeof(host.ABIVersion);
 		REQUIRE(before.size() == (sizeof(StrataScriptHostAPI) - firstFunction) / sizeof(host.Log));
 		CHECK(before.front().Name == "Log");
-		CHECK(before.back().Name == "ListSaveFiles");
+		CHECK(before.back().Name == "PhysicsGetLayerIndex");
 		std::unordered_set<std::string_view> names;
 		for (const ScriptHostFunctionCalls& entry : before)
 		{

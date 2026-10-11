@@ -5,6 +5,7 @@
 #include "Strata/Core/FrameProfiler.h"
 #include "Strata/Core/Timestep.h"
 #include "Strata/Core/UUID.h"
+#include "Strata/Scene/PhysicsLayerSettings.h"
 #include "Strata/Scene/SceneHierarchy.h"
 #include "Strata/Scene/SceneSystem.h"
 
@@ -54,6 +55,7 @@ namespace Strata
 		float FixedTimestep = 1.0f / 60.0f;
 		uint32_t MaxFixedStepsPerFrame = 8; // Prevents a spiral of death after long frames
 		PhysicsCapacitySettings PhysicsCapacity;
+		PhysicsLayerSettings PhysicsLayers; // Layer names and which layers collide
 	};
 
 	// A world of entities. Owns the EnTT registry, the hierarchy, and (while playing) the runtime systems.

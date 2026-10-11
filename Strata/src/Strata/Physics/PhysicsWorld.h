@@ -147,9 +147,10 @@ namespace Strata
 		bool SetGravity(const glm::vec3& gravity);
 		glm::vec3 GetGravity() const;
 
-		// Changes the layer collision matrix at runtime (symmetric) and wakes the bodies so that they notice.
-		void SetLayersCollide(uint32_t layerA, uint32_t layerB, bool collide);
+		// The layer collision matrix the world uses (PhysicsSettings::LayerCollisionMasks). PhysicsSystem replaces it with the
+		// scene's when that changes; SetLayerCollisionMasks wakes the bodies so that they notice.
 		bool DoLayersCollide(uint32_t layerA, uint32_t layerB) const;
+		void SetLayerCollisionMasks(const std::array<uint32_t, c_PhysicsLayerCount>& masks);
 
 		//////////////////////////////////////////////////////////////////////////
 		// Body API (entities that do not own a body in the simulation get false / zero)

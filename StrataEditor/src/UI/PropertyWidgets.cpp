@@ -193,7 +193,8 @@ namespace Strata
 			return open;
 		}
 
-		// An entry of a choice's list (the probe records it under `probeKey` unless that is empty). Returns true when picked.
+		// An entry of a choice's list (the probe records it with its label under `probeKey` unless that is empty). Returns true
+		// when picked.
 		bool Choice(const std::string& label, bool selected, int id, const std::string& probeKey)
 		{
 			ImGui::PushID(id);
@@ -202,7 +203,7 @@ namespace Strata
 			UI::PopSelectionColors();
 			ImGui::PopID();
 			if (!probeKey.empty())
-				UI::ItemProbe::Record(probeKey);
+				UI::ItemProbe::Record(probeKey, true, 0, label);
 			return picked;
 		}
 
@@ -231,6 +232,29 @@ namespace Strata
 					{
 						result.Changed = choice != value || options.Mixed;
 						value = choice;
+					}
+				}
+				ImGui::EndCombo();
+			}
+			return result;
+		}
+
+		// A collision layer (PropertyFlags::PhysicsLayer), chosen by the names the scene gives its layers ("Layer <index>"
+		// for layers without one). The probe records each layer's entry under "<key>.<index>".
+		PropertyEditResult DrawPhysicsLayer(uint32_t& value, const Scene& scene, const PropertyWidgetOptions& options)
+		{
+			PropertyEditResult result;
+			const PhysicsLayerSettings& layers = scene.GetSettings().PhysicsLayers;
+			const std::string preview = options.Mixed ? std::string(c_MixedText) : layers.GetDisplayName(value);
+			if (BeginChoice(preview, options.ProbeKey))
+			{
+				for (uint32_t layer = 0; layer < c_PhysicsLayerCount; layer++)
+				{
+					const std::string probe = options.ProbeKey.empty() ? std::string() : ProbeKey(options.ProbeKey, std::to_string(layer));
+					if (Choice(layers.GetDisplayName(layer), layer == value && !options.Mixed, static_cast<int>(layer), probe))
+					{
+						result.Changed = layer != value || options.Mixed;
+						value = layer;
 					}
 				}
 				ImGui::EndCombo();
@@ -886,6 +910,11 @@ namespace Strata
 				if (HasFlag(property.Flags, PropertyFlags::PowerOfTwoLimit))
 				{
 					result = DrawPowerOfTwoLimit(property, number, options);
+					break;
+				}
+				if (HasFlag(property.Flags, PropertyFlags::PhysicsLayer))
+				{
+					result = DrawPhysicsLayer(number, scene, options);
 					break;
 				}
 				const uint32_t min = property.HasRange() ? static_cast<uint32_t>(std::max(property.Min, 0.0f)) : 0u;

@@ -475,6 +475,20 @@ extern "C"
 		bool (*DeleteSaveFile)(StrataScriptContext* context, StrataScriptString name);
 		uint64_t (*ListSaveFiles)(StrataScriptContext* context, char* buffer, uint64_t capacity);
 
+		/*
+		 * Collision layers (added after the initial set of ABI version 1: check ST_SCRIPT_HAS_MEMBER before use). Bodies and
+		 * character controllers are on one of the layers 0 to 31 and collide only when the playing scene's layer matrix (its
+		 * settings, which the editor's scene inspector edits) lets their layers collide. PhysicsSetLayersCollide changes the
+		 * playing scene's matrix (symmetric; a layer may be paired with itself); physics applies it before its next step and
+		 * wakes resting bodies. It lasts while the scene plays (play mode's copy is discarded when play stops) and fails for
+		 * layers outside 0 to 31. PhysicsGetLayersCollide reads the matrix (false outside the range). PhysicsGetLayerIndex
+		 * finds a layer by its name (ignoring case; "Layer <index>" names a layer without a name of its own): its index, or
+		 * -1 when the scene has no such layer.
+		 */
+		bool (*PhysicsSetLayersCollide)(StrataScriptContext* context, uint32_t layerA, uint32_t layerB, bool collide);
+		bool (*PhysicsGetLayersCollide)(StrataScriptContext* context, uint32_t layerA, uint32_t layerB);
+		int32_t (*PhysicsGetLayerIndex)(StrataScriptContext* context, StrataScriptString name);
+
 		/* New functions are appended here (see the compatibility rules above). */
 	} StrataScriptHostAPI;
 

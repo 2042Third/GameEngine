@@ -31,6 +31,7 @@ public:
 		// Every system of the scene runs before the scripts start: physics works in OnCreate already.
 		Expect(Physics::Raycast(Home + glm::vec3(0.0f, 3.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f)).value_or(RaycastHit()).HitEntity == GetEntity(),
 			"physics queries work in OnCreate");
+		CheckLayers();
 	}
 
 	void OnFixedUpdate(float fixedDeltaTime) override
@@ -110,13 +111,28 @@ private:
 		Expect(Physics::Raycast(aboveZone, down).value_or(RaycastHit()).HitEntity == ground, "rays pass through triggers");
 		const std::optional<RaycastHit> zoneHit = Physics::Raycast(aboveZone, down, 10.0f, Physics::c_AllLayers, Entity(), true);
 		Expect(zoneHit.has_value() && zoneHit->HitEntity == zone && Near(zoneHit->Distance, 3.0f, 1e-3f), "rays can hit triggers");
-		Expect(Physics::Raycast(aboveZone, down, 10.0f, ~(1u << 3), Entity(), true).value_or(RaycastHit()).HitEntity == ground, "rays filter layers");
+		const int32_t triggers = Physics::GetLayerIndex("Triggers");
+		Expect(triggers == 3, "the zone's layer by its name");
+		Expect(Physics::Raycast(aboveZone, down, 10.0f, ~(1u << triggers), Entity(), true).value_or(RaycastHit()).HitEntity == ground, "rays filter layers");
 
 		const glm::vec3 inZone(7.5f, 1.0f, 6.5f);
 		Expect(Physics::OverlapSphere(inZone, 0.4f).empty(), "Physics::OverlapSphere skips triggers");
 		Expect(Physics::OverlapSphere(inZone, 0.4f, Physics::c_AllLayers, true) == std::vector<Entity> { zone }, "Physics::OverlapSphere can include triggers");
 		const glm::quat turned = glm::angleAxis(glm::radians(45.0f), glm::vec3(0.0f, 1.0f, 0.0f));
 		Expect(Physics::OverlapBox(Home, glm::vec3(0.25f), turned) == std::vector<Entity> { self }, "Physics::OverlapBox");
+	}
+
+	// The scene names layers 2 ("Characters"), 3 ("Triggers") and 7 ("Debris"), and debris passes through debris and layer 6.
+	void CheckLayers()
+	{
+		Expect(Physics::GetLayerIndex("characters") == 2 && Physics::GetLayerIndex("Debris") == 7 && Physics::GetLayerIndex("Layer 9") == 9,
+			"Physics::GetLayerIndex finds the scene's layers by name");
+		Expect(Physics::GetLayerIndex("Ghosts") == -1, "names the scene does not give find nothing");
+		Expect(!Physics::GetLayersCollide(7, 7) && !Physics::GetLayersCollide(7, 6) && Physics::GetLayersCollide(2, 3),
+			"Physics::GetLayersCollide reads the scene's matrix");
+		// Layers no body of the scene uses, so the change leaves the scenario alone.
+		Expect(Physics::SetLayersCollide(8, 9, false) && !Physics::GetLayersCollide(9, 8), "Physics::SetLayersCollide");
+		Expect(Physics::SetLayersCollide(8, 9, true) && Physics::GetLayersCollide(8, 9), "and back");
 	}
 
 	void CheckImpulses(RigidBody& body, const glm::vec3& center)

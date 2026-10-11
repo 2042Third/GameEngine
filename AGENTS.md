@@ -530,7 +530,9 @@ Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; t
 
 - Physics: `RigidBody` (velocities, forces, impulses, `Teleport`) and `Physics` (raycasts, overlaps) go through the scene
   services the scene's `PhysicsSystem` offers (`IBodyMotionQuery`, `IBodyControl`, `IPhysicsQueries`), also in `OnCreate`:
-  scenes start every system before the scripts (`SceneSystem::OnRuntimeStarted`). Contacts reach scripts as
+  scenes start every system before the scripts (`SceneSystem::OnRuntimeStarted`). `Physics::SetLayersCollide`,
+  `GetLayersCollide` and `GetLayerIndex` read and change the playing scene's collision layers
+  (`SceneSettings::PhysicsLayers`; physics applies a change before its next step). Contacts reach scripts as
   `OnCollisionEnter/Exit` and `OnTriggerEnter/Exit` (class descriptor callbacks taking a `StrataScriptCollision`):
   `ScriptSystem` listens to the scene's `ICollisionEventSource` while it runs and calls the scripts of both entities,
   skipping removed, disabled and not yet started instances; contacts begin only for active entities, and each instance
@@ -908,8 +910,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   matching tab (Inspector or Asset) forward without taking the keyboard focus. The Inspector edits every selected entity
   at once (shared components only; values that differ show as mixed; one undo step per edit), offers per component
   Reset, Copy Values and Paste Values (the values component.set can set; not for components without such properties)
-  and Remove (not for components the engine adds), and shows the scene's settings (gravity, the fixed step and the physics
-  world's capacities) and sky with nothing selected, in sections that start closed with a summary on their headers
+  and Remove (not for components the engine adds), and shows the scene's settings (gravity, the fixed step, the physics
+  world's capacities and the collision layers: names and matrix) and sky with nothing selected, in sections that start
+  closed with a summary on their headers
   (`UI::SectionHeader`'s summary: live widgets cost frame time while they are drawn); the
   Asset tab edits materials (`UI/MaterialEditor`: a drag previews, its release is one undo step) and import settings
   (Apply runs `asset.setImportSettings` through the runner) and previews textures as their content looks, with the

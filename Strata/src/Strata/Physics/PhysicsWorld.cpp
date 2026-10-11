@@ -3735,21 +3735,17 @@ namespace Strata
 		return ToGlm(m_Data->JoltSystem->GetGravity());
 	}
 
-	void PhysicsWorld::SetLayersCollide(uint32_t layerA, uint32_t layerB, bool collide)
-	{
-		if (layerA >= c_PhysicsLayerCount || layerB >= c_PhysicsLayerCount)
-		{
-			ST_CORE_WARN("Physics: cannot change the collision of layers {} and {}: layers range from 0 to {}", layerA, layerB, c_PhysicsLayerCount - 1);
-			return;
-		}
-
-		m_Data->Settings.SetLayersCollide(layerA, layerB, collide);
-		WakeAllBodies(*m_Data);
-	}
-
 	bool PhysicsWorld::DoLayersCollide(uint32_t layerA, uint32_t layerB) const
 	{
 		return m_Data->Settings.DoLayersCollide(layerA, layerB);
+	}
+
+	void PhysicsWorld::SetLayerCollisionMasks(const std::array<uint32_t, c_PhysicsLayerCount>& masks)
+	{
+		if (m_Data->Settings.LayerCollisionMasks == masks)
+			return;
+		m_Data->Settings.LayerCollisionMasks = masks;
+		WakeAllBodies(*m_Data);
 	}
 
 	glm::vec3 PhysicsWorld::GetLinearVelocity(Entity entity) const

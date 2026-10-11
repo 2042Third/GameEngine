@@ -89,7 +89,10 @@ namespace Strata
 		// Sets the scene's gravity (SceneSettings::Gravity) and applies it immediately. Non-finite values are rejected.
 		bool SetGravity(const glm::vec3& gravity);
 		glm::vec3 GetGravity() const;
-		// This scene's layer matrix (initialized from the default settings); applies to the running simulation too.
+		// Whether two layers collide: both the scene's layer matrix (SceneSettings::PhysicsLayers) and the default settings'
+		// (GetDefaultSettings, all layers collide unless a program changes them) must allow it. SetLayersCollide changes the
+		// scene's matrix, so the change is what the scene shows (and saves), and applies it to the running simulation at once;
+		// changes of the scene's matrix made elsewhere (scene.setSettings, undo) apply at the next fixed step.
 		void SetLayersCollide(uint32_t layerA, uint32_t layerB, bool collide);
 		bool DoLayersCollide(uint32_t layerA, uint32_t layerB) const;
 		PhysicsStats GetStats() const;
@@ -153,6 +156,10 @@ namespace Strata
 		// Creates the world once physics components exist, then applies the changes recorded since the last call.
 		void ApplyPendingChanges();
 		void SyncGravity();
+		// The matrix the world uses: the scene's and the default settings' masks together.
+		std::array<uint32_t, c_PhysicsLayerCount> GetEffectiveLayerMasks() const;
+		// Applies the scene's layer matrix to the world when it changed (scene.setSettings, a script, the inspector).
+		void SyncLayers();
 		void DispatchCollisionEvents();
 		// Tells the world which contacts to track: all of them while a listener of every entity is registered.
 		void UpdateContactTracking();
@@ -168,6 +175,7 @@ namespace Strata
 		CollisionListenerID m_NextListenerID = 1;
 		std::unordered_map<UUID, uint32_t> m_CollisionWatches; // Watched entities and their watch counts (see WatchCollisions)
 		glm::vec3 m_AppliedGravity = glm::vec3(0.0f); // Scene gravity last applied to the world
+		std::array<uint32_t, c_PhysicsLayerCount> m_AppliedLayerMasks = {}; // Layer matrix last applied to the world
 	};
 
 }

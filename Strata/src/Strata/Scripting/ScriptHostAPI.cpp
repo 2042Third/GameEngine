@@ -1992,6 +1992,52 @@ namespace Strata
 		}
 
 		////////////////////////////////////////////////////////////////////////////////
+		// Collision layers
+		////////////////////////////////////////////////////////////////////////////////
+
+		// The layer matrix lives in the scene's settings; the physics system applies changes before its next step (also when
+		// the scene plays without physics yet: a world created later starts with the matrix).
+		bool HostPhysicsSetLayersCollide(StrataScriptContext* context, uint32_t layerA, uint32_t layerB, bool collide)
+		{
+			return HostCall("PhysicsSetLayersCollide", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "PhysicsSetLayersCollide");
+				if (!system)
+					return false;
+				if (layerA >= c_PhysicsLayerCount || layerB >= c_PhysicsLayerCount)
+				{
+					system->ReportProblem("PhysicsSetLayersCollide",
+						fmt::format("layers {} and {}: layers range from 0 to {}", layerA, layerB, c_PhysicsLayerCount - 1));
+					return false;
+				}
+				system->GetScene().GetSettings().PhysicsLayers.SetCollide(layerA, layerB, collide);
+				return true;
+			});
+		}
+
+		bool HostPhysicsGetLayersCollide(StrataScriptContext* context, uint32_t layerA, uint32_t layerB)
+		{
+			return HostCall("PhysicsGetLayersCollide", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "PhysicsGetLayersCollide");
+				return system && system->GetScene().GetSettings().PhysicsLayers.DoCollide(layerA, layerB);
+			});
+		}
+
+		int32_t HostPhysicsGetLayerIndex(StrataScriptContext* context, StrataScriptString name)
+		{
+			return HostCall("PhysicsGetLayerIndex", int32_t(-1), [&]() -> int32_t
+			{
+				ScriptSystem* system = ResolveContext(context, "PhysicsGetLayerIndex");
+				if (!system)
+					return -1;
+				// An unknown name is an answer (-1), not misuse: games look layers up that a scene may not have.
+				const std::optional<uint32_t> layer = system->GetScene().GetSettings().PhysicsLayers.FindLayer(ScriptStringView(name));
+				return layer ? static_cast<int32_t>(*layer) : -1;
+			});
+		}
+
+		////////////////////////////////////////////////////////////////////////////////
 		// The table
 		////////////////////////////////////////////////////////////////////////////////
 
@@ -2097,7 +2143,10 @@ namespace Strata
 	X(WriteSaveFile) \
 	X(ReadSaveFile) \
 	X(DeleteSaveFile) \
-	X(ListSaveFiles)
+	X(ListSaveFiles) \
+	X(PhysicsSetLayersCollide) \
+	X(PhysicsGetLayersCollide) \
+	X(PhysicsGetLayerIndex)
 
 		struct HostFunctionEntry
 		{
