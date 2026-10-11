@@ -757,7 +757,7 @@ and `AudioSystem`, the built-in "Audio" scene system.
     window itself) opens a docked panel and brings it to the front, so agents can show the person what they look at; it
     fails while the launcher shows. A panel asked for (`EditorPanelRegistry::Focus`)
     stays open through a layout reset and the saved open states read at the first frame, and is asked for again until its
-    tab shows. Glyphs a font lacks show as its fallback glyph: draw color swatches as rectangles (the monospaced font has no
+    tab shows; while a modal dialog waits for the person it opens behind it (focusing it would close the dialog). Glyphs a font lacks show as its fallback glyph: draw color swatches as rectangles (the monospaced font has no
     icons), and check panels with `ImGuiHarness::CountFallbackGlyphs`.
 - **Every change to the scene or project goes through a command** (`EditorCommandRegistry::Execute`) or,
   for continuous UI edits, through `SceneEditTransaction` / `SetPropertyWithUndo`. That keeps the UI,

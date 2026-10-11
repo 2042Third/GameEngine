@@ -137,6 +137,42 @@ TEST_SUITE("Editor.UI.Activity")
 		CHECK(rerun.Parameters == nlohmann::json { { "name", "First" } });
 	}
 
+	TEST_CASE("The Activity panel asked for before the first frame joins the bottom area")
+	{
+		// As a command script's first command (editor.showPanel) does it: before the layout and the Console exist.
+		HarnessEditor editor({}, WithFeatureProject("ActivityFirstFrame"));
+		editor.Layer->GetPanels().Focus(EditorPanels::c_Activity);
+		editor.Frames(3);
+		ImGuiWindow* activity = editor.FindPanelWindow(EditorPanels::c_Activity);
+		ImGuiWindow* console = editor.FindPanelWindow(EditorPanels::c_Console);
+		REQUIRE(activity);
+		REQUIRE(console);
+		CHECK(activity->DockNode != nullptr);
+		CHECK(activity->DockNode == console->DockNode);
+		CHECK_FALSE(activity->Hidden);
+	}
+
+	TEST_CASE("A panel asked for while a dialog waits for the person opens behind it, and comes forward after")
+	{
+		HarnessEditor editor({}, WithFeatureProject("ActivityBehindDialog"));
+		editor.Frames(2);
+		editor.Run("editor.showDialog", { { "dialog", "about" } });
+		editor.Frames(2);
+		REQUIRE(editor.Layer->GetAboutDialog().IsOpen());
+		// An agent shows the Activity panel meanwhile: the dialog stays.
+		editor.Run("editor.showPanel", { { "panel", "Activity" } });
+		editor.Frames(3);
+		CHECK(editor.Layer->GetAboutDialog().IsOpen());
+		CHECK(editor.Layer->GetPanels().IsOpen(EditorPanels::c_Activity));
+		// Once the person closes the dialog, the panel comes to the front.
+		REQUIRE(editor.Click("About.Close"));
+		editor.Frames(3);
+		CHECK_FALSE(editor.Layer->GetAboutDialog().IsOpen());
+		ImGuiWindow* activity = editor.FindPanelWindow(EditorPanels::c_Activity);
+		REQUIRE(activity);
+		CHECK_FALSE(activity->Hidden);
+	}
+
 	TEST_CASE("An agent shows in the automation pill, a viewport chip and an outline of what it changed")
 	{
 		const std::filesystem::path sessions = CreateTemporaryDirectory("ActivityPresenceSessions");

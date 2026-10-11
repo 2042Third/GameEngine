@@ -176,7 +176,10 @@ namespace Strata
 			}
 
 			const EditorPanelWindowOptions options = entry.Panel->GetWindowOptions(context);
-			const bool focusing = entry.FocusRequested;
+			// Focusing a window closes the popups above it: while a modal dialog waits for the person (the unsaved-changes
+			// question, recovery), a panel asked for (e.g. by an agent's editor.showPanel) opens behind it and comes to the
+			// front once the dialog is answered.
+			const bool focusing = entry.FocusRequested && !ImGui::GetTopMostPopupModal();
 			if (focusing)
 				ImGui::SetNextWindowFocus();
 			if (entry.ShowTabRequested)

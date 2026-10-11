@@ -1140,11 +1140,14 @@ namespace Strata
 		switch (exporter.GetState())
 		{
 			case GameExportState::Succeeded:
+			{
 				notification.Level = NotificationLevel::Success;
 				notification.Title = "Game exported";
-				notification.Message = fmt::format("{} ({} assets, {:.1f} s)", FileSystem::ToUTF8(exporter.GetOptions().Directory), exporter.GetResult().AssetCount,
-					exporter.GetResult().Seconds);
+				const double seconds = exporter.GetResult().Seconds;
+				notification.Message = fmt::format("{} ({} assets, {})", FileSystem::ToUTF8(exporter.GetOptions().Directory), exporter.GetResult().AssetCount,
+					seconds < 1.0 ? fmt::format("{:.0f} ms", seconds * 1000.0) : fmt::format("{:.1f} s", seconds));
 				break;
+			}
 			case GameExportState::Failed:
 				notification.Level = NotificationLevel::Error;
 				notification.Title = "Export failed";
