@@ -7,6 +7,7 @@
 #include "Renderer/GPUTestUtils.h"
 #include "Runtime/PerfLogReader.h"
 #include "Strata/Asset/AssetImporter.h"
+#include "Strata/Core/CommandLine.h"
 #include "Strata/Core/CrashGuard.h"
 #include "Strata/Core/FileLock.h"
 #include "Strata/Core/FileSystem.h"
@@ -503,21 +504,40 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 	}
 	if (mode == "check-image")
 	{
-		// <png> [--dominant red|green|blue <percent>]: succeeds if the image decodes and shows something: it is neither
-		// (nearly) black nor a single color, and with --dominant at least <percent> of its pixels are clearly of that color
-		// (the channel exceeds both others by more than 40), e.g. a known object of the scene.
-		if (argc != 3 && argc != 6)
+		// <png> [--dominant red|green|blue <percent>] [--size <width>x<height>]: succeeds if the image decodes and shows
+		// something: it is neither (nearly) black nor a single color, with --dominant at least <percent> of its pixels are
+		// clearly of that color (the channel exceeds both others by more than 40), e.g. a known object of the scene, and with
+		// --size it has exactly that many pixels.
+		if (argc < 3)
 			return 2;
 		int dominantChannel = -1;
 		double dominantPercent = 0.0;
-		if (argc == 6)
+		const char* dominantName = "";
+		std::optional<std::pair<uint32_t, uint32_t>> expectedSize;
+		for (int argument = 3; argument < argc; argument++)
 		{
-			const std::string_view option(argv[3]);
-			const std::string_view color(argv[4]);
-			dominantChannel = color == "red" ? 0 : (color == "green" ? 1 : (color == "blue" ? 2 : -1));
-			dominantPercent = std::atof(argv[5]);
-			if (option != "--dominant" || dominantChannel < 0 || !(dominantPercent > 0.0 && dominantPercent <= 100.0))
+			const std::string_view option(argv[argument]);
+			if (option == "--dominant" && argument + 2 < argc)
+			{
+				dominantName = argv[argument + 1];
+				const std::string_view color(dominantName);
+				dominantChannel = color == "red" ? 0 : (color == "green" ? 1 : (color == "blue" ? 2 : -1));
+				dominantPercent = std::atof(argv[argument + 2]);
+				if (dominantChannel < 0 || !(dominantPercent > 0.0 && dominantPercent <= 100.0))
+					return 2;
+				argument += 2;
+			}
+			else if (option == "--size" && argument + 1 < argc)
+			{
+				expectedSize = Strata::CommandLine(std::vector<std::string> { "check-image", "--size", argv[argument + 1] }).GetSizeOption("--size");
+				if (!expectedSize)
+					return 2;
+				argument++;
+			}
+			else
+			{
 				return 2;
+			}
 		}
 		const std::optional<std::vector<uint8_t>> data = Strata::FileSystem::ReadBytes(Strata::FileSystem::FromUTF8(argv[2]));
 		if (!data || data->empty())
@@ -561,6 +581,11 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		}
 		stbi_image_free(pixels);
 		std::printf("%dx%d pixels, brightest channel %d, %lld pixels differ from the corner\n", width, height, brightest, static_cast<long long>(differing));
+		if (expectedSize && (static_cast<uint32_t>(width) != expectedSize->first || static_cast<uint32_t>(height) != expectedSize->second))
+		{
+			std::fprintf(stderr, "The image is not %ux%u pixels\n", expectedSize->first, expectedSize->second);
+			return 1;
+		}
 		if (brightest < 32)
 		{
 			std::fprintf(stderr, "The image is black\n");
@@ -574,10 +599,10 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		if (dominantChannel >= 0)
 		{
 			const double percent = 100.0 * static_cast<double>(dominant) / static_cast<double>(count);
-			std::printf("%.2f%% of the pixels are %s\n", percent, argv[4]);
+			std::printf("%.2f%% of the pixels are %s\n", percent, dominantName);
 			if (percent < dominantPercent)
 			{
-				std::fprintf(stderr, "Fewer than %.2f%% of the pixels are %s\n", dominantPercent, argv[4]);
+				std::fprintf(stderr, "Fewer than %.2f%% of the pixels are %s\n", dominantPercent, dominantName);
 				return 1;
 			}
 		}

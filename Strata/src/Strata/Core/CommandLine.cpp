@@ -62,4 +62,30 @@ namespace Strata
 		return value;
 	}
 
+	std::optional<std::pair<uint32_t, uint32_t>> CommandLine::GetSizeOption(std::string_view name) const
+	{
+		const std::optional<std::string> text = GetOption(name);
+		if (!text)
+			return std::nullopt;
+
+		const size_t separator = text->find('x');
+		if (separator == std::string::npos)
+			return std::nullopt;
+		// Whole numbers only: no sign, no spaces, nothing after them.
+		auto parse = [](std::string_view part) -> std::optional<uint32_t>
+		{
+			uint32_t value = 0;
+			const auto [end, error] = std::from_chars(part.data(), part.data() + part.size(), value);
+			if (part.empty() || error != std::errc() || end != part.data() + part.size() || value == 0 || value > c_MaxSizeOption)
+				return std::nullopt;
+			return value;
+		};
+		const std::string_view whole(*text);
+		const std::optional<uint32_t> width = parse(whole.substr(0, separator));
+		const std::optional<uint32_t> height = parse(whole.substr(separator + 1));
+		if (!width || !height)
+			return std::nullopt;
+		return std::pair { *width, *height };
+	}
+
 }

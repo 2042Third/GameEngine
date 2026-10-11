@@ -1449,8 +1449,11 @@ shows, so a game that does lists them in `Export.AlwaysInclude` (`project.setExp
 
 `StrataRuntime` (`StrataRuntime/src/RuntimeApplication.cpp`) runs `--game <file>`, or the manifest found next to the
 executable (`GameManifest::FindForExecutable`). It logs to `<user data>/<Game>/Logs/Game.log`. `--headless` disables
-the window and the renderer and paces at 60 frames per second; `--windowed` overrides a fullscreen manifest, and
-`--frames N` with `--screenshot out.png` saves the last frame, `--asset-budget-mb <n>` sets the GPU texture budget
+the window and the renderer and paces at 60 frames per second; `--windowed` overrides a fullscreen manifest,
+`--resolution <width>x<height>` opens a window of exactly that many pixels whatever the display's scale (the manifest's
+window size is in screen coordinates, which the display's scale multiplies: 1280x720 is 1920x1080 pixels at 150%;
+`WindowSpecification::SizeInPixels`), so perf logs and screenshots compare across displays, `--frames N` with
+`--screenshot out.png` saves the last frame, `--asset-budget-mb <n>` sets the GPU texture budget
 of the game's assets (the other budgets keep their defaults), and `--perf-log <csv>` writes a row for every frame, also
 headless (`Runtime/FramePerfLog`, a frame profiler listener, so writing costs the measured frame nothing): the frame's
 work time and interval, each stage's milliseconds, the job threads' busy percentages and the asset manager's streaming

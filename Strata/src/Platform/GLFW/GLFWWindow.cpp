@@ -54,7 +54,8 @@ namespace Strata
 		glfwWindowHint(GLFW_DECORATED, specification.Decorated ? GLFW_TRUE : GLFW_FALSE);
 		glfwWindowHint(GLFW_MAXIMIZED, specification.Maximized ? GLFW_TRUE : GLFW_FALSE);
 		glfwWindowHint(GLFW_VISIBLE, specification.Visible ? GLFW_TRUE : GLFW_FALSE);
-		glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);
+		const bool sizeInPixels = specification.SizeInPixels && !specification.Fullscreen;
+		glfwWindowHint(GLFW_SCALE_TO_MONITOR, sizeInPixels ? GLFW_FALSE : GLFW_TRUE);
 
 		GLFWmonitor* monitor = nullptr;
 		int width = static_cast<int>(specification.Width);
@@ -77,6 +78,23 @@ namespace Strata
 		int windowWidth = 0;
 		int windowHeight = 0;
 		glfwGetWindowSize(m_Window, &windowWidth, &windowHeight);
+		if (sizeInPixels)
+		{
+			// Where screen coordinates are not pixels (a Retina display), the framebuffer differs: size the window so that it
+			// has the pixels asked for.
+			int framebufferWidth = 0;
+			int framebufferHeight = 0;
+			glfwGetFramebufferSize(m_Window, &framebufferWidth, &framebufferHeight);
+			if (framebufferWidth > 0 && framebufferHeight > 0 && (framebufferWidth != width || framebufferHeight != height))
+			{
+				const auto scaled = [](int size, int windowSize, int framebufferSize)
+				{
+					return std::max(1, static_cast<int>(std::lround(static_cast<double>(size) * windowSize / framebufferSize)));
+				};
+				glfwSetWindowSize(m_Window, scaled(width, windowWidth, framebufferWidth), scaled(height, windowHeight, framebufferHeight));
+				glfwGetWindowSize(m_Window, &windowWidth, &windowHeight);
+			}
+		}
 		m_Data.Width = static_cast<uint32_t>(windowWidth);
 		m_Data.Height = static_cast<uint32_t>(windowHeight);
 		m_WindowedWidth = static_cast<int>(specification.Width);

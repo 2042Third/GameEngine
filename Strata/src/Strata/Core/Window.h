@@ -34,6 +34,9 @@ namespace Strata
 		bool Decorated = true;
 		bool VSync = true;
 		bool Visible = true;
+		// Width and Height are framebuffer pixels, whatever the display's scale (a windowed window only). Otherwise they are
+		// screen coordinates scaled with the monitor's content scale, so a window takes the same share of every display.
+		bool SizeInPixels = false;
 		std::filesystem::path IconPath; // Optional PNG used as the window icon
 	};
 
