@@ -3,6 +3,7 @@
 #include "Editor/EditorViewport.h"
 #include "Editor/GameExport.h"
 #include "Editor/PrefabSync.h"
+#include "Editor/ProjectThumbnail.h"
 #include "Editor/ProjectTemplates.h"
 #include "Editor/RecentProjects.h"
 #include "Editor/SceneEdit.h"
@@ -224,6 +225,8 @@ namespace Strata
 		PrefabSync& GetPrefabSync() { return m_PrefabSync; }
 		// Thumbnails of the open project's assets (Content Browser, Asset tab); null without a project or a GPU.
 		ThumbnailCache* GetThumbnails() const { return m_Thumbnails.get(); }
+		// The project's picture for the launcher, made after each scene save.
+		const ProjectThumbnail& GetProjectThumbnail() const { return m_ProjectThumbnail; }
 		// Records an edit of the active scene. Edits of the running copy during play are not recorded: they are
 		// discarded with it. Returns true when an undo step was recorded.
 		bool CommitEdit(SceneEditTransaction& transaction);
@@ -333,6 +336,8 @@ namespace Strata
 		void OpenScriptEngine(bool created);
 		// The open project's thumbnail cache (with a GPU), kept in its intermediate directory.
 		void OpenThumbnails();
+		// After the edited scene was saved: the project's picture for the launcher is made again.
+		void OnSceneSaved();
 		void CloseScriptEngine();
 		// Fingerprints the loaded module's file after a load. `expected` is its digest from before the load (if known):
 		// a file that changed while it was being loaded leaves the running version unknown.
@@ -367,6 +372,7 @@ namespace Strata
 		UndoStack m_UndoStack;
 		PrefabSync m_PrefabSync;
 		Scope<ThumbnailCache> m_Thumbnails;
+		ProjectThumbnail m_ProjectThumbnail;
 
 		Ref<ScriptEngine> m_ScriptEngine;
 		ScriptBuilder m_ScriptBuilder;

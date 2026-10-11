@@ -249,6 +249,7 @@ namespace Strata
 		CloseScriptEngine();
 		// Before the asset manager: its reads use the manager.
 		m_Thumbnails.reset();
+		m_ProjectThumbnail.Cancel();
 		if (m_AssetManager)
 		{
 			// Cancels the project's imports without waiting for them (also while something else still holds the manager).
@@ -400,6 +401,7 @@ namespace Strata
 		if (!m_AssetManager->SaveNativeAsset(m_SceneHandle, bytes, false, outError, scanned ? &references : nullptr))
 			return false;
 		m_UndoStack.MarkSaved();
+		OnSceneSaved();
 		return true;
 	}
 
@@ -428,7 +430,13 @@ namespace Strata
 		m_SceneHandle = handle;
 		m_EditScene->SetSourceAsset(handle);
 		m_UndoStack.MarkSaved();
+		OnSceneSaved();
 		return true;
+	}
+
+	void EditorContext::OnSceneSaved()
+	{
+		m_ProjectThumbnail.Request();
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -972,6 +980,7 @@ namespace Strata
 		UpdatePendingFrame();
 		if (m_Thumbnails)
 			m_Thumbnails->Update();
+		m_ProjectThumbnail.Update(*this);
 	}
 
 	////////////////////////////////////////////////////////////////////////////////

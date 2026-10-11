@@ -252,8 +252,7 @@ Open items and deferrals later waves own:
   1,000,000-entity scene in about 0.7 s (`scene-streaming`).
 - The editor starts in 0.7-1.0 s (Release, to its first frame on screen), not the 0.4 s the pillar names. An idle
   editor answers input and automation requests on its next throttled frame (up to 33 ms, 100 ms unfocused) until it
-  waits on events instead (later editor work). Project thumbnails and search in the recent projects move to
-  `content-and-prefabs`.
+  waits on events instead (later editor work).
 - Perf budgets hold for the reference machine only, so CI's hosted runners skip the `perf` label; a self-hosted runner
   on the reference machine would make them an automatic gate. On its hybrid processor where the scheduler places a
   process's main thread lasts for the process's life and shows in what it measures: pinned, an idle editor frame took

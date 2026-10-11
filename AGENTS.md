@@ -961,8 +961,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   File and Help menu bar), until a project opens or the user picks Continue without a project; closing the project
   shows it again. It offers New Project (`UI/ProjectDialogs`: template cards, name, location; the location used last is
   remembered in imgui.ini, first `<home>/StrataProjects`, which keeps script build paths short), Open Project, Open
-  Sample, the recent projects as cards (context menu: show in folder, copy path, remove from list), template and sample
-  cards, "Connect an AI agent" (the exact `claude mcp add strata -- "<bin>/StrataCLI" mcp` line with a copy button, and
+  Sample, the recent projects as cards with each project's picture (`Editor/ProjectThumbnail`: written after every scene
+  save to `<project>/.strata/Thumbnail.png`, 480x270, from the scene's camera) and a search over their names and paths
+  (context menu: show in folder, copy path, remove from list), template and sample cards, "Connect an AI agent" (the exact `claude mcp add strata -- "<bin>/StrataCLI" mcp` line with a copy button, and
   the automation state, also why it failed to start) and a footer with version, commit, GPU and startup time. Its
   sections share one grid in a content column centered in the main area, so they end at one right edge. Its actions
   report failures on it; dropping a `.stproj` on the window opens that project. File > Open Recent lists the recent

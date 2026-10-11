@@ -782,4 +782,48 @@ TEST_SUITE("Editor.Launcher")
 		CHECK(settings.find("Launcher=") == std::string::npos);
 		registry.RemoveSettingsHandler();
 	}
+
+	TEST_CASE("The search keeps the recent projects whose name or path holds every word")
+	{
+		const std::filesystem::path root = CreateTemporaryDirectory("LauncherSearch");
+		HarnessEditor editor;
+		editor.Run("project.create", { { "directory", FileSystem::ToUTF8(root / "Alpha") }, { "name", "Alpha Game" } });
+		editor.Run("project.create", { { "directory", FileSystem::ToUTF8(root / "Other" / "Beta") }, { "name", "Beta" } });
+		editor.Run("project.close");
+		editor.Frames(2);
+		const WelcomePanel* welcome = editor.Layer->GetPanels().Get<WelcomePanel>(EditorPanels::c_Welcome);
+		REQUIRE(welcome);
+		REQUIRE(welcome->GetRecentProjects().size() == 2);
+		CHECK(welcome->GetRecentProjects()[0].Name == "Beta"); // Recent.0: Beta, Recent.1: Alpha Game
+
+		const auto search = [&](const std::string& text)
+		{
+			REQUIRE(editor.ReplaceText("Welcome.Search", text));
+			editor.Frames(2);
+		};
+		search("alpha");
+		CHECK_FALSE(IsDrawn("Welcome.Recent.0"));
+		CHECK(IsDrawn("Welcome.Recent.1"));
+		search("OTHER"); // A folder of the path, in any case
+		CHECK(IsDrawn("Welcome.Recent.0"));
+		CHECK_FALSE(IsDrawn("Welcome.Recent.1"));
+		search("game alpha");
+		CHECK(IsDrawn("Welcome.Recent.1"));
+		search("alpha beta");
+		CHECK_FALSE(IsDrawn("Welcome.Recent.0"));
+		CHECK_FALSE(IsDrawn("Welcome.Recent.1"));
+		CHECK(IsDrawn("Welcome.NoMatch"));
+		// The field's clear button shows every project again.
+		REQUIRE(editor.Click("Welcome.Search.Clear"));
+		editor.Frames(2);
+		CHECK(IsDrawn("Welcome.Recent.0"));
+		CHECK(IsDrawn("Welcome.Recent.1"));
+
+		RecentProject project;
+		project.Name = "Space Race";
+		project.Path = root / "Games" / "Race.stproj";
+		CHECK(WelcomePanel::MatchesSearch(project, "space games"));
+		CHECK(WelcomePanel::MatchesSearch(project, "  RACE  "));
+		CHECK_FALSE(WelcomePanel::MatchesSearch(project, "space ship"));
+	}
 }

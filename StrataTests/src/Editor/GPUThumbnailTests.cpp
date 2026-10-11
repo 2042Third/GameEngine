@@ -2,8 +2,10 @@
 
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/ProjectThumbnail.h"
 #include "Editor/ThumbnailCache.h"
 #include "FeatureTest/FeatureTestUtils.h"
+#include "Panels/WelcomePanel.h"
 #include "Renderer/GPUTestUtils.h"
 #include "TestHelpers.h"
 
@@ -12,10 +14,12 @@
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Renderer/ImageReader.h>
 #include <Strata/Renderer/Renderer.h>
 
 #include <chrono>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -226,6 +230,70 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 			harness.Frame();
 		}
 		CHECK(harness.Thumbnails().GetStats().ScenesRendered == rendered + 1);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A scene save writes the project's picture for the launcher, which its card shows")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("GPUProjectThumbnail") / "Game";
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		const EditorCommandResult created = commands.Execute(context, "project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" },
+			{ "template", "basic3d" } });
+		INFO(created.Error);
+		REQUIRE(created.Success);
+		const auto frameUntil = [&](const std::function<bool()>& condition)
+		{
+			for (int frame = 0; frame < 2000 && !condition(); frame++)
+			{
+				REQUIRE(gpu.GetDevice().BeginFrame());
+				Renderer::BeginFrame();
+				context.Update(Timestep(1.0f / 60.0f));
+				gpu.GetDevice().EndFrame();
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			return condition();
+		};
+		// The new project's start scene was saved: its picture follows.
+		REQUIRE(frameUntil([&]() { return !context.GetProjectThumbnail().IsPending(); }));
+		const uint64_t written = context.GetProjectThumbnail().GetWrittenCount();
+		CHECK(written >= 1);
+		const EditorCommandResult saved = commands.Execute(context, "scene.save", nlohmann::json::object());
+		REQUIRE(saved.Success);
+		CHECK(context.GetProjectThumbnail().IsPending());
+		REQUIRE(frameUntil([&]() { return !context.GetProjectThumbnail().IsPending(); }));
+		CHECK(context.GetProjectThumbnail().GetWrittenCount() == written + 1);
+
+		const std::filesystem::path file = ProjectThumbnail::GetFile(directory);
+		const std::optional<std::vector<uint8_t>> png = FileSystem::ReadBytes(file);
+		REQUIRE(png);
+		const std::optional<ReadbackImage> image = ImageReader::DecodeRGBA8(*png);
+		REQUIRE(image);
+		CHECK(image->Width == ProjectThumbnail::c_Width);
+		CHECK(image->Height == ProjectThumbnail::c_Height);
+		// The scene from its camera: sky above, ground below, not a black frame.
+		const glm::u8vec4 top = Tests::GetPixelRGBA8(*image, image->Width / 2, 4);
+		const glm::u8vec4 bottom = Tests::GetPixelRGBA8(*image, image->Width / 2, image->Height - 4);
+		CHECK(top != bottom);
+		CHECK(static_cast<int>(top.r) + top.g + top.b > 30);
+
+		// The launcher's card reads it back as a texture of its size.
+		context.CloseProject();
+		WelcomePanel welcome;
+		nvrhi::ITexture* picture = nullptr;
+		for (int attempt = 0; attempt < 2000 && !picture; attempt++)
+		{
+			picture = welcome.GetCardImage(directory / "Game.stproj");
+			if (!picture)
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		REQUIRE(picture);
+		CHECK(picture->getDesc().width == ProjectThumbnail::c_Width);
+		// A project without a picture has none.
+		CHECK(welcome.GetCardImage(directory.parent_path() / "Missing" / "Missing.stproj") == nullptr);
+		gpu.GetDevice().WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

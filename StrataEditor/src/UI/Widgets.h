@@ -135,6 +135,9 @@ namespace Strata::UI
 		std::string_view Title;
 		std::string_view Subtitle;
 		std::string_view Detail;
+		// A picture of display colors in place of the badge (0: the badge), as wide as ImageAspect times its height.
+		ImTextureID Image = 0;
+		float ImageAspect = 16.0f / 9.0f;
 	};
 	bool EntryCard(const char* id, const EntryCardContent& content, const ImVec2& size);
 

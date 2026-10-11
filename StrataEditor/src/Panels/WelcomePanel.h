@@ -6,8 +6,11 @@
 #include <Strata/Core/Base.h>
 #include <Strata/Core/JobSystem.h>
 
+#include <nvrhi/nvrhi.h>
+
 #include <filesystem>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace Strata
@@ -16,8 +19,9 @@ namespace Strata
 	// The launcher: what the editor shows while no project is open (a launcher panel of the EditorPanelRegistry).
 	// - The strata mark and the name, and the actions that start work: New Project, Open Project and the samples, through
 	//   the dialogs of the EditorShell (project.create, project.open, project.openSample).
-	// - The recent projects (RecentProjects) as cards: a click opens one; the context menu also shows its folder, copies
-	//   its path or takes it off the list (editor.removeRecentProject).
+	// - The recent projects (RecentProjects) as cards with each project's picture (ProjectThumbnail, read on an I/O thread
+	//   while the launcher shows), filtered by a search over names and paths: a click opens one; the context menu also
+	//   shows its folder, copies its path or takes it off the list (editor.removeRecentProject).
 	// - "Connect an AI agent": the command line that adds Strata's MCP server (StrataCLI mcp) to Claude Code, with a copy
 	//   button, and the automation server's live state.
 	// - A footer with the version and commit, the GPU and the measured startup time, and About Strata.
@@ -44,6 +48,10 @@ namespace Strata
 		bool IsRefreshing() const { return m_RefreshResult != nullptr; }
 		// Whether the last read found the project file missing (File > Open Recent leaves it out too).
 		bool IsKnownMissing(const std::filesystem::path& projectFile) const;
+		// Whether a recent project matches a search: every word of it in its name or its path (ignoring case).
+		static bool MatchesSearch(const RecentProject& project, std::string_view search);
+		// The picture a recent project's card shows (null while it is read, without one and without a GPU).
+		nvrhi::ITexture* GetCardImage(const std::filesystem::path& projectFile);
 
 		// The command line that adds Strata's MCP server to Claude Code: claude mcp add strata -- "<StrataCLI>" mcp
 		static std::string GetAgentCommandLine(const std::filesystem::path& cliExecutable);
@@ -62,6 +70,14 @@ namespace Strata
 			int Columns = 1;
 			float ColumnWidth = 0.0f;
 			float Width = 0.0f; // From the left edge of the first column to the right edge of the last one
+		};
+
+		// A project's picture: read and decoded on an I/O thread, then a texture.
+		struct CardImageLoad;
+		struct CardImage
+		{
+			Ref<CardImageLoad> Load;
+			nvrhi::TextureHandle Texture;
 		};
 
 		// What a read of the recent projects on an I/O thread found.
@@ -105,6 +121,10 @@ namespace Strata
 		std::vector<Starter> m_Samples;
 		bool m_StartersRead = false;
 		std::string m_Error;
+		std::string m_Search;
+		// The pictures of the recent projects, by project file (read again each time the launcher shows).
+		std::unordered_map<std::string, CardImage> m_CardImages;
+		nvrhi::CommandListHandle m_UploadCommands;
 	};
 
 }

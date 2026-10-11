@@ -1,5 +1,6 @@
 #include "Editor/ThumbnailCache.h"
 
+#include "Editor/DisplayImage.h"
 #include "Editor/EditorCamera.h"
 #include "Editor/SceneBounds.h"
 
@@ -844,25 +845,17 @@ namespace Strata
 				continue;
 			Entry& entry = it->second;
 			const Ref<ThumbnailImage> image = std::move(entry.Image);
-			nvrhi::TextureDesc desc;
-			desc.width = image->Width;
-			desc.height = image->Height;
-			desc.format = nvrhi::Format::RGBA8_UNORM;
-			desc.debugName = "Thumbnail";
-			desc.initialState = nvrhi::ResourceStates::ShaderResource;
-			desc.keepInitialState = true;
-			nvrhi::TextureHandle texture = device->createTexture(desc);
-			if (!texture)
-			{
-				Fail(handle, entry.Key);
-				continue;
-			}
 			if (!open)
 			{
 				m_UploadCommands->open();
 				open = true;
 			}
-			m_UploadCommands->writeTexture(texture, 0, 0, image->Pixels.data(), static_cast<size_t>(image->Width) * 4);
+			nvrhi::TextureHandle texture = DisplayImage::Upload(m_UploadCommands, image->Width, image->Height, image->Pixels, "Thumbnail");
+			if (!texture)
+			{
+				Fail(handle, entry.Key);
+				continue;
+			}
 			if (entry.Texture)
 				replaced.push_back(entry.Texture);
 			entry.Texture = texture;

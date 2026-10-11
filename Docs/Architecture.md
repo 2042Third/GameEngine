@@ -1301,7 +1301,9 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   the launcher panel
   (`Panels/WelcomePanel`, registered with `EditorPanelPlacement::Launcher` and drawn by `EditorPanelRegistry::DrawLauncher`
   instead of the docked panels): a hero band with the strata, New Project, Open Project and Open Sample, the recent
-  projects as cards, template and sample cards, "Connect an AI agent" (the `claude mcp add` line for `StrataCLI mcp`
+  projects as cards (each with its project's picture, `<project>/.strata/Thumbnail.png`, read and decoded on an I/O
+  thread while the launcher shows and read again when it shows next, and filtered by a search over names and paths:
+  `WelcomePanel::MatchesSearch`, every word), template and sample cards, "Connect an AI agent" (the `claude mcp add` line for `StrataCLI mcp`
   next to the editor, and the automation server's state) and a footer with the version, commit, GPU and the startup time
   (process creation to the first frame on screen, `Platform::GetProcessUptime`). Otherwise it draws the
   dock space host (menu bar, the main toolbar under it, the dock space) and the status bar, then the panels through
@@ -1580,6 +1582,12 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   the PNG on a worker and saves on an I/O thread (`EditorViewportCommands.cpp`). The scene gizmos draw the range
   spheres and cones of the selection's lights only (`SceneGizmoSettings::AllLightRanges` off, the selection's subtrees as
   `LightRangeEntities`); other lights show as their icons, so a scene full of point lights stays readable.
+- **Project pictures** (`Editor/ProjectThumbnail.h`). After each scene save (`EditorContext::OnSceneSaved`, from
+  `SaveScene` and `SaveSceneAs`) the next frames render the saved scene from its primary camera (the editor camera without
+  one) at 480x270 with the viewport's capture renderer, without overlays, until nothing is loading (at most 120 frames),
+  read it back without stalling and encode and write it as `<project>/.strata/Thumbnail.png` on an I/O job; a save while
+  one is being made makes another after it. The launcher's cards show it (`DisplayImage::Upload` makes the texture, as
+  the thumbnail cache does). Nothing happens without a GPU or while playing.
 - **Placement** (`Editor/SceneRaycast.h`, `Editor/EditorPlacement.h`). `SceneRaycast::Cast` finds what a ray meets among
   the mesh renderers of a scene: the scene's `RenderScene` (synced first) answers which boxes lie along the ray (its
   spatial index, asked for a thin prism of planes around the segment), nearest first, and each is hit on its loaded mesh's

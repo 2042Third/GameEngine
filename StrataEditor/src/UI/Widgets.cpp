@@ -659,19 +659,31 @@ namespace Strata::UI
 		const ImVec2 padding = style.WindowPadding;
 		drawList->PushClipRect(min, max, true);
 
-		// The badge: a square as tall as the card's content.
+		// The badge: a square as tall as the card's content; or the picture, as tall, at its aspect (at most a third of the
+		// card's width).
 		const float badgeSize = std::max(size.y - padding.y * 2.0f, 1.0f);
 		const ImVec2 badgeMin(min.x + padding.x, min.y + (size.y - badgeSize) * 0.5f);
-		const ImVec2 badgeMax(badgeMin.x + badgeSize, badgeMin.y + badgeSize);
-		drawList->AddRectFilled(badgeMin, badgeMax, ToDrawColor(WithAlpha(content.BadgeColor, 0.16f)), rounding);
-		drawList->AddRect(badgeMin, badgeMax, ToDrawColor(WithAlpha(content.BadgeColor, 0.4f)), rounding);
-		ImFont* semiBold = EditorFonts::Get(EditorFont::SemiBold);
-		PushFont(EditorFont::SemiBold, TextSize::Title);
-		const ImVec2 badgeTextSize = ImGui::CalcTextSize(content.Badge.data(), content.Badge.data() + content.Badge.size());
-		ImGui::PopFont();
-		drawList->AddText(semiBold, GetTextSize(TextSize::Title) * fontScale,
-			ImVec2(badgeMin.x + (badgeSize - badgeTextSize.x) * 0.5f, badgeMin.y + (badgeSize - badgeTextSize.y) * 0.5f), ToDrawColor(content.BadgeColor),
-			content.Badge.data(), content.Badge.data() + content.Badge.size());
+		ImVec2 badgeMax(badgeMin.x + badgeSize, badgeMin.y + badgeSize);
+		if (content.Image)
+		{
+			const float imageWidth = std::round(std::min(badgeSize * std::max(content.ImageAspect, 0.1f), size.x / 3.0f));
+			badgeMax = ImVec2(badgeMin.x + imageWidth, badgeMin.y + badgeSize);
+			// Display colors, drawn as they are (ImGuiTextureDisplay::Direct).
+			drawList->AddImage(content.Image, badgeMin, badgeMax);
+			drawList->AddRect(badgeMin, badgeMax, ToDrawColor(border));
+		}
+		else
+		{
+			drawList->AddRectFilled(badgeMin, badgeMax, ToDrawColor(WithAlpha(content.BadgeColor, 0.16f)), rounding);
+			drawList->AddRect(badgeMin, badgeMax, ToDrawColor(WithAlpha(content.BadgeColor, 0.4f)), rounding);
+			ImFont* semiBold = EditorFonts::Get(EditorFont::SemiBold);
+			PushFont(EditorFont::SemiBold, TextSize::Title);
+			const ImVec2 badgeTextSize = ImGui::CalcTextSize(content.Badge.data(), content.Badge.data() + content.Badge.size());
+			ImGui::PopFont();
+			drawList->AddText(semiBold, GetTextSize(TextSize::Title) * fontScale,
+				ImVec2(badgeMin.x + (badgeSize - badgeTextSize.x) * 0.5f, badgeMin.y + (badgeSize - badgeTextSize.y) * 0.5f), ToDrawColor(content.BadgeColor),
+				content.Badge.data(), content.Badge.data() + content.Badge.size());
+		}
 
 		// Title, subtitle and detail, centered vertically next to it.
 		const float textX = badgeMax.x + padding.x;
