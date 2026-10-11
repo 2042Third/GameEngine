@@ -248,7 +248,9 @@ enabled and a window and graphics device exist, and calls `Begin`/`End` around t
 the UI for the window's content scale, on attach and on every `WindowContentScaleEvent`: the style is rebuilt from
 ImGui's dark defaults by the application's style callback (`SetStyleCallback`; the editor installs its Bedrock theme) and
 the fonts' DPI scale (`ImGuiStyle::FontScaleDpi`) follows; `SetContentScaleOverride` fixes the scale (`--ui-scale`).
-`ImGuiRenderer` is the NVRHI backend (user textures are `nvrhi::ITexture*`). Only the editor enables it. Draw callbacks
+`ImGuiRenderer` is the NVRHI backend (user textures are `nvrhi::ITexture*`); it copies the draw lists straight into
+vertex and index buffers the CPU writes and the GPU reads, mapped once, one set per frame the GPU may still be drawing
+(an event query says when the GPU is done with a set). Only the editor enables it. Draw callbacks
 set how the following draws sample (ImGui's linear and nearest sampler callbacks) and show their textures
 (`AddImGuiTextureDisplay`: `ImGuiTextureDisplay` as a push constant of `ImGui.frag`), so a texture whose stored layout
 would look wrong as sampled (sRGB, one channel standing for gray, a two-channel normal map) shows its content

@@ -66,14 +66,38 @@ namespace Strata
 		bool Init(nvrhi::IDevice* device, ShaderLibrary& shaders);
 		void Shutdown();
 
-		// Records all draw commands into commandList, rendering into the framebuffer (any color format).
+		// Records all draw commands into commandList, rendering into the framebuffer (any color format). Execute the command
+		// list before the next call: the draws read their vertices from memory the renderer writes again once the GPU has
+		// finished the work submitted before that call.
 		void Render(nvrhi::ICommandList* commandList, ImDrawData* drawData, nvrhi::IFramebuffer* framebuffer);
+		// How many sets of vertex and index buffers the renderer has (FrameBuffers): one per frame the GPU was still
+		// drawing when another began. For tests.
+		size_t GetFrameBufferSetCount() const { return m_FrameBuffers.size(); }
 	private:
+		// Vertex and index buffers that the CPU writes and the GPU reads in place: mapped once, the draw lists are copied
+		// straight into them, with no staging copy and no GPU copy (a frame's UI is a few hundred kilobytes). A set is
+		// written again only once the GPU is done with the frame that drew from it (Done).
+		struct FrameBuffers
+		{
+			nvrhi::BufferHandle Vertices;
+			nvrhi::BufferHandle Indices;
+			uint8_t* MappedVertices = nullptr;
+			uint8_t* MappedIndices = nullptr;
+			size_t VertexCapacity = 0; // In vertices
+			size_t IndexCapacity = 0;  // In indices
+			nvrhi::EventQueryHandle Done; // Set once the frame that drew from the set was submitted
+			bool Pending = false;          // Done was set and may not have completed yet
+			uint64_t LastUsedFrame = 0;
+		};
+
 		void UpdateTexture(nvrhi::ICommandList* commandList, ImTextureData* texture);
 		void DestroyTexture(ImTextureData* texture);
 		nvrhi::IGraphicsPipeline* GetPipeline(const nvrhi::FramebufferInfo& framebufferInfo);
 		nvrhi::IBindingSet* GetBindingSet(nvrhi::ITexture* texture, bool nearestFiltering);
-		bool ReserveBuffers(size_t vertexCount, size_t indexCount);
+		// A set the GPU is done with, holding at least these counts; null if a buffer could not be created.
+		FrameBuffers* AcquireFrameBuffers(size_t vertexCount, size_t indexCount);
+		bool ReserveFrameBuffers(FrameBuffers& buffers, size_t vertexCount, size_t indexCount);
+		void ReleaseFrameBuffers(FrameBuffers& buffers);
 	private:
 		nvrhi::IDevice* m_Device = nullptr;
 		nvrhi::ShaderHandle m_VertexShader;
@@ -96,12 +120,9 @@ namespace Strata
 		std::unordered_map<uintptr_t, CachedBindingSet> m_BindingSets;
 		uint64_t m_FrameCounter = 0;
 
-		nvrhi::BufferHandle m_VertexBuffer;
-		nvrhi::BufferHandle m_IndexBuffer;
-		size_t m_VertexCapacity = 0;
-		size_t m_IndexCapacity = 0;
-		std::vector<uint8_t> m_VertexStaging;
-		std::vector<uint8_t> m_IndexStaging;
+		std::vector<FrameBuffers> m_FrameBuffers;
+		// The set the previous Render drew from: its Done query is set at the next Render, once its draws were submitted.
+		std::optional<size_t> m_DrawnFrameBuffers;
 	};
 
 }
