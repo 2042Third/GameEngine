@@ -260,6 +260,11 @@ namespace Strata
 		return UUID(value);
 	}
 
+	std::optional<std::vector<uint8_t>> ReadImportSource(const ImportContext& context)
+	{
+		return context.ReadFile ? context.ReadFile(context.SourcePath) : FileSystem::ReadBytes(context.SourcePath);
+	}
+
 	std::optional<std::vector<uint8_t>> ReadImportDependency(const ImportContext& context, ImportResult& result, const std::filesystem::path& path)
 	{
 		const std::filesystem::path normalized = path.lexically_normal();
@@ -279,7 +284,7 @@ namespace Strata
 			dependency.Time = FileSystem::GetLastWriteTime(normalized).value_or(0);
 			// A link leading out of the asset directory is not read.
 			if (FileSystem::IsInsideResolved(normalized, assetDirectory))
-				bytes = FileSystem::ReadBytes(normalized);
+				bytes = context.ReadFile ? context.ReadFile(normalized) : FileSystem::ReadBytes(normalized);
 			if (bytes)
 				dependency.Hash = Hash::FNV1a(std::span<const uint8_t>(*bytes));
 			else

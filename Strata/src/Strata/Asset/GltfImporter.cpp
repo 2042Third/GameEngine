@@ -208,15 +208,26 @@ namespace Strata
 				if (!Load(outError))
 					return false;
 
+				// A cancelled import stops between a model's materials (whose textures take the longest) and meshes.
 				if (m_Settings.ImportMaterials)
 				{
 					for (cgltf_size index = 0; index < m_Data->materials_count; index++)
+					{
+						if (m_Context.IsCancelled())
+							return Fail(outError, "cancelled");
 						ImportMaterial(index);
+					}
 				}
 
 				for (cgltf_size index = 0; index < m_Data->meshes_count; index++)
+				{
+					if (m_Context.IsCancelled())
+						return Fail(outError, "cancelled");
 					ImportMesh(index);
+				}
 
+				if (m_Context.IsCancelled())
+					return Fail(outError, "cancelled");
 				if (!BuildModel(outError))
 					return false;
 
@@ -227,7 +238,7 @@ namespace Strata
 		private:
 			bool Load(std::string* outError)
 			{
-				std::optional<std::vector<uint8_t>> fileData = FileSystem::ReadBytes(m_Context.SourcePath);
+				std::optional<std::vector<uint8_t>> fileData = ReadImportSource(m_Context);
 				if (!fileData)
 					return Fail(outError, "cannot read the file");
 				// cgltf references the binary chunk of .glb files in place: the bytes must outlive the parsed data.
@@ -568,7 +579,9 @@ namespace Strata
 				Ref<Texture> decoded;
 				const std::string imageName = GetName(texture.image->name, "Image", imageIndex);
 				if (ReadImage(*texture.image, encoded, error))
-					decoded = TextureImporter::Decode(encoded, settings, imageName, &error);
+					decoded = TextureImporter::Decode(encoded, settings, imageName, &error, m_Context.Cancel);
+				if (!decoded && m_Context.IsCancelled())
+					return UUID::Null(); // Run fails the import before anything uses the slot
 				if (!decoded)
 				{
 					Warn(fmt::format("Material '{}': {} texture '{}' skipped: {}", materialName, slot, imageName, error));
@@ -726,6 +739,9 @@ namespace Strata
 
 				for (cgltf_size primitiveIndex = 0; primitiveIndex < source.primitives_count; primitiveIndex++)
 				{
+					// A cancelled import stops here; Run then fails it.
+					if (m_Context.IsCancelled())
+						return;
 					const cgltf_primitive& primitive = source.primitives[primitiveIndex];
 					const std::string primitiveName = source.primitives_count > 1 ? fmt::format("{}/{}", meshName, primitiveIndex) : meshName;
 					if (primitive.targets_count > 0)
@@ -877,6 +893,9 @@ namespace Strata
 					if (m_Settings.OptimizeMeshes)
 						MeshUtils::OptimizeIndices(primitiveIndices, primitiveVertexCount);
 					std::vector<std::vector<uint32_t>> levels = { primitiveIndices };
+					// Simplifying a large primitive into its levels of detail takes the longest of a mesh.
+					if (m_Context.IsCancelled())
+						return;
 					if (m_Settings.GenerateLODs && m_Settings.LODCount > 0)
 					{
 						for (std::vector<uint32_t>& level : MeshUtils::GenerateLODs(primitivePositions, primitiveIndices, m_Settings.LODCount))

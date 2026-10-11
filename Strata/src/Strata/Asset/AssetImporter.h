@@ -6,6 +6,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <atomic>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <optional>
@@ -62,10 +64,21 @@ namespace Strata
 		// Resolves another file of the project (e.g. a texture referenced by a model) to the handle of its registered
 		// asset. Returns null for unregistered files, files outside the asset directory and unknown types.
 		std::function<AssetHandle(const std::filesystem::path& absolutePath)> ResolveAsset;
+		// Reads a file of the project (the source, a dependency); null reads it directly. The editor's asset manager reads
+		// under its file lock, so that moving or deleting a file never fails because an import has it open. Importers read
+		// through ReadImportSource and ReadImportDependency, which use it.
+		std::function<std::optional<std::vector<uint8_t>>(const std::filesystem::path& absolutePath)> ReadFile;
+		// Set once the import is no longer wanted (the project closes; the asset changes, moves, is deleted or imported
+		// again): the importer stops at its next check (IsCancelled: per block of a compressed texture level, between a
+		// texture's mip levels, a model's images, primitives and levels of detail) and fails. Its result is discarded and
+		// nothing of it is stored. Null: the import cannot be cancelled.
+		const std::atomic<bool>* Cancel = nullptr;
+
+		bool IsCancelled() const { return Cancel && Cancel->load(std::memory_order_relaxed); }
 	};
 
-	// Converts a source file into the stored form the asset loaders read. Importers run on I/O threads and must not
-	// touch engine state other than through the ImportContext.
+	// Converts a source file into the stored form the asset loaders read. Importers run on background threads and must not
+	// touch engine state other than through the ImportContext; long imports check ImportContext::IsCancelled.
 	class AssetImporter
 	{
 	public:
@@ -150,9 +163,12 @@ namespace Strata
 	// Deterministic handle of a sub-asset: stable across re-imports and machines for the same parent and key.
 	AssetHandle DeriveSubAssetHandle(AssetHandle parent, std::string_view key);
 
+	// Reads the source file of an import (through ImportContext::ReadFile); null when it cannot be read.
+	std::optional<std::vector<uint8_t>> ReadImportSource(const ImportContext& context);
+
 	// Reads a file an import uses besides its source (external buffers, images) and records it in the result's
 	// dependencies, also when it is missing. Only regular files inside the asset directory, also after resolving
-	// symbolic links, are read; returns null for anything else.
+	// symbolic links, are read (through ImportContext::ReadFile); returns null for anything else.
 	std::optional<std::vector<uint8_t>> ReadImportDependency(const ImportContext& context, ImportResult& result, const std::filesystem::path& path);
 
 }

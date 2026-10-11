@@ -230,6 +230,8 @@ namespace Strata
 		CloseScriptEngine();
 		if (m_AssetManager)
 		{
+			// Cancels the project's imports without waiting for them (also while something else still holds the manager).
+			m_AssetManager->Close();
 			if (AssetManager::GetActive() == m_AssetManager)
 				AssetManager::SetActive(nullptr);
 			m_AssetManager.reset();

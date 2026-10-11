@@ -117,6 +117,11 @@ namespace Strata::TextureCooker
 			return false;
 		}
 
+		bool IsCancelled(const std::atomic<bool>* cancel)
+		{
+			return cancel && cancel->load(std::memory_order_relaxed);
+		}
+
 		// How EncodeLevel hands a level to JobSystem::ParallelFor: rows of blocks, or texels for uncompressed formats.
 		struct EncodeWork
 		{
@@ -167,9 +172,9 @@ namespace Strata::TextureCooker
 		}
 	}
 
-	bool EncodeLevel(const Image& image, TextureFormat format, bool highQuality, std::vector<uint8_t>& outData)
+	bool EncodeLevel(const Image& image, TextureFormat format, bool highQuality, std::vector<uint8_t>& outData, const std::atomic<bool>* cancel)
 	{
-		if (!CanEncode(format) || !IsValidImage(image))
+		if (!CanEncode(format) || !IsValidImage(image) || IsCancelled(cancel))
 			return false;
 
 		const TextureFormatInfo info = GetTextureFormatInfo(format);
@@ -181,6 +186,8 @@ namespace Strata::TextureCooker
 			// their helpers never take the processors from the frame.
 			JobSystem::ParallelFor(work.Count, work.MinBatchSize, [&](uint32_t begin, uint32_t end)
 			{
+				if (IsCancelled(cancel))
+					return;
 				uint8_t rgba[4];
 				for (uint32_t texel = begin; texel < end; texel++)
 				{
@@ -188,7 +195,7 @@ namespace Strata::TextureCooker
 					std::memcpy(outData.data() + static_cast<size_t>(texel) * info.BytesPerBlock, rgba, info.BytesPerBlock);
 				}
 			}, JobPriority::Background);
-			return true;
+			return !IsCancelled(cancel);
 		}
 
 		const uint32_t blocksX = (image.Width + info.BlockWidth - 1) / info.BlockWidth;
@@ -203,6 +210,10 @@ namespace Strata::TextureCooker
 			{
 				for (uint32_t blockX = 0; blockX < blocksX; blockX++)
 				{
+					// Checked per block, not per row: a row of a wide BC7 level takes tens of milliseconds on one thread, a
+					// block at most tens of microseconds, and the load of a flag nobody writes costs nothing beside it.
+					if (IsCancelled(cancel))
+						return;
 					uint8_t* destination = outData.data() + (static_cast<size_t>(blockY) * blocksX + blockX) * info.BytesPerBlock;
 					for (uint32_t texel = 0; texel < 16; texel++)
 						LoadRGBA(image, blockX * 4 + texel % 4, blockY * 4 + texel / 4, rgba + texel * 4);
@@ -242,7 +253,7 @@ namespace Strata::TextureCooker
 				}
 			}
 		}, JobPriority::Background);
-		return true;
+		return !IsCancelled(cancel);
 	}
 
 	void NormalizeNormalMap(Image& image)
@@ -279,12 +290,14 @@ namespace Strata::TextureCooker
 			TextureMip mip;
 			mip.Width = current.Width;
 			mip.Height = current.Height;
-			if (!EncodeLevel(current, settings.Format, settings.HighQuality, mip.Data))
-				return Fail(outError, fmt::format("encoding mip {} failed", level));
+			if (!EncodeLevel(current, settings.Format, settings.HighQuality, mip.Data, settings.Cancel))
+				return Fail(outError, IsCancelled(settings.Cancel) ? std::string(c_CancelledError) : fmt::format("encoding mip {} failed", level));
 			outMips.push_back(std::move(mip));
 			if (level + 1 == mipCount)
 				break;
 
+			if (IsCancelled(settings.Cancel))
+				return Fail(outError, c_CancelledError);
 			Image next;
 			if (!Halve(current, settings, next))
 				return Fail(outError, fmt::format("filtering mip {} failed", level + 1));
@@ -295,7 +308,8 @@ namespace Strata::TextureCooker
 		return true;
 	}
 
-	bool CookHDRLevels(FloatImage level0, bool generateMips, TextureWrap wrap, std::vector<TextureMip>& outMips, std::string* outError)
+	bool CookHDRLevels(FloatImage level0, bool generateMips, TextureWrap wrap, std::vector<TextureMip>& outMips, std::string* outError,
+		const std::atomic<bool>* cancel)
 	{
 		if (level0.Width == 0 || level0.Height == 0 || level0.Pixels.size() != static_cast<size_t>(level0.Width) * level0.Height * 4)
 			return Fail(outError, "the image is empty or its size does not match its pixels");
@@ -310,6 +324,8 @@ namespace Strata::TextureCooker
 			value = std::isfinite(value) ? std::clamp(value, 0.0f, 65504.0f) : 0.0f;
 		for (uint32_t level = 0; level < mipCount; level++)
 		{
+			if (IsCancelled(cancel))
+				return Fail(outError, c_CancelledError);
 			TextureMip mip;
 			mip.Width = current.Width;
 			mip.Height = current.Height;

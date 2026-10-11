@@ -19,11 +19,11 @@
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
-#include <thread>
 #include <vector>
 
 using namespace Strata;
@@ -32,7 +32,8 @@ namespace
 {
 
 	// Imports ".stgated" files as fonts (the embedded default font), but only once the test opens its gate, so a test can
-	// hold an import while the editor's frames go on. Settings: {"Level": 0..10, "Fail": bool}.
+	// hold an import while the editor's frames go on. A held import that is cancelled stops, as a long import does at its
+	// next cancellation check. Settings: {"Level": 0..10, "Fail": bool}.
 	class GatedImporter final : public AssetImporter
 	{
 	public:
@@ -41,6 +42,7 @@ namespace
 		static inline bool s_GateOpen = true;
 		static inline uint32_t s_Waiting = 0;
 		static inline std::atomic<uint32_t> s_ImportCount = 0;
+		static inline std::atomic<uint32_t> s_CancelledCount = 0; // Held imports that stopped because they were cancelled
 		static inline std::atomic<int64_t> s_LastLevel = -1;
 
 		static void SetGate(bool open)
@@ -55,8 +57,14 @@ namespace
 		// Whether an import waits at the closed gate.
 		static bool IsWaiting()
 		{
+			return GetWaiting() > 0;
+		}
+
+		// How many imports wait at the closed gate.
+		static uint32_t GetWaiting()
+		{
 			std::scoped_lock<std::mutex> lock(s_Mutex);
-			return s_Waiting > 0;
+			return s_Waiting;
 		}
 
 		AssetType GetType() const override { return AssetType::Font; }
@@ -82,9 +90,17 @@ namespace
 			{
 				std::unique_lock<std::mutex> lock(s_Mutex);
 				s_Waiting++;
-				const bool opened = s_Condition.wait_for(lock, std::chrono::seconds(60), []() { return s_GateOpen; });
+				const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+				while (!s_GateOpen && !context.IsCancelled() && std::chrono::steady_clock::now() < deadline)
+					s_Condition.wait_for(lock, std::chrono::milliseconds(1));
 				s_Waiting--;
-				if (!opened)
+				if (context.IsCancelled())
+				{
+					s_CancelledCount++;
+					*outError = "cancelled";
+					return false;
+				}
+				if (!s_GateOpen)
 				{
 					*outError = "The test never opened the gate";
 					return false;
@@ -111,6 +127,26 @@ namespace
 			s_Registered = true;
 		}
 	}
+
+	// Opens the gate when the test ends, also when it fails, before the job system shuts down (declare it after the jobs).
+	struct OpenGateAtEnd
+	{
+		~OpenGateAtEnd()
+		{
+			GatedImporter::SetGate(true);
+		}
+	};
+
+	double SecondsOf(const std::function<void()>& function)
+	{
+		const auto start = std::chrono::steady_clock::now();
+		function();
+		return std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+	}
+
+	// What an editor action that never waits for an import may take, generous for loaded machines: waiting for a held
+	// import takes the gate's minute.
+	constexpr double c_AtOnceSeconds = 2.0;
 
 	// An editor with a project, whose frames (context update, then the runner) a test runs one at a time.
 	struct ImportHarness
@@ -381,20 +417,177 @@ TEST_SUITE("Editor.ImportSettings")
 		CHECK(harness.Run("asset.info", { { "asset", asset } })["importError"] == "Requested failure");
 		CHECK(harness.Finish(harness.Start("asset.setImportSettings", { { "asset", asset }, { "settings", { { "Fail", false } } } })).Success);
 
+		OpenGateAtEnd gate;
 		GatedImporter::SetGate(false);
 		auto pending = harness.Start("asset.reimport", { { "asset", asset } });
 		REQUIRE(Tests::WaitUntil([]() { return GatedImporter::IsWaiting(); }, std::chrono::seconds(20)));
-		// Closing the project waits for the import, so the gate opens on another thread meanwhile.
-		std::thread opener([]()
-		{
-			std::this_thread::sleep_for(std::chrono::milliseconds(50));
-			GatedImporter::SetGate(true);
-		});
-		harness.Context.CloseProject();
-		opener.join();
+		// Closing the project cancels the import without waiting for it: the gate stays closed, and the import stops by itself.
+		const uint32_t cancelled = GatedImporter::s_CancelledCount;
+		const double seconds = SecondsOf([&]() { harness.Context.CloseProject(); });
+		CHECK_MESSAGE(seconds < c_AtOnceSeconds, "Closing the project took ", seconds, " s");
+		REQUIRE(Tests::WaitUntil([&]() { return GatedImporter::s_CancelledCount > cancelled; }, std::chrono::seconds(20)));
 		const EditorCommandResult closed = harness.Finish(pending);
 		CHECK_FALSE(closed.Success);
 		CHECK(closed.Error == "The project was closed before the import finished");
+	}
+
+	TEST_CASE("Closing the project, opening another and quitting never wait for the project's imports")
+	{
+		RegisterGatedImporter();
+		Tests::ScopedJobSystem jobs(2, 2);
+		OpenGateAtEnd gate;
+		// A project with three files to import when it opens (its cache is gone), and another one to open.
+		std::filesystem::path projectDirectory;
+		std::vector<std::string> assets;
+		{
+			ImportHarness harness("EditorCloseImports");
+			for (const char* name : { "Data/A.stgated", "Data/B.stgated", "Data/C.stgated" })
+				assets.push_back(harness.Add(name, { 's' }));
+			projectDirectory = harness.Context.GetProject()->GetProjectDirectory();
+			harness.Context.CloseProject();
+		}
+		REQUIRE(FileSystem::Remove(projectDirectory / ".strata" / "Cache"));
+		std::filesystem::path otherDirectory;
+		{
+			ImportHarness other("EditorCloseImportsOther");
+			otherDirectory = other.Context.GetProject()->GetProjectDirectory();
+		}
+
+		EditorContextSpecification specification { false };
+		specification.ImportInBackground = true;
+		GatedImporter::SetGate(false);
+		const uint32_t cancelled = GatedImporter::s_CancelledCount;
+		const uint32_t imports = GatedImporter::s_ImportCount;
+		auto openHeld = [&](EditorContext& context)
+		{
+			std::string error;
+			REQUIRE_MESSAGE(context.OpenProject(projectDirectory, &error), error);
+			REQUIRE(Tests::WaitUntil([]() { return GatedImporter::GetWaiting() == 2; }, std::chrono::seconds(20)));
+			CHECK(context.GetAssetManager()->GetPendingImportCount() == 3);
+		};
+		auto context = std::make_unique<EditorContext>(specification);
+		// project.close
+		openHeld(*context);
+		double seconds = SecondsOf([&]() { context->CloseProject(); });
+		CHECK_MESSAGE(seconds < c_AtOnceSeconds, "Closing the project took ", seconds, " s");
+		REQUIRE(Tests::WaitUntil([&]() { return GatedImporter::s_CancelledCount == cancelled + 2; }, std::chrono::seconds(20)));
+
+		// project.open of another project (project.openSample opens its copy the same way)
+		openHeld(*context);
+		std::string error;
+		bool opened = false;
+		seconds = SecondsOf([&]() { opened = context->OpenProject(otherDirectory, &error); });
+		REQUIRE_MESSAGE(opened, error);
+		CHECK_MESSAGE(seconds < c_AtOnceSeconds, "Opening another project took ", seconds, " s");
+		REQUIRE(Tests::WaitUntil([&]() { return GatedImporter::s_CancelledCount == cancelled + 4; }, std::chrono::seconds(20)));
+
+		// Quitting the editor: its context goes with the project open.
+		openHeld(*context);
+		seconds = SecondsOf([&]() { context.reset(); });
+		CHECK_MESSAGE(seconds < c_AtOnceSeconds, "Destroying the editor's context took ", seconds, " s");
+		REQUIRE(Tests::WaitUntil([&]() { return GatedImporter::s_CancelledCount == cancelled + 6; }, std::chrono::seconds(20)));
+		// No held import got through: the queued third import never ran, and the cancelled ones stored nothing.
+		CHECK(GatedImporter::s_ImportCount == imports);
+
+		// The next open imports all three again.
+		GatedImporter::SetGate(true);
+		EditorContext reopened { EditorContextSpecification { false } };
+		REQUIRE_MESSAGE(reopened.OpenProject(projectDirectory, &error), error);
+		CHECK(GatedImporter::s_ImportCount == imports + 3);
+		for (const std::string& asset : assets)
+		{
+			const std::optional<UUID> handle = UUID::FromString(asset);
+			REQUIRE(handle);
+			CHECK(reopened.GetAssetManager()->GetImportInfo(*handle).Imported);
+		}
+	}
+
+	TEST_CASE("asset.move and asset.delete answer at once while imports run, and cancel only the imports of what they change")
+	{
+		RegisterGatedImporter();
+		Tests::ScopedJobSystem jobs(2, 2);
+		OpenGateAtEnd gate;
+		ImportHarness harness("EditorMoveImports");
+		const std::string a = harness.Add("Data/A.stgated", { 'a' });
+		const std::string b = harness.Add("Data/B.stgated", { 'b' });
+		const std::string c = harness.Add("Data/C.stgated", { 'c' });
+		const std::string material = harness.Run("material.create", { { "path", "Materials/Red.stmat" } })["asset"].get<std::string>();
+
+		// Two imports run (held), a third waits for a thread.
+		GatedImporter::SetGate(false);
+		for (const std::string& asset : { a, b, c })
+			harness.Run("asset.reimport", { { "asset", asset }, { "wait", false } });
+		REQUIRE(Tests::WaitUntil([]() { return GatedImporter::GetWaiting() == 2; }, std::chrono::seconds(20)));
+		const uint32_t cancelled = GatedImporter::s_CancelledCount;
+
+		// What is not importing moves at once, cancelling nothing.
+		double seconds = SecondsOf([&]() { harness.Run("asset.move", { { "asset", material }, { "path", "Materials/Moved/Red.stmat" } }); });
+		CHECK_MESSAGE(seconds < c_AtOnceSeconds, "asset.move of the material took ", seconds, " s");
+		CHECK(harness.Run("editor.status")["assets"]["importing"] == 3);
+
+		// Moving or deleting an importing asset answers at once: its import is cancelled (a moved one runs again at the new
+		// place); the others go on.
+		seconds = SecondsOf([&]() { harness.Run("asset.move", { { "asset", a }, { "path", "Moved/A.stgated" } }); });
+		CHECK_MESSAGE(seconds < c_AtOnceSeconds, "asset.move of an importing asset took ", seconds, " s");
+		seconds = SecondsOf([&]() { harness.Run("asset.delete", { { "asset", b } }); });
+		CHECK_MESSAGE(seconds < c_AtOnceSeconds, "asset.delete of an importing asset took ", seconds, " s");
+		REQUIRE(Tests::WaitUntil([&]() { return GatedImporter::s_CancelledCount == cancelled + 2; }, std::chrono::seconds(20)));
+		CHECK(harness.Run("asset.info", { { "asset", a } })["importing"] == true);
+		CHECK(harness.Run("asset.info", { { "asset", c } })["importing"] == true);
+		CHECK(harness.Run("editor.status")["assets"]["importing"] == 2);
+
+		GatedImporter::SetGate(true);
+		REQUIRE(Tests::WaitUntil([&]()
+		{
+			harness.Frame();
+			return harness.Run("editor.status")["assets"]["importing"] == 0;
+		}, std::chrono::seconds(60)));
+		CHECK(GatedImporter::s_CancelledCount == cancelled + 2);
+		const nlohmann::json moved = harness.Run("asset.info", { { "asset", a } });
+		CHECK(moved["path"] == "Moved/A.stgated");
+		CHECK(moved["importError"] == "");
+		CHECK(harness.Run("asset.info", { { "asset", c } })["importError"] == "");
+		CHECK_FALSE(harness.Commands.Execute(harness.Context, "asset.info", { { "asset", b } }).Success);
+		// Nothing of the deleted asset's import was stored.
+		const std::filesystem::path cache = harness.Context.GetProject()->GetCacheDirectory();
+		std::error_code error;
+		for (std::filesystem::directory_iterator it(cache, error), end; !error && it != end; it.increment(error))
+			CHECK(FileSystem::ToUTF8(it->path().filename()).rfind(b, 0) != 0);
+	}
+
+	TEST_CASE("An export waits for running imports between frames, then packs what they imported")
+	{
+		RegisterGatedImporter();
+		Tests::ScopedJobSystem jobs(2, 2);
+		OpenGateAtEnd gate;
+		ImportHarness harness("EditorExportImports");
+		const std::string asset = harness.Add("Data/Slow.stgated", { 's' });
+		harness.Run("scene.saveAs", { { "path", "Scenes/Main.stscene" } });
+		harness.Run("project.setStartScene", { { "scene", "Scenes/Main.stscene" } });
+
+		GatedImporter::SetGate(false);
+		harness.Run("asset.setImportSettings", { { "asset", asset }, { "settings", { { "Level", 4 } } }, { "wait", false } });
+		REQUIRE(Tests::WaitUntil([]() { return GatedImporter::IsWaiting(); }, std::chrono::seconds(20)));
+		const std::filesystem::path output = harness.Context.GetProject()->GetProjectDirectory().parent_path() / "Build";
+		auto exported = harness.Start("project.export", { { "directory", FileSystem::ToUTF8(output) }, { "includeRuntime", false } });
+
+		// Frames go on while the export waits for the import.
+		for (int frame = 0; frame < 30; frame++)
+		{
+			const double seconds = SecondsOf([&]() { harness.Frame(); });
+			CHECK_MESSAGE(seconds < c_AtOnceSeconds, "A frame took ", seconds, " s");
+		}
+		CHECK_FALSE(exported->has_value());
+		CHECK(harness.Run("project.exportStatus")["state"] == "WaitingForImports");
+
+		GatedImporter::SetGate(true);
+		const EditorCommandResult result = harness.Finish(exported);
+		INFO(result.Error);
+		REQUIRE(result.Success);
+		CHECK(GatedImporter::s_LastLevel == 4);
+		// The pack holds the asset as imported with the new settings.
+		CHECK(FileSystem::IsRegularFile(FileSystem::FromUTF8(result.Value["assetPack"].get<std::string>())));
+		CHECK(result.Value["assetCount"].get<uint32_t>() >= 2);
 	}
 
 	TEST_CASE("Import settings are checked against the importer's description and asset.info lists it")

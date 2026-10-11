@@ -12,10 +12,13 @@
 #include <stb_image_write.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <numbers>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -509,5 +512,75 @@ TEST_SUITE("Asset.TextureImport")
 		}
 		CHECK(TextureCooker::GetEncodeBatchCount(TextureFormat::BC1SRGB, 4, 4) == 1);
 		CHECK(TextureCooker::GetEncodeBatchCount(TextureFormat::RGBA16F, 1024, 1024) == 0);
+	}
+
+	TEST_CASE("A cancelled cook stops at its next check and fails as cancelled")
+	{
+		const std::vector<uint8_t> gradient = CreateGradient(64);
+		std::atomic<bool> cancel = true;
+
+		// Cancelled before it starts: nothing is encoded or filtered, whatever the format.
+		std::vector<uint8_t> data;
+		for (TextureFormat format : { TextureFormat::BC7SRGB, TextureFormat::BC1SRGB, TextureFormat::RGBA8SRGB })
+		{
+			CAPTURE(std::string(TextureFormatToString(format)));
+			CHECK_FALSE(TextureCooker::EncodeLevel(CreateImage(64, 64, 4, gradient), format, true, data, &cancel));
+		}
+		TextureCooker::CookSettings settings;
+		settings.Format = TextureFormat::BC7SRGB;
+		settings.SRGB = true;
+		settings.Cancel = &cancel;
+		std::vector<TextureMip> mips;
+		std::string error;
+		CHECK_FALSE(TextureCooker::CookLevels(CreateImage(64, 64, 4, gradient), settings, mips, &error));
+		CHECK(error == TextureCooker::c_CancelledError);
+		TextureCooker::FloatImage hdr;
+		hdr.Width = 8;
+		hdr.Height = 8;
+		hdr.Pixels.assign(8 * 8 * 4, 1.0f);
+		CHECK_FALSE(TextureCooker::CookHDRLevels(hdr, true, TextureWrap::Repeat, mips, &error, &cancel));
+		CHECK(error == TextureCooker::c_CancelledError);
+		const std::vector<uint8_t> png = Tests::EncodePNG(64, 64, gradient);
+		CHECK_FALSE(TextureImporter::Decode(png, TextureImportSettings(), "Gradient.png", &error, &cancel));
+		CHECK(error == "Gradient.png: cancelled");
+
+		// The same calls with the flag clear cook as usual.
+		cancel = false;
+		REQUIRE_MESSAGE(TextureCooker::CookLevels(CreateImage(64, 64, 4, gradient), settings, mips, &error), error);
+		CHECK(mips.size() == 7);
+		REQUIRE_MESSAGE(TextureImporter::Decode(png, TextureImportSettings(), "Gradient.png", &error, &cancel), error);
+
+		// Cancelled while a large level is encoded on several threads: every thread stops at its next block instead of
+		// finishing the level (which takes seconds at High quality).
+		constexpr uint32_t c_Size = 2048;
+		std::vector<uint8_t> noise(static_cast<size_t>(c_Size) * c_Size * 4);
+		uint32_t random = 0x2468ACE1u;
+		for (uint8_t& value : noise)
+		{
+			random ^= random << 13;
+			random ^= random >> 17;
+			random ^= random << 5;
+			value = static_cast<uint8_t>(random);
+		}
+		const TextureCooker::Image large = CreateImage(c_Size, c_Size, 4, noise);
+		Tests::ScopedJobSystem jobs(4, 1);
+		std::atomic<bool> stop = false;
+		std::atomic<bool> finished = false;
+		bool encoded = true;
+		std::thread cook([&]()
+		{
+			std::vector<uint8_t> blocks;
+			encoded = TextureCooker::EncodeLevel(large, TextureFormat::BC7SRGB, true, blocks, &stop);
+			finished = true;
+		});
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		const bool finishedEarly = finished;
+		const auto cancelled = std::chrono::steady_clock::now();
+		stop = true;
+		cook.join();
+		const double stoppedAfter = std::chrono::duration<double>(std::chrono::steady_clock::now() - cancelled).count();
+		REQUIRE_FALSE(finishedEarly);
+		CHECK_FALSE(encoded);
+		CHECK_MESSAGE(stoppedAfter < 2.0, "The encode went on for ", stoppedAfter, " s after it was cancelled");
 	}
 }

@@ -339,7 +339,7 @@ namespace Strata
 
 	bool TextureImporter::Import(const ImportContext& context, ImportResult& result, std::string* outError) const
 	{
-		std::optional<std::vector<uint8_t>> encoded = FileSystem::ReadBytes(context.SourcePath);
+		std::optional<std::vector<uint8_t>> encoded = ReadImportSource(context);
 		if (!encoded)
 		{
 			if (outError)
@@ -348,7 +348,7 @@ namespace Strata
 		}
 
 		const TextureImportSettings settings = TextureImportSettings::FromJson(context.Settings, &result.Warnings);
-		Ref<Texture> texture = Decode(*encoded, settings, FileSystem::ToUTF8(context.SourcePath.filename()), outError);
+		Ref<Texture> texture = Decode(*encoded, settings, FileSystem::ToUTF8(context.SourcePath.filename()), outError, context.Cancel);
 		if (!texture)
 			return false;
 
@@ -356,7 +356,8 @@ namespace Strata
 		return true;
 	}
 
-	Ref<Texture> TextureImporter::Decode(std::span<const uint8_t> encoded, const TextureImportSettings& settings, const std::string& debugName, std::string* outError)
+	Ref<Texture> TextureImporter::Decode(std::span<const uint8_t> encoded, const TextureImportSettings& settings, const std::string& debugName, std::string* outError,
+		const std::atomic<bool>* cancel)
 	{
 		auto fail = [outError, &debugName](const std::string& message) -> Ref<Texture>
 		{
@@ -364,7 +365,10 @@ namespace Strata
 				*outError = fmt::format("{}: {}", debugName, message);
 			return nullptr;
 		};
+		auto cancelled = [cancel]() { return cancel && cancel->load(std::memory_order_relaxed); };
 
+		if (cancelled())
+			return fail(TextureCooker::c_CancelledError);
 		if (encoded.empty() || encoded.size() > static_cast<size_t>(INT_MAX))
 			return fail("image data is empty or too large");
 
@@ -406,6 +410,8 @@ namespace Strata
 				return fail(fmt::format("decoding failed ({})", GetDecodeFailureReason()));
 			if (decodedWidth != width || decodedHeight != height)
 				return fail("decoded size differs from the image header");
+			if (cancelled())
+				return fail(TextureCooker::c_CancelledError);
 
 			TextureCooker::FloatImage level0;
 			level0.Width = targetSize.x;
@@ -425,7 +431,7 @@ namespace Strata
 				FlipRows(level0.Pixels, static_cast<size_t>(targetSize.x) * 4, targetSize.y);
 
 			specification.Format = TextureFormat::RGBA16F;
-			if (!TextureCooker::CookHDRLevels(std::move(level0), settings.GenerateMips, settings.Wrap, mips, &error))
+			if (!TextureCooker::CookHDRLevels(std::move(level0), settings.GenerateMips, settings.Wrap, mips, &error, cancel))
 				return fail(error);
 		}
 		else
@@ -439,6 +445,8 @@ namespace Strata
 				return fail(fmt::format("decoding failed ({})", GetDecodeFailureReason()));
 			if (decodedWidth != width || decodedHeight != height)
 				return fail("decoded size differs from the image header");
+			if (cancelled())
+				return fail(TextureCooker::c_CancelledError);
 
 			const bool color = settings.Usage == TextureUsage::Color;
 			TextureCooker::Image level0;
@@ -480,6 +488,7 @@ namespace Strata
 			// and a metallic edge would shift the roughness beside it (see ChooseFormat), so data is searched in full at
 			// either quality.
 			cook.HighQuality = settings.Quality == TextureQuality::High || settings.Usage == TextureUsage::Data;
+			cook.Cancel = cancel;
 			if (!TextureCooker::CookLevels(std::move(level0), cook, mips, &error))
 				return fail(error);
 		}

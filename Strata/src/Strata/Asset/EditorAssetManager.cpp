@@ -12,11 +12,16 @@
 #include "Strata/Reflection/PropertyJson.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <chrono>
+#include <condition_variable>
 #include <filesystem>
+#include <mutex>
+#include <shared_mutex>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 namespace Strata
 {
@@ -280,7 +285,160 @@ namespace Strata
 			return all;
 		}
 
+		bool IsCancelled(const std::atomic<bool>* cancel)
+		{
+			return cancel && cancel->load(std::memory_order_relaxed);
+		}
+
 	}
+
+	// What the manager's background jobs use. A job keeps it alive (a Ref in its closure) and touches nothing else, so the
+	// manager closes, and may be destroyed, while a cancelled job still runs to its next cancellation check. Everything here
+	// is immutable or guarded by its own locks.
+	struct EditorAssetManager::BackgroundWork
+	{
+		explicit BackgroundWork(const EditorAssetManagerSpecification& specification)
+			: Specification(specification)
+		{
+		}
+
+		const EditorAssetManagerSpecification Specification; // The manager's, with absolute directories
+
+		// Files read on other threads (cache files, engine-native sources, the files imports read) are replaced, moved or
+		// deleted by the main thread, and imports publish their cache files; on Windows a change fails while a reader holds
+		// the file open. Reads take the lock shared, changes exclusive.
+		mutable std::shared_mutex FileMutex;
+
+		// The manager while it is open, for imports that resolve other files of the project (ImportContext::ResolveAsset).
+		// Close clears it, waiting at most for a lookup in progress. Lock order: OwnerMutex before the manager's m_SourceMutex.
+		mutable std::mutex OwnerMutex;
+		const EditorAssetManager* Owner = nullptr;
+
+		// The wanted jobs (queued or running and not cancelled), and what finished ones handed over for Update to apply.
+		// Condition is notified whenever a job leaves Jobs.
+		std::mutex Mutex;
+		std::condition_variable Condition;
+		std::unordered_set<Ref<BackgroundJob>> Jobs;
+		std::vector<ImportOutcome> CompletedImports;
+		std::vector<NativeReferences> CompletedReferences;
+
+		// Numbers the files imports write before they publish them, so that two imports of an asset never write the same file:
+		// a cancelled import may still run beside the one that replaced it.
+		mutable std::atomic<uint64_t> NextStagingNumber = 0;
+
+		std::filesystem::path ToAbsolute(std::string_view relativePath) const
+		{
+			return (Specification.AssetDirectory / FileSystem::FromUTF8(relativePath)).lexically_normal();
+		}
+
+		std::string ToRelative(const std::filesystem::path& absolutePath) const
+		{
+			const std::filesystem::path relative = FileSystem::GetRelativePath(absolutePath, Specification.AssetDirectory);
+			return relative.empty() ? std::string() : FileSystem::ToUTF8(relative);
+		}
+
+		std::filesystem::path GetCachePath(AssetHandle handle) const
+		{
+			return Specification.CacheDirectory / (handle.ToString() + ".bin");
+		}
+
+		std::filesystem::path GetImportRecordPath(AssetHandle handle) const
+		{
+			return Specification.CacheDirectory / (handle.ToString() + ".import");
+		}
+
+		void Add(const Ref<BackgroundJob>& job)
+		{
+			std::scoped_lock<std::mutex> lock(Mutex);
+			Jobs.insert(job);
+		}
+
+		// The job is no longer wanted: it never starts, or stops at its next cancellation check, and hands nothing over.
+		void Cancel(const Ref<BackgroundJob>& job)
+		{
+			{
+				std::scoped_lock<std::mutex> lock(Mutex);
+				job->Cancel.store(true);
+				Jobs.erase(job);
+			}
+			Condition.notify_all();
+		}
+
+		// A job ended: its result is handed over while the job is still wanted (a job is cancelled under the same lock, so
+		// a result that arrives after its cancellation is never handed over).
+		void Finish(const Ref<BackgroundJob>& job, ImportOutcome outcome)
+		{
+			const AssetHandle handle = outcome.Handle;
+			{
+				std::scoped_lock<std::mutex> lock(Mutex);
+				if (Jobs.erase(job) > 0 && !outcome.Cancelled)
+				{
+					outcome.Job = job;
+					try
+					{
+						CompletedImports.push_back(std::move(outcome));
+					}
+					catch (...)
+					{
+						ST_CORE_ERROR("Out of memory while completing the import of {}", handle.ToString());
+					}
+				}
+			}
+			Condition.notify_all();
+		}
+
+		void Finish(const Ref<BackgroundJob>& job, NativeReferences references)
+		{
+			const AssetHandle handle = references.Handle;
+			{
+				std::scoped_lock<std::mutex> lock(Mutex);
+				if (Jobs.erase(job) > 0)
+				{
+					try
+					{
+						CompletedReferences.push_back(std::move(references));
+					}
+					catch (...)
+					{
+						ST_CORE_ERROR("Out of memory while recording the references of {}", handle.ToString());
+					}
+				}
+			}
+			Condition.notify_all();
+		}
+
+		// A file of the project read for an import (ImportContext::ReadFile), under the shared file lock. Nothing is read
+		// once the import is cancelled: the file may be on its way to another place.
+		std::optional<std::vector<uint8_t>> ReadProjectFile(const std::filesystem::path& path, const std::atomic<bool>* cancel) const
+		{
+			if (IsCancelled(cancel))
+				return std::nullopt;
+			std::shared_lock<std::shared_mutex> lock(FileMutex);
+			return FileSystem::ReadBytes(path);
+		}
+
+		AssetHandle ResolveProjectFile(const std::filesystem::path& absolutePath) const
+		{
+			std::scoped_lock<std::mutex> lock(OwnerMutex);
+			return Owner ? Owner->FindAssetByAbsolutePath(absolutePath) : UUID::Null();
+		}
+
+		// True when the cached import matches the source; fills the outcome (sub-assets, warnings) from the record. Reads under
+		// the shared file lock; a refreshed record is written under the exclusive one, unless `cancel` is set by then (the
+		// asset may be gone, with its record). Any thread.
+		bool LoadCurrentImport(const ImportRequest& request, ImportOutcome& outOutcome, const std::atomic<bool>* cancel = nullptr) const;
+		// Imports on the calling thread (any thread). Once `cancel` is set the importer stops at its next check and the
+		// outcome is Cancelled: nothing is written. Otherwise the cache files and the record are published together under the
+		// exclusive file lock, after a last look at `cancel`: whoever cancels an import before it changes files under that
+		// lock (a move, a delete) never finds anything the import read before.
+		ImportOutcome RunImport(const ImportRequest& request, const std::atomic<bool>* cancel = nullptr) const;
+		// References of engine-native assets (AssetDependencies::Scan of the source), cached per content in the asset's import
+		// record. Any thread: reads the record, or scans the file (`data` when given, else read under the shared file lock,
+		// with its size and time; `references` when the caller knows them) and writes the record, or with deferRecord hands it
+		// to the caller in NativeReferences::Record.
+		NativeReferences FindNativeReferences(AssetHandle handle, AssetType type, const std::string& relativePath, std::span<const uint8_t> data = {},
+			const std::vector<AssetHandle>* references = nullptr, bool deferRecord = false) const;
+	};
 
 	EditorAssetManager::EditorAssetManager(const EditorAssetManagerSpecification& specification)
 		: m_Specification(specification)
@@ -291,18 +449,55 @@ namespace Strata
 		m_Specification.CacheDirectory = std::filesystem::absolute(m_Specification.CacheDirectory, error).lexically_normal();
 		FileSystem::CreateDirectories(m_Specification.AssetDirectory);
 		FileSystem::CreateDirectories(m_Specification.CacheDirectory);
+		m_Work = CreateRef<BackgroundWork>(m_Specification);
+		m_Work->Owner = this;
 	}
 
 	EditorAssetManager::~EditorAssetManager()
 	{
-		m_Watcher.Stop();
-		{
-			// Import jobs reference this manager.
-			std::unique_lock<std::mutex> lock(m_ImportMutex);
-			m_ImportCondition.wait(lock, [this]() { return m_ImportsInFlight == 0; });
-		}
+		// Background jobs only use m_Work, which they keep alive: nothing to wait for but the loads in flight.
+		Close();
 		WaitForInFlightLoads();
 		SaveAssetIndex();
+	}
+
+	void EditorAssetManager::Close()
+	{
+		if (m_Closed)
+			return;
+		m_Closed = true;
+		m_Watcher.Stop();
+
+		uint32_t running = 0;
+		uint32_t queued = 0;
+		{
+			std::scoped_lock<std::mutex> sourceLock(m_SourceMutex);
+			for (auto& [handle, source] : m_Sources)
+				source.ImportJob.reset();
+			m_SourcesImporting = 0;
+
+			// Every wanted job: the sources' imports and the searches of references. Results not applied yet go too.
+			std::scoped_lock<std::mutex> lock(m_Work->Mutex);
+			for (const Ref<BackgroundJob>& job : m_Work->Jobs)
+			{
+				job->Cancel.store(true);
+				(job->Started.load() ? running : queued)++;
+			}
+			m_Work->Jobs.clear();
+			m_Work->CompletedImports.clear();
+			m_Work->CompletedReferences.clear();
+		}
+		m_Work->Condition.notify_all();
+		{
+			std::scoped_lock<std::mutex> lock(m_Work->OwnerMutex);
+			m_Work->Owner = nullptr;
+		}
+
+		if (running + queued > 0)
+		{
+			ST_CORE_INFO("Cancelled the background imports and searches of '{}': {} running, {} queued (imports that did not finish run again when "
+				"the project opens)", FileSystem::ToUTF8(m_Specification.AssetDirectory), running, queued);
+		}
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -311,23 +506,22 @@ namespace Strata
 
 	std::filesystem::path EditorAssetManager::ToAbsolute(std::string_view relativePath) const
 	{
-		return (m_Specification.AssetDirectory / FileSystem::FromUTF8(relativePath)).lexically_normal();
+		return m_Work->ToAbsolute(relativePath);
 	}
 
 	std::string EditorAssetManager::ToRelative(const std::filesystem::path& absolutePath) const
 	{
-		const std::filesystem::path relative = FileSystem::GetRelativePath(absolutePath, m_Specification.AssetDirectory);
-		return relative.empty() ? std::string() : FileSystem::ToUTF8(relative);
+		return m_Work->ToRelative(absolutePath);
 	}
 
 	std::filesystem::path EditorAssetManager::GetCachePath(AssetHandle handle) const
 	{
-		return m_Specification.CacheDirectory / (handle.ToString() + ".bin");
+		return m_Work->GetCachePath(handle);
 	}
 
 	std::filesystem::path EditorAssetManager::GetImportRecordPath(AssetHandle handle) const
 	{
-		return m_Specification.CacheDirectory / (handle.ToString() + ".import");
+		return m_Work->GetImportRecordPath(handle);
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -469,8 +663,8 @@ namespace Strata
 				return;
 			subAssets = it->second.Import.SubAssets;
 			SetDependencies(it->second, {});
-			if (it->second.ImportInFlight)
-				m_SourcesImporting--; // Its import's outcome finds no source when it arrives
+			// A removed source is not imported: its import is cancelled before its cached data goes, so it stores nothing.
+			StopImport(it->second);
 			m_SourcesByPath.erase(it->second.Path);
 			m_Sources.erase(it);
 			m_AssetIndexDirty = true;
@@ -482,7 +676,7 @@ namespace Strata
 
 		if (deleteCache)
 		{
-			std::unique_lock<std::shared_mutex> fileLock(m_FileMutex);
+			std::unique_lock<std::shared_mutex> fileLock(m_Work->FileMutex);
 			for (AssetHandle subAsset : subAssets)
 				FileSystem::Remove(GetCachePath(subAsset));
 			FileSystem::Remove(GetCachePath(handle));
@@ -631,13 +825,13 @@ namespace Strata
 			{
 				try
 				{
-					if (LoadCurrentImport(requests[requestIndex], outcomes[requestIndex]))
+					if (m_Work->LoadCurrentImport(requests[requestIndex], outcomes[requestIndex]))
 					{
 						done[requestIndex] = 1;
 					}
 					else if (wait)
 					{
-						outcomes[requestIndex] = RunImport(requests[requestIndex]);
+						outcomes[requestIndex] = m_Work->RunImport(requests[requestIndex]);
 						importedCount++;
 						done[requestIndex] = 1;
 					}
@@ -685,7 +879,7 @@ namespace Strata
 		JobSystem::ParallelFor(static_cast<uint32_t>(natives.size()), 4, [&](uint32_t begin, uint32_t endIndex)
 		{
 			for (uint32_t index = begin; index < endIndex; index++)
-				nativeReferences[index] = FindNativeReferences(natives[index].Handle, natives[index].Type, natives[index].Path);
+				nativeReferences[index] = m_Work->FindNativeReferences(natives[index].Handle, natives[index].Type, natives[index].Path);
 		});
 		for (const NativeReferences& references : nativeReferences)
 			ApplyNativeReferences(references);
@@ -718,8 +912,9 @@ namespace Strata
 	void EditorAssetManager::RemoveUnusedCacheFiles()
 	{
 		ST_CORE_ASSERT(!m_Watcher.IsRunning(), "Cache files are cleaned up during the scan, before background imports can start");
-		// Cache files are named "<handle>.<kind>[.<temporary suffix>]". No import runs during a scan, so temporary
-		// files are leftovers of interrupted writes.
+		// Cache files are named "<handle>.<kind>[.<temporary suffix>]". No import of this manager runs during a scan, so
+		// temporary files are leftovers of interrupted writes, or of a cancelled import of an earlier manager of the project
+		// that is still running: that one never publishes them (and removes them itself where this removal fails).
 		std::vector<std::filesystem::path> unused;
 		std::error_code error;
 		for (std::filesystem::directory_iterator it(m_Specification.CacheDirectory, error), end; !error && it != end; it.increment(error))
@@ -735,7 +930,7 @@ namespace Strata
 				unused.push_back(it->path());
 		}
 
-		std::unique_lock<std::shared_mutex> fileLock(m_FileMutex);
+		std::unique_lock<std::shared_mutex> fileLock(m_Work->FileMutex);
 		for (const std::filesystem::path& path : unused)
 			FileSystem::Remove(path);
 	}
@@ -773,9 +968,14 @@ namespace Strata
 			ST_CORE_WARN("Could not write the asset index in '{}'", FileSystem::ToUTF8(m_Specification.CacheDirectory));
 	}
 
-	bool EditorAssetManager::LoadCurrentImport(const ImportRequest& request, ImportOutcome& outOutcome) const
+	bool EditorAssetManager::BackgroundWork::LoadCurrentImport(const ImportRequest& request, ImportOutcome& outOutcome, const std::atomic<bool>* cancel) const
 	{
+		if (IsCancelled(cancel))
+			return false;
 		const std::filesystem::path recordPath = GetImportRecordPath(request.Handle);
+		// The source and its dependencies may be hashed: read under the shared file lock, like every read of project files
+		// off the main thread (a move or delete of a file an open reader holds fails on Windows).
+		std::shared_lock<std::shared_mutex> fileLock(FileMutex);
 		std::optional<std::string> recordText = FileSystem::ReadText(recordPath);
 		if (!recordText)
 			return false;
@@ -855,36 +1055,66 @@ namespace Strata
 			}
 		}
 
+		fileLock.unlock();
+
 		if (recordChanged)
-			FileSystem::WriteText(recordPath, JsonUtils::Dump(*record, 1, '\t'));
+		{
+			// Like an import's publication: under the exclusive lock, and not once the import is cancelled (its asset may be
+			// gone, with the record it had).
+			std::unique_lock<std::shared_mutex> writeLock(FileMutex);
+			if (!IsCancelled(cancel))
+				FileSystem::WriteText(recordPath, JsonUtils::Dump(*record, 1, '\t'));
+		}
 		outOutcome = std::move(outcome);
 		return true;
 	}
 
-	EditorAssetManager::ImportOutcome EditorAssetManager::RunImport(const ImportRequest& request) const
+	EditorAssetManager::ImportOutcome EditorAssetManager::BackgroundWork::RunImport(const ImportRequest& request, const std::atomic<bool>* cancel) const
 	{
 		ST_PROFILE_FUNCTION();
 		const std::filesystem::path sourcePath = ToAbsolute(request.Path);
+		auto stopped = [&request]()
+		{
+			ImportOutcome outcome;
+			outcome.Handle = request.Handle;
+			outcome.Cancelled = true;
+			outcome.Error = "The import was cancelled";
+			return outcome;
+		};
+
+		// Large sources import one at a time: decoded data is many times the file size. A cancelled import stops waiting.
+		static std::timed_mutex s_LargeImportMutex;
+		std::unique_lock<std::timed_mutex> largeImportLock(s_LargeImportMutex, std::defer_lock);
+		if (FileSystem::GetFileSize(sourcePath).value_or(0) > c_LargeImportSize)
+		{
+			while (!largeImportLock.try_lock_for(std::chrono::milliseconds(10)))
+			{
+				if (IsCancelled(cancel))
+					return stopped();
+			}
+		}
+		if (IsCancelled(cancel))
+			return stopped();
 
 		ImportOutcome outcome;
 		outcome.Handle = request.Handle;
 		// The file state before importing: a change during the import is then still detected as a modification.
-		outcome.SourceSize = FileSystem::GetFileSize(sourcePath).value_or(0);
-		outcome.SourceTime = FileSystem::GetLastWriteTime(sourcePath).value_or(0);
-		const std::optional<uint64_t> sourceHash = HashFile(sourcePath);
+		std::optional<uint64_t> sourceHash;
+		{
+			std::shared_lock<std::shared_mutex> fileLock(FileMutex);
+			outcome.SourceSize = FileSystem::GetFileSize(sourcePath).value_or(0);
+			outcome.SourceTime = FileSystem::GetLastWriteTime(sourcePath).value_or(0);
+			sourceHash = HashFile(sourcePath);
+		}
 
 		ImportContext context;
 		context.Handle = request.Handle;
 		context.SourcePath = sourcePath;
-		context.AssetDirectory = m_Specification.AssetDirectory;
+		context.AssetDirectory = Specification.AssetDirectory;
 		context.Settings = request.Settings;
 		context.ResolveAsset = [this](const std::filesystem::path& path) { return ResolveProjectFile(path); };
-
-		// Large sources import one at a time: decoded data is many times the file size.
-		static std::mutex s_LargeImportMutex;
-		std::unique_lock<std::mutex> largeImportLock(s_LargeImportMutex, std::defer_lock);
-		if (outcome.SourceSize > c_LargeImportSize)
-			largeImportLock.lock();
+		context.ReadFile = [this, cancel](const std::filesystem::path& path) { return ReadProjectFile(path, cancel); };
+		context.Cancel = cancel;
 
 		ImportResult result;
 		std::string error;
@@ -904,7 +1134,11 @@ namespace Strata
 			error = "the importer failed with an unknown exception";
 			result = ImportResult();
 		}
-		largeImportLock = {};
+		if (largeImportLock.owns_lock())
+			largeImportLock.unlock();
+		// Whatever the importer returned: it may have failed because it was cancelled, or read a file that moved meanwhile.
+		if (IsCancelled(cancel))
+			return stopped();
 		if (outcome.Success)
 		{
 			// What the stored forms reference: what the importer recorded, and what their documents show.
@@ -928,42 +1162,62 @@ namespace Strata
 			outcome.Dependencies.push_back(relativePath);
 		}
 
+		// Cache files are written under temporary names first: only replacing them takes the file lock, so loads are not
+		// blocked while a large import writes. The staged files and the record are published together under the exclusive
+		// lock, after a last look at the cancellation flag: a move or delete sets it before it changes files under that lock,
+		// so an import it cancelled never stores what it read, and nothing of a cancelled import is left.
+		std::vector<std::pair<std::filesystem::path, std::filesystem::path>> stagedFiles;
+		auto removeStaged = [&stagedFiles]()
+		{
+			for (const auto& [stagedPath, cachePath] : stagedFiles)
+				FileSystem::Remove(stagedPath);
+		};
+		bool staged = true;
 		if (!outcome.Success)
 		{
 			outcome.Error = error.empty() ? std::string("Import failed") : error;
 		}
 		else
 		{
-			// Cache files are written under temporary names first: only replacing them takes the file lock, so loads
-			// are not blocked while a large import writes.
-			std::vector<std::pair<std::filesystem::path, std::filesystem::path>> stagedFiles;
+			const uint64_t stagingNumber = NextStagingNumber.fetch_add(1);
 			auto stage = [&](AssetHandle handle, std::vector<uint8_t>& data)
 			{
-				std::filesystem::path stagedPath = GetCachePath(handle);
-				stagedPath += ".staged";
-				const bool written = FileSystem::WriteBytes(stagedPath, data);
-				stagedFiles.emplace_back(stagedPath, GetCachePath(handle));
+				// Nothing more is written once the import is cancelled.
+				bool written = false;
+				if (!IsCancelled(cancel))
+				{
+					std::filesystem::path stagedPath = GetCachePath(handle);
+					stagedPath += fmt::format(".staged{}", stagingNumber);
+					written = FileSystem::WriteBytes(stagedPath, data);
+					stagedFiles.emplace_back(stagedPath, GetCachePath(handle));
+				}
 				std::vector<uint8_t>().swap(data); // Free the memory now: imports can be large
 				return written;
 			};
-			bool written = stage(request.Handle, result.Data);
+			staged = stage(request.Handle, result.Data);
 			for (ImportedSubAsset& subAsset : result.SubAssets)
-				written = stage(DeriveSubAssetHandle(request.Handle, subAsset.Key), subAsset.Data) && written; // Frees every sub-asset's data
+				staged = stage(DeriveSubAssetHandle(request.Handle, subAsset.Key), subAsset.Data) && staged; // Frees every sub-asset's data
+			outcome.SubAssets = std::move(result.SubAssets);
+		}
 
-			if (written)
-			{
-				std::unique_lock<std::shared_mutex> fileLock(m_FileMutex);
-				for (const auto& [stagedPath, cachePath] : stagedFiles)
-					written = written && FileSystem::Rename(stagedPath, cachePath);
-			}
+		std::unique_lock<std::shared_mutex> fileLock(FileMutex);
+		if (IsCancelled(cancel))
+		{
+			fileLock.unlock();
+			removeStaged();
+			return stopped();
+		}
+		if (outcome.Success)
+		{
+			bool written = staged;
+			for (const auto& [stagedPath, cachePath] : stagedFiles)
+				written = written && FileSystem::Rename(stagedPath, cachePath);
 			if (!written)
 			{
-				for (const auto& [stagedPath, cachePath] : stagedFiles)
-					FileSystem::Remove(stagedPath);
+				removeStaged();
 				outcome.Success = false;
-				outcome.Error = fmt::format("Could not write imported data to '{}'", FileSystem::ToUTF8(m_Specification.CacheDirectory));
+				outcome.Error = fmt::format("Could not write imported data to '{}'", FileSystem::ToUTF8(Specification.CacheDirectory));
 			}
-			outcome.SubAssets = std::move(result.SubAssets);
 		}
 
 		nlohmann::json record = nlohmann::json::object();
@@ -1060,7 +1314,7 @@ namespace Strata
 			if (std::find(subAssetHandles.begin(), subAssetHandles.end(), previous) != subAssetHandles.end())
 				continue;
 			UnregisterAsset(previous);
-			std::unique_lock<std::shared_mutex> fileLock(m_FileMutex);
+			std::unique_lock<std::shared_mutex> fileLock(m_Work->FileMutex);
 			FileSystem::Remove(GetCachePath(previous));
 		}
 
@@ -1074,38 +1328,48 @@ namespace Strata
 		ResumeLoadsAwaitingImport(awaited);
 	}
 
-	void EditorAssetManager::QueueImport(AssetHandle handle, bool force)
+	void EditorAssetManager::QueueImport(AssetHandle handle, bool force, bool replacing)
 	{
+		if (m_Closed)
+			return;
+		const Ref<BackgroundJob> job = CreateRef<BackgroundJob>();
 		ImportRequest request;
 		{
 			std::scoped_lock<std::mutex> lock(m_SourceMutex);
 			auto it = m_Sources.find(handle);
 			if (it == m_Sources.end() || it->second.Importer->StoresSourceDirectly())
 				return;
-			if (it->second.ImportInFlight)
-			{
-				// The running import read an earlier state: one more runs when it is done.
-				it->second.ImportQueuedAgain = true;
-				it->second.ForceImportAgain = it->second.ForceImportAgain || force;
-				return;
-			}
-			it->second.ImportInFlight = true;
+			// A queued or running import read an earlier state of the file, its settings or its place: this one replaces it
+			// at once, rather than after it (its work would be thrown away).
+			const Ref<BackgroundJob> replaced = StopImport(it->second);
+			if (replaced)
+				force = force || replaced->Force;
+			job->Force = force;
+			it->second.ImportJob = job;
 			m_SourcesImporting++;
 			request = MakeImportRequest(it->second);
 			request.Force = force;
+			request.Replaced = replacing || replaced != nullptr;
+			m_Work->Add(job);
 		}
+		SubmitImport(job, request);
+	}
 
+	void EditorAssetManager::SubmitImport(const Ref<BackgroundJob>& job, const ImportRequest& request)
+	{
+		// The job uses only the work it shares with the manager, so that the manager never waits for it (see BackgroundWork).
+		auto import = [work = m_Work, job, request]()
 		{
-			std::scoped_lock<std::mutex> lock(m_ImportMutex);
-			m_ImportsInFlight++;
-		}
-		auto import = [this, request]()
-		{
+			if (job->Cancel.load())
+				return; // Replaced, or the manager closed, before it started
+			job->Started.store(true);
 			ImportOutcome outcome;
 			try
 			{
-				if (request.Force || !LoadCurrentImport(request, outcome))
-					outcome = RunImport(request);
+				if (request.Force || !work->LoadCurrentImport(request, outcome, &job->Cancel))
+					outcome = work->RunImport(request, &job->Cancel);
+				else if (request.Replaced)
+					outcome.FromCache = false; // The current cache may hold what the replaced import stored and nothing loaded
 			}
 			catch (const std::exception& exception)
 			{
@@ -1113,25 +1377,14 @@ namespace Strata
 				outcome.Handle = request.Handle;
 				outcome.Error = fmt::format("Import failed: {}", exception.what());
 			}
-
-			// Always completes, so WaitForImports and the destructor never wait forever.
-			std::scoped_lock<std::mutex> lock(m_ImportMutex);
-			m_ImportsInFlight--;
-			try
-			{
-				m_CompletedImports.push_back(std::move(outcome));
-			}
-			catch (...)
-			{
-				ST_CORE_ERROR("Out of memory while completing the import of {}", request.Path);
-			}
-			m_ImportCondition.notify_all();
+			// Always ends the job, so WaitForImports never waits forever; the result goes to Update unless it is out of date.
+			work->Finish(job, std::move(outcome));
 		};
 		try
 		{
 			// On the background threads: imports decode and compress for seconds, which must neither take the processors from
 			// the frame nor hold the I/O threads that stream assets.
-			JobSystem::Submit(import, JobPriority::Background);
+			JobSystem::Submit(std::move(import), JobPriority::Background);
 		}
 		catch (const std::exception& exception)
 		{
@@ -1139,30 +1392,32 @@ namespace Strata
 			bool neverImported = false;
 			{
 				std::scoped_lock<std::mutex> lock(m_SourceMutex);
-				auto it = m_Sources.find(handle);
-				if (it != m_Sources.end())
+				auto it = m_Sources.find(request.Handle);
+				if (it != m_Sources.end() && it->second.ImportJob == job)
 				{
-					it->second.ImportInFlight = false;
-					it->second.ImportQueuedAgain = false;
-					it->second.ForceImportAgain = false;
-					m_SourcesImporting--;
+					StopImport(it->second);
 					neverImported = !it->second.Import.Imported;
 				}
-			}
-			{
-				std::scoped_lock<std::mutex> lock(m_ImportMutex);
-				m_ImportsInFlight--;
-				m_ImportCondition.notify_all();
 			}
 			// A first import that never runs fails, so that loads waiting for it end (a re-import keeps the data it has).
 			if (neverImported)
 			{
 				ImportOutcome failed;
-				failed.Handle = handle;
+				failed.Handle = request.Handle;
 				failed.Error = fmt::format("Could not queue the import: {}", exception.what());
 				ApplyImportOutcome(std::move(failed), false);
 			}
 		}
+	}
+
+	Ref<EditorAssetManager::BackgroundJob> EditorAssetManager::StopImport(SourceAsset& source)
+	{
+		Ref<BackgroundJob> job = std::exchange(source.ImportJob, nullptr);
+		if (!job)
+			return nullptr;
+		m_SourcesImporting--;
+		m_Work->Cancel(job);
+		return job;
 	}
 
 	void EditorAssetManager::ProcessCompletedImports()
@@ -1170,9 +1425,9 @@ namespace Strata
 		std::vector<ImportOutcome> completed;
 		std::vector<NativeReferences> references;
 		{
-			std::scoped_lock<std::mutex> lock(m_ImportMutex);
-			completed.swap(m_CompletedImports);
-			references.swap(m_CompletedReferences);
+			std::scoped_lock<std::mutex> lock(m_Work->Mutex);
+			completed.swap(m_Work->CompletedImports);
+			references.swap(m_Work->CompletedReferences);
 		}
 
 		// What engine-native assets reference, unless a later search or a save started meanwhile (its result follows): the
@@ -1194,26 +1449,17 @@ namespace Strata
 
 		for (ImportOutcome& outcome : completed)
 		{
-			const AssetHandle handle = outcome.Handle;
-			bool importAgain = false;
-			bool forceAgain = false;
 			{
 				std::scoped_lock<std::mutex> lock(m_SourceMutex);
-				auto it = m_Sources.find(handle);
-				if (it != m_Sources.end())
-				{
-					importAgain = it->second.ImportQueuedAgain;
-					forceAgain = it->second.ForceImportAgain;
-					if (it->second.ImportInFlight)
-						m_SourcesImporting--;
-					it->second.ImportInFlight = false;
-					it->second.ImportQueuedAgain = false;
-					it->second.ForceImportAgain = false;
-				}
+				auto it = m_Sources.find(outcome.Handle);
+				// The source went, or another import replaced this one (which finished before it was cancelled): its result is
+				// out of date, and the import that replaced it brings the current one.
+				if (it == m_Sources.end() || it->second.ImportJob != outcome.Job)
+					continue;
+				it->second.ImportJob.reset();
+				m_SourcesImporting--;
 			}
 			ApplyImportOutcome(std::move(outcome), true);
-			if (importAgain)
-				QueueImport(handle, forceAgain);
 		}
 	}
 
@@ -1222,23 +1468,18 @@ namespace Strata
 		while (true)
 		{
 			{
-				std::unique_lock<std::mutex> lock(m_ImportMutex);
-				m_ImportCondition.wait(lock, [this]() { return m_ImportsInFlight == 0; });
+				std::unique_lock<std::mutex> lock(m_Work->Mutex);
+				m_Work->Condition.wait(lock, [this]() { return m_Work->Jobs.empty(); });
 			}
 			ProcessCompletedImports();
 
-			std::scoped_lock<std::mutex> lock(m_ImportMutex);
-			if (m_ImportsInFlight == 0 && m_CompletedImports.empty() && m_CompletedReferences.empty())
+			std::scoped_lock<std::mutex> lock(m_Work->Mutex);
+			if (m_Work->Jobs.empty() && m_Work->CompletedImports.empty() && m_Work->CompletedReferences.empty())
 				return;
 		}
 	}
 
-	AssetHandle EditorAssetManager::ResolveProjectFile(const std::filesystem::path& absolutePath) const
-	{
-		return FindAssetByAbsolutePath(absolutePath);
-	}
-
-	EditorAssetManager::NativeReferences EditorAssetManager::FindNativeReferences(AssetHandle handle, AssetType type, const std::string& relativePath,
+	EditorAssetManager::NativeReferences EditorAssetManager::BackgroundWork::FindNativeReferences(AssetHandle handle, AssetType type, const std::string& relativePath,
 		std::span<const uint8_t> data, const std::vector<AssetHandle>* references, bool deferRecord) const
 	{
 		NativeReferences result;
@@ -1263,7 +1504,7 @@ namespace Strata
 				bool current = false;
 				if (record && record->is_object() && JsonUtils::GetUInt(*record, "Version", 0) == c_ImportRecordVersion && JsonUtils::GetBool(*record, "Native", false))
 				{
-					std::shared_lock<std::shared_mutex> fileLock(m_FileMutex);
+					std::shared_lock<std::shared_mutex> fileLock(FileMutex);
 					current = IsFileCurrent(sourcePath, *record, "SourceSize", "SourceTime", "SourceHash", recordChanged);
 				}
 				if (current)
@@ -1286,7 +1527,7 @@ namespace Strata
 			int64_t sourceTime = 0;
 			if (data.empty())
 			{
-				std::shared_lock<std::shared_mutex> fileLock(m_FileMutex);
+				std::shared_lock<std::shared_mutex> fileLock(FileMutex);
 				file = FileSystem::ReadBytes(sourcePath);
 				if (!file)
 					return result;
@@ -1350,11 +1591,13 @@ namespace Strata
 			path = it->second.Path;
 			it->second.ReferencesGeneration++; // A search queued before finds the previous contents
 		}
-		ApplyNativeReferences(FindNativeReferences(handle, type, path, data, references));
+		ApplyNativeReferences(m_Work->FindNativeReferences(handle, type, path, data, references));
 	}
 
 	void EditorAssetManager::QueueNativeReferences(AssetHandle handle)
 	{
+		if (m_Closed)
+			return;
 		AssetType type = AssetType::None;
 		std::string path;
 		uint64_t generation = 0;
@@ -1368,39 +1611,28 @@ namespace Strata
 			generation = ++it->second.ReferencesGeneration;
 		}
 
-		// Counted like an import: WaitForImports, HasPendingImports and the destructor wait for it too.
+		// A job like an import: WaitForImports and HasPendingImports count it, Close cancels it.
+		const Ref<BackgroundJob> job = CreateRef<BackgroundJob>();
+		m_Work->Add(job);
+		auto search = [work = m_Work, job, handle, type, path, generation]()
 		{
-			std::scoped_lock<std::mutex> lock(m_ImportMutex);
-			m_ImportsInFlight++;
-		}
-		auto search = [this, handle, type, path, generation]()
-		{
+			if (job->Cancel.load())
+				return;
+			job->Started.store(true);
 			// Its record is written by Update, and only while this is the latest search (FindNativeReferences catches what it
 			// may throw).
-			NativeReferences references = FindNativeReferences(handle, type, path, {}, nullptr, true);
+			NativeReferences references = work->FindNativeReferences(handle, type, path, {}, nullptr, true);
 			references.Generation = generation;
-			std::scoped_lock<std::mutex> lock(m_ImportMutex);
-			m_ImportsInFlight--;
-			try
-			{
-				m_CompletedReferences.push_back(std::move(references));
-			}
-			catch (...)
-			{
-				ST_CORE_ERROR("Out of memory while recording the references of {}", path);
-			}
-			m_ImportCondition.notify_all();
+			work->Finish(job, std::move(references));
 		};
 		try
 		{
-			JobSystem::SubmitIO(search, JobPriority::Normal);
+			JobSystem::SubmitIO(std::move(search), JobPriority::Normal);
 		}
 		catch (const std::exception& exception)
 		{
 			ST_CORE_ERROR("Could not queue the search of what '{}' references: {}", path, exception.what());
-			std::scoped_lock<std::mutex> lock(m_ImportMutex);
-			m_ImportsInFlight--;
-			m_ImportCondition.notify_all();
+			m_Work->Cancel(job);
 		}
 	}
 
@@ -1590,7 +1822,7 @@ namespace Strata
 
 			bool success = false;
 			{
-				std::shared_lock<std::shared_mutex> fileLock(m_FileMutex);
+				std::shared_lock<std::shared_mutex> fileLock(m_Work->FileMutex);
 				success = read(direct ? ToAbsolute(sourcePath) : GetCachePath(metadata.Handle));
 			}
 			if (success)
@@ -1763,6 +1995,12 @@ namespace Strata
 
 	bool EditorAssetManager::QueueBackgroundImport(AssetHandle handle, bool force, std::string* outError)
 	{
+		if (m_Closed)
+		{
+			if (outError)
+				*outError = "The project's assets are closed: nothing is imported any more";
+			return false;
+		}
 		bool direct = false;
 		{
 			std::scoped_lock<std::mutex> lock(m_SourceMutex);
@@ -1802,14 +2040,11 @@ namespace Strata
 			handle = metadata->Parent;
 		std::scoped_lock<std::mutex> lock(m_SourceMutex);
 		auto it = m_Sources.find(handle);
-		return it != m_Sources.end() && (it->second.ImportInFlight || it->second.ImportQueuedAgain);
+		return it != m_Sources.end() && it->second.ImportJob != nullptr;
 	}
 
 	bool EditorAssetManager::ReimportAsset(AssetHandle handle, std::string* outError)
 	{
-		// Finish background imports first: their results would otherwise overwrite this one.
-		WaitForImports();
-
 		ImportRequest request;
 		bool direct = false;
 		{
@@ -1823,7 +2058,13 @@ namespace Strata
 			}
 			direct = it->second.Importer->StoresSourceDirectly();
 			if (!direct)
+			{
+				// A background import of the asset read an earlier state, and its result must not follow this one: it is
+				// cancelled before this import starts, so it stores nothing once this one could have published. Other imports go
+				// on, and nothing waits for them.
+				StopImport(it->second);
 				request = MakeImportRequest(it->second);
+			}
 		}
 
 		if (direct)
@@ -1832,7 +2073,7 @@ namespace Strata
 			return true;
 		}
 
-		ImportOutcome outcome = RunImport(request);
+		ImportOutcome outcome = m_Work->RunImport(request);
 		const bool success = outcome.Success;
 		if (!success && outError)
 			*outError = outcome.Error;
@@ -1944,7 +2185,7 @@ namespace Strata
 			return fail(fmt::format("Invalid {} data: {}", AssetTypeToString(type), error));
 		bool written = false;
 		{
-			std::unique_lock<std::shared_mutex> fileLock(m_FileMutex);
+			std::unique_lock<std::shared_mutex> fileLock(m_Work->FileMutex);
 			written = FileSystem::WriteBytes(path, data);
 		}
 		if (!written)
@@ -1976,9 +2217,6 @@ namespace Strata
 			return false;
 		};
 
-		// An import still reading the old path would fail (and record the failure): finish imports first.
-		WaitForImports();
-
 		const std::filesystem::path destination = ToAbsolute(newRelativePath);
 		const std::string destinationRelative = ToRelative(destination);
 		if (destinationRelative.empty())
@@ -1995,27 +2233,41 @@ namespace Strata
 		if (AssetImporterRegistry::FindByExtension(GetExtension(destination)) != it->second.Importer)
 			return fail("Moving cannot change the file type");
 
+		// An import of the asset reads the file at its old place: it is cancelled before the file moves, so it stores nothing
+		// it read there, and imports again once the move is done (at the old place if the move fails). Other imports go on.
+		const Ref<BackgroundJob> stopped = StopImport(it->second);
 		const std::filesystem::path source = ToAbsolute(it->second.Path);
+		std::string failure;
 		{
-			std::unique_lock<std::shared_mutex> fileLock(m_FileMutex);
+			std::unique_lock<std::shared_mutex> fileLock(m_Work->FileMutex);
 			if (!FileSystem::CreateDirectories(destination.parent_path()) || !FileSystem::Rename(source, destination))
-				return fail(fmt::format("Could not move '{}' to '{}'", it->second.Path, destinationRelative));
-			if (FileSystem::Exists(GetMetaPath(source)) && !FileSystem::Rename(GetMetaPath(source), GetMetaPath(destination)))
+			{
+				failure = fmt::format("Could not move '{}' to '{}'", it->second.Path, destinationRelative);
+			}
+			else if (FileSystem::Exists(GetMetaPath(source)) && !FileSystem::Rename(GetMetaPath(source), GetMetaPath(destination)))
 			{
 				FileSystem::Rename(destination, source);
-				return fail(fmt::format("Could not move the .meta file of '{}'", it->second.Path));
+				failure = fmt::format("Could not move the .meta file of '{}'", it->second.Path);
 			}
 		}
 
-		m_SourcesByPath.erase(it->second.Path);
-		it->second.Path = destinationRelative;
-		it->second.PathGeneration++;
-		m_SourcesByPath[destinationRelative] = handle;
-		m_AssetIndexDirty = true;
-		if (!FileSystem::Exists(GetMetaPath(destination)))
-			WriteMetaFile(it->second);
+		if (failure.empty())
+		{
+			m_SourcesByPath.erase(it->second.Path);
+			it->second.Path = destinationRelative;
+			it->second.PathGeneration++;
+			m_SourcesByPath[destinationRelative] = handle;
+			m_AssetIndexDirty = true;
+			if (!FileSystem::Exists(GetMetaPath(destination)))
+				WriteMetaFile(it->second);
+		}
 		const std::vector<AssetHandle> subAssets = it->second.Import.SubAssets;
 		lock.unlock();
+
+		if (stopped)
+			QueueImport(handle, stopped->Force, true);
+		if (!failure.empty())
+			return fail(std::move(failure));
 
 		if (std::optional<AssetMetadata> metadata = GetMetadata(handle))
 		{
@@ -2036,8 +2288,8 @@ namespace Strata
 
 	bool EditorAssetManager::HasPendingImports() const
 	{
-		std::scoped_lock<std::mutex> lock(m_ImportMutex);
-		return m_ImportsInFlight > 0 || !m_CompletedImports.empty() || !m_CompletedReferences.empty();
+		std::scoped_lock<std::mutex> lock(m_Work->Mutex);
+		return !m_Work->Jobs.empty() || !m_Work->CompletedImports.empty() || !m_Work->CompletedReferences.empty();
 	}
 
 	bool EditorAssetManager::PlanAssetPack(const AssetPackBuildOptions& options, AssetPackBuildPlan& outPlan, std::string* outError) const
@@ -2193,10 +2445,8 @@ namespace Strata
 
 	bool EditorAssetManager::DeleteAsset(AssetHandle handle, std::string* outError)
 	{
-		// A running import would write cache files after they were deleted.
-		WaitForImports();
-
 		std::filesystem::path path;
+		Ref<BackgroundJob> stopped;
 		{
 			std::scoped_lock<std::mutex> lock(m_SourceMutex);
 			auto it = m_Sources.find(handle);
@@ -2207,17 +2457,26 @@ namespace Strata
 				return false;
 			}
 			path = ToAbsolute(it->second.Path);
+			// Its import is cancelled before the files go, so it stores nothing afterwards (a running one would write cache
+			// files after they were deleted). Other imports go on.
+			stopped = StopImport(it->second);
 		}
 
+		bool removed = true;
 		{
-			std::unique_lock<std::shared_mutex> fileLock(m_FileMutex);
-			if (FileSystem::Exists(path) && !FileSystem::Remove(path))
-			{
-				if (outError)
-					*outError = fmt::format("Could not delete '{}'", FileSystem::ToUTF8(path));
-				return false;
-			}
-			FileSystem::Remove(GetMetaPath(path));
+			std::unique_lock<std::shared_mutex> fileLock(m_Work->FileMutex);
+			removed = !FileSystem::Exists(path) || FileSystem::Remove(path);
+			if (removed)
+				FileSystem::Remove(GetMetaPath(path));
+		}
+		if (!removed)
+		{
+			// The asset stays: so does its import.
+			if (stopped)
+				QueueImport(handle, stopped->Force, true);
+			if (outError)
+				*outError = fmt::format("Could not delete '{}'", FileSystem::ToUTF8(path));
+			return false;
 		}
 		UnregisterSource(handle, true);
 		return true;

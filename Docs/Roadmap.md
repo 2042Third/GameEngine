@@ -122,7 +122,12 @@ machine, quiet:
   texture is compressed to BC7 on every core (10-30 ms before), and a frame never picks up an import's compression
   while it waits for its own work; the editor opens projects at once and imports in the background (a fresh copy of the
   stress project: the scan takes 38 ms instead of 7.6-7.9 s, the editor is on screen after 1.1 s and the 18 textures
-  arrive within about 8 s, loads of them waiting for their imports); pack blocks that compress by less than an eighth
+  arrive within about 8 s, loads of them waiting for their imports), and nothing waits for those imports any more: they
+  are cancelled instead (closing the project, opening another or a sample and quitting cancel them all; moving,
+  deleting or re-importing an asset only its own, which a move queues again at the new place), so with 17 imports of a
+  fresh stress project copy running, `project.close` answers in 0.06-0.34 s instead of 5.6-12 s (its frame 16-23 ms
+  instead of the whole wait), `asset.move` and `asset.delete` in 0.05-0.19 s instead of 5.6 s or more, and the editor
+  quits in 0.1-0.2 s instead of 5.8-6.3 s; pack blocks that compress by less than an eighth
   are stored and read straight into place, which brought streaming from version 2 back from 1.08-1.14 to 1.02-1.07
   times version 1's time with BC textures; every perf check of the wave is confirmed, with the workstreams' acceptance
   limits as budgets. `PerfStability.py --runs 5 --wait-quiet 20` on the merged tree after the review round, with

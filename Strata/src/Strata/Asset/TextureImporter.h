@@ -3,6 +3,7 @@
 #include "Strata/Asset/AssetImporter.h"
 #include "Strata/Renderer/Texture.h"
 
+#include <atomic>
 #include <optional>
 #include <span>
 #include <string>
@@ -83,9 +84,10 @@ namespace Strata
 		// Decodes an encoded image and cooks it into a texture: resized to MaxSize, each mip filtered from the previous level
 		// (a Mitchell filter; sRGB color in linear space with alpha weighting, normal maps renormalized per level) and every
 		// level stored in the format ChooseFormat picks (block-compressed on worker threads). Thread-safe; used by model
-		// importers for embedded images too.
+		// importers for embedded images too. Fails once `cancel` is set (ImportContext::Cancel), checked after decoding,
+		// between mip levels and between blocks.
 		static Ref<Texture> Decode(std::span<const uint8_t> encoded, const TextureImportSettings& settings, const std::string& debugName,
-			std::string* outError = nullptr);
+			std::string* outError = nullptr, const std::atomic<bool>* cancel = nullptr);
 
 		// The stored format of an image with `channels` channels (1 to 4; 2 is gray and alpha) whose alpha is below 255
 		// somewhere (`hasAlpha`):
