@@ -2,6 +2,7 @@
 
 #include "Strata/Core/BinaryStream.h"
 #include "Strata/Renderer/CookedTexture.h"
+#include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/Texture.h"
 
 #include <algorithm>
@@ -136,8 +137,16 @@ TEST_SUITE("Renderer.CookedTexture")
 					CHECK(std::ranges::equal(loaded->GetMipData(level), source->GetMips()[level].Data));
 				}
 				CHECK(loaded->Serialize() == cooked);
-				// Without a renderer the stored chain is what the texture holds, at its block-compressed size.
-				CHECK(loaded->GetFinalizedMemoryUsage().Cpu == loaded->GetMemoryUsage().Cpu);
+				// Finalized, the texture holds its chain at its block-compressed size: on the GPU where a renderer runs (GPU suites
+				// that ran earlier in this process leave the shared one initialized), else in system memory.
+				const AssetMemoryUsage finalized = loaded->GetFinalizedMemoryUsage();
+				uint64_t chainBytes = 0;
+				for (const TextureMip& mip : loaded->GetMips())
+					chainBytes += GetMipByteSize(format, mip.Width, mip.Height);
+				if (Renderer::IsInitialized())
+					CHECK(finalized == AssetMemoryUsage { 0, chainBytes, 0 });
+				else
+					CHECK(finalized == loaded->GetMemoryUsage());
 			}
 		}
 	}
