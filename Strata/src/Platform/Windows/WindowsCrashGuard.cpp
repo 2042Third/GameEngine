@@ -13,7 +13,7 @@ namespace Strata
 		constexpr DWORD c_CppExceptionCode = 0xE06D7363; // MSVC C++ exception ('msc')
 
 		// Plain data only: filled inside the exception filter, which may run on a nearly exhausted stack. It lives in
-		// Invoke's frame, so the filter needs no stack for the unwinding context.
+		// Invoke's frame, which every guarded call (every script call) sets up, so it stays small.
 		struct FaultRecord
 		{
 			DWORD Code = 0;
@@ -21,16 +21,25 @@ namespace Strata
 			ULONG_PTR AccessType = 0;
 			ULONG_PTR AccessAddress = 0;
 			bool HasAccessInfo = false;
-			uint64_t Frames[c_MaxCrashStackFrames]; // The first FrameCount are filled (not cleared: Invoke guards every script call)
-			uint32_t FrameCount = 0;
+		};
+
+		// The stack of the thread's latest fault, which the filter fills and Invoke copies out. Thread-local rather than in
+		// Invoke's frame: guarded calls keep a small frame, and the filter needs no stack for the unwinding context. A
+		// thread handles one fault at a time: the innermost guard's filter fills it, and nothing between the filter and the
+		// copy can fault (the unwinding runs no C++ destructors for structured exceptions).
+		struct StackCapture
+		{
+			uint64_t Frames[c_MaxCrashStackFrames]; // The first FrameCount are filled
+			uint32_t FrameCount;
 			CONTEXT Unwind; // The context being unwound
 		};
+		thread_local StackCapture t_StackCapture;
 
 #if defined(_M_X64)
 		// The faulting instruction and its callers' return addresses, unwound from the fault's context with the functions'
 		// unwind data. A corrupted stack may fault while it is read: that ends the walk (a nested exception in the filter
 		// would otherwise be dispatched on top of the one being handled).
-		void CaptureStack(const CONTEXT* faulting, FaultRecord* record)
+		void CaptureStack(const CONTEXT* faulting, StackCapture* record)
 		{
 			__try
 			{
@@ -99,12 +108,14 @@ namespace Strata
 				record->AccessAddress = exception->ExceptionInformation[1];
 			}
 			// After a stack overflow the filter runs on what the guard page left: no stack walk there.
+			StackCapture& stack = t_StackCapture;
+			stack.FrameCount = 0;
 #if defined(_M_X64)
 			if (exception->ExceptionCode != EXCEPTION_STACK_OVERFLOW && pointers->ContextRecord)
-				CaptureStack(pointers->ContextRecord, record);
+				CaptureStack(pointers->ContextRecord, &stack);
 #endif
-			if (record->FrameCount == 0)
-				record->Frames[record->FrameCount++] = record->Address;
+			if (stack.FrameCount == 0)
+				stack.Frames[stack.FrameCount++] = record->Address;
 			return EXCEPTION_EXECUTE_HANDLER;
 		}
 
@@ -170,7 +181,8 @@ namespace Strata
 			outInfo->Description = fmt::format("{} at 0x{:016X}", DescribeFault(record), record.Address);
 			outInfo->Code = record.Code;
 			outInfo->Address = record.Address;
-			outInfo->Stack.assign(record.Frames, record.Frames + record.FrameCount);
+			const StackCapture& stack = t_StackCapture;
+			outInfo->Stack.assign(stack.Frames, stack.Frames + stack.FrameCount);
 		}
 		return false;
 	}
