@@ -63,10 +63,11 @@ module-foundation, ran as its own workstream):
   Project, Open Sample, About and "Connect an AI agent", the strata mark as window and executable icon, and the build's
   git commit in its version.
 
-**Wave 2 landed (2026-10-10).** Seven workstreams merged into one integration branch, in the order perf-gates,
-physics-at-scale, texture-cook-v2, pack-v2, render-scene, streaming-observatory, editor-authoring; the integration then
-did the wiring the workstreams left to whichever of them merged second. Numbers are Release builds on the reference
-machine, quiet:
+**Wave 2 landed (2026-10-11).** Seven workstreams merged into one integration branch on 2026-10-10, in the order
+perf-gates, physics-at-scale, texture-cook-v2, pack-v2, render-scene, streaming-observatory, editor-authoring; the
+integration then did the wiring the workstreams left to whichever of them merged second, a review round fixed what its
+reviewers found, and three branches fixed what the review's verification still found. Numbers are Release builds on
+the reference machine, quiet:
 
 - `perf-gates`: perf checks that confirm a failure by measuring again (up to three attempts, each printed and recorded)
   and every limit in `StrataTests/Perf/Budgets.json` (an optional roadmap `Target` next to the gating budget), each
@@ -119,53 +120,63 @@ machine, quiet:
   (version 3) has the Asset tab behind the Inspector and the instruments in the bottom area; imports and exports
   compress on background threads below the main thread's priority, frame work keeps workers at the normal priority, and
   a thread that waits for jobs runs only the job it waits for, so the editor's frames stay at 3-4 ms while a 4096x4096
-  texture is compressed to BC7 on every core (10-30 ms before), and a frame never picks up an import's compression
-  while it waits for its own work; the editor opens projects at once and imports in the background (a fresh copy of the
-  stress project: the scan takes 38 ms instead of 7.6-7.9 s, the editor is on screen after 1.1 s and the 18 textures
-  arrive within about 8 s, loads of them waiting for their imports), and nothing waits for those imports any more: they
-  are cancelled instead (closing the project, opening another or a sample and quitting cancel them all; moving,
-  deleting or re-importing an asset only its own, which a move queues again at the new place), so with 17 imports of a
-  fresh stress project copy running, `project.close` answers in 0.06-0.34 s instead of 5.6-12 s (its frame 16-23 ms
-  instead of the whole wait), `asset.move` and `asset.delete` in 0.05-0.19 s instead of 5.6 s or more, and the editor
-  quits in 0.1-0.2 s instead of 5.8-6.3 s; pack blocks that compress by less than an eighth
-  are stored and read straight into place, which brought streaming from version 2 back from 1.08-1.14 to 1.02-1.07
-  times version 1's time with BC textures; every perf check of the wave is confirmed, with the workstreams' acceptance
-  limits as budgets. `PerfStability.py --runs 5 --wait-quiet 20` on the merged tree after the review round, with
-  main's idle-frame budgets back and finalization at 5.44 ms: 4 of 5 runs passed, at most three confirmations per run,
-  all of them editor idle frames; the failed run's `PerfGPU.Editor.PlayFrameNested100k` stayed over its budget in all
-  three attempts (0.36-0.39 ms against 0.3313). Tight but passing in every run: `PerfGPU.Streaming.MaxFinalizeTime`
-  (4.19-5.31 ms against 5.44). The editor's idle frames were
-  then made cheaper than wave 1's: `PerfGPU.Editor`'s command script on the generated nested scenes, interleaved runs,
-  medians of 8 rounds, takes 0.18-0.23 ms per frame against 0.23-0.26 ms for wave 1's editor (0.29-0.32 ms merged
-  before). ImGui's platform layer is the engine's own (`ImGuiPlatform`, fed by the window's events): the vendored GLFW
-  backend spent 0.05-0.06 ms of every frame on multi-viewport support the editor does not use (the window's mouse
-  passthrough, the monitors, a hook of the window procedure). The Inspector's scene settings start closed, with
-  summaries (open, their rows cost 0.026 ms of a frame), the UI's vertices go straight into mapped buffers, and the
-  status pills write their tooltips only while they show. `SceneRenderer::Render` costs what it did in wave 1 (sampled:
-  0.06-0.075 ms of an idle frame in both). Applications and the test runner opt out of Windows' execution-speed
-  throttling. The idle-frame budgets went down to 0.2808, 0.3 and 0.3133 ms for editing 100,000 and 1,000,000 entities
-  and playing 1,000,000 (0.358, 0.3294 and 0.3238 before; playing 100,000 keeps 0.3313), the export's median frame to
-  0.6349 ms (0.7674), all at 1.5 times the median of four runs on a machine 38-68% busy with other work; then
-  `PerfStability.py --runs 3 --wait-quiet 20` passed 3 of 3 runs, every idle frame on its first attempt (0.171-0.284
-  ms). The editor frames of `PerfGPU.Renderer`, which got cheaper by the same 0.05 ms, wait for a quiet campaign.
-- Runtime memory, after the review: texture cooking's acceptance criterion ("the exported stress game at 1920x1080 over
-  300 frames, with all textures resident, peaks at 650 MB private or less") is now gated as it reads.
-  `PerfGPU.Streaming.RuntimePeakPrivateMemoryAllResident` runs the exported stress game in `StrataRuntime` from the
-  stress project's `TopDown` scene (the world with its camera looking down on all of it), rendering 1920x1080 pixels
-  (`--resolution`, whatever the display's scale; the run checks its swapchain) for 300 frames with the game's own
-  budgets; every texture of the pack (111.8 MB) must be resident at the end, none evicted and none loading; budget
-  650 MB. The criterion's earlier reading, the overview camera (about two thirds of the textures resident), stays as
-  `RuntimePeakPrivateMemory`. With every texture resident the game peaked at 683-690 MB at the review (682-686 MB in its
-  verification), over the limit; the game now keeps what it needs: upload staging is bounded as a whole within 32 MiB,
-  mesh uploads included, and reused once an event query says the GPU is done (`StagingPool`; about -50 MB: the host
-  memory of staging held through loading went from 136 to 82 MiB), the output texture exists only when a frame composes
-  overlays or text (-8 MB), games write no entity-ID buffer (`SceneRendererSpecification::EntityIDs`, -8 MB), meshes
-  release their vertex attributes once uploaded (physics keeps positions and indices, -9.5 MB), and ambient occlusion
-  is half precision where the device stores r16f images (-8 MB). Measured at 1920x1080 pixels on the reference machine
-  (busy with other work; interleaved runs): every texture resident 589-612 MB (602 MB at the median of the gate's
-  runs), the overview camera 560-568 MB, the all-resident sweep 501-514 MB, the evicting sweep 399-410 MB (434-455 MB
-  for the review's build in the same conditions); the stress world loads by frame 10-11 either way, `FramesToSettle`
-  stays 4.
+  texture is compressed to BC7 on every core (10-30 ms before); the editor opens projects at once and imports in the
+  background (a fresh copy of the stress project: the scan takes 38 ms instead of 7.6-7.9 s, the editor is on screen
+  after 1.1 s and the 18 textures arrive within about 8 s, loads of them waiting for their imports); pack blocks that
+  compress by less than an eighth are stored and read straight into place, which brought streaming from version 2 back
+  from 1.08-1.14 to 1.02-1.07 times version 1's time with BC textures; every perf check of the wave is confirmed, with
+  the workstreams' acceptance limits as budgets.
+- The review's verification left three problems, each fixed on a branch of its own and merged on 2026-10-11:
+  - `idle-frames`: the merged editor's idle frame cost 0.04-0.06 ms more than wave 1's (0.29-0.32 ms against 0.23-0.26
+    ms, `PerfGPU.Editor`'s command script on the generated nested scenes), and main's budgets, restored, failed about
+    one perf run in five. The editor's idle frames are now cheaper than wave 1's: 0.18-0.23 ms (medians of 8
+    interleaved rounds). ImGui's platform layer is the engine's own (`ImGuiPlatform`, fed by the window's events): the
+    vendored GLFW backend spent 0.05-0.06 ms of every frame on multi-viewport support the editor does not use (the
+    window's mouse passthrough, the monitors, a hook of the window procedure). The Inspector's scene settings start
+    closed, with summaries (open, their rows cost 0.026 ms of a frame), the UI's vertices go straight into mapped
+    buffers, the status pills write their tooltips only while they show, and applications and the test runner opt out
+    of Windows' execution-speed throttling. `SceneRenderer::Render` costs what it did in wave 1.
+  - `import-cancel`: opening projects at once had moved the wait for their imports to closing the project, quitting
+    and moving or deleting assets (about 7 s with the stress project's imports running, past Windows' 5 s "not
+    responding"). Nothing in the editor waits for a background import any more: imports are cancelled instead
+    (closing the project, opening another or a sample and quitting cancel them all; moving, deleting or re-importing an
+    asset only its own, which a move queues again at the new place), importers stop at their cancellation checks (the
+    texture cooker per block) and a cancelled import stores nothing. With 17 imports of a fresh stress project copy
+    running, `project.close` answers in 0.06-0.34 s instead of 5.6-12 s, `asset.move` and `asset.delete` in 0.05-0.19
+    s instead of 5.6 s or more, and the editor quits in 0.1-0.2 s instead of 5.8-6.3 s; the cold import costs what it
+    did. In a window on the reference display (4 rounds): `project.close` 0.13-0.21 s, its frame 15 ms, the editor's
+    quit 0.17-0.20 s.
+  - `runtime-memory`: texture cooking's acceptance criterion ("the exported stress game at 1920x1080 over 300 frames,
+    with all textures resident, peaks at 650 MB private or less") is now gated as it reads.
+    `PerfGPU.Streaming.RuntimePeakPrivateMemoryAllResident` runs the exported stress game in `StrataRuntime` from the
+    stress project's `TopDown` scene (the world with its camera looking down on all of it), rendering 1920x1080 pixels
+    (`--resolution`, whatever the display's scale; the run checks its swapchain) for 300 frames with the game's own
+    budgets; every texture of the pack (111.8 MB) must be resident at the end, none evicted and none loading; budget
+    650 MB. The criterion's earlier reading, the overview camera (about two thirds of the textures resident), stays as
+    `RuntimePeakPrivateMemory`. With every texture resident the game peaked at 682-690 MB at the review, over the
+    limit; the game now keeps what it needs: upload staging is bounded as a whole within 32 MiB, mesh uploads included,
+    and reused once an event query says the GPU is done (`StagingPool`; about -50 MB: the host memory of staging held
+    through loading went from 136 to 82 MiB), the output texture exists only when a frame composes overlays or text
+    (-8 MB), games write no entity-ID buffer (`SceneRendererSpecification::EntityIDs`, -8 MB), meshes release their
+    vertex attributes once uploaded (physics keeps positions and indices, -9.5 MB), and ambient occlusion is half
+    precision where the device stores r16f images (-8 MB). The stress world loads by frame 10-11 either way.
+- The three merged cleanly (one conflict, in this file). The draw sort then got cheaper: `RadixSort` reads the keys once
+  and builds histograms and passes only for the bytes that differ (the 100,000 cubes of a grid share one key), which
+  took `SceneRenderer::Render` of 100,000 cubes from 0.91 to 0.64 ms and of 300,000 from 2.92 to 2.44 ms (medians of 8
+  interleaved rounds) and ended the failures of `PerfGPU.Renderer.Render100kCubes` (1.36-1.40 ms against 1.331 in all
+  three attempts in 2 of 10 runs, in processes where the sort took 2.5 times as long after heavy work). The final perf
+  campaign, `PerfStability.py --runs 5 --wait-quiet 20` on the merged tree after the reference machine's BIOS update
+  (version 1836, microcode 0x133; the canary `Perf.Harness.Sort200k` at 0.97-0.99 of its reference in all 20 runs of
+  the round, as before the update, so no budget changed for the machine): 5 of 5 runs passed, 84 metrics each, at most
+  two confirmations per run (`ImportSettings4kMaxFrame10kCubes` and `ExportMaxFrameStress`, whose first attempts catch
+  the worst frame of a busy moment, and `StreamStressWorldRatio`). Medians of the five: editor idle frames 0.176
+  (editing 100,000 entities), 0.165 (1,000,000), 0.239 and 0.242 ms (playing them); the exported game with every
+  texture resident 599 MB (594-605, budget 650), from the overview camera 562 MB; the all-resident sweep 503 MB, the
+  evicting sweep 404 MB; the longest finalization of the evicting sweep 4.70 ms (4.00-5.07, budget 5.44) and of the
+  exported game 4.26 ms; `SceneRenderer::Render` of 100,000 cubes 0.68 ms, an editor frame of them 0.92 ms; the
+  stress pack's world streams in 1.07 times version 1's time (1.03-1.09, the acceptance limit is 1.1). Budgets went
+  down with the round's measurements (1.5 times the median of quiet runs): the six the sort made cheaper and four
+  editor frames the UI work made cheaper.
 
 Open items and deferrals later waves own:
 
@@ -180,14 +191,23 @@ Open items and deferrals later waves own:
 - Textures: `asset.import` still cooks on the main thread (about 1.5 s for a 4096x4096 BC7 color texture; asynchronous
   import is `content-and-prefabs`'); HDR textures stay RGBA16F until a BC6H encoder exists; a BC7 upload step carries
   twice BC1's bytes, and the frame's first step goes whatever the deadline says (later finalizations of a frame past
-  its deadline wait for the next frame), so a frame that finalizes a large texture still takes 4.2-5.3 ms in the
-  evicting sweep (budget 5.44 ms) until smaller upload steps (`mip-streaming`).
+  its deadline wait for the next frame), so a frame that finalizes a large texture still takes 4.0-5.1 ms in the
+  evicting sweep (budget 5.44 ms; right after heavy work on the machine single frames reached 5.6-8.1 ms, in all three
+  attempts once in the round's 20 perf runs) until smaller upload steps (`mip-streaming`).
 - A world seen all at once still keeps every texture in view resident: no budget evicts what is in view, so the stress
-  world peaks at about 510 MB in the all-resident sweep until mip streaming (`mip-streaming`). Texture and mesh uploads
+  world peaks at about 500 MB in the all-resident sweep until mip streaming (`mip-streaming`). Texture and mesh uploads
   share the budgeted staging pool; smaller upload steps and an upload queue are `mip-streaming`'s. `GetResidencyInfo`
   and `GetResidencySamples` walk every registered asset (`GetStats` keeps counts instead), which a world of many
   registered assets will feel (`world-partition`). Two caches keep assets between frames: `SceneRenderer`'s environment
-  cache (the sky's map) and `TextRenderer`'s glyph atlases (their fonts).
+  cache (the sky's map) and `TextRenderer`'s glyph atlases (their fonts). Streaming the stress world from pack version 2
+  takes 1.03-1.09 times version 1's time (zstd blocks and their checksums), close to the 1.1 acceptance limit, which
+  needs a confirmation in about one run in five (range reads of `mip-streaming`).
+- Imports (`content-and-prefabs`, dependency-aware asynchronous import): a few long steps of an import cannot be
+  interrupted (stb_image decoding a large PNG, the resize to `MaxSize`, one mip level's filtering, meshoptimizer
+  simplifying one primitive); they never hold a frame, but delay when a cancelled import frees its thread. Moving or
+  deleting a file that another asset's import reads as a dependency does not cancel that import (the file watcher's
+  change event replaces it). A project whose large scenes have no reference records yet spends seconds of its scan in
+  the reference search (4 s for `PerfGPU.Editor`'s 1,000,000-entity scene).
 - Where the exported stress game's memory goes with every texture resident (MiB of private bytes at 1920x1080 pixels,
   from temporary stage logging): the process, its job threads and window 10; the NVIDIA driver's Vulkan device 59 and
   its first swapchain 93 (whatever its size: the driver presents through a layered DXGI swapchain, with a D3D12 device
@@ -205,24 +225,30 @@ Open items and deferrals later waves own:
   (renderer, later). Overlays that hook every windowed Vulkan process count too: RivaTuner Statistics Server, when it
   runs, adds about 55 MiB to every game and editor (its hook library allocates it as the window opens), which takes the
   stress game to about the 650 MB limit; the gates' measurements must be taken without it.
-- Editor: the Inspector reads every selected entity's values each frame, so 100,000 selected entities add about 8 ms to
-  a frame (`Perf.Editor.SelectionFrame100kSelected`) until a cache follows component signals; the color picker clamps
-  HDR colors while dragged (the channel fields keep them);
-  deleting one entity among 100,000 sibling roots renumbers the sibling list (about 0.5 ms); starting play copies a
+- Editor (later editor work, not planned in a wave yet): the Inspector reads every selected entity's values each frame,
+  so 100,000 selected entities add about 8 ms to a frame (`Perf.Editor.SelectionFrame100kSelected`) until a cache
+  follows component signals; the color picker clamps HDR colors while dragged (the channel fields keep them); deleting
+  one entity among 100,000 sibling roots renumbers the sibling list (about 0.5 ms); starting play copies a
   1,000,000-entity scene in about 0.7 s (`scene-streaming`).
 - The editor starts in 0.7-1.0 s (Release, to its first frame on screen), not the 0.4 s the pillar names. An idle
   editor answers input and automation requests on its next throttled frame (up to 33 ms, 100 ms unfocused) until it
-  waits on events instead. Project thumbnails and search in the recent projects move to `content-and-prefabs`.
+  waits on events instead (later editor work). Project thumbnails and search in the recent projects move to
+  `content-and-prefabs`.
 - Perf budgets hold for the reference machine only, so CI's hosted runners skip the `perf` label; a self-hosted runner
   on the reference machine would make them an automatic gate. On its hybrid processor where the scheduler places a
   process's main thread lasts for the process's life and shows in what it measures: pinned, an idle editor frame took
   0.25-0.28 ms on a performance core, about 12% more on the other hardware thread of the core the graphics driver's busy
   thread runs on, and 1.3-1.9 times as long on an efficiency core. Applications and the test runner opt out of Windows'
   execution-speed throttling, which moves background windows to the efficiency cores, and `PerfGPU.Editor` confirms a
-  metric in a fresh editor process; what remains of the spread between processes (0.15-0.28 ms for one idle frame of
-  the merged editor) is the scheduler's placement and the machine's other work.
-  Platform code first compiled by CI on Linux and macOS: `GetProcessMemory`, `GetProcessUptime`, `FindHomeDirectory`,
-  `FindFallbackFontFiles`, `PosixFileReader` and `SetCurrentThreadPriority`.
+  metric in a fresh editor process; what remains of the spread between processes (0.16-0.23 ms for one idle frame of the
+  merged editor in the final campaign) is the scheduler's placement and the machine's other work. Right after heavy work
+  some processes ran single-threaded work up to 2.5 times as long for their whole life (the draw sort above: 0.77
+  instead of 0.31 ms; not page faults, which a probe counted in such a process, and slower than the whole process pinned
+  to the efficiency cores, 0.53 ms; the cause is open); `ImportSettings4kMaxFrame10kCubes` and `ExportMaxFrameStress`,
+  maxima by nature, need a confirmation in about one run in three or four. Platform code first compiled by CI on Linux
+  and macOS, or run only on Windows so far: `GetProcessMemory`, `GetProcessUptime`, `FindHomeDirectory`,
+  `FindFallbackFontFiles`, `PosixFileReader`, `SetCurrentThreadPriority`, the window calls of `ImGuiPlatform` (layout
+  keys, cursor shapes, the clipboard) and the Retina fix-up of `StrataRuntime --resolution`.
 - The reference machine, not the engine: once in about 45 perf runs, under load, the editor failed to open
   `PerfGPU.Editor`'s generated million-entity scene ("Invalid JSON"; the test now describes the files on disk when that
   happens), and while `pack-v2` was measured a Release editor saving a 200,000-entity scene in a loop crashed once and
@@ -230,13 +256,15 @@ Open items and deferrals later waves own:
   address one bit (bit 34) away from the live node its registers hold, while every other thread waited and every heap
   pointer in the dump lies at the other address; one flipped bit also turns the entity ID that exists into the reported
   duplicate, and the saved scenes are intact. 108 saves alongside exports, background reimports and material saves on
-  the merged editor never failed. The machine's i7-13700K ran microcode 0x123 then (BIOS 1658 of May 2024, before Intel's
-  0x129 and 0x12B fixes for the 13th and 14th generations' instability) with DDR4-3600 XMP memory, and the compiler
-  crashed in `c1xx.dll` and `c2.dll` at changing places more than a dozen times in these days. The BIOS was updated on
-  2026-10-10 (version 1836, microcode 0x133), but compilers still crashed afterwards under full load (an MSVC internal
-  compiler error, C1001, and a GCC segmentation fault, in files that compiled on the retry): until a CPU and memory
-  stress test passes (or XMP is off), one-off crashes and corrupt data on this machine are suspect; the save path's
-  validation before writing, which turned the corruption into a refused save, stays.
+  the merged editor never failed. The machine's i7-13700K ran microcode 0x123 then (BIOS 1658 of May 2024, before
+  Intel's 0x129 and 0x12B fixes for the 13th and 14th generations' instability) with DDR4-3600 XMP memory, and the
+  compiler crashed in `c1xx.dll` and `c2.dll` at changing places more than a dozen times in these days. The BIOS was
+  updated on 2026-10-10 (version 1836, microcode 0x133), but compilers still crashed afterwards under full load (an MSVC
+  internal compiler error, C1001, and a GCC segmentation fault, in files that compiled on the retry): until a CPU and
+  memory stress test passes (or XMP is off), one-off crashes and corrupt data on this machine are suspect; the save
+  path's validation before writing, which turned the corruption into a refused save, stays. The integration's last round
+  on the updated machine (2026-10-11: Debug and Release builds, 402 GCC translation units, full test runs in both
+  configurations, 20 perf runs) saw no crash.
 
 ## Waves
 
