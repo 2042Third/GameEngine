@@ -199,6 +199,13 @@ namespace Strata
 			return settable;
 		}
 
+		void DropSelectionToGround(EditorContext& context, const EditorCommandRegistry& commands)
+		{
+			if (context.GetSelection().empty())
+				return;
+			RunEditorCommand(context, commands, "entity.dropToGround", { { "entities", GetTopmostSelection(context) } });
+		}
+
 		void HandleSelectionShortcuts(EditorContext& context, const EditorCommandRegistry& commands, bool selectAll)
 		{
 			if (ImGui::GetTopMostPopupModal() || !context.AcceptsEditShortcuts())
@@ -215,6 +222,8 @@ namespace Strata
 				CutSelection(context, commands);
 			if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_V, c_Focused))
 				Paste(context, commands);
+			if (ImGui::Shortcut(ImGuiKey_End, c_Focused))
+				DropSelectionToGround(context, commands);
 			if (selectAll && ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_A, c_Focused))
 				SelectAll(context);
 		}

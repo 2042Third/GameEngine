@@ -898,7 +898,7 @@ and `AudioSystem`, the built-in "Audio" scene system.
   two-channel normal map layouts as materials read them (`ImGuiTextureDisplay`). Property widgets come from
   `UI/PropertyWidgets.h` (`DrawPropertyWidget` with `PropertyWidgetOptions` for mixed values, axis resets and probe keys).
 - **Shortcuts:** `EditorLayer` handles the global ones (Ctrl+Z, Ctrl+Y, Ctrl+S, Ctrl+Shift+S, Ctrl+P, Ctrl+B).
-  Shortcuts that act on the selection (Delete, Ctrl+D, Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+A, F2) are
+  Shortcuts that act on the selection (Delete, Ctrl+D, Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+A, F2, End) are
   `ImGuiInputFlags_RouteFocused` shortcuts of the Hierarchy and the Viewport (`UI/EditorActions.h`,
   `HandleSelectionShortcuts`): a key pressed in another panel never edits the scene. The Edit menu runs the same actions.
 - `editor.status` summarizes the editor (project, scene, play state, selection, undo history); other
@@ -969,6 +969,13 @@ and `AudioSystem`, the built-in "Audio" scene system.
   projects in the editor too, and File > Show Launcher returns to the launcher from Continue without a project. Help >
   About Strata (`UI/AboutDialog`) shows the build, GPU, driver, Vulkan version, startup time and the compiled-in
   `ThirdPartyNotices.md`.
+- **Placing content** (`Editor/SceneRaycast`, `Editor/EditorPlacement`): new top-level entities from the create menus
+  appear where the view looks, resting on the surface there (`EditorPlacement::FindViewSurface`, `RestOn` with the mesh's
+  bounds), with the translation sent through `entity.create`; prefabs and models dropped into the viewport go to the
+  surface under the cursor, a dropped material goes to the mesh under it (`component.set`), and
+  `entity.dropToGround {entities}` (End) moves entities down onto what is below them, one undo step. Rays hit the mesh
+  renderers through the render scene's spatial index and the loaded meshes' triangles: code that needs what is under a
+  point uses `SceneRaycast::Cast`, never a loop over the scene's entities.
 - **Viewport panel** (`Panels/ViewportPanel`): renders into a texture of the panel's pixel size and takes input only
   while hovered or focused: Alt + left drag orbits, middle drag pans, the wheel dollies, right drag flies (WASD, Q/E
   down/up, Shift faster, wheel = speed), F frames the selection, Home everything, W/E/R/Q pick the gizmo (as do the main
@@ -1115,7 +1122,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `DrawSceneGizmos` the view (`SceneGizmoSettings::View`): it then leaves out shapes outside it or beyond `MaxDistance`
   and draws lights and cameras whose shapes would be smaller than `MinShapePixels` on screen as icons of `IconPixels`,
   so thousands of lights cost what is near and in view; colliders can be limited to a list (the editor: the selection,
-  unless `ViewportSettings::AllColliders`). Entity tints (`EntityTints`, `Overlay/StatusTint.frag`) come first: listed
+  unless `ViewportSettings::AllColliders`), and so can the range spheres and cones of lights (`AllLightRanges`,
+  `LightRangeEntities`; the editor shows the selection's only, the others as icons). Entity tints (`EntityTints`, `Overlay/StatusTint.frag`) come first: listed
   entities' pixels in the entity-ID buffer are blended with their color and no other pixel changes (debug views such as
   the editor's streaming and LOD views). Code that needs the level of detail the renderer draws uses `LODSelection`
   (`Renderer/LODSelection.h`), the functions `SceneRenderer` calls.

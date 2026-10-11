@@ -48,6 +48,13 @@ namespace Strata
 			return glm::vec4(glm::clamp(color, glm::vec3(0.0f), glm::vec3(1.0f)), 1.0f);
 		}
 
+		// Whether an entity of the scene is in a list sorted by entity handle.
+		bool IsListed(std::span<const Entity> listed, const Scene& scene, entt::entity entity)
+		{
+			const auto it = std::lower_bound(listed.begin(), listed.end(), entity, [](const Entity& a, entt::entity b) { return a.GetHandle() < b; });
+			return it != listed.end() && it->GetHandle() == entity && it->GetScene() == &scene;
+		}
+
 		// What the settings' view lets through: shapes in its frustum and distance, and whether they show as icons.
 		class GizmoView
 		{
@@ -240,9 +247,11 @@ namespace Strata
 			for (auto [entity, light, world] : registry.view<PointLightComponent, WorldTransformComponent>().each())
 			{
 				const glm::vec3 position(world.Matrix[3]);
-				if (!world.ActiveInHierarchy || !view.IsVisible(position, light.Range))
+				// A light whose range is not shown is its icon wherever it is (only with a view: icons face it).
+				const bool ranged = settings.AllLightRanges || IsListed(settings.LightRangeEntities, scene, entity);
+				if (!world.ActiveInHierarchy || (!ranged && !settings.View) || (ranged && !view.IsVisible(position, light.Range)))
 					continue;
-				if (view.IsIcon(position, light.Range))
+				if (!ranged || view.IsIcon(position, light.Range))
 				{
 					// Far away, a point light is a diamond with a cross, small and the same size on screen at any distance.
 					const float size = view.GetIconSize(position);
@@ -272,9 +281,10 @@ namespace Strata
 				const glm::vec3 axis = directionLength > 1e-6f ? direction / directionLength : glm::vec3(0.0f, 0.0f, -1.0f);
 				const glm::vec3 coneCenter = position + axis * (coneLength * 0.5f);
 				const float coneRadius = std::sqrt(coneLength * coneLength * 0.25f + baseRadius * baseRadius);
-				if (!view.IsVisible(coneCenter, coneRadius))
+				const bool ranged = settings.AllLightRanges || IsListed(settings.LightRangeEntities, scene, entity);
+				if ((!ranged && !settings.View) || (ranged && !view.IsVisible(coneCenter, coneRadius)))
 					continue;
-				if (view.IsIcon(coneCenter, coneRadius))
+				if (!ranged || view.IsIcon(coneCenter, coneRadius))
 				{
 					// A diamond with a stroke along the light's direction.
 					const float size = view.GetIconSize(position);

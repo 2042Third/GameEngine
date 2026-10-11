@@ -263,7 +263,7 @@ TEST_SUITE("Renderer.DebugDraw")
 			light.AddComponent<PointLightComponent>().Range = range;
 			return light;
 		};
-		addLight(glm::vec3(0.0f, 0.0f, -10.0f), 4.0f);   // Near and large: its range sphere
+		const Entity nearLight = addLight(glm::vec3(0.0f, 0.0f, -10.0f), 4.0f); // Near and large: its range sphere
 		addLight(glm::vec3(0.0f, 0.0f, -400.0f), 1.0f);  // Far and small: an icon
 		addLight(glm::vec3(0.0f, 0.0f, 30.0f), 4.0f);    // Behind the view
 		addLight(glm::vec3(0.0f, 0.0f, -1000.0f), 50.0f); // Beyond the distance limit
@@ -304,6 +304,19 @@ TEST_SUITE("Renderer.DebugDraw")
 		debugDraw.Clear();
 		DrawSceneGizmos(debugDraw, scene, settings);
 		CHECK(debugDraw.GetLineCount() == 96 + 6 + 12);
+
+		// Light ranges of the listed lights only: the near light, unlisted, becomes its icon.
+		settings.AllColliders = true;
+		settings.ColliderEntities = {};
+		settings.AllLightRanges = false;
+		debugDraw.Clear();
+		DrawSceneGizmos(debugDraw, scene, settings);
+		CHECK(debugDraw.GetLineCount() == 6 + 6 + 12 + 96);
+		const Entity litSelection[] = { nearLight };
+		settings.LightRangeEntities = litSelection;
+		debugDraw.Clear();
+		DrawSceneGizmos(debugDraw, scene, settings);
+		CHECK(debugDraw.GetLineCount() == 96 + 6 + 12 + 96);
 
 		// Without a view everything is drawn in full, as before.
 		settings = SceneGizmoSettings();

@@ -1553,6 +1553,7 @@ TEST_SUITE("Editor.UI.AssetInspector")
 		std::string handMaterial;
 		std::string handScene;
 		UUID handCube = UUID::Null();
+		glm::vec3 handTranslation(0.0f);
 		AssetHandle handMaterialHandle = UUID::Null();
 		AssetHandle texture = UUID::Null();
 		{
@@ -1567,6 +1568,8 @@ TEST_SUITE("Editor.UI.AssetInspector")
 			const Entity cube = editor.Context().GetPrimarySelection();
 			REQUIRE(cube);
 			handCube = cube.GetUUID();
+			// Placed where the view looks (the menu sends the translation with entity.create, as the commands below do).
+			handTranslation = cube.GetComponent<TransformComponent>().Translation;
 			editor.Frames(2);
 			REQUIRE(editor.Click("Inspector.MeshRenderer.NewMaterial"));
 			handMaterialHandle = cube.GetComponent<MeshRendererComponent>().Material;
@@ -1627,7 +1630,8 @@ TEST_SUITE("Editor.UI.AssetInspector")
 			REQUIRE(result.Success);
 			return result.Value;
 		};
-		const nlohmann::json cube = run("entity.create", { { "name", "Cube" }, { "components", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } } } } })["id"];
+		const nlohmann::json cube = run("entity.create", { { "name", "Cube" }, { "components", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } },
+			{ "Transform", { { "Translation", { handTranslation.x, handTranslation.y, handTranslation.z } } } } } } })["id"];
 		const nlohmann::json material = run("material.create", { { "path", "Materials/Cube.stmat" } })["asset"];
 		run("component.set", { { "entity", cube }, { "component", "MeshRenderer" }, { "values", { { "Material", material } } } });
 		const glm::vec4 white = MaterialProperties().BaseColor;

@@ -34,6 +34,11 @@ namespace Strata
 		// Colliders of every entity, or (false) only of ColliderEntities, e.g. the selection, sorted by entity handle.
 		bool AllColliders = true;
 		std::span<const Entity> ColliderEntities;
+		// The range spheres of point lights and the cones of spot lights for every light, or (false) only for
+		// LightRangeEntities, e.g. the selection, sorted by entity handle: with a view the other lights are drawn as their
+		// icons (a light's range would cover what is near it), without one they are left out.
+		bool AllLightRanges = true;
+		std::span<const Entity> LightRangeEntities;
 		float CameraAspectRatio = 16.0f / 9.0f; // Shape of the camera frustums
 		float MaxCameraFrustumLength = 10.0f;  // Camera frustums end at their far plane or this far, whichever is nearer
 		glm::vec4 CameraColor = { 0.85f, 0.85f, 0.85f, 1.0f };

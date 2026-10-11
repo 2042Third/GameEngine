@@ -222,6 +222,11 @@ the new ones (one undo step for the file and the scene); `prefab.status {"entity
 the prefab. The root's transform and name always stay the instance's own. Imported models are instantiated the same way
 but cannot be applied to (unpack them, or make a prefab of the instance).
 
+**Placing**: `entity.create` puts an entity where its `Transform` says (the origin without one); the editor's own menus
+put new entities on the surface the view looks at and send that translation. To rest entities on what is below them,
+`entity.dropToGround {"entities": [...]}` moves each straight down until its bounds touch a surface (one undo step;
+`unchanged` lists those with nothing below).
+
 **Edit**: `component.add` (adds if missing, then sets values), `component.set` (component must exist),
 `component.remove`, `entity.setActive`: each takes `"entities": [...]` instead of `"entity"` to change all of them in one
 undo step (as the inspector does for a multi-selection); `entity.rename`, `entity.delete`, `scene.setSettings` (gravity,

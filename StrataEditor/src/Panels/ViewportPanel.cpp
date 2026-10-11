@@ -2,6 +2,7 @@
 
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/EditorPlacement.h"
 #include "Editor/EditorViewport.h"
 #include "Editor/ViewportRenderer.h"
 #include "UI/EditorActions.h"
@@ -17,6 +18,7 @@
 #include <Strata/Input/Input.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/SceneRenderer.h>
+#include <Strata/Scene/Components.h>
 #include <Strata/Scene/Scene.h>
 
 #include <imgui.h>
@@ -662,27 +664,47 @@ namespace Strata
 		if (!ImGui::BeginDragDropTarget())
 			return;
 		const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(DragDrop::c_Asset);
-		if (payload && payload->DataSize == static_cast<int>(sizeof(AssetHandle)))
+		if (payload && payload->DataSize == static_cast<int>(sizeof(AssetHandle)) && m_Image.Size.x > 0.0f && m_Image.Size.y > 0.0f)
 		{
-			// Prefabs and models are placed at the camera's target, the point the view centers on.
 			AssetHandle asset = UUID::Null();
 			std::memcpy(&asset, payload->Data, sizeof(AssetHandle));
 			const AssetType type = AssetManager::GetAssetType(asset);
+			// The cursor in normalized device coordinates of the editor camera's view.
+			const ImVec2 mouse = ImGui::GetIO().MousePos;
+			const glm::vec2 ndc((mouse.x - m_Image.Min.x) / m_Image.Size.x * 2.0f - 1.0f, 1.0f - (mouse.y - m_Image.Min.y) / m_Image.Size.y * 2.0f);
+			const float aspect = m_Image.Size.x / m_Image.Size.y;
+			Scene& scene = *context.GetActiveScene();
+			const EditorCamera& camera = context.GetViewport().GetCamera();
 			if (type == AssetType::Prefab || type == AssetType::Model)
 			{
-				const glm::vec3 target = context.GetViewport().GetCamera().GetTarget();
+				// Where the cursor points: on the surface it hits, else under the camera's target (the game view shows another
+				// camera: the editor camera's target there).
+				const glm::vec3 point = m_GameView ? camera.GetTarget() : EditorPlacement::FindSurfaceAt(scene, camera, ndc, aspect).Point;
 				const nlohmann::json created = RunEditorCommand(context, commands, "prefab.instantiate", { { "prefab", UUIDToJson(asset) },
-					{ "components", { { "Transform", { { "Translation", { target.x, target.y, target.z } } } } } } });
-				const auto entities = created.is_object() ? created.find("entities") : created.end();
-				if (entities != created.end() && entities->is_array() && !entities->empty())
+					{ "components", { { "Transform", { { "Translation", { point.x, point.y, point.z } } } } } } });
+				if (created.is_object())
 				{
-					if (const std::optional<UUID> root = UUIDFromJson(entities->front()))
+					if (const std::optional<UUID> root = UUIDFromJson(created.value("id", nlohmann::json())))
 						context.Select(*root);
+				}
+			}
+			else if (type == AssetType::Material)
+			{
+				// Onto the mesh under the cursor: its renderer's material (one undo step).
+				const std::optional<SceneRayHit> hit = m_GameView ? std::nullopt : EditorPlacement::CastAt(scene, camera, ndc, aspect);
+				if (hit && hit->HitEntity.HasComponent<MeshRendererComponent>())
+				{
+					RunEditorCommand(context, commands, "component.set", { { "entity", UUIDToJson(hit->HitEntity.GetUUID()) }, { "component", "MeshRenderer" },
+						{ "values", { { "Material", UUIDToJson(asset) } } } });
+				}
+				else
+				{
+					ST_WARN("Drop a material onto a mesh in the viewport to give it the material");
 				}
 			}
 			else
 			{
-				ST_WARN("Only prefabs and models can be dropped into the viewport ({} is a {})", asset.ToString(), AssetTypeToString(type));
+				ST_WARN("Only prefabs, models and materials can be dropped into the viewport ({} is a {})", asset.ToString(), AssetTypeToString(type));
 			}
 		}
 		ImGui::EndDragDropTarget();

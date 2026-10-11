@@ -3,6 +3,7 @@
 #include "Editor/CommandUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/EditorPlacement.h"
 #include "Editor/PrefabSync.h"
 #include "UI/EditorActions.h"
 #include "UI/EditorFonts.h"
@@ -16,6 +17,7 @@
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/Asset/EditorAssetManager.h>
+#include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Components.h>
@@ -56,6 +58,10 @@ namespace Strata
 				{ Icons::Box, "Cube", "Cube", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } } } },
 				{ Icons::Globe, "Sphere", "Sphere", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::SphereMesh) } } } } },
 				{ Icons::Square, "Plane", "Plane", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::PlaneMesh) } } } } },
+				{ Icons::Cylinder, "Cylinder", "Cylinder", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CylinderMesh) } } } } },
+				{ Icons::Pill, "Capsule", "Capsule", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CapsuleMesh) } } } } },
+				{ Icons::Cone, "Cone", "Cone", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::ConeMesh) } } } } },
+				{ Icons::Torus, "Torus", "Torus", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::TorusMesh) } } } } },
 				{ Icons::Video, "Camera", "Camera", { { "Camera", nlohmann::json::object() } } },
 				{ Icons::Sun, "Directional Light", "Directional Light", { { "DirectionalLight", nlohmann::json::object() } } },
 				{ Icons::Lightbulb, "Point Light", "Point Light", { { "PointLight", nlohmann::json::object() } } },
@@ -66,12 +72,33 @@ namespace Strata
 				{ Icons::Volume2, "Audio Source", "Audio Source", { { "AudioSource", nlohmann::json::object() } } } };
 		}
 
-		// Creates an entity of a preset (entity.create) and selects it.
+		// Where a new top-level entity of a preset goes: at the view's pivot, resting on the surface under it (its mesh's
+		// bounds touching the surface).
+		glm::vec3 PlacePreset(EditorContext& context, const EntityPreset& preset)
+		{
+			const EditorPlacement::Surface surface = EditorPlacement::FindViewSurface(*context.GetActiveScene(), context.GetViewport().GetCamera());
+			AABB bounds;
+			const nlohmann::json* renderer = JsonUtils::Find(preset.Components, "MeshRenderer");
+			const nlohmann::json* mesh = renderer ? JsonUtils::Find(*renderer, "Mesh") : nullptr;
+			if (const std::optional<UUID> handle = mesh ? UUIDFromJson(*mesh) : std::nullopt)
+				bounds = EditorPlacement::GetMeshBounds(*handle);
+			return EditorPlacement::RestOn(surface, bounds);
+		}
+
+		// Creates an entity of a preset (entity.create) and selects it: under the parent at its origin, or at the top level
+		// where the view looks (PlacePreset).
 		void CreatePreset(EditorContext& context, const EditorCommandRegistry& commands, const EntityPreset& preset, UUID parent)
 		{
 			nlohmann::json parameters = { { "name", preset.Name }, { "components", preset.Components } };
 			if (parent.IsValid())
+			{
 				parameters["parent"] = UUIDToJson(parent);
+			}
+			else
+			{
+				const glm::vec3 translation = PlacePreset(context, preset);
+				parameters["components"]["Transform"] = { { "Translation", { translation.x, translation.y, translation.z } } };
+			}
 			const nlohmann::json created = RunEditorCommand(context, commands, "entity.create", parameters);
 			if (created.is_object())
 			{

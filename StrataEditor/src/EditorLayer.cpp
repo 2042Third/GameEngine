@@ -983,6 +983,8 @@ namespace Strata
 				RenameEntity(m_Context.GetPrimarySelection().GetUUID());
 			if (ImGui::MenuItem("Delete", "Del", false, selected && editable))
 				EditorActions::DeleteSelection(m_Context, m_Commands);
+			if (ImGui::MenuItem("Drop to Ground", "End", false, selected && editable))
+				EditorActions::DropSelectionToGround(m_Context, m_Commands);
 			ImGui::Separator();
 			if (ImGui::MenuItem("Select All", "Ctrl+A"))
 				EditorActions::SelectAll(m_Context);

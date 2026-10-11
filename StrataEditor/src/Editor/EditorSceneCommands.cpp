@@ -1,7 +1,10 @@
 #include "Editor/CommandUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/HierarchyView.h"
 #include "Editor/ProjectTemplates.h"
+#include "Editor/SceneBounds.h"
+#include "Editor/SceneRaycast.h"
 
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Core/JsonUtils.h>
@@ -12,6 +15,8 @@
 #include <Strata/Scene/Prefab.h>
 #include <Strata/Scene/Scene.h>
 #include <Strata/Scene/SceneSerializer.h>
+
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -30,6 +35,9 @@ namespace Strata
 
 	namespace
 	{
+
+		// entity.dropToGround leaves entities closer than this to the surface below them where they are.
+		constexpr float c_DropTolerance = 1.0e-4f;
 
 		// Scene settings are not entity data: their undo step stores the settings before and after.
 		class SceneSettingsAction final : public EditorAction
@@ -701,6 +709,61 @@ namespace Strata
 				for (Entity entity : entities)
 					entity.SetActive(active);
 				return Finish(context, transaction);
+			} });
+
+		registry.Register({ "entity.dropToGround",
+			"Moves entities straight down until what they draw (with their children) rests on the surface below them: the mesh renderers "
+			"of the scene, hit where their meshes are loaded (their bounds otherwise), their own left out. Entities listed below another "
+			"listed one move with it; those with nothing below stay. One undo step (while playing it changes the running copy only). "
+			"Returns {moved: [ids], unchanged: [ids]}.",
+			ObjectSchema({ { "entities", EntityArraySchema("Entities to drop") } }, { "entities" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				Scene& scene = *context.GetActiveScene();
+				CommandArguments arguments(parameters);
+				const std::vector<Entity> entities = arguments.GetEntities(scene, "entities");
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				std::vector<UUID> ids = GetIds(entities);
+				const std::vector<UUID> roots = HierarchyView::GetTopmostInHierarchyOrder(scene, ids);
+				SceneEditTransaction transaction(scene, roots.size() == 1 ? "Drop Entity to Ground" : "Drop Entities to Ground", roots);
+				nlohmann::json moved = nlohmann::json::array();
+				nlohmann::json unchanged = nlohmann::json::array();
+				for (const UUID id : roots)
+				{
+					const Entity entity = scene.GetEntityByUUID(id);
+					// Rays straight down from the bottom of what the entity draws: its center and, a little inside, its corners, so
+					// an entity whose middle hangs over an edge still lands on what is below its side. The nearest hit is where it
+					// stops.
+					const AABB bounds = SceneBounds::GetEntityBounds(scene, entity);
+					const Entity ignore[] = { entity };
+					std::optional<float> drop;
+					if (bounds.IsValid())
+					{
+						const glm::vec3 center = bounds.GetCenter();
+						const glm::vec3 inset = bounds.GetExtents() * 0.9f;
+						const glm::vec2 offsets[] = { { 0.0f, 0.0f }, { -1.0f, -1.0f }, { 1.0f, -1.0f }, { -1.0f, 1.0f }, { 1.0f, 1.0f } };
+						for (const glm::vec2& offset : offsets)
+						{
+							const glm::vec3 start(center.x + offset.x * inset.x, bounds.Min.y, center.z + offset.y * inset.z);
+							if (const std::optional<SceneRayHit> hit = SceneRaycast::Cast(scene, Ray(start, glm::vec3(0.0f, -1.0f, 0.0f)), std::numeric_limits<float>::max(), ignore))
+								drop = drop ? std::min(*drop, hit->Distance) : hit->Distance;
+						}
+					}
+					if (!drop || *drop <= c_DropTolerance)
+					{
+						unchanged.push_back(UUIDToJson(id));
+						continue;
+					}
+					const glm::mat4 world = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -*drop, 0.0f)) * scene.GetWorldTransform(entity);
+					if (!scene.SetWorldTransform(entity, world))
+					{
+						unchanged.push_back(UUIDToJson(id));
+						continue;
+					}
+					moved.push_back(UUIDToJson(id));
+				}
+				return Finish(context, transaction, { { "moved", std::move(moved) }, { "unchanged", std::move(unchanged) } });
 			} });
 
 		////////////////////////////////////////////////////////////////////////////////

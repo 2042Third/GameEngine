@@ -1550,9 +1550,9 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
     a job; streamed clips are decoded whole for it, up to ten minutes) and Play and Stop on a preview voice: an
     `AudioSource` of the `AudioEngine` that belongs to no scene, stopped when another asset is inspected or the tab hides.
   - **Shortcuts**: `EditorLayer` keeps the global ones (Ctrl+Z, Ctrl+Y, Ctrl+S, Ctrl+P, Ctrl+B); Delete, Ctrl+D, Ctrl+C,
-    Ctrl+X, Ctrl+V, Ctrl+A and F2 are `ImGuiInputFlags_RouteFocused` shortcuts of the Hierarchy and the Viewport
-    (`EditorActions::HandleSelectionShortcuts`), so they act only where the keyboard focus is; the clipboard holds
-    `entity.copy`'s data.
+    Ctrl+X, Ctrl+V, Ctrl+A, F2 and End (drop to the ground) are `ImGuiInputFlags_RouteFocused` shortcuts of the
+    Hierarchy and the Viewport (`EditorActions::HandleSelectionShortcuts`), so they act only where the keyboard focus
+    is; the clipboard holds `entity.copy`'s data.
 - **Automation** (`EditorAutomation.h`, `Network/RpcServer.h`). The server's network thread does the socket work;
   each frame `EditorAutomation::Update` registers new or changed commands as methods and runs queued requests through
   the runner, so a deferred command answers when it completes. Clients find the editor through session files
@@ -1577,7 +1577,23 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   which the UI sets from the theme (not saved).
   Picking reads one pixel of the entity-ID buffer asynchronously and completes in `EditorContext::Update`.
   `viewport.capture` renders on the next frame (with its own `debugView` if given), polls a `TextureReadback`, encodes
-  the PNG on a worker and saves on an I/O thread (`EditorViewportCommands.cpp`).
+  the PNG on a worker and saves on an I/O thread (`EditorViewportCommands.cpp`). The scene gizmos draw the range
+  spheres and cones of the selection's lights only (`SceneGizmoSettings::AllLightRanges` off, the selection's subtrees as
+  `LightRangeEntities`); other lights show as their icons, so a scene full of point lights stays readable.
+- **Placement** (`Editor/SceneRaycast.h`, `Editor/EditorPlacement.h`). `SceneRaycast::Cast` finds what a ray meets among
+  the mesh renderers of a scene: the scene's `RenderScene` (synced first) answers which boxes lie along the ray (its
+  spatial index, asked for a thin prism of planes around the segment), nearest first, and each is hit on its loaded mesh's
+  triangles (positions and indices stay on the CPU; submesh bounds skip what the ray misses) or, while the mesh is not
+  loaded, on its bounds; the entities being placed (and their children) are left out. `EditorPlacement` turns that into
+  where content goes: `FindViewSurface` (the ray through the view's center, else straight down under the camera's
+  target, else the target), `FindSurfaceAt` and `CastAt` (a cursor's ray), and `RestOn` (the translation that makes a
+  box at the entity's origin touch the surface with its side facing it). The Hierarchy's create menus (the Entity menu
+  too) put new top-level entities there, resting on the surface by their mesh's bounds (`GetMeshBounds`: the loaded
+  mesh's, else the recorded ones), and send the translation with `entity.create`; the viewport instantiates dropped prefabs
+  and models at the cursor's surface (`prefab.instantiate` with the translation) and gives a dropped material to the mesh
+  under the cursor (`component.set`, one undo step). `entity.dropToGround` (End, and Edit > Drop to Ground) moves each
+  entity straight down by the nearest hit of rays from the bottom of its bounds (with its children; the center and four
+  inset corners), in one undo step.
 - **Script builds** (`ScriptBuild.h`). `ScriptBuilder` runs CMake configure and build as child processes (one build at
   a time, ended as a process tree when cancelled), polled once per frame; its output streams to the log and is parsed
   into diagnostics. When a build finishes, `EditorContext` loads or hot reloads the module. With a Visual Studio
