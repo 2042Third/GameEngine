@@ -20,7 +20,8 @@ namespace Strata
 			{ ProjectTemplates::c_Empty, "Empty", "A project with no scene: start from nothing." },
 			{ ProjectTemplates::c_Basic3D, "Basic 3D",
 				"A lit 3D start scene: a main camera with an audio listener, a sun with shadows, a procedural sky, a 20 x 20 ground plane of dark "
-				"stone (Materials/Ground.stmat) and post-processing (ACES tone mapping, automatic exposure)." }
+				"stone (Materials/Ground.stmat) with a box collider, so bodies and characters stand on it, and post-processing (ACES tone mapping, "
+				"automatic exposure)." }
 		} };
 
 		constexpr glm::vec3 c_Basic3DCameraPosition = { 0.0f, 2.0f, 6.0f };
@@ -29,6 +30,9 @@ namespace Strata
 		constexpr glm::vec4 c_GroundColor = { 0.16f, 0.15f, 0.14f, 1.0f };
 		constexpr float c_GroundRoughness = 0.9f;
 		constexpr float c_Basic3DGroundSize = 20.0f;
+		// The ground's collider: a box under the plane (the plane's own space, scaled with it to 20 x 20), its top flush with
+		// the surface at y = 0, a meter thick so that fast bodies do not tunnel through.
+		constexpr float c_Basic3DGroundColliderHalfThickness = 0.5f;
 		constexpr float c_Basic3DExposureCompensation = 1.0f; // EV
 
 		void PopulateBasic3D(Scene& scene, const TemplateAssets& assets)
@@ -54,6 +58,10 @@ namespace Strata
 			MeshRendererComponent& renderer = ground.AddComponent<MeshRendererComponent>();
 			renderer.Mesh = BuiltinAssets::PlaneMesh;
 			renderer.Material = assets.GroundMaterial;
+			// A collider without a rigid body is a static body of its own: what falls on the ground stays on it.
+			BoxColliderComponent& collider = ground.AddComponent<BoxColliderComponent>();
+			collider.HalfExtents = glm::vec3(0.5f, c_Basic3DGroundColliderHalfThickness, 0.5f);
+			collider.Offset = glm::vec3(0.0f, -c_Basic3DGroundColliderHalfThickness, 0.0f);
 
 			PostProcessComponent& postProcess = scene.CreateEntity("Post Process").AddComponent<PostProcessComponent>();
 			postProcess.Tonemapper = TonemapOperator::ACES;

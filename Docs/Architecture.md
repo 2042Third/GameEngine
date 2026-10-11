@@ -1326,8 +1326,8 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   data directory that the user's editors share; changes a read-only list cannot save are kept in memory and applied over
   every read, and the launcher reads it and checks its projects on an I/O thread). Creating a project applies a template
   (`ProjectTemplates`: `empty`, or `basic3d` with a saved, lit start scene whose ground has a material of the project,
-  `Materials/Ground.stmat`). Samples (`ProjectSamples`) are finished projects listed by `Samples.json` in a
-  samples directory next to the executable, which the `StrataSamples` build target fills from the repository's `Samples/`
+  `Materials/Ground.stmat`, and a static box collider whose top is the ground plane). Samples (`ProjectSamples`) are
+  finished projects listed by `Samples.json` in a samples directory next to the executable, which the `StrataSamples` build target fills from the repository's `Samples/`
   (`CMake/StrataCopySamples.cmake`, without local `.strata` data); `project.openSample` copies one, again without its
   `.strata`, into a new directory and opens the copy, so the shipped sample never changes. Opening a scene restores the editor camera it was last shown with (stored per
   scene handle in the viewport state) or frames what it renders (`EditorViewport::FrameScene`, `SceneBounds`).

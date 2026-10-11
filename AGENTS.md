@@ -911,8 +911,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `basic3d` (a saved, lit start scene `Scenes/Main.stscene`: Main Camera with an audio listener, Sun shining from the
   preview sun's direction, procedural Sky, Ground, Post Process; the editor UI and the skills use it). Its Ground has a
   dark stone material of the project, `Materials/Ground.stmat` (made by `EditorContext::NewScene` when the project has
-  none, the built-in default material without a project), so white boxes stand out against it. Every opened or created
-  project goes to the front of `RecentProjects` (`Editor/RecentProjects`, at most 12, missing projects left out,
+  none, the built-in default material without a project), so white boxes stand out against it, and a static box collider
+  whose top is the plane (y = 0), so what falls on it stays there (`Editor.Templates` drops a crate on it). Every opened
+  or created project goes to the front of `RecentProjects` (`Editor/RecentProjects`, at most 12, missing projects left out,
   `editor.recentProjects`), a JSON file in the user data directory shared by the user's editors
   (`RecentProjects::GetDefaultFile`; `STRATA_RECENT_PROJECTS` overrides it); `editor.removeRecentProject {path}` takes
   one off. Scripted runs (`--frames`, `--commands`) only read it, and keep their own changes in memory over every read,
