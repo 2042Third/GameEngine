@@ -182,10 +182,19 @@ Open items and deferrals later waves own:
   threads matter (Windows' quality of service) or confirming in fresh processes would make such gates steadier.
   Platform code first compiled by CI on Linux and macOS: `GetProcessMemory`, `GetProcessUptime`, `FindHomeDirectory`,
   `FindFallbackFontFiles`, `PosixFileReader` and `SetCurrentThreadPriority`.
-- Unreproduced: once in about 45 perf runs, under load, the editor failed to open `PerfGPU.Editor`'s generated
-  million-entity scene ("Invalid JSON"; the test now describes the files on disk when that happens), and while `pack-v2`
-  was measured a Release editor saving a 200,000-entity scene in a loop crashed once (an access violation iterating a
-  JSON object) and once refused a save with "Duplicate entity ID"; neither came back since.
+- The reference machine, not the engine: once in about 45 perf runs, under load, the editor failed to open
+  `PerfGPU.Editor`'s generated million-entity scene ("Invalid JSON"; the test now describes the files on disk when that
+  happens), and while `pack-v2` was measured a Release editor saving a 200,000-entity scene in a loop crashed once and
+  once refused a save with "Duplicate entity ID". The crash dump shows the main thread reading a `std::map` node at an
+  address one bit (bit 34) away from the live node its registers hold, while every other thread waited and every heap
+  pointer in the dump lies at the other address; one flipped bit also turns the entity ID that exists into the reported
+  duplicate, and the saved scenes are intact. 108 saves alongside exports, background reimports and material saves on
+  the merged editor never failed. The machine's i7-13700K runs microcode 0x123 (BIOS 1658 of May 2024, before Intel's
+  0x129 and 0x12B fixes for the 13th and 14th generations' instability) with DDR4-3600 XMP memory, and the compiler
+  crashed in `c1xx.dll` and `c2.dll` at changing places more than a dozen times in these days. Until the owner updates
+  the BIOS (microcode 0x12B or later) and a CPU and memory stress test passes (or XMP is off), one-off crashes and
+  corrupt data on this machine are suspect; the save path's validation before writing, which turned the corruption into
+  a refused save, stays.
 
 ## Waves
 
