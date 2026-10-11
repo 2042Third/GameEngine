@@ -655,15 +655,8 @@ namespace Strata
 			}
 		}
 
+		// The set's data is reached through a Scope, also from const members, so one non-const lookup serves both.
 		ControllerRecord* FindController(CharacterControllerSetData& data, Entity entity)
-		{
-			if (!entity.IsValid() || entity.GetScene() != data.OwnerScene)
-				return nullptr;
-			auto it = data.Controllers.find(entity.GetHandle());
-			return it != data.Controllers.end() ? &it->second : nullptr;
-		}
-
-		const ControllerRecord* FindController(const CharacterControllerSetData& data, Entity entity)
 		{
 			if (!entity.IsValid() || entity.GetScene() != data.OwnerScene)
 				return nullptr;
