@@ -184,10 +184,14 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   frame finalization (a regression may show in one frame, which a percentile would hide) and the most frames a stop
   takes to settle. Every all-resident sweep must bring every texture in, evict none and fail no load; its budgets are its
   peak private memory (650 MB, texture cooking's limit) and its longest frame finalization. It then runs the exported
-  stress game in `StrataRuntime` (`STRATA_TEST_RUNTIME_PATH`, else next to the test executable) with `--perf-log`, one
-  run per attempt: every log has a row per frame, and the budget judges the slowest frame's `Assets.Finalize` stage; then
-  the game again with its own budgets in its 1280x720 window (1920x1080 pixels on the reference machine's 150% display),
-  whose last `PeakPrivateMB` the 650 MB limit judges.
+  stress game in `StrataRuntime` (`STRATA_TEST_RUNTIME_PATH`, else next to the test executable) with `--perf-log` and
+  `--resolution 1920x1080` (1920x1080 pixels whatever the display's scale; every run checks its swapchain), one run per
+  attempt: every log has a row per frame, and the budget judges the slowest frame's `Assets.Finalize` stage; then the game
+  with its own budgets from the world's overview camera (about two thirds of the textures resident), whose last
+  `PeakPrivateMB` is `RuntimePeakPrivateMemory`; then texture cooking's acceptance criterion itself,
+  `RuntimePeakPrivateMemoryAllResident` (budget 650 MB): the game started in the stress project's `TopDown` scene
+  (`WriteStressTopDownScene`: the world with its camera looking down on all of it), 300 frames with its own budgets,
+  every texture of the pack resident at the end and none evicted or loading.
   `Perf.FrameProfiler` measures the frame profiler's cost per frame and `Perf.EditorPanels` (in `src/Editor/`) the
   Streaming panel with 10,000 assets (with the job threads, which build its table) and the Performance panel with a full
   ring of frames, each drawn in the UI harness: the 95th percentile frame, and for the Streaming panel the frames that

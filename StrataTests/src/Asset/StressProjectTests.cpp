@@ -5,6 +5,7 @@
 #include "Strata/Asset/AssetPack.h"
 #include "Strata/Asset/RuntimeAssetManager.h"
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Math/Frustum.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/Scene.h"
@@ -100,6 +101,56 @@ TEST_SUITE("Asset.StressProject")
 		CHECK(objects == spec.Entities);
 		CHECK(terrains == 1);
 		CHECK(materialsUsed.size() == 5);
+	}
+
+	TEST_CASE("The top-down scene is the world with every object and the whole terrain in its camera's view")
+	{
+		const StressProjectSpec spec = GetTinySpec();
+		const std::filesystem::path directory = CreateTemporaryDirectory("StressTopDown");
+		std::string error;
+		std::optional<StressProject> project = WriteStressProject(directory / "Stress", spec, error);
+		REQUIRE_MESSAGE(project, error);
+		CHECK_FALSE(project->TopDownScene.IsValid());
+		REQUIRE_MESSAGE(WriteStressTopDownScene(*project, spec, error), error);
+		REQUIRE(project->TopDownScene.IsValid());
+		CHECK(project->TopDownScene != project->WorldScene);
+		REQUIRE_MESSAGE(BuildStressPack(*project, directory / "Stress.stpak", error), error);
+		const Ref<RuntimeAssetManager> manager = RuntimeAssetManager::Create(directory / "Stress.stpak", &error);
+		REQUIRE_MESSAGE(manager, error);
+
+		const Ref<Asset> sceneAsset = manager->LoadAssetSync(project->TopDownScene);
+		REQUIRE(sceneAsset);
+		REQUIRE(sceneAsset->GetType() == AssetType::Scene);
+		const Ref<Scene> scene = std::static_pointer_cast<SceneAsset>(sceneAsset)->CreateScene(&error);
+		REQUIRE_MESSAGE(scene, error);
+		scene->UpdateWorldTransforms();
+		const Entity camera = scene->GetPrimaryCameraEntity();
+		REQUIRE(camera);
+
+		// In landscape viewports, every object lies inside the view, as do the terrain's corners.
+		for (const float aspectRatio : { 4.0f / 3.0f, 16.0f / 9.0f })
+		{
+			CAPTURE(aspectRatio);
+			const SceneCamera view = SceneCamera::FromEntity(*scene, camera, aspectRatio);
+			const Frustum frustum(view.Projection * view.View);
+			uint32_t objects = 0;
+			uint32_t visible = 0;
+			for (auto [entity, renderer, transform] : scene->GetRegistry().view<MeshRendererComponent, TransformComponent>().each())
+			{
+				if (renderer.Mesh == project->GridMesh)
+					continue;
+				objects++;
+				visible += frustum.IsSphereVisible(transform.Translation, 0.0f) ? 1 : 0;
+			}
+			CHECK(objects == spec.Entities);
+			CHECK(visible == objects);
+			const float half = c_StressWorldSize * 0.5f;
+			for (const glm::vec3& corner : { glm::vec3(-half, 0.0f, -half), glm::vec3(half, 0.0f, -half), glm::vec3(-half, 0.0f, half), glm::vec3(half, 0.0f, half) })
+			{
+				CAPTURE(corner);
+				CHECK(frustum.IsPointVisible(corner));
+			}
+		}
 	}
 
 	TEST_CASE("The stress sweep holds at its stops and moves between them")

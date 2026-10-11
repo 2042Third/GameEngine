@@ -49,6 +49,7 @@ namespace Strata::Tests
 		constexpr uint64_t c_MaterialHandleBase = 0x5A00000000002000ull;
 		constexpr uint64_t c_GridModelHandle = 0x5A00000000003000ull;
 		constexpr uint64_t c_WorldSceneHandle = 0x5A00000000004000ull;
+		constexpr uint64_t c_TopDownSceneHandle = 0x5A00000000004001ull;
 		constexpr uint64_t c_SceneEntityHandleBase = 0x5AE0000000000000ull; // Camera, sun, terrain
 		constexpr uint64_t c_ObjectHandleBase = 0x5AF0000000000010ull;
 
@@ -282,17 +283,36 @@ namespace Strata::Tests
 			return WriteJsonAsset(modelsDirectory / "Grid.gltf", gltf, handle, error);
 		}
 
-		nlohmann::json CreateWorldScene(const StressProjectSpec& spec, const StressProject& project)
+		// Where a stress scene's camera is.
+		enum class StressCamera : uint8_t
 		{
-			Scene scene("World");
+			Overview = 0, // The streaming audit's: above the south part of the world, looking north over most of it
+			TopDown       // High above the center looking straight down, every district in view
+		};
 
-			// The overview of the streaming audit: from above the south edge, the whole world in view.
+		nlohmann::json CreateWorldScene(const StressProjectSpec& spec, const StressProject& project, const std::string& name, StressCamera cameraPlacement)
+		{
+			Scene scene(name);
+
 			Entity camera = scene.CreateEntityWithUUID(UUID(c_SceneEntityHandleBase + 1), "Camera");
 			TransformComponent& cameraTransform = camera.GetComponent<TransformComponent>();
-			cameraTransform.Translation = glm::vec3(0.0f, 60.0f, 260.0f);
-			cameraTransform.Rotation = glm::angleAxis(glm::radians(-20.0f), glm::vec3(1.0f, 0.0f, 0.0f));
 			CameraComponent& cameraComponent = camera.AddComponent<CameraComponent>();
-			cameraComponent.PerspectiveFar = 5000.0f;
+			if (cameraPlacement == StressCamera::Overview)
+			{
+				cameraTransform.Translation = glm::vec3(0.0f, 60.0f, 260.0f);
+				cameraTransform.Rotation = glm::angleAxis(glm::radians(-20.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+				cameraComponent.PerspectiveFar = 5000.0f;
+			}
+			else
+			{
+				// High enough that the world's square (and the objects on its edges) fits the vertical field of view, the
+				// narrower one of a landscape viewport, with some room.
+				const float halfExtent = c_StressWorldSize * 0.5f + c_ObjectScale;
+				const float height = 1.05f * halfExtent / std::tan(glm::radians(cameraComponent.PerspectiveFOV) * 0.5f);
+				cameraTransform.Translation = glm::vec3(0.0f, height, 0.0f);
+				cameraTransform.Rotation = glm::angleAxis(glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+				cameraComponent.PerspectiveFar = 2.0f * height;
+			}
 
 			Entity sun = scene.CreateEntityWithUUID(UUID(c_SceneEntityHandleBase + 2), "Sun");
 			sun.GetComponent<TransformComponent>().Rotation = Math::LookRotation(glm::normalize(glm::vec3(-0.4f, -1.0f, -0.6f)));
@@ -518,13 +538,23 @@ namespace Strata::Tests
 
 		if (!WriteGridModel(assets / "Models", spec.GridResolution, project.GridModel, error))
 			return std::nullopt;
-		if (!WriteJsonAsset(assets / "Scenes" / "World.stscene", CreateWorldScene(spec, project), project.WorldScene, error))
+		if (!WriteJsonAsset(assets / "Scenes" / "World.stscene", CreateWorldScene(spec, project, "World", StressCamera::Overview), project.WorldScene, error))
 			return std::nullopt;
 
 		projectFile->GetConfig().StartScene = project.WorldScene;
 		if (!projectFile->Save(&error))
 			return std::nullopt;
 		return project;
+	}
+
+	bool WriteStressTopDownScene(StressProject& project, const StressProjectSpec& spec, std::string& error)
+	{
+		const AssetHandle handle = UUID(c_TopDownSceneHandle);
+		const std::filesystem::path path = project.Directory / "Assets" / "Scenes" / "TopDown.stscene";
+		if (!WriteJsonAsset(path, CreateWorldScene(spec, project, "TopDown", StressCamera::TopDown), handle, error))
+			return false;
+		project.TopDownScene = handle;
+		return true;
 	}
 
 	Ref<EditorAssetManager> ImportStressProject(const StressProject& project, std::string& error)
@@ -540,6 +570,8 @@ namespace Strata::Tests
 		sources.insert(sources.end(), project.Materials.begin(), project.Materials.end());
 		sources.push_back(project.GridModel);
 		sources.push_back(project.WorldScene);
+		if (project.TopDownScene.IsValid())
+			sources.push_back(project.TopDownScene);
 		for (AssetHandle source : sources)
 		{
 			const AssetImportInfo import = manager->GetImportInfo(source);

@@ -611,13 +611,16 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 
 	if (mode == "write-stress-project")
 	{
-		// <directory>: writes the streaming stress project (Perf/StressProject.h: 447 MB of textures, the World scene) into a
-		// new directory, to look at it in the editor (StrataEditor --project <directory>), e.g. with the Streaming panel.
+		// <directory>: writes the streaming stress project (Perf/StressProject.h: 447 MB of textures, the World and TopDown
+		// scenes) into a new directory, to look at it in the editor (StrataEditor --project <directory>), e.g. with the
+		// Streaming panel.
 		if (argc != 3)
 			return 2;
 		std::string error;
 		const std::filesystem::path directory = Strata::FileSystem::FromUTF8(argv[2]);
-		if (!Strata::Tests::WriteStressProject(directory, Strata::Tests::StressProjectSpec(), error))
+		const Strata::Tests::StressProjectSpec spec;
+		std::optional<Strata::Tests::StressProject> project = Strata::Tests::WriteStressProject(directory, spec, error);
+		if (!project || !Strata::Tests::WriteStressTopDownScene(*project, spec, error))
 		{
 			std::fprintf(stderr, "Cannot write the stress project: %s\n", error.c_str());
 			return 1;

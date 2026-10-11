@@ -1014,12 +1014,17 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
     fail no load; `Budgets.json` judges its peak private bytes (at most 650 MB, texture cooking's limit) and its longest
     frame finalization (below the 8 ms the streaming work allows any frame).
 
-  Then it exports the stress game (a `.stgame` manifest next to the pack) and runs `StrataRuntime` in a window for 600
-  frames from the world's overview camera with `--perf-log` and the evicting sweep's texture budget, again confirmed by
-  up to two more runs: every log must have a row per frame, and `Budgets.json` judges the slowest frame's
-  `Assets.Finalize` stage. Last, the game runs with its own budgets (nothing evicted) in its manifest's 1280x720 window,
-  1920x1080 pixels on the reference machine's 150% display: the peak private memory its log ends with is the exported
-  game's own measure of texture cooking's 650 MB limit, which the all-resident sweep only stands in for. `Perf.TextureCook` (`TextureCookPerfTests.cpp`) imports the same project cold (once per
+  Then it exports the stress game (`.stgame` manifests next to the pack) and runs `StrataRuntime` in a window of
+  1920x1080 pixels (`--resolution`, whatever the display's scale; each run checks its swapchain's size) for 600 frames
+  from the world's overview camera with `--perf-log` and the evicting sweep's texture budget, again confirmed by up to two
+  more runs: every log must have a row per frame, and `Budgets.json` judges the slowest frame's `Assets.Finalize` stage.
+  Then the game runs with its own budgets (nothing evicted) from the overview camera, which shows about two thirds of the
+  textures (`RuntimePeakPrivateMemory`, the peak private memory its log ends with), and last texture cooking's acceptance
+  criterion itself, "the exported stress game at 1920x1080 over 300 frames, with all textures resident, peaks at 650 MB
+  private or less" (`RuntimePeakPrivateMemoryAllResident`, budget 650 MB): 300 frames of the game started in the stress
+  project's `TopDown` scene, the world seen from above (`WriteStressTopDownScene`), with its own budgets; every texture
+  of the pack must be resident at the end, none evicted and none loading. The all-resident sweep only stands in for
+  this. `Perf.TextureCook` (`TextureCookPerfTests.cpp`) imports the same project cold (once per
   attempt) and checks the import time, the stored sizes of its largest 2048x2048 texture, of its 4096x4096 texture and of
   all of them, and the pack size, and measures the BC7 encoder's time per block on one thread.
   `GPU.Assets.Streaming` runs the same sweep on a small stress project under the validation layers.
