@@ -9,6 +9,11 @@
 #include <string>
 #include <string_view>
 
+namespace Strata
+{
+	struct TextureSpecification;
+}
+
 namespace Strata::UI
 {
 
@@ -150,5 +155,12 @@ namespace Strata::UI
 		std::string Count;
 	};
 	void Legend(const char* id, const ImVec2& bottomLeft, std::span<const LegendLine> lines, std::string_view note = {});
+
+	// A texture drawn into a rectangle of the draw list (no item, so it takes no input) the way its content looks: sampled
+	// as the texture is set to be (Nearest keeps pixel art crisp) and shown in the display its stored layout needs
+	// (GetImGuiTextureDisplay, Strata/ImGui/ImGuiRenderer.h: sRGB colors encoded for the display, one-channel grayscale
+	// as gray, two-channel normal maps with their Z), through the renderer's draw callbacks. The list's later draws are
+	// back to the defaults.
+	void TextureImage(ImDrawList* drawList, ImTextureID texture, const TextureSpecification& specification, const ImVec2& min, const ImVec2& max);
 
 }

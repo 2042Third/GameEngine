@@ -5,6 +5,9 @@
 
 #include <imgui.h>
 
+#include <string>
+#include <vector>
+
 using namespace Strata;
 
 namespace
@@ -235,6 +238,93 @@ TEST_SUITE("GPU.Renderer")
 			CHECK(Tests::GetPixelRGBA8(image, 64 + 30, 16).r == 0);
 			CHECK(Tests::GetPixelRGBA8(image, 64 + 34, 16).r == 255);
 			CHECK(ImGui::GetPlatformIO().Renderer_RenderState == nullptr);
+
+			imguiRenderer.Shutdown();
+		}
+		ImGui::DestroyContext();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("ImGui texture displays show sRGB, grayscale and two-channel normal map textures as their content")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		nvrhi::IDevice* device = gpu.GetNvrhiDevice();
+		nvrhi::CommandListHandle commandList = device->createCommandList();
+
+		// One texel each: sRGB orange, a one-channel gray, and a normal map's X and Y (Z left to reconstruct).
+		const auto createTexel = [&](nvrhi::Format format, std::vector<uint8_t> texel)
+		{
+			nvrhi::TextureDesc desc;
+			desc.width = 1;
+			desc.height = 1;
+			desc.format = format;
+			desc.debugName = "TestDisplayTexel";
+			desc.initialState = nvrhi::ResourceStates::ShaderResource;
+			desc.keepInitialState = true;
+			nvrhi::TextureHandle texture = device->createTexture(desc);
+			REQUIRE(texture);
+			commandList->open();
+			commandList->writeTexture(texture, 0, 0, texel.data(), texel.size());
+			commandList->close();
+			device->executeCommandList(commandList);
+			return texture;
+		};
+		const nvrhi::TextureHandle srgb = createTexel(nvrhi::Format::SRGBA8_UNORM, { 230, 120, 30, 255 });
+		const nvrhi::TextureHandle gray = createTexel(nvrhi::Format::R8_UNORM, { 165 });
+		const nvrhi::TextureHandle normal = createTexel(nvrhi::Format::RG8_UNORM, { 191, 128 });
+
+		ImGui::CreateContext();
+		ImGuiIO& io = ImGui::GetIO();
+		io.IniFilename = nullptr;
+		io.DisplaySize = ImVec2(128.0f, 32.0f);
+		{
+			ImGuiRenderer imguiRenderer;
+			REQUIRE(imguiRenderer.Init(device, Renderer::GetShaderLibrary()));
+			nvrhi::TextureHandle target = CreateRenderTarget(device, 128, 32, nvrhi::Format::RGBA8_UNORM);
+			nvrhi::FramebufferHandle framebuffer = device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(target));
+
+			ImGui::NewFrame();
+			ImDrawList* drawList = ImGui::GetForegroundDrawList();
+			const auto image = [drawList](nvrhi::ITexture* texture, float x)
+			{
+				drawList->AddImage(static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(texture)), ImVec2(x, 0.0f), ImVec2(x + 32.0f, 32.0f));
+			};
+			image(srgb, 0.0f); // As sampled: the linear values
+			AddImGuiTextureDisplay(drawList, GetImGuiTextureDisplay(TextureFormat::RGBA8SRGB, false));
+			image(srgb, 32.0f);
+			AddImGuiTextureDisplay(drawList, GetImGuiTextureDisplay(TextureFormat::R8, true));
+			image(gray, 64.0f);
+			AddImGuiTextureDisplay(drawList, GetImGuiTextureDisplay(TextureFormat::RG8, false));
+			image(normal, 96.0f);
+			ImGui::Render();
+
+			commandList->open();
+			commandList->clearTextureFloat(target, nvrhi::AllSubresources, nvrhi::Color(0.0f, 0.0f, 0.0f, 1.0f));
+			imguiRenderer.Render(commandList, ImGui::GetDrawData(), framebuffer);
+			commandList->close();
+			device->executeCommandList(commandList);
+
+			ReadbackImage pixels;
+			REQUIRE(Renderer::ReadTexture(target, pixels));
+			const auto describe = [](const glm::u8vec4& pixel)
+			{
+				return std::to_string(pixel.r) + ", " + std::to_string(pixel.g) + ", " + std::to_string(pixel.b) + ", " + std::to_string(pixel.a);
+			};
+			const auto isClose = [](const glm::u8vec4& pixel, const glm::ivec3& expected)
+			{
+				return glm::all(glm::lessThanEqual(glm::abs(glm::ivec3(pixel) - expected), glm::ivec3(1)));
+			};
+			const glm::u8vec4 direct = Tests::GetPixelRGBA8(pixels, 16, 16);
+			CHECK_MESSAGE(isClose(direct, glm::ivec3(202, 48, 3)), describe(direct));
+			const glm::u8vec4 encoded = Tests::GetPixelRGBA8(pixels, 48, 16);
+			CHECK_MESSAGE(isClose(encoded, glm::ivec3(230, 120, 30)), describe(encoded));
+			const glm::u8vec4 grayscale = Tests::GetPixelRGBA8(pixels, 80, 16);
+			CHECK_MESSAGE(isClose(grayscale, glm::ivec3(165, 165, 165)), describe(grayscale));
+			// X 0.498, Y 0.004, so Z 0.867: shown as (X, Y, Z) * 0.5 + 0.5.
+			const glm::u8vec4 normalMap = Tests::GetPixelRGBA8(pixels, 112, 16);
+			CHECK_MESSAGE(isClose(normalMap, glm::ivec3(191, 128, 238)), describe(normalMap));
+			CHECK(normalMap.a == 255);
 
 			imguiRenderer.Shutdown();
 		}

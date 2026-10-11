@@ -13,16 +13,19 @@
 #include "UI/ItemProbe.h"
 #include "UI/PropertyWidgets.h"
 #include "UI/Theme.h"
+#include "UI/Widgets.h"
 
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
+#include <Strata/ImGui/ImGuiRenderer.h>
 #include <Strata/Math/Math.h>
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/Material.h>
+#include <Strata/Renderer/Texture.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Entity.h>
 #include <Strata/Scene/Scene.h>
@@ -36,6 +39,8 @@
 #include <cstdlib>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 // The authoring UI through the harness: the Hierarchy (rows, selection, rename, drops, filters), the Inspector (axis labels,
@@ -1194,6 +1199,104 @@ TEST_SUITE("Editor.UI.AssetInspector")
 		editor.Frames(1);
 		CHECK(UI::ItemProbe::Find("AssetInspector.Import.MaxSize")->Text == "1024");
 		CHECK(UI::ItemProbe::Find("AssetInspector.Apply")->Enabled);
+	}
+
+	TEST_CASE("The Asset tab names a texture's stored format and shows settings that have no effect disabled, saying why")
+	{
+		AuthoringEditor editor({}, WithFeatureProject("EditorAuthoringTextureFormat"));
+		EditorAssetManager* assets = editor.Context().GetAssetManager();
+		REQUIRE(assets);
+		const AssetHandle checker = assets->FindAssetByPath("Textures/Checker.png");
+		const AssetHandle roughness = assets->FindAssetByPath("Textures/Roughness.png");
+		const AssetHandle sky = assets->FindAssetByPath("Textures/Sky.hdr");
+		REQUIRE(checker.IsValid());
+		REQUIRE(roughness.IsValid());
+		REQUIRE(sky.IsValid());
+		const auto inspect = [&](AssetHandle texture)
+		{
+			UI::ItemProbe::Clear();
+			REQUIRE(editor.Context().SetInspectedAsset(texture));
+			REQUIRE(editor.FramesUntil([]() { return UI::ItemProbe::Find("AssetInspector.Preview.Caption").has_value(); }));
+			editor.Frames(1);
+			return UI::ItemProbe::Find("AssetInspector.Preview.Caption")->Text;
+		};
+		const auto active = [](std::string_view setting)
+		{
+			const std::optional<UI::ItemProbe::Item> item = UI::ItemProbe::Find("AssetInspector.Import." + std::string(setting) + ".Active");
+			REQUIRE(item.has_value());
+			return std::pair(item->Enabled, item->Text);
+		};
+
+		// Color: what Compression Auto chose, and Quality chooses how it encodes.
+		const std::string checkerCaption = inspect(checker);
+		CHECK(checkerCaption.find("BC7 sRGB") != std::string::npos);
+		CHECK(checkerCaption.find("grayscale") == std::string::npos);
+		CHECK(active("Compression").first);
+		CHECK(active("Quality").first);
+
+		// The draft decides: with Compression Uncompressed, Quality has no effect (before Apply too).
+		REQUIRE(editor.Click("AssetInspector.Import.Compression"));
+		editor.Frames(2);
+		REQUIRE(editor.Click("AssetInspector.Import.Compression.Uncompressed"));
+		editor.Frames(1);
+		CHECK_FALSE(active("Quality").first);
+		CHECK(active("Quality").second.find("Uncompressed") != std::string::npos);
+
+		// One-channel data is BC4, sampled as gray; Quality changes nothing for data.
+		const std::string roughnessCaption = inspect(roughness);
+		CHECK(roughnessCaption.find("BC4") != std::string::npos);
+		CHECK(roughnessCaption.find("grayscale") != std::string::npos);
+		CHECK_FALSE(active("Quality").first);
+		CHECK(active("Compression").first);
+
+		// HDR stays 16-bit float: neither compression setting does anything.
+		CHECK(inspect(sky).find("RGBA16F") != std::string::npos);
+		CHECK_FALSE(active("Compression").first);
+		CHECK(active("Compression").second.find("HDR") != std::string::npos);
+		CHECK_FALSE(active("Quality").first);
+	}
+
+	TEST_CASE("A texture image shows each stored layout as its content: sRGB, grayscale and two-channel normal maps")
+	{
+		CHECK(GetImGuiTextureDisplay(TextureFormat::BC7SRGB, false) == ImGuiTextureDisplay::EncodeSRGB);
+		CHECK(GetImGuiTextureDisplay(TextureFormat::RGBA8SRGB, false) == ImGuiTextureDisplay::EncodeSRGB);
+		CHECK(GetImGuiTextureDisplay(TextureFormat::BC1SRGB, false) == ImGuiTextureDisplay::EncodeSRGB);
+		CHECK(GetImGuiTextureDisplay(TextureFormat::BC4, true) == ImGuiTextureDisplay::Grayscale);
+		CHECK(GetImGuiTextureDisplay(TextureFormat::R8, true) == ImGuiTextureDisplay::Grayscale);
+		CHECK(GetImGuiTextureDisplay(TextureFormat::BC5, false) == ImGuiTextureDisplay::NormalXY);
+		CHECK(GetImGuiTextureDisplay(TextureFormat::RG8, false) == ImGuiTextureDisplay::NormalXY);
+		CHECK(GetImGuiTextureDisplay(TextureFormat::RGBA8, false) == ImGuiTextureDisplay::Direct);
+		CHECK(GetImGuiTextureDisplay(TextureFormat::BC7, false) == ImGuiTextureDisplay::Direct);
+		CHECK(GetImGuiTextureDisplay(TextureFormat::RGBA16F, false) == ImGuiTextureDisplay::Direct);
+
+		// Without a GPU the draws record the displays the renderer applies (GPU.Renderer checks the pixels): the texture's
+		// own around its image, then the default again.
+		ImGuiHarness harness;
+		const auto displaysOf = [&harness](TextureFormat format, bool grayscale)
+		{
+			TextureSpecification specification;
+			specification.Format = format;
+			specification.Grayscale = grayscale;
+			// The list is read after the frame, where only the frame can name it (there is no current window then).
+			ImDrawList* drawList = nullptr;
+			harness.Frame([&]()
+			{
+				drawList = ImGui::GetForegroundDrawList();
+				UI::TextureImage(drawList, static_cast<ImTextureID>(1), specification, ImVec2(0.0f, 0.0f), ImVec2(8.0f, 8.0f));
+			});
+			REQUIRE(drawList);
+			std::vector<ImGuiTextureDisplay> displays;
+			for (const ImDrawCmd& command : drawList->CmdBuffer)
+			{
+				if (const std::optional<ImGuiTextureDisplay> display = FindImGuiTextureDisplay(command))
+					displays.push_back(*display);
+			}
+			return displays;
+		};
+		CHECK(displaysOf(TextureFormat::BC4, true) == std::vector<ImGuiTextureDisplay> { ImGuiTextureDisplay::Grayscale, ImGuiTextureDisplay::Direct });
+		CHECK(displaysOf(TextureFormat::BC5, false) == std::vector<ImGuiTextureDisplay> { ImGuiTextureDisplay::NormalXY, ImGuiTextureDisplay::Direct });
+		CHECK(displaysOf(TextureFormat::BC7SRGB, false) == std::vector<ImGuiTextureDisplay> { ImGuiTextureDisplay::EncodeSRGB, ImGuiTextureDisplay::Direct });
+		CHECK(displaysOf(TextureFormat::RGBA8, false).empty());
 	}
 
 	TEST_CASE("The Asset tab without an asset centers its hint and promises only what it shows")

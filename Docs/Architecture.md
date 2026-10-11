@@ -248,7 +248,11 @@ enabled and a window and graphics device exist, and calls `Begin`/`End` around t
 the UI for the window's content scale, on attach and on every `WindowContentScaleEvent`: the style is rebuilt from
 ImGui's dark defaults by the application's style callback (`SetStyleCallback`; the editor installs its Bedrock theme) and
 the fonts' DPI scale (`ImGuiStyle::FontScaleDpi`) follows; `SetContentScaleOverride` fixes the scale (`--ui-scale`).
-`ImGuiRenderer` is the NVRHI backend (user textures are `nvrhi::ITexture*`). Only the editor enables it.
+`ImGuiRenderer` is the NVRHI backend (user textures are `nvrhi::ITexture*`). Only the editor enables it. Draw callbacks
+set how the following draws sample (ImGui's linear and nearest sampler callbacks) and show their textures
+(`AddImGuiTextureDisplay`: `ImGuiTextureDisplay` as a push constant of `ImGui.frag`), so a texture whose stored layout
+would look wrong as sampled (sRGB, one channel standing for gray, a two-channel normal map) shows its content
+(`GetImGuiTextureDisplay`).
 
 **Engine** (`Engine/`). `BuiltinModules`, the composition root (below), and nothing else: the only code that knows every
 runtime module (tooling, the asset pipeline, is handed in by the programs that use it).
@@ -1345,7 +1349,12 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   - The **Asset** inspector is tabbed with the Inspector: `EditorLayer` brings the tab of the inspection target forward
     when `GetInspectionVersion` changes (`EditorPanelRegistry::ShowTab`, which leaves the keyboard focus where it is).
     Materials are drawn by `MaterialEditor` (a drag previews, its release saves: one write and one undo step), import
-    settings as a draft of the settings JSON that Apply hands to `asset.setImportSettings` through the runner.
+    settings as a draft of the settings JSON that Apply hands to `asset.setImportSettings` through the runner; a setting
+    the draft's other settings leave without effect (`AssetImporter::GetInactiveReason`: a texture's Quality while it is
+    uncompressed, data or HDR) is shown disabled, its label's tooltip saying why. A texture's preview shows its content as
+    materials read it (`UI::TextureImage`: sRGB colors encoded again for the display, grayscale BC4/R8 as gray,
+    two-channel normal maps with their Z), and its caption names the stored format Compression and Quality chose and what
+    the texture takes on the GPU.
   - **Shortcuts**: `EditorLayer` keeps the global ones (Ctrl+Z, Ctrl+Y, Ctrl+S, Ctrl+P, Ctrl+B); Delete, Ctrl+D, Ctrl+C,
     Ctrl+X, Ctrl+V, Ctrl+A and F2 are `ImGuiInputFlags_RouteFocused` shortcuts of the Hierarchy and the Viewport
     (`EditorActions::HandleSelectionShortcuts`), so they act only where the keyboard focus is; the clipboard holds

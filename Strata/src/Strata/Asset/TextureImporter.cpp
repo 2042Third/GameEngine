@@ -291,6 +291,23 @@ namespace Strata
 		return TextureImportSettings::GetDefaults(sourcePath).ToJson();
 	}
 
+	std::string TextureImporter::GetInactiveReason(std::string_view setting, const nlohmann::json& settings) const
+	{
+		const TextureImportSettings values = TextureImportSettings::FromJson(settings);
+		if (setting == "Compression" && values.Usage == TextureUsage::HDR)
+			return "HDR textures stay 16-bit float: they are not block-compressed yet";
+		if (setting == "Quality")
+		{
+			if (values.Usage == TextureUsage::HDR)
+				return "HDR textures stay 16-bit float: they are not block-compressed yet";
+			if (values.Compression == TextureCompression::Uncompressed)
+				return "Quality only chooses how block compression encodes; with Compression Uncompressed every texel is kept exact";
+			if (values.Usage != TextureUsage::Color)
+				return "Normal maps and data are stored the same at either quality";
+		}
+		return {};
+	}
+
 	std::vector<PropertyInfo> TextureImporter::GetSettingsProperties() const
 	{
 		const TextureImportSettings defaults;

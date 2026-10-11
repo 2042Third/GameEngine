@@ -2,8 +2,12 @@
 #include "Strata/ImGui/ImGuiRenderer.h"
 
 #include "Strata/Renderer/ShaderLibrary.h"
+#include "Strata/Renderer/Texture.h"
 
 #include <imgui.h>
+
+#include <algorithm>
+#include <iterator>
 
 namespace Strata
 {
@@ -15,6 +19,7 @@ namespace Strata
 		{
 			float Scale[2];
 			float Translate[2];
+			uint32_t TextureDisplay; // ImGuiTextureDisplay (ImGui.frag)
 		};
 
 		// Backend storage attached to ImGui-managed textures (font atlas pages).
@@ -42,7 +47,10 @@ namespace Strata
 		void DrawCallbackResetRenderState(const ImDrawList*, const ImDrawCmd*)
 		{
 			if (ImGuiRenderState* state = GetRenderState())
+			{
 				state->NearestFiltering = false;
+				state->TextureDisplay = ImGuiTextureDisplay::Direct;
+			}
 		}
 
 		void DrawCallbackSetSamplerLinear(const ImDrawList*, const ImDrawCmd*)
@@ -57,11 +65,57 @@ namespace Strata
 				state->NearestFiltering = true;
 		}
 
+		// The callbacks of AddImGuiTextureDisplay point their user data at the display they set, one of these: the commands
+		// are told apart by the address of their data, never by the callback's (the linker may merge identical functions).
+		constexpr ImGuiTextureDisplay c_TextureDisplays[] = { ImGuiTextureDisplay::Direct, ImGuiTextureDisplay::EncodeSRGB, ImGuiTextureDisplay::Grayscale,
+			ImGuiTextureDisplay::NormalXY };
+
+		void DrawCallbackSetTextureDisplay(const ImDrawList*, const ImDrawCmd* command)
+		{
+			ImGuiRenderState* state = GetRenderState();
+			if (state && command->UserCallbackData)
+				state->TextureDisplay = *static_cast<const ImGuiTextureDisplay*>(command->UserCallbackData);
+		}
+
 		size_t AlignTo4(size_t value)
 		{
 			return (value + 3) & ~static_cast<size_t>(3);
 		}
 
+	}
+
+	ImGuiTextureDisplay GetImGuiTextureDisplay(TextureFormat format, bool grayscale)
+	{
+		const TextureFormatInfo info = GetTextureFormatInfo(format);
+		if (grayscale && info.Channels == 1)
+			return ImGuiTextureDisplay::Grayscale;
+		if (info.Channels == 2)
+			return ImGuiTextureDisplay::NormalXY;
+		return info.IsSRGB ? ImGuiTextureDisplay::EncodeSRGB : ImGuiTextureDisplay::Direct;
+	}
+
+	ImGuiTextureDisplay GetImGuiTextureDisplay(const TextureSpecification& specification)
+	{
+		return GetImGuiTextureDisplay(specification.Format, specification.Grayscale);
+	}
+
+	void AddImGuiTextureDisplay(ImDrawList* drawList, ImGuiTextureDisplay display)
+	{
+		const size_t index = std::min<size_t>(static_cast<size_t>(display), std::size(c_TextureDisplays) - 1);
+		// ImGui keeps the pointer (a user data size of 0) and never writes through it.
+		drawList->AddCallback(DrawCallbackSetTextureDisplay, const_cast<ImGuiTextureDisplay*>(&c_TextureDisplays[index]));
+	}
+
+	std::optional<ImGuiTextureDisplay> FindImGuiTextureDisplay(const ImDrawCmd& command)
+	{
+		if (!command.UserCallback)
+			return std::nullopt;
+		for (const ImGuiTextureDisplay& display : c_TextureDisplays)
+		{
+			if (command.UserCallbackData == &display)
+				return display;
+		}
+		return std::nullopt;
 	}
 
 	ImGuiRenderer::~ImGuiRenderer()
@@ -377,6 +431,7 @@ namespace Strata
 				state.bindings = { GetBindingSet(texture, renderState.NearestFiltering) };
 				state.viewport.scissorRects[0] = nvrhi::Rect(static_cast<int>(clipMinX), static_cast<int>(clipMaxX), static_cast<int>(clipMinY), static_cast<int>(clipMaxY));
 				commandList->setGraphicsState(state);
+				pushConstants.TextureDisplay = static_cast<uint32_t>(renderState.TextureDisplay);
 				commandList->setPushConstants(&pushConstants, sizeof(pushConstants));
 
 				nvrhi::DrawArguments arguments;

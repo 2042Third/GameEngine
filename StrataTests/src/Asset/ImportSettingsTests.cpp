@@ -152,6 +152,47 @@ TEST_SUITE("Asset.ImportSettings")
 		}
 	}
 
+	TEST_CASE("Importers say which settings the other settings leave without effect, and why")
+	{
+		const AssetImporter& textures = GetImporter(".png");
+		const nlohmann::json color = { { "Usage", "Color" }, { "Compression", "Auto" }, { "Quality", "High" } };
+		CHECK(textures.GetInactiveReason("Compression", color).empty());
+		CHECK(textures.GetInactiveReason("Quality", color).empty());
+		CHECK(textures.GetInactiveReason("Usage", color).empty());
+		CHECK(textures.GetInactiveReason("MaxSize", color).empty());
+		// Quality chooses how block compression encodes color only.
+		CHECK_FALSE(textures.GetInactiveReason("Quality", { { "Usage", "Color" }, { "Compression", "Uncompressed" } }).empty());
+		CHECK_FALSE(textures.GetInactiveReason("Quality", { { "Usage", "Data" }, { "Compression", "Auto" } }).empty());
+		CHECK_FALSE(textures.GetInactiveReason("Quality", { { "Usage", "NormalMap" } }).empty());
+		// HDR textures are not block-compressed.
+		CHECK_FALSE(textures.GetInactiveReason("Compression", { { "Usage", "HDR" } }).empty());
+		CHECK_FALSE(textures.GetInactiveReason("Quality", { { "Usage", "HDR" } }).empty());
+		// Missing settings read as the defaults (Color, Auto): everything has an effect.
+		CHECK(textures.GetInactiveReason("Quality", nlohmann::json::object()).empty());
+
+		const AssetImporter& models = GetImporter(".glb");
+		const nlohmann::json model = models.GetDefaultSettings("Helmet.glb");
+		for (const PropertyInfo& property : models.GetSettingsProperties())
+		{
+			CAPTURE(property.Name);
+			CHECK(models.GetInactiveReason(property.Name, model).empty());
+		}
+		nlohmann::json withoutLODs = model;
+		withoutLODs["GenerateLODs"] = false;
+		CHECK_FALSE(models.GetInactiveReason("LODCount", withoutLODs).empty());
+		nlohmann::json withoutMaterials = model;
+		withoutMaterials["ImportMaterials"] = false;
+		for (const char* setting : { "MaxTextureSize", "TextureCompression", "TextureQuality" })
+			CHECK_FALSE(models.GetInactiveReason(setting, withoutMaterials).empty());
+		nlohmann::json uncompressed = model;
+		uncompressed["TextureCompression"] = "Uncompressed";
+		CHECK_FALSE(models.GetInactiveReason("TextureQuality", uncompressed).empty());
+		CHECK(models.GetInactiveReason("MaxTextureSize", uncompressed).empty());
+
+		// Importers without such settings report none.
+		CHECK(GetImporter(".wav").GetInactiveReason("LoadMode", nlohmann::json::object()).empty());
+	}
+
 	TEST_CASE("Settings to change are checked against the schema and written in canonical form")
 	{
 		const AssetImporter& textures = GetImporter(".png");

@@ -4,6 +4,9 @@
 #include "UI/ItemProbe.h"
 #include "UI/Theme.h"
 
+#include <Strata/ImGui/ImGuiRenderer.h>
+#include <Strata/Renderer/Texture.h>
+
 #include <imgui_internal.h>
 #include <imgui_stdlib.h>
 
@@ -859,6 +862,22 @@ namespace Strata::UI
 		}
 		if (!note.empty())
 			AddText(drawList, ImVec2(swatchX, y), colors.TextSecondary, note);
+	}
+
+	void TextureImage(ImDrawList* drawList, ImTextureID texture, const TextureSpecification& specification, const ImVec2& min, const ImVec2& max)
+	{
+		const ImGuiPlatformIO& platform = ImGui::GetPlatformIO();
+		const bool nearest = specification.Filter == TextureFilter::Nearest && platform.DrawCallback_SetSamplerNearest;
+		if (nearest)
+			drawList->AddCallback(platform.DrawCallback_SetSamplerNearest, nullptr);
+		const ImGuiTextureDisplay display = GetImGuiTextureDisplay(specification);
+		if (display != ImGuiTextureDisplay::Direct)
+			AddImGuiTextureDisplay(drawList, display);
+		drawList->AddImage(texture, min, max);
+		if (display != ImGuiTextureDisplay::Direct)
+			AddImGuiTextureDisplay(drawList, ImGuiTextureDisplay::Direct);
+		if (nearest && platform.DrawCallback_SetSamplerLinear)
+			drawList->AddCallback(platform.DrawCallback_SetSamplerLinear, nullptr);
 	}
 
 }

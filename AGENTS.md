@@ -422,7 +422,9 @@ The threading model, frame loop and pipelines these rules protect are described 
   one in `GetSettingsProperties` (one `ImportSettingsBuilder` entry each: type, default, range or choices, tooltip;
   choices show in words, "NormalMap" as "Normal Map", and `PowerOfTwoLimit` makes a size limit a choice of "No limit" or
   a power of two), matching the keys of `GetDefaultSettings`; the asset inspector draws them and
-  `asset.setImportSettings` validates against them (`NormalizeImportSettings`), so a new setting is one entry there.
+  `asset.setImportSettings` validates against them (`NormalizeImportSettings`), so a new setting is one entry there. A
+  setting that other settings can leave without effect says so in `GetInactiveReason` (the inspector then shows it
+  disabled, with the reason).
   Editors re-import in the background (`EditorAssetManager::SetImportSettingsInBackground`, `ReimportAssetInBackground`,
   `IsImportPending`); the blocking forms are for tools and tests.
 - Engine-native assets (`.stscene`, `.stprefab`, `.stmat`) are JSON documents with a
@@ -832,8 +834,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   and Remove (not for components the engine adds), and shows the scene's settings (gravity, the fixed step and the physics
   world's capacities) and sky with nothing selected; the
   Asset tab edits materials (`UI/MaterialEditor`: a drag previews, its release is one undo step) and import settings
-  (Apply runs `asset.setImportSettings` through the runner). Property widgets come from `UI/PropertyWidgets.h`
-  (`DrawPropertyWidget` with `PropertyWidgetOptions` for mixed values, axis resets and probe keys).
+  (Apply runs `asset.setImportSettings` through the runner) and previews textures as their content looks, with the
+  stored format and GPU size: draw textures in UI code through `UI::TextureImage`, which shows sRGB, grayscale and
+  two-channel normal map layouts as materials read them (`ImGuiTextureDisplay`). Property widgets come from
+  `UI/PropertyWidgets.h` (`DrawPropertyWidget` with `PropertyWidgetOptions` for mixed values, axis resets and probe keys).
 - **Shortcuts:** `EditorLayer` handles the global ones (Ctrl+Z, Ctrl+Y, Ctrl+S, Ctrl+Shift+S, Ctrl+P, Ctrl+B).
   Shortcuts that act on the selection (Delete, Ctrl+D, Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+A, F2) are
   `ImGuiInputFlags_RouteFocused` shortcuts of the Hierarchy and the Viewport (`UI/EditorActions.h`,

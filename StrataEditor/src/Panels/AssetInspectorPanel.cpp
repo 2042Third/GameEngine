@@ -26,6 +26,7 @@
 #include <cmath>
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 namespace Strata
 {
@@ -43,6 +44,29 @@ namespace Strata
 			if (bytes >= 1024ull)
 				return fmt::format("{:.1f} KB", static_cast<double>(bytes) / 1024.0);
 			return fmt::format("{} bytes", bytes);
+		}
+
+		// "BC7 sRGB" for TextureFormat::BC7SRGB: the format's name with its color space apart.
+		std::string GetTextureFormatDisplayName(TextureFormat format)
+		{
+			std::string name = TextureFormatToString(format);
+			constexpr std::string_view c_SRGBSuffix = "SRGB";
+			if (GetTextureFormatInfo(format).IsSRGB && name.size() > c_SRGBSuffix.size() && name.ends_with(c_SRGBSuffix))
+				name = name.substr(0, name.size() - c_SRGBSuffix.size()) + " sRGB";
+			return name;
+		}
+
+		// The preview's caption: size, the stored format (what Compression and Quality chose), mips and what the texture
+		// takes on the GPU once uploaded.
+		std::string DescribeTexture(const Texture& texture)
+		{
+			std::string caption = fmt::format("{} x {} \xC2\xB7 {} \xC2\xB7 {} mips", texture.GetWidth(), texture.GetHeight(),
+				GetTextureFormatDisplayName(texture.GetSpecification().Format), texture.GetMipCount());
+			if (texture.GetSpecification().Grayscale)
+				caption += " \xC2\xB7 grayscale";
+			if (const uint64_t gpuBytes = texture.GetMemoryUsage().GpuTextures; gpuBytes > 0)
+				caption += fmt::format(" \xC2\xB7 {} on the GPU", FormatBytes(gpuBytes));
+			return caption;
 		}
 
 		// An icon, a title and a hint, all centered (the hint's lines each).
@@ -251,15 +275,21 @@ namespace Strata
 					continue;
 				PropertyValue value = property.GetValue(&m_Draft.Edited);
 				const std::string probe = "AssetInspector.Import." + property.Name;
-				UI::PropertyLabel(property.DisplayName, property.Tooltip, probe);
+				// A setting the other settings make moot (Quality of an uncompressed texture) is shown disabled, with why.
+				const std::string inactive = importer.GetInactiveReason(property.Name, m_Draft.Edited);
+				const std::string tooltip = inactive.empty() ? property.Tooltip : fmt::format("{}\n\nNo effect now: {}.", property.Tooltip, inactive);
+				UI::PropertyLabel(property.DisplayName, tooltip, probe);
 				PropertyWidgetOptions options;
 				options.ProbeKey = probe;
+				ImGui::BeginDisabled(!inactive.empty());
 				if (DrawPropertyWidget(property, value, *context.GetActiveScene(), options).Changed)
 				{
 					std::string error;
 					if (!property.SetValue(&m_Draft.Edited, value, &error))
 						ST_WARN("{}: {}", property.Name, error);
 				}
+				ImGui::EndDisabled();
+				UI::ItemProbe::Record(probe + ".Active", inactive.empty(), 0, inactive);
 			}
 			ImGui::EndDisabled();
 			UI::EndPropertyTable();
@@ -343,20 +373,15 @@ namespace Strata
 		const ImVec2 max(min.x + shownWidth, min.y + height);
 		ImDrawList* drawList = ImGui::GetWindowDrawList();
 		drawList->AddRectFilled(min, max, ImGui::GetColorU32(colors.Chrome));
+		// As its content looks (sRGB, grayscale and two-channel normal maps each shown as materials read them), sampled the
+		// way the texture is set to be (pixel art stays crisp).
 		if (nvrhi::ITexture* gpuTexture = texture->GetGPUTexture())
-		{
-			// Sampled the way the texture is set to be (pixel art stays crisp), through the renderer's sampler callbacks.
-			const ImGuiPlatformIO& platform = ImGui::GetPlatformIO();
-			const bool nearest = texture->GetSpecification().Filter == TextureFilter::Nearest && platform.DrawCallback_SetSamplerNearest;
-			if (nearest)
-				drawList->AddCallback(platform.DrawCallback_SetSamplerNearest, nullptr);
-			drawList->AddImage(static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(gpuTexture)), min, max);
-			if (nearest && platform.DrawCallback_SetSamplerLinear)
-				drawList->AddCallback(platform.DrawCallback_SetSamplerLinear, nullptr);
-		}
+			UI::TextureImage(drawList, static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(gpuTexture)), texture->GetSpecification(), min, max);
 		drawList->AddRect(min, max, ImGui::GetColorU32(colors.Border));
 		UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Caption);
-		ImGui::TextColored(colors.TextSecondary, "%u x %u \xC2\xB7 %u mips", texture->GetWidth(), texture->GetHeight(), texture->GetMipCount());
+		const std::string caption = DescribeTexture(*texture);
+		ImGui::TextColored(colors.TextSecondary, "%s", caption.c_str());
+		UI::ItemProbe::Record("AssetInspector.Preview.Caption", true, 0, caption);
 		ImGui::PopFont();
 	}
 

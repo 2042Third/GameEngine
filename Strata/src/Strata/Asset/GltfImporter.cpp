@@ -1156,6 +1156,20 @@ namespace Strata
 		};
 	}
 
+	std::string GltfImporter::GetInactiveReason(std::string_view setting, const nlohmann::json& settings) const
+	{
+		std::vector<std::string> warnings;
+		const ImportSettings values = ReadSettings(settings, warnings);
+		if (setting == "LODCount" && !values.GenerateLODs)
+			return "Simplified versions are made only with Generate LODs";
+		const bool textureSetting = setting == "MaxTextureSize" || setting == "TextureCompression" || setting == "TextureQuality";
+		if (textureSetting && !values.ImportMaterials)
+			return "The model's textures are imported with its materials: Import Materials is off";
+		if (setting == "TextureQuality" && values.Compression == TextureCompression::Uncompressed)
+			return "Quality only chooses how block compression encodes; with Texture Compression Uncompressed every texel is kept exact";
+		return {};
+	}
+
 	std::vector<PropertyInfo> GltfImporter::GetSettingsProperties() const
 	{
 		const ImportSettings defaults;

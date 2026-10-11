@@ -82,6 +82,10 @@ namespace Strata
 		// PropertyInfo::SetValue validates, clamps and stores a value. Built with ImportSettingsBuilder; every key of
 		// GetDefaultSettings has a property. Empty: the importer has no settings.
 		virtual std::vector<PropertyInfo> GetSettingsProperties() const { return {}; }
+		// Why a setting has no effect on an import with these settings (a settings object, as GetSettingsProperties reads
+		// them), for people; empty when it has one. Editors show such a setting disabled, with the reason. Its value stays
+		// valid and stored either way.
+		virtual std::string GetInactiveReason(std::string_view setting, const nlohmann::json& settings) const;
 		// True when the stored form is the source file itself (JSON assets): nothing is cached.
 		virtual bool StoresSourceDirectly() const { return false; }
 

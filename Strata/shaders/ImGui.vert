@@ -10,6 +10,7 @@ layout(push_constant) uniform PushConstants
 {
 	vec2 Scale;
 	vec2 Translate;
+	uint TextureDisplay; // Read by ImGui.frag
 } u_Push;
 
 layout(location = 0) out vec2 v_TexCoord;

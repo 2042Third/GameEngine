@@ -28,6 +28,8 @@ namespace Strata
 		uint32_t GetVersion() const override { return 4; }
 		nlohmann::json GetDefaultSettings(const std::filesystem::path& sourcePath) const override;
 		std::vector<PropertyInfo> GetSettingsProperties() const override;
+		// LODCount needs GenerateLODs, the texture settings ImportMaterials, TextureQuality compressed textures.
+		std::string GetInactiveReason(std::string_view setting, const nlohmann::json& settings) const override;
 		bool Import(const ImportContext& context, ImportResult& result, std::string* outError) const override;
 	};
 
