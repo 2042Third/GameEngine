@@ -17,7 +17,7 @@ namespace Strata
 		None = 0,
 		WindowClose, WindowResize, WindowFocus, WindowLostFocus, WindowMoved, WindowFileDrop, WindowContentScale,
 		KeyPressed, KeyReleased, KeyTyped,
-		MouseButtonPressed, MouseButtonReleased, MouseMoved, MouseScrolled
+		MouseButtonPressed, MouseButtonReleased, MouseMoved, MouseScrolled, MouseLeave
 	};
 
 	// Plain enum used as bit flags. Deliberately avoids the identifier `None`, which X11 headers define as a macro.

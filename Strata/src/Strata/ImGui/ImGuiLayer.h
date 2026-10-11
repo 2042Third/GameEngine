@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Strata/Core/Layer.h"
+#include "Strata/ImGui/ImGuiPlatform.h"
 #include "Strata/ImGui/ImGuiRenderer.h"
 
 #include <filesystem>
@@ -16,8 +17,9 @@ namespace Strata
 	// ImGui's dark style at its unscaled defaults; fonts are scaled separately (ImGuiStyle::FontScaleDpi).
 	using ImGuiStyleCallback = std::function<void(ImGuiStyle& style, float scale)>;
 
-	// Owns the Dear ImGui context for a windowed application: platform input through GLFW, rendering through
-	// NVRHI. The application calls Begin() before and End() after the layers' OnImGuiRender().
+	// Owns the Dear ImGui context for a windowed application: input and platform services from the application's window
+	// (ImGuiPlatform, fed with the window's events), rendering through NVRHI (ImGuiRenderer). The application calls Begin()
+	// before and End() after the layers' OnImGuiRender().
 	//
 	// The UI follows the window's content scale (DPI): on attach and on every WindowContentScaleEvent the style is rebuilt
 	// for the scale (ImGui's dark style, or the application's style callback) and the fonts' DPI scale is set to it.
@@ -61,6 +63,7 @@ namespace Strata
 		// Rebuilds the style of the current context for the UI scale.
 		void ApplyStyle();
 	private:
+		ImGuiPlatform m_Platform;
 		ImGuiRenderer m_Renderer;
 		nvrhi::CommandListHandle m_CommandList;
 		std::filesystem::path m_LayoutFile;

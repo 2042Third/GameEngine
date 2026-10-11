@@ -1308,21 +1308,30 @@ namespace Strata
 		// worker, I/O and background threads have in hand (averaged over the last second, so the count does not flicker).
 		const PerformancePanel* performance = m_Panels.Get<PerformancePanel>(EditorPanels::c_Performance);
 		std::string text = fmt::format("{:.1f} ms{}{:.0f} FPS", m_FrameStats.WorkMilliseconds, c_Separator, m_FrameStats.FramesPerSecond);
-		std::string tooltip = "Frame time (what a frame takes to run, without waiting for the next one) and frame rate. While nothing happens the editor "
-			"redraws less often (idle) and returns to the full rate on input.";
 		if (performance)
 		{
 			const long jobs = std::lround(performance->GetAverageJobsInFlight());
 			text += fmt::format("{}{} {}", c_Separator, jobs, jobs == 1 ? "job" : "jobs");
-			const JobSystemStats& stats = performance->GetJobStats();
-			tooltip += fmt::format("\nJobs running or queued on the {} worker, {} I/O and {} background threads, averaged over the last {} frames (now {} "
-				"running, {} queued). Click to see where the frames go (Performance).", stats.Workers.Threads, stats.IO.Threads, stats.Background.Threads,
-				PerformancePanel::c_JobSamples, stats.Workers.RunningJobs + stats.IO.RunningJobs + stats.Background.RunningJobs,
-				stats.Workers.QueuedJobs + stats.IO.QueuedJobs + stats.Background.QueuedJobs);
 		}
 		if (m_FrameStats.Idle)
 			text += std::string(c_Separator) + "idle";
-		if (UI::Pill("Status.Frame", Icons::Gauge, text, UI::GetThemeColors().TextSecondary, tooltip.c_str()))
+		const bool clicked = UI::Pill("Status.Frame", Icons::Gauge, text, UI::GetThemeColors().TextSecondary);
+		// Written only while it shows: the status bar is drawn every frame.
+		if (UI::IsTooltipDue())
+		{
+			std::string tooltip = "Frame time (what a frame takes to run, without waiting for the next one) and frame rate. While nothing happens the "
+				"editor redraws less often (idle) and returns to the full rate on input.";
+			if (performance)
+			{
+				const JobSystemStats& stats = performance->GetJobStats();
+				tooltip += fmt::format("\nJobs running or queued on the {} worker, {} I/O and {} background threads, averaged over the last {} frames (now {} "
+					"running, {} queued). Click to see where the frames go (Performance).", stats.Workers.Threads, stats.IO.Threads, stats.Background.Threads,
+					PerformancePanel::c_JobSamples, stats.Workers.RunningJobs + stats.IO.RunningJobs + stats.Background.RunningJobs,
+					stats.Workers.QueuedJobs + stats.IO.QueuedJobs + stats.Background.QueuedJobs);
+			}
+			ImGui::SetTooltip("%s", tooltip.c_str());
+		}
+		if (clicked)
 			m_Panels.Focus(EditorPanels::c_Performance);
 	}
 
@@ -1344,38 +1353,46 @@ namespace Strata
 				static_cast<double>(stats.Budgets.GetPoolBudget(*shownPool)) / c_BytesPerMB);
 		}
 		std::string text = fmt::format("{} ready{}{} streaming{}{}", stats.LoadedAssets, c_Separator, stats.LoadingAssets, c_Separator, memory);
-		std::string tooltip = stats.FailedAssets > 0 ? fmt::format("{} assets failed to load (see the Console or the Streaming panel).", stats.FailedAssets)
-			: fmt::format("Assets ready and streaming in; {} are registered.", stats.RegisteredAssets);
 		// Imports in the background (a project opened with assets to import): their assets stream in once they finish.
-		if (const uint32_t importing = m_Context.GetAssetManager()->GetPendingImportCount(); importing > 0)
-		{
+		const uint32_t importing = m_Context.GetAssetManager()->GetPendingImportCount();
+		if (importing > 0)
 			text = fmt::format("{} importing{}{}", importing, c_Separator, text);
-			tooltip += fmt::format(" {} {} importing in the background: {} once imported.", importing, importing == 1 ? "asset is" : "assets are",
-				importing == 1 ? "it loads" : "they load");
-		}
-		if (!shownPool)
-		{
-			tooltip += fmt::format(" Loaded assets use {}; the pools have no budgets (no graphics device).", FormatMegabytes(stats.LoadedMemory));
-		}
-		else
-		{
-			tooltip += fmt::format(" Shown: {}, the pool closest to its budget{}.", GetMemoryPoolName(*shownPool),
-				pressure == BudgetPressure::Over ? " (over it: what is in use stays resident)" : (pressure == BudgetPressure::High ? " (close to it)" : ""));
-			for (AssetMemoryPool pool : c_AssetMemoryPools)
-			{
-				const uint64_t used = GetPoolBytes(stats.Resident, pool);
-				const uint64_t budget = stats.Budgets.GetPoolBudget(pool);
-				tooltip += budget == AssetResidencyBudgets::c_Unlimited ? fmt::format("\n{}: {} (no budget)", GetMemoryPoolName(pool), FormatMegabytes(used))
-					: fmt::format("\n{}: {} of {}", GetMemoryPoolName(pool), FormatMegabytes(used), FormatMegabytes(budget));
-			}
-		}
-		tooltip += "\nClick to open the Streaming panel.";
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		// Failures matter most; then how full the budgets are (a comfortable budget is no news).
 		const ImVec4& color = stats.FailedAssets > 0 ? colors.Error
 			: (pressure == BudgetPressure::High || pressure == BudgetPressure::Over ? GetBudgetPressureColor(pressure) : colors.TextSecondary);
 		ImGui::SameLine();
-		if (UI::Pill("Status.Assets", Icons::Package, text, color, tooltip.c_str()))
+		const bool clicked = UI::Pill("Status.Assets", Icons::Package, text, color);
+		// Written only while it shows: the status bar is drawn every frame.
+		if (UI::IsTooltipDue())
+		{
+			std::string tooltip = stats.FailedAssets > 0 ? fmt::format("{} assets failed to load (see the Console or the Streaming panel).", stats.FailedAssets)
+				: fmt::format("Assets ready and streaming in; {} are registered.", stats.RegisteredAssets);
+			if (importing > 0)
+			{
+				tooltip += fmt::format(" {} {} importing in the background: {} once imported.", importing, importing == 1 ? "asset is" : "assets are",
+					importing == 1 ? "it loads" : "they load");
+			}
+			if (!shownPool)
+			{
+				tooltip += fmt::format(" Loaded assets use {}; the pools have no budgets (no graphics device).", FormatMegabytes(stats.LoadedMemory));
+			}
+			else
+			{
+				tooltip += fmt::format(" Shown: {}, the pool closest to its budget{}.", GetMemoryPoolName(*shownPool),
+					pressure == BudgetPressure::Over ? " (over it: what is in use stays resident)" : (pressure == BudgetPressure::High ? " (close to it)" : ""));
+				for (AssetMemoryPool pool : c_AssetMemoryPools)
+				{
+					const uint64_t used = GetPoolBytes(stats.Resident, pool);
+					const uint64_t budget = stats.Budgets.GetPoolBudget(pool);
+					tooltip += budget == AssetResidencyBudgets::c_Unlimited ? fmt::format("\n{}: {} (no budget)", GetMemoryPoolName(pool), FormatMegabytes(used))
+						: fmt::format("\n{}: {} of {}", GetMemoryPoolName(pool), FormatMegabytes(used), FormatMegabytes(budget));
+				}
+			}
+			tooltip += "\nClick to open the Streaming panel.";
+			ImGui::SetTooltip("%s", tooltip.c_str());
+		}
+		if (clicked)
 			m_Panels.Focus(EditorPanels::c_Streaming);
 	}
 

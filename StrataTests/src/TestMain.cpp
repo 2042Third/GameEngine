@@ -498,8 +498,21 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 	if (mode == "streaming-sweep")
 	{
 		// <settings file> <result file>: runs a camera sweep over a stress project's pack (Perf/StressProject.h) and writes
-		// what it measured, peak memory included, for the streaming perf test.
+		// what it measured, peak memory included, for the streaming perf test. A measurement runs at full speed, like the
+		// applications it stands for.
+		Strata::Platform::DisableExecutionSpeedThrottling();
 		return Strata::Tests::RunStreamingSweepProcess(argc, argv);
+	}
+	if (mode == "execution-speed-throttling")
+	{
+		// Prints whether the process is exempt from execution-speed throttling as it starts, the result of asking for that,
+		// and the state afterwards ("unknown" where the system has no such setting).
+		const auto describe = [](std::optional<bool> disabled) { return disabled ? (*disabled ? "disabled" : "default") : "unknown"; };
+		const char* before = describe(Strata::Platform::IsExecutionSpeedThrottlingDisabled());
+		const bool requested = Strata::Platform::DisableExecutionSpeedThrottling();
+		std::printf("before=%s requested=%d after=%s\n", before, requested ? 1 : 0, describe(Strata::Platform::IsExecutionSpeedThrottlingDisabled()));
+		std::fflush(stdout);
+		return 0;
 	}
 	if (mode == "check-image")
 	{
@@ -735,6 +748,10 @@ int main(int argc, char** argv)
 	Strata::LogSpecification logSpecification;
 	logSpecification.Level = Strata::LogLevel::Warn;
 	Strata::Log::Init(logSpecification);
+
+	// The perf suites measure the engine as applications run it, and applications opt out of execution-speed throttling
+	// (Application): so does the test process, whose console is rarely the window in the foreground.
+	Strata::Platform::DisableExecutionSpeedThrottling();
 
 	// The tests (and the helper processes they start, which inherit the environment) keep their runtime files - script
 	// module copies, private directories - in a private directory of their own, never in the user's.

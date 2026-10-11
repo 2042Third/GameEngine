@@ -52,6 +52,17 @@ namespace Strata
 		float m_YOffset;
 	};
 
+	// The cursor left the window: until it moves over the window again (a MouseMovedEvent), nothing there is under it.
+	// While a button is held the window keeps receiving the cursor's moves (the system captures the mouse for the drag).
+	class MouseLeaveEvent : public Event
+	{
+	public:
+		MouseLeaveEvent() = default;
+
+		ST_EVENT_CLASS_TYPE(MouseLeave)
+		ST_EVENT_CLASS_CATEGORY(EventCategoryMouse | EventCategoryInput)
+	};
+
 	class MouseButtonEvent : public Event
 	{
 	public:

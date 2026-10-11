@@ -176,6 +176,68 @@ TEST_SUITE("GPU.Renderer")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("ImGui frames the GPU has not drawn yet keep their own vertices")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		nvrhi::IDevice* device = gpu.GetNvrhiDevice();
+
+		ImGui::CreateContext();
+		ImGui::GetIO().IniFilename = nullptr;
+		{
+			ImGuiRenderer imguiRenderer;
+			REQUIRE(imguiRenderer.Init(device, Renderer::GetShaderLibrary()));
+			nvrhi::CommandListHandle commandList = device->createCommandList();
+			const auto drawFrame = [&](nvrhi::IFramebuffer* framebuffer, nvrhi::ITexture* target, const ImVec2& size, uint32_t rects, ImU32 color)
+			{
+				ImGui::GetIO().DisplaySize = size;
+				ImGui::NewFrame();
+				for (uint32_t rect = 0; rect < rects; rect++)
+					ImGui::GetForegroundDrawList()->AddRectFilled(ImVec2(0.0f, 0.0f), size, color);
+				ImGui::Render();
+				commandList->open();
+				commandList->clearTextureFloat(target, nvrhi::AllSubresources, nvrhi::Color(0.0f, 0.0f, 0.0f, 1.0f));
+				imguiRenderer.Render(commandList, ImGui::GetDrawData(), framebuffer);
+				commandList->close();
+				device->executeCommandList(commandList);
+			};
+
+			// A frame that keeps the GPU busy (thousands of blended layers over four million pixels), then frames recorded
+			// and submitted at once, each in a color and a target of its own: the GPU draws them long after the CPU wrote
+			// the next frames' vertices, which must not have replaced theirs.
+			nvrhi::TextureHandle busyTarget = CreateRenderTarget(device, 2048, 2048, nvrhi::Format::RGBA8_UNORM);
+			nvrhi::FramebufferHandle busyFramebuffer = device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(busyTarget));
+			drawFrame(busyFramebuffer, busyTarget, ImVec2(2048.0f, 2048.0f), 1500, IM_COL32(255, 255, 255, 1));
+
+			const std::vector<glm::u8vec4> colors = { { 255, 0, 0, 255 }, { 0, 255, 0, 255 }, { 0, 0, 255, 255 }, { 255, 255, 0, 255 }, { 0, 255, 255, 255 } };
+			std::vector<nvrhi::TextureHandle> targets;
+			std::vector<nvrhi::FramebufferHandle> framebuffers;
+			for (size_t frame = 0; frame < colors.size(); frame++)
+			{
+				targets.push_back(CreateRenderTarget(device, 64, 64, nvrhi::Format::RGBA8_UNORM));
+				framebuffers.push_back(device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(targets.back())));
+				const glm::u8vec4& color = colors[frame];
+				// More rectangles each frame: the buffers also grow while earlier frames are in flight.
+				drawFrame(framebuffers.back(), targets.back(), ImVec2(64.0f, 64.0f), 1 + static_cast<uint32_t>(frame) * 2000,
+					IM_COL32(color.r, color.g, color.b, color.a));
+			}
+
+			for (size_t frame = 0; frame < colors.size(); frame++)
+			{
+				CAPTURE(frame);
+				ReadbackImage image;
+				REQUIRE(Renderer::ReadTexture(targets[frame], image));
+				CHECK(Tests::GetPixelRGBA8(image, 32, 32) == colors[frame]);
+			}
+			// Frames in flight drew from sets of their own; the bounded number of sets was enough.
+			CHECK(imguiRenderer.GetFrameBufferSetCount() >= 2);
+			CHECK(imguiRenderer.GetFrameBufferSetCount() <= 8);
+			imguiRenderer.Shutdown();
+		}
+		ImGui::DestroyContext();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("ImGui sampler callbacks switch between linear and nearest filtering")
 	{
 		Tests::GPUContext gpu;

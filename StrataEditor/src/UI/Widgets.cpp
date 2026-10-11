@@ -32,7 +32,7 @@ namespace Strata::UI
 
 		void ShowTooltip(const char* tooltip)
 		{
-			if (tooltip && *tooltip && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_AllowWhenDisabled))
+			if (tooltip && *tooltip && IsTooltipDue())
 				ImGui::SetTooltip("%s", tooltip);
 		}
 
@@ -179,6 +179,11 @@ namespace Strata::UI
 			return pressed;
 		}
 
+	}
+
+	bool IsTooltipDue()
+	{
+		return ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_AllowWhenDisabled);
 	}
 
 	bool IconButton(const char* id, const char* icon, const char* tooltip, bool enabled)
@@ -334,8 +339,9 @@ namespace Strata::UI
 		ImGui::PopStyleColor();
 	}
 
-	bool SectionHeader(const char* id, const char* label, ImGuiTreeNodeFlags flags)
+	bool SectionHeader(const char* id, const char* label, ImGuiTreeNodeFlags flags, std::string_view summary)
 	{
+		const ImGuiStyle& style = ImGui::GetStyle();
 		const ThemeColors& colors = GetThemeColors();
 		ImGui::PushStyleColor(ImGuiCol_Header, colors.Raised);
 		ImGui::PushStyleColor(ImGuiCol_HeaderHovered, colors.Control);
@@ -344,9 +350,28 @@ namespace Strata::UI
 		ImGui::PushID(id);
 		const bool open = ImGui::CollapsingHeader(label, flags);
 		ImGui::PopID();
+		// Where the label ends, for a summary: the arrow and the label after the frame's padding (CollapsingHeader's layout).
+		const float labelEnd = summary.empty() ? 0.0f
+			: ImGui::GetItemRectMin().x + style.FramePadding.x * 3.0f + ImGui::GetFontSize() + ImGui::CalcTextSize(label, nullptr, true).x;
 		ImGui::PopFont();
 		ImGui::PopStyleColor(3);
-		ItemProbe::Record(id);
+		if (!summary.empty())
+		{
+			// At the right end, in the regular font; cut with an ellipsis where it would reach the label.
+			const ImVec2 min = ImGui::GetItemRectMin();
+			const ImVec2 max = ImGui::GetItemRectMax();
+			const float right = max.x - style.FramePadding.x;
+			const float left = std::max(labelEnd + style.ItemSpacing.x * 2.0f, right - ImGui::CalcTextSize(summary.data(), summary.data() + summary.size()).x);
+			const float y = min.y + (max.y - min.y - ImGui::GetFontSize()) * 0.5f;
+			if (right > left)
+			{
+				ImGui::PushStyleColor(ImGuiCol_Text, colors.TextSecondary);
+				ImGui::RenderTextEllipsis(ImGui::GetWindowDrawList(), ImVec2(left, y), ImVec2(right, y + ImGui::GetFontSize()), right, summary.data(),
+					summary.data() + summary.size(), nullptr);
+				ImGui::PopStyleColor();
+			}
+		}
+		ItemProbe::Record(id, true, 0, summary);
 		return open;
 	}
 

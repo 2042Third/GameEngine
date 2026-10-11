@@ -11,6 +11,11 @@
 // The Vulkan header comes first so GLFW declares its Vulkan functions (glfwInitVulkanLoader).
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
+#if defined(ST_PLATFORM_WINDOWS)
+	// The HWND, for the system's text input services (GetPlatformHandle).
+	#define GLFW_EXPOSE_NATIVE_WIN32
+	#include <GLFW/glfw3native.h>
+#endif
 
 #include <stb_image.h>
 
@@ -22,6 +27,18 @@ namespace Strata
 	static void GLFWErrorCallback(int error, const char* description)
 	{
 		ST_CORE_ERROR("GLFW error ({}): {}", error, description);
+	}
+
+	// Runs a GLFW call whose failure is an answer rather than an error (a cursor the system lacks, a clipboard without
+	// text): without reporting it through the error callback.
+	template<typename Function>
+	static auto WithoutErrorReports(Function&& function)
+	{
+		const GLFWerrorfun previous = glfwSetErrorCallback(nullptr);
+		auto result = function();
+		glfwSetErrorCallback(previous);
+		glfwGetError(nullptr);
+		return result;
 	}
 
 	Scope<Window> Window::Create(const WindowSpecification& specification)
@@ -222,6 +239,16 @@ namespace Strata
 				data.EventCallback(event);
 		});
 
+		glfwSetCursorEnterCallback(m_Window, [](GLFWwindow* window, int entered)
+		{
+			// Entering needs no event: moves over the window follow, with the cursor's position.
+			WindowData& data = *static_cast<WindowData*>(glfwGetWindowUserPointer(window));
+			if (entered || !data.EventCallback)
+				return;
+			MouseLeaveEvent event;
+			data.EventCallback(event);
+		});
+
 		glfwSetDropCallback(m_Window, [](GLFWwindow* window, int count, const char** paths)
 		{
 			WindowData& data = *static_cast<WindowData*>(glfwGetWindowUserPointer(window));
@@ -240,6 +267,11 @@ namespace Strata
 
 	GLFWWindow::~GLFWWindow()
 	{
+		for (GLFWcursor* cursor : m_Cursors)
+		{
+			if (cursor)
+				glfwDestroyCursor(cursor);
+		}
 		glfwDestroyWindow(m_Window);
 		s_GLFWWindowCount--;
 		if (s_GLFWWindowCount == 0)
@@ -339,6 +371,98 @@ namespace Strata
 		glfwSetInputMode(m_Window, GLFW_CURSOR, glfwMode);
 		if (mode == CursorMode::Locked && glfwRawMouseMotionSupported())
 			glfwSetInputMode(m_Window, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
+		m_CursorMode = mode;
+	}
+
+	GLFWcursor* GLFWWindow::GetCursor(CursorShape shape)
+	{
+		const size_t index = static_cast<size_t>(shape);
+		if (index >= m_Cursors.size() || shape == CursorShape::Arrow)
+			return nullptr;
+		if (m_CursorsCreated[index])
+			return m_Cursors[index];
+		m_CursorsCreated[index] = true;
+		if (shape == CursorShape::Hidden)
+		{
+			// A cursor image without a visible pixel: hiding the cursor this way leaves the cursor mode to the game.
+			std::array<unsigned char, 16 * 16 * 4> pixels = {};
+			const GLFWimage image { 16, 16, pixels.data() };
+			m_Cursors[index] = WithoutErrorReports([&]() { return glfwCreateCursor(&image, 0, 0); });
+			return m_Cursors[index];
+		}
+		int standard = GLFW_ARROW_CURSOR;
+		switch (shape)
+		{
+			case CursorShape::TextInput:  standard = GLFW_IBEAM_CURSOR; break;
+			case CursorShape::ResizeAll:  standard = GLFW_RESIZE_ALL_CURSOR; break;
+			case CursorShape::ResizeNS:   standard = GLFW_RESIZE_NS_CURSOR; break;
+			case CursorShape::ResizeEW:   standard = GLFW_RESIZE_EW_CURSOR; break;
+			case CursorShape::ResizeNESW: standard = GLFW_RESIZE_NESW_CURSOR; break;
+			case CursorShape::ResizeNWSE: standard = GLFW_RESIZE_NWSE_CURSOR; break;
+			case CursorShape::Hand:       standard = GLFW_POINTING_HAND_CURSOR; break;
+			case CursorShape::NotAllowed: standard = GLFW_NOT_ALLOWED_CURSOR; break;
+			case CursorShape::Arrow:
+			case CursorShape::Hidden:     break;
+		}
+		// Cursor themes may lack the newer shapes (X11): GLFW then fails with GLFW_CURSOR_UNAVAILABLE, and the arrow shows.
+		m_Cursors[index] = WithoutErrorReports([standard]() { return glfwCreateStandardCursor(standard); });
+		return m_Cursors[index];
+	}
+
+	void GLFWWindow::SetCursorShape(CursorShape shape)
+	{
+		if (shape == m_CursorShape)
+			return;
+		m_CursorShape = shape;
+		glfwSetCursor(m_Window, GetCursor(shape));
+	}
+
+	std::string GLFWWindow::GetClipboardText() const
+	{
+		// A clipboard without text is no error (GLFW_FORMAT_UNAVAILABLE).
+		const char* text = WithoutErrorReports([this]() { return glfwGetClipboardString(m_Window); });
+		return text ? std::string(text) : std::string();
+	}
+
+	void GLFWWindow::SetClipboardText(const std::string& text)
+	{
+		glfwSetClipboardString(m_Window, text.c_str());
+	}
+
+	KeyCode GLFWWindow::GetLayoutKey(KeyCode key) const
+	{
+		// The keys that type a character on a US keyboard; the keypad types the same in every layout.
+		constexpr std::string_view c_Punctuation = "'-,./;=[\\]`";
+		constexpr KeyCode c_PunctuationKeys[] = { Key::Apostrophe, Key::Minus, Key::Comma, Key::Period, Key::Slash, Key::Semicolon, Key::Equal,
+			Key::LeftBracket, Key::Backslash, Key::RightBracket, Key::GraveAccent };
+		static_assert(std::size(c_PunctuationKeys) == c_Punctuation.size());
+		const bool types = (key >= Key::A && key <= Key::Z) || (key >= Key::D0 && key <= Key::D9)
+			|| std::find(std::begin(c_PunctuationKeys), std::end(c_PunctuationKeys), key) != std::end(c_PunctuationKeys);
+		if (!types)
+			return key;
+		// What the key types in the layout, as one character (letters in either case); several bytes are a character the US
+		// layout has no key for.
+		const char* name = WithoutErrorReports([key]() { return glfwGetKeyName(static_cast<int>(key), 0); });
+		if (!name || name[0] == '\0' || name[1] != '\0')
+			return key;
+		const char character = name[0];
+		if (character >= 'a' && character <= 'z')
+			return static_cast<KeyCode>(Key::A + (character - 'a'));
+		if (character >= 'A' && character <= 'Z')
+			return static_cast<KeyCode>(Key::A + (character - 'A'));
+		if (character >= '0' && character <= '9')
+			return static_cast<KeyCode>(Key::D0 + (character - '0'));
+		const size_t punctuation = c_Punctuation.find(character);
+		return punctuation != std::string_view::npos ? c_PunctuationKeys[punctuation] : key;
+	}
+
+	void* GLFWWindow::GetPlatformHandle() const
+	{
+#if defined(ST_PLATFORM_WINDOWS)
+		return glfwGetWin32Window(m_Window);
+#else
+		return nullptr;
+#endif
 	}
 
 	void GLFWWindow::Maximize()

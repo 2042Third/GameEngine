@@ -339,6 +339,26 @@ namespace Strata
 		return value != THREAD_PRIORITY_ERROR_RETURN && value < THREAD_PRIORITY_NORMAL ? ThreadPriority::BelowNormal : ThreadPriority::Normal;
 	}
 
+	bool Platform::DisableExecutionSpeedThrottling()
+	{
+		// The mechanism is named in ControlMask; leaving it out of StateMask turns it off.
+		PROCESS_POWER_THROTTLING_STATE state = {};
+		state.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
+		state.ControlMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED;
+		state.StateMask = 0;
+		return SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &state, sizeof(state)) != FALSE;
+	}
+
+	std::optional<bool> Platform::IsExecutionSpeedThrottlingDisabled()
+	{
+		PROCESS_POWER_THROTTLING_STATE state = {};
+		state.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
+		if (!GetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &state, sizeof(state)))
+			return std::nullopt;
+		// Controlled by the process and turned off; without control the system decides.
+		return (state.ControlMask & PROCESS_POWER_THROTTLING_EXECUTION_SPEED) != 0 && (state.StateMask & PROCESS_POWER_THROTTLING_EXECUTION_SPEED) == 0;
+	}
+
 	uint32_t Platform::GetProcessID()
 	{
 		return static_cast<uint32_t>(::GetCurrentProcessId());

@@ -53,6 +53,11 @@ namespace Strata::UI
 	// true when clicked (pills that lead somewhere, e.g. the errors pill opening the Console).
 	bool Pill(const char* id, const char* icon, std::string_view text, const ImVec4& color, const char* tooltip = nullptr);
 
+	// Whether the last item's tooltip shows this frame (hovered for the tooltip delay, also while disabled). Widgets take
+	// finished tooltips; one that takes work to write (formatted statistics) is better written only then:
+	// `if (UI::IsTooltipDue()) ImGui::SetTooltip("%s", Describe().c_str());` after the widget.
+	bool IsTooltipDue();
+
 	// A banner across the available width: an icon and text (wrapped) in a color on a tint of that color, e.g. the play-mode
 	// notice over the Hierarchy and the Inspector. The probe records its color and text.
 	void Banner(const char* id, const char* icon, std::string_view text, const ImVec4& color);
@@ -74,8 +79,10 @@ namespace Strata::UI
 	void PopSelectionColors();
 
 	// A collapsible section header in the SemiBold font on a raised surface (CollapsingHeader). Add
-	// ImGuiTreeNodeFlags_AllowOverlap to place buttons on it. Returns whether the section is open.
-	bool SectionHeader(const char* id, const char* label, ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_DefaultOpen);
+	// ImGuiTreeNodeFlags_AllowOverlap to place buttons on it. A summary of what the section holds (for sections that start
+	// closed) shows at its right end in the secondary text color, cut with an ellipsis where it would reach the label; the
+	// probe records it as the header's text. Returns whether the section is open.
+	bool SectionHeader(const char* id, const char* label, ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_DefaultOpen, std::string_view summary = {});
 
 	// A heading in the SemiBold font at a size of the type scale (Title, or Display for large titles).
 	void Heading(std::string_view text, TextSize size = TextSize::Title);

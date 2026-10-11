@@ -416,6 +416,28 @@ TEST_SUITE("Editor.UI")
 		CHECK(performance->DockId == console->DockId);
 	}
 
+	TEST_CASE("The frame and assets pills explain themselves while hovered")
+	{
+		// Their tooltips are written only while they show (UI::IsTooltipDue).
+		HarnessEditor editor({}, WithFeatureProject("EditorUIPillTooltips"));
+		editor.Frames(2);
+		for (const char* pill : { "Status.Frame", "Status.Assets" })
+		{
+			CAPTURE(pill);
+			const std::optional<UI::ItemProbe::Item> item = UI::ItemProbe::Find(pill);
+			REQUIRE(item);
+			editor.Harness.MoveMouse(item->GetCenter());
+			editor.Frames(8, 0.1f);
+			ImGuiWindow* tooltip = ImGui::FindWindowByName("##Tooltip_00");
+			REQUIRE(tooltip);
+			CHECK(tooltip->Active);
+			CHECK(tooltip->DrawList->VtxBuffer.Size > 0);
+			editor.Harness.MoveMouse(ImVec2(item->Min.x, item->Min.y - ImGui::GetFrameHeight() * 4.0f));
+			editor.Frames(2);
+			CHECK_FALSE(tooltip->Active);
+		}
+	}
+
 	TEST_CASE("The assets pill shows budget pressure")
 	{
 		HarnessEditor editor({}, WithFeatureProject("EditorUIBudgetPressure"));

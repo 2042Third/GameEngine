@@ -136,8 +136,13 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   can fail one metric as well as many, and a failure in a run on a busy machine says nothing about the code: run the
   failing suite again on a quiet machine, where a regression stays over its budget in every attempt. The canary is a
   single-threaded workload: it shows a throttled or oversubscribed machine, and load on many cores usually leaves it
-  unchanged. `--wait-quiet <percent>` starts each run only once the machine is that quiet (machines shared with other
-  work; the perf tests alone keep the reference machine about 20% busy), and
+  unchanged. On the reference machine's hybrid processor the scheduler's placement of a process's main thread lasts and
+  shows in its measurements: an efficiency core makes an editor frame 1.3 to 1.9 times as long, the other hardware
+  thread of a core the graphics driver's busy thread runs on about 1.12 times. Applications and the test runner opt out
+  of Windows' execution-speed throttling (`Platform::DisableExecutionSpeedThrottling`), which otherwise moves processes
+  whose windows are in the background or covered to the efficiency cores. `--wait-quiet <percent>` starts each run
+  only once the machine is that quiet (machines shared with other work; the perf tests alone keep the reference machine
+  about 20% busy), and
   `--results <files>` reports on kept results files. Run it on the reference machine before merging changes to budgets
   or perf tests. GPU perf suites get the shared device
   without validation layers (the CTest sets `STRATA_TEST_GPU_VALIDATION=0`; `PerfGPU.Harness` fails without it)
@@ -725,7 +730,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
     `K importing` while imports run (`editor.status` has the count as `assets.importing`), in Sulfur from
     85% of it and Cinnabar beyond it or on failures; click to open the Streaming panel). The frame pill (`ms · FPS · J
     jobs`, jobs running or queued averaged over 60 frames) opens the Performance panel. Panels collect what the status bar
-    shows about them in `OnUpdate`, which runs while they are closed. `editor.showPanel {panel}` (registered by
+    shows about them in `OnUpdate`, which runs while they are closed. Widgets drawn every frame write tooltips that take
+    work (formatted statistics) only while they show (`UI::IsTooltipDue`). `editor.showPanel {panel}` (registered by
     `EditorLayer`, the only command of the window itself) opens a docked panel and brings it to the front, so agents can
     show the person what they look at; it fails while the launcher shows. A panel asked for (`EditorPanelRegistry::Focus`)
     stays open through a layout reset and the saved open states read at the first frame, and is asked for again until its
@@ -838,7 +844,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   at once (shared components only; values that differ show as mixed; one undo step per edit), offers per component
   Reset, Copy Values and Paste Values (the values component.set can set; not for components without such properties)
   and Remove (not for components the engine adds), and shows the scene's settings (gravity, the fixed step and the physics
-  world's capacities) and sky with nothing selected; the
+  world's capacities) and sky with nothing selected, in sections that start closed with a summary on their headers
+  (`UI::SectionHeader`'s summary: live widgets cost frame time while they are drawn); the
   Asset tab edits materials (`UI/MaterialEditor`: a drag previews, its release is one undo step) and import settings
   (Apply runs `asset.setImportSettings` through the runner) and previews textures as their content looks, with the
   stored format and GPU size: draw textures in UI code through `UI::TextureImage`, which shows sRGB, grayscale and

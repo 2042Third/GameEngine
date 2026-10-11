@@ -128,9 +128,21 @@ machine, quiet:
   limits as budgets. `PerfStability.py --runs 5 --wait-quiet 20` on the merged tree after the review round, with
   main's idle-frame budgets back and finalization at 5.44 ms: 4 of 5 runs passed, at most three confirmations per run,
   all of them editor idle frames; the failed run's `PerfGPU.Editor.PlayFrameNested100k` stayed over its budget in all
-  three attempts (0.36-0.39 ms against 0.3313; see the open regression below). Tight but passing in every run:
-  `PerfGPU.Streaming.MaxFinalizeTime` (4.19-5.31 ms against 5.44) and `RuntimePeakPrivateMemory` (632-646 MB against
-  650).
+  three attempts (0.36-0.39 ms against 0.3313). Tight but passing in every run: `PerfGPU.Streaming.MaxFinalizeTime`
+  (4.19-5.31 ms against 5.44) and `RuntimePeakPrivateMemory` (632-646 MB against 650). The editor's idle frames were
+  then made cheaper than wave 1's: `PerfGPU.Editor`'s command script on the generated nested scenes, interleaved runs,
+  medians of 8 rounds, takes 0.18-0.23 ms per frame against 0.23-0.26 ms for wave 1's editor (0.29-0.32 ms merged
+  before). ImGui's platform layer is the engine's own (`ImGuiPlatform`, fed by the window's events): the vendored GLFW
+  backend spent 0.05-0.06 ms of every frame on multi-viewport support the editor does not use (the window's mouse
+  passthrough, the monitors, a hook of the window procedure). The Inspector's scene settings start closed, with
+  summaries (open, their rows cost 0.026 ms of a frame), the UI's vertices go straight into mapped buffers, and the
+  status pills write their tooltips only while they show. `SceneRenderer::Render` costs what it did in wave 1 (sampled:
+  0.06-0.075 ms of an idle frame in both). Applications and the test runner opt out of Windows' execution-speed
+  throttling. The idle-frame budgets went down to 0.2808, 0.3 and 0.3133 ms for editing 100,000 and 1,000,000 entities
+  and playing 1,000,000 (0.358, 0.3294 and 0.3238 before; playing 100,000 keeps 0.3313), the export's median frame to
+  0.6349 ms (0.7674), all at 1.5 times the median of four runs on a machine 38-68% busy with other work; then
+  `PerfStability.py --runs 3 --wait-quiet 20` passed 3 of 3 runs, every idle frame on its first attempt (0.171-0.284
+  ms). The editor frames of `PerfGPU.Renderer`, which got cheaper by the same 0.05 ms, wait for a quiet campaign.
 
 Open items and deferrals later waves own:
 
@@ -164,29 +176,17 @@ Open items and deferrals later waves own:
   HDR colors while dragged (the channel fields keep them);
   deleting one entity among 100,000 sibling roots renumbers the sibling list (about 0.5 ms); starting play copies a
   1,000,000-entity scene in about 0.7 s (`scene-streaming`).
-- Open regression, the owner's decision: idle editor frames of `PerfGPU.Editor`'s generated 100,000- and
-  1,000,000-entity scenes cost 0.27-0.31 ms, 0.04-0.06 ms more than before the wave (0.22-0.25 ms), and run against
-  main's budgets (0.358, 0.3313, 0.3294 and 0.3238 ms; raising them broke the ratchet and was undone), which they meet
-  with little room: the first attempt of a run often measures 0.35-0.40 ms, so most runs need a confirmation, and one
-  run in five failed (above). `editor.perf` with temporary stages, and a sampling profile of both editors on the
-  100,000-entity scene (median work 0.2315 ms on main, 0.2837 ms merged), put the increase in the Inspector's scene
-  settings shown with nothing selected (0.025-0.033 ms, where main drew a one-line hint; the Gravity row's axis fields
-  0.008 ms of it), the viewport's `SceneRenderer::Render` (about 0.02 ms more, in bloom dispatches and NVRHI state
-  changes, not attributed further) and, spread thinly, the Hierarchy, the richer frame and assets pills (0.003 and
-  0.004 ms) and ImGui's draw data (0.009 ms); closed panels' `OnUpdate` costs 0.0014 ms in all. Drawing cheaper
-  widgets would recover part. The largest single cost of an idle frame lies outside the wave: ImGui's GLFW backend sets
-  the window's mouse passthrough every frame (`glfwSetWindowAttrib(GLFW_MOUSE_PASSTHROUGH)`, a `SetWindowLongW` that
-  costs about 0.04 ms on Windows) and enumerates the monitors (`EnumDisplaySettings`), for multi-viewport support the
-  editor does not use; skipping that would need a change to the vendored backend or a platform layer of Strata's own.
-  Rebasing the budgets on the new cost needs the owner's approval, recorded here with the measurements.
 - The editor starts in 0.7-1.0 s (Release, to its first frame on screen), not the 0.4 s the pillar names. An idle
   editor answers input and automation requests on its next throttled frame (up to 33 ms, 100 ms unfocused) until it
   waits on events instead. Project thumbnails and search in the recent projects move to `content-and-prefabs`.
 - Perf budgets hold for the reference machine only, so CI's hosted runners skip the `perf` label; a self-hosted runner
-  on the reference machine would make them an automatic gate. On its hybrid processor some test or editor processes run
-  1.4-1.5 times slower throughout (an idle editor frame takes 0.35 ms pinned to the performance cores, 0.57 ms pinned to
-  the efficiency cores), which every attempt of a check measured in one process shares; telling the scheduler which
-  threads matter (Windows' quality of service) or confirming in fresh processes would make such gates steadier.
+  on the reference machine would make them an automatic gate. On its hybrid processor where the scheduler places a
+  process's main thread lasts for the process's life and shows in what it measures: pinned, an idle editor frame took
+  0.25-0.28 ms on a performance core, about 12% more on the other hardware thread of the core the graphics driver's busy
+  thread runs on, and 1.3-1.9 times as long on an efficiency core. Applications and the test runner opt out of Windows'
+  execution-speed throttling, which moves background windows to the efficiency cores, and `PerfGPU.Editor` confirms a
+  metric in a fresh editor process; what remains of the spread between processes (0.15-0.28 ms for one idle frame of
+  the merged editor) is the scheduler's placement and the machine's other work.
   Platform code first compiled by CI on Linux and macOS: `GetProcessMemory`, `GetProcessUptime`, `FindHomeDirectory`,
   `FindFallbackFontFiles`, `PosixFileReader` and `SetCurrentThreadPriority`.
 - The reference machine, not the engine: once in about 45 perf runs, under load, the editor failed to open
@@ -196,12 +196,13 @@ Open items and deferrals later waves own:
   address one bit (bit 34) away from the live node its registers hold, while every other thread waited and every heap
   pointer in the dump lies at the other address; one flipped bit also turns the entity ID that exists into the reported
   duplicate, and the saved scenes are intact. 108 saves alongside exports, background reimports and material saves on
-  the merged editor never failed. The machine's i7-13700K runs microcode 0x123 (BIOS 1658 of May 2024, before Intel's
+  the merged editor never failed. The machine's i7-13700K ran microcode 0x123 then (BIOS 1658 of May 2024, before Intel's
   0x129 and 0x12B fixes for the 13th and 14th generations' instability) with DDR4-3600 XMP memory, and the compiler
-  crashed in `c1xx.dll` and `c2.dll` at changing places more than a dozen times in these days. Until the owner updates
-  the BIOS (microcode 0x12B or later) and a CPU and memory stress test passes (or XMP is off), one-off crashes and
-  corrupt data on this machine are suspect; the save path's validation before writing, which turned the corruption into
-  a refused save, stays.
+  crashed in `c1xx.dll` and `c2.dll` at changing places more than a dozen times in these days. The BIOS was updated on
+  2026-10-10 (version 1836, microcode 0x133), but compilers still crashed afterwards under full load (an MSVC internal
+  compiler error, C1001, and a GCC segmentation fault, in files that compiled on the retry): until a CPU and memory
+  stress test passes (or XMP is off), one-off crashes and corrupt data on this machine are suspect; the save path's
+  validation before writing, which turned the corruption into a refused save, stays.
 
 ## Waves
 

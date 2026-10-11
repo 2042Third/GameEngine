@@ -7,6 +7,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <cstring>
 #include <iterator>
 
 namespace Strata
@@ -30,6 +31,10 @@ namespace Strata
 
 		// Binding sets unused for this many frames are released (more than any number of frames in flight).
 		constexpr uint64_t c_BindingSetRetentionFrames = 8;
+		// Sets of vertex and index buffers at most (more than any number of frames in flight), and their smallest sizes.
+		constexpr size_t c_MaxFrameBufferSets = 8;
+		constexpr size_t c_MinVertexCapacity = 4096;
+		constexpr size_t c_MinIndexCapacity = 8192;
 
 		ImTextureID ToTextureID(nvrhi::ITexture* texture)
 		{
@@ -75,11 +80,6 @@ namespace Strata
 			ImGuiRenderState* state = GetRenderState();
 			if (state && command->UserCallbackData)
 				state->TextureDisplay = *static_cast<const ImGuiTextureDisplay*>(command->UserCallbackData);
-		}
-
-		size_t AlignTo4(size_t value)
-		{
-			return (value + 3) & ~static_cast<size_t>(3);
 		}
 
 	}
@@ -199,10 +199,11 @@ namespace Strata
 
 		m_BindingSets.clear();
 		m_Pipelines.clear();
-		m_VertexBuffer = nullptr;
-		m_IndexBuffer = nullptr;
-		m_VertexCapacity = 0;
-		m_IndexCapacity = 0;
+		// Command lists in flight keep the buffers they draw from alive (NVRHI references them).
+		for (FrameBuffers& buffers : m_FrameBuffers)
+			ReleaseFrameBuffers(buffers);
+		m_FrameBuffers.clear();
+		m_DrawnFrameBuffers.reset();
 		m_InputLayout = nullptr;
 		m_BindingLayout = nullptr;
 		m_LinearSampler = nullptr;
@@ -310,34 +311,97 @@ namespace Strata
 		return bindingSet;
 	}
 
-	bool ImGuiRenderer::ReserveBuffers(size_t vertexCount, size_t indexCount)
+	ImGuiRenderer::FrameBuffers* ImGuiRenderer::AcquireFrameBuffers(size_t vertexCount, size_t indexCount)
 	{
-		if (vertexCount > m_VertexCapacity || !m_VertexBuffer)
+		// The first set the GPU is done with. While every set is in use (frames in flight), another one, up to a bound: past
+		// it the GPU is that many frames behind, and waiting for its oldest frame beats taking more memory.
+		FrameBuffers* acquired = nullptr;
+		for (FrameBuffers& buffers : m_FrameBuffers)
 		{
-			m_VertexCapacity = std::max<size_t>(vertexCount + vertexCount / 2, 4096);
+			if (!buffers.Pending || m_Device->pollEventQuery(buffers.Done))
+			{
+				acquired = &buffers;
+				break;
+			}
+		}
+		if (!acquired && m_FrameBuffers.size() < c_MaxFrameBufferSets)
+		{
+			FrameBuffers& added = m_FrameBuffers.emplace_back();
+			added.Done = m_Device->createEventQuery();
+			acquired = &added;
+		}
+		if (!acquired)
+		{
+			acquired = &*std::min_element(m_FrameBuffers.begin(), m_FrameBuffers.end(),
+				[](const FrameBuffers& a, const FrameBuffers& b) { return a.LastUsedFrame < b.LastUsedFrame; });
+			m_Device->waitEventQuery(acquired->Done);
+		}
+		acquired->Pending = false;
+		acquired->LastUsedFrame = m_FrameCounter;
+		return ReserveFrameBuffers(*acquired, vertexCount, indexCount) ? acquired : nullptr;
+	}
+
+	bool ImGuiRenderer::ReserveFrameBuffers(FrameBuffers& buffers, size_t vertexCount, size_t indexCount)
+	{
+		// The GPU is done with the set: its buffers can be replaced. They grow by half again, so a growing UI replaces them
+		// rarely.
+		if (vertexCount > buffers.VertexCapacity || !buffers.MappedVertices)
+		{
+			if (buffers.Vertices && buffers.MappedVertices)
+				m_Device->unmapBuffer(buffers.Vertices);
+			buffers.MappedVertices = nullptr;
+			buffers.VertexCapacity = std::max<size_t>(vertexCount + vertexCount / 2, c_MinVertexCapacity);
 			nvrhi::BufferDesc desc;
-			desc.byteSize = m_VertexCapacity * sizeof(ImDrawVert);
+			desc.byteSize = buffers.VertexCapacity * sizeof(ImDrawVert);
 			desc.debugName = "ImGuiVertexBuffer";
 			desc.isVertexBuffer = true;
+			desc.cpuAccess = nvrhi::CpuAccessMode::Write;
 			desc.initialState = nvrhi::ResourceStates::VertexBuffer;
 			desc.keepInitialState = true;
-			m_VertexBuffer = m_Device->createBuffer(desc);
+			buffers.Vertices = m_Device->createBuffer(desc);
+			if (buffers.Vertices)
+				buffers.MappedVertices = static_cast<uint8_t*>(m_Device->mapBuffer(buffers.Vertices, nvrhi::CpuAccessMode::Write));
 		}
 
-		if (indexCount > m_IndexCapacity || !m_IndexBuffer)
+		if (indexCount > buffers.IndexCapacity || !buffers.MappedIndices)
 		{
-			m_IndexCapacity = std::max<size_t>(indexCount + indexCount / 2, 8192);
+			if (buffers.Indices && buffers.MappedIndices)
+				m_Device->unmapBuffer(buffers.Indices);
+			buffers.MappedIndices = nullptr;
+			buffers.IndexCapacity = std::max<size_t>(indexCount + indexCount / 2, c_MinIndexCapacity);
 			nvrhi::BufferDesc desc;
-			// Buffer updates are done in multiples of 4 bytes (vkCmdUpdateBuffer), which 16-bit indices may not be.
-			desc.byteSize = AlignTo4(m_IndexCapacity * sizeof(ImDrawIdx));
+			desc.byteSize = buffers.IndexCapacity * sizeof(ImDrawIdx);
 			desc.debugName = "ImGuiIndexBuffer";
 			desc.isIndexBuffer = true;
+			desc.cpuAccess = nvrhi::CpuAccessMode::Write;
 			desc.initialState = nvrhi::ResourceStates::IndexBuffer;
 			desc.keepInitialState = true;
-			m_IndexBuffer = m_Device->createBuffer(desc);
+			buffers.Indices = m_Device->createBuffer(desc);
+			if (buffers.Indices)
+				buffers.MappedIndices = static_cast<uint8_t*>(m_Device->mapBuffer(buffers.Indices, nvrhi::CpuAccessMode::Write));
 		}
 
-		return m_VertexBuffer && m_IndexBuffer;
+		if (!buffers.MappedVertices || !buffers.MappedIndices)
+		{
+			// A failed creation (out of memory) is tried again next frame.
+			ReleaseFrameBuffers(buffers);
+			return false;
+		}
+		return true;
+	}
+
+	void ImGuiRenderer::ReleaseFrameBuffers(FrameBuffers& buffers)
+	{
+		if (buffers.Vertices && buffers.MappedVertices)
+			m_Device->unmapBuffer(buffers.Vertices);
+		if (buffers.Indices && buffers.MappedIndices)
+			m_Device->unmapBuffer(buffers.Indices);
+		buffers.Vertices = nullptr;
+		buffers.Indices = nullptr;
+		buffers.MappedVertices = nullptr;
+		buffers.MappedIndices = nullptr;
+		buffers.VertexCapacity = 0;
+		buffers.IndexCapacity = 0;
 	}
 
 	void ImGuiRenderer::Render(nvrhi::ICommandList* commandList, ImDrawData* drawData, nvrhi::IFramebuffer* framebuffer)
@@ -348,6 +412,17 @@ namespace Strata
 
 		m_FrameCounter++;
 		std::erase_if(m_BindingSets, [this](const auto& entry) { return m_FrameCounter - entry.second.LastUsedFrame > c_BindingSetRetentionFrames; });
+
+		// The previous call's draws were submitted since (see Render): the GPU is done with their buffers once it finished
+		// everything submitted so far.
+		if (m_DrawnFrameBuffers)
+		{
+			FrameBuffers& drawn = m_FrameBuffers[*m_DrawnFrameBuffers];
+			m_Device->resetEventQuery(drawn.Done);
+			m_Device->setEventQuery(drawn.Done, nvrhi::CommandQueue::Graphics);
+			drawn.Pending = true;
+			m_DrawnFrameBuffers.reset();
+		}
 
 		if (drawData->Textures)
 		{
@@ -363,25 +438,21 @@ namespace Strata
 		if (framebufferWidth <= 0.0f || framebufferHeight <= 0.0f || drawData->TotalVtxCount == 0)
 			return;
 
-		if (!ReserveBuffers(static_cast<size_t>(drawData->TotalVtxCount), static_cast<size_t>(drawData->TotalIdxCount)))
+		FrameBuffers* buffers = AcquireFrameBuffers(static_cast<size_t>(drawData->TotalVtxCount), static_cast<size_t>(drawData->TotalIdxCount));
+		if (!buffers)
 			return;
-
-		// Sizes are padded to 4 bytes: NVRHI uploads small buffers with vkCmdUpdateBuffer, which reads whole dwords.
-		m_VertexStaging.resize(AlignTo4(static_cast<size_t>(drawData->TotalVtxCount) * sizeof(ImDrawVert)));
-		m_IndexStaging.resize(AlignTo4(static_cast<size_t>(drawData->TotalIdxCount) * sizeof(ImDrawIdx)));
 		size_t vertexOffset = 0;
 		size_t indexOffset = 0;
 		for (const ImDrawList* drawList : drawData->CmdLists)
 		{
 			const size_t vertexBytes = static_cast<size_t>(drawList->VtxBuffer.Size) * sizeof(ImDrawVert);
 			const size_t indexBytes = static_cast<size_t>(drawList->IdxBuffer.Size) * sizeof(ImDrawIdx);
-			std::memcpy(m_VertexStaging.data() + vertexOffset, drawList->VtxBuffer.Data, vertexBytes);
-			std::memcpy(m_IndexStaging.data() + indexOffset, drawList->IdxBuffer.Data, indexBytes);
+			std::memcpy(buffers->MappedVertices + vertexOffset, drawList->VtxBuffer.Data, vertexBytes);
+			std::memcpy(buffers->MappedIndices + indexOffset, drawList->IdxBuffer.Data, indexBytes);
 			vertexOffset += vertexBytes;
 			indexOffset += indexBytes;
 		}
-		commandList->writeBuffer(m_VertexBuffer, m_VertexStaging.data(), m_VertexStaging.size());
-		commandList->writeBuffer(m_IndexBuffer, m_IndexStaging.data(), m_IndexStaging.size());
+		m_DrawnFrameBuffers = static_cast<size_t>(buffers - m_FrameBuffers.data());
 
 		// Pixel coordinates (y down, origin at DisplayPos) to NDC (+Y up).
 		PushConstants pushConstants;
@@ -395,8 +466,8 @@ namespace Strata
 		state.framebuffer = framebuffer;
 		state.viewport.addViewport(nvrhi::Viewport(framebufferWidth, framebufferHeight));
 		state.viewport.addScissorRect(nvrhi::Rect(0, 0, 0, 0));
-		state.vertexBuffers = { nvrhi::VertexBufferBinding { m_VertexBuffer, 0, 0 } };
-		state.indexBuffer = nvrhi::IndexBufferBinding { m_IndexBuffer, sizeof(ImDrawIdx) == 2 ? nvrhi::Format::R16_UINT : nvrhi::Format::R32_UINT, 0 };
+		state.vertexBuffers = { nvrhi::VertexBufferBinding { buffers->Vertices, 0, 0 } };
+		state.indexBuffer = nvrhi::IndexBufferBinding { buffers->Indices, sizeof(ImDrawIdx) == 2 ? nvrhi::Format::R16_UINT : nvrhi::Format::R32_UINT, 0 };
 
 		const ImVec2 clipOffset = drawData->DisplayPos;
 		const ImVec2 clipScale = drawData->FramebufferScale;
