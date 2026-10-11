@@ -14,6 +14,9 @@
 #include <Strata/Scene/Prefab.h>
 
 #include <algorithm>
+#include <memory>
+#include <optional>
+#include <string>
 
 namespace Strata
 {
@@ -108,6 +111,46 @@ namespace Strata
 			});
 		}
 
+		// Adds what became of the start scene to a result: startSceneOpened, and startSceneError when it was not opened.
+		nlohmann::json DescribeStartScene(nlohmann::json value, bool opened, const std::string& error)
+		{
+			value["startSceneOpened"] = opened;
+			if (!opened && !error.empty())
+				value["startSceneError"] = error;
+			return value;
+		}
+
+		// Answers a command that opened a project (EditorContext::BeginOpenProject) once its start scene is open (it loads in
+		// the background, so the frames go on), or at once for a project without one. The project stays open whatever becomes
+		// of its start scene: the result says {startScene, startSceneOpened, startSceneError?, seconds} besides `value`.
+		EditorCommandResult FinishProjectOpen(EditorContext& context, nlohmann::json value)
+		{
+			const AssetHandle startScene = context.GetProject()->GetConfig().StartScene;
+			value["startScene"] = startScene.IsValid() ? UUIDToJson(startScene) : nlohmann::json(nullptr);
+			const EditorSceneLoadStatus& status = context.GetSceneLoadStatus();
+			if (!startScene.IsValid())
+				return EditorCommandResult::Ok(DescribeStartScene(std::move(value), false, std::string()));
+			// The start scene could not even start loading (BeginOpenProject recorded why as a failed load).
+			if (!context.IsSceneLoading())
+				return EditorCommandResult::Ok(DescribeStartScene(std::move(value), false, status.Error));
+
+			const uint64_t id = status.ID;
+			const std::weak_ptr<Project> project = context.GetProject();
+			return EditorCommandResult::Defer([id, project, value = std::move(value)](EditorContext& context) mutable -> std::optional<EditorCommandResult>
+			{
+				if (project.lock() != context.GetProject())
+					return EditorCommandResult::Fail("Another project was opened (or the project was closed) before its start scene was open",
+						EditorCommandError::Cancelled);
+				const EditorSceneLoadStatus& status = context.GetSceneLoadStatus();
+				if (status.ID != id)
+					return EditorCommandResult::Ok(DescribeStartScene(std::move(value), false, "Another scene was opened instead (scene.open)"));
+				if (!status.IsFinished())
+					return std::nullopt;
+				value["seconds"] = status.Seconds;
+				return EditorCommandResult::Ok(DescribeStartScene(std::move(value), status.State == SceneLoadState::Ready, status.Error));
+			});
+		}
+
 	}
 
 	void RegisterAssetCommands(EditorCommandRegistry& registry)
@@ -168,7 +211,11 @@ namespace Strata
 					{ "startScene", startScene.IsValid() ? UUIDToJson(startScene) : nlohmann::json(nullptr) } });
 			} });
 
-		registry.Register({ "project.open", "Opens a project file or the project in a directory (unsaved scene changes are discarded).",
+		registry.Register({ "project.open",
+			"Opens a project file or the project in a directory (unsaved scene changes are discarded). The project opens at once; its start "
+			"scene loads in the background like scene.open's (the frames go on, scene.loadStatus reports it) and the command answers once it is "
+			"the edited scene: {projectFile, startScene (null when the project has none), startSceneOpened, startSceneError (why it was not "
+			"opened; the project stays open with an empty scene), seconds (the start scene's load)}.",
 			ObjectSchema({ { "path", StringSchema("Project file (.stproj) or project directory") } }, { "path" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
@@ -177,9 +224,9 @@ namespace Strata
 				if (!arguments.IsValid())
 					return arguments.Fail();
 				std::string error;
-				if (!context.OpenProject(FileSystem::FromUTF8(path), &error))
+				if (!context.BeginOpenProject(FileSystem::FromUTF8(path), &error))
 					return EditorCommandResult::Fail(error);
-				return EditorCommandResult::Ok();
+				return FinishProjectOpen(context, { { "projectFile", FileSystem::ToUTF8(context.GetProject()->GetProjectFile()) } });
 			} });
 
 		registry.Register({ "project.close",
@@ -210,8 +257,8 @@ namespace Strata
 
 		registry.Register({ "project.openSample",
 			"Copies a sample project (project.samples) into a new directory and opens the copy, like project.open (unsaved scene changes are "
-			"discarded); the sample itself stays unchanged. The copy leaves out local editor data (.strata): build its scripts with script.build "
-			"before playing.",
+			"discarded; it answers once the start scene is open, with project.open's fields and sample); the sample itself stays unchanged. The "
+			"copy leaves out local editor data (.strata): build its scripts with script.build before playing.",
 			ObjectSchema({
 				{ "sample", StringSchema("The sample's id from project.samples, e.g. \"Tetris\"") },
 				{ "directory", StringSchema("Absolute directory for the copy: created, or an existing empty directory") } }, { "sample", "directory" }),
@@ -237,9 +284,9 @@ namespace Strata
 				const std::filesystem::path projectFile = ProjectSamples::Copy(*sample, FileSystem::FromUTF8(directory), &error);
 				if (projectFile.empty())
 					return EditorCommandResult::Fail(error);
-				if (!context.OpenProject(projectFile, &error))
+				if (!context.BeginOpenProject(projectFile, &error))
 					return EditorCommandResult::Fail(fmt::format("The sample was copied to '{}' but could not be opened: {}", directory, error));
-				return EditorCommandResult::Ok({ { "sample", sample->Id }, { "projectFile", FileSystem::ToUTF8(projectFile) } });
+				return FinishProjectOpen(context, { { "sample", sample->Id }, { "projectFile", FileSystem::ToUTF8(projectFile) } });
 			} });
 
 		registry.Register({ "project.setStartScene", "Sets the scene a built game starts with and saves the project file.",

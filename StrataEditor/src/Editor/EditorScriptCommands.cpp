@@ -373,8 +373,10 @@ namespace Strata
 				const std::string className = arguments.GetString("class");
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				// The entity has no such script: a mistake in the request.
 				std::string error;
+				if (!context.CheckSceneEditable(&error))
+					return EditorCommandResult::Fail(error);
+				// The entity has no such script: a mistake in the request.
 				if (!ScriptEdit::RemoveScript(context, entity, className, &error))
 					return EditorCommandResult::InvalidParameters(error);
 				return FinishScriptEdit(context, { { "entity", UUIDToJson(entity.GetUUID()) }, { "class", className } });
@@ -414,6 +416,8 @@ namespace Strata
 					return EditorCommandResult::InvalidParameters(fmt::format("{} has no field '{}' (see script.status)", info->Name, fieldName));
 
 				std::string error;
+				if (!context.CheckSceneEditable(&error))
+					return EditorCommandResult::Fail(error);
 				const nlohmann::json& valueJson = *valueIt;
 				std::optional<PropertyValue> value;
 				if (!valueJson.is_null())

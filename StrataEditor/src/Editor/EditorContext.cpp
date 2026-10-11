@@ -151,9 +151,18 @@ namespace Strata
 		return true;
 	}
 
-	bool EditorContext::OpenProject(const std::filesystem::path& path, std::string* outError)
+	bool EditorContext::BeginOpenProject(const std::filesystem::path& path, std::string* outError)
 	{
 		return OpenProjectInternal(path, false, outError);
+	}
+
+	bool EditorContext::OpenProject(const std::filesystem::path& path, std::string* outError)
+	{
+		if (!BeginOpenProject(path, outError))
+			return false;
+		// The project is open whatever becomes of its start scene (a failure is logged as a warning).
+		WaitForSceneLoad();
+		return true;
 	}
 
 	bool EditorContext::OpenProjectInternal(const std::filesystem::path& path, bool created, std::string* outError)
@@ -189,11 +198,25 @@ namespace Strata
 		ST_INFO("Opened project '{}' ({})", m_Project->GetConfig().Name, FileSystem::ToUTF8(m_Project->GetProjectDirectory()));
 		OpenScriptEngine(created);
 
-		// Continue with the start scene when the project has one.
+		// Continue with the start scene when the project has one: it loads in the background (UpdateSceneLoad warns when it
+		// cannot be opened).
 		const AssetHandle startScene = m_Project->GetConfig().StartScene;
 		std::string sceneError;
-		if (startScene.IsValid() && !OpenScene(startScene, &sceneError))
-			ST_WARN("Could not open the start scene: {}", sceneError);
+		if (startScene.IsValid())
+		{
+			if (!BeginOpenScene(startScene, &sceneError))
+			{
+				ST_WARN("Could not open the start scene: {}", sceneError);
+				// Reported like a load that failed (project.open, scene.loadStatus).
+				m_SceneLoadStatus = EditorSceneLoadStatus();
+				m_SceneLoadStatus.ID = m_NextSceneLoadID++;
+				m_SceneLoadStatus.Scene = startScene;
+				m_SceneLoadStatus.State = SceneLoadState::Failed;
+				m_SceneLoadStatus.Error = std::move(sceneError);
+				m_SceneLoadStatus.Started = std::chrono::steady_clock::now();
+			}
+			m_SceneLoadStatus.StartScene = true;
+		}
 		m_RecentProjects.Add(m_Project->GetConfig().Name, m_Project->GetProjectFile());
 		return true;
 	}
@@ -344,22 +367,45 @@ namespace Strata
 	{
 		if (!BeginOpenScene(handle, outError))
 			return false;
-		const uint64_t id = m_SceneLoadStatus.ID;
-		while (m_SceneLoad)
-		{
-			// Everything the request pinned is pending until it is in; waiting for it finalizes it here.
-			if (!m_AssetManager->WaitForPendingLoads(std::chrono::minutes(2)))
-			{
-				CancelSceneLoad();
-				m_SceneLoadStatus.Error = "Loading the scene took too long";
-				break;
-			}
-			UpdateSceneLoad();
-		}
-		if (m_SceneLoadStatus.ID == id && m_SceneLoadStatus.State == SceneLoadState::Ready)
+		if (WaitForSceneLoad())
 			return true;
 		if (outError)
 			*outError = m_SceneLoadStatus.Error;
+		return false;
+	}
+
+	bool EditorContext::WaitForSceneLoad(std::chrono::milliseconds timeout)
+	{
+		if (!m_SceneLoad)
+			return m_SceneLoadStatus.State == SceneLoadState::Ready;
+		const auto deadline = std::chrono::steady_clock::now() + timeout;
+		while (m_SceneLoad)
+		{
+			const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
+			// Everything the request pinned is pending until it is in; waiting for it finalizes it here.
+			if (left.count() <= 0 || !m_AssetManager->WaitForPendingLoads(left))
+			{
+				const bool startScene = m_SceneLoadStatus.StartScene;
+				CancelSceneLoad();
+				m_SceneLoadStatus.Error = "Loading the scene took too long";
+				if (startScene)
+					ST_WARN("Could not open the start scene: {}", m_SceneLoadStatus.Error);
+				return false;
+			}
+			UpdateSceneLoad();
+		}
+		return m_SceneLoadStatus.State == SceneLoadState::Ready;
+	}
+
+	bool EditorContext::CheckSceneEditable(std::string* outError) const
+	{
+		if (!IsSceneLoading() || IsPlaying())
+			return true;
+		if (outError)
+		{
+			*outError = fmt::format("Scene {} is being opened ({:.0f}%): the edited scene is read-only until it replaces it (scene.loadStatus)",
+				m_SceneLoadStatus.Scene.ToString(), m_SceneLoadStatus.Progress * 100.0f);
+		}
 		return false;
 	}
 
@@ -395,6 +441,9 @@ namespace Strata
 		else
 		{
 			m_SceneLoadStatus.Error = request.GetError();
+			// scene.open reports its own failures; the start scene's has nobody else to tell (the project stays open).
+			if (m_SceneLoadStatus.StartScene)
+				ST_WARN("Could not open the start scene: {}", m_SceneLoadStatus.Error);
 		}
 		m_SceneLoad.reset();
 	}
@@ -814,7 +863,8 @@ namespace Strata
 
 	bool EditorContext::Undo()
 	{
-		if (IsPlaying())
+		// While a scene is being opened the edited scene, and its history, are read-only.
+		if (IsPlaying() || !CheckSceneEditable())
 			return false;
 		const bool undone = m_UndoStack.Undo();
 		PruneSelection();
@@ -823,7 +873,7 @@ namespace Strata
 
 	bool EditorContext::Redo()
 	{
-		if (IsPlaying())
+		if (IsPlaying() || !CheckSceneEditable())
 			return false;
 		const bool redone = m_UndoStack.Redo();
 		PruneSelection();

@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Editor/CommandTestUtils.h"
 #include "Editor/CommandUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
@@ -201,7 +202,7 @@ TEST_SUITE("Editor.Templates")
 
 		// Reopened, the start scene is the same five entities and keeps its camera.
 		TemplateHarness harness;
-		harness.Run("project.open", { { "path", FileSystem::ToUTF8(directory) } });
+		Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.open", { { "path", FileSystem::ToUTF8(directory) } });
 		CHECK(harness.Context.GetSceneHandle() == *UUIDFromJson(startScene));
 		CheckBasic3DScene(*harness.Context.GetEditScene(), FindGroundMaterial(harness.Context));
 		CHECK(FindGroundMaterial(harness.Context).IsValid());

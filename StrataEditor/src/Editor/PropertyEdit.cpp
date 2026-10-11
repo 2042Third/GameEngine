@@ -92,6 +92,9 @@ namespace Strata
 		bool WriteOnEntities(EditorContext& context, std::span<const Entity> entities, const std::vector<UUID>& ids, const ComponentInfo& component,
 			const PropertyInfo& property, std::span<const PropertyValue> values, std::string* outError)
 		{
+			// While a scene is being opened the edited scene is read-only (CommitEdit would undo the edit).
+			if (!context.CheckSceneEditable(outError))
+				return false;
 			const std::string mergeKey = fmt::format("Property/{}+{}/{}/{}", ids.front().ToString(), ids.size(), component.Name, property.Name);
 			const std::string name = entities.size() == 1 ? fmt::format("Edit {} {}", component.DisplayName, property.DisplayName)
 				: fmt::format("Edit {} {} of {} Entities", component.DisplayName, property.DisplayName, entities.size());
@@ -138,6 +141,8 @@ namespace Strata
 				*outError = "The entity does not exist";
 			return false;
 		}
+		if (!context.CheckSceneEditable(outError))
+			return false;
 		const std::string mergeKey = fmt::format("Property/{}/{}/{}", entity.GetUUID().ToString(), component.Name, property.Name);
 		SceneEditTransaction transaction(*entity.GetScene(), fmt::format("Edit {} {}", component.DisplayName, property.DisplayName), { entity.GetUUID() }, mergeKey);
 		if (!ComponentAccess::SetProperty(entity, component, property, value, outError))

@@ -211,8 +211,12 @@ namespace Strata
 
 		if (!m_Options.ProjectPath.empty())
 		{
+			// A window shows the start scene's load (the viewport's load card) while frames go on; otherwise the editor starts
+			// with the scene open.
 			std::string error;
-			if (!m_Context.OpenProject(m_Options.ProjectPath, &error))
+			const bool opened = m_Options.OpenStartSceneInBackground ? m_Context.BeginOpenProject(m_Options.ProjectPath, &error)
+				: m_Context.OpenProject(m_Options.ProjectPath, &error);
+			if (!opened)
 				ReportError(fmt::format("Could not open the project '{}': {}", FileSystem::ToUTF8(m_Options.ProjectPath), error));
 		}
 
@@ -486,12 +490,7 @@ namespace Strata
 			});
 			if (project != paths.end())
 			{
-				RequestDiscardChanges([this, file = *project]()
-				{
-					const EditorCommandResult result = m_Commands.Execute(m_Context, "project.open", { { "path", FileSystem::ToUTF8(file) } });
-					if (!result.Success)
-						ReportError(fmt::format("Could not open {}: {}", FileSystem::ToUTF8(file), result.Error));
-				});
+				RequestDiscardChanges([this, file = *project]() { OpenProjectFileNow(file); });
 				return true;
 			}
 			if (!m_Context.HasProject())
@@ -681,12 +680,15 @@ namespace Strata
 
 	void EditorLayer::OpenProjectFile(const std::filesystem::path& projectFile)
 	{
-		RequestDiscardChanges([this, projectFile]()
-		{
-			const EditorCommandResult result = m_Commands.Execute(m_Context, "project.open", { { "path", FileSystem::ToUTF8(projectFile) } });
-			if (!result.Success)
-				ReportError(fmt::format("Could not open {}: {}", UI::DisplayPath(projectFile), result.Error));
-		});
+		RequestDiscardChanges([this, projectFile]() { OpenProjectFileNow(projectFile); });
+	}
+
+	void EditorLayer::OpenProjectFileNow(const std::filesystem::path& projectFile)
+	{
+		// Through the runner: the project opens at once, its start scene over the next frames (the viewport shows the load).
+		const std::string error = StartEditorCommand(m_CommandRunner, m_Context, m_Commands, "project.open", { { "path", FileSystem::ToUTF8(projectFile) } });
+		if (!error.empty())
+			ReportError(fmt::format("Could not open {}: {}", UI::DisplayPath(projectFile), error));
 	}
 
 	void EditorLayer::ShowAboutDialog()
@@ -1364,9 +1366,13 @@ namespace Strata
 		const uint32_t importing = m_Context.GetAssetManager()->GetPendingImportCount();
 		if (importing > 0)
 			text = fmt::format("{} importing{}{}", importing, c_Separator, text);
-		// A scene being opened (scene.open) loads with everything it uses: the largest load while it lasts.
+		// A scene being opened (scene.open, a project's start scene) loads with everything it uses: the largest load while it
+		// lasts. Its progress counts in bytes once its document is read (until then a share would stand still at 0).
 		const bool sceneLoading = m_Context.IsSceneLoading();
-		if (sceneLoading)
+		const bool readingScene = sceneLoading && m_Context.GetSceneLoadStatus().State == SceneLoadState::LoadingScene;
+		if (readingScene)
+			text = fmt::format("Opening scene...{}{}", c_Separator, text);
+		else if (sceneLoading)
 			text = fmt::format("Opening scene {:.0f}%{}{}", m_Context.GetSceneLoadStatus().Progress * 100.0f, c_Separator, text);
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		// Failures matter most; then how full the budgets are (a comfortable budget is no news).
@@ -1384,7 +1390,12 @@ namespace Strata
 				tooltip += fmt::format(" {} {} importing in the background: {} once imported.", importing, importing == 1 ? "asset is" : "assets are",
 					importing == 1 ? "it loads" : "they load");
 			}
-			if (sceneLoading)
+			if (readingScene)
+			{
+				tooltip += " A scene is being opened (its document is being read; what it uses loads next); it replaces the edited scene once all of it "
+					"is in.";
+			}
+			else if (sceneLoading)
 			{
 				tooltip += fmt::format(" A scene is being opened ({:.0f}% of it and what it uses is in); it replaces the edited scene once all of it is.",
 					m_Context.GetSceneLoadStatus().Progress * 100.0f);

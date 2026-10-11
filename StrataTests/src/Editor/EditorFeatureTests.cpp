@@ -70,7 +70,7 @@ TEST_SUITE("Editor.FeatureTest")
 
 		// The editor runs the feature scripts, built in-tree, as the project's script module.
 		FeatureEditor editor;
-		editor.Run("project.open", { { "path", FileSystem::ToUTF8(projectFile) } });
+		Tests::RunCommandToCompletion(editor.Context, editor.Commands, "project.open", { { "path", FileSystem::ToUTF8(projectFile) } });
 		CHECK(editor.Run("project.info")["startScene"] == "F7A0000000000001");
 		editor.Run("script.load", { { "path", FileSystem::ToUTF8(GetFeatureScriptModule()) } });
 		const Ref<ScriptEngine> engine = editor.Context.GetScriptEngine();

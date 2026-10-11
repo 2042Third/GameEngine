@@ -316,7 +316,15 @@ namespace Strata
 				paused ? "Paused: changes are discarded when play stops" : "Playing: changes are discarded when play stops", GetPlayStateColor(context));
 			ImGui::Spacing();
 		}
+		// While a scene is being opened, the scene shown cannot change: its values show, disabled.
+		const bool readOnly = DrawSceneLoadBanner("Inspector.SceneLoadBanner", context);
+		ImGui::BeginDisabled(readOnly);
+		DrawSelection(context, commands);
+		ImGui::EndDisabled();
+	}
 
+	void InspectorPanel::DrawSelection(EditorContext& context, const EditorCommandRegistry& commands)
+	{
 		// The selection in selection order (the last is the primary one).
 		std::vector<Entity> entities;
 		entities.reserve(context.GetSelection().size());

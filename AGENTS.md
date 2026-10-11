@@ -807,12 +807,20 @@ and `AudioSystem`, the built-in "Audio" scene system.
   stop a frame: never load scenes with `LoadAssetSync` in the editor or games; go through `SceneLoader` (Docs/Architecture.md,
   "Scene runtime lifecycle").
 - **Opening scenes** (`scene.open`, `EditorContext::BeginOpenScene`) loads in the background and answers once the scene
-  replaced the edited one; meanwhile the edited scene is read-only (`CommitEdit` rolls edits back, mutating scene commands
-  fail, play mode is refused) and the viewport shows the load's progress (`ViewportPanel::DrawSceneLoadOverlay`).
+  replaced the edited one; meanwhile the edited scene is read-only (`CommitEdit` rolls edits back; mutating scene commands,
+  undo, settings, script and property edits fail through `EditorContext::CheckSceneEditable`, which code editing the scene
+  outside `Finish`/`CommitEdit` checks first; play mode is refused; the Hierarchy and the Inspector draw their contents
+  disabled under a banner, `DrawSceneLoadBanner`, and the gizmo hides) and the viewport shows the load's progress
+  (`ViewportPanel::DrawSceneLoadOverlay`).
   `scene.loadStatus` and `editor.status` (`sceneLoad`) report it (`scene.loadStatus` also the running game's sub-scenes,
-  which `scene.loadAdditive {scene}` and `scene.unloadAdditive {subScene}` load and unload in play mode, see Scripting);
-  `EditorContext::OpenScene` waits for it (a project's start scene, tools, tests). UI code opens scenes through the runner
-  (`RunEditorCommandDeferred`).
+  which `scene.loadAdditive {scene}` and `scene.unloadAdditive {subScene}` load and unload in play mode, see Scripting;
+  `scene.loadStatus {wait: true}` answers once no scene is being opened); `EditorContext::OpenScene` waits for it (tools,
+  tests). Opening a project (`project.open`, `project.openSample`, `EditorContext::BeginOpenProject`) opens the project at
+  once and its start scene the same way (`EditorSceneLoadStatus::StartScene`): the commands answer once it is open
+  (`startSceneOpened`, `startSceneError`), and a window started with `--project` shows the editor while it loads
+  (`EditorOptions::OpenStartSceneInBackground`; scripted runs, headless editors and tests open it before the first frame,
+  `EditorContext::OpenProject`). UI code opens scenes and projects through the runner (`RunEditorCommandDeferred`,
+  `StartEditorCommand`).
 - **Scripts through commands** (see Scripting, "Project scripts"): `script.status` (loaded module, classes with fields
   and callbacks, faults, the running and last build with diagnostics), `script.build {wait}` (deferred; fails with the
   first compiler errors), `script.reload`, `script.load {path}`, `script.init {example}`, `script.add {entity, class,

@@ -4,12 +4,15 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/HarnessEditor.h"
+#include "Editor/PropertyEdit.h"
 #include "TestHelpers.h"
 
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Project/GameManifest.h>
+#include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Scene/Components.h>
 #include <Strata/Scene/Entity.h>
 #include <Strata/Scene/SceneSerializer.h>
 
@@ -84,6 +87,25 @@ TEST_SUITE("Editor.SceneLoad")
 		CHECK_FALSE(play.Success);
 		CHECK(play.Error.find("being opened") != std::string::npos);
 		CHECK_FALSE(context.IsPlaying());
+		// Settings, undo and property edits (the Inspector's) are refused the same way, before anything changes.
+		const glm::vec3 gravity = edited->GetSettings().Gravity;
+		const EditorCommandResult settings = project.Commands.Execute(context, "scene.setSettings", { { "gravity", { 0.0f, -1.0f, 0.0f } } });
+		CHECK(settings.ErrorKind == EditorCommandError::Failed);
+		CHECK(settings.Error.find("read-only") != std::string::npos);
+		CHECK(edited->GetSettings().Gravity == gravity);
+		const EditorCommandResult undo = project.Commands.Execute(context, "edit.undo");
+		CHECK(undo.ErrorKind == EditorCommandError::Failed);
+		CHECK(undo.Error.find("read-only") != std::string::npos);
+		const Entity hero = edited->FindEntityByName("Hero");
+		REQUIRE(hero);
+		const ComponentInfo* transform = ComponentRegistry::Find("Transform");
+		REQUIRE(transform);
+		const PropertyInfo* translation = transform->FindProperty("Translation");
+		REQUIRE(translation);
+		std::string error;
+		CHECK_FALSE(SetPropertyWithUndo(context, hero, *transform, *translation, PropertyValue(glm::vec3(5.0f)), &error));
+		CHECK(error.find("read-only") != std::string::npos);
+		CHECK(hero.GetComponent<TransformComponent>().Translation == glm::vec3(0.0f));
 		const nlohmann::json status = project.Run("editor.status");
 		REQUIRE(status["sceneLoad"].is_object());
 		CHECK(status["sceneLoad"]["scene"] == UUIDToJson(project.Two));
@@ -179,6 +201,15 @@ TEST_SUITE("Editor.SceneLoad")
 		REQUIRE(pill.has_value());
 		CHECK(pill->Text.find("Opening scene") == 0);
 		CHECK(ImGuiHarness::CountFallbackGlyphs(editor.FindPanelWindow(EditorPanels::c_Viewport)) == 0);
+		// The Hierarchy and the Inspector say that the scene shown is read-only (their contents are disabled).
+		for (const char* banner : { "Hierarchy.SceneLoadBanner", "Inspector.SceneLoadBanner" })
+		{
+			const std::optional<UI::ItemProbe::Item> drawn = UI::ItemProbe::Find(banner);
+			REQUIRE_MESSAGE(drawn.has_value(), banner);
+			CHECK(drawn->Frame == ImGui::GetFrameCount());
+			CHECK(drawn->Text.find("read-only") != std::string::npos);
+		}
+		CHECK(ImGuiHarness::CountFallbackGlyphs(editor.FindPanelWindow(EditorPanels::c_Hierarchy)) == 0);
 
 		// Once the scene is in, neither shows it any more.
 		REQUIRE(editor.FramesUntil([&]() { return !context.IsSceneLoading(); }));
@@ -188,6 +219,153 @@ TEST_SUITE("Editor.SceneLoad")
 		const std::optional<UI::ItemProbe::Item> pillAfter = UI::ItemProbe::Find("Status.Assets");
 		REQUIRE(pillAfter.has_value());
 		CHECK(pillAfter->Text.find("Opening scene") == std::string::npos);
+		const std::optional<UI::ItemProbe::Item> bannerAfter = UI::ItemProbe::Find("Hierarchy.SceneLoadBanner");
+		CHECK((!bannerAfter || bannerAfter->Frame < ImGui::GetFrameCount()));
+	}
+
+	TEST_CASE("project.open opens the project at once and answers once its start scene replaced the empty scene")
+	{
+		const std::filesystem::path directory = CreateTemporaryDirectory("EditorProjectOpen") / "Loads";
+		UUID one = UUID::Null();
+		{
+			SceneLoadProject project(directory);
+			project.Run("project.setStartScene", { { "scene", UUIDToJson(project.One) } });
+			one = project.One;
+		}
+
+		EditorContext context(EditorContextSpecification { false });
+		EditorCommandRegistry commands;
+		EditorCommandResult result = commands.Execute(context, "project.open", { { "path", FileSystem::ToUTF8(directory) } });
+		REQUIRE_MESSAGE(result.Success, result.Error);
+		REQUIRE(result.IsPending());
+
+		// The project is open; its start scene loads while the empty scene shows, read-only.
+		REQUIRE(context.HasProject());
+		CHECK(context.IsSceneLoading());
+		CHECK(context.GetSceneLoadStatus().StartScene);
+		CHECK(context.GetSceneLoadStatus().Scene == one);
+		CHECK_FALSE(context.GetSceneHandle().IsValid());
+		const EditorCommandResult create = commands.Execute(context, "entity.create", { { "name", "Lost" } });
+		CHECK_FALSE(create.Success);
+		CHECK(create.Error.find("read-only") != std::string::npos);
+		const nlohmann::json loading = RunCommandToCompletion(context, commands, "scene.loadStatus");
+		REQUIRE(loading["open"].is_object());
+		CHECK(loading["open"]["scene"] == UUIDToJson(one));
+		CHECK(loading["open"]["startScene"] == true);
+		CHECK(RunCommandToCompletion(context, commands, "editor.status")["sceneLoad"]["startScene"] == true);
+		// scene.loadStatus with wait answers once no scene is being opened.
+		EditorCommandResult waiting = commands.Execute(context, "scene.loadStatus", { { "wait", true } });
+		REQUIRE(waiting.Success);
+		REQUIRE(waiting.IsPending());
+
+		result = CompleteCommand(context, std::move(result));
+		REQUIRE_MESSAGE(result.Success, result.Error);
+		CHECK(result.Value["startScene"] == UUIDToJson(one));
+		CHECK(result.Value["startSceneOpened"] == true);
+		CHECK_FALSE(result.Value.contains("startSceneError"));
+		CHECK(result.Value["seconds"].get<double>() >= 0.0);
+		CHECK(FileSystem::FromUTF8(result.Value["projectFile"].get<std::string>()) == context.GetProject()->GetProjectFile());
+		CHECK_FALSE(context.IsSceneLoading());
+		CHECK(context.GetSceneHandle() == one);
+		CHECK(context.GetEditScene()->FindEntityByName("Hero").IsValid());
+		waiting = CompleteCommand(context, std::move(waiting));
+		REQUIRE_MESSAGE(waiting.Success, waiting.Error);
+		CHECK(waiting.Value["open"].is_null());
+		CHECK(waiting.Value["lastOpen"]["startScene"] == true);
+		CHECK(waiting.Value["lastOpen"]["state"] == "Ready");
+		// Without a load under way it answers at once.
+		CHECK_FALSE(commands.Execute(context, "scene.loadStatus", { { "wait", true } }).IsPending());
+		CHECK(commands.Execute(context, "scene.loadStatus", { { "wait", "yes" } }).ErrorKind == EditorCommandError::InvalidParameters);
+
+		// A project without a start scene answers at once.
+		const std::filesystem::path empty = CreateTemporaryDirectory("EditorProjectOpenEmpty") / "Empty";
+		RunCommandToCompletion(context, commands, "project.create", { { "directory", FileSystem::ToUTF8(empty) }, { "name", "Empty" } });
+		result = commands.Execute(context, "project.open", { { "path", FileSystem::ToUTF8(empty) } });
+		REQUIRE_MESSAGE(result.Success, result.Error);
+		CHECK_FALSE(result.IsPending());
+		CHECK(result.Value["startScene"].is_null());
+		CHECK(result.Value["startSceneOpened"] == false);
+
+		// Opening another project while the start scene loads: the first command ends as cancelled, the second opens its own.
+		EditorCommandResult first = commands.Execute(context, "project.open", { { "path", FileSystem::ToUTF8(directory) } });
+		REQUIRE(first.IsPending());
+		EditorCommandResult second = commands.Execute(context, "project.open", { { "path", FileSystem::ToUTF8(directory) } });
+		first = CompleteCommand(context, std::move(first));
+		CHECK_FALSE(first.Success);
+		CHECK(first.ErrorKind == EditorCommandError::Cancelled);
+		second = CompleteCommand(context, std::move(second));
+		REQUIRE_MESSAGE(second.Success, second.Error);
+		CHECK(second.Value["startSceneOpened"] == true);
+		CHECK(context.GetSceneHandle() == one);
+
+		// Opening another scene instead: the project stays open, and project.open says its start scene was not opened.
+		EditorCommandResult replaced = commands.Execute(context, "project.open", { { "path", FileSystem::ToUTF8(directory) } });
+		REQUIRE(replaced.IsPending());
+		EditorCommandResult other = commands.Execute(context, "scene.open", { { "scene", "Scenes/Two.stscene" } });
+		replaced = CompleteCommand(context, std::move(replaced));
+		REQUIRE_MESSAGE(replaced.Success, replaced.Error);
+		CHECK(replaced.Value["startSceneOpened"] == false);
+		CHECK(replaced.Value["startSceneError"].get<std::string>().find("Another scene") != std::string::npos);
+		other = CompleteCommand(context, std::move(other));
+		REQUIRE_MESSAGE(other.Success, other.Error);
+		CHECK(context.GetEditScene()->FindEntityByName("Boss").IsValid());
+	}
+
+	TEST_CASE("A project whose start scene cannot be opened opens with an empty scene, and project.open says why")
+	{
+		const std::filesystem::path directory = CreateTemporaryDirectory("EditorProjectOpenBroken") / "Loads";
+		{
+			SceneLoadProject project(directory);
+			project.Run("project.setStartScene", { { "scene", UUIDToJson(project.One) } });
+		}
+		// The start scene's document is damaged since.
+		REQUIRE(FileSystem::WriteText(directory / "Assets" / "Scenes" / "One.stscene", "{ \"Strata\": "));
+
+		EditorContext context(EditorContextSpecification { false });
+		EditorCommandRegistry commands;
+		const EditorCommandResult result = CompleteCommand(context, commands.Execute(context, "project.open", { { "path", FileSystem::ToUTF8(directory) } }));
+		REQUIRE_MESSAGE(result.Success, result.Error);
+		CHECK(result.Value["startSceneOpened"] == false);
+		REQUIRE(result.Value["startSceneError"].is_string());
+		CHECK_FALSE(result.Value["startSceneError"].get<std::string>().empty());
+		CHECK(context.HasProject());
+		CHECK_FALSE(context.IsSceneLoading());
+		CHECK_FALSE(context.GetSceneHandle().IsValid());
+		CHECK(context.GetSceneLoadStatus().State == SceneLoadState::Failed);
+		const nlohmann::json status = RunCommandToCompletion(context, commands, "scene.loadStatus");
+		CHECK(status["lastOpen"]["startScene"] == true);
+		CHECK(status["lastOpen"]["state"] == "Failed");
+		// The empty scene is editable.
+		RunCommandToCompletion(context, commands, "entity.create", { { "name", "Fresh" } });
+
+		// Waiting for it (OpenProject, for tools and tests) gives the same.
+		EditorContext waited(EditorContextSpecification { false });
+		std::string error;
+		REQUIRE_MESSAGE(waited.OpenProject(directory, &error), error);
+		CHECK_FALSE(waited.GetSceneHandle().IsValid());
+		CHECK(waited.GetSceneLoadStatus().State == SceneLoadState::Failed);
+	}
+
+	TEST_CASE("A window opens the project's start scene in the background")
+	{
+		EditorOptions options = WithFeatureProject("EditorStartSceneInBackground");
+		options.OpenStartSceneInBackground = true;
+		HarnessEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f }, options);
+		EditorContext& context = editor.Context();
+		REQUIRE(context.HasProject());
+		const AssetHandle startScene = context.GetProject()->GetConfig().StartScene;
+		REQUIRE(startScene.IsValid());
+		// The editor started without waiting for it: its frames go on over the empty scene (the viewport shows the load, as
+		// for scene.open) until the start scene is in.
+		REQUIRE(context.IsSceneLoading());
+		CHECK(context.GetSceneLoadStatus().StartScene);
+		CHECK(context.GetSceneLoadStatus().Scene == startScene);
+		CHECK_FALSE(context.GetSceneHandle().IsValid());
+
+		REQUIRE(editor.FramesUntil([&]() { return !context.IsSceneLoading(); }));
+		CHECK(context.GetSceneHandle() == startScene);
+		CHECK(context.GetSceneLoadStatus().State == SceneLoadState::Ready);
+		CHECK(context.GetEditScene()->FindEntityByName("Ball").IsValid());
 	}
 
 	TEST_CASE("Exports name the project's loading scene in the manifest and keep it in pruned packs")
@@ -226,6 +404,7 @@ TEST_SUITE("Editor.SceneLoad")
 		CHECK(project.Run("project.setExportSettings", { { "loadingScene", nullptr } })["loadingScene"].is_null());
 		CHECK_FALSE(context.GetProject()->GetConfig().Export.LoadingScene.IsValid());
 	}
+
 	TEST_CASE("Sub-scenes load into the running game and unload through commands, and play.stop discards them")
 	{
 		SceneLoadProject project(CreateTemporaryDirectory("EditorSubScenes") / "Loads");

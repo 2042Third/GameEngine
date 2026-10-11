@@ -74,7 +74,7 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | Question | Call |
 | --- | --- |
 | What is open, is it playing, unsaved changes? | `editor.status` |
-| Is a scene still opening, how far is it? | `scene.loadStatus` (`open` with `progress`, `lastOpen` with how it ended, `play` for a switch a running game asked for, `subScenes` of the running game); also `editor.status`'s `sceneLoad` |
+| Is a scene still opening, how far is it? | `scene.loadStatus` (`open` with `progress` and whether it is the project's `startScene`, `lastOpen` with how it ended, `play` for a switch a running game asked for, `subScenes` of the running game; `{"wait": true}` answers once nothing is opening); also `editor.status`'s `sceneLoad` |
 | Which projects did the user (or an agent) open lately? | `editor.recentProjects` (name, project file path for `project.open`, `lastOpened`; editors run with `--commands` or `--frames` list what they opened without saving it); `editor.removeRecentProject {path}` takes one off |
 | What can a new project or scene start from? | `project.templates` (`empty`, `basic3d`) |
 | Is there a finished game to learn from? | `project.samples` (e.g. `Tetris`); `project.openSample {sample, directory}` opens a copy in a new directory (the sample stays as shipped; build its scripts with `script.build` before playing) |
@@ -119,6 +119,10 @@ editor started with `--no-gpu` (use `--headless`):
   `frameTimes` of the frames meanwhile), so give large scenes a long `--timeout`. Meanwhile the edited scene is read-only:
   edits and `play.start` fail with "is being opened" (wait for the answer, or watch `scene.loadStatus`). A second
   `scene.open`, `scene.new` or `project.close` cancels it (the first `scene.open` then fails as cancelled, `-32006`).
+  Opening a project opens its start scene the same way: `project.open` and `project.openSample` answer once it is the
+  edited scene (`startSceneOpened`; `startSceneError` says why not, the project then stays open with an empty scene). An
+  editor started with a window and `--project` shows itself at once and opens the start scene meanwhile: call
+  `scene.loadStatus {"wait": true}` before editing it (headless editors and `--commands`/`--frames` runs start with it open).
 - **Sub-scenes (play mode).** `scene.loadAdditive {scene}` loads a scene asset into the running game next to what it holds
   (as scripts' `Scene::LoadAdditive` do) and answers once its entities exist: `{subScene, roots, totalEntities, slices,
   seconds, ...}`; they appear over several frames, at most the scene's `maxEntitiesInstantiatedPerFrame` per frame

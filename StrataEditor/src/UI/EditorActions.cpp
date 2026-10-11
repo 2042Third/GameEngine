@@ -5,8 +5,12 @@
 #include "Editor/EditorContext.h"
 #include "Editor/HierarchyView.h"
 #include "Editor/PropertyEdit.h"
+#include "UI/Icons.h"
+#include "UI/Theme.h"
+#include "UI/Widgets.h"
 
 #include <Strata/Core/Assert.h>
+#include <Strata/Core/Base.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Reflection/ComponentRegistry.h>
@@ -51,6 +55,44 @@ namespace Strata
 			if (!result.Success && result.ErrorKind != EditorCommandError::Cancelled)
 				ST_ERROR("{}: {}", name, result.Error);
 		});
+	}
+
+	std::string StartEditorCommand(EditorCommandRunner& runner, EditorContext& context, const EditorCommandRegistry& commands, std::string_view name,
+		const nlohmann::json& parameters)
+	{
+		// The completion runs inside Run when the command finishes at once, else in a later frame: it keeps what it shares.
+		struct Outcome
+		{
+			bool Pending = false;
+			std::string Error;
+		};
+		const Ref<Outcome> outcome = CreateRef<Outcome>();
+		outcome->Pending = runner.Run(context, commands, name, parameters, [outcome, name = std::string(name)](const EditorCommandResult& result)
+		{
+			if (result.Success || result.ErrorKind == EditorCommandError::Cancelled)
+				return;
+			if (outcome->Pending)
+				ST_ERROR("{}: {}", name, result.Error);
+			else
+				outcome->Error = result.Error;
+		});
+		return outcome->Error;
+	}
+
+	bool DrawSceneLoadBanner(const char* id, const EditorContext& context)
+	{
+		if (!context.IsSceneLoading() || context.IsPlaying())
+			return false;
+		const AssetHandle scene = context.GetSceneLoadStatus().Scene;
+		std::string name = scene.ToString();
+		if (const EditorAssetManager* assets = context.GetAssetManager())
+		{
+			if (const std::optional<AssetMetadata> metadata = assets->GetMetadata(scene))
+				name = metadata->Path.empty() ? metadata->Name : metadata->Path;
+		}
+		UI::Banner(id, Icons::LoaderCircle, fmt::format("Opening {}: the scene shown is read-only until it replaces it", name), UI::GetThemeColors().Info);
+		ImGui::Spacing();
+		return true;
 	}
 
 	namespace EditorActions

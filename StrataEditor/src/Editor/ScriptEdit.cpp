@@ -112,6 +112,8 @@ namespace Strata
 
 		bool AddScript(EditorContext& context, Entity entity, const ScriptClassInfo& info, const std::vector<ScriptFieldValue>& fields, std::string* outError)
 		{
+			if (!context.CheckSceneEditable(outError))
+				return false;
 			if (!entity)
 				return Fail(outError, "The entity does not exist");
 			ScriptComponent* existing = entity.TryGetComponent<ScriptComponent>();
@@ -139,6 +141,8 @@ namespace Strata
 
 		bool RemoveScript(EditorContext& context, Entity entity, std::string_view className, std::string* outError)
 		{
+			if (!context.CheckSceneEditable(outError))
+				return false;
 			if (!entity)
 				return Fail(outError, "The entity does not exist");
 			ScriptComponent* component = entity.TryGetComponent<ScriptComponent>();
@@ -158,6 +162,8 @@ namespace Strata
 		bool SetField(EditorContext& context, Entity entity, std::string_view className, const ScriptFieldInfo& field, const std::optional<PropertyValue>& value,
 			std::string* outError)
 		{
+			if (!context.CheckSceneEditable(outError))
+				return false;
 			if (!entity)
 				return Fail(outError, "The entity does not exist");
 			ScriptComponent* component = entity.TryGetComponent<ScriptComponent>();

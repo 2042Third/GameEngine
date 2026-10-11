@@ -42,6 +42,8 @@ namespace Strata
 		void OnImGuiRender(EditorPanelContext& context) override;
 		void OnHidden(EditorPanelContext& context) override;
 	private:
+		// The selected entities' components, or the scene's settings with nothing selected.
+		void DrawSelection(EditorContext& context, const EditorCommandRegistry& commands);
 		void DrawHeader(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities);
 		void DrawComponent(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info);
 		void DrawComponentMenu(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info);

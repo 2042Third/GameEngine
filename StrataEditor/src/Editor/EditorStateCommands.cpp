@@ -43,13 +43,14 @@ namespace Strata
 				{ "redo", undo.GetRedoName() } };
 		}
 
-		// The scene scene.open is opening, or null.
+		// The scene scene.open (or project.open, for the start scene) is opening, or null.
 		nlohmann::json DescribeSceneLoad(const EditorContext& context)
 		{
 			if (!context.IsSceneLoading())
 				return nullptr;
 			const EditorSceneLoadStatus& status = context.GetSceneLoadStatus();
-			return { { "scene", UUIDToJson(status.Scene) }, { "state", SceneLoadStateToString(status.State) }, { "progress", status.Progress } };
+			return { { "scene", UUIDToJson(status.Scene) }, { "startScene", status.StartScene }, { "state", SceneLoadStateToString(status.State) },
+				{ "progress", status.Progress } };
 		}
 
 		// The editor process's memory as the system accounts it (Platform::GetProcessMemory), in MiB; null where unknown.
@@ -171,21 +172,25 @@ namespace Strata
 		// Undo
 		////////////////////////////////////////////////////////////////////////////////
 
-		registry.Register({ "edit.undo", "Undoes the latest edit of the scene (not available while playing).", ObjectSchema({}),
+		registry.Register({ "edit.undo", "Undoes the latest edit of the scene (not available while playing or while a scene is being opened).", ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
 				if (context.IsPlaying())
 					return EditorCommandResult::Fail("Undo is not available while the scene is running");
+				if (std::string error; !context.CheckSceneEditable(&error))
+					return EditorCommandResult::Fail(std::move(error));
 				if (!context.Undo())
 					return EditorCommandResult::Fail("Nothing to undo");
 				return EditorCommandResult::Ok(DescribeHistory(context));
 			} });
 
-		registry.Register({ "edit.redo", "Redoes the latest undone edit (not available while playing).", ObjectSchema({}),
+		registry.Register({ "edit.redo", "Redoes the latest undone edit (not available while playing or while a scene is being opened).", ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
 				if (context.IsPlaying())
 					return EditorCommandResult::Fail("Redo is not available while the scene is running");
+				if (std::string error; !context.CheckSceneEditable(&error))
+					return EditorCommandResult::Fail(std::move(error));
 				if (!context.Redo())
 					return EditorCommandResult::Fail("Nothing to redo");
 				return EditorCommandResult::Ok(DescribeHistory(context));
@@ -203,9 +208,10 @@ namespace Strata
 
 		registry.Register({ "editor.status",
 			"Overview of the editor: engine version and commit, open project, scene (name, asset, unsaved changes, entity count), play state, "
-			"selection, undo history, sceneLoad (the scene scene.open is opening: {scene, state, progress}, null when none), the process's memory "
-			"(privateMB, workingSetMB and their peaks), and sections such as automation (port, clients, pending requests and commands) and assets "
-			"(memory and budgets per pool, streaming queue, uploads; see asset.stats). Start here to orient yourself.",
+			"selection, undo history, sceneLoad (the scene scene.open or project.open is opening: {scene, startScene, state, progress}, null when "
+			"none), the process's memory (privateMB, workingSetMB and their peaks), and sections such as automation (port, clients, pending "
+			"requests and commands) and assets (memory and budgets per pool, streaming queue, uploads; see asset.stats). Start here to orient "
+			"yourself.",
 			ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{

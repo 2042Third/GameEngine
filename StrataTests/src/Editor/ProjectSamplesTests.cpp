@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/ProjectSamples.h"
@@ -159,7 +160,8 @@ TEST_SUITE("Editor.Samples")
 
 		// Into a new directory below one that does not exist yet.
 		const std::filesystem::path copy = Tests::CreateTemporaryDirectory("SamplesOpenCopy") / "Games" / "My Tetris";
-		const nlohmann::json opened = harness.Run("project.openSample", { { "sample", "Tetris" }, { "directory", FileSystem::ToUTF8(copy) } });
+		const nlohmann::json opened = Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.openSample",
+			{ { "sample", "Tetris" }, { "directory", FileSystem::ToUTF8(copy) } });
 		CHECK(opened["sample"] == "Tetris");
 		CHECK(FileSystem::FromUTF8(opened["projectFile"].get<std::string>()) == copy / "Tetris.stproj");
 		REQUIRE(harness.Context.HasProject());
@@ -212,7 +214,8 @@ TEST_SUITE("Editor.Samples")
 
 		// An existing empty directory is fine.
 		REQUIRE(FileSystem::CreateDirectories(root / "Empty"));
-		harness.Run("project.openSample", { { "sample", "Tetris" }, { "directory", FileSystem::ToUTF8(root / "Empty") } });
+		Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.openSample",
+			{ { "sample", "Tetris" }, { "directory", FileSystem::ToUTF8(root / "Empty") } });
 		CHECK(harness.Context.HasProject());
 		harness.Context.CloseProject();
 

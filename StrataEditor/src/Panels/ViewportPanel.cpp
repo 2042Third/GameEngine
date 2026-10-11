@@ -559,7 +559,9 @@ namespace Strata
 	{
 		const ViewportSettings& settings = context.GetViewport().GetSettings();
 		Entity primary = context.GetPrimarySelection();
-		if (!primary || settings.Gizmo == GizmoOperation::None)
+		// No gizmo over a scene that is being replaced (a scene is being opened): it is read-only.
+		const bool readOnly = context.IsSceneLoading() && !context.IsPlaying();
+		if (!primary || settings.Gizmo == GizmoOperation::None || readOnly)
 		{
 			EndGizmoDrag(context);
 			return;

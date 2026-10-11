@@ -89,6 +89,7 @@ namespace Strata
 	{
 		uint64_t ID = 0;                      // 0 before the first load
 		AssetHandle Scene = UUID::Null();
+		bool StartScene = false;              // The project's start scene, opened with the project (BeginOpenProject)
 		SceneLoadState State = SceneLoadState::Cancelled;
 		float Progress = 0.0f;                // Of the scene and everything it uses (SceneLoadRequest::GetProgress)
 		std::string Error;                    // Why it failed or was cancelled
@@ -127,8 +128,13 @@ namespace Strata
 		// unknown template fails before anything is created.
 		bool CreateProject(const std::filesystem::path& directory, const std::string& name, std::string_view templateId = ProjectTemplates::c_Empty,
 			std::string* outError = nullptr);
-		// Opens a project file, or the project in a directory. Closes the current project first. Opened projects go to the
-		// front of the recent projects.
+		// Opens a project file, or the project in a directory, and starts opening its start scene in the background
+		// (BeginOpenScene; GetSceneLoadStatus().StartScene): the project is open when this returns, with an empty edited scene
+		// that the start scene replaces between frames once it and everything it uses are in. Closes the current project
+		// first. Opened projects go to the front of the recent projects. A start scene that cannot be opened is logged as a
+		// warning; the project stays open with the empty scene.
+		bool BeginOpenProject(const std::filesystem::path& path, std::string* outError = nullptr);
+		// BeginOpenProject, then waits for the start scene (WaitForSceneLoad): tools, tests, scripted and headless runs.
 		bool OpenProject(const std::filesystem::path& path, std::string* outError = nullptr);
 		// Saves the project's viewport state (editor camera and settings) to its intermediate directory, then closes it.
 		void CloseProject();
@@ -156,10 +162,17 @@ namespace Strata
 		// loading have loaded, unless the camera was moved meanwhile. False (nothing started) without a project or for a
 		// handle that is not a scene asset of the project.
 		bool BeginOpenScene(AssetHandle handle, std::string* outError = nullptr);
-		// BeginOpenScene, then waits for the load (tools, tests and opening a project's start scene).
+		// BeginOpenScene, then waits for the load (WaitForSceneLoad: tools and tests).
 		bool OpenScene(AssetHandle handle, std::string* outError = nullptr);
+		// Waits for the scene being opened (if any) and makes it the edited scene, finalizing what it uses on this thread;
+		// for tools and tests, never in a frame. False when the load failed, was cancelled or took longer than `timeout` (it is
+		// then cancelled); GetSceneLoadStatus says why.
+		bool WaitForSceneLoad(std::chrono::milliseconds timeout = std::chrono::minutes(2));
 		// A scene is being opened (BeginOpenScene) and has not replaced the edited scene yet.
 		bool IsSceneLoading() const { return m_SceneLoad != nullptr; }
+		// The edited scene cannot change while a scene is being opened (edits of a running copy are allowed): false, with the
+		// reason, then. Code that edits the scene outside SceneEditTransaction/CommitEdit (which rolls such edits back) checks it.
+		bool CheckSceneEditable(std::string* outError = nullptr) const;
 		// The scene load in progress (its progress as of the last Update), or the last one that finished.
 		const EditorSceneLoadStatus& GetSceneLoadStatus() const { return m_SceneLoadStatus; }
 		// Abandons the scene load in progress (its pins and unfinished loads go); the edited scene stays.

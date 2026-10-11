@@ -440,7 +440,7 @@ TEST_SUITE("Editor.Viewport")
 
 			// Opening another project saves this one's view and starts from that project's (default) view; the selection
 			// color (the editor's theme) stays.
-			harness.Run("project.open", { { "path", FileSystem::ToUTF8(other / "Other") } });
+			Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.open", { { "path", FileSystem::ToUTF8(other / "Other") } });
 			CHECK_FALSE(harness.Context.GetViewport().GetSettings().Snap);
 			CHECK(harness.Context.GetViewport().GetSettings().SelectionColor == themeColor);
 			const nlohmann::json camera = harness.Run("camera.get");
@@ -455,7 +455,7 @@ TEST_SUITE("Editor.Viewport")
 
 		{
 			ViewportHarness harness;
-			harness.Run("project.open", { { "path", FileSystem::ToUTF8(directory / "Game") } });
+			Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.open", { { "path", FileSystem::ToUTF8(directory / "Game") } });
 			CHECK(harness.Run("camera.get") == savedCamera);
 			CHECK_FALSE(harness.Context.GetViewport().GetSettings().ShowGrid);
 			CHECK(harness.Context.GetViewport().GetSettings().RotateSnap == 30.0f);
@@ -466,13 +466,13 @@ TEST_SUITE("Editor.Viewport")
 		REQUIRE(FileSystem::WriteText(stateFile, "{ \"Strata\": { \"Format\": \"EditorViewport\", \"Version\": 1 }, \"Camera\": { \"FOV\": -5 } }"));
 		{
 			ViewportHarness harness;
-			harness.Run("project.open", { { "path", FileSystem::ToUTF8(directory / "Game") } });
+			Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.open", { { "path", FileSystem::ToUTF8(directory / "Game") } });
 			CHECK(harness.Run("camera.get")["fov"] == 60.0);
 		}
 		REQUIRE(FileSystem::WriteText(stateFile, "not json"));
 		{
 			ViewportHarness harness;
-			harness.Run("project.open", { { "path", FileSystem::ToUTF8(directory / "Game") } });
+			Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.open", { { "path", FileSystem::ToUTF8(directory / "Game") } });
 			CHECK(harness.Run("camera.get")["fov"] == 60.0);
 		}
 		EditorViewport viewport;
@@ -639,7 +639,7 @@ TEST_SUITE("Editor.Viewport")
 
 		// Saved with the project's editor state.
 		ViewportHarness harness;
-		harness.Run("project.open", { { "path", FileSystem::ToUTF8(directory / "Game") } });
+		Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.open", { { "path", FileSystem::ToUTF8(directory / "Game") } });
 		CHECK_FALSE(harness.Context.GetViewport().GetSettings().PreviewLighting);
 		CHECK(harness.Context.GetViewport().GetSettings().ShowGameUI);
 		CHECK_FALSE(harness.Context.GetViewport().GetSettings().ShowGrid);
@@ -671,7 +671,7 @@ TEST_SUITE("Editor.Viewport")
 		{
 			ViewportHarness harness;
 			// First views frame each scene's content.
-			harness.Run("project.open", { { "path", FileSystem::ToUTF8(directory) } });
+			Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.open", { { "path", FileSystem::ToUTF8(directory) } });
 			CHECK(Near(ToVec3(harness.Run("camera.get")["target"]), glm::vec3(0.0f)));
 			movedCamera = harness.Run("camera.set", { { "position", { 2, 3, 4 } }, { "target", { 0, 0.5f, 0 } } });
 			Tests::RunCommandToCompletion(harness.Context, harness.Commands, "scene.open", { { "scene", second } });
@@ -694,7 +694,8 @@ TEST_SUITE("Editor.Viewport")
 		std::string third;
 		{
 			ViewportHarness harness;
-			harness.Run("project.open", { { "path", FileSystem::ToUTF8(directory) } }); // Opens the start scene, the first one
+			// Opens the start scene, the first one.
+			Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.open", { { "path", FileSystem::ToUTF8(directory) } });
 			CHECK(harness.Run("camera.get") == movedCamera);
 			Tests::RunCommandToCompletion(harness.Context, harness.Commands, "scene.open", { { "scene", second } });
 			CHECK(Near(ToVec3(harness.Run("camera.get")["target"]), glm::vec3(50.0f, 0.0f, 0.0f)));
@@ -714,7 +715,7 @@ TEST_SUITE("Editor.Viewport")
 		REQUIRE(FileSystem::WriteText(stateFile, "{ \"Strata\": { \"Format\": \"EditorViewport\", \"Version\": 1 }, \"Camera\": { \"Target\": [7, 8, 9], "
 			"\"Distance\": 3, \"Yaw\": 10, \"Pitch\": -5, \"FOV\": 40 }, \"Settings\": { \"ShowGrid\": false } }"));
 		ViewportHarness harness;
-		harness.Run("project.open", { { "path", FileSystem::ToUTF8(directory) } });
+		Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.open", { { "path", FileSystem::ToUTF8(directory) } });
 		const nlohmann::json camera = harness.Run("camera.get");
 		CHECK(Near(ToVec3(camera["target"]), glm::vec3(7.0f, 8.0f, 9.0f)));
 		CHECK(camera["fov"] == 40.0);

@@ -88,7 +88,7 @@ TEST_SUITE("Editor.Perf")
 
 		EditorContext context { EditorContextSpecification { false } };
 		EditorCommandRegistry commands;
-		Run(context, commands, "project.open", { { "path", FileSystem::ToUTF8(projectFile) } });
+		Tests::RunCommandToCompletion(context, commands, "project.open", { { "path", FileSystem::ToUTF8(projectFile) } });
 		Run(context, commands, "script.load", { { "path", FileSystem::ToUTF8(GetFeatureScriptModule()) } });
 		Tests::RunCommandToCompletion(context, commands, "scene.open", { { "scene", "Scenes/Feature.stscene" } });
 		LoadAllAssets(*context.GetAssetManager());

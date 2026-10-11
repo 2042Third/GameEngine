@@ -1398,8 +1398,9 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   real `EditorLayer` this way, with a `FakeEditorHost` (`StrataTests/src/Editor/HarnessEditor.h`).
 - **EditorContext** (`StrataEditor/src/Editor/EditorContext.h`) is the state with no UI. Opening a project creates and
   activates its `EditorAssetManager` (scan included), opens a `ScriptEngine` (hot reload on by default,
-  `EditorContextSpecification::HotReloadScripts`) and loads the built module, restores the viewport state, opens
-  the start scene and puts the project at the front of the recent projects (`RecentProjects`, a JSON file in the user
+  `EditorContextSpecification::HotReloadScripts`) and loads the built module, restores the viewport state, starts
+  opening the start scene in the background (`BeginOpenProject`; `OpenProject` waits for it) and puts the project at the
+  front of the recent projects (`RecentProjects`, a JSON file in the user
   data directory that the user's editors share; changes a read-only list cannot save are kept in memory and applied over
   every read, and the launcher reads it and checks its projects on an I/O thread). Creating a project applies a template
   (`ProjectTemplates`: `empty`, or `basic3d` with a saved, lit start scene whose ground has a material of the project,
@@ -1428,16 +1429,28 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   runner. UI actions that finish at once call the registry through `RunEditorCommand`
   (`UI/EditorActions.cpp`), which rejects pending results; Build Scripts, Apply of import settings, Reimport and opening a
   scene use the runner (`RunEditorCommandDeferred`; `EditorLayer.cpp`, `Panels/AssetInspectorPanel.cpp`,
-  `Panels/ContentBrowserPanel.cpp`).
+  `Panels/ContentBrowserPanel.cpp`), and so do opening projects and samples from the launcher, the File menu, a dropped
+  project file and the Open Sample dialog (`StartEditorCommand`, which hands a failure known at once back to the dialog or
+  the launcher that shows it).
 - **Opening scenes** (`EditorContext::BeginOpenScene`, `scene.open`). The scene's file is read again (the asset is
   unloaded first) through `SceneLoader` while the editor goes on drawing the edited scene, which is read-only meanwhile:
-  `CommitEdit` rolls an edit back, mutating scene commands fail (their `Finish`), and play mode is refused. `Update` makes
+  `CommitEdit` rolls an edit back, mutating scene commands fail (their `Finish`), and so do `scene.setSettings`, undo and
+  redo, script edits, property edits and gizmo drags (`EditorContext::CheckSceneEditable`, checked before anything
+  changes); play mode is refused, the Hierarchy and the Inspector draw their contents disabled under a banner naming the
+  scene that opens (`DrawSceneLoadBanner`, `UI/EditorActions.h`) and the viewport hides the gizmo. `Update` makes
   the loaded scene the edited one between frames (`FinishOpenScene`: the editor camera, the trim) once it and everything
   it uses are in; another `BeginOpenScene`, `NewScene` or closing the project cancels the load. `scene.open` answers
   deferred, one frame after the swap so that its `frameTimes` include the frame that swapped the scene in;
   `GetSceneLoadStatus` (and `editor.status`'s `sceneLoad`, `scene.loadStatus`) report its progress, the viewport draws a
-  card with it over the image (`ViewportPanel::DrawSceneLoadOverlay`) and the assets pill counts it. `OpenScene` waits for
-  the load (opening a project's start scene, tools and tests).
+  card with it over the image (`ViewportPanel::DrawSceneLoadOverlay`) and the assets pill counts it (reading the document
+  first, then the share of the bytes in). `OpenScene` and `WaitForSceneLoad` wait for the load (tools and tests).
+  A project's start scene opens the same way (`BeginOpenProject`, the status's `StartScene`): the project is open at once
+  with an empty, read-only scene that the start scene replaces; `project.open` and `project.openSample` answer once it is in
+  (or say why not: `startSceneError`, also logged as a warning, since the project stays open), and a window started with
+  `--project` draws its first frames meanwhile (`EditorOptions::OpenStartSceneInBackground`, set by the application for
+  windowed sessions that are not scripted; scripted runs, headless editors and tests wait in `OpenProject`, so their first
+  command finds the scene). With a 1,000,000-entity start scene the window's first frame comes after 1.0 s instead of 6.8 s
+  (Release; the scene follows about 7 s later, while frames go on).
 - **Undo** (`SceneEdit.h`, `UndoStack.h`). A `SceneEditTransaction` snapshots the entities an edit touches as
   `EntityState` (components as JSON, parent, sibling index from `Scene::GetSiblingIndex`); `Commit` records a
   `SceneEditAction` holding the states before and after, and undo or redo re-applies them with the same UUIDs
