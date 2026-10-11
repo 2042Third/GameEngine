@@ -1053,6 +1053,41 @@ TEST_SUITE("Editor.UI.Inspector")
 		CHECK(editor.ProbeText("Inspector.Scene.MaxContactConstraints") == "Auto");
 	}
 
+	TEST_CASE("The scene's streaming section sets how many entities sub-scenes create per frame, one undo step")
+	{
+		AuthoringEditor editor;
+		editor.Context().ClearSelection();
+		editor.Frames(2);
+		const auto setting = [&]() { return editor.Context().GetActiveScene()->GetSettings().MaxEntitiesInstantiatedPerFrame; };
+		REQUIRE(setting() == 5000u);
+		// Closed, the header sums it up.
+		CHECK(editor.ProbeText("Inspector.Streaming") == "5000 entities per frame");
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.Scene.MaxEntitiesInstantiatedPerFrame").has_value());
+
+		REQUIRE(editor.Click("Inspector.Streaming"));
+		CHECK(editor.ProbeText("Inspector.Scene.MaxEntitiesInstantiatedPerFrame.Label") == "Entities per Frame");
+		CHECK(editor.ProbeText("Inspector.Scene.MaxEntitiesInstantiatedPerFrame") == "5000");
+		const size_t position = editor.UndoPosition();
+		editor.TypeNumber("Inspector.Scene.MaxEntitiesInstantiatedPerFrame", "800");
+		CHECK(setting() == 800u);
+		CHECK(editor.UndoPosition() == position + 1);
+		editor.Frames(1);
+		CHECK(editor.ProbeText("Inspector.Streaming") == "800 entities per frame");
+		// Beyond the limit is the limit (scene.setSettings refuses more); the other settings stay.
+		editor.TypeNumber("Inspector.Scene.MaxEntitiesInstantiatedPerFrame", "99999999");
+		CHECK(setting() == SceneSettings::c_MaxEntitiesInstantiatedLimit);
+		CHECK(editor.Context().GetActiveScene()->GetSettings().MaxFixedStepsPerFrame == SceneSettings().MaxFixedStepsPerFrame);
+
+		editor.Run("edit.undo");
+		editor.Run("edit.undo");
+		CHECK(setting() == 5000u);
+		const nlohmann::json settings = editor.Run("scene.setSettings", { { "maxEntitiesInstantiatedPerFrame", 2500 } });
+		CHECK(settings["settings"]["maxEntitiesInstantiatedPerFrame"] == 2500);
+		CHECK(editor.Layer->GetCommands().Execute(editor.Context(), "scene.setSettings", { { "maxEntitiesInstantiatedPerFrame", 0 } }).ErrorKind
+			== EditorCommandError::InvalidParameters);
+		CHECK(setting() == 2500u);
+	}
+
 	TEST_CASE("The asset picker searches the assets of the property's type and picks with Enter")
 	{
 		AuthoringEditor editor;

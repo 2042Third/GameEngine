@@ -1,9 +1,8 @@
 #include <doctest/doctest.h>
 
-#include "Asset/AssetTestUtils.h"
+#include "Scene/SceneLoaderTestUtils.h"
 #include "Scene/SceneTestUtils.h"
 #include "Strata/Asset/AssetManager.h"
-#include "Strata/Core/JsonUtils.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
@@ -19,83 +18,11 @@
 using namespace Strata;
 using namespace Strata::Tests;
 
-namespace
-{
-
-	// Makes a manager the active one while it lives (SceneLoader loads from the active manager).
-	class ScopedActiveManager
-	{
-	public:
-		explicit ScopedActiveManager(const Ref<AssetManagerBase>& manager)
-			: m_Previous(AssetManager::GetActive())
-		{
-			AssetManager::SetActive(manager);
-		}
-
-		~ScopedActiveManager()
-		{
-			AssetManager::SetActive(m_Previous);
-		}
-
-		ScopedActiveManager(const ScopedActiveManager&) = delete;
-		ScopedActiveManager& operator=(const ScopedActiveManager&) = delete;
-	private:
-		Ref<AssetManagerBase> m_Previous;
-	};
-
-	std::vector<uint8_t> ToBytes(const nlohmann::json& json)
-	{
-		const std::string text = JsonUtils::Dump(json);
-		return std::vector<uint8_t>(text.begin(), text.end());
-	}
-
-	// A scene of `count` entities named "Level"; its document as an asset's stored form.
-	std::vector<uint8_t> MakeSceneDocument(size_t count, const std::string& name = "Level")
-	{
-		Scene scene(name);
-		for (size_t index = 0; index < count; index++)
-			scene.CreateEntity("Entity " + std::to_string(index)).GetComponent<TransformComponent>().Translation.x = static_cast<float>(index);
-		return ToBytes(SceneSerializer::Serialize(scene));
-	}
-
-	// A project of one scene asset (0x100) that uses ten fake assets of 100 bytes each (0x200...), recorded as its
-	// dependencies the way imports and packs record them.
-	struct LoaderFixture
-	{
-		ScopedJobSystem Jobs { 2, 1 };
-		ScopedFakeLoader Loader;
-		Ref<FakeAssetManager> Manager = CreateRef<FakeAssetManager>();
-		ScopedActiveManager Active { Manager };
-		AssetHandle SceneHandle = UUID::Null();
-		std::vector<AssetHandle> Dependencies;
-
-		LoaderFixture()
-		{
-			SceneHandle = Manager->AddStored(0x100, AssetType::Scene, MakeSceneDocument(5), "Scenes/Level.stscene");
-			for (uint64_t index = 0; index < 10; index++)
-				Dependencies.push_back(Manager->Add(0x200 + index, MakeUsage(100), 100));
-			Manager->SetDependencies(SceneHandle, Dependencies);
-		}
-
-		// Advances the manager and the request one frame at a time until the request is finished (REQUIREs it finishes).
-		void Finish(SceneLoadRequest& request)
-		{
-			REQUIRE(WaitUntil([&]()
-			{
-				Manager->Update();
-				request.Update();
-				return request.IsFinished();
-			}, std::chrono::milliseconds(10000)));
-		}
-	};
-
-}
-
 TEST_SUITE("Scene.Loader")
 {
 	TEST_CASE("A scene loads with everything it uses, read once, and becomes ready when all of it is in")
 	{
-		LoaderFixture fixture;
+		SceneLoaderFixture fixture;
 		FakeAssetManager& manager = *fixture.Manager;
 		const uint64_t reads = SceneSerializer::GetDeserializeCount();
 
@@ -162,7 +89,7 @@ TEST_SUITE("Scene.Loader")
 
 	TEST_CASE("A scene load may become ready before all it uses is in")
 	{
-		LoaderFixture fixture;
+		SceneLoaderFixture fixture;
 		FakeAssetManager& manager = *fixture.Manager;
 		SceneLoadOptions options;
 		options.RequiredProgress = 0.0f;
@@ -186,7 +113,7 @@ TEST_SUITE("Scene.Loader")
 
 	TEST_CASE("Two loads of one scene each get a scene of their own")
 	{
-		LoaderFixture fixture;
+		SceneLoaderFixture fixture;
 		const uint64_t reads = SceneSerializer::GetDeserializeCount();
 		SceneLoadRequest first = SceneLoader::LoadAsync(fixture.SceneHandle);
 		SceneLoadRequest second = SceneLoader::LoadAsync(fixture.SceneHandle);
@@ -206,7 +133,7 @@ TEST_SUITE("Scene.Loader")
 
 	TEST_CASE("Cancelling a scene load releases every pin and leaves nothing of it")
 	{
-		LoaderFixture fixture;
+		SceneLoaderFixture fixture;
 		FakeAssetManager& manager = *fixture.Manager;
 		manager.CloseGate();
 		SceneLoadRequest request = SceneLoader::LoadAsync(fixture.SceneHandle);
@@ -250,7 +177,7 @@ TEST_SUITE("Scene.Loader")
 
 	TEST_CASE("A scene load fails for what is not a valid scene, and failed dependencies do not stop it")
 	{
-		LoaderFixture fixture;
+		SceneLoaderFixture fixture;
 		FakeAssetManager& manager = *fixture.Manager;
 
 		// Not a scene asset, or no asset at all: failed at once.

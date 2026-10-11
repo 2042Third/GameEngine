@@ -69,6 +69,7 @@ namespace Strata
 				{ "gravity", { settings.Gravity.x, settings.Gravity.y, settings.Gravity.z } },
 				{ "fixedTimestep", settings.FixedTimestep },
 				{ "maxFixedStepsPerFrame", settings.MaxFixedStepsPerFrame },
+				{ "maxEntitiesInstantiatedPerFrame", settings.MaxEntitiesInstantiatedPerFrame },
 				{ "physicsCapacity", {
 					{ "maxBodies", settings.PhysicsCapacity.MaxBodies },
 					{ "maxBodyPairs", settings.PhysicsCapacity.MaxBodyPairs },
@@ -421,13 +422,17 @@ namespace Strata
 		capacitySchema["description"] = "Physics world capacities (only the given ones change), reserved in memory when play starts; raise them for "
 			"scenes that create many bodies while they play";
 		registry.Register({ "scene.setSettings",
-			"Changes physics settings of the edited scene: gravity, the fixed step and the physics world's capacities (undoable, one step). "
-			"Capacities take effect when a physics world is created, at the next play start, so set them in edit mode: while playing, changes go "
-			"to the running copy only and play.stop discards them (the result then has a warning). Returns the settings.",
+			"Changes settings of the edited scene: gravity, the fixed step, the physics world's capacities and how many entities additive loads "
+			"(sub-scenes) create per frame (undoable, one step). Capacities take effect when a physics world is created, at the next play start, "
+			"so set them in edit mode: while playing, changes go to the running copy only and play.stop discards them (the result then has a "
+			"warning). Returns the settings.",
 			ObjectSchema({
 				{ "gravity", Vec3Schema("Gravity in m/s^2") },
 				{ "fixedTimestep", NumberSchema("Fixed simulation step in seconds (1/1000 to 1/10)") },
 				{ "maxFixedStepsPerFrame", IntegerSchema("Upper bound of fixed steps per frame", 1, 64) },
+				{ "maxEntitiesInstantiatedPerFrame", IntegerSchema("Entities sub-scenes loading into the scene (scene.loadAdditive, scripts' "
+					"Scene::LoadAdditive) may create per frame, all together (default 5000); each frame also stops creating after about 2 ms", 1,
+					SceneSettings::c_MaxEntitiesInstantiatedLimit) },
 				{ "physicsCapacity", std::move(capacitySchema) } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
@@ -455,11 +460,14 @@ namespace Strata
 				}
 				CommandArguments arguments(parameters);
 				after.MaxFixedStepsPerFrame = static_cast<uint32_t>(arguments.GetInt("maxFixedStepsPerFrame", before.MaxFixedStepsPerFrame, 1, 64));
+				after.MaxEntitiesInstantiatedPerFrame = static_cast<uint32_t>(arguments.GetInt("maxEntitiesInstantiatedPerFrame", before.MaxEntitiesInstantiatedPerFrame,
+					1, SceneSettings::c_MaxEntitiesInstantiatedLimit));
 				if (!arguments.IsValid())
 					return arguments.Fail();
 
 				const bool changed = after.Gravity != before.Gravity || after.FixedTimestep != before.FixedTimestep
-					|| after.MaxFixedStepsPerFrame != before.MaxFixedStepsPerFrame || after.PhysicsCapacity != before.PhysicsCapacity;
+					|| after.MaxFixedStepsPerFrame != before.MaxFixedStepsPerFrame || after.PhysicsCapacity != before.PhysicsCapacity
+					|| after.MaxEntitiesInstantiatedPerFrame != before.MaxEntitiesInstantiatedPerFrame;
 				scene.GetSettings() = after;
 				if (changed && !context.IsPlaying())
 					context.GetUndoStack().Record(CreateScope<SceneSettingsAction>(scene, before, after));

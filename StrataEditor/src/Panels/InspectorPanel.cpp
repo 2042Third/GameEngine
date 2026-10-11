@@ -174,6 +174,8 @@ namespace Strata
 			SceneSettingRow MaxBodies;
 			SceneSettingRow MaxBodyPairs;
 			SceneSettingRow MaxContactConstraints;
+			// Sub-scenes (SceneSettings::MaxEntitiesInstantiatedPerFrame).
+			SceneSettingRow MaxEntitiesInstantiated;
 		};
 
 		SceneSettingRow MakeSceneSettingRow(PropertyInfo property)
@@ -186,6 +188,18 @@ namespace Strata
 		{
 			static const std::string s_Header = std::string(Icons::Orbit) + "  Physics";
 			return s_Header.c_str();
+		}
+
+		const char* GetStreamingHeader()
+		{
+			static const std::string s_Header = std::string(Icons::Layers) + "  Streaming";
+			return s_Header.c_str();
+		}
+
+		// The streaming section's summary ("5000 entities per frame").
+		std::string DescribeStreaming(const SceneSettings& settings)
+		{
+			return fmt::format("{} entities per frame", settings.MaxEntitiesInstantiatedPerFrame);
 		}
 
 		const char* GetSkyHeader()
@@ -270,6 +284,16 @@ namespace Strata
 					PhysicsCapacitySettings::c_MaxBodyPairsLimit));
 				properties.MaxContactConstraints = MakeSceneSettingRow(MakeCapacityProperty("MaxContactConstraints", "Max Contacts",
 					"Contacts solved per step (about 830 bytes each); Auto (0): sized from the bodies", PhysicsCapacitySettings::c_MaxContactConstraintsLimit));
+				PropertyInfo maxEntitiesInstantiated;
+				maxEntitiesInstantiated.Name = "MaxEntitiesInstantiatedPerFrame";
+				maxEntitiesInstantiated.DisplayName = "Entities per Frame";
+				maxEntitiesInstantiated.Tooltip = "Entities sub-scenes loading into the scene while it plays may create per frame, all together; a frame also "
+					"stops creating after about 2 ms. Lower it if streamed parts of a level make frames long";
+				maxEntitiesInstantiated.Type = PropertyType::UInt;
+				maxEntitiesInstantiated.Min = 1.0f;
+				maxEntitiesInstantiated.Max = static_cast<float>(SceneSettings::c_MaxEntitiesInstantiatedLimit); // A power of two: exact as a float
+				maxEntitiesInstantiated.Speed = 50.0f;
+				properties.MaxEntitiesInstantiated = MakeSceneSettingRow(std::move(maxEntitiesInstantiated));
 				return properties;
 			}();
 			return s_Properties;
@@ -812,27 +836,29 @@ namespace Strata
 		SceneSettings shown = m_SettingsDraft.value_or(scene.GetSettings());
 		if (!m_PhysicsSummary || m_PhysicsSummary->Gravity != shown.Gravity || m_PhysicsSummary->FixedTimestep != shown.FixedTimestep)
 			m_PhysicsSummary = PhysicsSummary { shown.Gravity, shown.FixedTimestep, DescribePhysics(shown) };
+		if (!m_StreamingSummary || m_StreamingSummary->MaxEntitiesInstantiatedPerFrame != shown.MaxEntitiesInstantiatedPerFrame)
+			m_StreamingSummary = StreamingSummary { shown.MaxEntitiesInstantiatedPerFrame, DescribeStreaming(shown) };
+		const SceneSettingProperties& properties = GetSceneSettingProperties();
+		const SceneSettings defaults;
+		bool changed = false;
+		bool finished = false;
+		auto draw = [&](const SceneSettingRow& row, PropertyValue value, const PropertyValue& fallback, std::string_view zeroLabel, auto&& apply)
+		{
+			UI::PropertyLabel(row.Property.DisplayName, row.Property.Tooltip, row.ProbeKey);
+			PropertyWidgetOptions options;
+			options.DefaultValue = &fallback;
+			options.ProbeKey = row.ProbeKey;
+			options.ZeroLabel = zeroLabel;
+			const PropertyEditResult result = DrawPropertyWidget(row.Property, value, scene, options);
+			if (result.Changed)
+				apply(value);
+			changed |= result.Changed;
+			finished |= result.Finished;
+		};
 		if (UI::SectionHeader("Inspector.Physics", GetPhysicsHeader(), ImGuiTreeNodeFlags_None, m_PhysicsSummary->Text))
 		{
-			const SceneSettingProperties& properties = GetSceneSettingProperties();
-			bool changed = false;
-			bool finished = false;
-			const SceneSettings defaults;
 			if (UI::BeginPropertyTable("Settings"))
 			{
-				auto draw = [&](const SceneSettingRow& row, PropertyValue value, const PropertyValue& fallback, std::string_view zeroLabel, auto&& apply)
-				{
-					UI::PropertyLabel(row.Property.DisplayName, row.Property.Tooltip, row.ProbeKey);
-					PropertyWidgetOptions options;
-					options.DefaultValue = &fallback;
-					options.ProbeKey = row.ProbeKey;
-					options.ZeroLabel = zeroLabel;
-					const PropertyEditResult result = DrawPropertyWidget(row.Property, value, scene, options);
-					if (result.Changed)
-						apply(value);
-					changed |= result.Changed;
-					finished |= result.Finished;
-				};
 				draw(properties.Gravity, shown.Gravity, PropertyValue(defaults.Gravity), {}, [&](const PropertyValue& value) { shown.Gravity = std::get<glm::vec3>(value); });
 				draw(properties.FixedTimestep, shown.FixedTimestep, PropertyValue(defaults.FixedTimestep), {},
 					[&](const PropertyValue& value) { shown.FixedTimestep = std::get<float>(value); });
@@ -851,21 +877,33 @@ namespace Strata
 					{ capacity.MaxContactConstraints = std::min(std::get<uint32_t>(value), PhysicsCapacitySettings::c_MaxContactConstraintsLimit); });
 				UI::EndPropertyTable();
 			}
-			// A drag shows its value here and applies it once, when it ends: one scene.setSettings, one undo step.
-			if (changed)
-				m_SettingsDraft = shown;
-			if (finished && m_SettingsDraft)
+		}
+		if (UI::SectionHeader("Inspector.Streaming", GetStreamingHeader(), ImGuiTreeNodeFlags_None, m_StreamingSummary->Text))
+		{
+			if (UI::BeginPropertyTable("StreamingSettings"))
 			{
-				const SceneSettings settings = *m_SettingsDraft;
-				m_SettingsDraft.reset();
-				const PhysicsCapacitySettings& capacity = settings.PhysicsCapacity;
-				RunEditorCommand(context, commands, "scene.setSettings", {
-					{ "gravity", { settings.Gravity.x, settings.Gravity.y, settings.Gravity.z } },
-					{ "fixedTimestep", settings.FixedTimestep },
-					{ "maxFixedStepsPerFrame", settings.MaxFixedStepsPerFrame },
-					{ "physicsCapacity", { { "maxBodies", capacity.MaxBodies }, { "maxBodyPairs", capacity.MaxBodyPairs },
-						{ "maxContactConstraints", capacity.MaxContactConstraints } } } });
+				// A typed value is not clamped by the field, and scene.setSettings refuses one out of range: it is clamped here.
+				draw(properties.MaxEntitiesInstantiated, shown.MaxEntitiesInstantiatedPerFrame, PropertyValue(defaults.MaxEntitiesInstantiatedPerFrame), {},
+					[&](const PropertyValue& value)
+					{ shown.MaxEntitiesInstantiatedPerFrame = std::clamp(std::get<uint32_t>(value), 1u, SceneSettings::c_MaxEntitiesInstantiatedLimit); });
+				UI::EndPropertyTable();
 			}
+		}
+		// A drag shows its value here and applies it once, when it ends: one scene.setSettings, one undo step.
+		if (changed)
+			m_SettingsDraft = shown;
+		if (finished && m_SettingsDraft)
+		{
+			const SceneSettings settings = *m_SettingsDraft;
+			m_SettingsDraft.reset();
+			const PhysicsCapacitySettings& capacity = settings.PhysicsCapacity;
+			RunEditorCommand(context, commands, "scene.setSettings", {
+				{ "gravity", { settings.Gravity.x, settings.Gravity.y, settings.Gravity.z } },
+				{ "fixedTimestep", settings.FixedTimestep },
+				{ "maxFixedStepsPerFrame", settings.MaxFixedStepsPerFrame },
+				{ "maxEntitiesInstantiatedPerFrame", settings.MaxEntitiesInstantiatedPerFrame },
+				{ "physicsCapacity", { { "maxBodies", capacity.MaxBodies }, { "maxBodyPairs", capacity.MaxBodyPairs },
+					{ "maxContactConstraints", capacity.MaxContactConstraints } } } });
 		}
 		DrawSky(context, commands);
 	}

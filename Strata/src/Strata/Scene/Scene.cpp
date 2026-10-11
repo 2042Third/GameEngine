@@ -5,6 +5,7 @@
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/SceneSerializer.h"
+#include "Strata/Scene/SubSceneLoad.h"
 #include "Strata/Scene/UnknownComponents.h"
 
 #include <algorithm>
@@ -1822,6 +1823,8 @@ namespace Strata
 	{
 		ST_PROFILE_FUNCTION();
 
+		// Before the systems update, so that they see the slice's entities in this update.
+		UpdateSubScenes();
 		if (!m_IsRunning)
 		{
 			UpdateWorldTransforms();
@@ -1928,6 +1931,7 @@ namespace Strata
 	void Scene::OnUpdateEditor(Timestep)
 	{
 		ST_PROFILE_FUNCTION();
+		UpdateSubScenes();
 		UpdateWorldTransforms();
 #ifdef ST_DEBUG
 		AssertCachesValid();

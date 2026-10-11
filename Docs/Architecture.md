@@ -529,7 +529,8 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   catch-up fixed steps once they took longer, in wall time, than the time they simulated, and drops the steps still due
   (`GetDroppedFixedStepCount`, also `PhysicsStats::DroppedSteps`). Otherwise a frame that runs eight expensive steps
   makes the next one owe even more. Tests and tools keep the default, every due step up to `MaxFixedStepsPerFrame`.
-- `SceneSettings` holds gravity, the fixed timestep (1/60 s), `MaxFixedStepsPerFrame` and the physics world's capacities
+- `SceneSettings` holds gravity, the fixed timestep (1/60 s), `MaxFixedStepsPerFrame`, `MaxEntitiesInstantiatedPerFrame` (see
+  additive scenes below) and the physics world's capacities
   (`PhysicsCapacity`: bodies, body pairs and contact constraints; 0, the default, sizes one automatically; each up to a
   limit that bounds the memory a world reserves). All of it is saved with the scene and changed with `scene.setSettings`
   (one undo step); capacities apply when a world is created, at play start.
@@ -571,6 +572,25 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   `GameRuntime` (start scene, loading scene, switches). While a switch loads, the running scene goes on and its scripts
   read the progress (`Scene::GetSceneLoadProgress`, set by the owner every frame); the new scene replaces it between
   updates, then its systems start and the trim of what only the previous scene used is scheduled.
+- **Additive scenes** (sub-scenes, `Scene/SceneSubScenes.cpp`, `Scene/SubScene.h`): `Scene::LoadSubScene(asset, options)`
+  loads a scene asset into a running scene next to what it holds (a level's streamed part, a room; world partition loads
+  its cells this way), and `BeginAdditiveLoad(preparedScene)` adds a scene made otherwise. The asset and its closure load
+  through `SceneLoader` (pinned at `SubSceneOptions::Priority` until every entity exists), the prepared scene is compiled
+  into an `EntityPrototype` on the job system (which also drops the prepared scene, so the main thread never pays for
+  destroying it), and its entities are created by `Scene::UpdateSubScenes`, which `OnUpdateRuntime` and `OnUpdateEditor`
+  call first: in slices of at most `SceneSettings::MaxEntitiesInstantiatedPerFrame` entities per update for all sub-scenes
+  together (default 5,000; saved with the scene, `scene.setSettings`, the Inspector's Streaming section), cut in chunks of
+  512 and stopped once `Scene::c_MaxInstantiationMillisecondsPerFrame` (2 ms) went by. Each slice's entities are complete
+  when it returns (`ContinueInstantiation`), so systems treat them like any other: their component signals give scripts
+  `OnCreate` at the next sync point, physics its bodies in its batches, audio its voices and the render scene its proxies.
+  The entities keep their IDs, so a sub-scene with an ID the scene has already fails with that ID in its error: checked for
+  all of them before the first entity exists, and again per slice for IDs the scene gained meanwhile, where the failure
+  destroys what the sub-scene created. Its top-level entities carry a runtime-only `SubSceneComponent` (not registered:
+  never saved, copied or shown) naming it, and `UnloadSubScene(id)` cancels the load (releasing every pin) and destroys
+  them with `DestroyEntities` (systems hear `OnEntityDestroying`; deferred while the scene updates). `GetSubSceneStatus`
+  reports the state (`Loading`, `Instantiating`, `Loaded`, `Failed` with the error), the progress (half the closure's
+  bytes, half the entities), the entities created and the slices; failed sub-scenes stay until unloaded. A sub-scene's own
+  settings (gravity...) are not applied.
 - A scene knows the scene asset it was loaded from or saved as (`Scene::GetSourceAsset`, set when a scene asset's
   scene is taken or copied and by the editor's save-as) and keeps an ID across its copies (`GetLineageID`: the source
   asset, else an ID of its own), by which systems recognize it from one play session to the next.
