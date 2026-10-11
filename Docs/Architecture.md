@@ -1264,10 +1264,14 @@ system, not to entities: a character's joints add no entities and no transform c
   `Scene.Animation`). Every active entity with an `AnimatorComponent` has an animator, started with `PlayOnStart` when
   the scene starts or the entity becomes active (deactivating resets it); animators with the same skeleton, controller
   and clip share an asset set, whose assets are requested once per update and held while animators use them. An update
-  evaluates the animators whose assets are loaded on the job system (`ParallelFor` in batches of
-  `c_EvaluationBatchSize`; each writes only its own record, so the results do not depend on the threads), then, on the
-  main thread and animator by animator in creation order: publishes the poses (new versions for `ISkinningPoses`),
-  applies root motion, places attachments and dispatches the events to the listeners of `IAnimationEventSource`.
+  resolves the sets, then goes over every animator on the job system (`ParallelFor` in batches of
+  `c_EvaluationBatchSize`; the jobs read the registry and the sets and write only their own animator's record, so the
+  results do not depend on the threads): an animator whose activity, assets and played clip are as they were advances
+  and poses right there, the others are queued for the main thread, brought up to date there (in creation order) and
+  stepped on the job system in turn. So the serial part of a frame does not grow with animators that only advance
+  (10,000 unseen animators cost a fraction of a millisecond). Then, on the main thread and animator by animator in
+  creation order, the update publishes the poses (new versions for `ISkinningPoses`), applies root motion, places
+  attachments and dispatches the events to the listeners of `IAnimationEventSource`.
 - **Root motion.** With `ApplyRootMotion` the root motion joint's horizontal travel and turn about +Y during the update
   are taken out of the pose and move the entity: measured per pass through the clip (loops included), weighted by the
   blend, in the frame the root faced when the clip started; the pose holds the root's subtree where (and facing how)

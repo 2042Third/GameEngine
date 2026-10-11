@@ -56,11 +56,13 @@ namespace Strata
 	//     when the scene starts or the component is added; reset when the entity is deactivated, started again on
 	//     activation with PlayOnStart). Animators with the same skeleton, controller and clip share an asset set: the assets
 	//     are requested once per update for all of them, and clip bindings are made once per skeleton and clip.
-	//  2. Evaluation, on the job system (JobSystem::ParallelFor; no registry access from the jobs): each animator whose assets
-	//     are loaded advances its time and state machine (AnimatorInstance::Advance) and computes its pose (Evaluate). A
-	//     WhenVisible animator computes its pose only when a renderer drew a mesh it skins since the previous update
-	//     (ReportVisible) or when it has none yet; time, transitions, events and root motion go on while it is unseen.
-	//     Results do not depend on the number of threads.
+	//  2. Evaluation, on the job system (JobSystem::ParallelFor over every animator; the jobs read the registry and the asset
+	//     sets and write only their own animator's record): an animator whose activity, assets and played clip are as they
+	//     were advances its time and state machine (AnimatorInstance::Advance) and computes its pose (Evaluate) right there;
+	//     the others (activated, deactivated, given other assets or a clip to play) are brought up to date on the main
+	//     thread and then stepped on the job system too. A WhenVisible animator computes its pose only when a renderer drew
+	//     a mesh it skins since the previous update (ReportVisible) or when it has none yet; time, transitions, events and
+	//     root motion go on while it is unseen. Results do not depend on the number of threads.
 	//  3. On the main thread, animator by animator: root motion moves the entity (ApplyRootMotion), the poses' versions
 	//     change, attachments (AttachToJointComponent) are placed at their joints, and the events the playheads passed are
 	//     dispatched to the listeners (IAnimationEventSource; the scripts' OnAnimationEvent), each animator's in order.
@@ -161,6 +163,15 @@ namespace Strata
 			bool Reported = false; // A failed asset was reported (once per set)
 		};
 
+		// What an update does with an animator.
+		enum class RecordUpdate : uint8_t
+		{
+			None = 0, // Inactive (or removed): nothing
+			Waiting,  // Its assets are loading
+			Sync,     // Activity, assets or a played clip changed: the main thread brings the record up to date first
+			Step      // Advances (and poses)
+		};
+
 		struct AnimatorRecord
 		{
 			entt::entity Handle = entt::null;
@@ -180,6 +191,7 @@ namespace Strata
 			bool PlayedClipLoading = false;
 
 			// The update's work (written by the evaluation jobs).
+			RecordUpdate Update = RecordUpdate::None;
 			AnimatorSettings Settings;
 			bool Evaluate = false;
 			bool Evaluated = false;
@@ -233,6 +245,13 @@ namespace Strata
 		AnimatorAssets CommandAssets(AnimatorRecord& record);
 		// Matches the record to its component: activity, asset set, start. False while the animator is inactive.
 		bool SyncRecord(AnimatorRecord& record, const AnimatorComponent& component, bool active);
+		// On the job system: what the update does with the record (preparing its step when it can take one). Reads the
+		// registry and the asset sets only.
+		RecordUpdate ClassifyRecord(AnimatorRecord& record, const entt::registry& registry) const;
+		// The settings and work of a step from the component.
+		void PrepareStep(AnimatorRecord& record, const AnimatorComponent& component) const;
+		// Advances the animator and computes its pose when it is to (thread-safe across records).
+		void StepRecord(AnimatorRecord& record, float deltaTime, std::vector<JointPose>& scratch) const;
 		bool IsReady(const AnimatorRecord& record) const;
 		void PlaceAttachments();
 		void DispatchEvents();
@@ -249,7 +268,8 @@ namespace Strata
 		std::map<std::array<uint64_t, 3>, uint32_t> m_SetIndices; // By skeleton, controller and clip handle
 		uint64_t m_NextObjectId = 1; // SkeletonId and ControllerId
 
-		std::vector<uint32_t> m_Work; // Records evaluated by the update's jobs
+		std::vector<uint32_t> m_SyncQueue; // Records the update's jobs left to the main thread
+		std::vector<uint32_t> m_Work;      // Records stepped after the main thread synchronized them
 		std::unordered_map<entt::entity, AttachmentState> m_Attachments;
 		std::vector<Ref<EventListener>> m_Listeners;
 		AnimationEventListenerID m_NextListenerID = 1;

@@ -99,5 +99,8 @@
 	"PerfGPU.Streaming.MaxFinalizeTimeAllResident": { "Measured": 3.468, "Budget": 5.202, "Unit": "ms" },
 	"PerfGPU.Streaming.RuntimeMaxFinalizeStage": { "Measured": 4.587, "Budget": 6.88, "Unit": "ms" },
 	"PerfGPU.Streaming.RuntimePeakPrivateMemory": { "Measured": 566.2, "Budget": 650.0, "Unit": "MB" },
-	"PerfGPU.Streaming.RuntimePeakPrivateMemoryAllResident": { "Measured": 602.0, "Budget": 650.0, "Unit": "MB" }
+	"PerfGPU.Streaming.RuntimePeakPrivateMemoryAllResident": { "Measured": 602.0, "Budget": 650.0, "Unit": "MB" },
+	"Perf.Animation.Evaluate1000": { "Measured": 0.49, "Budget": 0.735, "Unit": "ms" },
+	"Perf.Animation.CulledAnimators10k": { "Measured": 0.165, "Budget": 0.2475, "Unit": "ms" },
+	"PerfGPU.Renderer.Skinned1000": { "Measured": 1.07, "Budget": 1.605, "Unit": "ms" }
 }

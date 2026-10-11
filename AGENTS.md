@@ -709,9 +709,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
 - **Through scene services:** the renderer reads poses through `ISkinningPoses` and reports what it drew; scripts and
   other modules use `IAnimatorControl` and `IAnimationEventSource` (`Scene/SceneServices.h`). Only the Engine and
   AssetPipeline layers include Animation.
-- **Evaluation is parallel and deterministic:** jobs touch only their animator's record (no registry access); everything
-  that changes the scene (root motion, attachments, events) happens on the main thread afterwards, animator by animator.
-  Keep it that way: a test compares runs with different thread counts bit for bit.
+- **Evaluation is parallel and deterministic:** jobs write only their animator's record (they read the registry and the
+  asset sets, never write them; what needs the main thread, such as new asset sets or requests, is queued for it);
+  everything that changes the scene (root motion, attachments, events) happens on the main thread afterwards, animator by
+  animator. Keep it that way: a test compares runs with different thread counts bit for bit.
 - **Root motion** moves entities only in `AnimationSystem::ApplyRootMotion` (signaled through the transform contract); a
   character controller takes the delta there.
 - **Culling:** `WhenVisible` animators skip their pose while no renderer reports them (`ISkinningPoses::ReportVisible`);

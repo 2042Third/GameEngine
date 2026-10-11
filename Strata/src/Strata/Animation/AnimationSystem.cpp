@@ -14,6 +14,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 
@@ -263,9 +264,6 @@ namespace Strata
 			if (component.PlayOnStart && !record.Instance.IsPlaying())
 				record.Instance.Start();
 		}
-		record.Settings.Speed = std::isfinite(component.Speed) ? std::clamp(component.Speed, -c_MaxAnimatorSpeed, c_MaxAnimatorSpeed) : 0.0f;
-		record.Settings.Loop = component.Loop;
-		record.Settings.ApplyRootMotion = component.ApplyRootMotion;
 		return true;
 	}
 
@@ -510,56 +508,83 @@ namespace Strata
 		stats.Waiting = 0;
 		stats.Attachments = 0;
 
-		entt::registry& registry = m_Scene.GetRegistry();
-		m_Work.clear();
+		const entt::registry& registry = m_Scene.GetRegistry();
 		m_Iterating = true;
-		for (uint32_t index = 0; index < m_Records.size(); index++)
+		// The shared assets first, once per set: requests and bindings (main thread). Sets without users are free slots.
+		for (AssetSet& set : m_Sets)
+		{
+			if (set.Users > 0)
+				ResolveSet(set);
+		}
+
+		// On the job system, every animator at once: those whose activity, assets and played clip are as they were step right
+		// there; the others (activated, deactivated, given other assets or a clip to play) are queued for the main thread. Each
+		// job only reads the registry and the asset sets and writes its own records, so the results do not depend on the
+		// threads.
+		if (m_SyncQueue.size() < m_Records.size())
+			m_SyncQueue.resize(m_Records.size());
+		std::atomic<uint32_t> queued = 0;
+		JobSystem::ParallelFor(static_cast<uint32_t>(m_Records.size()), c_EvaluationBatchSize, [this, &registry, &queued, deltaTime](uint32_t begin, uint32_t end)
+		{
+			ST_PROFILE_SCOPE("AnimationSystem::Evaluate");
+			thread_local std::vector<JointPose> t_Scratch;
+			for (uint32_t index = begin; index < end; index++)
+			{
+				AnimatorRecord& record = m_Records[index];
+				record.Update = record.Removed ? RecordUpdate::None : ClassifyRecord(record, registry);
+				if (record.Update == RecordUpdate::Sync)
+					m_SyncQueue[queued.fetch_add(1, std::memory_order_relaxed)] = index;
+				else if (record.Update == RecordUpdate::Step)
+					StepRecord(record, deltaTime, t_Scratch);
+			}
+		});
+
+		// The queued animators, in creation order: synchronized with their components here, then stepped on the job system.
+		const std::span<uint32_t> synced(m_SyncQueue.data(), queued.load());
+		std::sort(synced.begin(), synced.end());
+		m_Work.clear();
+		for (const uint32_t index : synced)
 		{
 			AnimatorRecord& record = m_Records[index];
-			if (record.Removed)
-				continue;
 			const AnimatorComponent& component = registry.get<AnimatorComponent>(record.Handle);
-			if (!SyncRecord(record, component, m_Scene.IsActiveInHierarchy(Entity(record.Handle, &m_Scene))))
+			const WorldTransformComponent* world = registry.try_get<WorldTransformComponent>(record.Handle);
+			if (!SyncRecord(record, component, world && world->ActiveInHierarchy))
+			{
+				record.Update = RecordUpdate::None;
 				continue;
-			stats.ActiveAnimators++;
+			}
 			ResolveSet(m_Sets[record.Set]);
 			ResolvePlayedClip(record, m_Sets[record.Set]);
 			if (!IsReady(record))
 			{
-				stats.Waiting++;
+				record.Update = RecordUpdate::Waiting;
 				continue;
 			}
-			// Unseen WhenVisible animators skip their poses, except for a first one (renderers then have something to draw
-			// until they report it).
-			const bool seen = record.SeenUpdate != 0 && record.SeenUpdate + 1 >= m_UpdateIndex;
-			record.Evaluate = component.CullingMode == AnimatorCullingMode::AlwaysAnimate || seen || record.PoseVersion == 0;
-			record.Evaluated = false;
-			record.Events.clear();
+			PrepareStep(record, component);
+			record.Update = RecordUpdate::Step;
 			m_Work.push_back(index);
 		}
-
-		// Each animator changes only its own record: the results do not depend on the threads.
 		JobSystem::ParallelFor(static_cast<uint32_t>(m_Work.size()), c_EvaluationBatchSize, [this, deltaTime](uint32_t begin, uint32_t end)
 		{
 			ST_PROFILE_SCOPE("AnimationSystem::Evaluate");
 			thread_local std::vector<JointPose> t_Scratch;
 			for (uint32_t item = begin; item < end; item++)
-			{
-				AnimatorRecord& record = m_Records[m_Work[item]];
-				const AnimatorAssets assets = MakeAssets(record);
-				if (!record.Instance.Advance(deltaTime, assets, record.Settings, record.Events))
-					continue;
-				if (record.Evaluate)
-					record.Evaluated = record.Instance.Evaluate(assets, record.Settings, t_Scratch, record.Pose);
-			}
+				StepRecord(m_Records[m_Work[item]], deltaTime, t_Scratch);
 		});
 
+		// The results, animator by animator in creation order.
 		bool posesChanged = false;
-		for (const uint32_t index : m_Work)
+		for (uint32_t index = 0; index < m_Records.size(); index++)
 		{
 			AnimatorRecord& record = m_Records[index];
-			if (record.Removed)
+			if (record.Removed || record.Update == RecordUpdate::None)
 				continue;
+			stats.ActiveAnimators++;
+			if (record.Update != RecordUpdate::Step)
+			{
+				stats.Waiting++;
+				continue;
+			}
 			stats.Advanced++;
 			if (record.Evaluated)
 			{
@@ -595,6 +620,49 @@ namespace Strata
 		m_Iterating = false;
 		RemoveDeferredRecords();
 		DispatchEvents();
+	}
+
+	AnimationSystem::RecordUpdate AnimationSystem::ClassifyRecord(AnimatorRecord& record, const entt::registry& registry) const
+	{
+		const AnimatorComponent& component = registry.get<AnimatorComponent>(record.Handle);
+		const WorldTransformComponent* world = registry.try_get<WorldTransformComponent>(record.Handle);
+		if (!(world && world->ActiveInHierarchy))
+			return record.Active ? RecordUpdate::Sync : RecordUpdate::None;
+		if (!record.Active || record.Set == c_NoSet)
+			return RecordUpdate::Sync;
+		const AssetSet& set = m_Sets[record.Set];
+		if (set.SkeletonHandle != component.Skeleton || set.ControllerHandle != component.Controller || set.ClipHandle != component.Clip)
+			return RecordUpdate::Sync;
+		// A clip played directly that is new, still loading or bound to another version of the skeleton.
+		const AssetHandle played = record.Instance.GetPlayedClip();
+		if (played != record.PlayedClipHandle || (played.IsValid() && (record.PlayedClipLoading || !record.PlayedClip || record.PlayedBindingSkeletonId != set.SkeletonId)))
+			return RecordUpdate::Sync;
+		if (!IsReady(record))
+			return RecordUpdate::Waiting;
+		PrepareStep(record, component);
+		return RecordUpdate::Step;
+	}
+
+	void AnimationSystem::PrepareStep(AnimatorRecord& record, const AnimatorComponent& component) const
+	{
+		record.Settings.Speed = std::isfinite(component.Speed) ? std::clamp(component.Speed, -c_MaxAnimatorSpeed, c_MaxAnimatorSpeed) : 0.0f;
+		record.Settings.Loop = component.Loop;
+		record.Settings.ApplyRootMotion = component.ApplyRootMotion;
+		// Unseen WhenVisible animators skip their poses, except for a first one (renderers then have something to draw until
+		// they report it).
+		const bool seen = record.SeenUpdate != 0 && record.SeenUpdate + 1 >= m_UpdateIndex;
+		record.Evaluate = component.CullingMode == AnimatorCullingMode::AlwaysAnimate || seen || record.PoseVersion == 0;
+		record.Evaluated = false;
+		record.Events.clear();
+	}
+
+	void AnimationSystem::StepRecord(AnimatorRecord& record, float deltaTime, std::vector<JointPose>& scratch) const
+	{
+		const AnimatorAssets assets = MakeAssets(record);
+		if (!record.Instance.Advance(deltaTime, assets, record.Settings, record.Events))
+			return;
+		if (record.Evaluate)
+			record.Evaluated = record.Instance.Evaluate(assets, record.Settings, scratch, record.Pose);
 	}
 
 	void AnimationSystem::ApplyRootMotion(Entity animator, const RootMotionDelta& delta)
