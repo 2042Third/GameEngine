@@ -19,6 +19,10 @@ namespace Strata::UI
 	// safe); a moment in the future counts as just now.
 	std::string DescribeTimeAgo(int64_t then, int64_t now);
 
+	// A short age for what just happened, in whole units: "now" (under a second), "12 s ago", "3 min ago", "2 h ago".
+	// Negative and non-finite ages count as now.
+	std::string DescribeSecondsAgo(double seconds);
+
 	// One or two initials for a badge: the first letters of the first two words ("Space Game" -> "SG"), or of the first
 	// two capitalized parts of one word ("FeatureTest" -> "FT"), else its first character, uppercased if it is ASCII.
 	// Words are separated by spaces, '-', '_' and '.'; "?" for a name without letters or digits.

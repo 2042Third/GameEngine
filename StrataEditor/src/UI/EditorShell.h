@@ -8,6 +8,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace Strata
 {
@@ -61,6 +62,10 @@ namespace Strata
 		// Renames an entity in place in the Hierarchy (F2 in the viewport): the Hierarchy comes to the front with the entity's
 		// row revealed and its name in a text field.
 		virtual void RenameEntity(UUID entity) = 0;
+		// Opens a docked panel by its id (EditorPanels) and brings it to the front.
+		virtual void ShowPanel(std::string_view panel) = 0;
+		// The Activity panel with an entry of the activity journal selected (0: none).
+		virtual void ShowActivity(uint64_t entry) = 0;
 
 		virtual EditorEnvironment GetEnvironment() const = 0;
 		virtual EditorAutomationState GetAutomationState() const = 0;

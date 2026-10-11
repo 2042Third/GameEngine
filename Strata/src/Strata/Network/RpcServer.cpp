@@ -465,6 +465,7 @@ namespace Strata
 		std::atomic<uint16_t> Port = 0;
 		std::string LastError; // Why Start failed (owning thread)
 		std::atomic<uint32_t> ClientCount = 0;
+		std::atomic<uint64_t> ClientsVersion = 0; // Changes whenever the list GetClients returns changes
 
 		mutable std::mutex MethodsMutex;
 		std::condition_variable MethodsCondition;
@@ -631,6 +632,8 @@ namespace Strata
 		{
 			std::scoped_lock<std::mutex> lock(Shared->Mutex);
 			Shared->OpenConnections.clear();
+			if (!Shared->Clients.empty())
+				ClientsVersion++;
 			Shared->Clients.clear();
 			Shared->Outgoing.clear();
 		}
@@ -1329,18 +1332,31 @@ namespace Strata
 	void RpcServer::Impl::UpdateClientCount()
 	{
 		ClientCount = static_cast<uint32_t>(CountConnections(true));
-		// The list for GetClients changes only when a client comes or goes.
-		std::vector<RpcClientInfo> clients;
+		// The list for GetClients changes only when a client comes or goes: compared in place, built only then.
+		const auto listed = [](const Scope<Connection>& connection) { return connection->Authenticated && !connection->Closing && !connection->Closed; };
+		std::scoped_lock<std::mutex> lock(Shared->Mutex);
+		size_t index = 0;
+		bool same = true;
 		for (const Scope<Connection>& connection : Connections)
 		{
-			if (connection->Authenticated && !connection->Closing && !connection->Closed)
-				clients.push_back({ connection->Id, connection->ClientName, connection->ConnectedAt });
+			if (!listed(connection))
+				continue;
+			if (index >= Shared->Clients.size() || Shared->Clients[index].Id != connection->Id)
+			{
+				same = false;
+				break;
+			}
+			index++;
 		}
-		std::scoped_lock<std::mutex> lock(Shared->Mutex);
-		const bool same = clients.size() == Shared->Clients.size() && std::equal(clients.begin(), clients.end(), Shared->Clients.begin(),
-			[](const RpcClientInfo& a, const RpcClientInfo& b) { return a.Id == b.Id; });
-		if (!same)
-			Shared->Clients = std::move(clients);
+		if (same && index == Shared->Clients.size())
+			return;
+		Shared->Clients.clear();
+		for (const Scope<Connection>& connection : Connections)
+		{
+			if (listed(connection))
+				Shared->Clients.push_back({ connection->Id, connection->ClientName, connection->ConnectedAt });
+		}
+		ClientsVersion++;
 	}
 
 	bool RpcServer::Impl::CanProcessRequests(const Connection& connection)
@@ -1505,6 +1521,11 @@ namespace Strata
 	uint32_t RpcServer::GetClientCount() const
 	{
 		return m_Impl->ClientCount.load();
+	}
+
+	uint64_t RpcServer::GetClientsVersion() const
+	{
+		return m_Impl->ClientsVersion.load();
 	}
 
 	std::vector<RpcClientInfo> RpcServer::GetClients() const

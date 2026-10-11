@@ -204,6 +204,8 @@ namespace Strata
 		uint32_t GetClientCount() const;
 		// The authenticated clients, in the order they connected. Thread-safe.
 		std::vector<RpcClientInfo> GetClients() const;
+		// Changes whenever the list GetClients returns changes, so callers copy it only then. Thread-safe.
+		uint64_t GetClientsVersion() const;
 
 		// Registers a method (names starting with "rpc." are reserved). Returns false for an invalid or
 		// duplicate name. A missing or non-object ParamsSchema is replaced by an empty object schema.

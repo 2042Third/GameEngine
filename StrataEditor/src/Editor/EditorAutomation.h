@@ -78,6 +78,8 @@ namespace Strata
 		uint32_t GetClientCount() const;
 		// The connected clients with the names they gave in their handshakes (informational, never trusted).
 		std::vector<RpcClientInfo> GetClients() const;
+		// Changes whenever GetClients would return another list (RpcServer::GetClientsVersion).
+		uint64_t GetClientsVersion() const;
 		// Requests whose command has not finished yet.
 		size_t GetPendingRequestCount() const;
 		// Requests answered since Start.

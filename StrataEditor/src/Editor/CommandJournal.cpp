@@ -438,6 +438,15 @@ namespace Strata
 		entry->Bytes += added;
 		m_Bytes += added;
 		m_Version++;
+		if (entry->Source == CommandSource::Automation && entry->Parent == 0)
+		{
+			m_LatestAutomation.Id = entry->Id;
+			m_LatestAutomation.Command = entry->Command;
+			m_LatestAutomation.Client = entry->Client;
+			m_LatestAutomation.Succeeded = result.Success;
+			m_LatestAutomation.Finished = std::chrono::steady_clock::now();
+			m_LatestAutomation.Entities = result.Success ? entry->Entities : std::vector<UUID> {};
+		}
 		Trim();
 	}
 

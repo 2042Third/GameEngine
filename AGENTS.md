@@ -1172,7 +1172,8 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
   update) through the `EditorCommandRunner`: deferred commands answer when they complete; a client that
   disconnects meanwhile only loses the answer. Requests are logged at trace level (`Automation: #<n> <method>
   <params> -> <outcome> (<time>)`).
-- **Activity journal** (`Editor/CommandJournal`): every command `EditorCommandRegistry::Execute` runs is recorded once
+- **Activity journal** (`Editor/CommandJournal`, shown by the Activity panel, `Panels/ActivityPanel`: filters, the selected
+  entry's JSON, Copy as script, Re-run, Undo to here): every command `EditorCommandRegistry::Execute` runs is recorded once
   with its origin (`CommandOrigin`), parameters, outcome, duration and undo step; a deferred one when its result becomes
   final. Pass `CommandOrigin { CommandSource::UI }` when UI code runs a command (`RunEditorCommand` and the panels do);
   automation passes the client's name, command scripts their source, and code that passes nothing counts as the editor
@@ -1190,8 +1191,11 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
   (`RpcServer::Stop(gracePeriod)`) so the last answers, such as `editor.quit`'s, still arrive. A headless editor
   without `--frames` runs until `editor.quit` or a signal (a killed editor leaves a stale session file, which
   clients prune), or, with `--idle-timeout <seconds>`, until no client has been connected and no request
-  pending for that long (unsaved changes are then discarded, with a warning). The status bar shows the port
-  and the connected clients; `editor.status` has an `automation` section.
+  pending for that long (unsaved changes are then discarded, with a warning). The status bar's automation pill shows
+  the port, or who is connected ("Agent connected · <name>", from `clientName`); `editor.status` has an `automation`
+  section. The viewport names the latest automation command in a chip at its top right ("Agent: entity.create · 3 s
+  ago"; a click shows it in the Activity panel) and outlines the entities it changed for 600 ms in the accent
+  (`CommandJournal::GetLatestAutomationActivity`, `ViewportPanel::DrawAgentFlash`).
 - **Security model:** any local process, and any web page in a local browser, can reach the port; only
   holders of the session token are trusted. The server binds loopback addresses only and refuses to start
   without a token (`EditorSession::GenerateSessionToken`, from the OS secure random generator). Every

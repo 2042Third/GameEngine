@@ -2,6 +2,7 @@
 
 #include "Editor/CommandUtils.h"
 #include "Editor/GameExport.h"
+#include "Panels/ActivityPanel.h"
 #include "Panels/AssetInspectorPanel.h"
 #include "Panels/ConsolePanel.h"
 #include "Panels/ContentBrowserPanel.h"
@@ -108,8 +109,8 @@ namespace Strata
 		m_Commands.Register({ "editor.showPanel",
 			"Opens a panel of the editor's window and brings it to the front, e.g. to show the person at the editor what you are looking at: "
 			"Streaming (asset memory per pool against its budget, loads, uploads, the assets), Performance (where the frames go, stage by "
-			"stage), Console, ContentBrowser, Hierarchy, Inspector, AssetInspector (the Asset tab: the inspected asset, its settings and "
-			"preview) or Viewport. Changes no scene data and records no undo; fails in an editor "
+			"stage), Activity (every command the person, agents and scripts ran: editor.activity), Console, ContentBrowser, Hierarchy, Inspector, "
+			"AssetInspector (the Asset tab: the inspected asset, its settings and preview) or Viewport. Changes no scene data and records no undo; fails in an editor "
 			"without a window (--no-gpu or headless) and while the launcher shows (no project is open).",
 			CommandUtils::ObjectSchema({ { "panel", { { "type", "string" }, { "enum", panels }, { "description", "The panel to show" } } } }, { "panel" }),
 			[this](EditorContext&, const nlohmann::json& parameters) -> EditorCommandResult
@@ -158,6 +159,7 @@ namespace Strata
 		add(EditorPanels::c_Streaming, "Streaming", Icons::HardDrive, []() { return CreateScope<StreamingPanel>(); }, EditorPanelPlacement::Docked, false);
 		add(EditorPanels::c_Performance, "Performance", Icons::ChartColumnStacked, []() { return CreateScope<PerformancePanel>(); }, EditorPanelPlacement::Docked,
 			false);
+		add(EditorPanels::c_Activity, "Activity", Icons::History, []() { return CreateScope<ActivityPanel>(); }, EditorPanelPlacement::Docked, false);
 
 		if (ContentBrowserPanel* contentBrowser = m_Panels.Get<ContentBrowserPanel>(EditorPanels::c_ContentBrowser))
 		{
@@ -760,6 +762,18 @@ namespace Strata
 			return;
 		m_Panels.Focus(EditorPanels::c_Hierarchy);
 		hierarchy->BeginRename(entity);
+	}
+
+	void EditorLayer::ShowPanel(std::string_view panel)
+	{
+		m_Panels.Focus(panel);
+	}
+
+	void EditorLayer::ShowActivity(uint64_t entry)
+	{
+		if (ActivityPanel* activity = m_Panels.Get<ActivityPanel>(EditorPanels::c_Activity))
+			activity->Select(entry);
+		m_Panels.Focus(EditorPanels::c_Activity);
 	}
 
 	void EditorLayer::BuildScripts()
@@ -1409,7 +1423,7 @@ namespace Strata
 		const ImGuiWindow* console = ImGui::FindWindowByName(m_Panels.GetWindowName(EditorPanels::c_Console).c_str());
 		if (!console || console->DockId == 0)
 			return;
-		for (const char* id : { EditorPanels::c_Streaming, EditorPanels::c_Performance })
+		for (const char* id : { EditorPanels::c_Streaming, EditorPanels::c_Performance, EditorPanels::c_Activity })
 		{
 			// Only windows the layout knows nothing about: a panel the user moved elsewhere stays there.
 			const std::string name = m_Panels.GetWindowName(id);
@@ -1423,11 +1437,35 @@ namespace Strata
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		if (m_Automation.IsRunning())
 		{
-			const uint32_t clients = m_Automation.GetClientCount();
-			const std::string text = fmt::format("port {}{}{} {}", m_Automation.GetPort(), c_Separator, clients, clients == 1 ? "client" : "clients");
-			const std::string tooltip = fmt::format("Tools and AI agents control this editor through StrataCLI (or its MCP server, StrataCLI mcp), which "
-				"finds it through its session file.\n{} pending requests, {} answered", m_Automation.GetPendingRequestCount(), m_Automation.GetCompletedRequestCount());
-			UI::Pill("Status.Automation", Icons::Bot, text, clients > 0 ? colors.Info : colors.TextSecondary, tooltip.c_str());
+			// Who is connected, by the names clients gave (informational: never trusted).
+			if (m_AutomationPillVersion != m_Automation.GetClientsVersion() || m_AutomationPillPort != m_Automation.GetPort())
+			{
+				m_AutomationPillVersion = m_Automation.GetClientsVersion();
+				m_AutomationPillPort = m_Automation.GetPort();
+				m_AutomationClients = m_Automation.GetClients();
+				const auto named = std::find_if(m_AutomationClients.begin(), m_AutomationClients.end(), [](const RpcClientInfo& client) { return !client.Name.empty(); });
+				const std::string name = named != m_AutomationClients.end() ? fmt::format("{}{}", c_Separator, named->Name) : std::string();
+				if (m_AutomationClients.empty())
+					m_AutomationPillText = fmt::format("port {}{}no agent", m_AutomationPillPort, c_Separator);
+				else if (m_AutomationClients.size() == 1)
+					m_AutomationPillText = "Agent connected" + name;
+				else
+					m_AutomationPillText = fmt::format("{} agents connected{}", m_AutomationClients.size(), name);
+			}
+			UI::Pill("Status.Automation", Icons::Bot, m_AutomationPillText, m_AutomationClients.empty() ? colors.TextSecondary : colors.Info);
+			if (UI::IsTooltipDue())
+			{
+				std::string tooltip = fmt::format("Tools and AI agents control this editor through StrataCLI (or its MCP server, StrataCLI mcp), which "
+					"finds it through its session file (port {}).", m_AutomationPillPort);
+				const int64_t now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+				for (const RpcClientInfo& client : m_AutomationClients)
+				{
+					tooltip += fmt::format("\n{} (connected {})", client.Name.empty() ? std::string("A client without a name") : client.Name,
+						UI::DescribeTimeAgo(client.ConnectedAt / 1000, now));
+				}
+				tooltip += fmt::format("\n{} pending requests, {} answered", m_Automation.GetPendingRequestCount(), m_Automation.GetCompletedRequestCount());
+				ImGui::SetTooltip("%s", tooltip.c_str());
+			}
 			return false;
 		}
 		if (!m_Options.EnableAutomation)

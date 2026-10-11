@@ -173,6 +173,11 @@ namespace Strata
 		return m_Server.GetClients();
 	}
 
+	uint64_t EditorAutomation::GetClientsVersion() const
+	{
+		return m_Server.GetClientsVersion();
+	}
+
 	size_t EditorAutomation::GetPendingRequestCount() const
 	{
 		return m_State->PendingRequests;

@@ -48,6 +48,8 @@ namespace Strata::UI
 	// is on but has nothing to do now (inEffect false, e.g. preview lighting in a scene with lights of its own) is drawn
 	// muted, only outlined in the accent. The probe records the icon's color.
 	bool ToggleChip(const char* id, const char* icon, const char* label, bool* value, const char* tooltip, bool inEffect = true);
+	// The width a chip with this icon and label takes, e.g. to align one to the right.
+	float ChipWidth(const char* icon, const char* label);
 
 	// A status pill: an icon and text in a color on a tint of that color, sized to its text in the current font. Returns
 	// true when clicked (pills that lead somewhere, e.g. the errors pill opening the Console).

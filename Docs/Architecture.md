@@ -1300,7 +1300,13 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   for the GPU, the display and the pacer, which panels get in `EditorPanelContext::Frame`. **Instruments**: the
   Streaming panel (`Panels/StreamingPanel`) and the Performance panel (`Panels/PerformancePanel`) are closed until the
   status bar's assets and frame pills (or the View menu) open them, docked beside the Console (`DockNewToolPanels` for
-  layouts saved before them). Panels collect what the status bar shows in `OnUpdate`, also while closed: the Streaming
+  layouts saved before them), and so is the **Activity panel** (`Panels/ActivityPanel`): the activity journal as a
+  clipped table (source icon, command, compact parameters, result or error, milliseconds) filtered by text, source and
+  "changes only" (kind Edit), its rows rebuilt only when `CommandJournal::GetVersion` or the filters change and the
+  parameter previews made once per entry, with the selected entry's JSON (`CommandJournal::Describe`) and its actions:
+  Copy as script (a one-step command script), Re-run (through the runner, from the UI) and Undo to here (`edit.undo`
+  until the entry's step is the latest applied, so the journal shows the undos). `EditorShell::ShowActivity(entry)`
+  selects and reveals an entry (the viewport's agent chip, the toasts). Panels collect what the status bar shows in `OnUpdate`, also while closed: the Streaming
   panel takes the active asset manager's `GetStats` once per frame after the frame's commands ran (so its totals equal
   what `asset.stats` returned in that frame) and keeps 120 frames of uploaded bytes, the Performance panel samples the
   job system for the frame pill's job count. The assets pill shows the pool closest to its budget
@@ -1528,7 +1534,16 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   `SanitizeRpcClientName`, informational only and never used for trust): `RpcServer::GetClients` lists them, responders
   carry them (`RpcResponder::GetClient`) into the activity journal, and `editor.status` lists them under
   `automation.connectedClients`. StrataCLI names itself "StrataCLI"; its MCP server forwards the MCP client's
-  `clientInfo.name` from `initialize` (reconnecting to the same editor when the name changes).
+  `clientInfo.name` from `initialize` (reconnecting to the same editor when the name changes). **Presence**: the person
+  sees who works with them. The automation pill reads "Agent connected · <name>" (several: "N agents connected"), its
+  text made again only when `RpcServer::GetClientsVersion` changes and its tooltip (each client and when it connected)
+  only while it shows. The journal keeps the latest finished automation command (`GetLatestAutomationActivity`: command,
+  client, outcome, the entities its undo step touched); the viewport draws it as a chip at the image's top right ("Agent:
+  entity.create · 3 s ago", while a client is connected or for `c_AgentChipSeconds` after; a click shows it in the
+  Activity panel) and, for `c_AgentFlashSeconds` (600 ms), outlines the projected bounds of those entities (at most 64)
+  in the accent, fading out (`ViewportPanel::DrawAgentFlash`, an `ImDrawList` rectangle per entity, bounds taken once when
+  the command finished). While nothing of this shows the panel does no work for it, and only the fade keeps the editor at
+  its full frame rate (`IsAnimating`).
 - **Viewport** (`EditorViewport.h`, `ViewportRenderer.h`). `EditorViewport` holds the editor camera (and the cameras of
   the project's other scenes), the settings and two `ViewportRenderer`s (panel and captures). The panel renders during
   `OnImGuiRender`; `ResolveViewportView` picks the scene's primary camera while playing and the editor camera otherwise,

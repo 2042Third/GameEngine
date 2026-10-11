@@ -124,8 +124,7 @@ namespace Strata::UI
 			const float height = ImGui::GetFrameHeight();
 			const bool hasLabel = label && *label;
 			const ImVec2 iconSize = ImGui::CalcTextSize(icon);
-			const ImVec2 labelSize = hasLabel ? ImGui::CalcTextSize(label) : ImVec2(0.0f, 0.0f);
-			const float width = style.FramePadding.x * 2.0f + iconSize.x + (hasLabel ? style.ItemInnerSpacing.x + labelSize.x : 0.0f);
+			const float width = ChipWidth(icon, label);
 
 			// Chips lie over what their window shows: a click on one leaves the focus where it was, so that a chip over the
 			// game view does not hand the game the input.
@@ -196,6 +195,13 @@ namespace Strata::UI
 	bool ToolbarButton(const char* id, const char* icon, const char* label, const char* tooltip, const ButtonStyle& style)
 	{
 		return DrawButton(id, icon, label, tooltip, style);
+	}
+
+	float ChipWidth(const char* icon, const char* label)
+	{
+		const ImGuiStyle& style = ImGui::GetStyle();
+		const bool hasLabel = label && *label;
+		return style.FramePadding.x * 2.0f + ImGui::CalcTextSize(icon).x + (hasLabel ? style.ItemInnerSpacing.x + ImGui::CalcTextSize(label).x : 0.0f);
 	}
 
 	bool Chip(const char* id, const char* icon, const char* label, const char* tooltip)

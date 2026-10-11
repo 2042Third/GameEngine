@@ -4,9 +4,15 @@
 #include "Editor/TransformEdit.h"
 #include "UI/EditorPanelRegistry.h"
 
+#include <Strata/Math/AABB.h>
+
 #include <glm/glm.hpp>
 
+#include <chrono>
+#include <cstdint>
 #include <optional>
+#include <string>
+#include <vector>
 
 namespace Strata
 {
@@ -24,6 +30,9 @@ namespace Strata
 	// in the play state's color tops the image while the scene runs. While playing through the scene's camera the panel is
 	// the game view: game input goes to the scene while it is focused and editor tools are off; of the chips only the stats
 	// toggle remains, shown while the game does not have the input, so that clicks on the image always belong to the game.
+	// Agents show here too: a chip at the image's top right names the latest command of an automation client ("Agent:
+	// entity.create · 3 s ago"; a click shows it in the Activity panel), and for c_AgentFlashSeconds the entities it changed
+	// are outlined in the accent, fading out.
 	class ViewportPanel : public EditorPanel
 	{
 	public:
@@ -31,8 +40,13 @@ namespace Strata
 		void OnImGuiRender(EditorPanelContext& context) override;
 		void OnHidden(EditorPanelContext& context) override;
 		void OnDetach(EditorPanelContext& context) override;
-		// A camera or gizmo drag runs.
+		// A camera or gizmo drag runs, or the outline of what an agent changed fades.
 		bool IsAnimating() const override;
+
+		// How long the outline of what an automation command changed shows.
+		static constexpr double c_AgentFlashSeconds = 0.6;
+		// The chip shows the latest automation command while a client is connected, and this long after it ran.
+		static constexpr double c_AgentChipSeconds = 60.0;
 
 		// Ends interactions that hold state (camera drags, gizmo drags, a locked cursor). Uses no ImGui functions, so it
 		// also works after the ImGui context is gone.
@@ -58,6 +72,10 @@ namespace Strata
 		void UpdateCamera(EditorContext& context, bool hovered);
 		void UpdateGizmo(EditorContext& context, const ViewportView& view);
 		void DrawOverlays(EditorContext& context, const ViewportView& view, float chipRowBottom, const EditorFrameStats& frame);
+		// The latest automation command, as a chip right-aligned at `top` against `right`.
+		void DrawAgentChip(EditorPanelContext& context, float right, float top);
+		// The projected bounds of the entities the latest automation command changed, outlined in the accent while they fade.
+		void DrawAgentFlash(EditorContext& context, const ViewportView& view);
 		// The renderer's statistics over the image: frame time, draws, the render scene's proxies and uploads, asset requests.
 		static void DrawStatsOverlay(ImDrawList* drawList, const ImVec2& position, const ViewportRenderer& renderer, const ViewportView& view, const EditorFrameStats& frame);
 		void AcceptAssetDrops(EditorContext& context, const EditorCommandRegistry& commands);
@@ -75,6 +93,15 @@ namespace Strata
 		bool m_CursorLocked = false; // By fly mode
 		bool m_GameInputEnabled = false;
 		std::optional<TransformDrag> m_GizmoDrag;
+		// The agent chip's text for the activity and age (in whole seconds) it was made for.
+		std::string m_AgentChipText;
+		uint64_t m_AgentChipActivity = 0;
+		int64_t m_AgentChipSeconds = -1;
+		// The flash of the activity m_FlashActivity: world bounds taken when it began.
+		uint64_t m_FlashActivity = 0;
+		std::vector<AABB> m_FlashBounds;
+		std::chrono::steady_clock::time_point m_FlashStart;
+		bool m_Flashing = false;
 	};
 
 }

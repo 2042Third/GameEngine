@@ -1806,8 +1806,13 @@ TEST_SUITE("Network.RpcPresence")
 		CHECK(clients[1].Id == who.GetValue()["id"].get<uint64_t>());
 		CHECK(clients[1].ConnectedAt > 0);
 
+		// The list's version changes when a client comes or goes, not with requests, so callers copy the list only then.
+		const uint64_t version = server.GetServer().GetClientsVersion();
+		REQUIRE(named.Call("test.who", nlohmann::json::object(), c_CallTimeout).IsSuccess());
+		CHECK(server.GetServer().GetClientsVersion() == version);
 		named.Close();
 		CHECK(Tests::WaitUntil([&]() { return server.GetServer().GetClients().size() == 1; }));
+		CHECK(server.GetServer().GetClientsVersion() > version);
 	}
 
 	TEST_CASE("Client names are bounded and stripped of control characters, and must be strings")

@@ -53,6 +53,18 @@ namespace Strata::UI
 		return text;
 	}
 
+	std::string DescribeSecondsAgo(double seconds)
+	{
+		if (!(seconds >= 1.0)) // Also NaN
+			return "now";
+		if (seconds < 60.0)
+			return fmt::format("{} s ago", static_cast<int>(seconds));
+		if (seconds < 3600.0)
+			return fmt::format("{} min ago", static_cast<int>(seconds / 60.0));
+		// Ages beyond any session are written as hours too, bounded so the conversion cannot overflow.
+		return fmt::format("{} h ago", static_cast<int64_t>(std::min(seconds, 1.0e12) / 3600.0));
+	}
+
 	std::string DescribeTimeAgo(int64_t then, int64_t now)
 	{
 		constexpr int64_t c_Minute = 60;

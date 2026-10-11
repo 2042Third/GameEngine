@@ -96,6 +96,18 @@ namespace Strata
 		std::chrono::steady_clock::time_point Started;
 	};
 
+	// The latest command an automation client ran, once it finished (CommandJournal::GetLatestAutomationActivity): what the
+	// viewport's agent chip names and the entities it outlines for a moment.
+	struct AutomationActivity
+	{
+		uint64_t Id = 0; // Its journal entry; 0 before the first
+		std::string Command;
+		std::string Client; // The name the client gave, empty when it gave none
+		bool Succeeded = false;
+		std::chrono::steady_clock::time_point Finished;
+		std::vector<UUID> Entities; // What its undo step touched (at most CommandJournal::c_MaxEntities), when it succeeded
+	};
+
 	// A command script made from the journal (CommandJournal::BuildReplayScript).
 	struct ReplayScript
 	{
@@ -140,6 +152,7 @@ namespace Strata
 		void NoteEditsOutsideCommands(const UndoStack& undo);
 		// Undo records (steps, and merges into them) made outside commands since the journal began.
 		uint64_t GetEditsOutsideCommands() const { return m_EditsOutsideCommands; }
+		const AutomationActivity& GetLatestAutomationActivity() const { return m_LatestAutomation; }
 		// A deferred command was polled once more.
 		void NotePoll(uint64_t id);
 		// Ends the entry (only the first call counts) and, for a command begun with Begin, ends it as the running command.
@@ -180,6 +193,7 @@ namespace Strata
 		uint64_t m_NextId = 1;
 		uint64_t m_SeenUndoRecords = 0;            // UndoStack::GetRecordCount when the journal last looked
 		uint64_t m_EditsOutsideCommands = 0;
+		AutomationActivity m_LatestAutomation;
 		uint64_t m_Version = 0;
 		size_t m_Bytes = 0;
 		bool m_Enabled = true;

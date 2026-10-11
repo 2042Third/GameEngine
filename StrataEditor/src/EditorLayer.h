@@ -72,6 +72,7 @@ namespace Strata
 		constexpr const char* c_Console = "Console";
 		constexpr const char* c_Streaming = "Streaming";     // StreamingPanel, opened from the status bar's assets pill
 		constexpr const char* c_Performance = "Performance"; // PerformancePanel, opened from the status bar's frame pill
+		constexpr const char* c_Activity = "Activity";       // ActivityPanel, opened from the viewport's agent chip or the View menu
 		constexpr const char* c_Welcome = "Welcome"; // The launcher (WelcomePanel)
 	}
 
@@ -141,6 +142,8 @@ namespace Strata
 		void ShowAboutDialog() override;
 		void DismissLauncher() override;
 		void RenameEntity(UUID entity) override;
+		void ShowPanel(std::string_view panel) override;
+		void ShowActivity(uint64_t entry) override;
 		EditorEnvironment GetEnvironment() const override;
 		EditorAutomationState GetAutomationState() const override;
 	private:
@@ -226,6 +229,11 @@ namespace Strata
 		uint64_t m_ShownInspectionVersion = 0;
 		std::string m_WindowTitle;
 		std::string m_AutomationError; // Why automation did not start (when it was asked for)
+		// The automation pill's text, made again only when the connected clients change (EditorAutomation::GetClientsVersion).
+		std::string m_AutomationPillText;
+		std::vector<RpcClientInfo> m_AutomationClients;
+		uint64_t m_AutomationPillVersion = UINT64_MAX;
+		uint16_t m_AutomationPillPort = 0;
 		bool m_HasScriptBuild = false;
 		std::optional<double> m_ScriptBuildCheckTime;
 		bool m_LauncherDismissed = false; // Continue without a project (until a project opens)

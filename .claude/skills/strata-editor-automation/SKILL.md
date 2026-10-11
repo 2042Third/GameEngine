@@ -54,6 +54,10 @@ StrataCLI call viewport.capture --save-image shot.png    # image results are wri
   `editor.status`, do not start another editor); `5` `--save-image` could not write the image.
 - `--timeout <ms>` (default 30000) bounds the wait for one call. Commands that take frames (`editor.wait`,
   captures, builds) answer only when they finish.
+- The person at the editor sees you: the status bar reads "Agent connected · <your MCP client's name>" (StrataCLI calls
+  name themselves "StrataCLI"), the viewport names your latest command ("Agent: entity.create · 3 s ago") and outlines
+  what it changed for a moment, and the Activity panel (`editor.showPanel {"panel": "Activity"}`) lists every command
+  you, the person and scripts ran, with Re-run and Undo to here.
 
 ### MCP
 
