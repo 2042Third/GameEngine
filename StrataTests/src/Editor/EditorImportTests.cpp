@@ -727,12 +727,12 @@ TEST_SUITE("Editor.Import")
 		const std::filesystem::path external = harness.Assets.parent_path() / "Downloads";
 		WriteQuadModel(external / "Quad.gltf", "Quad.bin", "QuadColor.png");
 
-		const EditorCommandResult result = harness.Finish(harness.Start("asset.import", { { "file", FileSystem::ToUTF8(external / "Quad.gltf") }, { "directory", "Models" } }));
+		EditorCommandResult result = harness.Finish(harness.Start("asset.import", { { "file", FileSystem::ToUTF8(external / "Quad.gltf") }, { "directory", "Models" } }));
 		INFO(result.Error);
 		REQUIRE(result.Success);
 		CHECK(result.Value["path"] == "Models/Quad/Quad.gltf");
 		REQUIRE(result.Value["items"].size() == 1);
-		const nlohmann::json& item = result.Value["items"][0];
+		nlohmann::json& item = result.Value["items"][0];
 		CHECK(item["path"] == "Models/Quad/Quad.gltf");
 		CHECK_FALSE(item.contains("error"));
 		CHECK(FileSystem::IsRegularFile(harness.Assets / "Models" / "Quad" / "Quad.bin"));
@@ -742,7 +742,7 @@ TEST_SUITE("Editor.Import")
 		CHECK(item["assets"][0]["type"] == "Model");
 		CHECK(item["assets"][1]["path"] == "Models/Quad/QuadColor.png");
 
-		const nlohmann::json info = harness.Run("asset.info", { { "asset", "Models/Quad/Quad.gltf" } });
+		nlohmann::json info = harness.Run("asset.info", { { "asset", "Models/Quad/Quad.gltf" } });
 		CHECK(info["importError"] == "");
 		for (const nlohmann::json& warning : info["importWarnings"])
 			CHECK(warning.get<std::string>().find("skipped") == std::string::npos);
@@ -750,7 +750,7 @@ TEST_SUITE("Editor.Import")
 		CHECK(std::any_of(subAssets.begin(), subAssets.end(), [](const nlohmann::json& subAsset) { return subAsset["type"] == "Texture"; }));
 
 		// Again: a folder of its own.
-		const EditorCommandResult again = harness.Finish(harness.Start("asset.import", { { "file", FileSystem::ToUTF8(external / "Quad.gltf") }, { "directory", "Models" } }));
+		EditorCommandResult again = harness.Finish(harness.Start("asset.import", { { "file", FileSystem::ToUTF8(external / "Quad.gltf") }, { "directory", "Models" } }));
 		REQUIRE(again.Success);
 		CHECK(again.Value["path"] == "Models/Quad (1)/Quad.gltf");
 	}
@@ -762,13 +762,13 @@ TEST_SUITE("Editor.Import")
 		const std::filesystem::path external = harness.Assets.parent_path() / "Kit";
 		WriteQuadModel(external / "Models" / "Crate.gltf", "", "../Textures/Wood.png");
 
-		const EditorCommandResult result = harness.Finish(harness.Start("asset.import", { { "file", FileSystem::ToUTF8(external / "Models" / "Crate.gltf") },
+		EditorCommandResult result = harness.Finish(harness.Start("asset.import", { { "file", FileSystem::ToUTF8(external / "Models" / "Crate.gltf") },
 			{ "directory", "Props" } }));
 		INFO(result.Error);
 		REQUIRE(result.Success);
 		CHECK(result.Value["path"] == "Props/Crate/Models/Crate.gltf");
 		CHECK(FileSystem::IsRegularFile(harness.Assets / "Props" / "Crate" / "Textures" / "Wood.png"));
-		const nlohmann::json info = harness.Run("asset.info", { { "asset", "Props/Crate/Models/Crate.gltf" } });
+		nlohmann::json info = harness.Run("asset.info", { { "asset", "Props/Crate/Models/Crate.gltf" } });
 		CHECK(info["importError"] == "");
 		for (const nlohmann::json& warning : info["importWarnings"])
 			CHECK(warning.get<std::string>().find("skipped") == std::string::npos);
@@ -777,7 +777,7 @@ TEST_SUITE("Editor.Import")
 
 		// A file three folders up is too far; a URL is no file.
 		WriteQuadModel(external / "Deep" / "A" / "B" / "Far.gltf", "", "../../../Textures/Far.png");
-		const EditorCommandResult far = harness.Finish(harness.Start("asset.import", { { "file", FileSystem::ToUTF8(external / "Deep" / "A" / "B" / "Far.gltf") } }));
+		EditorCommandResult far = harness.Finish(harness.Start("asset.import", { { "file", FileSystem::ToUTF8(external / "Deep" / "A" / "B" / "Far.gltf") } }));
 		CHECK_FALSE(far.Success);
 		CHECK(far.Error.find("more than 2 folders above") != std::string::npos);
 		CHECK_FALSE(FileSystem::Exists(harness.Assets / "Far"));
@@ -795,10 +795,10 @@ TEST_SUITE("Editor.Import")
 		REQUIRE(FileSystem::WriteText(pack / "Notes.txt", "Not an asset"));
 		REQUIRE(FileSystem::WriteText(pack / ".git" / "config", "Hidden"));
 
-		const EditorCommandResult result = harness.Finish(harness.Start("asset.import", { { "directories", { FileSystem::ToUTF8(pack) } }, { "directory", "Imported" } }));
+		EditorCommandResult result = harness.Finish(harness.Start("asset.import", { { "directories", { FileSystem::ToUTF8(pack) } }, { "directory", "Imported" } }));
 		INFO(result.Error);
 		REQUIRE(result.Success);
-		const nlohmann::json& item = result.Value["items"][0];
+		nlohmann::json& item = result.Value["items"][0];
 		CHECK(item["folder"] == true);
 		CHECK(item["path"] == "Imported/Pack");
 		CHECK(item["assets"].size() == 4); // The model, its image, the texture and the sound
@@ -807,7 +807,7 @@ TEST_SUITE("Editor.Import")
 		CHECK_FALSE(FileSystem::Exists(harness.Assets / "Imported" / "Pack" / "Notes.txt"));
 		CHECK_FALSE(FileSystem::Exists(harness.Assets / "Imported" / "Pack" / ".git"));
 		// The .meta came along: its handle and settings.
-		const nlohmann::json stone = harness.Run("asset.info", { { "asset", "Imported/Pack/Textures/Stone.png" } });
+		nlohmann::json stone = harness.Run("asset.info", { { "asset", "Imported/Pack/Textures/Stone.png" } });
 		CHECK(stone["asset"] == "5A5A5A5A5A5A5A5A");
 		CHECK(stone["importSettings"]["MaxSize"] == 2);
 		CHECK(harness.Context.GetAssetManager()->HasFolder("Imported/Pack/Sounds"));
@@ -822,7 +822,7 @@ TEST_SUITE("Editor.Import")
 		REQUIRE(FileSystem::WriteBytes(broken, std::vector<uint8_t> { 'n', 'o', 't', ' ', 'a', 'n', ' ', 'i', 'm', 'a', 'g', 'e' }));
 
 		const uint64_t sequence = Log::GetBuffer().GetLatestSequence();
-		const EditorCommandResult failed = harness.Finish(harness.Start("asset.import", { { "file", FileSystem::ToUTF8(broken) }, { "directory", "Textures" } }));
+		EditorCommandResult failed = harness.Finish(harness.Start("asset.import", { { "file", FileSystem::ToUTF8(broken) }, { "directory", "Textures" } }));
 		CHECK_FALSE(failed.Success);
 		CHECK(failed.ErrorKind == EditorCommandError::Failed);
 		CHECK(failed.Error.find("Broken.png") != std::string::npos);
@@ -835,7 +835,7 @@ TEST_SUITE("Editor.Import")
 		CHECK(CountLogEntries(sequence, "Broken.png") == 1);
 
 		// Kept on request, with its error.
-		const EditorCommandResult kept = harness.Finish(harness.Start("asset.import", { { "file", FileSystem::ToUTF8(broken) }, { "keepOnFailure", true } }));
+		EditorCommandResult kept = harness.Finish(harness.Start("asset.import", { { "file", FileSystem::ToUTF8(broken) }, { "keepOnFailure", true } }));
 		CHECK_FALSE(kept.Success);
 		CHECK(kept.ErrorData["items"][0]["rolledBack"] == false);
 		CHECK(FileSystem::IsRegularFile(harness.Assets / "Broken.png"));
@@ -856,7 +856,7 @@ TEST_SUITE("Editor.Import")
 		const std::filesystem::path png = harness.Assets.parent_path() / "Downloads" / "Dropped.png";
 		REQUIRE(FileSystem::WriteBytes(png, CreatePNGWithUnknownChunk()));
 		const uint64_t sequence = Log::GetBuffer().GetLatestSequence();
-		const EditorCommandResult failed = harness.Finish(harness.Start("asset.import", { { "file", FileSystem::ToUTF8(png) }, { "keepOnFailure", true } }));
+		EditorCommandResult failed = harness.Finish(harness.Start("asset.import", { { "file", FileSystem::ToUTF8(png) }, { "keepOnFailure", true } }));
 		CHECK_FALSE(failed.Success);
 		CHECK(failed.Error.find("PNG chunk not known") != std::string::npos);
 		CHECK(failed.Error.find("\xEF\xBF\xBD" "END") != std::string::npos);
