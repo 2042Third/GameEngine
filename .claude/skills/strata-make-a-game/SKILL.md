@@ -115,7 +115,9 @@ viewport.capture {"camera": "scene", "width": 1280, "height": 720}   # CLI: --sa
 play.stop
 ```
 
-- Look at every capture you take. `pendingAssets` above 0: wait (`editor.wait`) and capture again.
+- Look at every capture you take. A capture waits (up to about five seconds) for the meshes, materials and textures it
+  shows; `pendingAssets` above 0 means some were still loading: wait (`editor.wait`) and capture again. To look from
+  elsewhere without moving the person's view, pass `position` and `target` (`camera.get` stays as it was).
 - Editor-camera captures in edit mode leave the HUD out (`hiddenScreenSpaceTexts`); the scene's camera and play mode show
   it.
 - Gravity and other timers keep running between your calls (a call takes about 0.1 s): plan sequences and send them in
