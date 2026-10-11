@@ -2244,6 +2244,19 @@
 					"Name": {
 						"Name": "Arm Rig"
 					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "AnimationFeatures",
+								"Fields": {
+									"SwingClip": {
+										"Type": "Asset",
+										"Value": "B24808E5B27B99CD"
+									}
+								}
+							}
+						]
+					},
 					"Transform": {
 						"Rotation": [
 							0,

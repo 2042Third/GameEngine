@@ -520,7 +520,7 @@ Writing scripts is described in `.claude/skills/strata-scripting/SKILL.md`.
 | Where | What |
 | --- | --- |
 | `StrataScriptCore/Include/StrataScript/ScriptABI.h` | The versioned C ABI: host API table, module/class/field descriptors, values. |
-| `StrataScriptCore/Include/StrataScript/*.h` | Header-only C++ SDK (`StrataScript.h` includes all): `Script`, `Entity`, `Scene`, `Assets`, `Input`, `Time`, `Log`, `RigidBody` and `Physics` (bodies and queries; `Collision` for the contact callbacks of `Script`), `AudioSource` and `Audio`, `Game` (quit, scene loads), `ST_SCRIPT_CLASS`/`ST_SCRIPT_FIELD`. |
+| `StrataScriptCore/Include/StrataScript/*.h` | Header-only C++ SDK (`StrataScript.h` includes all): `Script`, `Entity`, `Scene`, `Assets`, `Input`, `Time`, `Log`, `RigidBody` and `Physics` (bodies and queries; `Collision` for the contact callbacks of `Script`), `AudioSource` and `Audio`, `Animator` (states, parameters, joints; `OnAnimationEvent` of `Script`), `Game` (quit, scene loads), `ST_SCRIPT_CLASS`/`ST_SCRIPT_FIELD`. |
 | `StrataScriptCore/Source/ScriptModuleEntry.cpp` | The module entry points, compiled into every module by `strata_add_script_module()`. |
 | `StrataScriptCore/CMake/` | `strata_add_script_module()` and the package game projects use (`StrataScriptCoreConfig.cmake`). |
 | `Strata/src/Strata/Scripting/` | `ScriptEngine` (module, hot reload, faults, watchdog), `ScriptModule` (loading, validation, guarded calls), `ScriptSystem` (instances and lifecycle), `ScriptHostAPI` (the host table), `ScriptValue` (value conversion). |
@@ -538,6 +538,12 @@ Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; t
   that got an Enter gets its Exit, also after its entity was deactivated.
 - Audio: `AudioSource` and `Audio` go through the scene's `IAudioPlayback` (the `AudioSystem`); without it (simulate mode)
   the calls fail. The master volume belongs to the engine (the engine service `IAudioOutput`), so it works in any scene.
+- Animation: `Animator` (`Entity::GetAnimator`: play and cross-fade states, play clips, parameters, speed, the current
+  state, joint transforms) goes through the scene's `IAnimatorControl` (the `AnimationSystem`); without it (simulate mode)
+  the calls fail. Events of controller states reach the scripts of the animator's entity as `OnAnimationEvent(name)` (a
+  class descriptor callback taking a `StrataScriptString`): `ScriptSystem` listens to the scene's `IAnimationEventSource`
+  while it runs, and calls only scripts of active entities. Commands a script gives before the controller has loaded
+  apply once it has (`GetCurrentState` reports the waiting state).
 - Game flow: `Game::Quit`, `LoadScene` and `ReloadScene` set `Scene::RequestQuit`/`RequestSceneLoad`, which the scene's owner
   honors after the frame (see [Editor](#editor)).
 - Assets: `Assets::RequestLoad` pins the asset for the playing scene (`ScriptSystem::RequestAsset`; never evicted to meet

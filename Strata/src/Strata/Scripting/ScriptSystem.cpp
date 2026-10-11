@@ -90,6 +90,8 @@ namespace Strata
 		// Services are offered from the creation of the systems that provide them (before any starts) until they are destroyed.
 		if (ICollisionEventSource* contacts = m_Scene.GetService<ICollisionEventSource>())
 			m_CollisionListener = contacts->AddCollisionListener([this](const CollisionEvent& event) { OnCollision(event); }, CollisionListenerScope::WatchedEntities);
+		if (IAnimationEventSource* animation = m_Scene.GetService<IAnimationEventSource>())
+			m_AnimationListener = animation->AddAnimationEventListener([this](const AnimationEventInfo& event) { OnAnimationEvent(event); });
 
 		const std::vector<Entity> entities = m_Scene.GetEntitiesInHierarchyOrder();
 		for (const Entity entity : entities)
@@ -121,6 +123,12 @@ namespace Strata
 			if (ICollisionEventSource* contacts = m_Scene.GetService<ICollisionEventSource>())
 				contacts->RemoveCollisionListener(m_CollisionListener);
 			m_CollisionListener = c_InvalidCollisionListener;
+		}
+		if (m_AnimationListener != 0)
+		{
+			if (IAnimationEventSource* animation = m_Scene.GetService<IAnimationEventSource>())
+				animation->RemoveAnimationEventListener(m_AnimationListener);
+			m_AnimationListener = 0;
 		}
 		m_CreationBlocked = true;
 		DestroyAllInstances(true);
@@ -328,6 +336,32 @@ namespace Strata
 				return;
 			const ScriptCallSite site = MakeCallSite(*instance, ScriptCallbackToString(callback));
 			HandleCallResult(*instance, callback, module->InvokeContactCallback(site, instance->Handle, callback, contact));
+		}
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
+	// Animation events
+	////////////////////////////////////////////////////////////////////////////////
+
+	void ScriptSystem::OnAnimationEvent(const AnimationEventInfo& event)
+	{
+		if (!m_Running || !GetUsableModule())
+			return;
+		auto it = m_Instances.find(event.AnimatorID);
+		if (it == m_Instances.end() || !event.Animator || !m_Scene.IsActiveInHierarchy(event.Animator))
+			return;
+
+		// A copy: the callbacks may add or remove scripts (removed instances are flagged and skipped).
+		const std::vector<Ref<Instance>> instances = it->second;
+		for (const Ref<Instance>& instance : instances)
+		{
+			if (instance->Removed || instance->Disabled || !instance->Created || !instance->Handle || !instance->Class->Implements(ScriptCallback::OnAnimationEvent))
+				continue;
+			ScriptModule* module = GetUsableModule();
+			if (!module)
+				return;
+			const ScriptCallSite site = MakeCallSite(*instance, ScriptCallbackToString(ScriptCallback::OnAnimationEvent));
+			HandleCallResult(*instance, ScriptCallback::OnAnimationEvent, module->InvokeAnimationEventCallback(site, instance->Handle, event.Name));
 		}
 	}
 

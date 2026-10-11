@@ -86,6 +86,7 @@ ST_SCRIPT_CLASS(Turret)
 | `OnReload()` | After a hot reload, instead of `OnCreate`. Re-acquire cached pointers and non-field state. |
 | `OnCollisionEnter/Exit(collision)` | The entity's physics body starts/stops touching another body (after a fixed step). |
 | `OnTriggerEnter/Exit(collision)` | The same for contacts where either body is a trigger. |
+| `OnAnimationEvent(name)` | The entity's animator passed an event of its controller's current state (after the animators were evaluated). |
 
 - Inactive entities (or children of inactive entities) get no update callbacks.
 - Entities destroyed during a frame stay valid and keep updating until the frame ends.
@@ -118,8 +119,9 @@ ST_SCRIPT_CLASS(Turret)
 - `Time`: `GetDeltaTime`, `GetFixedDeltaTime`, `GetElapsedTime`, `GetFrameIndex`, `Get/SetTimeScale`.
 - `Log::Info/Warn/Error/Trace(args...)` - arguments are concatenated (`Log::Info("Health ", health)`).
 - `RigidBody` (`GetEntity().GetRigidBody()`), `Physics` (raycasts, overlaps), `Collision` (contact callbacks),
-  `AudioSource` (`GetEntity().GetAudioSource()`), `Audio` (one-shots, master volume), `Game` (quit, load scenes),
-  `Random`, `Timer`, `KeyRepeat`: see [Gameplay API](#gameplay-api).
+  `AudioSource` (`GetEntity().GetAudioSource()`), `Audio` (one-shots, master volume), `Animator`
+  (`GetEntity().GetAnimator()`: states, parameters, joints), `Game` (quit, load scenes), `Random`, `Timer`, `KeyRepeat`:
+  see [Gameplay API](#gameplay-api).
 
 Every call on a missing entity, unknown component or wrong value type fails harmlessly (`false`, empty `optional`,
 null entity) and the engine logs a warning naming the calling script.
@@ -186,6 +188,40 @@ Audio::SetMasterVolume(0.5f);                      // Game-wide volume option
 
 Request clips early (`Assets::RequestLoad(clip)` in `OnCreate`): a one-shot whose clip takes longer than a quarter
 second to load is dropped. Clip, volume, pitch, looping and spatial settings are `AudioSource` properties.
+
+### Animation
+
+Characters are entities with an `Animator` component (a model's root gets one on import: its skeleton and first clip)
+whose meshes carry `Skin` components naming it. With an animation controller (`.stanimator`: states, transitions,
+parameters, events; made with `animation.createController`, see the editor automation skill) scripts mostly set
+parameters and let the transitions do the rest:
+
+```cpp
+Animator animator = GetEntity().GetAnimator();
+animator.SetFloat("Speed", glm::length(velocity));   // Idle <-> Walk transitions test it
+animator.SetBool("Grounded", grounded);
+if (Input::IsKeyPressed(Key::Space))
+	animator.SetTrigger("Jump");                     // Consumed by the transition that fires on it
+animator.Play("Wave");                               // Jump to a state; CrossFade("Wave", 0.2f) blends to it
+animator.Play(clip);                                 // A clip asset directly, without the controller's transitions
+animator.SetSpeed(1.5f);
+std::string state = animator.GetCurrentState();      // "Walk" (empty while a clip plays directly)
+float progress = animator.GetNormalizedTime();       // 1.5: halfway through the second loop
+if (std::optional<JointTransform> hand = animator.GetJointTransform("Hand_R"))
+	sword.GetTransform().SetWorldPosition(hand->Position);
+
+void OnAnimationEvent(std::string_view name) override // Events of the controller's states ("Footstep" at 0.25 s)
+{
+	if (name == "Footstep")
+		Audio::PlayOneShotAt(step, GetTransform().GetWorldPosition());
+}
+```
+
+- Parameters and states are named as in the controller; commands given while it loads apply once it has loaded.
+- Prefer an `AttachToJoint` component (Animator entity and joint name) over copying joint transforms every frame: the
+  animation system places the entity after each pose.
+- `ApplyRootMotion` on the component moves the entity by the clip's root travel (walk cycles that do not slide);
+  `CullingMode` `WhenVisible` skips the pose of characters no camera sees (time, events and root motion go on).
 
 ### Game flow
 

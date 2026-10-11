@@ -15,6 +15,7 @@
 namespace Strata
 {
 
+	class Animator;
 	class AudioSource;
 	class Component;
 	class RigidBody;
@@ -73,6 +74,8 @@ namespace Strata
 		RigidBody GetRigidBody() const;
 		// Playback of the entity's AudioSource component (see Audio.h).
 		AudioSource GetAudioSource() const;
+		// Control of the entity's Animator component (see Animator.h).
+		Animator GetAnimator() const;
 
 		// Script instances on this entity, by class (must be registered with ST_SCRIPT_CLASS) or by class name.
 		template<typename T>

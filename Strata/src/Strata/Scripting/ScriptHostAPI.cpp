@@ -1606,6 +1606,179 @@ namespace Strata
 		}
 
 		////////////////////////////////////////////////////////////////////////////////
+		// Animation
+		////////////////////////////////////////////////////////////////////////////////
+
+		// The scene's animator service (Scene/SceneServices.h), reporting when the scene plays without animation.
+		IAnimatorControl* RequireAnimation(ScriptSystem& system, const char* function)
+		{
+			IAnimatorControl* animation = system.GetScene().GetService<IAnimatorControl>();
+			if (!animation)
+				system.ReportProblem(function, "the scene plays without animation");
+			return animation;
+		}
+
+		// The entity whose Animator a function acts on, reporting why there is none.
+		Entity RequireAnimator(ScriptSystem& system, StrataScriptEntityID id, const char* function)
+		{
+			const Entity entity = RequireEntity(system, id, function);
+			if (entity && !entity.HasComponent<AnimatorComponent>())
+			{
+				system.ReportProblem(function, fmt::format("'{}' has no Animator component", entity.GetName()));
+				return {};
+			}
+			return entity;
+		}
+
+		template<typename Result, typename Action>
+		Result ControlAnimator(StrataScriptContext* context, StrataScriptEntityID entity, const char* function, Result failure, Action&& action)
+		{
+			return HostCall(function, failure, [&]() -> Result
+			{
+				ScriptSystem* system = ResolveContext(context, function);
+				IAnimatorControl* animation = system ? RequireAnimation(*system, function) : nullptr;
+				const Entity animator = animation ? RequireAnimator(*system, entity, function) : Entity();
+				return animator ? action(*system, *animation, animator) : failure;
+			});
+		}
+
+		bool HostAnimatorPlay(StrataScriptContext* context, StrataScriptEntityID entity, StrataScriptString state)
+		{
+			return ControlAnimator(context, entity, "AnimatorPlay", false, [&](ScriptSystem& system, IAnimatorControl& animation, Entity animator)
+			{
+				const std::string_view name = ScriptStringView(state);
+				if (animation.Play(animator, name))
+					return true;
+				system.ReportProblem("AnimatorPlay", fmt::format("the animator of '{}' has no controller with a state '{}'", animator.GetName(), name));
+				return false;
+			});
+		}
+
+		bool HostAnimatorPlayClip(StrataScriptContext* context, StrataScriptEntityID entity, StrataScriptAssetHandle clip)
+		{
+			return ControlAnimator(context, entity, "AnimatorPlayClip", false, [&](ScriptSystem& system, IAnimatorControl& animation, Entity animator)
+			{
+				if (animation.PlayClip(animator, AssetHandle(clip)))
+					return true;
+				system.ReportProblem("AnimatorPlayClip", fmt::format("asset {} is not an animation clip", AssetHandle(clip).ToString()));
+				return false;
+			});
+		}
+
+		bool HostAnimatorCrossFade(StrataScriptContext* context, StrataScriptEntityID entity, StrataScriptString state, float seconds)
+		{
+			return ControlAnimator(context, entity, "AnimatorCrossFade", false, [&](ScriptSystem& system, IAnimatorControl& animation, Entity animator)
+			{
+				const std::string_view name = ScriptStringView(state);
+				if (!std::isfinite(seconds) || seconds < 0.0f)
+				{
+					system.ReportProblem("AnimatorCrossFade", "the duration must be finite and not negative");
+					return false;
+				}
+				if (animation.CrossFade(animator, name, seconds))
+					return true;
+				system.ReportProblem("AnimatorCrossFade", fmt::format("the animator of '{}' has no controller with a state '{}'", animator.GetName(), name));
+				return false;
+			});
+		}
+
+		// Sets a parameter through `set`, reporting a parameter the animator's controller does not have with that type.
+		template<typename Set>
+		bool SetAnimatorParameter(StrataScriptContext* context, StrataScriptEntityID entity, StrataScriptString parameter, const char* function,
+			const char* type, Set&& set)
+		{
+			return ControlAnimator(context, entity, function, false, [&](ScriptSystem& system, IAnimatorControl& animation, Entity animator)
+			{
+				const std::string_view name = ScriptStringView(parameter);
+				if (set(animation, animator, name))
+					return true;
+				system.ReportProblem(function, fmt::format("the animator of '{}' has no {} parameter '{}' (or the value is not finite)", animator.GetName(), type, name));
+				return false;
+			});
+		}
+
+		bool HostAnimatorSetFloat(StrataScriptContext* context, StrataScriptEntityID entity, StrataScriptString parameter, float value)
+		{
+			return SetAnimatorParameter(context, entity, parameter, "AnimatorSetFloat", "float",
+				[value](IAnimatorControl& animation, Entity animator, std::string_view name) { return animation.SetFloat(animator, name, value); });
+		}
+
+		bool HostAnimatorSetBool(StrataScriptContext* context, StrataScriptEntityID entity, StrataScriptString parameter, bool value)
+		{
+			return SetAnimatorParameter(context, entity, parameter, "AnimatorSetBool", "bool",
+				[value](IAnimatorControl& animation, Entity animator, std::string_view name) { return animation.SetBool(animator, name, value); });
+		}
+
+		bool HostAnimatorSetTrigger(StrataScriptContext* context, StrataScriptEntityID entity, StrataScriptString parameter)
+		{
+			return SetAnimatorParameter(context, entity, parameter, "AnimatorSetTrigger", "trigger",
+				[](IAnimatorControl& animation, Entity animator, std::string_view name) { return animation.SetTrigger(animator, name); });
+		}
+
+		bool HostAnimatorResetTrigger(StrataScriptContext* context, StrataScriptEntityID entity, StrataScriptString parameter)
+		{
+			return SetAnimatorParameter(context, entity, parameter, "AnimatorResetTrigger", "trigger",
+				[](IAnimatorControl& animation, Entity animator, std::string_view name) { return animation.ResetTrigger(animator, name); });
+		}
+
+		bool HostAnimatorSetSpeed(StrataScriptContext* context, StrataScriptEntityID entity, float speed)
+		{
+			return ControlAnimator(context, entity, "AnimatorSetSpeed", false, [&](ScriptSystem& system, IAnimatorControl& animation, Entity animator)
+			{
+				if (animation.SetSpeed(animator, speed))
+					return true;
+				system.ReportProblem("AnimatorSetSpeed", "the speed must be finite and at most 100 in magnitude");
+				return false;
+			});
+		}
+
+		uint64_t HostAnimatorGetCurrentState(StrataScriptContext* context, StrataScriptEntityID entity, char* buffer, uint64_t capacity)
+		{
+			return ControlAnimator(context, entity, "AnimatorGetCurrentState", uint64_t(0), [&](ScriptSystem&, IAnimatorControl& animation, Entity animator)
+			{
+				const std::optional<std::string> state = animation.GetCurrentState(animator);
+				return state ? CopyText(*state, buffer, capacity) : uint64_t(0);
+			});
+		}
+
+		float HostAnimatorGetNormalizedTime(StrataScriptContext* context, StrataScriptEntityID entity)
+		{
+			return ControlAnimator(context, entity, "AnimatorGetNormalizedTime", 0.0f,
+				[](ScriptSystem&, IAnimatorControl& animation, Entity animator) { return animation.GetNormalizedTime(animator); });
+		}
+
+		bool HostAnimatorIsInTransition(StrataScriptContext* context, StrataScriptEntityID entity)
+		{
+			return ControlAnimator(context, entity, "AnimatorIsInTransition", false,
+				[](ScriptSystem&, IAnimatorControl& animation, Entity animator) { return animation.IsInTransition(animator); });
+		}
+
+		bool HostAnimatorGetJointTransform(StrataScriptContext* context, StrataScriptEntityID entity, StrataScriptString joint, StrataScriptTransform* outTransform)
+		{
+			return ControlAnimator(context, entity, "AnimatorGetJointTransform", false, [&](ScriptSystem& system, IAnimatorControl& animation, Entity animator)
+			{
+				if (!outTransform)
+					return false;
+				const std::string_view name = ScriptStringView(joint);
+				const std::optional<glm::mat4> transform = animation.GetJointTransform(animator, name);
+				if (!transform)
+				{
+					system.ReportProblem("AnimatorGetJointTransform", fmt::format("the animator of '{}' has no pose with a joint '{}'", animator.GetName(), name));
+					return false;
+				}
+				glm::vec3 translation, scale;
+				glm::quat rotation;
+				if (!Math::DecomposeTransform(*transform, translation, rotation, scale))
+				{
+					system.ReportProblem("AnimatorGetJointTransform", fmt::format("the transform of joint '{}' of '{}' is degenerate", name, animator.GetName()));
+					return false;
+				}
+				WriteTransform(translation, rotation, scale, *outTransform);
+				return true;
+			});
+		}
+
+		////////////////////////////////////////////////////////////////////////////////
 		// The table
 		////////////////////////////////////////////////////////////////////////////////
 
@@ -1692,7 +1865,19 @@ namespace Strata
 	X(AudioGetMasterVolume) \
 	X(QuitGame) \
 	X(LoadScene) \
-	X(ReleaseAsset)
+	X(ReleaseAsset) \
+	X(AnimatorPlay) \
+	X(AnimatorPlayClip) \
+	X(AnimatorCrossFade) \
+	X(AnimatorSetFloat) \
+	X(AnimatorSetBool) \
+	X(AnimatorSetTrigger) \
+	X(AnimatorResetTrigger) \
+	X(AnimatorSetSpeed) \
+	X(AnimatorGetCurrentState) \
+	X(AnimatorGetNormalizedTime) \
+	X(AnimatorIsInTransition) \
+	X(AnimatorGetJointTransform)
 
 		struct HostFunctionEntry
 		{

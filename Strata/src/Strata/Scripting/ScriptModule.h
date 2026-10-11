@@ -101,6 +101,8 @@ namespace Strata
 		ScriptCallResult InvokeCallback(const ScriptCallSite& site, StrataScriptInstance instance, ScriptCallback callback, float argument);
 		// The contact callbacks (OnCollisionEnter/Exit, OnTriggerEnter/Exit) with the contact they report.
 		ScriptCallResult InvokeContactCallback(const ScriptCallSite& site, StrataScriptInstance instance, ScriptCallback callback, const StrataScriptCollision& contact);
+		// OnAnimationEvent with the event's name (engine memory the module reads during the call).
+		ScriptCallResult InvokeAnimationEventCallback(const ScriptCallSite& site, StrataScriptInstance instance, std::string_view name);
 
 		// Script host API support: the exception message a module reports for its current call, and the innermost call
 		// into script code running on this thread (null outside script code).
@@ -132,6 +134,7 @@ namespace Strata
 			decltype(StrataScriptClassDesc::OnCollisionExit) OnCollisionExit = nullptr;
 			decltype(StrataScriptClassDesc::OnTriggerEnter) OnTriggerEnter = nullptr;
 			decltype(StrataScriptClassDesc::OnTriggerExit) OnTriggerExit = nullptr;
+			decltype(StrataScriptClassDesc::OnAnimationEvent) OnAnimationEvent = nullptr;
 		};
 
 		template<typename Function>

@@ -37,6 +37,9 @@ namespace Strata
 	//   OnReload        after a hot reload, instead of OnCreate (see below)
 	//   OnCollisionEnter / OnCollisionExit, OnTriggerEnter / OnTriggerExit
 	//                   when the entity's physics body starts or stops touching another body (see below)
+	//   OnAnimationEvent
+	//                   when the playhead of the entity's animator passes an event of its controller's current state, with
+	//                   the event's name (after the animators were evaluated, in the order the events happened)
 	// Instances update in entity hierarchy order (parents first), then in the order of the scripts on the entity.
 	// Inactive entities receive no updates. Overrides may be public, protected or private.
 	//
@@ -77,6 +80,7 @@ namespace Strata
 		virtual void OnCollisionExit([[maybe_unused]] const Collision& collision) {}
 		virtual void OnTriggerEnter([[maybe_unused]] const Collision& collision) {}
 		virtual void OnTriggerExit([[maybe_unused]] const Collision& collision) {}
+		virtual void OnAnimationEvent([[maybe_unused]] std::string_view name) {}
 
 		// The entity this script is attached to.
 		Entity GetEntity() const { return m_Entity; }
@@ -277,6 +281,15 @@ namespace Strata
 			return InvokeScript(ScriptAccess::GetInstanceContext(*script), [&]() { (script->*Callback)(contact); });
 		}
 
+		inline uint32_t AnimationEventThunk(StrataScriptInstance instance, StrataScriptString name)
+		{
+			Script* script = ToScript(instance);
+			if (!script)
+				return StrataScriptResult_InvalidArgument;
+			const std::string_view text = FromABIString(name);
+			return InvokeScript(ScriptAccess::GetInstanceContext(*script), [&]() { script->OnAnimationEvent(text); });
+		}
+
 		// Per script class: its registered name and, while the module is loaded, its record.
 		template<typename T>
 		struct ClassSlot
@@ -298,7 +311,8 @@ namespace Strata
 			CallbackFlag_OnCollisionEnter = 1u << 6,
 			CallbackFlag_OnCollisionExit = 1u << 7,
 			CallbackFlag_OnTriggerEnter = 1u << 8,
-			CallbackFlag_OnTriggerExit = 1u << 9
+			CallbackFlag_OnTriggerExit = 1u << 9,
+			CallbackFlag_OnAnimationEvent = 1u << 10
 		};
 
 		// Whether T overrides a callback. `&T::OnUpdate` names Script::OnUpdate (type `void (Script::*)(float)`) unless T,
@@ -395,6 +409,15 @@ namespace Strata
 		}
 
 		template<typename T>
+		constexpr bool OverridesOnAnimationEvent()
+		{
+			if constexpr (requires { &T::OnAnimationEvent; })
+				return !std::is_same_v<decltype(&T::OnAnimationEvent), void (Script::*)(std::string_view)>;
+			else
+				return true;
+		}
+
+		template<typename T>
 		constexpr uint32_t GetCallbackFlags()
 		{
 			uint32_t flags = 0;
@@ -418,6 +441,8 @@ namespace Strata
 				flags |= CallbackFlag_OnTriggerEnter;
 			if constexpr (OverridesOnTriggerExit<T>())
 				flags |= CallbackFlag_OnTriggerExit;
+			if constexpr (OverridesOnAnimationEvent<T>())
+				flags |= CallbackFlag_OnAnimationEvent;
 			return flags;
 		}
 
@@ -562,6 +587,7 @@ namespace Strata
 			desc.OnCollisionExit = (flags & CallbackFlag_OnCollisionExit) ? &ContactThunk<&Script::OnCollisionExit> : nullptr;
 			desc.OnTriggerEnter = (flags & CallbackFlag_OnTriggerEnter) ? &ContactThunk<&Script::OnTriggerEnter> : nullptr;
 			desc.OnTriggerExit = (flags & CallbackFlag_OnTriggerExit) ? &ContactThunk<&Script::OnTriggerExit> : nullptr;
+			desc.OnAnimationEvent = (flags & CallbackFlag_OnAnimationEvent) ? &AnimationEventThunk : nullptr;
 			return record;
 		}
 
