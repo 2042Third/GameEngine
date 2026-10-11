@@ -13,6 +13,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <filesystem>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -145,8 +147,22 @@ namespace Strata
 				settings[key] = value;
 		}
 
+		// File systems keep times at a resolution (NTFS 100 ns, exFAT 10 ms, FAT and HFS+ 2 s): a file written again within it
+		// keeps its time. A record must not vouch for a time so recent that the file may still change without changing it, or
+		// an edit of the same size right after would pass for the recorded contents: such times are recorded as unknown (0),
+		// so the next check compares contents and records the time once it is old enough (as git treats racily clean files).
+		int64_t GetRecordableTime(int64_t time)
+		{
+			using Clock = std::filesystem::file_time_type::clock;
+			constexpr auto c_TimeResolution = std::chrono::seconds(2);
+			const int64_t now = Clock::now().time_since_epoch().count();
+			const int64_t window = std::chrono::duration_cast<Clock::duration>(c_TimeResolution).count();
+			return now - time < window ? 0 : time;
+		}
+
 		// Whether a file is in the state a record noted: same size and time, or only the time changed (a checkout, a copy)
-		// but not the contents. A refreshed time is written into the state (outChanged), so contents are compared once.
+		// but not the contents. A refreshed time is written into the state (outChanged), so contents are compared once (again
+		// while the time is too recent to vouch for, see GetRecordableTime).
 		bool IsFileCurrent(const std::filesystem::path& path, nlohmann::json& state, std::string_view sizeKey, std::string_view timeKey, std::string_view hashKey,
 			bool& outChanged)
 		{
@@ -159,7 +175,7 @@ namespace Strata
 			const std::optional<uint64_t> hash = HashFile(path);
 			if (!hash || HashToString(*hash) != JsonUtils::GetString(state, hashKey))
 				return false;
-			state[std::string(timeKey)] = time;
+			state[std::string(timeKey)] = GetRecordableTime(time);
 			outChanged = true;
 			return true;
 		}
@@ -758,7 +774,8 @@ namespace Strata
 		outcome.Success = true;
 		outcome.FromCache = true;
 		outcome.SourceSize = JsonUtils::GetUInt(*record, "SourceSize", 0);
-		outcome.SourceTime = JsonUtils::GetInt(*record, "SourceTime", 0);
+		// The file's own time (the record may hold none for a time too recent to vouch for): the file is current.
+		outcome.SourceTime = FileSystem::GetLastWriteTime(sourcePath).value_or(0);
 
 		if (auto dependencies = record->find("Dependencies"); dependencies != record->end() && dependencies->is_array())
 		{
@@ -880,8 +897,8 @@ namespace Strata
 			const std::string relativePath = ToRelative(dependency.Path);
 			if (relativePath.empty() || relativePath == request.Path)
 				continue;
-			dependencies.push_back({ { "Path", relativePath }, { "Exists", dependency.Exists }, { "Size", dependency.Size }, { "Time", dependency.Time },
-				{ "Hash", HashToString(dependency.Hash) } });
+			dependencies.push_back({ { "Path", relativePath }, { "Exists", dependency.Exists }, { "Size", dependency.Size },
+				{ "Time", GetRecordableTime(dependency.Time) }, { "Hash", HashToString(dependency.Hash) } });
 			outcome.Dependencies.push_back(relativePath);
 		}
 
@@ -930,7 +947,7 @@ namespace Strata
 		record["ImporterVersion"] = request.Importer->GetVersion();
 		record["SettingsHash"] = HashToString(HashSettings(request.Settings));
 		record["SourceSize"] = outcome.SourceSize;
-		record["SourceTime"] = outcome.SourceTime;
+		record["SourceTime"] = GetRecordableTime(outcome.SourceTime);
 		record["SourceHash"] = sourceHash ? HashToString(*sourceHash) : std::string();
 		record["Success"] = outcome.Success;
 		record["Error"] = outcome.Error;
@@ -1248,7 +1265,7 @@ namespace Strata
 			record["Native"] = true; // Stored as its source: the record only caches what it references
 			record["Source"] = relativePath;
 			record["SourceSize"] = data.size();
-			record["SourceTime"] = sourceTime;
+			record["SourceTime"] = GetRecordableTime(sourceTime);
 			record["SourceHash"] = HashToString(Hash::FNV1a(data));
 			record["References"] = ReferencesToJson(result.References);
 			if (deferRecord)

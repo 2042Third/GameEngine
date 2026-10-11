@@ -23,10 +23,12 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <filesystem>
 #include <limits>
 #include <map>
 #include <set>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -337,6 +339,29 @@ TEST_SUITE("Asset.Dependencies")
 		REQUIRE(manager->ReadStoredData(UUID(0x5001), whole, &error));
 		CHECK(whole == *file);
 		CHECK_FALSE(manager->ReadStoredData(UUID(0x9999), whole, &error));
+	}
+
+	TEST_CASE("A record never vouches for a file time that another write in the same timestamp tick keeps")
+	{
+		// File systems keep times at a resolution (exFAT: 10 ms): two writes in one tick leave one time. Here the tick is made
+		// exact by setting the time, a moment ahead of the clock, as such a write would have left it.
+		NativeProject project("NativeReferencesSameTick");
+		const std::filesystem::path file = project.Assets / "Materials" / "Brick.stmat";
+		project.WriteMaterial("Materials/Brick.stmat", 0x5021, 0x9021);
+		std::error_code error;
+		const std::filesystem::file_time_type tick = std::filesystem::file_time_type::clock::now() + std::chrono::seconds(1);
+		std::filesystem::last_write_time(file, tick, error);
+		REQUIRE_FALSE(error);
+		{
+			Ref<EditorAssetManager> manager = project.Open();
+			CHECK(manager->GetDependencies(UUID(0x5021)) == Handles({ 0x9021 }));
+		}
+		// Contents of the same size with the same time: the record must not be taken for them.
+		project.WriteMaterial("Materials/Brick.stmat", 0x5021, 0x9022);
+		std::filesystem::last_write_time(file, tick, error);
+		REQUIRE_FALSE(error);
+		Ref<EditorAssetManager> manager = project.Open();
+		CHECK(manager->GetDependencies(UUID(0x5021)) == Handles({ 0x9022 }));
 	}
 
 	TEST_CASE("A search of what a document references that a save overtook writes no record")
