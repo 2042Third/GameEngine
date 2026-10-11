@@ -226,4 +226,65 @@ TEST_SUITE("Editor.SceneLoad")
 		CHECK(project.Run("project.setExportSettings", { { "loadingScene", nullptr } })["loadingScene"].is_null());
 		CHECK_FALSE(context.GetProject()->GetConfig().Export.LoadingScene.IsValid());
 	}
+	TEST_CASE("Sub-scenes load into the running game and unload through commands, and play.stop discards them")
+	{
+		SceneLoadProject project(CreateTemporaryDirectory("EditorSubScenes") / "Loads");
+		EditorContext& context = project.Context;
+		const auto failure = [&](std::string_view name, const nlohmann::json& parameters)
+		{
+			return CompleteCommand(context, project.Commands.Execute(context, name, parameters));
+		};
+
+		// Edit mode: sub-scenes are runtime only.
+		const EditorCommandResult inEditMode = failure("scene.loadAdditive", { { "scene", UUIDToJson(project.Two) } });
+		CHECK_FALSE(inEditMode.Success);
+		CHECK(inEditMode.Error.find("play.start") != std::string::npos);
+		CHECK(project.Run("scene.loadStatus")["subScenes"].empty());
+
+		project.Run("play.start");
+		const Ref<Scene> running = context.GetActiveScene();
+		const size_t entities = running->GetEntityCount();
+		const nlohmann::json loaded = project.Run("scene.loadAdditive", { { "scene", "Scenes/Two.stscene" } });
+		CHECK(loaded["state"] == "Loaded");
+		CHECK(loaded["scene"] == UUIDToJson(project.Two));
+		CHECK(loaded["totalEntities"] == 1);
+		CHECK(loaded["slices"] == 1);
+		CHECK(loaded["warning"].is_string());
+		REQUIRE(loaded["roots"].size() == 1);
+		const std::optional<UUID> boss = UUIDFromJson(loaded["roots"][0]);
+		REQUIRE(boss.has_value());
+		CHECK(running->GetEntityByUUID(*boss).GetName() == "Boss");
+		CHECK(running->GetEntityCount() == entities + 1);
+		const int64_t subScene = loaded["subScene"].get<int64_t>();
+		const nlohmann::json status = project.Run("scene.loadStatus");
+		REQUIRE(status["subScenes"].size() == 1);
+		CHECK(status["subScenes"][0]["subScene"] == subScene);
+		CHECK(status["subScenes"][0]["state"] == "Loaded");
+		CHECK(status["subScenes"][0]["progress"] == 1.0);
+
+		// The same scene again: its IDs are there already.
+		const EditorCommandResult twice = failure("scene.loadAdditive", { { "scene", UUIDToJson(project.Two) } });
+		CHECK_FALSE(twice.Success);
+		CHECK(twice.Error.find(boss->ToString()) != std::string::npos);
+		CHECK(running->GetEntityCount() == entities + 1);
+		CHECK(project.Run("scene.loadStatus")["subScenes"].size() == 2); // The failed one stays, with its error, until unloaded
+		const int64_t failed = project.Run("scene.loadStatus")["subScenes"][1]["subScene"].get<int64_t>();
+		CHECK(project.Run("scene.unloadAdditive", { { "subScene", failed } })["entities"] == entities + 1);
+
+		const nlohmann::json unloaded = project.Run("scene.unloadAdditive", { { "subScene", subScene } });
+		CHECK(unloaded["entities"] == entities);
+		CHECK_FALSE(running->GetEntityByUUID(*boss).IsValid());
+		CHECK(project.Run("scene.loadStatus")["subScenes"].empty());
+		const EditorCommandResult unknown = failure("scene.unloadAdditive", { { "subScene", subScene } });
+		CHECK(unknown.ErrorKind == EditorCommandError::InvalidParameters);
+		CHECK(failure("scene.unloadAdditive", nlohmann::json::object()).ErrorKind == EditorCommandError::InvalidParameters);
+		CHECK(failure("scene.loadAdditive", { { "scene", "Scenes/Missing.stscene" } }).ErrorKind == EditorCommandError::InvalidParameters);
+
+		// Loaded again and left there: play.stop discards it with the running copy.
+		project.Run("scene.loadAdditive", { { "scene", UUIDToJson(project.Two) } });
+		project.Run("play.stop");
+		CHECK_FALSE(context.GetEditScene()->FindEntityByName("Boss").IsValid());
+		CHECK(context.GetEditScene()->GetSubScenes().empty());
+		CHECK_FALSE(context.IsSceneModified());
+	}
 }

@@ -593,7 +593,8 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   settings (gravity...) are not applied. Scripts load sub-scenes with `Scene::LoadAdditive` (the SDK's `SubScene`), read
   an asset closure's progress with `Assets::GetLoadProgress` (`ScriptSystem::GetAssetLoadProgress`, an
   `AssetGroupRequest` the scene pins until `Assets::Release`) and make many prefab instances with
-  `Scene::InstantiateMany`.
+  `Scene::InstantiateMany`; the editor's commands are `scene.loadAdditive` (play mode; deferred until the sub-scene's entities
+  exist), `scene.unloadAdditive` and `scene.loadStatus` (`subScenes`).
 - A scene knows the scene asset it was loaded from or saved as (`Scene::GetSourceAsset`, set when a scene asset's
   scene is taken or copied and by the editor's save-as) and keeps an ID across its copies (`GetLineageID`: the source
   asset, else an ID of its own), by which systems recognize it from one play session to the next.

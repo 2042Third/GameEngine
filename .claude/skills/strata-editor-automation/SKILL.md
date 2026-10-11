@@ -74,7 +74,7 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | Question | Call |
 | --- | --- |
 | What is open, is it playing, unsaved changes? | `editor.status` |
-| Is a scene still opening, how far is it? | `scene.loadStatus` (`open` with `progress`, `lastOpen` with how it ended, `play` for a switch a running game asked for); also `editor.status`'s `sceneLoad` |
+| Is a scene still opening, how far is it? | `scene.loadStatus` (`open` with `progress`, `lastOpen` with how it ended, `play` for a switch a running game asked for, `subScenes` of the running game); also `editor.status`'s `sceneLoad` |
 | Which projects did the user (or an agent) open lately? | `editor.recentProjects` (name, project file path for `project.open`, `lastOpened`; editors run with `--commands` or `--frames` list what they opened without saving it); `editor.removeRecentProject {path}` takes one off |
 | What can a new project or scene start from? | `project.templates` (`empty`, `basic3d`) |
 | Is there a finished game to learn from? | `project.samples` (e.g. `Tetris`); `project.openSample {sample, directory}` opens a copy in a new directory (the sample stays as shipped; build its scripts with `script.build` before playing) |
@@ -119,6 +119,11 @@ editor started with `--no-gpu` (use `--headless`):
   `frameTimes` of the frames meanwhile), so give large scenes a long `--timeout`. Meanwhile the edited scene is read-only:
   edits and `play.start` fail with "is being opened" (wait for the answer, or watch `scene.loadStatus`). A second
   `scene.open`, `scene.new` or `project.close` cancels it (the first `scene.open` then fails as cancelled, `-32006`).
+- **Sub-scenes (play mode).** `scene.loadAdditive {scene}` loads a scene asset into the running game next to what it holds
+  (as scripts' `Scene::LoadAdditive` do) and answers once its entities exist: `{subScene, roots, totalEntities, slices,
+  seconds, ...}`; they appear over several frames, at most the scene's `maxEntitiesInstantiatedPerFrame` per frame
+  (`scene.setSettings`). Its entities keep their IDs, so loading the same scene twice fails; `scene.unloadAdditive
+  {subScene}` removes one (also a failed one), and `play.stop` discards them all with the running copy.
 - `camera.get`; `camera.set {position?, target?, yaw?, pitch?, distance?, fov?, near?, far?, flySpeed?}`;
   `camera.focus {entities?}` frames the given (or selected) entities. Every scene remembers its own editor camera; a
   scene opened for the first time is framed on what it renders, seen from the direction of its primary camera.
@@ -206,7 +211,7 @@ entities (fresh IDs, references among them remapped, also in another scene);
 undo step (as the inspector does for a multi-selection); `entity.rename`, `entity.delete`, `scene.setSettings` (gravity,
 timestep, and `physicsCapacity {maxBodies, maxBodyPairs, maxContactConstraints}` for scenes that spawn many bodies while
 they play; 0 sizes a capacity from the bodies the scene starts with; set capacities in edit mode: they apply when play
-starts).
+starts; `maxEntitiesInstantiatedPerFrame` bounds how many entities sub-scenes create per frame, 5000 by default).
 
 **Materials**: `material.set {"material": "Materials/Red.stmat", "properties": {"Roughness": 0.3}}` saves the material
 file and is one undo step (`edit.undo` restores the file and what entities show); entities using it show the change in

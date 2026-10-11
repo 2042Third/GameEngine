@@ -809,8 +809,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
 - **Opening scenes** (`scene.open`, `EditorContext::BeginOpenScene`) loads in the background and answers once the scene
   replaced the edited one; meanwhile the edited scene is read-only (`CommitEdit` rolls edits back, mutating scene commands
   fail, play mode is refused) and the viewport shows the load's progress (`ViewportPanel::DrawSceneLoadOverlay`).
-  `scene.loadStatus` and `editor.status` (`sceneLoad`) report it; `EditorContext::OpenScene` waits for it (a project's
-  start scene, tools, tests). UI code opens scenes through the runner (`RunEditorCommandDeferred`).
+  `scene.loadStatus` and `editor.status` (`sceneLoad`) report it (`scene.loadStatus` also the running game's sub-scenes,
+  which `scene.loadAdditive {scene}` and `scene.unloadAdditive {subScene}` load and unload in play mode, see Scripting);
+  `EditorContext::OpenScene` waits for it (a project's start scene, tools, tests). UI code opens scenes through the runner
+  (`RunEditorCommandDeferred`).
 - **Scripts through commands** (see Scripting, "Project scripts"): `script.status` (loaded module, classes with fields
   and callbacks, faults, the running and last build with diagnostics), `script.build {wait}` (deferred; fails with the
   first compiler errors), `script.reload`, `script.load {path}`, `script.init {example}`, `script.add {entity, class,
