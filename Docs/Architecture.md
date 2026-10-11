@@ -223,7 +223,12 @@ the step, and each touching pair knows its position in the pair lists of both it
 in constant time (`PhysicsStats::PairIndexOperations` counts the list writes). Bodies created while changes are applied
 (play start, a prefab spawn, a streamed cell) join the simulation in one batch per activation mode
 (`AddBodiesPrepare`/`AddBodiesFinalize`), and destroyed bodies leave it in one batch, when `ApplyPendingChanges` ends;
-each Jolt body index leads to its entity and record in constant time (`BodySlot`). Around each step the work on awake
+each Jolt body index leads to its entity and record in constant time (`BodySlot`). Jolt rebuilds a broad phase tree, and
+frees the nodes of the bodies removed from it, only while the tree holds bodies, and aborts the process when its fixed
+node pool runs out: so every world keeps one static anchor body in each of its two trees (static and moving bodies), on a
+layer outside the 32 that collides with nothing and that no query accepts, beside its body capacity
+(`c_BroadPhaseAnchorCount`). Bodies spawned and removed again before every step then cost nodes only until the next step
+(`Physics.Capacity` runs such spawns in a helper process). Around each step the work on awake
 bodies runs on the job system: the synchronization skips, in parallel chunks, the bodies whose entity is where the last
 step put it (`Scene::FindCurrentWorldTransform` reads only current cached matrices), and the write-back writes the poses of
 bodies without a dynamic ancestor in parallel chunks, each touching only its own record and `TransformComponent` through

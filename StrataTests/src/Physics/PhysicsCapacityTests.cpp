@@ -2,6 +2,7 @@
 
 #include "Physics/PhysicsTestUtils.h"
 #include "Strata/Core/Log.h"
+#include "Strata/Core/Process.h"
 #include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Physics/PhysicsWorld.h"
 #include "Strata/Scene/Components.h"
@@ -10,7 +11,10 @@
 #include "Strata/Scene/SceneSerializer.h"
 #include "TestHelpers.h"
 
+#include <chrono>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <span>
 #include <string>
 #include <vector>
@@ -43,10 +47,93 @@ namespace
 		return boxes;
 	}
 
+	// Spawns `count` boxes (dynamic or static) in a grid, has the world build their bodies, and destroys them again before the
+	// next step, which then removes the bodies. False if the bodies were not built.
+	bool SpawnAndRemoveBoxes(Scene& scene, PhysicsSystem& physics, uint32_t count, bool dynamic)
+	{
+		std::vector<Entity> boxes;
+		boxes.reserve(count);
+		for (uint32_t index = 0; index < count; index++)
+		{
+			const glm::vec3 position(static_cast<float>(index % 32) * 1.5f, 1.0f, static_cast<float>(index / 32) * 1.5f);
+			boxes.push_back(dynamic ? CreateDynamicBox(scene, "Spawned", position) : CreateStaticBox(scene, "Spawned", position, glm::vec3(0.5f)));
+		}
+		const bool built = physics.HasBody(boxes.front()) && physics.HasBody(boxes.back());
+		scene.DestroyEntities(boxes);
+		StepScene(scene, 1);
+		return built;
+	}
+
+}
+
+namespace Strata::Tests
+{
+
+	int RunBroadPhaseChurnProcess()
+	{
+#if defined(_MSC_VER)
+		// Jolt aborts the process when its broad phase runs out of nodes: let the exit code say so, without a dialog.
+		_set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+#endif
+		LogSpecification logSpecification;
+		logSpecification.Level = LogLevel::Warn;
+		Log::Init(logSpecification);
+
+		// A world for 1,024 bodies: its broad phase has nodes for twice the trees of that many bodies. Spawning 1,000 bodies
+		// and removing them before the next step, again and again, takes all of them within a few rounds unless the steps
+		// free the nodes of removed bodies, in the tree of moving bodies and in the tree of static ones.
+		constexpr uint32_t c_Rounds = 20;
+		constexpr uint32_t c_Bodies = 1000;
+		int result = 0;
+		{
+			Scene scene("Churn");
+			scene.GetSettings().PhysicsCapacity.MaxBodies = 1024;
+			scene.OnRuntimeStart();
+			PhysicsSystem* physics = scene.GetSystem<PhysicsSystem>();
+			for (const bool dynamic : { true, false })
+			{
+				for (uint32_t round = 0; round < c_Rounds && physics && result == 0; round++)
+				{
+					if (!SpawnAndRemoveBoxes(scene, *physics, c_Bodies, dynamic))
+					{
+						std::printf("%s bodies were not built in round %u\n", dynamic ? "Dynamic" : "Static", round);
+						result = 1;
+					}
+				}
+			}
+			if (!physics)
+			{
+				std::printf("The scene has no physics system\n");
+				result = 1;
+			}
+			scene.OnRuntimeStop();
+		}
+		if (result == 0)
+			std::printf("survived %u rounds of %u dynamic and of %u static bodies\n", c_Rounds, c_Bodies, c_Bodies);
+		std::fflush(stdout);
+		Log::Shutdown();
+		return result;
+	}
+
 }
 
 TEST_SUITE("Physics.Capacity")
 {
+	TEST_CASE("Bodies spawned and removed again before every step never exhaust the broad phase")
+	{
+		// Jolt ends the process when its broad phase runs out of nodes, so the spawns run in a helper process
+		// (RunBroadPhaseChurnProcess).
+		ProcessSpecification specification;
+		specification.Executable = GetTestExecutablePath();
+		specification.Arguments = { "--strata-test-helper=broad-phase-churn" };
+		const Process::RunResult result = Process::Run(specification, std::chrono::minutes(5));
+		INFO("Output: ", result.Output);
+		REQUIRE(result.Started);
+		CHECK_FALSE(result.TimedOut);
+		CHECK(result.ExitCode == 0);
+		CHECK(result.Output.find("survived 20 rounds") != std::string::npos);
+	}
+
 	TEST_CASE("Automatic capacities follow the bodies a scene starts with")
 	{
 		const PhysicsSettings automatic;

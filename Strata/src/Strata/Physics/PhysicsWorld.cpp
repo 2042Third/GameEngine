@@ -112,6 +112,17 @@ namespace Strata
 			"Scene capacities exceed Jolt's contact constraint limit");
 		static_assert(2 * Scene::c_MaxEntities <= PhysicsCapacitySettings::c_MaxBodiesLimit, "The automatic body capacity must fit a scene full of bodies");
 
+		// Jolt rebuilds a broad phase tree, freeing the nodes of the bodies removed from it, only while the tree holds bodies.
+		// A tree that removals emptied keeps those nodes, so bodies added and removed again before every step (a spawn that is
+		// gone by the next step, repeated) take nodes from a fixed pool until Jolt runs out of them and aborts the process.
+		// The world keeps one anchor body in each of its two trees (static and moving), on a layer that collides with nothing
+		// and that no query accepts, so every tree always holds a body and the steps maintain it. The anchors are the first
+		// bodies of the world (indices 0 and 1) and come on top of its body capacity.
+		constexpr uint32_t c_BroadPhaseAnchorCount = 2;
+		constexpr uint32_t c_AnchorLayer = c_PhysicsLayerCount; // A user layer outside the valid range: collides with nothing
+		static_assert(PhysicsCapacitySettings::c_MaxBodiesLimit + c_BroadPhaseAnchorCount <= JPH::PhysicsSystem::cMaxBodiesLimit,
+			"The broad phase anchors must fit beside the largest body capacity");
+
 		uint32_t NextPowerOfTwo(uint64_t value)
 		{
 			return static_cast<uint32_t>(std::min<uint64_t>(std::bit_ceil(std::max<uint64_t>(value, 1)), uint64_t(1) << 31));
@@ -251,7 +262,9 @@ namespace Strata
 
 			bool ShouldCollide(JPH::ObjectLayer layer) const override
 			{
-				return (m_LayerMask & ST_BIT(GetUserLayer(layer))) != 0;
+				// Bodies outside the user layers (the broad phase anchors) never match.
+				const uint32_t userLayer = GetUserLayer(layer);
+				return userLayer < c_PhysicsLayerCount && (m_LayerMask & ST_BIT(userLayer)) != 0;
 			}
 		private:
 			uint32_t m_LayerMask;
@@ -1156,6 +1169,13 @@ namespace Strata
 			record.Failure = failure;
 		}
 
+		// The body slots of the world's own bodies (those of records and the presence bodies of character controllers): Jolt's
+		// body count without the broad phase anchors.
+		uint32_t GetUsedBodySlots(const PhysicsWorldData& data)
+		{
+			return data.JoltSystem->GetNumBodies() - c_BroadPhaseAnchorCount;
+		}
+
 		// One error for the entities that found the world full, instead of one per entity (thousands at once when a scene
 		// outgrows an explicit capacity); logged again only once they all got a body and the world fills up again. Records
 		// what the world would have needed, so that the scene's next world can grow.
@@ -1168,7 +1188,7 @@ namespace Strata
 				return;
 			}
 
-			const uint64_t needed = static_cast<uint64_t>(data.JoltSystem->GetNumBodies()) + data.BodyLimitCount;
+			const uint64_t needed = static_cast<uint64_t>(GetUsedBodySlots(data)) + data.BodyLimitCount;
 			data.Demand.Bodies = std::max(data.Demand.Bodies, static_cast<uint32_t>(std::min<uint64_t>(needed, PhysicsCapacitySettings::c_MaxBodiesLimit)));
 			if (!data.BodyLimitErrors.GetLastMessage().empty())
 				return;
@@ -1492,6 +1512,20 @@ namespace Strata
 			};
 			addBatch(data.PendingAdds, JPH::EActivation::DontActivate);
 			addBatch(data.PendingActivatedAdds, JPH::EActivation::Activate);
+		}
+
+		// Adds the anchor of the static and of the moving broad phase tree (see c_BroadPhaseAnchorCount): static bodies on the
+		// anchor layer, at the origin, never activated. Called on a new world, so they take the first two body indices.
+		void AddBroadPhaseAnchors(PhysicsWorldData& data)
+		{
+			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
+			const JPH::RefConst<JPH::Shape> shape = new JPH::SphereShape(0.01f);
+			for (const bool moving : { false, true })
+			{
+				const JPH::BodyCreationSettings settings(shape, JPH::RVec3::sZero(), JPH::Quat::sIdentity(), JPH::EMotionType::Static, MakeObjectLayer(c_AnchorLayer, moving));
+				[[maybe_unused]] const JPH::BodyID anchor = bodies.CreateAndAddBody(settings, JPH::EActivation::DontActivate);
+				ST_CORE_ASSERT(!anchor.IsInvalid() && anchor.GetIndex() < c_BroadPhaseAnchorCount, "The broad phase anchors must be the world's first bodies");
+			}
 		}
 
 		void DestroyAllBodies(PhysicsWorldData& data)
@@ -2066,7 +2100,7 @@ namespace Strata
 
 			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
 			// Bodies destroyed in this round of changes keep their slots until the batch: they do not count.
-			if (!record.HasBody() && data.JoltSystem->GetNumBodies() - data.PendingDestructions.size() >= data.Settings.MaxBodies)
+			if (!record.HasBody() && GetUsedBodySlots(data) - data.PendingDestructions.size() >= data.Settings.MaxBodies)
 			{
 				// Reported for all such entities at once (ReportBodyLimit).
 				SetBuildFailure(data, handle, record, BuildFailure::BodyLimit, worldTransform);
@@ -2708,7 +2742,7 @@ namespace Strata
 						case BuildFailure::DegenerateTransform:
 							retry = scene.GetWorldTransform(entity) != record->LastWorldTransform || (record->WaitsForParent && HasInvertibleParent(scene, entity));
 							break;
-						case BuildFailure::BodyLimit: retry = data.JoltSystem->GetNumBodies() < data.Settings.MaxBodies; break;
+						case BuildFailure::BodyLimit: retry = GetUsedBodySlots(data) < data.Settings.MaxBodies; break;
 						default: break;
 					}
 				}
@@ -3529,12 +3563,14 @@ namespace Strata
 		data.Allocator = CreateScope<JPH::TempAllocatorImplWithMallocFallback>(data.Settings.TempAllocatorSize);
 		data.Jobs = CreatePhysicsJobSystem(&data.JobCounters);
 		data.JoltSystem = CreateScope<JPH::PhysicsSystem>();
-		data.JoltSystem->Init(data.Settings.MaxBodies, 0, data.Settings.MaxBodyPairs, data.Settings.MaxContactConstraints, data.BroadPhaseLayers, data.ObjectVsBroadPhase, data.LayerPairFilter);
-		data.BodySlots.resize(data.Settings.MaxBodies);
+		data.JoltSystem->Init(data.Settings.MaxBodies + c_BroadPhaseAnchorCount, 0, data.Settings.MaxBodyPairs, data.Settings.MaxContactConstraints, data.BroadPhaseLayers,
+			data.ObjectVsBroadPhase, data.LayerPairFilter);
+		data.BodySlots.resize(data.JoltSystem->GetMaxBodies());
 		data.MovedBodyBits.assign((data.BodySlots.size() + 63) / 64, 0);
-		data.Contacts.Initialize(data.Settings.MaxBodies);
+		data.Contacts.Initialize(data.JoltSystem->GetMaxBodies());
 		data.JoltSystem->SetContactListener(&data.Contacts);
 		data.JoltSystem->SetBodyActivationListener(&data.Activations);
+		AddBroadPhaseAnchors(data);
 
 		const glm::vec3 gravity = scene.GetSettings().Gravity;
 		if (IsFinite(gravity))

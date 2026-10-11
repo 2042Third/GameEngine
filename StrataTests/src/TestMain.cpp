@@ -4,6 +4,7 @@
 #include "Engine/ModuleRegistrationHelpers.h"
 #include "Network/FakeEditorProcess.h"
 #include "Perf/StressProject.h"
+#include "Physics/PhysicsTestUtils.h"
 #include "Renderer/GPUTestUtils.h"
 #include "Runtime/PerfLogReader.h"
 #include "Strata/Asset/AssetImporter.h"
@@ -511,6 +512,8 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		}
 		return 0;
 	}
+	if (mode == "broad-phase-churn")
+		return Strata::Tests::RunBroadPhaseChurnProcess();
 	if (mode == "streaming-sweep")
 	{
 		// <settings file> <result file>: runs a camera sweep over a stress project's pack (Perf/StressProject.h) and writes
