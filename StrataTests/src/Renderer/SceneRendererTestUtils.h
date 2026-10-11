@@ -234,6 +234,20 @@ namespace Strata::Tests
 		return value;
 	}
 
+	// A texel of the renderer's ambient occlusion (SceneRenderer::GetAmbientOcclusionTexture): R16_FLOAT where the device
+	// stores half-precision images, R32_FLOAT otherwise.
+	inline float ReadOcclusionTexel(const ReadbackImage& image, const glm::uvec2& pixel)
+	{
+		REQUIRE((image.Format == nvrhi::Format::R16_FLOAT || image.Format == nvrhi::Format::R32_FLOAT));
+		if (image.Format == nvrhi::Format::R32_FLOAT)
+			return ReadFloatTexel(image, pixel);
+		REQUIRE(pixel.x < image.Width);
+		REQUIRE(pixel.y < image.Height);
+		uint16_t value = 0;
+		std::memcpy(&value, image.Pixels.data() + (static_cast<size_t>(pixel.y) * image.Width + pixel.x) * sizeof(uint16_t), sizeof(uint16_t));
+		return glm::unpackHalf1x16(value);
+	}
+
 	// Equirectangular HDR texture: `top` above the horizon, `bottom` below it.
 	inline Ref<Texture> CreateEnvironmentTexture(const glm::vec3& top, const glm::vec3& bottom)
 	{

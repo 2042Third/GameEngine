@@ -252,11 +252,14 @@ TEST_SUITE("GPU.SceneRenderer.PostProcess")
 		const ReadbackImage withOcclusion = RenderToImage(renderer, crease.SceneData, crease.Camera);
 		ReadbackImage occlusion;
 		REQUIRE(Renderer::ReadTexture(renderer.GetAmbientOcclusionTexture(), occlusion));
-		REQUIRE(occlusion.BytesPerPixel == sizeof(float));
-		CHECK(ReadFloatTexel(occlusion, creasePixel) < 0.85f);
-		CHECK(ReadFloatTexel(occlusion, openFloor) > 0.95f);
-		CHECK(ReadFloatTexel(occlusion, boxTop) > 0.95f);
-		CHECK(ReadFloatTexel(occlusion, glm::uvec2(size / 2, 1)) == 1.0f); // Background
+		// Half precision holds occlusion values: devices that store r16f images get a target half the size.
+		const bool halfPrecision = gpu.GetDevice().GetInfo().SupportsExtendedStorageFormats;
+		CHECK(occlusion.Format == (halfPrecision ? nvrhi::Format::R16_FLOAT : nvrhi::Format::R32_FLOAT));
+		CHECK(occlusion.BytesPerPixel == (halfPrecision ? 2u : 4u));
+		CHECK(ReadOcclusionTexel(occlusion, creasePixel) < 0.85f);
+		CHECK(ReadOcclusionTexel(occlusion, openFloor) > 0.95f);
+		CHECK(ReadOcclusionTexel(occlusion, boxTop) > 0.95f);
+		CHECK(ReadOcclusionTexel(occlusion, glm::uvec2(size / 2, 1)) == 1.0f); // Background
 
 		crease.PostProcess->AmbientOcclusion = false;
 		const ReadbackImage withoutOcclusion = RenderToImage(renderer, crease.SceneData, crease.Camera);
@@ -289,7 +292,7 @@ TEST_SUITE("GPU.SceneRenderer.PostProcess")
 		const ReadbackImage withOcclusion = RenderToImage(renderer, crease.SceneData, crease.Camera);
 		ReadbackImage occlusion;
 		REQUIRE(Renderer::ReadTexture(renderer.GetAmbientOcclusionTexture(), occlusion));
-		CHECK(ReadFloatTexel(occlusion, creasePixel) < 0.85f); // The crease behind the pane is occluded
+		CHECK(ReadOcclusionTexel(occlusion, creasePixel) < 0.85f); // The crease behind the pane is occluded
 		crease.PostProcess->AmbientOcclusion = false;
 		const ReadbackImage withoutOcclusion = RenderToImage(renderer, crease.SceneData, crease.Camera);
 		CHECK(Red(withOcclusion, creasePixel) > 50); // The pane covers the crease
@@ -324,8 +327,8 @@ TEST_SUITE("GPU.SceneRenderer.PostProcess")
 			ReadbackImage occlusion;
 			REQUIRE(Renderer::ReadTexture(renderer.GetAmbientOcclusionTexture(), occlusion));
 			CHECK(occlusion.Width == size.x);
-			CHECK(ReadFloatTexel(occlusion, ProjectToPixel(camera, crease.CreasePoint(), size.x, size.y)) < 0.9f);
-			CHECK(ReadFloatTexel(occlusion, ProjectToPixel(camera, crease.OpenFloorPoint(), size.x, size.y)) > 0.95f);
+			CHECK(ReadOcclusionTexel(occlusion, ProjectToPixel(camera, crease.CreasePoint(), size.x, size.y)) < 0.9f);
+			CHECK(ReadOcclusionTexel(occlusion, ProjectToPixel(camera, crease.OpenFloorPoint(), size.x, size.y)) > 0.95f);
 
 			ReadbackImage bloom;
 			REQUIRE(Renderer::ReadTexture(renderer.GetBloomTexture(), bloom));

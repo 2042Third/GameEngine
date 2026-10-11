@@ -34,6 +34,8 @@ namespace Strata
 		bool IsDiscreteGPU = false;
 		bool SupportsBCCompression = false;
 		bool SupportsWireframe = false;
+		// Storage images of the extended formats (r16f, r8...; shaderStorageImageExtendedFormats), enabled when present.
+		bool SupportsExtendedStorageFormats = false;
 		bool ValidationEnabled = false;
 		uint32_t MaxTextureDimension2D = 4096; // Largest width or height of a 2D texture or render target
 	};

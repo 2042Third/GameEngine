@@ -572,6 +572,7 @@ namespace Strata
 		nvrhi::TextureHandle m_OutputTexture;
 		nvrhi::TextureHandle m_AORawTexture; // Noisy GTAO output
 		nvrhi::TextureHandle m_AOTexture;    // Blurred
+		nvrhi::Format m_AOFormat = nvrhi::Format::R32_FLOAT; // Of both: R16_FLOAT where the device stores it (CreateResources)
 		nvrhi::BindingLayoutHandle m_AOBindingLayout;
 		nvrhi::BindingSetHandle m_GTAOBindingSet;
 		nvrhi::BindingSetHandle m_AOBlurBindingSet;

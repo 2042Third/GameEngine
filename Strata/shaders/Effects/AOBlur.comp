@@ -4,13 +4,18 @@
 
 #include "Include/Scene.glsl"
 
-// Depth-aware 5x5 blur of the ambient occlusion: removes the per-pixel slice noise without bleeding across edges.
+// Depth-aware 5x5 blur of the ambient occlusion: removes the per-pixel slice noise without bleeding across edges. With
+// ST_AO_HALF (registered as Effects/AOBlurHalf.comp) it writes a half-precision target.
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(set = 0, binding = ST_SRV(8)) uniform texture2D u_Depth;
 layout(set = 0, binding = ST_SRV(10)) uniform texture2D u_Input;
+#ifdef ST_AO_HALF
+layout(set = 0, binding = ST_UAV(0), r16f) uniform writeonly image2D o_Output;
+#else
 layout(set = 0, binding = ST_UAV(0), r32f) uniform writeonly image2D o_Output;
+#endif
 
 float LinearDepth(float depth)
 {

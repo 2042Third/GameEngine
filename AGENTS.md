@@ -1039,7 +1039,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   depth bias, the light's depth and normal offsets and a receiver plane depth bias in the PCSS filter.
 - HDR targets are RGBA16F: shaders writing them clamp with `SanitizeHDR` (Inf and NaN would turn
   black after tone mapping). Instances with a mirroring transform (negative determinant) use
-  pipelines with clockwise front faces and flip their tangent handedness (`c_InstanceMirrored`).
+  pipelines with clockwise front faces and flip their tangent handedness (`c_InstanceMirrored`). The ambient occlusion
+  targets are R16F where the device stores the extended storage image formats
+  (`GraphicsDeviceInfo::SupportsExtendedStorageFormats`, the `*Half.comp` variants of `GTAO` and `AOBlur`), else R32F.
 - Everything streams: meshes, materials and textures that are still loading are skipped or drawn with
   fallbacks and counted in `SceneRendererStats::PendingAssets`; never block a frame on an asset. Asset uploads are
   budgeted per frame and go in steps (Docs/Architecture.md, "Streaming and residency"); texture bands and mesh ranges go

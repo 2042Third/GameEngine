@@ -35,7 +35,10 @@ namespace Strata
 		constexpr nvrhi::Format c_HDRFormat = nvrhi::Format::RGBA16_FLOAT;
 		constexpr nvrhi::Format c_OutputFormat = nvrhi::Format::RGBA8_UNORM;
 		constexpr nvrhi::Format c_EnvironmentFormat = nvrhi::Format::RGBA16_FLOAT;
-		constexpr nvrhi::Format c_AOFormat = nvrhi::Format::R32_FLOAT; // r32f storage needs no optional device feature
+		// Ambient occlusion lies in [0, 1]: half precision holds it, where the device can store r16f images (an optional
+		// feature); r32f storage needs none.
+		constexpr nvrhi::Format c_AOFormat = nvrhi::Format::R16_FLOAT;
+		constexpr nvrhi::Format c_AOFallbackFormat = nvrhi::Format::R32_FLOAT;
 
 		constexpr uint32_t c_EnvironmentCubeSize = 512;
 		constexpr uint32_t c_IrradianceSize = 32;
@@ -391,8 +394,10 @@ namespace Strata
 			ST_CORE_VERIFY(desc.CS, "SceneRenderer: shader {} is missing", name);
 			return m_Device->createComputePipeline(desc);
 		};
-		m_GTAOPipeline = createComputePipeline("Effects/GTAO.comp", m_AOBindingLayout);
-		m_AOBlurPipeline = createComputePipeline("Effects/AOBlur.comp", m_AOBindingLayout);
+		const bool halfAO = Renderer::GetGraphicsDevice().GetInfo().SupportsExtendedStorageFormats;
+		m_AOFormat = halfAO ? c_AOFormat : c_AOFallbackFormat;
+		m_GTAOPipeline = createComputePipeline(halfAO ? "Effects/GTAOHalf.comp" : "Effects/GTAO.comp", m_AOBindingLayout);
+		m_AOBlurPipeline = createComputePipeline(halfAO ? "Effects/AOBlurHalf.comp" : "Effects/AOBlur.comp", m_AOBindingLayout);
 		m_ClusterPipeline = createComputePipeline("Scene/LightClusters.comp", m_ClusterBindingLayout);
 
 		nvrhi::BindingLayoutDesc exposureLayout;
@@ -1061,7 +1066,7 @@ namespace Strata
 			nvrhi::TextureDesc desc;
 			desc.width = width;
 			desc.height = height;
-			desc.format = c_AOFormat;
+			desc.format = m_AOFormat;
 			desc.isUAV = true;
 			desc.debugName = debugName;
 			desc.initialState = nvrhi::ResourceStates::ShaderResource;
