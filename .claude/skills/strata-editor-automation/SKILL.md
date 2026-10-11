@@ -81,6 +81,7 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | Which commands and parameters exist? | `editor.commands` (or `list --json`) |
 | Which components and properties (types, ranges, enum values)? | `component.list` |
 | Which assets exist? | `asset.list` (`type`, `path` filters), `asset.info` |
+| What uses an asset (before deleting it)? | `asset.findReferences` (`asset.delete` refuses while anything does) |
 | What does a material hold, which properties exist? | `material.get` (values, and each property's type, range, options) |
 | What state do the scripts hold (a score, a timer)? | `script.get` (live field values while playing) |
 | What is in the scene? | `scene.hierarchy`, `entity.find` (`name`, `tag`, `component`), `entity.get` |
@@ -185,6 +186,18 @@ Textures are block-compressed by default (`"Compression": "Auto"`; the format fo
 faster (opaque color as BC1, half the bytes, a little less exact; normal maps and data are stored the same at either
 quality); `"Compression": "Uncompressed"` keeps exact texels, e.g. for pixel art or textures a test compares texel for
 texel. Models expose sub-assets (meshes, materials) and are instantiated whole with `prefab.instantiate`.
+
+**Moving and deleting assets** never loses work: `asset.findReferences {"asset"}` lists what uses an asset
+(`referencedBy`: scenes, prefabs, models and materials by `path`, and the open scene from memory with `openScene: true`
+and the `entities` that use it, also when that scene is not saved). `asset.delete {"asset"}` **fails while anything uses
+the asset**, naming the users in the message and in the error's data (`referencedBy`); change those references first,
+or pass `"force": true` to delete anyway (the references become missing: meshes fall back to the default material).
+Deleting moves the file, its `.meta` and its cached import to `<project>/.strata/Trash` (kept 30 days) and is one undo
+step: `edit.undo` brings the asset back with the same handle, so its references work again. Folders:
+`asset.createFolder {"path"}`, `asset.moveFolder {"path", "to"}` (everything in it moves, every handle and reference
+stays valid) and `asset.deleteFolder {"path", "force"?}` (refused while assets outside it or the open scene use its
+assets); `asset.move {"asset", "path"}` renames or moves one asset. Each is one undo step (`edit.undo`, `edit.history`);
+the open scene cannot be deleted.
 
 **Hierarchy and prefabs**: `entity.create {"parent": "<id>"}`;
 `entity.setParent {"entities": ["<id>", ...], "parent": "<id>" | null, "index": 0}` moves entities (in the order given;

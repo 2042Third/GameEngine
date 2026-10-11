@@ -1,5 +1,6 @@
 #pragma once
 
+#include "UI/DeleteAssetDialog.h"
 #include "UI/EditorPanelRegistry.h"
 
 #include <Strata/Asset/Asset.h>
@@ -79,6 +80,8 @@ namespace Strata
 		AssetHandle m_RenameAsset = UUID::Null();
 		std::string m_RenameText;
 		std::string m_NewFolderName;
+		DeleteAssetDialog m_DeleteDialog;
+		bool m_DeleteDialogWasOpen = false;
 	};
 
 }

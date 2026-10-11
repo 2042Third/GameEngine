@@ -7,6 +7,7 @@
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JobSystem.h"
 #include "Strata/Core/JsonUtils.h"
+#include "Strata/Reflection/PropertyJson.h"
 #include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/MeshFactory.h"
@@ -362,6 +363,169 @@ TEST_SUITE("Asset.Editor")
 			CHECK_FALSE(manager->IsHandleValid(stone));
 			CHECK_FALSE(manager->DeleteAsset(stone, &error));
 		}
+	}
+
+	TEST_CASE("The folder index and the index of referencers follow scans, moves, saves and removals")
+	{
+		TestProject project("EditorIndexes");
+		project.Write("Textures/Brick.png", Tests::CreateSolidPNG(4, 4, 1, 1, 1));
+		REQUIRE(FileSystem::CreateDirectories(project.Assets / "Empty" / "Inner"));
+		REQUIRE(FileSystem::CreateDirectories(project.Assets / ".hidden"));
+		Ref<EditorAssetManager> manager = project.Open();
+		const AssetHandle brick = manager->FindAssetByPath("Textures/Brick.png");
+		REQUIRE(brick.IsValid());
+		CHECK(manager->GetFolders() == std::vector<std::string> { "Empty", "Empty/Inner", "Textures" });
+		CHECK(manager->GetAssetsInFolder("Textures") == std::vector<AssetHandle> { brick });
+		CHECK(manager->GetAssetsInFolder("").empty());
+
+		// A material that uses the texture: the texture's referencers.
+		nlohmann::json document = Material::Create()->Serialize();
+		document["Material"]["BaseColorMap"] = UUIDToJson(brick);
+		const std::vector<uint8_t> bytes = ToBytes(document);
+		std::string error;
+		const AssetHandle material = manager->CreateNativeAsset("Materials/Wall.stmat", bytes, &error);
+		REQUIRE_MESSAGE(material.IsValid(), error);
+		CHECK(manager->GetReferencers(brick) == std::vector<AssetHandle> { material });
+		CHECK(manager->GetAssetsInFolder("Materials") == std::vector<AssetHandle> { material });
+
+		// Saved without the texture: no longer a referencer.
+		const uint64_t version = manager->GetChangeVersion();
+		REQUIRE_MESSAGE(manager->SaveNativeAsset(material, CreateMaterialBytes(0.3f), false, &error), error);
+		CHECK(manager->GetReferencers(brick).empty());
+
+		// A move changes the folders the assets are listed in, and the change version.
+		REQUIRE_MESSAGE(manager->MoveAsset(brick, "Art/Brick.png", &error), error);
+		CHECK(manager->GetChangeVersion() != version);
+		CHECK(manager->GetAssetsInFolder("Textures").empty());
+		CHECK(manager->GetAssetsInFolder("Art") == std::vector<AssetHandle> { brick });
+		CHECK(manager->GetAssetsBelowFolder("") == std::vector<AssetHandle> { brick, material });
+
+		// Saved with it again, then deleted: a deleted referencer references nothing.
+		REQUIRE_MESSAGE(manager->SaveNativeAsset(material, bytes, false, &error), error);
+		CHECK(manager->GetReferencers(brick) == std::vector<AssetHandle> { material });
+		REQUIRE_MESSAGE(manager->DeleteAsset(material, &error), error);
+		CHECK(manager->GetReferencers(brick).empty());
+		CHECK(manager->GetAssetsInFolder("Materials").empty());
+
+		// Folders made and removed through the manager, and ones found by a new walk.
+		REQUIRE_MESSAGE(manager->CreateFolder("Levels/One", &error), error);
+		CHECK(manager->HasFolder("Levels"));
+		CHECK(manager->HasFolder("Levels/One"));
+		CHECK_FALSE(manager->RemoveEmptyFolder("Levels", &error)); // Holds a folder
+		REQUIRE_MESSAGE(manager->RemoveEmptyFolder("Levels/One", &error), error);
+		CHECK_FALSE(manager->HasFolder("Levels/One"));
+		REQUIRE(FileSystem::CreateDirectories(project.Assets / "Outside" / "Made"));
+		CHECK_FALSE(manager->HasFolder("Outside/Made"));
+		manager->RescanFolders();
+		CHECK(manager->HasFolder("Outside/Made"));
+	}
+
+	TEST_CASE("Assets and folders go to the trash and come back with their handles")
+	{
+		ScopedJobSystem jobs;
+		RegisterTestModelImporter();
+		TestProject project("EditorTrash");
+		project.Write("Models/Robot.sttestmodel", { 'r' });
+		project.Write("Models/Parts/Arm.sttestmodel", { 'a' });
+		project.Write("Models/Readme.txt", { 't' }); // No asset: it moves with its folder all the same
+		Ref<EditorAssetManager> manager = project.Open();
+		const AssetHandle robot = manager->FindAssetByPath("Models/Robot.sttestmodel");
+		const AssetHandle arm = manager->FindAssetByPath("Models/Parts/Arm.sttestmodel");
+		REQUIRE(robot.IsValid());
+		REQUIRE(arm.IsValid());
+		const std::vector<AssetHandle> subAssets = manager->GetImportInfo(robot).SubAssets;
+		REQUIRE(subAssets.size() == 3);
+
+		// Without a trash folder the manager refuses.
+		TrashedAssets trashed;
+		std::string error;
+		CHECK_FALSE(manager->MoveToTrash("Models/Robot.sttestmodel", trashed, &error));
+		manager.reset();
+
+		EditorAssetManagerSpecification specification;
+		specification.AssetDirectory = project.Assets;
+		specification.CacheDirectory = project.Cache;
+		specification.TrashDirectory = project.Root / ".strata" / "Trash";
+		specification.WatchFiles = false;
+		manager = CreateRef<EditorAssetManager>(specification);
+		manager->Scan();
+		const uint32_t imports = TestModelImporter::s_ImportCount;
+
+		// One asset: its file, .meta and cached imports.
+		REQUIRE_MESSAGE(manager->MoveToTrash("Models/Robot.sttestmodel", trashed, &error), error);
+		CHECK(trashed.Path == "Models/Robot.sttestmodel");
+		CHECK_FALSE(trashed.Folder);
+		CHECK(trashed.Handles == std::vector<AssetHandle> { robot });
+		CHECK_FALSE(FileSystem::Exists(project.Assets / "Models" / "Robot.sttestmodel"));
+		CHECK(FileSystem::IsRegularFile(trashed.Entry / "Assets" / "Models" / "Robot.sttestmodel.meta"));
+		CHECK(FileSystem::IsRegularFile(trashed.Entry / "Cache" / (subAssets[0].ToString() + ".bin")));
+		CHECK_FALSE(manager->IsHandleValid(robot));
+		CHECK_FALSE(manager->IsHandleValid(subAssets[0]));
+		REQUIRE_MESSAGE(manager->RestoreFromTrash(trashed, &error), error);
+		CHECK(manager->FindAssetByPath("Models/Robot.sttestmodel") == robot);
+		CHECK(manager->GetImportInfo(robot).SubAssets == subAssets);
+		CHECK(manager->GetImportInfo(robot).Imported);
+		CHECK(TestModelImporter::s_ImportCount == imports); // Its cached import came back with it
+		CHECK_FALSE(FileSystem::Exists(trashed.Entry));
+		CHECK_FALSE(manager->RestoreFromTrash(trashed, &error)); // Nothing left to restore
+
+		// A folder with everything in it.
+		REQUIRE_MESSAGE(manager->MoveToTrash("Models", trashed, &error), error);
+		CHECK(trashed.Folder);
+		CHECK(trashed.Handles.size() == 2);
+		CHECK_FALSE(FileSystem::Exists(project.Assets / "Models"));
+		CHECK(FileSystem::IsRegularFile(trashed.Entry / "Assets" / "Models" / "Readme.txt"));
+		CHECK_FALSE(manager->HasFolder("Models/Parts"));
+		CHECK_FALSE(manager->IsHandleValid(arm));
+		// Something new where it was blocks the restore.
+		project.Write("Models/New.png", Tests::CreateSolidPNG(4, 4, 1, 1, 1));
+		CHECK_FALSE(manager->RestoreFromTrash(trashed, &error));
+		CHECK(error.find("Models") != std::string::npos);
+		REQUIRE(FileSystem::Remove(project.Assets / "Models"));
+		REQUIRE_MESSAGE(manager->RestoreFromTrash(trashed, &error), error);
+		CHECK(manager->FindAssetByPath("Models/Parts/Arm.sttestmodel") == arm);
+		CHECK(manager->FindAssetByPath("Models/Robot.sttestmodel") == robot);
+		CHECK(manager->HasFolder("Models/Parts"));
+		CHECK(FileSystem::IsRegularFile(project.Assets / "Models" / "Readme.txt"));
+		CHECK(TestModelImporter::s_ImportCount == imports);
+
+		// What is no asset of the project is refused.
+		CHECK_FALSE(manager->MoveToTrash("Models/Readme.txt", trashed, &error));
+		CHECK_FALSE(manager->MoveToTrash("", trashed, &error));
+		CHECK_FALSE(manager->MoveToTrash("../Outside", trashed, &error));
+	}
+
+	TEST_CASE("Moving a folder keeps the handles of everything in it")
+	{
+		ScopedJobSystem jobs;
+		RegisterTestModelImporter();
+		TestProject project("EditorMoveFolder");
+		project.Write("Models/Robot.sttestmodel", { 'r' });
+		project.Write("Models/Brick.png", Tests::CreateSolidPNG(4, 4, 1, 1, 1));
+		project.Write("Models/Readme.txt", { 't' });
+		Ref<EditorAssetManager> manager = project.Open();
+		const AssetHandle robot = manager->FindAssetByPath("Models/Robot.sttestmodel");
+		const AssetHandle brick = manager->FindAssetByPath("Models/Brick.png");
+		const std::vector<AssetHandle> subAssets = manager->GetImportInfo(robot).SubAssets;
+		std::string error;
+		REQUIRE_MESSAGE(manager->MoveFolder("Models", "Art/Robots", &error), error);
+		CHECK(manager->FindAssetByPath("Art/Robots/Robot.sttestmodel") == robot);
+		CHECK(manager->FindAssetByPath("Art/Robots/Brick.png") == brick);
+		CHECK(manager->GetMetadata(subAssets[0])->Path == "Art/Robots/Robot.sttestmodel");
+		CHECK(FileSystem::IsRegularFile(project.Assets / "Art" / "Robots" / "Readme.txt"));
+		CHECK(FileSystem::IsRegularFile(project.Assets / "Art" / "Robots" / "Brick.png.meta"));
+		CHECK(manager->HasFolder("Art/Robots"));
+		CHECK_FALSE(manager->HasFolder("Models"));
+		REQUIRE(LoadTexture(*manager, brick));
+
+		CHECK_FALSE(manager->MoveFolder("Art", "Art/Robots/Inner", &error)); // Into itself
+		CHECK_FALSE(manager->MoveFolder("Missing", "Other", &error));
+		project.Write("Taken/File.png", Tests::CreateSolidPNG(4, 4, 1, 1, 1));
+		CHECK_FALSE(manager->MoveFolder("Art", "Taken", &error));
+		// The handles survive a new scan at the new place.
+		manager.reset();
+		manager = project.Open();
+		CHECK(manager->FindAssetByPath("Art/Robots/Robot.sttestmodel") == robot);
 	}
 
 	TEST_CASE("Copies named by file managers never take the original's handle")

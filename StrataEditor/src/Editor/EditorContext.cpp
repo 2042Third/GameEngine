@@ -35,6 +35,9 @@ namespace Strata
 	{
 
 		constexpr const char* c_ViewportStateFile = "EditorViewport.json";
+		// Deleted assets (asset.delete) wait in "<project>/.strata/Trash" this long, then go when the project is opened.
+		constexpr const char* c_TrashDirectory = "Trash";
+		constexpr std::chrono::hours c_TrashKeepTime { 30 * 24 };
 		// A scene's first view is framed again when its meshes load within this time (EditorContext::OpenScene).
 		constexpr std::chrono::seconds c_PendingFrameTimeout { 30 };
 
@@ -181,10 +184,12 @@ namespace Strata
 		EditorAssetManagerSpecification specification;
 		specification.AssetDirectory = m_Project->GetAssetDirectory();
 		specification.CacheDirectory = m_Project->GetCacheDirectory();
+		specification.TrashDirectory = m_Project->GetIntermediateDirectory() / c_TrashDirectory;
 		specification.WatchFiles = m_Specification.WatchAssetFiles;
 		m_AssetManager = CreateRef<EditorAssetManager>(specification);
 		AssetManager::SetActive(m_AssetManager);
 		m_AssetManager->Scan(m_Specification.ImportInBackground ? ScanImports::InBackground : ScanImports::Wait);
+		m_AssetManager->PurgeTrash(c_TrashKeepTime);
 		ST_INFO("Opened project '{}' ({})", m_Project->GetConfig().Name, FileSystem::ToUTF8(m_Project->GetProjectDirectory()));
 		OpenScriptEngine(created);
 

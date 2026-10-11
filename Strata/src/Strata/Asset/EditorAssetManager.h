@@ -6,13 +6,16 @@
 #include "Strata/Core/FileWatcher.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -31,7 +34,20 @@ namespace Strata
 	{
 		std::filesystem::path AssetDirectory; // Project asset root (absolute)
 		std::filesystem::path CacheDirectory; // Imported data; derived, safe to delete (absolute)
+		// Where MoveToTrash puts deleted assets (the editor's "<project>/.strata/Trash"; local data, never committed). Empty:
+		// MoveToTrash fails, and only DeleteAsset deletes (tools).
+		std::filesystem::path TrashDirectory;
 		bool WatchFiles = true;               // Re-import and hot reload files changed on disk
+	};
+
+	// What EditorAssetManager::MoveToTrash moved, so that RestoreFromTrash puts it back: one asset (its file, its .meta and
+	// its cached import) or a folder with everything in it (and the cached imports of its assets).
+	struct TrashedAssets
+	{
+		std::string Path;                 // Where it was, relative to the asset directory ('/' separators)
+		bool Folder = false;
+		std::filesystem::path Entry;      // The trash folder that holds it ("<trash>/<UTC time>[-n]")
+		std::vector<AssetHandle> Handles; // The source assets it held, by path
 	};
 
 	// What an asset pack built from the project holds, and in which order (EditorAssetManager::PlanAssetPack).
@@ -155,8 +171,58 @@ namespace Strata
 		// the new place; other imports go on (the file watcher re-imports those that read the file as a dependency).
 		bool MoveAsset(AssetHandle handle, const std::string& newRelativePath, std::string* outError = nullptr);
 		// Deletes the source file, its .meta and cached data, and unregisters the asset and its sub-assets. Never waits for
-		// an import: the asset's own import is cancelled before the files go and stores nothing; other imports go on.
+		// an import: the asset's own import is cancelled before the files go and stores nothing; other imports go on. Tools;
+		// the editor moves assets to the trash instead (MoveToTrash), which can be undone.
 		bool DeleteAsset(AssetHandle handle, std::string* outError = nullptr);
+
+		// Moves an asset's file (with its .meta and its cached import), or a folder with everything in it, from the asset
+		// directory into a new folder of the trash directory, and unregisters the assets it held, so that RestoreFromTrash can
+		// bring them back with the same handles. Imports of those assets are cancelled first (never waited for). Fails,
+		// moving nothing, without a trash directory, for paths outside the asset directory, the asset directory itself and
+		// what is neither an asset file nor a folder.
+		bool MoveToTrash(const std::string& relativePath, TrashedAssets& outTrashed, std::string* outError = nullptr);
+		// Puts what MoveToTrash moved back where it was and registers its assets with their handles (imports cached with them
+		// are current again, so nothing is imported anew), then removes the trash folder. Fails, restoring nothing, when
+		// something else is at that place now or the trash folder is gone.
+		bool RestoreFromTrash(const TrashedAssets& trashed, std::string* outError = nullptr);
+		// Removes trash folders older than `maxAge` (on an I/O job; the editor calls it when a project opens).
+		void PurgeTrash(std::chrono::hours maxAge);
+
+		// Creates a folder (and its parents) in the asset directory. Fails for paths outside it, in hidden folders, and when
+		// something exists there already.
+		bool CreateFolder(const std::string& relativePath, std::string* outError = nullptr);
+		// Removes an empty folder of the asset directory (the undo of CreateFolder). Fails when it holds anything.
+		bool RemoveEmptyFolder(const std::string& relativePath, std::string* outError = nullptr);
+		// Moves or renames a folder with everything in it (also files that are no assets, such as a model's buffers), keeping
+		// every handle: the assets in it are registered at their new paths like MoveAsset does, imports of them that run are
+		// cancelled and run again there, and models in it whose files moved with them are imported again. Fails, moving
+		// nothing, when the destination exists, lies inside the folder or outside the asset directory.
+		bool MoveFolder(const std::string& from, const std::string& to, std::string* outError = nullptr);
+
+		//////////////////////////////////////////////////////////////////////////
+		// Browsing (the Content Browser): folders, the assets in each, and what references an asset
+		//////////////////////////////////////////////////////////////////////////
+
+		// Changes whenever a source asset is added, removed, moved or imported (its error, warnings or sub-assets may differ),
+		// an import starts or ends, and a folder is created, moved or removed, so that views of the asset directory rebuild
+		// only then. Thread-safe.
+		uint64_t GetChangeVersion() const { return m_ChangeVersion.load(std::memory_order_acquire); }
+		// Every folder of the asset directory that is not hidden, sorted ('/' separators, the root left out). Folders created
+		// outside the editor appear when a file is added in them, or after RescanFolders.
+		std::vector<std::string> GetFolders() const;
+		// Whether the folder exists in the index ("" is the asset directory).
+		bool HasFolder(std::string_view relativePath) const;
+		// The source assets directly in a folder ("" for the root), sorted by path.
+		std::vector<AssetHandle> GetAssetsInFolder(std::string_view relativePath) const;
+		// The source assets in a folder and every folder below it, sorted by path.
+		std::vector<AssetHandle> GetAssetsBelowFolder(std::string_view relativePath) const;
+		// Walks the asset directory's folders again (folders created or removed outside the editor). Blocking.
+		void RescanFolders();
+
+		// The assets whose recorded dependencies (GetDependencies) name this asset: the scenes, prefabs, models and materials
+		// that use it, and the meshes of models that use a material. Answered from an index kept with the recorded references
+		// on the main thread (no document is read). Sorted by handle.
+		std::vector<AssetHandle> GetReferencers(AssetHandle handle) const;
 
 		// Whether background imports (hot reload), or searches of what changed engine-native assets reference, are queued,
 		// running, or finished and not applied yet (Update applies them).
@@ -327,6 +393,22 @@ namespace Strata
 		// the shared file lock, again at its new place when it moved meanwhile. False when the asset is unknown, its import
 		// failed or `read` fails (outError says which).
 		bool ReadStoredFile(const AssetMetadata& metadata, const std::function<bool(const std::filesystem::path& path)>& read, std::string* outError);
+
+		// SetAssetReferences, keeping the index of referencers (GetReferencers) current. Main thread.
+		void RecordReferences(AssetHandle handle, std::span<const AssetHandle> references, std::optional<AABB> bounds);
+		// Drops what an asset that is unregistered references from the index of referencers.
+		void ForgetReferences(AssetHandle handle);
+		// The folder index: a source asset's place (path) is added or removed. Requires m_SourceMutex.
+		void AddToFolderIndex(AssetHandle handle, const std::string& path);
+		void RemoveFromFolderIndex(AssetHandle handle, const std::string& path);
+		// Adds a folder and its parents to the index. Requires m_SourceMutex.
+		void AddFolderLocked(const std::string& relativePath);
+		// Walks the folders below an absolute directory into the index. Requires m_SourceMutex.
+		void IndexFoldersBelowLocked(const std::filesystem::path& directory);
+		void MarkChanged() { m_ChangeVersion.fetch_add(1, std::memory_order_acq_rel); }
+		// Registers a file that the editor put into the asset directory (a restore, a copy) and takes its import from the cache
+		// when it is current there, else queues it. Returns its handle (null when it is no asset).
+		AssetHandle RegisterAddedFile(const std::filesystem::path& absolutePath, bool queueImport);
 	private:
 		EditorAssetManagerSpecification m_Specification;
 		FileWatcher m_Watcher;
@@ -344,6 +426,16 @@ namespace Strata
 		bool m_Closed = false; // Close was called: no background work starts (main thread)
 
 		mutable std::atomic<uint64_t> m_PackPlans = 0; // PlanAssetPack calls (GetPackPlanCount)
+
+		// Folder index (GetFolders, GetAssetsInFolder); guarded by m_SourceMutex.
+		std::set<std::string> m_Folders; // Every indexed folder, relative, without the root
+		std::unordered_map<std::string, std::unordered_set<AssetHandle>> m_SourcesByFolder; // Folder ("" root) -> sources directly in it
+		std::atomic<uint64_t> m_ChangeVersion = 1;
+
+		// What every asset references as recorded, and the inverse (GetReferencers); guarded by m_ReferenceMutex.
+		mutable std::mutex m_ReferenceMutex;
+		std::unordered_map<AssetHandle, std::vector<AssetHandle>> m_RecordedReferences;
+		std::unordered_map<AssetHandle, std::unordered_set<AssetHandle>> m_Referencers;
 	};
 
 }

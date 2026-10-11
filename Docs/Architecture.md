@@ -724,6 +724,22 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   The manager hands them to `AssetManagerBase::SetAssetReferences`, which keeps each valid handle once and leaves out the
   asset itself (`NormalizeReferences`); packs carry them as their dependency table and entry bounds, so `GetDependencies`
   and `GetBounds` answer the same in the editor and in the game, before anything loads.
+- **Folders, the trash and who uses an asset** (`EditorAssetManager`). The manager keeps three indexes on the main
+  thread, so that views and checks never walk the disk or parse documents: the folders of the asset directory (found by
+  `Scan`, kept by the manager's own operations and by files added in them; `RescanFolders` walks again for folders made
+  outside the editor), the source assets per folder (`GetFolders`, `GetAssetsInFolder`, `GetAssetsBelowFolder`), and the
+  inverse of the recorded references (`GetReferencers`: every `SetAssetReferences` goes through `RecordReferences`, every
+  unregistration through `ForgetReferences`). `GetChangeVersion` changes with every registration, move, removal, applied
+  import, import start or end and folder change, so a view rebuilds only then. File operations keep handles:
+  `MoveFolder` renames a folder in one step (files that are no assets, such as a model's buffers, move with it) and
+  registers its assets at their new paths like `MoveAsset`; models in it that read other files import again, as do models
+  outside it that read files in it. `MoveToTrash` moves an asset's file with its `.meta` and its cached import (or a folder
+  with everything in it and the cached imports of its assets) into a new folder of the trash directory
+  (`EditorAssetManagerSpecification::TrashDirectory`, the editor's `<project>/.strata/Trash/<UTC time>`, described by a
+  `Trashed.json`) after cancelling their imports, then unregisters them; `RestoreFromTrash` moves them back and registers
+  them with their handles, taking their imports from the cache that came back (`RegisterAddedFile`: nothing is imported
+  anew). `PurgeTrash` removes trash folders older than 30 days when the editor opens the project. `DeleteAsset` (permanent)
+  remains for tools.
 - **Import settings** are a JSON object per asset (the importer's `GetDefaultSettings`, merged with the `.meta`'s
   `ImportSettings`). `AssetImporter::GetSettingsProperties` describes them as reflected properties of that object (built
   with `ImportSettingsBuilder`: getters read a setting or its default, setters write its canonical JSON), so the asset
@@ -1338,7 +1354,8 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   the one shown already), so the panels bring the matching inspector to the front.
 - **Commands** (`EditorCommands.h`). Handlers take a JSON object and return an `EditorCommandResult`: a value, an error
   with an `EditorCommandError` kind, or `Defer(poll)`. The built-in groups are registered by
-  `EditorSceneCommands.cpp` (scene, entity, component, prefab), `EditorAssetCommands.cpp` (asset, material, prefab,
+  `EditorSceneCommands.cpp` (scene, entity, component, prefab), `EditorAssetCommands.cpp` (asset, including
+  `asset.findReferences`, `asset.createFolder`, `asset.moveFolder` and `asset.deleteFolder`, material, prefab,
   project, including `project.templates`, `project.samples`, `project.openSample`, `project.close`, `project.export`,
   `project.exportStatus`, `project.cancelExport` and `project.setExportSettings`),
   `EditorStateCommands.cpp` (edit, editor including `editor.recentProjects`, `editor.removeRecentProject` and `editor.perf`,
@@ -1376,6 +1393,16 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   `GetDropTarget` maps a drop at a fraction of a row's height (top quarter before, bottom quarter after, the middle
   inside) to `entity.setParent`'s parent and final index, and `GetTopmostInHierarchyOrder` orders a selection for
   moving, copying and duplicating.
+- **Asset files** (`AssetFileAction.h`, `AssetReferences.h`). `asset.delete`, `asset.deleteFolder`, `asset.move`,
+  `asset.moveFolder` and `asset.createFolder` record `AssetFileAction`s (trash, move, folder): undo steps that share the
+  history with scene edits, never change the scene (so they never mark it unsaved) and refer to the asset manager weakly.
+  Deleting moves to the trash (`EditorAssetManager::MoveToTrash`), so undo restores the files, the `.meta`, the handle and
+  the cached import, and references work again. Before deleting, `AssetReferences::Find` asks the index of referencers
+  (`GetReferencers`) and walks the edited scene's components in memory (`FindInScene`: every asset property of every
+  registered component and every script field of asset type), so unsaved uses count and name their entities; a delete with
+  users fails with them in the error's data (`EditorCommandResult::ErrorData`, which automation sends as the JSON-RPC
+  error's `data`) unless forced. The Content Browser asks the same through `UI/DeleteAssetDialog` and runs the commands;
+  panels never write files themselves (`Editor.UI.Source` scans `Panels/` for file-system writes).
 - **Asset documents** (`AssetEdit.h`). Materials (and any engine-native document) are edited through `AssetEdit`:
   `ApplyDocument` validates the new document with the type's loader, writes the file (`EditorAssetManager::SaveNativeAsset`)
   and publishes the loaded object at once (`AssetManagerBase::ReplaceLoadedAsset`, which finalizes it, discards a load in

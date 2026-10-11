@@ -19,6 +19,7 @@
 #include <imgui_stdlib.h>
 
 #include <algorithm>
+#include <cstring>
 
 namespace Strata
 {
@@ -194,10 +195,7 @@ namespace Strata
 				ImGui::InputTextWithHint("##Folder", "Name", &m_NewFolderName);
 				if (ImGui::Button("Create") && !m_NewFolderName.empty())
 				{
-					const std::filesystem::path assetDirectory = context.GetProject()->GetAssetDirectory();
-					const std::filesystem::path directory = (assetDirectory / FileSystem::FromUTF8(JoinPath(m_CurrentDirectory, m_NewFolderName))).lexically_normal();
-					if (!FileSystem::IsInside(directory, assetDirectory) || !FileSystem::CreateDirectories(directory))
-						ST_ERROR("Could not create the folder '{}'", m_NewFolderName);
+					RunEditorCommand(context, commands, "asset.createFolder", { { "path", JoinPath(m_CurrentDirectory, m_NewFolderName) } });
 					m_NewFolderName.clear();
 					m_RefreshRequested = true;
 					ImGui::CloseCurrentPopup();
@@ -260,6 +258,28 @@ namespace Strata
 				ImGui::Selectable(fmt::format("{}  {}", Icons::Folder, folder).c_str(), false, ImGuiSelectableFlags_AllowDoubleClick);
 				if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 					enterFolder = folder;
+				// Assets dropped onto a folder move into it.
+				if (ImGui::BeginDragDropTarget())
+				{
+					if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(DragDrop::c_Asset))
+					{
+						AssetHandle dropped;
+						std::memcpy(&dropped, payload->Data, sizeof(AssetHandle));
+						if (const std::optional<AssetMetadata> metadata = context.GetAssetManager()->GetMetadata(dropped))
+						{
+							const std::string fileName = FileSystem::ToUTF8(FileSystem::FromUTF8(metadata->Path).filename());
+							RunEditorCommand(context, commands, "asset.move", { { "asset", UUIDToJson(dropped) }, { "path", JoinPath(JoinPath(m_CurrentDirectory, folder), fileName) } });
+							m_RefreshRequested = true;
+						}
+					}
+					ImGui::EndDragDropTarget();
+				}
+				if (ImGui::BeginPopupContextItem(folder.c_str()))
+				{
+					if (ImGui::MenuItem("Delete Folder..."))
+						m_DeleteDialog.OpenForFolder(context, JoinPath(m_CurrentDirectory, folder));
+					ImGui::EndPopup();
+				}
 			}
 
 			AssetHandle openScene = UUID::Null();
@@ -328,11 +348,8 @@ namespace Strata
 						});
 					}
 					ImGui::Separator();
-					if (ImGui::MenuItem("Delete"))
-					{
-						RunEditorCommand(context, commands, "asset.delete", { { "asset", UUIDToJson(metadata.Handle) } });
-						m_RefreshRequested = true;
-					}
+					if (ImGui::MenuItem("Delete..."))
+						m_DeleteDialog.OpenForAsset(context, metadata.Handle);
 					ImGui::EndPopup();
 				}
 				ImGui::PopID();
@@ -357,6 +374,10 @@ namespace Strata
 				OpenScene(context, commands, openScene);
 		}
 		ImGui::EndChild();
+		m_DeleteDialog.Draw(context, commands);
+		if (!m_DeleteDialog.IsOpen())
+			m_RefreshRequested = m_RefreshRequested || m_DeleteDialogWasOpen;
+		m_DeleteDialogWasOpen = m_DeleteDialog.IsOpen();
 	}
 
 }

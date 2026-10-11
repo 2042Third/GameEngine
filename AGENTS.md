@@ -423,7 +423,10 @@ The threading model, frame loop and pipelines these rules protect are described 
 
 - A project's assets are the files under its asset directory (`Assets/`). Each file has a sidecar
   `<file>.meta` (JSON: handle + import settings) that is committed with it; moving or renaming must go
-  through `EditorAssetManager::MoveAsset` (or move the `.meta` along) so the handle survives.
+  through `EditorAssetManager::MoveAsset` or `MoveFolder` (or move the `.meta` along) so the handle survives, and the
+  editor deletes through `MoveToTrash`/`RestoreFromTrash`. Code that lists folders or asks what uses an asset reads the
+  manager's indexes (`GetFolders`, `GetAssetsInFolder`, `GetReferencers`), rebuilt views only when `GetChangeVersion`
+  changed; never walk the disk or parse documents per frame.
 - Importers (`Asset/AssetImporter.h`, built-ins in `Asset/AssetImporters.cpp`) turn source files into
   the stored form, cached per handle in `<project>/.strata/Cache` (derived data, never committed). A
   cached import is redone when the source content, the import settings, the importer's `GetVersion()`
@@ -751,7 +754,15 @@ and `AudioSystem`, the built-in "Audio" scene system.
     icons), and check panels with `ImGuiHarness::CountFallbackGlyphs`.
 - **Every change to the scene or project goes through a command** (`EditorCommandRegistry::Execute`) or,
   for continuous UI edits, through `SceneEditTransaction` / `SetPropertyWithUndo`. That keeps the UI,
-  automation (AI agents) and tests identical, and makes every edit undoable.
+  automation (AI agents) and tests identical, and makes every edit undoable. Panels never write, move or remove files
+  themselves (`Editor.UI.Source` scans `Panels/`): the project's files change through `asset.*` commands.
+- **Asset files are never lost** (`Editor/AssetFileAction`, `Editor/AssetReferences`): `asset.delete` and
+  `asset.deleteFolder` fail while scenes, prefabs, models, materials or the open scene (from memory, unsaved uses
+  included) use what they delete, listing them in the error's data (`referencedBy`, `EditorCommandResult::ErrorData`),
+  unless `force`; deleting moves the files with their `.meta` and cached imports to `<project>/.strata/Trash`
+  (`EditorAssetManager::MoveToTrash`, kept 30 days) and is one undo step that restores the handle.
+  `asset.findReferences`, `asset.move`, `asset.createFolder` and `asset.moveFolder` (handles kept) complete the set; each
+  mutating one is one undo step that never marks the scene unsaved.
 - Commands are named `<group>.<action>`, take a JSON object and return a JSON value or an error. Each
   has a one-line description and a JSON Schema of its parameters (`CommandUtils::ObjectSchema` etc.);
   automation exposes them as tools, so descriptions must tell an agent what the command does. Use
