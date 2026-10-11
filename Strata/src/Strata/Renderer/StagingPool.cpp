@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Renderer/StagingPool.h"
 
+#include <algorithm>
 #include <bit>
 
 namespace Strata
@@ -19,6 +20,12 @@ namespace Strata
 		if (bytes > (1ull << 63))
 			return bytes;
 		return std::max(c_MinBufferBytes, std::bit_ceil(bytes));
+	}
+
+	bool StagingPool::HasIdleBuffer(uint64_t bytes) const
+	{
+		const uint64_t size = GetBufferByteSize(bytes);
+		return std::any_of(m_Idle.begin(), m_Idle.end(), [size](const Entry& entry) { return entry.Bytes == size; });
 	}
 
 	nvrhi::BufferHandle StagingPool::AcquireBuffer(uint64_t bytes, uint64_t limit)

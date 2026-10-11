@@ -5,6 +5,7 @@
 #include "Strata/Renderer/StagingPool.h"
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -15,8 +16,11 @@ namespace Strata
 	namespace
 	{
 
-		// The speed steps are planned with before any was measured: writing write-combined staging memory.
+		// The speeds and the staging creation time steps are planned with before any was measured: writing write-combined
+		// staging memory the pool had, and staging created for the step (GPUUploadQueueStats::BytesPerMs).
 		constexpr float c_InitialBytesPerMs = 4.0e6f;
+		constexpr float c_InitialColdBytesPerMs = 2.0e6f;
+		constexpr float c_InitialStagingCreateMs = 0.5f;
 		// A step that writes at least this much into staging the pool had already spreads its writes over the worker threads,
 		// in pieces of about c_CopyPieceBytes: one thread reads the decoded data and writes write-combined memory far slower
 		// than the memory system takes them (4 MiB took 0.4 to 1.2 ms on one thread of the reference machine, 0.15 to 0.3 ms
@@ -55,6 +59,8 @@ namespace Strata
 		: m_GraphicsDevice(device), m_Device(device.GetDevice()), m_Staging(staging)
 	{
 		m_Stats.BytesPerMs = c_InitialBytesPerMs;
+		m_Stats.ColdBytesPerMs = c_InitialColdBytesPerMs;
+		m_Stats.StagingCreateMs = c_InitialStagingCreateMs;
 	}
 
 	GPUUploadQueue::~GPUUploadQueue()
@@ -218,19 +224,32 @@ namespace Strata
 			const double untilDeadline = context.Deadline > now ? std::chrono::duration<double, std::milli>(context.Deadline - now).count() : 0.0;
 			milliseconds = std::min(milliseconds, untilDeadline);
 		}
-		if (std::isfinite(milliseconds))
+		const bool framesFirst = IsFramesFirstStep(context, callBytes);
+		const auto finish = [&](uint64_t bytes)
 		{
-			const double bytes = std::max(0.0, milliseconds) * static_cast<double>(m_Stats.BytesPerMs);
-			if (bytes < static_cast<double>(limit))
-				limit = static_cast<uint64_t>(bytes);
-		}
+			if (bytes >= wantedBytes)
+				return wantedBytes; // All of it fits
+			bytes -= bytes % granule;
+			if (bytes == 0 && framesFirst)
+				bytes = granule; // Every frame makes progress
+			return bytes;
+		};
+		if (!std::isfinite(milliseconds))
+			return finish(limit);
 
-		if (limit >= wantedBytes)
-			return wantedBytes; // All of it fits
-		limit -= limit % granule;
-		if (limit == 0 && IsFramesFirstStep(context, callBytes))
-			limit = granule; // Every frame makes progress
-		return limit;
+		const auto byTime = [&](double available, float bytesPerMs)
+		{
+			const double bytes = std::max(0.0, available) * static_cast<double>(bytesPerMs);
+			return bytes < static_cast<double>(limit) ? static_cast<uint64_t>(bytes) : limit;
+		};
+		const uint64_t step = finish(byTime(milliseconds, m_Stats.BytesPerMs));
+		// The staging the step would take (callers take what is wanted when it all fits, else a power of two of bytes): where
+		// the pool has none idle, the step creates it first and then writes fresh memory. The creation takes at most half the
+		// time left, so such steps still make progress (and staging of their size comes about) where creating staging is slow.
+		if (step == 0 || m_Staging.HasIdleBuffer(step >= wantedBytes ? wantedBytes : std::bit_floor(step)))
+			return step;
+		const double creationMs = std::min(static_cast<double>(m_Stats.StagingCreateMs), milliseconds * 0.5);
+		return finish(byTime(milliseconds - creationMs, m_Stats.ColdBytesPerMs));
 	}
 
 	bool GPUUploadQueue::HasStagingRoom(const AssetFinalizeContext& context, uint64_t bytes, bool framesFirstStep) const
@@ -279,6 +298,7 @@ namespace Strata
 			m_Staging.Release(std::move(staging));
 			return {};
 		}
+		const float acquireMs = MillisecondsSince(start);
 
 		m_TextureCopies.clear();
 		uint64_t offset = 0;
@@ -315,7 +335,7 @@ namespace Strata
 			m_BatchTextures.push_back(texture);
 		m_Staging.Release(std::move(staging), ToNvrhiQueue(queue));
 		const float milliseconds = MillisecondsSince(start);
-		RecordStep(context, bytes, milliseconds, true, queue);
+		RecordStep(context, bytes, milliseconds, acquireMs, created, true, queue);
 		return GPUUploadStep { true, bytes, milliseconds };
 	}
 
@@ -329,6 +349,7 @@ namespace Strata
 		for (const GPUBufferRegion& region : regions)
 			bytes += region.Size;
 
+		const auto acquireStart = std::chrono::steady_clock::now();
 		const uint64_t createdBefore = m_Staging.GetCreatedCount();
 		nvrhi::BufferHandle staging = m_Staging.AcquireBuffer(bytes, context.StagingBytes);
 		const bool created = m_Staging.GetCreatedCount() != createdBefore;
@@ -338,6 +359,7 @@ namespace Strata
 			m_Staging.Release(std::move(staging));
 			return {};
 		}
+		const float acquireMs = MillisecondsSince(acquireStart);
 		// One copy per range, from consecutive bytes of the staging buffer.
 		uint64_t offset = 0;
 		for (const GPUBufferRegion& region : regions)
@@ -367,7 +389,7 @@ namespace Strata
 		}
 		m_Staging.Release(std::move(staging), ToNvrhiQueue(queue));
 		const float milliseconds = MillisecondsSince(start);
-		RecordStep(context, bytes, milliseconds, false, queue);
+		RecordStep(context, bytes, milliseconds, acquireMs, created, false, queue);
 		return GPUUploadStep { true, bytes, milliseconds };
 	}
 
@@ -436,7 +458,8 @@ namespace Strata
 		m_GraphicsDevice.RecordQueueTransfer(GetList(GPUUploadQueueKind::Graphics), transfer, true);
 	}
 
-	void GPUUploadQueue::RecordStep(const AssetFinalizeContext& context, uint64_t bytes, float milliseconds, bool texture, GPUUploadQueueKind queue)
+	void GPUUploadQueue::RecordStep(const AssetFinalizeContext& context, uint64_t bytes, float milliseconds, float acquireMs, bool created, bool texture,
+		GPUUploadQueueKind queue)
 	{
 		if (context.UploadedBytes)
 			*context.UploadedBytes += bytes;
@@ -449,9 +472,16 @@ namespace Strata
 		(texture ? m_Stats.TextureBytes : m_Stats.BufferBytes) += bytes;
 		if (queue == GPUUploadQueueKind::Transfer)
 			m_Stats.TransferSteps++;
+		// A creation that took long counts at once, so the next steps that create staging plan with it.
+		if (created)
+			m_Stats.StagingCreateMs = std::max(acquireMs, 0.75f * m_Stats.StagingCreateMs + 0.25f * acquireMs);
 		// Steps too short to time say nothing about the speed.
-		if (milliseconds > 0.01f && bytes >= 16 * 1024)
-			m_Stats.BytesPerMs = 0.8f * m_Stats.BytesPerMs + 0.2f * (static_cast<float>(bytes) / milliseconds);
+		const float writeMs = milliseconds - acquireMs;
+		if (writeMs > 0.01f && bytes >= 16 * 1024)
+		{
+			float& speed = created ? m_Stats.ColdBytesPerMs : m_Stats.BytesPerMs;
+			speed = 0.8f * speed + 0.2f * (static_cast<float>(bytes) / writeMs);
+		}
 	}
 
 	GPUUploadTicket GPUUploadQueue::GetTicket() const

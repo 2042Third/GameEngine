@@ -988,9 +988,14 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   4.3 ms). Steps are sized by the queue (`GPUUploadQueue::PlanStep`) to what is left of the call's share of the frame:
   its upload bytes (`AssetFinalizeContext::UploadBudget`), its upload time (`UploadMsBudget`, from
   `AssetResidencyBudgets::UploadMsPerFrame`, 2 ms) and the time until the finalization deadline, at the speed of the
-  latest steps (measured: `GPUUploadQueueStats::BytesPerMs`), in whole granules (a row of blocks, and 64 KiB where a
-  level has that much), at most `c_AssetUploadStepBytes` (4 MiB): no frame uploads more than `UploadBytesPerFrame`, and
-  its steps end close to its time budgets. Only the frame's first step (the frame's first call, nothing uploaded in the
+  latest steps (measured: `GPUUploadQueueStats::BytesPerMs`). A step for which the pool has no idle staging of its size
+  (`StagingPool::HasIdleBuffer`) creates the buffer first and writes fresh memory: it is planned with the time creation
+  takes (`StagingCreateMs`: a slow creation counts at once and decays over the next ones; at most half the time left, so
+  where creating is slow, as under the validation layers, steps still make progress and staging of their size comes
+  about) and the speed of such steps (`ColdBytesPerMs`). Creating staging took from 0.03 to 1.1 ms in the stress sweeps,
+  so planning without it let a frame's upload steps end up to 0.3 ms over their 2 ms. Steps are in whole granules (a
+  row of blocks, and 64 KiB where a level has that much), at most `c_AssetUploadStepBytes` (4 MiB): no frame uploads
+  more than `UploadBytesPerFrame`, and its steps end close to its time budgets. Only the frame's first step (the frame's first call, nothing uploaded in the
   frame yet) goes whatever the budgets say, one granule at least, so every frame makes progress; a later call past the
   deadline does not even create its GPU resource. Before, steps were a fixed 4 MiB and a frame's first was exempt from
   the deadline: one BC7 step cost up to 2 ms on its own. Texture and mesh steps also wait for staging room (see Staging):
@@ -1168,30 +1173,40 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
 - **Measured** by the perf test `PerfGPU.Streaming` (`StrataTests/src/Perf/StreamingPerfTests.cpp`): it writes the
   stress project (`StrataTests/src/Perf/StressProject.h`: 16 textures of 2048² and one of 4096², which cook to 111.8 MB
   of BC7 (447.4 MB of RGBA8 before texture cooking v2), one material per district of a 2000-unit world, 2,000 objects
-  over a 512² terrain grid), imports it and builds its pack, then runs two camera sweeps at 60 frames per second in
+  over a 512² terrain grid), imports it and builds its pack, then runs camera sweeps at 60 frames per second in
   helper processes (peak memory belongs to a whole process):
   - the evicting sweep: 600 frames at 1280x720 with a 32 MB texture budget (the share of the textures the 128 MB budget
-    held of their RGBA8 form). Every sweep must keep the textures within the budget plus the largest one, evict, settle
+    held of their RGBA8 form), with whole textures (`StreamingSweepSettings::TextureStreaming` false: it gates the
+    residency budgets and eviction, which mip streaming would leave little to do). Every sweep must keep the textures within the budget plus the largest one, evict, settle
     every camera stop and fail no load; `StrataTests/Perf/Budgets.json` judges its peak private bytes, largest resident
     texture memory, longest frame finalization and the most frames a stop took to settle. A sweep over a budget is
     confirmed by up to two more sweeps (the graphics driver's commit charge varies by about 150 MB from sweep to sweep,
     and a frame the machine's other work preempted finalizes for longer);
   - the all-resident sweep: 300 frames at 1920x1080 over twelve stops whose views take in every district, with a budget
-    that holds every texture, confirmed like the evicting one. Every sweep must bring every texture in, evict none and
-    fail no load; `Budgets.json` judges its peak private bytes (at most 650 MB, texture cooking's limit) and its longest
-    frame finalization (below the 8 ms the streaming work allows any frame).
+    that holds every texture and whole textures, confirmed like the evicting one. Every sweep must bring every texture
+    in, evict none and fail no load; `Budgets.json` judges its peak private bytes (at most 650 MB, texture cooking's
+    limit) and its longest frame finalization (below the 8 ms the streaming work allows any frame);
+  - mip streaming's sweep: 600 frames at 1920x1080 low over six districts (12 units up, looking 25 degrees down) with a
+    96 MB texture budget, flown with mip streaming and again with whole textures (the baseline: the renderer's
+    `TextureStreaming` and the manager's partial loads off), one pair per attempt. Both must stream correctly, the
+    streaming run must raise and drop levels and hold less than the baseline, and its last frame must match the
+    baseline's by 40 dB PSNR or more (the levels the screen needs show the world as the full chains do).
+    `Budgets.json` judges the streaming run's peak private memory (at most 550 MB, mip streaming's limit), the most bytes
+    and upload-step milliseconds of a frame (24 MB, 2 ms) and its longest frame to the baseline's (the CPU time of the
+    manager's update and the rendering, without the first frame, which creates the renderer's pipelines in both; a
+    ratio, since budgets are not negative: the acceptance limit, 2 ms over the baseline's, is about 1.5 there).
 
   Then it exports the stress game (`.stgame` manifests next to the pack) and runs `StrataRuntime` in a window of
   1920x1080 pixels (`--resolution`, whatever the display's scale; each run checks its swapchain's size) for 600 frames
   from the world's overview camera with `--perf-log` and the evicting sweep's texture budget, again confirmed by up to two
   more runs: every log must have a row per frame, and `Budgets.json` judges the slowest frame's `Assets.Finalize` stage.
   Then the game runs with its own budgets (nothing evicted) from the overview camera, which shows about two thirds of the
-  textures (`RuntimePeakPrivateMemory`, the peak private memory its log ends with), and last texture cooking's acceptance
-  criterion itself, "the exported stress game at 1920x1080 over 300 frames, with all textures resident, peaks at 650 MB
-  private or less" (`RuntimePeakPrivateMemoryAllResident`, budget 650 MB): 300 frames of the game started in the stress
-  project's `TopDown` scene, the world seen from above (`WriteStressTopDownScene`), with its own budgets; every texture
-  of the pack must be resident at the end, none evicted and none loading. The all-resident sweep only stands in for
-  this. `Perf.TextureCook` (`TextureCookPerfTests.cpp`) imports the same project cold (once per
+  textures (`RuntimePeakPrivateMemory`, the peak private memory its log ends with), and last the whole world in view
+  (`RuntimePeakPrivateMemoryAllInView`, budget 650 MB, texture cooking's limit, target 550 MB, mip streaming's): 300
+  frames of the game started in the stress project's `TopDown` scene, the world seen from above
+  (`WriteStressTopDownScene`), with its own budgets; at the end every texture must be at the level its view needs
+  (`MipsBelowWanted` 0), none evicted and none loading. Texture cooking's criterion read "with all textures resident";
+  with mip streaming the world seen at once needs only what its 1920x1080 pixels show. `Perf.TextureCook` (`TextureCookPerfTests.cpp`) imports the same project cold (once per
   attempt) and checks the import time, the stored sizes of its largest 2048x2048 texture, of its 4096x4096 texture and of
   all of them, and the pack size, and measures the BC7 encoder's time per block on one thread.
   `GPU.Assets.Streaming` runs the same sweep on a small stress project under the validation layers.

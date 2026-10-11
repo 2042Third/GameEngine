@@ -183,22 +183,30 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   `StrataTests --strata-test-helper=write-stress-project <new directory>` writes it to open in the editor, and
   `--strata-test-helper=write-stress-game <new directory>` imports it and writes its pack and the manifests the test runs,
   `Stress.stgame` and `StressTopDown.stgame`, to run the exported game by hand) that way:
-  one that evicts within a small texture budget and one at 1920x1080 with every texture resident, one sweep per attempt
+  one that evicts within a small texture budget and one at 1920x1080 with every texture resident, both with whole
+  textures (`StreamingSweepSettings::TextureStreaming` false), and mip streaming's, one sweep per attempt
   each. Every evicting sweep must stream correctly (no failed load or device error, every camera stop
   settles, the textures stay within the residency budget give or take the largest); its budgets are maxima of the
   sweep: peak private memory (the graphics driver keeps commit charge of freed device memory for a while, which counts
   in private bytes on Windows, so identical sweeps peak up to about 150 MB apart), resident texture memory, the longest
   frame finalization (a regression may show in one frame, which a percentile would hide) and the most frames a stop
   takes to settle. Every all-resident sweep must bring every texture in, evict none and fail no load; its budgets are its
-  peak private memory (650 MB, texture cooking's limit) and its longest frame finalization. It then runs the exported
+  peak private memory (650 MB, texture cooking's limit) and its longest frame finalization. Mip streaming's sweep flies low
+  over six districts at 1920x1080 for 600 frames with a 96 MB texture budget, once with mip streaming and once with
+  whole textures (the baseline), one pair per attempt: both must stream correctly, streaming must raise and drop levels
+  and hold less than whole textures, and its last frame must match the baseline's by 40 dB PSNR or more (a check, not a
+  budget); its budgets (`PerfGPU.Streaming.Mips.*`, maxima by nature) are the streaming run's peak private memory (550 MB,
+  mip streaming's limit), the most bytes and upload-step milliseconds of a frame (24 MB, 2 ms) and its longest frame (CPU
+  time of the manager's update and the rendering, the first frame left out) to the baseline's (a `ratio`: budgets are
+  not negative, and streaming's longest frame is the shorter one). It then runs the exported
   stress game in `StrataRuntime` (`STRATA_TEST_RUNTIME_PATH`, else next to the test executable) with `--perf-log` and
   `--resolution 1920x1080` (1920x1080 pixels whatever the display's scale; every run checks its swapchain), one run per
   attempt: every log has a row per frame, and the budget judges the slowest frame's `Assets.Finalize` stage; then the game
   with its own budgets from the world's overview camera (about two thirds of the textures resident), whose last
-  `PeakPrivateMB` is `RuntimePeakPrivateMemory`; then texture cooking's acceptance criterion itself,
-  `RuntimePeakPrivateMemoryAllResident` (budget 650 MB): the game started in the stress project's `TopDown` scene
+  `PeakPrivateMB` is `RuntimePeakPrivateMemory`; then the whole world in view, `RuntimePeakPrivateMemoryAllInView` (budget
+  650 MB, target 550 MB, mip streaming's limit): the game started in the stress project's `TopDown` scene
   (`WriteStressTopDownScene`: the world with its camera looking down on all of it), 300 frames with its own budgets,
-  every texture of the pack resident at the end and none evicted or loading.
+  every texture at the level its view needs at the end (`MipsBelowWanted` 0), none evicted or loading.
   `Perf.FrameProfiler` measures the frame profiler's cost per frame and `Perf.EditorPanels` (in `src/Editor/`) the
   Streaming panel with 10,000 assets (with the job threads, which build its table) and the Performance panel with a full
   ring of frames, each drawn in the UI harness: the 95th percentile frame, and for the Streaming panel the frames that

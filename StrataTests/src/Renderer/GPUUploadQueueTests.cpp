@@ -10,6 +10,7 @@
 #include "Strata/Renderer/Texture.h"
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cstdint>
 #include <limits>
@@ -379,7 +380,7 @@ TEST_SUITE("GPU.UploadQueue")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("Steps are sized to the bytes and the time left, a frame's first one granule at least")
+	TEST_CASE("Steps are sized to the bytes and the time left, with the staging they create, a frame's first one granule at least")
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
@@ -400,13 +401,31 @@ TEST_SUITE("GPU.UploadQueue")
 		CHECK(queue.PlanStep(context, 1ull << 20, 0.0f, c_Wanted, c_Granule) == 0); // Less than a granule left
 		context.UploadBudget = std::numeric_limits<uint64_t>::max();
 
-		// The time left, at the measured speed.
-		const float speed = queue.GetStats().BytesPerMs;
-		REQUIRE(speed > 0.0f);
+		// The time left: where the pool has no idle staging for the step, after the time creating it takes, at the measured
+		// speed of writing fresh staging...
+		StagingPool& pool = Renderer::GetStagingPool();
+		pool.ReleaseIdle();
 		context.UploadMsBudget = 0.25f;
-		const uint64_t byTime = static_cast<uint64_t>(0.25 * speed);
-		const uint64_t planned = queue.PlanStep(context, 0, 0.0f, c_Wanted, c_Granule);
-		CHECK(planned == std::min(GPUUploadQueue::c_MaxStepBytes, byTime / c_Granule * c_Granule));
+		GPUUploadQueueStats stats = queue.GetStats();
+		REQUIRE(stats.BytesPerMs > 0.0f);
+		REQUIRE(stats.ColdBytesPerMs > 0.0f);
+		const auto plannedFor = [&](double milliseconds, float bytesPerMs)
+		{
+			const uint64_t bytes = std::min(GPUUploadQueue::c_MaxStepBytes, static_cast<uint64_t>(std::max(0.0, milliseconds) * static_cast<double>(bytesPerMs)));
+			return std::max(c_Granule, bytes / c_Granule * c_Granule); // The frame's first step: one granule at least
+		};
+		const uint64_t warm = plannedFor(0.25, stats.BytesPerMs);
+		REQUIRE_FALSE(pool.HasIdleBuffer(std::bit_floor(warm)));
+		const double creationMs = std::min(static_cast<double>(stats.StagingCreateMs), 0.25 * 0.5); // At most half the time left
+		CHECK(queue.PlanStep(context, 0, 0.0f, c_Wanted, c_Granule) == plannedFor(0.25 - creationMs, stats.ColdBytesPerMs));
+
+		// ... and with staging of that size idle, at the speed of writing it.
+		pool.Release(pool.AcquireBuffer(std::bit_floor(warm)));
+		SettleDevice(gpu);
+		REQUIRE(pool.HasIdleBuffer(std::bit_floor(warm)));
+		stats = queue.GetStats();
+		REQUIRE(plannedFor(0.25, stats.BytesPerMs) == warm);
+		CHECK(queue.PlanStep(context, 0, 0.0f, c_Wanted, c_Granule) == warm);
 		CHECK(queue.PlanStep(context, c_Granule, 0.25f, c_Wanted, c_Granule) == 0); // Spent: nothing for a later step of the call...
 
 		// ... but the frame's first step goes, one granule: every frame makes progress.

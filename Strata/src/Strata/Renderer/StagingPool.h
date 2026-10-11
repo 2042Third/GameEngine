@@ -65,6 +65,9 @@ namespace Strata
 		// owners that know uploads stopped without device frames (RendererUploadContext::EndFrame).
 		uint64_t ReleaseIdle();
 
+		// Whether AcquireBuffer(bytes) would reuse idle staging rather than create a buffer, as far as the latest poll knows
+		// (staging the GPU finished with since then counts as not idle yet).
+		bool HasIdleBuffer(uint64_t bytes) const;
 		uint64_t GetIdleBytes() const { return m_IdleBytes; }
 		uint64_t GetPendingBytes() const { return m_PendingBytes; } // Released, but the GPU may still copy from it
 		uint64_t GetCreatedCount() const { return m_CreatedCount; }  // Staging buffers created so far

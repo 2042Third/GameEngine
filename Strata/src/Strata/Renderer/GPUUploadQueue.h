@@ -71,7 +71,13 @@ namespace Strata
 		uint64_t TransferSteps = 0;  // Of the steps, those on the transfer queue
 		uint64_t TextureCopies = 0;  // GPU-side copies of texture levels (CopyTextureLevels)
 		uint64_t Batches = 0;        // Batches submitted
-		float BytesPerMs = 0.0f;     // Measured speed of the steps, which sizes them (PlanStep)
+		// What sizes the steps (PlanStep): the measured speed of steps through staging the pool had, of those through staging
+		// created for them (its pages fault in as they are first written, which the system serializes), and the time creating
+		// and mapping a staging buffer takes (a spike counts at once and decays over the next creations: the driver's
+		// allocations take from tenths of a millisecond to a millisecond, rarely).
+		float BytesPerMs = 0.0f;
+		float ColdBytesPerMs = 0.0f;
+		float StagingCreateMs = 0.0f;
 		bool TransferQueue = false;  // New uploads go to the transfer queue
 	};
 
@@ -127,9 +133,10 @@ namespace Strata
 
 		// The bytes the next step of an upload may take: at most `wantedBytes` and c_MaxStepBytes, within what is left of the
 		// call's upload bytes, upload time and deadline at the speed of the latest steps (`callBytes` and `callMs`: what the
-		// call uploaded and spent so far), rounded down to whole `granuleBytes`. 0 when not even one granule fits, except for
-		// the frame's first step (the frame's first call, nothing uploaded in the frame yet), which gets one granule whatever:
-		// every frame makes progress.
+		// call uploaded and spent so far; a step the pool has no idle staging for is planned with the time creating it takes,
+		// at most half the time left, and the speed of writing fresh staging), rounded down to whole `granuleBytes`. 0 when
+		// not even one granule fits, except for the frame's first step (the frame's first call, nothing uploaded in the frame
+		// yet), which gets one granule whatever: every frame makes progress.
 		uint64_t PlanStep(const AssetFinalizeContext& context, uint64_t callBytes, float callMs, uint64_t wantedBytes, uint64_t granuleBytes) const;
 		// Whether a step's staging of `bytes` fits beside the staging in flight within the context's staging room
 		// (AssetFinalizeContext::GetStagingRoom); the frame's first step within the whole of StagingBytes, which the others
@@ -196,7 +203,9 @@ namespace Strata
 		void AddCopy(uint8_t* destination, const uint8_t* source, size_t bytes);
 		void RunCopies(bool spread);
 		// Adds a step's bytes and time to the context, the statistics and the measured speed.
-		void RecordStep(const AssetFinalizeContext& context, uint64_t bytes, float milliseconds, bool texture, GPUUploadQueueKind queue);
+		// Counts a step: `milliseconds` in all, of which `acquireMs` acquiring and mapping its staging (`created`: a new buffer).
+		void RecordStep(const AssetFinalizeContext& context, uint64_t bytes, float milliseconds, float acquireMs, bool created, bool texture,
+			GPUUploadQueueKind queue);
 		// Marks the submissions whose queries completed (polled; they complete in submission order).
 		void CollectCompleted();
 	private:
