@@ -53,6 +53,11 @@ namespace Strata::UI
 	// true when clicked (pills that lead somewhere, e.g. the errors pill opening the Console).
 	bool Pill(const char* id, const char* icon, std::string_view text, const ImVec4& color, const char* tooltip = nullptr);
 
+	// Whether the last item's tooltip shows this frame (hovered for the tooltip delay, also while disabled). Widgets take
+	// finished tooltips; one that takes work to write (formatted statistics) is better written only then:
+	// `if (UI::IsTooltipDue()) ImGui::SetTooltip("%s", Describe().c_str());` after the widget.
+	bool IsTooltipDue();
+
 	// A banner across the available width: an icon and text (wrapped) in a color on a tint of that color, e.g. the play-mode
 	// notice over the Hierarchy and the Inspector. The probe records its color and text.
 	void Banner(const char* id, const char* icon, std::string_view text, const ImVec4& color);

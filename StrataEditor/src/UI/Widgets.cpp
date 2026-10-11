@@ -32,7 +32,7 @@ namespace Strata::UI
 
 		void ShowTooltip(const char* tooltip)
 		{
-			if (tooltip && *tooltip && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_AllowWhenDisabled))
+			if (tooltip && *tooltip && IsTooltipDue())
 				ImGui::SetTooltip("%s", tooltip);
 		}
 
@@ -179,6 +179,11 @@ namespace Strata::UI
 			return pressed;
 		}
 
+	}
+
+	bool IsTooltipDue()
+	{
+		return ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_AllowWhenDisabled);
 	}
 
 	bool IconButton(const char* id, const char* icon, const char* tooltip, bool enabled)

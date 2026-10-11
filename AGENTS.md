@@ -730,7 +730,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
     `K importing` while imports run (`editor.status` has the count as `assets.importing`), in Sulfur from
     85% of it and Cinnabar beyond it or on failures; click to open the Streaming panel). The frame pill (`ms · FPS · J
     jobs`, jobs running or queued averaged over 60 frames) opens the Performance panel. Panels collect what the status bar
-    shows about them in `OnUpdate`, which runs while they are closed. `editor.showPanel {panel}` (registered by
+    shows about them in `OnUpdate`, which runs while they are closed. Widgets drawn every frame write tooltips that take
+    work (formatted statistics) only while they show (`UI::IsTooltipDue`). `editor.showPanel {panel}` (registered by
     `EditorLayer`, the only command of the window itself) opens a docked panel and brings it to the front, so agents can
     show the person what they look at; it fails while the launcher shows. A panel asked for (`EditorPanelRegistry::Focus`)
     stays open through a layout reset and the saved open states read at the first frame, and is asked for again until its
