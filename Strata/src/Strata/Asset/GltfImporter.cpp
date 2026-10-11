@@ -914,11 +914,19 @@ namespace Strata
 
 				std::string error;
 				m_JointNames = names; // Channels name their joints
+				// Where each joint rests relative to the model's root: entities attached to joints start there.
+				m_JointRestModel.assign(names.size(), glm::mat4(1.0f));
+				for (size_t joint = 0; joint < names.size(); joint++)
+				{
+					const glm::mat4 local = AnimationMath::ToMatrix(restPose[joint]);
+					m_JointRestModel[joint] = parents[joint] == c_NoJoint ? local : AnimationMath::MultiplyAffine(m_JointRestModel[parents[joint]], local);
+				}
 				Ref<Skeleton> skeleton = Skeleton::Create(std::move(names), std::move(parents), std::move(restPose), rootMotionJoint, &error);
 				if (!skeleton)
 				{
 					Warn(fmt::format("The model's skeleton was not imported ({}); skins and animations are not imported", error));
 					m_NodeJoints.clear();
+					m_JointRestModel.clear();
 					return;
 				}
 				ImportedSubAsset subAsset;
@@ -1632,7 +1640,30 @@ namespace Strata
 				}
 			}
 
-			// Builds the entity hierarchy iteratively (no recursion on deep files); fails above the depth limit.
+			// The joint of the skeleton a node is (c_NoJoint for nodes outside it).
+			JointIndex GetNodeJoint(const cgltf_node& node) const
+			{
+				return m_NodeJoints.empty() ? c_NoJoint : m_NodeJoints[cgltf_node_index(m_Data.get(), &node)];
+			}
+
+			// Whether a joint has something the scene needs as an entity: a rigid mesh, a camera or light that is imported, or a
+			// child outside the skeleton (whose transform is relative to it). Joints without any are only part of the pose.
+			bool HasEntityContent(const cgltf_node& node) const
+			{
+				if (node.mesh || (node.camera && m_Settings.ImportCameras) || (node.light && m_Settings.ImportLights))
+					return true;
+				for (cgltf_size child = 0; child < node.children_count; child++)
+				{
+					if (GetNodeJoint(*node.children[child]) == c_NoJoint)
+						return true;
+				}
+				return false;
+			}
+
+			// Builds the entity hierarchy iteratively (no recursion on deep files); fails above the depth limit. With a skeleton
+			// the model's root is its animator: skinned meshes are placed under it with a Skin naming it, joints with content
+			// become entities under it that follow their joint (AttachToJoint), and other joints are no entities at all (the
+			// animator's pose holds them).
 			bool AddHierarchy(Scene& scene, const std::vector<const cgltf_node*>& roots, Entity parent, std::string& outError)
 			{
 				struct PendingNode
@@ -1663,6 +1694,16 @@ namespace Strata
 
 					const cgltf_node& node = *pending.Node;
 					const cgltf_size nodeIndex = cgltf_node_index(m_Data.get(), &node);
+					const MeshImport* mesh = FindMeshImport(node);
+					const bool skinned = mesh && mesh->Skinned;
+					const JointIndex joint = skinned ? c_NoJoint : GetNodeJoint(node);
+					if (joint != c_NoJoint && !HasEntityContent(node))
+					{
+						// Only a joint: its children are joints too, each placed on its own.
+						for (cgltf_size child = node.children_count; child > 0; child--)
+							stack.push_back(PendingNode { node.children[child - 1], parent, pending.Depth + 1 });
+						continue;
+					}
 					// Entity ids derive from the model handle, so re-imports produce the same ids.
 					Entity entity = scene.CreateEntityWithUUID(DeriveSubAssetHandle(m_Context.Handle, fmt::format("Node/{}", nodeIndex)), GetName(node.name, "Node", nodeIndex));
 					if (!entity)
@@ -1670,10 +1711,29 @@ namespace Strata
 						outError = "the model has more nodes than a scene can hold";
 						return false;
 					}
-					// A skinned mesh is placed by its joints relative to the model's root, whatever node draws it.
-					const MeshImport* mesh = FindMeshImport(node);
-					scene.SetParent(entity, mesh && mesh->Skinned ? parent : pending.Parent, false);
+					// Skinned meshes are placed by their joints and joints by the pose, both relative to the model's root (the
+					// animator), whatever their place in the file's hierarchy.
+					scene.SetParent(entity, skinned || joint != c_NoJoint ? parent : pending.Parent, false);
 					SetupEntity(entity, node);
+					if (skinned)
+						entity.AddComponent<SkinComponent>().Animator = parent.GetUUID();
+					if (joint != c_NoJoint)
+					{
+						// At the joint's rest pose until the animator poses it.
+						AttachToJointComponent& attachment = entity.AddComponent<AttachToJointComponent>();
+						attachment.Animator = parent.GetUUID();
+						attachment.Joint = m_JointNames[joint];
+						TransformComponent& transform = entity.GetComponent<TransformComponent>();
+						glm::vec3 translation;
+						glm::quat rotation;
+						glm::vec3 scale;
+						if (Math::DecomposeTransform(m_JointRestModel[joint], translation, rotation, scale))
+						{
+							transform.Translation = translation;
+							transform.Rotation = rotation;
+							transform.Scale = scale;
+						}
+					}
 
 					for (cgltf_size child = node.children_count; child > 0; child--)
 						stack.push_back(PendingNode { node.children[child - 1], entity, pending.Depth + 1 });
@@ -1696,6 +1756,13 @@ namespace Strata
 				std::string error;
 				if (!AddHierarchy(scene, roots, root, error))
 					return Fail(outError, error);
+				if (m_SkeletonHandle.IsValid())
+				{
+					// The model's animator: its skeleton, playing the first animation (a controller can take over).
+					AnimatorComponent& animator = root.AddComponent<AnimatorComponent>();
+					animator.Skeleton = m_SkeletonHandle;
+					animator.Clip = m_ClipHandles.empty() ? UUID::Null() : m_ClipHandles.front();
+				}
 
 				Ref<Model> model = Model::CreateFromSnapshot(SceneSerializer::SerializeEntities(scene, { root }));
 				if (!model)
@@ -1722,6 +1789,7 @@ namespace Strata
 			// The skeleton: each node's joint (c_NoJoint for nodes outside it; empty without a skeleton) and the joints' names.
 			std::vector<JointIndex> m_NodeJoints;
 			std::vector<std::string> m_JointNames;
+			std::vector<glm::mat4> m_JointRestModel; // Per joint, its rest transform relative to the model's root
 			AssetHandle m_SkeletonHandle = UUID::Null();
 			uint32_t m_SkeletonJointCount = 0;
 			std::map<const cgltf_skin*, MeshSkinBinding> m_Skins; // Empty joints: the skin cannot be used

@@ -139,8 +139,9 @@ and while it runs its scene systems (see [Scene runtime lifecycle](#scene-runtim
 non-owning handle. Components are plain structs in `Components.h`, registered with stable names in
 `ComponentRegistration.cpp` (ID, Name, Transform, Relationship, Tag, Inactive, PrefabInstance, Camera, MeshRenderer,
 DirectionalLight, PointLight, SpotLight, SkyLight, PostProcess, Text, RigidBody, BoxCollider, SphereCollider,
-CapsuleCollider, MeshCollider, AudioSource, AudioListener, Skin, Script). `ComponentAccess` reads and writes them with
-validation and change signals, `SceneSerializer` writes versioned JSON (keeping components it cannot read, see
+CapsuleCollider, MeshCollider, AudioSource, AudioListener, Skin, Animator, AttachToJoint, Script). `ComponentAccess`
+reads and writes them with validation and change signals, `SceneSerializer` writes versioned JSON (keeping components
+it cannot read, see
 [Composition root and registries](#composition-root-and-registries)), and `Prefab.h` defines the scene-shaped assets
 (`EntityTemplate`, `Prefab`, `Model`, `SceneAsset`). `SceneServices.h` defines the interfaces through which the systems
 of a playing scene use each other (see [Scene services](#scene-services)). See [Scene caches](#scene-caches) for how
@@ -227,11 +228,14 @@ API; mixing runs on miniaudio's audio thread, or is pulled with `AdvanceNullDevi
 with settings, and `AudioSystem` the "Audio" scene system (Play only), which offers the scene service `IAudioPlayback`;
 the module registers the engine service `IAudioOutput` (master volume). Details: AGENTS.md, "Audio".
 
-**Animation** (`Animation/`). Skeletal animation's assets: `Skeleton` (joint names, parents in topological order, rest
+**Animation** (`Animation/`). Skeletal animation: the assets `Skeleton` (joint names, parents in topological order, rest
 pose; the cooked `STSK` form), `AnimationClip` (per-joint translation, rotation and scale channels with step, linear and
 cubic spline interpolation, bound to skeletons by joint name; the cooked `STAC` form; `ReduceKeys` is the importer's
-keyframe reduction) and `AnimationController` (the `.stanimator` document: parameters, states, transitions, events),
-whose loaders `RegisterAnimationModule` registers. `AnimationTypes.h` has the joint pose and its math.
+keyframe reduction) and `AnimationController` (the `.stanimator` document: parameters, states, transitions, events);
+`AnimatorInstance` (one animator's playback: state machine, cross-fades, events, root motion, poses) and
+`AnimationSystem`, the "Animation" scene system (Play only), which offers the scene services `ISkinningPoses`,
+`IAnimatorControl` and `IAnimationEventSource`. `AnimationTypes.h` has the joint pose and its math. See
+[Animation](#animation).
 
 **Scripting** (`Scripting/`). `ScriptEngine` (the loaded module, hot reload, faults, optional watchdog),
 `ScriptModule` (loading, validation and guarded calls), `ScriptSystem` (the "Scripting" scene system: instances and
@@ -332,7 +336,7 @@ RegisterRendererModule     Renderer/RendererRegistration.cpp   Texture, Mesh, Ma
 RegisterScriptingModule    Scripting/ScriptingRegistration.cpp "Scripting" system
 RegisterPhysicsModule      Physics/PhysicsRegistration.cpp     "Physics" system
 RegisterAudioModule        Audio/AudioRegistration.cpp         AudioClip loader, "Audio" system
-RegisterAnimationModule    Animation/AnimationRegistration.cpp Skeleton, AnimationClip, AnimationController loaders
+RegisterAnimationModule    Animation/AnimationRegistration.cpp Skeleton, AnimationClip, AnimationController loaders, "Animation" system
 options.AssetPipeline      RegisterAssetPipeline, Asset/AssetImporters.cpp: opens the importer registry, importers
 options.Extra              registrations of games, tools and tests
 ComponentRegistry::Freeze
@@ -451,7 +455,7 @@ entered several times in a frame adds up. Its cost is about 0.6 microseconds per
 | `Input` | `Input::BeginFrame` and the window's events (`Application::RunFrame`) |
 | `Assets.Update` | `AssetManagerBase::Update` and `EditorAssetManager::Update` (file changes, imports, eviction) |
 | `Assets.Finalize` | `AssetManagerBase::ProcessCompletions`: finalizing arrivals, GPU uploads |
-| `Scene.Scripts`, `Scene.Physics`, `Scene.Audio` | the scene systems' start and update callbacks (`SceneSystemDescriptor::ProfileStage`) |
+| `Scene.Scripts`, `Scene.Physics`, `Scene.Audio` | the scene systems' start and update callbacks (`SceneSystemDescriptor::ProfileStage`; `Scene.Animation`, the animation system's, is registered when a scene first plays) |
 | `Scene.Transforms` | `Scene::UpdateWorldTransforms` when something is dirty |
 | `Render.Extract` | `SceneRenderer::Render`'s `RenderScene::Sync` and `PrepareExtraction`, then `CullView`, `FindShadowCasters`, `ResolveAssets`, `GatherDraws`, `GatherShadowDraws` and `CollectLights` (`SceneRendererExtraction.cpp`) |
 | `Render.Submit` | the rest of `SceneRenderer::Render`: recording and submitting the command list, text |
@@ -477,6 +481,7 @@ are, in update order:
 | System | Class | Modes | Order | Role |
 | --- | --- | --- | --- | --- |
 | Scripting | `ScriptSystem` | Play | | Script instances of the active `ScriptEngine` (null engine: no scripts). |
+| Animation | `AnimationSystem` | Play | After Scripting, Before Physics | Animators in `OnUpdate`: poses, root motion, attachments, events (see [Animation](#animation)). |
 | Physics | `PhysicsSystem` | Play, Simulate | After Scripting | Jolt world; steps in `OnFixedUpdate`, then dispatches contacts. |
 | Audio | `AudioSystem` | Play | After Physics | Sources and listener, in `OnLateUpdate` after scripts and physics. |
 
@@ -496,7 +501,8 @@ are, in update order:
   registered, not created in the current mode, or a base class). Systems of other modules use each other through scene
   services instead (below), never through `GetSystem` of a class they would have to include.
 - **Profiling.** A system's start and update callbacks run in the frame profiler stage its descriptor names
-  (`SceneSystemDescriptor::ProfileStage`: `Scene.Scripts`, `Scene.Physics`, `Scene.Audio`; empty: not timed on its own),
+  (`SceneSystemDescriptor::ProfileStage`: `Scene.Scripts`, `Scene.Animation`, `Scene.Physics`, `Scene.Audio`; empty: not
+  timed on its own),
   resolved when the scene starts; scenes updated outside a profiled frame (tests) skip the stages altogether.
 
 ```text
@@ -550,7 +556,9 @@ which means the module is not in the build or its system does not run in this mo
 | `IBodyControl`: velocities, forces, impulses, gravity scale, wake-up, teleport | `PhysicsSystem` | script host (`RigidBody`) |
 | `IPhysicsQueries`: raycasts and overlaps | `PhysicsSystem` | script host (`Physics`) |
 | `IAudioPlayback`: sources and one-shots | `AudioSystem` (an adapter object) | script host (`AudioSource`, `Audio`) |
-| `ISkinningPoses`: each animator's pose (model-space joint matrices with a version), and which animators renderers drew | the Animation module's system; the editor's pose preview for edited scenes | `RenderScene` (palettes of skinned meshes), `SceneRenderer` (reports the animators of what it drew) |
+| `ISkinningPoses`: each animator's pose (model-space joint matrices with a version), and which animators renderers drew | `AnimationSystem`; the editor's pose preview for edited scenes | `RenderScene` (palettes of skinned meshes), `SceneRenderer` (reports the animators of what it drew) |
+| `IAnimatorControl`: play, cross-fade, parameters, speed, state queries, joint transforms | `AnimationSystem` | script host (`Animator`), tools and tests |
+| `IAnimationEventSource`: listeners of the events controller states fire | `AnimationSystem` | `ScriptSystem` (`OnAnimationEvent`), tools and tests |
 
 What outlives scenes is an engine service (`Core/EngineServices.h`): a module registers it in its registration function
 while the composition root runs, e.g. the Audio module's `IAudioOutput` (the master volume, which scripts change in any
@@ -1210,6 +1218,74 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   `ViewportSettings::AllColliders`; circles take their points from tables.
   `ViewportRenderer` keeps the selection's subtrees until the selection or the scene's hierarchy changes, and
   `SceneRenderer` keeps the sorted outline IDs and their upload while the same entities stay selected.
+
+## Animation
+
+Skeletal animation lives in the Animation module (`Strata/src/Strata/Animation/`, a layer of its own above Scene; the
+renderer and the script host never include it and reach it through scene services). Poses belong to the animation
+system, not to entities: a character's joints add no entities and no transform changes to the scene.
+
+- **Assets.** A `Skeleton` holds joint names (unique, since clips bind by name), parents in topological order (parents
+  first), the rest pose (each joint's local translation, rotation and scale) and the root motion joint. An
+  `AnimationClip` holds channels per joint and path (translation, rotation, scale) with step, linear or cubic spline
+  keys (channels with the same key times share them); it lasts until its last key, and before a channel's first or after
+  its last key the channel holds that key. `AnimationClip::Bind` maps a clip's channels to a skeleton's joints once
+  (`AnimationClipBinding`; targets the skeleton lacks are skipped). An `AnimationController` (`.stanimator`) holds
+  parameters (float, bool, trigger), states (a clip or none, a speed, looping, events) and transitions. Their loaders
+  validate everything (truncated and garbage bytes are rejected).
+- **Import.** `GltfImporter` (version 6) makes one skeleton per model (sub-asset "Skeleton": the joints of every skin,
+  the animated nodes and their ancestors, parents first; the root motion joint is the topmost joint of a skin), a clip
+  per animation ("Animation/<name>", or its index; keyframes reduced) and skinned meshes (see Asset pipeline,
+  `MeshSkinBinding`). The model's root entity is its animator (`AnimatorComponent` with the skeleton and the first
+  clip). Skinned mesh entities sit under it with a `SkinComponent` naming it. Joints are no entities, except joints with
+  content (a rigid mesh, an imported camera or light, or a child outside the skeleton), which become entities under the
+  root with an `AttachToJointComponent` at the joint's rest pose, so rigid parts and node animation follow the pose.
+- **Components** (`Scene/Components.h`, category Animation). `AnimatorComponent`: `Skeleton`, `Controller` (none: the
+  simple mode, which plays `Clip`), `Clip`, `Speed` (negative plays backwards), `Loop` (the clip without a controller,
+  and clips scripts play directly), `PlayOnStart`, `ApplyRootMotion` and `CullingMode` (`AlwaysAnimate`, `WhenVisible`).
+  `SkinComponent {Animator}` makes a mesh renderer skinned by an animator's pose; the skeleton belongs to the animator,
+  so several meshes (a body, its clothes) share one pose, and `MeshRendererComponent`, its signals and the render
+  proxies stay as they were (a skin is one more component a proxy reads). `AttachToJointComponent {Animator, Joint}`
+  places an entity at a joint.
+- **Playback** (`AnimatorInstance`, no scene involved). The animator is in one state, the target of the latest
+  transition or command. After every update the transitions from any state, then those of the current state, are tested
+  in order; the first whose conditions all hold and whose exit time the update reached fires: the triggers it tests are
+  reset and a cross-fade to its target starts. An exit time is the state's normalized time (time over the clip's
+  duration, counting loops): a looping state with an exit time below 1 offers the transition once per loop, at that
+  point; otherwise once the normalized time reaches it. Any-state transitions skip their own target unless
+  `CanTransitionToSelf`. A cross-fade blends up to four entries: the target's weight grows linearly over the duration
+  while the others keep the proportions they had, so the weights add up to 1 (a fifth entry drops the faintest). Poses
+  blend translations and scales linearly and rotations by a normalized weighted sum on one hemisphere. Events of the
+  current state (not of states fading out) fire each time the playhead passes them, in order, also across a loop
+  boundary (at most four loops per update). Commands and parameters set while the controller loads wait for it; a
+  reloaded controller keeps the values of parameters with the same name and type. A state without a clip, or whose clip
+  did not load, shows the rest pose.
+- **The system** (`AnimationSystem`, "Animation", Play only, After Scripting and Before Physics, stage
+  `Scene.Animation`). Every active entity with an `AnimatorComponent` has an animator, started with `PlayOnStart` when
+  the scene starts or the entity becomes active (deactivating resets it); animators with the same skeleton, controller
+  and clip share an asset set, whose assets are requested once per update and held while animators use them. An update
+  evaluates the animators whose assets are loaded on the job system (`ParallelFor` in batches of
+  `c_EvaluationBatchSize`; each writes only its own record, so the results do not depend on the threads), then, on the
+  main thread and animator by animator in creation order: publishes the poses (new versions for `ISkinningPoses`),
+  applies root motion, places attachments and dispatches the events to the listeners of `IAnimationEventSource`.
+- **Root motion.** With `ApplyRootMotion` the root motion joint's horizontal travel and turn about +Y during the update
+  are taken out of the pose and move the entity: measured per pass through the clip (loops included), weighted by the
+  blend, in the frame the root faced when the clip started; the pose holds the root's subtree where (and facing how)
+  each clip started. `AnimationSystem::ApplyRootMotion` is the one place that moves the entity: the move, in the
+  entity's space, goes through its world transform (scale included) and its parent's inverse into the local translation,
+  the turn multiplies its rotation, and the write is signaled (`MarkModified<TransformComponent>`). A character
+  controller takes the delta there instead.
+- **Culling.** A `WhenVisible` animator computes its pose only when a renderer drew (or would have drawn, in its view or
+  its shadow cascades) a mesh it skins since the previous update (`ISkinningPoses::ReportVisible`, which `SceneRenderer`
+  calls for the animators of the Skin proxies it culled in), or when it has no pose yet; its time, state machine, events
+  and root motion go on, so gameplay does not depend on the camera. Unseen animators thus cost an update of their state
+  and no sampling; a renderer shows a re-entering animator's previous pose for one frame.
+- **Attachments.** Each update the system writes an `AttachToJointComponent`'s local transform so that its world
+  transform is the animator's world transform times the joint's pose: under the animator itself that is the pose, which
+  does not change when the animator moves; elsewhere it goes through the parent's world transform. A placement equal to
+  the last one, of an entity nobody moved since, writes nothing.
+- **Skinning** is the renderer's: `RenderScene` turns the poses of `ISkinningPoses` into palettes and posed bounds, and
+  the vertex shaders blend them (see [Render scene](#render-scene), "Skinned proxies").
 
 ## Scripting
 

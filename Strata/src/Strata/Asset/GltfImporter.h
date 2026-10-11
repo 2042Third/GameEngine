@@ -30,7 +30,7 @@ namespace Strata
 	public:
 		AssetType GetType() const override { return AssetType::Model; }
 		std::vector<std::string> GetExtensions() const override { return { ".gltf", ".glb" }; }
-		uint32_t GetVersion() const override { return 5; }
+		uint32_t GetVersion() const override { return 6; }
 		nlohmann::json GetDefaultSettings(const std::filesystem::path& sourcePath) const override;
 		std::vector<PropertyInfo> GetSettingsProperties() const override;
 		// LODCount needs GenerateLODs, the texture settings ImportMaterials, TextureQuality compressed textures.

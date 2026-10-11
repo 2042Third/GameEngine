@@ -38,15 +38,15 @@ together (targets, modules, frame loop, threading, asset pipeline, scripting, ed
 | `Samples/` | Games made through the editor by an AI agent, as projects (`.stproj`, `Assets/` with `.meta` files, `Scripts/`): `Tetris` (played and exported by the CTest `StrataEditor.Tetris`). `Samples.json` lists them; the build copies them next to the executables (`StrataSamples`), where the launcher's Open Sample and `project.openSample` offer them as copies. Open one in place only to change the sample: `StrataEditor --project Samples/<Game>`. |
 | `CMake/` | CMake modules (configurations, compiler options, shader compilation, manifest, the build's git commit). |
 | `Tools/` | Standard-library Python tools: generators whose outputs are committed (`GenerateBrandAssets.py` draws the strata mark into `StrataEditor/Resources/Brand/`: PNGs, raw RGBA for the window icon, the `.ico` of the executables) and `PerfStability.py` (runs the perf tests repeatedly and reports how stable every metric is, see [Testing](#testing)). |
-| `Docs/` | Documentation of how the engine works, linked to the code: `README.md` (index), `Architecture.md` (targets and dependencies, modules, frame loop, threading, asset pipeline, streaming and residency, scripting, editor, export and runtime), `Roadmap.md` (the pillars, the waves of workstreams and what each landed wave delivered; update its Status when a wave lands). |
+| `Docs/` | Documentation of how the engine works, linked to the code: `README.md` (index), `Architecture.md` (targets and dependencies, modules, frame loop, threading, asset pipeline, streaming and residency, render scene, animation, scripting, editor, export and runtime), `Roadmap.md` (the pillars, the waves of workstreams and what each landed wave delivered; update its Status when a wave lands). |
 | `.claude/skills/` | Task-specific skills for agents (build/test, adding components, script API, editor automation, making a game end to end: `strata-make-a-game`). |
 
 Engine modules (`Strata/src/Strata/`): `Core` (application, logging, jobs, platform services),
 `Events`, `Input`, `Math`, `Reflection`, `Scene` (ECS, components, serialization, prefabs),
 `Asset` (asset database, importers, cooking, streaming, packs), `Renderer`, `Physics`, `Audio`,
-`Animation` (skeletons, clips, animation controllers), `Scripting`, `Project` (projects, game manifests), `Runtime`
-(running exported games), `Network` (sockets, JSON-RPC, editor automation sessions), `ImGui`, `Engine` (the composition
-root that registers every module).
+`Animation` (skeletons, clips, animation controllers, animators), `Scripting`, `Project` (projects, game manifests),
+`Runtime` (running exported games), `Network` (sockets, JSON-RPC, editor automation sessions), `ImGui`, `Engine` (the
+composition root that registers every module).
 
 ## Building
 
@@ -689,6 +689,28 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `PlayOneShot`/`PlayOneShotAt` by clip handle and the engine-wide master volume. Game code goes through the system rather
   than `AudioEngine` directly, so that its sounds pause and stop with the scene. Scripts reach the same API through the SDK's
   `AudioSource` (`Entity::GetAudioSource`) and `Audio` (`StrataScript/Audio.h`).
+
+## Animation
+
+`Strata/src/Strata/Animation/` holds the assets `Skeleton`, `AnimationClip` and `AnimationController` (`.stanimator`),
+`AnimatorInstance` (one animator's playback, no scene) and `AnimationSystem`, the built-in "Animation" scene system
+(Play only, after Scripting and before Physics). How it all works: Docs/Architecture.md, "Animation".
+
+- **Poses are not entities.** An `AnimatorComponent` (skeleton, controller or clip, speed, loop, play on start, root
+  motion, culling mode) owns a pose in the system; meshes follow it through a `SkinComponent` naming the animator, other
+  entities through an `AttachToJointComponent`. Never create entities per joint or write joint transforms into the
+  scene: a character's joints must add no transform changes. The glTF importer follows this (joints with content only).
+- **Through scene services:** the renderer reads poses through `ISkinningPoses` and reports what it drew; scripts and
+  other modules use `IAnimatorControl` and `IAnimationEventSource` (`Scene/SceneServices.h`). Only the Engine and
+  AssetPipeline layers include Animation.
+- **Evaluation is parallel and deterministic:** jobs touch only their animator's record (no registry access); everything
+  that changes the scene (root motion, attachments, events) happens on the main thread afterwards, animator by animator.
+  Keep it that way: a test compares runs with different thread counts bit for bit.
+- **Root motion** moves entities only in `AnimationSystem::ApplyRootMotion` (signaled through the transform contract); a
+  character controller takes the delta there.
+- **Culling:** `WhenVisible` animators skip their pose while no renderer reports them (`ISkinningPoses::ReportVisible`);
+  time, transitions, events and root motion go on. Code that needs a pose of such an animator (a joint transform) gets
+  its latest pose.
 
 ## Editor
 

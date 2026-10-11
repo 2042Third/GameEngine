@@ -5,15 +5,15 @@ design and links to the code that implements it.
 
 - [Architecture.md](Architecture.md): the targets and their dependencies, the engine modules, the frame loop and the
   scene runtime lifecycle, the threading model, the asset pipeline, streaming and residency (memory budgets, eviction,
-  the load queue), scripting, the editor, export and the runtime.
+  the load queue), the render scene, animation, scripting, the editor, export and the runtime.
 - [Roadmap.md](Roadmap.md): what Strata is meant to be (its pillars), the waves of workstreams that get it there, and
   the status: what each landed wave delivered and the open items later waves own.
 
 ## Elsewhere in the repository
 
 - [AGENTS.md](../AGENTS.md): the development guide and the source of truth for rules: building, testing and the
-  feature test, code style, architecture rules, the asset pipeline, the script ABI, audio, editor commands, rendering,
-  automation and the pre-commit review checklist.
+  feature test, code style, architecture rules, the asset pipeline, the script ABI, audio, animation, editor commands,
+  rendering, automation and the pre-commit review checklist.
 - [README.md](../README.md): features, building, and making a game with the editor.
 - [.claude/skills/](../.claude/skills/): task playbooks, see [Skills](#skills).
 - [Samples/](../Samples/): example games as editor projects, see [Samples](#samples).

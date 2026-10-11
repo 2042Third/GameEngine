@@ -3,14 +3,18 @@
 #include "Animation/SkinnedGltf.h"
 #include "Strata/Animation/AnimationClip.h"
 #include "Strata/Animation/Skeleton.h"
+#include "Strata/Asset/AssetDependencies.h"
 #include "Strata/Asset/GltfImporter.h"
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Core/JsonUtils.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/Scene.h"
 #include "TestHelpers.h"
+
+#include <glm/gtc/epsilon.hpp>
 
 #include <algorithm>
 #include <string>
@@ -159,6 +163,89 @@ TEST_SUITE("Asset.Gltf")
 		CHECK(arm.GetParent() == roots[0]);
 		CHECK(arm.GetComponent<TransformComponent>().Translation == glm::vec3(0.0f));
 		CHECK(arm.GetComponent<MeshRendererComponent>().Mesh == DeriveSubAssetHandle(output.Handle, "Mesh/0"));
+
+		// The root is the model's animator, playing the first animation; the skinned mesh follows its pose.
+		REQUIRE(arm.HasComponent<SkinComponent>());
+		CHECK(arm.GetComponent<SkinComponent>().Animator == roots[0].GetUUID());
+		REQUIRE(roots[0].HasComponent<AnimatorComponent>());
+		const AnimatorComponent& animator = roots[0].GetComponent<AnimatorComponent>();
+		CHECK(animator.Skeleton == DeriveSubAssetHandle(output.Handle, "Skeleton"));
+		CHECK(animator.Clip == DeriveSubAssetHandle(output.Handle, "Animation/Wave"));
+		CHECK(animator.Controller == UUID::Null());
+		CHECK(animator.PlayOnStart);
+		// Joints without content are only part of the pose: they are no entities.
+		for (const char* joint : { "Armature", "Shoulder", "Elbow", "Wrist" })
+		{
+			CAPTURE(joint);
+			CHECK_FALSE(FindByName(roots[0], joint));
+		}
+		CHECK(roots[0].GetChildren().size() == 1);
+		// The model references its skeleton and clip through the animator.
+		std::vector<AssetHandle> references;
+		REQUIRE(AssetDependencies::Scan(AssetType::Model, output.Result.Data, references));
+		CHECK(std::find(references.begin(), references.end(), animator.Skeleton) != references.end());
+		CHECK(std::find(references.begin(), references.end(), animator.Clip) != references.end());
+	}
+
+	TEST_CASE("Joints that carry meshes or other nodes become entities that follow their joint")
+	{
+		const std::filesystem::path assets = Tests::CreateTemporaryDirectory("GltfSkinAttachments");
+		nlohmann::json document = Tests::CreateSkinnedArmDocument();
+		// A sword in the hand: a node below the wrist drawing the mesh rigidly.
+		document["nodes"].push_back({ { "name", "Sword" }, { "mesh", 0 }, { "translation", { 0.0, 0.5, 0.0 } } });
+		document["nodes"][4]["children"] = { document["nodes"].size() - 1 };
+		// A propeller at the top level that the wave's sampler spins: animated, so a joint of the skeleton.
+		document["nodes"].push_back({ { "name", "Propeller" }, { "mesh", 0 }, { "translation", { 2.0, 0.0, 0.0 } } });
+		document["scenes"][0]["nodes"].push_back(document["nodes"].size() - 1);
+		document["animations"][0]["channels"].push_back({ { "sampler", 0 }, { "target", { { "node", document["nodes"].size() - 1 }, { "path", "rotation" } } } });
+		const std::string text = JsonUtils::Dump(document);
+		const SkinImport output = ImportModel(assets, "Attachments.gltf", std::vector<uint8_t>(text.begin(), text.end()));
+		REQUIRE_MESSAGE(output.Success, output.Error);
+		CHECK(output.Result.Warnings.empty());
+
+		const ImportedSubAsset* skeletonData = output.Find("Skeleton");
+		REQUIRE(skeletonData);
+		std::string error;
+		Ref<Skeleton> skeleton = Skeleton::Deserialize(skeletonData->Data, &error);
+		REQUIRE_MESSAGE(skeleton, error);
+		CHECK(skeleton->FindJoint("Propeller") != c_NoJoint);
+		CHECK(skeleton->FindJoint("Sword") == c_NoJoint);
+
+		Ref<Model> model = Model::Deserialize(output.Result.Data, &error);
+		REQUIRE_MESSAGE(model, error);
+		Scene scene;
+		const std::vector<Entity> roots = model->Instantiate(scene);
+		REQUIRE(roots.size() == 1);
+		const UUID root = roots[0].GetUUID();
+
+		// The wrist carries the sword, so it is an entity under the root at the wrist's rest pose.
+		Entity wrist = FindByName(roots[0], "Wrist");
+		REQUIRE(wrist);
+		CHECK(wrist.GetParent() == roots[0]);
+		REQUIRE(wrist.HasComponent<AttachToJointComponent>());
+		CHECK(wrist.GetComponent<AttachToJointComponent>().Animator == root);
+		CHECK(wrist.GetComponent<AttachToJointComponent>().Joint == "Wrist");
+		CHECK(glm::all(glm::epsilonEqual(wrist.GetComponent<TransformComponent>().Translation, glm::vec3(0.0f, 2.0f, 0.0f), 1e-6f)));
+		CHECK_FALSE(wrist.HasComponent<MeshRendererComponent>());
+		Entity sword = FindByName(roots[0], "Sword");
+		REQUIRE(sword);
+		CHECK(sword.GetParent() == wrist);
+		CHECK(sword.GetComponent<TransformComponent>().Translation == glm::vec3(0.0f, 0.5f, 0.0f));
+		CHECK(sword.GetComponent<MeshRendererComponent>().Mesh == DeriveSubAssetHandle(output.Handle, "Mesh/0/Rigid"));
+		CHECK_FALSE(sword.HasComponent<AttachToJointComponent>());
+
+		// The propeller draws a mesh and is animated: it follows its own joint.
+		Entity propeller = FindByName(roots[0], "Propeller");
+		REQUIRE(propeller);
+		CHECK(propeller.GetParent() == roots[0]);
+		CHECK(propeller.GetComponent<AttachToJointComponent>().Joint == "Propeller");
+		CHECK(propeller.GetComponent<TransformComponent>().Translation == glm::vec3(2.0f, 0.0f, 0.0f));
+		CHECK(propeller.HasComponent<MeshRendererComponent>());
+		for (const char* joint : { "Armature", "Shoulder", "Elbow" })
+		{
+			CAPTURE(joint);
+			CHECK_FALSE(FindByName(roots[0], joint));
+		}
 	}
 
 	TEST_CASE("Skeleton, clip and mesh handles and data are stable across re-imports")

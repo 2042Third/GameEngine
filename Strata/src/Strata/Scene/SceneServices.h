@@ -11,6 +11,8 @@
 #include <functional>
 #include <optional>
 #include <span>
+#include <string>
+#include <string_view>
 #include <vector>
 
 // Scene services: the interfaces through which the systems of a running scene use each other.
@@ -23,7 +25,8 @@
 // include each other's headers (the layers of StrataTests/Architecture/Layers.json).
 //
 // The built-in providers: PhysicsSystem offers ICollisionEventSource, IBodyMotionQuery, IBodyControl and IPhysicsQueries;
-// AudioSystem offers IAudioPlayback; ISkinningPoses comes from what poses skeletons (the Animation module). All
+// AudioSystem offers IAudioPlayback; the Animation module's system offers ISkinningPoses, IAnimatorControl and
+// IAnimationEventSource (the editor's pose preview provides ISkinningPoses for edited scenes, where no system runs). All
 // services are main thread only, like the scene. IAudioOutput, defined here too, is an engine service
 // (Core/EngineServices.h): it belongs to the process, not to a scene.
 namespace Strata
@@ -230,6 +233,64 @@ namespace Strata
 		virtual uint64_t GetPosesVersion() const = 0;
 		// A renderer drew (in its view or its shadows) a mesh this animator poses, or would have, had it been posed.
 		virtual void ReportVisible(entt::entity animator) = 0;
+	};
+
+	// Commands and queries of the animators of a playing scene (the Animation module's system), for code that may not
+	// include the module (the script host). Every function takes the entity with the AnimatorComponent and fails (false,
+	// nothing, 0) for entities without one, unknown states or parameters, and wrong values; the system logs nothing, the
+	// callers report misuse their way.
+	class IAnimatorControl
+	{
+	public:
+		virtual ~IAnimatorControl() = default;
+
+		// Jumps to a state of the animator's controller (or, PlayClip, plays a clip without the controller's transitions until
+		// a state is played again); CrossFade blends to the state over `seconds`.
+		virtual bool Play(Entity animator, std::string_view state) = 0;
+		virtual bool PlayClip(Entity animator, AssetHandle clip) = 0;
+		virtual bool CrossFade(Entity animator, std::string_view state, float seconds) = 0;
+		// Parameters of the controller by name and type; a trigger stays set until a transition consumes it or it is reset.
+		virtual bool SetFloat(Entity animator, std::string_view parameter, float value) = 0;
+		virtual bool SetBool(Entity animator, std::string_view parameter, bool value) = 0;
+		virtual bool SetTrigger(Entity animator, std::string_view parameter) = 0;
+		virtual bool ResetTrigger(Entity animator, std::string_view parameter) = 0;
+		// The animator's speed (AnimatorComponent::Speed, which the call writes).
+		virtual bool SetSpeed(Entity animator, float speed) = 0;
+
+		// The state the animator is in: the target of the latest transition or command, also one waiting for the controller to
+		// load (an empty name while it plays a clip directly, or before it plays); nothing for entities without an animator.
+		virtual std::optional<std::string> GetCurrentState(Entity animator) = 0;
+		// How far the state is: its time over its clip's duration, counting loops.
+		virtual float GetNormalizedTime(Entity animator) = 0;
+		virtual bool IsInTransition(Entity animator) = 0;
+		// A joint's world transform in the animator's current pose (attach things to a hand); nothing without a pose or for a
+		// joint the skeleton does not have.
+		virtual std::optional<glm::mat4> GetJointTransform(Entity animator, std::string_view joint) = 0;
+	};
+
+	// An event of an animation controller's state that the playhead passed (AnimationEvent): dispatched on the main thread
+	// after the animators were evaluated, animator by animator, each animator's in the order they happened.
+	struct AnimationEventInfo
+	{
+		Entity Animator;
+		UUID AnimatorID = UUID::Null();
+		std::string_view Name;  // Valid during the call
+		std::string_view State;
+		float Time = 0.0f;      // The event's time in its clip
+	};
+
+	using AnimationEventCallback = std::function<void(const AnimationEventInfo&)>;
+	using AnimationEventListenerID = uint64_t;
+
+	// The animation events of a playing scene (the Animation module's system). Listeners added while events are dispatched
+	// receive the next update's; a removed one is not called again. Listeners may use the whole scene and the other services.
+	class IAnimationEventSource
+	{
+	public:
+		virtual ~IAnimationEventSource() = default;
+
+		virtual AnimationEventListenerID AddAnimationEventListener(AnimationEventCallback callback) = 0;
+		virtual bool RemoveAnimationEventListener(AnimationEventListenerID id) = 0;
 	};
 
 	// The engine's audio output (AudioEngine), which outlives every scene: an engine service (Core/EngineServices.h) the

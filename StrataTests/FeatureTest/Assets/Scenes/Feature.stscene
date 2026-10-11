@@ -2231,6 +2231,16 @@
 			},
 			{
 				"Components": {
+					"Animator": {
+						"ApplyRootMotion": false,
+						"Clip": "149C5DE55254DA1F",
+						"Controller": "F7A000000000000C",
+						"CullingMode": "AlwaysAnimate",
+						"Loop": true,
+						"PlayOnStart": false,
+						"Skeleton": "03B1B955BE45291A",
+						"Speed": 1
+					},
 					"Name": {
 						"Name": "Arm Rig"
 					},
@@ -2289,6 +2299,140 @@
 				},
 				"ID": "F7E0000000000061",
 				"Parent": "F7E0000000000060"
+			},
+			{
+				"Components": {
+					"AttachToJoint": {
+						"Animator": "F7E0000000000060",
+						"Joint": "Wrist"
+					},
+					"Name": {
+						"Name": "Arm Tip"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							1,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000062",
+				"Parent": "F7E0000000000060"
+			},
+			{
+				"Components": {
+					"MeshRenderer": {
+						"CastShadows": true,
+						"Material": "0000000000000000",
+						"Mesh": "0000000000000001"
+					},
+					"Name": {
+						"Name": "Tip Marker"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							0.15,
+							0.15,
+							0.15
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000065",
+				"Parent": "F7E0000000000062"
+			},
+			{
+				"Components": {
+					"Animator": {
+						"ApplyRootMotion": true,
+						"Clip": "B24808E5B27B99CD",
+						"Controller": "0000000000000000",
+						"CullingMode": "WhenVisible",
+						"Loop": false,
+						"PlayOnStart": true,
+						"Skeleton": "03B1B955BE45291A",
+						"Speed": 0.5
+					},
+					"Name": {
+						"Name": "Swing Rig"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							-3,
+							0,
+							4
+						]
+					}
+				},
+				"ID": "F7E0000000000063"
+			},
+			{
+				"Components": {
+					"MeshRenderer": {
+						"CastShadows": true,
+						"Material": "0000000000000000",
+						"Mesh": "36299E7DAECD8FA4"
+					},
+					"Name": {
+						"Name": "Swing Arm"
+					},
+					"Skin": {
+						"Animator": "F7E0000000000063"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000064",
+				"Parent": "F7E0000000000063"
 			},
 			{
 				"Components": {

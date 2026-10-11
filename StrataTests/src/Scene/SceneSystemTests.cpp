@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Strata/Animation/AnimationSystem.h"
 #include "Strata/Audio/AudioSystem.h"
 #include "Strata/Core/Log.h"
 #include "Strata/Physics/PhysicsSystem.h"
@@ -94,18 +95,25 @@ namespace
 
 TEST_SUITE("Scene.Systems")
 {
-	TEST_CASE("The built-in systems update in the order Scripting, Physics, Audio")
+	TEST_CASE("The built-in systems update in the order Scripting, Animation, Physics, Audio")
 	{
-		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Physics", "Audio" });
+		// Animation runs after the scripts (which drive animators) and before physics (root motion moves bodies before the
+		// step).
+		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Animation", "Physics", "Audio" });
 
 		const std::vector<SceneSystemDescriptor>& descriptors = SceneSystemRegistry::GetAll();
-		REQUIRE(descriptors.size() == 3);
+		REQUIRE(descriptors.size() == 4);
 		CHECK(descriptors[0].After.empty());
 		CHECK(descriptors[1].After == std::vector<std::string> { "Scripting" });
-		CHECK(descriptors[2].After == std::vector<std::string> { "Physics" });
+		CHECK(descriptors[1].Before == std::vector<std::string> { "Physics" });
+		CHECK(descriptors[2].After == std::vector<std::string> { "Scripting" });
+		CHECK(descriptors[3].After == std::vector<std::string> { "Physics" });
 		CHECK(descriptors[0].Type == entt::type_id<ScriptSystem>().hash());
-		CHECK(descriptors[1].Type == entt::type_id<PhysicsSystem>().hash());
-		CHECK(descriptors[2].Type == entt::type_id<AudioSystem>().hash());
+		CHECK(descriptors[1].Type == entt::type_id<AnimationSystem>().hash());
+		CHECK(descriptors[2].Type == entt::type_id<PhysicsSystem>().hash());
+		CHECK(descriptors[3].Type == entt::type_id<AudioSystem>().hash());
+		CHECK(descriptors[1].ProfileStage == "Scene.Animation");
+		CHECK_FALSE(descriptors[1].RunsInSimulateMode);
 	}
 
 	TEST_CASE("After and Before are honored, and registration order decides the rest")
@@ -118,7 +126,7 @@ TEST_SUITE("Scene.Systems")
 		REQUIRE(systems.Register(MakeRecording("TestD")));
 
 		// TestB goes before TestA, TestC between TestA and Audio; unconstrained choices follow registration order.
-		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Physics", "TestB", "TestA", "TestC", "Audio", "TestD" });
+		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Animation", "Physics", "TestB", "TestA", "TestC", "Audio", "TestD" });
 
 		{
 			Scene scene;
@@ -131,9 +139,9 @@ TEST_SUITE("Scene.Systems")
 		// A system registered again with the same name replaces the old one and counts as registered last: TestA stays,
 		// held between TestB and TestC; TestB, without its constraint now, follows every other system.
 		REQUIRE(SceneSystemRegistry::Register(MakeRecording("TestA")));
-		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Physics", "TestB", "TestA", "TestC", "Audio", "TestD" });
+		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Animation", "Physics", "TestB", "TestA", "TestC", "Audio", "TestD" });
 		REQUIRE(SceneSystemRegistry::Register(MakeRecording("TestB")));
-		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Physics", "TestA", "TestC", "Audio", "TestD", "TestB" });
+		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Animation", "Physics", "TestA", "TestC", "Audio", "TestD", "TestB" });
 	}
 
 	TEST_CASE("A system moves ahead of earlier registered ones only as far as its constraints require")
@@ -144,9 +152,9 @@ TEST_SUITE("Scene.Systems")
 		// a system registered after it has to run before one of them.
 		REQUIRE(systems.Register(MakeRecording("CameraFollow")));
 		REQUIRE(systems.Register(MakeRecording("Wind", {}, { "Physics" })));
-		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Wind", "Physics", "Audio", "CameraFollow" });
+		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Animation", "Wind", "Physics", "Audio", "CameraFollow" });
 		REQUIRE(systems.Register(MakeRecording("EarlyInput", {}, { "Scripting" })));
-		CHECK(GetSystemNames() == std::vector<std::string> { "EarlyInput", "Scripting", "Wind", "Physics", "Audio", "CameraFollow" });
+		CHECK(GetSystemNames() == std::vector<std::string> { "EarlyInput", "Scripting", "Animation", "Wind", "Physics", "Audio", "CameraFollow" });
 
 		{
 			Scene scene;
