@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Audio/AudioTestUtils.h"
 #include "Editor/HarnessEditor.h"
 #include "Editor/ImGuiHarness.h"
 #include "EditorLayer.h"
@@ -1710,5 +1711,34 @@ TEST_SUITE("Editor.UI.AssetInspector")
 		const std::optional<UI::ItemProbe::Item> play = UI::ItemProbe::Find("AssetInspector.Audio.Play");
 		REQUIRE(play);
 		CHECK(play->Enabled == AudioEngine::IsInitialized());
+	}
+
+	TEST_CASE("Play in an audio clip's Asset tab sounds in the mix, and Stop silences it")
+	{
+		// Audio output without a device: the test pulls the mix (an editor's application advances it every frame).
+		ScopedAudioEngine engine;
+		REQUIRE(engine.Initialized);
+		AuthoringEditor editor({ ImVec2(1600.0f, 1200.0f), 1.0f }, WithFeatureProject("EditorAuthoringAudioPlay"));
+		EditorAssetManager* assets = editor.Context().GetAssetManager();
+		REQUIRE(assets);
+		const AssetHandle clip = assets->FindAssetByPath("Audio/Blip.wav");
+		REQUIRE(clip.IsValid());
+		editor.Run("selection.set", { { "asset", UUIDToJson(clip) } });
+		REQUIRE(editor.FramesUntil([]()
+		{
+			const std::optional<UI::ItemProbe::Item> button = UI::ItemProbe::Find("AssetInspector.Audio.Play");
+			return button && button->Enabled;
+		}));
+		CHECK(ComputeRms(Render(2400)) == 0.0f);
+
+		REQUIRE(editor.Click("AssetInspector.Audio.Play"));
+		CHECK(editor.FramesUntil([]() { return UI::ItemProbe::Find("AssetInspector.Audio.Stop").has_value(); }));
+		// The middle of the 0.1 s blip (an 880 Hz tone at 0.4) is loud.
+		Render(1200);
+		CHECK(ComputeRms(Render(1200)) > 0.2f);
+
+		REQUIRE(editor.Click("AssetInspector.Audio.Stop"));
+		CHECK(editor.FramesUntil([]() { return UI::ItemProbe::Find("AssetInspector.Audio.Play").has_value(); }));
+		CHECK(ComputeRms(Render(2400)) == 0.0f);
 	}
 }
