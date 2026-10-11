@@ -234,6 +234,20 @@ TEST_SUITE("Core.Platform")
 		CHECK(*later - *uptime >= 0.04);
 	}
 
+	TEST_CASE("A process opts out of execution-speed throttling where the system throttles it")
+	{
+		// In a process of its own, which starts with the system's default (this one opted out at startup, like applications).
+		const Process::RunResult result = Process::Run(HelperProcess({ "--strata-test-helper=execution-speed-throttling" }));
+		REQUIRE_MESSAGE(result.Started, result.Error);
+		CHECK(result.ExitCode == 0);
+		INFO(result.Output);
+#if defined(ST_PLATFORM_WINDOWS)
+		CHECK(result.Output.find("before=default requested=1 after=disabled") != std::string::npos);
+#else
+		CHECK(result.Output.find("before=unknown requested=1 after=unknown") != std::string::npos);
+#endif
+	}
+
 	TEST_CASE("The home directory is the user's own")
 	{
 		const std::optional<std::filesystem::path> home = Platform::FindHomeDirectory();

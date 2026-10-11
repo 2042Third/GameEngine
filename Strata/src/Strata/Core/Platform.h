@@ -120,6 +120,18 @@ namespace Strata
 		static bool SetCurrentThreadPriority(ThreadPriority priority);
 		// The calling thread's scheduling priority: BelowNormal if it is below what new threads get, else Normal.
 		static ThreadPriority GetCurrentThreadPriority();
+		// Asks the system to run the current process at full speed whatever the state of its windows. Windows 11 lowers the
+		// quality of service of processes whose windows are not in the foreground, covered or minimized (lower clocks, and
+		// on processors with performance and efficiency cores, the efficiency cores, where an editor frame of the
+		// reference machine takes 1.3 to 1.9 times as long); this opts the process out of that execution-speed power
+		// throttling (SetProcessInformation, ProcessPowerThrottling). Applications call it at startup: an editor or a game
+		// is interactive, and keeps playing a game, building or measuring while another window has the focus. Other
+		// systems have no such per-process setting: nothing to do there, returns true. Returns false if the system
+		// refused it.
+		static bool DisableExecutionSpeedThrottling();
+		// Whether the current process opted out of execution-speed power throttling (DisableExecutionSpeedThrottling), as
+		// the system reports it; nullopt where there is no such throttling (Linux, macOS) or the system does not tell.
+		static std::optional<bool> IsExecutionSpeedThrottlingDisabled();
 		static uint32_t GetProcessID();
 		// Whether a process with this id is running (false once it has exited, even while a handle keeps its id).
 		static bool IsProcessAlive(uint32_t processId);

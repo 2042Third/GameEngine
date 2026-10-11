@@ -5,6 +5,7 @@
 #include "Strata/Audio/AudioEngine.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/FrameProfiler.h"
+#include "Strata/Core/Platform.h"
 #include "Strata/Core/Profiling.h"
 #include "Strata/Core/Timer.h"
 #include "Strata/Engine/BuiltinModules.h"
@@ -28,6 +29,10 @@ namespace Strata
 		// Before anything uses a registry. Without options, so without the asset pipeline (shipped games); a no-op when the
 		// client registered the modules itself with its own options (the editor's asset pipeline).
 		Engine::RegisterBuiltinModules();
+
+		// Editors and games are interactive: they keep their speed while another window has the focus (Platform.h).
+		if (!Platform::DisableExecutionSpeedThrottling())
+			ST_CORE_WARN("The system did not exempt the process from power throttling: it may run slower while its windows are in the background");
 
 		if (!m_Specification.WorkingDirectory.empty())
 		{

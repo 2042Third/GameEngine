@@ -345,7 +345,11 @@ ComponentRegistry::Freeze
 ## Application and frame loop
 
 Startup (`Application::Application`, `Core/Application.cpp`): `Engine::RegisterBuiltinModules` (a no-op when the client
-registered the modules already), set the working directory, `JobSystem::Init`, create
+registered the modules already), opt the process out of execution-speed power throttling
+(`Platform::DisableExecutionSpeedThrottling`: Windows 11 otherwise runs processes whose windows are in the background or
+covered at a lower quality of service, on hybrid processors on the efficiency cores, where an editor frame takes 1.3 to
+1.9 times as long; the test runner does the same, so perf suites measure what applications get), set the working
+directory, `JobSystem::Init`, create
 the window unless headless, `Input::Reset`, create the graphics device, swapchain and `Renderer` when
 `EnableRenderer` is set (no usable device: exit code 1), `AudioEngine::Init` (the null device when headless), and push
 the `ImGuiLayer` overlay. The client's constructor then pushes its layer (`EditorLayer`, `RuntimeLayer`).

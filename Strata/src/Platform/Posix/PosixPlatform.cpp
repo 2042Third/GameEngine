@@ -514,6 +514,17 @@ namespace Strata
 #endif
 	}
 
+	bool Platform::DisableExecutionSpeedThrottling()
+	{
+		// Neither Linux nor macOS has a per-process execution-speed throttling setting to turn off.
+		return true;
+	}
+
+	std::optional<bool> Platform::IsExecutionSpeedThrottlingDisabled()
+	{
+		return std::nullopt;
+	}
+
 	uint32_t Platform::GetProcessID()
 	{
 		return static_cast<uint32_t>(getpid());

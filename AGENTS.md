@@ -136,8 +136,13 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   can fail one metric as well as many, and a failure in a run on a busy machine says nothing about the code: run the
   failing suite again on a quiet machine, where a regression stays over its budget in every attempt. The canary is a
   single-threaded workload: it shows a throttled or oversubscribed machine, and load on many cores usually leaves it
-  unchanged. `--wait-quiet <percent>` starts each run only once the machine is that quiet (machines shared with other
-  work; the perf tests alone keep the reference machine about 20% busy), and
+  unchanged. On the reference machine's hybrid processor the scheduler's placement of a process's main thread lasts and
+  shows in its measurements: an efficiency core makes an editor frame 1.3 to 1.9 times as long, the other hardware
+  thread of a core the graphics driver's busy thread runs on about 1.12 times. Applications and the test runner opt out
+  of Windows' execution-speed throttling (`Platform::DisableExecutionSpeedThrottling`), which otherwise moves processes
+  whose windows are in the background or covered to the efficiency cores. `--wait-quiet <percent>` starts each run
+  only once the machine is that quiet (machines shared with other work; the perf tests alone keep the reference machine
+  about 20% busy), and
   `--results <files>` reports on kept results files. Run it on the reference machine before merging changes to budgets
   or perf tests. GPU perf suites get the shared device
   without validation layers (the CTest sets `STRATA_TEST_GPU_VALIDATION=0`; `PerfGPU.Harness` fails without it)
