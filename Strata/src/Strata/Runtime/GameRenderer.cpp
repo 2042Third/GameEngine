@@ -21,6 +21,8 @@ namespace Strata
 	{
 		SceneRendererSpecification specification;
 		specification.DebugName = "Game";
+		// A game neither picks by pixel nor outlines a selection: no entity-ID buffer (a 32-bit target of the window's size).
+		specification.EntityIDs = false;
 		m_Renderer = CreateScope<SceneRenderer>(specification);
 
 		// The message frame is a scene of its own: centered screen-space text over a plain background.

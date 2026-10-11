@@ -1086,9 +1086,11 @@ and `AudioSystem`, the built-in "Audio" scene system.
   crafted-font tests.
 - Reading GPU data back: `TextureReadback` copies a texture region and reports when the GPU is done (poll `IsReady`
   once per frame, never wait in a frame); `Renderer::ReadTexture` is the blocking form for tests and tools. Picking
-  uses `SceneRenderer::ReadEntityIDAsync` and `GetEntityFromID`.
+  uses `SceneRenderer::ReadEntityIDAsync` and `GetEntityFromID`; a renderer made with
+  `SceneRendererSpecification::EntityIDs` off writes no entity-ID buffer (it picks nothing, and leaves selection
+  outlines and entity tints out with an error).
 - `GameRenderer` (`Runtime/`) draws a running game into the window's back buffer from the scene's primary camera, or a
-  message frame naming the problem when the scene has none.
+  message frame naming the problem when the scene has none; it writes no entity-ID buffer (games do not pick by pixel).
 - GPU tests of the scene renderer share `StrataTests/src/Renderer/SceneRendererTestUtils.h`. Verify that a
   new regression test fails without its fix before relying on it.
 

@@ -4,7 +4,8 @@
 #include "Include/Scene.glsl"
 
 // Depth prepass: writes depth, view-space normals (screen-space effects) and entity ids (picking). Alpha-masked
-// materials are tested here; the forward pass then shades only the visible surface.
+// materials are tested here; the forward pass then shades only the visible surface. With ST_NO_ENTITY_IDS (registered as
+// Scene/DepthPrepassNoEntityIDs.frag) it writes no entity ids, for renderers without an entity-ID buffer.
 
 layout(location = 0) in vec3 v_WorldPosition;
 layout(location = 1) in vec3 v_Normal;
@@ -13,7 +14,9 @@ layout(location = 3) in vec2 v_TexCoord;
 layout(location = 4) flat in uint v_InstanceIndex;
 
 layout(location = 0) out vec2 o_Normal;
+#ifndef ST_NO_ENTITY_IDS
 layout(location = 1) out uint o_EntityID;
+#endif
 
 void main()
 {
@@ -30,5 +33,7 @@ void main()
 	if (!gl_FrontFacing)
 		normal = -normal;
 	o_Normal = OctahedralEncode(normalize(mat3(u_Frame.View) * normal));
+#ifndef ST_NO_ENTITY_IDS
 	o_EntityID = instance.EntityID;
+#endif
 }

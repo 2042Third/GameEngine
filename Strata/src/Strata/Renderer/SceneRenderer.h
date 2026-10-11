@@ -71,6 +71,10 @@ namespace Strata
 		uint32_t MaxLightsPerCluster = 256;
 		uint32_t ShadowMapSize = 2048; // Resolution of each directional shadow cascade
 		uint32_t ShadowCascades = 4;   // 1-4
+		// The depth prepass writes the entity-ID buffer (a 32-bit render target of the viewport's size): picking (GetEntityAt,
+		// ReadEntityIDAsync), the selection outline and entity tints read it. Renderers that do none of these (games) turn it
+		// off; outlines and tints asked of them are then left out, with an error.
+		bool EntityIDs = true;
 
 		// Asset requests follow visibility: mesh renderers in the view request their mesh and materials at High priority
 		// when their projected size (bounding sphere diameter / viewport height) exceeds this fraction, at Normal priority
@@ -263,7 +267,7 @@ namespace Strata
 		nvrhi::ITexture* GetHDRTexture() const { return m_HDRTexture; }
 		nvrhi::ITexture* GetDepthTexture() const { return m_DepthTexture; }
 		nvrhi::ITexture* GetNormalTexture() const { return m_NormalTexture; }
-		nvrhi::ITexture* GetEntityIDTexture() const { return m_EntityIDTexture; }
+		nvrhi::ITexture* GetEntityIDTexture() const { return m_EntityIDTexture; } // Null without one (SceneRendererSpecification::EntityIDs)
 		nvrhi::ITexture* GetAmbientOcclusionTexture() const { return m_AOTexture; } // 1 = unoccluded
 		// Image-based lighting data of the current environment (null without one); the BRDF lookup table always exists.
 		nvrhi::ITexture* GetEnvironmentCube() const { return m_Environment.Cube; }
@@ -273,11 +277,13 @@ namespace Strata
 
 		nvrhi::ITexture* GetBloomTexture() const { return m_BloomTexture; } // Level 0 of the bloom chain (half resolution)
 
-		// Entity visible at a pixel of the last rendered frame (invalid when none, or when no frame was rendered since
-		// the last resize). Blocks until the GPU is done; meant for tests and tools (editors use ReadEntityIDAsync).
+		// Entity visible at a pixel of the last rendered frame (invalid when none, when no frame was rendered since the last
+		// resize, or without an entity-ID buffer). Blocks until the GPU is done; meant for tests and tools (editors use
+		// ReadEntityIDAsync).
 		Entity GetEntityAt(Scene& scene, uint32_t x, uint32_t y);
 		// Starts reading the entity ID at a pixel of the last rendered frame without waiting for the GPU. Null when no
-		// frame was rendered since the last resize, the pixel is outside the viewport or the copy cannot be made. Once
+		// frame was rendered since the last resize, the renderer writes no entity IDs, the pixel is outside the viewport or
+		// the copy cannot be made. Once
 		// the readback is ready, its single R32_UINT pixel resolves with GetEntityFromID (against the scene that was
 		// rendered: entities destroyed meanwhile resolve to an invalid entity).
 		Scope<TextureReadback> ReadEntityIDAsync(uint32_t x, uint32_t y);

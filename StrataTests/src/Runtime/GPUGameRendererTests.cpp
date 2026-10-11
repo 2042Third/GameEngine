@@ -115,13 +115,47 @@ TEST_SUITE("GPU.Runtime.GameRenderer")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Games render without an entity-ID buffer, and without an output texture until they show text")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		WindowTarget target(gpu.GetNvrhiDevice());
+		Ref<Scene> scene = CreateRef<Scene>("Level");
+		AddNeutralPostProcess(*scene);
+		AddMesh(*scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(0.0f), "Cube");
+		scene->CreateEntity("Sun").AddComponent<DirectionalLightComponent>().Intensity = 2.0f;
+		Entity camera = scene->CreateEntity("Camera");
+		camera.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 0.0f, 3.0f);
+		camera.AddComponent<CameraComponent>().ClearColor = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+
+		// The image goes straight into the window: the targets a game does not use are never made.
+		GameRenderer renderer;
+		const glm::uvec2 size(c_Size, c_Size);
+		REQUIRE(renderer.Render(scene, target.Framebuffer, size));
+		CHECK(GetPixelRGBA8(target.Read(), c_Size / 2, c_Size / 2).r > 150); // The lit cube
+		CHECK(renderer.GetSceneRenderer().GetEntityIDTexture() == nullptr);
+		CHECK(renderer.GetSceneRenderer().GetOutputTexture() == nullptr);
+		CHECK(renderer.GetSceneRenderer().GetDepthTexture() != nullptr);
+
+		// A HUD is composed in the output texture first.
+		TextComponent& hud = scene->CreateEntity("Hud").AddComponent<TextComponent>();
+		hud.Text = "HUD";
+		hud.FontSize = 12.0f;
+		REQUIRE(renderer.Render(scene, target.Framebuffer, size));
+		CHECK(renderer.GetStats().Texts == 1);
+		CHECK(renderer.GetSceneRenderer().GetOutputTexture() != nullptr);
+		CHECK(renderer.GetSceneRenderer().GetEntityIDTexture() == nullptr);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Resizing the window right after a frame keeps the frame's render targets until the GPU is done")
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		SceneTestAssets assets;
-		// The message frame draws no mesh, so its frames only clear the entity IDs, which NVRHI's Vulkan backend does not
-		// keep alive for the GPU; the renderer recreates its targets at every new window size.
+		// The message frame draws no mesh, so its frames only clear the prepass targets, which NVRHI's Vulkan backend does
+		// not keep alive for the GPU; the renderer recreates its targets at every new window size.
 		Ref<Scene> scene = CreateRef<Scene>("Empty");
 		const glm::uvec2 sizes[] = { { 64, 48 }, { 80, 64 }, { 48, 72 } };
 		std::vector<WindowTarget> targets;

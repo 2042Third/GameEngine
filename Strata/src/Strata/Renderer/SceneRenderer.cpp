@@ -216,7 +216,7 @@ namespace Strata
 	{
 		ShaderLibrary& shaders = Renderer::GetShaderLibrary();
 		m_MeshVertexShader = shaders.Get("Scene/Mesh.vert");
-		m_PrepassPixelShader = shaders.Get("Scene/DepthPrepass.frag");
+		m_PrepassPixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/DepthPrepass.frag" : "Scene/DepthPrepassNoEntityIDs.frag");
 		m_ForwardPixelShader = shaders.Get("Scene/Forward.frag");
 		m_ForwardTransparentPixelShader = shaders.Get("Scene/ForwardTransparent.frag");
 		m_FullscreenVertexShader = shaders.Get("PostProcess/Fullscreen.vert");
@@ -1051,7 +1051,8 @@ namespace Strata
 
 		m_DepthTexture = CreateRenderTarget(m_Device, width, height, c_DepthFormat, name + ".Depth", true);
 		m_NormalTexture = CreateRenderTarget(m_Device, width, height, c_NormalFormat, name + ".Normals", false);
-		m_EntityIDTexture = CreateRenderTarget(m_Device, width, height, c_EntityIDFormat, name + ".EntityIDs", false);
+		if (m_Specification.EntityIDs)
+			m_EntityIDTexture = CreateRenderTarget(m_Device, width, height, c_EntityIDFormat, name + ".EntityIDs", false);
 		m_HDRTexture = CreateRenderTarget(m_Device, width, height, c_HDRFormat, name + ".HDR", false);
 		// Tone mapping writes here when FXAA follows.
 		m_LDRTexture = CreateRenderTarget(m_Device, width, height, c_OutputFormat, name + ".LDR", false);
@@ -1069,7 +1070,8 @@ namespace Strata
 		};
 		m_AORawTexture = createStorage(name + ".AORaw");
 		m_AOTexture = createStorage(name + ".AO");
-		if (!m_DepthTexture || !m_NormalTexture || !m_EntityIDTexture || !m_HDRTexture || !m_LDRTexture || !m_AORawTexture || !m_AOTexture)
+		if (!m_DepthTexture || !m_NormalTexture || (m_Specification.EntityIDs && !m_EntityIDTexture) || !m_HDRTexture || !m_LDRTexture || !m_AORawTexture
+			|| !m_AOTexture)
 			return fail("render targets");
 
 		auto createAOSet = [&](nvrhi::ITexture* input, nvrhi::ITexture* output)
@@ -1089,10 +1091,12 @@ namespace Strata
 		m_GTAOBindingSet = createAOSet(m_AOTexture, m_AORawTexture);
 		m_AOBlurBindingSet = createAOSet(m_AORawTexture, m_AOTexture);
 
-		m_PrepassFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc()
-			.addColorAttachment(m_NormalTexture)
-			.addColorAttachment(m_EntityIDTexture)
-			.setDepthAttachment(m_DepthTexture));
+		nvrhi::FramebufferDesc prepassDesc;
+		prepassDesc.addColorAttachment(m_NormalTexture);
+		if (m_EntityIDTexture)
+			prepassDesc.addColorAttachment(m_EntityIDTexture);
+		prepassDesc.setDepthAttachment(m_DepthTexture);
+		m_PrepassFramebuffer = m_Device->createFramebuffer(prepassDesc);
 		m_ForwardFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc()
 			.addColorAttachment(m_HDRTexture)
 			.setDepthAttachment(m_DepthTexture));
@@ -1652,7 +1656,8 @@ namespace Strata
 		const glm::vec4 clear = camera.ClearColor;
 		commandList->clearDepthStencilTexture(m_DepthTexture, nvrhi::AllSubresources, true, 0.0f, false, 0);
 		commandList->clearTextureFloat(m_NormalTexture, nvrhi::AllSubresources, nvrhi::Color(0.0f));
-		commandList->clearTextureUInt(m_EntityIDTexture, nvrhi::AllSubresources, 0);
+		if (m_EntityIDTexture)
+			commandList->clearTextureUInt(m_EntityIDTexture, nvrhi::AllSubresources, 0);
 		commandList->clearTextureFloat(m_HDRTexture, nvrhi::AllSubresources, nvrhi::Color(SRGBToLinear(clear.r), SRGBToLinear(clear.g), SRGBToLinear(clear.b), 1.0f));
 
 		commandList->beginMarker("Prepass");
@@ -1971,8 +1976,18 @@ namespace Strata
 		}
 		const nvrhi::Viewport viewport(static_cast<float>(m_ViewportSize.x), static_cast<float>(m_ViewportSize.y));
 
+		// Tints and the selection outline read the entity-ID buffer: without one (SceneRendererSpecification::EntityIDs) they
+		// are left out, and the other overlays drawn.
+		const bool entityIDs = m_EntityIDTexture != nullptr;
+		bool complete = true;
+		if (!entityIDs && (!options.EntityTints.empty() || !options.SelectedEntities.empty()))
+		{
+			m_Errors.Report("selection outlines and entity tints need the entity-ID buffer, which this renderer does not write");
+			complete = false;
+		}
+
 		// Tints color the scene itself: the other overlays go over them.
-		if (!options.EntityTints.empty() && !DrawEntityTints(commandList, scene, options.EntityTints, viewport))
+		if (entityIDs && !options.EntityTints.empty() && !DrawEntityTints(commandList, scene, options.EntityTints, viewport))
 			return false;
 
 		if (options.ShowGrid)
@@ -2038,7 +2053,7 @@ namespace Strata
 			m_SelectionIDs.erase(std::unique(m_SelectionIDs.begin(), m_SelectionIDs.end()), m_SelectionIDs.end());
 			m_SelectionUploaded = false;
 		}
-		if (!m_SelectionIDs.empty())
+		if (entityIDs && !m_SelectionIDs.empty())
 		{
 			bool recreated = false;
 			if (!EnsureBufferCapacity(m_SelectionBuffer, m_SelectionIDs.size(), sizeof(uint32_t), "Selection", recreated))
@@ -2083,7 +2098,7 @@ namespace Strata
 			DrawDebugLines(commandList, DebugDrawDepth::OnTop, testedVertices, onTopVertices);
 		if (drawText)
 			m_TextRenderer->Draw(commandList, m_OverlayFramebuffer, true); // The HUD goes over everything
-		return true;
+		return complete;
 	}
 
 	Entity SceneRenderer::GetEntityAt(Scene& scene, uint32_t x, uint32_t y)
