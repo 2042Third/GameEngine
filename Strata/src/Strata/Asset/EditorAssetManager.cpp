@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <mutex>
 #include <shared_mutex>
+#include <system_error>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -331,12 +332,14 @@ namespace Strata
 
 		// Copies files from outside the project into the asset directory (EditorAssetManager::ImportExternal, on an I/O job,
 		// and ImportExternalFile): records every file it writes in the item and every folder it creates, so that a failure or
-		// a cancellation can take them back. Uses no manager state.
+		// a cancellation can take them back. Uses no manager state. `claim` (optional) hears every file's relative path before
+		// the file is created, so that the manager's file watcher leaves files that are still being written alone.
 		class ExternalCopy
 		{
 		public:
-			ExternalCopy(const std::filesystem::path& assetDirectory, const std::atomic<bool>* cancel, std::vector<std::string>& createdFolders)
-				: m_AssetDirectory(assetDirectory), m_Cancel(cancel), m_CreatedFolders(createdFolders)
+			ExternalCopy(const std::filesystem::path& assetDirectory, const std::atomic<bool>* cancel, std::vector<std::string>& createdFolders,
+				std::function<void(const std::string& relativePath)> claim = {})
+				: m_AssetDirectory(assetDirectory), m_Cancel(cancel), m_CreatedFolders(createdFolders), m_Claim(std::move(claim))
 			{
 			}
 
@@ -524,18 +527,37 @@ namespace Strata
 					item.Error = "The import was cancelled";
 					return false;
 				}
-				if (!MakeFolder(to.parent_path()) || !FileSystem::Copy(from, to, false))
+				if (!MakeFolder(to.parent_path()))
 				{
 					item.Error = fmt::format("Could not copy '{}' into the project", FileSystem::ToUTF8(from));
 					return false;
 				}
-				item.Files.push_back(Relative(to));
+				const std::string relative = Relative(to);
+				if (m_Claim)
+					m_Claim(relative);
+				// Never over a file that was created since its name was picked; what a copy that failed otherwise left is no
+				// file of the project.
+				std::error_code error;
+				if (!std::filesystem::copy_file(from, to, std::filesystem::copy_options::none, error) || error)
+				{
+					if (error != std::errc::file_exists)
+					{
+						std::error_code removeError;
+						std::filesystem::remove(to, removeError);
+					}
+					// System messages come in the system's code page.
+					item.Error = fmt::format("Could not copy '{}' into the project: {}", FileSystem::ToUTF8(from),
+						error ? StringUtils::MakeValidUTF8(error.message()) : std::string("the copy failed"));
+					return false;
+				}
+				item.Files.push_back(relative);
 				return true;
 			}
 		private:
 			std::filesystem::path m_AssetDirectory;
 			const std::atomic<bool>* m_Cancel;
 			std::vector<std::string>& m_CreatedFolders;
+			std::function<void(const std::string& relativePath)> m_Claim;
 		};
 
 	}
@@ -552,6 +574,10 @@ namespace Strata
 		bool Done = false; // Guarded by Mutex, like what follows
 		std::vector<ExternalImportItem> Items;
 		std::vector<std::string> CreatedFolders;
+		// Every file the copy writes (relative to the asset directory), named before it is created: the file watcher leaves
+		// them alone until the import registers them, so it never imports a file that is still being written (a large copy
+		// can look settled to it).
+		std::unordered_set<std::string> Claimed;
 	};
 
 	// What the manager's background jobs use. A job keeps it alive (a Ref in its closure) and touches nothing else, so the
@@ -1964,11 +1990,26 @@ namespace Strata
 		// Removals last: a move arrives as a removal plus an addition, and the addition must find the asset at its old
 		// place to keep its handle and cached data; a file replaced by a "safe save" exists again by then.
 		std::vector<FileChange> changes = m_Watcher.PollChanges();
+		if (changes.empty())
+			return;
 		std::stable_partition(changes.begin(), changes.end(), [](const FileChange& change) { return change.Type != FileChangeType::Removed; });
+
+		// Files that imports of external files are still copying belong to those imports, which register them once they are
+		// complete (UpdateExternalImports, later in this update): a file that is still being written is never imported.
+		std::unordered_set<std::string> copying;
+		for (const Ref<ExternalImport>& import : m_ExternalImports)
+		{
+			if (import->m_State != ExternalImportState::Copying)
+				continue;
+			std::scoped_lock<std::mutex> lock(import->m_Task->Mutex);
+			copying.insert(import->m_Task->Claimed.begin(), import->m_Task->Claimed.end());
+		}
 
 		for (const FileChange& change : changes)
 		{
 			const std::filesystem::path path = change.Path.lexically_normal();
+			if (!copying.empty() && copying.contains(ToRelative(path)))
+				continue;
 			if (GetExtension(path) == c_MetaExtension)
 			{
 				std::filesystem::path sourcePath = path;
@@ -2469,13 +2510,39 @@ namespace Strata
 
 		Ref<ExternalImport> import = CreateRef<ExternalImport>();
 		import->m_Request = request;
+		import->m_TargetDirectory = directory;
 		import->m_Task = CreateRef<ExternalImport::CopyTask>();
+		// One copy at a time (StartNextExternalCopy): a copy picks free names for what it writes, and two copies beside each
+		// other could pick the same one. A copy that cannot start at once fails the call; one that waits for another starts
+		// with a later update.
+		const bool waits = std::any_of(m_ExternalImports.begin(), m_ExternalImports.end(), [](const Ref<ExternalImport>& other)
+		{
+			return other->m_State == ExternalImportState::Copying;
+		});
+		if (!waits)
+		{
+			std::string error;
+			if (!StartExternalCopy(*import, &error))
+				return fail(std::move(error));
+		}
+		m_ExternalImports.push_back(import);
+		MarkChanged();
+		return import;
+	}
+
+	bool EditorAssetManager::StartExternalCopy(ExternalImport& import, std::string* outError)
+	{
 		// The job uses only what it shares with the import: the manager may close while it copies.
-		auto copy = [task = import->m_Task, request, assetDirectory = m_Specification.AssetDirectory, directory]()
+		auto copy = [task = import.m_Task, request = import.m_Request, assetDirectory = m_Specification.AssetDirectory, directory = import.m_TargetDirectory]()
 		{
 			std::vector<ExternalImportItem> items;
 			std::vector<std::string> createdFolders;
-			ExternalCopy copier(assetDirectory, &task->Cancel, createdFolders);
+			auto claim = [&task](const std::string& relativePath)
+			{
+				std::scoped_lock<std::mutex> lock(task->Mutex);
+				task->Claimed.insert(relativePath);
+			};
+			ExternalCopy copier(assetDirectory, &task->Cancel, createdFolders, claim);
 			for (const std::filesystem::path& file : request.Files)
 				items.push_back(copier.CopyFile(file, directory));
 			for (const std::filesystem::path& folder : request.Directories)
@@ -2505,26 +2572,58 @@ namespace Strata
 		}
 		catch (const std::exception& exception)
 		{
-			return fail(fmt::format("Could not start copying: {}", exception.what()));
+			if (outError)
+				*outError = fmt::format("Could not start copying: {}", exception.what());
+			return false;
 		}
-		m_ExternalImports.push_back(import);
-		MarkChanged();
-		return import;
+		import.m_CopyStarted = true;
+		return true;
+	}
+
+	void EditorAssetManager::StartNextExternalCopy()
+	{
+		for (const Ref<ExternalImport>& import : m_ExternalImports)
+		{
+			if (import->m_State != ExternalImportState::Copying)
+				continue;
+			if (import->m_CopyStarted)
+				return; // Copying: the others wait for it
+			std::string error;
+			if (StartExternalCopy(*import, &error))
+				return;
+			// It ends with the error (UpdateExternalImports drops it), and the next one tries.
+			import->m_Error = std::move(error);
+			import->m_State = ExternalImportState::Finished;
+			MarkChanged();
+		}
 	}
 
 	void EditorAssetManager::UpdateExternalImports()
 	{
+		StartNextExternalCopy();
+		bool copied = false;
 		for (size_t index = 0; index < m_ExternalImports.size();)
 		{
 			ExternalImport& import = *m_ExternalImports[index];
+			if (import.m_State == ExternalImportState::Finished)
+			{
+				m_ExternalImports.erase(m_ExternalImports.begin() + static_cast<std::ptrdiff_t>(index));
+				continue;
+			}
 			if (import.m_State == ExternalImportState::Copying)
 			{
+				if (!import.m_CopyStarted)
+				{
+					index++;
+					continue;
+				}
 				std::scoped_lock<std::mutex> lock(import.m_Task->Mutex);
 				if (!import.m_Task->Done)
 				{
 					index++;
 					continue;
 				}
+				copied = true;
 				import.m_Items = std::move(import.m_Task->Items);
 				import.m_CreatedFolders = std::move(import.m_Task->CreatedFolders);
 				import.m_State = ExternalImportState::Importing;
@@ -2567,6 +2666,9 @@ namespace Strata
 			m_ExternalImports.erase(m_ExternalImports.begin() + static_cast<std::ptrdiff_t>(index));
 			MarkChanged();
 		}
+		// The next copy starts as soon as one is done, rather than a frame later.
+		if (copied)
+			StartNextExternalCopy();
 	}
 
 	void EditorAssetManager::FinishExternalImport(ExternalImport& import)

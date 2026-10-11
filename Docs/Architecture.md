@@ -689,18 +689,23 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   I/O job copies the files (`ExternalCopy`, which uses no manager state) and `Update` registers what it copied
   (`RegisterAddedFile`, with the copied `.meta` files' handles where they are free) and queues their imports as
   background jobs like re-imports; the import is `Finished` once every asset it brought is imported, and the command,
-  deferred, answers then. A file goes into the target folder (" (n)" added when its name is taken); the files its
-  importer reads besides it (`AssetImporter::FindExternalFiles`: a glTF model's buffer and image URIs, parsed by cgltf
-  without loading) come with it, keeping their layout below their nearest common folder (at most two folders above the
-  file), in a new folder named after it, so `ReadImportDependency` finds them inside the asset directory. URLs and
-  absolute paths are refused. A folder goes there with its tree: its asset files, their `.meta` files and the files its
-  models read inside it (hidden folders, links and other files stay out). An item whose import fails is removed again
-  (`RollBackExternalFiles`: its files, `.meta` files and the folders the copy made; for a folder, only the assets that
-  failed) unless `KeepOnFailure`; the failure is logged once (by `ApplyImportOutcome`) and the command fails with the
-  items in its error's data. Importers' messages, which third-party decoders may fill with bytes of the file, are made
-  valid UTF-8 (`StringUtils::MakeValidUTF8`) before they reach records, logs and results. Closing the project ends an
-  import: a copy that has not finished removes what it copied. `ImportExternalFile` copies the same way and imports on
-  the calling thread (tools, tests).
+  deferred, answers then. Copies run one at a time in the order of the calls (`StartNextExternalCopy`), so two never pick
+  the same free name, and a copy never writes over a file (`std::filesystem::copy_options::none`; what a failed copy left
+  is removed). The file watcher leaves the files of a copy alone until `Update` registers them complete: the copy names
+  each file before it creates it (`CopyTask::Claimed`), because a large file still being written can look settled to the
+  watcher (its directory entry changes only when the copy closes it) and would be imported half written. A file goes into
+  the target folder (" (n)" added when its name is taken); the files its importer reads besides it
+  (`AssetImporter::FindExternalFiles`: a glTF model's buffer and image URIs, parsed by cgltf without loading) come with
+  it, keeping their layout below their nearest common folder (at most two folders above the file), in a new folder named
+  after it, so `ReadImportDependency` finds them inside the asset directory. URLs and absolute paths are refused. A
+  folder goes there with its tree: its asset files, their `.meta` files and the files its models read inside it (hidden
+  folders, links and other files stay out). An item whose import fails is removed again (`RollBackExternalFiles`: its
+  files, `.meta` files and the folders the copy made; for a folder, only the assets that failed) unless
+  `KeepOnFailure`; the failure is logged once (by `ApplyImportOutcome`) and the command fails with the items in its
+  error's data. Importers' messages, which third-party decoders may fill with bytes of the file, are made valid UTF-8
+  (`StringUtils::MakeValidUTF8`) before they reach records, logs and results. Closing the project ends an import: a copy
+  that has not finished removes what it copied. `ImportExternalFile` copies the same way and imports on the calling
+  thread (tools, tests).
 - **Cancelling imports.** Nothing in the editor waits for a background import. Each is a `BackgroundJob` with a
   cancellation flag, the importer's `ImportContext::Cancel`: importers check it as they go (the texture cooker per block
   of a compressed level and between mip levels, the texture importer around decoding, the glTF importer between a

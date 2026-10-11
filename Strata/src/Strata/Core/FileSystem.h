@@ -34,6 +34,7 @@ namespace Strata
 		static bool CreateDirectories(const std::filesystem::path& path);
 		static bool Remove(const std::filesystem::path& path); // Files, or directories recursively
 		static bool Rename(const std::filesystem::path& from, const std::filesystem::path& to);
+		// Copies a file, creating the destination's folders. Without `overwrite` it fails when `to` exists (and leaves it).
 		static bool Copy(const std::filesystem::path& from, const std::filesystem::path& to, bool overwrite = true);
 		// Copies the directories and regular files below `from` into `to` (created if needed), overwriting files. Fails, with
 		// a description in outError, when an entry cannot be copied (e.g. a directory is in the way of a file); entries

@@ -113,8 +113,10 @@ namespace Strata
 		struct CopyTask;
 
 		ExternalImportRequest m_Request;
+		std::filesystem::path m_TargetDirectory; // Absolute
 		std::string m_Error;
 		ExternalImportState m_State = ExternalImportState::Copying;
+		bool m_CopyStarted = false; // Its copy job was submitted (copies run one at a time)
 		std::vector<ExternalImportItem> m_Items;
 		std::vector<std::string> m_CreatedFolders; // Folders the copy created, relative, parents first
 		Ref<CopyTask> m_Task;
@@ -240,8 +242,9 @@ namespace Strata
 		// folder named after it; they may lie at most two folders above it. A folder goes there with its tree: its asset files,
 		// their .meta files when they have them (handles that are taken get new ones) and the files models in it read inside
 		// it. An item whose import fails is removed again (its files and .meta files; for a folder, the assets that failed)
-		// unless KeepOnFailure; its error stays in the item. Fails at once (null) for a target outside the asset directory and
-		// once closed. Closing ends it: a copy that has not finished removes what it copied.
+		// unless KeepOnFailure; its error stays in the item. Copies run one at a time, in the order of the calls, and the file
+		// watcher leaves the files of a copy alone until the import registers them complete. Fails at once (null) for a target
+		// outside the asset directory and once closed. Closing ends it: a copy that has not finished removes what it copied.
 		Ref<ExternalImport> ImportExternal(const ExternalImportRequest& request, std::string* outError = nullptr);
 		// Imports of external files that have not finished (ImportExternal).
 		uint32_t GetExternalImportCount() const { return static_cast<uint32_t>(m_ExternalImports.size()); }
@@ -503,8 +506,13 @@ namespace Strata
 		// Registers a file that the editor put into the asset directory (a restore, a copy) and takes its import from the cache
 		// when it is current there, else queues it. Returns its handle (null when it is no asset).
 		AssetHandle RegisterAddedFile(const std::filesystem::path& absolutePath, bool queueImport);
-		// Advances the imports of external files (ImportExternal): registers what a finished copy brought, and ends imports
-		// whose assets are imported.
+		// Submits the copy job of an import of external files. False (outError says why) when the job cannot be queued.
+		bool StartExternalCopy(ExternalImport& import, std::string* outError);
+		// Starts the copy of the first import that waits for one, unless a copy runs; an import whose copy cannot start ends
+		// with the error.
+		void StartNextExternalCopy();
+		// Advances the imports of external files (ImportExternal): starts waiting copies, registers what a finished copy
+		// brought, and ends imports whose assets are imported.
 		void UpdateExternalImports();
 		void FinishExternalImport(ExternalImport& import);
 		// Removes what an item copied (it was never the user's project: permanently), unregistering its assets.

@@ -25,7 +25,9 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace Strata;
@@ -129,6 +131,75 @@ namespace
 			s_Registered = true;
 		}
 	}
+
+	// Imports ".stheld" files as fonts (the embedded default font). Its files may name others (ReadsExternalFiles), and
+	// asking which waits at a gate the test holds: a folder import's copy asks right after copying such a file, so while the
+	// gate is closed the file lies complete in the project and the copy has not finished.
+	class HeldCopyImporter final : public AssetImporter
+	{
+	public:
+		static inline std::mutex s_Mutex;
+		static inline std::condition_variable s_Condition;
+		static inline bool s_GateOpen = true;
+		static inline uint32_t s_Waiting = 0;
+		static inline std::atomic<uint32_t> s_ImportCount = 0;
+
+		static void SetGate(bool open)
+		{
+			{
+				std::scoped_lock<std::mutex> lock(s_Mutex);
+				s_GateOpen = open;
+			}
+			s_Condition.notify_all();
+		}
+
+		static bool IsWaiting()
+		{
+			std::scoped_lock<std::mutex> lock(s_Mutex);
+			return s_Waiting > 0;
+		}
+
+		AssetType GetType() const override { return AssetType::Font; }
+		std::vector<std::string> GetExtensions() const override { return { ".stheld" }; }
+		uint32_t GetVersion() const override { return 1; }
+		bool ReadsExternalFiles() const override { return true; }
+
+		bool FindExternalFiles(std::span<const uint8_t>, std::vector<std::string>&, std::string*) const override
+		{
+			std::unique_lock<std::mutex> lock(s_Mutex);
+			s_Waiting++;
+			s_Condition.wait_for(lock, std::chrono::seconds(60), []() { return s_GateOpen; });
+			s_Waiting--;
+			return true;
+		}
+
+		bool Import(const ImportContext&, ImportResult& result, std::string*) const override
+		{
+			s_ImportCount++;
+			result.Data = Font::GetDefault()->GetData();
+			return true;
+		}
+	};
+
+	void RegisterHeldCopyImporter()
+	{
+		static bool s_Registered = false;
+		if (!s_Registered)
+		{
+			AssetImporterRegistry::Register(CreateScope<HeldCopyImporter>());
+			s_Registered = true;
+		}
+	}
+
+	// Opens the held copy's gate when the test ends, also when it fails, before the job system shuts down (declare it after
+	// the jobs).
+	struct OpenHeldCopyAtEnd
+	{
+		~OpenHeldCopyAtEnd()
+		{
+			HeldCopyImporter::SetGate(true);
+		}
+	};
 
 	// Opens the gate when the test ends, also when it fails, before the job system shuts down (declare it after the jobs).
 	struct OpenGateAtEnd
@@ -238,12 +309,14 @@ namespace
 	// An editor with a project, whose frames (context update, then the runner) a test runs one at a time.
 	struct ImportHarness
 	{
-		EditorContext Context { EditorContextSpecification { false } };
+		EditorContext Context;
 		EditorCommandRegistry Commands;
 		EditorCommandRunner Runner;
 		std::filesystem::path Assets;
 
-		explicit ImportHarness(const std::string& name)
+		// `watchFiles`: the editor's file watcher runs, as in the editor (tests leave it off: its timing is the file system's).
+		explicit ImportHarness(const std::string& name, bool watchFiles = false)
+			: Context(EditorContextSpecification { watchFiles })
 		{
 			const std::filesystem::path directory = Tests::CreateTemporaryDirectory(name) / "Game";
 			Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
@@ -921,5 +994,62 @@ TEST_SUITE("Editor.Import")
 		const EditorCommandResult closed = harness.Finish(pending);
 		CHECK_FALSE(closed.Success);
 		CHECK(closed.Error.find("closed") != std::string::npos);
+	}
+
+	TEST_CASE("Imports copy one at a time, and the file watcher leaves what they copy alone until it is complete")
+	{
+		// The editor watches its asset directory. A large file being copied can look settled to the watcher (its directory
+		// entry changes only when the copy closes it), which would import it half written; and two copies beside each other
+		// could pick the same free name.
+		RegisterGatedImporter();
+		RegisterHeldCopyImporter();
+		Tests::ScopedJobSystem jobs(2, 2);
+		OpenHeldCopyAtEnd gate;
+		ImportHarness harness("EditorImportWatched", true);
+		EditorAssetManager& assets = *harness.Context.GetAssetManager();
+		const std::filesystem::path pack = harness.Assets.parent_path() / "Pack";
+		REQUIRE(FileSystem::WriteBytes(pack / "A.stheld", std::vector<uint8_t> { 'a' }));
+		REQUIRE(FileSystem::WriteBytes(pack / "B.stheld", std::vector<uint8_t> { 'b' }));
+		const std::filesystem::path single = harness.Assets.parent_path() / "Single" / "D.stgated";
+		REQUIRE(FileSystem::WriteBytes(single, std::vector<uint8_t> { 'd' }));
+		const uint32_t imports = HeldCopyImporter::s_ImportCount;
+
+		// The folder's copy stops after A, which lies complete in the project; the second import waits for that copy.
+		HeldCopyImporter::SetGate(false);
+		auto folder = harness.Start("asset.import", { { "directories", { FileSystem::ToUTF8(pack) } }, { "directory", "Imported" } });
+		auto file = harness.Start("asset.import", { { "file", FileSystem::ToUTF8(single) }, { "directory", "Imported" } });
+		REQUIRE(Tests::WaitUntil([&]()
+		{
+			harness.Frame();
+			return HeldCopyImporter::IsWaiting();
+		}, std::chrono::seconds(20)));
+		const std::filesystem::path copied = harness.Assets / "Imported" / "Pack" / "A.stheld";
+		REQUIRE(FileSystem::IsRegularFile(copied));
+
+		// A file written into the project after it: once the watcher reported that one, it has reported A too.
+		const std::filesystem::path control = harness.Assets / "Control.stgated";
+		REQUIRE(FileSystem::WriteBytes(control, std::vector<uint8_t> { 'c' }));
+		REQUIRE(Tests::WaitUntil([&]()
+		{
+			harness.Frame();
+			return assets.FindAssetByAbsolutePath(control).IsValid();
+		}, std::chrono::seconds(20)));
+		CHECK_FALSE(assets.FindAssetByAbsolutePath(copied).IsValid());
+		CHECK_FALSE(FileSystem::Exists(harness.Assets / "Imported" / "D.stgated"));
+		CHECK_FALSE(folder->has_value());
+		CHECK_FALSE(file->has_value());
+
+		// The copies go on: each file becomes an asset once, imported once.
+		HeldCopyImporter::SetGate(true);
+		EditorCommandResult folderResult = harness.Finish(folder);
+		INFO(folderResult.Error);
+		REQUIRE(folderResult.Success);
+		CHECK(folderResult.Value["items"][0]["assets"].size() == 2);
+		EditorCommandResult fileResult = harness.Finish(file);
+		INFO(fileResult.Error);
+		REQUIRE(fileResult.Success);
+		CHECK(fileResult.Value["path"] == "Imported/D.stgated");
+		CHECK(assets.FindAssetByAbsolutePath(copied).IsValid());
+		CHECK(HeldCopyImporter::s_ImportCount == imports + 2);
 	}
 }

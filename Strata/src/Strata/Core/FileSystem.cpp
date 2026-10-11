@@ -151,9 +151,10 @@ namespace Strata
 		if (to.has_parent_path())
 			std::filesystem::create_directories(to.parent_path(), error);
 
-		const auto options = overwrite ? std::filesystem::copy_options::overwrite_existing : std::filesystem::copy_options::skip_existing;
-		std::filesystem::copy_file(from, to, options, error);
-		return !error;
+		// Without overwrite an existing file fails the copy (copy_options::none), rather than being kept as if it were the copy.
+		const auto options = overwrite ? std::filesystem::copy_options::overwrite_existing : std::filesystem::copy_options::none;
+		const bool copied = std::filesystem::copy_file(from, to, options, error);
+		return copied && !error;
 	}
 
 	namespace
