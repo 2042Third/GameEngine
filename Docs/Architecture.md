@@ -1007,7 +1007,9 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   Then it exports the stress game (a `.stgame` manifest next to the pack) and runs `StrataRuntime` in a window for 600
   frames from the world's overview camera with `--perf-log` and the evicting sweep's texture budget, again confirmed by
   up to two more runs: every log must have a row per frame, and `Budgets.json` judges the slowest frame's
-  `Assets.Finalize` stage. `Perf.TextureCook` (`TextureCookPerfTests.cpp`) imports the same project cold (once per
+  `Assets.Finalize` stage. Last, the game runs with its own budgets (nothing evicted) in its manifest's 1280x720 window,
+  1920x1080 pixels on the reference machine's 150% display: the peak private memory its log ends with is the exported
+  game's own measure of texture cooking's 650 MB limit, which the all-resident sweep only stands in for. `Perf.TextureCook` (`TextureCookPerfTests.cpp`) imports the same project cold (once per
   attempt) and checks the import time, the stored sizes of its largest 2048x2048 texture, of its 4096x4096 texture and of
   all of them, and the pack size, and measures the BC7 encoder's time per block on one thread.
   `GPU.Assets.Streaming` runs the same sweep on a small stress project under the validation layers.
@@ -1443,7 +1445,7 @@ of the game's assets (the other budgets keep their defaults), and `--perf-log <c
 headless (`Runtime/FramePerfLog`, a frame profiler listener, so writing costs the measured frame nothing): the frame's
 work time and interval, each stage's milliseconds, the job threads' busy percentages and the asset manager's streaming
 numbers after the frame (loading, queued and in-flight loads, uploaded MB, finalization ms, resident MB per pool,
-evictions). A log that cannot be written fails the run (exit code 1).
+evictions) and the process's private memory with its peak so far (`PrivateMB`, `PeakPrivateMB`). A log that cannot be written fails the run (exit code 1).
 `GameRuntime::Create` loads the manifest, makes a
 `RuntimeAssetManager` on the pack active (with `GameRuntimeOptions::AssetBudgets` when given; the manifest's optional
 `PatchPacks` are mounted over it in order, and a missing one stops the game), loads the script module

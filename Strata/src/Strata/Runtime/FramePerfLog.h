@@ -24,6 +24,8 @@ namespace Strata
 	//   ResidentGpuBuffersMB, ResidentCpuMB, Evictions
 	//                                            the asset manager after the frame (AssetManagerStats; MB are 2^20 bytes,
 	//                                            empty without an asset manager)
+	//   PrivateMB, PeakPrivateMB                 the process's private memory after the frame and its peak so far
+	//                                            (Platform::GetProcessMemory; empty where the system does not report it)
 	// Rows are written as frames end; the file is complete once the log is closed.
 	class FramePerfLog
 	{

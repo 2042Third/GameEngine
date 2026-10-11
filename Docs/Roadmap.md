@@ -150,6 +150,12 @@ Open items and deferrals later waves own:
   walk every registered asset (`GetStats` keeps counts instead), which a world of many registered assets will feel
   (`world-partition`). Two caches keep assets between frames: `SceneRenderer`'s environment cache (the sky's map) and
   `TextRenderer`'s glyph atlases (their fonts).
+- Texture cooking's 650 MB limit for the exported stress game "at 1920x1080": with BC1 color `texture-cook-v2` measured
+  543-558 MB rendering 1920x1080 pixels and 658-659 MB in a 1920x1080 window on the 150% reference display (2880x1620
+  pixels); with BC7 color the review measured 623-631 MB and 729-751 MB. `PerfGPU.Streaming.RuntimePeakPrivateMemory`
+  now gates the game itself at 1920x1080 pixels (its 1280x720 window at 150%, its own budgets, about 73 MB of textures
+  resident from the overview camera): 642 MB against 650 MB, little room. Read as a 1920x1080 window at 150%, the
+  criterion fails by about 80-100 MB; which reading applies is still to be decided.
 - Editor: the Inspector reads every selected entity's values each frame, so 100,000 selected entities add about 8 ms to
   a frame (`Perf.Editor.SelectionFrame100kSelected`) until a cache follows component signals; idle editor frames of the
   generated 100,000- and 1,000,000-entity scenes cost 0.27-0.30 ms, about 0.04 ms more than before the rebuilt panels

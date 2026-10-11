@@ -3,6 +3,7 @@
 
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Core/Platform.h"
 
 #include <iterator>
 
@@ -59,7 +60,7 @@ namespace Strata
 		for (FrameStageID stage = 0; stage < log->m_StageCount; stage++)
 			log->m_Columns.push_back(profiler.GetStageName(stage));
 		for (const char* column : { "WorkerBusyPercent", "IOBusyPercent", "LoadingAssets", "QueuedLoads", "InFlightLoads", "InFlightMB", "UploadedMB",
-			"FinalizeMs", "ResidentGpuTexturesMB", "ResidentGpuBuffersMB", "ResidentCpuMB", "Evictions" })
+			"FinalizeMs", "ResidentGpuTexturesMB", "ResidentGpuBuffersMB", "ResidentCpuMB", "Evictions", "PrivateMB", "PeakPrivateMB" })
 		{
 			log->m_Columns.push_back(column);
 		}
@@ -106,6 +107,11 @@ namespace Strata
 		{
 			m_Line += ",,,,,,,,,,";
 		}
+		// What the process holds, for memory limits of whole games (a peak includes every frame before).
+		if (const std::optional<ProcessMemoryInfo> memory = Platform::GetProcessMemory())
+			fmt::format_to(out, ",{:.3f},{:.3f}", ToMB(memory->PrivateBytes), ToMB(memory->PeakPrivateBytes));
+		else
+			m_Line += ",,";
 		m_Line += '\n';
 
 		m_File.write(m_Line.data(), static_cast<std::streamsize>(m_Line.size()));

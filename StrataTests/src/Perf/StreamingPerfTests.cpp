@@ -67,6 +67,11 @@ namespace
 	// The exported game's slowest frame finalization (the Assets.Finalize stage of its perf log), one run per attempt: a
 	// maximum by nature too (below the same limit of 8 ms).
 	constexpr const char* c_RuntimeMaxFinalizeStage = "PerfGPU.Streaming.RuntimeMaxFinalizeStage";
+	// The exported game's peak private memory (the PeakPrivateMB its perf log ends with), run with the game's own budgets
+	// (nothing evicted: every texture its camera shows stays) in its manifest's 1280x720 window, which is 1920x1080 pixels on
+	// the reference machine's 150% display: the game itself at the resolution of texture cooking's limit (650 MB), which the
+	// sweeps above only stand in for. A maximum by nature, one run per attempt.
+	constexpr const char* c_RuntimePeakPrivateMemory = "PerfGPU.Streaming.RuntimePeakPrivateMemory";
 	// The all-resident sweep's texture budget: far more than the 111.8 MB of textures, so nothing is evicted.
 	constexpr uint64_t c_AllResidentTextureBudget = 1000 * c_MB;
 
@@ -142,16 +147,23 @@ namespace
 		double MaxFinalizeMs = 0.0;
 		size_t SlowestFrame = 0;
 		double UploadedMB = 0.0;
+		double PeakPrivateMB = 0.0; // Of 10^6 bytes, like the sweeps' memory metrics
+		double ResidentTexturesMB = 0.0; // At the end
 	};
 
-	// Runs the exported game for c_RuntimeFrames frames in a window with the stress test's texture budget and reads its perf
-	// log, which must have a row per frame.
-	RuntimePerfLogResult RunExportedGame(const std::filesystem::path& manifest, const std::filesystem::path& perfLog)
+	// Runs the exported game for c_RuntimeFrames frames in a window, with the stress test's texture budget (or the game's own
+	// budgets) and reads its perf log, which must have a row per frame.
+	RuntimePerfLogResult RunExportedGame(const std::filesystem::path& manifest, const std::filesystem::path& perfLog, bool textureBudget = true)
 	{
 		ProcessSpecification runtime;
 		runtime.Executable = GetRuntimePath();
-		runtime.Arguments = { "--game", FileSystem::ToUTF8(manifest), "--windowed", "--frames", std::to_string(c_RuntimeFrames), "--asset-budget-mb",
-			std::to_string(c_TextureBudget / (1024 * 1024)), "--perf-log", FileSystem::ToUTF8(perfLog) };
+		runtime.Arguments = { "--game", FileSystem::ToUTF8(manifest), "--windowed", "--frames", std::to_string(c_RuntimeFrames), "--perf-log",
+			FileSystem::ToUTF8(perfLog) };
+		if (textureBudget)
+		{
+			runtime.Arguments.push_back("--asset-budget-mb");
+			runtime.Arguments.push_back(std::to_string(c_TextureBudget / (1024 * 1024)));
+		}
 		const Process::RunResult run = Process::Run(runtime, std::chrono::minutes(5));
 		INFO("Runtime output:\n", run.Output);
 		REQUIRE_MESSAGE(run.Started, run.Error);
@@ -164,8 +176,12 @@ namespace
 		REQUIRE_MESSAGE(ValidatePerfLog(*table, c_RuntimeFrames, error), error); // One row per frame
 		const std::optional<size_t> finalizeColumn = table->FindColumn("Assets.Finalize");
 		const std::optional<size_t> uploadedColumn = table->FindColumn("UploadedMB");
+		const std::optional<size_t> peakPrivateColumn = table->FindColumn("PeakPrivateMB");
+		const std::optional<size_t> texturesColumn = table->FindColumn("ResidentGpuTexturesMB");
 		REQUIRE(finalizeColumn);
 		REQUIRE(uploadedColumn);
+		REQUIRE(peakPrivateColumn);
+		REQUIRE(texturesColumn);
 		RuntimePerfLogResult result;
 		result.Frames = table->Rows.size();
 		for (size_t row = 0; row < table->Rows.size(); row++)
@@ -178,6 +194,9 @@ namespace
 			}
 			result.UploadedMB += table->Rows[row][*uploadedColumn];
 		}
+		// The log's MB are 2^20 bytes.
+		result.PeakPrivateMB = table->Rows.back()[*peakPrivateColumn] * 1024.0 * 1024.0 / c_MBDouble;
+		result.ResidentTexturesMB = table->Rows.back()[*texturesColumn] * 1024.0 * 1024.0 / c_MBDouble;
 		return result;
 	}
 
@@ -299,6 +318,16 @@ TEST_SUITE("PerfGPU.Streaming")
 				" ms (frame ", result.SlowestFrame, "), ", result.UploadedMB, " MB uploaded");
 			CHECK(result.UploadedMB > 0.0); // It streamed
 			return result.MaxFinalizeMs;
+		});
+		Perf::CheckBudgetConfirmed(c_RuntimePeakPrivateMemory, [&]
+		{
+			const uint32_t run = ++runtimeRuns;
+			CAPTURE(run);
+			const RuntimePerfLogResult result = RunExportedGame(manifestPath, directory / ("RuntimePerfLog" + std::to_string(run) + ".csv"), false);
+			MESSAGE("Exported stress game with its own budgets, run ", run, ": peak private memory ", result.PeakPrivateMB, " MB, ",
+				result.ResidentTexturesMB, " MB of textures resident at the end");
+			CHECK(result.ResidentTexturesMB > 0.0);
+			return result.PeakPrivateMB;
 		});
 	}
 }

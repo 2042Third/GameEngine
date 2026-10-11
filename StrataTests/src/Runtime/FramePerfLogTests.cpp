@@ -82,7 +82,10 @@ TEST_SUITE("Runtime.PerfLog")
 		const std::optional<size_t> queuedColumn = table->FindColumn("QueuedLoads");
 		const std::optional<size_t> texturesColumn = table->FindColumn("ResidentGpuTexturesMB");
 		const std::optional<size_t> evictionsColumn = table->FindColumn("Evictions");
+		const std::optional<size_t> privateColumn = table->FindColumn("PrivateMB");
+		const std::optional<size_t> peakPrivateColumn = table->FindColumn("PeakPrivateMB");
 		REQUIRE((customColumn && finalizeColumn && workColumn && intervalColumn && uploadedColumn && queuedColumn && texturesColumn && evictionsColumn));
+		REQUIRE((privateColumn && peakPrivateColumn));
 		for (size_t row = 0; row < table->Rows.size(); row++)
 		{
 			CAPTURE(row);
@@ -92,6 +95,11 @@ TEST_SUITE("Runtime.PerfLog")
 			CHECK(values[*intervalColumn] == doctest::Approx(row == 0 ? 0.0 : 16.0));
 			CHECK(values[*finalizeColumn] == doctest::Approx(1.5));
 			CHECK(values[*customColumn] == doctest::Approx(0.25));
+			// This process's memory, every row (a peak never goes down and is at least what is held).
+			CHECK(values[*privateColumn] > 0.0);
+			CHECK(values[*peakPrivateColumn] >= values[*privateColumn]);
+			if (row > 0)
+				CHECK(values[*peakPrivateColumn] >= table->Rows[row - 1][*peakPrivateColumn]);
 			if (row < 3)
 			{
 				CHECK(std::isnan(values[*uploadedColumn])); // No asset manager: empty
