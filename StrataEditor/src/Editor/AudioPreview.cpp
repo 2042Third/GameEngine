@@ -69,13 +69,14 @@ namespace Strata
 			m_WaveformClip = handle;
 			m_WaveformColumns = columns;
 			m_Waveform.reset();
-			// A job still running for the clip shown before finishes on its own; its result is dropped with it.
+			// A job still running for the clip shown before finishes on its own; its result is dropped with it. Decoding a long
+			// streamed clip takes long: a background job, which never takes the processors from the frame's work.
 			m_WaveformJob = std::make_shared<WaveformJob>();
 			JobSystem::Submit([job = m_WaveformJob, clip, columns]()
 			{
 				job->Result = ComputeWaveform(*clip, columns);
 				job->Done.store(true, std::memory_order_release);
-			}, JobPriority::Low);
+			}, JobPriority::Background);
 		}
 		if (m_WaveformJob && m_WaveformJob->Done.load(std::memory_order_acquire))
 		{
