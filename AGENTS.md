@@ -753,8 +753,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
     jobs`, jobs running or queued averaged over 60 frames) opens the Performance panel. Panels collect what the status bar
     shows about them in `OnUpdate`, which runs while they are closed. Widgets drawn every frame write tooltips that take
     work (formatted statistics) only while they show (`UI::IsTooltipDue`). `editor.showPanel {panel}` (registered by
-    `EditorLayer`, the only command of the window itself) opens a docked panel and brings it to the front, so agents can
-    show the person what they look at; it fails while the launcher shows. A panel asked for (`EditorPanelRegistry::Focus`)
+    `EditorLayer`, like `editor.showDialog {dialog: "export" | "newProject" | "openSample" | "about"}`, the commands of the
+    window itself) opens a docked panel and brings it to the front, so agents can show the person what they look at; it
+    fails while the launcher shows. A panel asked for (`EditorPanelRegistry::Focus`)
     stays open through a layout reset and the saved open states read at the first frame, and is asked for again until its
     tab shows. Glyphs a font lacks show as its fallback glyph: draw color swatches as rectangles (the monospaced font has no
     icons), and check panels with `ImGuiHarness::CountFallbackGlyphs`.
@@ -861,9 +862,12 @@ and `AudioSystem`, the built-in "Audio" scene system.
   without a command, so the export counts them (`editsOutsideCommands`) instead (the UI's undo and redo run their
   commands).
   `--frames N` stops after N frames (without saving the panel layout), `--screenshot out.png` captures
-  the last frame (viewport included), `--no-gpu` runs headless without a graphics device (export, asset processing),
+  the last frame (viewport included; with `--quit-after-commands`, the frame the script ended on; a screenshot that
+  cannot be saved fails the run), `--no-gpu` runs headless without a graphics device (export, asset processing),
   and `--quit-after-commands` closes the editor once the command script finished (for scripts of unknown length, e.g.
-  with `script.build`, whose duration no frame budget can bound). `--ui-scale <factor>` draws the UI at a fixed scale
+  with `script.build`, whose duration no frame budget can bound). `--help` and `--version` print and exit 0 before
+  anything starts (no log file, window or session); an argument the editor does not know, or an option without its value,
+  exits 3 with the usage (the table of arguments is `c_Arguments` in `EditorApplication.cpp`: add new ones there). `--ui-scale <factor>` draws the UI at a fixed scale
   instead of the display's (e.g. 1 to check it at 100% on a 150% display), `--layout <file>` keeps the panel layout in
   that file instead of the user's (`<user data>/Strata/EditorLayout.ini`), and `--imgui-demo` offers ImGui's demo window
   (Help menu) for UI work.
@@ -927,7 +931,11 @@ and `AudioSystem`, the built-in "Audio" scene system.
   name gets less than 14 text heights, and the overview stacks above the table where beside it the table would be too
   narrow even then.
 - Mutating commands report a `warning` in their result while the scene is playing: such changes apply
-  to the running copy and are discarded by `play.stop`. Unknown or missing parameters are errors.
+  to the running copy and are discarded by `play.stop`. Unknown or missing parameters are errors, and so are values out of
+  a property's range (`PropertyInfo::IsInRange`, checked by `CommandUtils::ApplyComponents` for `component.set`,
+  `component.add`, `entity.create` and `prefab.instantiate`, and by `material.set`/`material.create`; scene settings name
+  their ranges too): `InvalidParameters` naming the range, nothing changed. The inspector's widgets keep clamping as they
+  drag (`PropertyInfo::SetValue`).
 - **Viewport state** lives in the core: `EditorContext::GetViewport()` (`EditorViewport`) holds the editor camera
   (`EditorCamera`: a target that is also the orbit pivot, distance, yaw/pitch in degrees, FOV, clip planes, fly speed),
   the `ViewportSettings` (grid, selection outline, light/camera/collider shapes and whether colliders show for every

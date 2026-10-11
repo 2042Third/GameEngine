@@ -147,6 +147,8 @@ editor started with `--no-gpu` (use `--headless`):
 - **Component values** use the scene file format: `{"Transform": {"Translation": [0, 1, 0], "Rotation": [0, 90, 0],
   "Scale": [1, 1, 1]}}`. Rotations accept Euler degrees `[pitch, yaw, roll]` or a quaternion `[x, y, z, w]` (read
   back as a quaternion). Property names are case-insensitive. `component.get` shows the accepted format of every value.
+  Values outside a property's range (`component.list`, `material.get` describe the ranges) are refused with `-32602`
+  naming the range (`Text.FontSize must be between 1 and 1024, not 0.5`); nothing is clamped or changed.
 - **Undo**: every successful mutating command is one undo step (`edit.undo`, `edit.redo`, `edit.history`). Material
   edits are steps of the same history, but they save their file themselves, so they never mark the scene unsaved.
 - **Unsaved changes are never discarded silently**: `scene.open`, `scene.new`, `project.open`, `project.create`,
@@ -242,8 +244,9 @@ time), with `stageSum` (at most the frame), `untimed` (the rest of each frame) a
 `ioBusyPercent`, `backgroundBusyPercent` (imports, exports), `running`, `queued`): `{"expect": {"/stages/Scene.Scripts/p95Ms": {"max": 2}}}` gates one stage. The
 person at the editor sees the same in the Performance panel (click the frame pill) and the streaming numbers of
 `asset.stats` in the Streaming panel (click the assets pill); `editor.showPanel {"panel": "Streaming"}` (or
-`"Performance"`, `"Console"`, ...) brings one to the front for them, also as the first command of a script (it fails
-while no project is open: the editor then shows its launcher instead of panels).
+`"Performance"`, `"Console"`, `"Activity"`, ...) brings one to the front for them, also as the first command of a script
+(it fails while no project is open: the editor then shows its launcher instead of panels). `editor.showDialog {"dialog":
+"export" | "newProject" | "openSample" | "about"}` opens a dialog of the window the same way.
 
 **Play it (simulated input)**: while the game runs (`play.start`), the `input.*` commands press keys and buttons the way a
 player would; scripts see them through `Input::IsKeyDown/IsKeyPressed/IsKeyReleased` (also while the viewport has no focus).

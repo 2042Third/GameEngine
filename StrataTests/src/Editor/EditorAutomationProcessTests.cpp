@@ -503,6 +503,39 @@ TEST_SUITE("EndToEnd.EditorAutomation")
 			CHECK(EditorSession::FindSessions(environment.SessionDirectory).empty());
 		}
 
+		// --help and --version answer and exit 0 without starting anything (no window, no session); a command line the editor
+		// does not understand exits 3 with the usage.
+		{
+			EditorProcess help;
+			REQUIRE(help.Start({ "--help" }));
+			const std::optional<int> helpExit = help.Wait();
+			REQUIRE(helpExit.has_value());
+			CHECK_MESSAGE(*helpExit == 0, help.TakeOutput());
+			CHECK(help.OutputContains("Usage: StrataEditor"));
+			CHECK(help.OutputContains("--quit-after-commands"));
+			CHECK(EditorSession::FindSessions(environment.SessionDirectory).empty());
+
+			EditorProcess version;
+			REQUIRE(version.Start({ "--version" }));
+			const std::optional<int> versionExit = version.Wait();
+			REQUIRE(versionExit.has_value());
+			CHECK(*versionExit == 0);
+			CHECK(version.OutputContains("Strata Editor "));
+
+			for (const std::vector<std::string>& arguments : { std::vector<std::string> { "--no-gpu", "--bogus" }, std::vector<std::string> { "stray" },
+				std::vector<std::string> { "--no-gpu", "--frames" }, std::vector<std::string> { "--no-gpu=1" } })
+			{
+				CAPTURE(arguments[arguments.size() - 1]);
+				EditorProcess wrong;
+				REQUIRE(wrong.Start(arguments));
+				const std::optional<int> wrongExit = wrong.Wait();
+				REQUIRE(wrongExit.has_value());
+				CHECK(*wrongExit == 3);
+				CHECK(wrong.OutputContains("Usage: StrataEditor"));
+			}
+			CHECK(EditorSession::FindSessions(environment.SessionDirectory).empty());
+		}
+
 		// A headless editor that would run until told to quit, but whose session cannot be published, exits with an error
 		// instead of running unreachable forever.
 		{

@@ -310,6 +310,14 @@ namespace Strata
 						if (!reference || !entity.GetScene()->GetEntityByUUID(*reference))
 							return fail(fmt::format("{}.{}: no entity {} in the scene", name, property->Name, value.dump()));
 					}
+					// Commands refuse values out of a property's range, where the inspector clamps as it drags: an agent learns its
+					// value was not taken instead of finding another one set.
+					if (property->HasRange())
+					{
+						std::string rangeError;
+						if (const std::optional<PropertyValue> parsed = PropertyValueFromJson(*property, converted); parsed && !property->IsInRange(*parsed, &rangeError))
+							return fail(fmt::format("{}.{} {}", name, property->Name, rangeError));
+					}
 					resolved[property->Name] = std::move(converted);
 				}
 

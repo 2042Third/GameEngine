@@ -180,6 +180,9 @@ namespace Strata
 		void UpdateWindowTitle();
 		// Advances the startup command script; once it finished, reports the result (a failed script fails the process).
 		void UpdateCommandScript();
+		// --screenshot: the frame being drawn, saved once it is on screen; with closeAfter the editor closes then (the last frame
+		// before --quit-after-commands quits). Once per run.
+		void TakeScreenshot(bool closeAfter);
 		// Notes input that arrived this frame (ImGui's input events, held keys and buttons).
 		void TrackInput();
 		// Chooses the frame rate for the next frames (idle throttling) and records frame times.
@@ -219,6 +222,7 @@ namespace Strata
 		ExportDialog m_ExportDialog;
 		// Like the Export dialog, its completions refer to it.
 		RecoveryDialog m_RecoveryDialog;
+		bool m_ScreenshotRequested = false;
 		bool m_RecoveryDialogWasOpen = false; // Closed with an offer left: a toast says where to find it
 		float m_StatusBarHeight = 0.0f;       // Of the last frame, which the toasts stay above
 

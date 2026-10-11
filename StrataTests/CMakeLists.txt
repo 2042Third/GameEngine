@@ -219,6 +219,17 @@ if(TARGET StrataEditor)
 	# The smoke script's capture shows the scene (grid, floor, crate), not a black or empty image.
 	add_test(NAME StrataEditor.SmokeCaptureCheck COMMAND StrataTests --strata-test-helper=check-image "${STRATA_SMOKE_CAPTURE_DIR}/SmokeViewport.png")
 	set_tests_properties(StrataEditor.SmokeCaptureCheck PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataEditorSmokeCaptures)
+	# --screenshot with --quit-after-commands saves the frame the script ended on, well before the frame bound.
+	add_test(NAME StrataEditor.QuitScreenshotClean COMMAND "${CMAKE_COMMAND}" -E rm -f "${CMAKE_CURRENT_BINARY_DIR}/QuitScreenshot.png")
+	set_tests_properties(StrataEditor.QuitScreenshotClean PROPERTIES FIXTURES_SETUP StrataEditorQuitScreenshotClean)
+	add_test(NAME StrataEditor.QuitScreenshot
+		COMMAND StrataEditor --no-automation --quit-after-commands --frames 3600 --windowed --screenshot "${CMAKE_CURRENT_BINARY_DIR}/QuitScreenshot.png"
+			--commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/WaitCommands.json"
+		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
+	set_tests_properties(StrataEditor.QuitScreenshot PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataEditorQuitScreenshotClean
+		FIXTURES_SETUP StrataEditorQuitScreenshot)
+	add_test(NAME StrataEditor.QuitScreenshotCheck COMMAND StrataTests --strata-test-helper=check-image "${CMAKE_CURRENT_BINARY_DIR}/QuitScreenshot.png")
+	set_tests_properties(StrataEditor.QuitScreenshotCheck PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataEditorQuitScreenshot)
 	# Without a project a windowed editor opens into the launcher (and closes cleanly from it).
 	add_test(NAME StrataEditor.LauncherSmoke
 		COMMAND StrataEditor --no-automation --frames 30 --windowed --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/LauncherCommands.json"

@@ -138,8 +138,13 @@ namespace Strata
 					return fail("Material properties must be an object of the form {\"PropertyName\": value}");
 				for (const auto& [name, value] : properties->items())
 				{
-					if (!FindMaterialProperty(name))
+					const PropertyInfo* property = FindMaterialProperty(name);
+					if (!property)
 						return fail(fmt::format("Unknown material property '{}' (properties: {}; material.get describes them)", name, ListMaterialProperties()));
+					// Out of the property's range: refused, not clamped (the material editor clamps as it drags).
+					std::string rangeError;
+					if (const std::optional<PropertyValue> parsed = PropertyValueFromJson(*property, value); parsed && !property->IsInRange(*parsed, &rangeError))
+						return fail(fmt::format("{} {}", name, rangeError));
 					document["Material"][name] = value;
 				}
 			}

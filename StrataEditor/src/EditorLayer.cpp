@@ -2,6 +2,8 @@
 
 #include "Editor/CommandUtils.h"
 #include "Editor/GameExport.h"
+#include "Editor/ProjectSamples.h"
+#include "Editor/ProjectTemplates.h"
 #include "Panels/ActivityPanel.h"
 #include "Panels/AssetInspectorPanel.h"
 #include "Panels/ConsolePanel.h"
@@ -129,6 +131,62 @@ namespace Strata
 					return EditorCommandResult::Fail("No project is open: the editor shows its launcher instead of the panels. Open or create a project first.");
 				m_Panels.Focus(panel);
 				return EditorCommandResult::Ok({ { "panel", panel } });
+			}, EditorCommandKind::Session });
+
+		m_Commands.Register({ "editor.showDialog",
+			"Opens a dialog of the editor's window for the person at it, e.g. to show what you are about to do or for a screenshot: export (the "
+			"Export Game dialog; needs a project), newProject (New Project, with template preselected), openSample (Open Sample: where to copy "
+			"the sample, the first one by default; see project.samples) or about (About Strata). The project dialogs ask about unsaved scene "
+			"changes first. Changes no scene data and records no undo; fails in an editor without a window (--no-gpu or headless).",
+			CommandUtils::ObjectSchema({
+				{ "dialog", { { "type", "string" }, { "enum", { "export", "newProject", "openSample", "about" } }, { "description", "The dialog to open" } } },
+				{ "template", CommandUtils::StringSchema("newProject: the template to preselect (project.templates; default basic3d)") },
+				{ "sample", CommandUtils::StringSchema("openSample: the sample to copy (project.samples; default: the first one)") } }, { "dialog" }),
+			[this](EditorContext& context, const nlohmann::json& parameters) -> EditorCommandResult
+			{
+				CommandArguments arguments(parameters);
+				const std::string dialog = arguments.GetString("dialog");
+				const std::string templateId = arguments.GetString("template", "");
+				std::string sample = arguments.GetString("sample", "");
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				if (dialog != "export" && dialog != "newProject" && dialog != "openSample" && dialog != "about")
+					return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'dialog': the editor has no dialog '{}' (export, newProject, openSample, about)", dialog));
+				if (!templateId.empty() && !ProjectTemplates::Find(templateId))
+					return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'template': unknown template '{}' (templates: {})", templateId, ProjectTemplates::ListIds()));
+				if (m_Options.Headless)
+					return EditorCommandResult::Fail("This editor runs without a window: it has no dialogs to show");
+
+				if (dialog == "export")
+				{
+					if (!context.HasProject())
+						return EditorCommandResult::Fail("No project is open: there is nothing to export (project.open or project.create first)");
+					ShowExportDialog();
+				}
+				else if (dialog == "newProject")
+				{
+					ShowNewProjectDialog(templateId);
+				}
+				else if (dialog == "openSample")
+				{
+					std::string error;
+					const std::optional<std::vector<ProjectSample>> samples = ProjectSamples::List(context.GetSamplesDirectory(), &error);
+					if (!samples || samples->empty())
+						return EditorCommandResult::Fail(samples ? std::string("No samples were installed next to the editor") : error);
+					if (sample.empty())
+						sample = samples->front().Id;
+					else if (std::none_of(samples->begin(), samples->end(), [&sample](const ProjectSample& offered) { return offered.Id == sample; }))
+						return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'sample': no sample '{}' (see project.samples)", sample));
+					ShowOpenSampleDialog(sample);
+				}
+				else
+				{
+					ShowAboutDialog();
+				}
+				nlohmann::json result = { { "dialog", dialog } };
+				if (dialog == "openSample")
+					result["sample"] = sample;
+				return EditorCommandResult::Ok(std::move(result));
 			}, EditorCommandKind::Session });
 	}
 
@@ -301,8 +359,36 @@ namespace Strata
 			ST_INFO("Command script finished ({} commands)", m_CommandScript->GetStepCount());
 		}
 		m_CommandScript.reset();
-		if (m_Options.QuitAfterCommands)
+		if (!m_Options.QuitAfterCommands)
+			return;
+		// The screenshot shows the end of the script: this frame, drawn and on screen before the editor closes (also when
+		// the script finished before the first frame).
+		if (!m_Options.ScreenshotPath.empty())
+			TakeScreenshot(true);
+		else
 			m_Host->Close();
+	}
+
+	void EditorLayer::TakeScreenshot(bool closeAfter)
+	{
+		if (m_ScreenshotRequested)
+			return;
+		m_ScreenshotRequested = true;
+		m_Host->RequestScreenshot([this, path = m_Options.ScreenshotPath, closeAfter](const ReadbackImage& image)
+		{
+			std::string error;
+			if (ImageWriter::SavePNG(image, path, true, &error))
+			{
+				ST_INFO("Saved screenshot to {}", FileSystem::ToUTF8(path));
+			}
+			else
+			{
+				ST_ERROR("Screenshot failed: {}", error);
+				m_Host->SetExitCode(1);
+			}
+			if (closeAfter)
+				m_Host->Close();
+		});
 	}
 
 	void EditorLayer::OnDetach()
@@ -395,16 +481,7 @@ namespace Strata
 			m_Host->SetExitCode(1);
 		}
 		if (lastFrame && !m_Options.ScreenshotPath.empty())
-		{
-			m_Host->RequestScreenshot([path = m_Options.ScreenshotPath](const ReadbackImage& image)
-			{
-				std::string error;
-				if (ImageWriter::SavePNG(image, path, true, &error))
-					ST_INFO("Saved screenshot to {}", FileSystem::ToUTF8(path));
-				else
-					ST_ERROR("Screenshot failed: {}", error);
-			});
-		}
+			TakeScreenshot(false);
 	}
 
 	void EditorLayer::UpdateWindowTitle()

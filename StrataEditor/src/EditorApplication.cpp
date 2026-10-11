@@ -12,12 +12,87 @@
 #include <nlohmann/json.hpp>
 
 #include <cmath>
+#include <cstdio>
+#include <optional>
+#include <string>
+#include <string_view>
 
 namespace Strata
 {
 
 	constexpr uint32_t c_HeadlessFrameRate = 60;
 	constexpr int64_t c_MaxIdleTimeoutSeconds = 7 * 24 * 60 * 60; // A week
+	// The exit code of a command line the editor does not understand (like StrataCLI's usage errors).
+	constexpr int c_UsageExitCode = 3;
+
+	namespace
+	{
+
+		struct EditorArgument
+		{
+			const char* Name;
+			const char* Value; // What follows it ("--frames 120" or "--frames=120"); null for flags
+			const char* Description;
+		};
+
+		constexpr EditorArgument c_Arguments[] = {
+			{ "--project", "<directory or .stproj>", "Open this project" },
+			{ "--commands", "<script.json>", "Run a command script at startup (a JSON array of {command, parameters, expect, bind})" },
+			{ "--quit-after-commands", nullptr, "Close once the command script finished" },
+			{ "--frames", "<count>", "Stop after this many frames" },
+			{ "--screenshot", "<file.png>", "Save the last frame (with --frames or --quit-after-commands)" },
+			{ "--headless", nullptr, "Run without a window (rendering stays available for captures)" },
+			{ "--no-gpu", nullptr, "Run without a graphics device (implies --headless)" },
+			{ "--windowed", nullptr, "Open a 1600x900 window instead of a maximized one" },
+			{ "--ui-scale", "<factor>", "Draw the UI at this scale instead of the display's (1 is 100%)" },
+			{ "--layout", "<file.ini>", "Keep the panel layout in this file" },
+			{ "--no-automation", nullptr, "Do not serve automation (StrataCLI, MCP)" },
+			{ "--automation-port", "<port>", "Serve automation on this port (0, the default, picks a free one)" },
+			{ "--idle-timeout", "<seconds>", "Close after this long without an automation client (0: never)" },
+			{ "--imgui-demo", nullptr, "Offer ImGui's demo window in the Help menu" },
+			{ "--version", nullptr, "Print the version and exit" },
+			{ "--help", nullptr, "Print this help and exit" } };
+
+		std::string GetUsage()
+		{
+			std::string usage = "Usage: StrataEditor [options]\n\nOptions:\n";
+			for (const EditorArgument& argument : c_Arguments)
+			{
+				const std::string name = argument.Value ? fmt::format("{} {}", argument.Name, argument.Value) : std::string(argument.Name);
+				usage += fmt::format("  {:<36} {}\n", name, argument.Description);
+			}
+			return usage;
+		}
+
+		// What is wrong with the command line: an argument the editor does not know, or an option without its value.
+		std::optional<std::string> CheckArguments(const CommandLine& commandLine)
+		{
+			for (size_t index = 1; index < commandLine.GetCount(); index++)
+			{
+				const std::string& text = commandLine[index];
+				const size_t equals = text.find('=');
+				const std::string_view name = std::string_view(text).substr(0, equals);
+				const EditorArgument* argument = nullptr;
+				for (const EditorArgument& candidate : c_Arguments)
+				{
+					if (name == candidate.Name)
+						argument = &candidate;
+				}
+				if (!argument)
+					return fmt::format("Unknown argument '{}'", text);
+				if (!argument->Value && equals != std::string::npos)
+					return fmt::format("{} takes no value", argument->Name);
+				if (argument->Value && equals == std::string::npos)
+				{
+					if (index + 1 >= commandLine.GetCount())
+						return fmt::format("{} needs a value: {} {}", argument->Name, argument->Name, argument->Value);
+					index++; // Its value
+				}
+			}
+			return std::nullopt;
+		}
+
+	}
 
 	// The editor layer's view of the application.
 	class ApplicationEditorHost final : public EditorHost
@@ -108,6 +183,26 @@ namespace Strata
 
 	Application* CreateApplication(const CommandLine& commandLine)
 	{
+		// Answered before anything starts: no log file, window or automation session.
+		if (commandLine.HasFlag("--help") || commandLine.HasFlag("-h"))
+		{
+			std::fputs(GetUsage().c_str(), stdout);
+			Application::SetStartupExitCode(0);
+			return nullptr;
+		}
+		if (commandLine.HasFlag("--version"))
+		{
+			std::printf("Strata Editor %s\n", std::string(c_EngineVersion).c_str());
+			Application::SetStartupExitCode(0);
+			return nullptr;
+		}
+		if (const std::optional<std::string> problem = CheckArguments(commandLine))
+		{
+			std::fprintf(stderr, "%s\n\n%s", problem->c_str(), GetUsage().c_str());
+			Application::SetStartupExitCode(c_UsageExitCode);
+			return nullptr;
+		}
+
 		const std::filesystem::path userData = Platform::GetUserDataDirectory("Strata");
 
 		LogSpecification logSpecification;
