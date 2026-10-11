@@ -432,6 +432,9 @@ namespace Strata
 		const Ref<Texture> texture = residentOnly ? m_Assets.FindResident<Texture>(handle) : m_Assets.Resolve<Texture>(handle, AssetPriority::Normal);
 		if (!texture || texture->GetBindlessSlot() == BindlessTextureTable::c_InvalidSlot)
 			return PackTextureSlot(loadingSlot, 0);
+		// Without streaming the renderer needs every level: it draws what is resident and waits for the rest.
+		if (!m_Specification.TextureStreaming && texture->GetResidentLevel() > 0 && !residentOnly)
+			m_Assets.CountPending(handle);
 		return PackTextureSlot(texture->GetBindlessSlot(), GetSamplerIndex(texture->GetSpecification()), texture->GetSpecification().Grayscale);
 	}
 

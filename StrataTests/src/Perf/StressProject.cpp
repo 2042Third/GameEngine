@@ -30,6 +30,7 @@
 #include <stb_image_write.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -661,6 +662,7 @@ namespace Strata::Tests
 		AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
 		budgets.GpuTextures = settings.TextureBudget;
 		manager->SetResidencyBudgets(budgets);
+		manager->SetPartialLoads(settings.TextureStreaming);
 		ScopedActiveAssetManager active(manager);
 
 		Ref<Scene> scene;
@@ -681,7 +683,9 @@ namespace Strata::Tests
 		}
 
 		{
-			SceneRenderer renderer;
+			SceneRendererSpecification specification;
+			specification.TextureStreaming = settings.TextureStreaming;
+			SceneRenderer renderer(specification);
 			renderer.SetViewportSize(settings.Width, settings.Height);
 			const float aspectRatio = static_cast<float>(settings.Width) / static_cast<float>(settings.Height);
 			const uint32_t frames = settings.Path.GetFrameCount();
@@ -691,6 +695,7 @@ namespace Strata::Tests
 			result.FinalizeMs.reserve(frames);
 			result.PrivateBytes.reserve(frames);
 			result.DeviceBytes.reserve(frames);
+			result.FrameMs.reserve(frames);
 			FramePacer pacer(settings.FrameRate);
 			for (uint32_t frame = 0; frame < frames; frame++)
 			{
@@ -701,10 +706,12 @@ namespace Strata::Tests
 					break;
 				}
 				Renderer::BeginFrame();
+				const auto frameStart = std::chrono::steady_clock::now();
 				manager->Update();
 				const AssetManagerStats stats = manager->GetStats();
 				const StressSweepFrame sweep = GetStressSweepFrame(settings.Spec, settings.Path, frame, aspectRatio);
 				const bool rendered = renderer.Render(*scene, sweep.Camera);
+				result.FrameMs.push_back(std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - frameStart).count());
 				device.EndFrame();
 				if (!rendered)
 				{
@@ -722,14 +729,25 @@ namespace Strata::Tests
 				result.MaxResidentTextureBytes = std::max(result.MaxResidentTextureBytes, stats.Resident.GpuTextures);
 				result.MaxUploadedBytes = std::max(result.MaxUploadedBytes, stats.UploadedBytesLastFrame);
 				result.MaxFinalizeMs = std::max(result.MaxFinalizeMs, stats.FinalizeMsLastFrame);
+				result.MaxUploadMs = std::max(result.MaxUploadMs, stats.UploadMsLastFrame);
 				if (sweep.Holding && pending == 0 && sweep.Stop < result.FramesToSettle.size() && result.FramesToSettle[sweep.Stop] == c_StopNeverSettled)
 					result.FramesToSettle[sweep.Stop] = sweep.FramesHolding;
 				result.Frames++;
 			}
 			device.WaitForIdle();
+			if (!settings.FinalFrameFile.empty() && result.Error.empty())
+			{
+				ReadbackImage image;
+				if (!Renderer::ReadTexture(renderer.GetOutputTexture(), image) || image.BytesPerPixel != 4
+					|| !FileSystem::WriteBytes(settings.FinalFrameFile, image.Pixels))
+					result.Error = "The last frame could not be read back and written";
+			}
 		}
 
 		const AssetManagerStats stats = manager->GetStats();
+		result.LevelsRaised = stats.Detail.LevelsRaised;
+		result.LevelsDropped = stats.Detail.LevelsDropped;
+		result.BytesStreamed = stats.Detail.BytesStreamed;
 		result.FailedAssets = stats.FailedAssets;
 		result.LoadsCompleted = stats.TotalLoadsCompleted;
 		result.Evictions = stats.Evictions;
@@ -754,6 +772,8 @@ namespace Strata::Tests
 		json["Width"] = settings.Width;
 		json["Height"] = settings.Height;
 		json["FrameRate"] = settings.FrameRate;
+		json["TextureStreaming"] = settings.TextureStreaming;
+		json["FinalFrameFile"] = FileSystem::ToUTF8(settings.FinalFrameFile);
 		json["Spec"] = {
 			{ "Textures2k", settings.Spec.Textures2k }, { "Textures4k", settings.Spec.Textures4k }, { "Materials", settings.Spec.Materials },
 			{ "Entities", settings.Spec.Entities }, { "GridResolution", settings.Spec.GridResolution },
@@ -794,6 +814,15 @@ namespace Strata::Tests
 			&& ReadFloat(*path, "VerticalFOVDegrees", settings.Path.VerticalFOVDegrees, error) && ReadFloat(*path, "FarClip", settings.Path.FarClip, error);
 		if (!valid)
 			return std::nullopt;
+		const nlohmann::json* streaming = JsonUtils::Find(json, "TextureStreaming");
+		const nlohmann::json* finalFrame = JsonUtils::Find(json, "FinalFrameFile");
+		if (!streaming || !streaming->is_boolean() || !finalFrame || !finalFrame->is_string())
+		{
+			error = "The settings need TextureStreaming and FinalFrameFile";
+			return std::nullopt;
+		}
+		settings.TextureStreaming = streaming->get<bool>();
+		settings.FinalFrameFile = FileSystem::FromUTF8(finalFrame->get<std::string>());
 		settings.Scene = UUID(scene);
 		return settings;
 	}
@@ -810,6 +839,10 @@ namespace Strata::Tests
 		json["MaxInFlightBytes"] = result.MaxInFlightBytes;
 		json["MaxUploadedBytes"] = result.MaxUploadedBytes;
 		json["MaxFinalizeMs"] = result.MaxFinalizeMs;
+		json["MaxUploadMs"] = result.MaxUploadMs;
+		json["LevelsRaised"] = result.LevelsRaised;
+		json["LevelsDropped"] = result.LevelsDropped;
+		json["BytesStreamed"] = result.BytesStreamed;
 		json["FramesToSettle"] = result.FramesToSettle;
 		json["FailedAssets"] = result.FailedAssets;
 		json["LoadsCompleted"] = result.LoadsCompleted;
@@ -823,6 +856,7 @@ namespace Strata::Tests
 		json["FinalizeMs"] = result.FinalizeMs;
 		json["PrivateBytes"] = result.PrivateBytes;
 		json["DeviceBytes"] = result.DeviceBytes;
+		json["FrameMs"] = result.FrameMs;
 		return json;
 	}
 
@@ -842,14 +876,17 @@ namespace Strata::Tests
 		const bool valid = ReadUInt32(json, "Frames", result.Frames, error) && ReadUInt(json, "TextureBudget", result.TextureBudget, error)
 			&& ReadUInt(json, "MaxResidentTextureBytes", result.MaxResidentTextureBytes, error)
 			&& ReadUInt(json, "MaxInFlightBytes", result.MaxInFlightBytes, error) && ReadUInt(json, "MaxUploadedBytes", result.MaxUploadedBytes, error)
-			&& ReadFloat(json, "MaxFinalizeMs", result.MaxFinalizeMs, error) && ReadNumbers(json, "FramesToSettle", result.FramesToSettle, error)
+			&& ReadFloat(json, "MaxFinalizeMs", result.MaxFinalizeMs, error) && ReadFloat(json, "MaxUploadMs", result.MaxUploadMs, error)
+			&& ReadUInt(json, "LevelsRaised", result.LevelsRaised, error) && ReadUInt(json, "LevelsDropped", result.LevelsDropped, error)
+			&& ReadUInt(json, "BytesStreamed", result.BytesStreamed, error) && ReadNumbers(json, "FramesToSettle", result.FramesToSettle, error)
 			&& ReadUInt32(json, "FailedAssets", result.FailedAssets, error) && ReadUInt(json, "LoadsCompleted", result.LoadsCompleted, error)
 			&& ReadUInt(json, "Evictions", result.Evictions, error) && ReadUInt(json, "StagingReleases", result.StagingReleases, error)
 			&& ReadUInt(json, "PeakPrivateBytes", result.PeakPrivateBytes, error) && ReadUInt(json, "PeakWorkingSetBytes", result.PeakWorkingSetBytes, error)
 			&& ReadUInt32(json, "NewErrors", result.NewErrors, error)
 			&& ReadNumbers(json, "ResidentTextureBytes", result.ResidentTextureBytes, error)
 			&& ReadNumbers(json, "PendingAssets", result.PendingAssets, error) && ReadNumbers(json, "FinalizeMs", result.FinalizeMs, error)
-			&& ReadNumbers(json, "PrivateBytes", result.PrivateBytes, error) && ReadNumbers(json, "DeviceBytes", result.DeviceBytes, error);
+			&& ReadNumbers(json, "PrivateBytes", result.PrivateBytes, error) && ReadNumbers(json, "DeviceBytes", result.DeviceBytes, error)
+			&& ReadNumbers(json, "FrameMs", result.FrameMs, error);
 		if (!valid)
 			return std::nullopt;
 		return result;

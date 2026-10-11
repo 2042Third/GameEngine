@@ -512,7 +512,19 @@ The threading model, frame loop and pipelines these rules protect are described 
   steps of at most `c_AssetUploadStepBytes` within the context's budget (`AssetFinalizeContext`,
   `AssetFinalizeResult::Pending`) and report their bytes; never upload an unbounded amount in one call. They record into
   `AssetFinalizeContext::Upload` (the renderer's assets downcast it with `RendererUploadContext::From`): the asset layer
-  knows no graphics API (`Architecture.Layering` refuses NVRHI and Vulkan headers there).
+  knows no graphics API (`Architecture.Layering` refuses NVRHI and Vulkan headers there). An asset that can be partly
+  resident registers a prefix function (`AssetLoaderRegistry::RegisterPrefix`: its loader then gets partial data,
+  `AssetLoadData::IsPartial`), reads the rest by range (`AssetManagerBase::RequestRange`, polled), reports memory it gains
+  or drops without being replaced (`AssetManagerBase::UpdateMemoryUsage`) and its levels (`Asset::GetDetailLevels`); the
+  work a module does for every manager each frame is an `AssetManagerExtension` (registry filled by the module's
+  registration function).
+- **Mip streaming** ([Docs/Architecture.md](Docs/Architecture.md), "Streaming and residency", Mip streaming): a texture's
+  first load holds its header and the levels up to 32x32 (its resident tail), and each manager's `TextureStreamer` raises
+  and drops its levels to what the views drew it at (`SceneRenderer` reports after every frame; `RequestLevel` for other
+  uses, `TextureStreamer::GetPreview` for thumbnails). A texture's GPU texture and bindless slot change when its levels
+  do: resolve the slot every frame (`Texture::GetBindlessSlot`), never cache it. Renderers and tests that compare exact
+  pixels set `SceneRendererSpecification::TextureStreaming = false` (every level, pending until resident); tests of
+  whole-asset residency turn the manager's partial loads off (`AssetManagerBase::SetPartialLoads(false)`).
 
 ## Scripting
 

@@ -211,9 +211,7 @@ Open items and deferrals later waves own:
   the mesh loads again (the source revisions render-scene uses would tell).
 - Textures: `asset.import` still cooks on the main thread (about 1.5 s for a 4096x4096 BC7 color texture; asynchronous
   import is `content-and-prefabs`'); HDR textures stay RGBA16F until a BC6H encoder exists.
-- A world seen all at once still keeps every texture in view resident: no budget evicts what is in view, so the stress
-  world peaks at about 500 MB in the all-resident sweep until mip streaming (`mip-streaming`). `GetResidencyInfo`
-  and `GetResidencySamples` walk every registered asset (`GetStats` keeps counts instead), which a world of many
+- `GetResidencyInfo` and `GetResidencySamples` walk every registered asset (`GetStats` keeps counts instead), which a world of many
   registered assets will feel (`world-partition`). Two caches keep assets between frames: `SceneRenderer`'s environment
   cache (the sky's map) and `TextRenderer`'s glyph atlases (their fonts). Streaming the stress world from pack version 2
   takes 1.03-1.09 times version 1's time (zstd blocks and their checksums), close to the 1.1 acceptance limit, which

@@ -38,7 +38,21 @@ namespace Strata
 			std::mutex Mutex;
 			std::atomic<bool> Open = false;
 			std::unordered_map<AssetType, AssetLoadFunction> Loaders;
+			std::unordered_map<AssetType, AssetPrefixFunction> Prefixes;
 		};
+
+		struct ExtensionStorage
+		{
+			std::mutex Mutex;
+			std::atomic<bool> Open = false;
+			std::vector<AssetManagerExtensionFactory> Factories;
+		};
+
+		ExtensionStorage& GetExtensionStorage()
+		{
+			static ExtensionStorage s_Storage;
+			return s_Storage;
+		}
 
 		LoaderStorage& GetLoaderStorageUnchecked()
 		{
@@ -110,6 +124,59 @@ namespace Strata
 		return it != storage.Loaders.end() ? &it->second : nullptr;
 	}
 
+	void AssetLoaderRegistry::RegisterPrefix(AssetType type, AssetPrefixFunction prefix)
+	{
+		LoaderStorage& storage = GetLoaderStorage();
+		std::scoped_lock<std::mutex> lock(storage.Mutex);
+		storage.Prefixes[type] = std::move(prefix);
+	}
+
+	const AssetPrefixFunction* AssetLoaderRegistry::FindPrefix(AssetType type)
+	{
+		LoaderStorage& storage = GetLoaderStorage();
+		std::scoped_lock<std::mutex> lock(storage.Mutex);
+		auto it = storage.Prefixes.find(type);
+		// Stable like the loaders (never removed).
+		return it != storage.Prefixes.end() ? &it->second : nullptr;
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
+	// AssetManagerExtensionRegistry
+	////////////////////////////////////////////////////////////////////////////////
+
+	void AssetManagerExtensionRegistry::BeginRegistration()
+	{
+		GetExtensionStorage().Open.store(true, std::memory_order_release);
+	}
+
+	void AssetManagerExtensionRegistry::Register(AssetManagerExtensionFactory factory)
+	{
+		ExtensionStorage& storage = GetExtensionStorage();
+		ST_CORE_VERIFY(storage.Open.load(std::memory_order_acquire),
+			"The asset manager extension registry is used before Engine::RegisterBuiltinModules() registered the engine's modules");
+		std::scoped_lock<std::mutex> lock(storage.Mutex);
+		storage.Factories.push_back(std::move(factory));
+	}
+
+	std::vector<Scope<AssetManagerExtension>> AssetManagerExtensionRegistry::CreateExtensions(AssetManagerBase& manager)
+	{
+		ExtensionStorage& storage = GetExtensionStorage();
+		ST_CORE_VERIFY(storage.Open.load(std::memory_order_acquire),
+			"An asset manager is created before Engine::RegisterBuiltinModules() registered the engine's modules");
+		std::vector<AssetManagerExtensionFactory> factories;
+		{
+			std::scoped_lock<std::mutex> lock(storage.Mutex);
+			factories = storage.Factories;
+		}
+		std::vector<Scope<AssetManagerExtension>> extensions;
+		for (const AssetManagerExtensionFactory& factory : factories)
+		{
+			if (Scope<AssetManagerExtension> extension = factory(manager))
+				extensions.push_back(std::move(extension));
+		}
+		return extensions;
+	}
+
 	////////////////////////////////////////////////////////////////////////////////
 	// AssetManagerBase
 	////////////////////////////////////////////////////////////////////////////////
@@ -120,7 +187,8 @@ namespace Strata
 		std::mutex Mutex;
 		std::condition_variable Condition;
 		std::deque<Completion> Completions;
-		uint32_t InFlight = 0; // Load jobs running (each ends in exactly one PushCompletion)
+		uint32_t InFlight = 0;  // Load jobs running (each ends in exactly one PushCompletion)
+		uint32_t RangeJobs = 0; // Range read jobs running (RunRange; each ends in EndRangeJob)
 	};
 
 	AssetManagerBase::AssetManagerBase()
@@ -135,6 +203,8 @@ namespace Strata
 		m_GpuReleaseFrames = framesInFlight + 1;
 		UpdateStreamingLimits();
 		BuiltinAssets::Register(*this);
+		m_Extensions = AssetManagerExtensionRegistry::CreateExtensions(*this);
+		UpdatePartialLoads();
 	}
 
 	AssetManagerBase::~AssetManagerBase()
@@ -160,6 +230,32 @@ namespace Strata
 	{
 		ST_CORE_ASSERT(!m_ProcessingCompletions, "The upload context cannot change while assets are finalized");
 		m_UploadContext = std::move(context);
+		UpdatePartialLoads();
+	}
+
+	void AssetManagerBase::SetPartialLoads(bool enabled)
+	{
+		m_PartialLoadsAllowed = enabled;
+		UpdatePartialLoads();
+	}
+
+	void AssetManagerBase::UpdatePartialLoads()
+	{
+		const AssetUploadContext* upload = GetUploadContext();
+		const bool refined = std::any_of(m_Extensions.begin(), m_Extensions.end(),
+			[upload](const Scope<AssetManagerExtension>& extension) { return extension->RefinesPartialAssets(upload); });
+		m_PartialLoadsActive.store(m_PartialLoadsAllowed && refined, std::memory_order_release);
+	}
+
+	bool AssetManagerBase::IsPartialLoadLocked(const AssetEntry& entry) const
+	{
+		return ArePartialLoadsActive() && entry.Metadata.StoredSize > 0 && AssetLoaderRegistry::FindPrefix(entry.Metadata.Type);
+	}
+
+	uint64_t AssetManagerBase::GetLoadBytesLocked(const AssetEntry& entry) const
+	{
+		// A partial load reads the head (and what its prefix needs beyond it: a cooked texture's tail is about as large).
+		return IsPartialLoadLocked(entry) ? std::min(entry.Metadata.StoredSize, c_AssetPrefixHeadBytes) : entry.Metadata.StoredSize;
 	}
 
 	void AssetManagerBase::WaitForInFlightLoads()
@@ -167,7 +263,7 @@ namespace Strata
 		// Nothing new starts: a job finishing its read would otherwise dispatch the next queued load to this manager.
 		m_Queue.Close();
 		std::unique_lock<std::mutex> lock(m_LoadState->Mutex);
-		m_LoadState->Condition.wait(lock, [this]() { return m_LoadState->InFlight == 0; });
+		m_LoadState->Condition.wait(lock, [this]() { return m_LoadState->InFlight == 0 && m_LoadState->RangeJobs == 0; });
 	}
 
 	bool AssetManagerBase::IsHandleValid(AssetHandle handle) const
@@ -302,7 +398,8 @@ namespace Strata
 		bool loading = false;
 		bool prefetchDependencies = false;
 		uint64_t generation = 0;
-		uint64_t storedSize = 0;
+		uint64_t loadBytes = 0;
+		bool partial = false;
 		{
 			std::scoped_lock<std::mutex> lock(m_Mutex);
 			auto it = m_Entries.find(handle);
@@ -323,13 +420,14 @@ namespace Strata
 			loading = entry.State == AssetState::Loading;
 			prefetchDependencies = deferred && !newRequest && entry.State != AssetState::Failed;
 			generation = entry.Generation;
-			storedSize = entry.Metadata.StoredSize;
+			loadBytes = GetLoadBytesLocked(entry);
+			partial = IsPartialLoadLocked(entry);
 		}
 
 		// The queue's lock is taken without the manager's: pumping dispatches, which takes the manager's lock.
 		if (newRequest)
 		{
-			m_Queue.Enqueue(handle, priority, score, storedSize, generation);
+			m_Queue.Enqueue(handle, priority, score, loadBytes, generation, partial);
 			m_Queue.Pump();
 		}
 		else if (loading && m_Queue.Raise(handle, priority, score))
@@ -342,6 +440,9 @@ namespace Strata
 
 	bool AssetManagerBase::DispatchLoad(const AssetStreamingRequest& request)
 	{
+		if (request.RangeId != 0)
+			return DispatchRange(request);
+
 		AssetMetadata metadata;
 		{
 			std::scoped_lock<std::mutex> lock(m_Mutex);
@@ -461,7 +562,8 @@ namespace Strata
 
 			auto data = CreateRef<std::vector<uint8_t>>();
 			std::string error;
-			const bool read = ReadAssetData(metadata, *data, &error);
+			uint64_t storedSize = 0; // Of the whole stored form, when only a prefix was read
+			const bool read = request.Partial ? ReadPrefix(metadata, *data, storedSize, &error) : ReadAssetData(metadata, *data, &error);
 			// The asset will arrive: what it references starts loading now, alongside its decoding and finalization. Queued
 			// before the read leaves its slot, so the pump that follows weighs the dependencies against what waits already.
 			const bool current = read && IsLoadCurrent(metadata.Handle, request.Generation);
@@ -480,7 +582,9 @@ namespace Strata
 				return;
 			}
 
-			JobSystem::Submit([loadState, metadata, data, completion]() mutable
+			if (storedSize > 0)
+				m_PartialLoads.fetch_add(1, std::memory_order_relaxed);
+			JobSystem::Submit([loadState, metadata, data, storedSize, completion]() mutable
 			{
 				try
 				{
@@ -492,7 +596,7 @@ namespace Strata
 					else
 					{
 						// The bytes are not needed after decoding: the loader may take them over.
-						AssetLoadData loadData(*data);
+						AssetLoadData loadData(*data, storedSize);
 						completion.LoadedAsset = (*loader)(metadata, loadData, &completion.Error);
 						if (completion.LoadedAsset)
 							completion.LoadedAsset->Handle = metadata.Handle;
@@ -801,10 +905,57 @@ namespace Strata
 			std::scoped_lock<std::mutex> lock(m_Mutex);
 			m_FrameIndex++;
 		}
-		// The job system may have been started after this manager was created.
+		// The job system may have been started after this manager was created, and the renderer (whose texture streamer
+		// refines partial loads).
 		UpdateStreamingLimits();
+		UpdatePartialLoads();
 		m_Queue.Pump();
+
+		// One upload batch for the frame: the arrivals' finalizations (which join it), the extensions' work and the levels
+		// they release before eviction, so that the frame's uploads reach the GPU together, before it renders.
+		AssetUploadContext* upload = GetUploadContext();
+		if (upload)
+			upload->Begin();
+		const auto start = std::chrono::steady_clock::now();
 		ProcessCompletions(true);
+
+		// The extensions (the renderer's texture streamer) get what is left of the frame's budgets.
+		AssetFinalizeContext context { upload, this };
+		uint64_t uploadedBytes = 0;
+		float uploadMs = 0.0f;
+		AssetResidencyBudgets budgets;
+		{
+			std::scoped_lock<std::mutex> lock(m_Mutex);
+			uploadedBytes = m_FrameUploadedBytes;
+			uploadMs = m_FrameUploadMs;
+			budgets = m_Budgets;
+		}
+		const uint64_t uploadedBefore = uploadedBytes;
+		const float uploadMsBefore = uploadMs;
+		context.UploadBudget = budgets.UploadBytesPerFrame - std::min(uploadedBytes, budgets.UploadBytesPerFrame);
+		context.UploadMsBudget = std::max(0.0f, budgets.UploadMsPerFrame - uploadMs);
+		context.Deadline = start + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+			std::chrono::duration<float, std::milli>(std::min(budgets.FinalizeMsPerFrame, 3600.0f * 1000.0f)));
+		context.StagingBytes = budgets.StagingBytes;
+		context.UploadedBytes = &uploadedBytes;
+		context.UploadMs = &uploadMs;
+		context.MayWait = true;
+		context.FirstOfFrame = uploadedBytes == 0;
+		if (!m_Extensions.empty())
+		{
+			ST_PROFILE_STAGE("Assets.Finalize");
+			const auto extensionsStart = std::chrono::steady_clock::now();
+			for (const Scope<AssetManagerExtension>& extension : m_Extensions)
+				extension->OnUpdate(context);
+			ReleaseExtensionMemory(context);
+			const float extensionsMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - extensionsStart).count();
+			std::scoped_lock<std::mutex> lock(m_Mutex);
+			m_FrameUploadedBytes += uploadedBytes - uploadedBefore;
+			m_FrameUploadMs += uploadMs - uploadMsBefore;
+			m_FrameFinalizeMs += extensionsMs;
+		}
+		if (upload)
+			upload->Submit();
 
 		std::vector<Ref<Asset>> released;
 		{
@@ -1080,7 +1231,8 @@ namespace Strata
 			if (m_LoadState->InFlight > 0 || !m_LoadState->Completions.empty())
 				return true;
 		}
-		return m_Queue.HasWork();
+		// Range reads are their owner's to poll: they end without the manager's updates.
+		return m_Queue.HasLoadWork();
 	}
 
 	bool AssetManagerBase::WaitForPendingLoads(std::chrono::milliseconds timeout)
@@ -1120,6 +1272,12 @@ namespace Strata
 		return true;
 	}
 
+	AssetMemoryUsage AssetManagerBase::GetResidentMemory() const
+	{
+		std::scoped_lock<std::mutex> lock(m_Mutex);
+		return m_Resident;
+	}
+
 	AssetManagerStats AssetManagerBase::GetStats() const
 	{
 		AssetManagerStats stats;
@@ -1152,7 +1310,12 @@ namespace Strata
 			stats.StagingReleases = m_StagingReleases;
 			stats.DependencyPrefetches = m_DependencyPrefetches;
 			stats.DependencyPrefetchesDropped = m_DependencyPrefetchesDropped;
+			stats.RangeReads = static_cast<uint32_t>(m_RangeReads.size());
+			stats.RangeReadsCompleted = m_RangeReadsCompleted;
 		}
+		stats.PartialLoads = m_PartialLoads.load(std::memory_order_relaxed);
+		for (const Scope<AssetManagerExtension>& extension : m_Extensions)
+			extension->AddStats(stats);
 
 		const AssetStreamingQueueStats queue = m_Queue.GetStats();
 		stats.QueuedLoads = queue.Queued;
@@ -1256,7 +1419,8 @@ namespace Strata
 		{
 			AssetHandle Handle;
 			uint64_t Generation = 0;
-			uint64_t StoredSize = 0;
+			uint64_t Bytes = 0;
+			bool Partial = false;
 		};
 		std::vector<Request> started;
 		std::vector<AssetHandle> loading;
@@ -1286,7 +1450,8 @@ namespace Strata
 				// Not touched: a prefetch is no use, so it keeps nothing resident and makes no room (see GetDependencies).
 				if (entry.State == AssetState::Unloaded)
 				{
-					const uint64_t bytes = entry.Metadata.StoredSize > 0 ? entry.Metadata.StoredSize : AssetStreamingQueue::c_UnknownSizeBytes;
+					const uint64_t loadBytes = GetLoadBytesLocked(entry);
+					const uint64_t bytes = loadBytes > 0 ? loadBytes : AssetStreamingQueue::c_UnknownSizeBytes;
 					if (!FitsPrefetchLocked(bytes, pendingBytes))
 						continue;
 					pendingBytes += bytes;
@@ -1294,7 +1459,7 @@ namespace Strata
 					entry.Error.clear();
 					entry.PrefetchOnly = true;
 					entry.DependenciesDeferred = false; // Its read decides again
-					started.push_back(Request { dependency, entry.Generation, entry.Metadata.StoredSize });
+					started.push_back(Request { dependency, entry.Generation, loadBytes, IsPartialLoadLocked(entry) });
 				}
 				else if (entry.State == AssetState::Loading)
 				{
@@ -1308,7 +1473,7 @@ namespace Strata
 
 		// The queue's lock is taken without the manager's (see RequestLoad).
 		for (const Request& request : started)
-			m_Queue.Enqueue(request.Handle, priority, c_DependencyPrefetchScore, request.StoredSize, request.Generation);
+			m_Queue.Enqueue(request.Handle, priority, c_DependencyPrefetchScore, request.Bytes, request.Generation, request.Partial);
 		for (AssetHandle dependency : loading)
 			m_Queue.Raise(dependency, priority, c_DependencyPrefetchScore);
 		m_Queue.Pump();
@@ -1401,6 +1566,275 @@ namespace Strata
 				*outError = fmt::format("Reading asset {} failed: {}", handle.ToString(), exception.what());
 			return false;
 		}
+	}
+
+	bool AssetManagerBase::ReadPrefix(const AssetMetadata& metadata, std::vector<uint8_t>& outData, uint64_t& outStoredSize, std::string* outError)
+	{
+		outStoredSize = 0;
+		const AssetPrefixFunction* prefix = AssetLoaderRegistry::FindPrefix(metadata.Type);
+		const uint64_t storedSize = metadata.StoredSize;
+		// The head, then what the prefix needs beyond it. A head that cannot be read (a stored size that no longer matches the
+		// stored form) is no reason to fail: the whole stored form is read instead, as is one the function does not split.
+		if (prefix && storedSize > 0 && ReadAssetRange(metadata, 0, std::min(storedSize, c_AssetPrefixHeadBytes), outData, nullptr))
+		{
+			const std::optional<uint64_t> prefixSize = (*prefix)(outData, storedSize);
+			if (prefixSize && *prefixSize > 0 && *prefixSize < storedSize)
+			{
+				if (*prefixSize <= outData.size())
+				{
+					outData.resize(static_cast<size_t>(*prefixSize));
+				}
+				else
+				{
+					std::vector<uint8_t> rest;
+					if (!ReadAssetRange(metadata, outData.size(), *prefixSize - outData.size(), rest, outError))
+						return false;
+					outData.insert(outData.end(), rest.begin(), rest.end());
+				}
+				outStoredSize = storedSize;
+				return true;
+			}
+			// Nothing to split: a head that is the whole stored form is all the load needs.
+			if (outData.size() == storedSize)
+				return true;
+		}
+		outData.clear();
+		return ReadAssetData(metadata, outData, outError);
+	}
+
+	bool AssetManagerBase::HasStoredForm(AssetHandle handle) const
+	{
+		std::scoped_lock<std::mutex> lock(m_Mutex);
+		auto it = m_Entries.find(handle);
+		return it != m_Entries.end() && !it->second.IsMemoryAsset && !it->second.Metadata.IsBuiltin();
+	}
+
+	uint64_t AssetManagerBase::RequestRange(AssetHandle handle, uint64_t offset, uint64_t size, AssetPriority priority, float score)
+	{
+		uint64_t id = 0;
+		{
+			std::scoped_lock<std::mutex> lock(m_Mutex);
+			auto it = m_Entries.find(handle);
+			if (it == m_Entries.end() || it->second.IsMemoryAsset || it->second.Metadata.IsBuiltin() || it->second.State != AssetState::Ready || size == 0)
+				return 0;
+			const uint64_t storedSize = it->second.Metadata.StoredSize;
+			if (storedSize > 0 && (offset > storedSize || size > storedSize - offset))
+				return 0;
+			id = m_NextRangeId++;
+			RangeRead& read = m_RangeReads[id];
+			read.Handle = handle;
+			read.Generation = it->second.Generation;
+			read.Offset = offset;
+			read.Size = size;
+		}
+		// The queue's lock is taken without the manager's (see RequestLoad).
+		m_Queue.EnqueueRange(id, handle, priority, score, size);
+		m_Queue.Pump();
+		return id;
+	}
+
+	void AssetManagerBase::RaiseRange(uint64_t id, AssetPriority priority, float score)
+	{
+		if (m_Queue.RaiseRange(id, priority, score))
+			m_Queue.Pump();
+	}
+
+	AssetRangeStatus AssetManagerBase::PollRange(uint64_t id, std::vector<uint8_t>& outData, std::string* outError)
+	{
+		uint64_t releasedBytes = 0;
+		AssetRangeStatus status = AssetRangeStatus::Pending;
+		{
+			std::scoped_lock<std::mutex> lock(m_Mutex);
+			auto it = m_RangeReads.find(id);
+			if (it == m_RangeReads.end() || it->second.Cancelled)
+				return AssetRangeStatus::Unknown;
+			RangeRead& read = it->second;
+			if (!read.Done)
+				return AssetRangeStatus::Pending;
+			// Bytes of another version of the asset are of no use: it was unloaded, evicted or reloaded meanwhile.
+			auto entry = m_Entries.find(read.Handle);
+			const bool current = entry != m_Entries.end() && entry->second.Generation == read.Generation;
+			if (read.Error.empty() && current)
+			{
+				outData = std::move(read.Data);
+				status = AssetRangeStatus::Complete;
+				m_RangeReadsCompleted++;
+			}
+			else
+			{
+				if (outError)
+					*outError = !read.Error.empty() ? read.Error : std::string("The asset changed while its range was read");
+				status = AssetRangeStatus::Failed;
+			}
+			releasedBytes = read.Dispatched ? read.Size : 0;
+			const bool dispatched = read.Dispatched;
+			m_RangeReads.erase(it);
+			if (!dispatched)
+				return status;
+		}
+		m_Queue.OnLoadFinished(releasedBytes, true);
+		return status;
+	}
+
+	void AssetManagerBase::CancelRange(uint64_t id)
+	{
+		uint64_t releasedBytes = 0;
+		{
+			std::scoped_lock<std::mutex> lock(m_Mutex);
+			auto it = m_RangeReads.find(id);
+			if (it == m_RangeReads.end() || it->second.Cancelled)
+				return;
+			RangeRead& read = it->second;
+			if (read.Running)
+			{
+				read.Cancelled = true; // Its job forgets it when it ends
+				return;
+			}
+			if (read.Done && !read.Dispatched)
+			{
+				m_RangeReads.erase(it); // Refused when it was dispatched: nothing is in flight
+				return;
+			}
+			if (!read.Dispatched)
+			{
+				// Still waiting: the queue drops it. Taken by a pump meanwhile, the dispatch finds it cancelled and refuses it.
+				// The queue's lock may be taken inside the manager's.
+				if (!m_Queue.CancelRange(id))
+				{
+					read.Cancelled = true;
+					return;
+				}
+				m_RangeReads.erase(it);
+				return;
+			}
+			releasedBytes = read.Size; // Done: its bytes leave the flight
+			m_RangeReads.erase(it);
+		}
+		m_Queue.OnLoadFinished(releasedBytes, true);
+	}
+
+	bool AssetManagerBase::DispatchRange(const AssetStreamingRequest& request)
+	{
+		AssetMetadata metadata;
+		{
+			std::scoped_lock<std::mutex> lock(m_Mutex);
+			auto it = m_RangeReads.find(request.RangeId);
+			if (it == m_RangeReads.end())
+				return false;
+			RangeRead& read = it->second;
+			if (read.Cancelled)
+			{
+				m_RangeReads.erase(it);
+				return false;
+			}
+			auto entry = m_Entries.find(read.Handle);
+			if (entry == m_Entries.end() || entry->second.Generation != read.Generation)
+			{
+				// Nothing to read any more: the owner's next poll reports it.
+				read.Done = true;
+				read.Error = "The asset changed before its range was read";
+				return false;
+			}
+			metadata = entry->second.Metadata;
+			read.Dispatched = true;
+			read.Running = true;
+		}
+		{
+			std::scoped_lock<std::mutex> lock(m_LoadState->Mutex);
+			m_LoadState->RangeJobs++;
+		}
+		try
+		{
+			JobSystem::SubmitIO([this, metadata, request]() { RunRange(metadata, request); }, ToJobPriority(request.Priority));
+			return true;
+		}
+		catch (...)
+		{
+		}
+		// The job never runs: the read ends here, failed.
+		{
+			std::scoped_lock<std::mutex> lock(m_Mutex);
+			auto it = m_RangeReads.find(request.RangeId);
+			if (it != m_RangeReads.end())
+			{
+				it->second.Running = false;
+				it->second.Done = true;
+				it->second.Error = "Could not queue the read";
+			}
+		}
+		m_Queue.OnReadFinished();
+		EndRangeJob();
+		return true;
+	}
+
+	void AssetManagerBase::RunRange(const AssetMetadata& metadata, const AssetStreamingRequest& request)
+	{
+		uint64_t offset = 0;
+		uint64_t size = 0;
+		bool cancelled = false;
+		{
+			std::scoped_lock<std::mutex> lock(m_Mutex);
+			auto it = m_RangeReads.find(request.RangeId);
+			cancelled = it == m_RangeReads.end() || it->second.Cancelled;
+			if (!cancelled)
+			{
+				offset = it->second.Offset;
+				size = it->second.Size;
+			}
+		}
+
+		std::vector<uint8_t> data;
+		std::string error;
+		bool read = false;
+		if (!cancelled)
+		{
+			try
+			{
+				read = ReadAssetRange(metadata, offset, size, data, &error);
+			}
+			catch (const std::exception& exception)
+			{
+				error = fmt::format("Reading failed: {}", exception.what());
+			}
+			catch (...)
+			{
+				error = "Reading failed with an unknown exception";
+			}
+		}
+		m_Queue.OnReadFinished();
+
+		bool release = false;
+		{
+			std::scoped_lock<std::mutex> lock(m_Mutex);
+			auto it = m_RangeReads.find(request.RangeId);
+			if (it == m_RangeReads.end() || it->second.Cancelled)
+			{
+				// Abandoned while it read: its bytes leave the flight now.
+				if (it != m_RangeReads.end())
+					m_RangeReads.erase(it);
+				release = true;
+			}
+			else
+			{
+				RangeRead& range = it->second;
+				range.Running = false;
+				range.Done = true;
+				if (read)
+					range.Data = std::move(data);
+				else
+					range.Error = error.empty() ? std::string("Failed to read the range") : error;
+			}
+		}
+		if (release)
+			m_Queue.OnLoadFinished(request.Bytes, true);
+		EndRangeJob();
+	}
+
+	void AssetManagerBase::EndRangeJob()
+	{
+		std::scoped_lock<std::mutex> lock(m_LoadState->Mutex);
+		m_LoadState->RangeJobs--;
+		m_LoadState->Condition.notify_all();
 	}
 
 	bool AssetManagerBase::ReadStoredRange(AssetHandle handle, uint64_t offset, uint64_t size, std::vector<uint8_t>& outData, std::string* outError)

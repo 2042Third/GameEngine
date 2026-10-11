@@ -12,7 +12,8 @@ the WAV samples come from the platform's math.sin (rounded to 16 bits, so a diff
 other files use integer and string operations and float arithmetic that IEEE 754 makes exact or correctly rounded
 everywhere (+, -, *, /, sqrt, frexp, log2 of powers of two, shortest float repr in JSON). After regenerating, commit
 only files whose content changed on purpose; the .meta files keep the handles either way. The assets:
-    Assets/Textures/Checker.png    8x8 RGBA checkerboard (sRGB color texture)
+    Assets/Textures/Checker.png    64x64 RGBA checkerboard (sRGB color texture; larger than the 32x32 tail that stays
+                                   resident, so its finer levels stream)
     Assets/Textures/Bumps_normal.png 16x16 RGB normal map of a grid of bumps (cooks to BC5)
     Assets/Textures/Roughness.png  16x16 grayscale ramp (one-channel data: cooks to BC4, sampled as gray)
     Assets/Textures/Sky.hdr        16x8 Radiance HDR sky gradient (equirectangular environment map)
@@ -66,7 +67,7 @@ def encode_png(width, height, color_type, texel):
 def make_checker_png():
     orange = (230, 120, 30, 255)
     cream = (240, 230, 200, 255)
-    return encode_png(8, 8, 6, lambda x, y: orange if ((x // 2) + (y // 2)) % 2 == 0 else cream)
+    return encode_png(64, 64, 6, lambda x, y: orange if ((x // 16) + (y // 16)) % 2 == 0 else cream)
 
 
 def make_bumps_normal_png():

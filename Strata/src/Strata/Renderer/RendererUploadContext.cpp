@@ -47,11 +47,6 @@ namespace Strata
 		return m_Staging.ReleaseIdle() > 0;
 	}
 
-	nvrhi::ICommandList* RendererUploadContext::GetCommandList() const
-	{
-		return m_Queue.GetCommandList();
-	}
-
 	RendererUploadContext* RendererUploadContext::From(AssetUploadContext* context)
 	{
 		return dynamic_cast<RendererUploadContext*>(context);

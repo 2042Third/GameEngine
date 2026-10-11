@@ -2,6 +2,7 @@
 
 #include "Asset/AssetTestUtils.h"
 #include "Renderer/GPUTestUtils.h"
+#include "Renderer/UploadQueueTestUtils.h"
 #include "Strata/Renderer/GPUUploadQueue.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/Renderer.h"
@@ -110,39 +111,6 @@ namespace
 		return std::all_of(handles.begin(), handles.end(), [&](AssetHandle handle) { return manager.GetAssetState(handle) == AssetState::Ready; });
 	}
 
-	// Uses the transfer queue for new uploads (where the device has one) while it lives.
-	class ScopedTransferQueue
-	{
-	public:
-		explicit ScopedTransferQueue(bool enabled)
-			: m_Previous(Renderer::GetUploadQueue().UsesTransferQueue())
-		{
-			m_Enabled = Renderer::GetUploadQueue().SetTransferQueue(enabled);
-		}
-
-		~ScopedTransferQueue()
-		{
-			Renderer::GetUploadQueue().SetTransferQueue(m_Previous);
-		}
-
-		ScopedTransferQueue(const ScopedTransferQueue&) = delete;
-		ScopedTransferQueue& operator=(const ScopedTransferQueue&) = delete;
-
-		bool IsEnabled() const { return m_Enabled; }
-	private:
-		bool m_Previous = false;
-		bool m_Enabled = false;
-	};
-
-	// The queues uploads are tested on: the graphics queue, and the transfer queue where the device has one.
-	std::vector<bool> GetQueueModes(GPUContext& gpu)
-	{
-		if (gpu.GetDevice().HasTransferQueue())
-			return { false, true };
-		MESSAGE("The device has no dedicated transfer queue: uploads are tested on the graphics queue only");
-		return { false };
-	}
-
 	// Budgets in which time does not limit the frames, however slow the machine (Debug builds, a busy machine).
 	AssetResidencyBudgets MakeByteBudgets(const AssetManagerBase& manager, uint64_t uploadBytesPerFrame, uint64_t stagingBytes)
 	{
@@ -172,6 +140,32 @@ TEST_SUITE("GPU.UploadQueue")
 			CHECK(Renderer::GetUploadQueue().UsesTransferQueue() == gpu.GetDevice().HasTransferQueue());
 		}
 		CHECK_FALSE(Renderer::GetUploadQueue().UsesTransferQueue());
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A batch that records nothing submits nothing")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		// Every asset manager update opens a batch; a frame without uploads must cost no submission.
+		GPUUploadQueue& queue = Renderer::GetUploadQueue();
+		const uint64_t batches = queue.GetStats().Batches;
+		const GPUUploadTicket ticket = queue.GetTicket();
+		queue.BeginBatch();
+		CHECK(queue.IsBatchOpen());
+		CHECK(queue.GetTicket() == ticket);
+		queue.SubmitBatch();
+		CHECK_FALSE(queue.IsBatchOpen());
+		CHECK(queue.GetStats().Batches == batches);
+		CHECK(queue.GetTicket() == ticket);
+		CHECK(queue.IsComplete(ticket));
+
+		// Through a manager's updates too, once its built-in assets are up (they upload as it is made).
+		Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		const uint64_t managerBatches = queue.GetStats().Batches;
+		for (int frame = 0; frame < 3; frame++)
+			RunDeviceFrame(gpu, [&]() { manager->Update(); });
+		CHECK(queue.GetStats().Batches == managerBatches);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

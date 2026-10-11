@@ -222,6 +222,9 @@ namespace Strata
 		texture->m_MipCount = view.Layout.MipCount;
 		texture->m_Mips = std::move(mips);
 		texture->m_CookedLayout = view.Layout;
+		texture->m_FromCookedData = true;
+		texture->m_LoadedLevel = view.FirstLevelInData;
+		texture->m_ResidentLevel.store(view.FirstLevelInData, std::memory_order_release);
 		// The view refers to the taken-over buffer, which moves along without being copied: its offsets stay valid.
 		if (takeOver)
 			texture->m_Cooked = std::move(*takeOver);
@@ -260,8 +263,8 @@ namespace Strata
 
 	std::vector<uint8_t> Texture::Serialize() const
 	{
-		// Uploading releases the CPU copy.
-		if (m_Mips.empty() || m_UploadStarted)
+		// Uploading releases the CPU copy; a partial load never had all of it.
+		if (m_Mips.empty() || m_UploadStarted || m_LoadedLevel > 0)
 			return {};
 
 		std::vector<std::span<const uint8_t>> levels;
@@ -288,6 +291,28 @@ namespace Strata
 		return CreateFromView(*view, &data, outError);
 	}
 
+	Ref<Texture> Texture::Deserialize(std::vector<uint8_t>&& data, uint64_t storedSize, std::string* outError)
+	{
+		if (storedSize <= data.size())
+			return Deserialize(std::move(data), outError);
+		const std::optional<CookedTextureView> view = ParseCookedTexturePrefix(data, storedSize, outError);
+		if (!view)
+			return nullptr;
+		return CreateFromView(*view, &data, outError);
+	}
+
+	std::optional<uint64_t> Texture::GetLoadPrefixSize(std::span<const uint8_t> head, uint64_t storedSize)
+	{
+		const std::optional<uint64_t> prefix = GetCookedTexturePrefixSize(head, storedSize, c_ResidentTailDimension);
+		if (!prefix)
+			return std::nullopt;
+		// Block-compressed levels the device cannot sample are decoded at load (Decompress), all of them at once.
+		const std::optional<CookedTextureView> view = ParseCookedTexturePrefix(head.first(std::min<size_t>(head.size(), static_cast<size_t>(*prefix))), storedSize);
+		if (view && IsBlockCompressedFormat(view->Format) && !IsBlockCompressionSupported())
+			return std::nullopt;
+		return prefix;
+	}
+
 	Ref<Texture> Texture::Decompress(std::string* outError) const
 	{
 		auto fail = [outError](std::string message) -> Ref<Texture>
@@ -298,7 +323,7 @@ namespace Strata
 		};
 		if (!IsBlockCompressedFormat(m_Specification.Format))
 			return fail(fmt::format("Texture '{}' is not block-compressed", m_Specification.DebugName));
-		if (m_Mips.empty() || m_UploadStarted)
+		if (m_Mips.empty() || m_UploadStarted || m_LoadedLevel > 0)
 			return fail(fmt::format("Texture '{}' has no CPU copy to decode", m_Specification.DebugName));
 
 		TextureSpecification specification = m_Specification;
@@ -323,11 +348,24 @@ namespace Strata
 
 	std::span<const uint8_t> Texture::GetMipData(uint32_t level) const
 	{
+		if (level >= m_MipCount)
+			return {};
+		const CookedTextureLevel& cooked = m_CookedLayout.Levels[level];
+		// Levels a change under way raises, from the bytes read for them.
+		if (m_LevelChange && !m_LevelChange->Data.empty() && level >= m_LevelChange->FirstLevel && level < GetResidentLevel())
+		{
+			const uint64_t offset = cooked.Offset - m_LevelChange->DataOffset;
+			if (cooked.Offset < m_LevelChange->DataOffset || offset > m_LevelChange->Data.size() || cooked.Size > m_LevelChange->Data.size() - offset)
+				return {};
+			return std::span<const uint8_t>(m_LevelChange->Data.data() + offset, static_cast<size_t>(cooked.Size));
+		}
 		if (level >= m_Mips.size())
 			return {};
 		if (m_Cooked.empty())
 			return m_Mips[level].Data;
-		const CookedTextureLevel& cooked = m_CookedLayout.Levels[level];
+		// A partial load's prefix holds the tail only.
+		if (cooked.Offset > m_Cooked.size() || cooked.Size > m_Cooked.size() - cooked.Offset)
+			return {};
 		return std::span<const uint8_t>(m_Cooked.data() + cooked.Offset, static_cast<size_t>(cooked.Size));
 	}
 
@@ -352,10 +390,11 @@ namespace Strata
 					TextureFormatToString(m_Specification.Format));
 				return AssetFinalizeResult::Failed;
 			}
-			m_UploadTexture = CreateGPUTexture(0);
+			// The levels the cooked data held: all of them, or a partial load's mip tail.
+			m_UploadTexture = CreateGPUTexture(m_LoadedLevel);
 			if (!m_UploadTexture)
 				return AssetFinalizeResult::Failed;
-			m_UploadPosition = UploadPosition { 0, m_MipCount, 0 };
+			m_UploadPosition = UploadPosition { m_LoadedLevel, m_MipCount - m_LoadedLevel, 0 };
 			m_UploadQueue = upload->GetQueue().ChooseQueue(context);
 		}
 
@@ -387,6 +426,8 @@ namespace Strata
 		}
 		m_BindlessSlot = slot;
 		m_GPUTexture = std::move(m_UploadTexture);
+		m_ResidentLevel.store(m_LoadedLevel, std::memory_order_release);
+		m_ResidentBytes.store(GetLevelBytes(m_LoadedLevel, m_MipCount), std::memory_order_release);
 
 		// The GPU copy is authoritative from now on; streaming re-reads cooked data when it needs pixels again.
 		const auto releaseStart = std::chrono::steady_clock::now();
@@ -561,7 +602,7 @@ namespace Strata
 	{
 		if (!Renderer::IsInitialized())
 			return GetMemoryUsage();
-		return AssetMemoryUsage { 0, GetLevelBytes(0, m_MipCount), 0 };
+		return AssetMemoryUsage { 0, GetLevelBytes(m_LoadedLevel, m_MipCount), 0 };
 	}
 
 	AssetMemoryUsage Texture::GetMemoryUsage() const
@@ -570,9 +611,144 @@ namespace Strata
 		usage.Cpu = m_Cooked.size();
 		for (const TextureMip& mip : m_Mips)
 			usage.Cpu += mip.Data.size();
-		if (m_GPUTexture || m_UploadTexture)
-			usage.GpuTextures = GetLevelBytes(0, m_MipCount);
+		if (m_GPUTexture)
+			usage.GpuTextures = GetLevelBytes(GetResidentLevel(), m_MipCount);
+		else if (m_UploadTexture)
+			usage.GpuTextures = GetLevelBytes(m_LoadedLevel, m_MipCount);
+		// A change under way holds its new texture beside the resident one, and the raised levels' bytes until they are up.
+		if (m_LevelChange)
+		{
+			usage.Cpu += m_LevelChange->Data.size();
+			if (m_LevelChange->Texture)
+				usage.GpuTextures += GetLevelBytes(m_LevelChange->FirstLevel, m_MipCount);
+		}
 		return usage;
+	}
+
+	uint32_t Texture::GetTailLevel() const
+	{
+		const CookedTextureByteRange tail = m_CookedLayout.GetMipTailByteRange(c_ResidentTailDimension);
+		return tail.LevelCount > 0 ? tail.FirstLevel : m_MipCount - 1;
+	}
+
+	bool Texture::CanChangeLevels() const
+	{
+		return m_FromCookedData && m_GPUTexture && m_BindlessSlot != BindlessTextureTable::c_InvalidSlot && !m_LevelChange && !m_UploadTexture
+			&& m_CookedLayout.Version >= 2;
+	}
+
+	uint32_t Texture::GetChangeLevel() const
+	{
+		return m_LevelChange ? m_LevelChange->FirstLevel : GetResidentLevel();
+	}
+
+	bool Texture::RaiseLevels(uint32_t firstLevel, std::vector<uint8_t> data)
+	{
+		const uint32_t resident = GetResidentLevel();
+		if (!CanChangeLevels() || firstLevel >= resident || firstLevel >= m_MipCount)
+			return false;
+		const CookedTextureByteRange range = m_CookedLayout.GetLevelsByteRange(firstLevel, resident);
+		if (range.Size != data.size())
+			return false;
+		m_LevelChange = std::make_unique<LevelChange>();
+		m_LevelChange->FirstLevel = firstLevel;
+		m_LevelChange->Position = UploadPosition { firstLevel, resident - firstLevel, 0 };
+		m_LevelChange->Data = std::move(data);
+		m_LevelChange->DataOffset = range.Offset;
+		return true;
+	}
+
+	bool Texture::DropLevels(uint32_t firstLevel)
+	{
+		const uint32_t resident = GetResidentLevel();
+		firstLevel = std::min(firstLevel, GetTailLevel());
+		if (!CanChangeLevels() || firstLevel <= resident)
+			return false;
+		m_LevelChange = std::make_unique<LevelChange>();
+		m_LevelChange->FirstLevel = firstLevel;
+		m_LevelChange->Position = UploadPosition { firstLevel, 0, 0 };
+		return true;
+	}
+
+	void Texture::CancelLevelChange()
+	{
+		m_LevelChange.reset();
+	}
+
+	AssetFinalizeResult Texture::ContinueLevelChange(const AssetFinalizeContext& context)
+	{
+		RendererUploadContext* upload = RendererUploadContext::From(context.Upload);
+		if (!m_LevelChange || !m_GPUTexture)
+			return AssetFinalizeResult::Failed;
+		if (!upload || !upload->GetQueue().IsBatchOpen())
+			return AssetFinalizeResult::Pending; // Nothing records it now
+		if (!context.FirstOfFrame && std::chrono::steady_clock::now() >= context.Deadline)
+			return AssetFinalizeResult::Pending;
+
+		GPUUploadQueue& queue = upload->GetQueue();
+		LevelChange& change = *m_LevelChange;
+		if (!change.Texture)
+		{
+			change.Texture = CreateGPUTexture(change.FirstLevel);
+			if (!change.Texture)
+			{
+				m_LevelChange.reset();
+				return AssetFinalizeResult::Failed;
+			}
+		}
+		if (!change.Copied)
+		{
+			// The levels both textures hold, from the resident one on the GPU: copies on the graphics queue, which samples it.
+			const uint32_t resident = GetResidentLevel();
+			const uint32_t kept = std::max(change.FirstLevel, resident);
+			queue.CopyTextureLevels(change.Texture, kept - change.FirstLevel, m_GPUTexture, kept - resident, m_MipCount - kept);
+			change.Copied = true;
+		}
+		if (change.Position.Remaining > 0)
+		{
+			// The raised levels go up on the graphics queue too: the change swaps in as soon as its batch is submitted.
+			m_UploadQueue = GPUUploadQueueKind::Graphics;
+			uint64_t uploaded = 0;
+			const UploadProgress progress = UploadLevels(queue, context, change.Texture, change.Position, uploaded);
+			if (progress == UploadProgress::Failed)
+			{
+				ST_CORE_ERROR("Texture '{}': no staging memory to raise its levels", m_Specification.DebugName);
+				m_LevelChange.reset();
+				return AssetFinalizeResult::Failed;
+			}
+			if (progress == UploadProgress::Partial)
+				return AssetFinalizeResult::Pending;
+		}
+
+		nvrhi::TextureHandle texture = std::move(change.Texture);
+		const uint32_t firstLevel = change.FirstLevel;
+		m_LevelChange.reset();
+		return SwapResidentTexture(std::move(texture), firstLevel) ? AssetFinalizeResult::Done : AssetFinalizeResult::Failed;
+	}
+
+	bool Texture::SwapResidentTexture(nvrhi::TextureHandle texture, uint32_t firstLevel)
+	{
+		BindlessTextureTable& bindless = Renderer::GetBindlessTextures();
+		const uint32_t slot = bindless.Allocate(texture);
+		if (slot == BindlessTextureTable::c_InvalidSlot)
+			return false; // Table full (logged by the table): the resident levels stay
+		// The old slot keeps its texture until no frame in flight samples it; frames from now on sample the new one.
+		bindless.Release(m_BindlessSlot);
+		m_BindlessSlot = slot;
+		m_GPUTexture = std::move(texture);
+		m_ResidentLevel.store(firstLevel, std::memory_order_release);
+		m_ResidentBytes.store(GetLevelBytes(firstLevel, m_MipCount), std::memory_order_release);
+		return true;
+	}
+
+	bool Texture::GetDetailLevels(AssetDetailLevels& outLevels) const
+	{
+		outLevels.Resident = GetResidentLevel();
+		const uint32_t wanted = m_WantedLevel.load(std::memory_order_acquire);
+		outLevels.Wanted = wanted == UINT32_MAX ? outLevels.Resident : wanted;
+		outLevels.Count = m_MipCount;
+		outLevels.ResidentBytes = m_ResidentBytes.load(std::memory_order_acquire);
+		return true;
 	}
 
 	namespace TextureUtils

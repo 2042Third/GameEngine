@@ -10,6 +10,7 @@
 #include "Strata/Renderer/MeshFactory.h"
 #include "Strata/Renderer/RendererUploadContext.h"
 #include "Strata/Renderer/Texture.h"
+#include "Strata/Renderer/TextureStreamer.h"
 
 namespace Strata
 {
@@ -33,13 +34,23 @@ namespace Strata
 
 		// Textures and meshes are stored in their cooked binary form, materials and fonts as their source. Textures and
 		// fonts keep their bytes: they take them over instead of copying them. Block-compressed textures are decoded here,
-		// on the loading worker, for graphics devices that cannot sample them.
+		// on the loading worker, for graphics devices that cannot sample them. A first load of a texture reads its header and
+		// mip tail only (its prefix), and the texture streamer each manager gets reads finer levels as views need them.
 		AssetLoaderRegistry::Register(AssetType::Texture, [](const AssetMetadata&, AssetLoadData& data, std::string* outError) -> Ref<Asset>
 		{
-			Ref<Texture> texture = Texture::Deserialize(data.TakeBytes(), outError);
+			const uint64_t storedSize = data.GetStoredSize();
+			Ref<Texture> texture = Texture::Deserialize(data.TakeBytes(), storedSize, outError);
 			if (texture && IsBlockCompressedFormat(texture->GetSpecification().Format) && !Texture::IsBlockCompressionSupported())
 				return texture->Decompress(outError);
 			return texture;
+		});
+		AssetLoaderRegistry::RegisterPrefix(AssetType::Texture, [](std::span<const uint8_t> head, uint64_t storedSize)
+		{
+			return Texture::GetLoadPrefixSize(head, storedSize);
+		});
+		AssetManagerExtensionRegistry::Register([](AssetManagerBase& manager) -> Scope<AssetManagerExtension>
+		{
+			return CreateScope<TextureStreamer>(manager);
 		});
 		AssetLoaderRegistry::Register(AssetType::Mesh, [](const AssetMetadata&, std::span<const uint8_t> data, std::string* outError) -> Ref<Asset>
 		{

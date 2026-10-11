@@ -12,6 +12,7 @@
 #include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/TextRenderer.h"
 #include "Strata/Renderer/Texture.h"
+#include "Strata/Renderer/TextureStreamer.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
 
@@ -692,6 +693,15 @@ namespace Strata
 			Ref<Texture> texture = m_Assets.Resolve<Texture>(skyLight->EnvironmentMap, AssetPriority::High);
 			if (!texture || !texture->GetGPUTexture())
 				return; // Constant ambient until the environment arrives (counted as pending by the resolve cache)
+			// The environment is computed from the whole map: its streamer makes every level resident first.
+			if (texture->GetResidentLevel() > 0)
+			{
+				if (TextureStreamer* streamer = TextureStreamer::Find(*AssetManager::GetActive()))
+					streamer->RequestLevel(skyLight->EnvironmentMap, 0);
+				m_Assets.CountPending(skyLight->EnvironmentMap);
+				if (!m_Environment.Source || m_Environment.Source != texture)
+					return;
+			}
 			if (texture != m_Environment.Source)
 				ProcessEnvironment(commandList, texture);
 			rotation = glm::radians(skyLight->Rotation);
@@ -1527,11 +1537,39 @@ namespace Strata
 		ST_PROFILE_FUNCTION();
 		ST_PROFILE_STAGE("Render.Submit"); // Extraction (Render.Extract) nests in it
 		const bool rendered = RenderFrame(scene, camera, target, options);
+		if (rendered)
+			ReportTextureUse(camera);
 		// The references the frame resolved end with it, so a renderer that stops rendering (a capture renderer between
 		// captures, a hidden view) keeps none of the meshes, materials and textures it drew resident (the environment
 		// cache keeps the sky light's map) and no asset manager alive.
 		ReleaseFrameAssets();
 		return rendered;
+	}
+
+	void SceneRenderer::ReportTextureUse(const SceneCamera& camera)
+	{
+		// A view that moved this far or turned this much since the previous frame jumped: what it needs now goes first.
+		constexpr float c_CameraCutDistance = 10.0f;
+		constexpr float c_CameraCutCosine = 0.7071f; // 45 degrees
+
+		const glm::vec3 forward = -glm::vec3(camera.View[0][2], camera.View[1][2], camera.View[2][2]);
+		const float forwardLength = glm::length(forward);
+		const glm::vec3 direction = forwardLength > 0.0f ? forward / forwardLength : glm::vec3(0.0f, 0.0f, -1.0f);
+		const bool cut = m_HasPreviousCamera && (glm::distance(camera.Position, m_PreviousCameraPosition) > c_CameraCutDistance
+			|| glm::dot(direction, m_PreviousCameraForward) < c_CameraCutCosine);
+		m_HasPreviousCamera = true;
+		m_PreviousCameraPosition = camera.Position;
+		m_PreviousCameraForward = direction;
+
+		const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
+		TextureStreamer* streamer = manager ? TextureStreamer::Find(*manager) : nullptr;
+		if (!streamer)
+			return;
+		TextureStreamingView view;
+		view.ViewportHeight = static_cast<float>(m_ViewportSize.y);
+		view.Streaming = m_Specification.TextureStreaming;
+		view.CameraCut = cut;
+		streamer->ReportView(view, m_VisibleMaterials);
 	}
 
 	bool SceneRenderer::RenderFrame(Scene& scene, const SceneCamera& camera, nvrhi::IFramebuffer* target, const SceneRenderOptions& options)

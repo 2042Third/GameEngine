@@ -313,15 +313,18 @@ them into the `AssetUploadContext` the renderer provides through the engine serv
 ### Composition root and registries
 
 The engine is extended through registries rather than through code that knows its modules: `ComponentRegistry`
-(components), `AssetLoaderRegistry` (stored bytes to asset objects), `AssetImporterRegistry` (source files to stored
-bytes), `BuiltinAssets` (objects of the built-in assets) and `SceneSystemRegistry` (runtime systems of playing scenes).
+(components), `AssetLoaderRegistry` (stored bytes to asset objects, and the prefixes partial loads read),
+`AssetImporterRegistry` (source files to stored bytes), `AssetManagerExtensionRegistry` (work modules do for every asset
+manager: the texture streamer), `BuiltinAssets` (objects of the built-in assets) and `SceneSystemRegistry` (runtime
+systems of playing scenes).
 `Engine::RegisterBuiltinModules` (`Engine/BuiltinModules.cpp`) fills them, once per process, before anything reads
 them:
 
 ```text
 open the registries (BeginRegistration; not the importers')
 RegisterSceneModule        Scene/SceneRegistration.cpp         components (ComponentRegistration.cpp); Scene, Prefab, Model loaders
-RegisterRendererModule     Renderer/RendererRegistration.cpp   Texture, Mesh, Material, Font loaders; built-in meshes and material
+RegisterRendererModule     Renderer/RendererRegistration.cpp   Texture (with its prefix), Mesh, Material, Font loaders; built-in
+                                                               meshes and material; the texture streamer of every manager
 RegisterScriptingModule    Scripting/ScriptingRegistration.cpp "Scripting" system
 RegisterPhysicsModule      Physics/PhysicsRegistration.cpp     "Physics" system
 RegisterAudioModule        Audio/AudioRegistration.cpp         AudioClip loader, "Audio" system
@@ -347,8 +350,9 @@ ComponentRegistry::Freeze
   that is registered already or under a name that is taken (ignoring case), logs an error and returns a builder that
   converts to false and discards what it is given; nothing aborts. A game registers its components through
   `ModuleRegistrationOptions::Extra`.
-- The loader, importer, built-in asset and scene system registries stay open: tools and tests register more later
-  (a later loader or importer replaces or overrides the built-in one).
+- The loader, importer, built-in asset, manager extension and scene system registries stay open: tools and tests register
+  more later (a later loader or importer replaces or overrides the built-in one; an extension applies to managers made
+  afterwards).
 - **Components of modules a build lacks survive.** A scene, prefab or snapshot can name components this build does
   not register (a game module that is not loaded, a newer engine). `SceneSerializer::DeserializeEntities` keeps them
   verbatim in the runtime-only `UnknownComponentsComponent` (`Scene/UnknownComponents.h`; not registered, so the
@@ -882,9 +886,13 @@ Textures are stored the way the GPU samples them: block-compressed, with their m
   (Docs/Roadmap.md).
 - **Cooked form** (`Renderer/CookedTexture.h`, `STTX` version 2): a 40-byte header (format, size, mip count, flags,
   filter, wrap, name length, data offset), a mip table (width, height, offset, size per level), the debug name, then the
-  levels smallest first, each 16-byte aligned. The mip tail - every level up to 128x128 - is therefore one range right
-  after the header (`CookedTextureLayout::GetMipTailByteRange`, `Texture::GetMipTailByteRange`), which streaming can
-  read on its own. `ParseCookedTexture` validates everything (format, sizes per level in whole blocks, offsets inside the
+  levels smallest first, each 16-byte aligned. The mip tail - every level up to a size, 128x128 by default - is therefore
+  one range right after the header (`CookedTextureLayout::GetMipTailByteRange`, `Texture::GetMipTailByteRange`), and so
+  is every run of the levels above it (`GetLevelsByteRange`). The tail is a texture's first residency: a first load
+  reads the header and the levels up to 32x32 (`Texture::c_ResidentTailDimension`; 1.4 KiB of a 2048x2048 BC7 texture)
+  as a prefix of the stored form (`ParseCookedTexturePrefix`, which checks every level against the whole stored size,
+  and `GetCookedTexturePrefixSize`), and the finer levels are read by range as views need them (see
+  [Streaming and residency](#streaming-and-residency), Mip streaming). `ParseCookedTexture` validates everything (format, sizes per level in whole blocks, offsets inside the
   data and aligned, levels that do not overlap and are stored smallest first, known flags) and returns a
   `CookedTextureView` that refers to the data without copying; `Texture::Deserialize` builds on it and keeps the levels'
   `CookedTextureLayout` (offsets, sizes and their format) after the CPU copy is gone. Version 1 (the
@@ -1054,14 +1062,66 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   without uploads (device frames, `StagingPool::BeginFrame`, or manager updates, `RendererUploadContext::EndFrame`, which
   `AssetManagerStats::StagingReleases` counts). Nothing records `writeBuffer` into the upload batches, so NVRHI's upload
   manager (which pools the staging chunks of each command list without a limit) holds nothing for them.
+- **Mip streaming** (`Renderer/TextureStreamer`, partial residency in `Asset/AssetManager.h` and `Renderer/Texture`).
+  Texture memory follows the screen, not the content:
+  - *Partial loads.* A loader type may register a prefix function (`AssetLoaderRegistry::RegisterPrefix`,
+    `AssetPrefixFunction`): a load then reads the first 64 KiB of the stored form (`c_AssetPrefixHeadBytes`), asks the
+    function how much of it the first residency needs, reads the rest of that prefix if any, and the loader gets partial
+    data (`AssetLoadData::IsPartial`, `GetStoredSize`). Textures register one: a first load holds the header and the
+    resident tail (levels up to 32x32), which upload like any texture and make it Ready; the streaming queue counts such
+    a load at the head's bytes. Managers load partly while an extension refines what they load
+    (`AssetManagerExtension::RefinesPartialAssets`: the texture streamer, while the manager uploads through the
+    renderer) and `SetPartialLoads` allows it (on by default; tests of whole-asset residency and the baseline sweep turn
+    it off). Tools and tests without a renderer load whole textures.
+  - *Range reads* (`AssetManagerBase::RequestRange`, `PollRange`, `RaiseRange`, `CancelRange`). A read of a byte range of
+    a loaded asset's stored form waits in the streaming queue beside loads (`AssetStreamingRequest::RangeId`; priority,
+    score, in-flight bytes and per-I/O-thread reads like a load), runs `ReadAssetRange` on an I/O thread (pack blocks at
+    runtime, the cache file in the editor) and keeps its bytes counted in flight until its owner polls them or cancels it,
+    so data the main thread has not taken bounds what else is read. A read of an asset that is unloaded, evicted or
+    reloaded meanwhile fails. `HasPendingLoads` ignores range reads: their owner polls them.
+  - *Memory changes* (`AssetManagerBase::UpdateMemoryUsage`). An asset whose memory changes without being replaced (a
+    texture raising or dropping levels) is reported, and the manager moves its usage between the pool totals and the
+    per-pool recency orders without changing its place in them (its latest request decides it) or its state, under the
+    lock like every bookkeeping change, so pool totals, per-state counts and eviction order stay exact.
+  - *Manager extensions* (`Asset/AssetManagerExtension.h`). A registry the renderer module fills
+    (`AssetManagerExtensionRegistry`; the composition root opens it) gives every manager its texture streamer. The manager
+    calls it once per `Update` after the frame's arrivals, inside the same upload batch, with what is left of the frame's
+    upload bytes, upload time and deadline (`OnUpdate`), and before evicting for a pool over budget lets it free memory
+    (`ReleaseMemory`); its counters join the statistics (`AssetManagerStats::Detail`).
+  - *Wanted levels.* Each `SceneRenderer` reports what it drew after a frame (`TextureStreamer::ReportView` with
+    `GetVisibleMaterials`: per material the largest projected size and texture coordinate tiling); per texture the
+    streamer takes `floor(log2(size * tiling / pixels)) + bias` (`TextureStreamingPolicy::ComputeWantedLevel`, clamped to
+    its levels), the finest over every use and view; shadow passes report nothing. Detail rises at once and falls only
+    after 120 frames without a need of it (`c_DropDelayFrames`); a texture nobody needs falls to its tail. Views without
+    streaming (`SceneRendererSpecification::TextureStreaming` false) need level 0 and count a texture as pending until it
+    is whole; with streaming a texture whose tail is resident is not pending. `RequestLevel` asks for a level outside
+    views (the asset inspector's preview, the sky light's environment map, which is processed once level 0 is resident);
+    `TextureStreamer::GetPreview` gets a texture without asking for more than its tail (thumbnails).
+  - *Raising* (`Texture::RaiseLevels`, `ContinueLevelChange`). The streamer reads the missing levels as one range
+    (`CookedTextureLayout::GetLevelsByteRange`) at Low priority, scored by missing levels times coverage (a view that
+    jumped - moved 10 units or turned 45 degrees since its previous frame - reads at Normal, before older reads), only
+    when the GPU texture budget can hold the result. Then a new GPU texture of the levels from the new finest one is
+    created, the resident levels are copied into it on the GPU, the new ones upload through the upload queue within the
+    frame's budgets (a change may span frames), and the new texture replaces the old with a new bindless slot; the old
+    slot keeps its texture until no frame in flight samples it, and `SceneRenderer::ResolveTexture` resolves the slot every
+    frame, so materials change nothing and nothing that was drawn shows the loading fallback again.
+  - *Dropping.* Levels no longer needed go by a GPU copy into a smaller texture (`Texture::DropLevels`; at most 8 a
+    frame), never past the resident tail. Under GPU texture pressure (`ReleaseMemory`) the least needed textures - those
+    the latest frame did not need, longest unneeded first, then those in view, smallest on screen first - drop to their
+    tail before the manager evicts whole assets; what a view without streaming needs keeps every level, and a manager
+    that loads whole textures keeps them whole. A texture dropped for the budget is raised again once the budget holds
+    the level it needs.
+
 - **The upload seam** (`Asset/AssetUploadContext.h`). The asset layer knows no graphics API: finalizations record their
   uploads into the `AssetUploadContext` of `AssetFinalizeContext::Upload`. The renderer implements it
   (`Renderer/RendererUploadContext`, which its textures and meshes downcast to; another implementation, such as a test's,
   makes them finalize as without a device) and hands it to every manager through the engine service `IAssetGraphics`
   (registered by `RegisterRendererModule`), which also gives the managers the device's frames in flight (their eviction
   grace) and memory budget (their default budgets). A manager opens a batch (`Begin`) before the finalizations of an
-  update, of `LoadAssetSync`, `ReplaceLoadedAsset` and `AddMemoryAsset` and submits it after them (`Submit`), so what a
-  batch recorded reaches the GPU before anything renders with what it finalized; `EndFrame` follows each update.
+  update (and its extensions' work: one batch per update), of `LoadAssetSync`, `ReplaceLoadedAsset` and `AddMemoryAsset`
+  and submits it after them (`Submit`), so what a batch recorded reaches the GPU before anything renders with what it
+  finalized; `EndFrame` follows each update. The upload queue opens a batch's command lists with the first thing it
+  records, so an update that uploads nothing submits nothing.
   `AssetManagerBase::SetUploadContext` replaces the renderer's context for one manager (tools and tests;
   `Asset.Finalize` drives the finalize contract with a fake one, without a GPU).
 - **Dependency prefetch** (`AssetManagerBase::GetDependencies`). When the read of a requested asset completes, its

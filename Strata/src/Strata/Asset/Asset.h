@@ -143,6 +143,16 @@ namespace Strata
 
 	// Base class of every asset. Assets are shared (Ref<Asset>) and identified by their handle; code holds handles
 	// and asks the asset manager for the current object, which allows hot reload and streaming to replace objects.
+	// How much of an asset that can be partly resident is, in levels of detail (textures: mip levels, 0 the finest):
+	// Asset::GetDetailLevels, AssetResidencyInfo::Detail.
+	struct AssetDetailLevels
+	{
+		uint32_t Resident = 0;      // The finest level resident
+		uint32_t Wanted = 0;        // The finest level something needs (Resident while nothing asks for another)
+		uint32_t Count = 0;         // Levels the asset has
+		uint64_t ResidentBytes = 0; // What the resident levels hold
+	};
+
 	class Asset
 	{
 	public:
@@ -167,6 +177,10 @@ namespace Strata
 		// Whether objects outside the asset share its data, so that dropping the asset would free nothing (a playing
 		// voice holds an audio clip's samples). Residency management keeps such assets resident.
 		virtual bool IsDataShared() const { return false; }
+
+		// For assets that can be partly resident (textures streaming their mip levels): how much of it is. False for the
+		// others. Any thread.
+		virtual bool GetDetailLevels(AssetDetailLevels&) const { return false; }
 
 		AssetHandle Handle = UUID::Null();
 	};

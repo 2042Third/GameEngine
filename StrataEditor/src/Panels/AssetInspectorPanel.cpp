@@ -19,6 +19,7 @@
 #include <Strata/Core/Log.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/Texture.h>
+#include <Strata/Renderer/TextureStreamer.h>
 
 #include <imgui.h>
 
@@ -368,6 +369,12 @@ namespace Strata
 		const float aspect = static_cast<float>(texture->GetHeight()) / static_cast<float>(texture->GetWidth());
 		const float height = std::min(width * aspect, ImGui::GetFontSize() * c_PreviewMaxHeightInFontSizes);
 		const float shownWidth = height / aspect;
+		// The mip level the preview's pixels need streams in like a view's would (TextureStreamer).
+		if (TextureStreamer* streamer = TextureStreamer::Find(*AssetManager::GetActive()))
+		{
+			const float pixels = height * ImGui::GetIO().DisplayFramebufferScale.y;
+			streamer->RequestLevel(handle, TextureStreamingPolicy::ComputeWantedLevel(texture->GetHeight(), texture->GetMipCount(), 1.0f, pixels));
+		}
 		const ImVec2 min(ImGui::GetCursorScreenPos().x + (width - shownWidth) * 0.5f, ImGui::GetCursorScreenPos().y);
 		ImGui::Dummy(ImVec2(width, height));
 		const ImVec2 max(min.x + shownWidth, min.y + height);

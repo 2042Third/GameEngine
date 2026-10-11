@@ -91,6 +91,17 @@ namespace Strata
 		return entry.Asset;
 	}
 
+	void AssetResolveCache::CountPending(AssetHandle handle)
+	{
+		if (!m_Manager || !handle.IsValid())
+			return;
+		Entry& entry = GetEntry(handle);
+		if ((entry.Lookups & c_CountedPending) != 0)
+			return;
+		entry.Lookups |= c_CountedPending;
+		m_Stats.Pending++;
+	}
+
 	void AssetResolveCache::Prefetch(AssetHandle handle)
 	{
 		if (!m_Manager || !handle.IsValid())

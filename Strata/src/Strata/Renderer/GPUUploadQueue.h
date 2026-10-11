@@ -114,15 +114,13 @@ namespace Strata
 		// again (AssetFinalizeContext::MayWait), else the graphics queue.
 		GPUUploadQueueKind ChooseQueue(const AssetFinalizeContext& context) const;
 
-		// Opens a batch: uploads recorded until SubmitBatch belong to it.
+		// Opens a batch: uploads recorded until SubmitBatch belong to it. Its command lists open with the first thing recorded.
 		void BeginBatch();
 		// Executes what the batch recorded (the transfer queue's copies, then the graphics queue's work) and fences the staging
 		// each released, so that the staging becomes reusable as soon as the GPU has run the copies rather than once it
 		// finished the frame.
 		void SubmitBatch();
 		bool IsBatchOpen() const { return m_BatchOpen; }
-		// The open batch's graphics command list (null while none is open): GPU work that must run with the uploads.
-		nvrhi::ICommandList* GetCommandList() const { return m_BatchOpen ? m_GraphicsList.Get() : nullptr; }
 
 		// Once per device frame (Renderer::BeginFrame): the frame's statistics, and completion of earlier batches.
 		void BeginFrame();
@@ -210,6 +208,7 @@ namespace Strata
 		nvrhi::CommandListHandle m_GraphicsList;
 		nvrhi::CommandListHandle m_TransferList;
 		bool m_BatchOpen = false;
+		bool m_GraphicsOpen = false; // The open batch opened the graphics queue's list (it recorded something)
 		bool m_TransferOpen = false; // The open batch opened the transfer queue's list
 		// What the open batch's transfer list wrote: their states are given back to NVRHI's tracking before it closes, so that
 		// it records no transitions into shader states, which the transfer queue cannot make.

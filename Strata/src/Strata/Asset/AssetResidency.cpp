@@ -190,6 +190,9 @@ namespace Strata
 				continue;
 			assets.push_back(AssetResidencyInfo { handle, entry.Metadata.Type, entry.Metadata.Path, entry.Metadata.Name, entry.State, entry.Usage,
 				entry.LastRequestedFrame, entry.PinCount, entry.IsMemoryAsset });
+			AssetDetailLevels detail;
+			if (entry.Loaded && entry.Loaded->GetDetailLevels(detail))
+				assets.back().Detail = detail;
 		}
 		return assets;
 	}
@@ -205,6 +208,9 @@ namespace Strata
 				continue;
 			outAssets.push_back(AssetResidencySample { handle, entry.Metadata.Type, entry.State, entry.Usage, entry.LastRequestedFrame, entry.PinCount,
 				entry.IsMemoryAsset });
+			AssetDetailLevels detail;
+			if (entry.Loaded && entry.Loaded->GetDetailLevels(detail))
+				outAssets.back().Detail = detail;
 		}
 	}
 
@@ -265,7 +271,23 @@ namespace Strata
 	{
 		// Arriving is no request: the entry goes where its latest request puts it, so an asset whose load outlasted every
 		// request for it may go at once.
-		const RecencyKey key { entry.LastRequestedFrame, m_NextRecencySequence++ };
+		LinkRecencyLocked(entry, RecencyKey { entry.LastRequestedFrame, m_NextRecencySequence++ });
+	}
+
+	std::optional<AssetManagerBase::RecencyKey> AssetManagerBase::GetRecencyKeyLocked(const AssetEntry& entry) const
+	{
+		if (!entry.InRecencyOrders)
+			return std::nullopt;
+		for (AssetMemoryPool pool : c_AssetMemoryPools)
+		{
+			if (GetPoolBytes(entry.Usage, pool) > 0)
+				return entry.RecencyNodes[static_cast<size_t>(pool)]->first;
+		}
+		return std::nullopt;
+	}
+
+	void AssetManagerBase::LinkRecencyLocked(AssetEntry& entry, const RecencyKey& key)
+	{
 		for (AssetMemoryPool pool : c_AssetMemoryPools)
 		{
 			const size_t index = static_cast<size_t>(pool);
@@ -360,6 +382,49 @@ namespace Strata
 			}
 		}
 		return evicted;
+	}
+
+	void AssetManagerBase::UpdateMemoryUsage(AssetHandle handle, const Asset& asset)
+	{
+		const AssetMemoryUsage usage = asset.GetMemoryUsage();
+		std::scoped_lock<std::mutex> lock(m_Mutex);
+		auto it = m_Entries.find(handle);
+		if (it == m_Entries.end() || it->second.Loaded.get() != &asset)
+			return;
+		AssetEntry& entry = it->second;
+		if (entry.Usage == usage)
+			return;
+		// The entry keeps its place in the recency orders (its latest request decides it, not its size); it moves only between
+		// the orders of the pools it holds memory of.
+		const std::optional<RecencyKey> key = GetRecencyKeyLocked(entry);
+		const bool linked = entry.InRecencyOrders;
+		UnlinkRecencyLocked(entry);
+		m_Resident -= entry.Usage;
+		entry.Usage = usage;
+		m_Resident += entry.Usage;
+		if (linked)
+			LinkRecencyLocked(entry, key ? *key : RecencyKey { entry.LastRequestedFrame, m_NextRecencySequence++ });
+	}
+
+	void AssetManagerBase::ReleaseExtensionMemory(const AssetFinalizeContext& context)
+	{
+		for (AssetMemoryPool pool : c_AssetMemoryPools)
+		{
+			for (const Scope<AssetManagerExtension>& extension : m_Extensions)
+			{
+				uint64_t over = 0;
+				{
+					std::scoped_lock<std::mutex> lock(m_Mutex);
+					const uint64_t resident = GetPoolBytes(m_Resident, pool);
+					const uint64_t budget = m_Budgets.GetPoolBudget(pool);
+					over = resident > budget ? resident - budget : 0;
+				}
+				if (over == 0)
+					break;
+				// Called without the manager's lock: the extension reports what it freed (UpdateMemoryUsage).
+				extension->ReleaseMemory(pool, over, context);
+			}
+		}
 	}
 
 	void AssetManagerBase::EvictToBudgets()

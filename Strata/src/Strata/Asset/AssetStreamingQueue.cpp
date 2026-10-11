@@ -15,7 +15,15 @@ namespace Strata
 	{
 		const Key key = MakeKey(request.Priority, request.Score, request.Order);
 		m_Waiting.emplace(key, request);
-		m_WaitingKeys.insert_or_assign(request.Handle, key);
+		if (request.RangeId != 0)
+		{
+			m_WaitingRangeKeys.insert_or_assign(request.RangeId, key);
+			m_WaitingRanges++;
+		}
+		else
+		{
+			m_WaitingKeys.insert_or_assign(request.Handle, key);
+		}
 		m_WaitingPerPriority[static_cast<size_t>(request.Priority)]++;
 		m_WaitingBytes += request.Bytes;
 	}
@@ -24,13 +32,22 @@ namespace Strata
 	{
 		m_WaitingPerPriority[static_cast<size_t>(node->second.Priority)]--;
 		m_WaitingBytes -= node->second.Bytes;
-		m_WaitingKeys.erase(node->second.Handle);
+		if (node->second.RangeId != 0)
+		{
+			m_WaitingRangeKeys.erase(node->second.RangeId);
+			m_WaitingRanges--;
+		}
+		else
+		{
+			m_WaitingKeys.erase(node->second.Handle);
+		}
 		m_Waiting.erase(node);
 	}
 
-	void AssetStreamingQueue::Enqueue(AssetHandle handle, AssetPriority priority, float score, uint64_t storedSize, uint64_t generation)
+	void AssetStreamingQueue::Enqueue(AssetHandle handle, AssetPriority priority, float score, uint64_t storedSize, uint64_t generation, bool partial)
 	{
 		AssetStreamingRequest request { handle, priority, std::isfinite(score) ? score : 0.0f, 0, storedSize > 0 ? storedSize : c_UnknownSizeBytes, generation };
+		request.Partial = partial;
 
 		std::scoped_lock<std::mutex> lock(m_Mutex);
 		if (m_Closed)
@@ -54,16 +71,22 @@ namespace Strata
 		InsertLocked(request);
 	}
 
-	bool AssetStreamingQueue::Raise(AssetHandle handle, AssetPriority priority, float score)
+	void AssetStreamingQueue::EnqueueRange(uint64_t rangeId, AssetHandle handle, AssetPriority priority, float score, uint64_t bytes)
 	{
-		const float sanitizedScore = std::isfinite(score) ? score : 0.0f;
+		ST_CORE_ASSERT(rangeId != 0, "Range reads need an id");
+		AssetStreamingRequest request { handle, priority, std::isfinite(score) ? score : 0.0f, 0, bytes > 0 ? bytes : 1, 0 };
+		request.RangeId = rangeId;
 
 		std::scoped_lock<std::mutex> lock(m_Mutex);
-		auto waiting = m_WaitingKeys.find(handle);
-		if (waiting == m_WaitingKeys.end())
-			return false;
+		if (m_Closed || rangeId == 0 || m_WaitingRangeKeys.find(rangeId) != m_WaitingRangeKeys.end())
+			return;
+		request.Order = m_NextOrder++;
+		InsertLocked(request);
+	}
 
-		auto node = m_Waiting.find(waiting->second);
+	bool AssetStreamingQueue::RaiseLocked(std::map<Key, AssetStreamingRequest>::iterator node, AssetPriority priority, float score)
+	{
+		const float sanitizedScore = std::isfinite(score) ? score : 0.0f;
 		AssetStreamingRequest request = node->second;
 		const bool higherPriority = priority < request.Priority;
 		const bool higherScore = priority == request.Priority && sanitizedScore > request.Score;
@@ -75,6 +98,34 @@ namespace Strata
 		request.Score = sanitizedScore;
 		EraseLocked(node);
 		InsertLocked(request);
+		return true;
+	}
+
+	bool AssetStreamingQueue::Raise(AssetHandle handle, AssetPriority priority, float score)
+	{
+		std::scoped_lock<std::mutex> lock(m_Mutex);
+		auto waiting = m_WaitingKeys.find(handle);
+		if (waiting == m_WaitingKeys.end())
+			return false;
+		return RaiseLocked(m_Waiting.find(waiting->second), priority, score);
+	}
+
+	bool AssetStreamingQueue::RaiseRange(uint64_t rangeId, AssetPriority priority, float score)
+	{
+		std::scoped_lock<std::mutex> lock(m_Mutex);
+		auto waiting = m_WaitingRangeKeys.find(rangeId);
+		if (waiting == m_WaitingRangeKeys.end())
+			return false;
+		return RaiseLocked(m_Waiting.find(waiting->second), priority, score);
+	}
+
+	bool AssetStreamingQueue::CancelRange(uint64_t rangeId)
+	{
+		std::scoped_lock<std::mutex> lock(m_Mutex);
+		auto waiting = m_WaitingRangeKeys.find(rangeId);
+		if (waiting == m_WaitingRangeKeys.end())
+			return false;
+		EraseLocked(m_Waiting.find(waiting->second));
 		return true;
 	}
 
@@ -117,6 +168,8 @@ namespace Strata
 			const AssetStreamingRequest request = m_Waiting.begin()->second;
 			EraseLocked(m_Waiting.begin());
 			m_InFlightLoads++;
+			if (request.RangeId != 0)
+				m_InFlightRanges++;
 			m_OutstandingReads++;
 			m_InFlightBytes += request.Bytes;
 			m_InFlightBytesHighWater = std::max(m_InFlightBytesHighWater, m_InFlightBytes);
@@ -143,6 +196,8 @@ namespace Strata
 			if (!dispatched)
 			{
 				m_InFlightLoads--;
+				if (request.RangeId != 0)
+					m_InFlightRanges--;
 				m_OutstandingReads--;
 				m_InFlightBytes -= request.Bytes;
 				m_Dispatched--;
@@ -162,13 +217,16 @@ namespace Strata
 		Pump();
 	}
 
-	void AssetStreamingQueue::OnLoadFinished(uint64_t bytes)
+	void AssetStreamingQueue::OnLoadFinished(uint64_t bytes, bool range)
 	{
 		{
 			std::scoped_lock<std::mutex> lock(m_Mutex);
-			ST_CORE_ASSERT(m_InFlightLoads > 0 && m_InFlightBytes >= bytes, "AssetStreamingQueue: a load finished that was never dispatched");
+			ST_CORE_ASSERT(m_InFlightLoads > 0 && m_InFlightBytes >= bytes && (!range || m_InFlightRanges > 0),
+				"AssetStreamingQueue: a load finished that was never dispatched");
 			if (m_InFlightLoads > 0)
 				m_InFlightLoads--;
+			if (range && m_InFlightRanges > 0)
+				m_InFlightRanges--;
 			m_InFlightBytes -= std::min(bytes, m_InFlightBytes);
 		}
 		Pump();
@@ -186,6 +244,8 @@ namespace Strata
 		m_Closed = true;
 		m_Waiting.clear();
 		m_WaitingKeys.clear();
+		m_WaitingRangeKeys.clear();
+		m_WaitingRanges = 0;
 		m_WaitingPerPriority = {};
 		m_WaitingBytes = 0;
 	}
@@ -194,6 +254,12 @@ namespace Strata
 	{
 		std::scoped_lock<std::mutex> lock(m_Mutex);
 		return !m_Waiting.empty() || m_InFlightLoads > 0;
+	}
+
+	bool AssetStreamingQueue::HasLoadWork() const
+	{
+		std::scoped_lock<std::mutex> lock(m_Mutex);
+		return m_Waiting.size() > m_WaitingRanges || m_InFlightLoads > m_InFlightRanges;
 	}
 
 	size_t AssetStreamingQueue::GetQueuedCount() const
@@ -213,6 +279,8 @@ namespace Strata
 		stats.InFlightBytes = m_InFlightBytes;
 		stats.InFlightBytesHighWater = m_InFlightBytesHighWater;
 		stats.Dispatched = m_Dispatched;
+		stats.QueuedRanges = m_WaitingRanges;
+		stats.InFlightRanges = m_InFlightRanges;
 		return stats;
 	}
 

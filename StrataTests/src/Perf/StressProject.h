@@ -120,6 +120,11 @@ namespace Strata::Tests
 		// Frames per second the sweep runs at, like a game with vsync (0: as fast as possible). Loads take time, not frames,
 		// so how many frames a stop takes to settle depends on it.
 		uint32_t FrameRate = 60;
+		// Textures stream at the levels the screen needs (SceneRendererSpecification::TextureStreaming); off, every texture
+		// drawn is loaded whole (the manager's partial loads are off too): the baseline mip streaming is measured against.
+		bool TextureStreaming = true;
+		// When set, the last frame's pixels (RGBA8, rows top first, Width x Height) are written to this file.
+		std::filesystem::path FinalFrameFile;
 	};
 
 	// StreamingSweepResult::FramesToSettle of a stop where the camera never drew without pending assets.
@@ -138,6 +143,11 @@ namespace Strata::Tests
 		uint64_t MaxInFlightBytes = 0;        // The streaming queue's high-water mark
 		uint64_t MaxUploadedBytes = 0;        // GPU bytes finalized in one frame, at most
 		float MaxFinalizeMs = 0.0f;           // Finalization time of one frame, at most
+		float MaxUploadMs = 0.0f;             // Of it, the upload steps' time (AssetManagerStats::UploadMsLastFrame), at most
+		// The texture streamer (AssetManagerStats::Detail): mip levels raised and dropped, bytes read for raised levels.
+		uint64_t LevelsRaised = 0;
+		uint64_t LevelsDropped = 0;
+		uint64_t BytesStreamed = 0;
 		// Per stop: frames from the first frame at rest until the first frame that drew without pending assets (0 when that
 		// was the first frame at rest), or c_StopNeverSettled when no frame of the stop's hold did.
 		std::vector<uint32_t> FramesToSettle;
@@ -155,6 +165,8 @@ namespace Strata::Tests
 		std::vector<float> FinalizeMs;
 		std::vector<uint64_t> PrivateBytes;
 		std::vector<uint64_t> DeviceBytes;
+		// Per frame: the CPU time of the asset manager's update and the scene's rendering (what streaming adds to a frame).
+		std::vector<float> FrameMs;
 	};
 
 	// Runs the sweep on the device (whose renderer must be initialized) with a RuntimeAssetManager of the pack, made the

@@ -3,8 +3,6 @@
 #include "Strata/Asset/AssetUploadContext.h"
 #include "Strata/Core/Base.h"
 
-#include <nvrhi/nvrhi.h>
-
 #include <cstdint>
 
 namespace Strata
@@ -32,8 +30,6 @@ namespace Strata
 
 		// The queue the batches record into.
 		GPUUploadQueue& GetQueue() const { return m_Queue; }
-		// The command list of the open batch; null while no batch is open.
-		nvrhi::ICommandList* GetCommandList() const;
 		// The renderer's context when `context` is one, else null (no context, or another implementation such as a test's):
 		// what the renderer's assets record their uploads into.
 		static RendererUploadContext* From(AssetUploadContext* context);

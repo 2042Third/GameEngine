@@ -32,7 +32,8 @@ namespace
 
 TEST_SUITE("GPU.Assets.Streaming")
 {
-	// The sweep of the streaming perf test (PerfGPU.Streaming) on a small stress project, under the validation layers.
+	// The sweep of the streaming perf test (PerfGPU.Streaming) on a small stress project, under the validation layers: with
+	// whole textures (the residency manager evicts them for the budget) and with mip streaming.
 	TEST_CASE("A camera sweep over a stress world stays within its texture budget")
 	{
 		GPUContext gpu;
@@ -67,19 +68,36 @@ TEST_SUITE("GPU.Assets.Streaming")
 
 		BindlessTextureTable& bindless = Renderer::GetBindlessTextures();
 		const uint32_t slotsBefore = bindless.GetAllocatedCount();
-		const StreamingSweepResult result = RunStreamingSweep(gpu.GetDevice(), settings);
-		REQUIRE_MESSAGE(result.Completed, result.Error);
-		CHECK(result.Frames == settings.Path.GetFrameCount());
-		CHECK(result.FailedAssets == 0);
-		CHECK(result.MaxResidentTextureBytes <= settings.TextureBudget + project->LargestTextureBytes);
-		CHECK(result.Evictions > 0);
-		REQUIRE(result.FramesToSettle.size() == settings.Path.Stops);
-		for (size_t stop = 0; stop < result.FramesToSettle.size(); stop++)
+		uint64_t wholeTexturesMax = 0;
+		for (const bool streaming : { false, true })
 		{
-			CAPTURE(stop);
-			CHECK(result.FramesToSettle[stop] < settings.Path.HoldFrames);
+			CAPTURE(streaming);
+			settings.TextureStreaming = streaming;
+			const StreamingSweepResult result = RunStreamingSweep(gpu.GetDevice(), settings);
+			REQUIRE_MESSAGE(result.Completed, result.Error);
+			CHECK(result.Frames == settings.Path.GetFrameCount());
+			CHECK(result.FailedAssets == 0);
+			CHECK(result.MaxResidentTextureBytes <= settings.TextureBudget + project->LargestTextureBytes);
+			REQUIRE(result.FramesToSettle.size() == settings.Path.Stops);
+			for (size_t stop = 0; stop < result.FramesToSettle.size(); stop++)
+			{
+				CAPTURE(stop);
+				CHECK(result.FramesToSettle[stop] < settings.Path.HoldFrames);
+			}
+			CHECK(result.NewErrors == 0);
+			if (!streaming)
+			{
+				// Whole textures: the sweep needs more than the budget holds, so the residency manager evicts.
+				CHECK(result.Evictions > 0);
+				CHECK(result.LevelsRaised == 0);
+				wholeTexturesMax = result.MaxResidentTextureBytes;
+			}
+			else
+			{
+				// With mip streaming the textures hold what the 320x180 view needs: far less.
+				CHECK(result.MaxResidentTextureBytes < wholeTexturesMax);
+			}
 		}
-		CHECK(result.NewErrors == 0);
 
 		// The sweep's manager is gone: its textures are released once the frames that might use them are done.
 		SettleDevice(gpu);

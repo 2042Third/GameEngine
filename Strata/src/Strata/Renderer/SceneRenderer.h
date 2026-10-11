@@ -88,6 +88,11 @@ namespace Strata
 		// batches are split only by pipeline state, mesh, submesh and level of detail. Off, batches are also split by
 		// material, as renderers without per-instance materials draw; for comparisons and debugging.
 		bool BatchAcrossMaterials = true;
+		// Textures stream at the mip levels the screen needs (TextureStreamer): the renderer reports what it drew after each
+		// frame (VisibleMaterialUse), and a texture whose mip tail is resident is drawn with what it has. Off, every texture
+		// it draws is made resident at full resolution and counts as pending until it is (SceneRendererStats::PendingAssets):
+		// exact-pixel tests and the baseline streaming is measured against.
+		bool TextureStreaming = true;
 	};
 
 	// A material the last frame drew, for streaming its textures at the resolution the screen needs.
@@ -413,6 +418,8 @@ namespace Strata
 		// Finds the scene's sky light (or the preview sky); (re)computes the environment maps when its environment texture
 		// or its procedural sky's parameters changed.
 		void UpdateEnvironment(Scene& scene, bool preview, RenderData::FrameConstants& frame, nvrhi::ICommandList* commandList);
+		// Reports what the frame drew to the active asset manager's texture streamer, for the levels its textures need.
+		void ReportTextureUse(const SceneCamera& camera);
 		// New environment textures (radiance cube with mips, irradiance, prefiltered).
 		EnvironmentMaps CreateEnvironmentMaps();
 		// The environment maps of an equirectangular texture (new textures, so maps of the previous source are never
@@ -498,6 +505,10 @@ namespace Strata
 		glm::uvec2 m_ViewportSize = { 0, 0 };
 		bool m_TargetsValid = false;
 		bool m_HasRenderedFrame = false; // Since the render targets were (re)created
+		// The camera of the previous frame, to tell the texture streamer when the view jumped (a camera cut).
+		bool m_HasPreviousCamera = false;
+		glm::vec3 m_PreviousCameraPosition = glm::vec3(0.0f);
+		glm::vec3 m_PreviousCameraForward = glm::vec3(0.0f, 0.0f, -1.0f);
 		ErrorThrottle m_Errors; // Rendering failures, logged once until a frame renders successfully again
 		bool m_WarnedLightOverflow = false;
 		SceneRendererStats m_Stats;

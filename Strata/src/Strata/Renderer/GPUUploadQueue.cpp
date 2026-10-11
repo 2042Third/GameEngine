@@ -78,15 +78,21 @@ namespace Strata
 	void GPUUploadQueue::BeginBatch()
 	{
 		ST_CORE_ASSERT(!m_BatchOpen, "Upload batches do not nest");
-		if (!m_GraphicsList)
-			m_GraphicsList = m_Device->createCommandList();
-		m_GraphicsList->open();
+		// The command lists open when something is recorded (GetList): a frame without uploads submits nothing.
 		m_BatchOpen = true;
+		m_GraphicsOpen = false;
 		m_TransferOpen = false;
 	}
 
 	nvrhi::ICommandList* GPUUploadQueue::GetList(GPUUploadQueueKind queue)
 	{
+		if (!m_GraphicsOpen)
+		{
+			if (!m_GraphicsList)
+				m_GraphicsList = m_Device->createCommandList();
+			m_GraphicsList->open();
+			m_GraphicsOpen = true;
+		}
 		if (queue == GPUUploadQueueKind::Graphics)
 			return m_GraphicsList;
 		if (!m_TransferOpen)
@@ -129,6 +135,9 @@ namespace Strata
 		if (!m_BatchOpen)
 			return;
 		m_BatchOpen = false;
+		if (!m_GraphicsOpen)
+			return; // Nothing was recorded (the transfer list opens the graphics list too): no ticket, no submission
+		m_GraphicsOpen = false;
 
 		// The transfer queue's copies first: the graphics queue's work of the batch does not depend on them (what they wrote is
 		// handed over by later batches, once they completed).
@@ -153,7 +162,7 @@ namespace Strata
 			queriesCreated = transferQuery != nullptr;
 		}
 
-		// Executed also when it recorded nothing: an (immediate) command list must be executed before it is opened again.
+		// Executed also when only the transfer list recorded: the batch's completion is tracked on both queues.
 		m_GraphicsList->close();
 		m_Device->executeCommandList(m_GraphicsList);
 		// The staging these uploads copy from becomes reusable as soon as the GPU has run them, usually by the next frame's
@@ -408,7 +417,7 @@ namespace Strata
 			const nvrhi::TextureDesc& desc = source->getDesc();
 			const uint32_t width = std::max(1u, desc.width >> (sourceMip + level));
 			const uint32_t height = std::max(1u, desc.height >> (sourceMip + level));
-			m_GraphicsList->copyTexture(destination, nvrhi::TextureSlice().setMipLevel(destinationMip + level).setSize(width, height, 1), source,
+			GetList(GPUUploadQueueKind::Graphics)->copyTexture(destination, nvrhi::TextureSlice().setMipLevel(destinationMip + level).setSize(width, height, 1), source,
 				nvrhi::TextureSlice().setMipLevel(sourceMip + level).setSize(width, height, 1));
 			m_Stats.TextureCopies++;
 		}
@@ -424,7 +433,7 @@ namespace Strata
 	void GPUUploadQueue::AcquireOnGraphics(const GPUQueueTransfer& transfer)
 	{
 		ST_CORE_ASSERT(m_BatchOpen, "Queue transfers are recorded within a batch");
-		m_GraphicsDevice.RecordQueueTransfer(m_GraphicsList, transfer, true);
+		m_GraphicsDevice.RecordQueueTransfer(GetList(GPUUploadQueueKind::Graphics), transfer, true);
 	}
 
 	void GPUUploadQueue::RecordStep(const AssetFinalizeContext& context, uint64_t bytes, float milliseconds, bool texture, GPUUploadQueueKind queue)
@@ -447,7 +456,8 @@ namespace Strata
 
 	GPUUploadTicket GPUUploadQueue::GetTicket() const
 	{
-		return m_BatchOpen ? m_BatchTicket : m_BatchTicket - 1;
+		// An open batch that recorded nothing yet has no ticket of its own.
+		return m_BatchOpen && m_GraphicsOpen ? m_BatchTicket : m_BatchTicket - 1;
 	}
 
 	void GPUUploadQueue::CollectCompleted()

@@ -6,6 +6,8 @@
 
 #include <nvrhi/nvrhi.h>
 
+#include <atomic>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -36,6 +38,13 @@ namespace Strata
 
 	// 2D texture asset: CPU mip chain plus (when a renderer is running) a GPU texture registered in the bindless
 	// table. Created from cooked data by the asset system or directly from pixels.
+	//
+	// Partial residency: a texture loaded from a prefix of its cooked form (a partial load, AssetLoadData::IsPartial) holds
+	// its mip tail only; its GPU texture holds the levels from GetResidentLevel() to the smallest. The renderer's texture
+	// streamer (TextureStreamer) changes that: RaiseLevels with the cooked bytes of finer levels read by range, DropLevels to
+	// release them, each continued within the frame's upload budgets (ContinueLevelChange) and finished by swapping in a new
+	// GPU texture with a new bindless slot (the old slot is released once no frame in flight samples it), so what samples
+	// the texture never sees the loading fallback again.
 	class Texture : public Asset
 	{
 	public:
@@ -52,8 +61,15 @@ namespace Strata
 		std::vector<uint8_t> Serialize() const;
 		static Ref<Texture> Deserialize(std::span<const uint8_t> data, std::string* outError = nullptr);
 		// The same, keeping the cooked bytes and reading the pixels in place instead of copying them (asset loads, where the
-		// bytes are not needed otherwise): GetMips then has the levels' sizes, GetMipData their pixels.
+		// bytes are not needed otherwise): GetMips then has the levels' sizes, GetMipData their pixels. With a storedSize
+		// larger than the data, the data is the first bytes of a version 2 cooked texture of that size (a partial load): the
+		// texture holds the levels they contain (GetLoadedLevel), its mip tail.
 		static Ref<Texture> Deserialize(std::vector<uint8_t>&& data, std::string* outError = nullptr);
+		static Ref<Texture> Deserialize(std::vector<uint8_t>&& data, uint64_t storedSize, std::string* outError = nullptr);
+		// The texture loader's AssetPrefixFunction: the bytes a partial load of a cooked texture reads (its header and mip
+		// tail), from its first bytes. nullopt (load all of it) for data that cannot be read in parts (version 1, no tail) and
+		// for block-compressed data while the device cannot sample it (it is decoded whole).
+		static std::optional<uint64_t> GetLoadPrefixSize(std::span<const uint8_t> head, uint64_t storedSize);
 
 		// A copy of a block-compressed texture decoded to GetDecodedFormat (RGBA8 or RGBA8SRGB; R8 for BC4, RG8 for BC5),
 		// for devices that cannot sample block-compressed formats. It keeps this texture's cooked layout (GetCookedLayout:
@@ -112,6 +128,46 @@ namespace Strata
 		// GPU state (main thread, after the asset became Ready).
 		nvrhi::ITexture* GetGPUTexture() const { return m_GPUTexture; }
 		uint32_t GetBindlessSlot() const { return m_BindlessSlot; }
+
+		// Partial residency (see the class comment; main thread unless noted).
+		//
+		// The finest level its GPU texture holds (it holds every level from this one on; GetMipCount() before it was
+		// uploaded); without a renderer the finest level of its CPU copy. Any thread.
+		uint32_t GetResidentLevel() const { return m_ResidentLevel.load(std::memory_order_acquire); }
+		// The finest level the cooked data it was made from held: 0, or the first level of the mip tail for a partial load.
+		uint32_t GetLoadedLevel() const { return m_LoadedLevel; }
+		// The largest side of the levels that stay resident whatever the streaming (the resident tail): what a first, partial
+		// load holds (the 32x32 level of a 2048x2048 BC7 texture and its smaller ones: 1.4 KiB), and what dropping levels
+		// keeps.
+		static constexpr uint32_t c_ResidentTailDimension = 32;
+		// The first level of the resident tail (levels of at most c_ResidentTailDimension texels a side): a partial load holds
+		// it, and dropping levels never goes further.
+		uint32_t GetTailLevel() const;
+		// Whether its levels can change: it was made from cooked data (whose levels can be read again) and is resident on the
+		// GPU, and no change is under way.
+		bool CanChangeLevels() const;
+		bool IsChangingLevels() const { return m_LevelChange != nullptr; }
+		// The finest level the change under way makes resident (GetResidentLevel() while none is under way).
+		uint32_t GetChangeLevel() const;
+		// Starts making levels [firstLevel, GetResidentLevel()) resident, from `data`: the cooked bytes of the range
+		// GetCookedLayout().GetLevelsByteRange(firstLevel, GetResidentLevel()). False (nothing changes) when the levels
+		// cannot change, firstLevel is not finer than the resident level, or the data does not have the range's size.
+		bool RaiseLevels(uint32_t firstLevel, std::vector<uint8_t> data);
+		// Starts keeping only levels [firstLevel, GetMipCount()), at most down to the tail (GetTailLevel). False when the
+		// levels cannot change or firstLevel is not coarser than the resident level.
+		bool DropLevels(uint32_t firstLevel);
+		// Continues the change under way within the context's budgets (Pending until its uploads are done): copies the
+		// resident levels it keeps into a new GPU texture on the GPU, uploads the raised ones through the upload queue, and,
+		// once done, swaps the new texture in (Done). Failed leaves the resident levels as they were. Within an open batch of
+		// the renderer's upload context.
+		AssetFinalizeResult ContinueLevelChange(const AssetFinalizeContext& context);
+		// Abandons the change under way (its new GPU texture goes once the GPU is done with it).
+		void CancelLevelChange();
+		// Bytes of levels [firstLevel, end) of the mip chain, in the format it is stored in.
+		uint64_t GetLevelBytes(uint32_t firstLevel, uint32_t end) const;
+		// The finest level something needs, as the texture streamer reports it (AssetDetailLevels::Wanted). Any thread.
+		void SetWantedLevel(uint32_t level) { m_WantedLevel.store(level, std::memory_order_release); }
+		bool GetDetailLevels(AssetDetailLevels& outLevels) const override;
 	private:
 		Texture() = default;
 
@@ -134,8 +190,6 @@ namespace Strata
 
 		static Ref<Texture> CreateFromView(const CookedTextureView& view, std::vector<uint8_t>* takeOver, std::string* outError);
 		CookedTextureDescription GetCookedDescription() const;
-		// Bytes of levels [firstLevel, end) of the mip chain.
-		uint64_t GetLevelBytes(uint32_t firstLevel, uint32_t end) const;
 		// Bytes the CPU copy (cooked bytes and level data) holds allocated.
 		uint64_t GetCPUCopyBytes() const;
 		// Uploads levels of the CPU copy into `texture` (which holds levels from position.FirstLevel on at its level 0) in
@@ -150,6 +204,20 @@ namespace Strata
 			uint64_t& outBytes);
 		// A GPU texture for levels [firstLevel, m_MipCount): its level 0 is level firstLevel. Null when it cannot be created.
 		nvrhi::TextureHandle CreateGPUTexture(uint32_t firstLevel) const;
+		// Makes `texture` (levels [firstLevel, m_MipCount)) the resident one: a new bindless slot, the old one released once
+		// no frame in flight samples it. False when the table is full (nothing changes).
+		bool SwapResidentTexture(nvrhi::TextureHandle texture, uint32_t firstLevel);
+
+		// A change of the resident levels under way (RaiseLevels, DropLevels).
+		struct LevelChange
+		{
+			uint32_t FirstLevel = 0;      // The new texture holds levels [FirstLevel, m_MipCount)
+			nvrhi::TextureHandle Texture; // Created by the first ContinueLevelChange
+			bool Copied = false;          // The levels it keeps of the resident texture were copied into it
+			UploadPosition Position;      // The raised levels left to upload
+			std::vector<uint8_t> Data;    // The raised levels' cooked bytes
+			uint64_t DataOffset = 0;      // Where Data starts in the cooked form
+		};
 	private:
 		TextureSpecification m_Specification;
 		std::vector<TextureMip> m_Mips;
@@ -169,6 +237,14 @@ namespace Strata
 		GPUUploadQueueKind m_UploadQueue {}; // The queue the upload's copies run on (the graphics queue until one is chosen)
 		uint64_t m_TransferTicket = 0; // While the transfer queue's copies complete: the ticket of the release (GPUUploadTicket)
 		bool m_UploadStarted = false; // The CPU copy started to go (Serialize and Decompress need all of it)
+
+		// Partial residency
+		bool m_FromCookedData = false; // Made by Deserialize: its levels can be read again from the stored form
+		uint32_t m_LoadedLevel = 0;    // The finest level the cooked data it was made from held
+		std::atomic<uint32_t> m_ResidentLevel = 0;
+		std::atomic<uint32_t> m_WantedLevel = UINT32_MAX; // UINT32_MAX: nothing reported
+		std::atomic<uint64_t> m_ResidentBytes = 0;          // Bytes of the resident levels
+		std::unique_ptr<LevelChange> m_LevelChange;
 	};
 
 	namespace TextureUtils

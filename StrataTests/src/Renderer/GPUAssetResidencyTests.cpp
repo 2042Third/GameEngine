@@ -28,9 +28,15 @@ namespace
 	constexpr uint64_t c_MB = 1000 * 1000;
 
 	// Serves stored assets (cooked textures, unless told otherwise) from memory: many handles may share the same bytes.
+	// Loads whole textures: these tests are about the residency of whole assets (partial loads: GPU.TextureStreaming).
 	class TextureManager final : public AssetManagerBase
 	{
 	public:
+		TextureManager()
+		{
+			SetPartialLoads(false);
+		}
+
 		~TextureManager() override
 		{
 			WaitForInFlightLoads();
@@ -765,11 +771,13 @@ TEST_SUITE("GPU.Assets.Residency")
 			return bytes;
 		};
 
-		// World streams in and is drawn.
+		// World streams in and is drawn. Its textures load their resident tails (32x32 and below): the cubes are drawn too small
+		// to need finer levels (mip streaming, TextureStreamer).
+		const uint64_t tailBytes = GetTextureBytes(32);
 		for (int warmup = 0; warmup < 60 && (renderer.GetStats().PendingAssets > 0 || residentTextureBytes(0, 4) == 0); warmup++)
 			frame();
 		REQUIRE(renderer.GetStats().PendingAssets == 0);
-		CHECK(residentTextureBytes(0, 4) == 5 * GetTextureBytes(256));
+		CHECK(residentTextureBytes(0, 4) == 5 * tailBytes);
 		CHECK(manager->GetStats().Evictions == 0);
 		// The shared texture's and material's objects: they must survive the switch, not be evicted and loaded again.
 		const std::weak_ptr<Asset> sharedTexture = manager->GetAsset(textures[4]);
@@ -804,7 +812,7 @@ TEST_SUITE("GPU.Assets.Residency")
 		// arrived.
 		CHECK(manager->GetAsset(textures[4]) == sharedTexture.lock());
 		CHECK(manager->GetAsset(materials[4]) == sharedMaterial.lock());
-		CHECK(residentTextureBytes(4, 8) == 5 * GetTextureBytes(256));
+		CHECK(residentTextureBytes(4, 8) == 5 * tailBytes);
 		CHECK(manager->GetStats().Evictions == 9); // Four textures, four materials, and World's scene document
 		CHECK(manager->GetAssetState(world.Handle) == AssetState::Unloaded);
 

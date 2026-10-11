@@ -70,6 +70,19 @@ namespace Strata
 		uint64_t GetPoolBudget(AssetMemoryPool pool) const;
 	};
 
+	// What manager extensions that keep assets partly resident did (AssetManagerStats::Detail): the renderer's texture
+	// streamer.
+	struct AssetDetailStats
+	{
+		uint64_t LevelsRaised = 0;        // Levels made resident since the manager was created
+		uint64_t LevelsDropped = 0;       // Levels released (no longer needed, or for budgets)
+		uint64_t BytesStreamed = 0;       // Bytes read for raised levels
+		uint64_t BytesStreamedLastFrame = 0;
+		uint32_t AssetsBelowWanted = 0;   // Assets whose resident levels are coarser than what something needs
+		uint32_t Reads = 0;               // Reads of levels queued or in flight
+		uint32_t Changes = 0;             // Assets changing levels (uploading or swapping)
+	};
+
 	namespace AssetResidency
 	{
 		// Frames after a scene switch until its owner trims what the previous scene used (AssetManagerBase::ScheduleTrim),

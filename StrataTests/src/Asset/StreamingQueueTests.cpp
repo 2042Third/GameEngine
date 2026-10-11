@@ -209,6 +209,48 @@ TEST_SUITE("Asset.StreamingQueue")
 		CHECK(recorder.Dispatched.back().Bytes == AssetStreamingQueue::c_UnknownSizeBytes);
 	}
 
+	TEST_CASE("Range reads wait and dispatch like loads, each on its own, and count apart from loads")
+	{
+		RecordingQueue recording;
+		AssetStreamingLimits limits;
+		limits.MaxOutstandingReads = 1;
+		recording.Queue.SetLimits(limits);
+		// A load and two reads of the same asset: three requests, ordered like any.
+		recording.Queue.Enqueue(UUID(1), AssetPriority::Normal, 0.0f, 1000, 1);
+		recording.Queue.EnqueueRange(10, UUID(1), AssetPriority::Low, 5.0f, 200);
+		recording.Queue.EnqueueRange(11, UUID(1), AssetPriority::Low, 1.0f, 300);
+		recording.Queue.EnqueueRange(11, UUID(1), AssetPriority::High, 1.0f, 300); // An id already waiting is ignored
+		CHECK(recording.Queue.GetStats().QueuedRanges == 2);
+		CHECK(recording.Queue.GetQueuedCount() == 3);
+
+		// Raised and cancelled by id; a cancelled read is never dispatched, a raised one goes before the load.
+		CHECK(recording.Queue.RaiseRange(11, AssetPriority::High, 0.0f));
+		CHECK_FALSE(recording.Queue.RaiseRange(11, AssetPriority::Low, 9.0f));
+		CHECK(recording.Queue.CancelRange(10));
+		CHECK_FALSE(recording.Queue.CancelRange(10));
+		CHECK_FALSE(recording.Queue.CancelRange(99));
+		recording.Queue.Pump();
+		REQUIRE(recording.Dispatched.size() == 1);
+		CHECK(recording.Dispatched[0].RangeId == 11);
+		CHECK(recording.Dispatched[0].Bytes == 300);
+		CHECK(recording.Queue.GetStats().InFlightRanges == 1);
+		// The read is in flight, the load waits: there is load work, and range work besides.
+		CHECK(recording.Queue.HasLoadWork());
+		recording.Queue.OnReadFinished();
+		REQUIRE(recording.Dispatched.size() == 2);
+		CHECK(recording.Dispatched[1].RangeId == 0);
+		CHECK(recording.Dispatched[1].Handle == UUID(1));
+		recording.Queue.OnReadFinished();
+		recording.Queue.OnLoadFinished(1000);
+		CHECK_FALSE(recording.Queue.HasLoadWork()); // Only the read is left in flight
+		CHECK(recording.Queue.HasWork());
+		CHECK(recording.Queue.GetStats().InFlightBytes == 300);
+		recording.Queue.OnLoadFinished(300, true);
+		CHECK_FALSE(recording.Queue.HasWork());
+		CHECK(recording.Queue.GetStats().InFlightRanges == 0);
+		CHECK(recording.Queue.GetStats().QueuedRanges == 0);
+	}
+
 	TEST_CASE("Outstanding reads are limited, and a refused dispatch is forgotten")
 	{
 		bool refuse = false;
