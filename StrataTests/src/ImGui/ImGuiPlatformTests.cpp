@@ -81,6 +81,9 @@ namespace
 			ImGuiIO& io = ImGui::GetIO();
 			io.IniFilename = nullptr;
 			io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+			// ImGui swaps Ctrl and Cmd by default when built for macOS: the tests see the keys as they are on every system,
+			// and the test of macOS behaviors turns them on itself.
+			io.ConfigMacOSXBehaviors = false;
 			Platform.Init(Window);
 		}
 

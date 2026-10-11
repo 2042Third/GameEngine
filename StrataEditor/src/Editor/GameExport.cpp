@@ -118,9 +118,12 @@ namespace Strata
 		const std::string text = FileSystem::ToUTF8(directory);
 		if (text.empty())
 			return "Choose the directory to export the game to";
-		// "\\server\share", "//server" and the "\\?\" and "\\.\" device namespaces all start with two separators.
-		auto isSeparator = [](char character) { return character == '/' || character == '\\'; };
-		if (text.size() >= 2 && isSeparator(text[0]) && isSeparator(text[1]))
+		// "\\server\share", "//server" and the "\\?\" and "\\.\" device namespaces all start with two separators. Refused on
+		// every system alike (POSIX leaves the meaning of two leading slashes to the system). The native string, as given:
+		// libstdc++'s generic form, which `text` is, collapses the two slashes into one.
+		const std::filesystem::path::string_type& native = directory.native();
+		auto isSeparator = [](std::filesystem::path::value_type character) { return character == '/' || character == '\\'; };
+		if (native.size() >= 2 && isSeparator(native[0]) && isSeparator(native[1]))
 			return fmt::format("'{}' is a network or device path: export to a folder on a local drive", text);
 		if (!directory.is_absolute())
 			return fmt::format("The export directory must be an absolute path, such as {} (got '{}')",

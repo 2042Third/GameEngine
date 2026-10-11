@@ -242,7 +242,13 @@ TEST_SUITE("Core.Platform")
 		CHECK(result.ExitCode == 0);
 		INFO(result.Output);
 #if defined(ST_PLATFORM_WINDOWS)
-		CHECK(result.Output.find("before=default requested=1 after=disabled") != std::string::npos);
+		// Some Windows versions accept the setting but cannot report it (Windows Server 2022, which CI runs, answers
+		// GetProcessInformation for ProcessPowerThrottling with an error). Where the state can be read, it must change from
+		// the default to disabled.
+		if (result.Output.find("before=unknown") != std::string::npos)
+			CHECK(result.Output.find("before=unknown requested=1 after=unknown") != std::string::npos);
+		else
+			CHECK(result.Output.find("before=default requested=1 after=disabled") != std::string::npos);
 #else
 		CHECK(result.Output.find("before=unknown requested=1 after=unknown") != std::string::npos);
 #endif
