@@ -108,6 +108,38 @@ TEST_SUITE("Editor.UI.AssetInspector")
 		CHECK(editor.Context().GetUndoStack().GetHistory().size() == steps);
 		CHECK_FALSE(editor.Context().IsSceneModified());
 	}
+
+	TEST_CASE("An edit that ends in the middle of the tables leaves the rest of the frame drawn from intact data")
+	{
+		HarnessEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f }, WithFeatureProject("EditorAnimationControllerCommit"));
+		REQUIRE(editor.Context().SetInspectedAsset(c_ArmController));
+		REQUIRE(editor.FramesUntil([]() { return UI::ItemProbe::Find("AssetInspector.Controller.AddParameter").has_value(); }));
+
+		// Typing keeps the edit in progress (the tables draw it) until Enter commits it from the first row of the states.
+		REQUIRE(editor.ReplaceText("AssetInspector.Controller.State0.Name", "Greet"));
+		CHECK(LoadedController()->GetStates()[0].Name == "Wave");
+		editor.Harness.SetKey(ImGuiKey_Enter, true);
+		bool committed = false;
+		for (int frame = 0; frame < 4 && !committed; frame++)
+		{
+			editor.Frames(1);
+			if (frame == 0)
+				editor.Harness.SetKey(ImGuiKey_Enter, false);
+			committed = LoadedController()->GetStates()[0].Name == "Greet";
+			if (!committed)
+				continue;
+			// The frame that committed it drew the later states and the transitions too, as they were.
+			const std::optional<UI::ItemProbe::Item> events = UI::ItemProbe::Find("AssetInspector.Controller.State1.Events");
+			REQUIRE(events.has_value());
+			CHECK(events->Text == "SwingEnd@0.9");
+			const std::optional<UI::ItemProbe::Item> conditions = UI::ItemProbe::Find("AssetInspector.Controller.Transition0.Conditions");
+			REQUIRE(conditions.has_value());
+			CHECK(conditions->Text == "Speed > 0.5");
+		}
+		CHECK(committed);
+		editor.Frames(1);
+		CHECK(UI::ItemProbe::Find("AssetInspector.Controller.State0.Name")->Text == "Greet");
+	}
 }
 
 TEST_SUITE("Editor.UI.Inspector")

@@ -316,20 +316,28 @@ namespace Strata
 	void AnimationAssetViews::Reset()
 	{
 		m_Pending.reset();
+		m_Queued.reset();
 		m_Source.reset();
 		m_Error.clear();
 	}
 
-	void AnimationAssetViews::Edit(EditorContext& context, AnimationControllerData data, bool finished, const std::string& name)
+	void AnimationAssetViews::Edit(AnimationControllerData data, bool finished, const std::string& name)
 	{
-		if (!finished)
+		if (m_Queued && m_Queued->Finished && !finished)
+			return;
+		m_Queued = QueuedEdit { std::move(data), finished, name };
+	}
+
+	void AnimationAssetViews::ApplyEdit(EditorContext& context, QueuedEdit edit)
+	{
+		if (!edit.Finished)
 		{
-			m_Pending = std::move(data);
+			m_Pending = std::move(edit.Data);
 			return;
 		}
 		m_Pending.reset();
 		std::string error;
-		if (AssetEdit::SetControllerData(context, m_Controller, data, name, {}, &error))
+		if (AssetEdit::SetControllerData(context, m_Controller, edit.Data, edit.Name, {}, &error))
 			m_Error.clear();
 		else
 			m_Error = std::move(error);
@@ -357,9 +365,17 @@ namespace Strata
 		if (!m_Error.empty())
 			UI::Banner("AssetInspector.Controller.Error", Icons::TriangleAlert, m_Error, colors.Error);
 
+		m_Queued.reset();
 		DrawParameters(context, data);
 		DrawStates(context, data);
 		DrawTransitions(context, data);
+		// Nothing draws from `data` any more: the frame's edit may replace or end the pending one now.
+		if (m_Queued)
+		{
+			QueuedEdit edit = std::move(*m_Queued);
+			m_Queued.reset();
+			ApplyEdit(context, std::move(edit));
+		}
 	}
 
 	void AnimationAssetViews::DrawParameters(EditorContext& context, const AnimationControllerData& data)
@@ -399,7 +415,7 @@ namespace Strata
 				{
 					AnimationControllerData edited = data;
 					edited.Parameters[index].Name = std::get<std::string>(name);
-					Edit(context, std::move(edited), result.Finished, "Rename Parameter");
+					Edit(std::move(edited), result.Finished, "Rename Parameter");
 				}
 				ImGui::TableNextColumn();
 				PropertyValue type = static_cast<int32_t>(parameter.Type);
@@ -407,7 +423,7 @@ namespace Strata
 				{
 					AnimationControllerData edited = data;
 					edited.Parameters[index].Type = static_cast<AnimationParameterType>(std::get<int32_t>(type));
-					Edit(context, std::move(edited), true, "Change Parameter Type");
+					Edit(std::move(edited), true, "Change Parameter Type");
 				}
 				ImGui::TableNextColumn();
 				if (parameter.Type == AnimationParameterType::Float)
@@ -417,7 +433,7 @@ namespace Strata
 					{
 						AnimationControllerData edited = data;
 						edited.Parameters[index].DefaultFloat = std::get<float>(value);
-						Edit(context, std::move(edited), result.Finished, "Edit Parameter Default");
+						Edit(std::move(edited), result.Finished, "Edit Parameter Default");
 					}
 				}
 				else if (parameter.Type == AnimationParameterType::Bool)
@@ -427,7 +443,7 @@ namespace Strata
 					{
 						AnimationControllerData edited = data;
 						edited.Parameters[index].DefaultBool = std::get<bool>(value);
-						Edit(context, std::move(edited), true, "Edit Parameter Default");
+						Edit(std::move(edited), true, "Edit Parameter Default");
 					}
 				}
 				else
@@ -455,7 +471,7 @@ namespace Strata
 						condition.Parameter--;
 				}
 			}
-			Edit(context, std::move(edited), true, "Remove Parameter");
+			Edit(std::move(edited), true, "Remove Parameter");
 		}
 		if (UI::ToolbarButton("AssetInspector.Controller.AddParameter", Icons::Plus, "Add Parameter", "Add a float parameter"))
 		{
@@ -464,7 +480,7 @@ namespace Strata
 			for (uint32_t number = 1; std::any_of(edited.Parameters.begin(), edited.Parameters.end(), [&](const AnimationParameter& parameter) { return parameter.Name == name; }); number++)
 				name = fmt::format("Parameter{}", number);
 			edited.Parameters.push_back(AnimationParameter { name, AnimationParameterType::Float, 0.0f, false });
-			Edit(context, std::move(edited), true, "Add Parameter");
+			Edit(std::move(edited), true, "Add Parameter");
 		}
 	}
 
@@ -516,7 +532,7 @@ namespace Strata
 				{
 					AnimationControllerData edited = data;
 					edited.DefaultState = static_cast<uint32_t>(index);
-					Edit(context, std::move(edited), true, "Set Default State");
+					Edit(std::move(edited), true, "Set Default State");
 				}
 				ImGui::TableNextColumn();
 				PropertyValue name = state.Name;
@@ -524,7 +540,7 @@ namespace Strata
 				{
 					AnimationControllerData edited = data;
 					edited.States[index].Name = std::get<std::string>(name);
-					Edit(context, std::move(edited), result.Finished, "Rename State");
+					Edit(std::move(edited), result.Finished, "Rename State");
 				}
 				ImGui::TableNextColumn();
 				PropertyValue clip = UUID(state.Clip);
@@ -532,7 +548,7 @@ namespace Strata
 				{
 					AnimationControllerData edited = data;
 					edited.States[index].Clip = std::get<UUID>(clip);
-					Edit(context, std::move(edited), true, "Change State Clip");
+					Edit(std::move(edited), true, "Change State Clip");
 				}
 				ImGui::TableNextColumn();
 				PropertyValue speed = state.Speed;
@@ -540,7 +556,7 @@ namespace Strata
 				{
 					AnimationControllerData edited = data;
 					edited.States[index].Speed = std::get<float>(speed);
-					Edit(context, std::move(edited), result.Finished, "Edit State Speed");
+					Edit(std::move(edited), result.Finished, "Edit State Speed");
 				}
 				ImGui::TableNextColumn();
 				PropertyValue loop = state.Loop;
@@ -548,7 +564,7 @@ namespace Strata
 				{
 					AnimationControllerData edited = data;
 					edited.States[index].Loop = std::get<bool>(loop);
-					Edit(context, std::move(edited), true, "Edit State Loop");
+					Edit(std::move(edited), true, "Edit State Loop");
 				}
 				ImGui::TableNextColumn();
 				PropertyValue events = FormatEvents(state);
@@ -557,7 +573,7 @@ namespace Strata
 					AnimationControllerData edited = data;
 					std::string error;
 					if (ParseEvents(std::get<std::string>(events), edited.States[index].Events, &error))
-						Edit(context, std::move(edited), true, "Edit State Events");
+						Edit(std::move(edited), true, "Edit State Events");
 					else
 						m_Error = std::move(error);
 				}
@@ -586,7 +602,7 @@ namespace Strata
 				edited.DefaultState = 0;
 			else if (edited.DefaultState > gone)
 				edited.DefaultState--;
-			Edit(context, std::move(edited), true, "Remove State");
+			Edit(std::move(edited), true, "Remove State");
 		}
 		if (UI::ToolbarButton("AssetInspector.Controller.AddState", Icons::Plus, "Add State", "Add a state without a clip"))
 		{
@@ -597,7 +613,7 @@ namespace Strata
 			AnimationState state;
 			state.Name = std::move(name);
 			edited.States.push_back(std::move(state));
-			Edit(context, std::move(edited), true, "Add State");
+			Edit(std::move(edited), true, "Add State");
 		}
 	}
 
@@ -661,7 +677,7 @@ namespace Strata
 					AnimationControllerData edited = data;
 					const int32_t value = std::get<int32_t>(source);
 					edited.Transitions[index].From = value < 0 ? AnimationTransition::c_AnyState : static_cast<uint32_t>(value);
-					Edit(context, std::move(edited), true, "Change Transition Source");
+					Edit(std::move(edited), true, "Change Transition Source");
 				}
 				ImGui::TableNextColumn();
 				PropertyValue target = static_cast<int32_t>(transition.To);
@@ -669,7 +685,7 @@ namespace Strata
 				{
 					AnimationControllerData edited = data;
 					edited.Transitions[index].To = static_cast<uint32_t>(std::get<int32_t>(target));
-					Edit(context, std::move(edited), true, "Change Transition Target");
+					Edit(std::move(edited), true, "Change Transition Target");
 				}
 				ImGui::TableNextColumn();
 				PropertyValue conditions = FormatConditions(data, transition);
@@ -678,7 +694,7 @@ namespace Strata
 					AnimationControllerData edited = data;
 					std::string error;
 					if (ParseConditions(data, std::get<std::string>(conditions), edited.Transitions[index].Conditions, &error))
-						Edit(context, std::move(edited), true, "Edit Transition Conditions");
+						Edit(std::move(edited), true, "Edit Transition Conditions");
 					else
 						m_Error = std::move(error);
 				}
@@ -688,7 +704,7 @@ namespace Strata
 				{
 					AnimationControllerData edited = data;
 					edited.Transitions[index].ExitTime = std::get<bool>(hasExit) ? std::optional<float>(1.0f) : std::nullopt;
-					Edit(context, std::move(edited), true, "Edit Transition Exit Time");
+					Edit(std::move(edited), true, "Edit Transition Exit Time");
 				}
 				ImGui::TableNextColumn();
 				if (transition.ExitTime)
@@ -698,7 +714,7 @@ namespace Strata
 					{
 						AnimationControllerData edited = data;
 						edited.Transitions[index].ExitTime = std::get<float>(exit);
-						Edit(context, std::move(edited), result.Finished, "Edit Transition Exit Time");
+						Edit(std::move(edited), result.Finished, "Edit Transition Exit Time");
 					}
 				}
 				else
@@ -711,7 +727,7 @@ namespace Strata
 				{
 					AnimationControllerData edited = data;
 					edited.Transitions[index].Duration = std::get<float>(duration);
-					Edit(context, std::move(edited), result.Finished, "Edit Transition Fade");
+					Edit(std::move(edited), result.Finished, "Edit Transition Fade");
 				}
 				ImGui::TableNextColumn();
 				if (UI::IconButton((probe + ".Remove").c_str(), Icons::X, "Remove the transition"))
@@ -724,7 +740,7 @@ namespace Strata
 		{
 			AnimationControllerData edited = data;
 			edited.Transitions.erase(edited.Transitions.begin() + static_cast<std::ptrdiff_t>(*removed));
-			Edit(context, std::move(edited), true, "Remove Transition");
+			Edit(std::move(edited), true, "Remove Transition");
 		}
 		if (UI::ToolbarButton("AssetInspector.Controller.AddTransition", Icons::Plus, "Add Transition", "Add a transition between the first two states"))
 		{
@@ -733,7 +749,7 @@ namespace Strata
 			transition.From = 0;
 			transition.To = data.States.size() > 1 ? 1u : 0u;
 			edited.Transitions.push_back(std::move(transition));
-			Edit(context, std::move(edited), true, "Add Transition");
+			Edit(std::move(edited), true, "Add Transition");
 		}
 	}
 

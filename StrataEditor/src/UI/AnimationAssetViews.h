@@ -41,8 +41,19 @@ namespace Strata
 		static std::string FormatEvents(const AnimationState& state);
 		static bool ParseEvents(std::string_view text, std::vector<AnimationEvent>& outEvents, std::string* outError = nullptr);
 	private:
+		struct QueuedEdit
+		{
+			AnimationControllerData Data;
+			bool Finished = false;
+			std::string Name; // Of the undo step
+		};
+
+		// Queues the frame's edit. The tables draw from the pending edit or the loaded controller, which applying an edit
+		// replaces or ends, so DrawController applies it once they are drawn. One per frame: a finished edit is kept over an
+		// unfinished one (another widget's, in the same frame).
+		void Edit(AnimationControllerData data, bool finished, const std::string& name);
 		// Applies an edit: kept to show while unfinished, else written as one undo step.
-		void Edit(EditorContext& context, AnimationControllerData data, bool finished, const std::string& name);
+		void ApplyEdit(EditorContext& context, QueuedEdit edit);
 		void DrawParameters(EditorContext& context, const AnimationControllerData& data);
 		void DrawStates(EditorContext& context, const AnimationControllerData& data);
 		void DrawTransitions(EditorContext& context, const AnimationControllerData& data);
@@ -54,6 +65,7 @@ namespace Strata
 		AssetHandle m_Controller = UUID::Null();
 		std::weak_ptr<const AnimationController> m_Source; // The loaded controller the pending edit started from
 		std::optional<AnimationControllerData> m_Pending;  // An edit in progress (shown, not written yet)
+		std::optional<QueuedEdit> m_Queued;                 // The edit of the frame being drawn (applied after the tables)
 		std::string m_Error;                                // Why the latest edit was refused
 	};
 
