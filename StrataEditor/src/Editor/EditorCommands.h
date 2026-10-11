@@ -51,8 +51,8 @@ namespace Strata
 		// blocking the frame. Success, Value and Error are meaningless while it is set. Run commands that may defer through
 		// EditorCommandRunner, which polls them.
 		EditorCommandPoll Pending;
-		// The activity journal's entry of a pending result (CommandJournal): PollCommandResult completes it when the result
-		// becomes final. Set by EditorCommandRegistry::Execute; 0 otherwise.
+		// The command's entry in the activity journal (CommandJournal), set by EditorCommandRegistry::Execute (0 otherwise):
+		// PollCommandResult completes it when a pending result becomes final, notifications point at it.
 		uint64_t JournalId = 0;
 
 		bool IsPending() const { return static_cast<bool>(Pending); }

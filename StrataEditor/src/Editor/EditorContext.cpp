@@ -991,6 +991,12 @@ namespace Strata
 		// The build reloads the module itself once it finished; the file watcher would reload it a second time when the
 		// linker writes it.
 		m_ScriptEngine->SetHotReloadEnabled(false);
+		EditorNotification notification;
+		notification.Level = NotificationLevel::Info;
+		notification.Title = "Building scripts";
+		notification.Message = fmt::format("{} (output in the Console)", m_Project->GetScriptModuleName());
+		notification.ShowConsole = true;
+		m_Notifications.Post(std::move(notification));
 		return true;
 	}
 
@@ -1026,6 +1032,30 @@ namespace Strata
 				m_LastScriptBuildLoad.Reloaded = replacing && m_LastScriptBuildLoad.Loaded;
 			}
 		}
+
+		EditorNotification notification;
+		notification.ShowConsole = true;
+		if (!result.Success)
+		{
+			notification.Level = NotificationLevel::Error;
+			notification.Title = "Script build failed";
+			notification.Message = result.Diagnostics.empty() ? result.Error
+				: fmt::format("{}{}{}: {}", FileSystem::ToUTF8(FileSystem::FromUTF8(result.Diagnostics.front().File).filename()), result.Diagnostics.front().Line > 0 ? ":" : "",
+					result.Diagnostics.front().Line > 0 ? std::to_string(result.Diagnostics.front().Line) : std::string(), result.Diagnostics.front().Message);
+		}
+		else if (!m_LastScriptBuildLoad.Error.empty())
+		{
+			notification.Level = NotificationLevel::Error;
+			notification.Title = "Scripts built, but not loaded";
+			notification.Message = m_LastScriptBuildLoad.Error;
+		}
+		else
+		{
+			notification.Level = NotificationLevel::Success;
+			notification.Title = m_LastScriptBuildLoad.Reloaded ? "Scripts built and reloaded" : "Scripts built";
+			notification.Message = fmt::format("{:.1f} s", result.Seconds);
+		}
+		m_Notifications.Post(std::move(notification));
 	}
 
 	bool EditorContext::StopOnScriptFault()
@@ -1040,6 +1070,12 @@ namespace Strata
 			: fmt::format("{}::{} on entity '{}' ({})", fault->ClassName, fault->Method, fault->EntityName, fault->Entity.ToString());
 		ST_ERROR("Script crash in {}: {}. Play mode stopped; fix the script and rebuild (script.build) or reload it (script.reload)", where,
 			fault->Description);
+		EditorNotification notification;
+		notification.Level = NotificationLevel::Error;
+		notification.Title = "Script crash: play mode stopped";
+		notification.Message = fmt::format("{}: {}", where, fault->Description);
+		notification.ShowConsole = true;
+		m_Notifications.Post(std::move(notification));
 		m_LastScriptFault = std::move(fault);
 		Stop();
 		return true;
@@ -1061,7 +1097,14 @@ namespace Strata
 		if (m_AssetManager)
 			m_AssetManager->Update();
 		if (m_GameExport)
+		{
 			m_GameExport->Update();
+			if (m_GameExport->IsFinished() && !m_GameExportNotified)
+			{
+				m_GameExportNotified = true;
+				NotifyExportFinished(*m_GameExport);
+			}
+		}
 		// An inspected asset that was deleted (also outside the editor) is no longer shown.
 		if (m_InspectedAsset.IsValid() && !AssetManager::IsHandleValid(m_InspectedAsset))
 			InspectEntities();
@@ -1091,6 +1134,36 @@ namespace Strata
 	// Export
 	////////////////////////////////////////////////////////////////////////////////
 
+	void EditorContext::NotifyExportFinished(const GameExport& exporter)
+	{
+		EditorNotification notification;
+		switch (exporter.GetState())
+		{
+			case GameExportState::Succeeded:
+				notification.Level = NotificationLevel::Success;
+				notification.Title = "Game exported";
+				notification.Message = fmt::format("{} ({} assets, {:.1f} s)", FileSystem::ToUTF8(exporter.GetOptions().Directory), exporter.GetResult().AssetCount,
+					exporter.GetResult().Seconds);
+				break;
+			case GameExportState::Failed:
+				notification.Level = NotificationLevel::Error;
+				notification.Title = "Export failed";
+				notification.Message = exporter.GetError();
+				notification.ShowConsole = true;
+				break;
+			case GameExportState::Cancelled:
+				notification.Level = NotificationLevel::Info;
+				notification.Title = "Export cancelled";
+				notification.Message = FileSystem::ToUTF8(exporter.GetOptions().Directory);
+				break;
+			case GameExportState::WaitingForImports:
+			case GameExportState::Packing:
+			case GameExportState::Copying:
+				return;
+		}
+		m_Notifications.Post(std::move(notification));
+	}
+
 	bool EditorContext::StartGameExport(const GameExportOptions& options, std::string* outError)
 	{
 		if (m_GameExport && !m_GameExport->IsFinished())
@@ -1101,6 +1174,7 @@ namespace Strata
 			return false;
 		}
 		Ref<GameExport> exporter = GameExport::Start(*this, options, outError);
+		m_GameExportNotified = false;
 		if (!exporter)
 			return false;
 		m_GameExport = std::move(exporter);

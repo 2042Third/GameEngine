@@ -6,6 +6,7 @@
 #include "Editor/ProjectTemplates.h"
 #include "Editor/RecentProjects.h"
 #include "Editor/SceneEdit.h"
+#include "Editor/EditorNotifications.h"
 #include "Editor/SceneRecovery.h"
 #include "Editor/ScriptBuild.h"
 #include "Editor/SimulatedInput.h"
@@ -247,6 +248,10 @@ namespace Strata
 		// there first, so nothing is lost even then.
 		SceneRecovery& GetRecovery() { return m_Recovery; }
 		const SceneRecovery& GetRecovery() const { return m_Recovery; }
+		// What the person should hear about (the UI's toasts): failed or warning UI commands, script builds and crashes,
+		// finished exports, recovery data on offer.
+		EditorNotifications& GetNotifications() { return m_Notifications; }
+		const EditorNotifications& GetNotifications() const { return m_Notifications; }
 		// The file of a scene asset of the project (absolute) and its path relative to the asset directory; empty for the
 		// null handle or without a project.
 		std::pair<std::filesystem::path, std::string> GetSceneFile(AssetHandle scene) const;
@@ -362,6 +367,8 @@ namespace Strata
 		// a file that changed while it was being loaded leaves the running version unknown.
 		void RecordScriptModuleFile(const std::optional<Sha256Digest>& expected);
 		void OnScriptBuildFinished();
+		// Posts how the game export ended (EditorNotifications).
+		void NotifyExportFinished(const GameExport& exporter);
 		// Stops play mode (and reports the fault) when the script module crashed. Returns true if it did.
 		bool StopOnScriptFault();
 		// Saves the viewport state and closes the project; with activateBuiltinAssets the built-in asset manager becomes active.
@@ -396,6 +403,8 @@ namespace Strata
 		Ref<ScriptEngine> m_ScriptEngine;
 		ScriptBuilder m_ScriptBuilder;
 		Ref<GameExport> m_GameExport;
+		bool m_GameExportNotified = false; // Its outcome was posted (EditorNotifications, NotifyExportFinished)
+		EditorNotifications m_Notifications;
 		ScriptBuildLoad m_LastScriptBuildLoad;
 		std::optional<ScriptFault> m_LastScriptFault;
 		// The loaded module's file as it was loaded (see ReadRunningScriptModule), and the load it belongs to.

@@ -17,7 +17,9 @@
 #include <Strata/Scripting/ScriptModule.h>
 #include <Strata/Scripting/ScriptSystem.h>
 
+#include <algorithm>
 #include <chrono>
+#include <deque>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -315,6 +317,12 @@ TEST_SUITE("Editor.Scripts")
 		harness.Run("play.start");
 		harness.Frames(3);
 		CHECK_FALSE(harness.Context.IsPlaying());
+		REQUIRE_FALSE(harness.Context.GetNotifications().IsEmpty());
+		const EditorNotification& crash = harness.Context.GetNotifications().GetActive().back();
+		CHECK(crash.Level == NotificationLevel::Error);
+		CHECK(crash.Title == "Script crash: play mode stopped");
+		CHECK(crash.Message.find("Faulty::OnUpdate") != std::string::npos);
+		CHECK(crash.ShowConsole);
 		const nlohmann::json status = harness.Run("script.status");
 		REQUIRE(status["fault"].is_object());
 		CHECK(status["fault"]["class"] == "Faulty");
@@ -369,6 +377,17 @@ TEST_SUITE("Editor.Scripts")
 		REQUIRE_MESSAGE(result.Success, result.Error);
 		CHECK_FALSE(result.ModuleChanged);
 		CHECK(harness.Context.GetLastScriptBuildLoad().Loaded);
+		// The person hears that the build started and how it ended.
+		const std::deque<EditorNotification>& notifications = harness.Context.GetNotifications().GetActive();
+		const auto posted = [&notifications](NotificationLevel level, std::string_view title)
+		{
+			return std::any_of(notifications.begin(), notifications.end(), [&](const EditorNotification& notification)
+			{
+				return notification.Level == level && notification.Title.starts_with(title);
+			});
+		};
+		CHECK(posted(NotificationLevel::Info, "Building scripts"));
+		CHECK(posted(NotificationLevel::Success, "Scripts built and reloaded")); // The crashed module loaded again
 		CHECK_FALSE(harness.Context.GetScriptEngine()->IsFaulted());
 		harness.Run("play.start");
 		harness.Frames(2);

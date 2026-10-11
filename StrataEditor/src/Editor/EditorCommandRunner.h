@@ -58,6 +58,7 @@ namespace Strata
 			Completion OnComplete;
 			// The journal of the command's entry: cancelling completes it there, also after the context is gone.
 			Ref<CommandJournal> Journal;
+			bool FromUI = false; // Run for the person: failures and warnings show as notifications
 			bool Done = false; // Completed or cancelled; erased at the end of the update
 		};
 

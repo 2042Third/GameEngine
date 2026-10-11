@@ -66,6 +66,8 @@ namespace Strata
 		virtual void ShowPanel(std::string_view panel) = 0;
 		// The Activity panel with an entry of the activity journal selected (0: none).
 		virtual void ShowActivity(uint64_t entry) = 0;
+		// The Recover Unsaved Changes dialog (RecoveryDialog).
+		virtual void ShowRecoveryDialog() = 0;
 
 		virtual EditorEnvironment GetEnvironment() const = 0;
 		virtual EditorAutomationState GetAutomationState() const = 0;

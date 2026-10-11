@@ -144,6 +144,7 @@ namespace Strata
 		void RenameEntity(UUID entity) override;
 		void ShowPanel(std::string_view panel) override;
 		void ShowActivity(uint64_t entry) override;
+		void ShowRecoveryDialog() override;
 		EditorEnvironment GetEnvironment() const override;
 		EditorAutomationState GetAutomationState() const override;
 	private:
@@ -218,6 +219,8 @@ namespace Strata
 		ExportDialog m_ExportDialog;
 		// Like the Export dialog, its completions refer to it.
 		RecoveryDialog m_RecoveryDialog;
+		bool m_RecoveryDialogWasOpen = false; // Closed with an offer left: a toast says where to find it
+		float m_StatusBarHeight = 0.0f;       // Of the last frame, which the toasts stay above
 
 		std::function<void()> m_PendingDiscardAction;
 		bool m_OpenUnsavedChangesModal = false;

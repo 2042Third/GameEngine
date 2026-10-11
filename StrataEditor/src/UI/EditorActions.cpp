@@ -2,6 +2,7 @@
 
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/EditorNotifications.h"
 #include "Editor/HierarchyView.h"
 #include "Editor/PropertyEdit.h"
 
@@ -25,6 +26,7 @@ namespace Strata
 	nlohmann::json RunEditorCommand(EditorContext& context, const EditorCommandRegistry& commands, std::string_view name, const nlohmann::json& parameters)
 	{
 		EditorCommandResult result = commands.Execute(context, name, parameters, CommandOrigin { CommandSource::UI });
+		NotifyCommandOutcome(context.GetNotifications(), name, result);
 		if (result.IsPending())
 		{
 			// UI actions run commands that finish at once; commands that take frames go through EditorCommandRunner.

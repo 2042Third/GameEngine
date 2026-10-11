@@ -1,6 +1,7 @@
 #include "Editor/EditorCommandRunner.h"
 
 #include "Editor/EditorContext.h"
+#include "Editor/EditorNotifications.h"
 
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
@@ -262,13 +263,16 @@ namespace Strata
 		const nlohmann::json& parameters, Completion onComplete, const CommandOrigin& origin)
 	{
 		EditorCommandResult result = commands.Execute(context, name, parameters, origin);
+		const bool fromUI = origin.Source == CommandSource::UI;
 		if (!result.IsPending())
 		{
+			if (fromUI)
+				NotifyCommandOutcome(context.GetNotifications(), name, result);
 			if (onComplete)
 				onComplete(result);
 			return false;
 		}
-		m_Pending.push_back({ std::string(name), std::move(result), std::move(onComplete), context.GetJournalRef(), false });
+		m_Pending.push_back({ std::string(name), std::move(result), std::move(onComplete), context.GetJournalRef(), fromUI, false });
 		return true;
 	}
 
@@ -295,9 +299,15 @@ namespace Strata
 				continue;
 			}
 			if (finished)
+			{
+				if (m_Pending[index].FromUI)
+					NotifyCommandOutcome(context.GetNotifications(), m_Pending[index].Name, result);
 				Finish(index, result);
+			}
 			else
+			{
 				m_Pending[index].Result = std::move(result);
+			}
 		}
 		std::erase_if(m_Pending, [](const PendingCommand& command) { return command.Done; });
 		m_Updating = false;

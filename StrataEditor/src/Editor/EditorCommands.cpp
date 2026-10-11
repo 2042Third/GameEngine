@@ -97,9 +97,9 @@ namespace Strata
 		EditorCommandResult result = Run(context, command, name, parameters);
 		// A step the handler recorded (or extended) is the command's.
 		journal.NoteUndo(entry, undo, records);
+		result.JournalId = entry;
 		if (result.IsPending())
 		{
-			result.JournalId = entry;
 			journal.Suspend(entry);
 		}
 		else

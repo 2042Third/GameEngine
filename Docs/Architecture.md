@@ -1358,6 +1358,16 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   `EditorCommands.cpp` (`editor.commands`); the UI's `EditorLayer` adds `editor.showPanel`, the one command about its
   window. Conventions: AGENTS.md, "Editor". Every command has a kind (`EditorCommandKind`: Edit, the default, Query or
   Session), which `editor.commands` lists and replays use.
+- **Notifications** (`EditorNotifications.h`, `UI/Notifications.h`). The context keeps what the person should hear about
+  (`EditorNotification`: level, title, message, the journal entry, whether the Console or the recovery dialog has more):
+  at most `c_MaxActive` (4), identical ones merged with a count, each expiring after its level's lifetime (`Expire`,
+  `KeepAlive` while hovered). Feeds: `NotifyCommandOutcome` for commands of the UI (`RunEditorCommand`, the runner when
+  the origin is `CommandSource::UI`: failures and warnings, with `EditorCommandResult::JournalId`, which `Execute` now sets
+  for every result), `EditorContext::BuildScripts` and `OnScriptBuildFinished`, `StopOnScriptFault`, the end of a game
+  export (`NotifyExportFinished`, once per export) and `EditorLayer` when the recovery dialog closes with changes still on
+  offer. `UI::DrawNotifications` draws them as toasts in one window at the bottom right of the work area, above the status
+  bar, kept in front without being focused (`BringWindowToDisplayFront`, `NoFocusOnAppearing`); it returns at once while
+  there are none.
 - **Activity journal** (`CommandJournal.h`). `EditorCommandRegistry::Execute` records every command it runs in the
   context's journal: its origin (`CommandOrigin`: UI from `RunEditorCommand` and the panels, Automation with the client's
   name from `EditorAutomation`, CommandScript from `EditorCommandScript`, Internal for code and for commands that commands

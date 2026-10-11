@@ -17,6 +17,7 @@
 #include "UI/FileDialogs.h"
 #include "UI/Icons.h"
 #include "UI/ItemProbe.h"
+#include "UI/Notifications.h"
 #include "UI/TextFormat.h"
 #include "UI/Theme.h"
 #include "UI/Widgets.h"
@@ -456,7 +457,23 @@ namespace Strata
 		m_AboutDialog.Draw(GetEnvironment());
 		m_ExportDialog.Draw(panelContext);
 		m_RecoveryDialog.Draw(panelContext);
+		// Closed with changes still on offer ("Later"): a toast says where they are.
+		const bool recoveryOpen = m_RecoveryDialog.IsOpen();
+		if (m_RecoveryDialogWasOpen && !recoveryOpen && RecoveryDialog::HasOffer(m_Context))
+		{
+			EditorNotification notification;
+			notification.Title = "Unsaved changes can still be recovered";
+			notification.Message = "File > Recover Unsaved Changes, until they are recovered or discarded";
+			notification.ShowRecovery = true;
+			m_Context.GetNotifications().Post(std::move(notification));
+		}
+		m_RecoveryDialogWasOpen = recoveryOpen;
 		DrawUnsavedChangesModal();
+		// Toasts last, over everything, above the status bar.
+		const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+		const float statusBar = IsLauncherShown() ? 0.0f : m_StatusBarHeight;
+		UI::DrawNotifications(m_Context.GetNotifications(), *this, EditorPanels::c_Console, mainViewport->WorkPos,
+			ImVec2(mainViewport->WorkPos.x + mainViewport->WorkSize.x, mainViewport->WorkPos.y + mainViewport->WorkSize.y - statusBar));
 		if (m_ShowImGuiDemo)
 			ImGui::ShowDemoWindow(&m_ShowImGuiDemo);
 		UpdateFrameRate();
@@ -769,6 +786,11 @@ namespace Strata
 		m_Panels.Focus(panel);
 	}
 
+	void EditorLayer::ShowRecoveryDialog()
+	{
+		m_RecoveryDialog.Open();
+	}
+
 	void EditorLayer::ShowActivity(uint64_t entry)
 	{
 		if (ActivityPanel* activity = m_Panels.Get<ActivityPanel>(EditorPanels::c_Activity))
@@ -847,6 +869,7 @@ namespace Strata
 		const ImGuiStyle& style = ImGui::GetStyle();
 		// The status bar uses the caption size.
 		const float statusBarHeight = UI::GetTextSize(UI::TextSize::Caption) * style.FontScaleMain * style.FontScaleDpi + style.FramePadding.y * 2.0f;
+		m_StatusBarHeight = statusBarHeight;
 		ImGui::SetNextWindowPos(viewport->WorkPos);
 		ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, viewport->WorkSize.y - statusBarHeight));
 		ImGui::SetNextWindowViewport(viewport->ID);

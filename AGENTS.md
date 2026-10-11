@@ -736,6 +736,14 @@ and `AudioSystem`, the built-in "Audio" scene system.
     stats and `editor.status` (`editor.frameRate.frameMilliseconds`, with the measured rate) show is what frames cost
     (`Application::GetLastFrameWorkTime`: CPU time without the waits for the GPU, the display and the frame rate cap;
     `EditorPanelContext::Frame` for panels), so an idle editor does not read as a slow one.
+  - Toasts tell the person what happened without their looking for it: `EditorContext::GetNotifications()`
+    (`Editor/EditorNotifications`, core) holds at most four, merged when they repeat and expiring by level (errors last
+    longest, hovering keeps one); `UI/Notifications` draws them at the bottom right above the status bar, never taking the
+    keyboard focus and doing nothing while there are none. They come from commands the person runs (`RunEditorCommand`
+    and the runner for `CommandSource::UI`: failures, and warnings such as edits of the running game,
+    `NotifyCommandOutcome`), script builds (start and end) and crashes, finished exports and recovery data left on offer;
+    their actions are Show in Activity (the command's journal entry), Show in Console and Recover. Post one for news the
+    person would otherwise miss; commands of tools and scripts get their errors as answers and post none.
   - Status pills say what is wrong and lead to it: errors (unread since the Console was last focused, not counting the
     frame its window appears in), a failed automation start (`--no-automation` is shown as off), scripts that are not
     built (click to build) or failed, assets that failed to load or pools close to or over their budget (the assets pill,
