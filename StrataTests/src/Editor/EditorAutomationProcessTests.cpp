@@ -361,7 +361,7 @@ TEST_SUITE("EndToEnd.EditorAutomation")
 
 		// Undo the last edit.
 		const nlohmann::json undone = Call("edit.undo");
-		CHECK(undone["redo"].get<std::string>().find("Transform") != std::string::npos);
+		CHECK(undone["redo"].get<std::string>().rfind("Set Scale of ", 0) == 0); // The step names what it changed
 		CHECK(Call("component.get", { { "entity", boardId }, { "component", "Transform" } })["values"]["Scale"] == nlohmann::json { 1.0, 1.0, 1.0 });
 
 		// Errors come back as JSON-RPC errors on stderr, with exit code 1.
