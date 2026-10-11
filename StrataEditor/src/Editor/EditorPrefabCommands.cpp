@@ -87,6 +87,18 @@ namespace Strata
 			return array;
 		}
 
+		// The answer of a command that changed the active scene: while it runs, the change belongs to the running copy, which
+		// play.stop discards, and the answer says so.
+		EditorCommandResult FinishSceneChange(const EditorContext& context, nlohmann::json result)
+		{
+			if (context.IsPlaying())
+			{
+				result["warning"] = fmt::format("The scene is running ({}): this change applies to the running copy and is discarded by play.stop",
+					SceneStateToString(context.GetSceneState()));
+			}
+			return EditorCommandResult::Ok(std::move(result));
+		}
+
 	}
 
 	void RegisterPrefabWorkflowCommands(EditorCommandRegistry& registry)
@@ -260,11 +272,7 @@ namespace Strata
 					transaction.TrackCreated(entity);
 				context.CommitEdit(transaction);
 				context.PruneSelection();
-				nlohmann::json result = { { "root", UUIDToJson(rootId) }, { "prefab", UUIDToJson(prefab) }, { "created", ToJson(created) } };
-				if (context.IsPlaying())
-					result["warning"] = fmt::format("The scene is running ({}): this change applies to the running copy and is discarded by play.stop",
-						SceneStateToString(context.GetSceneState()));
-				return EditorCommandResult::Ok(std::move(result));
+				return FinishSceneChange(context, { { "root", UUIDToJson(rootId) }, { "prefab", UUIDToJson(prefab) }, { "created", ToJson(created) } });
 			} });
 
 		registry.Register({ "prefab.unpack",
@@ -290,7 +298,7 @@ namespace Strata
 				}
 				PrefabInstances::Unpack(scene, root);
 				context.CommitEdit(transaction);
-				return EditorCommandResult::Ok({ { "root", UUIDToJson(root.GetUUID()) }, { "entities", unlinked } });
+				return FinishSceneChange(context, { { "root", UUIDToJson(root.GetUUID()) }, { "entities", unlinked } });
 			} });
 
 		registry.Register({ "prefab.select",

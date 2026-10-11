@@ -220,7 +220,8 @@ false` leaves them alone), then
 the new ones (one undo step for the file and the scene); `prefab.status {"entity"}` says whether an instance differs
 (`modified`, `changed`, `added`, `removed`), `prefab.revert {"entity"}` gives it the prefab's values again (IDs kept),
 `prefab.unpack {"entity"}` makes its entities plain ones, `prefab.select {"entity", "asset"?}` selects the root or shows
-the prefab. The root's transform and name always stay the instance's own. Imported models are instantiated the same way
+the prefab. While playing, revert and unpack change the running copy (their answers carry a `warning`) and apply is
+refused. The root's transform and name always stay the instance's own. Imported models are instantiated the same way
 but cannot be applied to (unpack them, or make a prefab of the instance).
 
 **Placing**: `entity.create` puts an entity where its `Transform` says (the origin without one); the editor's own menus

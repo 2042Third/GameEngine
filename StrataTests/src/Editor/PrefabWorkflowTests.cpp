@@ -369,6 +369,15 @@ TEST_SUITE("Editor.Prefab")
 		CHECK(harness.Context.GetSelection() == std::vector<UUID> { *UUIDFromJson(setup.First) });
 		harness.Run("prefab.select", { { "entity", bulb }, { "asset", true } });
 		CHECK(UUIDToJson(harness.Context.GetInspectedAsset()) == setup.Prefab);
+
+		// While playing, unpacking and reverting change the running copy, and their answers say so.
+		harness.Run("play.start");
+		const nlohmann::json running = harness.Run("prefab.unpack", { { "entity", setup.Second } });
+		CHECK(running["warning"].get<std::string>().find("running copy") != std::string::npos);
+		CHECK(harness.Run("prefab.revert", { { "entity", setup.First } })["warning"].get<std::string>().find("running copy") != std::string::npos);
+		harness.Run("play.stop");
+		CHECK(harness.IsLinked(setup.Second));
+		CHECK_FALSE(harness.Run("prefab.unpack", { { "entity", setup.Second } }).contains("warning"));
 	}
 
 	TEST_CASE("When a prefab's file changes, unmodified instances take its values and modified ones keep theirs")
