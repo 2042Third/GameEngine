@@ -157,11 +157,21 @@ Open items and deferrals later waves own:
   resident from the overview camera): 642 MB against 650 MB, little room. Read as a 1920x1080 window at 150%, the
   criterion fails by about 80-100 MB; which reading applies is still to be decided.
 - Editor: the Inspector reads every selected entity's values each frame, so 100,000 selected entities add about 8 ms to
-  a frame (`Perf.Editor.SelectionFrame100kSelected`) until a cache follows component signals; idle editor frames of the
-  generated 100,000- and 1,000,000-entity scenes cost 0.27-0.30 ms, about 0.04 ms more than before the rebuilt panels
-  (most of a frame is UI drawing); the color picker clamps HDR colors while dragged (the channel fields keep them);
+  a frame (`Perf.Editor.SelectionFrame100kSelected`) until a cache follows component signals; the color picker clamps
+  HDR colors while dragged (the channel fields keep them);
   deleting one entity among 100,000 sibling roots renumbers the sibling list (about 0.5 ms); starting play copies a
   1,000,000-entity scene in about 0.7 s (`scene-streaming`).
+- Open regression, the owner's decision: idle editor frames of `PerfGPU.Editor`'s generated 100,000- and
+  1,000,000-entity scenes cost 0.27-0.31 ms, 0.04-0.06 ms more than before the wave (0.22-0.25 ms), and run against
+  main's budgets (0.358, 0.3313, 0.3294 and 0.3238 ms; raising them broke the ratchet and was undone), which the
+  1,000,000-entity play frame meets with little room (0.27-0.39 ms per attempt; confirmation passes it). `editor.perf`
+  with temporary stages puts most of the increase in the Inspector's scene settings shown with nothing selected (about
+  0.025 ms, the Gravity row's axis fields 0.008 ms of it, where main drew a one-line hint); the rest is spread thinly
+  (the richer frame and assets pills 0.003 and 0.004 ms, the hidden Asset tab 0.001 ms, closed panels' `OnUpdate`
+  0.0014 ms in all). Drawing cheaper widgets would recover part; a larger lever lies outside the wave: ImGui's GLFW
+  backend (`ImGui_ImplGlfw_NewFrame`) takes about 0.05 ms of every editor frame in Win32 calls for monitors and
+  multi-viewport support that it makes every frame. Rebasing the budgets on the new cost needs the owner's approval,
+  recorded here with the measurements.
 - The editor starts in 0.7-1.0 s (Release, to its first frame on screen), not the 0.4 s the pillar names. An idle
   editor answers input and automation requests on its next throttled frame (up to 33 ms, 100 ms unfocused) until it
   waits on events instead. Project thumbnails and search in the recent projects move to `content-and-prefabs`.
