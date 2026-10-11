@@ -7,10 +7,6 @@
 #include "Strata/Renderer/Renderer.h"
 
 #include <imgui.h>
-#include <imgui_impl_glfw.h>
-
-#define GLFW_INCLUDE_NONE
-#include <GLFW/glfw3.h>
 
 #include <algorithm>
 #include <cmath>
@@ -68,7 +64,7 @@ namespace Strata
 			ImGui::DestroyContext();
 			return;
 		}
-		ImGui_ImplGlfw_InitForOther(static_cast<GLFWwindow*>(window->GetNativeWindow()), true);
+		m_Platform.Init(*window);
 		m_CommandList = Renderer::GetDevice()->createCommandList();
 		m_Initialized = true;
 	}
@@ -81,7 +77,7 @@ namespace Strata
 		Renderer::GetGraphicsDevice().WaitForIdle();
 		m_CommandList = nullptr;
 		m_Renderer.Shutdown();
-		ImGui_ImplGlfw_Shutdown();
+		m_Platform.Shutdown();
 		ImGui::DestroyContext();
 		m_Initialized = false;
 	}
@@ -96,7 +92,11 @@ namespace Strata
 			return false;
 		});
 
-		if (!m_Initialized || !m_BlockEvents)
+		if (!m_Initialized)
+			return;
+		// The overlay sees events first: ImGui's input comes from them.
+		m_Platform.OnEvent(event);
+		if (!m_BlockEvents)
 			return;
 
 		const ImGuiIO& io = ImGui::GetIO();
@@ -109,7 +109,7 @@ namespace Strata
 		if (!m_Initialized)
 			return;
 
-		ImGui_ImplGlfw_NewFrame();
+		m_Platform.NewFrame();
 		ImGui::NewFrame();
 	}
 

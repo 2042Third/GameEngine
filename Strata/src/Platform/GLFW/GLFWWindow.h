@@ -2,6 +2,10 @@
 
 #include "Strata/Core/Window.h"
 
+#include <array>
+#include <string>
+
+struct GLFWcursor;
 struct GLFWwindow;
 
 namespace Strata
@@ -29,6 +33,12 @@ namespace Strata
 		bool IsMinimized() const override;
 		bool IsFocused() const override;
 		void SetCursorMode(CursorMode mode) override;
+		CursorMode GetCursorMode() const override { return m_CursorMode; }
+		void SetCursorShape(CursorShape shape) override;
+		std::string GetClipboardText() const override;
+		void SetClipboardText(const std::string& text) override;
+		KeyCode GetLayoutKey(KeyCode key) const override;
+		void* GetPlatformHandle() const override;
 		void Maximize() override;
 		void SetIcon(std::span<const WindowIconImage> images) override;
 
@@ -37,8 +47,15 @@ namespace Strata
 		// Decodes a PNG file (WindowSpecification::IconPath) into the icon.
 		void SetIconFromFile(const std::filesystem::path& iconPath);
 		void PollGamepads();
+		// The system cursor of a shape, created on first use; null for the arrow (GLFW's default cursor) and for shapes the
+		// system has no cursor for.
+		GLFWcursor* GetCursor(CursorShape shape);
 	private:
 		GLFWwindow* m_Window = nullptr;
+		CursorMode m_CursorMode = CursorMode::Normal;
+		CursorShape m_CursorShape = CursorShape::Arrow;
+		std::array<GLFWcursor*, static_cast<size_t>(CursorShape::Hidden) + 1> m_Cursors = {};
+		std::array<bool, static_cast<size_t>(CursorShape::Hidden) + 1> m_CursorsCreated = {};
 
 		struct WindowData
 		{

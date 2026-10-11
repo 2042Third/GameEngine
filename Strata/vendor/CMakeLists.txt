@@ -82,6 +82,7 @@ strata_vendor_option(JSON_ImplicitConversions OFF)
 add_subdirectory(json SYSTEM)
 
 # --- Dear ImGui, docking branch (imgui) -----------------------------------------------------------
+# The core only: its platform backend (Strata/ImGui/ImGuiPlatform) and renderer backend (ImGuiRenderer) are the engine's.
 set(IMGUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/imgui")
 add_library(imgui STATIC
 	"${IMGUI_DIR}/imgui.cpp"
@@ -89,11 +90,9 @@ add_library(imgui STATIC
 	"${IMGUI_DIR}/imgui_draw.cpp"
 	"${IMGUI_DIR}/imgui_tables.cpp"
 	"${IMGUI_DIR}/imgui_widgets.cpp"
-	"${IMGUI_DIR}/misc/cpp/imgui_stdlib.cpp"
-	"${IMGUI_DIR}/backends/imgui_impl_glfw.cpp")
-target_include_directories(imgui SYSTEM PUBLIC "${IMGUI_DIR}" "${IMGUI_DIR}/backends" "${IMGUI_DIR}/misc/cpp")
+	"${IMGUI_DIR}/misc/cpp/imgui_stdlib.cpp")
+target_include_directories(imgui SYSTEM PUBLIC "${IMGUI_DIR}" "${IMGUI_DIR}/misc/cpp")
 target_compile_definitions(imgui PUBLIC IMGUI_DISABLE_OBSOLETE_FUNCTIONS)
-target_link_libraries(imgui PUBLIC glfw)
 
 # --- ImGuizmo -------------------------------------------------------------------------------------
 add_library(ImGuizmo STATIC "${CMAKE_CURRENT_SOURCE_DIR}/ImGuizmo/src/ImGuizmo.cpp")

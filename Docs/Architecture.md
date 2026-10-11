@@ -248,6 +248,14 @@ enabled and a window and graphics device exist, and calls `Begin`/`End` around t
 the UI for the window's content scale, on attach and on every `WindowContentScaleEvent`: the style is rebuilt from
 ImGui's dark defaults by the application's style callback (`SetStyleCallback`; the editor installs its Bedrock theme) and
 the fonts' DPI scale (`ImGuiStyle::FontScaleDpi`) follows; `SetContentScaleOverride` fixes the scale (`--ui-scale`).
+`ImGuiPlatform` is the platform backend, written for the engine (the vendored GLFW backend is not built): ImGui's input
+comes from the window's events (keys by what they type in the keyboard layout, `Window::GetLayoutKey`, with their
+modifiers; typed text, also from input methods; the mouse, its wheel and `MouseLeaveEvent`; focus), its clipboard and
+cursor shapes from the window (`Window::SetCursorShape`, only when ImGui asks for another shape and while the cursor
+mode is Normal), and on Windows ImGui's own input method support places candidate lists through the window's handle
+(`Window::GetPlatformHandle`). A frame asks the system only for the framebuffer's size: for multi-viewport support the
+editor does not use, the vendored backend set the window's mouse passthrough (`SetWindowLongW`) and enumerated the
+monitors every frame, and hooked the window procedure, about 0.05 ms of an idle editor frame in all.
 `ImGuiRenderer` is the NVRHI backend (user textures are `nvrhi::ITexture*`); it copies the draw lists straight into
 vertex and index buffers the CPU writes and the GPU reads, mapped once, one set per frame the GPU may still be drawing
 (an event query says when the GPU is done with a set). Only the editor enables it. Draw callbacks
