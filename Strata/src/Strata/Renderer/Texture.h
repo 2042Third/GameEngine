@@ -14,6 +14,9 @@
 namespace Strata
 {
 
+	class GPUUploadQueue;
+	enum class GPUUploadQueueKind : uint8_t;
+
 	struct TextureMip
 	{
 		uint32_t Width = 0;
@@ -66,19 +69,21 @@ namespace Strata
 
 		~Texture() override;
 
-		// Creates the GPU texture and uploads the mip chain in bands of at most c_UploadBandBytes - rows of one level (rows
-		// of 4x4 blocks for block-compressed formats), or every remaining level once they fit in one band, staging included
-		// (a block-compressed tail's staging is larger than its bytes, see RecordBlockUploadStep) - as far as the
-		// context's upload budget allows (Pending: the next call continues where this one stopped). Bands go through staging
-		// textures of the renderer's pool (StagingPool), reused once the GPU has copied them; steps wait while the staging in
-		// flight leaves no room within the context's StagingBytes, except the frame's first, and the pool keeps all of its
-		// staging within StagingBytes when it creates more (see StagingPool). Once the chain is uploaded, takes a
-		// bindless slot and releases the CPU copy (copied levels go as soon as they are uploaded, cooked bytes at the end).
-		// Freeing a large CPU copy is timed like a step: it waits for the next call (Pending) when it would end after the
-		// deadline. Fails for block-compressed formats the device cannot sample.
+		// Creates the GPU texture and uploads the mip chain through the renderer's upload queue (GPUUploadQueue), smallest
+		// level first, in steps the queue sizes (PlanStep) to what is left of the context's upload bytes, upload time and
+		// deadline: several whole levels stacked in one staging buffer while their staging fits a step, else runs of rows of a
+		// level (rows of 4x4 blocks for block-compressed formats, a power of two of them, filling staging buffers of a power of
+		// two of bytes)
+		// - as far as the context allows (Pending: the next call continues where this one stopped). The frame's first step is
+		// one row of blocks at least, whatever the budgets. Steps wait while the staging in flight leaves no room within the
+		// context's staging budget (the frame's first) or room (the others), and the pool keeps all of its staging within StagingBytes when it
+		// creates more (see StagingPool). Once the chain is uploaded, takes a bindless slot and releases the CPU copy (copied
+		// levels of textures made from pixels go as soon as they are uploaded, cooked bytes at the end). Freeing a large CPU
+		// copy is timed like a step: it waits for the next call (Pending) when it would end after the deadline. Fails for
+		// block-compressed formats the device cannot sample. Without the renderer's upload context (no device, or a test's
+		// context) the texture keeps its CPU data and is done.
 		AssetFinalizeResult FinalizeOnMainThread(const AssetFinalizeContext& context) override;
-		// The most one upload step copies. Steps are not started when they would end after the context's deadline (at the
-		// speed of the latest steps), except a call's first.
+		// The most one upload step copies (GPUUploadQueue::c_MaxStepBytes).
 		static constexpr uint64_t c_UploadBandBytes = c_AssetUploadStepBytes;
 		// The CPU mip chain (until it is uploaded) and the GPU texture, in the stored format (block-compressed sizes).
 		AssetMemoryUsage GetMemoryUsage() const override;
@@ -110,33 +115,41 @@ namespace Strata
 	private:
 		Texture() = default;
 
-		// One step of the upload (see FinalizeOnMainThread): rows [Row, Row + Rows) of Level, or (Tail) every level from
-		// Level on. Rows of block-compressed levels start and end on block rows (or the level's last row).
-		struct UploadStep
+		// How far an upload of levels from the CPU copy got: levels [FirstLevel, FirstLevel + Remaining) are left (they go up
+		// smallest first, so the next is FirstLevel + Remaining - 1) and, while a level goes up in runs of rows, the next of
+		// its rows.
+		struct UploadPosition
 		{
-			uint32_t Level = 0;
-			uint32_t Row = 0;
-			uint32_t Rows = 0;
-			bool Tail = false;
-			uint64_t Bytes = 0;        // Texture bytes the step uploads
-			uint64_t StagingBytes = 0; // Staging memory it uses: more than Bytes for a block-compressed tail (whole-block rows)
+			uint32_t FirstLevel = 0;
+			uint32_t Remaining = 0;
+			uint32_t NextRow = 0;
+		};
+		// The result of a run of upload steps.
+		enum class UploadProgress : uint8_t
+		{
+			Complete = 0,
+			Partial,  // The context's budget, time or staging room ran out first
+			Failed
 		};
 
 		static Ref<Texture> CreateFromView(const CookedTextureView& view, std::vector<uint8_t>* takeOver, std::string* outError);
 		CookedTextureDescription GetCookedDescription() const;
-		UploadStep GetNextUploadStep() const;
-		// Bytes of the whole mip chain.
-		uint64_t GetChainBytes() const;
+		// Bytes of levels [firstLevel, end) of the mip chain.
+		uint64_t GetLevelBytes(uint32_t firstLevel, uint32_t end) const;
 		// Bytes the CPU copy (cooked bytes and level data) holds allocated.
 		uint64_t GetCPUCopyBytes() const;
-		// Copies the step's pixels into a staging texture of the pool (which holds at most stagingLimit bytes of staging with
-		// it, StagingPool::AcquireTexture), records its copy into the GPU texture, releases copied levels that are complete and
-		// advances the upload position. False if no staging texture could be created or mapped.
-		bool RecordUploadStep(nvrhi::ICommandList* commandList, const UploadStep& step, uint64_t stagingLimit);
-		// The same for block-compressed formats, whose copies must cover whole blocks of the staging memory: a band of block
-		// rows, or the tail's levels stacked in one staging texture.
-		bool RecordBlockUploadStep(nvrhi::ICommandList* commandList, const UploadStep& step, uint64_t stagingLimit);
-		void CompleteUploadStep(const UploadStep& step, uint32_t levels);
+		// Uploads levels of the CPU copy into `texture` (which holds levels from position.FirstLevel on at its level 0) in
+		// steps within the context, advancing the position; frees the data of levels made from pixels once they are uploaded.
+		// outBytes: what the call uploaded.
+		UploadProgress UploadLevels(GPUUploadQueue& queue, const AssetFinalizeContext& context, nvrhi::ITexture* texture, UploadPosition& position,
+			uint64_t& outBytes);
+		// Uploads levels (UploadLevels) on the upload's queue and, once every level is copied there, hands an upload on the
+		// transfer queue over to the graphics queue: Done once `texture` may be sampled, AwaitingGPU while the transfer
+		// queue's copies run (only when the context allows it; else it waits for them), Pending or Failed like the steps.
+		AssetFinalizeResult ContinueUpload(GPUUploadQueue& queue, const AssetFinalizeContext& context, nvrhi::ITexture* texture, UploadPosition& position,
+			uint64_t& outBytes);
+		// A GPU texture for levels [firstLevel, m_MipCount): its level 0 is level firstLevel. Null when it cannot be created.
+		nvrhi::TextureHandle CreateGPUTexture(uint32_t firstLevel) const;
 	private:
 		TextureSpecification m_Specification;
 		std::vector<TextureMip> m_Mips;
@@ -150,9 +163,12 @@ namespace Strata
 
 		nvrhi::TextureHandle m_GPUTexture;
 		uint32_t m_BindlessSlot = UINT32_MAX;
-		// Upload position while the texture is finalized over several calls: the next level and row to upload.
-		uint32_t m_UploadLevel = 0;
-		uint32_t m_UploadRow = 0;
+		// While the texture is finalized over several calls: the GPU texture being filled and how far its upload got.
+		nvrhi::TextureHandle m_UploadTexture;
+		UploadPosition m_UploadPosition;
+		GPUUploadQueueKind m_UploadQueue {}; // The queue the upload's copies run on (the graphics queue until one is chosen)
+		uint64_t m_TransferTicket = 0; // While the transfer queue's copies complete: the ticket of the release (GPUUploadTicket)
+		bool m_UploadStarted = false; // The CPU copy started to go (Serialize and Decompress need all of it)
 	};
 
 	namespace TextureUtils

@@ -859,9 +859,13 @@ namespace Strata
 		size_t processed = 0;
 		size_t finalizations = 0; // FinalizeOnMainThread calls of this frame
 		uint64_t uploadedBytes = 0;
+		float uploadMs = 0.0f;    // Time of the frame's upload steps
 		std::vector<Ref<Asset>> released;
 		// Arrivals waiting until the GPU memory evicted for them is released, and those behind them (see below).
 		std::deque<Completion> waiting;
+		// Arrivals whose uploads are recorded and run on a queue beside the frame's work (AssetFinalizeResult::AwaitingGPU):
+		// finalized again in a later frame, while the arrivals behind them go on.
+		std::deque<Completion> awaitingGpu;
 		bool arrivalWaiting = false;
 		uint64_t waitingGpuBytes = 0; // GPU memory the waiting arrivals will allocate
 		bool makeRoomEarly = true;
@@ -958,20 +962,29 @@ namespace Strata
 				if (applyBudget)
 				{
 					context.UploadBudget = budgets.UploadBytesPerFrame - std::min(uploadedBytes, budgets.UploadBytesPerFrame);
+					context.UploadMsBudget = std::max(0.0f, budgets.UploadMsPerFrame - uploadMs);
 					context.Deadline = deadline;
 					context.StagingBytes = budgets.StagingBytes;
 				}
 				context.UploadedBytes = &uploadedBytes;
+				context.UploadMs = &uploadMs;
+				context.MayWait = applyBudget;
 				context.FirstOfFrame = finalizations == 0;
 				finalizations++;
 				const AssetFinalizeResult result = completion.LoadedAsset->FinalizeOnMainThread(context);
 				if (result == AssetFinalizeResult::Pending && applyBudget)
 					break; // Stays in line
+				if (result == AssetFinalizeResult::AwaitingGPU && applyBudget)
+				{
+					awaitingGpu.push_back(std::move(completion));
+					completions.pop_front();
+					continue;
+				}
 				if (result != AssetFinalizeResult::Done)
 				{
 					// Without a budget an asset has to finish: one that still asks for more is broken.
-					completion.Error = result == AssetFinalizeResult::Pending ? "Finalization did not finish without an upload budget"
-						: "Failed to create GPU resources";
+					completion.Error = result == AssetFinalizeResult::Failed ? "Failed to create GPU resources"
+						: "Finalization did not finish without an upload budget";
 					completion.LoadedAsset = nullptr;
 				}
 			}
@@ -1009,12 +1022,12 @@ namespace Strata
 		if (upload)
 			upload->Submit();
 
-		// What is left over (waiting for released memory, or the budget ran out) is finalized in a later frame, in its place
-		// in line: ahead of newer completions.
-		if (!completions.empty() || !waiting.empty())
+		// What is left over (waiting for the GPU or for released memory, or the budget ran out) is finalized in a later frame, in
+		// its place in line: ahead of newer completions, the arrivals waiting for the GPU first.
+		if (!completions.empty() || !waiting.empty() || !awaitingGpu.empty())
 		{
 			std::scoped_lock<std::mutex> lock(m_LoadState->Mutex);
-			for (std::deque<Completion>* leftOver : { &completions, &waiting })
+			for (std::deque<Completion>* leftOver : { &completions, &waiting, &awaitingGpu })
 			{
 				while (!leftOver->empty())
 				{
@@ -1027,6 +1040,7 @@ namespace Strata
 		{
 			std::scoped_lock<std::mutex> lock(m_Mutex);
 			m_FrameUploadedBytes += uploadedBytes;
+			m_FrameUploadMs += uploadMs;
 			m_FrameFinalizeMs += elapsedMs();
 		}
 		return processed;
@@ -1040,11 +1054,14 @@ namespace Strata
 			uploadedBytes = m_FrameUploadedBytes;
 			m_LastFrameUploadedBytes = m_FrameUploadedBytes;
 			m_LastFrameFinalizeMs = m_FrameFinalizeMs;
+			m_LastFrameUploadMs = m_FrameUploadMs;
 			m_UploadedBytesHistory[m_HistoryCursor] = m_FrameUploadedBytes;
 			m_FinalizeMsHistory[m_HistoryCursor] = m_FrameFinalizeMs;
+			m_UploadMsHistory[m_HistoryCursor] = m_FrameUploadMs;
 			m_HistoryCursor = (m_HistoryCursor + 1) % c_StatsWindowFrames;
 			m_FrameUploadedBytes = 0;
 			m_FrameFinalizeMs = 0.0f;
+			m_FrameUploadMs = 0.0f;
 		}
 
 		// Staging that went idle once uploads stopped is returned by the context (also without device frames, which tools and
@@ -1122,10 +1139,12 @@ namespace Strata
 			stats.Budgets = m_Budgets;
 			stats.UploadedBytesLastFrame = m_LastFrameUploadedBytes;
 			stats.FinalizeMsLastFrame = m_LastFrameFinalizeMs;
+			stats.UploadMsLastFrame = m_LastFrameUploadMs;
 			for (size_t index = 0; index < c_StatsWindowFrames; index++)
 			{
 				stats.UploadedBytesWindowMax = std::max(stats.UploadedBytesWindowMax, m_UploadedBytesHistory[index]);
 				stats.FinalizeMsWindowMax = std::max(stats.FinalizeMsWindowMax, m_FinalizeMsHistory[index]);
+				stats.UploadMsWindowMax = std::max(stats.UploadMsWindowMax, m_UploadMsHistory[index]);
 			}
 			stats.Evictions = m_Evictions;
 			stats.EvictionChecks = m_EvictionChecks;

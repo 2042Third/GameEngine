@@ -3,6 +3,7 @@
 #include "Strata/Core/Base.h"
 #include "Strata/Renderer/BindlessTextureTable.h"
 #include "Strata/Renderer/DeferredReleaseQueue.h"
+#include "Strata/Renderer/GPUUploadQueue.h"
 #include "Strata/Renderer/GraphicsDevice.h"
 #include "Strata/Renderer/RendererUploadContext.h"
 #include "Strata/Renderer/ShaderLibrary.h"
@@ -24,12 +25,22 @@ namespace Strata
 		std::vector<uint8_t> Pixels; // Tightly packed rows, top row first
 	};
 
+	struct RendererSpecification
+	{
+		// Asset uploads the managers may wait for run on the device's dedicated transfer queue, where it has one
+		// (GPUUploadQueue::SetTransferQueue). Off: on the reference machine it did not load the exported stress game faster
+		// (every texture resident from frame 10-11 with it, 10 without, in 5 runs each) and held more memory meanwhile (peak
+		// private memory 595-622 MB with it, 582-595 MB without): each upload is handed to the graphics queue a frame after
+		// its last copy, so its data stays that much longer.
+		bool TransferQueueUploads = false;
+	};
+
 	// Process-wide rendering services shared by every renderer: the graphics device, shader library, common
 	// samplers and fallback textures. Main thread only.
 	class Renderer
 	{
 	public:
-		static bool Init(GraphicsDevice& device);
+		static bool Init(GraphicsDevice& device, const RendererSpecification& specification = {});
 		static void Shutdown();
 		static bool IsInitialized();
 
@@ -41,6 +52,8 @@ namespace Strata
 		static StagingPool& GetStagingPool();
 		// Where the asset managers' finalizations record their uploads (the IAssetGraphics engine service hands it to them).
 		static RendererUploadContext& GetUploadContext();
+		// The budgeted queue every asset upload goes through (the upload context's batches are its batches).
+		static GPUUploadQueue& GetUploadQueue();
 		// Resources dropped while the GPU may still use them (see ReleaseDeferred).
 		static DeferredReleaseQueue& GetDeferredReleases();
 		// Drops the references once the GPU has finished every command list executed so far, without waiting for it. Use
@@ -49,9 +62,13 @@ namespace Strata
 		static void ReleaseDeferred(std::vector<nvrhi::ResourceHandle> resources);
 
 		// Called by the application after the graphics device began a frame: recycles bindless slots and staging memory,
-		// drops deferred releases the GPU is done with and clears the back buffer (when there is one) to black, so layers
-		// render onto a defined image.
+		// rolls the upload queue's frame and drops deferred releases the GPU is done with.
 		static void BeginFrame();
+		// Before the first command list of a frame that renders into the back buffer: the GPU waits for the display to hand
+		// the image over only from here on (GraphicsDevice::PrepareBackBuffer), so the frame's earlier work - asset uploads,
+		// offscreen rendering - never queues behind the display; the first call of a frame also clears the back buffer to
+		// black, so layers render onto a defined image. Returns the back buffer (null without one, e.g. headless).
+		static nvrhi::ITexture* PrepareBackBuffer();
 
 		static nvrhi::ISampler* GetLinearClampSampler();
 		static nvrhi::ISampler* GetLinearWrapSampler();

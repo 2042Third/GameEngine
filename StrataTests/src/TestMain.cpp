@@ -11,10 +11,12 @@
 #include "Strata/Core/CrashGuard.h"
 #include "Strata/Core/FileLock.h"
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Core/JobSystem.h"
 #include "Strata/Core/Log.h"
 #include "Strata/Core/Platform.h"
 #include "Strata/Core/Process.h"
 #include "Strata/Engine/BuiltinModules.h"
+#include "Strata/Project/GameManifest.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
@@ -639,6 +641,44 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 			return 1;
 		}
 		std::printf("Wrote the stress project to '%s'\n", argv[2]);
+		return 0;
+	}
+	if (mode == "write-stress-game")
+	{
+		// <directory>: writes the streaming stress project into <directory>/Stress, imports it and builds its pack with the
+		// manifests PerfGPU.Streaming runs (Stress.stgame from the world's overview camera, StressTopDown.stgame from above),
+		// to run the exported stress game by hand: StrataRuntime --game <directory>/StressTopDown.stgame --perf-log <csv>.
+		if (argc != 3)
+			return 2;
+		Strata::LogSpecification logSpecification;
+		logSpecification.Level = Strata::LogLevel::Warn;
+		Strata::Log::Init(logSpecification);
+		Strata::JobSystem::Init();
+		std::string error;
+		const std::filesystem::path directory = Strata::FileSystem::FromUTF8(argv[2]);
+		const Strata::Tests::StressProjectSpec spec;
+		std::optional<Strata::Tests::StressProject> project = Strata::Tests::WriteStressProject(directory / "Stress", spec, error);
+		bool written = project && Strata::Tests::WriteStressTopDownScene(*project, spec, error)
+			&& Strata::Tests::BuildStressPack(*project, directory / "Stress.stpak", error);
+		for (const auto& [scene, file] : { std::pair { project ? project->WorldScene : Strata::UUID::Null(), "Stress.stgame" },
+			std::pair { project ? project->TopDownScene : Strata::UUID::Null(), "StressTopDown.stgame" } })
+		{
+			if (!written)
+				break;
+			Strata::GameManifest manifest;
+			manifest.Name = "StrataStressWorld";
+			manifest.AssetPack = "Stress.stpak";
+			manifest.StartScene = scene;
+			written = manifest.Save(directory / file, &error);
+		}
+		Strata::JobSystem::Shutdown();
+		Strata::Log::Shutdown();
+		if (!written)
+		{
+			std::fprintf(stderr, "Cannot write the stress game: %s\n", error.c_str());
+			return 1;
+		}
+		std::printf("Wrote the stress game to '%s'\n", argv[2]);
 		return 0;
 	}
 	if (mode == "check-perf-log")

@@ -66,8 +66,9 @@ TEST_SUITE("Asset.Residency")
 		for (AssetMemoryPool pool : c_AssetMemoryPools)
 			CHECK(unlimited.GetPoolBudget(pool) == AssetResidencyBudgets::c_Unlimited);
 		CHECK(unlimited.InFlightBytes == 128 * c_MB);
-		CHECK(unlimited.UploadBytesPerFrame == 64 * c_MB);
+		CHECK(unlimited.UploadBytesPerFrame == 16 * c_MB);
 		CHECK(unlimited.FinalizeMsPerFrame == doctest::Approx(4.0f));
+		CHECK(unlimited.UploadMsPerFrame == doctest::Approx(2.0f));
 		CHECK(unlimited.StagingBytes == 32 * c_MB);
 
 		const AssetResidencyBudgets device = AssetResidencyBudgets::FromDeviceBudget(8000 * c_MB);

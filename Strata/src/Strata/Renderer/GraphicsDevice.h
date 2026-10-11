@@ -5,6 +5,8 @@
 #include <glm/glm.hpp>
 #include <nvrhi/nvrhi.h>
 
+#include <cstdint>
+#include <span>
 #include <string>
 
 namespace Strata
@@ -46,6 +48,30 @@ namespace Strata
 		uint64_t Usage = 0;  // Bytes currently allocated by the process
 	};
 
+	// A resource that copies on the transfer queue wrote and the graphics queue reads next: mip levels of a texture (left
+	// in the copy destination layout by the copies, in the shader read layout after the transfer), or a whole buffer
+	// (GraphicsDevice::RecordQueueTransfer).
+	struct GPUQueueTransfer
+	{
+		nvrhi::ITexture* Texture = nullptr;
+		uint32_t FirstMip = 0;
+		uint32_t MipCount = 0;
+		nvrhi::IBuffer* Buffer = nullptr; // Instead of a texture
+	};
+
+	// A copy of rows of one mip level of a color texture from a buffer (GraphicsDevice::RecordBufferToTextureCopies): the
+	// rows are tightly packed in the buffer from SourceOffset on, as whole blocks for block-compressed formats.
+	struct GPUBufferTextureCopy
+	{
+		nvrhi::IBuffer* Source = nullptr;
+		uint64_t SourceOffset = 0; // A multiple of 16 bytes (every format's texel block size divides it)
+		nvrhi::ITexture* Destination = nullptr;
+		uint32_t MipLevel = 0;
+		uint32_t FirstRow = 0;     // Texel rows; for block-compressed formats the first row of a block
+		uint32_t Width = 0;        // The level's width in texels
+		uint32_t Rows = 0;         // Texel rows; for block-compressed formats whole blocks but at the level's end
+	};
+
 	// Owns the GPU device (through NVRHI), the swapchain of the main window, and frame pacing.
 	class GraphicsDevice
 	{
@@ -78,9 +104,30 @@ namespace Strata
 		// advances the frame index.
 		virtual bool BeginFrame() = 0;
 		virtual void EndFrame() = 0;
+		// The GPU waits for the display to release the acquired back buffer only from here on: call it before the first
+		// command list of the frame that uses the back buffer (Renderer::PrepareBackBuffer does), so that the frame's earlier
+		// work - asset uploads, offscreen rendering - never queues behind the display. Does nothing after the first call of a
+		// frame; EndFrame calls it when nothing did. False when the frame has no back buffer (headless, or the wait could not
+		// be submitted: the back buffer is gone for the frame).
+		virtual bool PrepareBackBuffer() = 0;
 		virtual uint64_t GetFrameIndex() const = 0;
 		virtual uint32_t GetMaxFramesInFlight() const = 0;
 		virtual void WaitForIdle() = 0;
+
+		// Whether the device has a dedicated transfer queue (nvrhi::CommandQueue::Copy), which copies can run on beside the
+		// graphics queue's work.
+		virtual bool HasTransferQueue() const = 0;
+		// Records half of the queue family ownership transfer of a resource the transfer queue wrote to the graphics queue:
+		// the release (acquire false) into a command list of the transfer queue, after the copies; the acquire into a command
+		// list of the graphics queue that is executed once the release completed (observed on the CPU), before anything uses
+		// the resource there. Both halves must be recorded with the same transfer. Pending barriers of the command list are
+		// committed first. Does nothing without a transfer queue.
+		virtual void RecordQueueTransfer(nvrhi::ICommandList* commandList, const GPUQueueTransfer& transfer, bool acquire) = 0;
+		// Records copies from buffers into textures, which NVRHI's command lists only make from staging textures (one per
+		// shape of upload, so they could hardly be reused). The destinations' levels are made copy destinations through the
+		// command list's state tracking first; the sources must be copy sources already (staging buffers stay ones). The
+		// command list does not keep the resources alive: the caller does until the GPU has run the copies.
+		virtual void RecordBufferToTextureCopies(nvrhi::ICommandList* commandList, std::span<const GPUBufferTextureCopy> copies) = 0;
 
 		// Errors reported by the validation layers or NVRHI so far. Tests require this to stay zero.
 		virtual uint32_t GetErrorCount() const = 0;

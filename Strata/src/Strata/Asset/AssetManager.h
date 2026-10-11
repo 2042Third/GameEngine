@@ -53,6 +53,10 @@ namespace Strata
 		uint64_t UploadedBytesWindowMax = 0;
 		float FinalizeMsLastFrame = 0.0f;
 		float FinalizeMsWindowMax = 0.0f;
+		// Of the finalization time, what the upload steps took (writing staging memory, recording copies; see
+		// AssetResidencyBudgets::UploadMsPerFrame).
+		float UploadMsLastFrame = 0.0f;
+		float UploadMsWindowMax = 0.0f;
 
 		uint64_t Evictions = 0;       // Assets evicted for budgets or trims since the manager was created
 		// Resident assets that eviction (for budgets or trims) looked at since the manager was created: the cost of keeping
@@ -625,11 +629,14 @@ namespace Strata
 		uint64_t m_DependencyPrefetchesDropped = 0;
 		uint64_t m_FrameUploadedBytes = 0; // Since the last Update
 		float m_FrameFinalizeMs = 0.0f;
+		float m_FrameUploadMs = 0.0f;
 		std::array<uint64_t, c_StatsWindowFrames> m_UploadedBytesHistory = {};
 		std::array<float, c_StatsWindowFrames> m_FinalizeMsHistory = {};
+		std::array<float, c_StatsWindowFrames> m_UploadMsHistory = {};
 		size_t m_HistoryCursor = 0;
 		uint64_t m_LastFrameUploadedBytes = 0;
 		float m_LastFrameFinalizeMs = 0.0f;
+		float m_LastFrameUploadMs = 0.0f;
 
 		Ref<AssetUploadContext> m_UploadContext; // SetUploadContext's (main thread only)
 		std::atomic<uint64_t> m_ContentVersion = 0; // See GetContentVersion; changed with m_Mutex held

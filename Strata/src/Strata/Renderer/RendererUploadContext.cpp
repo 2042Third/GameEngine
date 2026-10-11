@@ -1,14 +1,15 @@
 #include "stpch.h"
 #include "Strata/Renderer/RendererUploadContext.h"
 
+#include "Strata/Renderer/GPUUploadQueue.h"
 #include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/StagingPool.h"
 
 namespace Strata
 {
 
-	RendererUploadContext::RendererUploadContext(nvrhi::IDevice* device, StagingPool& staging)
-		: m_Device(device), m_Staging(staging)
+	RendererUploadContext::RendererUploadContext(GPUUploadQueue& queue, StagingPool& staging)
+		: m_Queue(queue), m_Staging(staging)
 	{
 	}
 
@@ -19,11 +20,8 @@ namespace Strata
 
 	void RendererUploadContext::Begin()
 	{
-		if (m_OpenBatches++ > 0)
-			return; // Joins the open batch
-		if (!m_CommandList)
-			m_CommandList = m_Device->createCommandList();
-		m_CommandList->open();
+		if (m_OpenBatches++ == 0)
+			m_Queue.BeginBatch(); // Later ones join the open batch
 	}
 
 	void RendererUploadContext::Submit()
@@ -31,11 +29,7 @@ namespace Strata
 		ST_CORE_ASSERT(m_OpenBatches > 0, "An upload batch was submitted that was never opened");
 		if (m_OpenBatches == 0 || --m_OpenBatches > 0)
 			return;
-		m_CommandList->close();
-		m_Device->executeCommandList(m_CommandList);
-		// The staging these uploads copy from becomes reusable as soon as the GPU has run them, usually by the next frame's
-		// finalization: the GPU runs them ahead of the frame's rendering.
-		m_Staging.FenceReleased();
+		m_Queue.SubmitBatch();
 	}
 
 	bool RendererUploadContext::EndFrame(uint64_t uploadedBytes)
@@ -55,7 +49,7 @@ namespace Strata
 
 	nvrhi::ICommandList* RendererUploadContext::GetCommandList() const
 	{
-		return m_OpenBatches > 0 ? m_CommandList.Get() : nullptr;
+		return m_Queue.GetCommandList();
 	}
 
 	RendererUploadContext* RendererUploadContext::From(AssetUploadContext* context)

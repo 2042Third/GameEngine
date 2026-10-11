@@ -6,35 +6,12 @@
 namespace Strata
 {
 
-	namespace
-	{
-
-		bool HasShape(const nvrhi::TextureDesc& a, const nvrhi::TextureDesc& b)
-		{
-			return a.format == b.format && a.width == b.width && a.height == b.height && a.mipLevels == b.mipLevels;
-		}
-
-	}
-
 	StagingPool::StagingPool(nvrhi::IDevice* device)
 		: m_Device(device)
 	{
 	}
 
 	StagingPool::~StagingPool() = default;
-
-	uint64_t StagingPool::GetByteSize(const nvrhi::TextureDesc& desc)
-	{
-		const nvrhi::FormatInfo& format = nvrhi::getFormatInfo(desc.format);
-		uint64_t bytes = 0;
-		for (uint32_t level = 0; level < desc.mipLevels; level++)
-		{
-			const uint64_t blocksX = (std::max(1u, desc.width >> level) + format.blockSize - 1) / format.blockSize;
-			const uint64_t blocksY = (std::max(1u, desc.height >> level) + format.blockSize - 1) / format.blockSize;
-			bytes += blocksX * blocksY * format.bytesPerBlock;
-		}
-		return bytes;
-	}
 
 	uint64_t StagingPool::GetBufferByteSize(uint64_t bytes)
 	{
@@ -44,54 +21,23 @@ namespace Strata
 		return std::max(c_MinBufferBytes, std::bit_ceil(bytes));
 	}
 
-	nvrhi::StagingTextureHandle StagingPool::AcquireTexture(const nvrhi::TextureDesc& desc, uint64_t limit)
+	nvrhi::BufferHandle StagingPool::AcquireBuffer(uint64_t bytes, uint64_t limit)
 	{
 		m_LastAcquireFrame = m_CurrentFrame;
 		// What the GPU has finished copying from since the latest poll is reused rather than made anew.
 		CollectCompleted();
-		// The most recently released one of that shape: its memory is the likeliest to be in the caches.
-		for (auto it = m_Idle.rbegin(); it != m_Idle.rend(); ++it)
-		{
-			if (it->Texture && HasShape(it->Texture->getDesc(), desc))
-			{
-				nvrhi::StagingTextureHandle staging = std::move(it->Texture);
-				m_IdleBytes -= it->Bytes;
-				m_AcquiredBytes += it->Bytes;
-				m_Idle.erase(std::next(it).base());
-				return staging;
-			}
-		}
-
-		nvrhi::TextureDesc stagingDesc;
-		stagingDesc.width = desc.width;
-		stagingDesc.height = desc.height;
-		stagingDesc.mipLevels = desc.mipLevels;
-		stagingDesc.format = desc.format;
-		stagingDesc.debugName = "UploadStaging";
-		const uint64_t bytes = GetByteSize(stagingDesc);
-		MakeRoom(bytes, limit);
-		nvrhi::StagingTextureHandle staging = m_Device->createStagingTexture(stagingDesc, nvrhi::CpuAccessMode::Write);
-		if (staging)
-		{
-			m_CreatedCount++;
-			m_AcquiredBytes += bytes;
-		}
-		return staging;
-	}
-
-	nvrhi::BufferHandle StagingPool::AcquireBuffer(uint64_t bytes, uint64_t limit)
-	{
-		m_LastAcquireFrame = m_CurrentFrame;
-		CollectCompleted();
 		const uint64_t size = GetBufferByteSize(bytes);
+		// The most recently released one of that size: its memory is the likeliest to be in the caches. Idle staging of
+		// unbudgeted uploads may have put the pool over this limit: what else is idle goes until it is within it again.
 		for (auto it = m_Idle.rbegin(); it != m_Idle.rend(); ++it)
 		{
-			if (it->Buffer && it->Bytes == size)
+			if (it->Bytes == size)
 			{
 				nvrhi::BufferHandle staging = std::move(it->Buffer);
 				m_IdleBytes -= it->Bytes;
 				m_AcquiredBytes += it->Bytes;
 				m_Idle.erase(std::next(it).base());
+				MakeRoom(size, limit);
 				return staging;
 			}
 		}
@@ -128,30 +74,22 @@ namespace Strata
 		}
 	}
 
-	void StagingPool::Release(nvrhi::StagingTextureHandle staging)
-	{
-		if (!staging)
-			return;
-		const uint64_t bytes = GetByteSize(staging->getDesc());
-		AddPending(Entry { std::move(staging), nullptr, bytes });
-	}
-
-	void StagingPool::Release(nvrhi::BufferHandle staging)
+	void StagingPool::Release(nvrhi::BufferHandle staging, nvrhi::CommandQueue queue)
 	{
 		if (!staging)
 			return;
 		const uint64_t bytes = staging->getDesc().byteSize;
-		AddPending(Entry { nullptr, std::move(staging), bytes });
+		AddPending(Entry { std::move(staging), bytes }, queue);
 	}
 
-	void StagingPool::AddPending(Entry entry)
+	void StagingPool::AddPending(Entry entry, nvrhi::CommandQueue queue)
 	{
 		// Without frames (BeginFrame) nothing becomes reusable: beyond the limit, staging is left to the command lists that
 		// read it, which free it once the GPU is done.
 		if (m_PendingBytes + entry.Bytes > c_MaxPendingBytes)
 			return;
 		m_PendingBytes += entry.Bytes;
-		m_Released.push_back(std::move(entry));
+		m_Released[GetQueueIndex(queue)].push_back(std::move(entry));
 	}
 
 	void StagingPool::MakeIdle(std::vector<Entry>& entries)
@@ -180,19 +118,24 @@ namespace Strata
 
 	void StagingPool::CollectCompleted()
 	{
-		// Queries complete in submission order, so the first fenced batch decides whether any later one can be done.
-		while (!m_Fenced.empty() && m_Device->pollEventQuery(m_Fenced.front().Completion))
+		// A queue's queries complete in its submission order, so its first fenced batch decides whether any later one can be
+		// done; the queues run independently.
+		for (std::deque<Batch>& fenced : m_Fenced)
 		{
-			Batch batch = std::move(m_Fenced.front());
-			m_Fenced.pop_front();
-			MakeIdle(batch.Entries);
-			m_IdleQueries.push_back(std::move(batch.Completion));
+			while (!fenced.empty() && m_Device->pollEventQuery(fenced.front().Completion))
+			{
+				Batch batch = std::move(fenced.front());
+				fenced.pop_front();
+				MakeIdle(batch.Entries);
+				m_IdleQueries.push_back(std::move(batch.Completion));
+			}
 		}
 	}
 
-	void StagingPool::FenceReleased()
+	void StagingPool::FenceReleased(nvrhi::CommandQueue queue)
 	{
-		if (m_Released.empty())
+		std::vector<Entry>& released = m_Released[GetQueueIndex(queue)];
+		if (released.empty())
 			return;
 
 		// The command lists that copy from what was released were executed: a query set now completes after them.
@@ -209,19 +152,23 @@ namespace Strata
 		if (completion)
 		{
 			m_Device->resetEventQuery(completion);
-			m_Device->setEventQuery(completion, nvrhi::CommandQueue::Graphics);
-			m_Fenced.push_back(Batch { std::move(m_Released), std::move(completion) });
-			m_Released.clear();
+			m_Device->setEventQuery(completion, queue);
+			m_Fenced[GetQueueIndex(queue)].push_back(Batch { std::move(released), std::move(completion) });
+			released.clear();
 			return;
 		}
 
 		// Completion cannot be observed without a query: wait for the GPU instead.
 		ST_CORE_ERROR("StagingPool: failed to create an event query; waiting for the GPU to reuse staging");
 		m_Device->waitForIdle();
-		for (Batch& batch : m_Fenced)
-			MakeIdle(batch.Entries);
-		m_Fenced.clear();
-		MakeIdle(m_Released);
+		for (std::deque<Batch>& fenced : m_Fenced)
+		{
+			for (Batch& batch : fenced)
+				MakeIdle(batch.Entries);
+			fenced.clear();
+		}
+		for (std::vector<Entry>& entries : m_Released)
+			MakeIdle(entries);
 	}
 
 	uint64_t StagingPool::ReleaseIdle()
@@ -238,8 +185,9 @@ namespace Strata
 		m_CurrentFrame = frameIndex;
 		CollectCompleted();
 		// The copies of what was released since the latest query were executed by now (staging is released once its copies
-		// are recorded, and their command lists are executed within the frame).
-		FenceReleased();
+		// are recorded, and their command lists are executed within the frame). The transfer queue's staging is fenced by the
+		// upload queue whenever it submits.
+		FenceReleased(nvrhi::CommandQueue::Graphics);
 
 		// Uploads stopped a while ago: return everything. Otherwise keep the most recently released up to the limit.
 		const bool quiet = frameIndex >= m_LastAcquireFrame + c_IdleReleaseFrames;

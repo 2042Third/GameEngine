@@ -897,12 +897,11 @@ Textures are stored the way the GPU samples them: block-compressed, with their m
   cooked layout of the data it came from (block-compressed, where streaming reads levels again). GPUs decode BC7 exactly
   like the CPU decoder; BC1 to BC5 interpolation may differ by a fraction of a block's endpoint distance (the
   specifications leave it open; the GPU tests measure it).
-- **Uploads** go in bands of whole rows of blocks; block-compressed levels are copied from single-level staging textures
-  a whole number of blocks wide, the tail's levels stacked below each other in one (a staging texture with mips would
-  have levels below 4 texels, whose rows are not whole blocks). Stacked under a level as wide as its first, a tail takes
-  more staging than its blocks (1.5 times for a square chain), so the rest of a chain goes in one step only once its
-  staging fits in a band: a 2048x2048 BC1 chain goes up as level 0 (2 MiB) and then the tail, 3.1 MB of staging for
-  2.8 MB of blocks.
+- **Uploads** go in runs of whole rows of blocks through staging buffers, in which the rows of blocks lie as tightly as
+  in the cooked data (each level at a multiple of 16 bytes), copied into the texture by
+  `GraphicsDevice::RecordBufferToTextureCopies`; a chain's smaller levels go together while they fit a step: a
+  2048x2048 BC1 chain (2.8 MB) goes up in one step, through a staging buffer of 4 MiB (see Streaming and residency,
+  Staging).
 - **Shading**: material texture slots carry a grayscale bit (`RenderData::c_TextureSlotGrayscale`), so `BC4`/`R8` data
   samples as `(r, r, r, 1)` like the gray image it came from; `Forward.frag` reconstructs every normal map's Z from X and
   Y (`sqrt(saturate(1 - dot(xy, xy)))`), so `BC5` and `RGBA8` normal maps shade alike.
@@ -922,8 +921,9 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   the pack entry at runtime.
 - **Budgets** (`AssetResidencyBudgets`). With a graphics device, GPU textures may use 50% and GPU buffers 15% of the
   device's memory budget (`GraphicsDevice::GetMemoryBudget`, VK_EXT_memory_budget); without one they are unlimited. The
-  CPU pool is unlimited; loads in flight may hold 128 MiB; finalization may upload 64 MiB and take 4 ms per frame, and
-  texture and mesh uploads may hold 32 MiB of staging (see Staging). `AssetManagerBase::SetResidencyBudgets` replaces
+  CPU pool is unlimited; loads in flight may hold 128 MiB; finalization may upload 16 MiB and take 4 ms per frame, of
+  which its upload steps (writing staging memory, recording copies) 2 ms, and texture and mesh uploads may hold 32 MiB of
+  staging (see Staging). `AssetManagerBase::SetResidencyBudgets` replaces
   them (`GameRuntimeOptions::AssetBudgets`, StrataRuntime's `--asset-budget-mb`, the editor's `asset.setBudget`).
 - **Requests and pins**. Requests (`GetAsset`, `RequestLoad`, `Pin`) stamp an asset with the manager's frame counter,
   which `Update` advances. Whatever draws or uses assets requests them every frame (`SceneRenderer` requests the meshes,
@@ -968,26 +968,70 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   materials would request their textures, while what the waiting arrival replaces and its loaded data are still held),
   raised the peak private memory of the stress sweep by 20 to 60 MB. An arrival nobody requested lately makes no room;
   it may be evicted itself.
-- **Bounded uploads**. Assets upload in steps of at most `c_AssetUploadStepBytes` (4 MiB, about a millisecond of
-  memcpy): textures in bands of rows of a level (rows of 4x4 blocks for block-compressed formats), or the rest of the
-  mip chain once it fits in one band; meshes in ranges
-  of their buffers. Each finalization call gets what is left of the frame's budget (`AssetFinalizeContext`: upload
-  bytes, a deadline and the staging budget) and takes no step beyond the upload bytes except its first, and none beyond
-  the deadline except the first step of the frame's first call (`AssetFinalizeContext::FirstOfFrame`; a later call past
-  the deadline does not even create its GPU resource), so a frame overshoots `UploadBytesPerFrame` by one step and
-  `FinalizeMsPerFrame` by its first step at most; textures also skip a step
-  that would end after the deadline at the speed of the latest steps. Texture and mesh steps also wait for staging room
-  (see Staging), except the frame's first step: every frame makes progress, also without device frames, while a later
-  call may take no step at all; the others leave a step of the staging budget for it
-  (`AssetFinalizeContext::GetStagingRoom`), so it never takes staging beyond the budget. A texture is published (and
-  gets its bindless slot) once its whole chain is uploaded; its CPU copy goes then. Freeing a large copy takes
-  milliseconds (its pages go back to the system), so it is timed like a step and waits for the next call when it would
-  end after the deadline; it stays on the main thread, because freed on a worker it would still be held while the
-  frame's next arrivals allocate.
-  Uploads report the bytes they copied (`AssetFinalizeContext::UploadedBytes`).
-- **Staging** (`Renderer/StagingPool.h`). Texture bands go through CPU-writable staging textures of the renderer's
-  pool, mesh ranges through its CPU-writable staging buffers (powers of two from 64 KiB, copied from with
-  `copyBuffer`), reused once the GPU has copied from them, so streaming allocates no staging memory once warm. An
+- **Bounded uploads** (`Renderer/GPUUploadQueue.h`). Every asset upload goes through the renderer's upload queue
+  (`Renderer::GetUploadQueue`), whose batches are the managers' (`RendererUploadContext`): textures smallest level first,
+  several whole levels one after the other in one staging buffer while they fit the step, else runs of rows of a level
+  (rows of 4x4 blocks for block-compressed formats, a power of two of them, filling staging buffers of a power of two of
+  bytes); meshes in ranges of their buffers (powers of two from 64 KiB, like their staging buffers). A step that writes
+  512 KiB or more into staging the pool had already spreads its writes over the worker threads
+  (`JobSystem::ParallelFor`, pieces of 256 KiB): one thread reading the decoded data and writing write-combined memory
+  took 0.4 to 1.2 ms for 4 MiB in the exported stress game, spread 0.15 to 0.3 ms. Staging just created is written by
+  the main thread alone: its first writes fault its pages in, which the system serializes (spread, 4 MiB took up to
+  4.3 ms). Steps are sized by the queue (`GPUUploadQueue::PlanStep`) to what is left of the call's share of the frame:
+  its upload bytes (`AssetFinalizeContext::UploadBudget`), its upload time (`UploadMsBudget`, from
+  `AssetResidencyBudgets::UploadMsPerFrame`, 2 ms) and the time until the finalization deadline, at the speed of the
+  latest steps (measured: `GPUUploadQueueStats::BytesPerMs`), in whole granules (a row of blocks, and 64 KiB where a
+  level has that much), at most `c_AssetUploadStepBytes` (4 MiB): no frame uploads more than `UploadBytesPerFrame`, and
+  its steps end close to its time budgets. Only the frame's first step (the frame's first call, nothing uploaded in the
+  frame yet) goes whatever the budgets say, one granule at least, so every frame makes progress; a later call past the
+  deadline does not even create its GPU resource. Before, steps were a fixed 4 MiB and a frame's first was exempt from
+  the deadline: one BC7 step cost up to 2 ms on its own. Texture and mesh steps also wait for staging room (see Staging):
+  the frame's first step within the staging budget, the later ones within the budget less a step
+  (`AssetFinalizeContext::GetStagingRoom`), the step they leave for the next frame's first, so staging never exceeds the
+  budget (a single step larger than all of it goes once nothing else is in flight). With the GPU keeping up, every
+  frame's first step finds room, also without device frames; a frame whose staging is all still in flight waits for
+  the GPU. A texture is published (and gets its bindless slot) once its whole chain is uploaded;
+  its CPU copy goes then. Freeing a large copy takes milliseconds (its pages go back to the system), so it is timed like a
+  step and waits for the next call when it would end after the deadline; it stays on the main thread, because freed on a
+  worker it would still be held while the frame's next arrivals allocate. Uploads report the bytes they copied
+  (`AssetFinalizeContext::UploadedBytes`) and the time their steps took (`UploadMs`); the managers' statistics have both
+  (`AssetManagerStats::UploadedBytesLastFrame`, `UploadMsLastFrame` and their maxima), the queue counts steps and bytes per
+  frame and per kind (`GPUUploadQueue::GetStats`) and tracks the completion of its batches with event queries (`GetTicket`,
+  `IsComplete`). The copies run on the graphics queue ahead of the frame's rendering, so an asset may be drawn as soon as
+  the batch with its last step was submitted. They no longer wait for the display either: the GPU waits for the acquired
+  back buffer only once the frame's first work on it is about to be submitted (`Renderer::PrepareBackBuffer`, called by
+  the application before the UI and by the runtime before the game renders into the back buffer;
+  `GraphicsDevice::PrepareBackBuffer`), so the frame's uploads and offscreen rendering run while the display still holds
+  the image. Before, the acquire wait was submitted first in the frame with ALL_COMMANDS, and every upload waited for it.
+- **The transfer queue** (`RendererSpecification::TransferQueueUploads`, from
+  `ApplicationSpecification::TransferQueueUploads`, or `GPUUploadQueue::SetTransferQueue`; where the device has a
+  dedicated transfer queue: `GraphicsDevice::HasTransferQueue`). Off by default: with the display wait out of the way it
+  did not load the exported stress game faster on the reference machine (every texture resident from frame 10-11 with
+  it, 10 without) and held more memory meanwhile (peak private memory 595-622 MB, 582-595 MB without), since each
+  upload is handed over a frame after its last copy. Uploads the managers may wait for (their budgeted updates:
+  `AssetFinalizeContext::MayWait`) then run on that queue, beside the graphics queue's work; an upload keeps the queue it
+  started on (`GPUUploadQueue::ChooseQueue`). NVRHI creates resources for one queue family at a time and records no queue
+  family ownership transfers, so the queue does what it needs: on the transfer queue's command list (not an immediate one:
+  only one of those may be open) it tells NVRHI's tracking each level's state before a copy (undefined before the level's
+  first copy, so the transition into a copy destination is one the transfer queue can make; a copy destination after),
+  and gives the resources' initial states back to the tracking before the list closes, so NVRHI records no transition into
+  shader states there. After an asset's last copy the release half of the ownership transfer is recorded
+  (`ReleaseToGraphics`, `GraphicsDevice::RecordQueueTransfer`: the copy destination layout to the shader read layout, the
+  transfer family to the graphics family); the asset ends its finalization `AwaitingGPU`, and the manager goes on with the
+  arrivals behind it and calls it again in later frames; once the release's batch is complete (`IsComplete`, polled) the
+  acquire half goes into the graphics list of that frame's batch (`AcquireOnGraphics`), before anything samples the
+  resource, and the asset is published. Finalizations that must finish at once (`LoadAssetSync`, `AddMemoryAsset`,
+  `ReplaceLoadedAsset`: `MayWait` false) start on the graphics queue, and one that started on the transfer queue waits for
+  its copies there (`WaitForTicket` submits the open batch first when the ticket is its own). Staging released by the
+  transfer queue's copies is fenced on that queue (`StagingPool::FenceReleased(nvrhi::CommandQueue::Copy)`). Tests run the
+  uploads on both queues (`GPU.UploadQueue`).
+- **Staging** (`Renderer/StagingPool.h`). Texture steps and mesh ranges go through CPU-writable staging buffers of the
+  renderer's pool (powers of two from 64 KiB; mesh ranges are copied from them with `copyBuffer`, texture levels with
+  `GraphicsDevice::RecordBufferToTextureCopies`, since NVRHI copies into textures only from staging textures, whose
+  shape - format, width and height - each upload's would have to match: the pool reused few of them, and the exported
+  stress game created staging in most of its steps, 0.1 to 0.3 ms each and their pages faulted in on first write), reused
+  once the GPU has copied from them, so streaming allocates no staging memory once warm. NVRHI's command lists do not
+  reference what those copies write: the upload queue keeps the textures of each batch until it completed. An
   event query set after the command lists with the copies were executed tells when: the renderer's upload context sets it
   as soon as it submitted a batch of uploads (`RendererUploadContext::Submit`, `StagingPool::FenceReleased`), and
   `Renderer::BeginFrame` sets one for whatever else was released. The queries are polled, never waited for: at
@@ -995,17 +1039,18 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   of its rendering, so the staging of a frame's uploads is reusable in the next frame once the GPU has run them (fenced
   only at the next `BeginFrame`, it waited for the frame's rendering too and was polled a frame later: reused two frames
   after its release, half the budget per frame). Budgeted uploads wait while the staging still in flight leaves no room
-  within the staging budget (`AssetResidencyBudgets::StagingBytes`, 32 MiB) less the step kept for the next frame's
-  first, and staging created for them first releases idle staging of other
-  shapes until the pool as a whole (idle, in flight and new) fits the budget: the graphics driver keeps freed staging
+  within the staging budget (`AssetResidencyBudgets::StagingBytes`, 32 MiB; less the step kept for the next frame's
+  first, for steps after the frame's first), and staging handed out for them (new or idle) first releases other idle
+  staging until the pool as a whole (idle, in flight and handed out) fits the budget, also when unbudgeted uploads left
+  more idle staging than that: the graphics driver keeps freed staging
   memory committed for a while, so a process pays for the most staging it ever held, and idle staging must not come on
   top of the budget (before, idle staging and NVRHI's upload chunks of mesh ranges came on top of 64 MiB in flight: the
   exported stress game held about 86 MiB of host-visible memory more while it loaded, and kept it). Sustained uploads
   reach the budget less a step per frame (28 MiB) when the GPU has run a frame's uploads by the next frame's
   finalization, which it does when frames take longer than the copies (a frame that finalizes for milliseconds); when
   frames follow each other faster, frames that find the previous one's staging still in flight take only their first
-  step, about half the budget per frame on average. `UploadBytesPerFrame` and `FinalizeMsPerFrame` bound them too (a
-  loading screen raises all three). Idle staging is kept up to 16 MiB and all of it is returned after 120 frames
+  step, about half the budget per frame on average. `UploadBytesPerFrame`, `UploadMsPerFrame` and `FinalizeMsPerFrame`
+  bound them too (a loading screen raises them all). Idle staging is kept up to 16 MiB and all of it is returned after 120 frames
   without uploads (device frames, `StagingPool::BeginFrame`, or manager updates, `RendererUploadContext::EndFrame`, which
   `AssetManagerStats::StagingReleases` counts). Nothing records `writeBuffer` into the upload batches, so NVRHI's upload
   manager (which pools the staging chunks of each command list without a limit) holds nothing for them.
@@ -1524,8 +1569,9 @@ window size is in screen coordinates, which the display's scale multiplies: 1280
 of the game's assets (the other budgets keep their defaults), and `--perf-log <csv>` writes a row for every frame, also
 headless (`Runtime/FramePerfLog`, a frame profiler listener, so writing costs the measured frame nothing): the frame's
 work time and interval, each stage's milliseconds, the job threads' busy percentages and the asset manager's streaming
-numbers after the frame (loading, queued and in-flight loads, uploaded MB, finalization ms, resident MB per pool,
-evictions) and the process's private memory with its peak so far (`PrivateMB`, `PeakPrivateMB`). A log that cannot be written fails the run (exit code 1).
+numbers after the frame (loading, queued and in-flight loads, uploaded MB, finalization ms and its upload steps' ms,
+resident MB per pool, evictions), the frame's steps through the upload queue (`UploadQueueMB`, `UploadQueueMs`,
+`UploadQueueSteps`) and the process's private memory with its peak so far (`PrivateMB`, `PeakPrivateMB`). A log that cannot be written fails the run (exit code 1).
 `GameRuntime::Create` loads the manifest, makes a
 `RuntimeAssetManager` on the pack active (with `GameRuntimeOptions::AssetBudgets` when given; the manifest's optional
 `PatchPacks` are mounted over it in order, and a missing one stops the game), loads the script module

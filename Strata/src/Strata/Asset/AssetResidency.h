@@ -44,10 +44,15 @@ namespace Strata
 		// Bytes of loads that were dispatched and not finalized yet (read, decoded or waiting for the main thread), counted
 		// by their stored size (see AssetStreamingQueue).
 		uint64_t InFlightBytes = 128ull << 20;
-		// GPU bytes finalization uploads per frame; the first finalization of a frame always runs.
-		uint64_t UploadBytesPerFrame = 64ull << 20;
+		// GPU bytes finalization uploads per frame: no frame uploads more, but for its first step (one granule at least, see
+		// AssetFinalizeContext).
+		uint64_t UploadBytesPerFrame = 16ull << 20;
 		// Main-thread time finalization may take per frame, in milliseconds; the first finalization of a frame always runs.
 		float FinalizeMsPerFrame = 4.0f;
+		// Main-thread time the frame's upload steps may take (writing staging memory and recording copies), in milliseconds:
+		// steps are sized by their measured speed to end within it (AssetFinalizeContext::UploadMsBudget), so that a frame's
+		// upload stage stays short however much is waiting.
+		float UploadMsPerFrame = 2.0f;
 		// Staging memory texture and mesh uploads may hold at once: what the frame writes plus what the GPU may still copy
 		// from, and the idle staging the pool keeps for reuse (StagingPool). Staging is reusable once the GPU has run the
 		// copies that read it, which it does ahead of the frame's rendering: when it has run a frame's uploads by the next

@@ -143,6 +143,9 @@ namespace Strata
 			// A time budget that is not a number allows only the first finalization of each frame.
 			if (!std::isfinite(m_Budgets.FinalizeMsPerFrame) || m_Budgets.FinalizeMsPerFrame < 0.0f)
 				m_Budgets.FinalizeMsPerFrame = 0.0f;
+			// The same for the upload time: only the frame's first step.
+			if (!std::isfinite(m_Budgets.UploadMsPerFrame) || m_Budgets.UploadMsPerFrame < 0.0f)
+				m_Budgets.UploadMsPerFrame = 0.0f;
 		}
 		UpdateStreamingLimits();
 		m_Queue.Pump();

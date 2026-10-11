@@ -4,6 +4,7 @@
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/FrameProfiler.h"
+#include "Strata/Renderer/GPUUploadQueue.h"
 #include "Strata/Runtime/FramePerfLog.h"
 #include "TestHelpers.h"
 
@@ -40,12 +41,17 @@ TEST_SUITE("Runtime.PerfLog")
 		assets.InFlightBytes = 3 * 1024 * 1024;
 		assets.UploadedBytesLastFrame = 1024 * 1024;
 		assets.FinalizeMsLastFrame = 2.5f;
+		assets.UploadMsLastFrame = 1.25f;
 		assets.Resident = AssetMemoryUsage { 5 * 1024 * 1024, 64 * 1024 * 1024, 0 };
 		assets.Evictions = 7;
+		GPUUploadQueueStats uploads;
+		uploads.FrameBytes = 3 * 1024 * 1024;
+		uploads.FrameMs = 0.75f;
+		uploads.FrameSteps = 5;
 		bool withAssets = false;
 		const uint32_t listener = profiler.AddFrameListener([&](const FrameSample& frame)
 		{
-			CHECK(log->WriteFrame(frame, withAssets ? &assets : nullptr));
+			CHECK(log->WriteFrame(frame, withAssets ? &assets : nullptr, withAssets ? &uploads : nullptr));
 		});
 		for (int frame = 0; frame < 6; frame++)
 		{
@@ -80,12 +86,17 @@ TEST_SUITE("Runtime.PerfLog")
 		const std::optional<size_t> intervalColumn = table->FindColumn("IntervalMs");
 		const std::optional<size_t> uploadedColumn = table->FindColumn("UploadedMB");
 		const std::optional<size_t> queuedColumn = table->FindColumn("QueuedLoads");
+		const std::optional<size_t> uploadMsColumn = table->FindColumn("UploadMs");
+		const std::optional<size_t> queueBytesColumn = table->FindColumn("UploadQueueMB");
+		const std::optional<size_t> queueMsColumn = table->FindColumn("UploadQueueMs");
+		const std::optional<size_t> queueStepsColumn = table->FindColumn("UploadQueueSteps");
 		const std::optional<size_t> texturesColumn = table->FindColumn("ResidentGpuTexturesMB");
 		const std::optional<size_t> evictionsColumn = table->FindColumn("Evictions");
 		const std::optional<size_t> privateColumn = table->FindColumn("PrivateMB");
 		const std::optional<size_t> peakPrivateColumn = table->FindColumn("PeakPrivateMB");
 		REQUIRE((customColumn && finalizeColumn && workColumn && intervalColumn && uploadedColumn && queuedColumn && texturesColumn && evictionsColumn));
 		REQUIRE((privateColumn && peakPrivateColumn));
+		REQUIRE((uploadMsColumn && queueBytesColumn && queueMsColumn && queueStepsColumn));
 		for (size_t row = 0; row < table->Rows.size(); row++)
 		{
 			CAPTURE(row);
@@ -103,6 +114,7 @@ TEST_SUITE("Runtime.PerfLog")
 			if (row < 3)
 			{
 				CHECK(std::isnan(values[*uploadedColumn])); // No asset manager: empty
+				CHECK(std::isnan(values[*queueBytesColumn])); // No renderer: empty
 			}
 			else
 			{
@@ -110,6 +122,10 @@ TEST_SUITE("Runtime.PerfLog")
 				CHECK(values[*queuedColumn] == 7.0);
 				CHECK(values[*texturesColumn] == doctest::Approx(64.0));
 				CHECK(values[*evictionsColumn] == 7.0);
+				CHECK(values[*uploadMsColumn] == doctest::Approx(1.25));
+				CHECK(values[*queueBytesColumn] == doctest::Approx(3.0));
+				CHECK(values[*queueMsColumn] == doctest::Approx(0.75));
+				CHECK(values[*queueStepsColumn] == 5.0);
 			}
 		}
 	}

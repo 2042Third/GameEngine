@@ -40,8 +40,8 @@ namespace Strata
 		return handle.IsValid() && static_cast<uint64_t>(handle) <= c_MaxBuiltinAssetHandle;
 	}
 
-	// The most an asset that uploads in steps (AssetFinalizeContext) copies in one step: about a millisecond of memcpy, so a
-	// frame's finalization ends close to its deadline.
+	// The most an asset that uploads in steps (AssetFinalizeContext) copies in one step: about a millisecond of memcpy. Steps
+	// are sized to the time and bytes left in the frame, so most are smaller.
 	constexpr uint64_t c_AssetUploadStepBytes = 4ull << 20;
 
 	// What a call of Asset::FinalizeOnMainThread achieved.
@@ -49,23 +49,31 @@ namespace Strata
 	{
 		Done = 0, // Finalized: the asset can be published
 		Pending,  // The call's upload budget ran out first: the asset continues in the next call (a later frame)
-		Failed
+		Failed,
+		// Every upload is recorded, but on a queue the GPU runs beside the frame's work (the renderer's transfer queue): the
+		// asset continues in a later frame, once the GPU completed them, and the arrivals behind it go on meanwhile. Only when
+		// the context allows it (AssetFinalizeContext::MayWait).
+		AwaitingGPU
 	};
 
 	// What a call of Asset::FinalizeOnMainThread may do. Everything is unlimited unless the manager budgets the frame (loads
 	// it finalizes in Update, see AssetResidencyBudgets); then a call may end Pending, and the asset continues in a later
 	// frame.
 	//
-	// Assets that upload in steps of at most c_AssetUploadStepBytes (textures: bands of rows; meshes: ranges of their
-	// buffers) take no further step once the next one would exceed UploadBudget or end after Deadline; a call's first step
-	// is exempt from these two, so a frame's uploads overshoot them by one step at most and an asset larger than any budget
-	// still arrives. Steps through staging memory (texture bands, mesh ranges) also wait while the staging in flight leaves
-	// no room within GetStagingRoom (StagingBytes less one step): staging becomes reusable once the GPU has run the copies
-	// that read it (the upload context fences the uploads when it submits a batch, and the pool polls the fences), so
-	// budgeted uploads need the GPU to make progress to go on at full speed. Only the frame's first step (nothing
-	// uploaded yet, *UploadedBytes == 0) is exempt from that wait, and the step of room the others leave is for it: every
-	// frame makes progress within StagingBytes, but a later call may take no step at all (Pending without uploading). The
-	// manager itself may also hold an arrival back until memory evicted for it is released (see AssetManagerBase::Update).
+	// Assets that upload in steps of at most c_AssetUploadStepBytes (textures: runs of rows or several small levels; meshes:
+	// ranges of their buffers) size each step to what is left of UploadBudget, of UploadMsBudget and of the time until
+	// Deadline, at the speed of the latest steps (the renderer's GPUUploadQueue::PlanStep), and take none once not even a
+	// granule (a row of blocks, 64 KiB) fits: a frame uploads no more than its byte budget, and its steps end close to the
+	// time budget. Only the frame's first step (FirstOfFrame, nothing uploaded in the frame yet, *UploadedBytes == 0) goes
+	// whatever the budgets say, one granule at least, so every frame makes progress and an asset larger than any budget
+	// still arrives. Steps through staging memory also wait while the staging in flight leaves no room for them: the frame's
+	// first step within StagingBytes, the later ones within GetStagingRoom (StagingBytes less one step, kept for the next
+	// frame's first), so staging never exceeds StagingBytes (but for a single step larger than all of it, which goes once
+	// nothing else is in flight). Staging becomes reusable once the GPU has run the copies that read it (the upload context
+	// fences the uploads when it submits a batch, and the pool polls the fences): with the GPU keeping up every frame's
+	// first step finds room, and a frame whose staging is all still in flight waits for the GPU (Pending without uploading,
+	// as a later call of a frame may also end). The manager itself may also hold an arrival back until memory evicted for
+	// it is released (see AssetManagerBase::Update).
 	struct AssetFinalizeContext
 	{
 		// Where GPU uploads are recorded (Asset/AssetUploadContext.h); null without a graphics device: GPU assets then keep
@@ -79,20 +87,27 @@ namespace Strata
 		// When set, the GPU bytes the call uploaded are added to it (upload budgets and statistics); it holds what the
 		// frame's earlier calls uploaded.
 		uint64_t* UploadedBytes = nullptr;
+		// The call's share of the frame's upload time (AssetResidencyBudgets::UploadMsPerFrame): the CPU time its steps may
+		// take writing staging memory and recording copies. When UploadMs is set, the steps' time is added to it (it holds
+		// the frame's earlier calls').
+		float UploadMsBudget = std::numeric_limits<float>::infinity();
+		float* UploadMs = nullptr;
 		// The asset arrives as a dependency prefetch nobody has requested (see AssetManagerBase::GetDependencies): it must not
 		// request what it references, because prefetches do not chain. The manager prefetches its dependencies once
 		// something requests it, and whatever uses them requests them.
 		bool Prefetched = false;
-		// The frame's first finalization (and calls without a budget): its first step goes whatever the deadline says, so every
-		// frame makes progress and an asset larger than a frame's budget still arrives. A later call of the frame takes no
-		// step, and allocates nothing, once the deadline has passed or the step would end after it, so finalization ends by
-		// the deadline but for the frame's first step. (Every call's first step may go past the upload budget: the manager
-		// starts no call once it is used up, so a frame uploads its budget and one step at most.)
+		// The manager calls again in a later frame (its budgeted updates): the asset may end AwaitingGPU. Without it (loads that
+		// finish at once: LoadAssetSync, ReplaceLoadedAsset, AddMemoryAsset) an asset waits for its uploads itself.
+		bool MayWait = false;
+		// The frame's first finalization (and calls without a budget): its first step goes whatever the budgets and the
+		// deadline say (one granule when they leave nothing), so every frame makes progress and an asset larger than a frame's
+		// budget still arrives. A later call of the frame takes no step, and allocates nothing, once the deadline has passed,
+		// and sizes its steps to end by it.
 		bool FirstOfFrame = true;
 
 		// The staging the steps after the frame's first may leave in flight: StagingBytes less one step, the room the next
-		// frame's first step takes whatever is still in flight, so that staging stays within StagingBytes also when the GPU
-		// has not run a frame's uploads by the next frame. A budget below one step allows the frame's first step only.
+		// frame's first step finds also when the GPU has not run a frame's uploads by then. A budget below one step allows
+		// the frame's first step only.
 		uint64_t GetStagingRoom() const { return StagingBytes > c_AssetUploadStepBytes ? StagingBytes - c_AssetUploadStepBytes : 0; }
 	};
 

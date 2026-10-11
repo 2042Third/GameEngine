@@ -2,6 +2,7 @@
 
 #include "Renderer/GPUTestUtils.h"
 #include "Strata/Renderer/BindlessTextureTable.h"
+#include "Strata/Renderer/GPUUploadQueue.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/MeshFactory.h"
 #include "Strata/Renderer/Renderer.h"
@@ -144,18 +145,14 @@ TEST_SUITE("GPU.Assets.Uploads")
 		REQUIRE(gpu.IsValid());
 		{
 			StagingPool pool(gpu.GetNvrhiDevice());
-			nvrhi::TextureDesc band;
-			band.width = 256;
-			band.height = 256;
-			band.format = nvrhi::Format::RGBA8_UNORM;
-			const uint64_t bandBytes = 256 * 256 * 4;
-			CHECK(StagingPool::GetByteSize(band) == bandBytes);
+			const uint64_t bandBytes = 256 * 1024;
+			REQUIRE(StagingPool::GetBufferByteSize(bandBytes) == bandBytes);
 
 			uint64_t frame = 100;
 			pool.BeginFrame(frame);
-			nvrhi::StagingTextureHandle first = pool.AcquireTexture(band);
+			nvrhi::BufferHandle first = pool.AcquireBuffer(bandBytes);
 			REQUIRE(first);
-			nvrhi::IStagingTexture* firstObject = first.Get();
+			nvrhi::IBuffer* firstObject = first.Get();
 			CHECK(pool.GetCreatedCount() == 1);
 			pool.Release(std::move(first));
 			CHECK(pool.GetPendingBytes() == bandBytes);
@@ -169,24 +166,25 @@ TEST_SUITE("GPU.Assets.Uploads")
 			// the next BeginFrame), those copies may not even have been submitted: whatever the GPU has done, a new one is
 			// created, and the released one keeps its room.
 			gpu.GetDevice().WaitForIdle();
-			nvrhi::StagingTextureHandle second = pool.AcquireTexture(band);
+			nvrhi::BufferHandle second = pool.AcquireBuffer(bandBytes);
 			REQUIRE(second);
-			nvrhi::IStagingTexture* secondObject = second.Get();
+			nvrhi::IBuffer* secondObject = second.Get();
 			CHECK(secondObject != firstObject);
 			CHECK(pool.GetCreatedCount() == 2);
 			CHECK_FALSE(pool.HasRoomFor(1, bandBytes));
 
 			// The second one's copy, executed, then fenced: once the GPU has run what was submitted before the query, both are
 			// reusable in the same frame (a budgeted upload that finds no room, or an acquisition, polls the query).
-			nvrhi::TextureDesc destinationDesc = band;
-			destinationDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+			nvrhi::BufferDesc destinationDesc;
+			destinationDesc.byteSize = bandBytes;
+			destinationDesc.initialState = nvrhi::ResourceStates::CopyDest;
 			destinationDesc.keepInitialState = true;
 			destinationDesc.debugName = "StagingDestination";
-			nvrhi::TextureHandle destination = gpu.GetNvrhiDevice()->createTexture(destinationDesc);
+			nvrhi::BufferHandle destination = gpu.GetNvrhiDevice()->createBuffer(destinationDesc);
 			REQUIRE(destination);
 			nvrhi::CommandListHandle commandList = gpu.GetNvrhiDevice()->createCommandList();
 			commandList->open();
-			commandList->copyTexture(destination, nvrhi::TextureSlice(), second, nvrhi::TextureSlice());
+			commandList->copyBuffer(destination, 0, second, 0, bandBytes);
 			commandList->close();
 			pool.Release(std::move(second));
 			REQUIRE(gpu.ExecuteAndWait(commandList));
@@ -198,35 +196,31 @@ TEST_SUITE("GPU.Assets.Uploads")
 			pool.FenceReleased(); // Nothing released since: no query
 			CHECK(pool.GetIdleBytes() == 2 * bandBytes);
 
-			// The most recently released one comes back first; another shape gets its own.
-			nvrhi::StagingTextureHandle reused = pool.AcquireTexture(band);
+			// The most recently released one comes back first; another size gets its own.
+			nvrhi::BufferHandle reused = pool.AcquireBuffer(bandBytes);
 			CHECK(reused.Get() == secondObject);
 			CHECK(pool.GetCreatedCount() == 2);
-			nvrhi::TextureDesc other = band;
-			other.height = 128;
-			nvrhi::StagingTextureHandle otherShape = pool.AcquireTexture(other);
-			REQUIRE(otherShape);
+			nvrhi::BufferHandle otherSize = pool.AcquireBuffer(bandBytes / 2);
+			REQUIRE(otherSize);
 			CHECK(pool.GetCreatedCount() == 3);
 			pool.Release(std::move(reused));
-			pool.Release(std::move(otherShape));
+			pool.Release(std::move(otherSize));
 
 			// Idle staging stays within its limit, the most recently released kept.
 			frame += 10;
 			pool.BeginFrame(frame);
-			nvrhi::TextureDesc large = band;
-			large.width = 1024;
-			large.height = 1024; // 4 MiB
-			std::vector<nvrhi::StagingTextureHandle> larges;
+			constexpr uint64_t c_Large = 4ull << 20;
+			std::vector<nvrhi::BufferHandle> larges;
 			for (int index = 0; index < 6; index++)
-				larges.push_back(pool.AcquireTexture(large));
-			for (nvrhi::StagingTextureHandle& staging : larges)
+				larges.push_back(pool.AcquireBuffer(c_Large));
+			for (nvrhi::BufferHandle& staging : larges)
 				pool.Release(std::move(staging));
 			pool.BeginFrame(++frame);
 			gpu.GetDevice().WaitForIdle();
 			pool.BeginFrame(++frame);
 			CHECK(pool.GetPendingBytes() == 0);
 			CHECK(pool.GetIdleBytes() <= StagingPool::c_MaxIdleBytes);
-			CHECK(pool.GetIdleBytes() >= StagingPool::c_MaxIdleBytes - (4ull << 20));
+			CHECK(pool.GetIdleBytes() >= StagingPool::c_MaxIdleBytes - c_Large);
 
 			// After a while without uploads, everything is returned.
 			pool.BeginFrame(frame + StagingPool::c_IdleReleaseFrames);
@@ -234,20 +228,17 @@ TEST_SUITE("GPU.Assets.Uploads")
 
 			// Without queries (no FenceReleased, no frames) nothing becomes reusable: beyond the pending limit, staging is left
 			// to the GPU to free.
-			nvrhi::TextureDesc huge = band;
-			huge.width = 2048;
-			huge.height = 4096; // 32 MiB
-			const uint64_t hugeBytes = StagingPool::GetByteSize(huge);
-			const uint64_t fitting = StagingPool::c_MaxPendingBytes / hugeBytes;
+			constexpr uint64_t c_Huge = 32ull << 20;
+			const uint64_t fitting = StagingPool::c_MaxPendingBytes / c_Huge;
 			for (uint64_t index = 0; index <= fitting; index++)
-				pool.Release(pool.AcquireTexture(huge));
-			CHECK(pool.GetPendingBytes() == fitting * hugeBytes);
+				pool.Release(pool.AcquireBuffer(c_Huge));
+			CHECK(pool.GetPendingBytes() == fitting * c_Huge);
 		}
 		SettleDevice(gpu);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("Staging buffers come in powers of two and are reused like staging textures")
+	TEST_CASE("Staging buffers come in powers of two, and only one of the same size is reused")
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
@@ -268,8 +259,7 @@ TEST_SUITE("GPU.Assets.Uploads")
 			CHECK(pool.GetPendingBytes() == 4ull << 20);
 
 			// Not covered by a query yet: another one. Once the GPU has run what was submitted before the next frame's query, a
-			// request of the same rounded size gets one back, and staging textures never come from buffers (nor the other way
-			// round).
+			// request of the same rounded size gets one back, and one of another size gets a new one.
 			nvrhi::BufferHandle second = pool.AcquireBuffer(4ull << 20);
 			REQUIRE(second);
 			nvrhi::IBuffer* secondObject = second.Get();
@@ -277,12 +267,10 @@ TEST_SUITE("GPU.Assets.Uploads")
 			pool.Release(std::move(second));
 			pool.BeginFrame(++frame);
 			gpu.GetDevice().WaitForIdle();
-			nvrhi::TextureDesc band;
-			band.width = 1024;
-			band.height = 1024;
-			band.format = nvrhi::Format::RGBA8_UNORM; // 4 MiB as well
-			nvrhi::StagingTextureHandle texture = pool.AcquireTexture(band);
-			REQUIRE(texture);
+			nvrhi::BufferHandle larger = pool.AcquireBuffer(8ull << 20);
+			REQUIRE(larger);
+			CHECK(larger.Get() != firstObject);
+			CHECK(larger.Get() != secondObject);
 			CHECK(pool.GetIdleBytes() == 8ull << 20);
 			const uint64_t created = pool.GetCreatedCount();
 			nvrhi::BufferHandle reused = pool.AcquireBuffer((3ull << 20) + 1);
@@ -290,7 +278,7 @@ TEST_SUITE("GPU.Assets.Uploads")
 			CHECK(pool.GetCreatedCount() == created);
 			CHECK(pool.GetIdleBytes() == 4ull << 20);
 			pool.Release(std::move(reused));
-			pool.Release(std::move(texture));
+			pool.Release(std::move(larger));
 		}
 		SettleDevice(gpu);
 		CHECK(gpu.GetNewErrorCount() == 0);
@@ -303,44 +291,37 @@ TEST_SUITE("GPU.Assets.Uploads")
 		{
 			StagingPool pool(gpu.GetNvrhiDevice());
 			constexpr uint64_t c_Step = 4ull << 20;
-			nvrhi::TextureDesc band;
-			band.width = 1024;
-			band.height = 1024;
-			band.format = nvrhi::Format::RGBA8_UNORM; // 4 MiB
-			REQUIRE(StagingPool::GetByteSize(band) == c_Step);
 
-			// Three idle staging textures (12 MiB) and one in flight (4 MiB).
+			// Three idle staging buffers (12 MiB) and one in flight (4 MiB).
 			uint64_t frame = 100;
 			pool.BeginFrame(frame);
-			std::vector<nvrhi::StagingTextureHandle> bands;
+			std::vector<nvrhi::BufferHandle> steps;
 			for (int index = 0; index < 3; index++)
-				bands.push_back(pool.AcquireTexture(band));
-			for (nvrhi::StagingTextureHandle& staging : bands)
+				steps.push_back(pool.AcquireBuffer(c_Step));
+			for (nvrhi::BufferHandle& staging : steps)
 				pool.Release(std::move(staging));
 			pool.BeginFrame(++frame);
 			gpu.GetDevice().WaitForIdle();
 			pool.BeginFrame(++frame);
-			pool.Release(pool.AcquireTexture(band)); // Reuses an idle one, then is in flight
+			pool.Release(pool.AcquireBuffer(c_Step)); // Reuses an idle one, then is in flight
 			REQUIRE(pool.GetIdleBytes() == 2 * c_Step);
 			REQUIRE(pool.GetPendingBytes() == c_Step);
 
-			// A new shape within a limit of 12 MiB: the pool would hold 16 MiB with it, so an idle texture goes first.
-			nvrhi::BufferHandle buffer = pool.AcquireBuffer(c_Step, 3 * c_Step);
-			REQUIRE(buffer);
+			// A new size within a limit of 12 MiB: the pool would hold 14 MiB with it, so an idle buffer goes first.
+			nvrhi::BufferHandle half = pool.AcquireBuffer(c_Step / 2, 3 * c_Step);
+			REQUIRE(half);
 			CHECK(pool.GetIdleBytes() == c_Step);
-			CHECK(pool.GetIdleBytes() + pool.GetPendingBytes() + buffer->getDesc().byteSize <= 3 * c_Step);
-			pool.Release(std::move(buffer));
+			CHECK(pool.GetIdleBytes() + pool.GetPendingBytes() + half->getDesc().byteSize <= 3 * c_Step);
+			pool.Release(std::move(half));
 
 			// Without a limit idle staging stays; staging in flight is never released for room, whatever the limit.
-			nvrhi::TextureDesc other = band;
-			other.height = 512;
-			nvrhi::StagingTextureHandle unlimited = pool.AcquireTexture(other);
+			nvrhi::BufferHandle unlimited = pool.AcquireBuffer(c_Step / 4);
 			REQUIRE(unlimited);
 			CHECK(pool.GetIdleBytes() == c_Step);
-			nvrhi::StagingTextureHandle tight = pool.AcquireTexture(other, c_Step);
+			nvrhi::BufferHandle tight = pool.AcquireBuffer(c_Step / 4, c_Step);
 			REQUIRE(tight);
 			CHECK(pool.GetIdleBytes() == 0);
-			CHECK(pool.GetPendingBytes() == 2 * c_Step);
+			CHECK(pool.GetPendingBytes() == c_Step + c_Step / 2);
 			pool.Release(std::move(unlimited));
 			pool.Release(std::move(tight));
 		}
@@ -348,7 +329,41 @@ TEST_SUITE("GPU.Assets.Uploads")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("Textures upload in bands within each call's upload budget")
+	TEST_CASE("Reusing idle staging within a limit releases the other idle staging the pool holds beyond it")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		{
+			StagingPool pool(gpu.GetNvrhiDevice());
+			constexpr uint64_t c_Step = 4ull << 20;
+
+			// Unbudgeted uploads (no limit) leave 16 MiB of idle staging.
+			uint64_t frame = 100;
+			pool.BeginFrame(frame);
+			std::vector<nvrhi::BufferHandle> steps;
+			for (int index = 0; index < 4; index++)
+				steps.push_back(pool.AcquireBuffer(c_Step));
+			for (nvrhi::BufferHandle& staging : steps)
+				pool.Release(std::move(staging));
+			pool.BeginFrame(++frame);
+			gpu.GetDevice().WaitForIdle();
+			pool.BeginFrame(++frame);
+			REQUIRE(pool.GetIdleBytes() == 4 * c_Step);
+			const uint64_t created = pool.GetCreatedCount();
+
+			// A budgeted upload of 8 MiB reuses one, and the pool releases idle staging until it holds 8 MiB with it.
+			nvrhi::BufferHandle reused = pool.AcquireBuffer(c_Step, 2 * c_Step);
+			REQUIRE(reused);
+			CHECK(pool.GetCreatedCount() == created);
+			CHECK(pool.GetIdleBytes() == c_Step);
+			pool.Release(std::move(reused));
+			CHECK(pool.GetIdleBytes() + pool.GetPendingBytes() == 2 * c_Step);
+		}
+		SettleDevice(gpu);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Textures upload smallest level first in runs of rows within each call's upload budget")
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
@@ -356,7 +371,8 @@ TEST_SUITE("GPU.Assets.Uploads")
 		BindlessTextureTable& bindless = Renderer::GetBindlessTextures();
 		const uint32_t slotsBefore = bindless.GetAllocatedCount();
 
-		// 2048 x 1024 RGBA8: level 0 is 8 MiB, two bands of 512 rows; the rest of the chain (2.7 MB) is one more step.
+		// 2048 x 1024 RGBA8: level 0 is 8 MiB of 8 KiB rows. With 1 MiB per call the small levels go up stacked first, then
+		// level 0 in runs of 128 rows (a power of two of rows within the budget).
 		TextureSpecification specification;
 		specification.Format = TextureFormat::RGBA8;
 		specification.DebugName = "BandedTexture";
@@ -368,22 +384,34 @@ TEST_SUITE("GPU.Assets.Uploads")
 		REQUIRE(texture);
 		CHECK(texture->GetFinalizedMemoryUsage() == AssetMemoryUsage { 0, chainBytes, 0 });
 
-		uint64_t uploaded = 0;
-		CHECK(FinalizeOnce(gpu, *texture, 1, uploaded) == AssetFinalizeResult::Pending);
-		CHECK(uploaded == Texture::c_UploadBandBytes);
-		CHECK(texture->GetBindlessSlot() == BindlessTextureTable::c_InvalidSlot); // Not usable until it is complete
-		CHECK(FinalizeOnce(gpu, *texture, 1, uploaded) == AssetFinalizeResult::Pending);
-		CHECK(uploaded == Texture::c_UploadBandBytes);
-		CHECK(FinalizeOnce(gpu, *texture, 1, uploaded) == AssetFinalizeResult::Done);
-		CHECK(uploaded == chainBytes - 2 * Texture::c_UploadBandBytes);
+		constexpr uint64_t c_Budget = 1ull << 20;
+		uint64_t total = 0;
+		uint32_t calls = 0;
+		AssetFinalizeResult result = AssetFinalizeResult::Pending;
+		while (result == AssetFinalizeResult::Pending && calls < 64)
+		{
+			uint64_t uploaded = 0;
+			result = FinalizeOnce(gpu, *texture, c_Budget, uploaded);
+			calls++;
+			CHECK(uploaded > 0);
+			CHECK(uploaded <= c_Budget); // No call uploads more than its budget
+			total += uploaded;
+			if (result == AssetFinalizeResult::Pending)
+				CHECK(texture->GetBindlessSlot() == BindlessTextureTable::c_InvalidSlot); // Not usable until it is complete
+		}
+		REQUIRE(result == AssetFinalizeResult::Done);
+		CHECK(total == chainBytes);
+		// A call leaves less than a step of the smallest size unused.
+		CHECK(calls >= chainBytes / c_Budget);
+		CHECK(calls <= chainBytes / (c_Budget - GPUUploadQueue::c_MinStepBytes) + 1);
 		CHECK(texture->GetBindlessSlot() != BindlessTextureTable::c_InvalidSlot);
 		CHECK(texture->GetMemoryUsage() == AssetMemoryUsage { 0, chainBytes, 0 });
 		CHECK(texture->GetMipData(0).empty()); // The CPU copy is gone
 
-		// Every band landed where it belongs: both sides of the band boundary, the last row, and the small levels.
+		// Every run landed where it belongs: both sides of a run's boundary, the last row, and the small levels.
 		ReadbackImage level0;
 		REQUIRE(Renderer::ReadTexture(texture->GetGPUTexture(), level0, 0));
-		for (uint32_t y : { 0u, 511u, 512u, 1023u })
+		for (uint32_t y : { 0u, 127u, 128u, 511u, 512u, 1023u })
 		{
 			for (uint32_t x : { 0u, 1000u, 2047u })
 			{
@@ -403,6 +431,7 @@ TEST_SUITE("GPU.Assets.Uploads")
 		// Without a budget the whole chain goes in one call.
 		Ref<Texture> unbudgeted = Texture::Create(specification, CreatePatternChain(2048, 1024));
 		REQUIRE(unbudgeted);
+		uint64_t uploaded = 0;
 		CHECK(FinalizeOnce(gpu, *unbudgeted, std::numeric_limits<uint64_t>::max(), uploaded) == AssetFinalizeResult::Done);
 		CHECK(uploaded == chainBytes);
 		ReadbackImage unbudgetedLevel0;
@@ -416,7 +445,7 @@ TEST_SUITE("GPU.Assets.Uploads")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("Block-compressed textures upload in bands of whole block rows")
+	TEST_CASE("Block-compressed textures upload in runs of whole block rows")
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
@@ -424,9 +453,8 @@ TEST_SUITE("GPU.Assets.Uploads")
 		BindlessTextureTable& bindless = Renderer::GetBindlessTextures();
 		const uint32_t slotsBefore = bindless.GetAllocatedCount();
 
-		// 2050 x 2050 BC7: level 0 is 513 x 513 blocks (4.2 MB), one band of 511 block rows and one of the last two, which end
-		// inside their blocks; the rest of the chain (1.4 MB, sizes like 1025 and 3 that are not whole blocks) is one more
-		// step through one staging texture.
+		// 2050 x 2050 BC7: level 0 is 513 x 513 blocks (4.2 MB), whose last run ends inside its blocks; the smaller levels have
+		// sizes like 1025 and 3 that are not whole blocks. 512 KiB per call: runs of a power of two of block rows.
 		std::vector<TextureMip> mips;
 		for (uint32_t level = 0; level < TextureUtils::CalculateMipCount(2050, 2050); level++)
 		{
@@ -444,20 +472,27 @@ TEST_SUITE("GPU.Assets.Uploads")
 		const Ref<Texture> source = Texture::Create(specification, mips);
 		REQUIRE(source);
 		const uint64_t chainBytes = source->GetMemoryUsage().Cpu;
-		const uint64_t level0Bytes = GetMipByteSize(TextureFormat::BC7, 2050, 2050);
-		const uint64_t firstBandBytes = 511ull * 513 * 16;
 		Ref<Texture> texture = Texture::Deserialize(source->Serialize());
 		REQUIRE(texture);
 		// Residency counts the block-compressed chain.
 		CHECK(texture->GetFinalizedMemoryUsage() == AssetMemoryUsage { 0, chainBytes, 0 });
 
-		uint64_t uploaded = 0;
-		CHECK(FinalizeOnce(gpu, *texture, 1, uploaded) == AssetFinalizeResult::Pending);
-		CHECK(uploaded == firstBandBytes);
-		CHECK(FinalizeOnce(gpu, *texture, 1, uploaded) == AssetFinalizeResult::Pending);
-		CHECK(uploaded == level0Bytes - firstBandBytes);
-		CHECK(FinalizeOnce(gpu, *texture, 1, uploaded) == AssetFinalizeResult::Done);
-		CHECK(uploaded == chainBytes - level0Bytes);
+		constexpr uint64_t c_Budget = 512ull << 10;
+		uint64_t total = 0;
+		uint32_t calls = 0;
+		AssetFinalizeResult result = AssetFinalizeResult::Pending;
+		while (result == AssetFinalizeResult::Pending && calls < 64)
+		{
+			uint64_t uploaded = 0;
+			result = FinalizeOnce(gpu, *texture, c_Budget, uploaded);
+			calls++;
+			CHECK(uploaded > 0);
+			CHECK(uploaded <= c_Budget);
+			total += uploaded;
+		}
+		REQUIRE(result == AssetFinalizeResult::Done);
+		CHECK(total == chainBytes);
+		CHECK(calls > 8);
 		CHECK(texture->GetBindlessSlot() != BindlessTextureTable::c_InvalidSlot);
 		CHECK(texture->GetMemoryUsage() == AssetMemoryUsage { 0, chainBytes, 0 });
 
@@ -471,6 +506,7 @@ TEST_SUITE("GPU.Assets.Uploads")
 		// Without a budget the whole chain goes in one call.
 		Ref<Texture> unbudgeted = Texture::Create(specification, mips);
 		REQUIRE(unbudgeted);
+		uint64_t uploaded = 0;
 		CHECK(FinalizeOnce(gpu, *unbudgeted, std::numeric_limits<uint64_t>::max(), uploaded) == AssetFinalizeResult::Done);
 		CHECK(uploaded == chainBytes);
 		CHECK(ReadBlocks(gpu, unbudgeted->GetGPUTexture(), 0) == mips[0].Data);
@@ -483,16 +519,16 @@ TEST_SUITE("GPU.Assets.Uploads")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("A block-compressed tail goes up in one step only once its staging fits in a band")
+	TEST_CASE("Small levels go up stacked in one staging buffer while they fit a step")
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
-		SettleDevice(gpu); // Nothing pending: the pool's pending bytes below are this test's staging
+		SettleDevice(gpu);
 		const StagingPool& pool = Renderer::GetStagingPool();
 
-		// 2048 x 2048 BC1: the whole chain (2.8 MB) is less than a band, but stacked in one staging texture as wide as level
-		// 0 it would take 1025 block rows of 4096 bytes (4.2 MB, 1.5 times its blocks and more than a band). Level 0 goes up
-		// alone, then the rest stacks at half the width: 513 block rows of 2048 bytes for 0.7 MB of blocks.
+		// 2048 x 2048 BC1: the whole chain (2.8 MB) is less than a step, so it goes up in one, through one staging buffer of a
+		// step (4 MiB, the power of two above). The levels follow each other at offsets of whole 16 bytes: the 1x1 to 4x4
+		// levels are 8 bytes each.
 		std::vector<TextureMip> mips;
 		for (uint32_t level = 0; level < TextureUtils::CalculateMipCount(2048, 2048); level++)
 		{
@@ -510,24 +546,16 @@ TEST_SUITE("GPU.Assets.Uploads")
 		Ref<Texture> texture = Texture::Create(specification, mips);
 		REQUIRE(texture);
 		const uint64_t chainBytes = texture->GetMemoryUsage().Cpu;
-		const uint64_t level0Bytes = GetMipByteSize(TextureFormat::BC1, 2048, 2048);
 		REQUIRE(chainBytes == 2796216);
 		REQUIRE(chainBytes <= Texture::c_UploadBandBytes);
 
 		const uint64_t acquiredBefore = pool.GetAcquiredBytes();
+		const uint64_t stepsBefore = Renderer::GetUploadQueue().GetStats().TextureSteps;
 		uint64_t uploaded = 0;
-		CHECK(FinalizeOnce(gpu, *texture, 1, uploaded) == AssetFinalizeResult::Pending);
-		CHECK(uploaded == level0Bytes);
-		const uint64_t level0Staging = pool.GetAcquiredBytes() - acquiredBefore;
-		CHECK(level0Staging == level0Bytes);
-		CHECK(FinalizeOnce(gpu, *texture, 1, uploaded) == AssetFinalizeResult::Done);
-		CHECK(uploaded == chainBytes - level0Bytes);
-		const uint64_t tailStaging = pool.GetAcquiredBytes() - acquiredBefore - level0Staging;
-		CHECK(tailStaging == 513ull * 2048);
-		// No step stages more than a band, and the chain as a whole about an eighth more than its blocks.
-		CHECK(level0Staging <= Texture::c_UploadBandBytes);
-		CHECK(tailStaging <= Texture::c_UploadBandBytes);
-		CHECK(level0Staging + tailStaging == 3147776);
+		CHECK(FinalizeOnce(gpu, *texture, std::numeric_limits<uint64_t>::max(), uploaded) == AssetFinalizeResult::Done);
+		CHECK(uploaded == chainBytes);
+		CHECK(Renderer::GetUploadQueue().GetStats().TextureSteps - stepsBefore == 1);
+		CHECK(pool.GetAcquiredBytes() - acquiredBefore == c_AssetUploadStepBytes);
 
 		for (uint32_t level = 0; level < texture->GetMipCount(); level++)
 		{
@@ -539,7 +567,7 @@ TEST_SUITE("GPU.Assets.Uploads")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("A frame's first texture band goes up while staging is full; its later bands wait for room")
+	TEST_CASE("A frame's first texture step takes the step of staging the others leave; with none left it waits for the GPU")
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
@@ -551,18 +579,16 @@ TEST_SUITE("GPU.Assets.Uploads")
 		REQUIRE(source);
 		const std::vector<uint8_t> cooked = source->Serialize();
 		const uint64_t chainBytes = source->GetMemoryUsage().Cpu;
+		const uint64_t level0Bytes = 2048ull * 1024 * 4;
 
-		// Staging released in this frame and not covered by a query yet (its copies' command list is not executed): the
-		// budget leaves no room beside it.
+		// Staging released in this frame and not covered by a query yet (its copies' command list is not executed) fills the
+		// staging room: the budget leaves one step beside it, for the frame's first.
 		StagingPool& pool = Renderer::GetStagingPool();
-		nvrhi::TextureDesc band;
-		band.width = 1024;
-		band.height = 1024;
-		band.format = nvrhi::Format::RGBA8_UNORM;
-		pool.Release(pool.AcquireTexture(band));
-		const uint64_t stagingBudget = pool.GetPendingBytes();
-		REQUIRE(stagingBudget >= 4ull << 20);
-		CHECK_FALSE(pool.HasRoomFor(1, stagingBudget));
+		pool.Release(pool.AcquireBuffer(4ull << 20));
+		const uint64_t inFlight = pool.GetPendingBytes();
+		REQUIRE(inFlight >= 4ull << 20);
+		const uint64_t stagingBudget = inFlight + c_AssetUploadStepBytes;
+		CHECK_FALSE(pool.HasRoomFor(1, inFlight));
 
 		Ref<Texture> first = Texture::Deserialize(std::vector<uint8_t>(cooked));
 		Ref<Texture> second = Texture::Deserialize(std::vector<uint8_t>(cooked));
@@ -575,21 +601,34 @@ TEST_SUITE("GPU.Assets.Uploads")
 		context.UploadBudget = 64ull << 20;
 		context.StagingBytes = stagingBudget;
 		context.UploadedBytes = &frameUploaded;
-		// The frame's first step goes, so every frame makes progress; the next one waits for staging room.
+		// The frame's first step goes (levels 1 to 11 stacked in 4 MiB of staging); the next one waits for staging room.
 		CHECK(first->FinalizeOnMainThread(context) == AssetFinalizeResult::Pending);
-		CHECK(frameUploaded == Texture::c_UploadBandBytes);
+		CHECK(frameUploaded == chainBytes - level0Bytes);
+		CHECK(pool.GetPendingBytes() == stagingBudget);
 		// A later call of the same frame takes no step at all.
 		CHECK(second->FinalizeOnMainThread(context) == AssetFinalizeResult::Pending);
-		CHECK(frameUploaded == Texture::c_UploadBandBytes);
+		CHECK(frameUploaded == chainBytes - level0Bytes);
+		// Nor does the next frame's first step while all of the budget is still in flight: staging never exceeds it.
+		uint64_t nextFrameUploaded = 0;
+		context.UploadedBytes = &nextFrameUploaded;
+		CHECK(second->FinalizeOnMainThread(context) == AssetFinalizeResult::Pending);
+		CHECK(nextFrameUploaded == 0);
+		CHECK(pool.GetPendingBytes() == stagingBudget);
+		// Once the GPU has run the copies (submitted and fenced with the batch), it goes.
+		upload.Submit();
+		gpu.GetDevice().WaitForIdle();
+		upload.Begin();
+		CHECK(second->FinalizeOnMainThread(context) == AssetFinalizeResult::Pending);
+		CHECK(nextFrameUploaded == chainBytes - level0Bytes);
 		upload.Submit();
 		gpu.GetDevice().WaitForIdle();
 
 		// With room in a larger staging budget, both go on to the end.
 		uint64_t uploaded = 0;
 		CHECK(FinalizeOnce(gpu, *first, 64ull << 20, uploaded) == AssetFinalizeResult::Done);
-		CHECK(uploaded == chainBytes - Texture::c_UploadBandBytes);
+		CHECK(uploaded == level0Bytes);
 		CHECK(FinalizeOnce(gpu, *second, 64ull << 20, uploaded) == AssetFinalizeResult::Done);
-		CHECK(uploaded == chainBytes);
+		CHECK(uploaded == level0Bytes);
 		ReadbackImage level0;
 		REQUIRE(Renderer::ReadTexture(first->GetGPUTexture(), level0, 0));
 		CHECK(GetPixelRGBA8(level0, 2047, 1023) == GetPatternTexel(2047, 1023, 0));
@@ -601,7 +640,7 @@ TEST_SUITE("GPU.Assets.Uploads")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("A frame's later texture bands leave a step of the staging budget to the next frame's first")
+	TEST_CASE("A frame's later texture steps leave a step of the staging budget to the next frame's first")
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
@@ -612,11 +651,12 @@ TEST_SUITE("GPU.Assets.Uploads")
 		const Ref<Texture> source = Texture::Create(specification, CreatePatternChain(2048, 1024));
 		REQUIRE(source);
 		const uint64_t chainBytes = source->GetMemoryUsage().Cpu;
+		const uint64_t level0Bytes = 2048ull * 1024 * 4;
 		Ref<Texture> texture = Texture::Deserialize(source->Serialize());
 		REQUIRE(texture);
 
-		// Level 0 is two bands of 4 MiB, the smaller levels one step of 2.7 MiB. Within 12 MiB of staging the steps after the
-		// frame's first leave 4 MiB: both bands of level 0 go (8 MiB), the rest does not.
+		// Levels 1 to 11 stack in 4 MiB of staging, level 0 is two runs of 4 MiB. Within 12 MiB of staging the steps after the
+		// frame's first leave 4 MiB: the stack and the first run of level 0 go (8 MiB), the second run does not.
 		StagingPool& pool = Renderer::GetStagingPool();
 		constexpr uint64_t c_StagingBudget = 12ull << 20;
 		RendererUploadContext& upload = Renderer::GetUploadContext();
@@ -628,23 +668,25 @@ TEST_SUITE("GPU.Assets.Uploads")
 		context.UploadedBytes = &frameUploaded;
 		CHECK(context.GetStagingRoom() == c_StagingBudget - c_AssetUploadStepBytes);
 		CHECK(texture->FinalizeOnMainThread(context) == AssetFinalizeResult::Pending);
-		CHECK(frameUploaded == 2 * Texture::c_UploadBandBytes);
-		CHECK(pool.GetPendingBytes() == 2 * Texture::c_UploadBandBytes);
+		CHECK(frameUploaded == chainBytes - level0Bytes + level0Bytes / 2);
+		CHECK(pool.GetPendingBytes() == 2 * c_AssetUploadStepBytes);
 
 		// The next frame's first step goes whatever is still in flight (here: nothing has run), and fits in the step left.
 		uint64_t nextFrameUploaded = 0;
 		context.UploadedBytes = &nextFrameUploaded;
 		CHECK(texture->FinalizeOnMainThread(context) == AssetFinalizeResult::Done);
-		CHECK(nextFrameUploaded == chainBytes - 2 * Texture::c_UploadBandBytes);
-		CHECK(pool.GetPendingBytes() == chainBytes);
+		CHECK(nextFrameUploaded == level0Bytes / 2);
+		CHECK(pool.GetPendingBytes() == 3 * c_AssetUploadStepBytes);
 		CHECK(pool.GetPendingBytes() <= c_StagingBudget);
 		upload.Submit();
 		gpu.GetDevice().WaitForIdle();
 
-		// Every band is in place.
+		// Every run is in place.
 		ReadbackImage level0;
 		REQUIRE(Renderer::ReadTexture(texture->GetGPUTexture(), level0, 0));
 		CHECK(GetPixelRGBA8(level0, 2047, 1023) == GetPatternTexel(2047, 1023, 0));
+		CHECK(GetPixelRGBA8(level0, 0, 511) == GetPatternTexel(0, 511, 0));
+		CHECK(GetPixelRGBA8(level0, 0, 512) == GetPatternTexel(0, 512, 0));
 		ReadbackImage level1;
 		REQUIRE(Renderer::ReadTexture(texture->GetGPUTexture(), level1, 1));
 		CHECK(GetPixelRGBA8(level1, 1023, 511) == GetPatternTexel(1023, 511, 1));
@@ -663,45 +705,60 @@ TEST_SUITE("GPU.Assets.Uploads")
 		TextureSpecification specification;
 		specification.Format = TextureFormat::RGBA8;
 		specification.DebugName = "ReleasedTexture";
-		// 512 x 512 RGBA8: the whole chain (1.3 MB) is one step, and the cooked bytes the texture holds are large enough to
-		// take time to free.
+		// Past the deadline every call (each the frame's first) uploads one step of GPUUploadQueue::c_MinStepBytes at most.
+		// The call that uploads the last of a 512 x 512 texture would then free its cooked bytes (1.4 MB, which take time to
+		// free) after the deadline: that waits for the next call, which uploads nothing.
+		const auto finalizeLate = [&](Texture& texture, std::vector<std::pair<AssetFinalizeResult, uint64_t>>& calls)
+		{
+			RendererUploadContext& upload = Renderer::GetUploadContext();
+			AssetFinalizeResult result = AssetFinalizeResult::Pending;
+			while (result == AssetFinalizeResult::Pending && calls.size() < 100)
+			{
+				upload.Begin();
+				uint64_t uploaded = 0;
+				AssetFinalizeContext context { &upload, nullptr };
+				context.UploadBudget = 64ull << 20;
+				context.Deadline = std::chrono::steady_clock::now(); // Passed: only the frame's first step goes
+				context.UploadedBytes = &uploaded;
+				result = texture.FinalizeOnMainThread(context);
+				upload.Submit();
+				calls.emplace_back(result, uploaded);
+				CHECK(uploaded <= GPUUploadQueue::c_MinStepBytes);
+			}
+			gpu.GetDevice().WaitForIdle();
+			return result;
+		};
+
 		const Ref<Texture> source = Texture::Create(specification, CreatePatternChain(512, 512));
 		REQUIRE(source);
 		const uint64_t chainBytes = source->GetMemoryUsage().Cpu;
 		Ref<Texture> texture = Texture::Deserialize(source->Serialize());
 		REQUIRE(texture);
 		REQUIRE(texture->GetMemoryUsage().Cpu >= 1ull << 20);
-
-		RendererUploadContext& upload = Renderer::GetUploadContext();
-		upload.Begin();
-		uint64_t uploaded = 0;
-		AssetFinalizeContext context { &upload, nullptr };
-		context.UploadBudget = 64ull << 20;
-		context.Deadline = std::chrono::steady_clock::now(); // Passed: only each call's first piece of work goes
-		context.UploadedBytes = &uploaded;
-		// The call's first step uploads the chain; freeing the CPU copy would end after the deadline, so it waits.
-		CHECK(texture->FinalizeOnMainThread(context) == AssetFinalizeResult::Pending);
-		CHECK(uploaded == chainBytes);
-		CHECK(texture->GetMemoryUsage().Cpu > 0);
-		CHECK(texture->GetBindlessSlot() == BindlessTextureTable::c_InvalidSlot);
-		// It is the next call's first piece of work: that call frees it and finishes, uploading nothing.
-		uploaded = 0;
-		CHECK(texture->FinalizeOnMainThread(context) == AssetFinalizeResult::Done);
-		CHECK(uploaded == 0);
+		std::vector<std::pair<AssetFinalizeResult, uint64_t>> calls;
+		REQUIRE(finalizeLate(*texture, calls) == AssetFinalizeResult::Done);
+		REQUIRE(calls.size() >= 3);
+		uint64_t total = 0;
+		for (const auto& [result, uploaded] : calls)
+			total += uploaded;
+		CHECK(total == chainBytes);
+		CHECK(calls[calls.size() - 2].first == AssetFinalizeResult::Pending);
+		CHECK(calls[calls.size() - 2].second > 0); // Uploaded its last step, then left the free to the next call
+		CHECK(calls.back().second == 0);           // Freed, uploading nothing
 		CHECK(texture->GetMemoryUsage() == AssetMemoryUsage { 0, chainBytes, 0 });
 		CHECK(texture->GetBindlessSlot() != BindlessTextureTable::c_InvalidSlot);
-
-		// A small CPU copy costs too little to wait: a 256 x 256 texture finishes in one call after the deadline as well.
-		Ref<Texture> smallTexture = Texture::Deserialize(Texture::Create(specification, CreatePatternChain(256, 256))->Serialize());
-		REQUIRE(smallTexture);
-		CHECK(smallTexture->FinalizeOnMainThread(context) == AssetFinalizeResult::Done);
-		CHECK(smallTexture->GetMemoryUsage().Cpu == 0);
-		upload.Submit();
-		gpu.GetDevice().WaitForIdle();
-
 		ReadbackImage level0;
 		REQUIRE(Renderer::ReadTexture(texture->GetGPUTexture(), level0, 0));
 		CHECK(GetPixelRGBA8(level0, 511, 511) == GetPatternTexel(511, 511, 0));
+
+		// A small CPU copy costs too little to wait: the call that uploads the last of a 256 x 256 texture finishes it.
+		Ref<Texture> smallTexture = Texture::Deserialize(Texture::Create(specification, CreatePatternChain(256, 256))->Serialize());
+		REQUIRE(smallTexture);
+		std::vector<std::pair<AssetFinalizeResult, uint64_t>> smallCalls;
+		REQUIRE(finalizeLate(*smallTexture, smallCalls) == AssetFinalizeResult::Done);
+		CHECK(smallCalls.back().second > 0);
+		CHECK(smallTexture->GetMemoryUsage().Cpu == 0);
+
 		texture.reset();
 		smallTexture.reset();
 		SettleDevice(gpu);
@@ -738,13 +795,17 @@ TEST_SUITE("GPU.Assets.Uploads")
 		CHECK(mesh->FinalizeOnMainThread(context) == AssetFinalizeResult::Pending);
 		CHECK(mesh->GetIndexBuffer() == nullptr);
 		CHECK(uploaded == 0);
-		// The frame's first finalization takes its first step whatever the time.
+		// The frame's first finalization takes its first step whatever the time: one step of the smallest size.
 		context.FirstOfFrame = true;
 		CHECK(texture->FinalizeOnMainThread(context) == AssetFinalizeResult::Pending);
-		CHECK(texture->GetGPUTexture() != nullptr);
-		CHECK(uploaded == Texture::c_UploadBandBytes);
+		CHECK(uploaded > 0);
+		CHECK(uploaded <= GPUUploadQueue::c_MinStepBytes);
+		// The mesh in a frame of its own: the cube is smaller than a step, so it finishes.
+		uint64_t meshUploaded = 0;
+		context.UploadedBytes = &meshUploaded;
 		CHECK(mesh->FinalizeOnMainThread(context) == AssetFinalizeResult::Done);
 		CHECK(mesh->GetIndexBuffer() != nullptr);
+		CHECK(meshUploaded > 0);
 		upload.Submit();
 		gpu.GetDevice().WaitForIdle();
 
@@ -759,7 +820,8 @@ TEST_SUITE("GPU.Assets.Uploads")
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 
-		// 150,000 vertices: positions 1.8 MB, attributes 5.4 MB, indices 0.6 MB; 7.8 MB in two steps, each spanning streams.
+		// 150,000 vertices: positions 1.8 MB, attributes 5.4 MB, indices 0.6 MB; 7.8 MB in steps of 2 MiB, each spanning
+		// streams where they meet.
 		constexpr uint32_t c_Vertices = 150000;
 		std::vector<glm::vec3> positions(c_Vertices);
 		std::vector<MeshVertexAttributes> attributes(c_Vertices);
@@ -781,19 +843,20 @@ TEST_SUITE("GPU.Assets.Uploads")
 		const uint64_t indexBytes = c_Vertices * sizeof(uint32_t);
 		CHECK(mesh->GetFinalizedMemoryUsage().GpuBuffers == positionBytes + attributeBytes + indexBytes);
 
+		constexpr uint64_t c_Budget = 2ull << 20;
 		uint64_t uploaded = 0;
 		uint64_t total = 0;
 		uint32_t calls = 0;
 		AssetFinalizeResult result = AssetFinalizeResult::Pending;
 		while (result == AssetFinalizeResult::Pending && calls < 10)
 		{
-			result = FinalizeOnce(gpu, *mesh, 1, uploaded);
-			CHECK(uploaded <= c_AssetUploadStepBytes);
+			result = FinalizeOnce(gpu, *mesh, c_Budget, uploaded);
+			CHECK(uploaded <= c_Budget);
 			total += uploaded;
 			calls++;
 		}
 		CHECK(result == AssetFinalizeResult::Done);
-		CHECK(calls == 2);
+		CHECK(calls == 4);
 		CHECK(total == positionBytes + attributeBytes + indexBytes);
 		CHECK(mesh->GetMemoryUsage().GpuBuffers == positionBytes + attributeBytes + indexBytes);
 
@@ -811,7 +874,7 @@ TEST_SUITE("GPU.Assets.Uploads")
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 
-		// 40,002 vertices (13,334 triangles): attributes 1.44 MB, positions 0.48 MB, indices 0.16 MB, one step.
+		// 40,002 vertices (13,334 triangles): attributes 1.44 MB, positions 0.48 MB, indices 0.16 MB.
 		constexpr uint32_t c_Vertices = 40002;
 		std::vector<glm::vec3> positions(c_Vertices);
 		std::vector<MeshVertexAttributes> attributes(c_Vertices);
@@ -832,22 +895,33 @@ TEST_SUITE("GPU.Assets.Uploads")
 		const AssetMemoryUsage finalized = mesh->GetFinalizedMemoryUsage();
 		CHECK(finalized.Cpu == mesh->GetMemoryUsage().Cpu - attributeBytes);
 
-		// The step that uploads everything ends past the deadline: the vertex attributes are freed by the next call, which
-		// uploads nothing more.
+		// Past the deadline every call (each the frame's first) uploads one step. The call that uploads the last one would
+		// free the vertex attributes after the deadline: the next call frees them, uploading nothing.
 		RendererUploadContext& upload = Renderer::GetUploadContext();
-		upload.Begin();
-		uint64_t uploaded = 0;
-		AssetFinalizeContext context { &upload, nullptr };
-		context.Deadline = std::chrono::steady_clock::now(); // Passed: only each call's first piece of work goes
-		context.UploadedBytes = &uploaded;
-		CHECK(mesh->FinalizeOnMainThread(context) == AssetFinalizeResult::Pending);
-		CHECK(uploaded == finalized.GpuBuffers);
-		CHECK(mesh->GetAttributes().size() == c_Vertices);
-		uploaded = 0;
-		CHECK(mesh->FinalizeOnMainThread(context) == AssetFinalizeResult::Done);
-		CHECK(uploaded == 0);
-		upload.Submit();
+		std::vector<std::pair<AssetFinalizeResult, uint64_t>> calls;
+		AssetFinalizeResult result = AssetFinalizeResult::Pending;
+		while (result == AssetFinalizeResult::Pending && calls.size() < 100)
+		{
+			upload.Begin();
+			uint64_t uploaded = 0;
+			AssetFinalizeContext context { &upload, nullptr };
+			context.Deadline = std::chrono::steady_clock::now(); // Passed: only each frame's first step goes
+			context.UploadedBytes = &uploaded;
+			result = mesh->FinalizeOnMainThread(context);
+			upload.Submit();
+			calls.emplace_back(result, uploaded);
+			if (result == AssetFinalizeResult::Pending && uploaded > 0)
+				CHECK(mesh->GetAttributes().size() == c_Vertices);
+		}
 		gpu.GetDevice().WaitForIdle();
+		REQUIRE(result == AssetFinalizeResult::Done);
+		REQUIRE(calls.size() >= 3);
+		uint64_t total = 0;
+		for (const auto& [callResult, uploaded] : calls)
+			total += uploaded;
+		CHECK(total == finalized.GpuBuffers);
+		CHECK(calls[calls.size() - 2].second > 0);
+		CHECK(calls.back().second == 0);
 
 		// The GPU has the attributes; the CPU keeps positions and indices, and reports what it said it would.
 		CHECK(mesh->GetAttributes().empty());
@@ -856,18 +930,20 @@ TEST_SUITE("GPU.Assets.Uploads")
 		CHECK(mesh->GetMemoryUsage() == finalized);
 		const std::vector<uint8_t> gpuAttributes = ReadBuffer(gpu, mesh->GetAttributeBuffer(), attributeBytes);
 		CHECK(std::memcmp(gpuAttributes.data(), attributes.data(), attributeBytes) == 0);
-		CHECK(mesh->FinalizeOnMainThread(context) == AssetFinalizeResult::Done); // Finalized: nothing more to do
+		uint64_t uploaded = 0;
+		CHECK(FinalizeOnce(gpu, *mesh, std::numeric_limits<uint64_t>::max(), uploaded) == AssetFinalizeResult::Done); // Finalized: nothing more to do
+		CHECK(uploaded == 0);
 		SettleDevice(gpu);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("Mesh steps go through pooled staging buffers and wait for staging room like texture bands")
+	TEST_CASE("Mesh steps go through pooled staging buffers and wait for staging room like texture steps")
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		SettleDevice(gpu);
 
-		// 300,000 vertices: 15.6 MB of geometry, four steps.
+		// 300,000 vertices: 15.6 MB of geometry.
 		constexpr uint32_t c_Vertices = 300000;
 		std::vector<glm::vec3> positions(c_Vertices);
 		std::vector<MeshVertexAttributes> attributes(c_Vertices);
@@ -890,12 +966,13 @@ TEST_SUITE("GPU.Assets.Uploads")
 		const uint64_t attributeBytes = c_Vertices * sizeof(MeshVertexAttributes);
 		const uint64_t indexBytes = c_Vertices * sizeof(uint32_t);
 
-		// Staging released in this frame and not covered by a query yet fills the staging budget, as in the texture test.
+		// Staging released in this frame and not covered by a query yet fills the staging room, as in the texture test.
 		StagingPool& pool = Renderer::GetStagingPool();
 		pool.Release(pool.AcquireBuffer(c_AssetUploadStepBytes));
-		const uint64_t stagingBudget = pool.GetPendingBytes();
-		REQUIRE(stagingBudget >= c_AssetUploadStepBytes);
-		CHECK_FALSE(pool.HasRoomFor(1, stagingBudget));
+		const uint64_t inFlight = pool.GetPendingBytes();
+		REQUIRE(inFlight >= c_AssetUploadStepBytes);
+		const uint64_t stagingBudget = inFlight + c_AssetUploadStepBytes;
+		CHECK_FALSE(pool.HasRoomFor(1, inFlight));
 
 		RendererUploadContext& upload = Renderer::GetUploadContext();
 		upload.Begin();
@@ -908,7 +985,7 @@ TEST_SUITE("GPU.Assets.Uploads")
 		// call of the frame takes no step at all.
 		CHECK(first->FinalizeOnMainThread(context) == AssetFinalizeResult::Pending);
 		CHECK(frameUploaded == c_AssetUploadStepBytes);
-		CHECK(pool.GetPendingBytes() == stagingBudget + c_AssetUploadStepBytes);
+		CHECK(pool.GetPendingBytes() == stagingBudget);
 		CHECK(second->FinalizeOnMainThread(context) == AssetFinalizeResult::Pending);
 		CHECK(frameUploaded == c_AssetUploadStepBytes);
 		upload.Submit();

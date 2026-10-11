@@ -387,6 +387,8 @@ namespace Strata
 
 		ImGui::Text("Uploads %.2f MB last frame \xC2\xB7 at most %.2f MB of %.0f MB \xC2\xB7 finalize %.2f ms (at most %.2f of %.1f ms)", ToMB(stats.UploadedBytesLastFrame),
 			ToMB(stats.UploadedBytesWindowMax), budgetMB, stats.FinalizeMsLastFrame, stats.FinalizeMsWindowMax, stats.Budgets.FinalizeMsPerFrame);
+		ImGui::Text("Upload steps %.2f ms last frame \xC2\xB7 at most %.2f of %.1f ms", stats.UploadMsLastFrame, stats.UploadMsWindowMax,
+			stats.Budgets.UploadMsPerFrame);
 	}
 
 	////////////////////////////////////////////////////////////////////////////////

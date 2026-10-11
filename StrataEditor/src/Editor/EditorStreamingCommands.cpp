@@ -38,6 +38,7 @@ namespace Strata
 				{ "inFlightBytes", budgets.InFlightBytes },
 				{ "uploadBytesPerFrame", budgets.UploadBytesPerFrame },
 				{ "finalizeMsPerFrame", budgets.FinalizeMsPerFrame },
+				{ "uploadMsPerFrame", budgets.UploadMsPerFrame },
 				{ "stagingBytes", budgets.StagingBytes } };
 		}
 
@@ -114,6 +115,9 @@ namespace Strata
 					{ "finalizeMsLastFrame", stats.FinalizeMsLastFrame },
 					{ "finalizeMsWindowMax", stats.FinalizeMsWindowMax },
 					{ "finalizeBudgetMsPerFrame", stats.Budgets.FinalizeMsPerFrame },
+					{ "uploadMsLastFrame", stats.UploadMsLastFrame },
+					{ "uploadMsWindowMax", stats.UploadMsWindowMax },
+					{ "uploadBudgetMsPerFrame", stats.Budgets.UploadMsPerFrame },
 					{ "stagingBudgetBytes", stats.Budgets.StagingBytes },
 					{ "windowFrames", AssetManagerBase::c_StatsWindowFrames } } },
 				{ "evictions", stats.Evictions },
@@ -132,7 +136,7 @@ namespace Strata
 		registry.Register({ "asset.stats",
 			"Asset memory and streaming: resident bytes and budget per pool (cpu, gpuTextures, gpuBuffers; null budget = unlimited), "
 			"load counts, the streaming queue (queued loads per priority, loads and bytes in flight), finalization (GPU bytes uploaded and "
-			"main-thread milliseconds, last frame and maximum of recent frames, with their budgets and the staging budget), evictions (and how "
+			"main-thread milliseconds, and of those the milliseconds of the upload steps, last frame and maximum of recent frames, with their budgets and the staging budget), evictions (and how "
 			"many resident assets eviction looked at), cancellations, staging releases and dependency prefetches (prefetch: loads of what "
 			"assets reference started when their reads completed, and those dropped on arrival for lack of room in the budgets). With "
 			"assets: true it also lists the assets that are resident, loading, failed or pinned, with their memory, state, last use and pins.",
@@ -177,8 +181,8 @@ namespace Strata
 		registry.Register({ "asset.setBudget",
 			"Sets the asset streaming budgets of the open project's asset manager (until the project closes; not undoable; fails without a "
 			"project): resident memory per pool in megabytes (1 MB = 1048576 bytes; assets over budget are evicted, least recently used first), "
-			"the megabytes of loads in flight, the GPU megabytes uploaded per frame, the main-thread milliseconds finalization may take per frame "
-			"and the staging megabytes texture and mesh uploads may hold (sustained uploads reach at most half of the staging per frame, so "
+			"the megabytes of loads in flight, the GPU megabytes uploaded per frame, the main-thread milliseconds finalization may take per frame, "
+			"the milliseconds its upload steps may take (writing staging memory; steps are sized to fit) and the staging megabytes texture and mesh uploads may hold (sustained uploads reach at most half of the staging per frame, so "
 			"raise both for a loading screen). Values must be greater than 0; reset: true starts from the defaults (derived from the "
 			"GPU). Returns the budgets in effect (bytes, null = unlimited).",
 			ObjectSchema({
@@ -190,6 +194,8 @@ namespace Strata
 				{ "uploadMBPerFrame", { { "type", "number" }, { "exclusiveMinimum", 0 }, { "description", "GPU bytes finalization uploads per frame, in MB" } } },
 				{ "finalizeMsPerFrame", { { "type", "number" }, { "exclusiveMinimum", 0 },
 					{ "description", "Main-thread milliseconds finalization may take per frame" } } },
+				{ "uploadMsPerFrame", { { "type", "number" }, { "exclusiveMinimum", 0 },
+					{ "description", "Main-thread milliseconds the upload steps of a frame may take (writing staging memory, recording copies)" } } },
 				{ "stagingMB", { { "type", "number" }, { "exclusiveMinimum", 0 },
 					{ "description", "Staging memory texture and mesh uploads may hold, in flight and idle, in MB" } } },
 				{ "reset", BoolSchema("Start from the default budgets before applying the given values (default false)") } }),
@@ -206,6 +212,7 @@ namespace Strata
 				const std::optional<double> inFlight = ReadPositive(parameters, "inFlightMB", c_MaxMB, arguments);
 				const std::optional<double> upload = ReadPositive(parameters, "uploadMBPerFrame", c_MaxMB, arguments);
 				const std::optional<double> finalizeMs = ReadPositive(parameters, "finalizeMsPerFrame", c_MaxMs, arguments);
+				const std::optional<double> uploadMs = ReadPositive(parameters, "uploadMsPerFrame", c_MaxMs, arguments);
 				const std::optional<double> staging = ReadPositive(parameters, "stagingMB", c_MaxMB, arguments);
 				if (!arguments.IsValid())
 					return arguments.Fail();
@@ -230,6 +237,8 @@ namespace Strata
 					budgets.UploadBytesPerFrame = toBytes(*upload);
 				if (finalizeMs)
 					budgets.FinalizeMsPerFrame = static_cast<float>(*finalizeMs);
+				if (uploadMs)
+					budgets.UploadMsPerFrame = static_cast<float>(*uploadMs);
 				if (staging)
 					budgets.StagingBytes = toBytes(*staging);
 				manager->SetResidencyBudgets(budgets);

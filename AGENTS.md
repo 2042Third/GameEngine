@@ -180,7 +180,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   A process's peak memory includes everything it did before, so a test that measures peak memory
   runs the measured work in a helper process (`--strata-test-helper=<mode>`, see `TestMain.cpp`): `PerfGPU.Streaming`
   runs its camera sweeps over the stress project (`src/Perf/StressProject.h`, also usable by other suites;
-  `StrataTests --strata-test-helper=write-stress-project <new directory>` writes it to open in the editor) that way:
+  `StrataTests --strata-test-helper=write-stress-project <new directory>` writes it to open in the editor, and
+  `--strata-test-helper=write-stress-game <new directory>` imports it and writes its pack and the manifests the test runs,
+  `Stress.stgame` and `StressTopDown.stgame`, to run the exported game by hand) that way:
   one that evicts within a small texture budget and one at 1920x1080 with every texture resident, one sweep per attempt
   each. Every evicting sweep must stream correctly (no failed load or device error, every camera stop
   settles, the textures stay within the residency budget give or take the largest); its budgets are maxima of the
@@ -490,7 +492,8 @@ The threading model, frame loop and pipelines these rules protect are described 
   support get the blocks decoded at load time (`Texture::IsBlockCompressionSupported`, `BlockCompression`).
 - **Residency** ([Docs/Architecture.md](Docs/Architecture.md), "Streaming and residency"): memory is bounded by budgets
   per pool (`AssetResidencyBudgets`: GPU textures 50% and GPU buffers 15% of the device's memory budget, CPU unlimited;
-  128 MiB of loads in flight, 64 MiB and 4 ms of finalization per frame, 32 MiB of upload staging), and the least
+  128 MiB of loads in flight, 16 MiB and 4 ms of finalization per frame with 2 ms of upload steps, 32 MiB of upload
+  staging), and the least
   recently requested assets of a pool over budget are evicted. Hold `AssetHandle`s across frames, not `Ref`s, and
   request what you use every frame you use it (`GetAsset`): a held `Ref` keeps an asset from being evicted (it would
   free nothing), so it defeats the budget. Pin what gameplay must keep whether or not it is used
@@ -879,7 +882,7 @@ and `AudioSystem`, the built-in "Audio" scene system.
   in flight, uploads, finalization time and the staging budget, evictions and the assets eviction looked at,
   cancellations, staging releases, dependency prefetches started and dropped) and, with `assets: true`, the assets that
   are resident, loading, failed or pinned (`GetResidencyInfo`); `asset.setBudget {gpuTexturesMB?, gpuBuffersMB?, cpuMB?,
-  inFlightMB?, uploadMBPerFrame?, finalizeMsPerFrame?, stagingMB?, reset?}` changes the budgets of the open project's
+  inFlightMB?, uploadMBPerFrame?, finalizeMsPerFrame?, uploadMsPerFrame?, stagingMB?, reset?}` changes the budgets of the open project's
   manager until the project closes (it fails without a project; values greater than 0; MB are 2^20 bytes; no undo, as
   nothing in the project changes).
   Opening a scene, and a scene switch the game asks for in play mode, schedule the release of what only the previous
@@ -1065,13 +1068,17 @@ and `AudioSystem`, the built-in "Audio" scene system.
   (`GraphicsDeviceInfo::SupportsExtendedStorageFormats`, the `*Half.comp` variants of `GTAO` and `AOBlur`), else R32F.
 - Everything streams: meshes, materials and textures that are still loading are skipped or drawn with
   fallbacks and counted in `SceneRendererStats::PendingAssets`; never block a frame on an asset. Asset uploads are
-  budgeted per frame and go in steps (Docs/Architecture.md, "Streaming and residency"); texture bands and mesh ranges go
-  through the staging of `Renderer::GetStagingPool()` (`StagingPool`, all of it within the staging budget), reusable once
-  the GPU has run the copies: the renderer's upload context fences the managers' uploads when it submits a batch
-  (`RendererUploadContext::Submit`; every command list with copies from staging released before must have been executed
-  by then) and
-  `Renderer::BeginFrame` fences what else was released, so staging other code releases is reused only with device
-  frames (without them, such staging stays in flight).
+  budgeted per frame and go in steps (Docs/Architecture.md, "Streaming and residency") through one queue
+  (`Renderer::GetUploadQueue()`, `GPUUploadQueue`: steps sized by `PlanStep` to the bytes and time left in the frame, its
+  counters and completion tickets); texture steps and mesh ranges go through the staging buffers of
+  `Renderer::GetStagingPool()` (`StagingPool`, all of it within the staging budget; texture levels are copied from them by
+  `GraphicsDevice::RecordBufferToTextureCopies`, whose command lists do not keep the textures alive: the queue keeps them
+  until its batch completed), reusable once the GPU has run the copies: the queue fences the
+  managers' uploads when it submits a batch (`GPUUploadQueue::SubmitBatch`; every command list with copies from staging
+  released before must have been executed by then) and `Renderer::BeginFrame` fences what else was released, so staging
+  other code releases is reused only with device frames (without them, such staging stays in flight). Code that renders
+  into the back buffer calls `Renderer::PrepareBackBuffer()` first (the application and the runtime do): the GPU waits
+  for the display's image only from there on, so the frame's uploads never queue behind the display.
 - Material texture slots (`SampleMaterialTexture` in `Include/Scene.glsl`) pack the bindless slot, the sampler index and a
   grayscale bit (`RenderData::c_TextureSlotGrayscale`, from `TextureSpecification::Grayscale`). Normal maps are read as X
   and Y with Z reconstructed (`Forward.frag`), so BC5 and RGBA8 normal maps shade alike; a shader that reads a normal map

@@ -2,6 +2,7 @@
 #include <Strata/Core/EntryPoint.h>
 #include <Strata/Project/GameManifest.h>
 #include <Strata/Core/FrameProfiler.h>
+#include <Strata/Renderer/GPUUploadQueue.h>
 #include <Strata/Renderer/ImageWriter.h>
 #include <Strata/Runtime/FramePerfLog.h>
 #include <Strata/Runtime/GameRenderer.h>
@@ -95,8 +96,10 @@ namespace Strata
 			}
 			if (m_Renderer)
 			{
-				// Frames of minimized windows are skipped by the application; this frame has a back buffer.
+				// Frames of minimized windows are skipped by the application; this frame has a back buffer, which the GPU waits
+				// for only from here on (after the frame's asset uploads, which the update above submitted).
 				GraphicsDevice& device = Renderer::GetGraphicsDevice();
+				Renderer::PrepareBackBuffer();
 				if (nvrhi::IFramebuffer* backBuffer = device.GetBackBufferFramebuffer())
 					m_Renderer->Render(m_Runtime->GetScene(), backBuffer, device.GetBackBufferSize());
 			}
@@ -119,7 +122,8 @@ namespace Strata
 			m_PerfLogListener = FrameProfiler::Get().AddFrameListener([this](const FrameSample& frame)
 			{
 				const std::optional<AssetManagerStats> assets = m_Runtime ? std::optional<AssetManagerStats>(m_Runtime->GetAssetManager()->GetStats()) : std::nullopt;
-				if (!m_PerfLog->WriteFrame(frame, assets ? &*assets : nullptr))
+				const GPUUploadQueueStats* uploads = Renderer::IsInitialized() ? &Renderer::GetUploadQueue().GetStats() : nullptr;
+				if (!m_PerfLog->WriteFrame(frame, assets ? &*assets : nullptr, uploads))
 					Application::Get().SetExitCode(1); // A requested log that is incomplete fails the run, so CI notices
 			});
 			ST_INFO("Writing a perf log of every frame to {}", FileSystem::ToUTF8(m_Options.PerfLogPath));

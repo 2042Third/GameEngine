@@ -450,7 +450,8 @@ TEST_SUITE("GPU.Assets")
 		REQUIRE(loadedMesh);
 		CHECK(std::static_pointer_cast<Mesh>(loadedMesh)->GetIndexBuffer() != nullptr);
 
-		// A tiny upload budget spreads finalization over several updates.
+		// A tiny upload budget spreads finalization over several updates: each takes its first step only, one of the smallest
+		// size at most.
 		manager->UnloadAsset(UUID(0x9000));
 		manager->UnloadAsset(UUID(0x9001));
 		AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
@@ -458,13 +459,17 @@ TEST_SUITE("GPU.Assets")
 		manager->SetResidencyBudgets(budgets);
 		manager->RequestLoad(UUID(0x9000));
 		manager->RequestLoad(UUID(0x9001));
-		manager->Update();
-		const uint32_t readyAfterFirstUpdate = (manager->GetAssetState(UUID(0x9000)) == AssetState::Ready ? 1u : 0u)
-			+ (manager->GetAssetState(UUID(0x9001)) == AssetState::Ready ? 1u : 0u);
-		CHECK(readyAfterFirstUpdate == 1);
-		manager->Update();
-		CHECK(manager->GetAssetState(UUID(0x9000)) == AssetState::Ready);
-		CHECK(manager->GetAssetState(UUID(0x9001)) == AssetState::Ready);
+		uint32_t updates = 0;
+		const auto ready = [&](uint64_t handle) { return manager->GetAssetState(UUID(handle)) == AssetState::Ready; };
+		while (updates < 64 && !(ready(0x9000) && ready(0x9001)))
+		{
+			manager->Update();
+			updates++;
+			CHECK(manager->GetStats().UploadedBytesLastFrame <= GPUUploadQueue::c_MinStepBytes);
+		}
+		CHECK(updates >= 2);
+		CHECK(ready(0x9000));
+		CHECK(ready(0x9001));
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

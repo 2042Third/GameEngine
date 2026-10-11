@@ -125,7 +125,39 @@ namespace
 		std::vector<FinalizeCall>& m_Calls;
 	};
 
-	// Loads c_FakeAssetType as stepped assets while it lives: the stored form is (steps, step bytes).
+	// An asset whose uploads run on a queue beside the frame's work: it is AwaitingGPU for its first `waits` calls that allow
+	// it (AssetFinalizeContext::MayWait), then done; a call that does not allow it waits itself and finishes.
+	class AwaitingAsset final : public Asset
+	{
+	public:
+		AwaitingAsset(uint32_t waits, std::vector<FinalizeCall>& calls)
+			: m_Waits(waits), m_Calls(calls)
+		{
+		}
+
+		AssetType GetType() const override { return c_FakeAssetType; }
+
+		AssetFinalizeResult FinalizeOnMainThread(const AssetFinalizeContext& context) override
+		{
+			FinalizeCall call;
+			call.Handle = Handle;
+			call.Frame = context.Manager ? context.Manager->GetFrameIndex() : 0;
+			call.FirstOfFrame = context.FirstOfFrame;
+			m_Calls.push_back(call);
+			if (context.MayWait && m_Waits > 0)
+			{
+				m_Waits--;
+				return AssetFinalizeResult::AwaitingGPU;
+			}
+			return AssetFinalizeResult::Done;
+		}
+	private:
+		uint32_t m_Waits;
+		std::vector<FinalizeCall>& m_Calls;
+	};
+
+	// Loads c_FakeAssetType as stepped assets while it lives: the stored form is (steps, step bytes); (0, waits) is an asset
+	// awaiting the GPU for that many calls.
 	class ScopedSteppedLoader
 	{
 	public:
@@ -144,6 +176,8 @@ namespace
 					return nullptr;
 				}
 				std::memcpy(description, data.data(), sizeof(description));
+				if (description[0] == 0)
+					return CreateRef<AwaitingAsset>(static_cast<uint32_t>(description[1]), calls);
 				return CreateRef<SteppedAsset>(static_cast<uint32_t>(description[0]), description[1], calls);
 			});
 		}
@@ -279,6 +313,44 @@ TEST_SUITE("Asset.Finalize")
 			CHECK(call.FirstOfFrame);
 			CHECK(call.Steps == 1);
 		}
+		CHECK(StateCountsMatch(*manager));
+	}
+
+	TEST_CASE("An asset awaiting the GPU lets the arrivals behind it go on and is finalized again in a later update")
+	{
+		std::vector<FinalizeCall> calls;
+		ScopedSteppedLoader loader(calls);
+		Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		const Ref<FakeUploadContext> upload = CreateRef<FakeUploadContext>();
+		manager->SetUploadContext(upload);
+		AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
+		budgets.FinalizeMsPerFrame = 60000.0f;
+		manager->SetResidencyBudgets(budgets);
+		const AssetHandle awaiting = manager->AddStored(0x94000, c_FakeAssetType, EncodeStepped(0, 2));
+		const AssetHandle behind = manager->AddStored(0x94001, c_FakeAssetType, EncodeStepped(1, c_MB));
+		manager->RequestLoad(awaiting);
+		manager->RequestLoad(behind);
+
+		// The first update: the awaiting asset is asked first, then the one behind it finishes in the same update.
+		manager->Update();
+		CHECK(manager->GetAssetState(awaiting) == AssetState::Loading);
+		CHECK(manager->GetAssetState(behind) == AssetState::Ready);
+		// It is asked once per update until it is done, first in line.
+		manager->Update();
+		CHECK(manager->GetAssetState(awaiting) == AssetState::Loading);
+		manager->Update();
+		CHECK(manager->GetAssetState(awaiting) == AssetState::Ready);
+		std::vector<AssetHandle> order;
+		for (const FinalizeCall& call : calls)
+			order.push_back(call.Handle);
+		CHECK(order == std::vector<AssetHandle> { awaiting, behind, awaiting, awaiting });
+		CHECK(manager->GetStats().LoadingAssets == 0);
+
+		// A load that has to finish at once does not get to wait: it finishes in its call.
+		const AssetHandle synchronous = manager->AddStored(0x94002, c_FakeAssetType, EncodeStepped(0, 5));
+		calls.clear();
+		REQUIRE(manager->LoadAssetSync(synchronous));
+		CHECK(calls.size() == 1);
 		CHECK(StateCountsMatch(*manager));
 	}
 
