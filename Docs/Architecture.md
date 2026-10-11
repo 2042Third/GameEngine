@@ -565,7 +565,11 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   taken and the spent asset unloaded; the closure goes on loading), `Ready` (the share of the closure's stored bytes that
   `SceneLoadOptions::RequiredProgress` asks for is in: all of it by default; a dependency that fails counts as finished,
   the scene shows a fallback for it), `Failed` (the scene asset could not be loaded) and `Cancelled`. `GetProgress` is the
-  group's share of stored bytes (it never decreases), `TakeScene` hands the scene over once, `Cancel` releases every pin
+  group's share of stored bytes (it never decreases); while the document is read, the read's own progress counts for the
+  document's share (`Scene/SceneReadProgress.h`: the scene loader registers a `SceneReadProgress::Tracker` per read, and
+  `SceneAsset::Deserialize` reports the parse by bytes, `JsonUtils::Parse` with a `JsonParseProgress` at no cost to the
+  parse, then each pass over the entities, `EntityReadProgress`; a million entities read in about 5.7 s, Release), so a
+  bar never stands still for seconds. `TakeScene` hands the scene over once, `Cancel` releases every pin
   and abandons what only the request started (a request destroyed unfinished cancels itself). The owner drops the request
   once the scene it took has started, so that its assets are what the scene requests from then on. The owners: the
   editor's `scene.open` (`EditorContext::BeginOpenScene`), play-mode switches (`EditorContext::SwitchRuntimeScene`) and
@@ -1442,8 +1446,9 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   it uses are in; another `BeginOpenScene`, `NewScene` or closing the project cancels the load. `scene.open` answers
   deferred, one frame after the swap so that its `frameTimes` include the frame that swapped the scene in;
   `GetSceneLoadStatus` (and `editor.status`'s `sceneLoad`, `scene.loadStatus`) report its progress, the viewport draws a
-  card with it over the image (`ViewportPanel::DrawSceneLoadOverlay`) and the assets pill counts it (reading the document
-  first, then the share of the bytes in). `OpenScene` and `WaitForSceneLoad` wait for the load (tools and tests).
+  card with it over the image (`ViewportPanel::DrawSceneLoadOverlay`: the step, reading the scene or loading what it uses,
+  and the share done) and the assets pill counts it. `OpenScene` and `WaitForSceneLoad` wait for the load (tools and
+  tests).
   A project's start scene opens the same way (`BeginOpenProject`, the status's `StartScene`): the project is open at once
   with an empty, read-only scene that the start scene replaces; `project.open` and `project.openSample` answer once it is in
   (or say why not: `startSceneError`, also logged as a warning, since the project stays open), and a window started with

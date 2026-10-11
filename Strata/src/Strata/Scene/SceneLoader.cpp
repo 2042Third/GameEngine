@@ -3,6 +3,7 @@
 
 #include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/Scene.h"
+#include "Strata/Scene/SceneReadProgress.h"
 
 #include <algorithm>
 
@@ -45,11 +46,19 @@ namespace Strata
 			manager->UnloadAsset(scene);
 		// The scene first (the root of the closure), then what it uses, breadth first; all of it pinned while the request lives.
 		request.m_Group = manager->RequestLoadWithDependencies(scene, options.Priority);
+		uint64_t sceneWeight = 0;
+		uint64_t totalWeight = 0;
 		for (const AssetHandle member : request.m_Group.GetAssets())
 		{
-			if (const std::optional<AssetMetadata> metadata = manager->GetMetadata(member))
-				request.m_TotalBytes += metadata->StoredSize;
+			const std::optional<AssetMetadata> metadata = manager->GetMetadata(member);
+			const uint64_t storedSize = metadata ? metadata->StoredSize : 0;
+			request.m_TotalBytes += storedSize;
+			const uint64_t weight = std::max<uint64_t>(storedSize, 1);
+			totalWeight += weight;
+			if (member == scene)
+				sceneWeight = weight;
 		}
+		request.m_SceneShare = totalWeight > 0 ? static_cast<float>(static_cast<double>(sceneWeight) / static_cast<double>(totalWeight)) : 0.0f;
 		request.m_State = SceneLoadState::LoadingScene;
 		return request;
 	}
@@ -72,9 +81,18 @@ namespace Strata
 	{
 		if (m_State == SceneLoadState::Ready)
 			return 1.0f;
+		// Nothing is loading for a request that failed at once or was cancelled.
 		if (!m_Group.IsValid())
 			return 0.0f;
-		return m_Group.Progress();
+		float progress = m_Group.Progress();
+		// The group counts the scene asset once it is loaded; until then the read of its document counts for its share.
+		if (m_State == SceneLoadState::LoadingScene)
+		{
+			if (const std::optional<float> read = SceneReadProgress::Get(m_Scene))
+				progress += m_SceneShare * *read;
+		}
+		m_ReportedProgress = std::max(m_ReportedProgress, std::min(progress, 1.0f));
+		return m_ReportedProgress;
 	}
 
 	void SceneLoadRequest::Update()

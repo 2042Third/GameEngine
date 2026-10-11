@@ -3,6 +3,7 @@
 
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Scene/Prefab.h"
+#include "Strata/Scene/SceneReadProgress.h"
 
 namespace Strata
 {
@@ -20,9 +21,11 @@ namespace Strata
 		{
 			return Model::Deserialize(data, outError);
 		});
-		AssetLoaderRegistry::Register(AssetType::Scene, [](const AssetMetadata&, std::span<const uint8_t> data, std::string* outError) -> Ref<Asset>
+		// Reading a large scene takes seconds: the read reports how far it got (SceneReadProgress), which scene loads show.
+		AssetLoaderRegistry::Register(AssetType::Scene, [](const AssetMetadata& metadata, std::span<const uint8_t> data, std::string* outError) -> Ref<Asset>
 		{
-			return SceneAsset::Deserialize(data, outError);
+			SceneReadProgress::Tracker progress(metadata.Handle);
+			return SceneAsset::Deserialize(data, outError, [&progress](float share) { progress.Report(share); });
 		});
 	}
 

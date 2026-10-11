@@ -5,8 +5,10 @@
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
+#include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneLoader.h"
+#include "Strata/Scene/SceneReadProgress.h"
 #include "Strata/Scene/SceneSerializer.h"
 #include "TestHelpers.h"
 
@@ -206,5 +208,98 @@ TEST_SUITE("Scene.Loader")
 		// Without an active manager nothing can load.
 		ScopedActiveManager none(nullptr);
 		CHECK(SceneLoader::LoadAsync(fixture.SceneHandle).GetState() == SceneLoadState::Failed);
+	}
+
+	TEST_CASE("Reading a scene document reports its progress as it parses the text and creates the entities")
+	{
+		// About 4 MB of text and five passes over 30,000 entities: several reports in each step.
+		const std::vector<uint8_t> document = MakeSceneDocument(30'000);
+		REQUIRE(document.size() > (size_t(3) << 20));
+		std::vector<float> shares;
+		std::string error;
+		const Ref<SceneAsset> asset = SceneAsset::Deserialize(document, &error, [&shares](float share) { shares.push_back(share); });
+		REQUIRE_MESSAGE(asset, error);
+		CHECK(asset->CreateScene()->GetEntityCount() == 30'000);
+
+		REQUIRE(shares.size() >= 10);
+		for (size_t index = 1; index < shares.size(); index++)
+			CHECK(shares[index] >= shares[index - 1]);
+		CHECK(shares.front() > 0.0f);
+		CHECK(shares.back() == 1.0f);
+		// Shares while the text is parsed, while the entities are created, and between the two steps' ends.
+		size_t parsing = 0;
+		size_t creating = 0;
+		for (const float share : shares)
+		{
+			if (share < 0.4f)
+				parsing++;
+			else if (share > 0.45f && share < 0.8f)
+				creating++;
+		}
+		CHECK(parsing >= 3);
+		CHECK(creating >= 6);
+	}
+
+	TEST_CASE("The reads of scene documents under way are found by scene asset, the furthest one counting")
+	{
+		const AssetHandle scene = UUID(0x5CE7E);
+		const AssetHandle other = UUID(0x07E4);
+		CHECK_FALSE(SceneReadProgress::Get(scene).has_value());
+		{
+			SceneReadProgress::Tracker first(scene);
+			REQUIRE(SceneReadProgress::Get(scene).has_value());
+			CHECK(*SceneReadProgress::Get(scene) == 0.0f);
+			first.Report(0.3f);
+			first.Report(0.2f); // A read never goes back
+			CHECK(*SceneReadProgress::Get(scene) == doctest::Approx(0.3f));
+			CHECK_FALSE(SceneReadProgress::Get(other).has_value());
+			{
+				SceneReadProgress::Tracker second(scene);
+				second.Report(0.6f);
+				CHECK(*SceneReadProgress::Get(scene) == doctest::Approx(0.6f));
+			}
+			CHECK(*SceneReadProgress::Get(scene) == doctest::Approx(0.3f));
+			first.Report(5.0f);
+			CHECK(*SceneReadProgress::Get(scene) == 1.0f);
+		}
+		CHECK_FALSE(SceneReadProgress::Get(scene).has_value());
+	}
+
+	TEST_CASE("A scene load's progress counts the read of its document for the document's share of the bytes")
+	{
+		SceneLoaderFixture fixture;
+		FakeAssetManager& manager = *fixture.Manager;
+		manager.CloseGate();
+		SceneLoadRequest request = SceneLoader::LoadAsync(fixture.SceneHandle);
+		REQUIRE(request.GetState() == SceneLoadState::LoadingScene);
+		CHECK(request.GetProgress() == 0.0f);
+
+		// While the document is read (here: a read of it standing at half), half of its share is done. The ten dependencies
+		// hold 1,000 of the closure's bytes.
+		const uint64_t sceneBytes = manager.GetMetadata(fixture.SceneHandle)->StoredSize;
+		const float sceneShare = static_cast<float>(static_cast<double>(sceneBytes) / static_cast<double>(sceneBytes + 1000));
+		{
+			SceneReadProgress::Tracker read(fixture.SceneHandle);
+			read.Report(0.5f);
+			request.Update();
+			CHECK(request.GetProgress() == doctest::Approx(sceneShare * 0.5f));
+		}
+		// Once that read is over the progress keeps what it reached until the loaded scene counts in full.
+		CHECK(request.GetProgress() == doctest::Approx(sceneShare * 0.5f));
+
+		manager.OpenGate();
+		std::vector<float> progress;
+		REQUIRE(WaitUntil([&]()
+		{
+			manager.Update();
+			request.Update();
+			progress.push_back(request.GetProgress());
+			return request.IsFinished();
+		}, std::chrono::milliseconds(10000)));
+		CHECK(request.GetState() == SceneLoadState::Ready);
+		CHECK(progress.front() >= sceneShare * 0.5f);
+		for (size_t index = 1; index < progress.size(); index++)
+			CHECK(progress[index] >= progress[index - 1]);
+		CHECK(progress.back() == 1.0f);
 	}
 }

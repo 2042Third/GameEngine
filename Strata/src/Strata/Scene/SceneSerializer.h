@@ -7,11 +7,17 @@
 #include <nlohmann/json.hpp>
 
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
 namespace Strata
 {
+
+	// Receives the share of reading a document's entities done so far, in [0, 1] (SceneSerializer::Deserialize,
+	// DeserializeEntities), on the reading thread: every few thousand entities of each pass over them, and 1 once all of
+	// them exist. Reading a million entities takes seconds.
+	using EntityReadProgress = std::function<void(float share)>;
 
 	struct EntityInstantiationOptions
 	{
@@ -43,7 +49,8 @@ namespace Strata
 
 		static nlohmann::json Serialize(const Scene& scene);
 		// Loads into an empty scene. Returns false (with an error) for structurally invalid documents.
-		static bool Deserialize(Scene& scene, const nlohmann::json& json, std::string* outError = nullptr, std::vector<std::string>* outWarnings = nullptr);
+		static bool Deserialize(Scene& scene, const nlohmann::json& json, std::string* outError = nullptr, std::vector<std::string>* outWarnings = nullptr,
+			const EntityReadProgress& progress = {});
 		// How many scene documents Deserialize has read in this process (any thread): loading a scene asset reads its document
 		// once, whoever takes the scene (SceneAsset::TakePreparedScene), and tests check it with the difference of two calls.
 		static uint64_t GetDeserializeCount();
@@ -57,7 +64,7 @@ namespace Strata
 		// Instantiates a snapshot produced by SerializeEntities (or the "Entities" of a scene/prefab document).
 		// Returns the created top-level entities in order.
 		static std::vector<Entity> DeserializeEntities(Scene& scene, const nlohmann::json& json, const EntityInstantiationOptions& options,
-			std::string* outError = nullptr, std::vector<std::string>* outWarnings = nullptr);
+			std::string* outError = nullptr, std::vector<std::string>* outWarnings = nullptr, const EntityReadProgress& progress = {});
 	};
 
 }

@@ -27,6 +27,7 @@
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <cmath>
 #include <optional>
 
 namespace Strata
@@ -1367,13 +1368,9 @@ namespace Strata
 		if (importing > 0)
 			text = fmt::format("{} importing{}{}", importing, c_Separator, text);
 		// A scene being opened (scene.open, a project's start scene) loads with everything it uses: the largest load while it
-		// lasts. Its progress counts in bytes once its document is read (until then a share would stand still at 0).
-		const bool sceneLoading = m_Context.IsSceneLoading();
-		const bool readingScene = sceneLoading && m_Context.GetSceneLoadStatus().State == SceneLoadState::LoadingScene;
-		if (readingScene)
-			text = fmt::format("Opening scene...{}{}", c_Separator, text);
-		else if (sceneLoading)
-			text = fmt::format("Opening scene {:.0f}%{}{}", m_Context.GetSceneLoadStatus().Progress * 100.0f, c_Separator, text);
+		// lasts. Its progress counts its document as it is read, then what it uses in bytes.
+		if (m_Context.IsSceneLoading())
+			text = fmt::format("Opening scene {:.0f}%{}{}", std::floor(m_Context.GetSceneLoadStatus().Progress * 100.0f), c_Separator, text);
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		// Failures matter most; then how full the budgets are (a comfortable budget is no news).
 		const ImVec4& color = stats.FailedAssets > 0 ? colors.Error
@@ -1390,15 +1387,11 @@ namespace Strata
 				tooltip += fmt::format(" {} {} importing in the background: {} once imported.", importing, importing == 1 ? "asset is" : "assets are",
 					importing == 1 ? "it loads" : "they load");
 			}
-			if (readingScene)
+			if (m_Context.IsSceneLoading())
 			{
-				tooltip += " A scene is being opened (its document is being read; what it uses loads next); it replaces the edited scene once all of it "
-					"is in.";
-			}
-			else if (sceneLoading)
-			{
-				tooltip += fmt::format(" A scene is being opened ({:.0f}% of it and what it uses is in); it replaces the edited scene once all of it is.",
-					m_Context.GetSceneLoadStatus().Progress * 100.0f);
+				const EditorSceneLoadStatus& load = m_Context.GetSceneLoadStatus();
+				tooltip += fmt::format(" A scene is being opened ({:.0f}% of it and what it uses is in; {}); it replaces the edited scene once all of it is.",
+					std::floor(load.Progress * 100.0f), load.State == SceneLoadState::LoadingScene ? "its document is being read" : "what it uses is loading");
 			}
 			if (!shownPool)
 			{

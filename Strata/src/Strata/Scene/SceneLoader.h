@@ -58,7 +58,9 @@ namespace Strata
 		bool IsFinished() const { return m_State == SceneLoadState::Ready || m_State == SceneLoadState::Failed || m_State == SceneLoadState::Cancelled; }
 		const std::string& GetError() const { return m_Error; }
 		// The share of the stored bytes of the scene and its dependency closure that finished loading, in [0, 1]; it never
-		// decreases (1 once Ready).
+		// decreases (1 once Ready). While the scene's document is read, the share of the read done so far
+		// (SceneReadProgress) counts for its part of the bytes, so that the progress moves on during the seconds a large
+		// scene takes to read.
 		float GetProgress() const;
 		// The bytes of the closure (the scene asset included) and how many of its assets there are.
 		uint64_t GetTotalBytes() const { return m_TotalBytes; }
@@ -87,6 +89,9 @@ namespace Strata
 		std::string m_Error;
 		AssetGroupRequest m_Group;
 		uint64_t m_TotalBytes = 0;
+		// The scene asset's part of the closure as the group weighs it (AssetGroupRequest: stored sizes of at least 1).
+		float m_SceneShare = 0.0f;
+		mutable float m_ReportedProgress = 0.0f;
 		Ref<Scene> m_Prepared;
 		bool m_Taken = false;
 	};
