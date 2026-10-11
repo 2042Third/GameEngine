@@ -566,7 +566,8 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   `SceneLoadOptions::RequiredProgress` asks for is in: all of it by default; a dependency that fails counts as finished,
   the scene shows a fallback for it), `Failed` (the scene asset could not be loaded) and `Cancelled`. `GetProgress` is the
   group's share of stored bytes (it never decreases); while the document is read, the read's own progress counts for the
-  document's share (`Scene/SceneReadProgress.h`: the scene loader registers a `SceneReadProgress::Tracker` per read, and
+  document's share (`Scene/SceneReadProgress.h`: the scene asset's loader, `RegisterSceneModule`, registers a
+  `SceneReadProgress::Tracker` per read, and
   `SceneAsset::Deserialize` reports the parse by bytes, `JsonUtils::Parse` with a `JsonParseProgress` at no cost to the
   parse, then each pass over the entities, `EntityReadProgress`; a million entities read in about 5.7 s, Release), so a
   bar never stands still for seconds. `TakeScene` hands the scene over once, `Cancel` releases every pin
