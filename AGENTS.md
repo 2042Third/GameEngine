@@ -165,7 +165,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   materials, with the opaque draw calls those take) and, in `src/Editor/`, `Perf.Editor` (entity commands among 100,000
   roots; the hierarchy's rows of 100,000 roots, idle and rebuilt; the Hierarchy panel's share of an editor frame with
   100,000 roots, open against closed; what 100,000 selected entities add to a frame; the longest editor frame while a
-  4096x4096 texture re-imports uncompressed and then block-compressed again), `PerfGPU.Editor`, which runs the real
+  4096x4096 texture re-imports uncompressed and then block-compressed again; `asset.findReferences` among 10,000
+  assets), `PerfGPU.Editor`, which runs the real
   `StrataEditor` maximized on generated 100,000- and 1,000,000-entity scenes and checks the median CPU frame time its
   `editor.wait` steps report (when the editor fails, the test describes the scene files on disk with
   `Tests::DescribeJsonFile`, which tells a damaged file from a failed read or parse), exports the stress project (the

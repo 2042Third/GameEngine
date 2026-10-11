@@ -51,7 +51,7 @@
 	"Perf.Editor.SelectionFrame100kSelected": { "Measured": 7.81, "Budget": 11.71, "Unit": "ms" },
 	"Perf.Editor.FindReferences10k": { "Measured": 0.11, "Budget": 0.165, "Unit": "ms" },
 	"Perf.EditorPanels.Performance600FramesP95": { "Measured": 0.0616, "Budget": 0.0924, "Unit": "ms" },
-	"Perf.EditorPanels.ContentBrowser10kAssetsP95": { "Measured": 0.334, "Budget": 0.5, "Unit": "ms" },
+	"Perf.EditorPanels.ContentBrowser10kAssetsP95": { "Measured": 0.065, "Budget": 0.0975, "Unit": "ms" },
 	"Perf.EditorPanels.Streaming10kAssetsP95": { "Measured": 0.1448, "Budget": 0.2172, "Unit": "ms" },
 	"Perf.EditorPanels.Streaming10kAssetsRefreshFrame": { "Measured": 0.147, "Budget": 0.2205, "Unit": "ms" },
 	"Perf.Physics.Boxes30k.StartAnd30Frames": { "Measured": 241.6, "Budget": 362.4, "Unit": "ms" },
