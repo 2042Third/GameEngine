@@ -32,6 +32,10 @@ namespace Strata
 		// Frames a capture may render again while glyphs of its text are still being rasterized (a budget per render, see
 		// TextRenderer::c_FrameRasterBudget); enough for thousands of distinct glyphs.
 		constexpr uint32_t c_MaxCaptureTextFrames = 120;
+		// Frames a capture may render again while meshes, materials or textures of its view are still loading (waitForAssets):
+		// about five seconds at the editor's 60 frames per second, enough for a scene's first loads after opening or playing;
+		// what still loads then is reported (pendingAssets).
+		constexpr uint32_t c_MaxCaptureAssetFrames = 300;
 
 		nlohmann::json ToJson(const glm::vec3& value)
 		{
@@ -52,6 +56,16 @@ namespace Strata
 				{ "far", camera.GetFar() },
 				{ "flySpeed", camera.GetFlySpeed() }
 			};
+		}
+
+		// Where a capture looked from: position, forward direction and vertical field of view in degrees (null for orthographic
+		// cameras).
+		nlohmann::json DescribeView(const SceneCamera& camera)
+		{
+			// The view matrix maps the camera's forward direction to -Z: its third row, negated.
+			const glm::vec3 forward = -glm::vec3(camera.View[0][2], camera.View[1][2], camera.View[2][2]);
+			return { { "position", ToJson(camera.Position) }, { "forward", ToJson(forward) },
+				{ "fov", camera.Orthographic ? nlohmann::json(nullptr) : nlohmann::json(glm::degrees(camera.VerticalFOV)) } };
 		}
 
 		nlohmann::json RangeSchema(std::string description, double minimum, double maximum)
@@ -134,10 +148,36 @@ namespace Strata
 			return std::nullopt;
 		}
 
+		// A camera of the capture's own: the editor camera with these changes, which the person's camera never sees.
+		struct CaptureCamera
+		{
+			std::optional<glm::vec3> Position;
+			std::optional<glm::vec3> Target;
+			std::optional<float> FOV;
+
+			bool IsSet() const { return Position || Target || FOV; }
+
+			// Applies the changes to a copy of the editor camera; false when position and target are too close or too far apart.
+			bool Apply(EditorCamera& camera) const
+			{
+				if (FOV)
+					camera.SetFOV(*FOV);
+				if (Position && Target)
+					return camera.LookAt(*Position, *Target);
+				if (Position)
+					camera.SetPosition(*Position);
+				else if (Target)
+					camera.SetTarget(*Target);
+				return true;
+			}
+		};
+
 		struct CaptureRequest
 		{
 			glm::uvec2 Size = { 0, 0 };
 			ViewportCameraSource Camera = ViewportCameraSource::Automatic;
+			CaptureCamera OwnCamera; // Set: renders through it instead of the viewport's cameras
+			bool WaitForAssets = true;
 			std::optional<bool> Overlays;
 			std::optional<ViewportDebugView> DebugView; // Unset: the viewport's
 			std::filesystem::path Path; // Empty: the image is only returned
@@ -167,7 +207,8 @@ namespace Strata
 			bool PreviewLighting = false;
 			uint32_t ScreenSpaceTexts = 0;
 			uint32_t HiddenScreenSpaceTexts = 0;
-			uint32_t TextFrames = 0; // Renders repeated so far to complete the text
+			uint32_t TextFrames = 0;  // Renders repeated so far to complete the text
+			uint32_t AssetFrames = 0; // Renders repeated so far while assets of the view were loading
 			std::chrono::steady_clock::time_point Submitted;
 			Ref<EncodedCapture> Encoded; // Set once the pixels are on the CPU
 			JobHandle EncodeJob;
@@ -175,9 +216,30 @@ namespace Strata
 			bool SaveStarted = false;
 		};
 
+		// The view of a capture: the viewport's choice of camera, or the capture's own camera (an editor view while the game
+		// is not playing, like the editor camera it starts from).
+		std::optional<ViewportView> ResolveCaptureView(EditorContext& context, const CaptureRequest& request, float aspectRatio, std::string* outError)
+		{
+			if (!request.OwnCamera.IsSet())
+				return ResolveViewportView(context, request.Camera, aspectRatio, outError);
+			EditorCamera camera = context.GetViewport().GetCamera();
+			if (!request.OwnCamera.Apply(camera))
+			{
+				if (outError)
+					*outError = fmt::format("position and target must be between {} and {} apart", EditorCamera::c_MinDistance, EditorCamera::c_MaxDistance);
+				return std::nullopt;
+			}
+			ViewportView view;
+			view.Camera = camera.GetSceneCamera(aspectRatio);
+			view.EditorOverlays = true;
+			view.EditorView = context.GetSceneState() != SceneState::Play;
+			return view;
+		}
+
 		// First poll (the frame after the command): renders the image and starts reading it back. While glyphs of the
-		// scene's text are still being rasterized, the image would lack them: the next polls render again until the text is
-		// complete (or c_MaxCaptureTextFrames ran out).
+		// scene's text are still being rasterized, or (waitForAssets) assets of the view are still loading, the image would
+		// lack them: the next polls render again until it is complete, or c_MaxCaptureTextFrames and c_MaxCaptureAssetFrames
+		// ran out.
 		std::optional<EditorCommandResult> StartCapture(EditorContext& context, const CaptureRequest& request, CaptureProgress& progress)
 		{
 			EditorViewport& viewport = context.GetViewport();
@@ -187,7 +249,7 @@ namespace Strata
 
 			std::string error;
 			const float aspectRatio = static_cast<float>(request.Size.x) / static_cast<float>(request.Size.y);
-			std::optional<ViewportView> view = ResolveViewportView(context, request.Camera, aspectRatio, &error);
+			std::optional<ViewportView> view = ResolveCaptureView(context, request, aspectRatio, &error);
 			if (!view)
 			{
 				renderer->ReleaseTargets(); // An earlier render of this capture may have created them
@@ -214,9 +276,12 @@ namespace Strata
 			progress.PreviewLighting = stats.PreviewLighting;
 			progress.ScreenSpaceTexts = stats.ScreenSpaceTexts;
 			progress.HiddenScreenSpaceTexts = stats.HiddenScreenSpaceTexts;
-			if (progress.PendingTextGlyphs > 0 && progress.TextFrames < c_MaxCaptureTextFrames)
+			const bool textPending = progress.PendingTextGlyphs > 0 && progress.TextFrames < c_MaxCaptureTextFrames;
+			const bool assetsPending = request.WaitForAssets && progress.PendingAssets > 0 && progress.AssetFrames < c_MaxCaptureAssetFrames;
+			if (textPending || assetsPending)
 			{
-				progress.TextFrames++;
+				progress.TextFrames += textPending ? 1 : 0;
+				progress.AssetFrames += assetsPending ? 1 : 0;
 				return std::nullopt;
 			}
 			progress.Readback = TextureReadback::Create(renderer->GetOutputTexture(), {}, &error);
@@ -288,7 +353,9 @@ namespace Strata
 				{ "Image", { { "MimeType", "image/png" }, { "Data", std::move(encoded.Base64) } } },
 				{ "width", encoded.Image.Width },
 				{ "height", encoded.Image.Height },
-				{ "camera", progress.View.FromScene ? "scene" : "editor" },
+				{ "camera", request.OwnCamera.IsSet() ? "custom" : (progress.View.FromScene ? "scene" : "editor") },
+				{ "view", DescribeView(progress.View.Camera) },
+				{ "waitedFrames", std::max(progress.TextFrames, progress.AssetFrames) },
 				{ "overlays", progress.Overlays },
 				{ "pendingAssets", progress.PendingAssets },
 				{ "pendingTextGlyphs", progress.PendingTextGlyphs },
@@ -470,11 +537,15 @@ namespace Strata
 		registry.Register({ "viewport.capture",
 			"Renders the scene on the next frame and returns the picture as a PNG image, with its width and height. By default it looks like the viewport: "
 			"its size (1280x720 while the viewport is hidden), the scene's primary camera while playing (the editor camera otherwise) and the editor overlays "
-			"(grid, selection outline, light/camera/collider shapes) for the editor camera. With the editor camera outside play mode, a scene without any light "
+			"(grid, selection outline, light/camera/collider shapes) for the editor camera. position, target and fov look through a camera of the "
+			"capture's own (the editor camera with those changes; camera.get stays as it was): position + target looks from one at the other, either "
+			"alone moves the editor camera's view keeping its direction; the result's camera is then \"custom\", and view has the position, forward "
+			"direction and fov used. With the editor camera outside play mode, a scene without any light "
 			"of its own is lit by preview lighting (previewLighting: true in the result; the game will be unlit) and the game's screen-space text is hidden "
 			"(hiddenScreenSpaceTexts counts it): see viewport.setSettings, or use camera \"scene\" to see what the game shows. Text whose glyphs are still being "
-			"prepared delays the picture by a few frames, so it is complete. Also reports how many assets were still loading (pendingAssets: call editor.wait "
-			"and capture again to see them) and glyphs that could not be prepared in time (pendingTextGlyphs). debugView colors the picture by streaming "
+			"prepared delays the picture by a few frames, so it is complete, and so do meshes, materials and textures of the view that are still loading "
+			"(waitForAssets, default true: up to about five seconds of frames; waitedFrames counts the extra renders). Reports what was still loading "
+			"when the picture was taken (pendingAssets) and glyphs that could not be prepared in time (pendingTextGlyphs). debugView colors the picture by streaming "
 			"state or level of detail (default: the viewport's, viewport.setSettings) and the result's debugView says what it found: {view, "
 			"tintedEntities, pendingEntities, failedEntities, placeholderBoxes, entitiesPerLOD: [LOD0, LOD1, LOD2, LOD3+]} among the entities in view. "
 			"Needs a GPU (fails in editors started with --no-gpu).",
@@ -484,6 +555,11 @@ namespace Strata
 				{ "camera", { { "type", "string" }, { "enum", { "editor", "scene" } },
 					{ "description", "\"editor\": the editor camera; \"scene\": the scene's primary camera (fails without one)" } } },
 				{ "overlays", BoolSchema("Draw the editor overlays enabled in the viewport (default: on for the editor camera, off for the scene camera)") },
+				{ "position", Vec3Schema("Look from this point (a camera of the capture's own; the editor camera does not move)") },
+				{ "target", Vec3Schema("Look at this point (a camera of the capture's own; the editor camera does not move)") },
+				{ "fov", RangeSchema("Vertical field of view in degrees of the capture's own camera", EditorCamera::c_MinFOV, EditorCamera::c_MaxFOV) },
+				{ "waitForAssets", BoolSchema("Render again on the following frames while assets of the view are still loading, up to about five seconds "
+					"(default true); false takes the picture at once") },
 				{ "debugView", DebugViewSchema("\"streaming\" tints entities by streaming state (pending Sulfur, failed Cinnabar, missing meshes as boxes), "
 					"\"lod\" by level of detail, \"none\" not at all (default: the viewport's debug view)") },
 				{ "path", StringSchema("Also save the PNG to this .png file: relative to the project directory (needs an open project) or absolute; folders are "
@@ -504,6 +580,18 @@ namespace Strata
 					arguments.SetError("Parameter 'camera' must be \"editor\" or \"scene\"");
 				if (arguments.Has("overlays"))
 					request.Overlays = arguments.GetBool("overlays", true);
+				request.OwnCamera.Position = ReadVec3(parameters, arguments, "position");
+				request.OwnCamera.Target = ReadVec3(parameters, arguments, "target");
+				request.OwnCamera.FOV = ReadNumber(parameters, arguments, "fov", EditorCamera::c_MinFOV, EditorCamera::c_MaxFOV);
+				request.WaitForAssets = arguments.GetBool("waitForAssets", true);
+				if (arguments.IsValid() && request.OwnCamera.IsSet())
+				{
+					EditorCamera check = context.GetViewport().GetCamera();
+					if (request.Camera == ViewportCameraSource::Scene)
+						arguments.SetError("position, target and fov set a camera of the capture's own: they cannot be combined with camera \"scene\"");
+					else if (!request.OwnCamera.Apply(check))
+						arguments.SetError(fmt::format("Parameters 'position' and 'target' must be between {} and {} apart", EditorCamera::c_MinDistance, EditorCamera::c_MaxDistance));
+				}
 				if (arguments.Has("debugView"))
 				{
 					request.DebugView = ViewportDebugViewFromString(arguments.GetString("debugView"));

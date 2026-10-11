@@ -988,14 +988,18 @@ and `AudioSystem`, the built-in "Audio" scene system.
   image is a plain `Dummy` while the mouse is over the gizmo.
 - **View commands** change no scene data and record no undo: `camera.get`, `camera.set {position, target, yaw, pitch,
   distance, fov, near, far, flySpeed}` (position + target looks from one at the other) and `camera.focus {entities?}`
-  (frames them, or the whole scene). `viewport.capture {width?, height?, camera?: "editor" | "scene", overlays?,
-  debugView?: "none" | "streaming" | "lod", path?, overwrite?}` renders on the next frame (again on the following frames,
-  up to `c_MaxCaptureTextFrames`, while glyphs of the scene's text are still being rasterized, so text is never half
-  drawn), reads the image back without stalling, encodes it on a job thread and returns `{"Image": {"MimeType":
-  "image/png", "Data": <base64>}, "width", "height", "camera", "overlays", "pendingAssets", "pendingTextGlyphs",
-  "previewLighting", "screenSpaceTexts", "hiddenScreenSpaceTexts", "debugView": {"view", "tintedEntities",
-  "pendingEntities", "failedEntities", "placeholderBoxes", "entitiesPerLOD"}, "notice"?, "path"?}`; it defaults to the
-  viewport's size, camera, overlays and debug view and fails without a GPU. `viewport.getSettings` and
+  (frames them, or the whole scene). `viewport.capture {width?, height?, camera?: "editor" | "scene", position?, target?,
+  fov?, overlays?, debugView?: "none" | "streaming" | "lod", waitForAssets?, path?, overwrite?}` renders on the next
+  frame (again on the following frames, up to `c_MaxCaptureTextFrames`, while glyphs of the scene's text are still being
+  rasterized, so text is never half drawn, and with `waitForAssets` (default true) up to `c_MaxCaptureAssetFrames` while
+  assets of the view are loading, so the first capture after opening or playing a scene shows its materials), reads the
+  image back without stalling, encodes it on a job thread and returns `{"Image": {"MimeType": "image/png", "Data":
+  <base64>}, "width", "height", "camera", "view": {"position", "forward", "fov"}, "waitedFrames", "overlays",
+  "pendingAssets", "pendingTextGlyphs", "previewLighting", "screenSpaceTexts", "hiddenScreenSpaceTexts", "debugView":
+  {"view", "tintedEntities", "pendingEntities", "failedEntities", "placeholderBoxes", "entitiesPerLOD"}, "notice"?,
+  "path"?}`; it defaults to the viewport's size, camera, overlays and debug view and fails without a GPU. `position`,
+  `target` and `fov` render through a camera of the capture's own (a copy of the editor camera with those changes;
+  `camera.get` is unchanged, the result's camera is `"custom"`), so agents look around without moving the person's view. `viewport.getSettings` and
   `viewport.setSettings {grid, selectionOutline, sceneGizmos, allColliders, stats, previewLighting, gameUI, gizmo, space,
   snap, translateSnap, rotateSnap, scaleSnap, debugView}` read and change the view settings (validated as a whole: an
   invalid value changes nothing; the debug view is saved with them); `allColliders` draws the collider shapes of every

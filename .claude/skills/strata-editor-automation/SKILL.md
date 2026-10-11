@@ -95,10 +95,13 @@ Commands added at run time (for example `script.*`, `viewport.*`, `camera.*` whe
 appear in `editor.commands` and as tools automatically. The viewport commands need rendering: they fail in an
 editor started with `--no-gpu` (use `--headless`):
 
-- `viewport.capture {width?, height?, camera?: "editor" | "scene", overlays?, debugView?, path?}` returns
-  `{"Image": {"MimeType": "image/png", "Data"}, width, height, camera, overlays, pendingAssets, pendingTextGlyphs,
-  previewLighting, screenSpaceTexts, hiddenScreenSpaceTexts, debugView, notice?, path?}`. Text is complete in the
-  picture (the capture waits a few frames for new glyphs).
+- `viewport.capture {width?, height?, camera?: "editor" | "scene", position?, target?, fov?, overlays?, debugView?,
+  waitForAssets?, path?}` returns `{"Image": {"MimeType": "image/png", "Data"}, width, height, camera, view, waitedFrames,
+  overlays, pendingAssets, pendingTextGlyphs, previewLighting, screenSpaceTexts, hiddenScreenSpaceTexts, debugView,
+  notice?, path?}`. Text is complete in the picture, and so are the view's meshes, materials and textures: the capture
+  renders again for up to about five seconds of frames while they load (`waitForAssets: false` takes it at once;
+  `pendingAssets` says what was still loading). `position` + `target` (and `fov`) look from your own camera: the
+  person's view (`camera.get`) does not move, and the result's `camera` is `"custom"`.
 - **Debug views** show what streaming and level-of-detail selection do: `debugView: "streaming"` tints entities whose
   mesh, material or textures are still loading (yellow, Sulfur) or failed (red, Cinnabar) and draws a box where a mesh
   is not loaded yet; `"lod"` tints entities by the level of detail they are drawn at (green 0, blue 1, yellow 2, red 3+);
@@ -269,8 +272,9 @@ and read the effect (`component.get`, `log.read`, `viewport.capture`). Notes:
 
 **Look at it** (needs rendering, not `--no-gpu`): `camera.focus` or `camera.set`, then
 `StrataCLI call viewport.capture '{"camera": "scene"}' --save-image shot.png` and open `shot.png`; with MCP the
-capture arrives as an image. `pendingAssets` above zero means assets were still loading: wait a few frames and
-capture again. Editor-camera captures can be lit by preview lighting and leave out the HUD (see section 3): judge the
+capture arrives as an image. To look from elsewhere without moving the person's camera, pass `position` and `target`
+(`{"position": [6, 4, 6], "target": [0, 0, 0]}`). The capture waits for what it shows to load; `pendingAssets` above
+zero means something was still loading after that: wait and capture again. Editor-camera captures can be lit by preview lighting and leave out the HUD (see section 3): judge the
 game's look and its HUD from `"camera": "scene"` captures.
 
 **Export**: `project.export {"directory": "<absolute dir outside the project>"}` writes `<Game>.stpak`,

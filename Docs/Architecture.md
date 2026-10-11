@@ -1547,8 +1547,11 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   drawn at (`LODSelection`, with the viewport renderer's threshold). The colors are `ViewportSettings::DebugColors`,
   which the UI sets from the theme (not saved).
   Picking reads one pixel of the entity-ID buffer asynchronously and completes in `EditorContext::Update`.
-  `viewport.capture` renders on the next frame (with its own `debugView` if given), polls a `TextureReadback`, encodes
-  the PNG on a worker and saves on an I/O thread (`EditorViewportCommands.cpp`).
+  `viewport.capture` renders on the next frame (with its own `debugView` if given, and through a camera of its own, a
+  copy of the editor camera with the given `position`, `target` and `fov`, which leaves the person's camera alone),
+  renders again on the following frames while text glyphs or (`waitForAssets`, the default) assets of its view are
+  pending, up to a bound of frames each, polls a `TextureReadback`, encodes the PNG on a worker and saves on an I/O
+  thread (`EditorViewportCommands.cpp`).
 - **Script builds** (`ScriptBuild.h`). `ScriptBuilder` runs CMake configure and build as child processes (one build at
   a time, ended as a process tree when cancelled), polled once per frame; its output streams to the log and is parsed
   into diagnostics. When a build finishes, `EditorContext` loads or hot reloads the module. With a Visual Studio
