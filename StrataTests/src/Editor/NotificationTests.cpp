@@ -141,6 +141,9 @@ TEST_SUITE("Editor.Notifications")
 		const std::optional<AssetMetadata> metadata = context.GetAssetManager()->GetMetadata(toast.Asset);
 		REQUIRE(metadata.has_value());
 		CHECK(toast.Message.rfind(metadata->Path + ": ", 0) == 0);
+		// Named once, although the importer's error names the file too.
+		CHECK(toast.Message.find(metadata->Path, 1) == std::string::npos);
+		CHECK(context.GetAssetManager()->GetImportInfo(toast.Asset).Error.rfind(metadata->Path + ": ", 0) == 0);
 
 		// A re-import asked for by a command reports its failure to the command (and, from the UI, through its toast).
 		notifications.Clear();
@@ -255,5 +258,12 @@ TEST_SUITE("Editor.UI.Notifications")
 		editor.Frames(2);
 		CHECK(editor.Context().GetInspectedAsset() == broken);
 		CHECK_FALSE(UI::ItemProbe::Find("Toast.0").has_value());
+		// The Asset tab says why first, above the settings that may fix it.
+		const std::optional<UI::ItemProbe::Item> reason = UI::ItemProbe::Find("AssetInspector.ImportError");
+		REQUIRE(reason.has_value());
+		CHECK(reason->Text == editor.Context().GetAssetManager()->GetImportInfo(broken).Error);
+		const std::optional<UI::ItemProbe::Item> header = UI::ItemProbe::Find("AssetInspector.Header");
+		REQUIRE(header.has_value());
+		CHECK(reason->Min.y > header->Max.y);
 	}
 }

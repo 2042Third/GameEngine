@@ -24,7 +24,8 @@ namespace Strata
 	// - the import settings of an imported asset (texture, model, audio clip; fonts have none) as a draft: Apply runs
 	//   asset.setImportSettings through the command runner (the import runs in the background and the panel shows it),
 	//   Revert discards the draft;
-	// - a texture's image, and the asset's state and stored size.
+	// - a texture's image, and the asset's state and stored size;
+	// - why its last import failed, and its warnings, under the actions.
 	class AssetInspectorPanel : public EditorPanel
 	{
 	public:
@@ -33,6 +34,9 @@ namespace Strata
 	private:
 		void DrawHeader(const AssetMetadata& metadata);
 		void DrawActions(EditorPanelContext& context, const AssetMetadata& metadata, const AssetImporter* importer);
+		// Why the asset's last import failed, and its warnings, under the actions: what a person fixing it (sent here by an
+		// import failure's toast) reads first, next to the settings they may change.
+		void DrawImportOutcome(EditorAssetManager& assets, const AssetMetadata& metadata);
 		void DrawImportSettings(EditorPanelContext& context, EditorAssetManager& assets, const AssetMetadata& metadata, const AssetImporter& importer);
 		void DrawTexturePreview(AssetHandle handle);
 		void DrawDetails(EditorAssetManager& assets, const AssetMetadata& metadata);

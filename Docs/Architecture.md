@@ -1388,7 +1388,9 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   those of files changed on disk, are reported to nobody but the log: the manager keeps the latest `c_MaxImportFailures`
   (64) of them and how many failed, and `EditorContext::Update` takes them after the manager's update and posts one
   toast for all of them (group `AssetImport`: "Import failed", the latest path and error, the count, Show Asset and Show
-  in Console). Checking for them costs a comparison per frame.
+  in Console). Checking for them costs a comparison per frame. Show Asset leads to the Asset tab, which says why the last
+  import failed (and its warnings) under the asset's actions, above the settings that may fix it
+  (`AssetInspectorPanel::DrawImportOutcome`).
 - **Activity journal** (`CommandJournal.h`). `EditorCommandRegistry::Execute` records every command it runs in the
   context's journal: its origin (`CommandOrigin`: UI from `RunEditorCommand` and the panels, Automation with the client's
   name from `EditorAutomation`, CommandScript from `EditorCommandScript`, Internal for code and for commands that commands

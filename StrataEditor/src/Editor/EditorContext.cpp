@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <string_view>
 
 namespace Strata
 {
@@ -1181,10 +1182,15 @@ namespace Strata
 		// One toast however many fail (a project whose files are broken fails many imports as it opens): it counts them and
 		// shows the latest; the Console lists them all.
 		const AssetImportFailure& latest = failures.back();
+		// Importers name the file in their errors ("Brick.png: unsupported image"), and the toast names its path already.
+		std::string_view error = latest.Error;
+		const std::string fileName = FileSystem::ToUTF8(FileSystem::FromUTF8(latest.Path).filename()) + ": ";
+		if (error.starts_with(fileName))
+			error.remove_prefix(fileName.size());
 		EditorNotification notification;
 		notification.Level = NotificationLevel::Error;
 		notification.Title = "Import failed";
-		notification.Message = fmt::format("{}: {}", latest.Path, latest.Error);
+		notification.Message = fmt::format("{}: {}", latest.Path, error);
 		notification.Asset = latest.Asset;
 		notification.ShowConsole = true;
 		notification.Group = "AssetImport";

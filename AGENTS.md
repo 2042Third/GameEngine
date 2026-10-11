@@ -909,7 +909,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   world's capacities) and sky with nothing selected, in sections that start closed with a summary on their headers
   (`UI::SectionHeader`'s summary: live widgets cost frame time while they are drawn); the
   Asset tab edits materials (`UI/MaterialEditor`: a drag previews, its release is one undo step) and import settings
-  (Apply runs `asset.setImportSettings` through the runner) and previews textures as their content looks, with the
+  (Apply runs `asset.setImportSettings` through the runner; why the last import failed, and its warnings, show above
+  them) and previews textures as their content looks, with the
   stored format and GPU size: draw textures in UI code through `UI::TextureImage`, which shows sRGB, grayscale and
   two-channel normal map layouts as materials read them (`ImGuiTextureDisplay`). Property widgets come from
   `UI/PropertyWidgets.h` (`DrawPropertyWidget` with `PropertyWidgetOptions` for mixed values, axis resets and probe keys).

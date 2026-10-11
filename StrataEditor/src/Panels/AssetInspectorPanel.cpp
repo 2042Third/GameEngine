@@ -111,6 +111,8 @@ namespace Strata
 		const AssetImporter* importer = assets ? assets->GetImporter(handle) : nullptr;
 		DrawHeader(*metadata);
 		DrawActions(panelContext, *metadata, importer);
+		if (assets && importer)
+			DrawImportOutcome(*assets, *metadata);
 
 		if (metadata->Type == AssetType::Material)
 		{
@@ -392,7 +394,6 @@ namespace Strata
 
 	void AssetInspectorPanel::DrawDetails(EditorAssetManager& assets, const AssetMetadata& metadata)
 	{
-		const UI::ThemeColors& colors = UI::GetThemeColors();
 		if (!UI::SectionHeader("AssetInspector.Details", (std::string(Icons::Info) + "  Details").c_str(), ImGuiTreeNodeFlags_None))
 			return;
 		const AssetImportInfo import = assets.GetImportInfo(metadata.IsSubAsset() ? metadata.Parent : metadata.Handle);
@@ -409,10 +410,26 @@ namespace Strata
 			}
 			UI::EndPropertyTable();
 		}
+	}
+
+	void AssetInspectorPanel::DrawImportOutcome(EditorAssetManager& assets, const AssetMetadata& metadata)
+	{
+		const AssetImportInfo import = assets.GetImportInfo(metadata.IsSubAsset() ? metadata.Parent : metadata.Handle);
+		if (import.Error.empty() && import.Warnings.empty())
+			return;
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		ImGui::Spacing();
+		ImGui::PushTextWrapPos(0.0f);
 		if (!import.Error.empty())
-			ImGui::TextColored(colors.Error, "Import failed: %s", import.Error.c_str());
+		{
+			const std::string text = fmt::format("{}  Import failed: {}", Icons::CircleX, import.Error);
+			ImGui::TextColored(colors.Error, "%s", text.c_str());
+			UI::ItemProbe::Record("AssetInspector.ImportError", true, 0, import.Error);
+		}
 		for (const std::string& warning : import.Warnings)
-			ImGui::TextColored(colors.Warning, "%s", warning.c_str());
+			ImGui::TextColored(colors.Warning, "%s  %s", Icons::TriangleAlert, warning.c_str());
+		ImGui::PopTextWrapPos();
+		ImGui::Spacing();
 	}
 
 }
