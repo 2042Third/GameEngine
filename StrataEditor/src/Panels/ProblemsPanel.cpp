@@ -15,6 +15,7 @@
 #include <imgui.h>
 
 #include <string_view>
+#include <system_error>
 
 namespace Strata
 {
@@ -48,6 +49,27 @@ namespace Strata
 					return candidate;
 			}
 			return {};
+		}
+
+		// A file as the File column shows it: relative to the project directory when it lies there (what a person knows the
+		// project's files by), else as the compiler or the symbolizer named it.
+		std::string MakeShownFile(const EditorContext& context, const std::string& file, const std::filesystem::path& source)
+		{
+			if (source.empty() || !context.GetProject())
+				return file;
+			const std::filesystem::path& directory = context.GetProject()->GetProjectDirectory();
+			std::filesystem::path relative = FileSystem::GetRelativePath(source, directory);
+			if (relative.empty())
+			{
+				// The compiler may name the folder in another form than the project (a short 8.3 name, a link): compare where
+				// both lead.
+				std::error_code error;
+				const std::filesystem::path resolvedSource = std::filesystem::weakly_canonical(source, error);
+				const std::filesystem::path resolvedDirectory = error ? std::filesystem::path() : std::filesystem::weakly_canonical(directory, error);
+				if (!error)
+					relative = FileSystem::GetRelativePath(resolvedSource, resolvedDirectory);
+			}
+			return relative.empty() ? file : FileSystem::ToUTF8(relative);
 		}
 
 		std::string MakeFaultKey(const std::optional<ScriptFault>& fault)
@@ -90,6 +112,8 @@ namespace Strata
 		m_BuildID = build.ID;
 		m_FaultKey = MakeFaultKey(fault);
 		m_Rows.clear();
+		m_FileTexts.clear();
+		m_FileTextsWidth = -1.0f;
 		m_ErrorCount = 0;
 		m_WarningCount = 0;
 
@@ -105,6 +129,7 @@ namespace Strata
 				crash.File = fault->Location->File;
 				crash.Line = fault->Location->Line;
 				crash.Source = ResolveSource(editor, crash.File, {});
+				crash.ShownFile = MakeShownFile(editor, crash.File, crash.Source);
 			}
 			m_Rows.push_back(std::move(crash));
 			// The stack's frames with a source: where the crash came from.
@@ -118,6 +143,7 @@ namespace Strata
 				row.File = frame.File;
 				row.Line = frame.Line;
 				row.Source = ResolveSource(editor, row.File, {});
+				row.ShownFile = MakeShownFile(editor, row.File, row.Source);
 				m_Rows.push_back(std::move(row));
 			}
 		}
@@ -131,6 +157,7 @@ namespace Strata
 			row.Line = diagnostic.Line;
 			row.Column = diagnostic.Column;
 			row.Source = ResolveSource(editor, row.File, build.BuildDirectory);
+			row.ShownFile = MakeShownFile(editor, row.File, row.Source);
 			(row.Kind == RowKind::Warning ? m_WarningCount : m_ErrorCount)++;
 			m_Rows.push_back(std::move(row));
 		}
@@ -227,12 +254,23 @@ namespace Strata
 					open = index;
 				if (UI::IsTooltipDue())
 				{
-					ImGui::SetTooltip("%s\n%s", row.Text.c_str(), row.Source.empty() ? (row.File.empty() ? "No source file" : "The file is not on this machine")
-						: "Double-click to open it in the external editor");
+					const std::string where = row.File.empty() ? std::string() : (row.Line > 0 ? fmt::format("{}({})\n", row.File, row.Line) : row.File + "\n");
+					ImGui::SetTooltip("%s\n%s%s", row.Text.c_str(), where.c_str(), row.Source.empty() ? (row.File.empty() ? "No source file"
+						: "The file is not on this machine") : "Double-click to open it in the external editor");
 				}
 				ImGui::PopID();
 				ImGui::TableSetColumnIndex(1);
-				ImGui::TextUnformatted(row.File.c_str());
+				const float fileWidth = ImGui::GetContentRegionAvail().x;
+				if (fileWidth != m_FileTextsWidth || m_FileTexts.size() != m_Rows.size())
+				{
+					m_FileTexts.clear();
+					for (const Row& each : m_Rows)
+						m_FileTexts.push_back(UI::ElideStart(each.ShownFile, fileWidth));
+					m_FileTextsWidth = fileWidth;
+				}
+				ImGui::TextUnformatted(m_FileTexts[index].c_str());
+				if (index < c_ProbedRows)
+					UI::ItemProbe::Record(fmt::format("Problems.File.{}", index), true, 0, m_FileTexts[index]);
 				ImGui::TableSetColumnIndex(2);
 				if (row.Line > 0)
 					ImGui::Text("%u", row.Line);

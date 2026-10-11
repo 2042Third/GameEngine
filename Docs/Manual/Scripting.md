@@ -59,9 +59,9 @@ a Script component.
 ## When the build fails
 
 The status bar's pill turns to "Build failed"; click it, or open **View > Problems**: the Problems panel lists every
-error and warning with its file and line. **Double-click** one to open the file at that line in your code editor. A play
-whose build failed shows the Problems panel by itself. The Console has the whole build output; messages that name a
-file and line open it when clicked.
+error and warning with its file (relative to the project) and line. **Double-click** one to open the file at that line
+in your code editor; hover it to see the whole message and path. A play whose build failed shows the Problems panel by
+itself. The Console has the whole build output; messages that name a file and line open it when clicked.
 
 ## Your code editor
 

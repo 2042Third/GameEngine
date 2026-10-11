@@ -4,6 +4,7 @@
 #include "Editor/ImGuiHarness.h"
 #include "EditorLayer.h"
 #include "Panels/ProblemsPanel.h"
+#include "Scripting/ScriptTestUtils.h"
 #include "TestHelpers.h"
 #include "UI/ItemProbe.h"
 #include "UI/Theme.h"
@@ -102,6 +103,8 @@ TEST_SUITE("Editor.UI.Scripts")
 		CHECK(rows[0].Kind == ProblemsPanel::RowKind::Error);
 		CHECK(rows[0].Text.find("'Undeclared': undeclared identifier") != std::string::npos);
 		CHECK(rows[0].File == "Scripts/Broken.cpp");
+		CHECK(rows[0].ShownFile == "Scripts/Broken.cpp"); // The project's files show relative to it
+		CHECK(UI::ItemProbe::Find("Problems.File.0")->Text == "Scripts/Broken.cpp");
 		CHECK(rows[0].Line == 7);
 		CHECK(rows[0].Column == 5);
 		std::error_code error;
@@ -125,6 +128,41 @@ TEST_SUITE("Editor.UI.Scripts")
 		CHECK(problems->GetLastOpenError().empty());
 	}
 
+	TEST_CASE("The Problems panel shows a crash where it happened, its file cut at the start where the column is narrow")
+	{
+		HarnessEditor editor;
+		editor.Frames(1);
+		CreateProject(editor, "Crashing");
+		editor.Run("script.load", { { "path", FileSystem::ToUTF8(GetTestScriptModule(STRATA_TEST_SCRIPTS_FAULTS)) } });
+		const nlohmann::json created = editor.Run("entity.create", { { "name", "Faulty" } });
+		editor.Run("script.add", { { "entity", created["id"] }, { "class", "Faulty" }, { "fields", { { "Fault", "NullDereference" }, { "FaultIn", "OnUpdate" } } } });
+		editor.Run("play.start", { { "build", false } });
+		REQUIRE(editor.FramesUntil([&editor]()
+		{
+			const std::optional<ScriptFault>& fault = editor.Context().GetLastScriptFault();
+			return fault && fault->Symbolized;
+		}));
+		editor.Run("editor.showPanel", { { "panel", "Problems" } });
+		editor.Frames(3);
+
+		ProblemsPanel* problems = editor.Layer->GetPanels().Get<ProblemsPanel>(EditorPanels::c_Problems);
+		REQUIRE(problems);
+		const std::vector<ProblemsPanel::Row>& rows = problems->GetRows();
+		REQUIRE_FALSE(rows.empty());
+		CHECK(rows[0].Kind == ProblemsPanel::RowKind::Crash);
+		CHECK(rows[0].Text.find("Crash in Faulty::OnUpdate on 'Faulty'") != std::string::npos);
+#if defined(ST_PLATFORM_WINDOWS)
+		// The test module's source lies outside the project: its path as the symbolizer named it, cut at the start so that
+		// the file's name stays readable.
+		CHECK(FileSystem::FromUTF8(rows[0].File).filename() == "FaultScripts.cpp");
+		CHECK(rows[0].ShownFile == rows[0].File);
+		CHECK(rows[0].Line > 0);
+		const std::string shown = UI::ItemProbe::Find("Problems.File.0")->Text;
+		CHECK(shown.ends_with("FaultScripts.cpp"));
+		CHECK((shown == rows[0].File || shown.starts_with("\xE2\x80\xA6")));
+#endif
+	}
+
 	TEST_CASE("New Script writes a script class and opens it")
 	{
 		const std::filesystem::path output = CreateTemporaryDirectory("NewScriptEditor") / "Arguments.txt";
@@ -136,6 +174,13 @@ TEST_SUITE("Editor.UI.Scripts")
 		editor.Layer->GetNewScriptDialog().Open();
 		editor.Frames(2);
 		REQUIRE(editor.Layer->GetNewScriptDialog().IsOpen());
+
+		// Without a name nothing can be created; the name field has the keyboard as soon as the dialog shows.
+		REQUIRE(UI::ItemProbe::Find("NewScript.Create"));
+		CHECK_FALSE(UI::ItemProbe::Find("NewScript.Create")->Enabled);
+		editor.Harness.TypeText("Spin");
+		editor.Frames(2);
+		CHECK(UI::ItemProbe::Find("NewScript.Create")->Enabled);
 
 		// A name the project declares already cannot be created.
 		REQUIRE(editor.ReplaceText("NewScript.Class", "Spinner"));

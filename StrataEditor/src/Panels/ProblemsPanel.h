@@ -31,6 +31,7 @@ namespace Strata
 			RowKind Kind = RowKind::Error;
 			std::string Text;            // The message, or the crash's description, or the frame's function
 			std::string File;            // As the compiler or the symbolizer named it (empty when unknown)
+			std::string ShownFile;       // What the File column shows: relative to the project when it is the project's
 			uint32_t Line = 0;
 			uint32_t Column = 0;
 			std::filesystem::path Source; // The file to open (resolved against the project), empty when none exists
@@ -55,6 +56,10 @@ namespace Strata
 		uint64_t m_BuildID = UINT64_MAX;
 		std::string m_FaultKey;
 		bool m_Built = false;
+		// The File column's texts, cut at their start to the column's width (their file names stay visible), computed again
+		// only when the rows or the width change.
+		std::vector<std::string> m_FileTexts;
+		float m_FileTextsWidth = -1.0f;
 		std::string m_LastOpenError;
 	};
 

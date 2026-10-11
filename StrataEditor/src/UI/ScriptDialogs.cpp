@@ -83,6 +83,9 @@ namespace Strata
 			return;
 		}
 
+		// The name is what a person types first: the field takes the keyboard when the dialog appears.
+		if (ImGui::IsWindowAppearing())
+			ImGui::SetKeyboardFocusHere();
 		UI::TextField("NewScript.Class", "Class name", m_ClassName, "PlayerController", width);
 		const bool submitted = ImGui::IsItemDeactivatedAfterEdit() && IsEnterPressed();
 		// The script directory is read only when the name changed.

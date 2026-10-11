@@ -1545,7 +1545,9 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   components and a scan of the project's scene and prefab files on an I/O thread when the project opens), starts the
   build (`StartPlayBuild`) and defers until it finished; a failure fails the command and raises
   `GetProblemsPanelRequests`, which `EditorLayer` turns into showing the Problems panel (`Panels/ProblemsPanel`: the
-  last build's diagnostics and the crash with its stack, rebuilt only when the build or the crash changed). Sources
+  last build's diagnostics and the crash with its stack, rebuilt only when the build or the crash changed; the project's
+  files show relative to it, other paths cut at their start where the column is narrow, so file names stay readable,
+  the cut texts computed again only when the column's width changes). Sources
   open in the person's code editor (`Editor/ExternalEditor`: `ExternalEditorLauncher` starts the command template's
   program directly, without a shell, from the user's settings or `STRATA_EXTERNAL_EDITOR`, else the default
   application); the Problems panel's double click, the Console's click on a message naming a source line
