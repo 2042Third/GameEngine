@@ -265,6 +265,17 @@ if(TARGET StrataEditor)
 		COMMAND StrataEditor --no-gpu --no-automation --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/QuitEarlyCommands.json"
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
 	set_tests_properties(StrataEditor.QuitBeforeScriptEnds PROPERTIES WILL_FAIL TRUE TIMEOUT 60)
+
+	# A session exported from the activity journal (editor.activity.export) and run on a copy of the project makes the same
+	# scene and assets (see Editor/ReplaySession.cmake).
+	add_test(NAME StrataEditor.Replay
+		COMMAND "${CMAKE_COMMAND}"
+			"-DEDITOR=$<TARGET_FILE:StrataEditor>"
+			"-DTESTS=$<TARGET_FILE:StrataTests>"
+			"-DCOMMANDS=${CMAKE_CURRENT_SOURCE_DIR}/Editor/ReplaySessionCommands.json.in"
+			"-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/ReplaySession/$<CONFIG>"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/ReplaySession.cmake")
+	set_tests_properties(StrataEditor.Replay PROPERTIES TIMEOUT 300)
 endif()
 
 # Editor automation end to end (no GPU): the "EndToEnd" suites start the real editor headless and drive it with StrataCLI

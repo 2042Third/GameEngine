@@ -67,18 +67,6 @@ namespace Strata
 
 	using EditorCommandHandler = std::function<EditorCommandResult(EditorContext& context, const nlohmann::json& parameters)>;
 
-	// What a command does, for the activity journal (its "changes" filter) and replays (editor.activity.export repeats Edit
-	// commands only).
-	enum class EditorCommandKind : uint8_t
-	{
-		Edit = 0, // Changes the edited scene, its assets or the project's files: what replaying a session repeats
-		Query,    // Reads, waits or renders: changes nothing (captures included)
-		Session   // Changes the editor's session, not the project: which project is open, play mode, simulated input,
-		          // the selection, the view, the editor's own files
-	};
-
-	const char* EditorCommandKindToString(EditorCommandKind kind);
-
 	// A named editor operation taking a JSON object of parameters. Commands are the single way to change the editor
 	// state from outside the UI: the automation server exposes every registered command to tools and AI agents, and
 	// tests drive the editor through them. Mutating commands record undo steps like the equivalent UI actions.

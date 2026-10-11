@@ -11,6 +11,7 @@
 #include <exception>
 #include <optional>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 
 namespace Strata
@@ -150,6 +151,70 @@ namespace Strata
 			return std::nullopt;
 		}
 
+		// Binding names: letters, digits, '_', '-' and '.', at most 64 of them.
+		bool IsValidBindingName(const std::string& name)
+		{
+			return !name.empty() && name.size() <= 64 && std::all_of(name.begin(), name.end(), [](char character)
+			{
+				return (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9')
+					|| character == '_' || character == '-' || character == '.';
+			});
+		}
+
+		// The "bind" object of a script step; an error message when it is malformed.
+		std::optional<std::string> ParseBindings(const nlohmann::json& bind, std::vector<EditorCommandScript::Binding>& out)
+		{
+			if (!bind.is_object())
+				return std::string("\"bind\" must be an object {\"<name>\": \"<JSON pointer into the result>\"}");
+			for (const auto& [name, pointer] : bind.items())
+			{
+				if (!IsValidBindingName(name))
+					return fmt::format("'{}' in \"bind\" is not a name (letters, digits, '_', '-' and '.', at most 64)", name);
+				if (!pointer.is_string())
+					return fmt::format("the binding '{}' must be a JSON pointer into the result, e.g. \"/id\"", name);
+				std::optional<std::vector<std::string>> path = ParseJsonPointer(pointer.get<std::string>());
+				if (!path)
+					return fmt::format("'{}' (binding '{}') is not a JSON pointer (\"\" for the whole result, or \"/key/0\")", pointer.get<std::string>(), name);
+				out.push_back({ name, pointer.get<std::string>(), std::move(*path) });
+			}
+			return std::nullopt;
+		}
+
+		// Checks the references of a step's parameters against the names earlier steps bind; an error message for a malformed
+		// reference or an unknown name. Sets `found` when there is a reference.
+		std::optional<std::string> CheckReferences(const nlohmann::json& value, const std::unordered_set<std::string>& bound, bool& found)
+		{
+			if (EditorCommandScript::IsReference(value))
+			{
+				found = true;
+				const std::string& name = value["$ref"].get_ref<const std::string&>();
+				if (!bound.contains(name))
+					return fmt::format("unknown binding '{}': no earlier step binds it (\"bind\": {{\"{}\": \"/id\"}})", name, name);
+				if (const auto pointer = value.find("pointer"); pointer != value.end() && !ParseJsonPointer(pointer->get<std::string>()))
+					return fmt::format("the \"pointer\" of the reference to '{}' is not a JSON pointer", name);
+				return std::nullopt;
+			}
+			if (value.is_object())
+			{
+				if (value.contains("$ref"))
+					return std::string("a {\"$ref\"} object takes a binding's name and optionally a \"pointer\" (strings), nothing else");
+				for (const auto& [key, member] : value.items())
+				{
+					if (std::optional<std::string> error = CheckReferences(member, bound, found))
+						return error;
+				}
+			}
+			else if (value.is_array())
+			{
+				for (const nlohmann::json& element : value)
+				{
+					if (std::optional<std::string> error = CheckReferences(element, bound, found))
+						return error;
+				}
+			}
+			return std::nullopt;
+		}
+
 	}
 
 	bool PollCommandResult(EditorCommandResult& result, EditorContext& context)
@@ -159,6 +224,7 @@ namespace Strata
 
 		const uint64_t journalId = result.JournalId;
 		CommandJournal& journal = context.GetJournal();
+		journal.NoteEditsOutsideCommands(context.GetUndoStack());
 		const uint64_t records = context.GetUndoStack().GetRecordCount();
 		std::optional<EditorCommandResult> finished;
 		try
@@ -286,6 +352,7 @@ namespace Strata
 
 		std::vector<Step> steps;
 		steps.reserve(json.size());
+		std::unordered_set<std::string> bound; // Names the steps so far bind
 		for (size_t index = 0; index < json.size(); index++)
 		{
 			const nlohmann::json& step = json[index];
@@ -293,8 +360,8 @@ namespace Strata
 				return fail(fmt::format("Step {} must be an object {{\"command\": name, \"parameters\": {{...}}}}", index + 1));
 			for (const auto& [key, value] : step.items())
 			{
-				if (key != "command" && key != "parameters" && key != "expect")
-					return fail(fmt::format("Step {}: unknown key '{}' (expected \"command\", \"parameters\" and \"expect\")", index + 1, key));
+				if (key != "command" && key != "parameters" && key != "expect" && key != "bind")
+					return fail(fmt::format("Step {}: unknown key '{}' (expected \"command\", \"parameters\", \"expect\" and \"bind\")", index + 1, key));
 			}
 			const nlohmann::json* command = JsonUtils::Find(step, "command");
 			if (!command || !command->is_string() || command->get<std::string>().empty())
@@ -308,9 +375,86 @@ namespace Strata
 				if (const std::optional<std::string> error = ParseExpectations(*expect, expectations))
 					return fail(fmt::format("Step {} ({}): {}", index + 1, command->get<std::string>(), *error));
 			}
-			steps.push_back({ command->get<std::string>(), parameters ? *parameters : nlohmann::json::object(), std::move(expectations) });
+			// References are checked before anything runs: each must name a binding of an earlier step.
+			bool usesBindings = false;
+			if (parameters)
+			{
+				if (const std::optional<std::string> error = CheckReferences(*parameters, bound, usesBindings))
+					return fail(fmt::format("Step {} ({}): {}", index + 1, command->get<std::string>(), *error));
+			}
+			std::vector<Binding> bindings;
+			if (const nlohmann::json* bind = JsonUtils::Find(step, "bind"))
+			{
+				if (const std::optional<std::string> error = ParseBindings(*bind, bindings))
+					return fail(fmt::format("Step {} ({}): {}", index + 1, command->get<std::string>(), *error));
+			}
+			for (const Binding& binding : bindings)
+				bound.insert(binding.Name);
+			steps.push_back({ command->get<std::string>(), parameters ? *parameters : nlohmann::json::object(), std::move(expectations), std::move(bindings),
+				usesBindings });
 		}
 		return CreateScope<EditorCommandScript>(std::move(steps));
+	}
+
+	bool EditorCommandScript::IsReference(const nlohmann::json& value)
+	{
+		if (!value.is_object() || value.size() > 2)
+			return false;
+		const auto name = value.find("$ref");
+		if (name == value.end() || !name->is_string())
+			return false;
+		const auto pointer = value.find("pointer");
+		return value.size() == 1 || (pointer != value.end() && pointer->is_string());
+	}
+
+	std::optional<nlohmann::json> EditorCommandScript::Substitute(const nlohmann::json& value, std::string& outError) const
+	{
+		if (IsReference(value))
+		{
+			const std::string& name = value["$ref"].get_ref<const std::string&>();
+			const auto bound = m_Bindings.find(name);
+			if (bound == m_Bindings.end())
+			{
+				outError = fmt::format("the binding '{}' has no value (the step that binds it failed, or its result held nothing there)", name);
+				return std::nullopt;
+			}
+			const auto pointer = value.find("pointer");
+			if (pointer == value.end())
+				return bound->second;
+			const std::optional<std::vector<std::string>> path = ParseJsonPointer(pointer->get<std::string>());
+			const nlohmann::json* resolved = path ? ResolveJsonPath(bound->second, *path) : nullptr;
+			if (!resolved)
+			{
+				outError = fmt::format("the binding '{}' has no value at '{}'", name, pointer->get<std::string>());
+				return std::nullopt;
+			}
+			return *resolved;
+		}
+		if (value.is_object())
+		{
+			nlohmann::json substituted = nlohmann::json::object();
+			for (const auto& [key, member] : value.items())
+			{
+				std::optional<nlohmann::json> replaced = Substitute(member, outError);
+				if (!replaced)
+					return std::nullopt;
+				substituted[key] = std::move(*replaced);
+			}
+			return substituted;
+		}
+		if (value.is_array())
+		{
+			nlohmann::json substituted = nlohmann::json::array();
+			for (const nlohmann::json& element : value)
+			{
+				std::optional<nlohmann::json> replaced = Substitute(element, outError);
+				if (!replaced)
+					return std::nullopt;
+				substituted.push_back(std::move(*replaced));
+			}
+			return substituted;
+		}
+		return value;
 	}
 
 	Scope<EditorCommandScript> EditorCommandScript::Load(const std::filesystem::path& path, std::string* outError)
@@ -346,8 +490,23 @@ namespace Strata
 		while (!m_Waiting && m_Next < m_Steps.size())
 		{
 			const size_t index = m_Next++;
+			const Step& step = m_Steps[index];
+			nlohmann::json parameters;
+			if (step.UsesBindings)
+			{
+				// A step whose references have no value cannot be run as written: it fails as invalid parameters.
+				std::string error;
+				std::optional<nlohmann::json> substituted = Substitute(step.Parameters, error);
+				if (!substituted)
+				{
+					ST_ERROR("{} failed (invalid parameters): {}", step.Command, error);
+					m_Failed = true;
+					continue;
+				}
+				parameters = std::move(*substituted);
+			}
 			m_Waiting = true;
-			runner.Run(context, commands, m_Steps[index].Command, m_Steps[index].Parameters, [this, index](const EditorCommandResult& result)
+			runner.Run(context, commands, step.Command, step.UsesBindings ? parameters : step.Parameters, [this, index](const EditorCommandResult& result)
 			{
 				const std::string& name = m_Steps[index].Command;
 				if (result.Success)
@@ -359,11 +518,25 @@ namespace Strata
 						ST_ERROR("{}: {}", name, unmet);
 						m_Failed = true;
 					}
+					for (const Binding& binding : m_Steps[index].Bindings)
+					{
+						if (const nlohmann::json* value = ResolveJsonPath(result.Value, binding.Path))
+						{
+							m_Bindings.insert_or_assign(binding.Name, *value);
+							continue;
+						}
+						ST_ERROR("{}: the result has no value at '{}' to bind as '{}'", name, binding.Pointer, binding.Name);
+						m_Bindings.erase(binding.Name);
+						m_Failed = true;
+					}
 				}
 				else
 				{
 					ST_ERROR("{} failed: {}", name, result.Error);
 					m_Failed = true;
+					// Later steps that use its bindings fail instead of running with values of an earlier step.
+					for (const Binding& binding : m_Steps[index].Bindings)
+						m_Bindings.erase(binding.Name);
 				}
 				m_Waiting = false;
 			}, CommandOrigin { CommandSource::CommandScript });

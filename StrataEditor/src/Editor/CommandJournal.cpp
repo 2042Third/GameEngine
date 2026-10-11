@@ -4,9 +4,14 @@
 #include "Editor/SceneEdit.h"
 #include "Editor/UndoStack.h"
 
+#include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/Reflection/PropertyJson.h>
 
 #include <algorithm>
+#include <functional>
+#include <set>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace Strata
@@ -205,6 +210,71 @@ namespace Strata
 			}
 		}
 
+		// A binding's name for an ID a step's result holds at a pointer: "e12.id", "e12.entities.0". Distinct pointers get
+		// distinct names: '/' becomes '.', letters and digits stay, and every other character becomes '-' and its two
+		// hexadecimal digits. Binding names have at most 64 characters: a longer one is the entry and the pointer's hash.
+		std::string MakeBindingName(uint64_t entry, const std::string& pointer)
+		{
+			std::string name = fmt::format("e{}", entry);
+			for (const char character : pointer)
+			{
+				if ((character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9'))
+					name += character;
+				else if (character == '/')
+					name += '.';
+				else
+					name += fmt::format("-{:02X}", static_cast<unsigned char>(character));
+			}
+			if (name.size() > 64)
+				name = fmt::format("e{}-H{:016X}", entry, static_cast<uint64_t>(std::hash<std::string> {}(pointer)));
+			return name;
+		}
+
+		struct ReplayReference
+		{
+			size_t Producer = 0; // Index among the looked-at entries
+			std::string Pointer;
+		};
+
+		// The parameters with every ID a result of the session gave replaced by a reference to it; IDs no result gave yet are
+		// what the project had, kept as they are (and remembered as such).
+		nlohmann::json ReplaceProducedIds(const nlohmann::json& value, const std::unordered_map<UUID, ReplayReference>& produced, std::unordered_set<UUID>& literal,
+			std::vector<ReplayReference>& references, const std::vector<uint64_t>& entryIds)
+		{
+			if (value.is_string())
+			{
+				const std::string& text = value.get_ref<const std::string&>();
+				if (!IsIdText(text))
+					return value;
+				const std::optional<UUID> id = UUID::FromString(text);
+				if (!id || !id->IsValid())
+					return value;
+				const auto producer = produced.find(*id);
+				if (producer == produced.end())
+				{
+					literal.insert(*id);
+					return value;
+				}
+				references.push_back(producer->second);
+				return nlohmann::json { { "$ref", MakeBindingName(entryIds[producer->second.Producer], producer->second.Pointer) } };
+			}
+			if (value.is_object())
+			{
+				nlohmann::json replaced = nlohmann::json::object();
+				for (const auto& [key, member] : value.items())
+					replaced[key] = ReplaceProducedIds(member, produced, literal, references, entryIds);
+				return replaced;
+			}
+			if (value.is_array())
+			{
+				nlohmann::json replaced = nlohmann::json::array();
+				for (const nlohmann::json& element : value)
+					replaced.push_back(ReplaceProducedIds(element, produced, literal, references, entryIds));
+				return replaced;
+			}
+			return value;
+		}
+
 	}
 
 	const char* CommandSourceToString(CommandSource source)
@@ -240,7 +310,7 @@ namespace Strata
 		return "Unknown";
 	}
 
-	uint64_t CommandJournal::Begin(const CommandOrigin& origin, std::string_view command, bool mutating, const nlohmann::json& parameters, bool playing)
+	uint64_t CommandJournal::Begin(const CommandOrigin& origin, std::string_view command, EditorCommandKind kind, const nlohmann::json& parameters, bool playing)
 	{
 		if (!m_Enabled)
 			return 0;
@@ -260,8 +330,9 @@ namespace Strata
 			entry.Client = origin.Client;
 		}
 		entry.Command = command;
-		entry.Mutating = mutating;
+		entry.Kind = kind;
 		entry.Playing = playing;
+		entry.EditsOutsideCommandsBefore = m_EditsOutsideCommands;
 		const size_t parameterBytes = EstimateBytes(parameters, c_MaxParameterBytes);
 		if (parameterBytes > c_MaxParameterBytes)
 		{
@@ -285,6 +356,7 @@ namespace Strata
 
 	void CommandJournal::NoteUndo(uint64_t id, const UndoStack& undo, uint64_t recordCountBefore)
 	{
+		m_SeenUndoRecords = std::max(m_SeenUndoRecords, undo.GetRecordCount());
 		if (id == 0 || undo.GetRecordCount() == recordCountBefore)
 			return;
 		CommandJournalEntry* entry = FindMutable(id);
@@ -307,6 +379,16 @@ namespace Strata
 		entry->Bytes += added;
 		m_Bytes += added;
 		m_Version++;
+	}
+
+	void CommandJournal::NoteEditsOutsideCommands(const UndoStack& undo)
+	{
+		if (!m_Running.empty())
+			return;
+		const uint64_t records = undo.GetRecordCount();
+		if (records > m_SeenUndoRecords)
+			m_EditsOutsideCommands += records - m_SeenUndoRecords;
+		m_SeenUndoRecords = records;
 	}
 
 	void CommandJournal::NotePoll(uint64_t id)
@@ -398,7 +480,8 @@ namespace Strata
 			{ "time", entry.Time },
 			{ "source", CommandSourceToString(entry.Source) },
 			{ "command", entry.Command },
-			{ "mutating", entry.Mutating },
+			{ "kind", EditorCommandKindToString(entry.Kind) },
+			{ "mutating", entry.Kind == EditorCommandKind::Edit },
 			{ "parameters", entry.Parameters },
 			{ "status", CommandStatusToString(entry.Status) },
 			{ "durationMs", entry.DurationMs },
@@ -423,6 +506,114 @@ namespace Strata
 		if (!entry.Warning.empty())
 			description["warning"] = entry.Warning;
 		return description;
+	}
+
+	std::optional<ReplayScript> CommandJournal::BuildReplayScript(uint64_t since, std::string* outError) const
+	{
+		auto fail = [outError](std::string message) -> std::optional<ReplayScript>
+		{
+			if (outError)
+				*outError = std::move(message);
+			return std::nullopt;
+		};
+		if (!m_Entries.empty() && m_Entries.front().Id > since + 1)
+		{
+			return fail(fmt::format("The journal keeps the latest {} commands: entries #{} to #{} are gone, so a script from #{} would miss them. "
+				"Export from since {} or later", c_MaxEntries, since + 1, m_Entries.front().Id - 1, since + 1, m_Entries.front().Id - 1));
+		}
+
+		// The commands of the session that succeeded, at the top level (what commands ran inside them repeats with them).
+		std::vector<const CommandJournalEntry*> entries;
+		for (const CommandJournalEntry& entry : m_Entries)
+		{
+			if (entry.Id > since && entry.Parent == 0 && entry.Status == CommandStatus::Succeeded)
+				entries.push_back(&entry);
+		}
+		std::vector<uint64_t> entryIds;
+		for (const CommandJournalEntry* entry : entries)
+			entryIds.push_back(entry->Id);
+
+		ReplayScript script;
+		script.Since = since;
+		script.Latest = m_Entries.empty() ? since : m_Entries.back().Id;
+		// Counted from the entry `since` on (the first one held when the ring starts right after it).
+		const auto first = std::find_if(m_Entries.begin(), m_Entries.end(), [since](const CommandJournalEntry& entry) { return entry.Id >= since; });
+		script.EditsOutsideCommands = m_EditsOutsideCommands - (first != m_Entries.end() && since != 0 ? first->EditsOutsideCommandsBefore : 0);
+
+		// Forward: which ID each result gave first, and what each command's parameters refer to.
+		std::unordered_map<UUID, ReplayReference> produced;
+		std::unordered_set<UUID> literal;
+		std::vector<nlohmann::json> parameters(entries.size());
+		std::vector<std::vector<ReplayReference>> references(entries.size());
+		std::vector<bool> needed(entries.size(), false);
+		for (size_t index = 0; index < entries.size(); index++)
+		{
+			const CommandJournalEntry& entry = *entries[index];
+			const bool edit = entry.Kind == EditorCommandKind::Edit && !entry.Playing;
+			if (entry.Kind == EditorCommandKind::Edit && entry.Playing)
+				script.SkippedWhilePlaying++;
+			if (edit && entry.ParametersTruncated)
+			{
+				return fail(fmt::format("The parameters of #{} ({}) were too large to keep in the journal, so it cannot be repeated: export from since {} "
+					"or later", entry.Id, entry.Command, entry.Id));
+			}
+			parameters[index] = ReplaceProducedIds(entry.Parameters, produced, literal, references[index], entryIds);
+			needed[index] = edit;
+			// Results of edits and queries give IDs a replay takes from its own run. Those of session commands (the projects and
+			// scenes they open), of commands that ran while playing (the running copy's entities have the edited scene's IDs, and
+			// what play created is gone after play.stop) and the handles of built-in assets name what every run has: they stay
+			// as they are.
+			const bool producing = edit || (entry.Kind == EditorCommandKind::Query && !entry.Playing);
+			for (const auto& [pointer, id] : entry.ResultIds)
+			{
+				if (!producing || BuiltinAssets::IsBuiltin(id))
+					literal.insert(id);
+				else if (!literal.contains(id) && !produced.contains(id))
+					produced.emplace(id, ReplayReference { index, pointer });
+			}
+		}
+
+		// Backward: the steps the edits need for their references, and the values each of those binds.
+		std::vector<std::set<std::string>> binds(entries.size());
+		for (size_t index = entries.size(); index-- > 0;)
+		{
+			if (!needed[index])
+				continue;
+			for (const ReplayReference& reference : references[index])
+			{
+				needed[reference.Producer] = true;
+				binds[reference.Producer].insert(reference.Pointer);
+			}
+		}
+
+		for (size_t index = 0; index < entries.size(); index++)
+		{
+			if (!needed[index])
+				continue;
+			const CommandJournalEntry& entry = *entries[index];
+			if (entry.ParametersTruncated)
+			{
+				return fail(fmt::format("The parameters of #{} ({}), whose result later edits use, were too large to keep in the journal, so it cannot "
+					"be repeated: export from since {} or later", entry.Id, entry.Command, entry.Id));
+			}
+			nlohmann::json step = { { "command", entry.Command } };
+			if (!parameters[index].empty())
+				step["parameters"] = std::move(parameters[index]);
+			if (!binds[index].empty())
+			{
+				nlohmann::json bind = nlohmann::json::object();
+				for (const std::string& pointer : binds[index])
+					bind[MakeBindingName(entry.Id, pointer)] = pointer;
+				script.Bindings += binds[index].size();
+				step["bind"] = std::move(bind);
+			}
+			if (entry.Kind == EditorCommandKind::Edit)
+				script.Edits++;
+			else
+				script.Lookups++;
+			script.Steps.push_back(std::move(step));
+		}
+		return script;
 	}
 
 }

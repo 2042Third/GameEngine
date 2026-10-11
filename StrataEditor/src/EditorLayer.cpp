@@ -600,10 +600,12 @@ namespace Strata
 		// Keys the running game receives (e.g. Delete, or Ctrl+D with Ctrl to crouch) must not edit the scene.
 		if (!m_Context.AcceptsEditShortcuts())
 			return;
-		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Z, global))
-			m_Context.Undo();
-		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Y, global) || ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_Z, global))
-			m_Context.Redo();
+		// Undo and redo go through their commands, so the activity journal shows them and replays repeat them.
+		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Z, global) && m_Context.GetUndoStack().CanUndo() && !m_Context.IsPlaying())
+			RunEditorCommand(m_Context, m_Commands, "edit.undo");
+		if ((ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Y, global) || ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_Z, global))
+			&& m_Context.GetUndoStack().CanRedo() && !m_Context.IsPlaying())
+			RunEditorCommand(m_Context, m_Commands, "edit.redo");
 		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S, global))
 			SaveScene();
 		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_S, global))
@@ -970,9 +972,9 @@ namespace Strata
 			const std::string undo = m_Context.GetUndoStack().GetUndoName();
 			const std::string redo = m_Context.GetUndoStack().GetRedoName();
 			if (ImGui::MenuItem(undo.empty() ? "Undo" : ("Undo " + undo).c_str(), "Ctrl+Z", false, !undo.empty() && !m_Context.IsPlaying()))
-				m_Context.Undo();
+				RunEditorCommand(m_Context, m_Commands, "edit.undo");
 			if (ImGui::MenuItem(redo.empty() ? "Redo" : ("Redo " + redo).c_str(), "Ctrl+Y", false, !redo.empty() && !m_Context.IsPlaying()))
-				m_Context.Redo();
+				RunEditorCommand(m_Context, m_Commands, "edit.redo");
 			// The selection's actions: also shortcuts of the Hierarchy and the Viewport while they have the keyboard focus.
 			ImGui::Separator();
 			const bool selected = m_Context.GetPrimarySelection().IsValid();

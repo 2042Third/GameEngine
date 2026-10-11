@@ -21,6 +21,17 @@ namespace Strata
 	enum class EditorCommandError : uint8_t;
 	struct EditorCommandResult;
 
+	// What a command does, for the activity journal and replays (editor.activity.export repeats Edit commands only).
+	enum class EditorCommandKind : uint8_t
+	{
+		Edit = 0, // Changes the edited scene, its assets or the project's files: what replaying a session repeats
+		Query,    // Reads, waits or renders: changes nothing (captures included)
+		Session   // Changes the editor's session, not the project: which project is open, play mode, simulated input,
+		          // the selection, the view, the editor's own files
+	};
+
+	const char* EditorCommandKindToString(EditorCommandKind kind);
+
 	// Who ran a command (the activity journal, CommandJournal).
 	enum class CommandSource : uint8_t
 	{
@@ -58,8 +69,8 @@ namespace Strata
 		CommandSource Source = CommandSource::Internal;
 		std::string Client;
 		std::string Command;
-		bool Mutating = false; // The command changes the scene, its assets or the project (EditorCommandKind::Edit)
-		bool Playing = false;  // It ran while the scene played: its scene changes went to the running copy
+		EditorCommandKind Kind = EditorCommandKind::Edit;
+		bool Playing = false; // It ran while the scene played: its scene changes went to the running copy
 		// The parameters as given, unless they were larger than CommandJournal::c_MaxParameterBytes: then shortened (long
 		// strings and arrays cut) and ParametersTruncated, so the entry cannot be run again exactly.
 		nlohmann::json Parameters;
@@ -80,8 +91,22 @@ namespace Strata
 		size_t EntityCount = 0;
 		std::string UndoStep;
 		uint64_t UndoSerial = 0;
+		uint64_t EditsOutsideCommandsBefore = 0; // CommandJournal::GetEditsOutsideCommands when it began
 		size_t Bytes = 0; // About how much memory the entry holds
 		std::chrono::steady_clock::time_point Started;
+	};
+
+	// A command script made from the journal (CommandJournal::BuildReplayScript).
+	struct ReplayScript
+	{
+		nlohmann::json Steps = nlohmann::json::array(); // As EditorCommandScript reads them
+		size_t Edits = 0;               // Commands of kind Edit replayed
+		size_t Lookups = 0;             // Queries included because later steps use IDs their results gave
+		size_t Bindings = 0;            // Values bound for later steps
+		size_t SkippedWhilePlaying = 0; // Edits of the running copy, which play.stop discarded
+		uint64_t EditsOutsideCommands = 0; // Undo records no command made (CommandJournal::GetEditsOutsideCommands): not in it
+		uint64_t Since = 0;
+		uint64_t Latest = 0;            // The last entry looked at
 	};
 
 	// The activity journal: every command the editor ran, by whom, with what, how it went, how long it took and which
@@ -104,10 +129,17 @@ namespace Strata
 
 		// Starts an entry and returns its id (0 while the journal is disabled). A command begun while another one runs is
 		// that one's child, from source Internal, whatever origin it was given.
-		uint64_t Begin(const CommandOrigin& origin, std::string_view command, bool mutating, const nlohmann::json& parameters, bool playing);
+		uint64_t Begin(const CommandOrigin& origin, std::string_view command, EditorCommandKind kind, const nlohmann::json& parameters, bool playing);
 		// Notes the undo step a command recorded: when `undo` recorded or merged a step since `recordCountBefore`
 		// (UndoStack::GetRecordCount), its latest step is the command's.
 		void NoteUndo(uint64_t id, const UndoStack& undo, uint64_t recordCountBefore);
+		// Counts what `undo` recorded since the journal last looked as edits outside commands: continuous UI edits (inspector
+		// fields, gizmo drags, the material editor) record their steps directly, so the journal does not hold them and a
+		// replay cannot repeat them. Called before a top-level command's handler or poll runs (a command run by another one
+		// belongs to it); NoteUndo marks what commands record as seen.
+		void NoteEditsOutsideCommands(const UndoStack& undo);
+		// Undo records (steps, and merges into them) made outside commands since the journal began.
+		uint64_t GetEditsOutsideCommands() const { return m_EditsOutsideCommands; }
 		// A deferred command was polled once more.
 		void NotePoll(uint64_t id);
 		// Ends the entry (only the first call counts) and, for a command begun with Begin, ends it as the running command.
@@ -130,6 +162,15 @@ namespace Strata
 
 		// An entry as editor.activity reports it.
 		static nlohmann::json Describe(const CommandJournalEntry& entry);
+
+		// A command script that repeats the successful edits (EditorCommandKind::Edit, top level, not of a running copy)
+		// after entry `since`, for a project as it was then: IDs that results of the session gave (entities and assets the
+		// session created, which get new IDs every run) are bound where they appeared ("bind") and referenced where they
+		// are used ({"$ref"}), including results of queries that later edits took IDs from, which join the script; IDs the
+		// session used before any result gave them stay as they are (what the project already had). Fails when the journal
+		// no longer holds entries after `since`, or when the parameters of a command it needs were too large to keep. Edits
+		// outside commands cannot be in it: the script counts them (EditsOutsideCommands).
+		std::optional<ReplayScript> BuildReplayScript(uint64_t since, std::string* outError = nullptr) const;
 	private:
 		CommandJournalEntry* FindMutable(uint64_t id);
 		void Trim();
@@ -137,6 +178,8 @@ namespace Strata
 		std::deque<CommandJournalEntry> m_Entries; // Oldest first, ids increasing
 		std::vector<uint64_t> m_Running;           // The commands whose handlers run, innermost last
 		uint64_t m_NextId = 1;
+		uint64_t m_SeenUndoRecords = 0;            // UndoStack::GetRecordCount when the journal last looked
+		uint64_t m_EditsOutsideCommands = 0;
 		uint64_t m_Version = 0;
 		size_t m_Bytes = 0;
 		bool m_Enabled = true;

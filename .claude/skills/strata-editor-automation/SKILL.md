@@ -283,6 +283,17 @@ from the frame that started it); a large project takes a while, so give the call
 `project.setExportSettings {"alwaysInclude": ["Prefabs", "Sounds/Win.wav"]}` (folders or assets, saved in the project).
 Check the result headless: `<dir>/<Game> --headless --frames 120` (exit code 0).
 
+**Repeat a session** (a regression script without writing one): note `journal.latest` of `editor.activity {"limit": 1}` (the newest
+entry) before you start, work, then `editor.activity.export {"path": "Session.json", "since": <that latest>}`. It writes your successful
+edits (and the person's, if they edited meanwhile) as a command script that rebuilds the result on a copy of the project
+as it was when you noted the entry: `StrataEditor --no-gpu --no-automation --quit-after-commands --project <copy>
+--commands Session.json`. Created entities and assets get new IDs in every run, so the script binds them where a result
+gave them (`"bind": {"e12.id": "/id"}`) and refers to them later (`{"$ref": "e12.id"}`); queries you took IDs from are
+part of it, play mode and what changed while playing are not. Changes the person made in the inspector, with gizmos or in
+the material editor have no command, so no script holds them: `editsOutsideCommands` (and a `warning`) counts them. Write your own scripts the same way: `"bind": {"crate":
+"/id"}` on a step, `{"$ref": "crate"}` (or `{"$ref": "copy", "pointer": "/entities/0"}`) in any later parameter; a name
+no earlier step binds fails the script before it starts.
+
 **Finish**: save (`scene.save`), then `editor.quit`. Like every command that would replace the scene, it refuses while
 the scene has unsaved changes; `{"force": true}` discards them. The editor answers, closes and removes its session file.
 

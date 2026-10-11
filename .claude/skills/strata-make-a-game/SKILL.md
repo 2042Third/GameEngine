@@ -143,6 +143,11 @@ StrataEditor --no-gpu --no-automation --quit-after-commands --project <dir> --co
 
 Entity IDs are stable once the scene is saved. Make timing-dependent outcomes deterministic with fields (no gravity
 while checking an exact score), then turn them back to let time play its part (fast gravity to reach game over).
+
+Steps that create something can name what they made for later steps: `"bind": {"ball": "/id"}` on the step, then
+`{"$ref": "ball"}` wherever a later step's parameters need the ID. To turn how you built the scene into a script, export
+your session: `editor.activity.export {"path": "Build.json", "since": <journal.latest of editor.activity before you began>}`
+writes it with those bindings, ready to run on a fresh copy of the project as it was then.
 `StrataTests/Editor/TetrisCommands.json.in` and `TetrisSample.cmake` are the full example (CTest `StrataEditor.Tetris`).
 
 ## 8. Export and check the game

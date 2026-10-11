@@ -91,7 +91,8 @@ namespace Strata
 		const EditorCommand* command = Find(name);
 		CommandJournal& journal = context.GetJournal();
 		const UndoStack& undo = context.GetUndoStack();
-		const uint64_t entry = journal.Begin(origin, name, command && command->Kind == EditorCommandKind::Edit, parameters, context.IsPlaying());
+		journal.NoteEditsOutsideCommands(undo);
+		const uint64_t entry = journal.Begin(origin, name, command ? command->Kind : EditorCommandKind::Query, parameters, context.IsPlaying());
 		const uint64_t records = undo.GetRecordCount();
 		EditorCommandResult result = Run(context, command, name, parameters);
 		// A step the handler recorded (or extended) is the command's.

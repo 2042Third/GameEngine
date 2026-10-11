@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT
 #include <doctest/doctest.h>
 
+#include "Editor/SceneComparison.h"
 #include "Engine/ModuleRegistrationHelpers.h"
 #include "Network/FakeEditorProcess.h"
 #include "Perf/StressProject.h"
@@ -675,6 +676,38 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 			}
 		}
 		std::printf("'%s': %zu frames, %zu columns\n", argv[2], table->Rows.size(), table->Columns.size());
+		return 0;
+	}
+
+	if (mode == "compare-documents")
+	{
+		// <first> <second>...: succeeds if each pair of JSON documents (scenes, prefabs, materials) holds the same content once
+		// IDs are numbered by first appearance (Editor/SceneComparison.h): what a replay of a session on a copy of the project
+		// made against what the session made. Prints the first difference otherwise.
+		if (argc < 4 || (argc - 2) % 2 != 0)
+			return 2;
+		for (int index = 2; index + 1 < argc; index += 2)
+		{
+			nlohmann::json documents[2];
+			for (int side = 0; side < 2; side++)
+			{
+				const std::optional<std::string> text = Strata::FileSystem::ReadText(Strata::FileSystem::FromUTF8(argv[index + side]));
+				documents[side] = text ? nlohmann::json::parse(*text, nullptr, false) : nlohmann::json(nlohmann::json::value_t::discarded);
+				if (documents[side].is_discarded())
+				{
+					std::fprintf(stderr, "'%s' is not a readable JSON document\n", argv[index + side]);
+					return 1;
+				}
+			}
+			const nlohmann::json first = Strata::Tests::NormalizeIds(documents[0]);
+			const nlohmann::json second = Strata::Tests::NormalizeIds(documents[1]);
+			if (first != second)
+			{
+				std::fprintf(stderr, "'%s' and '%s' differ at %s\n", argv[index], argv[index + 1], Strata::Tests::DescribeFirstDifference(first, second).c_str());
+				return 1;
+			}
+			std::printf("'%s' and '%s' match\n", argv[index], argv[index + 1]);
+		}
 		return 0;
 	}
 

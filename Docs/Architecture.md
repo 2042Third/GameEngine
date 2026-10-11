@@ -1363,11 +1363,36 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   result, or the runner cancels it, so each command is recorded once with its real end. The ring keeps at most 2,000
   entries and 8 MB; recording costs about 2.6 us per command (`Perf.Editor.JournalPerCommand`, entity.get with the
   journal against without). `editor.activity {since, limit, source, command}` reads it.
+- **Replays** (`CommandJournal::BuildReplayScript`, `editor.activity.export {path, since, overwrite}`). A session after a
+  journal entry becomes a command script that repeats it on a copy of the project as it was then (a regression script made
+  by doing the work once): the successful top-level commands of kind Edit that did not change a running copy, in order
+  (an undo or redo repeats as one). Entities and assets the session created get new IDs in every run, so IDs are followed
+  through the session: an ID a result of an edit or a query gave first is bound where that result gave it (`"bind":
+  {"e12.id": "/id"}`) and replaced by a reference where later parameters use it (`{"$ref": "e12.id"}`), and a query whose
+  result gave such an ID joins the script (a lookup, e.g. `entity.find` of a template entity). IDs used before any result
+  gave them, results of session commands and of commands while playing (the running copy has the edited scene's IDs) and
+  built-in asset handles stay literal: they name what every copy has. The export fails rather than write a script that
+  would not repeat the session: when the journal no longer holds the entries after `since` (its ring), or when the
+  parameters of a command it needs were shortened. Continuous UI edits (inspector fields, gizmo drags, the material
+  editor) record their undo steps directly, not through commands, so no script holds them: the journal counts the undo
+  records no command made (`NoteEditsOutsideCommands`, before every top-level handler and poll) and the export reports
+  them (`editsOutsideCommands`, with a warning). Undo and redo from the UI run `edit.undo` and `edit.redo`. `StrataEditor.Replay` (`StrataTests/Editor/ReplaySession.cmake`) runs a session, exports it,
+  runs the export on a copy made before the session and compares the scene and assets with IDs numbered by appearance
+  (`StrataTests --strata-test-helper=compare-documents`, `src/Editor/SceneComparison.h`); `Editor.Replay` does the same
+  with 50 commands of an automation client in-process.
 - **Runner** (`EditorCommandRunner.h`). `Run` executes a command; a deferred one is polled once per frame from the next
   frame on, in issue order, and reports through its completion callback. Automation and command scripts always use the
   runner. UI actions that finish at once call the registry through `RunEditorCommand`
   (`UI/EditorActions.cpp`), which rejects pending results; Build Scripts, Apply of import settings and Reimport use the
   runner (`EditorLayer.cpp`, `Panels/AssetInspectorPanel.cpp`).
+- **Command scripts** (`EditorCommandScript`, also `EditorCommandRunner.h`): `--commands` files are arrays of steps
+  `{command, parameters, expect, bind}` run one at a time through the runner. `bind` names values of a step's result by
+  JSON pointer (`{"crate": "/id"}`, `""` for the whole result) and later parameters use them as `{"$ref": "crate"}`, or
+  `{"$ref": "crate", "pointer": "/entities/0"}` for a part of the bound value, anywhere in their objects and arrays.
+  Loading checks every reference against the names earlier steps bind, so a misspelt or out-of-order name fails the
+  script before anything runs. A step that fails, or whose result holds nothing at a bound pointer, leaves those names
+  without a value: steps referring to them fail as invalid parameters without running (the script goes on and the run's
+  exit code becomes 1), never with a value of an earlier run of the step.
 - **Undo** (`SceneEdit.h`, `UndoStack.h`). A `SceneEditTransaction` snapshots the entities an edit touches as
   `EntityState` (components as JSON, parent, sibling index from `Scene::GetSiblingIndex`); `Commit` records a
   `SceneEditAction` holding the states before and after, and undo or redo re-applies them with the same UUIDs

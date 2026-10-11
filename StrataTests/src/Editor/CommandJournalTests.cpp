@@ -197,7 +197,7 @@ TEST_SUITE("Editor.Journal")
 		CHECK(harness.Latest().UndoStep.find("Create") != std::string::npos);
 		REQUIRE(harness.Latest().Entities.size() == 1);
 		CHECK(UUIDToJson(harness.Latest().Entities[0]) == a);
-		CHECK(harness.Latest().Mutating);
+		CHECK(harness.Latest().Kind == EditorCommandKind::Edit);
 		REQUIRE(harness.Latest().ResultIds.size() == 1);
 		CHECK(harness.Latest().ResultIds[0].first == "/id");
 
@@ -208,7 +208,7 @@ TEST_SUITE("Editor.Journal")
 		CHECK(harness.Latest().UndoSerial == harness.Context.GetUndoStack().GetLatestSerial());
 		Tests::RunCommandToCompletion(harness.Context, harness.Commands, "scene.info");
 		CHECK(harness.Latest().UndoStep.empty());
-		CHECK_FALSE(harness.Latest().Mutating);
+		CHECK(harness.Latest().Kind == EditorCommandKind::Query);
 
 		Tests::RunCommandToCompletion(harness.Context, harness.Commands, "test.nested");
 		const std::vector<const CommandJournalEntry*> nested = harness.Entries("test.nested");

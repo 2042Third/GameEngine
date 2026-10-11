@@ -838,12 +838,20 @@ and `AudioSystem`, the built-in "Audio" scene system.
   default, at most 600) for the frame, every stage (`stages/<name>`, self times, `inFrameTime` false for Present), the
   stages added up (`stageSum`, at most the frame), the rest of each frame (`untimed`) and the job threads (busy percent,
   running and queued jobs).
-- `StrataEditor --commands script.json` runs a JSON array of `{"command", "parameters", "expect"}` at startup
+- `StrataEditor --commands script.json` runs a JSON array of `{"command", "parameters", "expect", "bind"}` at startup
   (`EditorCommandScript`); a pending command holds the script until it completes. `expect` (optional) maps JSON
   pointers into the command's result to conditions, e.g. `{"/values/Translation/1": {"min": 1.6, "max": 1.7}}` or
-  `{"/state": {"equals": "Play"}}`; a result that does not meet them fails the step. If a command or an expectation
-  fails, or the script has not finished by the last of `--frames N` frames or by `editor.quit`, the process exit code
-  becomes 1.
+  `{"/state": {"equals": "Play"}}`; a result that does not meet them fails the step. `bind` (optional) names values of the
+  result by JSON pointer (`{"crate": "/id"}`), which later parameters use as `{"$ref": "crate"}` (optionally with a
+  `"pointer"` into the bound value): scripts then work with the fresh IDs every run gives created entities and assets. A
+  reference to a name no earlier step binds fails the script before it starts; a step whose references have no value
+  (their step failed) fails without running. If a command or an expectation fails, or the script has not finished by the
+  last of `--frames N` frames or by `editor.quit`, the process exit code becomes 1. `editor.activity.export {path, since}`
+  writes what a session did after a journal entry as such a script (`CommandJournal::BuildReplayScript`: the edits, with
+  the IDs results gave bound and referenced, and the queries those IDs came from), to repeat it on a copy of the project as
+  it was then, e.g. as a regression script; continuous UI edits (inspector, gizmos, material editor) record undo steps
+  without a command, so the export counts them (`editsOutsideCommands`) instead (the UI's undo and redo run their
+  commands).
   `--frames N` stops after N frames (without saving the panel layout), `--screenshot out.png` captures
   the last frame (viewport included), `--no-gpu` runs headless without a graphics device (export, asset processing),
   and `--quit-after-commands` closes the editor once the command script finished (for scripts of unknown length, e.g.
@@ -861,7 +869,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   CTest runs `StrataTests/Editor/SmokeCommands.json.in` (configured into the build tree; it creates a project in the
   build tree, builds a scene and captures the viewport into `build/<preset>/StrataTests/SmokeCaptures/`), checks that a
   windowed editor without a project opens into the launcher (`Editor/LauncherCommands.json`) and that failing and
-  unfinished scripts fail the process.
+  unfinished scripts fail the process. `StrataEditor.Replay` (`Editor/ReplaySession.cmake`) runs a session with bindings
+  on a new project, exports it with `editor.activity.export`, runs the export on a copy made before the session and
+  compares the scenes and assets (`StrataTests --strata-test-helper=compare-documents`: IDs numbered by appearance).
 - The hierarchy panel draws the rows of `Editor/HierarchyView` (the visible entities as a flat list; a filter with
   `c:`/`t:` terms shows matches with their ancestors), which are rebuilt only when the hierarchy, the expansion or the
   filter changed: never walk the scene per frame in UI code, and draw long lists through `ImGuiListClipper` (only the
@@ -1162,7 +1172,8 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
   with its origin (`CommandOrigin`), parameters, outcome, duration and undo step; a deferred one when its result becomes
   final. Pass `CommandOrigin { CommandSource::UI }` when UI code runs a command (`RunEditorCommand` and the panels do);
   automation passes the client's name, command scripts their source, and code that passes nothing counts as the editor
-  itself (Internal). `editor.activity` reads it. Clients name themselves in `rpc.handshake` (`clientName`, optional, at
+  itself (Internal). `editor.activity` reads it and `editor.activity.export` turns it into a command script (see the
+  command scripts above). Clients name themselves in `rpc.handshake` (`clientName`, optional, at
   most 64 characters, sanitized, never trusted): `RpcClient::Connect`'s `clientName`, "StrataCLI", and the MCP client's
   `clientInfo.name` through `StrataCLI mcp`; `editor.status` lists them (`automation.connectedClients`).
 - **Errors** map from `EditorCommandError`: unknown command -32601 (`MethodNotFound`), `InvalidParameters`

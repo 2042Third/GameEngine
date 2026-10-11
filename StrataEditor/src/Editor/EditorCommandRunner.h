@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace Strata
@@ -68,11 +69,20 @@ namespace Strata
 	};
 
 	// A list of commands run one after another, e.g. `StrataEditor --commands script.json`: a JSON array of
-	// {"command": name, "parameters": {...}, "expect": {...}} ("parameters" and "expect" are optional). A pending command
+	// {"command": name, "parameters": {...}, "expect": {...}, "bind": {...}} (all but "command" optional). A pending command
 	// holds the script until it completes. A failed command is logged and marks the script as failed; the following
-	// commands still run. Its commands are recorded in the activity journal as CommandSource::CommandScript. "expect" checks the result of a successful command: it maps JSON pointers into the result
-	// ("" is the whole result, "/values/Translation/1" an element) to conditions {"equals": value, "min": number,
-	// "max": number} (any of them); a result that does not meet them fails the step like a failed command.
+	// commands still run. Its commands are recorded in the activity journal as CommandSource::CommandScript.
+	//
+	// "expect" checks the result of a successful command: it maps JSON pointers into the result ("" is the whole result,
+	// "/values/Translation/1" an element) to conditions {"equals": value, "min": number, "max": number} (any of them); a
+	// result that does not meet them fails the step like a failed command.
+	//
+	// "bind" names values of a step's result for later steps, {"crate": "/id"} (JSON pointers into the result), and later
+	// parameters use them anywhere in nested objects and arrays as {"$ref": "crate"} or {"$ref": "crate", "pointer":
+	// "/entities/0"} (a pointer into the bound value), which the value replaces. So a script can change entities it created,
+	// whose IDs are new every run. A reference to a name no earlier step binds fails the script before anything runs
+	// (FromJson); a step whose binding has no value (the step that binds it failed, or its result had nothing there) fails
+	// without running, as invalid parameters.
 	class EditorCommandScript
 	{
 	public:
@@ -85,12 +95,24 @@ namespace Strata
 			std::optional<double> Max;
 		};
 
+		struct Binding
+		{
+			std::string Name;
+			std::string Pointer;           // As written in the script, for messages
+			std::vector<std::string> Path; // The pointer's reference tokens
+		};
+
 		struct Step
 		{
 			std::string Command;
 			nlohmann::json Parameters;
 			std::vector<Expectation> Expectations;
+			std::vector<Binding> Bindings;
+			bool UsesBindings = false; // Its parameters hold {"$ref"} objects to replace before it runs
 		};
+
+		// A {"$ref": name, "pointer"?: pointer} object of a script's parameters.
+		static bool IsReference(const nlohmann::json& value);
 
 		static Scope<EditorCommandScript> FromJson(const nlohmann::json& json, std::string* outError = nullptr);
 		static Scope<EditorCommandScript> Load(const std::filesystem::path& path, std::string* outError = nullptr);
@@ -108,8 +130,14 @@ namespace Strata
 		size_t GetStepCount() const { return m_Steps.size(); }
 		// Number of steps that completed.
 		size_t GetCompletedCount() const { return m_Waiting ? m_Next - 1 : m_Next; }
+		// The values bound so far (name -> value).
+		const std::unordered_map<std::string, nlohmann::json>& GetBindings() const { return m_Bindings; }
+	private:
+		// The parameters with every reference replaced by its value; an error when a binding has none.
+		std::optional<nlohmann::json> Substitute(const nlohmann::json& value, std::string& outError) const;
 	private:
 		std::vector<Step> m_Steps;
+		std::unordered_map<std::string, nlohmann::json> m_Bindings;
 		size_t m_Next = 0;
 		bool m_Waiting = false;
 		bool m_Failed = false;
