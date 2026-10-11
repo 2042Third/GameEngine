@@ -1823,8 +1823,10 @@ namespace Strata
 	{
 		ST_PROFILE_FUNCTION();
 
-		// Before the systems update, so that they see the slice's entities in this update.
-		UpdateSubScenes();
+		// Before the systems update, so that they see the slice's entities in this update. Idle frames of scenes without
+		// sub-scenes (nearly all) skip even the call.
+		if (!m_SubScenes.empty())
+			UpdateSubScenes();
 		if (!m_IsRunning)
 		{
 			UpdateWorldTransforms();
@@ -1931,7 +1933,8 @@ namespace Strata
 	void Scene::OnUpdateEditor(Timestep)
 	{
 		ST_PROFILE_FUNCTION();
-		UpdateSubScenes();
+		if (!m_SubScenes.empty())
+			UpdateSubScenes();
 		UpdateWorldTransforms();
 #ifdef ST_DEBUG
 		AssertCachesValid();
