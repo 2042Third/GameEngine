@@ -180,7 +180,8 @@ namespace Strata
 
 		nlohmann::json ForceSchema()
 		{
-			return BoolSchema("Go on although the edited scene has unsaved changes, discarding them (default false: the command fails instead)");
+			return BoolSchema("Go on although the edited scene has unsaved changes, discarding them (default false: the command fails instead). "
+				"Discarded changes are kept as recovery data of the project (scene.recoveryStatus)");
 		}
 
 		std::optional<EditorCommandResult> CheckUnsavedChanges(const EditorContext& context, bool force, std::string_view action)
@@ -195,7 +196,7 @@ namespace Strata
 			}
 			const char* save = context.GetSceneHandle().IsValid() ? "scene.save" : "scene.saveAs, as the scene was never saved";
 			return EditorCommandResult::Fail(fmt::format("The scene '{}' has unsaved changes, which {} would discard: save them first ({}) or pass "
-				"force: true to discard them", scene, action, save));
+				"force: true to discard them (they are kept as recovery data, scene.recoveryStatus)", scene, action, save));
 		}
 
 		std::optional<std::filesystem::path> ResolveOutputPath(const EditorContext& context, std::string_view path, std::string_view extension, bool overwrite,

@@ -31,37 +31,6 @@ namespace Strata
 	namespace
 	{
 
-		// Scene settings are not entity data: their undo step stores the settings before and after.
-		class SceneSettingsAction final : public EditorAction
-		{
-		public:
-			SceneSettingsAction(Scene& scene, const SceneSettings& before, const SceneSettings& after)
-				: m_Scene(scene), m_Before(before), m_After(after)
-			{
-			}
-
-			const std::string& GetName() const override
-			{
-				static const std::string s_Name = "Change Scene Settings";
-				return s_Name;
-			}
-
-			bool Execute(std::string*) override
-			{
-				m_Scene.GetSettings() = m_After;
-				return true;
-			}
-
-			void Undo() override
-			{
-				m_Scene.GetSettings() = m_Before;
-			}
-		private:
-			Scene& m_Scene;
-			SceneSettings m_Before;
-			SceneSettings m_After;
-		};
-
 		nlohmann::json DescribeSettings(const SceneSettings& settings)
 		{
 			return {

@@ -453,6 +453,7 @@ namespace Strata
 		m_ProjectDialogs.Draw(panelContext);
 		m_AboutDialog.Draw(GetEnvironment());
 		m_ExportDialog.Draw(panelContext);
+		m_RecoveryDialog.Draw(panelContext);
 		DrawUnsavedChangesModal();
 		if (m_ShowImGuiDemo)
 			ImGui::ShowDemoWindow(&m_ShowImGuiDemo);
@@ -932,6 +933,10 @@ namespace Strata
 					SaveScene();
 				if (ImGui::MenuItem("Save Scene As...", "Ctrl+Shift+S", false, m_Context.HasProject() && !m_Context.IsPlaying()))
 					SaveSceneAs();
+				const bool recoverable = RecoveryDialog::HasOffer(m_Context);
+				if (ImGui::MenuItem("Recover Unsaved Changes...", nullptr, false, recoverable))
+					m_RecoveryDialog.Open();
+				UI::ItemProbe::Record("Menu.File.Recover", recoverable);
 				if (ImGui::MenuItem("Set as Start Scene", nullptr, false, m_Context.HasProject() && m_Context.GetSceneHandle().IsValid()))
 					RunEditorCommand(m_Context, m_Commands, "project.setStartScene", { { "scene", UUIDToJson(m_Context.GetSceneHandle()) } });
 				ImGui::Separator();

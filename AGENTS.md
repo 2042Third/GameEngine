@@ -164,7 +164,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   materials, with the opaque draw calls those take) and, in `src/Editor/`, `Perf.Editor` (entity commands among 100,000
   roots; the hierarchy's rows of 100,000 roots, idle and rebuilt; the Hierarchy panel's share of an editor frame with
   100,000 roots, open against closed; what 100,000 selected entities add to a frame; the longest editor frame while a
-  4096x4096 texture re-imports uncompressed and then block-compressed again), `PerfGPU.Editor`, which runs the real
+  4096x4096 texture re-imports uncompressed and then block-compressed again; the frames while the recovery journal of
+  edits of a 100,000-entity scene is written, and the capture of a recovery snapshot), `PerfGPU.Editor`, which runs the real
   `StrataEditor` maximized on generated 100,000- and 1,000,000-entity scenes and checks the median CPU frame time its
   `editor.wait` steps report (when the editor fails, the test describes the scene files on disk with
   `Tests::DescribeJsonFile`, which tells a damaged file from a failed read or parse), exports the stress project (the
@@ -767,6 +768,15 @@ and `AudioSystem`, the built-in "Audio" scene system.
   (`Failed`, naming the scene and how to proceed) and changes nothing, unless `force: true`; results report
   `discardedChanges`. A new command that replaces the scene uses the same guard. The UI keeps asking (the unsaved-changes
   dialog, `EditorShell::RequestDiscardChanges`) and passes `force` once the person has answered.
+- **Autosave and recovery** (`Editor/SceneRecovery`, Docs/Architecture.md "Autosave and recovery"): the edited scene's
+  unsaved changes are journaled in `<project>/.strata/Recovery` by following the undo stack (`UndoStackObserver`): the
+  entity states of the steps since the last save, written on an I/O job 2 s after edits stop (at least every 10 s), removed
+  by a save. Replacing a modified scene in any way (`EditorContext::ResetScene`) writes them first, marked discarded.
+  Opening a project offers what a crashed or discarding editor left (the Recover Unsaved Changes dialog,
+  `scene.recoveryStatus`, `scene.recover {scene, action: "apply" | "discard", force}`: one undo step back to the saved
+  scene). An undo action that changes the scene describes its effect as entity states (`GetSceneChange`,
+  `GetEntityStates`, shared and immutable); one that cannot (kind Other) makes the journal snapshot the whole scene, which
+  it does only up to `SceneRecovery::c_MaxSnapshotEntities`. Never write recovery files from anywhere else.
 - Undo works on entity snapshots: a `SceneEditTransaction` captures the entities an edit touches
   (`Track`, `TrackSubtree` before changing or deleting them, `TrackCreated` after creating them) and
   `EditorContext::CommitEdit` records the difference. Edits while playing are not recorded. Continuous edits merge

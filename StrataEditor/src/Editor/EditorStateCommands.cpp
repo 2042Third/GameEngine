@@ -175,6 +175,133 @@ namespace Strata
 			} });
 
 		////////////////////////////////////////////////////////////////////////////////
+		// Recovery
+		////////////////////////////////////////////////////////////////////////////////
+
+		registry.Register({ "scene.recoveryStatus",
+			"The recovery data of the open project (.strata/Recovery): unsaved scene changes an editor left behind when it ended without closing "
+			"the scene (a crash), or that were discarded on purpose (force, Don't Save) and kept anyway. Returns entries, newest first, each {id, "
+			"scene (null for a scene never saved), sceneName, scenePath, time (milliseconds since 1970-01-01 UTC), discarded, entityCount, complete "
+			"(a snapshot of every entity), applicable, problem (why it cannot be applied, e.g. the scene was saved since)}, and the journal of the "
+			"edited scene {active, file, writes, lastWrite, pending (changes not written yet: they are written about 2 s after edits stop), busy, "
+			"skipped (why its changes are not journaled)}. Reads the directory again, after the journal writes already asked for. Apply or "
+			"discard an entry with scene.recover. Fails without a project.",
+			ObjectSchema({}),
+			[](EditorContext& context, const nlohmann::json&)
+			{
+				if (!context.GetRecovery().IsActive())
+					return EditorCommandResult::Fail("No project is open (project.open or project.create)");
+				context.GetRecovery().Scan();
+				return EditorCommandResult::Defer([](EditorContext& context) -> std::optional<EditorCommandResult>
+				{
+					const SceneRecovery& recovery = context.GetRecovery();
+					if (recovery.IsScanning())
+						return std::nullopt;
+					nlohmann::json entries = nlohmann::json::array();
+					for (const RecoveryEntry& entry : recovery.GetEntries())
+						entries.push_back(SceneRecovery::DescribeEntry(entry));
+					nlohmann::json result = recovery.DescribeStatus();
+					result["entries"] = std::move(entries);
+					return EditorCommandResult::Ok(std::move(result));
+				});
+			} });
+
+		registry.Register({ "scene.recover",
+			"Applies or discards recovery data (scene.recoveryStatus). apply: opens the scene the changes were made to (a scene never saved: a "
+			"new scene of its name) and turns it into what the edits left, as one undo step back to the saved scene; the scene stays modified "
+			"(save it to keep the changes). It refuses when the scene file changed since the changes were made (applicable false), while "
+			"playing, and while the edited scene has unsaved changes it would discard unless force is true. discard: moves the data to "
+			".strata/Recovery/Discarded, where it is not offered again. Returns {recovered | discarded: id, ...}; apply also scene, sceneName, "
+			"entities (how many it restored or removed) and discardedChanges.",
+			ObjectSchema({
+				{ "scene", StringSchema("The id of an entry of scene.recoveryStatus, or a scene asset (handle or path) to use its newest applicable entry") },
+				{ "action", { { "type", "string" }, { "enum", { "apply", "discard" } }, { "description", "\"apply\" the changes or \"discard\" them" } } },
+				{ "force", ForceSchema() } },
+				{ "scene", "action" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				CommandArguments arguments(parameters);
+				const std::string reference = arguments.GetString("scene");
+				const std::string action = arguments.GetString("action");
+				const bool force = arguments.GetBool("force", false);
+				if (arguments.IsValid() && action != "apply" && action != "discard")
+					arguments.SetError("Parameter 'action' must be \"apply\" or \"discard\"");
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				if (!context.GetRecovery().IsActive())
+					return EditorCommandResult::Fail("No project is open (project.open or project.create)");
+
+				// The entries come from the scan the project's opening (or scene.recoveryStatus) started: wait for it first.
+				struct Progress
+				{
+					Ref<SceneRecovery::Load> Load;
+				};
+				auto progress = std::make_shared<Progress>();
+				return EditorCommandResult::Defer([reference, action, force, progress](EditorContext& context) -> std::optional<EditorCommandResult>
+				{
+					SceneRecovery& recovery = context.GetRecovery();
+					if (progress->Load)
+					{
+						if (!progress->Load->IsDone())
+							return std::nullopt;
+						if (!progress->Load->Error.empty())
+							return EditorCommandResult::Fail(progress->Load->Error);
+						const RecoveryData& data = *progress->Load->Data;
+						const bool replaces = !data.Entry.Scene.IsValid() || context.GetSceneHandle() != data.Entry.Scene || context.IsSceneModified();
+						const bool discarded = replaces && context.IsSceneModified();
+						size_t applied = 0;
+						std::string error;
+						if (!context.ApplyRecovery(data, force, &applied, &error))
+							return EditorCommandResult::Fail(error);
+						return EditorCommandResult::Ok({
+							{ "recovered", data.Entry.Id },
+							{ "scene", data.Entry.Scene.IsValid() ? UUIDToJson(data.Entry.Scene) : nlohmann::json(nullptr) },
+							{ "sceneName", data.Entry.SceneName },
+							{ "entities", applied },
+							{ "discardedChanges", discarded } });
+					}
+					if (recovery.IsScanning())
+						return std::nullopt;
+
+					// An entry's id, or the newest entry of a scene (applicable ones first).
+					const RecoveryEntry* entry = recovery.FindEntry(reference);
+					if (!entry)
+					{
+						if (const std::optional<FoundAsset> scene = FindAsset(reference); scene && scene->Type == AssetType::Scene)
+						{
+							for (const RecoveryEntry& candidate : recovery.GetEntries())
+							{
+								if (candidate.Scene == scene->Handle && (!entry || (candidate.Applicable && !entry->Applicable)))
+									entry = &candidate;
+							}
+						}
+					}
+					if (!entry)
+						return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'scene': no recovery data for '{}' (scene.recoveryStatus lists what there is)", reference));
+					if (action == "discard")
+					{
+						const std::string id = entry->Id;
+						std::string error;
+						if (!recovery.Discard(id, &error))
+							return EditorCommandResult::Fail(error);
+						return EditorCommandResult::Ok({ { "discarded", id } });
+					}
+					if (!entry->Applicable)
+						return EditorCommandResult::Fail(fmt::format("The recovery data '{}' cannot be applied: {}. Discard it with action \"discard\"", entry->Id, entry->Problem));
+					const bool replaces = !entry->Scene.IsValid() || context.GetSceneHandle() != entry->Scene || context.IsSceneModified();
+					if (replaces && !force)
+					{
+						if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, false, fmt::format("recovering '{}'", entry->SceneName)))
+							return std::move(*refused);
+					}
+					if (context.IsPlaying())
+						return EditorCommandResult::Fail("Stop play mode first (play.stop): recovering replaces the edited scene");
+					progress->Load = recovery.Read(entry->Id, context.GetSceneFile(entry->Scene).first);
+					return std::nullopt;
+				});
+			} });
+
+		////////////////////////////////////////////////////////////////////////////////
 		// Editor
 		////////////////////////////////////////////////////////////////////////////////
 

@@ -10,6 +10,7 @@
 #include "UI/EditorShell.h"
 #include "UI/ExportDialog.h"
 #include "UI/ProjectDialogs.h"
+#include "UI/RecoveryDialog.h"
 
 #include <Strata.h>
 
@@ -130,6 +131,7 @@ namespace Strata
 		ProjectDialogs& GetProjectDialogs() { return m_ProjectDialogs; }
 		const AboutDialog& GetAboutDialog() const { return m_AboutDialog; }
 		const ExportDialog& GetExportDialog() const { return m_ExportDialog; }
+		const RecoveryDialog& GetRecoveryDialog() const { return m_RecoveryDialog; }
 
 		// EditorShell
 		void RequestDiscardChanges(std::function<void()> action) override;
@@ -211,6 +213,8 @@ namespace Strata
 		AboutDialog m_AboutDialog;
 		// Completions of its exports refer to it: OnDetach cancels the runner's commands while it still exists.
 		ExportDialog m_ExportDialog;
+		// Like the Export dialog, its completions refer to it.
+		RecoveryDialog m_RecoveryDialog;
 
 		std::function<void()> m_PendingDiscardAction;
 		bool m_OpenUnsavedChangesModal = false;

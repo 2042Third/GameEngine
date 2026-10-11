@@ -1369,7 +1369,46 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   form (it writes only the vector components an edit changed). Continuous
   edits merge by key; the stack keeps 512 steps and a save point for the modified flag, which only steps that change the
   scene move (`EditorAction::ChangesScene`). Edits while playing are not recorded. The selection keeps its order in a
-  vector and answers `IsSelected` from a set.
+  vector and answers `IsSelected` from a set. Recorded states are shared and never change (a merge replaces the "after"
+  vector), actions say what their effect is made of (`EditorAction::GetSceneChange`: entity states, settings, nothing of
+  the scene, or something only a snapshot captures) and hand out their states (`GetEntityStates`), and the stack reports
+  every step it records, merges, undoes or redoes to its `UndoStackObserver`, so journals follow the scene without copying
+  it. Every action has a serial number that a merge keeps (`UndoStack::FindSerial`, `GoTo`).
+- **Autosave and recovery** (`SceneRecovery.h`). `EditorContext` keeps a journal of the edited scene's unsaved changes in
+  `<project>/.strata/Recovery/<scene>-<session>.strecovery`: a header line (scene handle and path, the SHA-256 of the
+  saved scene file the changes apply to, hashed on an I/O job when the scene opens or from the document when it is saved,
+  the owning process, whether the changes were discarded on purpose) and a body with the scene's settings and the steps:
+  the entity states the undo steps since the last save left, in order. Applied one after the other with
+  `SceneEdit::ApplyEntities`, as redo would, they turn the saved file into the edited scene; a step that creates, removes
+  or moves no entity folds into the step before it (positions recorded there stay true), so the file grows with the
+  structural edits only, and drags and value edits keep one step. The journal follows the undo stack as its observer,
+  which costs a reference per step on the main thread; a write hands the references to an I/O job that folds and
+  serializes them, so its cost follows the edits, not the scene's size. It is written `c_QuietSeconds` (2 s) after edits
+  stop and at least every `c_MaxIntervalSeconds` (10 s) while they go on: the most work a crash can take is about ten
+  seconds. Saving removes the file and so does undoing back to the save point. A scene that was never saved has no file
+  to apply changes to: its journal is complete, its first step every entity the scene started with (a template's
+  handful, captured on the main thread when it opens) and the edits after it; a step of kind Other turns a journal into
+  a complete snapshot at the next write. Snapshots are taken only of scenes with at most `c_MaxSnapshotEntities` (256)
+  entities; otherwise the journal is skipped until the scene is saved and `editor.status` (the `recovery` section's
+  `journal.skipped`) says why. Whenever the edited scene is
+  replaced with unsaved changes (`EditorContext::ResetScene`: a forced command, Don't Save, closing the editor) the
+  journal is written at once and marked discarded, so nothing is lost even then. File operations (writes, removals,
+  scans, reads) run one at a time on I/O jobs in the order they were asked for, so a removal after a save is never
+  overtaken by an earlier write; the editor waits for them only when it closes. Opening a project scans the directory:
+  a file whose owner process still runs and has not discarded it belongs to that editor and is left out; the others are
+  offered (the editor's Recover Unsaved Changes dialog, `UI/RecoveryDialog`, opens by itself once per opened project
+  with changes that still apply; File > Recover Unsaved Changes reopens it) and listed by `scene.recoveryStatus`. An
+  entry applies only while its scene file hashes to the recorded hash and the scene asset is still at its path.
+  `scene.recover {action: "apply"}` reads the file on an I/O job, opens the scene (a scene never saved: a new one of its
+  name) and applies the steps as one undo step back to the saved state (`SceneRecoveryAction`, also the settings); the
+  scene stays modified, its own journal is written at once and the applied file removed after that write. `"discard"`
+  moves the file to `Recovery/Discarded` (the newest 20 are kept). Measurements on the reference machine (Release,
+  `Perf.Editor.RecoveryWriteMaxFrame100k`, `RecoverySnapshotMaxEntities`): on a saved scene of 100,000 entities, a
+  frame that asks for the write of an edit of 10,000 of them costs 0.04 ms above an idle frame (handing over references
+  and the settings), the I/O job writes those 10,000 states in 15 to 30 ms and a journal of all 100,000 in about 180 ms
+  while frames stay at 0.05 ms, so writing every 10 s keeps an I/O thread at most 2% busy even for edits of the whole
+  scene; capturing a snapshot costs about 2.3 us per entity on the main thread (0.6 ms for 256), which is why snapshots
+  stop there.
 - **Hierarchy model** (`HierarchyView.h`). The hierarchy panel's rows without UI: the visible entities of the active
   scene as a flat depth-first list (`HierarchyRow`: handle, ID, depth, has-children, expanded, match), walked along the
   scene's sibling links into expanded entities only, or, with a filter (`HierarchyFilter`: name words, `c:` component,

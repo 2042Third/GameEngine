@@ -120,6 +120,12 @@ namespace
 			return m_Process.Wait(timeout);
 		}
 
+		// Ends the editor at once, as a crash would (TerminateProcess, SIGKILL): nothing of it runs any more.
+		void Kill()
+		{
+			CHECK_MESSAGE(m_Process.Terminate(), m_Process.GetLastError());
+		}
+
 		// Everything the editor printed so far (its log), for failure messages.
 		std::string TakeOutput()
 		{
@@ -510,6 +516,71 @@ TEST_SUITE("EndToEnd.EditorAutomation")
 			CHECK(*exitCode == 1);
 			CHECK(editor.OutputContains("needs automation"));
 		}
+	}
+}
+
+TEST_SUITE("EndToEnd.Recovery")
+{
+	TEST_CASE("An editor killed with unsaved changes leaves them to the next editor, which recovers them")
+	{
+		if (!HasBuiltExecutables())
+			return;
+		EndToEndEnvironment environment("EndToEndRecovery");
+		const std::filesystem::path projectDirectory = environment.Root / "Game";
+
+		std::string crate;
+		nlohmann::json savedEntities;
+		{
+			EditorProcess editor;
+			REQUIRE(editor.Start({ "--no-gpu" }));
+			REQUIRE(editor.WaitForSession(environment.SessionDirectory).has_value());
+			Call("project.create", { { "directory", FileSystem::ToUTF8(projectDirectory) }, { "name", "Game" }, { "template", "basic3d" } });
+			savedEntities = Call("scene.hierarchy")["entities"];
+
+			// An agent edits the saved scene.
+			crate = Call("entity.create", { { "name", "Crate" }, { "components", { { "Transform", { { "Translation", { 1, 2, 3 } } } } } } })["id"].get<std::string>();
+			Call("component.set", { { "entity", crate }, { "component", "Transform" }, { "values", { { "Translation", { 4, 5, 6 } } } } });
+			Call("entity.rename", { { "entity", crate }, { "name", "Big Crate" } });
+			REQUIRE(Call("editor.status")["scene"]["modified"] == true);
+
+			// The journal reaches the disk a few seconds after the edits stop.
+			const bool journaled = Tests::WaitUntil([]()
+			{
+				const nlohmann::json journal = Call("editor.status")["recovery"]["journal"];
+				return journal["lastWrite"].get<int64_t>() > 0 && journal["pending"] == false && journal["busy"] == false;
+			}, std::chrono::seconds(30));
+			REQUIRE(journaled);
+
+			// The editor dies without closing anything.
+			editor.Kill();
+			CHECK(editor.Wait().has_value());
+		}
+
+		EditorProcess editor;
+		REQUIRE(editor.Start({ "--no-gpu", "--project", FileSystem::ToUTF8(projectDirectory) }));
+		REQUIRE(editor.WaitForSession(environment.SessionDirectory).has_value());
+		const nlohmann::json status = Call("scene.recoveryStatus");
+		REQUIRE(status["entries"].size() == 1);
+		const nlohmann::json entry = status["entries"][0];
+		CHECK(entry["sceneName"] == "Main");
+		CHECK(entry["discarded"] == false); // Left behind by a crash
+		CHECK(entry["applicable"] == true);
+		CHECK(Call("editor.status")["recovery"]["applicable"] == 1);
+		CHECK(Call("scene.hierarchy")["entities"] == savedEntities);
+
+		const nlohmann::json recovered = Call("scene.recover", { { "scene", entry["id"] }, { "action", "apply" } });
+		CHECK(recovered["recovered"] == entry["id"]);
+		const nlohmann::json crateEntity = Call("entity.get", { { "entity", crate } });
+		CHECK(crateEntity["name"] == "Big Crate");
+		CHECK(crateEntity["components"]["Transform"]["Translation"] == nlohmann::json::array({ 4, 5, 6 }));
+		CHECK(Call("editor.status")["scene"]["modified"] == true);
+
+		// One undo step back to the saved file.
+		Call("edit.undo");
+		CHECK(Call("scene.hierarchy")["entities"] == savedEntities);
+		CHECK(Call("editor.status")["scene"]["modified"] == false);
+		Call("editor.quit", { { "force", true } });
+		CHECK(editor.Wait() == 0);
 	}
 }
 

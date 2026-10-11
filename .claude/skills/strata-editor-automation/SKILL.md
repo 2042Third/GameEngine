@@ -74,6 +74,7 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | Question | Call |
 | --- | --- |
 | What is open, is it playing, unsaved changes? | `editor.status` |
+| Are there unsaved changes a crashed (or discarding) editor left? | `scene.recoveryStatus` (entries with `id`, `sceneName`, `applicable`; the edited scene's `journal`), then `scene.recover {scene: <id or scene>, action: "apply" \| "discard"}` |
 | Which projects did the user (or an agent) open lately? | `editor.recentProjects` (name, project file path for `project.open`, `lastOpened`; editors run with `--commands` or `--frames` list what they opened without saving it); `editor.removeRecentProject {path}` takes one off |
 | What can a new project or scene start from? | `project.templates` (`empty`, `basic3d`) |
 | Is there a finished game to learn from? | `project.samples` (e.g. `Tetris`); `project.openSample {sample, directory}` opens a copy in a new directory (the sample stays as shipped; build its scripts with `script.build` before playing) |
@@ -145,6 +146,11 @@ editor started with `--no-gpu` (use `--headless`):
   unsaved changes (`editor.status` `scene.modified`), also while a copy of it plays. Save first (`scene.save`, or
   `scene.saveAs` for a scene never saved), or pass `"force": true` when discarding them is what you want; their results
   report `discardedChanges`. A person may be editing beside you: never force away work you did not make.
+- **Recovery**: the editor journals the edited scene's unsaved changes in `.strata/Recovery` (written about 2 s after
+  edits stop; `editor.status` `recovery.journal` has `lastWrite` and `pending`), and even forced discards are kept
+  there. When a project opens with changes an editor left behind, `scene.recoveryStatus` lists them; `scene.recover
+  {"scene": "<id>", "action": "apply"}` reopens the scene with them as one undo step (the scene stays unsaved: save
+  it), `"discard"` drops them. Ask the person before recovering or discarding their changes.
 - **Play mode**: `play.start` runs a copy of the scene. Changes made while playing apply to that copy, carry a
   `warning` in the result, and are discarded by `play.stop`. Undo and redo are not available while playing;
   `scene.save` saves the edited scene, never the running copy.

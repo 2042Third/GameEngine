@@ -5,6 +5,7 @@
 #include "Editor/ProjectTemplates.h"
 #include "Editor/RecentProjects.h"
 #include "Editor/SceneEdit.h"
+#include "Editor/SceneRecovery.h"
 #include "Editor/ScriptBuild.h"
 #include "Editor/SimulatedInput.h"
 #include "Editor/UndoStack.h"
@@ -225,6 +226,25 @@ namespace Strata
 		bool Redo();
 
 		//////////////////////////////////////////////////////////////////////////
+		// Recovery
+		//////////////////////////////////////////////////////////////////////////
+
+		// Autosave and crash recovery (SceneRecovery): the journal of the edited scene's unsaved changes, written in the
+		// background into the project's ".strata/Recovery", and the recovery files found there when the project opened (a
+		// crash, or changes discarded on purpose). Every replacement of the edited scene with unsaved changes writes them
+		// there first, so nothing is lost even then.
+		SceneRecovery& GetRecovery() { return m_Recovery; }
+		const SceneRecovery& GetRecovery() const { return m_Recovery; }
+		// The file of a scene asset of the project (absolute) and its path relative to the asset directory; empty for the
+		// null handle or without a project.
+		std::pair<std::filesystem::path, std::string> GetSceneFile(AssetHandle scene) const;
+		// Applies recovery data (SceneRecovery::Read): opens its scene (a scene never saved: a new scene of its name) unless
+		// it is the edited scene without unsaved changes, then turns it into what the recovered edits left as one undo step
+		// back to the saved state. The scene stays modified (unsaved). Fails while playing, and while the edited scene has
+		// unsaved changes that opening another would discard, unless `force`. outApplied: the entities it touched.
+		bool ApplyRecovery(const RecoveryData& data, bool force, size_t* outApplied = nullptr, std::string* outError = nullptr);
+
+		//////////////////////////////////////////////////////////////////////////
 		// Scripts
 		//////////////////////////////////////////////////////////////////////////
 
@@ -356,6 +376,8 @@ namespace Strata
 		std::unordered_set<UUID> m_SelectionSet; // The same entities, for IsSelected
 		AssetHandle m_InspectedAsset = UUID::Null();
 		uint64_t m_InspectionVersion = 0;
+		// Declared before the undo stack it observes, so the stack never outlives it.
+		SceneRecovery m_Recovery;
 		UndoStack m_UndoStack;
 
 		Ref<ScriptEngine> m_ScriptEngine;

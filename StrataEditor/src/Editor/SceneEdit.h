@@ -43,7 +43,8 @@ namespace Strata
 
 	}
 
-	// Undo step for any change to a set of entities, stored as their states before and after the change.
+	// Undo step for any change to a set of entities, stored as their states before and after the change. The states are
+	// shared and never change once recorded (a merge replaces the "after" states), so journals keep them without copies.
 	class SceneEditAction final : public EditorAction
 	{
 	public:
@@ -54,16 +55,34 @@ namespace Strata
 		bool Execute(std::string* outError) override;
 		void Undo() override;
 		bool MergeWith(const EditorAction& next) override;
-		bool IsNoOp() const override { return m_Before == m_After; }
+		bool IsNoOp() const override { return *m_Before == *m_After; }
+		SceneChangeKind GetSceneChange() const override { return SceneChangeKind::Entities; }
+		Ref<const std::vector<EntityState>> GetEntityStates(bool undone) const override { return undone ? m_Before : m_After; }
 
-		const std::vector<EntityState>& GetBefore() const { return m_Before; }
-		const std::vector<EntityState>& GetAfter() const { return m_After; }
+		const std::vector<EntityState>& GetBefore() const { return *m_Before; }
+		const std::vector<EntityState>& GetAfter() const { return *m_After; }
 	private:
 		Scene* m_Scene;
 		std::string m_Name;
-		std::vector<EntityState> m_Before;
-		std::vector<EntityState> m_After;
+		Ref<const std::vector<EntityState>> m_Before;
+		Ref<const std::vector<EntityState>> m_After;
 		std::string m_MergeKey;
+	};
+
+	// Undo step of a change to the scene's settings (gravity, fixed step, physics capacities: scene.setSettings).
+	class SceneSettingsAction final : public EditorAction
+	{
+	public:
+		SceneSettingsAction(Scene& scene, const SceneSettings& before, const SceneSettings& after);
+
+		const std::string& GetName() const override;
+		bool Execute(std::string* outError) override;
+		void Undo() override;
+		SceneChangeKind GetSceneChange() const override { return SceneChangeKind::Settings; }
+	private:
+		Scene& m_Scene;
+		SceneSettings m_Before;
+		SceneSettings m_After;
 	};
 
 	// Records an edit that is made directly on the scene: construct it with the entities the edit will touch, make

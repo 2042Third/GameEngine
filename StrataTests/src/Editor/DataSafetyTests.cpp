@@ -3,10 +3,12 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/HarnessEditor.h"
+#include "Editor/SceneRecovery.h"
 #include "TestHelpers.h"
 #include "UI/ItemProbe.h"
 
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/JsonUtils.h>
 #include <Strata/Project/Project.h>
 #include <Strata/Scene/Scene.h>
 #include <Strata/Scene/SceneSerializer.h>
@@ -124,6 +126,21 @@ namespace
 		return parameters;
 	}
 
+	// Recovery files of a project marked discarded for a scene (SceneRecovery).
+	size_t CountDiscardedRecoveries(const std::filesystem::path& project, const std::string& sceneName)
+	{
+		size_t count = 0;
+		std::error_code error;
+		for (std::filesystem::directory_iterator it(project / ".strata" / SceneRecovery::c_DirectoryName, error), end; !error && it != end; it.increment(error))
+		{
+			const std::optional<std::string> text = FileSystem::ReadText(it->path());
+			const std::optional<nlohmann::json> header = text ? JsonUtils::Parse(std::string_view(*text).substr(0, text->find('\n'))) : std::nullopt;
+			if (header && header->value("Discarded", false) && header->value("SceneName", "") == sceneName)
+				count++;
+		}
+		return count;
+	}
+
 }
 
 TEST_SUITE("Editor.DataSafety")
@@ -153,6 +170,10 @@ TEST_SUITE("Editor.DataSafety")
 			const nlohmann::json forced = harness.Run(name, WithForce(current.Parameters));
 			CHECK(forced["discardedChanges"] == true);
 			CHECK_FALSE(harness.Context.GetEditScene()->FindEntityByName("Unsaved"));
+
+			// Nothing is lost even then: the discarded changes are recovery data of the project they were made in.
+			harness.Context.GetRecovery().Wait();
+			CHECK(CountDiscardedRecoveries(harness.Root / "Game", "Main") == 1);
 		}
 	}
 

@@ -201,33 +201,56 @@ namespace Strata
 	}
 
 	SceneEditAction::SceneEditAction(Scene& scene, std::string name, std::vector<EntityState> before, std::vector<EntityState> after, std::string mergeKey)
-		: m_Scene(&scene), m_Name(std::move(name)), m_Before(std::move(before)), m_After(std::move(after)), m_MergeKey(std::move(mergeKey))
+		: m_Scene(&scene), m_Name(std::move(name)), m_Before(CreateRef<const std::vector<EntityState>>(std::move(before))),
+		m_After(CreateRef<const std::vector<EntityState>>(std::move(after))), m_MergeKey(std::move(mergeKey))
 	{
 	}
 
 	bool SceneEditAction::Execute(std::string*)
 	{
-		SceneEdit::ApplyEntities(*m_Scene, m_After);
+		SceneEdit::ApplyEntities(*m_Scene, *m_After);
 		return true;
 	}
 
 	void SceneEditAction::Undo()
 	{
-		SceneEdit::ApplyEntities(*m_Scene, m_Before);
+		SceneEdit::ApplyEntities(*m_Scene, *m_Before);
 	}
 
 	bool SceneEditAction::MergeWith(const EditorAction& next)
 	{
 		const auto* edit = dynamic_cast<const SceneEditAction*>(&next);
-		if (!edit || m_MergeKey.empty() || edit->m_MergeKey != m_MergeKey || edit->m_Scene != m_Scene || edit->m_After.size() != m_After.size())
+		if (!edit || m_MergeKey.empty() || edit->m_MergeKey != m_MergeKey || edit->m_Scene != m_Scene || edit->m_After->size() != m_After->size())
 			return false;
-		for (size_t index = 0; index < m_After.size(); index++)
+		for (size_t index = 0; index < m_After->size(); index++)
 		{
-			if (edit->m_After[index].ID != m_After[index].ID)
+			if ((*edit->m_After)[index].ID != (*m_After)[index].ID)
 				return false;
 		}
 		m_After = edit->m_After;
 		return true;
+	}
+
+	SceneSettingsAction::SceneSettingsAction(Scene& scene, const SceneSettings& before, const SceneSettings& after)
+		: m_Scene(scene), m_Before(before), m_After(after)
+	{
+	}
+
+	const std::string& SceneSettingsAction::GetName() const
+	{
+		static const std::string s_Name = "Change Scene Settings";
+		return s_Name;
+	}
+
+	bool SceneSettingsAction::Execute(std::string*)
+	{
+		m_Scene.GetSettings() = m_After;
+		return true;
+	}
+
+	void SceneSettingsAction::Undo()
+	{
+		m_Scene.GetSettings() = m_Before;
 	}
 
 	SceneEditTransaction::SceneEditTransaction(Scene& scene, std::string name, const std::vector<UUID>& entities, std::string mergeKey)

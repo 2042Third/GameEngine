@@ -83,7 +83,7 @@ namespace Strata
 		// project.close, project.openSample): while the edited scene has unsaved changes (also while a copy of it plays: the
 		// edited scene is what is at stake), the command fails, changing nothing, unless `force` is true. `action` says what the
 		// command would do, e.g. "opening the scene 'Level2'". Returns the failure (naming the scene and how to proceed), or
-		// nullopt when the command may go on.
+		// nullopt when the command may go on. A forced discard keeps the changes as recovery data (EditorContext::ResetScene).
 		std::optional<EditorCommandResult> CheckUnsavedChanges(const EditorContext& context, bool force, std::string_view action);
 
 		// A file a command writes for its client (e.g. a capture). Relative paths resolve against the project directory

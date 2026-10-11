@@ -49,6 +49,8 @@
 	"Perf.Editor.HierarchyRebuild100kRoots": { "Measured": 0.5926, "Budget": 0.8889, "Unit": "ms" },
 	"Perf.Editor.ImportSettings4kMaxFrame": { "Measured": 2.142, "Budget": 3.213, "Unit": "ms" },
 	"Perf.Editor.SelectionFrame100kSelected": { "Measured": 7.81, "Budget": 11.71, "Unit": "ms" },
+	"Perf.Editor.RecoveryWriteMaxFrame100k": { "Measured": 0.038, "Budget": 0.057, "Unit": "ms" },
+	"Perf.Editor.RecoverySnapshotMaxEntities": { "Measured": 0.6, "Budget": 0.9, "Unit": "ms" },
 	"Perf.EditorPanels.Performance600FramesP95": { "Measured": 0.0616, "Budget": 0.0924, "Unit": "ms" },
 	"Perf.EditorPanels.Streaming10kAssetsP95": { "Measured": 0.1448, "Budget": 0.2172, "Unit": "ms" },
 	"Perf.EditorPanels.Streaming10kAssetsRefreshFrame": { "Measured": 0.147, "Budget": 0.2205, "Unit": "ms" },
