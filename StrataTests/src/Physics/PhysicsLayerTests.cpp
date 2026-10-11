@@ -217,6 +217,26 @@ TEST_SUITE("Physics.Layers")
 		scene.OnRuntimeStop();
 	}
 
+	TEST_CASE("Letting two layers collide while the scene plays makes their bodies collide")
+	{
+		Scene scene;
+		CreateGround(scene); // Layer 0
+		Entity box = CreateDynamicBox(scene, "Box", glm::vec3(0.0f, 6.0f, 0.0f));
+		box.GetComponent<RigidBodyComponent>().Layer = 4;
+		scene.GetSettings().PhysicsLayers.SetCollide(0, 4, false);
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+
+		// Falling, still well above the ground, the box would pass through it; the change lets it land instead.
+		StepScene(scene, 10);
+		REQUIRE(GetWorldPosition(scene, box).y > 3.0f);
+		physics.SetLayersCollide(0, 4, true);
+		CHECK(scene.GetSettings().PhysicsLayers.DoCollide(4, 0));
+		StepScene(scene, 120);
+		CHECK(GetWorldPosition(scene, box).y == doctest::Approx(0.5f).epsilon(0.03));
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("The default settings' matrix still restricts every scene's")
 	{
 		PhysicsSettings settings;
