@@ -74,8 +74,10 @@ namespace Strata::UI
 	void PopSelectionColors();
 
 	// A collapsible section header in the SemiBold font on a raised surface (CollapsingHeader). Add
-	// ImGuiTreeNodeFlags_AllowOverlap to place buttons on it. Returns whether the section is open.
-	bool SectionHeader(const char* id, const char* label, ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_DefaultOpen);
+	// ImGuiTreeNodeFlags_AllowOverlap to place buttons on it. A summary of what the section holds (for sections that start
+	// closed) shows at its right end in the secondary text color, cut with an ellipsis where it would reach the label; the
+	// probe records it as the header's text. Returns whether the section is open.
+	bool SectionHeader(const char* id, const char* label, ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_DefaultOpen, std::string_view summary = {});
 
 	// A heading in the SemiBold font at a size of the type scale (Title, or Display for large titles).
 	void Heading(std::string_view text, TextSize size = TextSize::Title);

@@ -66,6 +66,14 @@ namespace Strata
 		std::string m_NameText;
 		// Scene settings being dragged: applied with one scene.setSettings when the drag ends.
 		std::optional<SceneSettings> m_SettingsDraft;
+		// The physics section's summary, formatted again only when the values it shows change.
+		struct PhysicsSummary
+		{
+			glm::vec3 Gravity = glm::vec3(0.0f);
+			float FixedTimestep = 0.0f;
+			std::string Text;
+		};
+		std::optional<PhysicsSummary> m_PhysicsSummary;
 		std::unordered_map<const ComponentInfo*, std::vector<std::optional<PropertyValue>>> m_Defaults;
 		MaterialEditor m_MaterialEditor;
 		// The rotation of several entities being edited, until the widget reports the edit finished.

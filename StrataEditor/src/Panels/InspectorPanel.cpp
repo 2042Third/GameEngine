@@ -157,17 +157,63 @@ namespace Strata
 			return first == std::string::npos ? std::string("Material") : result.substr(first);
 		}
 
-		// The editable settings of the scene, as properties the property widgets draw.
+		// An editable setting of the scene, as a property the property widgets draw, with its probe key
+		// ("Inspector.Scene.<Name>").
+		struct SceneSettingRow
+		{
+			PropertyInfo Property;
+			std::string ProbeKey;
+		};
+
 		struct SceneSettingProperties
 		{
-			PropertyInfo Gravity;
-			PropertyInfo FixedTimestep;
-			PropertyInfo MaxFixedSteps;
+			SceneSettingRow Gravity;
+			SceneSettingRow FixedTimestep;
+			SceneSettingRow MaxFixedSteps;
 			// The physics world's capacities (SceneSettings::PhysicsCapacity): 0 sizes them automatically.
-			PropertyInfo MaxBodies;
-			PropertyInfo MaxBodyPairs;
-			PropertyInfo MaxContactConstraints;
+			SceneSettingRow MaxBodies;
+			SceneSettingRow MaxBodyPairs;
+			SceneSettingRow MaxContactConstraints;
 		};
+
+		SceneSettingRow MakeSceneSettingRow(PropertyInfo property)
+		{
+			std::string probeKey = "Inspector.Scene." + property.Name;
+			return SceneSettingRow { std::move(property), std::move(probeKey) };
+		}
+
+		const char* GetPhysicsHeader()
+		{
+			static const std::string s_Header = std::string(Icons::Orbit) + "  Physics";
+			return s_Header.c_str();
+		}
+
+		const char* GetSkyHeader()
+		{
+			static const std::string s_Header = std::string(Icons::CloudSun) + "  Sky";
+			return s_Header.c_str();
+		}
+
+		// The physics section's summary: the gravity's strength and the fixed steps per second ("Gravity 9.81 m/s² · 60 steps/s").
+		std::string DescribePhysics(const SceneSettings& settings)
+		{
+			const float gravity = glm::length(settings.Gravity);
+			const std::string strength = gravity > 0.0f ? fmt::format("Gravity {:.3g} m/s\xC2\xB2", gravity) : std::string("No gravity");
+			const float stepsPerSecond = settings.FixedTimestep > 0.0f ? 1.0f / settings.FixedTimestep : 0.0f;
+			return fmt::format("{} \xC2\xB7 {:.4g} steps/s", strength, stepsPerSecond);
+		}
+
+		// The sky section's summary: where the sky's light comes from.
+		const char* DescribeSky(Entity sky)
+		{
+			if (!sky)
+				return "None";
+			const SkyLightComponent& light = sky.GetComponent<SkyLightComponent>();
+			if (light.Source == SkyLightSource::Procedural)
+				return "Procedural";
+			// Without a map, the sky light adds its ambient color.
+			return light.EnvironmentMap.IsValid() ? "Environment map" : "Ambient color";
+		}
 
 		// What a capacity of 0 (sized automatically when play starts) reads as.
 		constexpr std::string_view c_AutomaticCapacity = "Auto";
@@ -189,34 +235,41 @@ namespace Strata
 		{
 			static const SceneSettingProperties s_Properties = []()
 			{
+				PropertyInfo gravity;
+				gravity.Name = "Gravity";
+				gravity.DisplayName = "Gravity";
+				gravity.Tooltip = "Acceleration of rigid bodies in m/s\xC2\xB2";
+				gravity.Type = PropertyType::Vec3;
+				gravity.Speed = 0.05f;
+				PropertyInfo fixedTimestep;
+				fixedTimestep.Name = "FixedTimestep";
+				fixedTimestep.DisplayName = "Fixed Timestep";
+				fixedTimestep.Tooltip = "Seconds per physics step (1/1000 to 1/10)";
+				fixedTimestep.Type = PropertyType::Float;
+				fixedTimestep.Min = 0.001f;
+				fixedTimestep.Max = 0.1f;
+				fixedTimestep.Speed = 0.0005f;
+				PropertyInfo maxFixedSteps;
+				maxFixedSteps.Name = "MaxFixedStepsPerFrame";
+				maxFixedSteps.DisplayName = "Max Steps per Frame";
+				maxFixedSteps.Tooltip = "Physics steps one frame may run at most (a slow frame drops the rest)";
+				maxFixedSteps.Type = PropertyType::UInt;
+				maxFixedSteps.Min = 1.0f;
+				maxFixedSteps.Max = 64.0f;
+
 				SceneSettingProperties properties;
-				properties.Gravity.Name = "Gravity";
-				properties.Gravity.DisplayName = "Gravity";
-				properties.Gravity.Tooltip = "Acceleration of rigid bodies in m/s\xC2\xB2";
-				properties.Gravity.Type = PropertyType::Vec3;
-				properties.Gravity.Speed = 0.05f;
-				properties.FixedTimestep.Name = "FixedTimestep";
-				properties.FixedTimestep.DisplayName = "Fixed Timestep";
-				properties.FixedTimestep.Tooltip = "Seconds per physics step (1/1000 to 1/10)";
-				properties.FixedTimestep.Type = PropertyType::Float;
-				properties.FixedTimestep.Min = 0.001f;
-				properties.FixedTimestep.Max = 0.1f;
-				properties.FixedTimestep.Speed = 0.0005f;
-				properties.MaxFixedSteps.Name = "MaxFixedStepsPerFrame";
-				properties.MaxFixedSteps.DisplayName = "Max Steps per Frame";
-				properties.MaxFixedSteps.Tooltip = "Physics steps one frame may run at most (a slow frame drops the rest)";
-				properties.MaxFixedSteps.Type = PropertyType::UInt;
-				properties.MaxFixedSteps.Min = 1.0f;
-				properties.MaxFixedSteps.Max = 64.0f;
-				properties.MaxBodies = MakeCapacityProperty("MaxBodies", "Max Bodies",
+				properties.Gravity = MakeSceneSettingRow(std::move(gravity));
+				properties.FixedTimestep = MakeSceneSettingRow(std::move(fixedTimestep));
+				properties.MaxFixedSteps = MakeSceneSettingRow(std::move(maxFixedSteps));
+				properties.MaxBodies = MakeSceneSettingRow(MakeCapacityProperty("MaxBodies", "Max Bodies",
 					"Bodies the physics world holds, reserved when play starts (about 80 bytes each); Auto (0) sizes it from the bodies the "
 					"scene starts with. Raise it for scenes that create many bodies while they play",
-					PhysicsCapacitySettings::c_MaxBodiesLimit);
-				properties.MaxBodyPairs = MakeCapacityProperty("MaxBodyPairs", "Max Body Pairs",
+					PhysicsCapacitySettings::c_MaxBodiesLimit));
+				properties.MaxBodyPairs = MakeSceneSettingRow(MakeCapacityProperty("MaxBodyPairs", "Max Body Pairs",
 					"Pairs of bodies with overlapping bounds per step (about 90 bytes each); Auto (0): sized from the bodies",
-					PhysicsCapacitySettings::c_MaxBodyPairsLimit);
-				properties.MaxContactConstraints = MakeCapacityProperty("MaxContactConstraints", "Max Contacts",
-					"Contacts solved per step (about 830 bytes each); Auto (0): sized from the bodies", PhysicsCapacitySettings::c_MaxContactConstraintsLimit);
+					PhysicsCapacitySettings::c_MaxBodyPairsLimit));
+				properties.MaxContactConstraints = MakeSceneSettingRow(MakeCapacityProperty("MaxContactConstraints", "Max Contacts",
+					"Contacts solved per step (about 830 bytes each); Auto (0): sized from the bodies", PhysicsCapacitySettings::c_MaxContactConstraintsLimit));
 				return properties;
 			}();
 			return s_Properties;
@@ -754,24 +807,27 @@ namespace Strata
 		UI::ItemProbe::Record("Inspector.SceneSettings");
 		ImGui::Spacing();
 
-		if (UI::SectionHeader("Inspector.Physics", (std::string(Icons::Orbit) + "  Physics").c_str()))
+		// The sections start closed, their headers summing up what they hold: their rows are live widgets, which cost frame
+		// time while they are drawn, and they are opened to be edited (each keeps its state while the editor runs).
+		SceneSettings shown = m_SettingsDraft.value_or(scene.GetSettings());
+		if (!m_PhysicsSummary || m_PhysicsSummary->Gravity != shown.Gravity || m_PhysicsSummary->FixedTimestep != shown.FixedTimestep)
+			m_PhysicsSummary = PhysicsSummary { shown.Gravity, shown.FixedTimestep, DescribePhysics(shown) };
+		if (UI::SectionHeader("Inspector.Physics", GetPhysicsHeader(), ImGuiTreeNodeFlags_None, m_PhysicsSummary->Text))
 		{
 			const SceneSettingProperties& properties = GetSceneSettingProperties();
-			SceneSettings shown = m_SettingsDraft.value_or(scene.GetSettings());
 			bool changed = false;
 			bool finished = false;
 			const SceneSettings defaults;
 			if (UI::BeginPropertyTable("Settings"))
 			{
-				auto draw = [&](const PropertyInfo& property, PropertyValue value, const PropertyValue& fallback, std::string_view zeroLabel, auto&& apply)
+				auto draw = [&](const SceneSettingRow& row, PropertyValue value, const PropertyValue& fallback, std::string_view zeroLabel, auto&& apply)
 				{
-					const std::string probe = "Inspector.Scene." + property.Name;
-					UI::PropertyLabel(property.DisplayName, property.Tooltip, probe);
+					UI::PropertyLabel(row.Property.DisplayName, row.Property.Tooltip, row.ProbeKey);
 					PropertyWidgetOptions options;
 					options.DefaultValue = &fallback;
-					options.ProbeKey = probe;
+					options.ProbeKey = row.ProbeKey;
 					options.ZeroLabel = zeroLabel;
-					const PropertyEditResult result = DrawPropertyWidget(property, value, scene, options);
+					const PropertyEditResult result = DrawPropertyWidget(row.Property, value, scene, options);
 					if (result.Changed)
 						apply(value);
 					changed |= result.Changed;
@@ -818,8 +874,6 @@ namespace Strata
 	{
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		Scene& scene = *context.GetActiveScene();
-		if (!UI::SectionHeader("Inspector.Sky", (std::string(Icons::CloudSun) + "  Sky").c_str()))
-			return;
 		// The sky the renderer uses: the first active sky light.
 		Entity sky;
 		for (auto [entity, light, world] : scene.GetRegistry().view<SkyLightComponent, WorldTransformComponent>().each())
@@ -830,6 +884,8 @@ namespace Strata
 				break;
 			}
 		}
+		if (!UI::SectionHeader("Inspector.Sky", GetSkyHeader(), ImGuiTreeNodeFlags_None, DescribeSky(sky)))
+			return;
 		if (!sky)
 		{
 			ImGui::PushStyleColor(ImGuiCol_Text, colors.TextSecondary);

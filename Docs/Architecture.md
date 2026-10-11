@@ -1365,7 +1365,10 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
     (`EditorActions::CopyComponentValues`) and runs `component.set`/`component.remove {entities}`. With nothing selected
     it shows the scene's settings (gravity, the fixed step, and the physics world's capacities: 0, automatic sizing,
     reads "Auto", `PropertyWidgetOptions::ZeroLabel`), applied by one `scene.setSettings` when a drag ends, and the first
-    active sky light (the renderer's).
+    active sky light (the renderer's), in sections that start closed: their headers sum them up ("Gravity 9.81 m/s² ·
+    60 steps/s", the sky's source; the physics summary is formatted again only when its values change), and their rows,
+    live widgets that cost frame time while they are drawn, show once a section is opened (it stays open while the
+    editor runs).
   - The **Asset** inspector is tabbed with the Inspector: `EditorLayer` brings the tab of the inspection target forward
     when `GetInspectionVersion` changes (`EditorPanelRegistry::ShowTab`, which leaves the keyboard focus where it is).
     Materials are drawn by `MaterialEditor` (a drag previews, its release saves: one write and one undo step), import

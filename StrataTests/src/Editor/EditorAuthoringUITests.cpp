@@ -982,8 +982,17 @@ TEST_SUITE("Editor.UI.Inspector")
 		editor.Context().ClearSelection();
 		editor.Frames(2);
 		REQUIRE(UI::ItemProbe::Find("Inspector.SceneSettings").has_value());
+		// The sections start closed, their headers summing them up; the summaries follow the settings.
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.Scene.Gravity").has_value());
+		CHECK(editor.ProbeText("Inspector.Physics") == "Gravity 9.81 m/s\xC2\xB2 \xC2\xB7 60 steps/s");
+		CHECK(editor.ProbeText("Inspector.Sky") == "None");
+		editor.Run("scene.setSettings", { { "gravity", { 1.0, 2.0, 2.0 } }, { "fixedTimestep", 0.02 } });
+		editor.Frames(1);
+		CHECK(editor.ProbeText("Inspector.Physics") == "Gravity 3 m/s\xC2\xB2 \xC2\xB7 50 steps/s");
 		editor.Run("scene.setSettings", { { "gravity", { 1.0, 2.0, 3.0 } } });
 		editor.Frames(1);
+
+		REQUIRE(editor.Click("Inspector.Physics"));
 		const size_t position = editor.UndoPosition();
 		// The Y label resets gravity's Y to the default, through scene.setSettings: one step.
 		REQUIRE(editor.Click("Inspector.Scene.Gravity.Y"));
@@ -991,8 +1000,10 @@ TEST_SUITE("Editor.UI.Inspector")
 		CHECK(editor.UndoPosition() == position + 1);
 
 		// Without a sky light: a button adds one, and its settings show here.
+		REQUIRE(editor.Click("Inspector.Sky"));
 		REQUIRE(editor.Click("Inspector.AddSky"));
 		editor.Frames(1);
+		CHECK(editor.ProbeText("Inspector.Sky") == "Procedural");
 		CHECK(UI::ItemProbe::Find("Inspector.SkyLight.Intensity").has_value());
 		REQUIRE(editor.Click("Inspector.SelectSky"));
 		REQUIRE(editor.Context().GetPrimarySelection());
@@ -1004,6 +1015,7 @@ TEST_SUITE("Editor.UI.Inspector")
 		AuthoringEditor editor;
 		editor.Context().ClearSelection();
 		editor.Frames(2);
+		REQUIRE(editor.Click("Inspector.Physics"));
 		const auto capacity = [&]() { return editor.Context().GetActiveScene()->GetSettings().PhysicsCapacity; };
 		REQUIRE(capacity() == PhysicsCapacitySettings());
 		CHECK(editor.ProbeText("Inspector.Scene.MaxBodies.Label") == "Max Bodies");
