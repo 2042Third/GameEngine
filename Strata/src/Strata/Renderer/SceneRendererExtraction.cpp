@@ -615,9 +615,11 @@ namespace Strata
 			output.Draws.clear();
 			output.Transparent.clear();
 			output.MaterialPixelSizes.clear();
-			output.InstancesPerLOD = {};
-			output.Skipped = 0;
-			output.SkinnedInstances = 0;
+			// Counted in locals and stored once: a store per instance into the chunk, whose neighbours other threads write,
+			// cost 100,000 instances about 0.1 ms.
+			std::array<uint32_t, SceneRendererStats::c_LODStatCount> instancesPerLOD = {};
+			uint32_t skipped = 0;
+			uint32_t skinnedInstances = 0;
 			const uint32_t end = std::min(visible, (chunk + 1) * c_ExtractionChunkSize);
 			for (uint32_t item = chunk * c_ExtractionChunkSize; item < end; item++)
 			{
@@ -645,13 +647,13 @@ namespace Strata
 					const uint32_t lod = SelectLOD(submeshes[submeshIndex], fraction);
 					if (submeshIndex >= c_MaxKeySubmeshes || lod >= c_MaxKeyLODs)
 					{
-						output.Skipped++;
+						skipped++;
 						continue;
 					}
-					output.InstancesPerLOD[std::min<size_t>(lod, SceneRendererStats::c_LODStatCount - 1)]++;
+					instancesPerLOD[std::min<size_t>(lod, SceneRendererStats::c_LODStatCount - 1)]++;
 					AppendPixelSize(output.MaterialPixelSizes, materialSlot, fraction * viewportHeight);
 					const bool doubleSided = (materialFlags & c_MaterialDoubleSided) != 0;
-					output.SkinnedInstances += skinned ? 1u : 0u;
+					skinnedInstances += skinned ? 1u : 0u;
 					if ((materialFlags & c_MaterialTransparent) != 0)
 					{
 						output.Transparent.push_back(TransparentDraw { viewDepth, renderScene.GetEntityID(proxy), submeshIndex, instance, meshSlot, lod, doubleSided, mirrored, skinned });
@@ -661,6 +663,9 @@ namespace Strata
 						instance, 0 });
 				}
 			}
+			output.InstancesPerLOD = instancesPerLOD;
+			output.Skipped = skipped;
+			output.SkinnedInstances = skinnedInstances;
 		});
 
 		m_Draws.clear();
@@ -740,9 +745,11 @@ namespace Strata
 		{
 			ExtractionChunk& output = m_Chunks[chunk];
 			output.Draws.clear();
-			output.Skipped = 0;
+			// Accumulated in locals and stored once (see GatherDraws).
+			uint32_t skipped = 0;
+			std::array<float, RenderData::c_MaxCascades> casterNearZ = {};
 			for (uint32_t cascade = 0; cascade < cascadeCount; cascade++)
-				output.CasterNearZ[cascade] = m_Cascades[cascade].SphereNearZ;
+				casterNearZ[cascade] = m_Cascades[cascade].SphereNearZ;
 			const uint32_t end = std::min(casters, (chunk + 1) * c_ExtractionChunkSize);
 			for (uint32_t item = chunk * c_ExtractionChunkSize; item < end; item++)
 			{
@@ -756,7 +763,7 @@ namespace Strata
 				for (uint32_t cascade = 0; cascade < cascadeCount; cascade++)
 				{
 					if ((caster.CascadeMask & (1u << cascade)) != 0)
-						output.CasterNearZ[cascade] = std::max(output.CasterNearZ[cascade], caster.LightNearZ);
+						casterNearZ[cascade] = std::max(casterNearZ[cascade], caster.LightNearZ);
 				}
 
 				const AABB& bounds = renderScene.GetWorldBounds(caster.Proxy);
@@ -776,7 +783,7 @@ namespace Strata
 					const uint32_t lod = SelectLOD(submeshes[submeshIndex], fraction);
 					if (submeshIndex >= c_MaxKeySubmeshes || lod >= c_MaxKeyLODs)
 					{
-						output.Skipped++;
+						skipped++;
 						continue;
 					}
 					const bool alphaMask = (materialFlags & c_MaterialAlphaMask) != 0;
@@ -791,6 +798,8 @@ namespace Strata
 					}
 				}
 			}
+			output.Skipped = skipped;
+			output.CasterNearZ = casterNearZ;
 		});
 
 		std::array<float, RenderData::c_MaxCascades> casterNearZ = {};
