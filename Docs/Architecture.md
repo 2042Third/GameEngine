@@ -876,7 +876,8 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
 
 - **Accounting**. Every asset reports what it holds per pool (`Asset::GetMemoryUsage`, an `AssetMemoryUsage` of `Cpu`,
   `GpuTextures` and `GpuBuffers`): textures their CPU mips until uploaded, then their GPU mip chain; meshes their CPU
-  geometry (kept for physics and picking) and their GPU buffers, each counted once; materials their parameters; fonts
+  geometry and their GPU buffers, each counted once (once uploaded, the CPU keeps only the positions and indices physics
+  reads; the vertex attributes live on the GPU alone); materials their parameters; fonts
   and audio clips their data; prefabs, models and scenes an estimate of their parsed JSON. The manager reads it when an
   asset is published and keeps per-pool totals (`AssetManagerStats::Resident`; `LoadedMemory` is their sum).
   `AssetMetadata::StoredSize` is the size of what a load reads: the cache file or engine-native source in the editor,

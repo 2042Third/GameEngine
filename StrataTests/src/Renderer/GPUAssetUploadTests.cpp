@@ -733,6 +733,61 @@ TEST_SUITE("GPU.Assets.Uploads")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("An uploaded mesh keeps only the positions and indices physics reads on the CPU")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+
+		// 40,002 vertices (13,334 triangles): attributes 1.44 MB, positions 0.48 MB, indices 0.16 MB, one step.
+		constexpr uint32_t c_Vertices = 40002;
+		std::vector<glm::vec3> positions(c_Vertices);
+		std::vector<MeshVertexAttributes> attributes(c_Vertices);
+		std::vector<uint32_t> indices(c_Vertices);
+		for (uint32_t vertex = 0; vertex < c_Vertices; vertex++)
+		{
+			positions[vertex] = glm::vec3(static_cast<float>(vertex), 0.0f, static_cast<float>(vertex % 11));
+			attributes[vertex].TexCoord = glm::vec2(0.25f, static_cast<float>(vertex));
+			indices[vertex] = vertex;
+		}
+		Submesh submesh;
+		submesh.VertexCount = c_Vertices;
+		submesh.LODs.push_back(MeshLOD { 0, c_Vertices });
+		std::string error;
+		const Ref<Mesh> mesh = Mesh::Create(positions, attributes, indices, { submesh }, &error);
+		REQUIRE_MESSAGE(mesh, error);
+		const uint64_t attributeBytes = c_Vertices * sizeof(MeshVertexAttributes);
+		const AssetMemoryUsage finalized = mesh->GetFinalizedMemoryUsage();
+		CHECK(finalized.Cpu == mesh->GetMemoryUsage().Cpu - attributeBytes);
+
+		// The step that uploads everything ends past the deadline: the vertex attributes are freed by the next call, which
+		// uploads nothing more.
+		nvrhi::CommandListHandle commandList = gpu.GetNvrhiDevice()->createCommandList();
+		commandList->open();
+		uint64_t uploaded = 0;
+		AssetFinalizeContext context { commandList, nullptr };
+		context.Deadline = std::chrono::steady_clock::now(); // Passed: only each call's first piece of work goes
+		context.UploadedBytes = &uploaded;
+		CHECK(mesh->FinalizeOnMainThread(context) == AssetFinalizeResult::Pending);
+		CHECK(uploaded == finalized.GpuBuffers);
+		CHECK(mesh->GetAttributes().size() == c_Vertices);
+		uploaded = 0;
+		CHECK(mesh->FinalizeOnMainThread(context) == AssetFinalizeResult::Done);
+		CHECK(uploaded == 0);
+		commandList->close();
+		REQUIRE(gpu.ExecuteAndWait(commandList));
+
+		// The GPU has the attributes; the CPU keeps positions and indices, and reports what it said it would.
+		CHECK(mesh->GetAttributes().empty());
+		CHECK(mesh->GetPositions() == positions);
+		CHECK(mesh->GetIndices() == indices);
+		CHECK(mesh->GetMemoryUsage() == finalized);
+		const std::vector<uint8_t> gpuAttributes = ReadBuffer(gpu, mesh->GetAttributeBuffer(), attributeBytes);
+		CHECK(std::memcmp(gpuAttributes.data(), attributes.data(), attributeBytes) == 0);
+		CHECK(mesh->FinalizeOnMainThread(context) == AssetFinalizeResult::Done); // Finalized: nothing more to do
+		SettleDevice(gpu);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Mesh steps go through pooled staging buffers and wait for staging room like texture bands")
 	{
 		GPUContext gpu;

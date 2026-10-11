@@ -384,17 +384,21 @@ TEST_SUITE("GPU.Assets")
 		REQUIRE(mesh->GetPositionBuffer());
 		REQUIRE(mesh->GetAttributeBuffer());
 		REQUIRE(mesh->GetIndexBuffer());
+		const uint64_t attributeBytes = mesh->GetPositions().size() * sizeof(MeshVertexAttributes);
 		CHECK(mesh->GetPositionBuffer()->getDesc().byteSize == mesh->GetPositions().size() * sizeof(glm::vec3));
-		CHECK(mesh->GetAttributeBuffer()->getDesc().byteSize == mesh->GetAttributes().size() * sizeof(MeshVertexAttributes));
+		CHECK(mesh->GetAttributeBuffer()->getDesc().byteSize == attributeBytes);
 		CHECK(mesh->GetIndexBuffer()->getDesc().byteSize == mesh->GetIndices().size() * sizeof(uint32_t));
 		CHECK(mesh->GetIndexBuffer()->getDesc().isIndexBuffer);
-		// Each copy counts once, in its own pool: the CPU geometry stays as it was, the buffers are added on the GPU.
+		// Each copy counts once, in its own pool: the CPU keeps the positions and indices physics reads, the vertex attributes
+		// went with the upload, and the buffers are added on the GPU.
 		const AssetMemoryUsage uploaded = mesh->GetMemoryUsage();
-		CHECK(uploaded.Cpu == cpuOnly.Cpu);
+		CHECK(uploaded.Cpu == cpuOnly.Cpu - attributeBytes);
 		CHECK(uploaded.GpuBuffers == mesh->GetPositionBuffer()->getDesc().byteSize + mesh->GetAttributeBuffer()->getDesc().byteSize
 			+ mesh->GetIndexBuffer()->getDesc().byteSize);
 		CHECK(uploaded.GpuTextures == 0);
-		CHECK_FALSE(mesh->GetPositions().empty()); // CPU geometry stays for physics and picking
+		CHECK_FALSE(mesh->GetPositions().empty());
+		CHECK_FALSE(mesh->GetIndices().empty());
+		CHECK(mesh->GetAttributes().empty());
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

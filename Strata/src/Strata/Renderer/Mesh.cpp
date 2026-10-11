@@ -16,6 +16,9 @@ namespace Strata
 		constexpr uint32_t c_MeshMagic = 0x484D5453; // "STMH"
 		constexpr uint64_t c_MaxVertices = 1ull << 28;
 		constexpr uint64_t c_MaxIndices = 1ull << 30;
+		// Vertex attributes from this size on are freed within the finalization deadline (freeing tens of megabytes takes
+		// milliseconds), like textures' CPU copies.
+		constexpr uint64_t c_TimedReleaseBytes = 1ull << 20;
 
 		struct CookedMeshHeader
 		{
@@ -125,6 +128,7 @@ namespace Strata
 
 	std::vector<uint8_t> Mesh::Serialize() const
 	{
+		ST_CORE_ASSERT(m_Attributes.size() == m_Positions.size(), "Mesh::Serialize after the upload released the vertex attributes");
 		BinaryWriter writer;
 		writer.Write(CookedMeshHeader { c_MeshMagic, c_CookedVersion, static_cast<uint32_t>(m_Submeshes.size()), 0 });
 		writer.WriteArray(std::span<const glm::vec3>(m_Positions));
@@ -276,6 +280,13 @@ namespace Strata
 			*context.UploadedBytes += uploaded;
 		if (m_UploadOffset < totalBytes)
 			return AssetFinalizeResult::Pending;
+
+		// Only shading reads the vertex attributes, from the GPU: their CPU copy goes (the terrain of the stress world held
+		// 9.4 MB of them). Physics keeps reading positions and indices (AssetMeshProvider). Freeing a large copy hands its
+		// pages back to the system, which takes a while: when the steps above ran past the deadline, it is the next call's.
+		if (!firstStep && attributeBytes >= c_TimedReleaseBytes && std::chrono::steady_clock::now() >= context.Deadline)
+			return AssetFinalizeResult::Pending;
+		std::vector<MeshVertexAttributes>().swap(m_Attributes);
 		m_Uploaded = true;
 		return AssetFinalizeResult::Done;
 	}
@@ -297,10 +308,14 @@ namespace Strata
 	AssetMemoryUsage Mesh::GetFinalizedMemoryUsage() const
 	{
 		AssetMemoryUsage usage = GetMemoryUsage();
-		if (Renderer::IsInitialized() && !m_IndexBuffer)
+		if (Renderer::IsInitialized())
 		{
-			for (size_t bytes : { m_Positions.size() * sizeof(glm::vec3), m_Attributes.size() * sizeof(MeshVertexAttributes), m_Indices.size() * sizeof(uint32_t) })
-				usage.GpuBuffers += GetStaticBufferSize(bytes);
+			if (!m_IndexBuffer)
+			{
+				for (size_t bytes : { m_Positions.size() * sizeof(glm::vec3), m_Attributes.size() * sizeof(MeshVertexAttributes), m_Indices.size() * sizeof(uint32_t) })
+					usage.GpuBuffers += GetStaticBufferSize(bytes);
+			}
+			usage.Cpu -= m_Attributes.size() * sizeof(MeshVertexAttributes); // The upload releases them
 		}
 		return usage;
 	}
