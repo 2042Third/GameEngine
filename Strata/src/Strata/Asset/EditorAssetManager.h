@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <functional>
 #include <mutex>
@@ -62,6 +63,16 @@ namespace Strata
 		std::string Error;     // Empty when the last import succeeded
 		std::vector<std::string> Warnings;
 		std::vector<AssetHandle> SubAssets;
+	};
+
+	// An import that failed while nobody waited for its outcome: one of the scan of a project, or of a file that changed on
+	// disk. Callers that asked for an import (ReimportAsset, the background forms) get its error themselves; these the editor
+	// tells the person about (EditorAssetManager::TakeImportFailures).
+	struct AssetImportFailure
+	{
+		AssetHandle Asset = UUID::Null();
+		std::string Path; // Relative to the asset directory, '/' separators
+		std::string Error;
 	};
 
 	// Asset manager of the editor. Every file with a known importer under the asset directory is an asset; its handle
@@ -137,6 +148,11 @@ namespace Strata
 		// Source assets whose import is queued or running, or finished and not applied yet (what Scan left to the
 		// background, re-imports). Thread-safe.
 		uint32_t GetPendingImportCount() const;
+		// The imports that failed while nobody waited for them (AssetImportFailure) since the last call, oldest first: the latest
+		// c_MaxImportFailures of them, and in outCount how many failed in all. Main thread, like the imports' results.
+		std::vector<AssetImportFailure> TakeImportFailures(uint64_t* outCount = nullptr);
+		bool HasImportFailures() const { return m_ImportFailureCount > 0; }
+		static constexpr size_t c_MaxImportFailures = 64;
 
 		// Copies an external file into the asset directory (relative target directory) and imports it. If the name is
 		// taken, " (n)" is appended. Returns the new handle, or null.
@@ -226,6 +242,9 @@ namespace Strata
 			// The wanted background import (queued, running, or finished and not applied yet); null without one. Only its
 			// outcome is applied: one that replaced it cancelled it (StopImport).
 			Ref<BackgroundJob> ImportJob;
+			// A caller waits for the outcome of the next import applied (it asked for it): a failure is that caller's to report,
+			// not an AssetImportFailure.
+			bool ImportAwaited = false;
 			// Of assets stored as-is: incremented whenever a search of what it references starts, so that only the latest
 			// search's result is recorded (see QueueNativeReferences).
 			uint64_t ReferencesGeneration = 0;
@@ -342,6 +361,10 @@ namespace Strata
 		// work's file lock and before its job lock.
 		Ref<BackgroundWork> m_Work;
 		bool m_Closed = false; // Close was called: no background work starts (main thread)
+
+		// Failures of imports nobody waited for, not taken yet (TakeImportFailures): the latest ones, and how many (main thread).
+		std::deque<AssetImportFailure> m_ImportFailures;
+		uint64_t m_ImportFailureCount = 0;
 
 		mutable std::atomic<uint64_t> m_PackPlans = 0; // PlanAssetPack calls (GetPackPlanCount)
 	};

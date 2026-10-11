@@ -741,9 +741,11 @@ and `AudioSystem`, the built-in "Audio" scene system.
     longest, hovering keeps one); `UI/Notifications` draws them at the bottom right above the status bar, never taking the
     keyboard focus and doing nothing while there are none. They come from commands the person runs (`RunEditorCommand`
     and the runner for `CommandSource::UI`: failures, and warnings such as edits of the running game,
-    `NotifyCommandOutcome`), script builds (start and end) and crashes, finished exports and recovery data left on offer;
-    their actions are Show in Activity (the command's journal entry), Show in Console and Recover. Post one for news the
-    person would otherwise miss; commands of tools and scripts get their errors as answers and post none.
+    `NotifyCommandOutcome`), script builds (start and end) and crashes, finished exports, imports that failed while nobody
+    waited for them (one toast counting them: `EditorAssetManager::TakeImportFailures`, `EditorNotification::Group`) and
+    recovery data left on offer; their actions are Show in Activity (the command's journal entry), Show Asset, Show in
+    Console and Recover. Post one for news the person would otherwise miss; commands of tools and scripts get their errors
+    as answers and post none.
   - Status pills say what is wrong and lead to it: errors (unread since the Console was last focused, not counting the
     frame its window appears in), a failed automation start (`--no-automation` is shown as off), scripts that are not
     built (click to build) or failed, assets that failed to load or pools close to or over their budget (the assets pill,

@@ -14,24 +14,32 @@ namespace Strata
 	{
 		const auto now = std::chrono::steady_clock::now();
 		m_Version++;
+		notification.Count = std::max<uint32_t>(notification.Count, 1);
 		const auto same = std::find_if(m_Active.begin(), m_Active.end(), [&notification](const EditorNotification& active)
 		{
-			return active.Level == notification.Level && active.Title == notification.Title && active.Message == notification.Message;
+			if (!notification.Group.empty())
+				return active.Group == notification.Group;
+			return active.Group.empty() && active.Level == notification.Level && active.Title == notification.Title && active.Message == notification.Message;
 		});
 		if (same != m_Active.end())
 		{
-			// Again while it shows: counted, kept longer, and pointing at the latest journal entry.
+			// Again while it shows: counted, kept longer, and pointing at the latest journal entry. One of a group shows the
+			// latest of it.
 			EditorNotification merged = std::move(*same);
 			m_Active.erase(same);
-			merged.Count++;
-			merged.Expires = now + GetLifetime(merged.Level);
-			if (notification.JournalEntry != 0)
+			const uint64_t id = merged.Id;
+			const uint32_t count = merged.Count + notification.Count;
+			if (!notification.Group.empty())
+				merged = std::move(notification);
+			else if (notification.JournalEntry != 0)
 				merged.JournalEntry = notification.JournalEntry;
+			merged.Id = id;
+			merged.Count = count;
+			merged.Expires = now + GetLifetime(merged.Level);
 			m_Active.push_back(std::move(merged));
-			return m_Active.back().Id;
+			return id;
 		}
 		notification.Id = m_NextId++;
-		notification.Count = 1;
 		notification.Expires = now + GetLifetime(notification.Level);
 		m_Active.push_back(std::move(notification));
 		while (m_Active.size() > c_MaxActive)

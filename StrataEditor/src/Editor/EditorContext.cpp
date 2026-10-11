@@ -16,6 +16,7 @@
 #include <Strata/Scene/SceneSerializer.h>
 
 #include <algorithm>
+#include <limits>
 
 namespace Strata
 {
@@ -1095,7 +1096,11 @@ namespace Strata
 			OnScriptBuildFinished();
 
 		if (m_AssetManager)
+		{
 			m_AssetManager->Update();
+			if (m_AssetManager->HasImportFailures())
+				NotifyImportFailures();
+		}
 		if (m_GameExport)
 		{
 			m_GameExport->Update();
@@ -1164,6 +1169,26 @@ namespace Strata
 			case GameExportState::Copying:
 				return;
 		}
+		m_Notifications.Post(std::move(notification));
+	}
+
+	void EditorContext::NotifyImportFailures()
+	{
+		uint64_t count = 0;
+		const std::vector<AssetImportFailure> failures = m_AssetManager->TakeImportFailures(&count);
+		if (failures.empty())
+			return;
+		// One toast however many fail (a project whose files are broken fails many imports as it opens): it counts them and
+		// shows the latest; the Console lists them all.
+		const AssetImportFailure& latest = failures.back();
+		EditorNotification notification;
+		notification.Level = NotificationLevel::Error;
+		notification.Title = "Import failed";
+		notification.Message = fmt::format("{}: {}", latest.Path, latest.Error);
+		notification.Asset = latest.Asset;
+		notification.ShowConsole = true;
+		notification.Group = "AssetImport";
+		notification.Count = static_cast<uint32_t>(std::min<uint64_t>(count, std::numeric_limits<uint32_t>::max()));
 		m_Notifications.Post(std::move(notification));
 	}
 

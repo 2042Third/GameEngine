@@ -135,10 +135,13 @@ namespace Strata::UI
 				return LinkButton(id.c_str(), label);
 			};
 			bool showActivity = false;
+			bool showAsset = false;
 			bool showConsole = false;
 			bool recover = false;
 			if (notification.JournalEntry != 0)
 				showActivity = action(key + ".Activity", "Show in Activity");
+			if (notification.Asset.IsValid())
+				showAsset = action(key + ".Asset", "Show Asset");
 			if (notification.ShowConsole)
 				showConsole = action(key + ".Console", "Show in Console");
 			if (notification.ShowRecovery)
@@ -165,11 +168,13 @@ namespace Strata::UI
 				notifications.KeepAlive(notification.Id);
 			if (showActivity)
 				shell.ShowActivity(notification.JournalEntry);
+			if (showAsset)
+				shell.ShowAsset(notification.Asset);
 			if (showConsole)
 				shell.ShowPanel(consolePanel);
 			if (recover)
 				shell.ShowRecoveryDialog();
-			if (close || showActivity || showConsole || recover)
+			if (close || showActivity || showAsset || showConsole || recover)
 				notifications.Dismiss(notification.Id);
 		}
 		ImGui::End();

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <Strata/Asset/AssetTypes.h>
+
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -21,8 +23,8 @@ namespace Strata
 	};
 
 	// Something the person at the editor should hear about without looking for it: a command of theirs that failed or warned,
-	// a finished export or script build, a script crash, recovery data still on offer. The UI shows notifications as toasts
-	// (UI/Notifications) with the actions they carry.
+	// a finished export or script build, a script crash, an import that failed, recovery data still on offer. The UI shows
+	// notifications as toasts (UI/Notifications) with the actions they carry.
 	struct EditorNotification
 	{
 		uint64_t Id = 0;
@@ -32,13 +34,19 @@ namespace Strata
 		uint64_t JournalEntry = 0; // Show in Activity: the activity journal's entry, when there is one
 		bool ShowConsole = false;  // Show in Console: the log holds more (build output, a crash's details)
 		bool ShowRecovery = false; // Recover...: the recovery dialog
-		uint32_t Count = 1;        // How many times it was posted while it showed (identical ones merge)
+		AssetHandle Asset = UUID::Null(); // Show Asset: the asset it is about, in the Asset tab
+		// Notifications of one group (when not empty) merge into one that shows the latest of them, e.g. one toast for the
+		// imports that fail while a project opens.
+		std::string Group;
+		// How many times it happened while it showed: identical notifications, and those of a group, add up. Posting one that
+		// stands for several sets it (at least 1).
+		uint32_t Count = 1;
 		std::chrono::steady_clock::time_point Expires;
 	};
 
 	// The notifications that show now, newest last: at most c_MaxActive (posting more drops the oldest), each for its
 	// level's lifetime unless the person keeps it (hovers it) or dismisses it. Identical notifications (level, title and
-	// message) merge into one with a count. Costs nothing while empty. Main thread only.
+	// message), and notifications of a group, merge into one with a count. Costs nothing while empty. Main thread only.
 	class EditorNotifications
 	{
 	public:
@@ -47,7 +55,7 @@ namespace Strata
 		static constexpr std::chrono::seconds c_WarningLifetime { 8 };
 		static constexpr std::chrono::seconds c_ErrorLifetime { 12 };
 
-		// Shows a notification (its Id, Count and Expires are set here); returns its id.
+		// Shows a notification (its Id and Expires are set here, its Count added to one it merges with); returns its id.
 		uint64_t Post(EditorNotification notification);
 		void Dismiss(uint64_t id);
 		// The person looks at it: it stays at least `extra` from now.

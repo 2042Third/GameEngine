@@ -369,6 +369,9 @@ namespace Strata
 		void OnScriptBuildFinished();
 		// Posts how the game export ended (EditorNotifications).
 		void NotifyExportFinished(const GameExport& exporter);
+		// Posts the imports that failed while nobody waited for them (EditorAssetManager::TakeImportFailures): one toast for
+		// all of them, showing the latest.
+		void NotifyImportFailures();
 		// Stops play mode (and reports the fault) when the script module crashed. Returns true if it did.
 		bool StopOnScriptFault();
 		// Saves the viewport state and closes the project; with activateBuiltinAssets the built-in asset manager becomes active.

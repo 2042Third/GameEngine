@@ -146,6 +146,7 @@ namespace Strata
 		void ShowPanel(std::string_view panel) override;
 		void ShowActivity(uint64_t entry) override;
 		void ShowRecoveryDialog() override;
+		void ShowAsset(AssetHandle asset) override;
 		EditorEnvironment GetEnvironment() const override;
 		EditorAutomationState GetAutomationState() const override;
 	private:

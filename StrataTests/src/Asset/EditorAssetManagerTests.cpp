@@ -725,6 +725,66 @@ TEST_SUITE("Asset.Editor")
 		}
 	}
 
+	TEST_CASE("Imports that fail while nobody waits for them are reported once; requested ones are their caller's")
+	{
+		RegisterTestModelImporter();
+		ScopedJobSystem jobs;
+		TestProject project("EditorImportFailures");
+		project.Write("Broken.png", { 1, 2, 3, 4, 5, 6, 7, 8 });
+		project.Write("Models/Robot.sttestmodel", { 'r' });
+		Ref<EditorAssetManager> manager = project.Open();
+
+		// The scan's import of the broken file: nobody asked for it.
+		const AssetHandle texture = manager->FindAssetByPath("Broken.png");
+		REQUIRE(texture.IsValid());
+		REQUIRE(manager->HasImportFailures());
+		uint64_t count = 0;
+		const std::vector<AssetImportFailure> failures = manager->TakeImportFailures(&count);
+		REQUIRE(failures.size() == 1);
+		CHECK(count == 1);
+		CHECK(failures[0].Asset == texture);
+		CHECK(failures[0].Path == "Broken.png");
+		CHECK(failures[0].Error == manager->GetImportInfo(texture).Error);
+		CHECK_FALSE(manager->HasImportFailures());
+		CHECK(manager->TakeImportFailures(&count).empty());
+		CHECK(count == 0);
+
+		// Imports a caller asked for report their failures to it: blocking, and in the background.
+		std::string error;
+		CHECK_FALSE(manager->ReimportAsset(texture, &error));
+		CHECK_FALSE(error.empty());
+		const AssetHandle model = manager->FindAssetByPath("Models/Robot.sttestmodel");
+		REQUIRE(manager->SetImportSettingsInBackground(model, { { "Fail", true } }, &error));
+		REQUIRE(Tests::WaitUntil([&]()
+		{
+			manager->Update();
+			return !manager->IsImportPending(model);
+		}, std::chrono::seconds(20)));
+		CHECK(manager->GetImportInfo(model).Error == "Requested failure");
+		CHECK_FALSE(manager->HasImportFailures());
+
+		// A project whose imports run in the background (the editor's way): reported as they are applied, the latest
+		// c_MaxImportFailures of them with how many failed.
+		TestProject many("EditorImportFailuresMany");
+		const size_t brokenCount = EditorAssetManager::c_MaxImportFailures + 3;
+		for (size_t index = 0; index < brokenCount; index++)
+			many.Write(fmt::format("Broken{}.png", index), { 1, 2, 3, 4 });
+		EditorAssetManagerSpecification specification;
+		specification.AssetDirectory = many.Assets;
+		specification.CacheDirectory = many.Cache;
+		specification.WatchFiles = false;
+		Ref<EditorAssetManager> background = CreateRef<EditorAssetManager>(specification);
+		background->Scan(ScanImports::InBackground);
+		REQUIRE(Tests::WaitUntil([&]()
+		{
+			background->Update();
+			return background->GetPendingImportCount() == 0;
+		}, std::chrono::seconds(60)));
+		const std::vector<AssetImportFailure> latest = background->TakeImportFailures(&count);
+		CHECK(count == brokenCount);
+		CHECK(latest.size() == EditorAssetManager::c_MaxImportFailures);
+	}
+
 	TEST_CASE("Background re-imports run on the I/O pool and apply on the next updates")
 	{
 		RegisterTestModelImporter();

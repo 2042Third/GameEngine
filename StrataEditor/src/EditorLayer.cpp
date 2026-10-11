@@ -875,6 +875,16 @@ namespace Strata
 		m_Panels.Focus(EditorPanels::c_Activity);
 	}
 
+	void EditorLayer::ShowAsset(AssetHandle asset)
+	{
+		// Inspecting it brings the Asset tab forward (OnImGuiRender follows the inspection); the Content Browser shows where it
+		// lies without taking the front from it.
+		if (!m_Context.SetInspectedAsset(asset))
+			return;
+		if (ContentBrowserPanel* contentBrowser = m_Panels.Get<ContentBrowserPanel>(EditorPanels::c_ContentBrowser))
+			contentBrowser->RevealAsset(m_Context, asset);
+	}
+
 	void EditorLayer::BuildScripts()
 	{
 		// The builder logs the outcome of builds that ran; requests refused at once (no project, a build already running)

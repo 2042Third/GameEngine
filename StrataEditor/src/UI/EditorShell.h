@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Strata/Asset/AssetTypes.h>
 #include <Strata/Core/UUID.h>
 #include <Strata/Renderer/GraphicsDevice.h>
 
@@ -72,6 +73,8 @@ namespace Strata
 		virtual void ShowActivity(uint64_t entry) = 0;
 		// The Recover Unsaved Changes dialog (RecoveryDialog).
 		virtual void ShowRecoveryDialog() = 0;
+		// An asset in the Asset tab, which comes forward, and in the Content Browser (e.g. a toast's Show Asset).
+		virtual void ShowAsset(AssetHandle asset) = 0;
 
 		virtual EditorEnvironment GetEnvironment() const = 0;
 		virtual EditorAutomationState GetAutomationState() const = 0;

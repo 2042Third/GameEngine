@@ -1370,15 +1370,25 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   `--screenshot`, the end of the command script requests the capture of that frame and the capture closes the editor
   (`EditorLayer::TakeScreenshot`), so the screenshot shows how the script ended, also when it ended before the first frame.
 - **Notifications** (`EditorNotifications.h`, `UI/Notifications.h`). The context keeps what the person should hear about
-  (`EditorNotification`: level, title, message, the journal entry, whether the Console or the recovery dialog has more):
-  at most `c_MaxActive` (4), identical ones merged with a count, each expiring after its level's lifetime (`Expire`,
+  (`EditorNotification`: level, title, message, the journal entry, the asset, whether the Console or the recovery dialog
+  has more): at most `c_MaxActive` (4), identical ones merged with a count, and those of a `Group` merged into one that
+  shows the latest (a post may stand for several: `Count`), each expiring after its level's lifetime (`Expire`,
   `KeepAlive` while hovered). Feeds: `NotifyCommandOutcome` for commands of the UI (`RunEditorCommand`, the runner when
   the origin is `CommandSource::UI`: failures and warnings, with `EditorCommandResult::JournalId`, which `Execute` now sets
   for every result), `EditorContext::BuildScripts` and `OnScriptBuildFinished`, `StopOnScriptFault`, the end of a game
-  export (`NotifyExportFinished`, once per export: an export that does not start leaves the announced one) and
-  `EditorLayer` when the recovery dialog closes with changes still on offer. `UI::DrawNotifications` draws them as toasts
-  in one window at the bottom right of the work area, above the status bar, kept in front without being focused
-  (`BringWindowToDisplayFront`, `NoFocusOnAppearing`); it returns at once while there are none.
+  export (`NotifyExportFinished`, once per export: an export that does not start leaves the announced one), imports that
+  failed while nobody waited for them (`NotifyImportFailures`, below) and `EditorLayer` when the recovery dialog closes
+  with changes still on offer. `UI::DrawNotifications` draws them as toasts in one window at the bottom right of the work
+  area, above the status bar, kept in front without being focused (`BringWindowToDisplayFront`, `NoFocusOnAppearing`); it
+  returns at once while there are none. Their actions go through the `EditorShell`: Show in Activity, Show Asset
+  (`ShowAsset`: the Asset tab inspects it and the Content Browser reveals it), Show in Console and Recover.
+- **Import failures** (`EditorAssetManager::TakeImportFailures`). An import that fails while a caller waits for its
+  outcome (`ReimportAsset`, `SetImportSettingsInBackground`, `ReimportAssetInBackground`: the source's `ImportAwaited`)
+  is that caller's to report, e.g. `asset.reimport` fails with it. The others, the scan's imports as a project opens and
+  those of files changed on disk, are reported to nobody but the log: the manager keeps the latest `c_MaxImportFailures`
+  (64) of them and how many failed, and `EditorContext::Update` takes them after the manager's update and posts one
+  toast for all of them (group `AssetImport`: "Import failed", the latest path and error, the count, Show Asset and Show
+  in Console). Checking for them costs a comparison per frame.
 - **Activity journal** (`CommandJournal.h`). `EditorCommandRegistry::Execute` records every command it runs in the
   context's journal: its origin (`CommandOrigin`: UI from `RunEditorCommand` and the panels, Automation with the client's
   name from `EditorAutomation`, CommandScript from `EditorCommandScript`, Internal for code and for commands that commands

@@ -14,12 +14,17 @@
 #include "UI/ItemProbe.h"
 #include "UI/Theme.h"
 
+#include <Strata/Core/FileSystem.h>
 #include <Strata/Core/Log.h>
+#include <Strata/Core/Timestep.h>
 
 #include <nlohmann/json.hpp>
 
 #include <chrono>
+#include <filesystem>
+#include <optional>
 #include <string>
+#include <vector>
 
 // Notifications (EditorNotifications) and their toasts (UI/Notifications).
 
@@ -84,6 +89,64 @@ TEST_SUITE("Editor.Notifications")
 		notifications.Dismiss(kept);
 		CHECK(notifications.IsEmpty());
 		notifications.Dismiss(info); // Gone already: nothing happens
+		CHECK(notifications.IsEmpty());
+	}
+
+	TEST_CASE("Notifications of a group merge into one that shows the latest and counts them all")
+	{
+		EditorNotifications notifications;
+		EditorNotification first = Make(NotificationLevel::Error, "Import failed", "A.png: broken");
+		first.Group = "AssetImport";
+		first.Asset = UUID(1);
+		const uint64_t id = notifications.Post(first);
+		// A post may stand for several occurrences.
+		EditorNotification batch = Make(NotificationLevel::Error, "Import failed", "B.png: broken too");
+		batch.Group = "AssetImport";
+		batch.Asset = UUID(2);
+		batch.Count = 3;
+		CHECK(notifications.Post(batch) == id);
+		REQUIRE(notifications.GetActive().size() == 1);
+		const EditorNotification& merged = notifications.GetActive()[0];
+		CHECK(merged.Count == 4);
+		CHECK(merged.Message == "B.png: broken too");
+		CHECK(merged.Asset == UUID(2));
+		// Outside the group, the same text is another notification.
+		notifications.Post(Make(NotificationLevel::Error, "Import failed", "B.png: broken too"));
+		CHECK(notifications.GetActive().size() == 2);
+	}
+
+	TEST_CASE("Imports that fail without a caller waiting post one toast that counts them; requested ones post none")
+	{
+		const std::filesystem::path root = CreateTemporaryDirectory("NotificationImports");
+		EditorContextSpecification specification;
+		specification.WatchAssetFiles = false;
+		specification.HotReloadScripts = false;
+		EditorContext context(specification);
+		EditorCommandRegistry commands;
+		REQUIRE(commands.Execute(context, "project.create", { { "directory", FileSystem::ToUTF8(root / "Game") }, { "name", "Game" } }).Success);
+		REQUIRE(FileSystem::WriteBytes(root / "Game" / "Assets" / "First.png", std::vector<uint8_t> { 1, 2, 3, 4 }));
+		REQUIRE(FileSystem::WriteBytes(root / "Game" / "Assets" / "Second.png", std::vector<uint8_t> { 5, 6, 7, 8 }));
+		REQUIRE(commands.Execute(context, "project.close").Success);
+		// The scan of the project as it opens imports the broken files.
+		REQUIRE(commands.Execute(context, "project.open", { { "path", FileSystem::ToUTF8(root / "Game") } }).Success);
+		context.Update(Timestep(1.0f / 60.0f));
+		EditorNotifications& notifications = context.GetNotifications();
+		REQUIRE(notifications.GetActive().size() == 1);
+		const EditorNotification& toast = notifications.GetActive()[0];
+		CHECK(toast.Level == NotificationLevel::Error);
+		CHECK(toast.Title == "Import failed");
+		CHECK(toast.Count == 2);
+		CHECK(toast.ShowConsole);
+		REQUIRE(toast.Asset.IsValid());
+		const std::optional<AssetMetadata> metadata = context.GetAssetManager()->GetMetadata(toast.Asset);
+		REQUIRE(metadata.has_value());
+		CHECK(toast.Message.rfind(metadata->Path + ": ", 0) == 0);
+
+		// A re-import asked for by a command reports its failure to the command (and, from the UI, through its toast).
+		notifications.Clear();
+		const EditorCommandResult reimport = Tests::CompleteCommand(context, commands.Execute(context, "asset.reimport", { { "asset", "First.png" } }));
+		CHECK_FALSE(reimport.Success);
+		context.Update(Timestep(1.0f / 60.0f));
 		CHECK(notifications.IsEmpty());
 	}
 
@@ -171,5 +234,26 @@ TEST_SUITE("Editor.UI.Notifications")
 		CHECK(editor.Layer->GetPanels().IsOpen(EditorPanels::c_Console));
 		CHECK_FALSE(UI::ItemProbe::Find("Toast.0").has_value());
 		CHECK(editor.Context().GetNotifications().IsEmpty());
+	}
+
+	TEST_CASE("An import that fails as the project opens shows a toast that leads to the asset")
+	{
+		EditorOptions options = WithFeatureProject("NotificationImportToast");
+		REQUIRE(FileSystem::WriteBytes(options.ProjectPath.parent_path() / "Assets" / "Broken.png", std::vector<uint8_t> { 1, 2, 3, 4 }));
+		HarnessEditor editor({}, options);
+		editor.Frames(2);
+		REQUIRE(editor.Context().HasProject());
+		const std::optional<UI::ItemProbe::Item> toast = UI::ItemProbe::Find("Toast.0");
+		REQUIRE(toast.has_value());
+		CHECK(toast->Text.rfind("Import failed\nBroken.png: ", 0) == 0);
+		CHECK(toast->Color == UI::ToColorU32(UI::GetThemeColors().Error));
+		const AssetHandle broken = editor.Context().GetAssetManager()->FindAssetByPath("Broken.png");
+		REQUIRE(broken.IsValid());
+
+		// Show Asset: the Asset tab inspects it (with its import error); the toast goes.
+		REQUIRE(editor.Click("Toast.0.Asset"));
+		editor.Frames(2);
+		CHECK(editor.Context().GetInspectedAsset() == broken);
+		CHECK_FALSE(UI::ItemProbe::Find("Toast.0").has_value());
 	}
 }
