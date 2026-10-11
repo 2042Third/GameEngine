@@ -243,8 +243,9 @@ namespace Strata
 			if (!m_Viewport.Save(GetViewportStateFile(), &error))
 				ST_WARN("The viewport state was not saved: {}", error);
 		}
-		// Unsaved changes of the scene that goes reach the project's recovery directory before it closes.
-		ResetScene(CreateRef<Scene>(), UUID::Null());
+		// Unsaved changes of the scene that goes reach the project's recovery directory before it closes. Without the built-in
+		// assets to fall back to, the editor itself goes away, and nobody is left to tell.
+		ResetScene(CreateRef<Scene>(), UUID::Null(), activateBuiltinAssets ? DiscardNotice::ProjectCloses : DiscardNotice::None);
 		if (hadProject)
 			m_Recovery.SetProject({}, {});
 		InspectEntities(); // The project's assets go with it
@@ -274,12 +275,15 @@ namespace Strata
 	// Scene
 	////////////////////////////////////////////////////////////////////////////////
 
-	void EditorContext::ResetScene(Ref<Scene> scene, AssetHandle handle)
+	void EditorContext::ResetScene(Ref<Scene> scene, AssetHandle handle, DiscardNotice notice)
 	{
 		Stop();
 		// Unsaved changes of the scene that goes are written as recovery data first, so nothing is lost whatever replaced
 		// it (a forced command, the unsaved-changes dialog's Don't Save, closing the editor).
-		m_Recovery.EndScene(*m_EditScene, IsSceneModified());
+		std::string lostReason;
+		const DiscardOutcome discarded = m_Recovery.EndScene(*m_EditScene, IsSceneModified(), &lostReason);
+		if (discarded != DiscardOutcome::Unmodified && notice != DiscardNotice::None)
+			NotifyDiscardedChanges(m_EditScene->GetName(), discarded, lostReason, notice);
 		// The scene that goes keeps its view for when it opens again.
 		m_Viewport.StoreSceneCamera(m_SceneHandle);
 		m_PendingFrame.reset();
@@ -847,6 +851,44 @@ namespace Strata
 			*outApplied = ids.size();
 		ST_INFO("Recovered the unsaved changes of '{}' ({} entities); undo returns to the saved scene", entry.SceneName, ids.size());
 		return true;
+	}
+
+	void EditorContext::NotifyDiscardedChanges(const std::string& sceneName, DiscardOutcome outcome, const std::string& reason, DiscardNotice notice)
+	{
+		// Who discarded them: the command that runs now, from its top (a command another one runs acts for that one). Without
+		// one, or from the interface, the person answered the unsaved-changes question themselves.
+		const CommandJournalEntry* command = m_Journal->Find(m_Journal->GetOutermostRunningId());
+		const bool byPerson = !command || command->Source == CommandSource::UI || command->Source == CommandSource::Internal;
+		// The person knows what they chose; when nothing could be kept there is nothing to offer them either.
+		if (byPerson && outcome == DiscardOutcome::Lost)
+			return;
+
+		EditorNotification notification;
+		notification.Level = byPerson ? NotificationLevel::Info : NotificationLevel::Warning;
+		if (byPerson)
+			notification.Title = "Unsaved changes discarded";
+		else if (command->Source == CommandSource::Automation)
+			notification.Title = fmt::format("{} discarded unsaved changes", command->Client.empty() ? std::string("An agent") : command->Client);
+		else
+			notification.Title = "A command script discarded unsaved changes";
+		const std::string what = byPerson ? fmt::format("The changes to '{}'", sceneName) : fmt::format("{} replaced the scene '{}'. Its changes", command->Command, sceneName);
+		if (outcome == DiscardOutcome::Lost)
+		{
+			notification.Message = fmt::format("{} are gone: {}.", what, reason);
+		}
+		else if (notice == DiscardNotice::ProjectCloses && m_Project)
+		{
+			notification.Message = fmt::format("{} are kept as recovery data of the project '{}', which offers them when it opens again.", what,
+				m_Project->GetConfig().Name);
+		}
+		else
+		{
+			notification.Message = fmt::format("{} are kept as recovery data.", what);
+			notification.ShowRecovery = true;
+		}
+		if (command)
+			notification.JournalEntry = command->Id;
+		m_Notifications.Post(std::move(notification));
 	}
 
 	////////////////////////////////////////////////////////////////////////////////

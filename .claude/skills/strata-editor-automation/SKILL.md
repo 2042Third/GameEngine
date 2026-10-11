@@ -157,11 +157,13 @@ editor started with `--no-gpu` (use `--headless`):
   `project.close`, `project.openSample` and `editor.quit` fail (`-32005`, naming the scene) while the edited scene has
   unsaved changes (`editor.status` `scene.modified`), also while a copy of it plays. Save first (`scene.save`, or
   `scene.saveAs` for a scene never saved), or pass `"force": true` when discarding them is what you want; their results
-  report `discardedChanges`. A person may be editing beside you: never force away work you did not make.
+  report `discardedChanges`. A person may be editing beside you: never force away work you did not make. The person sees
+  a toast naming your client ("Claude Code discarded unsaved changes") with a Recover button.
 - **Recovery**: the editor journals the edited scene's unsaved changes in `.strata/Recovery` (written about 2 s after
   edits stop; `editor.status` `recovery.journal` has `lastWrite` and `pending`), and even forced discards are kept
-  there. When a project opens with changes an editor left behind, `scene.recoveryStatus` lists them; `scene.recover
-  {"scene": "<id>", "action": "apply"}` reopens the scene with them as one undo step (the scene stays unsaved: save
+  there and listed at once (the newest 8 discards stay on offer, older ones move to `Recovery/Discarded`; what a crash
+  left always stays). When a project opens with changes an editor left behind, `scene.recoveryStatus` lists them;
+  `scene.recover {"scene": "<id>", "action": "apply"}` reopens the scene with them as one undo step (the scene stays unsaved: save
   it), `"discard"` drops them. Ask the person before recovering or discarding their changes.
 - **Play mode**: `play.start` runs a copy of the scene. Changes made while playing apply to that copy, carry a
   `warning` in the result, and are discarded by `play.stop`. Undo and redo are not available while playing;

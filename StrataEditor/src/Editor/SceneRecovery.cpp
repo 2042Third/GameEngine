@@ -232,6 +232,47 @@ namespace Strata
 				FileSystem::Remove(files[index].second);
 		}
 
+		// Moves a recovery file (by its id) to Recovery/Discarded, where it is not offered, and keeps the newest files there.
+		bool MoveToDiscarded(const std::filesystem::path& directory, const std::string& id)
+		{
+			const std::filesystem::path discarded = directory / SceneRecovery::c_DiscardedDirectoryName;
+			const std::filesystem::path file = directory / FileSystem::FromUTF8(id + SceneRecovery::c_FileExtension);
+			if (!FileSystem::CreateDirectories(discarded) || !FileSystem::Rename(file, FileSystem::GetUniquePath(discarded / file.filename())))
+			{
+				ST_WARN("Recovery: '{}' could not be moved to '{}'", FileSystem::ToUTF8(file), FileSystem::ToUTF8(discarded));
+				return false;
+			}
+			PruneOldestFiles(discarded, SceneRecovery::c_MaxDiscardedFiles);
+			return true;
+		}
+
+		// Of the changes discarded on purpose, the newest `keep` stay on offer (those that still apply first); the others
+		// move to Recovery/Discarded. What a crash left stays whatever its number.
+		void RetireDiscards(const std::filesystem::path& directory, std::vector<RecoveryEntry>& entries, size_t keep)
+		{
+			std::vector<const RecoveryEntry*> discards;
+			for (const RecoveryEntry& entry : entries)
+			{
+				if (entry.Discarded)
+					discards.push_back(&entry);
+			}
+			if (discards.size() <= keep)
+				return;
+			std::stable_sort(discards.begin(), discards.end(), [](const RecoveryEntry* a, const RecoveryEntry* b)
+			{
+				if (a->Applicable != b->Applicable)
+					return a->Applicable;
+				return a->Time > b->Time;
+			});
+			std::unordered_set<std::string> retired;
+			for (size_t index = keep; index < discards.size(); index++)
+			{
+				if (MoveToDiscarded(directory, discards[index]->Id))
+					retired.insert(discards[index]->Id);
+			}
+			std::erase_if(entries, [&retired](const RecoveryEntry& entry) { return retired.contains(entry.Id); });
+		}
+
 		// Every entity of a scene, in hierarchy order: a complete journal's first step.
 		Ref<const std::vector<EntityState>> CaptureScene(const Scene& scene)
 		{
@@ -302,6 +343,7 @@ namespace Strata
 		m_Directory = recoveryDirectory;
 		m_AssetDirectory = assetDirectory;
 		m_Scan.reset();
+		m_RescanDue = false;
 		m_Entries.clear();
 		m_EntriesVersion++;
 		if (!IsActive())
@@ -338,19 +380,36 @@ namespace Strata
 		return true;
 	}
 
-	void SceneRecovery::EndScene(const Scene& scene, bool modified)
+	DiscardOutcome SceneRecovery::EndScene(const Scene& scene, bool modified, std::string* outReason)
 	{
+		DiscardOutcome outcome = modified ? DiscardOutcome::Lost : DiscardOutcome::Unmodified;
 		if (IsActive() && m_Journal)
 		{
-			// Written again even when nothing changed since the last write: marked discarded, other sessions may offer it.
-			if (modified && !Write(scene, true, true))
+			// Written again even when nothing changed since the last write: marked discarded, it is offered from now on.
+			if (modified && Write(scene, true, true))
+			{
+				outcome = DiscardOutcome::Kept;
+				m_RescanDue = true;
+			}
+			else if (modified)
+			{
 				ST_WARN("The unsaved changes of '{}' were discarded without recovery data: {}", scene.GetName(), m_Skipped);
-			else if (!modified && m_Changed)
+				if (outReason)
+					*outReason = fmt::format("they could not be journaled: {}", m_Skipped);
+			}
+			else if (m_Changed)
+			{
 				Write(scene, false, false);
+			}
+		}
+		else if (modified && outReason)
+		{
+			*outReason = IsActive() ? "the scene's changes were not journaled" : "no project is open to keep them in";
 		}
 		m_Journal.reset();
 		m_PendingSteps.clear();
 		m_Changed = false;
+		return outcome;
 	}
 
 	void SceneRecovery::BeginScene(const Scene& scene, AssetHandle handle, const std::filesystem::path& sceneFile, const std::string& scenePath)
@@ -375,8 +434,8 @@ namespace Strata
 			if (scene.GetEntityCount() > c_MaxSnapshotEntities)
 			{
 				m_Unjournaled = true;
-				m_Skipped = fmt::format("its changes are not journaled: it was never saved and started with {} entities, more than the {} a snapshot "
-					"may hold without holding up a frame; save it (scene.saveAs) to protect them", scene.GetEntityCount(), c_MaxSnapshotEntities);
+				m_Skipped = fmt::format("it was never saved and started with {} entities, more than the {} a snapshot may hold without holding up a "
+					"frame", scene.GetEntityCount(), c_MaxSnapshotEntities);
 			}
 			else
 			{
@@ -458,6 +517,12 @@ namespace Strata
 		PumpOperations();
 		if (m_Scan && m_Scan->Done.load(std::memory_order_acquire))
 			FinishScan();
+		// Changes discarded since the last scan are offered at once: a scan queued now runs after their write.
+		if (m_RescanDue && IsActive() && !m_Scan)
+		{
+			m_RescanDue = false;
+			Scan();
+		}
 		if (!IsActive() || !m_Journal || !m_Changed)
 			return;
 		const auto now = std::chrono::steady_clock::now();
@@ -505,8 +570,8 @@ namespace Strata
 			if (count > c_MaxSnapshotEntities)
 			{
 				m_Unjournaled = true;
-				m_Skipped = fmt::format("its changes are not journaled: an edit changed it in a way only a snapshot captures, and it has {} entities, "
-					"more than the {} a snapshot may hold without holding up a frame; save it to protect them", count, c_MaxSnapshotEntities);
+				m_Skipped = fmt::format("an edit changed it in a way only a snapshot captures, and it has {} entities, more than the {} a snapshot "
+					"may hold without holding up a frame", count, c_MaxSnapshotEntities);
 				return false;
 			}
 			snapshot = CaptureScene(scene);
@@ -656,6 +721,8 @@ namespace Strata
 		scan->Directory = m_Directory;
 		scan->AssetDirectory = m_AssetDirectory;
 		m_Scan = scan;
+		// Queued after every write asked for so far, discards included.
+		m_RescanDue = false;
 		Enqueue([scan, processId = m_ProcessId, processStartTime = m_ProcessStartTime]()
 		{
 			std::error_code error;
@@ -695,6 +762,7 @@ namespace Strata
 				}
 				scan->Entries.push_back(std::move(entry));
 			}
+			RetireDiscards(scan->Directory, scan->Entries, c_MaxOfferedDiscards);
 			std::sort(scan->Entries.begin(), scan->Entries.end(), [](const RecoveryEntry& a, const RecoveryEntry& b) { return a.Time > b.Time; });
 			scan->Done.store(true, std::memory_order_release);
 		});
@@ -738,17 +806,7 @@ namespace Strata
 		}
 		m_Entries.erase(it);
 		m_EntriesVersion++;
-		Enqueue([directory = m_Directory, id]()
-		{
-			const std::filesystem::path discarded = directory / c_DiscardedDirectoryName;
-			const std::filesystem::path file = directory / FileSystem::FromUTF8(id + c_FileExtension);
-			if (!FileSystem::CreateDirectories(discarded) || !FileSystem::Rename(file, FileSystem::GetUniquePath(discarded / file.filename())))
-			{
-				ST_WARN("Recovery: '{}' could not be moved to '{}'", FileSystem::ToUTF8(file), FileSystem::ToUTF8(discarded));
-				return;
-			}
-			PruneOldestFiles(discarded, c_MaxDiscardedFiles);
-		});
+		Enqueue([directory = m_Directory, id]() { MoveToDiscarded(directory, id); });
 		return true;
 	}
 
@@ -843,7 +901,11 @@ namespace Strata
 		status.LastWrite = m_LastWriteTime->load(std::memory_order_acquire);
 		status.Pending = m_Changed;
 		status.Busy = IsBusy();
-		status.Skipped = m_Skipped;
+		if (!m_Skipped.empty())
+		{
+			status.Skipped = fmt::format("its changes are not journaled: {}; save it to protect them (scene.save, or scene.saveAs for a scene never "
+				"saved)", m_Skipped);
+		}
 		return status;
 	}
 

@@ -1377,9 +1377,13 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   the origin is `CommandSource::UI`: failures and warnings, with `EditorCommandResult::JournalId`, which `Execute` now sets
   for every result), `EditorContext::BuildScripts` and `OnScriptBuildFinished`, `StopOnScriptFault`, the end of a game
   export (`NotifyExportFinished`, once per export: an export that does not start leaves the announced one), imports that
-  failed while nobody waited for them (`NotifyImportFailures`, below) and `EditorLayer` when the recovery dialog closes
-  with changes still on offer. `UI::DrawNotifications` draws them as toasts in one window at the bottom right of the work
-  area, above the status bar, kept in front without being focused (`BringWindowToDisplayFront`, `NoFocusOnAppearing`); it
+  failed while nobody waited for them (`NotifyImportFailures`, below), unsaved changes that a scene replacement discarded
+  (`NotifyDiscardedChanges`, from `ResetScene`: who discarded them, from the command that runs now,
+  `CommandJournal::GetOutermostRunningId`, which a deferred command is during its polls too; a warning naming the agent or
+  the command script, information when the person answered Don't Save; Recover while the project stays open, where they
+  are kept when it closes, and nothing when the person discarded what could not be kept) and `EditorLayer` when the
+  recovery dialog closes with changes still on offer. `UI::DrawNotifications` draws them as toasts in one window at the
+  bottom right of the work area, above the status bar, kept in front without being focused (`BringWindowToDisplayFront`, `NoFocusOnAppearing`); it
   returns at once while there are none. Their actions go through the `EditorShell`: Show in Activity, Show Asset
   (`ShowAsset`: the Asset tab inspects it and the Content Browser reveals it), Show in Console and Recover.
 - **Import failures** (`EditorAssetManager::TakeImportFailures`). An import that fails while a caller waits for its
@@ -1480,7 +1484,14 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   entities; otherwise the journal is skipped until the scene is saved and `editor.status` (the `recovery` section's
   `journal.skipped`) says why. Whenever the edited scene is
   replaced with unsaved changes (`EditorContext::ResetScene`: a forced command, Don't Save, closing the editor) the
-  journal is written at once and marked discarded, so nothing is lost even then. File operations (writes, removals,
+  journal is written at once and marked discarded, so nothing is lost even then (`EndScene` says whether it was kept:
+  `DiscardOutcome`), the directory is scanned again after that write, so the changes are offered at once (File > Recover
+  Unsaved Changes, `scene.recoveryStatus`), and the person is told who discarded them (Notifications, above). An agent that
+  discards scene after scene must not bury the person in offers: a scan offers the newest `c_MaxOfferedDiscards` (8)
+  changes discarded on purpose, those that still apply first, and moves the others to `Recovery/Discarded`; what a crash
+  left is never moved. The dialog lists more than four entries in a scrolling list of a fixed height (an auto-sized one
+  would measure itself only after the dialog was centered for its first size), and `UI::BeginModal` moves an open dialog
+  that grew past the window back inside it. File operations (writes, removals,
   scans, reads) run one at a time on I/O jobs in the order they were asked for, so a removal after a save is never
   overtaken by an earlier write; the editor waits for them only when it closes. Opening a project scans the directory:
   a file whose owner process still runs (its id with the start time recorded, since ids are reused, also this process's)
@@ -1491,8 +1502,8 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   `scene.recover {action: "apply"}` reads the file on an I/O job, opens the scene (a scene never saved: a new one of its
   name) and applies the steps as one undo step back to the saved state (`SceneRecoveryAction`, also the settings); the
   scene stays modified, its own journal is written at once and the applied file removed after that write. `"discard"`
-  moves the file to `Recovery/Discarded` (the newest 20 are kept). Measurements on the reference machine (Release,
-  `Perf.Editor.RecoveryWriteMaxFrame100k`, `RecoverySnapshotMaxEntities`): on a saved scene of 100,000 entities, a
+  moves the file to `Recovery/Discarded` (the newest 20 are kept); the dialog's Discard All does that for every entry.
+  Measurements on the reference machine (Release, `Perf.Editor.RecoveryWriteMaxFrame100k`, `RecoverySnapshotMaxEntities`): on a saved scene of 100,000 entities, a
   frame that asks for the write of an edit of 10,000 of them costs 0.04 ms above an idle frame (handing over references
   and the settings), the I/O job writes those 10,000 states in 15 to 30 ms and a journal of all 100,000 in about 180 ms
   while frames stay at 0.05 ms, so writing every 10 s keeps an I/O thread at most 2% busy even for edits of the whole

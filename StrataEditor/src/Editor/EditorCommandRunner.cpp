@@ -227,6 +227,8 @@ namespace Strata
 		CommandJournal& journal = context.GetJournal();
 		journal.NoteEditsOutsideCommands(context.GetUndoStack());
 		const uint64_t records = context.GetUndoStack().GetRecordCount();
+		// While its poll runs the command is the running one again: what the poll does is known to be its work.
+		journal.Resume(journalId);
 		std::optional<EditorCommandResult> finished;
 		try
 		{
@@ -237,6 +239,7 @@ namespace Strata
 			// Engine code does not throw; this guards third-party code (JSON access) used by poll functions.
 			finished = EditorCommandResult::Fail(fmt::format("Command failed: {}", exception.what()), EditorCommandError::Internal);
 		}
+		journal.Suspend(journalId);
 		journal.NotePoll(journalId);
 		journal.NoteUndo(journalId, context.GetUndoStack(), records);
 		if (!finished)

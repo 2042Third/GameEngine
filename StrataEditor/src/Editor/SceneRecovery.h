@@ -54,6 +54,14 @@ namespace Strata
 		std::vector<std::vector<EntityState>> Steps;
 	};
 
+	// What became of the unsaved changes of a scene that went away (SceneRecovery::EndScene).
+	enum class DiscardOutcome : uint8_t
+	{
+		Unmodified = 0, // It had none
+		Kept,           // Written as recovery data marked discarded: offered until recovered or discarded
+		Lost            // Not kept: no project to keep them in, or changes that are not journaled (the reason says why)
+	};
+
 	// What the journal of the edited scene does (editor.status "recovery", scene.recoveryStatus).
 	struct RecoveryJournalStatus
 	{
@@ -104,7 +112,10 @@ namespace Strata
 	// next write. Snapshots are captured on the main thread, so only of scenes with at most c_MaxSnapshotEntities (otherwise
 	// the changes are not journaled until the scene is saved, and the status says so). When the edited scene is replaced
 	// (another scene or project opens, the editor closes) with unsaved changes, they are written at once and marked
-	// discarded, so even a forced discard loses nothing.
+	// discarded, so even a forced discard loses nothing, and the project's entries are read again after that write, so they
+	// are offered at once (File > Recover Unsaved Changes, scene.recoveryStatus). Of the changes discarded on purpose, a scan
+	// offers the newest c_MaxOfferedDiscards (those that still apply first) and moves the others to Recovery/Discarded, so
+	// that an agent discarding scene after scene does not bury the person in offers; what a crash left is never moved.
 	//
 	// File operations run one at a time on I/O jobs, in the order they were asked for, so a scan sees every write asked
 	// for before it and a removal after a save is never overtaken by an earlier write. A scan lists the project's recovery
@@ -122,6 +133,8 @@ namespace Strata
 		static constexpr size_t c_MaxSnapshotEntities = 256;
 		// Discarded recovery files kept in Recovery/Discarded (the oldest go).
 		static constexpr size_t c_MaxDiscardedFiles = 20;
+		// Changes discarded on purpose that a scan offers (the newest; the others move to Recovery/Discarded).
+		static constexpr size_t c_MaxOfferedDiscards = 8;
 
 		// Problems the editor knows of a recovery entry beyond its scene file (e.g. the scene asset is gone): empty when it
 		// applies. Runs on the main thread when a scan finishes.
@@ -141,8 +154,10 @@ namespace Strata
 		const std::filesystem::path& GetDirectory() const { return m_Directory; }
 		void SetEntryValidator(EntryValidator validator) { m_Validator = std::move(validator); }
 
-		// The edited scene goes away: with unsaved changes they are written now, marked discarded.
-		void EndScene(const Scene& scene, bool modified);
+		// The edited scene goes away: with unsaved changes they are written now, marked discarded, and the entries are read
+		// again after that write (Update starts the scan). Returns what became of the changes; outReason says why changes
+		// were Lost.
+		DiscardOutcome EndScene(const Scene& scene, bool modified, std::string* outReason = nullptr);
 		// A journal starts for the scene that is now edited (sceneFile: its file, absolute, and scenePath relative to the
 		// asset directory; both empty for a scene that was never saved, whose entities the journal captures now).
 		void BeginScene(const Scene& scene, AssetHandle handle, const std::filesystem::path& sceneFile, const std::string& scenePath);
@@ -153,7 +168,8 @@ namespace Strata
 		// UndoStackObserver: the edited scene's undo stack applied a step.
 		void OnApplied(const EditorAction& action, bool undone) override;
 
-		// Once per frame: writes the journal when it is due, starts the next file operation and takes the results of scans.
+		// Once per frame: writes the journal when it is due, starts the next file operation, takes the results of scans and
+		// starts the scan a discard asked for.
 		void Update(const Scene& scene, bool modified);
 		// Writes the journal at once if it changed, whatever the timing. Returns whether a write (or the removal of the file
 		// of an unmodified scene) was asked for.
@@ -259,6 +275,7 @@ namespace Strata
 		bool m_Changed = false;                  // Since the last write
 		bool m_NeedsSnapshot = false;            // The next write captures every entity (a step of kind Other)
 		bool m_Unjournaled = false;              // The scene's changes cannot be journaled until it is saved (m_Skipped says why)
+		bool m_RescanDue = false;                // A discard was written: the entries are read again (Update)
 		std::string m_Skipped;                   // Why the current changes are not journaled
 		std::chrono::steady_clock::time_point m_LastChange;
 		std::chrono::steady_clock::time_point m_LastWrite;

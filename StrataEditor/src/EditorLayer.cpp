@@ -469,8 +469,10 @@ namespace Strata
 		// Started for a tool that has gone away (--idle-timeout): nobody is left to quit it.
 		if (m_Automation.HasIdledOut() && m_Host->IsRunning())
 		{
-			ST_WARN("No automation client for {} s (--idle-timeout): closing the editor{}", m_Options.IdleTimeout.count(),
-				m_Context.IsSceneModified() ? " and discarding unsaved scene changes" : "");
+			const char* discarding = !m_Context.IsSceneModified() ? ""
+				: m_Context.GetRecovery().IsActive() ? " and discarding unsaved scene changes (kept as recovery data of the project)"
+				: " and discarding unsaved scene changes";
+			ST_WARN("No automation client for {} s (--idle-timeout): closing the editor{}", m_Options.IdleTimeout.count(), discarding);
 			m_Host->Close();
 		}
 		const bool lastFrame = m_Options.MaxFrames && m_Host->GetFrameCount() + 1 == *m_Options.MaxFrames;

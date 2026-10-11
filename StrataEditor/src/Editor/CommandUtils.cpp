@@ -181,7 +181,8 @@ namespace Strata
 		nlohmann::json ForceSchema()
 		{
 			return BoolSchema("Go on although the edited scene has unsaved changes, discarding them (default false: the command fails instead). "
-				"Discarded changes are kept as recovery data of the project (scene.recoveryStatus)");
+				"Discarded changes are kept as recovery data of the project (scene.recoveryStatus), and the person at the editor is told who "
+				"discarded them");
 		}
 
 		std::optional<EditorCommandResult> CheckUnsavedChanges(const EditorContext& context, bool force, std::string_view action)

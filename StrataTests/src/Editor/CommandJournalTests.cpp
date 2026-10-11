@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <chrono>
 #include <future>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -172,6 +173,36 @@ TEST_SUITE("Editor.Journal")
 		REQUIRE(result.IsPending());
 		result = Tests::CompleteCommand(harness.Context, std::move(result));
 		CHECK(harness.Latest().Status == CommandStatus::Succeeded);
+	}
+
+	TEST_CASE("A deferred command's poll runs as that command: what it does is known to be its work")
+	{
+		JournalHarness harness;
+		uint64_t runningDuringPoll = 0;
+		harness.Commands.Register({ "test.deferredNested", "Test command whose poll creates an entity through entity.create.", CommandUtils::ObjectSchema({}),
+			[&harness, &runningDuringPoll](EditorContext&, const nlohmann::json&)
+			{
+				return EditorCommandResult::Defer([&harness, &runningDuringPoll](EditorContext& context) -> std::optional<EditorCommandResult>
+				{
+					runningDuringPoll = context.GetJournal().GetOutermostRunningId();
+					return harness.Commands.Execute(context, "entity.create", { { "name", "Inner" } });
+				});
+			}, EditorCommandKind::Edit });
+
+		bool done = false;
+		REQUIRE(harness.Runner.Run(harness.Context, harness.Commands, "test.deferredNested", nlohmann::json::object(),
+			[&done](const EditorCommandResult&) { done = true; }, CommandOrigin { CommandSource::Automation, "Claude Code" }));
+		CHECK(harness.Journal().GetOutermostRunningId() == 0); // Between polls nothing runs
+		REQUIRE(harness.FramesUntil([&done]() { return done; }));
+		const std::vector<const CommandJournalEntry*> outer = harness.Entries("test.deferredNested");
+		REQUIRE(outer.size() == 1);
+		CHECK(runningDuringPoll == outer[0]->Id);
+		CHECK(harness.Journal().GetOutermostRunningId() == 0);
+		const CommandJournalEntry& inner = harness.Latest();
+		CHECK(inner.Command == "entity.create");
+		CHECK(inner.Parent == outer[0]->Id);
+		CHECK(inner.Source == CommandSource::Internal);
+		CHECK(outer[0]->Status == CommandStatus::Succeeded);
 	}
 
 	TEST_CASE("Failures carry their kind and message")

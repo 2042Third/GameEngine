@@ -470,7 +470,22 @@ namespace Strata::UI
 	bool BeginModal(const char* name, std::string_view title, bool* open)
 	{
 		const ImGuiStyle& style = ImGui::GetStyle();
-		ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+		const ImGuiViewport* viewport = ImGui::GetMainViewport();
+		// Centered for the size it appears with; contents that grow later (more entries, an error) would push it past the
+		// viewport's edge, so an open dialog that sticks out is moved back in.
+		const ImGuiWindow* window = ImGui::IsPopupOpen(name) ? ImGui::FindWindowByName(name) : nullptr;
+		if (window && window->WasActive)
+		{
+			const ImVec2 limit(std::max(viewport->WorkPos.x, viewport->WorkPos.x + viewport->WorkSize.x - window->Size.x),
+				std::max(viewport->WorkPos.y, viewport->WorkPos.y + viewport->WorkSize.y - window->Size.y));
+			const ImVec2 inside(std::clamp(window->Pos.x, viewport->WorkPos.x, limit.x), std::clamp(window->Pos.y, viewport->WorkPos.y, limit.y));
+			if (inside.x != window->Pos.x || inside.y != window->Pos.y)
+				ImGui::SetNextWindowPos(inside);
+		}
+		else
+		{
+			ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+		}
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(style.WindowPadding.x * 2.0f, style.WindowPadding.y * 2.0f));
 		const bool visible = ImGui::BeginPopupModal(name, nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar);
 		ImGui::PopStyleVar();

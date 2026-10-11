@@ -162,11 +162,17 @@ namespace Strata
 		void Complete(uint64_t id, const EditorCommandResult& result);
 		// A deferred command's handler returned: it is no longer the running command (its entry stays pending).
 		void Suspend(uint64_t id);
+		// A deferred command's poll runs (PollCommandResult): it is the running command again until Suspend or Complete, so
+		// commands it runs are its children and work it causes is known to be its (GetOutermostRunningId).
+		void Resume(uint64_t id);
 
 		const std::deque<CommandJournalEntry>& GetEntries() const { return m_Entries; }
 		const CommandJournalEntry* Find(uint64_t id) const;
 		// The innermost command whose handler runs now (0 when none), e.g. editor.activity's own entry.
 		uint64_t GetRunningId() const { return m_Running.empty() ? 0 : m_Running.back(); }
+		// The outermost command whose handler or poll runs now (0 when none): whom the work going on is for (its source and
+		// client; a command run by another one is that one's child).
+		uint64_t GetOutermostRunningId() const { return m_Running.empty() ? 0 : m_Running.front(); }
 		// Changes with every entry begun or completed (the Activity panel rebuilds its rows then).
 		uint64_t GetVersion() const { return m_Version; }
 		uint64_t GetLatestId() const { return m_NextId - 1; }

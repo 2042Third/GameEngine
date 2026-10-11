@@ -742,9 +742,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
     keyboard focus and doing nothing while there are none. They come from commands the person runs (`RunEditorCommand`
     and the runner for `CommandSource::UI`: failures, and warnings such as edits of the running game,
     `NotifyCommandOutcome`), script builds (start and end) and crashes, finished exports, imports that failed while nobody
-    waited for them (one toast counting them: `EditorAssetManager::TakeImportFailures`, `EditorNotification::Group`) and
-    recovery data left on offer; their actions are Show in Activity (the command's journal entry), Show Asset, Show in
-    Console and Recover. Post one for news the person would otherwise miss; commands of tools and scripts get their errors
+    waited for them (one toast counting them: `EditorAssetManager::TakeImportFailures`, `EditorNotification::Group`),
+    unsaved changes a scene replacement discarded (who did it: an agent by its name, a command script, or the person's own
+    Don't Save; `EditorContext::NotifyDiscardedChanges`) and recovery data left on offer; their actions are Show in
+    Activity (the command's journal entry), Show Asset, Show in Console and Recover. Post one for news the person would otherwise miss; commands of tools and scripts get their errors
     as answers and post none.
   - Status pills say what is wrong and lead to it: errors (unread since the Console was last focused, not counting the
     frame its window appears in), a failed automation start (`--no-automation` is shown as off), scripts that are not
@@ -788,8 +789,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
 - **Autosave and recovery** (`Editor/SceneRecovery`, Docs/Architecture.md "Autosave and recovery"): the edited scene's
   unsaved changes are journaled in `<project>/.strata/Recovery` by following the undo stack (`UndoStackObserver`): the
   entity states of the steps since the last save, written on an I/O job 2 s after edits stop (at least every 10 s), removed
-  by a save. Replacing a modified scene in any way (`EditorContext::ResetScene`) writes them first, marked discarded.
-  Opening a project offers what a crashed or discarding editor left (the Recover Unsaved Changes dialog,
+  by a save. Replacing a modified scene in any way (`EditorContext::ResetScene`) writes them first, marked discarded, offers
+  them at once (the directory is scanned again) and tells the person who discarded them; scans keep the newest
+  `SceneRecovery::c_MaxOfferedDiscards` discards on offer and move older ones to `Recovery/Discarded` (never what a crash
+  left). Opening a project offers what a crashed or discarding editor left (the Recover Unsaved Changes dialog,
   `scene.recoveryStatus`, `scene.recover {scene, action: "apply" | "discard", force}`: one undo step back to the saved
   scene). An undo action that changes the scene describes its effect as entity states (`GetSceneChange`,
   `GetEntityStates`, shared and immutable); one that cannot (kind Other) makes the journal snapshot the whole scene, which

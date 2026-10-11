@@ -9,6 +9,7 @@
 #include "Perf/SceneGenerators.h"
 #include "TestHelpers.h"
 #include "UI/ItemProbe.h"
+#include "UI/RecoveryDialog.h"
 
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
@@ -17,12 +18,16 @@
 #include <Strata/Scene/Scene.h>
 #include <Strata/Scene/SceneSerializer.h>
 
+#include <imgui.h>
+#include <imgui_internal.h>
 #include <nlohmann/json.hpp>
+#include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
 #include <chrono>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -64,9 +69,20 @@ namespace
 			return Tests::RunCommandToCompletion(Context, Commands, name, parameters);
 		}
 
-		EditorCommandResult Execute(std::string_view name, const nlohmann::json& parameters = nlohmann::json::object())
+		EditorCommandResult Execute(std::string_view name, const nlohmann::json& parameters = nlohmann::json::object(), const CommandOrigin& origin = {})
 		{
-			return Tests::CompleteCommand(Context, Commands.Execute(Context, name, parameters));
+			return Tests::CompleteCommand(Context, Commands.Execute(Context, name, parameters, origin));
+		}
+
+		// Frames until the entries the scans found satisfy `condition`.
+		bool UpdateUntil(const std::function<bool(const std::vector<RecoveryEntry>&)>& condition)
+		{
+			return Tests::WaitUntil([&]()
+			{
+				Context.Update(Timestep(1.0f / 60.0f));
+				Context.GetRecovery().Wait();
+				return !Context.GetRecovery().IsScanning() && condition(Context.GetRecovery().GetEntries());
+			}, std::chrono::seconds(10));
 		}
 
 		// Writes the journal now and waits for the disk.
@@ -549,5 +565,192 @@ TEST_SUITE("Editor.Recovery")
 		CHECK_FALSE(result.Success);
 		CHECK(result.Error.find("damaged") != std::string::npos);
 		CHECK_FALSE(harness.Context.IsSceneModified());
+	}
+
+	TEST_CASE("Discarded changes are offered at once, and the person hears who discarded them")
+	{
+		RecoveryHarness harness(Tests::CreateTemporaryDirectory("RecoveryDiscardNotice") / "Game");
+		const EditorNotifications& notifications = harness.Context.GetNotifications();
+		auto find = [&notifications](std::string_view title) -> const EditorNotification*
+		{
+			const auto it = std::find_if(notifications.GetActive().begin(), notifications.GetActive().end(),
+				[title](const EditorNotification& notification) { return notification.Title == title; });
+			return it != notifications.GetActive().end() ? &*it : nullptr;
+		};
+
+		// An agent discards the person's changes: they are offered without a project reopening or a status request, and the
+		// person is told who did it, with Recover and the command in the Activity panel.
+		harness.Run("entity.create", { { "name", "Crate" } });
+		const EditorCommandResult forced = harness.Execute("scene.new", { { "name", "Other" }, { "force", true } },
+			CommandOrigin { CommandSource::Automation, "Claude Code" });
+		REQUIRE(forced.Success);
+		CHECK(forced.Value["discardedChanges"] == true);
+		CHECK(harness.UpdateUntil([](const std::vector<RecoveryEntry>& entries)
+		{
+			return entries.size() == 1 && entries[0].Discarded && entries[0].Applicable && entries[0].SceneName == "Main";
+		}));
+		const EditorNotification* byAgent = find("Claude Code discarded unsaved changes");
+		REQUIRE(byAgent != nullptr);
+		CHECK(byAgent->Level == NotificationLevel::Warning);
+		CHECK(byAgent->ShowRecovery);
+		CHECK(byAgent->JournalEntry == forced.JournalId);
+		CHECK(byAgent->Message.find("scene.new replaced the scene 'Main'") != std::string::npos);
+
+		// The person's own Don't Save (a command of the interface) is news too, quieter: Recover is the undo of the answer.
+		harness.Context.GetNotifications().Clear();
+		harness.Run("entity.create", { { "name", "Sketch" } });
+		REQUIRE(harness.Execute("scene.open", { { "scene", "Scenes/Main.stscene" }, { "force", true } }, CommandOrigin { CommandSource::UI }).Success);
+		const EditorNotification* byPerson = find("Unsaved changes discarded");
+		REQUIRE(byPerson != nullptr);
+		CHECK(byPerson->Level == NotificationLevel::Info);
+		CHECK(byPerson->ShowRecovery);
+		CHECK(byPerson->Message == "The changes to 'Other' are kept as recovery data.");
+		CHECK(harness.UpdateUntil([](const std::vector<RecoveryEntry>& entries) { return entries.size() == 2; }));
+
+		// Replacing a scene without changes discards nothing and says nothing.
+		harness.Context.GetNotifications().Clear();
+		REQUIRE(harness.Execute("scene.new", { { "name", "Empty" } }, CommandOrigin { CommandSource::Automation, "Claude Code" }).Success);
+		CHECK(notifications.IsEmpty());
+
+		// A command script that closes the project: the changes stay with the project, which offers them when it opens again.
+		harness.Run("entity.create", { { "name", "Late" } });
+		REQUIRE(harness.Execute("project.close", { { "force", true } }, CommandOrigin { CommandSource::CommandScript }).Success);
+		const EditorNotification* byScript = find("A command script discarded unsaved changes");
+		REQUIRE(byScript != nullptr);
+		CHECK_FALSE(byScript->ShowRecovery);
+		CHECK(byScript->Message.find("of the project 'Game'") != std::string::npos);
+
+		// Without a project nothing can be kept, and an agent that discards says so.
+		harness.Context.GetNotifications().Clear();
+		harness.Run("entity.create", { { "name", "Nowhere" } });
+		REQUIRE(harness.Execute("scene.new", { { "force", true } }, CommandOrigin { CommandSource::Automation, "Claude Code" }).Success);
+		const EditorNotification* lost = find("Claude Code discarded unsaved changes");
+		REQUIRE(lost != nullptr);
+		CHECK(lost->Message.find("are gone: no project is open") != std::string::npos);
+		CHECK_FALSE(lost->ShowRecovery);
+	}
+
+	TEST_CASE("Changes discarded on purpose are offered up to a limit, what a crash left always")
+	{
+		const std::filesystem::path project = Tests::CreateTemporaryDirectory("RecoveryDiscardLimit") / "Game";
+		RecoveryHarness harness(project);
+
+		// What a crashed editor left: a journal whose owner process is gone.
+		harness.Run("entity.create", { { "name", "Crashed" } });
+		harness.FlushJournal();
+		std::vector<std::filesystem::path> files = ListRecoveryFiles(harness.GetRecoveryDirectory());
+		REQUIRE(files.size() == 1);
+		const std::string text = *FileSystem::ReadText(files[0]);
+		nlohmann::json header = ReadRecoveryHeader(files[0]);
+		header["Owner"]["ProcessStartTime"] = header["Owner"]["ProcessStartTime"].get<uint64_t>() + 1;
+		header["Time"] = header["Time"].get<int64_t>() - 60'000; // The oldest of all
+		const std::string crashedId = "Crashed-0000000000000001";
+		REQUIRE(FileSystem::WriteText(harness.GetRecoveryDirectory() / (crashedId + SceneRecovery::c_FileExtension),
+			JsonUtils::Dump(header) + "\n" + text.substr(text.find('\n') + 1)));
+		harness.Run("edit.undo");
+		harness.FlushJournal();
+
+		// An agent that discards scene after scene: each discard is kept, the newest are offered.
+		const size_t discards = SceneRecovery::c_MaxOfferedDiscards + 3;
+		std::string newest;
+		for (size_t index = 0; index < discards; index++)
+		{
+			harness.Run("entity.create", { { "name", fmt::format("Attempt {}", index) } });
+			const std::string file = harness.Context.GetRecovery().GetStatus().File;
+			newest = file.substr(0, file.size() - std::string_view(SceneRecovery::c_FileExtension).size());
+			REQUIRE(harness.Execute("scene.open", { { "scene", "Scenes/Main.stscene" }, { "force", true } }).Success);
+			harness.Context.GetRecovery().Wait();
+			// Apart in time, so that "newest" means one file.
+			std::this_thread::sleep_for(std::chrono::milliseconds(3));
+		}
+
+		const nlohmann::json entries = harness.Run("scene.recoveryStatus")["entries"];
+		size_t offeredDiscards = 0;
+		bool crashOffered = false;
+		bool newestOffered = false;
+		for (const nlohmann::json& entry : entries)
+		{
+			offeredDiscards += entry["discarded"].get<bool>() ? 1 : 0;
+			crashOffered |= entry["id"] == crashedId;
+			newestOffered |= entry["id"] == newest;
+		}
+		CHECK(offeredDiscards == SceneRecovery::c_MaxOfferedDiscards);
+		CHECK(crashOffered);
+		CHECK(newestOffered);
+		CHECK(entries.size() == SceneRecovery::c_MaxOfferedDiscards + 1);
+		// The others are kept where discarded entries go.
+		CHECK(ListRecoveryFiles(harness.GetRecoveryDirectory() / SceneRecovery::c_DiscardedDirectoryName).size() == discards - SceneRecovery::c_MaxOfferedDiscards);
+	}
+
+	TEST_CASE("A toast's Recover brings back what was just discarded, and the dialog fits the window with many offers")
+	{
+		const std::filesystem::path project = Tests::CreateTemporaryDirectory("RecoveryToast") / "Game";
+		{
+			RecoveryHarness harness(project);
+		}
+		EditorOptions options;
+		options.ProjectPath = project;
+		// A laptop's window at 150%: eight offers at their full height would not fit.
+		Tests::ImGuiHarness::Specification specification;
+		specification.DisplaySize = ImVec2(1600.0f, 900.0f);
+		specification.ContentScale = 1.5f;
+		Tests::HarnessEditor editor(specification, options);
+		editor.Frames(3);
+		REQUIRE_FALSE(editor.Layer->GetRecoveryDialog().IsOpen());
+
+		// The person discards changes by mistake: the toast's Recover opens the dialog with them while the scan that finds them
+		// may still run, and recovering brings them back.
+		editor.Run("entity.create", { { "name", "Precious" } });
+		editor.Context().GetNotifications().Clear();
+		REQUIRE(editor.Layer->GetCommands().Execute(editor.Context(), "scene.new", { { "force", true } }, CommandOrigin { CommandSource::UI }).Success);
+		// A toast sizes itself over its first frames.
+		editor.Frames(2);
+		REQUIRE(editor.Click("Toast.0.Recover"));
+		REQUIRE(editor.FramesUntil([&]() { return UI::ItemProbe::Find("Recovery.Recover.0").has_value(); }));
+		CHECK(editor.Layer->GetRecoveryDialog().IsOpen());
+		// A dialog that sizes itself to its contents settles over its first frames.
+		editor.Frames(3);
+		REQUIRE(editor.Click("Recovery.Recover.0"));
+		// The new scene has no changes of its own: nothing to ask.
+		REQUIRE(editor.FramesUntil([&]() { return editor.Context().GetEditScene()->FindEntityByName("Precious").IsValid(); }));
+		editor.Frames(2);
+		CHECK_FALSE(editor.Layer->GetRecoveryDialog().IsOpen());
+
+		// Opened right after a discard, the dialog waits for the scan that finds it instead of closing as if nothing were left.
+		editor.Run("entity.create", { { "name", "Again" } });
+		editor.Run("scene.open", { { "scene", "Scenes/Main.stscene" }, { "force", true } });
+		editor.Layer->ShowRecoveryDialog();
+		editor.Frames(1);
+		REQUIRE(editor.Context().GetRecovery().IsScanning());
+		CHECK(editor.Layer->GetRecoveryDialog().IsOpen());
+		CHECK(editor.FramesUntil([&]() { return UI::ItemProbe::Find("Recovery.Recover.0").has_value(); }));
+
+		// Many offers scroll in a list: the dialog's buttons stay inside the window, and Discard All empties it.
+		for (size_t index = 0; index + 1 < SceneRecovery::c_MaxOfferedDiscards; index++)
+		{
+			editor.Run("entity.create", { { "name", fmt::format("Attempt {}", index) } });
+			editor.Run("scene.open", { { "scene", "Scenes/Main.stscene" }, { "force", true } });
+			editor.Context().GetRecovery().Wait();
+		}
+		REQUIRE(editor.FramesUntil([&]()
+		{
+			return !editor.Context().GetRecovery().IsScanning() && editor.Context().GetRecovery().GetEntries().size() == SceneRecovery::c_MaxOfferedDiscards;
+		}));
+		// The dialog stayed open while the offers came: centered for one entry, it grew, and stays inside the window.
+		editor.Frames(3);
+		REQUIRE(editor.Layer->GetRecoveryDialog().IsOpen());
+		const ImGuiWindow* dialog = ImGui::FindWindowByName(RecoveryDialog::c_Popup);
+		REQUIRE(dialog != nullptr);
+		const ImGuiViewport* viewport = ImGui::GetMainViewport();
+		CHECK(dialog->Pos.y >= viewport->Pos.y);
+		CHECK(dialog->Pos.y + dialog->Size.y <= viewport->Pos.y + viewport->Size.y);
+		const std::optional<UI::ItemProbe::Item> later = UI::ItemProbe::Find("Recovery.Later");
+		REQUIRE(later.has_value());
+		CHECK(later->Max.y <= dialog->Pos.y + dialog->Size.y);
+		REQUIRE(editor.Click("Recovery.DiscardAll"));
+		REQUIRE(editor.FramesUntil([&]() { return !editor.Layer->GetRecoveryDialog().IsOpen(); }));
+		editor.Context().GetRecovery().Wait();
+		CHECK(ListRecoveryFiles(project / ".strata" / SceneRecovery::c_DirectoryName).size() <= 1); // The edited scene's own journal, if any
+		CHECK(editor.Context().GetRecovery().GetEntries().empty());
 	}
 }

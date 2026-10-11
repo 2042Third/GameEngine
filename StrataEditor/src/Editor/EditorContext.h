@@ -354,7 +354,19 @@ namespace Strata
 		void ResetSimulatedInput();
 		// Replaces the running scene with a scene asset, or with a restart of the running scene for the null handle.
 		bool SwitchRuntimeScene(AssetHandle scene, std::string* outError);
-		void ResetScene(Ref<Scene> scene, AssetHandle handle);
+		// Where the unsaved changes a scene replacement discards end up, for the notification that tells the person.
+		enum class DiscardNotice : uint8_t
+		{
+			Recoverable = 0, // The project stays open: the changes are offered at once (Recover...)
+			ProjectCloses,   // The project closes: they are offered when it opens again
+			None             // The editor itself goes away: nobody to tell
+		};
+		// Replaces the edited scene. Unsaved changes of the scene that goes are written as recovery data first, and the
+		// person hears that they were discarded and by whom (NotifyDiscardedChanges).
+		void ResetScene(Ref<Scene> scene, AssetHandle handle, DiscardNotice notice = DiscardNotice::Recoverable);
+		// Posts that the unsaved changes of `sceneName` were discarded, naming who did it (the command running now: the
+		// person, an agent, a command script) and where they are kept.
+		void NotifyDiscardedChanges(const std::string& sceneName, DiscardOutcome outcome, const std::string& reason, DiscardNotice notice);
 		// Gives a template's new scene its start scene file and the template's editor view (CreateProject).
 		bool SaveTemplateStartScene(std::string_view templateId, std::string* outError);
 		// The assets a template's scene uses in this project (NewScene).
