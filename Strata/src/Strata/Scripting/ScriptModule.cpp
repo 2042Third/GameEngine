@@ -686,14 +686,35 @@ namespace Strata
 		JobSystem::SubmitIO([symbols, frames = std::move(moduleFrames), indices = std::move(moduleFrameIndices), directories = std::move(searchDirectories)]() mutable
 		{
 			Symbolizer::Resolve(frames, directories);
-			for (size_t frame = 0; frame < frames.size(); frame++)
+			// Each frame of the module comes after the calls the compiler inlined at its address, innermost first, so the
+			// stack starts with the line that ran (in an optimized build too) rather than the call of the function holding it.
+			// GetFault reads the stack only once Done is set.
+			std::vector<ScriptCodeLocation> stack;
+			stack.reserve(symbols->Stack.size());
+			size_t nextFrame = 0;
+			for (size_t index = 0; index < symbols->Stack.size(); index++)
 			{
-				ScriptCodeLocation& location = symbols->Stack[indices[frame]];
-				if (!frames[frame].Function.empty())
-					location.Function = frames[frame].Function;
-				location.File = frames[frame].File;
-				location.Line = frames[frame].Line;
+				ScriptCodeLocation location = symbols->Stack[index];
+				if (nextFrame < indices.size() && indices[nextFrame] == index)
+				{
+					const Symbolizer::Frame& frame = frames[nextFrame++];
+					for (const Symbolizer::InlinedCall& call : frame.Inlined)
+					{
+						ScriptCodeLocation inlined = location;
+						inlined.Function = call.Function;
+						inlined.File = call.File;
+						inlined.Line = call.Line;
+						inlined.Inlined = true;
+						stack.push_back(std::move(inlined));
+					}
+					if (!frame.Function.empty())
+						location.Function = frame.Function;
+					location.File = frame.File;
+					location.Line = frame.Line;
+				}
+				stack.push_back(std::move(location));
 			}
+			symbols->Stack = std::move(stack);
 			symbols->Done.store(true, std::memory_order_release);
 		});
 	}

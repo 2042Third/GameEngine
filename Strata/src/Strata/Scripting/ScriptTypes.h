@@ -64,6 +64,9 @@ namespace Strata
 		std::string Function;      // Empty when unknown
 		std::string File;          // Empty when unknown (no debug information; POSIX reads none)
 		uint32_t Line = 0;
+		// A call the compiler inlined at Address (optimized builds, Windows): the frames that follow it with the same address
+		// are the functions it was inlined into, the last of them the function the code belongs to.
+		bool Inlined = false;
 	};
 
 	// "C:/Game/Scripts/Player.cpp(42) in Player::OnUpdate", or "GameScripts.dll+0x1A2B in ..." without a file.

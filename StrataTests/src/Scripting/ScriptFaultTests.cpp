@@ -5,6 +5,7 @@
 #include "Strata/Core/Process.h"
 #include "TestHelpers.h"
 
+#include <algorithm>
 #include <chrono>
 #include <csignal>
 #include <optional>
@@ -42,6 +43,45 @@ namespace
 		return entity;
 	}
 
+	// The engine's fault once symbolization (a job; inline without a job system) finished, or as it was after 30 s.
+	std::optional<ScriptFault> WaitForSymbolizedFault(const ScriptEngine& engine)
+	{
+		std::optional<ScriptFault> fault = engine.GetFault();
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+		while (fault && !fault->Symbolized && std::chrono::steady_clock::now() < deadline)
+		{
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+			fault = engine.GetFault();
+		}
+		return fault;
+	}
+
+	// Line `line` (from 1) of a source file, empty when the file or the line does not exist.
+	std::string ReadSourceLine(const std::string& file, uint32_t line)
+	{
+		const std::optional<std::string> source = FileSystem::ReadText(FileSystem::FromUTF8(file));
+		if (!source || line == 0)
+			return {};
+		size_t start = 0;
+		for (uint32_t current = 1; current < line; current++)
+		{
+			start = source->find('\n', start);
+			if (start == std::string::npos)
+				return {};
+			start++;
+		}
+		const size_t end = source->find('\n', start);
+		return source->substr(start, end == std::string::npos ? std::string::npos : end - start);
+	}
+
+	std::string DescribeStack(const std::vector<ScriptCodeLocation>& stack)
+	{
+		std::string text;
+		for (const ScriptCodeLocation& frame : stack)
+			text += "\n  " + DescribeScriptCodeLocation(frame) + (frame.Inlined ? " (inlined)" : "");
+		return text;
+	}
+
 }
 
 TEST_SUITE("Scripting.Faults")
@@ -56,14 +96,8 @@ TEST_SUITE("Scripting.Faults")
 		REQUIRE(engine->IsFaulted());
 
 		// Symbolization runs on a job (inline without a job system); the fault has its stack at once.
-		std::optional<ScriptFault> fault = engine->GetFault();
+		const std::optional<ScriptFault> fault = WaitForSymbolizedFault(*engine);
 		REQUIRE(fault);
-		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-		while (!fault->Symbolized && std::chrono::steady_clock::now() < deadline)
-		{
-			std::this_thread::sleep_for(std::chrono::milliseconds(10));
-			fault = engine->GetFault();
-		}
 		REQUIRE(fault->Symbolized);
 		REQUIRE_FALSE(fault->Stack.empty());
 		REQUIRE(fault->Location);
@@ -74,18 +108,7 @@ TEST_SUITE("Scripting.Faults")
 #if defined(ST_PLATFORM_WINDOWS)
 		// The null write itself, from the module's PDB.
 		CHECK(FileSystem::FromUTF8(location.File).filename() == "FaultScripts.cpp");
-		const std::optional<std::string> source = FileSystem::ReadText(FileSystem::FromUTF8(location.File));
-		REQUIRE(source);
-		std::vector<std::string> lines;
-		size_t start = 0;
-		for (size_t end = source->find('\n'); end != std::string::npos; end = source->find('\n', start))
-		{
-			lines.push_back(source->substr(start, end - start));
-			start = end + 1;
-		}
-		REQUIRE(location.Line >= 1);
-		REQUIRE(location.Line <= lines.size());
-		CHECK(lines[location.Line - 1].find("*pointer = 42;") != std::string::npos);
+		CHECK(ReadSourceLine(location.File, location.Line).find("*pointer = 42;") != std::string::npos);
 		CHECK_FALSE(location.Function.empty());
 		CHECK(DescribeScriptCodeLocation(location).find("FaultScripts.cpp(" + std::to_string(location.Line) + ")") != std::string::npos);
 #else
@@ -94,6 +117,51 @@ TEST_SUITE("Scripting.Faults")
 		// The function that wrote, or the one it was inlined into (optimized builds).
 		const std::string& function = location.Function;
 		CHECK((function.find("Crash") != std::string::npos || function.find("Faulty") != std::string::npos));
+#endif
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("A crash in code the compiler inlined names the line that ran, then the call it was inlined at")
+	{
+		// The Faults module's WriteThroughNull is forced inline wherever the compiler inlines (Release, Dist): its null write
+		// then runs inside Crash, at an address whose debug information knows both lines.
+		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_FAULTS));
+		Scene scene;
+		CreateFaultyEntity(scene, "InlinedNullDereference", "OnUpdate");
+		scene.OnRuntimeStart();
+		RunFrames(scene, 1);
+		REQUIRE(engine->IsFaulted());
+
+		const std::optional<ScriptFault> fault = WaitForSymbolizedFault(*engine);
+		REQUIRE(fault);
+		REQUIRE(fault->Symbolized);
+		REQUIRE(fault->Location);
+		const ScriptCodeLocation& location = *fault->Location;
+		INFO("Location: ", DescribeScriptCodeLocation(location), "\nStack:", DescribeStack(fault->Stack));
+#if defined(ST_PLATFORM_WINDOWS)
+		CHECK(ReadSourceLine(location.File, location.Line).find("*pointer = 7;") != std::string::npos);
+		CHECK(location.Function.find("WriteThroughNull") != std::string::npos);
+		// The call follows: the caller's own frame where nothing was inlined, the frame of the function the write was inlined
+		// into otherwise (at the same address).
+		const auto call = std::find_if(fault->Stack.begin(), fault->Stack.end(), [](const ScriptCodeLocation& frame)
+		{
+			return ReadSourceLine(frame.File, frame.Line).find("WriteThroughNull();") != std::string::npos;
+		});
+		REQUIRE(call != fault->Stack.end());
+		CHECK(call->Function.find("Crash") != std::string::npos);
+		const auto write = std::find_if(fault->Stack.begin(), fault->Stack.end(), [&](const ScriptCodeLocation& frame)
+		{
+			return frame.Address == location.Address && frame.Line == location.Line;
+		});
+		REQUIRE(write != fault->Stack.end());
+		CHECK(write < call);
+		if (location.Inlined)
+			CHECK(call->Address == location.Address);
+#else
+		// No DWARF reader: the function holding the write, which is the caller when the write was inlined.
+		CHECK(location.File.empty());
+		const std::string& function = location.Function;
+		CHECK((function.find("WriteThroughNull") != std::string::npos || function.find("Crash") != std::string::npos || function.find("Faulty") != std::string::npos));
 #endif
 		scene.OnRuntimeStop();
 	}

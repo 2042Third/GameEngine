@@ -681,9 +681,11 @@ Building and loading scripts:
 - **Crash locations:** `CrashGuard` records the faulting instruction and, on Windows x64, its callers' return addresses
   (unwound from the exception's context, `CrashInfo::Stack`; no walk after a stack overflow). `ScriptModule` names each
   frame's module at once (`Symbolizer::Describe`) and resolves the module's own frames on a job (`Symbolizer::Resolve`:
-  DbgHelp reads the PDB beside the module as it was built, also for hot-reload copies, serialized; on Linux the ELF
+  DbgHelp reads the PDB beside the module as it was built, also for hot-reload copies, serialized, with the calls the
+  compiler inlined at each address as frames of their own before it, `ScriptCodeLocation::Inlined`; on Linux the ELF
   symbol table and on macOS dladdr give the function, never file or line). `ScriptFault::Location` is the first frame of
-  the module with a source that is not C runtime or SDK entry code, `Stack` the frames; `Symbolized` says the job
+  the module with a source that is not C runtime or SDK entry code (in optimized builds too the line that ran, not the
+  call of the function it was inlined into), `Stack` the frames; `Symbolized` says the job
   finished (`ScriptModule::GetFault` merges its result). `script.status`, the Console (a click opens the line), the
   Problems panel and the play-stop log show them. Script modules write a PDB in every configuration
   (`strata_add_script_module`).

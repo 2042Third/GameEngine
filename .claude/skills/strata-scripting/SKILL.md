@@ -438,7 +438,9 @@ every step below is a command, and source files are written with your own file t
    A build that fails keeps the running module. `script.reload` reloads the module file without building.
 8. **Crashes.** A crash (null pointer, division by zero, stack overflow) stops play mode; the log and `script.status` ->
    `fault`/`lastFault` name the module, class, callback, entity and the crash, and, once `symbolized` is true (a moment
-   later), `location` (`file` and `line` on Windows from the module's PDB, the `function` elsewhere) and the `stack`. `play.start` fails until the module is
+   later), `location` (`file` and `line` on Windows from the module's PDB, the `function` elsewhere) and the `stack`
+   (innermost first; frames with `inlined: true` are calls the compiler inlined at the same address as the frames after
+   them, so `location` is the line that ran even in an optimized build). `play.start` fails until the module is
    rebuilt (`script.build`; after a crash a successful build loads the module again even when nothing had to be
    compiled, e.g. when you fixed a field value with `script.setField`) or reloaded (`script.reload`). An exception
    thrown by a script only disables that instance (the message is logged).

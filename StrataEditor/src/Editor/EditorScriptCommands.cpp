@@ -40,6 +40,7 @@ namespace Strata
 				{ "function", location.Function },
 				{ "module", location.Module },
 				{ "moduleOffset", fmt::format("0x{:X}", location.ModuleOffset) },
+				{ "inlined", location.Inlined },
 				{ "text", DescribeScriptCodeLocation(location) } };
 		}
 

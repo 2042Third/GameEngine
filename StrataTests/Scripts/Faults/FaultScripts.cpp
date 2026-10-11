@@ -31,6 +31,17 @@ namespace
 		return Recurse(currentDepth + 1) + padding[0];
 	}
 
+	// Inlined into its caller wherever the compiler inlines (optimized builds): crash reports must still name this line.
+#if defined(_MSC_VER)
+	__forceinline void WriteThroughNull()
+#else
+	inline __attribute__((always_inline)) void WriteThroughNull()
+#endif
+	{
+		volatile int* pointer = nullptr;
+		*pointer = 7; // The inlined null write
+	}
+
 	void Throw()
 	{
 		throw std::runtime_error("This exception leaves a noexcept function on purpose");
@@ -48,6 +59,10 @@ namespace
 		{
 			volatile int* pointer = nullptr;
 			*pointer = 42;
+		}
+		else if (kind == "InlinedNullDereference")
+		{
+			WriteThroughNull();
 		}
 		else if (kind == "DivideByZero")
 		{
@@ -81,8 +96,8 @@ namespace
 
 }
 
-// Crashes with Fault ("NullDereference", "DivideByZero", "StackOverflow", "Abort", "Assert", "Terminate" or
-// "TerminateFromNoexcept") in the callback named by FaultIn.
+// Crashes with Fault ("NullDereference", "InlinedNullDereference", "DivideByZero", "StackOverflow", "Abort", "Assert",
+// "Terminate" or "TerminateFromNoexcept") in the callback named by FaultIn.
 class Faulty : public Script
 {
 public:

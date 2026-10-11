@@ -113,7 +113,9 @@ The script crash in DoorOpener::OnUpdate happened at C:/Games/Castle/Scripts/Doo
 ```
 
 On Windows the file and line come from the module's program database (the PDB next to it, which every configuration
-writes); the Problems panel also lists the stack's frames with their files. On Linux and macOS the report names the
+writes); the Problems panel also lists the stack's frames with their files. In an optimized build the compiler copies
+small functions into their callers ("inlining"): the report still names the line that crashed, and the next frame is the
+call it was copied into (frames of copied functions are marked "(inlined)"). On Linux and macOS the report names the
 function and the offset in the module (file and line are not read there). Fix the code and press Play: it builds first.
 
 ## Debugging with a debugger

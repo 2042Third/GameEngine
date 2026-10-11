@@ -1294,7 +1294,10 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   (`CrashInfo::Stack`). `ScriptModule::RecordFault` names every frame's module while the module is still loaded
   (`Symbolizer::Describe`) and resolves the module's own frames on an I/O job (`Symbolizer::Resolve`): on Windows DbgHelp
   reads the module's PDB (calls serialized, a session of its own, the module read from its file as built at the base and
-  size it was loaded with, so hot-reload copies resolve too, `Platform/Windows/WindowsSymbolizer.cpp`); on Linux the
+  size it was loaded with, so hot-reload copies resolve too, `Platform/Windows/WindowsSymbolizer.cpp`), including the
+  calls the compiler inlined at each address (`Symbolizer::Frame::Inlined`, from DbgHelp's inline trace), which come
+  before their frame in `Stack` (`ScriptCodeLocation::Inlined`), so an optimized build names the line that ran rather
+  than the call of the function it was inlined into; on Linux the
   function comes from the ELF symbol table of the module's file and on macOS from dladdr, never a file or line
   (`Platform/Posix/PosixSymbolizer.cpp`). `ScriptFault::Location` is the first of the module's frames with a source that
   is neither C runtime nor the SDK's entry code (the abort handler), `Stack` all frames; `ScriptModule::GetFault` merges

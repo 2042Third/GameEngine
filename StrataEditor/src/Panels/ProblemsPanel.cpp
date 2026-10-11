@@ -132,14 +132,21 @@ namespace Strata
 				crash.ShownFile = MakeShownFile(editor, crash.File, crash.Source);
 			}
 			m_Rows.push_back(std::move(crash));
-			// The stack's frames with a source: where the crash came from.
+			// The stack's frames with a source: where the crash came from. Calls inlined at one address share it, so the
+			// location's own frame is the one at its address with its line.
+			const auto isLocation = [&](const ScriptCodeLocation& frame)
+			{
+				return fault->Location && frame.Address == fault->Location->Address && frame.File == fault->Location->File && frame.Line == fault->Location->Line;
+			};
 			for (const ScriptCodeLocation& frame : fault->Stack)
 			{
-				if (frame.File.empty() || (fault->Location && frame.Address == fault->Location->Address))
+				if (frame.File.empty() || isLocation(frame))
 					continue;
 				Row row;
 				row.Kind = RowKind::Frame;
 				row.Text = frame.Function.empty() ? fmt::format("{}+0x{:X}", frame.Module, frame.ModuleOffset) : frame.Function;
+				if (frame.Inlined)
+					row.Text += " (inlined)";
 				row.File = frame.File;
 				row.Line = frame.Line;
 				row.Source = ResolveSource(editor, row.File, {});
