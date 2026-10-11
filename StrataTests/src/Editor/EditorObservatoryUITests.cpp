@@ -339,6 +339,47 @@ TEST_SUITE("Editor.UI")
 		}
 	}
 
+	TEST_CASE("The Streaming table keeps asset names readable where it is narrow: the least telling columns go first")
+	{
+		// A laptop's window at 150%: the bottom dock is wide enough for the overview beside the table, but not for every column.
+		ImGuiHarness harness({ ImVec2(2400.0f, 1350.0f), 1.5f });
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		EditorCommandRunner runner;
+		EditorPanelContext panelContext { context, commands, runner };
+		SceneTestAssets assets;
+		StreamingPanel panel;
+		struct Shown
+		{
+			float AssetWidth = 0.0f;
+			int Columns = 0;
+		};
+		const auto draw = [&](float width)
+		{
+			DrawPanel(harness, panel, panelContext, ImVec2(width, 400.0f), 4);
+			ImGuiTable* table = FindTable(ImGui::FindWindowByName("Panel"), 7);
+			REQUIRE(table);
+			Shown shown;
+			shown.AssetWidth = table->Columns[0].WidthGiven;
+			for (int column = 0; column < table->ColumnsCount; column++)
+				shown.Columns += table->Columns[column].IsEnabled ? 1 : 0;
+			return shown;
+		};
+		const float minAsset = ImGui::GetFontSize() * 14.0f - 1.0f;
+
+		// Wide: every column, the name beside them.
+		const Shown wide = draw(3000.0f);
+		CHECK(wide.Columns == 7);
+		CHECK(wide.AssetWidth >= minAsset);
+		// The bottom dock of the laptop's window: some columns go, the name keeps its width.
+		const Shown laptop = draw(1300.0f);
+		CHECK(laptop.Columns < 7);
+		CHECK(laptop.Columns >= 4);
+		CHECK(laptop.AssetWidth >= minAsset);
+		// Wide again: the columns come back.
+		CHECK(draw(3000.0f).Columns == 7);
+	}
+
 	TEST_CASE("Instruments opened in a layout saved before they existed join the Console")
 	{
 		// A layout saved by an editor without the instruments: their windows' settings removed.

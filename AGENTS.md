@@ -860,7 +860,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   same numbers, read once per frame after the frame's commands, and the assets as a sortable, filtered table, failed
   assets first, sub-assets named by their file and key: the main thread copies `GetResidencySamples` (and the metadata
   when `GetMetadataVersion` changed) four times a second and a job names, sorts and filters the rows; a row click reveals
-  the asset in the Content Browser.
+  the asset in the Content Browser. Where the table is narrow it drops Pins, CPU MB and then Last used before the asset's
+  name gets less than 14 text heights, and the overview stacks above the table where beside it the table would be too
+  narrow even then.
 - Mutating commands report a `warning` in their result while the scene is playing: such changes apply
   to the running copy and are discarded by `play.stop`. Unknown or missing parameters are errors.
 - **Viewport state** lives in the core: `EditorContext::GetViewport()` (`EditorViewport`) holds the editor camera

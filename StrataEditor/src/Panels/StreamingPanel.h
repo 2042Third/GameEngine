@@ -126,7 +126,12 @@ namespace Strata
 		void DrawStreaming(const AssetManagerStats& stats);
 		void DrawUploads(const AssetManagerStats& stats);
 		void DrawTable();
+		// Measures the fixed columns' widths (again only when the text size changed).
+		void UpdateColumnWidths();
 		void SetupTableColumns();
+		// The narrowest table that shows the asset's name at its least width with the fixed columns of the first
+		// `optionalColumns` of c_OptionalColumns' drop order kept (3: all).
+		float GetTableWidth(int optionalColumns) const;
 		// Takes a finished build and starts the next one when the table is due for a refresh or its sort or filter changed.
 		void UpdateTable(const Ref<AssetManagerBase>& manager);
 		void StartTableBuild(const Ref<AssetManagerBase>& manager);
@@ -159,6 +164,9 @@ namespace Strata
 		// Widths of the fixed columns at m_ColumnFontSize (they hold their headers, sort arrows and values).
 		std::array<float, 7> m_ColumnWidths = {};
 		float m_ColumnFontSize = 0.0f;
+		// How many of the optional columns the table showed when it last chose (-1 before it did): they are hidden only
+		// when the width calls for it, so columns the user hides through the header's menu stay hidden meanwhile.
+		int m_OptionalColumnsShown = -1;
 		std::function<void(AssetHandle)> m_RevealAsset;
 	};
 

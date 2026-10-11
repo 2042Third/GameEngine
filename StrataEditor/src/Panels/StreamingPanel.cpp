@@ -11,6 +11,7 @@
 #include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
+#include <array>
 #include <initializer_list>
 #include <limits>
 #include <numeric>
@@ -42,6 +43,10 @@ namespace Strata
 		constexpr int c_ColumnLastUsed = 5;
 		constexpr int c_ColumnPins = 6;
 		constexpr int c_ColumnCount = 7;
+		// Where the table is narrow these columns go first, in this order (the least telling first), so the asset's name keeps
+		// at least c_MinAssetColumnInFontSizes text heights.
+		constexpr std::array<int, 3> c_OptionalColumns = { c_ColumnPins, c_ColumnCpu, c_ColumnLastUsed };
+		constexpr float c_MinAssetColumnInFontSizes = 14.0f;
 		// Between a sub-asset's file and its key ("›").
 		constexpr std::string_view c_SubAssetSeparator = " \xE2\x80\xBA ";
 
@@ -272,9 +277,11 @@ namespace Strata
 		ImGui::TextColored(colors.TextSecondary, "\xC2\xB7 %u pinned \xC2\xB7 frame %llu", stats.PinnedAssets, static_cast<unsigned long long>(stats.Frame));
 
 		// Wide panels (the bottom dock) put the overview beside the asset table, which then gets the full height; narrow ones
-		// stack them.
+		// stack them, also wide ones whose share for the table could not show the asset names beside the essential columns.
+		UpdateColumnWidths();
 		const float available = ImGui::GetContentRegionAvail().x;
-		const bool sideBySide = available >= ImGui::GetFontSize() * c_SideBySideWidthInFontSizes;
+		const bool sideBySide = available >= ImGui::GetFontSize() * c_SideBySideWidthInFontSizes
+			&& available * (1.0f - c_OverviewShare) - ImGui::GetStyle().ItemSpacing.x >= GetTableWidth(0);
 		if (sideBySide)
 			ImGui::BeginChild("Overview", ImVec2(available * c_OverviewShare, 0.0f), ImGuiChildFlags_None);
 		if (UI::SectionHeader("Streaming.Memory", "Memory"))
@@ -566,7 +573,7 @@ namespace Strata
 		build.Built = true;
 	}
 
-	void StreamingPanel::SetupTableColumns()
+	void StreamingPanel::UpdateColumnWidths()
 	{
 		// The fixed columns hold their header with its sort arrow and their widest usual value; the asset's name takes the
 		// rest. Measured again only when the text size changes (the UI scale).
@@ -594,6 +601,23 @@ namespace Strata
 			m_ColumnWidths[c_ColumnLastUsed] = widest({ "Last used", "99999 frames ago" }) + sortArrow;
 			m_ColumnWidths[c_ColumnPins] = widest({ "Pins", "999" }) + sortArrow;
 		}
+	}
+
+	float StreamingPanel::GetTableWidth(int optionalColumns) const
+	{
+		// Each column adds its cell padding and the border between it and the next.
+		const float columnExtra = ImGui::GetStyle().CellPadding.x * 2.0f + 1.0f;
+		float width = ImGui::GetFontSize() * c_MinAssetColumnInFontSizes + columnExtra;
+		for (const int column : { c_ColumnType, c_ColumnState, c_ColumnGpu })
+			width += m_ColumnWidths[column] + columnExtra;
+		for (size_t index = c_OptionalColumns.size() - static_cast<size_t>(optionalColumns); index < c_OptionalColumns.size(); index++)
+			width += m_ColumnWidths[c_OptionalColumns[index]] + columnExtra;
+		return width;
+	}
+
+	void StreamingPanel::SetupTableColumns()
+	{
+		UpdateColumnWidths();
 		ImGui::TableSetupColumn("Asset", ImGuiTableColumnFlags_WidthStretch, 1.0f, c_ColumnAsset);
 		ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, m_ColumnWidths[c_ColumnType], c_ColumnType);
 		ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, m_ColumnWidths[c_ColumnState], c_ColumnState);
@@ -617,11 +641,23 @@ namespace Strata
 		// The sort is the session's (and the default one each start): restoring a sorted column from imgui.ini moves it to
 		// the front in the vendored ImGui.
 		const ImGuiTableFlags flags = ImGuiTableFlags_Sortable | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable
-			| ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_NoSavedSettings;
+			| ImGuiTableFlags_Hideable | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_NoSavedSettings;
+		// As many of the optional columns as leave the asset's name its least width.
+		int optionalColumns = static_cast<int>(c_OptionalColumns.size());
+		const float tableWidth = ImGui::GetContentRegionAvail().x;
+		while (optionalColumns > 0 && tableWidth < GetTableWidth(optionalColumns))
+			optionalColumns--;
 		if (!ImGui::BeginTable("Assets", c_ColumnCount, flags, ImVec2(0.0f, std::max(ImGui::GetContentRegionAvail().y, ImGui::GetFrameHeight() * 4.0f))))
 			return;
 		ImGui::TableSetupScrollFreeze(0, 1);
 		SetupTableColumns();
+		if (optionalColumns != m_OptionalColumnsShown)
+		{
+			const size_t firstShown = c_OptionalColumns.size() - static_cast<size_t>(optionalColumns);
+			for (size_t index = 0; index < c_OptionalColumns.size(); index++)
+				ImGui::TableSetColumnEnabled(c_OptionalColumns[index], index >= firstShown);
+			m_OptionalColumnsShown = optionalColumns;
+		}
 		ImGui::TableHeadersRow();
 
 		if (ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs(); specs && specs->SpecsDirty)
