@@ -74,6 +74,25 @@ namespace Strata
 			}
 		}
 
+		// The same for a per-frame callback: only the systems in `calls` (Scene::SystemCall, in update order) take it.
+		template<typename Calls, typename Callback>
+		void ForEachSystemCall(const Calls& calls, Callback&& callback)
+		{
+			FrameProfiler& profiler = FrameProfiler::Get();
+			if (!profiler.IsTimingThisThread())
+			{
+				for (const auto& call : calls)
+					callback(*call.System);
+				return;
+			}
+			for (const auto& call : calls)
+			{
+				const FrameStageScope stage(profiler, call.Stage);
+				ST_PROFILE_STAGE_ID_ZONE(call.Stage);
+				callback(*call.System);
+			}
+		}
+
 	}
 
 	static std::atomic<uint32_t> s_RunningSceneCount = 0;
@@ -1659,9 +1678,17 @@ namespace Strata
 			if (mode != SceneRuntimeMode::Play && !descriptor.RunsInSimulateMode)
 				continue;
 			Scope<SceneSystem>& system = m_Systems.emplace_back(descriptor.Create(*this));
-			m_SystemStages.push_back(descriptor.ProfileStage.empty() ? c_InvalidFrameStage : FrameProfiler::Get().RegisterStage(descriptor.ProfileStage));
+			const FrameStageID stage = descriptor.ProfileStage.empty() ? c_InvalidFrameStage : FrameProfiler::Get().RegisterStage(descriptor.ProfileStage);
+			m_SystemStages.push_back(stage);
 			if (descriptor.Type != 0)
 				m_SystemsByType[descriptor.Type] = system.get();
+			// A frame calls only the callbacks a system takes part in.
+			if (descriptor.CallsUpdate)
+				m_UpdateCalls.push_back(SystemCall { system.get(), stage });
+			if (descriptor.CallsFixedUpdate)
+				m_FixedUpdateCalls.push_back(SystemCall { system.get(), stage });
+			if (descriptor.CallsLateUpdate)
+				m_LateUpdateCalls.push_back(SystemCall { system.get(), stage });
 		}
 
 		// Systems may create or destroy entities while starting (e.g. scripts in OnCreate).
@@ -1683,6 +1710,9 @@ namespace Strata
 			(*it)->OnRuntimeStop();
 		m_IsUpdating = false;
 
+		m_UpdateCalls.clear();
+		m_FixedUpdateCalls.clear();
+		m_LateUpdateCalls.clear();
 		// A system being destroyed still finds the systems created before it.
 		while (!m_Systems.empty())
 		{
@@ -1747,11 +1777,11 @@ namespace Strata
 		m_IsUpdating = true;
 		UpdateWorldTransforms();
 
-		ForEachSystem(m_Systems, m_SystemStages, [deltaTime](SceneSystem& system) { system.OnUpdate(Timestep(deltaTime)); });
+		ForEachSystemCall(m_UpdateCalls, [deltaTime](SceneSystem& system) { system.OnUpdate(Timestep(deltaTime)); });
 
 		if (stepping)
 		{
-			ForEachSystem(m_Systems, m_SystemStages, [fixedTimestep](SceneSystem& system) { system.OnFixedUpdate(fixedTimestep); });
+			ForEachSystemCall(m_FixedUpdateCalls, [fixedTimestep](SceneSystem& system) { system.OnFixedUpdate(fixedTimestep); });
 			m_StepFrames--;
 		}
 		else
@@ -1779,7 +1809,7 @@ namespace Strata
 						break;
 					}
 				}
-				ForEachSystem(m_Systems, m_SystemStages, [fixedTimestep](SceneSystem& system) { system.OnFixedUpdate(fixedTimestep); });
+				ForEachSystemCall(m_FixedUpdateCalls, [fixedTimestep](SceneSystem& system) { system.OnFixedUpdate(fixedTimestep); });
 				m_FixedTimeAccumulator -= fixedTimestep;
 				steps++;
 			}
@@ -1800,7 +1830,7 @@ namespace Strata
 			}
 		}
 
-		ForEachSystem(m_Systems, m_SystemStages, [deltaTime](SceneSystem& system) { system.OnLateUpdate(Timestep(deltaTime)); });
+		ForEachSystemCall(m_LateUpdateCalls, [deltaTime](SceneSystem& system) { system.OnLateUpdate(Timestep(deltaTime)); });
 
 		m_Time += deltaTime;
 		m_FrameIndex++;

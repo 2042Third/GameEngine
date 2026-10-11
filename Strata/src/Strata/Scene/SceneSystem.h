@@ -28,7 +28,8 @@ namespace Strata
 	// OnRuntimeStarted (both in update order), so that game code run while starting (the scripts' OnCreate, in
 	// OnRuntimeStarted) finds every system running.
 	// Per frame the scene calls OnUpdate, then OnFixedUpdate zero or more times at the fixed timestep,
-	// then OnLateUpdate. React to entity/component changes through the registry's EnTT signals.
+	// then OnLateUpdate (of the systems whose descriptor asks for them: SceneSystemDescriptor::CallsUpdate and the others).
+	// React to entity/component changes through the registry's EnTT signals.
 	class SceneSystem
 	{
 	public:
@@ -70,9 +71,31 @@ namespace Strata
 		// The FrameProfiler stage the system's start and update callbacks are timed in (e.g. "Scene.Physics"); empty: the
 		// system is not timed on its own (its time counts for the stage around the scene's update).
 		std::string ProfileStage;
+		// The per-frame callbacks the scene calls: all of them by default; MakeSceneSystemDescriptor keeps only those the
+		// class overrides, so a system costs nothing in the phases it takes no part in (a scene's idle play frame is the
+		// sum of these calls).
+		bool CallsUpdate = true;
+		bool CallsFixedUpdate = true;
+		bool CallsLateUpdate = true;
 	};
 
-	// A descriptor for a system of class T, which Scene::GetSystem<T> finds while the scene runs.
+	namespace Detail
+	{
+
+		// Whether T overrides a callback of SceneSystem (itself or through a base between them): &T::OnUpdate then names a
+		// member of that class instead of SceneSystem's. The types tell, and they are known at compile time (comparing
+		// pointers to virtual member functions is unspecified). Systems declare their overrides public.
+		template<typename T>
+		constexpr bool c_OverridesUpdate = !std::is_same_v<decltype(&T::OnUpdate), void (SceneSystem::*)(Timestep)>;
+		template<typename T>
+		constexpr bool c_OverridesFixedUpdate = !std::is_same_v<decltype(&T::OnFixedUpdate), void (SceneSystem::*)(float)>;
+		template<typename T>
+		constexpr bool c_OverridesLateUpdate = !std::is_same_v<decltype(&T::OnLateUpdate), void (SceneSystem::*)(Timestep)>;
+
+	}
+
+	// A descriptor for a system of class T, which Scene::GetSystem<T> finds while the scene runs. The scene calls only the
+	// per-frame callbacks T overrides.
 	template<typename T>
 	SceneSystemDescriptor MakeSceneSystemDescriptor(std::string name, bool runsInSimulateMode, std::function<Scope<T>(Scene&)> factory)
 	{
@@ -83,6 +106,9 @@ namespace Strata
 		if (factory)
 			descriptor.Create = [factory = std::move(factory)](Scene& scene) -> Scope<SceneSystem> { return factory(scene); };
 		descriptor.Type = entt::type_id<T>().hash();
+		descriptor.CallsUpdate = Detail::c_OverridesUpdate<T>;
+		descriptor.CallsFixedUpdate = Detail::c_OverridesFixedUpdate<T>;
+		descriptor.CallsLateUpdate = Detail::c_OverridesLateUpdate<T>;
 		return descriptor;
 	}
 

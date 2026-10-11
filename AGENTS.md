@@ -396,10 +396,11 @@ The threading model, frame loop and pipelines these rules protect are described 
   importers are not linked into StrataRuntime. Components can only be registered while the composition root runs (the
   registry freezes at its end): games and tests pass theirs in `ModuleRegistrationOptions::Extra`. Scene systems
   declare their update order (`SceneSystemDescriptor::After`/`Before`) instead of relying on registration order, and
-  are made with `MakeSceneSystemDescriptor<T>` so that `Scene::GetSystem<T>` finds them. Scenes keep the components of
-  modules a build lacks: they load with one warning per component name into `UnknownComponentsComponent` and are saved
-  back unchanged (also through play mode, prefab snapshots, duplication and undo). Details: Docs/Architecture.md,
-  "Composition root and registries" and "Scene runtime lifecycle".
+  are made with `MakeSceneSystemDescriptor<T>` so that `Scene::GetSystem<T>` finds them and frames call only the
+  per-frame callbacks `T` overrides (`SceneSystemDescriptor::CallsUpdate` and the others; declare overrides public).
+  Scenes keep the components of modules a build lacks: they load with one warning per component name into
+  `UnknownComponentsComponent` and are saved back unchanged (also through play mode, prefab snapshots, duplication and
+  undo). Details: Docs/Architecture.md, "Composition root and registries" and "Scene runtime lifecycle".
 - **Scene caches and the transform contract:** per-frame scene cost follows what changed. `Scene` mirrors the hierarchy
   as EnTT handle links (`HierarchyComponent`, `Scene/SceneHierarchy.h`), recomputes cached world transforms
   (`WorldTransformComponent`) only below entities whose transform changed, keeps `ActiveInHierarchy` exact as activity

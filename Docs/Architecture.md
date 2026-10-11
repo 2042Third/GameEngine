@@ -500,6 +500,12 @@ are, in update order:
   it to the created system, so `Scene::GetSystem<T>` is a hash lookup of the exact class (null for a class that is not
   registered, not created in the current mode, or a base class). Systems of other modules use each other through scene
   services instead (below), never through `GetSystem` of a class they would have to include.
+- **Per-frame calls.** A frame calls `OnUpdate`, `OnFixedUpdate` and `OnLateUpdate` only on the systems whose descriptor
+  asks for them (`SceneSystemDescriptor::CallsUpdate`, `CallsFixedUpdate`, `CallsLateUpdate`; all three for a descriptor
+  built by hand). `MakeSceneSystemDescriptor<T>` sets them from the callbacks `T` overrides, told apart at compile time by
+  the type of `&T::OnUpdate`, so the built-ins cost an idle play frame seven calls (Scripting all three, Animation
+  `OnUpdate`, Physics `OnUpdate` and `OnFixedUpdate`, Audio `OnLateUpdate`) and a new system adds only the phases it uses
+  (`Perf.Scene.IdlePlayFrame1M`). `OnUpdateRuntime` walks one list of systems per phase, built when the scene starts.
 - **Profiling.** A system's start and update callbacks run in the frame profiler stage its descriptor names
   (`SceneSystemDescriptor::ProfileStage`: `Scene.Scripts`, `Scene.Animation`, `Scene.Physics`, `Scene.Audio`; empty: not
   timed on its own),
@@ -512,7 +518,8 @@ OnUpdateRuntime(dt)    paused without steps: only world transforms
                        dt = timestep * time scale (one fixed step while stepping)
                        OnUpdate -> OnFixedUpdate x N (accumulator, at most MaxFixedStepsPerFrame = 8, backlog
                        dropped; with time dilation catch-up steps stop once the update's steps took longer than
-                       they simulated) -> OnLateUpdate -> flush deferred destruction -> world transforms
+                       they simulated) -> OnLateUpdate, each on the systems that take part in it -> flush
+                       deferred destruction -> world transforms
 SetPaused(bool)        OnPausedChanged on every system; Step(n) runs n single fixed steps while paused
 OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reverse order, destruction flushed
 ```

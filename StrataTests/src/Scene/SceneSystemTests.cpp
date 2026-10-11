@@ -39,6 +39,36 @@ namespace
 		using RecordingSystem::RecordingSystem;
 	};
 
+	struct PhaseCounts
+	{
+		uint32_t Updates = 0;
+		uint32_t FixedUpdates = 0;
+		uint32_t LateUpdates = 0;
+	};
+
+	// Counts the per-frame callbacks the scene calls.
+	class PhaseCountingSystem : public SceneSystem
+	{
+	public:
+		explicit PhaseCountingSystem(PhaseCounts& counts)
+			: m_Counts(counts)
+		{
+		}
+
+		void OnUpdate(Timestep) override { m_Counts.Updates++; }
+		void OnFixedUpdate(float) override { m_Counts.FixedUpdates++; }
+		void OnLateUpdate(Timestep) override { m_Counts.LateUpdates++; }
+	private:
+		PhaseCounts& m_Counts;
+	};
+
+	// Takes part in the late update only.
+	class LateOnlySystem : public SceneSystem
+	{
+	public:
+		void OnLateUpdate(Timestep) override {}
+	};
+
 	SceneSystemDescriptor MakeRecording(const std::string& name, std::vector<std::string> after = {}, std::vector<std::string> before = {})
 	{
 		// Typeless: several recording systems may be registered at once.
@@ -232,6 +262,62 @@ TEST_SUITE("Scene.Systems")
 		REQUIRE(SceneSystemRegistry::Register(MakeRecording("TestA")));
 		CHECK(SceneSystemRegistry::Unregister("TestA"));
 		CHECK(GetSystemNames() == names);
+	}
+
+	TEST_CASE("A frame calls only the per-frame callbacks a system takes part in")
+	{
+		// MakeSceneSystemDescriptor asks for the callbacks the class overrides, also those it inherits from a base between it
+		// and SceneSystem; a descriptor built by hand asks for all of them.
+		const SceneSystemDescriptor lateOnly = MakeSceneSystemDescriptor<LateOnlySystem>("TestLate", false, [](Scene&) { return CreateScope<LateOnlySystem>(); });
+		CHECK_FALSE(lateOnly.CallsUpdate);
+		CHECK_FALSE(lateOnly.CallsFixedUpdate);
+		CHECK(lateOnly.CallsLateUpdate);
+		const SceneSystemDescriptor derived = MakeSceneSystemDescriptor<OtherRecordingSystem>("TestDerived", false, [](Scene&) { return CreateScope<OtherRecordingSystem>("TestDerived"); });
+		CHECK(derived.CallsUpdate);
+		CHECK_FALSE(derived.CallsFixedUpdate);
+		CHECK_FALSE(derived.CallsLateUpdate);
+		const SceneSystemDescriptor typeless = MakeRecording("TestTypeless");
+		CHECK(typeless.CallsUpdate);
+		CHECK(typeless.CallsFixedUpdate);
+		CHECK(typeless.CallsLateUpdate);
+
+		// The built-ins take part in seven calls of an idle frame: Scripting in all three phases, Animation in OnUpdate,
+		// Physics in OnUpdate and OnFixedUpdate, Audio in OnLateUpdate.
+		const std::vector<SceneSystemDescriptor>& builtins = SceneSystemRegistry::GetAll();
+		REQUIRE(builtins.size() == 4);
+		CHECK((builtins[0].CallsUpdate && builtins[0].CallsFixedUpdate && builtins[0].CallsLateUpdate));
+		CHECK((builtins[1].CallsUpdate && !builtins[1].CallsFixedUpdate && !builtins[1].CallsLateUpdate));
+		CHECK((builtins[2].CallsUpdate && builtins[2].CallsFixedUpdate && !builtins[2].CallsLateUpdate));
+		CHECK((!builtins[3].CallsUpdate && !builtins[3].CallsFixedUpdate && builtins[3].CallsLateUpdate));
+
+		// The scene calls what the descriptors ask for, in frames and in steps of a paused scene.
+		PhaseCounts all;
+		PhaseCounts withoutFixed;
+		ScopedSystems systems;
+		SceneSystemDescriptor allDescriptor;
+		allDescriptor.Name = "TestAllPhases";
+		allDescriptor.Create = [&all](Scene&) -> Scope<SceneSystem> { return CreateScope<PhaseCountingSystem>(all); };
+		REQUIRE(systems.Register(std::move(allDescriptor)));
+		SceneSystemDescriptor withoutFixedDescriptor;
+		withoutFixedDescriptor.Name = "TestWithoutFixed";
+		withoutFixedDescriptor.Create = [&withoutFixed](Scene&) -> Scope<SceneSystem> { return CreateScope<PhaseCountingSystem>(withoutFixed); };
+		withoutFixedDescriptor.CallsFixedUpdate = false;
+		REQUIRE(systems.Register(std::move(withoutFixedDescriptor)));
+		{
+			Scene scene;
+			scene.OnRuntimeStart();
+			scene.OnUpdateRuntime(scene.GetSettings().FixedTimestep);
+			scene.SetPaused(true);
+			scene.Step(1);
+			scene.OnUpdateRuntime(0.016f);
+			scene.OnRuntimeStop();
+		}
+		CHECK(all.Updates == 2);
+		CHECK(all.FixedUpdates == 2);
+		CHECK(all.LateUpdates == 2);
+		CHECK(withoutFixed.Updates == 2);
+		CHECK(withoutFixed.FixedUpdates == 0);
+		CHECK(withoutFixed.LateUpdates == 2);
 	}
 
 	TEST_CASE("GetSystem finds the running systems by their class")
