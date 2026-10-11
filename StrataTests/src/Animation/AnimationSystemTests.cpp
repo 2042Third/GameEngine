@@ -1,13 +1,16 @@
 #include <doctest/doctest.h>
 
 #include "Animation/AnimationTestUtils.h"
+#include "Animation/SkinnedMeshTestUtils.h"
 #include "Asset/AssetTestUtils.h"
 #include "Scene/SceneTestUtils.h"
 #include "Strata/Animation/AnimationSystem.h"
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Core/Log.h"
+#include "Strata/Renderer/RenderScene.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
+#include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneServices.h"
 
@@ -16,6 +19,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -663,5 +667,110 @@ TEST_SUITE("Animation.StateMachine")
 			CHECK(threaded.first == reference.first);
 			CHECK(threaded.second == reference.second);
 		}
+	}
+}
+
+TEST_SUITE("Animation.System")
+{
+	TEST_CASE("Every instance of an animated prefab plays its own animator, which its skins and attachments follow")
+	{
+		AnimationScene scene;
+		// A character as a prefab: the animator at its root, a skinned body and a hand attached to the wrist, both naming it.
+		const AssetHandle meshHandle = UUID(0x5C1B);
+		const Ref<Mesh> tube = CreateSkinnedTube({ .Joints = 3, .RingsPerJoint = 2, .Sides = 6, .JointLength = 1.0f, .Radius = 0.25f });
+		Ref<Prefab> prefab;
+		{
+			Scene source("Character");
+			Entity root = source.CreateEntity("Character");
+			AnimatorComponent& animator = root.AddComponent<AnimatorComponent>();
+			animator.Skeleton = UUID(c_SkeletonHandle);
+			animator.Clip = UUID(c_WaveHandle);
+			Entity body = source.CreateChildEntity(root, "Body");
+			body.AddComponent<MeshRendererComponent>().Mesh = meshHandle;
+			body.AddComponent<SkinComponent>().Animator = root.GetUUID();
+			Entity hand = source.CreateChildEntity(root, "Hand");
+			hand.AddComponent<AttachToJointComponent>() = AttachToJointComponent { root.GetUUID(), "Wrist" };
+			prefab = Prefab::CreateFromEntities(source, { root });
+		}
+		REQUIRE(prefab);
+
+		// Two instances, the second at half speed and elsewhere: fresh IDs, and each one's references name its own root.
+		const std::vector<Entity> first = prefab->Instantiate(*scene.SceneRef);
+		const std::vector<Entity> second = prefab->Instantiate(*scene.SceneRef);
+		REQUIRE(first.size() == 1);
+		REQUIRE(second.size() == 1);
+		Entity characters[] = { first[0], second[0] };
+		CHECK(characters[0].GetUUID() != characters[1].GetUUID());
+		for (const Entity character : characters)
+		{
+			const std::vector<Entity> children = character.GetChildren();
+			REQUIRE(children.size() == 2);
+			CHECK(children[0].GetComponent<SkinComponent>().Animator == character.GetUUID());
+			CHECK(children[1].GetComponent<AttachToJointComponent>().Animator == character.GetUUID());
+		}
+		characters[1].GetComponent<AnimatorComponent>().Speed = 0.5f;
+		characters[1].GetComponent<TransformComponent>().Translation = glm::vec3(4.0f, 0.0f, 0.0f);
+		characters[1].MarkModified<TransformComponent>();
+
+		scene.Start();
+		scene.Update(0.25f);
+		CHECK(scene.System()->GetStats().Animators == 2);
+		CHECK(scene.System()->GetStats().AssetSets == 1); // Same skeleton and clip: shared
+		// A quarter into the wave the first elbow is bent 45 degrees; the second is an eighth in, as the clip has it then.
+		CHECK(ElbowDegrees(scene.GetJoint(characters[0], 1)) == doctest::Approx(45.0f).epsilon(1e-3));
+		const Ref<Skeleton> skeleton = CreateArmSkeleton();
+		const Ref<AnimationClip> wave = CreateWaveClip(1.0f);
+		const AnimationClipBinding binding = wave->Bind(*skeleton);
+		std::vector<JointPose> eighth = skeleton->GetRestPose();
+		wave->Sample(binding, 0.125f, eighth);
+		CHECK(ElbowDegrees(scene.GetJoint(characters[1], 1)) == doctest::Approx(glm::degrees(glm::angle(eighth[1].Rotation))).epsilon(1e-3));
+		// Each hand is at its own animator's wrist.
+		for (const Entity character : characters)
+		{
+			const Entity hand = character.GetChildren()[1];
+			CHECK(SameMatrices(scene.SceneRef->GetWorldTransform(hand), scene.SceneRef->GetWorldTransform(character) * scene.GetJoint(character, 2), 1e-5f));
+		}
+		CheckSceneCaches(*scene.SceneRef);
+
+		// The renderer poses each body by its own animator, from palettes of their own.
+		RenderScene& renderScene = RenderScene::Get(*scene.SceneRef);
+		renderScene.Sync(nullptr);
+		for (uint32_t slot = 0; slot < renderScene.GetMeshSlotCapacity(); slot++)
+		{
+			if (renderScene.GetMeshHandle(slot) == meshHandle)
+				renderScene.SetMeshLayout(slot, *tube);
+		}
+		renderScene.Sync(nullptr);
+		uint32_t paletteFirsts[2] = {};
+		for (size_t index = 0; index < 2; index++)
+		{
+			CAPTURE(index);
+			const uint32_t proxy = renderScene.FindProxy(characters[index].GetChildren()[0].GetHandle());
+			REQUIRE(proxy != RenderScene::c_InvalidIndex);
+			CHECK((renderScene.GetProxyFlags(proxy) & RenderProxyFlags::Skinned) != 0);
+			CHECK(renderScene.GetSkinAnimator(proxy) == characters[index].GetHandle());
+			REQUIRE(renderScene.GetPaletteCount(proxy) == 3);
+			paletteFirsts[index] = renderScene.GetPaletteFirst(proxy);
+		}
+		CHECK(paletteFirsts[0] != paletteFirsts[1]);
+		// The joint above the elbows: the poses differ, and so do the palettes.
+		const std::span<const RenderData::AffineTransform> palette = renderScene.GetPalette();
+		CHECK(std::memcmp(&palette[paletteFirsts[0] + 2], &palette[paletteFirsts[1] + 2], sizeof(RenderData::AffineTransform)) != 0);
+		std::string error;
+		CHECK_MESSAGE(renderScene.Validate(&error), error);
+
+		// An instance spawned while the scene plays (as scripts spawn prefabs) starts at the next update, posing its own body.
+		const std::vector<Entity> third = prefab->Instantiate(*scene.SceneRef);
+		REQUIRE(third.size() == 1);
+		scene.Update(0.25f);
+		CHECK(scene.System()->GetStats().Animators == 3);
+		CHECK(ElbowDegrees(scene.GetJoint(third[0], 1)) == doctest::Approx(45.0f).epsilon(1e-3));
+		renderScene.Sync(nullptr);
+		const uint32_t spawned = renderScene.FindProxy(third[0].GetChildren()[0].GetHandle());
+		REQUIRE(spawned != RenderScene::c_InvalidIndex);
+		CHECK((renderScene.GetProxyFlags(spawned) & RenderProxyFlags::Skinned) != 0);
+		CHECK(renderScene.GetSkinAnimator(spawned) == third[0].GetHandle());
+		CHECK_MESSAGE(renderScene.Validate(&error), error);
+		CheckSceneCaches(*scene.SceneRef);
 	}
 }
