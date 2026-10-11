@@ -425,7 +425,7 @@ entered several times in a frame adds up. Its cost is about 0.6 microseconds per
 | `Assets.Finalize` | `AssetManagerBase::ProcessCompletions`: finalizing arrivals, GPU uploads |
 | `Scene.Scripts`, `Scene.Physics`, `Scene.Audio` | the scene systems' start and update callbacks (`SceneSystemDescriptor::ProfileStage`) |
 | `Scene.Transforms` | `Scene::UpdateWorldTransforms` when something is dirty |
-| `Render.Extract` | `SceneRenderer::CollectLights`, `CollectDraws`, `CollectShadowCasters` |
+| `Render.Extract` | `SceneRenderer::Render`'s `RenderScene::Sync` and `PrepareExtraction`, then `CullView`, `FindShadowCasters`, `ResolveAssets`, `GatherDraws`, `GatherShadowDraws` and `CollectLights` (`SceneRendererExtraction.cpp`) |
 | `Render.Submit` | the rest of `SceneRenderer::Render`: recording and submitting the command list, text |
 | `Editor.UI` | `Application::RenderImGui`: the layers' `OnImGuiRender` and ImGui's drawing (the viewport's render nests in it) |
 | `Present` | `GraphicsDevice::EndFrame`, after the work time is measured (outside the frame time) |

@@ -106,7 +106,8 @@ namespace Strata
 		m_Commands.Register({ "editor.showPanel",
 			"Opens a panel of the editor's window and brings it to the front, e.g. to show the person at the editor what you are looking at: "
 			"Streaming (asset memory per pool against its budget, loads, uploads, the assets), Performance (where the frames go, stage by "
-			"stage), Console, ContentBrowser, Hierarchy, Inspector or Viewport. Changes no scene data and records no undo; fails in an editor "
+			"stage), Console, ContentBrowser, Hierarchy, Inspector, AssetInspector (the Asset tab: the inspected asset, its settings and "
+			"preview) or Viewport. Changes no scene data and records no undo; fails in an editor "
 			"without a window (--no-gpu or headless) and while the launcher shows (no project is open).",
 			CommandUtils::ObjectSchema({ { "panel", { { "type", "string" }, { "enum", panels }, { "description", "The panel to show" } } } }, { "panel" }),
 			[this](EditorContext&, const nlohmann::json& parameters) -> EditorCommandResult
