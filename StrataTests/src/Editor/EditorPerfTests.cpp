@@ -16,9 +16,11 @@
 
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/GraphicsDevice.h>
+#include <Strata/Renderer/Material.h>
 #include <Strata/Renderer/Renderer.h>
 #include <Strata/Renderer/SceneRenderer.h>
 #include <Strata/Renderer/Texture.h>
@@ -343,6 +345,46 @@ TEST_SUITE("Perf.Editor")
 			return std::max(uncompressed, compressed);
 		});
 		CHECK(AssetManager::GetAsset<Texture>(texture)->GetWidth() == 4096u);
+	}
+
+	TEST_CASE("Finding what uses an asset among 10,000 assets")
+	{
+		// 10,000 materials, every hundredth using one texture, and the open scene using it too: asset.findReferences answers
+		// from the asset manager's index of who references whom (and the open scene from memory), never by reading documents.
+		constexpr uint32_t c_Materials = 10'000;
+		constexpr uint32_t c_Users = 100;
+		Perf::ScopedApplicationJobSystem jobs;
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		const std::filesystem::path project = CreateTemporaryDirectory("PerfFindReferences") / "Game";
+		const EditorCommandResult created = commands.Execute(context, "project.create", { { "directory", FileSystem::ToUTF8(project) }, { "name", "Game" } });
+		REQUIRE_MESSAGE(created.Success, created.Error);
+		REQUIRE(FileSystem::WriteBytes(project / "Assets" / "Textures" / "Shared.png", CreateSolidPNG(4, 4, 200, 100, 50)));
+		std::string error;
+		REQUIRE_MESSAGE(context.OpenProject(project, &error), error);
+		const AssetHandle texture = context.GetAssetManager()->FindAssetByPath("Textures/Shared.png");
+		REQUIRE(texture.IsValid());
+		const std::string plain = JsonUtils::Dump(Material::Create()->Serialize(), 1, '\t');
+		MaterialProperties properties;
+		properties.BaseColorMap = texture;
+		const std::string textured = JsonUtils::Dump(Material::Create(properties)->Serialize(), 1, '\t');
+		for (uint32_t index = 0; index < c_Materials; index++)
+			REQUIRE(FileSystem::WriteText(project / "Assets" / "Materials" / fmt::format("Perf{}.stmat", index), index % (c_Materials / c_Users) == 0 ? textured : plain));
+		REQUIRE_MESSAGE(context.OpenProject(project, &error), error);
+		const nlohmann::json parameters = { { "asset", UUIDToJson(texture) } };
+		const EditorCommandResult first = commands.Execute(context, "asset.findReferences", parameters);
+		REQUIRE_MESSAGE(first.Success, first.Error);
+		CHECK(first.Value["referencedBy"].size() == c_Users);
+
+		// The median call: one lookup of the index and a walk of the open scene's entities.
+		Perf::CheckBudgetConfirmed("Perf.Editor.FindReferences10k", [&]
+		{
+			return Perf::Measure("Perf.Editor.FindReferences10k", 5, 50, [&]
+			{
+				const EditorCommandResult result = commands.Execute(context, "asset.findReferences", parameters);
+				REQUIRE(result.Success);
+			}).MedianMs;
+		});
 	}
 }
 
