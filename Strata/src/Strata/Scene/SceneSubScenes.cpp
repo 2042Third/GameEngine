@@ -92,11 +92,13 @@ namespace Strata
 		auto it = std::find_if(m_SubScenes.begin(), m_SubScenes.end(), [id](const Scope<SubSceneLoad>& load) { return load->Status.ID == id; });
 		if (it == m_SubScenes.end())
 			return false;
+		// While sub-scenes advance (a failed one's entities go, and their scripts' OnDestroy may unload sub-scenes), the load
+		// being advanced must stay: the unload waits for the end of UpdateSubScenes.
 		if (m_AdvancingSubScenes)
 		{
-			ST_CORE_ASSERT(false, "Scene '{}': sub-scene {} cannot be unloaded from the signals of entities sub-scenes are creating", m_Name, id);
-			ST_CORE_ERROR("Scene '{}': sub-scene {} cannot be unloaded from the signals of entities sub-scenes are creating", m_Name, id);
-			return false;
+			if (std::find(m_DeferredSubSceneUnloads.begin(), m_DeferredSubSceneUnloads.end(), id) == m_DeferredSubSceneUnloads.end())
+				m_DeferredSubSceneUnloads.push_back(id);
+			return true;
 		}
 
 		// Taken out of the list first: systems reacting to the destruction may load or unload sub-scenes themselves.
@@ -177,6 +179,10 @@ namespace Strata
 				AdvanceSubScene(*load, budget, deadline);
 		}
 		m_AdvancingSubScenes = false;
+		const std::vector<SubSceneID> unloads = std::move(m_DeferredSubSceneUnloads);
+		m_DeferredSubSceneUnloads.clear();
+		for (const SubSceneID id : unloads)
+			UnloadSubScene(id);
 	}
 
 	void Scene::AdvanceSubScene(SubSceneLoad& load, size_t& budget, std::chrono::steady_clock::time_point deadline)

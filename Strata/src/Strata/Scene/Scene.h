@@ -167,8 +167,8 @@ namespace Strata
 		SubSceneID BeginAdditiveLoad(Ref<Scene> prepared, std::string* outError = nullptr);
 		// Removes a sub-scene: cancels its load (releasing every pin it holds) and destroys the entities it created with their
 		// descendants (DestroyEntities: running systems hear OnEntityDestroying first; deferred while the scene updates).
-		// Its ID is unknown afterwards. False for an unknown ID, and from the component signals of entities UpdateSubScenes
-		// creates (a programmer error: their sub-scene is half made).
+		// Its ID is unknown afterwards. False for an unknown ID. While UpdateSubScenes runs (scripts' OnDestroy when a failed
+		// sub-scene's entities go), the unload happens once it returns.
 		bool UnloadSubScene(SubSceneID id);
 		// Whether every entity of the sub-scene exists.
 		bool IsSubSceneLoaded(SubSceneID id) const;
@@ -599,7 +599,8 @@ namespace Strata
 		// Sub-scenes in the order of their loads (Scene/SceneSubScenes.cpp).
 		std::vector<Scope<SubSceneLoad>> m_SubScenes;
 		SubSceneID m_NextSubSceneID = 1;
-		bool m_AdvancingSubScenes = false; // UpdateSubScenes is creating entities (whose signals must not unload sub-scenes)
+		bool m_AdvancingSubScenes = false;               // UpdateSubScenes runs: unloads wait for its end
+		std::vector<SubSceneID> m_DeferredSubSceneUnloads; // Unloads requested meanwhile
 
 		// Declared last: disconnected before anything the handlers use is destroyed.
 		std::vector<entt::scoped_connection> m_Connections;

@@ -23,6 +23,7 @@
 #include <ImGuizmo.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <optional>
@@ -648,7 +649,18 @@ namespace Strata
 			if (const std::optional<AssetMetadata> metadata = assets->GetMetadata(status.Scene))
 				name = metadata->Path.empty() ? metadata->Name : metadata->Path;
 		}
-		const char* stage = status.State == SceneLoadState::LoadingScene ? "Reading the scene" : "Loading what it uses";
+		// Reading the document is one step of the load's progress (it counts once the scene is prepared): the time it has
+		// taken shows that it goes on. What the scene uses then loads by bytes.
+		std::string stage;
+		if (status.State == SceneLoadState::LoadingScene)
+		{
+			const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - status.Started).count();
+			stage = seconds >= 1.0 ? fmt::format("Reading the scene \xC2\xB7 {:.0f} s", std::floor(seconds)) : std::string("Reading the scene");
+		}
+		else
+		{
+			stage = fmt::format("Loading what it uses {:.0f}%", status.Progress * 100.0f);
+		}
 
 		// A card in the middle of the image: the scene's name over the progress bar (no item takes the image's clicks but the
 		// bar, which takes none either).
@@ -665,7 +677,7 @@ namespace Strata
 		drawList->AddText(contentMin, ImGui::GetColorU32(colors.Text), title.c_str());
 		ImGui::PopFont();
 		ImGui::SetCursorScreenPos(ImVec2(contentMin.x, contentMin.y + ImGui::GetTextLineHeightWithSpacing()));
-		UI::StrataProgressBar("Viewport.SceneLoad", status.Progress, fmt::format("{} {:.0f}%", stage, status.Progress * 100.0f), contentWidth);
+		UI::StrataProgressBar("Viewport.SceneLoad", status.Progress, stage, contentWidth);
 	}
 
 	void ViewportPanel::DrawStatsOverlay(ImDrawList* drawList, const ImVec2& position, const ViewportRenderer& renderer, const ViewportView& view, const EditorFrameStats& frame)

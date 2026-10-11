@@ -75,6 +75,24 @@ namespace
 		return tags ? tags->size() : 0;
 	}
 
+	// Unloads a sub-scene the first time an entity of the scene is destroyed, as a script's OnDestroy might.
+	struct UnloadOnDestroy
+	{
+		Scene& Target;
+		SubSceneID SubScene = 0;
+		bool Unloaded = false;
+		entt::connection Connection;
+
+		void OnDestroyed(entt::registry&, entt::entity)
+		{
+			if (!Unloaded)
+				Unloaded = Target.UnloadSubScene(SubScene);
+		}
+
+		void Connect() { Connection = Target.GetRegistry().on_destroy<NameComponent>().connect<&UnloadOnDestroy::OnDestroyed>(*this); }
+		void Disconnect() { Connection.release(); }
+	};
+
 	size_t CountOccurrences(const std::string& text, const std::string& part)
 	{
 		size_t count = 0;
@@ -283,6 +301,33 @@ TEST_SUITE("Scene.Streaming")
 		CHECK(scene.GetSubSceneStatus(lateID)->Error.find(lastID.ToString()) != std::string::npos);
 		CHECK(scene.GetEntityCount() == 3);
 		CHECK(scene.GetEntityByUUID(lastID).GetName() == "Interloper");
+		CHECK(CountSubSceneTags(scene) == 0);
+		CheckSceneCaches(scene);
+
+		// What reacts to a failed sub-scene's entities going (scripts' OnDestroy) may unload sub-scenes: the unload waits until
+		// the sub-scenes' update is done.
+		const SubSceneID resident = scene.BeginAdditiveLoad(MakeNestedScene(10, "Resident"));
+		UpdateUntilSettled(scene, resident);
+		REQUIRE(scene.IsSubSceneLoaded(resident));
+		const Ref<Scene> doomed = MakeNestedScene(300, "Doomed");
+		const UUID doomedLast = doomed->GetEntitiesInHierarchyOrder().back().GetUUID();
+		const SubSceneID doomedID = scene.BeginAdditiveLoad(doomed);
+		UnloadOnDestroy listener { scene, resident };
+		bool collided = false;
+		UpdateUntilSettled(scene, doomedID, [&]()
+		{
+			if (!collided && scene.GetSubSceneStatus(doomedID)->CreatedEntities > 0)
+			{
+				scene.CreateEntityWithUUID(doomedLast, "Collider");
+				listener.Connect();
+				collided = true;
+			}
+		});
+		listener.Disconnect();
+		CHECK(scene.GetSubSceneStatus(doomedID)->State == SubSceneState::Failed);
+		CHECK(listener.Unloaded);
+		CHECK(scene.GetSubSceneStatus(resident) == nullptr);
+		CHECK(scene.GetEntityCount() == 4);
 		CHECK(CountSubSceneTags(scene) == 0);
 		CheckSceneCaches(scene);
 
