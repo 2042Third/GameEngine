@@ -1287,7 +1287,11 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   (`scene.open`, `scene.new`, `project.open`, `project.create`, `project.close`, `project.openSample`, `editor.quit`)
   fails while it has unsaved changes unless `force: true` (`CommandUtils::CheckUnsavedChanges`) and reports
   `discardedChanges`, so neither an agent nor a script can throw away a person's work by accident; the UI asks first and
-  then passes `force`.
+  then passes `force`. An answer covers the changes the scene had then: New Project and Open Sample, which open after the
+  question, ask again at Create when the scene changed meanwhile (an agent edited it; `UndoStack::GetVersion` against the
+  version they opened with). Dialogs that ask while they stay open (the recovery dialog's Recover, those two) draw the
+  question over themselves (`EditorShell::DrawDiscardQuestion` inside their modal): a modal opened over the whole window
+  would close them, since ImGui keeps one popup per level.
   A `.stproj` file dropped on the window opens its project. The look comes from
   `UI/Theme` (the Bedrock palette and its meanings; `ApplyTheme` is the `ImGuiLayer` style callback), `UI/EditorFonts`
   (Inter, Inter SemiBold and JetBrains Mono embedded with `strata_embed_file`, Lucide's icons merged into the Inter
@@ -1305,7 +1309,9 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   "changes only" (kind Edit), its rows rebuilt only when `CommandJournal::GetVersion` or the filters change and the
   parameter previews made once per entry, with the selected entry's JSON (`CommandJournal::Describe`) and its actions:
   Copy as script (a one-step command script), Re-run (through the runner, from the UI) and Undo to here (`edit.undo`
-  until the entry's step is the latest applied, so the journal shows the undos). `EditorShell::ShowActivity(entry)`
+  until the entry's step is the latest applied, so the journal shows the undos). A `force` the person gave was their
+  answer to the unsaved-changes question then: Copy as script leaves it out of their commands, and Re-run of a command
+  that takes `force` asks again (`EditorShell::RequestDiscardChanges`). `EditorShell::ShowActivity(entry)`
   selects and reveals an entry (the viewport's agent chip, the toasts). Panels collect what the status bar shows in `OnUpdate`, also while closed: the Streaming
   panel takes the active asset manager's `GetStats` once per frame after the frame's commands ran (so its totals equal
   what `asset.stats` returned in that frame) and keeps 120 frames of uploaded bytes, the Performance panel samples the
@@ -1369,10 +1375,10 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   `KeepAlive` while hovered). Feeds: `NotifyCommandOutcome` for commands of the UI (`RunEditorCommand`, the runner when
   the origin is `CommandSource::UI`: failures and warnings, with `EditorCommandResult::JournalId`, which `Execute` now sets
   for every result), `EditorContext::BuildScripts` and `OnScriptBuildFinished`, `StopOnScriptFault`, the end of a game
-  export (`NotifyExportFinished`, once per export) and `EditorLayer` when the recovery dialog closes with changes still on
-  offer. `UI::DrawNotifications` draws them as toasts in one window at the bottom right of the work area, above the status
-  bar, kept in front without being focused (`BringWindowToDisplayFront`, `NoFocusOnAppearing`); it returns at once while
-  there are none.
+  export (`NotifyExportFinished`, once per export: an export that does not start leaves the announced one) and
+  `EditorLayer` when the recovery dialog closes with changes still on offer. `UI::DrawNotifications` draws them as toasts
+  in one window at the bottom right of the work area, above the status bar, kept in front without being focused
+  (`BringWindowToDisplayFront`, `NoFocusOnAppearing`); it returns at once while there are none.
 - **Activity journal** (`CommandJournal.h`). `EditorCommandRegistry::Execute` records every command it runs in the
   context's journal: its origin (`CommandOrigin`: UI from `RunEditorCommand` and the panels, Automation with the client's
   name from `EditorAutomation`, CommandScript from `EditorCommandScript`, Internal for code and for commands that commands
@@ -1393,11 +1399,13 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   result gave such an ID joins the script (a lookup, e.g. `entity.find` of a template entity). IDs used before any result
   gave them, results of session commands and of commands while playing (the running copy has the edited scene's IDs) and
   built-in asset handles stay literal: they name what every copy has. The export fails rather than write a script that
-  would not repeat the session: when the journal no longer holds the entries after `since` (its ring), or when the
-  parameters of a command it needs were shortened. Continuous UI edits (inspector fields, gizmo drags, the material
-  editor) record their undo steps directly, not through commands, so no script holds them: the journal counts the undo
-  records no command made (`NoteEditsOutsideCommands`, before every top-level handler and poll) and the export reports
-  them (`editsOutsideCommands`, with a warning). Undo and redo from the UI run `edit.undo` and `edit.redo`. `StrataEditor.Replay` (`StrataTests/Editor/ReplaySession.cmake`) runs a session, exports it,
+  would not repeat the session: when the journal no longer holds every entry after `since` (its ring dropped the first
+  ones; also for `since` 0, the session's start), or when the parameters of a command it needs were shortened.
+  Continuous UI edits (inspector fields, gizmo drags, the material editor) record their undo steps directly, not through
+  commands, so no script holds them: the journal counts the edits no command made (`NoteEditsOutsideCommands`, before
+  every top-level handler and poll: the undo steps recorded since, one however many merges made it, as `UndoStack::
+  GetStepCount` counts them, and merges alone into an earlier step as one) and the export reports them
+  (`editsOutsideCommands`, with a warning). Undo and redo from the UI run `edit.undo` and `edit.redo`. `StrataEditor.Replay` (`StrataTests/Editor/ReplaySession.cmake`) runs a session, exports it,
   runs the export on a copy made before the session and compares the scene and assets with IDs numbered by appearance
   (`StrataTests --strata-test-helper=compare-documents`, `src/Editor/SceneComparison.h`); `Editor.Replay` does the same
   with 50 commands of an automation client in-process.
@@ -1458,7 +1466,8 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   journal is written at once and marked discarded, so nothing is lost even then. File operations (writes, removals,
   scans, reads) run one at a time on I/O jobs in the order they were asked for, so a removal after a save is never
   overtaken by an earlier write; the editor waits for them only when it closes. Opening a project scans the directory:
-  a file whose owner process still runs and has not discarded it belongs to that editor and is left out; the others are
+  a file whose owner process still runs (its id with the start time recorded, since ids are reused, also this process's)
+  and has not discarded it belongs to that editor and is left out; the others are
   offered (the editor's Recover Unsaved Changes dialog, `UI/RecoveryDialog`, opens by itself once per opened project
   with changes that still apply; File > Recover Unsaved Changes reopens it) and listed by `scene.recoveryStatus`. An
   entry applies only while its scene file hashes to the recorded hash and the scene asset is still at its path.
@@ -1563,7 +1572,7 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   Activity panel) and, for `c_AgentFlashSeconds` (600 ms), outlines the projected bounds of those entities (at most 64)
   in the accent, fading out (`ViewportPanel::DrawAgentFlash`, an `ImDrawList` rectangle per entity, bounds taken once when
   the command finished). While nothing of this shows the panel does no work for it, and only the fade keeps the editor at
-  its full frame rate (`IsAnimating`).
+  its full frame rate (`IsAnimating`, from the clock, so a viewport hidden mid-fade does not keep it there).
 - **Viewport** (`EditorViewport.h`, `ViewportRenderer.h`). `EditorViewport` holds the editor camera (and the cameras of
   the project's other scenes), the settings and two `ViewportRenderer`s (panel and captures). The panel renders during
   `OnImGuiRender`; `ResolveViewportView` picks the scene's primary camera while playing and the editor camera otherwise,

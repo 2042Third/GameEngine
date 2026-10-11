@@ -7,6 +7,7 @@
 #include "Editor/UndoStack.h"
 #include "UI/EditorActions.h"
 #include "UI/EditorFonts.h"
+#include "UI/EditorShell.h"
 #include "UI/Icons.h"
 #include "UI/ItemProbe.h"
 #include "UI/TextFormat.h"
@@ -100,6 +101,13 @@ namespace Strata
 			return { "done", colors.TextSecondary };
 		}
 
+		// Commands that replace the edited scene take "force" (CommandUtils::ForceSchema), which discards its unsaved changes.
+		bool ReplacesScene(const EditorCommand& command)
+		{
+			const auto properties = command.Parameters.find("properties");
+			return properties != command.Parameters.end() && properties->is_object() && properties->contains("force");
+		}
+
 	}
 
 	void ActivityPanel::Select(uint64_t id)
@@ -113,9 +121,12 @@ namespace Strata
 	{
 		if (entry.ParametersTruncated)
 			return std::nullopt;
+		nlohmann::json parameters = entry.Parameters;
+		if (entry.Source == CommandSource::UI && parameters.is_object())
+			parameters.erase("force");
 		nlohmann::json step = { { "command", entry.Command } };
-		if (entry.Parameters.is_object() && !entry.Parameters.empty())
-			step["parameters"] = entry.Parameters;
+		if (parameters.is_object() && !parameters.empty())
+			step["parameters"] = std::move(parameters);
 		return JsonUtils::Dump(nlohmann::json::array({ std::move(step) }), 1, '\t') + "\n";
 	}
 
@@ -293,14 +304,31 @@ namespace Strata
 		if (UI::ToolbarButton("Activity.Rerun", Icons::RotateCcw, "Re-run",
 				rerunStyle.Enabled ? "Run this command again with the same parameters" : "Only finished commands whose parameters the journal kept whole", rerunStyle))
 		{
-			const std::string command = entry.Command;
-			panelContext.Runner.Run(context, panelContext.Commands, command, entry.Parameters, [command](const EditorCommandResult& result)
+			// A command that replaces the edited scene asks about its unsaved changes now, as the menus do: the force it was
+			// recorded with answered for other changes. The answer may come in a later frame, so the run keeps what outlives
+			// this one.
+			const EditorCommand* command = panelContext.Commands.Find(entry.Command);
+			const bool replacesScene = command && ReplacesScene(*command);
+			nlohmann::json parameters = entry.Parameters;
+			if (replacesScene && parameters.is_object())
+				parameters.erase("force");
+			auto rerun = [editor = &context, commands = &panelContext.Commands, runner = &panelContext.Runner, name = entry.Command, parameters](bool force)
 			{
-				if (!result.Success)
-					ST_ERROR("{}: {}", command, result.Error);
-				else if (result.Value.is_object() && result.Value.contains("warning") && result.Value["warning"].is_string())
-					ST_WARN("{}: {}", command, result.Value["warning"].get<std::string>());
-			}, CommandOrigin { CommandSource::UI });
+				nlohmann::json given = parameters;
+				if (force)
+					given["force"] = true;
+				runner->Run(*editor, *commands, name, given, [name](const EditorCommandResult& result)
+				{
+					if (!result.Success)
+						ST_ERROR("{}: {}", name, result.Error);
+					else if (result.Value.is_object() && result.Value.contains("warning") && result.Value["warning"].is_string())
+						ST_WARN("{}: {}", name, result.Value["warning"].get<std::string>());
+				}, CommandOrigin { CommandSource::UI });
+			};
+			if (replacesScene && panelContext.Shell)
+				panelContext.Shell->RequestDiscardChanges([rerun]() { rerun(true); });
+			else
+				rerun(false);
 		}
 
 		// Undo to here: every step after this entry's own, through edit.undo, so the journal shows the undos too.

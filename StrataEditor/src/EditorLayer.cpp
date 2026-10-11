@@ -1630,8 +1630,18 @@ namespace Strata
 		return m_HasScriptBuild;
 	}
 
+	void EditorLayer::DrawDiscardQuestion()
+	{
+		DrawUnsavedChangesModal();
+	}
+
 	void EditorLayer::DrawUnsavedChangesModal()
 	{
+		// A dialog that asked draws the question over itself before the window's own call comes (popups belong to the level
+		// they are opened at: opened over the whole window, the question would close that dialog).
+		if (m_UnsavedChangesModalFrame == ImGui::GetFrameCount())
+			return;
+		m_UnsavedChangesModalFrame = ImGui::GetFrameCount();
 		if (m_OpenUnsavedChangesModal)
 		{
 			UI::OpenModal(c_UnsavedChangesModal);

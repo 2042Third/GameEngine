@@ -101,6 +101,11 @@ namespace Strata
 		uint64_t GetLatestSerial() const { return m_Position > 0 ? m_Entries[m_Position - 1].Serial : 0; }
 		// Counts recorded actions, merges included: a command that changed it recorded (or extended) a step.
 		uint64_t GetRecordCount() const { return m_RecordCount; }
+		// Counts the steps recorded (serials given out), not the merges into them: a drag recorded in many merges is one.
+		uint64_t GetStepCount() const { return m_NextSerial - 1; }
+		// Changes whenever what the stack holds, applies or calls saved changes: a record or merge, undo, redo, a save point,
+		// Clear. Unchanged, the scene's unsaved changes are the same ones (an answer about them still holds).
+		uint64_t GetVersion() const { return m_Version; }
 		// The serial of the step the latest Execute or Record created or merged into; 0 when that step changed nothing in
 		// the end and was dropped (a merged drag back to its start).
 		uint64_t GetLastRecordedSerial() const { return m_LastRecordedSerial; }
@@ -140,6 +145,7 @@ namespace Strata
 		uint64_t m_NextSerial = 1;
 		uint64_t m_RecordCount = 0;
 		uint64_t m_LastRecordedSerial = 0;
+		uint64_t m_Version = 0;
 		UndoStackObserver* m_Observer = nullptr;
 	};
 

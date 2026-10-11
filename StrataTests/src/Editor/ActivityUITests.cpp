@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Editor/CommandJournal.h"
+#include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/HarnessEditor.h"
 #include "Editor/UndoStack.h"
@@ -137,6 +138,62 @@ TEST_SUITE("Editor.UI.Activity")
 		CHECK(rerun.Parameters == nlohmann::json { { "name", "First" } });
 	}
 
+	TEST_CASE("Re-running a command that replaces the scene asks about its unsaved changes again")
+	{
+		HarnessEditor editor({}, WithFeatureProject("ActivityRerunScene"));
+		editor.Frames(2);
+		REQUIRE(editor.Context().HasProject());
+		editor.Run("editor.showPanel", { { "panel", "Activity" } });
+		editor.Frames(2);
+		ActivityPanel* panel = editor.Layer->GetPanels().Get<ActivityPanel>(EditorPanels::c_Activity);
+		REQUIRE(panel);
+
+		// The person opened the scene after answering the question about unsaved changes: the entry holds that answer.
+		const std::string scene = editor.Context().GetSceneHandle().ToString();
+		const EditorCommandResult opened = editor.Layer->GetCommands().Execute(editor.Context(), "scene.open", { { "scene", scene }, { "force", true } },
+			CommandOrigin { CommandSource::UI });
+		REQUIRE(opened.Success);
+		const uint64_t entry = opened.JournalId;
+		REQUIRE(editor.Context().GetJournal().Find(entry)->Parameters["force"] == true);
+		panel->Select(entry);
+		editor.Frames(2);
+
+		// As a script, the answer is left out: the script refuses to discard changes unless it says so itself.
+		REQUIRE(editor.Click("Activity.CopyScript"));
+		editor.Frames(1);
+		const nlohmann::json script = nlohmann::json::parse(editor.Harness.GetClipboard(), nullptr, false);
+		REQUIRE(script.is_array());
+		REQUIRE(script.size() == 1);
+		CHECK(script[0]["parameters"] == nlohmann::json { { "scene", scene } });
+
+		// Changes made since are asked about: Cancel keeps them.
+		const CommandJournal& journal = editor.Context().GetJournal();
+		editor.Run("entity.create", { { "name", "Unsaved" } });
+		REQUIRE(editor.Context().IsSceneModified());
+		REQUIRE(editor.Click("Activity.Rerun"));
+		editor.Frames(2);
+		REQUIRE(UI::ItemProbe::Find("UnsavedChanges.Cancel").has_value());
+		CHECK(FindLatest(journal, "scene.open") == entry);
+		REQUIRE(editor.Click("UnsavedChanges.Cancel"));
+		editor.Frames(2);
+		CHECK(editor.Context().GetEditScene()->FindEntityByName("Unsaved"));
+		CHECK(FindLatest(journal, "scene.open") == entry);
+
+		// Don't Save runs it again, with the answer.
+		REQUIRE(editor.Click("Activity.Rerun"));
+		editor.Frames(2);
+		REQUIRE(editor.Click("UnsavedChanges.DontSave"));
+		editor.Frames(2);
+		CHECK_FALSE(editor.Context().GetEditScene()->FindEntityByName("Unsaved"));
+		CHECK_FALSE(editor.Context().IsSceneModified());
+		const uint64_t rerunId = FindLatest(journal, "scene.open");
+		REQUIRE(rerunId > entry);
+		const CommandJournalEntry& rerun = *journal.Find(rerunId);
+		CHECK(rerun.Source == CommandSource::UI);
+		CHECK(rerun.Status == CommandStatus::Succeeded);
+		CHECK(rerun.Parameters["force"] == true);
+	}
+
 	TEST_CASE("The Activity panel asked for before the first frame joins the bottom area")
 	{
 		// As a command script's first command (editor.showPanel) does it: before the layout and the Console exist.
@@ -210,8 +267,11 @@ TEST_SUITE("Editor.UI.Activity")
 		REQUIRE(viewport);
 		CHECK(viewport->IsAnimating()); // The fade runs at the full frame rate
 
-		// The outline fades within c_AgentFlashSeconds; the chip stays while the agent is connected.
+		// The outline fades within c_AgentFlashSeconds; the chip stays while the agent is connected. The fade ends by the clock,
+		// also for a viewport that is not drawn meanwhile (hidden behind another tab), which must not keep the editor at its
+		// full frame rate.
 		std::this_thread::sleep_for(std::chrono::duration<double>(ViewportPanel::c_AgentFlashSeconds + 0.1));
+		CHECK_FALSE(viewport->IsAnimating());
 		editor.Frames(1);
 		CHECK_FALSE(UI::ItemProbe::Find("Viewport.AgentFlash").has_value());
 		CHECK_FALSE(viewport->IsAnimating());

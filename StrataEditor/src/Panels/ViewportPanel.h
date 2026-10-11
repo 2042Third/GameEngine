@@ -76,6 +76,8 @@ namespace Strata
 		void DrawAgentChip(EditorPanelContext& context, float right, float top);
 		// The projected bounds of the entities the latest automation command changed, outlined in the accent while they fade.
 		void DrawAgentFlash(EditorContext& context, const ViewportView& view);
+		// Whether the outline of what an agent changed still fades at `now` (it has bounds and c_AgentFlashSeconds have not passed).
+		bool IsFlashing(std::chrono::steady_clock::time_point now) const;
 		// The renderer's statistics over the image: frame time, draws, the render scene's proxies and uploads, asset requests.
 		static void DrawStatsOverlay(ImDrawList* drawList, const ImVec2& position, const ViewportRenderer& renderer, const ViewportView& view, const EditorFrameStats& frame);
 		void AcceptAssetDrops(EditorContext& context, const EditorCommandRegistry& commands);
@@ -97,11 +99,10 @@ namespace Strata
 		std::string m_AgentChipText;
 		uint64_t m_AgentChipActivity = 0;
 		int64_t m_AgentChipSeconds = -1;
-		// The flash of the activity m_FlashActivity: world bounds taken when it began.
+		// The flash of the activity m_FlashActivity: world bounds taken when it began (dropped when the panel is hidden).
 		uint64_t m_FlashActivity = 0;
 		std::vector<AABB> m_FlashBounds;
 		std::chrono::steady_clock::time_point m_FlashStart;
-		bool m_Flashing = false;
 	};
 
 }

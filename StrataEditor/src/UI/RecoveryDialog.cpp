@@ -112,8 +112,8 @@ namespace Strata
 			if (UI::ActionButton(recoverId.c_str(), Icons::ArchiveRestore, "Recover", "Open the scene with these changes (unsaved; undo returns to the saved scene)",
 				recover))
 			{
-				// Recovering replaces the edited scene: its own unsaved changes are asked about first. The answer may come in a
-				// later frame, so the action keeps what outlives this one.
+				// Recovering replaces the edited scene: its own unsaved changes are asked about first, over the dialog
+				// (DrawDiscardQuestion below). The answer may come in a later frame, so the action keeps what outlives this one.
 				EditorContext* editor = &context.Context;
 				const EditorCommandRegistry* commands = &context.Commands;
 				EditorCommandRunner* runner = &context.Runner;
@@ -145,7 +145,13 @@ namespace Strata
 		ImGui::Spacing();
 		ImGui::Dummy(ImVec2(width, 0.0f));
 		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + width - UI::DialogButtonWidth("Later"));
-		if (UI::DialogButton("Recovery.Later", "Later") || !open || (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && idle))
+		// Escape belongs to the question over the dialog while that shows.
+		const bool escape = ImGui::IsKeyPressed(ImGuiKey_Escape, false) && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+		const bool later = UI::DialogButton("Recovery.Later", "Later");
+		// Recover asks about the edited scene's own unsaved changes over the dialog, which stays open meanwhile.
+		if (context.Shell)
+			context.Shell->DrawDiscardQuestion();
+		if (later || !open || (escape && idle))
 		{
 			ImGui::CloseCurrentPopup();
 			m_Open = false;

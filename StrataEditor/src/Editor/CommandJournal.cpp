@@ -357,6 +357,7 @@ namespace Strata
 	void CommandJournal::NoteUndo(uint64_t id, const UndoStack& undo, uint64_t recordCountBefore)
 	{
 		m_SeenUndoRecords = std::max(m_SeenUndoRecords, undo.GetRecordCount());
+		m_SeenUndoSteps = std::max(m_SeenUndoSteps, undo.GetStepCount());
 		if (id == 0 || undo.GetRecordCount() == recordCountBefore)
 			return;
 		CommandJournalEntry* entry = FindMutable(id);
@@ -386,9 +387,15 @@ namespace Strata
 		if (!m_Running.empty())
 			return;
 		const uint64_t records = undo.GetRecordCount();
+		const uint64_t steps = undo.GetStepCount();
 		if (records > m_SeenUndoRecords)
-			m_EditsOutsideCommands += records - m_SeenUndoRecords;
+		{
+			// Steps count once however many merges made them (a drag of a hundred frames is one edit); merges alone, into a step
+			// recorded before, count as one edit more.
+			m_EditsOutsideCommands += std::max<uint64_t>(steps > m_SeenUndoSteps ? steps - m_SeenUndoSteps : 0, 1);
+		}
 		m_SeenUndoRecords = records;
+		m_SeenUndoSteps = std::max(m_SeenUndoSteps, steps);
 	}
 
 	void CommandJournal::NotePoll(uint64_t id)
@@ -527,8 +534,10 @@ namespace Strata
 		};
 		if (!m_Entries.empty() && m_Entries.front().Id > since + 1)
 		{
-			return fail(fmt::format("The journal keeps the latest {} commands: entries #{} to #{} are gone, so a script from #{} would miss them. "
-				"Export from since {} or later", c_MaxEntries, since + 1, m_Entries.front().Id - 1, since + 1, m_Entries.front().Id - 1));
+			// A script that misses the first commands of what it repeats would not build the same scene.
+			return fail(fmt::format("The journal keeps at most {} commands and {} MB of them: entries #{} to #{} are gone, so a script from #{} "
+				"would miss them. Export from since {} or later", c_MaxEntries, c_MaxBytes / (1024 * 1024), since + 1, m_Entries.front().Id - 1,
+				since + 1, m_Entries.front().Id - 1));
 		}
 
 		// The commands of the session that succeeded, at the top level (what commands ran inside them repeats with them).

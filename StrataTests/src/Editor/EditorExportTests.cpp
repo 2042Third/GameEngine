@@ -173,11 +173,22 @@ TEST_SUITE("Editor.Export")
 		// The person hears about it (a toast), once.
 		harness.Context.Update(Timestep(1.0f / 60.0f));
 		harness.Context.Update(Timestep(1.0f / 60.0f));
-		const std::deque<EditorNotification>& notifications = harness.Context.GetNotifications().GetActive();
-		CHECK(std::count_if(notifications.begin(), notifications.end(), [](const EditorNotification& notification)
+		const auto countAnnouncements = [&harness]()
 		{
-			return notification.Level == NotificationLevel::Success && notification.Title == "Game exported" && notification.Count == 1;
-		}) == 1);
+			const std::deque<EditorNotification>& notifications = harness.Context.GetNotifications().GetActive();
+			return std::count_if(notifications.begin(), notifications.end(), [](const EditorNotification& notification)
+			{
+				return notification.Level == NotificationLevel::Success && notification.Title == "Game exported" && notification.Count == 1;
+			});
+		};
+		CHECK(countAnnouncements() == 1);
+		// An export that does not start leaves the finished one, which is not announced again.
+		const std::filesystem::path notADirectory = harness.Directory / "NotADirectory";
+		REQUIRE(FileSystem::WriteText(notADirectory, "a file"));
+		CHECK_FALSE(harness.Commands.Execute(harness.Context, "project.export", { { "directory", FileSystem::ToUTF8(notADirectory) }, { "includeRuntime", false } }).Success);
+		harness.Context.Update(Timestep(1.0f / 60.0f));
+		harness.Context.Update(Timestep(1.0f / 60.0f));
+		CHECK(countAnnouncements() == 1);
 
 		// The game's pack starts with the start scene and what it uses.
 		std::string error;

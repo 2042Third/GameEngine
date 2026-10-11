@@ -455,14 +455,20 @@ TEST_SUITE("Editor.Replay")
 		CHECK(editor.Commands.Execute(editor.Context, "editor.activity.export", { { "path", "Session.json" } }).ErrorKind == EditorCommandError::InvalidParameters);
 		editor.Run("editor.activity.export", { { "path", "Session.json" }, { "overwrite", true } });
 
-		// An inspector edit records its undo step directly: the script cannot hold it, and the export says so. Undo through
-		// its command is an edit like any other.
+		// An inspector edit records its undo step directly: the script cannot hold it, and the export says so. A drag is one
+		// edit however many values it went through (they merge into one step). Undo through its command is an edit like any
+		// other.
 		const uint64_t beforeInspector = editor.Context.GetJournal().GetLatestId();
 		const Entity entity = editor.Context.GetEditScene()->GetEntityByUUID(*UUID::FromString(edited));
 		const ComponentInfo& transform = *ComponentRegistry::Find("Transform");
-		std::string error;
-		REQUIRE_MESSAGE(SetPropertyWithUndo(editor.Context, entity, transform, *transform.FindProperty("Translation"), PropertyValue(glm::vec3(1.0f, 2.0f, 3.0f)),
-			&error), error);
+		const size_t stepsBeforeDrag = editor.Context.GetUndoStack().GetCount();
+		for (int frame = 1; frame <= 5; frame++)
+		{
+			std::string error;
+			REQUIRE_MESSAGE(SetPropertyWithUndo(editor.Context, entity, transform, *transform.FindProperty("Translation"),
+				PropertyValue(glm::vec3(1.0f, 2.0f, static_cast<float>(frame))), &error), error);
+		}
+		REQUIRE(editor.Context.GetUndoStack().GetCount() == stepsBeforeDrag + 1);
 		const nlohmann::json inspected = editor.Run("editor.activity.export", { { "path", "Inspected.json" }, { "since", beforeInspector } });
 		CHECK(inspected["editsOutsideCommands"] == 1);
 		CHECK(inspected["edits"] == 0);
@@ -486,6 +492,6 @@ TEST_SUITE("Editor.Replay")
 			editor.Commands.Execute(editor.Context, "scene.info");
 		const EditorCommandResult gone = editor.Commands.Execute(editor.Context, "editor.activity.export", { { "path", "Gone.json" } });
 		CHECK(gone.ErrorKind == EditorCommandError::Failed);
-		CHECK(gone.Error.find("journal keeps the latest") != std::string::npos);
+		CHECK(gone.Error.find("journal keeps at most") != std::string::npos);
 	}
 }

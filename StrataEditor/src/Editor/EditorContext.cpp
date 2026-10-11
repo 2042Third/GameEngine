@@ -1177,10 +1177,11 @@ namespace Strata
 			return false;
 		}
 		Ref<GameExport> exporter = GameExport::Start(*this, options, outError);
-		m_GameExportNotified = false;
+		// An export that does not start leaves the previous one, which was announced already.
 		if (!exporter)
 			return false;
 		m_GameExport = std::move(exporter);
+		m_GameExportNotified = false;
 		return true;
 	}
 

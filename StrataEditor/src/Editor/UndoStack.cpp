@@ -37,6 +37,7 @@ namespace Strata
 	void UndoStack::Push(Scope<EditorAction> action)
 	{
 		m_RecordCount++;
+		m_Version++;
 		// Recording after undoing discards the undone actions; a save point among them becomes unreachable.
 		if (m_Position < m_Entries.size())
 		{
@@ -86,6 +87,7 @@ namespace Strata
 	{
 		if (!CanUndo())
 			return false;
+		m_Version++;
 		m_Position--;
 		m_Entries[m_Position].Action->Undo();
 		m_MergeBroken = true;
@@ -97,6 +99,8 @@ namespace Strata
 	{
 		if (!CanRedo())
 			return false;
+		// Also a failed redo changes the history (it drops the steps it cannot apply).
+		m_Version++;
 		std::string error;
 		if (!m_Entries[m_Position].Action->Execute(&error))
 		{
@@ -159,6 +163,7 @@ namespace Strata
 	{
 		m_SavedPosition = m_Position;
 		m_MergeBroken = true;
+		m_Version++;
 	}
 
 	bool UndoStack::IsModified() const
@@ -182,6 +187,7 @@ namespace Strata
 		m_Position = 0;
 		m_SavedPosition = 0;
 		m_MergeBroken = true;
+		m_Version++;
 	}
 
 }

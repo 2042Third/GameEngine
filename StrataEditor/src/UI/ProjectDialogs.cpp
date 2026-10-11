@@ -3,7 +3,9 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/ProjectTemplates.h"
+#include "Editor/UndoStack.h"
 #include "UI/EditorFonts.h"
+#include "UI/EditorShell.h"
 #include "UI/FileDialogs.h"
 #include "UI/Icons.h"
 #include "UI/TextFormat.h"
@@ -22,6 +24,7 @@
 #include <cmath>
 #include <cstring>
 #include <system_error>
+#include <utility>
 
 namespace Strata
 {
@@ -172,6 +175,7 @@ namespace Strata
 		m_Error.clear();
 		m_CheckedName.clear();
 		m_CheckedLocation.clear();
+		NoteAnswer(context.Context);
 		m_Dialog = Dialog::NewProject;
 		m_OpenRequested = true;
 	}
@@ -204,9 +208,34 @@ namespace Strata
 		m_Error.clear();
 		m_CheckedName.clear();
 		m_CheckedLocation.clear();
+		NoteAnswer(context.Context);
 		m_Dialog = Dialog::OpenSample;
 		m_OpenRequested = true;
 		return true;
+	}
+
+	void ProjectDialogs::NoteAnswer(EditorContext& context)
+	{
+		// The dialogs open once the person has answered (EditorShell::RequestDiscardChanges), so what the scene holds now is
+		// what they answered about.
+		m_AnsweredVersion = context.GetUndoStack().GetVersion();
+		m_Answered = false;
+	}
+
+	bool ProjectDialogs::MayReplaceScene(EditorPanelContext& context)
+	{
+		EditorContext& editor = context.Context;
+		if (!editor.IsSceneModified() || editor.GetUndoStack().GetVersion() == m_AnsweredVersion || !context.Shell)
+			return true;
+		// The scene changed since the answer: the person decides about these changes too, over the dialog
+		// (DrawDiscardQuestion). The answer may come in a later frame; the dialog submits once it came.
+		const UndoStack* undo = &editor.GetUndoStack();
+		context.Shell->RequestDiscardChanges([this, undo]()
+		{
+			m_AnsweredVersion = undo->GetVersion();
+			m_Answered = true;
+		});
+		return false;
 	}
 
 	void ProjectDialogs::Draw(EditorPanelContext& context)
@@ -270,13 +299,16 @@ namespace Strata
 		ImGui::Spacing();
 
 		PlaceDialogButtons(width, "Cancel", "Create");
-		if (UI::DialogButton("NewProject.Cancel", "Cancel") || (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !editing))
+		// Escape belongs to the question over the dialog while that shows.
+		const bool focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+		if (UI::DialogButton("NewProject.Cancel", "Cancel") || (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !editing && focused))
 			open = false;
 		ImGui::SameLine();
 		submit |= UI::DialogButton("NewProject.Create", "Create", true, problem.empty());
-		if (submit && problem.empty() && open)
+		submit |= std::exchange(m_Answered, false);
+		if (submit && problem.empty() && open && MayReplaceScene(context))
 		{
-			// The dialog opens once the person has answered the question about unsaved changes (EditorShell::ShowNewProjectDialog).
+			// The person has answered the question about the unsaved changes the scene has (MayReplaceScene).
 			nlohmann::json parameters = { { "directory", FileSystem::ToUTF8(target) }, { "name", m_Name }, { "force", true } };
 			if (!m_TemplateId.empty())
 				parameters["template"] = m_TemplateId;
@@ -291,6 +323,8 @@ namespace Strata
 				m_Error = error;
 			}
 		}
+		if (context.Shell)
+			context.Shell->DrawDiscardQuestion();
 		if (!open)
 		{
 			ImGui::CloseCurrentPopup();
@@ -349,14 +383,16 @@ namespace Strata
 		ImGui::Spacing();
 
 		PlaceDialogButtons(width, "Cancel", "Copy and Open");
-		if (UI::DialogButton("OpenSample.Cancel", "Cancel") || (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !editing))
+		const bool focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+		if (UI::DialogButton("OpenSample.Cancel", "Cancel") || (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !editing && focused))
 			open = false;
 		ImGui::SameLine();
 		submit |= UI::DialogButton("OpenSample.Open", "Copy and Open", true, problem.empty());
-		if (submit && problem.empty() && open)
+		submit |= std::exchange(m_Answered, false);
+		if (submit && problem.empty() && open && MayReplaceScene(context))
 		{
 			std::string error;
-			// Like New Project: the dialog opens once the question about unsaved changes was answered.
+			// Like New Project: the person has answered the question about the scene's unsaved changes.
 			if (RunNow(context, "project.openSample", { { "sample", m_SampleId }, { "directory", FileSystem::ToUTF8(target) }, { "force", true } }, nullptr, error))
 			{
 				SetLocation(target.parent_path());
@@ -367,6 +403,8 @@ namespace Strata
 				m_Error = error;
 			}
 		}
+		if (context.Shell)
+			context.Shell->DrawDiscardQuestion();
 		if (!open)
 		{
 			ImGui::CloseCurrentPopup();

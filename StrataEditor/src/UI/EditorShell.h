@@ -49,6 +49,10 @@ namespace Strata
 		// decided by the time the action runs, so its command passes force: true (the commands refuse to discard unsaved
 		// changes otherwise, see CommandUtils::CheckUnsavedChanges).
 		virtual void RequestDiscardChanges(std::function<void()> action) = 0;
+		// A modal dialog that asks (RequestDiscardChanges) while it stays open calls this between its UI::BeginModal and
+		// UI::EndModal every frame: the question then shows over it. Asked from anywhere else, the question opens over the
+		// whole window, which closes a modal dialog that is open.
+		virtual void DrawDiscardQuestion() = 0;
 		// The New Project dialog: template, name and location, then project.create. An empty template id chooses the
 		// default one (basic3d).
 		virtual void ShowNewProjectDialog(const std::string& templateId) = 0;

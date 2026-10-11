@@ -16,8 +16,9 @@ namespace Strata
 
 	// The activity journal (CommandJournal): every command the person, agents, command scripts and the editor ran, newest at
 	// the bottom, filtered by text, source and whether it changed anything, with a JSON details pane for the selected one and
-	// its actions: Copy as command script, Re-run, and Undo to here (undoes every step after the entry's own). The rows are
-	// built again only when the journal or the filters change, and drawn clipped.
+	// its actions: Copy as command script, Re-run (a command that replaces the edited scene asks about its unsaved changes
+	// first, as the menus do), and Undo to here (undoes every step after the entry's own). The rows are built again only when
+	// the journal or the filters change, and drawn clipped.
 	class ActivityPanel : public EditorPanel
 	{
 	public:
@@ -30,7 +31,8 @@ namespace Strata
 		const std::vector<uint64_t>& GetShownEntries() const { return m_Rows; }
 
 		// A command script of one step that runs the entry's command again with its parameters; nullopt when the journal
-		// shortened them (the step would not be the same).
+		// shortened them (the step would not be the same). The "force" of a command the person ran is left out: it was their
+		// answer to the question about unsaved changes then (CommandUtils::CheckUnsavedChanges), not part of the command.
 		static std::optional<std::string> MakeCommandScript(const CommandJournalEntry& entry);
 	private:
 		void DrawFilters();

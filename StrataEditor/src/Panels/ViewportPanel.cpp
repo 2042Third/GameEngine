@@ -271,13 +271,21 @@ namespace Strata
 
 	bool ViewportPanel::IsAnimating() const
 	{
-		return m_CameraDrag != CameraDrag::None || m_GizmoDrag.has_value() || m_Flashing;
+		return m_CameraDrag != CameraDrag::None || m_GizmoDrag.has_value() || (!m_FlashBounds.empty() && IsFlashing(std::chrono::steady_clock::now()));
+	}
+
+	bool ViewportPanel::IsFlashing(std::chrono::steady_clock::time_point now) const
+	{
+		// From the clock, not from the last draw: a viewport that stops being drawn mid-flash must not keep the editor at its
+		// full frame rate.
+		return !m_FlashBounds.empty() && std::chrono::duration<double>(now - m_FlashStart).count() < c_AgentFlashSeconds;
 	}
 
 	void ViewportPanel::Reset(EditorContext& context)
 	{
 		m_Focused = false;
 		m_Hovered = false;
+		m_FlashBounds.clear();
 		EndCameraDrag();
 		EndGizmoDrag(context);
 		UpdateGameInput(context, false);
@@ -409,10 +417,10 @@ namespace Strata
 				}
 			}
 		}
-		const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - m_FlashStart).count();
-		m_Flashing = !m_FlashBounds.empty() && elapsed < c_AgentFlashSeconds;
-		if (!m_Flashing)
+		const auto now = std::chrono::steady_clock::now();
+		if (!IsFlashing(now))
 			return;
+		const double elapsed = std::chrono::duration<double>(now - m_FlashStart).count();
 
 		const ImVec2 imageMin(m_Image.Min.x, m_Image.Min.y);
 		const ImVec2 imageMax(m_Image.Min.x + m_Image.Size.x, m_Image.Min.y + m_Image.Size.y);

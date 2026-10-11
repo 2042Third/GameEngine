@@ -388,7 +388,7 @@ namespace Strata
 			Enqueue([journal = m_Journal, directory = m_Directory]()
 			{
 				if (journal->Written && !directory.empty())
-					FileSystem::Remove(directory / (journal->Stem + c_FileExtension));
+					FileSystem::Remove(directory / FileSystem::FromUTF8(journal->Stem + c_FileExtension));
 				journal->Written = false;
 			});
 		}
@@ -469,7 +469,7 @@ namespace Strata
 			Enqueue([journal, directory = m_Directory]()
 			{
 				if (journal->Written)
-					FileSystem::Remove(directory / (journal->Stem + c_FileExtension));
+					FileSystem::Remove(directory / FileSystem::FromUTF8(journal->Stem + c_FileExtension));
 				journal->Written = false;
 				journal->Segments.clear();
 			});
@@ -572,7 +572,7 @@ namespace Strata
 				{ "Steps", target.Segments.size() + (target.Base ? 1 : 0) },
 				{ "Complete", target.Complete } };
 			std::string error;
-			if (!WriteFileReplacing(directory / (target.Stem + c_FileExtension), JsonUtils::Dump(header) + "\n" + body, error))
+			if (!WriteFileReplacing(directory / FileSystem::FromUTF8(target.Stem + c_FileExtension), JsonUtils::Dump(header) + "\n" + body, error))
 			{
 				ST_WARN("Recovery: the unsaved changes of '{}' could not be written: {}", sceneName, error);
 				return;
@@ -641,7 +641,7 @@ namespace Strata
 		scan->Directory = m_Directory;
 		scan->AssetDirectory = m_AssetDirectory;
 		m_Scan = scan;
-		Enqueue([scan, processId = m_ProcessId]()
+		Enqueue([scan, processId = m_ProcessId, processStartTime = m_ProcessStartTime]()
 		{
 			std::error_code error;
 			for (std::filesystem::directory_iterator it(scan->Directory, error), end; !error && it != end; it.increment(error))
@@ -663,8 +663,10 @@ namespace Strata
 					const nlohmann::json* owner = JsonUtils::Find(*header, "Owner");
 					const uint32_t ownerId = owner ? static_cast<uint32_t>(JsonUtils::GetUInt(*owner, "ProcessId", 0)) : 0;
 					const uint64_t ownerStart = owner ? JsonUtils::GetUInt(*owner, "ProcessStartTime", 0) : 0;
-					const bool alive = ownerId != 0 && Platform::IsProcessAlive(ownerId) && (ownerId == processId
-						|| Platform::GetProcessStartTime(ownerId).value_or(0) == ownerStart);
+					// A process is the owner only with the owner's start time too: process ids are reused, also this one's (an
+					// editor that crashed earlier may have had it).
+					const bool alive = ownerId != 0 && (ownerId == processId ? ownerStart == processStartTime
+						: Platform::IsProcessAlive(ownerId) && Platform::GetProcessStartTime(ownerId).value_or(0) == ownerStart);
 					if (alive)
 						continue;
 				}

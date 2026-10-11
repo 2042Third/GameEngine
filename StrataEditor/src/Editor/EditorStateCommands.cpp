@@ -240,19 +240,20 @@ namespace Strata
 			}, EditorCommandKind::Query });
 
 		registry.Register({ "editor.activity.export",
-			"Writes the successful edits after an entry of the activity journal (editor.activity; since 0: all it holds) as a command script for "
+			"Writes the successful edits after an entry of the activity journal (editor.activity; since 0: from the session's start) as a command script for "
 			"StrataEditor --commands, to repeat a session on a copy of the project as it was at that point, e.g. as a regression script: "
 			"commands of kind Edit (editor.commands), not edits of a running copy (play.stop discarded them). Entities and assets the session "
 			"created get new IDs every run, so the script binds them where a result gave them (\"bind\": {\"e12.id\": \"/id\"}) and refers to them "
 			"where they are used ({\"$ref\": \"e12.id\"}); queries whose results later edits took IDs from are part of the script too. Returns "
 			"{path, steps, edits, lookups, bindings, skippedWhilePlaying, editsOutsideCommands, warning?, since, latest}: changes made outside "
 			"commands (inspector fields, gizmo drags, the material editor record their undo steps directly) cannot be in the script, and a "
-			"warning says so when there were any. Fails when the journal no longer holds entries after since (it keeps the latest 2,000), or "
-			"the parameters of a command the script needs were too large to keep.",
+			"warning says so when there were any. Fails when the journal no longer holds every entry after since (it keeps at most 2,000 "
+			"commands and 8 MB of them: export from a later entry then), or when the parameters of a command the script needs were too large to keep.",
 			ObjectSchema({
 				{ "path", StringSchema("The .json file to write: relative to the project directory (needs an open project) or absolute; folders are created, "
 					"network and device paths are refused") },
-				{ "since", IntegerSchema("Repeat the edits after this journal entry (default 0: every entry the journal holds)", 0, std::numeric_limits<int64_t>::max()) },
+				{ "since", IntegerSchema("Repeat the edits after this journal entry (default 0: from the session's first command, which the journal must "
+					"still hold)", 0, std::numeric_limits<int64_t>::max()) },
 				{ "overwrite", BoolSchema("Replace an existing file at path (default false)") } },
 				{ "path" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
@@ -289,7 +290,7 @@ namespace Strata
 					{ "latest", script->Latest } };
 				if (script->EditsOutsideCommands > 0)
 				{
-					value["warning"] = fmt::format("{} change(s) since #{} were made outside commands (inspector, gizmos, material editor): the script "
+					value["warning"] = fmt::format("{} edit(s) since #{} were made outside commands (inspector, gizmos, material editor): the script "
 						"does not repeat them", script->EditsOutsideCommands, script->Since);
 				}
 				return EditorCommandResult::Ok(std::move(value));

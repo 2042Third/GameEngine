@@ -116,7 +116,7 @@ namespace Strata
 		size_t Lookups = 0;             // Queries included because later steps use IDs their results gave
 		size_t Bindings = 0;            // Values bound for later steps
 		size_t SkippedWhilePlaying = 0; // Edits of the running copy, which play.stop discarded
-		uint64_t EditsOutsideCommands = 0; // Undo records no command made (CommandJournal::GetEditsOutsideCommands): not in it
+		uint64_t EditsOutsideCommands = 0; // Edits no command made (CommandJournal::GetEditsOutsideCommands): not in it
 		uint64_t Since = 0;
 		uint64_t Latest = 0;            // The last entry looked at
 	};
@@ -150,7 +150,8 @@ namespace Strata
 		// replay cannot repeat them. Called before a top-level command's handler or poll runs (a command run by another one
 		// belongs to it); NoteUndo marks what commands record as seen.
 		void NoteEditsOutsideCommands(const UndoStack& undo);
-		// Undo records (steps, and merges into them) made outside commands since the journal began.
+		// Edits made outside commands since the journal began: undo steps (one however many merges made it, e.g. a drag), and
+		// merges into a step recorded before (one for those between two commands).
 		uint64_t GetEditsOutsideCommands() const { return m_EditsOutsideCommands; }
 		const AutomationActivity& GetLatestAutomationActivity() const { return m_LatestAutomation; }
 		// A deferred command was polled once more.
@@ -192,6 +193,7 @@ namespace Strata
 		std::vector<uint64_t> m_Running;           // The commands whose handlers run, innermost last
 		uint64_t m_NextId = 1;
 		uint64_t m_SeenUndoRecords = 0;            // UndoStack::GetRecordCount when the journal last looked
+		uint64_t m_SeenUndoSteps = 0;              // UndoStack::GetStepCount then
 		uint64_t m_EditsOutsideCommands = 0;
 		AutomationActivity m_LatestAutomation;
 		uint64_t m_Version = 0;

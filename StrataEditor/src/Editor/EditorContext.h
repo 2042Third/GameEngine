@@ -1,12 +1,12 @@
 #pragma once
 
 #include "Editor/CommandJournal.h"
+#include "Editor/EditorNotifications.h"
 #include "Editor/EditorViewport.h"
 #include "Editor/GameExport.h"
 #include "Editor/ProjectTemplates.h"
 #include "Editor/RecentProjects.h"
 #include "Editor/SceneEdit.h"
-#include "Editor/EditorNotifications.h"
 #include "Editor/SceneRecovery.h"
 #include "Editor/ScriptBuild.h"
 #include "Editor/SimulatedInput.h"

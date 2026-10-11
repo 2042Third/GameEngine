@@ -3,6 +3,7 @@
 #include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/EditorNotifications.h"
 #include "Editor/HarnessEditor.h"
 #include "Editor/SceneRecovery.h"
 #include "TestHelpers.h"
@@ -10,13 +11,16 @@
 
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
+#include <Strata/Core/Platform.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Scene.h>
 #include <Strata/Scene/SceneSerializer.h>
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <chrono>
+#include <deque>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -175,6 +179,50 @@ TEST_SUITE("Editor.Recovery")
 			return !ListRecoveryFiles(harness.GetRecoveryDirectory()).empty();
 		}, std::chrono::seconds(10)));
 		CHECK(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count() >= SceneRecovery::c_QuietSeconds);
+	}
+
+	TEST_CASE("A journal of an editor that is gone is offered, also when its process id is this process's")
+	{
+		// Process ids are reused: an editor that crashed may have had the id this process has now, and only the start time
+		// tells the two apart.
+		const std::filesystem::path project = Tests::CreateTemporaryDirectory("RecoveryReusedId") / "Game";
+		std::filesystem::path file;
+		nlohmann::json header;
+		std::string body;
+		{
+			RecoveryHarness harness(project);
+			harness.Run("entity.create", { { "name", "Crate" } });
+			harness.FlushJournal();
+			const std::vector<std::filesystem::path> files = ListRecoveryFiles(harness.GetRecoveryDirectory());
+			REQUIRE(files.size() == 1);
+			file = files[0];
+			const std::optional<std::string> text = FileSystem::ReadText(file);
+			REQUIRE(text.has_value());
+			header = ReadRecoveryHeader(file);
+			body = text->substr(text->find('\n') + 1);
+			// Back to the saved scene: this editor leaves nothing behind.
+			harness.Run("edit.undo");
+			harness.FlushJournal();
+			REQUIRE(ListRecoveryFiles(harness.GetRecoveryDirectory()).empty());
+		}
+		REQUIRE(header["Owner"]["ProcessId"] == Platform::GetProcessID());
+		REQUIRE(header["Discarded"] == false);
+
+		// Owned by this process (its id and start time): the journal of the scene this editor edits, not offered.
+		REQUIRE(FileSystem::WriteText(file, JsonUtils::Dump(header) + "\n" + body));
+		{
+			RecoveryHarness harness(project, false);
+			CHECK(harness.Run("scene.recoveryStatus")["entries"].empty());
+		}
+
+		// Another start time: an earlier process with the same id, which is gone.
+		header["Owner"]["ProcessStartTime"] = header["Owner"]["ProcessStartTime"].get<uint64_t>() + 1;
+		REQUIRE(FileSystem::WriteText(file, JsonUtils::Dump(header) + "\n" + body));
+		RecoveryHarness harness(project, false);
+		const nlohmann::json entries = harness.Run("scene.recoveryStatus")["entries"];
+		REQUIRE(entries.size() == 1);
+		harness.Run("scene.recover", { { "scene", entries[0]["id"] }, { "action", "apply" } });
+		CHECK(harness.Context.GetEditScene()->FindEntityByName("Crate"));
 	}
 
 	TEST_CASE("Discarded changes are offered and recovered as one undo step back to the saved scene")
@@ -421,6 +469,39 @@ TEST_SUITE("Editor.Recovery")
 		const std::optional<UI::ItemProbe::Item> item = UI::ItemProbe::Find("Menu.File.Recover");
 		REQUIRE(item.has_value());
 		CHECK_FALSE(item->Enabled);
+	}
+
+	TEST_CASE("Recover asks about the edited scene's own unsaved changes over the dialog, which stays open")
+	{
+		const std::filesystem::path project = Tests::CreateTemporaryDirectory("RecoveryOfferAsks") / "Game";
+		{
+			RecoveryHarness harness(project);
+			harness.Run("entity.create", { { "name", "Recovered" } });
+			harness.Run("project.close", { { "force", true } });
+		}
+
+		EditorOptions options;
+		options.ProjectPath = project;
+		Tests::HarnessEditor editor({}, options);
+		REQUIRE(editor.FramesUntil([&]() { return editor.Layer->GetRecoveryDialog().IsOpen(); }));
+		editor.Frames(3);
+		// An agent changed the edited scene meanwhile.
+		editor.Run("entity.create", { { "name", "Current" } });
+		REQUIRE(editor.Context().IsSceneModified());
+
+		REQUIRE(editor.Click("Recovery.Recover.0"));
+		editor.Frames(2);
+		REQUIRE(UI::ItemProbe::Find("UnsavedChanges.DontSave").has_value());
+		// Over the recovery dialog, not in its place: it stays open, so no toast says the changes are still on offer.
+		CHECK(editor.Layer->GetRecoveryDialog().IsOpen());
+		const std::deque<EditorNotification>& notifications = editor.Context().GetNotifications().GetActive();
+		CHECK(std::none_of(notifications.begin(), notifications.end(), [](const EditorNotification& notification) { return notification.ShowRecovery; }));
+		CHECK(editor.Context().GetEditScene()->FindEntityByName("Current"));
+
+		REQUIRE(editor.Click("UnsavedChanges.DontSave"));
+		REQUIRE(editor.FramesUntil([&]() { return editor.Context().GetEditScene()->FindEntityByName("Recovered").IsValid(); }));
+		CHECK_FALSE(editor.Context().GetEditScene()->FindEntityByName("Current"));
+		CHECK(editor.Context().IsSceneModified());
 	}
 
 	TEST_CASE("Damaged recovery files are reported, not applied")

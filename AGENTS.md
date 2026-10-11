@@ -779,7 +779,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `CommandUtils::CheckUnsavedChanges`: while the edited scene has unsaved changes (also while a copy of it plays) it fails
   (`Failed`, naming the scene and how to proceed) and changes nothing, unless `force: true`; results report
   `discardedChanges`. A new command that replaces the scene uses the same guard. The UI keeps asking (the unsaved-changes
-  dialog, `EditorShell::RequestDiscardChanges`) and passes `force` once the person has answered.
+  dialog, `EditorShell::RequestDiscardChanges`) and passes `force` once the person has answered, for the changes they were
+  asked about only: a dialog that runs the command later asks again when the scene changed since (`UndoStack::GetVersion`),
+  a modal dialog asks over itself (`EditorShell::DrawDiscardQuestion` between its `BeginModal` and `EndModal`), and a
+  recorded `force` is never repeated for the person (the Activity panel's Re-run asks).
 - **Autosave and recovery** (`Editor/SceneRecovery`, Docs/Architecture.md "Autosave and recovery"): the edited scene's
   unsaved changes are journaled in `<project>/.strata/Recovery` by following the undo stack (`UndoStackObserver`): the
   entity states of the steps since the last save, written on an I/O job 2 s after edits stop (at least every 10 s), removed

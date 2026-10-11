@@ -136,6 +136,7 @@ namespace Strata
 
 		// EditorShell
 		void RequestDiscardChanges(std::function<void()> action) override;
+		void DrawDiscardQuestion() override;
 		void ShowNewProjectDialog(const std::string& templateId) override;
 		void ShowOpenSampleDialog(const std::string& sampleId) override;
 		void ShowOpenProjectDialog() override;
@@ -175,6 +176,8 @@ namespace Strata
 		bool DrawScriptsPill();
 		// Tool panels (Streaming, Performance) opened in a layout saved before they existed join the Console's dock node.
 		void DockNewToolPanels();
+		// The question about unsaved changes (RequestDiscardChanges), at the popup level it is called at: over the whole window,
+		// or over the dialog that calls DrawDiscardQuestion. Drawn once per frame, by whichever call comes first.
 		void DrawUnsavedChangesModal();
 		void HandleShortcuts();
 		void UpdateWindowTitle();
@@ -228,6 +231,7 @@ namespace Strata
 
 		std::function<void()> m_PendingDiscardAction;
 		bool m_OpenUnsavedChangesModal = false;
+		int m_UnsavedChangesModalFrame = -1; // ImGui's frame the question was drawn in last
 		bool m_ShowImGuiDemo = false;
 		bool m_ResetLayout = false;
 		bool m_LayoutChecked = false;

@@ -208,12 +208,13 @@ namespace Strata
 			Ref<const std::vector<EntityState>> Prior;
 		};
 
-		// One step of the journal on disk: entity states by entity, in the order they were first touched.
+		// One step of the journal on disk: entity states by entity, in the order they were first touched. A step of the edits
+		// that creates, removes or moves entities starts a segment; one that does not folds into the latest segment, whatever
+		// that holds, since it leaves every entity where that segment put it.
 		struct Segment
 		{
 			std::vector<UUID> Order;
 			std::unordered_map<UUID, std::pair<Ref<const std::vector<EntityState>>, size_t>> States;
-			bool Structural = false; // It creates, removes or moves entities: later steps cannot fold into it
 		};
 
 		// What the journal's writes and the file operations around it share. Changed only by the file operations, which run
