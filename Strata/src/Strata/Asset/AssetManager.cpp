@@ -250,6 +250,13 @@ namespace Strata
 					return it->second.Loaded;
 				if (it->second.State == AssetState::Unloaded)
 					return nullptr;
+				if (it->second.AwaitingImport)
+				{
+					// Its import is applied between frames (the subclass's Update), which waiting here would never reach.
+					ST_CORE_WARN("'{}' is still importing: it cannot be loaded synchronously yet", it->second.Metadata.Path.empty() ? handle.ToString()
+						: it->second.Metadata.Path);
+					return nullptr;
+				}
 			}
 
 			if (ProcessCompletions(false) == 0)
@@ -329,6 +336,28 @@ namespace Strata
 			metadata = it->second.Metadata;
 		}
 
+		// Nothing to read before the asset's first import is applied: the load waits for ResumeLoadsAwaitingImport. The
+		// subclass is asked without the manager's lock, so the import may be applied meanwhile, before the entry is marked;
+		// asking again after marking it catches that (ResumeLoadsAwaitingImport then found no mark: the load goes on here).
+		if (IsAwaitingImport(metadata))
+		{
+			{
+				std::scoped_lock<std::mutex> lock(m_Mutex);
+				auto it = m_Entries.find(request.Handle);
+				if (it == m_Entries.end() || it->second.Generation != request.Generation || it->second.State != AssetState::Loading)
+					return false;
+				it->second.AwaitingImport = true;
+				it->second.AwaitedPriority = request.Priority;
+			}
+			if (IsAwaitingImport(metadata))
+				return false;
+			std::scoped_lock<std::mutex> lock(m_Mutex);
+			auto it = m_Entries.find(request.Handle);
+			if (it == m_Entries.end() || it->second.Generation != request.Generation || !it->second.AwaitingImport)
+				return false; // Resumed (or cancelled, reloaded) meanwhile: that request carries on
+			it->second.AwaitingImport = false;
+		}
+
 		{
 			std::scoped_lock<std::mutex> lock(m_LoadState->Mutex);
 			m_LoadState->InFlight++;
@@ -353,6 +382,34 @@ namespace Strata
 		m_Queue.OnReadFinished();
 		PushCompletion(m_LoadState, Completion { request.Handle, request.Generation, nullptr, std::move(error), request.Bytes });
 		return true;
+	}
+
+	bool AssetManagerBase::IsAwaitingImport(const AssetMetadata&) const
+	{
+		return false;
+	}
+
+	void AssetManagerBase::ResumeLoadsAwaitingImport(std::span<const AssetHandle> handles)
+	{
+		std::vector<std::pair<AssetHandle, AssetPriority>> resumed;
+		{
+			std::scoped_lock<std::mutex> lock(m_Mutex);
+			for (const AssetHandle handle : handles)
+			{
+				auto it = m_Entries.find(handle);
+				if (it == m_Entries.end() || !it->second.AwaitingImport)
+					continue;
+				AssetEntry& entry = it->second;
+				// A new request: the one that waited left the queue when it was not dispatched.
+				SetStateLocked(entry, AssetState::Unloaded);
+				entry.Generation = m_NextGeneration++;
+				// A prefetch nobody has requested since stays one: whatever uses the asset requests it.
+				if (!entry.PrefetchOnly)
+					resumed.emplace_back(handle, entry.AwaitedPriority);
+			}
+		}
+		for (const auto& [handle, priority] : resumed)
+			RequestLoad(handle, priority);
 	}
 
 	bool AssetManagerBase::IsLoadCurrent(AssetHandle handle, uint64_t generation) const

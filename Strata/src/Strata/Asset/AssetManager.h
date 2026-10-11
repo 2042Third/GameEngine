@@ -420,6 +420,13 @@ namespace Strata
 	protected:
 		// Reads the stored bytes of an asset. Called on I/O threads; must be thread-safe.
 		virtual bool ReadAssetData(const AssetMetadata& metadata, std::vector<uint8_t>& outData, std::string* outError) = 0;
+		// Whether the asset's stored form is not there yet because its first import is still running (an editor importing in
+		// the background). A load of it waits, Loading, instead of failing; ResumeLoadsAwaitingImport starts it once the import
+		// is applied. Any thread; must be thread-safe.
+		virtual bool IsAwaitingImport(const AssetMetadata& metadata) const;
+		// Starts the loads of these assets that waited for their import (IsAwaitingImport), with the priority they were
+		// requested at. Main thread.
+		void ResumeLoadsAwaitingImport(std::span<const AssetHandle> handles);
 
 		// Stops dispatching loads and blocks until no load job is running. Subclasses must call this first in their
 		// destructor: in-flight jobs call ReadAssetData on the subclass.
@@ -476,6 +483,9 @@ namespace Strata
 			bool PrefetchOnly = false;
 			// Read while PrefetchOnly, so its own dependencies were not prefetched: its next request prefetches them.
 			bool DependenciesDeferred = false;
+			// Loading, but not dispatched: its import has not finished (IsAwaitingImport). Cleared when the entry leaves Loading.
+			bool AwaitingImport = false;
+			AssetPriority AwaitedPriority = AssetPriority::Normal;
 		};
 
 		struct Completion

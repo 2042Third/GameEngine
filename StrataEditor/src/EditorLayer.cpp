@@ -58,8 +58,10 @@ namespace Strata
 			specification.RecentProjectsReadOnly = options.RecentProjectsReadOnly;
 			specification.WatchAssetFiles = options.WatchFiles;
 			specification.HotReloadScripts = options.WatchFiles;
-			// Play mode runs on the wall clock, except in scripted runs (--frames, --commands), which count frames.
+			// Play mode runs on the wall clock, except in scripted runs (--frames, --commands), which count frames; and projects
+			// open at once with their imports in the background, except in scripted runs, which expect every asset imported.
 			specification.TimeDilation = !options.MaxFrames && options.CommandScript.empty();
+			specification.ImportInBackground = options.ImportInBackground && !options.MaxFrames && options.CommandScript.empty();
 			if (options.ScriptBuild)
 				specification.ScriptBuild = *options.ScriptBuild;
 			return specification;
@@ -1341,9 +1343,16 @@ namespace Strata
 			memory = fmt::format("{} {:.0f}/{:.0f} MB", GetMemoryPoolShortName(*shownPool), static_cast<double>(GetPoolBytes(stats.Resident, *shownPool)) / c_BytesPerMB,
 				static_cast<double>(stats.Budgets.GetPoolBudget(*shownPool)) / c_BytesPerMB);
 		}
-		const std::string text = fmt::format("{} ready{}{} streaming{}{}", stats.LoadedAssets, c_Separator, stats.LoadingAssets, c_Separator, memory);
+		std::string text = fmt::format("{} ready{}{} streaming{}{}", stats.LoadedAssets, c_Separator, stats.LoadingAssets, c_Separator, memory);
 		std::string tooltip = stats.FailedAssets > 0 ? fmt::format("{} assets failed to load (see the Console or the Streaming panel).", stats.FailedAssets)
 			: fmt::format("Assets ready and streaming in; {} are registered.", stats.RegisteredAssets);
+		// Imports in the background (a project opened with assets to import): their assets stream in once they finish.
+		if (const uint32_t importing = m_Context.GetAssetManager()->GetPendingImportCount(); importing > 0)
+		{
+			text = fmt::format("{} importing{}{}", importing, c_Separator, text);
+			tooltip += fmt::format(" {} {} importing in the background: {} once imported.", importing, importing == 1 ? "asset is" : "assets are",
+				importing == 1 ? "it loads" : "they load");
+		}
 		if (!shownPool)
 		{
 			tooltip += fmt::format(" Loaded assets use {}; the pools have no budgets (no graphics device).", FormatMegabytes(stats.LoadedMemory));

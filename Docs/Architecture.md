@@ -653,7 +653,12 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
 ```
 
 - **Importing** (`Asset/EditorAssetManager.h`). `Scan` registers every file with a known importer, creates missing
-  `.meta` files and imports stale assets in parallel (`JobSystem::ParallelFor`), blocking. Afterwards the file watcher
+  `.meta` files, takes current imports from the cache and imports stale assets: in parallel before it returns
+  (`ScanImports::Wait`: tools, tests, scripted editor runs), or as background jobs that `Update` applies
+  (`ScanImports::InBackground`: the editor, so a project with textures to compress opens at once and its frames go on).
+  Until an asset's first import is applied, a load of it waits, `Loading`, instead of failing (the manager does not
+  dispatch it while `IsAwaitingImport` says so, and `ResumeLoadsAwaitingImport` starts it with the import's data or
+  error); its sub-assets are registered once the import is. Afterwards the file watcher
   reports changes; `Update` re-registers files and queues re-imports as background jobs, and applies finished imports
   through `ReloadAsset`: loaded assets load again, and every reloaded asset gets a new source revision
   (`GetSourceRevisions`), announced as a content change at once when no object of it is loaded. The cache record
@@ -826,9 +831,10 @@ Textures are stored the way the GPU samples them: block-compressed, with their m
   block at `High` and 1.2 us at `Fast` on the stress textures' noise (every block searched in full); the feature
   test's checker is exact and a smooth 256x256 gradient reaches 54 dB at `High` (BC1: 43.6 and 45.6 dB).
 - **Where imports run**: on the background threads (`JobPriority::Background`, below the frame's priority), and so does
-  their encoding (`ParallelFor` from background work stays there). `EditorAssetManager::Scan` imports what needs it in
-  parallel while its caller waits (the editor, when it opens a project); re-imports after file changes run as background
-  jobs and are applied between frames, and so do `asset.reimport` and `asset.setImportSettings` (see
+  their encoding (`ParallelFor` from background work stays there). `EditorAssetManager::Scan` imports what needs it as
+  background jobs when the editor opens a project, or in parallel while its caller waits (tools, tests, scripted runs);
+  re-imports after file changes run as background jobs and are applied between frames, and so do `asset.reimport` and
+  `asset.setImportSettings` (see
   [Importing](#asset-pipeline): their commands answer once the import is applied); the editor's `asset.import` still
   imports inside the command, the main thread taking part in the encoding (about a fifth of the stress project's cold
   import, 1.5 s, for a 4096x4096 color texture in Release), until `content-and-prefabs` makes it asynchronous

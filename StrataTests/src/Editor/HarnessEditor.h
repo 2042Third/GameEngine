@@ -39,6 +39,7 @@ namespace Strata::Tests
 		{
 			options.EnableAutomation = automation;
 			options.WatchFiles = false;
+			options.ImportInBackground = false;
 			Host->UIScale = specification.ContentScale;
 			Log::GetBuffer().Clear();
 			Layer = CreateScope<EditorLayer>(options, CreateScope<FakeEditorHost>(Host));

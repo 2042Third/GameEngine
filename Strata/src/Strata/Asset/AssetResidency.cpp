@@ -211,6 +211,8 @@ namespace Strata
 		m_StateCounts[static_cast<size_t>(entry.State)]--;
 		entry.State = state;
 		m_StateCounts[static_cast<size_t>(state)]++;
+		if (state != AssetState::Loading)
+			entry.AwaitingImport = false;
 	}
 
 	AssetManagerBase::AssetEntry& AssetManagerBase::AddEntryLocked(AssetHandle handle, bool& outInserted)

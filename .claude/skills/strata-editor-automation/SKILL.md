@@ -120,6 +120,11 @@ editor started with `--no-gpu` (use `--headless`):
   agent) instead of the editor; opening or creating a project (`project.open`, `project.create`, `project.openSample`)
   shows the editor, and `project.close` returns to the launcher. Changes to the untitled scene are not visible to the
   person while the launcher shows: create or open a project first.
+- A project opens at once even when its assets need importing (a fresh copy, a new engine version): the imports run in the
+  background and their assets load once imported (a model's meshes and materials appear then). `editor.status` says how
+  many are still importing (`assets.importing`), `asset.info` per asset (`importing`); wait for 0 (e.g. `editor.wait`
+  between checks) before relying on sub-assets or exporting, which waits for them itself. Editors run with `--commands`
+  or `--frames` import before the project opens.
 - Game logic: write C++ scripts into the project's `Scripts/` folder and use `script.build`, `script.status`,
   `script.add`, `script.setField`, `script.reload` (see `.claude/skills/strata-scripting/SKILL.md`, "The workflow in a
   game project"). Builds need CMake and the engine's compiler on the machine; they work with `--no-gpu`.

@@ -426,7 +426,10 @@ The threading model, frame loop and pipelines these rules protect are described 
   setting that other settings can leave without effect says so in `GetInactiveReason` (the inspector then shows it
   disabled, with the reason).
   Editors re-import in the background (`EditorAssetManager::SetImportSettingsInBackground`, `ReimportAssetInBackground`,
-  `IsImportPending`); the blocking forms are for tools and tests.
+  `IsImportPending`); the blocking forms are for tools and tests. The editor also opens projects with their imports in the
+  background (`Scan(ScanImports::InBackground)`, `EditorContextSpecification::ImportInBackground`; tests and scripted runs
+  scan blocking, so every asset is imported when the project is open): a load of an asset whose first import is still
+  running waits for it instead of failing (`AssetManagerBase::IsAwaitingImport`, `ResumeLoadsAwaitingImport`).
 - Engine-native assets (`.stscene`, `.stprefab`, `.stmat`) are JSON documents with a
   `{ "Strata": { "Format": ..., "Version": ... } }` header, stored as-is. Their loaders validate fully;
   JSON entry points are named `FromJson`, byte entry points `Deserialize`.
@@ -716,7 +719,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   - Status pills say what is wrong and lead to it: errors (unread since the Console was last focused, not counting the
     frame its window appears in), a failed automation start (`--no-automation` is shown as off), scripts that are not
     built (click to build) or failed, assets that failed to load or pools close to or over their budget (the assets pill,
-    `N ready · M streaming · <pool> X/Y MB` for the pool closest to its budget, `GetMostPressuredPool`, in Sulfur from
+    `N ready · M streaming · <pool> X/Y MB` for the pool closest to its budget, `GetMostPressuredPool`, after
+    `K importing` while imports run (`editor.status` has the count as `assets.importing`), in Sulfur from
     85% of it and Cinnabar beyond it or on failures; click to open the Streaming panel). The frame pill (`ms · FPS · J
     jobs`, jobs running or queued averaged over 60 frames) opens the Performance panel. Panels collect what the status bar
     shows about them in `OnUpdate`, which runs while they are closed. `editor.showPanel {panel}` (registered by

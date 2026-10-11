@@ -67,6 +67,10 @@ namespace Strata
 		// (Scene::SetTimeDilation). The editor turns it on for interactive and automation sessions; off by default, so that
 		// tests and scripted runs step deterministically.
 		bool TimeDilation = false;
+		// Opening a project imports what needs it in the background (ScanImports::InBackground): the project opens at once and
+		// frames go on while textures compress, the assets arriving as their imports finish. The editor turns it on for
+		// interactive and automation sessions; off by default, so that tests and scripted runs find every asset imported.
+		bool ImportInBackground = false;
 	};
 
 	// What became of the module of the last finished script build.

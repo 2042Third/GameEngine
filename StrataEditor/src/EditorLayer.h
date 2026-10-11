@@ -52,6 +52,9 @@ namespace Strata
 		// Watch the project's assets and script module for changes made outside the editor (hot reload). UI tests turn it off:
 		// they need no watcher threads.
 		bool WatchFiles = true;
+		// Open projects with their imports in the background (EditorContextSpecification::ImportInBackground), except in
+		// scripted runs (--frames, --commands). UI tests turn it off: they expect every asset imported once a project is open.
+		bool ImportInBackground = true;
 		// The toolchain script builds use instead of the engine's (EditorContextSpecification::ScriptBuild); UI tests build
 		// with a stand-in for CMake.
 		std::optional<ScriptBuildSettings> ScriptBuild;

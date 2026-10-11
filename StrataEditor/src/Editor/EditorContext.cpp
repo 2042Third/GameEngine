@@ -70,10 +70,15 @@ namespace Strata
 	{
 		ActivateBuiltinAssets();
 		// The asset manager of the open project, or the built-in assets' without one (asset.stats has the details).
-		SetStatusProvider("assets", []()
+		SetStatusProvider("assets", [this]()
 		{
 			const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
-			return manager ? CommandUtils::DescribeAssetStats(manager->GetStats()) : nlohmann::json(nullptr);
+			if (!manager)
+				return nlohmann::json(nullptr);
+			nlohmann::json description = CommandUtils::DescribeAssetStats(manager->GetStats());
+			// Imports still running (a project opened with assets to import, re-imports): their assets arrive when they finish.
+			description["importing"] = m_AssetManager && manager == m_AssetManager ? m_AssetManager->GetPendingImportCount() : 0u;
+			return description;
 		});
 	}
 
@@ -179,7 +184,7 @@ namespace Strata
 		specification.WatchFiles = m_Specification.WatchAssetFiles;
 		m_AssetManager = CreateRef<EditorAssetManager>(specification);
 		AssetManager::SetActive(m_AssetManager);
-		m_AssetManager->Scan();
+		m_AssetManager->Scan(m_Specification.ImportInBackground ? ScanImports::InBackground : ScanImports::Wait);
 		ST_INFO("Opened project '{}' ({})", m_Project->GetConfig().Name, FileSystem::ToUTF8(m_Project->GetProjectDirectory()));
 		OpenScriptEngine(created);
 

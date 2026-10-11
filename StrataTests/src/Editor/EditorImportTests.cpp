@@ -4,6 +4,7 @@
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/HarnessEditor.h"
 #include "TestHelpers.h"
 
 #include <Strata/Asset/AssetImporter.h>
@@ -17,10 +18,13 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <thread>
+#include <vector>
 
 using namespace Strata;
 
@@ -216,6 +220,151 @@ TEST_SUITE("Editor.ImportSettings")
 		const EditorCommandResult reimported = harness.Finish(harness.Start("asset.reimport", { { "asset", "Data/Slow.stgated" } }));
 		CHECK(reimported.Success);
 		CHECK(GatedImporter::s_ImportCount == imports + 1);
+	}
+
+	TEST_CASE("A project with imports to do opens at once and imports them while the editor's frames go on")
+	{
+		RegisterGatedImporter();
+		Tests::ScopedJobSystem jobs(2, 2);
+		// A project whose file has to be imported again when it opens: its cache is gone.
+		std::filesystem::path projectDirectory;
+		UUID asset = UUID::Null();
+		{
+			ImportHarness harness("EditorOpenImports");
+			const std::optional<UUID> handle = UUID::FromString(harness.Add("Data/Slow.stgated", { 's' }));
+			REQUIRE(handle);
+			asset = *handle;
+			projectDirectory = harness.Context.GetProject()->GetProjectDirectory();
+			harness.Context.CloseProject();
+		}
+		REQUIRE(FileSystem::Remove(projectDirectory / ".strata" / "Cache"));
+
+		EditorContextSpecification specification { false };
+		specification.ImportInBackground = true;
+		EditorContext context { specification };
+		EditorCommandRegistry commands;
+		GatedImporter::SetGate(false);
+		std::string error;
+		REQUIRE_MESSAGE(context.OpenProject(projectDirectory, &error), error); // Returns while the import waits at the gate
+		REQUIRE(Tests::WaitUntil([]() { return GatedImporter::IsWaiting(); }, std::chrono::seconds(20)));
+		EditorAssetManager* assets = context.GetAssetManager();
+		REQUIRE(assets);
+		CHECK(assets->IsImportPending(asset));
+		CHECK(assets->HasPendingImports());
+		CHECK(assets->GetPendingImportCount() == 1);
+		const EditorCommandResult status = commands.Execute(context, "editor.status", nlohmann::json::object());
+		REQUIRE(status.Success);
+		CHECK(status.Value["assets"]["importing"] == 1);
+
+		// A load of the asset waits for its import (Loading, not failed) while frames run.
+		CHECK(AssetManager::GetAsset<Font>(asset) == nullptr);
+		for (int frame = 0; frame < 30; frame++)
+		{
+			context.Update(Timestep(1.0f / 60.0f));
+			CHECK(assets->GetAssetState(asset) == AssetState::Loading);
+		}
+
+		// Once imported, it loads.
+		GatedImporter::SetGate(true);
+		REQUIRE(Tests::WaitUntil([&]()
+		{
+			context.Update(Timestep(1.0f / 60.0f));
+			AssetManager::GetAsset<Font>(asset);
+			return assets->GetAssetState(asset) == AssetState::Ready;
+		}, std::chrono::seconds(60)));
+		CHECK_FALSE(assets->IsImportPending(asset));
+		CHECK(assets->GetPendingImportCount() == 0);
+		CHECK(assets->GetImportInfo(asset).Error.empty());
+	}
+
+	TEST_CASE("Without background imports a project opens with every asset imported, and a failed first import fails its loads")
+	{
+		RegisterGatedImporter();
+		Tests::ScopedJobSystem jobs(2, 2);
+		std::filesystem::path projectDirectory;
+		UUID asset = UUID::Null();
+		{
+			ImportHarness harness("EditorOpenImportsWaiting");
+			const std::optional<UUID> handle = UUID::FromString(harness.Add("Data/Slow.stgated", { 's' }));
+			REQUIRE(handle);
+			asset = *handle;
+			projectDirectory = harness.Context.GetProject()->GetProjectDirectory();
+			harness.Context.CloseProject();
+		}
+		REQUIRE(FileSystem::Remove(projectDirectory / ".strata" / "Cache"));
+
+		// Tests and scripted runs: the import is done when OpenProject returns.
+		const uint32_t imports = GatedImporter::s_ImportCount;
+		{
+			EditorContext context { EditorContextSpecification { false } };
+			std::string error;
+			REQUIRE_MESSAGE(context.OpenProject(projectDirectory, &error), error);
+			CHECK(GatedImporter::s_ImportCount == imports + 1);
+			CHECK_FALSE(context.GetAssetManager()->HasPendingImports());
+			CHECK(context.GetAssetManager()->GetImportInfo(asset).Imported);
+		}
+
+		// In the background, a first import that fails ends the loads that waited for it with its error.
+		REQUIRE(FileSystem::Remove(projectDirectory / ".strata" / "Cache"));
+		std::filesystem::path meta = projectDirectory / "Assets" / "Data" / "Slow.stgated";
+		meta += ".meta";
+		std::optional<std::string> text = FileSystem::ReadText(meta);
+		REQUIRE(text);
+		std::optional<nlohmann::json> document = JsonUtils::Parse(*text);
+		REQUIRE(document);
+		(*document)["ImportSettings"]["Fail"] = true;
+		REQUIRE(FileSystem::WriteText(meta, JsonUtils::Dump(*document, 1, '\t')));
+		EditorContextSpecification specification { false };
+		specification.ImportInBackground = true;
+		EditorContext context { specification };
+		GatedImporter::SetGate(false);
+		std::string error;
+		REQUIRE_MESSAGE(context.OpenProject(projectDirectory, &error), error);
+		EditorAssetManager* assets = context.GetAssetManager();
+		REQUIRE(Tests::WaitUntil([]() { return GatedImporter::IsWaiting(); }, std::chrono::seconds(20)));
+		CHECK(AssetManager::GetAsset<Font>(asset) == nullptr);
+		context.Update(Timestep(1.0f / 60.0f));
+		CHECK(assets->GetAssetState(asset) == AssetState::Loading);
+		GatedImporter::SetGate(true);
+		REQUIRE(Tests::WaitUntil([&]()
+		{
+			context.Update(Timestep(1.0f / 60.0f));
+			return assets->GetAssetState(asset) == AssetState::Failed;
+		}, std::chrono::seconds(60)));
+		CHECK(assets->GetAssetError(asset).find("Requested failure") != std::string::npos);
+	}
+
+	TEST_CASE("The assets pill counts the imports running in the background")
+	{
+		RegisterGatedImporter();
+		Tests::ScopedJobSystem jobs(2, 2);
+		Tests::HarnessEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f });
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("EditorImportPill") / "Game";
+		editor.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+		const std::filesystem::path external = directory.parent_path() / "External" / "Slow.stgated";
+		REQUIRE(FileSystem::CreateDirectories(external.parent_path()));
+		REQUIRE(FileSystem::WriteBytes(external, std::vector<uint8_t> { 's' }));
+		GatedImporter::SetGate(true);
+		const std::optional<UUID> asset = UUID::FromString(
+			editor.Run("asset.import", { { "file", FileSystem::ToUTF8(external) }, { "directory", "Data" } })["asset"].get<std::string>());
+		REQUIRE(asset);
+		editor.Frames(2);
+		CHECK(editor.GetPillText("Status.Assets").find("importing") == std::string::npos);
+
+		// While the import waits at the gate, the pill says so first.
+		GatedImporter::SetGate(false);
+		EditorAssetManager* assets = editor.Context().GetAssetManager();
+		REQUIRE(assets);
+		REQUIRE(assets->ReimportAssetInBackground(*asset));
+		REQUIRE(Tests::WaitUntil([]() { return GatedImporter::IsWaiting(); }, std::chrono::seconds(20)));
+		editor.Frames(2);
+		const std::string pill = editor.GetPillText("Status.Assets");
+		CHECK_MESSAGE(pill.rfind("1 importing", 0) == 0, pill);
+
+		GatedImporter::SetGate(true);
+		REQUIRE(editor.FramesUntil([&]() { return assets->GetPendingImportCount() == 0; }));
+		editor.Frames(1);
+		CHECK(editor.GetPillText("Status.Assets").find("importing") == std::string::npos);
 	}
 
 	TEST_CASE("A failed background import fails the command, and closing the project ends it")

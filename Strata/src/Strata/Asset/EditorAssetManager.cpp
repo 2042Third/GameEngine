@@ -469,6 +469,8 @@ namespace Strata
 				return;
 			subAssets = it->second.Import.SubAssets;
 			SetDependencies(it->second, {});
+			if (it->second.ImportInFlight)
+				m_SourcesImporting--; // Its import's outcome finds no source when it arrives
 			m_SourcesByPath.erase(it->second.Path);
 			m_Sources.erase(it);
 			m_AssetIndexDirty = true;
@@ -518,7 +520,7 @@ namespace Strata
 		return it != m_DependentsByPath.end() ? it->second : std::vector<AssetHandle>();
 	}
 
-	void EditorAssetManager::Scan()
+	void EditorAssetManager::Scan(ScanImports imports)
 	{
 		ST_PROFILE_FUNCTION();
 		const auto startTime = std::chrono::steady_clock::now();
@@ -616,7 +618,12 @@ namespace Strata
 			}
 		}
 
+		// Current imports are taken from the cache at once. The others import here (in parallel, on the background threads), or
+		// in the background after the scan: then the scan only checks the cache, on the workers like other work the frame
+		// waits for.
+		const bool wait = imports == ScanImports::Wait;
 		std::vector<ImportOutcome> outcomes(requests.size());
+		std::vector<uint8_t> done(requests.size(), 0); // Not a vector<bool>: batches write their elements concurrently
 		std::atomic<uint32_t> importedCount = 0;
 		JobSystem::ParallelFor(static_cast<uint32_t>(requests.size()), 1, [&](uint32_t begin, uint32_t endIndex)
 		{
@@ -624,10 +631,15 @@ namespace Strata
 			{
 				try
 				{
-					if (!LoadCurrentImport(requests[requestIndex], outcomes[requestIndex]))
+					if (LoadCurrentImport(requests[requestIndex], outcomes[requestIndex]))
+					{
+						done[requestIndex] = 1;
+					}
+					else if (wait)
 					{
 						outcomes[requestIndex] = RunImport(requests[requestIndex]);
 						importedCount++;
+						done[requestIndex] = 1;
 					}
 				}
 				catch (const std::exception& exception)
@@ -635,15 +647,22 @@ namespace Strata
 					outcomes[requestIndex] = ImportOutcome();
 					outcomes[requestIndex].Handle = requests[requestIndex].Handle;
 					outcomes[requestIndex].Error = fmt::format("Import failed: {}", exception.what());
+					done[requestIndex] = 1;
 				}
 			}
-		}, JobPriority::Background);
+		}, wait ? JobPriority::Background : JobPriority::High);
 
 		uint32_t failedCount = 0;
-		for (ImportOutcome& outcome : outcomes)
+		std::vector<AssetHandle> backgroundImports;
+		for (size_t requestIndex = 0; requestIndex < requests.size(); requestIndex++)
 		{
-			failedCount += outcome.Success ? 0 : 1;
-			ApplyImportOutcome(std::move(outcome), false);
+			if (!done[requestIndex])
+			{
+				backgroundImports.push_back(requests[requestIndex].Handle);
+				continue;
+			}
+			failedCount += outcomes[requestIndex].Success ? 0 : 1;
+			ApplyImportOutcome(std::move(outcomes[requestIndex]), false);
 		}
 
 		// What the engine-native assets reference: from their records where the files did not change, else scanned.
@@ -671,13 +690,20 @@ namespace Strata
 		for (const NativeReferences& references : nativeReferences)
 			ApplyNativeReferences(references);
 		RemoveUnusedCacheFiles();
+		// After the cleanup, which takes the temporary files of interrupted imports for leftovers.
+		for (const AssetHandle handle : backgroundImports)
+			QueueImport(handle);
 
 		if (m_Specification.WatchFiles && !m_Watcher.IsRunning() && !m_Watcher.Start(m_Specification.AssetDirectory))
 			ST_CORE_WARN("Asset hot reload is unavailable: cannot watch '{}'", FileSystem::ToUTF8(m_Specification.AssetDirectory));
 
 		SaveAssetIndex();
 		const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startTime);
-		ST_CORE_INFO("Asset scan: {} assets, {} imported, {} failed ({} ms)", files.size(), importedCount.load(), failedCount, elapsed.count());
+		if (backgroundImports.empty())
+			ST_CORE_INFO("Asset scan: {} assets, {} imported, {} failed ({} ms)", files.size(), importedCount.load(), failedCount, elapsed.count());
+		else
+			ST_CORE_INFO("Asset scan: {} assets, {} importing in the background, {} failed ({} ms)", files.size(), backgroundImports.size(), failedCount,
+				elapsed.count());
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -972,6 +998,9 @@ namespace Strata
 		std::vector<AssetHandle> previousSubAssets;
 		std::vector<AssetHandle> subAssetHandles;
 		std::string path;
+		// Loads of the asset and its sub-assets that waited for a first import (IsAwaitingImport) go on once it is applied:
+		// with its data, or failing with its error.
+		std::vector<AssetHandle> awaited = { outcome.Handle };
 		{
 			std::scoped_lock<std::mutex> lock(m_SourceMutex);
 			auto it = m_Sources.find(outcome.Handle);
@@ -979,6 +1008,7 @@ namespace Strata
 				return; // Deleted while importing
 
 			SourceAsset& source = it->second;
+			awaited.insert(awaited.end(), source.Import.SubAssets.begin(), source.Import.SubAssets.end());
 			source.Import.Imported = true;
 			source.Import.Error = outcome.Error;
 			source.Import.Warnings = outcome.Warnings;
@@ -1002,8 +1032,10 @@ namespace Strata
 		if (!outcome.Success)
 		{
 			ST_CORE_ERROR("Import of '{}' failed: {}", path, outcome.Error);
+			ResumeLoadsAwaitingImport(awaited);
 			return;
 		}
+		awaited.insert(awaited.end(), subAssetHandles.begin(), subAssetHandles.end());
 
 		SetStoredSize(outcome.Handle, FileSystem::GetFileSize(GetCachePath(outcome.Handle)).value_or(0));
 		SetAssetReferences(outcome.Handle, outcome.References, outcome.Bounds);
@@ -1038,6 +1070,8 @@ namespace Strata
 			for (AssetHandle subAsset : subAssetHandles)
 				ReloadAsset(subAsset);
 		}
+		// Reloads restart waiting loads themselves; these are the others (an import found current, or applied without reload).
+		ResumeLoadsAwaitingImport(awaited);
 	}
 
 	void EditorAssetManager::QueueImport(AssetHandle handle, bool force)
@@ -1056,6 +1090,7 @@ namespace Strata
 				return;
 			}
 			it->second.ImportInFlight = true;
+			m_SourcesImporting++;
 			request = MakeImportRequest(it->second);
 			request.Force = force;
 		}
@@ -1101,6 +1136,7 @@ namespace Strata
 		catch (const std::exception& exception)
 		{
 			ST_CORE_ERROR("Could not queue the import of '{}': {}", request.Path, exception.what());
+			bool neverImported = false;
 			{
 				std::scoped_lock<std::mutex> lock(m_SourceMutex);
 				auto it = m_Sources.find(handle);
@@ -1109,11 +1145,23 @@ namespace Strata
 					it->second.ImportInFlight = false;
 					it->second.ImportQueuedAgain = false;
 					it->second.ForceImportAgain = false;
+					m_SourcesImporting--;
+					neverImported = !it->second.Import.Imported;
 				}
 			}
-			std::scoped_lock<std::mutex> lock(m_ImportMutex);
-			m_ImportsInFlight--;
-			m_ImportCondition.notify_all();
+			{
+				std::scoped_lock<std::mutex> lock(m_ImportMutex);
+				m_ImportsInFlight--;
+				m_ImportCondition.notify_all();
+			}
+			// A first import that never runs fails, so that loads waiting for it end (a re-import keeps the data it has).
+			if (neverImported)
+			{
+				ImportOutcome failed;
+				failed.Handle = handle;
+				failed.Error = fmt::format("Could not queue the import: {}", exception.what());
+				ApplyImportOutcome(std::move(failed), false);
+			}
 		}
 	}
 
@@ -1156,6 +1204,8 @@ namespace Strata
 				{
 					importAgain = it->second.ImportQueuedAgain;
 					forceAgain = it->second.ForceImportAgain;
+					if (it->second.ImportInFlight)
+						m_SourcesImporting--;
 					it->second.ImportInFlight = false;
 					it->second.ImportQueuedAgain = false;
 					it->second.ForceImportAgain = false;
@@ -1730,6 +1780,20 @@ namespace Strata
 		else
 			QueueImport(handle, force);
 		return true;
+	}
+
+	bool EditorAssetManager::IsAwaitingImport(const AssetMetadata& metadata) const
+	{
+		const AssetHandle sourceHandle = metadata.IsSubAsset() ? metadata.Parent : metadata.Handle;
+		std::scoped_lock<std::mutex> lock(m_SourceMutex);
+		auto it = m_Sources.find(sourceHandle);
+		return it != m_Sources.end() && !it->second.Importer->StoresSourceDirectly() && !it->second.Import.Imported;
+	}
+
+	uint32_t EditorAssetManager::GetPendingImportCount() const
+	{
+		std::scoped_lock<std::mutex> lock(m_SourceMutex);
+		return m_SourcesImporting;
 	}
 
 	bool EditorAssetManager::IsImportPending(AssetHandle handle) const

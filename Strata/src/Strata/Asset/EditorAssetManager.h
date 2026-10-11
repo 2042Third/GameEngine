@@ -22,6 +22,13 @@
 namespace Strata
 {
 
+	// How EditorAssetManager::Scan imports the assets whose cached import is missing or stale.
+	enum class ScanImports : uint8_t
+	{
+		Wait = 0,    // In parallel before Scan returns (tools, tests, scripted editor runs)
+		InBackground // As background jobs that Update applies: Scan returns once every asset is registered (the editor)
+	};
+
 	struct EditorAssetManagerSpecification
 	{
 		std::filesystem::path AssetDirectory; // Project asset root (absolute)
@@ -73,9 +80,11 @@ namespace Strata
 		explicit EditorAssetManager(const EditorAssetManagerSpecification& specification);
 		~EditorAssetManager() override;
 
-		// Registers every asset, imports those whose cached data is missing or stale (in parallel; blocks until done)
-		// and starts watching the directory. Call once after construction.
-		void Scan();
+		// Registers every asset, imports those whose cached data is missing or stale and starts watching the directory. Call
+		// once after construction. With ScanImports::InBackground the imports run as background jobs (like re-imports after
+		// file changes) that Update applies; meanwhile a load of such an asset waits for its import instead of failing
+		// (AssetManagerBase::IsAwaitingImport), its sub-assets appear once it is applied, and HasPendingImports is true.
+		void Scan(ScanImports imports = ScanImports::Wait);
 
 		// Applies file changes and finished background imports (hot reload), then finalizes loads.
 		void Update() override;
@@ -108,6 +117,9 @@ namespace Strata
 		// Whether an import of the source asset (for a sub-asset: of its parent) is queued or running, or finished without
 		// Update having applied it yet. False for unknown assets.
 		bool IsImportPending(AssetHandle handle) const;
+		// Source assets whose import is queued or running, or finished and not applied yet (what Scan left to the
+		// background, re-imports). Thread-safe.
+		uint32_t GetPendingImportCount() const;
 
 		// Copies an external file into the asset directory (relative target directory) and imports it. If the name is
 		// taken, " (n)" is appended. Returns the new handle, or null.
@@ -158,6 +170,8 @@ namespace Strata
 		static constexpr uint64_t c_LargeImportSize = 64ull * 1024 * 1024;
 	protected:
 		bool ReadAssetData(const AssetMetadata& metadata, std::vector<uint8_t>& outData, std::string* outError) override;
+		// Assets of a source whose first import has not been applied (Scan in the background, a file added since).
+		bool IsAwaitingImport(const AssetMetadata& metadata) const override;
 		// Reads the range from the cache file or the source file, without reading the rest.
 		bool ReadAssetRange(const AssetMetadata& metadata, uint64_t offset, uint64_t size, std::vector<uint8_t>& outData, std::string* outError) override;
 	private:
@@ -284,6 +298,7 @@ namespace Strata
 		std::unordered_map<std::string, AssetHandle> m_SourcesByPath; // Relative path -> handle
 		std::unordered_map<std::string, std::vector<AssetHandle>> m_DependentsByPath; // Dependency key -> importing sources
 		bool m_AssetIndexDirty = false;                               // Guarded by m_SourceMutex
+		uint32_t m_SourcesImporting = 0;                              // Sources with ImportInFlight; guarded by m_SourceMutex
 
 		// Files read on I/O threads (cache files, engine-native sources) are replaced, moved or deleted by the main
 		// thread; on Windows that fails while a reader holds them open. Reads take the lock shared, changes exclusive.
