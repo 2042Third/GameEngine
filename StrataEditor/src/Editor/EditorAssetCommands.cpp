@@ -637,7 +637,8 @@ namespace Strata
 
 		registry.Register({ "asset.move",
 			"Moves or renames an asset (with its .meta and cached import) within the asset directory; its handle and every reference to it stay "
-			"valid. One undo step (edit.undo moves it back). Returns its new path.",
+			"valid. One undo step (edit.undo moves it back); a name that differs only in case renames it in place, and its own path changes "
+			"nothing. Fails when another file is at the path. Returns {asset, path (the new one)}.",
 			ObjectSchema({ { "asset", AssetSchema("Asset to move") }, { "path", StringSchema("New path relative to the asset directory, with the file's extension") } },
 				{ "asset", "path" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
@@ -657,7 +658,9 @@ namespace Strata
 				if (!assets->MoveAsset(handle, path, &error))
 					return EditorCommandResult::Fail(error);
 				const std::string to = assets->GetMetadata(handle)->Path;
-				context.GetUndoStack().Record(CreateScope<AssetMoveAction>(*assets, fmt::format("Move {}", from), handle, from, to));
+				// Its own path moves nothing: no step.
+				if (to != from)
+					context.GetUndoStack().Record(CreateScope<AssetMoveAction>(*assets, fmt::format("Move {}", from), handle, from, to));
 				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) }, { "path", to } });
 			} });
 
@@ -763,7 +766,8 @@ namespace Strata
 				const size_t count = assets->GetAssetsBelowFolder(from).size();
 				if (!assets->MoveFolder(from, to, &error))
 					return EditorCommandResult::Fail(error);
-				context.GetUndoStack().Record(CreateScope<AssetMoveAction>(*assets, fmt::format("Move Folder {}", from), UUID::Null(), from, to));
+				if (to != from)
+					context.GetUndoStack().Record(CreateScope<AssetMoveAction>(*assets, fmt::format("Move Folder {}", from), UUID::Null(), from, to));
 				return EditorCommandResult::Ok({ { "path", to }, { "assets", count } });
 			} });
 

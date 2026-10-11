@@ -202,8 +202,9 @@ Deleting moves the file, its `.meta` and its cached import to `<project>/.strata
 step: `edit.undo` brings the asset back with the same handle, so its references work again. Folders:
 `asset.createFolder {"path"}`, `asset.moveFolder {"path", "to"}` (everything in it moves, every handle and reference
 stays valid) and `asset.deleteFolder {"path", "force"?}` (refused while assets outside it or the open scene use its
-assets); `asset.move {"asset", "path"}` renames or moves one asset. Each is one undo step (`edit.undo`, `edit.history`);
-the open scene cannot be deleted.
+assets); `asset.move {"asset", "path"}` renames or moves one asset (a name that differs only in case renames it in
+place; its own path changes nothing). Each is one undo step (`edit.undo`, `edit.history`); the open scene cannot be
+deleted.
 
 **Hierarchy and prefabs**: `entity.create {"parent": "<id>"}`;
 `entity.setParent {"entities": ["<id>", ...], "parent": "<id>" | null, "index": 0}` moves entities (in the order given;

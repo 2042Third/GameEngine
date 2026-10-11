@@ -238,6 +238,43 @@ TEST_SUITE("Editor.AssetOperations")
 		CHECK(assets.GetMetadata(a)->Path == "Art/Materials/A.stmat");
 	}
 
+	TEST_CASE("Moving to the own path changes nothing, and names that differ only in case rename in place")
+	{
+		AssetHarness harness("AssetOpsMoveCase");
+		const AssetHandle crate = ToHandle(harness.Run("material.create", { { "path", "Materials/crate.stmat" } })["asset"]);
+		EditorAssetManager& assets = harness.Assets();
+		const size_t history = harness.History().size();
+
+		// The own path: nothing moves, and no undo step is recorded.
+		CHECK(harness.Run("asset.move", { { "asset", UUIDToJson(crate) }, { "path", "Materials/crate.stmat" } })["path"] == "Materials/crate.stmat");
+		CHECK(harness.Run("asset.moveFolder", { { "path", "Materials" }, { "to", "Materials" } })["path"] == "Materials");
+		CHECK(harness.History().size() == history);
+
+		// Only the case changes (on file systems that ignore case the destination "exists": it is the asset's own file).
+		CHECK(harness.Run("asset.move", { { "asset", UUIDToJson(crate) }, { "path", "Materials/Crate.stmat" } })["path"] == "Materials/Crate.stmat");
+		CHECK(assets.GetMetadata(crate)->Path == "Materials/Crate.stmat");
+		CHECK(assets.FindAssetByPath("Materials/Crate.stmat") == crate);
+		CHECK(harness.Run("asset.moveFolder", { { "path", "Materials" }, { "to", "materials" } })["path"] == "materials");
+		CHECK(assets.GetMetadata(crate)->Path == "materials/Crate.stmat");
+		CHECK(harness.Run("material.get", { { "material", "materials/Crate.stmat" } })["asset"] == UUIDToJson(crate));
+		// The names on disk follow.
+		std::vector<std::string> names;
+		std::error_code error;
+		for (std::filesystem::directory_iterator it(harness.AssetPath(""), error), end; !error && it != end; it.increment(error))
+			names.push_back(FileSystem::ToUTF8(it->path().filename()));
+		CHECK(std::find(names.begin(), names.end(), "materials") != names.end());
+		CHECK(std::find(names.begin(), names.end(), "Materials") == names.end());
+		REQUIRE(harness.History().size() == history + 2);
+
+		harness.Run("edit.undo");
+		harness.Run("edit.undo");
+		CHECK(assets.GetMetadata(crate)->Path == "Materials/crate.stmat");
+
+		// Another file at the destination still refuses the move.
+		harness.Run("material.create", { { "path", "Materials/Other.stmat" } });
+		CHECK_FALSE(harness.Fail("asset.move", { { "asset", UUIDToJson(crate) }, { "path", "Materials/Other.stmat" } }).Error.empty());
+	}
+
 	TEST_CASE("Folders are created, deleted with their assets and restored by undo")
 	{
 		AssetHarness harness("AssetOpsFolders");

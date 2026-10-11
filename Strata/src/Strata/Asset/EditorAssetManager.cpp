@@ -2770,20 +2770,23 @@ namespace Strata
 			return fail(fmt::format("'{}' is outside the asset directory", newRelativePath));
 		if (IsHiddenRelativePath(FileSystem::FromUTF8(destinationRelative)))
 			return fail(fmt::format("'{}' is in a hidden directory", destinationRelative));
-		if (FileSystem::Exists(destination))
-			return fail(fmt::format("'{}' already exists", destinationRelative));
 
 		std::unique_lock<std::mutex> lock(m_SourceMutex);
 		auto it = m_Sources.find(handle);
 		if (it == m_Sources.end())
 			return fail("Not a source asset of the project");
+		if (destinationRelative == it->second.Path)
+			return true; // Where it is already
+		const std::filesystem::path source = ToAbsolute(it->second.Path);
+		// A name that differs only in case names the asset's own file where the file system ignores case: renamed in place.
+		if (FileSystem::Exists(destination) && !FileSystem::IsSameFile(source, destination))
+			return fail(fmt::format("'{}' already exists", destinationRelative));
 		if (AssetImporterRegistry::FindByExtension(GetExtension(destination)) != it->second.Importer)
 			return fail("Moving cannot change the file type");
 
 		// An import of the asset reads the file at its old place: it is cancelled before the file moves, so it stores nothing
 		// it read there, and imports again once the move is done (at the old place if the move fails). Other imports go on.
 		const Ref<BackgroundJob> stopped = StopImport(it->second);
-		const std::filesystem::path source = ToAbsolute(it->second.Path);
 		std::string failure;
 		{
 			std::unique_lock<std::shared_mutex> fileLock(m_Work->FileMutex);
@@ -3309,9 +3312,12 @@ namespace Strata
 			return fail(fmt::format("'{}' is outside the asset directory", to));
 		if (IsHiddenRelativePath(FileSystem::FromUTF8(destinationRelative)))
 			return fail(fmt::format("'{}' is hidden (a name starts with '.'), so it could hold no assets", destinationRelative));
+		if (destinationRelative == sourceRelative)
+			return true; // Where it is already
 		if (IsInFolder(destinationRelative, sourceRelative))
 			return fail(fmt::format("'{}' cannot move into itself ('{}')", sourceRelative, destinationRelative));
-		if (FileSystem::Exists(destination))
+		// A name that differs only in case names the folder itself where the file system ignores case: renamed in place.
+		if (FileSystem::Exists(destination) && !FileSystem::IsSameFile(source, destination))
 			return fail(fmt::format("'{}' exists already", destinationRelative));
 
 		struct MovedSource

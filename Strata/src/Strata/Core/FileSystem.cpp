@@ -103,6 +103,13 @@ namespace Strata
 		return std::filesystem::exists(path, error);
 	}
 
+	bool FileSystem::IsSameFile(const std::filesystem::path& first, const std::filesystem::path& second)
+	{
+		std::error_code error;
+		const bool same = std::filesystem::equivalent(first, second, error);
+		return same && !error;
+	}
+
 	bool FileSystem::IsDirectory(const std::filesystem::path& path)
 	{
 		std::error_code error;

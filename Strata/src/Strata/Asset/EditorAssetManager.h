@@ -256,7 +256,9 @@ namespace Strata
 			const std::vector<AssetHandle>* references = nullptr);
 		// Moves or renames an asset (and its .meta) within the asset directory; the handle does not change. Never waits for
 		// an import: an import of the asset that is queued or running is cancelled before the file moves and runs again at
-		// the new place; other imports go on (the file watcher re-imports those that read the file as a dependency).
+		// the new place; other imports go on (the file watcher re-imports those that read the file as a dependency). Its own
+		// path does nothing; a name that differs only in case renames it where the file system ignores case. Fails when
+		// another file is at the destination.
 		bool MoveAsset(AssetHandle handle, const std::string& newRelativePath, std::string* outError = nullptr);
 		// Deletes the source file, its .meta and cached data, and unregisters the asset and its sub-assets. Never waits for
 		// an import: the asset's own import is cancelled before the files go and stores nothing; other imports go on. Tools;
@@ -283,8 +285,9 @@ namespace Strata
 		bool RemoveEmptyFolder(const std::string& relativePath, std::string* outError = nullptr);
 		// Moves or renames a folder with everything in it (also files that are no assets, such as a model's buffers), keeping
 		// every handle: the assets in it are registered at their new paths like MoveAsset does, imports of them that run are
-		// cancelled and run again there, and models in it whose files moved with them are imported again. Fails, moving
-		// nothing, when the destination exists, lies inside the folder or outside the asset directory.
+		// cancelled and run again there, and models in it whose files moved with them are imported again. Its own path does
+		// nothing, and a name that differs only in case renames it where the file system ignores case. Fails, moving nothing,
+		// when something else is at the destination or it lies inside the folder or outside the asset directory.
 		bool MoveFolder(const std::string& from, const std::string& to, std::string* outError = nullptr);
 
 		//////////////////////////////////////////////////////////////////////////

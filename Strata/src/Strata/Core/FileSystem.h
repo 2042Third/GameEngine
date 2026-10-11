@@ -26,6 +26,9 @@ namespace Strata
 		static bool WriteText(const std::filesystem::path& path, std::string_view text);
 
 		static bool Exists(const std::filesystem::path& path);
+		// Whether two paths name the same existing file or directory (where the file system ignores case, names that differ
+		// only in case do). False when either does not exist.
+		static bool IsSameFile(const std::filesystem::path& first, const std::filesystem::path& second);
 		static bool IsDirectory(const std::filesystem::path& path);
 		static bool IsRegularFile(const std::filesystem::path& path);
 		static bool CreateDirectories(const std::filesystem::path& path);
