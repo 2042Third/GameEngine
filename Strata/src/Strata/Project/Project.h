@@ -29,6 +29,8 @@ namespace Strata
 		// Assets ("Prefabs/Enemy.stprefab") and folders ("Prefabs") relative to the asset directory, '/' separators, that an
 		// export with pruning keeps with what they use although no scene references them: assets the scripts find by path.
 		std::vector<std::string> AlwaysInclude;
+		// A scene the game plays while its start scene loads (GameManifest::LoadingScene); null: none (a cleared frame).
+		AssetHandle LoadingScene = UUID::Null();
 	};
 
 	struct ProjectConfig
@@ -46,7 +48,7 @@ namespace Strata
 	//
 	// Project file: { "Strata": { "Format": "Project", "Version": 2 }, "Project": { "Name": ..., "AssetDirectory": ...,
 	// "StartScene": "<handle>", "Scripts": { "SourceDirectory": "Scripts", "ModuleName": ... },
-	// "Export": { "AlwaysInclude": [...] } } }
+	// "Export": { "AlwaysInclude": [...], "LoadingScene": "<handle>" } } }
 	// Version 1 files (without "Scripts") load with the default script settings; "Export" is optional (written when it says
 	// something).
 	class Project

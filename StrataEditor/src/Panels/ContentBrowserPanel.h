@@ -62,7 +62,7 @@ namespace Strata
 		void Refresh(EditorContext& context);
 		void DrawToolbar(EditorContext& context, const EditorCommandRegistry& commands);
 		void DrawRenamePopup(EditorContext& context, const EditorCommandRegistry& commands);
-		void OpenScene(EditorContext& context, const EditorCommandRegistry& commands, AssetHandle scene);
+		void OpenScene(EditorPanelContext& panelContext, AssetHandle scene);
 	private:
 		std::string m_CurrentDirectory; // Relative to the asset directory, '/' separators, empty for the root
 		std::string m_Filter;

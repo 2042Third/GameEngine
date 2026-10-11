@@ -12,6 +12,7 @@ namespace Strata
 {
 
 	class EditorCommandRegistry;
+	class EditorCommandRunner;
 	class EditorContext;
 	struct ComponentInfo;
 
@@ -19,6 +20,10 @@ namespace Strata
 	// result value, or null on failure. Only for commands that finish at once: commands that take frames go through the
 	// EditorCommandRunner.
 	nlohmann::json RunEditorCommand(EditorContext& context, const EditorCommandRegistry& commands, std::string_view name,
+		const nlohmann::json& parameters = nlohmann::json::object());
+	// Runs a command from the UI through the runner, for commands that may take frames (scene.open), and logs a failure when
+	// it ends (not a cancellation, e.g. by a later scene.open).
+	void RunEditorCommandDeferred(EditorCommandRunner& runner, EditorContext& context, const EditorCommandRegistry& commands, std::string_view name,
 		const nlohmann::json& parameters = nlohmann::json::object());
 
 	// What the Edit menu and the focus-scoped shortcuts of the Hierarchy and the Viewport do with the selected entities:

@@ -74,6 +74,7 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | Question | Call |
 | --- | --- |
 | What is open, is it playing, unsaved changes? | `editor.status` |
+| Is a scene still opening, how far is it? | `scene.loadStatus` (`open` with `progress`, `lastOpen` with how it ended, `play` for a switch a running game asked for); also `editor.status`'s `sceneLoad` |
 | Which projects did the user (or an agent) open lately? | `editor.recentProjects` (name, project file path for `project.open`, `lastOpened`; editors run with `--commands` or `--frames` list what they opened without saving it); `editor.removeRecentProject {path}` takes one off |
 | What can a new project or scene start from? | `project.templates` (`empty`, `basic3d`) |
 | Is there a finished game to learn from? | `project.samples` (e.g. `Tetris`); `project.openSample {sample, directory}` opens a copy in a new directory (the sample stays as shipped; build its scripts with `script.build` before playing) |
@@ -113,6 +114,11 @@ editor started with `--no-gpu` (use `--headless`):
   allColliders?, stats?, gizmo?, space?, debugView?, ...}` change these view settings (no undo step; saved with the
   project's editor state). Collider shapes show for the selection only unless `allColliders` is on; far away lights and
   cameras show as small icons.
+- **Opening a scene takes frames.** `scene.open` reads the scene and loads everything it uses in the background while the
+  editor goes on showing the edited scene; it answers once the opened scene replaced it (`entities`, `seconds`, and the
+  `frameTimes` of the frames meanwhile), so give large scenes a long `--timeout`. Meanwhile the edited scene is read-only:
+  edits and `play.start` fail with "is being opened" (wait for the answer, or watch `scene.loadStatus`). A second
+  `scene.open`, `scene.new` or `project.close` cancels it (the first `scene.open` then fails as cancelled, `-32006`).
 - `camera.get`; `camera.set {position?, target?, yaw?, pitch?, distance?, fov?, near?, far?, flySpeed?}`;
   `camera.focus {entities?}` frames the given (or selected) entities. Every scene remembers its own editor camera; a
   scene opened for the first time is framed on what it renders, seen from the direction of its primary camera.
@@ -269,7 +275,10 @@ from the frame that started it); a large project takes a while, so give the call
 (a relative path, a directory inside the project, a file, unsaved changes) fail at once with what to do instead.
 `"prune": true` ships only what the scenes use: assets the scripts load by path must then be named with
 `project.setExportSettings {"alwaysInclude": ["Prefabs", "Sounds/Win.wav"]}` (folders or assets, saved in the project).
-Check the result headless: `<dir>/<Game> --headless --frames 120` (exit code 0).
+`project.setExportSettings {"loadingScene": "Scenes/Loading.stscene"}` names a scene the game plays while its start scene
+loads (null: none; the game shows black until its start scene is in); exports keep it, also pruned ones.
+Check the result headless: `<dir>/<Game> --headless --frames 120` (exit code 0). Games load scenes in the background
+too: the first frames run before the start scene is in, so give short checks enough `--frames`.
 
 **Finish**: save (`scene.save`), then `editor.quit`. It refuses while the scene has unsaved changes;
 `{"force": true}` discards them. The editor answers, closes and removes its session file.

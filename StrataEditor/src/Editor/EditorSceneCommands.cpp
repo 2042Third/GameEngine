@@ -17,6 +17,7 @@
 #include <cmath>
 #include <iterator>
 #include <limits>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -124,10 +125,24 @@ namespace Strata
 				SceneStateToString(context.GetSceneState()));
 		}
 
+		// What mutating commands report while the edited scene is read-only (a scene is being opened, scene.open).
+		std::string GetSceneLoadingError(const EditorContext& context)
+		{
+			const EditorSceneLoadStatus& status = context.GetSceneLoadStatus();
+			return fmt::format("Scene {} is being opened ({:.0f}%): the edited scene is read-only until it replaces it (scene.loadStatus)",
+				status.Scene.ToString(), status.Progress * 100.0f);
+		}
+
 		// Ends a mutating command: records the undo step (edit mode) and reports the result. While playing, edits change
-		// the running copy only; the result says so, because play.stop discards them.
+		// the running copy only; the result says so, because play.stop discards them. While a scene is being opened the
+		// edited scene is read-only: the edit is undone and the command fails.
 		EditorCommandResult Finish(EditorContext& context, SceneEditTransaction& transaction, nlohmann::json value = nullptr)
 		{
+			if (context.IsSceneLoading() && !context.IsPlaying())
+			{
+				transaction.Rollback();
+				return EditorCommandResult::Fail(GetSceneLoadingError(context));
+			}
 			context.CommitEdit(transaction);
 			if (context.IsPlaying())
 			{
@@ -136,6 +151,54 @@ namespace Strata
 				value["warning"] = GetRunningCopyWarning(context);
 			}
 			return EditorCommandResult::Ok(std::move(value));
+		}
+
+		// The load of scene.open: starts opening the scene and answers once it replaced the edited scene, with the frames that
+		// ran meanwhile (the frame that swapped it in included).
+		EditorCommandResult OpenSceneAndWait(EditorContext& context, AssetHandle handle)
+		{
+			std::string error;
+			if (!context.BeginOpenScene(handle, &error))
+				return EditorCommandResult::Fail(error);
+			const uint64_t id = context.GetSceneLoadStatus().ID;
+			// Frames are measured from the one that started the load, which the editor records at the start of the next frame.
+			const uint64_t firstMeasured = context.GetRecordedFrameCount() + 1;
+			return EditorCommandResult::Defer([id, firstMeasured, frames = uint64_t(0), lastRecorded = uint64_t(0), frameTimes = std::vector<double>(),
+				finishedAt = std::optional<uint64_t>()](EditorContext& context) mutable -> std::optional<EditorCommandResult>
+			{
+				frames++;
+				const uint64_t recorded = context.GetRecordedFrameCount();
+				if (recorded >= firstMeasured && recorded != lastRecorded)
+				{
+					frameTimes.push_back(context.GetLastFrameTime());
+					lastRecorded = recorded;
+				}
+				const EditorSceneLoadStatus& status = context.GetSceneLoadStatus();
+				if (status.ID != id)
+					return EditorCommandResult::Fail("Opening the scene was cancelled: another scene is being opened", EditorCommandError::Cancelled);
+				if (!status.IsFinished())
+					return std::nullopt;
+				if (status.State == SceneLoadState::Cancelled)
+					return EditorCommandResult::Fail(status.Error, EditorCommandError::Cancelled);
+				if (status.State == SceneLoadState::Failed)
+					return EditorCommandResult::Fail(status.Error);
+				// The frame that swapped the scene in is recorded at the start of the next one: one more poll reports it.
+				if (!finishedAt)
+				{
+					finishedAt = recorded;
+					return std::nullopt;
+				}
+				const Ref<Scene>& scene = context.GetEditScene();
+				nlohmann::json value = {
+					{ "scene", UUIDToJson(status.Scene) },
+					{ "name", scene->GetName() },
+					{ "entities", scene->GetEntityCount() },
+					{ "seconds", status.Seconds },
+					{ "frames", frames } };
+				if (!frameTimes.empty())
+					value["frameTimes"] = DescribeFrameTimes(std::move(frameTimes));
+				return EditorCommandResult::Ok(std::move(value));
+			});
 		}
 
 		EditorCommandResult RollBack(SceneEditTransaction& transaction, std::string error, EditorCommandError kind)
@@ -286,7 +349,12 @@ namespace Strata
 				return EditorCommandResult::Ok();
 			} });
 
-		registry.Register({ "scene.open", "Opens a scene asset for editing (unsaved changes are discarded).",
+		registry.Register({ "scene.open",
+			"Opens a scene asset for editing (unsaved changes are discarded). The scene is read and loaded with everything it uses in the "
+			"background while the editor goes on showing the edited scene, which stays read-only meanwhile (edits and play.start fail); the "
+			"command answers once the opened scene replaced it: {scene, name, entities, seconds, frames, frameTimes (the CPU time of the frames "
+			"that ran meanwhile: count, medianMs, meanMs, p95Ms, maxMs)}. Opening another scene, scene.new or closing the project cancels it. "
+			"scene.loadStatus (and editor.status's sceneLoad) report its progress.",
 			ObjectSchema({ { "scene", AssetSchema("Scene to open") } }, { "scene" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
@@ -294,10 +362,30 @@ namespace Strata
 				const AssetHandle handle = ResolveAsset(context, arguments, "scene", AssetType::Scene);
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				std::string error;
-				if (!context.OpenScene(handle, &error))
-					return EditorCommandResult::Fail(error);
-				return EditorCommandResult::Ok();
+				return OpenSceneAndWait(context, handle);
+			} });
+
+		registry.Register({ "scene.loadStatus",
+			"The scene loads under way: open (the scene scene.open is opening, {scene, state: LoadingScene | LoadingDependencies, progress 0 to "
+			"1}, null when none), lastOpen (the latest scene.open that finished: {scene, state: Ready | Failed | Cancelled, error, seconds}, null "
+			"before the first) and play (the scene a running game asked for while it loads, {scene, progress}, null when none).",
+			ObjectSchema({}),
+			[](EditorContext& context, const nlohmann::json&)
+			{
+				const EditorSceneLoadStatus& status = context.GetSceneLoadStatus();
+				nlohmann::json open = nullptr;
+				nlohmann::json lastOpen = nullptr;
+				if (context.IsSceneLoading())
+					open = { { "scene", UUIDToJson(status.Scene) }, { "state", SceneLoadStateToString(status.State) }, { "progress", status.Progress } };
+				else if (status.ID != 0)
+				{
+					lastOpen = { { "scene", UUIDToJson(status.Scene) }, { "state", SceneLoadStateToString(status.State) },
+						{ "error", status.Error.empty() ? nlohmann::json(nullptr) : nlohmann::json(status.Error) }, { "seconds", status.Seconds } };
+				}
+				nlohmann::json play = nullptr;
+				if (context.IsRuntimeSceneLoading())
+					play = { { "scene", UUIDToJson(context.GetRuntimeSceneLoadTarget()) }, { "progress", context.GetRuntimeSceneLoadProgress() } };
+				return EditorCommandResult::Ok({ { "open", std::move(open) }, { "lastOpen", std::move(lastOpen) }, { "play", std::move(play) } });
 			} });
 
 		registry.Register({ "scene.save", "Saves the edited scene to its asset. New scenes need scene.saveAs first.", ObjectSchema({}),

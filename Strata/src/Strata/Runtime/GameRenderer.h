@@ -32,6 +32,9 @@ namespace Strata
 		// Returns false when nothing was rendered: no scene or target, a zero size (e.g. a minimized window) or a failure the
 		// renderer logged.
 		bool Render(const Ref<Scene>& scene, nvrhi::IFramebuffer* target, const glm::uvec2& size);
+		// Renders a frame of plain black into `target`: what a game shows while it has no scene yet (its start scene loads
+		// and it has no loading scene). False under the conditions of Render.
+		bool RenderEmpty(nvrhi::IFramebuffer* target, const glm::uvec2& size);
 
 		// Whether the last frame showed the missing-camera message.
 		bool IsShowingMessage() const { return m_ShowingMessage; }

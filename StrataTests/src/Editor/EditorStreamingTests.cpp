@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "TestHelpers.h"
@@ -211,7 +212,7 @@ TEST_SUITE("Editor.Streaming")
 		harness.Run("scene.saveAs", { { "path", "Scenes/First.stscene" } });
 		harness.Run("scene.new");
 		harness.Run("scene.saveAs", { { "path", "Scenes/Second.stscene" } });
-		harness.Run("scene.open", { { "scene", "Scenes/First.stscene" } });
+		Tests::RunCommandToCompletion(harness.Context, harness.Commands, "scene.open", { { "scene", "Scenes/First.stscene" } });
 
 		// What draws the scene requests its assets every frame (here: the test, as no viewport renders).
 		const auto frame = [&harness](std::initializer_list<AssetHandle> used)
@@ -229,7 +230,7 @@ TEST_SUITE("Editor.Streaming")
 		REQUIRE_FALSE(sharedObject.expired());
 		const uint64_t evictionsBefore = AssetManager::GetActive()->GetStats().Evictions;
 
-		harness.Run("scene.open", { { "scene", "Scenes/Second.stscene" } });
+		Tests::RunCommandToCompletion(harness.Context, harness.Commands, "scene.open", { { "scene", "Scenes/Second.stscene" } });
 		for (uint32_t switched = 0; switched < AssetResidency::c_SceneSwitchTrimFrames + 1; switched++)
 		{
 			frame({ shared, second });
@@ -269,10 +270,12 @@ TEST_SUITE("Editor.Streaming")
 		const std::weak_ptr<Asset> sharedObject = AssetManager::GetActive()->GetAsset(shared);
 		REQUIRE_FALSE(sharedObject.expired());
 
-		// The game asks for the other scene (scripts: Game::LoadScene); the editor switches after the frame's update.
+		// The game asks for the other scene (scripts: Game::LoadScene); the editor loads it while the game goes on, and switches
+		// between frames once it is in.
 		const Ref<Scene> previous = harness.Context.GetActiveScene();
 		previous->RequestSceneLoad(secondScene);
-		frame({ first, shared });
+		for (int loading = 0; loading < 120 && harness.Context.GetActiveScene() == previous; loading++)
+			frame({ first, shared });
 		REQUIRE(harness.Context.IsPlaying());
 		REQUIRE(harness.Context.GetActiveScene() != previous);
 		for (uint32_t switched = 0; switched < AssetResidency::c_SceneSwitchTrimFrames + 1; switched++)

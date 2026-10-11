@@ -312,6 +312,8 @@ namespace Strata
 				return nullptr;
 			asset->m_Prepared = std::move(scene);
 		}
+		// The world transforms too are computed here rather than in the frame that starts the scene.
+		asset->m_Prepared->UpdateWorldTransforms();
 		asset->m_PreparedBytes = asset->m_Prepared->EstimateMemoryUsage();
 		return asset;
 	}

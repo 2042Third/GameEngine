@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Audio/AudioTestUtils.h"
+#include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "FeatureTest/FeatureTestUtils.h"
@@ -89,7 +90,7 @@ TEST_SUITE("Editor.Perf")
 		EditorCommandRegistry commands;
 		Run(context, commands, "project.open", { { "path", FileSystem::ToUTF8(projectFile) } });
 		Run(context, commands, "script.load", { { "path", FileSystem::ToUTF8(GetFeatureScriptModule()) } });
-		Run(context, commands, "scene.open", { { "scene", "Scenes/Feature.stscene" } });
+		Tests::RunCommandToCompletion(context, commands, "scene.open", { { "scene", "Scenes/Feature.stscene" } });
 		LoadAllAssets(*context.GetAssetManager());
 		Run(context, commands, "play.start");
 

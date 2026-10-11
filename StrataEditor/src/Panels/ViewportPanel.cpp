@@ -39,6 +39,8 @@ namespace Strata
 		constexpr float c_CameraFieldWidthInFontSizes = 11.0f;
 		// The play-state strip over the image, in text heights (2 pixels at the base text size).
 		constexpr float c_PlayStripInFontSizes = 1.0f / 7.0f;
+		// The scene load card's width, in text heights.
+		constexpr float c_SceneLoadCardInFontSizes = 22.0f;
 
 		ImTextureID ToTextureID(nvrhi::ITexture* texture)
 		{
@@ -243,6 +245,8 @@ namespace Strata
 		// Text boxes go below the chip row, also while it is hidden, so they stay in place when it comes and goes.
 		if (view)
 			DrawOverlays(context, *view, chipsMin.y + ImGui::GetFrameHeight(), panelContext.Frame);
+		if (context.IsSceneLoading())
+			DrawSceneLoadOverlay(context);
 	}
 
 	void ViewportPanel::OnHidden(EditorPanelContext& context)
@@ -631,6 +635,37 @@ namespace Strata
 		ViewportRenderer* renderer = viewport.GetRenderer();
 		if (viewport.GetSettings().ShowStats && renderer)
 			DrawStatsOverlay(drawList, ImVec2(imageMin.x + margin, top), *renderer, view, frame);
+	}
+
+	void ViewportPanel::DrawSceneLoadOverlay(EditorContext& context)
+	{
+		const EditorSceneLoadStatus& status = context.GetSceneLoadStatus();
+		const ImGuiStyle& style = ImGui::GetStyle();
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		std::string name = status.Scene.ToString();
+		if (const Ref<AssetManagerBase>& assets = AssetManager::GetActive())
+		{
+			if (const std::optional<AssetMetadata> metadata = assets->GetMetadata(status.Scene))
+				name = metadata->Path.empty() ? metadata->Name : metadata->Path;
+		}
+		const char* stage = status.State == SceneLoadState::LoadingScene ? "Reading the scene" : "Loading what it uses";
+
+		// A card in the middle of the image: the scene's name over the progress bar (no item takes the image's clicks but the
+		// bar, which takes none either).
+		const float width = std::min(ImGui::GetFontSize() * c_SceneLoadCardInFontSizes, std::max(m_Image.Size.x - style.WindowPadding.x * 2.0f, 0.0f));
+		const float height = ImGui::GetTextLineHeightWithSpacing() + ImGui::GetFrameHeight() + style.WindowPadding.y * 2.0f;
+		const ImVec2 cardMin(m_Image.Min.x + (m_Image.Size.x - width) * 0.5f, m_Image.Min.y + (m_Image.Size.y - height) * 0.5f);
+		const ImVec2 cardMax(cardMin.x + width, cardMin.y + height);
+		ImDrawList* drawList = ImGui::GetWindowDrawList();
+		drawList->AddRectFilled(cardMin, cardMax, ImGui::GetColorU32(colors.Overlay), style.WindowRounding);
+		const ImVec2 contentMin(cardMin.x + style.WindowPadding.x, cardMin.y + style.WindowPadding.y);
+		const float contentWidth = std::max(width - style.WindowPadding.x * 2.0f, 0.0f);
+		UI::PushFont(UI::EditorFont::SemiBold, UI::TextSize::Body);
+		const std::string title = UI::ElideStart(fmt::format("Opening {}", name), contentWidth);
+		drawList->AddText(contentMin, ImGui::GetColorU32(colors.Text), title.c_str());
+		ImGui::PopFont();
+		ImGui::SetCursorScreenPos(ImVec2(contentMin.x, contentMin.y + ImGui::GetTextLineHeightWithSpacing()));
+		UI::StrataProgressBar("Viewport.SceneLoad", status.Progress, fmt::format("{} {:.0f}%", stage, status.Progress * 100.0f), contentWidth);
 	}
 
 	void ViewportPanel::DrawStatsOverlay(ImDrawList* drawList, const ImVec2& position, const ViewportRenderer& renderer, const ViewportView& view, const EditorFrameStats& frame)

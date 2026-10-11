@@ -541,6 +541,21 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   prototype entities and the components that differ (what applying and reverting instances work from). Instantiation can
   also run in slices (`ContinueInstantiation` with a limit), each slice's entities complete when it returns, and keep the
   prototype's own IDs (`InstantiationOptions::KeepIDs`; an ID the scene has already fails before anything is created).
+- **Scene loads never stop the frame** (`Scene/SceneLoader.h`). `SceneLoader::LoadAsync(scene, options)` returns a
+  `SceneLoadRequest`: the scene asset and everything it uses (its dependency closure,
+  `AssetManagerBase::RequestLoadWithDependencies`) load in the background, pinned at the load's priority so that none of
+  it is evicted meanwhile; its owner calls `Update` once per frame. States: `LoadingScene` (the document is read and the
+  scene prepared on the loading worker, its world transforms included), `LoadingDependencies` (the prepared scene is
+  taken and the spent asset unloaded; the closure goes on loading), `Ready` (the share of the closure's stored bytes that
+  `SceneLoadOptions::RequiredProgress` asks for is in: all of it by default; a dependency that fails counts as finished,
+  the scene shows a fallback for it), `Failed` (the scene asset could not be loaded) and `Cancelled`. `GetProgress` is the
+  group's share of stored bytes (it never decreases), `TakeScene` hands the scene over once, `Cancel` releases every pin
+  and abandons what only the request started (a request destroyed unfinished cancels itself). The owner drops the request
+  once the scene it took has started, so that its assets are what the scene requests from then on. The owners: the
+  editor's `scene.open` (`EditorContext::BeginOpenScene`), play-mode switches (`EditorContext::SwitchRuntimeScene`) and
+  `GameRuntime` (start scene, loading scene, switches). While a switch loads, the running scene goes on and its scripts
+  read the progress (`Scene::GetSceneLoadProgress`, set by the owner every frame); the new scene replaces it between
+  updates, then its systems start and the trim of what only the previous scene used is scheduled.
 - A scene knows the scene asset it was loaded from or saved as (`Scene::GetSourceAsset`, set when a scene asset's
   scene is taken or copied and by the editor's save-as) and keeps an ID across its copies (`GetLineageID`: the source
   asset, else an ID of its own), by which systems recognize it from one play session to the next.
@@ -963,9 +978,9 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   generation and a published content change (caches revalidate; physics keeps the colliders it built and audio keeps
   playing clips), and it loads again on its next request. `TrimUnused(frames)` evicts every evictable asset not
   requested in that many frames, whatever the budgets (assets holding no memory stay: evicting them would free nothing);
-  `ScheduleTrim` runs it a few updates later. `GameRuntime::LoadScene`, `EditorContext::OpenScene` and the editor's
-  scene switches in play mode (`EditorContext::SwitchRuntimeScene`) schedule `TrimUnused(3)` three frames after a scene
-  switch, so what the new scene draws or requests by then stays. `AssetManagerStats::EvictionChecks` counts the assets
+  `ScheduleTrim` runs it a few updates later. `GameRuntime` and the editor (`EditorContext::BeginOpenScene` and its scene
+  switches in play mode, `EditorContext::SwitchRuntimeScene`) schedule `TrimUnused(3)` three frames after a loaded scene
+  replaced the previous one, so what the new scene draws or requests by then stays. `AssetManagerStats::EvictionChecks` counts the assets
   eviction looked at.
 - **Streaming queue** (`AssetStreamingQueue`). A request marks the asset Loading and queues it keyed by priority, then
   score (higher first; e.g. how large on screen it is needed), then request order; repeating it raises a queued request,
@@ -1372,8 +1387,18 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
 - **Runner** (`EditorCommandRunner.h`). `Run` executes a command; a deferred one is polled once per frame from the next
   frame on, in issue order, and reports through its completion callback. Automation and command scripts always use the
   runner. UI actions that finish at once call the registry through `RunEditorCommand`
-  (`UI/EditorActions.cpp`), which rejects pending results; Build Scripts, Apply of import settings and Reimport use the
-  runner (`EditorLayer.cpp`, `Panels/AssetInspectorPanel.cpp`).
+  (`UI/EditorActions.cpp`), which rejects pending results; Build Scripts, Apply of import settings, Reimport and opening a
+  scene use the runner (`RunEditorCommandDeferred`; `EditorLayer.cpp`, `Panels/AssetInspectorPanel.cpp`,
+  `Panels/ContentBrowserPanel.cpp`).
+- **Opening scenes** (`EditorContext::BeginOpenScene`, `scene.open`). The scene's file is read again (the asset is
+  unloaded first) through `SceneLoader` while the editor goes on drawing the edited scene, which is read-only meanwhile:
+  `CommitEdit` rolls an edit back, mutating scene commands fail (their `Finish`), and play mode is refused. `Update` makes
+  the loaded scene the edited one between frames (`FinishOpenScene`: the editor camera, the trim) once it and everything
+  it uses are in; another `BeginOpenScene`, `NewScene` or closing the project cancels the load. `scene.open` answers
+  deferred, one frame after the swap so that its `frameTimes` include the frame that swapped the scene in;
+  `GetSceneLoadStatus` (and `editor.status`'s `sceneLoad`, `scene.loadStatus`) report its progress, the viewport draws a
+  card with it over the image (`ViewportPanel::DrawSceneLoadOverlay`) and the assets pill counts it. `OpenScene` waits for
+  the load (opening a project's start scene, tools and tests).
 - **Undo** (`SceneEdit.h`, `UndoStack.h`). A `SceneEditTransaction` snapshots the entities an edit touches as
   `EntityState` (components as JSON, parent, sibling index from `Scene::GetSiblingIndex`); `Commit` records a
   `SceneEditAction` holding the states before and after, and undo or redo re-applies them with the same UUIDs
@@ -1518,12 +1543,14 @@ It writes:
 | --- | --- |
 | `<Game>.stpak` | `EditorAssetManager::WriteAssetPack` of the plan: every project asset, or with `prune` what the scenes and `Export.AlwaysInclude` use, ordered by first use |
 | script module (and its PDB) | `EditorContext::ReadRunningScriptModule`: the loaded module, checked by digest |
-| `<Game>.stgame` | `GameManifest` (version 3): name, pack, start scene, module, window settings |
+| `<Game>.stgame` | `GameManifest` (version 4): name, pack, start scene, loading scene (`Export.LoadingScene`, optional), module, window settings |
 | `<Game>[.exe]`, `ThirdPartyNotices.md` | `StrataRuntime` from the editor's directory, renamed (`includeRuntime`) |
 
 The module's PDB is copied when it exists, except in Dist builds or with `includeScriptSymbols: false`
 (`GameExportOptions::IncludeScriptSymbols`). Pruning is off by default: scripts may load assets by path, which no scene
-shows, so a game that does lists them in `Export.AlwaysInclude` (`project.setExportSettings`).
+shows, so a game that does lists them in `Export.AlwaysInclude` (`project.setExportSettings`). The project's loading scene
+(`Export.LoadingScene`, `project.setExportSettings {loadingScene}`) is written into the manifest and kept in pruned packs
+with what it uses.
 
 `StrataRuntime` (`StrataRuntime/src/RuntimeApplication.cpp`) runs `--game <file>`, or the manifest found next to the
 executable (`GameManifest::FindForExecutable`). It logs to `<user data>/<Game>/Logs/Game.log`. `--headless` disables
@@ -1540,10 +1567,16 @@ evictions) and the process's private memory with its peak so far (`PrivateMB`, `
 `GameRuntime::Create` loads the manifest, makes a
 `RuntimeAssetManager` on the pack active (with `GameRuntimeOptions::AssetBudgets` when given; the manifest's optional
 `PatchPacks` are mounted over it in order, and a missing one stops the game), loads the script module
-into its own `ScriptEngine` without hot reload and makes it active, and starts the start scene in Play mode.
-Each frame it finalizes loads, updates the scene and honors requests: a quit ends the process with the game's exit
-code, a scene load replaces the scene synchronously from the pack and schedules the release of what only the previous
-scene used ([Streaming and residency](#streaming-and-residency)). Exit codes: 1 when the game cannot start, 2 when
+into its own `ScriptEngine` without hot reload and makes it active, and starts loading the start scene (`SceneLoader`) and
+the manifest's loading scene (version 4, `LoadingScene`; version 3 manifests load without one), so it returns at once.
+The loading scene plays while the start scene loads (without one, renderers draw a black frame,
+`GameRenderer::RenderEmpty`); the start scene replaces it once it and everything it uses are in. A start scene that cannot
+be loaded is `GetStartError` (StrataRuntime exits with code 1); `WaitForStart` waits for it without running frames (tools
+and tests). Each frame it finalizes loads, advances the scene loads (swapping in a scene that is ready), updates the scene
+and honors requests: a quit ends the process with the game's exit code, a scene load (`LoadScene`) loads the next scene
+while the running one goes on, then swaps it in, starts its systems and schedules the release of what only the previous
+scene used ([Streaming and residency](#streaming-and-residency)). `--screenshot` fails a run whose last frame is still
+black for want of a scene. Exit codes: 1 when the game cannot start, 2 when
 the scripts crashed in a headless run (a windowed game keeps running without scripts), otherwise the code the game
 quit with. Exported games are the end-to-end check of the whole pipeline: the CTest export chain
 (`StrataEditor.Export`, `StrataRuntime.Smoke`, ...) is listed in the `strata-build-test` skill, the feature test

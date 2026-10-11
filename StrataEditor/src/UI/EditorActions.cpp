@@ -1,5 +1,6 @@
 #include "UI/EditorActions.h"
 
+#include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/HierarchyView.h"
@@ -40,6 +41,16 @@ namespace Strata
 		if (result.Value.is_object() && result.Value.contains("warning"))
 			ST_WARN("{}: {}", name, result.Value["warning"].get<std::string>());
 		return result.Value;
+	}
+
+	void RunEditorCommandDeferred(EditorCommandRunner& runner, EditorContext& context, const EditorCommandRegistry& commands, std::string_view name,
+		const nlohmann::json& parameters)
+	{
+		runner.Run(context, commands, name, parameters, [name = std::string(name)](const EditorCommandResult& result)
+		{
+			if (!result.Success && result.ErrorKind != EditorCommandError::Cancelled)
+				ST_ERROR("{}: {}", name, result.Error);
+		});
 	}
 
 	namespace EditorActions

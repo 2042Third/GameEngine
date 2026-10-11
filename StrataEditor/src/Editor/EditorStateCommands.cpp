@@ -43,6 +43,29 @@ namespace Strata
 				{ "redo", undo.GetRedoName() } };
 		}
 
+		// The scene scene.open is opening, or null.
+		nlohmann::json DescribeSceneLoad(const EditorContext& context)
+		{
+			if (!context.IsSceneLoading())
+				return nullptr;
+			const EditorSceneLoadStatus& status = context.GetSceneLoadStatus();
+			return { { "scene", UUIDToJson(status.Scene) }, { "state", SceneLoadStateToString(status.State) }, { "progress", status.Progress } };
+		}
+
+		// The editor process's memory as the system accounts it (Platform::GetProcessMemory), in MiB; null where unknown.
+		nlohmann::json DescribeProcessMemory()
+		{
+			const std::optional<ProcessMemoryInfo> memory = Platform::GetProcessMemory();
+			if (!memory)
+				return nullptr;
+			const auto toMB = [](uint64_t bytes) { return static_cast<double>(bytes) / static_cast<double>(1ull << 20); };
+			return {
+				{ "privateMB", toMB(memory->PrivateBytes) },
+				{ "workingSetMB", toMB(memory->WorkingSet) },
+				{ "peakPrivateMB", toMB(memory->PeakPrivateBytes) },
+				{ "peakWorkingSetMB", toMB(memory->PeakWorkingSet) } };
+		}
+
 		nlohmann::json DescribeFrameTimeStats(const FrameTimeStats& stats)
 		{
 			return { { "avgMs", stats.Average }, { "p50Ms", stats.P50 }, { "p95Ms", stats.P95 }, { "maxMs", stats.Max } };
@@ -180,8 +203,9 @@ namespace Strata
 
 		registry.Register({ "editor.status",
 			"Overview of the editor: engine version and commit, open project, scene (name, asset, unsaved changes, entity count), play state, "
-			"selection, undo history, and sections such as automation (port, clients, pending requests and commands) and assets (memory and "
-			"budgets per pool, streaming queue, uploads; see asset.stats). Start here to orient yourself.",
+			"selection, undo history, sceneLoad (the scene scene.open is opening: {scene, state, progress}, null when none), the process's memory "
+			"(privateMB, workingSetMB and their peaks), and sections such as automation (port, clients, pending requests and commands) and assets "
+			"(memory and budgets per pool, streaming queue, uploads; see asset.stats). Start here to orient yourself.",
 			ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
@@ -206,7 +230,9 @@ namespace Strata
 						{ "position", undo.GetPosition() },
 						{ "count", undo.GetHistory().size() },
 						{ "undo", undo.GetUndoName() },
-						{ "redo", undo.GetRedoName() } } } };
+						{ "redo", undo.GetRedoName() } } },
+					{ "sceneLoad", DescribeSceneLoad(context) },
+					{ "memory", DescribeProcessMemory() } };
 				// Sections of other editor parts; they never replace the built-in ones.
 				for (const auto& [section, provider] : context.GetStatusProviders())
 					status.emplace(section, provider());

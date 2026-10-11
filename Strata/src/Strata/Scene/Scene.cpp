@@ -1693,6 +1693,7 @@ namespace Strata
 		m_FrameIndex = 0;
 		m_QuitRequest.reset();
 		m_SceneLoadRequest.reset();
+		m_SceneLoadProgress.reset();
 		UpdateWorldTransforms();
 
 		// In update order. Systems may look up the ones created before them (GetSystem) while they are constructed.

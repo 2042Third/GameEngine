@@ -736,6 +736,7 @@ TEST_SUITE("GPU.Assets.Residency")
 
 		Scope<GameRuntime> runtime = GameRuntime::Create(directory / "Switch.stgame", &error);
 		REQUIRE_MESSAGE(runtime, error);
+		REQUIRE(runtime->WaitForStart());
 		const Ref<RuntimeAssetManager>& manager = runtime->GetAssetManager();
 		WindowTarget target(gpu.GetNvrhiDevice(), c_SceneTestSize);
 		GameRenderer renderer;
@@ -771,8 +772,17 @@ TEST_SUITE("GPU.Assets.Residency")
 		REQUIRE_FALSE(sharedTexture.expired());
 		REQUIRE_FALSE(sharedMaterial.expired());
 
-		// The game switches to Big, the way scripts ask for it: the textures only World used are gone within five frames.
+		// The game switches to Big, the way scripts ask for it: World plays on while Big and what it uses load (the shared
+		// texture and material stay, pinned by the load), then Big replaces it and the textures only World used are gone
+		// within five frames.
 		runtime->GetScene()->RequestSceneLoad(big.Handle);
+		for (int loading = 0; loading < 120 && runtime->GetSceneHandle() != big.Handle; loading++)
+		{
+			frame();
+			CHECK(manager->GetAssetState(textures[4]) == AssetState::Ready);
+			CHECK_FALSE(sharedTexture.expired());
+		}
+		REQUIRE(runtime->GetSceneHandle() == big.Handle);
 		uint32_t framesUntilReleased = 0;
 		for (uint32_t switched = 1; switched <= 5; switched++)
 		{
@@ -799,7 +809,8 @@ TEST_SUITE("GPU.Assets.Residency")
 		CHECK(manager->GetAsset(textures[4]) == sharedTexture.lock());
 		CHECK(manager->GetAsset(materials[4]) == sharedMaterial.lock());
 		CHECK(residentTextureBytes(4, 8) == 5 * GetTextureBytes(256));
-		CHECK(manager->GetStats().Evictions == 9); // Four textures, four materials, and World's scene document
+		// Four textures and four materials; scene documents are not evicted but unloaded once their scene was taken.
+		CHECK(manager->GetStats().Evictions == 8);
 		CHECK(manager->GetAssetState(world.Handle) == AssetState::Unloaded);
 
 		runtime.reset();

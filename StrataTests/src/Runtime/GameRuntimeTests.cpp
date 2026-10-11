@@ -1,0 +1,200 @@
+#include <doctest/doctest.h>
+
+#include "Asset/AssetTestUtils.h"
+#include "Strata/Asset/AssetPackWriter.h"
+#include "Strata/Core/FileSystem.h"
+#include "Strata/Core/JsonUtils.h"
+#include "Strata/Project/GameManifest.h"
+#include "Strata/Runtime/GameRuntime.h"
+#include "Strata/Scene/Components.h"
+#include "Strata/Scene/Entity.h"
+#include "Strata/Scene/SceneSerializer.h"
+#include "TestHelpers.h"
+
+#include <chrono>
+#include <filesystem>
+#include <map>
+#include <string>
+#include <thread>
+#include <vector>
+
+using namespace Strata;
+using namespace Strata::Tests;
+
+namespace
+{
+
+	constexpr Timestep c_Frame = Timestep(1.0f / 60.0f);
+
+	std::vector<uint8_t> ToBytes(const std::string& text)
+	{
+		return std::vector<uint8_t>(text.begin(), text.end());
+	}
+
+	// A scene document named `name` with a camera and `count` more entities.
+	std::vector<uint8_t> MakeScene(const std::string& name, size_t count)
+	{
+		Scene scene(name);
+		scene.CreateEntity("Camera").AddComponent<CameraComponent>().Primary = true;
+		for (size_t index = 0; index < count; index++)
+			scene.CreateEntity("Entity");
+		return ToBytes(JsonUtils::Dump(SceneSerializer::Serialize(scene)));
+	}
+
+	// An exported game made of the given scenes (handle -> stored document), written as a pack with a manifest.
+	std::filesystem::path WriteGame(const std::filesystem::path& directory, const std::map<uint64_t, std::vector<uint8_t>>& scenes, UUID startScene,
+		UUID loadingScene = UUID::Null())
+	{
+		std::vector<AssetMetadata> metadata;
+		for (const auto& [handle, document] : scenes)
+		{
+			AssetMetadata scene;
+			scene.Handle = UUID(handle);
+			scene.Type = AssetType::Scene;
+			scene.Path = "Scenes/" + std::to_string(handle) + ".stscene";
+			scene.Name = std::to_string(handle);
+			metadata.push_back(scene);
+		}
+		std::string error;
+		REQUIRE_MESSAGE(AssetPackWriter::Write(directory / "Game.stpak", metadata, [&scenes](const AssetMetadata& asset, std::vector<uint8_t>& outData, std::string*)
+		{
+			outData = scenes.at(static_cast<uint64_t>(asset.Handle));
+			return true;
+		}, &error), error);
+		GameManifest manifest;
+		manifest.Name = "Loads";
+		manifest.AssetPack = "Game.stpak";
+		manifest.StartScene = startScene;
+		manifest.LoadingScene = loadingScene;
+		REQUIRE_MESSAGE(manifest.Save(directory / "Game.stgame", &error), error);
+		return directory / "Game.stgame";
+	}
+
+	// Frames until the condition holds (REQUIREd), sleeping a little between them for the loads on other threads.
+	template<typename Condition>
+	void UpdateUntil(GameRuntime& game, Condition&& condition)
+	{
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+		while (!condition())
+		{
+			REQUIRE(std::chrono::steady_clock::now() < deadline);
+			game.Update(c_Frame);
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+	}
+
+}
+
+TEST_SUITE("Runtime.Game")
+{
+	TEST_CASE("A game opens at once and starts its scene once the scene is loaded")
+	{
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeStart");
+		const std::filesystem::path manifest = WriteGame(directory, { { 0x1010, MakeScene("Start", 100) } }, UUID(0x1010));
+		const uint64_t reads = SceneSerializer::GetDeserializeCount();
+		std::string error;
+		Scope<GameRuntime> game = GameRuntime::Create(manifest, &error);
+		REQUIRE_MESSAGE(game, error);
+		// Nothing plays yet: the scene loads in the background, and renderers clear the frame meanwhile.
+		CHECK_FALSE(game->HasStarted());
+		CHECK_FALSE(game->GetScene());
+		CHECK(game->IsLoadingScene());
+		CHECK(game->GetLoadingSceneAsset() == UUID(0x1010));
+		CHECK(game->GetSceneLoadProgress() <= 1.0f);
+		UpdateUntil(*game, [&]() { return game->HasStarted(); });
+		REQUIRE(game->GetScene());
+		CHECK(game->GetScene()->IsRunning());
+		CHECK(game->GetSceneHandle() == UUID(0x1010));
+		CHECK(game->GetScene()->GetEntityCount() == 101);
+		CHECK_FALSE(game->IsLoadingScene());
+		CHECK_FALSE(game->GetStartError());
+		CHECK(SceneSerializer::GetDeserializeCount() - reads == 1);
+		// The spent scene asset is not kept.
+		CHECK(game->GetAssetManager()->GetAssetState(UUID(0x1010)) == AssetState::Unloaded);
+	}
+
+	TEST_CASE("The loading scene plays while the start scene loads, then gives way to it")
+	{
+		ScopedJobSystem jobs(2, 2);
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeLoadingScene");
+		// A start scene large enough to take many frames to read, and a small loading scene.
+		const std::filesystem::path manifest = WriteGame(directory, { { 0x1010, MakeScene("Start", 30'000) }, { 0x1011, MakeScene("Loading", 1) } }, UUID(0x1010),
+			UUID(0x1011));
+		std::string error;
+		Scope<GameRuntime> game = GameRuntime::Create(manifest, &error);
+		REQUIRE_MESSAGE(game, error);
+		UpdateUntil(*game, [&]() { return game->GetScene() != nullptr; });
+		REQUIRE(game->IsShowingLoadingScene());
+		CHECK_FALSE(game->HasStarted());
+		const Ref<Scene> loading = game->GetScene();
+		CHECK(game->GetSceneHandle() == UUID(0x1011));
+		CHECK(loading->GetName() == "Loading");
+		CHECK(loading->IsRunning());
+		// It plays, and its scripts could show the start scene's progress.
+		game->Update(c_Frame);
+		CHECK(loading->GetFrameIndex() >= 1);
+		REQUIRE(loading->GetSceneLoadProgress().has_value());
+		CHECK(*loading->GetSceneLoadProgress() < 1.0f);
+
+		UpdateUntil(*game, [&]() { return game->HasStarted(); });
+		CHECK_FALSE(game->IsShowingLoadingScene());
+		CHECK(game->GetSceneHandle() == UUID(0x1010));
+		CHECK(game->GetScene()->GetEntityCount() == 30'001);
+		CHECK_FALSE(loading->IsRunning());
+	}
+
+	TEST_CASE("A game whose start scene cannot be loaded does not start")
+	{
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeBrokenStart");
+		const std::filesystem::path manifest = WriteGame(directory, { { 0x1010, ToBytes("{ \"Strata\": ") }, { 0x1011, MakeScene("Loading", 1) } }, UUID(0x1010),
+			UUID(0x1011));
+		std::string error;
+		Scope<GameRuntime> game = GameRuntime::Create(manifest, &error);
+		REQUIRE_MESSAGE(game, error);
+		UpdateUntil(*game, [&]() { return game->GetStartError().has_value(); });
+		CHECK(game->GetStartError()->find("Loading the start scene failed") != std::string::npos);
+		CHECK_FALSE(game->HasStarted());
+		CHECK_FALSE(game->WaitForStart(std::chrono::milliseconds(10)));
+
+		// Scenes the manifest names must be scenes of the pack.
+		const std::filesystem::path wrongLoading = WriteGame(CreateTemporaryDirectory("RuntimeWrongLoading"), { { 0x1010, MakeScene("Start", 1) } }, UUID(0x1010),
+			UUID(0x1099));
+		CHECK_FALSE(GameRuntime::Create(wrongLoading, &error));
+		CHECK(error.find("loading scene") != std::string::npos);
+		const std::filesystem::path wrongStart = WriteGame(CreateTemporaryDirectory("RuntimeWrongStart"), { { 0x1010, MakeScene("Start", 1) } }, UUID(0x1098));
+		CHECK_FALSE(GameRuntime::Create(wrongStart, &error));
+		CHECK(error.find("not a scene of the game") != std::string::npos);
+	}
+
+	TEST_CASE("A scene switch keeps the running scene playing until the next scene is in")
+	{
+		ScopedJobSystem jobs(2, 2);
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeSwitch");
+		const std::filesystem::path manifest = WriteGame(directory, { { 0x1010, MakeScene("Start", 1) }, { 0x1012, MakeScene("Next", 30'000) } }, UUID(0x1010));
+		std::string error;
+		Scope<GameRuntime> game = GameRuntime::Create(manifest, &error);
+		REQUIRE_MESSAGE(game, error);
+		REQUIRE(game->WaitForStart());
+		const Ref<Scene> start = game->GetScene();
+		start->RequestSceneLoad(UUID(0x1012));
+		game->Update(c_Frame);
+		REQUIRE(game->IsLoadingScene());
+		const uint64_t frameAtRequest = start->GetFrameIndex();
+		UpdateUntil(*game, [&]() { return game->GetSceneHandle() == UUID(0x1012); });
+		// The start scene kept running every frame until the switch.
+		CHECK(start->GetFrameIndex() > frameAtRequest);
+		CHECK_FALSE(start->IsRunning());
+		CHECK(game->GetScene()->GetEntityCount() == 30'001);
+		CHECK_FALSE(game->GetScene()->GetSceneLoadProgress().has_value());
+
+		// A request replaces one under way; asking for what is not a scene keeps the scene running.
+		game->GetScene()->RequestSceneLoad(UUID(0x1010));
+		game->Update(c_Frame);
+		CHECK(game->LoadScene(UUID(0x1012)));
+		CHECK(game->GetLoadingSceneAsset() == UUID(0x1012));
+		CHECK_FALSE(game->LoadScene(UUID(0x1077), &error));
+		CHECK(game->GetLoadingSceneAsset() == UUID(0x1012));
+		UpdateUntil(*game, [&]() { return !game->IsLoadingScene(); });
+		CHECK(game->GetSceneHandle() == UUID(0x1012));
+	}
+}

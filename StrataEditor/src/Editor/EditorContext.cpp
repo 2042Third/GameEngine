@@ -13,6 +13,7 @@
 #include <Strata/Core/Log.h>
 #include <Strata/Input/Input.h>
 #include <Strata/Scene/Prefab.h>
+#include <Strata/Scene/SceneLoader.h>
 #include <Strata/Scene/SceneSerializer.h>
 
 #include <algorithm>
@@ -210,6 +211,7 @@ namespace Strata
 			m_GameExport->Cancel();
 			m_GameExport->Wait();
 		}
+		CancelSceneLoad();
 		Stop();
 		const bool hadProject = m_Project != nullptr;
 		if (hadProject)
@@ -266,6 +268,7 @@ namespace Strata
 	{
 		if (!ProjectTemplates::Find(templateId))
 			return false;
+		CancelSceneLoad();
 		Ref<Scene> scene = CreateRef<Scene>(name);
 		if (!ProjectTemplates::Populate(templateId, *scene, GetTemplateAssets(templateId)))
 			return false;
@@ -302,7 +305,7 @@ namespace Strata
 		return assets;
 	}
 
-	bool EditorContext::OpenScene(AssetHandle handle, std::string* outError)
+	bool EditorContext::BeginOpenScene(AssetHandle handle, std::string* outError)
 	{
 		auto fail = [outError](std::string message)
 		{
@@ -316,19 +319,89 @@ namespace Strata
 		if (m_AssetManager->GetAssetType(handle) != AssetType::Scene)
 			return fail(fmt::format("{} is not a scene asset of the project", handle.ToString()));
 
-		// Read the current file, not a copy loaded earlier.
-		m_AssetManager->UnloadAsset(handle);
-		Ref<SceneAsset> asset = AssetManager::LoadAssetSync<SceneAsset>(handle);
-		if (!asset)
-			return fail(fmt::format("Loading the scene failed: {}", m_AssetManager->GetAssetError(handle)));
-		std::string error;
-		Ref<Scene> scene = asset->TakePreparedScene(&error);
-		// The asset is spent: the next load of the scene reads its file again.
-		m_AssetManager->UnloadAsset(handle);
-		if (!scene)
-			return fail(fmt::format("The scene is invalid: {}", error));
+		// A load under way is replaced: its pins and the loads only it needed go.
+		CancelSceneLoad();
+		SceneLoadOptions options;
+		// The current file, not a copy loaded earlier.
+		options.Reload = true;
+		m_SceneLoad = CreateScope<SceneLoad>();
+		m_SceneLoad->Request = SceneLoader::LoadAsync(handle, options);
+		m_SceneLoadStatus = EditorSceneLoadStatus();
+		m_SceneLoadStatus.ID = m_NextSceneLoadID++;
+		m_SceneLoadStatus.Scene = handle;
+		m_SceneLoadStatus.State = m_SceneLoad->Request.GetState();
+		m_SceneLoadStatus.Started = std::chrono::steady_clock::now();
+		// It fails at once only for what LoadAsync rejects (checked above already); otherwise Update advances it.
+		if (m_SceneLoad->Request.IsFinished())
+		{
+			UpdateSceneLoad();
+			return fail(m_SceneLoadStatus.Error);
+		}
+		return true;
+	}
 
-		ResetScene(scene, handle);
+	bool EditorContext::OpenScene(AssetHandle handle, std::string* outError)
+	{
+		if (!BeginOpenScene(handle, outError))
+			return false;
+		const uint64_t id = m_SceneLoadStatus.ID;
+		while (m_SceneLoad)
+		{
+			// Everything the request pinned is pending until it is in; waiting for it finalizes it here.
+			if (!m_AssetManager->WaitForPendingLoads(std::chrono::minutes(2)))
+			{
+				CancelSceneLoad();
+				m_SceneLoadStatus.Error = "Loading the scene took too long";
+				break;
+			}
+			UpdateSceneLoad();
+		}
+		if (m_SceneLoadStatus.ID == id && m_SceneLoadStatus.State == SceneLoadState::Ready)
+			return true;
+		if (outError)
+			*outError = m_SceneLoadStatus.Error;
+		return false;
+	}
+
+	void EditorContext::CancelSceneLoad()
+	{
+		if (!m_SceneLoad)
+			return;
+		m_SceneLoad->Request.Cancel();
+		m_SceneLoad.reset();
+		m_SceneLoadStatus.State = SceneLoadState::Cancelled;
+		m_SceneLoadStatus.Error = "Opening the scene was cancelled";
+		m_SceneLoadStatus.Seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - m_SceneLoadStatus.Started).count();
+	}
+
+	void EditorContext::UpdateSceneLoad()
+	{
+		if (!m_SceneLoad)
+			return;
+		SceneLoadRequest& request = m_SceneLoad->Request;
+		request.Update();
+		m_SceneLoadStatus.State = request.GetState();
+		m_SceneLoadStatus.Progress = request.GetProgress();
+		if (!request.IsFinished())
+			return;
+
+		m_SceneLoadStatus.Seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - m_SceneLoadStatus.Started).count();
+		const AssetHandle handle = request.GetSceneAsset();
+		if (request.GetState() == SceneLoadState::Ready)
+		{
+			// The scene is in place before the request (and its pins) goes, so what it uses is requested from now on.
+			FinishOpenScene(request.TakeScene(), handle);
+		}
+		else
+		{
+			m_SceneLoadStatus.Error = request.GetError();
+		}
+		m_SceneLoad.reset();
+	}
+
+	void EditorContext::FinishOpenScene(Ref<Scene> scene, AssetHandle handle)
+	{
+		ResetScene(std::move(scene), handle);
 		// What the previous scene used and the viewport does not request for this one in its first frames is released then.
 		m_AssetManager->ScheduleTrim(AssetResidency::c_SceneSwitchTrimFrames, AssetResidency::c_SceneSwitchTrimFrames);
 		if (!m_Viewport.RestoreSceneCamera(handle))
@@ -342,7 +415,6 @@ namespace Strata
 					std::chrono::steady_clock::now() + c_PendingFrameTimeout };
 			}
 		}
-		return true;
 	}
 
 	void EditorContext::UpdatePendingFrame()
@@ -456,6 +528,15 @@ namespace Strata
 				*outError = fmt::format("The scene is already running ({})", SceneStateToString(m_SceneState));
 			return false;
 		}
+		if (IsSceneLoading())
+		{
+			if (outError)
+			{
+				*outError = fmt::format("A scene is being opened ({}, {:.0f}%): play once it is open (scene.open answers then; scene.loadStatus)",
+					m_SceneLoadStatus.Scene.ToString(), m_SceneLoadStatus.Progress * 100.0f);
+			}
+			return false;
+		}
 		m_UndoStack.BreakMerge();
 		m_MasterVolumeBeforePlay = AudioEngine::GetMasterVolume();
 		m_RuntimeScene = Scene::Copy(m_EditScene);
@@ -473,6 +554,11 @@ namespace Strata
 	{
 		if (!m_RuntimeScene)
 			return;
+		if (m_RuntimeSceneLoad)
+		{
+			m_RuntimeSceneLoad->Request.Cancel();
+			m_RuntimeSceneLoad.reset();
+		}
 		m_RuntimeScene->OnRuntimeStop();
 		m_RuntimeScene.reset();
 		m_RuntimeSceneAsset = UUID::Null();
@@ -510,39 +596,59 @@ namespace Strata
 		};
 
 		// The null handle restarts what runs: the scene asset switched to last, or else the edited scene (unsaved changes
-		// included, as play mode started with them).
+		// included, as play mode started with them), which needs no loading.
 		const AssetHandle target = scene.IsValid() ? scene : m_RuntimeSceneAsset;
-		Ref<Scene> next;
 		if (!target.IsValid())
 		{
-			next = Scene::Copy(m_EditScene);
-		}
-		else
-		{
-			if (!m_AssetManager || m_AssetManager->GetAssetType(target) != AssetType::Scene)
-				return fail(fmt::format("{} is not a scene asset of the project", target.ToString()));
-			Ref<SceneAsset> asset = AssetManager::LoadAssetSync<SceneAsset>(target);
-			if (asset && asset->IsTaken())
+			if (m_RuntimeSceneLoad)
 			{
-				m_AssetManager->UnloadAsset(target);
-				asset = AssetManager::LoadAssetSync<SceneAsset>(target);
+				m_RuntimeSceneLoad->Request.Cancel();
+				m_RuntimeSceneLoad.reset();
+				m_RuntimeScene->SetSceneLoadProgress(std::nullopt);
 			}
-			if (!asset)
-				return fail(fmt::format("loading scene {} failed: {}", target.ToString(), m_AssetManager->GetAssetError(target)));
-			std::string error;
-			next = asset->TakePreparedScene(&error);
-			m_AssetManager->UnloadAsset(target);
-			if (!next)
-				return fail(fmt::format("scene {} is invalid: {}", target.ToString(), error));
+			ReplaceRuntimeScene(Scene::Copy(m_EditScene), UUID::Null());
+			return true;
 		}
+		if (!m_AssetManager || m_AssetManager->GetAssetType(target) != AssetType::Scene)
+			return fail(fmt::format("{} is not a scene asset of the project", target.ToString()));
 
+		// Like the exported game (GameRuntime::LoadScene): the running scene goes on while the next one and everything it
+		// uses load, then UpdateRuntimeSceneLoad swaps it in. A later request replaces an earlier one.
+		if (m_RuntimeSceneLoad)
+			m_RuntimeSceneLoad->Request.Cancel();
+		m_RuntimeSceneLoad = CreateScope<RuntimeSceneLoad>();
+		m_RuntimeSceneLoad->Scene = target;
+		m_RuntimeSceneLoad->Request = SceneLoader::LoadAsync(target);
+		m_RuntimeScene->SetSceneLoadProgress(0.0f);
+		return true;
+	}
+
+	void EditorContext::UpdateRuntimeSceneLoad()
+	{
+		if (!m_RuntimeSceneLoad || !m_RuntimeScene)
+			return;
+		SceneLoadRequest& request = m_RuntimeSceneLoad->Request;
+		request.Update();
+		m_RuntimeScene->SetSceneLoadProgress(request.GetProgress());
+		if (!request.IsFinished())
+			return;
+		if (request.GetState() == SceneLoadState::Ready)
+			ReplaceRuntimeScene(request.TakeScene(), m_RuntimeSceneLoad->Scene);
+		else
+			ST_ERROR("The game cannot switch scenes: {}", request.GetError());
+		m_RuntimeScene->SetSceneLoadProgress(std::nullopt);
+		m_RuntimeSceneLoad.reset();
+	}
+
+	void EditorContext::ReplaceRuntimeScene(Ref<Scene> next, AssetHandle asset)
+	{
 		// The new scene continues the way play mode was going: paused (with the steps still to run) or running.
 		const SceneRuntimeMode mode = m_RuntimeScene->GetRuntimeMode();
 		const bool paused = m_RuntimeScene->IsPaused();
 		const uint32_t steps = m_RuntimeScene->GetStepFrames();
 		m_RuntimeScene->OnRuntimeStop();
 		m_RuntimeScene = std::move(next);
-		m_RuntimeSceneAsset = target;
+		m_RuntimeSceneAsset = asset;
 		m_RuntimeScene->SetTimeDilation(m_Specification.TimeDilation);
 		m_RuntimeScene->OnRuntimeStart(mode);
 		if (paused)
@@ -552,11 +658,10 @@ namespace Strata
 		}
 		PruneSelection(); // The selection named entities of the previous scene
 		UpdateInputSuspension();
-		// Like the exported game (GameRuntime::LoadScene): what the previous scene used and this one does not request in its
-		// first frames is released then, so playtests show the game's memory behavior.
+		// Like the exported game (GameRuntime): what the previous scene used and this one does not request in its first frames
+		// is released then, so playtests show the game's memory behavior.
 		if (m_AssetManager)
 			m_AssetManager->ScheduleTrim(AssetResidency::c_SceneSwitchTrimFrames, AssetResidency::c_SceneSwitchTrimFrames);
-		return true;
 	}
 
 	void EditorContext::SetGameInputActive(bool active)
@@ -698,6 +803,12 @@ namespace Strata
 	{
 		if (IsPlaying())
 			return false;
+		if (IsSceneLoading())
+		{
+			// The edited scene is about to be replaced: an edit now would be lost with it, so it is undone at once.
+			transaction.Rollback();
+			return false;
+		}
 		return transaction.Commit(m_UndoStack);
 	}
 
@@ -932,6 +1043,8 @@ namespace Strata
 
 		if (m_AssetManager)
 			m_AssetManager->Update();
+		// A scene being opened replaces the edited one between frames, before anything draws or updates it.
+		UpdateSceneLoad();
 		if (m_GameExport)
 			m_GameExport->Update();
 		// An inspected asset that was deleted (also outside the editor) is no longer shown.
@@ -939,6 +1052,7 @@ namespace Strata
 			InspectEntities();
 		if (m_RuntimeScene)
 		{
+			UpdateRuntimeSceneLoad();
 			m_RuntimeScene->OnUpdateRuntime(timestep);
 			// A crashed game stops; one that still runs gets what it asked for.
 			if (!StopOnScriptFault())

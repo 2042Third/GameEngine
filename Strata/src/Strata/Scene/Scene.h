@@ -352,6 +352,10 @@ namespace Strata
 		std::optional<UUID> GetSceneLoadRequest() const { return m_SceneLoadRequest; }
 		// The pending scene load, which the call clears (so that an owner that cannot honor it does not retry every frame).
 		std::optional<UUID> TakeSceneLoadRequest();
+		// How far the owner got loading the scene this one asked for (owners load it while this scene goes on, and update the
+		// progress every frame): in [0, 1], or nullopt while no such load is under way. Gameplay shows it (a loading bar).
+		void SetSceneLoadProgress(std::optional<float> progress) { m_SceneLoadProgress = progress; }
+		std::optional<float> GetSceneLoadProgress() const { return m_SceneLoadProgress; }
 
 		// The first active entity in hierarchy order whose CameraComponent is Primary, or an invalid Entity. Examines only the
 		// entities with a CameraComponent (and reads the current component values, so it is never stale).
@@ -526,6 +530,7 @@ namespace Strata
 		uint64_t m_FrameIndex = 0;
 		std::optional<int32_t> m_QuitRequest;
 		std::optional<UUID> m_SceneLoadRequest;
+		std::optional<float> m_SceneLoadProgress;
 
 		// Declared last: disconnected before anything the handlers use is destroyed.
 		std::vector<entt::scoped_connection> m_Connections;

@@ -14,6 +14,7 @@
 #include <Strata/Core/Timestep.h>
 #include <Strata/Project/Project.h>
 #include <Strata/Scene/Scene.h>
+#include <Strata/Scene/SceneLoader.h>
 #include <Strata/Scripting/ScriptEngine.h>
 #include <Strata/Scripting/ScriptTypes.h>
 
@@ -82,6 +83,21 @@ namespace Strata
 		std::string Error;   // Why it could not be loaded
 	};
 
+	// A scene being opened for editing (EditorContext::BeginOpenScene), or the last one that was: identified by ID, so that
+	// whoever started a load (scene.open) recognizes its own.
+	struct EditorSceneLoadStatus
+	{
+		uint64_t ID = 0;                      // 0 before the first load
+		AssetHandle Scene = UUID::Null();
+		SceneLoadState State = SceneLoadState::Cancelled;
+		float Progress = 0.0f;                // Of the scene and everything it uses (SceneLoadRequest::GetProgress)
+		std::string Error;                    // Why it failed or was cancelled
+		std::chrono::steady_clock::time_point Started;
+		double Seconds = 0.0;                 // From the start until it finished
+
+		bool IsFinished() const { return State == SceneLoadState::Ready || State == SceneLoadState::Failed || State == SceneLoadState::Cancelled; }
+	};
+
 	// The file of the script module the editor runs, as read back for shipping it (EditorContext::ReadRunningScriptModule).
 	struct ScriptModuleFile
 	{
@@ -131,10 +147,23 @@ namespace Strata
 		// ProjectTemplates::c_GroundMaterialPath); without a project it uses built-in ones. False (nothing changed) for an
 		// unknown template.
 		bool NewScene(const std::string& name = "Untitled", std::string_view templateId = ProjectTemplates::c_Empty);
-		// Opens a scene asset for editing. The editor camera returns to where it was when the scene was last shown; a scene
+		// Starts opening a scene asset for editing (scene.open) without waiting for it: the file is read again (not a copy
+		// loaded before) and prepared on the loading worker while everything it uses loads (SceneLoader); Update replaces the
+		// edited scene between frames once all of it is in (GetSceneLoadStatus). Meanwhile the edited scene stays visible and
+		// read-only: edits are refused (CommitEdit) and so is play mode. Starting another load cancels this one, and so do
+		// NewScene and closing the project. The editor camera returns to where it was when the scene was last shown; a scene
 		// shown for the first time is framed (EditorViewport::FrameScene), and framed again once meshes that were still
-		// loading have loaded, unless the camera was moved meanwhile.
+		// loading have loaded, unless the camera was moved meanwhile. False (nothing started) without a project or for a
+		// handle that is not a scene asset of the project.
+		bool BeginOpenScene(AssetHandle handle, std::string* outError = nullptr);
+		// BeginOpenScene, then waits for the load (tools, tests and opening a project's start scene).
 		bool OpenScene(AssetHandle handle, std::string* outError = nullptr);
+		// A scene is being opened (BeginOpenScene) and has not replaced the edited scene yet.
+		bool IsSceneLoading() const { return m_SceneLoad != nullptr; }
+		// The scene load in progress (its progress as of the last Update), or the last one that finished.
+		const EditorSceneLoadStatus& GetSceneLoadStatus() const { return m_SceneLoadStatus; }
+		// Abandons the scene load in progress (its pins and unfinished loads go); the edited scene stays.
+		void CancelSceneLoad();
 		// Saves the edited scene to its asset; fails for scenes that were never saved (use SaveSceneAs).
 		bool SaveScene(std::string* outError = nullptr);
 		// Saves the edited scene as a new ".stscene" asset (path relative to the asset directory) and continues
@@ -166,6 +195,10 @@ namespace Strata
 		bool IsPlaying() const { return m_SceneState != SceneState::Edit; }
 		void SetPaused(bool paused);
 		bool IsPaused() const;
+		// The scene a running game asked for (Scene::RequestSceneLoad) while it loads (SwitchRuntimeScene), and its progress.
+		bool IsRuntimeSceneLoading() const { return m_RuntimeSceneLoad != nullptr; }
+		AssetHandle GetRuntimeSceneLoadTarget() const { return m_RuntimeSceneLoad ? m_RuntimeSceneLoad->Scene : UUID::Null(); }
+		float GetRuntimeSceneLoadProgress() const { return m_RuntimeSceneLoad ? m_RuntimeSceneLoad->Request.GetProgress() : 1.0f; }
 		// While paused, advances the simulation by `frames` fixed steps over the next updates.
 		void Step(uint32_t frames = 1);
 		// Whether the viewport's game view feeds keyboard and mouse input to the running game (play mode through the
@@ -219,7 +252,8 @@ namespace Strata
 
 		UndoStack& GetUndoStack() { return m_UndoStack; }
 		// Records an edit of the active scene. Edits of the running copy during play are not recorded: they are
-		// discarded with it. Returns true when an undo step was recorded.
+		// discarded with it. Returns true when an undo step was recorded. While a scene is being opened (IsSceneLoading) the
+		// edited scene is read-only: the edit is rolled back and nothing is recorded.
 		bool CommitEdit(SceneEditTransaction& transaction);
 		bool Undo();
 		bool Redo();
@@ -315,8 +349,18 @@ namespace Strata
 		void UpdateInputSuspension();
 		// Drops the simulated device's state and the commands' holds (play mode starts or stops).
 		void ResetSimulatedInput();
-		// Replaces the running scene with a scene asset, or with a restart of the running scene for the null handle.
+		// Starts replacing the running scene with a scene asset (loaded while the running scene goes on, swapped in by
+		// UpdateRuntimeSceneLoad), or restarts the running scene at once for the null handle when a copy of the edited scene
+		// runs.
 		bool SwitchRuntimeScene(AssetHandle scene, std::string* outError);
+		// Advances the play-mode scene switch and swaps the loaded scene in once it is ready (Update).
+		void UpdateRuntimeSceneLoad();
+		// Replaces the running scene with `next`, which continues the way play mode was going (paused, with its steps).
+		void ReplaceRuntimeScene(Ref<Scene> next, AssetHandle asset);
+		// Advances the scene being opened and makes it the edited scene once it is ready (Update).
+		void UpdateSceneLoad();
+		// Makes a scene that was opened the edited one: the editor camera, the trim of what the previous scene used.
+		void FinishOpenScene(Ref<Scene> scene, AssetHandle handle);
 		void ResetScene(Ref<Scene> scene, AssetHandle handle);
 		// Gives a template's new scene its start scene file and the template's editor view (CreateProject).
 		bool SaveTemplateStartScene(std::string_view templateId, std::string* outError);
@@ -346,6 +390,21 @@ namespace Strata
 		Ref<Scene> m_EditScene;
 		Ref<Scene> m_RuntimeScene;
 		AssetHandle m_RuntimeSceneAsset = UUID::Null(); // The scene asset playing after a switch; null while a copy of the edited scene runs
+		// The scene a play-mode switch loads while the running scene goes on.
+		struct RuntimeSceneLoad
+		{
+			AssetHandle Scene = UUID::Null();
+			SceneLoadRequest Request;
+		};
+		Scope<RuntimeSceneLoad> m_RuntimeSceneLoad;
+		// The scene being opened for editing (BeginOpenScene).
+		struct SceneLoad
+		{
+			SceneLoadRequest Request;
+		};
+		Scope<SceneLoad> m_SceneLoad;
+		EditorSceneLoadStatus m_SceneLoadStatus;
+		uint64_t m_NextSceneLoadID = 1;
 		AssetHandle m_SceneHandle = UUID::Null();
 		SceneState m_SceneState = SceneState::Edit;
 		float m_MasterVolumeBeforePlay = 1.0f;

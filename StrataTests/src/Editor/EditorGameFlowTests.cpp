@@ -126,22 +126,35 @@ TEST_SUITE("Editor.GameFlow")
 		CHECK(context.GetActiveScene() == context.GetEditScene());
 		CHECK(Logged(log.GetEntries(), "The game quit with exit code 5"));
 
-		// A scene load replaces the running scene; quitting wins over a load requested in the same frame.
+		// A scene load replaces the running scene once it is loaded (the running scene goes on meanwhile, and reads the load's
+		// progress); quitting wins over a load requested in the same frame.
 		project.Run("play.start");
-		context.GetActiveScene()->RequestSceneLoad(project.LevelTwo);
-		project.Update();
+		const Ref<Scene> first = context.GetActiveScene();
+		first->RequestSceneLoad(project.LevelTwo);
+		project.Update(); // The frame that asks for it starts the load
+		CHECK(project.Run("scene.loadStatus")["play"]["scene"] == UUIDToJson(project.LevelTwo));
+		UpdateUntil([&] { project.Update(); }, [&]
+		{
+			if (context.GetActiveScene() == first)
+			{
+				CHECK(first->IsRunning());
+				CHECK(first->GetSceneLoadProgress().has_value());
+			}
+			return context.GetActiveScene() != first;
+		});
 		REQUIRE(context.IsPlaying());
 		Ref<Scene> running = context.GetActiveScene();
 		CHECK(running->IsRunning());
+		CHECK_FALSE(first->IsRunning());
 		CHECK(running->FindEntityByName("Boss").IsValid());
 		CHECK_FALSE(running->FindEntityByName("Hero").IsValid());
+		CHECK_FALSE(running->GetSceneLoadProgress().has_value());
 
 		// The null handle restarts the scene that runs (Two now), from its asset.
 		running->DestroyEntity(running->FindEntityByName("Boss"));
 		REQUIRE_FALSE(running->FindEntityByName("Boss").IsValid());
 		running->RequestSceneLoad(UUID::Null());
-		project.Update();
-		REQUIRE(context.GetActiveScene() != running);
+		UpdateUntil([&] { project.Update(); }, [&] { return context.GetActiveScene() != running; });
 		running = context.GetActiveScene();
 		CHECK(running->IsRunning());
 		CHECK(running->FindEntityByName("Boss").IsValid());
@@ -178,16 +191,21 @@ TEST_SUITE("Editor.GameFlow")
 		project.Run("play.start");
 		project.Run("play.pause", { { "paused", true } });
 		project.Run("play.step", { { "frames", 3 } });
-		context.GetActiveScene()->RequestSceneLoad(project.LevelTwo);
-		project.Update(); // Runs one step, then the switch
+		const Ref<Scene> previous = context.GetActiveScene();
+		previous->RequestSceneLoad(project.LevelTwo);
+		// The previous scene runs steps while the next one loads; the steps left go to the next one.
+		UpdateUntil([&] { project.Update(); }, [&] { return context.GetActiveScene() != previous; });
 
 		const Ref<Scene> switched = context.GetActiveScene();
 		REQUIRE(switched->FindEntityByName("Boss").IsValid());
 		CHECK(context.IsPaused());
-		CHECK(switched->GetStepFrames() == 2);
+		CHECK(previous->GetFrameIndex() + switched->GetFrameIndex() + switched->GetStepFrames() == 3);
+		CHECK(previous->GetFrameIndex() >= 1); // The step of the frame that asked for the switch
 		for (int32_t frame = 0; frame < 3; frame++)
 			project.Update();
-		CHECK(switched->GetFrameIndex() == 2); // The two remaining steps, then nothing: still paused
+		// The steps were all run, then nothing: still paused.
+		CHECK(switched->GetStepFrames() == 0);
+		CHECK(previous->GetFrameIndex() + switched->GetFrameIndex() == 3);
 		CHECK(context.IsPaused());
 		project.Run("play.stop");
 	}
@@ -203,17 +221,27 @@ TEST_SUITE("Editor.GameFlow")
 		ScopedInfoLogging infoLogging;
 		LogCapture log;
 		const Timestep frame(1.0f / 60.0f);
+		// Nothing plays until the start scene is in.
+		UpdateUntil([&] { game->Update(frame); }, [&] { return game->HasStarted(); });
+		CHECK(game->GetSceneHandle() == project.LevelOne);
 
-		game->GetScene()->RequestSceneLoad(project.LevelTwo);
-		game->Update(frame);
-		CHECK(game->GetSceneHandle() == project.LevelTwo);
+		// The running scene goes on until the next one is in.
+		const Ref<Scene> start = game->GetScene();
+		start->RequestSceneLoad(project.LevelTwo);
+		UpdateUntil([&] { game->Update(frame); }, [&]
+		{
+			if (game->GetScene() == start)
+				CHECK(start->IsRunning());
+			return game->GetSceneHandle() == project.LevelTwo;
+		});
 		CHECK(game->GetScene()->IsRunning());
+		CHECK_FALSE(start->IsRunning());
 		CHECK(game->GetScene()->FindEntityByName("Boss").IsValid());
 
 		// The null handle restarts the current scene.
 		const Ref<Scene> previous = game->GetScene();
 		previous->RequestSceneLoad(UUID::Null());
-		game->Update(frame);
+		UpdateUntil([&] { game->Update(frame); }, [&] { return game->GetScene() != previous; });
 		CHECK(game->GetScene() != previous);
 		CHECK_FALSE(previous->IsRunning());
 		CHECK(game->GetSceneHandle() == project.LevelTwo);

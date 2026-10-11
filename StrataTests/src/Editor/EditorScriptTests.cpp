@@ -451,6 +451,7 @@ TEST_SUITE("Editor.Scripts")
 			std::string error;
 			Scope<GameRuntime> game = GameRuntime::Create(manifestPath, &error);
 			REQUIRE_MESSAGE(game, error);
+			REQUIRE(game->WaitForStart());
 			const Ref<ScriptEngine> engine = game->GetScriptEngine();
 			REQUIRE(engine);
 			CHECK(engine != harness.Context.GetScriptEngine());
@@ -475,6 +476,7 @@ TEST_SUITE("Editor.Scripts")
 		std::string error;
 		Scope<GameRuntime> game = GameRuntime::Create(FileSystem::FromUTF8(crashing["manifest"].get<std::string>()), &error);
 		REQUIRE_MESSAGE(game, error);
+		REQUIRE(game->WaitForStart());
 		game->Update(Timestep(1.0f / 60.0f));
 		REQUIRE(game->GetScriptFault());
 		CHECK(game->GetScriptFault()->ClassName == "Faulty");

@@ -283,6 +283,7 @@ TEST_SUITE("Package.ScriptBuild")
 		std::string gameError;
 		Scope<GameRuntime> game = GameRuntime::Create(FileSystem::FromUTF8(exported["manifest"].get<std::string>()), &gameError);
 		REQUIRE_MESSAGE(game, gameError);
+		REQUIRE(game->WaitForStart());
 		REQUIRE(game->GetScriptEngine());
 		CHECK(game->GetScriptEngine()->FindClass("Counter"));
 		for (int frame = 0; frame < 2; frame++)

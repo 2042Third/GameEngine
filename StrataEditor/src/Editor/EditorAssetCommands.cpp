@@ -370,11 +370,16 @@ namespace Strata
 				return EditorCommandResult::Ok({ { "cancelling", true } });
 			} });
 
-		registry.Register({ "project.setExportSettings", "Sets how the project exports and saves the project file. alwaysInclude: assets (\"Prefabs/Enemy.stprefab\") "
-			"and folders (\"Prefabs\") relative to the asset directory that an export with prune keeps, with what they use, although no scene uses them "
-			"(assets scripts load by path); each must name an asset or a folder of assets.",
-			ObjectSchema({ { "alwaysInclude", { { "type", "array" }, { "items", { { "type", "string" } } },
-				{ "description", "Asset paths and folders relative to the asset directory ('/' separators); empty to keep nothing extra" } } } }, { "alwaysInclude" }),
+		registry.Register({ "project.setExportSettings", "Sets how the project exports and saves the project file; settings left out keep their "
+			"values. alwaysInclude: assets (\"Prefabs/Enemy.stprefab\") and folders (\"Prefabs\") relative to the asset directory that an export "
+			"with prune keeps, with what they use, although no scene uses them (assets scripts load by path); each must name an asset or a folder "
+			"of assets. loadingScene: a scene the exported game plays while its start scene loads (null: none, the game shows a cleared frame "
+			"meanwhile). Returns both settings.",
+			ObjectSchema({
+				{ "alwaysInclude", { { "type", "array" }, { "items", { { "type", "string" } } },
+					{ "description", "Asset paths and folders relative to the asset directory ('/' separators); empty to keep nothing extra" } } },
+				{ "loadingScene", { { "type", { "string", "null" } },
+					{ "description", "Scene (handle or path) the game plays while its start scene loads; null for none" } } } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				std::string error;
@@ -382,28 +387,48 @@ namespace Strata
 				if (!assets)
 					return EditorCommandResult::Fail(error);
 				const nlohmann::json* list = JsonUtils::Find(parameters, "alwaysInclude");
-				if (!list || !list->is_array())
-					return EditorCommandResult::InvalidParameters("'alwaysInclude' must be an array of asset paths");
-				std::vector<std::string> alwaysInclude;
-				for (const nlohmann::json& entry : *list)
-				{
-					if (!entry.is_string())
-						return EditorCommandResult::InvalidParameters("'alwaysInclude' must be an array of asset paths");
-					alwaysInclude.push_back(entry.get<std::string>());
-				}
-				// Every entry must name something, as a pruned pack's plan requires.
-				if (!assets->CheckAlwaysInclude(alwaysInclude, &error))
-					return EditorCommandResult::InvalidParameters(error);
-
+				const nlohmann::json* loading = JsonUtils::Find(parameters, "loadingScene");
+				if (!list && !loading)
+					return EditorCommandResult::InvalidParameters("Missing parameter 'alwaysInclude' (or 'loadingScene')");
 				Project& project = *context.GetProject();
-				const std::vector<std::string> previous = project.GetConfig().Export.AlwaysInclude;
-				project.GetConfig().Export.AlwaysInclude = std::move(alwaysInclude);
+				const ProjectExportSettings previous = project.GetConfig().Export;
+				ProjectExportSettings settings = previous;
+				if (list)
+				{
+					if (!list->is_array())
+						return EditorCommandResult::InvalidParameters("'alwaysInclude' must be an array of asset paths");
+					settings.AlwaysInclude.clear();
+					for (const nlohmann::json& entry : *list)
+					{
+						if (!entry.is_string())
+							return EditorCommandResult::InvalidParameters("'alwaysInclude' must be an array of asset paths");
+						settings.AlwaysInclude.push_back(entry.get<std::string>());
+					}
+					// Every entry must name something, as a pruned pack's plan requires.
+					if (!assets->CheckAlwaysInclude(settings.AlwaysInclude, &error))
+						return EditorCommandResult::InvalidParameters(error);
+				}
+				if (loading)
+				{
+					settings.LoadingScene = UUID::Null();
+					if (!loading->is_null())
+					{
+						CommandArguments arguments(parameters);
+						settings.LoadingScene = ResolveAsset(context, arguments, "loadingScene", AssetType::Scene);
+						if (!arguments.IsValid())
+							return arguments.Fail();
+					}
+				}
+
+				project.GetConfig().Export = std::move(settings);
 				if (!project.Save(&error))
 				{
-					project.GetConfig().Export.AlwaysInclude = previous;
+					project.GetConfig().Export = previous;
 					return EditorCommandResult::Fail(error);
 				}
-				return EditorCommandResult::Ok({ { "alwaysInclude", project.GetConfig().Export.AlwaysInclude } });
+				const ProjectExportSettings& saved = project.GetConfig().Export;
+				return EditorCommandResult::Ok({ { "alwaysInclude", saved.AlwaysInclude },
+					{ "loadingScene", saved.LoadingScene.IsValid() ? UUIDToJson(saved.LoadingScene) : nlohmann::json(nullptr) } });
 			} });
 
 		////////////////////////////////////////////////////////////////////////////////

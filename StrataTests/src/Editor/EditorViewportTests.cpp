@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Editor/CommandTestUtils.h"
 #include "Editor/CommandUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
@@ -673,11 +674,11 @@ TEST_SUITE("Editor.Viewport")
 			harness.Run("project.open", { { "path", FileSystem::ToUTF8(directory) } });
 			CHECK(Near(ToVec3(harness.Run("camera.get")["target"]), glm::vec3(0.0f)));
 			movedCamera = harness.Run("camera.set", { { "position", { 2, 3, 4 } }, { "target", { 0, 0.5f, 0 } } });
-			harness.Run("scene.open", { { "scene", second } });
+			Tests::RunCommandToCompletion(harness.Context, harness.Commands, "scene.open", { { "scene", second } });
 			CHECK(Near(ToVec3(harness.Run("camera.get")["target"]), glm::vec3(50.0f, 0.0f, 0.0f)));
 
 			// Back to the first scene: the view it was left with.
-			harness.Run("scene.open", { { "scene", first } });
+			Tests::RunCommandToCompletion(harness.Context, harness.Commands, "scene.open", { { "scene", first } });
 			CHECK(harness.Run("camera.get") == movedCamera);
 		}
 
@@ -695,12 +696,12 @@ TEST_SUITE("Editor.Viewport")
 			ViewportHarness harness;
 			harness.Run("project.open", { { "path", FileSystem::ToUTF8(directory) } }); // Opens the start scene, the first one
 			CHECK(harness.Run("camera.get") == movedCamera);
-			harness.Run("scene.open", { { "scene", second } });
+			Tests::RunCommandToCompletion(harness.Context, harness.Commands, "scene.open", { { "scene", second } });
 			CHECK(Near(ToVec3(harness.Run("camera.get")["target"]), glm::vec3(50.0f, 0.0f, 0.0f)));
 			// A scene deleted meanwhile loses its camera when the project closes.
 			harness.Run("scene.new", { { "name", "Third" } });
 			third = harness.Run("scene.saveAs", { { "path", "Scenes/Third.stscene" } })["scene"].get<std::string>();
-			harness.Run("scene.open", { { "scene", first } });
+			Tests::RunCommandToCompletion(harness.Context, harness.Commands, "scene.open", { { "scene", first } });
 			CHECK(harness.Context.GetViewport().HasSceneCamera(*UUIDFromJson(third)));
 			harness.Run("asset.delete", { { "asset", third } });
 		}
@@ -719,7 +720,7 @@ TEST_SUITE("Editor.Viewport")
 		CHECK(camera["fov"] == 40.0);
 		CHECK_FALSE(harness.Context.GetViewport().GetSettings().ShowGrid);
 		// It belonged to that scene: the other scene gets a first view of its own.
-		harness.Run("scene.open", { { "scene", second } });
+		Tests::RunCommandToCompletion(harness.Context, harness.Commands, "scene.open", { { "scene", second } });
 		CHECK(Near(ToVec3(harness.Run("camera.get")["target"]), glm::vec3(50.0f, 0.0f, 0.0f)));
 	}
 
