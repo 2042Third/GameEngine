@@ -4,18 +4,23 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/ImGuiHarness.h"
+#include "Editor/ThumbnailCache.h"
 #include "Panels/ContentBrowserPanel.h"
 #include "Panels/PerformancePanel.h"
 #include "Panels/StreamingPanel.h"
 #include "Perf/PerfUtils.h"
 #include "Perf/SceneGenerators.h"
+#include "Renderer/GPUTestUtils.h"
 #include "Renderer/SceneRendererTestUtils.h"
 #include "TestHelpers.h"
 
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/FrameProfiler.h>
 #include <Strata/Core/JsonUtils.h>
+#include <Strata/Core/Timestep.h>
+#include <Strata/Renderer/GraphicsDevice.h>
 #include <Strata/Renderer/Material.h>
+#include <Strata/Renderer/Renderer.h>
 
 #include <imgui.h>
 
@@ -24,6 +29,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace Strata;
@@ -188,5 +194,86 @@ TEST_SUITE("Perf.EditorPanels")
 				performanceStats.MedianMs, " ms, p95 ", performanceStats.P95Ms, " ms, max ", performanceStats.MaxMs, " ms per frame");
 			return performanceStats.P95Ms;
 		});
+	}
+}
+
+TEST_SUITE("PerfGPU.Editor")
+{
+	TEST_CASE("The Content Browser with 10,001 assets costs a fraction of a millisecond per frame with their thumbnails shown")
+	{
+		// As Perf.EditorPanels measures it, with a device: the tiles in view show their thumbnails (rendered once, then
+		// cached), as in the editor.
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		GraphicsDevice& device = gpu.GetDevice();
+		Perf::ScopedApplicationJobSystem jobs;
+		ImGuiHarness harness;
+		EditorCommandRegistry commands;
+		EditorCommandRunner runner;
+		EditorContext context { EditorContextSpecification { false } };
+		EditorPanelContext panelContext { context, commands, runner };
+		const std::filesystem::path project = CreateTemporaryDirectory("PerfGPUContentBrowser") / "Game";
+		const EditorCommandResult created = commands.Execute(context, "project.create", { { "directory", FileSystem::ToUTF8(project) }, { "name", "Game" } });
+		REQUIRE_MESSAGE(created.Success, created.Error);
+		const std::string document = JsonUtils::Dump(Material::Create()->Serialize(), 1, '\t');
+		for (uint32_t index = 0; index < c_BrowserAssets; index++)
+			REQUIRE(FileSystem::WriteText(project / "Assets" / "Materials" / fmt::format("Perf{}.stmat", index), document));
+		std::string error;
+		REQUIRE_MESSAGE(context.OpenProject(project, &error), error);
+		ThumbnailCache* thumbnails = context.GetThumbnails();
+		REQUIRE(thumbnails);
+		ContentBrowserPanel browser;
+		browser.SetCurrentDirectory("Materials");
+
+		// An editor frame on the device: the context's update (the thumbnail cache renders, reads back and uploads) and the
+		// panel, whose cost is what is measured.
+		const auto frame = [&]()
+		{
+			REQUIRE(device.BeginFrame());
+			Renderer::BeginFrame();
+			context.Update(Timestep(1.0f / 60.0f));
+			const double cost = MeasurePanel(harness, browser, panelContext, 1).All.front();
+			device.EndFrame();
+			return cost;
+		};
+		// Frames until every tile in view shows its thumbnail.
+		size_t inView = 0;
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(3);
+		bool shown = false;
+		while (!shown && std::chrono::steady_clock::now() < deadline)
+		{
+			frame();
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			inView = 0;
+			size_t ready = 0;
+			for (const AssetBrowserItem& item : browser.GetView().GetItems())
+			{
+				if (!browser.FindItemRect(item.Handle))
+					continue;
+				inView++;
+				ready += thumbnails->GetState(item.Handle) == ThumbnailState::Ready ? 1 : 0;
+			}
+			shown = inView > 0 && ready == inView && !thumbnails->IsBusy();
+		}
+		REQUIRE(shown);
+		REQUIRE(browser.GetView().GetItems().size() == c_BrowserAssets);
+		CHECK(thumbnails->GetStats().ScenesRendered >= inView);
+		const uint64_t rebuilds = browser.GetView().GetRebuildCount();
+
+		// The 95th percentile frame (the acceptance limit, 0.5 ms, is the budget's ceiling).
+		Perf::CheckBudgetConfirmed("PerfGPU.Editor.ContentBrowser10kThumbnailsP95", [&]
+		{
+			std::vector<double> costs;
+			costs.reserve(c_MeasuredFrames);
+			for (uint32_t index = 0; index < c_MeasuredFrames; index++)
+				costs.push_back(frame());
+			const Perf::Measurement stats = Perf::Summarize(costs);
+			MESSAGE("Content Browser with ", c_BrowserAssets, " assets, ", inView, " thumbnails in view: mean ", Mean(costs), " ms, median ", stats.MedianMs,
+				" ms, p95 ", stats.P95Ms, " ms, max ", stats.MaxMs, " ms per frame");
+			return stats.P95Ms;
+		});
+		CHECK(browser.GetView().GetRebuildCount() == rebuilds);
+		device.WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

@@ -200,8 +200,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   (`WriteStressTopDownScene`: the world with its camera looking down on all of it), 300 frames with its own budgets,
   every texture of the pack resident at the end and none evicted or loading.
   `Perf.FrameProfiler` measures the frame profiler's cost per frame and `Perf.EditorPanels` (in `src/Editor/`) the
-  Streaming panel with 10,000 assets (with the job threads, which build its table) and the Performance panel with a full
-  ring of frames, each drawn in the UI harness: the 95th percentile frame, and for the Streaming panel the frames that
+  Streaming panel with 10,000 assets (with the job threads, which build its table), the Content Browser with 10,001 assets
+  in a folder (and, in `PerfGPU.Editor`, with the thumbnails of the tiles in view shown) and the Performance panel with a
+  full ring of frames, each drawn in the UI harness: the 95th percentile frame, and for the Streaming panel the frames that
   refresh its table, so a periodic hitch cannot hide in an average. Script dispatch prefetches instances ahead because
   the hardware prefetchers follow heap blocks only when they recognize the pattern by the reading instruction's address:
   a perf difference between builds of identical sources points at such a layout effect; compare the builds' profiles
