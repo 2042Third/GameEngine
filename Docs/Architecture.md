@@ -1395,13 +1395,17 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   context's journal: its origin (`CommandOrigin`: UI from `RunEditorCommand` and the panels, Automation with the client's
   name from `EditorAutomation`, CommandScript from `EditorCommandScript`, Internal for code and for commands that commands
   run, which are recorded as children of theirs), the parameters (whole up to 256 KB, a shortened copy beyond, flagged),
-  whether the scene was playing, then the outcome: a summary of the result (scalars, containers by their size) with
-  every ID it holds by JSON pointer, or the error and its kind, the duration, and the undo step it recorded with the
+  whether the scene was playing, then the outcome: a summary of the result (scalars, containers by their size; kept as
+  compact JSON text written straight from the result, since a JSON tree costs allocations per member) with every ID it
+  holds by JSON pointer (written only for the IDs found), or the error and its kind, the duration, and the undo step it recorded with the
   entities it touched (the undo stack's record counter and `GetLastRecordedSerial` attribute steps to the command whose
   handler or poll recorded them). A deferred command's entry stays pending until `PollCommandResult` sees its final
   result, or the runner cancels it, so each command is recorded once with its real end. The ring keeps at most 2,000
-  entries and 8 MB; recording costs about 2.6 us per command (`Perf.Editor.JournalPerCommand`, entity.get with the
-  journal against without). `editor.activity {since, limit, source, command}` reads it.
+  entries and 8 MB; recording costs about 1.5 us per command (`Perf.Editor.JournalPerCommand`, entity.get with the
+  journal against without; about 0.8 us of an `entity.create`, spread over the parameters' copy, the undo step's note
+  and the result's summary). The entry being recorded and the step just recorded are found at the ends of their rings
+  first: the command's own work has pushed the rest out of the caches. `editor.activity {since, limit, source, command}`
+  reads it.
 - **Replays** (`CommandJournal::BuildReplayScript`, `editor.activity.export {path, since, overwrite}`). A session after a
   journal entry becomes a command script that repeats it on a copy of the project as it was then (a regression script made
   by doing the work once): the successful top-level commands of kind Edit that did not change a running copy, in order

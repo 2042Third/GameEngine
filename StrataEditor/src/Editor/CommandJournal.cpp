@@ -5,11 +5,18 @@
 #include "Editor/UndoStack.h"
 
 #include <Strata/Asset/BuiltinAssets.h>
+#include <Strata/Core/JsonUtils.h>
 #include <Strata/Reflection/PropertyJson.h>
 
+#include <spdlog/fmt/fmt.h>
+
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <functional>
+#include <iterator>
 #include <set>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -114,40 +121,118 @@ namespace Strata
 			return shortened;
 		}
 
-		std::string DescribeContainer(const nlohmann::json& value)
+		// Appends text as a JSON string: quoted, with quotes, backslashes and control characters escaped (other characters,
+		// UTF-8 included, as they are).
+		void AppendJsonString(std::string& out, std::string_view text)
 		{
-			if (value.is_array())
-				return fmt::format("[{} {}]", value.size(), value.size() == 1 ? "item" : "items");
-			return fmt::format("{{{} {}}}", value.size(), value.size() == 1 ? "key" : "keys");
+			out += '"';
+			for (const char character : text)
+			{
+				switch (character)
+				{
+					case '"':  out += "\\\""; break;
+					case '\\': out += "\\\\"; break;
+					case '\n': out += "\\n"; break;
+					case '\r': out += "\\r"; break;
+					case '\t': out += "\\t"; break;
+					default:
+						if (static_cast<unsigned char>(character) < 0x20)
+							fmt::format_to(std::back_inserter(out), "\\u{:04x}", static_cast<unsigned int>(static_cast<unsigned char>(character)));
+						else
+							out += character;
+				}
+			}
+			out += '"';
 		}
 
-		// The result as the journal keeps it: an object's scalar members (strings shortened) and its containers described
-		// by their size; other values the same way.
-		nlohmann::json Summarize(const nlohmann::json& value)
+		// A string shortened to at most c_SummaryStringBytes (at a UTF-8 character boundary), as a JSON string.
+		void AppendShortString(std::string& out, const std::string& text)
 		{
-			if (value.is_string())
-				return ShortenString(value.get_ref<const std::string&>(), c_SummaryStringBytes);
-			if (value.is_array())
-				return DescribeContainer(value);
-			if (!value.is_object())
-				return value;
-			nlohmann::json summary = nlohmann::json::object();
-			size_t members = 0;
-			for (const auto& [key, member] : value.items())
+			if (text.size() <= c_SummaryStringBytes)
 			{
-				if (members++ == c_SummaryMembers)
+				AppendJsonString(out, text);
+				return;
+			}
+			AppendJsonString(out, ShortenString(text, c_SummaryStringBytes));
+		}
+
+		// A container described by its size, as a JSON string: "[3 items]", "{1 key}".
+		void AppendContainer(std::string& out, const nlohmann::json& value)
+		{
+			if (value.is_array())
+				fmt::format_to(std::back_inserter(out), "\"[{} {}]\"", value.size(), value.size() == 1 ? "item" : "items");
+			else
+				fmt::format_to(std::back_inserter(out), "\"{{{} {}}}\"", value.size(), value.size() == 1 ? "key" : "keys");
+		}
+
+		void AppendSummaryValue(std::string& out, const nlohmann::json& value)
+		{
+			switch (value.type())
+			{
+				case nlohmann::json::value_t::string:
+					AppendShortString(out, value.get_ref<const std::string&>());
+					break;
+				case nlohmann::json::value_t::boolean:
+					out += value.get<bool>() ? "true" : "false";
+					break;
+				case nlohmann::json::value_t::number_integer:
+					fmt::format_to(std::back_inserter(out), "{}", value.get<int64_t>());
+					break;
+				case nlohmann::json::value_t::number_unsigned:
+					fmt::format_to(std::back_inserter(out), "{}", value.get<uint64_t>());
+					break;
+				case nlohmann::json::value_t::number_float:
 				{
-					summary["..."] = fmt::format("{} more members", value.size() - c_SummaryMembers);
+					// JSON has no infinities or NaN (nlohmann writes them as null too); the shortest form that reads back the same.
+					const double number = value.get<double>();
+					if (std::isfinite(number))
+						fmt::format_to(std::back_inserter(out), "{}", number);
+					else
+						out += "null";
 					break;
 				}
-				if (member.is_string())
-					summary[key] = ShortenString(member.get_ref<const std::string&>(), c_SummaryStringBytes);
-				else if (member.is_structured())
-					summary[key] = DescribeContainer(member);
-				else
-					summary[key] = member;
+				case nlohmann::json::value_t::array:
+				case nlohmann::json::value_t::object:
+				case nlohmann::json::value_t::binary:
+					AppendContainer(out, value);
+					break;
+				case nlohmann::json::value_t::null:
+				case nlohmann::json::value_t::discarded:
+					out += "null";
+					break;
 			}
-			return summary;
+		}
+
+		// The result as the journal keeps it, as compact JSON text: an object's scalar members (strings shortened) and its
+		// containers described by their size; other values the same way. Written straight into one string: every command
+		// pays for it, and a summary built as a JSON tree costs allocations per member (Describe parses the text when asked).
+		void WriteSummary(std::string& out, const nlohmann::json& value)
+		{
+			out.clear();
+			if (!value.is_object())
+			{
+				if (value.is_structured())
+					AppendContainer(out, value);
+				else
+					AppendSummaryValue(out, value);
+				return;
+			}
+			out += '{';
+			size_t members = 0;
+			for (auto it = value.begin(); it != value.end(); ++it)
+			{
+				if (members > 0)
+					out += ',';
+				if (members++ == c_SummaryMembers)
+				{
+					fmt::format_to(std::back_inserter(out), "\"...\":\"{} more members\"", value.size() - c_SummaryMembers);
+					break;
+				}
+				AppendJsonString(out, it.key());
+				out += ':';
+				AppendSummaryValue(out, it.value());
+			}
+			out += '}';
 		}
 
 		bool IsIdText(const std::string& text)
@@ -172,8 +257,20 @@ namespace Strata
 			}
 		}
 
-		// The IDs a result holds by JSON pointer, looking at no more than `budget` nodes.
-		void CollectIds(const nlohmann::json& value, std::string& pointer, std::vector<std::pair<std::string, UUID>>& out, size_t& budget, int depth = 0)
+		// A step of the way to a value inside a result: an object member's key, or else an array index.
+		struct PathToken
+		{
+			const std::string* Key = nullptr;
+			size_t Index = 0;
+		};
+
+		// The way from the result to the value CollectIds looks at: one token per level it walks down.
+		using IdScanPath = std::array<PathToken, c_MaxWalkDepth + 1>;
+
+		// The IDs a result holds by JSON pointer, looking at no more than `budget` nodes. The pointer is written only for the
+		// IDs found: every command's result passes through here, and most of its values are no IDs. `path` holds the way to
+		// `value` in its first `depth` tokens.
+		void CollectIds(const nlohmann::json& value, IdScanPath& path, std::vector<std::pair<std::string, UUID>>& out, size_t& budget, int depth = 0)
 		{
 			if (budget == 0 || out.size() >= CommandJournal::c_MaxResultIds || depth > c_MaxWalkDepth)
 				return;
@@ -181,31 +278,43 @@ namespace Strata
 			if (value.is_string())
 			{
 				const std::string& text = value.get_ref<const std::string&>();
-				if (IsIdText(text))
+				if (!IsIdText(text))
+					return;
+				const std::optional<UUID> id = UUID::FromString(text);
+				if (!id || !id->IsValid())
+					return;
+				std::string pointer;
+				for (int level = 0; level < depth; level++)
 				{
-					if (const std::optional<UUID> id = UUID::FromString(text); id && id->IsValid())
-						out.emplace_back(pointer, *id);
+					const PathToken& token = path[static_cast<size_t>(level)];
+					if (token.Key)
+					{
+						AppendPointerToken(pointer, *token.Key);
+					}
+					else
+					{
+						pointer += '/';
+						fmt::format_to(std::back_inserter(pointer), "{}", token.Index);
+					}
 				}
+				out.emplace_back(std::move(pointer), *id);
 				return;
 			}
-			const size_t length = pointer.size();
+			PathToken& token = path[static_cast<size_t>(depth)];
 			if (value.is_object())
 			{
-				for (const auto& [key, member] : value.items())
+				for (auto it = value.begin(); it != value.end(); ++it)
 				{
-					AppendPointerToken(pointer, key);
-					CollectIds(member, pointer, out, budget, depth + 1);
-					pointer.resize(length);
+					token = { &it.key(), 0 };
+					CollectIds(it.value(), path, out, budget, depth + 1);
 				}
 			}
 			else if (value.is_array())
 			{
 				for (size_t index = 0; index < value.size(); index++)
 				{
-					pointer += '/';
-					pointer += std::to_string(index);
-					CollectIds(value[index], pointer, out, budget, depth + 1);
-					pointer.resize(length);
+					token = { nullptr, index };
+					CollectIds(value[index], path, out, budget, depth + 1);
 				}
 			}
 		}
@@ -429,16 +538,16 @@ namespace Strata
 		}
 		else
 		{
-			entry->Result = Summarize(result.Value);
+			WriteSummary(entry->ResultSummary, result.Value);
 			if (result.Value.is_object())
 			{
 				if (const auto warning = result.Value.find("warning"); warning != result.Value.end() && warning->is_string())
 					entry->Warning = ShortenString(warning->get<std::string>(), c_MaxErrorBytes);
 			}
-			std::string pointer;
 			size_t budget = c_IdScanNodes;
-			CollectIds(result.Value, pointer, entry->ResultIds, budget);
-			added += EstimateBytes(entry->Result, c_MaxBytes) + entry->Warning.size();
+			IdScanPath path;
+			CollectIds(result.Value, path, entry->ResultIds, budget);
+			added += entry->ResultSummary.size() + entry->Warning.size();
 			for (const auto& [idPointer, value] : entry->ResultIds)
 				added += idPointer.size() + sizeof(value) + c_JsonNodeBytes;
 		}
@@ -459,6 +568,10 @@ namespace Strata
 
 	const CommandJournalEntry* CommandJournal::Find(uint64_t id) const
 	{
+		// The command being recorded is nearly always the newest: found without touching the rest of the ring, which the
+		// command's own work has pushed out of the caches.
+		if (!m_Entries.empty() && m_Entries.back().Id == id)
+			return &m_Entries.back();
 		// Ids grow with the position: a binary search finds an entry in the full ring.
 		const auto it = std::lower_bound(m_Entries.begin(), m_Entries.end(), id, [](const CommandJournalEntry& entry, uint64_t value) { return entry.Id < value; });
 		return it != m_Entries.end() && it->Id == id ? &*it : nullptr;
@@ -514,7 +627,12 @@ namespace Strata
 		if (entry.Status == CommandStatus::Failed)
 			description["error"] = { { "kind", EditorCommandErrorToString(entry.ErrorKind) }, { "message", entry.Error } };
 		if (entry.Status == CommandStatus::Succeeded)
-			description["result"] = entry.Result;
+		{
+			// The summary is JSON text written by the journal; text that does not read back (a result with invalid UTF-8) shows
+			// as it is.
+			std::optional<nlohmann::json> summary = JsonUtils::Parse(entry.ResultSummary);
+			description["result"] = summary ? std::move(*summary) : nlohmann::json(entry.ResultSummary);
+		}
 		if (entry.Frames > 0)
 			description["frames"] = entry.Frames;
 		if (!entry.UndoStep.empty())

@@ -133,6 +133,9 @@ namespace Strata
 
 	std::optional<size_t> UndoStack::FindSerial(uint64_t serial) const
 	{
+		// The step just recorded is the latest: found without a search through the history.
+		if (!m_Entries.empty() && m_Entries.back().Serial == serial)
+			return m_Entries.size() - 1;
 		// Serials grow with the index: a binary search finds one in long histories.
 		const auto it = std::lower_bound(m_Entries.begin(), m_Entries.end(), serial, [](const Entry& entry, uint64_t value) { return entry.Serial < value; });
 		if (it == m_Entries.end() || it->Serial != serial)

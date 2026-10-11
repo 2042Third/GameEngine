@@ -79,7 +79,9 @@ namespace Strata
 		EditorCommandError ErrorKind = {};
 		std::string Error;
 		std::string Warning;   // The result's "warning" (e.g. a change to the running copy while playing)
-		nlohmann::json Result; // A summary: the result's scalar members, containers described by their size
+		// A summary of the result as compact JSON text (Describe reads it): the result's scalar members, strings shortened, and
+		// its containers described by their size.
+		std::string ResultSummary;
 		// Every ID (16 hexadecimal digits) the result holds, by JSON pointer (at most c_MaxResultIds): what a replay binds
 		// to refer to entities and assets the command made.
 		std::vector<std::pair<std::string, UUID>> ResultIds;

@@ -219,6 +219,61 @@ TEST_SUITE("Editor.Journal")
 		CHECK(inner.Source == CommandSource::Internal);
 	}
 
+	TEST_CASE("Results are kept as summaries: scalars, strings shortened, containers by their size")
+	{
+		JournalHarness harness;
+		const std::string longText = std::string(300, 'a') + "\xC3\xA9";
+		nlohmann::json value = {
+			{ "id", "4EA8DC383765341F" },
+			{ "quoted", "say \"hi\"\\ \n\ttab \x01 \xE2\x9C\x93" },
+			{ "long", longText },
+			{ "count", 42 },
+			{ "negative", -7 },
+			{ "big", 18'000'000'000'000'000'000ull },
+			{ "ratio", 0.049999997f },
+			{ "flag", true },
+			{ "nothing", nullptr },
+			{ "list", { 1, 2, 3 } },
+			{ "one", { 1 } },
+			{ "object", { { "a", 1 }, { "b", 2 } } } };
+		harness.Commands.Register({ "test.result", "Test command returning a result of every kind.", CommandUtils::ObjectSchema({}),
+			[value](EditorContext&, const nlohmann::json&) { return EditorCommandResult::Ok(value); }, EditorCommandKind::Query });
+		REQUIRE(harness.Commands.Execute(harness.Context, "test.result").Success);
+		const nlohmann::json summary = CommandJournal::Describe(harness.Latest())["result"];
+		REQUIRE(summary.is_object());
+		CHECK(summary["id"] == "4EA8DC383765341F");
+		CHECK(summary["quoted"] == value["quoted"]);
+		const std::string shortened = summary["long"].get<std::string>();
+		CHECK(shortened.size() < longText.size());
+		CHECK(shortened.find(std::to_string(longText.size()) + " bytes") != std::string::npos);
+		CHECK(summary["count"] == 42);
+		CHECK(summary["negative"] == -7);
+		CHECK(summary["big"] == 18'000'000'000'000'000'000ull);
+		CHECK(summary["ratio"].get<double>() == static_cast<double>(0.049999997f));
+		CHECK(summary["flag"] == true);
+		CHECK(summary["nothing"].is_null());
+		CHECK(summary["list"] == "[3 items]");
+		CHECK(summary["one"] == "[1 item]");
+		CHECK(summary["object"] == "{2 keys}");
+		REQUIRE(harness.Latest().ResultIds.size() == 1);
+		CHECK(harness.Latest().ResultIds[0].first == "/id");
+
+		// At most 32 members, then how many more; results that are not objects are summarized the same way.
+		nlohmann::json many = nlohmann::json::object();
+		for (int index = 0; index < 40; index++)
+			many[fmt::format("m{:02}", index)] = index;
+		harness.Commands.Register({ "test.many", "Test command returning 40 members.", CommandUtils::ObjectSchema({}),
+			[many](EditorContext&, const nlohmann::json&) { return EditorCommandResult::Ok(many); }, EditorCommandKind::Query });
+		REQUIRE(harness.Commands.Execute(harness.Context, "test.many").Success);
+		const nlohmann::json capped = CommandJournal::Describe(harness.Latest())["result"];
+		CHECK(capped.size() == 33);
+		CHECK(capped["..."] == "8 more members");
+		harness.Commands.Register({ "test.array", "Test command returning an array.", CommandUtils::ObjectSchema({}),
+			[](EditorContext&, const nlohmann::json&) { return EditorCommandResult::Ok(nlohmann::json::array({ 1, 2 })); }, EditorCommandKind::Query });
+		REQUIRE(harness.Commands.Execute(harness.Context, "test.array").Success);
+		CHECK(CommandJournal::Describe(harness.Latest())["result"] == "[2 items]");
+	}
+
 	TEST_CASE("The ring keeps at most 2,000 entries and 8 MB, and shortens huge parameters")
 	{
 		JournalHarness harness;
