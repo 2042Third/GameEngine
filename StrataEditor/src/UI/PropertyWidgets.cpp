@@ -1070,6 +1070,9 @@ namespace Strata
 				case AssetType::Texture:   return Icons::Image;
 				case AssetType::AudioClip: return Icons::AudioLines;
 				case AssetType::Font:      return Icons::Type;
+				case AssetType::Skeleton:  return Icons::Bone;
+				case AssetType::AnimationClip: return Icons::Film;
+				case AssetType::AnimationController: return Icons::Network;
 				case AssetType::None:      break;
 			}
 			return Icons::File;
@@ -1087,6 +1090,9 @@ namespace Strata
 				case AssetType::Texture:   return "Texture";
 				case AssetType::AudioClip: return "Audio Clip";
 				case AssetType::Font:      return "Font";
+				case AssetType::Skeleton:  return "Skeleton";
+				case AssetType::AnimationClip: return "Animation Clip";
+				case AssetType::AnimationController: return "Animation Controller";
 				case AssetType::None:      break;
 			}
 			return "Asset";

@@ -57,6 +57,7 @@ namespace Strata
 		float Speed = 1.0f;
 		bool Loop = true; // The simple mode's clip and clips played directly
 		bool ApplyRootMotion = false;
+		bool Transitions = true; // false: the state machine does not run (a preview holds the state it shows)
 	};
 
 	// An event the playhead passed during an update, in the order they happened.

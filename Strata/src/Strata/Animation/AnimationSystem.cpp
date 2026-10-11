@@ -865,9 +865,9 @@ namespace Strata
 		return record && record->Active ? &record->Instance : nullptr;
 	}
 
-	std::vector<std::pair<std::string, float>> AnimationSystem::GetParameters(Entity animator) const
+	std::vector<AnimatorParameterValue> AnimationSystem::GetParameters(Entity animator) const
 	{
-		std::vector<std::pair<std::string, float>> parameters;
+		std::vector<AnimatorParameterValue> parameters;
 		const AnimatorRecord* record = animator.GetScene() == &m_Scene ? FindRecord(animator.GetHandle()) : nullptr;
 		if (!record || record->Set == c_NoSet || !m_Sets[record->Set].Controller)
 			return parameters;
@@ -880,7 +880,7 @@ namespace Strata
 			float value = parameter.Type == AnimationParameterType::Float ? parameter.DefaultFloat : (parameter.Type == AnimationParameterType::Bool && parameter.DefaultBool ? 1.0f : 0.0f);
 			if (values.size() == declared.size())
 				value = values[index];
-			parameters.emplace_back(parameter.Name, value);
+			parameters.push_back(AnimatorParameterValue { parameter.Name, parameter.Type, value });
 		}
 		return parameters;
 	}

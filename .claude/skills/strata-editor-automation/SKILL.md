@@ -208,6 +208,41 @@ the same frame. `"save": false` only previews the values in the loaded material 
 `material.set` saves them too; `material.get` says `"saved": false` meanwhile. Built-in materials and those imported
 with a model cannot be changed: make one with `material.create` and assign it.
 
+**Animation**: an imported model with skins or animations comes with a skeleton and clips as sub-assets; instantiated,
+its root entity is the animator (`Animator` component: `Skeleton`, `Controller`, `Clip`, `Speed`, `Loop`, `PlayOnStart`,
+`ApplyRootMotion`, `CullingMode`), its skinned meshes follow it (`Skin`), and joints that carry rigid parts follow their
+joint (`AttachToJoint`). `animation.info {"asset": "Models/Hero.glb"}` lists the model's skeleton (joint names) and
+clips (handles, names, durations); `{"asset": <skeleton|clip|controller>}` describes one; `{"entity": "<id>"}` an
+animator, and while playing its current state, normalized time, blending and parameter values. A controller is made
+and changed without writing JSON files:
+
+```text
+animation.createController {"path": "Animations/Hero.stanimator",
+  "parameters": [{"Name": "Speed", "Type": "Float", "Default": 0}, {"Name": "Jump", "Type": "Trigger"}],
+  "states": [{"Name": "Idle", "Clip": "<clip handle>"},
+             {"Name": "Run", "Clip": "<clip handle>", "Events": [{"Name": "Step", "Time": 0.3}]},
+             {"Name": "Jump", "Clip": "<clip handle>", "Loop": false}],
+  "transitions": [
+    {"From": "Idle", "To": "Run", "Duration": 0.2,
+     "Conditions": [{"Parameter": "Speed", "Mode": "Greater", "Threshold": 0.1}]},
+    {"From": "Run", "To": "Idle", "Duration": 0.2,
+     "Conditions": [{"Parameter": "Speed", "Mode": "Less", "Threshold": 0.1}]},
+    {"AnyState": true, "To": "Jump", "Duration": 0.1, "Conditions": [{"Parameter": "Jump", "Mode": "Set"}]},
+    {"From": "Jump", "To": "Idle", "ExitTime": 1, "Duration": 0.2}]}
+component.set {"entity": "<root id>", "component": "Animator",
+               "values": {"Controller": "Animations/Hero.stanimator"}}
+animation.setController {"controller": "Animations/Hero.stanimator", "states": [...]}
+                        (replaces the sections given; one undo step)
+animation.preview {"entity": "<root id>", "state": "Run", "time": 0.25}
+                  (edit mode: the viewport and captures show the pose)
+animation.preview {"stop": true}
+```
+
+Modes: `Greater`/`Less` (floats, with `Threshold`), `True`/`False` (bools), `Set` (triggers, consumed when the
+transition fires). `ExitTime` is the source state's normalized time (1: its end; below 1 on a looping state: that point
+of every loop). Previews change nothing in the scene and need no undo; play mode poses the running copy instead. The
+Asset tab edits controllers as tables (one undo step per edit) and shows skeletons and clips.
+
 **Play and inspect**: `play.start` -> `editor.wait {"frames": 120}` (about two seconds) -> `entity.get` /
 `component.get` / `log.read` -> `play.stop`. `play.pause {"paused": true}` and `play.step {"frames": n}` advance
 a paused scene by fixed steps. `play.simulate` runs physics only.

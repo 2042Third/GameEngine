@@ -307,13 +307,16 @@ TEST_SUITE("Animation.System")
 		CHECK_FALSE(control->IsInTransition(plain));
 
 		// The editor reads the parameters by name.
-		const std::vector<std::pair<std::string, float>> parameters = scene.System()->GetParameters(animator);
+		const std::vector<AnimatorParameterValue> parameters = scene.System()->GetParameters(animator);
 		REQUIRE(parameters.size() == 3);
-		CHECK(parameters[0].first == "Speed");
-		CHECK(parameters[0].second == 0.0f);
-		CHECK(parameters[1].first == "Grounded");
-		CHECK(parameters[1].second == 1.0f);
-		CHECK(parameters[2].second == 0.0f); // The jump consumed its trigger
+		CHECK(parameters[0].Name == "Speed");
+		CHECK(parameters[0].Type == AnimationParameterType::Float);
+		CHECK(parameters[0].Value == 0.0f);
+		CHECK(parameters[1].Name == "Grounded");
+		CHECK(parameters[1].Type == AnimationParameterType::Bool);
+		CHECK(parameters[1].Value == 1.0f);
+		CHECK(parameters[2].Type == AnimationParameterType::Trigger);
+		CHECK(parameters[2].Value == 0.0f); // The jump consumed its trigger
 	}
 
 	TEST_CASE("Events reach the listeners after the poses, in order, once each")
@@ -475,11 +478,11 @@ TEST_SUITE("Animation.System")
 		scene.Manager->ReloadAsset(UUID(c_ControllerHandle));
 		REQUIRE(scene.Manager->WaitForPendingLoads());
 		scene.Update(0.1f);
-		const std::vector<std::pair<std::string, float>> parameters = scene.System()->GetParameters(animator);
+		const std::vector<AnimatorParameterValue> parameters = scene.System()->GetParameters(animator);
 		REQUIRE(parameters.size() == 4);
-		CHECK(parameters[0].second == 0.25f);
-		CHECK(parameters[3].first == "Crouch");
-		CHECK(parameters[3].second == 1.0f);
+		CHECK(parameters[0].Value == 0.25f);
+		CHECK(parameters[3].Name == "Crouch");
+		CHECK(parameters[3].Value == 1.0f);
 
 		// Without the controller the clip plays, from its start.
 		animator.GetComponent<AnimatorComponent>().Controller = UUID::Null();

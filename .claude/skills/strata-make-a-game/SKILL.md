@@ -60,6 +60,14 @@ Design the code for verification before writing it:
   `asset.import {"file": "<absolute>", "directory": "Sounds"}`. Models, textures and fonts import the same way.
 - Built-in meshes: `Builtin/Cube`, `Sphere`, `Plane`, `Quad`, `Cylinder`, `Capsule`, `Cone`, `Torus` (also reachable
   from scripts: `Assets::Find("Builtin/Cube")`).
+- Animated characters: import a skinned `.glb`/`.gltf` (`asset.import`), then `animation.info {"asset": "<model>"}` for
+  its clips (handles, names, durations). `prefab.instantiate` the model: the root is the animator, already playing the
+  first clip on start. For more than one animation make a controller (`animation.createController`: states per clip,
+  parameters, transitions; the editor automation skill has an example), set it as the root's `Animator.Controller`, and
+  drive it from a script on the root (`GetEntity().GetAnimator().SetFloat("Speed", speed)`, `SetTrigger("Jump")`, events
+  in `OnAnimationEvent`). Walk cycles that move the root use `ApplyRootMotion` so the feet do not slide; otherwise move
+  the entity from the script and keep the clips in place. Check poses in edit mode with `animation.preview` and a
+  `viewport.capture`; while playing, `animation.info {"entity": "<root>"}` reports the state and parameters.
 
 ## 4. Scripts
 

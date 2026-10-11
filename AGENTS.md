@@ -1006,6 +1006,15 @@ and `AudioSystem`, the built-in "Audio" scene system.
   loaded asset at once (`AssetManagerBase::ReplaceLoadedAsset`), recording an `AssetDocumentAction` (the document's bytes
   before and after; merged by key for drags); `save: false` only previews the values in the loaded material. Such steps
   do not change the scene (`EditorAction::ChangesScene`), so they never mark it unsaved.
+- **Animation commands** (`Editor/EditorAnimationCommands.cpp`): `animation.createController {path, parameters, states,
+  transitions, defaultState}` and `animation.setController {controller, ...}` (the sections given replace the
+  controller's; one undo step through `AssetEdit::SetControllerData`, an `AssetDocumentAction`), `animation.info {asset
+  | entity}` (a model's skeleton and clips, a skeleton's joints, a clip's channels, a controller's graph; an animator's
+  assets and, while playing, its state and parameters) and `animation.preview {entity, state?, clip?, time?, stop?}`:
+  poses of the edited scene's animators through the `EditorContext`'s `AnimationPreview` (the edited scene's
+  `ISkinningPoses` while it does not play), which change no scene data and are dropped with the scene. The Asset tab
+  draws skeletons, clips and controllers (`UI/AnimationAssetViews`: controllers as editable tables, one undo step per
+  edit); the Inspector shows a playing animator's state and parameters.
 - **Simulated input** (`Editor/EditorInputCommands.cpp`) lets tools play a running game (play mode only) as a person
   would: `input.key {key, action: tap|press|release, frames, wait}`, `input.mouseButton {button, action, frames, wait}`,
   `input.mouseMove {position, wait}` (pixels from the game view's top-left corner), `input.scroll {delta, wait}`,

@@ -1286,6 +1286,15 @@ system, not to entities: a character's joints add no entities and no transform c
   the last one, of an entity nobody moved since, writes nothing.
 - **Skinning** is the renderer's: `RenderScene` turns the poses of `ISkinningPoses` into palettes and posed bounds, and
   the vertex shaders blend them (see [Render scene](#render-scene), "Skinned proxies").
+- **Previews** (`AnimationPreview`): a scene that does not play has no animation system, so its skinned meshes show
+  their bind pose. A preview offers `ISkinningPoses` for such a scene and poses the animators asked for (a state, a clip
+  or what they play on start, at a time; `AnimatorSettings::Transitions` off, so the state machine holds it) once their
+  assets arrive, again when the request, the component's assets or an asset object (a reload) change; nothing in the
+  scene changes. The editor keeps one for its edited scene (`EditorContext::GetAnimationPreview`, `animation.preview`).
+- **Editor.** `animation.createController`, `animation.setController`, `animation.info` and `animation.preview` give
+  agents the whole workflow without hand-written JSON (AGENTS.md, "Editor"); the Asset tab edits controllers as tables
+  (`UI/AnimationAssetViews`) and shows skeletons and clips, and the Inspector shows a playing animator's state and
+  parameters.
 
 ## Scripting
 

@@ -256,6 +256,7 @@ namespace Strata
 		// The scene that goes keeps its view for when it opens again.
 		m_Viewport.StoreSceneCamera(m_SceneHandle);
 		m_PendingFrame.reset();
+		m_AnimationPreview.reset(); // Of the scene that goes
 		m_EditScene = std::move(scene);
 		m_SceneHandle = handle;
 		ClearSelection();
@@ -909,6 +910,13 @@ namespace Strata
 		return true;
 	}
 
+	AnimationPreview& EditorContext::GetAnimationPreview()
+	{
+		if (!m_AnimationPreview)
+			m_AnimationPreview = CreateScope<AnimationPreview>(*m_EditScene);
+		return *m_AnimationPreview;
+	}
+
 	void EditorContext::Update(Timestep timestep)
 	{
 		// Script modules are only replaced here, outside scene updates.
@@ -940,6 +948,9 @@ namespace Strata
 		{
 			m_EditScene->OnUpdateEditor(timestep);
 		}
+		// Before the viewports render: previews whose assets arrived get their poses.
+		if (m_AnimationPreview)
+			m_AnimationPreview->Update();
 		// After the game's update and before the next input frame: taps whose frames passed let go, and input frames stop
 		// while the game is paused (a step was used up, or play mode stopped).
 		m_SimulatedInput.Update();

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Strata/Animation/AnimationClip.h"
+#include "Strata/Animation/AnimationController.h"
 #include "Strata/Animation/AnimatorInstance.h"
 #include "Strata/Asset/AssetTypes.h"
 #include "Strata/Core/Base.h"
@@ -24,9 +25,16 @@
 namespace Strata
 {
 
-	class AnimationController;
 	class Scene;
 	class Skeleton;
+
+	// A parameter of an animator's controller and its value (bools and triggers: 0 or 1).
+	struct AnimatorParameterValue
+	{
+		std::string Name;
+		AnimationParameterType Type = AnimationParameterType::Float;
+		float Value = 0.0f;
+	};
 
 	struct AnimationSystemStats
 	{
@@ -122,9 +130,8 @@ namespace Strata
 
 		// The playback of an animator (null for entities without an AnimatorComponent, or inactive ones).
 		const AnimatorInstance* FindInstance(Entity animator) const;
-		// The names and values of the animator's controller parameters (bools and triggers 0 or 1); empty without a
-		// controller.
-		std::vector<std::pair<std::string, float>> GetParameters(Entity animator) const;
+		// The parameters of the animator's controller with their values; empty without a controller.
+		std::vector<AnimatorParameterValue> GetParameters(Entity animator) const;
 		AnimationSystemStats GetStats() const;
 	private:
 		static constexpr uint32_t c_NoSet = ~0u;

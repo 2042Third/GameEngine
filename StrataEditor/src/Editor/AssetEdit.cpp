@@ -2,6 +2,7 @@
 
 #include "Editor/EditorContext.h"
 
+#include <Strata/Animation/AnimationController.h>
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/FileSystem.h>
@@ -73,7 +74,7 @@ namespace Strata
 			if (!metadata)
 				return fail(fmt::format("Unknown asset {}", handle.ToString()));
 			if (metadata->IsBuiltin() || metadata->IsSubAsset() || GetNativeAssetExtension(metadata->Type).empty())
-				return fail(fmt::format("'{}' is not a document of the project (a material, prefab or scene file)", metadata->Name));
+				return fail(fmt::format("'{}' is not a document of the project (a material, prefab, scene or animation controller file)", metadata->Name));
 			const std::filesystem::path path = assets.GetAbsolutePath(handle);
 			if (path.empty())
 				return fail(fmt::format("'{}' has no file in the project", metadata->Name));
@@ -242,6 +243,49 @@ namespace Strata
 			if (!saved || !loaded || loaded->GetType() != AssetType::Material)
 				return true;
 			return std::static_pointer_cast<Material>(loaded)->Serialize() == saved->Serialize();
+		}
+
+		std::optional<std::string> BuildControllerDocument(const AnimationControllerData& data, std::string* outError)
+		{
+			Ref<AnimationController> controller = AnimationController::Create(data, outError);
+			if (!controller)
+				return std::nullopt;
+			return JsonUtils::Dump(controller->Serialize(), 1, '\t') + "\n";
+		}
+
+		bool SetControllerData(EditorContext& context, AssetHandle controller, const AnimationControllerData& data, const std::string& name,
+			const std::string& mergeKey, std::string* outError, EditorCommandError* outErrorKind)
+		{
+			auto fail = [outError, outErrorKind](std::string message, EditorCommandError kind)
+			{
+				if (outError)
+					*outError = std::move(message);
+				if (outErrorKind)
+					*outErrorKind = kind;
+				return false;
+			};
+
+			EditorAssetManager* assets = context.GetAssetManager();
+			if (!assets)
+				return fail("No project is open (project.open or project.create)", EditorCommandError::Failed);
+			const std::optional<AssetMetadata> metadata = assets->GetMetadata(controller);
+			if (!metadata || metadata->Type != AssetType::AnimationController)
+				return fail(fmt::format("{} is not an animation controller of the project", controller.ToString()), EditorCommandError::InvalidParameters);
+
+			std::string error;
+			const std::optional<std::string> document = BuildControllerDocument(data, &error);
+			if (!document)
+				return fail(fmt::format("Invalid animation controller: {}", error), EditorCommandError::InvalidParameters);
+			std::vector<uint8_t> before;
+			if (!ReadDocument(*assets, controller, before, &error))
+				return fail(error, EditorCommandError::Failed);
+			std::vector<uint8_t> after(document->begin(), document->end());
+			if (before == after)
+				return true;
+			if (!ApplyDocument(*assets, controller, after, &error))
+				return fail(error, EditorCommandError::Failed);
+			context.GetUndoStack().Record(CreateScope<AssetDocumentAction>(*assets, controller, name, std::move(before), std::move(after), mergeKey));
+			return true;
 		}
 
 	}

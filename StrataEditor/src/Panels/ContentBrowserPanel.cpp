@@ -63,6 +63,9 @@ namespace Strata
 				case AssetType::Texture:   return Icons::Image;
 				case AssetType::AudioClip: return Icons::AudioLines;
 				case AssetType::Font:      return Icons::Type;
+				case AssetType::Skeleton:  return Icons::Bone;
+				case AssetType::AnimationClip: return Icons::Film;
+				case AssetType::AnimationController: return Icons::Network;
 				default:                   return Icons::File;
 			}
 		}

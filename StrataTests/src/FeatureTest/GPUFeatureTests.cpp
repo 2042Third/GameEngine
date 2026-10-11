@@ -3,6 +3,7 @@
 #include "FeatureTest/FeatureTestUtils.h"
 #include "Renderer/GPUTestUtils.h"
 #include "Renderer/SceneRendererTestUtils.h"
+#include "Strata/Animation/AnimationPreview.h"
 #include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/SceneRenderer.h"
 #include "Strata/Scene/Entity.h"
@@ -99,6 +100,57 @@ TEST_SUITE("GPU.FeatureTest")
 		}
 		CHECK(hudPixels > 100);
 		CHECK_FALSE(IsHudPixel(GetPixelRGBA8(image, c_Width - 2, c_Height - 2)));
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The skinned arm shows the pose of an animation preview in the entity-ID buffer")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		FeatureProject project;
+		LoadAllAssets(*project.GetAssetManager());
+		const Ref<Scene> scene = project.LoadStartScene();
+		const Entity rig = scene->FindEntityByName("Arm Rig");
+		const Entity arm = scene->FindEntityByName("Arm");
+		REQUIRE(rig.IsValid());
+		REQUIRE(arm.IsValid());
+
+		// The arm from the front: it stands 1 unit tall on the rig, its elbow halfway up.
+		constexpr uint32_t c_Size = 128;
+		const glm::vec3 origin = glm::vec3(scene->GetWorldTransform(rig)[3]);
+		const SceneCamera camera = OrthographicLookAt(origin + glm::vec3(0.0f, 0.5f, 4.0f), origin + glm::vec3(0.0f, 0.5f, 0.0f), 2.0f);
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Size, c_Size);
+		auto render = [&]()
+		{
+			for (int32_t frame = 0; frame < 2; frame++)
+			{
+				project.GetAssetManager()->Update();
+				REQUIRE(renderer.Render(*scene, camera));
+			}
+		};
+		const glm::uvec2 upright = ProjectToPixel(camera, origin + glm::vec3(0.0f, 0.85f, 0.08f), c_Size, c_Size);
+		const glm::uvec2 bent = ProjectToPixel(camera, origin + glm::vec3(-0.35f, 0.5f, 0.08f), c_Size, c_Size);
+
+		// Not playing, nothing poses the arm: the bind pose, the forearm upright.
+		render();
+		CHECK(renderer.GetEntityAt(*scene, upright.x, upright.y) == arm);
+		CHECK(renderer.GetEntityAt(*scene, bent.x, bent.y) != arm);
+		CHECK(renderer.GetStats().SkinnedInstances == 0);
+
+		// Half a second into Wave the elbow is bent 90 degrees: the forearm points along -X.
+		AnimationPreview preview(*scene);
+		REQUIRE(preview.IsRegistered());
+		AnimationPreview::Request request;
+		request.State = "Wave";
+		request.Time = 0.5f;
+		REQUIRE(preview.Set(rig, request));
+		preview.Update();
+		REQUIRE(preview.GetStatus(rig) == AnimationPreview::Status::Posed);
+		render();
+		CHECK(renderer.GetEntityAt(*scene, bent.x, bent.y) == arm);
+		CHECK(renderer.GetEntityAt(*scene, upright.x, upright.y) != arm);
+		CHECK(renderer.GetStats().SkinnedInstances >= 1);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

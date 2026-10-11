@@ -13,6 +13,7 @@
 #include "UI/Theme.h"
 #include "UI/Widgets.h"
 
+#include <Strata/Animation/AnimationSystem.h>
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
@@ -502,6 +503,8 @@ namespace Strata
 			}
 			if (info.TypeId == entt::type_id<MeshRendererComponent>().hash())
 				DrawMaterialSection(context, commands, entities);
+			if (info.TypeId == entt::type_id<AnimatorComponent>().hash() && entities.size() == 1)
+				DrawAnimatorState(context, entities.front());
 			ImGui::Spacing();
 		}
 		ImGui::PopID();
@@ -664,6 +667,48 @@ namespace Strata
 			}
 		}
 		ImGui::Unindent(ImGui::GetStyle().IndentSpacing * 0.5f);
+	}
+
+	void InspectorPanel::DrawAnimatorState(EditorContext& context, Entity entity)
+	{
+		const Ref<Scene>& scene = context.GetActiveScene();
+		AnimationSystem* system = scene && scene->IsRunning() ? scene->GetSystem<AnimationSystem>() : nullptr;
+		if (!system)
+			return;
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		ImGui::Spacing();
+		if (!system->FindInstance(entity))
+		{
+			ImGui::TextColored(colors.TextSecondary, "%s  Not animating: the entity is inactive", Icons::Bone);
+			return;
+		}
+		const std::optional<std::string> state = system->GetCurrentState(entity);
+		const bool blending = system->IsInTransition(entity);
+		const std::vector<AnimatorParameterValue> parameters = system->GetParameters(entity);
+		if (!UI::BeginPropertyTable("Inspector.Animator.Live"))
+			return;
+		UI::PropertyLabel("State", "The state the animator is in (a clip played directly has none); blending while a cross-fade runs",
+			"Inspector.Animator.State");
+		std::string stateText = state && !state->empty() ? *state : std::string(system->FindInstance(entity)->IsPlaying() ? "(clip)" : "(not playing)");
+		if (blending)
+			stateText = fmt::format("{}  {}  blending", stateText, Icons::ArrowRight);
+		ImGui::TextUnformatted(stateText.c_str());
+		UI::ItemProbe::Record("Inspector.Animator.State", true, 0, stateText);
+		UI::PropertyLabel("Time", "The state's time over its clip's duration, counting loops", "Inspector.Animator.Time");
+		UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Body);
+		ImGui::Text("%.2f", system->GetNormalizedTime(entity));
+		ImGui::PopFont();
+		for (const AnimatorParameterValue& parameter : parameters)
+		{
+			UI::PropertyLabel(parameter.Name, fmt::format("{} parameter of the controller", AnimationParameterTypeToString(parameter.Type)));
+			UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Body);
+			if (parameter.Type == AnimationParameterType::Float)
+				ImGui::Text("%.3f", parameter.Value);
+			else
+				ImGui::TextColored(parameter.Value != 0.0f ? colors.Text : colors.TextSecondary, "%s", parameter.Value != 0.0f ? "true" : "false");
+			ImGui::PopFont();
+		}
+		UI::EndPropertyTable();
 	}
 
 	void InspectorPanel::DrawAddComponentPopup(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities)

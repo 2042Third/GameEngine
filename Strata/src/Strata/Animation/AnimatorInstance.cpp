@@ -634,7 +634,7 @@ namespace Strata
 
 		// The state machine: transitions from any state first, then from the state the animator is in; one fires at most.
 		const AnimationController* controller = assets.Controller;
-		if (!controller || m_PlayedClip.IsValid() || m_Count == 0)
+		if (!controller || !settings.Transitions || m_PlayedClip.IsValid() || m_Count == 0)
 			return true;
 		const Playing& playing = m_Entries[m_Count - 1];
 		if (playing.State == c_ClipState)
