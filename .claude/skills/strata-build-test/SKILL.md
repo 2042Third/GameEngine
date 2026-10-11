@@ -66,7 +66,9 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
   → `StrataEditor.Export` (`--no-gpu`; it exports the smoke game twice, the second time starting in a scene without a
   camera; exports run in the background, so the run quits after its commands) → `StrataRuntime.Smoke` (the exported
   game, headless; `StrataRuntime.HeadlessPacing` checks that headless runs keep 60 frames per second,
-  `StrataRuntime.AssetBudget` and `.InvalidAssetBudget` the `--asset-budget-mb` option, `StrataRuntime.PerfLog` →
+  `StrataRuntime.AssetBudget` and `.InvalidAssetBudget` the `--asset-budget-mb` option, `StrataRuntime.Resolution` →
+  `.ResolutionCheck` (label `gpu`: a window of exactly 400x250 pixels whatever the display's scale, checked with
+  `check-image --size`) and `.InvalidResolution` the `--resolution` option, `StrataRuntime.PerfLog` →
   `.PerfLogCheck` and `.InvalidPerfLog` the `--perf-log` CSV, read back by
   `StrataTests --strata-test-helper=check-perf-log <csv> <rows> [--nonzero <column>...]`) →
   `StrataRuntime.Render` (windowed, saves
