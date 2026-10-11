@@ -82,6 +82,9 @@ namespace Strata
 		static constexpr float c_MinTileScale = 4.0f;
 		static constexpr float c_MaxTileScale = 12.0f;
 		static constexpr float c_DefaultTileScale = 6.5f;
+		// A browser too short for a whole tile of the slider's size (a laptop's docked panel) shrinks its tiles to the height
+		// in view, down to this.
+		static constexpr float c_MinFitTileScale = 3.0f;
 		// Payload of a folder dragged from the browser: its path ('/' separators), without a terminator.
 		static constexpr const char* c_FolderPayload = "STRATA_ASSET_FOLDER";
 	private:

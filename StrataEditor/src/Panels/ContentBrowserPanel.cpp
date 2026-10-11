@@ -681,9 +681,17 @@ namespace Strata
 		const ImGuiStyle& style = ImGui::GetStyle();
 		const std::vector<AssetBrowserItem>& items = m_View.GetItems();
 		ThumbnailCache* thumbnails = panelContext.Context.GetThumbnails();
-		const float tile = std::round(ImGui::GetFontSize() * std::clamp(m_TileScale, c_MinTileScale, c_MaxTileScale));
 		const float titleHeight = ImGui::GetTextLineHeight();
-		const ImVec2 tileSize(tile, tile + titleHeight + style.ItemInnerSpacing.y * 2.0f);
+		const float titleSpace = titleHeight + style.ItemInnerSpacing.y * 2.0f;
+		// The size the slider picked, unless the browser is too short to show a whole tile with its name (a laptop's docked
+		// panel): then tiles shrink to the height in view, down to c_MinFitTileScale. A tile's item takes the spacing too.
+		const float picked = std::round(ImGui::GetFontSize() * std::clamp(m_TileScale, c_MinTileScale, c_MaxTileScale));
+		const float smallest = std::round(ImGui::GetFontSize() * c_MinFitTileScale);
+		const ImGuiWindow* pane = ImGui::GetCurrentWindow();
+		const float paneHeight = pane->InnerRect.Max.y - (ImGui::GetCursorScreenPos().y + pane->Scroll.y);
+		const float inView = std::floor(paneHeight - titleSpace - style.ItemSpacing.y);
+		const float tile = std::max(smallest, std::min(picked, inView));
+		const ImVec2 tileSize(tile, tile + titleSpace);
 		const float spacing = style.ItemSpacing.x;
 		const int columns = std::max(1, static_cast<int>((ImGui::GetContentRegionAvail().x + spacing) / (tile + spacing)));
 		const int rowCount = static_cast<int>((items.size() + static_cast<size_t>(columns) - 1) / static_cast<size_t>(columns));

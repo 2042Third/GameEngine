@@ -1431,11 +1431,13 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   panels never write files themselves (`Editor.UI.Source` scans `Panels/` for file-system writes).
 - **Content Browser** (`Panels/ContentBrowserPanel`, rows in `Editor/AssetBrowserView`). Two panes in a resizable table: a
   folder tree (the asset directory and its folders as far as they are expanded) and the current folder's items as a grid
-  of tiles (the asset's thumbnail, or the type's icon, on a square, the name cut to the tile; a size slider) or a list, both drawn through
-  `ImGuiListClipper` (only what is in view). Above them: breadcrumbs (each a drop target), a search (every word in a name,
-  below the current folder), type chips (`UI::ToggleChip`), the view mode, New (folder, material) and Import (files, a
-  folder). `AssetBrowserView` (no UI, tested alone) holds the rows: folders first, then assets by name, an expanded model's
-  sub-assets (meshes, materials, textures) right after it as drag sources of their own. It rebuilds only when
+  of tiles (the asset's thumbnail, or the type's icon, on a square, the name cut to the tile; a size slider, and in a pane
+  too short for a whole tile of that size, as the default layout docks it in a laptop-sized window, tiles shrink to the
+  height in view, down to `c_MinFitTileScale`) or a list, both drawn through `ImGuiListClipper` (only what is in view).
+  Above them: breadcrumbs (each a drop target), a search (every word in a name, below the current folder), type chips
+  (`UI::ToggleChip`), the view mode, New (folder, material) and Import (files, a folder). `AssetBrowserView` (no UI,
+  tested alone) holds the rows: folders first, then assets by name, an expanded model's sub-assets (meshes, materials,
+  textures) right after it as drag sources of their own. It rebuilds only when
   `EditorAssetManager::GetChangeVersion` (or the folder, search, filter or an expansion) changed, from one look at the
   manager's index (`ListAssets`), and counts its rebuilds: an idle editor rebuilds nothing (the browser used to copy
   every asset's metadata twice a second). Labels are made at rebuild time; tiles cut their names once per tile width. Every

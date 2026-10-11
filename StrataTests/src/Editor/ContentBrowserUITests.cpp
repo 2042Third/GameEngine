@@ -17,9 +17,12 @@
 
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
+#include <cmath>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace Strata;
@@ -347,6 +350,46 @@ TEST_SUITE("Editor.UI.ContentBrowser")
 		editor.Run("edit.undo");
 		CHECK_FALSE(editor.Assets().FindAssetByPath("Materials/Lamp.stprefab").IsValid());
 		CHECK(editor.Run("prefab.status", { { "entity", lamp } })["linked"] == false);
+	}
+
+	TEST_CASE("A short browser shrinks its tiles so that a whole tile with its name shows")
+	{
+		// The default layout in a window of laptop proportions (1600x900 at any scale) leaves the docked browser too short for
+		// tiles of the slider's size, or even its smallest: they shrink to the height in view.
+
+		// The checker's tile and the bottom of the items' pane in view, for a window of this height.
+		struct Shown
+		{
+			ContentBrowserPanel::ItemRect Tile;
+			float PaneBottom = 0.0f;
+
+			float GetWidth() const { return Tile.Max.x - Tile.Min.x; }
+		};
+		auto show = [](float height)
+		{
+			BrowserEditor editor(fmt::format("ContentBrowserTiles{}", height), { ImVec2(1600.0f, height), 1.0f });
+			editor.Browser().SetCurrentDirectory("Textures");
+			editor.Frames(3);
+			const std::optional<ContentBrowserPanel::ItemRect> tile = editor.Browser().FindItemRect(editor.Assets().FindAssetByPath("Textures/Checker.png"));
+			REQUIRE(tile);
+			const ImGuiWindow* pane = nullptr;
+			for (const ImGuiWindow* window : ImGui::GetCurrentContext()->Windows)
+			{
+				if (std::string_view(window->Name).find("ContentBrowser.Items") != std::string_view::npos)
+					pane = window;
+			}
+			REQUIRE(pane);
+			return Shown { *tile, pane->InnerRect.Max.y };
+		};
+
+		// Where there is room, the slider's size; where there is not, smaller, but not below c_MinFitTileScale (both in the
+		// panel's font, so their ratio is at least the scales').
+		const Shown desktop = show(1400.0f);
+		CHECK(desktop.Tile.Max.y <= desktop.PaneBottom + 0.5f);
+		const Shown laptop = show(900.0f);
+		CHECK(laptop.Tile.Max.y <= laptop.PaneBottom + 0.5f);
+		CHECK(laptop.GetWidth() < desktop.GetWidth());
+		CHECK(laptop.GetWidth() >= std::floor(desktop.GetWidth() * ContentBrowserPanel::c_MinFitTileScale / ContentBrowserPanel::c_DefaultTileScale));
 	}
 
 	TEST_CASE("Files and folders dropped on the editor import into the open folder; files of no asset type are named and left out")
