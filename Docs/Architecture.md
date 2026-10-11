@@ -179,7 +179,9 @@ for preview lighting, leave out screen-space text and tint entities (`SceneRende
 overlay, `Overlay/StatusTint.frag`, blends the listed entities' colors over exactly their pixels of the entity-ID buffer,
 found by binary search in a sorted (id, color) buffer like the selection outline's). How a mesh's level of detail is
 chosen is a pure function (`LODSelection::GetScreenFraction`, `SelectLOD`), so tools show the level the renderer draws.
-Assets: `Mesh`, `Material`, `Texture`, `Font`; procedural primitives come from `MeshFactory`; texture formats, the cooked
+Assets: `Mesh` (skinned meshes also have a skin stream, four joint influences per vertex, and a `MeshSkinBinding`: the
+skin's joints in the skeleton, their inverse bind matrices and the bind-pose extent of what each joint moves; cooked mesh
+format version 2, version 1 still loads), `Material`, `Texture`, `Font`; procedural primitives come from `MeshFactory`; texture formats, the cooked
 texture format and the block decoders are `TextureFormat`, `CookedTexture` and `BlockCompression` (see
 [Texture cooking](#texture-cooking)). Also `TextRenderer`/`FontAtlas`, `DebugDraw`/`SceneGizmos`, `TextureReadback`
 (non-blocking GPU readback) and `ImageWriter` (PNG). Conventions and rules: AGENTS.md, "Architecture rules" and
@@ -746,7 +748,7 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   | --- | --- | --- | --- |
   | Scene, Prefab, Material, AnimationController | `.stscene .stprefab .stmat .stanimator` | `NativeAssetImporter` | the JSON source |
   | Texture | `.png .jpg .jpeg .tga .bmp .psd .gif .hdr` | `TextureImporter` | cooked `STTX` texture (see [Texture cooking](#texture-cooking)) |
-  | Model | `.gltf .glb` | `GltfImporter` | entity template; Mesh, Material, Texture sub-assets |
+  | Model | `.gltf .glb` | `GltfImporter` | entity template; Mesh (skinned ones with their skin), Material, Texture, Skeleton and AnimationClip sub-assets |
   | AudioClip | `.wav .mp3 .flac .ogg` | `AudioClipImporter` | `STAU` header + the encoded file |
   | Font | `.ttf .otf` | `FontImporter` | the source, validated on import |
 

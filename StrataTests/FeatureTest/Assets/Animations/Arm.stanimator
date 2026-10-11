@@ -1,0 +1,115 @@
+{
+	"AnimationController": {
+		"DefaultState": "Wave",
+		"Parameters": [
+			{
+				"Default": 0.0,
+				"Name": "Speed",
+				"Type": "Float"
+			},
+			{
+				"Default": false,
+				"Name": "Raised",
+				"Type": "Bool"
+			},
+			{
+				"Name": "Swing",
+				"Type": "Trigger"
+			}
+		],
+		"States": [
+			{
+				"Clip": "149C5DE55254DA1F",
+				"Events": [
+					{
+						"Name": "WaveTop",
+						"Time": 0.5
+					}
+				],
+				"Loop": true,
+				"Name": "Wave",
+				"Speed": 1.0
+			},
+			{
+				"Clip": "B24808E5B27B99CD",
+				"Events": [
+					{
+						"Name": "SwingEnd",
+						"Time": 0.9
+					}
+				],
+				"Loop": false,
+				"Name": "Swing",
+				"Speed": 1.0
+			},
+			{
+				"Clip": null,
+				"Events": [],
+				"Loop": true,
+				"Name": "Rest",
+				"Speed": 1.0
+			}
+		],
+		"Transitions": [
+			{
+				"Conditions": [
+					{
+						"Mode": "Greater",
+						"Parameter": "Speed",
+						"Threshold": 0.5
+					}
+				],
+				"Duration": 0.25,
+				"ExitTime": null,
+				"From": "Wave",
+				"To": "Swing"
+			},
+			{
+				"AnyState": true,
+				"CanTransitionToSelf": false,
+				"Conditions": [
+					{
+						"Mode": "Set",
+						"Parameter": "Swing"
+					},
+					{
+						"Mode": "True",
+						"Parameter": "Raised"
+					}
+				],
+				"Duration": 0.1,
+				"ExitTime": null,
+				"To": "Swing"
+			},
+			{
+				"Conditions": [
+					{
+						"Mode": "Less",
+						"Parameter": "Speed",
+						"Threshold": 0.5
+					}
+				],
+				"Duration": 0.2,
+				"ExitTime": 1.0,
+				"From": "Swing",
+				"To": "Wave"
+			},
+			{
+				"Conditions": [
+					{
+						"Mode": "False",
+						"Parameter": "Raised"
+					}
+				],
+				"Duration": 0.0,
+				"ExitTime": 0.5,
+				"From": "Rest",
+				"To": "Wave"
+			}
+		]
+	},
+	"Strata": {
+		"Format": "AnimationController",
+		"Version": 1
+	}
+}

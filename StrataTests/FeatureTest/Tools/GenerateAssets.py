@@ -20,6 +20,10 @@ only files whose content changed on purpose; the .meta files keep the handles ei
     Assets/Fonts/FeatureBlocks.ttf TrueType font: every printable ASCII character is a solid block
     Assets/Models/Platform.gltf    glTF 2.0 model: a 4 x 0.5 x 4 platform with a pyramid "Beacon" child node,
                                    two materials (one textured with Checker.png), buffers embedded as a data URI
+    Assets/Models/Arm.gltf         glTF 2.0 skinned model: a 104-vertex tube skinned to a three-joint arm (Shoulder,
+                                   Elbow, Wrist below an "Armature" node) with two animations, "Wave" (linear, baked at
+                                   30 keys per second) and "Swing" (linear root travel, a cubic spline turn, a step
+                                   scale); its quaternions come from math.sin and math.cos, like Blip.wav's samples
 
 The .meta sidecars are not generated: they hold the stable asset handles the scene, prefab and material reference.
 """
@@ -367,6 +371,154 @@ def make_platform_gltf():
     return (json.dumps(document, indent="\t") + "\n").encode("utf-8")
 
 
+################################################################################
+# Arm.gltf
+################################################################################
+
+def quaternion_about(axis, degrees):
+    half = math.radians(degrees) * 0.5
+    sine = math.sin(half)
+    return (axis[0] * sine, axis[1] * sine, axis[2] * sine, math.cos(half))
+
+
+def make_arm_mesh():
+    """A square tube from y = 0 to 1 (13 rings of 8 vertices: every corner once per face) with its skin influences."""
+    corners = [(-0.08, -0.08), (0.08, -0.08), (0.08, 0.08), (-0.08, 0.08)]
+    positions, normals, joints, weights, indices = [], [], [], [], []
+    rings = 13
+    for ring in range(rings):
+        y = ring / 12.0
+        # Shoulder (joint 0) below 0.4, elbow (joint 1) from 0.6, wrist (joint 2) at the top; blended in between.
+        if y < 0.4:
+            influence = ((0, 1), (255, 0))
+        elif y < 0.6:
+            elbow = int(round((y - 0.4) / 0.2 * 255.0))
+            influence = ((0, 1), (255 - elbow, elbow))
+        elif y < 0.95:
+            influence = ((1, 2), (255, 0))
+        else:
+            influence = ((2, 1), (255, 0))
+        for face in range(4):
+            a, b = corners[face], corners[(face + 1) % 4]
+            normal = normalize(((a[0] + b[0]) * 0.5, 0.0, (a[1] + b[1]) * 0.5))
+            for corner in (a, b):
+                positions.append((corner[0], y, corner[1]))
+                normals.append(normal)
+                joints.append((influence[0][0], influence[0][1], 0, 0))
+                weights.append((influence[1][0], influence[1][1], 0, 0))
+    for ring in range(rings - 1):
+        for face in range(4):
+            bottom = ring * 8 + face * 2
+            top = bottom + 8
+            indices.extend([bottom, top + 1, bottom + 1, bottom, top, top + 1])  # Counter-clockwise seen from outside
+    return positions, normals, joints, weights, indices
+
+
+def make_arm_gltf():
+    buffer = bytearray()
+    buffer_views = []
+    accessors = []
+
+    def add(data, count, kind, component_type, normalized=False, bounds=None):
+        while len(buffer) % 4:
+            buffer.append(0)
+        buffer_views.append({"buffer": 0, "byteOffset": len(buffer), "byteLength": len(data)})
+        buffer.extend(data)
+        accessor = {"bufferView": len(buffer_views) - 1, "componentType": component_type, "count": count, "type": kind}
+        if normalized:
+            accessor["normalized"] = True
+        if bounds:
+            accessor["min"], accessor["max"] = bounds
+        accessors.append(accessor)
+        return len(accessors) - 1
+
+    def floats(values):
+        return b"".join(struct.pack("<f", value) for value in values)
+
+    positions, normals, joints, weights, indices = make_arm_mesh()
+    attributes = {
+        "POSITION": add(b"".join(struct.pack("<3f", *p) for p in positions), len(positions), "VEC3", 5126,
+                        bounds=([min(p[i] for p in positions) for i in range(3)], [max(p[i] for p in positions) for i in range(3)])),
+        "NORMAL": add(b"".join(struct.pack("<3f", *n) for n in normals), len(normals), "VEC3", 5126),
+        "JOINTS_0": add(b"".join(struct.pack("<4B", *j) for j in joints), len(joints), "VEC4", 5121),
+        "WEIGHTS_0": add(b"".join(struct.pack("<4B", *w) for w in weights), len(weights), "VEC4", 5121, normalized=True),
+    }
+    index_accessor = add(struct.pack(f"<{len(indices)}H", *indices), len(indices), "SCALAR", 5123)
+    # Inverse bind matrices (column-major): the joints are bound where they rest, 0, 0.5 and 1 up the arm.
+    inverse_bind = []
+    for height in (0.0, 0.5, 1.0):
+        inverse_bind.extend([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, -height, 0, 1])
+    inverse_bind_accessor = add(floats(inverse_bind), 3, "MAT4", 5126)
+
+    # Wave: the elbow bends 0 -> 90 -> 0 degrees about +Z in one second, baked at 30 keys per second (linear; the importer
+    # reduces it to its three corners).
+    wave_times = [key / 30.0 for key in range(31)]
+    wave_rotations = []
+    for time in wave_times:
+        wave_rotations.extend(quaternion_about((0.0, 0.0, 1.0), 90.0 * (1.0 - abs(1.0 - 2.0 * time))))
+    wave_time_accessor = add(floats(wave_times), len(wave_times), "SCALAR", 5126, bounds=([0.0], [1.0]))
+    wave_value_accessor = add(floats(wave_rotations), len(wave_times), "VEC4", 5126)
+
+    # Swing: the shoulder (the root motion joint) travels 0.5 along +X (linear) while it turns 30 degrees about +Z along a
+    # cubic spline, and the wrist steps to 1.25 times its size halfway.
+    swing_times = [0.0, 1.0]
+    swing_time_accessor = add(floats(swing_times), 2, "SCALAR", 5126, bounds=([0.0], [1.0]))
+    travel_accessor = add(floats([0.0, 0.0, 0.0, 0.5, 0.0, 0.0]), 2, "VEC3", 5126)
+    turn = quaternion_about((0.0, 0.0, 1.0), 30.0)
+    spline = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.2, 0.0,
+              0.0, 0.0, 0.2, 0.0, turn[0], turn[1], turn[2], turn[3], 0.0, 0.0, 0.0, 0.0]
+    spline_accessor = add(floats(spline), 6, "VEC4", 5126)
+    step_times = [0.0, 0.5]
+    step_time_accessor = add(floats(step_times), 2, "SCALAR", 5126, bounds=([0.0], [0.5]))
+    step_accessor = add(floats([1.0, 1.0, 1.0, 1.25, 1.25, 1.25]), 2, "VEC3", 5126)
+
+    document = {
+        "asset": {"version": "2.0", "generator": "Strata FeatureTest GenerateAssets.py"},
+        "scene": 0,
+        "scenes": [{"name": "Arm", "nodes": [0, 1]}],
+        "nodes": [
+            {"name": "Arm", "mesh": 0, "skin": 0},
+            {"name": "Armature", "children": [2]},
+            {"name": "Shoulder", "children": [3]},
+            {"name": "Elbow", "translation": [0.0, 0.5, 0.0], "children": [4]},
+            {"name": "Wrist", "translation": [0.0, 0.5, 0.0]},
+        ],
+        "meshes": [{"name": "Arm", "primitives": [{"attributes": attributes, "indices": index_accessor, "material": 0}]}],
+        "materials": [{
+            "name": "ArmMaterial",
+            "pbrMetallicRoughness": {"baseColorFactor": [0.9, 0.45, 0.15, 1.0], "metallicFactor": 0.0, "roughnessFactor": 0.6},
+        }],
+        "skins": [{"name": "ArmSkin", "joints": [2, 3, 4], "skeleton": 2, "inverseBindMatrices": inverse_bind_accessor}],
+        "animations": [
+            {
+                "name": "Wave",
+                "samplers": [{"input": wave_time_accessor, "output": wave_value_accessor, "interpolation": "LINEAR"}],
+                "channels": [{"sampler": 0, "target": {"node": 3, "path": "rotation"}}],
+            },
+            {
+                "name": "Swing",
+                "samplers": [
+                    {"input": swing_time_accessor, "output": travel_accessor, "interpolation": "LINEAR"},
+                    {"input": swing_time_accessor, "output": spline_accessor, "interpolation": "CUBICSPLINE"},
+                    {"input": step_time_accessor, "output": step_accessor, "interpolation": "STEP"},
+                ],
+                "channels": [
+                    {"sampler": 0, "target": {"node": 2, "path": "translation"}},
+                    {"sampler": 1, "target": {"node": 2, "path": "rotation"}},
+                    {"sampler": 2, "target": {"node": 4, "path": "scale"}},
+                ],
+            },
+        ],
+        "accessors": accessors,
+        "bufferViews": buffer_views,
+        "buffers": [{
+            "byteLength": len(buffer),
+            "uri": "data:application/octet-stream;base64," + base64.b64encode(bytes(buffer)).decode("ascii"),
+        }],
+    }
+    return (json.dumps(document, indent="\t") + "\n").encode("utf-8")
+
+
 def main():
     write_bytes("Textures/Checker.png", make_checker_png())
     write_bytes("Textures/Bumps_normal.png", make_bumps_normal_png())
@@ -375,6 +527,7 @@ def main():
     write_bytes("Audio/Blip.wav", make_blip_wav())
     write_bytes("Fonts/FeatureBlocks.ttf", make_font())
     write_bytes("Models/Platform.gltf", make_platform_gltf())
+    write_bytes("Models/Arm.gltf", make_arm_gltf())
 
 
 if __name__ == "__main__":

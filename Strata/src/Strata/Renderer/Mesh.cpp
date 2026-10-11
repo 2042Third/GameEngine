@@ -25,8 +25,23 @@ namespace Strata
 			uint32_t Magic;
 			uint32_t Version;
 			uint32_t SubmeshCount;
-			uint32_t Reserved;
+			uint32_t Flags; // Version 2 (c_CookedMeshSkinned); version 1 wrote 0
 		};
+
+		constexpr uint32_t c_CookedMeshSkinned = 1u << 0;
+
+		bool IsFiniteMatrix(const glm::mat4& matrix)
+		{
+			for (int column = 0; column < 4; column++)
+			{
+				for (int row = 0; row < 4; row++)
+				{
+					if (!std::isfinite(matrix[column][row]))
+						return false;
+				}
+			}
+			return true;
+		}
 
 		struct CookedSubmesh
 		{
@@ -71,6 +86,19 @@ namespace Strata
 
 	Ref<Mesh> Mesh::Create(std::vector<glm::vec3> positions, std::vector<MeshVertexAttributes> attributes, std::vector<uint32_t> indices,
 		std::vector<Submesh> submeshes, std::string* outError)
+	{
+		return Build(std::move(positions), std::move(attributes), std::move(indices), std::move(submeshes), {}, nullptr, outError);
+	}
+
+	Ref<Mesh> Mesh::CreateSkinned(std::vector<glm::vec3> positions, std::vector<MeshVertexAttributes> attributes, std::vector<uint32_t> indices,
+		std::vector<Submesh> submeshes, std::vector<MeshSkinVertex> skinVertices, MeshSkinBinding binding, std::string* outError)
+	{
+		return Build(std::move(positions), std::move(attributes), std::move(indices), std::move(submeshes), std::move(skinVertices),
+			CreateScope<MeshSkinBinding>(std::move(binding)), outError);
+	}
+
+	Ref<Mesh> Mesh::Build(std::vector<glm::vec3> positions, std::vector<MeshVertexAttributes> attributes, std::vector<uint32_t> indices,
+		std::vector<Submesh> submeshes, std::vector<MeshSkinVertex> skinVertices, Scope<MeshSkinBinding> binding, std::string* outError)
 	{
 		auto fail = [outError](const std::string& message) -> Ref<Mesh>
 		{
@@ -117,20 +145,64 @@ namespace Strata
 				submesh.Bounds = MeshUtils::ComputeBounds(std::span<const glm::vec3>(positions).subspan(submesh.BaseVertex, submesh.VertexCount));
 		}
 
+		if (binding)
+		{
+			const size_t jointCount = binding->Joints.size();
+			if (jointCount == 0 || jointCount > MeshSkinBinding::c_MaxJoints)
+				return fail(fmt::format("A skinned mesh needs 1 to {} joints", MeshSkinBinding::c_MaxJoints));
+			if (binding->InverseBindMatrices.size() != jointCount)
+				return fail("A skinned mesh needs one inverse bind matrix per joint");
+			if (skinVertices.size() != positions.size())
+				return fail("The skin stream of a skinned mesh has another length than its vertices");
+			for (const glm::mat4& matrix : binding->InverseBindMatrices)
+			{
+				// Affine (the fourth row is 0, 0, 0, 1), as the palette and the shaders treat them.
+				if (!IsFiniteMatrix(matrix) || matrix[0][3] != 0.0f || matrix[1][3] != 0.0f || matrix[2][3] != 0.0f || matrix[3][3] != 1.0f)
+					return fail("A skinned mesh has an inverse bind matrix that is not a finite affine transform");
+			}
+
+			// Each joint's bind-pose extent: the vertices it influences.
+			binding->JointBounds.assign(jointCount, AABB());
+			for (size_t vertex = 0; vertex < skinVertices.size(); vertex++)
+			{
+				const MeshSkinVertex& skin = skinVertices[vertex];
+				uint32_t weightSum = 0;
+				for (int influence = 0; influence < 4; influence++)
+				{
+					if (skin.Weights[influence] == 0)
+						continue;
+					if (skin.Joints[influence] >= jointCount)
+						return fail(fmt::format("Vertex {} is influenced by joint {} of a skin with {} joints", vertex, skin.Joints[influence], jointCount));
+					weightSum += skin.Weights[influence];
+					binding->JointBounds[skin.Joints[influence]].Expand(positions[vertex]);
+				}
+				if (weightSum != 65535)
+					return fail(fmt::format("The skin weights of vertex {} add up to {} instead of 65535", vertex, weightSum));
+			}
+		}
+		else if (!skinVertices.empty())
+		{
+			return fail("Skin vertices without a skin binding");
+		}
+
 		Ref<Mesh> mesh(new Mesh());
 		mesh->m_Bounds = MeshUtils::ComputeBounds(positions);
 		mesh->m_Positions = std::move(positions);
 		mesh->m_Attributes = std::move(attributes);
 		mesh->m_Indices = std::move(indices);
 		mesh->m_Submeshes = std::move(submeshes);
+		mesh->m_SkinVertices = std::move(skinVertices);
+		if (binding)
+			mesh->m_SkinBinding = Ref<const MeshSkinBinding>(binding.release());
 		return mesh;
 	}
 
 	std::vector<uint8_t> Mesh::Serialize() const
 	{
 		ST_CORE_ASSERT(m_Attributes.size() == m_Positions.size(), "Mesh::Serialize after the upload released the vertex attributes");
+		ST_CORE_ASSERT(!m_SkinBinding || m_SkinVertices.size() == m_Positions.size(), "Mesh::Serialize after the upload released the skin stream");
 		BinaryWriter writer;
-		writer.Write(CookedMeshHeader { c_MeshMagic, c_CookedVersion, static_cast<uint32_t>(m_Submeshes.size()), 0 });
+		writer.Write(CookedMeshHeader { c_MeshMagic, c_CookedVersion, static_cast<uint32_t>(m_Submeshes.size()), m_SkinBinding ? c_CookedMeshSkinned : 0u });
 		writer.WriteArray(std::span<const glm::vec3>(m_Positions));
 		writer.WriteArray(std::span<const MeshVertexAttributes>(m_Attributes));
 		writer.WriteArray(std::span<const uint32_t>(m_Indices));
@@ -140,6 +212,12 @@ namespace Strata
 				static_cast<uint64_t>(submesh.Material), submesh.Bounds.Min, submesh.Bounds.Max });
 			writer.WriteString(submesh.Name);
 			writer.WriteArray(std::span<const MeshLOD>(submesh.LODs));
+		}
+		if (m_SkinBinding)
+		{
+			writer.WriteArray(std::span<const MeshSkinVertex>(m_SkinVertices));
+			writer.WriteArray(std::span<const uint16_t>(m_SkinBinding->Joints));
+			writer.WriteArray(std::span<const glm::mat4>(m_SkinBinding->InverseBindMatrices));
 		}
 		return writer.TakeData();
 	}
@@ -157,9 +235,10 @@ namespace Strata
 		const CookedMeshHeader header = reader.Read<CookedMeshHeader>();
 		if (!reader.IsValid() || header.Magic != c_MeshMagic)
 			return fail("Not a cooked Strata mesh");
-		if (header.Version != c_CookedVersion)
+		// Version 1 is version 2 without flags (its reserved word was always 0).
+		if (header.Version != 1 && header.Version != c_CookedVersion)
 			return fail(fmt::format("Unsupported cooked mesh version {}", header.Version));
-		if (header.SubmeshCount == 0 || header.SubmeshCount > 65536)
+		if (header.SubmeshCount == 0 || header.SubmeshCount > 65536 || (header.Flags & ~c_CookedMeshSkinned) != 0 || (header.Version == 1 && header.Flags != 0))
 			return fail("Cooked mesh header is corrupt");
 
 		std::vector<glm::vec3> positions;
@@ -181,7 +260,21 @@ namespace Strata
 			submesh.Bounds = AABB(cooked.BoundsMin, cooked.BoundsMax);
 		}
 
-		return Create(std::move(positions), std::move(attributes), std::move(indices), std::move(submeshes), outError);
+		if ((header.Flags & c_CookedMeshSkinned) == 0)
+		{
+			if (reader.GetRemaining() != 0)
+				return fail("Cooked mesh has trailing data");
+			return Create(std::move(positions), std::move(attributes), std::move(indices), std::move(submeshes), outError);
+		}
+
+		std::vector<MeshSkinVertex> skinVertices;
+		MeshSkinBinding binding;
+		if (!reader.ReadArray(skinVertices, c_MaxVertices) || !reader.ReadArray(binding.Joints, MeshSkinBinding::c_MaxJoints)
+			|| !reader.ReadArray(binding.InverseBindMatrices, MeshSkinBinding::c_MaxJoints))
+			return fail("Cooked mesh skin is truncated");
+		if (reader.GetRemaining() != 0)
+			return fail("Cooked mesh has trailing data");
+		return CreateSkinned(std::move(positions), std::move(attributes), std::move(indices), std::move(submeshes), std::move(skinVertices), std::move(binding), outError);
 	}
 
 	AssetFinalizeResult Mesh::FinalizeOnMainThread(const AssetFinalizeContext& context)
@@ -196,17 +289,25 @@ namespace Strata
 
 		const size_t positionBytes = m_Positions.size() * sizeof(glm::vec3);
 		const size_t attributeBytes = m_Attributes.size() * sizeof(MeshVertexAttributes);
+		const size_t skinBytes = m_SkinVertices.size() * sizeof(MeshSkinVertex);
 		const size_t indexBytes = m_Indices.size() * sizeof(uint32_t);
+		auto releaseBuffers = [this]()
+		{
+			m_PositionBuffer = nullptr;
+			m_AttributeBuffer = nullptr;
+			m_SkinBuffer = nullptr;
+			m_IndexBuffer = nullptr;
+		};
 		if (!m_IndexBuffer)
 		{
 			m_PositionBuffer = CreateStaticBuffer(positionBytes, "MeshPositions", true);
 			m_AttributeBuffer = CreateStaticBuffer(attributeBytes, "MeshAttributes", true);
+			// Only skinned meshes have a skin stream: other meshes hold nothing more than before skinning existed.
+			m_SkinBuffer = m_SkinBinding ? CreateStaticBuffer(skinBytes, "MeshSkin", true) : nullptr;
 			m_IndexBuffer = CreateStaticBuffer(indexBytes, "MeshIndices", false);
-			if (!m_PositionBuffer || !m_AttributeBuffer || !m_IndexBuffer)
+			if (!m_PositionBuffer || !m_AttributeBuffer || !m_IndexBuffer || (m_SkinBinding && !m_SkinBuffer))
 			{
-				m_PositionBuffer = nullptr;
-				m_AttributeBuffer = nullptr;
-				m_IndexBuffer = nullptr;
+				releaseBuffers();
 				return AssetFinalizeResult::Failed;
 			}
 			m_UploadOffset = 0;
@@ -217,15 +318,16 @@ namespace Strata
 		// staging buffers of the renderer's pool, within the staging room like texture bands (the frame's first step also when
 		// the staging in flight leaves none: the room leaves a step for it), so a mesh's upload never holds more staging than
 		// the budget allows.
-		const std::array<UploadRange, 3> ranges = { {
+		const std::array<UploadRange, 4> ranges = { {
 			{ m_PositionBuffer, reinterpret_cast<const uint8_t*>(m_Positions.data()), positionBytes },
 			{ m_AttributeBuffer, reinterpret_cast<const uint8_t*>(m_Attributes.data()), attributeBytes },
+			{ m_SkinBuffer, reinterpret_cast<const uint8_t*>(m_SkinVertices.data()), skinBytes }, // Empty for meshes without a skin
 			{ m_IndexBuffer, reinterpret_cast<const uint8_t*>(m_Indices.data()), indexBytes }
 		} };
 		nvrhi::IDevice* device = Renderer::GetDevice();
 		StagingPool& stagingPool = Renderer::GetStagingPool();
 		const bool framesFirstCall = !context.UploadedBytes || *context.UploadedBytes == 0;
-		const uint64_t totalBytes = positionBytes + attributeBytes + indexBytes;
+		const uint64_t totalBytes = positionBytes + attributeBytes + skinBytes + indexBytes;
 		uint64_t uploaded = 0;
 		bool firstStep = true;
 		while (m_UploadOffset < totalBytes)
@@ -244,9 +346,7 @@ namespace Strata
 			{
 				ST_CORE_ERROR("Mesh: no staging memory for its upload");
 				stagingPool.Release(std::move(staging));
-				m_PositionBuffer = nullptr;
-				m_AttributeBuffer = nullptr;
-				m_IndexBuffer = nullptr;
+				releaseBuffers();
 				return AssetFinalizeResult::Failed;
 			}
 			// A step may span streams: one copy per stream it covers, from consecutive bytes of the staging buffer.
@@ -285,9 +385,10 @@ namespace Strata
 		// Only shading reads the vertex attributes, from the GPU: their CPU copy goes (the terrain of the stress world held
 		// 9.4 MB of them). Physics keeps reading positions and indices (AssetMeshProvider). Freeing a large copy hands its
 		// pages back to the system, which takes a while: when the steps above ran past the deadline, it is the next call's.
-		if (!firstStep && attributeBytes >= c_TimedReleaseBytes && std::chrono::steady_clock::now() >= context.Deadline)
+		if (!firstStep && attributeBytes + skinBytes >= c_TimedReleaseBytes && std::chrono::steady_clock::now() >= context.Deadline)
 			return AssetFinalizeResult::Pending;
 		std::vector<MeshVertexAttributes>().swap(m_Attributes);
+		std::vector<MeshSkinVertex>().swap(m_SkinVertices);
 		m_Uploaded = true;
 		return AssetFinalizeResult::Done;
 	}
@@ -295,10 +396,15 @@ namespace Strata
 	AssetMemoryUsage Mesh::GetMemoryUsage() const
 	{
 		AssetMemoryUsage usage;
-		usage.Cpu = m_Positions.size() * sizeof(glm::vec3) + m_Attributes.size() * sizeof(MeshVertexAttributes) + m_Indices.size() * sizeof(uint32_t);
+		usage.Cpu = m_Positions.size() * sizeof(glm::vec3) + m_Attributes.size() * sizeof(MeshVertexAttributes) + m_SkinVertices.size() * sizeof(MeshSkinVertex)
+			+ m_Indices.size() * sizeof(uint32_t);
 		for (const Submesh& submesh : m_Submeshes)
 			usage.Cpu += sizeof(Submesh) + submesh.Name.size() + submesh.LODs.size() * sizeof(MeshLOD);
-		for (nvrhi::IBuffer* buffer : { m_PositionBuffer.Get(), m_AttributeBuffer.Get(), m_IndexBuffer.Get() })
+		if (m_SkinBinding)
+		{
+			usage.Cpu += sizeof(MeshSkinBinding) + m_SkinBinding->Joints.size() * (sizeof(uint16_t) + sizeof(glm::mat4) + sizeof(AABB));
+		}
+		for (nvrhi::IBuffer* buffer : { m_PositionBuffer.Get(), m_AttributeBuffer.Get(), m_SkinBuffer.Get(), m_IndexBuffer.Get() })
 		{
 			if (buffer)
 				usage.GpuBuffers += buffer->getDesc().byteSize;
@@ -311,12 +417,16 @@ namespace Strata
 		AssetMemoryUsage usage = GetMemoryUsage();
 		if (Renderer::IsInitialized())
 		{
+			const uint64_t attributeBytes = m_Attributes.size() * sizeof(MeshVertexAttributes);
+			const uint64_t skinBytes = m_SkinVertices.size() * sizeof(MeshSkinVertex);
 			if (!m_IndexBuffer)
 			{
-				for (size_t bytes : { m_Positions.size() * sizeof(glm::vec3), m_Attributes.size() * sizeof(MeshVertexAttributes), m_Indices.size() * sizeof(uint32_t) })
+				for (size_t bytes : { m_Positions.size() * sizeof(glm::vec3), attributeBytes, m_Indices.size() * sizeof(uint32_t) })
 					usage.GpuBuffers += GetStaticBufferSize(bytes);
+				if (m_SkinBinding)
+					usage.GpuBuffers += GetStaticBufferSize(skinBytes);
 			}
-			usage.Cpu -= m_Attributes.size() * sizeof(MeshVertexAttributes); // The upload releases them
+			usage.Cpu -= attributeBytes + skinBytes; // The upload releases them
 		}
 		return usage;
 	}
@@ -421,9 +531,10 @@ namespace Strata
 			return genTangSpaceDefault(&context) != 0;
 		}
 
-		bool GenerateSeamTangents(std::vector<glm::vec3>& positions, std::vector<MeshVertexAttributes>& attributes, std::vector<uint32_t>& indices, bool flatNormals)
+		bool GenerateSeamTangents(std::vector<glm::vec3>& positions, std::vector<MeshVertexAttributes>& attributes, std::vector<uint32_t>& indices, bool flatNormals,
+			std::vector<MeshSkinVertex>* skinVertices)
 		{
-			if (indices.empty() || indices.size() % 3 != 0 || positions.size() != attributes.size())
+			if (indices.empty() || indices.size() % 3 != 0 || positions.size() != attributes.size() || (skinVertices && skinVertices->size() != positions.size()))
 				return false;
 			for (uint32_t index : indices)
 			{
@@ -457,17 +568,32 @@ namespace Strata
 			if (!GenerateTangents(cornerPositions, sequential, cornerAttributes))
 				return false;
 
-			// Weld corners whose data is bit-identical (MeshVertexAttributes has no padding, so bytes compare values).
+			std::vector<MeshSkinVertex> cornerSkin;
+			if (skinVertices)
+			{
+				cornerSkin.resize(cornerCount);
+				for (size_t corner = 0; corner < cornerCount; corner++)
+					cornerSkin[corner] = (*skinVertices)[indices[corner]];
+			}
+
+			// Weld corners whose data is bit-identical (MeshVertexAttributes and MeshSkinVertex have no padding, so bytes compare
+			// values).
 			const meshopt_Stream streams[] = {
 				{ cornerPositions.data(), sizeof(glm::vec3), sizeof(glm::vec3) },
-				{ cornerAttributes.data(), sizeof(MeshVertexAttributes), sizeof(MeshVertexAttributes) }
+				{ cornerAttributes.data(), sizeof(MeshVertexAttributes), sizeof(MeshVertexAttributes) },
+				{ cornerSkin.data(), sizeof(MeshSkinVertex), sizeof(MeshSkinVertex) }
 			};
 			std::vector<uint32_t> remap(cornerCount);
-			const size_t vertexCount = meshopt_generateVertexRemapMulti(remap.data(), nullptr, cornerCount, cornerCount, streams, std::size(streams));
+			const size_t vertexCount = meshopt_generateVertexRemapMulti(remap.data(), nullptr, cornerCount, cornerCount, streams, skinVertices ? 3 : 2);
 			positions.resize(vertexCount);
 			attributes.resize(vertexCount);
 			meshopt_remapVertexBuffer(positions.data(), cornerPositions.data(), cornerCount, sizeof(glm::vec3), remap.data());
 			meshopt_remapVertexBuffer(attributes.data(), cornerAttributes.data(), cornerCount, sizeof(MeshVertexAttributes), remap.data());
+			if (skinVertices)
+			{
+				skinVertices->resize(vertexCount);
+				meshopt_remapVertexBuffer(skinVertices->data(), cornerSkin.data(), cornerCount, sizeof(MeshSkinVertex), remap.data());
+			}
 			indices = std::move(remap); // Corner i of the sequential index buffer is vertex remap[i]
 			return true;
 		}

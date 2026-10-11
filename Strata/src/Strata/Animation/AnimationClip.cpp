@@ -42,9 +42,10 @@ namespace Strata
 		static_assert(sizeof(CookedChannel) == 20);
 
 		// Keys whose value deviates from the interpolation of their kept neighbours by less than this are dropped (a hundred
-		// thousandth of a unit for translations and scales at unit size; about 0.02 degrees for rotations).
+		// thousandth of a unit for translations and scales at unit size; about 0.01 degrees for rotations, measured as the
+		// distance between the unit quaternions, which unlike their dot product keeps its precision for small angles).
 		constexpr float c_ReductionTolerance = 1.0e-5f;
-		constexpr float c_RotationReductionTolerance = 2.0e-8f; // 1 - |cos(half angle)|
+		constexpr float c_RotationReductionTolerance = 1.0e-4f;
 		// Keys tested against one interpolation at most: bounds the reduction's work on long straight runs.
 		constexpr uint32_t c_ReductionWindow = 256;
 
@@ -241,8 +242,11 @@ namespace Strata
 			if (rotation)
 			{
 				const glm::quat a = AnimationMath::Normalize(ReadRotation(expected));
-				const glm::quat b = AnimationMath::Normalize(ReadRotation(actual));
-				return 1.0f - std::abs(glm::dot(a, b)) <= c_RotationReductionTolerance;
+				glm::quat b = AnimationMath::Normalize(ReadRotation(actual));
+				if (glm::dot(a, b) < 0.0f)
+					b = -b; // The same rotation
+				const glm::vec4 difference(a.x - b.x, a.y - b.y, a.z - b.z, a.w - b.w);
+				return glm::length(difference) <= c_RotationReductionTolerance;
 			}
 			const glm::vec3 a = ReadVector(expected);
 			const glm::vec3 b = ReadVector(actual);
