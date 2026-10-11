@@ -519,7 +519,7 @@ Writing scripts is described in `.claude/skills/strata-scripting/SKILL.md`.
 | Where | What |
 | --- | --- |
 | `StrataScriptCore/Include/StrataScript/ScriptABI.h` | The versioned C ABI: host API table, module/class/field descriptors, values. |
-| `StrataScriptCore/Include/StrataScript/*.h` | Header-only C++ SDK (`StrataScript.h` includes all): `Script`, `Entity`, `Scene`, `Assets`, `Input`, `Time`, `Log`, `RigidBody` and `Physics` (bodies and queries; `Collision` for the contact callbacks of `Script`), `CharacterController` (walking, jumping, ground state), `AudioSource` and `Audio`, `Game` (quit, scene loads), `ST_SCRIPT_CLASS`/`ST_SCRIPT_FIELD`. |
+| `StrataScriptCore/Include/StrataScript/*.h` | Header-only C++ SDK (`StrataScript.h` includes all): `Script`, `Entity`, `Scene`, `Assets`, `Input` (keyboard, mouse, gamepads, the cursor mode), `Time`, `Log`, `RigidBody` and `Physics` (bodies and queries; `Collision` for the contact callbacks of `Script`), `CharacterController` (walking, jumping, ground state), `AudioSource` and `Audio`, `Game` (quit, scene loads, the window's mode, resolution and vsync, save files), `ST_SCRIPT_CLASS`/`ST_SCRIPT_FIELD`. |
 | `StrataScriptCore/Source/ScriptModuleEntry.cpp` | The module entry points, compiled into every module by `strata_add_script_module()`. |
 | `StrataScriptCore/CMake/` | `strata_add_script_module()` and the package game projects use (`StrataScriptCoreConfig.cmake`). |
 | `Strata/src/Strata/Scripting/` | `ScriptEngine` (module, hot reload, faults, watchdog), `ScriptModule` (loading, validation, guarded calls), `ScriptSystem` (instances and lifecycle), `ScriptHostAPI` (the host table), `ScriptValue` (value conversion). |
@@ -542,6 +542,17 @@ Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; t
   the calls fail. The master volume belongs to the engine (the engine service `IAudioOutput`), so it works in any scene.
 - Game flow: `Game::Quit`, `LoadScene` and `ReloadScene` set `Scene::RequestQuit`/`RequestSceneLoad`, which the scene's owner
   honors after the frame (see [Editor](#editor)).
+- Input: gamepads (`Input::IsGamepadConnected`, `IsGamepadButtonDown/Pressed/Released`, `GetGamepadAxis` and
+  `GetGamepadStick` with dead zones) and the cursor (`Input::SetCursorMode`: Normal, Hidden, Locked for mouse look, which
+  `Input::SetGameCursorMode` applies while the game has the input; play mode stopping gives it back).
+- The game's shell belongs to the program running it, through engine services (`Core/EngineServices.h`, provided while it
+  runs the game with `EngineServices::ScopedProvider`): `Game::SetWindowMode`, `SetResolution`, `SetVSync` and
+  `GetWindowSize` go to `IGameWindow` (StrataRuntime's `GameWindowService` applies them after the frame; the editor's
+  `EditorGameWindow` only records them for `editor.status` and the game view's notice), save files (`Game::WriteSaveFile`,
+  `ReadSaveFile`/`ReadSaveText`, `DeleteSaveFile`, `ListSaveFiles`) to `IGameSaves` (`<user data>/<Game>/Saves` in a
+  shipped game, `<project>/.strata/Saves` in the editor). Save names are checked in the engine before any path is formed
+  (`SaveFiles::ValidateName`: no separators, no "..", no device names) and writes are atomic. Code that runs a game
+  in-process (tests, tools) provides both, or the calls fail and are reported.
 - Assets: `Assets::RequestLoad` pins the asset for the playing scene (`ScriptSystem::RequestAsset`; never evicted to meet
   memory budgets, see [Asset pipeline](#asset-pipeline), "Residency") until `Assets::Release` (host function
   `ReleaseAsset`, appended to ABI version 1) or the end of play; requests do not add up.
@@ -872,7 +883,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `HandleSelectionShortcuts`): a key pressed in another panel never edits the scene. The Edit menu runs the same actions.
 - `editor.status` summarizes the editor (project, scene, play state, selection, undo history); other
   parts of the editor add sections to it through `EditorContext::SetStatusProvider`: `automation`, `assets` (the
-  totals of `asset.stats`) and `editor`: the window, UI scale and frame rate, whether the launcher shows (`launcher`),
+  totals of `asset.stats`), `game` (the window requests of the running game, `null` without any, its cursor mode and its
+  save directory) and `editor`: the window, UI scale and frame rate, whether the launcher shows (`launcher`),
   the GPU (`gpu`) and the startup time (`startupSeconds`: from the process's creation to its first frame on screen,
   `Platform::GetProcessUptime`, also logged as "Started in ... s").
 - **Asset streaming commands** (`Editor/EditorStreamingCommands.cpp`): `asset.stats {assets?, limit?, sort?: "bytes" |
@@ -984,8 +996,11 @@ and `AudioSystem`, the built-in "Audio" scene system.
 - **Simulated input** (`Editor/EditorInputCommands.cpp`) lets tools play a running game (play mode only) as a person
   would: `input.key {key, action: tap|press|release, frames, wait}`, `input.mouseButton {button, action, frames, wait}`,
   `input.mouseMove {position, wait}` (pixels from the game view's top-left corner), `input.scroll {delta, wait}`,
-  `input.releaseAll {wait}` and `input.state`. Keys and buttons are named like the `Key::`/`Mouse::` constants
-  (`InputNames`, ignoring case). The commands feed the engine's virtual device (`Input::SimulateKey` and friends): its
+  `input.gamepadButton {gamepad, button, action, frames, wait}`, `input.gamepadAxis {gamepad, axis, value, frames, wait}`
+  (a value holds until replaced, `null` or, with `frames`, for that many frames; clamped to the axis' range),
+  `input.releaseAll {wait}` and `input.state`. Keys, buttons and gamepad controls are named like the `Key::`/`Mouse::`/
+  `GamepadButton::`/`GamepadAxis::` constants (`InputNames`, ignoring case); a gamepad simulated input used counts as
+  connected until play stops. The commands feed the engine's virtual device (`Input::SimulateKey` and friends): its
   events apply at the next input frame, are merged with device input (one source pressing a key the other holds is no
   transition) and reach the game even while the viewport has no focus. Holds belong to commands (`SimulatedInput`, owned
   by `EditorContext`): a tap ends only its own hold, overlapping holds of a button keep it down until the last ends, a

@@ -241,6 +241,7 @@ namespace Strata
 		if (rendered && viewport.GetSettings().DebugView != ViewportDebugView::None)
 			DrawDebugViewLegend(context);
 		// Text boxes go below the chip row, also while it is hidden, so they stay in place when it comes and goes.
+		m_GameWindowNoticeShown = false;
 		if (view)
 			DrawOverlays(context, *view, chipsMin.y + ImGui::GetFrameHeight(), panelContext.Frame);
 	}
@@ -249,6 +250,7 @@ namespace Strata
 	{
 		// Hidden behind another tab, collapsed or closed: nothing is rendered and held interactions end.
 		Reset(context.Context);
+		m_GameWindowNoticeShown = false;
 	}
 
 	void ViewportPanel::OnDetach(EditorPanelContext& context)
@@ -531,14 +533,26 @@ namespace Strata
 			m_Focused = false;
 		}
 
-		// Scripts read Input: only the focused game view feeds it, with coordinates relative to the image.
+		// Scripts read Input: only the focused game view feeds it, with coordinates relative to the image. A game that hid or
+		// locked the cursor gives it back when it loses the input and takes it again when it gets the input back
+		// (Input::SetGameCursorMode applies only while input is enabled).
 		const bool enabled = gameView && m_Focused && context.GetSceneState() == SceneState::Play;
-		// A game that hid or locked the cursor gives it back when it loses the input.
-		if (m_GameInputEnabled && !enabled && !m_CursorLocked && Input::GetCursorMode() != CursorMode::Normal)
-			Input::SetCursorMode(CursorMode::Normal);
 		m_GameInputEnabled = enabled;
 		context.SetGameInputActive(enabled);
 		Input::SetEnabled(enabled);
+		// A locked cursor stays inside the game view: the editor's UI ignores the mouse meanwhile, so no click lands on another
+		// panel (Shift+F1 leaves the game view).
+		const bool gameOwnsMouse = enabled && Input::GetGameCursorMode() == CursorMode::Locked;
+		// Detaching runs this after the ImGui context is gone.
+		if (gameOwnsMouse != m_GameOwnsMouse && ImGui::GetCurrentContext())
+		{
+			m_GameOwnsMouse = gameOwnsMouse;
+			ImGuiIO& io = ImGui::GetIO();
+			if (gameOwnsMouse)
+				io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
+			else
+				io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+		}
 		if (enabled)
 		{
 			const ImVec2 origin = ImGui::GetMainViewport()->Pos;
@@ -626,11 +640,32 @@ namespace Strata
 			const float width = ImGui::CalcTextSize(view.Notice.c_str()).x + ImGui::GetStyle().FramePadding.x * 2.0f;
 			DrawTextBox(drawList, ImVec2(std::max(imageMin.x + (m_Image.Size.x - width) * 0.5f, imageMin.x), top), { view.Notice }, colors.Warning);
 		}
+		DrawGameWindowNotice(context, view, drawList);
 
 		EditorViewport& viewport = context.GetViewport();
 		ViewportRenderer* renderer = viewport.GetRenderer();
 		if (viewport.GetSettings().ShowStats && renderer)
 			DrawStatsOverlay(drawList, ImVec2(imageMin.x + margin, top), *renderer, view, frame);
+	}
+
+	void ViewportPanel::DrawGameWindowNotice(EditorContext& context, const ViewportView& view, ImDrawList* drawList)
+	{
+		// What the game asked of its window shows over the game view, at the image's bottom (the editor's window stays).
+		const EditorGameWindow& gameWindow = context.GetGameWindow();
+		m_GameWindowNoticeShown = view.FromScene && gameWindow.HasRequests();
+		if (!m_GameWindowNoticeShown)
+			return;
+		if (gameWindow.GetVersion() != m_GameWindowNoticeVersion)
+		{
+			m_GameWindowNotice = gameWindow.DescribeForPeople();
+			m_GameWindowNoticeVersion = gameWindow.GetVersion();
+		}
+		const ImVec2 padding = ImGui::GetStyle().FramePadding;
+		const float margin = ImGui::GetStyle().ItemSpacing.x;
+		const ImVec2 textSize = ImGui::CalcTextSize(m_GameWindowNotice.c_str());
+		const float x = std::max(m_Image.Min.x + (m_Image.Size.x - textSize.x - padding.x * 2.0f) * 0.5f, m_Image.Min.x);
+		const float y = m_Image.Min.y + m_Image.Size.y - textSize.y - padding.y * 2.0f - margin;
+		DrawTextBox(drawList, ImVec2(x, y), { m_GameWindowNotice }, UI::GetThemeColors().TextSecondary);
 	}
 
 	void ViewportPanel::DrawStatsOverlay(ImDrawList* drawList, const ImVec2& position, const ViewportRenderer& renderer, const ViewportView& view, const EditorFrameStats& frame)

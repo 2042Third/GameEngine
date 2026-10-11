@@ -1,10 +1,19 @@
-// The gameplay helpers (Random, Timer, KeyRepeat) and the game flow (Game) on "Game Features". The in-process runners set
+// The gameplay helpers (Random, Timer, KeyRepeat), the game's window and save files, and the game flow (Game) on "Game
+// Features". Every runner provides a window (the editor records the requests, the runtime applies them after the frame or,
+// headless, reports them) and a save directory (the editor's project, the runners' temporary directories, a shipped game's
+// user data: the script deletes what it saved). The in-process runners set
 // QuitFrame to the frame they play after the scenario (PlayFeatureQuitFrame): in it, the script asks for scene loads and
 // then to quit with QuitCode (set by the scene), and the runners check that whoever runs the scene (the headless scene
 // itself, the editor, the game runtime) honors the quit. The real executables' runs never set it, so their games keep
 // running for as many frames as they play.
 
 #include "FeatureScript.h"
+
+#include <algorithm>
+#include <cstdint>
+#include <span>
+#include <string>
+#include <vector>
 
 using namespace Strata;
 using namespace FeatureTest;
@@ -27,6 +36,8 @@ public:
 		Journal(*this, "GameFeatures", "OnCreate");
 		Expect(QuitCode != 0, "the scene sets the exit code");
 		CheckRandom();
+		CheckWindow();
+		CheckSaves();
 		m_Countdown.Start(0.5f);
 		m_Ticker.Start(0.1f, true);
 	}
@@ -71,6 +82,31 @@ public:
 		}
 	}
 private:
+	void CheckWindow()
+	{
+		Expect(Game::SetWindowMode(WindowMode::Windowed), "Game::SetWindowMode");
+		Expect(Game::SetResolution(1280, 720), "Game::SetResolution");
+		Expect(Game::SetVSync(true), "Game::SetVSync");
+		// The size before the requests apply: the window's, the editor's game view, or zero for a headless game.
+		const glm::uvec2 size = Game::GetWindowSize();
+		Expect(size.x <= 16384 && size.y <= 16384, "Game::GetWindowSize");
+	}
+
+	void CheckSaves()
+	{
+		const std::string progress = "checkpoint " + std::to_string(QuitCode);
+		const std::vector<uint8_t> bytes = { 0, 1, 2, 254, 255 };
+		Expect(Game::WriteSaveFile("Feature Progress", progress), "Game::WriteSaveFile(text)");
+		Expect(Game::WriteSaveFile("Feature.bin", std::span<const uint8_t>(bytes)), "Game::WriteSaveFile(bytes)");
+		Expect(Game::ReadSaveText("Feature Progress") == progress, "Game::ReadSaveText");
+		Expect(Game::ReadSaveFile("Feature.bin") == bytes, "Game::ReadSaveFile");
+		const std::vector<std::string> saves = Game::ListSaveFiles();
+		const auto listed = [&saves](const char* name) { return std::find(saves.begin(), saves.end(), name) != saves.end(); };
+		Expect(listed("Feature Progress") && listed("Feature.bin"), "Game::ListSaveFiles");
+		Expect(Game::DeleteSaveFile("Feature Progress") && Game::DeleteSaveFile("Feature.bin"), "Game::DeleteSaveFile");
+		Expect(!Game::ReadSaveText("Feature Progress") && !Game::DeleteSaveFile("Feature.bin"), "deleted saves are gone");
+	}
+
 	void CheckRandom()
 	{
 		Random random(static_cast<uint64_t>(QuitCode));

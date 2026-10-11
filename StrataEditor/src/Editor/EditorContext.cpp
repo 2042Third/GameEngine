@@ -69,6 +69,17 @@ namespace Strata
 		  m_RecentProjects(specification.RecentProjectsFile, specification.RecentProjectsReadOnly)
 	{
 		ActivateBuiltinAssets();
+		m_GameWindowProvider = CreateScope<EngineServices::ScopedProvider<IGameWindow>>(m_GameWindow);
+		m_GameSavesProvider = CreateScope<EngineServices::ScopedProvider<IGameSaves>>(m_GameSaves);
+		// What the game asked of its shell: window requests (recorded, not applied), its cursor, where its saves go.
+		SetStatusProvider("game", [this]()
+		{
+			const std::optional<std::filesystem::path> saves = GetGameSaveDirectory();
+			const CursorMode cursor = Input::GetGameCursorMode();
+			return nlohmann::json { { "windowRequests", m_GameWindow.Describe() },
+				{ "cursor", cursor == CursorMode::Locked ? "locked" : (cursor == CursorMode::Hidden ? "hidden" : "normal") },
+				{ "saveDirectory", saves ? nlohmann::json(FileSystem::ToUTF8(*saves)) : nlohmann::json(nullptr) } };
+		});
 		// The asset manager of the open project, or the built-in assets' without one (asset.stats has the details).
 		SetStatusProvider("assets", [this]()
 		{
@@ -460,6 +471,7 @@ namespace Strata
 		m_RuntimeSceneAsset = UUID::Null();
 		// Keys a tool held down in an earlier session (input.* commands) must not leak into this one.
 		ResetSimulatedInput();
+		ResetGameShell();
 		m_RuntimeScene->SetTimeDilation(m_Specification.TimeDilation);
 		m_RuntimeScene->OnRuntimeStart(mode);
 		m_SceneState = mode == SceneRuntimeMode::Play ? SceneState::Play : SceneState::Simulate;
@@ -479,6 +491,7 @@ namespace Strata
 		AudioEngine::SetMasterVolume(m_MasterVolumeBeforePlay);
 		m_GameInputActive = false;
 		ResetSimulatedInput(); // The game that a tool's simulated input was meant for is gone
+		ResetGameShell();
 		UpdateInputSuspension();
 		PruneSelection(); // Entities created during play are gone
 	}
@@ -585,6 +598,19 @@ namespace Strata
 	{
 		Input::ClearSimulated();
 		m_SimulatedInput.Reset();
+	}
+
+	void EditorContext::ResetGameShell()
+	{
+		m_GameWindow.Clear();
+		Input::SetGameCursorMode(CursorMode::Normal);
+	}
+
+	std::optional<std::filesystem::path> EditorContext::GetGameSaveDirectory() const
+	{
+		if (!m_Project)
+			return std::nullopt;
+		return m_Project->GetIntermediateDirectory() / "Saves";
 	}
 
 	////////////////////////////////////////////////////////////////////////////////

@@ -884,6 +884,31 @@ TEST_SUITE("Editor.UI")
 		editor.Run("play.stop");
 	}
 
+	TEST_CASE("The game view says what the game asked of its window, which play mode does not apply")
+	{
+		ScopedAudioEngine audio;
+		REQUIRE(audio.Initialized);
+		HarnessEditor editor({}, WithFeatureProject("EditorUIGameWindow"));
+		editor.Run("script.load", { { "path", FileSystem::ToUTF8(GetTestScriptModule(STRATA_TEST_SCRIPTS_API)) } });
+		const nlohmann::json created = editor.Run("entity.create", { { "name", "Display Options" } });
+		editor.Run("script.add", { { "entity", created["id"] }, { "class", "WindowRequests" }, { "fields", { { "Mode", 1 }, { "Width", 1920 }, { "Height", 1080 } } } });
+		editor.Frames(2);
+		const ViewportPanel* viewport = editor.Layer->GetPanels().Get<ViewportPanel>(EditorPanels::c_Viewport);
+		REQUIRE(viewport);
+		CHECK(viewport->GetShownGameWindowNotice().empty());
+
+		REQUIRE(editor.Click("Toolbar.Play"));
+		editor.Frames(3);
+		REQUIRE(editor.Context().IsPlaying());
+		// The requests reach the editor's game window service only (EditorHost offers no way to change the editor's window).
+		CHECK(viewport->GetShownGameWindowNotice() == "The game asked for a fullscreen window at 1920 x 1080 pixels with vsync off; play mode keeps the editor's window.");
+		CHECK(editor.Run("editor.status")["game"]["windowRequests"]["mode"] == "fullscreen");
+
+		REQUIRE(editor.Click("Toolbar.Stop"));
+		editor.Frames(1);
+		CHECK(viewport->GetShownGameWindowNotice().empty());
+	}
+
 	TEST_CASE("Gizmo drags snap per the toolbar's snap toggle, inverted while Ctrl is held")
 	{
 		HarnessEditor editor({}, WithFeatureProject("EditorUISnap"));

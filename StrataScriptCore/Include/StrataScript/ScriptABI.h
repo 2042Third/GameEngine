@@ -219,6 +219,22 @@ extern "C"
 		&& offsetof(StrataScriptCharacterState, Velocity) == 40 && offsetof(StrataScriptCharacterState, Padding2) == 52,
 		"StrataScriptCharacterState's layout is part of the ABI");
 
+	/* The cursor over the game (SetCursorMode). */
+	typedef enum StrataScriptCursorMode
+	{
+		StrataScriptCursorMode_Normal = 0,
+		StrataScriptCursorMode_Hidden = 1, /* Hidden over the game's window */
+		StrataScriptCursorMode_Locked = 2  /* Hidden and kept in the game's window; mouse deltas keep coming (first-person cameras) */
+	} StrataScriptCursorMode;
+
+	/* How the game's window shows (SetWindowMode). */
+	typedef enum StrataScriptWindowMode
+	{
+		StrataScriptWindowMode_Windowed = 0,
+		StrataScriptWindowMode_Fullscreen = 1, /* Exclusive: the display switches to the game's resolution */
+		StrataScriptWindowMode_Borderless = 2  /* A window covering the display at the desktop's resolution */
+	} StrataScriptWindowMode;
+
 	/*
 	 * Engine services for scripts. Unless noted otherwise, functions taking a context only work while the engine is
 	 * calling into the module for that context, on the engine's main thread; otherwise they fail (returning false, 0
@@ -411,6 +427,53 @@ extern "C"
 		bool (*CharacterJump)(StrataScriptContext* context, StrataScriptEntityID entity, float speed);
 		bool (*CharacterTeleport)(StrataScriptContext* context, StrataScriptEntityID entity, const float position[3]);
 		bool (*CharacterGetState)(StrataScriptContext* context, StrataScriptEntityID entity, StrataScriptCharacterState* outState);
+
+		/*
+		 * Gamepads (added after the initial set of ABI version 1: check ST_SCRIPT_HAS_MEMBER before use). Gamepads are numbered
+		 * 0 to 3; buttons (0 to 14) and axes (0 to 5) follow the GLFW gamepad mapping, an Xbox-style layout (the SDK's
+		 * GamepadButton and GamepadAxis). Sticks range from -1 to 1 with +X right and +Y up, triggers from 0 (released) to 1;
+		 * the values are the device's, without a dead zone (the SDK applies one). Like keys, buttons and axes report nothing
+		 * from the device while the game has no input focus (simulated input still comes through).
+		 */
+		bool (*IsGamepadConnected)(StrataScriptContext* context, uint32_t gamepad);
+		bool (*IsGamepadButtonDown)(StrataScriptContext* context, uint32_t gamepad, uint32_t button);
+		bool (*IsGamepadButtonPressed)(StrataScriptContext* context, uint32_t gamepad, uint32_t button);
+		bool (*IsGamepadButtonReleased)(StrataScriptContext* context, uint32_t gamepad, uint32_t button);
+		float (*GetGamepadAxis)(StrataScriptContext* context, uint32_t gamepad, uint32_t axis);
+
+		/*
+		 * The cursor (added after the initial set of ABI version 1: check ST_SCRIPT_HAS_MEMBER before use): a
+		 * StrataScriptCursorMode. It applies while the game has the input: in the editor while the game view has the focus
+		 * (Shift+F1 frees the cursor, clicking the game view takes it again, stopping play restores Normal).
+		 */
+		void (*SetCursorMode)(StrataScriptContext* context, uint32_t mode);
+		uint32_t (*GetCursorMode)(StrataScriptContext* context);
+
+		/*
+		 * The game's window (added after the initial set of ABI version 1: check ST_SCRIPT_HAS_MEMBER before use). Requests are
+		 * checked at once and applied after the frame: a shipped game changes its window, the editor's play mode records them
+		 * (editor.status, a notice in the game view) without touching the editor's window, a headless game accepts them.
+		 * SetWindowMode takes a StrataScriptWindowMode; SetResolution 1 to 16384 pixels per side. GetWindowSize reports the
+		 * pixels the game renders into now (the window's framebuffer, the editor's game view).
+		 */
+		bool (*SetWindowMode)(StrataScriptContext* context, uint32_t mode);
+		bool (*SetResolution)(StrataScriptContext* context, uint32_t width, uint32_t height);
+		bool (*SetVSync)(StrataScriptContext* context, bool enabled);
+		bool (*GetWindowSize)(StrataScriptContext* context, uint32_t outSize[2]);
+
+		/*
+		 * Save files (added after the initial set of ABI version 1: check ST_SCRIPT_HAS_MEMBER before use): named byte blobs
+		 * in the game's save directory (a shipped game: <user data>/<Game>/Saves; the editor: <project>/.strata/Saves). Names
+		 * are 1 to 64 ASCII letters, digits, spaces, '-', '_' and '.' (not at the start or end), without "..": the engine
+		 * refuses others, so no name reaches another directory. Writes replace the file atomically (at most 64 MiB). The calls
+		 * read and write the disk before they return: keep saves small. ReadSaveFile copies at most `capacity` bytes and
+		 * reports the file's size in outSize (false for a file that does not exist); ListSaveFiles copies the names, sorted
+		 * and each followed by '\n', following the text buffer protocol.
+		 */
+		bool (*WriteSaveFile)(StrataScriptContext* context, StrataScriptString name, const void* data, uint64_t size);
+		bool (*ReadSaveFile)(StrataScriptContext* context, StrataScriptString name, void* buffer, uint64_t capacity, uint64_t* outSize);
+		bool (*DeleteSaveFile)(StrataScriptContext* context, StrataScriptString name);
+		uint64_t (*ListSaveFiles)(StrataScriptContext* context, char* buffer, uint64_t capacity);
 
 		/* New functions are appended here (see the compatibility rules above). */
 	} StrataScriptHostAPI;

@@ -68,11 +68,19 @@ namespace Strata::Tests
 				Input::ProcessMouseButton(Mouse::ButtonLeft, true);
 				Input::ProcessMouseMove({ 120.0f, 50.0f });
 				Input::ProcessScroll({ 0.0f, 2.0f });
+				// Gamepad 0 connects with A down, the left stick at full tilt and the right trigger half pressed.
+				const float axes[c_GamepadAxisCount] = { 0.6f, 0.8f, 0.0f, 0.0f, 0.0f, 0.5f };
+				bool buttons[c_GamepadButtonCount] = {};
+				buttons[static_cast<size_t>(GamepadButton::A)] = true;
+				Input::ProcessGamepad(0, true, axes, buttons);
 			}
 			else if (frame == pressFrame + 2)
 			{
 				Input::ProcessKey(Key::Space, false);
 				Input::ProcessMouseButton(Mouse::ButtonLeft, false);
+				const float axes[c_GamepadAxisCount] = {};
+				const bool buttons[c_GamepadButtonCount] = {};
+				Input::ProcessGamepad(0, true, axes, buttons);
 			}
 		}
 

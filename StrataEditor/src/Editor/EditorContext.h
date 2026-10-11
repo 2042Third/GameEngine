@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Editor/EditorGameWindow.h"
 #include "Editor/EditorViewport.h"
 #include "Editor/GameExport.h"
 #include "Editor/ProjectTemplates.h"
@@ -11,6 +12,7 @@
 
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/Crypto.h>
+#include <Strata/Core/EngineServices.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Project/Project.h>
 #include <Strata/Scene/Scene.h>
@@ -179,6 +181,13 @@ namespace Strata
 		const SimulatedInput& GetSimulatedInput() const { return m_SimulatedInput; }
 		// Whether keyboard shortcuts that edit the scene or the project (undo, delete, duplicate, save) may act now.
 		bool AcceptsEditShortcuts() const { return !m_GameInputActive; }
+		// The game's shell while it plays here: its window requests are recorded, not applied (EditorGameWindow, the engine
+		// service IGameWindow while the context lives), its save files go to <project>/.strata/Saves (IGameSaves; none without
+		// a project). Starting and stopping play forget the window requests and give the cursor back (the game's cursor mode
+		// returns to Normal).
+		EditorGameWindow& GetGameWindow() { return m_GameWindow; }
+		const EditorGameWindow& GetGameWindow() const { return m_GameWindow; }
+		std::optional<std::filesystem::path> GetGameSaveDirectory() const;
 
 		//////////////////////////////////////////////////////////////////////////
 		// Selection (entities of the active scene)
@@ -315,6 +324,8 @@ namespace Strata
 		void UpdateInputSuspension();
 		// Drops the simulated device's state and the commands' holds (play mode starts or stops).
 		void ResetSimulatedInput();
+		// Forgets the game's window requests and frees the cursor it may have locked (play mode starts or stops).
+		void ResetGameShell();
 		// Replaces the running scene with a scene asset, or with a restart of the running scene for the null handle.
 		bool SwitchRuntimeScene(AssetHandle scene, std::string* outError);
 		void ResetScene(Ref<Scene> scene, AssetHandle handle);
@@ -351,6 +362,23 @@ namespace Strata
 		float m_MasterVolumeBeforePlay = 1.0f;
 		bool m_GameInputActive = false;
 		SimulatedInput m_SimulatedInput;
+		// The game's shell (see GetGameWindow): the services and, declared after them so that they end first, their providers.
+		class ProjectGameSaves final : public IGameSaves
+		{
+		public:
+			explicit ProjectGameSaves(const EditorContext& context)
+				: m_Context(context)
+			{
+			}
+
+			std::optional<std::filesystem::path> GetSaveDirectory() override { return m_Context.GetGameSaveDirectory(); }
+		private:
+			const EditorContext& m_Context;
+		};
+		EditorGameWindow m_GameWindow;
+		ProjectGameSaves m_GameSaves { *this };
+		Scope<EngineServices::ScopedProvider<IGameWindow>> m_GameWindowProvider;
+		Scope<EngineServices::ScopedProvider<IGameSaves>> m_GameSavesProvider;
 
 		std::vector<UUID> m_Selection;
 		std::unordered_set<UUID> m_SelectionSet; // The same entities, for IsSelected

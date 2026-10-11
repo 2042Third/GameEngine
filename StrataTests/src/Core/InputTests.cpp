@@ -349,6 +349,162 @@ TEST_SUITE("Core.Input")
 		Input::Reset();
 	}
 
+	TEST_CASE("Gamepad axes are clamped to their ranges and rest at zero, triggers at released")
+	{
+		Input::Reset();
+		Input::BeginFrame();
+		const float nan = std::numeric_limits<float>::quiet_NaN();
+		float axes[c_GamepadAxisCount] = { 2.0f, -3.0f, nan, 0.25f, -1.0f, 0.75f };
+		bool buttons[c_GamepadButtonCount] = {};
+		Input::ProcessGamepad(1, true, axes, buttons);
+		CHECK(Input::GetGamepadAxis(1, GamepadAxis::LeftX) == 1.0f);
+		CHECK(Input::GetGamepadAxis(1, GamepadAxis::LeftY) == -1.0f);
+		CHECK(Input::GetGamepadAxis(1, GamepadAxis::RightX) == 0.0f); // Not a number: at rest
+		CHECK(Input::GetGamepadAxis(1, GamepadAxis::RightY) == 0.25f);
+		CHECK(Input::GetGamepadAxis(1, GamepadAxis::LeftTrigger) == 0.0f); // Triggers do not go below released
+		CHECK(Input::GetGamepadAxis(1, GamepadAxis::RightTrigger) == 0.75f);
+		CHECK(GetGamepadAxisMinimum(GamepadAxis::LeftY) == -1.0f);
+		CHECK(GetGamepadAxisMinimum(GamepadAxis::RightTrigger) == 0.0f);
+
+		// Out of range gamepads and axes read as nothing.
+		CHECK(Input::GetGamepadAxis(c_MaxGamepads, GamepadAxis::LeftX) == 0.0f);
+		CHECK(Input::GetGamepadAxis(1, static_cast<GamepadAxis>(c_GamepadAxisCount)) == 0.0f);
+		CHECK_FALSE(Input::IsGamepadButtonDown(c_MaxGamepads, GamepadButton::A));
+		CHECK_FALSE(Input::IsGamepadButtonDown(1, static_cast<GamepadButton>(c_GamepadButtonCount)));
+
+		// A disabled game sees the sticks and triggers at rest.
+		Input::SetEnabled(false);
+		CHECK(Input::GetGamepadAxis(1, GamepadAxis::RightY) == 0.0f);
+		CHECK(Input::GetGamepadAxis(1, GamepadAxis::RightTrigger) == 0.0f);
+		Input::Reset();
+	}
+
+	TEST_CASE("Simulated gamepads connect when used, merge with the devices and release like keys")
+	{
+		Input::Reset();
+		Input::BeginFrame();
+		CHECK_FALSE(Input::IsGamepadConnected(2));
+		Input::SimulateGamepadButton(2, GamepadButton::A, true);
+		Input::SimulateGamepadAxis(2, GamepadAxis::LeftX, 0.5f);
+		Input::SimulateGamepadAxis(2, GamepadAxis::RightTrigger, -4.0f); // Clamped to released
+		Input::SimulateGamepadAxis(2, GamepadAxis::LeftY, std::numeric_limits<float>::infinity()); // Ignored
+		CHECK_FALSE(Input::IsGamepadConnected(2)); // Queued until the next input frame
+
+		Input::BeginFrame();
+		CHECK(Input::IsGamepadConnected(2));
+		CHECK(Input::IsSimulatedGamepadConnected(2));
+		CHECK(Input::IsGamepadButtonDown(2, GamepadButton::A));
+		CHECK(Input::IsGamepadButtonPressed(2, GamepadButton::A));
+		CHECK(Input::IsSimulatedGamepadButtonDown(2, GamepadButton::A));
+		CHECK(Input::GetGamepadAxis(2, GamepadAxis::LeftX) == 0.5f);
+		CHECK(Input::GetGamepadAxis(2, GamepadAxis::RightTrigger) == 0.0f);
+		CHECK(Input::GetGamepadAxis(2, GamepadAxis::LeftY) == 0.0f);
+		REQUIRE(Input::GetSimulatedGamepadAxis(2, GamepadAxis::LeftX));
+		CHECK(*Input::GetSimulatedGamepadAxis(2, GamepadAxis::LeftX) == 0.5f);
+		CHECK_FALSE(Input::GetSimulatedGamepadAxis(2, GamepadAxis::LeftY));
+
+		// A device on the same slot: its buttons merge, a held simulated axis wins over its stick.
+		float axes[c_GamepadAxisCount] = { -0.75f, 0.5f, 0.0f, 0.0f, 0.0f, 0.0f };
+		bool buttons[c_GamepadButtonCount] = {};
+		buttons[static_cast<size_t>(GamepadButton::B)] = true;
+		Input::BeginFrame();
+		Input::ProcessGamepad(2, true, axes, buttons);
+		CHECK(Input::IsGamepadButtonDown(2, GamepadButton::A));
+		CHECK_FALSE(Input::IsGamepadButtonPressed(2, GamepadButton::A));
+		CHECK(Input::IsGamepadButtonPressed(2, GamepadButton::B));
+		CHECK(Input::GetGamepadAxis(2, GamepadAxis::LeftX) == 0.5f);
+		CHECK(Input::GetGamepadAxis(2, GamepadAxis::LeftY) == 0.5f);
+
+		// Releasing the axis gives it back to the device; releasing the button is a release transition.
+		Input::ReleaseSimulatedGamepadAxis(2, GamepadAxis::LeftX);
+		Input::SimulateGamepadButton(2, GamepadButton::A, false);
+		Input::BeginFrame();
+		CHECK(Input::GetGamepadAxis(2, GamepadAxis::LeftX) == -0.75f);
+		CHECK_FALSE(Input::IsGamepadButtonDown(2, GamepadButton::A));
+		CHECK(Input::IsGamepadButtonReleased(2, GamepadButton::A));
+
+		// Simulated gamepads reach the game while device input is disabled.
+		Input::SetEnabled(false);
+		Input::SimulateGamepadButton(2, GamepadButton::Start, true);
+		Input::SimulateGamepadAxis(2, GamepadAxis::RightY, -1.0f);
+		Input::BeginFrame();
+		CHECK(Input::IsGamepadButtonPressed(2, GamepadButton::Start));
+		CHECK_FALSE(Input::IsGamepadButtonDown(2, GamepadButton::B));
+		CHECK(Input::GetGamepadAxis(2, GamepadAxis::RightY) == -1.0f);
+		CHECK(Input::GetGamepadAxis(2, GamepadAxis::LeftY) == 0.0f);
+
+		// Releasing everything lets go of the buttons and axes; clearing forgets the gamepad.
+		Input::SimulateGamepadButton(2, GamepadButton::X, true); // Still queued: dropped
+		Input::ReleaseAllSimulated();
+		Input::BeginFrame();
+		CHECK(Input::IsGamepadButtonReleased(2, GamepadButton::Start));
+		CHECK_FALSE(Input::IsGamepadButtonDown(2, GamepadButton::X));
+		CHECK_FALSE(Input::GetSimulatedGamepadAxis(2, GamepadAxis::RightY));
+		CHECK(Input::IsSimulatedGamepadConnected(2));
+		Input::ClearSimulated();
+		CHECK_FALSE(Input::IsSimulatedGamepadConnected(2));
+		CHECK(Input::IsGamepadConnected(2)); // The device is still there
+
+		// Out of range gamepads and controls are ignored.
+		Input::SimulateGamepadButton(c_MaxGamepads, GamepadButton::A, true);
+		Input::SimulateGamepadAxis(0, static_cast<GamepadAxis>(c_GamepadAxisCount), 1.0f);
+		Input::BeginFrame();
+		CHECK_FALSE(Input::IsSimulatedGamepadConnected(0));
+		CHECK_FALSE(Input::HasQueuedSimulatedInput());
+		Input::Reset();
+	}
+
+	TEST_CASE("The game's cursor mode applies to the window only while the game has the input")
+	{
+		struct TestWindow final : public InputWindow
+		{
+			uint32_t GetWidth() const override { return 800; }
+			uint32_t GetHeight() const override { return 600; }
+			void SetCursorMode(CursorMode mode) override { Cursor = mode; Changes++; }
+
+			CursorMode Cursor = CursorMode::Normal;
+			int Changes = 0;
+		};
+
+		TestWindow window;
+		Input::Reset();
+		Input::SetWindow(&window);
+
+		Input::SetGameCursorMode(CursorMode::Locked);
+		CHECK(Input::GetGameCursorMode() == CursorMode::Locked);
+		CHECK(window.Cursor == CursorMode::Locked);
+		CHECK(Input::GetCursorMode() == CursorMode::Locked);
+
+		// The game loses the input (the editor's game view lost the focus): the cursor is free, and comes back locked.
+		Input::SetEnabled(false);
+		CHECK(window.Cursor == CursorMode::Normal);
+		CHECK(Input::GetGameCursorMode() == CursorMode::Locked);
+		Input::SetGameCursorMode(CursorMode::Hidden); // Recorded, applied once the game has the input again
+		CHECK(window.Cursor == CursorMode::Normal);
+		Input::SetEnabled(true);
+		CHECK(window.Cursor == CursorMode::Hidden);
+
+		// Enabling input that is enabled changes nothing.
+		const int changes = window.Changes;
+		Input::SetEnabled(true);
+		CHECK(window.Changes == changes);
+
+		// A game with the normal cursor leaves the window's cursor to the editor (e.g. its fly mode).
+		Input::SetGameCursorMode(CursorMode::Normal);
+		Input::SetCursorMode(CursorMode::Locked);
+		Input::SetEnabled(false);
+		Input::SetEnabled(true);
+		CHECK(window.Cursor == CursorMode::Locked);
+
+		// Resetting forgets the game's mode.
+		Input::SetGameCursorMode(CursorMode::Hidden);
+		Input::Reset();
+		CHECK(Input::GetGameCursorMode() == CursorMode::Normal);
+		Input::SetCursorMode(CursorMode::Normal);
+		Input::SetWindow(nullptr);
+		Input::Reset();
+	}
+
 	TEST_CASE("Clearing simulated input forgets held keys and queued events without releases")
 	{
 		Input::Reset();
@@ -419,5 +575,36 @@ TEST_SUITE("Core.InputNames")
 		CHECK_FALSE(InputNames::FindMouseButton("Button8"));
 		CHECK_FALSE(InputNames::FindMouseButton(""));
 		CHECK(InputNames::GetMouseButtonName(c_MaxMouseButtons) == nullptr);
+	}
+
+	TEST_CASE("Gamepad buttons and axes are named like their constants")
+	{
+		const std::span<const char* const> buttons = InputNames::GetGamepadButtonNames();
+		REQUIRE(buttons.size() == c_GamepadButtonCount);
+		for (uint32_t index = 0; index < c_GamepadButtonCount; index++)
+		{
+			const GamepadButton button = static_cast<GamepadButton>(index);
+			CHECK(InputNames::FindGamepadButton(buttons[index]) == button);
+			CHECK(InputNames::FindGamepadButton(StringUtils::ToLower(buttons[index])) == button);
+			CHECK(std::string(InputNames::GetGamepadButtonName(button)) == buttons[index]);
+		}
+		CHECK(InputNames::FindGamepadButton("A") == GamepadButton::A);
+		CHECK(InputNames::FindGamepadButton("leftbumper") == GamepadButton::LeftBumper);
+		CHECK(InputNames::FindGamepadButton("DPadLeft") == GamepadButton::DPadLeft);
+		CHECK_FALSE(InputNames::FindGamepadButton("Triangle"));
+		CHECK_FALSE(InputNames::FindGamepadButton(""));
+		CHECK(InputNames::GetGamepadButtonName(static_cast<GamepadButton>(c_GamepadButtonCount)) == nullptr);
+
+		const std::span<const char* const> axes = InputNames::GetGamepadAxisNames();
+		REQUIRE(axes.size() == c_GamepadAxisCount);
+		for (uint32_t index = 0; index < c_GamepadAxisCount; index++)
+		{
+			const GamepadAxis axis = static_cast<GamepadAxis>(index);
+			CHECK(InputNames::FindGamepadAxis(axes[index]) == axis);
+			CHECK(std::string(InputNames::GetGamepadAxisName(axis)) == axes[index]);
+		}
+		CHECK(InputNames::FindGamepadAxis("rightTrigger") == GamepadAxis::RightTrigger);
+		CHECK_FALSE(InputNames::FindGamepadAxis("LeftZ"));
+		CHECK(InputNames::GetGamepadAxisName(static_cast<GamepadAxis>(c_GamepadAxisCount)) == nullptr);
 	}
 }

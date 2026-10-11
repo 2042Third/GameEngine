@@ -66,6 +66,9 @@ namespace Strata
 			}
 		}
 		ScriptEngine::SetActive(runtime->m_ScriptEngine);
+		// The game's save files, from its first script call on (OnCreate may load a save).
+		runtime->m_Saves = options.SaveFilesDirectory.empty() ? SaveDirectory::ForGame(runtime->m_Manifest.Name) : CreateScope<SaveDirectory>(options.SaveFilesDirectory);
+		runtime->m_SavesProvider = CreateScope<EngineServices::ScopedProvider<IGameSaves>>(*runtime->m_Saves);
 
 		if (!runtime->LoadScene(runtime->m_Manifest.StartScene, outError))
 			return nullptr; // The destructor deactivates the asset manager and the script engine

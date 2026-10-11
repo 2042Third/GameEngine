@@ -4,10 +4,13 @@
 #include "FeatureTest/FeatureTestUtils.h"
 #include "Scripting/ScriptTestUtils.h"
 #include "Strata/Asset/AssetImporter.h"
+#include "Strata/Core/EngineServices.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JsonUtils.h"
+#include "Strata/Core/SaveFiles.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Renderer/Texture.h"
+#include "Strata/Runtime/GameWindowService.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scripting/ScriptHostAPI.h"
@@ -208,6 +211,11 @@ TEST_SUITE("FeatureTest")
 		LoadAllAssets(*project.GetAssetManager());
 		const Ref<Scene> scene = project.LoadStartScene();
 		ScopedScriptEngine engine(GetFeatureScriptModule());
+		// The game's shell as a headless game has it: a window service without a window, and saves in a directory of its own.
+		GameWindowService window(nullptr);
+		EngineServices::ScopedProvider<IGameWindow> windowProvider(window);
+		SaveDirectory saves(CreateTemporaryDirectory("FeatureSaves"));
+		EngineServices::ScopedProvider<IGameSaves> savesProvider(saves);
 
 		ScopedScriptLogLevel scriptLogLevel;
 		LogCapture log;

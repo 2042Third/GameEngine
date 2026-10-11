@@ -2,6 +2,8 @@
 
 #include "Strata/Asset/RuntimeAssetManager.h"
 #include "Strata/Core/Base.h"
+#include "Strata/Core/EngineServices.h"
+#include "Strata/Core/SaveFiles.h"
 #include "Strata/Core/Timestep.h"
 #include "Strata/Project/GameManifest.h"
 #include "Strata/Scene/Scene.h"
@@ -25,6 +27,9 @@ namespace Strata
 		// (Scene::SetTimeDilation): for games driven by the wall clock. Off by default, so that tools and tests that drive
 		// the runtime with chosen timesteps step deterministically.
 		bool TimeDilation = false;
+		// Where the game keeps its save files (scripts' Game::WriteSaveFile: the engine service IGameSaves while the runtime
+		// lives); empty: the player's, <user data>/<game name>/Saves.
+		std::filesystem::path SaveFilesDirectory;
 	};
 
 	// Runs an exported game: opens its asset pack (the active asset manager while the runtime lives), loads its script
@@ -52,6 +57,8 @@ namespace Strata
 		const Ref<ScriptEngine>& GetScriptEngine() const { return m_ScriptEngine; }
 		// The crash that disabled the scripts, if they crashed.
 		const std::optional<ScriptFault>& GetScriptFault() const { return m_ScriptFault; }
+		// Where the game keeps its save files (see GameRuntimeOptions::SaveFilesDirectory).
+		std::optional<std::filesystem::path> GetSaveDirectory() const { return m_Saves ? m_Saves->GetSaveDirectory() : std::nullopt; }
 
 		// Stops the current scene and starts another scene of the pack. The current scene keeps running on failure. The
 		// assets the new scene does not use are released a few frames later (AssetManagerBase::ScheduleTrim).
@@ -80,6 +87,8 @@ namespace Strata
 		Ref<ScriptEngine> m_ScriptEngine;
 		Ref<ScriptEngine> m_PreviousScriptEngine; // Active before this runtime; restored when it ends
 		std::optional<ScriptFault> m_ScriptFault;
+		Scope<SaveDirectory> m_Saves;
+		Scope<EngineServices::ScopedProvider<IGameSaves>> m_SavesProvider; // After m_Saves: ends first
 	};
 
 }

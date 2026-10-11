@@ -65,6 +65,29 @@ namespace Strata
 		// The numbered names of the first three buttons, accepted as aliases of Left, Right and Middle.
 		constexpr std::array<const char*, 3> c_MouseButtonAliases = { "Button0", "Button1", "Button2" };
 
+		// In GamepadButton and GamepadAxis order (GamepadCodes.h).
+		constexpr std::array<const char*, c_GamepadButtonCount> c_GamepadButtonNames = {
+			"A", "B", "X", "Y", "LeftBumper", "RightBumper", "Back", "Start", "Guide", "LeftThumb", "RightThumb",
+			"DPadUp", "DPadRight", "DPadDown", "DPadLeft"
+		};
+		static_assert(static_cast<uint32_t>(GamepadButton::DPadLeft) == c_GamepadButtonCount - 1);
+
+		constexpr std::array<const char*, c_GamepadAxisCount> c_GamepadAxisNames = {
+			"LeftX", "LeftY", "RightX", "RightY", "LeftTrigger", "RightTrigger"
+		};
+		static_assert(static_cast<uint32_t>(GamepadAxis::RightTrigger) == c_GamepadAxisCount - 1);
+
+		template<size_t Count>
+		std::optional<size_t> FindName(const std::array<const char*, Count>& names, std::string_view name)
+		{
+			for (size_t index = 0; index < Count; index++)
+			{
+				if (StringUtils::EqualsIgnoreCase(names[index], name))
+					return index;
+			}
+			return std::nullopt;
+		}
+
 	}
 
 	namespace InputNames
@@ -118,6 +141,40 @@ namespace Strata
 		std::span<const char* const> GetMouseButtonNames()
 		{
 			return c_MouseButtonNames;
+		}
+
+		const char* GetGamepadButtonName(GamepadButton button)
+		{
+			const size_t index = static_cast<size_t>(button);
+			return index < c_GamepadButtonNames.size() ? c_GamepadButtonNames[index] : nullptr;
+		}
+
+		std::optional<GamepadButton> FindGamepadButton(std::string_view name)
+		{
+			const std::optional<size_t> index = FindName(c_GamepadButtonNames, name);
+			return index ? std::optional<GamepadButton>(static_cast<GamepadButton>(*index)) : std::nullopt;
+		}
+
+		std::span<const char* const> GetGamepadButtonNames()
+		{
+			return c_GamepadButtonNames;
+		}
+
+		const char* GetGamepadAxisName(GamepadAxis axis)
+		{
+			const size_t index = static_cast<size_t>(axis);
+			return index < c_GamepadAxisNames.size() ? c_GamepadAxisNames[index] : nullptr;
+		}
+
+		std::optional<GamepadAxis> FindGamepadAxis(std::string_view name)
+		{
+			const std::optional<size_t> index = FindName(c_GamepadAxisNames, name);
+			return index ? std::optional<GamepadAxis>(static_cast<GamepadAxis>(*index)) : std::nullopt;
+		}
+
+		std::span<const char* const> GetGamepadAxisNames()
+		{
+			return c_GamepadAxisNames;
 		}
 
 	}

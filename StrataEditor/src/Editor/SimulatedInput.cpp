@@ -3,7 +3,10 @@
 #include <Strata/Input/Input.h>
 #include <Strata/Input/InputNames.h>
 
+#include <spdlog/fmt/fmt.h>
+
 #include <algorithm>
+#include <cmath>
 
 namespace Strata
 {
@@ -11,17 +14,30 @@ namespace Strata
 	namespace
 	{
 
-		void SimulateButton(SimulatedButtonType type, uint16_t code, bool down)
+		void SimulateControl(SimulatedControlType type, uint16_t code, bool down)
 		{
-			if (type == SimulatedButtonType::Key)
-				Input::SimulateKey(code, down);
-			else
-				Input::SimulateMouseButton(code, down);
+			switch (type)
+			{
+				case SimulatedControlType::Key:
+					Input::SimulateKey(code, down);
+					break;
+				case SimulatedControlType::MouseButton:
+					Input::SimulateMouseButton(code, down);
+					break;
+				case SimulatedControlType::GamepadButton:
+					Input::SimulateGamepadButton(SimulatedInput::GetGamepad(code), static_cast<GamepadButton>(SimulatedInput::GetGamepadControl(code)), down);
+					break;
+				case SimulatedControlType::GamepadAxis:
+					// Axes are set by HoldAxis; letting go returns them to the device's value.
+					if (!down)
+						Input::ReleaseSimulatedGamepadAxis(SimulatedInput::GetGamepad(code), static_cast<GamepadAxis>(SimulatedInput::GetGamepadControl(code)));
+					break;
+			}
 		}
 
 	}
 
-	Ref<const SimulatedHold> SimulatedInput::Press(SimulatedButtonType type, uint16_t code, uint32_t frames)
+	Ref<const SimulatedHold> SimulatedInput::Press(SimulatedControlType type, uint16_t code, uint32_t frames)
 	{
 		const uint64_t nextFrame = Input::GetFrameIndex() + 1;
 		Ref<SimulatedHold> hold = CreateRef<SimulatedHold>();
@@ -30,12 +46,39 @@ namespace Strata
 		hold->FirstFrame = nextFrame;
 		hold->LastFrame = frames > 0 ? nextFrame + frames - 1 : 0;
 		if (!IsHeld(type, code))
-			SimulateButton(type, code, true);
+			SimulateControl(type, code, true);
 		m_Holds.push_back(hold);
 		return hold;
 	}
 
-	bool SimulatedInput::Release(SimulatedButtonType type, uint16_t code)
+	Ref<const SimulatedHold> SimulatedInput::HoldAxis(uint32_t gamepad, GamepadAxis axis, float value, uint32_t frames)
+	{
+		const uint64_t nextFrame = Input::GetFrameIndex() + 1;
+		const uint16_t code = MakeGamepadCode(gamepad, static_cast<uint32_t>(axis));
+		// The axis takes the new value: the hold before ends without letting the axis go.
+		for (const Ref<SimulatedHold>& previous : m_Holds)
+		{
+			if (previous->Type == SimulatedControlType::GamepadAxis && previous->Code == code)
+			{
+				previous->Ended = true;
+				previous->Interrupted = previous->LastFrame != 0;
+				previous->EndFrame = nextFrame;
+			}
+		}
+		m_Holds.erase(std::remove_if(m_Holds.begin(), m_Holds.end(), [](const Ref<SimulatedHold>& hold) { return hold->Ended; }), m_Holds.end());
+
+		Ref<SimulatedHold> hold = CreateRef<SimulatedHold>();
+		hold->Type = SimulatedControlType::GamepadAxis;
+		hold->Code = code;
+		hold->Value = std::isfinite(value) ? std::clamp(value, GetGamepadAxisMinimum(axis), 1.0f) : 0.0f;
+		hold->FirstFrame = nextFrame;
+		hold->LastFrame = frames > 0 ? nextFrame + frames - 1 : 0;
+		Input::SimulateGamepadAxis(gamepad, axis, hold->Value);
+		m_Holds.push_back(hold);
+		return hold;
+	}
+
+	bool SimulatedInput::Release(SimulatedControlType type, uint16_t code)
 	{
 		bool released = false;
 		// End erases from m_Holds: collect the holds first.
@@ -91,7 +134,7 @@ namespace Strata
 			End(hold, false);
 	}
 
-	std::vector<uint16_t> SimulatedInput::GetHeld(SimulatedButtonType type) const
+	std::vector<uint16_t> SimulatedInput::GetHeld(SimulatedControlType type) const
 	{
 		std::vector<uint16_t> codes;
 		for (const Ref<SimulatedHold>& hold : m_Holds)
@@ -103,6 +146,16 @@ namespace Strata
 		return codes;
 	}
 
+	float SimulatedInput::GetAxisValue(uint16_t code) const
+	{
+		for (const Ref<SimulatedHold>& hold : m_Holds)
+		{
+			if (hold->Type == SimulatedControlType::GamepadAxis && hold->Code == code)
+				return hold->Value;
+		}
+		return 0.0f;
+	}
+
 	std::string SimulatedInput::DescribeHolds() const
 	{
 		std::string text;
@@ -110,20 +163,30 @@ namespace Strata
 		{
 			text += (text.empty() ? "" : ", ") + name;
 		};
-		for (uint16_t key : GetHeld(SimulatedButtonType::Key))
+		for (uint16_t key : GetHeld(SimulatedControlType::Key))
 		{
 			const char* name = InputNames::GetKeyName(key);
 			append(name ? std::string(name) : "Key " + std::to_string(key));
 		}
-		for (uint16_t button : GetHeld(SimulatedButtonType::MouseButton))
+		for (uint16_t button : GetHeld(SimulatedControlType::MouseButton))
 		{
 			const char* name = InputNames::GetMouseButtonName(button);
 			append("Mouse " + (name ? std::string(name) : std::to_string(button)));
 		}
+		for (uint16_t code : GetHeld(SimulatedControlType::GamepadButton))
+		{
+			const char* name = InputNames::GetGamepadButtonName(static_cast<GamepadButton>(GetGamepadControl(code)));
+			append(fmt::format("Gamepad {} {}", GetGamepad(code) + 1, name ? name : std::to_string(GetGamepadControl(code))));
+		}
+		for (uint16_t code : GetHeld(SimulatedControlType::GamepadAxis))
+		{
+			const char* name = InputNames::GetGamepadAxisName(static_cast<GamepadAxis>(GetGamepadControl(code)));
+			append(fmt::format("Gamepad {} {} {:.2f}", GetGamepad(code) + 1, name ? name : std::to_string(GetGamepadControl(code)), GetAxisValue(code)));
+		}
 		return text;
 	}
 
-	bool SimulatedInput::IsHeld(SimulatedButtonType type, uint16_t code) const
+	bool SimulatedInput::IsHeld(SimulatedControlType type, uint16_t code) const
 	{
 		return std::any_of(m_Holds.begin(), m_Holds.end(), [&](const Ref<SimulatedHold>& hold) { return hold->Type == type && hold->Code == code; });
 	}
@@ -135,7 +198,7 @@ namespace Strata
 		hold->EndFrame = Input::GetFrameIndex() + 1;
 		m_Holds.erase(std::remove(m_Holds.begin(), m_Holds.end(), hold), m_Holds.end());
 		if (!IsHeld(hold->Type, hold->Code))
-			SimulateButton(hold->Type, hold->Code, false);
+			SimulateControl(hold->Type, hold->Code, false);
 	}
 
 }

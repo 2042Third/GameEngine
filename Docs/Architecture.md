@@ -106,8 +106,10 @@ process memory with peaks: `GetProcessMemory`, process uptime: `GetProcessUptime
 `Process` (child processes), `DynamicLibrary`, `CrashGuard`, `UUID`, `Hash` (FNV-1a, and CRC-32C with the processor's CRC
 instructions where it has them), `Crypto` (SHA-256, peer authentication), `Base64`,
 `CommandLine`, `Timer`/`FramePacer`, `JsonUtils` (exception-free JSON reads), `SequenceLock` (lock-free hand-off to the
-audio thread), `EngineServices` (process-wide interfaces a module offers the modules that may not include it, such as the
-audio output's master volume, `IAudioOutput`), `FrameProfiler` (the always-on timer of the main thread's frame stages,
+audio thread), `EngineServices` (process-wide interfaces a module or the program running a game offers the modules that
+may not include it, such as the audio output's master volume, `IAudioOutput`, the game's window, `IGameWindow`, and its
+save directory, `IGameSaves`), `SaveFiles` (a game's save files: names checked before any path is formed, atomic writes;
+`SaveDirectory`), `FrameProfiler` (the always-on timer of the main thread's frame stages,
 see [Frame profiler](#frame-profiler)) and `Profiling` (`ST_PROFILE_STAGE`; Tracy with `STRATA_ENABLE_TRACY`).
 
 **Events** (`Events/`). Window, key and mouse events (`ApplicationEvent.h`, `KeyEvent.h`, `MouseEvent.h`, including
@@ -117,11 +119,18 @@ down until one marks it handled (`EventDispatcher`). An unhandled `WindowCloseEv
 can veto closing (the editor asks about unsaved changes).
 
 **Input** (`Input/`). `Input` is a static polling API: down state, per-frame pressed/released transitions, mouse
-position relative to the input viewport, deltas, scrolling and gamepads. `GLFWWindow` feeds it (`Input::Process*`);
+position relative to the input viewport, deltas, scrolling and gamepads (up to four, the GLFW gamepad mapping:
+`GamepadCodes.h`; sticks -1 to 1 with +Y up, triggers 0 released to 1 pressed, which `GLFWWindow` converts GLFW's values
+to; out-of-range and non-finite values are clamped or read at rest). `GLFWWindow` feeds it (`Input::Process*`);
 Input reaches the window only through `InputWindow` (size, cursor mode), which `Window` implements, so the input layer
-stays below the application shell. It also has a virtual device for tools (`SimulateKey` and friends) merged with the
-real devices, `SetEnabled` (device input off, e.g. while the editor's game view has no focus) and `SetSuspended`
-(input frames follow the game's updates). `InputNames` maps key and button names for the `input.*` commands.
+stays below the application shell. It also has a virtual device for tools (`SimulateKey`, `SimulateGamepadButton`,
+`SimulateGamepadAxis` and friends) merged with the real devices (a gamepad simulated input used counts as connected; an
+axis it holds wins over the device's until released), `SetEnabled` (device input off, e.g. while the editor's game view
+has no focus; sticks and triggers then read at rest) and `SetSuspended` (input frames follow the game's updates). The
+cursor mode a game asks for (`SetGameCursorMode`, scripts' `Input::SetCursorMode`) applies to the window only while input
+is enabled: disabling input gives the cursor back, enabling it applies the game's mode again, so a locked cursor in the
+editor stays in the focused game view and Shift+F1 frees it. `InputNames` maps key, button and gamepad control names for
+the `input.*` commands.
 
 **Math** (`Math/`). Engine conventions in `Math.h`: right-handed, +Y up, -Z forward, reversed-Z projections, Euler
 angles in degrees. `AABB`, `Frustum`, `Ray`, and `Random` (thread-local generators).
@@ -533,7 +542,10 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   recomputation (`Scene::ValidateWorldTransforms`, `ValidateHierarchy`; see [Scene caches](#scene-caches)).
 - Gameplay asks the scene's owner to quit or to switch scenes (`Scene::RequestQuit`, `RequestSceneLoad`); owners honor
   the requests after the update. The owners are the editor's play mode (`EditorContext::StartRuntime` plays a
-  `Scene::Copy` of the edited scene; `Stop` discards it) and `GameRuntime`.
+  `Scene::Copy` of the edited scene; `Stop` discards it) and `GameRuntime`. The game's shell (its window and save files,
+  engine services, see [Scene services](#scene-services)) belongs to the program running it: play mode records window
+  requests without touching the editor's window and keeps saves in the project (`<project>/.strata/Saves`); starting and
+  stopping play forget the requests and set the game's cursor mode back to Normal (`EditorContext::ResetGameShell`).
 - **Time dilation** (`Scene::SetTimeDilation`): owners driven by the wall clock (the editor's play mode outside scripted
   runs, `EditorContextSpecification::TimeDilation`; exported games outside `--frames` runs,
   `GameRuntimeOptions::TimeDilation`) let a simulation that cannot keep up with real time slow down: an update stops its
@@ -568,7 +580,13 @@ which means the module is not in the build or its system does not run in this mo
 
 What outlives scenes is an engine service (`Core/EngineServices.h`): a module registers it in its registration function
 while the composition root runs, e.g. the Audio module's `IAudioOutput` (the master volume, which scripts change in any
-scene, also one that plays without audio).
+scene, also one that plays without audio). What belongs to the program running a game is provided for as long as it runs
+the game (`EngineServices::ScopedProvider`, which restores the provider it replaced; scopes end in reverse order):
+
+| Service | Provider | Consumers |
+| --- | --- | --- |
+| `IGameWindow`: window mode, resolution, vsync, the size the game renders at | StrataRuntime's `GameWindowService` (applied after the frame, `ApplyRequests`; headless: accepted and reported back), the editor's `EditorGameWindow` (recorded and reported, never applied: `editor.status` and a notice over the game view) | script host (`Game::SetWindowMode` and friends) |
+| `IGameSaves`: the save directory | `GameRuntime` (`<user data>/<game>/Saves`, `GameRuntimeOptions::SaveFilesDirectory`), `EditorContext` (`<project>/.strata/Saves`) | script host (`Game::WriteSaveFile` and friends, through `SaveFiles`) |
 
 ### Scene caches
 
@@ -1282,7 +1300,7 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
  --------------------------------------------------------------------------------------------------------------
  StrataEditorCore  EditorContext          project, EditorAssetManager, edited and running scene, play mode,
                                           selection, UndoStack, ScriptEngine + ScriptBuilder, EditorViewport,
-                                          SimulatedInput
+                                          SimulatedInput, the game's shell (EditorGameWindow, save directory)
                    EditorCommandRegistry  every operation as a named command with a JSON Schema
                    EditorCommandRunner    deferred commands; EditorCommandScript runs --commands files
                    EditorAutomation       RpcServer exposing the commands; session files
@@ -1529,7 +1547,11 @@ The module's PDB is copied when it exists, except in Dist builds or with `includ
 shows, so a game that does lists them in `Export.AlwaysInclude` (`project.setExportSettings`).
 
 `StrataRuntime` (`StrataRuntime/src/RuntimeApplication.cpp`) runs `--game <file>`, or the manifest found next to the
-executable (`GameManifest::FindForExecutable`). It logs to `<user data>/<Game>/Logs/Game.log`. `--headless` disables
+executable (`GameManifest::FindForExecutable`). It logs to `<user data>/<Game>/Logs/Game.log` and keeps the game's save
+files in `<user data>/<Game>/Saves` (`<Game>` is the manifest's name made a safe directory name,
+`SaveFiles::MakeGameDirectoryName`). What the game asks of its window (`Game::SetWindowMode`, `SetResolution`, `SetVSync`)
+applies after the frame (`GameWindowService`; the swapchain follows at the next frame); a headless run accepts the
+requests and reports them back. `--headless` disables
 the window and the renderer and paces at 60 frames per second; `--windowed` overrides a fullscreen manifest,
 `--resolution <width>x<height>` opens a window of exactly that many pixels whatever the display's scale (the manifest's
 window size is in screen coordinates, which the display's scale multiplies: 1280x720 is 1920x1080 pixels at 150%;

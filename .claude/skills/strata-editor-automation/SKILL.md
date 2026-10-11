@@ -78,6 +78,7 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | What can a new project or scene start from? | `project.templates` (`empty`, `basic3d`) |
 | Is there a finished game to learn from? | `project.samples` (e.g. `Tetris`); `project.openSample {sample, directory}` opens a copy in a new directory (the sample stays as shipped; build its scripts with `script.build` before playing) |
 | Does the person at the editor see the launcher or the editor? | `editor.status` (`editor.launcher`; also `editor.gpu` and `editor.startupSeconds`) |
+| Did the game ask for fullscreen or a resolution, lock the cursor, where do its saves go? | `editor.status` (`game`: `windowRequests`, recorded but not applied in play mode; `cursor`; `saveDirectory`, the project's `.strata/Saves`) |
 | Which commands and parameters exist? | `editor.commands` (or `list --json`) |
 | Which components and properties (types, ranges, enum values)? | `component.list` |
 | Which assets exist? | `asset.list` (`type`, `path` filters), `asset.info` |
@@ -238,11 +239,16 @@ input.key         {"key": "Right", "action": "release"}
 input.mouseMove   {"position": [640, 360]}                # pixels from the game view's top-left corner
 input.mouseButton {"button": "Left"}                      # Left, Right, Middle, Button3..7; same actions as keys
 input.scroll      {"delta": [0, 1]}
+input.gamepadButton {"button": "A"}                       # gamepad 0 unless "gamepad": 0..3; same actions as keys
+input.gamepadAxis {"axis": "LeftY", "value": 1}           # stick up, held until replaced, "value": null or play.stop
+input.gamepadAxis {"axis": "RightTrigger", "value": 1, "frames": 30} # half a second, then back to rest
 input.state       {}                                      # what simulated input holds; input.releaseAll lets go of it
 ```
 
 Keys are named like the SDK's `Key::` constants (`Left`, `Up`, `Space`, `Enter`, `Escape`, `A`, `D1`, `F5`, `LeftShift`;
-case does not matter). Each command answers once the game has seen its input (`"seen": true`), so issue them one after another
+case does not matter), gamepad buttons and axes like `GamepadButton::`/`GamepadAxis::` (`A`, `B`, `X`, `Y`, `LeftBumper`,
+`Start`, `DPadUp`; `LeftX`, `LeftY` (+1 is up), `RightX`, `RightY`, `LeftTrigger`, `RightTrigger`); a gamepad the
+commands used is connected for the game until play stops. Each command answers once the game has seen its input (`"seen": true`), so issue them one after another
 and read the effect (`component.get`, `log.read`, `viewport.capture`). Notes:
 
 - Input only reaches play mode (not edit or simulate); `play.stop` drops held keys.

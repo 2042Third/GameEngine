@@ -2,10 +2,12 @@
 #include <Strata/Core/EntryPoint.h>
 #include <Strata/Project/GameManifest.h>
 #include <Strata/Core/FrameProfiler.h>
+#include <Strata/Core/SaveFiles.h>
 #include <Strata/Renderer/ImageWriter.h>
 #include <Strata/Runtime/FramePerfLog.h>
 #include <Strata/Runtime/GameRenderer.h>
 #include <Strata/Runtime/GameRuntime.h>
+#include <Strata/Runtime/GameWindowService.h>
 
 namespace Strata
 {
@@ -48,6 +50,10 @@ namespace Strata
 				runtimeOptions.AssetBudgets = AssetManagerBase::GetDefaultResidencyBudgets();
 				runtimeOptions.AssetBudgets->GpuTextures = *m_Options.TextureBudget;
 			}
+			// The game's display options (scripts' Game::SetWindowMode, SetResolution, SetVSync) change this window, or nothing
+			// in a headless run; from the game's first script call on.
+			m_WindowService = CreateScope<GameWindowService>(Application::Get().GetWindow());
+			m_WindowProvider = CreateScope<EngineServices::ScopedProvider<IGameWindow>>(*m_WindowService);
 			std::string error;
 			m_Runtime = GameRuntime::Create(m_Options.ManifestPath, &error, runtimeOptions);
 			if (!m_Runtime)
@@ -69,6 +75,8 @@ namespace Strata
 			StopPerfLog();
 			m_Renderer.reset();
 			m_Runtime.reset();
+			m_WindowProvider.reset();
+			m_WindowService.reset();
 		}
 
 		void OnUpdate(Timestep timestep) override
@@ -93,6 +101,8 @@ namespace Strata
 				Application::Get().Close();
 				return;
 			}
+			// Window changes the game asked for during its update; the swapchain follows at the next frame.
+			m_WindowService->ApplyRequests();
 			if (m_Renderer)
 			{
 				// Frames of minimized windows are skipped by the application; this frame has a back buffer.
@@ -171,6 +181,8 @@ namespace Strata
 		}
 	private:
 		RuntimeOptions m_Options;
+		Scope<GameWindowService> m_WindowService;
+		Scope<EngineServices::ScopedProvider<IGameWindow>> m_WindowProvider; // After the service: ends first
 		Scope<GameRuntime> m_Runtime;
 		Scope<GameRenderer> m_Renderer;
 		Scope<FramePerfLog> m_PerfLog;
@@ -198,13 +210,13 @@ namespace Strata
 		else
 			options.ManifestPath = GameManifest::FindForExecutable(Platform::GetExecutablePath());
 
-		// The manifest names the game, which also names its log and data directory.
+		// The manifest names the game, which also names its data directory (logs, saves: SaveFiles::MakeGameDirectoryName).
 		std::string error;
 		std::optional<GameManifest> manifest = options.ManifestPath.empty() ? std::nullopt : GameManifest::Load(options.ManifestPath, &error);
 		const std::string name = manifest ? manifest->Name : std::string("Strata Game");
 
 		LogSpecification logSpecification;
-		logSpecification.LogFile = Platform::GetUserDataDirectory(name) / "Logs" / "Game.log";
+		logSpecification.LogFile = Platform::GetUserDataDirectory(SaveFiles::MakeGameDirectoryName(name)) / "Logs" / "Game.log";
 		Log::Init(logSpecification);
 		ST_INFO("{} (Strata {}, {})", name, c_EngineVersion, Platform::GetName());
 		if (!manifest)

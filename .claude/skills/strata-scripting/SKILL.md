@@ -114,12 +114,14 @@ ST_SCRIPT_CLASS(Turret)
   `GetMousePosition` (viewport pixels), `GetMouseDelta`, `GetScrollDelta`. In the editor, scripts receive device input only
   while the viewport is the focused game view (playing through the scene's primary camera); positions are relative to
   the image. Tools play the game with the `input.*` editor commands (simulated input, see the editor automation skill),
-  which reach the scripts whether or not the viewport has the focus.
+  which reach the scripts whether or not the viewport has the focus. Gamepads and the cursor: see
+  [Gamepads and the cursor](#gamepads-and-the-cursor).
 - `Time`: `GetDeltaTime`, `GetFixedDeltaTime`, `GetElapsedTime`, `GetFrameIndex`, `Get/SetTimeScale`.
 - `Log::Info/Warn/Error/Trace(args...)` - arguments are concatenated (`Log::Info("Health ", health)`).
 - `RigidBody` (`GetEntity().GetRigidBody()`), `Physics` (raycasts, overlaps), `Collision` (contact callbacks),
   `CharacterController` (`GetEntity().GetCharacterController()`: walk, jump, ground state),
-  `AudioSource` (`GetEntity().GetAudioSource()`), `Audio` (one-shots, master volume), `Game` (quit, load scenes),
+  `AudioSource` (`GetEntity().GetAudioSource()`), `Audio` (one-shots, master volume), `Game` (quit, load scenes, the
+  window, save files),
   `Random`, `Timer`, `KeyRepeat`: see [Gameplay API](#gameplay-api).
 
 Every call on a missing entity, unknown component or wrong value type fails harmlessly (`false`, empty `optional`,
@@ -220,6 +222,46 @@ Both happen after the current frame; every entity of the old scene goes away (sc
 the next scene through fields set in that scene, or rebuild it there. The switch loads the scene synchronously: request the
 next level early (`Assets::RequestLoad(Assets::Find("Levels/Two.stscene"))` while the current one runs) to avoid a hitch.
 In the editor `ReloadScene` restarts what play mode runs, including unsaved edits.
+
+### Gamepads and the cursor
+
+```cpp
+if (Input::IsGamepadConnected())                                    // Gamepad 0 unless you pass another (0 to 3)
+{
+	const glm::vec2 stick = Input::GetGamepadStick(GamepadStick::Left); // +x right, +y up; round dead zone, length <= 1
+	controller.Move((right * stick.x + forward * stick.y) * Speed);
+	if (Input::IsGamepadButtonPressed(GamepadButton::A))             // Xbox layout: A bottom, B right, X left, Y top
+		controller.Jump(5.0f);
+	const float throttle = Input::GetGamepadAxis(GamepadAxis::RightTrigger); // 0 released to 1 pressed, dead zone 0.15
+}
+Input::SetCursorMode(CursorMode::Locked);  // Mouse look: hidden and kept in the window; read Input::GetMouseDelta()
+Input::SetCursorMode(CursorMode::Normal);  // Menus (Hidden hides it over the game without locking)
+```
+
+`GetGamepadAxis(axis, gamepad, deadZone)` takes a dead zone (pass 0 for the raw value). The cursor mode applies while the
+game has the input: in the editor while the game view is focused (Shift+F1 frees the cursor, clicking the game view
+takes it again, stopping play gives it back). Tools press buttons and move sticks with `input.gamepadButton` and
+`input.gamepadAxis`.
+
+### The window and save files
+
+```cpp
+Game::SetWindowMode(WindowMode::Fullscreen);   // Windowed, Fullscreen (exclusive), Borderless
+Game::SetResolution(1920, 1080);               // Pixels; false outside 1 to 16384
+Game::SetVSync(false);
+glm::uvec2 size = Game::GetWindowSize();       // What the game renders at now
+
+Game::WriteSaveFile("Slot 1", "level=3;score=1200");     // Text or std::span<const uint8_t>; replaces the file whole
+std::optional<std::string> slot = Game::ReadSaveText("Slot 1"); // Nothing when there is no such save (yet)
+std::vector<std::string> slots = Game::ListSaveFiles();  // Sorted names
+Game::DeleteSaveFile("Slot 1");
+```
+
+Window requests apply after the frame in an exported game; the editor's play mode only records them (`editor.status`
+section `game`, a notice over the game view), its own window stays. Saves go to `<user data>/<Game>/Saves` in an exported
+game and to `<project>/.strata/Saves` in the editor. Names are 1 to 64 ASCII letters, digits, spaces, `-`, `_` and `.`
+(not first or last), without `..` (no paths); the calls read and write the disk before they return, so save at quiet
+moments (checkpoints, menus) and keep saves small.
 
 ### Text, spawning and other building blocks
 

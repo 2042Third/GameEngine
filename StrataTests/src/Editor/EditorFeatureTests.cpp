@@ -8,8 +8,10 @@
 #include "Scripting/ScriptTestUtils.h"
 #include "TestHelpers.h"
 
+#include <Strata/Core/EngineServices.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Runtime/GameRuntime.h>
+#include <Strata/Runtime/GameWindowService.h>
 
 #include <nlohmann/json.hpp>
 
@@ -109,8 +111,13 @@ TEST_SUITE("Editor.FeatureTest")
 		REQUIRE(exported["scriptModule"].is_string());
 		CHECK(FileSystem::FromUTF8(exported["scriptModule"].get<std::string>()).filename() == GetFeatureScriptModule().filename());
 		const std::filesystem::path manifest = FileSystem::FromUTF8(exported["manifest"].get<std::string>());
+		// The game's window as StrataRuntime provides it headless; saves in the test's directory instead of the user's data.
+		GameWindowService gameWindow(nullptr);
+		EngineServices::ScopedProvider<IGameWindow> gameWindowProvider(gameWindow);
+		GameRuntimeOptions gameOptions;
+		gameOptions.SaveFilesDirectory = directory / "Saves";
 		std::string error;
-		Scope<GameRuntime> game = GameRuntime::Create(manifest, &error);
+		Scope<GameRuntime> game = GameRuntime::Create(manifest, &error, gameOptions);
 		REQUIRE_MESSAGE(game, error);
 		const Ref<ScriptEngine> gameEngine = game->GetScriptEngine();
 		REQUIRE(gameEngine);
