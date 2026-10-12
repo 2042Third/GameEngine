@@ -89,15 +89,14 @@ namespace Strata
 		// level first, in steps the queue sizes (PlanStep) to what is left of the context's upload bytes, upload time and
 		// deadline: several whole levels stacked in one staging buffer while their staging fits a step, else runs of rows of a
 		// level (rows of 4x4 blocks for block-compressed formats, a power of two of them, filling staging buffers of a power of
-		// two of bytes)
-		// - as far as the context allows (Pending: the next call continues where this one stopped). The frame's first step is
-		// one row of blocks at least, whatever the budgets. Steps wait while the staging in flight leaves no room within the
-		// context's staging budget (the frame's first) or room (the others), and the pool keeps all of its staging within StagingBytes when it
-		// creates more (see StagingPool). Once the chain is uploaded, takes a bindless slot and releases the CPU copy (copied
-		// levels of textures made from pixels go as soon as they are uploaded, cooked bytes at the end). Freeing a large CPU
-		// copy is timed like a step: it waits for the next call (Pending) when it would end after the deadline. Fails for
-		// block-compressed formats the device cannot sample. Without the renderer's upload context (no device, or a test's
-		// context) the texture keeps its CPU data and is done.
+		// two of bytes), as far as the context allows (Pending: the next call continues where this one stopped). The frame's
+		// first step is one row of blocks at least, whatever the budgets. Steps wait while the staging in flight leaves no
+		// room within the context's staging budget (the frame's first) or room (the others), and the pool keeps all of its
+		// staging within StagingBytes when it creates more (see StagingPool). Once the chain is uploaded, takes a bindless slot
+		// and releases the CPU copy (copied levels of textures made from pixels go as soon as they are uploaded, cooked bytes
+		// at the end). Freeing a large CPU copy is timed like a step: it waits for the next call (Pending) when it would end
+		// after the deadline. Fails for block-compressed formats the device cannot sample. Without the renderer's upload
+		// context (no device, or a test's context) the texture keeps its CPU data and is done.
 		AssetFinalizeResult FinalizeOnMainThread(const AssetFinalizeContext& context) override;
 		// The most one upload step copies (GPUUploadQueue::c_MaxStepBytes).
 		static constexpr uint64_t c_UploadBandBytes = c_AssetUploadStepBytes;

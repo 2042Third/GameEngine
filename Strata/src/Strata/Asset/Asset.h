@@ -145,8 +145,6 @@ namespace Strata
 		bool operator==(const AssetMemoryUsage& other) const = default;
 	};
 
-	// Base class of every asset. Assets are shared (Ref<Asset>) and identified by their handle; code holds handles
-	// and asks the asset manager for the current object, which allows hot reload and streaming to replace objects.
 	// How much of an asset that can be partly resident is, in levels of detail (textures: mip levels, 0 the finest):
 	// Asset::GetDetailLevels, AssetResidencyInfo::Detail.
 	struct AssetDetailLevels
@@ -157,6 +155,8 @@ namespace Strata
 		uint64_t ResidentBytes = 0; // What the resident levels hold
 	};
 
+	// Base class of every asset. Assets are shared (Ref<Asset>) and identified by their handle; code holds handles
+	// and asks the asset manager for the current object, which allows hot reload and streaming to replace objects.
 	class Asset
 	{
 	public:
