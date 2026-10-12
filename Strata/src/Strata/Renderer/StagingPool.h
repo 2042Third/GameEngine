@@ -14,8 +14,10 @@ namespace Strata
 {
 
 	// CPU-writable staging memory for uploads, reused rather than allocated for every upload: staging buffers in powers of
-	// two of bytes, through which the upload queue copies texture levels and buffer ranges (GPUUploadQueue). Released staging becomes reusable once the GPU has run the copies that read it:
-	// an event query set after the command lists with those copies were executed tells when. The asset managers set it as
+	// two of bytes, through which the upload queue copies texture levels and buffer ranges (GPUUploadQueue). Released
+	// staging is held until the GPU has run the copies that read it, whatever the command lists that record them reference
+	// (copies from buffers into textures reference neither: GraphicsDevice::RecordBufferToTextureCopies), and then becomes
+	// reusable: an event query set after the command lists with those copies were executed tells when. The asset managers set it as
 	// soon as they executed the frame's uploads (FenceReleased, through GPUUploadQueue::SubmitBatch), and BeginFrame sets one
 	// for whatever was released since; the queries are polled, never waited for, at BeginFrame, before staging is acquired
 	// and when a budgeted upload finds no room (HasRoomFor). The GPU runs a frame's uploads ahead of that frame's rendering,
@@ -36,7 +38,8 @@ namespace Strata
 	public:
 		static constexpr uint64_t c_Unlimited = std::numeric_limits<uint64_t>::max();
 
-		explicit StagingPool(nvrhi::IDevice* device);
+		// `maxPendingBytes`: how much staging waiting for the GPU is pooled (see c_MaxPendingBytes).
+		explicit StagingPool(nvrhi::IDevice* device, uint64_t maxPendingBytes = c_MaxPendingBytes);
 		// Drops the staging it holds: the owner waits for the GPU first (Renderer::Shutdown does).
 		~StagingPool();
 
@@ -49,7 +52,9 @@ namespace Strata
 		// an idle one is reused (unbudgeted uploads may have left the pool above the limit). Null when one cannot be created.
 		nvrhi::BufferHandle AcquireBuffer(uint64_t bytes, uint64_t limit = c_Unlimited);
 		// Hands staging back once the copies that read it are recorded, in a command list of `queue` (the graphics queue, or
-		// the transfer queue for the upload queue's copies there).
+		// the transfer queue for the upload queue's copies there). The pool holds it until the GPU has run them (the query of
+		// the next FenceReleased or BeginFrame of that queue completed), also when it is not pooled (beyond the pending
+		// limit): the caller may drop every other reference at once.
 		void Release(nvrhi::BufferHandle staging, nvrhi::CommandQueue queue = nvrhi::CommandQueue::Graphics);
 		// Once every command list of `queue` that copies from the staging released for it so far was executed: sets the event
 		// query on that queue that tells when the GPU has run those copies, so that the staging becomes reusable without
@@ -69,7 +74,8 @@ namespace Strata
 		// (staging the GPU finished with since then counts as not idle yet).
 		bool HasIdleBuffer(uint64_t bytes) const;
 		uint64_t GetIdleBytes() const { return m_IdleBytes; }
-		uint64_t GetPendingBytes() const { return m_PendingBytes; } // Released, but the GPU may still copy from it
+		uint64_t GetPendingBytes() const { return m_PendingBytes; } // Released, but the GPU may still copy from it (pooled or not)
+		uint64_t GetMaxPendingBytes() const { return m_MaxPendingBytes; }
 		uint64_t GetCreatedCount() const { return m_CreatedCount; }  // Staging buffers created so far
 		uint64_t GetAcquiredBytes() const { return m_AcquiredBytes; } // Bytes of the staging handed out so far (reused or new)
 
@@ -81,8 +87,9 @@ namespace Strata
 
 		static constexpr uint64_t c_MaxIdleBytes = 16ull << 20;
 		static constexpr uint32_t c_IdleReleaseFrames = 120;
-		// At most this much waits for the GPU to become reusable; more is not pooled (it is freed once the GPU is done),
-		// which bounds the pool when frames do not advance (tools, tests) or uploads ignore HasRoomFor (unbudgeted).
+		// By default, at most this much staging waiting for the GPU is pooled (becomes idle once the GPU is done); what is
+		// released beyond it is freed then instead, which bounds what the pool keeps for reuse after a burst of uploads that
+		// ignore HasRoomFor (unbudgeted: LoadAssetSync, AddMemoryAsset) or run without device frames (tools, tests).
 		static constexpr uint64_t c_MaxPendingBytes = 256ull << 20;
 		// Staging buffers come in powers of two from this size on, so that the buffers of uploads of similar sizes are reused.
 		static constexpr uint64_t c_MinBufferBytes = 64ull << 10;
@@ -94,6 +101,7 @@ namespace Strata
 		{
 			nvrhi::BufferHandle Buffer;
 			uint64_t Bytes = 0;
+			bool Pooled = true; // Becomes idle once the GPU has run its copies; else it is freed then
 		};
 		// Staging released before an event query was set: reusable once the query completes.
 		struct Batch
@@ -105,15 +113,17 @@ namespace Strata
 		// Releases idle staging, least recently released first, until `bytes` of new staging fit beside what the pool holds
 		// within `limit`, or nothing idle is left.
 		void MakeRoom(uint64_t bytes, uint64_t limit);
-		// Holds released staging until the GPU is done with it (or leaves it to the GPU beyond c_MaxPendingBytes).
+		// Holds released staging until the GPU is done with it, pooled while what waits stays within the pending limit.
 		void AddPending(Entry entry, nvrhi::CommandQueue queue);
 		// The index of a queue's released and fenced staging: the graphics queue's, or the transfer queue's.
 		static size_t GetQueueIndex(nvrhi::CommandQueue queue) { return queue == nvrhi::CommandQueue::Copy ? 1 : 0; }
+		// For staging the GPU is done with: pooled entries become idle, the others are freed.
 		void MakeIdle(std::vector<Entry>& entries);
 		// Makes the staging of the fenced batches whose queries completed idle (polled, never waiting).
 		void CollectCompleted();
 	private:
 		nvrhi::IDevice* m_Device;
+		uint64_t m_MaxPendingBytes = c_MaxPendingBytes;
 		uint64_t m_CurrentFrame = 0;
 		uint64_t m_LastAcquireFrame = 0;
 		// Per queue (indexed by GetQueueIndex): staging released since the queue's latest query, not covered by one yet, and the
@@ -122,7 +132,7 @@ namespace Strata
 		std::array<std::deque<Batch>, 2> m_Fenced;
 		std::vector<nvrhi::EventQueryHandle> m_IdleQueries;
 		std::vector<Entry> m_Idle;     // Least recently released first
-		uint64_t m_PendingBytes = 0;   // Released and not idle yet (m_Released and m_Fenced)
+		uint64_t m_PendingBytes = 0;   // Released and not idle or freed yet (m_Released and m_Fenced)
 		uint64_t m_IdleBytes = 0;
 		uint64_t m_CreatedCount = 0;
 		uint64_t m_AcquiredBytes = 0;

@@ -8,12 +8,14 @@
 #include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/StagingPool.h"
 #include "Strata/Renderer/Texture.h"
+#include "Strata/Renderer/TextureFormat.h"
 
 #include <algorithm>
 #include <bit>
 #include <chrono>
 #include <cstdint>
 #include <limits>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -238,6 +240,71 @@ TEST_SUITE("GPU.UploadQueue")
 			SettleDevice(gpu);
 			CHECK(gpu.GetNewErrorCount() == 0);
 		}
+	}
+
+	TEST_CASE("Staging past the pool's pending limit stays alive until the GPU has run the copies from it")
+	{
+		// Copies from staging into textures are recorded raw (GraphicsDevice::RecordBufferToTextureCopies): their command lists
+		// do not reference the staging, so the pool holds all of it until the GPU has run them, also what it does not pool. A
+		// pool whose pending limit the batch's steps exceed, as unbudgeted loads of large textures (LoadAssetSync,
+		// AddMemoryAsset) exceed the renderer's.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SettleDevice(gpu);
+		{
+			constexpr uint32_t c_Size = 1024;
+			constexpr uint32_t c_RowsPerStep = 64;
+			constexpr uint64_t c_StepBytes = static_cast<uint64_t>(c_Size) * c_RowsPerStep * 4;
+			constexpr uint32_t c_Steps = c_Size / c_RowsPerStep;
+			StagingPool pool(gpu.GetNvrhiDevice(), 2 * c_StepBytes);
+			GPUUploadQueue queue(gpu.GetDevice(), pool);
+
+			nvrhi::TextureDesc desc;
+			desc.width = c_Size;
+			desc.height = c_Size;
+			desc.format = ToNvrhiFormat(TextureFormat::RGBA8);
+			desc.initialState = nvrhi::ResourceStates::ShaderResource;
+			desc.keepInitialState = true;
+			desc.debugName = "PendingLimitTexture";
+			const nvrhi::TextureHandle texture = gpu.GetNvrhiDevice()->createTexture(desc);
+			REQUIRE(texture);
+			std::vector<uint8_t> texels(static_cast<size_t>(c_Size) * c_Size * 4);
+			for (uint32_t y = 0; y < c_Size; y++)
+			{
+				for (uint32_t x = 0; x < c_Size; x++)
+				{
+					const glm::u8vec4 texel = GetPatternTexel(x, y, 0);
+					uint8_t* destination = texels.data() + (static_cast<size_t>(y) * c_Size + x) * 4;
+					destination[0] = texel.r;
+					destination[1] = texel.g;
+					destination[2] = texel.b;
+					destination[3] = texel.a;
+				}
+			}
+
+			// One batch, unbudgeted, a staging buffer per step: all but the first two steps' staging goes past the limit.
+			const AssetFinalizeContext context;
+			queue.BeginBatch();
+			for (uint32_t row = 0; row < c_Size; row += c_RowsPerStep)
+			{
+				const GPUTextureRegion region { 0, c_Size, c_Size, row, c_RowsPerStep, texels.data() + static_cast<size_t>(row) * c_Size * 4 };
+				REQUIRE(queue.UploadTexture(context, texture, TextureFormat::RGBA8, std::span<const GPUTextureRegion>(&region, 1), GPUUploadQueueKind::Graphics).Recorded);
+			}
+			CHECK(pool.GetCreatedCount() == c_Steps);
+			CHECK(pool.GetPendingBytes() == c_Steps * c_StepBytes); // All of it held
+			queue.SubmitBatch();
+			queue.WaitForTicket(queue.GetTicket());
+
+			// Once the GPU has run the copies, the limit's worth is idle and the rest is freed.
+			CHECK(pool.ReleaseIdle() == 2 * c_StepBytes);
+			CHECK(pool.GetPendingBytes() == 0);
+			ReadbackImage image;
+			REQUIRE(Renderer::ReadTexture(texture, image, 0));
+			for (const glm::uvec2 texel : { glm::uvec2(0, 0), glm::uvec2(5, 3 * c_RowsPerStep + 7), glm::uvec2(c_Size - 1, c_Size / 2), glm::uvec2(700, c_Size - 1) })
+				CHECK(GetPixelRGBA8(image, texel.x, texel.y) == GetPatternTexel(texel.x, texel.y, 0));
+		}
+		SettleDevice(gpu);
+		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
 	TEST_CASE("Mesh and texture uploads both go through the queue")

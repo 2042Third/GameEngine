@@ -225,14 +225,25 @@ TEST_SUITE("GPU.Assets.Uploads")
 			// After a while without uploads, everything is returned.
 			pool.BeginFrame(frame + StagingPool::c_IdleReleaseFrames);
 			CHECK(pool.GetIdleBytes() == 0);
-
-			// Without queries (no FenceReleased, no frames) nothing becomes reusable: beyond the pending limit, staging is left
-			// to the GPU to free.
-			constexpr uint64_t c_Huge = 32ull << 20;
-			const uint64_t fitting = StagingPool::c_MaxPendingBytes / c_Huge;
-			for (uint64_t index = 0; index <= fitting; index++)
-				pool.Release(pool.AcquireBuffer(c_Huge));
-			CHECK(pool.GetPendingBytes() == fitting * c_Huge);
+		}
+		{
+			// Without queries (no FenceReleased, no frames) nothing becomes reusable, and staging released beyond the pending
+			// limit is held all the same (the GPU may still copy from it), but freed rather than pooled once the GPU is done.
+			constexpr uint64_t c_Buffer = 1ull << 20;
+			StagingPool pool(gpu.GetNvrhiDevice(), 3 * c_Buffer);
+			CHECK(pool.GetMaxPendingBytes() == 3 * c_Buffer);
+			pool.BeginFrame(200);
+			for (int index = 0; index < 5; index++)
+				pool.Release(pool.AcquireBuffer(c_Buffer));
+			CHECK(pool.GetPendingBytes() == 5 * c_Buffer);
+			gpu.GetDevice().WaitForIdle();
+			CHECK_FALSE(pool.HasRoomFor(1, 5 * c_Buffer));
+			CHECK(pool.GetPendingBytes() == 5 * c_Buffer);
+			pool.FenceReleased();
+			gpu.GetDevice().WaitForIdle();
+			CHECK(pool.HasRoomFor(5 * c_Buffer, 5 * c_Buffer));
+			CHECK(pool.GetPendingBytes() == 0);
+			CHECK(pool.GetIdleBytes() == 3 * c_Buffer);
 		}
 		SettleDevice(gpu);
 		CHECK(gpu.GetNewErrorCount() == 0);

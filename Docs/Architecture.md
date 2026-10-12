@@ -1050,7 +1050,11 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   shape - format, width and height - each upload's would have to match: the pool reused few of them, and the exported
   stress game created staging in most of its steps, 0.1 to 0.3 ms each and their pages faulted in on first write), reused
   once the GPU has copied from them, so streaming allocates no staging memory once warm. NVRHI's command lists do not
-  reference what those copies write: the upload queue keeps the textures of each batch until it completed. An
+  reference what those copies write, nor the staging they read: the upload queue keeps the textures of each batch until
+  it completed, and the pool holds every staging buffer released to it until the GPU has run the copies from it, also
+  what it does not keep for reuse (what is released while more than `StagingPool::c_MaxPendingBytes`, 256 MiB, waits for
+  the GPU, as unbudgeted loads of large textures release, is freed then instead of becoming idle; before, it was dropped
+  at once, and its copies read freed memory). An
   event query set after the command lists with the copies were executed tells when: the renderer's upload context sets it
   as soon as it submitted a batch of uploads (`RendererUploadContext::Submit`, `StagingPool::FenceReleased`), and
   `Renderer::BeginFrame` sets one for whatever else was released. The queries are polled, never waited for: at

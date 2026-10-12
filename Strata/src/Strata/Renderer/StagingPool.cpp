@@ -7,8 +7,8 @@
 namespace Strata
 {
 
-	StagingPool::StagingPool(nvrhi::IDevice* device)
-		: m_Device(device)
+	StagingPool::StagingPool(nvrhi::IDevice* device, uint64_t maxPendingBytes)
+		: m_Device(device), m_MaxPendingBytes(maxPendingBytes)
 	{
 	}
 
@@ -91,10 +91,10 @@ namespace Strata
 
 	void StagingPool::AddPending(Entry entry, nvrhi::CommandQueue queue)
 	{
-		// Without frames (BeginFrame) nothing becomes reusable: beyond the limit, staging is left to the command lists that
-		// read it, which free it once the GPU is done.
-		if (m_PendingBytes + entry.Bytes > c_MaxPendingBytes)
-			return;
+		// Held until the GPU has run the copies that read it, whatever its size: the command lists of raw copies into textures
+		// do not reference their source, so freeing it any earlier would free memory the GPU is still to read. Beyond the
+		// limit it is freed then rather than pooled.
+		entry.Pooled = m_PendingBytes <= m_MaxPendingBytes && entry.Bytes <= m_MaxPendingBytes - m_PendingBytes;
 		m_PendingBytes += entry.Bytes;
 		m_Released[GetQueueIndex(queue)].push_back(std::move(entry));
 	}
@@ -104,6 +104,8 @@ namespace Strata
 		for (Entry& entry : entries)
 		{
 			m_PendingBytes -= entry.Bytes;
+			if (!entry.Pooled)
+				continue; // Freed with the list's entry: the GPU is done with it
 			m_IdleBytes += entry.Bytes;
 			m_Idle.push_back(std::move(entry));
 		}
