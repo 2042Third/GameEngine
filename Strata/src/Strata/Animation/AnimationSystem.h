@@ -175,7 +175,7 @@ namespace Strata
 		struct AnimatorRecord
 		{
 			entt::entity Handle = entt::null;
-			bool Removed = false; // The component went away during an update (removed at its end)
+			bool Removed = false; // The component went away (the record leaves at the next CompactRecords)
 			uint32_t Set = c_NoSet;
 			AnimatorInstance Instance;
 			bool Active = false;
@@ -228,8 +228,8 @@ namespace Strata
 		void OnAnimatorRemoved(entt::registry& registry, entt::entity handle);
 		void OnAttachmentRemoved(entt::registry& registry, entt::entity handle);
 		void AddRecord(entt::entity handle);
-		void RemoveRecord(uint32_t index);
-		void RemoveDeferredRecords();
+		// Drops the records of removed animators (AnimatorRecord::Removed) in one pass that keeps the others' order.
+		void CompactRecords();
 		AnimatorRecord* FindRecord(entt::entity handle);
 		const AnimatorRecord* FindRecord(entt::entity handle) const;
 
@@ -258,10 +258,11 @@ namespace Strata
 	private:
 		Scene& m_Scene;
 		std::vector<entt::scoped_connection> m_Connections;
+		// In the order updates process them (and publish their results in): by entity when the scene starts, then in the
+		// order animators were added. Removed ones stay, flagged, until CompactRecords, so the others never move.
 		std::vector<AnimatorRecord> m_Records;
-		std::unordered_map<entt::entity, uint32_t> m_RecordIndices;
-		std::vector<uint32_t> m_DeferredRemovals;
-		bool m_Iterating = false; // Records are not moved while set (removals wait for RemoveDeferredRecords)
+		std::unordered_map<entt::entity, uint32_t> m_RecordIndices; // Of the records not removed
+		uint32_t m_RemovedRecords = 0; // Flagged records CompactRecords drops
 
 		std::vector<AssetSet> m_Sets;
 		std::vector<uint32_t> m_FreeSets;

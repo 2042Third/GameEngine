@@ -403,6 +403,56 @@ TEST_SUITE("Animation.System")
 		CheckSceneCaches(*scene.SceneRef);
 	}
 
+	TEST_CASE("Removing an animator keeps the order the others' events are dispatched in")
+	{
+		AnimationScene scene;
+		std::vector<Entity> animators;
+		for (const char* name : { "A", "B", "C" })
+			animators.push_back(scene.CreateAnimator(name, c_WaveHandle, c_ControllerHandle));
+		scene.Start();
+		IAnimatorControl* control = scene.SceneRef->GetService<IAnimatorControl>();
+		std::vector<std::string> order;
+		scene.SceneRef->GetService<IAnimationEventSource>()->AddAnimationEventListener([&](const AnimationEventInfo& event)
+		{
+			// One entry per animator and update (its events arrive together).
+			if (order.empty() || order.back() != event.Animator.GetName())
+				order.push_back(event.Animator.GetName());
+		});
+		auto walk = [&](Entity entity)
+		{
+			REQUIRE(control->Play(entity, "Walk"));
+			REQUIRE(control->SetFloat(entity, "Speed", 1.0f));
+		};
+		for (Entity entity : animators)
+			walk(entity);
+		scene.Update(0.5f);
+		CHECK(order == std::vector<std::string> { "A", "B", "C" });
+
+		// The first one goes between updates, one is added: the others keep their order, the new one comes last.
+		animators[0].RemoveComponent<AnimatorComponent>();
+		Entity added = scene.CreateAnimator("D", c_WaveHandle, c_ControllerHandle);
+		scene.Update(0.0f); // Takes in the assets the new component was given after it was added
+		walk(added);
+		order.clear();
+		scene.Update(0.5f);
+		CHECK(order == std::vector<std::string> { "B", "C", "D" });
+
+		// One removed while the update dispatches (by a listener) leaves at its end; the order of the rest stays.
+		const AnimationEventListenerID remover = scene.SceneRef->GetService<IAnimationEventSource>()->AddAnimationEventListener([&](const AnimationEventInfo& event)
+		{
+			if (event.Animator == animators[1] && animators[1].HasComponent<AnimatorComponent>())
+				animators[1].RemoveComponent<AnimatorComponent>();
+		});
+		order.clear();
+		scene.Update(0.5f);
+		CHECK(order == std::vector<std::string> { "B", "C", "D" });
+		CHECK(scene.SceneRef->GetService<IAnimationEventSource>()->RemoveAnimationEventListener(remover));
+		order.clear();
+		scene.Update(0.5f);
+		CHECK(order == std::vector<std::string> { "C", "D" });
+		CHECK(scene.System()->GetStats().Animators == 2);
+	}
+
 	TEST_CASE("WhenVisible animators compute their pose only while a renderer saw them")
 	{
 		AnimationScene scene;

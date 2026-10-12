@@ -101,8 +101,9 @@ namespace Strata
 		entt::registry& registry = m_Scene.GetRegistry();
 		for (const auto [handle, component] : registry.view<AnimatorComponent>().each())
 			AddRecord(handle);
-		// In the order the entities were created (as animators added later are), whatever order the registry keeps them in:
-		// events are dispatched animator by animator in this order.
+		// By entity (the order a scene that was just loaded created them in), whatever order the registry keeps them in;
+		// animators added later follow in the order they were added. Results and events go out animator by animator in
+		// this order.
 		std::sort(m_Records.begin(), m_Records.end(), [](const AnimatorRecord& a, const AnimatorRecord& b)
 		{
 			return entt::to_entity(a.Handle) < entt::to_entity(b.Handle);
@@ -121,7 +122,7 @@ namespace Strata
 		m_Running = false;
 		m_Records.clear();
 		m_RecordIndices.clear();
-		m_DeferredRemovals.clear();
+		m_RemovedRecords = 0;
 		m_Sets.clear();
 		m_FreeSets.clear();
 		m_SetIndices.clear();
@@ -145,16 +146,17 @@ namespace Strata
 		auto it = m_RecordIndices.find(handle);
 		if (it == m_RecordIndices.end())
 			return;
-		const uint32_t index = it->second;
+		// Nothing finds the record any more; it leaves the list at the next compaction (CompactRecords), which keeps the
+		// others in their order. An update works on the records by index meanwhile, skipping removed ones.
+		AnimatorRecord& record = m_Records[it->second];
 		m_RecordIndices.erase(it);
-		if (m_Iterating)
+		record.Removed = true;
+		if (record.PoseVersion != 0)
 		{
-			// The update works on the records by index: the record leaves when it is done.
-			m_Records[index].Removed = true;
-			m_DeferredRemovals.push_back(index);
-			return;
+			record.PoseVersion = 0;
+			m_PosesVersion++;
 		}
-		RemoveRecord(index);
+		m_RemovedRecords++;
 	}
 
 	void AnimationSystem::OnAttachmentRemoved(entt::registry&, entt::entity handle)
@@ -174,31 +176,31 @@ namespace Strata
 		record.Set = AcquireSet(component.Skeleton, component.Controller, component.Clip);
 	}
 
-	void AnimationSystem::RemoveRecord(uint32_t index)
+	void AnimationSystem::CompactRecords()
 	{
-		AnimatorRecord& record = m_Records[index];
-		if (record.PoseVersion != 0)
-			m_PosesVersion++;
-		if (record.Set != c_NoSet)
-			ReleaseSet(record.Set);
-		if (index + 1 != m_Records.size())
-		{
-			m_Records[index] = std::move(m_Records.back());
-			if (!m_Records[index].Removed)
-				m_RecordIndices[m_Records[index].Handle] = index;
-		}
-		m_Records.pop_back();
-	}
-
-	void AnimationSystem::RemoveDeferredRecords()
-	{
-		if (m_DeferredRemovals.empty())
+		if (m_RemovedRecords == 0)
 			return;
-		// From the back: each removal moves the last record, which is never one still to remove (those have lower indices).
-		std::sort(m_DeferredRemovals.begin(), m_DeferredRemovals.end(), std::greater<uint32_t>());
-		for (const uint32_t index : m_DeferredRemovals)
-			RemoveRecord(index);
-		m_DeferredRemovals.clear();
+		// One pass that closes the gaps: the remaining records keep their order (the order updates process them in), and
+		// removing many animators costs one pass, not one per animator.
+		size_t kept = 0;
+		for (size_t index = 0; index < m_Records.size(); index++)
+		{
+			AnimatorRecord& record = m_Records[index];
+			if (record.Removed)
+			{
+				if (record.Set != c_NoSet)
+					ReleaseSet(record.Set);
+				continue;
+			}
+			if (kept != index)
+			{
+				m_Records[kept] = std::move(record);
+				m_RecordIndices[m_Records[kept].Handle] = static_cast<uint32_t>(kept);
+			}
+			kept++;
+		}
+		m_Records.erase(m_Records.begin() + static_cast<std::ptrdiff_t>(kept), m_Records.end());
+		m_RemovedRecords = 0;
 	}
 
 	AnimationSystem::AnimatorRecord* AnimationSystem::FindRecord(entt::entity handle)
@@ -507,13 +509,14 @@ namespace Strata
 		stats.Culled = 0;
 		stats.Waiting = 0;
 		stats.Attachments = 0;
+		// Animators removed since the previous update leave first.
+		CompactRecords();
 		// Without animators there is nothing to resolve, step, place or dispatch (records go with their components, events
 		// with the update that fired them), so scenes that do not animate pay next to nothing per frame.
 		if (m_Records.empty())
 			return;
 
 		const entt::registry& registry = m_Scene.GetRegistry();
-		m_Iterating = true;
 		// The shared assets first, once per set: requests and bindings (main thread). Sets without users are free slots.
 		for (AssetSet& set : m_Sets)
 		{
@@ -543,7 +546,7 @@ namespace Strata
 			}
 		});
 
-		// The queued animators, in creation order: synchronized with their components here, then stepped on the job system.
+		// The queued animators, in record order: synchronized with their components here, then stepped on the job system.
 		const std::span<uint32_t> synced(m_SyncQueue.data(), queued.load());
 		std::sort(synced.begin(), synced.end());
 		m_Work.clear();
@@ -576,7 +579,7 @@ namespace Strata
 				StepRecord(m_Records[m_Work[item]], deltaTime, t_Scratch);
 		});
 
-		// The results, animator by animator in creation order.
+		// The results, animator by animator in record order.
 		bool posesChanged = false;
 		for (uint32_t index = 0; index < m_Records.size(); index++)
 		{
@@ -621,8 +624,8 @@ namespace Strata
 			m_PosesVersion++;
 
 		PlaceAttachments();
-		m_Iterating = false;
-		RemoveDeferredRecords();
+		// Animators that listeners of the transforms written above removed.
+		CompactRecords();
 		DispatchEvents();
 	}
 
