@@ -945,6 +945,8 @@ namespace Strata
 			return inputs;
 		inputs.Joints = pose.Joints;
 		inputs.Version = pose.Version;
+		inputs.Reach = pose.Reach;
+		inputs.ReachScale = pose.ReachScale;
 		inputs.Posed = true;
 		return inputs;
 	}
@@ -958,6 +960,13 @@ namespace Strata
 			const glm::mat4 matrix = pose.AnimatorToProxy * pose.Joints[skin.Joints[joint]] * skin.InverseBindMatrices[joint];
 			outPalette[joint] = RenderData::AffineTransform::FromMatrix(matrix);
 			outBounds.Expand(skin.JointBounds[joint].Transformed(matrix));
+		}
+		// An animator that does not compute its pose every update: the bounds also take in wherever its clips take the joints
+		// (and the vertices around them), so views of those places find it and it gets posed there.
+		if (pose.Reach.IsValid())
+		{
+			const glm::vec3 margin(skin.MaxJointExtent * pose.ReachScale);
+			outBounds.Expand(AABB(pose.Reach.Min - margin, pose.Reach.Max + margin).Transformed(pose.AnimatorToProxy));
 		}
 	}
 

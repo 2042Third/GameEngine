@@ -46,6 +46,11 @@ namespace Strata
 		std::vector<uint16_t> Joints;               // Skeleton joint of each skin joint
 		std::vector<glm::mat4> InverseBindMatrices; // Affine, per skin joint
 		std::vector<AABB> JointBounds;              // Per skin joint, in the mesh's (bind) space; computed by Mesh::CreateSkinned
+		// The farthest a vertex lies from the origin of a joint that influences it, in that joint's space (its inverse bind
+		// matrix times the vertex): in any pose, the skinned vertices lie within this distance (times the joints' scale) of
+		// their joints' origins. Bounds where joints may go, not where they are (SkeletonPose::Reach), grow by it. Computed by
+		// Mesh::CreateSkinned.
+		float MaxJointExtent = 0.0f;
 	};
 
 	struct MeshLOD

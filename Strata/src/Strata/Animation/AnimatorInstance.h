@@ -4,6 +4,7 @@
 #include "Strata/Animation/AnimationController.h"
 #include "Strata/Animation/AnimationTypes.h"
 #include "Strata/Animation/Skeleton.h"
+#include "Strata/Math/AABB.h"
 
 #include <glm/glm.hpp>
 
@@ -17,13 +18,6 @@
 namespace Strata
 {
 
-	// A clip as an animator plays it: the loaded clip and its binding to the animator's skeleton (null while not loaded).
-	struct AnimatorClip
-	{
-		const AnimationClip* Clip = nullptr;
-		const AnimationClipBinding* Binding = nullptr;
-	};
-
 	// What the root motion joint's motion is measured in: the model-space transform of its ancestors (from the rest pose)
 	// and which joints lie in its subtree (the joints root motion moves). One per skeleton.
 	struct RootMotionSetup
@@ -33,6 +27,39 @@ namespace Strata
 		std::vector<uint8_t> InSubtree; // Per joint
 
 		static RootMotionSetup Create(const Skeleton& skeleton);
+	};
+
+	// Where a clip takes the skeleton's joints: the box of every joint's model-space origin over the clip (sampled at
+	// c_SamplesPerSecond, at most c_MaxSamples, the start and end included), without and with root motion (which holds the
+	// root's subtree where the clip started), and the largest scale of a joint's transform. It bounds the meshes of an
+	// animator that does not compute its pose every update (WhenVisible): renderers find it wherever its clips take it.
+	struct AnimationReach
+	{
+		static constexpr float c_SamplesPerSecond = 15.0f;
+		static constexpr uint32_t c_MaxSamples = 48;
+
+		AABB Bounds;
+		AABB RootMotionBounds;
+		float MaxScale = 0.0f;
+
+		static AnimationReach Compute(const AnimationClip& clip, const AnimationClipBinding& binding, const Skeleton& skeleton, const RootMotionSetup& setup);
+	};
+
+	// A clip as an animator plays it: the loaded clip, its binding to the animator's skeleton (null while not loaded) and
+	// where it takes the joints (null: not known).
+	struct AnimatorClip
+	{
+		const AnimationClip* Clip = nullptr;
+		const AnimationClipBinding* Binding = nullptr;
+		const AnimationReach* Reach = nullptr;
+	};
+
+	// Where what an animator plays now takes its joints (AnimatorInstance::GetReach): model space, with the largest scale of
+	// a joint's transform. An invalid box when that is not known.
+	struct AnimatorReach
+	{
+		AABB Bounds;
+		float Scale = 0.0f;
 	};
 
 	// What the assets of an animator are now: the skeleton, the controller (null: the simple mode, which plays the
@@ -140,6 +167,10 @@ namespace Strata
 		// a sample (resized as needed). With root motion the root joint's subtree is held where the clip started.
 		bool Evaluate(const AnimatorAssets& assets, const AnimatorSettings& settings, std::vector<JointPose>& scratch, std::vector<glm::mat4>& outModel) const;
 		const RootMotionDelta& GetRootMotion() const { return m_RootMotion; }
+		// Where what plays now takes the joints: the union of the reaches of the clips playing (with root motion as the
+		// settings have it). Unknown (an invalid box) while nothing plays or a clip's reach is not known; blends of clips may
+		// leave it by a little.
+		AnimatorReach GetReach(const AnimatorAssets& assets, const AnimatorSettings& settings) const;
 
 		// State queries: the state the animator is in (its name; empty for a clip played without one), how far it is (time
 		// over duration, counting loops) and whether a cross-fade is under way.

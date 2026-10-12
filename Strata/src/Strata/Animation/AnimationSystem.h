@@ -158,6 +158,7 @@ namespace Strata
 			std::vector<AssetHandle> ClipHandles;
 			std::vector<Ref<AnimationClip>> Clips;
 			std::vector<AnimationClipBinding> Bindings;
+			std::vector<AnimationReach> Reaches; // With the bindings
 			std::vector<AnimatorClip> StateClips;
 			bool ClipsLoading = false;
 			bool Reported = false; // A failed asset was reported (once per set)
@@ -180,21 +181,27 @@ namespace Strata
 			AnimatorInstance Instance;
 			bool Active = false;
 			std::vector<glm::mat4> Pose; // Model space, per joint of the skeleton
-			uint64_t PoseVersion = 0;    // 0: no pose
+			uint64_t PoseVersion = 0;    // 0: no pose; changes with the pose and with the reach
 			uint64_t SeenUpdate = 0;     // The update before which a renderer last drew a mesh it skins
+			// Published with the pose while the animator may skip poses (SkeletonPose::Reach): where its clips take the joints.
+			AABB Reach;
+			float ReachScale = 0.0f;
 
 			// A clip a script played directly, resolved every update.
 			AssetHandle PlayedClipHandle = UUID::Null();
 			Ref<AnimationClip> PlayedClip;
 			AnimationClipBinding PlayedBinding;
+			AnimationReach PlayedReach;
 			uint64_t PlayedBindingSkeletonId = 0;
 			bool PlayedClipLoading = false;
 
 			// The update's work (written by the evaluation jobs).
 			RecordUpdate Update = RecordUpdate::None;
 			AnimatorSettings Settings;
+			bool MayCull = false;      // WhenVisible: it publishes its reach
 			bool Evaluate = false;
 			bool Evaluated = false;
+			bool ReachChanged = false;
 			std::vector<AnimatorFiredEvent> Events;
 		};
 

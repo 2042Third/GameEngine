@@ -1,3 +1,4 @@
+#include "Animation/AnimationTestUtils.h"
 #include "Animation/SkinnedMeshTestUtils.h"
 #include "Animation/TestSkinningPoses.h"
 #include "Renderer/SceneRendererTestUtils.h"
@@ -356,5 +357,48 @@ TEST_SUITE("GPU.Animation")
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 		scene.UnregisterService<ISkinningPoses>(poses);
+	}
+
+	TEST_CASE("A WhenVisible animator whose clip carries its mesh into a view that its first pose is not in is posed there")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		const AssetHandle material = assets.AddMaterial(UnlitColor(glm::vec4(1.0f, 1.0f, 1.0f, 1.0f)));
+		const AssetHandle tube = assets.Add(CreateSkinnedTube({ .Joints = 3, .RingsPerJoint = 2, .Sides = 8, .JointLength = 1.0f, .Radius = 0.25f }), "Arm");
+		const AssetHandle skeleton = assets.Add(CreateArmSkeleton(), "Skeleton");
+		// The walk carries the arm 2 along +Z over its one-second loop (no root motion: the travel stays in the pose).
+		const AssetHandle walk = assets.Add(CreateWaveClip(1.0f, 2.0f, "Walk"), "Walk");
+
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		Entity walker = scene.CreateEntity("Walker");
+		AnimatorComponent& animator = walker.AddComponent<AnimatorComponent>();
+		animator.Skeleton = skeleton;
+		animator.Clip = walk;
+		animator.CullingMode = AnimatorCullingMode::WhenVisible;
+		Entity body = AddMesh(scene, tube, material, glm::vec3(0.0f), "Body");
+		scene.SetParent(body, walker, false);
+		body.AddComponent<SkinComponent>().Animator = walker.GetUUID();
+		scene.OnRuntimeStart(SceneRuntimeMode::Play);
+
+		// A narrow view of the place the arm reaches three quarters into the walk, far from where it starts.
+		constexpr uint32_t size = 64;
+		const SceneCamera camera = OrthographicLookAt(glm::vec3(6.0f, 0.5f, 1.5f), glm::vec3(0.0f, 0.5f, 1.5f), 0.6f);
+		SceneRenderer renderer;
+		renderer.SetViewportSize(size, size);
+		for (int frame = 0; frame < 45; frame++)
+		{
+			scene.OnUpdateRuntime(1.0f / 60.0f);
+			REQUIRE(gpu.GetDevice().BeginFrame());
+			Renderer::BeginFrame();
+			REQUIRE(renderer.Render(scene, camera));
+			gpu.GetDevice().EndFrame();
+		}
+		const std::vector<uint8_t> mask = EntityMask(renderer, body);
+		const glm::uvec2 center = ProjectToPixel(camera, glm::vec3(0.0f, 0.5f, 1.5f), size);
+		CHECK(mask[static_cast<size_t>(center.y) * size + center.x] == 1);
+		CHECK(gpu.GetNewErrorCount() == 0);
+		scene.OnRuntimeStop();
 	}
 }

@@ -57,6 +57,26 @@ namespace Strata
 			return sample;
 		}
 
+		// Root motion moves the entity, so the pose holds the root's subtree back: moved by -offset in the plane and turned by
+		// -yaw about the root's position.
+		void HoldRoot(std::vector<glm::mat4>& model, const RootMotionSetup& setup, JointIndex root, const glm::vec3& offset, float yaw)
+		{
+			const glm::vec3 pivot(model[root][3].x, 0.0f, model[root][3].z);
+			const glm::mat4 correction = glm::translate(glm::mat4(1.0f), pivot - offset) * glm::rotate(glm::mat4(1.0f), -yaw, glm::vec3(0.0f, 1.0f, 0.0f))
+				* glm::translate(glm::mat4(1.0f), -pivot);
+			for (size_t joint = 0; joint < model.size(); joint++)
+			{
+				if (setup.InSubtree[joint])
+					model[joint] = AnimationMath::MultiplyAffine(correction, model[joint]);
+			}
+		}
+
+		// The largest scale a transform applies along any axis.
+		float GetMaxScale(const glm::mat4& transform)
+		{
+			return std::max({ glm::length(glm::vec3(transform[0])), glm::length(glm::vec3(transform[1])), glm::length(glm::vec3(transform[2])) });
+		}
+
 		// The motion of the root from time a to time b of one pass through a clip, in the frame the root faced at a.
 		struct RootTravel
 		{
@@ -98,6 +118,49 @@ namespace Strata
 			setup.InSubtree[joint] = parent != c_NoJoint && setup.InSubtree[parent] ? 1 : 0;
 		}
 		return setup;
+	}
+
+	AnimationReach AnimationReach::Compute(const AnimationClip& clip, const AnimationClipBinding& binding, const Skeleton& skeleton, const RootMotionSetup& setup)
+	{
+		AnimationReach reach;
+		const uint32_t joints = skeleton.GetJointCount();
+		if (joints == 0 || setup.InSubtree.size() != joints)
+			return reach;
+		const float duration = clip.GetDuration();
+		const uint32_t samples = duration > 0.0f ? std::clamp(static_cast<uint32_t>(std::ceil(duration * c_SamplesPerSecond)) + 1u, 2u, c_MaxSamples) : 1u;
+		const AnimatorClip bound { &clip, &binding };
+		const RootSample start = SampleRoot(bound, skeleton, setup, 0.0f);
+		const JointIndex root = skeleton.GetRootMotionJoint();
+		std::vector<JointPose> local;
+		std::vector<glm::mat4> model(joints);
+		for (uint32_t sample = 0; sample < samples; sample++)
+		{
+			const float time = samples > 1 ? duration * static_cast<float>(sample) / static_cast<float>(samples - 1) : 0.0f;
+			local = skeleton.GetRestPose();
+			clip.Sample(binding, time, local);
+			skeleton.ComputeModelTransforms(local, model);
+			for (const glm::mat4& transform : model)
+			{
+				reach.Bounds.Expand(glm::vec3(transform[3]));
+				reach.MaxScale = std::max(reach.MaxScale, GetMaxScale(transform));
+			}
+			// As the pose holds the root with root motion (Evaluate).
+			const RootSample now = SampleRoot(bound, skeleton, setup, time);
+			glm::vec3 offset = now.Position - start.Position;
+			offset.y = 0.0f;
+			HoldRoot(model, setup, root, offset, GetYaw(now.Rotation * glm::inverse(start.Rotation)));
+			for (const glm::mat4& transform : model)
+				reach.RootMotionBounds.Expand(glm::vec3(transform[3]));
+		}
+		// Transforms that overflowed would make the boxes useless for culling: no reach then.
+		auto finite = [](const AABB& box)
+		{
+			return box.IsValid() && std::isfinite(box.Min.x) && std::isfinite(box.Min.y) && std::isfinite(box.Min.z) && std::isfinite(box.Max.x)
+				&& std::isfinite(box.Max.y) && std::isfinite(box.Max.z);
+		};
+		if (!std::isfinite(reach.MaxScale) || !finite(reach.Bounds) || !finite(reach.RootMotionBounds))
+			return AnimationReach();
+		return reach;
 	}
 
 	void AnimatorInstance::Reset()
@@ -768,16 +831,25 @@ namespace Strata
 			yaw += GetYaw(now.Rotation * glm::inverse(start.Rotation)) * weight;
 		}
 		offset.y = 0.0f;
-		const JointIndex root = skeleton.GetRootMotionJoint();
-		const glm::vec3 pivot(outModel[root][3].x, 0.0f, outModel[root][3].z);
-		const glm::mat4 correction = glm::translate(glm::mat4(1.0f), pivot - offset) * glm::rotate(glm::mat4(1.0f), -yaw, glm::vec3(0.0f, 1.0f, 0.0f))
-			* glm::translate(glm::mat4(1.0f), -pivot);
-		for (uint32_t joint = 0; joint < joints; joint++)
-		{
-			if (assets.RootMotion->InSubtree[joint])
-				outModel[joint] = AnimationMath::MultiplyAffine(correction, outModel[joint]);
-		}
+		HoldRoot(outModel, *assets.RootMotion, skeleton.GetRootMotionJoint(), offset, yaw);
 		return true;
+	}
+
+	AnimatorReach AnimatorInstance::GetReach(const AnimatorAssets& assets, const AnimatorSettings& settings) const
+	{
+		AnimatorReach reach;
+		if (m_Count == 0)
+			return reach;
+		const bool rootMotion = settings.ApplyRootMotion && assets.RootMotion;
+		for (uint32_t index = 0; index < m_Count; index++)
+		{
+			const AnimatorClip clip = GetClip(assets, m_Entries[index].State);
+			if (!clip.Reach || !clip.Reach->Bounds.IsValid())
+				return AnimatorReach();
+			reach.Bounds.Expand(rootMotion ? clip.Reach->RootMotionBounds : clip.Reach->Bounds);
+			reach.Scale = std::max(reach.Scale, clip.Reach->MaxScale);
+		}
+		return reach;
 	}
 
 }

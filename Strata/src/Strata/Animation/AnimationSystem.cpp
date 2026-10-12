@@ -386,6 +386,7 @@ namespace Strata
 				set.ClipHandles = std::move(handles);
 				set.Clips.assign(set.ClipHandles.size(), nullptr);
 				set.Bindings.assign(set.ClipHandles.size(), AnimationClipBinding());
+				set.Reaches.assign(set.ClipHandles.size(), AnimationReach());
 			}
 		}
 		set.ClipsLoading = false;
@@ -416,8 +417,11 @@ namespace Strata
 			if (!set.SkeletonAsset)
 				continue;
 			if (rebind)
+			{
 				set.Bindings[index] = set.Clips[index]->Bind(*set.SkeletonAsset);
-			set.StateClips[index] = AnimatorClip { set.Clips[index].get(), &set.Bindings[index] };
+				set.Reaches[index] = AnimationReach::Compute(*set.Clips[index], set.Bindings[index], *set.SkeletonAsset, set.RootMotion);
+			}
+			set.StateClips[index] = AnimatorClip { set.Clips[index].get(), &set.Bindings[index], &set.Reaches[index] };
 		}
 
 		if (!failures.empty() && !set.Reported)
@@ -456,6 +460,7 @@ namespace Strata
 		if (set.SkeletonAsset && record.PlayedBindingSkeletonId != set.SkeletonId)
 		{
 			record.PlayedBinding = record.PlayedClip->Bind(*set.SkeletonAsset);
+			record.PlayedReach = AnimationReach::Compute(*record.PlayedClip, record.PlayedBinding, *set.SkeletonAsset, set.RootMotion);
 			record.PlayedBindingSkeletonId = set.SkeletonId;
 		}
 	}
@@ -473,7 +478,7 @@ namespace Strata
 		assets.ControllerLoading = !set.Controller && set.ControllerHandle.IsValid() && !set.ControllerFailed;
 		assets.StateClips = set.StateClips;
 		if (record.PlayedClip && set.SkeletonAsset && record.PlayedBindingSkeletonId == set.SkeletonId)
-			assets.PlayedClip = AnimatorClip { record.PlayedClip.get(), &record.PlayedBinding };
+			assets.PlayedClip = AnimatorClip { record.PlayedClip.get(), &record.PlayedBinding, &record.PlayedReach };
 		return assets;
 	}
 
@@ -599,9 +604,16 @@ namespace Strata
 				posesChanged = true;
 				stats.Evaluated++;
 			}
-			else if (!record.Evaluate)
+			else
 			{
-				stats.Culled++;
+				if (!record.Evaluate)
+					stats.Culled++;
+				// The pose stays, where its clips take it changed (a transition while unseen).
+				if (record.ReachChanged && record.PoseVersion != 0)
+				{
+					record.PoseVersion = m_NextPoseVersion++;
+					posesChanged = true;
+				}
 			}
 			if (!record.Events.empty())
 			{
@@ -657,9 +669,11 @@ namespace Strata
 		record.Settings.ApplyRootMotion = component.ApplyRootMotion;
 		// Unseen WhenVisible animators skip their poses, except for a first one (renderers then have something to draw until
 		// they report it).
+		record.MayCull = component.CullingMode == AnimatorCullingMode::WhenVisible;
 		const bool seen = record.SeenUpdate != 0 && record.SeenUpdate + 1 >= m_UpdateIndex;
-		record.Evaluate = component.CullingMode == AnimatorCullingMode::AlwaysAnimate || seen || record.PoseVersion == 0;
+		record.Evaluate = !record.MayCull || seen || record.PoseVersion == 0;
 		record.Evaluated = false;
+		record.ReachChanged = false;
 		record.Events.clear();
 	}
 
@@ -670,6 +684,15 @@ namespace Strata
 			return;
 		if (record.Evaluate)
 			record.Evaluated = record.Instance.Evaluate(assets, record.Settings, scratch, record.Pose);
+		// An animator that may skip its poses publishes where its clips take the joints, so renderers find its meshes there
+		// whatever pose they show (a change publishes the pose again).
+		const AnimatorReach reach = record.MayCull ? record.Instance.GetReach(assets, record.Settings) : AnimatorReach();
+		if (std::memcmp(&reach.Bounds, &record.Reach, sizeof(AABB)) != 0 || reach.Scale != record.ReachScale)
+		{
+			record.Reach = reach.Bounds;
+			record.ReachScale = reach.Scale;
+			record.ReachChanged = true;
+		}
 	}
 
 	void AnimationSystem::ApplyRootMotion(Entity animator, const RootMotionDelta& delta)
@@ -795,6 +818,8 @@ namespace Strata
 			return false;
 		outPose.Joints = record->Pose;
 		outPose.Version = record->PoseVersion;
+		outPose.Reach = record->Reach;
+		outPose.ReachScale = record->ReachScale;
 		return true;
 	}
 

@@ -330,7 +330,8 @@ namespace Strata
 	enum class AnimatorCullingMode : uint8_t
 	{
 		AlwaysAnimate = 0, // Posed every frame
-		// Posed only while a renderer draws a mesh it skins or that mesh's shadow in view; time, events and root motion go on.
+		// Posed only while a renderer draws (or would draw, wherever its clips take it) a mesh it skins or that mesh's shadow
+		// in view; time, events and root motion go on.
 		WhenVisible
 	};
 

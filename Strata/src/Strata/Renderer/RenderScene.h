@@ -265,6 +265,8 @@ namespace Strata
 			std::span<const glm::mat4> Joints;
 			uint64_t Version = 0;
 			glm::mat4 AnimatorToProxy = glm::mat4(1.0f); // Inverse of the proxy's world transform times the animator's
+			AABB Reach;              // SkeletonPose::Reach
+			float ReachScale = 0.0f;
 		};
 
 		struct MaterialEntry

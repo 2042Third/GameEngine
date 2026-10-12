@@ -2,6 +2,7 @@
 
 #include "Strata/Asset/AssetTypes.h"
 #include "Strata/Core/UUID.h"
+#include "Strata/Math/AABB.h"
 #include "Strata/Scene/Entity.h"
 
 #include <glm/glm.hpp>
@@ -214,7 +215,13 @@ namespace Strata
 	struct SkeletonPose
 	{
 		std::span<const glm::mat4> Joints; // Valid until the provider changes the pose (the next animation update)
-		uint64_t Version = 0;              // Changes whenever the joints change
+		uint64_t Version = 0;              // Changes whenever the joints or the reach change
+		// For an animator that does not compute its pose every update (WhenVisible): where what it plays takes the joints'
+		// origins (model space, like the joints), and the largest scale of a joint's transform there. Renderers bound its
+		// meshes with it as well as with the pose, so they find it wherever its clips take it, also while it shows an older
+		// pose. Invalid (empty) for poses that are computed every update.
+		AABB Reach;
+		float ReachScale = 0.0f;
 	};
 
 	// The poses animators publish (the Animation module's system in Play mode; the editor's pose preview), which renderers

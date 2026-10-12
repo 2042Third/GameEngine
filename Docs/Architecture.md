@@ -1159,18 +1159,22 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   its real bounds and is drawn; meshes that failed to load, or that the manager does not know, are asked for every
   frame (one lookup each), so that a fixed or newly imported one shows.
 - **Skinned proxies**. A proxy whose entity has a `SkinComponent` (`RenderProxyFlags::Skin`) and whose mesh layout has a
-  skin binding (`MeshSkinBinding`, kept with the layout like the bounds) is posed while the scene's `ISkinningPoses` has a
-  pose for the animator the component names (`RenderProxyFlags::Skinned`; `EvaluatePose`). `Sync` then computes its
+  skin binding (`MeshSkinBinding`, kept with the layout like the bounds) is posed while the scene's `ISkinningPoses` has
+  a pose for the animator the component names (`RenderProxyFlags::Skinned`; `EvaluatePose`). `Sync` then computes its
   palette, per joint of the mesh's skin `inverse(proxy world) * animator world * joint model transform * inverse bind
-  matrix` (3x4 rows, `RenderData::AffineTransform`), into a palette range of its own in one array (`GetPalette`), and its
-  posed bounds: every joint's bind-pose extent (`MeshSkinBinding::JointBounds`) transformed by its palette entry, unioned
-  (each skinned vertex is a weighted average of points inside those boxes), which replace the mesh's bounds for culling,
-  the spatial index and the shadow casters, so a limb swung outside the bind pose is neither culled nor loses its shadow.
-  Palettes are computed only when the pose's version, the skin binding (another mesh of the same skin, a reimport) or
-  the transform from the animator to the proxy changed, in batches of 16 proxies on the job system (each writes its own
-  range and bounds), and logged by version like the instances (`GetPaletteChanges`), so renderers upload only changed
-  joints into their joint buffer (`ST_SRV(15)`); a still frame skips the pass entirely (poses, transforms, hierarchy and
-  layouts unchanged). Instances of posed proxies carry `c_InstanceSkinned` and the palette's first joint
+  matrix` (3x4 rows, `RenderData::AffineTransform`), into a palette range of its own in one array (`GetPalette`), and
+  its posed bounds: every joint's bind-pose extent (`MeshSkinBinding::JointBounds`) transformed by its palette entry,
+  unioned (each skinned vertex is a weighted average of points inside those boxes), which replace the mesh's bounds for
+  culling, the spatial index and the shadow casters, so a limb swung outside the bind pose is neither culled nor loses
+  its shadow. A pose of an animator that does not compute it every update (`WhenVisible`) carries its reach
+  (`SkeletonPose::Reach`: where its clips take the joints), which the posed bounds take in too, grown by the farthest a
+  vertex lies from a joint that moves it (`MeshSkinBinding::MaxJointExtent`, times the joints' scale): a view of any
+  place its clips take it finds it, and a frozen pose cannot hide it from the view that would pose it. Palettes are
+  computed only when the pose's version, the skin binding (another mesh of the same skin, a reimport) or the transform
+  from the animator to the proxy changed, in batches of 16 proxies on the job system (each writes its own range and
+  bounds), and logged by version like the instances (`GetPaletteChanges`), so renderers upload only changed joints into
+  their joint buffer (`ST_SRV(15)`); a still frame skips the pass entirely (poses, transforms, hierarchy and layouts
+  unchanged). Instances of posed proxies carry `c_InstanceSkinned` and the palette's first joint
   (`InstanceData::SkinPalette`, where the padding was: still 64 bytes), and their draws a sort key bit of their own:
   they batch per mesh, submesh, level of detail and pipeline state like every draw, and draw with the skinned variants
   of the mesh and shadow vertex shaders (`Scene/MeshSkinned.vert`, `ShadowMeshSkinned.vert`: `ST_SKINNED`), which blend
@@ -1298,12 +1302,16 @@ system, not to entities: a character's joints add no entities and no transform c
   entity's space, goes through its world transform (scale included) and its parent's inverse into the local translation,
   the turn multiplies its rotation, and the write is signaled (`MarkModified<TransformComponent>`). A character
   controller takes the delta there instead.
-- **Culling.** A `WhenVisible` animator computes its pose only when a renderer drew (or would have drawn) a mesh it
-  skins in its view, or that mesh's shadow on what its view shows, since the previous update
-  (`ISkinningPoses::ReportVisible`, which `SceneRenderer` calls for the animators of the Skin proxies it culled in and
-  of the casters out of view whose shadows can reach the view), or when it has no pose yet; its time, state machine,
-  events and root motion go on, so gameplay does not depend on the camera. Unseen animators thus cost an update of their
-  state and no sampling; a renderer shows a re-entering animator's previous pose for one frame.
+- **Culling.** A `WhenVisible` animator computes its pose only when a renderer drew (or would have drawn) a mesh it skins
+  in its view, or that mesh's shadow on what its view shows, since the previous update (`ISkinningPoses::ReportVisible`,
+  which `SceneRenderer` calls for the animators of the Skin proxies it culled in and of the casters out of view whose
+  shadows can reach the view), or when it has no pose yet; its time, state machine, events and root motion go on, so
+  gameplay does not depend on the camera. Such an animator publishes with its pose its reach (`SkeletonPose::Reach`: the
+  union of the reaches of the clips playing, `AnimationReach`, computed when a clip is bound: the box of every joint's
+  origin over the clip, sampled at 15 per second and at most 48 times, with and without root motion; a change of it is a
+  new pose version), which renderers bound its meshes with too, so a view of any place its clips take it finds it even
+  while it shows an older pose (blends of clips may leave the reach by a little). Unseen animators thus cost an update of
+  their state and no sampling; a renderer shows a re-entering animator's previous pose for one frame.
 - **Attachments.** Each update the system writes an `AttachToJointComponent`'s local transform so that its world
   transform is the animator's world transform times the joint's pose: under the animator itself that is the pose, which
   does not change when the animator moves; elsewhere it goes through the parent's world transform. A placement equal to

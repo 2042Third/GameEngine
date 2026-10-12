@@ -871,6 +871,47 @@ TEST_SUITE("Animation.System")
 		CHECK_MESSAGE(renderScene.Validate(&error), error);
 		CheckSceneCaches(*scene.SceneRef);
 	}
+
+	TEST_CASE("An unseen WhenVisible animator's skinned meshes are bounded by where its clips take them")
+	{
+		// The walk carries the arm 2 along +Z over its loop (without root motion the travel stays in the pose): an animator
+		// that skips its poses while unseen must still be found where the clip will have taken its mesh, or it never is.
+		AnimationScene scene;
+		Entity walker = scene.CreateAnimator("Walker", c_WalkHandle);
+		walker.GetComponent<AnimatorComponent>().CullingMode = AnimatorCullingMode::WhenVisible;
+		const AssetHandle meshHandle = UUID(0x5C1C);
+		const Ref<Mesh> tube = CreateSkinnedTube({ .Joints = 3, .RingsPerJoint = 2, .Sides = 6, .JointLength = 1.0f, .Radius = 0.25f });
+		Entity body = scene.SceneRef->CreateChildEntity(walker, "Body");
+		body.AddComponent<MeshRendererComponent>().Mesh = meshHandle;
+		body.AddComponent<SkinComponent>().Animator = walker.GetUUID();
+		scene.Start();
+		RenderScene& renderScene = RenderScene::Get(*scene.SceneRef);
+		renderScene.Sync(nullptr);
+		for (uint32_t slot = 0; slot < renderScene.GetMeshSlotCapacity(); slot++)
+		{
+			if (renderScene.GetMeshHandle(slot) == meshHandle)
+				renderScene.SetMeshLayout(slot, *tube);
+		}
+
+		// The first pose, near the start of the walk, then nothing: no renderer reports it.
+		for (int update = 0; update < 3; update++)
+		{
+			scene.Update(1.0f / 60.0f);
+			renderScene.Sync(nullptr);
+		}
+		CHECK(scene.System()->GetStats().Culled == 1);
+		const uint32_t proxy = renderScene.FindProxy(body.GetHandle());
+		REQUIRE((renderScene.GetProxyFlags(proxy) & RenderProxyFlags::Skinned) != 0);
+		CHECK(glm::vec3(scene.GetJoint(walker, 0)[3]).z < 0.1f);
+		// Its bounds reach as far as the walk goes, so a view of any place on the way finds it.
+		const AABB bounds = renderScene.GetWorldBounds(proxy);
+		CHECK(bounds.Min.z <= -0.25f + 1e-4f);
+		CHECK(bounds.Max.z >= 2.0f + 0.25f - 1e-4f);
+		CHECK(bounds.Contains(glm::vec3(0.0f, 0.5f, 1.5f)));
+		std::string error;
+		CHECK_MESSAGE(renderScene.Validate(&error), error);
+		CheckSceneCaches(*scene.SceneRef);
+	}
 }
 
 TEST_SUITE("Animation.Preview")

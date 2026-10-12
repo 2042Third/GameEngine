@@ -181,6 +181,21 @@ namespace Strata
 				if (weightSum != 65535)
 					return fail(fmt::format("The skin weights of vertex {} add up to {} instead of 65535", vertex, weightSum));
 			}
+			// The distance is convex in the vertex: the farthest point of a joint's extent from its origin is a corner.
+			binding->MaxJointExtent = 0.0f;
+			for (size_t joint = 0; joint < jointCount; joint++)
+			{
+				const AABB& bounds = binding->JointBounds[joint];
+				if (!bounds.IsValid())
+					continue;
+				for (int corner = 0; corner < 8; corner++)
+				{
+					const glm::vec3 point((corner & 1) ? bounds.Max.x : bounds.Min.x, (corner & 2) ? bounds.Max.y : bounds.Min.y, (corner & 4) ? bounds.Max.z : bounds.Min.z);
+					binding->MaxJointExtent = std::max(binding->MaxJointExtent, glm::length(glm::vec3(binding->InverseBindMatrices[joint] * glm::vec4(point, 1.0f))));
+				}
+			}
+			if (!std::isfinite(binding->MaxJointExtent))
+				return fail("A skinned mesh's joints are too far from its vertices");
 		}
 		else if (!skinVertices.empty())
 		{
