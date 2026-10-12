@@ -607,6 +607,40 @@ TEST_SUITE("Editor.Recovery")
 		CHECK_FALSE(harness.Context.GetEditScene()->FindEntityByName("Crashed"));
 	}
 
+	TEST_CASE("A scene that moves before its version is noted keeps its changes recoverable")
+	{
+		// The journal notes the version of the scene file on an I/O job. A scene moved before that job runs (it waits behind a
+		// discard's write, or a script moves the scene right after opening it) is no longer where the job looks: the move's
+		// own operation notes it at the new place.
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("RecoveryMovedEarly");
+		const std::filesystem::path assets = directory / "Assets";
+		Scene saved("Level");
+		saved.CreateEntity("Saved");
+		const std::filesystem::path movedFile = assets / "Levels" / "Level.stscene";
+		REQUIRE(FileSystem::WriteText(movedFile, JsonUtils::Dump(SceneSerializer::Serialize(saved), 1, '\t') + "\n"));
+
+		SceneRecovery recovery;
+		recovery.SetProject(directory / "Recovery", assets);
+		Scene scene("Level");
+		// Where the scene was when it opened: gone by the time its version is noted.
+		recovery.BeginScene(scene, UUID(), assets / "Scenes" / "Level.stscene", "Scenes/Level.stscene");
+		recovery.OnSceneMoved(movedFile, "Levels/Level.stscene");
+
+		UndoStack undo;
+		undo.SetObserver(&recovery);
+		SceneEditTransaction transaction(scene, "Create 'Edit'", {});
+		transaction.TrackCreated(scene.CreateEntity("Edit").GetUUID());
+		REQUIRE(transaction.Commit(undo));
+		REQUIRE(recovery.Flush(scene, true));
+		recovery.Wait();
+		const std::vector<std::filesystem::path> files = ListRecoveryFiles(directory / "Recovery");
+		REQUIRE(files.size() == 1);
+		const nlohmann::json header = ReadRecoveryHeader(files[0]);
+		CHECK(header["ScenePath"] == "Levels/Level.stscene");
+		CHECK(header["BaseHash"].is_string());
+		undo.SetObserver(nullptr);
+	}
+
 	TEST_CASE("The editor offers recovery data when the project opens, and Recover applies it")
 	{
 		const std::filesystem::path project = Tests::CreateTemporaryDirectory("RecoveryOffer") / "Game";

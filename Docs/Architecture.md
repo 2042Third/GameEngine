@@ -2096,7 +2096,8 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   to its `UndoStackObserver`, so journals follow the scene without copying it. Every action has a serial number that a merge keeps (`UndoStack::FindSerial`, `GoTo`).
 - **Autosave and recovery** (`SceneRecovery.h`). `EditorContext` keeps a journal of the edited scene's unsaved changes in
   `<project>/.strata/Recovery/<scene>-<session>.strecovery`: a header line (scene handle and path, the SHA-256 of the
-  saved scene file the changes apply to, hashed on an I/O job when the scene opens, a megabyte at a time so that a scene of
+  saved scene file the changes apply to, hashed on an I/O job when the scene opens (at its new place by the operation of a
+  move that came before that job ran), a megabyte at a time so that a scene of
   a million entities (170 MB) costs no memory of its size, or from the document when it is saved,
   the owning process, whether the changes were discarded on purpose) and a body with the scene's settings and the steps:
   the entity states the undo steps since the last save left, in order. Applied one after the other with

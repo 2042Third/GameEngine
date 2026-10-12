@@ -264,6 +264,7 @@ namespace Strata
 			std::vector<Segment> Segments;
 			bool Complete = false;
 			bool Written = false;                // A file of this journal is on disk
+			bool BaseHashReported = false;       // A write said that the scene file's version is unknown
 		};
 
 		struct ScanResult

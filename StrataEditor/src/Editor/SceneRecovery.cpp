@@ -447,12 +447,13 @@ namespace Strata
 		}
 		if (sceneFile.empty())
 			return;
-		// The version of the scene file the changes will apply to, hashed right away: the file could change on disk later.
+		// The version of the scene file the changes will apply to, hashed right away: the file could change on disk later. A
+		// scene moved before this runs (it waits behind a discard's write, or a script moves the scene right after opening it)
+		// is no longer here: the move's operation notes it at the new place (OnSceneMoved), and a write of a journal that
+		// still has none says so.
 		Enqueue([journal = m_Journal]()
 		{
 			journal->BaseHash = HashFile(journal->SceneFile);
-			if (!journal->BaseHash)
-				ST_WARN("Recovery: cannot read the scene file '{}' to note its version", FileSystem::ToUTF8(journal->SceneFile));
 		});
 	}
 
@@ -496,6 +497,10 @@ namespace Strata
 		{
 			journal->ScenePath = scenePath;
 			journal->SceneFile = sceneFile;
+			// Moved before BeginScene's hash ran, which found nothing at the old place: a move keeps the file's content, so its
+			// version is noted here.
+			if (!journal->BaseHash)
+				journal->BaseHash = HashFile(sceneFile);
 		});
 		// Written again soon, so that a journal left behind names the scene's new place (scans find a moved scene by its
 		// handle anyway).
@@ -670,6 +675,13 @@ namespace Strata
 			}
 			body += "]}\n";
 
+			// Changes that apply to a scene file need its version (a complete journal starts from an empty scene instead).
+			if (!target.Complete && target.Scene.IsValid() && !target.BaseHash && !target.BaseHashReported)
+			{
+				ST_WARN("Recovery: cannot read the scene file '{}' to note its version, so the unsaved changes of '{}' cannot be recovered",
+					FileSystem::ToUTF8(target.SceneFile), sceneName);
+				target.BaseHashReported = true;
+			}
 			const nlohmann::json header = {
 				{ "Strata", { { "Format", c_Format }, { "Version", c_FormatVersion } } },
 				{ "Scene", target.Scene.IsValid() ? UUIDToJson(target.Scene) : nlohmann::json(nullptr) },
