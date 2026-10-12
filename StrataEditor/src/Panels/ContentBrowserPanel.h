@@ -67,8 +67,9 @@ namespace Strata
 		// Shows a folder of the asset directory ('/' separators, empty for the root) from the next frame on.
 		void SetCurrentDirectory(std::string directory);
 
-		// Shows the Scripts root (the project's script sources) instead of the asset folders, or the assets again.
-		void ShowScripts(bool show);
+		// Shows the Scripts root (the project's script sources) instead of the asset folders, or the assets again, for the
+		// project open now: also when the browser has not drawn that project yet (another project opens on its assets).
+		void ShowScripts(const EditorContext& context, bool show);
 		bool IsShowingScripts() const { return m_ShowingScripts; }
 		const ScriptBrowser& GetScriptBrowser() const { return m_Scripts; }
 
@@ -124,7 +125,7 @@ namespace Strata
 		void DrawFilters();
 		void DrawFolderTree(EditorPanelContext& context);
 		// The tree's Scripts root, below the asset folders (which scroll above it, so that it stays in view).
-		void DrawScriptsRoot();
+		void DrawScriptsRoot(const EditorContext& context);
 		void DrawItems(EditorPanelContext& context);
 		void DrawGrid(EditorPanelContext& context);
 		void DrawList(EditorPanelContext& context);
@@ -190,6 +191,7 @@ namespace Strata
 		// The Scripts root: shown in the items pane instead of the folder's items while m_ShowingScripts, with its own search.
 		ScriptBrowser m_Scripts;
 		bool m_ShowingScripts = false;
+		uint64_t m_ScriptsProjectGeneration = 0; // The project m_ShowingScripts was set for (EditorContext::GetProjectGeneration)
 		std::string m_ScriptSearch;
 	};
 

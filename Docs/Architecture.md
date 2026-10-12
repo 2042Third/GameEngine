@@ -2467,7 +2467,8 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   hidden folders and build trees, each code file read for its `ST_SCRIPT_CLASS` registrations outside comments, string
   and raw string literals and preprocessor lines, unchanged files lending what an earlier listing found; at most 4,096
   files and 65,536 directory entries) for `script.list` and for `UI/ScriptBrowser`, the view of the script sources a
-  panel draws (the Content Browser's Scripts root, `ContentBrowserPanel::ShowScripts`): it lists on an I/O thread
+  panel draws (the Content Browser's Scripts root, `ContentBrowserPanel::ShowScripts`, which a project opens without
+  unless it was asked for in that project, also before the browser first drew it): it lists on an I/O thread
   (`ScriptSourceList`, whose job compares the new listing with the one before and shares it immutable, so the main
   thread neither copies nor compares files) when it is first drawn and every second while it is drawn, never while it is
   not, and rebuilds its rows only when the files or the search changed. New Script (`UI/ScriptDialogs`) runs

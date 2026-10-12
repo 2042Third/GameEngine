@@ -126,7 +126,7 @@ namespace Strata
 			CommandUtils::ObjectSchema({ { "panel", { { "type", "string" }, { "enum", panels }, { "description", "The panel to show" } } },
 				{ "scripts", CommandUtils::BoolSchema("ContentBrowser only: show its Scripts root (true) or its asset folders (false); "
 					"without it, the browser shows what it showed") } }, { "panel" }),
-			[this](EditorContext&, const nlohmann::json& parameters) -> EditorCommandResult
+			[this](EditorContext& context, const nlohmann::json& parameters) -> EditorCommandResult
 			{
 				CommandArguments arguments(parameters);
 				const std::string panel = arguments.GetString("panel");
@@ -147,7 +147,7 @@ namespace Strata
 				if (scripts)
 				{
 					if (ContentBrowserPanel* browser = m_Panels.Get<ContentBrowserPanel>(EditorPanels::c_ContentBrowser))
-						browser->ShowScripts(*scripts);
+						browser->ShowScripts(context, *scripts);
 					result["scripts"] = *scripts;
 				}
 				return EditorCommandResult::Ok(std::move(result));

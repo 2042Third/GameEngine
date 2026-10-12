@@ -797,4 +797,23 @@ TEST_SUITE("Editor.UI.Scripts")
 		CHECK_FALSE(browser->IsShowingScripts());
 		CHECK(UI::ItemProbe::Find("ContentBrowser.Filter.Texture"));
 	}
+
+	TEST_CASE("editor.showPanel shows the Scripts root also before the Content Browser drew the project, which the next project does not keep")
+	{
+		// A command script's first step runs before the browser's first frame, whose project is the one the request was for.
+		HarnessEditor editor({ ImVec2(1600.0f, 1200.0f), 1.0f }, WithFeatureProject("ScriptsRootFirst"));
+		REQUIRE(editor.Context().HasProject());
+		editor.Run("editor.showPanel", { { "panel", "ContentBrowser" }, { "scripts", true } });
+		editor.Frames(3);
+		ContentBrowserPanel* browser = editor.Layer->GetPanels().Get<ContentBrowserPanel>(EditorPanels::c_ContentBrowser);
+		REQUIRE(browser);
+		CHECK(browser->IsShowingScripts());
+		CHECK(UI::ItemProbe::Find("ScriptBrowser.NewScript").has_value());
+		CHECK_FALSE(UI::ItemProbe::Find("ContentBrowser.Filter.Texture").has_value());
+
+		// Asked for in this project, not in the next one: it opens on its assets.
+		CreateProject(editor, "AfterScriptsRoot");
+		CHECK_FALSE(browser->IsShowingScripts());
+		CHECK(UI::ItemProbe::Find("ContentBrowser.Filter.Texture"));
+	}
 }
