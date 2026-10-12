@@ -8,11 +8,13 @@
 #include "Strata/Animation/AnimationSystem.h"
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Core/Log.h"
+#include "Strata/Reflection/PropertyJson.h"
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/Scene.h"
+#include "Strata/Scene/SceneSerializer.h"
 #include "Strata/Scene/SceneServices.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -597,8 +599,35 @@ TEST_SUITE("Animation.System")
 		component.CullingMode = AnimatorCullingMode::WhenVisible;
 		Entity sword = scene.SceneRef->CreateChildEntity(animator, "Sword");
 		sword.AddComponent<AttachToJointComponent>() = AttachToJointComponent { animator.GetUUID(), "Wrist" };
+		Entity body = scene.SceneRef->CreateChildEntity(animator, "Body");
+		body.AddComponent<SkinComponent>().Animator = animator.GetUUID();
 
-		const Ref<Scene> copy = Scene::Copy(scene.SceneRef);
+		// Written as the scene file has them (enumerations by name), and read back from that.
+		const nlohmann::json written = SceneSerializer::Serialize(*scene.SceneRef);
+		const nlohmann::json* animatorJson = nullptr;
+		const nlohmann::json* swordJson = nullptr;
+		const nlohmann::json* bodyJson = nullptr;
+		for (const nlohmann::json& entity : written["Scene"]["Entities"])
+		{
+			const UUID id = *UUIDFromJson(entity["ID"]);
+			if (id == animator.GetUUID())
+				animatorJson = &entity["Components"];
+			else if (id == sword.GetUUID())
+				swordJson = &entity["Components"];
+			else if (id == body.GetUUID())
+				bodyJson = &entity["Components"];
+		}
+		REQUIRE(animatorJson);
+		REQUIRE(swordJson);
+		REQUIRE(bodyJson);
+		CHECK((*animatorJson)["Animator"]["CullingMode"] == "WhenVisible");
+		CHECK((*animatorJson)["Animator"]["Speed"] == -0.5);
+		CHECK((*swordJson)["AttachToJoint"]["Joint"] == "Wrist");
+		CHECK(*UUIDFromJson((*bodyJson)["Skin"]["Animator"]) == animator.GetUUID());
+
+		const Ref<Scene> copy = CreateRef<Scene>("Read");
+		std::string error;
+		REQUIRE_MESSAGE(SceneSerializer::Deserialize(*copy, written, &error), error);
 		const Entity copied = copy->GetEntityByUUID(animator.GetUUID());
 		REQUIRE(copied);
 		const AnimatorComponent& read = copied.GetComponent<AnimatorComponent>();
@@ -613,6 +642,7 @@ TEST_SUITE("Animation.System")
 		const AttachToJointComponent& attachment = copy->GetEntityByUUID(sword.GetUUID()).GetComponent<AttachToJointComponent>();
 		CHECK(attachment.Animator == animator.GetUUID());
 		CHECK(attachment.Joint == "Wrist");
+		CHECK(copy->GetEntityByUUID(body.GetUUID()).GetComponent<SkinComponent>().Animator == animator.GetUUID());
 	}
 }
 
