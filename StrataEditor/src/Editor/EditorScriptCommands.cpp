@@ -89,6 +89,7 @@ namespace Strata
 			return {
 				{ "build", result.ID },
 				{ "success", result.Success },
+				{ "cancelled", result.Cancelled },
 				{ "error", result.Error },
 				{ "seconds", result.Seconds },
 				{ "configured", result.Configured },
@@ -314,7 +315,7 @@ namespace Strata
 					if (result.ID != id)
 						return EditorCommandResult::Fail(fmt::format("The result of script build {} is no longer available (see script.status)", id));
 					if (!result.Success)
-						return EditorCommandResult::Fail(result.Error);
+						return EditorCommandResult::Fail(result.Error, result.Cancelled ? EditorCommandError::Cancelled : EditorCommandError::Failed);
 					const ScriptBuildLoad& load = context.GetLastScriptBuildLoad();
 					if (load.BuildID == id && !load.Loaded)
 						return EditorCommandResult::Fail(fmt::format("The scripts were built, but the module could not be loaded: {}", load.Error));

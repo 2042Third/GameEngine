@@ -42,6 +42,8 @@ namespace Strata
 
 		const std::vector<Row>& GetRows() const { return m_Rows; }
 		size_t GetErrorCount() const { return m_ErrorCount; }
+		// The line over the rows: the crash first (where it happened), then the last build's outcome.
+		const std::string& GetSummary() const { return m_Summary; }
 		// Opens a row's source (as a double click does). False, with the reason in GetLastOpenError, when it cannot.
 		bool OpenRow(EditorPanelContext& context, size_t index);
 		const std::string& GetLastOpenError() const { return m_LastOpenError; }
@@ -51,6 +53,7 @@ namespace Strata
 		std::vector<Row> m_Rows;
 		size_t m_ErrorCount = 0;
 		size_t m_WarningCount = 0;
+		bool m_HasCrash = false;
 		std::string m_Summary;
 		// What the rows were built from.
 		uint64_t m_BuildID = UINT64_MAX;
@@ -60,7 +63,7 @@ namespace Strata
 		// only when the rows or the width change.
 		std::vector<std::string> m_FileTexts;
 		float m_FileTextsWidth = -1.0f;
-		std::string m_LastOpenError;
+		std::string m_LastOpenError; // Cleared when the rows are rebuilt
 	};
 
 }

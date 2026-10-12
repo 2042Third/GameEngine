@@ -789,7 +789,10 @@ namespace Strata
 			return;
 		m_CommandRunner.Run(m_Context, m_Commands, "play.start", nlohmann::json::object(), [](const EditorCommandResult& result)
 		{
-			if (!result.Success)
+			// A build the person cancelled (the "Building to play" pill) is no error.
+			if (result.ErrorKind == EditorCommandError::Cancelled)
+				ST_INFO("Play: {}", result.Error);
+			else if (!result.Success)
 				ST_ERROR("Play: {}", result.Error);
 		});
 	}
@@ -1261,7 +1264,7 @@ namespace Strata
 		const ImGuiStyle& style = ImGui::GetStyle();
 		const ScriptBuilder& builder = m_Context.GetScriptBuilder();
 		const bool building = builder.IsRunning();
-		const bool failed = !building && builder.GetLastResult().ID != 0 && !builder.GetLastResult().Success;
+		const bool failed = !building && builder.GetLastResult().ID != 0 && !builder.GetLastResult().Success && !builder.GetLastResult().Cancelled;
 
 		const std::string label = building ? fmt::format("Building {:.0f} s", builder.GetElapsedSeconds()) : std::string("Build Scripts");
 		const char* icon = building ? Icons::LoaderCircle : (failed ? Icons::CircleAlert : Icons::Hammer);
@@ -1509,7 +1512,8 @@ namespace Strata
 			}
 			return false;
 		}
-		if (builder.GetLastResult().ID != 0 && !builder.GetLastResult().Success)
+		// A build someone cancelled failed at nothing: the pill goes back to what the module is.
+		if (builder.GetLastResult().ID != 0 && !builder.GetLastResult().Success && !builder.GetLastResult().Cancelled)
 		{
 			if (UI::Pill("Status.Scripts", Icons::CircleAlert, "Build failed", colors.Error, "The last script build failed. Click to see its errors (the Problems panel)."))
 				m_Panels.Focus(EditorPanels::c_Problems);

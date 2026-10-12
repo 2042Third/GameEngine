@@ -57,7 +57,7 @@ namespace Strata
 		};
 
 		// Plays once the build play.start waited for finished: a failed build (or a module that cannot load) fails play.start
-		// with its first diagnostics and asks the UI for the Problems panel.
+		// with its first diagnostics and asks the UI for the Problems panel; a cancelled one only ends play.start (Cancelled).
 		std::optional<EditorCommandResult> FinishPlayBuild(EditorContext& context, PlayBuildState& state)
 		{
 			const ScriptBuildResult& result = context.GetScriptBuilder().GetLastResult();
@@ -66,6 +66,8 @@ namespace Strata
 				context.ClearPlayBuild();
 			if (result.ID != state.WaitingFor)
 				return EditorCommandResult::Fail(fmt::format("The result of script build {} is no longer available (see script.status)", state.WaitingFor));
+			if (result.Cancelled)
+				return EditorCommandResult::Fail("The script build play.start waited for was cancelled, so the game does not play", EditorCommandError::Cancelled);
 			if (!result.Success)
 			{
 				context.RequestProblemsPanel();

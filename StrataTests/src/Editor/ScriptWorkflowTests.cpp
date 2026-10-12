@@ -12,6 +12,7 @@
 #include "TestHelpers.h"
 
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/Log.h>
 #include <Strata/Core/Platform.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Reflection/PropertyJson.h>
@@ -492,6 +493,8 @@ TEST_SUITE("Editor.ScriptWorkflow")
 		harness.Runner.Run(harness.Context, harness.Commands, "play.start", nlohmann::json::object(), [&outcome](const EditorCommandResult& result) { outcome = result; });
 		REQUIRE(harness.Context.GetScriptBuilder().IsRunning());
 		CHECK(harness.Context.GetPlayBuildID() == harness.Context.GetScriptBuilder().GetCurrentID());
+		const uint64_t requests = harness.Context.GetProblemsPanelRequests();
+		LogCapture log;
 		harness.Context.CancelScriptBuild();
 		harness.Context.Update(Timestep(1.0f / 60.0f));
 		harness.Runner.Update(harness.Context);
@@ -500,6 +503,16 @@ TEST_SUITE("Editor.ScriptWorkflow")
 		CHECK(outcome->Error.find("cancelled") != std::string::npos);
 		CHECK_FALSE(harness.Context.IsPlaying());
 		CHECK(harness.Context.GetPlayBuildID() == 0);
+		// Someone ended the build on purpose: play.start was cancelled, nothing failed, and nothing asks for the Problems panel
+		// or writes an error.
+		CHECK(outcome->ErrorKind == EditorCommandError::Cancelled);
+		CHECK(harness.Context.GetProblemsPanelRequests() == requests);
+		const ScriptBuildResult& build = harness.Context.GetScriptBuilder().GetLastResult();
+		CHECK(build.Cancelled);
+		CHECK_FALSE(build.Success);
+		CHECK(harness.Run("script.status")["build"]["last"]["cancelled"] == true);
+		for (const LogEntry& entry : log.GetEntries())
+			CHECK_MESSAGE(entry.Level < LogLevel::Error, entry.Message);
 	}
 
 	TEST_CASE("Console messages that name a source line point to it")

@@ -1084,14 +1084,15 @@ namespace Strata
 			CollectOutput(true);
 			m_Process.reset();
 		}
-		Finish(false, "The script build was cancelled");
+		Finish(false, "The script build was cancelled", true);
 	}
 
-	void ScriptBuilder::Finish(bool success, std::string error)
+	void ScriptBuilder::Finish(bool success, std::string error, bool cancelled)
 	{
 		ScriptBuildResult result;
 		result.ID = m_NextID - 1;
 		result.Success = success;
+		result.Cancelled = cancelled;
 		result.Diagnostics = ParseScriptBuildDiagnostics(m_Log);
 		result.LogTail = GetLogTail(m_Log, c_LogTailLines);
 		result.Configured = m_Configured;
@@ -1100,7 +1101,13 @@ namespace Strata
 		result.Module = m_Module;
 		result.ModuleChanged = success && (!m_ModuleExistedBefore || FileSystem::GetLastWriteTime(m_Module).value_or(0) != m_ModuleTimeBefore);
 
-		if (!success)
+		if (cancelled)
+		{
+			// Someone ended it: nothing failed, and the output so far says nothing about the scripts.
+			result.Error = std::move(error);
+			ST_INFO("Script build {} was cancelled", result.ID);
+		}
+		else if (!success)
 		{
 			// The first errors make the message actionable on its own; the full list is in Diagnostics.
 			result.Error = DescribeScriptBuildFailure(error, result.Diagnostics, m_Log);

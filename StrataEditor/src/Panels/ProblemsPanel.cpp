@@ -29,6 +29,8 @@ namespace Strata
 		constexpr float c_FileColumnWeight = 0.4f;
 		// Rows recorded in the item probe (for tests).
 		constexpr size_t c_ProbedRows = 8;
+		// Where a row's tooltip wraps, in text heights: a path or message longer than that wraps rather than leaving the screen.
+		constexpr float c_TooltipWidthInFontSizes = 40.0f;
 		// Functions of the script SDK's internals start with it.
 		constexpr std::string_view c_SDKInternalNamespace = "Strata::Detail::";
 
@@ -118,14 +120,26 @@ namespace Strata
 		m_FileTextsWidth = -1.0f;
 		m_ErrorCount = 0;
 		m_WarningCount = 0;
+		// An error opening a row of the rows before says nothing about these.
+		m_LastOpenError.clear();
+		m_HasCrash = fault.has_value();
 
+		// The function that crashed: where the crash happened once that is known, else the callback the engine called. The
+		// crash row names it besides the callback when they differ (a function the callback called, inlined or not), since
+		// the stack rows leave the location's own frame out: the crash row stands for it.
+		std::string crashedIn;
 		if (fault)
 		{
 			Row crash;
 			crash.Kind = RowKind::Crash;
 			const std::string where = fault->ClassName.empty() ? fault->Method : fault->ClassName + "::" + fault->Method;
-			crash.Text = fault->EntityName.empty() ? fmt::format("Crash in {}: {}", where, fault->Description)
-				: fmt::format("Crash in {} on '{}': {}", where, fault->EntityName, fault->Description);
+			crashedIn = where;
+			const std::string function = fault->Location ? fault->Location->Function : std::string();
+			const std::string inFunction = function.empty() || function == where ? std::string() : fmt::format(" (in {})", function);
+			if (!function.empty())
+				crashedIn = function;
+			crash.Text = fault->EntityName.empty() ? fmt::format("Crash in {}{}: {}", where, inFunction, fault->Description)
+				: fmt::format("Crash in {} on '{}'{}: {}", where, fault->EntityName, inFunction, fault->Description);
 			if (fault->Location)
 			{
 				crash.File = fault->Location->File;
@@ -172,16 +186,33 @@ namespace Strata
 			m_Rows.push_back(std::move(row));
 		}
 
-		if (build.ID == 0)
-			m_Summary = "No script build in this session yet.";
-		else if (build.Success)
-			m_Summary = fmt::format("Build {} succeeded{}.", build.ID, m_WarningCount > 0 ? fmt::format(" with {} warning{}", m_WarningCount, m_WarningCount == 1 ? "" : "s")
-				: std::string());
-		else
-			m_Summary = fmt::format("Build {} failed: {} error{}, {} warning{}.", build.ID, m_ErrorCount, m_ErrorCount == 1 ? "" : "s", m_WarningCount,
-				m_WarningCount == 1 ? "" : "s");
+		// The crash first: it stopped the game. Then the last build, unless there was none to speak of.
+		m_Summary.clear();
 		if (fault)
-			m_Summary += fault->Symbolized || !fault->Location ? " The scripts crashed." : " The scripts crashed (finding where).";
+		{
+			m_Summary = fmt::format("The scripts crashed in {}{}.", crashedIn, fault->Symbolized || !fault->Location ? "" : " (finding where)");
+			if (build.ID != 0)
+				m_Summary += " ";
+		}
+		if (build.ID == 0)
+		{
+			if (!fault)
+				m_Summary = "No script build in this session yet.";
+		}
+		else if (build.Cancelled)
+		{
+			m_Summary += fmt::format("Build {} cancelled.", build.ID);
+		}
+		else if (build.Success)
+		{
+			m_Summary += fmt::format("Build {} succeeded{}.", build.ID, m_WarningCount > 0 ? fmt::format(" with {} warning{}", m_WarningCount,
+				m_WarningCount == 1 ? "" : "s") : std::string());
+		}
+		else
+		{
+			m_Summary += fmt::format("Build {} failed: {} error{}, {} warning{}.", build.ID, m_ErrorCount, m_ErrorCount == 1 ? "" : "s", m_WarningCount,
+				m_WarningCount == 1 ? "" : "s");
+		}
 	}
 
 	bool ProblemsPanel::OpenRow(EditorPanelContext& context, size_t index)
@@ -215,10 +246,12 @@ namespace Strata
 		}
 		ImGui::SameLine();
 		ImGui::AlignTextToFramePadding();
-		ImGui::PushStyleColor(ImGuiCol_Text, m_ErrorCount > 0 ? colors.Error : colors.TextSecondary);
+		const ImVec4& summaryColor = m_ErrorCount > 0 || m_HasCrash ? colors.Error : colors.TextSecondary;
+		ImGui::PushStyleColor(ImGuiCol_Text, summaryColor);
 		ImGui::TextUnformatted(building ? "Building..." : m_Summary.c_str());
 		ImGui::PopStyleColor();
-		UI::ItemProbe::Record("Problems.Summary", true, 0, m_Summary);
+		UI::ItemProbe::Record("Problems.Summary", true, UI::ToColorU32(summaryColor), m_Summary);
+		UI::ItemProbe::Record("Problems.OpenError", true, 0, m_LastOpenError);
 		if (!m_LastOpenError.empty())
 		{
 			ImGui::SameLine();
@@ -247,13 +280,17 @@ namespace Strata
 				ImGui::TableNextRow();
 				ImGui::TableSetColumnIndex(0);
 				ImGui::PushID(line);
+				// A frame of the crash's stack goes under the crash, its icon included (indenting after the icon would move the
+				// text back onto it).
+				if (row.Kind == RowKind::Frame)
+					ImGui::Indent(ImGui::GetFontSize());
 				const ImVec4& color = row.Kind == RowKind::Warning ? colors.Warning : (row.Kind == RowKind::Frame ? colors.TextSecondary : colors.Error);
 				ImGui::PushStyleColor(ImGuiCol_Text, color);
 				ImGui::TextUnformatted(GetIcon(row.Kind));
+				if (index < c_ProbedRows)
+					UI::ItemProbe::Record(UI::NumberedProbeKey("Problems.Icon.", index));
 				ImGui::PopStyleColor();
 				ImGui::SameLine();
-				if (row.Kind == RowKind::Frame)
-					ImGui::Indent(ImGui::GetFontSize());
 				// An unlabeled row with the text drawn after it: messages may hold "##" (token pasting), which a label would cut.
 				ImGui::Selectable("##Row", false, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick);
 				// The first rows only: the probe keeps a fixed set of keys.
@@ -263,12 +300,23 @@ namespace Strata
 					open = index;
 				if (UI::IsTooltipDue())
 				{
-					const std::string where = row.File.empty() ? std::string() : (row.Line > 0 ? fmt::format("{}({})\n", row.File, row.Line) : row.File + "\n");
-					ImGui::SetTooltip("%s\n%s%s", row.Text.c_str(), where.c_str(), row.Source.empty() ? (row.File.empty() ? "No source file"
-						: "The file is not on this machine") : "Double-click to open it in the external editor");
+					// The file as the File column shows it (relative to the project when it is the project's), wrapped like the
+					// message: neither runs off the screen.
+					const std::string where = row.ShownFile.empty() ? std::string() : (row.Line > 0 ? fmt::format("{}({})", row.ShownFile, row.Line) : row.ShownFile);
+					ImGui::BeginTooltip();
+					ImGui::PushTextWrapPos(ImGui::GetFontSize() * c_TooltipWidthInFontSizes);
+					ImGui::TextUnformatted(row.Text.c_str(), row.Text.c_str() + row.Text.size());
+					if (!where.empty())
+						ImGui::TextUnformatted(where.c_str(), where.c_str() + where.size());
+					ImGui::TextUnformatted(row.Source.empty() ? (row.File.empty() ? "No source file" : "The file is not on this machine")
+						: "Double-click to open it in the external editor");
+					ImGui::PopTextWrapPos();
+					ImGui::EndTooltip();
 				}
 				ImGui::SameLine(0.0f, 0.0f);
 				ImGui::TextUnformatted(row.Text.c_str());
+				if (index < c_ProbedRows)
+					UI::ItemProbe::Record(UI::NumberedProbeKey("Problems.Text.", index));
 				if (row.Kind == RowKind::Frame)
 					ImGui::Unindent(ImGui::GetFontSize());
 				ImGui::PopID();

@@ -141,6 +141,7 @@ namespace Strata
 	{
 		uint64_t ID = 0;      // Builds are numbered from 1 in each editor session
 		bool Success = false;
+		bool Cancelled = false; // Ended by ScriptBuilder::Cancel (not a failure of the scripts; Success is false)
 		std::string Error;    // Why the build failed (with the first errors), empty on success
 		std::vector<ScriptDiagnostic> Diagnostics;
 		std::string LogTail;  // The end of the CMake output
@@ -180,7 +181,7 @@ namespace Strata
 		bool Start(const Project& project, const ScriptBuildSettings& settings, std::string* outError = nullptr);
 		// Advances a running build. Returns true in the call in which the build finished (see GetLastResult).
 		bool Update();
-		// Terminates a running build; it finishes as failed.
+		// Terminates a running build; it finishes without success, as cancelled (ScriptBuildResult::Cancelled).
 		void Cancel();
 
 		bool IsRunning() const { return m_Phase != ScriptBuildPhase::Idle; }
@@ -194,7 +195,7 @@ namespace Strata
 		bool StartProcess(const std::vector<std::string>& arguments, std::string* outError);
 		// Moves new output into the log text and streams complete lines to the log.
 		void CollectOutput(bool flushPartialLine);
-		void Finish(bool success, std::string error);
+		void Finish(bool success, std::string error, bool cancelled = false);
 	private:
 		ScriptBuildSettings m_Settings;
 		std::filesystem::path m_BuildDirectory;

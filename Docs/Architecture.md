@@ -1569,11 +1569,13 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   changed, added or removed), so a build that left the module as it was (an up-to-date build, a header nothing includes,
   a CMake comment) settles the reason, and deleted or renamed files count. A module someone else wrote (an IDE's build, an
   earlier session) has no stamp: a source newer than it is the reason then. A failed build fails the command and raises
-  `GetProblemsPanelRequests`, which `EditorLayer` turns into showing the Problems panel (`Panels/ProblemsPanel`: the
-  last build's diagnostics and the crash with its stack, without the SDK's internal `Strata::Detail` frames, rebuilt only
-  when the build or the crash changed; the project's
-  files show relative to it, other paths cut at their start where the column is narrow, so file names stay readable,
-  the cut texts computed again only when the column's width changes). Sources
+  `GetProblemsPanelRequests`, which `EditorLayer` turns into showing the Problems panel; a cancelled one
+  (`ScriptBuildResult::Cancelled`, the "Building to play" pill) fails `play.start` as `Cancelled` and asks for nothing.
+  The Problems panel (`Panels/ProblemsPanel`) lists the last build's diagnostics and the crash with its stack (the crash
+  row names the function that crashed besides the callback when they differ, the stack rows the callers, without the
+  SDK's internal `Strata::Detail` frames), rebuilt only when the build or the crash changed; its summary leads with the
+  crash. The project's files show relative to it, other paths cut at their start where the column is narrow, so file
+  names stay readable, the cut texts computed again only when the column's width changes. Sources
   open in the person's code editor (`Editor/ExternalEditor`: `ExternalEditorLauncher` starts the command template's
   program directly, without a shell, from the user's settings or `STRATA_EXTERNAL_EDITOR`, else the default
   application); the Problems panel's double click, the Console's click on a message naming a source line

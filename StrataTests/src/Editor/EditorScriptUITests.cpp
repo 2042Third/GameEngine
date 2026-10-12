@@ -3,6 +3,7 @@
 #include "Editor/HarnessEditor.h"
 #include "Editor/ImGuiHarness.h"
 #include "EditorLayer.h"
+#include "FeatureTest/FeatureTestUtils.h"
 #include "Panels/ProblemsPanel.h"
 #include "Scripting/ScriptTestUtils.h"
 #include "TestHelpers.h"
@@ -11,7 +12,10 @@
 #include "UI/Theme.h"
 
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/Log.h>
 #include <Strata/Core/Timestep.h>
+#include <Strata/Scene/Components.h>
+#include <Strata/Scene/Entity.h>
 
 #include <imgui.h>
 
@@ -219,6 +223,57 @@ TEST_SUITE("Editor.UI.Scripts")
 		CHECK(lines[1] == "7");
 		CHECK(lines[2] == "5");
 		CHECK(problems->GetLastOpenError().empty());
+
+		// A file that is gone since says so next to the summary, until the rows are built again (the next build's).
+		REQUIRE(FileSystem::Remove(broken));
+		editor.Frames(30);
+		editor.ClickAt(row->GetCenter());
+		editor.ClickAt(row->GetCenter());
+		editor.Frames(1);
+		CHECK(problems->GetLastOpenError().find("There is no file") != std::string::npos);
+		CHECK(UI::ItemProbe::Find("Problems.OpenError")->Text == problems->GetLastOpenError());
+		REQUIRE(FileSystem::WriteText(broken, "// Back again\n"));
+		const uint64_t built = builder.GetLastResult().ID;
+		REQUIRE(editor.Click("Problems.Build"));
+		REQUIRE(editor.FramesUntil([&builder, built]() { return !builder.IsRunning() && builder.GetLastResult().ID == built + 1; }));
+		editor.Frames(2);
+		CHECK(problems->GetLastOpenError().empty());
+		CHECK(UI::ItemProbe::Find("Problems.OpenError")->Text.empty());
+	}
+
+	TEST_CASE("Cancelling the build Play waits for is no failure: no error, no Problems panel, and the build reads as cancelled")
+	{
+		ScopedEnvironmentVariable fakeCMake("STRATA_TEST_FAKE_CMAKE", "succeed");
+		HarnessEditor editor({}, WithFakeScriptBuild());
+		editor.Frames(1);
+		CreateProject(editor, "Cancelling");
+		// A scene that uses scripts which are not built: Play builds first.
+		editor.Context().GetEditScene()->CreateEntity("Scripted").AddComponent<ScriptComponent>();
+		editor.Frames(2);
+		const uint64_t requests = editor.Context().GetProblemsPanelRequests();
+		LogCapture log;
+
+		// Ctrl+P starts the build in this frame; the builder polls it from the next one, so it is still running here.
+		editor.Harness.SetKey(ImGuiMod_Ctrl, true);
+		editor.Harness.SetKey(ImGuiKey_P, true);
+		editor.Frames(1);
+		editor.Harness.SetKey(ImGuiKey_P, false);
+		editor.Harness.SetKey(ImGuiMod_Ctrl, false);
+		const ScriptBuilder& builder = editor.Context().GetScriptBuilder();
+		REQUIRE(builder.IsRunning());
+		REQUIRE(editor.Context().GetPlayBuildID() == builder.GetCurrentID());
+		editor.Context().CancelScriptBuild(); // What the "Building to play" pill does when clicked
+		editor.Frames(3);
+
+		CHECK_FALSE(editor.Context().IsPlaying());
+		CHECK(editor.Context().GetProblemsPanelRequests() == requests);
+		CHECK(builder.GetLastResult().Cancelled);
+		CHECK(editor.GetPillText("Status.Scripts") != "Build failed");
+		ProblemsPanel* problems = editor.Layer->GetPanels().Get<ProblemsPanel>(EditorPanels::c_Problems);
+		REQUIRE(problems);
+		CHECK(problems->GetSummary() == fmt::format("Build {} cancelled.", builder.GetLastResult().ID));
+		for (const LogEntry& entry : log.GetEntries())
+			CHECK_MESSAGE(entry.Level < LogLevel::Error, entry.Message);
 	}
 
 	TEST_CASE("The Problems panel shows a crash where it happened, its file cut at the start where the column is narrow")
@@ -266,15 +321,46 @@ TEST_SUITE("Editor.UI.Scripts")
 			return !frame.File.empty() && !isLocation && !frame.Function.starts_with("Strata::Detail::");
 		});
 		CHECK(std::count_if(rows.begin(), rows.end(), [](const ProblemsPanel::Row& row) { return row.Kind == ProblemsPanel::RowKind::Frame; }) == shownFrames);
+
+		// The function that crashed is named on the crash row (its frame is not a row of its own) and leads the summary, in
+		// the error color.
+		REQUIRE_FALSE(fault.Location->Function.empty());
+		// The null write is in a function OnUpdate calls (inlined into it in optimized builds, which still name it).
+		CHECK(fault.Location->Function != "Faulty::OnUpdate");
+		if (fault.Location->Function != "Faulty::OnUpdate")
+			CHECK(rows[0].Text.find("(in " + fault.Location->Function + ")") != std::string::npos);
+		CHECK(problems->GetSummary() == "The scripts crashed in " + fault.Location->Function + ".");
+		const std::optional<UI::ItemProbe::Item> summary = UI::ItemProbe::Find("Problems.Summary");
+		REQUIRE(summary);
+		CHECK(summary->Color == UI::ToColorU32(UI::GetThemeColors().Error));
+
+		// Stack rows sit under the crash row, their icon indented with them and their text clear of the icon.
+		if (rows.size() > 1)
+		{
+			REQUIRE(rows[1].Kind == ProblemsPanel::RowKind::Frame);
+			const std::optional<UI::ItemProbe::Item> crashIcon = UI::ItemProbe::Find("Problems.Icon.0");
+			const std::optional<UI::ItemProbe::Item> frameIcon = UI::ItemProbe::Find("Problems.Icon.1");
+			const std::optional<UI::ItemProbe::Item> crashText = UI::ItemProbe::Find("Problems.Text.0");
+			const std::optional<UI::ItemProbe::Item> frameText = UI::ItemProbe::Find("Problems.Text.1");
+			REQUIRE(crashIcon);
+			REQUIRE(frameIcon);
+			REQUIRE(crashText);
+			REQUIRE(frameText);
+			CHECK(frameIcon->Min.x > crashIcon->Min.x + ImGui::GetFontSize() * 0.5f);
+			const float crashGap = crashText->Min.x - crashIcon->Max.x;
+			CHECK(crashGap > 0.0f);
+			CHECK(frameText->Min.x - frameIcon->Max.x == doctest::Approx(crashGap));
+		}
 #endif
 	}
 
-	TEST_CASE("New Script writes a script class and opens it")
+	TEST_CASE("New Script writes a script class, opens it and builds the scripts, so that the class can be attached")
 	{
 		const std::filesystem::path output = CreateTemporaryDirectory("NewScriptEditor") / "Arguments.txt";
 		ScopedEnvironmentVariable externalEditor("STRATA_EXTERNAL_EDITOR", fmt::format("\"{}\" --strata-test-helper=record-arguments \"{}\" {{file}} {{line}}",
 			FileSystem::ToUTF8(GetTestExecutablePath()), FileSystem::ToUTF8(output)));
-		HarnessEditor editor;
+		ScopedEnvironmentVariable fakeCMake("STRATA_TEST_FAKE_CMAKE", "succeed");
+		HarnessEditor editor({}, WithFakeScriptBuild());
 		editor.Frames(1);
 		CreateProject(editor, "Authoring");
 		editor.Layer->GetNewScriptDialog().Open();
