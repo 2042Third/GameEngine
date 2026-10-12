@@ -335,6 +335,10 @@ namespace Strata
 		// finished exports, recovery data on offer.
 		EditorNotifications& GetNotifications() { return m_Notifications; }
 		const EditorNotifications& GetNotifications() const { return m_Notifications; }
+		// Posts that the command running now moved `path` (an asset, or a folder with `assets` assets) to the project's trash,
+		// when an agent or a command script runs it: the person did not see it go. It names who did it and that undo
+		// restores it, as a warning when references to it were left missing (`force`). The person's own deletes post nothing.
+		void NotifyAssetsTrashed(const std::string& path, bool folder, size_t assets, bool referencesLeft);
 		// The file of a scene asset of the project (absolute) and its path relative to the asset directory; empty for the
 		// null handle or without a project.
 		std::pair<std::filesystem::path, std::string> GetSceneFile(AssetHandle scene) const;

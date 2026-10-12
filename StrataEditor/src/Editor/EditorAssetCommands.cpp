@@ -826,6 +826,7 @@ namespace Strata
 				if (!assets->MoveToTrash(path, trashed, &error))
 					return EditorCommandResult::Fail(error);
 				context.GetUndoStack().Record(CreateScope<AssetTrashAction>(context, *assets, fmt::format("Delete {}", path), trashed, force));
+				context.NotifyAssetsTrashed(path, false, trashed.Handles.size(), !referencers.empty());
 				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) }, { "path", path }, { "trash", FileSystem::ToUTF8(trashed.Entry) },
 					{ "referencedBy", AssetReferences::ToJson(referencers) } });
 			} });
@@ -913,6 +914,7 @@ namespace Strata
 				if (!assets->MoveToTrash(path, trashed, &error))
 					return EditorCommandResult::Fail(error);
 				context.GetUndoStack().Record(CreateScope<AssetTrashAction>(context, *assets, fmt::format("Delete Folder {}", path), trashed, force));
+				context.NotifyAssetsTrashed(path, true, trashed.Handles.size(), !referencers.empty());
 				return EditorCommandResult::Ok({ { "path", path }, { "assets", trashed.Handles.size() }, { "trash", FileSystem::ToUTF8(trashed.Entry) },
 					{ "referencedBy", AssetReferences::ToJson(referencers) } });
 			} });

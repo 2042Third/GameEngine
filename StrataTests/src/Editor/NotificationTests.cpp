@@ -153,6 +153,50 @@ TEST_SUITE("Editor.Notifications")
 		CHECK(notifications.IsEmpty());
 	}
 
+	TEST_CASE("Assets an agent or a command script moves to the trash are announced with who did it; the person's own deletes are not")
+	{
+		const std::filesystem::path root = CreateTemporaryDirectory("NotificationTrash");
+		EditorContextSpecification specification;
+		specification.WatchAssetFiles = false;
+		specification.HotReloadScripts = false;
+		EditorContext context(specification);
+		EditorCommandRegistry commands;
+		REQUIRE(commands.Execute(context, "project.create", { { "directory", FileSystem::ToUTF8(root / "Game") }, { "name", "Game" }, { "template", "basic3d" } }).Success);
+		for (const char* name : { "Materials/Mine.stmat", "Materials/Theirs.stmat", "Old/Kept.stmat", "Old/Also.stmat" })
+			REQUIRE(commands.Execute(context, "material.create", { { "path", name } }).Success);
+		EditorNotifications& notifications = context.GetNotifications();
+		notifications.Clear();
+
+		// The person's own delete (the Content Browser's, through RunEditorCommand): they saw it go.
+		CHECK_FALSE(RunEditorCommand(context, commands, "asset.delete", { { "asset", "Materials/Mine.stmat" } }).is_null());
+		CHECK(notifications.IsEmpty());
+
+		// An agent's: named, pointing at its journal entry (Show in Activity, where Undo to here is), saying that undo restores it.
+		REQUIRE(commands.Execute(context, "asset.delete", { { "asset", "Materials/Theirs.stmat" } }, CommandOrigin { CommandSource::Automation, "Claude" }).Success);
+		REQUIRE(notifications.GetActive().size() == 1);
+		const EditorNotification& deleted = notifications.GetActive()[0];
+		CHECK(deleted.Level == NotificationLevel::Info);
+		CHECK(deleted.Title == "Claude deleted an asset");
+		CHECK(deleted.Message == "'Materials/Theirs.stmat' went to the project's trash; Undo restores it.");
+		CHECK(deleted.JournalEntry == context.GetJournal().GetLatestId());
+		CHECK(context.GetJournal().Find(deleted.JournalEntry)->UndoStep == "Delete Materials/Theirs.stmat");
+
+		// One the scene uses, forced: a warning that references were left missing.
+		notifications.Clear();
+		REQUIRE(commands.Execute(context, "asset.delete", { { "asset", "Materials/Ground.stmat" }, { "force", true } }, CommandOrigin { CommandSource::Automation }).Success);
+		REQUIRE(notifications.GetActive().size() == 1);
+		CHECK(notifications.GetActive()[0].Level == NotificationLevel::Warning);
+		CHECK(notifications.GetActive()[0].Title == "An agent deleted an asset");
+		CHECK(notifications.GetActive()[0].Message.find("leaving references to it missing") != std::string::npos);
+
+		// A command script's folder.
+		notifications.Clear();
+		REQUIRE(commands.Execute(context, "asset.deleteFolder", { { "path", "Old" } }, CommandOrigin { CommandSource::CommandScript }).Success);
+		REQUIRE(notifications.GetActive().size() == 1);
+		CHECK(notifications.GetActive()[0].Title == "A command script deleted a folder");
+		CHECK(notifications.GetActive()[0].Message == "'Old' and its 2 assets went to the project's trash; Undo restores them.");
+	}
+
 	TEST_CASE("Commands the person runs post their failures and warnings; others do not")
 	{
 		EditorContext context { EditorContextSpecification { false } };

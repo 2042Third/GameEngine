@@ -1198,6 +1198,25 @@ namespace Strata
 		m_Notifications.Post(std::move(notification));
 	}
 
+	void EditorContext::NotifyAssetsTrashed(const std::string& path, bool folder, size_t assets, bool referencesLeft)
+	{
+		// Who deleted it, as for discarded changes: the person saw their own delete happen (and answered its question).
+		const CommandJournalEntry* command = m_Journal->Find(m_Journal->GetOutermostRunningId());
+		if (!command || command->Source == CommandSource::UI || command->Source == CommandSource::Internal)
+			return;
+
+		EditorNotification notification;
+		notification.Level = referencesLeft ? NotificationLevel::Warning : NotificationLevel::Info;
+		const std::string who = command->Source == CommandSource::Automation ? (command->Client.empty() ? std::string("An agent") : command->Client)
+			: std::string("A command script");
+		notification.Title = fmt::format("{} deleted {}", who, folder ? "a folder" : "an asset");
+		const std::string what = folder ? fmt::format("'{}' and its {} {}", path, assets, assets == 1 ? "asset" : "assets") : fmt::format("'{}'", path);
+		notification.Message = fmt::format("{} went to the project's trash{}; Undo restores {}.", what,
+			referencesLeft ? ", leaving references to it missing" : "", folder ? "them" : "it");
+		notification.JournalEntry = command->Id;
+		m_Notifications.Post(std::move(notification));
+	}
+
 	////////////////////////////////////////////////////////////////////////////////
 	// Scripts
 	////////////////////////////////////////////////////////////////////////////////

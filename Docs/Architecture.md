@@ -1984,7 +1984,10 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   (`NotifyDiscardedChanges`, from `ResetScene`: who discarded them, from the command that runs now,
   `CommandJournal::GetOutermostRunningId`, which a deferred command is during its polls too; a warning naming the agent or
   the command script, information when the person answered Don't Save; Recover while the project stays open, where they
-  are kept when it closes, and nothing when the person discarded what could not be kept) and `EditorLayer` when the
+  are kept when it closes, and nothing when the person discarded what could not be kept), assets and folders an agent or a
+  command script moved to the trash (`NotifyAssetsTrashed`, from `asset.delete` and `asset.deleteFolder`, found the same
+  way: who did it, that Undo restores them, a warning when `force` left references missing, the command's entry for Show
+  in Activity; the person's own deletes post nothing, as they asked and saw them go) and `EditorLayer` when the
   recovery dialog closes with changes still on offer. `UI::DrawNotifications` draws them as toasts in one window at the
   bottom right of the work area, above the status bar, kept in front without being focused (`BringWindowToDisplayFront`,
   `NoFocusOnAppearing`); it returns at once while there are none. A title too long for its line wraps before the close
