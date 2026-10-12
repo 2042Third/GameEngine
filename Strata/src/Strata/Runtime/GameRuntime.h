@@ -72,8 +72,9 @@ namespace Strata
 
 		// Starts loading a scene of the pack: the running scene goes on until it and everything it uses are loaded, then
 		// Update swaps it in (stopping the running scene, starting the new one's systems; the assets the new scene does not
-		// use are released a few frames later, AssetManagerBase::ScheduleTrim). A load under way is replaced. False, with
-		// nothing changed, for a handle that is not a scene of the pack.
+		// use are released a few frames later, AssetManagerBase::ScheduleTrim). A load of another scene under way is
+		// replaced; a load of the same scene goes on (asking for it again changes nothing). False, with nothing changed, for a
+		// handle that is not a scene of the pack.
 		bool LoadScene(AssetHandle scene, std::string* outError = nullptr);
 		// A scene is loading to replace the running one (or to start the game).
 		bool IsLoadingScene() const { return m_SceneLoad != nullptr; }
@@ -83,8 +84,9 @@ namespace Strata
 
 		// Once per frame: finishes asset loads, advances the scene loads (swapping in a scene that is ready), advances the scene,
 		// then honors its requests (Scene::RequestQuit, RequestSceneLoad): a quit ends the game (GetQuitRequest; further updates
-		// do nothing), a scene load starts loading that scene of the pack, or the current one again for the null handle (a
-		// failure is logged and the scene keeps running).
+		// do nothing), a scene load starts loading that scene of the pack (LoadScene), or the current one again for the null
+		// handle (a failure is logged and the scene keeps running). The loading scene starting itself over loads again beside
+		// the start scene's load, which goes on.
 		void Update(Timestep timestep);
 		// For tools and tests: waits for the start scene and starts it (or fails, GetStartError) without running any frame.
 		// False when it failed or took longer than `timeout`.
@@ -103,6 +105,8 @@ namespace Strata
 
 		// Advances the loading scene's and the next scene's loads; starts what is ready.
 		void UpdateSceneLoads();
+		// Loads the playing loading scene again, to start it over (unless that load is under way already).
+		void RestartLoadingScene();
 		// Stops the running scene and starts `scene` (of asset `handle`) in its place; what the previous scene used goes a few
 		// frames later, unless the new one requested it by then or its load brought it in (`loaded`).
 		void StartScene(Ref<Scene> scene, AssetHandle handle, std::span<const AssetHandle> loaded);

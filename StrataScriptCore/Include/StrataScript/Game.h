@@ -11,7 +11,7 @@ namespace Strata
 {
 
 	// The game as a whole: ending it and switching scenes. Both take effect once the current frame's update is done (scripts
-	// keep running until then); quitting wins over a scene switch, and later requests replace earlier ones.
+	// keep running until then); quitting wins over a scene switch, and a request for another scene replaces an earlier one.
 	class Game
 	{
 	public:
@@ -27,6 +27,8 @@ namespace Strata
 		// what it uses load in the background while the current scene goes on (show GetSceneLoadProgress); the switch happens
 		// once it is in (with what it uses where that fits in the memory budgets, else the new scene streams it in as it draws
 		// it; other scenes it names stay unloaded).
+		// Asking again for the scene that is loading changes nothing, so calling this in every update while a condition holds
+		// is fine.
 		static bool LoadScene(AssetHandle scene)
 		{
 			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(LoadScene);
@@ -35,8 +37,9 @@ namespace Strata
 
 		static bool LoadScene(std::string_view path) { return LoadScene(Assets::Find(path)); }
 
-		// Starts the running scene over (e.g. after the player lost): an exported game loads it again from its asset; the
-		// editor restarts what play mode runs (the edited scene with its unsaved changes, or the scene asset switched to last).
+		// Starts the running scene over (e.g. after the player lost): an exported game loads it again from its asset (asking
+		// again while that load is under way changes nothing); the editor restarts what play mode runs (the edited scene with
+		// its unsaved changes, or the scene asset switched to last).
 		static bool ReloadScene()
 		{
 			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(LoadScene);

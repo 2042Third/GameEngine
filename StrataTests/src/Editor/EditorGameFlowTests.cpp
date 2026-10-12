@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Asset/AssetTestUtils.h"
 #include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
@@ -17,10 +18,12 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 
 using namespace Strata;
 using namespace Strata::Tests;
@@ -308,5 +311,46 @@ TEST_SUITE("Editor.GameFlow")
 		UpdateUntil([&] { game->Update(frame); }, [&] { return game->GetSceneHandle() == project.LevelTwo; });
 		CHECK(SceneSerializer::GetDeserializeCount() - reads == 1);
 		CHECK(game->GetScene()->FindEntityByName("Boss").IsValid());
+	}
+
+	TEST_CASE("A scene the game asks for in every update loads once and replaces the running scene")
+	{
+		// Loads on threads of their own, as in the editor: the running scene goes on while the level is read.
+		ScopedJobSystem jobs(2, 2);
+		const std::filesystem::path directory = CreateTemporaryDirectory("RepeatedSceneSwitch");
+		GameFlowProject project(directory / "Flow");
+		EditorContext& context = project.Context;
+		// A level large enough to take many frames to read.
+		project.Run("scene.new");
+		Scene& crowd = *context.GetEditScene();
+		for (int index = 0; index < 30'000; index++)
+			crowd.CreateEntity("Extra");
+		const UUID bigLevel = GameFlowProject::ToUUID(project.Run("scene.saveAs", { { "path", "Levels/Big.stscene" } })["scene"]);
+		Tests::RunCommandToCompletion(context, project.Commands, "scene.open", { { "scene", UUIDToJson(project.LevelOne) } });
+
+		// As a script does that calls Game::LoadScene in every update while its condition holds: the load goes on (the
+		// progress the running scene reads grows, and never falls back), and the level's document is read once.
+		project.Run("play.start");
+		const Ref<Scene> first = context.GetActiveScene();
+		const uint64_t reads = SceneSerializer::GetDeserializeCount();
+		float progress = 0.0f;
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+		while (context.GetActiveScene() == first)
+		{
+			REQUIRE(std::chrono::steady_clock::now() < deadline);
+			first->RequestSceneLoad(bigLevel);
+			project.Update();
+			if (const std::optional<float> reported = first->GetSceneLoadProgress(); reported && context.GetActiveScene() == first)
+			{
+				CHECK(*reported >= progress);
+				progress = *reported;
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		CHECK(progress > 0.0f);
+		CHECK(context.GetActiveScene()->GetEntityCount() == 30'000);
+		CHECK(SceneSerializer::GetDeserializeCount() - reads == 1);
+		CHECK(project.Run("scene.loadStatus")["play"].is_null());
+		project.Run("play.stop");
 	}
 }

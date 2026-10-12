@@ -16,6 +16,7 @@
 #include <chrono>
 #include <filesystem>
 #include <map>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -200,6 +201,51 @@ TEST_SUITE("Runtime.Game")
 		CHECK(game->GetSceneHandle() == UUID(0x1012));
 	}
 
+	TEST_CASE("A scene the running scene asks for in every update loads once and replaces it")
+	{
+		ScopedJobSystem jobs(2, 2);
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeRepeatedSwitch");
+		// A next scene large enough to take many frames to read.
+		const std::filesystem::path manifest = WriteGame(directory, { { 0x1010, MakeScene("Start", 1) }, { 0x1012, MakeScene("Next", 30'000) } }, UUID(0x1010));
+		std::string error;
+		Scope<GameRuntime> game = GameRuntime::Create(manifest, &error);
+		REQUIRE_MESSAGE(game, error);
+		REQUIRE(game->WaitForStart());
+
+		// As a script does that calls Game::LoadScene in every update while its condition holds: the load goes on (the
+		// progress the running scene reads grows, and never falls back), and the scene's document is read once.
+		const uint64_t reads = SceneSerializer::GetDeserializeCount();
+		float progress = 0.0f;
+		UpdateUntil(*game, [&]()
+		{
+			if (game->GetSceneHandle() == UUID(0x1012))
+				return true;
+			game->GetScene()->RequestSceneLoad(UUID(0x1012));
+			if (const std::optional<float> reported = game->GetScene()->GetSceneLoadProgress())
+			{
+				CHECK(*reported >= progress);
+				progress = *reported;
+			}
+			return false;
+		});
+		CHECK(progress > 0.0f);
+		CHECK(game->GetScene()->GetEntityCount() == 30'001);
+		CHECK(SceneSerializer::GetDeserializeCount() - reads == 1);
+
+		// Starting the running scene over in every update (Game::ReloadScene) likewise loads it once.
+		const Ref<Scene> previous = game->GetScene();
+		const uint64_t reloadReads = SceneSerializer::GetDeserializeCount();
+		UpdateUntil(*game, [&]()
+		{
+			if (game->GetScene() != previous)
+				return true;
+			previous->RequestSceneLoad(UUID::Null());
+			return false;
+		});
+		CHECK(game->GetSceneHandle() == UUID(0x1012));
+		CHECK(SceneSerializer::GetDeserializeCount() - reloadReads == 1);
+	}
+
 	TEST_CASE("A switch is timed in the frame's Scene.Load stage, and the scene it replaces is destroyed on a background thread")
 	{
 		ScopedJobSystem jobs(2, 2);
@@ -234,5 +280,32 @@ TEST_SUITE("Runtime.Game")
 		CHECK(game->GetScene()->IsRunning());
 		CHECK(loadMs > 0.0f);
 		CHECK(start.WaitForDestruction() == SceneDestructionWatch::Place::BackgroundThread);
+	}
+
+	TEST_CASE("The loading scene starting itself over does not stop the start scene's load")
+	{
+		ScopedJobSystem jobs(2, 2);
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeLoadingRestart");
+		const std::filesystem::path manifest = WriteGame(directory, { { 0x1010, MakeScene("Start", 30'000) }, { 0x1011, MakeScene("Loading", 1) } }, UUID(0x1010),
+			UUID(0x1011));
+		std::string error;
+		Scope<GameRuntime> game = GameRuntime::Create(manifest, &error);
+		REQUIRE_MESSAGE(game, error);
+		UpdateUntil(*game, [&]() { return game->GetScene() != nullptr; });
+		REQUIRE(game->IsShowingLoadingScene());
+
+		// The loading scene asks to start over in every update (Game::ReloadScene) until the game started: it starts over
+		// (loaded again on its own) while the start scene's load goes on.
+		UpdateUntil(*game, [&]()
+		{
+			if (game->HasStarted())
+				return true;
+			game->GetScene()->RequestSceneLoad(UUID::Null());
+			return false;
+		});
+		CHECK(game->GetSceneHandle() == UUID(0x1010));
+		CHECK(game->GetScene()->GetEntityCount() == 30'001);
+		CHECK_FALSE(game->IsShowingLoadingScene());
+		CHECK_FALSE(game->IsLoadingScene());
 	}
 }

@@ -815,10 +815,11 @@ and `AudioSystem`, the built-in "Audio" scene system.
   SDK's `Game`), honored after each update: the editor stops play mode, or loads the scene while the running one goes on
   and replaces it once the scene and everything it uses are in (`SceneLoader`; a paused game stays paused, with its pending
   steps; `play.stop` still returns to the edited scene); `GameRuntime` ends the game (`GetQuitRequest`; StrataRuntime exits
-  with the code) or loads the scene from the pack the same way. A null handle restarts the running scene. Scene loads never
-  stop a frame: never load scenes with `LoadAssetSync` in the editor or games; go through `SceneLoader` (Docs/Architecture.md,
-  "Scene runtime lifecycle"), and let go of a scene a switch replaces with `Scene::ReleaseInBackground` (stopped on the
-  main thread, destroyed by a background job).
+  with the code) or loads the scene from the pack the same way. A null handle restarts the running scene. Asking again for
+  the scene that is loading keeps its load (scripts may ask in every update); a request for another scene replaces it.
+  Scene loads never stop a frame: never load scenes with `LoadAssetSync` in the editor or games; go through `SceneLoader`
+  (Docs/Architecture.md, "Scene runtime lifecycle"), and let go of a scene a switch replaces with
+  `Scene::ReleaseInBackground` (stopped on the main thread, destroyed by a background job).
 - **Opening scenes** (`scene.open`, `EditorContext::BeginOpenScene`) loads in the background and answers once the scene
   replaced the edited one; meanwhile the edited scene is read-only (`CommitEdit` rolls edits back; mutating scene commands,
   undo, settings, script and property edits fail through `EditorContext::CheckSceneEditable`, which code editing the scene

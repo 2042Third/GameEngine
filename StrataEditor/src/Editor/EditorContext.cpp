@@ -346,13 +346,15 @@ namespace Strata
 		if (m_AssetManager->GetAssetType(handle) != AssetType::Scene)
 			return fail(fmt::format("{} is not a scene asset of the project", handle.ToString()));
 
-		// A load under way is replaced: its pins and the loads only it needed go.
-		CancelSceneLoad();
 		SceneLoadOptions options;
 		// The current file, not a copy loaded earlier.
 		options.Reload = true;
-		m_SceneLoad = CreateScope<SceneLoad>();
-		m_SceneLoad->Request = SceneLoader::LoadAsync(handle, options);
+		Scope<SceneLoad> next = CreateScope<SceneLoad>();
+		next->Request = SceneLoader::LoadAsync(handle, options);
+		// A load under way is replaced: its pins and the loads only it needed go. The new one started first, so that what
+		// both use keeps loading (Cancel leaves assets others pin alone).
+		CancelSceneLoad();
+		m_SceneLoad = std::move(next);
 		m_SceneLoadStatus = EditorSceneLoadStatus();
 		m_SceneLoadStatus.ID = m_NextSceneLoadID++;
 		m_SceneLoadStatus.Scene = handle;
@@ -669,12 +671,15 @@ namespace Strata
 			return fail(fmt::format("{} is not a scene asset of the project", target.ToString()));
 
 		// Like the exported game (GameRuntime::LoadScene): the running scene goes on while the next one and everything it
-		// uses load, then UpdateRuntimeSceneLoad swaps it in. A later request replaces an earlier one.
-		if (m_RuntimeSceneLoad)
-			m_RuntimeSceneLoad->Request.Cancel();
-		m_RuntimeSceneLoad = CreateScope<RuntimeSceneLoad>();
-		m_RuntimeSceneLoad->Scene = target;
-		m_RuntimeSceneLoad->Request = SceneLoader::LoadAsync(target);
+		// uses load, then UpdateRuntimeSceneLoad swaps it in. Asking again for the scene that is loading keeps its load
+		// (scripts ask in every update while their condition holds); a request for another scene replaces it, starting
+		// first so that what both use keeps loading (the replaced request's Cancel leaves assets others pin alone).
+		if (m_RuntimeSceneLoad && m_RuntimeSceneLoad->Scene == target)
+			return true;
+		Scope<RuntimeSceneLoad> next = CreateScope<RuntimeSceneLoad>();
+		next->Scene = target;
+		next->Request = SceneLoader::LoadAsync(target);
+		m_RuntimeSceneLoad = std::move(next);
 		m_RuntimeScene->SetSceneLoadProgress(0.0f);
 		return true;
 	}

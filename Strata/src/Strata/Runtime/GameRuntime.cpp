@@ -120,13 +120,29 @@ namespace Strata
 				*outError = fmt::format("{} is not a scene of the game", scene.ToString());
 			return false;
 		}
-		// A later request replaces an earlier one: its pins and the loads only it needed go.
-		m_SceneLoad = CreateScope<PendingScene>();
-		m_SceneLoad->Scene = scene;
-		m_SceneLoad->Request = SceneLoader::LoadAsync(scene);
+		// Asking again for the scene that is loading keeps its load: scripts ask in every update while their condition holds
+		// (the running scene goes on meanwhile), and starting over would read it anew each time and never switch.
+		if (m_SceneLoad && m_SceneLoad->Scene == scene)
+			return true;
+		// A request for another scene replaces the one under way: its pins and the loads only it needed go. The new load
+		// starts first, so that what both use keeps loading (Cancel leaves assets others pin alone).
+		Scope<PendingScene> next = CreateScope<PendingScene>();
+		next->Scene = scene;
+		next->Request = SceneLoader::LoadAsync(scene);
+		m_SceneLoad = std::move(next);
 		if (m_Scene)
 			m_Scene->SetSceneLoadProgress(0.0f);
 		return true;
+	}
+
+	void GameRuntime::RestartLoadingScene()
+	{
+		if (m_LoadingSceneLoad && m_LoadingSceneLoad->Scene == m_SceneHandle)
+			return;
+		Scope<PendingScene> next = CreateScope<PendingScene>();
+		next->Scene = m_SceneHandle;
+		next->Request = SceneLoader::LoadAsync(m_SceneHandle);
+		m_LoadingSceneLoad = std::move(next);
 	}
 
 	void GameRuntime::StartScene(Ref<Scene> scene, AssetHandle handle, std::span<const AssetHandle> loaded)
@@ -248,6 +264,12 @@ namespace Strata
 		if (!request)
 			return;
 		const AssetHandle scene = request->IsValid() ? *request : m_SceneHandle;
+		// The loading scene starting itself over loads again on its own: the start scene's load goes on.
+		if (m_ShowingLoadingScene && scene == m_SceneHandle)
+		{
+			RestartLoadingScene();
+			return;
+		}
 		std::string error;
 		if (!LoadScene(scene, &error))
 			ST_CORE_ERROR("'{}' cannot switch scenes: {}", m_Manifest.Name, error);

@@ -196,8 +196,9 @@ running); once it is in (with what it uses where that fits in the memory budgets
 it draws it), it replaces the running scene between
 frames: every entity of the old scene goes away (scripts get `OnDestroy`), so pass state to the next scene through fields
 set in that scene, or rebuild it there. Meanwhile `Game::GetSceneLoadProgress()` returns how far the next scene got, in
-[0, 1] (a loading bar on a Text entity), and a negative value while no switch is under way. A scene named in a field
-(the next level) is not loaded with the scene that names it.
+[0, 1] (a loading bar on a Text entity), and a negative value while no switch is under way. Asking again for the scene
+that is loading changes nothing, so `if (lives <= 0) Game::LoadScene(GameOver);` in `OnUpdate` is fine; asking for
+another scene replaces the load. A scene named in a field (the next level) is not loaded with the scene that names it.
 In the editor `ReloadScene` restarts what play mode runs, including unsaved edits.
 
 ### Streaming: sub-scenes, loading progress, many instances
