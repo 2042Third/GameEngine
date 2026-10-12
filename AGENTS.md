@@ -1026,9 +1026,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   the project, among others) and fails at once otherwise; the editor stays editable meanwhile, and a document saved
   during the export that references what its plan did not hold fails it, naming the document (export again).
   `project.exportStatus` reports its progress and stage, `project.cancelExport` stops it, `project.setExportSettings
-  {alwaysInclude}` names the assets and folders scripts load by path (saved in the project file), and closing the
-  project cancels a running export. The UI is the Export dialog (`UI/ExportDialog`: File > Export Game..., the toolbar's
-  Export button), which also shows and cancels exports that commands and agents started. CTest exports a small game
+  {alwaysInclude, loadingScene}` names the assets and folders scripts load by path and the scene the game plays while its
+  start scene loads (saved in the project file), and closing the project cancels a running export. The UI is the Export
+  dialog (`UI/ExportDialog`: File > Export Game..., the toolbar's Export button), which also picks the loading scene and
+  shows and cancels exports that commands and agents started. CTest exports a small game
   (`StrataEditor --no-gpu`) and runs it headless; `StrataEditor.Tetris` also exports Tetris pruned and runs it.
 - Play mode runs on the wall clock with time dilation (`Scene::SetTimeDilation`, `EditorContextSpecification::TimeDilation`;
   exported games too, `GameRuntimeOptions::TimeDilation`): when fixed steps cannot keep up with real time the game slows

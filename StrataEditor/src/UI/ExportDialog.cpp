@@ -13,14 +13,18 @@
 #include "UI/Theme.h"
 #include "UI/Widgets.h"
 
+#include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Platform.h>
+#include <Strata/Project/Project.h>
 
 #include <imgui.h>
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <string>
 
 namespace Strata
@@ -33,6 +37,8 @@ namespace Strata
 		constexpr float c_WidthInFontSizes = 34.0f;
 		constexpr float c_NumberFieldWidthInFontSizes = 6.0f;
 		constexpr int c_MaxWindowSize = 16384;
+		// The loading scene's choice for none.
+		constexpr const char* c_NoLoadingScene = "None";
 
 		bool IsEnterPressed()
 		{
@@ -280,6 +286,10 @@ namespace Strata
 		Option("Export.Fullscreen", "Fullscreen", &m_Fullscreen, "Start the game in fullscreen (its players can still pass --windowed)");
 		ImGui::Spacing();
 
+		// What plays while the start scene loads.
+		DrawLoadingScene(context, width);
+		ImGui::Spacing();
+
 		// What goes with it.
 		Option("Export.IncludeRuntime", "Copy the runtime", &m_IncludeRuntime,
 			"Copy StrataRuntime as the game's executable, with the third-party notices; without it, only the game's data is written");
@@ -299,6 +309,68 @@ namespace Strata
 			Caption(fmt::format("Writes the game to {}: an asset pack ordered by first use{}, the scripts the editor runs, a manifest{}. The editor keeps "
 				"running while it works.", m_Directory, m_Prune ? " (only the assets in use)" : "", m_IncludeRuntime ? " and the runtime" : ""),
 				colors.TextSecondary, width);
+	}
+
+	void ExportDialog::DrawLoadingScene(EditorPanelContext& context, float width)
+	{
+		EditorContext& editor = context.Context;
+		const Ref<Project>& project = editor.GetProject();
+		EditorAssetManager* assets = editor.GetAssetManager();
+		if (!project || !assets)
+			return;
+		const ProjectConfig& config = project->GetConfig();
+		const AssetHandle current = config.Export.LoadingScene;
+		std::string preview = c_NoLoadingScene;
+		if (current.IsValid())
+		{
+			const std::optional<AssetMetadata> metadata = assets->GetMetadata(current);
+			preview = metadata && metadata->Type == AssetType::Scene ? metadata->Path : fmt::format("Missing scene {}", current.ToString());
+		}
+
+		const char* label = "Loading scene";
+		ImGui::AlignTextToFramePadding();
+		ImGui::TextUnformatted(label);
+		ImGui::SameLine();
+		const float fieldWidth = std::max(width - ImGui::CalcTextSize(label).x - ImGui::GetStyle().ItemSpacing.x, 1.0f);
+		const ImVec2 min = ImGui::GetCursorScreenPos();
+		ImGui::SetNextItemWidth(fieldWidth);
+		const bool open = ImGui::BeginCombo("##LoadingScene", preview.c_str());
+		// Its own rectangle: while the list is open, its entries come after it.
+		UI::ItemProbe::RecordRect("Export.LoadingScene", min, ImVec2(min.x + fieldWidth, min.y + ImGui::GetFrameHeight()), true, 0, preview);
+		if (!open && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+		{
+			ImGui::SetTooltip("A scene the game plays while its start scene loads (the project's export setting, saved in the project file); "
+				"without one the game shows a cleared frame meanwhile");
+		}
+		if (!open)
+			return;
+
+		// The project's scenes other than the start scene, listed while the list is open (the asset index, not the disk).
+		std::optional<nlohmann::json> picked;
+		UI::PushSelectionColors(!current.IsValid());
+		if (ImGui::Selectable(c_NoLoadingScene, !current.IsValid()))
+			picked = nlohmann::json(nullptr);
+		UI::PopSelectionColors();
+		UI::ItemProbe::Record("Export.LoadingScene.None", true, 0, c_NoLoadingScene);
+		size_t index = 0;
+		for (const AssetListing& listing : assets->ListAssets("", true))
+		{
+			if (listing.Type != AssetType::Scene || listing.Handle == config.StartScene)
+				continue;
+			const bool selected = listing.Handle == current;
+			ImGui::PushID(static_cast<int>(index));
+			UI::PushSelectionColors(selected);
+			if (ImGui::Selectable(listing.Path.c_str(), selected))
+				picked = nlohmann::json(listing.Path);
+			UI::PopSelectionColors();
+			ImGui::PopID();
+			UI::ItemProbe::Record(UI::NumberedProbeKey("Export.LoadingScene.", index), true, 0, listing.Path);
+			index++;
+		}
+		ImGui::EndCombo();
+		// A project setting, saved in the project file like project.setExportSettings saves it for agents.
+		if (picked)
+			RunEditorCommand(editor, context.Commands, "project.setExportSettings", { { "loadingScene", *picked } });
 	}
 
 	void ExportDialog::DrawProgress(EditorPanelContext& context, float width)

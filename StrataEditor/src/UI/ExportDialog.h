@@ -16,6 +16,7 @@ namespace Strata
 	// has the fields of project.export (the directory, with Browse; the window's width, height and fullscreen; whether to
 	// copy the runtime and the script symbols; whether to prune unused assets), which start as the command's defaults, and
 	// runs the command through the command runner, so the editor keeps running while the export works on an I/O thread.
+	// It also offers the project's loading scene (a project setting: picking one runs project.setExportSettings at once).
 	// Meanwhile it shows the export's progress as a strata-band bar with its stage and a Cancel button; afterwards what was
 	// written, with Open Folder, or why it failed. Exports that a command or an agent started show the same way while the
 	// dialog is open (the toolbar's "Exporting" button opens it). Closing the dialog leaves an export running; opening it
@@ -40,6 +41,9 @@ namespace Strata
 		void SetFolderPickerAvailable(bool available) { m_FolderPickerAvailable = available; }
 	private:
 		void DrawFields(EditorPanelContext& context, float width);
+		// The scene the game plays while its start scene loads (ProjectExportSettings::LoadingScene): a choice of none and the
+		// project's other scenes, listed only while it is open.
+		void DrawLoadingScene(EditorPanelContext& context, float width);
 		void DrawProgress(EditorPanelContext& context, float width);
 		void DrawOutcome(float width);
 		void StartExport(EditorPanelContext& context);

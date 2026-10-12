@@ -6,9 +6,11 @@
 #include "TestHelpers.h"
 #include "UI/ItemProbe.h"
 
+#include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JobSystem.h>
 #include <Strata/Core/Log.h>
+#include <Strata/Project/Project.h>
 
 #include <atomic>
 #include <chrono>
@@ -102,6 +104,55 @@ TEST_SUITE("Editor.ExportDialog")
 		CHECK(shown("Export.Prune") == checked(defaults.Prune));
 		CHECK(shown("Export.Width") == std::to_string(defaults.WindowWidth));
 		CHECK(shown("Export.Height") == std::to_string(defaults.WindowHeight));
+	}
+
+	TEST_CASE("The Export dialog sets the project's loading scene among its other scenes")
+	{
+		HarnessEditor editor;
+		const std::filesystem::path directory = CreateTemporaryDirectory("EditorExportDialogLoadingScene");
+		editor.Run("project.create", { { "directory", FileSystem::ToUTF8(directory / "Game") }, { "name", "Loading Game" } });
+		editor.Run("entity.create", { { "name", "Box" }, { "components", { { "MeshRenderer", { { "Mesh", "0000000000000001" } } } } } });
+		editor.Run("scene.saveAs", { { "path", "Scenes/Main.stscene" } });
+		editor.Run("project.setStartScene", { { "scene", "Scenes/Main.stscene" } });
+		editor.Run("entity.create", { { "name", "Spinner" } });
+		editor.Run("scene.saveAs", { { "path", "Scenes/Loading.stscene" } });
+		editor.Frames(3);
+		const Ref<Project> project = editor.Context().GetProject();
+		REQUIRE(project);
+		const AssetHandle loading = editor.Context().GetAssetManager()->FindAssetByPath("Scenes/Loading.stscene");
+		REQUIRE(loading.IsValid());
+
+		REQUIRE(editor.Click("Toolbar.Export"));
+		editor.Frames(2);
+		REQUIRE(editor.Layer->GetExportDialog().IsOpen());
+		REQUIRE(UI::ItemProbe::Find("Export.LoadingScene"));
+		CHECK(UI::ItemProbe::Find("Export.LoadingScene")->Text == "None");
+
+		// The list offers none and the scenes but the start scene.
+		REQUIRE(editor.Click("Export.LoadingScene"));
+		editor.Frames(2);
+		REQUIRE(UI::ItemProbe::Find("Export.LoadingScene.None"));
+		REQUIRE(UI::ItemProbe::Find("Export.LoadingScene.0"));
+		CHECK(UI::ItemProbe::Find("Export.LoadingScene.0")->Text == "Scenes/Loading.stscene");
+		CHECK_FALSE(UI::ItemProbe::Find("Export.LoadingScene.1"));
+		REQUIRE(editor.Click("Export.LoadingScene.0"));
+		editor.Frames(2);
+		// Picked, it is the project's setting, saved in the project file, and the dialog stays open.
+		CHECK(project->GetConfig().Export.LoadingScene == loading);
+		const std::optional<std::string> projectFile = FileSystem::ReadText(project->GetProjectFile());
+		REQUIRE(projectFile);
+		CHECK(projectFile->find(loading.ToString()) != std::string::npos);
+		CHECK(editor.Layer->GetExportDialog().IsOpen());
+		REQUIRE(UI::ItemProbe::Find("Export.LoadingScene"));
+		CHECK(UI::ItemProbe::Find("Export.LoadingScene")->Text == "Scenes/Loading.stscene");
+
+		// None takes it back.
+		REQUIRE(editor.Click("Export.LoadingScene"));
+		editor.Frames(2);
+		REQUIRE(editor.Click("Export.LoadingScene.None"));
+		editor.Frames(2);
+		CHECK_FALSE(project->GetConfig().Export.LoadingScene.IsValid());
+		CHECK(UI::ItemProbe::Find("Export.LoadingScene")->Text == "None");
 	}
 
 	TEST_CASE("The Export dialog shows an export a command started and cancels it")

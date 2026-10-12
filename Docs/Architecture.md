@@ -2517,8 +2517,10 @@ editor cancels it and waits for it. The command answers when it finished, with t
 assets, the pack's size, the seconds it took and the editor's frame times from the frame that started it. The UI is the
 Export dialog (`UI/ExportDialog`: File > Export Game..., or the main toolbar's Export button, which shows the share done
 while an export runs): the command's fields with its defaults (no script symbols in Dist editors; the directory is
-checked when its text changes or the dialog opens, since the check asks the file system), then a strata-band progress
-bar (`UI::StrataProgressBar`) and Open Folder. Exports that a command or an agent started show the same way while the
+checked when its text changes or the dialog opens, since the check asks the file system) and the project's loading scene
+(none or one of its other scenes, listed from the asset index while the choice is open; picking one runs
+`project.setExportSettings` at once, as it is a project setting), then a strata-band progress bar
+(`UI::StrataProgressBar`) and Open Folder. Exports that a command or an agent started show the same way while the
 dialog is open, with Cancel.
 It writes:
 
